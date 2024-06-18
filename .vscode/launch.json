@@ -1,0 +1,43 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "trusted-platform version",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "port": 2345,
+            "host": "127.0.0.1",
+            "preLaunchTask": "rm_log",
+            "program": "${workspaceRoot}",
+            "args": ["version", "--debug"],
+            "showLog": true,
+            "debugAdapter": "legacy"
+        }, {
+        
+            "name": "trusted-platform tpm --import-ek-cert",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "port": 2345,
+            "host": "127.0.0.1",
+            "preLaunchTask": "rm_log",
+            "program": "${workspaceRoot}",
+            "args": ["tpm", "--import-ek-cert", "tpm-ek.bin", "--debug"],
+            "showLog": true,
+            "debugAdapter": "legacy"
+    }, {
+        
+        "name": "trusted-platform webserver --debug",
+        "type": "go",
+        "request": "launch",
+        "mode": "debug",
+        "port": 2345,
+        "host": "127.0.0.1",
+        "preLaunchTask": "rm_log",
+        "program": "${workspaceRoot}",
+        "args": ["webserver", "--debug"],
+        "showLog": true,
+        "debugAdapter": "legacy"
+    }]
+}

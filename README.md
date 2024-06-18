@@ -1,0 +1,186 @@
+# go-trusted-platform
+
+The `Trusted Platform` uses a [Trusted Platform Module (TPM)](https://en.wikipedia.org/wiki/Trusted_Platform_Module), [Secure Boot](https://en.wikipedia.org/wiki/UEFI), and a provided [Certificate Authority](https://en.wikipedia.org/wiki/Certificate_authority) to establish a Platform Root of Trust, perform Local and [Remote Attestation](https://tpm2-software.github.io/tpm2-tss/getting-started/2019/12/18/Remote-Attestation.html), encryption, signing, x509 certificate management, data integrity and more.
+
+
+## Components
+
+The main components of this project are:
+
+#### Trusted Platform Module
+
+The Trusted Platform Module (TPM) technology is designed to provide hardware-based,
+security-related functions. A TPM chip is a secure crypto-processor that is designed
+to carry out cryptographic operations. The chip includes multiple physical security
+mechanisms to make it tamper-resistant, and malicious software is unable to tamper
+with the security functions of the TPM. 
+
+The Trusted Platform Module (TPM) provides:
+
+- A hardware random number generator
+
+- Facilities for the secure generation of cryptographic keys for limited uses
+
+- Remote attestation: Creates a nearly unforgeable hash key summary of the hardware and software configuration. One could use the hash to verify that the hardware and software have not been changed. The software in charge of hashing the setup determines the extent of the summary
+
+- Binding: Data is encrypted using the TPM bind key, a unique RSA key descended from a storage key. Computers that incorporate a TPM can create cryptographic keys and encrypt them so that they can only be decrypted by the TPM. This process, often called wrapping or binding a key, can help protect the key from disclosure. Each TPM has a master wrapping key, called the storage root key, which is stored within the TPM itself. User-level RSA key containers are stored with the Windows user profile for a particular user and can be used to encrypt and decrypt information for applications that run under that specific user identity
+
+- Sealed storage: Specifies the TPM state for the data to be decrypted (unsealed)
+
+- Other Trusted Computing functions for the data to be decrypted (unsealed)
+
+Computer programs can use a TPM for the authentication of hardware devices, since each TPM chip has a unique and secret Endorsement Key (EK) burned in as it is produced. Security embedded in hardware provides more protection than a software-only solution. Its use is restricted in some countries.
+
+#### Secure Boot
+
+The UEFI specification defines a protocol known as Secure Boot, which can secure the boot process by preventing the loading of UEFI drivers or OS boot loaders that are not signed with an acceptable digital signature. The mechanical details of how precisely these drivers are to be signed are not specified. When Secure Boot is enabled, it is initially placed in "setup" mode, which allows a public key known as the "platform key" (PK) to be written to the firmware. Once the key is written, Secure Boot enters "User" mode, where only UEFI drivers and OS boot loaders signed with the platform key can be loaded by the firmware. Additional "key exchange keys" (KEK) can be added to a database stored in memory to allow other certificates to be used, but they must still have a connection to the private portion of the platform key. Secure Boot can also be placed in "Custom" mode, where additional public keys can be added to the system that do not match the private key.
+
+Secure Boot is supported by Windows 8 and 8.1, Windows Server 2012 and 2012 R2, Windows 10, Windows Server 2016, 2019, and 2022, and Windows 11, VMware vSphere 6.5 and a number of Linux distributions including Fedora (since version 18), openSUSE (since version 12.3), RHEL (since version 7), CentOS (since version 7), Debian (since version 10), Ubuntu (since version 12.04.2), Linux Mint (since version 21.3)., and AlmaLinux OS (since version 8.4). As of January 2024, FreeBSD support is in a planning stage.
+
+#### Certificate Authority
+
+In cryptography, a certificate authority or certification authority (CA) is an entity that stores, signs, and issues digital certificates. A digital certificate certifies the ownership of a public key by the named subject of the certificate. This allows others (relying parties) to rely upon signatures or on assertions made about the private key that corresponds to the certified public key. A CA acts as a trusted third party—trusted both by the subject (owner) of the certificate and by the party relying upon the certificate. The format of these certificates is specified by the X.509 or EMV standard. 
+
+
+## Architecture
+
+This Trusted Platform relies on secure boot and the TPM to record measurements that guarantee the integrity of every critical piece of firmware, drivers, and software used to boot into the Operating System.
+
+The Trusted Platform takes over after the Operating System has booted, and extends the trusted execution environment to any application that integrates with it. The Trusted Platform provides a way for servers and clients to prove their identities, attest to operating system and software states / configurations, enforce network policies, and provide secure key management to connected devices.
+
+In addition to platform integrity, the included Certificate Authority establishes a Public Key Infrastructure (PKI) that's used to issue TLS and digital certificates for any service / device on the network.
+
+Private keys generated and used by the Trusted Platform and the applications that integrate with it, are delegated to the Certificate Authority, which relies on the TPM for secure private key generation and storage. In addition, the TPM has a true random generator, which the Certificate Authority can be configured to use during certificate generation (the default mode) instead of the random source provided by the Operating System.
+
+The traffic between the CPU <-> TPM bus can also be encrypted to help protect against side-channel and hardware based attacks.
+
+The default configuration for the Trusted Platform is "use the most secure configuration possible". Use the configuration file to tune and optimize the platform.
+
+#### Flow
+
+The following steps are used to complete device
+
+###### Device Registration
+
+![Device Registration](https://tpm2-software.github.io/images/tpm2-attestation-demo/registration.png)
+
+###### Service Request - Part 1: Platform Anonymous Identity Validation
+
+![Service Request - Part 1](https://tpm2-software.github.io/images/tpm2-attestation-demo/identity-validation.png)
+
+###### Service Request - Part 2: Platform Software State Validation
+
+![Service Request - Part 2](https://tpm2-software.github.io/images/tpm2-attestation-demo/software-state-validation.png)
+
+###### Service Delivery
+
+![Service Delivery](https://tpm2-software.github.io/images/tpm2-attestation-demo/service-delivery.png)
+
+
+## Compatibility
+
+This project makes use of the new [go-tpm/tpm2](https://github.com/google/go-tpm) "TPMDirect" TPM 2.0 API introduced in v0.9.0.
+
+As the complimentary [go-tpm-tools](https://github.com/google/go-tpm-tools) and [go-attestation](https://github.com/google/go-attestation) projects are using the [Legacy API](https://github.com/google/go-tpm-tools/issues/462), I've forked the necessary code with the intention to make as much use of the original libraries as possible, replacing Legacy API calls with the new TPMDirect API, to reduce the resulting binary size and provide a consistent execution path through the libraries to the TPM.
+
+When the go-tpm-tools and go-attestation libraries catches up to the latest go-tpm/tpm2 TPMDirect API, the forked code in this repo will be replaced with the latest versions of those libraries.
+
+
+## Documentation
+
+The `docs` folder provides links to resources with detailed information about how the internals of the TPM and various other components used in this project work, along with examples of how to use the software included in this repository.
+
+
+## Status
+
+This project is under active development. APIs can change at any moment.
+
+The `main` branch will always build and run. Don't be afraid to try it out!
+
+- [ ] Trusted Platform
+    - [ ] Certificate Authority
+        - [x] Polymorphic Persistent Storage
+            - [x] Local file storage
+            - [ ] Database storage
+            - [ ] Clustered H/A storage
+            - [ ] Encryption at Rest
+        - [x] Root CA
+        - [x] Intermediate CA(s)
+        - [x] x509 Certificate & key storage / retrieval
+        - [x] Issue x509 certificate (from Root and Intermediate CA)
+        - [x] x509 Certificate Revocation
+        - [x] Import to trusted root certificate store
+        - [x] Import to trusted intermediate certificate store
+        - [x] Create RSA public/private key pairs
+        - [x] Create Certificate Signing Requests
+        - [x] RSA Sign / Verify (certificates and data)
+        - [ ] RSA Encrypt / Decrypt
+        - [x] Encode / Decode to / from DER / PEM
+        - [x] Automatic download / import of Issuer CA(s) to trust store
+        - [x] Automatic download / import of CA Revocation Lists (CRLs)
+        - [ ] Online Certificate Status Protocol (OCSP)
+    - [ ] TPM 2.0
+        - [x] Create RSA Endorsement Key
+        - [x] Create ECC Endorsement Key
+        - [x] Create RSA Storage Root Key
+        - [x] Create ECC Storage Root Key
+        - [x] Create RSA Storage Root Key
+        - [x] Create ECC Attestation Key
+        - [x] Validate EK Cert w/ CA
+        - [x] Auto-import EK Issuer Root & Intermediate CAs
+        - [x] Create Attestation Key from EK / SRK
+        - [x] Credential challenge
+        - [x] Activate credential
+        - [x] Event Log Parsing
+        - [ ] Provide Attestation Key to Client
+    - [ ] Command Line Interface
+        - [ ] Certificate Authority
+            - [x] Issue Certificate
+            - [ ] Import Certificate to CA Trust Store
+            - [x] Retrieve Public Key
+            - [x] List Certificates
+            - [x] Show Certificate
+            - [x] Install to Operating System Trust Store
+            - [x] Uninstall to Operating System Trust Store
+            - [ ] Sign / verify (certificate & data)
+            - [ ] Encrypt / Decrypt
+            - [ ] Encode / Decode
+        - [ ] Trusted Platform Module 2.0
+            - [ ] Create RSA Endorsement Key
+            - [ ] Create ECC Endorsement Key
+            - [ ] Create RSA Storage Root Key
+            - [ ] Create ECC Storage Root Key
+            - [ ] Create RSA Storage Root Key
+            - [ ] Create ECC Attestation Key
+            - [ ] Validate EK Cert w/ CA
+            - [ ] Auto-import EK Issuer Root & Intermediate CAs
+            - [ ] Create Attestation Key from EK / SRK
+            - [ ] Credential challenge
+            - [ ] Activate credential
+            - [x] Event Log Parsing
+            - [ ] Provide Attestation Key to Client
+            - [ ] Full Remote Attestation
+    - [ ] Web Services
+        - [x] Web server
+        - [x] REST API
+            - [x] Swagger
+        - [ ] JWT Authentication
+            - [x] Generate Token
+            - [x] Refresh Token
+            - [x] Validate Token
+            - [ ] Support opaque private key from TPM
+        - [x] HTTPS / TLS
+        - [ ] mTLS
+        - [ ] gRPC Full Remote Attestation
+            - [ ] Server (Verifier)
+            - [ ] Client (Attestor)
+    - [ ] Flows
+        - [x] Device Registration
+        - [ ] Service Request - Part 1: Platform Anonymous Identity Validation
+        - [ ] Service Request - Part 2: Platform Software State Validation
+        - [ ] Service Delivery
+    - [ ] Plugin System
+        - [ ] Persistent Storage
+        - [ ] Install / uninstall
+        - [ ] Sign / verify
+    - [ ] Volume Encryption (LUKS)

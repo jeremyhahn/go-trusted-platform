@@ -1,0 +1,9 @@
+{
+    "version": "2.0.0",
+    "tasks": [{
+        "type": "shell",
+        "label": "rm_log",
+        "command": "rm",
+        "args": ["-rf", "logs/"]
+    }]
+}

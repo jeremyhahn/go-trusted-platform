@@ -1,0 +1,470 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "This is the RESTful web servce for CropDroid.",
+        "title": "CropDroid REST API",
+        "termsOfService": "https://www.cropdroid.com/terms/",
+        "contact": {
+            "name": "API Support",
+            "url": "https://www.cropdroid.com/support",
+            "email": "support@cropdroid.com"
+        },
+        "license": {
+            "name": "Commercial",
+            "url": "https://www.cropdroid.com/licenses/commercial.txt"
+        },
+        "version": "v0.0.3"
+    },
+    "host": "localhost:8443",
+    "basePath": "/api/v1",
+    "paths": {
+        "/config": {
+            "get": {
+                "security": [
+                    {
+                        "JWT": []
+                    }
+                ],
+                "description": "Returns the server configuration",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "System configuration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/app.App"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.WebServiceResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.WebServiceResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/endpoints": {
+            "get": {
+                "description": "Returns a list of REST API endpoints",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "REST API Endpoints",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            }
+        },
+        "/events/{page}": {
+            "get": {
+                "security": [
+                    {
+                        "JWT": []
+                    }
+                ],
+                "description": "Returns a page of system event log entries",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "System Event Log",
+                "parameters": [
+                    {
+                        "maxLength": 20,
+                        "minLength": 1,
+                        "type": "string",
+                        "description": "string valid",
+                        "name": "page",
+                        "in": "path"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.WebServiceResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.WebServiceResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/login": {
+            "post": {
+                "description": "Authenticate a user and returns a new JWT",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Authentication"
+                ],
+                "summary": "Authenticate and obtain JWT",
+                "parameters": [
+                    {
+                        "description": "UserCredentials struct",
+                        "name": "UserCredentials",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.UserCredentials"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/rest.JsonWebToken"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/rest.JsonWebToken"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/rest.JsonWebToken"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/rest.JsonWebToken"
+                        }
+                    }
+                }
+            }
+        },
+        "/login/refresh": {
+            "get": {
+                "security": [
+                    {
+                        "JWT": []
+                    }
+                ],
+                "description": "Returns a new JWT token with a new, extended expiration date",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Authentication"
+                ],
+                "summary": "Refresh JWT",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/rest.JsonWebToken"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/rest.JsonWebToken"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/rest.JsonWebToken"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/rest.JsonWebToken"
+                        }
+                    }
+                }
+            }
+        },
+        "/pubkey": {
+            "get": {
+                "description": "Returns the server public RSA key",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "Retrieve RSA pubilc key",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/status": {
+            "get": {
+                "security": [
+                    {
+                        "JWT": []
+                    }
+                ],
+                "description": "Returns current system status metrics",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "System Status",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "app.App": {
+            "type": "object",
+            "properties": {
+                "cert_dir": {
+                    "type": "string"
+                },
+                "certificate_authority": {
+                    "$ref": "#/definitions/ca.Config"
+                },
+                "config_dir": {
+                    "type": "string"
+                },
+                "data_dir": {
+                    "type": "string"
+                },
+                "debug": {
+                    "type": "boolean"
+                },
+                "domain": {
+                    "type": "string"
+                },
+                "log_dir": {
+                    "type": "string"
+                },
+                "runtime_user": {
+                    "type": "string"
+                },
+                "tpm": {
+                    "$ref": "#/definitions/tpm2.Config"
+                },
+                "webservice": {
+                    "$ref": "#/definitions/config.WebService"
+                }
+            }
+        },
+        "ca.Config": {
+            "type": "object",
+            "properties": {
+                "auto_import_issuing_ca": {
+                    "type": "boolean"
+                },
+                "identity": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/ca.Identity"
+                    }
+                },
+                "system_cert_pool": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "ca.Identity": {
+            "type": "object",
+            "properties": {
+                "key_size": {
+                    "type": "integer"
+                },
+                "sans": {
+                    "$ref": "#/definitions/ca.SubjectAlternativeNames"
+                },
+                "subject": {
+                    "$ref": "#/definitions/ca.Subject"
+                },
+                "valid": {
+                    "type": "integer"
+                }
+            }
+        },
+        "ca.Subject": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string"
+                },
+                "cn": {
+                    "type": "string"
+                },
+                "country": {
+                    "type": "string"
+                },
+                "locality": {
+                    "type": "string"
+                },
+                "organization": {
+                    "type": "string"
+                },
+                "organizational_unit": {
+                    "type": "string"
+                },
+                "postal_code": {
+                    "type": "string"
+                },
+                "province": {
+                    "type": "string"
+                }
+            }
+        },
+        "ca.SubjectAlternativeNames": {
+            "type": "object",
+            "properties": {
+                "dns": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "email": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "ips": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "config.WebService": {
+            "type": "object",
+            "properties": {
+                "certificate": {
+                    "$ref": "#/definitions/ca.Identity"
+                },
+                "jwt_expiration": {
+                    "type": "integer"
+                },
+                "port": {
+                    "type": "integer"
+                },
+                "tls_ca": {
+                    "type": "string"
+                },
+                "tls_crt": {
+                    "type": "string"
+                },
+                "tls_key": {
+                    "type": "string"
+                },
+                "tls_port": {
+                    "type": "integer"
+                }
+            }
+        },
+        "response.WebServiceResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "payload": {},
+                "success": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "rest.JsonWebToken": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "token": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.UserCredentials": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string"
+                },
+                "password": {
+                    "type": "string"
+                }
+            }
+        },
+        "tpm2.Config": {
+            "type": "object",
+            "properties": {
+                "device": {
+                    "type": "string"
+                },
+                "ek-cert-index": {
+                    "type": "integer"
+                },
+                "ek_cert": {
+                    "type": "string"
+                },
+                "encrypt_sessions": {
+                    "type": "boolean"
+                },
+                "entropy": {
+                    "type": "boolean"
+                }
+            }
+        }
+    },
+    "securityDefinitions": {
+        "JWT": {
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
+        }
+    }
+}

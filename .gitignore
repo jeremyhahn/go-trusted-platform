@@ -1,0 +1,5 @@
+trusted-platform
+ek_cert.bin
+pki/tpm2/ek_cert.bin
+tpm-ek.bin
+pki/ca/certs
