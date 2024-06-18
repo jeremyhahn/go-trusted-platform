@@ -1,0 +1,304 @@
+basePath: /api/v1
+definitions:
+  app.App:
+    properties:
+      cert_dir:
+        type: string
+      certificate_authority:
+        $ref: '#/definitions/ca.Config'
+      config_dir:
+        type: string
+      data_dir:
+        type: string
+      debug:
+        type: boolean
+      domain:
+        type: string
+      log_dir:
+        type: string
+      runtime_user:
+        type: string
+      tpm:
+        $ref: '#/definitions/tpm2.Config'
+      webservice:
+        $ref: '#/definitions/config.WebService'
+    type: object
+  ca.Config:
+    properties:
+      auto_import_issuing_ca:
+        type: boolean
+      identity:
+        items:
+          $ref: '#/definitions/ca.Identity'
+        type: array
+      system_cert_pool:
+        type: boolean
+    type: object
+  ca.Identity:
+    properties:
+      key_size:
+        type: integer
+      sans:
+        $ref: '#/definitions/ca.SubjectAlternativeNames'
+      subject:
+        $ref: '#/definitions/ca.Subject'
+      valid:
+        type: integer
+    type: object
+  ca.Subject:
+    properties:
+      address:
+        type: string
+      cn:
+        type: string
+      country:
+        type: string
+      locality:
+        type: string
+      organization:
+        type: string
+      organizational_unit:
+        type: string
+      postal_code:
+        type: string
+      province:
+        type: string
+    type: object
+  ca.SubjectAlternativeNames:
+    properties:
+      dns:
+        items:
+          type: string
+        type: array
+      email:
+        items:
+          type: string
+        type: array
+      ips:
+        items:
+          type: string
+        type: array
+    type: object
+  config.WebService:
+    properties:
+      certificate:
+        $ref: '#/definitions/ca.Identity'
+      jwt_expiration:
+        type: integer
+      port:
+        type: integer
+      tls_ca:
+        type: string
+      tls_crt:
+        type: string
+      tls_key:
+        type: string
+      tls_port:
+        type: integer
+    type: object
+  response.WebServiceResponse:
+    properties:
+      code:
+        type: integer
+      error:
+        type: string
+      payload: {}
+      success:
+        type: boolean
+    type: object
+  rest.JsonWebToken:
+    properties:
+      error:
+        type: string
+      token:
+        type: string
+    type: object
+  service.UserCredentials:
+    properties:
+      email:
+        type: string
+      password:
+        type: string
+    type: object
+  tpm2.Config:
+    properties:
+      device:
+        type: string
+      ek-cert-index:
+        type: integer
+      ek_cert:
+        type: string
+      encrypt_sessions:
+        type: boolean
+      entropy:
+        type: boolean
+    type: object
+host: localhost:8443
+info:
+  contact:
+    email: support@cropdroid.com
+    name: API Support
+    url: https://www.cropdroid.com/support
+  description: This is the RESTful web servce for CropDroid.
+  license:
+    name: Commercial
+    url: https://www.cropdroid.com/licenses/commercial.txt
+  termsOfService: https://www.cropdroid.com/terms/
+  title: CropDroid REST API
+  version: v0.0.3
+paths:
+  /config:
+    get:
+      description: Returns the server configuration
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/app.App'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.WebServiceResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.WebServiceResponse'
+      security:
+      - JWT: []
+      summary: System configuration
+      tags:
+      - System
+  /endpoints:
+    get:
+      description: Returns a list of REST API endpoints
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+      summary: REST API Endpoints
+      tags:
+      - System
+  /events/{page}:
+    get:
+      description: Returns a page of system event log entries
+      parameters:
+      - description: string valid
+        in: path
+        maxLength: 20
+        minLength: 1
+        name: page
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.WebServiceResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.WebServiceResponse'
+      security:
+      - JWT: []
+      summary: System Event Log
+      tags:
+      - System
+  /login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticate a user and returns a new JWT
+      parameters:
+      - description: UserCredentials struct
+        in: body
+        name: UserCredentials
+        required: true
+        schema:
+          $ref: '#/definitions/service.UserCredentials'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rest.JsonWebToken'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/rest.JsonWebToken'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/rest.JsonWebToken'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/rest.JsonWebToken'
+      summary: Authenticate and obtain JWT
+      tags:
+      - Authentication
+  /login/refresh:
+    get:
+      consumes:
+      - application/json
+      description: Returns a new JWT token with a new, extended expiration date
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rest.JsonWebToken'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/rest.JsonWebToken'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/rest.JsonWebToken'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/rest.JsonWebToken'
+      security:
+      - JWT: []
+      summary: Refresh JWT
+      tags:
+      - Authentication
+  /pubkey:
+    get:
+      description: Returns the server public RSA key
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: string
+      summary: Retrieve RSA pubilc key
+      tags:
+      - System
+  /status:
+    get:
+      description: Returns current system status metrics
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+      security:
+      - JWT: []
+      summary: System Status
+      tags:
+      - System
+securityDefinitions:
+  JWT:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

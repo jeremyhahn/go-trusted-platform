@@ -1,0 +1,93 @@
+# Configuration file
+
+debug: true
+config-dir: ./db/config
+data-dir: ./db/data
+cert-dir: ./db/certs
+log-dir: ./logs/
+
+domain: example.com
+
+tpm:
+  device: /dev/tpmrm0
+  # Encrypt CPU <-> TPM bus communication
+  encrypt-sessions: false
+  entropy: false
+  ek-cert-index: 0x01C00002
+  ek-cert: rsa_ek_cert.bin
+
+certificate-authority:
+  auto-import-issuing-ca: true
+  system-cert-pool: true
+  identity:
+  - key-size: 2048
+     # CA cert expiration (years)
+    valid: 50
+    subject:
+      cn: root-ca
+      organization: ACME Corproation
+      country: US
+      province: Miami
+      locality: Homestead
+      address: 123 Virtual Street
+      postal-code: 12345
+    sans:
+      dns: 
+        - root-ca
+        - root-ca.localdomain
+        - root-ca.dev.example.com
+      ips:
+        - 127.0.0.1
+      email:
+        - root@localhost
+        - root@localhost.localdomain
+  - key-size: 2048
+     # CA cert expiration (years)
+    valid: 10
+    subject:
+      cn: intermediate-ca
+      organization: ACME Corproation
+      country: US
+      province: Miami
+      locality: Homestead
+      address: 123 Virtual Street
+      postal-code: 12345
+    sans:
+      dns:
+        - intermediate-ca
+        - intermediate-ca.localdomain
+        - intermediate-ca.example.com
+      ips:
+        - 127.0.0.1
+      email:
+        - root@localhost
+        - root@localhost.localdomain
+
+webservice:
+  port: 8080
+  tls-port: 8443
+  jwt-expiration: 525960
+  tls-ca: certs/intermediate-ca.pub
+  tls-key: certs/intermediate-ca.key
+  tls-crt: certs/issued/localhost/localhost.crt
+  certificate:
+    key-size: 2048
+    # valid 365 days
+    valid: 365
+    subject:
+      cn: localhost
+      organization: ACME Corproation
+      country: US
+      province: Miami
+      locality: Homestead
+      address: 123 Virtual Street
+      postal-code: 12345
+    sans:
+      dns:
+        - localhost
+        - localhost.localdomain
+      ips:
+        - 127.0.0.1
+      email:
+        - root@localhost
+        - root@localhost.localdomain
