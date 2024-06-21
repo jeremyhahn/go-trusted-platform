@@ -19,6 +19,7 @@ var DebugFlag bool
 var ConfigDir string
 var DataDir string
 var LogDir string
+var CertDir string
 var HomeDir string
 var RuntimeUser string
 
@@ -40,16 +41,23 @@ x509 certificate management, data integrity and more.`,
 func init() {
 
 	cobra.OnInitialize(func() {
-		App = app.NewApp()
-		App.Init()
+		App = app.NewApp().Init(&app.AppInitParams{
+			Debug:     DebugFlag,
+			LogDir:    LogDir,
+			ConfigDir: ConfigDir,
+			CertDir:   CertDir})
 	})
 
-	wd, _ := os.Getwd()
+	wd, err := os.Getwd()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	rootCmd.PersistentFlags().BoolVarP(&DebugFlag, "debug", "", false, "Enable debug mode")
 	rootCmd.PersistentFlags().StringVarP(&HomeDir, "home", "", wd, "Program home directory") // doesnt work as system daemon if not wd (/)
 	rootCmd.PersistentFlags().StringVarP(&DataDir, "data-dir", "", fmt.Sprintf("%s/db", wd), "Directory where database files are stored")
 	rootCmd.PersistentFlags().StringVarP(&ConfigDir, "config-dir", "", fmt.Sprintf("/etc/%s", app.Name), "Directory where configuration files are stored")
+	rootCmd.PersistentFlags().StringVarP(&CertDir, "cert-dir", "", fmt.Sprintf("/etc/%s", app.Name), "Directory where certificates are stored")
 	rootCmd.PersistentFlags().StringVarP(&LogDir, "log-dir", "", "./logs", "Logging directory")
 	rootCmd.PersistentFlags().StringVarP(&RuntimeUser, "setuid", "", "root", "Ther operating system user to run as")
 

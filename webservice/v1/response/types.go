@@ -3,5 +3,5 @@ package response
 import "errors"
 
 var (
-	ErrFarmNotFound = errors.New("farm not found")
+	ErrServiceNotFound = errors.New("service not found")
 )

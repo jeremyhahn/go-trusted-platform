@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"math/big"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ type FileSystemCertStore struct {
 	revokedDir             string
 	crlDir                 string
 	sigDir                 string
+	ekDir                  string
 	certificate            *x509.Certificate
 	caName                 string
 	CertificateStore
@@ -45,7 +47,8 @@ func NewFileSystemCertStore(
 		PARTITION_ISSUED,
 		PARTITION_REVOKED,
 		PARTITION_CRL,
-		PARTITION_SIGNED}
+		PARTITION_SIGNED,
+		PARTITION_ENDORSEMENT_KEYS}
 
 	for _, partition := range partitions {
 		dir := fmt.Sprintf("%s/%s", caDir, partition)
@@ -65,6 +68,7 @@ func NewFileSystemCertStore(
 		revokedDir:             fmt.Sprintf("%s/%s", caDir, PARTITION_REVOKED),
 		crlDir:                 fmt.Sprintf("%s/%s", caDir, PARTITION_CRL),
 		sigDir:                 fmt.Sprintf("%s/%s", caDir, PARTITION_SIGNED),
+		ekDir:                  fmt.Sprintf("%s/%s", caDir, PARTITION_ENDORSEMENT_KEYS),
 		certificate:            certificate,
 		caName:                 certificate.Subject.CommonName}, nil
 }
@@ -95,9 +99,44 @@ func (store *FileSystemCertStore) RootCertForCA(cn string) (*x509.Certificate, e
 	return cert, nil
 }
 
+// Returns a slice containing the Root Certificate Authority certificate and all
+// trusted root certiticates that have been imported into the certificate store.
+func (store *FileSystemCertStore) TrustedRootCerts() ([]*x509.Certificate, error) {
+
+	// Get the root CA certificate
+	rootCert, err := store.RootCertForCA(store.caName)
+	if err != nil {
+		store.logger.Error(err)
+		return nil, err
+	}
+
+	// Get all imported trusted root certificates
+	trustedRootCerts, err := store.Certificates(PARTITION_TRUSTED_ROOT)
+	if err != nil {
+		store.logger.Error(err)
+		return nil, err
+	}
+
+	// Create the slice and add the CA Root certificate first
+	certs := make([]*x509.Certificate, len(trustedRootCerts)+1)
+	certs[0] = rootCert
+
+	// Add all of the imported trusted root certificates
+	for i, bytes := range trustedRootCerts {
+		cert, err := x509.ParseCertificate(bytes)
+		if err != nil {
+			return nil, err
+		}
+		certs[i+1] = cert
+	}
+
+	return certs, nil
+}
+
 // Returns a Trusted Root CertPool that contains the Certificate Authority root certificate with
 // the options to include the local operating system trusted root certificates.
 func (store *FileSystemCertStore) TrustedRootCertPool(includeSystemRoot bool) (*x509.CertPool, error) {
+
 	roots := x509.NewCertPool()
 	if includeSystemRoot {
 		roots, _ := x509.SystemCertPool()
@@ -337,8 +376,8 @@ func (store *FileSystemCertStore) PrivKeyPEM(cn string) ([]byte, error) {
 	return store.Get(cn, PARTITION_ISSUED, FSEXT_PRIVATE_PEM)
 }
 
-// Saves an issued certificate to the file system
-func (store *FileSystemCertStore) Save(
+// Appends certificate bytes to an existing certificate file
+func (store *FileSystemCertStore) Append(
 	cn string,
 	data []byte,
 	partition Partition,
@@ -364,12 +403,96 @@ func (store *FileSystemCertStore) Save(
 		return err
 	}
 	certFile := fmt.Sprintf("%s/%s%s", certDir, cn, extension)
+
+	f, err := os.OpenFile(certFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, os.ModePerm)
+	if err != nil {
+		store.logger.Error(err)
+		return err
+	}
+	defer f.Close()
+
+	if _, err = f.Write(data); err != nil {
+		store.logger.Error(err)
+		return err
+	}
+
+	store.logger.Debugf("appending certificate %s", certFile)
+	return nil
+}
+
+// Saves an issued certificate to the file system
+func (store *FileSystemCertStore) Save(
+	cn string,
+	data []byte,
+	partition Partition,
+	extension FSExtension) error {
+
+	var certDir string
+	part, err := store.partition(partition)
+	if err != nil {
+		store.logger.Error(err)
+		return err
+	}
+	if partition == PARTITION_CA ||
+		partition == PARTITION_TRUSTED_ROOT ||
+		partition == PARTITION_TRUSTED_INTERMEDIATE ||
+		partition == PARTITION_PUBLIC_KEYS ||
+		partition == PARTITION_CRL {
+		certDir = fmt.Sprintf("%s", part)
+	} else {
+		certDir = fmt.Sprintf("%s/%s", part, cn)
+	}
+	if err := os.MkdirAll(certDir, os.ModePerm); err != nil {
+		store.logger.Error(err)
+		return err
+	}
+	certFile := fmt.Sprintf("%s/%s%s", certDir, cn, extension)
 	if err = os.WriteFile(certFile, data, 0644); err != nil {
 		store.logger.Error(err)
 		return err
 	}
 	store.logger.Debugf("saving certificate %s", certFile)
 	return nil
+}
+
+// Saves a signed blob to the "signed" partition. If the blob key contains
+// forward slashes, a directory hierarchy will be created to match the
+// key. For example, the blob key /my/secret/blob.dat would get saved to
+// cert-store/signed/my/secret/blob.dat
+func (store *FileSystemCertStore) SaveBlob(key string, data []byte) error {
+	trimmed := strings.TrimLeft(key, "/")
+	dir := fmt.Sprintf("%s/%s", store.sigDir, filepath.Dir(trimmed))
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		store.logger.Error(err)
+		return err
+	}
+	blobFile := fmt.Sprintf("%s/%s%s", store.sigDir, trimmed, FSEXT_BLOB)
+	if err := os.WriteFile(blobFile, data, 0644); err != nil {
+		store.logger.Error(err)
+		return err
+	}
+	return nil
+}
+
+// Retrieves a signed blob from the "signed" partition. ErrBlobNotFound is
+// returned if the signed data could not be found.
+func (store *FileSystemCertStore) Blob(key string) ([]byte, error) {
+	trimmed := strings.TrimLeft(key, "/")
+	dir := fmt.Sprintf("%s/%s/", store.sigDir, filepath.Dir(trimmed))
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		store.logger.Error(err)
+		return nil, err
+	}
+	blobFile := fmt.Sprintf("%s/%s%s", store.sigDir, trimmed, FSEXT_BLOB)
+	bytes, err := os.ReadFile(blobFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			store.logger.Errorf("error retrieving blob: partition: signed, key: %s", key)
+			return nil, ErrBlobNotFound
+		}
+		return nil, err
+	}
+	return bytes, nil
 }
 
 // Saves a CA certificate to the Certificate Authority

@@ -13,8 +13,16 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Create a fake TPM cert
+// https://gist.github.com/op-ct/e202fc911de22c018effdb3371e8335f
+// https://github.com/osresearch/safeboot/pull/85
+
 var currentWorkingDirectory, _ = os.Getwd()
 var CERTS_DIR = fmt.Sprintf("%s/certs", currentWorkingDirectory)
+
+const (
+	EK_CERT_PATH = "./ECcert.bin"
+)
 
 //var CERTS_DIR = "./certs"
 
@@ -31,18 +39,11 @@ func teardown() {
 
 func setup() {
 	os.RemoveAll(CERTS_DIR)
-	// The CA creates the certs dir on first start
-	//os.MkdirAll(CERTS_DIR, os.ModePerm)
 }
 
-func TestEventLog(t *testing.T) {
+func TestParseEventLog(t *testing.T) {
 
 	logger, tpm := createSim(false, false)
-
-	//data, err := os.ReadFile("binary_bios_measurements")
-	//assert.Nil(t, err)
-
-	//logger.Debug("%+v", data)
 
 	eventLog, err := tpm.Measurements(nil)
 	assert.Nil(t, err)
@@ -98,7 +99,7 @@ func TestCreateAK(t *testing.T) {
 	logger.Debugf("ekPub: %+v", ekPub)
 
 	srkAuth := []byte("my-password")
-	srkHandle, srkName, srkPub, err := tpm.CreateSRK(ekPub, srkAuth)
+	srkHandle, srkName, srkPub, err := tpm.CreateSRK(nil, ekPub, srkAuth)
 	defer tpm.Flush(srkHandle)
 
 	assert.Nil(t, err)
@@ -141,7 +142,7 @@ func TestImportTSS(t *testing.T) {
 	assert.NotNil(t, tpm)
 	assert.NotNil(t, ca)
 
-	cert, err := tpm.ImportTSSFile(EK_FILE, true)
+	cert, err := tpm.ImportTSSFile(EK_CERT_PATH, true)
 	assert.Nil(t, err)
 	assert.Equal(t, expectedSN, cert.SerialNumber.String())
 
@@ -181,13 +182,13 @@ func TestCapabilities(t *testing.T) {
 
 func TestEKCert(t *testing.T) {
 
-	logger, tpm := createSim(false, false)
+	logger, tpm := createSim(true, false)
 
 	ca := createCA()
 
 	tpm.SetCertificateAuthority(ca)
 
-	cert, err := tpm.EKCert(nil)
+	cert, err := tpm.EKCert(nil, nil)
 	assert.Nil(t, err)
 	assert.NotNil(t, cert)
 
@@ -220,7 +221,7 @@ func TestCreateSRK(t *testing.T) {
 	logger.Debugf("ekPub: %+v", ekPub)
 
 	srkAuth := []byte("my-password")
-	srkHandle, srkName, srkPub, err := tpm.CreateSRK(ekPub, srkAuth)
+	srkHandle, srkName, srkPub, err := tpm.CreateSRK(nil, ekPub, srkAuth)
 	defer tpm.Flush(srkHandle)
 
 	assert.Nil(t, err)
@@ -244,7 +245,7 @@ func TestSealUnseal(t *testing.T) {
 	logger.Debugf("ekPub: %+v", ekPub)
 
 	srkAuth := []byte("my-password")
-	srkHandle, srkName, srkPub, err := tpm.CreateSRK(ekPub, srkAuth)
+	srkHandle, srkName, srkPub, err := tpm.CreateSRK(nil, ekPub, srkAuth)
 	defer tpm.Flush(srkHandle)
 
 	assert.Nil(t, err)
@@ -277,22 +278,22 @@ func TestSealUnseal(t *testing.T) {
 // Verify CA chain:
 
 	openssl verify \
-	  -CAfile certs/root-ca/root-ca.crt \
-	  certs/intermediate-ca/intermediate-ca.crt
+	  -CAfile db/certs/root-ca/root-ca.crt \
+	  db/certs/intermediate-ca/intermediate-ca.crt
 
 // Verify CA chain & server certificate:
 
 	openssl verify \
-	 -CAfile certs/intermediate-ca/trusted-root/root-ca.crt \
-	 -untrusted certs/intermediate-ca/intermediate-ca.crt \
-	 certs/intermediate-ca/issued/localhost/localhost.crt
+	 -CAfile db/certs/intermediate-ca/trusted-root/root-ca.crt \
+	 -untrusted db/certs/intermediate-ca/intermediate-ca.crt \
+	 db/certs/intermediate-ca/issued/localhost/localhost.crt
 
 // Verify EK chain & certificate:
 
 	openssl verify \
-	 -CAfile certs/intermediate-ca/trusted-root/www.intel.com.crt \
-	 -untrusted certs/intermediate-ca/trusted-intermediate/CNLEPIDPOSTB1LPPROD2_EK_Platform_Public_Key.crt \
-	 certs/intermediate-ca/issued/tpm-ek/tpm-ek.crt
+	 -CAfile db/certs/intermediate-ca/trusted-root/www.intel.com.crt \
+	 -untrusted db/certs/intermediate-ca/trusted-intermediate/CNLEPIDPOSTB1LPPROD2_EK_Platform_Public_Key.crt \
+	 db/certs/intermediate-ca/issued/tpm-ek/tpm-ek.crt
 */
 // func TestTPM(t *testing.T) {
 
@@ -352,12 +353,14 @@ func TestRandom(t *testing.T) {
 	logging.SetBackend(stdout)
 	logger := logging.MustGetLogger("tpm")
 
+	domain := "test.com"
+
 	// Create TPM instance
-	tpm, err := New(logger, &Config{
+	tpm, err := NewTPM2(logger, &Config{
 		Device:         "/dev/tpmrm0",
 		EncryptSession: false,
 		UseEntropy:     true,
-	})
+	}, domain)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -377,6 +380,8 @@ func TestRandom(t *testing.T) {
 // Creates a connection a simulated TPM (without creating a CA)
 func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2) {
 
+	domain := "test.com"
+
 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
 	logging.SetBackend(stdout)
 	logger := logging.MustGetLogger("tpm")
@@ -384,7 +389,7 @@ func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2) 
 	tpm, err := NewSimulation(logger, &Config{
 		EncryptSession: encrypt,
 		UseEntropy:     entropy,
-	})
+	}, domain)
 	if err != nil {
 		logger.Fatal(err)
 	}
@@ -395,15 +400,17 @@ func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2) 
 // Creates a basic connection the TPM (without creating a CA)
 func createTPM(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2) {
 
+	domain := "test.com"
+
 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
 	logging.SetBackend(stdout)
 	logger := logging.MustGetLogger("tpm")
 
-	tpm, err := New(logger, &Config{
+	tpm, err := NewTPM2(logger, &Config{
 		Device:         "/dev/tpmrm0",
 		EncryptSession: encrypt,
 		UseEntropy:     entropy,
-	})
+	}, domain)
 	if err != nil {
 		logger.Fatal(err)
 	}
@@ -414,16 +421,18 @@ func createTPM(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2) 
 // Creates a new TPM for testing
 func createTP(encrypt bool) (*logging.Logger, TrustedPlatformModule2, ca.CertificateAuthority, error) {
 
+	domain := "test.com"
+
 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
 	logging.SetBackend(stdout)
 	logger := logging.MustGetLogger("tpm")
 
 	// Create TPM instance
-	tpm, err := New(logger, &Config{
+	tpm, err := NewTPM2(logger, &Config{
 		Device: "/dev/tpmrm0",
 		//EnableEncryption: encrypt,
 		UseEntropy: false,
-	})
+	}, domain)
 	if err != nil {
 		logger.Fatal(err)
 	}

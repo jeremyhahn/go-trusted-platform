@@ -19,6 +19,7 @@ const (
 	PARTITION_REVOKED                        = "revoked"
 	PARTITION_CRL                            = "crl"
 	PARTITION_SIGNED                         = "signed"
+	PARTITION_ENDORSEMENT_KEYS               = "endorsement-keys"
 )
 
 const (
@@ -29,9 +30,11 @@ const (
 	FSEXT_PUBLIC_PKCS1              = ".pub.pkcs1"
 	FSEXT_CSR                       = ".csr"
 	FSEXT_PEM                       = ".crt"
+	FSEXT_PEM_BUNDLE                = ".bundle.crt"
 	FSEXT_DER                       = ".cer"
 	FSEXT_CRL                       = ".crl"
 	FSEXT_SIG                       = ".sig"
+	FSEXT_EKCERT                    = ".tss"
 )
 
 var (
@@ -51,6 +54,7 @@ type TrustStore interface {
 }
 
 type CertificateStore interface {
+	Blob(key string) ([]byte, error)
 	CAPubPEM() ([]byte, error)
 	CAPubKey() (*rsa.PublicKey, error)
 	CAPrivKey() (*rsa.PrivateKey, error)
@@ -62,7 +66,9 @@ type CertificateStore interface {
 	PrivKey(cn string) (*rsa.PrivateKey, error)
 	PrivKeyPEM(cn string) ([]byte, error)
 	Get(cn string, partition Partition, extension FSExtension) ([]byte, error)
+	Append(cn string, data []byte, partition Partition, extension FSExtension) error
 	Save(cn string, data []byte, partition Partition, extension FSExtension) error
+	SaveBlob(key string, data []byte) error
 	SaveTrustedCA(cn string, data []byte, partition Partition, extension FSExtension) error
 	Revoke(cn string, cert *x509.Certificate) error
 	RootCertForCA(cn string) (*x509.Certificate, error)
@@ -71,6 +77,7 @@ type CertificateStore interface {
 	TrustedRoot(cn string) ([]byte, error)
 	TrustedIntermediateCertPool() (*x509.CertPool, error)
 	TrustedRootCertPool(includeSystemRoot bool) (*x509.CertPool, error)
+	TrustedRootCerts() ([]*x509.Certificate, error)
 	TrustedIntermediate(cn string) ([]byte, error)
 	TrustedCertificateFor(cert *x509.Certificate) (*x509.Certificate, error)
 	TrustsCA(cn string, partition Partition) (bool, error)

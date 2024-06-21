@@ -21,26 +21,41 @@ import (
 )
 
 type App struct {
-	Domain      string                      `yaml:"domain" json:"domain" mapstructure:"domain"`
-	CA          ca.CertificateAuthority     `yaml:"-" json:"-" mapstructure:"-"`
-	TPM         tpm2.TrustedPlatformModule2 `yaml:"-" json:"-" mapstructure:"-"`
-	CAConfig    *ca.Config                  `yaml:"certificate-authority" json:"certificate_authority" mapstructure:"certificate-authority"`
-	TPMConfig   *tpm2.Config                `yaml:"tpm" json:"tpm" mapstructure:"tpm"`
-	DebugFlag   bool                        `yaml:"debug" json:"debug" mapstructure:"debug"`
-	CertDir     string                      `yaml:"cert-dir" json:"cert_dir" mapstructure:"cert-dir"`
-	ConfigDir   string                      `yaml:"config-dir" json:"config_dir" mapstructure:"config-dir"`
-	DataDir     string                      `yaml:"data-dir" json:"data_dir" mapstructure:"data-dir"`
-	LogDir      string                      `yaml:"log-dir" json:"log_dir" mapstructure:"log-dir"`
-	Logger      *logging.Logger             `yaml:"-" json:"-" mapstructure:"-"`
-	RuntimeUser string                      `yaml:"runtime-user" json:"runtime_user" mapstructure:"runtime-user"`
-	WebService  config.WebService           `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
+	Domain            string                      `yaml:"domain" json:"domain" mapstructure:"domain"`
+	Hostmaster        string                      `yaml:"hostmaster" json:"hostmaster" mapstructure:"hostmaster"`
+	CA                ca.CertificateAuthority     `yaml:"-" json:"-" mapstructure:"-"`
+	TPM               tpm2.TrustedPlatformModule2 `yaml:"-" json:"-" mapstructure:"-"`
+	CAConfig          ca.Config                   `yaml:"certificate-authority" json:"certificate_authority" mapstructure:"certificate-authority"`
+	TPMConfig         tpm2.Config                 `yaml:"tpm" json:"tpm" mapstructure:"tpm"`
+	AttestationConfig config.Attestation          `yaml:"attestation" json:"attestation" mapstructure:"attestation"`
+	DebugFlag         bool                        `yaml:"debug" json:"debug" mapstructure:"debug"`
+	CertDir           string                      `yaml:"cert-dir" json:"cert_dir" mapstructure:"cert-dir"`
+	ConfigDir         string                      `yaml:"config-dir" json:"config_dir" mapstructure:"config-dir"`
+	DataDir           string                      `yaml:"data-dir" json:"data_dir" mapstructure:"data-dir"`
+	LogDir            string                      `yaml:"log-dir" json:"log_dir" mapstructure:"log-dir"`
+	Logger            *logging.Logger             `yaml:"-" json:"-" mapstructure:"-"`
+	RuntimeUser       string                      `yaml:"runtime-user" json:"runtime_user" mapstructure:"runtime-user"`
+	WebService        config.WebService           `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
 }
 
 func NewApp() *App {
 	return new(App)
 }
 
-func (app *App) Init() {
+type AppInitParams struct {
+	Debug     bool
+	LogDir    string
+	ConfigDir string
+	CertDir   string
+}
+
+func (app *App) Init(initParams *AppInitParams) *App {
+	if initParams != nil {
+		app.DebugFlag = initParams.Debug
+		app.LogDir = initParams.LogDir
+		app.ConfigDir = initParams.ConfigDir
+		app.CertDir = initParams.CertDir
+	}
 	app.initConfig()
 	app.initLogger()
 	app.initTPM()
@@ -54,6 +69,7 @@ func (app *App) Init() {
 	} else {
 		logging.SetLevel(logging.INFO, "")
 	}
+	return app
 }
 
 func (app *App) initConfig() {
@@ -61,7 +77,7 @@ func (app *App) initConfig() {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(app.ConfigDir)
-	viper.AddConfigPath(fmt.Sprintf("/etc/%s/", Name))
+	//viper.AddConfigPath(fmt.Sprintf("/etc/%s/", Name))
 	viper.AddConfigPath(fmt.Sprintf("$HOME/.%s/", Name))
 	viper.AddConfigPath(".")
 
@@ -73,9 +89,7 @@ func (app *App) initConfig() {
 		log.Fatal(err)
 	}
 
-	if app.DebugFlag {
-		log.Println(viper.AllSettings())
-	}
+	log.Printf("Using configuration file: %s\n", viper.ConfigFileUsed())
 }
 
 func (app *App) initLogger() {
@@ -98,12 +112,19 @@ func (app *App) initLogger() {
 }
 
 // Open a connection to the TPM, using an unauthenticated, unverified
-// and un-attested connection.
+// and un-attested connection. Use the software TPM simulator if enabled
+// in the TPM configuration section.
 func (app *App) initTPM() {
-	tpm, err := tpm2.New(app.Logger, app.TPMConfig)
+	var err error
+	var tpm tpm2.TrustedPlatformModule2
+	if app.TPMConfig.UseSimulator {
+		tpm, err = tpm2.NewSimulation(app.Logger, &app.TPMConfig, app.Domain)
+	} else {
+		tpm, err = tpm2.NewTPM2(app.Logger, &app.TPMConfig, app.Domain)
+	}
 	if err != nil {
 		app.Logger.Error(err)
-		app.Logger.Error("continuing as untrusted platform!")
+		app.Logger.Error("continuing as UNTRUSTED platform!")
 	}
 	app.TPM = tpm
 }
@@ -120,9 +141,9 @@ func (app *App) initTPM() {
 // the session / bus communication between the CPU <-> TPM.
 func (app *App) initCA() {
 
-	// No need to keep the TPM open after local attestation
-	// and the Certificate Authority initialization is complete.
-	// Open and close it again later when needed.
+	// No need to keep the TPM open after Certificate Authority
+	// initialization local attestation is complete. Open and
+	// close it again later when needed.
 	defer app.TPM.Close()
 
 	// Initalize TPM based random reader if present.
@@ -142,8 +163,9 @@ func (app *App) initCA() {
 	}
 
 	// Create new Root and Intermediate CA(s)
-	_, intermediateCAs, err := ca.NewCA(app.Logger, app.CertDir, app.CAConfig, random)
-	if err != nil && err != ca.ErrCertNotFound {
+	_, intermediateCAs, err := ca.NewCA(
+		app.Logger, app.CertDir, &app.CAConfig, random)
+	if err != nil {
 		app.Logger.Fatal(err)
 	}
 
@@ -151,38 +173,50 @@ func (app *App) initCA() {
 	intermediateCN := intermediateIdentity.Subject.CommonName
 	intermediateCA := intermediateCAs[intermediateCN]
 
+	// Inject the CA into the TPM
 	app.TPM.SetCertificateAuthority(intermediateCA)
 
-	// Issue a TLS certificate fpr encrypted web services
-	certReq := ca.CertificateRequest{
-		Valid: 365, // days
-		Subject: ca.Subject{
-			CommonName:   app.Domain,
-			Organization: app.WebService.Certificate.Subject.Organization,
-			Country:      app.WebService.Certificate.Subject.Country,
-			Locality:     app.WebService.Certificate.Subject.Locality,
-			Address:      app.WebService.Certificate.Subject.Address,
-			PostalCode:   app.WebService.Certificate.Subject.PostalCode,
-		},
-		SANS: &ca.SubjectAlternativeNames{
-			DNS: []string{
-				app.Domain,
-				"localhost",
-				"localhost.localdomain",
-			},
-			IPs: app.parseLocalAddresses(),
-			Email: []string{
-				"root@localhost",
-				"root@test.com",
-			},
-		},
-	}
+	// Try to load the web services TLS cert
+	_, err = intermediateCA.PEM(app.Domain)
+	if err != nil {
 
-	if _, err = intermediateCA.IssueCertificate(certReq, random); err != nil {
-		app.Logger.Fatal(err)
+		// Issue a platform server certificate for TLS encrypted web services
+		certReq := ca.CertificateRequest{
+			Valid: 365, // days
+			Subject: ca.Subject{
+				CommonName:   app.Domain,
+				Organization: app.WebService.Certificate.Subject.Organization,
+				Country:      app.WebService.Certificate.Subject.Country,
+				Locality:     app.WebService.Certificate.Subject.Locality,
+				Address:      app.WebService.Certificate.Subject.Address,
+				PostalCode:   app.WebService.Certificate.Subject.PostalCode,
+			},
+			SANS: &ca.SubjectAlternativeNames{
+				DNS: []string{
+					app.Domain,
+					"localhost",
+					"localhost.localdomain",
+				},
+				IPs: app.parseLocalAddresses(),
+				Email: []string{
+					app.Hostmaster,
+					"root@localhost",
+					"root@test.com",
+				},
+			},
+		}
+
+		if _, err = intermediateCA.IssueCertificate(certReq, random); err != nil {
+			app.Logger.Fatal(err)
+		}
 	}
 
 	app.CA = intermediateCA
+
+	// Initialize the TPM / Platform
+	if err := app.TPM.Init(); err != nil {
+		app.Logger.Fatal(err)
+	}
 }
 
 func (app *App) InitLogFile(uid, gid int) *os.File {

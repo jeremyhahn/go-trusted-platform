@@ -31,9 +31,26 @@ func setup() {
 	os.RemoveAll(CERTS_DIR)
 }
 
+func TestInit(t *testing.T) {
+
+	logger, _, intermediateCAs, err := createService()
+	assert.Nil(t, err)
+
+	intermediateCA := intermediateCAs["intermediate-ca"]
+	bundle, err := intermediateCA.CABundle()
+	assert.Nil(t, err)
+	assert.NotNil(t, bundle)
+
+	if err != nil {
+		logger.Error(err)
+	}
+
+	logger.Info(bundle)
+}
+
 func TestImportIssuingCAs(t *testing.T) {
 
-	rootCA, _, err := createService()
+	_, rootCA, _, err := createService()
 	assert.Nil(t, err)
 
 	// Download the certificate
@@ -66,7 +83,7 @@ func TestImportIssuingCAs(t *testing.T) {
 
 func TestDownloadDistribuitionCRLs(t *testing.T) {
 
-	rootCA, _, err := createService()
+	_, rootCA, _, err := createService()
 	assert.Nil(t, err)
 
 	// Download the certificate
@@ -93,7 +110,7 @@ func TestDownloadDistribuitionCRLs(t *testing.T) {
 
 func TestSignAndVerify(t *testing.T) {
 
-	rootCA, _, err := createService()
+	_, rootCA, _, err := createService()
 	assert.Nil(t, err)
 
 	// Create test data
@@ -114,39 +131,42 @@ func TestSignAndVerify(t *testing.T) {
 
 func TestPersistentSignAndVerify(t *testing.T) {
 
-	rootCA, _, err := createService()
+	_, rootCA, _, err := createService()
 	assert.Nil(t, err)
 
 	// Create test data
-	cn := "test"
+	blobKey := "/my/secret/data.dat"
 	data := []byte("hello\nworld\n")
 
 	// Sign and store the data and the signature
-	signature, err := rootCA.PersistentSign(cn, data, true)
+	err = rootCA.PersistentSign(blobKey, data, true)
+	assert.Nil(t, err)
+
+	signature, err := rootCA.Signature(blobKey)
 	assert.Nil(t, err)
 	assert.NotNil(t, signature)
 
 	// Verify the data with the stored signature
-	assert.Nil(t, rootCA.PersistentVerifySignature(cn, data))
+	assert.Nil(t, rootCA.PersistentVerifySignature(blobKey, data))
 
 	// Modified data to ensure verification fails
 	newData := []byte("injected-malware")
-	assert.NotNil(t, rootCA.PersistentVerifySignature(cn, newData))
+	assert.NotNil(t, rootCA.PersistentVerifySignature(blobKey, newData))
 
 	// Ensure the check to see if the signature data exists
-	signed, err := rootCA.Signed(cn)
+	signed, err := rootCA.Signed(blobKey)
 	assert.Nil(t, err)
 	assert.True(t, signed)
 
 	// Ensure the signed data can be retrieved
-	signedData, err := rootCA.SignedData(cn)
+	signedData, err := rootCA.SignedData(blobKey)
 	assert.Nil(t, err)
 	assert.Equal(t, data, signedData)
 }
 
 func TestGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 
-	rootCA, _, err := createService()
+	_, rootCA, _, err := createService()
 	assert.Nil(t, err)
 
 	// Get the CA public key
@@ -290,7 +310,7 @@ func TestGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 
 func TestIssueCertificate(t *testing.T) {
 
-	rootCA, _, err := createService()
+	_, rootCA, _, err := createService()
 	assert.Nil(t, err)
 
 	domain := "www.domain.com"
@@ -331,7 +351,7 @@ func TestIssueCertificate(t *testing.T) {
 	assert.Equal(t, domain, cert.Subject.CommonName)
 }
 
-func createService() (CertificateAuthority, map[string]CertificateAuthority, error) {
+func createService() (*logging.Logger, CertificateAuthority, map[string]CertificateAuthority, error) {
 
 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
 	logging.SetBackend(stdout)
@@ -446,5 +466,5 @@ func createService() (CertificateAuthority, map[string]CertificateAuthority, err
 		logger.Fatal(err)
 	}
 
-	return rootCA, intermediateCAs, nil
+	return logger, rootCA, intermediateCAs, nil
 }

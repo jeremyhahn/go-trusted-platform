@@ -14,6 +14,7 @@ var TPMImportEkCert string
 var TPMFormDER bool
 var TPMVerify bool
 var TPMEventLog bool
+var EKCertName string
 
 func init() {
 
@@ -21,6 +22,7 @@ func init() {
 	tpmCmd.PersistentFlags().BoolVar(&TPMFormDER, "der", false, "Flag indicating if the certificate is ASN.1 DER form")
 	tpmCmd.PersistentFlags().BoolVar(&TPMVerify, "verify", false, "Flag indicating if the certificate should be verified by the Certificate Authority")
 	tpmCmd.PersistentFlags().BoolVar(&TPMEventLog, "event-log", false, "Shows the TPM event log")
+	tpmCmd.PersistentFlags().StringVar(&EKCertName, "ek-cert-name", "localhost", "The Endirsement Key (EK) name")
 
 	rootCmd.AddCommand(tpmCmd)
 }
@@ -48,30 +50,6 @@ https://www.intel.com/content/www/us/en/business/enterprise-computers/resources/
 
 		// --import-ek-cert cn
 		if TPMImportEkCert != "" {
-
-			// bytes, err := os.ReadFile(TPMImportEkCert)
-			// if err != nil {
-			// 	App.Logger.Fatal(err)
-			// }
-
-			// ekCert, err := App.TPM.ParseEKCertificate(bytes)
-			// if err != nil {
-			// 	App.Logger.Fatal(err)
-			// }
-
-			// if err := App.CA.ImportCN(cn, ekCert); err != nil {
-			// 	App.Logger.Fatal(err)
-			// }
-
-			// if TPMVerify {
-			// 	valid, err := App.CA.Verify(ekCert, &cn)
-			// 	if err != nil {
-			// 		App.Logger.Fatal(err)
-			// 	}
-			// 	if !valid {
-			// 		App.Logger.Fatal("failed to validate EK certificate")
-			// 	}
-			// }
 
 			cn, _ := util.FileName(TPMImportEkCert)
 
