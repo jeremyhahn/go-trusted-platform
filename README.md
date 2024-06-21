@@ -12,7 +12,7 @@ The main components of this project are:
 The Trusted Platform Module (TPM) technology is designed to provide hardware-based,
 security-related functions. A TPM chip is a secure crypto-processor that is designed
 to carry out cryptographic operations. The chip includes multiple physical security
-mechanisms to make it tamper-resistant, and malicious software is unable to tamper
+mechanisms to make it tamper-resistant, where malicious software is unable to tamper
 with the security functions of the TPM. 
 
 The Trusted Platform Module (TPM) provides:
@@ -58,7 +58,7 @@ The default configuration for the Trusted Platform is "use the most secure confi
 
 #### Flow
 
-The following steps are used to complete device
+The following steps are used to complete device registration, identity validation, platform software state validation, and service delivery.
 
 ###### Device Registration
 
@@ -97,6 +97,7 @@ This project is under active development. APIs can change at any moment.
 
 The `main` branch will always build and run. Don't be afraid to try it out!
 
+
 - [ ] Trusted Platform
     - [ ] Certificate Authority
         - [x] Polymorphic Persistent Storage
@@ -107,19 +108,29 @@ The `main` branch will always build and run. Don't be afraid to try it out!
         - [x] Root CA
         - [x] Intermediate CA(s)
         - [x] x509 Certificate & key storage / retrieval
-        - [x] Issue x509 certificate (from Root and Intermediate CA)
-        - [x] x509 Certificate Revocation
+        - [x] Issue x509 certificates (from Root and/or Intermediate CA)
         - [x] Import to trusted root certificate store
         - [x] Import to trusted intermediate certificate store
         - [x] Create RSA public/private key pairs
-        - [x] Create Certificate Signing Requests
+        - [x] Create & Sign Certificate Signing Requests (CSR)
+        - [x] x509 Certificate Revocation Lists (CRLs)
         - [x] RSA Sign / Verify (certificates and data)
         - [ ] RSA Encrypt / Decrypt
         - [x] Encode / Decode to / from DER / PEM
         - [x] Automatic download / import of Issuer CA(s) to trust store
         - [x] Automatic download / import of CA Revocation Lists (CRLs)
+        - [x] Parse & Create CA bundles
+        - [x] Create Golang CertPool objects pre-initialized with CA certificates
+        - [x] Create Golang tls.Config objects pre-initialized with Root / Client CA bundle and x509 Certificates
+        - [x] Signed blob storage
+        - [x] Install / Uninstall CA certificates to Operating System trust store
         - [ ] Online Certificate Status Protocol (OCSP)
     - [ ] TPM 2.0
+        - [x] Read Endorsement Key Certificate from NVRAM
+        - [x] Download Endorsement Key Certificate from Manufacturer
+            - [x] Intel
+        - [x] Read Endorsement Key Certificate from file (tpm2_getekcertificate)
+        - [x] Auto-import Platform Certificates (Manufacturer CA chain)
         - [x] Create RSA Endorsement Key
         - [x] Create ECC Endorsement Key
         - [x] Create RSA Storage Root Key
@@ -127,11 +138,11 @@ The `main` branch will always build and run. Don't be afraid to try it out!
         - [x] Create RSA Storage Root Key
         - [x] Create ECC Attestation Key
         - [x] Validate EK Cert w/ CA
-        - [x] Auto-import EK Issuer Root & Intermediate CAs
         - [x] Create Attestation Key from EK / SRK
         - [x] Credential challenge
         - [x] Activate credential
-        - [x] Event Log Parsing
+        - [x] Read / Parse Event Log
+        - [x] Read Platform Configuration Registers (PCRs)
         - [ ] Provide Attestation Key to Client
     - [ ] Command Line Interface
         - [ ] Certificate Authority
@@ -145,6 +156,7 @@ The `main` branch will always build and run. Don't be afraid to try it out!
             - [ ] Sign / verify (certificate & data)
             - [ ] Encrypt / Decrypt
             - [ ] Encode / Decode
+            - [x] Parse DER / PEM x509 certificates
         - [ ] Trusted Platform Module 2.0
             - [ ] Create RSA Endorsement Key
             - [ ] Create ECC Endorsement Key
@@ -159,7 +171,18 @@ The `main` branch will always build and run. Don't be afraid to try it out!
             - [ ] Activate credential
             - [x] Event Log Parsing
             - [ ] Provide Attestation Key to Client
-            - [ ] Full Remote Attestation
+        - [ ] Full Remote Attestation
+            - [ ] Server (Attestor)
+                - [x] gRPC service
+                - [x] Insecure service
+                    - [x] Exchange CA certificate bundle with Verifier
+                    - [x] Supports mTLS auto-negotiation
+                    - [x] Require TLSv1.3
+                - [x] Secure service (requires mTLS)
+                    - [x] Get Endorsement Key (EK) and Certificate
+            - [ ] Client (Verifier)
+                - [x] Auto-negotiated mTLSv1.3
+                - [x] Get Attestor Endorsement Key (EK) and Certificate
     - [ ] Web Services
         - [x] Web server
         - [x] REST API
@@ -168,14 +191,14 @@ The `main` branch will always build and run. Don't be afraid to try it out!
             - [x] Generate Token
             - [x] Refresh Token
             - [x] Validate Token
-            - [ ] Support opaque private key from TPM
+            - [ ] Opaque Private Key - TPM
         - [x] HTTPS / TLS
         - [ ] mTLS
         - [ ] gRPC Full Remote Attestation
             - [ ] Server (Verifier)
             - [ ] Client (Attestor)
     - [ ] Flows
-        - [x] Device Registration
+        - [ ] Device Registration
         - [ ] Service Request - Part 1: Platform Anonymous Identity Validation
         - [ ] Service Request - Part 2: Platform Software State Validation
         - [ ] Service Delivery

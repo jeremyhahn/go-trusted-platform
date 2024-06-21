@@ -48,9 +48,16 @@ LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/app.Version=${APP_VERSION}
 GREEN=\033[0;32m
 NO_COLOR=\033[0m
 
-.PHONY: deps build build-debug build-static build-debug-static clean test initlog
+# The TPM Endorsement Key file name. This is set to a default value that
+# aligns with the EK cert name used in the tpm2_getekcertificate docs:
+# https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_getekcertificate.1.md
+EK_CERT_NAME ?= ECcert.bin
 
-default: build
+
+.PHONY: deps build build-debug build-static build-debug-static clean test initlog \
+	swagger verifier attestor proto
+
+default: proto build
 
 env:
 	@echo "ORG: \t\t\t$(ORG)"
@@ -156,5 +163,95 @@ clean:
 		$(APPNAME).log \
 		/usr/local/bin/$(APPNAME) \
 		db/ \
-		ek-cert.bin \
-		pki/tpm2/ek-cert.bin
+		logs \
+		pki/tpm2/$(EK_CERT_NAME)
+
+
+proto:
+	cd attestation && protoc \
+		--go_out=. \
+		--go_opt=paths=source_relative \
+    	--go-grpc_out=. \
+		--go-grpc_opt=paths=source_relative \
+		proto/attestation.proto
+
+
+# Verifier
+
+# Set the domain and SANS names in the config to the verifier
+verifier-init:
+	cp config.yaml attestation/verifier
+	sed -i 's/domain: example.com/domain: verifier.example.com/' attestation/verifier/config.yaml
+	sed -i 's/- example.com/- verifier.example.com/' attestation/verifier/config.yaml
+	cp $(EK_CERT_NAME) attestation/verifier
+
+verifier-cert-chain:
+	cd attestation && \
+	openssl verify \
+		-CAfile verifier/db/certs/root-ca/root-ca.crt \
+		-untrusted verifier/db/certs/intermediate-ca/intermediate-ca.crt \
+		verifier/db/certs/intermediate-ca/issued/verifier.example.com/verifier.example.com.crt
+
+verifier-clean: 
+	rm -rf \
+		attestation/verifier/logs \
+		attestation/verifier/db \
+		attestation/verifier/$(EK_CERT_NAME)
+
+verifier: verifier-clean build verifier-init
+	cd attestation/verifier && \
+		../../trusted-platform verifier \
+			--debug \
+			--data-dir ./db \
+			--log-dir ./logs \
+			--attestor attestor.example.com
+
+# Attestor
+
+# Set the domain and SANS names in the config to the attestor
+attestor-init:
+	cp config.yaml attestation/attestor
+	sed -i 's/domain: example.com/domain: attestor.example.com/' attestation/attestor/config.yaml
+	sed -i 's/- example.com/- attestor.example.com/' attestation/attestor/config.yaml
+	cp $(EK_CERT_NAME) attestation/attestor/
+
+attestor-cert-chain:
+	cd attestation && \
+	openssl verify \
+		-CAfile attestor/db/certs/root-ca/root-ca.crt \
+		-untrusted attestor/db/certs/intermediate-ca/intermediate-ca.crt \
+		attestor/db/certs/intermediate-ca/issued/attestor.example.com/attestor.example.com.crt
+
+attestor-tls:
+	cd attestation && \
+	openssl s_client \
+		-connect localhost:8082 \
+		-showcerts \
+		-servername localhost \
+		-CAfile attestor/db/certs/intermediate-ca/intermediate-ca.bundle.crt \
+		| openssl x509 -noout -text
+
+attestor-clean: 
+	rm -rf \
+		attestation/attestor/logs \
+		attestation/attestor/db \
+		attestation/verifier/$(EK_CERT_NAME)
+
+attestor: attestor-clean build attestor-init
+	cd attestation/attestor && \
+		../../trusted-platform attestor \
+			--debug \
+			--config-dir ./ \
+			--data-dir ./db \
+			--log-dir ./logs
+
+
+# Web Services
+webservice-tls:
+	cd attestation && \
+	openssl s_client \
+		-connect localhost:8081 \
+		-showcerts \
+		-servername localhost \
+		-CAfile attestor/db/certs/intermediate-ca/trusted-root/root-ca.crt \
+		| openssl x509 -noout -text

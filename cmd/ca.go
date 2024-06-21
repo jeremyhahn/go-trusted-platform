@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"crypto/rand"
+	"crypto/x509"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,17 +14,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var CAInstallCACert bool
-var CAUninstallCACert bool
-var CAPublicKey string
-var CAList bool
-var CAIssueCertificate string
-var CASubjectFile string
-var CASansDNS string
-var CASansIPs string
-var CASansEmails string
-var CAShowCert string
-var CARevokeCert string
+var (
+	CAInstallCACert,
+	CAUninstallCACert,
+	CAList bool
+
+	CAPublicKey,
+	CAIssueCertificate,
+	CASubjectFile,
+	CASansDNS,
+	CASansIPs,
+	CASansEmails,
+	CAShowCert,
+	CARevokeCert,
+	CAParseDER,
+	CAParsePEM string
+)
 
 func init() {
 
@@ -38,6 +44,8 @@ func init() {
 	caCmd.PersistentFlags().StringVar(&CASansDNS, "sans-dns", "", "Comma separated list of SANS DNS names (ex: domain1.com,domain2.com)")
 	caCmd.PersistentFlags().StringVar(&CASansIPs, "sans-ips", "", "Comma separated list of SANS IP Addresses (ex: 1.2.3.4,5.6.7.8)")
 	caCmd.PersistentFlags().StringVar(&CASansEmails, "sans-emails", "", "Comma separated list of SANS IP Email addresses (ex: me@domain1.com,me@domain2.com)")
+	caCmd.PersistentFlags().StringVar(&CAParseDER, "der", "", "Parses a DER encoded certificate")
+	caCmd.PersistentFlags().StringVar(&CAParsePEM, "pem", "", "Parses a PEM encoded certificate")
 
 	rootCmd.AddCommand(caCmd)
 }
@@ -49,6 +57,30 @@ var caCmd = &cobra.Command{
 services to the platform. Create, install, issue, and revoke certificates
 or secure web services, mTLS, encryption, and identity management.`,
 	Run: func(cmd *cobra.Command, args []string) {
+
+		if CAParsePEM != "" {
+			bytes, err := os.ReadFile(CAParsePEM)
+			if err != nil {
+				App.Logger.Fatal(err)
+			}
+			cert, err := App.CA.DecodePEM(bytes)
+			if err != nil {
+				App.Logger.Fatal(err)
+			}
+			App.Logger.Infof("%+v", cert)
+		}
+
+		if CAParseDER != "" {
+			bytes, err := os.ReadFile(CAParseDER)
+			if err != nil {
+				App.Logger.Fatal(err)
+			}
+			cert, err := x509.ParseCertificate(bytes)
+			if err != nil {
+				App.Logger.Fatal(err)
+			}
+			App.Logger.Infof("%+v", cert)
+		}
 
 		// --show cn
 		if CAShowCert != "" {
@@ -81,7 +113,7 @@ or secure web services, mTLS, encryption, and identity management.`,
 
 		// --install-ca
 		if CAInstallCACert {
-			rootCA, intermediateCAs, err := ca.NewCA(App.Logger, App.CertDir, App.CAConfig, nil)
+			rootCA, intermediateCAs, err := ca.NewCA(App.Logger, App.CertDir, &App.CAConfig, nil)
 			if err != nil {
 				App.Logger.Fatal(err)
 			}
@@ -99,7 +131,7 @@ or secure web services, mTLS, encryption, and identity management.`,
 
 		// --uninstal-ca
 		if CAUninstallCACert {
-			rootCA, intermediateCAs, err := ca.NewCA(App.Logger, App.CertDir, App.CAConfig, nil)
+			rootCA, intermediateCAs, err := ca.NewCA(App.Logger, App.CertDir, &App.CAConfig, nil)
 			if err != nil {
 				App.Logger.Fatal(err)
 			}

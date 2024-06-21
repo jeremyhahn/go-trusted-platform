@@ -4,6 +4,58 @@
         "type": "shell",
         "label": "rm_log",
         "command": "rm",
-        "args": ["-rf", "logs/"]
+        "args": ["-rf", 
+            "logs/"
+        ]
+    }, 
+    {
+        "type": "shell",
+        "label": "rm_db",
+        "command": "rm",
+        "args": ["-rf", "db/"]
+    }, 
+    {
+        "type": "shell",
+        "label": "clean_attestor",
+        "command": "rm",
+        "args": ["-rf",
+             "attestation/attestor/db",
+             "attestation/attestor/logs",
+        ]
+    },
+    {
+        "type": "shell",
+        "label": "clean_verifier",
+        "command": "rm",
+        "args": ["-rf",
+             "attestation/verifier/db/",
+             "attestation/verifier/logs/"
+        ]
+    },
+    {
+        "type": "shell",
+        // "dependsOn": [
+        //     "rm_log",
+        //     "clean_attestor",
+        // ],
+        "label": "attestor_init",
+        "command": "rm",
+        "args": ["-rf",
+             "attestation/attestor/db/",
+             "attestation/attestor/logs/"
+        ]
+    },
+    {
+        "type": "shell",
+        // "dependsOn": [
+        //     "rm_log",
+        //     "clean_verifier",
+        // ],
+        "label": "verifier_init",
+        "command": "rm",
+        "args": ["-rf",
+             "attestation/verifier/db/",
+             "attestation/verifier/logs/"
+        ]
     }]
 }

@@ -93,7 +93,7 @@ func (restService *SystemRestService) EventsPage(w http.ResponseWriter, r *http.
 		return
 	}
 
-	restService.app.Logger.Debugf("[Webserver.eventsPage] page %s requested", page)
+	restService.app.Logger.Debugf("EventsPage: page %s requested", page)
 
 	restService.httpWriter.Success200(w, r, p)
 }

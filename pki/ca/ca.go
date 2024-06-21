@@ -7,9 +7,11 @@ import (
 	"crypto/rsa"
 	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/binary"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -23,6 +25,8 @@ import (
 	"time"
 
 	"github.com/op/go-logging"
+
+	"github.com/jeremyhahn/go-trusted-platform/util"
 )
 
 var (
@@ -38,9 +42,12 @@ var (
 	ErrCRLAlreadyExists = errors.New("certificate-authority: revocation list already exists")
 	ErrNoIssuingCA      = errors.New("certificate-authority: no issuing CAs found in certificate")
 	ErrCertNotSupported = errors.New("certificate-authority: certificate contains unsupported configuration")
+	ErrBlobNotFound     = errors.New("certificate-authority: signed blob not found")
 )
 
 type CertificateAuthority interface {
+	CABundle() ([]byte, error)
+	CABundleCertPool() (*(x509.CertPool), error)
 	CACertificate() *x509.Certificate
 	CAPubKey() (*rsa.PublicKey, error)
 	Certificate(cn string) (*x509.Certificate, error)
@@ -53,6 +60,7 @@ type CertificateAuthority interface {
 	DER(cn string) ([]byte, error)
 	Init(identity Identity, parentPrivKey *rsa.PrivateKey, random io.Reader) error
 	Identity() *x509.Certificate
+	IsAutoImportingIssuerCAs() bool
 	IsReady() bool
 	IssueCertificate(request CertificateRequest, random io.Reader) ([]byte, error)
 	IssuedCertificates() ([]string, error)
@@ -64,13 +72,16 @@ type CertificateAuthority interface {
 	ImportCN(cn string, cert *x509.Certificate) error
 	ImportDER(cn string, derCert []byte) error
 	ImportDistrbutionCRLs(cert *x509.Certificate) error
+	//ImportEK(domain string, tssBytes []byte) error
 	ImportPEM(cn string, pemBytes []byte) error
 	ImportIssuingCAs(cert *x509.Certificate, leafCN *string, leaf *x509.Certificate) error
 	ImportTrustedRoot(cn string, derCert []byte) error
 	ImportTrustedIntermediate(cn string, derCert []byte) error
 	ImportPubKey(cn string, pub any) error
+	ParseCABundle(bundle []byte) ([]*x509.Certificate, error)
+	ParseEKCertificate(ekCert []byte) (*x509.Certificate, error)
 	PEM(cn string) ([]byte, error)
-	PersistentSign(cn string, data []byte, saveData bool) ([]byte, error)
+	PersistentSign(key string, data []byte, saveData bool) error
 	PersistentVerifySignature(cn string, data []byte) error
 	PubKey(cn string) (*rsa.PublicKey, error)
 	RSADecrypt(data []byte) ([]byte, error)
@@ -78,10 +89,10 @@ type CertificateAuthority interface {
 	Revoke(cn string) error
 	RootCertificate() (*x509.Certificate, error)
 	RootCertForCA(cn string) (*x509.Certificate, error)
-	Sign(data []byte) ([]byte, error)
-	Signature(cn string) ([]byte, error)
-	Signed(cn string) (bool, error)
-	SignedData(cn string) ([]byte, error)
+	Sign(key []byte) ([]byte, error)
+	Signature(key string) ([]byte, error)
+	Signed(key string) (bool, error)
+	SignedData(key string) ([]byte, error)
 	SignCSR(csrBytes []byte, request CertificateRequest) ([]byte, error)
 	TrustStore() TrustStore
 	TrustedRootCertificate(cn string) (*x509.Certificate, error)
@@ -90,6 +101,8 @@ type CertificateAuthority interface {
 	TrustedIntermediateCertPool() (*x509.CertPool, error)
 	Verify(certificate *x509.Certificate, leafCN *string) (bool, error)
 	VerifySignature(data []byte, signature []byte) error
+	X509KeyPair(cn string) (tls.Certificate, error)
+	TLSConfig(cn string, includeSystemRoot bool) (*tls.Config, error)
 }
 
 type CA struct {
@@ -226,6 +239,11 @@ func NewIntermediateCA(
 		trustStore:          NewDebianTrustStore(logger, certDir),
 		commonName:          identity.Subject.CommonName,
 		autoImportIssuingCA: autoImportIssuingCA}, nil
+}
+
+// Returns true if auto-importing of CA certificates are enabled
+func (ca *CA) IsAutoImportingIssuerCAs() bool {
+	return ca.config.AutoImportIssuingCA
 }
 
 // Returns the backend certificate store used to
@@ -424,8 +442,11 @@ func (ca *CA) Init(identity Identity, parentPrivKey *rsa.PrivateKey, random io.R
 
 	// If this is an Intermediate Certificate Authority, import the
 	// Root CA certificate into the trusted root certificate store
+	// and create a CA bundle file for TLS clients to verify issued
+	// certificates.
 	if ca.parentIdentity != nil {
 		ca.importRootCA()
+		ca.createCABundle()
 	}
 
 	return nil
@@ -859,26 +880,30 @@ func (ca *CA) VerifySignature(data []byte, signature []byte) error {
 }
 
 // Signs the requested data and saves the signature, and optionally the data,
-// to the certificate store.
-func (ca *CA) PersistentSign(cn string, data []byte, saveData bool) ([]byte, error) {
+// to the certificate store. If the blob key contains forward slashes, a
+// directory hierarchy will be created to match the key. For example, the
+// blob key /my/secret/blob.dat would get saved to cert-store/signed/my/secret/blob.dat
+func (ca *CA) PersistentSign(key string, data []byte, saveData bool) error {
 	signature, err := ca.Sign(data)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := ca.certStore.Save(cn, signature, PARTITION_SIGNED, FSEXT_SIG); err != nil {
-		return nil, err
+	sigKey := fmt.Sprintf("%s%s", key, FSEXT_SIG)
+	if err := ca.certStore.SaveBlob(sigKey, signature); err != nil {
+		return err
 	}
 	if saveData {
-		if err := ca.certStore.Save(cn, data, PARTITION_SIGNED, FSEXT_BLOB); err != nil {
-			return nil, err
+		if err := ca.certStore.SaveBlob(key, data); err != nil {
+			return err
 		}
 	}
-	return signature, nil
+	return nil
 }
 
 // Verifies the signature of the requested data using a stored signature
-func (ca *CA) PersistentVerifySignature(cn string, data []byte) error {
-	signature, err := ca.certStore.Get(cn, PARTITION_SIGNED, FSEXT_SIG)
+func (ca *CA) PersistentVerifySignature(key string, data []byte) error {
+	sigKey := fmt.Sprintf("%s%s", key, FSEXT_SIG)
+	signature, err := ca.certStore.Blob(sigKey)
 	if err != nil {
 		return err
 	}
@@ -889,22 +914,24 @@ func (ca *CA) PersistentVerifySignature(cn string, data []byte) error {
 	return nil
 }
 
-// Returns a stored signature from the certificate store
-func (ca *CA) Signature(cn string) ([]byte, error) {
-	return ca.certStore.Get(cn, PARTITION_SIGNED, FSEXT_SIG)
+// Returns a stored signature from the signed blob store
+func (ca *CA) Signature(key string) ([]byte, error) {
+	sigKey := fmt.Sprintf("%s%s", key, FSEXT_SIG)
+	return ca.certStore.Blob(sigKey)
 }
 
 // Returns true if the specified common name has a stored signature
-func (ca *CA) Signed(cn string) (bool, error) {
-	if _, err := ca.certStore.Get(cn, PARTITION_SIGNED, FSEXT_SIG); err != nil {
+func (ca *CA) Signed(key string) (bool, error) {
+	sigKey := fmt.Sprintf("%s%s", key, FSEXT_SIG)
+	if _, err := ca.certStore.Blob(sigKey); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-// Returns signed data from the certificate store
-func (ca *CA) SignedData(cn string) ([]byte, error) {
-	return ca.certStore.Get(cn, PARTITION_SIGNED, FSEXT_BLOB)
+// Returns signed data from the signed blob store
+func (ca *CA) SignedData(key string) ([]byte, error) {
+	return ca.certStore.Blob(key)
 }
 
 // Download, verify and import all "CA Issuers" listed in the certificate
@@ -915,15 +942,6 @@ func (ca *CA) ImportIssuingCAs(cert *x509.Certificate, leafCN *string, leaf *x50
 	for _, url := range cert.IssuingCertificateURL {
 		cn := cert.Subject.CommonName
 		if cn == "" {
-			// Parse the certificate file name from the URL
-			filePieces := strings.Split(url, "/")
-			filename := filePieces[len(filePieces)-1]
-			namePieces := strings.Split(filename, ".")
-			cn = namePieces[0]
-			// extension := ""
-			// if len(namePieces) > 1  {
-			// 	extension := namePieces[1]
-			// }
 			cn, err = ca.parseIssuerCommonName(cert)
 			if err != nil {
 				return err
@@ -1043,15 +1061,10 @@ func (ca *CA) ImportDistrbutionCRLs(cert *x509.Certificate) error {
 		}
 
 		if cn == "" {
-			// Parse the certificate file name from the URL
-			filePieces := strings.Split(url, "/")
-			filename := filePieces[len(filePieces)-1]
-			namePieces := strings.Split(filename, ".")
-			cn = namePieces[0]
-			// extension := ""
-			// if len(namePieces) > 1  {
-			// 	extension := namePieces[1]
-			// }
+			cn, err = ca.parseIssuerCommonName(cert)
+			if err != nil {
+				return err
+			}
 		}
 
 		ca.logger.Infof("Importing Distribution Certificate Revocation List (CRL): %s", url)
@@ -1111,6 +1124,47 @@ func (ca *CA) ImportDistrbutionCRLs(cert *x509.Certificate) error {
 		ca.logger.Infof("Distribution CRL successfully imported: %s", cn)
 	}
 	return nil
+}
+
+// Parses a raw Trusted Software Stack (TSS) encoded TPM Endorsement Key (EK) blob.
+// The certificate may contain a header, which this function strips and returns a
+// standard x509.Certificate.
+// Thanks, Google: https://github.com/google/go-attestation/blob/master/attest/tpm.go#L221
+func (ca *CA) ParseEKCertificate(ekCert []byte) (*x509.Certificate, error) {
+	var wasWrapped bool
+
+	// TCG PC Specific Implementation section 7.3.2 specifies
+	// a prefix when storing a certificate in NVRAM. We look
+	// for and unwrap the certificate if its present.
+	if len(ekCert) > 5 && bytes.Equal(ekCert[:3], []byte{0x10, 0x01, 0x00}) {
+		certLen := int(binary.BigEndian.Uint16(ekCert[3:5]))
+		if len(ekCert) < certLen+5 {
+			return nil, fmt.Errorf("tpm: parsing nvram header: ekCert size %d smaller than specified cert length %d", len(ekCert), certLen)
+		}
+		ekCert = ekCert[5 : 5+certLen]
+		wasWrapped = true
+	}
+
+	// If the cert parses fine without any changes, we are G2G.
+	if c, err := x509.ParseCertificate(ekCert); err == nil {
+		return c, nil
+	}
+	// There might be trailing nonsense in the cert, which Go
+	// does not parse correctly. As ASN1 data is TLV encoded, we should
+	// be able to just get the certificate, and then send that to Go's
+	// certificate parser.
+	var cert struct {
+		Raw asn1.RawContent
+	}
+	if _, err := asn1.UnmarshalWithParams(ekCert, &cert, "lax"); err != nil {
+		return nil, fmt.Errorf("ca: asn1.Unmarshal() failed: %v, wasWrapped=%v", err, wasWrapped)
+	}
+
+	c, err := x509.ParseCertificate(cert.Raw)
+	if err != nil {
+		return nil, fmt.Errorf("ca: x509.ParseCertificate() failed: %v", err)
+	}
+	return c, nil
 }
 
 // Returns the all of the certificates in the Certificate Authority
@@ -1528,3 +1582,229 @@ func (ca *CA) importRootCA() error {
 
 	return nil
 }
+
+func (ca *CA) createCABundle() error {
+
+	if ca.parentCertificate == nil {
+		return errors.New("certificate-authority: parent CA needed to create bundle")
+	}
+
+	// Save the current CA certificate to a bundle file
+	caPEM, err := ca.EncodePEM(ca.certificate.Raw)
+	if err != nil {
+		return err
+	}
+	err = ca.certStore.Save(
+		ca.certificate.Subject.CommonName,
+		caPEM,
+		PARTITION_CA,
+		FSEXT_PEM_BUNDLE)
+	if err != nil {
+		return err
+	}
+
+	// Append the parent certificate
+	parentPEM, err := ca.EncodePEM(ca.parentCertificate.Raw)
+	if err != nil {
+		return err
+	}
+	err = ca.certStore.Append(
+		ca.certificate.Subject.CommonName,
+		parentPEM,
+		PARTITION_CA,
+		FSEXT_PEM_BUNDLE)
+	if err != nil {
+		return err
+	}
+
+	// Append any other Issuing CAs
+	for _, issuer := range ca.parentCertificate.IssuingCertificateURL {
+		cn, _ := util.FileName(issuer)
+		certPEM, err := ca.certStore.Get(cn, PARTITION_CA, FSEXT_PEM)
+		if err != nil {
+			return err
+		}
+		err = ca.certStore.Append(
+			ca.certificate.Subject.CommonName,
+			certPEM,
+			PARTITION_CA,
+			FSEXT_PEM_BUNDLE)
+	}
+
+	return nil
+}
+
+// Returns a CA "bundle" that contains all of the certificates
+// in the chain up to the Root. This file is useful for clients
+// who wish to verify a TLS connection to a server who was issued
+// a certificate from this CA.
+func (ca *CA) CABundle() ([]byte, error) {
+	return ca.certStore.Get(
+		ca.certificate.Subject.CommonName,
+		PARTITION_CA,
+		FSEXT_PEM_BUNDLE)
+}
+
+// Returns a CA "bundle" that contains all of the certificates
+// in the chain up to the Root. This file is useful for clients
+// who wish to verify a TLS connection to a server who was issued
+// a certificate from this CA.
+func (ca *CA) CABundleCertPool() (*(x509.CertPool), error) {
+
+	rootCAs := x509.NewCertPool()
+	bundlePEM, err := ca.CABundle()
+	if err != nil {
+		ca.logger.Error(err)
+		return nil, err
+	}
+
+	if !rootCAs.AppendCertsFromPEM(bundlePEM) {
+		ca.logger.Error(err)
+		return nil, ErrCertInvalid
+	}
+
+	return rootCAs, nil
+}
+
+// Parses a PEM encoded CA bundle with multiple certificates
+// and returns and array of x509 certificates that can be used
+// for verification or creating a CertPool.
+func (ca *CA) ParseCABundle(bundle []byte) ([]*x509.Certificate, error) {
+	certs := make([]*x509.Certificate, 0)
+	// keys := make([]*rsa.PrivateKey, 0)
+	for block, rest := pem.Decode(bundle); block != nil; block, rest = pem.Decode(rest) {
+		switch block.Type {
+		case "CERTIFICATE":
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				ca.logger.Error(err)
+				return nil, err
+			}
+			certs = append(certs, cert)
+		// case "PRIVATE KEY":
+		// 	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+		// 	if err != nil {
+		// 		ca.logger.Error(err)
+		// 		return nil, err
+		// 	}
+		// 	keys = append(keys, key)
+		default:
+			ca.logger.Error("certificate-authority: invalid certificate in bundle")
+			return nil, ErrCertInvalid
+		}
+	}
+	return certs, nil
+}
+
+// Returns an x509 certificate KeyPair suited for tls.Config
+func (ca *CA) X509KeyPair(cn string) (tls.Certificate, error) {
+
+	privKeyPEM, err := ca.certStore.PrivKeyPEM(cn)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	certPEM, err := ca.PEM(cn)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	keypair, err := tls.X509KeyPair(certPEM, privKeyPEM)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	// Set the leaf certificate to reduce per-handshake processing
+	cert, err := ca.Certificate(cn)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	keypair.Leaf = cert
+
+	return keypair, err
+}
+
+// Returns a tls.Config for the requested common name populated with the
+// Certificate Authority Trusted Root certificates and leaf certifiate.
+func (ca *CA) TLSConfig(cn string, includeSystemRoot bool) (*tls.Config, error) {
+
+	rootCAs, err := ca.TrustedRootCertPool(includeSystemRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	cert, err := ca.X509KeyPair(cn)
+	if err != nil {
+		return nil, err
+	}
+
+	return &tls.Config{
+		RootCAs:      rootCAs,
+		Certificates: []tls.Certificate{cert},
+	}, nil
+}
+
+// Imports a TPM Endorsement Key in Trusted Software Stack (TSS) form. The key
+// is saved to the certificate store in TSS and PEM form.
+// func (ca *CA) ImportEK(domain string, tssBytes []byte) error {
+
+// 	ca.logger.Infof("Importing %s TPM Endorsement Key (EK)", domain)
+
+// 	cn := "ek"
+
+// 	// Parse the x509 certifiate from the blob
+// 	cert, err := ca.ParseEKCertificate(tssBytes)
+// 	if err != nil {
+// 		return ErrCertInvalid
+// 	}
+
+// 	// Save TSS form
+// 	if err := ca.certStore.Save(cn, tssBytes, PARTITION_ENDORSEMENT_KEYS, FSEXT_EKCERT); err != nil {
+// 		return err
+// 	}
+
+// 	// Save PEM form
+// 	pemBytes, err := ca.EncodePEM(cert.Raw)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	if err := ca.certStore.Save(cn, pemBytes, PARTITION_ENDORSEMENT_KEYS, FSEXT_PEM); err != nil {
+// 		return err
+// 	}
+
+// 	ca.logger.Debugf("ca: importing %s TPM Endorsement Key (EK)", domain)
+
+// 	return nil
+// }
+
+// // Imports a TPM Attestation Key (AK) to the certificate store.
+// func (ca *CA) ImportAK(domain string, tssBytes []byte) error {
+
+// 	ca.logger.Infof("Importing %s TPM Endorsement Key (EK)", domain)
+
+// 	cn := "ek"
+
+// 	// Parse the x509 certifiate from the blob
+// 	cert, err := ca.ParseEKCertificate(tssBytes)
+// 	if err != nil {
+// 		return ErrCertInvalid
+// 	}
+
+// 	// Save TSS form
+// 	if err := ca.certStore.Save(cn, tssBytes, PARTITION_ENDORSEMENT_KEYS, FSEXT_EKCERT); err != nil {
+// 		return err
+// 	}
+
+// 	// Save PEM form
+// 	pemBytes, err := ca.EncodePEM(cert.Raw)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	if err := ca.certStore.Save(cn, pemBytes, PARTITION_ENDORSEMENT_KEYS, FSEXT_PEM); err != nil {
+// 		return err
+// 	}
+
+// 	ca.logger.Debugf("ca: importing %s TPM Endorsement Key (EK)", domain)
+
+// 	return nil
+// }

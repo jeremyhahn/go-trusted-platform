@@ -8,7 +8,6 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
-	"encoding/asn1"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -32,6 +31,11 @@ import (
 const (
 	manufacturerIntel     = "Intel"
 	intelEKCertServiceURL = "https://ekop.intel.com/ekcertservice/"
+	infoOpeningSimulator  = "tpm: opening TPM simulator"
+	infoOpeningDevice     = "tpm: opening TPM 2.0 device"
+	infoClosingConnection = "tpm: closing connection"
+
+	blobStorePrefix = "tpm"
 )
 
 var (
@@ -45,6 +49,7 @@ var (
 	ErrDeviceAlreadyOpen       = errors.New("tpm: device already open")
 	ErrOpeningDevice           = errors.New("tpm: error opening device")
 	ErrInvalidSessionType      = errors.New("tpm: invalid session type")
+	ErrInvalidSRKAuth          = errors.New("tpm: invalid storage root key auth")
 
 	ErrHashAlgorithmNotSupported = errors.New("TPM_RC_HASH (parameter 1): hash algorithm not supported or not appropriate")
 
@@ -52,19 +57,23 @@ var (
 	// and the manufactuter website may not be available
 	// so try to load the cert from the local file system
 	// as a last resort.
-	EK_CERT_CN = "tpm-ek"
-	EK_FILE    = "tpm-ek.bin"
+	// EK_CERT_CN = "tpm-ek"
+	// EK_PUB     = "ek.pub"
 )
 
 type TrustedPlatformModule2 interface {
 	RandomReader() (io.Reader, error)
 	Random() ([]byte, error)
-	ImportTSSFile(
-		ekCertPath string,
+	ImportTSSFile(ekCertPath string, verify bool) (*x509.Certificate, error)
+	ImportEK(
+		domain, cn string,
+		ekCert *x509.Certificate,
 		verify bool) (*x509.Certificate, error)
-	ImportTSS(
-		ekCertBytes []byte,
+	ImportDER(
+		domain, cn string,
+		ekDER []byte,
 		verify bool) (*x509.Certificate, error)
+	ImportPEM(domain, cn string, ekCertPEM []byte, verify bool) (*x509.Certificate, error)
 	HMACAuthSessionWithKey(
 		srkHandle tpm2.TPMHandle,
 		srkPub tpm2.TPMTPublic,
@@ -85,6 +94,7 @@ type TrustedPlatformModule2 interface {
 		srkPub tpm2.TPMTPublic,
 		srkAuth, sealAuth, sealName, sealData []byte) (*tpm2.CreateResponse, error)
 	CreateSRK(
+		ekHandle *tpm2.TPMHandle,
 		ekPub tpm2.TPMTPublic,
 		password []byte) (tpm2.TPMHandle, tpm2.TPM2BName, tpm2.TPMTPublic, error)
 	ECCSRK(
@@ -98,7 +108,7 @@ type TrustedPlatformModule2 interface {
 		srkAuth []byte) (*tpm2.CreateResponse, error)
 	RSAEK() (tpm2.TPMHandle, tpm2.TPM2BName, tpm2.TPMTPublic, error)
 	ECCEK() (tpm2.TPMHandle, tpm2.TPM2BName, tpm2.TPMTPublic, error)
-	EKCert(srkAuth []byte) (*x509.Certificate, error)
+	EKCert(ekHandle *tpm2.TPMHandle, srkAuth []byte) (*x509.Certificate, error)
 	Capabilities() (tpm20Info, error)
 	Init() error
 	EKRSAPubKey() *rsa.PublicKey
@@ -126,27 +136,35 @@ type TrustedPlatformModule2 interface {
 	// MeasurementLog() (*EventLog, error)
 	Measurements(logpath []byte) (*EventLog, error)
 	ParseEKCertificate(ekCert []byte) (*x509.Certificate, error)
+	Open() error
 }
 
 type TPM2 struct {
 	logger      *logging.Logger
+	domain      string
 	config      *Config
 	device      *os.File
 	ca          ca.CertificateAuthority
 	ekRSAPubKey *rsa.PublicKey
 	ekECCPubKey *ecdh.PublicKey
+	ekCertName  string
+	ekBlobKey   string
 	// ekECCPubKey *ecdsa.PublicKey
 	transport transport.TPM
-
+	simulator *simulator.Simulator
 	TrustedPlatformModule2
 }
 
-// Opens a new socket to a Trusted Platform Module (TPM)
-func New(logger *logging.Logger, config *Config) (TrustedPlatformModule2, error) {
+// Creates a new TPM2 instance and opens a socket to a
+// Trusted Platform Module (TPM). When this function
+// returns the TPM is ready for use.
+func NewTPM2(logger *logging.Logger, config *Config, domain string) (TrustedPlatformModule2, error) {
 
 	if config == nil || config.Device == "" {
 		config.Device = "/dev/tpmrm0"
 	}
+
+	logger.Infof("%s %s", infoOpeningDevice, config.Device)
 
 	f, err := os.OpenFile(config.Device, os.O_RDWR, 0)
 	if err != nil {
@@ -154,89 +172,83 @@ func New(logger *logging.Logger, config *Config) (TrustedPlatformModule2, error)
 		return nil, ErrOpeningDevice
 	}
 
+	ekCertName := fmt.Sprintf("%s-ek", domain)
 	return &TPM2{
-		logger:    logger,
-		config:    config,
-		device:    f,
-		transport: transport.FromReadWriter(f)}, nil
+		logger:     logger,
+		config:     config,
+		device:     f,
+		transport:  transport.FromReadWriter(f),
+		ekCertName: ekCertName,
+		ekBlobKey:  fmt.Sprintf("%s/%s/%s", blobStorePrefix, domain, ekCertName),
+		domain:     domain}, nil
 }
 
-func NewSimulation(logger *logging.Logger, config *Config) (TrustedPlatformModule2, error) {
+// Creates a new Trusted Platoform Module simulator (software)
+func NewSimulation(logger *logging.Logger, config *Config, domain string) (TrustedPlatformModule2, error) {
+	logger.Info(infoOpeningSimulator)
 	sim, err := simulator.Get()
 	if err != nil {
 		logger.Error(err)
 		return nil, err
 	}
+	ekCertName := fmt.Sprintf("%s-ek", domain)
 	return &TPM2{
-		logger:    logger,
-		config:    config,
-		device:    nil,
-		transport: transport.FromReadWriter(sim)}, nil
+		logger:     logger,
+		config:     config,
+		device:     nil,
+		simulator:  sim,
+		transport:  transport.FromReadWriter(sim),
+		ekCertName: ekCertName,
+		ekBlobKey:  fmt.Sprintf("%s/%s/%s", blobStorePrefix, domain, ekCertName),
+		domain:     domain}, nil
 }
 
-// Opens a new socket to a Trusted Platform Module (TPM) and uses the passed
-// Privacy-CA to bootstrap the inital Root of Trust by verifying the Endorsement
-// Certificate and ensuring the EK public key matches the public key in the certificate.
-func NewTP(
-	logger *logging.Logger,
-	config *Config,
-	CA ca.CertificateAuthority) (TrustedPlatformModule2, error) {
+// Opens an existing TPM connection
+func (tpm *TPM2) Open() error {
 
-	if config == nil || config.Device == "" {
-		config.Device = "/dev/tpmrm0"
+	var t transport.TPM
+
+	if tpm.config.UseSimulator && tpm.simulator == nil {
+
+		tpm.logger.Info(infoOpeningSimulator)
+		sim, err := simulator.Get()
+		if err != nil {
+			tpm.logger.Error(err)
+			return err
+		}
+		tpm.simulator = sim
+		t = transport.FromReadWriter(sim)
+	} else {
+
+		tpm.logger.Infof("%s %s", infoOpeningDevice, tpm.config.Device)
+		f, err := os.OpenFile(tpm.config.Device, os.O_RDWR, 0)
+		if err != nil {
+			tpm.logger.Error(err)
+			return ErrOpeningDevice
+		}
+		tpm.device = f
+		t = transport.FromReadWriter(f)
 	}
 
-	f, err := os.OpenFile(config.Device, os.O_RDWR, 0)
-	if err != nil {
-		logger.Error(err)
-		return nil, ErrOpeningDevice
-	}
-
-	return &TPM2{
-		logger:    logger,
-		config:    config,
-		device:    f,
-		transport: transport.FromReadWriter(f)}, nil
+	tpm.transport = t
+	return nil
 }
 
-// Open a connection to the TPM and load the Endorsement Key (EK), EK RSA public key,
-// and TPM manufacturer's x509 certificate that proves the EK originated from the TPM
-// manufacturer.
-//
-// If the EK public key is not found in the Certificate Authority, it's loaded from
-// TPM NVRAM and imported into the Cerficiate Authority.
-//
-// If the EK certificate is not found in the Certificate Authority, a 1st attempt loads
-// it from TPM NVRAM, with a 2nd attempt to downloading it from the TPM manufacturer's
-// website if it's not found in the TPM.
-//
-// The connection must be closed after the platform has been initialized to free
-// the resources and allow other goroutines and / or processes to access the TPM.
-//
-// Manufacturer EK Certificate Services:
-// Intel:    https://ekop.intel.com/ekcertservice
-// AMD:      https://ftpm.amd.com/pki/aia
-// // Qualcomm: https://ekcert.spserv.microsoft.com/EKCertificate/GetEKCertificate/v1
-func NewTrustedPlatform(
-	logger *logging.Logger,
-	config *Config,
-	CA ca.CertificateAuthority) (TrustedPlatformModule2, error) {
-
-	if config == nil || config.Device == "" {
-		config.Device = "/dev/tpmrm0"
+// Closes the connection to the TPM
+func (tpm *TPM2) Close() error {
+	tpm.logger.Info(infoClosingConnection)
+	if tpm.device != nil {
+		if err := tpm.device.Close(); err != nil {
+			tpm.logger.Error(err)
+		}
+		tpm.device = nil
+		tpm.transport = nil
 	}
-
-	f, err := os.OpenFile(config.Device, os.O_RDWR, 0)
-	if err != nil {
-		logger.Error(err)
-		return nil, ErrOpeningDevice
+	if tpm.simulator != nil {
+		tpm.simulator.Close()
+		tpm.simulator = nil
 	}
-
-	return &TPM2{
-		logger:    logger,
-		config:    config,
-		device:    f,
-		transport: transport.FromReadWriter(f)}, nil
+	return nil
 }
 
 // Injects the Certificate Authority after instantiation
@@ -249,48 +261,24 @@ func (tp *TPM2) EKRSAPubKey() *rsa.PublicKey {
 	return tp.ekRSAPubKey
 }
 
-// Initializes the TPM device by either loading an existing Endorsement Key
-// and Attestation profile or creating a new EK and performing a new initialization.
-//
-// During initialization, the EK Issuer certificates are downloaded and imported into
-// the Intermeidate Certificate Authority. The EK is verified to ensure it's issued
-// by the TPM manufacturter. If valid, the EK is signed and stored in the CA signed
-// artifacts store, initial platform measurements are taken and sealed to TPM PCRs.
+// Initializes the TPM device by loading an existing Endorsement Key and x509
+// Certificate, and performing Local Attestation. If the Endorssement  Key (EK)
+// doesn't exist in the CA, a new EK is created and imported into the
+// CA, Local Attestation platform measurements are taken, sealed to TPM PCRs, and
+// the EK public key, certificate and platform measurements are signed and
+// saved to the CA's signed blob store.
 func (tpm *TPM2) Init() error {
 
-	tpm.logger.Info("tpm: retrieving endorsement key and certificate from certificate authority")
+	tpm.logger.Info("Retrieving TPM Endorsement Key (EK) and Certificate from Certificate Authority")
 
-	// Check the CA for a signed EK cert
-	certBytes, err := tpm.ca.SignedData(EK_CERT_CN)
-	if err == ca.ErrCertNotFound {
-		// Perform integrity check on the cert
-		if err := tpm.ca.PersistentVerifySignature(EK_CERT_CN, certBytes); err != nil {
-			return err
-		}
-		// // Return the signed EK cert from the CA
-		// _, err := x509.ParseCertificate(certBytes)
-		// return err
-		return nil
-	}
-	if err != ca.ErrCertNotFound {
+	if _, err := tpm.EKCert(nil, nil); err != nil {
 		return err
 	}
 
-	// No signed certificate in the CA, initialize and perform local attestation.
-	if err != nil {
-		if err == ca.ErrCertNotFound {
-			if _, err := tpm.EKCert(nil); err != nil {
-				return err
-			}
-			// if err := tpm.loadEKCert(); err != nil {
-			// 	return err
-			// }
-			return nil
-		}
-		return err
-	}
+	// if err := tpm.attestLocal(); err != nil {
+	// 	return err
+	// }
 
-	// TPM and Certificate Authority already initalized
 	return nil
 }
 
@@ -314,53 +302,61 @@ func (tpm *TPM2) Measurements(logpath []byte) (*EventLog, error) {
 	return ParseEventLog(logpath)
 }
 
-// Retrieve the Endorsement Key Certificate from the Certificate Authority.
-// If the certificate can not be found, treat this as a first-start and
-// try to load the cert from TPM NVRAM. If that fails, try to download the
-// certificate from the Manufacturer's EK cert service. If that fails, try
-// to load the certificate from the current working directory as a last resort.
-func (tpm *TPM2) EKCert(srkAuth []byte) (*x509.Certificate, error) {
+// Retrieve the requested Endorsement Key Certificate from the Certificate
+// Authority signed blob store. If the certificate can not be found, treat
+// this as an initial setup and try to load the cert from TPM NVRAM. If that
+// fails, try to download the certificate from the Manufacturer's EK cert
+// service. If that fails, try to load the certificate from the current
+// working directory as a final attempt.
+func (tpm *TPM2) EKCert(ekHandle *tpm2.TPMHandle, srkAuth []byte) (*x509.Certificate, error) {
 
 	tpm.logger.Debug("tpm: checking Certificate Authority for signed EK certificate")
 
 	// Check the CA for a signed EK cert
-	certBytes, err := tpm.ca.SignedData(EK_CERT_CN)
+	certPEM, err := tpm.ca.SignedData(tpm.ekBlobKey)
 	if err == nil {
 		// Perform integrity check on the cert
-		if err := tpm.ca.PersistentVerifySignature(EK_CERT_CN, certBytes); err != nil {
+		if err := tpm.ca.PersistentVerifySignature(tpm.ekBlobKey, certPEM); err != nil {
 			return nil, err
 		}
 		tpm.logger.Info("tpm: loading EK certificate from Certificate Authority")
-		// Return the signed EK cert from the CA
-		return x509.ParseCertificate(certBytes)
+		// Decode and return the signed and verified x509 EK cert from the CA
+		ekCert, err := tpm.ca.DecodePEM(certPEM)
+		if err != nil {
+			return nil, err
+		}
+		return ekCert, nil
 	}
-	if err != ca.ErrCertNotFound {
+	if err != ca.ErrBlobNotFound {
 		return nil, err
 	}
 
 	// No EK found in the CA. Treat this as an initial platform setup...
 
-	// No certificate found in the CA, check TPM NVRAM
-	var srkHandle tpm2.TPMHandle
-	var srkPub tpm2.TPMTPublic
-	if srkAuth == nil {
-		_, _, ekPub, err := tpm.RSAEK()
-		if err != nil {
-			return nil, err
-		}
-		srkHandle, _, srkPub, err = tpm.CreateSRK(ekPub, srkAuth)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// Start session using SRK
-	session, closer, err := tpm.HMACAuthSessionWithKey(srkHandle, srkPub, srkAuth)
+	// Create EK
+	_, _, ekPub, err := tpm.RSAEK()
 	if err != nil {
 		return nil, err
 	}
 
-	defer closer()
+	// Create SRK
+	srkHandle, _, srkPub, err := tpm.CreateSRK(ekHandle, ekPub, srkAuth)
+	if err != nil {
+		return nil, err
+	}
+
+	// Creaet session to the TPM. Use SRKAuth if provided
+	var session tpm2.Session
+	var closer func() error
+	if srkAuth != nil {
+		session, closer, err = tpm.HMACAuthSessionWithKey(srkHandle, srkPub, srkAuth)
+		if err != nil {
+			return nil, err
+		}
+		defer closer()
+	} else {
+		session = tpm.HMACSession()
+	}
 
 	// Attempt to read the cert from NVRAM
 	response, err := tpm2.NVReadPublic{
@@ -371,36 +367,36 @@ func (tpm *TPM2) EKCert(srkAuth []byte) (*x509.Certificate, error) {
 
 		// No EK cert found in NVRAM. Try downloading from the manufacturer EK certificate service
 		manufacuterCert, err := tpm.downloadEKCertFromManufacturer()
-		if err == nil {
+		if err == nil && len(manufacuterCert) > 0 {
 			return x509.ParseCertificate(manufacuterCert)
 		}
 
-		// Final attempt: look for a raw TSS formatted certificate in the current working directory
-		if _, err := os.Stat(EK_FILE); errors.Is(err, os.ErrNotExist) {
+		// Nope, final attempt: look for a raw TSS formatted certificate in the current working directory
+		if _, err := os.Stat(tpm.config.EKCert); errors.Is(err, os.ErrNotExist) {
 			return nil, err
 		}
-		return tpm.ImportTSSFile(EK_FILE, true)
+		return tpm.ImportTSSFile(tpm.config.EKCert, true)
 
 	} else {
-		certBytes = response.NVPublic.Bytes()
+		certPEM = response.NVPublic.Bytes()
 	}
 
 	// Make sure the certificate is a valid x509 cert
-	cert, err := x509.ParseCertificate(certBytes)
+	cert, err := x509.ParseCertificate(certPEM)
 	if err != nil {
 		return nil, err
 	}
 
 	// Import the EK public key to the CA
 	tpm.logger.Infof("tpm: importing EK Public Key to Certificate Authority")
-	if err := tpm.ca.ImportPubKey(EK_CERT_CN, cert.PublicKey); err != nil {
+	if err := tpm.ca.ImportPubKey(tpm.ekCertName, cert.PublicKey); err != nil {
 		tpm.logger.Error(err)
 		return nil, err
 	}
 
 	// Sign and save the EK certificate to the CA
 	tpm.logger.Infof("tpm: signing EK certificate and importing to Certificate Authority")
-	if _, err := tpm.ca.PersistentSign(EK_CERT_CN, certBytes, true); err != nil {
+	if err := tpm.ca.PersistentSign(tpm.ekCertName, certPEM, true); err != nil {
 		return nil, err
 	}
 
@@ -632,6 +628,7 @@ func (tpm *TPM2) ECCSRK(
 // when done.
 // NOTE: TCG spec disallows sealing to endorsement keys
 func (tpm *TPM2) CreateSRK(
+	ekHandle *tpm2.TPMHandle,
 	ekPub tpm2.TPMTPublic,
 	password []byte) (tpm2.TPMHandle, tpm2.TPM2BName, tpm2.TPMTPublic, error) {
 
@@ -661,10 +658,10 @@ func (tpm *TPM2) CreateSRK(
 	// Execute the create SRK command
 	var srk *tpm2.CreatePrimaryResponse
 	var err error
-	if tpm.config.EncryptSession {
+	if tpm.config.EncryptSession && ekHandle != nil {
 		srk, err = createPrimaryCMD.Execute(
 			tpm.transport,
-			tpm.SaltedHMACSession(srk.ObjectHandle, ekPub))
+			tpm.SaltedHMACSession(*ekHandle, ekPub))
 	} else {
 		srk, err = createPrimaryCMD.Execute(tpm.transport)
 	}
@@ -1348,13 +1345,18 @@ func (tp *TPM2) Random() ([]byte, error) {
 	// return keyPEM, nil
 }
 
-// Imports a raw TSS formatted EK certificate file into
-// the Certificate Authority from disk.
+// Imports a local EK certificat in raw TCG Software Stack (TSS) form
+// from a local disk.
 func (tpm *TPM2) ImportTSSFile(
 	ekCertPath string,
 	verify bool) (*x509.Certificate, error) {
 
-	tpm.logger.Info("Attemping to load Endorsement Key (EK) Certificate from local disk: %s", ekCertPath)
+	var ekCert *x509.Certificate
+
+	tpm.logger.Infof(
+		"Attemping to load Endorsement Key (EK) Certificate from local disk: %s",
+		ekCertPath)
+
 	bytes, err := os.ReadFile(ekCertPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1362,108 +1364,130 @@ func (tpm *TPM2) ImportTSSFile(
 		}
 		return nil, err
 	}
-	return tpm.ImportTSS(bytes, verify)
+
+	// Try parseing as ASN.1 DER form
+	ekCert, err = x509.ParseCertificate(bytes)
+	if err != nil {
+
+		// Failed, try parsing PEM form
+		ekCert, err = tpm.ca.DecodePEM(bytes)
+		if err != nil {
+			tpm.logger.Error(err)
+			return nil, err
+		}
+		return tpm.ImportEK(tpm.domain, tpm.ekCertName, ekCert, verify)
+	}
+
+	// Passed, encode the ASN.1 DER bytes to PEM
+	// ekPEM, err := tpm.ca.EncodePEM(bytes)
+	// if err != nil {
+	// 	tpm.logger.Error(err)
+	// 	return nil, err
+	// }
+	return tpm.ImportEK(tpm.domain, tpm.ekCertName, ekCert, verify)
 }
 
-// Imports a raw TSS formatted EK certificate file into
-// the Certificate Authority using a parse byte array.
-func (tpm *TPM2) ImportTSS(
-	ekCertBytes []byte,
+// Imports a local or remote attestor EK certificate in raw ASN.1 DER form
+func (tpm *TPM2) ImportDER(
+	domain, cn string,
+	ekDER []byte,
 	verify bool) (*x509.Certificate, error) {
 
-	tpm.logger.Info("tpm: decoding endorsement key")
-
-	// Decode the EK
-	decoded := make([]byte, len(ekCertBytes))
-	n, err := base64.StdEncoding.Decode(decoded, ekCertBytes)
+	tpm.logger.Info("Importing Endorsement Key (EK) Certificate in ASN.1 DER form")
+	ekCert, err := x509.ParseCertificate(ekDER)
 	if err != nil {
+		tpm.logger.Error(err)
 		return nil, err
 	}
-	if n == 0 {
-		return nil, ErrInvalidEKCertFormat
+	return tpm.ImportEK(domain, cn, ekCert, verify)
+}
+
+// Imports a local or remote attestor EK certificate in PEM form
+func (tpm *TPM2) ImportPEM(
+	domain, cn string,
+	ekPEM []byte,
+	verify bool) (*x509.Certificate, error) {
+
+	tpm.logger.Info("Importing Endorsement Key (EK) Certificate in PEM form")
+	var block *pem.Block
+	if block, _ = pem.Decode(ekPEM); block == nil {
+		return nil, ca.ErrInvalidEncoding
 	}
-
-	tpm.logger.Info("tpm: parsing endorsement key")
-
-	// Parse the x509 certificate from the decoded EK
-	ekCert, err := tpm.ParseEKCertificate(decoded)
+	ekCert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
+		tpm.logger.Error(err)
+		return nil, err
+	}
+	return tpm.ImportEK(domain, cn, ekCert, verify)
+}
+
+// Imports a local or remote attestor x509 EK certificate
+func (tpm *TPM2) ImportEK(
+	domain, cn string,
+	ekCert *x509.Certificate,
+	verify bool) (*x509.Certificate, error) {
+
+	tpm.logger.Infof("Importing %s x509 Endorsement Key (EK) Certificate", domain)
+
+	// Convert the ASN.1 DER encoded certificate to PEM form
+	ekCertPEM, err := tpm.ca.EncodePEM(ekCert.Raw)
+	if err != nil {
+		tpm.logger.Error(err)
 		return nil, err
 	}
 
 	// Unhandled critical extensions cause Verify to fail
 	for _, uce := range ekCert.UnhandledCriticalExtensions {
-		tpm.logger.Debugf("tpm: ek certificate contains unhandled critical extention: %s",
+		tpm.logger.Warningf("tpm: EK certificate contains unhandled critical extention: %s",
 			uce.String())
 	}
 	ekCert.UnhandledCriticalExtensions = nil
 
-	// Verify the endorsement key certificate
+	// Verify the certificate using the Certificate Authority Root & Intermediate
+	// Certifiates along with all imported Trusted Root and Intermediate certificates.
 	if verify {
-		valid, err := tpm.ca.Verify(ekCert, &EK_CERT_CN)
+		_, err := tpm.ca.Verify(ekCert, &tpm.ekCertName) // &tpm.ekCertName
 		if err != nil {
+			// The above Verify call should have already auto-imported
+			// the issuing CA if auto-import is enabled for the CA. Now
+			// check the TPM auto-import option to see if it overrides
+			// the global CA setting to allow auto-importing  EK platform
+			// certs.
 			if _, ok := err.(x509.UnknownAuthorityError); ok {
-
-				tpm.logger.Info("tpm: importing Issuer CA certificates")
-
-				if err := tpm.ca.ImportIssuingCAs(ekCert, &EK_CERT_CN, ekCert); err != nil {
-					return nil, err
-				}
-
-				tpm.logger.Info("tpm: verifying endorsement key")
-
-				valid, err := tpm.ca.Verify(ekCert, &EK_CERT_CN)
-				if err != nil {
-					return nil, err
-				}
-				if !valid {
-					return nil, ErrInvalidEKCert
+				// Auto-import the EK platform certificates
+				// if auto-import-ek-certs enabled in the TPM
+				// config section, overriding the CA global
+				// auto-import setting.
+				if tpm.config.AutoImportEKCerts {
+					tpm.logger.Info("Importing Endorsement Key (EK) platform certificates")
+					if err := tpm.ca.ImportIssuingCAs(ekCert, &tpm.ekCertName, ekCert); err != nil {
+						return nil, err
+					}
 				}
 			} else {
 				return nil, err
 			}
 		}
-		if !valid {
-			return nil, ErrInvalidEKCert
+		// All EK platform certs are imported into the Certificate
+		// Authority trust store, now verify the EK certificate.
+		valid, err := tpm.ca.Verify(ekCert, &tpm.ekCertName) // &tpm.ekCertName
+		if err != nil {
+			tpm.logger.Error(err)
+			return nil, err
 		}
+		if !valid {
+			return nil, ca.ErrCertInvalid
+		}
+		tpm.logger.Debugf("tpm: successfully verified endorsement key certificate: %s", domain)
 	}
 
-	// Intel EK: This is failing with x509: unhandled critical extension...
-	//
-	// ImportCN calls ImportDER, which uses the ekCert.Raw DER
-	// encoded bytes, which has ekCert.UnhandledCriticalExtensions.
-	// Rather than hacking the CA code to allow unhandled critical
-	// extensions, "manually" verify and import the EK PEM using
-	// Verify, EncodePEM, and ImportPEM instead...
-	//
-	// if err := tp.ca.ImportCN(EK_CERT_CN, ekCert); err != nil {
-	// 	return nil, err
-	// }
-
-	// All EK CA certs are imported into the Certificate
-	// Authority trust store, now verify the EK certificate.
-	valid, err := tpm.ca.Verify(ekCert, &EK_CERT_CN)
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-	if !valid {
-		return nil, ca.ErrCertInvalid
-	}
-	tpm.logger.Infof("successfully verified endorsement key certificate: %s", EK_CERT_CN)
-
-	// Encode the EK cert to PEM and import it into the CA
-	pemBytes, err := tpm.ca.EncodePEM(ekCert.Raw)
-	if err != nil {
-		return nil, err
-	}
-	if err := tpm.ca.ImportPEM(EK_CERT_CN, pemBytes); err != nil {
+	// Sign and save the EK cert to the CA's signed blob storage
+	ekBlobKey := tpm.createEKCertBlobKey(domain, cn)
+	if err := tpm.ca.PersistentSign(ekBlobKey, ekCertPEM, true); err != nil {
 		return nil, err
 	}
 
-	tpm.logger.Debug(pemBytes)
-
-	tpm.logger.Info("tpm: endorsement key imported to certificate authority")
+	tpm.logger.Info("Endorsement Key (EK) successfully imported to Certificate Authority")
 
 	return ekCert, nil
 }
@@ -1628,57 +1652,6 @@ func (tpm *TPM2) Flush(handle tpm2.TPMHandle) {
 	}
 }
 
-// Closes the connection to the TPM
-func (tp *TPM2) Close() error {
-	tp.logger.Info("tpm: closing connection")
-	if tp.device != nil {
-		if err := tp.device.Close(); err != nil {
-			tp.logger.Error(err)
-		}
-		tp.device = nil
-	}
-	return nil
-}
-
-// ParseEKCertificate parses a raw DER encoded EK certificate blob.
-// Thanks, Google: https://github.com/google/go-attestation/blob/master/attest/tpm.go#L221
-func (tpm *TPM2) ParseEKCertificate(ekCert []byte) (*x509.Certificate, error) {
-	var wasWrapped bool
-
-	// TCG PC Specific Implementation section 7.3.2 specifies
-	// a prefix when storing a certificate in NVRAM. We look
-	// for and unwrap the certificate if its present.
-	if len(ekCert) > 5 && bytes.Equal(ekCert[:3], []byte{0x10, 0x01, 0x00}) {
-		certLen := int(binary.BigEndian.Uint16(ekCert[3:5]))
-		if len(ekCert) < certLen+5 {
-			return nil, fmt.Errorf("tpm: parsing nvram header: ekCert size %d smaller than specified cert length %d", len(ekCert), certLen)
-		}
-		ekCert = ekCert[5 : 5+certLen]
-		wasWrapped = true
-	}
-
-	// If the cert parses fine without any changes, we are G2G.
-	if c, err := x509.ParseCertificate(ekCert); err == nil {
-		return c, nil
-	}
-	// There might be trailing nonsense in the cert, which Go
-	// does not parse correctly. As ASN1 data is TLV encoded, we should
-	// be able to just get the certificate, and then send that to Go's
-	// certificate parser.
-	var cert struct {
-		Raw asn1.RawContent
-	}
-	if _, err := asn1.UnmarshalWithParams(ekCert, &cert, "lax"); err != nil {
-		return nil, fmt.Errorf("tpm: asn1.Unmarshal() failed: %v, wasWrapped=%v", err, wasWrapped)
-	}
-
-	c, err := x509.ParseCertificate(cert.Raw)
-	if err != nil {
-		return nil, fmt.Errorf("tpm: x509.ParseCertificate() failed: %v", err)
-	}
-	return c, nil
-}
-
 // Thanks, Google: https://github.com/google/go-attestation/blob/master/attest/tpm.go#L263
 func intelEKURL(ekPub *rsa.PublicKey) string {
 	pubHash := sha256.New()
@@ -1689,8 +1662,6 @@ func intelEKURL(ekPub *rsa.PublicKey) string {
 }
 
 // Downloads the EK certificate from the manufactuers EK cert service
-// TODO: Add support for other manufacturers
-// Google :(
 func (tpm *TPM2) downloadEKCertFromManufacturer() ([]byte, error) {
 
 	url := intelEKURL(tpm.ekRSAPubKey)
@@ -1709,7 +1680,7 @@ func (tpm *TPM2) downloadEKCertFromManufacturer() ([]byte, error) {
 			tpm.logger.Error(err)
 			return nil, err
 		}
-		tpm.logger.Error("tpm: error downloading EK certificate from manufacturer: http.StatusCode: %d, body: %s",
+		tpm.logger.Errorf("tpm: error downloading EK certificate: http.StatusCode: %d, body: %s",
 			resp.StatusCode, body)
 		tpm.logger.Error(err)
 		return nil, err
@@ -1722,4 +1693,14 @@ func (tpm *TPM2) downloadEKCertFromManufacturer() ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+// Creates a new signed blob storage key for the local TPM
+// func (tpm *TPM2) ekCertBlobKey() string {
+// 	return fmt.Sprintf("%s/%s", blobStorePrefix, tpm.ekBlobKey)
+// }
+
+// Creates a new signed blob storage key for an attestor TPM
+func (tpm *TPM2) createEKCertBlobKey(domain, cn string) string {
+	return fmt.Sprintf("%s/%s/%s", blobStorePrefix, domain, cn)
 }

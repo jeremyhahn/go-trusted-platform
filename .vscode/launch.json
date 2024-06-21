@@ -1,6 +1,7 @@
 {
     "version": "0.2.0",
     "configurations": [
+        
         {
             "name": "trusted-platform version",
             "type": "go",
@@ -26,18 +27,58 @@
             "args": ["tpm", "--import-ek-cert", "tpm-ek.bin", "--debug"],
             "showLog": true,
             "debugAdapter": "legacy"
-    }, {
-        
-        "name": "trusted-platform webserver --debug",
-        "type": "go",
-        "request": "launch",
-        "mode": "debug",
-        "port": 2345,
-        "host": "127.0.0.1",
-        "preLaunchTask": "rm_log",
-        "program": "${workspaceRoot}",
-        "args": ["webserver", "--debug"],
-        "showLog": true,
-        "debugAdapter": "legacy"
-    }]
+        }, {
+
+            "name": "trusted-platform webserver --debug",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "port": 2345,
+            "host": "127.0.0.1",
+            "preLaunchTask": "rm_log",
+            "program": "${workspaceRoot}",
+            "args": ["webserver", "--debug"],
+            "showLog": true,
+            "debugAdapter": "legacy"
+        }, {
+            
+            "name": "trusted-platform verifier --debug",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "port": 2345,
+            "host": "127.0.0.1",
+            "preLaunchTask": "verifier_init",
+            "program": "${workspaceRoot}",
+            "args": ["verifier",
+                 "--debug",
+                 "--config-dir", "attestation/verifier",
+                 "--data-dir", "attestation/verifier/db",
+                 "--cert-dir", "attestation/verifier/db/certs",
+                 "--log-dir", "attestation/verifier/logs",
+                 "--attestor", "attestor.example.com"
+            ],
+            "showLog": true,
+            "debugAdapter": "legacy"
+        }, {
+            
+            "name": "trusted-platform attestor --debug",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "port": 2345,
+            "host": "127.0.0.1",
+            "preLaunchTask": "attestor_init",
+            "program": "${workspaceRoot}",
+            "args": ["attestor",
+                 "--debug",
+                 "--config-dir", "attestation/attestor",
+                 "--data-dir", "attestation/attestor/db",
+                 "--cert-dir", "attestation/attestor/db/certs",
+                 "--log-dir", "attestation/attestor/logs",
+            ],
+            "showLog": true,
+            "debugAdapter": "legacy"
+        }
+    ]
 }
