@@ -131,13 +131,15 @@ The `main` branch will always build and run. Don't be afraid to try it out!
             - [x] Intel
         - [x] Read Endorsement Key Certificate from file (tpm2_getekcertificate)
         - [x] Auto-import Platform Certificates (Manufacturer CA chain)
+        - [x] Import ASN.1 DER encoded Endorsement Key Certificates
+        - [x] Import PEM encoded Endorsement Key Certificates
         - [x] Create RSA Endorsement Key
         - [x] Create ECC Endorsement Key
         - [x] Create RSA Storage Root Key
         - [x] Create ECC Storage Root Key
         - [x] Create RSA Storage Root Key
         - [x] Create ECC Attestation Key
-        - [x] Validate EK Cert w/ CA
+        - [x] Validate Endorsement Key x509 Certificate w/ CA
         - [x] Create Attestation Key from EK / SRK
         - [x] Credential challenge
         - [x] Activate credential
