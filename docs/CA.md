@@ -34,7 +34,7 @@ The generated certificates can be verified with OpenSSL.
     openssl rsa -pubin -in root-ca.pub -text
 
     # Create "ca-bundle" file
-    cat localhost.crt intermediate-ca.crt > ca-bundle.crt
+    cat intermediate-ca.crt root-ca.crt > ca-bundle.crt
 
     # Create a single file containing the full certificate chain including the leaf
     cat localhost.crt intermediate-ca.crt root-ca.crt > localhost-bundle.crt

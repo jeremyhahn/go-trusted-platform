@@ -1,8 +1,9 @@
 # Trusted Platform Configuration File
 
 
-# Global platform
+# Global platform configs
 debug: true
+debug-secrets: true
 config-dir: ./db/config
 data-dir: ./db/data
 cert-dir: ./db/certs
@@ -17,51 +18,48 @@ hostmaster: root@example.com
 
 # Remote Attestation
 attestation:
-  # The Verifier / Service Provider domain
-  # service: attestor.example.com
-  
   # During the initial "upgrade" from an insecure connection to mTLS,
   # the Attestor's gRPC TLS server certificate is verified by the Verifier
-  # using the Verifier's Operating System and Certificate Authority trust
-  # stores.
+  # using the Verifier's Certificate Authority (and optionally) Operating
+  # System trusted certificates store.
   #
   # If the Attestor's server certificate can't be verified by either store,
   # that means the Attestor's gRPC service is not using a server certificate
-  # issued from a public trusted CA that's already trusted by the Operating
-  # System trusted certificate store, or a server certificate issued by the
-  # Verifier / Service Provider Certificate Authority. Setting
-  # allow-attestor-self-ca to true will allow the Attestor to use their own
-  # private CA bundle, which is provided during the initial mTLS negotiation
-  # / "upgrade" process that takes place on the insecure gRPC port. Setting
-  # this to false requires the client to use either a server certificate issued
-  # by a public trusted CA (and therefore trusted by the operating system) or
-  # a certificate that's been issued by the Verifier / Service Provider
-  # Certificate Authority.
+  # issued from a public trusted CA that's already trusted by the Verifier's
+  # Certificate Authority or Operating System trusted certificate store,
+  # or a server certificate issued by the Verifier / Service Provider
+  # Certificate Authority. Setting allow-attestor-self-ca to true allows the
+  # Attestor to use their own private CA bundle, which the Attestor provides
+  # during the initial mTLS negotiation / "upgrade" process that takes place
+  # on the insecure gRPC port. Setting this to false requires the client either
+  # use a server certificate issued by a public trusted CA (and therefore trusted
+  # by the operating system) or a certificate that's been issued by the Verifier
+  # / Service Provider Certificate Authority.
   #
   # Setting this option to true DOES NOT import the Attestor's CA bundle
   # into the Verifier / Service Provider's Certificate Authority. It is only
-  # used to encrypt the Remote# Attestation mTLS gRPC connection. After Remote
-  # Attestaion is complete, the CA certificates are discarded.
+  # used to verify and encrypt the Remote Attestation mTLS gRPC connection.
+  # After Remote Attestaion is complete, the CA certificates are discarded.
   #
   # The mTLS connection encrypts the Remote Attestation communication between
-  # the Verifier and Attestor to ensure privacy and prevents man-in-the-middle
+  # the Verifier and Attestor to ensure privacy and prevent man-in-the-middle
   # attacks. In addition, requiring the Attestor's gRPC server to use a 
   # certificate issued by the Verifier / Service Provider's Certificate Authority
-  # provides another point of authorization and access control for the Verifier /
-  # Service Provider to control the clients that are allowed to connect to the
-  # network to gain access to services and resources.
-  # 
-  # Setting this to true allows the Verifier / Service Provider to negotiate
-  # an initial encrypted mTLS gRPC connection with any Attestor who presents
-  # a valid CA certificate bundle, whether it was issued from a public trusted
-  # Certificate Authority, or the Verifier / Service Provider's Certificate
-  # Authority. Enabling this means we will accept the Attestor's own self-signed
-  # Certificate Authority Root and/or Intermediate bundle that was used to sign
-  # their gRPC TLS server certificate.
+  # allows the Verifier to control which Attestors are authorized to perform
+  # Remote Attestation. In this scenerio, a server / device certificate must be
+  # issued to the Attestor by the Verifier / Service Provider Certifiate Authority
+  # using some other manual or automated provisioning process before the Attestor
+  # can perform Remote Attestation for the first time.
   allow-attestor-self-ca: true
 
-  # The Attestor's CA certificate bundle (Root CA or Root & Intermediate(s) bundle)
-  # client-ca-cert: ../attestor/db/certs/intermediate-ca/intermediate-ca.bundle.crt
+  # When enabled, Open Enrollment creates an attestation policy for the Attestor
+  # using the current state of TPM PCRs, EventLog, and Secure Boot, and issues
+  # an x509 Certificate for the Attestation Key used during Remote Attestation.
+  # If disabled, an attestation policy and x509 certificate must be created using
+  # some other manual or automated process prior to the Attestor performing Remote
+  # Attestation so the Remote Attestation process is able to load the policy and
+  # certificate to verify the Attestor.
+  allow-open-enrollment: true
 
   # gRPC ports used by the Verifier and Attestor
   # to perform Remote Attestation
@@ -92,33 +90,59 @@ attestation:
   # either TSS or PEM.
   ek-cert-form: PEM
 
+  # PCRs used for Quote/Verify
+  quote-pcrs: 6,7,8,9
+
 
 # Trusted Platform Module
 tpm:
   device: /dev/tpmrm0
   # Encrypt CPU <-> TPM bus communication
   encrypt-sessions: true
+  # Use TPM for entropy operations (random source)
   entropy: false
+  # Location of EK cert in NVRAM
   ek-cert-index: 0x01C00002
+  # Name of EK cert (if loading from file system / tpm2_getekcertificate)
   ek-cert: ECcert.bin
   # Use TPM Simulator instead of real TPM
   simulator: true
+  # Automatically import EK Platform (Manufacturer) Certificate(s) into trust store
   auto-import-ek-certs: true
 
 
 # Certificate Authority
 certificate-authority:
+  # Automatically download and import Issuing CAs
+  # when importing leaf certificates, so the leaf
+  # can be verified.
   auto-import-issuing-ca: true
+  # Use the Operating System trusted certificate store
+  # when verifying certificates. If disabled, noly
+  # certificates in the Certificate Authority will be
+  # trusted and used for verifying leaf certificates.
   system-cert-pool: true
+  # How long issued client certificates are valid (days)
+  issued-valid: 365
+  # Set to true to include "localhost" in SANS names
+  sans-include-localhost: true
+  # Delete revoked certificates. They can be safely
+  # discarded after revocation, but you may want them
+  # retained, for example, some external audit process,
+  # or the ability to confirm the certificate has been
+  # revoked without having to parse the CA's Revocation
+  # List.
+  delete-revoked-certificates: true
+  # The Certificate Authority identity
   identity:
   - key-size: 2048
      # CA cert expiration (years)
     valid: 50
     subject:
-      cn: root-ca
-      organization: ACME Corproation
+      cn: root-ca.example.com
+      organization: Example Corporation
       country: US
-      province: Miami
+      province: Example
       locality: Homestead
       address: 123 Virtual Street
       postal-code: 12345
@@ -137,10 +161,10 @@ certificate-authority:
      # CA cert expiration (years)
     valid: 10
     subject:
-      cn: intermediate-ca
-      organization: ACME Corproation
+      cn: intermediate-ca.example.com
+      organization: Example Corporation
       country: US
-      province: Miami
+      province: Example
       locality: Homestead
       address: 123 Virtual Street
       postal-code: 12345
@@ -171,9 +195,9 @@ webservice:
     valid: 365
     subject:
       cn: localhost
-      organization: ACME Corproation
+      organization: Example Corporation
       country: US
-      province: Miami
+      province: Example
       locality: Homestead
       address: 123 Virtual Street
       postal-code: 12345

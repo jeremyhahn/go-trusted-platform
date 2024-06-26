@@ -17,15 +17,16 @@ func init() {
 var verifierCmd = &cobra.Command{
 	Use:   "verifier",
 	Short: "Starts the Attestor as a service",
-	Long: `Starts the Attestor service to bebin listening for inbound
-verification requests from the Verifier to begin Full Remote Attestation`,
+	Long: `Starts the Attestor service to begin listening for inbound
+verification requests from the Verifier to perform Provisioning, Remote
+Attestation or quote / Verify operations`,
 	Run: func(cmd *cobra.Command, args []string) {
 		//srkAuth := []byte("")
 		verifier, err := verifier.NewVerifier(App, VFAttestor)
 		if err != nil {
 			App.Logger.Fatal(err)
 		}
-		if err := verifier.Verify(); err != nil {
+		if err := verifier.Provision(); err != nil {
 			App.Logger.Fatal(err)
 		}
 	},

@@ -12,8 +12,8 @@ trusted-platform
 **/*.crl
 db/
 logs/
-pki/ca/certs
-pki/tpm2/certs
+ca/certs
+tpm2/certs
 attestation/attestor/db
 attestation/attestor/logs
 attestation/attestor/config.yaml

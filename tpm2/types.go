@@ -1,6 +1,9 @@
 package tpm2
 
 import (
+	"crypto/ecdh"
+	"crypto/rsa"
+
 	"github.com/google/go-tpm/tpm2"
 )
 
@@ -188,4 +191,44 @@ var vendors = map[TCGVendorID]string{
 
 func (id TCGVendorID) String() string {
 	return vendors[id]
+}
+
+// Defines the interface to the TPM Context store
+type ContextStore interface {
+	Get(key string) ([]byte, error)
+	Save(key string, value []byte) error
+}
+
+type Key struct {
+	Handle tpm2.TPMHandle
+	Name   tpm2.TPM2BName
+	Public tpm2.TPMTPublic
+	// BPublic        tpm2.TPM2BPublic
+	BPublicBytes    []byte
+	Auth            []byte
+	RSAPubKey       *rsa.PublicKey
+	PublicKeyBytes  []byte
+	PublicKeyPEM    []byte
+	RSAPrivKey      *rsa.PrivateKey
+	PrivateKeyPEM   []byte
+	PrivateKeyBytes []byte
+	ECCPubKey       *ecdh.PublicKey
+}
+
+type DerivedKey struct {
+	Key
+	Name           []byte
+	CreationHash   []byte
+	CreationData   []byte
+	CreationTicket []byte
+}
+
+type Credential struct {
+	CredentialBlob  []byte
+	EncryptedSecret []byte
+}
+
+type Quote struct {
+	Quoted []byte
+	Nonce  []byte
 }

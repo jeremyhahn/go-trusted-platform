@@ -6,7 +6,7 @@ import (
 	"crypto/x509"
 	"io"
 
-	"github.com/jeremyhahn/go-trusted-platform/pki/ca"
+	"github.com/jeremyhahn/go-trusted-platform/ca"
 	"github.com/op/go-logging"
 )
 

@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/jeremyhahn/go-trusted-platform/pki/ca"
+	"github.com/jeremyhahn/go-trusted-platform/ca"
 	"gopkg.in/yaml.v2"
 
 	"github.com/spf13/cobra"

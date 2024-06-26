@@ -27,7 +27,6 @@ const (
 	FSEXT_PRIVATE_PEM               = ".key"
 	FSEXT_PRIVATE_PKCS8             = ".key.pkcs8"
 	FSEXT_PUBLIC_PEM                = ".pub"
-	FSEXT_PUBLIC_PKCS1              = ".pub.pkcs1"
 	FSEXT_CSR                       = ".csr"
 	FSEXT_PEM                       = ".crt"
 	FSEXT_PEM_BUNDLE                = ".bundle.crt"
@@ -35,6 +34,7 @@ const (
 	FSEXT_CRL                       = ".crl"
 	FSEXT_SIG                       = ".sig"
 	FSEXT_EKCERT                    = ".tss"
+	FSEXT_PUBLIC_PKCS1              = ".pub.pkcs1"
 )
 
 var (

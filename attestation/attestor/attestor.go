@@ -14,9 +14,9 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	"github.com/jeremyhahn/go-trusted-platform/app"
+	"github.com/jeremyhahn/go-trusted-platform/ca"
 	"github.com/jeremyhahn/go-trusted-platform/config"
-	"github.com/jeremyhahn/go-trusted-platform/pki/ca"
-	"github.com/jeremyhahn/go-trusted-platform/pki/tpm2"
+	"github.com/jeremyhahn/go-trusted-platform/tpm2"
 	"github.com/op/go-logging"
 
 	pb "github.com/jeremyhahn/go-trusted-platform/attestation/proto"
@@ -27,15 +27,10 @@ var (
 	ErrConnectionFailed      = errors.New("attestor: connection failed")
 	ErrUnknownVerifier       = errors.New("attestor: unknown attestation verifier")
 	ErrInvalidClientCertPool = errors.New("attestor: invalid verifier certificate pool")
-	attestor                 Attestor
 )
 
 type Attestor interface {
 	Run() error
-	CA() ca.CertificateAuthority
-	TPM() tpm2.TrustedPlatformModule2
-	Logger() *logging.Logger
-	ClientCertPool(cn string) (*x509.CertPool, error)
 	AddVerifierCABundle(verifier string, bundle []byte) error
 	RemoveVerifierCABundle(verifier string)
 }
@@ -47,15 +42,15 @@ type Attest struct {
 	ca                   ca.CertificateAuthority
 	tpm                  tpm2.TrustedPlatformModule2
 	srkAuth              []byte
-	secureServer         *grpc.Server
+	secureGRPCServer     *grpc.Server
 	secureServerStopChan chan bool
 	verifierCertPool     *x509.CertPool
-	verifierCerts        map[string][]byte
 	verifierCertPools    map[string]*x509.CertPool
 	verifierCertsMutex   sync.RWMutex
 	Attestor
 }
 
+// Entry-point when invoked directly
 func main() {
 	app := app.NewApp().Init(nil)
 	srkAuth := []byte(app.AttestationConfig.SRKAuth)
@@ -70,8 +65,6 @@ func NewAttestor(app *app.App, srkAuth []byte) (Attestor, error) {
 
 	var wg sync.WaitGroup
 	secureServerStopChan := make(chan bool)
-
-	verifierCerts := make(map[string][]byte, 0)
 	verifierCertPools := make(map[string](*x509.CertPool), 0)
 
 	attestor := &Attest{
@@ -81,12 +74,11 @@ func NewAttestor(app *app.App, srkAuth []byte) (Attestor, error) {
 		tpm:                  app.TPM,
 		domain:               app.Domain,
 		srkAuth:              srkAuth,
-		verifierCerts:        verifierCerts,
 		verifierCertPools:    verifierCertPools,
 		verifierCertsMutex:   sync.RWMutex{},
 		secureServerStopChan: secureServerStopChan}
 
-	insecureService := &InsecureServer{
+	insecureService := &InsecureAttestor{
 		attestor: attestor,
 		config:   app.AttestationConfig,
 		logger:   app.Logger,
@@ -106,18 +98,15 @@ func NewAttestor(app *app.App, srkAuth []byte) (Attestor, error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		secureService := &SecureServer{
-			attestor: attestor,
-			config:   app.AttestationConfig,
-			logger:   app.Logger,
-			ca:       app.CA,
-			tpm:      app.TPM,
-			srkAuth:  srkAuth,
-		}
+		secureService := NewSecureAttestor(attestor, app, srkAuth)
 		if err := attestor.newTLSGRPCServer(secureService); err != nil {
 			app.Logger.Fatal(err)
 		}
 	}()
+
+	if err := attestor.tpm.Open(); err != nil {
+		return nil, err
+	}
 
 	wg.Wait()
 
@@ -126,7 +115,7 @@ func NewAttestor(app *app.App, srkAuth []byte) (Attestor, error) {
 
 // Creates a new gRPC server TLS connection using Root CA trusted
 // certificate pool. The returned connection must be closed after use.
-func (attestor *Attest) newTLSGRPCServer(secureService *SecureServer) error {
+func (attestor *Attest) newTLSGRPCServer(secureService *SecureAttestor) error {
 
 	socket := fmt.Sprintf("localhost:%d", attestor.config.TLSPort)
 
@@ -208,26 +197,26 @@ func (attestor *Attest) newTLSGRPCServer(secureService *SecureServer) error {
 	sopts := []grpc.ServerOption{grpc.MaxConcurrentStreams(10)}
 	sopts = append(sopts, grpc.Creds(creds), grpc.UnaryInterceptor(authUnaryInterceptor))
 	// sopts = append(sopts, grpc.StatsHandler(statsHandler))
-	attestor.secureServer = grpc.NewServer(sopts...)
+	attestor.secureGRPCServer = grpc.NewServer(sopts...)
 
 	// verifier.RegisterVerifierServer(s, &server{})
 	// healthpb.RegisterHealthServer(s, &hserver{
 	// 	statusMap: make(map[string]healthpb.HealthCheckResponse_ServingStatus),
 	// })
 
-	pb.RegisterTLSAttestorServer(attestor.secureServer, secureService)
+	pb.RegisterTLSAttestorServer(attestor.secureGRPCServer, secureService)
 
 	go func() {
 		// Run forever
-		if err := attestor.secureServer.Serve(listener); err != nil {
+		if err := attestor.secureGRPCServer.Serve(listener); err != nil {
 			attestor.logger.Fatal(err)
 		}
 	}()
 
 	// Block until a shutdown signal is received
 	<-attestor.secureServerStopChan
-	attestor.secureServer.GracefulStop()
-	attestor.secureServer = nil
+	attestor.secureGRPCServer.GracefulStop()
+	attestor.secureGRPCServer = nil
 	return nil
 }
 
@@ -235,7 +224,7 @@ func (attestor *Attest) newTLSGRPCServer(secureService *SecureServer) error {
 // the CA certificate(s) needed to verify the client-side TLS connection
 func newInsecureGRPCServer(
 	config config.Attestation,
-	insecureService *InsecureServer) (*grpc.Server, error) {
+	insecureService *InsecureAttestor) (*grpc.Server, error) {
 
 	socket := fmt.Sprintf("localhost:%d", config.InsecurePort)
 
@@ -297,7 +286,7 @@ func (attestor *Attest) AddVerifierCABundle(verifier string, bundle []byte) erro
 }
 
 // Removes a verifier / service provider's CA bundle from
-// the trusted client certificate pool.
+// the in-memory trusted client certificate pool.
 func (attestor *Attest) RemoveVerifierCABundle(verifier string) {
 
 	attestor.logger.Info("Discarding Verifier's CA bundle")
@@ -305,35 +294,5 @@ func (attestor *Attest) RemoveVerifierCABundle(verifier string) {
 	attestor.verifierCertsMutex.Lock()
 	defer attestor.verifierCertsMutex.Unlock()
 
-	//delete(a.verifierCerts, verifier)
 	delete(attestor.verifierCertPools, verifier)
 }
-
-// // Returns the Certificate Authority
-// func (a *Attest) CA() ca.CertificateAuthority {
-// 	return a.ca
-// }
-
-// // Returns the Trusted Platform module
-// func (a *Attest) TPM() tpm2.TrustedPlatformModule2 {
-// 	return a.tpm
-// }
-
-// // Get the Intermediate CA certificate
-// func (s *service) CACert() []byte {
-// 	return attestor.ca.CACertificate().Raw
-// }
-
-// // Get the local TPM Endorsement key
-// func (s *service) EKCert() (*x509.Certificate, error) {
-// 	return attestor.tpm.EKCert(attestor.srkAuth)
-// }
-
-// // Get the local TPM Endorsement key
-// func (s *service) GetEK() error {
-// 	_, _, _, err := attestor.tpm.RSAEK()
-// 	if err != nil {
-// 		return nil
-// 	}
-// 	return nil
-// }

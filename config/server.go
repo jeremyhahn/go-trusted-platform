@@ -52,7 +52,3 @@ func (server *Server) RemoveServiceRef(serviceID uint64) {
 	}
 	server.ServiceRefs = refs
 }
-
-func (server *Server) SetFarmRefs(refs []uint64) {
-	server.ServiceRefs = refs
-}

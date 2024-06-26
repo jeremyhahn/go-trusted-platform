@@ -1,9 +1,11 @@
 package ca
 
 type Config struct {
-	AutoImportIssuingCA bool       `yaml:"auto-import-issuing-ca" json:"auto_import_issuing_ca" mapstructure:"auto-import-issuing-ca"`
-	SystemCertPool      bool       `yaml:"system-cert-pool" json:"system_cert_pool" mapstructure:"system-cert-pool"`
-	Identity            []Identity `yaml:"identity" json:"identity" mapstructure:"identity"`
+	AutoImportIssuingCA    bool       `yaml:"auto-import-issuing-ca" json:"auto_import_issuing_ca" mapstructure:"auto-import-issuing-ca"`
+	SystemCertPool         bool       `yaml:"system-cert-pool" json:"system_cert_pool" mapstructure:"system-cert-pool"`
+	Identity               []Identity `yaml:"identity" json:"identity" mapstructure:"identity"`
+	ValidDays              int        `yaml:"issued-valid-days" json:"issued-valid-days" mapstructure:"issued-valid-days"`
+	IncludeLocalhostInSANS bool       `yaml:"sans-include-localhost" json:"sans-include-localhost" mapstructure:"sans-include-localhost"`
 }
 
 type Identity struct {

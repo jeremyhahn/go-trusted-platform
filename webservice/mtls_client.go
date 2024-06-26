@@ -5,7 +5,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/jeremyhahn/go-trusted-platform/pki/ca"
+	"github.com/jeremyhahn/go-trusted-platform/ca"
 	"github.com/op/go-logging"
 )
 
