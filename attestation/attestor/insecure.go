@@ -4,14 +4,14 @@ import (
 	"context"
 
 	pb "github.com/jeremyhahn/go-trusted-platform/attestation/proto"
+	"github.com/jeremyhahn/go-trusted-platform/ca"
 	"github.com/jeremyhahn/go-trusted-platform/config"
-	"github.com/jeremyhahn/go-trusted-platform/pki/ca"
 	"github.com/op/go-logging"
 	"google.golang.org/grpc/peer"
 )
 
 // Insecure non TLS encrypted gRPC web service
-type InsecureServer struct {
+type InsecureAttestor struct {
 	attestor Attestor
 	logger   *logging.Logger
 	config   config.Attestation
@@ -19,7 +19,7 @@ type InsecureServer struct {
 	pb.InsecureAttestorServer
 }
 
-func (a *InsecureServer) SetAttestor(attestor Attestor) {
+func (a *InsecureAttestor) SetAttestor(attestor Attestor) {
 	a.attestor = attestor
 }
 
@@ -30,7 +30,7 @@ func (a *InsecureServer) SetAttestor(attestor Attestor) {
 // The verifier must be explicitly set in the "allowed-verifiers"
 // configuration variable to be allowed to connect and retrieve
 // the certificate bundle (and perform remote attestation).
-func (s *InsecureServer) GetCABundle(
+func (s *InsecureAttestor) GetCABundle(
 	ctx context.Context,
 	in *pb.CABundleRequest) (*pb.CABundleReply, error) {
 
@@ -85,7 +85,7 @@ BREAK:
 	// the insecure connection and establish a new mTLS connection
 	attestorBundle, err := s.ca.CABundle()
 	if err != nil {
-		attestor.Logger().Error(err)
+		s.logger.Error(err)
 		return nil, err
 	}
 

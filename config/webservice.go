@@ -1,6 +1,6 @@
 package config
 
-import "github.com/jeremyhahn/go-trusted-platform/pki/ca"
+import "github.com/jeremyhahn/go-trusted-platform/ca"
 
 type WebService struct {
 	JWTExpiration int         `yaml:"jwt-expiration" json:"jwt_expiration" mapstructure:"jwt-expiration"`

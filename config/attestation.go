@@ -11,4 +11,6 @@ type Attestation struct {
 	AllowAttestorSelfCA bool     `yaml:"allow-attestor-self-ca" json:"allow_attestor_self_ca" mapstructure:"allow-attestor-self-ca"`
 	SRKAuth             string   `yaml:"srk-auth" json:"srk_auth" mapstructure:"srk-auth"`
 	EkCertForm          string   `yaml:"ek-cert-form" json:"ek_cert_form" mapstructure:"ek-cert-form"`
+	AllowOpenEnrollment bool     `yaml:"allow-open-enrollment" json:"allow-open-enrollment" mapstructure:"allow-open-enrollment"`
+	QuotePCRs           []int32  `yaml:"quote-pcrs" json:"quote-pcrs" mapstructure:"quote-pcrs"`
 }

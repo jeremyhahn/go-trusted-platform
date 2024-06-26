@@ -1,13 +1,13 @@
 package config
 
 type License interface {
-	GetOrganizationQuota() int
+	Quota() int
 }
 
 type LicenseStruct struct {
-	OrganizationQuota int
+	quota int
 }
 
-func (license *LicenseStruct) GetOrganizationQuota() int {
-	return license.OrganizationQuota
+func (license *LicenseStruct) Quota() int {
+	return license.quota
 }

@@ -167,6 +167,11 @@ clean:
 		pki/tpm2/$(EK_CERT_NAME)
 
 
+test:
+	cd ca && go test -v
+	cd tpm2 && go test -v
+
+
 proto:
 	cd attestation && protoc \
 		--go_out=. \
@@ -185,18 +190,13 @@ verifier-init:
 	sed -i 's/- example.com/- verifier.example.com/' attestation/verifier/config.yaml
 	cp $(EK_CERT_NAME) attestation/verifier
 
-verifier-cert-chain:
-	cd attestation && \
-	openssl verify \
-		-CAfile verifier/db/certs/root-ca/root-ca.crt \
-		-untrusted verifier/db/certs/intermediate-ca/intermediate-ca.crt \
-		verifier/db/certs/intermediate-ca/issued/verifier.example.com/verifier.example.com.crt
-
-verifier-clean: 
-	rm -rf \
-		attestation/verifier/logs \
-		attestation/verifier/db \
-		attestation/verifier/$(EK_CERT_NAME)
+verifier-no-clean: build verifier-init
+	cd attestation/verifier && \
+		../../trusted-platform verifier \
+			--debug \
+			--config-dir ./ \
+			--data-dir ./db \
+			--log-dir ./logs
 
 verifier: verifier-clean build verifier-init
 	cd attestation/verifier && \
@@ -205,6 +205,20 @@ verifier: verifier-clean build verifier-init
 			--data-dir ./db \
 			--log-dir ./logs \
 			--attestor attestor.example.com
+
+verifier-clean: 
+	rm -rf \
+		attestation/verifier/logs \
+		attestation/verifier/db \
+		attestation/verifier/$(EK_CERT_NAME)
+
+verifier-cert-chain:
+	cd attestation && \
+	openssl verify \
+		-CAfile verifier/db/certs/root-ca.example.com/root-ca.example.com.crt \
+		-untrusted verifier/db/certs/intermediate-ca.example.com/intermediate-ca.example.com.crt \
+		verifier/db/certs/intermediate-ca.example.com/issued/verifier.example.com/verifier.example.com.crt
+
 
 # Attestor
 
@@ -215,27 +229,19 @@ attestor-init:
 	sed -i 's/- example.com/- attestor.example.com/' attestation/attestor/config.yaml
 	cp $(EK_CERT_NAME) attestation/attestor/
 
-attestor-cert-chain:
-	cd attestation && \
-	openssl verify \
-		-CAfile attestor/db/certs/root-ca/root-ca.crt \
-		-untrusted attestor/db/certs/intermediate-ca/intermediate-ca.crt \
-		attestor/db/certs/intermediate-ca/issued/attestor.example.com/attestor.example.com.crt
-
-attestor-tls:
-	cd attestation && \
-	openssl s_client \
-		-connect localhost:8082 \
-		-showcerts \
-		-servername localhost \
-		-CAfile attestor/db/certs/intermediate-ca/intermediate-ca.bundle.crt \
-		| openssl x509 -noout -text
-
 attestor-clean: 
 	rm -rf \
 		attestation/attestor/logs \
 		attestation/attestor/db \
 		attestation/verifier/$(EK_CERT_NAME)
+
+attestor-no-clean: build attestor-init
+	cd attestation/attestor && \
+		../../trusted-platform attestor \
+			--debug \
+			--config-dir ./ \
+			--data-dir ./db \
+			--log-dir ./logs
 
 attestor: attestor-clean build attestor-init
 	cd attestation/attestor && \
@@ -245,13 +251,30 @@ attestor: attestor-clean build attestor-init
 			--data-dir ./db \
 			--log-dir ./logs
 
+attestor-verify-cert-chain:
+	cd attestation && \
+	openssl verify \
+		-CAfile attestor/db/certs/root-ca.example.com/root-ca.example.com.crt \
+		-untrusted attestor/db/certs/intermediate-ca.example.com/intermediate-ca.example.com.crt \
+		attestor/db/certs/intermediate-ca.example.com/issued/attestor.example.com/attestor.example.com.crt
+
+attestor-verify-tls:
+	cd attestation && \
+	openssl s_client \
+		-connect localhost:8082 \
+		-showcerts \
+		-servername localhost \
+		-CAfile attestor/db/certs/intermediate-ca.example.com/intermediate-ca.example.com.bundle.crt \
+		| openssl x509 -noout -text
+
 
 # Web Services
-webservice-tls:
+webservice-verify-tls:
 	cd attestation && \
 	openssl s_client \
 		-connect localhost:8081 \
 		-showcerts \
 		-servername localhost \
-		-CAfile attestor/db/certs/intermediate-ca/trusted-root/root-ca.crt \
+		-CAfile attestor/db/certs/intermediate-ca.example.com/trusted-root/root-ca.example.com.crt \
 		| openssl x509 -noout -text
+

@@ -8,6 +8,7 @@ option go_package = "github.com/jeremyhahn/go-trusted-platform-attestation/proto
 package proto;
 
 
+// Inseecure gRPC Attestor service
 service InsecureAttestor {
   rpc GetCABundle (CABundleRequest) returns (CABundleReply) {}
 }
@@ -23,10 +24,13 @@ message CABundleReply {
 message Null {
 }
 
-
-
+// Secure, mTLS gRPC Attestor service
 service TLSAttestor {
   rpc GetEKCert(Null) returns (EKCertReply) {}
+  rpc GetAK(Null) returns (AKReply) {}
+  rpc ActivateCredential(ActivateCredentialRequest) returns (ActivateCredentialResponse) {}
+  rpc AcceptCertificate(AcceptCertificateResquest) returns (Null) {}
+  rpc Quote(QuoteRequest) returns (QuoteResponse) {}
   rpc Close(Null) returns (Null) {}
 }
 
@@ -34,110 +38,44 @@ message EKCertReply {
   bytes certificate = 1;
 }
 
+message AKReply {
+  bytes ekBPublicBytes = 1;
+  bytes ekPublicPEM = 2;
+  bytes akPublicPEM = 3;
+  bytes akBPublicBytes = 4;
+  bytes akPublicKeyByes = 5;
+  bytes akName = 6;
+}
 
+message ActivateCredentialRequest {
+	bytes credentialBlob  = 1;
+	bytes encryptedSecret = 2;
+}
 
+message ActivateCredentialResponse {
+  bytes secret = 1;
+}
 
-// service Attestor {
-//   rpc GetPlatformCert (GetPlatformCertRequest) returns (GetPlatformCertResponse) { }
-//   rpc GetEKCert (GetEKCertRequest) returns (GetEKCertResponse) { }
-//   rpc GetAK (GetAKRequest) returns (GetAKResponse) { }
-//   rpc ActivateCredential (ActivateCredentialRequest) returns (ActivateCredentialResponse) { }
-//   rpc Quote (QuoteRequest) returns (QuoteResponse) { }
-//   rpc Attest (AttestRequest) returns (AttestResponse) { }
-//   rpc PushSecret (PushSecretRequest) returns (PushSecretResponse) { }
-//   rpc PullRSAKey (PullRSAKeyRequest) returns (PullRSAKeyResponse) { }      
-// }
+message AcceptCertificateResquest {
+  bytes certificate = 1;
+}
 
-// enum SecretType {
-//   RAW = 0;
-//   RSA = 1;
-//   AES = 2;
-// }  
+message QuoteRequest {
+  bytes nonce = 1;
+  repeated int32 pcrs = 2;
+}
 
-// message GetPlatformCertRequest {
-//   string uid = 1;
-// }
+message QuoteResponse {
+  bytes nonce = 1;
+  bytes quoted = 2;  
+}
 
-// message GetPlatformCertResponse {
-//   string uid = 1;
-//   bytes platformCert = 2;
-// }
-
-// message GetEKCertRequest {
-//   string uid = 1;
-// }
-
-// message GetEKCertResponse {
-//   string uid = 1;
-//   bytes ekCert = 2;
-//   bytes ekPub = 3;
-// }
-
-// message GetAKRequest {
-//   string uid = 1;
-// }
-
-// message GetAKResponse {
-//   string uid = 1;
-//   bytes ekPub = 2;
-//   bytes akName = 3;  
-//   bytes akPub = 4;
-// }
-
-// message ActivateCredentialRequest {
-//   string uid = 1;
-//   bytes credBlob = 2;
-//   bytes encryptedSecret = 3;
-// }
-
-// message ActivateCredentialResponse {
-//   string uid = 1;
-//   bytes secret = 2;
-// }
-
-// message QuoteRequest {
-//   string uid = 1;
-//   repeated int32 pcrs = 2;
-//   string secret =3;
-// }
-
-// message QuoteResponse {
-//   string uid = 1;
-//   bytes attestation = 2;
-//   bytes signature = 3;
-//   bytes eventlog = 4;  
-// }
-
-// message AttestRequest {
-//   string uid = 1;
-//   string secret =3;
-// }
-
-// message AttestResponse {
-//   string uid = 1;
-//   bytes attestation = 2; 
-// }
-
-// message PushSecretRequest {
-//   string uid = 1;
-//   SecretType secret_type = 2;
-//   bytes importBlob = 3;  
-// }
-
-// message PushSecretResponse {
-//   string uid = 1;
-//   bytes verification = 2;  
-// }
-
-// message PullRSAKeyRequest {
-//   string uid = 1;
-//   repeated int32 pcrs = 2;
-// }
-
-// message PullRSAKeyResponse {
-//   string uid = 1;
-//   bytes tpm_public_key = 2;
-//   bytes test_signature = 3;
-//   bytes attestation_signature = 4;
-//   bytes attestation = 5;
-// }
+// Not used by gRPC. The Verifier uses this
+// to serialize the AK to the CA signed blob
+// storage partition.
+message AttestationKey {
+  bytes name = 1;
+  bytes creationHash = 2;
+  bytes creationData = 3;
+  bytes creationTicket = 4;
+}

@@ -7,8 +7,8 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/app"
+	"github.com/jeremyhahn/go-trusted-platform/ca"
 	"github.com/jeremyhahn/go-trusted-platform/model"
-	"github.com/jeremyhahn/go-trusted-platform/pki/ca"
 	"github.com/jeremyhahn/go-trusted-platform/webservice/v1/response"
 )
 

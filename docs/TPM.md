@@ -4,6 +4,10 @@ This document provides information on what a TPM is along with tools, tutorials,
 and examples on how to work with it.
 
 
+   Using the Trusted Platform Module in the New Age of Security
+
+[A Practical Guide to TPM 2.0](https://link.springer.com/book/10.1007/978-1-4302-6584-9)
+
 
 ## What is a TPM?
 

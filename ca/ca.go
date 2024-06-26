@@ -11,7 +11,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
-	"encoding/binary"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -30,19 +29,22 @@ import (
 )
 
 var (
-	ErrInvalidConfig    = errors.New("certificate-authority: invalid configuration")
-	ErrCorruptWrite     = errors.New("certificate-authority: corrupt write: bytes written does not match data length")
-	ErrCertRevoked      = errors.New("certificate-authority: certificate revoked")
-	ErrCertNotFound     = errors.New("certificate-authority: certificate not found")
-	ErrCertFuture       = errors.New("certificate-authority: certificate issued in the future")
-	ErrCertExpired      = errors.New("certificate-authority: certificate expired")
-	ErrCertInvalid      = errors.New("certificate-authority: certificate invalid")
-	ErrTrustExists      = errors.New("certificate-authority: certificate already trusted")
-	ErrInvalidSignature = errors.New("certificate-authority: invalid signature")
-	ErrCRLAlreadyExists = errors.New("certificate-authority: revocation list already exists")
-	ErrNoIssuingCA      = errors.New("certificate-authority: no issuing CAs found in certificate")
-	ErrCertNotSupported = errors.New("certificate-authority: certificate contains unsupported configuration")
-	ErrBlobNotFound     = errors.New("certificate-authority: signed blob not found")
+	ErrInvalidConfig        = errors.New("certificate-authority: invalid configuration")
+	ErrCorruptWrite         = errors.New("certificate-authority: corrupt write: bytes written does not match data length")
+	ErrCertRevoked          = errors.New("certificate-authority: certificate revoked")
+	ErrCertNotFound         = errors.New("certificate-authority: certificate not found")
+	ErrCertFuture           = errors.New("certificate-authority: certificate issued in the future")
+	ErrCertExpired          = errors.New("certificate-authority: certificate expired")
+	ErrCertInvalid          = errors.New("certificate-authority: certificate invalid")
+	ErrTrustExists          = errors.New("certificate-authority: certificate already trusted")
+	ErrInvalidSignature     = errors.New("certificate-authority: invalid signature")
+	ErrCRLAlreadyExists     = errors.New("certificate-authority: revocation list already exists")
+	ErrNoIssuingCA          = errors.New("certificate-authority: no issuing CAs found in certificate")
+	ErrCertNotSupported     = errors.New("certificate-authority: certificate contains unsupported configuration")
+	ErrBlobNotFound         = errors.New("certificate-authority: signed blob not found")
+	ErrInvalidRSAPublicKey  = errors.New("certificate-authority: invalid RSA public key")
+	ErrInvalidRSAPrivateKey = errors.New("certificate-authority: invalid RSA private key")
+	ErrInvalidEncodingPEM   = errors.New("certificate-authority: invalid PEM encoding")
 )
 
 type CertificateAuthority interface {
@@ -55,8 +57,12 @@ type CertificateAuthority interface {
 	CreateCSR(email string, request CertificateRequest) ([]byte, error)
 	DecodeCSR(bytes []byte) (*x509.CertificateRequest, error)
 	EncodePEM(derCert []byte) ([]byte, error)
-	EncodePubKey(cn string, pub any) ([]byte, error)
+	EncodePubKey(pub any) ([]byte, error)
+	EncodePubKeyPEM(cn string, derBytes []byte) ([]byte, error)
+	EncodePrivKey(privateKey *rsa.PrivateKey) ([]byte, error)
+	EncodePrivKeyPEM(der []byte) ([]byte, error)
 	DecodePEM(bytes []byte) (*x509.Certificate, error)
+	DecodeRSAPubKeyPEM(bytes []byte) (*rsa.PublicKey, error)
 	DER(cn string) ([]byte, error)
 	Init(identity Identity, parentPrivKey *rsa.PrivateKey, random io.Reader) error
 	Identity() *x509.Certificate
@@ -72,14 +78,13 @@ type CertificateAuthority interface {
 	ImportCN(cn string, cert *x509.Certificate) error
 	ImportDER(cn string, derCert []byte) error
 	ImportDistrbutionCRLs(cert *x509.Certificate) error
-	//ImportEK(domain string, tssBytes []byte) error
 	ImportPEM(cn string, pemBytes []byte) error
 	ImportIssuingCAs(cert *x509.Certificate, leafCN *string, leaf *x509.Certificate) error
 	ImportTrustedRoot(cn string, derCert []byte) error
 	ImportTrustedIntermediate(cn string, derCert []byte) error
 	ImportPubKey(cn string, pub any) error
 	ParseCABundle(bundle []byte) ([]*x509.Certificate, error)
-	ParseEKCertificate(ekCert []byte) (*x509.Certificate, error)
+	ParsePrivateKey([]byte) (*rsa.PrivateKey, error)
 	PEM(cn string) ([]byte, error)
 	PersistentSign(key string, data []byte, saveData bool) error
 	PersistentVerifySignature(cn string, data []byte) error
@@ -103,6 +108,7 @@ type CertificateAuthority interface {
 	VerifySignature(data []byte, signature []byte) error
 	X509KeyPair(cn string) (tls.Certificate, error)
 	TLSConfig(cn string, includeSystemRoot bool) (*tls.Config, error)
+	DefaultValidityPeriod() int
 }
 
 type CA struct {
@@ -239,6 +245,13 @@ func NewIntermediateCA(
 		trustStore:          NewDebianTrustStore(logger, certDir),
 		commonName:          identity.Subject.CommonName,
 		autoImportIssuingCA: autoImportIssuingCA}, nil
+}
+
+// Returns the default number of days certificates issued by
+// the CA are valid. If a CSR is submitted that is requesting
+// "0 days", the CA default value is used instead of the 0 value.
+func (ca *CA) DefaultValidityPeriod() int {
+	return ca.config.ValidDays
 }
 
 // Returns true if auto-importing of CA certificates are enabled
@@ -580,9 +593,12 @@ func (ca *CA) SignCSR(csrBytes []byte, request CertificateRequest) ([]byte, erro
 }
 
 // Create a new private / public key pair and save it to the cert store
-// in PEM format. This method returns the raw DER encoded []byte array as
-// returned from x509.CreateCertificate.
+// in DER and PEM form. This method returns the raw DER encoded []byte
+// as returned from x509.CreateCertificate.
 func (ca *CA) IssueCertificate(request CertificateRequest, random io.Reader) ([]byte, error) {
+	if request.Valid == 0 {
+		request.Valid = ca.config.ValidDays
+	}
 	ipAddresses, dnsNames, emailAddresses, err := parseSANS(request.SANS)
 	if err != nil {
 		ca.logger.Error(err)
@@ -974,8 +990,6 @@ func (ca *CA) ImportIssuingCAs(cert *x509.Certificate, leafCN *string, leaf *x50
 
 		// Verify the issuer certficate
 		//
-		// Intel / Golang :(
-		//
 		// Disabling this for now because Intel TPM EK Platform key
 		// (CNLEPIDPOSTB1LPPROD2_EK_Platform_Public_Key.cer) is throwing error:
 		//
@@ -1126,47 +1140,6 @@ func (ca *CA) ImportDistrbutionCRLs(cert *x509.Certificate) error {
 	return nil
 }
 
-// Parses a raw Trusted Software Stack (TSS) encoded TPM Endorsement Key (EK) blob.
-// The certificate may contain a header, which this function strips and returns a
-// standard x509.Certificate.
-// Thanks, Google: https://github.com/google/go-attestation/blob/master/attest/tpm.go#L221
-func (ca *CA) ParseEKCertificate(ekCert []byte) (*x509.Certificate, error) {
-	var wasWrapped bool
-
-	// TCG PC Specific Implementation section 7.3.2 specifies
-	// a prefix when storing a certificate in NVRAM. We look
-	// for and unwrap the certificate if its present.
-	if len(ekCert) > 5 && bytes.Equal(ekCert[:3], []byte{0x10, 0x01, 0x00}) {
-		certLen := int(binary.BigEndian.Uint16(ekCert[3:5]))
-		if len(ekCert) < certLen+5 {
-			return nil, fmt.Errorf("tpm: parsing nvram header: ekCert size %d smaller than specified cert length %d", len(ekCert), certLen)
-		}
-		ekCert = ekCert[5 : 5+certLen]
-		wasWrapped = true
-	}
-
-	// If the cert parses fine without any changes, we are G2G.
-	if c, err := x509.ParseCertificate(ekCert); err == nil {
-		return c, nil
-	}
-	// There might be trailing nonsense in the cert, which Go
-	// does not parse correctly. As ASN1 data is TLV encoded, we should
-	// be able to just get the certificate, and then send that to Go's
-	// certificate parser.
-	var cert struct {
-		Raw asn1.RawContent
-	}
-	if _, err := asn1.UnmarshalWithParams(ekCert, &cert, "lax"); err != nil {
-		return nil, fmt.Errorf("ca: asn1.Unmarshal() failed: %v, wasWrapped=%v", err, wasWrapped)
-	}
-
-	c, err := x509.ParseCertificate(cert.Raw)
-	if err != nil {
-		return nil, fmt.Errorf("ca: x509.ParseCertificate() failed: %v", err)
-	}
-	return c, nil
-}
-
 // Returns the all of the certificates in the Certificate Authority
 // certificate store.
 func (ca *CA) IssuedCertificates() ([]string, error) {
@@ -1196,7 +1169,8 @@ func (ca *CA) IssuedCertificates() ([]string, error) {
 	return names, nil
 }
 
-// Returns a validated x509 certificate from the "issued" certificate store.
+// Returns a validated x509 certificate from the "issued" certificate
+// store partition.
 func (ca *CA) Certificate(cn string) (*x509.Certificate, error) {
 	der, err := ca.DER(cn)
 	if err != nil {
@@ -1205,47 +1179,100 @@ func (ca *CA) Certificate(cn string) (*x509.Certificate, error) {
 	return x509.ParseCertificate(der)
 }
 
-// Returns a raw DER encoded certificate byte array from the certificate store.
+// Returns raw ASN.1 DER encoded certificate bytes from the certificate store
 func (ca *CA) DER(cn string) ([]byte, error) {
 	return ca.certStore.Get(cn, PARTITION_ISSUED, FSEXT_DER)
 }
 
-// Returns a PEM certifcate from the cert store as a []byte array or
+// Returns a PEM certifcate from the cert store as []byte or
 // ErrCertNotFound if the certificate does not exist.
 func (ca *CA) PEM(cn string) ([]byte, error) {
 	return ca.certStore.Get(cn, PARTITION_ISSUED, FSEXT_PEM)
 }
 
-// Decodes a CSR byte array to a x509.CertificateRequest
+// Decodes CSR bytes to x509.CertificateRequest
 func (ca *CA) DecodeCSR(bytes []byte) (*x509.CertificateRequest, error) {
 	var block *pem.Block
 	if block, _ = pem.Decode(bytes); block == nil {
-		return nil, ErrInvalidEncoding
+		return nil, ErrInvalidEncodingPEM
 	}
 	return x509.ParseCertificateRequest(block.Bytes)
 }
 
-// Decodes a PEM byte array to *x509.Certificate
+// Decodes PEM bytes to *x509.Certificate
 func (ca *CA) DecodePEM(bytes []byte) (*x509.Certificate, error) {
 	var block *pem.Block
 	if block, _ = pem.Decode(bytes); block == nil {
-		return nil, ErrInvalidEncoding
+		return nil, ErrInvalidEncodingPEM
 	}
 	return x509.ParseCertificate(block.Bytes)
 }
 
-// Encodes a raw DER byte array as a PEM byte array
+// Encodes a raw ASN.1 DER bytes to PEM bytes
 func (ca *CA) EncodePEM(derCert []byte) ([]byte, error) {
 	return ca.certStore.EncodePEM(derCert)
 }
 
-// Encodes a x509 certificate public key
-func (ca *CA) EncodePubKey(cn string, pub any) ([]byte, error) {
+// Encodes any public key (RSA/ECC) to ASN.1 DER form
+func (ca *CA) EncodePubKey(pub any) ([]byte, error) {
 	return x509.MarshalPKIXPublicKey(pub)
 }
 
-// Returns a private key from the certificate store by parsing it's PKCS8 ASN.1
-// DER certificate.
+// Encodes a private key to ASN.1 DER PKCS8 form
+func (ca *CA) EncodePrivKey(privateKey *rsa.PrivateKey) ([]byte, error) {
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		ca.logger.Error(err)
+		return nil, err
+	}
+	// PEM PKCS1
+	// caPrivKeyPEM := new(bytes.Buffer)
+	// err = pem.Encode(caPrivKeyPEM, &pem.Block{
+	// 	Type:  "RSA PRIVATE KEY",
+	// 	Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+	// })
+	return pkcs8, nil
+}
+
+// Encodes a private key to ASN.1 DER PKCS8 form
+func (ca *CA) EncodePrivKeyPEM(der []byte) ([]byte, error) {
+	caPrivKeyPEM := new(bytes.Buffer)
+	err := pem.Encode(caPrivKeyPEM, &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: der,
+	})
+	// // PEM PKCS1
+	// caPrivKeyPEM := new(bytes.Buffer)
+	// err = pem.Encode(caPrivKeyPEM, &pem.Block{
+	// 	Type:  "RSA PRIVATE KEY",
+	// 	Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+	// })
+	if err != nil {
+		ca.logger.Error(err)
+		return nil, err
+	}
+	return caPrivKeyPEM.Bytes(), nil
+}
+
+// Parses RSA private key bytes in ASN.1 DER form
+func (ca *CA) ParsePrivateKey(bytes []byte) (*rsa.PrivateKey, error) {
+	var err error
+	var privKeyAny any
+	// Try parsing as PKCS8 first, since thats what the CA prefers
+	privKeyAny, err = x509.ParsePKCS8PrivateKey(bytes)
+	if err != nil {
+		// ... try parsing as PKCS1
+		privKeyAny, err = x509.ParsePKCS1PrivateKey(bytes)
+		if err != nil {
+			ca.logger.Error(err)
+			return nil, ErrInvalidRSAPrivateKey
+		}
+	}
+	return privKeyAny.(*rsa.PrivateKey), nil
+}
+
+// Returns a private key from the certificate store using the stored ASN.1
+// DER PKCS8 key.
 func (ca *CA) PrivateKey(cn string) (*rsa.PrivateKey, error) {
 	bytes, err := ca.certStore.Get(cn, PARTITION_ISSUED, FSEXT_PRIVATE_PKCS8)
 	if err != nil {
@@ -1279,11 +1306,14 @@ func (ca *CA) ImportCN(cn string, cert *x509.Certificate) error {
 	return ca.ImportDER(cn, cert.Raw)
 }
 
-// Import a raw DER certificate, format it as PEM, extract the public key, and
-// save the DER, PEM and public key to the certificate store.
+// Import a raw DER certificate and perform the following operations:
+// 1. Parse to ensure it's valid
+// 2. Verify the certificate (auto-import issuer CA's if enabled)
+// 3. Format & save as PEM
+// 4. Extract and save the public key
 func (ca *CA) ImportDER(cn string, derCert []byte) error {
 
-	// Parse the certificate
+	// Parse the certificate to ensure it's valid
 	cert, err := x509.ParseCertificate(derCert)
 	if err != nil {
 		ca.logger.Error(err)
@@ -1331,49 +1361,66 @@ func (ca *CA) ImportDER(cn string, derCert []byte) error {
 	return ca.IssuePubKey(cn, cert.PublicKey)
 }
 
-// Import a PEM certificate to the certificate store
+// Import a PEM certificate to the certificate store. The certificate
+// is parsed and verified prior to import to ensure it's valid.
 func (ca *CA) ImportPEM(cn string, pemBytes []byte) error {
+
+	// Parse the certificat to ensure it's valid
+	cert, err := ca.DecodePEM(pemBytes)
+	if err != nil {
+		return err
+	}
+
+	// Import the intermediate and root certificates so the
+	// cert can be validated, if not already in the store
+	valid, err := ca.Verify(cert, &cn)
+	if err != nil {
+		ca.logger.Warning(err)
+	}
+	if !valid && ca.autoImportIssuingCA {
+		if err := ca.ImportIssuingCAs(cert, &cn, cert); err != nil {
+			return err
+		}
+	}
+
 	return ca.certStore.Save(cn, pemBytes, PARTITION_ISSUED, FSEXT_PEM)
 }
 
-// Saves a private key to the certificate store in PEM PKCS1 and PCKS8 format, extracts
-// the public key, and saves it in PKCS1 format to certificate store "issued" partition
+// Saves a private key to the certificate store "issued" partition in ASN.1 DER
+// PKCS8 and PEM (PCKS8) form
 func (ca *CA) IssuePrivKey(cn string, privateKey *rsa.PrivateKey) error {
 	return ca.issuePrivKey(cn, privateKey, PARTITION_ISSUED)
 }
 
-// Saves a private key to the certificate store in PEM PKCS1 and PCKS8 format, extracts
-// the public key, and saves it in PKCS1 format to certificate store CA partition
+// Saves a CA private key to the certificate store in ASN.1 DER PKCS8 and PEM (PCKS8) form
 func (ca *CA) IssueCAPrivKey(cn string, privateKey *rsa.PrivateKey) error {
 	return ca.issuePrivKey(cn, privateKey, PARTITION_CA)
 }
 
-// Saves a private key to the certificate store in PEM PKCS1 and PCKS8 format, extracts
-// the public key, and saves it in PKCS1 format to the specified certificate store partition
+// Extracts the public key from the private key and saves both to the certificate store
+// in ASN.1 DER PKCS8 and PEM (PCKS8) form
 func (ca *CA) issuePrivKey(cn string, privateKey *rsa.PrivateKey, partition Partition) error {
-	// PKCS8
-	pkcs8PrivKeyBytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	pkcs8, err := ca.EncodePrivKey(privateKey)
+	err = ca.certStore.Save(cn, pkcs8, partition, FSEXT_PRIVATE_PKCS8)
 	if err != nil {
 		ca.logger.Error(err)
 		return err
 	}
-	ca.certStore.Save(cn, pkcs8PrivKeyBytes, partition, FSEXT_PRIVATE_PKCS8)
-	// PEM PKCS1
-	caPrivKeyPEM := new(bytes.Buffer)
-	err = pem.Encode(caPrivKeyPEM, &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
-	})
+	pkcs8PEM, err := ca.EncodePrivKeyPEM(pkcs8)
 	if err != nil {
 		ca.logger.Error(err)
 		return err
 	}
-	ca.certStore.Save(cn, caPrivKeyPEM.Bytes(), partition, FSEXT_PRIVATE_PEM)
+	err = ca.certStore.Save(cn, pkcs8PEM, partition, FSEXT_PRIVATE_PEM)
+	if err != nil {
+		ca.logger.Error(err)
+		return err
+	}
 	return ca.issuePubKey(cn, &privateKey.PublicKey, partition)
 }
 
 // Encodes a public key as PKIX, ASN.1 DER and PEM form and saves both to the
-// certificate store CA partition
+// certificate store "issued" partition
 func (ca *CA) IssuePubKey(cn string, pub any) error {
 	return ca.issuePubKey(cn, pub, PARTITION_ISSUED)
 }
@@ -1384,25 +1431,47 @@ func (ca *CA) IssueCAPubKey(cn string, pub any) error {
 	return ca.issuePubKey(cn, pub, PARTITION_CA)
 }
 
-// Encodes a PKIX, ASN.1 DER form public key in PEM form and saves it to
-// the public keys partition
-func (ca *CA) ImportPubKey(cn string, pub any) error {
-	// PKIX, ASN.1 DER form
-	derBytes, err := ca.EncodePubKey(cn, pub)
-	if err != nil {
-		return err
-	}
-	// PEM PKCS1 form
+// Encodes a public key ASN.1 DER form public key to PEM form
+func (ca *CA) EncodePubKeyPEM(cn string, derBytes []byte) ([]byte, error) {
 	pubPEM := new(bytes.Buffer)
-	err = pem.Encode(pubPEM, &pem.Block{
+	err := pem.Encode(pubPEM, &pem.Block{
 		Type:  "PUBLIC KEY",
 		Bytes: derBytes,
 	})
 	if err != nil {
 		ca.logger.Error(err)
+		return nil, err
+	}
+	return pubPEM.Bytes(), err
+}
+
+// Decodes and returns an ASN.1 DER - PEM encoded - RSA Public Key
+func (ca *CA) DecodeRSAPubKeyPEM(bytes []byte) (*rsa.PublicKey, error) {
+	var block *pem.Block
+	if block, _ = pem.Decode(bytes); block == nil {
+		return nil, ErrInvalidEncodingPEM
+	}
+	pubKey, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		ca.logger.Error(err)
+		return nil, err
+	}
+	return pubKey.(*rsa.PublicKey), nil
+}
+
+// Imports any public key (RSA/ECC) to the certificate store in PEM form
+func (ca *CA) ImportPubKey(cn string, pub any) error {
+	pubDER, err := ca.EncodePubKey(pub)
+	if err != nil {
+		ca.logger.Error(err)
 		return err
 	}
-	return ca.certStore.Save(cn, pubPEM.Bytes(), PARTITION_PUBLIC_KEYS, FSEXT_PUBLIC_PEM)
+	pubPEM, err := ca.EncodePubKeyPEM(cn, pubDER)
+	if err != nil {
+		ca.logger.Error(err)
+		return err
+	}
+	return ca.certStore.Save(cn, pubPEM, PARTITION_PUBLIC_KEYS, FSEXT_PUBLIC_PEM)
 }
 
 // Imports a root CA certificate into the trusted root store
@@ -1508,28 +1577,27 @@ func (ca *CA) importTrustedCert(cn string, derCert []byte, partition Partition) 
 	return ca.certStore.SaveTrustedCA(cn, pem, partition, FSEXT_PEM)
 }
 
-// Encodes a public key as PKIX, ASN.1 DER and PEM form and saves both to the
-// specified certificate store partition
+// Encodes a public key to PEM form and saves it to the certificate store
 func (ca *CA) issuePubKey(cn string, pub any, partition Partition) error {
 	// PKIX, ASN.1 DER form
-	derBytes, err := ca.EncodePubKey(cn, pub)
+	privKeyDER, err := ca.EncodePubKey(pub)
 	if err != nil {
 		return err
 	}
-	// Save the DER
-	if err := ca.certStore.Save(cn, derBytes, partition, FSEXT_PUBLIC_PKCS1); err != nil {
+	// Save the ASN.1 DER PKCS1 form
+	if err := ca.certStore.Save(cn, privKeyDER, partition, FSEXT_PUBLIC_PKCS1); err != nil {
 		return err
 	}
-	// PEM PKCS1 form
 	pubPEM := new(bytes.Buffer)
 	err = pem.Encode(pubPEM, &pem.Block{
 		Type:  "PUBLIC KEY",
-		Bytes: derBytes,
+		Bytes: privKeyDER,
 	})
 	if err != nil {
 		ca.logger.Error(err)
 		return err
 	}
+	// Save the PEM (PKCS1) form
 	return ca.certStore.Save(cn, pubPEM.Bytes(), partition, FSEXT_PUBLIC_PEM)
 }
 
@@ -1743,68 +1811,3 @@ func (ca *CA) TLSConfig(cn string, includeSystemRoot bool) (*tls.Config, error) 
 		Certificates: []tls.Certificate{cert},
 	}, nil
 }
-
-// Imports a TPM Endorsement Key in Trusted Software Stack (TSS) form. The key
-// is saved to the certificate store in TSS and PEM form.
-// func (ca *CA) ImportEK(domain string, tssBytes []byte) error {
-
-// 	ca.logger.Infof("Importing %s TPM Endorsement Key (EK)", domain)
-
-// 	cn := "ek"
-
-// 	// Parse the x509 certifiate from the blob
-// 	cert, err := ca.ParseEKCertificate(tssBytes)
-// 	if err != nil {
-// 		return ErrCertInvalid
-// 	}
-
-// 	// Save TSS form
-// 	if err := ca.certStore.Save(cn, tssBytes, PARTITION_ENDORSEMENT_KEYS, FSEXT_EKCERT); err != nil {
-// 		return err
-// 	}
-
-// 	// Save PEM form
-// 	pemBytes, err := ca.EncodePEM(cert.Raw)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	if err := ca.certStore.Save(cn, pemBytes, PARTITION_ENDORSEMENT_KEYS, FSEXT_PEM); err != nil {
-// 		return err
-// 	}
-
-// 	ca.logger.Debugf("ca: importing %s TPM Endorsement Key (EK)", domain)
-
-// 	return nil
-// }
-
-// // Imports a TPM Attestation Key (AK) to the certificate store.
-// func (ca *CA) ImportAK(domain string, tssBytes []byte) error {
-
-// 	ca.logger.Infof("Importing %s TPM Endorsement Key (EK)", domain)
-
-// 	cn := "ek"
-
-// 	// Parse the x509 certifiate from the blob
-// 	cert, err := ca.ParseEKCertificate(tssBytes)
-// 	if err != nil {
-// 		return ErrCertInvalid
-// 	}
-
-// 	// Save TSS form
-// 	if err := ca.certStore.Save(cn, tssBytes, PARTITION_ENDORSEMENT_KEYS, FSEXT_EKCERT); err != nil {
-// 		return err
-// 	}
-
-// 	// Save PEM form
-// 	pemBytes, err := ca.EncodePEM(cert.Raw)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	if err := ca.certStore.Save(cn, pemBytes, PARTITION_ENDORSEMENT_KEYS, FSEXT_PEM); err != nil {
-// 		return err
-// 	}
-
-// 	ca.logger.Debugf("ca: importing %s TPM Endorsement Key (EK)", domain)
-
-// 	return nil
-// }

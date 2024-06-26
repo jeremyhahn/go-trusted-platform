@@ -1,11 +1,8 @@
 package app
 
 import (
-	"crypto/rand"
 	"fmt"
-	"io"
 	"log"
-	"net"
 	"os"
 	"os/user"
 	"runtime"
@@ -15,9 +12,10 @@ import (
 	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
 
+	"github.com/jeremyhahn/go-trusted-platform/ca"
 	"github.com/jeremyhahn/go-trusted-platform/config"
-	"github.com/jeremyhahn/go-trusted-platform/pki/ca"
-	"github.com/jeremyhahn/go-trusted-platform/pki/tpm2"
+	"github.com/jeremyhahn/go-trusted-platform/tpm2"
+	"github.com/jeremyhahn/go-trusted-platform/util"
 )
 
 type App struct {
@@ -29,6 +27,7 @@ type App struct {
 	TPMConfig         tpm2.Config                 `yaml:"tpm" json:"tpm" mapstructure:"tpm"`
 	AttestationConfig config.Attestation          `yaml:"attestation" json:"attestation" mapstructure:"attestation"`
 	DebugFlag         bool                        `yaml:"debug" json:"debug" mapstructure:"debug"`
+	DebugSecretsFlag  bool                        `yaml:"debug-secrets" json:"debug-secrets" mapstructure:"debug-secrets"`
 	CertDir           string                      `yaml:"cert-dir" json:"cert_dir" mapstructure:"cert-dir"`
 	ConfigDir         string                      `yaml:"config-dir" json:"config_dir" mapstructure:"config-dir"`
 	DataDir           string                      `yaml:"data-dir" json:"data_dir" mapstructure:"data-dir"`
@@ -94,7 +93,7 @@ func (app *App) initConfig() {
 
 func (app *App) initLogger() {
 	logFormat := logging.MustStringFormatter(
-		`%{color}%{time:15:04:05.000} %{shortpkg}.%{shortfunc} ▶ %{level:.4s} %{id:03x}%{color:reset} %{message}`,
+		`%{color}%{time:15:04:05.000} %{shortpkg}.%{shortfunc} %{level:.4s} %{id:03x}%{color:reset} %{message}`,
 	)
 	f := app.InitLogFile(os.Getuid(), os.Getgid())
 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
@@ -118,9 +117,11 @@ func (app *App) initTPM() {
 	var err error
 	var tpm tpm2.TrustedPlatformModule2
 	if app.TPMConfig.UseSimulator {
-		tpm, err = tpm2.NewSimulation(app.Logger, &app.TPMConfig, app.Domain)
+		tpm, err = tpm2.NewSimulation(
+			app.Logger, app.DebugSecretsFlag, &app.TPMConfig, app.Domain)
 	} else {
-		tpm, err = tpm2.NewTPM2(app.Logger, &app.TPMConfig, app.Domain)
+		tpm, err = tpm2.NewTPM2(
+			app.Logger, app.DebugSecretsFlag, &app.TPMConfig, app.Domain)
 	}
 	if err != nil {
 		app.Logger.Error(err)
@@ -129,7 +130,7 @@ func (app *App) initTPM() {
 	app.TPM = tpm
 }
 
-// Initializes a new Root and Intermediate Certificate Authorities according
+// Initializes new Root and Intermediate Certificate Authorities according
 // to the configuration. If this is the first time the CA is being initialized,
 // new keys and certificates are created for the Root and Intermediate CAs
 // and a web server certificate is issued for the configured domain by the
@@ -142,25 +143,15 @@ func (app *App) initTPM() {
 func (app *App) initCA() {
 
 	// No need to keep the TPM open after Certificate Authority
-	// initialization local attestation is complete. Open and
+	// initialization and local attestation is complete. Open and
 	// close it again later when needed.
 	defer app.TPM.Close()
 
 	// Initalize TPM based random reader if present.
 	// If "Encrypt" flag is set, the Read operation is
-	// performed using an encrypted session between the
-	// CPU <-> TPM.
-	var random io.Reader
-	if app.TPM != nil {
-		r, err := app.TPM.RandomReader()
-		if err != nil {
-			app.Logger.Fatal(err)
-		}
-		random = r
-	} else {
-		// Use golang runtime random reader
-		random = rand.Reader
-	}
+	// performed using an encrypted HMAC session between
+	// the CPU <-> TPM.
+	random := app.TPM.RandomReader()
 
 	// Create new Root and Intermediate CA(s)
 	_, intermediateCAs, err := ca.NewCA(
@@ -194,18 +185,31 @@ func (app *App) initCA() {
 			SANS: &ca.SubjectAlternativeNames{
 				DNS: []string{
 					app.Domain,
-					"localhost",
-					"localhost.localdomain",
 				},
-				IPs: app.parseLocalAddresses(),
+				IPs: []string{},
 				Email: []string{
 					app.Hostmaster,
-					"root@localhost",
-					"root@test.com",
 				},
 			},
 		}
 
+		// Include localhost SANS DNS, IPs, and and root email if config
+		// is set to sans-include-localhost: true.
+		if app.CAConfig.IncludeLocalhostInSANS {
+			// Parse list of usable local IPs
+			ips, err := util.LocalAddresses()
+			if err != nil {
+				app.Logger.Fatal(err)
+			}
+			certReq.SANS.DNS = append(certReq.SANS.DNS, "localhost")
+			certReq.SANS.DNS = append(certReq.SANS.DNS, "localhost.localdomain")
+			certReq.SANS.DNS = append(certReq.SANS.DNS, "localhost.localdomain")
+			certReq.SANS.Email = append(certReq.SANS.Email, "root@localhost")
+			certReq.SANS.Email = append(certReq.SANS.Email, "root@example.com")
+			certReq.SANS.IPs = append(certReq.SANS.IPs, ips...)
+		}
+
+		// Issue the web server certificate
 		if _, err = intermediateCA.IssueCertificate(certReq, random); err != nil {
 			app.Logger.Fatal(err)
 		}
@@ -290,20 +294,4 @@ func (app *App) DropPrivileges() {
 		}
 		app.InitLogFile(int(uid), int(gid))
 	}
-}
-
-// Parses a list of usable local IP addresses
-func (app *App) parseLocalAddresses() []string {
-	ips := make([]string, 0)
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		app.Logger.Fatal(err)
-	}
-	for _, addr := range addrs {
-		ipNet, ok := addr.(*net.IPNet)
-		if ok && !ipNet.IP.IsLoopback() && ipNet.IP.To4() != nil {
-			ips = append(ips, ipNet.IP.String())
-		}
-	}
-	return ips
 }

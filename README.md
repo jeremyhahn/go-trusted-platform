@@ -91,11 +91,18 @@ When the go-tpm-tools and go-attestation libraries catches up to the latest go-t
 The `docs` folder provides links to resources with detailed information about how the internals of the TPM and various other components used in this project work, along with examples of how to use the software included in this repository.
 
 
+## Road Map
+
+This project aims to follow best practices and guidance issued by the TCG and NIST to provide everything necessary to provision, manage and run a trusted computing platform on Linux at scale:
+
+1. [TCG-TPM-v2.0-Provisioning-Guidance](https://trustedcomputinggroup.org/wp-content/uploads/TCG-TPM-v2.0-Provisioning-Guidance-Published-v1r1.pdf#page=39&zoom=100,73,501)
+
+
 ## Status
 
 This project is under active development. APIs can change at any moment.
 
-The `main` branch will always build and run. Don't be afraid to try it out!
+The `main` branch will always build and run. Try it out!
 
 
 - [ ] Trusted Platform
@@ -160,19 +167,19 @@ The `main` branch will always build and run. Don't be afraid to try it out!
             - [ ] Encode / Decode
             - [x] Parse DER / PEM x509 certificates
         - [ ] Trusted Platform Module 2.0
-            - [ ] Create RSA Endorsement Key
+            - [x] Create RSA Endorsement Key
             - [ ] Create ECC Endorsement Key
-            - [ ] Create RSA Storage Root Key
+            - [x] Create RSA Storage Root Key
             - [ ] Create ECC Storage Root Key
-            - [ ] Create RSA Storage Root Key
+            - [x] Create RSA Storage Root Key
             - [ ] Create ECC Attestation Key
-            - [ ] Validate EK Cert w/ CA
-            - [ ] Auto-import EK Issuer Root & Intermediate CAs
-            - [ ] Create Attestation Key from EK / SRK
-            - [ ] Credential challenge
-            - [ ] Activate credential
+            - [x] Validate EK Cert w/ CA
+            - [x] Auto-import EK Issuer Root & Intermediate CAs
+            - [x] Create Attestation Key
+            - [x] Credential challenge
+            - [x] Activate credential
             - [x] Event Log Parsing
-            - [ ] Provide Attestation Key to Client
+            - [x] Provide Attestation Key to Client
         - [ ] Full Remote Attestation
             - [ ] Server (Attestor)
                 - [x] gRPC service
@@ -188,7 +195,7 @@ The `main` branch will always build and run. Don't be afraid to try it out!
     - [ ] Web Services
         - [x] Web server
         - [x] REST API
-            - [x] Swagger
+            - [x] Swagger API Docs
         - [ ] JWT Authentication
             - [x] Generate Token
             - [x] Refresh Token
@@ -196,11 +203,25 @@ The `main` branch will always build and run. Don't be afraid to try it out!
             - [ ] Opaque Private Key - TPM
         - [x] HTTPS / TLS
         - [ ] mTLS
-        - [ ] gRPC Full Remote Attestation
-            - [ ] Server (Verifier)
-            - [ ] Client (Attestor)
+    - [ ] gRPC Remote Attestation
+        - [x] Verifier (Service Provider)
+            - [x] mTLS auto-negotiation
+            - [x] Get Endorsement Key Certificate
+            - [x] Get Attestation Key Profile
+            - [x] Make Credential Challenge
+            - [x] Activate Credential
+            - [x] Issue AK x509 Certificate
+            - [ ] Quote / Verify
+        - [x] Attestor (Client)
+            - [x] mTLS auto-negotiation
+            - [x] Get Endorsement Key Certificate
+            - [x] Get Attestation Key Profile
+            - [x] Activate Credential
+            - [ ] Quote / Verify
     - [ ] Flows
-        - [ ] Device Registration
+        - [ ] Device Provisioning
+            - [x] Auto-provision during Remote Attestation
+            - [ ] Pre-provision keys and x509 device certificate
         - [ ] Service Request - Part 1: Platform Anonymous Identity Validation
         - [ ] Service Request - Part 2: Platform Software State Validation
         - [ ] Service Delivery
