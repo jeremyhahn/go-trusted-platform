@@ -520,6 +520,9 @@ func (tpm *TPM2) RSASRK(ek Key, password []byte) (Key, error) {
 
 	tpm.logger.Debug("tpm: creating new RSA Storage Root Key (SRK)")
 
+	var err error
+	var response *tpm2.CreatePrimaryResponse
+
 	createPrimaryCMD := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHOwner,
 		InPublic:      tpm2.New2B(tpm2.RSASRKTemplate),
@@ -533,10 +536,6 @@ func (tpm *TPM2) RSASRK(ek Key, password []byte) (Key, error) {
 			},
 		}
 	}
-
-	// Execute the create SRK command
-	var response *tpm2.CreatePrimaryResponse
-	var err error
 	if tpm.config.EncryptSession {
 		response, err = createPrimaryCMD.Execute(
 			tpm.transport,
@@ -901,16 +900,17 @@ func (tpm *TPM2) RSAAK() (Key, DerivedKey, error) {
 	return ek, ak, nil
 }
 
-// Creates a new random secret using the TPM random source
-// and performs MakeCredential, returning the new credential
-// challenge. If the secret parameter is not provided, the
-// TPM will be used to generate a random secret.
+// Performs TPM2_MakeCredential, returning the new credential
+// challenge for a remote Attestor. If the secret parameter is
+// not provided, a random secret will be generated. If the
+// "entropy" TPM option is enabled, the TPM RNG will be used
+// to generate the secret, otherwise the runtime / operating
+// system generator will be used.
 func (tpm *TPM2) MakeCredential(ek Key, ak DerivedKey, secret []byte) (*tpm2.MakeCredentialResponse, []byte, error) {
 
 	tpm.logger.Info("Creating new Activation Credential")
 
 	if secret == nil {
-		// Use TPM to generate random secret
 		var err error
 		secret, err = tpm.Random()
 		if err != nil {

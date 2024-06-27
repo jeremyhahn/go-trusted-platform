@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"crypto/rand"
 	"crypto/x509"
 	"fmt"
 	"os"
@@ -200,7 +199,7 @@ or secure web services, mTLS, encryption, and identity management.`,
 					Email: emails}}
 
 			// Hard coding random number generator for now
-			_, err = App.CA.IssueCertificate(request, rand.Reader)
+			_, err = App.CA.IssueCertificate(request)
 			if err != nil {
 				App.Logger.Error(err)
 			}

@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"crypto"
 	"crypto/rsa"
 	"encoding/json"
 	"errors"
@@ -69,16 +70,12 @@ func CreateJsonWebTokenService(
 		expiration:     time.Duration(expiration)}, nil
 }
 
-// Returns the RSA private key for the web server, ignoring errors. The
-// constructor already makes sure the private key exists when the service
-// is instantiated.
-func (jwtService *JWTService) privateKey() *rsa.PrivateKey {
+// Returns the RSA private key for the web server. This can be any key
+// that implements the crypto.PrivateKey interface, including opaque keys.
+func (jwtService *JWTService) privateKey() crypto.PrivateKey {
 	privKey, err := jwtService.app.CA.CertStore().PrivKey(jwtService.app.Domain)
 	if err != nil {
 		jwtService.app.Logger.Fatal(err)
-	}
-	if jwtService.publicKey == nil {
-		jwtService.publicKey = &privKey.PublicKey
 	}
 	return privKey
 }

@@ -3,6 +3,8 @@ package ca
 import (
 	"bytes"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
@@ -28,6 +30,16 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/util"
 )
 
+const (
+	KEY_ALGO_RSA = "RSA"
+	KEY_ALGO_ECC = "ECC"
+
+	CURVE_P224 = "P256"
+	CURVE_P256 = "P256"
+	CURVE_P384 = "P386"
+	CURVE_P521 = "P521"
+)
+
 var (
 	ErrInvalidConfig        = errors.New("certificate-authority: invalid configuration")
 	ErrCorruptWrite         = errors.New("certificate-authority: corrupt write: bytes written does not match data length")
@@ -42,38 +54,45 @@ var (
 	ErrNoIssuingCA          = errors.New("certificate-authority: no issuing CAs found in certificate")
 	ErrCertNotSupported     = errors.New("certificate-authority: certificate contains unsupported configuration")
 	ErrBlobNotFound         = errors.New("certificate-authority: signed blob not found")
-	ErrInvalidRSAPublicKey  = errors.New("certificate-authority: invalid RSA public key")
-	ErrInvalidRSAPrivateKey = errors.New("certificate-authority: invalid RSA private key")
+	ErrInvalidPublicKey     = errors.New("certificate-authority: invalid public key")
+	ErrInvalidPrivateKey    = errors.New("certificate-authority: invalid private key")
+	ErrInvalidPublicKeyRSA  = errors.New("certificate-authority: invalid RSA public key")
+	ErrInvalidPrivateKeyRSA = errors.New("certificate-authority: invalid RSA private key")
+	ErrInvalidPublicKeyECC  = errors.New("certificate-authority: invalid ECC public key")
+	ErrInvalidPrivateKeyECC = errors.New("certificate-authority: invalid ECC private key")
 	ErrInvalidEncodingPEM   = errors.New("certificate-authority: invalid PEM encoding")
+	ErrInvalidCurve         = errors.New("certificate-authority: invalid ECC Curve")
+	ErrInvalidAlgorithm     = errors.New("certificate-authority: invalid algorithm")
 )
 
 type CertificateAuthority interface {
 	CABundle() ([]byte, error)
 	CABundleCertPool() (*(x509.CertPool), error)
 	CACertificate() *x509.Certificate
-	CAPubKey() (*rsa.PublicKey, error)
+	CAPubKey() (crypto.PublicKey, error)
 	Certificate(cn string) (*x509.Certificate, error)
 	CertStore() CertificateStore
 	CreateCSR(email string, request CertificateRequest) ([]byte, error)
 	DecodeCSR(bytes []byte) (*x509.CertificateRequest, error)
 	EncodePEM(derCert []byte) ([]byte, error)
-	EncodePubKey(pub any) ([]byte, error)
+	EncodePubKey(pub crypto.PublicKey) ([]byte, error)
 	EncodePubKeyPEM(cn string, derBytes []byte) ([]byte, error)
-	EncodePrivKey(privateKey *rsa.PrivateKey) ([]byte, error)
+	EncodePrivKey(privateKey crypto.PrivateKey) ([]byte, error)
 	EncodePrivKeyPEM(der []byte) ([]byte, error)
+	EncryptionKey(cn, keyName string) (*rsa.PublicKey, error)
 	DecodePEM(bytes []byte) (*x509.Certificate, error)
-	DecodeRSAPubKeyPEM(bytes []byte) (*rsa.PublicKey, error)
+	DecodeRSAPubKeyPEM(bytes []byte) (crypto.PublicKey, error)
 	DER(cn string) ([]byte, error)
-	Init(identity Identity, parentPrivKey *rsa.PrivateKey, random io.Reader) error
+	Init(identity Identity, parentPrivKey crypto.PrivateKey, random io.Reader) error
 	Identity() *x509.Certificate
 	IsAutoImportingIssuerCAs() bool
 	IsReady() bool
-	IssueCertificate(request CertificateRequest, random io.Reader) ([]byte, error)
+	IssueCertificate(request CertificateRequest) ([]byte, error)
 	IssuedCertificates() ([]string, error)
-	IssueCAPrivKey(cn string, privateKey *rsa.PrivateKey) error
-	IssueCAPubKey(cn string, pub any) error
-	IssuePrivKey(cn string, privateKey *rsa.PrivateKey) error
-	IssuePubKey(cn string, pub any) error
+	IssueCAPrivKey(cn string, privateKey crypto.PrivateKey) error
+	IssueCAPubKey(cn string, pub crypto.PublicKey) error
+	IssuePrivKey(cn string, privateKey crypto.PrivateKey) error
+	IssuePubKey(cn string, pub crypto.PublicKey) error
 	Import(cer *x509.Certificate) error
 	ImportCN(cn string, cert *x509.Certificate) error
 	ImportDER(cn string, derCert []byte) error
@@ -82,15 +101,16 @@ type CertificateAuthority interface {
 	ImportIssuingCAs(cert *x509.Certificate, leafCN *string, leaf *x509.Certificate) error
 	ImportTrustedRoot(cn string, derCert []byte) error
 	ImportTrustedIntermediate(cn string, derCert []byte) error
-	ImportPubKey(cn string, pub any) error
+	ImportPubKey(cn string, pub crypto.PublicKey) error
+	NewEncryptionKey(cn, keyName string) (*rsa.PublicKey, error)
 	ParseCABundle(bundle []byte) ([]*x509.Certificate, error)
-	ParsePrivateKey([]byte) (*rsa.PrivateKey, error)
+	ParsePrivateKey([]byte) (crypto.PrivateKey, error)
 	PEM(cn string) ([]byte, error)
 	PersistentSign(key string, data []byte, saveData bool) error
 	PersistentVerifySignature(cn string, data []byte) error
-	PubKey(cn string) (*rsa.PublicKey, error)
-	RSADecrypt(data []byte) ([]byte, error)
-	RSAEncrypt(data []byte) ([]byte, error)
+	PubKey(cn string) (crypto.PublicKey, error)
+	RSADecrypt(cn, keyName string, ciphertext []byte) ([]byte, error)
+	RSAEncrypt(cn, keyName string, data []byte) ([]byte, error)
 	Revoke(cn string) error
 	RootCertificate() (*x509.Certificate, error)
 	RootCertForCA(cn string) (*x509.Certificate, error)
@@ -118,14 +138,17 @@ type CA struct {
 	certDir             string
 	parentIdentity      *Identity
 	parentCertificate   *x509.Certificate
-	parentPubKey        *rsa.PublicKey
+	parentPubKey        crypto.PublicKey
 	identity            Identity
+	signatureAlgorithm  x509.SignatureAlgorithm
 	certificate         *x509.Certificate
-	publicKey           *rsa.PublicKey
+	publicKey           crypto.PublicKey
+	curve               elliptic.Curve
 	trustStore          TrustStore
 	certStore           CertificateStore
 	commonName          string
 	autoImportIssuingCA bool
+	random              io.Reader
 	CertificateAuthority
 }
 
@@ -221,7 +244,7 @@ func NewIntermediateCA(
 	identity Identity,
 	parentIdentity Identity,
 	parentCertificate *x509.Certificate,
-	parentPubKey *rsa.PublicKey,
+	parentPubKey crypto.PublicKey,
 	autoImportIssuingCA bool) (CertificateAuthority, error) {
 
 	certDir := fmt.Sprintf("%s/%s",
@@ -245,6 +268,27 @@ func NewIntermediateCA(
 		trustStore:          NewDebianTrustStore(logger, certDir),
 		commonName:          identity.Subject.CommonName,
 		autoImportIssuingCA: autoImportIssuingCA}, nil
+}
+
+// Sets the Elliptical Curve Cryptography Curve to use when
+// generating ECC keys / certificates
+func (ca *CA) setCurve() error {
+	if ca.config.DefaultKeyAlgorithm == KEY_ALGO_ECC {
+		switch ca.config.EllipticalCurve {
+		case "P224":
+			ca.curve = elliptic.P224()
+		case "P256":
+			ca.curve = elliptic.P256()
+		case "P384":
+			ca.curve = elliptic.P384()
+		case "P521":
+			ca.curve = elliptic.P521()
+		default:
+			return fmt.Errorf("%s: %s", ErrInvalidCurve, ca.config.EllipticalCurve)
+		}
+		ca.signatureAlgorithm = x509.ECDSAWithSHA256
+	}
+	return nil
 }
 
 // Returns the default number of days certificates issued by
@@ -336,13 +380,23 @@ func (ca *CA) IsReady() bool {
 // the cert store. Subsequent initializations load the generated keys and certificates
 // so the CA is ready to start servicing requests. Certificates are saved to the cert
 // store in DER, PEM, PKCS#1 and PKCS#8 formats.
-func (ca *CA) Init(identity Identity, parentPrivKey *rsa.PrivateKey, random io.Reader) error {
+func (ca *CA) Init(identity Identity, parentPrivKey crypto.PrivateKey, random io.Reader) error {
+
+	if err := ca.setCurve(); err != nil {
+		return err
+	}
+
+	// Set the Random Number Generator and ECC curve
+	// based on platform configuration.
+	ca.random = random
 
 	if ca.IsReady() {
 		return ca.loadCA()
 	}
 
 	ca.logger.Debugf("Initializing Certificate Authority: %s", ca.commonName)
+
+	var privateKey crypto.PrivateKey
 
 	ipAddresses, dnsNames, emailAddresses, err := parseSANS(identity.SANS)
 	if err != nil {
@@ -356,15 +410,28 @@ func (ca *CA) Init(identity Identity, parentPrivKey *rsa.PrivateKey, random io.R
 		return err
 	}
 
-	// Generate a new RSA key if this is the Root Certificate Authority. If
-	// this is an Intermediate Certificate Authority, use the parent CA key.
-	privateKey, err := rsa.GenerateKey(random, identity.KeySize)
-	if err != nil {
-		ca.logger.Error(err)
-		return err
+	if ca.config.DefaultKeyAlgorithm == KEY_ALGO_RSA {
+		privateKeyRSA, err := rsa.GenerateKey(random, identity.KeySize)
+		if err != nil {
+			ca.logger.Error(err)
+			return err
+		}
+		privateKey = privateKeyRSA
+		ca.publicKey = &privateKeyRSA.PublicKey
+		ca.signatureAlgorithm = x509.SHA256WithRSA
+	} else if ca.config.DefaultKeyAlgorithm == KEY_ALGO_ECC {
+		privateKeyECC, err := ecdsa.GenerateKey(ca.curve, rand.Reader)
+		if err != nil {
+			ca.logger.Error(err)
+			return err
+		}
+		privateKey = privateKeyECC
+		ca.publicKey = &privateKeyECC.PublicKey
+		// set in the call to setCurve
+		// ca.signatureAlgorithm = x509.ECDSAWithSHA256
+	} else {
+		return fmt.Errorf("%s: %s", ErrInvalidAlgorithm, ca.config.DefaultKeyAlgorithm)
 	}
-
-	ca.publicKey = &privateKey.PublicKey
 
 	subjectKeyID, err := ca.createSubjectKeyIdentifier()
 	if err != nil {
@@ -383,8 +450,8 @@ func (ca *CA) Init(identity Identity, parentPrivKey *rsa.PrivateKey, random io.R
 		PostalCode:         []string{identity.Subject.PostalCode}}
 
 	template := &x509.Certificate{
-		SignatureAlgorithm:    x509.SHA256WithRSA,
-		PublicKeyAlgorithm:    x509.PublicKeyAlgorithm(x509.SHA256WithRSA),
+		SignatureAlgorithm:    ca.signatureAlgorithm,
+		PublicKeyAlgorithm:    x509.PublicKeyAlgorithm(ca.signatureAlgorithm),
 		SerialNumber:          serialNumber,
 		Issuer:                subject,
 		Subject:               subject,
@@ -418,7 +485,7 @@ func (ca *CA) Init(identity Identity, parentPrivKey *rsa.PrivateKey, random io.R
 
 	// Create the new Root / Intermediate CA certificate
 	caDerCert, err := x509.CreateCertificate(rand.Reader,
-		template, parentCertificate, &privateKey.PublicKey, usePrivKey)
+		template, parentCertificate, ca.publicKey, usePrivKey)
 	if err != nil {
 		ca.logger.Error(err)
 		return err
@@ -497,8 +564,8 @@ func (ca *CA) CreateCSR(email string, request CertificateRequest) ([]byte, error
 
 	template := x509.CertificateRequest{
 		RawSubject:         asn1Subj,
-		SignatureAlgorithm: x509.SHA256WithRSA,
-		PublicKeyAlgorithm: x509.PublicKeyAlgorithm(x509.SHA256WithRSA),
+		SignatureAlgorithm: ca.signatureAlgorithm,
+		PublicKeyAlgorithm: x509.PublicKeyAlgorithm(ca.signatureAlgorithm),
 		DNSNames:           dnsNames,
 		IPAddresses:        ipAddresses,
 		EmailAddresses:     emailAddresses,
@@ -595,7 +662,7 @@ func (ca *CA) SignCSR(csrBytes []byte, request CertificateRequest) ([]byte, erro
 // Create a new private / public key pair and save it to the cert store
 // in DER and PEM form. This method returns the raw DER encoded []byte
 // as returned from x509.CreateCertificate.
-func (ca *CA) IssueCertificate(request CertificateRequest, random io.Reader) ([]byte, error) {
+func (ca *CA) IssueCertificate(request CertificateRequest) ([]byte, error) {
 	if request.Valid == 0 {
 		request.Valid = ca.config.ValidDays
 	}
@@ -611,8 +678,8 @@ func (ca *CA) IssueCertificate(request CertificateRequest, random io.Reader) ([]
 		return nil, err
 	}
 	cert := &x509.Certificate{
-		SignatureAlgorithm: x509.SHA256WithRSA,
-		PublicKeyAlgorithm: x509.PublicKeyAlgorithm(x509.SHA256WithRSA),
+		SignatureAlgorithm: ca.signatureAlgorithm,
+		PublicKeyAlgorithm: x509.PublicKeyAlgorithm(ca.signatureAlgorithm),
 		SerialNumber:       serialNumber,
 		Issuer:             ca.certificate.Subject,
 		Subject: pkix.Name{
@@ -624,7 +691,6 @@ func (ca *CA) IssueCertificate(request CertificateRequest, random io.Reader) ([]
 			StreetAddress: []string{request.Subject.Address},
 			PostalCode:    []string{request.Subject.PostalCode},
 		},
-		// IPAddresses:    []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
 		NotBefore:      time.Now(),
 		NotAfter:       time.Now().AddDate(0, 0, request.Valid),
 		AuthorityKeyId: ca.certificate.SubjectKeyId,
@@ -635,15 +701,28 @@ func (ca *CA) IssueCertificate(request CertificateRequest, random io.Reader) ([]
 		IPAddresses:    ipAddresses,
 		EmailAddresses: emailAddresses}
 
-	certPrivKey, err := rsa.GenerateKey(random, ca.identity.KeySize)
-	if err != nil {
-		ca.logger.Error(err)
-		return nil, err
+	var certPubKey crypto.PublicKey
+	if ca.config.DefaultKeyAlgorithm == KEY_ALGO_RSA {
+		privateKeyRSA, err := rsa.GenerateKey(ca.random, ca.identity.KeySize)
+		if err != nil {
+			ca.logger.Error(err)
+			return nil, err
+		}
+		certPubKey = &privateKeyRSA.PublicKey
+	} else if ca.config.DefaultKeyAlgorithm == KEY_ALGO_ECC {
+		privateKeyECC, err := ecdsa.GenerateKey(ca.curve, rand.Reader)
+		if err != nil {
+			ca.logger.Error(err)
+			return nil, err
+		}
+		certPubKey = &privateKeyECC.PublicKey
+	} else {
+		return nil, fmt.Errorf("%s: %s", ErrInvalidAlgorithm, ca.config.DefaultKeyAlgorithm)
 	}
 
 	caPrivateKey, err := ca.certStore.CAPrivKey()
 	certDerBytes, err := x509.CreateCertificate(
-		rand.Reader, cert, ca.certificate, &certPrivKey.PublicKey, caPrivateKey)
+		rand.Reader, cert, ca.certificate, certPubKey, caPrivateKey)
 	if err != nil {
 		ca.logger.Error(err)
 		return nil, err
@@ -651,10 +730,6 @@ func (ca *CA) IssueCertificate(request CertificateRequest, random io.Reader) ([]
 	caPrivateKey = nil
 
 	if err := ca.ImportDER(request.Subject.CommonName, certDerBytes); err != nil {
-		return nil, err
-	}
-
-	if err = ca.IssuePrivKey(request.Subject.CommonName, certPrivKey); err != nil {
 		return nil, err
 	}
 
@@ -877,8 +952,20 @@ func (ca *CA) Sign(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	var signature []byte
 	hashed := sha256.Sum256(data)
-	signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, hashed[:])
+	if ca.certificate.SignatureAlgorithm == x509.SHA256WithRSA {
+		signature, err = rsa.SignPKCS1v15(
+			rand.Reader,
+			privateKey.(*rsa.PrivateKey),
+			crypto.SHA256,
+			hashed[:])
+	} else if ca.certificate.SignatureAlgorithm == x509.ECDSAWithSHA256 {
+		signature, err = ecdsa.SignASN1(
+			rand.Reader,
+			privateKey.(*ecdsa.PrivateKey),
+			hashed[:])
+	}
 	if err != nil {
 		ca.logger.Error(err)
 		return nil, err
@@ -889,8 +976,28 @@ func (ca *CA) Sign(data []byte) ([]byte, error) {
 // Verifies the signature of the requested data
 func (ca *CA) VerifySignature(data []byte, signature []byte) error {
 	hashed := sha256.Sum256(data)
-	if err := rsa.VerifyPKCS1v15(ca.publicKey, crypto.SHA256, hashed[:], signature); err != nil {
-		return ErrInvalidSignature
+	if ca.certificate.SignatureAlgorithm == x509.SHA256WithRSA {
+		rsaPub, ok := ca.publicKey.(*rsa.PublicKey)
+		if !ok {
+			return ErrInvalidPublicKeyRSA
+		}
+		if err := rsa.VerifyPKCS1v15(rsaPub, crypto.SHA256, hashed[:], signature); err != nil {
+			return ErrInvalidSignature
+		}
+	} else if ca.certificate.SignatureAlgorithm == x509.ECDSAWithSHA256 {
+		var esig struct {
+			R, S *big.Int
+		}
+		if _, err := asn1.Unmarshal(signature, &esig); err != nil {
+			return err
+		}
+		eccPub, ok := ca.publicKey.(*ecdsa.PublicKey)
+		if !ok {
+			return ErrInvalidPublicKeyRSA
+		}
+		if ok := ecdsa.VerifyASN1(eccPub, hashed[:], signature); !ok {
+			return ErrInvalidSignature
+		}
 	}
 	return nil
 }
@@ -924,7 +1031,11 @@ func (ca *CA) PersistentVerifySignature(key string, data []byte) error {
 		return err
 	}
 	hashed := sha256.Sum256(data)
-	if err := rsa.VerifyPKCS1v15(ca.publicKey, crypto.SHA256, hashed[:], signature); err != nil {
+	rsaPub, ok := ca.publicKey.(*rsa.PublicKey)
+	if !ok {
+		return ErrInvalidPublicKeyRSA
+	}
+	if err := rsa.VerifyPKCS1v15(rsaPub, crypto.SHA256, hashed[:], signature); err != nil {
 		return ErrInvalidSignature
 	}
 	return nil
@@ -1024,7 +1135,8 @@ func (ca *CA) ImportIssuingCAs(cert *x509.Certificate, leafCN *string, leaf *x50
 		}
 
 		// Save the certificate to the Certificate Authority trust store in DER form
-		err = ca.certStore.SaveTrustedCA(cn, bufBytes, partition, FSEXT_DER)
+		//err = ca.certStore.SaveTrustedCA(cn, bufBytes, partition, FSEXT_DER)
+		err = ca.certStore.Save(cn, bufBytes, partition, FSEXT_DER)
 		if err != nil {
 			ca.logger.Error(err)
 			return err
@@ -1035,7 +1147,7 @@ func (ca *CA) ImportIssuingCAs(cert *x509.Certificate, leafCN *string, leaf *x50
 		if err != nil {
 			return err
 		}
-		err = ca.certStore.SaveTrustedCA(cn, bufPEM, partition, FSEXT_PEM)
+		err = ca.certStore.Save(cn, bufPEM, partition, FSEXT_PEM)
 		if err != nil {
 			ca.logger.Error(err)
 			return err
@@ -1155,8 +1267,6 @@ func (ca *CA) IssuedCertificates() ([]string, error) {
 		if file.Name() == "ca.crl" {
 			continue
 		}
-		// pieces := strings.Split(file.Name(), ".")
-		// certs[pieces[0]] = true
 		certs[file.Name()] = true
 	}
 	names := make([]string, len(certs))
@@ -1214,39 +1324,36 @@ func (ca *CA) EncodePEM(derCert []byte) ([]byte, error) {
 }
 
 // Encodes any public key (RSA/ECC) to ASN.1 DER form
-func (ca *CA) EncodePubKey(pub any) ([]byte, error) {
+func (ca *CA) EncodePubKey(pub crypto.PublicKey) ([]byte, error) {
 	return x509.MarshalPKIXPublicKey(pub)
 }
 
 // Encodes a private key to ASN.1 DER PKCS8 form
-func (ca *CA) EncodePrivKey(privateKey *rsa.PrivateKey) ([]byte, error) {
+func (ca *CA) EncodePrivKey(privateKey crypto.PrivateKey) ([]byte, error) {
 	pkcs8, err := x509.MarshalPKCS8PrivateKey(privateKey)
 	if err != nil {
 		ca.logger.Error(err)
 		return nil, err
 	}
-	// PEM PKCS1
-	// caPrivKeyPEM := new(bytes.Buffer)
-	// err = pem.Encode(caPrivKeyPEM, &pem.Block{
-	// 	Type:  "RSA PRIVATE KEY",
-	// 	Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
-	// })
 	return pkcs8, nil
 }
 
 // Encodes a private key to ASN.1 DER PKCS8 form
 func (ca *CA) EncodePrivKeyPEM(der []byte) ([]byte, error) {
 	caPrivKeyPEM := new(bytes.Buffer)
+	var keyType string
+	if ca.config.DefaultKeyAlgorithm == KEY_ALGO_RSA {
+		keyType = "RSA PRIVATE KEY"
+	} else if ca.config.DefaultKeyAlgorithm == KEY_ALGO_ECC {
+		keyType = "EC PRIVATE KEY"
+	} else {
+		return nil, fmt.Errorf("%s: %s",
+			ErrInvalidAlgorithm, ca.config.DefaultKeyAlgorithm)
+	}
 	err := pem.Encode(caPrivKeyPEM, &pem.Block{
-		Type:  "RSA PRIVATE KEY",
+		Type:  keyType,
 		Bytes: der,
 	})
-	// // PEM PKCS1
-	// caPrivKeyPEM := new(bytes.Buffer)
-	// err = pem.Encode(caPrivKeyPEM, &pem.Block{
-	// 	Type:  "RSA PRIVATE KEY",
-	// 	Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
-	// })
 	if err != nil {
 		ca.logger.Error(err)
 		return nil, err
@@ -1255,7 +1362,7 @@ func (ca *CA) EncodePrivKeyPEM(der []byte) ([]byte, error) {
 }
 
 // Parses RSA private key bytes in ASN.1 DER form
-func (ca *CA) ParsePrivateKey(bytes []byte) (*rsa.PrivateKey, error) {
+func (ca *CA) ParsePrivateKey(bytes []byte) (crypto.PrivateKey, error) {
 	var err error
 	var privKeyAny any
 	// Try parsing as PKCS8 first, since thats what the CA prefers
@@ -1265,15 +1372,15 @@ func (ca *CA) ParsePrivateKey(bytes []byte) (*rsa.PrivateKey, error) {
 		privKeyAny, err = x509.ParsePKCS1PrivateKey(bytes)
 		if err != nil {
 			ca.logger.Error(err)
-			return nil, ErrInvalidRSAPrivateKey
+			return nil, ErrInvalidPrivateKey
 		}
 	}
-	return privKeyAny.(*rsa.PrivateKey), nil
+	return privKeyAny.(crypto.PrivateKey), nil
 }
 
 // Returns a private key from the certificate store using the stored ASN.1
 // DER PKCS8 key.
-func (ca *CA) PrivateKey(cn string) (*rsa.PrivateKey, error) {
+func (ca *CA) PrivateKey(cn string) (crypto.PrivateKey, error) {
 	bytes, err := ca.certStore.Get(cn, PARTITION_ISSUED, FSEXT_PRIVATE_PKCS8)
 	if err != nil {
 		return nil, err
@@ -1282,16 +1389,16 @@ func (ca *CA) PrivateKey(cn string) (*rsa.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	return key.(*rsa.PrivateKey), nil
+	return key, nil
 }
 
 // Loads and parses a PKIX, ASN.1 DER RSA public key from the certificate store
-func (ca *CA) CAPubKey() (*rsa.PublicKey, error) {
+func (ca *CA) CAPubKey() (crypto.PublicKey, error) {
 	return ca.certStore.CAPubKey()
 }
 
 // Loads and parses a PKIX, ASN.1 DER RSA public key from the certificate store
-func (ca *CA) PubKey(cn string) (*rsa.PublicKey, error) {
+func (ca *CA) PubKey(cn string) (crypto.PublicKey, error) {
 	return ca.certStore.PubKey(cn)
 }
 
@@ -1354,10 +1461,6 @@ func (ca *CA) ImportDER(cn string, derCert []byte) error {
 		}
 	}
 
-	// Encode and save the public key
-	if cert.IsCA {
-		return ca.IssueCAPubKey(cn, cert.PublicKey)
-	}
 	return ca.IssuePubKey(cn, cert.PublicKey)
 }
 
@@ -1388,18 +1491,18 @@ func (ca *CA) ImportPEM(cn string, pemBytes []byte) error {
 
 // Saves a private key to the certificate store "issued" partition in ASN.1 DER
 // PKCS8 and PEM (PCKS8) form
-func (ca *CA) IssuePrivKey(cn string, privateKey *rsa.PrivateKey) error {
+func (ca *CA) IssuePrivKey(cn string, privateKey crypto.PrivateKey) error {
 	return ca.issuePrivKey(cn, privateKey, PARTITION_ISSUED)
 }
 
 // Saves a CA private key to the certificate store in ASN.1 DER PKCS8 and PEM (PCKS8) form
-func (ca *CA) IssueCAPrivKey(cn string, privateKey *rsa.PrivateKey) error {
+func (ca *CA) IssueCAPrivKey(cn string, privateKey crypto.PrivateKey) error {
 	return ca.issuePrivKey(cn, privateKey, PARTITION_CA)
 }
 
 // Extracts the public key from the private key and saves both to the certificate store
 // in ASN.1 DER PKCS8 and PEM (PCKS8) form
-func (ca *CA) issuePrivKey(cn string, privateKey *rsa.PrivateKey, partition Partition) error {
+func (ca *CA) issuePrivKey(cn string, privateKey crypto.PrivateKey, partition Partition) error {
 	pkcs8, err := ca.EncodePrivKey(privateKey)
 	err = ca.certStore.Save(cn, pkcs8, partition, FSEXT_PRIVATE_PKCS8)
 	if err != nil {
@@ -1416,18 +1519,31 @@ func (ca *CA) issuePrivKey(cn string, privateKey *rsa.PrivateKey, partition Part
 		ca.logger.Error(err)
 		return err
 	}
-	return ca.issuePubKey(cn, &privateKey.PublicKey, partition)
+	if ca.config.DefaultKeyAlgorithm == KEY_ALGO_RSA {
+		rsaPriv, ok := privateKey.(*rsa.PrivateKey)
+		if !ok {
+			return ErrInvalidPrivateKeyRSA
+		}
+		return ca.issuePubKey(cn, &rsaPriv.PublicKey, partition)
+	} else if ca.config.DefaultKeyAlgorithm == KEY_ALGO_ECC {
+		eccPriv, ok := privateKey.(*ecdsa.PrivateKey)
+		if !ok {
+			return ErrInvalidPrivateKeyECC
+		}
+		return ca.issuePubKey(cn, &eccPriv.PublicKey, partition)
+	}
+	return ErrInvalidAlgorithm
 }
 
 // Encodes a public key as PKIX, ASN.1 DER and PEM form and saves both to the
 // certificate store "issued" partition
-func (ca *CA) IssuePubKey(cn string, pub any) error {
+func (ca *CA) IssuePubKey(cn string, pub crypto.PublicKey) error {
 	return ca.issuePubKey(cn, pub, PARTITION_ISSUED)
 }
 
 // Encodes a public key as PKIX, ASN.1 DER and PEM form and saves both to the
 // certificate store CA partition
-func (ca *CA) IssueCAPubKey(cn string, pub any) error {
+func (ca *CA) IssueCAPubKey(cn string, pub crypto.PublicKey) error {
 	return ca.issuePubKey(cn, pub, PARTITION_CA)
 }
 
@@ -1446,7 +1562,7 @@ func (ca *CA) EncodePubKeyPEM(cn string, derBytes []byte) ([]byte, error) {
 }
 
 // Decodes and returns an ASN.1 DER - PEM encoded - RSA Public Key
-func (ca *CA) DecodeRSAPubKeyPEM(bytes []byte) (*rsa.PublicKey, error) {
+func (ca *CA) DecodeRSAPubKeyPEM(bytes []byte) (crypto.PublicKey, error) {
 	var block *pem.Block
 	if block, _ = pem.Decode(bytes); block == nil {
 		return nil, ErrInvalidEncodingPEM
@@ -1456,11 +1572,11 @@ func (ca *CA) DecodeRSAPubKeyPEM(bytes []byte) (*rsa.PublicKey, error) {
 		ca.logger.Error(err)
 		return nil, err
 	}
-	return pubKey.(*rsa.PublicKey), nil
+	return pubKey.(crypto.PublicKey), nil
 }
 
 // Imports any public key (RSA/ECC) to the certificate store in PEM form
-func (ca *CA) ImportPubKey(cn string, pub any) error {
+func (ca *CA) ImportPubKey(cn string, pub crypto.PublicKey) error {
 	pubDER, err := ca.EncodePubKey(pub)
 	if err != nil {
 		ca.logger.Error(err)
@@ -1482,6 +1598,108 @@ func (ca *CA) ImportTrustedRoot(cn string, derCert []byte) error {
 // Imports an intermediate CA certificate into the trusted intermediate store
 func (ca *CA) ImportTrustedIntermediate(cn string, derCert []byte) error {
 	return ca.importTrustedCert(cn, derCert, PARTITION_TRUSTED_INTERMEDIATE)
+}
+
+// Creates a new RSA encryption key for the requested common name and
+// returns the public half of the key. Private encryption keys are
+// unable to be retrieved from the Certificate authority and stored in
+// a separate partition / hierarchy to increase security and provide
+// flexibility to rotate keyes without impacting other resources.
+func (ca *CA) NewEncryptionKey(cn, keyName string) (*rsa.PublicKey, error) {
+	privateKey, err := rsa.GenerateKey(ca.random, ca.identity.KeySize)
+	if err != nil {
+		ca.logger.Error(err)
+		return nil, err
+	}
+	// Private Key: Create
+	pkcs8, err := ca.EncodePrivKey(privateKey)
+	err = ca.certStore.SaveKeyed(
+		cn, keyName, pkcs8, PARTITION_ENCRYPTION_KEYS, FSEXT_PRIVATE_PKCS8)
+	if err != nil {
+		ca.logger.Error(err)
+		return nil, err
+	}
+	// Private Key: Encode to PKCS8
+	pkcs8PEM, err := ca.EncodePrivKeyPEM(pkcs8)
+	if err != nil {
+		ca.logger.Error(err)
+		return nil, err
+	}
+	// Private Key: Save PKCS8 PEM encoded key
+	err = ca.certStore.SaveKeyed(
+		cn, keyName, pkcs8PEM, PARTITION_ENCRYPTION_KEYS, FSEXT_PRIVATE_PEM)
+	if err != nil {
+		ca.logger.Error(err)
+		return nil, err
+	}
+	// Public Key: Encode to PKIX, ASN.1 DER form
+	privKeyDER, err := ca.EncodePubKey(&privateKey.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+	// Public Key: Save the ASN.1 DER PKCS1 form
+	err = ca.certStore.SaveKeyed(
+		cn, keyName, privKeyDER, PARTITION_ENCRYPTION_KEYS, FSEXT_PUBLIC_PKCS1)
+	if err != nil {
+		return nil, err
+	}
+	// Public Key: Encdode to PEM form
+	pubPEM, err := ca.EncodePubKeyPEM(cn, privKeyDER)
+	if err != nil {
+		ca.logger.Error(err)
+		return nil, err
+	}
+	// Public Key: Save PEM form
+	err = ca.certStore.SaveKeyed(cn, keyName, pubPEM, PARTITION_ENCRYPTION_KEYS, FSEXT_PUBLIC_PEM)
+	if err != nil {
+		ca.logger.Error(err)
+		return nil, err
+	}
+	return &privateKey.PublicKey, nil
+}
+
+// Returns the RSA public key for the requested common name / key from the
+// encryption keys partition
+func (ca *CA) EncryptionKey(cn, keyName string) (*rsa.PublicKey, error) {
+	pubPEM, err := ca.certStore.GetKeyed(
+		cn, keyName, PARTITION_ENCRYPTION_KEYS, FSEXT_PUBLIC_PEM)
+	if err != nil {
+		return nil, err
+	}
+	rsaPub, err := ca.DecodeRSAPubKeyPEM(pubPEM)
+	if err != nil {
+		return nil, err
+	}
+	return rsaPub.(*rsa.PublicKey), nil
+}
+
+// Encrypts the requested data using RSA Optimal Asymetric Encryption
+// Padding (OAEP) provided by the common name's public key. OAEP is used
+// to protect against Bleichenbacher ciphertext attacks described here:
+// https://pkg.go.dev/crypto/rsa#DecryptPKCS1v15SessionKey
+// https://www.rfc-editor.org/rfc/rfc3218.html#section-2.3.2
+func (ca *CA) RSAEncrypt(cn, keyName string, data []byte) ([]byte, error) {
+	pub, err := ca.EncryptionKey(cn, keyName)
+	if err != nil {
+		return nil, err
+	}
+	return rsa.EncryptOAEP(sha256.New(), ca.random, pub, data, nil)
+}
+
+// Decrypts the requested data, expected in OAEP form, using the common
+// name's RSA private key.
+func (ca *CA) RSADecrypt(cn, keyName string, ciphertext []byte) ([]byte, error) {
+	privDER, err := ca.certStore.GetKeyed(
+		cn, keyName, PARTITION_ENCRYPTION_KEYS, FSEXT_PRIVATE_PKCS8)
+	if err != nil {
+		return nil, err
+	}
+	priv, err := ca.ParsePrivateKey(privDER)
+	if err != nil {
+		return nil, err
+	}
+	privKey := priv.(*rsa.PrivateKey)
+	return rsa.DecryptOAEP(sha256.New(), ca.random, privKey, ciphertext, nil)
 }
 
 // Load CA private and public keys from the cert store, decode the
@@ -1566,7 +1784,7 @@ func (ca *CA) createSubjectKeyIdentifier() ([]byte, error) {
 
 // Imports a CA certificate into the specified trust store partition
 func (ca *CA) importTrustedCert(cn string, derCert []byte, partition Partition) error {
-	err := ca.certStore.SaveTrustedCA(cn, derCert, partition, FSEXT_DER)
+	err := ca.certStore.Save(cn, derCert, partition, FSEXT_DER)
 	if err != nil {
 		return err
 	}
@@ -1574,11 +1792,11 @@ func (ca *CA) importTrustedCert(cn string, derCert []byte, partition Partition) 
 	if err != nil {
 		return err
 	}
-	return ca.certStore.SaveTrustedCA(cn, pem, partition, FSEXT_PEM)
+	return ca.certStore.Save(cn, pem, partition, FSEXT_PEM)
 }
 
 // Encodes a public key to PEM form and saves it to the certificate store
-func (ca *CA) issuePubKey(cn string, pub any, partition Partition) error {
+func (ca *CA) issuePubKey(cn string, pub crypto.PublicKey, partition Partition) error {
 	// PKIX, ASN.1 DER form
 	privKeyDER, err := ca.EncodePubKey(pub)
 	if err != nil {
@@ -1588,17 +1806,18 @@ func (ca *CA) issuePubKey(cn string, pub any, partition Partition) error {
 	if err := ca.certStore.Save(cn, privKeyDER, partition, FSEXT_PUBLIC_PKCS1); err != nil {
 		return err
 	}
-	pubPEM := new(bytes.Buffer)
-	err = pem.Encode(pubPEM, &pem.Block{
-		Type:  "PUBLIC KEY",
-		Bytes: privKeyDER,
-	})
+	pubPEM, err := ca.EncodePubKeyPEM(cn, privKeyDER)
+	// pubPEM := new(bytes.Buffer)
+	// err = pem.Encode(pubPEM, &pem.Block{
+	// 	Type:  "PUBLIC KEY",
+	// 	Bytes: privKeyDER,
+	// })
 	if err != nil {
 		ca.logger.Error(err)
 		return err
 	}
 	// Save the PEM (PKCS1) form
-	return ca.certStore.Save(cn, pubPEM.Bytes(), partition, FSEXT_PUBLIC_PEM)
+	return ca.certStore.Save(cn, pubPEM, partition, FSEXT_PUBLIC_PEM)
 }
 
 // Imports the Root CA certificate into the trusted root store of an Intermediate
@@ -1606,7 +1825,7 @@ func (ca *CA) issuePubKey(cn string, pub any, partition Partition) error {
 func (ca *CA) importRootCA() error {
 
 	// Save DER certificate
-	err := ca.certStore.SaveTrustedCA(
+	err := ca.certStore.Save(
 		ca.parentCertificate.Subject.CommonName,
 		ca.parentCertificate.Raw,
 		PARTITION_TRUSTED_ROOT,
@@ -1620,7 +1839,7 @@ func (ca *CA) importRootCA() error {
 	if err != nil {
 		return nil
 	}
-	err = ca.certStore.SaveTrustedCA(
+	err = ca.certStore.Save(
 		ca.parentCertificate.Subject.CommonName,
 		rootPEM,
 		PARTITION_TRUSTED_ROOT,

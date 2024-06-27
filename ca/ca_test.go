@@ -24,16 +24,16 @@ func TestMain(m *testing.M) {
 }
 
 func teardown() {
-	//os.RemoveAll(CERTS_DIR)
+	os.RemoveAll(CERTS_DIR)
 }
 
 func setup() {
 	os.RemoveAll(CERTS_DIR)
 }
 
-func TestInit(t *testing.T) {
+func TestRSAInit(t *testing.T) {
 
-	logger, _, intermediateCAs, err := createService()
+	logger, _, intermediateCAs, err := createService(KEY_ALGO_RSA, true)
 	assert.Nil(t, err)
 
 	intermediateCA := intermediateCAs["intermediate-ca"]
@@ -45,12 +45,81 @@ func TestInit(t *testing.T) {
 		logger.Error(err)
 	}
 
-	logger.Info(bundle)
+	logger.Info(string(bundle))
 }
 
-func TestImportIssuingCAs(t *testing.T) {
+func TestRSALoad(t *testing.T) {
 
-	_, rootCA, _, err := createService()
+	logger, _, intermediateCAs, err := createService(KEY_ALGO_RSA, false)
+	assert.Nil(t, err)
+
+	logger, _, intermediateCAs, err = createService(KEY_ALGO_RSA, false)
+	assert.Nil(t, err)
+
+	intermediateCA := intermediateCAs["intermediate-ca"]
+	bundle, err := intermediateCA.CABundle()
+	assert.Nil(t, err)
+	assert.NotNil(t, bundle)
+
+	if err != nil {
+		logger.Error(err)
+	}
+
+	logger.Info(string(bundle))
+}
+
+func TestNewEncryptionKey(t *testing.T) {
+
+	logger, _, intermediateCAs, err := createService(KEY_ALGO_RSA, false)
+	assert.Nil(t, err)
+
+	cn := "localhost"
+	keyName := "test"
+	secret := []byte("password")
+
+	intermediateCA := intermediateCAs["intermediate-ca"]
+	pub, err := intermediateCA.NewEncryptionKey(cn, keyName)
+	assert.Nil(t, err)
+	assert.NotNil(t, pub)
+
+	ciphertext, err := intermediateCA.RSAEncrypt(cn, keyName, secret)
+	assert.Nil(t, err)
+	assert.NotEqual(t, secret, ciphertext)
+
+	decrypted, err := intermediateCA.RSADecrypt(cn, keyName, ciphertext)
+	assert.Nil(t, err)
+	assert.Equal(t, secret, decrypted)
+
+	logger.Debugf("encryption-key: cn: %s", cn)
+	logger.Debugf("encryption-key: keyName: %s", keyName)
+	logger.Debugf("encryption-key: secret: %s", secret)
+	logger.Debugf("encryption-key: ciphertext: %s", ciphertext)
+	logger.Debugf("encryption-key: decrypted: %s", decrypted)
+
+	// Create a 2nd key
+	keyName2 := "test2"
+	secret2 := []byte("password2")
+	pub2, err := intermediateCA.NewEncryptionKey(cn, keyName2)
+	assert.Nil(t, err)
+	assert.NotNil(t, pub2)
+
+	ciphertext2, err := intermediateCA.RSAEncrypt(cn, keyName2, secret2)
+	assert.Nil(t, err)
+	assert.NotEqual(t, secret, ciphertext)
+
+	decrypted2, err := intermediateCA.RSADecrypt(cn, keyName2, ciphertext2)
+	assert.Nil(t, err)
+	assert.Equal(t, secret2, decrypted2)
+
+	// Ensure encryption fails
+	decryptFails, err := intermediateCA.RSADecrypt(cn, keyName, ciphertext2)
+	assert.NotNil(t, err)
+	assert.Nil(t, decryptFails)
+}
+
+func TestRSAImportIssuingCAs(t *testing.T) {
+
+	_, rootCA, _, err := createService(KEY_ALGO_RSA, false)
 	assert.Nil(t, err)
 
 	// Download the certificate
@@ -81,9 +150,9 @@ func TestImportIssuingCAs(t *testing.T) {
 	assert.Equal(t, cert.Subject.CommonName, importedCert.Subject.CommonName)
 }
 
-func TestDownloadDistribuitionCRLs(t *testing.T) {
+func TestRSADownloadDistribuitionCRLs(t *testing.T) {
 
-	_, rootCA, _, err := createService()
+	_, rootCA, _, err := createService(KEY_ALGO_RSA, false)
 	assert.Nil(t, err)
 
 	// Download the certificate
@@ -108,9 +177,9 @@ func TestDownloadDistribuitionCRLs(t *testing.T) {
 	assert.Equal(t, ErrCRLAlreadyExists, err2)
 }
 
-func TestSignAndVerify(t *testing.T) {
+func TestRSASignAndVerify(t *testing.T) {
 
-	_, rootCA, _, err := createService()
+	_, rootCA, _, err := createService(KEY_ALGO_RSA, false)
 	assert.Nil(t, err)
 
 	// Create test data
@@ -129,9 +198,9 @@ func TestSignAndVerify(t *testing.T) {
 	assert.NotNil(t, rootCA.VerifySignature(newData, signature))
 }
 
-func TestPersistentSignAndVerify(t *testing.T) {
+func TestRSAPersistentSignAndVerify(t *testing.T) {
 
-	_, rootCA, _, err := createService()
+	_, rootCA, _, err := createService(KEY_ALGO_RSA, false)
 	assert.Nil(t, err)
 
 	// Create test data
@@ -164,9 +233,9 @@ func TestPersistentSignAndVerify(t *testing.T) {
 	assert.Equal(t, data, signedData)
 }
 
-func TestGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
+func TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 
-	_, rootCA, _, err := createService()
+	_, rootCA, _, err := createService(KEY_ALGO_RSA, false)
 	assert.Nil(t, err)
 
 	// Get the CA public key
@@ -203,7 +272,7 @@ func TestGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 
 	// Issue certificate using golang random number genrator
 	// go generate the private key
-	keypair, err := rootCA.IssueCertificate(certReq, rand.Reader)
+	keypair, err := rootCA.IssueCertificate(certReq)
 	assert.Nil(t, err)
 	assert.NotNil(t, keypair)
 
@@ -308,9 +377,9 @@ func TestGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 	//   -servername localhost  | openssl x509 -noout -text
 }
 
-func TestIssueCertificate(t *testing.T) {
+func TestRSAIssueCertificateRSA(t *testing.T) {
 
-	_, rootCA, _, err := createService()
+	_, rootCA, _, err := createService(KEY_ALGO_RSA, false)
 	assert.Nil(t, err)
 
 	domain := "www.domain.com"
@@ -342,20 +411,30 @@ func TestIssueCertificate(t *testing.T) {
 	}
 	// Issue certificate using golang runtime random number
 	// generator when creating the private key
-	der, err := rootCA.IssueCertificate(certReq, rand.Reader)
+	der, err := rootCA.IssueCertificate(certReq)
 	assert.Nil(t, err)
 	assert.NotNil(t, der)
 
 	cert, err := x509.ParseCertificate(der)
 	assert.Nil(t, err)
 	assert.Equal(t, domain, cert.Subject.CommonName)
+	assert.Equal(t, x509.SHA256WithRSA, cert.SignatureAlgorithm)
 }
 
-func createService() (*logging.Logger, CertificateAuthority, map[string]CertificateAuthority, error) {
+func createService(
+	algorithm string,
+	issueServerCert bool) (*logging.Logger, CertificateAuthority, map[string]CertificateAuthority, error) {
 
 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
 	logging.SetBackend(stdout)
 	logger := logging.MustGetLogger("certificate-authority")
+
+	logFormat := logging.MustStringFormatter(
+		`%{color}%{time:15:04:05.000} %{shortpkg}.%{shortfunc} %{level:.4s} %{id:03x}%{color:reset} %{message}`,
+	)
+	logFormatter := logging.NewBackendFormatter(stdout, logFormat)
+	backends := logging.MultiLogger(stdout, logFormatter)
+	logging.SetBackend(backends)
 
 	rootIdentity := Identity{
 		KeySize: 1024, // bits
@@ -412,6 +491,8 @@ func createService() (*logging.Logger, CertificateAuthority, map[string]Certific
 
 	config := &Config{
 		AutoImportIssuingCA: true,
+		DefaultKeyAlgorithm: algorithm,
+		EllipticalCurve:     CURVE_P256,
 		Identity: []Identity{
 			rootIdentity,
 			intermediateIdentity},
@@ -460,10 +541,11 @@ func createService() (*logging.Logger, CertificateAuthority, map[string]Certific
 		},
 	}
 
-	// Use golang runtime random number generator to generate private key
-	_, err = intermediateCA.IssueCertificate(certReq, rand.Reader)
-	if err != nil {
-		logger.Fatal(err)
+	if issueServerCert {
+		_, err = intermediateCA.IssueCertificate(certReq)
+		if err != nil {
+			logger.Fatal(err)
+		}
 	}
 
 	return logger, rootCA, intermediateCAs, nil

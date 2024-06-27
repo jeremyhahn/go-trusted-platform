@@ -114,15 +114,17 @@ The `main` branch will always build and run. Try it out!
             - [ ] Encryption at Rest
         - [x] Root CA
         - [x] Intermediate CA(s)
+        - [x] RSA & ECC x509 Certificates
         - [x] x509 Certificate & key storage / retrieval
         - [x] Issue x509 certificates (from Root and/or Intermediate CA)
         - [x] Import to trusted root certificate store
         - [x] Import to trusted intermediate certificate store
-        - [x] Create RSA public/private key pairs
+        - [x] Create RSA public private keys
         - [x] Create & Sign Certificate Signing Requests (CSR)
         - [x] x509 Certificate Revocation Lists (CRLs)
-        - [x] RSA Sign / Verify (certificates and data)
-        - [ ] RSA Encrypt / Decrypt
+        - [x] Dedicated Encryption Keys
+            - [x] RSA Encrypt / Decrypt
+        - [x] RSA Sign / Verify (using certificate keys)
         - [x] Encode / Decode to / from DER / PEM
         - [x] Automatic download / import of Issuer CA(s) to trust store
         - [x] Automatic download / import of CA Revocation Lists (CRLs)
@@ -152,7 +154,8 @@ The `main` branch will always build and run. Try it out!
         - [x] Activate credential
         - [x] Read / Parse Event Log
         - [x] Read Platform Configuration Registers (PCRs)
-        - [ ] Provide Attestation Key to Client
+        - [x] Provide Attestation Key to Client
+        - [ ] Quote / Verify
     - [ ] Command Line Interface
         - [ ] Certificate Authority
             - [x] Issue Certificate
@@ -163,7 +166,8 @@ The `main` branch will always build and run. Try it out!
             - [x] Install to Operating System Trust Store
             - [x] Uninstall to Operating System Trust Store
             - [ ] Sign / verify (certificate & data)
-            - [ ] Encrypt / Decrypt
+            - [ ] RSA Encrypt / Decrypt
+            - [ ] ECC Encrypt / Decrypt
             - [ ] Encode / Decode
             - [x] Parse DER / PEM x509 certificates
         - [ ] Trusted Platform Module 2.0
@@ -173,13 +177,13 @@ The `main` branch will always build and run. Try it out!
             - [ ] Create ECC Storage Root Key
             - [x] Create RSA Storage Root Key
             - [ ] Create ECC Attestation Key
-            - [x] Validate EK Cert w/ CA
-            - [x] Auto-import EK Issuer Root & Intermediate CAs
-            - [x] Create Attestation Key
-            - [x] Credential challenge
-            - [x] Activate credential
+            - [ ] Validate EK Cert w/ CA
+            - [ ] Auto-import EK Issuer Root & Intermediate CAs
+            - [ ] Create Attestation Key
+            - [ ] Credential challenge
+            - [ ] Activate credential
             - [x] Event Log Parsing
-            - [x] Provide Attestation Key to Client
+            - [ ] Provide Attestation Key to Client
         - [ ] Full Remote Attestation
             - [ ] Server (Attestor)
                 - [x] gRPC service

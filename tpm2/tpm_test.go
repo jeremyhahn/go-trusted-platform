@@ -21,11 +21,11 @@ import (
 var currentWorkingDirectory, _ = os.Getwd()
 var CERTS_DIR = fmt.Sprintf("%s/certs", currentWorkingDirectory)
 
+var INTERMEDIATE_CA ca.CertificateAuthority
+
 const (
 	EK_CERT_PATH = "./ECcert.bin"
 )
-
-//var CERTS_DIR = "./certs"
 
 func TestMain(m *testing.M) {
 	setup()
@@ -35,11 +35,26 @@ func TestMain(m *testing.M) {
 }
 
 func teardown() {
-	// os.RemoveAll(CERTS_DIR)
+
 }
 
 func setup() {
 	os.RemoveAll(CERTS_DIR)
+	createCA()
+}
+
+func TestEKCert(t *testing.T) {
+
+	logger, tpm := createSim(true, false)
+	defer tpm.Close()
+
+	tpm.SetCertificateAuthority(INTERMEDIATE_CA)
+
+	cert, err := tpm.EKCert(nil, nil)
+	assert.Nil(t, err)
+	assert.NotNil(t, cert)
+
+	logger.Debugf("cert: %+v", cert)
 }
 
 func TestQuote(t *testing.T) {
@@ -85,19 +100,6 @@ func TestReadPCRs(t *testing.T) {
 			logger.Infof("%d: 0x%s", pcrK, pcrV)
 		}
 	}
-}
-
-func TestMap(t *testing.T) {
-
-	logger, tpm := createSim(false, false)
-	defer tpm.Close()
-
-	m := []int{
-		0, 1, 2, 3, 4, 5,
-	}
-	val := m[:2]
-
-	logger.Infof("value = %+v", val)
 }
 
 // NOTE: The user account running the test requires read permissions
@@ -186,13 +188,11 @@ func TestImportTSS(t *testing.T) {
 
 	expectedSN := "455850945431947993541652326598156649892946412448"
 
-	logger, tpm, ca, err := createTP(false)
+	logger, tpm := createSim(false, false)
 	defer tpm.Close()
 
-	assert.Nil(t, err)
 	assert.NotNil(t, logger)
 	assert.NotNil(t, tpm)
-	assert.NotNil(t, ca)
 
 	cert, err := tpm.ImportTSSFile(EK_CERT_PATH, true)
 	assert.Nil(t, err)
@@ -213,22 +213,6 @@ func TestCapabilities(t *testing.T) {
 	logger.Debugf("Vendor: %s", caps.vendor)
 	logger.Debugf("Manufacturer: %s", caps.manufacturer.String())
 	logger.Debugf("Firmware: %d.%d", caps.fwMajor, caps.fwMinor)
-}
-
-func TestEKCert(t *testing.T) {
-
-	logger, tpm := createSim(true, false)
-	defer tpm.Close()
-
-	ca := createCA()
-
-	tpm.SetCertificateAuthority(ca)
-
-	cert, err := tpm.EKCert(nil, nil)
-	assert.Nil(t, err)
-	assert.NotNil(t, cert)
-
-	logger.Debugf("cert: %+v", cert)
 }
 
 func TestRSAEK(t *testing.T) {
@@ -313,7 +297,7 @@ func TestSealUnseal(t *testing.T) {
 	logger.Debugf("creation-ticket-digest: %+v", createResponse.CreationTicket.Digest.Buffer)
 }
 
-func testRandom(t *testing.T) {
+func TestRandom(t *testing.T) {
 
 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
 	logging.SetBackend(stdout)
@@ -358,79 +342,90 @@ func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2) 
 	tpm, err := NewSimulation(logger, debugSecrets, &Config{
 		EncryptSession: encrypt,
 		UseEntropy:     entropy,
+		EKCert:         "ECcert.bin",
 	}, domain)
 	if err != nil {
 		logger.Fatal(err)
 	}
 
-	intermediateCA := createCA()
-	tpm.SetCertificateAuthority(intermediateCA)
+	tpm.SetCertificateAuthority(INTERMEDIATE_CA)
 
 	return logger, tpm
 }
 
 // Creates a new TPM for testing
-func createTP(encrypt bool) (*logging.Logger, TrustedPlatformModule2, ca.CertificateAuthority, error) {
+// func createTP(encrypt bool) (*logging.Logger, TrustedPlatformModule2, ca.CertificateAuthority, error) {
 
-	debugSecrets := true
-	domain := "test.com"
+// 	debugSecrets := true
+// 	domain := "test.com"
 
-	stdout := logging.NewLogBackend(os.Stdout, "", 0)
-	logging.SetBackend(stdout)
-	logger := logging.MustGetLogger("tpm")
+// 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
+// 	logging.SetBackend(stdout)
+// 	logger := logging.MustGetLogger("tpm")
 
-	// Create TPM instance
-	tpm, err := NewTPM2(logger, debugSecrets, &Config{
-		Device: "/dev/tpmrm0",
-		//EnableEncryption: encrypt,
-		UseEntropy: false,
-	}, domain)
-	if err != nil {
-		logger.Fatal(err)
+// 	// Create TPM instance
+// 	tpm, err := NewTPM2(logger, debugSecrets, &Config{
+// 		Device: "/dev/tpmrm0",
+// 		//EnableEncryption: encrypt,
+// 		UseEntropy: false,
+// 	}, domain)
+// 	if err != nil {
+// 		logger.Fatal(err)
+// 	}
+
+// 	intermediateCA := createCA()
+// 	tpm.SetCertificateAuthority(intermediateCA)
+
+// 	// Generate server certificate
+// 	certReq := ca.CertificateRequest{
+// 		Valid: 365, // days
+// 		Subject: ca.Subject{
+// 			CommonName:   "localhost",
+// 			Organization: "ACME Corporation",
+// 			Country:      "US",
+// 			Locality:     "Miami",
+// 			Address:      "123 acme street",
+// 			PostalCode:   "12345"},
+// 		SANS: &ca.SubjectAlternativeNames{
+// 			DNS: []string{
+// 				"localhost",
+// 				"localhost.localdomain",
+// 			},
+// 			IPs: []string{
+// 				"127.0.0.1",
+// 			},
+// 			Email: []string{
+// 				"root@localhost",
+// 				"root@test.com",
+// 			},
+// 		},
+// 	}
+
+// 	// Issue a new test certificate using random number generator
+// 	_, err = intermediateCA.IssueCertificate(certReq)
+// 	if err != nil {
+// 		logger.Fatal(err)
+// 	}
+
+// 	return logger, tpm, intermediateCA, nil
+// }
+
+func createCA() {
+
+	if INTERMEDIATE_CA != nil {
+		return
 	}
-
-	intermediateCA := createCA()
-	tpm.SetCertificateAuthority(intermediateCA)
-
-	// Generate server certificate
-	certReq := ca.CertificateRequest{
-		Valid: 365, // days
-		Subject: ca.Subject{
-			CommonName:   "localhost",
-			Organization: "ACME Corporation",
-			Country:      "US",
-			Locality:     "Miami",
-			Address:      "123 acme street",
-			PostalCode:   "12345"},
-		SANS: &ca.SubjectAlternativeNames{
-			DNS: []string{
-				"localhost",
-				"localhost.localdomain",
-			},
-			IPs: []string{
-				"127.0.0.1",
-			},
-			Email: []string{
-				"root@localhost",
-				"root@test.com",
-			},
-		},
-	}
-
-	// Issue a new test certificate using random number generator
-	_, err = intermediateCA.IssueCertificate(certReq, tpm.RandomReader())
-	if err != nil {
-		logger.Fatal(err)
-	}
-
-	return logger, tpm, intermediateCA, nil
-}
-
-func createCA() ca.CertificateAuthority {
 
 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
 	logging.SetBackend(stdout)
 	logger := logging.MustGetLogger("certificate-authority")
+
+	logFormat := logging.MustStringFormatter(
+		`%{color}%{time:15:04:05.000} %{shortpkg}.%{shortfunc} %{level:.4s} %{id:03x}%{color:reset} %{message}`,
+	)
+	logFormatter := logging.NewBackendFormatter(stdout, logFormat)
+	backends := logging.MultiLogger(stdout, logFormatter)
+	logging.SetBackend(backends)
 
 	// Create Root and Intermediate Certificate Authorities
 	rootIdentity := ca.Identity{
@@ -489,6 +484,8 @@ func createCA() ca.CertificateAuthority {
 	// Initialize CA config
 	config := &ca.Config{
 		AutoImportIssuingCA: true,
+		DefaultKeyAlgorithm: ca.KEY_ALGO_ECC,
+		EllipticalCurve:     ca.CURVE_P256,
 		Identity: []ca.Identity{
 			rootIdentity,
 			intermediateIdentity},
@@ -499,9 +496,7 @@ func createCA() ca.CertificateAuthority {
 	if err != nil {
 		logger.Fatal(err)
 	}
-	intermediateCA := intermediateCAs["intermediate-ca"]
-
-	return intermediateCA
+	INTERMEDIATE_CA = intermediateCAs["intermediate-ca"]
 }
 
 /*
@@ -641,4 +636,17 @@ func createCA() ca.CertificateAuthority {
 
 // 	assert.NotNil(t, tpm.EKRSAPubKey())
 // 	logger.Debugf("tpm.EKRSAPubKey: %+v", tpm.EKRSAPubKey())
+// }
+
+// func TestMap(t *testing.T) {
+
+// 	logger, tpm := createSim(false, false)
+// 	defer tpm.Close()
+
+// 	m := []int{
+// 		0, 1, 2, 3, 4, 5,
+// 	}
+// 	val := m[:2]
+
+// 	logger.Infof("value = %+v", val)
 // }

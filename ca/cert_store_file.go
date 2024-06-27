@@ -2,6 +2,8 @@ package ca
 
 import (
 	"bytes"
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -18,6 +20,11 @@ import (
 	"github.com/op/go-logging"
 )
 
+var (
+	ErrFileAlreadyExists = errors.New("certificate-store: file already exists")
+	ErrFileNotFound      = errors.New("certificcate-store: file not found")
+)
+
 type FileSystemCertStore struct {
 	logger                 *logging.Logger
 	caDir                  string
@@ -28,7 +35,7 @@ type FileSystemCertStore struct {
 	revokedDir             string
 	crlDir                 string
 	sigDir                 string
-	ekDir                  string
+	cryptDir               string
 	certificate            *x509.Certificate
 	caName                 string
 	CertificateStore
@@ -39,6 +46,14 @@ func NewFileSystemCertStore(
 	caDir string,
 	certificate *x509.Certificate) (CertificateStore, error) {
 
+	// if certificate.SignatureAlgorithm == x509.SHA256WithRSA {
+	// 	caDir = fmt.Sprintf("%s/%s", caDir, "rsa")
+	// } else if certificate.SignatureAlgorithm == x509.ECDSAWithSHA256 {
+	// 	caDir = fmt.Sprintf("%s/%s", caDir, "ecc")
+	// } else {
+	// 	return nil, ErrInvalidAlgorithm
+	// }
+
 	partitions := []Partition{
 		PARTITION_CA,
 		PARTITION_TRUSTED_ROOT,
@@ -48,7 +63,7 @@ func NewFileSystemCertStore(
 		PARTITION_REVOKED,
 		PARTITION_CRL,
 		PARTITION_SIGNED,
-		PARTITION_ENDORSEMENT_KEYS}
+		PARTITION_ENCRYPTION_KEYS}
 
 	for _, partition := range partitions {
 		dir := fmt.Sprintf("%s/%s", caDir, partition)
@@ -68,7 +83,7 @@ func NewFileSystemCertStore(
 		revokedDir:             fmt.Sprintf("%s/%s", caDir, PARTITION_REVOKED),
 		crlDir:                 fmt.Sprintf("%s/%s", caDir, PARTITION_CRL),
 		sigDir:                 fmt.Sprintf("%s/%s", caDir, PARTITION_SIGNED),
-		ekDir:                  fmt.Sprintf("%s/%s", caDir, PARTITION_ENDORSEMENT_KEYS),
+		cryptDir:               fmt.Sprintf("%s/%s", caDir, PARTITION_ENCRYPTION_KEYS),
 		certificate:            certificate,
 		caName:                 certificate.Subject.CommonName}, nil
 }
@@ -283,7 +298,7 @@ func (store *FileSystemCertStore) CACertificate(cn string) (*x509.Certificate, e
 // Returns the Certificate Authority's RSA Private Key. This key should never
 // be cached, saved, or exported outside of the Certificate Authority, only
 // loaded on the stack and set to nil to clear it from memory as soon as possible.
-func (store *FileSystemCertStore) CAPrivKey() (*rsa.PrivateKey, error) {
+func (store *FileSystemCertStore) CAPrivKey() (crypto.PrivateKey, error) {
 	bytes, err := os.ReadFile(fmt.Sprintf("%s/%s%s",
 		store.caDir, store.caName, FSEXT_PRIVATE_PKCS8))
 	if err != nil {
@@ -293,17 +308,17 @@ func (store *FileSystemCertStore) CAPrivKey() (*rsa.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	return key.(*rsa.PrivateKey), nil
+	return key.(crypto.PrivateKey), nil
 }
 
 // Returns the Certificate Authority's RSA Public Key
-func (store *FileSystemCertStore) CAPubKey() (*rsa.PublicKey, error) {
+func (store *FileSystemCertStore) CAPubKey() (crypto.PublicKey, error) {
 	bytes, err := store.Get(store.caName, PARTITION_CA, FSEXT_PUBLIC_PKCS1)
 	if err != nil {
 		return nil, err
 	}
 	pubKey, err := x509.ParsePKIXPublicKey(bytes)
-	return pubKey.(*rsa.PublicKey), err
+	return pubKey.(crypto.PublicKey), err
 }
 
 // Returns the Certificate Authority's RSA Public Key in PEM form
@@ -341,7 +356,7 @@ func (store *FileSystemCertStore) Certificates(partition Partition) ([][]byte, e
 // Returns an issued RSA Private Key. This key should never be cached, saved,
 // or exported outside of the Certificate Authority, only loaded on the stack
 // and set to nil to clear it from memory as soon as possible.
-func (store *FileSystemCertStore) PrivKey(cn string) (*rsa.PrivateKey, error) {
+func (store *FileSystemCertStore) PrivKey(cn string) (crypto.PrivateKey, error) {
 	bytes, err := os.ReadFile(fmt.Sprintf("%s/%s/%s/%s%s",
 		store.caDir, PARTITION_ISSUED, cn, cn, FSEXT_PRIVATE_PKCS8))
 	if err != nil {
@@ -351,17 +366,17 @@ func (store *FileSystemCertStore) PrivKey(cn string) (*rsa.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	return key.(*rsa.PrivateKey), nil
+	return key.(crypto.PrivateKey), nil
 }
 
 // Returns the RSA Public Key from the issued partition for the specified common name
-func (store *FileSystemCertStore) PubKey(cn string) (*rsa.PublicKey, error) {
+func (store *FileSystemCertStore) PubKey(cn string) (crypto.PublicKey, error) {
 	bytes, err := store.Get(cn, PARTITION_ISSUED, FSEXT_PUBLIC_PKCS1)
 	if err != nil {
 		return nil, err
 	}
 	pubKey, err := x509.ParsePKIXPublicKey(bytes)
-	return pubKey.(*rsa.PublicKey), err
+	return pubKey.(crypto.PublicKey), err
 }
 
 // Returns and issued RSA Public Key in PEM form, from the issued partition
@@ -447,12 +462,51 @@ func (store *FileSystemCertStore) Save(
 		return err
 	}
 	certFile := fmt.Sprintf("%s/%s%s", certDir, cn, extension)
-	if err = os.WriteFile(certFile, data, 0644); err != nil {
+
+	if _, err := os.Stat(certFile); errors.Is(err, os.ErrNotExist) {
+		if err = os.WriteFile(certFile, data, 0644); err != nil {
+			store.logger.Error(err)
+			return err
+		}
+		store.logger.Debugf("saving certificate %s", certFile)
+		return nil
+	}
+
+	return fmt.Errorf("%s: %s", ErrFileAlreadyExists, certFile)
+}
+
+// Saves a "keyed object" to the file system using the common
+// name as a subfolder with the keyed object stored inside.
+func (store *FileSystemCertStore) SaveKeyed(
+	cn, key string,
+	data []byte,
+	partition Partition,
+	extension FSExtension) error {
+
+	var dir string
+	part, err := store.partition(partition)
+	if err != nil {
 		store.logger.Error(err)
 		return err
 	}
-	store.logger.Debugf("saving certificate %s", certFile)
-	return nil
+
+	dir = fmt.Sprintf("%s/%s/", part, cn)
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		store.logger.Error(err)
+		return err
+	}
+
+	file := fmt.Sprintf("%s/%s%s", dir, key, extension)
+	if _, err := os.Stat(file); errors.Is(err, os.ErrNotExist) {
+		if err = os.WriteFile(file, data, 0644); err != nil {
+			store.logger.Error(err)
+			return err
+		}
+		store.logger.Debugf("saving certificate %s", file)
+		return nil
+	}
+
+	return fmt.Errorf("%s: %s", ErrFileAlreadyExists, file)
 }
 
 // Saves a signed blob to the "signed" partition. If the blob key contains
@@ -495,28 +549,6 @@ func (store *FileSystemCertStore) Blob(key string) ([]byte, error) {
 	return bytes, nil
 }
 
-// Saves a CA certificate to the Certificate Authority
-// trusted certificates store.
-func (store *FileSystemCertStore) SaveTrustedCA(
-	cn string,
-	data []byte,
-	partition Partition,
-	extension FSExtension) error {
-
-	part, err := store.partition(partition)
-	if err != nil {
-		store.logger.Error(err)
-		return err
-	}
-	certFile := fmt.Sprintf("%s/%s%s", part, cn, extension)
-	if err = os.WriteFile(certFile, data, 0644); err != nil {
-		store.logger.Error(err)
-		return err
-	}
-	store.logger.Debugf("saving certificate %s", certFile)
-	return nil
-}
-
 // Retrieves key / certificate from the requested certificate
 // store partition
 func (store *FileSystemCertStore) Get(
@@ -547,6 +579,39 @@ func (store *FileSystemCertStore) Get(
 			store.logger.Errorf("error retrieving certificate. partition:%s, cn=%s",
 				partition, cn)
 			return nil, ErrCertNotFound
+		}
+		return nil, err
+	}
+	return bytes, nil
+}
+
+// Gets a "keyed object" from the store
+func (store *FileSystemCertStore) GetKeyed(
+	cn, key string,
+	partition Partition,
+	extension FSExtension) ([]byte, error) {
+
+	var dir string
+	part, err := store.partition(partition)
+	if err != nil {
+		store.logger.Error(err)
+		return nil, err
+	}
+
+	dir = fmt.Sprintf("%s/%s/", part, cn)
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		store.logger.Error(err)
+		return nil, err
+	}
+
+	file := fmt.Sprintf("%s/%s%s", dir, key, extension)
+	bytes, err := os.ReadFile(file)
+	if err != nil {
+		if os.IsNotExist(err) {
+			store.logger.Errorf(
+				"error retrieving keyed object. partition:%s, cn=%s, key=%s",
+				partition, cn, key)
+			return nil, ErrFileNotFound
 		}
 		return nil, err
 	}
@@ -661,18 +726,28 @@ func (store *FileSystemCertStore) Revoke(cn string, cert *x509.Certificate) erro
 		return err
 	}
 
+	var crlDER []byte
 	// Create the new CRL
-	crlDer, err := x509.CreateRevocationList(rand.Reader,
-		&template, store.certificate, privateKey)
-	if err != nil {
-		store.logger.Error(err)
-		return err
+	if store.certificate.SignatureAlgorithm == x509.SHA256WithRSA {
+		crlDER, err = x509.CreateRevocationList(rand.Reader,
+			&template, store.certificate, privateKey.(*rsa.PrivateKey))
+		if err != nil {
+			store.logger.Error(err)
+			return err
+		}
+	} else if store.certificate.SignatureAlgorithm == x509.ECDSAWithSHA256 {
+		crlDER, err = x509.CreateRevocationList(rand.Reader,
+			&template, store.certificate, privateKey.(*ecdsa.PrivateKey))
+		if err != nil {
+			store.logger.Error(err)
+			return err
+		}
 	}
 	privateKey = nil
 
 	// Save the CRL to the ca partition
 	crl := fmt.Sprintf("%s/%s%s", store.caDir, store.caName, FSEXT_CRL)
-	if err = os.WriteFile(crl, crlDer, 0644); err != nil {
+	if err = os.WriteFile(crl, crlDER, 0644); err != nil {
 		store.logger.Error(err)
 		return err
 	}
@@ -765,6 +840,8 @@ func (store *FileSystemCertStore) partition(partition Partition) (string, error)
 		return store.crlDir, nil
 	case PARTITION_SIGNED:
 		return store.sigDir, nil
+	case PARTITION_ENCRYPTION_KEYS:
+		return store.cryptDir, nil
 	}
 	return "", ErrInvalidPartition
 }

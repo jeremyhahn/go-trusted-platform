@@ -210,7 +210,7 @@ func (app *App) initCA() {
 		}
 
 		// Issue the web server certificate
-		if _, err = intermediateCA.IssueCertificate(certReq, random); err != nil {
+		if _, err = intermediateCA.IssueCertificate(certReq); err != nil {
 			app.Logger.Fatal(err)
 		}
 	}

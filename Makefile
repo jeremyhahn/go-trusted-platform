@@ -167,8 +167,13 @@ clean:
 		pki/tpm2/$(EK_CERT_NAME)
 
 
-test:
-	cd ca && go test -v
+test: test-ca test-tpm
+
+test-ca:
+	cd ca && go test -v -run TestRSA
+	cd ca && go test -v -run TestECC
+
+test-tpm:
 	cd tpm2 && go test -v
 
 
@@ -181,9 +186,42 @@ proto:
 		proto/attestation.proto
 
 
-# Verifier
+# Certificate Authority
+ca-verify-all: ca-root-verify ca-intermediate-verify ca-server-=verify
 
-# Set the domain and SANS names in the config to the verifier
+ca-show-all: ca-root-show ca-intermediate-show ca-server-show
+
+ca-root-verify:
+	cd ca/certs && \
+		openssl verify -CAfile root-ca/root-ca.crt root-ca/root-ca.crt
+
+ca-root-show:
+	cd ca/certs && \
+		openssl x509 -in root-ca/root-ca.crt -text -noout
+
+ca-intermediate-verify:
+	cd ca/certs && \
+		openssl verify \
+			-CAfile root-ca/root-ca.crt \
+			intermediate-ca/intermediate-ca.crt
+
+ca-intermediate-show:
+	cd ca/certs && \
+		openssl x509 -in intermediate-ca/intermediate-ca.crt -text -noout
+
+ca-server-verify:
+	cd ca/certs && \
+		openssl verify \
+			-CAfile root-ca/root-ca.crt \
+			-untrusted intermediate-ca/intermediate-ca.crt \
+			intermediate-ca/issued/localhost/localhost.crt
+
+ca-server-show:
+	cd ca/certs && \
+		openssl x509 -in intermediate-ca/issued/localhost/localhost.crt -text -noout
+
+
+# Verifier
 verifier-init:
 	cp config.yaml attestation/verifier
 	sed -i 's/domain: example.com/domain: verifier.example.com/' attestation/verifier/config.yaml
@@ -221,8 +259,6 @@ verifier-cert-chain:
 
 
 # Attestor
-
-# Set the domain and SANS names in the config to the attestor
 attestor-init:
 	cp config.yaml attestation/attestor
 	sed -i 's/domain: example.com/domain: attestor.example.com/' attestation/attestor/config.yaml
