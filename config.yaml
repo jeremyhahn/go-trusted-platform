@@ -100,7 +100,7 @@ tpm:
   # Encrypt CPU <-> TPM bus communication
   encrypt-sessions: true
   # Use TPM for entropy operations (random source)
-  entropy: false
+  entropy: true
   # Location of EK cert in NVRAM
   ek-cert-index: 0x01C00002
   # Name of EK cert (if loading from file system / tpm2_getekcertificate)
@@ -118,7 +118,7 @@ certificate-authority:
   # can be verified.
   auto-import-issuing-ca: true
   # Use the Operating System trusted certificate store
-  # when verifying certificates. If disabled, noly
+  # when verifying certificates. If disabled, only
   # certificates in the Certificate Authority will be
   # trusted and used for verifying leaf certificates.
   system-cert-pool: true
@@ -133,6 +133,12 @@ certificate-authority:
   # revoked without having to parse the CA's Revocation
   # List.
   delete-revoked-certificates: true
+  # The default algorithm to use when creating keys and certificates
+  # Supported algorithms: RSA, ECC
+  default-key-algorithm: ECC
+  # The Elliptical Curve Cryptography Curve
+  # Supported curves: P224, P256, P384, P521
+  elliptic-curve: P256
   # The Certificate Authority identity
   identity:
   - key-size: 2048
@@ -186,15 +192,15 @@ webservice:
   port: 8080
   tls-port: 8443
   jwt-expiration: 525960
-  tls-ca: certs/intermediate-ca.pub
-  tls-key: certs/intermediate-ca.key
+  tls-ca: certs/intermediate-ca.example.com.pub
+  tls-key: certs/intermediate-ca.example.com.key
   tls-crt: certs/issued/localhost/localhost.crt
   certificate:
     key-size: 2048
     # valid 365 days
     valid: 365
     subject:
-      cn: localhost
+      cn: www.example.com
       organization: Example Corporation
       country: US
       province: Example

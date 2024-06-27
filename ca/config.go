@@ -6,6 +6,8 @@ type Config struct {
 	Identity               []Identity `yaml:"identity" json:"identity" mapstructure:"identity"`
 	ValidDays              int        `yaml:"issued-valid-days" json:"issued-valid-days" mapstructure:"issued-valid-days"`
 	IncludeLocalhostInSANS bool       `yaml:"sans-include-localhost" json:"sans-include-localhost" mapstructure:"sans-include-localhost"`
+	DefaultKeyAlgorithm    string     `yaml:"default-key-algorithm" json:"default-key-algorithm" mapstructure:"default-key-algorithm"`
+	EllipticalCurve        string     `yaml:"elliptic-curve" json:"elliptic-curve" mapstructure:"elliptic-curve"`
 }
 
 type Identity struct {

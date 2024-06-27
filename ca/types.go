@@ -1,7 +1,7 @@
 package ca
 
 import (
-	"crypto/rsa"
+	"crypto"
 	"crypto/x509"
 	"errors"
 	"math/big"
@@ -19,7 +19,7 @@ const (
 	PARTITION_REVOKED                        = "revoked"
 	PARTITION_CRL                            = "crl"
 	PARTITION_SIGNED                         = "signed"
-	PARTITION_ENDORSEMENT_KEYS               = "endorsement-keys"
+	PARTITION_ENCRYPTION_KEYS                = "encryption-keys"
 )
 
 const (
@@ -56,20 +56,21 @@ type TrustStore interface {
 type CertificateStore interface {
 	Blob(key string) ([]byte, error)
 	CAPubPEM() ([]byte, error)
-	CAPubKey() (*rsa.PublicKey, error)
-	CAPrivKey() (*rsa.PrivateKey, error)
+	CAPubKey() (crypto.PublicKey, error)
+	CAPrivKey() (crypto.PrivateKey, error)
 	CACertificate(cn string) (*x509.Certificate, error)
 	Certificates(partition Partition) ([][]byte, error)
 	EncodePEM(derCert []byte) ([]byte, error)
-	PubKey(cn string) (*rsa.PublicKey, error)
+	PubKey(cn string) (crypto.PublicKey, error)
 	PubKeyPEM(cn string) ([]byte, error)
-	PrivKey(cn string) (*rsa.PrivateKey, error)
+	PrivKey(cn string) (crypto.PrivateKey, error)
 	PrivKeyPEM(cn string) ([]byte, error)
 	Get(cn string, partition Partition, extension FSExtension) ([]byte, error)
+	GetKeyed(cn, key string, partition Partition, extension FSExtension) ([]byte, error)
 	Append(cn string, data []byte, partition Partition, extension FSExtension) error
 	Save(cn string, data []byte, partition Partition, extension FSExtension) error
+	SaveKeyed(cn, key string, data []byte, partition Partition, extension FSExtension) error
 	SaveBlob(key string, data []byte) error
-	SaveTrustedCA(cn string, data []byte, partition Partition, extension FSExtension) error
 	Revoke(cn string, cert *x509.Certificate) error
 	RootCertForCA(cn string) (*x509.Certificate, error)
 	IsRevoked(cn string, serialNumber *big.Int) (bool, error)

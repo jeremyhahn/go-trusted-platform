@@ -422,8 +422,8 @@ func (verifier *Verification) MakeCredential(ek tpm2.Key, ak tpm2.DerivedKey) (m
 }
 
 // Send an encrypted secret to the Attestor to decrypt and return. The Attestor
-// proves they are in posession of the both the EK and AK by loading both keys into
-// their TPM and using the EK to decrypt the secret.
+// proves they are in posession of both the EK and AK by loading both keys into
+// the TPM and using the EK to decrypt the secret.
 // https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_activatecredential.1.md
 func (verifier *Verification) ActivateCredential(
 	makeCredentialResponse makeCredentialResponse) ([]byte, error) {
@@ -473,7 +473,7 @@ func (verifier *Verification) Quote(ak tpm2.DerivedKey) (*pb.QuoteResponse, erro
 
 	quoteRequest := &pb.QuoteRequest{
 		Nonce: []byte("test"),
-		//Pcrs: []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, },
+		//Pcrs: []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9 },
 		Pcrs: verifier.app.AttestationConfig.QuotePCRs,
 	}
 
@@ -531,13 +531,12 @@ func (verifier *Verification) enrollAttestor(ak tpm2.DerivedKey) ([]byte, error)
 		}
 		certReq.SANS.DNS = append(certReq.SANS.DNS, "localhost")
 		certReq.SANS.DNS = append(certReq.SANS.DNS, "localhost.localdomain")
-		certReq.SANS.DNS = append(certReq.SANS.DNS, "localhost.localdomain")
 		certReq.SANS.Email = append(certReq.SANS.Email, "root@localhost")
 		certReq.SANS.IPs = append(certReq.SANS.IPs, ips...)
 	}
 
 	// Issue an x509 platform certificate to the Attestor
-	certDER, err := verifier.ca.IssueCertificate(certReq, verifier.tpm.RandomReader())
+	certDER, err := verifier.ca.IssueCertificate(certReq)
 	if err != nil {
 		verifier.logger.Error(err)
 		return nil, err
