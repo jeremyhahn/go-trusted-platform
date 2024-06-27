@@ -21,8 +21,6 @@ import (
 var currentWorkingDirectory, _ = os.Getwd()
 var CERTS_DIR = fmt.Sprintf("%s/certs", currentWorkingDirectory)
 
-var INTERMEDIATE_CA ca.CertificateAuthority
-
 const (
 	EK_CERT_PATH = "./ECcert.bin"
 )
@@ -48,7 +46,8 @@ func TestEKCert(t *testing.T) {
 	logger, tpm := createSim(true, false)
 	defer tpm.Close()
 
-	tpm.SetCertificateAuthority(INTERMEDIATE_CA)
+	ca := createCA()
+	tpm.SetCertificateAuthority(ca)
 
 	cert, err := tpm.EKCert(nil, nil)
 	assert.Nil(t, err)
@@ -348,7 +347,8 @@ func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2) 
 		logger.Fatal(err)
 	}
 
-	tpm.SetCertificateAuthority(INTERMEDIATE_CA)
+	ca := createCA()
+	tpm.SetCertificateAuthority(ca)
 
 	return logger, tpm
 }
@@ -410,11 +410,7 @@ func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2) 
 // 	return logger, tpm, intermediateCA, nil
 // }
 
-func createCA() {
-
-	if INTERMEDIATE_CA != nil {
-		return
-	}
+func createCA() ca.CertificateAuthority {
 
 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
 	logging.SetBackend(stdout)
@@ -496,7 +492,8 @@ func createCA() {
 	if err != nil {
 		logger.Fatal(err)
 	}
-	INTERMEDIATE_CA = intermediateCAs["intermediate-ca"]
+
+	return intermediateCAs["intermediate-ca"]
 }
 
 /*
