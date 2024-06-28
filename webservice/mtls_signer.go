@@ -44,14 +44,14 @@ func (signer *Signer) Sign(
 	signer.logger.Info("signer.Sign")
 
 	signer.logger.Info("retrieving private PEM key from cert store")
-	privPEM, err := signer.ca.CertStore().PrivKeyPEM(signer.cn)
+	privPEM, err := signer.ca.PrivKeyPEM(signer.cn)
 	if err != nil {
 		signer.logger.Error(err)
 		return nil, err
 	}
 
 	signer.logger.Info("retrieving public PEM key from cert store")
-	pubPEM, err := signer.ca.CertStore().PubKeyPEM(signer.cn)
+	pubPEM, err := signer.ca.PubKeyPEM(signer.cn)
 	if err != nil {
 		signer.logger.Error(err)
 		return nil, err

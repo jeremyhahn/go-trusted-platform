@@ -6,12 +6,12 @@ import (
 )
 
 var (
-	SRKAuth string
+	ATTPassword string
 )
 
 func init() {
 
-	attestorCmd.PersistentFlags().StringVarP(&SRKAuth, "srk-auth", "a", "", "Storage Root Key (SRK) authentication password")
+	// attestorCmd.PersistentFlags().StringVarP(&ATTPassword, "password", "a", "", "Storage Root Key (SRK) authentication password")
 
 	rootCmd.AddCommand(attestorCmd)
 }
@@ -23,9 +23,9 @@ var attestorCmd = &cobra.Command{
 verification requests from the Verifier to begin Full Remote Attestation`,
 	Run: func(cmd *cobra.Command, args []string) {
 		srkAuth := App.AttestationConfig.SRKAuth
-		if SRKAuth != "" {
+		if ATTPassword != "" {
 			// Override config with CLI argument if specified
-			srkAuth = SRKAuth
+			srkAuth = ATTPassword
 		}
 		if _, err := attestor.NewAttestor(App, []byte(srkAuth)); err != nil {
 			App.Logger.Fatal(err)

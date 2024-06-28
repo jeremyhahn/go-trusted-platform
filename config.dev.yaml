@@ -4,16 +4,47 @@
 # Global platform configs
 debug: true
 debug-secrets: true
-config-dir: ./db/config
-data-dir: ./db/data
-cert-dir: ./db/certs
-log-dir: ./logs/
+platform-dir: platform
+config-dir: platform/etc
+log-dir: platform/log
 
 # The platform domain name
 domain: example.com
 
 # The hostmaster responsible for the platform
 hostmaster: root@example.com
+
+# Trusted Platform administrators perform authentication via the
+# Certificate Authority. 2 passwords are required to setup and 
+# subsequently access the platform. The Root password is used to
+# password protect the Root Certifiate Authority Private Key. The
+# Operator password is used to password protect the first
+# Intermediate Certifiate Authority that is created by default during
+# platform setup. After setup, the Root Certificate Authority Private
+# Key should be remove from the system and taken offline. Future operations
+# should be performed using an Intermediate Certificate Authority, either
+# the default created during setup, or an additional created after setup.
+#
+# Passwords should never be set here in a production environment, however,
+# can be useful during testing and development.
+root-password: asdf
+intermediate-password: asdf
+
+# Regular Expression that defines password complexity requirements
+# for private keys. A few examples:
+# 
+# Minimum 10 characters, uppercase and lowercase letters, and numbera (no symbols)
+# ^[a-zA-Z0-9]{10,}$
+# 
+# Minimum 10 characters, uppercase and lowercase letters, numbers and symbols
+# ^[a-zA-Z0-9-_!@#$%^&*() /\\\\+]{10,}$
+#
+# Minimum 10 characters, max 20, uppercase and lowercase lettes, numbers and symbols
+# ^[a-zA-Z0-9-_!@#$%^&*() /\\\\+.]{10,20}$
+#
+# Allow all:
+# ^*$
+password-policy: '^*'
 
 
 # Remote Attestation
@@ -81,17 +112,12 @@ attestation:
   allowed-verifiers:
     - verifier.example.com
 
-  # The Storage Root Key (SRK) password. This should never
-  # be set in a production environment, but is useful during
-  # testing and development.
-  srk-auth: my-secret
-
   # The Attestor Endorsement Key Certificate form. Can be 
   # either TSS or PEM.
   ek-cert-form: PEM
 
   # PCRs used for Quote/Verify
-  quote-pcrs: 6,7,8,9
+  quote-pcrs: 0,1,2,3,4,5,6,7,8,9
 
 
 # Trusted Platform Module
@@ -113,6 +139,8 @@ tpm:
 
 # Certificate Authority
 certificate-authority:
+  # The Certifiate Authority home directory
+  home: platform/ca
   # Automatically download and import Issuing CAs
   # when importing leaf certificates, so the leaf
   # can be verified.
@@ -139,6 +167,13 @@ certificate-authority:
   # The Elliptical Curve Cryptography Curve
   # Supported curves: P224, P256, P384, P521
   elliptic-curve: P256
+  # Requires passwords for private keys (FIPS 140-3)
+  require-pkcs8-password: true
+  # The password policy for private key passwords. Set to "inherit"
+  # to use the global password policy.
+  password-policy: inherit
+  # True to retain revoked certificates, false to delete
+  retain-revoked-certificates: true
   # The Certificate Authority identity
   identity:
   - key-size: 2048
@@ -154,6 +189,7 @@ certificate-authority:
       postal-code: 12345
     sans:
       dns: 
+        - root-ca.example.com
         - example.com
         - root-ca
         - root-ca.localdomain
@@ -176,10 +212,10 @@ certificate-authority:
       postal-code: 12345
     sans:
       dns:
+        - intermediate-ca.example.com
         - example.com
         - intermediate-ca
         - intermediate-ca.localdomain
-        - intermediate-ca.example.com
       ips:
         - 127.0.0.1
       email:
@@ -192,9 +228,9 @@ webservice:
   port: 8080
   tls-port: 8443
   jwt-expiration: 525960
-  tls-ca: certs/intermediate-ca.example.com.pub
-  tls-key: certs/intermediate-ca.example.com.key
-  tls-crt: certs/issued/localhost/localhost.crt
+  tls-ca: platform/ca/intermediate-ca.example.com.pub
+  tls-key: platform/ca/intermediate-ca.example.com.key
+  tls-crt: platform/ca/issued/localhost/localhost.crt
   certificate:
     key-size: 2048
     # valid 365 days
@@ -209,6 +245,7 @@ webservice:
       postal-code: 12345
     sans:
       dns:
+        - www.example.com
         - example.com
         - localhost
         - localhost.localdomain
@@ -217,3 +254,14 @@ webservice:
       email:
         - root@localhost
         - root@localhost.localdomain
+
+
+# Argon2 Password Hashing
+# https://github.com/P-H-C/phc-winner-argon2
+# https://pkg.go.dev/golang.org/x/crypto/argon2
+argon2:
+  memory: 1
+  iterations: 1
+  parallelism: 1
+  saltLen: 16
+  keyLen: 32

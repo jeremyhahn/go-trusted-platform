@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/op/go-logging"
+	"github.com/youmark/pkcs8"
 )
 
 var (
@@ -38,13 +39,15 @@ type FileSystemCertStore struct {
 	cryptDir               string
 	certificate            *x509.Certificate
 	caName                 string
+	retainRevoked          bool
 	CertificateStore
 }
 
 func NewFileSystemCertStore(
 	logger *logging.Logger,
 	caDir string,
-	certificate *x509.Certificate) (CertificateStore, error) {
+	certificate *x509.Certificate,
+	retainRevoked bool) (CertificateStore, error) {
 
 	// if certificate.SignatureAlgorithm == x509.SHA256WithRSA {
 	// 	caDir = fmt.Sprintf("%s/%s", caDir, "rsa")
@@ -85,18 +88,22 @@ func NewFileSystemCertStore(
 		sigDir:                 fmt.Sprintf("%s/%s", caDir, PARTITION_SIGNED),
 		cryptDir:               fmt.Sprintf("%s/%s", caDir, PARTITION_ENCRYPTION_KEYS),
 		certificate:            certificate,
-		caName:                 certificate.Subject.CommonName}, nil
+		caName:                 certificate.Subject.CommonName,
+		retainRevoked:          retainRevoked}, nil
 }
 
 // Returns the Root CA certificate for the requested CA certificate by
 // recursively loading the current certificate chain until the root
 // certificate is found.
 func (store *FileSystemCertStore) RootCertForCA(cn string) (*x509.Certificate, error) {
-	der, err := store.Get(cn, PARTITION_CA, FSEXT_DER)
+	// Assume this is an Intermediate CA calling this function
+	// and check the trusted-root partition first
+	der, err := store.Get(cn, PARTITION_TRUSTED_ROOT, FSEXT_DER)
 	if err != nil {
 		if err == ErrCertNotFound {
-			// Try to load the cert from the trusted CA root store
-			der, err = store.Get(cn, PARTITION_TRUSTED_ROOT, FSEXT_DER)
+			// Try to load the cert from the root CA directory
+			// (this is the root CA)
+			der, err = store.Get(cn, PARTITION_CA, FSEXT_DER)
 			if err != nil {
 				return nil, err
 			}
@@ -298,13 +305,13 @@ func (store *FileSystemCertStore) CACertificate(cn string) (*x509.Certificate, e
 // Returns the Certificate Authority's RSA Private Key. This key should never
 // be cached, saved, or exported outside of the Certificate Authority, only
 // loaded on the stack and set to nil to clear it from memory as soon as possible.
-func (store *FileSystemCertStore) CAPrivKey() (crypto.PrivateKey, error) {
-	bytes, err := os.ReadFile(fmt.Sprintf("%s/%s%s",
-		store.caDir, store.caName, FSEXT_PRIVATE_PKCS8))
+func (store *FileSystemCertStore) CAPrivKey(password []byte) (crypto.PrivateKey, error) {
+	file := fmt.Sprintf("%s/%s%s", store.caDir, store.caName, FSEXT_PRIVATE_PKCS8)
+	bytes, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
 	}
-	key, err := x509.ParsePKCS8PrivateKey(bytes)
+	key, err := pkcs8.ParsePKCS8PrivateKey(bytes, password)
 	if err != nil {
 		return nil, err
 	}
@@ -353,7 +360,7 @@ func (store *FileSystemCertStore) Certificates(partition Partition) ([][]byte, e
 	return certs, nil
 }
 
-// Returns an issued RSA Private Key. This key should never be cached, saved,
+// Returns an issued private key. This key should never be cached, saved,
 // or exported outside of the Certificate Authority, only loaded on the stack
 // and set to nil to clear it from memory as soon as possible.
 func (store *FileSystemCertStore) PrivKey(cn string) (crypto.PrivateKey, error) {
@@ -431,7 +438,7 @@ func (store *FileSystemCertStore) Append(
 		return err
 	}
 
-	store.logger.Debugf("appending certificate %s", certFile)
+	store.logger.Debugf("certificate-store: appending certificate %s", certFile)
 	return nil
 }
 
@@ -468,7 +475,7 @@ func (store *FileSystemCertStore) Save(
 			store.logger.Error(err)
 			return err
 		}
-		store.logger.Debugf("saving certificate %s", certFile)
+		store.logger.Debugf("certificate-store: saving certificate %s", certFile)
 		return nil
 	}
 
@@ -502,7 +509,7 @@ func (store *FileSystemCertStore) SaveKeyed(
 			store.logger.Error(err)
 			return err
 		}
-		store.logger.Debugf("saving certificate %s", file)
+		store.logger.Debugf("certificate-store: saving certificate %s", file)
 		return nil
 	}
 
@@ -541,7 +548,7 @@ func (store *FileSystemCertStore) Blob(key string) ([]byte, error) {
 	bytes, err := os.ReadFile(blobFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			store.logger.Errorf("error retrieving blob: partition: signed, key: %s", key)
+			store.logger.Errorf("certificate-store: error retrieving blob: %s", blobFile)
 			return nil, ErrBlobNotFound
 		}
 		return nil, err
@@ -576,8 +583,8 @@ func (store *FileSystemCertStore) Get(
 	bytes, err := os.ReadFile(certFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			store.logger.Errorf("error retrieving certificate. partition:%s, cn=%s",
-				partition, cn)
+			store.logger.Warningf(
+				"certificate-store: error retrieving certificate %s", certFile)
 			return nil, ErrCertNotFound
 		}
 		return nil, err
@@ -609,8 +616,7 @@ func (store *FileSystemCertStore) GetKeyed(
 	if err != nil {
 		if os.IsNotExist(err) {
 			store.logger.Errorf(
-				"error retrieving keyed object. partition:%s, cn=%s, key=%s",
-				partition, cn, key)
+				"certificate-store: error retrieving keyed object: %s", file)
 			return nil, ErrFileNotFound
 		}
 		return nil, err
@@ -674,7 +680,7 @@ func (store *FileSystemCertStore) IsRevokedAtDistributionPoints(
 
 // Adds the specified certificate to the Certicicate Authority revocation list
 // and moves all of the related certificates to the revoked certificates directory.
-func (store *FileSystemCertStore) Revoke(cn string, cert *x509.Certificate) error {
+func (store *FileSystemCertStore) Revoke(cn string, cert *x509.Certificate, password []byte) error {
 
 	// A list of certificates revoked by the local Certificate Authority
 	revokedCertificates := make([]x509.RevocationListEntry, 0)
@@ -720,7 +726,7 @@ func (store *FileSystemCertStore) Revoke(cn string, cert *x509.Certificate) erro
 	}
 
 	// Load the local CA's private key to sign the new CRL
-	privateKey, err := store.CAPrivKey()
+	privateKey, err := store.CAPrivKey(password)
 	if err != nil {
 		store.logger.Error(err)
 		return err
@@ -758,44 +764,41 @@ func (store *FileSystemCertStore) Revoke(cn string, cert *x509.Certificate) erro
 		store.logger.Error(err)
 		return err
 	}
-
-	// Create the certificate revocation directory if it doesnt exist
 	certDir := fmt.Sprintf("%s/%s", issuedPartition, cn)
-	revokedDir := fmt.Sprintf("%s/%s", store.revokedDir, cn)
-	if err := os.MkdirAll(revokedDir, fs.ModePerm); err != nil {
-		store.logger.Error(err)
-		return err
-	}
 
-	// Move all related certiticates in "issued" to "revoked"
+	// Delete or move certiticates in "issued" to "revoked"
 	commonExtensions := []FSExtension{
+		FSEXT_PRIVATE_PEM,
+		FSEXT_PRIVATE_PKCS8,
 		FSEXT_PUBLIC_PEM,
 		FSEXT_PUBLIC_PKCS1,
 		FSEXT_CSR,
 		FSEXT_DER,
 		FSEXT_PEM}
-	for _, ext := range commonExtensions {
-		src := fmt.Sprintf("%s/%s%s", certDir, cn, ext)
-		dst := fmt.Sprintf("%s/%s%s", revokedDir, cn, ext)
-		err = os.Rename(src, dst)
-		if err != nil {
+	if store.retainRevoked {
+		// Create the certificate revocation directory if it doesnt exist
+		revokedDir := fmt.Sprintf("%s/%s", store.revokedDir, cn)
+		if err := os.MkdirAll(revokedDir, fs.ModePerm); err != nil {
 			store.logger.Error(err)
 			return err
 		}
-	}
-
-	// Certificates generated from CSR don't have private keys
-	// in the certificate store. Ignore file not found errors for private keys.
-	keyExtensions := []FSExtension{FSEXT_PRIVATE_PEM, FSEXT_PRIVATE_PKCS8}
-	for _, ext := range keyExtensions {
-		src := fmt.Sprintf("%s/%s%s", certDir, cn, ext)
-		dst := fmt.Sprintf("%s/%s%s", revokedDir, cn, ext)
-		if _, err := os.Stat(src); errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err = os.Rename(src, dst); err != nil {
-			store.logger.Error(err)
-			return err
+		for _, ext := range commonExtensions {
+			src := fmt.Sprintf("%s/%s%s", certDir, cn, ext)
+			dst := fmt.Sprintf("%s/%s%s", revokedDir, cn, ext)
+			err = os.Rename(src, dst)
+			if err != nil {
+				if os.IsNotExist(err) {
+					if ext == FSEXT_CSR || ext == FSEXT_PRIVATE_PKCS8 || ext == FSEXT_PRIVATE_PEM {
+						// ignore errors for CSR and Private Key files
+						// that dont exist since they are not present
+						// for certificates generated from a CSR process.
+						// IssueCertificate does not use CSRs.
+						continue
+					}
+				}
+				store.logger.Error(err)
+				return err
+			}
 		}
 	}
 

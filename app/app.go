@@ -11,30 +11,37 @@ import (
 
 	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
+	"golang.org/x/term"
 
 	"github.com/jeremyhahn/go-trusted-platform/ca"
 	"github.com/jeremyhahn/go-trusted-platform/config"
+	"github.com/jeremyhahn/go-trusted-platform/hash"
+	"github.com/jeremyhahn/go-trusted-platform/platform/auth"
+	"github.com/jeremyhahn/go-trusted-platform/platform/setup"
 	"github.com/jeremyhahn/go-trusted-platform/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/util"
 )
 
 type App struct {
-	Domain            string                      `yaml:"domain" json:"domain" mapstructure:"domain"`
-	Hostmaster        string                      `yaml:"hostmaster" json:"hostmaster" mapstructure:"hostmaster"`
-	CA                ca.CertificateAuthority     `yaml:"-" json:"-" mapstructure:"-"`
-	TPM               tpm2.TrustedPlatformModule2 `yaml:"-" json:"-" mapstructure:"-"`
-	CAConfig          ca.Config                   `yaml:"certificate-authority" json:"certificate_authority" mapstructure:"certificate-authority"`
-	TPMConfig         tpm2.Config                 `yaml:"tpm" json:"tpm" mapstructure:"tpm"`
-	AttestationConfig config.Attestation          `yaml:"attestation" json:"attestation" mapstructure:"attestation"`
-	DebugFlag         bool                        `yaml:"debug" json:"debug" mapstructure:"debug"`
-	DebugSecretsFlag  bool                        `yaml:"debug-secrets" json:"debug-secrets" mapstructure:"debug-secrets"`
-	CertDir           string                      `yaml:"cert-dir" json:"cert_dir" mapstructure:"cert-dir"`
-	ConfigDir         string                      `yaml:"config-dir" json:"config_dir" mapstructure:"config-dir"`
-	DataDir           string                      `yaml:"data-dir" json:"data_dir" mapstructure:"data-dir"`
-	LogDir            string                      `yaml:"log-dir" json:"log_dir" mapstructure:"log-dir"`
-	Logger            *logging.Logger             `yaml:"-" json:"-" mapstructure:"-"`
-	RuntimeUser       string                      `yaml:"runtime-user" json:"runtime_user" mapstructure:"runtime-user"`
-	WebService        config.WebService           `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
+	Domain               string                      `yaml:"domain" json:"domain" mapstructure:"domain"`
+	Hostmaster           string                      `yaml:"hostmaster" json:"hostmaster" mapstructure:"hostmaster"`
+	CA                   ca.CertificateAuthority     `yaml:"-" json:"-" mapstructure:"-"`
+	TPM                  tpm2.TrustedPlatformModule2 `yaml:"-" json:"-" mapstructure:"-"`
+	CAConfig             ca.Config                   `yaml:"certificate-authority" json:"certificate_authority" mapstructure:"certificate-authority"`
+	TPMConfig            tpm2.Config                 `yaml:"tpm" json:"tpm" mapstructure:"tpm"`
+	AttestationConfig    config.Attestation          `yaml:"attestation" json:"attestation" mapstructure:"attestation"`
+	DebugFlag            bool                        `yaml:"debug" json:"debug" mapstructure:"debug"`
+	DebugSecretsFlag     bool                        `yaml:"debug-secrets" json:"debug-secrets" mapstructure:"debug-secrets"`
+	PlatformDir          string                      `yaml:"platform-dir" json:"platform_dir" mapstructure:"platform-dir"`
+	ConfigDir            string                      `yaml:"config-dir" json:"config_dir" mapstructure:"config-dir"`
+	LogDir               string                      `yaml:"log-dir" json:"log_dir" mapstructure:"log-dir"`
+	Logger               *logging.Logger             `yaml:"-" json:"-" mapstructure:"-"`
+	RuntimeUser          string                      `yaml:"runtime-user" json:"runtime_user" mapstructure:"runtime-user"`
+	Argon2               hash.Argon2Params           `yaml:"argon2" json:"argon2" mapstructure:"argon2"`
+	WebService           config.WebService           `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
+	PasswordPolicy       string                      `yaml:"password-policy" json:"password-policy" mapstructure:"password-policy"`
+	RootPassword         string                      `yaml:"root-password" json:"root_password" mapstructure:"root-password"`
+	IntermediatePassword string                      `yaml:"intermediate-password" json:"intermediate_password" mapstructure:"intermediate-password"`
 }
 
 func NewApp() *App {
@@ -42,32 +49,36 @@ func NewApp() *App {
 }
 
 type AppInitParams struct {
-	Debug     bool
-	LogDir    string
-	ConfigDir string
-	CertDir   string
+	Debug       bool
+	LogDir      string
+	ConfigDir   string
+	PlatformDir string
+	CADir       string
+	Password    []byte
 }
 
 func (app *App) Init(initParams *AppInitParams) *App {
 	if initParams != nil {
 		app.DebugFlag = initParams.Debug
-		app.LogDir = initParams.LogDir
+		app.PlatformDir = initParams.PlatformDir
 		app.ConfigDir = initParams.ConfigDir
-		app.CertDir = initParams.CertDir
+		app.LogDir = initParams.LogDir
+		app.CAConfig.Home = initParams.CADir
 	}
 	app.initConfig()
-	app.initLogger()
-	app.initTPM()
-	app.initCA()
-	if app.DebugFlag {
-		logging.SetLevel(logging.DEBUG, "")
-		app.Logger.Debug("Starting logger in debug mode...")
-		for k, v := range viper.AllSettings() {
-			app.Logger.Debugf("%s: %+v", k, v)
-		}
-	} else {
-		logging.SetLevel(logging.INFO, "")
+	if initParams.Password == nil {
+		initParams.Password = app.PasswordPrompt()
 	}
+	// if initParams != nil {
+	// 	app.DebugFlag = initParams.Debug
+	// 	app.PlatformDir = initParams.PlatformDir
+	// 	app.ConfigDir = initParams.ConfigDir
+	// 	app.LogDir = initParams.LogDir
+	// 	app.CAConfig.Home = initParams.CADir
+	// }
+	app.CAConfig.Home = initParams.CADir
+	app.initLogger()
+	app.initCA(initParams.Password)
 	return app
 }
 
@@ -76,7 +87,6 @@ func (app *App) initConfig() {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(app.ConfigDir)
-	//viper.AddConfigPath(fmt.Sprintf("/etc/%s/", Name))
 	viper.AddConfigPath(fmt.Sprintf("$HOME/.%s/", Name))
 	viper.AddConfigPath(".")
 
@@ -99,11 +109,17 @@ func (app *App) initLogger() {
 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
 	logfile := logging.NewLogBackend(f, "", log.Lshortfile)
 	logFormatter := logging.NewBackendFormatter(logfile, logFormat)
+	stdoutFormatter := logging.NewBackendFormatter(stdout, logFormat)
 	//syslog, _ := logging.NewSyslogBackend(appName)
-	backends := logging.MultiLogger(stdout, logFormatter)
+	backends := logging.MultiLogger(stdoutFormatter, logFormatter)
 	logging.SetBackend(backends)
+	logger := logging.MustGetLogger(Name)
 	if app.DebugFlag {
 		logging.SetLevel(logging.DEBUG, "")
+		logger.Debug("Starting logger in debug mode...")
+		for k, v := range viper.AllSettings() {
+			logger.Debugf("%s: %+v", k, v)
+		}
 	} else {
 		logging.SetLevel(logging.ERROR, "")
 	}
@@ -113,15 +129,15 @@ func (app *App) initLogger() {
 // Open a connection to the TPM, using an unauthenticated, unverified
 // and un-attested connection. Use the software TPM simulator if enabled
 // in the TPM configuration section.
-func (app *App) initTPM() {
+func (app *App) openTPM(password []byte) {
 	var err error
 	var tpm tpm2.TrustedPlatformModule2
 	if app.TPMConfig.UseSimulator {
 		tpm, err = tpm2.NewSimulation(
-			app.Logger, app.DebugSecretsFlag, &app.TPMConfig, app.Domain)
+			app.Logger, app.DebugSecretsFlag, &app.TPMConfig, password, app.Domain)
 	} else {
 		tpm, err = tpm2.NewTPM2(
-			app.Logger, app.DebugSecretsFlag, &app.TPMConfig, app.Domain)
+			app.Logger, app.DebugSecretsFlag, &app.TPMConfig, password, app.Domain)
 	}
 	if err != nil {
 		app.Logger.Error(err)
@@ -134,17 +150,28 @@ func (app *App) initTPM() {
 // to the configuration. If this is the first time the CA is being initialized,
 // new keys and certificates are created for the Root and Intermediate CAs
 // and a web server certificate is issued for the configured domain by the
-// Intermediate CA. If the CA and web server certificates have already been
-// initialized, load them from persistent storage.
+// Intermediate CA. If the CA has already been initialized, it's keys and signing
+// certificate are reloaded from persistent storage.
 //
-// If a Trusted Platform Module is found, use it as the random generator for
-// the CA private keys. Use the TPM "Encrypt" configuration option to encrypt
-// the session / bus communication between the CPU <-> TPM.
-func (app *App) initCA() {
+// If a Trusted Platform Module is found and entropy is enabled in the
+// configuration then it's used as the source of randomness for all random
+// operations in the platform. Use the TPM "Encrypt" configuration option
+// to encrypt the bus communication between the CPU <-> TPM.
+func (app *App) initCA(password []byte) {
 
-	// No need to keep the TPM open after Certificate Authority
-	// initialization and local attestation is complete. Open and
-	// close it again later when needed.
+	// Override passwords with user-defined passwords
+	// in configuration file
+	rootPassword := password
+	intermediatePassword := password
+	if app.RootPassword != "" {
+		rootPassword = []byte(app.RootPassword)
+	}
+	if app.IntermediatePassword != "" {
+		intermediatePassword = []byte(app.IntermediatePassword)
+		app.openTPM(intermediatePassword)
+	} else {
+		app.openTPM(password)
+	}
 	defer app.TPM.Close()
 
 	// Initalize TPM based random reader if present.
@@ -153,19 +180,54 @@ func (app *App) initCA() {
 	// the CPU <-> TPM.
 	random := app.TPM.RandomReader()
 
-	// Create new Root and Intermediate CA(s)
-	_, intermediateCAs, err := ca.NewCA(
-		app.Logger, app.CertDir, &app.CAConfig, random)
-	if err != nil {
-		app.Logger.Fatal(err)
+	// Set the CA password policy to the global password
+	// password policy if set to "inherit"
+	if app.CAConfig.PasswordPolicy == "inherit" {
+		app.CAConfig.PasswordPolicy = app.PasswordPolicy
 	}
 
-	intermediateIdentity := app.CAConfig.Identity[1]
-	intermediateCN := intermediateIdentity.Subject.CommonName
-	intermediateCA := intermediateCAs[intermediateCN]
+	// Create new Root and Intermediate CA(s)
+	rootCA, intermediateCA, err := ca.NewCA(
+		app.Logger, &app.CAConfig, password, 1, random)
 
 	// Inject the CA into the TPM
 	app.TPM.SetCertificateAuthority(intermediateCA)
+
+	// Start platform setup if the CA hasn't been initialized
+	if err != nil {
+		if err == ca.ErrNotInitialized {
+			// Set up the platform authenticator (PKCS8)
+			pkcs8Authenticator := auth.NewPKCS8Authenticator(
+				app.Logger,
+				intermediateCA,
+				app.RootPassword,
+				app.IntermediatePassword)
+
+			// Run platform setup using the PKCS8 authenticator
+			platformSetup := setup.NewPlatformSetup(
+				app.Logger,
+				app.PasswordPolicy,
+				rootPassword,
+				intermediatePassword,
+				app.CAConfig,
+				rootCA,
+				intermediateCA,
+				app.TPM,
+				pkcs8Authenticator)
+
+			// Run platform setup
+			platformSetup.Setup(password)
+		} else {
+			app.Logger.Fatal(err)
+		}
+	}
+
+	// Platform Setup uses nil password to load
+	// passwords from file. This sets the regular
+	// password variable to the password in the config.
+	if app.IntermediatePassword != "" {
+		password = intermediatePassword
+	}
 
 	// Try to load the web services TLS cert
 	_, err = intermediateCA.PEM(app.Domain)
@@ -210,14 +272,14 @@ func (app *App) initCA() {
 		}
 
 		// Issue the web server certificate
-		if _, err = intermediateCA.IssueCertificate(certReq); err != nil {
+		if _, err = intermediateCA.IssueCertificate(certReq, password); err != nil {
 			app.Logger.Fatal(err)
 		}
 	}
 
 	app.CA = intermediateCA
 
-	// Initialize the TPM / Platform
+	// Initialize the TPM
 	if err := app.TPM.Init(); err != nil {
 		app.Logger.Fatal(err)
 	}
@@ -294,4 +356,13 @@ func (app *App) DropPrivileges() {
 		}
 		app.InitLogFile(int(uid), int(gid))
 	}
+}
+
+// Prompts for a password via STDIN
+func (app *App) PasswordPrompt() []byte {
+	password, err := term.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		app.Logger.Fatal(err)
+	}
+	return password
 }

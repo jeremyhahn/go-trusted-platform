@@ -37,7 +37,7 @@ const (
 )
 
 var (
-	EKCertIndex = tpm2.TPMHandle(0x01C00002) //  TCG specified location for RSA-EK-certificate.
+	EKCertIndex = tpm2.TPMHandle(0x01C00002) //  TCG specified location for RSA-EK-certificate
 
 	ErrEndorsementCertNotFound     = errors.New("tpm: endorsement key certificate not found")
 	ErrEndorsementKeyNotFound      = errors.New("tpm: endorsement key not found")
@@ -110,6 +110,8 @@ type TPM2 struct {
 	// ekECCPubKey *ecdsa.PublicKey
 	transport transport.TPM
 	simulator *simulator.Simulator
+	// TODO: Replace this with opaque key
+	caPassword []byte
 	TrustedPlatformModule2
 }
 
@@ -120,6 +122,7 @@ func NewTPM2(
 	logger *logging.Logger,
 	debugSecrets bool,
 	config *Config,
+	caPassword []byte,
 	domain string) (TrustedPlatformModule2, error) {
 
 	if config == nil || config.Device == "" {
@@ -135,7 +138,6 @@ func NewTPM2(
 	}
 
 	ekCertName := fmt.Sprintf("%s-ek", domain)
-
 	tpm := &TPM2{
 		logger:       logger,
 		debugSecrets: debugSecrets,
@@ -144,7 +146,8 @@ func NewTPM2(
 		transport:    transport.FromReadWriter(f),
 		ekCertName:   ekCertName,
 		ekBlobKey:    fmt.Sprintf("%s/%s/%s", blobStorePrefix, domain, ekCertName),
-		domain:       domain}
+		domain:       domain,
+		caPassword:   caPassword}
 
 	random, err := tpm.randomReader()
 	if err != nil {
@@ -154,11 +157,13 @@ func NewTPM2(
 	return tpm, nil
 }
 
-// Creates a new Trusted Platoform Module simulator (software)
+// Creates a new Trusted Platoform Module Simulator (Software TPM)
 func NewSimulation(
 	logger *logging.Logger,
 	debugSecrets bool,
-	config *Config, domain string) (TrustedPlatformModule2, error) {
+	config *Config,
+	caPassword []byte,
+	domain string) (TrustedPlatformModule2, error) {
 
 	logger.Info(infoOpeningSimulator)
 
@@ -178,7 +183,8 @@ func NewSimulation(
 		transport:    transport.FromReadWriter(sim),
 		ekCertName:   ekCertName,
 		ekBlobKey:    fmt.Sprintf("%s/%s/%s", blobStorePrefix, domain, ekCertName),
-		domain:       domain}
+		domain:       domain,
+		caPassword:   caPassword}
 
 	random, err := tpm.randomReader()
 	if err != nil {
@@ -188,7 +194,7 @@ func NewSimulation(
 	return tpm, nil
 }
 
-// Opens an existing TPM connection
+// Re-opens a TPM connection
 func (tpm *TPM2) Open() error {
 
 	var t transport.TPM
@@ -395,7 +401,7 @@ func (tpm *TPM2) EKCert(ekHandle *tpm2.TPMHandle, srkAuth []byte) (*x509.Certifi
 
 	// Sign and save the EK certificate to the CA
 	tpm.logger.Infof("tpm: signing EK certificate and importing to Certificate Authority")
-	if err := tpm.ca.PersistentSign(tpm.ekCertName, certPEM, true); err != nil {
+	if err := tpm.ca.PersistentSign(tpm.ekCertName, certPEM, tpm.caPassword, true); err != nil {
 		return nil, err
 	}
 
@@ -1595,12 +1601,12 @@ func (tpm *TPM2) ImportEK(
 	// Verify the certificate using the Certificate Authority Root & Intermediate
 	// Certifiates along with all imported Trusted Root and Intermediate certificates.
 	if verify {
-		_, err := tpm.ca.Verify(ekCert, &tpm.ekCertName) // &tpm.ekCertName
+		_, err := tpm.ca.Verify(ekCert, &tpm.ekCertName)
 		if err != nil {
 			// The above Verify call should have already auto-imported
 			// the issuing CA if auto-import is enabled for the CA. Now
 			// check the TPM auto-import option to see if it overrides
-			// the global CA setting to allow auto-importing  EK platform
+			// the global CA setting to allow auto-importing EK platform
 			// certs.
 			if _, ok := err.(x509.UnknownAuthorityError); ok {
 				// Auto-import the EK platform certificates
@@ -1632,7 +1638,7 @@ func (tpm *TPM2) ImportEK(
 
 	// Sign and save the EK cert to the CA's signed blob storage
 	ekBlobKey := tpm.createEKCertBlobKey(domain, cn)
-	if err := tpm.ca.PersistentSign(ekBlobKey, ekCertPEM, true); err != nil {
+	if err := tpm.ca.PersistentSign(ekBlobKey, ekCertPEM, tpm.caPassword, true); err != nil {
 		return nil, err
 	}
 

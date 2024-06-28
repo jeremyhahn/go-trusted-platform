@@ -304,13 +304,14 @@ func TestRandom(t *testing.T) {
 
 	debugSecrets := true
 	domain := "test.com"
+	password := []byte("Secret!2#4")
 
 	// Create TPM instance
 	tpm, err := NewTPM2(logger, debugSecrets, &Config{
 		Device:         "/dev/tpmrm0",
 		EncryptSession: false,
 		UseEntropy:     true,
-	}, domain)
+	}, password, domain)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -333,6 +334,7 @@ func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2) 
 
 	debugSecrets := true
 	domain := "test.com"
+	password := []byte("intermediate-password")
 
 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
 	logging.SetBackend(stdout)
@@ -342,7 +344,7 @@ func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2) 
 		EncryptSession: encrypt,
 		UseEntropy:     entropy,
 		EKCert:         "ECcert.bin",
-	}, domain)
+	}, password, domain)
 	if err != nil {
 		logger.Fatal(err)
 	}
@@ -414,7 +416,7 @@ func createCA() ca.CertificateAuthority {
 
 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
 	logging.SetBackend(stdout)
-	logger := logging.MustGetLogger("certificate-authority")
+	logger := logging.MustGetLogger("tpm")
 
 	logFormat := logging.MustStringFormatter(
 		`%{color}%{time:15:04:05.000} %{shortpkg}.%{shortfunc} %{level:.4s} %{id:03x}%{color:reset} %{message}`,
@@ -422,6 +424,9 @@ func createCA() ca.CertificateAuthority {
 	logFormatter := logging.NewBackendFormatter(stdout, logFormat)
 	backends := logging.MultiLogger(stdout, logFormatter)
 	logging.SetBackend(backends)
+
+	rootPassword := []byte("root-password")
+	intermediatePassword := []byte("intermediate-password")
 
 	// Create Root and Intermediate Certificate Authorities
 	rootIdentity := ca.Identity{
@@ -479,6 +484,7 @@ func createCA() ca.CertificateAuthority {
 
 	// Initialize CA config
 	config := &ca.Config{
+		Home:                CERTS_DIR,
 		AutoImportIssuingCA: true,
 		DefaultKeyAlgorithm: ca.KEY_ALGO_ECC,
 		EllipticalCurve:     ca.CURVE_P256,
@@ -488,12 +494,18 @@ func createCA() ca.CertificateAuthority {
 	}
 
 	// Create the CAs
-	_, intermediateCAs, err := ca.NewCA(logger, CERTS_DIR, config, rand.Reader)
-	if err != nil {
-		logger.Fatal(err)
+	rootCA, intermediateCA, err := ca.NewCA(logger, config, intermediatePassword, 1, rand.Reader)
+	if err == ca.ErrNotInitialized {
+		rootPrivKey, rootCert, err := rootCA.Init(nil, nil, rootPassword, rand.Reader)
+		if err != nil {
+			logger.Fatal(err)
+		}
+		_, _, err = intermediateCA.Init(rootPrivKey, rootCert, intermediatePassword, rand.Reader)
+		if err != nil {
+			logger.Fatal(err)
+		}
 	}
-
-	return intermediateCAs["intermediate-ca"]
+	return intermediateCA
 }
 
 /*
