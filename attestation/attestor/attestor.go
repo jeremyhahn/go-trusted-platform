@@ -27,6 +27,8 @@ var (
 	ErrConnectionFailed      = errors.New("attestor: connection failed")
 	ErrUnknownVerifier       = errors.New("attestor: unknown attestation verifier")
 	ErrInvalidClientCertPool = errors.New("attestor: invalid verifier certificate pool")
+
+	// password = flag.String("password", "", "The password used to unseal the Certificate Authority Private Key")
 )
 
 type Attestor interface {
@@ -121,37 +123,42 @@ func (attestor *Attest) newTLSGRPCServer(secureService *SecureAttestor) error {
 
 	attestor.logger.Infof("Starting TLS gRPC services on port: %s", socket)
 
-	rootCAs, err := attestor.ca.CABundleCertPool()
+	// rootCAs, err := attestor.ca.CABundleCertPool()
+	// if err != nil {
+	// 	attestor.logger.Error(err)
+	// 	return err
+	// }
+
+	// serverCert, err := attestor.ca.PEM(attestor.domain)
+	// if err != nil {
+	// 	return err
+	// }
+
+	// serverKey, err := attestor.ca.CertStore().PrivKeyPEM(attestor.domain)
+	// if err != nil {
+	// 	return err
+	// }
+
+	// serverKeyPair, err := tls.X509KeyPair(serverCert, serverKey)
+	// if err != nil {
+	// 	attestor.logger.Fatalf(
+	// 		"Failed to read Server Certificate files %s  %s: %v",
+	// 		serverCert,
+	// 		serverKey,
+	// 		err)
+	// }
+
+	// tlsTemplate := &tls.Config{
+	// 	RootCAs:      rootCAs,
+	// 	Certificates: []tls.Certificate{serverKeyPair},
+	// 	ClientAuth:   tls.NoClientCert,
+	// 	MinVersion:   tls.VersionTLS13,
+	// 	MaxVersion:   tls.VersionTLS13,
+	// }
+	tlsTemplate, err := attestor.ca.TLSConfig(attestor.domain, true)
 	if err != nil {
 		attestor.logger.Error(err)
 		return err
-	}
-
-	serverCert, err := attestor.ca.PEM(attestor.domain)
-	if err != nil {
-		return err
-	}
-
-	serverKey, err := attestor.ca.CertStore().PrivKeyPEM(attestor.domain)
-	if err != nil {
-		return err
-	}
-
-	serverKeyPair, err := tls.X509KeyPair(serverCert, serverKey)
-	if err != nil {
-		attestor.logger.Fatalf(
-			"Failed to read Server Certificate files %s  %s: %v",
-			serverCert,
-			serverKey,
-			err)
-	}
-
-	tlsTemplate := &tls.Config{
-		RootCAs:      rootCAs,
-		Certificates: []tls.Certificate{serverKeyPair},
-		ClientAuth:   tls.NoClientCert,
-		MinVersion:   tls.VersionTLS13,
-		MaxVersion:   tls.VersionTLS13,
 	}
 
 	// Build mTLS config that contains the Attestor (our) Certificate Authority

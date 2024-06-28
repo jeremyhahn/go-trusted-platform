@@ -14,15 +14,16 @@ import (
 	"github.com/spf13/viper"
 )
 
-var App *app.App
-var DebugFlag bool
-var ConfigDir string
-var DataDir string
-var LogDir string
-var CertDir string
-var HomeDir string
-var RuntimeUser string
-
+var (
+	App       *app.App
+	DebugFlag bool
+	ConfigDir,
+	PlatformDir,
+	LogDir,
+	CADir,
+	RuntimeUser,
+	Password string
+)
 var rootCmd = &cobra.Command{
 	Use:   app.Name,
 	Short: "Golang Viper / Cobra trusted-platform project",
@@ -42,10 +43,12 @@ func init() {
 
 	cobra.OnInitialize(func() {
 		App = app.NewApp().Init(&app.AppInitParams{
-			Debug:     DebugFlag,
-			LogDir:    LogDir,
-			ConfigDir: ConfigDir,
-			CertDir:   CertDir})
+			Debug:       DebugFlag,
+			LogDir:      LogDir,
+			ConfigDir:   ConfigDir,
+			CADir:       CADir,
+			PlatformDir: PlatformDir,
+			Password:    []byte(Password)})
 	})
 
 	wd, err := os.Getwd()
@@ -54,12 +57,12 @@ func init() {
 	}
 
 	rootCmd.PersistentFlags().BoolVarP(&DebugFlag, "debug", "", false, "Enable debug mode")
-	rootCmd.PersistentFlags().StringVarP(&HomeDir, "home", "", wd, "Program home directory") // doesnt work as system daemon if not wd (/)
-	rootCmd.PersistentFlags().StringVarP(&DataDir, "data-dir", "", fmt.Sprintf("%s/db", wd), "Directory where database files are stored")
+	rootCmd.PersistentFlags().StringVarP(&PlatformDir, "platform-dir", "", wd, "Trusted Platform home / data directory") // doesnt work as system daemon if not wd (defaults to /)
 	rootCmd.PersistentFlags().StringVarP(&ConfigDir, "config-dir", "", fmt.Sprintf("/etc/%s", app.Name), "Directory where configuration files are stored")
-	rootCmd.PersistentFlags().StringVarP(&CertDir, "cert-dir", "", fmt.Sprintf("/etc/%s", app.Name), "Directory where certificates are stored")
-	rootCmd.PersistentFlags().StringVarP(&LogDir, "log-dir", "", "./logs", "Logging directory")
+	rootCmd.PersistentFlags().StringVarP(&LogDir, "log-dir", "", "platform/log", "Logging directory")
+	rootCmd.PersistentFlags().StringVarP(&CADir, "ca-dir", "", "platform/ca", "Logging directory")
 	rootCmd.PersistentFlags().StringVarP(&RuntimeUser, "setuid", "", "root", "Ther operating system user to run as")
+	rootCmd.PersistentFlags().StringVarP(&Password, "password", "a", "", "Password to unseal the Certificate Authority")
 
 	viper.BindPFlags(rootCmd.PersistentFlags())
 

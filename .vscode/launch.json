@@ -49,10 +49,10 @@
             "program": "${workspaceRoot}",
             "args": ["verifier",
                  "--debug",
-                 "--config-dir", "attestation/verifier",
-                 "--data-dir", "attestation/verifier/db",
-                 "--cert-dir", "attestation/verifier/db/certs",
-                 "--log-dir", "attestation/verifier/logs",
+                 "--config-dir", "attestation/verifier/platform/etc",
+                 "--platform-dir", "attestation/attestor/platform",
+                 "--log-dir", "attestation/verifier/platform/logs",
+                 "--ca-dir", "attestation/verifier/platform/ca",
                  "--attestor", "attestor.example.com"
             ],
             "debugAdapter": "legacy"
@@ -67,10 +67,10 @@
             "program": "${workspaceRoot}",
             "args": ["verifier",
                  "--debug",
-                 "--config-dir", "attestation/verifier",
-                 "--data-dir", "attestation/verifier/db",
-                 "--cert-dir", "attestation/verifier/db/certs",
-                 "--log-dir", "attestation/verifier/logs",
+                 "--config-dir", "attestation/verifier/platform/etc",
+                 "--platform-dir", "attestation/attestor/platform",
+                 "--log-dir", "attestation/verifier/platform/logs",
+                 "--ca-dir", "attestation/verifier/platform/ca",
                  "--attestor", "attestor.example.com"
             ],
             "debugAdapter": "legacy"
@@ -86,10 +86,11 @@
             "program": "${workspaceRoot}",
             "args": ["attestor",
                  "--debug",
-                 "--config-dir", "attestation/attestor",
-                 "--data-dir", "attestation/attestor/db",
-                 "--cert-dir", "attestation/attestor/db/certs",
-                 "--log-dir", "attestation/attestor/logs",
+                // "--password", "#Trusted%secre3t.Se#",
+                 "--config-dir", "attestation/attestor/platform/etc",
+                 "--platform-dir", "attestation/attestor/platform",
+                 "--log-dir", "attestation/attestor/platform/logs",
+                 "--ca-dir", "attestation/attestor/platform/ca",
             ],
             "debugAdapter": "legacy"
         }, {
@@ -103,10 +104,11 @@
             "program": "${workspaceRoot}",
             "args": ["attestor",
                  "--debug",
-                 "--config-dir", "attestation/attestor",
-                 "--data-dir", "attestation/attestor/db",
-                 "--cert-dir", "attestation/attestor/db/certs",
-                 "--log-dir", "attestation/attestor/logs",
+               //  "--password", "test",
+                 "--config-dir", "attestation/attestor/platform/etc",
+                 "--platform-dir", "attestation/attestor/platform",
+                 "--log-dir", "attestation/attestor/platform/logs",
+                 "--ca-dir", "attestation/attestor/platform/ca",
             ],
             "debugAdapter": "legacy"
         }

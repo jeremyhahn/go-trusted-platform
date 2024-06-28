@@ -57,7 +57,7 @@ type CertificateStore interface {
 	Blob(key string) ([]byte, error)
 	CAPubPEM() ([]byte, error)
 	CAPubKey() (crypto.PublicKey, error)
-	CAPrivKey() (crypto.PrivateKey, error)
+	CAPrivKey(password []byte) (crypto.PrivateKey, error)
 	CACertificate(cn string) (*x509.Certificate, error)
 	Certificates(partition Partition) ([][]byte, error)
 	EncodePEM(derCert []byte) ([]byte, error)
@@ -71,7 +71,7 @@ type CertificateStore interface {
 	Save(cn string, data []byte, partition Partition, extension FSExtension) error
 	SaveKeyed(cn, key string, data []byte, partition Partition, extension FSExtension) error
 	SaveBlob(key string, data []byte) error
-	Revoke(cn string, cert *x509.Certificate) error
+	Revoke(cn string, cert *x509.Certificate, password []byte) error
 	RootCertForCA(cn string) (*x509.Certificate, error)
 	IsRevoked(cn string, serialNumber *big.Int) (bool, error)
 	IsRevokedAtDistributionPoints(cn string, serialNumber *big.Int) (bool, error)

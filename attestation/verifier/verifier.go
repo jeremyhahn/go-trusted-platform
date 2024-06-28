@@ -39,8 +39,9 @@ var (
 	ErrInvalidPublicKey     = errors.New("verifier: invalid public key")
 	ErrInvalidCredential    = errors.New("verifier: attestor failed credential challenge")
 
-	// CLI option when invoked directly
+	// CLI options when invoked directly
 	attestorHostname = flag.String("attestor", "localhost", "The Attestor hostname / FQDN / IP")
+	caPassword       = flag.String("password", "", "The password used to unseal the Certificate Authority Private Key")
 )
 
 type AttestationKey struct {
@@ -79,13 +80,14 @@ type Verification struct {
 	secureAttestor pb.TLSAttestorClient
 	clientCertPool *x509.CertPool
 	attestor       string
+	caPassword     []byte
 	Verifier
 }
 
 func main() {
 	flag.Parse()
 	app := app.NewApp().Init(nil)
-	verifier, err := NewVerifier(app, *attestorHostname)
+	verifier, err := NewVerifier(app, *attestorHostname, []byte(*caPassword))
 	if err != nil {
 		app.Logger.Fatal(err)
 	}
@@ -95,7 +97,7 @@ func main() {
 }
 
 // Creates a new Remote Attestation Verifier
-func NewVerifier(app *app.App, attestor string) (Verifier, error) {
+func NewVerifier(app *app.App, attestor string, caPassword []byte) (Verifier, error) {
 
 	clientCertPool := x509.NewCertPool()
 	secureConn, err := newTLSGRPCClient(
@@ -536,7 +538,7 @@ func (verifier *Verification) enrollAttestor(ak tpm2.DerivedKey) ([]byte, error)
 	}
 
 	// Issue an x509 platform certificate to the Attestor
-	certDER, err := verifier.ca.IssueCertificate(certReq)
+	certDER, err := verifier.ca.IssueCertificate(certReq, verifier.caPassword)
 	if err != nil {
 		verifier.logger.Error(err)
 		return nil, err
@@ -565,7 +567,8 @@ func (verifier *Verification) importAndSignAK(ak tpm2.DerivedKey) error {
 		verifier.logger.Error(err)
 		return err
 	}
-	err := verifier.ca.PersistentSign(akNameBlobKey, akBuffer.Bytes(), true)
+	err := verifier.ca.PersistentSign(
+		akNameBlobKey, akBuffer.Bytes(), verifier.caPassword, true)
 	if err != nil {
 		verifier.logger.Error(err)
 		return err

@@ -73,7 +73,7 @@ func CreateJsonWebTokenService(
 // Returns the RSA private key for the web server. This can be any key
 // that implements the crypto.PrivateKey interface, including opaque keys.
 func (jwtService *JWTService) privateKey() crypto.PrivateKey {
-	privKey, err := jwtService.app.CA.CertStore().PrivKey(jwtService.app.Domain)
+	privKey, err := jwtService.app.CA.PrivKey(jwtService.app.Domain)
 	if err != nil {
 		jwtService.app.Logger.Fatal(err)
 	}

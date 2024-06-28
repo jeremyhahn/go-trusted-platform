@@ -9,7 +9,11 @@ import (
 
 func TestECCIssueCertificate(t *testing.T) {
 
-	_, rootCA, _, err := createService(KEY_ALGO_ECC, false)
+	rootPass := []byte("root-password")
+	intermediatePass := []byte("intermediate-password")
+	_, rootCA, _, tmpDir, err := createService(KEY_ALGO_ECC, rootPass, intermediatePass, true)
+	defer cleanTempDir(tmpDir)
+
 	assert.Nil(t, err)
 
 	domain := "www.domain.com"
@@ -41,7 +45,7 @@ func TestECCIssueCertificate(t *testing.T) {
 	}
 	// Issue certificate using golang runtime random number
 	// generator when creating the private key
-	der, err := rootCA.IssueCertificate(certReq)
+	der, err := rootCA.IssueCertificate(certReq, rootPass)
 	assert.Nil(t, err)
 	assert.NotNil(t, der)
 
@@ -53,10 +57,12 @@ func TestECCIssueCertificate(t *testing.T) {
 
 func TestECCInit(t *testing.T) {
 
-	logger, _, intermediateCAs, err := createService(KEY_ALGO_ECC, false)
+	rootPass := []byte("root-password")
+	intermediatePass := []byte("intermediate-password")
+	logger, _, intermediateCA, tmpDir, err := createService(KEY_ALGO_ECC, rootPass, intermediatePass, true)
+	defer cleanTempDir(tmpDir)
 	assert.Nil(t, err)
 
-	intermediateCA := intermediateCAs["intermediate-ca"]
 	bundle, err := intermediateCA.CABundle()
 	assert.Nil(t, err)
 	assert.NotNil(t, bundle)

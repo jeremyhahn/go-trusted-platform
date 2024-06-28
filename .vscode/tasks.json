@@ -10,17 +10,17 @@
     }, 
     {
         "type": "shell",
-        "label": "rm_db",
+        "label": "rm_platform",
         "command": "rm",
-        "args": ["-rf", "db/"]
+        "args": ["-rf",
+            "platform/ca"]
     }, 
     {
         "type": "shell",
         "label": "clean_attestor",
         "command": "rm",
         "args": ["-rf",
-             "attestation/attestor/db",
-             "attestation/attestor/logs",
+             "attestation/attestor/platform",
         ]
     },
     {
@@ -28,34 +28,26 @@
         "label": "clean_verifier",
         "command": "rm",
         "args": ["-rf",
-             "attestation/verifier/db/",
-             "attestation/verifier/logs/"
+             "attestation/verifier/platform",
         ]
     },
     {
         "type": "shell",
         // "dependsOn": [
-        //     "rm_log",
         //     "clean_attestor",
         // ],
         "label": "attestor_init",
-        "command": "rm",
-        "args": ["-rf",
-             "attestation/attestor/db/",
-             "attestation/attestor/logs/"
-        ]
+        "command": "make",
+        "args": [
+            "attestor-clean",
+            "attestor-init"]
     },
     {
         "type": "shell",
-        // "dependsOn": [
-        //     "rm_log",
-        //     "clean_verifier",
-        // ],
         "label": "verifier_init",
-        "command": "rm",
-        "args": ["-rf",
-             "attestation/verifier/db/",
-             "attestation/verifier/logs/"
-        ]
+        "command": "make",
+        "args": [
+            "verifier-clean",
+            "verifier-init"]
     }]
 }

@@ -7,6 +7,8 @@ OS                      := $(shell go env GOOS)
 LONG_BITS               := $(shell getconf LONG_BIT)
 
 GOBIN                   := $(shell dirname `which go`)
+PYTHONBIN               ?= python3
+PIPBIN                  ?= pip
 
 ARM_CC                  ?= arm-linux-gnueabihf-gcc-8
 ARM_CC_64				?= aarch64-linux-gnu-gcc
@@ -20,12 +22,6 @@ GIT_TAG                 = $(shell git describe --tags)
 GIT_HASH                = $(shell git rev-parse HEAD)
 GIT_BRANCH              = $(shell git branch --show-current)	
 BUILD_DATE              = $(shell date '+%Y-%m-%d_%H:%M:%S')
-
-CLONE_HOST              ?= github.com
-CLONE_OWNER             ?= jeremyhahn
-CLONE_APP_NAME          ?= new-app
-CLONE_PACKAGE           ?= go-$(CLONE_APP_NAME)
-CLONE_DIR               ?= ../$(CLONE_PACKAGE)
 
 VERSION_FILE            ?= VERSION
 
@@ -47,6 +43,34 @@ LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/app.Version=${APP_VERSION}
 
 GREEN=\033[0;32m
 NO_COLOR=\033[0m
+
+ATTESTATION_DIR ?= attestation
+ATTESTOR_DIR    ?= $(ATTESTATION_DIR)/attestor
+VERIFIER_DIR    ?= $(ATTESTATION_DIR)/verifier
+PLATFORM_DIR    ?= platform
+CONFIG_DIR      ?= $(PLATFORM_DIR)/etc
+LOG_DIR         ?= $(PLATFORM_DIR)/log
+CA_DIR          ?= $(PLATFORM_DIR)/ca
+
+VERIFIER_CONF   ?= $(VERIFIER_DIR)/$(CONFIG_DIR)/config.yaml
+VERIFIER_CA     ?= $(VERIFIER_DIR)/$(PLATFORM_DIR)/ca
+
+ATTESTOR_CONF   ?= $(ATTESTOR_DIR)/$(CONFIG_DIR)/config.yaml
+ATTESTOR_CA     ?= $(ATTESTOR_DIR)/$(PLATFORM_DIR)/ca
+
+PROTO_DIR       ?= proto
+PROTOC          ?= protoc
+
+ROOT_CA         ?= root-ca
+INTERMEDIATE_CA ?= intermediate-ca
+DOMAIN          ?= example.com
+
+VERIFIER_HOSTNAME ?= verifier
+ATTESTOR_HOSTNAME ?= attestor
+
+CONFIG_YAML  ?= config.dev.yaml
+
+ANSIBLE_USER     ?= ansible
 
 # The TPM Endorsement Key file name. This is set to a default value that
 # aligns with the EK cert name used in the tpm2_getekcertificate docs:
@@ -74,12 +98,26 @@ env:
 	@echo "GIT_HASH: \t\t$(GIT_HASH)"
 	@echo "GIT_BRANCH: \t\t$(GIT_BRANCH)"
 	@echo "BUILD_DATE: \t\t$(BUILD_DATE)"
-	@echo "CLONE_HOST: \t\t$(CLONE_HOST)"
-	@echo "CLONE_OWNER: \t\t$(CLONE_OWNER)"
-	@echo "CLONE_APP_NAME: \t$(CLONE_APP_NAME)"
-	@echo "CLONE_PACKAGE: \t\t$(CLONE_PACKAGE)"
-	@echo "CLONE_DIR: \t\t$(CLONE_DIR)"
 	@echo "VERSION_FILE: \t\t$(VERSION_FILE)"
+	@echo "ATTESTATION_DIR: \t$(ATTESTATION_DIR)"
+	@echo "ATTESTOR_DIR: \t\t$(ATTESTOR_DIR)"
+	@echo "VERIFIER_DIR: \t\t$(VERIFIER_DIR)"
+	@echo "PLATFORM_DIR: \t\t$(PLATFORM_DIR)"
+	@echo "CONFIG_DIR: \t\t$(CONFIG_DIR)"
+	@echo "LOG_DIR: \t\t$(LOG_DIR)"
+	@echo "CA_DIR: \t\t$(CA_DIR)"
+	@echo "VERIFIER_CONF: \t\t$(VERIFIER_CONF)"
+	@echo "VERIFIER_CA: \t\t$(VERIFIER_CA)"
+	@echo "ATTESTOR_CONF: \t\t$(ATTESTOR_CONF)"
+	@echo "ATTESTOR_CA: \t\t$(ATTESTOR_CA)"
+	@echo "PROTO_DIR: \t\t$(PROTO_DIR)"
+	@echo "PROTOC: \t\t$(PROTOC)"
+	@echo "ROOT_CA: \t\t$(ROOT_CA)"
+	@echo "INTERMEDIATE_CA: \t$(INTERMEDIATE_CA)"
+	@echo "DOMAIN: \t\t$(DOMAIN)"
+	@echo "VERIFIER_HOSTNAME: \t$(VERIFIER_HOSTNAME)"
+	@echo "ATTESTOR_HOSTNAME: \t$(ATTESTOR_HOSTNAME)"
+	@echo "CONFIG_YAML: \t\t$(CONFIG_YAML)"
 
 deps:
 	go get
@@ -164,7 +202,12 @@ clean:
 		/usr/local/bin/$(APPNAME) \
 		db/ \
 		logs \
-		pki/tpm2/$(EK_CERT_NAME)
+		$(CA_DIR) \
+		tpm2/certs \
+		tpm2/$(EK_CERT_NAME) \
+		$(PLATFORM_DIR)/ca \
+		$(ATTESTOR_DIR)/platform \
+		$(VERIFIER_DIR)/platform
 
 
 test: test-ca test-tpm
@@ -178,12 +221,12 @@ test-tpm:
 
 
 proto:
-	cd attestation && protoc \
+	cd $(ATTESTATION_DIR) && $(PROTOC) \
 		--go_out=. \
 		--go_opt=paths=source_relative \
     	--go-grpc_out=. \
 		--go-grpc_opt=paths=source_relative \
-		proto/attestation.proto
+		$(PROTO_DIR)/attestation.proto
 
 
 # Certificate Authority
@@ -192,125 +235,140 @@ ca-verify-all: ca-root-verify ca-intermediate-verify ca-server-=verify
 ca-show-all: ca-root-show ca-intermediate-show ca-server-show
 
 ca-root-verify:
-	cd ca/certs && \
-		openssl verify -CAfile root-ca/root-ca.crt root-ca/root-ca.crt
+	cd $(CA_DIR) && \
+		openssl verify -CAfile $(ROOT_CA)/$(ROOT_CA).crt $(ROOT_CA)/$(ROOT_CA).crt
 
 ca-root-show:
-	cd ca/certs && \
-		openssl x509 -in root-ca/root-ca.crt -text -noout
+	cd $(CA_DIR) && \
+		openssl x509 -in $(ROOT_CA)/$(ROOT_CA).crt -text -noout
 
 ca-intermediate-verify:
-	cd ca/certs && \
+	cd $(CA_DIR) && \
 		openssl verify \
-			-CAfile root-ca/root-ca.crt \
-			intermediate-ca/intermediate-ca.crt
+			-CAfile $(ROOT_CA)/$(ROOT_CA).crt \
+			$(INTERMEDIATE_CA)/$(INTERMEDIATE_CA).crt
 
 ca-intermediate-show:
-	cd ca/certs && \
-		openssl x509 -in intermediate-ca/intermediate-ca.crt -text -noout
+	cd $(CA_DIR) && \
+		openssl x509 -in $(INTERMEDIATE_CA)/$(INTERMEDIATE_CA).crt -text -noout
 
 ca-server-verify:
-	cd ca/certs && \
+	cd $(CA_DIR) && \
 		openssl verify \
-			-CAfile root-ca/root-ca.crt \
-			-untrusted intermediate-ca/intermediate-ca.crt \
-			intermediate-ca/issued/localhost/localhost.crt
+			-CAfile $(ROOT_CA)/$(ROOT_CA).crt \
+			-untrusted $(INTERMEDIATE_CA)/$(INTERMEDIATE_CA).crt \
+			$(INTERMEDIATE_CA)/issued/localhost/localhost.crt
 
 ca-server-show:
-	cd ca/certs && \
-		openssl x509 -in intermediate-ca/issued/localhost/localhost.crt -text -noout
+	cd $(CA_DIR) && \
+		openssl x509 -in $(INTERMEDIATE_CA)/issued/localhost/localhost.crt -text -noout
+
+ca-decrypt-root-key:
+	openssl rsa -in $(CA_DIR)/$(ROOT_CA)/$(ROOT_CA).key -out $(ROOT_CA).pem
+
+ca-decrypt-intermediate-key:
+	openssl rsa -in $(CA_DIR)/$(INTERMEDIATE_CA)/$(INTERMEDIATE_CA).key -out $(INTERMEDIATE_CA).pem
 
 
 # Verifier
 verifier-init:
-	cp config.yaml attestation/verifier
-	sed -i 's/domain: example.com/domain: verifier.example.com/' attestation/verifier/config.yaml
-	sed -i 's/- example.com/- verifier.example.com/' attestation/verifier/config.yaml
-	cp $(EK_CERT_NAME) attestation/verifier
+	mkdir -p $(VERIFIER_DIR)/$(CONFIG_DIR)
+	cp $(CONFIG_YAML) $(VERIFIER_CONF)
+	sed -i 's/domain: $(DOMAIN)/domain: $(VERIFIER_HOSTNAME).$(DOMAIN)/' $(VERIFIER_CONF)
+	sed -i 's/- $(DOMAIN)/- $(VERIFIER_HOSTNAME).$(DOMAIN)/' $(VERIFIER_CONF)
+	cp $(EK_CERT_NAME) $(VERIFIER_DIR)
 
 verifier-no-clean: build verifier-init
-	cd attestation/verifier && \
+	cd $(VERIFIER_DIR) && \
 		../../trusted-platform verifier \
 			--debug \
-			--config-dir ./ \
-			--data-dir ./db \
-			--log-dir ./logs
+			--config-dir $(CONFIG_DIR) \
+			--platform-dir $(PLATFORM_DIR) \
+			--log-dir $(LOG_DIR)
 
 verifier: verifier-clean build verifier-init
-	cd attestation/verifier && \
+	cd $(VERIFIER_DIR) && \
 		../../trusted-platform verifier \
 			--debug \
-			--data-dir ./db \
-			--log-dir ./logs \
-			--attestor attestor.example.com
+			--config-dir $(CONFIG_DIR) \
+			--platform-dir $(PLATFORM_DIR) \
+			--log-dir $(LOG_DIR)
+			--attestor $(ATTESTOR_HOSTNAME).$(DOMAIN)
 
 verifier-clean: 
 	rm -rf \
-		attestation/verifier/logs \
-		attestation/verifier/db \
-		attestation/verifier/$(EK_CERT_NAME)
+		$(VERIFIER_DIR)/$(PLATFORM_DIR) \
+		$(VERIFIER_DIR)/$(EK_CERT_NAME)
 
 verifier-cert-chain:
-	cd attestation && \
+	cd $(ATTESTATION_DIR) && \
 	openssl verify \
-		-CAfile verifier/db/certs/root-ca.example.com/root-ca.example.com.crt \
-		-untrusted verifier/db/certs/intermediate-ca.example.com/intermediate-ca.example.com.crt \
-		verifier/db/certs/intermediate-ca.example.com/issued/verifier.example.com/verifier.example.com.crt
+		-CAfile $(VERIFIER_CA)/$(ROOT_CA).$(DOMAIN)/$(ROOT_CA).$(DOMAIN).crt \
+		-untrusted $(VERIFIER_CA)/$(INTERMEDIATE_CA).$(DOMAIN)/$(INTERMEDIATE_CA).$(DOMAIN).crt \
+		$(VERIFIER_CA)/$(INTERMEDIATE_CA).$(DOMAIN)/issued/$(VERIFIER_HOSTNAME).$(DOMAIN)/$(VERIFIER_HOSTNAME).$(DOMAIN).crt
 
 
 # Attestor
 attestor-init:
-	cp config.yaml attestation/attestor
-	sed -i 's/domain: example.com/domain: attestor.example.com/' attestation/attestor/config.yaml
-	sed -i 's/- example.com/- attestor.example.com/' attestation/attestor/config.yaml
-	cp $(EK_CERT_NAME) attestation/attestor/
+	mkdir -p $(ATTESTOR_DIR)/$(CONFIG_DIR)
+	cp $(CONFIG_YAML) $(ATTESTOR_CONF)
+	sed -i 's/domain: $(DOMAIN)/domain: $(ATTESTOR_HOSTNAME).$(DOMAIN)/' $(ATTESTOR_CONF)
+	sed -i 's/- $(DOMAIN)/- $(ATTESTOR_HOSTNAME).$(DOMAIN)/' $(ATTESTOR_CONF)
+	cp $(EK_CERT_NAME) $(ATTESTOR_DIR)
 
 attestor-clean: 
 	rm -rf \
-		attestation/attestor/logs \
-		attestation/attestor/db \
-		attestation/verifier/$(EK_CERT_NAME)
+		$(ATTESTOR_DIR)/$(PLATFORM_DIR) \
+		$(ATTESTOR_DIR)/$(EK_CERT_NAME)
 
 attestor-no-clean: build attestor-init
-	cd attestation/attestor && \
+	cd $(ATTESTOR_DIR) && \
 		../../trusted-platform attestor \
 			--debug \
-			--config-dir ./ \
-			--data-dir ./db \
-			--log-dir ./logs
+			--config-dir $(CONFIG_DIR) \
+			--platform-dir $(PLATFORM_DIR) \
+			--log-dir $(PLATFORM_DIR)/$(LOG_DIR)
 
 attestor: attestor-clean build attestor-init
-	cd attestation/attestor && \
+	cd $(ATTESTOR_DIR) && \
 		../../trusted-platform attestor \
 			--debug \
-			--config-dir ./ \
-			--data-dir ./db \
-			--log-dir ./logs
+			--config-dir $(CONFIG_DIR) \
+			--platform-dir $(PLATFORM_DIR) \
+			--log-dir $(LOG_DIR)
+#			--password=teGDF!234st
 
 attestor-verify-cert-chain:
-	cd attestation && \
+	cd $(ATTESTATION_DIR) && \
 	openssl verify \
-		-CAfile attestor/db/certs/root-ca.example.com/root-ca.example.com.crt \
-		-untrusted attestor/db/certs/intermediate-ca.example.com/intermediate-ca.example.com.crt \
-		attestor/db/certs/intermediate-ca.example.com/issued/attestor.example.com/attestor.example.com.crt
+		-CAfile $(ATTESTOR_CA)/$(ROOT_CA).$(DOMAIN)/$(ROOT_CA).$(DOMAIN).crt \
+		-untrusted $(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(DOMAIN)/$(INTERMEDIATE_CA).$(DOMAIN).crt \
+		$(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(DOMAIN)/issued/$(ATTESTOR_HOSTNAME).$(DOMAIN)/$(ATTESTOR_HOSTNAME).$(DOMAIN).crt
 
 attestor-verify-tls:
-	cd attestation && \
+	cd $(ATTESTATION_DIR) && \
 	openssl s_client \
 		-connect localhost:8082 \
 		-showcerts \
 		-servername localhost \
-		-CAfile attestor/db/certs/intermediate-ca.example.com/intermediate-ca.example.com.bundle.crt \
+		-CAfile $(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(DOMAIN)/$(INTERMEDIATE_CA).$(DOMAIN).bundle.crt \
 		| openssl x509 -noout -text
 
 
 # Web Services
 webservice-verify-tls:
-	cd attestation && \
+	cd $(ATTESTATION_DIR) && \
 	openssl s_client \
 		-connect localhost:8081 \
 		-showcerts \
 		-servername localhost \
-		-CAfile attestor/db/certs/intermediate-ca.example.com/trusted-root/root-ca.example.com.crt \
+		-CAfile $(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(DOMAIN)/trusted-root/$(ROOT_CA).$(DOMAIN).crt \
 		| openssl x509 -noout -text
+
+
+# Ansible
+ansible-install:
+	$(PYTHONBIN) -m $(PIPBIN) install --upgrade pip
+	$(PYTHONBIN) -m $(PIPBIN) install --user $(ANSIBLE_USER)
+	$(PYTHONBIN) -m $(PIPBIN) install --upgrade --user $(ANSIBLE_USER)
 

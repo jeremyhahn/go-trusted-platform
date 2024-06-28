@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/hex"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"testing"
 
 	"github.com/op/go-logging"
@@ -15,6 +18,7 @@ import (
 
 var CERTS_DIR = "./certs"
 var INTEL_CERT_URL = "https://trustedservices.intel.com/content/CRL/ekcert/CNLEPIDPOSTB1LPPROD2_EK_Platform_Public_Key.cer"
+var CLEAN_TMP = false
 
 func TestMain(m *testing.M) {
 	setup()
@@ -24,61 +28,98 @@ func TestMain(m *testing.M) {
 }
 
 func teardown() {
-	os.RemoveAll(CERTS_DIR)
+	// os.RemoveAll(CERTS_DIR)
 }
 
 func setup() {
 	os.RemoveAll(CERTS_DIR)
 }
 
-func TestRSAInit(t *testing.T) {
+func TestLoad(t *testing.T) {
 
-	logger, _, intermediateCAs, err := createService(KEY_ALGO_RSA, true)
+	rootPass := []byte("root-password")
+	intermediatePass := []byte("intermediate-password")
+
+	// Instantiate the CA without calling Init(), it should fail
+	// with ErrNotInitialized
+	logger, _, intermediateCA, tmpDir, err := createService(
+		KEY_ALGO_RSA, rootPass, intermediatePass, false)
+	defer cleanTempDir(tmpDir)
+	assert.Equal(t, ErrNotInitialized, err)
+
+	// Instantiate the CA using Init(), it should create a Root
+	// and Intermediate CA ready for use
+	_, _, intermediateCA, tmpDir, err = createService(
+		KEY_ALGO_RSA, rootPass, intermediatePass, true)
+	defer cleanTempDir(tmpDir)
 	assert.Nil(t, err)
 
-	intermediateCA := intermediateCAs["intermediate-ca"]
+	// Get the CA bundle
 	bundle, err := intermediateCA.CABundle()
 	assert.Nil(t, err)
 	assert.NotNil(t, bundle)
 
-	if err != nil {
-		logger.Error(err)
-	}
-
 	logger.Info(string(bundle))
 }
 
-func TestRSALoad(t *testing.T) {
+func TestInit(t *testing.T) {
 
-	logger, _, intermediateCAs, err := createService(KEY_ALGO_RSA, false)
+	rootPass := []byte("root-password")
+	intermediatePass := []byte("intermediate-password")
+	logger, rootCA, intermediateCA, tmpDir, err := createService(KEY_ALGO_RSA, rootPass, intermediatePass, false)
+	defer cleanTempDir(tmpDir)
+
+	assert.Equal(t, ErrNotInitialized, err)
+	assert.NotNil(t, rootCA)
+	assert.NotNil(t, intermediateCA)
+
+	rootPrivKey, rootCert, err := rootCA.Init(nil, nil, rootPass, rand.Reader)
 	assert.Nil(t, err)
+	assert.NotNil(t, rootPrivKey)
 
-	logger, _, intermediateCAs, err = createService(KEY_ALGO_RSA, false)
+	intermediatePrivKey, intermediateCert, err := intermediateCA.Init(
+		rootPrivKey, rootCert, intermediatePass, rand.Reader)
 	assert.Nil(t, err)
+	assert.NotNil(t, intermediatePrivKey)
+	assert.NotNil(t, intermediateCert)
 
-	intermediateCA := intermediateCAs["intermediate-ca"]
 	bundle, err := intermediateCA.CABundle()
-	assert.Nil(t, err)
 	assert.NotNil(t, bundle)
 
-	if err != nil {
-		logger.Error(err)
-	}
-
 	logger.Info(string(bundle))
 }
 
-func TestNewEncryptionKey(t *testing.T) {
+func TestPasswordComplexity(t *testing.T) {
 
-	logger, _, intermediateCAs, err := createService(KEY_ALGO_RSA, false)
+	pattern := "^[a-zA-Z0-9-_!@#$%^&*() /\\\\+]{10,20}$"
+
+	var err error
+	var matcher *regexp.Regexp
+	matcher, err = regexp.Compile(pattern)
+	assert.Nil(t, err)
+	assert.NotNil(t, matcher)
+
+	matches := matcher.MatchString("password")
+	assert.False(t, matches)
+
+	matches = matcher.MatchString("p\\s!@#$%^&*()-+swo ")
+	assert.True(t, matches)
+}
+
+func TestNewEncryptionWithPassword(t *testing.T) {
+
+	rootPass := []byte("root-password")
+	intermediatePass := []byte("intermediate-password")
+	logger, _, intermediateCA, tmpDir, err := createService(KEY_ALGO_RSA, rootPass, intermediatePass, true)
+	defer cleanTempDir(tmpDir)
 	assert.Nil(t, err)
 
 	cn := "localhost"
-	keyName := "test"
-	secret := []byte("password")
+	keyName := "test-with-password"
+	secret := []byte("app-secret")
+	keyPass := []byte("key-password")
 
-	intermediateCA := intermediateCAs["intermediate-ca"]
-	pub, err := intermediateCA.NewEncryptionKey(cn, keyName)
+	pub, err := intermediateCA.NewEncryptionKey(cn, keyName, keyPass, intermediatePass)
 	assert.Nil(t, err)
 	assert.NotNil(t, pub)
 
@@ -86,7 +127,7 @@ func TestNewEncryptionKey(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotEqual(t, secret, ciphertext)
 
-	decrypted, err := intermediateCA.RSADecrypt(cn, keyName, ciphertext)
+	decrypted, err := intermediateCA.RSADecrypt(cn, keyName, keyPass, ciphertext)
 	assert.Nil(t, err)
 	assert.Equal(t, secret, decrypted)
 
@@ -97,9 +138,9 @@ func TestNewEncryptionKey(t *testing.T) {
 	logger.Debugf("encryption-key: decrypted: %s", decrypted)
 
 	// Create a 2nd key
-	keyName2 := "test2"
+	keyName2 := "test2-with-password"
 	secret2 := []byte("password2")
-	pub2, err := intermediateCA.NewEncryptionKey(cn, keyName2)
+	pub2, err := intermediateCA.NewEncryptionKey(cn, keyName2, keyPass, intermediatePass)
 	assert.Nil(t, err)
 	assert.NotNil(t, pub2)
 
@@ -107,19 +148,103 @@ func TestNewEncryptionKey(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotEqual(t, secret, ciphertext)
 
-	decrypted2, err := intermediateCA.RSADecrypt(cn, keyName2, ciphertext2)
+	decrypted2, err := intermediateCA.RSADecrypt(cn, keyName2, keyPass, ciphertext2)
 	assert.Nil(t, err)
 	assert.Equal(t, secret2, decrypted2)
 
 	// Ensure encryption fails
-	decryptFails, err := intermediateCA.RSADecrypt(cn, keyName, ciphertext2)
+	_, err = intermediateCA.RSADecrypt(cn, keyName, keyPass, ciphertext2)
 	assert.NotNil(t, err)
-	assert.Nil(t, decryptFails)
+	assert.Equal(t, "crypto/rsa: decryption error", err.Error())
 }
 
-func TestRSAImportIssuingCAs(t *testing.T) {
+func TestNewEncryptionKeyWihtInvalidPasswordCombinations(t *testing.T) {
 
-	_, rootCA, _, err := createService(KEY_ALGO_RSA, false)
+	// Create the Root and Intermediate CA
+	rootPass := []byte("root-password")
+	intermediatePass := []byte("intermediate-password")
+	logger, _, intermediateCA, tmpDir, err := createService(KEY_ALGO_RSA, nil, nil, true)
+	defer cleanTempDir(tmpDir)
+	assert.Equal(t, ErrPrivateKeyPasswordRequired, err)
+
+	cn := "localhost"
+	keyName := "test-without-password"
+	secret := []byte("app-secret")
+	keyPass := []byte("key-password")
+
+	// Create the Root and Intermediate CA
+	logger, _, intermediateCA, tmpDir, err = createService(KEY_ALGO_RSA, rootPass, intermediatePass, true)
+	defer cleanTempDir(tmpDir)
+	assert.Nil(t, err)
+
+	// Create new encryption key
+	pub, err := intermediateCA.NewEncryptionKey(cn, keyName, keyPass, intermediatePass)
+	assert.Nil(t, err)
+	assert.NotNil(t, pub)
+
+	// Encrypt the secret
+	ciphertext, err := intermediateCA.RSAEncrypt(cn, keyName, secret)
+	assert.Nil(t, err)
+	assert.NotEqual(t, secret, ciphertext)
+
+	// Decrypt without a password (should fail with invalid password)
+	decrypted, err := intermediateCA.RSADecrypt(cn, keyName, nil, ciphertext)
+	assert.Equal(t, ErrInvalidPassword, err)
+
+	// Decrypt with a bad password (should fail with invalid password)
+	decrypted, err = intermediateCA.RSADecrypt(cn, keyName, secret, ciphertext)
+	assert.Equal(t, ErrInvalidPassword, err)
+
+	// Decrypt with correct password (should work)
+	decrypted, err = intermediateCA.RSADecrypt(cn, keyName, keyPass, ciphertext)
+	assert.Nil(t, err)
+	assert.Equal(t, secret, decrypted)
+
+	logger.Debugf("encryption-key: cn: %s", cn)
+	logger.Debugf("encryption-key: keyName: %s", keyName)
+	logger.Debugf("encryption-key: secret: %s", secret)
+	logger.Debugf("encryption-key: ciphertext: %s", ciphertext)
+	logger.Debugf("encryption-key: decrypted: %s", decrypted)
+
+	// Create a 2nd key without a password
+	keyName2 := "test2-without-password"
+	pub2, err := intermediateCA.NewEncryptionKey(cn, keyName2, nil, intermediatePass)
+	assert.Equal(t, ErrPrivateKeyPasswordRequired, err)
+	assert.Nil(t, pub2)
+
+	pub3, err := intermediateCA.NewEncryptionKey(cn, keyName2, nil, intermediatePass)
+	assert.Equal(t, ErrPrivateKeyPasswordRequired, err)
+	assert.Nil(t, pub3)
+
+	// Create a 3rd with a bad password
+	keyName3 := "test2-without-password"
+	secret3 := []byte("password2")
+
+	// Try to decrypt using a key that doesnt exist
+	_, err = intermediateCA.RSAEncrypt(cn, keyName3, secret3)
+	assert.Equal(t, ErrFileNotFound, err)
+
+	// Create the missing key
+	pub4, err := intermediateCA.NewEncryptionKey(cn, keyName3, keyPass, intermediatePass)
+	assert.Nil(t, err)
+	assert.NotNil(t, pub4)
+
+	ciphertext3, err := intermediateCA.RSAEncrypt(cn, keyName3, secret3)
+	assert.Nil(t, err)
+	assert.NotEqual(t, secret3, ciphertext3)
+
+	// It works
+	decrypted3, err := intermediateCA.RSADecrypt(cn, keyName3, keyPass, ciphertext3)
+	assert.Nil(t, err)
+	assert.Equal(t, secret3, decrypted3)
+}
+
+func TestImportIssuingCAs(t *testing.T) {
+
+	rootPass := []byte("root-password")
+	intermediatePass := []byte("intermediate-password")
+	_, rootCA, _, tmpDir, err := createService(KEY_ALGO_RSA, rootPass, intermediatePass, true)
+	defer cleanTempDir(tmpDir)
 	assert.Nil(t, err)
 
 	// Download the certificate
@@ -150,9 +275,12 @@ func TestRSAImportIssuingCAs(t *testing.T) {
 	assert.Equal(t, cert.Subject.CommonName, importedCert.Subject.CommonName)
 }
 
-func TestRSADownloadDistribuitionCRLs(t *testing.T) {
+func TestDownloadDistribuitionCRLs(t *testing.T) {
 
-	_, rootCA, _, err := createService(KEY_ALGO_RSA, false)
+	rootPass := []byte("root-password")
+	intermediatePass := []byte("intermediate-password")
+	_, rootCA, _, tmpDir, err := createService(KEY_ALGO_RSA, rootPass, intermediatePass, true)
+	defer cleanTempDir(tmpDir)
 	assert.Nil(t, err)
 
 	// Download the certificate
@@ -179,14 +307,17 @@ func TestRSADownloadDistribuitionCRLs(t *testing.T) {
 
 func TestRSASignAndVerify(t *testing.T) {
 
-	_, rootCA, _, err := createService(KEY_ALGO_RSA, false)
+	rootPass := []byte("root-password")
+	intermediatePass := []byte("intermediate-password")
+	_, rootCA, _, tmpDir, err := createService(KEY_ALGO_RSA, rootPass, intermediatePass, true)
+	defer cleanTempDir(tmpDir)
 	assert.Nil(t, err)
 
 	// Create test data
 	data := []byte("hello\nworld\n")
 
 	// Sign it
-	signature, err := rootCA.Sign(data)
+	signature, err := rootCA.Sign(data, rootPass)
 	assert.Nil(t, err)
 	assert.NotNil(t, signature)
 
@@ -200,7 +331,10 @@ func TestRSASignAndVerify(t *testing.T) {
 
 func TestRSAPersistentSignAndVerify(t *testing.T) {
 
-	_, rootCA, _, err := createService(KEY_ALGO_RSA, false)
+	rootPass := []byte("root-password")
+	intermediatePass := []byte("intermediate-password")
+	_, rootCA, _, tmpDir, err := createService(KEY_ALGO_RSA, rootPass, intermediatePass, true)
+	defer cleanTempDir(tmpDir)
 	assert.Nil(t, err)
 
 	// Create test data
@@ -208,7 +342,7 @@ func TestRSAPersistentSignAndVerify(t *testing.T) {
 	data := []byte("hello\nworld\n")
 
 	// Sign and store the data and the signature
-	err = rootCA.PersistentSign(blobKey, data, true)
+	err = rootCA.PersistentSign(blobKey, data, rootPass, true)
 	assert.Nil(t, err)
 
 	signature, err := rootCA.Signature(blobKey)
@@ -235,11 +369,14 @@ func TestRSAPersistentSignAndVerify(t *testing.T) {
 
 func TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 
-	_, rootCA, _, err := createService(KEY_ALGO_RSA, false)
+	rootPass := []byte("root-password")
+	intermediatePass := []byte("intermediate-password")
+	_, _, intermediateCA, tmpDir, err := createService(KEY_ALGO_RSA, rootPass, intermediatePass, true)
+	defer cleanTempDir(tmpDir)
 	assert.Nil(t, err)
 
 	// Get the CA public key
-	publicKey, err := rootCA.CAPubKey()
+	publicKey, err := intermediateCA.CAPubKey()
 	assert.Nil(t, err)
 	assert.NotNil(t, publicKey)
 
@@ -272,12 +409,12 @@ func TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 
 	// Issue certificate using golang random number genrator
 	// go generate the private key
-	keypair, err := rootCA.IssueCertificate(certReq)
+	keypair, err := intermediateCA.IssueCertificate(certReq, intermediatePass)
 	assert.Nil(t, err)
 	assert.NotNil(t, keypair)
 
 	// openssl req -in testme.example.com.csr -noout -text
-	csrBytes, err := rootCA.CreateCSR(
+	csrBytes, err := intermediateCA.CreateCSR(
 		"me@mydomain.com",
 		CertificateRequest{
 			Valid: 365, // 1 days
@@ -305,12 +442,12 @@ func TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 					"info@testme.com",
 				},
 			},
-		})
+		}, intermediatePass)
 	assert.Nil(t, err)
 	assert.NotNil(t, csrBytes)
 
 	// openssl x509 -in testme.example.com.crt -text -noout
-	certBytes, err := rootCA.SignCSR(
+	certBytes, err := intermediateCA.SignCSR(
 		csrBytes,
 		CertificateRequest{
 			Valid: 365, // 1 days
@@ -338,34 +475,34 @@ func TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 					"info@testme.com",
 				},
 			},
-		})
+		}, intermediatePass)
 	assert.Nil(t, err)
 	assert.NotNil(t, certBytes)
 
-	cert, err := rootCA.DecodePEM(certBytes)
+	cert, err := intermediateCA.DecodePEM(certBytes)
 	assert.Nil(t, err)
 	assert.NotNil(t, cert)
 
 	// Make sure the cert is valid
-	valid, err := rootCA.Verify(cert, nil)
+	valid, err := intermediateCA.Verify(cert, nil)
 	assert.Nil(t, err)
 	assert.True(t, valid)
 
 	// Get the cert *rsa.PublicKey
-	publicKey, err = rootCA.PubKey("testme.example.com")
+	publicKey, err = intermediateCA.PubKey("testme.example.com")
 	assert.Nil(t, err)
 	assert.NotNil(t, publicKey)
 
 	// Removke the cert
-	err = rootCA.Revoke("testme.example.com")
+	err = intermediateCA.Revoke("testme.example.com", intermediatePass)
 	assert.Nil(t, err)
 
 	// Revoke the certificate again to ensure it errors
-	err = rootCA.Revoke("testme.example.com")
-	assert.Equal(t, ErrCertNotFound, err)
+	err = intermediateCA.Revoke("testme.example.com", intermediatePass)
+	assert.Equal(t, ErrCertNotFound, err) // TODO: should return ErrCertRevoked
 
 	// Make sure the cert is no longer valid
-	valid, err = rootCA.Verify(cert, nil)
+	valid, err = intermediateCA.Verify(cert, nil)
 	assert.NotNil(t, err)
 	assert.Equal(t, ErrCertRevoked, err)
 	assert.False(t, valid)
@@ -377,9 +514,12 @@ func TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 	//   -servername localhost  | openssl x509 -noout -text
 }
 
-func TestRSAIssueCertificateRSA(t *testing.T) {
+func TestRSAIssueCertificate(t *testing.T) {
 
-	_, rootCA, _, err := createService(KEY_ALGO_RSA, false)
+	rootPass := []byte("root-password")
+	intermediatePass := []byte("intermediate-password")
+	_, rootCA, _, tmpDir, err := createService(KEY_ALGO_RSA, rootPass, intermediatePass, true)
+	defer cleanTempDir(tmpDir)
 	assert.Nil(t, err)
 
 	domain := "www.domain.com"
@@ -411,7 +551,7 @@ func TestRSAIssueCertificateRSA(t *testing.T) {
 	}
 	// Issue certificate using golang runtime random number
 	// generator when creating the private key
-	der, err := rootCA.IssueCertificate(certReq)
+	der, err := rootCA.IssueCertificate(certReq, rootPass)
 	assert.Nil(t, err)
 	assert.NotNil(t, der)
 
@@ -421,9 +561,18 @@ func TestRSAIssueCertificateRSA(t *testing.T) {
 	assert.Equal(t, x509.SHA256WithRSA, cert.SignatureAlgorithm)
 }
 
+func cleanTempDir(dir string) {
+	if CLEAN_TMP {
+		if err := os.RemoveAll(dir); err != nil {
+			fmt.Errorf("%S", err)
+		}
+	}
+}
+
 func createService(
 	algorithm string,
-	issueServerCert bool) (*logging.Logger, CertificateAuthority, map[string]CertificateAuthority, error) {
+	rootPass, intermediatePass []byte,
+	performInit bool) (*logging.Logger, CertificateAuthority, CertificateAuthority, string, error) {
 
 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
 	logging.SetBackend(stdout)
@@ -489,10 +638,21 @@ func createService(
 		},
 	}
 
+	// Create a temp directory so parallel tests don't
+	// corrupt each other.
+	buf := make([]byte, 8)
+	_, err := rand.Reader.Read(buf)
+	tmpDir := hex.EncodeToString(buf)
+
 	config := &Config{
-		AutoImportIssuingCA: true,
-		DefaultKeyAlgorithm: algorithm,
-		EllipticalCurve:     CURVE_P256,
+		Home:                      fmt.Sprintf("%s/%s", CERTS_DIR, tmpDir),
+		AutoImportIssuingCA:       true,
+		DefaultKeyAlgorithm:       algorithm,
+		EllipticalCurve:           CURVE_P256,
+		RetainRevokedCertificates: false,
+		//PasswordPolicy:            "^[a-zA-Z0-9-_]+$",
+		PasswordPolicy:            "^*$",
+		RequirePrivateKeyPassword: false,
 		Identity: []Identity{
 			rootIdentity,
 			intermediateIdentity},
@@ -502,51 +662,35 @@ func createService(
 	// based on configuration
 	//
 	// Root CA certificates
-	// openssl rsa -in certs/ca/root-ca.key -text (-check)
-	// openssl x509 -in certs/ca/root-ca.crt -text -noout
-	// openssl rsa -pubin -in certs/ca/root-ca.pub -text
+	// openssl rsa -in platform/ca/root-ca.key -text (-check)
+	// openssl x509 -in platform/ca/root-ca.crt -text -noout
+	// openssl rsa -pubin -in platform/ca/root-ca.pub -text
 	//
 	// Intermediate CA certificates
-	// openssl rsa -in certs/ca/intermediate-ca.key -text (-check)
-	// openssl x509 -in certs/ca/intermediate-ca.crt -text -noout
-	// openssl rsa -pubin -in certs/ca/intermediate-ca.pub -text
-	rootCA, intermediateCAs, err := NewCA(logger, CERTS_DIR, config, rand.Reader)
+	// openssl rsa -in platform/ca/intermediate-ca.key -text (-check)
+	// openssl x509 -in platform/ca/intermediate-ca.crt -text -noout
+	// openssl rsa -pubin -in platform/ca/intermediate-ca.pub -text
+	rootCA, intermediateCA, err := NewCA(logger, config, intermediatePass, 1, rand.Reader)
 	if err != nil {
-		logger.Fatal(err)
-	}
-
-	// Generate server certificate
-	intermediateCA := intermediateCAs["intermediate-ca"]
-	certReq := CertificateRequest{
-		Valid: 365, // days
-		Subject: Subject{
-			CommonName:   "localhost",
-			Organization: "ACME Corporation",
-			Country:      "US",
-			Locality:     "Miami",
-			Address:      "123 acme street",
-			PostalCode:   "12345"},
-		SANS: &SubjectAlternativeNames{
-			DNS: []string{
-				"localhost",
-				"localhost.localdomain",
-			},
-			IPs: []string{
-				"127.0.0.1",
-			},
-			Email: []string{
-				"root@localhost",
-				"root@test.com",
-			},
-		},
-	}
-
-	if issueServerCert {
-		_, err = intermediateCA.IssueCertificate(certReq)
-		if err != nil {
-			logger.Fatal(err)
+		if err == ErrNotInitialized && performInit {
+			privKey, cert, initErr := rootCA.Init(nil, nil, rootPass, rand.Reader)
+			if initErr != nil {
+				logger.Error(initErr)
+				return nil, nil, nil, tmpDir, initErr
+			}
+			_, _, initErr = intermediateCA.Init(privKey, cert, intermediatePass, rand.Reader)
+			if initErr != nil {
+				logger.Error(initErr)
+				return nil, nil, nil, tmpDir, initErr
+			}
+			err = nil
+		} else if performInit {
+			logger.Error(err)
+			return nil, nil, nil, tmpDir, err
 		}
+	} else {
+		logger.Warning("CA has already been initialized")
 	}
 
-	return logger, rootCA, intermediateCAs, nil
+	return logger, rootCA, intermediateCA, tmpDir, err
 }

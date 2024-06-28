@@ -18,6 +18,7 @@ var (
 	CAUninstallCACert,
 	CAList bool
 
+	// CAPassword,
 	CAPublicKey,
 	CAIssueCertificate,
 	CASubjectFile,
@@ -54,7 +55,7 @@ var caCmd = &cobra.Command{
 	Short: "Certificate Authority",
 	Long: `The Certificate Authority provides Private Key Infrastructure (PKI)
 services to the platform. Create, install, issue, and revoke certificates
-or secure web services, mTLS, encryption, and identity management.`,
+or secure web services, mTLS, encryption, and perform identity management.`,
 	Run: func(cmd *cobra.Command, args []string) {
 
 		if CAParsePEM != "" {
@@ -89,7 +90,7 @@ or secure web services, mTLS, encryption, and identity management.`,
 			}
 			arg0 := "x509"
 			arg1 := "-in"
-			arg2 := fmt.Sprintf("%s/%s/%s.crt", wd, App.CertDir, CAShowCert)
+			arg2 := fmt.Sprintf("%s/%s/%s.crt", wd, App.CAConfig.Home, CAShowCert)
 			arg3 := "-text"
 			cmd := exec.Command("openssl", arg0, arg1, arg2, arg3)
 			stdout, err := cmd.Output()
@@ -102,7 +103,7 @@ or secure web services, mTLS, encryption, and identity management.`,
 
 		// --revoke cn
 		if CARevokeCert != "" {
-			err := App.CA.Revoke(CARevokeCert)
+			err := App.CA.Revoke(CARevokeCert, App.PasswordPrompt())
 			if err != nil {
 				App.Logger.Fatal(err)
 			}
@@ -112,17 +113,19 @@ or secure web services, mTLS, encryption, and identity management.`,
 
 		// --install-ca
 		if CAInstallCACert {
-			rootCA, intermediateCAs, err := ca.NewCA(App.Logger, App.CertDir, &App.CAConfig, nil)
+			rootCA, intermediateCA, err := ca.NewCA(
+				App.Logger, &App.CAConfig, App.PasswordPrompt(), 1, nil)
 			if err != nil {
 				App.Logger.Fatal(err)
 			}
-			if err := rootCA.TrustStore().Install(App.CAConfig.Identity[0].Subject.CommonName); err != nil {
+			if err := rootCA.TrustStore().Install(
+				App.CAConfig.Identity[0].Subject.CommonName); err != nil {
+
 				App.Logger.Fatal(err)
 			}
-			for cn, intermediateCA := range intermediateCAs {
-				if err := intermediateCA.TrustStore().Install(cn); err != nil {
-					App.Logger.Fatal(err)
-				}
+			intermediateCN := App.CAConfig.Identity[1].Subject.CommonName
+			if err := intermediateCA.TrustStore().Install(intermediateCN); err != nil {
+				App.Logger.Fatal(err)
 			}
 			App.Logger.Info("CA certificate successfully installed")
 			os.Exit(0)
@@ -130,17 +133,17 @@ or secure web services, mTLS, encryption, and identity management.`,
 
 		// --uninstal-ca
 		if CAUninstallCACert {
-			rootCA, intermediateCAs, err := ca.NewCA(App.Logger, App.CertDir, &App.CAConfig, nil)
+			rootCA, intermediateCA, err := ca.NewCA(
+				App.Logger, &App.CAConfig, App.PasswordPrompt(), 1, nil)
 			if err != nil {
 				App.Logger.Fatal(err)
 			}
 			if err := rootCA.TrustStore().Uninstall(App.CAConfig.Identity[0].Subject.CommonName); err != nil {
 				App.Logger.Fatal(err)
 			}
-			for cn, intermediateCA := range intermediateCAs {
-				if err := intermediateCA.TrustStore().Uninstall(cn); err != nil {
-					App.Logger.Fatal(err)
-				}
+			intermediateCN := App.CAConfig.Identity[1].Subject.CommonName
+			if err := intermediateCA.TrustStore().Install(intermediateCN); err != nil {
+				App.Logger.Fatal(err)
 			}
 			App.Logger.Info("CA certificate successfully uninstalled")
 			os.Exit(0)
@@ -199,7 +202,7 @@ or secure web services, mTLS, encryption, and identity management.`,
 					Email: emails}}
 
 			// Hard coding random number generator for now
-			_, err = App.CA.IssueCertificate(request)
+			_, err = App.CA.IssueCertificate(request, App.PasswordPrompt())
 			if err != nil {
 				App.Logger.Error(err)
 			}

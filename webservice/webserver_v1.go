@@ -1,17 +1,17 @@
-// @title CropDroid REST API
-// @version v0.0.3
-// @description This is the RESTful web servce for CropDroid.
-// @termsOfService https://www.cropdroid.com/terms/
+// @title Trusted Platform
+// @version v0.0.1
+// @description This is the RESTful Web Services API for Trusted Platform
+// @termsOfService https://www.trusted-platform.io/terms
 
 // @contact.name API Support
-// @contact.url https://www.cropdroid.com/support
-// @contact.email support@cropdroid.com
+// @contact.url https://www.trusted-platform.io/support
+// @contact.email support@trusted-platform.org
 
-// @license.name GNU AFFERO GENERAL PUBLIC LICENSE
-// @license.url https://www.gnu.org/licenses/agpl-3.0.txt
+// @license.name Apache 2.0
+// @license.url https://www.apache.org/licenses/LICENSE-2.0.txt
 
 // @license.name Commercial
-// @license.url https://www.cropdroid.com/licenses/commercial.txt
+// @license.url https://www.trusted-platform.io/licenses/commercial.txt
 
 // @host localhost:8443
 // @BasePath /api/v1
@@ -52,8 +52,8 @@ const (
 )
 
 var (
-	ErrLoadTlsCerts = errors.New("unable to load TLS certificates")
-	ErrBindPort     = errors.New("unable to bind to web service port")
+	ErrLoadTlsCerts = errors.New("webserver: unable to load TLS certificates")
+	ErrBindPort     = errors.New("webserver: unable to bind to web service port")
 )
 
 type WebServerV1 struct {
@@ -114,7 +114,7 @@ func (server *WebServerV1) Run() {
 }
 
 func (server WebServerV1) Shutdown() {
-	server.app.Logger.Info("Web services shutting down")
+	server.app.Logger.Info("webserver: shutting down")
 	server.closeChan <- true
 	close(server.closeChan)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -127,7 +127,7 @@ func (server *WebServerV1) startHttp() {
 	sWebPort := fmt.Sprintf(":%d", server.app.WebService.Port)
 
 	insecureWebServicesMsg := fmt.Sprintf(
-		"Starting insecure web services on plain-text HTTP port %s (not recommended)", sWebPort)
+		"webserver: starting insecure web services on plain-text HTTP port %s", sWebPort)
 	server.app.Logger.Infof(insecureWebServicesMsg)
 
 	ipv4Listener, err := net.Listen("tcp4", sWebPort)
@@ -138,7 +138,7 @@ func (server *WebServerV1) startHttp() {
 	//err = http.Serve(ipv4Listener, server.router)
 	err = server.httpServer.Serve(ipv4Listener)
 	if err != nil {
-		server.app.Logger.Fatalf("Unable to start web services: %s", err.Error())
+		server.app.Logger.Fatalf("webserver: unable to start web services: %s", err.Error())
 	}
 }
 
@@ -146,28 +146,28 @@ func (server *WebServerV1) startHttps() {
 
 	sTlsPort := fmt.Sprintf(":%d", server.app.WebService.TLSPort)
 
-	message := fmt.Sprintf("Starting secure web services on TLS port %s", sTlsPort)
+	message := fmt.Sprintf("webserver: starting secure web services on TLS port %s", sTlsPort)
 	server.app.Logger.Debugf(message)
 
-	server.app.Logger.Info("retrieving server private PEM key from cert store")
-	privKeyPEM, err := server.app.CA.CertStore().PrivKeyPEM(server.app.Domain)
+	server.app.Logger.Info("webserver: retrieving server private PEM key from cert store")
+	privKeyPEM, err := server.app.CA.PrivKeyPEM(server.app.Domain)
 	if err != nil {
 		server.app.Logger.Fatal(err)
 	}
 
-	server.app.Logger.Info("retrieving server public PEM key from cert store")
+	server.app.Logger.Info("webserver: retrieving server public PEM key from cert store")
 	certPEM, err := server.app.CA.PEM(server.app.Domain)
 	if err != nil {
 		server.app.Logger.Fatal(err)
 	}
 
-	server.app.Logger.Info("creating server x509 key pair")
+	server.app.Logger.Info("webserver: setting web server x509 key pair")
 	serverCertificate, err := tls.X509KeyPair(certPEM, privKeyPEM)
 	if err != nil {
 		server.app.Logger.Fatal(err)
 	}
 
-	rootCertPool, err := server.app.CA.CertStore().TrustedRootCertPool(server.app.CAConfig.AutoImportIssuingCA)
+	rootCertPool, err := server.app.CA.TrustedRootCertPool(server.app.CAConfig.AutoImportIssuingCA)
 	if err != nil {
 		server.app.Logger.Fatal(err)
 	}

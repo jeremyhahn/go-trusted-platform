@@ -64,7 +64,7 @@ https://www.intel.com/content/www/us/en/business/enterprise-computers/resources/
 			}
 			arg0 := "x509"
 			arg1 := "-in"
-			arg2 := fmt.Sprintf("%s/%s/%s.crt", wd, App.CertDir, cn)
+			arg2 := fmt.Sprintf("%s/%s/%s.crt", wd, App.CAConfig.Home, cn)
 			arg3 := "-text"
 			cmd := exec.Command("openssl", arg0, arg1, arg2, arg3)
 			stdout, err := cmd.Output()
