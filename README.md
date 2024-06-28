@@ -1,4 +1,4 @@
-[logo]: https://github.com/jeremyhahn/go-trusted-platform/raw/master/logo.png "go-trusted-platform"
+[logo]: https://github.com/jeremyhahn/go-trusted-platform/blob/main/logo.png "go-trusted-platform"
 
 The `Trusted Platform` uses a [Trusted Platform Module (TPM)](https://en.wikipedia.org/wiki/Trusted_Platform_Module), [Secure Boot](https://en.wikipedia.org/wiki/UEFI), and a provided [Certificate Authority](https://en.wikipedia.org/wiki/Certificate_authority) to establish a Platform Root of Trust, perform Local and [Remote Attestation](https://tpm2-software.github.io/tpm2-tss/getting-started/2019/12/18/Remote-Attestation.html), encryption, signing, x509 certificate management, data integrity and more.
 
