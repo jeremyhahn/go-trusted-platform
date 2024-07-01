@@ -18,23 +18,23 @@ const (
 	PARTITION_ISSUED                         = "issued"
 	PARTITION_REVOKED                        = "revoked"
 	PARTITION_CRL                            = "crl"
-	PARTITION_SIGNED                         = "signed"
+	PARTITION_SIGNED_BLOB                    = "blobs"
 	PARTITION_ENCRYPTION_KEYS                = "encryption-keys"
+	PARTITION_SIGNING_KEYS                   = "signing-keys"
 )
 
 const (
 	FSEXT_BLOB          FSExtension = ""
-	FSEXT_PRIVATE_PEM               = ".key"
+	FSEXT_CA_BUNDLE_PEM             = ".bundle.crt"
 	FSEXT_PRIVATE_PKCS8             = ".key.pkcs8"
+	FSEXT_PRIVATE_PEM               = ".key"
+	FSEXT_PUBLIC_PKCS1              = ".pub.pkcs1"
 	FSEXT_PUBLIC_PEM                = ".pub"
 	FSEXT_CSR                       = ".csr"
 	FSEXT_PEM                       = ".crt"
-	FSEXT_PEM_BUNDLE                = ".bundle.crt"
 	FSEXT_DER                       = ".cer"
 	FSEXT_CRL                       = ".crl"
 	FSEXT_SIG                       = ".sig"
-	FSEXT_EKCERT                    = ".tss"
-	FSEXT_PUBLIC_PKCS1              = ".pub.pkcs1"
 )
 
 var (
@@ -61,11 +61,10 @@ type CertificateStore interface {
 	CACertificate(cn string) (*x509.Certificate, error)
 	Certificates(partition Partition) ([][]byte, error)
 	EncodePEM(derCert []byte) ([]byte, error)
-	PubKey(cn string) (crypto.PublicKey, error)
-	PubKeyPEM(cn string) ([]byte, error)
-	PrivKey(cn string) (crypto.PrivateKey, error)
-	PrivKeyPEM(cn string) ([]byte, error)
-	Get(cn string, partition Partition, extension FSExtension) ([]byte, error)
+	PubKey(cn, name string, partition Partition) (crypto.PublicKey, error)
+	PubKeyPEM(cn, name string, partition Partition) ([]byte, error)
+	PrivKey(cn, keyName string, password []byte, partition Partition) (crypto.PrivateKey, error)
+	Get(cn, name string, partition Partition, extension FSExtension) ([]byte, error)
 	GetKeyed(cn, key string, partition Partition, extension FSExtension) ([]byte, error)
 	Append(cn string, data []byte, partition Partition, extension FSExtension) error
 	Save(cn string, data []byte, partition Partition, extension FSExtension) error

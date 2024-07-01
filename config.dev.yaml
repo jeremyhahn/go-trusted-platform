@@ -4,9 +4,9 @@
 # Global platform configs
 debug: true
 debug-secrets: true
-platform-dir: platform
-config-dir: platform/etc
-log-dir: platform/log
+platform-dir: trusted-data
+config-dir: trusted-data/etc
+log-dir: trusted-data/log
 
 # The platform domain name
 domain: example.com
@@ -27,8 +27,8 @@ hostmaster: root@example.com
 #
 # Passwords should never be set here in a production environment, however,
 # can be useful during testing and development.
-root-password: asdf
-intermediate-password: asdf
+root-password: ca-root-password
+intermediate-password: ca-intermediate-password
 
 # Regular Expression that defines password complexity requirements
 # for private keys. A few examples:
@@ -87,9 +87,7 @@ attestation:
   # using the current state of TPM PCRs, EventLog, and Secure Boot, and issues
   # an x509 Certificate for the Attestation Key used during Remote Attestation.
   # If disabled, an attestation policy and x509 certificate must be created using
-  # some other manual or automated process prior to the Attestor performing Remote
-  # Attestation so the Remote Attestation process is able to load the policy and
-  # certificate to verify the Attestor.
+  # some other manual or automated system, for example, a licensing system.
   allow-open-enrollment: true
 
   # gRPC ports used by the Verifier and Attestor
@@ -117,7 +115,8 @@ attestation:
   ek-cert-form: PEM
 
   # PCRs used for Quote/Verify
-  quote-pcrs: 0,1,2,3,4,5,6,7,8,9
+  # quote-pcrs: 0,1,2,3,4,5,6,7,8,9
+  quote-pcrs: 6,7,8,9
 
 
 # Trusted Platform Module
@@ -140,7 +139,7 @@ tpm:
 # Certificate Authority
 certificate-authority:
   # The Certifiate Authority home directory
-  home: platform/ca
+  home: trusted-data/ca
   # Automatically download and import Issuing CAs
   # when importing leaf certificates, so the leaf
   # can be verified.
@@ -228,10 +227,14 @@ webservice:
   port: 8080
   tls-port: 8443
   jwt-expiration: 525960
-  tls-ca: platform/ca/intermediate-ca.example.com.pub
-  tls-key: platform/ca/intermediate-ca.example.com.key
-  tls-crt: platform/ca/issued/localhost/localhost.crt
+  tls-ca: trusted-data/ca/intermediate-ca.example.com.pub
+  tls-key: trusted-data/ca/intermediate-ca.example.com.key
+  tls-crt: trusted-data/ca/issued/localhost/localhost.crt
   certificate:
+    # The password for the web service TLS private key.
+    # This should never be configured in a production
+    # environment but it's useful for testing and development.
+    private-key-password: server-password
     key-size: 2048
     # valid 365 days
     valid: 365

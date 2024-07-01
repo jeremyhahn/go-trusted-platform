@@ -4,9 +4,9 @@
 # Global platform configs
 debug: true
 debug-secrets: false
-platform-dir: platform
-config-dir: platform/etc
-log-dir: platform/log
+platform-dir: trusted-data
+config-dir: trusted-data/etc
+log-dir: trusted-data/log
 
 # The platform domain name
 domain: example.com

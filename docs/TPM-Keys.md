@@ -37,7 +37,17 @@ The root key for the AIK is the EK. The goal of the EK is to prove everything co
 
 ## References
 
+[TPM 2.0 Keys for Device Identity and Attestation](https://trustedcomputinggroup.org/wp-content/uploads/TPM-2p0-Keys-for-Device-Identity-and-Attestation_v1_r12_pub10082021.pdf)
+
+[NIST SP 800-57](https://trustedcomputinggroup.org/wp-content/uploads/TCG_IWG_EKCredentialProfile_v2p3_r2_pub.pdf)
+
+https://nvlpubs.nist.gov/nistpubs/specialpublications/nist.sp.800-57pt1r5.pdf
+
 https://dev.to/nandhithakamal/tpm-part-1-4emf
 
 https://ericchiang.github.io/post/tpm-keys/
 
+
+## 
+
+US NIST SP800-57 in section 5.2 does not allow the same key to be used for both decryption and signing, and recommends that applications not share keys.

@@ -23,7 +23,8 @@ var webserverCmd = &cobra.Command{
 		sigChan := make(chan os.Signal, 1)
 
 		restRegistry := rest.NewRestServiceRegistry(App)
-		webserver := webservice.NewWebServerV1(App, restRegistry)
+		// TODO: support pkcs8 and pkcs11 keys
+		webserver := webservice.NewWebServerV1(App, nil, restRegistry)
 
 		go webserver.Run()
 

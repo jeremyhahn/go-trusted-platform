@@ -44,7 +44,9 @@ func (signer *Signer) Sign(
 	signer.logger.Info("signer.Sign")
 
 	signer.logger.Info("retrieving private PEM key from cert store")
-	privPEM, err := signer.ca.PrivKeyPEM(signer.cn)
+
+	// TODO: support pkcs8 and pkcs11 keys
+	privPEM, err := signer.ca.PrivKeyPEM(signer.cn, signer.cn, nil)
 	if err != nil {
 		signer.logger.Error(err)
 		return nil, err

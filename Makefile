@@ -7,7 +7,7 @@ OS                      := $(shell go env GOOS)
 LONG_BITS               := $(shell getconf LONG_BIT)
 
 GOBIN                   := $(shell dirname `which go`)
-PYTHONBIN               ?= python3
+PYTHONBIN               ?= /usr/bin/python3.8
 PIPBIN                  ?= pip
 
 ARM_CC                  ?= arm-linux-gnueabihf-gcc-8
@@ -47,7 +47,7 @@ NO_COLOR=\033[0m
 ATTESTATION_DIR ?= attestation
 ATTESTOR_DIR    ?= $(ATTESTATION_DIR)/attestor
 VERIFIER_DIR    ?= $(ATTESTATION_DIR)/verifier
-PLATFORM_DIR    ?= platform
+PLATFORM_DIR    ?= trusted-data
 CONFIG_DIR      ?= $(PLATFORM_DIR)/etc
 LOG_DIR         ?= $(PLATFORM_DIR)/log
 CA_DIR          ?= $(PLATFORM_DIR)/ca
@@ -68,9 +68,15 @@ DOMAIN          ?= example.com
 VERIFIER_HOSTNAME ?= verifier
 ATTESTOR_HOSTNAME ?= attestor
 
-CONFIG_YAML  ?= config.dev.yaml
+CONFIG_YAML       ?= config.dev.yaml
 
-ANSIBLE_USER     ?= ansible
+ANSIBLE_USER      ?= ansible
+
+LUKS_KEYFILE      ?= luks.key
+LUKS_SIZE         ?= 5G
+LUKS_TYPE         ?= luks2
+
+TPM2_PTOOL        ?= ../go-trusted-platform-ansible/setup/trusted-data/build/tpm2-pkcs11/tools/tpm2_ptool.py
 
 # The TPM Endorsement Key file name. This is set to a default value that
 # aligns with the EK cert name used in the tpm2_getekcertificate docs:
@@ -130,6 +136,7 @@ swagger:
 		--parseInternal \
 		--parseDepth 1 \
 		--output public_html/swagger
+
 
 # x86_64
 build:
@@ -206,8 +213,8 @@ clean:
 		tpm2/certs \
 		tpm2/$(EK_CERT_NAME) \
 		$(PLATFORM_DIR)/ca \
-		$(ATTESTOR_DIR)/platform \
-		$(VERIFIER_DIR)/platform
+		$(ATTESTOR_DIR)/$(PLATFORM_DIR) \
+		$(VERIFIER_DIR)/$(PLATFORM_DIR)
 
 
 test: test-ca test-tpm
@@ -228,6 +235,8 @@ proto:
 		--go-grpc_opt=paths=source_relative \
 		$(PROTO_DIR)/attestation.proto
 
+install: luks-create ansible-install ansible-setup
+uninstall: uninstall-ansible
 
 # Certificate Authority
 ca-verify-all: ca-root-verify ca-intermediate-verify ca-server-=verify
@@ -292,7 +301,11 @@ verifier: verifier-clean build verifier-init
 			--debug \
 			--config-dir $(CONFIG_DIR) \
 			--platform-dir $(PLATFORM_DIR) \
-			--log-dir $(LOG_DIR)
+			--log-dir $(LOG_DIR) \
+			--ca-dir $(PLATFORM_DIR)/ca \
+			--ca-password ca-intermediate-password \
+			--server-password server-password \
+			--ak-password ak-password \
 			--attestor $(ATTESTOR_HOSTNAME).$(DOMAIN)
 
 verifier-clean: 
@@ -335,8 +348,10 @@ attestor: attestor-clean build attestor-init
 			--debug \
 			--config-dir $(CONFIG_DIR) \
 			--platform-dir $(PLATFORM_DIR) \
-			--log-dir $(LOG_DIR)
-#			--password=teGDF!234st
+			--log-dir $(LOG_DIR) \
+			--ca-dir $(PLATFORM_DIR)/ca \
+			--ca-password ca-intermediate-password \
+			--server-password server-password
 
 attestor-verify-cert-chain:
 	cd $(ATTESTATION_DIR) && \
@@ -366,9 +381,85 @@ webservice-verify-tls:
 		| openssl x509 -noout -text
 
 
+
+## tpm2-pkcs11
+tpm2pkcs11-init:
+	$(TPM2_PTOOL) init --path=/tmp
+	$(TPM2_PTOOL) addtoken \
+		--pid=1 --sopin=mysopin \
+		--userpin=myuserpin \
+		--label=label --path /tmp
+	tpm2pkcs11-tool \
+		--label="label" \
+		--login \
+		--pin myuserpin \
+		--change-pin \
+		--new-pin mynewpin
+		--path /tmp
+
+# https://github.com/tpm2-software/tpm2-pkcs11/blob/master/docs/PKCS11_TOOL.md
+tpm2pkcs11-create-key:
+	tpm2pkcs11-tool --label="label" --login --pin=mynewpin --keypairgen
+
+
+# LUKS Encrypted Platform Data Container
+luks-create:
+	dd if=/dev/zero of=$(PLATFORM_DIR).$(LUKS_TYPE) bs=1 count=0 seek=$(LUKS_SIZE)
+	dd if=/dev/urandom of=$(LUKS_KEYFILE) bs=1024 count=8
+	sudo cryptsetup luksFormat --type $(LUKS_TYPE) $(PLATFORM_DIR).$(LUKS_TYPE) $(LUKS_KEYFILE)
+	sudo cryptsetup luksOpen $(PLATFORM_DIR).$(LUKS_TYPE) $(APPNAME) --key-file $(LUKS_KEYFILE)
+	sudo mkfs.ext4 /dev/mapper/$(APPNAME) -L $(PLATFORM_DIR)
+
+luks-mount:
+	mkdir -p $(PLATFORM_DIR)
+	-sudo cryptsetup luksOpen $(PLATFORM_DIR).$(LUKS_TYPE) $(APPNAME) --key-file $(LUKS_KEYFILE)
+	-sudo mount /dev/mapper/$(APPNAME) $(PLATFORM_DIR)
+	sudo chown -R $(USER).$(USER) $(PLATFORM_DIR)
+
+luks-umount:
+	sudo umount $(PLATFORM_DIR)
+	sudo cryptsetup luksClose /dev/mapper/$(APPNAME)
+	rm -rf $(PLATFORM_DIR)
+
+
 # Ansible
 ansible-install:
 	$(PYTHONBIN) -m $(PIPBIN) install --upgrade pip
 	$(PYTHONBIN) -m $(PIPBIN) install --user $(ANSIBLE_USER)
 	$(PYTHONBIN) -m $(PIPBIN) install --upgrade --user $(ANSIBLE_USER)
+	$(PYTHONBIN) -m $(PIPBIN) install cryptography==3.0
+
+ansible-uninstall:
+	$(PYTHONBIN) -m $(PIPBIN) ansible
+
+ansible-setup:
+	ansible-playbook \
+		../go-trusted-platform-ansible/setup/platform-setup.yml \
+		-e PLATFORM_DIR=$(PLATFORM_DIR) \
+		-e CONFIG_DIR=$(CONFIG_DIR) \
+		-e LOG_DIR=$(LOG_DIR) \
+		-e CA_DIR=$(CA_DIR) \
+		-e platform_dir=$(PLATFORM_DIR) \
+		-e config_dir=$(PLATFORM_DIR)/etc \
+    	-e log_dir=$(PLATFORM_DIR)/log \
+		-e ca_dir=$(PLATFORM_DIR)/ca \
+	    -e platform_build_dir=$(PLATFORM_DIR)/build \
+		--ask-become-pass
+
+
+# Qemu 
+qemu-ubuntu-test:
+	qemu-system-aarch64 \
+		-machine type=raspi3 \
+		-m 1024 \
+		-kernel vmlinux \
+		-initrd initramfs
+
+
+# Python
+python-pip-reinstall:
+	sudo apt-get remove --purge python-pip
+	wget https://bootstrap.pypa.io/get-pip.py
+	python get-pip.py
+	rm get-pip.py
 

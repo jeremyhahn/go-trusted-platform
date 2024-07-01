@@ -321,7 +321,13 @@ func (tpm *TPM2) EKCert(ekHandle *tpm2.TPMHandle, srkAuth []byte) (*x509.Certifi
 	certPEM, err := tpm.ca.SignedData(tpm.ekBlobKey)
 	if err == nil {
 		// Perform integrity check on the cert
-		if err := tpm.ca.PersistentVerifySignature(tpm.ekBlobKey, certPEM); err != nil {
+		verifyOpts := &ca.VerifyOpts{
+			KeyCN:              &tpm.domain,
+			KeyName:            &tpm.ekCertName,
+			BlobKey:            &tpm.ekBlobKey,
+			UseStoredSignature: true,
+		}
+		if err := tpm.ca.VerifySignature(certPEM, nil, verifyOpts); err != nil {
 			return nil, err
 		}
 		tpm.logger.Info("tpm: loading EK certificate from Certificate Authority")
@@ -401,7 +407,15 @@ func (tpm *TPM2) EKCert(ekHandle *tpm2.TPMHandle, srkAuth []byte) (*x509.Certifi
 
 	// Sign and save the EK certificate to the CA
 	tpm.logger.Infof("tpm: signing EK certificate and importing to Certificate Authority")
-	if err := tpm.ca.PersistentSign(tpm.ekCertName, certPEM, tpm.caPassword, true); err != nil {
+	ekBlobKey := tpm.createEKCertBlobKey(tpm.domain, tpm.ekCertName)
+	signingOpts := &ca.SigningOpts{
+		KeyCN:          &tpm.domain,
+		KeyName:        &tpm.ekCertName,
+		BlobKey:        &ekBlobKey,
+		StoreSignature: true,
+	}
+	_, _, err = tpm.ca.Sign(certPEM, tpm.caPassword, signingOpts)
+	if err != nil {
 		return nil, err
 	}
 
@@ -1636,12 +1650,22 @@ func (tpm *TPM2) ImportEK(
 		tpm.logger.Debugf("tpm: successfully verified endorsement key certificate: %s", domain)
 	}
 
-	// Sign and save the EK cert to the CA's signed blob storage
+	// Create a new signing key, sign the EK, and save to blob storage
+	// key, err := rootCA.NewSigningKey(domain, cn, tpm.caPassword, tpm.caPassword)
+	// if err != nil {
+	// 	return nil, err
+	// }
 	ekBlobKey := tpm.createEKCertBlobKey(domain, cn)
-	if err := tpm.ca.PersistentSign(ekBlobKey, ekCertPEM, tpm.caPassword, true); err != nil {
+	signingOpts := &ca.SigningOpts{
+		// KeyCN:     &domain,
+		// KeyName:   &cn,
+		BlobKey:        &ekBlobKey,
+		StoreSignature: true,
+	}
+	_, _, err = tpm.ca.Sign(ekCertPEM, tpm.caPassword, signingOpts)
+	if err != nil {
 		return nil, err
 	}
-
 	tpm.logger.Info("Endorsement Key (EK) successfully imported to Certificate Authority")
 
 	return ekCert, nil

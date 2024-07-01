@@ -41,7 +41,9 @@ var (
 
 	// CLI options when invoked directly
 	attestorHostname = flag.String("attestor", "localhost", "The Attestor hostname / FQDN / IP")
-	caPassword       = flag.String("password", "", "The password used to unseal the Certificate Authority Private Key")
+	caPassword       = flag.String("ca-password", "", "The Certificate Authority private key password")
+	serverPassword   = flag.String("server-password", "", "The gRPC server TLS private key password")
+	akCertPassword   = flag.String("ak-password", "", "An optional password for the generated AK Certificate private key")
 )
 
 type AttestationKey struct {
@@ -75,19 +77,21 @@ type Verification struct {
 	domain         string
 	ca             ca.CertificateAuthority
 	tpm            tpm2.TrustedPlatformModule2
-	srkAuth        []byte
+	caPassword     []byte
+	serverPassword []byte
+	akCertPassword []byte
 	grpcConn       *grpc.ClientConn
 	secureAttestor pb.TLSAttestorClient
 	clientCertPool *x509.CertPool
 	attestor       string
-	caPassword     []byte
 	Verifier
 }
 
 func main() {
 	flag.Parse()
 	app := app.NewApp().Init(nil)
-	verifier, err := NewVerifier(app, *attestorHostname, []byte(*caPassword))
+	verifier, err := NewVerifier(app,
+		*attestorHostname, []byte(*caPassword), []byte(*serverPassword), []byte(*akCertPassword))
 	if err != nil {
 		app.Logger.Fatal(err)
 	}
@@ -97,12 +101,13 @@ func main() {
 }
 
 // Creates a new Remote Attestation Verifier
-func NewVerifier(app *app.App, attestor string, caPassword []byte) (Verifier, error) {
+func NewVerifier(app *app.App, attestor string, caPassword, serverPassword, akCertPassword []byte) (Verifier, error) {
 
 	clientCertPool := x509.NewCertPool()
 	secureConn, err := newTLSGRPCClient(
 		app.Logger,
 		app.AttestationConfig,
+		serverPassword,
 		app.Domain,
 		attestor,
 		app.CA)
@@ -125,6 +130,9 @@ func NewVerifier(app *app.App, attestor string, caPassword []byte) (Verifier, er
 		secureAttestor: pb.NewTLSAttestorClient(secureConn),
 		clientCertPool: clientCertPool,
 		attestor:       attestor,
+		caPassword:     caPassword,
+		serverPassword: serverPassword,
+		akCertPassword: akCertPassword,
 	}, nil
 }
 
@@ -140,6 +148,7 @@ func newInsecureGRPCClient(config config.Attestation, attestor string) (*grpc.Cl
 func newTLSGRPCClient(
 	logger *logging.Logger,
 	config config.Attestation,
+	serverPassword []byte,
 	domain, attestor string,
 	ca ca.CertificateAuthority) (*grpc.ClientConn, error) {
 
@@ -154,7 +163,7 @@ func newTLSGRPCClient(
 		return nil, err
 	}
 
-	clientCert, err := ca.X509KeyPair(domain)
+	clientCert, err := ca.X509KeyPair(domain, domain, serverPassword)
 	if err != nil {
 		return nil, err
 	}
@@ -538,7 +547,8 @@ func (verifier *Verification) enrollAttestor(ak tpm2.DerivedKey) ([]byte, error)
 	}
 
 	// Issue an x509 platform certificate to the Attestor
-	certDER, err := verifier.ca.IssueCertificate(certReq, verifier.caPassword)
+	certDER, err := verifier.ca.IssueCertificate(
+		certReq, verifier.caPassword, verifier.akCertPassword)
 	if err != nil {
 		verifier.logger.Error(err)
 		return nil, err
@@ -567,8 +577,11 @@ func (verifier *Verification) importAndSignAK(ak tpm2.DerivedKey) error {
 		verifier.logger.Error(err)
 		return err
 	}
-	err := verifier.ca.PersistentSign(
-		akNameBlobKey, akBuffer.Bytes(), verifier.caPassword, true)
+	signingOpts := &ca.SigningOpts{
+		BlobKey:        &akNameBlobKey,
+		StoreSignature: true,
+	}
+	_, _, err := verifier.ca.Sign(akBuffer.Bytes(), verifier.caPassword, signingOpts)
 	if err != nil {
 		verifier.logger.Error(err)
 		return err

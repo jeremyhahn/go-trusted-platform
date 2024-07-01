@@ -49,12 +49,13 @@ func NewApp() *App {
 }
 
 type AppInitParams struct {
-	Debug       bool
-	LogDir      string
-	ConfigDir   string
-	PlatformDir string
-	CADir       string
-	Password    []byte
+	Debug             bool
+	LogDir            string
+	ConfigDir         string
+	PlatformDir       string
+	CADir             string
+	CAPassword        []byte
+	ServerTLSPassword []byte
 }
 
 func (app *App) Init(initParams *AppInitParams) *App {
@@ -66,19 +67,18 @@ func (app *App) Init(initParams *AppInitParams) *App {
 		app.CAConfig.Home = initParams.CADir
 	}
 	app.initConfig()
-	if initParams.Password == nil {
-		initParams.Password = app.PasswordPrompt()
-	}
-	// if initParams != nil {
-	// 	app.DebugFlag = initParams.Debug
-	// 	app.PlatformDir = initParams.PlatformDir
-	// 	app.ConfigDir = initParams.ConfigDir
-	// 	app.LogDir = initParams.LogDir
-	// 	app.CAConfig.Home = initParams.CADir
-	// }
+	// Overwrite config with CLI options
 	app.CAConfig.Home = initParams.CADir
 	app.initLogger()
-	app.initCA(initParams.Password)
+	if initParams.CAPassword == nil || len(initParams.CAPassword) == 0 {
+		app.promptForCAPassword()
+		initParams.CAPassword = app.PasswordPrompt()
+	}
+	if initParams.ServerTLSPassword == nil || len(initParams.ServerTLSPassword) == 0 {
+		app.promptForServerTLSPassword()
+		initParams.ServerTLSPassword = app.PasswordPrompt()
+	}
+	app.initCA(initParams.CAPassword, initParams.ServerTLSPassword)
 	return app
 }
 
@@ -129,15 +129,15 @@ func (app *App) initLogger() {
 // Open a connection to the TPM, using an unauthenticated, unverified
 // and un-attested connection. Use the software TPM simulator if enabled
 // in the TPM configuration section.
-func (app *App) openTPM(password []byte) {
+func (app *App) openTPM(caPassword []byte) {
 	var err error
 	var tpm tpm2.TrustedPlatformModule2
 	if app.TPMConfig.UseSimulator {
 		tpm, err = tpm2.NewSimulation(
-			app.Logger, app.DebugSecretsFlag, &app.TPMConfig, password, app.Domain)
+			app.Logger, app.DebugSecretsFlag, &app.TPMConfig, caPassword, app.Domain)
 	} else {
 		tpm, err = tpm2.NewTPM2(
-			app.Logger, app.DebugSecretsFlag, &app.TPMConfig, password, app.Domain)
+			app.Logger, app.DebugSecretsFlag, &app.TPMConfig, caPassword, app.Domain)
 	}
 	if err != nil {
 		app.Logger.Error(err)
@@ -157,20 +157,22 @@ func (app *App) openTPM(password []byte) {
 // configuration then it's used as the source of randomness for all random
 // operations in the platform. Use the TPM "Encrypt" configuration option
 // to encrypt the bus communication between the CPU <-> TPM.
-func (app *App) initCA(password []byte) {
+func (app *App) initCA(caPassword, serverTLSPassword []byte) {
 
 	// Override passwords with user-defined passwords
-	// in configuration file
-	rootPassword := password
-	intermediatePassword := password
+	// in configuration file, if provided
+	rootPassword := caPassword
+	intermediatePassword := caPassword
 	if app.RootPassword != "" {
+		app.Logger.Warning("Loading Root Certificate Authority private key password from configuration file")
 		rootPassword = []byte(app.RootPassword)
 	}
 	if app.IntermediatePassword != "" {
+		app.Logger.Warning("Loading Intermediate Certificate Authority private key password from configuration file")
 		intermediatePassword = []byte(app.IntermediatePassword)
 		app.openTPM(intermediatePassword)
 	} else {
-		app.openTPM(password)
+		app.openTPM(caPassword)
 	}
 	defer app.TPM.Close()
 
@@ -187,8 +189,16 @@ func (app *App) initCA(password []byte) {
 	}
 
 	// Create new Root and Intermediate CA(s)
-	rootCA, intermediateCA, err := ca.NewCA(
-		app.Logger, &app.CAConfig, password, 1, random)
+	params := ca.CAParams{
+		Debug:                app.DebugFlag,
+		DebugSecrets:         app.DebugSecretsFlag,
+		Logger:               app.Logger,
+		Config:               &app.CAConfig,
+		Password:             caPassword,
+		SelectedIntermediate: 1,
+		Random:               random,
+	}
+	rootCA, intermediateCA, err := ca.NewCA(params)
 
 	// Inject the CA into the TPM
 	app.TPM.SetCertificateAuthority(intermediateCA)
@@ -216,7 +226,7 @@ func (app *App) initCA(password []byte) {
 				pkcs8Authenticator)
 
 			// Run platform setup
-			platformSetup.Setup(password)
+			platformSetup.Setup(caPassword)
 		} else {
 			app.Logger.Fatal(err)
 		}
@@ -226,7 +236,7 @@ func (app *App) initCA(password []byte) {
 	// passwords from file. This sets the regular
 	// password variable to the password in the config.
 	if app.IntermediatePassword != "" {
-		password = intermediatePassword
+		caPassword = intermediatePassword
 	}
 
 	// Try to load the web services TLS cert
@@ -272,7 +282,7 @@ func (app *App) initCA(password []byte) {
 		}
 
 		// Issue the web server certificate
-		if _, err = intermediateCA.IssueCertificate(certReq, password); err != nil {
+		if _, err = intermediateCA.IssueCertificate(certReq, caPassword, serverTLSPassword); err != nil {
 			app.Logger.Fatal(err)
 		}
 	}
@@ -358,11 +368,22 @@ func (app *App) DropPrivileges() {
 	}
 }
 
-// Prompts for a password via STDIN
+// Prompts for CA password via STDIN
 func (app *App) PasswordPrompt() []byte {
 	password, err := term.ReadPassword(int(syscall.Stdin))
 	if err != nil {
 		app.Logger.Fatal(err)
 	}
 	return password
+}
+
+// Outputs
+func (app *App) promptForCAPassword() {
+	fmt.Println("\nCertifiate Authority private key password:")
+	fmt.Println("")
+}
+
+func (app *App) promptForServerTLSPassword() {
+	fmt.Println("\nServer TLS private key password")
+	fmt.Println("")
 }

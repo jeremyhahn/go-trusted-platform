@@ -107,30 +107,33 @@ The `main` branch will always build and run. Try it out!
 
 - [ ] Trusted Platform
     - [ ] Certificate Authority
-        - [x] Polymorphic Persistent Storage
-            - [x] Local file storage
-            - [ ] Database storage
-            - [ ] Clustered H/A storage
-            - [ ] Encryption at Rest
+        - [ ] Key Storage
+            - [x] [PKCS 1](https://en.wikipedia.org/wiki/PKCS_1)
+            - [x] [PKCS 8](https://en.wikipedia.org/wiki/PKCS_8) (local file storage)
+            - [ ] [PKCS 11](https://en.wikipedia.org/wiki/PKCS_11)
+        - [x] Key Storage Backends
+            - [x] File storage
+            - [ ] PKCS 11
+                - [ ] [TPM 2.0](https://en.wikipedia.org/wiki/Trusted_Platform_Module)
+                - [ ] [SoftHSM](https://www.opendnssec.org/softhsm/)
+                - [ ] [YubiKey](https://www.yubico.com/)
         - [x] Root CA
         - [x] Intermediate CA(s)
-        - [x] RSA & ECC x509 Certificates
-        - [x] x509 Certificate & key storage / retrieval
-        - [x] Issue x509 certificates (from Root and/or Intermediate CA)
-        - [x] Import to trusted root certificate store
-        - [x] Import to trusted intermediate certificate store
-        - [x] Create RSA public private keys
+        - [x] x509 Certificates (RSA & ECC )
+        - [x] Certificate & Key key storage / retrieval
+        - [x] Private trusted root certificate store
+        - [x] Private trusted intermediate certificate store
+        - [x] Distinct TLS, encryption & signing keys
+        - [x] RSA public / private keys
+        - [x] RSA & ECC signing keys
         - [x] Create & Sign Certificate Signing Requests (CSR)
         - [x] x509 Certificate Revocation Lists (CRLs)
-        - [x] Dedicated Encryption Keys
-            - [x] RSA Encrypt / Decrypt
-        - [x] RSA Sign / Verify (using certificate keys)
-        - [x] Encode / Decode to / from DER / PEM
-        - [x] Automatic download / import of Issuer CA(s) to trust store
-        - [x] Automatic download / import of CA Revocation Lists (CRLs)
+        - [x] Encoding / Decoding support for DER and PEM
+        - [x] Automatic download & import Issuer CA(s) to trust store
+        - [x] Automatic download & import Revocation Lists (CRLs)
         - [x] Parse & Create CA bundles
         - [x] Create Golang CertPool objects pre-initialized with CA certificates
-        - [x] Create Golang tls.Config objects pre-initialized with Root / Client CA bundle and x509 Certificates
+        - [x] Create Golang tls.Config objects pre-initialized with Root & Client CA bundle and x509 Certificates (mTLS)
         - [x] Signed blob storage
         - [x] Install / Uninstall CA certificates to Operating System trust store
         - [ ] Online Certificate Status Protocol (OCSP)
@@ -193,9 +196,18 @@ The `main` branch will always build and run. Try it out!
                     - [x] Require TLSv1.3
                 - [x] Secure service (requires mTLS)
                     - [x] Get Endorsement Key (EK) and Certificate
+                    - [x] Create Endorsement Key
+                    - [x] Create Attestation Key
+                    - [x] Activate Credential
+                    - [x] Quote
             - [ ] Client (Verifier)
                 - [x] Auto-negotiated mTLSv1.3
-                - [x] Get Attestor Endorsement Key (EK) and Certificate
+                - [x] Get Endorsement Key (EK) and Certificate
+                - [x] Get Attestation Key Profile (EK, AK, AK Name)
+                - [x] Credential Challenge (TPM2_MakeCredential)
+                - [x] Activate Credential ((TPM2_ActivateCredential)
+                - [x] Issue Attestation Key Certificate
+                - [ ] Verify Quote
     - [ ] Web Services
         - [x] Web server
         - [x] REST API
@@ -204,11 +216,12 @@ The `main` branch will always build and run. Try it out!
             - [x] Generate Token
             - [x] Refresh Token
             - [x] Validate Token
-            - [ ] Opaque Private Key - TPM
+            - [ ] Opaque TLS Private Key
         - [x] HTTPS / TLS
         - [ ] mTLS
     - [ ] gRPC Remote Attestation
         - [x] Verifier (Service Provider)
+            - [ ] Opaque TLS Private Key
             - [x] mTLS auto-negotiation
             - [x] Get Endorsement Key Certificate
             - [x] Get Attestation Key Profile
@@ -217,6 +230,7 @@ The `main` branch will always build and run. Try it out!
             - [x] Issue AK x509 Certificate
             - [ ] Quote / Verify
         - [x] Attestor (Client)
+            - [ ] Opaque TLS Private Key
             - [x] mTLS auto-negotiation
             - [x] Get Endorsement Key Certificate
             - [x] Get Attestation Key Profile
@@ -230,7 +244,26 @@ The `main` branch will always build and run. Try it out!
         - [ ] Service Request - Part 2: Platform Software State Validation
         - [ ] Service Delivery
     - [ ] Plugin System
-        - [ ] Persistent Storage
         - [ ] Install / uninstall
         - [ ] Sign / verify
     - [ ] Volume Encryption (LUKS)
+        - [x] Preliminary Luks support for setup
+        - [ ] Full LUKS integration to create and manage volumes
+    - [ ] Automated Setup and Provisioning
+        - [ ] Platform
+            - [x] Create LUKS encrypted trusted-data volume
+            - [x] Install and configure platform dependencies
+        - [ ] Embedded Systems
+            - [ ] Raspberry PI
+                - [ ] Image builder
+                    - [ ] Secure Boot
+                    - [ ] OTP Password
+                    - [ ] SD Card Writer
+                    - [ ] Device Provisioning
+                    - [ ] Device Onboarding
+            - [ ] Arduino
+                - [ ] ROM integrity check
+                - [ ] Platform firmeware
+                - [ ] Firmware flasher
+                - [ ] Device Provisioning
+                - [ ] Device Onboarding
