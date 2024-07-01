@@ -6,12 +6,12 @@ import (
 )
 
 var VFAttestor string
-var VFPassword string
+var VFAKPassword string
 
 func init() {
 
-	verifierCmd.PersistentFlags().StringVarP(&VFAttestor, "attestor", "a", "localhost", "The host or dns name of the attestor to verify")
-	verifierCmd.PersistentFlags().StringVarP(&VFPassword, "password", "p", "", "Password to unseal the Certificate Authority Private Key")
+	verifierCmd.PersistentFlags().StringVarP(&VFAttestor, "attestor", "a", "localhost", "The hostname, DNS name, or IP of the attestor to verify")
+	verifierCmd.PersistentFlags().StringVar(&VFAKPassword, "ak-password", "", "The host or dns name of the attestor to verify")
 
 	rootCmd.AddCommand(verifierCmd)
 }
@@ -23,8 +23,18 @@ var verifierCmd = &cobra.Command{
 verification requests from the Verifier to perform Provisioning, Remote
 Attestation or quote / Verify operations`,
 	Run: func(cmd *cobra.Command, args []string) {
-		//srkAuth := []byte("")
-		verifier, err := verifier.NewVerifier(App, VFAttestor, []byte(VFPassword))
+		var caPassword, serverPassword, akPassword []byte
+		if CAPassword != "" {
+			caPassword = []byte(CAPassword)
+		}
+		if CAPassword != "" {
+			serverPassword = []byte(TLSPassword)
+		}
+		if VFAKPassword != "" {
+			akPassword = []byte(VFAKPassword)
+		}
+		verifier, err := verifier.NewVerifier(
+			App, VFAttestor, caPassword, serverPassword, akPassword)
 		if err != nil {
 			App.Logger.Fatal(err)
 		}

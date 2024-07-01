@@ -67,15 +67,18 @@ type WebServerV1 struct {
 	httpServer          *http.Server
 	restServiceRegistry rest.RestServiceRegistry
 	middleware          middleware.JsonWebTokenMiddleware
+	password            []byte
 	closeChan           chan bool
 }
 
 func NewWebServerV1(
 	app *app.App,
+	password []byte,
 	restServiceRegistry rest.RestServiceRegistry) *WebServerV1 {
 
 	webserver := &WebServerV1{
 		app:                 app,
+		password:            password,
 		baseURI:             "/api/v1",
 		eventType:           "WebServer",
 		endpointList:        make([]string, 0),
@@ -150,7 +153,9 @@ func (server *WebServerV1) startHttps() {
 	server.app.Logger.Debugf(message)
 
 	server.app.Logger.Info("webserver: retrieving server private PEM key from cert store")
-	privKeyPEM, err := server.app.CA.PrivKeyPEM(server.app.Domain)
+	privKeyPEM, err := server.app.CA.PrivKeyPEM(
+		// TODO: support pkcs8 and pkcs11 keys
+		server.app.Domain, server.app.Domain, server.password)
 	if err != nil {
 		server.app.Logger.Fatal(err)
 	}

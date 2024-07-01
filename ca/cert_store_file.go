@@ -35,8 +35,9 @@ type FileSystemCertStore struct {
 	issuedDir              string
 	revokedDir             string
 	crlDir                 string
-	sigDir                 string
-	cryptDir               string
+	signedBlobDir          string
+	cryptKeyDir            string
+	signatureKeyDir        string
 	certificate            *x509.Certificate
 	caName                 string
 	retainRevoked          bool
@@ -49,14 +50,6 @@ func NewFileSystemCertStore(
 	certificate *x509.Certificate,
 	retainRevoked bool) (CertificateStore, error) {
 
-	// if certificate.SignatureAlgorithm == x509.SHA256WithRSA {
-	// 	caDir = fmt.Sprintf("%s/%s", caDir, "rsa")
-	// } else if certificate.SignatureAlgorithm == x509.ECDSAWithSHA256 {
-	// 	caDir = fmt.Sprintf("%s/%s", caDir, "ecc")
-	// } else {
-	// 	return nil, ErrInvalidAlgorithm
-	// }
-
 	partitions := []Partition{
 		PARTITION_CA,
 		PARTITION_TRUSTED_ROOT,
@@ -65,8 +58,9 @@ func NewFileSystemCertStore(
 		PARTITION_ISSUED,
 		PARTITION_REVOKED,
 		PARTITION_CRL,
-		PARTITION_SIGNED,
-		PARTITION_ENCRYPTION_KEYS}
+		PARTITION_SIGNED_BLOB,
+		PARTITION_ENCRYPTION_KEYS,
+		PARTITION_SIGNING_KEYS}
 
 	for _, partition := range partitions {
 		dir := fmt.Sprintf("%s/%s", caDir, partition)
@@ -85,8 +79,9 @@ func NewFileSystemCertStore(
 		issuedDir:              fmt.Sprintf("%s/%s", caDir, PARTITION_ISSUED),
 		revokedDir:             fmt.Sprintf("%s/%s", caDir, PARTITION_REVOKED),
 		crlDir:                 fmt.Sprintf("%s/%s", caDir, PARTITION_CRL),
-		sigDir:                 fmt.Sprintf("%s/%s", caDir, PARTITION_SIGNED),
-		cryptDir:               fmt.Sprintf("%s/%s", caDir, PARTITION_ENCRYPTION_KEYS),
+		signedBlobDir:          fmt.Sprintf("%s/%s", caDir, PARTITION_SIGNED_BLOB),
+		cryptKeyDir:            fmt.Sprintf("%s/%s", caDir, PARTITION_ENCRYPTION_KEYS),
+		signatureKeyDir:        fmt.Sprintf("%s/%s", caDir, PARTITION_SIGNING_KEYS),
 		certificate:            certificate,
 		caName:                 certificate.Subject.CommonName,
 		retainRevoked:          retainRevoked}, nil
@@ -98,12 +93,12 @@ func NewFileSystemCertStore(
 func (store *FileSystemCertStore) RootCertForCA(cn string) (*x509.Certificate, error) {
 	// Assume this is an Intermediate CA calling this function
 	// and check the trusted-root partition first
-	der, err := store.Get(cn, PARTITION_TRUSTED_ROOT, FSEXT_DER)
+	der, err := store.Get(cn, cn, PARTITION_TRUSTED_ROOT, FSEXT_DER)
 	if err != nil {
 		if err == ErrCertNotFound {
 			// Try to load the cert from the root CA directory
 			// (this is the root CA)
-			der, err = store.Get(cn, PARTITION_CA, FSEXT_DER)
+			der, err = store.Get(cn, cn, PARTITION_CA, FSEXT_DER)
 			if err != nil {
 				return nil, err
 			}
@@ -211,6 +206,7 @@ func (store *FileSystemCertStore) TrustedIntermediateCertPool() (*x509.CertPool,
 	// Add the Intermediate Certificate Authority certificate first
 	intermediatePEM, err := store.Get(
 		store.caName,
+		store.caName,
 		PARTITION_CA,
 		FSEXT_PEM)
 	if err != nil {
@@ -238,12 +234,12 @@ func (store *FileSystemCertStore) TrustedIntermediateCertPool() (*x509.CertPool,
 
 // Returns the requested Trusted Root CA certificate
 func (store *FileSystemCertStore) TrustedRoot(cn string) ([]byte, error) {
-	return store.Get(cn, PARTITION_TRUSTED_ROOT, FSEXT_PEM)
+	return store.Get(cn, cn, PARTITION_TRUSTED_ROOT, FSEXT_PEM)
 }
 
 // Returns the requested Trusted Intermediate CA certificate
 func (store *FileSystemCertStore) TrustedIntermediate(cn string) ([]byte, error) {
-	return store.Get(cn, PARTITION_TRUSTED_INTERMEDIATE, FSEXT_PEM)
+	return store.Get(cn, cn, PARTITION_TRUSTED_INTERMEDIATE, FSEXT_PEM)
 }
 
 // Returns a parent certificate from the trusted root or intermediate certificate store
@@ -295,7 +291,7 @@ func (store *FileSystemCertStore) HasCRL(cn string) (bool, error) {
 
 // Returns the requested Certificate Authority's x509 identity certificate
 func (store *FileSystemCertStore) CACertificate(cn string) (*x509.Certificate, error) {
-	der, err := store.Get(cn, PARTITION_CA, FSEXT_DER)
+	der, err := store.Get(cn, cn, PARTITION_CA, FSEXT_DER)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +316,7 @@ func (store *FileSystemCertStore) CAPrivKey(password []byte) (crypto.PrivateKey,
 
 // Returns the Certificate Authority's RSA Public Key
 func (store *FileSystemCertStore) CAPubKey() (crypto.PublicKey, error) {
-	bytes, err := store.Get(store.caName, PARTITION_CA, FSEXT_PUBLIC_PKCS1)
+	bytes, err := store.Get(store.caName, store.caName, PARTITION_CA, FSEXT_PUBLIC_PKCS1)
 	if err != nil {
 		return nil, err
 	}
@@ -330,7 +326,7 @@ func (store *FileSystemCertStore) CAPubKey() (crypto.PublicKey, error) {
 
 // Returns the Certificate Authority's RSA Public Key in PEM form
 func (store *FileSystemCertStore) CAPubPEM() ([]byte, error) {
-	return store.Get(store.caName, PARTITION_CA, FSEXT_PUBLIC_PEM)
+	return store.Get(store.caName, store.caName, PARTITION_CA, FSEXT_PUBLIC_PEM)
 }
 
 // Returns all PEM form certificates from the specified Certificate Authority partition
@@ -360,16 +356,18 @@ func (store *FileSystemCertStore) Certificates(partition Partition) ([][]byte, e
 	return certs, nil
 }
 
-// Returns an issued private key. This key should never be cached, saved,
-// or exported outside of the Certificate Authority, only loaded on the stack
-// and set to nil to clear it from memory as soon as possible.
-func (store *FileSystemCertStore) PrivKey(cn string) (crypto.PrivateKey, error) {
-	bytes, err := os.ReadFile(fmt.Sprintf("%s/%s/%s/%s%s",
-		store.caDir, PARTITION_ISSUED, cn, cn, FSEXT_PRIVATE_PKCS8))
+// Returns a private key from the requested partition
+func (store *FileSystemCertStore) PrivKey(cn, name string, password []byte, partition Partition) (crypto.PrivateKey, error) {
+	file := fmt.Sprintf("%s/%s/%s/%s%s",
+		store.caDir, partition, cn, name, FSEXT_PRIVATE_PKCS8)
+	bytes, err := os.ReadFile(file)
 	if err != nil {
+		store.logger.Error(err)
 		return nil, err
 	}
-	key, err := x509.ParsePKCS8PrivateKey(bytes)
+	store.logger.Debugf("certificate-store: parsing private key: cn: %s, name: %s, partition: %s",
+		cn, name, partition)
+	key, err := pkcs8.ParsePKCS8PrivateKey(bytes, password)
 	if err != nil {
 		return nil, err
 	}
@@ -377,8 +375,8 @@ func (store *FileSystemCertStore) PrivKey(cn string) (crypto.PrivateKey, error) 
 }
 
 // Returns the RSA Public Key from the issued partition for the specified common name
-func (store *FileSystemCertStore) PubKey(cn string) (crypto.PublicKey, error) {
-	bytes, err := store.Get(cn, PARTITION_ISSUED, FSEXT_PUBLIC_PKCS1)
+func (store *FileSystemCertStore) PubKey(cn, name string, partition Partition) (crypto.PublicKey, error) {
+	bytes, err := store.Get(cn, name, partition, FSEXT_PUBLIC_PKCS1)
 	if err != nil {
 		return nil, err
 	}
@@ -388,14 +386,8 @@ func (store *FileSystemCertStore) PubKey(cn string) (crypto.PublicKey, error) {
 
 // Returns and issued RSA Public Key in PEM form, from the issued partition
 // for the specified common name.
-func (store *FileSystemCertStore) PubKeyPEM(cn string) ([]byte, error) {
-	return store.Get(cn, PARTITION_ISSUED, FSEXT_PUBLIC_PEM)
-}
-
-// Returns and issued RSA Private Key in PEM form, from the issued partition
-// for the specified common name.
-func (store *FileSystemCertStore) PrivKeyPEM(cn string) ([]byte, error) {
-	return store.Get(cn, PARTITION_ISSUED, FSEXT_PRIVATE_PEM)
+func (store *FileSystemCertStore) PubKeyPEM(cn, name string, partition Partition) ([]byte, error) {
+	return store.Get(cn, name, partition, FSEXT_PUBLIC_PEM)
 }
 
 // Appends certificate bytes to an existing certificate file
@@ -482,8 +474,9 @@ func (store *FileSystemCertStore) Save(
 	return fmt.Errorf("%s: %s", ErrFileAlreadyExists, certFile)
 }
 
-// Saves a "keyed object" to the file system using the common
-// name as a subfolder with the keyed object stored inside.
+// Saves a "keyed object" to the file system using the cn
+// as a subfolder name, with the data blob stored inside.
+// Keyed Object: An object to store to a specifid path
 func (store *FileSystemCertStore) SaveKeyed(
 	cn, key string,
 	data []byte,
@@ -522,12 +515,12 @@ func (store *FileSystemCertStore) SaveKeyed(
 // cert-store/signed/my/secret/blob.dat
 func (store *FileSystemCertStore) SaveBlob(key string, data []byte) error {
 	trimmed := strings.TrimLeft(key, "/")
-	dir := fmt.Sprintf("%s/%s", store.sigDir, filepath.Dir(trimmed))
+	dir := fmt.Sprintf("%s/%s", store.signedBlobDir, filepath.Dir(trimmed))
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
 		store.logger.Error(err)
 		return err
 	}
-	blobFile := fmt.Sprintf("%s/%s%s", store.sigDir, trimmed, FSEXT_BLOB)
+	blobFile := fmt.Sprintf("%s/%s%s", store.signedBlobDir, trimmed, FSEXT_BLOB)
 	if err := os.WriteFile(blobFile, data, 0644); err != nil {
 		store.logger.Error(err)
 		return err
@@ -539,12 +532,12 @@ func (store *FileSystemCertStore) SaveBlob(key string, data []byte) error {
 // returned if the signed data could not be found.
 func (store *FileSystemCertStore) Blob(key string) ([]byte, error) {
 	trimmed := strings.TrimLeft(key, "/")
-	dir := fmt.Sprintf("%s/%s/", store.sigDir, filepath.Dir(trimmed))
+	dir := fmt.Sprintf("%s/%s/", store.signedBlobDir, filepath.Dir(trimmed))
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
 		store.logger.Error(err)
 		return nil, err
 	}
-	blobFile := fmt.Sprintf("%s/%s%s", store.sigDir, trimmed, FSEXT_BLOB)
+	blobFile := fmt.Sprintf("%s/%s%s", store.signedBlobDir, trimmed, FSEXT_BLOB)
 	bytes, err := os.ReadFile(blobFile)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -559,7 +552,7 @@ func (store *FileSystemCertStore) Blob(key string) ([]byte, error) {
 // Retrieves key / certificate from the requested certificate
 // store partition
 func (store *FileSystemCertStore) Get(
-	cn string,
+	cn, name string,
 	partition Partition,
 	extension FSExtension) ([]byte, error) {
 
@@ -579,7 +572,7 @@ func (store *FileSystemCertStore) Get(
 	} else {
 		certDir = fmt.Sprintf("%s/%s", part, cn)
 	}
-	certFile := fmt.Sprintf("%s/%s%s", certDir, cn, extension)
+	certFile := fmt.Sprintf("%s/%s%s", certDir, name, extension)
 	bytes, err := os.ReadFile(certFile)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -841,10 +834,12 @@ func (store *FileSystemCertStore) partition(partition Partition) (string, error)
 		return store.revokedDir, nil
 	case PARTITION_CRL:
 		return store.crlDir, nil
-	case PARTITION_SIGNED:
-		return store.sigDir, nil
+	case PARTITION_SIGNED_BLOB:
+		return store.signedBlobDir, nil
 	case PARTITION_ENCRYPTION_KEYS:
-		return store.cryptDir, nil
+		return store.cryptKeyDir, nil
+	case PARTITION_SIGNING_KEYS:
+		return store.signatureKeyDir, nil
 	}
 	return "", ErrInvalidPartition
 }

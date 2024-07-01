@@ -493,8 +493,17 @@ func createCA() ca.CertificateAuthority {
 			intermediateIdentity},
 	}
 
+	// CA constructor params
+	params := ca.CAParams{
+		Logger:               logger,
+		Config:               config,
+		Password:             intermediatePassword,
+		SelectedIntermediate: 1,
+		Random:               rand.Reader,
+	}
+
 	// Create the CAs
-	rootCA, intermediateCA, err := ca.NewCA(logger, config, intermediatePassword, 1, rand.Reader)
+	rootCA, intermediateCA, err := ca.NewCA(params)
 	if err == ca.ErrNotInitialized {
 		rootPrivKey, rootCert, err := rootCA.Init(nil, nil, rootPassword, rand.Reader)
 		if err != nil {

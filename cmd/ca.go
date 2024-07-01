@@ -58,6 +58,14 @@ services to the platform. Create, install, issue, and revoke certificates
 or secure web services, mTLS, encryption, and perform identity management.`,
 	Run: func(cmd *cobra.Command, args []string) {
 
+		params := ca.CAParams{
+			Logger:               App.Logger,
+			Config:               &App.CAConfig,
+			Password:             []byte(CAPassword),
+			SelectedIntermediate: 1,
+			Random:               App.TPM.RandomReader(),
+		}
+
 		if CAParsePEM != "" {
 			bytes, err := os.ReadFile(CAParsePEM)
 			if err != nil {
@@ -113,8 +121,7 @@ or secure web services, mTLS, encryption, and perform identity management.`,
 
 		// --install-ca
 		if CAInstallCACert {
-			rootCA, intermediateCA, err := ca.NewCA(
-				App.Logger, &App.CAConfig, App.PasswordPrompt(), 1, nil)
+			rootCA, intermediateCA, err := ca.NewCA(params)
 			if err != nil {
 				App.Logger.Fatal(err)
 			}
@@ -133,8 +140,7 @@ or secure web services, mTLS, encryption, and perform identity management.`,
 
 		// --uninstal-ca
 		if CAUninstallCACert {
-			rootCA, intermediateCA, err := ca.NewCA(
-				App.Logger, &App.CAConfig, App.PasswordPrompt(), 1, nil)
+			rootCA, intermediateCA, err := ca.NewCA(params)
 			if err != nil {
 				App.Logger.Fatal(err)
 			}
@@ -201,8 +207,8 @@ or secure web services, mTLS, encryption, and perform identity management.`,
 					IPs:   ips,
 					Email: emails}}
 
-			// Hard coding random number generator for now
-			_, err = App.CA.IssueCertificate(request, App.PasswordPrompt())
+			_, err = App.CA.IssueCertificate(
+				request, []byte(CAPassword), []byte(TLSPassword))
 			if err != nil {
 				App.Logger.Error(err)
 			}

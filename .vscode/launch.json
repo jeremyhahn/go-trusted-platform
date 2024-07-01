@@ -48,12 +48,15 @@
             "preLaunchTask": "verifier_init",
             "program": "${workspaceRoot}",
             "args": ["verifier",
-                 "--debug",
-                 "--config-dir", "attestation/verifier/platform/etc",
-                 "--platform-dir", "attestation/attestor/platform",
-                 "--log-dir", "attestation/verifier/platform/logs",
-                 "--ca-dir", "attestation/verifier/platform/ca",
-                 "--attestor", "attestor.example.com"
+                "--debug",
+                "--ca-password", "ca-intermediate-password",
+                "--server-password", "server-password",
+                "--ak-password", "ak-password",
+                "--config-dir", "attestation/verifier/trusted-data/etc",
+                "--platform-dir", "attestation/attestor/trusted-data",
+                "--log-dir", "attestation/verifier/trusted-data/logs",
+                "--ca-dir", "attestation/verifier/trusted-data/ca",
+                "--attestor", "attestor.example.com"
             ],
             "debugAdapter": "legacy"
         }, {
@@ -66,12 +69,15 @@
             "host": "127.0.0.1",
             "program": "${workspaceRoot}",
             "args": ["verifier",
-                 "--debug",
-                 "--config-dir", "attestation/verifier/platform/etc",
-                 "--platform-dir", "attestation/attestor/platform",
-                 "--log-dir", "attestation/verifier/platform/logs",
-                 "--ca-dir", "attestation/verifier/platform/ca",
-                 "--attestor", "attestor.example.com"
+                "--debug",
+                "--ca-password", "ca-intermediate-password",
+                "--server-password", "server-password",
+                "--ak-password", "ak-password",
+                "--config-dir", "attestation/verifier/trusted-data/etc",
+                "--platform-dir", "attestation/attestor/trusted-data",
+                "--log-dir", "attestation/verifier/trusted-data/logs",
+                "--ca-dir", "attestation/verifier/trusted-data/ca",
+                "--attestor", "attestor.example.com"
             ],
             "debugAdapter": "legacy"
         }, {
@@ -85,12 +91,13 @@
             "preLaunchTask": "attestor_init",
             "program": "${workspaceRoot}",
             "args": ["attestor",
-                 "--debug",
-                // "--password", "#Trusted%secre3t.Se#",
-                 "--config-dir", "attestation/attestor/platform/etc",
-                 "--platform-dir", "attestation/attestor/platform",
-                 "--log-dir", "attestation/attestor/platform/logs",
-                 "--ca-dir", "attestation/attestor/platform/ca",
+                "--debug",
+                "--ca-password", "ca-intermediate-password",
+                "--server-password", "server-password",
+                "--config-dir", "attestation/attestor/trusted-data/etc",
+                "--platform-dir", "attestation/attestor/trusted-data",
+                "--log-dir", "attestation/attestor/trusted-data/logs",
+                "--ca-dir", "attestation/attestor/trusted-data/ca",
             ],
             "debugAdapter": "legacy"
         }, {
@@ -103,12 +110,13 @@
             "host": "127.0.0.1",
             "program": "${workspaceRoot}",
             "args": ["attestor",
-                 "--debug",
-               //  "--password", "test",
-                 "--config-dir", "attestation/attestor/platform/etc",
-                 "--platform-dir", "attestation/attestor/platform",
-                 "--log-dir", "attestation/attestor/platform/logs",
-                 "--ca-dir", "attestation/attestor/platform/ca",
+                "--debug",
+                "--ca-password", "ca-intermediate-password",
+                "--server-password", "server-password",
+                "--config-dir", "attestation/attestor/trusted-data/etc",
+                "--platform-dir", "attestation/attestor/trusted-data",
+                "--log-dir", "attestation/attestor/trusted-data/logs",
+                "--ca-dir", "attestation/attestor/trusted-data/ca",
             ],
             "debugAdapter": "legacy"
         }

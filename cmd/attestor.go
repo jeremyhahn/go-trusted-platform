@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	ATTPassword string
+// ATTPassword string
 )
 
 func init() {
@@ -22,12 +22,14 @@ var attestorCmd = &cobra.Command{
 	Long: `Starts the Attestor service to bebin listening for inbound
 verification requests from the Verifier to begin Full Remote Attestation`,
 	Run: func(cmd *cobra.Command, args []string) {
-		srkAuth := App.AttestationConfig.SRKAuth
-		if ATTPassword != "" {
-			// Override config with CLI argument if specified
-			srkAuth = ATTPassword
+		var caPassword, serverPassword []byte
+		if CAPassword != "" {
+			caPassword = []byte(CAPassword)
 		}
-		if _, err := attestor.NewAttestor(App, []byte(srkAuth)); err != nil {
+		if TLSPassword != "" {
+			serverPassword = []byte(TLSPassword)
+		}
+		if _, err := attestor.NewAttestor(App, caPassword, serverPassword); err != nil {
 			App.Logger.Fatal(err)
 		}
 		// Run forever
