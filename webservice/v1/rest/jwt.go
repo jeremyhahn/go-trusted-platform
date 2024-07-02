@@ -12,6 +12,7 @@ import (
 	jwt "github.com/dgrijalva/jwt-go"
 	"github.com/dgrijalva/jwt-go/request"
 	"github.com/jeremyhahn/go-trusted-platform/app"
+	"github.com/jeremyhahn/go-trusted-platform/ca"
 	"github.com/jeremyhahn/go-trusted-platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/webservice/v1/response"
@@ -75,7 +76,7 @@ func CreateJsonWebTokenService(
 func (jwtService *JWTService) privateKey() crypto.PrivateKey {
 	privKey, err := jwtService.app.CA.PrivKey(
 		// TODO: support pkcs8 and pkcs11 keys
-		jwtService.app.Domain, jwtService.app.Domain, nil)
+		jwtService.app.Domain, jwtService.app.Domain, nil, ca.PARTITION_ISSUED)
 	if err != nil {
 		jwtService.app.Logger.Fatal(err)
 	}

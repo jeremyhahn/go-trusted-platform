@@ -264,7 +264,7 @@ The `main` branch will always build and run. Try it out!
                     - [ ] Device Onboarding
             - [ ] Arduino
                 - [ ] ROM integrity check
-                - [ ] Platform firmeware
+                - [ ] Platform firmware
                 - [ ] Firmware flasher
                 - [ ] Device Provisioning
                 - [ ] Device Onboarding

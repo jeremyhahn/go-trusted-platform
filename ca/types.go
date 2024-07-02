@@ -35,6 +35,7 @@ const (
 	FSEXT_DER                       = ".cer"
 	FSEXT_CRL                       = ".crl"
 	FSEXT_SIG                       = ".sig"
+	FSEXT_DIGEST                    = ".digest"
 )
 
 var (
@@ -82,4 +83,43 @@ type CertificateStore interface {
 	TrustedCertificateFor(cert *x509.Certificate) (*x509.Certificate, error)
 	TrustsCA(cn string, partition Partition) (bool, error)
 	HasCRL(cn string) (bool, error)
+}
+
+func SupportedHashes() map[string]crypto.Hash {
+	hashes := make(map[string]crypto.Hash)
+	hashes["MD4"] = crypto.MD4
+	hashes["MD5"] = crypto.MD5
+	hashes["SHA1"] = crypto.SHA1
+	hashes["SHA224"] = crypto.SHA224
+	hashes["SHA256"] = crypto.SHA256
+	hashes["SHA384"] = crypto.SHA384
+	hashes["SHA512"] = crypto.SHA512
+	hashes["MD5SHA1"] = crypto.MD5SHA1
+	hashes["RIPEMD160"] = crypto.RIPEMD160
+	hashes["SHA3_224"] = crypto.SHA3_224
+	hashes["SHA3_256"] = crypto.SHA3_256
+	hashes["SHA3_384"] = crypto.SHA3_384
+	hashes["SHA3_512"] = crypto.SHA3_512
+	hashes["SHA512_224"] = crypto.SHA512_224
+	hashes["SHA512_256"] = crypto.SHA512_256
+	hashes["BLAKE2s_256"] = crypto.BLAKE2s_256
+	hashes["BLAKE2b_256"] = crypto.BLAKE2b_256
+	hashes["BLAKE2b_384"] = crypto.BLAKE2b_384
+	hashes["BLAKE2b_512"] = crypto.BLAKE2b_512
+	return hashes
+}
+
+func SupportedSignatureAlgorithms() map[string]x509.SignatureAlgorithm {
+	algos := make(map[string]x509.SignatureAlgorithm)
+	algos["SHA256WithRSA"] = x509.SHA256WithRSA
+	algos["SHA384WithRSA"] = x509.SHA384WithRSA
+	algos["SHA512WithRSA"] = x509.SHA512WithRSA
+	algos["ECDSAWithSHA256"] = x509.ECDSAWithSHA256
+	algos["ECDSAWithSHA384"] = x509.ECDSAWithSHA384
+	algos["ECDSAWithSHA512"] = x509.ECDSAWithSHA512
+	algos["SHA256WithRSAPSS"] = x509.SHA256WithRSAPSS
+	algos["SHA384WithRSAPSS"] = x509.SHA384WithRSAPSS
+	algos["SHA512WithRSAPSS"] = x509.SHA512WithRSAPSS
+	algos["PureEd25519"] = x509.PureEd25519
+	return algos
 }

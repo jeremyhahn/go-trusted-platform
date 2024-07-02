@@ -34,6 +34,8 @@ const (
 	infoClosingConnection = "tpm: closing connection"
 
 	blobStorePrefix = "tpm"
+	ekBlobName      = "endorsement-key"
+	akCertBlobName  = "attestation-key"
 )
 
 var (
@@ -56,11 +58,13 @@ var (
 )
 
 type TrustedPlatformModule2 interface {
+	BlobKey(domain, cn string) string
 	DebugPrimaryKey(key Key)
 	DebugAttestationKey(ak DerivedKey)
 	Random() ([]byte, error)
 	ImportTSSFile(ekCertPath string, verify bool) (*x509.Certificate, error)
-	ImportEK(domain, cn string, ekCert *x509.Certificate, verify bool) (*x509.Certificate, error)
+	ImportEKCert(domain, cn string, ekCert *x509.Certificate, verify bool) (*x509.Certificate, error)
+	ImportAKCert(service string, akDER []byte) error
 	ImportDER(domain, cn string, ekDER []byte, verify bool) (*x509.Certificate, error)
 	ImportPEM(domain, cn string, ekCertPEM []byte, verify bool) (*x509.Certificate, error)
 	HMACAuthSessionWithKey(srk Key, password []byte) (s tpm2.Session, close func() error, err error)
@@ -137,15 +141,14 @@ func NewTPM2(
 		return nil, ErrOpeningDevice
 	}
 
-	ekCertName := fmt.Sprintf("%s-ek", domain)
 	tpm := &TPM2{
 		logger:       logger,
 		debugSecrets: debugSecrets,
 		config:       config,
 		device:       f,
 		transport:    transport.FromReadWriter(f),
-		ekCertName:   ekCertName,
-		ekBlobKey:    fmt.Sprintf("%s/%s/%s", blobStorePrefix, domain, ekCertName),
+		ekCertName:   ekBlobName,
+		ekBlobKey:    fmt.Sprintf("%s/%s/%s", blobStorePrefix, domain, ekBlobName),
 		domain:       domain,
 		caPassword:   caPassword}
 
@@ -172,7 +175,6 @@ func NewSimulation(
 		logger.Error(err)
 		return nil, err
 	}
-	ekCertName := fmt.Sprintf("%s-ek", domain)
 
 	tpm := &TPM2{
 		logger:       logger,
@@ -181,8 +183,8 @@ func NewSimulation(
 		device:       nil,
 		simulator:    sim,
 		transport:    transport.FromReadWriter(sim),
-		ekCertName:   ekCertName,
-		ekBlobKey:    fmt.Sprintf("%s/%s/%s", blobStorePrefix, domain, ekCertName),
+		ekCertName:   ekBlobName,
+		ekBlobKey:    fmt.Sprintf("%s/%s/%s", blobStorePrefix, domain, ekBlobName),
 		domain:       domain,
 		caPassword:   caPassword}
 
@@ -321,13 +323,15 @@ func (tpm *TPM2) EKCert(ekHandle *tpm2.TPMHandle, srkAuth []byte) (*x509.Certifi
 	certPEM, err := tpm.ca.SignedData(tpm.ekBlobKey)
 	if err == nil {
 		// Perform integrity check on the cert
+		signerOpts, err := ca.NewSigningOpts(tpm.ca.Hash(), certPEM)
+		if err != nil {
+			return nil, err
+		}
 		verifyOpts := &ca.VerifyOpts{
-			KeyCN:              &tpm.domain,
-			KeyName:            &tpm.ekCertName,
 			BlobKey:            &tpm.ekBlobKey,
 			UseStoredSignature: true,
 		}
-		if err := tpm.ca.VerifySignature(certPEM, nil, verifyOpts); err != nil {
+		if err := tpm.ca.VerifySignature(signerOpts.Digest(), nil, verifyOpts); err != nil {
 			return nil, err
 		}
 		tpm.logger.Info("tpm: loading EK certificate from Certificate Authority")
@@ -407,18 +411,18 @@ func (tpm *TPM2) EKCert(ekHandle *tpm2.TPMHandle, srkAuth []byte) (*x509.Certifi
 
 	// Sign and save the EK certificate to the CA
 	tpm.logger.Infof("tpm: signing EK certificate and importing to Certificate Authority")
-	ekBlobKey := tpm.createEKCertBlobKey(tpm.domain, tpm.ekCertName)
-	signingOpts := &ca.SigningOpts{
-		KeyCN:          &tpm.domain,
-		KeyName:        &tpm.ekCertName,
-		BlobKey:        &ekBlobKey,
-		StoreSignature: true,
-	}
-	_, _, err = tpm.ca.Sign(certPEM, tpm.caPassword, signingOpts)
+	sigOpts, err := ca.NewSigningOpts(tpm.ca.Hash(), certPEM)
 	if err != nil {
 		return nil, err
 	}
-
+	blobKey := tpm.BlobKey(tpm.domain, tpm.ekCertName)
+	sigOpts.KeyCN = &tpm.domain
+	sigOpts.KeyName = &tpm.ekCertName
+	sigOpts.BlobKey = &blobKey
+	sigOpts.StoreSignature = true
+	if _, err = tpm.ca.Sign(tpm.random, sigOpts.Digest(), sigOpts); err != nil {
+		return nil, err
+	}
 	return cert, nil
 }
 
@@ -1544,7 +1548,7 @@ func (tpm *TPM2) ImportTSSFile(
 			tpm.logger.Error(err)
 			return nil, err
 		}
-		return tpm.ImportEK(tpm.domain, tpm.ekCertName, ekCert, verify)
+		return tpm.ImportEKCert(tpm.domain, tpm.ekCertName, ekCert, verify)
 	}
 
 	// Passed, encode the ASN.1 DER bytes to PEM
@@ -1553,7 +1557,7 @@ func (tpm *TPM2) ImportTSSFile(
 	// 	tpm.logger.Error(err)
 	// 	return nil, err
 	// }
-	return tpm.ImportEK(tpm.domain, tpm.ekCertName, ekCert, verify)
+	return tpm.ImportEKCert(tpm.domain, tpm.ekCertName, ekCert, verify)
 }
 
 // Imports a local or remote attestor EK certificate in raw ASN.1 DER form
@@ -1568,7 +1572,7 @@ func (tpm *TPM2) ImportDER(
 		tpm.logger.Error(err)
 		return nil, err
 	}
-	return tpm.ImportEK(domain, cn, ekCert, verify)
+	return tpm.ImportEKCert(domain, cn, ekCert, verify)
 }
 
 // Imports a local or remote attestor EK certificate in PEM form
@@ -1587,11 +1591,11 @@ func (tpm *TPM2) ImportPEM(
 		tpm.logger.Error(err)
 		return nil, err
 	}
-	return tpm.ImportEK(domain, cn, ekCert, verify)
+	return tpm.ImportEKCert(domain, cn, ekCert, verify)
 }
 
 // Imports a local or remote attestor x509 EK certificate
-func (tpm *TPM2) ImportEK(
+func (tpm *TPM2) ImportEKCert(
 	domain, cn string,
 	ekCert *x509.Certificate,
 	verify bool) (*x509.Certificate, error) {
@@ -1650,25 +1654,55 @@ func (tpm *TPM2) ImportEK(
 		tpm.logger.Debugf("tpm: successfully verified endorsement key certificate: %s", domain)
 	}
 
-	// Create a new signing key, sign the EK, and save to blob storage
-	// key, err := rootCA.NewSigningKey(domain, cn, tpm.caPassword, tpm.caPassword)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	ekBlobKey := tpm.createEKCertBlobKey(domain, cn)
-	signingOpts := &ca.SigningOpts{
-		// KeyCN:     &domain,
-		// KeyName:   &cn,
-		BlobKey:        &ekBlobKey,
-		StoreSignature: true,
-	}
-	_, _, err = tpm.ca.Sign(ekCertPEM, tpm.caPassword, signingOpts)
-	if err != nil {
+	tpm.logger.Debugf(string(ekCertPEM))
+
+	blobKey := tpm.BlobKey(domain, cn)
+	sigOpts, err := ca.NewSigningOpts(tpm.ca.Hash(), ekCertPEM)
+	sigOpts.BlobKey = &blobKey
+	sigOpts.BlobData = ekCertPEM
+	sigOpts.StoreSignature = true
+	if _, err = tpm.ca.Sign(tpm.random, sigOpts.Digest(), sigOpts); err != nil {
 		return nil, err
 	}
 	tpm.logger.Info("Endorsement Key (EK) successfully imported to Certificate Authority")
-
 	return ekCert, nil
+}
+
+// Imports an Attestation Key x509 certificate to the CA blob store
+func (tpm *TPM2) ImportAKCert(service string, akDER []byte) error {
+	// Build cert path
+	akCertPathDER := fmt.Sprintf(
+		"%s/%s%s",
+		service, akCertBlobName, ca.FSEXT_DER)
+	blobKeyDER := tpm.BlobKey(tpm.domain, akCertPathDER)
+
+	// Create signing options - store the cert, digest and checksum
+	sigOpts, err := ca.NewSigningOpts(tpm.ca.Hash(), akDER)
+	sigOpts.BlobKey = &blobKeyDER
+	sigOpts.BlobData = akDER
+	sigOpts.StoreSignature = true
+
+	// Sign the DER digest
+	if _, err = tpm.ca.Sign(tpm.random, sigOpts.Digest(), sigOpts); err != nil {
+		return err
+	}
+
+	// Encode the AK DER cert to PEM
+	akPEM, err := tpm.ca.EncodePEM(akDER)
+	if err != nil {
+		return err
+	}
+
+	// Save the PEM cert
+	akCertPathPEM := fmt.Sprintf(
+		"%s/%s.%s",
+		service, akCertBlobName, ca.FSEXT_PEM)
+	blobKeyPEM := tpm.BlobKey(tpm.domain, akCertPathPEM)
+	if err := tpm.ca.ImportBlob(blobKeyPEM, akPEM); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Reads all Platform Configuration Register (PCR) values
@@ -1876,8 +1910,9 @@ func (tpm *TPM2) downloadEKCertFromManufacturer() ([]byte, error) {
 // 	return fmt.Sprintf("%s/%s", blobStorePrefix, tpm.ekBlobKey)
 // }
 
-// Creates a new signed blob storage key for an attestor TPM
-func (tpm *TPM2) createEKCertBlobKey(domain, cn string) string {
+// Returns the relative path to the blob store for TPM objects
+// given a domain and common name for the object.
+func (tpm *TPM2) BlobKey(domain, cn string) string {
 	return fmt.Sprintf("%s/%s/%s", blobStorePrefix, domain, cn)
 }
 

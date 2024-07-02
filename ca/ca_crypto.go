@@ -1,8 +1,10 @@
 package ca
 
 import (
+	"crypto"
 	"crypto/rsa"
 	"crypto/sha256"
+	"io"
 )
 
 // Creates a new RSA encryption key for the requested common name and
@@ -10,7 +12,7 @@ import (
 // never returned from from the Certificate Authority, and are stored
 // in a separate partition / hierarchy for security and to provide
 // flexibility to backup, restore, and rotate keyes.
-func (ca *CA) NewEncryptionKey(cn, keyName string, password, caPassword []byte) (*rsa.PublicKey, error) {
+func (ca *CA) NewEncryptionKey(cn, keyName string, password, caPassword []byte) (*rsa.PrivateKey, error) {
 	// Check private key password and complexity requirements
 	encrypted := false
 	if ca.params.Config.RequirePrivateKeyPassword {
@@ -72,18 +74,24 @@ func (ca *CA) NewEncryptionKey(cn, keyName string, password, caPassword []byte) 
 		ca.params.Logger.Error(err)
 		return nil, err
 	}
-	// Sign: sign the public key to make it verifiable
-	sig, _, err := ca.Sign(pubPEM, caPassword, nil)
+	// Sign: sign the public key with the CA public key to make it verifiable
+	sigKey := NewSigningKey(ca.params.Logger, ca, caPassword, &privateKey.PublicKey)
+	sigOpts, err := NewSigningOpts(ca.Hash(), pubPEM)
+	if err != nil {
+		ca.params.Logger.Error(err)
+		return nil, err
+	}
+	sig, err := sigKey.Sign(ca.params.Random, sigOpts.Digest(), sigOpts)
 	if err != nil {
 		return nil, err
 	}
-	// Sign: Save the public key signature with the keys
+	// Sign: Save the signature with the keys
 	err = ca.certStore.SaveKeyed(cn, keyName, sig, PARTITION_ENCRYPTION_KEYS, FSEXT_SIG)
 	if err != nil {
 		ca.params.Logger.Error(err)
 		return nil, err
 	}
-	return &privateKey.PublicKey, nil
+	return privateKey, nil
 }
 
 // Returns the RSA public key for the requested common name / key from the
@@ -99,6 +107,24 @@ func (ca *CA) EncryptionKey(cn, keyName string) (*rsa.PublicKey, error) {
 		return nil, err
 	}
 	return rsaPub.(*rsa.PublicKey), nil
+}
+
+// Returns a crypto.Decrypter implementation for PKCS #8 private keys
+func (ca *CA) DecryptionKey(cn, keyName string, password []byte) (crypto.Decrypter, error) {
+	privDER, err := ca.certStore.GetKeyed(
+		cn, keyName, PARTITION_ENCRYPTION_KEYS, FSEXT_PRIVATE_PKCS8)
+	if err != nil {
+		return nil, err
+	}
+	privKey, err := ca.ParsePrivateKey(privDER, password)
+	if err != nil {
+		return nil, err
+	}
+	rsaPriv, ok := privKey.(*rsa.PrivateKey)
+	if !ok {
+		return nil, ErrInvalidPrivateKeyRSA
+	}
+	return NewPKCS8Decrypter(ca.params.Random, ca.Hash(), ca, rsaPriv), nil
 }
 
 // Encrypts the requested data using RSA Optimal Asymetric Encryption
@@ -128,4 +154,19 @@ func (ca *CA) RSADecrypt(cn, keyName string, password, ciphertext []byte) ([]byt
 	}
 	privKey := priv.(*rsa.PrivateKey)
 	return rsa.DecryptOAEP(sha256.New(), ca.params.Random, privKey, ciphertext, nil)
+}
+
+// Decrypts a message using the Certificate Authority private key
+// Implements crypto.Decrypter
+func (ca *CA) Decrypt(rand io.Reader, msg []byte, opts crypto.DecrypterOpts) (plaintext []byte, err error) {
+	priv, err := ca.CAPrivKey(ca.params.Password)
+	if err != nil {
+		ca.params.Logger.Error(priv)
+		return nil, err
+	}
+	rsaPriv, ok := priv.(*rsa.PrivateKey)
+	if !ok {
+		return nil, ErrInvalidPrivateKeyRSA
+	}
+	return rsaPriv.Decrypt(rand, msg, opts)
 }

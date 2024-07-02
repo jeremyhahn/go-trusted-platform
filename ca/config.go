@@ -7,11 +7,15 @@ type Config struct {
 	Identity                  []Identity `yaml:"identity" json:"identity" mapstructure:"identity"`
 	ValidDays                 int        `yaml:"issued-valid-days" json:"issued-valid-days" mapstructure:"issued-valid-days"`
 	IncludeLocalhostInSANS    bool       `yaml:"sans-include-localhost" json:"sans-include-localhost" mapstructure:"sans-include-localhost"`
-	DefaultKeyAlgorithm       string     `yaml:"default-key-algorithm" json:"default-key-algorithm" mapstructure:"default-key-algorithm"`
+	KeyAlgorithm              string     `yaml:"key-algorithm" json:"key-algorithm" mapstructure:"key-algorithm"`
+	KeyStore                  string     `yaml:"key-store" json:"key-store" mapstructure:"key-store"`
+	Hash                      string     `yaml:"hash" json:"hash" mapstructure:"hash"`
+	RSAScheme                 string     `yaml:"rsa-scheme" json:"rsa-scheme" mapstructure:"rsa-scheme"`
 	EllipticalCurve           string     `yaml:"elliptic-curve" json:"elliptic-curve" mapstructure:"elliptic-curve"`
 	RequirePrivateKeyPassword bool       `yaml:"require-pkcs8-password" json:"require-pkcs8-password" mapstructure:"require-pkcs8-password"`
 	PasswordPolicy            string     `yaml:"password-policy" json:"password-policy" mapstructure:"password-policy"`
 	RetainRevokedCertificates bool       `yaml:"retain-revoked-certificates" json:"retain-revoked-certificates" mapstructure:"retain-revoked-certificates"`
+	SignatureAlgorithm        string     `yaml:"signature-algorithm" json:"signature-algorithm" mapstructure:"signature-algorithm"`
 }
 
 type Identity struct {

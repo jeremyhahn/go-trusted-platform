@@ -122,16 +122,22 @@ attestation:
 # Trusted Platform Module
 tpm:
   device: /dev/tpmrm0
+
   # Encrypt CPU <-> TPM bus communication
   encrypt-sessions: true
+  
   # Use TPM for entropy operations (random source)
   entropy: true
+  
   # Location of EK cert in NVRAM
   ek-cert-index: 0x01C00002
+  
   # Name of EK cert (if loading from file system / tpm2_getekcertificate)
   ek-cert: ECcert.bin
+  
   # Use TPM Simulator instead of real TPM
   simulator: true
+  
   # Automatically import EK Platform (Manufacturer) Certificate(s) into trust store
   auto-import-ek-certs: true
 
@@ -140,19 +146,24 @@ tpm:
 certificate-authority:
   # The Certifiate Authority home directory
   home: trusted-data/ca
+  
   # Automatically download and import Issuing CAs
   # when importing leaf certificates, so the leaf
   # can be verified.
   auto-import-issuing-ca: true
+  
   # Use the Operating System trusted certificate store
   # when verifying certificates. If disabled, only
   # certificates in the Certificate Authority will be
   # trusted and used for verifying leaf certificates.
   system-cert-pool: true
+  
   # How long issued client certificates are valid (days)
   issued-valid: 365
+  
   # Set to true to include "localhost" in SANS names
   sans-include-localhost: true
+  
   # Delete revoked certificates. They can be safely
   # discarded after revocation, but you may want them
   # retained, for example, some external audit process,
@@ -160,19 +171,43 @@ certificate-authority:
   # revoked without having to parse the CA's Revocation
   # List.
   delete-revoked-certificates: true
+  
+  # The private key store.
+  # PKCS #8 file store is the only supported store at this time
+  key-store: PKCS8
+
+  # The default hash function for signing and encryption opreations
+  # Supported hash functions: Any valid crypto.Hash
+  # https://pkg.go.dev/crypto#Hash
+  hash: SHA256
+
+  # Default RSA padding scheme for RSA keys
+  # Supported schemes: RSA_PSS | RSA_PKCS1v15
+  rsa-scheme: RSA_PSS
+ 
   # The default algorithm to use when creating keys and certificates
   # Supported algorithms: RSA, ECC
-  default-key-algorithm: ECC
+  key-algorithm: RSA
+
+  # The default signature algorithm
+  # Any fully supported Go x509 SignatureAlgorithm:
+  # https://pkg.go.dev/crypto/x509#SignatureAlgorithm
+  signature-algorithm: SHA256WithRSA
+  
   # The Elliptical Curve Cryptography Curve
   # Supported curves: P224, P256, P384, P521
   elliptic-curve: P256
+  
   # Requires passwords for private keys (FIPS 140-3)
   require-pkcs8-password: true
+  
   # The password policy for private key passwords. Set to "inherit"
   # to use the global password policy.
   password-policy: inherit
+  
   # True to retain revoked certificates, false to delete
   retain-revoked-certificates: true
+  
   # The Certificate Authority identity
   identity:
   - key-size: 2048

@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestNewEncryptionWithPassword(t *testing.T) {
+func TestNewEncryptionKeyWithPassword(t *testing.T) {
 
 	config, err := defaultConfig()
 	assert.Nil(t, err)

@@ -2,6 +2,7 @@ package attestor
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"sync"
 
@@ -42,6 +43,7 @@ func NewSecureAttestor(attestor Attestor, app *app.App, srkAuth []byte) *SecureA
 	return &SecureAttestor{
 		attestor:     attestor,
 		config:       app.AttestationConfig,
+		domain:       app.Domain,
 		logger:       app.Logger,
 		ca:           app.CA,
 		tpm:          app.TPM,
@@ -188,7 +190,16 @@ func (s *SecureAttestor) AcceptCertificate(
 
 	s.logConnection(ctx, "AcceptCertificate")
 
-	if err := s.ca.ImportDER(s.domain, in.Certificate); err != nil {
+	// Parse the certificate to make sure its valid
+	cert, err := x509.ParseCertificate(in.Certificate)
+	if err != nil {
+		s.logger.Error(err)
+		return nil, err
+	}
+
+	// Import the certificate to the CA
+	err = s.tpm.ImportAKCert(cert.Issuer.CommonName, in.Certificate)
+	if err != nil {
 		s.logger.Error(err)
 		return nil, err
 	}
