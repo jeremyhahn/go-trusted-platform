@@ -1,14 +1,14 @@
 ![alt text](https://github.com/jeremyhahn/go-trusted-platform/blob/main/logo.png?raw=true)
 
 
-The `Trusted Platform` uses a [Trusted Platform Module (TPM)](https://en.wikipedia.org/wiki/Trusted_Platform_Module), [Secure Boot](https://en.wikipedia.org/wiki/UEFI), and a provided [Certificate Authority](https://en.wikipedia.org/wiki/Certificate_authority) to establish a Platform Root of Trust, perform Local and [Remote Attestation](https://tpm2-software.github.io/tpm2-tss/getting-started/2019/12/18/Remote-Attestation.html), encryption, signing, x509 certificate management, data integrity and more.
+The `Trusted Platform` uses a [Trusted Platform Module (TPM)](https://en.wikipedia.org/wiki/Trusted_Platform_Module), [Secure Boot](https://en.wikipedia.org/wiki/UEFI), and a provided [Certificate Authority](https://en.wikipedia.org/wiki/Certificate_authority) to establish a Platform Root of Trust, perform Local and [Remote Attestation](https://tpm2-software.github.io/tpm2-tss/getting-started/2019/12/18/Remote-Attestation.html), encryption, signing, x509 certificate management, data integrity, intrusion detection, licensing and more.
 
 
 ## Components
 
 The main components of this project are:
 
-#### Trusted Platform Module
+### Trusted Platform Module
 
 The Trusted Platform Module (TPM) technology is designed to provide hardware-based,
 security-related functions. A TPM chip is a secure crypto-processor that is designed
@@ -24,7 +24,7 @@ The Trusted Platform Module (TPM) provides:
 
 - Remote attestation: Creates a nearly unforgeable hash key summary of the hardware and software configuration. One could use the hash to verify that the hardware and software have not been changed. The software in charge of hashing the setup determines the extent of the summary
 
-- Binding: Data is encrypted using the TPM bind key, a unique RSA key descended from a storage key. Computers that incorporate a TPM can create cryptographic keys and encrypt them so that they can only be decrypted by the TPM. This process, often called wrapping or binding a key, can help protect the key from disclosure. Each TPM has a master wrapping key, called the storage root key, which is stored within the TPM itself. User-level RSA key containers are stored with the Windows user profile for a particular user and can be used to encrypt and decrypt information for applications that run under that specific user identity
+- Binding: Data is encrypted using the TPM bind key, a unique RSA key descended from a storage key. Computers that incorporate a TPM can create cryptographic keys and encrypt them so that they can only be decrypted by the TPM. This process, often called wrapping or binding a key, can help protect the key from disclosure. Each TPM has a master wrapping key, called the storage root key, which is stored within the TPM itself. User-level RSA key containers are stored in a user profile for a particular user and can be used to encrypt and decrypt information for applications that run under that specific user identity
 
 - Sealed storage: Specifies the TPM state for the data to be decrypted (unsealed)
 
@@ -32,13 +32,35 @@ The Trusted Platform Module (TPM) provides:
 
 Computer programs can use a TPM for the authentication of hardware devices, since each TPM chip has a unique and secret Endorsement Key (EK) burned in as it is produced. Security embedded in hardware provides more protection than a software-only solution. Its use is restricted in some countries.
 
-#### Secure Boot
+##### Key Features and Benefits
+
+* High-end security controller with advanced cryptographic algorithms implemented in hardware (e.g. RSA & ECC256, SHA-256)
+* Common Criteria (EAL4+) and FIPS security certification
+* Flexible integration (SPI, I2C or LPC interface support)
+* Reduced risk based on proven technology
+* Fast time to market through concept reuse
+* Easy integration into all platform architectures and operating systems (Windows, Linux & derivatives)
+
+##### Use Cases
+
+* Automatic device onboarding
+* Device health attestation
+* Device identity for network access control
+* Secret (configuration data, IP, and etc) protection
+* Secured communication with TLS
+* Secured firmware update
+* Secured key storage
+* Verification of device authenticity
+* Licensing
+
+
+### Secure Boot
 
 The UEFI specification defines a protocol known as Secure Boot, which can secure the boot process by preventing the loading of UEFI drivers or OS boot loaders that are not signed with an acceptable digital signature. The mechanical details of how precisely these drivers are to be signed are not specified. When Secure Boot is enabled, it is initially placed in "setup" mode, which allows a public key known as the "platform key" (PK) to be written to the firmware. Once the key is written, Secure Boot enters "User" mode, where only UEFI drivers and OS boot loaders signed with the platform key can be loaded by the firmware. Additional "key exchange keys" (KEK) can be added to a database stored in memory to allow other certificates to be used, but they must still have a connection to the private portion of the platform key. Secure Boot can also be placed in "Custom" mode, where additional public keys can be added to the system that do not match the private key.
 
 Secure Boot is supported by Windows 8 and 8.1, Windows Server 2012 and 2012 R2, Windows 10, Windows Server 2016, 2019, and 2022, and Windows 11, VMware vSphere 6.5 and a number of Linux distributions including Fedora (since version 18), openSUSE (since version 12.3), RHEL (since version 7), CentOS (since version 7), Debian (since version 10), Ubuntu (since version 12.04.2), Linux Mint (since version 21.3)., and AlmaLinux OS (since version 8.4). As of January 2024, FreeBSD support is in a planning stage.
 
-#### Certificate Authority
+### Certificate Authority
 
 In cryptography, a certificate authority or certification authority (CA) is an entity that stores, signs, and issues digital certificates. A digital certificate certifies the ownership of a public key by the named subject of the certificate. This allows others (relying parties) to rely upon signatures or on assertions made about the private key that corresponds to the certified public key. A CA acts as a trusted third party—trusted both by the subject (owner) of the certificate and by the party relying upon the certificate. The format of these certificates is specified by the X.509 or EMV standard. 
 
@@ -57,7 +79,7 @@ The traffic between the CPU <-> TPM bus can also be encrypted to help protect ag
 
 The default configuration for the Trusted Platform is "use the most secure configuration possible". Use the configuration file to tune and optimize the platform.
 
-#### Flow
+##### Flow
 
 The following steps are used to complete device registration, identity validation, platform software state validation, and service delivery.
 
@@ -78,7 +100,7 @@ The following steps are used to complete device registration, identity validatio
 ![Service Delivery](https://tpm2-software.github.io/images/tpm2-attestation-demo/service-delivery.png)
 
 
-## Compatibility
+### Compatibility
 
 This project makes use of the new [go-tpm/tpm2](https://github.com/google/go-tpm) "TPMDirect" TPM 2.0 API introduced in v0.9.0.
 
@@ -86,6 +108,7 @@ As the complimentary [go-tpm-tools](https://github.com/google/go-tpm-tools) and 
 
 When the go-tpm-tools and go-attestation libraries catches up to the latest go-tpm/tpm2 TPMDirect API, the forked code in this repo will be replaced with the latest versions of those libraries.
 
+Linux is the only platform being developed on and supported at this time. As Go is a portable language, it will likely run fine on Mac and Windows, however, [Windows will not support the future planned plugin architecture](https://pkg.go.dev/plugin).
 
 ## Documentation
 
@@ -96,7 +119,27 @@ The `docs` folder provides links to resources with detailed information about ho
 
 This project aims to follow best practices and guidance issued by the TCG and NIST to provide everything necessary to provision, manage and run a trusted computing platform on Linux at scale:
 
-1. [TCG-TPM-v2.0-Provisioning-Guidance](https://trustedcomputinggroup.org/wp-content/uploads/TCG-TPM-v2.0-Provisioning-Guidance-Published-v1r1.pdf#page=39&zoom=100,73,501)
+
+#### TCG
+
+1. [TCG TPM v2.0 Provisioning Guidance](https://trustedcomputinggroup.org/wp-content/uploads/TCG-TPM-v2.0-Provisioning-Guidance-Published-v1r1.pdf#page=39&zoom=100,73,501)
+
+2. [TCG Guidance for Securing Network Equipment Using TCG Technology](https://trustedcomputinggroup.org/wp-content/uploads/TCG_Guidance_for_Securing_NetEq_1_0r29.pdf)
+
+3. [TCG Guidance for Secure Update of Software and Firmware on Embedded Systems](https://trustedcomputinggroup.org/wp-content/uploads/TCG-Secure-Update-of-SW-and-FW-on-Devices-v1r72_pub.pdf)
+
+4. 
+
+#### NIST
+
+1. [BIOS Protection Guidelines](https://nvlpubs.nist.gov/nistpubs/legacy/sp/nistspecialpublication800-147.pdf)
+
+2. [BIOS Protection Guidelines for Servers](https://nvlpubs.nist.gov/nistpubs/specialpublications/nist.sp.800-147b.pdf)
+
+
+#### FIPS
+
+1. [Security Requirements for Cryptographic Modules](https://csrc.nist.gov/pubs/fips/140-3/final)
 
 
 ## Status
@@ -110,7 +153,7 @@ The `main` branch will always build and run. Try it out!
     - [ ] Certificate Authority
         - [ ] Key Storage
             - [x] [PKCS 1](https://en.wikipedia.org/wiki/PKCS_1)
-            - [x] [PKCS 8](https://en.wikipedia.org/wiki/PKCS_8) (local file storage)
+            - [x] [PKCS 8](https://en.wikipedia.org/wiki/PKCS_8)
             - [ ] [PKCS 11](https://en.wikipedia.org/wiki/PKCS_11)
         - [x] Key Storage Backends
             - [x] File storage
@@ -121,7 +164,7 @@ The `main` branch will always build and run. Try it out!
         - [x] Root CA
         - [x] Intermediate CA(s)
         - [x] x509 Certificates (RSA & ECC )
-        - [x] Certificate & Key key storage / retrieval
+        - [x] Certificate & Key storage & retrieval
         - [x] Private trusted root certificate store
         - [x] Private trusted intermediate certificate store
         - [x] Distinct TLS, encryption & signing keys
@@ -268,3 +311,28 @@ The `main` branch will always build and run. Try it out!
                 - [ ] Firmware flasher
                 - [ ] Device Provisioning
                 - [ ] Device Onboarding
+    - [ ] DNS Server
+        - [ ] Automatic edge device registration
+    - [ ] High Availability
+        - [ ] Gossip [(Partition Tolerance & Availability)](https://en.wikipedia.org/wiki/CAP_theorem)
+            - [ ] Real-time network statistics
+            - [ ] Health checking and monitoring
+            - [ ] WAN Replication
+        - [ ] Raft [(Consistency & Availability)]((https://en.wikipedia.org/wiki/CAP_theorem))
+            - [ ] LAN Replication
+    - [ ] Intrusion Detection / Tamper Resistance
+        - [ ] Detect unauthorized software or hardware changes
+        - [ ] Configurable automated event based response mechanisms
+            - [ ] Platform shutdown
+            - [ ] Unmount luks container (re-sealing the platform)
+            - [ ] Delete luks volume & platform binary
+
+## Support
+
+Please consider supporting this project for ongoing success and sustainability. I'm a passionate open source contributor making a professional living creating free, secure, scalable, robust, enterprise grade, distributed systems and cloud native solutions.
+
+I'm also available for international consulting opportunities. Please let me know how I can assist you or your organization in achieving your desired security posture and technology goals.
+
+https://github.com/sponsors/jeremyhahn
+
+https://www.linkedin.com/in/jeremyhahn
