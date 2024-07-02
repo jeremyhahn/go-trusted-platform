@@ -67,21 +67,26 @@ In cryptography, a certificate authority or certification authority (CA) is an e
 
 ## Architecture
 
-This Trusted Platform relies on secure boot and the TPM to record measurements that guarantee the integrity of every critical piece of firmware, drivers, and software used to boot into the Operating System.
+This Trusted Platform relies on Secure Boot and the TPM to record measurements that guarantee the integrity of every critical piece of firmware, drivers, and software used to boot into the Operating System.
 
-The Trusted Platform takes over after the Operating System has booted, and extends the trusted execution environment to any application that integrates with it. The Trusted Platform provides a way for servers and clients to prove their identities, attest to operating system and software states / configurations, enforce network policies, and provide secure key management to connected devices.
+The Trusted Platform takes over after the Operating System has booted, and extends the trusted execution environment to any application that integrates with it. The Trusted Platform provides a way for servers and clients to prove their identities, attest to operating system software states & configurations, enforce network policies, and provide secure key management to connected devices.
 
-In addition to platform integrity, the included Certificate Authority establishes a Public Key Infrastructure (PKI) that's used to issue TLS and digital certificates for any service / device on the network.
+In addition to platform integrity, the included Certificate Authority establishes a Public Key Infrastructure (PKI) that's used to issue TLS and digital certificates for any service or device on the network.
 
-Private keys generated and used by the Trusted Platform and the applications that integrate with it, are delegated to the Certificate Authority, which relies on the TPM for secure private key generation and storage. In addition, the TPM has a true random generator, which the Certificate Authority can be configured to use during certificate generation (the default mode) instead of the random source provided by the Operating System.
+Private keys generated and used by the Trusted Platform (and the applications that integrate with it), are managed by the Certificate Authority, which uses the TPM and/or 
+[Hardware Security Modules](https://csrc.nist.gov/glossary/term/hardware_security_module_hsm) for secure private key generation and storage. 
 
-The traffic between the CPU <-> TPM bus can also be encrypted to help protect against side-channel and hardware based attacks.
+TPM 2.0 has a true Random Number Generator (RNG), which the Certificate Authority can be configured to use during private key and signing operations (the default) instead of the random source provided by the Operating System.
 
-The default configuration for the Trusted Platform is "use the most secure configuration possible". Use the configuration file to tune and optimize the platform.
+The traffic between the CPU <-> TPM bus supports encryption to help protect against side-channel and other hardware based attacks.
+
+The platform configuration file provides examples and documentation on how to tune and optimize the platform according to your desired security posture and application requirements.
+
 
 ##### Flow
 
-The following steps are used to complete device registration, identity validation, platform software state validation, and service delivery.
+The following steps are used to complete device registration, identity validation, platform software state validation, and service delivery, as illustrated on [Remote Attestation With Tpm2 Tools](https://tpm2-software.github.io/2020/06/12/Remote-Attestation-With-tpm2-tools.html).
+
 
 ###### Device Registration
 
@@ -114,12 +119,18 @@ Linux is the only platform being developed on and supported at this time. As Go 
 
 The `docs` folder provides links to resources with detailed information about how the internals of the TPM and various other components used in this project work, along with examples of how to use the software included in this repository.
 
-As this is a work in progress, and complex project, I will continue to update the docs to capture as much information on relevant topics as possible, and continue to update this README to reflect the road map and current status of features.
+As this is a work in progress, complex project, and many resources on uses cases and implementation details using the TPM are incomplete, scarce, inconsistent, old, and some just plain wrong, I will continue to update the docs to capture as much information on relevant topics as possible, and continue to update this README to reflect the road map and current status of the project.
 
 
 ## Road Map
 
-This project aims to be FIPS compliant and follow all best practices and guidance issued by the TCG and NIST to provide everything necessary to provision, manage, scale and secure a trusted service provider platform on-prem, in the cloud, or hybrid environment.
+This project aims to be FIPS compliant and follows best practices and guidance issued by the TCG and NIST to provide everything necessary to provision, manage, scale and secure a trusted service provider platform and it's clients on-prem, in the cloud, or hybrid environment.
+
+The Trusted Platform is also supporting it's own cloud - an experimental mode, running as a globally distributed network powered by it's users, similar to Bitcoin.
+
+The stimulus for this project is an [Agricultural IoT Platform](https://github.com/jeremyhahn/go-cropdroid) I've been working on for a few years. I'll be cherry picking code from several repositories in the "cropdroid" family, combined with new pixie dust, to create a robust, general purpose web services and IoT platform that can be used to host and secure many different types of applications and deployment scenerios, from public service providers to corporate IT systems and home networks.
+
+The initial use case I'm supporting is a local farmers market that runs as an open, distributed network that any user can join, including hardware and software to automate physical cultivation processes and laborious tasks, provide detailed logs and data points on every aspect of the cultivation process, for example, reports on organically produced products, an integrated shopping cart system to sell harvests, and a rich ecosystem for collaboration and e-commerce, connecting farmers and organic consumers around the world. [An Android app](https://github.com/jeremyhahn/cropdroid-android) provides the ability to receive real-time alerts and notifications, monitor and control hardware devices, provide shopping cart features, and connect with and collaborate with other users on the network, including resource sharing (data replication, backups, WAN clustering / load balancing) and lots of other cool stuff.
 
 
 #### TCG
