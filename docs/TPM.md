@@ -109,18 +109,6 @@ https://pkg.go.dev/crypto#Decrypter
 https://pkg.go.dev/crypto/rsa#PrivateKey.Decrypt
 
 
-```
-var decrypter crypto.Decrypter
-decrypter = <implement this>
-
-cert := &tls.Certificate{}
-cert.<other fields>
-cert.PrivateKey = decrypter
-
-conn, err := tls.Dial("tcp", "127.0.0.1:443", &tls.Config{
-	Certificates: []{cert},
-})
-```
 
 #### Misc
 
