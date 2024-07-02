@@ -420,6 +420,7 @@ func Test_SigningKey_SignAndVerify_RSA_PKCS1v15_WithStorage(t *testing.T) {
 	opts.KeyCN = &keyCN
 	opts.KeyName = &keyName
 	opts.BlobKey = &blobKey
+	opts.BlobData = data
 	opts.StoreSignature = true
 
 	verifyOpts := &VerifyOpts{

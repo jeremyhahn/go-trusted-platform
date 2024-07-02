@@ -218,7 +218,7 @@ clean:
 		$(VERIFIER_DIR)/$(PLATFORM_DIR)
 
 
-test: test-ca test-tpm
+test: test-ca test-tpm test-hash
 
 test-ca:
 	cd ca && go test -v
@@ -227,6 +227,8 @@ test-tpm:
 	cp $(EK_CERT_NAME) tpm2/
 	cd tpm2 && go test -v
 
+test-hash:
+	cd hash && go test -v
 
 proto:
 	cd $(ATTESTATION_DIR) && $(PROTOC) \
