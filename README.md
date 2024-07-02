@@ -114,10 +114,12 @@ Linux is the only platform being developed on and supported at this time. As Go 
 
 The `docs` folder provides links to resources with detailed information about how the internals of the TPM and various other components used in this project work, along with examples of how to use the software included in this repository.
 
+As this is a work in progress, and complex project, I will continue to update the docs to capture as much information on relevant topics as possible, and continue to update this README to reflect the road map and current status of features.
+
 
 ## Road Map
 
-This project aims to follow best practices and guidance issued by the TCG and NIST to provide everything necessary to provision, manage and run a trusted computing platform on Linux at scale:
+This project aims to follow best practices and guidance issued by the TCG and NIST to provide everything necessary to provision, manage and run a trusted computing platform on Linux at scale, either on-prem or in the cloud:
 
 
 #### TCG
@@ -128,7 +130,6 @@ This project aims to follow best practices and guidance issued by the TCG and NI
 
 3. [TCG Guidance for Secure Update of Software and Firmware on Embedded Systems](https://trustedcomputinggroup.org/wp-content/uploads/TCG-Secure-Update-of-SW-and-FW-on-Devices-v1r72_pub.pdf)
 
-4. 
 
 #### NIST
 
@@ -313,19 +314,23 @@ The `main` branch will always build and run. Try it out!
                 - [ ] Device Onboarding
     - [ ] DNS Server
         - [ ] Automatic edge device registration
+        - [ ] Dynamic DNS updates
     - [ ] High Availability
         - [ ] Gossip [(Partition Tolerance & Availability)](https://en.wikipedia.org/wiki/CAP_theorem)
-            - [ ] Real-time network statistics
+            - [ ] Real-time platform network statistics
             - [ ] Health checking and monitoring
-            - [ ] WAN Replication
-        - [ ] Raft [(Consistency & Availability)]((https://en.wikipedia.org/wiki/CAP_theorem))
-            - [ ] LAN Replication
-    - [ ] Intrusion Detection / Tamper Resistance
+            - [ ] WAN Database Replication
+            - [ ] Automated provisioning event system
+        - [ ] Raft [(Consistency & Availability)](https://en.wikipedia.org/wiki/CAP_theorem)
+            - [ ] LAN Database Replication
+    - [ ] Intrusion Detection
         - [ ] Detect unauthorized software or hardware changes
-        - [ ] Configurable automated event based response mechanisms
-            - [ ] Platform shutdown
-            - [ ] Unmount luks container (re-sealing the platform)
-            - [ ] Delete luks volume & platform binary
+        - [ ] Tamper Resistance
+            - [ ] Pluggable event based response mechanisms
+                - [ ] Platform shutdown
+                - [ ] Unmount luks container (re-sealing the platform)
+                - [ ] Delete luks volume & platform binary
+                - [ ] Wipe file system
 
 ## Support
 
