@@ -119,7 +119,7 @@ As this is a work in progress, and complex project, I will continue to update th
 
 ## Road Map
 
-This project aims to follow best practices and guidance issued by the TCG and NIST to provide everything necessary to provision, manage and run a trusted computing platform on Linux at scale, either on-prem or in the cloud:
+This project aims to be FIPS compliant and follow all best practices and guidance issued by the TCG and NIST to provide everything necessary to provision, manage, scale and secure a trusted service provider platform on-prem, in the cloud, or hybrid environment.
 
 
 #### TCG
@@ -140,7 +140,23 @@ This project aims to follow best practices and guidance issued by the TCG and NI
 
 #### FIPS
 
-1. [Security Requirements for Cryptographic Modules](https://csrc.nist.gov/pubs/fips/140-3/final)
+1. [FIPS 140-3: Security Requirements for Cryptographic Modules](https://csrc.nist.gov/pubs/fips/140-3/final)
+
+2. [FIPS 180-4: Secure Hash Standard (SHS)](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.180-4.pdf)
+
+3. [FIPS 186-5: Digital Signature Standard (DSS)](https://csrc.nist.gov/pubs/fips/186-5/finalf)
+
+4. [FIPS 197: Advanced Encryption Standard (AES)](https://csrc.nist.gov/pubs/fips/197/final)
+
+5. [FIPS 198-1: The Keyed-Hash Message Authentication Code (HMAC)](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.198-1.pdf)
+
+6. [FIPS 199: Standards for Security Categorization of Federal Information and Information Systems](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.199.pdf)
+
+7. [FIPS 200: Minimum Security Requirements for Federal Information and Information Systems](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.200.pdf)
+
+8. [FIPS 201-2: Personal Identity Verification (PIV) of Federal Employees and Contractors](https://csrc.nist.gov/pubs/fips/201-2/final)
+
+9. [FIPS 202: SHA-3 Standard: Permutation-Based Hash and Extendable-Output Functions](https://csrc.nist.gov/pubs/fips/202/final)
 
 
 ## Status
@@ -164,7 +180,7 @@ The `main` branch will always build and run. Try it out!
                 - [ ] [YubiKey](https://www.yubico.com/)
         - [x] Root CA
         - [x] Intermediate CA(s)
-        - [x] x509 Certificates (RSA & ECC )
+        - [x] x509 Certificates (RSA & ECC)
         - [x] Certificate & Key storage & retrieval
         - [x] Private trusted root certificate store
         - [x] Private trusted intermediate certificate store
