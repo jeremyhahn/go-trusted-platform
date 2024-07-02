@@ -3,6 +3,7 @@ package verifier
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
@@ -460,7 +461,7 @@ func (verifier *Verification) ActivateCredential(
 		return nil, ErrInvalidCredential
 	}
 
-	verifier.logger.Error("verifier: Credential activation successful")
+	verifier.logger.Info("verifier: Credential activation successful")
 
 	var certDER []byte
 	if verifier.config.AllowOpenEnrollment {
@@ -570,20 +571,30 @@ func (verifier *Verification) importAndSignAK(ak tpm2.DerivedKey) error {
 		CreationData:   ak.CreationData,
 		CreationTicket: ak.CreationTicket,
 	}
-	akNameBlobKey := fmt.Sprintf("tpm/%s/attestation-key.bin", verifier.attestor)
+	akCN := "tpm-attestation-key"
+	akNameBlobKey := fmt.Sprintf("tpm/%s/%s.bin", verifier.attestor, akCN)
+
+	// Encode the cert to a blob
 	akBuffer := &bytes.Buffer{}
 	encoder := gob.NewEncoder(akBuffer)
 	if err := encoder.Encode(_ak); err != nil {
 		verifier.logger.Error(err)
 		return err
 	}
-	signingOpts := &ca.SigningOpts{
-		BlobKey:        &akNameBlobKey,
-		StoreSignature: true,
-	}
-	_, _, err := verifier.ca.Sign(akBuffer.Bytes(), verifier.caPassword, signingOpts)
+
+	// Create new signing key
+	key, err := verifier.ca.NewSigningKey(
+		verifier.domain, akCN, verifier.caPassword)
 	if err != nil {
-		verifier.logger.Error(err)
+		return err
+	}
+
+	// Create signing options that contain the AK PEM cert
+	// and blob storage parameters
+	sigOpts, err := ca.NewSigningOpts(crypto.SHA256, akBuffer.Bytes())
+	sigOpts.BlobKey = &akNameBlobKey
+	sigOpts.StoreSignature = true
+	if _, err = key.Sign(verifier.tpm.RandomReader(), sigOpts.Digest(), sigOpts); err != nil {
 		return err
 	}
 	return nil

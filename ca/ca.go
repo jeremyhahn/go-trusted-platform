@@ -32,8 +32,14 @@ import (
 )
 
 const (
+	KEY_STORE_PKCS8  = "PKCS8"
+	KEY_STORE_PKCS11 = "PKCS11"
+
 	KEY_ALGO_RSA = "RSA"
 	KEY_ALGO_ECC = "ECC"
+
+	RSA_SCHEME_RSAPSS   = "RSA_PSS"
+	RSA_SCHEME_PKCS1v15 = "PKCS1v15"
 
 	CURVE_P224 = "P256"
 	CURVE_P256 = "P256"
@@ -51,6 +57,7 @@ var (
 	ErrCertInvalid                  = errors.New("certificate-authority: certificate invalid")
 	ErrTrustExists                  = errors.New("certificate-authority: certificate already trusted")
 	ErrInvalidSignature             = errors.New("certificate-authority: invalid signature")
+	ErrInvalidSignatureAlgorithm    = errors.New("certificate-authority: invalid signature algorithm")
 	ErrCRLAlreadyExists             = errors.New("certificate-authority: revocation list already exists")
 	ErrNoIssuingCA                  = errors.New("certificate-authority: no issuing CAs found in certificate")
 	ErrCertNotSupported             = errors.New("certificate-authority: certificate contains unsupported configuration")
@@ -72,17 +79,23 @@ var (
 	ErrInvalidPassword              = errors.New("certificate-authority: invalid password")
 	ErrUnsupportedSigningAlgorithm  = errors.New("certificate-authority: unsupported signing algorithm")
 	ErrUnsupportedHashAlgorithm     = errors.New("certificate-authority: unsupported hashing algorithm")
+	ErrUnsupportedRSAScheme         = errors.New("certificate-authority: unsupported RSA padding scheme")
 )
 
 type CertificateAuthority interface {
+	Blob(key string) ([]byte, error)
 	CABundle() ([]byte, error)
 	CABundleCertPool() (*(x509.CertPool), error)
 	CACertificate() *x509.Certificate
 	CAPrivKey(password []byte) (crypto.PublicKey, error)
 	CAPubKey() (crypto.PublicKey, error)
 	Certificate(cn string) (*x509.Certificate, error)
+	Checksum(key string) (bool, error)
 	CreateCSR(email string, request CertificateRequest, password []byte) ([]byte, error)
 	DecodeCSR(bytes []byte) (*x509.CertificateRequest, error)
+	Decrypt(rand io.Reader, msg []byte, opts crypto.DecrypterOpts) (plaintext []byte, err error)
+	DecryptionKey(cn, keyName string, password []byte) (crypto.Decrypter, error)
+	Digest(key string, hash crypto.Hash) (bool, error)
 	EncodePEM(derCert []byte) ([]byte, error)
 	EncodePubKey(pub crypto.PublicKey) ([]byte, error)
 	EncodePubKeyPEM(cn string, derBytes []byte) ([]byte, error)
@@ -93,6 +106,8 @@ type CertificateAuthority interface {
 	DecodeRSAPubKeyPEM(bytes []byte) (crypto.PublicKey, error)
 	DefaultValidityPeriod() int
 	DER(cn string) ([]byte, error)
+	Hash() crypto.Hash
+	HashFileExtension(hash crypto.Hash) string
 	Init(
 		parentPrivKey crypto.PrivateKey,
 		parentCertifiate *x509.Certificate,
@@ -106,6 +121,7 @@ type CertificateAuthority interface {
 	IssuePrivKey(cn string, privateKey crypto.PrivateKey, password []byte) error
 	IssuePubKey(cn string, pub crypto.PublicKey) error
 	Import(cer *x509.Certificate) error
+	ImportBlob(key string, data []byte) error
 	ImportCN(cn string, cert *x509.Certificate) error
 	ImportDER(cn string, derCert []byte) error
 	ImportDistrbutionCRLs(cert *x509.Certificate) error
@@ -115,13 +131,17 @@ type CertificateAuthority interface {
 	ImportTrustedIntermediate(cn string, derCert []byte) error
 	ImportPubKey(cn string, pub crypto.PublicKey) error
 	Load(password []byte) (crypto.PrivateKey, *x509.Certificate, error)
-	NewEncryptionKey(cn, keyName string, password, caPassword []byte) (*rsa.PublicKey, error)
-	NewSigningKey(cn, keyName string, password, caPassword []byte) (crypto.PublicKey, error)
+	NewECDSASigningKey(cn, keyName string, password []byte) (crypto.Signer, error)
+	NewEncryptionKey(cn, keyName string, password, caPassword []byte) (*rsa.PrivateKey, error)
+	NewPKCS1v15SigningKey(cn, keyName string, password []byte) (crypto.Signer, error)
+	NewRSASigningKey(cn, keyName string, password []byte) (crypto.Signer, error)
+	NewSigningKey(cn, keyName string, password []byte) (crypto.Signer, error)
 	ParseCABundle(bundle []byte) ([]*x509.Certificate, error)
 	ParsePrivateKey(bytes, password []byte) (crypto.PrivateKey, error)
 	PEM(cn string) ([]byte, error)
-	PrivKey(cn, name string, password []byte) (crypto.PublicKey, error)
+	PrivKey(cn, name string, password []byte, partition Partition) (crypto.PublicKey, error)
 	PrivKeyPEM(cn, name string, password []byte) ([]byte, error)
+	Public() crypto.PublicKey
 	PubKey(cn string) (crypto.PublicKey, error)
 	PubKeyPEM(cn string) ([]byte, error)
 	RSADecrypt(cn, keyName string, password, ciphertext []byte) ([]byte, error)
@@ -129,12 +149,12 @@ type CertificateAuthority interface {
 	Revoke(cn string, password []byte) error
 	RootCertificate() (*x509.Certificate, error)
 	RootCertForCA(cn string) (*x509.Certificate, error)
-	Sign(data []byte, password []byte, opts *SigningOpts) ([]byte, []byte, error)
-	SignPKCS1v15(data []byte, password []byte, opts *SigningOpts) ([]byte, []byte, error)
+	Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) (signature []byte, err error)
 	Signature(key string) ([]byte, error)
 	Signed(key string) (bool, error)
 	SignedData(key string) ([]byte, error)
 	SignCSR(csrBytes []byte, request CertificateRequest, password []byte) ([]byte, error)
+	SigningKey(cn, keyName string, password []byte) (SigningKey, error)
 	TLSConfig(cn, name string, password []byte, includeSystemRoot bool) (*tls.Config, error)
 	TrustStore() TrustStore
 	TrustedRootCertificate(cn string) (*x509.Certificate, error)
@@ -147,17 +167,6 @@ type CertificateAuthority interface {
 	X509KeyPair(cn, name string, password []byte) (tls.Certificate, error)
 }
 
-type SigningOpts struct {
-	// Optional PSS Salt Length when using RSA PSS.
-	// Default rsa.PSSSaltLengthAuto
-	PSSSaltLength  int
-	KeyCN          *string
-	KeyName        *string
-	BlobKey        *string
-	Hash           *crypto.Hash
-	StoreSignature bool
-}
-
 type VerifyOpts struct {
 	PSSSaltLength      int
 	KeyCN              *string
@@ -165,6 +174,16 @@ type VerifyOpts struct {
 	BlobKey            *string
 	Hash               *crypto.Hash
 	UseStoredSignature bool
+}
+
+type CAParams struct {
+	Debug                bool
+	DebugSecrets         bool
+	Logger               *logging.Logger
+	Config               *Config
+	Password             []byte
+	SelectedIntermediate int
+	Random               io.Reader
 }
 
 type CA struct {
@@ -182,17 +201,8 @@ type CA struct {
 	certStore          CertificateStore
 	commonName         string
 	passwordPolicy     *regexp.Regexp
+	decrypter          crypto.Decrypter
 	CertificateAuthority
-}
-
-type CAParams struct {
-	Debug                bool
-	DebugSecrets         bool
-	Logger               *logging.Logger
-	Config               *Config
-	Password             []byte
-	SelectedIntermediate int
-	Random               io.Reader
 }
 
 // This function creates new Root and Intermediate x509 Certifiate Authorities. First
@@ -306,6 +316,23 @@ func NewIntermediateCA(
 		commonName:        identity.Subject.CommonName}, nil
 }
 
+// Implements crypto.PrivateKey
+// Implements crypto.Decrypter
+func (ca *CA) Public() crypto.PublicKey {
+	return ca.publicKey
+}
+
+// Returns the CA's hash function
+func (ca *CA) Hash() crypto.Hash {
+	hashes := SupportedHashes()
+	hash, ok := hashes[ca.params.Config.Hash]
+	if !ok {
+		ca.params.Logger.Fatalf("%s: %s",
+			ErrUnsupportedHashAlgorithm, ca.params.Config.Hash)
+	}
+	return hash
+}
+
 // Returns true if the Certificate Authority is initialized and ready
 // to start servicing requests. A successful response indicates the Load()
 // method is ready to be called. An unsuccessful response should perform
@@ -380,6 +407,21 @@ func (ca *CA) Load(password []byte) (crypto.PrivateKey, *x509.Certificate, error
 		ca.params.Logger.Fatal(err)
 	}
 
+	// Set the CA's decrypter
+	ca.decrypter, err = ca.DecryptionKey(ca.commonName, ca.commonName, ca.params.Password)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Set the signature algorithm
+	signatureAlgorithms := SupportedSignatureAlgorithms()
+	preferredAlgo, ok := signatureAlgorithms[ca.params.Config.SignatureAlgorithm]
+	if !ok {
+		return nil, nil, fmt.Errorf("%s: %s",
+			ErrInvalidSignatureAlgorithm, ca.params.Config.SignatureAlgorithm)
+	}
+	ca.signatureAlgorithm = preferredAlgo
+
 	return privKey, ca.certificate, nil
 }
 
@@ -399,6 +441,7 @@ func (ca *CA) Init(
 	password []byte,
 	random io.Reader) (crypto.PrivateKey, *x509.Certificate, error) {
 
+	var err error
 	var privateKey crypto.PrivateKey
 	ca.params.Random = random
 	ca.parentCertificate = parentCertificate
@@ -428,8 +471,16 @@ func (ca *CA) Init(
 		return privateKey, nil, nil
 	}
 
+	signatureAlgorithms := SupportedSignatureAlgorithms()
+	preferredAlgo, ok := signatureAlgorithms[ca.params.Config.SignatureAlgorithm]
+	if !ok {
+		return nil, nil, fmt.Errorf("%s: %s",
+			ErrInvalidSignatureAlgorithm, ca.params.Config.SignatureAlgorithm)
+	}
+	ca.signatureAlgorithm = preferredAlgo
+
 	// Generate RSA or ECC signing key for the CA
-	if ca.params.Config.DefaultKeyAlgorithm == KEY_ALGO_RSA {
+	if ca.params.Config.KeyAlgorithm == KEY_ALGO_RSA {
 		privateKeyRSA, err := rsa.GenerateKey(random, ca.identity.KeySize)
 		if err != nil {
 			ca.params.Logger.Error(err)
@@ -437,8 +488,8 @@ func (ca *CA) Init(
 		}
 		privateKey = privateKeyRSA
 		ca.publicKey = &privateKeyRSA.PublicKey
-		ca.signatureAlgorithm = x509.SHA256WithRSA
-	} else if ca.params.Config.DefaultKeyAlgorithm == KEY_ALGO_ECC {
+
+	} else if ca.params.Config.KeyAlgorithm == KEY_ALGO_ECC {
 		privateKeyECC, err := ecdsa.GenerateKey(ca.curve, rand.Reader)
 		if err != nil {
 			ca.params.Logger.Error(err)
@@ -446,10 +497,8 @@ func (ca *CA) Init(
 		}
 		privateKey = privateKeyECC
 		ca.publicKey = &privateKeyECC.PublicKey
-		// set in the call to setCurve
-		// ca.signatureAlgorithm = x509.ECDSAWithSHA256
 	} else {
-		return nil, nil, fmt.Errorf("%s: %s", ErrInvalidAlgorithm, ca.params.Config.DefaultKeyAlgorithm)
+		return nil, nil, fmt.Errorf("%s: %s", ErrInvalidAlgorithm, ca.params.Config.KeyAlgorithm)
 	}
 
 	// Create Subject Key ID
@@ -561,6 +610,21 @@ func (ca *CA) Init(
 	// Initialize the CRL by creating a dummy cert and revoking it
 	if err := ca.initCRL(password); err != nil {
 		return nil, nil, err
+	}
+
+	// Set the CA's crypto.Decrypter
+	if ca.params.Config.KeyStore == KEY_STORE_PKCS8 {
+		// Create a new CA encryption key
+		privKey, err := ca.NewEncryptionKey(
+			ca.commonName, ca.commonName, password, password)
+		if err != nil {
+			return nil, nil, err
+		}
+		ca.decrypter = NewPKCS8Decrypter(
+			ca.params.Random,
+			ca.Hash(),
+			ca,
+			privKey)
 	}
 
 	return privateKey, ca.certificate, nil
@@ -789,6 +853,7 @@ func (ca *CA) IssueCertificate(request CertificateRequest, caPassword, certPassw
 		ca.params.Logger.Error(err)
 		return nil, err
 	}
+
 	cert := &x509.Certificate{
 		SignatureAlgorithm: ca.signatureAlgorithm,
 		PublicKeyAlgorithm: x509.PublicKeyAlgorithm(ca.signatureAlgorithm),
@@ -815,7 +880,7 @@ func (ca *CA) IssueCertificate(request CertificateRequest, caPassword, certPassw
 
 	var certPrivKey crypto.PrivateKey
 	var certPubKey crypto.PublicKey
-	if ca.params.Config.DefaultKeyAlgorithm == KEY_ALGO_RSA {
+	if ca.params.Config.KeyAlgorithm == KEY_ALGO_RSA {
 		privateKeyRSA, err := rsa.GenerateKey(ca.params.Random, ca.identity.KeySize)
 		if err != nil {
 			ca.params.Logger.Error(err)
@@ -823,7 +888,7 @@ func (ca *CA) IssueCertificate(request CertificateRequest, caPassword, certPassw
 		}
 		certPrivKey = privateKeyRSA
 		certPubKey = &privateKeyRSA.PublicKey
-	} else if ca.params.Config.DefaultKeyAlgorithm == KEY_ALGO_ECC {
+	} else if ca.params.Config.KeyAlgorithm == KEY_ALGO_ECC {
 		privateKeyECC, err := ecdsa.GenerateKey(ca.curve, rand.Reader)
 		if err != nil {
 			ca.params.Logger.Error(err)
@@ -832,7 +897,7 @@ func (ca *CA) IssueCertificate(request CertificateRequest, caPassword, certPassw
 		certPrivKey = privateKeyECC
 		certPubKey = &privateKeyECC.PublicKey
 	} else {
-		return nil, fmt.Errorf("%s: %s", ErrInvalidAlgorithm, ca.params.Config.DefaultKeyAlgorithm)
+		return nil, fmt.Errorf("%s: %s", ErrInvalidAlgorithm, ca.params.Config.KeyAlgorithm)
 	}
 
 	// Get the CA key to sign the certificate
@@ -1347,7 +1412,6 @@ func (ca *CA) EncodePubKey(pub crypto.PublicKey) ([]byte, error) {
 
 // Encodes a private key to ASN.1 DER PKCS8 form
 func (ca *CA) EncodePrivKey(privateKey crypto.PrivateKey, password []byte) ([]byte, error) {
-	//  pkcs8, err := x509.MarshalPKCS8PrivateKey(privateKey)
 	pkcs8, err := pkcs8.MarshalPrivateKey(privateKey, password, nil)
 	if err != nil {
 		ca.params.Logger.Error(err)
@@ -1363,13 +1427,13 @@ func (ca *CA) EncodePrivKeyPEM(der []byte, isEncrypted bool) ([]byte, error) {
 
 	if isEncrypted {
 		keyType = "ENCRYPTED PRIVATE KEY"
-	} else if ca.params.Config.DefaultKeyAlgorithm == KEY_ALGO_RSA {
+	} else if ca.params.Config.KeyAlgorithm == KEY_ALGO_RSA {
 		keyType = "RSA PRIVATE KEY"
-	} else if ca.params.Config.DefaultKeyAlgorithm == KEY_ALGO_ECC {
+	} else if ca.params.Config.KeyAlgorithm == KEY_ALGO_ECC {
 		keyType = "EC PRIVATE KEY"
 	} else {
 		return nil, fmt.Errorf("%s: %s",
-			ErrInvalidAlgorithm, ca.params.Config.DefaultKeyAlgorithm)
+			ErrInvalidAlgorithm, ca.params.Config.KeyAlgorithm)
 	}
 	err := pem.Encode(caPrivKeyPEM, &pem.Block{
 		Type:  keyType,
@@ -1445,8 +1509,12 @@ func (ca *CA) CAPubKey() (crypto.PublicKey, error) {
 
 // Returns the requested PKCS8 private key from the certificate store
 // "issued" partition.
-func (ca *CA) PrivKey(cn, name string, password []byte) (crypto.PublicKey, error) {
-	return ca.certStore.PrivKey(cn, name, password, PARTITION_ISSUED)
+func (ca *CA) PrivKey(
+	cn, name string,
+	password []byte,
+	partition Partition) (crypto.PublicKey, error) {
+
+	return ca.certStore.PrivKey(cn, name, password, partition)
 }
 
 // Returns the requested PKCS8 PEM private key from the certificate store
@@ -1625,13 +1693,13 @@ func (ca *CA) issuePrivKey(
 		ca.params.Logger.Error(err)
 		return err
 	}
-	if ca.params.Config.DefaultKeyAlgorithm == KEY_ALGO_RSA {
+	if ca.params.Config.KeyAlgorithm == KEY_ALGO_RSA {
 		rsaPriv, ok := privateKey.(*rsa.PrivateKey)
 		if !ok {
 			return ErrInvalidPrivateKeyRSA
 		}
 		return ca.issuePubKey(cn, &rsaPriv.PublicKey, partition)
-	} else if ca.params.Config.DefaultKeyAlgorithm == KEY_ALGO_ECC {
+	} else if ca.params.Config.KeyAlgorithm == KEY_ALGO_ECC {
 		eccPriv, ok := privateKey.(*ecdsa.PrivateKey)
 		if !ok {
 			return ErrInvalidPrivateKeyECC
@@ -2007,10 +2075,20 @@ func (ca *CA) TLSConfig(cn, name string, password []byte, includeSystemRoot bool
 	}, nil
 }
 
+// Returns the requested blob from the blob store
+func (ca *CA) Blob(key string) ([]byte, error) {
+	return ca.certStore.Blob(key)
+}
+
+// Saves a new blobl to the blob store
+func (ca *CA) ImportBlob(key string, data []byte) error {
+	return ca.certStore.SaveBlob(key, data)
+}
+
 // Sets the Elliptical Curve Cryptography Curve to use when
 // generating ECC keys / certificates
 func (ca *CA) setCurve() error {
-	if ca.params.Config.DefaultKeyAlgorithm == KEY_ALGO_ECC {
+	if ca.params.Config.KeyAlgorithm == KEY_ALGO_ECC {
 		switch ca.params.Config.EllipticalCurve {
 		case "P224":
 			ca.curve = elliptic.P224()
@@ -2023,7 +2101,6 @@ func (ca *CA) setCurve() error {
 		default:
 			return fmt.Errorf("%s: %s", ErrInvalidCurve, ca.params.Config.EllipticalCurve)
 		}
-		ca.signatureAlgorithm = x509.ECDSAWithSHA256
 	}
 	return nil
 }
@@ -2051,4 +2128,26 @@ func (ca *CA) initCRL(password []byte) error {
 		return err
 	}
 	return ca.Revoke(cn, password)
+}
+
+// Ensures the specified password meets requirements and returns
+// a boolean flag indicating if the key is encrypted.
+//
+// ErrPrivateKeyPasswordRequired is returned if a password is
+// required but the specified password is nil
+//
+// ErrPasswordComplexity is returned if the password fails to meet
+// password complexity requirements.
+func (ca *CA) checkPassword(password []byte) (bool, error) {
+	isEncrypted := false
+	if ca.params.Config.RequirePrivateKeyPassword {
+		if password == nil {
+			return false, ErrPrivateKeyPasswordRequired
+		}
+		if !ca.passwordPolicy.MatchString(string(password)) {
+			return false, ErrPasswordComplexity
+		}
+		isEncrypted = true
+	}
+	return isEncrypted, nil
 }

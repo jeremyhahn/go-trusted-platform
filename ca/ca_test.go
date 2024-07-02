@@ -46,6 +46,10 @@ func TestLoad(t *testing.T) {
 	logger, _, intermediateCA, err := createService(config, rootPass, intermediatePass, true)
 	defer cleanTempDir(config.Home)
 
+	if err != nil {
+		logger.Fatal(err)
+	}
+
 	// Instantiate the CA using Init(), it should create a Root
 	// and Intermediate CA ready for use
 	config, err = defaultConfig() // call again to get new temp dir
@@ -389,7 +393,6 @@ func TestIssueCertificateWithPassword(t *testing.T) {
 	cert, err := x509.ParseCertificate(der)
 	assert.Nil(t, err)
 	assert.Equal(t, domain, cert.Subject.CommonName)
-	assert.Equal(t, x509.SHA256WithRSA, cert.SignatureAlgorithm)
 }
 
 func cleanTempDir(dir string) {
@@ -475,7 +478,7 @@ func defaultConfig() (*Config, error) {
 		Valid:   10,   // years
 		Subject: Subject{
 			CommonName:   "root-ca",
-			Organization: "ACME Corporation",
+			Organization: "Example Corporation",
 			Country:      "US",
 			Locality:     "Miami",
 			Address:      "123 acme street",
@@ -502,7 +505,7 @@ func defaultConfig() (*Config, error) {
 
 		Subject: Subject{
 			CommonName:   "intermediate-ca",
-			Organization: "ACME Corporation",
+			Organization: "Example Corporation",
 			Country:      "US",
 			Locality:     "Miami",
 			Address:      "123 acme street",
@@ -535,12 +538,17 @@ func defaultConfig() (*Config, error) {
 	return &Config{
 		Home:                      fmt.Sprintf("%s/%s", CERTS_DIR, tmpDir),
 		AutoImportIssuingCA:       true,
-		DefaultKeyAlgorithm:       KEY_ALGO_RSA,
+		KeyAlgorithm:              KEY_ALGO_ECC,
+		KeyStore:                  KEY_STORE_PKCS8,
+		SignatureAlgorithm:        "ECDSAWithSHA256",
+		RSAScheme:                 RSA_SCHEME_RSAPSS,
+		Hash:                      "SHA256",
 		EllipticalCurve:           CURVE_P256,
 		RetainRevokedCertificates: false,
-		//PasswordPolicy:            "^[a-zA-Z0-9-_]+$",
 		PasswordPolicy:            "^*$",
 		RequirePrivateKeyPassword: true,
+		// RSAScheme:              "RSA_PSS",
+		//PasswordPolicy:          "^[a-zA-Z0-9-_]+$",
 		Identity: []Identity{
 			rootIdentity,
 			intermediateIdentity},

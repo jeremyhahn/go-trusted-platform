@@ -210,6 +210,7 @@ clean:
 		db/ \
 		logs \
 		$(CA_DIR) \
+		ca/certs \
 		tpm2/certs \
 		tpm2/$(EK_CERT_NAME) \
 		$(PLATFORM_DIR)/ca \
@@ -220,10 +221,10 @@ clean:
 test: test-ca test-tpm
 
 test-ca:
-	cd ca && go test -v -run TestRSA
-	cd ca && go test -v -run TestECC
+	cd ca && go test -v
 
 test-tpm:
+	cp $(EK_CERT_NAME) tpm2/
 	cd tpm2 && go test -v
 
 
@@ -314,7 +315,6 @@ verifier-clean:
 		$(VERIFIER_DIR)/$(EK_CERT_NAME)
 
 verifier-cert-chain:
-	cd $(ATTESTATION_DIR) && \
 	openssl verify \
 		-CAfile $(VERIFIER_CA)/$(ROOT_CA).$(DOMAIN)/$(ROOT_CA).$(DOMAIN).crt \
 		-untrusted $(VERIFIER_CA)/$(INTERMEDIATE_CA).$(DOMAIN)/$(INTERMEDIATE_CA).$(DOMAIN).crt \
@@ -354,11 +354,16 @@ attestor: attestor-clean build attestor-init
 			--server-password server-password
 
 attestor-verify-cert-chain:
-	cd $(ATTESTATION_DIR) && \
 	openssl verify \
 		-CAfile $(ATTESTOR_CA)/$(ROOT_CA).$(DOMAIN)/$(ROOT_CA).$(DOMAIN).crt \
 		-untrusted $(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(DOMAIN)/$(INTERMEDIATE_CA).$(DOMAIN).crt \
 		$(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(DOMAIN)/issued/$(ATTESTOR_HOSTNAME).$(DOMAIN)/$(ATTESTOR_HOSTNAME).$(DOMAIN).crt
+
+attestor-verify-tpm-certs:
+	openssl pkeyutl -verify \
+		-in $(ATTESTOR_DIR)/$(PLATFORM_DIR)/ca/$(INTERMEDIATE_CA).$(DOMAIN)/blobs/tpm/$(ATTESTOR_HOSTNAME).$(DOMAIN)/$(INTERMEDIATE_CA).$(DOMAIN)/attestation-key.cer.digest \
+		-sigfile $(ATTESTOR_DIR)/$(PLATFORM_DIR)/ca/$(INTERMEDIATE_CA).$(DOMAIN)/blobs/tpm/$(ATTESTOR_HOSTNAME).$(DOMAIN)/$(INTERMEDIATE_CA).$(DOMAIN)/attestation-key.cer.sig \
+		-inkey $(ATTESTOR_DIR)/$(PLATFORM_DIR)/ca/$(INTERMEDIATE_CA).$(DOMAIN)/$(INTERMEDIATE_CA).$(DOMAIN).key
 
 attestor-verify-tls:
 	cd $(ATTESTATION_DIR) && \

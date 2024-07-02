@@ -20,6 +20,7 @@ import (
 
 var currentWorkingDirectory, _ = os.Getwd()
 var CERTS_DIR = fmt.Sprintf("%s/certs", currentWorkingDirectory)
+var CLEAN_TMP = false
 
 const (
 	EK_CERT_PATH = "./ECcert.bin"
@@ -38,16 +39,13 @@ func teardown() {
 
 func setup() {
 	os.RemoveAll(CERTS_DIR)
-	createCA()
 }
 
 func TestEKCert(t *testing.T) {
 
-	logger, tpm := createSim(true, false)
+	logger, tpm, tmpDir := createSim(false, false)
 	defer tpm.Close()
-
-	ca := createCA()
-	tpm.SetCertificateAuthority(ca)
+	defer cleanTempDir(tmpDir)
 
 	cert, err := tpm.EKCert(nil, nil)
 	assert.Nil(t, err)
@@ -56,10 +54,29 @@ func TestEKCert(t *testing.T) {
 	logger.Debugf("cert: %+v", cert)
 }
 
+func TestImportTSS(t *testing.T) {
+
+	expectedSN := "455850945431947993541652326598156649892946412448"
+
+	logger, tpm, tmpDir := createSim(false, false)
+	defer tpm.Close()
+	defer cleanTempDir(tmpDir)
+
+	assert.NotNil(t, logger)
+	assert.NotNil(t, tpm)
+
+	cert, err := tpm.ImportTSSFile(EK_CERT_PATH, true)
+	assert.Nil(t, err)
+	assert.Equal(t, expectedSN, cert.SerialNumber.String())
+
+	logger.Debugf("%+v", cert)
+}
+
 func TestQuote(t *testing.T) {
 
-	_, tpm := createSim(false, false)
+	_, tpm, tmpDir := createSim(false, false)
 	defer tpm.Close()
+	defer cleanTempDir(tmpDir)
 
 	nonce := []byte("nonce")
 
@@ -84,8 +101,9 @@ func TestQuote(t *testing.T) {
 
 func TestReadPCRs(t *testing.T) {
 
-	logger, tpm := createSim(false, false)
+	logger, tpm, tmpDir := createSim(false, false)
 	defer tpm.Close()
+	defer cleanTempDir(tmpDir)
 
 	algos, err := tpm.ReadPCRs()
 	assert.Nil(t, err)
@@ -106,8 +124,9 @@ func TestReadPCRs(t *testing.T) {
 // sudo chown root.myuser /sys/kernel/security/tpm0/binary_bios_measurements
 func TestParseEventLog(t *testing.T) {
 
-	logger, tpm := createSim(false, false)
+	logger, tpm, tmpDir := createSim(false, false)
 	defer tpm.Close()
+	defer cleanTempDir(tmpDir)
 
 	eventLog, err := tpm.Measurements(nil)
 	assert.Nil(t, err)
@@ -118,8 +137,9 @@ func TestParseEventLog(t *testing.T) {
 
 func TestMakeActivateCredentialWithGeneratedSecret(t *testing.T) {
 
-	_, tpm := createSim(false, false)
+	_, tpm, tmpDir := createSim(false, false)
 	defer tpm.Close()
+	defer cleanTempDir(tmpDir)
 
 	ek, ak, err := tpm.RSAAK()
 	assert.Nil(t, err)
@@ -149,8 +169,9 @@ func TestMakeActivateCredentialWithGeneratedSecret(t *testing.T) {
 
 func TestMakeActivateCredential(t *testing.T) {
 
-	_, tpm := createSim(false, false)
+	_, tpm, tmpDir := createSim(false, false)
 	defer tpm.Close()
+	defer cleanTempDir(tmpDir)
 
 	ek, ak, err := tpm.RSAAK()
 	assert.Nil(t, err)
@@ -183,27 +204,11 @@ func TestMakeActivateCredential(t *testing.T) {
 	assert.NotEqual(t, secret, digest)
 }
 
-func TestImportTSS(t *testing.T) {
-
-	expectedSN := "455850945431947993541652326598156649892946412448"
-
-	logger, tpm := createSim(false, false)
-	defer tpm.Close()
-
-	assert.NotNil(t, logger)
-	assert.NotNil(t, tpm)
-
-	cert, err := tpm.ImportTSSFile(EK_CERT_PATH, true)
-	assert.Nil(t, err)
-	assert.Equal(t, expectedSN, cert.SerialNumber.String())
-
-	logger.Debugf("%+v", cert)
-}
-
 func TestCapabilities(t *testing.T) {
 
-	logger, tpm := createSim(false, false)
+	logger, tpm, tmpDir := createSim(false, false)
 	defer tpm.Close()
+	defer cleanTempDir(tmpDir)
 
 	caps, err := tpm.Capabilities()
 	assert.Nil(t, err)
@@ -216,8 +221,9 @@ func TestCapabilities(t *testing.T) {
 
 func TestRSAEK(t *testing.T) {
 
-	logger, tpm := createSim(false, false)
+	logger, tpm, tmpDir := createSim(false, false)
 	defer tpm.Close()
+	defer cleanTempDir(tmpDir)
 
 	ek, err := tpm.RSAEK()
 	assert.Nil(t, err)
@@ -230,8 +236,9 @@ func TestRSAEK(t *testing.T) {
 
 func TestRSASRK(t *testing.T) {
 
-	logger, tpm := createSim(false, false)
+	logger, tpm, tmpDir := createSim(false, false)
 	defer tpm.Close()
+	defer cleanTempDir(tmpDir)
 
 	ek, err := tpm.RSAEK()
 	assert.Nil(t, err)
@@ -255,8 +262,9 @@ func TestRSASRK(t *testing.T) {
 
 func TestSealUnseal(t *testing.T) {
 
-	logger, tpm := createSim(false, false)
+	logger, tpm, tmpDir := createSim(false, false)
 	defer tpm.Close()
+	defer cleanTempDir(tmpDir)
 
 	ek, err := tpm.RSAEK()
 	assert.Nil(t, err)
@@ -330,7 +338,7 @@ func TestRandom(t *testing.T) {
 }
 
 // Creates a connection a simulated TPM (without creating a CA)
-func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2) {
+func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2, string) {
 
 	debugSecrets := true
 	domain := "test.com"
@@ -349,70 +357,32 @@ func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2) 
 		logger.Fatal(err)
 	}
 
-	ca := createCA()
+	config, err := defaultConfig()
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	rootPass := []byte("root-password")
+	intermediatePass := []byte("intermediate-password")
+	ca := createCA(config, rootPass, intermediatePass, true)
+
 	tpm.SetCertificateAuthority(ca)
 
-	return logger, tpm
+	return logger, tpm, config.Home
 }
 
-// Creates a new TPM for testing
-// func createTP(encrypt bool) (*logging.Logger, TrustedPlatformModule2, ca.CertificateAuthority, error) {
+func cleanTempDir(dir string) {
+	if CLEAN_TMP {
+		if err := os.RemoveAll(dir); err != nil {
+			fmt.Errorf("%S", err)
+		}
+	}
+}
 
-// 	debugSecrets := true
-// 	domain := "test.com"
-
-// 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
-// 	logging.SetBackend(stdout)
-// 	logger := logging.MustGetLogger("tpm")
-
-// 	// Create TPM instance
-// 	tpm, err := NewTPM2(logger, debugSecrets, &Config{
-// 		Device: "/dev/tpmrm0",
-// 		//EnableEncryption: encrypt,
-// 		UseEntropy: false,
-// 	}, domain)
-// 	if err != nil {
-// 		logger.Fatal(err)
-// 	}
-
-// 	intermediateCA := createCA()
-// 	tpm.SetCertificateAuthority(intermediateCA)
-
-// 	// Generate server certificate
-// 	certReq := ca.CertificateRequest{
-// 		Valid: 365, // days
-// 		Subject: ca.Subject{
-// 			CommonName:   "localhost",
-// 			Organization: "ACME Corporation",
-// 			Country:      "US",
-// 			Locality:     "Miami",
-// 			Address:      "123 acme street",
-// 			PostalCode:   "12345"},
-// 		SANS: &ca.SubjectAlternativeNames{
-// 			DNS: []string{
-// 				"localhost",
-// 				"localhost.localdomain",
-// 			},
-// 			IPs: []string{
-// 				"127.0.0.1",
-// 			},
-// 			Email: []string{
-// 				"root@localhost",
-// 				"root@test.com",
-// 			},
-// 		},
-// 	}
-
-// 	// Issue a new test certificate using random number generator
-// 	_, err = intermediateCA.IssueCertificate(certReq)
-// 	if err != nil {
-// 		logger.Fatal(err)
-// 	}
-
-// 	return logger, tpm, intermediateCA, nil
-// }
-
-func createCA() ca.CertificateAuthority {
+func createCA(
+	config *ca.Config,
+	rootPass, intermediatePass []byte,
+	performInit bool) ca.CertificateAuthority {
 
 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
 	logging.SetBackend(stdout)
@@ -425,16 +395,53 @@ func createCA() ca.CertificateAuthority {
 	backends := logging.MultiLogger(stdout, logFormatter)
 	logging.SetBackend(backends)
 
-	rootPassword := []byte("root-password")
-	intermediatePassword := []byte("intermediate-password")
+	var err error
+	if config == nil {
+		config, err = defaultConfig()
+		if err != nil {
+			logger.Fatal(err)
+		}
+	}
 
-	// Create Root and Intermediate Certificate Authorities
+	// CA constructor params
+	params := ca.CAParams{
+		Logger:               logger,
+		Config:               config,
+		Password:             intermediatePass,
+		SelectedIntermediate: 1,
+		Random:               rand.Reader,
+	}
+
+	rootCA, intermediateCA, err := ca.NewCA(params)
+	if err != nil {
+		if err == ca.ErrNotInitialized && performInit {
+			privKey, cert, initErr := rootCA.Init(nil, nil, rootPass, rand.Reader)
+			if initErr != nil {
+				logger.Fatal(err)
+			}
+			_, _, initErr = intermediateCA.Init(privKey, cert, intermediatePass, rand.Reader)
+			if initErr != nil {
+				logger.Fatal(err)
+			}
+			err = nil
+		} else if performInit {
+			logger.Fatal(err)
+		}
+	} else {
+		logger.Warning("CA has already been initialized")
+	}
+
+	return intermediateCA
+}
+
+// Creates a default CA configuration
+func defaultConfig() (*ca.Config, error) {
 	rootIdentity := ca.Identity{
 		KeySize: 1024, // bits
 		Valid:   10,   // years
 		Subject: ca.Subject{
 			CommonName:   "root-ca",
-			Organization: "ACME Corporation",
+			Organization: "Example Corporation",
 			Country:      "US",
 			Locality:     "Miami",
 			Address:      "123 acme street",
@@ -461,7 +468,7 @@ func createCA() ca.CertificateAuthority {
 
 		Subject: ca.Subject{
 			CommonName:   "intermediate-ca",
-			Organization: "ACME Corporation",
+			Organization: "Example Corporation",
 			Country:      "US",
 			Locality:     "Miami",
 			Address:      "123 acme street",
@@ -482,39 +489,32 @@ func createCA() ca.CertificateAuthority {
 		},
 	}
 
-	// Initialize CA config
-	config := &ca.Config{
-		Home:                CERTS_DIR,
-		AutoImportIssuingCA: true,
-		DefaultKeyAlgorithm: ca.KEY_ALGO_ECC,
-		EllipticalCurve:     ca.CURVE_P256,
+	// Create a temp directory so parallel tests don't
+	// corrupt each other.
+	buf := make([]byte, 8)
+	_, err := rand.Reader.Read(buf)
+	if err != nil {
+		return nil, err
+	}
+	tmpDir := hex.EncodeToString(buf)
+
+	return &ca.Config{
+		Home:                      fmt.Sprintf("%s/%s", CERTS_DIR, tmpDir),
+		AutoImportIssuingCA:       true,
+		KeyAlgorithm:              ca.KEY_ALGO_RSA,
+		KeyStore:                  ca.KEY_STORE_PKCS8,
+		SignatureAlgorithm:        "SHA256WithRSA",
+		RSAScheme:                 ca.RSA_SCHEME_RSAPSS,
+		Hash:                      "SHA256",
+		EllipticalCurve:           ca.CURVE_P256,
+		RetainRevokedCertificates: false,
+		//PasswordPolicy:            "^[a-zA-Z0-9-_]+$",
+		PasswordPolicy:            "^*$",
+		RequirePrivateKeyPassword: true,
 		Identity: []ca.Identity{
 			rootIdentity,
 			intermediateIdentity},
-	}
-
-	// CA constructor params
-	params := ca.CAParams{
-		Logger:               logger,
-		Config:               config,
-		Password:             intermediatePassword,
-		SelectedIntermediate: 1,
-		Random:               rand.Reader,
-	}
-
-	// Create the CAs
-	rootCA, intermediateCA, err := ca.NewCA(params)
-	if err == ca.ErrNotInitialized {
-		rootPrivKey, rootCert, err := rootCA.Init(nil, nil, rootPassword, rand.Reader)
-		if err != nil {
-			logger.Fatal(err)
-		}
-		_, _, err = intermediateCA.Init(rootPrivKey, rootCert, intermediatePassword, rand.Reader)
-		if err != nil {
-			logger.Fatal(err)
-		}
-	}
-	return intermediateCA
+	}, nil
 }
 
 /*
@@ -667,4 +667,61 @@ func createCA() ca.CertificateAuthority {
 // 	val := m[:2]
 
 // 	logger.Infof("value = %+v", val)
+// }
+
+// Creates a new TPM for testing
+// func createTP(encrypt bool) (*logging.Logger, TrustedPlatformModule2, ca.CertificateAuthority, error) {
+
+// 	debugSecrets := true
+// 	domain := "test.com"
+
+// 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
+// 	logging.SetBackend(stdout)
+// 	logger := logging.MustGetLogger("tpm")
+
+// 	// Create TPM instance
+// 	tpm, err := NewTPM2(logger, debugSecrets, &Config{
+// 		Device: "/dev/tpmrm0",
+// 		//EnableEncryption: encrypt,
+// 		UseEntropy: false,
+// 	}, domain)
+// 	if err != nil {
+// 		logger.Fatal(err)
+// 	}
+
+// 	intermediateCA := createCA()
+// 	tpm.SetCertificateAuthority(intermediateCA)
+
+// 	// Generate server certificate
+// 	certReq := ca.CertificateRequest{
+// 		Valid: 365, // days
+// 		Subject: ca.Subject{
+// 			CommonName:   "localhost",
+// 			Organization: "ACME Corporation",
+// 			Country:      "US",
+// 			Locality:     "Miami",
+// 			Address:      "123 acme street",
+// 			PostalCode:   "12345"},
+// 		SANS: &ca.SubjectAlternativeNames{
+// 			DNS: []string{
+// 				"localhost",
+// 				"localhost.localdomain",
+// 			},
+// 			IPs: []string{
+// 				"127.0.0.1",
+// 			},
+// 			Email: []string{
+// 				"root@localhost",
+// 				"root@test.com",
+// 			},
+// 		},
+// 	}
+
+// 	// Issue a new test certificate using random number generator
+// 	_, err = intermediateCA.IssueCertificate(certReq)
+// 	if err != nil {
+// 		logger.Fatal(err)
+// 	}
+
+// 	return logger, tpm, intermediateCA, nil
 // }

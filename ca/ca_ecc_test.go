@@ -14,7 +14,7 @@ func TestECCIssueCertificateWithoutPrivateKeyPassword(t *testing.T) {
 	assert.NotNil(t, config)
 
 	// Set CA's default key algorithm to ECC
-	config.DefaultKeyAlgorithm = KEY_ALGO_ECC
+	config.KeyAlgorithm = KEY_ALGO_ECC
 
 	// Don't require passwords for these operations
 	config.RequirePrivateKeyPassword = false
@@ -72,7 +72,7 @@ func TestECCIssueCertificateWithPrivateKeyPassword(t *testing.T) {
 	assert.NotNil(t, config)
 
 	// Set CA's default key algorithm to ECC
-	config.DefaultKeyAlgorithm = KEY_ALGO_ECC
+	config.KeyAlgorithm = KEY_ALGO_ECC
 
 	rootPass := []byte("root-password")
 	intermediatePass := []byte("intermediate-password")
