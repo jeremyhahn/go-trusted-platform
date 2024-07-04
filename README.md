@@ -188,7 +188,7 @@ We now live in a world with lots of connected devices, artifical intelligence sy
 
 This platform makes security a first class citizen and encourages a thoughtful design approach to building a connected services platform, abstracting the common activities, complexities, compliances, and boilerplate necessities into a modular and flexible framework that can be applied to any web services, SAAS, or conneccted devices platform. It strives to protect user data and confidentiality while empowering service providers and application developers to create secure offerings using industry approved standards and mechanisms so they can focus on delivering intuitive, feature-filled solutions.
 
-This project makes use of modern authentication and security mechanisms such as [WebAuthn](https://en.wikipedia.org/wiki/WebAuthn), [FIDO 2](https://fidoalliance.org/fido2/) and [PIV] cards, and hardware based secret management to provide a password-less user experience for users and platform administrators, while meeting stringent security requirements for highly regulated industries.
+This project makes use of modern authentication and security mechanisms such as [WebAuthn](https://en.wikipedia.org/wiki/WebAuthn), [FIDO 2](https://fidoalliance.org/fido2/), [PIV](https://en.wikipedia.org/wiki/FIPS_201) cards, and hardware based secret management to provide a password-less experience for users and platform administrators, while meeting stringent security requirements for highly regulated industries.
 
 
 ## Status
