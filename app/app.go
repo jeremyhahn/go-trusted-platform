@@ -129,15 +129,15 @@ func (app *App) initLogger() {
 // Open a connection to the TPM, using an unauthenticated, unverified
 // and un-attested connection. Use the software TPM simulator if enabled
 // in the TPM configuration section.
-func (app *App) openTPM(caPassword []byte) {
+func (app *App) OpenTPM() {
 	var err error
 	var tpm tpm2.TrustedPlatformModule2
 	if app.TPMConfig.UseSimulator {
 		tpm, err = tpm2.NewSimulation(
-			app.Logger, app.DebugSecretsFlag, &app.TPMConfig, caPassword, app.Domain)
+			app.Logger, app.DebugSecretsFlag, &app.TPMConfig, app.Domain)
 	} else {
 		tpm, err = tpm2.NewTPM2(
-			app.Logger, app.DebugSecretsFlag, &app.TPMConfig, caPassword, app.Domain)
+			app.Logger, app.DebugSecretsFlag, &app.TPMConfig, app.Domain)
 	}
 	if err != nil {
 		app.Logger.Error(err)
@@ -170,10 +170,11 @@ func (app *App) initCA(caPassword, serverTLSPassword []byte) {
 	if app.IntermediatePassword != "" {
 		app.Logger.Warning("Loading Intermediate Certificate Authority private key password from configuration file")
 		intermediatePassword = []byte(app.IntermediatePassword)
-		app.openTPM(intermediatePassword)
 	} else {
-		app.openTPM(caPassword)
 	}
+
+	// Open the TPM. Close it after CA initialization is complete
+	app.OpenTPM()
 	defer app.TPM.Close()
 
 	// Initalize TPM based random reader if present.

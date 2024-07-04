@@ -25,6 +25,8 @@ BUILD_DATE              = $(shell date '+%Y-%m-%d_%H:%M:%S')
 
 VERSION_FILE            ?= VERSION
 
+RPI_HOST                ?= rpi
+
 ifneq ("$(wildcard $(VERSION_FILE))","")
     APP_VERSION = $(shell cat $(VERSION_FILE))
 else
@@ -431,17 +433,15 @@ luks-umount:
 
 # Ansible
 ansible-install:
-	$(PYTHONBIN) -m $(PIPBIN) install --upgrade pip
-	$(PYTHONBIN) -m $(PIPBIN) install --user $(ANSIBLE_USER)
-	$(PYTHONBIN) -m $(PIPBIN) install --upgrade --user $(ANSIBLE_USER)
-	$(PYTHONBIN) -m $(PIPBIN) install cryptography==3.0
-
-ansible-uninstall:
-	$(PYTHONBIN) -m $(PIPBIN) ansible
+	$(PYTHONBIN) -m venv python-venv
+	cd python-venv && \
+		./bin/python3 -m pip install --upgrade pip && \
+		./bin/python3 -m pip install cryptography==3.0
 
 ansible-setup:
+	cd python-venv && \
 	ansible-playbook \
-		../go-trusted-platform-ansible/setup/platform-setup.yml \
+		../../go-trusted-platform-ansible/setup/platform-setup.yml \
 		-e PLATFORM_DIR=$(PLATFORM_DIR) \
 		-e CONFIG_DIR=$(CONFIG_DIR) \
 		-e LOG_DIR=$(LOG_DIR) \
@@ -453,20 +453,20 @@ ansible-setup:
 	    -e platform_build_dir=$(PLATFORM_DIR)/build \
 		--ask-become-pass
 
+# Raspbery PI
+rpi-sync:
+	rsync -av --progress \
+		../$(PACKAGE) $(RPI_HOST): \
+		--exclude ../$(PACKAGE)/.git/
 
-# Qemu 
-qemu-ubuntu-test:
+rpi-sync-ansible:
+	rsync -av --progress \
+		../$(PACKAGE)-ansible $(RPI_HOST): \
+		--exclude ../$(PACKAGE)-ansible/.git/
+
+rpi-qemu:
 	qemu-system-aarch64 \
 		-machine type=raspi3 \
 		-m 1024 \
 		-kernel vmlinux \
 		-initrd initramfs
-
-
-# Python
-python-pip-reinstall:
-	sudo apt-get remove --purge python-pip
-	wget https://bootstrap.pypa.io/get-pip.py
-	python get-pip.py
-	rm get-pip.py
-

@@ -34,7 +34,6 @@ https://uefi.org/sites/default/files/resources/UEFI_Plugfest_Advanced_TPM_Usage_
 3. https://github.com/tpm2dev/tpm.dev.tutorials/blob/master/Intro/README.md
 
 
-
 ## Tutorials
 
 https://tpm2-software.github.io/tutorials/
@@ -107,6 +106,12 @@ https://pkg.go.dev/crypto/rsa#PrivateKey.Sign
 https://pkg.go.dev/crypto#Decrypter
 
 https://pkg.go.dev/crypto/rsa#PrivateKey.Decrypt
+
+
+
+## Endorsement Keys
+
+* [TCG EK Credential Profile] https://trustedcomputinggroup.org/wp-content/uploads/TCG_IWG_Credential_Profile_EK_V2.1_R13.pdf
 
 
 

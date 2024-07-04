@@ -335,7 +335,7 @@ func (ca *CA) Signed(key string) (bool, error) {
 }
 
 // Returns signed data from the signed blob store
-func (ca *CA) SignedData(key string) ([]byte, error) {
+func (ca *CA) SignedBlob(key string) ([]byte, error) {
 	return ca.certStore.Blob(key)
 }
 

@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/google/go-tpm-tools/simulator"
@@ -33,9 +34,8 @@ const (
 	infoOpeningDevice     = "tpm: opening TPM 2.0 connection"
 	infoClosingConnection = "tpm: closing connection"
 
-	blobStorePrefix = "tpm"
-	ekBlobName      = "endorsement-key"
-	akCertBlobName  = "attestation-key"
+	ekCertBlobName = "ek-cert"
+	akCertBlobName = "ak-cert"
 )
 
 var (
@@ -54,49 +54,51 @@ var (
 	ErrHashAlgorithmNotSupported   = errors.New("tpm: hash algorithm not supported")
 	ErrInvalidPolicyDigest         = errors.New("tpm: invalid policy digest")
 	ErrInvalidHandle               = errors.New("tpm: invalid entity handle")
-	ErrUnexpectedRandomBytes       = errors.New("verifier: unexpected number of random bytes read")
+	ErrUnexpectedRandomBytes       = errors.New("tpm: unexpected number of random bytes read")
+	ErrInvalidPCRIndex             = errors.New("tpm: invalid PCR index")
 )
 
 type TrustedPlatformModule2 interface {
-	BlobKey(domain, cn string) string
+	ActivateCredential(ak DerivedKey, credential Credential) ([]byte, error)
+	Capabilities() (tpm20Info, error)
+	Close() error
+	CreateAK(srk Key) (*tpm2.CreateResponse, error)
 	DebugPrimaryKey(key Key)
 	DebugAttestationKey(ak DerivedKey)
-	Random() ([]byte, error)
-	ImportTSSFile(ekCertPath string, verify bool) (*x509.Certificate, error)
+	Decode(s string) ([]byte, error)
+	ECCEK() (Key, error)
+	ECCSRK(ek Key, password []byte) (Key, error)
+	EKCert(ekHandle *tpm2.TPMHandle, srkAuth []byte) (*x509.Certificate, error)
+	EKRSAPubKey() *rsa.PublicKey
+	Encode(bytes []byte) string
+	Flush(handle tpm2.TPMHandle)
+	HMACAuthSession(srkAuth []byte) (s tpm2.Session, close func() error, err error)
+	HMACAuthSessionWithKey(srk Key, password []byte) (s tpm2.Session, close func() error, err error)
+	HMACSession() tpm2.Session
+	// ImportAKCert(service string, akDER []byte) error
 	ImportEKCert(domain, cn string, ekCert *x509.Certificate, verify bool) (*x509.Certificate, error)
-	ImportAKCert(service string, akDER []byte) error
+	ImportTSSFile(ekCertPath string, verify bool) (*x509.Certificate, error)
 	ImportDER(domain, cn string, ekDER []byte, verify bool) (*x509.Certificate, error)
 	ImportPEM(domain, cn string, ekCertPEM []byte, verify bool) (*x509.Certificate, error)
-	HMACAuthSessionWithKey(srk Key, password []byte) (s tpm2.Session, close func() error, err error)
-	HMACAuthSession(srkAuth []byte) (s tpm2.Session, close func() error, err error)
-	SaltedHMACSession(Key) tpm2.Session
-	HMACSession() tpm2.Session
-	Unseal(srk Key, createResponse *tpm2.CreateResponse, sealName, sealAuth []byte) ([]byte, error)
-	Seal(srk Key, sealAuth, sealName, sealData []byte) (*tpm2.CreateResponse, error)
-	ECCSRK(ek Key, password []byte) (Key, error)
-	RSASRK(ek Key, password []byte) (Key, error)
-	CreateAK(srk Key) (*tpm2.CreateResponse, error)
-	RSAEK() (Key, error)
-	ECCEK() (Key, error)
-	EKCert(ekHandle *tpm2.TPMHandle, srkAuth []byte) (*x509.Certificate, error)
-	Capabilities() (tpm20Info, error)
 	Init() error
-	EKRSAPubKey() *rsa.PublicKey
-	SetCertificateAuthority(ca ca.CertificateAuthority)
-	Close() error
-	Flush(handle tpm2.TPMHandle)
-	ReadPCRs() (map[string][][]byte, error)
-	ActivateCredential(ak DerivedKey, credential Credential) ([]byte, error)
 	MakeCredential(ek Key, ak DerivedKey, secret []byte) (*tpm2.MakeCredentialResponse, []byte, error)
-	RSAAK() (Key, DerivedKey, error)
-	Encode(bytes []byte) string
-	Decode(s string) ([]byte, error)
-	// MeasurementLog() (*EventLog, error)
-	Measurements(logpath []byte) (*EventLog, error)
-	ParseEKCertificate(ekCert []byte) (*x509.Certificate, error)
 	Open() error
-	RandomReader() io.Reader
+	ParseEKCertificate(ekCert []byte) (*x509.Certificate, error)
 	Quote(pcrs []uint, nonce []byte) (Quote, error)
+	Random() ([]byte, error)
+	RandomReader() io.Reader
+	ReadPCRs(pcrList []uint) (map[string][][]byte, error)
+	RSAAK() (Key, DerivedKey, error)
+	RSAEK() (Key, error)
+	RSASRK(ek Key, password []byte) (Key, error)
+	SaltedHMACSession(Key) tpm2.Session
+	Seal(srk Key, sealAuth, sealName, sealData []byte) (*tpm2.CreateResponse, error)
+	SetCertificateAuthority(ca ca.CertificateAuthority)
+	Transport() transport.TPM
+	Unseal(srk Key, createResponse *tpm2.CreateResponse, sealName, sealAuth []byte) ([]byte, error)
+
+	Device() string
+	EventLog() ([]byte, error)
 }
 
 type TPM2 struct {
@@ -108,14 +110,10 @@ type TPM2 struct {
 	ca           ca.CertificateAuthority
 	ekRSAPubKey  *rsa.PublicKey
 	ekECCPubKey  *ecdh.PublicKey
-	ekCertName   string
-	ekBlobKey    string
 	random       io.Reader
-	// ekECCPubKey *ecdsa.PublicKey
-	transport transport.TPM
-	simulator *simulator.Simulator
+	transport    transport.TPM
+	simulator    *simulator.Simulator
 	// TODO: Replace this with opaque key
-	caPassword []byte
 	TrustedPlatformModule2
 }
 
@@ -126,7 +124,6 @@ func NewTPM2(
 	logger *logging.Logger,
 	debugSecrets bool,
 	config *Config,
-	caPassword []byte,
 	domain string) (TrustedPlatformModule2, error) {
 
 	if config == nil || config.Device == "" {
@@ -147,10 +144,7 @@ func NewTPM2(
 		config:       config,
 		device:       f,
 		transport:    transport.FromReadWriter(f),
-		ekCertName:   ekBlobName,
-		ekBlobKey:    fmt.Sprintf("%s/%s/%s", blobStorePrefix, domain, ekBlobName),
-		domain:       domain,
-		caPassword:   caPassword}
+		domain:       domain}
 
 	random, err := tpm.randomReader()
 	if err != nil {
@@ -165,12 +159,11 @@ func NewSimulation(
 	logger *logging.Logger,
 	debugSecrets bool,
 	config *Config,
-	caPassword []byte,
 	domain string) (TrustedPlatformModule2, error) {
 
 	logger.Info(infoOpeningSimulator)
 
-	sim, err := simulator.Get()
+	sim, err := simulator.GetWithFixedSeedInsecure(1234567890)
 	if err != nil {
 		logger.Error(err)
 		return nil, err
@@ -183,10 +176,7 @@ func NewSimulation(
 		device:       nil,
 		simulator:    sim,
 		transport:    transport.FromReadWriter(sim),
-		ekCertName:   ekBlobName,
-		ekBlobKey:    fmt.Sprintf("%s/%s/%s", blobStorePrefix, domain, ekBlobName),
-		domain:       domain,
-		caPassword:   caPassword}
+		domain:       domain}
 
 	random, err := tpm.randomReader()
 	if err != nil {
@@ -201,10 +191,10 @@ func (tpm *TPM2) Open() error {
 
 	var t transport.TPM
 
-	if tpm.config.UseSimulator && tpm.simulator == nil {
+	if tpm.config.UseSimulator {
 
 		tpm.logger.Info(infoOpeningSimulator)
-		sim, err := simulator.Get()
+		sim, err := simulator.GetWithFixedSeedInsecure(1234567890)
 		if err != nil {
 			tpm.logger.Error(err)
 			return err
@@ -225,6 +215,16 @@ func (tpm *TPM2) Open() error {
 
 	tpm.transport = t
 	return nil
+}
+
+func (tpm *TPM2) Device() string {
+	return tpm.config.Device
+}
+
+// Returns the underlying transport.TPM used to facilitate
+// the logical connection to the TPM.
+func (tpm *TPM2) Transport() transport.TPM {
+	return tpm.transport
 }
 
 // Closes the connection to the TPM
@@ -289,24 +289,11 @@ func (tpm *TPM2) Init() error {
 	return nil
 }
 
-// Returns a parsed TPM Event Log
-func (tpm *TPM2) Measurements(logpath []byte) (*EventLog, error) {
-
-	if logpath == nil {
-		measurementLog, err := os.ReadFile("/sys/kernel/security/tpm0/binary_bios_measurements")
-		if err != nil {
-			tpm.logger.Error("tpm: error reading event log: %s", err)
-			return nil, err
-		}
-
-		tpm.logger.Infof("tpm: read %d bytes from event log", len(measurementLog))
-
-		return ParseEventLog(measurementLog)
-	}
-
-	tpm.logger.Infof("tpm: parsing event log: %+v", logpath)
-
-	return ParseEventLog(logpath)
+// Returns the TPM EK blob storage key
+func (tpm *TPM2) ekCertBlobKey() string {
+	return tpm.ca.TPMBlobKey(
+		tpm.ca.CACertificate().Subject.CommonName,
+		ekCertBlobName)
 }
 
 // Retrieve the requested Endorsement Key Certificate from the Certificate
@@ -319,8 +306,9 @@ func (tpm *TPM2) EKCert(ekHandle *tpm2.TPMHandle, srkAuth []byte) (*x509.Certifi
 
 	tpm.logger.Debug("tpm: checking Certificate Authority for signed EK certificate")
 
+	ekBlobKey := tpm.ekCertBlobKey()
 	// Check the CA for a signed EK cert
-	certPEM, err := tpm.ca.SignedData(tpm.ekBlobKey)
+	certPEM, err := tpm.ca.EndorsementKeyCertificate()
 	if err == nil {
 		// Perform integrity check on the cert
 		signerOpts, err := ca.NewSigningOpts(tpm.ca.Hash(), certPEM)
@@ -328,7 +316,7 @@ func (tpm *TPM2) EKCert(ekHandle *tpm2.TPMHandle, srkAuth []byte) (*x509.Certifi
 			return nil, err
 		}
 		verifyOpts := &ca.VerifyOpts{
-			BlobKey:            &tpm.ekBlobKey,
+			BlobKey:            &ekBlobKey,
 			UseStoredSignature: true,
 		}
 		if err := tpm.ca.VerifySignature(signerOpts.Digest(), nil, verifyOpts); err != nil {
@@ -353,12 +341,14 @@ func (tpm *TPM2) EKCert(ekHandle *tpm2.TPMHandle, srkAuth []byte) (*x509.Certifi
 	if err != nil {
 		return nil, err
 	}
+	defer tpm.Flush(ek.Handle)
 
 	// Create RSA SRK
 	srk, err := tpm.RSASRK(ek, srkAuth)
 	if err != nil {
 		return nil, err
 	}
+	defer tpm.Flush(srk.Handle)
 
 	// Create session to the TPM. Use SRK password auth if provided.
 	var session tpm2.Session
@@ -404,20 +394,22 @@ func (tpm *TPM2) EKCert(ekHandle *tpm2.TPMHandle, srkAuth []byte) (*x509.Certifi
 
 	// Import the EK public key to the CA
 	tpm.logger.Infof("tpm: importing EK Public Key to Certificate Authority")
-	if err := tpm.ca.ImportPubKey(tpm.ekCertName, cert.PublicKey); err != nil {
+	if err := tpm.ca.ImportPubKey(ekCertBlobName, cert.PublicKey); err != nil {
 		tpm.logger.Error(err)
 		return nil, err
 	}
 
-	// Sign and save the EK certificate to the CA
+	// Sign the EK certificate using the CA public key
+	// and save the certificate to blob storage
 	tpm.logger.Infof("tpm: signing EK certificate and importing to Certificate Authority")
 	sigOpts, err := ca.NewSigningOpts(tpm.ca.Hash(), certPEM)
 	if err != nil {
 		return nil, err
 	}
-	blobKey := tpm.BlobKey(tpm.domain, tpm.ekCertName)
+	blobName := ekCertBlobName
+	blobKey := tpm.ca.TPMBlobKey(tpm.domain, ekCertBlobName)
 	sigOpts.KeyCN = &tpm.domain
-	sigOpts.KeyName = &tpm.ekCertName
+	sigOpts.KeyName = &blobName
 	sigOpts.BlobKey = &blobKey
 	sigOpts.StoreSignature = true
 	if _, err = tpm.ca.Sign(tpm.random, sigOpts.Digest(), sigOpts); err != nil {
@@ -577,6 +569,7 @@ func (tpm *TPM2) RSASRK(ek Key, password []byte) (Key, error) {
 	if err != nil {
 		return Key{}, nil
 	}
+	key.Handle = response.ObjectHandle
 	key.BPublicBytes = response.OutPublic.Bytes()
 	key.Auth = password
 
@@ -684,7 +677,7 @@ func (tpm *TPM2) ECCAK() (Key, DerivedKey, error) {
 		return Key{}, DerivedKey{}, nil
 	}
 	// Parse the RSA public / private key
-	akECC, err := tpm.parseECC(akPub, createLoadedResponse.OutPrivate.Buffer)
+	akECC, err := tpm.parseECC(akPub)
 	if err != nil {
 		tpm.logger.Error(err)
 		return Key{}, DerivedKey{}, nil
@@ -779,7 +772,7 @@ func (tpm *TPM2) DerivedKey(key Key) (Key, error) {
 		derivedKey.RSAPubKey = rsa.RSAPubKey
 
 	case tpm2.TPMAlgECC:
-		ecc, err := tpm.parseECC(pub, nil)
+		ecc, err := tpm.parseECC(pub)
 		if err != nil {
 			return Key{}, err
 		}
@@ -1101,7 +1094,7 @@ func (tpm *TPM2) ActivateCredential(ak DerivedKey, credential Credential) ([]byt
 	return digest, nil
 }
 
-// Creates a Quote signed by the Endorsement Key
+// Creates a Quote signed by an Attestation Key
 func (tpm *TPM2) Quote(pcrs []uint, nonce []byte) (Quote, error) {
 
 	primaryKey, err := tpm2.CreatePrimary{
@@ -1183,15 +1176,49 @@ func (tpm *TPM2) Quote(pcrs []uint, nonce []byte) (Quote, error) {
 		return Quote{}, err
 	}
 
-	// rsassa, err := q.Signature.Signature.RSASSA()
-	// if err != nil {
-	// 	tpm.logger.Error(err)
-	// 	return Quote{}, err
-	// }
+	rsassa, err := q.Signature.Signature.RSASSA()
+	if err != nil {
+		tpm.logger.Error(err)
+		return Quote{}, err
+	}
+
+	// Get the event log:
+	// Rather than parsing the event log and secure boot state,
+	// capture the raw binary log as a blob so it can be signed
+	// and imported to the CA blob storage. Verify should do a byte
+	// level comparison and digest verification for the system state
+	// integrity check.
+	// https://github.com/google/go-attestation/blob/master/docs/event-log-disclosure.md
+	eventLog, err := tpm.EventLog()
+	if err != nil {
+		return Quote{}, err
+	}
+
+	// Get the key public area and parse the RSA public key
+	pub, err := rsaKeyResponse.OutPublic.Contents()
+	if err != nil {
+		tpm.logger.Error(err)
+		return Quote{}, err
+	}
+	akRSA, err := tpm.parseRSA(pub, nil)
+	if err != nil {
+		tpm.logger.Error(err)
+		return Quote{}, err
+	}
+
+	quotedPCRs, err := tpm.ReadPCRs(pcrs)
+	if err != nil {
+		tpm.logger.Error(err)
+		return Quote{}, err
+	}
 
 	return Quote{
-		Quoted: q.Quoted.Bytes(),
-		Nonce:  nonce,
+		Nonce:          nonce,
+		Quoted:         q.Quoted.Bytes(),
+		Signature:      rsassa.Sig.Buffer,
+		PCRs:           quotedPCRs,
+		EventLog:       eventLog,
+		PublicKeyBytes: akRSA.PublicKeyBytes,
 	}, nil
 }
 
@@ -1548,7 +1575,7 @@ func (tpm *TPM2) ImportTSSFile(
 			tpm.logger.Error(err)
 			return nil, err
 		}
-		return tpm.ImportEKCert(tpm.domain, tpm.ekCertName, ekCert, verify)
+		return tpm.ImportEKCert(tpm.domain, ekCertBlobName, ekCert, verify)
 	}
 
 	// Passed, encode the ASN.1 DER bytes to PEM
@@ -1557,7 +1584,7 @@ func (tpm *TPM2) ImportTSSFile(
 	// 	tpm.logger.Error(err)
 	// 	return nil, err
 	// }
-	return tpm.ImportEKCert(tpm.domain, tpm.ekCertName, ekCert, verify)
+	return tpm.ImportEKCert(tpm.domain, ekCertBlobName, ekCert, verify)
 }
 
 // Imports a local or remote attestor EK certificate in raw ASN.1 DER form
@@ -1616,10 +1643,14 @@ func (tpm *TPM2) ImportEKCert(
 	}
 	ekCert.UnhandledCriticalExtensions = nil
 
+	// Assign the global ekCertBlobName to a local variable so it can be
+	// passed as a reference to Verify
+	ekCertBlobName := ekCertBlobName
+
 	// Verify the certificate using the Certificate Authority Root & Intermediate
 	// Certifiates along with all imported Trusted Root and Intermediate certificates.
 	if verify {
-		_, err := tpm.ca.Verify(ekCert, &tpm.ekCertName)
+		_, err := tpm.ca.Verify(ekCert, &ekCertBlobName)
 		if err != nil {
 			// The above Verify call should have already auto-imported
 			// the issuing CA if auto-import is enabled for the CA. Now
@@ -1629,11 +1660,11 @@ func (tpm *TPM2) ImportEKCert(
 			if _, ok := err.(x509.UnknownAuthorityError); ok {
 				// Auto-import the EK platform certificates
 				// if auto-import-ek-certs enabled in the TPM
-				// config section, overriding the CA global
+				// config section. This overrides the global CA
 				// auto-import setting.
 				if tpm.config.AutoImportEKCerts {
 					tpm.logger.Info("Importing Endorsement Key (EK) platform certificates")
-					if err := tpm.ca.ImportIssuingCAs(ekCert, &tpm.ekCertName, ekCert); err != nil {
+					if err := tpm.ca.ImportIssuingCAs(ekCert, &ekCertBlobName, ekCert); err != nil {
 						return nil, err
 					}
 				}
@@ -1643,7 +1674,7 @@ func (tpm *TPM2) ImportEKCert(
 		}
 		// All EK platform certs are imported into the Certificate
 		// Authority trust store, now verify the EK certificate.
-		valid, err := tpm.ca.Verify(ekCert, &tpm.ekCertName) // &tpm.ekCertName
+		valid, err := tpm.ca.Verify(ekCert, &ekCertBlobName)
 		if err != nil {
 			tpm.logger.Error(err)
 			return nil, err
@@ -1656,57 +1687,30 @@ func (tpm *TPM2) ImportEKCert(
 
 	tpm.logger.Debugf(string(ekCertPEM))
 
-	blobKey := tpm.BlobKey(domain, cn)
-	sigOpts, err := ca.NewSigningOpts(tpm.ca.Hash(), ekCertPEM)
-	sigOpts.BlobKey = &blobKey
-	sigOpts.BlobData = ekCertPEM
-	sigOpts.StoreSignature = true
-	if _, err = tpm.ca.Sign(tpm.random, sigOpts.Digest(), sigOpts); err != nil {
+	// Import the key into the CA
+	if err := tpm.ca.ImportEndorsementKeyCertificate(ekCertPEM); err != nil {
 		return nil, err
 	}
+
 	tpm.logger.Info("Endorsement Key (EK) successfully imported to Certificate Authority")
 	return ekCert, nil
 }
 
-// Imports an Attestation Key x509 certificate to the CA blob store
-func (tpm *TPM2) ImportAKCert(service string, akDER []byte) error {
-	// Build cert path
-	akCertPathDER := fmt.Sprintf(
-		"%s/%s%s",
-		service, akCertBlobName, ca.FSEXT_DER)
-	blobKeyDER := tpm.BlobKey(tpm.domain, akCertPathDER)
-
-	// Create signing options - store the cert, digest and checksum
-	sigOpts, err := ca.NewSigningOpts(tpm.ca.Hash(), akDER)
-	sigOpts.BlobKey = &blobKeyDER
-	sigOpts.BlobData = akDER
-	sigOpts.StoreSignature = true
-
-	// Sign the DER digest
-	if _, err = tpm.ca.Sign(tpm.random, sigOpts.Digest(), sigOpts); err != nil {
-		return err
-	}
-
-	// Encode the AK DER cert to PEM
-	akPEM, err := tpm.ca.EncodePEM(akDER)
+// Retrieves the raw event log from /sys/kernel/security/tpm*/binary_bios_measurements
+func (tpm *TPM2) EventLog() ([]byte, error) {
+	measurementLogPath := fmt.Sprintf(
+		"/sys/kernel/security/%s/binary_bios_measurements",
+		tpm.tpmDeviceName())
+	bytes, err := os.ReadFile(measurementLogPath)
 	if err != nil {
-		return err
+		tpm.logger.Error(err)
+		return nil, err
 	}
-
-	// Save the PEM cert
-	akCertPathPEM := fmt.Sprintf(
-		"%s/%s.%s",
-		service, akCertBlobName, ca.FSEXT_PEM)
-	blobKeyPEM := tpm.BlobKey(tpm.domain, akCertPathPEM)
-	if err := tpm.ca.ImportBlob(blobKeyPEM, akPEM); err != nil {
-		return err
-	}
-
-	return nil
+	return bytes, nil
 }
 
 // Reads all Platform Configuration Register (PCR) values
-func (tpm *TPM2) ReadPCRs() (map[string][][]byte, error) {
+func (tpm *TPM2) ReadPCRs(pcrList []uint) (map[string][][]byte, error) {
 
 	maxPCR := uint(23)
 	out := make(map[string][][]byte, 0)
@@ -1723,43 +1727,48 @@ func (tpm *TPM2) ReadPCRs() (map[string][][]byte, error) {
 		tpm2.TPMAlgSHA384,
 		tpm2.TPMAlgSHA512}
 
+Exit:
 	for j, algo := range algos {
 
-		pcrs := make([][]byte, maxPCR+1)
+		encoded := make([][]byte, 0)
 
-		for i := uint(0); i < maxPCR+1; i++ {
+		for _, pcr := range pcrList {
 
+			if pcr > maxPCR {
+				return nil, ErrInvalidPCRIndex
+			}
 			pcrRead := tpm2.PCRRead{
 				PCRSelectionIn: tpm2.TPMLPCRSelection{
 					PCRSelections: []tpm2.TPMSPCRSelection{
 						{
 							Hash:      algo,
-							PCRSelect: PCClientCompatible.PCRs(uint(i)),
+							PCRSelect: PCClientCompatible.PCRs(pcr),
 						},
 					},
 				},
 			}
-
-			pcrReadRsp, err := pcrRead.Execute(tpm.transport)
+			response, err := pcrRead.Execute(tpm.transport)
 			if err != nil {
 				if strings.Contains(err.Error(), ErrHashAlgorithmNotSupported.Error()) {
-					//tpm.logger.Warningf("tpm: error reading PCR Bank %s: %s", algoNames[i], err)
+					tpm.logger.Warningf("tpm: error reading PCR Bank %s: %s", algo, err)
 					return out, nil
 				}
 			}
-			if pcrReadRsp == nil {
+			if response == nil {
+				if strings.Contains(err.Error(), "hash algorithm not supported or not appropriate") {
+					break Exit
+				}
 				tpm.logger.Errorf("tpm: error reading PCR bank %s: %s", algoNames[j], err)
 				return out, nil
 			}
 
-			buffer := pcrReadRsp.PCRValues.Digests[0].Buffer
-			encoded := tpm.Encode(buffer)
-
-			pcrs[i] = []byte(encoded)
-			// tpm.logger.Debugf("pcr %d: 0x%s", i, encoded)
+			buf := response.PCRValues.Digests[0].Buffer
+			enc := []byte(tpm.Encode(buf))
+			encoded = append(encoded, enc)
+			tpm.logger.Debugf("pcr %d: 0x%s", pcr, enc)
 		}
 
-		out[algoNames[j]] = pcrs
+		out[algoNames[j]] = encoded
 	}
 
 	return out, nil
@@ -1905,17 +1914,6 @@ func (tpm *TPM2) downloadEKCertFromManufacturer() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Creates a new signed blob storage key for the local TPM
-// func (tpm *TPM2) ekCertBlobKey() string {
-// 	return fmt.Sprintf("%s/%s", blobStorePrefix, tpm.ekBlobKey)
-// }
-
-// Returns the relative path to the blob store for TPM objects
-// given a domain and common name for the object.
-func (tpm *TPM2) BlobKey(domain, cn string) string {
-	return fmt.Sprintf("%s/%s/%s", blobStorePrefix, domain, cn)
-}
-
 // Extracts a RSA Public Key from a TPM CreatePrimary response
 func (tpm *TPM2) parsePrimaryRSA(
 	response *tpm2.CreatePrimaryResponse) (Key, error) {
@@ -1944,7 +1942,7 @@ func (tpm *TPM2) parsePrimaryECC(
 		tpm.logger.Error(err)
 		return Key{}, err
 	}
-	key, err := tpm.parseECC(ekPub, nil)
+	key, err := tpm.parseECC(ekPub)
 	if err != nil {
 		return key, err
 	}
@@ -1955,7 +1953,7 @@ func (tpm *TPM2) parsePrimaryECC(
 }
 
 // Extracts the ECC public key from the public area of a TPM response
-func (tpm *TPM2) parseECC(pub *tpm2.TPMTPublic, rsaPrivBlob []byte) (Key, error) {
+func (tpm *TPM2) parseECC(pub *tpm2.TPMTPublic) (Key, error) {
 	eccUnique, err := pub.Unique.ECC()
 	if err != nil {
 		tpm.logger.Error(err)
@@ -2081,3 +2079,60 @@ func (tpm *TPM2) DebugAttestationKey(ak DerivedKey) {
 	tpm.logger.Debugf("\tPrivateKeyPEM: %s", ak.PrivateKeyPEM)
 	tpm.logger.Debugf("\tPublicKeyPEM: %x", ak.PublicKeyPEM)
 }
+
+func (tpm *TPM2) tpmDeviceName() string {
+	filename := filepath.Base(tpm.config.Device)
+	return strings.ReplaceAll(filename, "tpmrm", "tpm")
+}
+
+// Returns a parsed TPM Event Log
+// func (tpm *TPM2) MeasurementLog(logpath []byte) (*EventLog, error) {
+// 	if logpath == nil {
+// 		measurementLog, err := os.ReadFile("/sys/kernel/security/tpm0/binary_bios_measurements")
+// 		if err != nil {
+// 			tpm.logger.Error("tpm: error reading event log: %s", err)
+// 			return nil, err
+// 		}
+// 		tpm.logger.Infof("tpm: read %d bytes from event log", len(measurementLog))
+// 		return ParseEventLog(measurementLog)
+// 	}
+// 	tpm.logger.Infof("tpm: parsing event log: %+v", logpath)
+// 	return ParseEventLog(logpath)
+// }
+
+// // Imports an Attestation Key x509 certificate to the CA blob store
+// func (tpm *TPM2) ImportAKCert(service string, akDER []byte) error {
+// 	// Build cert path
+// 	akCertPathDER := fmt.Sprintf(
+// 		"%s/%s%s",
+// 		service, akCertBlobName, ca.FSEXT_DER)
+// 	blobKeyDER := tpm.ca.TPMBlobKey(tpm.domain, akCertPathDER)
+
+// 	// Create signing options - store the cert, digest and checksum
+// 	sigOpts, err := ca.NewSigningOpts(tpm.ca.Hash(), akDER)
+// 	sigOpts.BlobKey = &blobKeyDER
+// 	sigOpts.BlobData = akDER
+// 	sigOpts.StoreSignature = true
+
+// 	// Sign the DER digest
+// 	if _, err = tpm.ca.Sign(tpm.random, sigOpts.Digest(), sigOpts); err != nil {
+// 		return err
+// 	}
+
+// 	// Encode the AK DER cert to PEM
+// 	akPEM, err := tpm.ca.EncodePEM(akDER)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	// Save the PEM cert
+// 	akCertPathPEM := fmt.Sprintf(
+// 		"%s/%s.%s",
+// 		service, akCertBlobName, ca.FSEXT_PEM)
+// 	blobKeyPEM := tpm.ca.TPMBlobKey(tpm.domain, akCertPathPEM)
+// 	if err := tpm.ca.ImportBlob(blobKeyPEM, akPEM); err != nil {
+// 		return err
+// 	}
+
+// 	return nil
+// }

@@ -80,9 +80,14 @@ var (
 	ErrUnsupportedSigningAlgorithm  = errors.New("certificate-authority: unsupported signing algorithm")
 	ErrUnsupportedHashAlgorithm     = errors.New("certificate-authority: unsupported hashing algorithm")
 	ErrUnsupportedRSAScheme         = errors.New("certificate-authority: unsupported RSA padding scheme")
+	ErrInvalidAttestationBlobType   = errors.New("certificate-authority: invalid attestation blob type")
 )
 
 type CertificateAuthority interface {
+	AttestationEventLog(cn string) ([]byte, error)
+	AttestationPCRs(cn string) (map[string][][]byte, error)
+	AttestationQuote(cn string) ([]byte, error)
+	AttestationSignature(cn, blobType string) ([]byte, error)
 	Blob(key string) ([]byte, error)
 	CABundle() ([]byte, error)
 	CABundleCertPool() (*(x509.CertPool), error)
@@ -95,6 +100,10 @@ type CertificateAuthority interface {
 	DecodeCSR(bytes []byte) (*x509.CertificateRequest, error)
 	Decrypt(rand io.Reader, msg []byte, opts crypto.DecrypterOpts) (plaintext []byte, err error)
 	DecryptionKey(cn, keyName string, password []byte) (crypto.Decrypter, error)
+	DecodePEM(bytes []byte) (*x509.Certificate, error)
+	DecodeRSAPubKeyPEM(bytes []byte) (crypto.PublicKey, error)
+	DefaultValidityPeriod() int
+	DER(cn string) ([]byte, error)
 	Digest(key string, hash crypto.Hash) (bool, error)
 	EncodePEM(derCert []byte) ([]byte, error)
 	EncodePubKey(pub crypto.PublicKey) ([]byte, error)
@@ -102,10 +111,7 @@ type CertificateAuthority interface {
 	EncodePrivKey(privateKey crypto.PrivateKey, password []byte) ([]byte, error)
 	EncodePrivKeyPEM(der []byte, isEncrypted bool) ([]byte, error)
 	EncryptionKey(cn, keyName string) (*rsa.PublicKey, error)
-	DecodePEM(bytes []byte) (*x509.Certificate, error)
-	DecodeRSAPubKeyPEM(bytes []byte) (crypto.PublicKey, error)
-	DefaultValidityPeriod() int
-	DER(cn string) ([]byte, error)
+	EndorsementKeyCertificate() ([]byte, error)
 	Hash() crypto.Hash
 	HashFileExtension(hash crypto.Hash) string
 	Init(
@@ -121,10 +127,16 @@ type CertificateAuthority interface {
 	IssuePrivKey(cn string, privateKey crypto.PrivateKey, password []byte) error
 	IssuePubKey(cn string, pub crypto.PublicKey) error
 	Import(cer *x509.Certificate) error
+	ImportAttestation(cn, blobType string, data []byte) error
+	ImportAttestationKeyCertificate(domain, service string, akDER []byte) error
+	ImportAttestationEventLog(cn string, data []byte) error
+	ImportAttestationPCRs(cn string, pcrs map[string][][]byte) error
+	ImportAttestationQuote(cn string, data []byte) error
 	ImportBlob(key string, data []byte) error
 	ImportCN(cn string, cert *x509.Certificate) error
 	ImportDER(cn string, derCert []byte) error
 	ImportDistrbutionCRLs(cert *x509.Certificate) error
+	ImportEndorsementKeyCertificate(ekCertPEM []byte) error
 	ImportPEM(cn string, pemBytes []byte) error
 	ImportIssuingCAs(cert *x509.Certificate, leafCN *string, leaf *x509.Certificate) error
 	ImportTrustedRoot(cn string, derCert []byte) error
@@ -152,16 +164,20 @@ type CertificateAuthority interface {
 	Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) (signature []byte, err error)
 	Signature(key string) ([]byte, error)
 	Signed(key string) (bool, error)
-	SignedData(key string) ([]byte, error)
+	SignedBlob(key string) ([]byte, error)
 	SignCSR(csrBytes []byte, request CertificateRequest, password []byte) ([]byte, error)
 	SigningKey(cn, keyName string, password []byte) (SigningKey, error)
 	TLSConfig(cn, name string, password []byte, includeSystemRoot bool) (*tls.Config, error)
+	TPMBlobKey(domain, cn string) string
 	TrustStore() TrustStore
 	TrustedRootCertificate(cn string) (*x509.Certificate, error)
 	TrustedRootCertPool(includeSystemRoot bool) (*x509.CertPool, error)
 	TrustedIntermediateCertificate(cn string) (*x509.Certificate, error)
 	TrustedIntermediateCertPool() (*x509.CertPool, error)
 	Verify(certificate *x509.Certificate, leafCN *string) (bool, error)
+	VerifyAttestationEventLog(cn string, eventLog []byte) error
+	VerifyAttestationPCRs(cn string, pcrs map[string][][]byte) error
+	VerifyAttestationQuote(cn string, quote []byte) error
 	VerifyPKCS1v15(digest, signature []byte, opts *VerifyOpts) error
 	VerifySignature(digest []byte, signature []byte, opts *VerifyOpts) error
 	X509KeyPair(cn, name string, password []byte) (tls.Certificate, error)

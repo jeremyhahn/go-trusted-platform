@@ -116,6 +116,11 @@ attestation:
 
   # PCRs used for Quote/Verify
   # quote-pcrs: 0,1,2,3,4,5,6,7,8,9
+  # quote-pcrs: 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,15,17,18,19,20,21,22,23
+  #
+  # TODO: investigate this -
+  # Passing more than 4 PC$ values to the simulator results in:
+  # TPM_RC_SIZE (parameter 3): structure is the wrong size
   quote-pcrs: 6,7,8,9
 
 

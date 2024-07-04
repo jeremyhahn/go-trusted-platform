@@ -22,14 +22,11 @@ var attestorCmd = &cobra.Command{
 	Long: `Starts the Attestor service to bebin listening for inbound
 verification requests from the Verifier to begin Full Remote Attestation`,
 	Run: func(cmd *cobra.Command, args []string) {
-		var caPassword, serverPassword []byte
-		if CAPassword != "" {
-			caPassword = []byte(CAPassword)
-		}
+		var serverPassword []byte
 		if TLSPassword != "" {
 			serverPassword = []byte(TLSPassword)
 		}
-		if _, err := attestor.NewAttestor(App, caPassword, serverPassword); err != nil {
+		if _, err := attestor.NewAttestor(App, serverPassword); err != nil {
 			App.Logger.Fatal(err)
 		}
 		// Run forever

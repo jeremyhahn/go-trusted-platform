@@ -541,7 +541,8 @@ func (store *FileSystemCertStore) Blob(key string) ([]byte, error) {
 	bytes, err := os.ReadFile(blobFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			store.logger.Errorf("certificate-store: error retrieving blob: %s", blobFile)
+			store.logger.Errorf("certificate-store: error retrieving blob: %s, key: %s",
+				blobFile, key)
 			return nil, ErrBlobNotFound
 		}
 		return nil, err
@@ -577,7 +578,8 @@ func (store *FileSystemCertStore) Get(
 	if err != nil {
 		if os.IsNotExist(err) {
 			store.logger.Warningf(
-				"certificate-store: error retrieving certificate %s", certFile)
+				"certificate-store: error retrieving certificate: %s, cn: %s, parition: %s",
+				certFile, cn, partition)
 			return nil, ErrCertNotFound
 		}
 		return nil, err

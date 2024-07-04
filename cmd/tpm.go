@@ -86,7 +86,7 @@ https://www.intel.com/content/www/us/en/business/enterprise-computers/resources/
 			// }
 			//App.Logger.Infof("%+v", measurementLog)
 
-			eventLog, err := App.TPM.Measurements(nil)
+			eventLog, err := App.TPM.EventLog()
 			if err != nil {
 				App.Logger.Fatalf("error parsing event log: %s", err)
 			}

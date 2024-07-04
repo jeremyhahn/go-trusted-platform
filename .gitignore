@@ -15,9 +15,10 @@ db/
 logs/
 ca/certs
 tpm2/certs
-attestation/attestor/db
+attestation/attestor/trusted-data
 attestation/attestor/logs
 attestation/attestor/config.yaml
-attestation/verifier/db
+attestation/verifier/trusted-data
 attestation/verifier/logs
 attestation/verifier/config.yaml
+python-venv/
