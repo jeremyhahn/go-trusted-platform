@@ -16,7 +16,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/app"
 	"github.com/jeremyhahn/go-trusted-platform/ca"
 	"github.com/jeremyhahn/go-trusted-platform/config"
-	"github.com/jeremyhahn/go-trusted-platform/tpm2"
 	"github.com/op/go-logging"
 
 	pb "github.com/jeremyhahn/go-trusted-platform/attestation/proto"
@@ -45,8 +44,6 @@ type Attest struct {
 	debug                bool
 	debugSecrets         bool
 	ca                   ca.CertificateAuthority
-	tpm                  tpm2.TrustedPlatformModule2
-	caPassword           []byte
 	serverTLSPassword    []byte
 	secureGRPCServer     *grpc.Server
 	secureServerStopChan chan bool
@@ -59,17 +56,15 @@ type Attest struct {
 // Entry-point when invoked directly
 func main() {
 	app := app.NewApp().Init(nil)
-	// caPassword := []byte(*fCaPassword)
 	// serverPassword := []byte(*fServerPassword)
-	//if _, err := NewAttestor(app, caPassword, serverPassword); err != nil {
-	if _, err := NewAttestor(app, nil, nil); err != nil {
+	if _, err := NewAttestor(app, nil); err != nil {
 		app.Logger.Fatal(err)
 	}
 	// Run forever
 }
 
 // Creates a new Attestor (client role)
-func NewAttestor(app *app.App, caPassword, serverPassword []byte) (Attestor, error) {
+func NewAttestor(app *app.App, serverPassword []byte) (Attestor, error) {
 
 	var wg sync.WaitGroup
 	secureServerStopChan := make(chan bool)
@@ -79,11 +74,9 @@ func NewAttestor(app *app.App, caPassword, serverPassword []byte) (Attestor, err
 		logger:               app.Logger,
 		config:               app.AttestationConfig,
 		ca:                   app.CA,
-		tpm:                  app.TPM,
 		domain:               app.Domain,
 		debug:                app.DebugFlag,
 		debugSecrets:         app.DebugSecretsFlag,
-		caPassword:           caPassword,
 		serverTLSPassword:    serverPassword,
 		verifierCertPools:    verifierCertPools,
 		verifierCertsMutex:   sync.RWMutex{},
@@ -114,10 +107,6 @@ func NewAttestor(app *app.App, caPassword, serverPassword []byte) (Attestor, err
 			app.Logger.Fatal(err)
 		}
 	}()
-
-	if err := attestor.tpm.Open(); err != nil {
-		return nil, err
-	}
 
 	wg.Wait()
 
@@ -181,13 +170,14 @@ func (attestor *Attest) newTLSGRPCServer(secureService *SecureAttestor) error {
 		attestor.logger.Fatalf("failed to listen: %v", err)
 	}
 
-	// statsHandler := &handler{
-	// 	logger:   attestor.logger,
-	// 	attestor: attestor,
-	// }
+	statsHandler := &handler{
+		logger:        attestor.logger,
+		attestor:      attestor,
+		secureService: secureService,
+	}
 	sopts := []grpc.ServerOption{grpc.MaxConcurrentStreams(10)}
 	sopts = append(sopts, grpc.Creds(creds), grpc.UnaryInterceptor(authUnaryInterceptor))
-	// sopts = append(sopts, grpc.StatsHandler(statsHandler))
+	sopts = append(sopts, grpc.StatsHandler(statsHandler))
 	attestor.secureGRPCServer = grpc.NewServer(sopts...)
 
 	// verifier.RegisterVerifierServer(s, &server{})

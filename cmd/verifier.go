@@ -38,7 +38,7 @@ Attestation or quote / Verify operations`,
 		if err != nil {
 			App.Logger.Fatal(err)
 		}
-		if err := verifier.Provision(); err != nil {
+		if err := verifier.Attest(); err != nil {
 			App.Logger.Fatal(err)
 		}
 	},

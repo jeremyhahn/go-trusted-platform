@@ -66,8 +66,7 @@ message QuoteRequest {
 }
 
 message QuoteResponse {
-  bytes nonce = 1;
-  bytes quoted = 2;  
+  bytes quote = 1;
 }
 
 // Not used by gRPC. The Verifier uses this

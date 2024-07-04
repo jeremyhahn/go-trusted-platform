@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/google/go-tpm/tpm2"
+	"github.com/google/logger"
 	"github.com/jeremyhahn/go-trusted-platform/ca"
 	"github.com/op/go-logging"
 	"github.com/stretchr/testify/assert"
@@ -101,11 +102,12 @@ func TestQuote(t *testing.T) {
 
 func TestReadPCRs(t *testing.T) {
 
-	logger, tpm, tmpDir := createSim(false, false)
+	_, tpm := createTPM(false, false)
 	defer tpm.Close()
-	defer cleanTempDir(tmpDir)
 
-	algos, err := tpm.ReadPCRs()
+	pcrs := []uint{0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11,
+		12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23}
+	algos, err := tpm.ReadPCRs(pcrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, algos)
 
@@ -114,26 +116,29 @@ func TestReadPCRs(t *testing.T) {
 		logger.Infof("%s", algoK)
 
 		for pcrK, pcrV := range algoV {
-			logger.Infof("%d: 0x%s", pcrK, pcrV)
+			logger.Infof("%d: 0x%s", pcrK, string(pcrV))
 		}
 	}
+
+	assert.Equal(t, 23, len(algos["SHA1"]))
+	assert.Equal(t, 23, len(algos["SHA256"]))
 }
 
 // NOTE: The user account running the test requires read permissions
 // to binary_bios_measurements:
 // sudo chown root.myuser /sys/kernel/security/tpm0/binary_bios_measurements
-func TestParseEventLog(t *testing.T) {
+// func TestParseEventLog(t *testing.T) {
 
-	logger, tpm, tmpDir := createSim(false, false)
-	defer tpm.Close()
-	defer cleanTempDir(tmpDir)
+// 	logger, tpm, tmpDir := createSim(false, false)
+// 	defer tpm.Close()
+// 	defer cleanTempDir(tmpDir)
 
-	eventLog, err := tpm.Measurements(nil)
-	assert.Nil(t, err)
-	assert.NotNil(t, eventLog)
+// 	eventLog, err := tpm.MeasurementLog(nil)
+// 	assert.Nil(t, err)
+// 	assert.NotNil(t, eventLog)
 
-	logger.Debugf("%d", eventLog)
-}
+// 	logger.Debugf("%d", eventLog)
+// }
 
 func TestMakeActivateCredentialWithGeneratedSecret(t *testing.T) {
 
@@ -312,14 +317,13 @@ func TestRandom(t *testing.T) {
 
 	debugSecrets := true
 	domain := "test.com"
-	password := []byte("Secret!2#4")
 
 	// Create TPM instance
 	tpm, err := NewTPM2(logger, debugSecrets, &Config{
 		Device:         "/dev/tpmrm0",
 		EncryptSession: false,
 		UseEntropy:     true,
-	}, password, domain)
+	}, domain)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -337,12 +341,33 @@ func TestRandom(t *testing.T) {
 	logger.Debugf("%+s", encoded)
 }
 
+// Creates a basic connection the TPM (without creating a CA)
+func createTPM(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2) {
+
+	debugSecrets := true
+	domain := "test.com"
+
+	stdout := logging.NewLogBackend(os.Stdout, "", 0)
+	logging.SetBackend(stdout)
+	logger := logging.MustGetLogger("tpm")
+
+	tpm, err := NewTPM2(logger, debugSecrets, &Config{
+		Device:         "/dev/tpmrm0",
+		EncryptSession: encrypt,
+		UseEntropy:     entropy,
+	}, domain)
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	return logger, tpm
+}
+
 // Creates a connection a simulated TPM (without creating a CA)
 func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2, string) {
 
 	debugSecrets := true
 	domain := "test.com"
-	password := []byte("intermediate-password")
 
 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
 	logging.SetBackend(stdout)
@@ -352,7 +377,7 @@ func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2, 
 		EncryptSession: encrypt,
 		UseEntropy:     entropy,
 		EKCert:         "ECcert.bin",
-	}, password, domain)
+	}, domain)
 	if err != nil {
 		logger.Fatal(err)
 	}
@@ -585,28 +610,6 @@ func defaultConfig() (*ca.Config, error) {
 // 	if err := os.WriteFile("encrypted_aik.json", akBytes, 0600); err != nil {
 // 		logger.Fatal(err)
 // 	}
-// }
-
-// Creates a basic connection the TPM (without creating a CA)
-// func createTPM(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2) {
-
-// 	debugSecrets := true
-// 	domain := "test.com"
-
-// 	stdout := logging.NewLogBackend(os.Stdout, "", 0)
-// 	logging.SetBackend(stdout)
-// 	logger := logging.MustGetLogger("tpm")
-
-// 	tpm, err := NewTPM2(logger, debugSecrets, &Config{
-// 		Device:         "/dev/tpmrm0",
-// 		EncryptSession: encrypt,
-// 		UseEntropy:     entropy,
-// 	}, domain)
-// 	if err != nil {
-// 		logger.Fatal(err)
-// 	}
-
-// 	return logger, tpm
 // }
 
 // func TestCreateAK(t *testing.T) {

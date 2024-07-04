@@ -5,12 +5,14 @@ import (
 	"context"
 	"crypto"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/gob"
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -30,15 +32,19 @@ import (
 
 const (
 	TLS_DEADLINE = time.Minute
+	akBlobName   = "ak"
 )
 
 var (
-	ErrInvalidCACertificate = errors.New("verifier: failed to add CA certificate to x509 certificate pool")
-	ErrConnectionFailed     = errors.New("verifier: connection failed")
-	ErrImportEKCert         = errors.New("verifier: failed to import Endorsement Key (EK) certificate")
-	ErrCertKeyMismatch      = errors.New("verifier: certificate / attestation public key modulus mismatch")
-	ErrInvalidPublicKey     = errors.New("verifier: invalid public key")
-	ErrInvalidCredential    = errors.New("verifier: attestor failed credential challenge")
+	ErrInvalidCACertificate    = errors.New("verifier: failed to add CA certificate to x509 certificate pool")
+	ErrConnectionFailed        = errors.New("verifier: connection failed")
+	ErrImportEKCert            = errors.New("verifier: failed to import Endorsement Key (EK) certificate")
+	ErrCertKeyMismatch         = errors.New("verifier: certificate and attestation public key modulus mismatch")
+	ErrInvalidPublicKey        = errors.New("verifier: invalid public key")
+	ErrInvalidCredential       = errors.New("verifier: attestor failed credential challenge")
+	ErrInvalidNonce            = errors.New("verifier: invalid nonce")
+	ErrUnexpectedEventLogState = errors.New("verifier: unexpected event log state")
+	ErrUnexpectedPCRState      = errors.New("verifier: unexpected PCR state")
 
 	// CLI options when invoked directly
 	attestorHostname = flag.String("attestor", "localhost", "The Attestor hostname / FQDN / IP")
@@ -61,13 +67,14 @@ type makeCredentialResponse struct {
 }
 
 type Verifier interface {
-	Provision() error
+	Attest() error
 	EKCert() (*x509.Certificate, error)
 	AKProfile(ekCert *x509.Certificate) (tpm2.Key, tpm2.DerivedKey, error)
 	MakeCredential(ek tpm2.Key, ak tpm2.DerivedKey) (makeCredentialResponse, error)
-	ActivateCredential(makeCredentialResponse makeCredentialResponse) ([]byte, error)
-	IssueCertificate(certDER []byte) error
-	Quote(ak tpm2.DerivedKey) (*pb.QuoteResponse, error)
+	ActivateCredential(makeCredentialResponse makeCredentialResponse) (tpm2.DerivedKey, error)
+	IssueCertificate(ak tpm2.DerivedKey, certDER []byte) error
+	Quote(ak tpm2.DerivedKey) (tpm2.Quote, []byte, error)
+	Verify(quote tpm2.Quote, nonce []byte) error
 	Close() error
 }
 
@@ -96,7 +103,7 @@ func main() {
 	if err != nil {
 		app.Logger.Fatal(err)
 	}
-	if err := verifier.Provision(); err != nil {
+	if err := verifier.Attest(); err != nil {
 		app.Logger.Fatal(err)
 	}
 }
@@ -329,20 +336,6 @@ func (verifier *Verification) AKProfile(ekCert *x509.Certificate) (tpm2.Key, tpm
 		return tpm2.Key{}, tpm2.DerivedKey{}, err
 	}
 
-	// // Decode EK RSA public key
-	// ekPubRSA, err := verifier.ca.DecodeRSAPubKeyPEM(response.EkPublicPEM)
-	// if err != nil {
-	// 	verifier.logger.Error(err)
-	// 	return tpm2.Key{}, tpm2.DerivedKey{}, err
-	// }
-
-	// // Decode AK RSA public key
-	// akPubRSA, err := verifier.ca.DecodeRSAPubKeyPEM(response.AkPublicPEM)
-	// if err != nil {
-	// 	verifier.logger.Error(err)
-	// 	return tpm2.Key{}, tpm2.DerivedKey{}, err
-	// }
-
 	verifier.logger.Infof("Endorsement Key (EK) Public Key PEM\n%s",
 		string(response.EkPublicPEM))
 
@@ -438,7 +431,7 @@ func (verifier *Verification) MakeCredential(ek tpm2.Key, ak tpm2.DerivedKey) (m
 // the TPM and using the EK to decrypt the secret.
 // https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_activatecredential.1.md
 func (verifier *Verification) ActivateCredential(
-	makeCredentialResponse makeCredentialResponse) ([]byte, error) {
+	makeCredentialResponse makeCredentialResponse) (tpm2.DerivedKey, error) {
 
 	verifier.logger.Info("Activating Credential")
 
@@ -452,77 +445,211 @@ func (verifier *Verification) ActivateCredential(
 		ctx, makeCredentialResponse.activationRequest)
 	if err != nil {
 		verifier.logger.Error(err)
-		return nil, err
+		return tpm2.DerivedKey{}, err
 	}
 
 	// Compare the Attestor and Verifier secret
 	if bytes.Compare(response.Secret, makeCredentialResponse.secret) != 0 {
 		verifier.logger.Error("verifier: attestor failed to activate credential")
-		return nil, ErrInvalidCredential
+		return tpm2.DerivedKey{}, ErrInvalidCredential
 	}
 
-	verifier.logger.Info("verifier: Credential activation successful")
+	verifier.logger.Info("Credential activation successful")
 
-	var certDER []byte
-	if verifier.config.AllowOpenEnrollment {
-		certDER, err = verifier.enrollAttestor(makeCredentialResponse.ak)
-		if err != nil {
-			verifier.logger.Error(err)
-			return nil, err
-		}
-	} else {
-		// look up the policy and perform Quote / Verify
-	}
-
-	return certDER, nil
+	return makeCredentialResponse.ak, nil
 }
 
-// Requests a TPM PCR quote from the Attestor
-func (verifier *Verification) Quote(ak tpm2.DerivedKey) (*pb.QuoteResponse, error) {
+// Requests a TPM PCR quote from the Attestor that includes current TPM
+// PCR values, EventLog, and Secure Boot state. If Open Enrollment is enabled,
+// the state is signed and saved to the CA's signed blob storage, the Attestation
+// Key's Public Key is imported into the key store, and an x509 certificate is
+// issued and provided to the Attestor.
+func (verifier *Verification) Quote(ak tpm2.DerivedKey) (tpm2.Quote, []byte, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), TLS_DEADLINE)
 	defer cancel()
 
-	quoteRequest := &pb.QuoteRequest{
-		Nonce: []byte("test"),
-		//Pcrs: []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9 },
-		Pcrs: verifier.app.AttestationConfig.QuotePCRs,
+	nonce, err := verifier.tpm.Random()
+	if err != nil {
+		return tpm2.Quote{}, nil, err
 	}
 
-	quote, err := verifier.secureAttestor.Quote(ctx, quoteRequest)
+	// Request a quote using PCRs specified in config
+	quoteRequest := &pb.QuoteRequest{
+		Nonce: nonce,
+		Pcrs:  verifier.app.AttestationConfig.QuotePCRs,
+	}
+
+	// Request a quote from the Attestor
+	response, err := verifier.secureAttestor.Quote(ctx, quoteRequest)
 	if err != nil {
 		verifier.logger.Error(err)
-		return nil, err
+		return tpm2.Quote{}, nil, err
 	}
 
-	return quote, nil
+	// De-gob the quote
+	var quote tpm2.Quote
+	buf := bytes.NewBuffer(response.Quote)
+	decoder := gob.NewDecoder(buf)
+	if err := decoder.Decode(&quote); err != nil {
+		return tpm2.Quote{}, nil, err
+	}
+
+	verifier.logger.Info("Quote received")
+
+	if verifier.config.AllowOpenEnrollment {
+
+		verifier.logger.Info("Beginning Open Enrollment")
+
+		// Sign data using the CA's public key and save
+		// to signed blob storage
+
+		// Sign and store the quote
+		err = verifier.ca.ImportAttestationQuote(verifier.attestor, response.Quote)
+		if err != nil {
+			verifier.logger.Error(err)
+			return tpm2.Quote{}, nil, err
+		}
+
+		// Sign and store the quote
+		err = verifier.ca.ImportAttestationEventLog(verifier.attestor, quote.EventLog)
+		if err != nil {
+			verifier.logger.Error(err)
+			return tpm2.Quote{}, nil, err
+		}
+
+		// Sign and store the PCR state
+		err = verifier.ca.ImportAttestationPCRs(verifier.attestor, quote.PCRs)
+		if err != nil {
+			verifier.logger.Error(err)
+			return tpm2.Quote{}, nil, err
+		}
+
+		// Parse the public key
+		// TODO: Support ECC keys
+		var rsaPub *rsa.PublicKey
+		publicKey, err := x509.ParsePKIXPublicKey(quote.PublicKeyBytes)
+		if err != nil {
+			verifier.logger.Error(err)
+			return tpm2.Quote{}, nil, err
+		}
+		rsaPub = publicKey.(*rsa.PublicKey)
+
+		// Import the public key to the CA public key store
+		if err := verifier.ca.ImportPubKey(verifier.attestor, rsaPub); err != nil {
+			return tpm2.Quote{}, nil, err
+		}
+	}
+
+	return quote, nonce, nil
 }
 
-// Performs enrollment by requesting a Quote from the Attestor that includes current TPM
-// PCR values, EventLog, and Secure Boot state, signing and storing them in the CA's signed
-// blob storage, creating an attestation policy, and issuing and disseminating an x509
-// Attestation Key certificate.
-func (verifier *Verification) enrollAttestor(ak tpm2.DerivedKey) ([]byte, error) {
+// Verifies a TPM 2.0 quote.
+// Rather than parsing and replaying the event log, a more simplistic
+// approach is taken, which compares the current event log and secure
+// boot state blob with the state stored in the CA signed blob store
+// captured during device enrollment. This may change in the future.
+// The rationale for this is partly due to the event log not being
+// a reliable source for integrity checking to begin with:
+// https://github.com/google/go-attestation/blob/master/docs/event-log-disclosure.md
+func (verifier *Verification) Verify(quote tpm2.Quote, nonce []byte) error {
 
-	verifier.logger.Info("Enrolling Attestor")
-
-	quote, err := verifier.Quote(ak)
-	if err != nil {
-		return nil, err
+	// Make sure the returned nonce matches the nonce
+	// that was sent in the quote request.
+	if !bytes.Equal(quote.Nonce, nonce) {
+		return ErrInvalidNonce
 	}
 
-	verifier.logger.Debugf("%+v", quote)
+	// Parse the public key
+	var rsaPub *rsa.PublicKey
+	publicKey, err := x509.ParsePKIXPublicKey(quote.PublicKeyBytes)
+	if err != nil {
+		verifier.logger.Error(err)
+		return err
+	}
+	rsaPub = publicKey.(*rsa.PublicKey)
 
-	// Generate a platform x509 certifiate request for the Attestor
+	// Verify the quote signature
+	digest := sha256.Sum256(quote.Quoted)
+	if err := rsa.VerifyPKCS1v15(rsaPub, crypto.SHA256, digest[:], quote.Signature); err != nil {
+		log.Fatalf("Failed to verify signature: %v", err)
+	}
+
+	// Verify the event log
+	err = verifier.ca.VerifyAttestationEventLog(verifier.attestor, quote.EventLog)
+	if err != nil {
+		return err
+	}
+
+	// Verify PCR state
+	err = verifier.ca.VerifyAttestationPCRs(verifier.attestor, quote.PCRs)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Imports the Attestation Key into the signed blob store
+func (verifier *Verification) importAndSignAK(ak tpm2.DerivedKey) error {
+	_ak := AttestationKey{
+		Name:           ak.Name,
+		CreationHash:   ak.CreationHash,
+		CreationData:   ak.CreationData,
+		CreationTicket: ak.CreationTicket,
+	}
+
+	akNameBlobKey := verifier.akBlobKey()
+
+	// Encode the cert to a blob
+	akBuffer := &bytes.Buffer{}
+	encoder := gob.NewEncoder(akBuffer)
+	if err := encoder.Encode(_ak); err != nil {
+		verifier.logger.Error(err)
+		return err
+	}
+
+	// Create new signing key
+	key, err := verifier.ca.NewSigningKey(
+		verifier.domain, akNameBlobKey, verifier.caPassword)
+	if err != nil {
+		return err
+	}
+
+	// Create signing options that contain the AK PEM cert
+	// and blob storage parameters
+	sigOpts, err := ca.NewSigningOpts(crypto.SHA256, akBuffer.Bytes())
+	sigOpts.BlobKey = &akNameBlobKey
+	sigOpts.BlobData = akBuffer.Bytes()
+	sigOpts.StoreSignature = true
+	if _, err = key.Sign(verifier.tpm.RandomReader(), sigOpts.Digest(), sigOpts); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Sends the issued x509 platform certifiate to the Attestor
+func (verifier *Verification) IssueCertificate(ak tpm2.DerivedKey, certDER []byte) error {
+
+	verifier.logger.Info("Issuing Attestation Key x509 certificate")
+
+	// If only a Root CA is configured, use that, otherwuse default
+	// to the first Intermediate CA.
+	idx := 0
+	if len(verifier.app.CAConfig.Identity) > 1 {
+		idx = 1
+	}
+
+	// Generate the certificate request
 	certReq := ca.CertificateRequest{
 		Valid: verifier.ca.DefaultValidityPeriod(), // days
 		Subject: ca.Subject{
 			CommonName:   verifier.attestor,
-			Organization: verifier.app.WebService.Certificate.Subject.Organization,
-			Country:      verifier.app.WebService.Certificate.Subject.Country,
-			Locality:     verifier.app.WebService.Certificate.Subject.Locality,
-			Address:      verifier.app.WebService.Certificate.Subject.Address,
-			PostalCode:   verifier.app.WebService.Certificate.Subject.PostalCode,
+			Organization: verifier.app.CAConfig.Identity[idx].Subject.CommonName,
+			Country:      verifier.app.CAConfig.Identity[idx].Subject.Country,
+			Locality:     verifier.app.CAConfig.Identity[idx].Subject.Locality,
+			Address:      verifier.app.CAConfig.Identity[idx].Subject.Address,
+			PostalCode:   verifier.app.CAConfig.Identity[idx].Subject.PostalCode,
 		},
 		SANS: &ca.SubjectAlternativeNames{
 			DNS: []string{
@@ -535,11 +662,14 @@ func (verifier *Verification) enrollAttestor(ak tpm2.DerivedKey) ([]byte, error)
 		},
 	}
 
+	// Include localhost SANS names -
+	// TODO: Refactor this to take an option provided by
+	// the attestor during enrollment
 	if verifier.app.CAConfig.IncludeLocalhostInSANS {
 		ips, err := util.LocalAddresses()
 		if err != nil {
 			verifier.logger.Error(err)
-			return nil, err
+			return err
 		}
 		certReq.SANS.DNS = append(certReq.SANS.DNS, "localhost")
 		certReq.SANS.DNS = append(certReq.SANS.DNS, "localhost.localdomain")
@@ -547,67 +677,25 @@ func (verifier *Verification) enrollAttestor(ak tpm2.DerivedKey) ([]byte, error)
 		certReq.SANS.IPs = append(certReq.SANS.IPs, ips...)
 	}
 
-	// Issue an x509 platform certificate to the Attestor
+	// Issue the cert
 	certDER, err := verifier.ca.IssueCertificate(
 		certReq, verifier.caPassword, verifier.akCertPassword)
 	if err != nil {
 		verifier.logger.Error(err)
-		return nil, err
+		return err
 	}
 
 	// Sign and import the AK into the signed blob store
 	if err := verifier.importAndSignAK(ak); err != nil {
-		return nil, err
-	}
-
-	return certDER, nil
-}
-
-// Imports the Attestation Key into the signed blob store
-func (verifier *Verification) importAndSignAK(ak tpm2.DerivedKey) error {
-	_ak := AttestationKey{
-		Name:           ak.Name,
-		CreationHash:   ak.CreationHash,
-		CreationData:   ak.CreationData,
-		CreationTicket: ak.CreationTicket,
-	}
-	akCN := "tpm-attestation-key"
-	akNameBlobKey := fmt.Sprintf("tpm/%s/%s.bin", verifier.attestor, akCN)
-
-	// Encode the cert to a blob
-	akBuffer := &bytes.Buffer{}
-	encoder := gob.NewEncoder(akBuffer)
-	if err := encoder.Encode(_ak); err != nil {
-		verifier.logger.Error(err)
 		return err
 	}
 
-	// Create new signing key
-	key, err := verifier.ca.NewSigningKey(
-		verifier.domain, akCN, verifier.caPassword)
-	if err != nil {
-		return err
-	}
-
-	// Create signing options that contain the AK PEM cert
-	// and blob storage parameters
-	sigOpts, err := ca.NewSigningOpts(crypto.SHA256, akBuffer.Bytes())
-	sigOpts.BlobKey = &akNameBlobKey
-	sigOpts.StoreSignature = true
-	if _, err = key.Sign(verifier.tpm.RandomReader(), sigOpts.Digest(), sigOpts); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Sends the issued x509 platform certifiate to the Attestor
-func (verifier *Verification) IssueCertificate(certDER []byte) error {
-
+	// Send the Attestor the cert
 	ctx, cancel := context.WithTimeout(context.Background(), TLS_DEADLINE)
 	defer cancel()
 
 	certRequest := &pb.AcceptCertificateResquest{Certificate: certDER}
-	_, err := verifier.secureAttestor.AcceptCertificate(ctx, certRequest)
+	_, err = verifier.secureAttestor.AcceptCertificate(ctx, certRequest)
 	if err != nil {
 		verifier.logger.Error(err)
 		return err
@@ -635,14 +723,13 @@ func (verifier *Verification) Close() error {
 
 // Provisions a new device key using the steps outlined in Key Provisioning:
 // https://tpm2-software.github.io/tpm2-tss/getting-started/2019/12/18/Remote-Attestation.html
-func (verifier *Verification) Provision() error {
+func (verifier *Verification) Attest() error {
 
 	defer verifier.Close()
 
 	verifier.logger.Info("Requesting Endorsement Key (EK) certificate")
 	ekCert, err := verifier.EKCert()
 	if err != nil {
-		verifier.logger.Error(err)
 		return err
 	}
 
@@ -661,19 +748,33 @@ func (verifier *Verification) Provision() error {
 	}
 
 	verifier.logger.Info("Requesting credential activation")
-	certDER, err := verifier.ActivateCredential(makeCredentialResponse)
+	activatedAK, err := verifier.ActivateCredential(makeCredentialResponse)
 	if err != nil {
 		verifier.logger.Error(err)
 		return err
 	}
 
-	verifier.logger.Info("Issuing Attestor x509 device certificate")
-	if err := verifier.IssueCertificate(certDER); err != nil {
+	verifier.logger.Info("Requesting Quote (PCRs & Event Log)")
+	quote, nonce, err := verifier.Quote(activatedAK)
+	if err != nil {
 		verifier.logger.Error(err)
 		return err
 	}
 
-	verifier.logger.Info("Remote Attestation Key Provisioning complete")
+	var certDER []byte
+	verifier.logger.Info("Verifying Quote")
+	if err := verifier.Verify(quote, nonce); err != nil {
+		verifier.logger.Error(err)
+		return err
+	}
+
+	verifier.logger.Info("Issuing Attestor x509 device certificate")
+	if err := verifier.IssueCertificate(activatedAK, certDER); err != nil {
+		verifier.logger.Error(err)
+		return err
+	}
+
+	verifier.logger.Info("Remote Attestation complete: success")
 	verifier.logger.Info("")
 
 	return nil
@@ -683,4 +784,8 @@ func (verifier *Verification) debugAK(ak *pb.AKReply) {
 	verifier.logger.Debugf("Endorsement Key PEM:\n%s", string(ak.GetEkPublicPEM()))
 	verifier.logger.Debugf("Attestation Key PEM:\n%s", string(ak.GetAkPublicPEM()))
 	verifier.logger.Debugf("Attestation Key Name: 0x%x", verifier.tpm.Encode(ak.GetAkName()))
+}
+
+func (verifier *Verification) akBlobKey() string {
+	return fmt.Sprintf("tpm/%s/%s.bin", verifier.attestor, akBlobName)
 }

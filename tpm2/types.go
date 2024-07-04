@@ -229,6 +229,10 @@ type Credential struct {
 }
 
 type Quote struct {
-	Quoted []byte
-	Nonce  []byte
+	Quoted         []byte
+	Signature      []byte
+	Nonce          []byte
+	PCRs           map[string][][]byte
+	EventLog       []byte
+	PublicKeyBytes []byte
 }

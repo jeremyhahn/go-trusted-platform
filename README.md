@@ -60,6 +60,7 @@ The UEFI specification defines a protocol known as Secure Boot, which can secure
 
 Secure Boot is supported by Windows 8 and 8.1, Windows Server 2012 and 2012 R2, Windows 10, Windows Server 2016, 2019, and 2022, and Windows 11, VMware vSphere 6.5 and a number of Linux distributions including Fedora (since version 18), openSUSE (since version 12.3), RHEL (since version 7), CentOS (since version 7), Debian (since version 10), Ubuntu (since version 12.04.2), Linux Mint (since version 21.3)., and AlmaLinux OS (since version 8.4). As of January 2024, FreeBSD support is in a planning stage.
 
+
 ### Certificate Authority
 
 In cryptography, a certificate authority or certification authority (CA) is an entity that stores, signs, and issues digital certificates. A digital certificate certifies the ownership of a public key by the named subject of the certificate. This allows others (relying parties) to rely upon signatures or on assertions made about the private key that corresponds to the certified public key. A CA acts as a trusted third party—trusted both by the subject (owner) of the certificate and by the party relying upon the certificate. The format of these certificates is specified by the X.509 or EMV standard. 
@@ -109,17 +110,18 @@ The following steps are used to complete device registration, identity validatio
 
 This project makes use of the new [go-tpm/tpm2](https://github.com/google/go-tpm) "TPMDirect" TPM 2.0 API introduced in v0.9.0.
 
-As the complimentary [go-tpm-tools](https://github.com/google/go-tpm-tools) and [go-attestation](https://github.com/google/go-attestation) projects are using the [Legacy API](https://github.com/google/go-tpm-tools/issues/462), I've forked the necessary code with the intention to make as much use of the original libraries as possible, replacing Legacy API calls with the new TPMDirect API, to reduce the resulting binary size and provide a consistent execution path through the libraries to the TPM.
-
-When the go-tpm-tools and go-attestation libraries catches up to the latest go-tpm/tpm2 TPMDirect API, the forked code in this repo will be replaced with the latest versions of those libraries.
+As the complimentary [go-tpm-tools](https://github.com/google/go-tpm-tools) and [go-attestation](https://github.com/google/go-attestation) projects are using the [Legacy API](https://github.com/google/go-tpm-tools/issues/462), along with the TPM Event Log [not being completely reliable](https://github.com/google/go-attestation/blob/master/docs/event-log-disclosure.md), a slightly different approach is taken for verification that bypasses this mess, and simply performs a byte level comparison of the event log and PCR state during attestation, using the event log and PCR state captured during enrollment. The captured data is signed and stored in the CA blob store where subsequent attestations are verified using the stored signature from the blobs caputured during enrollment.
 
 Linux is the only platform being developed on and supported at this time. As Go is a portable language, it will likely run fine on Mac and Windows, however, [Windows will not support the future planned plugin architecture](https://pkg.go.dev/plugin).
+
+Local development environment is Debian / Ubuntu. 
+
 
 ## Documentation
 
 The `docs` folder provides links to resources with detailed information about how the internals of the TPM and various other components used in this project work, along with examples of how to use the software included in this repository.
 
-As this is a work in progress, complex project, and many resources on uses cases and implementation details using the TPM are incomplete, scarce, inconsistent, old, and some just plain wrong, I will continue to update the docs to capture as much information on relevant topics as possible, and continue to update this README to reflect the road map and current status of the project.
+As this is a work in progress, complex project, and many resources on uses cases and implementation details using the TPM are incomplete, scarce, inconsistent, old, and some just plain wrong, I will continue to update the docs to capture as much accurate and helpful information as possible, and continue to update this README to reflect the road map and current status.
 
 
 ## Road Map
@@ -144,9 +146,13 @@ The initial use case I'm supporting is a local farmers market that runs as an op
 
 #### NIST
 
-1. [BIOS Protection Guidelines](https://nvlpubs.nist.gov/nistpubs/legacy/sp/nistspecialpublication800-147.pdf)
+1. [800-147: BIOS Protection Guidelines](https://nvlpubs.nist.gov/nistpubs/legacy/sp/nistspecialpublication800-147.pdf)
 
-2. [BIOS Protection Guidelines for Servers](https://nvlpubs.nist.gov/nistpubs/specialpublications/nist.sp.800-147b.pdf)
+2. [800-147B: BIOS Protection Guidelines for Servers](https://nvlpubs.nist.gov/nistpubs/specialpublications/nist.sp.800-147b.pdf)
+
+3. [800-57: Recommendation for Key Management](https://nvlpubs.nist.gov/nistpubs/specialpublications/nist.sp.800-57pt1r5.pdf)
+
+4. [800-88: Guidelines for Media Sanitization](https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-88r1.pdf)
 
 
 #### FIPS
@@ -168,6 +174,21 @@ The initial use case I'm supporting is a local farmers market that runs as an op
 8. [FIPS 201-2: Personal Identity Verification (PIV) of Federal Employees and Contractors](https://csrc.nist.gov/pubs/fips/201-2/final)
 
 9. [FIPS 202: SHA-3 Standard: Permutation-Based Hash and Extendable-Output Functions](https://csrc.nist.gov/pubs/fips/202/final)
+
+
+## The Need for Security
+
+Unfortunately, we live in a world where physics put both users and corporations at odds with security.
+
+![Security, Functionality, Usability](https://miro.medium.com/v2/resize:fit:720/format:webp/1*tN9HwPDvRECmxGS7Kq0law.jpeg)
+
+The more features and functionality introduced to software, the further away it moves from being secure. Users want software that is easy to use and filled with features, and corporations want profits driven by users who are happy with their products that do many amazing things, intuitively.
+
+We now live in a world with lots of connected devices, artifical intelligence systems learning from and controlling said devices, processing incoming data at light speed, and integrating with many different 3rd party systems and service providers around the world. Privacy controls, systems and network hardening and data encryption at rest and in-transit are often a 2nd thought, especially on home networks where it's common to omit TLS verifications. Attackers are constantly looking for new hosts to compromise, expand their botnets and criminal enterprises, extract data, steal identities, and perform other nefarious activities.
+
+This platform makes security a first class citizen and encourages a thoughtful design approach to building a connected services platform, abstracting the common activities, complexities, compliances, and boilerplate necessities into a modular and flexible framework that can be applied to any web services, SAAS, or conneccted devices platform. It strives to protect user data and confidentiality while empowering service providers and application developers to create secure offerings using industry approved standards and mechanisms so they can focus on delivering intuitive, feature-filled solutions.
+
+This project makes use of modern authentication and security mechanisms such as [WebAuthn](https://en.wikipedia.org/wiki/WebAuthn), [FIDO 2](https://fidoalliance.org/fido2/) and [PIV] cards, and hardware based secret management to provide a password-less user experience for users and platform administrators, while meeting stringent security requirements for highly regulated industries.
 
 
 ## Status
@@ -213,6 +234,7 @@ The `main` branch will always build and run. Try it out!
         - [x] Read Endorsement Key Certificate from NVRAM
         - [x] Download Endorsement Key Certificate from Manufacturer
             - [x] Intel
+            - [ ] Optiga
         - [x] Read Endorsement Key Certificate from file (tpm2_getekcertificate)
         - [x] Auto-import Platform Certificates (Manufacturer CA chain)
         - [x] Import ASN.1 DER encoded Endorsement Key Certificates
@@ -230,7 +252,7 @@ The `main` branch will always build and run. Try it out!
         - [x] Read / Parse Event Log
         - [x] Read Platform Configuration Registers (PCRs)
         - [x] Provide Attestation Key to Client
-        - [ ] Quote / Verify
+        - [x] Quote / Verify
     - [ ] Command Line Interface
         - [ ] Certificate Authority
             - [x] Issue Certificate
@@ -301,13 +323,15 @@ The `main` branch will always build and run. Try it out!
             - [x] Activate Credential
             - [x] Issue AK x509 Certificate
             - [ ] Quote / Verify
+            - [x] Automatic Device enrollment
         - [x] Attestor (Client)
             - [ ] Opaque TLS Private Key
             - [x] mTLS auto-negotiation
             - [x] Get Endorsement Key Certificate
             - [x] Get Attestation Key Profile
             - [x] Activate Credential
-            - [ ] Quote / Verify
+            - [x] Quote / Verify
+            - [x] Automatic Device enrollment
     - [ ] Flows
         - [ ] Device Provisioning
             - [x] Auto-provision during Remote Attestation

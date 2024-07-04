@@ -1,8 +1,10 @@
 package attestor
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/gob"
 	"errors"
 	"sync"
 
@@ -79,16 +81,35 @@ func (s *SecureAttestor) session(verifier string) (Session, error) {
 	return session, nil
 }
 
+// Opens a new connection to the TPM if a connection is not already connected
+func (s *SecureAttestor) OnConnect() {
+	s.tpm.Open()
+}
+
+// Cleans up the session by removing the Verifier's CA bundle from memory
+func (s *SecureAttestor) Close(ctx context.Context, in *pb.Null) (*pb.Null, error) {
+	verifier := s.parseVerifierIP(ctx)
+	s.logger.Debugf("Received connection from: %v", verifier)
+
+	s.attestor.RemoveVerifierCABundle(verifier)
+
+	s.sessionMutex.Lock()
+	defer s.sessionMutex.Unlock()
+
+	s.logger.Debugf("secure-server/Close: deleting verifier session: %s", verifier)
+	delete(s.sessions, verifier)
+
+	if len(s.sessions) == 0 {
+		s.tpm.Close()
+	}
+	return nil, nil
+}
+
 // Returns the Attestor TPM Endorsement Key x509 Certificate in
 // raw ASN.1 DER form
 func (s *SecureAttestor) GetEKCert(ctx context.Context, in *pb.Null) (*pb.EKCertReply, error) {
 
 	s.logConnection(ctx, "GetEK")
-
-	// if err := s.tpm.Open(); err != nil {
-	// 	return nil, err
-	// }
-	// defer s.tpm.Close()
 
 	// Get the EK cert as x509.Certificate
 	cert, err := s.tpm.EKCert(nil, s.srkAuth)
@@ -108,12 +129,6 @@ func (s *SecureAttestor) GetAK(ctx context.Context, in *pb.Null) (*pb.AKReply, e
 	s.logConnection(ctx, "GetAK")
 
 	verifier := s.parseVerifierIP(ctx)
-
-	// if err := s.tpm.Open(); err != nil {
-	// 	s.logger.Error(err)
-	// 	return nil, err
-	// }
-	// defer s.tpm.Close()
 
 	// Create EK and AK
 	ek, ak, err := s.tpm.RSAAK()
@@ -165,12 +180,6 @@ func (s *SecureAttestor) ActivateCredential(
 		return nil, err
 	}
 
-	// if err := s.tpm.Open(); err != nil {
-	// 	s.logger.Error(err)
-	// 	return nil, err
-	// }
-	// defer s.tpm.Close()
-
 	secret, err := s.tpm.ActivateCredential(session.ak, tpm2.Credential{
 		CredentialBlob:  in.CredentialBlob,
 		EncryptedSecret: in.EncryptedSecret,
@@ -198,7 +207,8 @@ func (s *SecureAttestor) AcceptCertificate(
 	}
 
 	// Import the certificate to the CA
-	err = s.tpm.ImportAKCert(cert.Issuer.CommonName, in.Certificate)
+	err = s.ca.ImportAttestationKeyCertificate(
+		s.domain, cert.Subject.CommonName, in.Certificate)
 	if err != nil {
 		s.logger.Error(err)
 		return nil, err
@@ -218,38 +228,33 @@ func (s *SecureAttestor) Quote(
 	for i, pcr := range in.Pcrs {
 		uints[i] = uint(pcr)
 	}
+
 	quote, err := s.tpm.Quote(uints, in.Nonce)
 	if err != nil {
 		s.logger.Error(err)
 		return nil, err
 	}
 
+	buf := new(bytes.Buffer)
+	encoder := gob.NewEncoder(buf)
+	if err := encoder.Encode(quote); err != nil {
+		s.logger.Error(err)
+		return nil, err
+	}
+
 	return &pb.QuoteResponse{
-		Nonce:  quote.Nonce,
-		Quoted: quote.Quoted,
+		Quote: buf.Bytes(),
 	}, nil
-}
-
-// Cleans up the session by removing the Verifier's CA bundle from memory
-func (s *SecureAttestor) Close(ctx context.Context, in *pb.Null) (*pb.Null, error) {
-	p, _ := peer.FromContext(ctx)
-	s.logger.Debugf("Received connection from: %v", p.Addr.String())
-	verifier := parseVerifierIP(p.Addr)
-	s.attestor.RemoveVerifierCABundle(verifier)
-
-	s.sessionMutex.Lock()
-	defer s.sessionMutex.Unlock()
-
-	s.logger.Debugf("secure-server/Close: deleting verifier session: %s", verifier)
-	delete(s.sessions, verifier)
-
-	s.tpm.Close()
-	return nil, nil
 }
 
 // Create a log entry with the client IP and requested method name
 func (s *SecureAttestor) logConnection(ctx context.Context, method string) {
-	p, _ := peer.FromContext(ctx)
+	p, ok := peer.FromContext(ctx)
+	if !ok {
+		s.logger.Warning("secure-server: unable to parse peer from context")
+		s.logger.Debugf("%+v")
+		return
+	}
 	s.logger.Debugf("secure-server/%s: Received connection from: %v",
 		method, p.Addr.String())
 }
@@ -257,5 +262,5 @@ func (s *SecureAttestor) logConnection(ctx context.Context, method string) {
 // Create a log entry with the client IP and requested method name
 func (s *SecureAttestor) parseVerifierIP(ctx context.Context) string {
 	p, _ := peer.FromContext(ctx)
-	return p.Addr.String()
+	return parseVerifierIP(p.Addr)
 }
