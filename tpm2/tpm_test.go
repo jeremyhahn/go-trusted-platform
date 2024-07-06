@@ -48,7 +48,8 @@ func TestEKCert(t *testing.T) {
 	defer tpm.Close()
 	defer cleanTempDir(tmpDir)
 
-	cert, err := tpm.EKCert(nil, nil)
+	intermediatePass := []byte("intermediate-password")
+	cert, err := tpm.EKCert(nil, intermediatePass)
 	assert.Nil(t, err)
 	assert.NotNil(t, cert)
 
@@ -66,7 +67,8 @@ func TestImportTSS(t *testing.T) {
 	assert.NotNil(t, logger)
 	assert.NotNil(t, tpm)
 
-	cert, err := tpm.ImportTSSFile(EK_CERT_PATH, true)
+	intermediatePass := []byte("intermediate-password")
+	cert, err := tpm.ImportTSSFile(EK_CERT_PATH, true, intermediatePass)
 	assert.Nil(t, err)
 	assert.Equal(t, expectedSN, cert.SerialNumber.String())
 
@@ -377,6 +379,8 @@ func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule2, 
 		EncryptSession: encrypt,
 		UseEntropy:     entropy,
 		EKCert:         "ECcert.bin",
+		Device:         "/dev/tpm0",
+		UseSimulator:   true,
 	}, domain)
 	if err != nil {
 		logger.Fatal(err)

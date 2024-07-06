@@ -1,3 +1,5 @@
+MAKEFLAGS+="-j $(shell nproc)"
+
 ORG                     := automatethethingsllc
 TARGET_OS               := linux
 TARGET_ARCH             := $(shell uname -m)
@@ -79,6 +81,8 @@ LUKS_SIZE         ?= 5G
 LUKS_TYPE         ?= luks2
 
 TPM2_PTOOL        ?= ../go-trusted-platform-ansible/setup/trusted-data/build/tpm2-pkcs11/tools/tpm2_ptool.py
+
+DEBUG_CMD         ?= webservice
 
 # The TPM Endorsement Key file name. This is set to a default value that
 # aligns with the EK cert name used in the tpm2_getekcertificate docs:
@@ -209,15 +213,13 @@ clean:
 	rm -rf $(APPNAME) \
 		$(APPNAME).log \
 		/usr/local/bin/$(APPNAME) \
-		db/ \
-		logs \
 		$(CA_DIR) \
+		$(PLATFORM_DIR) \
+		$(ATTESTOR_DIR)/$(PLATFORM_DIR) \
+		$(VERIFIER_DIR)/$(PLATFORM_DIR) \
 		ca/certs \
 		tpm2/certs \
 		tpm2/$(EK_CERT_NAME) \
-		$(PLATFORM_DIR)/ca \
-		$(ATTESTOR_DIR)/$(PLATFORM_DIR) \
-		$(VERIFIER_DIR)/$(PLATFORM_DIR)
 
 
 test: test-ca test-tpm test-hash
@@ -242,6 +244,16 @@ proto:
 
 install: luks-create ansible-install ansible-setup
 uninstall: uninstall-ansible
+
+debug-launch: clean build
+	./trusted-platform $(DEBUG_CMD)
+
+debug-listen:
+	dlv attach --headless --listen=:2345 $(shell ps aux | grep trusted-platform | cut -d " " -f5 | head -n 1) ./
+
+debug-clean:
+	killall dlv trusted-platform
+
 
 # Certificate Authority
 ca-verify-all: ca-root-verify ca-intermediate-verify ca-server-=verify
@@ -470,3 +482,7 @@ rpi-qemu:
 		-m 1024 \
 		-kernel vmlinux \
 		-initrd initramfs
+
+#  http://localhost:3000/
+webapp-run:
+	cd public_html/$(APPNAME) && npm run dev

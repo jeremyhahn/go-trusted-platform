@@ -9,15 +9,15 @@ const docTemplate = `{
     "info": {
         "description": "{{escape .Description}}",
         "title": "{{.Title}}",
-        "termsOfService": "https://www.cropdroid.com/terms/",
+        "termsOfService": "https://www.trusted-platform.io/terms",
         "contact": {
             "name": "API Support",
-            "url": "https://www.cropdroid.com/support",
-            "email": "support@cropdroid.com"
+            "url": "https://www.trusted-platform.io/support",
+            "email": "support@trusted-platform.org"
         },
         "license": {
             "name": "Commercial",
-            "url": "https://www.cropdroid.com/licenses/commercial.txt"
+            "url": "https://www.trusted-platform.io/licenses/commercial.txt"
         },
         "version": "{{.Version}}"
     },
@@ -264,8 +264,11 @@ const docTemplate = `{
         "app.App": {
             "type": "object",
             "properties": {
-                "cert_dir": {
-                    "type": "string"
+                "argon2": {
+                    "$ref": "#/definitions/hash.Argon2Params"
+                },
+                "attestation": {
+                    "$ref": "#/definitions/config.Attestation"
                 },
                 "certificate_authority": {
                     "$ref": "#/definitions/ca.Config"
@@ -273,19 +276,37 @@ const docTemplate = `{
                 "config_dir": {
                     "type": "string"
                 },
-                "data_dir": {
-                    "type": "string"
-                },
                 "debug": {
+                    "type": "boolean"
+                },
+                "debug-secrets": {
                     "type": "boolean"
                 },
                 "domain": {
                     "type": "string"
                 },
+                "hostmaster": {
+                    "type": "string"
+                },
+                "intermediate_password": {
+                    "type": "string"
+                },
                 "log_dir": {
                     "type": "string"
                 },
+                "password-policy": {
+                    "type": "string"
+                },
+                "platform_dir": {
+                    "type": "string"
+                },
+                "root_password": {
+                    "type": "string"
+                },
                 "runtime_user": {
+                    "type": "string"
+                },
+                "server_password": {
                     "type": "string"
                 },
                 "tpm": {
@@ -302,11 +323,47 @@ const docTemplate = `{
                 "auto_import_issuing_ca": {
                     "type": "boolean"
                 },
+                "elliptic-curve": {
+                    "type": "string"
+                },
+                "hash": {
+                    "type": "string"
+                },
+                "home": {
+                    "type": "string"
+                },
                 "identity": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/ca.Identity"
                     }
+                },
+                "issued-valid-days": {
+                    "type": "integer"
+                },
+                "key-algorithm": {
+                    "type": "string"
+                },
+                "key-store": {
+                    "type": "string"
+                },
+                "password-policy": {
+                    "type": "string"
+                },
+                "require-pkcs8-password": {
+                    "type": "boolean"
+                },
+                "retain-revoked-certificates": {
+                    "type": "boolean"
+                },
+                "rsa-scheme": {
+                    "type": "string"
+                },
+                "sans-include-localhost": {
+                    "type": "boolean"
+                },
+                "signature-algorithm": {
+                    "type": "string"
                 },
                 "system_cert_pool": {
                     "type": "boolean"
@@ -382,6 +439,50 @@ const docTemplate = `{
                 }
             }
         },
+        "config.Attestation": {
+            "type": "object",
+            "properties": {
+                "allow-open-enrollment": {
+                    "type": "boolean"
+                },
+                "allow_attestor_self_ca": {
+                    "type": "boolean"
+                },
+                "allowed_verifiers": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "client_ca_cert": {
+                    "type": "string"
+                },
+                "ek_cert_form": {
+                    "type": "string"
+                },
+                "insecure_port": {
+                    "type": "integer"
+                },
+                "insecure_skip_verify": {
+                    "type": "boolean"
+                },
+                "quote-pcrs": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "service": {
+                    "type": "string"
+                },
+                "service_ca_cert": {
+                    "type": "string"
+                },
+                "tls_port": {
+                    "type": "integer"
+                }
+            }
+        },
         "config.WebService": {
             "type": "object",
             "properties": {
@@ -404,6 +505,26 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "tls_port": {
+                    "type": "integer"
+                }
+            }
+        },
+        "hash.Argon2Params": {
+            "type": "object",
+            "properties": {
+                "iterations": {
+                    "type": "integer"
+                },
+                "keyLen": {
+                    "type": "integer"
+                },
+                "memory": {
+                    "type": "integer"
+                },
+                "parallelism": {
+                    "type": "integer"
+                },
+                "saltLen": {
                     "type": "integer"
                 }
             }
@@ -448,6 +569,9 @@ const docTemplate = `{
         "tpm2.Config": {
             "type": "object",
             "properties": {
+                "auto_import_ek_certs": {
+                    "type": "boolean"
+                },
                 "device": {
                     "type": "string"
                 },
@@ -461,6 +585,9 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "entropy": {
+                    "type": "boolean"
+                },
+                "simulator": {
                     "type": "boolean"
                 }
             }
@@ -477,12 +604,12 @@ const docTemplate = `{
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
-	Version:          "v0.0.3",
+	Version:          "v0.0.1",
 	Host:             "localhost:8443",
 	BasePath:         "/api/v1",
 	Schemes:          []string{},
-	Title:            "CropDroid REST API",
-	Description:      "This is the RESTful web servce for CropDroid.",
+	Title:            "Trusted Platform",
+	Description:      "This is the RESTful Web Services API for Trusted Platform",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

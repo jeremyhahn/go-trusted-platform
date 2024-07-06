@@ -2,21 +2,35 @@ basePath: /api/v1
 definitions:
   app.App:
     properties:
-      cert_dir:
-        type: string
+      argon2:
+        $ref: '#/definitions/hash.Argon2Params'
+      attestation:
+        $ref: '#/definitions/config.Attestation'
       certificate_authority:
         $ref: '#/definitions/ca.Config'
       config_dir:
         type: string
-      data_dir:
-        type: string
       debug:
+        type: boolean
+      debug-secrets:
         type: boolean
       domain:
         type: string
+      hostmaster:
+        type: string
+      intermediate_password:
+        type: string
       log_dir:
         type: string
+      password-policy:
+        type: string
+      platform_dir:
+        type: string
+      root_password:
+        type: string
       runtime_user:
+        type: string
+      server_password:
         type: string
       tpm:
         $ref: '#/definitions/tpm2.Config'
@@ -27,10 +41,34 @@ definitions:
     properties:
       auto_import_issuing_ca:
         type: boolean
+      elliptic-curve:
+        type: string
+      hash:
+        type: string
+      home:
+        type: string
       identity:
         items:
           $ref: '#/definitions/ca.Identity'
         type: array
+      issued-valid-days:
+        type: integer
+      key-algorithm:
+        type: string
+      key-store:
+        type: string
+      password-policy:
+        type: string
+      require-pkcs8-password:
+        type: boolean
+      retain-revoked-certificates:
+        type: boolean
+      rsa-scheme:
+        type: string
+      sans-include-localhost:
+        type: boolean
+      signature-algorithm:
+        type: string
       system_cert_pool:
         type: boolean
     type: object
@@ -79,6 +117,35 @@ definitions:
           type: string
         type: array
     type: object
+  config.Attestation:
+    properties:
+      allow-open-enrollment:
+        type: boolean
+      allow_attestor_self_ca:
+        type: boolean
+      allowed_verifiers:
+        items:
+          type: string
+        type: array
+      client_ca_cert:
+        type: string
+      ek_cert_form:
+        type: string
+      insecure_port:
+        type: integer
+      insecure_skip_verify:
+        type: boolean
+      quote-pcrs:
+        items:
+          type: integer
+        type: array
+      service:
+        type: string
+      service_ca_cert:
+        type: string
+      tls_port:
+        type: integer
+    type: object
   config.WebService:
     properties:
       certificate:
@@ -94,6 +161,19 @@ definitions:
       tls_key:
         type: string
       tls_port:
+        type: integer
+    type: object
+  hash.Argon2Params:
+    properties:
+      iterations:
+        type: integer
+      keyLen:
+        type: integer
+      memory:
+        type: integer
+      parallelism:
+        type: integer
+      saltLen:
         type: integer
     type: object
   response.WebServiceResponse:
@@ -122,6 +202,8 @@ definitions:
     type: object
   tpm2.Config:
     properties:
+      auto_import_ek_certs:
+        type: boolean
       device:
         type: string
       ek-cert-index:
@@ -132,20 +214,22 @@ definitions:
         type: boolean
       entropy:
         type: boolean
+      simulator:
+        type: boolean
     type: object
 host: localhost:8443
 info:
   contact:
-    email: support@cropdroid.com
+    email: support@trusted-platform.org
     name: API Support
-    url: https://www.cropdroid.com/support
-  description: This is the RESTful web servce for CropDroid.
+    url: https://www.trusted-platform.io/support
+  description: This is the RESTful Web Services API for Trusted Platform
   license:
     name: Commercial
-    url: https://www.cropdroid.com/licenses/commercial.txt
-  termsOfService: https://www.cropdroid.com/terms/
-  title: CropDroid REST API
-  version: v0.0.3
+    url: https://www.trusted-platform.io/licenses/commercial.txt
+  termsOfService: https://www.trusted-platform.io/terms
+  title: Trusted Platform
+  version: v0.0.1
 paths:
   /config:
     get:

@@ -5,14 +5,12 @@ import (
 	"context"
 	"crypto"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/gob"
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"time"
 
@@ -42,14 +40,14 @@ var (
 	ErrCertKeyMismatch         = errors.New("verifier: certificate and attestation public key modulus mismatch")
 	ErrInvalidPublicKey        = errors.New("verifier: invalid public key")
 	ErrInvalidCredential       = errors.New("verifier: attestor failed credential challenge")
-	ErrInvalidNonce            = errors.New("verifier: invalid nonce")
 	ErrUnexpectedEventLogState = errors.New("verifier: unexpected event log state")
 	ErrUnexpectedPCRState      = errors.New("verifier: unexpected PCR state")
 
-	// CLI options when invoked directly
+	// CLI options when invoked directly - flag names must be unique and
+	// not conflict with those used in Cobra cmd package
 	attestorHostname = flag.String("attestor", "localhost", "The Attestor hostname / FQDN / IP")
-	caPassword       = flag.String("ca-password", "", "The Certificate Authority private key password")
-	serverPassword   = flag.String("server-password", "", "The gRPC server TLS private key password")
+	caPassword       = flag.String("platform-password", "", "The Certificate Authority private key password")
+	serverPassword   = flag.String("tls-password", "", "The gRPC server TLS private key password")
 	akCertPassword   = flag.String("ak-password", "", "An optional password for the generated AK Certificate private key")
 )
 
@@ -74,7 +72,6 @@ type Verifier interface {
 	ActivateCredential(makeCredentialResponse makeCredentialResponse) (tpm2.DerivedKey, error)
 	IssueCertificate(ak tpm2.DerivedKey, certDER []byte) error
 	Quote(ak tpm2.DerivedKey) (tpm2.Quote, []byte, error)
-	Verify(quote tpm2.Quote, nonce []byte) error
 	Close() error
 }
 
@@ -298,7 +295,11 @@ func (verifier *Verification) EKCert() (*x509.Certificate, error) {
 	}
 
 	cert, err := verifier.tpm.ImportDER(
-		verifier.attestor, verifier.attestor, response.Certificate, true)
+		verifier.attestor,
+		verifier.attestor,
+		response.Certificate,
+		true,
+		verifier.caPassword)
 	if err != nil {
 		return nil, ErrImportEKCert
 	}
@@ -505,21 +506,24 @@ func (verifier *Verification) Quote(ak tpm2.DerivedKey) (tpm2.Quote, []byte, err
 		// to signed blob storage
 
 		// Sign and store the quote
-		err = verifier.ca.ImportAttestationQuote(verifier.attestor, response.Quote)
+		err = verifier.ca.ImportAttestationQuote(
+			verifier.attestor, response.Quote, verifier.caPassword)
 		if err != nil {
 			verifier.logger.Error(err)
 			return tpm2.Quote{}, nil, err
 		}
 
 		// Sign and store the quote
-		err = verifier.ca.ImportAttestationEventLog(verifier.attestor, quote.EventLog)
+		err = verifier.ca.ImportAttestationEventLog(
+			verifier.attestor, quote.EventLog, verifier.caPassword)
 		if err != nil {
 			verifier.logger.Error(err)
 			return tpm2.Quote{}, nil, err
 		}
 
 		// Sign and store the PCR state
-		err = verifier.ca.ImportAttestationPCRs(verifier.attestor, quote.PCRs)
+		err = verifier.ca.ImportAttestationPCRs(
+			verifier.attestor, quote.PCRs, verifier.caPassword)
 		if err != nil {
 			verifier.logger.Error(err)
 			return tpm2.Quote{}, nil, err
@@ -542,52 +546,6 @@ func (verifier *Verification) Quote(ak tpm2.DerivedKey) (tpm2.Quote, []byte, err
 	}
 
 	return quote, nonce, nil
-}
-
-// Verifies a TPM 2.0 quote.
-// Rather than parsing and replaying the event log, a more simplistic
-// approach is taken, which compares the current event log and secure
-// boot state blob with the state stored in the CA signed blob store
-// captured during device enrollment. This may change in the future.
-// The rationale for this is partly due to the event log not being
-// a reliable source for integrity checking to begin with:
-// https://github.com/google/go-attestation/blob/master/docs/event-log-disclosure.md
-func (verifier *Verification) Verify(quote tpm2.Quote, nonce []byte) error {
-
-	// Make sure the returned nonce matches the nonce
-	// that was sent in the quote request.
-	if !bytes.Equal(quote.Nonce, nonce) {
-		return ErrInvalidNonce
-	}
-
-	// Parse the public key
-	var rsaPub *rsa.PublicKey
-	publicKey, err := x509.ParsePKIXPublicKey(quote.PublicKeyBytes)
-	if err != nil {
-		verifier.logger.Error(err)
-		return err
-	}
-	rsaPub = publicKey.(*rsa.PublicKey)
-
-	// Verify the quote signature
-	digest := sha256.Sum256(quote.Quoted)
-	if err := rsa.VerifyPKCS1v15(rsaPub, crypto.SHA256, digest[:], quote.Signature); err != nil {
-		log.Fatalf("Failed to verify signature: %v", err)
-	}
-
-	// Verify the event log
-	err = verifier.ca.VerifyAttestationEventLog(verifier.attestor, quote.EventLog)
-	if err != nil {
-		return err
-	}
-
-	// Verify PCR state
-	err = verifier.ca.VerifyAttestationPCRs(verifier.attestor, quote.PCRs)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 // Imports the Attestation Key into the signed blob store
@@ -763,7 +721,7 @@ func (verifier *Verification) Attest() error {
 
 	var certDER []byte
 	verifier.logger.Info("Verifying Quote")
-	if err := verifier.Verify(quote, nonce); err != nil {
+	if err := verifier.tpm.VerifyQuote(verifier.attestor, quote, nonce); err != nil {
 		verifier.logger.Error(err)
 		return err
 	}

@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-type SigningOpts struct {
+type SignerOpts struct {
 	// Optional PSS Salt Length when using RSA PSS.
 	// Default rsa.PSSSaltLengthAuto
 	PSSSaltLength  int
@@ -14,33 +14,34 @@ type SigningOpts struct {
 	BlobKey        *string
 	BlobData       []byte
 	StoreSignature bool
+	Password       []byte
 
 	hash   crypto.Hash
 	data   []byte
 	digest []byte
 }
 
-func NewSigningOpts(hash crypto.Hash, data []byte) (SigningOpts, error) {
+func NewSigningOpts(hash crypto.Hash, data []byte) (SignerOpts, error) {
 	hasher := hash.New()
 	n, err := hasher.Write(data)
 	if n != len(data) {
-		return SigningOpts{}, fmt.Errorf("signer-opts: bytes written doesnt match data length")
+		return SignerOpts{}, fmt.Errorf("signer-opts: bytes written doesnt match data length")
 	}
 	if err != nil {
-		return SigningOpts{}, err
+		return SignerOpts{}, err
 	}
 	digest := hasher.Sum(nil)
-	return SigningOpts{
+	return SignerOpts{
 		hash:   hash,
 		data:   data,
 		digest: digest[:],
 	}, nil
 }
 
-func (opts SigningOpts) HashFunc() crypto.Hash {
+func (opts SignerOpts) HashFunc() crypto.Hash {
 	return opts.hash
 }
 
-func (opts SigningOpts) Digest() []byte {
+func (opts SignerOpts) Digest() []byte {
 	return opts.digest
 }

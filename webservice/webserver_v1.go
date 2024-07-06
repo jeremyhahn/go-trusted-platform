@@ -148,86 +148,27 @@ func (server *WebServerV1) startHttp() {
 func (server *WebServerV1) startHttps() {
 
 	sTlsPort := fmt.Sprintf(":%d", server.app.WebService.TLSPort)
-
 	message := fmt.Sprintf("webserver: starting secure web services on TLS port %s", sTlsPort)
 	server.app.Logger.Debugf(message)
 
-	server.app.Logger.Info("webserver: retrieving server private PEM key from cert store")
-	privKeyPEM, err := server.app.CA.PrivKeyPEM(
-		// TODO: support pkcs8 and pkcs11 keys
-		server.app.Domain, server.app.Domain, server.password)
+	// Retrieve a TLS config ready to go from the CA
+	tlsconf, err := server.app.CA.TLSConfig(
+		server.app.Domain,
+		server.app.Domain,
+		server.password,
+		false)
 	if err != nil {
 		server.app.Logger.Fatal(err)
 	}
-
-	server.app.Logger.Info("webserver: retrieving server public PEM key from cert store")
-	certPEM, err := server.app.CA.PEM(server.app.Domain)
-	if err != nil {
-		server.app.Logger.Fatal(err)
-	}
-
-	server.app.Logger.Info("webserver: setting web server x509 key pair")
-	serverCertificate, err := tls.X509KeyPair(certPEM, privKeyPEM)
-	if err != nil {
-		server.app.Logger.Fatal(err)
-	}
-
-	rootCertPool, err := server.app.CA.TrustedRootCertPool(server.app.CAConfig.AutoImportIssuingCA)
-	if err != nil {
-		server.app.Logger.Fatal(err)
-	}
-
-	tlsconf := &tls.Config{
-		// ClientCAs:    clientCertPool,
-		// ClientAuth:   tls.RequireAndVerifyClientCert,
-		//GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-		// Always get latest certificate
-		// cert, err := tls.X509KeyPair(newPubPEM, newPrivPEM)
-		// if err != nil {
-		// 	return nil, err
-		// }
-		// return &cert, nil
-		//},
-		RootCAs:      rootCertPool,
-		Certificates: []tls.Certificate{serverCertificate},
-	}
-
-	// Set up an HTTPS client configured to trust the CA
-	//
-	// caPEM, err := server.app.CA.PEM("ca")
-	// if err != nil {
-	// 	server.app.Logger.Fatalf(ErrLoadTlsCerts.Error())
-	// }
-	//
-	// certpool := x509.NewCertPool()
-	// certpool.AppendCertsFromPEM(caPEM)
-	// clientTLSConf ;= &tls.Config{
-	// 	RootCAs: certpool,
-	// }
-
-	// transport := &http.Transport{
-	// 	TLSClientConfig: clientTLSConf,
-	// }
-	// http := http.Client{
-	// 	Transport: transport,
-	// }
-
 	server.httpServer.TLSConfig = tlsconf
 
+	// Create the TLS listener on the configured port
 	tlsListener, err := tls.Listen("tcp4", sTlsPort, tlsconf)
 	if err != nil {
 		server.app.Logger.Fatalf("%s: %d", ErrBindPort, server.app.WebService.TLSPort)
 	}
 
-	// if server.app.RedirectHttpToHttps {
-	// 	server.app.Logger.Debugf("Redirecting HTTP traffic to HTTPS")
-	// 	go http.ListenAndServe(sWebPort, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	// 		http.Redirect(w, r, "https://"+r.Host+sWebPort+r.URL.String(), http.StatusMovedPermanently)
-	// 	}))
-	// } else {
-	// 	go server.startHttp()
-	// }
-
+	// Start the http server and start serving requests
 	err = server.httpServer.Serve(tlsListener)
 	if err != nil {
 		server.app.Logger.Fatalf("Unable to start TLS web server: %s", err.Error())
@@ -277,50 +218,4 @@ func (server *WebServerV1) buildRoutes() {
 // 	if err != nil {
 // 		server.app.Logger.Errorf("[WebServer.WalkRoutes] Error: err", err)
 // 	}
-// }
-
-// func (server *WebServer) MaintenanceMode(w http.ResponseWriter, r *http.Request) {
-
-// 	//server.systemEventLogService.Create(server.eventType,
-// 	//	fmt.Sprintf("/maint/%d requested by %s", mode, server.clientIP(r)))
-
-// 	params := mux.Vars(r)
-
-// 	farmID, err := strconv.ParseUint(params["farmID"], 10, 64)
-// 	if err != nil {
-// 		response.NewResponseWriter(server.app.Logger).Error400(w, r, err)
-// 		return
-// 	}
-
-// 	/*
-// 		mode, err := strconv.Atoi(params["mode"])
-// 		if err != nil {
-// 			server.app.Logger.Error(err.Error())
-// 			server.sendBadRequest(w, r, err)
-// 			return
-// 		}*/
-
-// 	farmService := server.serviceRegistry.GetFarmService(farmID)
-// 	if farmService == nil {
-// 		server.app.Logger.Error(response.ErrFarmNotFound)
-// 		return
-// 	}
-// 	farmState := farmService.GetState()
-// 	if farmState == nil {
-// 		response.NewResponseWriter(server.app.Logger).Error400(w, r, err)
-// 		return
-// 	}
-
-// 	/*
-// 		if mode == 0 {
-// 			farmState.SetMaintenanceMode(false)
-// 			server.app.FarmStore.Put(farmID, farmState)
-// 		} else {
-// 			farmState.SetMaintenanceMode(true)
-// 			server.app.FarmStore.Put(farmID, farmState)
-// 		}*/
-
-// 	w.Header().Set("Content-Type", "application/json")
-// 	json, _ := json.MarshalIndent(farmState, "", " ")
-// 	fmt.Fprintln(w, string(json))
 // }

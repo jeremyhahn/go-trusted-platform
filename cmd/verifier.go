@@ -18,17 +18,15 @@ func init() {
 
 var verifierCmd = &cobra.Command{
 	Use:   "verifier",
-	Short: "Starts the Attestor as a service",
-	Long: `Starts the Attestor service to begin listening for inbound
-verification requests from the Verifier to perform Provisioning, Remote
-Attestation or quote / Verify operations`,
+	Short: "Starts the Verifier as a client",
+	Long:  `Performs Remote Attestation with the specified Attestor`,
 	Run: func(cmd *cobra.Command, args []string) {
 		var caPassword, serverPassword, akPassword []byte
 		if CAPassword != "" {
 			caPassword = []byte(CAPassword)
 		}
-		if CAPassword != "" {
-			serverPassword = []byte(TLSPassword)
+		if ServerPassword != "" {
+			serverPassword = []byte(ServerPassword)
 		}
 		if VFAKPassword != "" {
 			akPassword = []byte(VFAKPassword)

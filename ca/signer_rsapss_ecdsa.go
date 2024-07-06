@@ -51,9 +51,9 @@ func (signer SigningKey) Sign(
 	digest []byte,
 	opts crypto.SignerOpts) (signature []byte, err error) {
 
-	signingOpts, ok := opts.(SigningOpts)
+	signingOpts, ok := opts.(SignerOpts)
 	if !ok {
-		return nil, fmt.Errorf("signer: invalid signing opts: %T. ca.SigningOpts required", opts)
+		return nil, ErrInvalidSignerOpts
 	}
 
 	var privateKey crypto.PrivateKey

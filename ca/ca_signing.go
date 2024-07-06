@@ -15,6 +15,9 @@ import (
 // Creates a new signing key that matches the same algorithm configuration
 // of the Certificate Authority (RSA / ECC).
 func (ca *CA) NewSigningKey(cn, keyName string, password []byte) (crypto.Signer, error) {
+	if ca.params.DebugSecrets {
+		ca.params.Logger.Debugf("ca/NewSigningKey: password: %s", password)
+	}
 	if ca.params.Config.KeyAlgorithm == KEY_ALGO_RSA {
 		return ca.NewRSASigningKey(cn, keyName, password)
 	} else if ca.params.Config.KeyAlgorithm == KEY_ALGO_ECC {
@@ -26,6 +29,9 @@ func (ca *CA) NewSigningKey(cn, keyName string, password []byte) (crypto.Signer,
 // Returns a signing key from the key store or ErrKeyDoesntExist if the
 // key does not exist
 func (ca *CA) SigningKey(cn, keyName string, password []byte) (SigningKey, error) {
+	if ca.params.DebugSecrets {
+		ca.params.Logger.Debugf("ca/SigningKey: password: %s", password)
+	}
 	keyDER, err := ca.certStore.Get(cn, keyName, PARTITION_SIGNING_KEYS, FSEXT_PUBLIC_PKCS1)
 	if err != nil {
 		return SigningKey{}, err
@@ -44,6 +50,9 @@ func (ca *CA) SigningKey(cn, keyName string, password []byte) (SigningKey, error
 // Certificate Authority, and are stored in a separate partition /
 // hierarchy for security and longevity.
 func (ca *CA) NewRSASigningKey(cn, keyName string, password []byte) (crypto.Signer, error) {
+	if ca.params.DebugSecrets {
+		ca.params.Logger.Debugf("ca/NewRSASigningKey: password: %s", password)
+	}
 	// Ensure password confirms to requirements and
 	// retrieve encryption flag
 	isEncrypted, err := ca.checkPassword(password)
@@ -72,6 +81,9 @@ func (ca *CA) NewRSASigningKey(cn, keyName string, password []byte) (crypto.Sign
 // Creates a new ECDSA signing key for the requested common name and
 // returns a crypto.Signer implementation that uses the new public key.
 func (ca *CA) NewECDSASigningKey(cn, keyName string, password []byte) (crypto.Signer, error) {
+	if ca.params.DebugSecrets {
+		ca.params.Logger.Debugf("ca/NewECDSASigningKey: password: %s", password)
+	}
 	// Ensure password confirms to requirements and
 	// retrieve encryption flag
 	isEncrypted, err := ca.checkPassword(password)
@@ -105,6 +117,9 @@ func (ca *CA) NewECDSASigningKey(cn, keyName string, password []byte) (crypto.Si
 // returns the PKCS1v15 crypto.Signer implementation that uses the new public
 // key.
 func (ca *CA) NewPKCS1v15SigningKey(cn, keyName string, password []byte) (crypto.Signer, error) {
+	if ca.params.DebugSecrets {
+		ca.params.Logger.Debugf("ca/NewPKCS1v15SigningKey: password: %s", password)
+	}
 	// Ensure password confirms to requirements and
 	// retrieve encryption flag
 	isEncrypted, err := ca.checkPassword(password)
@@ -138,6 +153,9 @@ func (ca *CA) createSigningKey(
 	publicKey crypto.PublicKey,
 	isEncrypted bool) error {
 
+	if ca.params.DebugSecrets {
+		ca.params.Logger.Debugf("ca/createSigningKey: password: %s", password)
+	}
 	// Private Key: Marshal to PKCS8 (w/ optional password)
 	pkcs8, err := ca.EncodePrivKey(privateKey, password)
 	err = ca.certStore.SaveKeyed(
@@ -299,19 +317,32 @@ func (ca *CA) VerifyPKCS1v15(digest, signature []byte, opts *VerifyOpts) error {
 	return nil
 }
 
-// Signs a digest using the Certificate Authority public key
+// Signs a digest using the Certificate Authority public key.
 // Implements crypto.Signer
 func (ca *CA) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	// If this is the platform's custom ca.SignerOpts,
+	// use the supplied password to authenticate the
+	// private key.
+	var password []byte
+	sigKeyOpts, ok := opts.(SignerOpts)
+	if ok {
+		password = sigKeyOpts.Password
+		if ca.params.DebugSecrets {
+			ca.params.Logger.Debugf("ca/Sign: signing opts password: %s", password)
+		}
+	} else {
+		ca.params.Logger.Warning(WarnNoSigningPassword)
+	}
 	pub, err := ca.CAPubKey()
 	if err != nil {
 		return nil, err
 	}
 	if ca.params.Config.RSAScheme == RSA_SCHEME_RSAPSS {
-		signer := NewSigningKey(ca.params.Logger, ca, ca.params.Password, pub)
+		signer := NewSigningKey(ca.params.Logger, ca, password, pub)
 		return signer.Sign(ca.params.Random, digest, opts)
 	} else if ca.params.Config.RSAScheme == RSA_SCHEME_PKCS1v15 {
 		signer := NewPKCS1v15SigningKey(
-			ca.params.Logger, ca, ca.params.Password, pub)
+			ca.params.Logger, ca, password, pub)
 		return signer.Sign(ca.params.Random, digest, opts)
 	} else {
 		return nil, fmt.Errorf("%s: %s",

@@ -10,38 +10,37 @@ import (
 	"github.com/fatih/color"
 	"github.com/jeremyhahn/go-trusted-platform/ca"
 	"github.com/jeremyhahn/go-trusted-platform/common"
-	"github.com/jeremyhahn/go-trusted-platform/platform/auth"
 	"github.com/jeremyhahn/go-trusted-platform/tpm2"
 	"github.com/op/go-logging"
 	"golang.org/x/term"
 )
 
 type PlatformSetup interface {
-	Setup(password []byte)
+	Setup() []byte
 }
 
 type Setup struct {
+	appName              string
 	logger               *logging.Logger
 	passwordPolicy       *regexp.Regexp
-	rootPassword         []byte
-	intermediatePassword []byte
+	rootPassword         string
+	intermediatePassword string
 	caConfig             ca.Config
 	rootCA               ca.CertificateAuthority
 	intermediateCA       ca.CertificateAuthority
 	tpm                  tpm2.TrustedPlatformModule2
-	authenticator        auth.PlatformAuthenticator
 }
 
 // Creates a new Platform Setup
 func NewPlatformSetup(
+	appName string,
 	logger *logging.Logger,
 	passwordPolicyPattern string,
-	rootPassword, intermediatePassword []byte,
+	rootPassword, intermediatePassword string,
 	caConfig ca.Config,
 	rootCA ca.CertificateAuthority,
 	intermediateCA ca.CertificateAuthority,
-	tpm tpm2.TrustedPlatformModule2,
-	authenticator auth.PlatformAuthenticator) PlatformSetup {
+	tpm tpm2.TrustedPlatformModule2) PlatformSetup {
 
 	regex, err := regexp.Compile(passwordPolicyPattern)
 	if err != nil {
@@ -49,6 +48,7 @@ func NewPlatformSetup(
 	}
 
 	return &Setup{
+		appName:              appName,
 		logger:               logger,
 		caConfig:             caConfig,
 		rootPassword:         rootPassword,
@@ -57,104 +57,74 @@ func NewPlatformSetup(
 		rootCA:               rootCA,
 		intermediateCA:       intermediateCA,
 		tpm:                  tpm,
-		authenticator:        authenticator,
 	}
 }
 
 // Performs initial platform setup:
 // 1. Has the Certificate Authority been initialized?
-//   - Yes: Prompt for existing PKCS8 CA password, unseal the CA, start platform
-//   - No:  Prompt for new passwork, initialize root and intermediate CAs
-func (setup Setup) Setup(password []byte) {
+//   - Yes: Prompt for CA password, unseal the CA, start platform
+//   - No:  Prompt for new passwords, initialize root and intermediate CAs
+func (setup Setup) Setup() []byte {
 
-	if !setup.intermediateCA.IsInitialized() {
-
-		setup.printWelcome()
-
-		fmt.Println("")
-		fmt.Println("It looks like this is your first time starting the platform...")
-		fmt.Println("")
-		fmt.Println("Let's take a few minutes to set up a secure and trusted environment.")
-		fmt.Println("")
-		fmt.Println("Enter a password for the Root Certificate Authority")
-		fmt.Println("")
-
-		// Bypass prompts if passwords are configured for auto-unseal
-		if setup.rootPassword != nil && setup.intermediatePassword != nil {
-			emptyByte := []byte("")
-			if !bytes.Equal(setup.rootPassword, emptyByte) &&
-				!bytes.Equal(setup.intermediatePassword, emptyByte) {
-
-				setup.initCA(setup.rootPassword, setup.intermediatePassword)
-				return
-			}
-		}
-
-		// Prompt for new passwords
-		var rootPass []byte
-		for rootPass == nil {
-			maybePassword, err := setup.initialPasswordPrompt()
-			if err != nil {
-				setup.logger.Error(err)
-			}
-			rootPass = maybePassword
-		}
-
-		fmt.Println("\nEnter a password for the Intermediate Certifiate Authority")
-		fmt.Println("")
-		var intermediatePass []byte
-		for intermediatePass == nil {
-			maybePassword, err := setup.initialPasswordPrompt()
-			if err != nil {
-				setup.logger.Error(err)
-			}
-			intermediatePass = maybePassword
-		}
-
-		setup.initCA(rootPass, intermediatePass)
-		return
+	// Bypass prompts if passwords are configured for auto-unseal. This should only
+	// be used for development and automating tests
+	if setup.rootPassword != "" && setup.intermediatePassword != "" {
+		setup.initCA([]byte(setup.rootPassword), []byte(setup.intermediatePassword))
+		return []byte(setup.intermediatePassword)
 	}
 
-	// Attempt to authenticate the user if a password was supplied
-	if len(password) > 0 {
-		if err := setup.authenticator.Authenticate(password); err != nil {
-			if err == ca.ErrNotInitialized {
-				if password != nil {
-					setup.initCA(password, password)
-					return
-				}
-			}
-			setup.logger.Fatal(err)
-		}
-	}
-
-	// Abort with error if private key passwords are required in config
-	if setup.caConfig.RequirePrivateKeyPassword {
-		setup.logger.Fatal(ca.ErrPrivateKeyPasswordRequired)
-	}
-
-	// Last attempt to init/load the CA using a blank password
-	setup.initCA(password, password)
-}
-
-// Reads a password from STDIN
-func (setup Setup) PasswordPrompt() []byte {
 	setup.printWelcome()
-	password, err := term.ReadPassword(int(syscall.Stdin))
-	if err != nil {
+
+	fmt.Println("")
+	fmt.Println("It looks like this is your first time starting the platform...")
+	fmt.Println("")
+	fmt.Println("Let's take a few minutes to set up a secure and trusted environment.")
+	fmt.Println("")
+	fmt.Println("Enter a password for the Root Certificate Authority")
+	fmt.Println("")
+
+	// Prompt for new passwords
+	var rootPass []byte
+	for rootPass == nil {
+		maybePassword, err := setup.initialPasswordPrompt()
+		if err != nil {
+			setup.logger.Error(err)
+		}
+		rootPass = maybePassword
+	}
+
+	fmt.Println("")
+	fmt.Println("\nEnter a password for the Intermediate Certifiate Authority")
+	fmt.Println("")
+	var intermediatePass []byte
+	for intermediatePass == nil {
+		maybePassword, err := setup.initialPasswordPrompt()
+		if err != nil {
+			setup.logger.Error(err)
+		}
+		intermediatePass = maybePassword
+	}
+
+	// Initialize the CA
+	setup.initCA(rootPass, intermediatePass)
+
+	// Perform local TPM quote, sign and store to CA blob storage
+	if _, err := setup.tpm.LocalQuote(true, intermediatePass); err != nil {
 		setup.logger.Fatal(err)
 	}
-	return password
+
+	return intermediatePass
 }
 
 // Prompt for password with confirmation of the typed password
 func (setup Setup) initialPasswordPrompt() ([]byte, error) {
 
-	fmt.Print("Enter Password: ")
-	password := setup.readassword()
+	fmt.Print("Enter Password")
+	password := setup.readPassword()
+	fmt.Println()
 
-	fmt.Print("\nConfirm Password: ")
-	confirm := setup.readassword()
+	fmt.Println("Confirm Password")
+	confirm := setup.readPassword()
 
 	if bytes.Compare(password, confirm) != 0 {
 		return nil, common.ErrPasswordsDontMatch
@@ -174,7 +144,8 @@ func (setup Setup) printWelcome() {
 }
 
 // Reads a password from STDIN
-func (setup Setup) readassword() []byte {
+func (setup Setup) readPassword() []byte {
+	fmt.Printf("%s $ ", setup.appName)
 	password, err := term.ReadPassword(int(syscall.Stdin))
 	if err != nil {
 		setup.logger.Fatal(err)
@@ -184,12 +155,17 @@ func (setup Setup) readassword() []byte {
 
 // Initialize a Root and Intermediate CA
 func (setup Setup) initCA(rootPassword, intermediatePassword []byte) {
+
+	setup.rootCA.SetPassword(rootPassword)
+	setup.intermediateCA.SetPassword(intermediatePassword)
+
 	// Initialize the Root CA
 	rootPrivKey, rootCert, err := setup.rootCA.Init(
 		nil, nil, rootPassword, setup.tpm.RandomReader())
 	if err != nil {
 		setup.logger.Fatal(err)
 	}
+
 	// Initialize the Intermediate CA
 	_, _, err = setup.intermediateCA.Init(
 		rootPrivKey, rootCert, intermediatePassword, rand.Reader)

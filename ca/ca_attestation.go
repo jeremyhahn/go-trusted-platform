@@ -15,10 +15,14 @@ var (
 )
 
 // Imports a new TPM PEM encoded Endorsement Key into the certificate store
-func (ca *CA) ImportEndorsementKeyCertificate(ekCertPEM []byte) error {
+func (ca *CA) ImportEndorsementKeyCertificate(ekCertPEM, caPassword []byte) error {
+	if ca.params.DebugSecrets {
+		ca.params.Logger.Debugf("ca/ImportEndorsementKeyCertificate: caPassword: %s", caPassword)
+	}
 	certName := fmt.Sprintf("ek-cert%s", FSEXT_PEM)
 	blobKey := ca.TPMBlobKey(ca.commonName, certName)
 	sigOpts, err := NewSigningOpts(ca.Hash(), ekCertPEM)
+	sigOpts.Password = caPassword
 	sigOpts.BlobKey = &blobKey
 	sigOpts.BlobData = ekCertPEM
 	sigOpts.StoreSignature = true
@@ -235,19 +239,19 @@ func (ca *CA) AttestationPCRs(cn string) (map[string][][]byte, error) {
 
 // Signs the requested quote using the CA public key and saves the
 // signature, digest and quote to the signed blob store.
-func (ca *CA) ImportAttestationQuote(cn string, data []byte) error {
-	return ca.ImportAttestation(cn, ATTEST_BLOB_QUOTE, data)
+func (ca *CA) ImportAttestationQuote(cn string, data, caPassword []byte) error {
+	return ca.ImportAttestation(cn, ATTEST_BLOB_QUOTE, data, caPassword)
 }
 
 // Signs the requested event log using the CA public key and saves the
 // signature, digest and event log to the signed blob store.
-func (ca *CA) ImportAttestationEventLog(cn string, data []byte) error {
-	return ca.ImportAttestation(cn, ATTEST_BLOB_EVENTLOG, data)
+func (ca *CA) ImportAttestationEventLog(cn string, data, caPassword []byte) error {
+	return ca.ImportAttestation(cn, ATTEST_BLOB_EVENTLOG, data, caPassword)
 }
 
 // Signs the requested PCR list using the CA public key and saves the
 // signature, digest and PCR list to the signed blob store.
-func (ca *CA) ImportAttestationPCRs(cn string, pcrs map[string][][]byte) error {
+func (ca *CA) ImportAttestationPCRs(cn string, pcrs map[string][][]byte, caPassword []byte) error {
 	// Gob the PCR list
 	pcrsBuf := new(bytes.Buffer)
 	encoder := gob.NewEncoder(pcrsBuf)
@@ -255,12 +259,12 @@ func (ca *CA) ImportAttestationPCRs(cn string, pcrs map[string][][]byte) error {
 		ca.params.Logger.Error(err)
 		return err
 	}
-	return ca.ImportAttestation(cn, ATTEST_BLOB_PCRS, pcrsBuf.Bytes())
+	return ca.ImportAttestation(cn, ATTEST_BLOB_PCRS, pcrsBuf.Bytes(), caPassword)
 }
 
 // Signs the requested blob type using the CA public key and saves the
 // signature, digest and blob to the signed blob store.
-func (ca *CA) ImportAttestation(cn, blobType string, data []byte) error {
+func (ca *CA) ImportAttestation(cn, blobType string, data, caPassword []byte) error {
 
 	// Create signing options
 	opts, err := NewSigningOpts(ca.Hash(), data)
@@ -290,6 +294,7 @@ func (ca *CA) ImportAttestation(cn, blobType string, data []byte) error {
 	// Set storage properties
 	// opts.KeyCN = &cn
 	// opts.KeyName = ca.akKeyName()
+	opts.Password = caPassword
 	opts.BlobKey = blobKey
 	opts.BlobData = data
 	opts.StoreSignature = true

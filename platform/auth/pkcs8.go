@@ -19,15 +19,15 @@ type PlatformAuthenticator interface {
 type PKCS8Authenticator struct {
 	logger               *logging.Logger
 	ca                   ca.CertificateAuthority
-	rootPassword         string
-	intermediatePassword string
+	rootPassword         []byte
+	intermediatePassword []byte
 	PlatformAuthenticator
 }
 
 func NewPKCS8Authenticator(
 	logger *logging.Logger,
 	ca ca.CertificateAuthority,
-	rootPassword, intermediatePassword string) PlatformAuthenticator {
+	rootPassword, intermediatePassword []byte) PlatformAuthenticator {
 
 	return PKCS8Authenticator{
 		logger:               logger,
@@ -45,13 +45,13 @@ func (authenticator PKCS8Authenticator) Authenticate(password []byte) error {
 	// If the rootPassword or intermediatePassword is set,
 	// emit a log warning and use them to transparently log
 	// into the platform without prompting for a password.
-	if authenticator.rootPassword != "" {
+	if authenticator.rootPassword != nil {
 		authenticator.warn(infoInsecureRootPassword)
 		_, err := authenticator.ca.CAPrivKey([]byte(authenticator.rootPassword))
 		if err != nil {
 			return err
 		}
-	} else if authenticator.intermediatePassword != "" {
+	} else if authenticator.intermediatePassword != nil {
 		authenticator.warn(insecureIntermediatePassword)
 		_, err := authenticator.ca.CAPrivKey([]byte(authenticator.intermediatePassword))
 		if err != nil {
@@ -68,12 +68,12 @@ func (authenticator PKCS8Authenticator) Authenticate(password []byte) error {
 
 // Creates a new public / private key
 func (authenticator PKCS8Authenticator) Provision(cn string, password, caPassword []byte) error {
-	if authenticator.rootPassword != "" {
+	if authenticator.rootPassword != nil {
 		_, err := authenticator.ca.CAPrivKey([]byte(authenticator.rootPassword))
 		if err != nil {
 			return err
 		}
-	} else if authenticator.intermediatePassword != "" {
+	} else if authenticator.intermediatePassword != nil {
 		_, err := authenticator.ca.CAPrivKey([]byte(authenticator.intermediatePassword))
 		if err != nil {
 			return err

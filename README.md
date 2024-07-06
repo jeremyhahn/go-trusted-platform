@@ -1,4 +1,4 @@
-![alt text](https://github.com/jeremyhahn/go-trusted-platform/blob/main/logo.png?raw=true)
+![alt text](https://github.com/jeremyhahn/go-trusted-platform/blob/main/public_html/images/logo.png?raw=true)
 
 
 The `Trusted Platform` uses a [Trusted Platform Module (TPM)](https://en.wikipedia.org/wiki/Trusted_Platform_Module), [Secure Boot](https://en.wikipedia.org/wiki/UEFI), and a provided [Certificate Authority](https://en.wikipedia.org/wiki/Certificate_authority) to establish a Platform Root of Trust, perform Local and [Remote Attestation](https://tpm2-software.github.io/tpm2-tss/getting-started/2019/12/18/Remote-Attestation.html), encryption, signing, x509 certificate management, data integrity, intrusion detection, licensing and more.
@@ -171,7 +171,7 @@ The initial use case I'm supporting is a local farmers market that runs as an op
 
 7. [FIPS 200: Minimum Security Requirements for Federal Information and Information Systems](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.200.pdf)
 
-8. [FIPS 201-2: Personal Identity Verification (PIV) of Federal Employees and Contractors](https://csrc.nist.gov/pubs/fips/201-2/final)
+8. [FIPS 201-3: Personal Identity Verification (PIV) of Federal Employees and Contractors](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.201-3.pdf)
 
 9. [FIPS 202: SHA-3 Standard: Permutation-Based Hash and Extendable-Output Functions](https://csrc.nist.gov/pubs/fips/202/final)
 
@@ -186,7 +186,7 @@ The more features and functionality introduced to software, the further away it 
 
 We now live in a world with lots of connected devices, artifical intelligence systems learning from and controlling said devices, processing incoming data at light speed, and integrating with many different 3rd party systems and service providers around the world. Privacy controls, systems and network hardening and data encryption at rest and in-transit are often a 2nd thought, especially on home networks where it's common to omit TLS verifications. Attackers are constantly looking for new hosts to compromise, expand their botnets and criminal enterprises, extract data, steal identities, and perform other nefarious activities.
 
-This platform makes security a first class citizen and encourages a thoughtful design approach to building a connected services platform, abstracting the common activities, complexities, compliances, and boilerplate necessities into a modular and flexible framework that can be applied to any web services, SAAS, or conneccted devices platform. It strives to protect user data and confidentiality while empowering service providers and application developers to create secure offerings using industry approved standards and mechanisms so they can focus on delivering intuitive, feature-filled solutions.
+This platform makes security a first class citizen and encourages a thoughtful design approach to building a connected services platform, abstracting the common activities, complexities, compliances, and boilerplate necessities into a modular and flexible framework that can be applied to any web services, SAAS, or connected devices platform. It strives to protect user data and confidentiality while empowering service providers and application developers to create secure offerings using industry approved standards and mechanisms so they can focus on delivering intuitive, feature-filled solutions.
 
 This project makes use of modern authentication and security mechanisms such as [WebAuthn](https://en.wikipedia.org/wiki/WebAuthn), [FIDO 2](https://fidoalliance.org/fido2/), [PIV](https://en.wikipedia.org/wiki/FIPS_201) cards, and hardware based secret management to provide a password-less experience for users and platform administrators, while meeting stringent security requirements for highly regulated industries.
 
@@ -217,11 +217,11 @@ The `main` branch will always build and run. Try it out!
         - [x] Private trusted root certificate store
         - [x] Private trusted intermediate certificate store
         - [x] Distinct TLS, encryption & signing keys
-        - [x] RSA public / private keys
+        - [x] RSA public & private encryption keys
         - [x] RSA & ECC signing keys
         - [x] Create & Sign Certificate Signing Requests (CSR)
         - [x] x509 Certificate Revocation Lists (CRLs)
-        - [x] Encoding / Decoding support for DER and PEM
+        - [x] Encoding & Decoding support for DER and PEM
         - [x] Automatic download & import Issuer CA(s) to trust store
         - [x] Automatic download & import Revocation Lists (CRLs)
         - [x] Parse & Create CA bundles
@@ -254,6 +254,11 @@ The `main` branch will always build and run. Try it out!
         - [x] Provide Attestation Key to Client
         - [x] Quote / Verify
     - [ ] Command Line Interface
+        [ [ ] Linux man pages
+            - [ ] CA
+                - [x] install-ca-certificates
+            - [ ] TPM
+                - [x] import-ek
         - [ ] Certificate Authority
             - [x] Issue Certificate
             - [ ] Import Certificate to CA Trust Store
@@ -304,15 +309,18 @@ The `main` branch will always build and run. Try it out!
                 - [ ] Verify Quote
     - [ ] Web Services
         - [x] Web server
+        - [x] TLS Web Server
+            - [x] Encrypted private key
+            - [ ] Opaque private key
+            - [ ] mTLS
         - [x] REST API
-            - [x] Swagger API Docs
+            - [x] Swagger / OpenAPI Docs
         - [ ] JWT Authentication
             - [x] Generate Token
             - [x] Refresh Token
             - [x] Validate Token
-            - [ ] Opaque TLS Private Key
-        - [x] HTTPS / TLS
-        - [ ] mTLS
+            - [x] Encrypted private key
+            - [ ] Opaque Private Key
     - [ ] gRPC Remote Attestation
         - [x] Verifier (Service Provider)
             - [ ] Opaque TLS Private Key
@@ -322,7 +330,7 @@ The `main` branch will always build and run. Try it out!
             - [x] Make Credential Challenge
             - [x] Activate Credential
             - [x] Issue AK x509 Certificate
-            - [ ] Quote / Verify
+            - [x] Quote / Verify
             - [x] Automatic Device enrollment
         - [x] Attestor (Client)
             - [ ] Opaque TLS Private Key

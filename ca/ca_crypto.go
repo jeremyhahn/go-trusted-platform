@@ -13,6 +13,10 @@ import (
 // in a separate partition / hierarchy for security and to provide
 // flexibility to backup, restore, and rotate keyes.
 func (ca *CA) NewEncryptionKey(cn, keyName string, password, caPassword []byte) (*rsa.PrivateKey, error) {
+	if ca.params.DebugSecrets {
+		ca.params.Logger.Debugf("ca/NewEncryptionKey: caPassword: %s", caPassword)
+		ca.params.Logger.Debugf("ca/NewEncryptionKey: password: %s", password)
+	}
 	// Check private key password and complexity requirements
 	encrypted := false
 	if ca.params.Config.RequirePrivateKeyPassword {
@@ -111,6 +115,9 @@ func (ca *CA) EncryptionKey(cn, keyName string) (*rsa.PublicKey, error) {
 
 // Returns a crypto.Decrypter implementation for PKCS #8 private keys
 func (ca *CA) DecryptionKey(cn, keyName string, password []byte) (crypto.Decrypter, error) {
+	if ca.params.DebugSecrets {
+		ca.params.Logger.Debugf("ca/DecryptionKey: password: %s", password)
+	}
 	privDER, err := ca.certStore.GetKeyed(
 		cn, keyName, PARTITION_ENCRYPTION_KEYS, FSEXT_PRIVATE_PKCS8)
 	if err != nil {
@@ -143,6 +150,9 @@ func (ca *CA) RSAEncrypt(cn, keyName string, data []byte) ([]byte, error) {
 // Decrypts the requested data, expected with OAEP padding, using the common
 // name's RSA private key.
 func (ca *CA) RSADecrypt(cn, keyName string, password, ciphertext []byte) ([]byte, error) {
+	if ca.params.DebugSecrets {
+		ca.params.Logger.Debugf("ca/RSADecrypt: password: %s", password)
+	}
 	privDER, err := ca.certStore.GetKeyed(
 		cn, keyName, PARTITION_ENCRYPTION_KEYS, FSEXT_PRIVATE_PKCS8)
 	if err != nil {

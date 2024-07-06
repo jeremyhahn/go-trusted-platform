@@ -40,7 +40,6 @@ func NewSystemRestService(
 
 // Writes a list of webservice REST and WebSocket endpoints
 func (restService *SystemRestService) Endpoints(w http.ResponseWriter, r *http.Request) {
-	//restService.server.WalkRoutes() // TODO remove
 	restService.httpWriter.Write(w, r, http.StatusOK, restService.endpointList)
 }
 
