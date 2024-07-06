@@ -6,12 +6,12 @@ import (
 )
 
 var (
-// ATTPassword string
+	ATTListenAddress string
 )
 
 func init() {
 
-	// attestorCmd.PersistentFlags().StringVarP(&ATTPassword, "password", "a", "", "Storage Root Key (SRK) authentication password")
+	attestorCmd.PersistentFlags().StringVar(&ATTListenAddress, "listen", "", "The IP address or hostname to listen on for incoming verifier requests")
 
 	rootCmd.AddCommand(attestorCmd)
 }
@@ -22,13 +22,18 @@ var attestorCmd = &cobra.Command{
 	Long: `Starts the Attestor service to bebin listening for inbound
 verification requests from the Verifier to begin Full Remote Attestation`,
 	Run: func(cmd *cobra.Command, args []string) {
-		var serverPassword []byte
-		if TLSPassword != "" {
-			serverPassword = []byte(TLSPassword)
-		}
-		if _, err := attestor.NewAttestor(App, serverPassword); err != nil {
+
+		_, err := attestor.NewAttestor(
+			App,
+			ATTListenAddress,
+			[]byte(CAPassword),
+			[]byte(ServerPassword),
+			[]byte(SRKAuth))
+
+		if err != nil {
 			App.Logger.Fatal(err)
 		}
+
 		// Run forever
 	},
 }

@@ -28,20 +28,21 @@ type Session struct {
 
 // Secure TLS encrypted gRPC web service
 type SecureAttestor struct {
-	logger   *logging.Logger
-	config   config.Attestation
-	domain   string
-	ca       ca.CertificateAuthority
-	tpm      tpm2.TrustedPlatformModule2
-	srkAuth  []byte
-	attestor Attestor
+	logger     *logging.Logger
+	config     config.Attestation
+	domain     string
+	ca         ca.CertificateAuthority
+	tpm        tpm2.TrustedPlatformModule2
+	caPassword []byte
+	srkAuth    []byte
+	attestor   Attestor
 	pb.TLSAttestorClient
 	pb.UnimplementedTLSAttestorServer
 	sessions     map[string]Session
 	sessionMutex sync.RWMutex
 }
 
-func NewSecureAttestor(attestor Attestor, app *app.App, srkAuth []byte) *SecureAttestor {
+func NewSecureAttestor(attestor Attestor, app *app.App, caPassword, srkAuth []byte) *SecureAttestor {
 	return &SecureAttestor{
 		attestor:     attestor,
 		config:       app.AttestationConfig,
@@ -49,6 +50,7 @@ func NewSecureAttestor(attestor Attestor, app *app.App, srkAuth []byte) *SecureA
 		logger:       app.Logger,
 		ca:           app.CA,
 		tpm:          app.TPM,
+		caPassword:   caPassword,
 		srkAuth:      srkAuth,
 		sessions:     make(map[string]Session, 0),
 		sessionMutex: sync.RWMutex{}}
@@ -112,7 +114,7 @@ func (s *SecureAttestor) GetEKCert(ctx context.Context, in *pb.Null) (*pb.EKCert
 	s.logConnection(ctx, "GetEK")
 
 	// Get the EK cert as x509.Certificate
-	cert, err := s.tpm.EKCert(nil, s.srkAuth)
+	cert, err := s.tpm.EKCert(s.caPassword, s.srkAuth)
 	if err != nil {
 		s.logger.Error(err)
 		return nil, err
@@ -259,7 +261,7 @@ func (s *SecureAttestor) logConnection(ctx context.Context, method string) {
 		method, p.Addr.String())
 }
 
-// Create a log entry with the client IP and requested method name
+// Parse the verifier IP from the context
 func (s *SecureAttestor) parseVerifierIP(ctx context.Context) string {
 	p, _ := peer.FromContext(ctx)
 	return parseVerifierIP(p.Addr)

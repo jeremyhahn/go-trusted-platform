@@ -15,16 +15,15 @@ func init() {
 }
 
 var webserverCmd = &cobra.Command{
-	Use:   "webserver",
+	Use:   "webservice",
 	Short: "Run Trusted Platform Web Services",
-	Long:  `Starts the embedded web services`,
+	Long:  `Starts the embedded web server to host the REST API and static assets`,
 	Run: func(cmd *cobra.Command, args []string) {
 
 		sigChan := make(chan os.Signal, 1)
 
 		restRegistry := rest.NewRestServiceRegistry(App)
-		// TODO: support pkcs8 and pkcs11 keys
-		webserver := webservice.NewWebServerV1(App, nil, restRegistry)
+		webserver := webservice.NewWebServerV1(App, []byte(App.ServerPassword), restRegistry)
 
 		go webserver.Run()
 

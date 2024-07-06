@@ -1,19 +1,19 @@
 {
     "swagger": "2.0",
     "info": {
-        "description": "This is the RESTful web servce for CropDroid.",
-        "title": "CropDroid REST API",
-        "termsOfService": "https://www.cropdroid.com/terms/",
+        "description": "This is the RESTful Web Services API for Trusted Platform",
+        "title": "Trusted Platform",
+        "termsOfService": "https://www.trusted-platform.io/terms",
         "contact": {
             "name": "API Support",
-            "url": "https://www.cropdroid.com/support",
-            "email": "support@cropdroid.com"
+            "url": "https://www.trusted-platform.io/support",
+            "email": "support@trusted-platform.org"
         },
         "license": {
             "name": "Commercial",
-            "url": "https://www.cropdroid.com/licenses/commercial.txt"
+            "url": "https://www.trusted-platform.io/licenses/commercial.txt"
         },
-        "version": "v0.0.3"
+        "version": "v0.0.1"
     },
     "host": "localhost:8443",
     "basePath": "/api/v1",
@@ -258,8 +258,11 @@
         "app.App": {
             "type": "object",
             "properties": {
-                "cert_dir": {
-                    "type": "string"
+                "argon2": {
+                    "$ref": "#/definitions/hash.Argon2Params"
+                },
+                "attestation": {
+                    "$ref": "#/definitions/config.Attestation"
                 },
                 "certificate_authority": {
                     "$ref": "#/definitions/ca.Config"
@@ -267,19 +270,37 @@
                 "config_dir": {
                     "type": "string"
                 },
-                "data_dir": {
-                    "type": "string"
-                },
                 "debug": {
+                    "type": "boolean"
+                },
+                "debug-secrets": {
                     "type": "boolean"
                 },
                 "domain": {
                     "type": "string"
                 },
+                "hostmaster": {
+                    "type": "string"
+                },
+                "intermediate_password": {
+                    "type": "string"
+                },
                 "log_dir": {
                     "type": "string"
                 },
+                "password-policy": {
+                    "type": "string"
+                },
+                "platform_dir": {
+                    "type": "string"
+                },
+                "root_password": {
+                    "type": "string"
+                },
                 "runtime_user": {
+                    "type": "string"
+                },
+                "server_password": {
                     "type": "string"
                 },
                 "tpm": {
@@ -296,11 +317,47 @@
                 "auto_import_issuing_ca": {
                     "type": "boolean"
                 },
+                "elliptic-curve": {
+                    "type": "string"
+                },
+                "hash": {
+                    "type": "string"
+                },
+                "home": {
+                    "type": "string"
+                },
                 "identity": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/ca.Identity"
                     }
+                },
+                "issued-valid-days": {
+                    "type": "integer"
+                },
+                "key-algorithm": {
+                    "type": "string"
+                },
+                "key-store": {
+                    "type": "string"
+                },
+                "password-policy": {
+                    "type": "string"
+                },
+                "require-pkcs8-password": {
+                    "type": "boolean"
+                },
+                "retain-revoked-certificates": {
+                    "type": "boolean"
+                },
+                "rsa-scheme": {
+                    "type": "string"
+                },
+                "sans-include-localhost": {
+                    "type": "boolean"
+                },
+                "signature-algorithm": {
+                    "type": "string"
                 },
                 "system_cert_pool": {
                     "type": "boolean"
@@ -376,6 +433,50 @@
                 }
             }
         },
+        "config.Attestation": {
+            "type": "object",
+            "properties": {
+                "allow-open-enrollment": {
+                    "type": "boolean"
+                },
+                "allow_attestor_self_ca": {
+                    "type": "boolean"
+                },
+                "allowed_verifiers": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "client_ca_cert": {
+                    "type": "string"
+                },
+                "ek_cert_form": {
+                    "type": "string"
+                },
+                "insecure_port": {
+                    "type": "integer"
+                },
+                "insecure_skip_verify": {
+                    "type": "boolean"
+                },
+                "quote-pcrs": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "service": {
+                    "type": "string"
+                },
+                "service_ca_cert": {
+                    "type": "string"
+                },
+                "tls_port": {
+                    "type": "integer"
+                }
+            }
+        },
         "config.WebService": {
             "type": "object",
             "properties": {
@@ -398,6 +499,26 @@
                     "type": "string"
                 },
                 "tls_port": {
+                    "type": "integer"
+                }
+            }
+        },
+        "hash.Argon2Params": {
+            "type": "object",
+            "properties": {
+                "iterations": {
+                    "type": "integer"
+                },
+                "keyLen": {
+                    "type": "integer"
+                },
+                "memory": {
+                    "type": "integer"
+                },
+                "parallelism": {
+                    "type": "integer"
+                },
+                "saltLen": {
                     "type": "integer"
                 }
             }
@@ -442,6 +563,9 @@
         "tpm2.Config": {
             "type": "object",
             "properties": {
+                "auto_import_ek_certs": {
+                    "type": "boolean"
+                },
                 "device": {
                     "type": "string"
                 },
@@ -455,6 +579,9 @@
                     "type": "boolean"
                 },
                 "entropy": {
+                    "type": "boolean"
+                },
+                "simulator": {
                     "type": "boolean"
                 }
             }

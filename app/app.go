@@ -1,6 +1,8 @@
 package app
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -20,6 +22,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/platform/setup"
 	"github.com/jeremyhahn/go-trusted-platform/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/util"
+)
+
+var (
+	ErrInvalidLocalAttestationSignature = errors.New("trusted-platform: local attestation signature verification failed")
 )
 
 type App struct {
@@ -42,6 +48,10 @@ type App struct {
 	PasswordPolicy       string                      `yaml:"password-policy" json:"password-policy" mapstructure:"password-policy"`
 	RootPassword         string                      `yaml:"root-password" json:"root_password" mapstructure:"root-password"`
 	IntermediatePassword string                      `yaml:"intermediate-password" json:"intermediate_password" mapstructure:"intermediate-password"`
+	ServerPassword       string                      `yaml:"server-password" json:"server_password" mapstructure:"server-password"`
+	EKAuth               string                      `yaml:"ek-auth" json:"ek_auth mapstructure:"ek-auth"`
+	SRKAuth              string                      `yaml:"srk-auth" json:"srk_auth mapstructure:"srk-auth"`
+	cAPassword           string
 }
 
 func NewApp() *App {
@@ -49,15 +59,22 @@ func NewApp() *App {
 }
 
 type AppInitParams struct {
-	Debug             bool
-	LogDir            string
-	ConfigDir         string
-	PlatformDir       string
-	CADir             string
-	CAPassword        []byte
-	ServerTLSPassword []byte
+	Debug                bool
+	LogDir               string
+	ConfigDir            string
+	PlatformDir          string
+	CADir                string
+	CAPassword           string
+	RootPassword         string
+	IntermediatePassword string
+	ServerPassword       string
+	EKAuth               string
+	SRKAuth              string
 }
 
+// Initialize the platform. Load the platform configuration file,
+// create the logger, Root and Intermediate Certificate Authorities,
+// and initialize the TPM.
 func (app *App) Init(initParams *AppInitParams) *App {
 	if initParams != nil {
 		app.DebugFlag = initParams.Debug
@@ -67,21 +84,39 @@ func (app *App) Init(initParams *AppInitParams) *App {
 		app.CAConfig.Home = initParams.CADir
 	}
 	app.initConfig()
-	// Overwrite config with CLI options
-	app.CAConfig.Home = initParams.CADir
+	// Override initConfig with CLI options
+	if initParams.CADir != "" {
+		app.CAConfig.Home = initParams.CADir
+	}
+	if initParams.RootPassword != "" {
+		app.RootPassword = initParams.RootPassword
+	}
+	if initParams.IntermediatePassword != "" {
+		app.IntermediatePassword = initParams.IntermediatePassword
+	}
+	if initParams.ServerPassword != "" {
+		app.ServerPassword = initParams.ServerPassword
+	}
+	if initParams.EKAuth != "" {
+		app.SRKAuth = initParams.SRKAuth
+	}
+	if initParams.SRKAuth != "" {
+		app.SRKAuth = initParams.SRKAuth
+	}
+	caPassword := initParams.CAPassword
+	if caPassword == "" {
+		if app.IntermediatePassword != "" {
+			caPassword = app.IntermediatePassword
+		} else {
+			caPassword = app.RootPassword
+		}
+	}
 	app.initLogger()
-	if initParams.CAPassword == nil || len(initParams.CAPassword) == 0 {
-		app.promptForCAPassword()
-		initParams.CAPassword = app.PasswordPrompt()
-	}
-	if initParams.ServerTLSPassword == nil || len(initParams.ServerTLSPassword) == 0 {
-		app.promptForServerTLSPassword()
-		initParams.ServerTLSPassword = app.PasswordPrompt()
-	}
-	app.initCA(initParams.CAPassword, initParams.ServerTLSPassword)
+	app.initCA([]byte(caPassword))
 	return app
 }
 
+// Read and parse the platform configuration file
 func (app *App) initConfig() {
 
 	viper.SetConfigName("config")
@@ -101,6 +136,9 @@ func (app *App) initConfig() {
 	log.Printf("Using configuration file: %s\n", viper.ConfigFileUsed())
 }
 
+// Creates a new file and STDOUT logger. If the global DebugFlag is set,
+// the logger is initialized in debug mode, executing all logger.Debug*
+// statements.
 func (app *App) initLogger() {
 	logFormat := logging.MustStringFormatter(
 		`%{color}%{time:15:04:05.000} %{shortpkg}.%{shortfunc} %{level:.4s} %{id:03x}%{color:reset} %{message}`,
@@ -126,61 +164,80 @@ func (app *App) initLogger() {
 	app.Logger = logging.MustGetLogger(Name)
 }
 
-// Open a connection to the TPM, using an unauthenticated, unverified
-// and un-attested connection. Use the software TPM simulator if enabled
-// in the TPM configuration section.
-func (app *App) OpenTPM() {
-	var err error
-	var tpm tpm2.TrustedPlatformModule2
-	if app.TPMConfig.UseSimulator {
-		tpm, err = tpm2.NewSimulation(
-			app.Logger, app.DebugSecretsFlag, &app.TPMConfig, app.Domain)
+// Opens a connection to the TPM, using an unauthenticated, unverified
+// and un-attested connection. A TPM software simulator is used if enabled
+// in the TPM section of the platform configuration file.
+func (app *App) OpenTPM() error {
+	if app.TPM == nil {
+		var err error
+		var tpm tpm2.TrustedPlatformModule2
+		if app.TPMConfig.UseSimulator {
+			tpm, err = tpm2.NewSimulation(
+				app.Logger, app.DebugSecretsFlag, &app.TPMConfig, app.Domain)
+		} else {
+			tpm, err = tpm2.NewTPM2(
+				app.Logger, app.DebugSecretsFlag, &app.TPMConfig, app.Domain)
+		}
+		if err != nil {
+			app.Logger.Error(err)
+			return err
+		}
+		app.TPM = tpm
 	} else {
-		tpm, err = tpm2.NewTPM2(
-			app.Logger, app.DebugSecretsFlag, &app.TPMConfig, app.Domain)
+		if err := app.TPM.Open(); err != nil {
+			app.Logger.Error(err)
+			return err
+		}
 	}
-	if err != nil {
-		app.Logger.Error(err)
-		app.Logger.Error("continuing as UNTRUSTED platform!")
-	}
-	app.TPM = tpm
+	return nil
 }
 
-// Initializes new Root and Intermediate Certificate Authorities according
-// to the configuration. If this is the first time the CA is being initialized,
-// new keys and certificates are created for the Root and Intermediate CAs
-// and a web server certificate is issued for the configured domain by the
-// Intermediate CA. If the CA has already been initialized, it's keys and signing
-// certificate are reloaded from persistent storage.
+// Initializes the Certificate Authority.
 //
-// If a Trusted Platform Module is found and entropy is enabled in the
-// configuration then it's used as the source of randomness for all random
-// operations in the platform. Use the TPM "Encrypt" configuration option
-// to encrypt the bus communication between the CPU <-> TPM.
-func (app *App) initCA(caPassword, serverTLSPassword []byte) {
+// If the CA does not exist, Platform Setup begins to collect the Root and
+// Intermediate Private Key passwords. New Root and Intermediate Certificate
+// Authorities are created according to the platform configuration file - new
+// RSA/ECC key pairs, an x509 signing certificates, and dedicated RSA encryption
+// keys are created.
+//
+// If the CA is already initialized, the private key password must be supplied
+// to log into the Trusted Platform, unseal the CA, and make it's private key
+// available for signing and decryption operations.
+//
+// If a Trusted Platform Module (TPM) is found and entropy is enabled in the
+// platform configuration file, then the TPM is used as the source of randomness
+// for all entropy operations performed within the platform. Use the TPM "Encrypt"
+// configuration option to encrypt the bus communication between the CPU <-> TPM.
+//
+// Any errors enountered during CA initialization are treated as Fatal.
+func (app *App) initCA(caPassword []byte) {
 
 	// Override passwords with user-defined passwords
 	// in configuration file, if provided
-	rootPassword := caPassword
-	intermediatePassword := caPassword
 	if app.RootPassword != "" {
-		app.Logger.Warning("Loading Root Certificate Authority private key password from configuration file")
-		rootPassword = []byte(app.RootPassword)
+		app.Logger.Warning("Loading Root Certificate Authority private key password from config file")
 	}
 	if app.IntermediatePassword != "" {
-		app.Logger.Warning("Loading Intermediate Certificate Authority private key password from configuration file")
-		intermediatePassword = []byte(app.IntermediatePassword)
-	} else {
+		app.Logger.Warning("Loading Intermediate Certificate Authority private key password from config file")
 	}
 
 	// Open the TPM. Close it after CA initialization is complete
-	app.OpenTPM()
-	defer app.TPM.Close()
+	if err := app.OpenTPM(); err != nil {
+		app.Logger.Fatal(err)
+	}
+	defer func() {
+		if err := app.TPM.Close(); err != nil {
+			app.Logger.Error(err)
+		}
+	}()
 
-	// Initalize TPM based random reader if present.
+	// If TPM entropy is enabled in the config file,
+	// the TPM RNG will be used as the source of
+	// randomness, otherwise, the runtime rand.Reader
+	// is used.
 	// If "Encrypt" flag is set, the Read operation is
-	// performed using an encrypted HMAC session between
-	// the CPU <-> TPM.
+	// performed using a salted, encrypted HMAC session
+	// between the CPU <-> TPM bus.
 	random := app.TPM.RandomReader()
 
 	// Set the CA password policy to the global password
@@ -189,62 +246,119 @@ func (app *App) initCA(caPassword, serverTLSPassword []byte) {
 		app.CAConfig.PasswordPolicy = app.PasswordPolicy
 	}
 
-	// Create new Root and Intermediate CA(s)
+	// Instantiate Root and Intermediate CA(s)
 	params := ca.CAParams{
 		Debug:                app.DebugFlag,
 		DebugSecrets:         app.DebugSecretsFlag,
 		Logger:               app.Logger,
 		Config:               &app.CAConfig,
-		Password:             caPassword,
+		Password:             []byte(caPassword),
 		SelectedIntermediate: 1,
 		Random:               random,
 	}
 	rootCA, intermediateCA, err := ca.NewCA(params)
-
-	// Inject the CA into the TPM
-	app.TPM.SetCertificateAuthority(intermediateCA)
-
-	// Start platform setup if the CA hasn't been initialized
 	if err != nil {
-		if err == ca.ErrNotInitialized {
-			// Set up the platform authenticator (PKCS8)
-			pkcs8Authenticator := auth.NewPKCS8Authenticator(
-				app.Logger,
-				intermediateCA,
-				app.RootPassword,
-				app.IntermediatePassword)
 
-			// Run platform setup using the PKCS8 authenticator
+		if err == ca.ErrNotInitialized {
+
+			// Run platform setup to initialize the CA
 			platformSetup := setup.NewPlatformSetup(
+				Name,
 				app.Logger,
 				app.PasswordPolicy,
-				rootPassword,
-				intermediatePassword,
+				app.RootPassword,
+				app.IntermediatePassword,
 				app.CAConfig,
 				rootCA,
 				intermediateCA,
-				app.TPM,
-				pkcs8Authenticator)
+				app.TPM)
 
 			// Run platform setup
-			platformSetup.Setup(caPassword)
+			caPassword = platformSetup.Setup()
+
+			// Inject the CA into the TPM instance
+			app.TPM.SetCertificateAuthority(intermediateCA)
+
+			// Perform local TPM quote, sign and store to CA blob storage
+			if _, err := app.TPM.LocalQuote(true, caPassword); err != nil {
+				app.Logger.Fatal(err)
+			}
+
+			// Generate a new TLS server certificate for the
+			// web server. Any errors are treated as fatal.
+			app.InitWebServices(
+				intermediateCA,
+				caPassword,
+				[]byte(app.ServerPassword))
+
 		} else {
-			app.Logger.Fatal(err)
+
+			// Set up the platform authenticator (PKCS #8)
+			// TODO: PKCS #11
+			pkcs8Authenticator := auth.NewPKCS8Authenticator(
+				app.Logger,
+				intermediateCA,
+				[]byte(app.RootPassword),
+				[]byte(app.IntermediatePassword))
+
+			if err := pkcs8Authenticator.Authenticate(caPassword); err != nil {
+				app.Logger.Fatal(err)
+			}
+
+			// Perform local system attestation
+			if err := app.TPM.AttestLocal(caPassword); err != nil {
+				// TODO: Re-seal the CA, run intrusion detection handlers,
+				// wipe the file system, etc in an attempt to mitigate the
+				// attack or unauthorized / unexpected changes.
+				app.Logger.Fatal(ErrInvalidLocalAttestationSignature)
+			}
 		}
+
+		// Inject the CA into the TPM instance
+		app.TPM.SetCertificateAuthority(intermediateCA)
+
+	} else {
+
+		// Inject the CA into the TPM instance
+		app.TPM.SetCertificateAuthority(intermediateCA)
 	}
 
-	// Platform Setup uses nil password to load
-	// passwords from file. This sets the regular
-	// password variable to the password in the config.
-	if app.IntermediatePassword != "" {
-		caPassword = intermediatePassword
+	if caPassword == nil {
+		app.Logger.Warningf("trusted-platform: proceeding as UNTRUSTED, INSECURE platform")
+	}
+	if app.DebugSecretsFlag {
+		app.Logger.Debug("Starting platform using the following credentials:")
+		app.Logger.Debugf("Root CA: %s", app.RootPassword)
+		app.Logger.Debugf("Intermediate CA: %s", app.IntermediatePassword)
+		app.Logger.Debugf("Platform CA: %s", caPassword)
+	}
+
+	// Set the platform CA
+	app.CA = intermediateCA
+
+	// Initialize the TPM
+	if err := app.TPM.Init([]byte(app.SRKAuth), []byte(caPassword)); err != nil {
+		app.Logger.Fatal(err)
+	}
+}
+
+// Check the CA for a TLS web server certificate. Create a new certificate
+// if it doesn't exist. Any encountered errors are treated as Fatal.
+func (app *App) InitWebServices(
+	_ca ca.CertificateAuthority,
+	caPassword, serverPassword []byte) {
+
+	if app.DebugSecretsFlag {
+		app.Logger.Debug("Initializing web services")
+		app.Logger.Debugf("CA Private Key Password: %s", caPassword)
+		app.Logger.Debugf("TLS Private Key Password: %s", serverPassword)
 	}
 
 	// Try to load the web services TLS cert
-	_, err = intermediateCA.PEM(app.Domain)
+	_, err := _ca.PEM(app.Domain)
 	if err != nil {
 
-		// Issue a platform server certificate for TLS encrypted web services
+		// No cert, issue a platform server certificate for TLS encrypted web services
 		certReq := ca.CertificateRequest{
 			Valid: 365, // days
 			Subject: ca.Subject{
@@ -283,16 +397,12 @@ func (app *App) initCA(caPassword, serverTLSPassword []byte) {
 		}
 
 		// Issue the web server certificate
-		if _, err = intermediateCA.IssueCertificate(certReq, caPassword, serverTLSPassword); err != nil {
+		if _, err = _ca.IssueCertificate(
+			certReq,
+			[]byte(caPassword),
+			[]byte(serverPassword)); err != nil {
 			app.Logger.Fatal(err)
 		}
-	}
-
-	app.CA = intermediateCA
-
-	// Initialize the TPM
-	if err := app.TPM.Init(); err != nil {
-		app.Logger.Fatal(err)
 	}
 }
 
@@ -369,22 +479,34 @@ func (app *App) DropPrivileges() {
 	}
 }
 
-// Prompts for CA password via STDIN
-func (app *App) PasswordPrompt() []byte {
-	password, err := term.ReadPassword(int(syscall.Stdin))
+// Reads STDIN and returns the input as []byte
+func (app *App) ReadPassword() []byte {
+	fmt.Printf("%s> ", Name)
+	data, err := term.ReadPassword(int(syscall.Stdin))
+	fmt.Println()
 	if err != nil {
 		app.Logger.Fatal(err)
 	}
-	return password
+	return data
 }
 
-// Outputs
-func (app *App) promptForCAPassword() {
-	fmt.Println("\nCertifiate Authority private key password:")
+// Prompts for the Certificate Authority password
+func (app *App) CAPasswordPrompt() []byte {
+	fmt.Println()
+	fmt.Println("Certificate Authority Password:")
 	fmt.Println("")
+	return app.ReadPassword()
 }
 
-func (app *App) promptForServerTLSPassword() {
-	fmt.Println("\nServer TLS private key password")
-	fmt.Println("")
+// Prompts for input via STDIN using the given
+// message as the user prompt.
+func (app *App) Prompt(message string) string {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Println(message)
+	fmt.Printf("%s $ ", Name)
+	str, err := reader.ReadString('\n')
+	if err != nil {
+		app.Logger.Fatal(err)
+	}
+	return str
 }

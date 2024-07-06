@@ -2,19 +2,13 @@
     "version": "2.0.0",
     "tasks": [{
         "type": "shell",
-        "label": "rm_log",
+        "label": "rm_trusted_data",
         "command": "rm",
-        "args": ["-rf", 
-            "logs/"
+        "args": [
+            "-rf",
+            "trusted-data",
         ]
-    }, 
-    {
-        "type": "shell",
-        "label": "rm_platform",
-        "command": "rm",
-        "args": ["-rf",
-            "platform/ca"]
-    }, 
+    },
     {
         "type": "shell",
         "label": "clean_attestor",

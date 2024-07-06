@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -27,8 +28,10 @@ var (
 	ErrUnknownVerifier       = errors.New("attestor: unknown attestation verifier")
 	ErrInvalidClientCertPool = errors.New("attestor: invalid verifier certificate pool")
 
-	// fCaPassword     = flag.String("ca-password", "", "Certificate Authority private key password")
-	// fServerPassword = flag.String("server-password", "", "Server TLS certificate private key password")
+	fListenAddress  = flag.String("listen", "", "The IP address or hostname to listen on for incoming requests")
+	fCaPassword     = flag.String("ca-password", "", "Certificate Authority private key password")
+	fServerPassword = flag.String("server-password", "", "Server TLS certificate private key password")
+	fSrkAuth        = flag.String("srk-auth", "", "TPM Storage Root Key authorization password")
 )
 
 type Attestor interface {
@@ -44,7 +47,6 @@ type Attest struct {
 	debug                bool
 	debugSecrets         bool
 	ca                   ca.CertificateAuthority
-	serverTLSPassword    []byte
 	secureGRPCServer     *grpc.Server
 	secureServerStopChan chan bool
 	verifierCertPool     *x509.CertPool
@@ -56,15 +58,18 @@ type Attest struct {
 // Entry-point when invoked directly
 func main() {
 	app := app.NewApp().Init(nil)
-	// serverPassword := []byte(*fServerPassword)
-	if _, err := NewAttestor(app, nil); err != nil {
+	fListenAddress := *fListenAddress
+	caPassword := []byte(*fCaPassword)
+	serverPassword := []byte(*fServerPassword)
+	srkAuth := []byte(*fSrkAuth)
+	if _, err := NewAttestor(app, fListenAddress, caPassword, serverPassword, srkAuth); err != nil {
 		app.Logger.Fatal(err)
 	}
 	// Run forever
 }
 
 // Creates a new Attestor (client role)
-func NewAttestor(app *app.App, serverPassword []byte) (Attestor, error) {
+func NewAttestor(app *app.App, listenAddress string, caPassword, serverPassword, srkAuth []byte) (Attestor, error) {
 
 	var wg sync.WaitGroup
 	secureServerStopChan := make(chan bool)
@@ -77,7 +82,6 @@ func NewAttestor(app *app.App, serverPassword []byte) (Attestor, error) {
 		domain:               app.Domain,
 		debug:                app.DebugFlag,
 		debugSecrets:         app.DebugSecretsFlag,
-		serverTLSPassword:    serverPassword,
 		verifierCertPools:    verifierCertPools,
 		verifierCertsMutex:   sync.RWMutex{},
 		secureServerStopChan: secureServerStopChan}
@@ -102,8 +106,8 @@ func NewAttestor(app *app.App, serverPassword []byte) (Attestor, error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		secureService := NewSecureAttestor(attestor, app, nil) // srkAuth
-		if err := attestor.newTLSGRPCServer(secureService); err != nil {
+		secureService := NewSecureAttestor(attestor, app, caPassword, srkAuth) // srkAuth
+		if err := attestor.newTLSGRPCServer(secureService, listenAddress, serverPassword); err != nil {
 			app.Logger.Fatal(err)
 		}
 	}()
@@ -115,20 +119,23 @@ func NewAttestor(app *app.App, serverPassword []byte) (Attestor, error) {
 
 // Creates a new gRPC server TLS connection using Root CA trusted
 // certificate pool. The returned connection must be closed after use.
-func (attestor *Attest) newTLSGRPCServer(secureService *SecureAttestor) error {
+func (attestor *Attest) newTLSGRPCServer(
+	secureService *SecureAttestor,
+	listenAddress string,
+	serverPassword []byte) error {
 
-	socket := fmt.Sprintf("localhost:%d", attestor.config.TLSPort)
+	socket := fmt.Sprintf("%s:%d", listenAddress, attestor.config.TLSPort)
 
 	attestor.logger.Infof("Starting TLS gRPC services on port: %s", socket)
 
 	if attestor.debugSecrets {
 		attestor.logger.Debugf(
 			"attestor: loading server TLS certificate: domain: %s, password: %s",
-			attestor.domain, attestor.serverTLSPassword)
+			attestor.domain, serverPassword)
 	}
 
 	tlsTemplate, err := attestor.ca.TLSConfig(
-		attestor.domain, attestor.domain, attestor.serverTLSPassword, true)
+		attestor.domain, attestor.domain, serverPassword, true)
 	if err != nil {
 		attestor.logger.Error(err)
 		return err
