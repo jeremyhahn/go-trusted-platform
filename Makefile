@@ -1,5 +1,3 @@
-MAKEFLAGS+="-j $(shell nproc)"
-
 ORG                     := automatethethingsllc
 TARGET_OS               := linux
 TARGET_ARCH             := $(shell uname -m)
@@ -35,54 +33,58 @@ else
     APP_VERSION = $(shell git branch --show-current)
 endif
 
-LDFLAGS=-X github.com/jeremyhahn/$(PACKAGE)/app.Name=${APPNAME}
-LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/app.Repository=${REPO}
-LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/app.Package=${PACKAGE}
-LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/app.GitBranch=${GIT_BRANCH}
-LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/app.GitHash=${GIT_HASH}
-LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/app.GitTag=${GIT_TAG}
-LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/app.BuildUser=${USER}
-LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/app.BuildDate=${BUILD_DATE}
-LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/app.Version=${APP_VERSION}
+LDFLAGS=-X github.com/jeremyhahn/$(PACKAGE)/pkg/app.Name=${APPNAME}
+LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.Repository=${REPO}
+LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.Package=${PACKAGE}
+LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.GitBranch=${GIT_BRANCH}
+LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.GitHash=${GIT_HASH}
+LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.GitTag=${GIT_TAG}
+LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.BuildUser=${USER}
+LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.BuildDate=${BUILD_DATE}
+LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.Version=${APP_VERSION}
 
 GREEN=\033[0;32m
 NO_COLOR=\033[0m
 
-ATTESTATION_DIR ?= attestation
-ATTESTOR_DIR    ?= $(ATTESTATION_DIR)/attestor
-VERIFIER_DIR    ?= $(ATTESTATION_DIR)/verifier
-PLATFORM_DIR    ?= trusted-data
-CONFIG_DIR      ?= $(PLATFORM_DIR)/etc
-LOG_DIR         ?= $(PLATFORM_DIR)/log
-CA_DIR          ?= $(PLATFORM_DIR)/ca
+ATTESTATION_ECCERT ?= ../../ECcert.bin
+ATTESTATION_DIR    ?= attestation
+ATTESTOR_DIR       ?= $(ATTESTATION_DIR)/attestor
+VERIFIER_DIR       ?= $(ATTESTATION_DIR)/verifier
+PLATFORM_DIR       ?= trusted-data
+CONFIG_DIR         ?= $(PLATFORM_DIR)/etc
+LOG_DIR            ?= $(PLATFORM_DIR)/log
+CA_DIR             ?= $(PLATFORM_DIR)/ca
 
-VERIFIER_CONF   ?= $(VERIFIER_DIR)/$(CONFIG_DIR)/config.yaml
-VERIFIER_CA     ?= $(VERIFIER_DIR)/$(PLATFORM_DIR)/ca
+VERIFIER_CONF      ?= $(VERIFIER_DIR)/$(CONFIG_DIR)/config.yaml
+VERIFIER_CA        ?= $(VERIFIER_DIR)/$(PLATFORM_DIR)/ca
 
-ATTESTOR_CONF   ?= $(ATTESTOR_DIR)/$(CONFIG_DIR)/config.yaml
-ATTESTOR_CA     ?= $(ATTESTOR_DIR)/$(PLATFORM_DIR)/ca
+ATTESTOR_CONF      ?= $(ATTESTOR_DIR)/$(CONFIG_DIR)/config.yaml
+ATTESTOR_CA        ?= $(ATTESTOR_DIR)/$(PLATFORM_DIR)/ca
 
-PROTO_DIR       ?= proto
-PROTOC          ?= protoc
+PROTO_DIR          ?= proto
+PROTOC             ?= protoc
 
-ROOT_CA         ?= root-ca
-INTERMEDIATE_CA ?= intermediate-ca
-DOMAIN          ?= example.com
+ROOT_CA            ?= root-ca
+INTERMEDIATE_CA    ?= intermediate-ca
+DOMAIN             ?= example.com
 
-VERIFIER_HOSTNAME ?= verifier
-ATTESTOR_HOSTNAME ?= attestor
+VERIFIER_HOSTNAME  ?= verifier
+ATTESTOR_HOSTNAME  ?= attestor
 
-CONFIG_YAML       ?= config.dev.yaml
+CONFIG_YAML        ?= config.dev.yaml
 
-ANSIBLE_USER      ?= ansible
+ANSIBLE_USER       ?= ansible
 
-LUKS_KEYFILE      ?= luks.key
-LUKS_SIZE         ?= 5G
-LUKS_TYPE         ?= luks2
+LUKS_KEYFILE       ?= luks.key
+LUKS_SIZE          ?= 5G
+LUKS_TYPE          ?= luks2
 
-TPM2_PTOOL        ?= ../go-trusted-platform-ansible/setup/trusted-data/build/tpm2-pkcs11/tools/tpm2_ptool.py
+SOFTHSM_DIR        ?= /usr/local/bin
+SOFTHSM_LIB        ?= /usr/local/lib/softhsm/libsofthsm2.so
+SOFTHSM_TOKEN_DIR  ?= /var/lib/softhsm/tokens
+SOFTHSM_CONFIG     ?= configs/softhsm2.conf
 
-DEBUG_CMD         ?= webservice
+TPM2_PTOOL         ?= ../go-trusted-platform-ansible/setup/trusted-data/build/tpm2-pkcs11/tools/tpm2_ptool.py
 
 # The TPM Endorsement Key file name. This is set to a default value that
 # aligns with the EK cert name used in the tpm2_getekcertificate docs:
@@ -146,96 +148,115 @@ swagger:
 
 # x86_64
 build:
-	$(GOBIN)/go build -o $(APPNAME) -ldflags="-w -s ${LDFLAGS}"
+	cd pkg; \
+	$(GOBIN)/go build -o ../$(APPNAME) -ldflags="-w -s ${LDFLAGS}"
 
 build-debug:
-	$(GOBIN)/go build -gcflags='all=-N -l' -o $(APPNAME) -gcflags='all=-N -l' -ldflags="-w -s ${LDFLAGS}"
+	cd pkg; \
+	$(GOBIN)/go build -gcflags='all=-N -l' -o ../$(APPNAME) -gcflags='all=-N -l' -ldflags="-w -s ${LDFLAGS}"
 
 build-static:
-	$(GOBIN)/go build -o $(APPNAME) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
+	cd pkg; \
+	$(GOBIN)/go build -o ../$(APPNAME) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
 
 build-debug-static:
-	$(GOBIN)/go build -o $(APPNAME) -gcflags='all=-N -l' --ldflags '-extldflags -static -v ${LDFLAGS}'
+	cd pkg; \
+	$(GOBIN)/go build -o ../$(APPNAME) -gcflags='all=-N -l' --ldflags '-extldflags -static -v ${LDFLAGS}'
 
 
 # x86
 build-x86:
-	GOARCH=386 $(GOBIN)/go build -o $(APPNAME) -ldflags="-w -s ${LDFLAGS}"
+	cd pkg; \
+	GOARCH=386 $(GOBIN)/go build -o ../$(APPNAME) -ldflags="-w -s ${LDFLAGS}"
 
 build-x86-debug:
-	GOARCH=386 $(GOBIN)/go build -gcflags='all=-N -l' -o $(APPNAME) -gcflags='all=-N -l' -ldflags="-w -s ${LDFLAGS}"
+	cd pkg; \
+	GOARCH=386 $(GOBIN)/go build -gcflags='all=-N -l' -o ../$(APPNAME) -gcflags='all=-N -l' -ldflags="-w -s ${LDFLAGS}"
 
 build-x86-static:
-	GOARCH=386 $(GOBIN)/go build -o $(APPNAME) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
+	cd pkg; \
+	GOARCH=386 $(GOBIN)/go build -o ../$(APPNAME) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
 
 build-x86-debug-static:
-	GOARCH=386 $(GOBIN)/go build -o $(APPNAME) -gcflags='all=-N -l' --ldflags '-extldflags -static -v ${LDFLAGS}'
+	cd pkg; \
+	GOARCH=386 $(GOBIN)/go build -o ../$(APPNAME) -gcflags='all=-N -l' --ldflags '-extldflags -static -v ${LDFLAGS}'
 
 
 # ARM 32-bit
 build-arm:
+	cd pkg; \
 	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=6 \
-	$(GOBIN)/go build -o $(APP) -ldflags="-w -s ${LDFLAGS}"
+	$(GOBIN)/go build -o ../$(APP) -ldflags="-w -s ${LDFLAGS}"
 
 build-arm-static:
+	cd pkg; \
 	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=6 \
-	$(GOBIN)/go build -v -a -o $(APP) -v --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
+	$(GOBIN)/go build -v -a -o ../$(APP) -v --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
 
 build-arm-debug:
+	cd pkg; \
 	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=6 \
-	$(GOBIN)/go build -gcflags "all=-N -l" -o $(APP) --ldflags="-v $(LDFLAGS)"
+	$(GOBIN)/go build -gcflags "all=-N -l" -o ../$(APP) --ldflags="-v $(LDFLAGS)"
 
 build-arm-debug-static:
+	cd pkg; \
 	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=6 \
-	$(GOBIN)/go build -gcflags "all=-N -l" -v -a -o $(APP) -v --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
+	$(GOBIN)/go build -gcflags "all=-N -l" -v -a -o ../$(APP) -v --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
 
 
 # ARM 64-bit
 build-arm64:
+	cd pkg; \
 	CC=$(ARM_CC_64) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -o $(APP) -ldflags="-w -s ${LDFLAGS}"
+	$(GOBIN)/go build -o ../$(APP) -ldflags="-w -s ${LDFLAGS}"
 
 build-arm64-static:
+	cd pkg; \
 	CC=$(ARM_CC_64) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -o $(APP) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
+	$(GOBIN)/go build -o ../$(APP) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
 
 build-arm64-debug:
+	cd pkg; \
 	CC=$(ARM_CC_64) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -gcflags "all=-N -l" -o $(APP) --ldflags="$(LDFLAGS)"
+	$(GOBIN)/go build -gcflags "all=-N -l" -o ../$(APP) --ldflags="$(LDFLAGS)"
 
 build-arm64-debug-static:
+	cd pkg; \
 	CC=$(ARM_CC_64) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -gcflags "all=-N -l" -o $(APP) --ldflags '-extldflags -static -v ${LDFLAGS}'
+	$(GOBIN)/go build -gcflags "all=-N -l" -o ../$(APP) --ldflags '-extldflags -static -v ${LDFLAGS}'
 
 
 clean:
+	cd pkg; \
 	$(GOBIN)/go clean
-	rm -rf $(APPNAME) \
-		$(APPNAME).log \
+	rm -rf \
+		$(APPNAME) \
 		/usr/local/bin/$(APPNAME) \
-		$(CA_DIR) \
 		$(PLATFORM_DIR) \
-		$(ATTESTOR_DIR)/$(PLATFORM_DIR) \
-		$(VERIFIER_DIR)/$(PLATFORM_DIR) \
-		ca/certs \
-		tpm2/certs \
-		tpm2/$(EK_CERT_NAME) \
+		$(ATTESTATION_DIR) \
+		pkg/ca/certs \
+		pkg/tpm2/certs \
+		pkg/tpm2/$(EK_CERT_NAME) \
+		pkg/$(EK_CERT_NAME)
 
 
 test: test-ca test-tpm test-hash
 
 test-ca:
-	cd ca && go test -v
+	cd pkg/ca && go test -v
 
 test-tpm:
-	cp $(EK_CERT_NAME) tpm2/
-	cd tpm2 && go test -v
+	cp $(EK_CERT_NAME) pkg/tpm2/
+	cd pkg/tpm2 && go test -v
+
+test-pkcs11:
+	cd pkg/pkcs11 && go test -v
 
 test-hash:
-	cd hash && go test -v
+	cd pkg/hash && go test -v
 
 proto:
-	cd $(ATTESTATION_DIR) && $(PROTOC) \
+	cd pkg/$(ATTESTATION_DIR) && $(PROTOC) \
 		--go_out=. \
 		--go_opt=paths=source_relative \
     	--go-grpc_out=. \
@@ -244,15 +265,6 @@ proto:
 
 install: luks-create ansible-install ansible-setup
 uninstall: uninstall-ansible
-
-debug-launch: clean build
-	./trusted-platform $(DEBUG_CMD)
-
-debug-listen:
-	dlv attach --headless --listen=:2345 $(shell ps aux | grep trusted-platform | cut -d " " -f5 | head -n 1) ./
-
-debug-clean:
-	killall dlv trusted-platform
 
 
 # Certificate Authority
@@ -299,10 +311,9 @@ ca-decrypt-intermediate-key:
 # Verifier
 verifier-init:
 	mkdir -p $(VERIFIER_DIR)/$(CONFIG_DIR)
-	cp $(CONFIG_YAML) $(VERIFIER_CONF)
+	cp configs/platform/$(CONFIG_YAML) $(VERIFIER_CONF)
 	sed -i 's/domain: $(DOMAIN)/domain: $(VERIFIER_HOSTNAME).$(DOMAIN)/' $(VERIFIER_CONF)
 	sed -i 's/- $(DOMAIN)/- $(VERIFIER_HOSTNAME).$(DOMAIN)/' $(VERIFIER_CONF)
-	cp $(EK_CERT_NAME) $(VERIFIER_DIR)
 
 verifier-no-clean: build verifier-init
 	cd $(VERIFIER_DIR) && \
@@ -312,7 +323,7 @@ verifier-no-clean: build verifier-init
 			--platform-dir $(PLATFORM_DIR) \
 			--log-dir $(LOG_DIR)
 
-verifier: verifier-clean build verifier-init
+verifier: verifier-clean verifier-init build
 	cd $(VERIFIER_DIR) && \
 		../../trusted-platform verifier \
 			--debug \
@@ -322,6 +333,7 @@ verifier: verifier-clean build verifier-init
 			--ca-dir $(PLATFORM_DIR)/ca \
 			--ca-password ca-intermediate-password \
 			--server-password server-password \
+			--ek-cert $(ATTESTATION_ECCERT) \
 			--ak-password ak-password \
 			--attestor $(ATTESTOR_HOSTNAME).$(DOMAIN)
 
@@ -340,10 +352,9 @@ verifier-cert-chain:
 # Attestor
 attestor-init:
 	mkdir -p $(ATTESTOR_DIR)/$(CONFIG_DIR)
-	cp $(CONFIG_YAML) $(ATTESTOR_CONF)
+	cp configs/platform/$(CONFIG_YAML) $(ATTESTOR_CONF)
 	sed -i 's/domain: $(DOMAIN)/domain: $(ATTESTOR_HOSTNAME).$(DOMAIN)/' $(ATTESTOR_CONF)
 	sed -i 's/- $(DOMAIN)/- $(ATTESTOR_HOSTNAME).$(DOMAIN)/' $(ATTESTOR_CONF)
-	cp $(EK_CERT_NAME) $(ATTESTOR_DIR)
 
 attestor-clean: 
 	rm -rf \
@@ -358,7 +369,7 @@ attestor-no-clean: build attestor-init
 			--platform-dir $(PLATFORM_DIR) \
 			--log-dir $(PLATFORM_DIR)/$(LOG_DIR)
 
-attestor: attestor-clean build attestor-init
+attestor: attestor-clean attestor-init build
 	cd $(ATTESTOR_DIR) && \
 		../../trusted-platform attestor \
 			--debug \
@@ -366,6 +377,7 @@ attestor: attestor-clean build attestor-init
 			--platform-dir $(PLATFORM_DIR) \
 			--log-dir $(LOG_DIR) \
 			--ca-dir $(PLATFORM_DIR)/ca \
+			--ek-cert $(ATTESTATION_ECCERT) \
 			--ca-password ca-intermediate-password \
 			--server-password server-password
 
@@ -426,7 +438,7 @@ tpm2pkcs11-create-key:
 # LUKS Encrypted Platform Data Container
 luks-create:
 	dd if=/dev/zero of=$(PLATFORM_DIR).$(LUKS_TYPE) bs=1 count=0 seek=$(LUKS_SIZE)
-	dd if=/dev/urandom of=$(LUKS_KEYFILE) bs=1024 count=8
+	dd if=/dev/urandom of=$(LUKS_KEYFILE) bs=2048 count=8
 	sudo cryptsetup luksFormat --type $(LUKS_TYPE) $(PLATFORM_DIR).$(LUKS_TYPE) $(LUKS_KEYFILE)
 	sudo cryptsetup luksOpen $(PLATFORM_DIR).$(LUKS_TYPE) $(APPNAME) --key-file $(LUKS_KEYFILE)
 	sudo mkfs.ext4 /dev/mapper/$(APPNAME) -L $(PLATFORM_DIR)
@@ -441,6 +453,19 @@ luks-umount:
 	sudo umount $(PLATFORM_DIR)
 	sudo cryptsetup luksClose /dev/mapper/$(APPNAME)
 	rm -rf $(PLATFORM_DIR)
+
+
+# SoftHSM
+softhsm-init:
+	export SOFTHSM_CONF=$(SOFTHSM_CONFIG); \
+	chown $(USER):$(USER) $(SOFTHSM_TOKEN_DIR); \
+	$(SOFTHSM_DIR)/softhsm2-util \
+		--init-token \
+		--slot 0 \
+		--label test \
+		--so-pin 1234 \
+		--pin 5678 ; \
+	$(SOFTHSM_DIR)/softhsm2-util --show-slots
 
 
 # Ansible
