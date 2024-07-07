@@ -4,196 +4,355 @@
 The `Trusted Platform` uses a [Trusted Platform Module (TPM)](https://en.wikipedia.org/wiki/Trusted_Platform_Module), [Secure Boot](https://en.wikipedia.org/wiki/UEFI), and a provided [Certificate Authority](https://en.wikipedia.org/wiki/Certificate_authority) to establish a Platform Root of Trust, perform Local and [Remote Attestation](https://tpm2-software.github.io/tpm2-tss/getting-started/2019/12/18/Remote-Attestation.html), encryption, signing, x509 certificate management, data integrity, intrusion detection, licensing and more.
 
 
-## Components
+## Overview
 
-The main components of this project are:
+For detailed documentationon the components used in this project, please refer to the [docs](docs/OVERVIEW.md).
 
-### Trusted Platform Module
+## Build
 
-The Trusted Platform Module (TPM) technology is designed to provide hardware-based,
-security-related functions. A TPM chip is a secure crypto-processor that is designed
-to carry out cryptographic operations. The chip includes multiple physical security
-mechanisms to make it tamper-resistant, where malicious software is unable to tamper
-with the security functions of the TPM. 
+#### Dependencies
 
-The Trusted Platform Module (TPM) provides:
+* [Linux](https://www.debian.org/)
+* [Make](https://www.gnu.org/software/make/)
+* [Golang](https://go.dev/)
 
-- A hardware random number generator
+Optional dependencies:
 
-- Facilities for the secure generation of cryptographic keys for limited uses
+* [SoftHSM](https://www.opendnssec.org/softhsm/)
+* [YubiKey](https://www.yubico.com/)
+* [YubiHSM](https://www.yubico.com/products/hardware-security-module/)
 
-- Remote attestation: Creates a nearly unforgeable hash key summary of the hardware and software configuration. One could use the hash to verify that the hardware and software have not been changed. The software in charge of hashing the setup determines the extent of the summary
+For FIPS compliance, you must use a FIPS Series or otherwise certified token.
 
-- Binding: Data is encrypted using the TPM bind key, a unique RSA key descended from a storage key. Computers that incorporate a TPM can create cryptographic keys and encrypt them so that they can only be decrypted by the TPM. This process, often called wrapping or binding a key, can help protect the key from disclosure. Each TPM has a master wrapping key, called the storage root key, which is stored within the TPM itself. User-level RSA key containers are stored in a user profile for a particular user and can be used to encrypt and decrypt information for applications that run under that specific user identity
 
-- Sealed storage: Specifies the TPM state for the data to be decrypted (unsealed)
+#### Build
 
-- Other Trusted Computing functions for the data to be decrypted (unsealed)
+Use the included `Makefile` to build and perform initial setup.
 
-Computer programs can use a TPM for the authentication of hardware devices, since each TPM chip has a unique and secret Endorsement Key (EK) burned in as it is produced. Security embedded in hardware provides more protection than a software-only solution. Its use is restricted in some countries.
+    # Build the binary
+    make
 
-##### Key Features and Benefits
+    # Run tests
+    make test
 
-* High-end security controller with advanced cryptographic algorithms implemented in hardware (e.g. RSA & ECC256, SHA-256)
-* Common Criteria (EAL4+) and FIPS security certification
-* Flexible integration (SPI, I2C or LPC interface support)
-* Reduced risk based on proven technology
-* Fast time to market through concept reuse
-* Easy integration into all platform architectures and operating systems (Windows, Linux & derivatives)
 
-##### Use Cases
+#### Configuration
 
-* Automatic device onboarding
-* Device health attestation
-* Device identity for network access control
-* Secret (configuration data, IP, and etc) protection
-* Secured communication with TLS
-* Secured firmware update
-* Secured key storage
-* Verification of device authenticity
-* Licensing
+Copy the [config file](configs/platform/config.dev.yaml) to the root of the project directory where you will run the `trusted-platform` binary. Edit the configuration file according to your environment and requirements.
 
+Use [tpm2_getekcertificate](https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_getekcertificate.1.md) to dump your TPM Endorsement Key to the project directory where you will run the `trusted-platform` binary. Follow the example and use the ECcert.bin file name, or edit the config file to match the custom name you choose for your EK certificate in the TPM section of the config.
 
-### Secure Boot
+Start the embedded web services:
 
-The UEFI specification defines a protocol known as Secure Boot, which can secure the boot process by preventing the loading of UEFI drivers or OS boot loaders that are not signed with an acceptable digital signature. The mechanical details of how precisely these drivers are to be signed are not specified. When Secure Boot is enabled, it is initially placed in "setup" mode, which allows a public key known as the "platform key" (PK) to be written to the firmware. Once the key is written, Secure Boot enters "User" mode, where only UEFI drivers and OS boot loaders signed with the platform key can be loaded by the firmware. Additional "key exchange keys" (KEK) can be added to a database stored in memory to allow other certificates to be used, but they must still have a connection to the private portion of the platform key. Secure Boot can also be placed in "Custom" mode, where additional public keys can be added to the system that do not match the private key.
+    # Run web services
+    ./trusted-platform webservice --debug
 
-Secure Boot is supported by Windows 8 and 8.1, Windows Server 2012 and 2012 R2, Windows 10, Windows Server 2016, 2019, and 2022, and Windows 11, VMware vSphere 6.5 and a number of Linux distributions including Fedora (since version 18), openSUSE (since version 12.3), RHEL (since version 7), CentOS (since version 7), Debian (since version 10), Ubuntu (since version 12.04.2), Linux Mint (since version 21.3)., and AlmaLinux OS (since version 8.4). As of January 2024, FreeBSD support is in a planning stage.
+The default config uses a TPM simulator which is reset every time the platform starts. Be sure to disable it to use your real TPM device.
 
 
-### Certificate Authority
+###### Passwords
 
-In cryptography, a certificate authority or certification authority (CA) is an entity that stores, signs, and issues digital certificates. A digital certificate certifies the ownership of a public key by the named subject of the certificate. This allows others (relying parties) to rely upon signatures or on assertions made about the private key that corresponds to the certified public key. A CA acts as a trusted third party—trusted both by the subject (owner) of the certificate and by the party relying upon the certificate. The format of these certificates is specified by the X.509 or EMV standard. 
+Currently, only PKCS #8 file based private keys are supported. PKCS #11 is on the way.
 
+During platform setup, several passwords are collected to encrypt and password protect the PKCS #8 private keys.
 
-## Architecture
+* Root Certificate Authority Private Key Password
+* Intermediate Certificate Authority Private Key Password
+* Web Server Private Key Password
 
-This Trusted Platform relies on Secure Boot and the TPM to record measurements that guarantee the integrity of every critical piece of firmware, drivers, and software used to boot into the Operating System.
+To automate the platform setup for testing, these passwords can be set in the configuration file, which will cause the setup to bypass the inital prompts and use the passwords defined in the config. This mechanism should only be used for testing, evaluation or development.
 
-The Trusted Platform takes over after the Operating System has booted, and extends the trusted execution environment to any application that integrates with it. The Trusted Platform provides a way for servers and clients to prove their identities, attest to operating system software states & configurations, enforce network policies, and provide secure key management to connected devices.
 
-In addition to platform integrity, the included Certificate Authority establishes a Public Key Infrastructure (PKI) that's used to issue TLS and digital certificates for any service or device on the network.
+## LUKS
 
-Private keys generated and used by the Trusted Platform (and the applications that integrate with it), are managed by the Certificate Authority, which uses the TPM and/or 
-[Hardware Security Modules](https://csrc.nist.gov/glossary/term/hardware_security_module_hsm) for secure private key generation and storage. 
+At this time, preliminary support for LUKS is included in the `Makefile`. In the future, full LUKS integration will be provided.
 
-TPM 2.0 has a true Random Number Generator (RNG), which the Certificate Authority can be configured to use during private key and signing operations (the default) instead of the random source provided by the Operating System.
+To setup an ecnrypted LUKS `trusted-data` volume for platform data, use the included `luks-create` Makefile target. 
 
-The traffic between the CPU <-> TPM bus supports encryption to help protect against side-channel and other hardware based attacks.
+    # Setup LUKS encrypted volume w/ Makefile
+    make luks-create
 
-The platform configuration file provides examples and documentation on how to tune and optimize the platform according to your desired security posture and application requirements.
+If you don't trust the trusted `Makefile`, you can create your own key file and volume something like this:
 
+    # Generate LUKS key file
+    echo -n "my-secret" > luks.jey
 
-##### Flow
+    # Generate strong key file w/ random bytes
+    dd bs=2048 count=4 if=/dev/random of=luks.key
 
-The following steps are used to complete device registration, identity validation, platform software state validation, and service delivery, as illustrated on [Remote Attestation With Tpm2 Tools](https://tpm2-software.github.io/2020/06/12/Remote-Attestation-With-tpm2-tools.html).
+    # Create LUKS volume
+    sudo cryptsetup luksFormat --type luks2 trusted-data.luks2 luks.key
 
+Then you can use the `luks-mount` target to mount your volume prior to starting the platform.
 
-###### Device Registration
+Don't forget to remove your LUKS key from the system. In the future, this step will be fully automated and the key will be sealed to the TPM Endorsement Key.
 
-![Device Registration](https://tpm2-software.github.io/images/tpm2-attestation-demo/registration.png)
 
-###### Service Request - Part 1: Platform Anonymous Identity Validation
+## Platform Startup & Local Attestation
 
-![Service Request - Part 1](https://tpm2-software.github.io/images/tpm2-attestation-demo/identity-validation.png)
+When the platform starts up, the Certificate Authorities are initialized, resulting in a Root and Intermeidate CA with public / private keys, a signing certificate, and a dedicated encryption key. The Intermediate CA will have the Root CA's certificate imported to its trusted root store. Each CA's Certificate Revocation List is created and initialized with a dummy certificate.
 
-###### Service Request - Part 2: Platform Software State Validation
+After the CA is initialized, local system platform measurements are taken according to the platform configuration file, signed by the CA, and stored in the CA's internal blob storage along with it's signature. Each time the platform is subsequently started, new system measurements are taken, a new digest is created from the new measurements, and verified against the initial platform measurements signature. If the signgature does not match (verification failed), the platform will return a fatal error and terminate. 
 
-![Service Request - Part 2](https://tpm2-software.github.io/images/tpm2-attestation-demo/software-state-validation.png)
+In the future, custom local attestation failure event handlers will be supported.
 
-###### Service Delivery
 
-![Service Delivery](https://tpm2-software.github.io/images/tpm2-attestation-demo/service-delivery.png)
-
-
-### Compatibility
-
-This project makes use of the new [go-tpm/tpm2](https://github.com/google/go-tpm) "TPMDirect" TPM 2.0 API introduced in v0.9.0.
-
-As the complimentary [go-tpm-tools](https://github.com/google/go-tpm-tools) and [go-attestation](https://github.com/google/go-attestation) projects are using the [Legacy API](https://github.com/google/go-tpm-tools/issues/462), along with the TPM Event Log [not being completely reliable](https://github.com/google/go-attestation/blob/master/docs/event-log-disclosure.md), a slightly different approach is taken for verification that bypasses this mess, and simply performs a byte level comparison of the event log and PCR state during attestation, using the event log and PCR state captured during enrollment. The captured data is signed and stored in the CA blob store where subsequent attestations are verified using the stored signature from the blobs caputured during enrollment.
-
-Linux is the only platform being developed on and supported at this time. As Go is a portable language, it will likely run fine on Mac and Windows, however, [Windows will not support the future planned plugin architecture](https://pkg.go.dev/plugin).
-
-Local development environment is Debian / Ubuntu. 
-
-
-## Documentation
-
-The `docs` folder provides links to resources with detailed information about how the internals of the TPM and various other components used in this project work, along with examples of how to use the software included in this repository.
-
-As this is a work in progress, complex project, and many resources on uses cases and implementation details using the TPM are incomplete, scarce, inconsistent, old, and some just plain wrong, I will continue to update the docs to capture as much accurate and helpful information as possible, and continue to update this README to reflect the road map and current status.
-
-
-## Road Map
-
-This project aims to be FIPS compliant and follows best practices and guidance issued by the TCG and NIST to provide everything necessary to provision, manage, scale and secure a trusted service provider platform and it's clients on-prem, in the cloud, or hybrid environment.
-
-The Trusted Platform is also supporting it's own cloud - an experimental mode, running as a globally distributed network powered by it's users, similar to Bitcoin.
-
-The stimulus for this project is an [Agricultural IoT Platform](https://github.com/jeremyhahn/go-cropdroid) I've been working on for a few years. I'll be cherry picking code from several repositories in the "cropdroid" family, combined with new pixie dust, to create a robust, general purpose web services and IoT platform that can be used to host and secure many different types of applications and deployment scenerios, from public service providers to corporate IT systems and home networks.
-
-The initial use case I'm supporting is a local farmers market that runs as an open, distributed network that any user can join, including hardware and software to automate physical cultivation processes and laborious tasks, provide detailed logs and data points on every aspect of the cultivation process, for example, reports on organically produced products, an integrated shopping cart system to sell harvests, and a rich ecosystem for collaboration and e-commerce, connecting farmers and organic consumers around the world. [An Android app](https://github.com/jeremyhahn/cropdroid-android) provides the ability to receive real-time alerts and notifications, monitor and control hardware devices, provide shopping cart features, and connect with and collaborate with other users on the network, including resource sharing (data replication, backups, WAN clustering / load balancing) and lots of other cool stuff.
-
-
-#### TCG
-
-1. [TCG TPM v2.0 Provisioning Guidance](https://trustedcomputinggroup.org/wp-content/uploads/TCG-TPM-v2.0-Provisioning-Guidance-Published-v1r1.pdf#page=39&zoom=100,73,501)
-
-2. [TCG Guidance for Securing Network Equipment Using TCG Technology](https://trustedcomputinggroup.org/wp-content/uploads/TCG_Guidance_for_Securing_NetEq_1_0r29.pdf)
-
-3. [TCG Guidance for Secure Update of Software and Firmware on Embedded Systems](https://trustedcomputinggroup.org/wp-content/uploads/TCG-Secure-Update-of-SW-and-FW-on-Devices-v1r72_pub.pdf)
-
-
-#### NIST
-
-1. [800-147: BIOS Protection Guidelines](https://nvlpubs.nist.gov/nistpubs/legacy/sp/nistspecialpublication800-147.pdf)
-
-2. [800-147B: BIOS Protection Guidelines for Servers](https://nvlpubs.nist.gov/nistpubs/specialpublications/nist.sp.800-147b.pdf)
-
-3. [800-57: Recommendation for Key Management](https://nvlpubs.nist.gov/nistpubs/specialpublications/nist.sp.800-57pt1r5.pdf)
-
-4. [800-88: Guidelines for Media Sanitization](https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-88r1.pdf)
-
-
-#### FIPS
-
-1. [FIPS 140-3: Security Requirements for Cryptographic Modules](https://csrc.nist.gov/pubs/fips/140-3/final)
-
-2. [FIPS 180-4: Secure Hash Standard (SHS)](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.180-4.pdf)
-
-3. [FIPS 186-5: Digital Signature Standard (DSS)](https://csrc.nist.gov/pubs/fips/186-5/finalf)
-
-4. [FIPS 197: Advanced Encryption Standard (AES)](https://csrc.nist.gov/pubs/fips/197/final)
-
-5. [FIPS 198-1: The Keyed-Hash Message Authentication Code (HMAC)](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.198-1.pdf)
-
-6. [FIPS 199: Standards for Security Categorization of Federal Information and Information Systems](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.199.pdf)
-
-7. [FIPS 200: Minimum Security Requirements for Federal Information and Information Systems](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.200.pdf)
-
-8. [FIPS 201-3: Personal Identity Verification (PIV) of Federal Employees and Contractors](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.201-3.pdf)
-
-9. [FIPS 202: SHA-3 Standard: Permutation-Based Hash and Extendable-Output Functions](https://csrc.nist.gov/pubs/fips/202/final)
-
-
-## The Need for Security
-
-Unfortunately, we live in a world where physics put both users and corporations at odds with security.
-
-![Security, Functionality, Usability](https://miro.medium.com/v2/resize:fit:720/format:webp/1*tN9HwPDvRECmxGS7Kq0law.jpeg)
-
-The more features and functionality introduced to software, the further away it moves from being secure. Users want software that is easy to use and filled with features, and corporations want profits driven by users who are happy with their products that do many amazing things, intuitively.
-
-We now live in a world with lots of connected devices, artifical intelligence systems learning from and controlling said devices, processing incoming data at light speed, and integrating with many different 3rd party systems and service providers around the world. Privacy controls, systems and network hardening and data encryption at rest and in-transit are often a 2nd thought, especially on home networks where it's common to omit TLS verifications. Attackers are constantly looking for new hosts to compromise, expand their botnets and criminal enterprises, extract data, steal identities, and perform other nefarious activities.
-
-This platform makes security a first class citizen and encourages a thoughtful design approach to building a connected services platform, abstracting the common activities, complexities, compliances, and boilerplate necessities into a modular and flexible framework that can be applied to any web services, SAAS, or connected devices platform. It strives to protect user data and confidentiality while empowering service providers and application developers to create secure offerings using industry approved standards and mechanisms so they can focus on delivering intuitive, feature-filled solutions.
-
-This project makes use of modern authentication and security mechanisms such as [WebAuthn](https://en.wikipedia.org/wiki/WebAuthn), [FIDO 2](https://fidoalliance.org/fido2/), [PIV](https://en.wikipedia.org/wiki/FIPS_201) cards, and hardware based secret management to provide a password-less experience for users and platform administrators, while meeting stringent security requirements for highly regulated industries.
+## Remote Attestation
+
+Full remote attestation is working. Test it out using the provided `Makefile` targets.
+
+    # Attestor
+    make attestor
+
+    # Verifier
+    make verifier
+
+After attestation completes, you should see a new `attestation` folder appear with something like this:
+
+ ```
+.
+attestation/
+├── attestor
+│   └── trusted-data
+│       ├── ca
+│       │   ├── intermediate-ca.example.com
+│       │   │   ├── blobs
+│       │   │   │   └── tpm
+│       │   │   │       ├── attestor.example.com
+│       │   │   │       │   ├── ak-cert.cer
+│       │   │   │       │   ├── ak-cert.cer.digest
+│       │   │   │       │   ├── ak-cert.cer.sha256
+│       │   │   │       │   ├── ak-cert.cer.sig
+│       │   │   │       │   ├── ak-cert.crt
+│       │   │   │       │   ├── eventlog
+│       │   │   │       │   ├── eventlog.digest
+│       │   │   │       │   ├── eventlog.sha256
+│       │   │   │       │   ├── eventlog.sig
+│       │   │   │       │   ├── pcrs
+│       │   │   │       │   ├── pcrs.digest
+│       │   │   │       │   ├── pcrs.sha256
+│       │   │   │       │   ├── pcrs.sig
+│       │   │   │       │   ├── quote
+│       │   │   │       │   ├── quote.digest
+│       │   │   │       │   ├── quote.sha256
+│       │   │   │       │   └── quote.sig
+│       │   │   │       └── intermediate-ca.example.com
+│       │   │   │           ├── ek-cert.crt
+│       │   │   │           ├── ek-cert.crt.digest
+│       │   │   │           ├── ek-cert.crt.sha256
+│       │   │   │           └── ek-cert.crt.sig
+│       │   │   ├── crl
+│       │   │   ├── encryption-keys
+│       │   │   │   └── intermediate-ca.example.com
+│       │   │   │       ├── intermediate-ca.example.com.key
+│       │   │   │       ├── intermediate-ca.example.com.key.pkcs8
+│       │   │   │       ├── intermediate-ca.example.com.pub
+│       │   │   │       ├── intermediate-ca.example.com.pub.pkcs1
+│       │   │   │       └── intermediate-ca.example.com.sig
+│       │   │   ├── intermediate-ca.example.com.bundle.crt
+│       │   │   ├── intermediate-ca.example.com.cer
+│       │   │   ├── intermediate-ca.example.com.crl
+│       │   │   ├── intermediate-ca.example.com.crt
+│       │   │   ├── intermediate-ca.example.com.key
+│       │   │   ├── intermediate-ca.example.com.key.pkcs8
+│       │   │   ├── intermediate-ca.example.com.pub
+│       │   │   ├── intermediate-ca.example.com.pub.pkcs1
+│       │   │   ├── issued
+│       │   │   │   └── attestor.example.com
+│       │   │   │       ├── attestor.example.com.cer
+│       │   │   │       ├── attestor.example.com.crt
+│       │   │   │       ├── attestor.example.com.key
+│       │   │   │       ├── attestor.example.com.key.pkcs8
+│       │   │   │       ├── attestor.example.com.pub
+│       │   │   │       └── attestor.example.com.pub.pkcs1
+│       │   │   ├── public-keys
+│       │   │   │   ├── attestor.example.com.pub
+│       │   │   │   └── root-ca.example.com.pub
+│       │   │   ├── revoked
+│       │   │   │   └── dummy
+│       │   │   │       ├── dummy.cer
+│       │   │   │       ├── dummy.crt
+│       │   │   │       ├── dummy.key
+│       │   │   │       ├── dummy.key.pkcs8
+│       │   │   │       ├── dummy.pub
+│       │   │   │       └── dummy.pub.pkcs1
+│       │   │   ├── signing-keys
+│       │   │   ├── trusted-intermediate
+│       │   │   │   ├── CNLEPIDPOSTB1LPPROD2_EK_Platform_Public_Key.cer
+│       │   │   │   └── CNLEPIDPOSTB1LPPROD2_EK_Platform_Public_Key.crt
+│       │   │   └── trusted-root
+│       │   │       ├── root-ca.example.com.cer
+│       │   │       ├── root-ca.example.com.crt
+│       │   │       ├── www.intel.com.cer
+│       │   │       └── www.intel.com.crt
+│       │   └── root-ca.example.com
+│       │       ├── blobs
+│       │       ├── crl
+│       │       ├── encryption-keys
+│       │       │   └── root-ca.example.com
+│       │       │       ├── root-ca.example.com.key
+│       │       │       ├── root-ca.example.com.key.pkcs8
+│       │       │       ├── root-ca.example.com.pub
+│       │       │       ├── root-ca.example.com.pub.pkcs1
+│       │       │       └── root-ca.example.com.sig
+│       │       ├── issued
+│       │       ├── public-keys
+│       │       ├── revoked
+│       │       │   └── dummy
+│       │       │       ├── dummy.cer
+│       │       │       ├── dummy.crt
+│       │       │       ├── dummy.key
+│       │       │       ├── dummy.key.pkcs8
+│       │       │       ├── dummy.pub
+│       │       │       └── dummy.pub.pkcs1
+│       │       ├── root-ca.example.com.cer
+│       │       ├── root-ca.example.com.crl
+│       │       ├── root-ca.example.com.crt
+│       │       ├── root-ca.example.com.key
+│       │       ├── root-ca.example.com.key.pkcs8
+│       │       ├── root-ca.example.com.pub
+│       │       ├── root-ca.example.com.pub.pkcs1
+│       │       ├── signing-keys
+│       │       ├── trusted-intermediate
+│       │       └── trusted-root
+│       ├── etc
+│       │   └── config.yaml
+│       └── log
+│           └── trusted-platform.log
+└── verifier
+    └── trusted-data
+        ├── ca
+        │   ├── intermediate-ca.example.com
+        │   │   ├── blobs
+        │   │   │   └── tpm
+        │   │   │       ├── attestor.example.com
+        │   │   │       │   ├── ak.cer
+        │   │   │       │   ├── ak.cer.digest
+        │   │   │       │   ├── ak.cer.sha256
+        │   │   │       │   ├── ak.cer.sig
+        │   │   │       │   ├── eventlog
+        │   │   │       │   ├── eventlog.digest
+        │   │   │       │   ├── eventlog.sha256
+        │   │   │       │   ├── eventlog.sig
+        │   │   │       │   ├── pcrs
+        │   │   │       │   ├── pcrs.digest
+        │   │   │       │   ├── pcrs.sha256
+        │   │   │       │   ├── pcrs.sig
+        │   │   │       │   ├── quote
+        │   │   │       │   ├── quote.digest
+        │   │   │       │   ├── quote.sha256
+        │   │   │       │   └── quote.sig
+        │   │   │       ├── intermediate-ca.example.com
+        │   │   │       │   ├── ek-cert.crt
+        │   │   │       │   ├── ek-cert.crt.digest
+        │   │   │       │   ├── ek-cert.crt.sha256
+        │   │   │       │   └── ek-cert.crt.sig
+        │   │   │       └── verifier.example.com
+        │   │   │           ├── eventlog
+        │   │   │           ├── eventlog.digest
+        │   │   │           ├── eventlog.sha256
+        │   │   │           ├── eventlog.sig
+        │   │   │           ├── pcrs
+        │   │   │           ├── pcrs.digest
+        │   │   │           ├── pcrs.sha256
+        │   │   │           ├── pcrs.sig
+        │   │   │           ├── quote
+        │   │   │           ├── quote.digest
+        │   │   │           ├── quote.sha256
+        │   │   │           └── quote.sig
+        │   │   ├── crl
+        │   │   ├── encryption-keys
+        │   │   │   └── intermediate-ca.example.com
+        │   │   │       ├── intermediate-ca.example.com.key
+        │   │   │       ├── intermediate-ca.example.com.key.pkcs8
+        │   │   │       ├── intermediate-ca.example.com.pub
+        │   │   │       ├── intermediate-ca.example.com.pub.pkcs1
+        │   │   │       └── intermediate-ca.example.com.sig
+        │   │   ├── intermediate-ca.example.com.bundle.crt
+        │   │   ├── intermediate-ca.example.com.cer
+        │   │   ├── intermediate-ca.example.com.crl
+        │   │   ├── intermediate-ca.example.com.crt
+        │   │   ├── intermediate-ca.example.com.key
+        │   │   ├── intermediate-ca.example.com.key.pkcs8
+        │   │   ├── intermediate-ca.example.com.pub
+        │   │   ├── intermediate-ca.example.com.pub.pkcs1
+        │   │   ├── issued
+        │   │   │   ├── attestor.example.com
+        │   │   │   │   ├── attestor.example.com.cer
+        │   │   │   │   ├── attestor.example.com.crt
+        │   │   │   │   ├── attestor.example.com.key
+        │   │   │   │   ├── attestor.example.com.key.pkcs8
+        │   │   │   │   ├── attestor.example.com.pub
+        │   │   │   │   └── attestor.example.com.pub.pkcs1
+        │   │   │   └── verifier.example.com
+        │   │   │       ├── verifier.example.com.cer
+        │   │   │       ├── verifier.example.com.crt
+        │   │   │       ├── verifier.example.com.key
+        │   │   │       ├── verifier.example.com.key.pkcs8
+        │   │   │       ├── verifier.example.com.pub
+        │   │   │       └── verifier.example.com.pub.pkcs1
+        │   │   ├── public-keys
+        │   │   │   ├── attestor.example.com.pub
+        │   │   │   ├── root-ca.example.com.pub
+        │   │   │   └── verifier.example.com.pub
+        │   │   ├── revoked
+        │   │   │   └── dummy
+        │   │   │       ├── dummy.cer
+        │   │   │       ├── dummy.crt
+        │   │   │       ├── dummy.key
+        │   │   │       ├── dummy.key.pkcs8
+        │   │   │       ├── dummy.pub
+        │   │   │       └── dummy.pub.pkcs1
+        │   │   ├── signing-keys
+        │   │   ├── trusted-intermediate
+        │   │   │   ├── CNLEPIDPOSTB1LPPROD2_EK_Platform_Public_Key.cer
+        │   │   │   └── CNLEPIDPOSTB1LPPROD2_EK_Platform_Public_Key.crt
+        │   │   └── trusted-root
+        │   │       ├── root-ca.example.com.cer
+        │   │       ├── root-ca.example.com.crt
+        │   │       ├── www.intel.com.cer
+        │   │       └── www.intel.com.crt
+        │   └── root-ca.example.com
+        │       ├── blobs
+        │       ├── crl
+        │       ├── encryption-keys
+        │       │   └── root-ca.example.com
+        │       │       ├── root-ca.example.com.key
+        │       │       ├── root-ca.example.com.key.pkcs8
+        │       │       ├── root-ca.example.com.pub
+        │       │       ├── root-ca.example.com.pub.pkcs1
+        │       │       └── root-ca.example.com.sig
+        │       ├── issued
+        │       ├── public-keys
+        │       ├── revoked
+        │       │   └── dummy
+        │       │       ├── dummy.cer
+        │       │       ├── dummy.crt
+        │       │       ├── dummy.key
+        │       │       ├── dummy.key.pkcs8
+        │       │       ├── dummy.pub
+        │       │       └── dummy.pub.pkcs1
+        │       ├── root-ca.example.com.cer
+        │       ├── root-ca.example.com.crl
+        │       ├── root-ca.example.com.crt
+        │       ├── root-ca.example.com.key
+        │       ├── root-ca.example.com.key.pkcs8
+        │       ├── root-ca.example.com.pub
+        │       ├── root-ca.example.com.pub.pkcs1
+        │       ├── signing-keys
+        │       ├── trusted-intermediate
+        │       └── trusted-root
+        ├── etc
+        │   └── config.yaml
+        └── log
+            └── trusted-platform.log
+```
 
 
 ## Status
 
-This project is under active development. APIs can change at any moment.
+
+This project is under active development APIs can change at any moment.
 
 The `main` branch will always build and run. Try it out!
 
@@ -286,8 +445,25 @@ The `main` branch will always build and run. Try it out!
             - [ ] Activate credential
             - [x] Event Log Parsing
             - [ ] Provide Attestation Key to Client
-        - [ ] Full Remote Attestation
-            - [ ] Server (Attestor)
+        - [x] Local Attestation
+            - [x] Capture initial platform measurements
+            - [x] Sign and store initial measurements
+            - [x] Capture new measurements on subsequent startups
+            - [x] Verify subsequent startup measurements
+            - [x] Terminate if verification fails
+                - [x] Exit with Fatal error
+                - [ ] Re-seal the platform
+                - [ ] Invoke custom event handlers
+            - [ ] Client (Verifier)
+                - [x] Auto-negotiated mTLSv1.3
+                - [x] Get Endorsement Key (EK) and Certificate
+                - [x] Get Attestation Key Profile (EK, AK, AK Name)
+                - [x] Credential Challenge (TPM2_MakeCredential)
+                - [x] Activate Credential ((TPM2_ActivateCredential)
+                - [x] Issue Attestation Key Certificate
+                - [x] Verify Quote
+        - [x] Full Remote Attestation
+            - [x] Server (Attestor)
                 - [x] gRPC service
                 - [x] Insecure service
                     - [x] Exchange CA certificate bundle with Verifier
@@ -299,14 +475,16 @@ The `main` branch will always build and run. Try it out!
                     - [x] Create Attestation Key
                     - [x] Activate Credential
                     - [x] Quote
+                    - [ ] Accept service registration key
             - [ ] Client (Verifier)
                 - [x] Auto-negotiated mTLSv1.3
                 - [x] Get Endorsement Key (EK) and Certificate
                 - [x] Get Attestation Key Profile (EK, AK, AK Name)
                 - [x] Credential Challenge (TPM2_MakeCredential)
                 - [x] Activate Credential ((TPM2_ActivateCredential)
-                - [x] Issue Attestation Key Certificate
-                - [ ] Verify Quote
+                - [x] Issue Attestation Key x509 Certificate
+                - [x] Verify Quote
+                - [ ] Disseminate service registration
     - [ ] Web Services
         - [x] Web server
         - [x] TLS Web Server

@@ -9,7 +9,7 @@ config-dir: trusted-data/etc
 log-dir: trusted-data/log
 
 # The platform domain name
-domain: example.com
+domain: attestor.example.com
 
 # The hostmaster responsible for the platform
 hostmaster: root@example.com
@@ -21,7 +21,7 @@ hostmaster: root@example.com
 # Operator password is used to password protect the first
 # Intermediate Certifiate Authority that is created by default during
 # platform setup. After setup, the Root Certificate Authority Private
-# Key should be removed from the system and taken offline. Future operations
+# Key should be remove from the system and taken offline. Future operations
 # should be performed using an Intermediate Certificate Authority, either
 # the default created during setup, or an additional created after setup.
 #
@@ -30,7 +30,6 @@ hostmaster: root@example.com
 root-password: ca-root-password
 intermediate-password: ca-intermediate-password
 server-password: server-password
-
 
 # Regular Expression that defines password complexity requirements
 # for private keys. A few examples:
@@ -124,6 +123,15 @@ attestation:
   # Passing more than 4 PC$ values to the simulator results in:
   # TPM_RC_SIZE (parameter 3): structure is the wrong size
   quote-pcrs: 6,7,8,9
+
+
+# PKCS #11
+pkcs11:
+  # The Hardware Security Module Cryptoki library
+  library: /usr/local/lib/softhsm/libsofthsm2.so
+
+  # The library configuration file
+  config: ../../libs/configs/platform/softhsm.conf
 
 
 # Trusted Platform Module
@@ -234,7 +242,7 @@ certificate-authority:
     sans:
       dns: 
         - root-ca.example.com
-        - example.com
+        - attestor.example.com
         - root-ca
         - root-ca.localdomain
         - root-ca.dev.example.com
@@ -257,7 +265,7 @@ certificate-authority:
     sans:
       dns:
         - intermediate-ca.example.com
-        - example.com
+        - attestor.example.com
         - intermediate-ca
         - intermediate-ca.localdomain
       ips:
@@ -294,7 +302,7 @@ webservice:
     sans:
       dns:
         - www.example.com
-        - example.com
+        - attestor.example.com
         - localhost
         - localhost.localdomain
       ips:

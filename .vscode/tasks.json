@@ -2,7 +2,19 @@
     "version": "2.0.0",
     "tasks": [{
         "type": "shell",
+        "label": "debug_config",
+        "command": "cp",
+        "args": [
+            "configs/platform/config.debug.yaml",
+            "pkg/config.yaml",
+        ]
+    },
+    {
+        "type": "shell",
         "label": "rm_trusted_data",
+        "dependsOn": [
+            "debug_config",
+        ],
         "command": "rm",
         "args": [
             "-rf",
@@ -11,6 +23,9 @@
     },
     {
         "type": "shell",
+        "dependsOn": [
+            "debug_config",
+        ],
         "label": "clean_attestor",
         "command": "rm",
         "args": ["-rf",
@@ -19,6 +34,9 @@
     },
     {
         "type": "shell",
+        "dependsOn": [
+            "debug_config",
+        ],
         "label": "clean_verifier",
         "command": "rm",
         "args": ["-rf",
@@ -27,9 +45,9 @@
     },
     {
         "type": "shell",
-        // "dependsOn": [
-        //     "clean_attestor",
-        // ],
+        "dependsOn": [
+            "debug_config",
+        ],
         "label": "attestor_init",
         "command": "make",
         "args": [
@@ -38,6 +56,9 @@
     },
     {
         "type": "shell",
+        "dependsOn": [
+            "debug_config",
+        ],
         "label": "verifier_init",
         "command": "make",
         "args": [
