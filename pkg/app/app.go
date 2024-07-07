@@ -17,7 +17,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/hash"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/argon2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/pkcs11"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/setup"
@@ -35,25 +35,25 @@ type App struct {
 	CA                   ca.CertificateAuthority     `yaml:"-" json:"-" mapstructure:"-"`
 	TPM                  tpm2.TrustedPlatformModule2 `yaml:"-" json:"-" mapstructure:"-"`
 	PKCS11               pkcs11.PKCS11
-	CAConfig             ca.Config          `yaml:"certificate-authority" json:"certificate_authority" mapstructure:"certificate-authority"`
-	TPMConfig            tpm2.Config        `yaml:"tpm" json:"tpm" mapstructure:"tpm"`
-	PKCS11Config         pkcs11.Config      `yaml:"pkcs11" json:"pkcs11" mapstructure:"pkcs11"`
-	AttestationConfig    config.Attestation `yaml:"attestation" json:"attestation" mapstructure:"attestation"`
-	DebugFlag            bool               `yaml:"debug" json:"debug" mapstructure:"debug"`
-	DebugSecretsFlag     bool               `yaml:"debug-secrets" json:"debug-secrets" mapstructure:"debug-secrets"`
-	PlatformDir          string             `yaml:"platform-dir" json:"platform_dir" mapstructure:"platform-dir"`
-	ConfigDir            string             `yaml:"config-dir" json:"config_dir" mapstructure:"config-dir"`
-	LogDir               string             `yaml:"log-dir" json:"log_dir" mapstructure:"log-dir"`
-	Logger               *logging.Logger    `yaml:"-" json:"-" mapstructure:"-"`
-	RuntimeUser          string             `yaml:"runtime-user" json:"runtime_user" mapstructure:"runtime-user"`
-	Argon2               hash.Argon2Params  `yaml:"argon2" json:"argon2" mapstructure:"argon2"`
-	WebService           config.WebService  `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
-	PasswordPolicy       string             `yaml:"password-policy" json:"password-policy" mapstructure:"password-policy"`
-	RootPassword         string             `yaml:"root-password" json:"root_password" mapstructure:"root-password"`
-	IntermediatePassword string             `yaml:"intermediate-password" json:"intermediate_password" mapstructure:"intermediate-password"`
-	ServerPassword       string             `yaml:"server-password" json:"server_password" mapstructure:"server-password"`
-	EKAuth               string             `yaml:"ek-auth" json:"ek_auth mapstructure:"ek-auth"`
-	SRKAuth              string             `yaml:"srk-auth" json:"srk_auth mapstructure:"srk-auth"`
+	CAConfig             ca.Config           `yaml:"certificate-authority" json:"certificate_authority" mapstructure:"certificate-authority"`
+	TPMConfig            tpm2.Config         `yaml:"tpm" json:"tpm" mapstructure:"tpm"`
+	PKCS11Config         pkcs11.Config       `yaml:"pkcs11" json:"pkcs11" mapstructure:"pkcs11"`
+	AttestationConfig    config.Attestation  `yaml:"attestation" json:"attestation" mapstructure:"attestation"`
+	DebugFlag            bool                `yaml:"debug" json:"debug" mapstructure:"debug"`
+	DebugSecretsFlag     bool                `yaml:"debug-secrets" json:"debug-secrets" mapstructure:"debug-secrets"`
+	PlatformDir          string              `yaml:"platform-dir" json:"platform_dir" mapstructure:"platform-dir"`
+	ConfigDir            string              `yaml:"config-dir" json:"config_dir" mapstructure:"config-dir"`
+	LogDir               string              `yaml:"log-dir" json:"log_dir" mapstructure:"log-dir"`
+	Logger               *logging.Logger     `yaml:"-" json:"-" mapstructure:"-"`
+	RuntimeUser          string              `yaml:"runtime-user" json:"runtime_user" mapstructure:"runtime-user"`
+	Argon2               argon2.Argon2Params `yaml:"argon2" json:"argon2" mapstructure:"argon2"`
+	WebService           config.WebService   `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
+	PasswordPolicy       string              `yaml:"password-policy" json:"password-policy" mapstructure:"password-policy"`
+	RootPassword         string              `yaml:"root-password" json:"root_password" mapstructure:"root-password"`
+	IntermediatePassword string              `yaml:"intermediate-password" json:"intermediate_password" mapstructure:"intermediate-password"`
+	ServerPassword       string              `yaml:"server-password" json:"server_password" mapstructure:"server-password"`
+	EKAuth               string              `yaml:"ek-auth" json:"ek_auth mapstructure:"ek-auth"`
+	SRKAuth              string              `yaml:"srk-auth" json:"srk_auth mapstructure:"srk-auth"`
 	cAPassword           string
 }
 

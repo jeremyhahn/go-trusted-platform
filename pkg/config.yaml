@@ -203,14 +203,16 @@ certificate-authority:
   # Supported schemes: RSA_PSS | RSA_PKCS1v15
   rsa-scheme: RSA_PSS
  
-  # The default algorithm to use when creating keys and certificates
+  # The key algorithm used for the CA signing certificate
   # Supported algorithms: RSA, ECC
-  key-algorithm: RSA
+  # key-algorithm: RSA
+  key-algorithm: ECC
 
   # The default signature algorithm
   # Any fully supported Go x509 SignatureAlgorithm:
   # https://pkg.go.dev/crypto/x509#SignatureAlgorithm
-  signature-algorithm: SHA256WithRSA
+  # signature-algorithm: SHA256WithRSA
+  signature-algorithm: ECDSAWithSHA256
   
   # The Elliptical Curve Cryptography Curve
   # Supported curves: P224, P256, P384, P521

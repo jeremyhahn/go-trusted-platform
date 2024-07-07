@@ -1,4 +1,4 @@
-package hash
+package argon2
 
 import (
 	"crypto/subtle"
@@ -12,22 +12,9 @@ import (
 )
 
 var (
-	ErrInvalidHash         = errors.New("argon2di: invalid format")
-	ErrIncompatibleVersion = errors.New("argon2di: version incompatible")
+	ErrInvalidHash         = errors.New("argon2id: invalid format")
+	ErrIncompatibleVersion = errors.New("argon2id: version incompatible")
 )
-
-type Argon2Params struct {
-	Memory      uint32 `yaml:"memory" json:"memory" mapstructure:"memory"`
-	Iterations  uint32 `yaml:"iterations" json:"iterations" mapstructure:"iterations"`
-	Parallelism uint8  `yaml:"parallelism" json:"parallelism" mapstructure:"parallelism"`
-	SaltLength  uint32 `yaml:"saltLen" json:"saltLen" mapstructure:"saltLen"`
-	KeyLength   uint32 `yaml:"keyLen" json:"keyLen" mapstructure:"keyLen"`
-}
-
-type Argon2 interface {
-	Hash(password string) (string, error)
-	Compare(password, hash string) (match bool, err error)
-}
 
 type Argon2Hasher struct {
 	random io.Reader
