@@ -2,7 +2,7 @@
 
 
 # Global platform configs
-debug: true
+debug: false
 debug-secrets: false
 platform-dir: trusted-data
 config-dir: trusted-data/etc
@@ -138,10 +138,10 @@ tpm:
   ek-cert: ../ECcert.bin
   
   # Use TPM Simulator instead of real TPM
-  simulator: true
+  simulator: false
   
   # Automatically import EK Platform (Manufacturer) Certificate(s) into trust store
-  auto-import-ek-certs: true
+  auto-import-ek-certs: false
 
   # PCRs to use for local attestation
   # https://uapi-group.org/specifications/specs/linux_tpm_pcr_registry/
@@ -169,7 +169,7 @@ certificate-authority:
   issued-valid: 365
   
   # Set to true to include "localhost" in SANS names
-  sans-include-localhost: true
+  sans-include-localhost: false
   
   # Delete revoked certificates. They can be safely
   # discarded after revocation, but you may want them
@@ -217,7 +217,7 @@ certificate-authority:
 
   # The Certificate Authority identity
   identity:
-  - key-size: 2048
+  - key-size: 4096
      # CA cert expiration (years)
     valid: 50
     subject:
@@ -310,3 +310,4 @@ argon2:
   parallelism: 1
   saltLen: 16
   keyLen: 32
+  
