@@ -6,7 +6,7 @@ The `Trusted Platform` uses a [Trusted Platform Module (TPM)](https://en.wikiped
 
 ## Overview
 
-For detailed documentationon the components used in this project, please refer to the [docs](docs/OVERVIEW.md).
+For detailed documentation on the components used in this project, please refer to the [docs](docs/OVERVIEW.md).
 
 ## Build
 
@@ -40,7 +40,7 @@ Use the included `Makefile` to build and perform initial setup.
 
 Copy the [config file](configs/platform/config.dev.yaml) to the root of the project directory where you will run the `trusted-platform` binary. Edit the configuration file according to your environment and requirements.
 
-Use [tpm2_getekcertificate](https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_getekcertificate.1.md) to dump your TPM Endorsement Key to the project directory where you will run the `trusted-platform` binary. Follow the example and use the ECcert.bin file name, or edit the config file to match the custom name you choose for your EK certificate in the TPM section of the config.
+Use [tpm2_getekcertificate](https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_getekcertificate.1.md) to dump your TPM Endorsement Key x509 certificate to the project directory where you will run the `trusted-platform` binary. Follow the example and use the ECcert.bin file name, or edit the config file to match the custom name you choose for your EK certificate in the TPM section of the platform configuration file.
 
 Start the embedded web services:
 
@@ -58,14 +58,14 @@ During platform setup, several passwords are collected to encrypt and password p
 
 * Root Certificate Authority Private Key Password
 * Intermediate Certificate Authority Private Key Password
-* Web Server Private Key Password
+* Web Server TLS Private Key Password
 
 To automate the platform setup for testing, these passwords can be set in the configuration file, which will cause the setup to bypass the inital prompts and use the passwords defined in the config. This mechanism should only be used for testing, evaluation or development.
 
 
 ## LUKS
 
-At this time, preliminary support for LUKS is included in the `Makefile`. In the future, full LUKS integration will be provided.
+At this time, preliminary support for LUKS is included in the `Makefile`. In the future, full LUKS integration will be provided through the platform.
 
 To setup an ecnrypted LUKS `trusted-data` volume for platform data, use the included `luks-create` Makefile target. 
 
@@ -85,16 +85,14 @@ If you don't trust the trusted `Makefile`, you can create your own key file and 
 
 Then you can use the `luks-mount` target to mount your volume prior to starting the platform.
 
-Don't forget to remove your LUKS key from the system. In the future, this step will be fully automated and the key will be sealed to the TPM Endorsement Key.
+Don't forget to remove your LUKS key from the system. In the future, this step will be fully automated and the key will be sealed to the TPM.
 
 
 ## Platform Startup & Local Attestation
 
 When the platform starts up, the Certificate Authorities are initialized, resulting in a Root and Intermeidate CA with public / private keys, a signing certificate, and a dedicated encryption key. The Intermediate CA will have the Root CA's certificate imported to its trusted root store. Each CA's Certificate Revocation List is created and initialized with a dummy certificate.
 
-After the CA is initialized, local system platform measurements are taken according to the platform configuration file, signed by the CA, and stored in the CA's internal blob storage along with it's signature. Each time the platform is subsequently started, new system measurements are taken, a new digest is created from the new measurements, and verified against the initial platform measurements signature. If the signgature does not match (verification failed), the platform will return a fatal error and terminate. 
-
-In the future, custom local attestation failure event handlers will be supported.
+After the CA is initialized, local system platform measurements are taken according to the platform configuration file, signed by the CA, and stored in the CA's internal blob store along, with the digest and signature of the measurements. On subsequent startups, new system measurements are taken, a new digest is created and then verified against the initial platform measurements signature. If the signature does not match (verification failed), the platform will return a fatal error and terminate. In the future, it will also re-seal the platform by unmounting the LUKS volume and run a set of custom event handlers that allow responding to the unexpected state of the system any way you want.
 
 
 ## Remote Attestation
@@ -107,7 +105,7 @@ Full remote attestation is working. Test it out using the provided `Makefile` ta
     # Verifier
     make verifier
 
-After attestation completes, you should see a new `attestation` folder appear with something like this:
+After attestation completes, you should see a new `attestation` folder appear that looks something like this:
 
  ```
 .

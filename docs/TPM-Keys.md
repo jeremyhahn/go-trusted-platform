@@ -14,26 +14,20 @@ The TPM is a Root of Trust for Reporting.
 
 ## Key Types
 
-1. Endorsement Key: The key that the TPM uses in its role as Root of Trust for Reporting. Only used directly to certify Identity Keys (AIKs). Trust in all keys in the system come down to trust in EK.
+1. Endorsement Key: The key that the TPM uses in its role as Root of Trust for Reporting. Only used directly to certify Identity Keys (AIKs). Trust in all keys in the system come down to trust in the EK.
 
 2. Storage Root Key (SRK): The key that the TPM uses in its role as
 Root of Trust for Storage. Used to protect other keys and data via encryption. Users can freely create other keys unless SRK requires authorization
 
-
-## Administrative Operations
-
-TPM operations which need the EK:
-
-1. Take ownership
-2. Clear the TPM
-3. Change the SRK
-4. Change the Owner(obviously)
-5. Allow SRK read using SRK auth (tpm_restrictsrk -a)
+3. Attestation Key: The key that's used as a signing key during Remote Attestation. The process starts with the Verifier obtaining the EK x509 certificate that's issued by the Manufacturer for the EK on the TPM. The verifier sends the Attestor an encrypted secret that only the EK can decrypt. To decrypt the secret, both the AK and the EK must be simultaneously loaded into the TPM (proving the AK is derived from the EK and "that" TPM), using a one-time session that includes a nonce and timestamp (to avoid replay attacks), and proves that it's derived from the EK and a real TPM, by decryting the secret with the EK and sending it back to the Verifier in plain text form for confirmation.
 
 
 ## Privacy Concerns
 
-The root key for the AIK is the EK. The goal of the EK is to prove everything comes from a valid TPM. The EK can be use to sign, but there will be a privacy issue, so the intention of the AIK is to prove a valid TPM without exposure of being traced (by the CA issuing certificates or logs along the way).
+The EK can not be used to sign. This is for security (encryption and signing keys should be distinct), and because the EK is the identity of the TPM, and therefore it's owner. To prevent using the TPM as a means for tracing, an EK can not be used to sign, and it is fixed to the TPM, meaning it can not be exported or removed.
+
+The root key for the AK is the EK. To enable anonymous attestations, an AK is generated from the EK, and used to sign during the attestation process.
+
 
 ## References
 
@@ -47,7 +41,5 @@ https://dev.to/nandhithakamal/tpm-part-1-4emf
 
 https://ericchiang.github.io/post/tpm-keys/
 
-
-## 
 
 US NIST SP800-57 in section 5.2 does not allow the same key to be used for both decryption and signing, and recommends that applications not share keys.
