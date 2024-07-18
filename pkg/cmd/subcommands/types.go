@@ -7,15 +7,21 @@ import (
 )
 
 var (
-	App      *app.App
-	TPM      tpm2.TrustedPlatformModule2
-	CAParams ca.CAParams
+	App        *app.App
+	TPM        tpm2.TrustedPlatformModule2
+	CAParams   ca.CAParams
+	InitParams *app.AppInitParams
+	CACN,
+	CAAlgorithm,
+	CAKeyName,
 	EKCert,
-	CAPassword,
-	SRKAuth,
 	CAFile,
 	CACertCN,
 	CASansDNS,
 	CASansIPs,
 	CASansEmails string
 )
+
+func init() {
+	InitParams = &app.AppInitParams{}
+}

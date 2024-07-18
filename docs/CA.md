@@ -1,12 +1,16 @@
 # Certificate Authority
 
-The Certificate Authority (CA) provides a full-featured x509 certificate management system providing integrity checks, encryption / decryption and digital identies, and is "TPM and Attestation Aware".
+The Certificate Authority (CA) provides a full-featured "TPM and Attestation Aware" x509 certificate management system providing TLS certificates, device certificates, signing, encryption, and more.
 
-When the server starts for the first time, Root and Intermediate Certificate Authorities are created along with a web server TLS certificate, and is ready to being servicing requests.
+When the server starts for the first time, Root and Intermediate Certificate Authorities are created with RSA, ECDSA, and Ed25519 private keys and x509 certifiates. A TLS certificate is issued for the embedded web server using the algorithm specified in the platform configuration file.
 
 For increased security, the Root Certificate Authority (and especially it's private key) should be kept offline until a new Intermediate Certificate Authority needs to be created.
 
 For maximum security, use a Trusted Platform Module (TPM), combined with Secure Boot, to provide critial BIOS, firmware, boot loader, and system integrity checks, and store all private keys offline, in a tamper resistant cryptographic co-processor, using opaque keys when needed. Use the CA to sign all executable binaries and verify their signatures prior to execution.
+
+# Supported Algorithms
+
+The Certificate Authorityh
 
 
 ## Verifying Certificates w/ OpenSSL

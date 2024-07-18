@@ -68,8 +68,11 @@ ROOT_CA            ?= root-ca
 INTERMEDIATE_CA    ?= intermediate-ca
 DOMAIN             ?= example.com
 
-VERIFIER_HOSTNAME  ?= verifier
-ATTESTOR_HOSTNAME  ?= attestor
+VERIFIER_HOSTNAME  ?= www
+VERIFIER_DOMAIN    ?= verifier.example.com
+
+ATTESTOR_HOSTNAME  ?= www
+ATTESTOR_DOMAIN    ?= attestor.example.com
 
 CONFIG_YAML        ?= config.dev.yaml
 
@@ -138,12 +141,15 @@ deps:
 
 swagger:
 	swag init \
-		--dir webservice,webservice/v1/router,webservice/v1/response,service,model,app,config \
+		--dir pkg/webservice,pkg/webservice/v1/router,pkg/webservice/v1/response,pkg/app,pkg/config \
 		--generalInfo webserver_v1.go \
 		--parseDependency \
 		--parseInternal \
 		--parseDepth 1 \
-		--output public_html/swagger
+		--output pkg/public_html/swagger
+
+swagger-ui:
+	git clone --depth=1 https://github.com/swagger-api/swagger-ui.git public_html/swagger
 
 
 # x86_64
@@ -234,13 +240,18 @@ clean:
 		/usr/local/bin/$(APPNAME) \
 		$(PLATFORM_DIR) \
 		$(ATTESTATION_DIR) \
-		pkg/ca/certs \
-		pkg/tpm2/certs \
+		pkg/$(PLATFORM_DIR) \
+		pkg/store/testdata \
+		pkg/store/keystore/testdata \
+		pkg/store/pkcs8/testdata \
+		pkg/ca/testdata \
+		pkg/tpm2/testdata \
 		pkg/tpm2/$(EK_CERT_NAME) \
-		pkg/$(EK_CERT_NAME)
+		pkg/$(EK_CERT_NAME) \
+		config.yaml
 
 
-test: test-ca test-tpm test-hash
+test: test-ca test-tpm test-crypto test-store
 
 test-ca:
 	cd pkg/ca && go test -v
@@ -252,8 +263,14 @@ test-tpm:
 test-pkcs11:
 	cd pkg/pkcs11 && go test -v
 
-test-hash:
-	cd pkg/hash && go test -v
+test-crypto:
+	cd pkg/crypto/aesgcm && go test -v
+	cd pkg/crypto/argon2 && go test -v
+
+test-store:
+	cd pkg/store && go test -v
+	cd pkg/store/keystore && go test -v
+	cd pkg/store/keystore/pkcs8 && go test -v
 
 proto:
 	cd pkg/$(ATTESTATION_DIR) && $(PROTOC) \
@@ -268,15 +285,15 @@ uninstall: uninstall-ansible
 
 
 # Certificate Authority
-ca-verify-all: ca-root-verify ca-intermediate-verify ca-server-=verify
+ca-verify-all: ca-parent-verify ca-intermediate-verify ca-server-=verify
 
-ca-show-all: ca-root-show ca-intermediate-show ca-server-show
+ca-show-all: ca-parent-show ca-intermediate-show ca-server-show
 
-ca-root-verify:
+ca-parent-verify:
 	cd $(CA_DIR) && \
 		openssl verify -CAfile $(ROOT_CA)/$(ROOT_CA).crt $(ROOT_CA)/$(ROOT_CA).crt
 
-ca-root-show:
+ca-parent-show:
 	cd $(CA_DIR) && \
 		openssl x509 -in $(ROOT_CA)/$(ROOT_CA).crt -text -noout
 
@@ -312,8 +329,8 @@ ca-decrypt-intermediate-key:
 verifier-init:
 	mkdir -p $(VERIFIER_DIR)/$(CONFIG_DIR)
 	cp configs/platform/$(CONFIG_YAML) $(VERIFIER_CONF)
-	sed -i 's/domain: $(DOMAIN)/domain: $(VERIFIER_HOSTNAME).$(DOMAIN)/' $(VERIFIER_CONF)
-	sed -i 's/- $(DOMAIN)/- $(VERIFIER_HOSTNAME).$(DOMAIN)/' $(VERIFIER_CONF)
+	sed -i 's/$(DOMAIN)/$(VERIFIER_DOMAIN)/' $(VERIFIER_CONF)
+	sed -i 's/- $(VERIFIER_HOSTNAME).$(DOMAIN)/- $(VERIFIER_DOMAIN)/' $(VERIFIER_CONF)
 
 verifier-no-clean: build verifier-init
 	cd $(VERIFIER_DIR) && \
@@ -335,7 +352,7 @@ verifier: verifier-clean verifier-init build
 			--server-password server-password \
 			--ek-cert $(ATTESTATION_ECCERT) \
 			--ak-password ak-password \
-			--attestor $(ATTESTOR_HOSTNAME).$(DOMAIN)
+			--attestor $(ATTESTOR_HOSTNAME).$(ATTESTOR_DOMAIN)
 
 verifier-clean: 
 	rm -rf \
@@ -353,8 +370,9 @@ verifier-cert-chain:
 attestor-init:
 	mkdir -p $(ATTESTOR_DIR)/$(CONFIG_DIR)
 	cp configs/platform/$(CONFIG_YAML) $(ATTESTOR_CONF)
-	sed -i 's/domain: $(DOMAIN)/domain: $(ATTESTOR_HOSTNAME).$(DOMAIN)/' $(ATTESTOR_CONF)
-	sed -i 's/- $(DOMAIN)/- $(ATTESTOR_HOSTNAME).$(DOMAIN)/' $(ATTESTOR_CONF)
+	sed -i 's/$(DOMAIN)/$(ATTESTOR_DOMAIN)/' $(ATTESTOR_CONF)
+	sed -i 's/- __VERIFIER_CA__/- $(INTERMEDIATE_CA).$(VERIFIER_DOMAIN)/' $(ATTESTOR_CONF)
+	cp $(EK_CERT_NAME) $(ATTESTOR_DIR)/$(EK_CERT_NAME)
 
 attestor-clean: 
 	rm -rf \

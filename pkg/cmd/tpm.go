@@ -45,5 +45,6 @@ https://link.springer.com/book/10.1007/978-1-4302-6584-9
 		   `,
 	Run: func(cmd *cobra.Command, args []string) {
 
+		App.InitCA()
 	},
 }

@@ -14,10 +14,19 @@ var CAPemCmd = &cobra.Command{
 	Long: `This command retrieves a PEM certificate from the Certificate
 Authority certificate store`,
 	Run: func(cmd *cobra.Command, args []string) {
-		bytes, err := App.CA.PEM(CAFile)
-		if err != nil {
-			App.Logger.Fatal(err)
+
+		for algo, attrs := range App.CA.CAKeyAttributesList() {
+
+			App.Logger.Infof("$s Key Attributes", algo)
+
+			caAttrs := App.CA.CAKeyAttributes(&attrs.KeyAlgorithm)
+
+			bytes, err := App.CA.PEM(caAttrs)
+			if err != nil {
+				App.Logger.Fatal(err)
+			}
+
+			App.Logger.Info(string(bytes))
 		}
-		App.Logger.Info(string(bytes))
 	},
 }

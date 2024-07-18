@@ -3,9 +3,7 @@ package verifier
 import (
 	"bytes"
 	"context"
-	"crypto"
 	"crypto/rsa"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/gob"
 	"errors"
@@ -21,6 +19,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/op/go-logging"
@@ -70,8 +70,8 @@ type Verifier interface {
 	AKProfile(ekCert *x509.Certificate) (tpm2.Key, tpm2.DerivedKey, error)
 	MakeCredential(ek tpm2.Key, ak tpm2.DerivedKey) (makeCredentialResponse, error)
 	ActivateCredential(makeCredentialResponse makeCredentialResponse) (tpm2.DerivedKey, error)
-	IssueCertificate(ak tpm2.DerivedKey, certDER []byte) error
-	Quote(ak tpm2.DerivedKey) (tpm2.Quote, []byte, error)
+	IssueCertificate(ak tpm2.DerivedKey) error
+	Quote(ak tpm2.DerivedKey) (tpm2.Quote, []byte, keystore.X509Attributes, error)
 	Close() error
 }
 
@@ -88,7 +88,7 @@ type Verification struct {
 	grpcConn       *grpc.ClientConn
 	secureAttestor pb.TLSAttestorClient
 	clientCertPool *x509.CertPool
-	attestor       string
+	attestorCN     string
 	Verifier
 }
 
@@ -106,15 +106,22 @@ func main() {
 }
 
 // Creates a new Remote Attestation Verifier
-func NewVerifier(app *app.App, attestor string, caPassword, serverPassword, akCertPassword []byte) (Verifier, error) {
+func NewVerifier(app *app.App, attestorCN string, caPassword, serverPassword, akCertPassword []byte) (Verifier, error) {
+
+	keyAlgo, err := keystore.ParseKeyAlgorithm(app.WebService.TLSKeyAlgorithm)
+	if err != nil {
+		return nil, err
+	}
 
 	clientCertPool := x509.NewCertPool()
 	secureConn, err := newTLSGRPCClient(
 		app.Logger,
 		app.AttestationConfig,
+		keyAlgo,
+		app.WebService.Certificate.Subject.CommonName,
 		serverPassword,
 		app.Domain,
-		attestor,
+		attestorCN,
 		app.CA)
 	if err != nil {
 		return nil, err
@@ -134,7 +141,7 @@ func NewVerifier(app *app.App, attestor string, caPassword, serverPassword, akCe
 		domain:         app.Domain,
 		secureAttestor: pb.NewTLSAttestorClient(secureConn),
 		clientCertPool: clientCertPool,
-		attestor:       attestor,
+		attestorCN:     attestorCN,
 		caPassword:     caPassword,
 		serverPassword: serverPassword,
 		akCertPassword: akCertPassword,
@@ -142,8 +149,8 @@ func NewVerifier(app *app.App, attestor string, caPassword, serverPassword, akCe
 }
 
 // Creates a new insecure GRPC client
-func newInsecureGRPCClient(config config.Attestation, attestor string) (*grpc.ClientConn, error) {
-	socket := fmt.Sprintf("%s:%d", attestor, config.InsecurePort)
+func newInsecureGRPCClient(config config.Attestation, attestorCN string) (*grpc.ClientConn, error) {
+	socket := fmt.Sprintf("%s:%d", attestorCN, config.InsecurePort)
 	return grpc.NewClient(
 		socket,
 		grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -153,34 +160,47 @@ func newInsecureGRPCClient(config config.Attestation, attestor string) (*grpc.Cl
 func newTLSGRPCClient(
 	logger *logging.Logger,
 	config config.Attestation,
+	tlsAlgorithm x509.PublicKeyAlgorithm,
+	tlsCommonName string,
 	serverPassword []byte,
-	domain, attestor string,
+	domain, attestorCN string,
 	ca ca.CertificateAuthority) (*grpc.ClientConn, error) {
 
-	socket := fmt.Sprintf("%s:%d", attestor, config.TLSPort)
+	socket := fmt.Sprintf("%s:%d", attestorCN, config.TLSPort)
+
+	logger.Debugf("verifier: gRPC client socket: %s", socket)
 
 	if config.InsecureSkipVerify {
 		logger.Warning("verifier: InsecureSkipVerify is enabled, allowing man-in-the-middle attacks!")
 	}
 
-	rootCAs, err := buildRootCertPool(logger, config, ca, attestor)
+	// Build root cert pool, including the CA bundle presented
+	// by the Attestor if the platform configuration file is allowing
+	// self-signed Attestor TLS certificates.
+	rootCAs, err := buildRootCertPool(logger, config, ca, attestorCN)
 	if err != nil {
 		return nil, err
 	}
 
-	clientCert, err := ca.X509KeyPair(domain, domain, serverPassword)
+	// Create key attributes using the configured web services
+	// TLS template algorithm. The gRPC TLS shares the same DNS
+	// and TLS / x509 certificate name as the web server, it
+	// simply binds to a different port.
+	attrs, ok := keystore.Templates[tlsAlgorithm]
+	if !ok {
+		return nil, keystore.ErrInvalidKeyAlgorithm
+	}
+	attrs.Domain = domain
+	attrs.CN = tlsCommonName
+	attrs.Password = serverPassword
+
+	// Get a TLS config from the CA
+	tlsConfig, err := ca.TLSConfig(attrs, true)
 	if err != nil {
+		logger.Error(err)
 		return nil, err
 	}
-
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: config.InsecureSkipVerify,
-		RootCAs:            rootCAs,
-		Certificates:       []tls.Certificate{clientCert},
-		ServerName:         attestor,
-		MinVersion:         tls.VersionTLS13,
-		MaxVersion:         tls.VersionTLS13,
-	}
+	tlsConfig.RootCAs = rootCAs
 
 	ce := credentials.NewTLS(tlsConfig)
 	conn, err := grpc.NewClient(socket, grpc.WithTransportCredentials(ce))
@@ -198,7 +218,7 @@ func buildRootCertPool(
 	logger *logging.Logger,
 	config config.Attestation,
 	ca ca.CertificateAuthority,
-	attestor string) (*x509.CertPool, error) {
+	attestorCN string) (*x509.CertPool, error) {
 
 	if config.ClientCACert != "" {
 		// Load client CA certs from location specified in config
@@ -214,14 +234,16 @@ func buildRootCertPool(
 		return rootCAs, nil
 	}
 
+	algorithm := ca.CAKeyAttributes(nil).KeyAlgorithm
+
 	if config.AllowAttestorSelfCA {
 		// Connect to the Attestor on insecure gRPC port and
 		// exchange CA bundles to prepare an mTLS connection
-		pool, err := ca.TrustedRootCertPool(false)
+		pool, err := ca.TrustedRootCertPool(algorithm, false)
 		if err != nil {
 			return nil, err
 		}
-		bundle, err := getAttestorCABundle(logger, config, ca, attestor)
+		bundle, err := getAttestorCABundle(logger, config, ca, attestorCN)
 		if err != nil {
 			return nil, err
 		}
@@ -239,7 +261,7 @@ func buildRootCertPool(
 	// trusted CA whose root certificates are installed in the
 	// Operating System trusted root store or a certificate issued
 	// from the Verifier / Service Provider's Certificate Authority.
-	return ca.TrustedRootCertPool(true)
+	return ca.TrustedRootCertPool(algorithm, true)
 }
 
 // Retrieves the CA certificate(s) used to sign the Attestor's
@@ -250,15 +272,15 @@ func getAttestorCABundle(
 	logger *logging.Logger,
 	config config.Attestation,
 	ca ca.CertificateAuthority,
-	attestor string) ([]byte, error) {
+	attestorCN string) ([]byte, error) {
 
 	// Get the verifiers CA bundle
-	bundle, err := ca.CABundle()
+	bundle, err := ca.CABundle(nil)
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := newInsecureGRPCClient(config, attestor)
+	conn, err := newInsecureGRPCClient(config, attestorCN)
 	if err != nil {
 		return nil, err
 	}
@@ -294,12 +316,11 @@ func (verifier *Verification) EKCert() (*x509.Certificate, error) {
 		return nil, err
 	}
 
-	cert, err := verifier.tpm.ImportDER(
-		verifier.attestor,
-		verifier.attestor,
-		response.Certificate,
-		true,
-		verifier.caPassword)
+	attrs := verifier.ca.CAKeyAttributes(nil)
+	attrs.Domain = verifier.attestorCN
+	attrs.CN = verifier.attestorCN
+
+	cert, err := verifier.tpm.ImportDER(attrs, response.Certificate, true)
 	if err != nil {
 		return nil, ErrImportEKCert
 	}
@@ -465,14 +486,19 @@ func (verifier *Verification) ActivateCredential(
 // the state is signed and saved to the CA's signed blob storage, the Attestation
 // Key's Public Key is imported into the key store, and an x509 certificate is
 // issued and provided to the Attestor.
-func (verifier *Verification) Quote(ak tpm2.DerivedKey) (tpm2.Quote, []byte, error) {
+func (verifier *Verification) Quote(ak tpm2.DerivedKey) (tpm2.Quote, []byte, keystore.X509Attributes, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), TLS_DEADLINE)
 	defer cancel()
 
+	attestationAttrs := keystore.X509Attributes{
+		CN:   verifier.attestorCN,
+		Type: keystore.X509_TYPE_REMOTE_ATTESTATION,
+	}
+
 	nonce, err := verifier.tpm.Random()
 	if err != nil {
-		return tpm2.Quote{}, nil, err
+		return tpm2.Quote{}, nil, attestationAttrs, err
 	}
 
 	// Request a quote using PCRs specified in config
@@ -485,13 +511,13 @@ func (verifier *Verification) Quote(ak tpm2.DerivedKey) (tpm2.Quote, []byte, err
 	response, err := verifier.secureAttestor.Quote(ctx, quoteRequest)
 	if err != nil {
 		verifier.logger.Error(err)
-		return tpm2.Quote{}, nil, err
+		return tpm2.Quote{}, nil, attestationAttrs, err
 	}
 
 	quote, err := verifier.tpm.DecodeQuote(response.Quote)
 	if err != nil {
 		verifier.logger.Error(err)
-		return tpm2.Quote{}, nil, err
+		return tpm2.Quote{}, nil, attestationAttrs, err
 	}
 
 	verifier.logger.Info("Quote received")
@@ -500,51 +526,42 @@ func (verifier *Verification) Quote(ak tpm2.DerivedKey) (tpm2.Quote, []byte, err
 
 		verifier.logger.Info("Beginning Open Enrollment")
 
+		caAttrs := verifier.ca.CAKeyAttributes(nil)
+		signerAttrs, err := keystore.Template(caAttrs.KeyAlgorithm)
+		signerAttrs.KeyType = keystore.KEY_TYPE_CA
+		signerAttrs.Domain = caAttrs.Domain
+		signerAttrs.CN = caAttrs.Domain
+		signerAttrs.AuthPassword = verifier.caPassword
+		signerAttrs.Password = []byte(verifier.app.WebService.Certificate.KeyPassword)
+		signerAttrs.X509Attributes = &attestationAttrs
+
 		// Sign and store the quote using the CA's private key
-		err = verifier.ca.ImportAttestationQuote(
-			verifier.attestor, response.Quote, verifier.caPassword)
+		err = verifier.ca.ImportAttestationQuote(signerAttrs, response.Quote)
 		if err != nil {
 			verifier.logger.Error(err)
-			return tpm2.Quote{}, nil, err
+			return tpm2.Quote{}, nil, attestationAttrs, err
 		}
 
 		// Sign and store the quote using the CA's private key
-		err = verifier.ca.ImportAttestationEventLog(
-			verifier.attestor, quote.EventLog, verifier.caPassword)
+		err = verifier.ca.ImportAttestationEventLog(signerAttrs, quote.EventLog)
 		if err != nil {
 			verifier.logger.Error(err)
-			return tpm2.Quote{}, nil, err
+			return tpm2.Quote{}, nil, attestationAttrs, err
 		}
 
 		// Sign and store the PCR state using the CA's private key
-		err = verifier.ca.ImportAttestationPCRs(
-			verifier.attestor, quote.PCRs, verifier.caPassword)
+		err = verifier.ca.ImportAttestationPCRs(signerAttrs, quote.PCRs)
 		if err != nil {
 			verifier.logger.Error(err)
-			return tpm2.Quote{}, nil, err
-		}
-
-		// Parse the public key
-		// TODO: Support ECC keys
-		var rsaPub *rsa.PublicKey
-		publicKey, err := x509.ParsePKIXPublicKey(quote.PublicKeyBytes)
-		if err != nil {
-			verifier.logger.Error(err)
-			return tpm2.Quote{}, nil, err
-		}
-		rsaPub = publicKey.(*rsa.PublicKey)
-
-		// Import the public key to the CA public key store
-		if err := verifier.ca.ImportPubKey(verifier.attestor, rsaPub); err != nil {
-			return tpm2.Quote{}, nil, err
+			return tpm2.Quote{}, nil, attestationAttrs, err
 		}
 	}
 
-	return quote, nonce, nil
+	return quote, nonce, attestationAttrs, nil
 }
 
-// Sends the issued x509 platform certifiate to the Attestor
-func (verifier *Verification) IssueCertificate(ak tpm2.DerivedKey, certDER []byte) error {
+// Generate and send new x509 platform certifiate to the Attestor
+func (verifier *Verification) IssueCertificate(ak tpm2.DerivedKey) error {
 
 	verifier.logger.Info("Issuing Attestation Key x509 certificate")
 
@@ -555,11 +572,19 @@ func (verifier *Verification) IssueCertificate(ak tpm2.DerivedKey, certDER []byt
 		idx = 1
 	}
 
+	// Use platform CA default key attributes / signing algorithm
+	signerAttrs := verifier.ca.CAKeyAttributes(nil)
+	signerAttrs.X509Attributes = &keystore.X509Attributes{
+		CN:   verifier.attestorCN,
+		Type: keystore.X509_TYPE_TLS,
+	}
+
 	// Generate the certificate request
 	certReq := ca.CertificateRequest{
-		Valid: verifier.ca.DefaultValidityPeriod(), // days
+		KeyAttributes: &signerAttrs,
+		Valid:         verifier.ca.DefaultValidityPeriod(), // days
 		Subject: ca.Subject{
-			CommonName:   verifier.attestor,
+			CommonName:   verifier.attestorCN,
 			Organization: verifier.app.CAConfig.Identity[idx].Subject.CommonName,
 			Country:      verifier.app.CAConfig.Identity[idx].Subject.Country,
 			Locality:     verifier.app.CAConfig.Identity[idx].Subject.Locality,
@@ -568,7 +593,7 @@ func (verifier *Verification) IssueCertificate(ak tpm2.DerivedKey, certDER []byt
 		},
 		SANS: &ca.SubjectAlternativeNames{
 			DNS: []string{
-				verifier.attestor,
+				verifier.attestorCN,
 			},
 			IPs: []string{},
 			Email: []string{
@@ -577,9 +602,7 @@ func (verifier *Verification) IssueCertificate(ak tpm2.DerivedKey, certDER []byt
 		},
 	}
 
-	// Include localhost SANS names -
-	// TODO: Refactor this to take an option provided by
-	// the attestor during enrollment
+	// Include localhost SANS names if configured to do so
 	if verifier.app.CAConfig.IncludeLocalhostInSANS {
 		ips, err := util.LocalAddresses()
 		if err != nil {
@@ -593,8 +616,7 @@ func (verifier *Verification) IssueCertificate(ak tpm2.DerivedKey, certDER []byt
 	}
 
 	// Issue the cert
-	certDER, err := verifier.ca.IssueCertificate(
-		certReq, verifier.caPassword, verifier.akCertPassword)
+	certDER, err := verifier.ca.IssueCertificate(certReq)
 	if err != nil {
 		verifier.logger.Error(err)
 		return err
@@ -639,13 +661,15 @@ func (verifier *Verification) importAndSignAK(ak tpm2.DerivedKey) error {
 		return err
 	}
 
-	// Create signing options that contain the AK PEM cert
-	// and blob storage parameters
-	sigOpts, err := ca.NewSigningOpts(crypto.SHA256, akBuffer.Bytes())
-	sigOpts.Password = verifier.caPassword
-	sigOpts.BlobKey = &akNameBlobKey
+	// Sign the AK PEM cert with the CA's private key
+	// and save it to blob storage with digest and checksum
+	sigOpts, err := keystore.NewSignerOpts(
+		verifier.ca.CAKeyAttributes(nil), akBuffer.Bytes())
+
+	// TODO: remove password
+	// sigOpts.Password = verifier.caPassword
+	sigOpts.BlobCN = &akNameBlobKey
 	sigOpts.BlobData = akBuffer.Bytes()
-	sigOpts.StoreSignature = true
 	if _, err = verifier.ca.Sign(
 		verifier.tpm.RandomReader(), sigOpts.Digest(), sigOpts); err != nil {
 		return err
@@ -704,21 +728,20 @@ func (verifier *Verification) Attest() error {
 	}
 
 	verifier.logger.Info("Requesting Quote (PCRs & Event Log)")
-	quote, nonce, err := verifier.Quote(activatedAK)
+	quote, nonce, attrs, err := verifier.Quote(activatedAK)
 	if err != nil {
 		verifier.logger.Error(err)
 		return err
 	}
 
-	var certDER []byte
 	verifier.logger.Info("Verifying Quote")
-	if err := verifier.tpm.VerifyQuote(verifier.attestor, quote, nonce); err != nil {
+	if err := verifier.tpm.VerifyQuote(attrs, quote, nonce); err != nil {
 		verifier.logger.Error(err)
 		return err
 	}
 
 	verifier.logger.Info("Issuing Attestor x509 device certificate")
-	if err := verifier.IssueCertificate(activatedAK, certDER); err != nil {
+	if err := verifier.IssueCertificate(activatedAK); err != nil {
 		verifier.logger.Error(err)
 		return err
 	}
@@ -737,5 +760,5 @@ func (verifier *Verification) debugAK(ak *pb.AKReply) {
 
 func (verifier *Verification) akBlobKey() string {
 	return fmt.Sprintf("tpm/%s/%s%s",
-		verifier.attestor, akBlobName, ca.FSEXT_DER)
+		verifier.attestorCN, akBlobName, store.FSEXT_DER)
 }

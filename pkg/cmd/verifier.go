@@ -21,21 +21,21 @@ var verifierCmd = &cobra.Command{
 	Short: "Starts the Verifier as a client",
 	Long:  `Performs Remote Attestation with the specified Attestor`,
 	Run: func(cmd *cobra.Command, args []string) {
-		var caPassword, serverPassword, akPassword []byte
-		if CAPassword != "" {
-			caPassword = []byte(CAPassword)
-		}
-		if ServerPassword != "" {
-			serverPassword = []byte(ServerPassword)
-		}
-		if VFAKPassword != "" {
-			akPassword = []byte(VFAKPassword)
-		}
+
+		// Initialize CA and TPM
+		App.InitCA()
+
+		// Create new verifier
 		verifier, err := verifier.NewVerifier(
-			App, VFAttestor, caPassword, serverPassword, akPassword)
+			App, VFAttestor,
+			[]byte(InitParams.CAPassword),
+			[]byte(InitParams.ServerPassword),
+			[]byte(VFAKPassword))
 		if err != nil {
 			App.Logger.Fatal(err)
 		}
+
+		// Perform remote attestation
 		if err := verifier.Attest(); err != nil {
 			App.Logger.Fatal(err)
 		}

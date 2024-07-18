@@ -17,6 +17,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/op/go-logging"
 
 	pb "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/proto"
@@ -52,28 +53,39 @@ type Attest struct {
 	verifierCertPool     *x509.CertPool
 	verifierCertPools    map[string]*x509.CertPool
 	verifierCertsMutex   sync.RWMutex
+	tlsAlgorithm         x509.PublicKeyAlgorithm
+	tlsCommonName        string
 	Attestor
 }
 
 // Entry-point when invoked directly
 func main() {
-	app := app.NewApp().Init(nil)
-	fListenAddress := *fListenAddress
-	caPassword := []byte(*fCaPassword)
-	serverPassword := []byte(*fServerPassword)
-	srkAuth := []byte(*fSrkAuth)
-	if _, err := NewAttestor(app, fListenAddress, caPassword, serverPassword, srkAuth); err != nil {
+
+	initParams := app.AppInitParams{}
+	initParams.CAPassword = *fCaPassword
+	initParams.ServerPassword = *fServerPassword
+	initParams.SRKAuth = *fSrkAuth
+	initParams.ListenAddress = *fListenAddress
+
+	app := app.NewApp().Init(&initParams)
+
+	if _, err := NewAttestor(app); err != nil {
 		app.Logger.Fatal(err)
 	}
 	// Run forever
 }
 
 // Creates a new Attestor (client role)
-func NewAttestor(app *app.App, listenAddress string, caPassword, serverPassword, srkAuth []byte) (Attestor, error) {
+func NewAttestor(app *app.App) (Attestor, error) {
 
 	var wg sync.WaitGroup
 	secureServerStopChan := make(chan bool)
 	verifierCertPools := make(map[string](*x509.CertPool), 0)
+
+	keyAlgo, err := keystore.ParseKeyAlgorithm(app.WebService.TLSKeyAlgorithm)
+	if err != nil {
+		return nil, err
+	}
 
 	attestor := &Attest{
 		logger:               app.Logger,
@@ -84,7 +96,9 @@ func NewAttestor(app *app.App, listenAddress string, caPassword, serverPassword,
 		debugSecrets:         app.DebugSecretsFlag,
 		verifierCertPools:    verifierCertPools,
 		verifierCertsMutex:   sync.RWMutex{},
-		secureServerStopChan: secureServerStopChan}
+		secureServerStopChan: secureServerStopChan,
+		tlsAlgorithm:         keyAlgo,
+		tlsCommonName:        app.WebService.Certificate.Subject.CommonName}
 
 	insecureService := &InsecureAttestor{
 		attestor: attestor,
@@ -106,8 +120,11 @@ func NewAttestor(app *app.App, listenAddress string, caPassword, serverPassword,
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		secureService := NewSecureAttestor(attestor, app, caPassword, srkAuth) // srkAuth
-		if err := attestor.newTLSGRPCServer(secureService, listenAddress, serverPassword); err != nil {
+		secureService := NewSecureAttestor(attestor, app) // srkAuth
+		if err := attestor.newTLSGRPCServer(
+			secureService,
+			app.InitParams.ListenAddress,
+			[]byte(app.InitParams.ServerPassword)); err != nil {
 			app.Logger.Fatal(err)
 		}
 	}()
@@ -134,8 +151,20 @@ func (attestor *Attest) newTLSGRPCServer(
 			attestor.domain, serverPassword)
 	}
 
-	tlsTemplate, err := attestor.ca.TLSConfig(
-		attestor.domain, attestor.domain, serverPassword, true)
+	// Create key attributes using the configured web services
+	// TLS template algorithm. The gRPC TLS shares the same DNS
+	// and TLS / x509 certificate name as the web server, it
+	// simply binds to a different port.
+	attrs, ok := keystore.Templates[attestor.tlsAlgorithm]
+	if !ok {
+		return keystore.ErrInvalidKeyAlgorithm
+	}
+	attrs.Domain = attestor.domain
+	attrs.CN = attestor.tlsCommonName
+	attrs.Password = serverPassword
+
+	// Get a TLS config from the CA
+	tlsConfig, err := attestor.ca.TLSConfig(attrs, false)
 	if err != nil {
 		attestor.logger.Error(err)
 		return err
@@ -145,7 +174,6 @@ func (attestor *Attest) newTLSGRPCServer(
 	// bundle and a custom config builder for the  Verifier (client) CA server certs
 	// that uses the verifierCertPools populated by the insecure gRPC server used
 	// to exchange CA bundles in preparation for this mTLS connection.
-	tlsConfig := tlsTemplate
 	tlsConfig.GetConfigForClient = func(info *tls.ClientHelloInfo) (*tls.Config, error) {
 		// The Verifier (client) CA certificates are retrieved from
 		// the verifierCertPools which are populated on the insecure
@@ -159,12 +187,12 @@ func (attestor *Attest) newTLSGRPCServer(
 		if !ok {
 			attestor.logger.Errorf(
 				"attestor: client CA certifiates not found for verifier: %s", verifierIP)
-			return tlsTemplate, nil
+			return tlsConfig, nil
 		}
 
 		attestor.logger.Debugf("attestor: loading %s client CA certificates", verifierIP)
 
-		clientTLS := tlsTemplate
+		clientTLS := tlsConfig
 		clientTLS.ClientAuth = tls.RequireAndVerifyClientCert
 		clientTLS.ClientCAs = pool
 		return clientTLS, nil

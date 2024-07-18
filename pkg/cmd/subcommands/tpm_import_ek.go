@@ -1,12 +1,15 @@
 package subcommands
 
 import (
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/spf13/cobra"
 )
 
 func init() {
-	TPMImportEKCmd.PersistentFlags().StringVarP(&EKCert, "file", "f", "", "The path to a TPM Endorsement Key certificate to import into the Certificate Authority")
-	TPMImportEKCmd.PersistentFlags().StringVarP(&SRKAuth, "srk-auth", "a", "", "The TPM Storage Root Key authorization password")
+	cobra.OnInitialize(func() {
+		TPMImportEKCmd.PersistentFlags().StringVarP(&InitParams.EKCert, "file", "f", "", "The path to a TPM Endorsement Key certificate to import into the Certificate Authority")
+		TPMImportEKCmd.PersistentFlags().StringVarP(&InitParams.SRKAuth, "srk-auth", "a", "", "The TPM Storage Root Key authorization password")
+	})
 }
 
 var TPMImportEKCmd = &cobra.Command{
@@ -35,13 +38,16 @@ to the Certificate Authority signed blob store. `,
 				App.Logger.Fatal(err)
 			}
 		}()
+
+		attrs := App.CA.CAKeyAttributes(nil)
+
 		// Import the cert
-		cert, err := App.TPM.EKCert([]byte(SRKAuth), []byte(CAPassword))
+		cert, err := App.TPM.EKCert(attrs)
 		if err != nil {
 			App.Logger.Fatal(err)
 		}
 		// Encode to PEM and print to the console
-		ekPEM, err := App.CA.EncodePEM(cert.Raw)
+		ekPEM, err := ca.EncodePEM(cert.Raw)
 		App.Logger.Info("Successfully imported Endorsement Public Key and Certificate")
 		App.Logger.Infof("PEM:\n%s", string(ekPEM))
 	},
