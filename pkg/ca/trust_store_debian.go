@@ -12,10 +12,10 @@ type DebianTrustStore struct {
 	logger   *logging.Logger
 	certDir  string
 	storeDir string
-	TrustStore
+	OSTrustStore
 }
 
-func NewDebianTrustStore(logger *logging.Logger, certDir string) TrustStore {
+func NewDebianTrustStore(logger *logging.Logger, certDir string) OSTrustStore {
 	return &DebianTrustStore{
 		logger:   logger,
 		certDir:  certDir,

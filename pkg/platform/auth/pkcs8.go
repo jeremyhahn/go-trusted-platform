@@ -47,19 +47,19 @@ func (authenticator PKCS8Authenticator) Authenticate(password []byte) error {
 	// into the platform without prompting for a password.
 	if authenticator.rootPassword != nil {
 		authenticator.warn(infoInsecureRootPassword)
-		_, err := authenticator.ca.CAPrivKey([]byte(authenticator.rootPassword))
+		_, err := authenticator.ca.CASigner(nil)
 		if err != nil {
 			return err
 		}
 	} else if authenticator.intermediatePassword != nil {
 		authenticator.warn(insecureIntermediatePassword)
-		_, err := authenticator.ca.CAPrivKey([]byte(authenticator.intermediatePassword))
+		_, err := authenticator.ca.CASigner(nil)
 		if err != nil {
 			return err
 		}
 	} else {
 		// Authenticate the user-provided password
-		if _, err := authenticator.ca.CAPrivKey(password); err != nil {
+		if _, err := authenticator.ca.CASigner(nil); err != nil {
 			return err
 		}
 	}
@@ -69,12 +69,12 @@ func (authenticator PKCS8Authenticator) Authenticate(password []byte) error {
 // Creates a new public / private key
 func (authenticator PKCS8Authenticator) Provision(cn string, password, caPassword []byte) error {
 	if authenticator.rootPassword != nil {
-		_, err := authenticator.ca.CAPrivKey([]byte(authenticator.rootPassword))
+		_, err := authenticator.ca.CASigner(nil)
 		if err != nil {
 			return err
 		}
 	} else if authenticator.intermediatePassword != nil {
-		_, err := authenticator.ca.CAPrivKey([]byte(authenticator.intermediatePassword))
+		_, err := authenticator.ca.CASigner(nil)
 		if err != nil {
 			return err
 		}

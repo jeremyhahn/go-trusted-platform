@@ -4,32 +4,39 @@ import (
 	"crypto/x509"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestECCIssueCertificateWithoutPrivateKeyPassword(t *testing.T) {
 
-	config, err := defaultConfig()
-	assert.Nil(t, err)
+	config := defaultConfig()
 	assert.NotNil(t, config)
 
 	// Set CA's default key algorithm to ECC
-	config.KeyAlgorithm = KEY_ALGO_ECC
+	config.DefaultKeyAlgorithm = x509.ECDSA.String()
+	config.SignatureAlgorithm = x509.ECDSAWithSHA256.String()
 
 	// Don't require passwords for these operations
 	config.RequirePrivateKeyPassword = false
 
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	_, rootCA, _, err := createService(config, rootPass, intermediatePass, true)
+	_, rootCA, _, err := createService(config, true)
 	defer cleanTempDir(config.Home)
 
 	assert.Nil(t, err)
 
-	domain := "www.domain.com"
+	caAttrs := rootCA.CAKeyAttributes(nil)
+	attrs, err := keystore.Template(caAttrs.KeyAlgorithm)
+	attrs.KeyType = keystore.KEY_TYPE_TLS
+	attrs.Domain = "example.com"
+	attrs.CN = "www.example.com"
+	attrs.AuthPassword = []byte(rootCA.Identity().KeyPassword)
+	attrs.Password = []byte("server-password")
 
+	domain := "www.domain.com"
 	certReq := CertificateRequest{
-		Valid: 365, // days
+		KeyAttributes: &attrs,
+		Valid:         365, // days
 		Subject: Subject{
 			CommonName:   domain,
 			Organization: "Example Corporation",
@@ -55,7 +62,7 @@ func TestECCIssueCertificateWithoutPrivateKeyPassword(t *testing.T) {
 	}
 	// Issue certificate using golang runtime random number
 	// generator when creating the private key
-	der, err := rootCA.IssueCertificate(certReq, rootPass, nil)
+	der, err := rootCA.IssueCertificate(certReq)
 	assert.Nil(t, err)
 	assert.NotNil(t, der)
 
@@ -67,25 +74,30 @@ func TestECCIssueCertificateWithoutPrivateKeyPassword(t *testing.T) {
 
 func TestECCIssueCertificateWithPrivateKeyPassword(t *testing.T) {
 
-	config, err := defaultConfig()
-	assert.Nil(t, err)
+	config := defaultConfig()
 	assert.NotNil(t, config)
 
 	// Set CA's default key algorithm to ECC
-	config.KeyAlgorithm = KEY_ALGO_ECC
+	config.DefaultKeyAlgorithm = x509.ECDSA.String()
+	config.SignatureAlgorithm = x509.ECDSAWithSHA256.String()
 
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	_, rootCA, _, err := createService(config, rootPass, intermediatePass, true)
+	_, rootCA, _, err := createService(config, true)
 	defer cleanTempDir(config.Home)
 
 	assert.Nil(t, err)
 
-	domain := "www.domain.com"
-	keyPass := []byte("cert-private-key-pass")
+	caAttrs := rootCA.CAKeyAttributes(nil)
+	attrs, err := keystore.Template(caAttrs.KeyAlgorithm)
+	attrs.KeyType = keystore.KEY_TYPE_TLS
+	attrs.Domain = "example.com"
+	attrs.CN = "www.example.com"
+	attrs.AuthPassword = []byte(rootCA.Identity().KeyPassword)
+	attrs.Password = []byte("server-password")
 
+	domain := "www.domain.com"
 	certReq := CertificateRequest{
-		Valid: 365, // days
+		KeyAttributes: &attrs,
+		Valid:         365, // days
 		Subject: Subject{
 			CommonName:   domain,
 			Organization: "Example Corporation",
@@ -111,7 +123,7 @@ func TestECCIssueCertificateWithPrivateKeyPassword(t *testing.T) {
 	}
 	// Issue certificate using golang runtime random number
 	// generator when creating the private key
-	der, err := rootCA.IssueCertificate(certReq, rootPass, keyPass)
+	der, err := rootCA.IssueCertificate(certReq)
 	assert.Nil(t, err)
 	assert.NotNil(t, der)
 
@@ -123,22 +135,19 @@ func TestECCIssueCertificateWithPrivateKeyPassword(t *testing.T) {
 
 func TestECCInit(t *testing.T) {
 
-	config, err := defaultConfig()
-	assert.Nil(t, err)
+	config := defaultConfig()
 	assert.NotNil(t, config)
 
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	logger, _, intermediateCA, err := createService(config, rootPass, intermediatePass, true)
+	params, _, intermediateCA, err := createService(config, true)
 	defer cleanTempDir(config.Home)
 
-	bundle, err := intermediateCA.CABundle()
+	bundle, err := intermediateCA.CABundle(nil)
 	assert.Nil(t, err)
 	assert.NotNil(t, bundle)
 
 	if err != nil {
-		logger.Error(err)
+		params.Logger.Error(err)
 	}
 
-	logger.Info(string(bundle))
+	params.Logger.Info(string(bundle))
 }

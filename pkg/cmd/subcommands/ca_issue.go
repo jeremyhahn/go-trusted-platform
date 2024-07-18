@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"
 )
@@ -49,21 +50,29 @@ var CAIssueCmd = &cobra.Command{
 			emails = strings.Split(CASansEmails, ",")
 		}
 
+		caAttrs := App.CA.CAKeyAttributes(nil)
+		attrs, err := keystore.Template(caAttrs.KeyAlgorithm)
+		attrs.KeyType = keystore.KEY_TYPE_TLS
+		attrs.Domain = "example.com"
+		attrs.CN = "www.example.com"
+		attrs.AuthPassword = []byte(InitParams.CAPassword)
+		attrs.Password = []byte(InitParams.ServerPassword)
+
 		request := ca.CertificateRequest{
-			Valid:   365, // days
-			Subject: subject,
+			KeyAttributes: &attrs,
+			Valid:         365, // days
+			Subject:       subject,
 			SANS: &ca.SubjectAlternativeNames{
 				DNS:   dnsNames,
 				IPs:   ips,
 				Email: emails}}
 
-		_, err = App.CA.IssueCertificate(
-			request, []byte(CAPassword), []byte(App.ServerPassword))
+		_, err = App.CA.IssueCertificate(request)
 		if err != nil {
 			App.Logger.Error(err)
 		}
 
-		cert, err := App.CA.PEM(CACertCN)
+		cert, err := App.CA.PEM(caAttrs)
 		if err != nil {
 			App.Logger.Error(err)
 		}

@@ -2,48 +2,57 @@ package ca
 
 import (
 	"crypto/rand"
-	"fmt"
+	"crypto/rsa"
+	"crypto/x509"
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/stretchr/testify/assert"
 )
 
-// Test RSA-PSS signing using the CA key
-func Test_CA_RSA_PSS(t *testing.T) {
+//
+// CA Signing key tests
+//
 
-	config, err := defaultConfig()
-	assert.Nil(t, err)
+// Test RSA signing with PKCS1v15 padding using the CA key
+func Test_CA_RSA_PKCS1v15(t *testing.T) {
+
+	config := defaultConfig()
 	assert.NotNil(t, config)
 
-	config.KeyAlgorithm = KEY_ALGO_RSA
-	config.RSAScheme = RSA_SCHEME_RSAPSS
-	config.SignatureAlgorithm = "SHA256WithRSA"
+	config.DefaultKeyAlgorithm = x509.RSA.String()
+	// config.RSAScheme = string(keystore.RSA_SCHEME_RSAPSS)
+	config.SignatureAlgorithm = x509.SHA256WithRSA.String()
 
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	_, _, intermediateCA, err := createService(config, rootPass, intermediatePass, true)
+	_, _, intermediateCA, err := createService(config, true)
 	defer cleanTempDir(config.Home)
 	assert.Nil(t, err)
 
 	// Create test data
-	cn := "test"
-	keyName := "app1"
 	data := []byte("hello\nworld\n")
 
-	sigKey, err := intermediateCA.NewRSASigningKey(cn, keyName, intermediatePass)
-	assert.Nil(t, err)
-	assert.NotNil(t, sigKey)
+	// Get the CA key attributes
+	caKeyAttributes := intermediateCA.CAKeyAttributes(nil)
 
-	opts, err := NewSigningOpts(intermediateCA.Hash(), data)
+	// Get the CA's signing key using its key attributes
+	caSigner, err := intermediateCA.SigningKey(caKeyAttributes)
+	assert.Nil(t, err)
+	assert.NotNil(t, caSigner)
+
+	// Create new signing opts to build the digest. The digest
+	// could also be built manually, but this method ensures the
+	// same hash function used to generate certificates is
+	// the same hash function used by the signer and verifier.
+	opts, err := keystore.NewSignerOpts(caKeyAttributes, data)
 	assert.Nil(t, err)
 
-	// Sign it
-	signature, err := sigKey.Sign(rand.Reader, data, opts)
+	// Sign the data using the CA's public key - NOT passing the
+	// opts, only using it's digest and hash function
+	signature, err := caSigner.Sign(rand.Reader, opts.Digest(), opts.HashFunc())
 	assert.Nil(t, err)
 	assert.NotNil(t, signature)
 
-	// Verify it
+	// Verify the signature using the CA's signing key
 	err = intermediateCA.VerifySignature(opts.Digest(), signature, nil)
 	assert.Nil(t, err)
 
@@ -52,53 +61,241 @@ func Test_CA_RSA_PSS(t *testing.T) {
 	assert.NotNil(t, intermediateCA.VerifySignature(newData, signature, nil))
 }
 
-// Test RSA-PSS with storage: store the digest and signature, verify
-// using stored key with specified signature
-func Test_SigningKey_RSA_PSS(t *testing.T) {
+func Test_CA_RSA_PKCS1v15_WithBlobStorage(t *testing.T) {
 
-	config, err := defaultConfig()
-	assert.Nil(t, err)
+	config := defaultConfig()
 	assert.NotNil(t, config)
 
-	config.KeyAlgorithm = KEY_ALGO_RSA
-	config.RSAScheme = RSA_SCHEME_RSAPSS
-	config.SignatureAlgorithm = "SHA256WithRSA"
+	config.DefaultKeyAlgorithm = x509.RSA.String()
+	// config.RSAScheme = string(keystore.RSA_SCHEME_RSAPSS)
+	config.SignatureAlgorithm = x509.SHA256WithRSA.String()
 
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	_, _, intermediateCA, err := createService(config, rootPass, intermediatePass, true)
+	_, _, intermediateCA, err := createService(config, true)
 	defer cleanTempDir(config.Home)
 	assert.Nil(t, err)
 
 	// Create test data
-	keyCN := "test"
-	keyName := "app1"
-	keyPass := []byte("app1-password")
+	blobCN := "/my/pkcs1v15/data.txt"
 	data := []byte("hello\nworld\n")
 
-	// Create signing options
-	opts, err := NewSigningOpts(intermediateCA.Hash(), data)
+	// Get the CA key attributes
+	caKeyAttributes := intermediateCA.CAKeyAttributes(nil)
+
+	// Get the CA's signing key using its key attributes
+	caSigner, err := intermediateCA.SigningKey(caKeyAttributes)
+	assert.Nil(t, err)
+	assert.NotNil(t, caSigner)
+
+	// Create new signing opts to build the digest. The digest
+	// could also be built manually, but this method ensures the
+	// same hash function used to generate certificates is
+	// the same hash function used by the signer and verifier.
+	opts, err := keystore.NewSignerOpts(caKeyAttributes, data)
 	assert.Nil(t, err)
 
-	// Set storage properties
-	opts.KeyCN = &keyCN
-	opts.KeyName = &keyName
+	// Set the blob CN so the signer persists the signature,
+	// digest, and a checksum
+	opts.BlobCN = &blobCN
 
-	verifyOpts := &VerifyOpts{
-		KeyCN:   &keyCN,
-		KeyName: &keyName,
+	// Set the blob data so the signer persists the blob data
+	opts.BlobData = data
+
+	// Sign the data using the CA's public key - NOT passing the
+	// opts, only using it's digest and hash function
+	signature, err := caSigner.Sign(rand.Reader, opts.Digest(), opts)
+	assert.Nil(t, err)
+	assert.NotNil(t, signature)
+
+	// Verify the signature using the CA's signing key
+	err = intermediateCA.VerifySignature(opts.Digest(), signature, nil)
+	assert.Nil(t, err)
+
+	// Ensure verification fails
+	newData := []byte("injected-malware")
+	assert.NotNil(t, intermediateCA.VerifySignature(newData, signature, nil))
+}
+
+func Test_CA_RSA_PSS(t *testing.T) {
+
+	config := defaultConfig()
+	assert.NotNil(t, config)
+
+	config.DefaultKeyAlgorithm = x509.RSA.String()
+	// config.RSAScheme = string(keystore.RSA_SCHEME_RSAPSS)
+	config.SignatureAlgorithm = x509.SHA256WithRSA.String()
+
+	_, _, intermediateCA, err := createService(config, true)
+	defer cleanTempDir(config.Home)
+	assert.Nil(t, err)
+
+	// Create test data
+	data := []byte("hello\nworld\n")
+
+	// Get the CA key attributes
+	caKeyAttributes := intermediateCA.CAKeyAttributes(nil)
+
+	// Get the CA's signing key using its key attributes
+	caSigner, err := intermediateCA.SigningKey(caKeyAttributes)
+	assert.Nil(t, err)
+	assert.NotNil(t, caSigner)
+
+	// Create new signing opts to build the digest. The digest
+	// could also be built manually, but this method ensures the
+	// same hash function used to generate certificates is
+	// the same hash function used by the signer and verifier.
+	opts, err := keystore.NewSignerOpts(caKeyAttributes, data)
+	assert.Nil(t, err)
+
+	// Create PSS options to pass to the signer
+	pssOpts := &rsa.PSSOptions{
+		SaltLength: rsa.PSSSaltLengthAuto,
+		Hash:       opts.HashFunc(),
 	}
 
-	key, err := intermediateCA.NewRSASigningKey(keyCN, keyName, keyPass)
+	// Sign the data using the CA's public key, passing PSS padding opts
+	signature, err := caSigner.Sign(rand.Reader, opts.Digest(), pssOpts)
+	assert.Nil(t, err)
+	assert.NotNil(t, signature)
+
+	// Create PSS padding verifier opts
+	verifyOpts := &keystore.VerifyOpts{
+		KeyAttributes: caKeyAttributes,
+		PSSOptions:    pssOpts,
+	}
+
+	// Verify the signature using the CA's signing key with PSS padding opts
+	err = intermediateCA.VerifySignature(opts.Digest(), signature, verifyOpts)
+	assert.Nil(t, err)
+
+	// Ensure verification fails
+	newData := []byte("injected-malware")
+	assert.NotNil(t, intermediateCA.VerifySignature(newData, signature, verifyOpts))
+}
+
+func Test_CA_RSA_PSS_WithBlobStorage(t *testing.T) {
+
+	config := defaultConfig()
+	assert.NotNil(t, config)
+
+	config.DefaultKeyAlgorithm = x509.RSA.String()
+	// config.RSAScheme = string(keystore.RSA_SCHEME_RSAPSS)
+	config.SignatureAlgorithm = x509.SHA256WithRSA.String()
+
+	_, _, intermediateCA, err := createService(config, true)
+	defer cleanTempDir(config.Home)
+	assert.Nil(t, err)
+
+	// Create test data
+	blobCN := "/my/pss/data.txt"
+	data := []byte("hello\nworld\n")
+
+	// Get the CA key attributes
+	caKeyAttributes := intermediateCA.CAKeyAttributes(nil)
+
+	// Get the CA's signing key using its key attributes
+	caSigner, err := intermediateCA.SigningKey(caKeyAttributes)
+	assert.Nil(t, err)
+	assert.NotNil(t, caSigner)
+
+	// Create new signing opts to build the digest. The digest
+	// could also be built manually, but this method ensures the
+	// same hash function used to generate certificates is
+	// the same hash function used by the signer and verifier.
+	opts, err := keystore.NewSignerOpts(caKeyAttributes, data)
+	assert.Nil(t, err)
+
+	// Create PSS options to pass to the signer
+	opts.PSSOptions = &rsa.PSSOptions{
+		SaltLength: rsa.PSSSaltLengthAuto,
+		Hash:       opts.HashFunc(),
+	}
+
+	// Set the blob CN so the signer persists the signature,
+	// digest, and a checksum
+	opts.BlobCN = &blobCN
+
+	// Set the blob data so the signer persists the blob data
+	opts.BlobData = data
+
+	// Sign the data using the CA's public key, passing PSS padding opts
+	signature, err := caSigner.Sign(rand.Reader, opts.Digest(), opts)
+	assert.Nil(t, err)
+	assert.NotNil(t, signature)
+
+	// Create PSS padding verifier opts
+	verifyOpts := &keystore.VerifyOpts{
+		KeyAttributes: caKeyAttributes,
+		PSSOptions:    opts.PSSOptions,
+	}
+
+	// Verify the signature using the CA's signing key with PSS padding opts
+	err = intermediateCA.VerifySignature(opts.Digest(), signature, verifyOpts)
+	assert.Nil(t, err)
+
+	// Ensure verification fails
+	newData := []byte("injected-malware")
+	assert.NotNil(t, intermediateCA.VerifySignature(newData, signature, verifyOpts))
+}
+
+//
+// Dedicated signing key tests
+//
+
+// Test RSA dedicated signing key using PKCS1v15 padding scheme
+func Test_SigningKey_RSA_PKCS1v15(t *testing.T) {
+
+	config := defaultConfig()
+	assert.NotNil(t, config)
+
+	config.DefaultKeyAlgorithm = x509.RSA.String()
+	// config.RSAScheme = string(keystore.RSA_SCHEME_RSAPSS)
+	config.SignatureAlgorithm = x509.SHA256WithRSA.String()
+
+	_, rootCA, intermediateCA, err := createService(config, true)
+	defer cleanTempDir(config.Home)
+	assert.Nil(t, err)
+
+	// Create test data
+	data := []byte("hello\nworld\n")
+
+	// Define key attributes
+	attrs := keystore.KeyAttributes{
+		// Pass the CA's password for PKCS #8
+		AuthPassword:       []byte(rootCA.Identity().KeyPassword),
+		Password:           []byte(intermediateCA.Identity().KeyPassword),
+		Domain:             "example.com",
+		CN:                 "app1",
+		KeyType:            keystore.KEY_TYPE_SIGNING,
+		Hash:               intermediateCA.Hash(),
+		KeyAlgorithm:       x509.RSA,
+		SignatureAlgorithm: x509.SHA256WithRSA,
+		RSAAttributes: &keystore.RSAAttributes{
+			KeySize: 512,
+			// KeyScheme: keystore.RSA_SCHEME_RSAPSS,
+		},
+	}
+
+	// Create the new dedicated signing key
+	key, err := intermediateCA.NewSigningKey(attrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, key)
 
-	// Sign it
+	// Create signing opts using the dedicated signing key
+	opts, err := keystore.NewSignerOpts(attrs, data)
+	assert.Nil(t, err)
+
+	// Sign the data digest using the dedicated signing key
 	signature, err := key.Sign(rand.Reader, opts.Digest(), opts)
 	assert.Nil(t, err)
 	assert.NotNil(t, signature)
 
-	// Verify it
+	// Set verifier opts that specify the dedicated signing key
+	verifyOpts := &keystore.VerifyOpts{
+		KeyAttributes: attrs,
+		// IntegrityCheck: true,
+	}
+
+	// Verify the signature using the dedicated signing key
 	err = intermediateCA.VerifySignature(opts.Digest(), signature, verifyOpts)
 	assert.Nil(t, err)
 
@@ -108,111 +305,273 @@ func Test_SigningKey_RSA_PSS(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
-// Test RSA-PSS with storage: store the digest and signature, verify
-// using stored signature.
-func Test_SigningKey_RSA_PSS_WithStorage(t *testing.T) {
+func Test_SigningKey_RSA_PKCS1v15_WithBlobStorage(t *testing.T) {
 
-	config, err := defaultConfig()
-	assert.Nil(t, err)
+	config := defaultConfig()
 	assert.NotNil(t, config)
 
-	config.KeyAlgorithm = KEY_ALGO_RSA
-	config.RSAScheme = RSA_SCHEME_RSAPSS
-	config.SignatureAlgorithm = "SHA256WithRSA"
+	config.DefaultKeyAlgorithm = x509.RSA.String()
+	// config.RSAScheme = string(keystore.RSA_SCHEME_RSAPSS)
+	config.SignatureAlgorithm = x509.SHA256WithRSA.String()
 
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	_, _, intermediateCA, err := createService(config, rootPass, intermediatePass, true)
+	_, rootCA, intermediateCA, err := createService(config, true)
 	defer cleanTempDir(config.Home)
 	assert.Nil(t, err)
 
 	// Create test data
-	blobKey := "/my/other/secret/data.dat"
+	blobCN := "/my/pkcs1v15/data.txt"
 	data := []byte("hello\nworld\n")
 
-	keyCN := "test.com"
-	keyName := "app1"
-	keyPass := []byte("app1-secret")
-
-	// Create signing options
-	opts, err := NewSigningOpts(intermediateCA.Hash(), data)
-	assert.Nil(t, err)
-
-	// Set storage properties
-	opts.KeyCN = &keyCN
-	opts.KeyName = &keyName
-	opts.BlobKey = &blobKey
-	opts.BlobData = data
-	opts.StoreSignature = true
-
-	verifyOpts := &VerifyOpts{
-		KeyCN:              &keyCN,
-		KeyName:            &keyName,
-		BlobKey:            &blobKey,
-		UseStoredSignature: true,
+	// Define key attributes
+	attrs := keystore.KeyAttributes{
+		// Pass the CA's password for PKCS #8
+		AuthPassword:       []byte(rootCA.Identity().KeyPassword),
+		Password:           []byte(intermediateCA.Identity().KeyPassword),
+		Domain:             "example.com",
+		CN:                 "app1",
+		KeyType:            keystore.KEY_TYPE_SIGNING,
+		Hash:               intermediateCA.Hash(),
+		KeyAlgorithm:       x509.RSA,
+		SignatureAlgorithm: x509.SHA256WithRSA,
+		RSAAttributes: &keystore.RSAAttributes{
+			KeySize: 512,
+			// KeyScheme: keystore.RSA_SCHEME_RSAPSS,
+		},
 	}
 
-	key, err := intermediateCA.NewRSASigningKey(keyCN, keyName, keyPass)
+	// Create the new dedicated signing key
+	key, err := intermediateCA.NewSigningKey(attrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, key)
 
-	// Sign it
+	// Create signing opts using the dedicated signing key
+	opts, err := keystore.NewSignerOpts(attrs, data)
+	assert.Nil(t, err)
+
+	// Set the blob CN so the signer persists the signature,
+	// digest, and a checksum
+	opts.BlobCN = &blobCN
+
+	// Set the blob data so the signer persists the blob data
+	opts.BlobData = data
+
+	// Sign the data digest using the dedicated signing key
 	signature, err := key.Sign(rand.Reader, opts.Digest(), opts)
 	assert.Nil(t, err)
 	assert.NotNil(t, signature)
 
-	// Verify it
-	err = intermediateCA.VerifySignature(opts.Digest(), nil, verifyOpts)
+	// Set verifier opts that specify the dedicated signing key
+	verifyOpts := &keystore.VerifyOpts{
+		KeyAttributes: attrs,
+		// BlobCN: blobCN,
+		// IntegrityCheck: true,
+	}
+
+	// Verify the signature using the dedicated signing key
+	err = intermediateCA.VerifySignature(opts.Digest(), signature, verifyOpts)
 	assert.Nil(t, err)
 
 	// Ensure verification fails
 	newData := []byte("injected-malware")
 	err = intermediateCA.VerifySignature(newData, nil, verifyOpts)
 	assert.NotNil(t, err)
-
-	// Ensure the blob exists
-	blobPath := fmt.Sprintf("%s/intermediate-ca/blobs/%s", config.Home, blobKey)
-	exists, err := util.FileExists(blobPath)
-	assert.Nil(t, err)
-	assert.True(t, exists)
 }
 
-func Test_SigningKey_ECDSA(t *testing.T) {
+// Test RSA dedicated signing key using PSS padding scheme
+func Test_SigningKey_RSA_PSS(t *testing.T) {
 
-	config, err := defaultConfig()
-	assert.Nil(t, err)
+	config := defaultConfig()
 	assert.NotNil(t, config)
 
-	config.KeyAlgorithm = KEY_ALGO_ECC
+	config.DefaultKeyAlgorithm = x509.RSA.String()
+	// config.RSAScheme = string(keystore.RSA_SCHEME_RSAPSS)
+	config.SignatureAlgorithm = x509.SHA256WithRSA.String()
 
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	_, _, intermediateCA, err := createService(config, rootPass, intermediatePass, true)
+	_, rootCA, intermediateCA, err := createService(config, true)
 	defer cleanTempDir(config.Home)
 	assert.Nil(t, err)
 
 	// Create test data
-	keyCN := "test"
-	keyName := "app1"
-	keyPass := []byte("app1-password")
 	data := []byte("hello\nworld\n")
 
-	// Create signing options
-	opts, err := NewSigningOpts(intermediateCA.Hash(), data)
+	// Define key attributes
+	attrs := keystore.KeyAttributes{
+		// Pass the CA's password for PKCS #8
+		AuthPassword:       []byte(rootCA.Identity().KeyPassword),
+		Password:           []byte(intermediateCA.Identity().KeyPassword),
+		Domain:             "example.com",
+		CN:                 "app1",
+		KeyType:            keystore.KEY_TYPE_SIGNING,
+		Hash:               intermediateCA.Hash(),
+		KeyAlgorithm:       x509.RSA,
+		SignatureAlgorithm: x509.SHA256WithRSA,
+		RSAAttributes: &keystore.RSAAttributes{
+			KeySize: 512,
+			// KeyScheme: keystore.RSA_SCHEME_RSAPSS,
+		},
+	}
+
+	// Create the new dedicated signing key
+	key, err := intermediateCA.NewSigningKey(attrs)
+	assert.Nil(t, err)
+	assert.NotNil(t, key)
+
+	// Create signing opts using the dedicated signing key
+	opts, err := keystore.NewSignerOpts(attrs, data)
 	assert.Nil(t, err)
 
-	// Set storage properties
-	opts.KeyCN = &keyCN
-	opts.KeyName = &keyName
+	// Add PSS options to the signing opts. Use the hash
+	// function defined by the dedicated signing key attributes.
+	opts.PSSOptions = &rsa.PSSOptions{
+		SaltLength: rsa.PSSSaltLengthAuto,
+		Hash:       attrs.Hash,
+	}
 
-	// Set the key to use for verification
-	verifyOpts := &VerifyOpts{
-		KeyCN:   &keyCN,
-		KeyName: &keyName,
+	// Sign the data digest using the dedicated signing key
+	signature, err := key.Sign(rand.Reader, opts.Digest(), opts)
+	assert.Nil(t, err)
+	assert.NotNil(t, signature)
+
+	// Set verifier opts that specify the dedicated signing key
+	verifyOpts := &keystore.VerifyOpts{
+		KeyAttributes: attrs,
+		PSSOptions:    opts.PSSOptions,
+		// IntegrityCheck: true,
+	}
+
+	// Verify the signature using the dedicated signing key
+	err = intermediateCA.VerifySignature(opts.Digest(), signature, verifyOpts)
+	assert.Nil(t, err)
+
+	// Ensure verification fails
+	newData := []byte("injected-malware")
+	err = intermediateCA.VerifySignature(newData, nil, verifyOpts)
+	assert.NotNil(t, err)
+}
+
+// Test RSA dedicated signing key using PSS padding scheme
+// with blob storage options
+func Test_SigningKey_RSA_PSS_WithBlobStorage(t *testing.T) {
+
+	config := defaultConfig()
+	assert.NotNil(t, config)
+
+	config.DefaultKeyAlgorithm = x509.RSA.String()
+	// config.RSAScheme = string(keystore.RSA_SCHEME_RSAPSS)
+	config.SignatureAlgorithm = x509.SHA256WithRSA.String()
+
+	_, rootCA, intermediateCA, err := createService(config, true)
+	defer cleanTempDir(config.Home)
+	assert.Nil(t, err)
+
+	// Create test data
+	blobCN := "/my/pss/data.txt"
+	data := []byte("hello\nworld\n")
+
+	// Define key attributes
+	attrs := keystore.KeyAttributes{
+		// Pass the CA's password for PKCS #8
+		AuthPassword:       []byte(rootCA.Identity().KeyPassword),
+		Password:           []byte(intermediateCA.Identity().KeyPassword),
+		Domain:             "example.com",
+		CN:                 "app1",
+		KeyType:            keystore.KEY_TYPE_SIGNING,
+		Hash:               intermediateCA.Hash(),
+		KeyAlgorithm:       x509.RSA,
+		SignatureAlgorithm: x509.SHA256WithRSA,
+		RSAAttributes: &keystore.RSAAttributes{
+			KeySize: 512,
+			// KeyScheme: keystore.RSA_SCHEME_RSAPSS,
+		},
+	}
+
+	// Create the new dedicated signing key
+	key, err := intermediateCA.NewSigningKey(attrs)
+	assert.Nil(t, err)
+	assert.NotNil(t, key)
+
+	// Create signing opts using the dedicated signing key
+	opts, err := keystore.NewSignerOpts(attrs, data)
+	assert.Nil(t, err)
+
+	// Add PSS options to the signing opts. Use the hash
+	// function defined by the dedicated signing key attributes.
+	opts.PSSOptions = &rsa.PSSOptions{
+		SaltLength: rsa.PSSSaltLengthAuto,
+		Hash:       attrs.Hash,
+	}
+
+	// Set the blob CN so the signer persists the signature,
+	// digest, and a checksum
+	opts.BlobCN = &blobCN
+
+	// Set the blob data so the signer persists the blob data
+	opts.BlobData = data
+
+	// Sign the data digest using the dedicated signing key
+	signature, err := key.Sign(rand.Reader, opts.Digest(), opts)
+	assert.Nil(t, err)
+	assert.NotNil(t, signature)
+
+	// Set verifier opts that specify the dedicated signing key
+	verifyOpts := &keystore.VerifyOpts{
+		KeyAttributes:  attrs,
+		PSSOptions:     opts.PSSOptions,
+		BlobCN:         blobCN,
+		IntegrityCheck: true,
+	}
+
+	// Verify the signature using the dedicated signing key
+	err = intermediateCA.VerifySignature(opts.Digest(), signature, verifyOpts)
+	assert.Nil(t, err)
+
+	// Ensure verification fails
+	newData := []byte("injected-malware")
+	err = intermediateCA.VerifySignature(newData, nil, verifyOpts)
+	assert.NotNil(t, err)
+}
+
+func Test_SigningKey_ECDSA(t *testing.T) {
+
+	config := defaultConfig()
+	assert.NotNil(t, config)
+
+	config.DefaultKeyAlgorithm = x509.ECDSA.String()
+	config.EllipticalCurve = string(keystore.CURVE_P256)
+	config.SignatureAlgorithm = x509.ECDSAWithSHA256.String()
+
+	_, rootCA, intermediateCA, err := createService(config, true)
+	defer cleanTempDir(config.Home)
+	assert.Nil(t, err)
+
+	// Create test data
+	data := []byte("hello\nworld\n")
+
+	// Create new key attributes using key store template
+	attrs, err := keystore.Template(x509.ECDSA)
+	attrs.KeyType = keystore.KEY_TYPE_SIGNING
+	assert.Nil(t, err)
+
+	// Set new signing key specific properties
+	attrs.AuthPassword = []byte(rootCA.Identity().KeyPassword)
+	attrs.Domain = "test.com"
+	attrs.CN = "app1"
+	attrs.Password = []byte("app1-secret")
+
+	// Create signing options
+	opts, err := keystore.NewSignerOpts(attrs, data)
+	assert.Nil(t, err)
+
+	// Set the signing options key attributes
+	opts.KeyAttributes = attrs
+
+	// Set the key attributes for verification
+	verifyOpts := &keystore.VerifyOpts{
+		KeyAttributes: attrs,
 	}
 
 	// Create new ECDSA signing key
-	sigKey, err := intermediateCA.NewECDSASigningKey(keyCN, keyName, keyPass)
+	sigKey, err := intermediateCA.NewSigningKey(attrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, sigKey)
 
@@ -232,44 +591,43 @@ func Test_SigningKey_ECDSA(t *testing.T) {
 
 func Test_SigningKey_ECDSA_WithStorage(t *testing.T) {
 
-	config, err := defaultConfig()
-	assert.Nil(t, err)
+	config := defaultConfig()
 	assert.NotNil(t, config)
 
-	config.KeyAlgorithm = KEY_ALGO_ECC
+	config.DefaultKeyAlgorithm = x509.ECDSA.String()
+	config.SignatureAlgorithm = x509.ECDSAWithSHA256.String()
 
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	_, _, intermediateCA, err := createService(config, rootPass, intermediatePass, true)
+	_, _, intermediateCA, err := createService(config, true)
 	defer cleanTempDir(config.Home)
 	assert.Nil(t, err)
 
-	// Create test data
-	keyCN := "test"
-	keyName := "app1"
-	keyPass := []byte("app1-password")
+	// Define key attributes
+	attrs := intermediateCA.CAKeyAttributes(nil)
+	attrs.Domain = "test.com"
+	attrs.CN = "app1"
+	attrs.Password = []byte("app1-secret")
+	attrs.KeyType = keystore.KEY_TYPE_SIGNING
+
+	// Define test data and storage path
 	blobKey := "/my/secret/data.dat"
 	data := []byte("hello\nworld\n")
 
 	// Create signing options
-	opts, err := NewSigningOpts(intermediateCA.Hash(), data)
+	opts, err := keystore.NewSignerOpts(attrs, data)
 	assert.Nil(t, err)
 
 	// Set storage properties
-	opts.KeyCN = &keyCN
-	opts.KeyName = &keyName
-	opts.BlobKey = &blobKey
+	opts.KeyAttributes = attrs
+	opts.BlobCN = &blobKey
 	opts.BlobData = data
-	opts.StoreSignature = true
 
-	verifyOpts := &VerifyOpts{
-		KeyCN:              &keyCN,
-		KeyName:            &keyName,
-		BlobKey:            &blobKey,
-		UseStoredSignature: true,
+	verifyOpts := &keystore.VerifyOpts{
+		KeyAttributes:  attrs,
+		BlobCN:         blobKey,
+		IntegrityCheck: true,
 	}
 
-	sigKey, err := intermediateCA.NewECDSASigningKey(keyCN, keyName, keyPass)
+	sigKey, err := intermediateCA.NewSigningKey(attrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, sigKey)
 
@@ -286,198 +644,39 @@ func Test_SigningKey_ECDSA_WithStorage(t *testing.T) {
 	newData := []byte("injected-malware")
 	assert.NotNil(t, intermediateCA.VerifySignature(newData, signature, nil))
 
-	// Ensure the blob exists
-	blobPath := fmt.Sprintf("%s/intermediate-ca/blobs/%s", config.Home, blobKey)
-	exists, err := util.FileExists(blobPath)
+	// Ensure the signed blob was persisted to blob storage
+	// and the CA is able to retrieve it
+	blob, err := intermediateCA.Blob(blobKey)
 	assert.Nil(t, err)
-	assert.True(t, exists)
-}
-
-func Test_CA_SignAndVerify_RSA_PKCS1v15(t *testing.T) {
-
-	config, err := defaultConfig()
-	assert.Nil(t, err)
-	assert.NotNil(t, config)
-
-	config.KeyAlgorithm = KEY_ALGO_RSA
-	config.RSAScheme = RSA_SCHEME_PKCS1v15
-	config.SignatureAlgorithm = "SHA256WithRSA"
-
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	_, rootCA, _, err := createService(config, rootPass, intermediatePass, true)
-	defer cleanTempDir(config.Home)
-	assert.Nil(t, err)
-
-	// Create test data
-	keyCN := "test"
-	keyName := "app1"
-	data := []byte("hello\nworld\n")
-
-	sigKey, err := rootCA.NewPKCS1v15SigningKey(keyCN, keyName, rootPass)
-	assert.Nil(t, err)
-	assert.NotNil(t, sigKey)
-
-	// Create signing options
-	opts, err := NewSigningOpts(rootCA.Hash(), data)
-	assert.Nil(t, err)
-
-	// Sign it
-	signature, err := sigKey.Sign(rand.Reader, opts.Digest(), opts)
-	assert.Nil(t, err)
-	assert.NotNil(t, signature)
-
-	// Verify it
-	assert.Nil(t, rootCA.VerifyPKCS1v15(opts.Digest(), signature, nil))
-
-	// Ensure verification fails
-	newData := []byte("injected-malware")
-	assert.NotNil(t, rootCA.VerifySignature(newData, signature, nil))
-}
-
-func Test_SigningKey_SignAndVerify_RSA_PKCS1v15(t *testing.T) {
-
-	config, err := defaultConfig()
-	assert.Nil(t, err)
-	assert.NotNil(t, config)
-
-	config.KeyAlgorithm = KEY_ALGO_RSA
-	config.RSAScheme = RSA_SCHEME_PKCS1v15
-	config.SignatureAlgorithm = "SHA256WithRSA"
-
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	_, rootCA, _, err := createService(config, rootPass, intermediatePass, true)
-	defer cleanTempDir(config.Home)
-	assert.Nil(t, err)
-
-	// Create test data
-	keyCN := "test"
-	keyName := "app1"
-	keyPass := []byte("app1-password")
-	data := []byte("hello\nworld\n")
-
-	// Create signing options
-	opts, err := NewSigningOpts(rootCA.Hash(), data)
-	assert.Nil(t, err)
-
-	// Set storage properties
-	opts.KeyCN = &keyCN
-	opts.KeyName = &keyName
-
-	verifyOpts := &VerifyOpts{
-		KeyCN:   &keyCN,
-		KeyName: &keyName,
-	}
-
-	// Create new signing key
-	key, err := rootCA.NewPKCS1v15SigningKey(keyCN, keyName, keyPass)
-	assert.Nil(t, err)
-	assert.NotNil(t, key)
-
-	// Sign test data
-	signature, err := key.Sign(rand.Reader, opts.Digest(), opts)
-	assert.Nil(t, err)
-	assert.NotNil(t, signature)
-
-	// Verify it
-	err = rootCA.VerifyPKCS1v15(opts.Digest(), signature, verifyOpts)
-	assert.Nil(t, err)
-
-	// Ensure verification fails
-	newData := []byte("injected-malware")
-	assert.NotNil(t, rootCA.VerifySignature(newData, signature, nil))
-}
-
-func Test_SigningKey_SignAndVerify_RSA_PKCS1v15_WithStorage(t *testing.T) {
-
-	config, err := defaultConfig()
-	assert.Nil(t, err)
-	assert.NotNil(t, config)
-
-	config.KeyAlgorithm = KEY_ALGO_RSA
-	config.RSAScheme = RSA_SCHEME_PKCS1v15
-	config.SignatureAlgorithm = "SHA256WithRSA"
-
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	_, rootCA, _, err := createService(config, rootPass, intermediatePass, true)
-	defer cleanTempDir(config.Home)
-	assert.Nil(t, err)
-
-	// Create test data
-	keyCN := "test"
-	keyName := "app1"
-	keyPass := []byte("app1-password")
-	blobKey := "/my/secret/data.dat"
-	data := []byte("hello\nworld\n")
-
-	// Create signing options
-	opts, err := NewSigningOpts(rootCA.Hash(), data)
-	assert.Nil(t, err)
-
-	// Set storage properties
-	opts.KeyCN = &keyCN
-	opts.KeyName = &keyName
-	opts.BlobKey = &blobKey
-	opts.BlobData = data
-	opts.StoreSignature = true
-
-	verifyOpts := &VerifyOpts{
-		KeyCN:              &keyCN,
-		KeyName:            &keyName,
-		BlobKey:            &blobKey,
-		UseStoredSignature: true,
-	}
-
-	// Create new signing key
-	key, err := rootCA.NewPKCS1v15SigningKey(keyCN, keyName, keyPass)
-	assert.Nil(t, err)
-	assert.NotNil(t, key)
-
-	// Sign test data
-	signature, err := key.Sign(rand.Reader, opts.Digest(), opts)
-	assert.Nil(t, err)
-	assert.NotNil(t, signature)
-
-	// Verify it
-	err = rootCA.VerifyPKCS1v15(opts.Digest(), signature, verifyOpts)
-	assert.Nil(t, err)
-
-	// Ensure verification fails
-	newData := []byte("injected-malware")
-	assert.NotNil(t, rootCA.VerifySignature(newData, signature, nil))
-
-	// 	// Ensure the blob exists
-	blobPath := fmt.Sprintf("%s/root-ca/blobs/%s", config.Home, blobKey)
-	exists, err := util.FileExists(blobPath)
-	assert.Nil(t, err)
-	assert.True(t, exists)
+	assert.True(t, len(blob) == 12)
 }
 
 func TestGetSigningKey(t *testing.T) {
 
-	config, err := defaultConfig()
-	assert.Nil(t, err)
+	config := defaultConfig()
 	assert.NotNil(t, config)
 
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	_, rootCA, _, err := createService(config, rootPass, intermediatePass, true)
+	config.DefaultKeyAlgorithm = x509.RSA.String()
+	// config.RSAScheme = string(keystore.RSA_SCHEME_RSAPSS)
+	config.SignatureAlgorithm = x509.SHA256WithRSA.String()
+
+	_, rootCA, _, err := createService(config, true)
 	defer cleanTempDir(config.Home)
 	assert.Nil(t, err)
 
-	keyCN := "test"
-	keyName := "app1"
-	keyPass := []byte("app1-password")
+	// Define key attributes
+	attrs := keystore.TemplateRSA
+	attrs.Domain = "test.com"
+	attrs.CN = "app1"
+	attrs.Password = []byte("app1-secret")
+	attrs.AuthPassword = []byte(rootCA.Identity().KeyPassword)
 
 	// Create new signing key
-	key, err := rootCA.NewPKCS1v15SigningKey(keyCN, keyName, keyPass)
+	key, err := rootCA.NewSigningKey(attrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, key)
 
 	// Retrieve the key from the store
-	sigKey, err := rootCA.SigningKey(keyCN, keyName, keyPass)
+	_, err = rootCA.SigningKey(attrs)
 	assert.Nil(t, err)
-	assert.Equal(t, keyPass, sigKey.password)
 }

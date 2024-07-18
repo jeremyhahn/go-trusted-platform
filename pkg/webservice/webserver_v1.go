@@ -1,11 +1,11 @@
 // @title Trusted Platform
 // @version v0.0.1
-// @description This is the RESTful Web Services API for Trusted Platform
+// @description The Trusted Platform RESTful Web Services API
 // @termsOfService https://www.trusted-platform.io/terms
 
 // @contact.name API Support
 // @contact.url https://www.trusted-platform.io/support
-// @contact.email support@trusted-platform.org
+// @contact.email support@trusted-platform.io
 
 // @license.name Apache 2.0
 // @license.url https://www.apache.org/licenses/LICENSE-2.0.txt
@@ -147,26 +147,24 @@ func (server *WebServerV1) startHttp() {
 
 func (server *WebServerV1) startHttps() {
 
-	sTlsPort := fmt.Sprintf(":%d", server.app.WebService.TLSPort)
-	message := fmt.Sprintf("webserver: starting secure web services on TLS port %s", sTlsPort)
+	sTlsAddr := fmt.Sprintf("%s:%d", server.app.ListenAddress, server.app.WebService.TLSPort)
+	message := fmt.Sprintf("webserver: starting secure TLS web services on %s", sTlsAddr)
 	server.app.Logger.Debugf(message)
 
 	// Retrieve a TLS config ready to go from the CA
-	tlsconf, err := server.app.CA.TLSConfig(
-		server.app.Domain,
-		server.app.Domain,
-		server.password,
-		false)
+	tlsconf, err := server.app.CA.TLSConfig(server.app.ServerKeyAttributes, false)
 	if err != nil {
 		server.app.Logger.Fatal(err)
 	}
 	server.httpServer.TLSConfig = tlsconf
 
 	// Create the TLS listener on the configured port
-	tlsListener, err := tls.Listen("tcp4", sTlsPort, tlsconf)
+	tlsListener, err := tls.Listen("tcp4", sTlsAddr, tlsconf)
 	if err != nil {
 		server.app.Logger.Fatalf("%s: %d", ErrBindPort, server.app.WebService.TLSPort)
 	}
+
+	server.app.Logger.Debugf("Lsitening for incoming web service connections on %s", sTlsAddr)
 
 	// Start the http server and start serving requests
 	err = server.httpServer.Serve(tlsListener)

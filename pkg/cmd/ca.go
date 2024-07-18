@@ -10,6 +10,9 @@ var (
 	CAInstallCACert,
 	CAUninstallCACert,
 	CAList bool
+	CACN,
+	CAKeyNAme,
+	CAAlgorithm,
 	CAPublicKey,
 	CAIssueCertificate,
 	CASubjectFile,
@@ -54,5 +57,6 @@ services to the platform. Create, install, issue, and revoke certificates
 or secure web services, mTLS, encryption, and perform identity management.`,
 	Run: func(cmd *cobra.Command, args []string) {
 
+		App.InitCA()
 	},
 }

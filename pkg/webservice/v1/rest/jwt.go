@@ -12,8 +12,8 @@ import (
 	jwt "github.com/dgrijalva/jwt-go"
 	"github.com/dgrijalva/jwt-go/request"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
@@ -31,6 +31,8 @@ type JWTService struct {
 	expiration     time.Duration
 	responseWriter response.HttpWriter
 	publicKey      *rsa.PublicKey
+	keyAttributes  keystore.KeyAttributes
+	keystore       keystore.KeyStorer
 	JsonWebTokenServicer
 	middleware.JsonWebTokenMiddleware
 }
@@ -51,36 +53,42 @@ type JsonWebToken struct {
 // Creates a new JsonWebTokenService with default configuration
 func NewJsonWebTokenService(
 	app *app.App,
+	keyAttributes keystore.KeyAttributes,
+	keystore keystore.KeyStorer,
 	responseWriter response.HttpWriter) (JsonWebTokenServicer, error) {
 
 	return CreateJsonWebTokenService(
 		app,
 		responseWriter,
-		app.WebService.JWTExpiration)
+		app.WebService.JWTExpiration,
+		keyAttributes,
+		keystore)
 }
 
 // Createa a new JsonWebBokenService with custom expiration
 func CreateJsonWebTokenService(
 	app *app.App,
 	responseWriter response.HttpWriter,
-	expiration int) (JsonWebTokenServicer, error) {
+	expiration int,
+	keyAttributes keystore.KeyAttributes,
+	keystore keystore.KeyStorer) (JsonWebTokenServicer, error) {
 
 	return &JWTService{
 		app:            app,
 		responseWriter: responseWriter,
-		expiration:     time.Duration(expiration)}, nil
+		expiration:     time.Duration(expiration),
+		keystore:       keystore,
+		keyAttributes:  keyAttributes}, nil
 }
 
-// Returns the RSA private key for the web server. This can be any key
-// that implements the crypto.PrivateKey interface, including opaque keys.
-func (jwtService *JWTService) privateKey() crypto.PrivateKey {
-	privKey, err := jwtService.app.CA.PrivKey(
-		// TODO: support pkcs8 and pkcs11 keys
-		jwtService.app.Domain, jwtService.app.Domain, nil, ca.PARTITION_ISSUED)
+// Returns a crypto.Signer backed by the underlying key store
+// opaque private key and web server TLS certificate.
+func (jwtService *JWTService) signer() crypto.Signer {
+	signer, err := jwtService.app.CA.Signer(jwtService.keyAttributes)
 	if err != nil {
 		jwtService.app.Logger.Fatal(err)
 	}
-	return privKey
+	return signer
 }
 
 // Creates a new web service session by parsing the organization and Service from
@@ -191,7 +199,7 @@ func (jwtService *JWTService) GenerateToken(w http.ResponseWriter, req *http.Req
 			IssuedAt:  time.Now().Unix(),
 			ExpiresAt: time.Now().Add(time.Minute * jwtService.expiration).Unix()}})
 
-	tokenString, err := token.SignedString(jwtService.privateKey())
+	tokenString, err := token.SignedString(jwtService.signer())
 	if err != nil {
 		jwtService.responseWriter.Write(w, req,
 			http.StatusInternalServerError, JsonWebToken{Error: "Error signing token"})
@@ -255,7 +263,7 @@ func (jwtService *JWTService) RefreshToken(w http.ResponseWriter, req *http.Requ
 					IssuedAt:  time.Now().Unix(),
 					ExpiresAt: time.Now().Add(time.Minute * jwtService.expiration).Unix()}})
 
-			tokenString, err := token.SignedString(jwtService.privateKey())
+			tokenString, err := token.SignedString(jwtService.signer())
 			if err != nil {
 				jwtService.responseWriter.Write(w, req, http.StatusInternalServerError,
 					JsonWebToken{Error: "Error signing token"})
