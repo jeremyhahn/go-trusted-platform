@@ -9,4 +9,6 @@ type Config struct {
 	UseSimulator      bool    `yaml:"simulator" json:"simulator" mapstructure:"simulator"`
 	AutoImportEKCerts bool    `yaml:"auto-import-ek-certs" json:"auto_import_ek_certs" mapstructure:"auto-import-ek-certs"`
 	AttestationPCRs   []int32 `yaml:"attestation-pcrs" json:"attestation_pcrs" mapstructure:"attestation-pcrs"`
+	EKAuth            string  `yaml:"ek-auth" json:"ek-auth" mapstructure:"ek-auth"`
+	SRKAuth           string  `yaml:"srk-auth" json:"srk-auth" mapstructure:"srk-auth"`
 }

@@ -29,7 +29,7 @@ owned by the CA: certificates, keys, blob storage, etc.`,
 			if err := os.RemoveAll(App.PlatformDir); err != nil {
 				App.Logger.Fatal(err)
 			}
-			App.Logger.Info("Paltform data successfully destroyed")
+			App.Logger.Info("Platform data successfully destroyed")
 		}
 
 		fmt.Println("")

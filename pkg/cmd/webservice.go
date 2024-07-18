@@ -22,13 +22,24 @@ var webserverCmd = &cobra.Command{
 
 		sigChan := make(chan os.Signal, 1)
 
-		restRegistry := rest.NewRestServiceRegistry(App)
-		webserver := webservice.NewWebServerV1(App, []byte(App.ServerPassword), restRegistry)
+		// Initialize the CA and TPM
+		App.InitCA()
 
+		// Build rest service registry
+		restRegistry := rest.NewRestServiceRegistry(App)
+		webserver := webservice.NewWebServerV1(
+			App,
+			[]byte(InitParams.ServerPassword),
+			restRegistry)
+
+		// Start the web server in a background goroutine
 		go webserver.Run()
 
-		signal.Notify(sigChan, syscall.SIGINT) // catch CTRL+C // syscall.SIGTERM, syscall.SIGHUP)
+		// Set CTRL+C handler to stop the web service and
+		// shut down the platform
+		signal.Notify(sigChan, syscall.SIGINT) //syscall.SIGTERM, syscall.SIGHUP)
 
+		// Wait for the signal notification
 		<-sigChan
 		close(sigChan)
 

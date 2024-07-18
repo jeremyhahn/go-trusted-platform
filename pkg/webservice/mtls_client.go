@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/op/go-logging"
 )
 
@@ -18,18 +19,15 @@ type MutualTLSClient struct {
 func NewMutalTLSClient(
 	logger *logging.Logger,
 	ca ca.CertificateAuthority,
-	cn string) *MutualTLSClient {
+	attrs keystore.KeyAttributes) MutualTLSClient {
 
-	client := &MutualTLSClient{
-		logger: logger,
-		ca:     ca}
-
+	client := MutualTLSClient{logger: logger, ca: ca}
 	client.http = http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
 				GetClientCertificate: func(
 					info *tls.CertificateRequestInfo) (*tls.Certificate, error) {
-					return client.certificate(cn)
+					return client.certificate(attrs)
 				},
 			},
 		},
@@ -39,7 +37,7 @@ func NewMutalTLSClient(
 }
 
 // Performs an HTTP GET request
-func (client *MutualTLSClient) Get(url string) ([]byte, error) {
+func (client MutualTLSClient) Get(url string) ([]byte, error) {
 
 	response, err := client.http.Get(url)
 	if err != nil {
@@ -58,11 +56,11 @@ func (client *MutualTLSClient) Get(url string) ([]byte, error) {
 }
 
 // Retrieves the mTLS client certificate from the Certificate Authority
-func (client *MutualTLSClient) certificate(cn string) (*tls.Certificate, error) {
+func (client MutualTLSClient) certificate(attrs keystore.KeyAttributes) (*tls.Certificate, error) {
 
-	client.logger.Infof("requesting client certificate: %s", cn)
+	client.logger.Infof("requesting client certificate: %s", attrs.CN)
 
-	cert, err := client.ca.Certificate(cn)
+	cert, err := client.ca.Certificate(attrs)
 	if err != nil {
 		return nil, err
 	}

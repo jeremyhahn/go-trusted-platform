@@ -20,7 +20,7 @@ to the operating system trusted certificate store.`,
 
 			App.Logger.Fatal(err)
 		}
-		intermediateCN := App.CAConfig.Identity[1].Subject.CommonName
+		intermediateCN := App.CAConfig.Identity[CAParams.SelectedCA].Subject.CommonName
 		if err := intermediateCA.TrustStore().Install(intermediateCN); err != nil {
 			App.Logger.Fatal(err)
 		}

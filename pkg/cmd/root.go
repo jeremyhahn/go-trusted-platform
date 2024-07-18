@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"crypto/rand"
 	"fmt"
 	"log"
 	"os"
@@ -17,22 +18,11 @@ import (
 )
 
 var (
-	App       *app.App
-	DebugFlag bool
-	CAParams  ca.CAParams
-	ConfigDir,
-	PlatformDir,
-	LogDir,
-	CADir,
-	RuntimeUser,
-	CAPassword,
-	RootPassword,
-	IntermediatePassword,
-	ServerPassword,
-	EKCert,
-	EKAuth,
-	SRKAuth string
+	App        *app.App
+	InitParams *app.AppInitParams
+	CAParams   ca.CAParams
 )
+
 var rootCmd = &cobra.Command{
 	Use:   app.Name,
 	Short: "The Trusted Platform",
@@ -53,46 +43,31 @@ func init() {
 
 	cobra.OnInitialize(func() {
 
-		// The caPassword is the password for the CA that will
-		// be used by the platform. This should be the Intermediate
-		// CA, but a single Root CA is supported as well. This can
-		// be useful for local development and testing.
-		if CAPassword == "" {
-			CAPassword = RootPassword
-			if IntermediatePassword != "" {
-				CAPassword = IntermediatePassword
-			}
-		}
-
 		// Initialize the platform
-		App = app.NewApp().Init(&app.AppInitParams{
-			Debug:                DebugFlag,
-			LogDir:               LogDir,
-			ConfigDir:            ConfigDir,
-			CADir:                CADir,
-			PlatformDir:          PlatformDir,
-			CAPassword:           CAPassword,
-			RootPassword:         RootPassword,
-			IntermediatePassword: IntermediatePassword,
-			ServerPassword:       ServerPassword,
-			EKCert:               EKCert,
-			EKAuth:               EKAuth,
-			SRKAuth:              SRKAuth,
-		})
+		App = app.NewApp().Init(InitParams)
 
 		// Initialize subcommand globals
 		CAParams := ca.CAParams{
-			Logger:               App.Logger,
-			Config:               &App.CAConfig,
-			Password:             []byte(CAPassword),
-			SelectedIntermediate: 1,
-			Random:               App.TPM.RandomReader(),
+			Logger:     App.Logger,
+			Config:     App.CAConfig,
+			SelectedCA: InitParams.SelectedCA,
+			Random:     rand.Reader,
 		}
+
+		// Use TPM for entropy if enabled
+		if App.TPM != nil {
+			CAParams.Random = App.TPM.RandomReader()
+		}
+
 		subcommands.App = App
-		subcommands.CAPassword = CAPassword
+		subcommands.InitParams = InitParams
 		subcommands.CAParams = CAParams
 		subcommands.TPM = App.TPM
 	})
+
+	// Set provided initialization parameters for
+	// commands package and program entry points
+	InitParams = &app.AppInitParams{}
 
 	wd, err := os.Getwd()
 	if err != nil {
@@ -100,20 +75,22 @@ func init() {
 	}
 
 	platformDir := fmt.Sprintf("%s/%s", wd, "trusted-data")
-	rootCmd.PersistentFlags().BoolVarP(&DebugFlag, "debug", "d", false, "Enable debug mode")
-	rootCmd.PersistentFlags().BoolVarP(&DebugFlag, "debug-secrets", "", false, "Enable secret debugging mode. Includes passwords and secrets in logs")
-	rootCmd.PersistentFlags().StringVarP(&PlatformDir, "platform-dir", "", platformDir, "Trusted Platform home directory where data is stored") // doesnt work as system daemon if not wd (defaults to /)
-	rootCmd.PersistentFlags().StringVarP(&ConfigDir, "config-dir", "", fmt.Sprintf("/etc/%s", app.Name), "Platform configuration file directory")
-	rootCmd.PersistentFlags().StringVarP(&LogDir, "log-dir", "", "trusted-data/log", "Platform logs directory")
-	rootCmd.PersistentFlags().StringVarP(&CADir, "ca-dir", "", "trusted-data/ca", "Certificate Authority data directory")
-	rootCmd.PersistentFlags().StringVarP(&RuntimeUser, "setuid", "", "root", "Ther operating system user to run as")
-	rootCmd.PersistentFlags().StringVarP(&CAPassword, "ca-password", "p", "", "Platform Certificate Authority private key password")
-	rootCmd.PersistentFlags().StringVarP(&RootPassword, "root-password", "r", "", "Root Certificate Authority private key password")
-	rootCmd.PersistentFlags().StringVarP(&IntermediatePassword, "intermediate-password", "i", "", "Intermediate Certificate Authority private key password")
-	rootCmd.PersistentFlags().StringVarP(&ServerPassword, "server-password", "s", "", "Web server TLS private key password")
-	rootCmd.PersistentFlags().StringVar(&EKCert, "ek-cert", "", "TPM Endorsement Key Certificate")
-	rootCmd.PersistentFlags().StringVar(&EKAuth, "ek-auth", "", "TPM Endorsement Key authorization password")
-	rootCmd.PersistentFlags().StringVar(&SRKAuth, "srk-auth", "", "TPM Storage Root Key authorization password")
+	rootCmd.PersistentFlags().BoolVarP(&InitParams.Debug, "debug", "d", false, "Enable debug mode")
+	rootCmd.PersistentFlags().BoolVarP(&InitParams.DebugSecrets, "debug-secrets", "", false, "Enable secret debugging mode. Includes passwords and secrets in logs")
+	rootCmd.PersistentFlags().StringVarP(&InitParams.PlatformDir, "platform-dir", "", platformDir, "Trusted Platform home directory where data is stored") // doesnt work as system daemon if not wd (defaults to /)
+	rootCmd.PersistentFlags().StringVarP(&InitParams.ConfigDir, "config-dir", "", fmt.Sprintf("/etc/%s", app.Name), "Platform configuration file directory")
+	rootCmd.PersistentFlags().StringVarP(&InitParams.LogDir, "log-dir", "", "trusted-data/log", "Platform logs directory")
+	rootCmd.PersistentFlags().StringVarP(&InitParams.CADir, "ca-dir", "", "trusted-data/ca", "Certificate Authority data directory")
+	rootCmd.PersistentFlags().StringVarP(&InitParams.RuntimeUser, "setuid", "", "root", "Ther operating system user to run as")
+	rootCmd.PersistentFlags().StringVarP(&InitParams.CAParentPassword, "ca-parent-password", "r", "", "Root or Parent Certificate Authority private key password")
+	rootCmd.PersistentFlags().StringVarP(&InitParams.CAPassword, "ca-password", "p", "", "Intermediate Certificate Authority private key password")
+	rootCmd.PersistentFlags().StringVarP(&InitParams.ServerPassword, "server-password", "s", "", "Web server TLS private key password")
+	rootCmd.PersistentFlags().StringVar(&InitParams.EKCert, "ek-cert", "", "TPM Endorsement Key Certificate")
+	rootCmd.PersistentFlags().StringVar(&InitParams.EKAuth, "ek-auth", "", "TPM Endorsement Key authorization password")
+	rootCmd.PersistentFlags().StringVar(&InitParams.SRKAuth, "srk-auth", "", "TPM Storage Root Key authorization password")
+	rootCmd.PersistentFlags().IntVarP(&InitParams.SelectedCA, "intermediate", "", 1, "The target Certificate Authority. This number is the Identity array index of the target CA.")
+	rootCmd.PersistentFlags().StringVarP(&InitParams.ListenAddress, "listen", "", "", "The listen address for platform services")
+	rootCmd.PersistentFlags().StringVarP(&InitParams.Domain, "domain", "", "", "The domain name for platform services")
 
 	viper.BindPFlags(rootCmd.PersistentFlags())
 

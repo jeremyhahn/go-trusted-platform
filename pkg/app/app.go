@@ -19,8 +19,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/argon2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/pkcs11"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/setup"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 )
@@ -30,31 +30,32 @@ var (
 )
 
 type App struct {
-	Domain               string                      `yaml:"domain" json:"domain" mapstructure:"domain"`
-	Hostmaster           string                      `yaml:"hostmaster" json:"hostmaster" mapstructure:"hostmaster"`
-	CA                   ca.CertificateAuthority     `yaml:"-" json:"-" mapstructure:"-"`
-	TPM                  tpm2.TrustedPlatformModule2 `yaml:"-" json:"-" mapstructure:"-"`
-	PKCS11               pkcs11.PKCS11
-	CAConfig             ca.Config           `yaml:"certificate-authority" json:"certificate_authority" mapstructure:"certificate-authority"`
-	TPMConfig            tpm2.Config         `yaml:"tpm" json:"tpm" mapstructure:"tpm"`
-	PKCS11Config         pkcs11.Config       `yaml:"pkcs11" json:"pkcs11" mapstructure:"pkcs11"`
-	AttestationConfig    config.Attestation  `yaml:"attestation" json:"attestation" mapstructure:"attestation"`
-	DebugFlag            bool                `yaml:"debug" json:"debug" mapstructure:"debug"`
-	DebugSecretsFlag     bool                `yaml:"debug-secrets" json:"debug-secrets" mapstructure:"debug-secrets"`
-	PlatformDir          string              `yaml:"platform-dir" json:"platform_dir" mapstructure:"platform-dir"`
-	ConfigDir            string              `yaml:"config-dir" json:"config_dir" mapstructure:"config-dir"`
-	LogDir               string              `yaml:"log-dir" json:"log_dir" mapstructure:"log-dir"`
-	Logger               *logging.Logger     `yaml:"-" json:"-" mapstructure:"-"`
-	RuntimeUser          string              `yaml:"runtime-user" json:"runtime_user" mapstructure:"runtime-user"`
-	Argon2               argon2.Argon2Params `yaml:"argon2" json:"argon2" mapstructure:"argon2"`
-	WebService           config.WebService   `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
-	PasswordPolicy       string              `yaml:"password-policy" json:"password-policy" mapstructure:"password-policy"`
-	RootPassword         string              `yaml:"root-password" json:"root_password" mapstructure:"root-password"`
-	IntermediatePassword string              `yaml:"intermediate-password" json:"intermediate_password" mapstructure:"intermediate-password"`
-	ServerPassword       string              `yaml:"server-password" json:"server_password" mapstructure:"server-password"`
-	EKAuth               string              `yaml:"ek-auth" json:"ek_auth mapstructure:"ek-auth"`
-	SRKAuth              string              `yaml:"srk-auth" json:"srk_auth mapstructure:"srk-auth"`
-	cAPassword           string
+	Argon2              argon2.Argon2Params         `yaml:"argon2" json:"argon2" mapstructure:"argon2"`
+	AttestationConfig   config.Attestation          `yaml:"attestation" json:"attestation" mapstructure:"attestation"`
+	CA                  ca.CertificateAuthority     `yaml:"-" json:"-" mapstructure:"-"`
+	CAConfig            ca.Config                   `yaml:"certificate-authority" json:"certificate_authority" mapstructure:"certificate-authority"`
+	CAKeyAttributes     keystore.KeyAttributes      `yaml:"-" json:"-" mapstructure:"-"`
+	ConfigDir           string                      `yaml:"config-dir" json:"config_dir" mapstructure:"config-dir"`
+	DebugFlag           bool                        `yaml:"debug" json:"debug" mapstructure:"debug"`
+	DebugSecretsFlag    bool                        `yaml:"debug-secrets" json:"debug-secrets" mapstructure:"debug-secrets"`
+	Domain              string                      `yaml:"domain" json:"domain" mapstructure:"domain"`
+	EKAuth              string                      `yaml:"ek-auth" json:"ek_auth" mapstructure:"ek-auth"`
+	FIPSMode            bool                        `yaml:"fips-mode" json:"fips-mode" mapstructure:"fips-mode"`
+	Hostmaster          string                      `yaml:"hostmaster" json:"hostmaster" mapstructure:"hostmaster"`
+	InitParams          AppInitParams               `yaml:"-" json:"-" mapstructure:"-"`
+	KeyStore            keystore.KeyStorer          `yaml:"-" json:"-" mapstructure:"-"`
+	ListenAddress       string                      `yaml:"listen" json:"listen" mapstructure:"listen"`
+	LogDir              string                      `yaml:"log-dir" json:"log_dir" mapstructure:"log-dir"`
+	Logger              *logging.Logger             `yaml:"-" json:"-" mapstructure:"-"`
+	PKCS11Config        pkcs11.Config               `yaml:"pkcs11" json:"pkcs11" mapstructure:"pkcs11"`
+	PasswordPolicy      string                      `yaml:"password-policy" json:"password-policy" mapstructure:"password-policy"`
+	PlatformDir         string                      `yaml:"platform-dir" json:"platform_dir" mapstructure:"platform-dir"`
+	RuntimeUser         string                      `yaml:"runtime-user" json:"runtime_user" mapstructure:"runtime-user"`
+	TPM                 tpm2.TrustedPlatformModule2 `yaml:"-" json:"-" mapstructure:"-"`
+	TPMConfig           tpm2.Config                 `yaml:"tpm" json:"tpm" mapstructure:"tpm"`
+	WebService          config.WebService           `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
+	ServerKeyAttributes keystore.KeyAttributes      `yaml:"-" json:"-" mapstructure:"-"`
+	cAPassword          string
 }
 
 func NewApp() *App {
@@ -62,18 +63,22 @@ func NewApp() *App {
 }
 
 type AppInitParams struct {
-	Debug                bool
-	LogDir               string
-	ConfigDir            string
-	PlatformDir          string
-	CADir                string
-	CAPassword           string
-	RootPassword         string
-	IntermediatePassword string
-	ServerPassword       string
-	EKCert               string
-	EKAuth               string
-	SRKAuth              string
+	Debug            bool
+	DebugSecrets     bool
+	LogDir           string
+	ConfigDir        string
+	PlatformDir      string
+	CADir            string
+	CAPassword       string
+	CAParentPassword string
+	RuntimeUser      string
+	SelectedCA       int
+	ServerPassword   string
+	EKCert           string
+	EKAuth           string
+	SRKAuth          string
+	ListenAddress    string
+	Domain           string
 }
 
 // Initialize the platform. Load the platform configuration file,
@@ -81,45 +86,45 @@ type AppInitParams struct {
 // and initialize the TPM.
 func (app *App) Init(initParams *AppInitParams) *App {
 	if initParams != nil {
+		app.InitParams = *initParams
 		app.DebugFlag = initParams.Debug
+		app.DebugSecretsFlag = initParams.DebugSecrets
 		app.PlatformDir = initParams.PlatformDir
 		app.ConfigDir = initParams.ConfigDir
 		app.LogDir = initParams.LogDir
 		app.CAConfig.Home = initParams.CADir
+		app.ListenAddress = initParams.ListenAddress
+		app.Domain = initParams.Domain
 	}
 	app.initConfig()
+
 	// Override initConfig with CLI options
 	if initParams.CADir != "" {
 		app.CAConfig.Home = initParams.CADir
 	}
-	if initParams.RootPassword != "" {
-		app.RootPassword = initParams.RootPassword
+	if initParams.CAParentPassword != "" {
+		app.CAConfig.Identity[0].KeyPassword = initParams.CAParentPassword
 	}
-	if initParams.IntermediatePassword != "" {
-		app.IntermediatePassword = initParams.IntermediatePassword
+	if initParams.CAPassword != "" {
+		app.CAConfig.Identity[initParams.SelectedCA].KeyPassword = initParams.CAPassword
+	}
+	if initParams.SelectedCA > 0 {
+		app.CAConfig.DefaultCA = initParams.SelectedCA
 	}
 	if initParams.ServerPassword != "" {
-		app.ServerPassword = initParams.ServerPassword
+		app.WebService.Certificate.KeyPassword = initParams.ServerPassword
 	}
 	if initParams.EKCert != "" {
 		app.TPMConfig.EKCert = initParams.EKCert
 	}
 	if initParams.EKAuth != "" {
-		app.SRKAuth = initParams.SRKAuth
+		app.TPMConfig.SRKAuth = initParams.SRKAuth
 	}
 	if initParams.SRKAuth != "" {
-		app.SRKAuth = initParams.SRKAuth
+		app.TPMConfig.SRKAuth = initParams.SRKAuth
 	}
-	caPassword := initParams.CAPassword
-	if caPassword == "" {
-		if app.IntermediatePassword != "" {
-			caPassword = app.IntermediatePassword
-		} else {
-			caPassword = app.RootPassword
-		}
-	}
+	initParams.DebugSecrets = app.DebugSecretsFlag
 	app.initLogger()
-	app.initCA([]byte(caPassword))
 	return app
 }
 
@@ -217,16 +222,10 @@ func (app *App) OpenTPM() error {
 // configuration option to encrypt the bus communication between the CPU <-> TPM.
 //
 // Any errors enountered during CA initialization are treated as Fatal.
-func (app *App) initCA(caPassword []byte) {
+func (app *App) InitCA() {
 
-	// Override passwords with user-defined passwords
-	// in configuration file, if provided
-	if app.RootPassword != "" {
-		app.Logger.Warning("Loading Root Certificate Authority private key password from config file")
-	}
-	if app.IntermediatePassword != "" {
-		app.Logger.Warning("Loading Intermediate Certificate Authority private key password from config file")
-	}
+	keystore.DebugAvailableHashes(app.Logger)
+	keystore.DebugAvailableSignatureAkgorithms(app.Logger)
 
 	// Open the TPM. Close it after CA initialization is complete
 	if err := app.OpenTPM(); err != nil {
@@ -255,121 +254,177 @@ func (app *App) initCA(caPassword []byte) {
 
 	// Instantiate Root and Intermediate CA(s)
 	params := ca.CAParams{
-		Debug:                app.DebugFlag,
-		DebugSecrets:         app.DebugSecretsFlag,
-		Logger:               app.Logger,
-		Config:               &app.CAConfig,
-		Password:             []byte(caPassword),
-		SelectedIntermediate: 1,
-		Random:               random,
+		Debug:        app.DebugFlag,
+		DebugSecrets: app.DebugSecretsFlag,
+		Domain:       app.Domain,
+		Logger:       app.Logger,
+		Config:       app.CAConfig,
+		SelectedCA:   app.InitParams.SelectedCA,
+		Random:       random,
 	}
+
+	var parentPassword, caPassword []byte
+	var platformCA ca.CertificateAuthority
+
 	rootCA, intermediateCA, err := ca.NewCA(params)
 	if err != nil {
 
 		if err == ca.ErrNotInitialized {
 
-			// Run platform setup to initialize the CA
-			platformSetup := setup.NewPlatformSetup(
-				Name,
-				app.Logger,
-				app.PasswordPolicy,
-				app.RootPassword,
-				app.IntermediatePassword,
-				app.CAConfig,
-				rootCA,
-				intermediateCA,
-				app.TPM)
+			// Load the configured key store
+			var platformSetup setup.PlatformSetup
+			if app.PKCS11Config.Library == "" {
+				// Use PKCS #8 key store
+				platformSetup = setup.NewPKCS8(
+					Name,
+					app.PasswordPolicy,
+					&params,
+					rootCA,
+					intermediateCA,
+					app.TPM)
+			} else {
+				// Use PKCS #11 key store
+				platformSetup = setup.NewPKCS11(
+					app.Logger,
+					app.CAConfig,
+					app.PKCS11Config)
+			}
 
 			// Run platform setup
-			caPassword = platformSetup.Setup()
+			platformCA = platformSetup.Setup()
 
 			// Inject the CA into the TPM instance
 			app.TPM.SetCertificateAuthority(intermediateCA)
 
+			// Create attestation x509 attributes
+			attestationAttrs := keystore.X509Attributes{
+				CN:   platformCA.Identity().Subject.CommonName,
+				Type: keystore.X509_TYPE_LOCAL_ATTESTATION,
+			}
+
 			// Perform local TPM quote, sign and store to CA blob storage
-			if _, err := app.TPM.LocalQuote(true, caPassword); err != nil {
+			if _, _, err := app.TPM.LocalQuote(attestationAttrs, true); err != nil {
 				app.Logger.Fatal(err)
 			}
+
+			caPassword = []byte(app.CAConfig.Identity[app.InitParams.SelectedCA].KeyPassword)
 
 			// Generate a new TLS server certificate for the
 			// web server. Any errors are treated as fatal.
-			app.InitWebServices(
-				intermediateCA,
-				caPassword,
-				[]byte(app.ServerPassword))
+			app.InitWebServices(intermediateCA)
 
 		} else {
-
-			// Set up the platform authenticator (PKCS #8)
-			// TODO: PKCS #11
-			pkcs8Authenticator := auth.NewPKCS8Authenticator(
-				app.Logger,
-				intermediateCA,
-				[]byte(app.RootPassword),
-				[]byte(app.IntermediatePassword))
-
-			if err := pkcs8Authenticator.Authenticate(caPassword); err != nil {
-				app.Logger.Fatal(err)
-			}
-
-			// Perform local system attestation
-			if err := app.TPM.AttestLocal(caPassword); err != nil {
-				// TODO: Re-seal the CA, run intrusion detection handlers,
-				// wipe the file system, etc in an attempt to mitigate the
-				// attack or unauthorized / unexpected changes.
-				app.Logger.Fatal(ErrInvalidLocalAttestationSignature)
-			}
+			app.Logger.Fatal(err)
 		}
-
-		// Inject the CA into the TPM instance
-		app.TPM.SetCertificateAuthority(intermediateCA)
 
 	} else {
 
+		parentPassword = []byte(app.CAConfig.Identity[0].KeyPassword)
+		caPassword = []byte(app.CAConfig.Identity[app.InitParams.SelectedCA].KeyPassword)
+
+		if rootCA != nil {
+			if err := rootCA.Load(nil); err != nil {
+				app.Logger.Fatal(err)
+			}
+		}
+
+		if intermediateCA != nil {
+			intermediateCA.Load(rootCA)
+			if err := intermediateCA.Load(rootCA); err != nil {
+				app.Logger.Fatal(err)
+			}
+		}
+
+		platformCA = intermediateCA
+		if platformCA == nil {
+			platformCA = rootCA
+		}
+
 		// Inject the CA into the TPM instance
-		app.TPM.SetCertificateAuthority(intermediateCA)
+		app.TPM.SetCertificateAuthority(platformCA)
+
+		// Create attestation x509 attributes
+		attestationAttrs := keystore.X509Attributes{
+			CN:   platformCA.Identity().Subject.CommonName,
+			Type: keystore.X509_TYPE_LOCAL_ATTESTATION,
+		}
+
+		// Perform local system attestation
+		if err := app.TPM.AttestLocal(attestationAttrs); err != nil {
+			// TODO: Re-seal the CA, run intrusion detection handlers,
+			// wipe the file system, etc in an attempt to mitigate the
+			// attack or unauthorized / unexpected changes.
+			app.Logger.Fatal(ErrInvalidLocalAttestationSignature)
+		}
 	}
 
+	// Set web server key attributes
+	serverKeyAttrs, err := keystore.TemplateFromString(app.WebService.TLSKeyAlgorithm)
+	if err != nil {
+		app.Logger.Fatal(err)
+	}
+	serverKeyAttrs.KeyType = keystore.KEY_TYPE_TLS
+	serverKeyAttrs.Domain = app.Domain
+	serverKeyAttrs.CN = app.WebService.Certificate.Subject.CommonName
+	serverKeyAttrs.AuthPassword = []byte(platformCA.Identity().KeyPassword)
+	serverKeyAttrs.Password = []byte(app.WebService.Certificate.KeyPassword)
+	serverKeyAttrs.X509Attributes = &keystore.X509Attributes{
+		CN:   app.WebService.Certificate.Subject.CommonName,
+		Type: keystore.X509_TYPE_TLS,
+	}
+	app.ServerKeyAttributes = serverKeyAttrs
+
 	if caPassword == nil {
-		app.Logger.Warningf("trusted-platform: proceeding as UNTRUSTED, INSECURE platform")
+		if app.CAConfig.RequirePrivateKeyPassword {
+			app.Logger.Fatal(ca.ErrPrivateKeyPasswordRequired)
+		}
+		app.Logger.Warningf("trusted-platform: proceeding as UNTRUSTED, INSECURE platform with empty CA credentials!")
 	}
 	if app.DebugSecretsFlag {
 		app.Logger.Debug("Starting platform using the following credentials:")
-		app.Logger.Debugf("Root CA: %s", app.RootPassword)
-		app.Logger.Debugf("Intermediate CA: %s", app.IntermediatePassword)
-		app.Logger.Debugf("Platform CA: %s", caPassword)
+		app.Logger.Debugf("Root CA: %s", parentPassword)
+		app.Logger.Debugf("Intermediate CA: %s", caPassword)
+		app.Logger.Debugf("Server TLS: %s", app.WebService.Certificate.KeyPassword)
 	}
 
 	// Set the platform CA
-	app.CA = intermediateCA
-
-	// Initialize the TPM
-	if err := app.TPM.Init([]byte(app.SRKAuth), []byte(caPassword)); err != nil {
-		app.Logger.Fatal(err)
-	}
+	app.CA = platformCA
 }
 
 // Check the CA for a TLS web server certificate. Create a new certificate
 // if it doesn't exist. Any encountered errors are treated as Fatal.
-func (app *App) InitWebServices(
-	_ca ca.CertificateAuthority,
-	caPassword, serverPassword []byte) {
+func (app *App) InitWebServices(_ca ca.CertificateAuthority) {
 
 	if app.DebugSecretsFlag {
 		app.Logger.Debug("Initializing web services")
-		app.Logger.Debugf("CA Private Key Password: %s", caPassword)
-		app.Logger.Debugf("TLS Private Key Password: %s", serverPassword)
+		app.Logger.Debugf("CA Private Key Password: %s", _ca.CAKeyAttributes(nil).Password)
+		app.Logger.Debugf("TLS Private Key Password: %s", app.ServerKeyAttributes.Password)
+	}
+
+	serverKeyAttrs, err := keystore.TemplateFromString(app.WebService.TLSKeyAlgorithm)
+	if err != nil {
+		app.Logger.Fatal(err)
+	}
+
+	serverKeyAttrs.Domain = app.Domain
+	serverKeyAttrs.CN = app.WebService.Certificate.Subject.CommonName
+	serverKeyAttrs.AuthPassword = []byte(_ca.Identity().KeyPassword)
+	serverKeyAttrs.Password = []byte(app.WebService.Certificate.KeyPassword)
+	serverKeyAttrs.X509Attributes = &keystore.X509Attributes{
+		CN:   app.WebService.Certificate.Subject.CommonName,
+		Type: keystore.X509_TYPE_TLS,
 	}
 
 	// Try to load the web services TLS cert
-	_, err := _ca.PEM(app.Domain)
+	_, err = _ca.PEM(serverKeyAttrs)
 	if err != nil {
 
 		// No cert, issue a platform server certificate for TLS encrypted web services
 		certReq := ca.CertificateRequest{
-			Valid: 365, // days
+			KeyAttributes: &serverKeyAttrs,
+			Valid:         365, // days
 			Subject: ca.Subject{
-				CommonName:   app.Domain,
+				CommonName:   app.WebService.Certificate.Subject.CommonName,
 				Organization: app.WebService.Certificate.Subject.Organization,
 				Country:      app.WebService.Certificate.Subject.Country,
 				Locality:     app.WebService.Certificate.Subject.Locality,
@@ -404,12 +459,11 @@ func (app *App) InitWebServices(
 		}
 
 		// Issue the web server certificate
-		if _, err = _ca.IssueCertificate(
-			certReq,
-			[]byte(caPassword),
-			[]byte(serverPassword)); err != nil {
+		if _, err = _ca.IssueCertificate(certReq); err != nil {
 			app.Logger.Fatal(err)
 		}
+
+		app.ServerKeyAttributes = serverKeyAttrs
 	}
 }
 
