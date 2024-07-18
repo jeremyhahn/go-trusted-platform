@@ -1,9 +1,10 @@
 package ca
 
 import (
-	"bytes"
-	"encoding/gob"
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 )
 
 var (
@@ -15,17 +16,20 @@ var (
 )
 
 // Imports a new TPM PEM encoded Endorsement Key into the certificate store
-func (ca *CA) ImportEndorsementKeyCertificate(ekCertPEM, caPassword []byte) error {
-	if ca.params.DebugSecrets {
-		ca.params.Logger.Debugf("ca/ImportEndorsementKeyCertificate: caPassword: %s", caPassword)
-	}
-	certName := fmt.Sprintf("ek-cert%s", FSEXT_PEM)
-	blobKey := ca.TPMBlobKey(ca.commonName, certName)
-	sigOpts, err := NewSigningOpts(ca.Hash(), ekCertPEM)
-	sigOpts.Password = caPassword
-	sigOpts.BlobKey = &blobKey
+func (ca *CA) ImportEndorsementKeyCertificate(attrs keystore.KeyAttributes, ekCertPEM []byte) error {
+
+	ca.params.Logger.Info("Importing Endorsement Key Certificate")
+
+	keystore.DebugKeyAttributes(ca.params.Logger, attrs)
+
+	certName := fmt.Sprintf("ek-cert%s", store.FSEXT_PEM)
+	attrs.CN = certName
+
+	blobKey := ca.TPMBlobKey(attrs)
+
+	sigOpts, err := keystore.NewSignerOpts(ca.CAKeyAttributes(nil), ekCertPEM)
+	sigOpts.BlobCN = &blobKey
 	sigOpts.BlobData = ekCertPEM
-	sigOpts.StoreSignature = true
 	if _, err = ca.Sign(ca.params.Random, sigOpts.Digest(), sigOpts); err != nil {
 		return err
 	}
@@ -34,20 +38,27 @@ func (ca *CA) ImportEndorsementKeyCertificate(ekCertPEM, caPassword []byte) erro
 
 // Returns the local TPM Endorsement Key x509 Certificate in PEM form
 func (ca *CA) EndorsementKeyCertificate() ([]byte, error) {
-	certName := fmt.Sprintf("ak-cert%s", FSEXT_PEM)
-	ekBlobKey := ca.TPMBlobKey(ca.commonName, certName)
-	certPEM, err := ca.SignedBlob(ekBlobKey)
+
+	ca.params.Logger.Info("Retrieving Endorsement Key Certificate")
+
+	attrs := ca.CAKeyAttributes(nil)
+	attrs.CN = fmt.Sprintf("ak-cert%s", store.FSEXT_PEM)
+
+	keystore.DebugKeyAttributes(ca.params.Logger, attrs)
+
+	ekBlobCN := ca.TPMBlobKey(attrs)
+	certPEM, err := ca.SignedBlob(ekBlobCN)
 	if err == nil {
 		// No need to perform integrity check on local file being
 		// loaded from a trusted file system. If an attacker can compromise
 		// the cert, they also have access to forge a signature to match
 		// the malicious cert and pass verification.
-		// signerOpts, err := NewSigningOpts(ca.Hash(), certPEM)
+		// signerOpts, err := NewSignerOpts(ca.Hash(), certPEM)
 		// if err != nil {
 		// 	return nil, err
 		// }
 		// verifyOpts := &VerifyOpts{
-		// 	BlobKey:            &ekBlobKey,
+		// 	BlobCN:            &ekBlobCN,
 		// 	UseStoredSignature: true,
 		// }
 		// if err := ca.VerifySignature(signerOpts.Digest(), nil, verifyOpts); err != nil {
@@ -55,7 +66,7 @@ func (ca *CA) EndorsementKeyCertificate() ([]byte, error) {
 		// }
 		ca.params.Logger.Info("certificate-authority: loading TPM Endorsement Key")
 		// Decode and return the signed and verified x509 EK cert from the CA
-		_, err = ca.DecodePEM(certPEM)
+		_, err = DecodePEM(certPEM)
 		if err != nil {
 			return nil, err
 		}
@@ -65,20 +76,26 @@ func (ca *CA) EndorsementKeyCertificate() ([]byte, error) {
 }
 
 // Imports a TPM Attestation Key x509 certificate to the TPM blob storage
-// partition. The certificate is encoded to PEM, signed by the CA public key.
-func (ca *CA) ImportAttestationKeyCertificate(domain, service string, akDER, caPassword []byte) error {
+// partition. The certificate is encoded to PEM, signed by the CA public key,
+// and saved to blob storage.
+func (ca *CA) ImportAttestationKeyCertificate(attrs keystore.KeyAttributes, akDER []byte) error {
 
-	akCertBlobName := "ak-cert"
-	// Build cert path
-	derFileName := fmt.Sprintf("%s%s", akCertBlobName, FSEXT_DER)
-	blobKeyDER := ca.TPMBlobKey(domain, derFileName)
+	ca.params.Logger.Info("Importing Attestation Key Certificate")
+	keystore.DebugKeyAttributes(ca.params.Logger, attrs)
+
+	akCertBlobName := "ak-cert%s"
+	attrs.CN = fmt.Sprintf(akCertBlobName, store.FSEXT_DER)
+	blobKeyDER := ca.TPMBlobKey(attrs)
+
+	// Default the domain to the common name if not provided
+	if attrs.Domain == "" {
+		return keystore.ErrDomainAttributeRequired
+	}
 
 	// Create signing options - store the cert, digest and checksum
-	sigOpts, err := NewSigningOpts(ca.Hash(), akDER)
-	sigOpts.Password = caPassword
-	sigOpts.BlobKey = &blobKeyDER
+	sigOpts, err := keystore.NewSignerOpts(ca.CAKeyAttributes(nil), akDER)
+	sigOpts.BlobCN = &blobKeyDER
 	sigOpts.BlobData = akDER
-	sigOpts.StoreSignature = true
 
 	// Sign the DER digest
 	if _, err = ca.Sign(ca.params.Random, sigOpts.Digest(), sigOpts); err != nil {
@@ -86,14 +103,14 @@ func (ca *CA) ImportAttestationKeyCertificate(domain, service string, akDER, caP
 	}
 
 	// Encode the AK DER cert to PEM
-	akPEM, err := ca.EncodePEM(akDER)
+	akPEM, err := EncodePEM(akDER)
 	if err != nil {
 		return err
 	}
 
 	// Save the PEM cert
-	pemFileName := fmt.Sprintf("%s%s", akCertBlobName, FSEXT_PEM)
-	blobKeyPEM := ca.TPMBlobKey(domain, pemFileName)
+	attrs.CN = fmt.Sprintf("%s%s", akCertBlobName, store.FSEXT_PEM)
+	blobKeyPEM := ca.TPMBlobKey(attrs)
 	if err := ca.ImportBlob(blobKeyPEM, akPEM); err != nil {
 		return err
 	}
@@ -101,185 +118,58 @@ func (ca *CA) ImportAttestationKeyCertificate(domain, service string, akDER, caP
 	return nil
 }
 
-func (ca *CA) VerifyAttestationQuote(cn string, quote []byte) error {
-	sigingOpts, err := NewSigningOpts(ca.Hash(), quote)
-	if err != nil {
-		return err
-	}
-	verifyOpts := &VerifyOpts{
-		BlobKey:            ca.quoteBlobKey(cn),
-		UseStoredSignature: true,
-	}
-	err = ca.VerifySignature(sigingOpts.Digest(), nil, verifyOpts)
-	if err != nil {
-		return err
-	}
-
-	// if !bytes.Equal(quote.EventLog, signedEventLog) {
-	// 	return ErrUnexpectedEventLogState
-	// }
-
-	return nil
-}
-
-func (ca *CA) VerifyAttestationEventLog(cn string, eventLog []byte) error {
-
-	// Use the CA's public key to verify
-	sigingOpts, err := NewSigningOpts(ca.Hash(), eventLog)
-	if err != nil {
-		return err
-	}
-
-	// Use the signature in blob storage for verification
-	verifyOpts := &VerifyOpts{
-		BlobKey:            ca.eventLogBlobKey(cn),
-		UseStoredSignature: true,
-	}
-
-	// Verify the event log using the new digest and stored signature
-	err = ca.VerifySignature(sigingOpts.Digest(), nil, verifyOpts)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// func (ca *CA) VerifyAttestationPCRs(cn string, pcrs map[string][][]byte) error {
-func (ca *CA) VerifyAttestationPCRs(cn string, pcrs []byte) error {
-
-	// Create signing opts to get a digest using the CA's configured
-	// hash function
-	sigingOpts, err := NewSigningOpts(ca.Hash(), pcrs)
-	if err != nil {
-		return err
-	}
-
-	// Use the stored signature for verification
-	verifyOpts := &VerifyOpts{
-		BlobKey:            ca.pcrsBlobKey(cn),
-		UseStoredSignature: true,
-	}
-
-	// Verify the PCRs using the new digest and stored signature
-	err = ca.VerifySignature(sigingOpts.Digest(), nil, verifyOpts)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// Returns the requested attestation blob from the signed blob storage
-func (ca *CA) AttestationSignature(cn, blobType string) ([]byte, error) {
-
-	var blobKey *string
-	switch blobType {
-
-	case ATTEST_BLOB_QUOTE:
-		blobKey = ca.quoteBlobKey(cn)
-
-	case ATTEST_BLOB_EVENTLOG:
-		blobKey = ca.eventLogBlobKey(cn)
-
-	case ATTEST_BLOB_PCRS:
-		blobKey = ca.pcrsBlobKey(cn)
-
-	default:
-		blobKey = &blobType
-		//return ErrInvalidAttestationBlobType
-	}
-
-	return ca.Signature(*blobKey)
-}
-
-// Returns the requested attestation quote from the signed blob store
-func (ca *CA) AttestationQuote(cn string) ([]byte, error) {
-	return ca.SignedBlob(*ca.quoteBlobKey(cn))
-}
-
-// Returns the requested attestation event log from the signed blob store
-func (ca *CA) AttestationEventLog(cn string) ([]byte, error) {
-	return ca.SignedBlob(*ca.eventLogBlobKey(cn))
-}
-
-// Returns the requested attestation pcr state from the signed blob store
-func (ca *CA) AttestationPCRs(cn string) (map[string][][]byte, error) {
-
-	// Get the signed PCR state
-	signedPCRs, err := ca.SignedBlob(*ca.pcrsBlobKey(cn))
-	if err != nil {
-		return nil, err
-	}
-
-	// De-gob the list
-	var pcrs map[string][][]byte
-	buf := bytes.NewBuffer(signedPCRs)
-	decoder := gob.NewDecoder(buf)
-	if err := decoder.Decode(&pcrs); err != nil {
-		return nil, err
-	}
-
-	return pcrs, nil
-}
-
 // Signs the requested quote using the CA public key and saves the
 // signature, digest and quote to the signed blob store.
-func (ca *CA) ImportAttestationQuote(cn string, data, caPassword []byte) error {
-	return ca.ImportAttestation(cn, ATTEST_BLOB_QUOTE, data, caPassword)
+func (ca *CA) ImportAttestationQuote(attestatomAttrs keystore.KeyAttributes, data []byte) error {
+	return ca.ImportAttestation(attestatomAttrs, ATTEST_BLOB_QUOTE, data)
 }
 
 // Signs the requested event log using the CA public key and saves the
 // signature, digest and event log to the signed blob store.
-func (ca *CA) ImportAttestationEventLog(cn string, data, caPassword []byte) error {
-	return ca.ImportAttestation(cn, ATTEST_BLOB_EVENTLOG, data, caPassword)
+func (ca *CA) ImportAttestationEventLog(attestatomAttrs keystore.KeyAttributes, data []byte) error {
+	return ca.ImportAttestation(attestatomAttrs, ATTEST_BLOB_EVENTLOG, data)
 }
 
 // Signs the requested PCR list using the CA public key and saves the
 // signature, digest and PCR list to the signed blob store.
-func (ca *CA) ImportAttestationPCRs(cn string, pcrs []byte, caPassword []byte) error {
-	return ca.ImportAttestation(cn, ATTEST_BLOB_PCRS, pcrs, caPassword)
+func (ca *CA) ImportAttestationPCRs(attestatomAttrs keystore.KeyAttributes, pcrs []byte) error {
+	return ca.ImportAttestation(attestatomAttrs, ATTEST_BLOB_PCRS, pcrs)
 }
 
 // Signs the requested blob type using the CA public key and saves the
 // signature, digest and blob to the signed blob store.
-func (ca *CA) ImportAttestation(cn, blobType string, data, caPassword []byte) error {
+func (ca *CA) ImportAttestation(attestatomAttrs keystore.KeyAttributes, blobType string, data []byte) error {
 
-	// Create signing options
-	opts, err := NewSigningOpts(ca.Hash(), data)
+	// Create signing options using default CA key attributes
+	opts, err := keystore.NewSignerOpts(attestatomAttrs, data)
 	if err != nil {
 		ca.params.Logger.Error(err)
 		return err
 	}
 
 	// Create attestation blob key based on the blob type
-	var blobKey *string
+	var blobKey string
 	switch blobType {
 
 	case ATTEST_BLOB_QUOTE:
-		blobKey = ca.quoteBlobKey(cn)
+		blobKey = ca.quoteBlobCN(attestatomAttrs.CN)
 
 	case ATTEST_BLOB_EVENTLOG:
-		blobKey = ca.eventLogBlobKey(cn)
+		blobKey = ca.eventLogBlobCN(attestatomAttrs.CN)
 
 	case ATTEST_BLOB_PCRS:
-		blobKey = ca.pcrsBlobKey(cn)
+		blobKey = ca.pcrsBlobCN(attestatomAttrs.CN)
 
 	default:
-		blobKey = &blobType
-		//return ErrInvalidAttestationBlobType
+		return ErrInvalidAttestationBlobType
 	}
 
 	// Set storage properties
-	// opts.KeyCN = &cn
-	// opts.KeyName = ca.akKeyName()
-	opts.Password = caPassword
-	opts.BlobKey = blobKey
+	opts.BlobCN = &blobKey
 	opts.BlobData = data
-	opts.StoreSignature = true
 
 	// Sign and store the requested data
-	_, err = ca.Sign(ca.params.Random, opts.Digest(), opts)
+	_, err = ca.Sign(ca.params.Random, nil, opts)
 	if err != nil {
 		return err
 	}
@@ -287,37 +177,107 @@ func (ca *CA) ImportAttestation(cn, blobType string, data, caPassword []byte) er
 	return nil
 }
 
+func (ca *CA) VerifyAttestationQuote(signerAttrs keystore.KeyAttributes, quote []byte) error {
+	signing, err := keystore.NewSignerOpts(ca.CAKeyAttributes(nil), quote)
+	if err != nil {
+		return err
+	}
+	verifyOpts := &keystore.VerifyOpts{
+		KeyAttributes: signerAttrs,
+		BlobCN:        ca.quoteBlobCN(signerAttrs.CN),
+	}
+	err = ca.VerifySignature(signing.Digest(), nil, verifyOpts)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (ca *CA) VerifyAttestationEventLog(signerAttrs keystore.KeyAttributes, eventLog []byte) error {
+
+	// Use the CA's public key to verify
+	opts, err := keystore.NewSignerOpts(signerAttrs, eventLog)
+	if err != nil {
+		return err
+	}
+
+	digest := opts.Digest()
+
+	// Use the signature in blob storage for verification
+	verifyOpts := &keystore.VerifyOpts{
+		KeyAttributes: signerAttrs,
+		BlobCN:        ca.eventLogBlobCN(signerAttrs.CN),
+	}
+
+	signature, err := ca.Sign(ca.params.Random, digest, opts)
+	if err != nil {
+		return err
+	}
+
+	// Verify the event log using the new digest and stored signature
+	err = ca.VerifySignature(digest, signature, verifyOpts)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (ca *CA) VerifyAttestationPCRs(signerAttrs keystore.KeyAttributes, pcrs []byte) error {
+
+	// Create signing opts to get a digest using the CA's configured
+	// hash function
+	opts, err := keystore.NewSignerOpts(ca.CAKeyAttributes(nil), pcrs)
+	if err != nil {
+		return err
+	}
+
+	digest := opts.Digest()
+
+	// Use the stored signature for verification
+	verifyOpts := &keystore.VerifyOpts{
+		KeyAttributes: signerAttrs,
+		BlobCN:        ca.pcrsBlobCN(signerAttrs.CN),
+	}
+
+	signature, err := ca.Sign(ca.params.Random, digest, opts)
+	if err != nil {
+		return err
+	}
+
+	// Verify the PCRs using the new digest and stored signature
+	err = ca.VerifySignature(digest, signature, verifyOpts)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Returns the relative path to the blob store for TPM
+// and attestation related blobs, given the owner's key
+// attributes.
+func (ca *CA) TPMBlobKey(attrs keystore.KeyAttributes) string {
+	//return fmt.Sprintf("tpm/%s/%s", attrs.CN, attrs.KeyName)
+	return fmt.Sprintf("tpm/%s/%s", attrs.CN, attrs.CN)
+}
+
 // Returns the file path for a TPM attestation blob given the device
 // common name and blob name
-func (ca *CA) akBlobKey(cn, blobType string) *string {
+func (ca *CA) akBlobKey(cn, blobType string) string {
 	path := fmt.Sprintf("%s/%s/%s",
 		ATTEST_BLOB_ROOT, cn, blobType)
-	return &path
+	return path
 }
 
-func (ca *CA) akKeyCN(cn string) *string {
-	return &cn
-}
-
-func (ca *CA) akKeyName() *string {
-	akKeyName := ATTEST_AK_NAME
-	return &akKeyName
-}
-
-func (ca *CA) quoteBlobKey(cn string) *string {
+func (ca *CA) quoteBlobCN(cn string) string {
 	return ca.akBlobKey(cn, ATTEST_BLOB_QUOTE)
 }
 
-func (ca *CA) eventLogBlobKey(cn string) *string {
+func (ca *CA) eventLogBlobCN(cn string) string {
 	return ca.akBlobKey(cn, ATTEST_BLOB_EVENTLOG)
 }
 
-func (ca *CA) pcrsBlobKey(cn string) *string {
+func (ca *CA) pcrsBlobCN(cn string) string {
 	return ca.akBlobKey(cn, ATTEST_BLOB_PCRS)
-}
-
-// Returns the relative path to the blob store for TPM objects
-// given a domain and common name for the object.
-func (ca *CA) TPMBlobKey(domain, cn string) string {
-	return fmt.Sprintf("tpm/%s/%s", domain, cn)
 }

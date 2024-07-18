@@ -14,90 +14,90 @@ import (
 
 	"github.com/op/go-logging"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 )
 
-var CERTS_DIR = "./certs"
+/*
+// Verify CA chain:
+
+	openssl verify \
+	  -CAfile testdata/root-ca/root-ca.crt \
+	  testdata/intermediate-ca/intermediate-ca.crt
+
+// Verify CA chain & server certificate:
+
+	openssl verify \
+	 -CAfile testdata/intermediate-ca/trusted-root/root-ca.crt \
+	 -untrusted testdata/intermediate-ca/intermediate-ca.crt \
+	 testdata/intermediate-ca/issued/localhost/localhost.crt
+
+// Verify EK chain & certificate:
+
+	openssl verify \
+	 -CAfile testdata/intermediate-ca/trusted-root/www.intel.com.crt \
+	 -untrusted testdata/intermediate-ca/trusted-intermediate/CNLEPIDPOSTB1LPPROD2_EK_Platform_Public_Key.crt \
+	 testdata/intermediate-ca/issued/tpm-ek/tpm-ek.crt
+*/
+
+var CERTS_DIR = "./testdata"
 var INTEL_CERT_URL = "https://trustedservices.intel.com/content/CRL/ekcert/CNLEPIDPOSTB1LPPROD2_EK_Platform_Public_Key.cer"
 var CLEAN_TMP = false
 
-func TestMain(m *testing.M) {
-	setup()
-	code := m.Run()
-	teardown()
-	os.Exit(code)
-}
-
-func teardown() {
-	// os.RemoveAll(CERTS_DIR)
-}
-
-func setup() {
-	os.RemoveAll(CERTS_DIR)
-}
-
 func TestLoad(t *testing.T) {
 
-	config, err := defaultConfig()
-	assert.Nil(t, err)
+	config := defaultConfig()
 	assert.NotNil(t, config)
 
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	logger, _, intermediateCA, err := createService(config, rootPass, intermediatePass, true)
+	params, _, intermediateCA, err := createService(config, true)
 	defer cleanTempDir(config.Home)
 
 	if err != nil {
-		logger.Fatal(err)
+		params.Logger.Fatal(err)
 	}
 
 	// Instantiate the CA using Init(), it should create a Root
 	// and Intermediate CA ready for use
-	config, err = defaultConfig() // call again to get new temp dir
-	assert.Nil(t, err)
+	config = defaultConfig() // call again to get new temp dir
 	assert.NotNil(t, config)
 
-	_, _, intermediateCA, err = createService(
-		config, rootPass, intermediatePass, true)
+	_, _, intermediateCA, err = createService(config, true)
 	defer cleanTempDir(config.Home)
 	assert.Nil(t, err)
 
 	// Get the CA bundle
-	bundle, err := intermediateCA.CABundle()
+	bundle, err := intermediateCA.CABundle(nil)
 	assert.Nil(t, err)
 	assert.NotNil(t, bundle)
 
-	logger.Info(string(bundle))
+	params.Logger.Info(string(bundle))
 }
 
 func TestInit(t *testing.T) {
 
-	config, err := defaultConfig()
-	assert.Nil(t, err)
+	config := defaultConfig()
 	assert.NotNil(t, config)
 
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	logger, rootCA, intermediateCA, err := createService(config, rootPass, intermediatePass, false)
+	params, rootCA, intermediateCA, err := createService(config, false)
 	defer cleanTempDir(config.Home)
 
 	assert.Equal(t, ErrNotInitialized, err)
 	assert.NotNil(t, rootCA)
 	assert.NotNil(t, intermediateCA)
 
-	rootPrivKey, rootCert, err := rootCA.Init(nil, nil, rootPass, rand.Reader)
+	rootCerts, err := rootCA.Init(nil)
 	assert.Nil(t, err)
-	assert.NotNil(t, rootPrivKey)
+	assert.NotNil(t, rootCerts)
 
-	intermediatePrivKey, intermediateCert, err := intermediateCA.Init(
-		rootPrivKey, rootCert, intermediatePass, rand.Reader)
+	intermediateCerts, err := intermediateCA.Init(rootCerts)
 	assert.Nil(t, err)
-	assert.NotNil(t, intermediatePrivKey)
-	assert.NotNil(t, intermediateCert)
+	assert.NotNil(t, intermediateCerts)
 
-	bundle, err := intermediateCA.CABundle()
+	bundle, err := intermediateCA.CABundle(nil)
 	assert.NotNil(t, bundle)
 
-	logger.Info(string(bundle))
+	params.Logger.Info(string(bundle))
 }
 
 func TestPasswordComplexity(t *testing.T) {
@@ -119,13 +119,10 @@ func TestPasswordComplexity(t *testing.T) {
 
 func TestImportIssuingCAs(t *testing.T) {
 
-	config, err := defaultConfig()
-	assert.Nil(t, err)
+	config := defaultConfig()
 	assert.NotNil(t, config)
 
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	_, rootCA, _, err := createService(config, rootPass, intermediatePass, true)
+	_, _, intermediateCA, err := createService(config, true)
 	defer cleanTempDir(config.Home)
 	assert.Nil(t, err)
 
@@ -146,26 +143,27 @@ func TestImportIssuingCAs(t *testing.T) {
 
 	leafCN := "www.intel.com"
 
-	err = rootCA.ImportIssuingCAs(cert, &leafCN, nil)
+	err = intermediateCA.ImportIssuingCAs(cert, &leafCN, nil)
 	assert.Nil(t, err)
 
-	err = rootCA.ImportIssuingCAs(cert, &leafCN, nil)
+	err = intermediateCA.ImportIssuingCAs(cert, &leafCN, nil)
 	assert.Equal(t, ErrTrustExists, err)
 
-	importedCert, err := rootCA.TrustedRootCertificate(cert.Subject.CommonName)
+	attrs, _ := keystore.Template(intermediateCA.DefaultKeyAlgorithm())
+	attrs.Domain = "EKRootPublicKey"
+	attrs.KeyType = keystore.KEY_TYPE_NULL
+	importedCert, err := intermediateCA.TrustedRootCertificate(attrs, store.FSEXT_DER)
+
 	assert.Nil(t, err)
 	assert.Equal(t, cert.Subject.CommonName, importedCert.Subject.CommonName)
 }
 
 func TestDownloadDistribuitionCRLs(t *testing.T) {
 
-	config, err := defaultConfig()
-	assert.Nil(t, err)
+	config := defaultConfig()
 	assert.NotNil(t, config)
 
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	_, rootCA, _, err := createService(config, rootPass, intermediatePass, true)
+	_, rootCA, _, err := createService(config, true)
 	defer cleanTempDir(config.Home)
 	assert.Nil(t, err)
 
@@ -184,38 +182,43 @@ func TestDownloadDistribuitionCRLs(t *testing.T) {
 	cert, err := x509.ParseCertificate(bufBytes)
 	assert.Nil(t, err)
 
+	// Import it
 	err = rootCA.ImportDistrbutionCRLs(cert)
 	assert.Nil(t, err)
 
+	// Import it again and make sure it fails with already exists
 	err2 := rootCA.ImportDistrbutionCRLs(cert)
 	assert.Equal(t, ErrCRLAlreadyExists, err2)
 }
 
 func TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 
-	config, err := defaultConfig()
-	assert.Nil(t, err)
+	config := defaultConfig()
 	assert.NotNil(t, config)
 
 	// Don't require passwords for this test
 	config.RequirePrivateKeyPassword = false
 
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	_, _, intermediateCA, err := createService(config, rootPass, intermediatePass, true)
+	_, rootCA, intermediateCA, err := createService(config, true)
 	defer cleanTempDir(config.Home)
 
-	// Get the CA public key
-	publicKey, err := intermediateCA.CAPubKey()
-	assert.Nil(t, err)
-	assert.NotNil(t, publicKey)
+	publicKey := intermediateCA.Public()
+	caAttrs := intermediateCA.CAKeyAttributes(nil)
+
+	attrs, err := keystore.Template(caAttrs.KeyAlgorithm)
+	attrs.KeyType = keystore.KEY_TYPE_TLS
+	attrs.Domain = "example.com"
+	attrs.CN = "www.example.com"
+	attrs.AuthPassword = []byte(rootCA.Identity().KeyPassword)
+	attrs.Password = []byte("server-password")
 
 	// openssl rsa -in testorg.example.com.key -check
 	// openssl x509 -in testorg.example.com.crt -text -noout
 	certReq := CertificateRequest{
-		Valid: 365, // 1 days
+		KeyAttributes: &attrs,
+		Valid:         365, // 1 days
 		Subject: Subject{
-			CommonName:         "testorg.example.com",
+			CommonName:         attrs.CN,
 			Organization:       "Test Organization",
 			OrganizationalUnit: "Web Services",
 			Country:            "US",
@@ -237,79 +240,18 @@ func TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 		},
 	}
 
-	// Issue certificate using golang random number genrator
-	// go generate the private key
-	keypair, err := intermediateCA.IssueCertificate(certReq, intermediatePass, nil)
-	assert.Nil(t, err)
-	assert.NotNil(t, keypair)
-
 	// openssl req -in testme.example.com.csr -noout -text
-	csrBytes, err := intermediateCA.CreateCSR(
-		"me@mydomain.com",
-		CertificateRequest{
-			Valid: 365, // 1 days
-			Subject: Subject{
-				CommonName:         "testme.example.com",
-				Organization:       "Customer Organization",
-				OrganizationalUnit: "Farming",
-				Country:            "US",
-				Locality:           "California",
-				Address:            "123 farming street",
-				PostalCode:         "01210",
-			},
-			SANS: &SubjectAlternativeNames{
-				DNS: []string{
-					"localhost",
-					"localhost.localdomain",
-					"localhost.testme",
-				},
-				IPs: []string{
-					"127.0.0.1",
-					"192.168.1.10",
-				},
-				Email: []string{
-					"user@testme.com",
-					"info@testme.com",
-				},
-			},
-		}, intermediatePass)
+	csrBytes, err := intermediateCA.CreateCSR(certReq)
 	assert.Nil(t, err)
 	assert.NotNil(t, csrBytes)
 
 	// openssl x509 -in testme.example.com.crt -text -noout
-	certBytes, err := intermediateCA.SignCSR(
-		csrBytes,
-		CertificateRequest{
-			Valid: 365, // 1 days
-			Subject: Subject{
-				CommonName:         "testme.example.com",
-				Organization:       "Customer Organization",
-				OrganizationalUnit: "Farming",
-				Country:            "US",
-				Locality:           "California",
-				Address:            "123 farming street",
-				PostalCode:         "01210",
-			},
-			SANS: &SubjectAlternativeNames{
-				DNS: []string{
-					"localhost",
-					"localhost.localdomain",
-					"localhost.testme",
-				},
-				IPs: []string{
-					"127.0.0.1",
-					"192.168.1.10",
-				},
-				Email: []string{
-					"user@testme.com",
-					"info@testme.com",
-				},
-			},
-		}, intermediatePass)
+	certBytes, err := intermediateCA.SignCSR(csrBytes, certReq)
 	assert.Nil(t, err)
 	assert.NotNil(t, certBytes)
 
-	cert, err := intermediateCA.DecodePEM(certBytes)
+	// Decode from PEM to ASN.1 DER
+	cert, err := DecodePEM(certBytes)
 	assert.Nil(t, err)
 	assert.NotNil(t, cert)
 
@@ -318,18 +260,20 @@ func TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 	assert.Nil(t, err)
 	assert.True(t, valid)
 
-	// Get the cert *rsa.PublicKey
-	publicKey, err = intermediateCA.PubKey("testme.example.com")
+	// Get the cert crypto.PublicKey
+	publicKey, err = intermediateCA.PubKey(attrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, publicKey)
 
 	// Removke the cert
-	err = intermediateCA.Revoke("testme.example.com", intermediatePass)
+	err = intermediateCA.Revoke(attrs)
 	assert.Nil(t, err)
 
 	// Revoke the certificate again to ensure it errors
-	err = intermediateCA.Revoke("testme.example.com", intermediatePass)
-	assert.Equal(t, ErrCertNotFound, err) // TODO: should return ErrCertRevoked
+	err = intermediateCA.Revoke(attrs)
+
+	// TODO: should return ErrCertRevoked
+	assert.Equal(t, store.ErrFileNotFound, err)
 
 	// Make sure the cert is no longer valid
 	valid, err = intermediateCA.Verify(cert, nil)
@@ -346,22 +290,27 @@ func TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 
 func TestIssueCertificateWithPassword(t *testing.T) {
 
-	config, err := defaultConfig()
-	assert.Nil(t, err)
+	config := defaultConfig()
 	assert.NotNil(t, config)
 
-	rootPass := []byte("root-password")
-	intermediatePass := []byte("intermediate-password")
-	_, rootCA, _, err := createService(config, rootPass, intermediatePass, true)
+	_, rootCA, _, err := createService(config, true)
 	defer cleanTempDir(config.Home)
 	assert.Nil(t, err)
 
-	domain := "www.domain.com"
+	caAttrs := rootCA.CAKeyAttributes(nil)
+
+	attrs, err := keystore.Template(caAttrs.KeyAlgorithm)
+	attrs.KeyType = keystore.KEY_TYPE_TLS
+	attrs.Domain = "example.com"
+	attrs.CN = "www.example.com"
+	attrs.AuthPassword = []byte(rootCA.Identity().KeyPassword)
+	attrs.Password = []byte("server-password")
 
 	certReq := CertificateRequest{
-		Valid: 365, // days
+		KeyAttributes: &attrs,
+		Valid:         365, // days
 		Subject: Subject{
-			CommonName:   domain,
+			CommonName:   attrs.CN,
 			Organization: "ACME Corporation",
 			Country:      "US",
 			Locality:     "Miami",
@@ -369,7 +318,7 @@ func TestIssueCertificateWithPassword(t *testing.T) {
 			PostalCode:   "12345"},
 		SANS: &SubjectAlternativeNames{
 			DNS: []string{
-				domain,
+				attrs.CN,
 				"localhost",
 				"localhost.localdomain",
 			},
@@ -385,14 +334,131 @@ func TestIssueCertificateWithPassword(t *testing.T) {
 	}
 	// Issue certificate using golang runtime random number
 	// generator when creating the private key
-	certPassword := []byte("server-password")
-	der, err := rootCA.IssueCertificate(certReq, rootPass, certPassword)
+	der, err := rootCA.IssueCertificate(certReq)
 	assert.Nil(t, err)
 	assert.NotNil(t, der)
 
 	cert, err := x509.ParseCertificate(der)
 	assert.Nil(t, err)
-	assert.Equal(t, domain, cert.Subject.CommonName)
+	assert.Equal(t, attrs.CN, cert.Subject.CommonName)
+}
+
+func TestIssueCertificate_CA_RSA_WITH_LEAF_ECDSA(t *testing.T) {
+
+	config := defaultConfig()
+	assert.NotNil(t, config)
+
+	config.KeyAlgorithms = []string{
+		x509.RSA.String(),
+		x509.ECDSA.String(),
+		x509.Ed25519.String(),
+	}
+
+	params, rootCA, _, err := createService(config, true)
+	defer cleanTempDir(config.Home)
+	assert.Nil(t, err)
+
+	DebugCipherSuites(params.Logger)
+	DebugInsecureCipherSuites(params.Logger)
+
+	attrs, err := keystore.Template(x509.ECDSA)
+	attrs.KeyType = keystore.KEY_TYPE_TLS
+	attrs.Domain = "example.com"
+	attrs.CN = "www.example.com"
+	attrs.AuthPassword = []byte(rootCA.Identity().KeyPassword)
+	attrs.Password = []byte("server-password")
+
+	certReq := CertificateRequest{
+		KeyAttributes: &attrs,
+		Valid:         365, // days
+		Subject: Subject{
+			CommonName:   attrs.CN,
+			Organization: "ACME Corporation",
+			Country:      "US",
+			Locality:     "Miami",
+			Address:      "123 acme street",
+			PostalCode:   "12345"},
+		SANS: &SubjectAlternativeNames{
+			DNS: []string{
+				attrs.CN,
+				"localhost",
+				"localhost.localdomain",
+			},
+			IPs: []string{
+				"127.0.0.1",
+				"127.0.0.2",
+			},
+			Email: []string{
+				"root@localhost",
+				"root@test.com",
+			},
+		},
+	}
+	// Issue certificate using golang runtime random number
+	// generator when creating the private key
+	der, err := rootCA.IssueCertificate(certReq)
+	assert.Nil(t, err)
+	assert.NotNil(t, der)
+
+	cert, err := x509.ParseCertificate(der)
+	assert.Nil(t, err)
+	assert.Equal(t, attrs.CN, cert.Subject.CommonName)
+}
+
+func TestIssueCertificateWithoutPassword(t *testing.T) {
+
+	config := defaultConfig()
+	assert.NotNil(t, config)
+
+	config.RequirePrivateKeyPassword = false
+
+	_, rootCA, _, err := createService(config, true)
+	defer cleanTempDir(config.Home)
+	assert.Nil(t, err)
+
+	caAttrs := rootCA.CAKeyAttributes(nil)
+	attrs, err := keystore.Template(caAttrs.KeyAlgorithm)
+	attrs.KeyType = keystore.KEY_TYPE_TLS
+	attrs.Domain = "example.com"
+	attrs.CN = "www.example.com"
+	attrs.AuthPassword = []byte(rootCA.Identity().KeyPassword)
+	attrs.Password = []byte("server-password")
+
+	certReq := CertificateRequest{
+		KeyAttributes: &attrs,
+		Valid:         365, // days
+		Subject: Subject{
+			CommonName:   attrs.CN,
+			Organization: "ACME Corporation",
+			Country:      "US",
+			Locality:     "Miami",
+			Address:      "123 acme street",
+			PostalCode:   "12345"},
+		SANS: &SubjectAlternativeNames{
+			DNS: []string{
+				attrs.CN,
+				"localhost",
+				"localhost.localdomain",
+			},
+			IPs: []string{
+				"127.0.0.1",
+				"127.0.0.2",
+			},
+			Email: []string{
+				"root@localhost",
+				"root@test.com",
+			},
+		},
+	}
+	// Issue certificate using golang runtime random number
+	// generator when creating the private key
+	der, err := rootCA.IssueCertificate(certReq)
+	assert.Nil(t, err)
+	assert.NotNil(t, der)
+
+	cert, err := x509.ParseCertificate(der)
+	assert.Nil(t, err)
+	assert.Equal(t, attrs.CN, cert.Subject.CommonName)
 }
 
 func cleanTempDir(dir string) {
@@ -404,78 +470,91 @@ func cleanTempDir(dir string) {
 }
 
 func createService(
-	config *Config,
-	rootPass, intermediatePass []byte,
-	performInit bool) (*logging.Logger, CertificateAuthority, CertificateAuthority, error) {
-
-	stdout := logging.NewLogBackend(os.Stdout, "", 0)
-	logging.SetBackend(stdout)
-	logger := logging.MustGetLogger("certificate-authority")
-
-	logFormat := logging.MustStringFormatter(
-		`%{color}%{time:15:04:05.000} %{shortpkg}.%{shortfunc} %{level:.4s} %{id:03x}%{color:reset} %{message}`,
-	)
-	logFormatter := logging.NewBackendFormatter(stdout, logFormat)
-	backends := logging.MultiLogger(stdout, logFormatter)
-	logging.SetBackend(backends)
-
-	var err error
-	if config == nil {
-		config, err = defaultConfig()
-		if err != nil {
-			logger.Fatal(err)
-		}
-	}
+	config Config,
+	performInit bool) (CAParams, CertificateAuthority, CertificateAuthority, error) {
 
 	// Initialize Root and Intermediate Certificate Authorities
 	// based on configuration
 	//
 	// Root CA certificates
-	// openssl rsa -in certs/ca/root-ca.key -text (-check)
-	// openssl x509 -in certs/ca/root-ca.crt -text -noout
+	// openssl rsa -in testdata/ca/root-ca.key -text (-check)
+	// openssl x509 -in testdata/ca/root-ca.crt -text -noout
 	// openssl rsa -pubin -in platform/ca/root-ca.pub -text
 	//
 	// Intermediate CA certificates
-	// openssl rsa -in certs/ca/intermediate-ca.key -text (-check)
-	// openssl x509 -in certs/ca/intermediate-ca.crt -text -noout
-	// openssl rsa -pubin -in certs/ca/intermediate-ca.pub -text
-	params := CAParams{
-		Logger:               logger,
-		Config:               config,
-		Password:             intermediatePass,
-		SelectedIntermediate: 1,
-		Random:               rand.Reader,
-	}
+	// openssl rsa -in testdata/ca/intermediate-ca.key -text (-check)
+	// openssl x509 -in testdata/ca/intermediate-ca.crt -text -noout
+	// openssl rsa -pubin -in testdata/ca/intermediate-ca.pub -text
+
+	logger := defaultLogger()
+	params := defaultParams(logger, config)
+
 	rootCA, intermediateCA, err := NewCA(params)
 	if err != nil {
 		if err == ErrNotInitialized && performInit {
-			privKey, cert, initErr := rootCA.Init(nil, nil, rootPass, rand.Reader)
+			rootCerts, initErr := rootCA.Init(nil)
 			if initErr != nil {
 				logger.Error(initErr)
-				return nil, nil, nil, initErr
+				return params, nil, nil, initErr
 			}
-			_, _, initErr = intermediateCA.Init(privKey, cert, intermediatePass, rand.Reader)
+			_, initErr = intermediateCA.Init(rootCerts)
 			if initErr != nil {
 				logger.Error(initErr)
-				return nil, nil, nil, initErr
+				return params, nil, nil, initErr
 			}
+			params.Identity = intermediateCA.Identity()
 			err = nil
 		} else if performInit {
 			logger.Error(err)
-			return nil, nil, nil, err
+			return params, nil, nil, err
 		}
 	} else {
-		logger.Warning("CA has already been initialized")
+		logger.Warning("CA already initialized")
 	}
 
-	return logger, rootCA, intermediateCA, err
+	return params, rootCA, intermediateCA, err
+}
+
+func defaultLogger() *logging.Logger {
+	stdout := logging.NewLogBackend(os.Stdout, "", 0)
+	//logging.SetBackend(stdout)
+	logger := logging.MustGetLogger("certificate-authority")
+	logFormat := logging.MustStringFormatter(
+		`%{color}%{time:15:04:05.000} %{shortpkg}.%{shortfunc} %{level:.4s} %{id:03x}%{color:reset} %{message}`,
+	)
+	logFormatter := logging.NewBackendFormatter(stdout, logFormat)
+	// backends := logging.MultiLogger(stdout, logFormatter)
+	logging.SetBackend(logFormatter)
+
+	keystore.DebugAvailableHashes(logger)
+	keystore.DebugAvailableSignatureAkgorithms(logger)
+
+	return logger
+}
+
+func defaultParams(
+	logger *logging.Logger,
+	config Config) CAParams {
+
+	initParams := CAParams{
+		Config:       config,
+		Logger:       logger,
+		Random:       rand.Reader,
+		SelectedCA:   1,
+		Identity:     config.Identity[0],
+		Debug:        true,
+		DebugSecrets: true,
+	}
+	return initStores(initParams)
 }
 
 // Creates a default CA configuration
-func defaultConfig() (*Config, error) {
+func defaultConfig() Config {
+
 	rootIdentity := Identity{
-		KeySize: 1024, // bits
-		Valid:   10,   // years
+		KeyPassword: "root-password",
+		KeySize:     512, // bits
+		Valid:       1,   // year
 		Subject: Subject{
 			CommonName:   "root-ca",
 			Organization: "Example Corporation",
@@ -500,9 +579,9 @@ func defaultConfig() (*Config, error) {
 	}
 
 	intermediateIdentity := Identity{
-		KeySize: 1024, // bits
-		Valid:   10,   // years
-
+		KeyPassword: "intermediate-password",
+		KeySize:     512, // bits
+		Valid:       1,   // year
 		Subject: Subject{
 			CommonName:   "intermediate-ca",
 			Organization: "Example Corporation",
@@ -526,31 +605,16 @@ func defaultConfig() (*Config, error) {
 		},
 	}
 
-	// Create a temp directory so parallel tests don't
-	// corrupt each other.
+	// Create a temp directory for each instantiation
+	// so parallel tests don't corrupt each other.
 	buf := make([]byte, 8)
 	_, err := rand.Reader.Read(buf)
 	if err != nil {
-		return nil, err
+		defaultLogger().Fatal(err)
 	}
 	tmpDir := hex.EncodeToString(buf)
 
-	return &Config{
-		Home:                      fmt.Sprintf("%s/%s", CERTS_DIR, tmpDir),
-		AutoImportIssuingCA:       true,
-		KeyAlgorithm:              KEY_ALGO_ECC,
-		KeyStore:                  KEY_STORE_PKCS8,
-		SignatureAlgorithm:        "ECDSAWithSHA256",
-		RSAScheme:                 RSA_SCHEME_RSAPSS,
-		Hash:                      "SHA256",
-		EllipticalCurve:           CURVE_P256,
-		RetainRevokedCertificates: false,
-		PasswordPolicy:            "^*$",
-		RequirePrivateKeyPassword: true,
-		// RSAScheme:              "RSA_PSS",
-		//PasswordPolicy:          "^[a-zA-Z0-9-_]+$",
-		Identity: []Identity{
-			rootIdentity,
-			intermediateIdentity},
-	}, nil
+	caDir := fmt.Sprintf("%s/%s", CERTS_DIR, tmpDir)
+	//return DefaultConfigECDSA(caDir, rootIdentity, intermediateIdentity)
+	return DefaultConfigRSA(caDir, rootIdentity, intermediateIdentity)
 }

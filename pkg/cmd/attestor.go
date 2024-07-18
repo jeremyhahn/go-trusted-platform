@@ -23,13 +23,11 @@ var attestorCmd = &cobra.Command{
 verification requests from the Verifier to begin Full Remote Attestation`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		_, err := attestor.NewAttestor(
-			App,
-			ATTListenAddress,
-			[]byte(CAPassword),
-			[]byte(ServerPassword),
-			[]byte(SRKAuth))
+		// Initialize the CA and TPM
+		App.InitCA()
 
+		// Start the gRPC server
+		_, err := attestor.NewAttestor(App)
 		if err != nil {
 			App.Logger.Fatal(err)
 		}

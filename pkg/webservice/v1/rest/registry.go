@@ -2,6 +2,7 @@ package rest
 
 import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
@@ -22,7 +23,7 @@ func NewRestServiceRegistry(app *app.App) RestServiceRegistry {
 
 	httpWriter := response.NewResponseWriter(app.Logger, nil)
 
-	registry.createJsonWebTokenService()
+	registry.createJsonWebTokenService(app.ServerKeyAttributes)
 
 	registry.systemRestService = NewSystemRestService(
 		app,
@@ -40,12 +41,14 @@ func (registry *RestRegistry) SystemRestService() SystemRestServicer {
 	return registry.systemRestService
 }
 
-func (registry *RestRegistry) createJsonWebTokenService() {
+func (registry *RestRegistry) createJsonWebTokenService(keyAttributes keystore.KeyAttributes) {
 	httpWriter := response.NewResponseWriter(registry.app.Logger, nil)
 	jsonWebTokenService, err := CreateJsonWebTokenService(
 		registry.app,
 		httpWriter,
-		registry.app.WebService.JWTExpiration)
+		registry.app.WebService.JWTExpiration,
+		keyAttributes,
+		registry.app.KeyStore)
 	if err != nil {
 		registry.app.Logger.Fatal(err)
 	}

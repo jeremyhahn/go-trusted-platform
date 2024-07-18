@@ -3,22 +3,44 @@
     "tasks": [{
         "type": "shell",
         "label": "debug_config",
+        "dependsOn": [
+            "make_trusted_data",
+        ],
         "command": "cp",
         "args": [
             "configs/platform/config.debug.yaml",
-            "pkg/config.yaml",
+            "pkg/trusted-data/etc/config.yaml",
+        ]
+    },
+    {
+        "type": "shell",
+        "label": "debug_config_clean",
+        "dependsOn": [
+            "rm_trusted_data",
+            "make_trusted_data",
+        ],
+        "command": "cp",
+        "args": [
+            "configs/platform/config.debug.yaml",
+            "pkg/trusted-data/etc/config.yaml",
+        ]
+    },
+    {
+        "type": "shell",
+        "label": "make_trusted_data",
+        "command": "mkdir",
+        "args": [
+            "-p",
+            "pkg/trusted-data/etc",
         ]
     },
     {
         "type": "shell",
         "label": "rm_trusted_data",
-        "dependsOn": [
-            "debug_config",
-        ],
         "command": "rm",
         "args": [
             "-rf",
-            "trusted-data",
+            "pkg/trusted-data",
         ]
     },
     {
@@ -45,9 +67,6 @@
     },
     {
         "type": "shell",
-        "dependsOn": [
-            "debug_config",
-        ],
         "label": "attestor_init",
         "command": "make",
         "args": [
@@ -56,9 +75,9 @@
     },
     {
         "type": "shell",
-        "dependsOn": [
-            "debug_config",
-        ],
+        // "dependsOn": [
+        //     "debug_config",
+        // ],
         "label": "verifier_init",
         "command": "make",
         "args": [

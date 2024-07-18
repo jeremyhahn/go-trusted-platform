@@ -3,6 +3,7 @@ package subcommands
 import (
 	"os"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/spf13/cobra"
 )
 
@@ -19,7 +20,7 @@ var CAParseDERCmd = &cobra.Command{
 		if err != nil {
 			App.Logger.Fatal(err)
 		}
-		cert, err := App.CA.DecodePEM(bytes)
+		cert, err := ca.DecodePEM(bytes)
 		if err != nil {
 			App.Logger.Fatal(err)
 		}

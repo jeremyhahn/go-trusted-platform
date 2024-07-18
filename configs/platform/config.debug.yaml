@@ -4,32 +4,30 @@
 # Global platform configs
 debug: true
 debug-secrets: true
+
+# Directory for platform data
 platform-dir: trusted-data
+
+# Directory for configuration files
 config-dir: trusted-data/etc
+
+# Directory for log files
 log-dir: trusted-data/log
 
-# The platform domain name
-domain: attestor.example.com
+# Platform server(s) listen address
+listen: localhost
+
+# The platform domain / DNS zone name
+domain: example.com
 
 # The hostmaster responsible for the platform
 hostmaster: root@example.com
 
-# Trusted Platform administrators perform authentication via the
-# Certificate Authority. 2 passwords are required to setup and 
-# subsequently access the platform. The Root password is used to
-# password protect the Root Certifiate Authority Private Key. The
-# Operator password is used to password protect the first
-# Intermediate Certifiate Authority that is created by default during
-# platform setup. After setup, the Root Certificate Authority Private
-# Key should be remove from the system and taken offline. Future operations
-# should be performed using an Intermediate Certificate Authority, either
-# the default created during setup, or an additional created after setup.
-#
-# Passwords should never be set here in a production environment, however,
-# can be useful during testing and development.
-root-password: ca-root-password
-intermediate-password: ca-intermediate-password
-server-password: server-password
+# Flag to enable FIPS mode. Not supported yet. In the
+# future, will result in errors being returned for known
+# violations.
+fips-mode: true
+
 
 # Regular Expression that defines password complexity requirements
 # for private keys. A few examples:
@@ -103,13 +101,12 @@ attestation:
   # attacks.
   insecure-skip-verify: false
 
-  # Defines the verifiers that are allowed to connect to the
-  # attestors gRPC service. TLS certificates provided by
-  # verifiers must be issued to a common or SANS name
-  # on this list or the connection is refused with
-  # ErrUnknownVerifier
+  # Defines the verifier CA common names that are allowed to 
+  # connect to the attestors gRPC service. TLS certificate bundle
+  # provided by verifiers must be issued from a common or SANS name
+  # on this list or the connection is refused with ErrUnknownVerifier
   allowed-verifiers:
-    - verifier.example.com
+    - __VERIFIER_CA__
 
   # The Attestor Endorsement Key Certificate form. Can be 
   # either TSS or PEM.
@@ -125,13 +122,30 @@ attestation:
   quote-pcrs: 6,7,8,9
 
 
-# PKCS #11
+# Hardware Security Module PKCS #11 interface
 pkcs11:
   # The Hardware Security Module Cryptoki library
-  library: /usr/local/lib/softhsm/libsofthsm2.so
+  # library: /usr/local/lib/softhsm/libsofthsm2.so
+  library:
 
   # The library configuration file
   config: ../../libs/configs/platform/softhsm.conf
+
+  # The slot where the token is present
+  slot: 0
+
+  # The platform token label
+  label: Trusted Platform
+
+  # The Security Officer PIN
+  # This should never be set for anything other than
+  # development and testing.
+  so-pin: 1234
+
+  # The User PIN
+  # This should never be set for anything other than
+  # development and testing.
+  pin: 5678
 
 
 # Trusted Platform Module
@@ -162,9 +176,61 @@ tpm:
 
 # Certificate Authority
 certificate-authority:
+  
   # The Certifiate Authority home directory
   home: trusted-data/ca
-  
+
+  # The default Certificate Authority used by the platform.
+  # This is the array index of the CA "identity" as configured
+  # below. For example:
+  #
+  # For a Root only configuration, only define a single CA identity
+  # below and then use 0 for the default-ca value.
+  #
+  # For a Root and single Intermediate, define 2 CA identities
+  # and set the default-ca value to 1. This is the default.
+  #
+  # For N intermediates, define a Root and N identities, then set
+  # default-ca to Y, with Y being the index of the intermediate 
+  # in the identity list.
+  default-ca: 1
+
+  # The key store backend. PKCS8 or PKCS11
+  key-store: PKCS8
+
+  # List of key algorithms supported by the CA.
+  # When specified, the CA will create a key and
+  # signing certificate to match each of the specified
+  # algorithms.
+  key-algorithms:
+    - RSA
+    - ECDSA
+    - Ed25519
+
+  # The default key algorithm used when a key type
+  # is not explicitly provided.
+  # Supported algorithms: RSA, ECDSA
+  # key-algorithm: RSA
+  key-algorithm: RSA
+
+  # The default hash function for signing and encryption opreations
+  # Supported hash functions: Any valid crypto.Hash
+  # https://pkg.go.dev/crypto#Hash
+  hash: SHA-256
+
+  # The default signature algorithm
+  # Any fully supported Go x509 SignatureAlgorithm:
+  # https://pkg.go.dev/crypto/x509#SignatureAlgorithm
+  # signature-algorithm: SHA256-RSA
+  # signature-algorithm: SHA256-RSAPSS
+  # signature-algorithm: ECDSA-SHA256
+  signature-algorithm: SHA256-RSAPSS
+
+  # The Elliptical Curve Cryptography Curve. This
+  # option is ignored when using key-algorithm: RSA.
+  # Supported curves: P224, P256, P384, P521
+  elliptic-curve: P256
+
   # Automatically download and import Issuing CAs
   # when importing leaf certificates, so the leaf
   # can be verified.
@@ -190,34 +256,6 @@ certificate-authority:
   # List.
   delete-revoked-certificates: true
   
-  # The private key store.
-  # PKCS #8 file store is the only supported store at this time
-  key-store: PKCS8
-
-  # The default hash function for signing and encryption opreations
-  # Supported hash functions: Any valid crypto.Hash
-  # https://pkg.go.dev/crypto#Hash
-  hash: SHA256
-
-  # Default RSA padding scheme for RSA keys
-  # Supported schemes: RSA_PSS | RSA_PKCS1v15
-  rsa-scheme: RSA_PSS
- 
-  # The key algorithm used for the CA signing certificate
-  # Supported algorithms: RSA, ECC
-  # key-algorithm: RSA
-  key-algorithm: ECC
-
-  # The default signature algorithm
-  # Any fully supported Go x509 SignatureAlgorithm:
-  # https://pkg.go.dev/crypto/x509#SignatureAlgorithm
-  # signature-algorithm: SHA256WithRSA
-  signature-algorithm: ECDSAWithSHA256
-  
-  # The Elliptical Curve Cryptography Curve
-  # Supported curves: P224, P256, P384, P521
-  elliptic-curve: P256
-  
   # Requires passwords for private keys (FIPS 140-3)
   require-pkcs8-password: true
   
@@ -227,10 +265,17 @@ certificate-authority:
   
   # True to retain revoked certificates, false to delete
   retain-revoked-certificates: true
+
+  # A true value allows the private keys for the CA to
+  # be exported from the key store.
+  exportable-keys: true
   
-  # The Certificate Authority identity
+  # The Certificate Authority identities
   identity:
+    # Root Certificate Authority
   - key-size: 2048
+    # PKCS #8 password (omit for PKCS #11)
+    key-password: root-password
      # CA cert expiration (years)
     valid: 50
     subject:
@@ -244,7 +289,6 @@ certificate-authority:
     sans:
       dns: 
         - root-ca.example.com
-        - attestor.example.com
         - root-ca
         - root-ca.localdomain
         - root-ca.dev.example.com
@@ -253,7 +297,10 @@ certificate-authority:
       email:
         - root@localhost
         - root@localhost.localdomain
+    # Intermediate Certificate Authority
   - key-size: 2048
+     # PKCS #8 password (omit for PKCS #11)
+    key-password: intermediate-password
      # CA cert expiration (years)
     valid: 10
     subject:
@@ -267,7 +314,6 @@ certificate-authority:
     sans:
       dns:
         - intermediate-ca.example.com
-        - attestor.example.com
         - intermediate-ca
         - intermediate-ca.localdomain
       ips:
@@ -285,11 +331,16 @@ webservice:
   tls-ca: trusted-data/ca/intermediate-ca.example.com.pub
   tls-key: trusted-data/ca/intermediate-ca.example.com.key
   tls-crt: trusted-data/ca/issued/localhost/localhost.crt
-  certificate:
-    # The password for the web service TLS private key.
+  # The password for the web service TLS private key.
     # This should never be configured in a production
     # environment but it's useful for testing and development.
-    private-key-password: server-password
+  tls-key-algorithm: ECDSA
+  certificate:
+    # The key algorithm to use for the server TLS certificate.
+    # The certificate authority key-algorithms liste must
+    # contain this algorithm in it's.
+    # Any supported CA key store algorithm [ RSA | ECDSA | Ed25519 ]
+    key-password: server-password
     key-size: 2048
     # valid 365 days
     valid: 365
@@ -304,7 +355,6 @@ webservice:
     sans:
       dns:
         - www.example.com
-        - attestor.example.com
         - localhost
         - localhost.localdomain
       ips:

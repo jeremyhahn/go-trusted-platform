@@ -50,6 +50,11 @@ func (s *InsecureAttestor) GetCABundle(
 	}
 BREAK:
 	for _, cert := range certs {
+
+		s.logger.Debugf(
+			"attestor: checking allowed verifiers list for common name: %s",
+			cert.Subject.CommonName)
+
 		for _, _verifier := range s.config.AllowedVerifiers {
 			// Check the common name for an allow list match
 			if _verifier == cert.Subject.CommonName {
@@ -70,7 +75,7 @@ BREAK:
 	// Refuse the request with ErrUnknownVerifier if not on
 	// the allow list.
 	if !allowed {
-		s.logger.Errorf("attestor: error: %s", ErrUnknownVerifier)
+		s.logger.Errorf("error: %s", ErrUnknownVerifier)
 		return nil, ErrUnknownVerifier
 	}
 
@@ -83,7 +88,7 @@ BREAK:
 
 	// Send our CA certs to the Verifier so they can terminate
 	// the insecure connection and establish a new mTLS connection
-	attestorBundle, err := s.ca.CABundle()
+	attestorBundle, err := s.ca.CABundle(nil)
 	if err != nil {
 		s.logger.Error(err)
 		return nil, err

@@ -45,7 +45,8 @@ func (restService *SystemRestService) Endpoints(w http.ResponseWriter, r *http.R
 
 // Writes the web servers RSA public key
 func (restService *SystemRestService) RSAPublicKey(w http.ResponseWriter, r *http.Request) {
-	cert, err := restService.app.CA.PEM(restService.app.Domain)
+	attrs := restService.app.CA.CAKeyAttributes(nil)
+	cert, err := restService.app.CA.PEM(attrs)
 	if err == ca.ErrCertNotFound {
 		restService.httpWriter.Error404(w, r, err)
 		return

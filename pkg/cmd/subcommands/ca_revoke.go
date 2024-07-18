@@ -1,11 +1,13 @@
 package subcommands
 
 import (
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/spf13/cobra"
 )
 
 func init() {
-	CARevokeCmd.PersistentFlags().StringVar(&CACertCN, "cn", "", "The common name of the certificate to revoke")
+	CARevokeCmd.PersistentFlags().StringVar(&CACN, "cn", "", "The common name of the certificate to revoke")
+	CARevokeCmd.PersistentFlags().StringVarP(&CAAlgorithm, "algorithm", "a", "", "Optional key algorithm. [ RSA | ECDSA | Ed35519 ]")
 }
 
 var CARevokeCmd = &cobra.Command{
@@ -14,7 +16,20 @@ var CARevokeCmd = &cobra.Command{
 	Long: `Add the certificate to the CA Certificate Revocation List and optionally
 delete the certificates.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		err := App.CA.Revoke(CACertCN, App.CAPasswordPrompt())
+
+		algo, err := keystore.ParseKeyAlgorithm(CAAlgorithm)
+		if err != nil {
+			App.Logger.Fatal(err)
+		}
+
+		attrs, err := keystore.Template(algo)
+		if err != nil {
+			App.Logger.Fatal(err)
+		}
+		attrs.Domain = CACN
+		attrs.CN = CAKeyName
+
+		err = App.CA.Revoke(attrs)
 		if err != nil {
 			App.Logger.Fatal(err)
 		}
