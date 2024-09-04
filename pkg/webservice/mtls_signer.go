@@ -45,10 +45,9 @@ func (signer *Signer) Sign(
 
 	signer.logger.Info("webserivce: signing digest: %s", digest)
 
-	attrs := keystore.KeyAttributes{
-		Domain:   signer.cert.Subject.CommonName,
+	attrs := &keystore.KeyAttributes{
 		CN:       signer.cert.Subject.CommonName,
-		Password: signer.password,
+		Password: keystore.NewClearPassword(signer.password),
 	}
 
 	s, err := signer.ca.Signer(attrs)

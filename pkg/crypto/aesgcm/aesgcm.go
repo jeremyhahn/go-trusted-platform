@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -46,6 +47,16 @@ func NewAESGCM(
 		debugSecrets: debugSecrets,
 		random:       random,
 	}
+}
+
+// Generates and returns an AES-256 32 byte key
+// encoded to hexidecimal
+func (this AESGCM) GenerateKey() []byte {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		panic(err.Error())
+	}
+	return []byte(hex.EncodeToString(bytes))
 }
 
 // Seal the provided plain-test and "additional data" data

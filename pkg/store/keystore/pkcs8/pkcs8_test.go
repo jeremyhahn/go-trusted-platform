@@ -7,15 +7,14 @@ import (
 	"crypto/rsa"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"testing"
 
 	"github.com/op/go-logging"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store"
 	blobstore "github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 )
 
 var (
@@ -26,12 +25,12 @@ func TestSignPKCS1v15_WithoutFileIntegrityCheck(t *testing.T) {
 
 	_, ks, _, _ := createKeystore()
 
-	// Create new key attributes using the pre-defined
+	// Generate new key attributes using the pre-defined
 	// key store RSA template
 	testKeyAttrs := keystore.TemplateRSA
 
-	// Create a new RSA test key
-	opaqueKey, err := ks.CreateKey(testKeyAttrs)
+	// Generate a new RSA test key
+	opaqueKey, err := ks.GenerateKey(testKeyAttrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, opaqueKey)
 	assert.NotNil(t, opaqueKey.Public())
@@ -75,12 +74,12 @@ func TestSignPKCS1v15_WithFileIntegrityCheck(t *testing.T) {
 
 	_, ks, _, _ := createKeystore()
 
-	// Create new key attributes using the pre-defined
+	// Generate new key attributes using the pre-defined
 	// key store RSA template
 	testKeyAttrs := keystore.TemplateRSA
 
-	// Create a new RSA test key
-	opaqueKey, err := ks.CreateKey(testKeyAttrs)
+	// Generate a new RSA test key
+	opaqueKey, err := ks.GenerateKey(testKeyAttrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, opaqueKey)
 	assert.NotNil(t, opaqueKey.Public())
@@ -91,12 +90,12 @@ func TestSignPKCS1v15_WithFileIntegrityCheck(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, digest)
 
-	signerOpts, err := keystore.NewSignerOpts(testKeyAttrs, data)
+	signerOpts := keystore.NewSignerOpts(testKeyAttrs, data)
 	assert.Nil(t, err)
 
-	blobCN := "example.com/data.bin"
+	blobCN := []byte("example.com/data.bin")
 	signerOpts.KeyAttributes = testKeyAttrs
-	signerOpts.BlobCN = &blobCN
+	signerOpts.BlobCN = blobCN
 
 	// Sign the digest
 	sig, err := opaqueKey.Sign(rand.Reader, digest, signerOpts)
@@ -132,12 +131,12 @@ func TestSignRSAPSS(t *testing.T) {
 
 	_, ks, _, _ := createKeystore()
 
-	// Create new key attributes using the pre-defined
+	// Generate new key attributes using the pre-defined
 	// key store RSA template
 	testKeyAttrs := keystore.TemplateRSA
 
-	// Create a new RSA test key
-	opaqueKey, err := ks.CreateKey(testKeyAttrs)
+	// Generate a new RSA test key
+	opaqueKey, err := ks.GenerateKey(testKeyAttrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, opaqueKey)
 	assert.NotNil(t, opaqueKey.Public())
@@ -173,12 +172,12 @@ func TestSignECDSA(t *testing.T) {
 
 	_, ks, _, _ := createKeystore()
 
-	// Create new key attributes using the pre-defined
+	// Generate new key attributes using the pre-defined
 	// key store RSA template
 	testKeyAttrs := keystore.TemplateECDSA
 
-	// Create a new RSA test key
-	opaqueKey, err := ks.CreateKey(testKeyAttrs)
+	// Generate a new RSA test key
+	opaqueKey, err := ks.GenerateKey(testKeyAttrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, opaqueKey)
 	assert.NotNil(t, opaqueKey.Public())
@@ -208,12 +207,12 @@ func TestSignED25519(t *testing.T) {
 
 	_, ks, _, _ := createKeystore()
 
-	// Create new key attributes using the pre-defined
+	// Generate new key attributes using the pre-defined
 	// key store RSA template
 	testKeyAttrs := keystore.TemplateEd25519
 
-	// Create a new RSA test key
-	opaqueKey, err := ks.CreateKey(testKeyAttrs)
+	// Generate a new RSA test key
+	opaqueKey, err := ks.GenerateKey(testKeyAttrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, opaqueKey)
 	assert.NotNil(t, opaqueKey.Public())
@@ -240,20 +239,11 @@ func TestSignED25519(t *testing.T) {
 }
 
 func createKeystore() (*logging.Logger,
-	keystore.KeyStorer, keystore.KeyAttributes, blobstore.BlobStorer) {
+	keystore.KeyStorer, *keystore.KeyAttributes, blobstore.BlobStorer) {
 
-	stdout := logging.NewLogBackend(os.Stdout, "", 0)
-	logging.SetBackend(stdout)
-	logger := logging.MustGetLogger("keystore-pkcs8")
+	logger := util.Logger()
 
-	logFormat := logging.MustStringFormatter(
-		`%{color}%{time:15:04:05.000} %{shortpkg}.%{shortfunc} %{level:.4s} %{id:03x}%{color:reset} %{message}`,
-	)
-	logFormatter := logging.NewBackendFormatter(stdout, logFormat)
-	backends := logging.MultiLogger(stdout, logFormatter)
-	logging.SetBackend(backends)
-
-	// Create a temp directory for each instantiation
+	// Generate a temp directory for each instantiation
 	// so parallel tests don't corrupt each other.
 	buf := make([]byte, 8)
 	_, err := rand.Reader.Read(buf)
@@ -263,23 +253,28 @@ func createKeystore() (*logging.Logger,
 	tmpDir := hex.EncodeToString(buf)
 
 	rootDir := fmt.Sprintf("%s/%s", TEST_DATA_DIR, tmpDir)
-	blobStore, err := blobstore.NewFSBlobStore(logger, rootDir)
+	blobStore, err := blobstore.NewFSBlobStore(logger, rootDir, nil)
 	if err != nil {
 		logger.Fatal(err)
 	}
 
-	signerStore := store.NewSignerStore(blobStore)
-	backend := store.NewFileBackend(logger, rootDir)
+	signerStore := keystore.NewSignerStore(blobStore)
+	backend := keystore.NewFileBackend(logger, rootDir)
 	caTemplate := keystore.TemplateRSA
 
-	params := Params{
-		KeyDir:         rootDir,
-		DefaultKeySize: caTemplate.RSAAttributes.KeySize,
-		Random:         rand.Reader,
-		Backend:        backend,
-		SignerStore:    signerStore,
-		BlobStore:      blobStore,
-		Logger:         logger,
+	params := &Params{
+		// KeyDir:      rootDir,
+		Random:      rand.Reader,
+		Backend:     backend,
+		SignerStore: signerStore,
+		BlobStore:   blobStore,
+		Logger:      logger,
 	}
-	return logger, NewKeyStorePKCS8(params), caTemplate, blobStore
+
+	pkcs8Store, err := NewKeyStore(params)
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	return logger, pkcs8Store, caTemplate, blobStore
 }

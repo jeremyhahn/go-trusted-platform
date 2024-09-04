@@ -16,6 +16,7 @@ ARM_CC_64				?= aarch64-linux-gnu-gcc
 REPO                    ?= github.com
 PACKAGE                 ?= go-trusted-platform
 APPNAME                 ?= trusted-platform
+APPBIN                  ?= tpadm
 
 APP_VERSION       		?= $(shell git describe --tags --abbrev=0)
 GIT_TAG                 = $(shell git describe --tags)
@@ -25,6 +26,7 @@ BUILD_DATE              = $(shell date '+%Y-%m-%d_%H:%M:%S')
 
 VERSION_FILE            ?= VERSION
 
+ENV                     ?= dev
 RPI_HOST                ?= rpi
 
 ifneq ("$(wildcard $(VERSION_FILE))","")
@@ -46,7 +48,6 @@ LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.Version=${APP_VERSION}
 GREEN=\033[0;32m
 NO_COLOR=\033[0m
 
-ATTESTATION_ECCERT ?= ../../ECcert.bin
 ATTESTATION_DIR    ?= attestation
 ATTESTOR_DIR       ?= $(ATTESTATION_DIR)/attestor
 VERIFIER_DIR       ?= $(ATTESTATION_DIR)/verifier
@@ -55,11 +56,19 @@ CONFIG_DIR         ?= $(PLATFORM_DIR)/etc
 LOG_DIR            ?= $(PLATFORM_DIR)/log
 CA_DIR             ?= $(PLATFORM_DIR)/ca
 
-VERIFIER_CONF      ?= $(VERIFIER_DIR)/$(CONFIG_DIR)/config.yaml
 VERIFIER_CA        ?= $(VERIFIER_DIR)/$(PLATFORM_DIR)/ca
+VERIFIER_CONFIG    ?= verifier.yaml
+VERIFIER_CONF      ?= $(VERIFIER_DIR)/$(CONFIG_DIR)/config.yaml
+VERIFIER_DOMAIN    ?= verifier.example.com
+VERIFIER_HOSTNAME  ?= www
 
-ATTESTOR_CONF      ?= $(ATTESTOR_DIR)/$(CONFIG_DIR)/config.yaml
 ATTESTOR_CA        ?= $(ATTESTOR_DIR)/$(PLATFORM_DIR)/ca
+ATTESTOR_CONFIG    ?= attestor.yaml
+ATTESTOR_CONF      ?= $(ATTESTOR_DIR)/$(CONFIG_DIR)/config.yaml
+ATTESTOR_HOSTNAME  ?= www
+ATTESTOR_DOMAIN    ?= attestor.example.com
+
+CONFIG_YAML        ?= config.debug.pkcs11.yaml
 
 PROTO_DIR          ?= proto
 PROTOC             ?= protoc
@@ -67,14 +76,6 @@ PROTOC             ?= protoc
 ROOT_CA            ?= root-ca
 INTERMEDIATE_CA    ?= intermediate-ca
 DOMAIN             ?= example.com
-
-VERIFIER_HOSTNAME  ?= www
-VERIFIER_DOMAIN    ?= verifier.example.com
-
-ATTESTOR_HOSTNAME  ?= www
-ATTESTOR_DOMAIN    ?= attestor.example.com
-
-CONFIG_YAML        ?= config.dev.yaml
 
 ANSIBLE_USER       ?= ansible
 
@@ -86,13 +87,6 @@ SOFTHSM_DIR        ?= /usr/local/bin
 SOFTHSM_LIB        ?= /usr/local/lib/softhsm/libsofthsm2.so
 SOFTHSM_TOKEN_DIR  ?= /var/lib/softhsm/tokens
 SOFTHSM_CONFIG     ?= configs/softhsm2.conf
-
-TPM2_PTOOL         ?= ../go-trusted-platform-ansible/setup/trusted-data/build/tpm2-pkcs11/tools/tpm2_ptool.py
-
-# The TPM Endorsement Key file name. This is set to a default value that
-# aligns with the EK cert name used in the tpm2_getekcertificate docs:
-# https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_getekcertificate.1.md
-EK_CERT_NAME ?= ECcert.bin
 
 
 .PHONY: deps build build-debug build-static build-debug-static clean test initlog \
@@ -136,8 +130,12 @@ env:
 	@echo "ATTESTOR_HOSTNAME: \t$(ATTESTOR_HOSTNAME)"
 	@echo "CONFIG_YAML: \t\t$(CONFIG_YAML)"
 
+
 deps:
-	go get
+	go install -v golang.org/x/tools/gopls@latest
+	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.28
+	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.2
+
 
 swagger:
 	swag init \
@@ -146,131 +144,180 @@ swagger:
 		--parseDependency \
 		--parseInternal \
 		--parseDepth 1 \
-		--output pkg/public_html/swagger
+		--output public_html/swagger
 
 swagger-ui:
-	git clone --depth=1 https://github.com/swagger-api/swagger-ui.git public_html/swagger
+	mkdir -p public_html/swagger
+	git clone --depth=1 https://github.com/swagger-api/swagger-ui.git && \
+		cp -R swagger-ui/dist/* public_html/swagger && \
+		rm -rf swagger-ui
 
 
 # x86_64
 build:
 	cd pkg; \
-	$(GOBIN)/go build -o ../$(APPNAME) -ldflags="-w -s ${LDFLAGS}"
+	$(GOBIN)/go build -o ../$(APPBIN) -ldflags="-w -s ${LDFLAGS}"
 
 build-debug:
 	cd pkg; \
-	$(GOBIN)/go build -gcflags='all=-N -l' -o ../$(APPNAME) -gcflags='all=-N -l' -ldflags="-w -s ${LDFLAGS}"
+	$(GOBIN)/go build -gcflags='all=-N -l' -o ../$(APPBIN) -gcflags='all=-N -l' -ldflags="-w -s ${LDFLAGS}"
 
 build-static:
 	cd pkg; \
-	$(GOBIN)/go build -o ../$(APPNAME) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
+	$(GOBIN)/go build -o ../$(APPBIN) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
 
 build-debug-static:
 	cd pkg; \
-	$(GOBIN)/go build -o ../$(APPNAME) -gcflags='all=-N -l' --ldflags '-extldflags -static -v ${LDFLAGS}'
+	$(GOBIN)/go build -o ../$(APPBIN) -gcflags='all=-N -l' --ldflags '-extldflags -static -v ${LDFLAGS}'
 
 
 # x86
 build-x86:
 	cd pkg; \
-	GOARCH=386 $(GOBIN)/go build -o ../$(APPNAME) -ldflags="-w -s ${LDFLAGS}"
+	GOARCH=386 $(GOBIN)/go build -o ../$(APPBIN) -ldflags="-w -s ${LDFLAGS}"
 
 build-x86-debug:
 	cd pkg; \
-	GOARCH=386 $(GOBIN)/go build -gcflags='all=-N -l' -o ../$(APPNAME) -gcflags='all=-N -l' -ldflags="-w -s ${LDFLAGS}"
+	GOARCH=386 $(GOBIN)/go build -gcflags='all=-N -l' -o ../$(APPBIN) -gcflags='all=-N -l' -ldflags="-w -s ${LDFLAGS}"
 
 build-x86-static:
 	cd pkg; \
-	GOARCH=386 $(GOBIN)/go build -o ../$(APPNAME) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
+	GOARCH=386 $(GOBIN)/go build -o ../$(APPBIN) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
 
 build-x86-debug-static:
 	cd pkg; \
-	GOARCH=386 $(GOBIN)/go build -o ../$(APPNAME) -gcflags='all=-N -l' --ldflags '-extldflags -static -v ${LDFLAGS}'
+	GOARCH=386 $(GOBIN)/go build -o ../$(APPBIN) -gcflags='all=-N -l' --ldflags '-extldflags -static -v ${LDFLAGS}'
 
 
 # ARM 32-bit
 build-arm:
 	cd pkg; \
 	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=6 \
-	$(GOBIN)/go build -o ../$(APP) -ldflags="-w -s ${LDFLAGS}"
+	$(GOBIN)/go build -o ../$(APPBIN) -ldflags="-w -s ${LDFLAGS}"
 
 build-arm-static:
 	cd pkg; \
 	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=6 \
-	$(GOBIN)/go build -v -a -o ../$(APP) -v --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
+	$(GOBIN)/go build -v -a -o ../$(APPBIN) -v --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
 
 build-arm-debug:
 	cd pkg; \
 	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=6 \
-	$(GOBIN)/go build -gcflags "all=-N -l" -o ../$(APP) --ldflags="-v $(LDFLAGS)"
+	$(GOBIN)/go build -gcflags "all=-N -l" -o ../$(APPBIN) --ldflags="-v $(LDFLAGS)"
 
 build-arm-debug-static:
 	cd pkg; \
 	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=6 \
-	$(GOBIN)/go build -gcflags "all=-N -l" -v -a -o ../$(APP) -v --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
+	$(GOBIN)/go build -gcflags "all=-N -l" -v -a -o ../$(APPBIN) -v --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
 
 
 # ARM 64-bit
 build-arm64:
 	cd pkg; \
 	CC=$(ARM_CC_64) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -o ../$(APP) -ldflags="-w -s ${LDFLAGS}"
+	$(GOBIN)/go build -o ../$(APPBIN) -ldflags="-w -s ${LDFLAGS}"
 
 build-arm64-static:
 	cd pkg; \
-	CC=$(ARM_CC_64) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -o ../$(APP) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
+	CC=$(ARM_CC_64) APPBIN=1 GOOS=linux GOARCH=arm64 \
+	$(GOBIN)/go build -o ../$(APPBIN) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
 
 build-arm64-debug:
 	cd pkg; \
 	CC=$(ARM_CC_64) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -gcflags "all=-N -l" -o ../$(APP) --ldflags="$(LDFLAGS)"
+	$(GOBIN)/go build -gcflags "all=-N -l" -o ../$(APPBIN) --ldflags="$(LDFLAGS)"
 
 build-arm64-debug-static:
 	cd pkg; \
 	CC=$(ARM_CC_64) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -gcflags "all=-N -l" -o ../$(APP) --ldflags '-extldflags -static -v ${LDFLAGS}'
+	$(GOBIN)/go build -gcflags "all=-N -l" -o ../$(APPBIN) --ldflags '-extldflags -static -v ${LDFLAGS}'
+
+
+build-local: clean build-debug
+	sudo chown $(USER):$(USER) /dev/tpmrm0
+	-sudo chown $(USER):$(USER) /sys/kernel/security/tpm0/binary_bios_measurements
+	mkdir -p $(PLATFORM_DIR)/etc/
+	cp configs/platform/config.dev.yaml config.yaml
+	cp configs/softhsm.conf $(PLATFORM_DIR)/etc/softhsm.conf
+
+
+config:
+	mkdir -p pkg/$(PLATFORM_DIR)/etc/
+	cp configs/platform/$(CONFIG_YAML) pkg/config.yaml
+	cp configs/softhsm.conf pkg/trusted-data/etc/softhsm.conf
 
 
 clean:
 	cd pkg; \
 	$(GOBIN)/go clean
 	rm -rf \
-		$(APPNAME) \
-		/usr/local/bin/$(APPNAME) \
+		$(APPBIN) \
+		/usr/local/bin/$(APPBIN) \
 		$(PLATFORM_DIR) \
 		$(ATTESTATION_DIR) \
 		pkg/$(PLATFORM_DIR) \
-		pkg/store/testdata \
+		pkg/config.yaml \
+		pkg/public_html \
+		pkg/ca/testdata \
+		pkg/platform/testdata \
+		pkg/store/blob/testdata \
+		pkg/store/certstore/testdata \
 		pkg/store/keystore/testdata \
-		pkg/store/pkcs8/testdata \
+		pkg/store/keystore/pkcs8/testdata \
+		pkg/store/keystore/pkcs11/testdata \
+		pkg/store/keystore/tpm2/testdata \
+		pkg/tpm2/testdata \
+		pkg/tpm2/blobs \
 		pkg/ca/testdata \
 		pkg/tpm2/testdata \
-		pkg/tpm2/$(EK_CERT_NAME) \
-		pkg/$(EK_CERT_NAME) \
 		config.yaml
 
 
-test: test-ca test-tpm test-crypto test-store
+test: test-tpm test-crypto test-store
 
 test-ca:
-	cd pkg/ca && go test -v
+	cd pkg/ca && \
+		go test -v -run ^TestInit$ && \
+		go test -v -run ^TestPasswordComplexity$ && \
+		go test -v -run ^TestImportIssuingCAs$ && \
+		go test -v -run ^TestDownloadDistribuitionCRLs$ && \
+		go test -v -run ^TestIssueCertificateWithPassword$ && \
+		go test -v -run ^TestIssueCertificateWithoutPassword$ && \
+		go test -v -run ^TestIssueCertificate_CA_RSA_WITH_LEAF_ECDSA$ && \
+		go test -v -run ^TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke$
 
 test-tpm:
-	cp $(EK_CERT_NAME) pkg/tpm2/
 	cd pkg/tpm2 && go test -v
-
-test-pkcs11:
-	cd pkg/pkcs11 && go test -v
 
 test-crypto:
 	cd pkg/crypto/aesgcm && go test -v
 	cd pkg/crypto/argon2 && go test -v
 
 test-store:
-	cd pkg/store && go test -v
 	cd pkg/store/keystore && go test -v
 	cd pkg/store/keystore/pkcs8 && go test -v
+	$(MAKE) test-store-pkcs11 test-store-tpm2
+
+test-store-pkcs11:
+	cd pkg/store/keystore/pkcs11 && \
+		go test -v -run ^TestConnection$ && \
+		go test -v -run ^TestSignEd25519_WithoutFileIntegrityCheck$ && \
+		go test -v -run ^TestSignECDSA_WithoutFileIntegrityCheck$ && \
+		go test -v -run ^TestSignRSASSA_WithoutFileIntegrityCheck$ && \
+		go test -v -run ^TestSignRSAPSS_WithoutFileIntegrityCheck$ && \
+		go test -v -run ^TestSignRSAPSS_WithFileIntegrityCheck$ && \
+		go test -v -run ^TestInitHSM$
+
+test-store-tpm2:
+	cd pkg/store/keystore/tpm2 && \
+		go test -v -run ^TestKeyStoreNotInitialized$ && \
+		go test -v -run ^TestKeyStoreInitialization$ && \
+		go test -v -run ^TestSignerRSA_PSS$ && \
+		go test -v -run ^TestSignerRSA_PKCS1v15$ && \
+		go test -v -run ^TestSignerECDSA$ && \
+		go test -v -run ^TestRSA_PKCS1v15_WithPasswordWithoutPolicy$ && \
+		go test -v -run ^TestKeyStoreGenerateRSAWithPolicy$ && \
+		go test -v -run ^TestRSA_PSS_WithPasswordWithoutPolicy$
 
 proto:
 	cd pkg/$(ATTESTATION_DIR) && $(PROTOC) \
@@ -284,57 +331,19 @@ install: luks-create ansible-install ansible-setup
 uninstall: uninstall-ansible
 
 
-# Certificate Authority
-ca-verify-all: ca-parent-verify ca-intermediate-verify ca-server-=verify
-
-ca-show-all: ca-parent-show ca-intermediate-show ca-server-show
-
-ca-parent-verify:
-	cd $(CA_DIR) && \
-		openssl verify -CAfile $(ROOT_CA)/$(ROOT_CA).crt $(ROOT_CA)/$(ROOT_CA).crt
-
-ca-parent-show:
-	cd $(CA_DIR) && \
-		openssl x509 -in $(ROOT_CA)/$(ROOT_CA).crt -text -noout
-
-ca-intermediate-verify:
-	cd $(CA_DIR) && \
-		openssl verify \
-			-CAfile $(ROOT_CA)/$(ROOT_CA).crt \
-			$(INTERMEDIATE_CA)/$(INTERMEDIATE_CA).crt
-
-ca-intermediate-show:
-	cd $(CA_DIR) && \
-		openssl x509 -in $(INTERMEDIATE_CA)/$(INTERMEDIATE_CA).crt -text -noout
-
-ca-server-verify:
-	cd $(CA_DIR) && \
-		openssl verify \
-			-CAfile $(ROOT_CA)/$(ROOT_CA).crt \
-			-untrusted $(INTERMEDIATE_CA)/$(INTERMEDIATE_CA).crt \
-			$(INTERMEDIATE_CA)/issued/localhost/localhost.crt
-
-ca-server-show:
-	cd $(CA_DIR) && \
-		openssl x509 -in $(INTERMEDIATE_CA)/issued/localhost/localhost.crt -text -noout
-
-ca-decrypt-root-key:
-	openssl rsa -in $(CA_DIR)/$(ROOT_CA)/$(ROOT_CA).key -out $(ROOT_CA).pem
-
-ca-decrypt-intermediate-key:
-	openssl rsa -in $(CA_DIR)/$(INTERMEDIATE_CA)/$(INTERMEDIATE_CA).key -out $(INTERMEDIATE_CA).pem
-
-
 # Verifier
 verifier-init:
 	mkdir -p $(VERIFIER_DIR)/$(CONFIG_DIR)
-	cp configs/platform/$(CONFIG_YAML) $(VERIFIER_CONF)
+	cp configs/platform/$(VERIFIER_CONFIG) $(VERIFIER_CONF)
 	sed -i 's/$(DOMAIN)/$(VERIFIER_DOMAIN)/' $(VERIFIER_CONF)
-	sed -i 's/- $(VERIFIER_HOSTNAME).$(DOMAIN)/- $(VERIFIER_DOMAIN)/' $(VERIFIER_CONF)
+	sed -i 's|trusted-data/etc/softhsm.conf|$(shell pwd)/$(VERIFIER_DIR)/$(CONFIG_DIR)/softhsm.conf|' $(VERIFIER_CONF)
+	sed -i 's/- __VERIFIER_CA__/-  $(VERIFIER_HOSTNAME).$(VERIFIER_DOMAIN)/' $(VERIFIER_CONF)
+	cp configs/softhsm.conf $(VERIFIER_DIR)/$(CONFIG_DIR)
+	sed -i 's|trusted-data/softhsm2|$(shell pwd)/$(VERIFIER_DIR)/$(PLATFORM_DIR)|' $(VERIFIER_DIR)/$(CONFIG_DIR)/softhsm.conf
 
 verifier-no-clean: build verifier-init
 	cd $(VERIFIER_DIR) && \
-		../../trusted-platform verifier \
+		../../$(APPBIN) verifier \
 			--debug \
 			--config-dir $(CONFIG_DIR) \
 			--platform-dir $(PLATFORM_DIR) \
@@ -342,22 +351,21 @@ verifier-no-clean: build verifier-init
 
 verifier: verifier-clean verifier-init build
 	cd $(VERIFIER_DIR) && \
-		../../trusted-platform verifier \
+		../../$(APPBIN) verifier \
 			--debug \
+			--init \
 			--config-dir $(CONFIG_DIR) \
 			--platform-dir $(PLATFORM_DIR) \
 			--log-dir $(LOG_DIR) \
 			--ca-dir $(PLATFORM_DIR)/ca \
-			--ca-password ca-intermediate-password \
-			--server-password server-password \
-			--ek-cert $(ATTESTATION_ECCERT) \
-			--ak-password ak-password \
-			--attestor $(ATTESTOR_HOSTNAME).$(ATTESTOR_DOMAIN)
+			--attestor $(ATTESTOR_HOSTNAME).$(ATTESTOR_DOMAIN) \
+			--raw-so-pin 123456 \
+            --raw-pin 123456
 
 verifier-clean: 
 	rm -rf \
 		$(VERIFIER_DIR)/$(PLATFORM_DIR) \
-		$(VERIFIER_DIR)/$(EK_CERT_NAME)
+		pkg/$(PLATFORM_DIR)
 
 verifier-cert-chain:
 	openssl verify \
@@ -369,19 +377,22 @@ verifier-cert-chain:
 # Attestor
 attestor-init:
 	mkdir -p $(ATTESTOR_DIR)/$(CONFIG_DIR)
-	cp configs/platform/$(CONFIG_YAML) $(ATTESTOR_CONF)
+	cp configs/platform/$(ATTESTOR_CONFIG) $(ATTESTOR_CONF)
 	sed -i 's/$(DOMAIN)/$(ATTESTOR_DOMAIN)/' $(ATTESTOR_CONF)
-	sed -i 's/- __VERIFIER_CA__/- $(INTERMEDIATE_CA).$(VERIFIER_DOMAIN)/' $(ATTESTOR_CONF)
-	cp $(EK_CERT_NAME) $(ATTESTOR_DIR)/$(EK_CERT_NAME)
+	sed -i 's|trusted-data/etc/softhsm.conf|$(shell pwd)/$(ATTESTOR_DIR)/$(CONFIG_DIR)/softhsm.conf|' $(ATTESTOR_CONF)
+	sed -i 's/- __VERIFIER_CA__/- $(VERIFIER_HOSTNAME).$(VERIFIER_DOMAIN)/' $(ATTESTOR_CONF)
+	cp configs/softhsm.conf $(ATTESTOR_DIR)/$(CONFIG_DIR)
+	sed -i 's|trusted-data/softhsm2|$(shell pwd)/$(ATTESTOR_DIR)/$(PLATFORM_DIR)|' $(ATTESTOR_DIR)/$(CONFIG_DIR)/softhsm.conf
+
 
 attestor-clean: 
 	rm -rf \
 		$(ATTESTOR_DIR)/$(PLATFORM_DIR) \
-		$(ATTESTOR_DIR)/$(EK_CERT_NAME)
+		pkg/$(PLATFORM_DIR)
 
 attestor-no-clean: build attestor-init
 	cd $(ATTESTOR_DIR) && \
-		../../trusted-platform attestor \
+		../../$(APPBIN) attestor \
 			--debug \
 			--config-dir $(CONFIG_DIR) \
 			--platform-dir $(PLATFORM_DIR) \
@@ -389,15 +400,15 @@ attestor-no-clean: build attestor-init
 
 attestor: attestor-clean attestor-init build
 	cd $(ATTESTOR_DIR) && \
-		../../trusted-platform attestor \
+		../../$(APPBIN) attestor \
 			--debug \
+			--init \
 			--config-dir $(CONFIG_DIR) \
 			--platform-dir $(PLATFORM_DIR) \
 			--log-dir $(LOG_DIR) \
 			--ca-dir $(PLATFORM_DIR)/ca \
-			--ek-cert $(ATTESTATION_ECCERT) \
-			--ca-password ca-intermediate-password \
-			--server-password server-password
+			--raw-so-pin 123456 \
+            --raw-pin 123456
 
 attestor-verify-cert-chain:
 	openssl verify \
@@ -422,35 +433,17 @@ attestor-verify-tls:
 
 
 # Web Services
+webservice: build-debug config
+	cd pkg && ../$(APPBIN) webservice --init
+
 webservice-verify-tls:
 	cd $(ATTESTATION_DIR) && \
 	openssl s_client \
-		-connect localhost:8081 \
+		-connect localhost:8443 \
 		-showcerts \
 		-servername localhost \
-		-CAfile $(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(DOMAIN)/trusted-root/$(ROOT_CA).$(DOMAIN).crt \
+		-CAfile pkg/$(PLATFORM_DIR)/ca/$(INTERMEDIATE_CA).$(DOMAIN)/x509/$(ROOT_CA).$(DOMAIN).pkcs8.rsa.crt \
 		| openssl x509 -noout -text
-
-
-
-## tpm2-pkcs11
-tpm2pkcs11-init:
-	$(TPM2_PTOOL) init --path=/tmp
-	$(TPM2_PTOOL) addtoken \
-		--pid=1 --sopin=mysopin \
-		--userpin=myuserpin \
-		--label=label --path /tmp
-	tpm2pkcs11-tool \
-		--label="label" \
-		--login \
-		--pin myuserpin \
-		--change-pin \
-		--new-pin mynewpin
-		--path /tmp
-
-# https://github.com/tpm2-software/tpm2-pkcs11/blob/master/docs/PKCS11_TOOL.md
-tpm2pkcs11-create-key:
-	tpm2pkcs11-tool --label="label" --login --pin=mynewpin --keypairgen
 
 
 # LUKS Encrypted Platform Data Container
@@ -529,3 +522,36 @@ rpi-qemu:
 #  http://localhost:3000/
 webapp-run:
 	cd public_html/$(APPNAME) && npm run dev
+
+# Docker
+docker-load-builder: build-debug
+	docker build --load \
+		-t $(APPNAME)-builder \
+		-f build/docker/$(APPNAME)-builder/Dockerfile .
+
+docker-run: build-debug
+	docker run -it --privileged \
+	-v .:/mnt \
+	-v /dev/bus/usb:/dev/bus/usb \
+	trusted-platform-builder bash
+
+docker-run-builder-with-usb:
+	docker run -it --rm --privileged \
+		-v /dev/bus/usb:/dev/bus/usb \
+		# -v /sys/devices/:/sys/devices/ \
+		# -v /dev/hidraw4:/dev/hidraw4 \
+		$(APPNAME)-builder \
+		bash
+		# /usr/local/bin/yubico-piv-tool -astatus
+
+docker-run-builder2:
+	docker run -ti --rm \
+		-v /dev/bus/usb:/dev/bus/usb \
+		-v /sys/bus/usb/:/sys/bus/usb/ \
+		-v /sys/devices/:/sys/devices/ \
+		-v /dev/hidraw4:/dev/hidraw4 \
+		--device /dev/usb:/dev/usb \
+		--device /dev/bus/usb:/dev/bus/usb \
+		--privileged \
+		$(APPNAME)-builder \
+		/usr/local/bin/yubico-piv-tool -astatus

@@ -80,29 +80,6 @@ The traffic between the CPU <-> TPM bus supports encryption to help protect agai
 
 The platform configuration file provides examples and documentation on how to tune and optimize the platform according to your desired security posture and application requirements.
 
-
-##### Flow
-
-The following steps are used to complete device registration, identity validation, platform software state validation, and service delivery, as illustrated on [Remote Attestation With Tpm2 Tools](https://tpm2-software.github.io/2020/06/12/Remote-Attestation-With-tpm2-tools.html).
-
-
-###### Device Registration
-
-![Device Registration](https://tpm2-software.github.io/images/tpm2-attestation-demo/registration.png)
-
-###### Service Request - Part 1: Platform Anonymous Identity Validation
-
-![Service Request - Part 1](https://tpm2-software.github.io/images/tpm2-attestation-demo/identity-validation.png)
-
-###### Service Request - Part 2: Platform Software State Validation
-
-![Service Request - Part 2](https://tpm2-software.github.io/images/tpm2-attestation-demo/software-state-validation.png)
-
-###### Service Delivery
-
-![Service Delivery](https://tpm2-software.github.io/images/tpm2-attestation-demo/service-delivery.png)
-
-
 ### Compatibility
 
 This project makes use of the new [go-tpm/tpm2](https://github.com/google/go-tpm) "TPMDirect" TPM 2.0 API introduced in v0.9.0.
@@ -134,11 +111,21 @@ The initial use case I'm supporting is a local farmers market that runs as an op
 
 #### TCG
 
-1. [TCG TPM v2.0 Provisioning Guidance](https://trustedcomputinggroup.org/wp-content/uploads/TCG-TPM-v2.0-Provisioning-Guidance-Published-v1r1.pdf#page=39&zoom=100,73,501)
+1. [Trusted Platform Module Library - Part 1: Architecture](https://trustedcomputinggroup.org/wp-content/uploads/TPM-Rev-2.0-Part-1-Architecture-01.07-2014-03-13.pdf)
 
-2. [TCG Guidance for Securing Network Equipment Using TCG Technology](https://trustedcomputinggroup.org/wp-content/uploads/TCG_Guidance_for_Securing_NetEq_1_0r29.pdf)
+2. [Trusted Platform Module Library - Part 2: Structures](https://trustedcomputinggroup.org/wp-content/uploads/TPM-Rev-2.0-Part-2-Structures-00.99.pdf)
 
-3. [TCG Guidance for Secure Update of Software and Firmware on Embedded Systems](https://trustedcomputinggroup.org/wp-content/uploads/TCG-Secure-Update-of-SW-and-FW-on-Devices-v1r72_pub.pdf)
+3. [Trusted Platform Module Library - Part 3: Commands](https://trustedcomputinggroup.org/wp-content/uploads/TPM-Rev-2.0-Part-3-Commands-01.38.pdf)
+
+4. [TPM 2.0 Keys for Device Identity and Attestation](https://trustedcomputinggroup.org/wp-content/uploads/TPM-2p0-Keys-for-Device-Identity-and-Attestation_v1_r12_pub10082021.pdf)
+
+5. [Registry of Reserved TPM 2.0 Handles and Localities](https://trustedcomputinggroup.org/wp-content/uploads/RegistryOfReservedTPM2HandlesAndLocalities_v1p1_pub.pdf)
+
+6. [TCG TPM v2.0 Provisioning Guidance](https://trustedcomputinggroup.org/wp-content/uploads/TCG-TPM-v2.0-Provisioning-Guidance-Published-v1r1.pdf#page=39&zoom=100,73,501)
+
+7. [TCG Guidance for Securing Network Equipment Using TCG Technology](https://trustedcomputinggroup.org/wp-content/uploads/TCG_Guidance_for_Securing_NetEq_1_0r29.pdf)
+
+8. [TCG Guidance for Secure Update of Software and Firmware on Embedded Systems](https://trustedcomputinggroup.org/wp-content/uploads/TCG-Secure-Update-of-SW-and-FW-on-Devices-v1r72_pub.pdf)
 
 
 #### NIST
@@ -171,18 +158,3 @@ The initial use case I'm supporting is a local farmers market that runs as an op
 8. [FIPS 201-3: Personal Identity Verification (PIV) of Federal Employees and Contractors](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.201-3.pdf)
 
 9. [FIPS 202: SHA-3 Standard: Permutation-Based Hash and Extendable-Output Functions](https://csrc.nist.gov/pubs/fips/202/final)
-
-
-## The Need for Security
-
-Unfortunately, we live in a world where physics put both users and corporations at odds with security.
-
-![Security, Functionality, Usability](https://miro.medium.com/v2/resize:fit:720/format:webp/1*tN9HwPDvRECmxGS7Kq0law.jpeg)
-
-The more features and functionality introduced to software, the further away it moves from being secure. Users want software that is easy to use and filled with features, and corporations want profits driven by users who are happy with their products that do many amazing things, intuitively.
-
-We now live in a world with lots of connected devices, artifical intelligence systems learning from and controlling said devices, processing incoming data at light speed, and integrating with many different 3rd party systems and service providers around the world. Privacy controls, systems and network hardening and data encryption at rest and in-transit are often a 2nd thought, especially on home networks where it's common to omit TLS verifications. Attackers are constantly looking for new hosts to compromise, expand their botnets and criminal enterprises, extract data, steal identities, and perform other nefarious activities.
-
-This platform makes security a first class citizen and encourages a thoughtful design approach to building a connected services platform, abstracting the common activities, complexities, compliances, and boilerplate necessities into a modular and flexible framework that can be applied to any web services, SAAS, or connected devices platform. It strives to protect user data and confidentiality while empowering service providers and application developers to create secure offerings using industry approved standards and mechanisms so they can focus on delivering intuitive, feature-filled solutions.
-
-This project makes use of modern authentication and security mechanisms such as [WebAuthn](https://en.wikipedia.org/wiki/WebAuthn), [FIDO 2](https://fidoalliance.org/fido2/), [PIV](https://en.wikipedia.org/wiki/FIPS_201) cards, and hardware based secret management to provide a password-less experience for users and platform administrators, while meeting stringent security requirements for highly regulated industries.

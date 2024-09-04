@@ -10,64 +10,169 @@ import (
 	"io"
 	"strings"
 
-	"github.com/op/go-logging"
-	libpkcs8 "github.com/youmark/pkcs8"
-
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store"
-	blobstore "github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
+	"github.com/op/go-logging"
+
+	"github.com/google/go-tpm/tpm2"
+	libtpm2 "github.com/google/go-tpm/tpm2"
+	blobstore "github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
+	tpmks "github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/tpm2"
+	tptpm2 "github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
+	libpkcs8 "github.com/youmark/pkcs8"
 )
 
 type Params struct {
-	Logger         *logging.Logger
-	KeyDir         string
-	DefaultKeySize int
-	Random         io.Reader
-	Backend        store.Backend
-	SignerStore    store.SignerStorer
-	BlobStore      blobstore.BlobStorer
+	Config       *Config
+	DebugSecrets bool
+	Logger       *logging.Logger
+	Random       io.Reader
+	Backend      keystore.KeyBackend
+	SignerStore  keystore.SignerStorer
+	BlobStore    blobstore.BlobStorer
+	TPMKS        tpmks.PlatformKeyStorer
 }
 
-type KeyStorePKCS8 struct {
-	params Params
+type KeyStore struct {
+	params *Params
 	keystore.KeyStorer
 }
 
-// Creates a new PKCS #8 key store
-func NewKeyStorePKCS8(params Params) keystore.KeyStorer {
-	return KeyStorePKCS8{
-		params: params,
+// PKCS #8 Key Store Module. This module saves keys to the the provided
+// backend in PKCS #8 form.
+func NewKeyStore(params *Params) (keystore.KeyStorer, error) {
+
+	ks := &KeyStore{params: params}
+
+	// secret, err := ks.password(ks.keyAttrsTemplate())
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// _, err = secret.String()
+	// if err != nil {
+	// 	if err == keystore.ErrFileNotFound {
+	// 		return ks, keystore.ErrNotInitalized
+	// 	}
+	// 	return nil, err
+	// }
+
+	return ks, nil
+}
+
+// No-op method that implements keystore.KeyStorer
+func (ks *KeyStore) Initialize(soPIN, userPIN keystore.Password) error {
+
+	if ks.params.TPMKS == nil {
+		return keystore.ErrNotInitalized
+	}
+
+	// // Generate new PIN if not provided via Secret parameter
+	// var newPin string
+	// var err error
+
+	// // if userPIN == nil || userPIN == keystore.NewClearPassword([]byte(keystore.DEFAULT_PASSWORD)) {
+	// if userPIN == nil {
+	// 	pinBytes := aesgcm.NewAESGCM(
+	// 		ks.params.Logger, ks.params.DebugSecrets, ks.params.Random).GenerateKey()
+	// 	userPIN = keystore.NewClearPassword(pinBytes)
+	// 	newPin = string(pinBytes)
+	// } else {
+	// 	newPin, err = userPIN.String()
+	// 	if err != nil {
+	// 		ks.params.Logger.Error(err)
+	// 		return err
+	// 	}
+	// 	if newPin == keystore.DEFAULT_PASSWORD {
+	// 		pinBytes := aesgcm.NewAESGCM(
+	// 			ks.params.Logger, ks.params.DebugSecrets, ks.params.Random).GenerateKey()
+	// 		userPIN = keystore.NewClearPassword(pinBytes)
+	// 		newPin = string(pinBytes)
+	// 	}
+	// }
+
+	// // Get the platform key store SRK attributes
+	// srkAttrs := ks.params.TPMKS.SRKAttributes()
+
+	// // Generate child key under the platform key store SRK
+	// keyAttrs := ks.keyAttrsTemplate()
+
+	// if ks.params.DebugSecrets {
+	// 	ks.params.Logger.Debug("keystore/pkcs8: security officer PIN: N/A")
+	// 	ks.params.Logger.Debugf(
+	// 		"keystore/pkcs8: user PIN: %s:%s", keyAttrs.CN, newPin)
+	// }
+
+	// keyAttrs.Secret = userPIN
+	// keyAttrs.Parent = srkAttrs
+	// keyAttrs.TPMAttributes.Hierarchy = srkAttrs.TPMAttributes.Hierarchy
+	// err = ks.params.TPMKS.TPM2().GenerateKeyedHash(keyAttrs)
+	// if err != nil {
+	// 	ks.params.Logger.Error(err)
+	// 	return err
+	// }
+
+	return nil
+}
+
+// Returns key attriibutes for the PKCS #8 key store pin
+func (ks *KeyStore) keyAttrsTemplate() *keystore.KeyAttributes {
+	tpmkskAttrs := ks.params.TPMKS.SRKAttributes()
+	return &keystore.KeyAttributes{
+		CN:             fmt.Sprintf("%s.pin", ks.params.Config.CN),
+		Debug:          ks.params.DebugSecrets,
+		KeyAlgorithm:   x509.PublicKeyAlgorithm(tpm2.TPMAlgKeyedHash),
+		KeyType:        keystore.KEY_TYPE_HMAC,
+		Parent:         tpmkskAttrs,
+		PlatformPolicy: ks.params.Config.PlatformPolicy,
+		Hash:           tpmkskAttrs.Hash,
+		StoreType:      keystore.STORE_PKCS8,
+		TPMAttributes: &keystore.TPMAttributes{
+			HandleType: libtpm2.TPMHTTransient,
+			Hierarchy:  tpm2.TPMRHOwner,
+			Template:   tptpm2.KeyedHashTemplate,
+		},
 	}
 }
 
+// Returns the key store backend
+func (ks *KeyStore) Backend() keystore.KeyBackend {
+	return ks.params.Backend
+}
+
+// No-op method that implements keystore.KeyStorer
+func (ks *KeyStore) Close() error {
+	return nil
+}
+
 // Returns the key store type as a string
-func (pkcs8 KeyStorePKCS8) Type() keystore.StoreType {
+func (ks *KeyStore) Type() keystore.StoreType {
 	return keystore.STORE_PKCS8
 }
 
-// Create new private key using the provided key attributes
-// and return an OpaqueKey implementing crypto.Signer
-func (ks KeyStorePKCS8) CreateKey(attrs keystore.KeyAttributes) (keystore.OpaqueKey, error) {
-	if attrs.RSAAttributes != nil && attrs.KeyAlgorithm == x509.RSA {
-		return ks.CreateRSA(attrs)
+// Deletes a key pair from the key store
+func (ks *KeyStore) Delete(attrs *keystore.KeyAttributes) error {
+	return ks.params.Backend.Delete(attrs)
+}
 
-	} else if attrs.ECCAttributes != nil {
-		if attrs.KeyAlgorithm == x509.ECDSA {
-			return ks.CreateECDSA(attrs)
-		}
-		if attrs.KeyAlgorithm == x509.Ed25519 {
-			return ks.CreateEd25519(attrs)
-		}
+// Generate new private key using the provided key attributes
+// and return an OpaqueKey implementing crypto.Signer
+func (ks *KeyStore) GenerateKey(attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
+	switch attrs.KeyAlgorithm {
+	case x509.RSA:
+		return ks.GenerateRSA(attrs)
+	case x509.ECDSA:
+		return ks.GenerateECDSA(attrs)
+	case x509.Ed25519:
+		return ks.GenerateEd25519(attrs)
 	}
 	return nil, keystore.ErrInvalidKeyAlgorithm
 }
 
-// Create new RSA private key and return an OpaqueKey implementing crypto.Signer
-func (ks KeyStorePKCS8) CreateRSA(attrs keystore.KeyAttributes) (keystore.OpaqueKey, error) {
+// Generate new RSA private key and return an OpaqueKey implementing crypto.Signer
+func (ks *KeyStore) GenerateRSA(attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
 	// Provide default key size if not specified or less than 512 bits
 	if attrs.RSAAttributes.KeySize == 0 || attrs.RSAAttributes.KeySize < 512 {
-		attrs.RSAAttributes.KeySize = ks.params.DefaultKeySize
+		attrs.RSAAttributes.KeySize = 2048
 	}
 
 	// Generate the key
@@ -76,7 +181,7 @@ func (ks KeyStorePKCS8) CreateRSA(attrs keystore.KeyAttributes) (keystore.Opaque
 		return nil, err
 	}
 
-	// Save the key to the key store
+	// Save the key to the key store.
 	err = ks.save(attrs, privateKey)
 	if err != nil {
 		return nil, err
@@ -89,9 +194,9 @@ func (ks KeyStorePKCS8) CreateRSA(attrs keystore.KeyAttributes) (keystore.Opaque
 	return keystore.NewOpaqueKey(ks, attrs, &privateKey.PublicKey), nil
 }
 
-// Creates a new ECDSA private key and return and OpaqueKey
+// Generates a new ECDSA private key and return and OpaqueKey
 // implementing crypto.Signer
-func (ks KeyStorePKCS8) CreateECDSA(attrs keystore.KeyAttributes) (keystore.OpaqueKey, error) {
+func (ks *KeyStore) GenerateECDSA(attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 	privateKey, err := ecdsa.GenerateKey(attrs.ECCAttributes.Curve, ks.params.Random)
 	if err != nil {
 		return nil, err
@@ -106,9 +211,9 @@ func (ks KeyStorePKCS8) CreateECDSA(attrs keystore.KeyAttributes) (keystore.Opaq
 	return keystore.NewOpaqueKey(ks, attrs, &privateKey.PublicKey), nil
 }
 
-// Creates a new Ed25519 private key and return and OpaqueKey
+// Generates a new Ed25519 private key and return and OpaqueKey
 // implementing crypto.Signer
-func (ks KeyStorePKCS8) CreateEd25519(attrs keystore.KeyAttributes) (keystore.OpaqueKey, error) {
+func (ks *KeyStore) GenerateEd25519(attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 	publicKey, privateKey, err := ed25519.GenerateKey(ks.params.Random)
 	if err != nil {
 		return nil, err
@@ -123,8 +228,26 @@ func (ks KeyStorePKCS8) CreateEd25519(attrs keystore.KeyAttributes) (keystore.Op
 	return keystore.NewOpaqueKey(ks, attrs, publicKey), nil
 }
 
+// Generates a new AES-256 32 byte secret key
+func (ks *KeyStore) GenerateSecretKey(
+	attrs *keystore.KeyAttributes) error {
+
+	// bytes := aesgcm.NewAESGCM(
+	// 	ks.params.Logger,
+	// 	ks.params.DebugSecrets,
+	// 	ks.params.Random).GenerateKey()
+
+	// err := ks.Backend().Save(attrs, bytes, keystore.FSEXT_PRIVATE_BLOB)
+	// if err != nil {
+	// 	return err
+	// }
+	// return nil
+
+	return ks.params.TPMKS.GenerateSecretKey(attrs)
+}
+
 // Returns a PKCS #8 crypto.Signer based on the provided key attributes
-func (ks KeyStorePKCS8) Signer(attrs keystore.KeyAttributes) (crypto.Signer, error) {
+func (ks *KeyStore) Signer(attrs *keystore.KeyAttributes) (crypto.Signer, error) {
 
 	// Retrieve the requested key
 	key, err := ks.privKey(attrs)
@@ -132,40 +255,37 @@ func (ks KeyStorePKCS8) Signer(attrs keystore.KeyAttributes) (crypto.Signer, err
 		return nil, err
 	}
 
-	if attrs.RSAAttributes != nil {
-		if attrs.KeyAlgorithm == x509.RSA {
-			rsaPriv, ok := key.(*rsa.PrivateKey)
-			if !ok {
-				return nil, keystore.ErrInvalidPrivateKeyRSA
-			}
-			return NewSignerRSA(
-				ks,
-				ks.params.SignerStore,
-				attrs,
-				&rsaPriv.PublicKey), nil
+	if attrs.KeyAlgorithm == x509.RSA {
+		rsaPriv, ok := key.(*rsa.PrivateKey)
+		if !ok {
+			return nil, keystore.ErrInvalidPrivateKeyRSA
 		}
-	} else if attrs.ECCAttributes != nil {
-		if attrs.KeyAlgorithm == x509.ECDSA {
-			ecdsaPriv, ok := key.(*ecdsa.PrivateKey)
-			if !ok {
-				return nil, keystore.ErrInvalidPrivateKeyECDSA
-			}
-			return NewSignerECDSA(
-				ks,
-				ks.params.SignerStore,
-				attrs,
-				&ecdsaPriv.PublicKey), nil
-		} else if attrs.KeyAlgorithm == x509.Ed25519 {
-			ed25519Priv, ok := key.(ed25519.PrivateKey)
-			if !ok {
-				return nil, keystore.ErrInvalidPrivateKeyECDSA
-			}
-			return NewSignerEd25519(
-				ks,
-				ks.params.SignerStore,
-				attrs,
-				ed25519Priv.Public()), nil
+		return NewSignerRSA(
+			ks,
+			ks.params.SignerStore,
+			attrs,
+			&rsaPriv.PublicKey), nil
+
+	} else if attrs.KeyAlgorithm == x509.ECDSA {
+		ecdsaPriv, ok := key.(*ecdsa.PrivateKey)
+		if !ok {
+			return nil, keystore.ErrInvalidPrivateKeyECDSA
 		}
+		return NewSignerECDSA(
+			ks,
+			ks.params.SignerStore,
+			attrs,
+			&ecdsaPriv.PublicKey), nil
+	} else if attrs.KeyAlgorithm == x509.Ed25519 {
+		ed25519Priv, ok := key.(ed25519.PrivateKey)
+		if !ok {
+			return nil, keystore.ErrInvalidPrivateKeyECDSA
+		}
+		return NewSignerEd25519(
+			ks,
+			ks.params.SignerStore,
+			attrs,
+			ed25519Priv.Public()), nil
 	}
 
 	return nil, fmt.Errorf("%s: %s",
@@ -173,22 +293,49 @@ func (ks KeyStorePKCS8) Signer(attrs keystore.KeyAttributes) (crypto.Signer, err
 }
 
 // Returns a custom PKCS #8 verifier
-func (ks KeyStorePKCS8) Verifier(
-	attrs keystore.KeyAttributes,
+func (ks *KeyStore) Verifier(
+	attrs *keystore.KeyAttributes,
 	opts *keystore.VerifyOpts) keystore.Verifier {
 
-	return NewVerifier(ks.params.SignerStore)
+	return keystore.NewVerifier(ks.params.SignerStore)
 }
 
 // Returns a PKCS #8 crypto.Decrypter from the dedicated encryption keys partition.
-func (ks KeyStorePKCS8) Decrypter(attrs keystore.KeyAttributes) (crypto.Decrypter, error) {
+func (ks *KeyStore) Decrypter(attrs *keystore.KeyAttributes) (crypto.Decrypter, error) {
 	ks.privKey(attrs)
 	return nil, nil
 }
 
-// Returns a private key RSA key backed by this PKCS #8 key store
+// Returns a private key RSA key backed by this PKCS #8 key store.
 // for signing and decryption operations
-func (ks KeyStorePKCS8) Key(attrs keystore.KeyAttributes) (crypto.Signer, error) {
+func (ks *KeyStore) Key(attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
+	privKey, err := ks.privKey(attrs)
+	if err != nil {
+		return nil, err
+	}
+	if attrs.KeyAlgorithm == x509.RSA {
+		rsaPriv, ok := privKey.(*rsa.PrivateKey)
+		if ok {
+			return keystore.NewOpaqueKey(ks, attrs, rsaPriv.Public()), nil
+		}
+	} else if attrs.KeyAlgorithm == x509.ECDSA {
+		ecdsaPriv, ok := privKey.(*ecdsa.PrivateKey)
+		if ok {
+			return keystore.NewOpaqueKey(ks, attrs, ecdsaPriv.Public()), nil
+		}
+	} else if attrs.KeyAlgorithm == x509.Ed25519 {
+		ed25519Priv, ok := privKey.(ed25519.PrivateKey)
+		if ok {
+			return keystore.NewOpaqueKey(ks, attrs, ed25519Priv.Public()), nil
+		}
+	}
+	return nil, fmt.Errorf("%s: %s",
+		keystore.ErrInvalidSignatureAlgorithm, attrs.KeyAlgorithm)
+}
+
+// Returns a private key RSA key backed by this PKCS #8 key store.
+// for signing and decryption operations
+func (ks *KeyStore) PrivateKey(attrs *keystore.KeyAttributes) (crypto.Signer, error) {
 	privKey, err := ks.privKey(attrs)
 	if err != nil {
 		return nil, err
@@ -214,10 +361,10 @@ func (ks KeyStorePKCS8) Key(attrs keystore.KeyAttributes) (crypto.Signer, error)
 }
 
 // Compares an opaque key with the provided key
-// This is the PKCA #8 key store implementation for
+// This is the PKCA #8 key store. implementation for
 // the opaque key's  crypto.PrivateKey implementation
 // https://pkg.go.dev/crypto#PrivateKey
-func (ks KeyStorePKCS8) Equal(opaque keystore.Opaque, x crypto.PrivateKey) bool {
+func (ks *KeyStore) Equal(opaque keystore.Opaque, x crypto.PrivateKey) bool {
 	rsaPriv, ok := x.(*rsa.PrivateKey)
 	if !ok {
 		return false
@@ -226,20 +373,32 @@ func (ks KeyStorePKCS8) Equal(opaque keystore.Opaque, x crypto.PrivateKey) bool 
 }
 
 // Extracts the public key from the private key, encodes both to supported
-// formats (DER, PEM, PKCS1, PKCS8), and saves them to the key store.
-func (ks KeyStorePKCS8) save(
-	attrs keystore.KeyAttributes,
+// formats (DER, PEM, PKCS1, PKCS8), and saves them to the key store .
+func (ks *KeyStore) save(
+	attrs *keystore.KeyAttributes,
 	privateKey crypto.PrivateKey) error {
 
 	var err error
-	var pubKeyDER []byte
+	var pubKeyDER, password []byte
+
+	// If the key is configured with a platform policy, save the password
+	// to the platform key store with the platform PCR authorization policy
+	if attrs.Password != nil {
+		if err := ks.params.TPMKS.CreatePassword(attrs, ks.params.Backend); err != nil {
+			return err
+		}
+		password, err = attrs.Password.Bytes()
+		if err != nil {
+			return err
+		}
+	}
 
 	if attrs.KeyAlgorithm == x509.RSA {
 		rsaPriv, ok := privateKey.(*rsa.PrivateKey)
 		if !ok {
 			return keystore.ErrInvalidPrivateKeyRSA
 		}
-		pubKeyDER, err = store.EncodePubKey(&rsaPriv.PublicKey)
+		pubKeyDER, err = keystore.EncodePubKey(&rsaPriv.PublicKey)
 		if err != nil {
 			return err
 		}
@@ -249,7 +408,7 @@ func (ks KeyStorePKCS8) save(
 		if !ok {
 			return keystore.ErrInvalidPrivateKeyECDSA
 		}
-		pubKeyDER, err = store.EncodePubKey(&ecdsaPriv.PublicKey)
+		pubKeyDER, err = keystore.EncodePubKey(&ecdsaPriv.PublicKey)
 		if err != nil {
 			return err
 		}
@@ -258,7 +417,7 @@ func (ks KeyStorePKCS8) save(
 		if !ok {
 			return keystore.ErrInvalidPrivateKeyEd25519
 		}
-		pubKeyDER, err = store.EncodePubKey(ed25519Priv.Public())
+		pubKeyDER, err = keystore.EncodePubKey(ed25519Priv.Public())
 		if err != nil {
 			return err
 		}
@@ -266,37 +425,15 @@ func (ks KeyStorePKCS8) save(
 		return fmt.Errorf("%s: %s", keystore.ErrInvalidKeyAlgorithm, attrs.KeyAlgorithm)
 	}
 
-	// Private Key: Marshal to DER ASN.1 PKCS #8 (w/ optional password)
-	pkcs8, err := store.EncodePrivKey(privateKey, attrs.Password)
-	err = ks.params.Backend.Save(attrs, pkcs8, store.FSEXT_PRIVATE_PKCS8, nil)
-	if err != nil {
-		return err
-	}
-
-	// Private Key: Encode to PEM
-	pkcs8PEM, err := store.EncodePrivKeyPEM(attrs, privateKey)
-	if err != nil {
-		return err
-	}
-
-	// Private Key: Save PKCS8 PEM encoded key
-	err = ks.params.Backend.Save(attrs, pkcs8PEM, store.FSEXT_PRIVATE_PKCS8_PEM, nil)
+	// Private Key: Marshal to DER ASN.1 PKCS #8
+	pkcs8, err := keystore.EncodePrivKey(privateKey, password)
+	err = ks.params.Backend.Save(attrs, pkcs8, keystore.FSEXT_PRIVATE_PKCS8)
 	if err != nil {
 		return err
 	}
 
 	// Public Key: Save the ASN.1 DER PKCS1 form
-	err = ks.params.Backend.Save(attrs, pubKeyDER, store.FSEXT_PUBLIC_PKCS1, nil)
-	if err != nil {
-		return err
-	}
-	// Public Key: Encdode to PEM form
-	pubPEM, err := store.EncodePubKeyPEM(attrs.CN, pubKeyDER)
-	if err != nil {
-		return err
-	}
-	// Public Key: Save PEM form
-	err = ks.params.Backend.Save(attrs, pubPEM, store.FSEXT_PUBLIC_PEM, nil)
+	err = ks.params.Backend.Save(attrs, pubKeyDER, keystore.FSEXT_PUBLIC_PKCS1)
 	if err != nil {
 		return err
 	}
@@ -304,60 +441,33 @@ func (ks KeyStorePKCS8) save(
 }
 
 // Returns a PKCS #8 private key from the backend
-func (ks KeyStorePKCS8) privKey(attrs keystore.KeyAttributes) (crypto.PrivateKey, error) {
-	// keyExt := ks.params.Backend.KeyFileExtension(attrs.KeyAlgorithm, store.FSEXT_PRIVATE_PKCS8)
-	// bytes, err := ks.params.Backend.Get(attrs, keyExt, nil)
-	var bytes []byte
-	var err error
-	var key interface{}
-	if attrs.X509Attributes != nil {
-
-		switch attrs.X509Attributes.Type {
-
-		case keystore.X509_TYPE_LOCAL_ATTESTATION:
-			// Attestation's are signed using the CA key. Look for the CA key in the
-			// CA keys partition.
-			partition := store.PARTITION_CA
-			bytes, err = ks.params.Backend.Get(attrs, store.FSEXT_PRIVATE_PKCS8, &partition)
-			if err != nil {
-				return nil, err
-			}
-			key, err = libpkcs8.ParsePKCS8PrivateKey(bytes, attrs.Password)
-		case keystore.X509_TYPE_REMOTE_ATTESTATION:
-			// 	bytes, err = ks.params.Backend.Get(attrs, store.FSEXT_PRIVATE_PKCS8, nil)
-			// Attestation's are signed using the CA key. Look for the CA key in the
-			// CA keys partition.
-			partition := store.PARTITION_CA
-			bytes, err = ks.params.Backend.Get(attrs, store.FSEXT_PRIVATE_PKCS8, &partition)
-			if err != nil {
-				return nil, err
-			}
-			key, err = libpkcs8.ParsePKCS8PrivateKey(bytes, attrs.Password)
-			bytes, err = ks.params.Backend.Get(attrs, store.FSEXT_PRIVATE_PKCS8, &partition)
-			if err != nil {
-				return nil, err
-			}
-			key, err = libpkcs8.ParsePKCS8PrivateKey(bytes, attrs.AuthPassword)
-
-		case keystore.X509_TYPE_TLS:
-			bytes, err = ks.params.Backend.Get(attrs, store.FSEXT_PRIVATE_PKCS8, nil)
-			key, err = libpkcs8.ParsePKCS8PrivateKey(bytes, attrs.Password)
+func (ks *KeyStore) privKey(attrs *keystore.KeyAttributes) (crypto.PrivateKey, error) {
+	bytes, err := ks.params.Backend.Get(attrs, keystore.FSEXT_PRIVATE_PKCS8)
+	if err != nil {
+		return nil, err
+	}
+	var password []byte
+	if attrs.Password != nil {
+		if attrs.Parent == nil {
+			attrs.Parent = ks.params.TPMKS.SRKAttributes()
 		}
-
-	} else {
-		keyExt := ks.params.Backend.KeyFileExtension(attrs.KeyAlgorithm, store.FSEXT_PRIVATE_PKCS8)
-		bytes, err = ks.params.Backend.Get(attrs, keyExt, nil)
+		password, err = attrs.Password.Bytes()
 		if err != nil {
 			return nil, err
 		}
-		key, err = libpkcs8.ParsePKCS8PrivateKey(bytes, attrs.Password)
 	}
+	key, err := libpkcs8.ParsePKCS8PrivateKey(bytes, password)
 	if err != nil {
+		keystore.DebugKeyAttributes(ks.params.Logger, attrs)
 		if strings.Contains(err.Error(), "asn1: structure error: tags don't match") {
-			return nil, store.ErrInvalidPassword
+			return nil, keystore.ErrInvalidPassword
+		}
+		if strings.Contains(err.Error(), "pkcs8: incorrect password") {
+			if ks.params.DebugSecrets || attrs.Debug {
+				ks.params.Logger.Debugf("%s: %s:%s", err, attrs.CN, password)
+			}
 		}
 		return nil, err
 	}
-
 	return key.(crypto.PrivateKey), nil
 }

@@ -31,14 +31,14 @@ type JWTService struct {
 	expiration     time.Duration
 	responseWriter response.HttpWriter
 	publicKey      *rsa.PublicKey
-	keyAttributes  keystore.KeyAttributes
+	keyAttributes  *keystore.KeyAttributes
 	keystore       keystore.KeyStorer
 	JsonWebTokenServicer
 	middleware.JsonWebTokenMiddleware
 }
 
 type JsonWebTokenClaims struct {
-	ServerID int    `json:"sid"`
+	ServerID uint64 `json:"sid"`
 	UserID   uint64 `json:"uid"`
 	Email    string `json:"email"`
 	Services string `json:"services"`
@@ -53,7 +53,7 @@ type JsonWebToken struct {
 // Creates a new JsonWebTokenService with default configuration
 func NewJsonWebTokenService(
 	app *app.App,
-	keyAttributes keystore.KeyAttributes,
+	keyAttributes *keystore.KeyAttributes,
 	keystore keystore.KeyStorer,
 	responseWriter response.HttpWriter) (JsonWebTokenServicer, error) {
 
@@ -70,7 +70,7 @@ func CreateJsonWebTokenService(
 	app *app.App,
 	responseWriter response.HttpWriter,
 	expiration int,
-	keyAttributes keystore.KeyAttributes,
+	keyAttributes *keystore.KeyAttributes,
 	keystore keystore.KeyStorer) (JsonWebTokenServicer, error) {
 
 	return &JWTService{
@@ -190,7 +190,7 @@ func (jwtService *JWTService) GenerateToken(w http.ResponseWriter, req *http.Req
 	// }
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, JsonWebTokenClaims{
-		ServerID: int(1),
+		ServerID: uint64(1),
 		UserID:   1,
 		Email:    "root@example.com",
 		//Services: string(serviceClaimsJson),
@@ -254,7 +254,7 @@ func (jwtService *JWTService) RefreshToken(w http.ResponseWriter, req *http.Requ
 			// }
 
 			token := jwt.NewWithClaims(jwt.SigningMethodRS256, JsonWebTokenClaims{
-				ServerID: int(1),
+				ServerID: uint64(1),
 				UserID:   1,
 				Email:    "root@example.com",
 				//Services: string(serviceClaimsJson),

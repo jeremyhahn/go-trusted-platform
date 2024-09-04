@@ -19,7 +19,7 @@ type MutualTLSClient struct {
 func NewMutalTLSClient(
 	logger *logging.Logger,
 	ca ca.CertificateAuthority,
-	attrs keystore.KeyAttributes) MutualTLSClient {
+	attrs *keystore.KeyAttributes) MutualTLSClient {
 
 	client := MutualTLSClient{logger: logger, ca: ca}
 	client.http = http.Client{
@@ -56,7 +56,7 @@ func (client MutualTLSClient) Get(url string) ([]byte, error) {
 }
 
 // Retrieves the mTLS client certificate from the Certificate Authority
-func (client MutualTLSClient) certificate(attrs keystore.KeyAttributes) (*tls.Certificate, error) {
+func (client MutualTLSClient) certificate(attrs *keystore.KeyAttributes) (*tls.Certificate, error) {
 
 	client.logger.Infof("requesting client certificate: %s", attrs.CN)
 

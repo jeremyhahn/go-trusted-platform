@@ -5,7 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 )
 
 // Encodes a raw DER byte array as a PEM byte array
@@ -25,7 +25,7 @@ func EncodePEM(derCert []byte) ([]byte, error) {
 func DecodePEM(bytes []byte) (*x509.Certificate, error) {
 	var block *pem.Block
 	if block, _ = pem.Decode(bytes); block == nil {
-		return nil, store.ErrInvalidEncodingPEM
+		return nil, keystore.ErrInvalidEncodingPEM
 	}
 	return x509.ParseCertificate(block.Bytes)
 }
@@ -44,7 +44,7 @@ func EncodeCSR(csr []byte) ([]byte, error) {
 func DecodeCSR(bytes []byte) (*x509.CertificateRequest, error) {
 	var block *pem.Block
 	if block, _ = pem.Decode(bytes); block == nil {
-		return nil, store.ErrInvalidEncodingPEM
+		return nil, keystore.ErrInvalidEncodingPEM
 	}
 	return x509.ParseCertificateRequest(block.Bytes)
 }

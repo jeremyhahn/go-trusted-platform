@@ -1,22 +1,33 @@
 package cmd
 
 import (
-	"github.com/jeremyhahn/go-trusted-platform/pkg/cmd/subcommands"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cmd/tpm"
+	subcmd "github.com/jeremyhahn/go-trusted-platform/pkg/cmd/tpm"
 	"github.com/spf13/cobra"
 )
 
-var TPMImportEkCert string
-var TPMFormDER bool
-var TPMVerify bool
-var TPMEventLog bool
-var EKCertName string
+var (
+	tpmDevicePath string
+)
 
 func init() {
 
-	rootCmd.AddCommand(tpmCmd)
+	caCmd.PersistentFlags().StringVar(&tpmDevicePath, "device", "/dev/tpm0", "The TPM device path")
 
-	tpmCmd.AddCommand(subcommands.TPMEventLogEKCmd)
-	tpmCmd.AddCommand(subcommands.TPMImportEKCmd)
+	tpmCmd.AddCommand(tpm.ClearCmd)
+	tpmCmd.AddCommand(tpm.EKCmd)
+	tpmCmd.AddCommand(tpm.EventLogEKCmd)
+	tpmCmd.AddCommand(tpm.InfoCmd)
+	tpmCmd.AddCommand(tpm.ProvisionCmd)
+
+	rootCmd.AddCommand(tpmCmd)
+}
+
+func initTPM() {
+
+	subcmd.App = App
+	subcmd.InitParams = InitParams
+	subcmd.DevicePath = tpmDevicePath
 }
 
 var tpmCmd = &cobra.Command{
@@ -42,9 +53,16 @@ are:
 For more information:
 https://trustedcomputinggroup.org/about/what-is-a-trusted-platform-module-tpm/
 https://link.springer.com/book/10.1007/978-1-4302-6584-9
-		   `,
+
+This command set provides the following capabilities outlined in the TCG
+TPM 2.0  Provisioning Guidance:
+
+* Section 8:  Utilities and Capabilities Provided to the Platform Administrator
+* Section 10: Platform Manufacturer Provisioning
+* Section 11: Platform Administrator Provisioning
+https://trustedcomputinggroup.org/wp-content/uploads/TCG-TPM-v2.0-Provisioning-Guidance-Published-v1r1.pdf
+`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App.InitCA()
 	},
 }

@@ -5,22 +5,21 @@ import (
 	"crypto/rsa"
 	"io"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 )
 
 type SignerRSA struct {
 	keyStore      keystore.KeyStorer
-	signerStore   store.SignerStorer
-	keyAttributes keystore.KeyAttributes
+	signerStore   keystore.SignerStorer
+	keyAttributes *keystore.KeyAttributes
 	pub           crypto.PublicKey
 	crypto.Signer
 }
 
 func NewSignerRSA(
 	keyStore keystore.KeyStorer,
-	signerStore store.SignerStorer,
-	keyAttributes keystore.KeyAttributes,
+	signerStore keystore.SignerStorer,
+	keyAttributes *keystore.KeyAttributes,
 	publicKey crypto.PublicKey) crypto.Signer {
 
 	return SignerRSA{
@@ -45,13 +44,13 @@ func (signer SignerRSA) Sign(
 	opts crypto.SignerOpts) (signature []byte, err error) {
 
 	// Try to parse as key store signer opts
-	signerOpts, ok := opts.(keystore.SignerOpts)
+	signerOpts, ok := opts.(*keystore.SignerOpts)
 	if ok {
 
 		hashFunc := signerOpts.HashFunc()
 
 		// Load the signer opts private key
-		privateKey, err := signer.keyStore.Key(signerOpts.KeyAttributes)
+		privateKey, err := signer.keyStore.(*KeyStore).PrivateKey(signerOpts.KeyAttributes)
 		if err != nil {
 			return nil, err
 		}
@@ -65,11 +64,11 @@ func (signer SignerRSA) Sign(
 		// Sign using PSS if options provided
 		if signerOpts.PSSOptions != nil {
 			signature, err = rsa.SignPSS(
-				rand, rsaPriv, hashFunc, signerOpts.Digest(), signerOpts.PSSOptions)
+				rand, rsaPriv, hashFunc, digest, signerOpts.PSSOptions)
 		} else {
 			// Sign using PKCS1v15
 			signature, err = rsa.SignPKCS1v15(
-				rand, rsaPriv, hashFunc, signerOpts.Digest())
+				rand, rsaPriv, hashFunc, digest)
 		}
 		if err != nil {
 			return nil, err
@@ -78,7 +77,7 @@ func (signer SignerRSA) Sign(
 		if signerOpts.BlobCN != nil {
 			// Save the signature and digest to blob storage
 			if err := signer.signerStore.SaveSignature(
-				signerOpts, signature, signerOpts.Digest()); err != nil {
+				signerOpts, signature, digest); err != nil {
 
 				return nil, err
 			}
@@ -89,7 +88,7 @@ func (signer SignerRSA) Sign(
 
 	// No key store / blob opts, sign using the key attributes,
 	// hash function, and opts provided to the signer.
-	privateKey, err := signer.keyStore.Key(signer.keyAttributes)
+	privateKey, err := signer.keyStore.(*KeyStore).PrivateKey(signer.keyAttributes)
 	if err != nil {
 		return nil, err
 	}

@@ -60,7 +60,7 @@ func (session *DefaultSession) IsMemberOfOrganization(organizationID uint64) boo
 
 func (session *DefaultSession) Close() {
 	if session.logger != nil {
-		session.GetLogger().Debugf("[common.Context] Closing session")
+		session.GetLogger().Debugf("session: closing session")
 	}
 }
 
