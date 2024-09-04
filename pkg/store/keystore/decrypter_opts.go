@@ -1,7 +1,7 @@
 package keystore
 
 type DecrypterOpts struct {
-	EncryptAttributes  KeyAttributes
+	EncryptAttributes  *KeyAttributes
 	BlobCN             *string
 	BlobData           []byte
 	StoreEncryptedBlob bool

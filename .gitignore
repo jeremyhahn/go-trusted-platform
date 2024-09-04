@@ -1,4 +1,4 @@
-trusted-platform
+/trusted-platform
 **/*.pb.go
 **/*.log
 **/*.bin
@@ -22,3 +22,5 @@ attestation/verifier/trusted-data
 attestation/verifier/logs
 attestation/verifier/config.yaml
 python-venv/
+tpadm
+config.yaml

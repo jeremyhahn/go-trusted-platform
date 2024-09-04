@@ -1,0 +1,65 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" version="24.7.8">
+  <diagram name="Page-1" id="rF4Mysb7gb6Hz46oRa4G">
+    <mxGraphModel dx="1434" dy="820" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="IsW2bdPz4Km_NM4sXlcL-1" value="Embedded Device, Sensor,&lt;br&gt;PLC, FPGA, or other&lt;br&gt;connected device" style="outlineConnect=0;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=mxgraph.aws3.hardware_board;fillColor=#5294CF;gradientColor=none;" parent="1" vertex="1">
+          <mxGeometry x="180" y="460" width="84" height="100.5" as="geometry" />
+        </mxCell>
+        <mxCell id="IsW2bdPz4Km_NM4sXlcL-6" value="Embedded Device, Sensor,&lt;br style=&quot;border-color: var(--border-color);&quot;&gt;PLC, FPGA, or other&lt;br style=&quot;border-color: var(--border-color);&quot;&gt;connected device" style="outlineConnect=0;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=mxgraph.aws3.hardware_board;fillColor=#5294CF;gradientColor=none;" parent="1" vertex="1">
+          <mxGeometry x="375.5" y="460" width="84" height="100.5" as="geometry" />
+        </mxCell>
+        <mxCell id="IsW2bdPz4Km_NM4sXlcL-7" value="Embedded Device, Sensor,&lt;br style=&quot;border-color: var(--border-color);&quot;&gt;PLC, FPGA, or other&lt;br style=&quot;border-color: var(--border-color);&quot;&gt;connected device" style="outlineConnect=0;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=mxgraph.aws3.hardware_board;fillColor=#5294CF;gradientColor=none;" parent="1" vertex="1">
+          <mxGeometry x="570" y="460" width="84" height="100.5" as="geometry" />
+        </mxCell>
+        <mxCell id="IsW2bdPz4Km_NM4sXlcL-11" value="" style="image;aspect=fixed;perimeter=ellipsePerimeter;html=1;align=center;shadow=0;dashed=0;spacingTop=3;image=img/lib/active_directory/internet_cloud.svg;" parent="1" vertex="1">
+          <mxGeometry x="260" y="10" width="269.84" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="IsW2bdPz4Km_NM4sXlcL-12" value="Trusted Platform&lt;br&gt;Public Cloud&lt;br&gt;(Gossip)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="346.3" y="80" width="106.12" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="IsW2bdPz4Km_NM4sXlcL-13" value="" style="endArrow=classic;startArrow=classic;html=1;rounded=0;" parent="1" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="250" y="460" as="sourcePoint" />
+            <mxPoint x="360" y="350" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="280" y="430" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="IsW2bdPz4Km_NM4sXlcL-14" value="" style="endArrow=classic;startArrow=classic;html=1;rounded=0;" parent="1" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="480" y="350" as="sourcePoint" />
+            <mxPoint x="590" y="460" as="targetPoint" />
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="IsW2bdPz4Km_NM4sXlcL-15" value="" style="endArrow=classic;startArrow=classic;html=1;rounded=0;" parent="1" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="416" y="451" as="sourcePoint" />
+            <mxPoint x="416" y="411" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="416" y="431" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="IsW2bdPz4Km_NM4sXlcL-16" value="" style="group" parent="1" vertex="1" connectable="0">
+          <mxGeometry x="330" y="220" width="129.5" height="119.5" as="geometry" />
+        </mxCell>
+        <mxCell id="IsW2bdPz4Km_NM4sXlcL-2" value="" style="outlineConnect=0;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=mxgraph.aws3.generic;fillColor=#5294CF;gradientColor=none;" parent="IsW2bdPz4Km_NM4sXlcL-16" vertex="1">
+          <mxGeometry width="80" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="IsW2bdPz4Km_NM4sXlcL-8" value="" style="outlineConnect=0;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=mxgraph.aws3.generic;fillColor=#5294CF;gradientColor=none;" parent="IsW2bdPz4Km_NM4sXlcL-16" vertex="1">
+          <mxGeometry x="20" y="20" width="79.5" height="79.5" as="geometry" />
+        </mxCell>
+        <mxCell id="IsW2bdPz4Km_NM4sXlcL-9" value="Clusterable&lt;br&gt;Edge Device&lt;br&gt;(Raft)" style="outlineConnect=0;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=mxgraph.aws3.generic;fillColor=#5294CF;gradientColor=none;" parent="IsW2bdPz4Km_NM4sXlcL-16" vertex="1">
+          <mxGeometry x="50" y="40" width="79.5" height="79.5" as="geometry" />
+        </mxCell>
+        <mxCell id="IsW2bdPz4Km_NM4sXlcL-17" value="" style="line;strokeWidth=4;direction=south;html=1;perimeter=backbonePerimeter;points=[];outlineConnect=0;" parent="1" vertex="1">
+          <mxGeometry x="400" y="190" width="10" height="30" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

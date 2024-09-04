@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"crypto/rand"
 	"fmt"
 	"log"
 	"os"
@@ -9,9 +8,10 @@ import (
 	"runtime"
 	"syscall"
 
+	"github.com/fatih/color"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/cmd/subcommands"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -20,18 +20,24 @@ import (
 var (
 	App        *app.App
 	InitParams *app.AppInitParams
-	CAParams   ca.CAParams
+	CAParams   *ca.CAParams
+	bPin       bool
+	bSOPin     bool
+	SOPin      string
+	Pin        string
+
+	EXIT_CODE_FAILURE = 255
 )
 
 var rootCmd = &cobra.Command{
 	Use:   app.Name,
 	Short: "The Trusted Platform",
-	Long: `The Trusted Platform uses a Trusted Platform Module (TPM),
-Secure Boot, and a provided Certificate Authority to establish a Platform
-Root of Trust, perform Local and Remote Attestation, encryption, signing,
-x509 certificate management, data integrity and a framework for building
-secure, scalable web applications using industry approved best practices
-and standards.`,
+	Long: `The Trusted Platform uses a Trusted Platform Module, Secure
+Boot, and Certificate Authority to establish a Platform Root of Trust,
+Root of Trust for Measurements, perform Local and Remote Attestation,
+secure encryption, signing, x509 certificate management, data integrity
+and a framework for building secure, scalable web applications and
+connected devices.`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 	},
 	Run: func(cmd *cobra.Command, args []string) {
@@ -43,26 +49,25 @@ func init() {
 
 	cobra.OnInitialize(func() {
 
-		// Initialize the platform
-		App = app.NewApp().Init(InitParams)
-
-		// Initialize subcommand globals
-		CAParams := ca.CAParams{
-			Logger:     App.Logger,
-			Config:     App.CAConfig,
-			SelectedCA: InitParams.SelectedCA,
-			Random:     rand.Reader,
+		if bSOPin {
+			InitParams.SOPin = prompt.SOPin()
+		}
+		if bPin {
+			InitParams.Pin = prompt.Pin()
+		}
+		if SOPin != "" {
+			InitParams.SOPin = []byte(SOPin)
+		}
+		if Pin != "" {
+			InitParams.Pin = []byte(Pin)
 		}
 
-		// Use TPM for entropy if enabled
-		if App.TPM != nil {
-			CAParams.Random = App.TPM.RandomReader()
-		}
+		App = app.NewApp()
 
-		subcommands.App = App
-		subcommands.InitParams = InitParams
-		subcommands.CAParams = CAParams
-		subcommands.TPM = App.TPM
+		// Initialize subcommands
+		initCA()
+		initPlatform()
+		initTPM()
 	})
 
 	// Set provided initialization parameters for
@@ -77,20 +82,21 @@ func init() {
 	platformDir := fmt.Sprintf("%s/%s", wd, "trusted-data")
 	rootCmd.PersistentFlags().BoolVarP(&InitParams.Debug, "debug", "d", false, "Enable debug mode")
 	rootCmd.PersistentFlags().BoolVarP(&InitParams.DebugSecrets, "debug-secrets", "", false, "Enable secret debugging mode. Includes passwords and secrets in logs")
+	rootCmd.PersistentFlags().StringVarP(&InitParams.Env, "env", "e", "dev", "Runtime environment (dev, staging, prod)")
 	rootCmd.PersistentFlags().StringVarP(&InitParams.PlatformDir, "platform-dir", "", platformDir, "Trusted Platform home directory where data is stored") // doesnt work as system daemon if not wd (defaults to /)
 	rootCmd.PersistentFlags().StringVarP(&InitParams.ConfigDir, "config-dir", "", fmt.Sprintf("/etc/%s", app.Name), "Platform configuration file directory")
 	rootCmd.PersistentFlags().StringVarP(&InitParams.LogDir, "log-dir", "", "trusted-data/log", "Platform logs directory")
 	rootCmd.PersistentFlags().StringVarP(&InitParams.CADir, "ca-dir", "", "trusted-data/ca", "Certificate Authority data directory")
 	rootCmd.PersistentFlags().StringVarP(&InitParams.RuntimeUser, "setuid", "", "root", "Ther operating system user to run as")
-	rootCmd.PersistentFlags().StringVarP(&InitParams.CAParentPassword, "ca-parent-password", "r", "", "Root or Parent Certificate Authority private key password")
-	rootCmd.PersistentFlags().StringVarP(&InitParams.CAPassword, "ca-password", "p", "", "Intermediate Certificate Authority private key password")
-	rootCmd.PersistentFlags().StringVarP(&InitParams.ServerPassword, "server-password", "s", "", "Web server TLS private key password")
-	rootCmd.PersistentFlags().StringVar(&InitParams.EKCert, "ek-cert", "", "TPM Endorsement Key Certificate")
-	rootCmd.PersistentFlags().StringVar(&InitParams.EKAuth, "ek-auth", "", "TPM Endorsement Key authorization password")
-	rootCmd.PersistentFlags().StringVar(&InitParams.SRKAuth, "srk-auth", "", "TPM Storage Root Key authorization password")
-	rootCmd.PersistentFlags().IntVarP(&InitParams.SelectedCA, "intermediate", "", 1, "The target Certificate Authority. This number is the Identity array index of the target CA.")
+	rootCmd.PersistentFlags().IntVarP(&InitParams.PlatformCA, "intermediate", "", 1, "The target Certificate Authority. This number is the Identity array index of the target CA.")
 	rootCmd.PersistentFlags().StringVarP(&InitParams.ListenAddress, "listen", "", "", "The listen address for platform services")
-	rootCmd.PersistentFlags().StringVarP(&InitParams.Domain, "domain", "", "", "The domain name for platform services")
+	rootCmd.PersistentFlags().BoolVar(&bSOPin, "so-pin", false, "Security Officer PIN / password")
+	rootCmd.PersistentFlags().BoolVar(&bPin, "pin", false, "Platform Administrator or user PIN / password")
+	rootCmd.PersistentFlags().BoolVar(&InitParams.Initialize, "init", false, "True to automatically initialize and provision the platform")
+
+	// For devops automation, testing and development - bypass PIN prompts
+	rootCmd.PersistentFlags().StringVar(&SOPin, "raw-so-pin", "", "Raw plain-text Security Officer PIN / password")
+	rootCmd.PersistentFlags().StringVar(&Pin, "raw-pin", "", "Raw plain-text Platform Administrator or user PIN / password")
 
 	viper.BindPFlags(rootCmd.PersistentFlags())
 
@@ -100,8 +106,16 @@ func init() {
 }
 
 func Execute() error {
+
+	prompt.PrintBanner(app.Version)
+
 	if err := rootCmd.Execute(); err != nil {
 		log.Fatal(err)
 	}
 	return nil
+}
+
+func fatal(message string) {
+	color.New(color.FgRed).Println(message)
+	os.Exit(EXIT_CODE_FAILURE)
 }

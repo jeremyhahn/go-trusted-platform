@@ -1,4 +1,4 @@
-% trusted-platform ca install-ca-certificates | TPM Commands Manual
+% tpadm ca install-ca-certificates | Trusted Platform Commands Manual
 
 # NAME
 
@@ -26,9 +26,9 @@ This command requires root or sudo privileges.
 
 # EXAMPLES
 
-## Import EK certificate from NV Index, local disk, or TPM manufacturer
+## Install Certificate Authority certificates to local OS trust store
 ```bash
-sudo trusted-platform ca install-ca-certificates
+sudo tpadm ca install-ca-certificates
 ```
 
 # AUTHOR

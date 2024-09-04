@@ -39,12 +39,13 @@ message EKCertReply {
 }
 
 message AKReply {
-  bytes ekBPublicBytes = 1;
-  bytes ekPublicPEM = 2;
-  bytes akPublicPEM = 3;
-  bytes akBPublicBytes = 4;
-  bytes akPublicKeyByes = 5;
-  bytes akName = 6;
+  bytes EKPub              = 1;
+  bytes AKName             = 2;
+  bytes AKPub              = 3;
+  // This field deviates from the tpm2-software procedure. The signature 
+  // is required for RSA (PKCS1v15 or RSA-PSS).
+  // https://tpm2-software.github.io/tpm2-tss/getting-started/2019/12/18/Remote-Attestation.html
+  int32 SignatureAlgorithm = 4;
 }
 
 message ActivateCredentialRequest {
@@ -67,14 +68,4 @@ message QuoteRequest {
 
 message QuoteResponse {
   bytes quote = 1;
-}
-
-// Not used by gRPC. The Verifier uses this
-// to serialize the AK to the CA signed blob
-// storage partition.
-message AttestationKey {
-  bytes name = 1;
-  bytes creationHash = 2;
-  bytes creationData = 3;
-  bytes creationTicket = 4;
 }

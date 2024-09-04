@@ -1,10 +1,28 @@
 ![alt text](https://github.com/jeremyhahn/go-trusted-platform/blob/main/public_html/images/logo.png?raw=true)
 
 
-The `Trusted Platform` uses a [Trusted Platform Module (TPM)](https://en.wikipedia.org/wiki/Trusted_Platform_Module), [Secure Boot](https://en.wikipedia.org/wiki/UEFI), and a provided [Certificate Authority](https://en.wikipedia.org/wiki/Certificate_authority) to establish a Platform Root of Trust, perform Local and [Remote Attestation](https://tpm2-software.github.io/tpm2-tss/getting-started/2019/12/18/Remote-Attestation.html), encryption, signing, x509 certificate management, data integrity, intrusion detection, licensing, device provisioning and more.
+The `Trusted Platform` uses a [Trusted Platform Module (TPM)](https://en.wikipedia.org/wiki/Trusted_Platform_Module), [Secure Boot](https://en.wikipedia.org/wiki/UEFI), and a provided [Certificate Authority](https://en.wikipedia.org/wiki/Certificate_authority) to establish a Platform Root of Trust for Storage & Reporting, perform Local and [Remote Attestation](https://tpm2-software.github.io/tpm2-tss/getting-started/2019/12/18/Remote-Attestation.html), encryption, signing, x509 certificate management, data integrity, intrusion detection, licensing, device provisioning and more.
 
 
 ## Overview
+
+This project provides a toolkit and framework for building [Trusted Computing](https://en.wikipedia.org/wiki/Trusted_Computing) architectures and web services in Golang.
+
+This project supports the following use cases:
+
+* Original Equipment Manufacturer
+* Platform Administrator / User
+* IoT Cloud
+* DevOps Automation
+* Enterprise Network Management
+* Mobile Device Management
+* Secure Key Store
+* Trusted Web Services Framework
+* WebAuthN / FIDO2
+* Automated Certificate Management
+* PKI-as-a-Service
+* Single Sign-On
+
 
 For detailed documentation on the components used in this project, please refer to the [docs](docs/OVERVIEW.md).
 
@@ -21,8 +39,9 @@ Optional dependencies:
 * [SoftHSM](https://www.opendnssec.org/softhsm/)
 * [YubiKey](https://www.yubico.com/)
 * [YubiHSM](https://www.yubico.com/products/hardware-security-module/)
+* Other PKCS #11 HSM
 
-For FIPS compliance, you must use a FIPS Series or otherwise certified token.
+    For FIPS compliance, a FIPS certified token is required.
 
 
 #### Build
@@ -52,11 +71,11 @@ The platform includes a built-in web server to host the REST API. The provided c
 
 Procedure to start the embedded web services for the first time:
 
-    # Copy config file
-    cp configs/platform/config.dev.yaml config.yaml
+    # Copy a config file to the local directory
+    cp configs/platform/config.prod.yaml config.yaml
 
     # Run web services
-    ./trusted-platform webservice --debug
+    ./tpadm webservice
 
     # Navigate to OpenAPI docs
     xdg-open https://localhost:8443/swagger/
@@ -112,7 +131,9 @@ After the CA is initialized, local system platform measurements are taken accord
 
 ## Remote Attestation
 
-Full remote attestation is working. Test it out using the provided `Makefile` targets.
+A remote attestation implementation using the procedure outlined by [tpm2-community](https://tpm2-software.github.io/tpm2-tss/getting-started/2019/12/18/Remote-Attestation.html) is working, however, be sure to read the notes in the attestation directory regarding this approach.
+
+To test it out using the provided `Makefile` targets.
 
     # Attestor
     make attestor
@@ -120,173 +141,245 @@ Full remote attestation is working. Test it out using the provided `Makefile` ta
     # Verifier
     make verifier
 
-After attestation completes, you a new `attestation` folder appears that looks something like this (on the verifier side):
+After attestation completes, you should see a new `attestation` folder appears that looks something like this (on the verifier side):
+
+This example demonstrates a Certificate Authority with PKCS #8, PKCS #11, and TPM 2.0 key store enabled, and RSA-PSS, ECDSA and Ed25519 keys configured to enable simultaneous signing with any of the configured keys. In addition, PKCS #8 and TPM 2.0 keys support secondary password protection, using key level passwords in addition to the PIN used to secure the keys at the hardware level. The passwords are stored in the *platform key store* as HMAC secrets with an optional PCR policy that allows retrieval of the password as long as the platform is in it's approved state. The key store PINs have the `.pin` extension in their file names, while secondary passwords are stored using only their common names.
+
+Note that the TPM 2.0 spec does not support Twisted Edward Curves (Ed25519). Many budget friendly HSM's don't support it either. Be sure to check the specifications on your PKCS #11 HSM to confirm support.
 
  ```
-.
-attestation/verifier/trusted-data
+attestation/verifier/trusted-data/
+├── b3177f70-89ed-6019-f568-07379867db76
+│   ├── 050095df-a7c0-98c1-0b06-3ad5d80c8e8d.lock
+│   ├── 050095df-a7c0-98c1-0b06-3ad5d80c8e8d.object
+│   ├── 056b65e8-ebad-97d5-48ac-19862056d36f.lock
+│   ├── 056b65e8-ebad-97d5-48ac-19862056d36f.object
+│   ├── 089b7599-2598-f3c5-d90c-a1e5bddf6786.lock
+│   ├── 089b7599-2598-f3c5-d90c-a1e5bddf6786.object
+│   ├── 09044801-a3c7-fdbb-665a-ab3de814ff98.lock
+│   ├── 09044801-a3c7-fdbb-665a-ab3de814ff98.object
+│   ├── 0b1ba04d-8544-34a0-a784-724756dcf40f.lock
+│   ├── 0b1ba04d-8544-34a0-a784-724756dcf40f.object
+│   ├── 392ff10a-705f-97b0-8eab-614dabd5b9ec.lock
+│   ├── 392ff10a-705f-97b0-8eab-614dabd5b9ec.object
+│   ├── 3a5fd61e-b27f-b3a1-163f-cb8b2721edc2.lock
+│   ├── 3a5fd61e-b27f-b3a1-163f-cb8b2721edc2.object
+│   ├── 83fbc37e-2007-c8bc-f2b9-4ec9f45bf30b.lock
+│   ├── 83fbc37e-2007-c8bc-f2b9-4ec9f45bf30b.object
+│   ├── 8933c982-ccfb-ee2d-7e55-06c17ab52a07.lock
+│   ├── 8933c982-ccfb-ee2d-7e55-06c17ab52a07.object
+│   ├── 95bee1b0-0a2d-4d45-d3f5-b0e735692cd3.lock
+│   ├── 95bee1b0-0a2d-4d45-d3f5-b0e735692cd3.object
+│   ├── 9b039fd6-ddf4-4427-a1d0-2587cae6da0e.lock
+│   ├── 9b039fd6-ddf4-4427-a1d0-2587cae6da0e.object
+│   ├── c1b2cc95-4486-b3e8-0586-245d7e2cab99.lock
+│   ├── c1b2cc95-4486-b3e8-0586-245d7e2cab99.object
+│   ├── d92b8150-75b7-791a-a9f0-c775680c97d2.lock
+│   ├── d92b8150-75b7-791a-a9f0-c775680c97d2.object
+│   ├── ddc4bd89-ee49-365b-761e-a5a8018976a2.lock
+│   ├── ddc4bd89-ee49-365b-761e-a5a8018976a2.object
+│   ├── e8805a14-2fb4-861c-8d7c-0a59f0a9de8d.lock
+│   ├── e8805a14-2fb4-861c-8d7c-0a59f0a9de8d.object
+│   ├── f27f24ec-daf3-7d23-8cff-b6373321af52.lock
+│   ├── f27f24ec-daf3-7d23-8cff-b6373321af52.object
+│   ├── token.lock
+│   └── token.object
+├── blobs
+│   ├── tpm
+│   │   ├── device-id-001
+│   │   │   ├── eventlog
+│   │   │   ├── eventlog.digest
+│   │   │   ├── eventlog.sha256
+│   │   │   ├── eventlog.sig
+│   │   │   ├── pcrs
+│   │   │   ├── pcrs.digest
+│   │   │   ├── pcrs.sha256
+│   │   │   ├── pcrs.sig
+│   │   │   ├── quote
+│   │   │   ├── quote.digest
+│   │   │   ├── quote.sha256
+│   │   │   └── quote.sig
+│   │   └── www.attestor.example.com
+│   │       ├── ak.cer
+│   │       ├── ak.cer.digest
+│   │       ├── ak.cer.sha256
+│   │       ├── ak.cer.sig
+│   │       ├── eventlog
+│   │       ├── eventlog.digest
+│   │       ├── eventlog.sha256
+│   │       ├── eventlog.sig
+│   │       ├── pcrs
+│   │       ├── pcrs.digest
+│   │       ├── pcrs.sha256
+│   │       ├── pcrs.sig
+│   │       ├── quote
+│   │       ├── quote.digest
+│   │       ├── quote.sha256
+│   │       └── quote.sig
+│   └── .tpm2.rsa.cer
 ├── ca
 │   ├── intermediate-ca.verifier.example.com
-│   │   ├── blobs
-│   │   │   └── tpm
-│   │   │       ├── ek-cert.crt
-│   │   │       │   ├── ek-cert.crt
-│   │   │       │   ├── ek-cert.crt.digest
-│   │   │       │   ├── ek-cert.crt.sha256
-│   │   │       │   └── ek-cert.crt.signature
-│   │   │       ├── intermediate-ca.verifier.example.com
-│   │   │       │   ├── eventlog
-│   │   │       │   ├── eventlog.digest
-│   │   │       │   ├── eventlog.sha256
-│   │   │       │   ├── eventlog.signature
-│   │   │       │   ├── pcrs
-│   │   │       │   ├── pcrs.digest
-│   │   │       │   ├── pcrs.sha256
-│   │   │       │   ├── pcrs.signature
-│   │   │       │   ├── quote
-│   │   │       │   ├── quote.digest
-│   │   │       │   ├── quote.sha256
-│   │   │       │   └── quote.signature
-│   │   │       └── www.attestor.example.com
-│   │   │           ├── ak.cer
-│   │   │           ├── ak.cer.digest
-│   │   │           ├── ak.cer.sha256
-│   │   │           └── ak.cer.signature
-│   │   ├── crl
 │   │   ├── encryption-keys
-│   │   ├── intermediate-ca.verifier.example.com.crl
-│   │   ├── intermediate-ca.verifier.example.com.ecdsa.bundle.crt
-│   │   ├── intermediate-ca.verifier.example.com.ecdsa.cer
-│   │   ├── intermediate-ca.verifier.example.com.ecdsa.crt
-│   │   ├── intermediate-ca.verifier.example.com.ecdsa.pkcs8
-│   │   ├── intermediate-ca.verifier.example.com.ecdsa.pkcs8.crt
-│   │   ├── intermediate-ca.verifier.example.com.ecdsa.pub.crt
-│   │   ├── intermediate-ca.verifier.example.com.ecdsa.pub.pkcs1
-│   │   ├── intermediate-ca.verifier.example.com.ed25519.bundle.crt
-│   │   ├── intermediate-ca.verifier.example.com.ed25519.cer
-│   │   ├── intermediate-ca.verifier.example.com.ed25519.crt
-│   │   ├── intermediate-ca.verifier.example.com.ed25519.pkcs8
-│   │   ├── intermediate-ca.verifier.example.com.ed25519.pkcs8.crt
-│   │   ├── intermediate-ca.verifier.example.com.ed25519.pub.crt
-│   │   ├── intermediate-ca.verifier.example.com.ed25519.pub.pkcs1
-│   │   ├── intermediate-ca.verifier.example.com.rsa.bundle.crt
-│   │   ├── intermediate-ca.verifier.example.com.rsa.cer
-│   │   ├── intermediate-ca.verifier.example.com.rsa.crt
-│   │   ├── intermediate-ca.verifier.example.com.rsa.pkcs8
-│   │   ├── intermediate-ca.verifier.example.com.rsa.pkcs8.crt
-│   │   ├── intermediate-ca.verifier.example.com.rsa.pub.crt
-│   │   ├── intermediate-ca.verifier.example.com.rsa.pub.pkcs1
+│   │   ├── hmac-keys
+│   │   ├── intermediate-ca.verifier.example.com.pkcs8.ecdsa.key
+│   │   ├── intermediate-ca.verifier.example.com.pkcs8.ecdsa.pub
+│   │   ├── intermediate-ca.verifier.example.com.pkcs8.ed25519.key
+│   │   ├── intermediate-ca.verifier.example.com.pkcs8.ed25519.pub
+│   │   ├── intermediate-ca.verifier.example.com.pkcs8.rsa.key
+│   │   ├── intermediate-ca.verifier.example.com.pkcs8.rsa.pub
+│   │   ├── intermediate-ca.verifier.example.com.tpm2.ecdsa.key.bin
+│   │   ├── intermediate-ca.verifier.example.com.tpm2.ecdsa.pub.bin
+│   │   ├── intermediate-ca.verifier.example.com.tpm2.rsa.key.bin
+│   │   ├── intermediate-ca.verifier.example.com.tpm2.rsa.pub.bin
 │   │   ├── issued
-│   │   │   ├── www.attestor.example.com
-│   │   │   │   ├── www.attestor.example.com.rsa.cer
-│   │   │   │   ├── www.attestor.example.com.rsa.crt
-│   │   │   │   ├── www.attestor.example.com.rsa.pkcs8
-│   │   │   │   ├── www.attestor.example.com.rsa.pkcs8.crt
-│   │   │   │   ├── www.attestor.example.com.rsa.pub.crt
-│   │   │   │   └── www.attestor.example.com.rsa.pub.pkcs1
 │   │   │   └── www.verifier.example.com
-│   │   │       ├── www.verifier.example.com.rsa.cer
-│   │   │       ├── www.verifier.example.com.rsa.crt
-│   │   │       ├── www.verifier.example.com.rsa.pkcs8
-│   │   │       ├── www.verifier.example.com.rsa.pkcs8.crt
-│   │   │       ├── www.verifier.example.com.rsa.pub.crt
-│   │   │       └── www.verifier.example.com.rsa.pub.pkcs1
-│   │   ├── revoked
-│   │   │   └── dummy
-│   │   │       ├── dummy.ecdsa.cer
-│   │   │       ├── dummy.ecdsa.crt
-│   │   │       ├── dummy.ecdsa.pkcs8
-│   │   │       ├── dummy.ecdsa.pub.crt
-│   │   │       ├── dummy.ecdsa.pub.pkcs1
-│   │   │       ├── dummy.ed25519.cer
-│   │   │       ├── dummy.ed25519.crt
-│   │   │       ├── dummy.ed25519.pkcs8
-│   │   │       ├── dummy.ed25519.pub.crt
-│   │   │       ├── dummy.ed25519.pub.pkcs1
-│   │   │       ├── dummy.rsa.cer
-│   │   │       ├── dummy.rsa.crt
-│   │   │       ├── dummy.rsa.pkcs8
-│   │   │       ├── dummy.rsa.pub.crt
-│   │   │       └── dummy.rsa.pub.pkcs1
+│   │   │       ├── www.verifier.example.com.pkcs8.rsa.key
+│   │   │       └── www.verifier.example.com.pkcs8.rsa.pub
+│   │   ├── secrets
 │   │   ├── signing-keys
-│   │   ├── trusted-intermediate
-│   │   │   └── CNLEPIDPOSTB1LPPROD2_EK_Platform_Public_Key.cer
-│   │   └── trusted-root
-│   │       ├── EKRootPublicKey.cer
-│   │       ├── root-ca.verifier.example.com.ecdsa.cer
-│   │       ├── root-ca.verifier.example.com.ed25519.cer
-│   │       └── root-ca.verifier.example.com.rsa.cer
+│   │   └── x509
+│   │       ├── ek.tpm2.rsa.cer
+│   │       ├── intermediate-ca.attestor.example.com.pkcs8.rsa.cer
+│   │       ├── intermediate-ca.verifier.example.com.pkcs11.ecdsa.cer
+│   │       ├── intermediate-ca.verifier.example.com.pkcs11.ecdsa.crl
+│   │       ├── intermediate-ca.verifier.example.com.pkcs11.rsa.cer
+│   │       ├── intermediate-ca.verifier.example.com.pkcs11.rsa.crl
+│   │       ├── intermediate-ca.verifier.example.com.pkcs8.ecdsa.cer
+│   │       ├── intermediate-ca.verifier.example.com.pkcs8.ecdsa.crl
+│   │       ├── intermediate-ca.verifier.example.com.pkcs8.ed25519.cer
+│   │       ├── intermediate-ca.verifier.example.com.pkcs8.ed25519.crl
+│   │       ├── intermediate-ca.verifier.example.com.pkcs8.rsa.cer
+│   │       ├── intermediate-ca.verifier.example.com.pkcs8.rsa.crl
+│   │       ├── intermediate-ca.verifier.example.com.tpm2.ecdsa.cer
+│   │       ├── intermediate-ca.verifier.example.com.tpm2.ecdsa.crl
+│   │       ├── intermediate-ca.verifier.example.com.tpm2.rsa.cer
+│   │       ├── intermediate-ca.verifier.example.com.tpm2.rsa.crl
+│   │       ├── root-ca.attestor.example.com.pkcs8.rsa.cer
+│   │       ├── root-ca.verifier.example.com.pkcs11.ecdsa.cer
+│   │       ├── root-ca.verifier.example.com.pkcs11.rsa.cer
+│   │       ├── root-ca.verifier.example.com.pkcs8.ecdsa.cer
+│   │       ├── root-ca.verifier.example.com.pkcs8.ed25519.cer
+│   │       ├── root-ca.verifier.example.com.pkcs8.rsa.cer
+│   │       ├── root-ca.verifier.example.com.tpm2.ecdsa.cer
+│   │       ├── root-ca.verifier.example.com.tpm2.rsa.cer
+│   │       ├── .tpm2.rsa.cer
+│   │       ├── www.attestor.example.com.tpm2.rsa.cer
+│   │       └── www.verifier.example.com.pkcs8.rsa.cer
 │   └── root-ca.verifier.example.com
-│       ├── blobs
-│       ├── crl
 │       ├── encryption-keys
+│       ├── hmac-keys
 │       ├── issued
-│       ├── revoked
-│       │   └── dummy
-│       │       ├── dummy.ecdsa.cer
-│       │       ├── dummy.ecdsa.crt
-│       │       ├── dummy.ecdsa.pkcs8
-│       │       ├── dummy.ecdsa.pub.crt
-│       │       ├── dummy.ecdsa.pub.pkcs1
-│       │       ├── dummy.ed25519.cer
-│       │       ├── dummy.ed25519.crt
-│       │       ├── dummy.ed25519.pkcs8
-│       │       ├── dummy.ed25519.pub.crt
-│       │       ├── dummy.ed25519.pub.pkcs1
-│       │       ├── dummy.rsa.cer
-│       │       ├── dummy.rsa.crt
-│       │       ├── dummy.rsa.pkcs8
-│       │       ├── dummy.rsa.pub.crt
-│       │       └── dummy.rsa.pub.pkcs1
-│       ├── root-ca.verifier.example.com.crl
-│       ├── root-ca.verifier.example.com.ecdsa.cer
-│       ├── root-ca.verifier.example.com.ecdsa.crt
-│       ├── root-ca.verifier.example.com.ecdsa.pkcs8
-│       ├── root-ca.verifier.example.com.ecdsa.pkcs8.crt
-│       ├── root-ca.verifier.example.com.ecdsa.pub.crt
-│       ├── root-ca.verifier.example.com.ecdsa.pub.pkcs1
-│       ├── root-ca.verifier.example.com.ed25519.cer
-│       ├── root-ca.verifier.example.com.ed25519.crt
-│       ├── root-ca.verifier.example.com.ed25519.pkcs8
-│       ├── root-ca.verifier.example.com.ed25519.pkcs8.crt
-│       ├── root-ca.verifier.example.com.ed25519.pub.crt
-│       ├── root-ca.verifier.example.com.ed25519.pub.pkcs1
-│       ├── root-ca.verifier.example.com.rsa.cer
-│       ├── root-ca.verifier.example.com.rsa.crt
-│       ├── root-ca.verifier.example.com.rsa.pkcs8
-│       ├── root-ca.verifier.example.com.rsa.pkcs8.crt
-│       ├── root-ca.verifier.example.com.rsa.pub.crt
-│       ├── root-ca.verifier.example.com.rsa.pub.pkcs1
+│       ├── root-ca.verifier.example.com.pkcs8.ecdsa.key
+│       ├── root-ca.verifier.example.com.pkcs8.ecdsa.pub
+│       ├── root-ca.verifier.example.com.pkcs8.ed25519.key
+│       ├── root-ca.verifier.example.com.pkcs8.ed25519.pub
+│       ├── root-ca.verifier.example.com.pkcs8.rsa.key
+│       ├── root-ca.verifier.example.com.pkcs8.rsa.pub
+│       ├── root-ca.verifier.example.com.tpm2.ecdsa.key.bin
+│       ├── root-ca.verifier.example.com.tpm2.ecdsa.pub.bin
+│       ├── root-ca.verifier.example.com.tpm2.rsa.key.bin
+│       ├── root-ca.verifier.example.com.tpm2.rsa.pub.bin
+│       ├── secrets
 │       ├── signing-keys
-│       ├── trusted-intermediate
-│       └── trusted-root
+│       └── x509
+│           ├── root-ca.verifier.example.com.pkcs11.ecdsa.cer
+│           ├── root-ca.verifier.example.com.pkcs11.ecdsa.crl
+│           ├── root-ca.verifier.example.com.pkcs11.rsa.cer
+│           ├── root-ca.verifier.example.com.pkcs11.rsa.crl
+│           ├── root-ca.verifier.example.com.pkcs8.ecdsa.cer
+│           ├── root-ca.verifier.example.com.pkcs8.ecdsa.crl
+│           ├── root-ca.verifier.example.com.pkcs8.ed25519.cer
+│           ├── root-ca.verifier.example.com.pkcs8.ed25519.crl
+│           ├── root-ca.verifier.example.com.pkcs8.rsa.cer
+│           ├── root-ca.verifier.example.com.pkcs8.rsa.crl
+│           ├── root-ca.verifier.example.com.tpm2.ecdsa.cer
+│           ├── root-ca.verifier.example.com.tpm2.ecdsa.crl
+│           ├── root-ca.verifier.example.com.tpm2.rsa.cer
+│           └── root-ca.verifier.example.com.tpm2.rsa.crl
 ├── etc
-│   └── config.yaml
-└── log
-    └── trusted-platform.log
+│   ├── config.yaml
+│   └── softhsm.conf
+├── log
+│   └── trusted-platform.log
+└── platform
+    └── keystore
+        ├── encryption-keys
+        ├── hmac-keys
+        │   ├── intermediate-ca.verifier.example.com
+        │   │   ├── intermediate-ca.verifier.example.com.pkcs8.ecdsa.hmac.key.bin
+        │   │   ├── intermediate-ca.verifier.example.com.pkcs8.ecdsa.hmac.pub.bin
+        │   │   ├── intermediate-ca.verifier.example.com.pkcs8.ed25519.hmac.key.bin
+        │   │   ├── intermediate-ca.verifier.example.com.pkcs8.ed25519.hmac.pub.bin
+        │   │   ├── intermediate-ca.verifier.example.com.pkcs8.rsa.hmac.key.bin
+        │   │   ├── intermediate-ca.verifier.example.com.pkcs8.rsa.hmac.pub.bin
+        │   │   ├── intermediate-ca.verifier.example.com.tpm2.ecdsa.hmac.key.bin
+        │   │   ├── intermediate-ca.verifier.example.com.tpm2.ecdsa.hmac.pub.bin
+        │   │   ├── intermediate-ca.verifier.example.com.tpm2.rsa.hmac.key.bin
+        │   │   └── intermediate-ca.verifier.example.com.tpm2.rsa.hmac.pub.bin
+        │   ├── intermediate-ca.verifier.example.com.pin
+        │   │   ├── intermediate-ca.verifier.example.com.pin.pkcs11.8.hmac.key.bin
+        │   │   ├── intermediate-ca.verifier.example.com.pin.pkcs11.8.hmac.pub.bin
+        │   │   ├── intermediate-ca.verifier.example.com.pin.tpm2.8.hmac.key.bin
+        │   │   └── intermediate-ca.verifier.example.com.pin.tpm2.8.hmac.pub.bin
+        │   ├── platform.pin
+        │   │   ├── platform.pin.tpm2.8.hmac.key.bin
+        │   │   └── platform.pin.tpm2.8.hmac.pub.bin
+        │   ├── root-ca.verifier.example.com
+        │   │   ├── root-ca.verifier.example.com.pkcs8.ecdsa.hmac.key.bin
+        │   │   ├── root-ca.verifier.example.com.pkcs8.ecdsa.hmac.pub.bin
+        │   │   ├── root-ca.verifier.example.com.pkcs8.ed25519.hmac.key.bin
+        │   │   ├── root-ca.verifier.example.com.pkcs8.ed25519.hmac.pub.bin
+        │   │   ├── root-ca.verifier.example.com.pkcs8.rsa.hmac.key.bin
+        │   │   ├── root-ca.verifier.example.com.pkcs8.rsa.hmac.pub.bin
+        │   │   ├── root-ca.verifier.example.com.tpm2.ecdsa.hmac.key.bin
+        │   │   ├── root-ca.verifier.example.com.tpm2.ecdsa.hmac.pub.bin
+        │   │   ├── root-ca.verifier.example.com.tpm2.rsa.hmac.key.bin
+        │   │   └── root-ca.verifier.example.com.tpm2.rsa.hmac.pub.bin
+        │   ├── root-ca.verifier.example.com.pin
+        │   │   ├── root-ca.verifier.example.com.pin.pkcs11.8.hmac.key.bin
+        │   │   ├── root-ca.verifier.example.com.pin.pkcs11.8.hmac.pub.bin
+        │   │   ├── root-ca.verifier.example.com.pin.tpm2.8.hmac.key.bin
+        │   │   └── root-ca.verifier.example.com.pin.tpm2.8.hmac.pub.bin
+        │   └── www.verifier.example.com
+        │       ├── www.verifier.example.com.pkcs8.rsa.hmac.key.bin
+        │       └── www.verifier.example.com.pkcs8.rsa.hmac.pub.bin
+        ├── issued
+        ├── secrets
+        └── signing-keys
 ```
 
 
 ## Status
 
 
-This project is under active development APIs can change at any moment.
+This project is under active development, APIs can change at any moment.
 
 The `main` branch will always build and run. Try it out!
 
 
 - [ ] Trusted Platform
+    - [ ] Supported Use Cases
+        - [x] TPM Manufacturer
+        - [x] Original Equipment (Device) Manufacturer
+        - [x] Platform Administrator / End User
+        - [x] Enterprise Network
+        - [x] SOHO Network
     - [ ] Certificate Authority
-        - [ ] Key Storage
+        - [x] Key Storage Modules
+            - [x] [PKCS 8](https://en.wikipedia.org/wiki/PKCS_8)
+            - [x] [PKCS 11](https://en.wikipedia.org/wiki/PKCS_11)
+            - [x] [TPM 2.0](https://en.wikipedia.org/wiki/Trusted_Platform_Module)
+            - [x] [SoftHSM](https://www.opendnssec.org/softhsm/)
+        - [x] Key Storage Backends
+            - [x] File storage
+            - [x] PKCS 11
+            - [x] [TPM 2.0](https://en.wikipedia.org/wiki/Trusted_Platform_Module)
+            - [x] [SoftHSM](https://www.opendnssec.org/softhsm/)
+            - [ ] [Raft](https://raft.github.io/)
+        - [x] Formats
             - [x] [PKCS 1](https://en.wikipedia.org/wiki/PKCS_1)
             - [x] [PKCS 8](https://en.wikipedia.org/wiki/PKCS_8)
-            - [ ] [PKCS 11](https://en.wikipedia.org/wiki/PKCS_11)
-        - [x] Storage Backends
-            - [x] File storage
-            - [ ] PKCS 11
-                - [ ] [TPM 2.0](https://en.wikipedia.org/wiki/Trusted_Platform_Module)
-                - [ ] [SoftHSM](https://www.opendnssec.org/softhsm/)
-                - [ ] [YubiKey](https://www.yubico.com/)
+            - [x] [PEM](https://en.wikipedia.org/wiki/Privacy-Enhanced_Mail)
         - [x] [TLS 1.3](https://words.filippo.io/tls-1-3-at-33c3/)
         - [x] Root CA
         - [x] Intermediate CA(s)
@@ -310,55 +403,70 @@ The `main` branch will always build and run. Try it out!
         - [x] Signed blob storage
         - [x] Install / Uninstall CA certificates to Operating System trust store
         - [ ] Online Certificate Status Protocol (OCSP)
+        - [x] Sign TCG-CSR-IDEVID
+        - [ ] Sign TCG-CSR-LDEVID
+        - [x] Generate TCG compliant EK certificate
+        - [x] Generate Attestation Key Certificate
+        - [x] Forge Certificates (force specified public key)
+        - [ ] Automatic Certificate Management Environment (ACME)
+            - [ ] [acme-device-attest-03](https://datatracker.ietf.org/doc/html/draft-acme-device-attest-03)
+        - [ ] Cross-Signed Certificates with Let's Encrypt CA
     - [ ] TPM 2.0
+        - [x] Provisioning per TCG recommended best practices
         - [x] Read Endorsement Key Certificate from NVRAM
         - [x] Download Endorsement Key Certificate from Manufacturer
             - [x] Intel
             - [ ] Optiga
-        - [x] Read Endorsement Key Certificate from file (tpm2_getekcertificate)
-        - [x] Auto-import Platform Certificates (Manufacturer CA chain)
-        - [x] Import ASN.1 DER encoded Endorsement Key Certificates
-        - [x] Import PEM encoded Endorsement Key Certificates
-        - [x] Create RSA Endorsement Key w/ password auth
-        - [x] Create ECC Endorsement Key w/ password auth
-        - [x] Create RSA Storage Root Key w/ password auth
-        - [x] Create ECC Storage Root Key w/ password auth
-        - [x] Create RSA Storage Root Key w/ password auth
-        - [x] Create ECC Attestation Key w/ password auth
+        - [x] Read Endorsement Key Certificate from x509 certificate store
+        - [x] Create EK Certificates
+        - [x] Auto-import TPM Manufacturer CA chain
+        - [x] Create RSA/ECC EK, SRK, AK, DevID keys and x509 certificates
         - [x] Verify Endorsement Key x509 Certificate w/ CA
-        - [x] Create Attestation Key from EK / SRK
         - [x] Credential challenge
         - [x] Activate credential
-        - [x] Read / Parse Event Log
+        - [x] Read Event Log
         - [x] Read Platform Configuration Registers (PCRs)
         - [x] Provide Attestation Key to Client
         - [x] Quote / Verify
+        - [x] Create TCG-CSR-IDEVID certificate request
+        - [ ] Create TCG-CSR-LDEVID certificate request
     - [ ] Command Line Interface
-        [ [ ] Linux man pages
+          [ ] [Linux man pages](docs/man)
             - [ ] CA
-                - [x] install-ca-certificates
+                - [x] info
+                - [x] init
+                - [x] install
+                - [x] issue
+                - [x] revoke
+                - [x] show
+                - [x] uninstall
+            - [ ] Platform
+                - [x] destroy
+                - [x] install
+                - [x] password
+                - [x] provision
             - [ ] TPM
-                - [x] import-ek
+                - [x] clear
+                - [x] ek
+                - [x] eventlog
+                - [x] info
+                - [x] provision
         - [ ] Certificate Authority
             - [x] Issue Certificate
-            - [ ] Import Certificate to CA Trust Store
+            - [x] Import Certificate to CA Trust Store
             - [x] Retrieve Public Key
             - [x] List Certificates
             - [x] Show Certificate
             - [x] Install to Operating System Trust Store
             - [x] Uninstall to Operating System Trust Store
             - [ ] Sign / verify (certificate & data)
-            - [ ] RSA Encrypt / Decrypt
-            - [ ] ECC Encrypt / Decrypt
+            - [ ] Encrypt / Decrypt
             - [ ] Encode / Decode
-            - [x] Parse DER / PEM x509 certificates
+            - [ ] Parse DER / PEM x509 certificates
         - [ ] Trusted Platform Module 2.0
-            - [x] Create RSA Endorsement Key
-            - [ ] Create ECC Endorsement Key
-            - [x] Create RSA Storage Root Key
-            - [ ] Create ECC Storage Root Key
-            - [x] Create RSA Storage Root Key
-            - [ ] Create ECC Attestation Key
+            - [x] Create EK certificate
+            - [x] Create Storage Root Key
+            - [ ] Create Attestation Key
             - [ ] Validate EK Cert w/ CA
             - [ ] Auto-import EK Issuer Root & Intermediate CAs
             - [ ] Create Attestation Key
@@ -369,10 +477,10 @@ The `main` branch will always build and run. Try it out!
         - [x] Local Attestation
             - [x] Capture initial platform measurements
             - [x] Sign and store initial measurements
-            - [x] Capture new measurements on subsequent startups
-            - [x] Verify subsequent startup measurements
-            - [x] Terminate if verification fails
-                - [x] Exit with Fatal error
+            - [ ] Capture new measurements on subsequent startups
+            - [ ] Verify subsequent startup measurements
+            - [ ] Terminate if verification fails
+                - [ ] Exit with Fatal error
                 - [ ] Re-seal the platform
                 - [ ] Invoke custom event handlers
             - [ ] Client (Verifier)
@@ -380,15 +488,15 @@ The `main` branch will always build and run. Try it out!
                 - [x] Get Endorsement Key (EK) and Certificate
                 - [x] Get Attestation Key Profile (EK, AK, AK Name)
                 - [x] Credential Challenge (TPM2_MakeCredential)
-                - [x] Activate Credential ((TPM2_ActivateCredential)
+                - [x] Activate Credential (TPM2_ActivateCredential)
                 - [x] Issue Attestation Key Certificate
                 - [x] Verify Quote
-        - [x] Full Remote Attestation
+        - [x] Remote Attestation
             - [x] Attestor (service consumer / server socket)
                 - [x] gRPC service
                 - [x] Insecure service
                     - [x] Exchange CA certificate bundle with Verifier
-                    - [x] Supports mTLS auto-negotiation
+                    - [x] mTLS auto-negotiation
                     - [x] Require TLSv1.3
                 - [x] Secure service (requires mTLS)
                     - [x] Get Endorsement Key (EK) and Certificate
@@ -398,21 +506,22 @@ The `main` branch will always build and run. Try it out!
                     - [x] Quote
                     - [ ] Accept service registration key
                     - [ ] DNS registration
+                    - [ ] ACME device-attest enrollment
             - [ ] Verifier (service provider / client socket)
                 - [x] Auto-negotiated mTLSv1.3
                 - [x] Get Endorsement Key (EK) and Certificate
                 - [x] Get Attestation Key Profile (EK, AK, AK Name)
                 - [x] Credential Challenge (TPM2_MakeCredential)
-                - [x] Activate Credential ((TPM2_ActivateCredential)
+                - [x] Activate Credential (TPM2_ActivateCredential)
                 - [x] Issue Attestation Key x509 Certificate
                 - [x] Verify Quote
-                - [ ] Disseminate service registration
+                - [x] Provide AK Certificate w/ Secret
                 - [ ] DNS registration
+                - [ ] ACME device-attest enrollment
     - [ ] Web Services
         - [x] TLS 1.3
         - [x] Web server
         - [x] TLS Web Server
-            - [x] Encrypted private key
             - [x] Opaque private key
             - [ ] mTLS
         - [x] REST API
@@ -443,13 +552,6 @@ The `main` branch will always build and run. Try it out!
             - [x] Activate Credential
             - [x] Quote / Verify
             - [x] Automatic Device enrollment
-    - [ ] Flows
-        - [ ] Device Provisioning
-            - [x] Auto-provision during Remote Attestation
-            - [ ] Pre-provision keys and x509 device certificate
-        - [ ] Service Request - Part 1: Platform Anonymous Identity Validation
-        - [ ] Service Request - Part 2: Platform Software State Validation
-        - [ ] Service Delivery
     - [ ] Plugin System
         - [ ] Install / uninstall
         - [ ] Sign / verify
@@ -475,8 +577,6 @@ The `main` branch will always build and run. Try it out!
                 - [ ] Firmware flasher
                 - [ ] Device Provisioning
                 - [ ] Device Onboarding
-            - [ ] FPGA (Field Programmable Gate Array)
-                - [ ] Trusted Platform IP Cores
     - [ ] DNS Server
         - [ ] Automatic edge device registration
         - [ ] Dynamic DNS updates
@@ -489,6 +589,7 @@ The `main` branch will always build and run. Try it out!
         - [ ] Raft [(Consistency & Availability)](https://en.wikipedia.org/wiki/CAP_theorem)
             - [ ] LAN Database Replication
     - [ ] Intrusion Detection
+        - [x] File Integrity Monitoring
         - [ ] Detect unauthorized software or hardware changes
         - [ ] Tamper Resistance
             - [ ] Pluggable event based response mechanisms

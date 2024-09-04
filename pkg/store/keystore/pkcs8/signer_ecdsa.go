@@ -5,16 +5,15 @@ import (
 	"crypto/ecdsa"
 	"io"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store"
 	blobstore "github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 )
 
 type SignerECDSA struct {
 	keyStore      keystore.KeyStorer
-	signerStore   store.SignerStorer
+	signerStore   keystore.SignerStorer
 	blobStore     blobstore.BlobStorer
-	keyAttributes keystore.KeyAttributes
+	keyAttributes *keystore.KeyAttributes
 	pub           crypto.PublicKey
 	crypto.Signer
 }
@@ -26,8 +25,8 @@ type SignerECDSA struct {
 // optionally, the private key provided via SignerOpts during the call to Sign.
 func NewSignerECDSA(
 	keyStore keystore.KeyStorer,
-	signerStore store.SignerStorer,
-	keyAttributes keystore.KeyAttributes,
+	signerStore keystore.SignerStorer,
+	keyAttributes *keystore.KeyAttributes,
 	publicKey crypto.PublicKey) crypto.Signer {
 
 	return SignerECDSA{
@@ -50,11 +49,11 @@ func (signer SignerECDSA) Sign(
 	opts crypto.SignerOpts) (signature []byte, err error) {
 
 	// Try to parse as platform blob signer opts
-	signerOpts, ok := opts.(keystore.SignerOpts)
+	signerOpts, ok := opts.(*keystore.SignerOpts)
 	if ok {
 
 		// Load the blob signing key
-		blobSigner, err := signer.keyStore.Key(signerOpts.KeyAttributes)
+		blobSigner, err := signer.keyStore.(*KeyStore).PrivateKey(signerOpts.KeyAttributes)
 		if err != nil {
 			return nil, err
 		}
@@ -65,7 +64,7 @@ func (signer SignerECDSA) Sign(
 		}
 
 		// Sign the digest
-		signature, err = ecdsa.SignASN1(rand, ecdsaPriv, signerOpts.Digest())
+		signature, err = ecdsa.SignASN1(rand, ecdsaPriv, digest)
 		if err != nil {
 			return nil, err
 		}
@@ -82,7 +81,7 @@ func (signer SignerECDSA) Sign(
 
 	// No key store / blob opts, sign using the key attributes
 	// provided to the signer.
-	privateKey, err := signer.keyStore.Key(signer.keyAttributes)
+	privateKey, err := signer.keyStore.(*KeyStore).PrivateKey(signer.keyAttributes)
 	if err != nil {
 		return nil, err
 	}

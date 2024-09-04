@@ -18,7 +18,7 @@ var (
 
 type Argon2Hasher struct {
 	random io.Reader
-	params Argon2Params
+	config Argon2Config
 	Argon2
 }
 
@@ -32,7 +32,7 @@ type Argon2Hasher struct {
 func NewArgon2(random io.Reader) Argon2 {
 	return Argon2Hasher{
 		random: random,
-		params: Argon2Params{
+		config: Argon2Config{
 			Memory:      64 * 1024,
 			Iterations:  3,
 			Parallelism: 2,
@@ -42,8 +42,8 @@ func NewArgon2(random io.Reader) Argon2 {
 
 // Creates a new Argon2id password hasher using default parameters
 // using user-defined parameters.
-func CreateArgon2(random io.Reader, params Argon2Params) Argon2 {
-	return Argon2Hasher{random: random, params: params}
+func CreateArgon2(random io.Reader, config Argon2Config) Argon2 {
+	return Argon2Hasher{random: random, config: config}
 }
 
 // Hashes the password using Argon2id
@@ -53,30 +53,30 @@ func (hasher Argon2Hasher) Hash(password string) (string, error) {
 		return "", err
 	}
 	hash := argon2.IDKey([]byte(password), salt,
-		hasher.params.Iterations,
-		hasher.params.Memory,
-		hasher.params.Parallelism,
-		hasher.params.KeyLength)
+		hasher.config.Iterations,
+		hasher.config.Memory,
+		hasher.config.Parallelism,
+		hasher.config.KeyLength)
 	b64Salt := base64.RawStdEncoding.EncodeToString(salt)
 	b64Hash := base64.RawStdEncoding.EncodeToString(hash)
 	encodedHash := fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2.Version, hasher.params.Memory, hasher.params.Iterations,
-		hasher.params.Parallelism, b64Salt, b64Hash)
+		argon2.Version, hasher.config.Memory, hasher.config.Iterations,
+		hasher.config.Parallelism, b64Salt, b64Hash)
 	return encodedHash, nil
 }
 
 func (hasher Argon2Hasher) Compare(password,
 	encodedHash string) (match bool, err error) {
 
-	params, salt, hash, err := hasher.decodeHash(encodedHash)
+	config, salt, hash, err := hasher.decodeHash(encodedHash)
 	if err != nil {
 		return false, err
 	}
 
 	// Derive the key from the other password using the same parameters.
 	otherHash := argon2.IDKey([]byte(password), salt,
-		params.Iterations, params.Memory, params.Parallelism,
-		params.KeyLength)
+		config.Iterations, config.Memory, config.Parallelism,
+		config.KeyLength)
 
 	// Check that the contents of the hashed passwords are identical. Note
 	// that we are using the subtle.ConstantTimeCompare() function for this
@@ -87,11 +87,9 @@ func (hasher Argon2Hasher) Compare(password,
 	return false, nil
 }
 
-// Crates a random salt using the operating system runtime
+// Creates a random salt
 func (hasher Argon2Hasher) createSalt() ([]byte, error) {
-	// Use TPM random source and entropy configuration
-	// to generate random salt
-	b := make([]byte, hasher.params.SaltLength)
+	b := make([]byte, hasher.config.SaltLength)
 	n, err := hasher.random.Read(b)
 	if err != nil {
 		return nil, err
@@ -103,10 +101,10 @@ func (hasher Argon2Hasher) createSalt() ([]byte, error) {
 }
 
 // Decodes an Argon2id encoded hash
-func (hasher Argon2Hasher) decodeHash(encodedHash string) (p Argon2Params,
+func (hasher Argon2Hasher) decodeHash(encodedHash string) (p Argon2Config,
 	salt, hash []byte, err error) {
 
-	var returnParams Argon2Params
+	var returnParams Argon2Config
 
 	vals := strings.Split(encodedHash, "$")
 	if len(vals) != 6 {
@@ -122,7 +120,7 @@ func (hasher Argon2Hasher) decodeHash(encodedHash string) (p Argon2Params,
 		return returnParams, nil, nil, ErrIncompatibleVersion
 	}
 
-	p = Argon2Params{}
+	p = Argon2Config{}
 	_, err = fmt.Sscanf(vals[3], "m=%d,t=%d,p=%d", &p.Memory,
 		&p.Iterations, &p.Parallelism)
 	if err != nil {

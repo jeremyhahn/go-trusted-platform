@@ -1,22 +1,34 @@
 package cmd
 
 import (
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cmd/platform"
+
 	"github.com/spf13/cobra"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/cmd/subcommands"
+	subcmd "github.com/jeremyhahn/go-trusted-platform/pkg/cmd/platform"
 )
 
 func init() {
 
-	rootCmd.AddCommand(platformCmd)
+	platformCmd.AddCommand(platform.DestroyCmd)
+	platformCmd.AddCommand(platform.PasswordCmd)
+	platformCmd.AddCommand(platform.ProvisionCmd)
+	platformCmd.AddCommand(platform.InstallCmd)
 
-	platformCmd.AddCommand(subcommands.PFDestroyCmd)
+	rootCmd.AddCommand(platformCmd)
+}
+
+func initPlatform() {
+
+	subcmd.App = App
+	subcmd.InitParams = InitParams
+	subcmd.CAParams = CAParams
 }
 
 var platformCmd = &cobra.Command{
 	Use:   "platform",
 	Short: "Platform Operations",
-	Long:  `Perform platform administrator operations`,
+	Long:  `Perform Platform Administrator operations`,
 	Run: func(cmd *cobra.Command, args []string) {
 
 	},

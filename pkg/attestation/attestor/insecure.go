@@ -2,6 +2,7 @@ package attestor
 
 import (
 	"context"
+	"crypto/x509"
 
 	pb "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/proto"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
@@ -23,10 +24,10 @@ func (a *InsecureAttestor) SetAttestor(attestor Attestor) {
 	a.attestor = attestor
 }
 
-// Provide the Verifier our CA certificate bundle over an insecure
+// Provide the Verifier the CA certificate bundle over an insecure
 // connection. This allows the Verifier to add the bundle to their
-// CertPool to verify the certificate used by our gRPC TLS service,
-// effectively "upgrading" to a secure mTLS encrypted gRPC connection.
+// CertPool to verify the certificate used by this gRPC TLS service,
+// thereby "upgrading" to a secure mTLS encrypted gRPC connection.
 // The verifier must be explicitly set in the "allowed-verifiers"
 // configuration variable to be allowed to connect and retrieve
 // the certificate bundle (and perform remote attestation).
@@ -48,6 +49,7 @@ func (s *InsecureAttestor) GetCABundle(
 	if err != nil {
 		return nil, err
 	}
+	var keyAlgorithm x509.PublicKeyAlgorithm
 BREAK:
 	for _, cert := range certs {
 
@@ -59,6 +61,7 @@ BREAK:
 			// Check the common name for an allow list match
 			if _verifier == cert.Subject.CommonName {
 				allowed = true
+				keyAlgorithm = cert.PublicKeyAlgorithm
 				// verifier = _verifier
 				break BREAK
 			}
@@ -88,7 +91,7 @@ BREAK:
 
 	// Send our CA certs to the Verifier so they can terminate
 	// the insecure connection and establish a new mTLS connection
-	attestorBundle, err := s.ca.CABundle(nil)
+	attestorBundle, err := s.ca.CABundle(nil, &keyAlgorithm)
 	if err != nil {
 		s.logger.Error(err)
 		return nil, err
