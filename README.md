@@ -33,10 +33,12 @@ For detailed documentation on the components used in this project, please refer 
 * [Linux](https://www.debian.org/)
 * [Make](https://www.gnu.org/software/make/)
 * [Golang](https://go.dev/)
+* [Trusted Platform Module](https://trustedcomputinggroup.org/resource/trusted-platform-module-tpm-summary/)
 
 Optional dependencies:
 
 * [SoftHSM](https://www.opendnssec.org/softhsm/)
+* [NitroKey](https://www.nitrokey.com/products/nitrokeys)
 * [YubiKey](https://www.yubico.com/)
 * [YubiHSM](https://www.yubico.com/products/hardware-security-module/)
 * Other PKCS #11 HSM
@@ -57,11 +59,11 @@ Use the included `Makefile` to build and perform initial setup.
 
 #### Configuration
 
-Copy the [config file](configs/platform/config.dev.yaml) to `./config.yaml` (where you will run the `trusted-platform` binary). Edit the configuration file according to your environment and requirements.
+Copy the [config file](configs/platform/config.prod.yaml) to `./config.yaml` (where you will run the `tpadm` binary). Edit the configuration file according to your environment and requirements.
 
-The Trusted Platform will try to read the TPM Endorsement Key Certificate from NVRAM, however, not all TPM's have their certificates flashed to NVRAM. Next it will attempt to download the EK certificate from the Manufacturer website (currently only Intel is supported). If neither of these methods is able to locate your TPM EK certificate, you can try using the [tpm2_getekcertificate](https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_getekcertificate.1.md) tool to dump your TPM Endorsement Key certificate to the project directory where you will run the `trusted-platform` binary. Follow the example and use the `ECcert.bin` file name, or edit the platform configuration file to match the custom name for your certificate in the TPM section.
+The Trusted Platform will try to read the TPM Endorsement Key Certificate from NVRAM, however, not all TPM's have their certificates flashed to NVRAM. Next it will attempt to download the EK certificate from the Manufacturer website (currently only Intel is supported). If neither of these methods is able to locate your TPM EK certificate, an EK certificate will be generated. If an EK `cert-handle` is defined, the generated certificate will be written to NV RAM. It may optionally be stored in the x509 certificate store.
 
-The default config uses a TPM simulator which is reset every time the platform starts. Be sure to set the simulator to false in the platform configuration file to start using your real TPM device.
+The development and example attestation configs uses a TPM simulator which is reset every time the platform starts. Be sure to set the simulator to false in the platform configuration file to start using your real TPM device. The included prod config file provides some example defaults intended for a production environment.
 
 
 ##### Web Services
@@ -82,18 +84,28 @@ Procedure to start the embedded web services for the first time:
 
 
 
-###### Passwords
+##### Key Stores
 
-Currently, only PKCS #8 file based private keys are supported. PKCS #11 is on the way.
+The Trusted Platform currently includes PKCS #8, PKCS #11 and TPM 2.0 key store modules. All 3 of these modules may be used at the same time.
 
-During platform setup, a few passwords are collected to encrypt and password protect the PKCS #8 private keys.
+There are a few important concepts to understand regarding the key stores. 
 
-* Root Certificate Authority Private Key Password
-* Intermediate Certificate Authority Private Key Password
-* Web Server TLS Private Key Password
+The first is the `Platform Key Store`, the general purpose key store that acts as a central repository for key store module PINs, secondary key passwords and generic passwords stored by the platform or applications.
 
-To automate the platform setup for testing, these passwords can be set in the configuration file, which will cause the setup to bypass the inital prompts and use the passwords defined in the config. This mechanism should only be used for testing, evaluation or development.
+The second is the `Keychain`, which is a collection of `Key Store Module` configurations, and the keys that belong to the keychain.
 
+A Keychain may be configured with any or all of the supported Key Store Modules, and must contain a valid configuration for any keys on the keychain using that particular module.
+
+Each Certificate Authority has it's own keychain and keys. The PIN / password for the Key Store Modules, if enabled with a `platform-policy`, are stored in the general purpose `Platform Key Store` and automatically retrieved by the Trusted Platform as necessary using a PCR policy session which releases the passwords as long as the chosen platform PCR is in it's valid state.
+
+
+##### Passwords
+
+The PKCS #8 and TPM 2.0 key store modules support secondary key passwords. 
+
+These passwords, if configured with the `platform-policy`, are stored in the *Platform Key Store*, and automatically retrieved by the Trusted Platform as necessary using a PCR policy session which releases the password as long as the chosen platform PCR is in it's valid state. If `platform-policy` is not true, the password will not be stored, and in the case of PKCS #8 and TPM 2.0, will require the password entered when necessary.
+
+PKCS #11 does not support secondary key passwords.
 
 ## LUKS
 
@@ -122,16 +134,14 @@ Don't forget to remove your LUKS key from the system. In the future, this step w
 
 ## Platform Startup & Local Attestation
 
-When the platform starts up, the Certificate Authorities are initialized, resulting in a Root and Intermediate CA with public / private keys, a signing certificate, and a dedicated encryption key using each of the configured key
-algorithms specified in the platform configuration file. The Intermediate CA
-will have the Root CA's certificate imported to its trusted root store. Each CA's Certificate Revocation List is created and initialized with a dummy certificate.
+When the platform starts up, the Certificate Authorities are initialized, resulting in a Root and Intermediate CA with public / private keys and a signing certificates for each of the keys listed in the platform configuration file. The Intermediate CA will have the Root certificate imported to its trusted root store. A Certificate Revocation List is created and initialized with a dummy certificate for each of the configured key algorithms, in each of the configured Key Store Modules.
 
-After the CA is initialized, local system platform measurements are taken according to the platform configuration file, signed by the CA, and stored in the CA's internal blob store, along with the digest, signature, and checksum of the measurements. On subsequent startups, new system measurements are taken, a new digest is created and verified against the initial platform measurements signature. If the signature does not match (the state is different / unexpected), the platform will return a fatal error and terminate. In the future, it will also re-seal the platform by unmounting the LUKS volume and run a set of custom event handlers that allow responding to the unexpected state of the system using plugins.
+After the CA is initialized, local system platform measurements are taken according to the platform configuration file, signed by the CA, and placed into internal blob storage, along with the digest, signature, and checksum of the measurements. On subsequent startups, new system measurements are taken, a new digest is created and verified against the initial platform measurements signature. If the signature does not match (the state is different / unexpected), the platform will return a fatal error and terminate. In the future, it will also integrate with LUKS volumes and run a set of custom event handlers that allow responding to the unexpected state of the system using a plugin architecture.
 
 
 ## Remote Attestation
 
-A remote attestation implementation using the procedure outlined by [tpm2-community](https://tpm2-software.github.io/tpm2-tss/getting-started/2019/12/18/Remote-Attestation.html) is working, however, be sure to read the notes in the attestation directory regarding this approach.
+A remote attestation implementation using the procedure outlined by [tpm2-community](https://tpm2-software.github.io/tpm2-tss/getting-started/2019/12/18/Remote-Attestation.html) is working, however, be sure to read the notes in the [attestation](pkg/attestation) directory regarding this approach. This will be replaced with an ACME device-attest enrollment protocol in the near future.
 
 To test it out using the provided `Makefile` targets.
 
@@ -141,11 +151,11 @@ To test it out using the provided `Makefile` targets.
     # Verifier
     make verifier
 
-After attestation completes, you should see a new `attestation` folder appears that looks something like this (on the verifier side):
+After attestation completes, you should see a new `attestation` folder appear that looks something like this (on the verifier side):
 
-This example demonstrates a Certificate Authority with PKCS #8, PKCS #11, and TPM 2.0 key store enabled, and RSA-PSS, ECDSA and Ed25519 keys configured to enable simultaneous signing with any of the configured keys. In addition, PKCS #8 and TPM 2.0 keys support secondary password protection, using key level passwords in addition to the PIN used to secure the keys at the hardware level. The passwords are stored in the *platform key store* as HMAC secrets with an optional PCR policy that allows retrieval of the password as long as the platform is in it's approved state. The key store PINs have the `.pin` extension in their file names, while secondary passwords are stored using only their common names.
+This example demonstrates a Certificate Authority with PKCS #8, PKCS #11, and TPM 2.0 key store modules configured with RSA (PSS), ECDSA and Ed25519 keys configured to enable simultaneous signing with any of the configured keys. In addition, PKCS #8 and TPM 2.0 keys support secondary password protection, using key level passwords in addition to the PIN used to secure the keys at the hardware level. The passwords are stored in the *Platform Key Store* as HMAC secrets with an optional PCR policy that allows retrieval of the password as long as the platform is in it's approved state. The key store PINs have the `.pin` extension in their file names, while secondary passwords are stored using only their common names.
 
-Note that the TPM 2.0 spec does not support Twisted Edward Curves (Ed25519). Many budget friendly HSM's don't support it either. Be sure to check the specifications on your PKCS #11 HSM to confirm support.
+Note that the TPM 2.0 spec does not support Twisted Edward Curves (Ed25519). Many budget friendly HSM's also don't support twisted curves. Be sure to check the specifications on your HSM and to confirm support.
 
  ```
 attestation/verifier/trusted-data/
@@ -373,8 +383,8 @@ The `main` branch will always build and run. Try it out!
         - [x] Key Storage Backends
             - [x] File storage
             - [x] PKCS 11
-            - [x] [TPM 2.0](https://en.wikipedia.org/wiki/Trusted_Platform_Module)
-            - [x] [SoftHSM](https://www.opendnssec.org/softhsm/)
+            - [x] TPM 2.0
+            - [x] SoftHSM
             - [ ] [Raft](https://raft.github.io/)
         - [x] Formats
             - [x] [PKCS 1](https://en.wikipedia.org/wiki/PKCS_1)
@@ -389,9 +399,8 @@ The `main` branch will always build and run. Try it out!
         - [x] Private trusted root certificate store
         - [x] Private trusted intermediate certificate store
         - [x] Distinct CA, TLS, encryption & signing keys
-        - [x] RSA public & private encryption keys
         - [x] RSA, ECDSA & Ed21159 signing keys
-        - [x] RSA PKCS1v15, RSA-PSS, ECDSA, & Ed25519 signature verification
+        - [x] SHA-256, 385, 512 w/ RSA PKCS1v15, PSS, ECDSA, & Ed25519 signature algorithms
         - [x] Create & Sign Certificate Signing Requests (CSR)
         - [x] x509 Certificate Revocation Lists (CRLs)
         - [x] Encoding & Decoding support for DER and PEM
@@ -430,67 +439,26 @@ The `main` branch will always build and run. Try it out!
         - [x] Quote / Verify
         - [x] Create TCG-CSR-IDEVID certificate request
         - [ ] Create TCG-CSR-LDEVID certificate request
-    - [ ] Command Line Interface
-          [ ] [Linux man pages](docs/man)
-            - [ ] CA
-                - [x] info
-                - [x] init
-                - [x] install
-                - [x] issue
-                - [x] revoke
-                - [x] show
-                - [x] uninstall
-            - [ ] Platform
-                - [x] destroy
-                - [x] install
-                - [x] password
-                - [x] provision
-            - [ ] TPM
-                - [x] clear
-                - [x] ek
-                - [x] eventlog
-                - [x] info
-                - [x] provision
-        - [ ] Certificate Authority
-            - [x] Issue Certificate
-            - [x] Import Certificate to CA Trust Store
-            - [x] Retrieve Public Key
-            - [x] List Certificates
-            - [x] Show Certificate
-            - [x] Install to Operating System Trust Store
-            - [x] Uninstall to Operating System Trust Store
-            - [ ] Sign / verify (certificate & data)
-            - [ ] Encrypt / Decrypt
-            - [ ] Encode / Decode
-            - [ ] Parse DER / PEM x509 certificates
-        - [ ] Trusted Platform Module 2.0
-            - [x] Create EK certificate
-            - [x] Create Storage Root Key
-            - [ ] Create Attestation Key
-            - [ ] Validate EK Cert w/ CA
-            - [ ] Auto-import EK Issuer Root & Intermediate CAs
-            - [ ] Create Attestation Key
-            - [ ] Credential challenge
-            - [ ] Activate credential
-            - [x] Event Log Parsing
-            - [ ] Provide Attestation Key to Client
-        - [x] Local Attestation
-            - [x] Capture initial platform measurements
-            - [x] Sign and store initial measurements
-            - [ ] Capture new measurements on subsequent startups
-            - [ ] Verify subsequent startup measurements
-            - [ ] Terminate if verification fails
-                - [ ] Exit with Fatal error
-                - [ ] Re-seal the platform
-                - [ ] Invoke custom event handlers
-            - [ ] Client (Verifier)
-                - [x] Auto-negotiated mTLSv1.3
-                - [x] Get Endorsement Key (EK) and Certificate
-                - [x] Get Attestation Key Profile (EK, AK, AK Name)
-                - [x] Credential Challenge (TPM2_MakeCredential)
-                - [x] Activate Credential (TPM2_ActivateCredential)
-                - [x] Issue Attestation Key Certificate
-                - [x] Verify Quote
+    - [ ] [Command Line Interface](docs/man)
+        - [ ] CA
+            - [x] info
+            - [x] init
+            - [x] install
+            - [x] issue
+            - [x] revoke
+            - [x] show
+            - [x] uninstall
+        - [ ] Platform
+            - [x] destroy
+            - [x] install
+            - [x] password
+            - [x] provision
+        - [ ] TPM
+            - [x] clear
+            - [x] ek
+            - [x] eventlog
+            - [x] info
+            - [x] provision
         - [x] Remote Attestation
             - [x] Attestor (service consumer / server socket)
                 - [x] gRPC service
@@ -597,6 +565,13 @@ The `main` branch will always build and run. Try it out!
                 - [ ] Unmount luks container (re-sealing the platform)
                 - [ ] Delete luks volume & platform binary
                 - [ ] Wipe file system
+
+## Sponsors
+
+|  |  |
+| ------- | ----- |
+| <img src="https://www.nitrokey.com/sites/all/themes/nitrokey/logo.svg" width="64">| Thanks for 3 NetHSM devices to assist in PKCS #11 & Raft development! |
+
 
 ## Support
 
