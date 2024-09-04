@@ -3,7 +3,7 @@ definitions:
   app.App:
     properties:
       argon2:
-        $ref: '#/definitions/hash.Argon2Params'
+        $ref: '#/definitions/argon2.Argon2Config'
       attestation:
         $ref: '#/definitions/config.Attestation'
       certificate_authority:
@@ -18,64 +18,63 @@ definitions:
         type: string
       hostmaster:
         type: string
-      intermediate_password:
+      hostname:
+        type: string
+      listen:
         type: string
       log_dir:
         type: string
-      password-policy:
-        type: string
       platform_dir:
         type: string
-      root_password:
-        type: string
       runtime_user:
-        type: string
-      server_password:
         type: string
       tpm:
         $ref: '#/definitions/tpm2.Config'
       webservice:
         $ref: '#/definitions/config.WebService'
     type: object
+  argon2.Argon2Config:
+    properties:
+      iterations:
+        type: integer
+      keyLen:
+        type: integer
+      memory:
+        type: integer
+      parallelism:
+        type: integer
+      saltLen:
+        type: integer
+    type: object
   ca.Config:
     properties:
       auto_import_issuing_ca:
         type: boolean
-      elliptic-curve:
+      default_idevid_cn:
         type: string
-      hash:
-        type: string
-      home:
-        type: string
+      default_validity:
+        type: integer
       identity:
         items:
           $ref: '#/definitions/ca.Identity'
         type: array
-      issued-valid-days:
+      platform_ca:
         type: integer
-      key-algorithm:
-        type: string
-      key-store:
-        type: string
-      password-policy:
-        type: string
-      require-pkcs8-password:
+      require-password:
         type: boolean
-      retain-revoked-certificates:
+      sans_include_localhost:
         type: boolean
-      rsa-scheme:
-        type: string
-      sans-include-localhost:
-        type: boolean
-      signature-algorithm:
-        type: string
       system_cert_pool:
         type: boolean
     type: object
   ca.Identity:
     properties:
-      key_size:
-        type: integer
+      keys:
+        items:
+          $ref: '#/definitions/keystore.KeyConfig'
+        type: array
+      keystores:
+        $ref: '#/definitions/platform.KeyChainConfig'
       sans:
         $ref: '#/definitions/ca.SubjectAlternativeNames'
       subject:
@@ -129,8 +128,6 @@ definitions:
         type: array
       client_ca_cert:
         type: string
-      ek_cert_form:
-        type: string
       insecure_port:
         type: integer
       insecure_skip_verify:
@@ -139,42 +136,108 @@ definitions:
         items:
           type: integer
         type: array
-      service:
-        type: string
-      service_ca_cert:
-        type: string
       tls_port:
+        type: integer
+    type: object
+  config.Identity:
+    properties:
+      sans:
+        $ref: '#/definitions/ca.SubjectAlternativeNames'
+      subject:
+        $ref: '#/definitions/ca.Subject'
+      valid:
         type: integer
     type: object
   config.WebService:
     properties:
       certificate:
-        $ref: '#/definitions/ca.Identity'
+        $ref: '#/definitions/config.Identity'
+      home:
+        type: string
       jwt_expiration:
         type: integer
+      key:
+        $ref: '#/definitions/keystore.KeyConfig'
       port:
         type: integer
-      tls_ca:
-        type: string
-      tls_crt:
-        type: string
-      tls_key:
-        type: string
       tls_port:
         type: integer
     type: object
-  hash.Argon2Params:
+  keystore.ECCConfig:
     properties:
-      iterations:
+      curve:
+        type: string
+    type: object
+  keystore.KeyConfig:
+    properties:
+      algorithm:
+        type: string
+      cn:
+        type: string
+      debug:
+        type: boolean
+      default:
+        type: boolean
+      ecc:
+        $ref: '#/definitions/keystore.ECCConfig'
+      hash:
+        type: string
+      parent:
+        $ref: '#/definitions/keystore.KeyConfig'
+      password:
+        type: string
+      platform-policy:
+        type: boolean
+      rsa:
+        $ref: '#/definitions/keystore.RSAConfig'
+      secret:
+        type: string
+      signature-algorithm:
+        type: string
+      store:
+        type: string
+    type: object
+  keystore.RSAConfig:
+    properties:
+      size:
         type: integer
-      keyLen:
+    type: object
+  pkcs8.Config:
+    properties:
+      cn:
+        type: string
+      platform_policy:
+        type: boolean
+    type: object
+  pkcs11.Config:
+    properties:
+      cn:
+        type: string
+      config:
+        type: string
+      label:
+        type: string
+      library:
+        type: string
+      pin:
+        type: string
+      platform_policy:
+        type: boolean
+      slot:
         type: integer
-      memory:
-        type: integer
-      parallelism:
-        type: integer
-      saltLen:
-        type: integer
+      so_pin:
+        type: string
+    type: object
+  platform.KeyChainConfig:
+    properties:
+      cn:
+        type: string
+      pkcs8:
+        $ref: '#/definitions/pkcs8.Config'
+      pkcs11:
+        $ref: '#/definitions/pkcs11.Config'
+      tpm2:
+        $ref: '#/definitions/tpm2.KeyStoreConfig'
     type: object
   response.WebServiceResponse:
     properties:
@@ -202,28 +265,153 @@ definitions:
     type: object
   tpm2.Config:
     properties:
-      auto_import_ek_certs:
-        type: boolean
       device:
         type: string
-      ek-cert-index:
-        type: integer
-      ek_cert:
-        type: string
+      ek:
+        $ref: '#/definitions/tpm2.EKConfig'
       encrypt_sessions:
         type: boolean
       entropy:
         type: boolean
+      file_integrity:
+        items:
+          type: string
+        type: array
+      hash:
+        type: string
+      iak:
+        $ref: '#/definitions/tpm2.IAKConfig'
+      idevid:
+        $ref: '#/definitions/tpm2.IDevIDConfig'
+      keystore:
+        $ref: '#/definitions/tpm2.KeyStoreConfig'
+      lockout-auth:
+        type: string
+      platform_pcr:
+        type: integer
       simulator:
         type: boolean
+      ssrk:
+        $ref: '#/definitions/tpm2.SRKConfig'
+    type: object
+  tpm2.EKConfig:
+    properties:
+      _platform_policy:
+        type: boolean
+      algorithm:
+        type: string
+      cert-handle:
+        type: integer
+      cn:
+        type: string
+      debug:
+        type: boolean
+      ecc:
+        $ref: '#/definitions/keystore.ECCConfig'
+      handle:
+        type: integer
+      hierarchy_auth:
+        type: string
+      password:
+        type: string
+      rsa:
+        $ref: '#/definitions/keystore.RSAConfig'
+    type: object
+  tpm2.IAKConfig:
+    properties:
+      _platform_policy:
+        type: boolean
+      algorithm:
+        type: string
+      cert-handle:
+        type: integer
+      cn:
+        type: string
+      debug:
+        type: boolean
+      ecc:
+        $ref: '#/definitions/keystore.ECCConfig'
+      handle:
+        type: integer
+      hash:
+        type: string
+      password:
+        type: string
+      rsa:
+        $ref: '#/definitions/keystore.RSAConfig'
+      signature-algorithm:
+        type: string
+    type: object
+  tpm2.IDevIDConfig:
+    properties:
+      _platform_policy:
+        type: boolean
+      algorithm:
+        type: string
+      cert-handle:
+        type: integer
+      cn:
+        type: string
+      debug:
+        type: boolean
+      ecc:
+        $ref: '#/definitions/keystore.ECCConfig'
+      handle:
+        type: integer
+      hash:
+        type: string
+      model:
+        type: string
+      pad:
+        type: boolean
+      password:
+        type: string
+      rsa:
+        $ref: '#/definitions/keystore.RSAConfig'
+      serial:
+        type: string
+      signature-algorithm:
+        type: string
+    type: object
+  tpm2.KeyStoreConfig:
+    properties:
+      cn:
+        type: string
+      platform_policy:
+        type: boolean
+      srk-handle:
+        type: integer
+      srk_auth:
+        type: string
+    type: object
+  tpm2.SRKConfig:
+    properties:
+      _platform_policy:
+        type: boolean
+      algorithm:
+        type: string
+      cn:
+        type: string
+      debug:
+        type: boolean
+      ecc:
+        $ref: '#/definitions/keystore.ECCConfig'
+      handle:
+        type: integer
+      hierarchy-auth:
+        type: string
+      password:
+        type: string
+      rsa:
+        $ref: '#/definitions/keystore.RSAConfig'
     type: object
 host: localhost:8443
 info:
   contact:
-    email: support@trusted-platform.org
+    email: support@trusted-platform.io
     name: API Support
     url: https://www.trusted-platform.io/support
-  description: This is the RESTful Web Services API for Trusted Platform
+  description: The Trusted Platform RESTful Web Services API
   license:
     name: Commercial
     url: https://www.trusted-platform.io/licenses/commercial.txt
@@ -231,6 +419,19 @@ info:
   title: Trusted Platform
   version: v0.0.1
 paths:
+  /certificate:
+    get:
+      description: Returns the server public RSA key
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: string
+      summary: Retrieve the server x509 certificate
+      tags:
+      - System
   /config:
     get:
       description: Returns the server configuration
@@ -364,7 +565,7 @@ paths:
           description: OK
           schema:
             type: string
-      summary: Retrieve RSA pubilc key
+      summary: Retrieve the server pubilc key
       tags:
       - System
   /status:

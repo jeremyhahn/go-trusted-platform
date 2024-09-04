@@ -11,26 +11,20 @@ var VFAKPassword string
 func init() {
 
 	verifierCmd.PersistentFlags().StringVarP(&VFAttestor, "attestor", "a", "localhost", "The hostname, DNS name, or IP of the attestor to verify")
-	verifierCmd.PersistentFlags().StringVar(&VFAKPassword, "ak-password", "", "The host or dns name of the attestor to verify")
 
 	rootCmd.AddCommand(verifierCmd)
 }
 
 var verifierCmd = &cobra.Command{
 	Use:   "verifier",
-	Short: "Starts the Verifier as a client",
+	Short: "Starts the Verifier gRPC client",
 	Long:  `Performs Remote Attestation with the specified Attestor`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		// Initialize CA and TPM
-		App.InitCA()
+		App.Init(InitParams)
 
 		// Create new verifier
-		verifier, err := verifier.NewVerifier(
-			App, VFAttestor,
-			[]byte(InitParams.CAPassword),
-			[]byte(InitParams.ServerPassword),
-			[]byte(VFAKPassword))
+		verifier, err := verifier.NewVerifier(App, VFAttestor)
 		if err != nil {
 			App.Logger.Fatal(err)
 		}

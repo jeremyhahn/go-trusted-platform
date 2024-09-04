@@ -9,6 +9,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	pb "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/proto"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
 	"github.com/op/go-logging"
 	"google.golang.org/grpc/peer"
@@ -18,81 +19,43 @@ var (
 	ErrInternalServerError = errors.New("grpc-secure-server: internal server error")
 )
 
-type Session struct {
-	ek tpm2.Key
-	ak tpm2.DerivedKey
-}
-
 // Secure TLS encrypted gRPC web service
 type SecureAttestor struct {
-	logger   *logging.Logger
-	config   config.Attestation
 	app      *app.App
 	attestor Attestor
+	config   config.Attestation
+	keyAttrs *keystore.KeyAttributes
+	logger   *logging.Logger
 	pb.TLSAttestorClient
 	pb.UnimplementedTLSAttestorServer
-	sessions     map[string]Session
 	sessionMutex sync.RWMutex
 }
 
-func NewSecureAttestor(attestor Attestor, app *app.App) *SecureAttestor {
+func NewSecureAttestor(
+	attestor Attestor,
+	app *app.App) *SecureAttestor {
+
 	return &SecureAttestor{
 		logger:       app.Logger,
 		app:          app,
 		config:       app.AttestationConfig,
 		attestor:     attestor,
-		sessions:     make(map[string]Session, 0),
+		keyAttrs:     app.ServerKeyAttributes,
 		sessionMutex: sync.RWMutex{}}
-}
-
-func (s *SecureAttestor) setSession(verifier string, session Session) {
-	s.sessionMutex.Lock()
-	defer s.sessionMutex.Unlock()
-	s.sessions[verifier] = session
-}
-
-func (s *SecureAttestor) deleteSession(verifier string) error {
-	if _, ok := s.sessions[verifier]; !ok {
-		s.logger.Errorf("missing expected session for %s", verifier)
-		return ErrInternalServerError
-	}
-	s.sessionMutex.Lock()
-	defer s.sessionMutex.Unlock()
-	delete(s.sessions, verifier)
-	return nil
-}
-
-func (s *SecureAttestor) session(verifier string) (Session, error) {
-	s.sessionMutex.Lock()
-	defer s.sessionMutex.Unlock()
-	session, ok := s.sessions[verifier]
-	if !ok {
-		return Session{}, nil
-	}
-	return session, nil
 }
 
 // Opens a new connection to the TPM if a connection is not already connected
 func (s *SecureAttestor) OnConnect() {
-	s.app.TPM.Open()
 }
 
 // Cleans up the session by removing the Verifier's CA bundle from memory
 func (s *SecureAttestor) Close(ctx context.Context, in *pb.Null) (*pb.Null, error) {
 	verifier := s.parseVerifierIP(ctx)
-	s.logger.Debugf("Received connection from: %v", verifier)
 
+	s.logger.Debugf("Received connection from: %v", verifier)
+	s.logger.Debugf("secure-server/Close: deleting verifier session: %s", verifier)
 	s.attestor.RemoveVerifierCABundle(verifier)
 
-	s.sessionMutex.Lock()
-	defer s.sessionMutex.Unlock()
-
-	s.logger.Debugf("secure-server/Close: deleting verifier session: %s", verifier)
-	delete(s.sessions, verifier)
-
-	if len(s.sessions) == 0 {
-		s.app.TPM.Close()
-	}
 	return nil, nil
 }
 
@@ -103,8 +66,7 @@ func (s *SecureAttestor) GetEKCert(ctx context.Context, in *pb.Null) (*pb.EKCert
 	s.logConnection(ctx, "GetEK")
 
 	// Get the EK cert as x509.Certificate
-	attrs := s.app.CA.CAKeyAttributes(nil)
-	cert, err := s.app.TPM.EKCert(attrs)
+	cert, err := s.app.TPM.EKCertificate()
 	if err != nil {
 		s.logger.Error(err)
 		return nil, err
@@ -120,34 +82,18 @@ func (s *SecureAttestor) GetAK(ctx context.Context, in *pb.Null) (*pb.AKReply, e
 
 	s.logConnection(ctx, "GetAK")
 
-	verifier := s.parseVerifierIP(ctx)
-
-	// Create EK and AK
-	ek, ak, err := s.app.TPM.RSAAK()
+	// Retrieve the AK Profile (EK pub, AK pub, AK name)
+	profile, err := s.app.TPM.AKProfile()
 	if err != nil {
 		s.logger.Error(err)
 		return nil, err
 	}
-
-	// Create a new session to store the EK and AK
-	// to reference in subsequent calls during the
-	// remote attestation flow.
-	session, err := s.session(verifier)
-	if err != nil {
-		s.logger.Error(err)
-		return nil, err
-	}
-	session.ek = ek
-	session.ak = ak
-	s.setSession(verifier, session)
-	s.logger.Debugf("secure-server/GetAK: creating session for verifier: %s", verifier)
 
 	return &pb.AKReply{
-		EkPublicPEM:    ek.PublicKeyPEM,
-		EkBPublicBytes: ek.BPublicBytes,
-		AkPublicPEM:    ak.PublicKeyPEM,
-		AkBPublicBytes: ak.BPublicBytes,
-		AkName:         ak.Name,
+		AKName:             profile.AKName.Buffer,
+		AKPub:              profile.AKPub,
+		EKPub:              profile.EKPub,
+		SignatureAlgorithm: int32(profile.SignatureAlgorithm),
 	}, nil
 }
 
@@ -165,17 +111,9 @@ func (s *SecureAttestor) ActivateCredential(
 
 	s.logConnection(ctx, "ActivateCredential")
 
-	verifier := s.parseVerifierIP(ctx)
-	session, err := s.session(verifier)
-	if err != nil {
-		s.logger.Error(err)
-		return nil, err
-	}
-
-	secret, err := s.app.TPM.ActivateCredential(session.ak, tpm2.Credential{
-		CredentialBlob:  in.CredentialBlob,
-		EncryptedSecret: in.EncryptedSecret,
-	})
+	secret, err := s.app.TPM.ActivateCredential(
+		in.CredentialBlob,
+		in.EncryptedSecret)
 	if err != nil {
 		s.logger.Error(err)
 		return nil, err
@@ -198,15 +136,8 @@ func (s *SecureAttestor) AcceptCertificate(
 		return nil, err
 	}
 
-	// Import the certificate to the platform CA
-	attrs := s.app.CA.CAKeyAttributes(nil)
-	attrs.Domain = s.app.Domain
-	attrs.CN = cert.Subject.CommonName
-	attrs.AuthPassword = []byte(s.app.CA.Identity().KeyPassword)
-
-	err = s.app.CA.ImportAttestationKeyCertificate(attrs, in.Certificate)
-	if err != nil {
-		s.logger.Error(err)
+	// Save the certificate to the platform certificate store
+	if err := s.app.PlatformCertStore.ImportCertificate(cert); err != nil {
 		return nil, err
 	}
 
@@ -231,7 +162,7 @@ func (s *SecureAttestor) Quote(
 		return nil, err
 	}
 
-	encoded, err := s.app.TPM.EncodeQuote(quote)
+	encoded, err := tpm2.EncodeQuote(quote)
 	if err != nil {
 		s.logger.Error(err)
 		return nil, err

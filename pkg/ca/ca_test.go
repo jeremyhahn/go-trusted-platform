@@ -2,21 +2,30 @@ package ca
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"testing"
 
-	"github.com/op/go-logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/pkcs11"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/pkcs8"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
+	tpm2ks "github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/tpm2"
 )
 
 /*
@@ -41,63 +50,76 @@ import (
 	 testdata/intermediate-ca/issued/tpm-ek/tpm-ek.crt
 */
 
-var CERTS_DIR = "./testdata"
+var TEST_DATA_DIR = "./testdata"
+var SOFTHSM_DATA_DIR = "./trusted-data"
 var INTEL_CERT_URL = "https://trustedservices.intel.com/content/CRL/ekcert/CNLEPIDPOSTB1LPPROD2_EK_Platform_Public_Key.cer"
 var CLEAN_TMP = false
+var TEST_SOFTHSM_CONF = []byte(`
+# SoftHSM v2 configuration file
 
-func TestLoad(t *testing.T) {
+directories.tokendir = testdata/
+objectstore.backend = file
+objectstore.umask = 0077
 
-	config := defaultConfig()
-	assert.NotNil(t, config)
+# ERROR, WARNING, INFO, DEBUG
+log.level = DEBUG
 
-	params, _, intermediateCA, err := createService(config, true)
-	defer cleanTempDir(config.Home)
+# If CKF_REMOVABLE_DEVICE flag should be set
+slots.removable = false
 
-	if err != nil {
-		params.Logger.Fatal(err)
+# Enable and disable PKCS#11 mechanisms using slots.mechanisms.
+slots.mechanisms = ALL
+
+# If the library should reset the state on fork
+library.reset_on_fork = false
+`)
+
+func TestMain(m *testing.M) {
+	setup()
+	code := m.Run()
+	teardown()
+	os.Exit(code)
+}
+
+func teardown() {
+	// os.RemoveAll(TEST_DATA_DIR)
+}
+
+func setup() {
+
+	os.RemoveAll(TEST_DATA_DIR)
+	os.RemoveAll(SOFTHSM_DATA_DIR)
+
+	if err := os.MkdirAll(TEST_DATA_DIR+"/trusted-data/etc", os.ModePerm); err != nil {
+		fmt.Println(err)
+		return
 	}
-
-	// Instantiate the CA using Init(), it should create a Root
-	// and Intermediate CA ready for use
-	config = defaultConfig() // call again to get new temp dir
-	assert.NotNil(t, config)
-
-	_, _, intermediateCA, err = createService(config, true)
-	defer cleanTempDir(config.Home)
-	assert.Nil(t, err)
-
-	// Get the CA bundle
-	bundle, err := intermediateCA.CABundle(nil)
-	assert.Nil(t, err)
-	assert.NotNil(t, bundle)
-
-	params.Logger.Info(string(bundle))
 }
 
 func TestInit(t *testing.T) {
 
-	config := defaultConfig()
+	performInit := true
+	encrypt := false
+	entropy := false
+
+	config := defaultConfig(nil)
 	assert.NotNil(t, config)
 
-	params, rootCA, intermediateCA, err := createService(config, false)
-	defer cleanTempDir(config.Home)
+	rootCA, intermediateCA, tpm, tmp, err := createService(
+		config, performInit, encrypt, entropy)
+	defer tpm.Close()
+	defer cleanTempDir(tmp)
 
-	assert.Equal(t, ErrNotInitialized, err)
+	assert.Nil(t, err)
 	assert.NotNil(t, rootCA)
 	assert.NotNil(t, intermediateCA)
 
-	rootCerts, err := rootCA.Init(nil)
+	caKeyAttrs, err := rootCA.CAKeyAttributes(nil, nil)
 	assert.Nil(t, err)
-	assert.NotNil(t, rootCerts)
-
-	intermediateCerts, err := intermediateCA.Init(rootCerts)
-	assert.Nil(t, err)
-	assert.NotNil(t, intermediateCerts)
-
-	bundle, err := intermediateCA.CABundle(nil)
+	bundle, err := intermediateCA.CABundle(
+		&caKeyAttrs.StoreType, &caKeyAttrs.KeyAlgorithm)
 	assert.NotNil(t, bundle)
-
-	params.Logger.Info(string(bundle))
+	fmt.Println(string(bundle))
 }
 
 func TestPasswordComplexity(t *testing.T) {
@@ -119,12 +141,16 @@ func TestPasswordComplexity(t *testing.T) {
 
 func TestImportIssuingCAs(t *testing.T) {
 
-	config := defaultConfig()
+	performInit := true
+	encrypt := false
+	entropy := false
+
+	config := defaultConfig(nil)
 	assert.NotNil(t, config)
 
-	_, _, intermediateCA, err := createService(config, true)
-	defer cleanTempDir(config.Home)
-	assert.Nil(t, err)
+	_, intermediateCA, tpm, _, err := createService(
+		config, performInit, encrypt, entropy)
+	defer tpm.Close()
 
 	// Download the certificate
 	resp, err := http.Get(INTEL_CERT_URL)
@@ -141,31 +167,25 @@ func TestImportIssuingCAs(t *testing.T) {
 	cert, err := x509.ParseCertificate(bufBytes)
 	assert.Nil(t, err)
 
-	leafCN := "www.intel.com"
-
-	err = intermediateCA.ImportIssuingCAs(cert, &leafCN, nil)
+	err = intermediateCA.ImportIssuingCAs(cert)
 	assert.Nil(t, err)
 
-	err = intermediateCA.ImportIssuingCAs(cert, &leafCN, nil)
-	assert.Equal(t, ErrTrustExists, err)
-
-	attrs, _ := keystore.Template(intermediateCA.DefaultKeyAlgorithm())
-	attrs.Domain = "EKRootPublicKey"
-	attrs.KeyType = keystore.KEY_TYPE_NULL
-	importedCert, err := intermediateCA.TrustedRootCertificate(attrs, store.FSEXT_DER)
-
-	assert.Nil(t, err)
-	assert.Equal(t, cert.Subject.CommonName, importedCert.Subject.CommonName)
+	err = intermediateCA.ImportIssuingCAs(cert)
+	assert.Equal(t, certstore.ErrTrustExists, err)
 }
 
 func TestDownloadDistribuitionCRLs(t *testing.T) {
 
-	config := defaultConfig()
+	performInit := true
+	encrypt := false
+	entropy := false
+
+	config := defaultConfig(nil)
 	assert.NotNil(t, config)
 
-	_, rootCA, _, err := createService(config, true)
-	defer cleanTempDir(config.Home)
-	assert.Nil(t, err)
+	rootCA, _, tpm, _, err := createService(
+		config, performInit, encrypt, entropy)
+	defer tpm.Close()
 
 	// Download the certificate
 	resp, err := http.Get(INTEL_CERT_URL)
@@ -191,127 +211,33 @@ func TestDownloadDistribuitionCRLs(t *testing.T) {
 	assert.Equal(t, ErrCRLAlreadyExists, err2)
 }
 
-func TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
-
-	config := defaultConfig()
-	assert.NotNil(t, config)
-
-	// Don't require passwords for this test
-	config.RequirePrivateKeyPassword = false
-
-	_, rootCA, intermediateCA, err := createService(config, true)
-	defer cleanTempDir(config.Home)
-
-	publicKey := intermediateCA.Public()
-	caAttrs := intermediateCA.CAKeyAttributes(nil)
-
-	attrs, err := keystore.Template(caAttrs.KeyAlgorithm)
-	attrs.KeyType = keystore.KEY_TYPE_TLS
-	attrs.Domain = "example.com"
-	attrs.CN = "www.example.com"
-	attrs.AuthPassword = []byte(rootCA.Identity().KeyPassword)
-	attrs.Password = []byte("server-password")
-
-	// openssl rsa -in testorg.example.com.key -check
-	// openssl x509 -in testorg.example.com.crt -text -noout
-	certReq := CertificateRequest{
-		KeyAttributes: &attrs,
-		Valid:         365, // 1 days
-		Subject: Subject{
-			CommonName:         attrs.CN,
-			Organization:       "Test Organization",
-			OrganizationalUnit: "Web Services",
-			Country:            "US",
-			Locality:           "New York",
-			Address:            "123 anywhere street",
-			PostalCode:         "54321"},
-		SANS: &SubjectAlternativeNames{
-			DNS: []string{
-				"localhost",
-				"localhost.localdomain",
-			},
-			IPs: []string{
-				"127.0.0.1",
-			},
-			Email: []string{
-				"user@testorg.com",
-				"root@test.com",
-			},
-		},
-	}
-
-	// openssl req -in testme.example.com.csr -noout -text
-	csrBytes, err := intermediateCA.CreateCSR(certReq)
-	assert.Nil(t, err)
-	assert.NotNil(t, csrBytes)
-
-	// openssl x509 -in testme.example.com.crt -text -noout
-	certBytes, err := intermediateCA.SignCSR(csrBytes, certReq)
-	assert.Nil(t, err)
-	assert.NotNil(t, certBytes)
-
-	// Decode from PEM to ASN.1 DER
-	cert, err := DecodePEM(certBytes)
-	assert.Nil(t, err)
-	assert.NotNil(t, cert)
-
-	// Make sure the cert is valid
-	valid, err := intermediateCA.Verify(cert, nil)
-	assert.Nil(t, err)
-	assert.True(t, valid)
-
-	// Get the cert crypto.PublicKey
-	publicKey, err = intermediateCA.PubKey(attrs)
-	assert.Nil(t, err)
-	assert.NotNil(t, publicKey)
-
-	// Removke the cert
-	err = intermediateCA.Revoke(attrs)
-	assert.Nil(t, err)
-
-	// Revoke the certificate again to ensure it errors
-	err = intermediateCA.Revoke(attrs)
-
-	// TODO: should return ErrCertRevoked
-	assert.Equal(t, store.ErrFileNotFound, err)
-
-	// Make sure the cert is no longer valid
-	valid, err = intermediateCA.Verify(cert, nil)
-	assert.NotNil(t, err)
-	assert.Equal(t, ErrCertRevoked, err)
-	assert.False(t, valid)
-
-	// Test the web server certificate
-	//
-	// openssl s_client \
-	//   -connect localhost:8443 \
-	//   -servername localhost  | openssl x509 -noout -text
-}
-
 func TestIssueCertificateWithPassword(t *testing.T) {
 
-	config := defaultConfig()
+	performInit := true
+	encrypt := false
+	entropy := false
+
+	config := defaultConfig(nil)
 	assert.NotNil(t, config)
 
-	_, rootCA, _, err := createService(config, true)
-	defer cleanTempDir(config.Home)
-	assert.Nil(t, err)
+	rootCA, _, tpm, _, err := createService(
+		config, performInit, encrypt, entropy)
+	defer tpm.Close()
 
-	caAttrs := rootCA.CAKeyAttributes(nil)
+	caAttrs, err := rootCA.CAKeyAttributes(nil, nil)
+	assert.Nil(t, err)
 
 	attrs, err := keystore.Template(caAttrs.KeyAlgorithm)
 	attrs.KeyType = keystore.KEY_TYPE_TLS
-	attrs.Domain = "example.com"
 	attrs.CN = "www.example.com"
-	attrs.AuthPassword = []byte(rootCA.Identity().KeyPassword)
-	attrs.Password = []byte("server-password")
+	attrs.Password = keystore.NewClearPassword([]byte("server-password"))
 
 	certReq := CertificateRequest{
-		KeyAttributes: &attrs,
+		KeyAttributes: attrs,
 		Valid:         365, // days
 		Subject: Subject{
 			CommonName:   attrs.CN,
-			Organization: "ACME Corporation",
+			Organization: "Test Corporation",
 			Country:      "US",
 			Locality:     "Miami",
 			Address:      "123 acme street",
@@ -345,31 +271,28 @@ func TestIssueCertificateWithPassword(t *testing.T) {
 
 func TestIssueCertificate_CA_RSA_WITH_LEAF_ECDSA(t *testing.T) {
 
-	config := defaultConfig()
+	performInit := true
+	encrypt := false
+	entropy := false
+
+	config := defaultConfig(nil)
 	assert.NotNil(t, config)
 
-	config.KeyAlgorithms = []string{
-		x509.RSA.String(),
-		x509.ECDSA.String(),
-		x509.Ed25519.String(),
-	}
+	rootCA, _, tpm, _, err := createService(
+		config, performInit, encrypt, entropy)
+	defer tpm.Close()
 
-	params, rootCA, _, err := createService(config, true)
-	defer cleanTempDir(config.Home)
-	assert.Nil(t, err)
-
-	DebugCipherSuites(params.Logger)
-	DebugInsecureCipherSuites(params.Logger)
+	logger := util.Logger()
+	DebugCipherSuites(logger)
+	DebugInsecureCipherSuites(logger)
 
 	attrs, err := keystore.Template(x509.ECDSA)
 	attrs.KeyType = keystore.KEY_TYPE_TLS
-	attrs.Domain = "example.com"
 	attrs.CN = "www.example.com"
-	attrs.AuthPassword = []byte(rootCA.Identity().KeyPassword)
-	attrs.Password = []byte("server-password")
+	attrs.Password = keystore.NewClearPassword([]byte("server-password"))
 
 	certReq := CertificateRequest{
-		KeyAttributes: &attrs,
+		KeyAttributes: attrs,
 		Valid:         365, // days
 		Subject: Subject{
 			CommonName:   attrs.CN,
@@ -407,29 +330,31 @@ func TestIssueCertificate_CA_RSA_WITH_LEAF_ECDSA(t *testing.T) {
 
 func TestIssueCertificateWithoutPassword(t *testing.T) {
 
-	config := defaultConfig()
+	performInit := true
+	encrypt := false
+	entropy := false
+
+	config := defaultConfig(nil)
 	assert.NotNil(t, config)
 
-	config.RequirePrivateKeyPassword = false
+	rootCA, _, tpm, _, err := createService(
+		config, performInit, encrypt, entropy)
+	defer tpm.Close()
 
-	_, rootCA, _, err := createService(config, true)
-	defer cleanTempDir(config.Home)
+	caAttrs, err := rootCA.CAKeyAttributes(nil, nil)
 	assert.Nil(t, err)
 
-	caAttrs := rootCA.CAKeyAttributes(nil)
 	attrs, err := keystore.Template(caAttrs.KeyAlgorithm)
 	attrs.KeyType = keystore.KEY_TYPE_TLS
-	attrs.Domain = "example.com"
 	attrs.CN = "www.example.com"
-	attrs.AuthPassword = []byte(rootCA.Identity().KeyPassword)
-	attrs.Password = []byte("server-password")
+	attrs.Password = keystore.NewClearPassword([]byte("server-password"))
 
 	certReq := CertificateRequest{
-		KeyAttributes: &attrs,
+		KeyAttributes: attrs,
 		Valid:         365, // days
 		Subject: Subject{
 			CommonName:   attrs.CN,
-			Organization: "ACME Corporation",
+			Organization: "Test Corporation",
 			Country:      "US",
 			Locality:     "Miami",
 			Address:      "123 acme street",
@@ -469,92 +394,445 @@ func cleanTempDir(dir string) {
 	}
 }
 
-func createService(
-	config Config,
-	performInit bool) (CAParams, CertificateAuthority, CertificateAuthority, error) {
+// Initialize Root and Intermediate Certificate Authorities
+// based on configuration
+//
+// Root CA certificates
+// openssl rsa -in testdata/ca/root-ca.key -text (-check)
+// openssl x509 -in testdata/ca/root-ca.crt -text -noout
+// openssl rsa -pubin -in platform/ca/root-ca.pub -text
+//
+// Intermediate CA certificates
+// openssl rsa -in testdata/ca/intermediate-ca.key -text (-check)
+// openssl x509 -in testdata/ca/intermediate-ca.crt -text -noout
+// openssl rsa -pubin -in testdata/ca/intermediate-ca.pub -text
 
-	// Initialize Root and Intermediate Certificate Authorities
-	// based on configuration
-	//
-	// Root CA certificates
-	// openssl rsa -in testdata/ca/root-ca.key -text (-check)
-	// openssl x509 -in testdata/ca/root-ca.crt -text -noout
-	// openssl rsa -pubin -in platform/ca/root-ca.pub -text
-	//
-	// Intermediate CA certificates
-	// openssl rsa -in testdata/ca/intermediate-ca.key -text (-check)
-	// openssl x509 -in testdata/ca/intermediate-ca.crt -text -noout
-	// openssl rsa -pubin -in testdata/ca/intermediate-ca.pub -text
+func TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 
-	logger := defaultLogger()
-	params := defaultParams(logger, config)
+	performInit := true
+	encrypt := false
+	entropy := false
 
-	rootCA, intermediateCA, err := NewCA(params)
-	if err != nil {
-		if err == ErrNotInitialized && performInit {
-			rootCerts, initErr := rootCA.Init(nil)
-			if initErr != nil {
-				logger.Error(initErr)
-				return params, nil, nil, initErr
-			}
-			_, initErr = intermediateCA.Init(rootCerts)
-			if initErr != nil {
-				logger.Error(initErr)
-				return params, nil, nil, initErr
-			}
-			params.Identity = intermediateCA.Identity()
-			err = nil
-		} else if performInit {
-			logger.Error(err)
-			return params, nil, nil, err
-		}
-	} else {
-		logger.Warning("CA already initialized")
+	config := defaultConfig(nil)
+	assert.NotNil(t, config)
+
+	_, intermediateCA, tpm, tmp, err := createService(
+		config, performInit, encrypt, entropy)
+	defer tpm.Close()
+
+	defer cleanTempDir(tmp)
+
+	// publicKey := intermediateCA.Public()
+	caAttrs, err := intermediateCA.CAKeyAttributes(nil, nil)
+	assert.Nil(t, err)
+
+	attrs, err := keystore.Template(caAttrs.KeyAlgorithm)
+	attrs.KeyType = keystore.KEY_TYPE_TLS
+	attrs.CN = "www.test.com"
+
+	// openssl rsa -in www.test.com.key -check
+	// openssl x509 -in www.test.com.crt -text -noout
+	certReq := CertificateRequest{
+		KeyAttributes: attrs,
+		Valid:         365, // 1 days
+		Subject: Subject{
+			CommonName:         attrs.CN,
+			Organization:       "Test Organization",
+			OrganizationalUnit: "Web Services",
+			Country:            "US",
+			Locality:           "New York",
+			Address:            "123 anywhere street",
+			PostalCode:         "54321"},
+		SANS: &SubjectAlternativeNames{
+			DNS: []string{
+				"localhost",
+				"localhost.localdomain",
+			},
+			IPs: []string{
+				"127.0.0.1",
+			},
+			Email: []string{
+				"user@testorg.com",
+				"root@test.com",
+			},
+		},
 	}
 
-	return params, rootCA, intermediateCA, err
+	// openssl req -in testme.example.com.csr -noout -text
+	csrBytes, err := intermediateCA.CreateCSR(certReq)
+	assert.Nil(t, err)
+	assert.NotNil(t, csrBytes)
+
+	// openssl x509 -in testme.example.com.crt -text -noout
+	derBytes, err := intermediateCA.SignCSR(csrBytes, certReq)
+	assert.Nil(t, err)
+	assert.NotNil(t, derBytes)
+
+	// Encode from ASN.1 DER to PEM
+	pem, err := EncodePEM(derBytes)
+	assert.Nil(t, err)
+	assert.NotNil(t, pem)
+
+	cert, err := x509.ParseCertificate(derBytes)
+	assert.Nil(t, err)
+
+	// Make sure the cert is valid
+	err = intermediateCA.Verify(cert)
+	assert.Nil(t, err)
+
+	err = intermediateCA.Revoke(cert)
+	assert.Nil(t, err)
+
+	// Revoke the certificate again to ensure it errors
+	err = intermediateCA.Revoke(cert)
+	assert.Equal(t, certstore.ErrCertRevoked, err)
+
+	// Make sure the cert is no longer valid
+	err = intermediateCA.Verify(cert)
+	assert.NotNil(t, err)
+	assert.Equal(t, certstore.ErrCertRevoked, err)
+
+	// Test the web server certificate
+	//
+	// openssl s_client \
+	//   -connect localhost:8443 \
+	//   -servername localhost  | openssl x509 -noout -text
 }
 
-func defaultLogger() *logging.Logger {
-	stdout := logging.NewLogBackend(os.Stdout, "", 0)
-	//logging.SetBackend(stdout)
-	logger := logging.MustGetLogger("certificate-authority")
-	logFormat := logging.MustStringFormatter(
-		`%{color}%{time:15:04:05.000} %{shortpkg}.%{shortfunc} %{level:.4s} %{id:03x}%{color:reset} %{message}`,
-	)
-	logFormatter := logging.NewBackendFormatter(stdout, logFormat)
-	// backends := logging.MultiLogger(stdout, logFormatter)
-	logging.SetBackend(logFormatter)
+func createService(
+	config Config,
+	performInit bool,
+	encrypt, entropy bool) (CertificateAuthority,
+	CertificateAuthority, tpm2.TrustedPlatformModule, string, error) {
 
-	keystore.DebugAvailableHashes(logger)
-	keystore.DebugAvailableSignatureAkgorithms(logger)
+	logger := util.Logger()
 
-	return logger
-}
+	soPinBytes := []byte("so-pin-test")
+	pinBytes := []byte("user-pin-test")
 
-func defaultParams(
-	logger *logging.Logger,
-	config Config) CAParams {
+	soPIN := keystore.NewClearPassword(soPinBytes)
+	userPIN := keystore.NewClearPassword(pinBytes)
 
-	initParams := CAParams{
+	// Create temp directory for each test
+	buf := make([]byte, 8)
+	_, err := rand.Reader.Read(buf)
+	if err != nil {
+		logger.Fatal(err)
+	}
+	hexVal := hex.EncodeToString(buf)
+	tmp := fmt.Sprintf("%s/%s", TEST_DATA_DIR, hexVal)
+
+	//
+	// Setup Global Platform Objects
+	//
+
+	// Create global platform blob store
+	platformBlobStore, err := blob.NewFSBlobStore(logger, tmp, nil)
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	// Write SoftHSM config
+	softhsm_conf := fmt.Sprintf("%s/softhsm.conf", tmp)
+	conf := strings.ReplaceAll(string(TEST_SOFTHSM_CONF), "testdata/", tmp)
+	err = os.WriteFile(softhsm_conf, []byte(conf), fs.ModePerm)
+	if err != nil {
+		return nil, nil, nil, "", err
+	}
+
+	platformBackend := keystore.NewFileBackend(logger, tmp+"/platform")
+
+	// Create new TPM simulator
+	tpmConfig := &tpm2.Config{
+		// HierarchiesAuth: keystore.DEFAULT_PASSWORD,
+		EncryptSession: encrypt,
+		UseEntropy:     entropy,
+		Device:         "/dev/tpmrm0",
+		UseSimulator:   true,
+		Hash:           "SHA-256",
+		EK: &tpm2.EKConfig{
+			CertHandle:    0x01C00002,
+			Handle:        0x81010001,
+			HierarchyAuth: keystore.DEFAULT_PASSWORD,
+			KeyAlgorithm:  x509.RSA.String(),
+			RSAConfig: &keystore.RSAConfig{
+				KeySize: 2048,
+			},
+		},
+		IAK: &tpm2.IAKConfig{
+			CN:           "device-id-001",
+			Debug:        true,
+			Hash:         crypto.SHA256.String(),
+			Handle:       uint32(0x81010002),
+			KeyAlgorithm: x509.RSA.String(),
+			RSAConfig: &keystore.RSAConfig{
+				KeySize: 2048,
+			},
+			SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
+		},
+		SSRK: &tpm2.SRKConfig{
+			Handle:        0x81000001,
+			HierarchyAuth: keystore.DEFAULT_PASSWORD,
+			KeyAlgorithm:  x509.RSA.String(),
+			RSAConfig: &keystore.RSAConfig{
+				KeySize: 2048,
+			},
+		},
+		PlatformPCR: 16,
+		FileIntegrity: []string{
+			"./",
+		},
+		KeyStore: &tpm2.KeyStoreConfig{
+			// SRKAuth:        keystore.DEFAULT_PASSWORD,
+			SRKAuth:        "testme",
+			SRKHandle:      0x81000001,
+			PlatformPolicy: true,
+		},
+	}
+	tpmParams := &tpm2.Params{
+		Logger:       util.Logger(),
+		DebugSecrets: true,
+		Config:       tpmConfig,
+		BlobStore:    platformBlobStore,
+		Backend:      platformBackend,
+		FQDN:         "node1.example.com",
+	}
+
+	// Provision EK and Shared SRK
+	tpm, err := tpm2.NewTPM2(tpmParams)
+	if err != nil {
+		if err == tpm2.ErrNotInitialized {
+			if err = tpm.Provision(soPIN); err != nil {
+				logger.Fatal(err)
+			}
+		} else {
+			logger.Fatal(err)
+		}
+	}
+
+	// Create platform signer store
+	platformSignerStore := keystore.NewSignerStore(platformBlobStore)
+
+	// Create the platform key store
+	platformKSParams := &tpm2ks.Params{
+		Backend:      platformBackend,
+		Logger:       logger,
+		DebugSecrets: true,
+		Config: &tpm2.KeyStoreConfig{
+			CN:             "keystore",
+			SRKHandle:      0x81000002,
+			SRKAuth:        string(soPinBytes),
+			PlatformPolicy: true,
+		},
+		PlatformKeyStore: nil,
+		SignerStore:      platformSignerStore,
+		TPM:              tpm,
+	}
+	platformKS, err := tpm2ks.NewKeyStore(platformKSParams)
+	if err != nil {
+		if err == keystore.ErrNotInitalized {
+			err = platformKS.Initialize(soPIN, userPIN)
+			if err != nil {
+				logger.Fatal(err)
+			}
+		} else {
+			logger.Fatal(err)
+		}
+	}
+
+	//
+	// Setup Root CA
+	//
+
+	rootHome := tmp + "/ca/root"
+
+	rootKeyBackend := keystore.NewFileBackend(logger, rootHome)
+
+	// Create root CA blob store
+	rootBlobStore, err := blob.NewFSBlobStore(
+		logger, rootHome, &config.Identity[0].Subject.CommonName)
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	rootSignerStore := keystore.NewSignerStore(rootBlobStore)
+
+	// Create x509 certificate store
+	rootCertStore, err := certstore.NewCertificateStore(
+		logger, rootBlobStore)
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	// Create root CA key chain
+	slot := 0
+	rootKeychainConfig := &platform.KeyChainConfig{
+		CN: "root-ca",
+		PKCS8Config: &pkcs8.Config{
+			PlatformPolicy: true,
+		},
+		PKCS11Config: &pkcs11.Config{
+			Library:        "/usr/local/lib/softhsm/libsofthsm2.so",
+			LibraryConfig:  softhsm_conf,
+			Slot:           &slot,
+			TokenLabel:     "SoftHSM",
+			SOPin:          string(soPinBytes),
+			Pin:            string(pinBytes),
+			PlatformPolicy: true,
+		},
+		TPMConfig: &tpm2.KeyStoreConfig{
+			// CN:             "Test",
+			SRKHandle:      0x81000003,
+			SRKAuth:        string(pinBytes),
+			PlatformPolicy: true,
+		},
+	}
+
+	rootKC, err := platform.NewKeyChain(
+		logger,
+		true,
+		tmp,
+		rand.Reader,
+		rootKeychainConfig,
+		rootKeyBackend,
+		rootBlobStore,
+		rootSignerStore,
+		tpm,
+		// rootTPMKS,
+		platformKS,
+		soPIN,
+		userPIN)
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	rootParams := CAParams{
+		Backend:      rootKeyBackend,
+		BlobStore:    rootBlobStore,
+		CertStore:    rootCertStore,
 		Config:       config,
+		Debug:        true,
+		DebugSecrets: true,
+		Home:         tmp,
+		Identity:     config.Identity[0],
+		KeyChain:     rootKC,
 		Logger:       logger,
 		Random:       rand.Reader,
 		SelectedCA:   1,
-		Identity:     config.Identity[0],
+		SignerStore:  rootSignerStore,
+		TPM:          tpm,
+	}
+	rootParams.Identity.KeyChainConfig.CN = config.Identity[1].Subject.CommonName
+
+	// Creates a new Parent / Root Certificate Authority
+	rootCA, err := NewParentCA(&rootParams)
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	// Initialize the CA by creating new keys and certificates
+	if err := rootCA.Init(nil); err != nil {
+		logger.Fatal(err)
+	}
+
+	//
+	// Setup Intermediate CA
+	//
+
+	// Create intermediate key chain
+	intermediateHome := tmp + "/ca/intermediate"
+	os.MkdirAll(intermediateHome, os.ModePerm)
+
+	intermediateKeyBackend := keystore.NewFileBackend(logger, intermediateHome)
+
+	intermediateBlobStore, err := blob.NewFSBlobStore(
+		logger, intermediateHome, &config.Identity[1].Subject.CommonName)
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	intermediateSignerStore := keystore.NewSignerStore(intermediateBlobStore)
+
+	// Create x509 certificate store
+	intermediateCertStore, err := certstore.NewCertificateStore(
+		logger, intermediateBlobStore)
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	intermediateKeychainConfig := &platform.KeyChainConfig{
+		CN: "intermediate-ca",
+		PKCS8Config: &pkcs8.Config{
+			PlatformPolicy: true,
+		},
+		PKCS11Config: &pkcs11.Config{
+			Library:        "/usr/local/lib/softhsm/libsofthsm2.so",
+			LibraryConfig:  softhsm_conf,
+			Slot:           &slot,
+			TokenLabel:     "SoftHSM",
+			SOPin:          string(soPinBytes),
+			Pin:            string(pinBytes),
+			PlatformPolicy: true,
+		},
+		TPMConfig: &tpm2.KeyStoreConfig{
+			SRKHandle:      0x81000004,
+			SRKAuth:        string(pinBytes),
+			PlatformPolicy: true,
+		},
+	}
+
+	intermediateKC, err := platform.NewKeyChain(
+		logger,
+		true,
+		intermediateHome,
+		rand.Reader,
+		intermediateKeychainConfig,
+		intermediateKeyBackend,
+		intermediateBlobStore,
+		intermediateSignerStore,
+		tpm,
+		platformKS,
+		soPIN,
+		userPIN)
+
+	// Create intermediate params
+	intermediateParams := CAParams{
+		Backend:      intermediateKeyBackend,
+		BlobStore:    intermediateBlobStore,
+		CertStore:    intermediateCertStore,
+		Config:       config,
 		Debug:        true,
 		DebugSecrets: true,
+		Home:         tmp,
+		Identity:     config.Identity[1],
+		KeyChain:     intermediateKC,
+		Logger:       logger,
+		Random:       rand.Reader,
+		SelectedCA:   1,
+		SignerStore:  intermediateSignerStore,
+		TPM:          tpm,
 	}
-	return initStores(initParams)
+	intermediateParams.Identity.KeyChainConfig.CN = config.Identity[1].Subject.CommonName
+
+	intermediateCA, err := NewIntermediateCA(&intermediateParams)
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	// Initialize the CA by creating new keys and certificates, using
+	// the parentCA to sign for this new intermediate
+	if err := intermediateCA.Init(rootCA); err != nil {
+		logger.Fatal(err)
+	}
+
+	return rootCA, intermediateCA, tpm, tmp, nil
 }
 
 // Creates a default CA configuration
-func defaultConfig() Config {
+func defaultConfig(tmpDir *string) Config {
 
 	rootIdentity := Identity{
-		KeyPassword: "root-password",
-		KeySize:     512, // bits
-		Valid:       1,   // year
+		Valid: 1, // year
 		Subject: Subject{
 			CommonName:   "root-ca",
 			Organization: "Example Corporation",
@@ -576,12 +854,116 @@ func defaultConfig() Config {
 				"root@test.com",
 			},
 		},
+		KeyChainConfig: &platform.KeyChainConfig{
+			CN: "root-keychain",
+			PKCS8Config: &pkcs8.Config{
+				PlatformPolicy: true,
+			},
+			PKCS11Config: &pkcs11.Config{
+				Library:        "/usr/local/lib/softhsm/libsofthsm2.so",
+				LibraryConfig:  "trusted-data/etc/softhsm.conf",
+				Slot:           nil,
+				TokenLabel:     "SoftHSM",
+				SOPin:          "123456",
+				Pin:            "123456",
+				PlatformPolicy: true,
+			},
+			TPMConfig: &tpm2.KeyStoreConfig{
+				SRKHandle:      0x81000003,
+				SRKAuth:        "123456",
+				PlatformPolicy: true,
+			},
+		},
+		Keys: []*keystore.KeyConfig{
+			// PKCS #8 keys
+			{
+				Debug:              true,
+				SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
+				RSAConfig: &keystore.RSAConfig{
+					KeySize: 2048,
+				},
+				Password:       "123456",
+				PlatformPolicy: true,
+				KeyAlgorithm:   x509.RSA.String(),
+				StoreType:      string(keystore.STORE_PKCS8),
+				Hash:           "SHA-256",
+			},
+			{
+				Debug:              true,
+				SignatureAlgorithm: x509.ECDSAWithSHA256.String(),
+				ECCConfig: &keystore.ECCConfig{
+					Curve: string(keystore.CURVE_P256),
+				},
+				Password:       "123456",
+				PlatformPolicy: true,
+				KeyAlgorithm:   x509.ECDSA.String(),
+				StoreType:      string(keystore.STORE_PKCS8),
+				Hash:           "SHA-256",
+			},
+			{
+				Debug:              true,
+				SignatureAlgorithm: x509.PureEd25519.String(),
+				Password:           "123456",
+				PlatformPolicy:     true,
+				KeyAlgorithm:       x509.Ed25519.String(),
+				StoreType:          string(keystore.STORE_PKCS8),
+				Hash:               "SHA-256",
+			},
+			// PKCS #11 keys
+			{
+				Debug:              true,
+				SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
+				RSAConfig: &keystore.RSAConfig{
+					KeySize: 2048,
+				},
+				Password:       "123456",
+				PlatformPolicy: true,
+				KeyAlgorithm:   x509.RSA.String(),
+				StoreType:      string(keystore.STORE_PKCS11),
+				Hash:           "SHA-256",
+			},
+			{
+				Debug:              true,
+				SignatureAlgorithm: x509.ECDSAWithSHA256.String(),
+				ECCConfig: &keystore.ECCConfig{
+					Curve: string(keystore.CURVE_P256),
+				},
+				Password:       "123456",
+				PlatformPolicy: true,
+				KeyAlgorithm:   x509.ECDSA.String(),
+				StoreType:      string(keystore.STORE_PKCS11),
+				Hash:           "SHA-256",
+			},
+			// TPM keys
+			{
+				Debug:              true,
+				SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
+				RSAConfig: &keystore.RSAConfig{
+					KeySize: 2048,
+				},
+				Password:       "123456",
+				PlatformPolicy: true,
+				KeyAlgorithm:   x509.RSA.String(),
+				StoreType:      string(keystore.STORE_TPM2),
+				Hash:           "SHA-256",
+			},
+			{
+				Debug:              true,
+				SignatureAlgorithm: x509.ECDSAWithSHA256.String(),
+				ECCConfig: &keystore.ECCConfig{
+					Curve: string(keystore.CURVE_P256),
+				},
+				Password:       "123456",
+				PlatformPolicy: true,
+				KeyAlgorithm:   x509.ECDSA.String(),
+				StoreType:      string(keystore.STORE_TPM2),
+				Hash:           "SHA-256",
+			},
+		},
 	}
 
 	intermediateIdentity := Identity{
-		KeyPassword: "intermediate-password",
-		KeySize:     512, // bits
-		Valid:       1,   // year
+		Valid: 1, // year
 		Subject: Subject{
 			CommonName:   "intermediate-ca",
 			Organization: "Example Corporation",
@@ -603,18 +985,114 @@ func defaultConfig() Config {
 				"root@test.com",
 			},
 		},
+		KeyChainConfig: &platform.KeyChainConfig{
+			CN: "intermediate-keychain",
+			PKCS8Config: &pkcs8.Config{
+				PlatformPolicy: true,
+			},
+			PKCS11Config: &pkcs11.Config{
+				Library:        "/usr/local/lib/softhsm/libsofthsm2.so",
+				LibraryConfig:  "trusted-data/etc/softhsm.conf",
+				Slot:           nil,
+				TokenLabel:     "SoftHSM",
+				SOPin:          "123456",
+				Pin:            "123456",
+				PlatformPolicy: true,
+			},
+			TPMConfig: &tpm2.KeyStoreConfig{
+				SRKHandle:      0x81000004,
+				SRKAuth:        "123456",
+				PlatformPolicy: true,
+			},
+		},
+		Keys: []*keystore.KeyConfig{
+			// PKCS #8 keys
+			{
+				Debug:              true,
+				SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
+				RSAConfig: &keystore.RSAConfig{
+					KeySize: 2048,
+				},
+				Password:       "123456",
+				PlatformPolicy: true,
+				KeyAlgorithm:   x509.RSA.String(),
+				StoreType:      string(keystore.STORE_PKCS8),
+				Hash:           "SHA-256",
+			},
+			{
+				Debug:              true,
+				SignatureAlgorithm: x509.ECDSAWithSHA256.String(),
+				ECCConfig: &keystore.ECCConfig{
+					Curve: string(keystore.CURVE_P256),
+				},
+				Password:       "123456",
+				PlatformPolicy: true,
+				KeyAlgorithm:   x509.ECDSA.String(),
+				StoreType:      string(keystore.STORE_PKCS8),
+				Hash:           "SHA-256",
+			},
+			{
+				Debug:              true,
+				SignatureAlgorithm: x509.PureEd25519.String(),
+				Password:           "123456",
+				PlatformPolicy:     true,
+				KeyAlgorithm:       x509.Ed25519.String(),
+				StoreType:          string(keystore.STORE_PKCS8),
+				Hash:               "SHA-256",
+			},
+			// PKCS #11 keys
+			{
+				Debug:              true,
+				SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
+				RSAConfig: &keystore.RSAConfig{
+					KeySize: 2048,
+				},
+				Password:       "123456",
+				PlatformPolicy: true,
+				KeyAlgorithm:   x509.RSA.String(),
+				StoreType:      string(keystore.STORE_PKCS11),
+				Hash:           "SHA-256",
+			},
+			{
+				Debug:              true,
+				SignatureAlgorithm: x509.ECDSAWithSHA256.String(),
+				ECCConfig: &keystore.ECCConfig{
+					Curve: string(keystore.CURVE_P256),
+				},
+				Password:       "123456",
+				PlatformPolicy: true,
+				KeyAlgorithm:   x509.ECDSA.String(),
+				StoreType:      string(keystore.STORE_PKCS11),
+				Hash:           "SHA-256",
+			},
+			// TPM keys
+			{
+				Debug:              true,
+				SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
+				RSAConfig: &keystore.RSAConfig{
+					KeySize: 2048,
+				},
+				Password:       "123456",
+				PlatformPolicy: true,
+				KeyAlgorithm:   x509.RSA.String(),
+				StoreType:      string(keystore.STORE_TPM2),
+				Hash:           "SHA-256",
+			},
+			{
+				Debug:              true,
+				SignatureAlgorithm: x509.ECDSAWithSHA256.String(),
+				ECCConfig: &keystore.ECCConfig{
+					Curve: string(keystore.CURVE_P256),
+				},
+				Password:       "123456",
+				PlatformPolicy: true,
+				KeyAlgorithm:   x509.ECDSA.String(),
+				StoreType:      string(keystore.STORE_TPM2),
+				Hash:           "SHA-256",
+			},
+		},
 	}
 
-	// Create a temp directory for each instantiation
-	// so parallel tests don't corrupt each other.
-	buf := make([]byte, 8)
-	_, err := rand.Reader.Read(buf)
-	if err != nil {
-		defaultLogger().Fatal(err)
-	}
-	tmpDir := hex.EncodeToString(buf)
-
-	caDir := fmt.Sprintf("%s/%s", CERTS_DIR, tmpDir)
 	//return DefaultConfigECDSA(caDir, rootIdentity, intermediateIdentity)
-	return DefaultConfigRSA(caDir, rootIdentity, intermediateIdentity)
+	return DefaultConfigRSA(rootIdentity, intermediateIdentity)
 }

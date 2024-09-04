@@ -5,11 +5,14 @@ go 1.22
 toolchain go1.22.0
 
 require (
+	github.com/GeertJohan/yubigo v0.0.0-20190917122436-175bc097e60e
+	github.com/SSSaaS/sssa-golang v0.0.0-20170502204618-d37d7782d752
 	github.com/ThalesIgnite/crypto11 v1.2.5
 	github.com/codegangsta/negroni v1.0.0
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible
 	github.com/fatih/color v1.17.0
 	github.com/golang/protobuf v1.5.4
+	github.com/google/go-cmp v0.6.0
 	github.com/google/go-tpm v0.9.1
 	github.com/google/go-tpm-tools v0.4.4
 	github.com/google/logger v1.1.1
@@ -26,6 +29,7 @@ require (
 	google.golang.org/grpc v1.64.0
 	google.golang.org/protobuf v1.34.2
 	gopkg.in/yaml.v2 v2.4.0
+	pault.ag/go/ykpiv v1.4.0
 )
 
 require (

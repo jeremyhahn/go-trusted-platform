@@ -22,14 +22,12 @@ var webserverCmd = &cobra.Command{
 
 		sigChan := make(chan os.Signal, 1)
 
-		// Initialize the CA and TPM
-		App.InitCA()
+		App.Init(InitParams)
 
 		// Build rest service registry
 		restRegistry := rest.NewRestServiceRegistry(App)
 		webserver := webservice.NewWebServerV1(
 			App,
-			[]byte(InitParams.ServerPassword),
 			restRegistry)
 
 		// Start the web server in a background goroutine

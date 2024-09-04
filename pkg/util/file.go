@@ -6,15 +6,15 @@ import (
 	"strings"
 )
 
-func FileExists(path string) (bool, error) {
+func FileExists(path string) bool {
 	_, err := os.Stat(path)
 	if err == nil {
-		return true, nil
+		return true
 	}
 	if os.IsNotExist(err) {
-		return false, nil
+		return false
 	}
-	return false, err
+	return false
 }
 
 func FileName(path string) (string, string) {

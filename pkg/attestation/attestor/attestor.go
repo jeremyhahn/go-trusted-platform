@@ -29,32 +29,31 @@ var (
 	ErrUnknownVerifier       = errors.New("attestor: unknown attestation verifier")
 	ErrInvalidClientCertPool = errors.New("attestor: invalid verifier certificate pool")
 
-	fListenAddress  = flag.String("listen", "", "The IP address or hostname to listen on for incoming requests")
-	fCaPassword     = flag.String("ca-password", "", "Certificate Authority private key password")
-	fServerPassword = flag.String("server-password", "", "Server TLS certificate private key password")
-	fSrkAuth        = flag.String("srk-auth", "", "TPM Storage Root Key authorization password")
+	fListenAddress = flag.String("listen", "", "The IP address or hostname to listen on for incoming requests")
 )
 
 type Attestor interface {
 	Run() error
 	AddVerifierCABundle(verifier string, bundle []byte) error
 	RemoveVerifierCABundle(verifier string)
+	KeyAttributes() *keystore.KeyAttributes
 }
 
 type Attest struct {
-	logger               *logging.Logger
+	ca                   ca.CertificateAuthority
 	config               config.Attestation
 	domain               string
 	debug                bool
 	debugSecrets         bool
-	ca                   ca.CertificateAuthority
+	logger               *logging.Logger
+	keyAttrs             *keystore.KeyAttributes
 	secureGRPCServer     *grpc.Server
 	secureServerStopChan chan bool
+	tlsAlgorithm         x509.PublicKeyAlgorithm
+	tlsCommonName        string
 	verifierCertPool     *x509.CertPool
 	verifierCertPools    map[string]*x509.CertPool
 	verifierCertsMutex   sync.RWMutex
-	tlsAlgorithm         x509.PublicKeyAlgorithm
-	tlsCommonName        string
 	Attestor
 }
 
@@ -62,9 +61,6 @@ type Attest struct {
 func main() {
 
 	initParams := app.AppInitParams{}
-	initParams.CAPassword = *fCaPassword
-	initParams.ServerPassword = *fServerPassword
-	initParams.SRKAuth = *fSrkAuth
 	initParams.ListenAddress = *fListenAddress
 
 	app := app.NewApp().Init(&initParams)
@@ -82,11 +78,6 @@ func NewAttestor(app *app.App) (Attestor, error) {
 	secureServerStopChan := make(chan bool)
 	verifierCertPools := make(map[string](*x509.CertPool), 0)
 
-	keyAlgo, err := keystore.ParseKeyAlgorithm(app.WebService.TLSKeyAlgorithm)
-	if err != nil {
-		return nil, err
-	}
-
 	attestor := &Attest{
 		logger:               app.Logger,
 		config:               app.AttestationConfig,
@@ -94,10 +85,11 @@ func NewAttestor(app *app.App) (Attestor, error) {
 		domain:               app.Domain,
 		debug:                app.DebugFlag,
 		debugSecrets:         app.DebugSecretsFlag,
+		keyAttrs:             app.ServerKeyAttributes,
 		verifierCertPools:    verifierCertPools,
 		verifierCertsMutex:   sync.RWMutex{},
 		secureServerStopChan: secureServerStopChan,
-		tlsAlgorithm:         keyAlgo,
+		tlsAlgorithm:         app.ServerKeyAttributes.KeyAlgorithm,
 		tlsCommonName:        app.WebService.Certificate.Subject.CommonName}
 
 	insecureService := &InsecureAttestor{
@@ -111,7 +103,8 @@ func NewAttestor(app *app.App) (Attestor, error) {
 		defer wg.Done()
 		_, err := newInsecureGRPCServer(
 			app.AttestationConfig,
-			insecureService)
+			insecureService,
+			app.ListenAddress)
 		if err != nil {
 			app.Logger.Fatal(err)
 		}
@@ -120,11 +113,11 @@ func NewAttestor(app *app.App) (Attestor, error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		secureService := NewSecureAttestor(attestor, app) // srkAuth
+		secureService := NewSecureAttestor(attestor, app)
 		if err := attestor.newTLSGRPCServer(
+			app.ServerKeyAttributes,
 			secureService,
-			app.InitParams.ListenAddress,
-			[]byte(app.InitParams.ServerPassword)); err != nil {
+			app.ListenAddress); err != nil {
 			app.Logger.Fatal(err)
 		}
 	}()
@@ -137,34 +130,14 @@ func NewAttestor(app *app.App) (Attestor, error) {
 // Creates a new gRPC server TLS connection using Root CA trusted
 // certificate pool. The returned connection must be closed after use.
 func (attestor *Attest) newTLSGRPCServer(
+	keyAttrs *keystore.KeyAttributes,
 	secureService *SecureAttestor,
-	listenAddress string,
-	serverPassword []byte) error {
+	listenAddress string) error {
 
 	socket := fmt.Sprintf("%s:%d", listenAddress, attestor.config.TLSPort)
 
-	attestor.logger.Infof("Starting TLS gRPC services on port: %s", socket)
-
-	if attestor.debugSecrets {
-		attestor.logger.Debugf(
-			"attestor: loading server TLS certificate: domain: %s, password: %s",
-			attestor.domain, serverPassword)
-	}
-
-	// Create key attributes using the configured web services
-	// TLS template algorithm. The gRPC TLS shares the same DNS
-	// and TLS / x509 certificate name as the web server, it
-	// simply binds to a different port.
-	attrs, ok := keystore.Templates[attestor.tlsAlgorithm]
-	if !ok {
-		return keystore.ErrInvalidKeyAlgorithm
-	}
-	attrs.Domain = attestor.domain
-	attrs.CN = attestor.tlsCommonName
-	attrs.Password = serverPassword
-
 	// Get a TLS config from the CA
-	tlsConfig, err := attestor.ca.TLSConfig(attrs, false)
+	tlsConfig, err := attestor.ca.TLSConfig(keyAttrs)
 	if err != nil {
 		attestor.logger.Error(err)
 		return err
@@ -222,6 +195,8 @@ func (attestor *Attest) newTLSGRPCServer(
 
 	pb.RegisterTLSAttestorServer(attestor.secureGRPCServer, secureService)
 
+	attestor.logger.Infof("TLS gRPC service listening on: %s", socket)
+
 	go func() {
 		// Run forever
 		if err := attestor.secureGRPCServer.Serve(listener); err != nil {
@@ -240,12 +215,13 @@ func (attestor *Attest) newTLSGRPCServer(
 // the CA certificate(s) needed to verify the client-side TLS connection
 func newInsecureGRPCServer(
 	config config.Attestation,
-	insecureService *InsecureAttestor) (*grpc.Server, error) {
+	insecureService *InsecureAttestor,
+	listenAddress string) (*grpc.Server, error) {
 
-	socket := fmt.Sprintf("localhost:%d", config.InsecurePort)
+	socket := fmt.Sprintf("%s:%d", listenAddress, config.InsecurePort)
 
 	insecureService.logger.Infof(
-		"Starting insecure gRPC service on port %d", config.InsecurePort)
+		"Insecure gRPC service listening on %s", socket)
 
 	lis, err := net.Listen("tcp", socket)
 	if err != nil {
@@ -311,4 +287,9 @@ func (attestor *Attest) RemoveVerifierCABundle(verifier string) {
 	defer attestor.verifierCertsMutex.Unlock()
 
 	delete(attestor.verifierCertPools, verifier)
+}
+
+// Returns the Attestor's key algorithm
+func (attestor *Attest) KeyAttributes() *keystore.KeyAttributes {
+	return attestor.keyAttrs
 }
