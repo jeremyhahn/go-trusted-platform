@@ -6,31 +6,18 @@ This is the set of global options supported by every command in the CLI:
   * **-d**, **\--debug**:
     Enables debug mode with verbose logging
 
-  * **-p**, **\--ca-password**:
-    The platform Certificate Authority password. This is the password to
-    the CA that is currently loaded and in use by the platform.
-
-  * **-r**, **\--root-password**:
-    The Root Certificate Authority Password. This options should only be used
-    during initialization of the platform. After initialization, the Root
-    Certificate Authority should be taken offline, including it's private key,
-    for maximum security and align with CA operational best practices.
-
-  * **-i**, **\--intermediate-password**:
-    The Intermediate Certificate Authority Password.
-
-  * **-s**, **\--server-password**:
-    The web servicer TLS private key password
-
-  * , **\--ek-auth**:
-    The Endorsement Key authorization password
-
-  * , **\--srk-auth**:
-    The Storage Root Key authorization password
-
   * , **\--debug-secrets**:
     Enables secret debugging. Passwords and other sensitive information is
     printed to the log for debugging.
+
+  * **\--init**:
+    Perform initialization
+
+  * **\--so-pin**:
+    The Security Officer PIN
+
+  * **\--pin**:
+    The user PIN
 
   * , **\--platform-dir**:
     The directory where all platform data is stored.
@@ -47,3 +34,6 @@ This is the set of global options supported by every command in the CLI:
   * , **\--setuid**:
     Sets the uid for the platform to run. If the platform is started as root,
     permissions are downgraded to the specified uid.
+
+  * , **\--listen**:
+    The socket listen address used for embedded network services

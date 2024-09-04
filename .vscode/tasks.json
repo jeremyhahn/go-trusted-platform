@@ -2,6 +2,29 @@
     "version": "2.0.0",
     "tasks": [{
         "type": "shell",
+        "label": "debug_pkcs11_no_clean",
+        "dependsOn": [
+            "make_trusted_data",
+        ],
+        "command": "cp",
+        "args": [
+            "configs/platform/config.debug.pkcs11.yaml",
+            "pkg/trusted-data/etc/config.yaml",
+        ]
+    }, {
+        "type": "shell",
+        "label": "debug_config_pkcs11",
+        "dependsOn": [
+            "rm_trusted_data",
+            "make_trusted_data",
+        ],
+        "command": "cp",
+        "args": [
+            "configs/platform/config.debug.pkcs11.yaml",
+            "pkg/trusted-data/etc/config.yaml",
+        ]
+    }, {
+        "type": "shell",
         "label": "debug_config",
         "dependsOn": [
             "make_trusted_data",
@@ -22,6 +45,29 @@
         "command": "cp",
         "args": [
             "configs/platform/config.debug.yaml",
+            "pkg/trusted-data/etc/config.yaml",
+        ]
+    },
+    {
+        "type": "shell",
+        "label": "copy_softhsm_conf",
+        "command": "cp",
+        "args": [
+            "configs/softhsm.conf",
+            "pkg/trusted-data/etc/softhsm.conf",
+        ]
+    },
+    {
+        "type": "shell",
+        "label": "debug_config_clean_pkcs11",
+        "dependsOn": [
+            "rm_trusted_data",
+            "make_trusted_data",
+            // "copy_softhsm_conf",
+        ],
+        "command": "cp",
+        "args": [
+            "configs/platform/config.debug.pkcs11.yaml",
             "pkg/trusted-data/etc/config.yaml",
         ]
     },
@@ -49,10 +95,8 @@
             "debug_config",
         ],
         "label": "clean_attestor",
-        "command": "rm",
-        "args": ["-rf",
-             "attestation/attestor/platform",
-        ]
+        "command": "make",
+        "args": ["attestor-clean"]
     },
     {
         "type": "shell",
@@ -60,10 +104,8 @@
             "debug_config",
         ],
         "label": "clean_verifier",
-        "command": "rm",
-        "args": ["-rf",
-             "attestation/verifier/platform",
-        ]
+        "command": "make",
+        "args": ["verifier-clean"]
     },
     {
         "type": "shell",

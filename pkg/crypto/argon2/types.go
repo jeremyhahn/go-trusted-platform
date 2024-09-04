@@ -1,6 +1,6 @@
 package argon2
 
-type Argon2Params struct {
+type Argon2Config struct {
 	Memory      uint32 `yaml:"memory" json:"memory" mapstructure:"memory"`
 	Iterations  uint32 `yaml:"iterations" json:"iterations" mapstructure:"iterations"`
 	Parallelism uint8  `yaml:"parallelism" json:"parallelism" mapstructure:"parallelism"`

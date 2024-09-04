@@ -41,14 +41,24 @@ func (registry *RestRegistry) SystemRestService() SystemRestServicer {
 	return registry.systemRestService
 }
 
-func (registry *RestRegistry) createJsonWebTokenService(keyAttributes keystore.KeyAttributes) {
+func (registry *RestRegistry) createJsonWebTokenService(keyAttributes *keystore.KeyAttributes) {
 	httpWriter := response.NewResponseWriter(registry.app.Logger, nil)
+	// keyfactory, err := registry.app.KeyChainFromConfig(
+	// 	registry.app.WebService.Certificate.KeyChainConfig,
+	// 	registry.app.PlatformDir,
+	// 	// TODO :)
+	// 	nil, nil, nil)
+	// if err != nil {
+	// 	registry.app.Logger.Fatal(err)
+	// }
 	jsonWebTokenService, err := CreateJsonWebTokenService(
 		registry.app,
 		httpWriter,
 		registry.app.WebService.JWTExpiration,
 		keyAttributes,
-		registry.app.KeyStore)
+		// keyfactory.PKCS8(),
+		registry.app.PlatformKS,
+	)
 	if err != nil {
 		registry.app.Logger.Fatal(err)
 	}

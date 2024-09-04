@@ -2,20 +2,18 @@ package tpm2
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ecdh"
-	"crypto/rand"
+	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/base64"
-	"encoding/binary"
-	"encoding/gob"
-	"encoding/hex"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -25,181 +23,241 @@ import (
 	"github.com/google/go-tpm-tools/simulator"
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
+
 	"github.com/op/go-logging"
-
-	blobstore "github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 )
 
-const (
-	manufacturerIntel     = "Intel"
-	intelEKCertServiceURL = "https://ekop.intel.com/ekcertservice/"
-	infoOpeningSimulator  = "tpm: opening TPM simulator connection"
-	infoOpeningDevice     = "tpm: opening TPM 2.0 connection"
-	infoClosingConnection = "tpm: closing connection"
-
-	ekCertBlobName = "ek-cert"
-	akCertBlobName = "ak-cert"
-)
-
-var (
-	EKCertIndex = tpm2.TPMHandle(0x01C00002) //  TCG specified location for RSA-EK-certificate
-
-	ErrEndorsementCertNotFound     = errors.New("tpm: endorsement key certificate not found")
-	ErrEndorsementKeyNotFound      = errors.New("tpm: endorsement key not found")
-	ErrInvalidEKCertFormat         = errors.New("tpm: invalid endorsement certificate format")
-	ErrInvalidEKCert               = errors.New("tpm: failed to verify endorsement key certificate")
-	ErrDeviceAlreadyOpen           = errors.New("tpm: device already open")
-	ErrOpeningDevice               = errors.New("tpm: error opening device")
-	ErrInvalidSessionType          = errors.New("tpm: invalid session type")
-	ErrInvalidSRKAuth              = errors.New("tpm: invalid storage root key auth")
-	ErrInvalidActivationCredential = errors.New("tpm: invalid activation credential")
-	ErrHashAlgorithmNotSupported   = errors.New("tpm: hash algorithm not supported")
-	ErrInvalidPolicyDigest         = errors.New("tpm: invalid policy digest")
-	ErrInvalidHandle               = errors.New("tpm: invalid entity handle")
-	ErrUnexpectedRandomBytes       = errors.New("tpm: unexpected number of random bytes read")
-	ErrInvalidPCRIndex             = errors.New("tpm: invalid PCR index")
-	ErrInvalidNonce                = errors.New("tpm: invalid nonce")
-
-	warnMissingLocalAttestationPCRs = errors.New("tpm: Local attestation PCRs missing from configuration file")
-)
-
-type TrustedPlatformModule2 interface {
-	ActivateCredential(ak DerivedKey, credential Credential) ([]byte, error)
-	AttestLocal(keystore.X509Attributes) error
-	Capabilities() (tpm20Info, error)
+type TrustedPlatformModule interface {
+	ActivateCredential(credentialBlob, encryptedSecret []byte) ([]byte, error)
+	AKProfile() (AKProfile, error)
+	Info() (tpm20Info, error)
+	Clear(hierarchyAuth []byte, hierarchy tpm2.TPMHandle) error
 	Close() error
-	CreateAK(srk Key) (*tpm2.CreateResponse, error)
-	DebugPrimaryKey(key Key)
-	DebugAttestationKey(ak DerivedKey)
-	Decode(s string) ([]byte, error)
-	DecodePCRs(pcrBanks []byte) ([]PCRBank, error)
-	DecodeQuote(quote []byte) (Quote, error)
+	Config() *Config
+	CreateECDSA(
+		keyAttrs *keystore.KeyAttributes,
+		backend keystore.KeyBackend) (*ecdsa.PublicKey, error)
+	CreateEK(keyAttrs *keystore.KeyAttributes) error
+	CreateSecretKey(
+		keyAttrs *keystore.KeyAttributes,
+		backend keystore.KeyBackend) error
+	CreateIAK(ekAttrs *keystore.KeyAttributes) (*keystore.KeyAttributes, error)
+	CreateIDevID(akAttrs *keystore.KeyAttributes, ekCert *x509.Certificate) (*keystore.KeyAttributes, *TCG_CSR_IDEVID, error)
+	CreateKeySession(
+		keyAttrs *keystore.KeyAttributes,
+		parentSession *tpm2.Session) (tpm2.Session, func() error, error)
+	CreatePlatformPolicy() error
+	CreateRSA(
+		keyAttrs *keystore.KeyAttributes,
+		backend keystore.KeyBackend) (*rsa.PublicKey, error)
+	CreateSession(keyAttrs *keystore.KeyAttributes) (tpm2.Session, func() error, error)
+	CreateSRK(keyAttrs *keystore.KeyAttributes) error
+	CreateTCG_CSR_IDEVID(
+		ekCert *x509.Certificate,
+		akAttrs *keystore.KeyAttributes,
+		idevidAttrs *keystore.KeyAttributes) (TCG_CSR_IDEVID, error)
+	DebugCapabilities() error
+	DeleteKey(keyAttrs *keystore.KeyAttributes, backend keystore.KeyBackend) error
 	Device() string
-	ECCEK() (Key, error)
-	ECCSRK(ek Key, password []byte) (Key, error)
-	EKCert(attrs keystore.KeyAttributes) (*x509.Certificate, error)
-	EKRSAPubKey() *rsa.PublicKey
-	Encode(bytes []byte) string
-	EncodePCRs(pcrBanks []PCRBank) ([]byte, error)
-	EncodeQuote(quote Quote) ([]byte, error)
+	EK() crypto.PublicKey
+	EKPublic() (tpm2.TPM2BName, tpm2.TPMTPublic)
+	EKAttributes() (*keystore.KeyAttributes, error)
+	EKCertificate() (*x509.Certificate, error)
+	EKECC() *ecdsa.PublicKey
+	EKRSA() *rsa.PublicKey
 	EventLog() ([]byte, error)
+	FixedProperties() (*PropertiesFixed, error)
 	Flush(handle tpm2.TPMHandle)
-	HMACAuthSession(srkAuth []byte) (s tpm2.Session, close func() error, err error)
-	HMACAuthSessionWithKey(srk Key, password []byte) (s tpm2.Session, close func() error, err error)
-	HMACSession() tpm2.Session
-	ImportTSSFile(keystore.KeyAttributes, bool) (*x509.Certificate, error)
-	ImportDER(attrs keystore.KeyAttributes, ekDER []byte, verify bool) (*x509.Certificate, error)
-	ImportLocalAttestation(attestationAttrs keystore.X509Attributes, quote Quote) error
-	ImportPEM(keystore.KeyAttributes, []byte, bool) (*x509.Certificate, error)
-	LocalQuote(keystore.X509Attributes, bool) (Quote, []byte, error)
-	MakeCredential(ek Key, ak DerivedKey, secret []byte) (*tpm2.MakeCredentialResponse, []byte, error)
+	GoldenMeasurements() []byte
+	HMAC(auth []byte) tpm2.Session
+	HMACSaltedSession(
+		handle tpm2.TPMHandle,
+		pub tpm2.TPMTPublic,
+		auth []byte) (s tpm2.Session, close func() error, err error)
+	HMACSession(auth []byte) (s tpm2.Session, close func() error, err error)
+	IAK() crypto.PublicKey
+	IAKAttributes() (*keystore.KeyAttributes, error)
+	IDevID() crypto.PublicKey
+	IDevIDAttributes() (*keystore.KeyAttributes, error)
+	Install(soPIN keystore.Password) error
+	LoadKeyPair(
+		keyAttrs *keystore.KeyAttributes,
+		session *tpm2.Session,
+		backend keystore.KeyBackend) (*tpm2.LoadResponse, error)
+	LocalQuote(keyAttrs *keystore.KeyAttributes) (Quote, []byte, error)
+	MakeCredential(
+		akName tpm2.TPM2BName,
+		secret []byte) ([]byte, []byte, []byte, error)
+	NonceSession(secret keystore.Password) (tpm2.Session, func() error, error)
+	NVRead(keyAttrs *keystore.KeyAttributes, dataSize uint16) ([]byte, error)
+	NVWrite(keyAttrs *keystore.KeyAttributes) error
 	Open() error
 	ParseEKCertificate(ekCert []byte) (*x509.Certificate, error)
+	ParsePublicKey(tpm2BPublic []byte) (crypto.PublicKey, error)
+	PlatformPolicyDigest() tpm2.TPM2BDigest
+	PlatformPolicySession() (tpm2.Session, func() error, error)
+	PolicyDigest() tpm2.TPM2BDigest
+	PrintCapabilities() error
+	Provision(soPIN keystore.Password) error
+	ProvisionEKCert(hierarchyAuth, ekCert []byte) error
+	ProvisionOwner(hierarchyAuth keystore.Password) (*keystore.KeyAttributes, error)
 	Quote(pcrs []uint, nonce []byte) (Quote, error)
 	Random() ([]byte, error)
-	RandomReader() io.Reader
+	RandomBytes(fixedLength int) ([]byte, error)
+	RandomHex(fixedLength int) ([]byte, error)
+	Read(data []byte) (n int, err error)
+	ReadHandle(handle tpm2.TPMHandle) (tpm2.TPM2BName, tpm2.TPMTPublic, error)
 	ReadPCRs(pcrList []uint) ([]PCRBank, error)
-	RSAAK() (Key, DerivedKey, error)
-	RSAEK() (Key, error)
-	RSASRK(ek Key, password []byte) (Key, error)
-	SaltedHMACSession(Key) tpm2.Session
-	Seal(srk Key, sealAuth, sealName, sealData []byte) (*tpm2.CreateResponse, error)
-	SetCertificateAuthority(ca ca.CertificateAuthority)
-	BlobKey(domain, cn string) string
+	SaveKeyPair(
+		keyAttrs *keystore.KeyAttributes,
+		outPrivate tpm2.TPM2BPrivate,
+		outPublic tpm2.TPM2B[tpm2.TPMTPublic, *tpm2.TPMTPublic],
+		backend keystore.KeyBackend) error
+	Seal(
+		keyAttrs *keystore.KeyAttributes,
+		backend keystore.KeyBackend) (*tpm2.CreateResponse, error)
+	Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) (signature []byte, err error)
+	SetHierarchyAuth(oldSecret, newSecret keystore.Password, hierarchy *tpm2.TPMHandle) error
+	SecretFromShares(shares []string) (string, error)
+	ShareSecret(secret []byte, shares int) ([]string, error)
+	SRKPublic() (tpm2.TPM2BName, tpm2.TPMTPublic)
+	SSRKAttributes() (*keystore.KeyAttributes, error)
 	Transport() transport.TPM
-	Unseal(srk Key, createResponse *tpm2.CreateResponse, sealName, sealAuth []byte) ([]byte, error)
-	VerifyQuote(attestationAttrs keystore.X509Attributes, quote Quote, nonce []byte) error
+	TPMAttributes(handle tpm2.TPMHandle) (*keystore.KeyAttributes, error)
+	Unseal(keyAttrs *keystore.KeyAttributes, backend keystore.KeyBackend) ([]byte, error)
+	WriteEKCert(ekCert []byte) error
+
+	VerifyCSR(
+		csr *TCG_CSR_IDEVID,
+		sigAlgo x509.SignatureAlgorithm) (*keystore.KeyAttributes, *UNPACKED_TCG_CSR_IDEVID, error)
+	SignValidate(
+		keyAttrs *keystore.KeyAttributes,
+		digest, validationDigest []byte) ([]byte, error)
+	HashSequence(
+		keyAttrs *keystore.KeyAttributes,
+		data []byte) ([]byte, []byte, error)
+}
+
+type Params struct {
+	Backend      keystore.KeyBackend
+	BlobStore    blob.BlobStorer
+	CertStore    certstore.CertificateStorer
+	Config       *Config
+	DebugSecrets bool
+	FQDN         string
+	Logger       *logging.Logger
+	SignerStore  keystore.SignerStorer
 }
 
 type TPM2 struct {
-	logger       *logging.Logger
-	debugSecrets bool
-	domain       string
+	backend      keystore.KeyBackend
+	blobStore    blob.BlobStorer
+	certStore    certstore.CertificateStorer
 	config       *Config
+	debugSecrets bool
 	device       *os.File
-	ca           ca.CertificateAuthority
+	ekAttrs      *keystore.KeyAttributes
+	ekECCPubKey  *ecdsa.PublicKey
 	ekRSAPubKey  *rsa.PublicKey
-	ekECCPubKey  *ecdh.PublicKey
-	random       io.Reader
-	transport    transport.TPM
+	fqdn         string
+	hash         crypto.Hash
+	iakAttrs     *keystore.KeyAttributes
+	idevidAttrs  *keystore.KeyAttributes
+	logger       *logging.Logger
+	policyDigest tpm2.TPM2BDigest
+	signerStore  keystore.SignerStorer
 	simulator    *simulator.Simulator
-	TrustedPlatformModule2
+	ssrkAttrs    *keystore.KeyAttributes
+	transport    transport.TPM
+	TrustedPlatformModule
 }
 
-// Creates a new TPM2 instance and opens a socket to a
+// Creates a new TPM2 instance by opening a socket to a
 // Trusted Platform Module (TPM). When this function
 // returns the TPM is ready for use.
-func NewTPM2(
-	logger *logging.Logger,
-	debugSecrets bool,
-	config *Config,
-	domain string) (TrustedPlatformModule2, error) {
+func NewTPM2(params *Params) (TrustedPlatformModule, error) {
 
-	if config == nil || config.Device == "" {
-		config.Device = "/dev/tpmrm0"
+	if params.Config == nil || params.Config.Device == "" {
+		params.Config.Device = "/dev/tpmrm0"
 	}
 
-	logger.Infof("%s %s", infoOpeningDevice, config.Device)
-
-	f, err := os.OpenFile(config.Device, os.O_RDWR, 0)
-	if err != nil {
-		logger.Error(err)
-		return nil, ErrOpeningDevice
+	if params.Config.EK.KeyAlgorithm == "" {
+		if params.Config.EK.RSAConfig != nil {
+			params.Config.EK.KeyAlgorithm = x509.RSA.String()
+		} else if params.Config.EK.ECCConfig != nil {
+			params.Config.EK.KeyAlgorithm = x509.ECDSA.String()
+		} else {
+			return nil, keystore.ErrInvalidKeyAttributes
+		}
 	}
 
-	tpm := &TPM2{
-		logger:       logger,
-		debugSecrets: debugSecrets,
-		config:       config,
-		device:       f,
-		transport:    transport.FromReadWriter(f),
-		domain:       domain}
-
-	random, err := tpm.randomReader()
-	if err != nil {
-		return nil, err
+	var sim *simulator.Simulator
+	var tpmTransport transport.TPM
+	var device *os.File
+	var err error
+	if params.Config.UseSimulator {
+		params.Logger.Info(infoOpeningSimulator)
+		sim, err = simulator.GetWithFixedSeedInsecure(1234567890)
+		if err != nil {
+			params.Logger.Error(err)
+			return nil, err
+		}
+		tpmTransport = transport.FromReadWriter(sim)
+	} else {
+		params.Logger.Infof("%s %s", infoOpeningDevice, params.Config.Device)
+		device, err = os.OpenFile(params.Config.Device, os.O_RDWR, 0)
+		if err != nil {
+			params.Logger.Error(err)
+			return nil, ErrOpeningDevice
+		}
+		tpmTransport = transport.FromReadWriter(device)
 	}
-	tpm.random = random
-	return tpm, nil
-}
 
-// Creates a new Trusted Platoform Module Simulator (Software TPM)
-func NewSimulation(
-	logger *logging.Logger,
-	debugSecrets bool,
-	config *Config,
-	domain string) (TrustedPlatformModule2, error) {
-
-	logger.Info(infoOpeningSimulator)
-
-	sim, err := simulator.GetWithFixedSeedInsecure(1234567890)
-	if err != nil {
-		logger.Error(err)
-		return nil, err
+	hash, ok := keystore.AvailableHashes()[params.Config.Hash]
+	if !ok {
+		return nil, keystore.ErrInvalidHashFunction
 	}
 
 	tpm := &TPM2{
-		logger:       logger,
-		config:       config,
-		debugSecrets: debugSecrets,
-		device:       nil,
+		logger:       params.Logger,
+		backend:      params.Backend,
+		blobStore:    params.BlobStore,
+		certStore:    params.CertStore,
+		signerStore:  params.SignerStore,
+		debugSecrets: params.DebugSecrets,
+		config:       params.Config,
+		device:       device,
+		fqdn:         params.FQDN,
+		hash:         hash,
 		simulator:    sim,
-		transport:    transport.FromReadWriter(sim),
-		domain:       domain}
+		transport:    tpmTransport}
 
-	random, err := tpm.randomReader()
+	// Return ErrNotInitialized if the EK persistent handle can't be read
+	_, err = tpm2.ReadPublic{
+		ObjectHandle: tpm2.TPMHandle(params.Config.EK.Handle),
+	}.Execute(tpm.transport)
 	if err != nil {
-		return nil, err
+		if err == tpm2.TPMRC(0x184) {
+			// TPM_RC_VALUE (handle 1): value is out of range or is not correct for the context
+			return tpm, ErrNotInitialized
+		} else if err == tpm2.TPMRC(0x18b) {
+			// TPM_RC_HANDLE (handle 1): the handle is not correct for the use
+			return tpm, ErrNotInitialized
+		} else {
+			tpm.logger.Error(err)
+			return nil, err
+		}
 	}
-	tpm.random = random
+
 	return tpm, nil
 }
 
-// Re-opens a TPM connection
+// Opens a new logical connection with the underlying TPM
+// using an instance of this TPM2 object that's already been
+// instantiated.
 func (tpm *TPM2) Open() error {
 
 	var t transport.TPM
@@ -230,6 +288,68 @@ func (tpm *TPM2) Open() error {
 	return nil
 }
 
+// Parses a tpm2.TPM2BPublic byte array and returns the crypto.PublicKey
+func (tpm *TPM2) ParsePublicKey(tpm2BPublic []byte) (crypto.PublicKey, error) {
+
+	loadRsp, err := tpm2.LoadExternal{
+		Hierarchy: tpm2.TPMRHNull,
+		InPublic:  tpm2.BytesAs2B[tpm2.TPMTPublic](tpm2BPublic),
+	}.Execute(tpm.transport)
+	if err != nil {
+		return nil, err
+	}
+	defer tpm.Flush(loadRsp.ObjectHandle)
+
+	pubArea, err := tpm2.ReadPublic{
+		ObjectHandle: loadRsp.ObjectHandle,
+	}.Execute(tpm.transport)
+	if err != nil {
+		tpm.logger.Error(err)
+		return nil, err
+	}
+
+	pub, err := pubArea.OutPublic.Contents()
+	if err != nil {
+		return nil, err
+	}
+
+	if pub.Type == tpm2.TPMAlgRSA {
+		rsaDetail, err := pub.Parameters.RSADetail()
+		if err != nil {
+			return nil, err
+		}
+		rsaUnique, err := pub.Unique.RSA()
+		if err != nil {
+			return nil, err
+		}
+		rsaPub, err := tpm2.RSAPub(rsaDetail, rsaUnique)
+		if err != nil {
+			return nil, err
+		}
+		return rsaPub, nil
+	} else if pub.Type == tpm2.TPMAlgECC {
+
+		eccUnique, err := pub.Unique.ECC()
+		if err != nil {
+			return nil, err
+		}
+		eccPub, err := tpm2.ECDHPubKey(ecdh.P256(), &tpm2.TPMSECCPoint{
+			X: eccUnique.X,
+			Y: eccUnique.Y,
+		})
+		return eccPub, nil
+	}
+
+	return nil, keystore.ErrInvalidKeyAlgorithm
+}
+
+// Returns the platform policy digest of the Golden
+// Integrity Measurements with the Policy PCR.
+func (tpm *TPM2) PolicyDigest() tpm2.TPM2BDigest {
+	return tpm.policyDigest
+}
+
+// Returns the TPM device path
 func (tpm *TPM2) Device() string {
 	return tpm.config.Device
 }
@@ -257,33 +377,82 @@ func (tpm *TPM2) Close() error {
 	return nil
 }
 
-// Injects the Certificate Authority after instantiation
-func (tpm *TPM2) SetCertificateAuthority(ca ca.CertificateAuthority) {
-	tpm.ca = ca
+// Returns the TPM configuration per the platform configuration file
+func (tpm *TPM2) Config() *Config {
+	return tpm.config
 }
 
-// Returns a random source reader. If UseEntropy option is enabled
-// in the TPM config, the TPM’s True Random Number Generator will be
-// used, otherwise the runtime rand.Reader is used.
+// Takes ownership of the TPM by setting the Owner, Endorsement and
+// Lockout hierarchy authorization passwords, as described in TCG
+// TPM 2.0 Part 1 - Architecture - Section 13.8.1 - Taking Ownership
+// https://trustedcomputinggroup.org/wp-content/uploads/TPM-2.0-1.83-Part-1-Architecture.pdf
 //
-// https://github.com/tpm2dev/tpm.dev.tutorials/blob/master/Random_Number_Generator/README.md
-func (tpm *TPM2) RandomReader() io.Reader {
-	return tpm.random
-}
-
-// Returns the TPM Endorsement Key (EK) Public (Key
-func (tpm *TPM2) EKRSAPubKey() *rsa.PublicKey {
-	return tpm.ekRSAPubKey
-}
-
-// Returns the TPM EK blob storage key (its blob ID)
-func (tpm *TPM2) ekCertBlobKey(attrs keystore.KeyAttributes) string {
-	// cert, err := tpm.ca.Certificate(attrs)
-	// if err != nil {
-	// 	return "", err
-	// }
-	//return tpm.ca.TPMBlobKey(cert.Subject.CommonName, ekCertBlobName)
-	return tpm.ca.TPMBlobKey(attrs)
+// If the optional hierarchy is provided, only the authorization password for
+// the specified hierarchy will be set. If not provided, all hierarchies will
+// be set to the same authorization password.
+func (tpm *TPM2) SetHierarchyAuth(oldPasswd, newPasswd keystore.Password, hierarchy *tpm2.TPMHandle) error {
+	if hierarchy != nil {
+		var sHierarchy string
+		switch *hierarchy {
+		case tpm2.TPMRHLockout:
+			sHierarchy = "Lockout"
+		case tpm2.TPMRHEndorsement:
+			sHierarchy = "Endorsement"
+		case tpm2.TPMRHOwner:
+			sHierarchy = "Owner"
+		}
+		tpm.logger.Debugf("tpm: Setting %s hierarchy authorization password", sHierarchy)
+	} else {
+		tpm.logger.Debug("tpm: Setting hierarchy authorization passwords")
+	}
+	var oldPassword, newPassword []byte
+	var err error
+	if oldPasswd != nil {
+		oldPassword, err = oldPasswd.Bytes()
+		if err != nil {
+			return err
+		}
+	}
+	if newPasswd != nil {
+		newPassword, err = newPasswd.Bytes()
+		if err != nil {
+			return err
+		}
+	}
+	if tpm.debugSecrets {
+		tpm.logger.Debugf(
+			"tpm: old password: %s, new password: %s",
+			oldPassword, newPassword)
+	}
+	var hierarchies []tpm2.TPMHandle
+	if hierarchy != nil {
+		hierarchies = []tpm2.TPMHandle{
+			*hierarchy,
+		}
+	} else {
+		hierarchies = []tpm2.TPMHandle{
+			tpm2.TPMRHEndorsement,
+			tpm2.TPMRHLockout,
+			tpm2.TPMRHOwner,
+			// tpm2.TPMRHPlatform,
+		}
+	}
+	for _, hierarchy := range hierarchies {
+		_, err := tpm2.HierarchyChangeAuth{
+			AuthHandle: tpm2.AuthHandle{
+				Handle: hierarchy,
+				Auth:   tpm2.PasswordAuth(oldPassword),
+			},
+			NewAuth: tpm2.TPM2BAuth{
+				Buffer: newPassword,
+			},
+		}.Execute(tpm.transport)
+		if err != nil {
+			tpm.logger.Error(err)
+			return err
+		}
+	}
+	return nil
 }
 
 // Retrieve the requested Endorsement Key Certificate from the Certificate
@@ -293,1626 +462,599 @@ func (tpm *TPM2) ekCertBlobKey(attrs keystore.KeyAttributes) string {
 // service. If that fails, try to load the certificate from the current
 // working directory as a final attempt, using the EKCert name defined
 // in the platform configuration file.
-func (tpm *TPM2) EKCert(attrs keystore.KeyAttributes) (*x509.Certificate, error) {
+func (tpm *TPM2) EKCertificate() (*x509.Certificate, error) {
 
-	tpm.logger.Debug("tpm: checking Certificate Authority for signed EK certificate")
+	tpm.logger.Debug("tpm: retrieving EK certificate")
 
-	if tpm.debugSecrets {
-		tpm.logger.Debugf("tpm/EKCert: srkAuth: %s", attrs.Password)
-		tpm.logger.Debugf("tpm/EKCert: caPassword: %s", attrs.AuthPassword)
+	ekAttrs, err := EKAttributesFromConfig(*tpm.config.EK, &tpm.policyDigest)
+	if err != nil {
+		return nil, err
 	}
 
-	caKeyAttributes := tpm.ca.CAKeyAttributes(nil)
-	ekBlobKey := tpm.ekCertBlobKey(attrs)
-
-	// Check the CA for a signed EK cert
-	certPEM, err := tpm.ca.EndorsementKeyCertificate()
-	if err == nil {
-		// Perform integrity check on the cert
-		signerOpts, err := keystore.NewSignerOpts(caKeyAttributes, certPEM)
+	if tpm.config.EK.CertHandle == 0 {
+		ekCert, err := tpm.certStore.Get(ekAttrs)
 		if err != nil {
-			return nil, err
-		}
-		verifyOpts := &keystore.VerifyOpts{
-			BlobCN: ekBlobKey,
-		}
-		if err := tpm.ca.VerifySignature(signerOpts.Digest(), nil, verifyOpts); err != nil {
-			return nil, err
-		}
-		tpm.logger.Info("tpm: loading EK certificate from Certificate Authority")
-		// Decode and return the signed and verified x509 EK cert from the CA
-		ekCert, err := ca.DecodePEM(certPEM)
-		if err != nil {
+			if err == certstore.ErrCertNotFound {
+				return nil, ErrEndorsementCertNotFound
+			}
 			return nil, err
 		}
 		return ekCert, nil
 	}
-	if err != blobstore.ErrBlobNotFound {
-		return nil, err
-	}
 
-	// No EK found in the CA. Treat this as an initial platform setup...
+	// Load the EK cert from TPM NV RAM
+	ekCertIndex := tpm2.TPMHandle(ekCertIndex)
 
-	// Create RSA EK
-	ek, err := tpm.RSAEK()
-	if err != nil {
-		return nil, err
-	}
-	defer tpm.Flush(ek.Handle)
+	if ekAttrs.TPMAttributes != nil && ekAttrs.TPMAttributes.CertHandle > 0 {
+		// Load the EK cert index provided by TPM attributes
+		ekCertIndex = tpm2.TPMHandle(ekAttrs.TPMAttributes.CertHandle)
 
-	// Create RSA SRK
-	srk, err := tpm.RSASRK(ek, attrs.Password)
-	if err != nil {
-		return nil, err
-	}
-	defer tpm.Flush(srk.Handle)
+	} else if tpm.config.EK.CertHandle > 0 {
 
-	// Create session to the TPM. Use SRK password auth if provided.
-	var session tpm2.Session
-	var closer func() error
-	if attrs.Password != nil {
-		session, closer, err = tpm.HMACAuthSessionWithKey(srk, attrs.Password)
-		if err != nil {
-			return nil, err
-		}
-		defer closer()
+		// Load EK cert index provided by platform configuration
+		ekCertIndex = tpm2.TPMHandle(tpm.config.EK.CertHandle)
+
 	} else {
-		session = tpm.HMACSession()
+
+		// Load EK cert that matches the key attributes algorithm
+		if ekAttrs.KeyAlgorithm == x509.RSA {
+			ekCertIndex = tpm2.TPMHandle(ekCertIndexRSA2048)
+		} else if ekAttrs.KeyAlgorithm == x509.ECDSA {
+			ekCertIndex = tpm2.TPMHandle(ekCertIndexECCP256)
+		} else {
+			return nil, keystore.ErrInvalidKeyAlgorithm
+		}
 	}
 
-	// Attempt to read the cert from NVRAM
+	// Read the EK cert from NVRAM
 	response, err := tpm2.NVReadPublic{
-		NVIndex: EKCertIndex,
-	}.Execute(tpm.transport, session)
+		NVIndex: ekCertIndex,
+	}.Execute(tpm.transport)
+
 	if err != nil {
+
 		tpm.logger.Error(err)
 
-		// Not there, look in the current working directory for
-		// a certificate exported by tpm2_getekcertificate
-		exists, err := util.FileExists(tpm.config.EKCert)
-		if err != nil {
-			tpm.logger.Error(err)
-			return nil, err
-		}
-		if exists {
-			attrs.Domain = tpm.domain
-			attrs.CN = tpm.config.EKCert
-			return tpm.ImportTSSFile(attrs, true)
-		}
-
-		// Try downloading from the manufacturer EK certificate service
-		manufacuterCert, err := tpm.downloadEKCertFromManufacturer()
+		// As a last resort, try downloading from the manufacturer
+		// EK certificate service
+		manufacuterCert, err := tpm.downloadEKCertFromManufacturer(ekCertIndex)
 		if err == nil && len(manufacuterCert) > 0 {
 			return x509.ParseCertificate(manufacuterCert)
 		}
 
 		return nil, ErrEndorsementCertNotFound
-
-	} else {
-		certPEM = response.NVPublic.Bytes()
 	}
 
-	// Make sure the certificate is a valid x509 cert
-	cert, err := x509.ParseCertificate(certPEM)
+	return x509.ParseCertificate(response.NVPublic.Bytes())
+}
+
+// Signs the requested data using the key attributes
+// provided by SignerOpts. Supports RSA and ECDSA.
+func (tpm *TPM2) Sign(
+	rand io.Reader,
+	digest []byte,
+	opts crypto.SignerOpts) (signature []byte, err error) {
+
+	ksSignerOpts, ok := opts.(*keystore.SignerOpts)
+	if !ok {
+		return nil, keystore.ErrInvalidSignerOpts
+	}
+
+	var session tpm2.Session
+	var closer func() error
+
+	keyAttrs := ksSignerOpts.KeyAttributes
+
+	if keyAttrs.Parent == nil {
+		return nil, keystore.ErrInvalidParentAttributes
+	}
+
+	// Default to the platform backend
+	backend := tpm.backend
+
+	// Use backend provided by signer opts
+	if ksSignerOpts.Backend != nil {
+		backend = ksSignerOpts.Backend
+	}
+
+	// Create parent session to load the key
+	session, closer, err = tpm.CreateSession(keyAttrs)
 	if err != nil {
 		return nil, err
 	}
-
-	// Import the EK public key to the CA
-	// tpm.logger.Infof("tpm: importing EK Public Key to Certificate Authority")
-	// if err := tpm.ca.ImportPubKey(ekCertBlobName, cert.PublicKey); err != nil {
-	// 	tpm.logger.Error(err)
-	// 	return nil, err
-	// }
-
-	// Sign the EK certificate using the CA public key
-	// and save the certificate to blob storage
-	tpm.logger.Infof("tpm: signing EK certificate and importing to Certificate Authority")
-	sigOpts, err := keystore.NewSignerOpts(caKeyAttributes, certPEM)
-	if err != nil {
-		return nil, err
-	}
-
-	blobKey := tpm.ca.TPMBlobKey(attrs)
-	sigOpts.BlobCN = &blobKey
-	if _, err = tpm.ca.Sign(tpm.random, sigOpts.Digest(), sigOpts); err != nil {
-		return nil, err
-	}
-	return cert, nil
-}
-
-// Returns an Elliptical Curve Cryptography (ECC) Endorsement Key (EK) in alignment
-// with the TCG reference ECC-P256 EK template.
-func (tpm *TPM2) ECCEK() (Key, error) {
-
-	tpm.logger.Debug("tpm: creating ECC Endorsement Key (EK)")
-
-	ekCreate := tpm2.CreatePrimary{
-		PrimaryHandle: tpm2.TPMRHEndorsement,
-		InPublic:      tpm2.New2B(tpm2.ECCEKTemplate),
-	}
-	response, err := ekCreate.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, err
-	}
-	//defer tpm.Flush(response.ObjectHandle)
-
-	key, err := tpm.parsePrimaryECC(response)
-	if err != nil {
-		return key, err
-	}
-	key.BPublicBytes = response.OutPublic.Bytes()
-	tpm.ekECCPubKey = key.ECCPubKey
-	return key, nil
-}
-
-// Creates an Rivest Shamir Adleman (RSA) Endorsement Key (EK) in alignment with
-// the TCG reference RSA-2048 EK template.
-func (tpm *TPM2) RSAEK() (Key, error) {
-
-	tpm.logger.Debug("tpm: creating RSA Endorsement Key (EK)")
-
-	createPrimary := tpm2.CreatePrimary{
-		PrimaryHandle: tpm2.TPMRHEndorsement,
-		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
-	}
-
-	response, err := createPrimary.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, err
-	}
-	//defer tpm.Flush(response.ObjectHandle)
-
-	key, err := tpm.parsePrimaryRSA(response)
-	if err != nil {
-		return key, nil
-	}
-	key.BPublicBytes = response.OutPublic.Bytes()
-	tpm.ekRSAPubKey = key.RSAPubKey
-	return key, nil
-}
-
-// Create new ECC Storage Root Key (SRK). Returns the SRK handle to be used
-// in subsequent calls / operations and requires a call to Flush when done.
-// NOTE: TCG spec disallows sealing to endorsement keys
-func (tpm *TPM2) ECCSRK(ek Key, password []byte) (Key, error) {
-
-	tpm.logger.Debug("tpm: creating new Storage Root Key (SRK)")
-
-	createPrimaryCMD := tpm2.CreatePrimary{
-		PrimaryHandle: tpm2.TPMRHOwner,
-		InPublic:      tpm2.New2B(tpm2.ECCSRKTemplate),
-	}
-	if len(password) > 0 {
-		createPrimaryCMD.InSensitive = tpm2.TPM2BSensitiveCreate{
-			Sensitive: &tpm2.TPMSSensitiveCreate{
-				UserAuth: tpm2.TPM2BAuth{
-					Buffer: password,
-				},
-			},
-		}
-	}
-
-	// Execute the create SRK command
-	var response *tpm2.CreatePrimaryResponse
-	var err error
-	if tpm.config.EncryptSession {
-		response, err = createPrimaryCMD.Execute(
-			tpm.transport,
-			tpm.SaltedHMACSession(ek))
-	} else {
-		response, err = createPrimaryCMD.Execute(tpm.transport)
-	}
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, err
-	}
-	//defer tpm.Flush(srk.ObjectHandle)
-
-	// saveContextCMD := tpm2.ContextSave{
-	// 	SaveHandle: srk.ObjectHandle,
-	// }
-	// saveContextResponse, err := saveContextCMD.Execute(tpm.transport)
-	// if err != nil {
-	// 	return key, err
-	// }
-	// saveContextResponse.Context
-
-	key, err := tpm.parsePrimaryECC(response)
-	if err != nil {
-		return Key{}, nil
-	}
-	key.BPublicBytes = response.OutPublic.Bytes()
-
-	tpm.logger.Debugf("tpm: created ECC Storage Root Key (SRK) with handle: 0x%x",
-		response.ObjectHandle)
-
-	return key, nil
-}
-
-// Create RSA Storage Root Key (SRK). Returns the SRK handle to be used
-// in subsequent calls / operations and requires a call to Flush when done.
-// NOTE: TCG spec disallows sealing to endorsement keys
-func (tpm *TPM2) RSASRK(ek Key, password []byte) (Key, error) {
-
-	tpm.logger.Debug("tpm: creating new RSA Storage Root Key (SRK)")
-
-	var err error
-	var response *tpm2.CreatePrimaryResponse
-
-	createPrimaryCMD := tpm2.CreatePrimary{
-		PrimaryHandle: tpm2.TPMRHOwner,
-		InPublic:      tpm2.New2B(tpm2.RSASRKTemplate),
-	}
-	if len(password) > 0 {
-		createPrimaryCMD.InSensitive = tpm2.TPM2BSensitiveCreate{
-			Sensitive: &tpm2.TPMSSensitiveCreate{
-				UserAuth: tpm2.TPM2BAuth{
-					Buffer: password,
-				},
-			},
-		}
-	}
-	if tpm.config.EncryptSession {
-		response, err = createPrimaryCMD.Execute(
-			tpm.transport,
-			tpm.SaltedHMACSession(ek))
-	} else {
-		response, err = createPrimaryCMD.Execute(tpm.transport)
-	}
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, err
-	}
-	//defer tpm.Flush(srk.ObjectHandle)
-
-	key, err := tpm.parsePrimaryRSA(response)
-	if err != nil {
-		return Key{}, nil
-	}
-	key.Handle = response.ObjectHandle
-	key.BPublicBytes = response.OutPublic.Bytes()
-	key.Auth = password
-
-	tpm.logger.Debugf("tpm: created RSA Storage Root Key (SRK) with handle: 0x%x",
-		response.ObjectHandle)
-
-	return key, nil
-}
-
-// Create an Eliptical Curve Cryptography (ECC) Attestation Key
-func (tpm *TPM2) ECCAK() (Key, DerivedKey, error) {
-
-	tpm.logger.Info("Creating Eliptical Curve Cryptography (ECC) Endorsement Key (EK)")
-
-	primaryKey, err := tpm2.CreatePrimary{
-		PrimaryHandle: tpm2.TPMRHEndorsement,
-		InPublic:      tpm2.New2B(tpm2.ECCEKTemplate),
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, DerivedKey{}, nil
-	}
-	defer tpm.Flush(primaryKey.ObjectHandle)
-
-	ek, err := tpm.parsePrimaryRSA(primaryKey)
-	if err != nil {
-		return Key{}, DerivedKey{}, nil
-	}
-	tpm.logger.Debugf("tpm: created Endorsement Key (EK): %s", tpm.Encode(ek.Name.Buffer))
-
-	// Create a stateful policy based session that uses a TPM generated one-time
-	// use nonce that is sent with each command performed in the session, to prevent
-	// replay attacks.
-	tpm.logger.Debug("tpm: creating TPM PolicySession")
-	session, closer, err := tpm2.PolicySession(tpm.transport, tpm2.TPMAlgSHA256, 16)
-	defer func() {
-		if err := closer(); err != nil {
-			tpm.logger.Error(err)
-		}
-	}()
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, DerivedKey{}, nil
-	}
-
-	tpm.logger.Debug("tpm: Setting session policy")
-	_, err = tpm2.PolicySecret{
-		AuthHandle:    tpm2.TPMRHEndorsement,
-		NonceTPM:      session.NonceTPM(),
-		PolicySession: session.Handle(),
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, DerivedKey{}, nil
-	}
-
-	// Verify the policy digest to ensure the policy
-	// criteria was met using a trial session. A trial
-	// session
-	trialSession, closer, err := tpm2.PolicySession(
-		tpm.transport, tpm2.TPMAlgSHA256, 16, tpm2.Trial())
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, DerivedKey{}, nil
-	}
-	defer func() {
-		if err := closer(); err != nil {
-			tpm.logger.Error(err)
-		}
-	}()
-	pgd, err := tpm2.PolicyGetDigest{
-		PolicySession: trialSession.Handle(),
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, DerivedKey{}, nil
-	}
-
-	tpm.logger.Debug("tpm: loading EK using policy based session")
-
-	// Apply the policy digest to the AK
-
-	// Create a new SRK template, setting the policy digest
-	akWithAuthTemplate := tpm2.RSASRKTemplate
-	akWithAuthTemplate.AuthPolicy = pgd.PolicyDigest
-	// Create the key using the rsaSRKTemplate w/ AuthPolicy
-	createLoadedResponse, err := tpm2.CreateLoaded{
-		ParentHandle: tpm2.AuthHandle{
-			Handle: primaryKey.ObjectHandle,
-			Name:   primaryKey.Name,
-			Auth:   session,
-		},
-		InPublic: tpm2.New2BTemplate(&akWithAuthTemplate),
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, DerivedKey{}, nil
-	}
-	defer tpm.Flush(createLoadedResponse.ObjectHandle)
-
-	// Retrieve the public area of the loaded object
-	akPub, err := createLoadedResponse.OutPublic.Contents()
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, DerivedKey{}, nil
-	}
-	// Parse the RSA public / private key
-	akECC, err := tpm.parseECC(akPub)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, DerivedKey{}, nil
-	}
-
-	ak := DerivedKey{
-		CreationHash:   primaryKey.CreationHash.Buffer,
-		CreationData:   primaryKey.CreationData.Bytes(),
-		CreationTicket: primaryKey.CreationTicket.Digest.Buffer,
-	}
-	ak.Handle = createLoadedResponse.ObjectHandle
-	ak.Public = akECC.Public
-	ak.Name = createLoadedResponse.Name.Buffer
-	ak.BPublicBytes = createLoadedResponse.OutPublic.Bytes()
-	ak.RSAPubKey = akECC.RSAPubKey
-	ak.PublicKeyBytes = akECC.PublicKeyBytes
-	ak.PublicKeyPEM = akECC.PublicKeyPEM
-	ak.PrivateKeyBytes = akECC.PrivateKeyBytes
-
-	return ek, ak, nil
-}
-
-// Creates a new key under the hierarchy of the specified key parameter.
-// For example, pass a Storage Root Key as the key parameter to generate
-// a new key under the storage hierarchy.
-func (tpm *TPM2) DerivedKey(key Key) (Key, error) {
-
-	tpm.logger.Debug("tpm: creating new RSA key from parent key: %x", tpm.Encode(key.Name.Buffer))
-
-	var err error
-	session, closer, err := tpm.HMACAuthSessionWithKey(key, key.Auth)
 	defer closer()
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, err
+
+	var handle tpm2.TPMHandle
+
+	validation := tpm2.TPMTTKHashCheck{
+		Tag: tpm2.TPMSTHashCheck,
 	}
 
-	createKeyCMD := tpm2.Create{
-		ParentHandle: tpm2.AuthHandle{
-			Handle: key.Handle,
-			Name:   key.Name,
-			Auth:   session,
-		},
-		InPublic: tpm2.New2B(rsaTemplate),
-		// CreationPCR: tpm2.TPMLPCRSelection{
-		// 	PCRSelections: []tpm2.TPMSPCRSelection{
-		// 		{
-		// 			Hash:      tpm2.TPMAlgSHA256,
-		// 			PCRSelect: tpm2.PCClientCompatible.PCRs(debugPCR),
-		// 		},
-		// 	},
-		// },
-		// InSensitive: tpm2.TPM2BSensitiveCreate{
-		// 	Sensitive: &tpm2.TPMSSensitiveCreate{
-		// 		UserAuth: tpm2.TPM2BAuth{
-		// 			Buffer: sealAuth,
-		// 		},
-		// 		Data: tpm2.NewTPMUSensitiveCreate(
-		// 			&tpm2.TPM2BSensitiveData{
-		// 				Buffer: sealData,
-		// 			}),
-		// 	},
-		// },
-	}
+	if keyAttrs.KeyType == keystore.KEY_TYPE_ATTESTATION ||
+		keyAttrs.KeyType == keystore.KEY_TYPE_IDEVID {
 
-	var createKeyResponse *tpm2.CreateResponse
-	if tpm.config.EncryptSession {
-		createKeyResponse, err = createKeyCMD.Execute(
-			tpm.transport,
-			tpm.SaltedHMACSession(key))
+		digest, validationDigest, err := tpm.Hash(keyAttrs, digest)
+
+		// TPMT_TK_HASHCHECK – This ticket is used to indicate that
+		// a digest of external data is safe to sign using a restricted
+		// signing key. A restricted signing key may only sign a digest
+		// that was produced by the TPM. If the digest was produced from
+		// externally provided data, there needs to be an indication that the
+		// data did not start with the same first octets as are used for data
+		// that is generated within the TPM. This prevents "forgeries" of
+		// attestation data. This ticket is used to provide the evidence that
+		// the data used in the digest was checked by the TPM and is safe to
+		// sign. Assuming that the external data is "safe", this type of ticket
+		// is produced by TPM2_Hash() or TPM2_SequenceComplete() and used by
+		// TPM2_Sign().
+		validation = tpm2.TPMTTKHashCheck{
+			Hierarchy: tpm2.TPMRHEndorsement,
+			Digest: tpm2.TPM2BDigest{
+				Buffer: validationDigest,
+			},
+			Tag: tpm2.TPMSTHashCheck,
+		}
+
+		handle = keyAttrs.TPMAttributes.Handle
+
+		pub, err := tpm2.ReadPublic{
+			ObjectHandle: handle,
+		}.Execute(tpm.Transport())
+		if err != nil {
+			tpm.logger.Error(err)
+			return nil, err
+		}
+
+		outPub, err := pub.OutPublic.Contents()
+		if err != nil {
+			tpm.logger.Error(err)
+			return nil, err
+		}
+
+		var algo tpm2.TPMIAlgHash
+		if opts == nil {
+			algo = tpm2.TPMAlgSHA256
+		} else {
+			if opts.HashFunc() == crypto.SHA256 {
+				algo = tpm2.TPMAlgSHA256
+			} else if opts.HashFunc() == crypto.SHA384 {
+				algo = tpm2.TPMAlgSHA384
+			} else if opts.HashFunc() == crypto.SHA512 {
+				algo = tpm2.TPMAlgSHA512
+			} else {
+				tpm.logger.Error("%s: %s",
+					keystore.ErrInvalidHashFunction, opts.HashFunc())
+				return nil, keystore.ErrInvalidHashFunction
+			}
+		}
+
+		rsaDetails, err := outPub.Parameters.RSADetail()
+		if err != nil {
+			tpm.logger.Error(err)
+			return nil, err
+		}
+
+		signResponse, err := tpm2.Sign{
+			KeyHandle: tpm2.AuthHandle{
+				Handle: handle,
+				Name:   pub.Name,
+				Auth:   tpm2.PasswordAuth(nil),
+			},
+			Digest: tpm2.TPM2BDigest{
+				Buffer: digest,
+			},
+			InScheme: tpm2.TPMTSigScheme{
+				Scheme: rsaDetails.Scheme.Scheme,
+				Details: tpm2.NewTPMUSigScheme(
+					rsaDetails.Scheme.Scheme, &tpm2.TPMSSchemeHash{
+						HashAlg: algo,
+					}),
+			},
+			Validation: validation,
+		}.Execute(tpm.transport)
+		if err != nil {
+			return nil, err
+		}
+		var rsaSig *tpm2.TPMSSignatureRSA
+		if opts.(*keystore.SignerOpts).PSSOptions != nil {
+			rsaSig, err = signResponse.Signature.Signature.RSAPSS()
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			rsaSig, err = signResponse.Signature.Signature.RSASSA()
+			if err != nil {
+				return nil, err
+			}
+		}
+		return rsaSig.Sig.Buffer, nil
+
 	} else {
-		createKeyResponse, err = createKeyCMD.Execute(tpm.transport)
+
+		// Load the keyed hash from saved context file and priv, pub keys
+		key, err := tpm.LoadKeyPair(keyAttrs, &session, backend)
+		if err != nil {
+			tpm.logger.Error(err)
+			return nil, err
+		}
+		defer tpm.Flush(key.ObjectHandle)
+		handle = key.ObjectHandle
 	}
+
+	pub, err := tpm2.ReadPublic{
+		ObjectHandle: handle,
+	}.Execute(tpm.Transport())
 	if err != nil {
 		tpm.logger.Error(err)
-		return Key{}, err
+		return nil, err
 	}
 
-	pub, err := createKeyResponse.OutPublic.Contents()
+	outPub, err := pub.OutPublic.Contents()
 	if err != nil {
 		tpm.logger.Error(err)
-		return Key{}, err
+		return nil, err
 	}
 
-	derivedKey := Key{}
-	switch pub.Type {
-	case tpm2.TPMAlgRSA:
-		rsa, err := tpm.parseRSA(pub, nil)
-		if err != nil {
-			return Key{}, err
+	var algo tpm2.TPMIAlgHash
+	if opts == nil {
+		algo = tpm2.TPMAlgSHA256
+	} else {
+		if opts.HashFunc() == crypto.SHA256 {
+			algo = tpm2.TPMAlgSHA256
+		} else if opts.HashFunc() == crypto.SHA384 {
+			algo = tpm2.TPMAlgSHA384
+		} else if opts.HashFunc() == crypto.SHA512 {
+			algo = tpm2.TPMAlgSHA512
+		} else {
+			tpm.logger.Error("%s: %s",
+				keystore.ErrInvalidHashFunction, opts.HashFunc())
+			return nil, keystore.ErrInvalidHashFunction
 		}
-		derivedKey.RSAPubKey = rsa.RSAPubKey
-
-	case tpm2.TPMAlgECC:
-		ecc, err := tpm.parseECC(pub)
-		if err != nil {
-			return Key{}, err
-		}
-		derivedKey.ECCPubKey = ecc.ECCPubKey
 	}
 
-	return derivedKey, nil
+	// Create key session to sign with
+	session2, closer2, err2 := tpm.CreateKeySession(keyAttrs, &session)
+	if err2 != nil {
+		tpm.logger.Error(err)
+		return nil, err
+	}
+	defer closer2()
+
+	if outPub.Type == tpm2.TPMAlgRSA {
+
+		rsaDetails, err := outPub.Parameters.RSADetail()
+		if err != nil {
+			tpm.logger.Error(err)
+			return nil, err
+		}
+
+		signResponse, err := tpm2.Sign{
+			KeyHandle: tpm2.AuthHandle{
+				Handle: handle,
+				Name:   pub.Name,
+				Auth:   session2,
+			},
+			Digest: tpm2.TPM2BDigest{
+				Buffer: digest,
+			},
+			InScheme: tpm2.TPMTSigScheme{
+				Scheme: rsaDetails.Scheme.Scheme,
+				Details: tpm2.NewTPMUSigScheme(
+					rsaDetails.Scheme.Scheme, &tpm2.TPMSSchemeHash{
+						HashAlg: algo,
+					}),
+			},
+			Validation: validation,
+		}.Execute(tpm.transport)
+		if err != nil {
+			return nil, err
+		}
+
+		var rsaSig *tpm2.TPMSSignatureRSA
+		if keystore.IsRSAPSS(keyAttrs.SignatureAlgorithm) ||
+			opts.(*keystore.SignerOpts).PSSOptions != nil {
+
+			rsaSig, err = signResponse.Signature.Signature.RSAPSS()
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			rsaSig, err = signResponse.Signature.Signature.RSASSA()
+			if err != nil {
+				return nil, err
+			}
+		}
+		return rsaSig.Sig.Buffer, nil
+
+	} else if outPub.Type == tpm2.TPMAlgECC {
+
+		signResponse, err := tpm2.Sign{
+			KeyHandle: tpm2.AuthHandle{
+				Handle: handle,
+				Name:   pub.Name,
+				Auth:   session2,
+			},
+			Digest: tpm2.TPM2BDigest{
+				Buffer: digest[:],
+			},
+			InScheme: tpm2.TPMTSigScheme{
+				Scheme: tpm2.TPMAlgECDSA,
+				Details: tpm2.NewTPMUSigScheme(
+					tpm2.TPMAlgECDSA,
+					&tpm2.TPMSSchemeHash{
+						HashAlg: algo,
+					},
+				),
+			},
+			Validation: tpm2.TPMTTKHashCheck{
+				Tag: tpm2.TPMSTHashCheck,
+			},
+		}.Execute(tpm.Transport())
+		if err != nil {
+			return nil, err
+		}
+
+		sig, err := signResponse.Signature.Signature.ECDSA()
+		if err != nil {
+			return nil, err
+		}
+
+		r := big.NewInt(0).SetBytes(sig.SignatureR.Buffer)
+		s := big.NewInt(0).SetBytes(sig.SignatureS.Buffer)
+		asn1Struct := struct{ R, S *big.Int }{r, s}
+		return asn1.Marshal(asn1Struct)
+	}
+
+	return nil, keystore.ErrUnsupportedKeyAlgorithm
 }
 
-// Creates a new RSA Attestation Key and policy session to restricting the key
-// usage to the session.
-func (tpm *TPM2) RSAAK() (Key, DerivedKey, error) {
+// Performs a TPM2_Hash on the requested data. If the length is greater
+// than 1024 bytes, the data is hashed using HashSequence commands.
+func (tpm *TPM2) Hash(
+	keyAttrs *keystore.KeyAttributes,
+	data []byte) ([]byte, []byte, error) {
 
-	// Not printing Rivest, Shamir, and Adleman here because its
-	// a lot of bytes in the log and they need no introduction :)
-	tpm.logger.Info("Creating RSA Endorsement Key (EK)")
-
-	primaryKey, err := tpm2.CreatePrimary{
-		PrimaryHandle: tpm2.TPMRHEndorsement,
-		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, DerivedKey{}, nil
+	if len(data) > 1024 {
+		return tpm.HashSequence(keyAttrs, data)
 	}
-	defer tpm.Flush(primaryKey.ObjectHandle)
-
-	ek, err := tpm.parsePrimaryRSA(primaryKey)
-	if err != nil {
-		return Key{}, DerivedKey{}, nil
-	}
-
-	tpm.logger.Debugf("tpm: created Endorsement Key (EK): %s", tpm.Encode(ek.Name.Buffer))
-
-	// Create a stateful policy based session that uses a TPM generated one-time
-	// use nonce that is sent with each command performed in the session, to prevent
-	// replay attacks.
-	tpm.logger.Debug("tpm: creating TPM PolicySession")
-	session, closer, err := tpm2.PolicySession(tpm.transport, tpm2.TPMAlgSHA256, 16)
-	// TPM_RC_HANDLE (parameter 1): the handle is not correct for the use
-	// defer func() {
-	// 	if err := closer(); err != nil {
-	// 		tpm.logger.Error(err)
-	// 	}
-	// }()
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, DerivedKey{}, nil
-	}
-
-	tpm.logger.Debug("tpm: Setting session policy")
-	_, err = tpm2.PolicySecret{
-		AuthHandle:    tpm2.TPMRHEndorsement,
-		NonceTPM:      session.NonceTPM(),
-		PolicySession: session.Handle(),
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, DerivedKey{}, nil
-	}
-
-	// "During a trial policy session, all assertions pass; the purpose
-	// of the trial policy session is to generate the policyDigest as
-	// if all the assertions passed. After all the policy commands are
-	// sent to the TPM, the policyDigest can be read from the TPM using
-	// the TPM2_GetPolicyDigest command."
-	//
-	// See "Policy Authorization Time Intervals" for details:
-	// https://link.springer.com/chapter/10.1007/978-1-4302-6584-9_13
-	trialSession, closer, err := tpm2.PolicySession(
-		tpm.transport, tpm2.TPMAlgSHA256, 16, tpm2.Trial())
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, DerivedKey{}, nil
-	}
-	defer func() {
-		if err := closer(); err != nil {
-			tpm.logger.Error(err)
-		}
-	}()
-	pgd, err := tpm2.PolicyGetDigest{
-		PolicySession: trialSession.Handle(),
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, DerivedKey{}, nil
-	}
-
-	tpm.logger.Debug("tpm: loading EK using policy based session")
-
-	// Create the AK using the HMAC session with an authorization
-	// policy that restricts the key usage to this session.
-
-	// Use the SRK template, setting the policy digest
-	akWithAuthTemplate := tpm2.RSASRKTemplate
-	akWithAuthTemplate.AuthPolicy = pgd.PolicyDigest
-
-	// Create the key using the tpm2.RSAEKTemplate w/ AuthPolicy
-	createLoadedResponse, err := tpm2.CreateLoaded{
-		ParentHandle: tpm2.AuthHandle{
-			Handle: primaryKey.ObjectHandle,
-			Name:   primaryKey.Name,
-			Auth:   session,
+	h, err := tpm2.Hash{
+		Hierarchy: tpm2.TPMRHEndorsement,
+		HashAlg:   keyAttrs.TPMAttributes.HashAlg,
+		Data: tpm2.TPM2BMaxBuffer{
+			Buffer: data,
 		},
-		InPublic: tpm2.New2BTemplate(&akWithAuthTemplate),
 	}.Execute(tpm.transport)
 	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, DerivedKey{}, nil
+		return nil, nil, err
 	}
-	defer tpm.Flush(createLoadedResponse.ObjectHandle)
-
-	// Retrieve the public area of the loaded object
-	akPub, err := createLoadedResponse.OutPublic.Contents()
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, DerivedKey{}, nil
-	}
-	// Parse the key from the public area
-	akRSA, err := tpm.parseRSA(akPub, createLoadedResponse.OutPrivate.Buffer)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, DerivedKey{}, nil
-	}
-	ak := DerivedKey{
-		CreationHash:   primaryKey.CreationHash.Buffer,
-		CreationData:   primaryKey.CreationData.Bytes(),
-		CreationTicket: primaryKey.CreationTicket.Digest.Buffer,
-	}
-	ak.Handle = createLoadedResponse.ObjectHandle
-	ak.Public = akRSA.Public
-	ak.Name = createLoadedResponse.Name.Buffer
-	ak.BPublicBytes = createLoadedResponse.OutPublic.Bytes()
-	ak.RSAPubKey = akRSA.RSAPubKey
-	ak.PublicKeyBytes = akRSA.PublicKeyBytes
-	ak.PublicKeyPEM = akRSA.PublicKeyPEM
-	ak.PrivateKeyBytes = akRSA.PrivateKeyBytes
-
-	tpm.DebugPrimaryKey(ek)
-	tpm.DebugAttestationKey(ak)
-
-	return ek, ak, nil
+	return h.OutHash.Buffer, h.Validation.Digest.Buffer, nil
 }
 
-// Performs TPM2_MakeCredential, returning the new credential
-// challenge for a remote Attestor. If the secret parameter is
-// not provided, a random secret will be generated. If the
-// "entropy" TPM option is enabled, the TPM RNG will be used
-// to generate the secret, otherwise the runtime / operating
-// system generator will be used.
-func (tpm *TPM2) MakeCredential(ek Key, ak DerivedKey, secret []byte) (*tpm2.MakeCredentialResponse, []byte, error) {
+// Performs a hash sequence using TPM2_HashSequenceStart,
+// TPM2_SequenceUpdate, TPM2_SequenceComplete.
+func (tpm *TPM2) HashSequence(
+	keyAttrs *keystore.KeyAttributes,
+	data []byte) ([]byte, []byte, error) {
 
-	tpm.logger.Info("Creating new Activation Credential")
+	var akAuth []byte
+	var err error
+	var maxDigestBuffer = 1024
 
-	if secret == nil {
-		var err error
-		secret, err = tpm.Random()
+	if keyAttrs.Password != nil {
+		akAuth, err = keyAttrs.Password.Bytes()
 		if err != nil {
-			tpm.logger.Error(err)
 			return nil, nil, err
 		}
 	}
 
-	if tpm.debugSecrets {
-		tpm.logger.Debugf(
-			"tpm: MakeCredential secret (raw): %s", secret)
-		tpm.logger.Debugf(
-			"tpm: MakeCredential secret (hex): 0x%x", tpm.Encode(secret))
+	hashSequenceStart := tpm2.HashSequenceStart{
+		Auth: tpm2.TPM2BAuth{
+			Buffer: akAuth,
+		},
+		HashAlg: keyAttrs.TPMAttributes.HashAlg,
 	}
-
-	digest := tpm2.TPM2BDigest{Buffer: secret}
-
-	// Load the Endorsement Key (EK)
-	loadedEK, err := tpm2.LoadExternal{
-		Hierarchy: tpm2.TPMRHNull,
-		InPublic:  tpm2.BytesAs2B[tpm2.TPMTPublic](ek.BPublicBytes),
-	}.Execute(tpm.transport)
+	rspHSS, err := hashSequenceStart.Execute(tpm.transport)
 	if err != nil {
-		tpm.logger.Error(err)
-		return nil, nil, err
-	}
-	defer tpm.Flush(loadedEK.ObjectHandle)
-	tpm.logger.Debugf("tpm: loaded EK name: 0x%x", tpm.Encode(loadedEK.Name.Buffer))
-
-	// Load the Attestation Key (AK)
-	loadedKey, err := tpm2.LoadExternal{
-		Hierarchy: tpm2.TPMRHNull,
-		InPublic:  tpm2.BytesAs2B[tpm2.TPMTPublic](ak.BPublicBytes),
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, nil, err
-	}
-	defer tpm.Flush(loadedKey.ObjectHandle)
-	tpm.logger.Debugf("tpm: loaded AK name: 0x%x", tpm.Encode(loadedKey.Name.Buffer))
-
-	// Create the new credential challenge
-	mc, err := tpm2.MakeCredential{
-		Handle:      loadedEK.ObjectHandle,
-		Credential:  digest,
-		ObjectNamae: loadedKey.Name,
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
 		return nil, nil, err
 	}
 
-	if tpm.debugSecrets {
-		tpm.logger.Debugf("tpm: MakeCredential: secret (raw): %s", digest.Buffer)
-		tpm.logger.Debugf("tpm: MakeCredential: secret (hex): 0x%x", tpm.Encode(digest.Buffer))
-
-		tpm.logger.Debugf("tpm: MakeCredential: encrypted secret (raw): %s", mc.CredentialBlob.Buffer)
-		tpm.logger.Debugf("tpm: MakeCredential: encrypted secret (hex): 0x%x", tpm.Encode(mc.CredentialBlob.Buffer))
-
-		tpm.logger.Debugf("tpm: MakeCredential: secret response (raw): %s", mc.Secret.Buffer)
-		tpm.logger.Debugf("tpm: MakeCredential: secret response (hex): 0x%x", tpm.Encode(mc.Secret.Buffer))
-	}
-
-	return mc, digest.Buffer, nil
-}
-
-// Activates a credential challenge previously initiated by MakeCredential
-func (tpm *TPM2) ActivateCredential(ak DerivedKey, credential Credential) ([]byte, error) {
-
-	tpm.logger.Info("Activating Credential")
-
-	// Create Endorsement Key (EK)
-	primaryKey, err := tpm2.CreatePrimary{
-		PrimaryHandle: tpm2.TPMRHEndorsement,
-		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-	defer tpm.Flush(primaryKey.ObjectHandle)
-
-	// Load Attestation Key (AK)
-	loadedAK, err := tpm2.Load{
-		ParentHandle: tpm2.AuthHandle{
-			Handle: primaryKey.ObjectHandle,
-			Name:   primaryKey.Name,
-			Auth:   tpm2.Policy(tpm2.TPMAlgSHA256, 16, tpm.ekPolicy),
+	authHandle := tpm2.AuthHandle{
+		Handle: rspHSS.SequenceHandle,
+		Name: tpm2.TPM2BName{
+			Buffer: akAuth,
 		},
-		InPublic: tpm2.BytesAs2B[tpm2.TPMTPublic](ak.BPublicBytes),
-		InPrivate: tpm2.TPM2BPrivate{
-			Buffer: ak.PrivateKeyBytes,
-		},
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-	tpm.logger.Debugf("tpm2: loaded AK: %x", tpm.Encode(loadedAK.Name.Buffer))
-
-	// Create a new policy session to authenticate the ActivateCredential command,
-	// ensuring only the session that created the AK can perform the activation.
-	tpm.logger.Debug("tpm2: creating policy session")
-	session, closer, err := tpm2.PolicySession(tpm.transport, tpm2.TPMAlgSHA256, 16)
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-	defer func() {
-		if err := closer(); err != nil {
-			tpm.logger.Error(err)
-		}
-	}()
-
-	// Couple the ActivateCredential authorization with the session
-	tpm.logger.Debug("tpm2: satisfying policy criteria")
-	_, err = tpm2.PolicySecret{
-		AuthHandle:    tpm2.TPMRHEndorsement,
-		NonceTPM:      session.NonceTPM(),
-		PolicySession: session.Handle(),
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
+		Auth: tpm2.PasswordAuth(akAuth),
 	}
 
-	// Activate the credential, proving the AK and EK are both loaded
-	// into the same TPM, and the EK is able to decrypt the secret.
-	tpm.logger.Debug("tpm2: activating credential")
-	activateCredentialsResponse, err := tpm2.ActivateCredential{
-		ActivateHandle: tpm2.NamedHandle{
-			Handle: loadedAK.ObjectHandle,
-			Name:   loadedAK.Name,
-		},
-		KeyHandle: tpm2.AuthHandle{
-			Handle: primaryKey.ObjectHandle,
-			Name:   primaryKey.Name,
-			Auth:   session,
-		},
-		CredentialBlob: tpm2.TPM2BIDObject{
-			Buffer: credential.CredentialBlob,
-		},
-		Secret: tpm2.TPM2BEncryptedSecret{
-			Buffer: credential.EncryptedSecret,
-		},
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, ErrInvalidActivationCredential
-	}
-
-	// Release the decrypted secret. Print some helpful info
-	// if secret debugging is enabled.
-	digest := activateCredentialsResponse.CertInfo.Buffer
-	if tpm.debugSecrets {
-		tpm.logger.Debugf("tpm: credential encrypted secret (raw): %s", credential.EncryptedSecret)
-		tpm.logger.Debugf("tpm: credential encrypted secret (hex): 0x%x", tpm.Encode(credential.EncryptedSecret))
-
-		tpm.logger.Debugf("tpm: TPM2BDigest (raw): %s", digest)
-		tpm.logger.Debugf("tpm: TPM2BDigest (hex): 0x%x", tpm.Encode(digest))
-	}
-
-	// Return the decrypted secret
-	return digest, nil
-}
-
-// Creates a Quote signed by an Attestation Key
-func (tpm *TPM2) Quote(pcrs []uint, nonce []byte) (Quote, error) {
-
-	tpm.logger.Info("Performing TPM 2.0 Quote")
-
-	primaryKey, err := tpm2.CreatePrimary{
-		PrimaryHandle: tpm2.TPMRHOwner,
-		InPublic:      tpm2.New2B(tpm2.RSASRKTemplate),
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Quote{}, err
-	}
-	defer tpm.Flush(primaryKey.ObjectHandle)
-
-	rsaTemplate := tpm2.TPMTPublic{
-		Type:    tpm2.TPMAlgRSA,
-		NameAlg: tpm2.TPMAlgSHA256,
-		ObjectAttributes: tpm2.TPMAObject{
-			SignEncrypt:         true,
-			FixedTPM:            true,
-			FixedParent:         true,
-			SensitiveDataOrigin: true,
-			UserWithAuth:        true,
-			STClear:             false,
-		},
-		AuthPolicy: tpm2.TPM2BDigest{},
-		Parameters: tpm2.NewTPMUPublicParms(
-			tpm2.TPMAlgRSA,
-			&tpm2.TPMSRSAParms{
-				Scheme: tpm2.TPMTRSAScheme{
-					Scheme: tpm2.TPMAlgRSASSA,
-					Details: tpm2.NewTPMUAsymScheme(
-						tpm2.TPMAlgRSASSA,
-						&tpm2.TPMSSigSchemeRSASSA{
-							HashAlg: tpm2.TPMAlgSHA256,
-						},
-					),
-				},
-				KeyBits: 2048,
+	for len(data) > maxDigestBuffer {
+		sequenceUpdate := tpm2.SequenceUpdate{
+			SequenceHandle: authHandle,
+			Buffer: tpm2.TPM2BMaxBuffer{
+				Buffer: data[:maxDigestBuffer],
 			},
-		),
-	}
-
-	rsaKeyResponse, err := tpm2.CreateLoaded{
-		ParentHandle: tpm2.AuthHandle{
-			Handle: primaryKey.ObjectHandle,
-			Name:   primaryKey.Name,
-			Auth:   tpm2.PasswordAuth(nil),
-		},
-		InPublic: tpm2.New2BTemplate(&rsaTemplate),
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Quote{}, err
-	}
-	defer tpm.Flush(rsaKeyResponse.ObjectHandle)
-
-	// Create PCR selection(s)
-	pcrSelections := make([]tpm2.TPMSPCRSelection, len(pcrs))
-	for i, pcr := range pcrs {
-		pcrSelections[i] = tpm2.TPMSPCRSelection{
-
-			Hash:      tpm2.TPMAlgSHA256,
-			PCRSelect: tpm2.PCClientCompatible.PCRs(pcr),
 		}
-	}
-	pcrSelect := tpm2.TPMLPCRSelection{
-		PCRSelections: pcrSelections,
-	}
-
-	// Create the quote
-	q, err := tpm2.Quote{
-		SignHandle: rsaKeyResponse.ObjectHandle,
-		QualifyingData: tpm2.TPM2BData{
-			Buffer: nonce,
-		},
-		PCRSelect: pcrSelect,
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Quote{}, err
-	}
-
-	rsassa, err := q.Signature.Signature.RSASSA()
-	if err != nil {
-		tpm.logger.Error(err)
-		return Quote{}, err
-	}
-
-	// Get the event log:
-	// Rather than parsing the event log and secure boot state,
-	// capture the raw binary log as a blob so it can be signed
-	// and imported to the CA blob storage. Verify should do a byte
-	// level comparison and digest verification for the system state
-	// integrity check.
-	// https://github.com/google/go-attestation/blob/master/docs/event-log-disclosure.md
-	eventLog, err := tpm.EventLog()
-	if err != nil {
-		return Quote{}, err
-	}
-
-	// Get the key public area and parse the RSA public key
-	pub, err := rsaKeyResponse.OutPublic.Contents()
-	if err != nil {
-		tpm.logger.Error(err)
-		return Quote{}, err
-	}
-	akRSA, err := tpm.parseRSA(pub, nil)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Quote{}, err
-	}
-
-	quotedPCRs, err := tpm.ReadPCRs(pcrs)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Quote{}, err
-	}
-
-	pcrBytes, err := tpm.EncodePCRs(quotedPCRs)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Quote{}, err
-	}
-
-	return Quote{
-		Nonce:          nonce,
-		Quoted:         q.Quoted.Bytes(),
-		Signature:      rsassa.Sig.Buffer,
-		PCRs:           pcrBytes,
-		EventLog:       eventLog,
-		PublicKeyBytes: akRSA.PublicKeyBytes,
-	}, nil
-}
-
-// Verifies a TPM 2.0 quote using a previously captured event log and
-// PCR state that's been signed and stored in the CA signed blob store.
-//
-// Rather than parsing and replaying the event log, a more simplistic
-// approach is taken, which verifies the current event log and secure
-// boot state blobs with the state stored in the CA signed blob store
-// captured during device enrollment or local attestation. This may
-// change in the future. The rationale for this is partly due to the
-// event log not being a reliable source for integrity checking to begin
-// with:
-// https://github.com/google/go-attestation/blob/master/docs/event-log-disclosure.md
-func (tpm *TPM2) VerifyQuote(attestationAttrs keystore.X509Attributes, quote Quote, nonce []byte) error {
-
-	tpm.logger.Info("Verifying Quote")
-
-	// Make sure the returned nonce matches the nonce
-	// that was sent in the quote request.
-	if !bytes.Equal(quote.Nonce, nonce) {
-		return ErrInvalidNonce
-	}
-
-	signerAttrs := tpm.ca.CAKeyAttributes(nil)
-
-	// Parse the public key
-	var rsaPub *rsa.PublicKey
-	publicKey, err := x509.ParsePKIXPublicKey(quote.PublicKeyBytes)
-	if err != nil {
-		tpm.logger.Error(err)
-		return err
-	}
-	rsaPub = publicKey.(*rsa.PublicKey)
-
-	digest, err := keystore.Digest(signerAttrs.Hash, quote.Quoted)
-	if err != nil {
-		return err
-	}
-	if err := rsa.VerifyPKCS1v15(rsaPub, signerAttrs.Hash, digest, quote.Signature); err != nil {
-		log.Fatalf("Failed to verify signature: %v", err)
-	}
-
-	// Verify the event log
-	err = tpm.ca.VerifyAttestationEventLog(signerAttrs, quote.EventLog)
-	if err != nil {
-		return err
-	}
-
-	// Verify PCR state
-	err = tpm.ca.VerifyAttestationPCRs(signerAttrs, quote.PCRs)
-	if err != nil {
-		tpm.logger.Error("PCR state verification failed")
-		decoded, err := tpm.DecodePCRs(quote.PCRs)
+		_, err = sequenceUpdate.Execute(tpm.transport)
 		if err != nil {
-			return fmt.Errorf("tpm: failed to decode PCR banks")
+			return nil, nil, err
 		}
-		for _, bank := range decoded {
-			for _, pcr := range bank.PCRs {
-				tpm.logger.Debugf("%s pcr %d: 0x%s",
-					bank.Algorithm, pcr.ID, pcr.Value)
-			}
-		}
-		return err
+
+		data = data[maxDigestBuffer:]
 	}
 
-	return nil
+	sequenceComplete := tpm2.SequenceComplete{
+		SequenceHandle: authHandle,
+		Buffer: tpm2.TPM2BMaxBuffer{
+			Buffer: data,
+		},
+		Hierarchy: tpm2.TPMRHEndorsement,
+	}
+
+	// Complete the hashing sequence and retrieve the digest
+	rspSC, err := sequenceComplete.Execute(tpm.transport)
+	if err != nil {
+		return nil, nil, err
+	}
+	digest := rspSC.Result.Buffer
+
+	return digest, rspSC.Validation.Digest.Buffer, nil
 }
 
-// Performs a TPM 2.0 quote over the PCRs defined in the
-// TPM section of the platform configuration file, used
-// for local attestation. The quote, event log, and PCR
-// state is optionally signed and saved to the CA blob store.
-func (tpm *TPM2) LocalQuote(
-	attestationAttrs keystore.X509Attributes,
-	importBlobs bool) (Quote, []byte, error) {
+// Performs a sequential hash on the provided data using the
+// hash algorithm and authorization defined by akAttrs. This
+// operation uses the Handle, HashAlg, Name, SignatureAlgorithm
+// and Password provided by akAttrs.
+func (tpm *TPM2) SignValidate(
+	keyAttrs *keystore.KeyAttributes,
+	digest, validationDigest []byte) ([]byte, error) {
 
-	tpm.logger.Info("Performing local TPM 2.0 Quote")
+	var akAuth []byte
+	var err error
 
-	if len(tpm.config.AttestationPCRs) == 0 {
-		tpm.logger.Warning(warnMissingLocalAttestationPCRs)
-	}
-	uints := make([]uint, len(tpm.config.AttestationPCRs))
-	for i, pcr := range tpm.config.AttestationPCRs {
-		uints[i] = uint(pcr)
-	}
-	nonce, err := tpm.Random()
-	if err != nil {
-		tpm.logger.Fatal(err)
-	}
-	quote, err := tpm.Quote(uints, nonce)
-	if err != nil {
-		return Quote{}, nil, err
-	}
-	if importBlobs {
-		if err := tpm.ImportLocalAttestation(attestationAttrs, quote); err != nil {
-			return Quote{}, nil, err
+	if keyAttrs.Password != nil {
+		akAuth, err = keyAttrs.Password.Bytes()
+		if err != nil {
+			return nil, err
 		}
 	}
-	return quote, nonce, nil
-}
 
-// Perform local attestation. Current system measurements
-// are taken according to platform configuration and verified
-// using the existing event log and PCR state signatures captured
-// during platform setup.
-func (tpm *TPM2) AttestLocal(attestationAttrs keystore.X509Attributes) error {
-	tpm.logger.Info("Performing Local Attestation")
-	if len(tpm.config.AttestationPCRs) == 0 {
-		tpm.logger.Warning(warnMissingLocalAttestationPCRs)
-	}
-	nonce, err := tpm.Random()
-	if err != nil {
-		tpm.logger.Fatal(err)
-	}
-	quote, nonce, err := tpm.LocalQuote(attestationAttrs, false)
-	if err != nil {
-		return err
-	}
-	return tpm.VerifyQuote(attestationAttrs, quote, nonce)
-}
+	// Sign the digest
+	var hashSig []byte
+	if keyAttrs.TPMAttributes.Public.Type == tpm2.TPMAlgRSA {
 
-// Imports a local Attesation Quote. The quote, event log, PCR state, and
-// public key of the attested system are signed and saved to the Certificate
-// Authority blob storage.
-func (tpm *TPM2) ImportLocalAttestation(x509Attrs keystore.X509Attributes, quote Quote) error {
+		// rsaDetails, err := keyAttrs.TPMAttributes.Public.Parameters.RSADetail()
+		rsaDetails, err := keyAttrs.TPMAttributes.Public.Parameters.RSADetail()
+		if err != nil {
+			tpm.logger.Error(err)
+			return nil, err
+		}
 
-	tpm.logger.Info("Importing local attestation blobs")
-
-	// Get CA key attributes and add the X509 attributes
-	// to the local quote
-	caAttrs := tpm.ca.CAKeyAttributes(nil)
-	caAttrs.Domain = x509Attrs.CN
-	caAttrs.X509Attributes = &x509Attrs
-
-	// Sign and store the quote
-	err := tpm.ca.ImportAttestationQuote(caAttrs, quote.Quoted)
-	if err != nil {
-		tpm.logger.Error(err)
-		return err
-	}
-
-	// Sign and store the quote
-	err = tpm.ca.ImportAttestationEventLog(caAttrs, quote.EventLog)
-	if err != nil {
-		tpm.logger.Error(err)
-		return err
-	}
-
-	// Sign and store the PCR state
-	err = tpm.ca.ImportAttestationPCRs(caAttrs, quote.PCRs)
-	if err != nil {
-		tpm.logger.Error(err)
-		return err
-	}
-
-	return nil
-}
-
-// Encodes a quote to binary using the encoding/gob package
-func (tpm *TPM2) EncodeQuote(quote Quote) ([]byte, error) {
-	buf := new(bytes.Buffer)
-	encoder := gob.NewEncoder(buf)
-	if err := encoder.Encode(quote); err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-// Decodes a quote from binary using the encoding/gob package
-func (tpm *TPM2) DecodeQuote(quote []byte) (Quote, error) {
-	var q Quote
-	buf := bytes.NewBuffer(quote)
-	decoder := gob.NewDecoder(buf)
-	if err := decoder.Decode(&q); err != nil {
-		return Quote{}, err
-	}
-	return q, nil
-}
-
-// Encodes a PCR bank slice to binary using the encoding/gob package
-func (tpm *TPM2) EncodePCRs(pcrBanks []PCRBank) ([]byte, error) {
-	buf := new(bytes.Buffer)
-	encoder := gob.NewEncoder(buf)
-	if err := encoder.Encode(pcrBanks); err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-// Decodes a PCR bank slice from binary using the encoding/gob package
-func (tpm *TPM2) DecodePCRs(pcrBanks []byte) ([]PCRBank, error) {
-	banks := make([]PCRBank, 0)
-	buf := bytes.NewBuffer(pcrBanks)
-	decoder := gob.NewDecoder(buf)
-	if err := decoder.Decode(&banks); err != nil {
-		return nil, err
-	}
-	return banks, nil
-}
-
-// Decrypts an encrypted blob using the requested Attestation Key (AK)
-// pointed to by akHandle.
-func (tpm *TPM2) RSADecrypt(
-	akHandle tpm2.TPMHandle,
-	blob []byte) ([]byte, error) {
-
-	response, err := tpm2.RSADecrypt{
-		KeyHandle:  akHandle,
-		CipherText: tpm2.TPM2BPublicKeyRSA{Buffer: blob},
-		InScheme: tpm2.TPMTRSADecrypt{
-			Scheme: tpm2.TPMAlgOAEP,
-			Details: tpm2.NewTPMUAsymScheme(
-				tpm2.TPMAlgOAEP,
-				&tpm2.TPMSEncSchemeOAEP{
-					HashAlg: tpm2.TPMAlgSHA256,
-				},
-			),
-		},
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-	return response.Message.Buffer, nil
-}
-
-// Encrypts the message using the requested Attestation Key (AK)
-// pointed to by akHandle.
-func (tpm *TPM2) RSAEncrypt(
-	akHandle tpm2.TPMHandle,
-	message []byte) ([]byte, error) {
-
-	response, err := tpm2.RSAEncrypt{
-		KeyHandle: akHandle,
-		Message:   tpm2.TPM2BPublicKeyRSA{Buffer: message},
-		InScheme: tpm2.TPMTRSADecrypt{
-			Scheme: tpm2.TPMAlgOAEP,
-			Details: tpm2.NewTPMUAsymScheme(
-				tpm2.TPMAlgOAEP,
-				&tpm2.TPMSEncSchemeOAEP{
-					HashAlg: tpm2.TPMAlgSHA256,
-				},
-			),
-		},
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-	return response.OutData.Buffer, nil
-}
-
-// Creates a new Attestment Key
-func (tpm *TPM2) Seal(
-	derived Key, sealAuth, sealName, sealData []byte) (*tpm2.CreateResponse, error) {
-
-	tpm.logger.Debugf("tpm: sealing %s with parent key handle 0x%x", sealName, derived.Handle)
-	if tpm.debugSecrets {
-
-		tpm.logger.Debugf("tpm: SRK auth: %s", derived.Auth)
-
-		tpm.logger.Debugf("tpm: seal secret (raw): %+v", sealAuth)
-		tpm.logger.Debugf("tpm: seal secret (hex): 0x%x", tpm.Encode(sealAuth))
-		tpm.logger.Debugf("tpm: seal secret (string): %s", string(sealAuth))
-
-		tpm.logger.Debugf("tpm: seal data (raw): %+v", sealData)
-		tpm.logger.Debugf("tpm: seal data (hex): 0x%x", tpm.Encode(sealData))
-		tpm.logger.Debugf("tpm: seal data (string): %s", string(sealData))
-	}
-
-	tpm.logger.Debugf("tpm: creating seal session: %+v", sealAuth)
-	session, closer, err := tpm.HMACAuthSessionWithKey(derived, derived.Auth)
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-	defer closer()
-
-	createBlobCMD := tpm2.Create{
-		ParentHandle: tpm2.AuthHandle{
-			Handle: derived.Handle,
-			Name:   derived.Name,
-			Auth:   session,
-		},
-		InPublic: tpm2.New2B(tpm2.TPMTPublic{
-			Type:    tpm2.TPMAlgKeyedHash,
-			NameAlg: tpm2.TPMAlgSHA256,
-			ObjectAttributes: tpm2.TPMAObject{
-				FixedTPM:     true,
-				FixedParent:  true,
-				UserWithAuth: true,
-				NoDA:         true,
+		signResponse, err := tpm2.Sign{
+			KeyHandle: tpm2.AuthHandle{
+				Handle: keyAttrs.TPMAttributes.Handle,
+				Name:   keyAttrs.TPMAttributes.Name,
+				Auth:   tpm2.PasswordAuth(akAuth),
 			},
-		}),
-		InSensitive: tpm2.TPM2BSensitiveCreate{
-			Sensitive: &tpm2.TPMSSensitiveCreate{
-				UserAuth: tpm2.TPM2BAuth{
-					Buffer: sealAuth,
-				},
-				Data: tpm2.NewTPMUSensitiveCreate(
-					&tpm2.TPM2BSensitiveData{
-						Buffer: sealData,
+			Digest: tpm2.TPM2BDigest{
+				Buffer: digest,
+			},
+			InScheme: tpm2.TPMTSigScheme{
+				Scheme: rsaDetails.Scheme.Scheme,
+				Details: tpm2.NewTPMUSigScheme(
+					rsaDetails.Scheme.Scheme, &tpm2.TPMSSchemeHash{
+						HashAlg: keyAttrs.TPMAttributes.HashAlg,
 					}),
 			},
-		},
-	}
-	createBlobResponse, err := createBlobCMD.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-
-	tpm.logger.Debugf("tpm: sealed %s to TPM", string(sealName))
-
-	return createBlobResponse, nil
-}
-
-// Unseals data stored in the TPM under the Storage Root Key (SRK)
-func (tpm *TPM2) Unseal(
-	srk Key,
-	createResponse *tpm2.CreateResponse,
-	sealName, sealAuth []byte) ([]byte, error) {
-
-	tpm.logger.Debugf("tpm: unsealing %s", string(sealName))
-	if tpm.debugSecrets {
-		tpm.logger.Debugf("tpm: seal secret (raw): %+v", sealAuth)
-		tpm.logger.Debugf("tpm: seal secret (hex): 0x%x", tpm.Encode(sealAuth))
-		tpm.logger.Debugf("tpm: seal secret (string): %s", string(sealAuth))
-	}
-
-	// Create authenticated session using SRK
-	var session tpm2.Session
-	var closer func() error
-	session, closer, err := tpm.HMACAuthSessionWithKey(srk, srk.Auth)
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-	defer closer()
-
-	// Load the sealed blob
-	loadBlobCmd := tpm2.Load{
-		ParentHandle: tpm2.AuthHandle{
-			Handle: srk.Handle,
-			Name:   srk.Name,
-			Auth:   session,
-		},
-		InPrivate: createResponse.OutPrivate,
-		InPublic:  createResponse.OutPublic,
-	}
-	loadResponse, err := loadBlobCmd.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-	defer tpm.Flush(loadResponse.ObjectHandle)
-
-	// Create a new session using the Seal auth
-	if tpm.config.EncryptSession {
-		session, closer, err = tpm.HMACAuthSessionWithKey(srk, sealAuth)
-	} else {
-		session, closer, err = tpm.HMACAuthSession(sealAuth)
-	}
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-	defer closer()
-
-	// Unseal the blob
-	unsealResponse, err := tpm2.Unseal{
-		ItemHandle: tpm2.AuthHandle{
-			Handle: loadResponse.ObjectHandle,
-			Name:   loadResponse.Name,
-			Auth:   session,
-		},
-	}.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-
-	tpm.logger.Debugf("tpm: successfully unsealed %s", string(sealName))
-
-	if tpm.debugSecrets {
-		tpm.logger.Debugf("tpm: unsealed (raw) %+v", unsealResponse.OutData.Buffer)
-		tpm.logger.Debugf("tpm: unsealed (hex) 0x%x", tpm.Encode(unsealResponse.OutData.Buffer))
-		tpm.logger.Debugf("tpm: unsealed (string) %s", string(unsealResponse.OutData.Buffer))
-	}
-
-	return unsealResponse.OutData.Buffer, nil
-}
-
-// Creates a "one-time", unauthenticated, NON-encrypted HMAC session to the TPM
-func (tpm *TPM2) HMACSession() tpm2.Session {
-	return tpm2.HMAC(
-		tpm2.TPMAlgSHA256,
-		16,
-		tpm2.AESEncryption(128, tpm2.EncryptInOut))
-}
-
-// Creates a new HMAC session with the TPM
-func (tpm *TPM2) HMACAuthSession(srkAuth []byte) (s tpm2.Session, close func() error, err error) {
-	return tpm2.HMACSession(
-		tpm.transport,
-		tpm2.TPMAlgSHA256,
-		16,
-		// Auth uses the session to prove knowledge of the object's auth value.
-		tpm2.Auth(srkAuth),
-		tpm2.AESEncryption(
-			128,
-			tpm2.EncryptOut))
-}
-
-// Creates a new authenticated, salted HMAC session. If session encryption is enabled, the
-// session is salted using the derived tpm2.TPMTPublic key.
-func (tpm *TPM2) HMACAuthSessionWithKey(derived Key, auth []byte) (s tpm2.Session, close func() error, err error) {
-	if tpm.config.EncryptSession {
-		tpm.logger.Debugf("tpm: created encrypted HMAC session using key handle: 0x%x", derived.Handle)
-		return tpm2.HMACSession(
-			tpm.transport,
-			tpm2.TPMAlgSHA256,
-			16,
-			tpm2.Auth(auth),
-			tpm2.AESEncryption(
-				128,
-				tpm2.EncryptInOut),
-			tpm2.Salted(derived.Handle, derived.Public))
-	}
-	return tpm2.HMACSession(
-		tpm.transport,
-		tpm2.TPMAlgSHA256,
-		16,
-		tpm2.Auth(auth),
-		tpm2.AESEncryption(
-			128,
-			tpm2.EncryptInOut))
-}
-
-// Creates an unauthenticated, encrypted HMAC session with the TPM. Bus communication
-// between the CPU <-> TPM is secured using a salted session from the derived key.
-func (tpm *TPM2) SaltedHMACSession(derived Key) tpm2.Session {
-	return tpm2.HMAC(
-		tpm2.TPMAlgSHA256,
-		16,
-		// AESEncryption uses the session to encrypt the first parameter sent to/from
-		// the TPM.
-		// Note that only commands whose first command/response parameter is a 2B can
-		// support session encryption.
-		// EncryptIn specifies a decrypt session.
-		// EncryptOut specifies an encrypt session.
-		// EncryptInOut specifies a decrypt+encrypt session
-		tpm2.AESEncryption(
-			128,
-			tpm2.EncryptInOut),
-		// Salted specifies that this session's session key should depend on an
-		// encrypted seed value using the given public key.
-		// 'handle' must refer to a loaded RSA or ECC key.
-		tpm2.Salted(derived.Handle, derived.Public))
-}
-
-// Returns a random reader that reads random bytes to produce entropy during
-// private key operations. If UseEntropy is disabled in the config, the default
-// runtime random reader is used instead of the TPM. If session encryption is
-// enabled, communication bus between CPU <-> TPM bus will be encrypted using
-// a salted HMAC session.
-func (tpm *TPM2) randomReader() (io.Reader, error) {
-
-	// Use golang runtime random entropy if
-	// TPM entropy isn't enabled
-	if !tpm.config.UseEntropy {
-		tpm.logger.Info("tpm: entropy source: runtime")
-		return rand.Reader, nil
-	}
-
-	tpm.logger.Info("tpm: entropy source: TPM")
-
-	// Create a new TPM transport and random reader
-	reader := NewRandomReader(tpm.transport)
-	if tpm.config.EncryptSession {
-
-		tpm.logger.Info("tpm: encrypting TPM <-> CPU entropy communication")
-
-		response, err := tpm2.CreatePrimary{
-			PrimaryHandle: tpm2.TPMRHEndorsement,
-			InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
+			Validation: tpm2.TPMTTKHashCheck{
+				Hierarchy: tpm2.TPMRHEndorsement,
+				Digest: tpm2.TPM2BDigest{
+					Buffer: validationDigest,
+				},
+				Tag: tpm2.TPMSTHashCheck,
+			},
 		}.Execute(tpm.transport)
-		defer tpm.Flush(response.ObjectHandle)
-
-		ekPub, err := response.OutPublic.Contents()
 		if err != nil {
 			tpm.logger.Error(err)
 			return nil, err
 		}
-		reader.EncryptionHandle = response.ObjectHandle
-		reader.EncryptionPub = ekPub
-	}
-	return reader, nil
-}
 
-// Generates a random 32 byte fixed length []byte
-func (tpm *TPM2) Random() ([]byte, error) {
-
-	var err error
-	var n int
-	fixedLength := 32
-	bytes := make([]byte, fixedLength)
-
-	// Read fixed length bytes
-	n, err = tpm.RandomReader().Read(bytes)
-	if n != fixedLength {
-		return nil, ErrUnexpectedRandomBytes
-	}
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-
-	tpm.logger.Debugf("tpm: read %d random bytes", n)
-
-	return bytes, nil
-}
-
-// Imports a local EK certificat in raw TCG Software Stack (TSS) form
-// from a local disk.
-func (tpm *TPM2) ImportTSSFile(
-	attrs keystore.KeyAttributes,
-	verify bool) (*x509.Certificate, error) {
-
-	var ekCert *x509.Certificate
-
-	tpm.logger.Infof(
-		"Loading Endorsement Key (EK) Certificate from local disk using CN: %s",
-		attrs.CN)
-	keystore.DebugKeyAttributes(tpm.logger, attrs)
-
-	bytes, err := os.ReadFile(attrs.CN)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, ErrEndorsementCertNotFound
-		}
-		return nil, err
-	}
-
-	// Try parseing as ASN.1 DER form
-	ekCert, err = x509.ParseCertificate(bytes)
-	if err != nil {
-
-		// Failed, try parsing PEM form
-		ekCert, err = ca.DecodePEM(bytes)
-		if err != nil {
-			tpm.logger.Error(err)
-			return nil, err
-		}
-	}
-
-	return tpm.ImportEKCert(attrs, ekCert, verify)
-}
-
-// keystore.KeyAttributes, []byte, bool, []byte) (*x509.Certificate, error)keystore.KeyAttributes, []byte, bool, []byte) (*x509.Certificate, error)keystore.KeyAttributes, []byte, bool, []byte) (*x509.Certificate, error)
-
-// Imports a local or remote attestor EK certificate in raw ASN.1 DER form
-func (tpm *TPM2) ImportDER(
-	attrs keystore.KeyAttributes,
-	ekDER []byte,
-	verify bool) (*x509.Certificate, error) {
-
-	tpm.logger.Info("Importing Endorsement Key (EK) Certificate in ASN.1 DER form")
-
-	if tpm.debugSecrets {
-		tpm.logger.Debugf("tpm/ImportDER: CA Password: %s", attrs.AuthPassword)
-	}
-
-	ekCert, err := x509.ParseCertificate(ekDER)
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-	return tpm.ImportEKCert(attrs, ekCert, verify)
-}
-
-// Imports a local or remote attestor EK certificate in PEM form
-func (tpm *TPM2) ImportPEM(
-	attrs keystore.KeyAttributes,
-	ekPEM []byte,
-	verify bool) (*x509.Certificate, error) {
-
-	tpm.logger.Info("Importing Endorsement Key (EK) Certificate in PEM form")
-
-	var block *pem.Block
-	if block, _ = pem.Decode(ekPEM); block == nil {
-		return nil, ca.ErrInvalidEncodingPEM
-	}
-	ekCert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-	return tpm.ImportEKCert(attrs, ekCert, verify)
-}
-
-// Imports a local or remote attestor x509 EK certificate
-func (tpm *TPM2) ImportEKCert(
-	attrs keystore.KeyAttributes,
-	ekCert *x509.Certificate,
-	verify bool) (*x509.Certificate, error) {
-
-	tpm.logger.Infof("Importing %s x509 Endorsement Key (EK) Certificate", attrs.CN)
-	keystore.DebugKeyAttributes(tpm.logger, attrs)
-
-	if tpm.debugSecrets {
-		tpm.logger.Debugf("tpm/ImportEKCert: CA Password: %s", attrs.AuthPassword)
-	}
-
-	// Convert the ASN.1 DER encoded certificate to PEM form
-	ekCertPEM, err := ca.EncodePEM(ekCert.Raw)
-	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
-	}
-
-	// Unhandled critical extensions cause Verify to fail
-	for _, uce := range ekCert.UnhandledCriticalExtensions {
-		tpm.logger.Warningf("tpm: EK certificate contains unhandled critical extention: %s",
-			uce.String())
-	}
-	ekCert.UnhandledCriticalExtensions = nil
-
-	// Assign the global ekCertBlobName to a local variable so it can be
-	// passed as a reference to Verify
-	ekCertBlobName := ekCertBlobName
-
-	// Verify the certificate using the Certificate Authority Root & Intermediate
-	// Certifiates along with all imported Trusted Root and Intermediate certificates.
-	if verify {
-		_, err := tpm.ca.Verify(ekCert, &ekCertBlobName)
-		if err != nil {
-			// The above Verify call should have already auto-imported
-			// the issuing CA if auto-import is enabled for the CA. Now
-			// check the TPM auto-import option to see if it overrides
-			// the global CA setting to allow auto-importing EK platform
-			// certs.
-			if _, ok := err.(x509.UnknownAuthorityError); ok {
-				// Auto-import the EK platform certificates
-				// if auto-import-ek-certs enabled in the TPM
-				// config section. This overrides the global CA
-				// auto-import setting.
-				if tpm.config.AutoImportEKCerts {
-					tpm.logger.Info("Importing Endorsement Key (EK) platform certificates")
-					if err := tpm.ca.ImportIssuingCAs(ekCert, &ekCertBlobName, ekCert); err != nil {
-						return nil, err
-					}
-				}
-			} else if err != ca.ErrTrustExists {
+		var rsaSig *tpm2.TPMSSignatureRSA
+		if keystore.IsRSAPSS(keyAttrs.SignatureAlgorithm) {
+			rsaSig, err = signResponse.Signature.Signature.RSAPSS()
+			if err != nil {
 				return nil, err
 			}
+		} else {
+			rsaSig, err = signResponse.Signature.Signature.RSASSA()
+			if err != nil {
+				return nil, err
+			}
+
+			// loadRsp, err := tpm2.LoadExternal{
+			// 	Hierarchy: tpm2.TPMRHEndorsement,
+			// 	// InPublic:  tpm2.BytesAs2B[tpm2.TPMTPublic](tcgContent.AttestPub),
+			// 	// InPublic: akAttrs.TPMAttributes.BPublic,
+			// 	InPublic: tpm2.New2B(keyAttrs.TPMAttributes.Public),
+			// 	// InPublic: tpm2.New2B(*iakPub),
+			// }.Execute(tpm.transport)
+			// if err != nil {
+			// 	return nil, err
+			// }
+			// defer tpm.Flush(loadRsp.ObjectHandle)
+
+			// _, err = tpm2.VerifySignature{
+			// 	KeyHandle: loadRsp.ObjectHandle,
+			// 	Digest: tpm2.TPM2BDigest{
+			// 		Buffer: digest,
+			// 	},
+			// 	Signature: tpm2.TPMTSignature{
+			// 		SigAlg: tpm2.TPMAlgRSASSA,
+			// 		Signature: tpm2.NewTPMUSignature[*tpm2.TPMSSignatureRSA](
+			// 			tpm2.TPMAlgRSASSA,
+			// 			&tpm2.TPMSSignatureRSA{
+			// 				Hash: keyAttrs.TPMAttributes.HashAlg,
+			// 				Sig: tpm2.TPM2BPublicKeyRSA{
+			// 					Buffer: rsaSig.Sig.Buffer,
+			// 				},
+			// 			},
+			// 		),
+			// 	},
+			// }.Execute(tpm.transport)
+			// if err != nil {
+			// 	return nil, err
+			// }
+
 		}
-		// All EK platform certs are imported into the Certificate
-		// Authority trust store, now verify the EK certificate.
-		valid, err := tpm.ca.Verify(ekCert, &ekCertBlobName)
+		hashSig = rsaSig.Sig.Buffer
+
+	} else if keyAttrs.TPMAttributes.Public.Type == tpm2.TPMAlgECC {
+
+		signResponse, err := tpm2.Sign{
+			KeyHandle: tpm2.AuthHandle{
+				Handle: keyAttrs.TPMAttributes.Handle,
+				Name:   keyAttrs.TPMAttributes.Name,
+				Auth:   tpm2.PasswordAuth(akAuth),
+			},
+			Digest: tpm2.TPM2BDigest{
+				Buffer: digest,
+			},
+			InScheme: tpm2.TPMTSigScheme{
+				Scheme: tpm2.TPMAlgECDSA,
+				Details: tpm2.NewTPMUSigScheme(
+					tpm2.TPMAlgECDSA,
+					&tpm2.TPMSSchemeHash{
+						HashAlg: keyAttrs.TPMAttributes.HashAlg,
+					},
+				),
+			},
+			Validation: tpm2.TPMTTKHashCheck{
+				Hierarchy: tpm2.TPMRHEndorsement,
+				Digest: tpm2.TPM2BDigest{
+					Buffer: validationDigest,
+				},
+				Tag: tpm2.TPMSTHashCheck,
+			},
+		}.Execute(tpm.Transport())
 		if err != nil {
-			tpm.logger.Error(err)
 			return nil, err
 		}
-		if !valid {
-			return nil, ca.ErrCertInvalid
+
+		sig, err := signResponse.Signature.Signature.ECDSA()
+		if err != nil {
+			return nil, err
 		}
-		tpm.logger.Debugf("tpm: successfully verified endorsement key certificate: %s", attrs.CN)
+
+		r := big.NewInt(0).SetBytes(sig.SignatureR.Buffer)
+		s := big.NewInt(0).SetBytes(sig.SignatureS.Buffer)
+		asn1Struct := struct{ R, S *big.Int }{r, s}
+
+		asn1Sig, err := asn1.Marshal(asn1Struct)
+		if err != nil {
+			return nil, err
+		}
+		hashSig = asn1Sig
 	}
 
-	tpm.logger.Debug("TPM Endorsement Key x509 Certificate PEM:")
-	tpm.logger.Debugf("\n%s", string(ekCertPEM))
-
-	// Import the key into the CA
-	if err := tpm.ca.ImportEndorsementKeyCertificate(attrs, ekCertPEM); err != nil {
-		return nil, err
-	}
-
-	tpm.logger.Info("Endorsement Key (EK) successfully imported to Certificate Authority")
-	return ekCert, nil
+	return hashSig, nil
 }
 
 // Retrieves the raw event log from /sys/kernel/security/tpm*/binary_bios_measurements
@@ -1928,11 +1070,29 @@ func (tpm *TPM2) EventLog() ([]byte, error) {
 	return bytes, nil
 }
 
-// Reads all Platform Configuration Register (PCR) values across all
-// supported banks. This method supports SHA1, SHA256, SHA386, and SHA512.
-// If one of the banks are not supported, the the function stops processing
-// and returns the banks that were successfully parsed (without an error).
+// Returns the name and public area for the provided handle
+func (tpm *TPM2) ReadHandle(handle tpm2.TPMHandle) (tpm2.TPM2BName, tpm2.TPMTPublic, error) {
+	ek, err := tpm2.ReadPublic{
+		ObjectHandle: handle,
+	}.Execute(tpm.transport)
+	if err != nil {
+		return tpm2.TPM2BName{}, tpm2.TPMTPublic{}, err
+	}
+	pub, err := ek.OutPublic.Contents()
+	if err != nil {
+		return tpm2.TPM2BName{}, tpm2.TPMTPublic{}, err
+	}
+	return ek.Name, *pub, nil
+}
+
+// Reads Platform Configuration Register (PCR) values across all
+// supported banks with the corresponding PCR ID. This method supports SHA1,
+// SHA256, SHA386, and SHA512. If one of the banks are not supported, the
+// function stops processing and returns the banks that were successfully
+// parsed without an error.
 func (tpm *TPM2) ReadPCRs(pcrList []uint) ([]PCRBank, error) {
+
+	tpm.logger.Debugf("tpm/ReadPCRs: Reading PCR values across all supported banks")
 
 	maxPCR := uint(23)
 	banks := make([]PCRBank, 0)
@@ -1945,6 +1105,9 @@ func (tpm *TPM2) ReadPCRs(pcrList []uint) ([]PCRBank, error) {
 
 Exit:
 	for name, algo := range supportedBanks {
+
+		tpm.logger.Debug(name)
+
 		bank := PCRBank{
 			Algorithm: name,
 			PCRs:      make([]PCR, 0),
@@ -1958,7 +1121,7 @@ Exit:
 					PCRSelections: []tpm2.TPMSPCRSelection{
 						{
 							Hash:      algo,
-							PCRSelect: PCClientCompatible.PCRs(pcr),
+							PCRSelect: tpm2.PCClientCompatible.PCRs(pcr),
 						},
 					},
 				},
@@ -1978,104 +1141,16 @@ Exit:
 				return banks, nil
 			}
 			buf := response.PCRValues.Digests[0].Buffer
-			encoded := []byte(tpm.Encode(buf))
+			encoded := []byte(Encode(buf))
 			bank.PCRs = append(bank.PCRs, PCR{
 				ID:    int32(i),
 				Value: encoded,
 			})
-			tpm.logger.Debugf("tpm/ReadPCRs: bank %s %d: 0x%s", name, pcr, encoded)
+			tpm.logger.Debugf("  %d: 0x%s", pcr, encoded)
 		}
 		banks = append(banks, bank)
 	}
 	return banks, nil
-}
-
-// Returns the supported TPM capabilities
-func (tpm *TPM2) Capabilities() (tpm20Info, error) {
-
-	var vendorInfo string
-
-	// The Vendor String is split up into 4 sections of 4 bytes,
-	// for a maximum length of 16 octets of ASCII text. We iterate
-	// through the 4 indexes to get all 16 bytes & construct vendorInfo.
-	// See: TPM_PT_VENDOR_STRING_1 in TPM 2.0 Structures reference.
-	// Thanks, Google: https://github.com/google/go-attestation/blob/master/attest/tpm.go#L173
-	for i := 0; i < 4; i++ {
-
-		capabilityCMD := tpm2.GetCapability{
-			Capability:    tpm2.TPMCapTPMProperties,
-			Property:      tpmPtVendorString + uint32(i),
-			PropertyCount: 1}
-
-		response, err := capabilityCMD.Execute(tpm.transport)
-		if err != nil {
-			tpm.logger.Error(err)
-			return tpm20Info{}, err
-		}
-
-		tpm.logger.Debugf("%+v", response)
-
-		props, err := response.CapabilityData.Data.TPMProperties()
-		if err != nil {
-			tpm.logger.Error(err)
-			return tpm20Info{}, nil
-		}
-
-		// Reconstruct the 4 ASCII octets from the uint32 value.
-		b := make([]byte, 4)
-		binary.BigEndian.PutUint32(b, props.TPMProperty[0].Value)
-		vendorInfo += string(b)
-	}
-
-	// Manufacturer
-	manufacturerCMD := tpm2.GetCapability{
-		Capability:    tpm2.TPMCapTPMProperties,
-		Property:      tpmPtManufacturer,
-		PropertyCount: 1}
-
-	response, err := manufacturerCMD.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return tpm20Info{}, err
-	}
-
-	manufacturer, err := response.CapabilityData.Data.TPMProperties()
-	if err != nil {
-		tpm.logger.Error(err)
-		return tpm20Info{}, err
-	}
-
-	// Firmware
-	firmwareCMD := tpm2.GetCapability{
-		Capability:    tpm2.TPMCapTPMProperties,
-		Property:      tpmPtFwVersion1,
-		PropertyCount: 1}
-
-	response, err = firmwareCMD.Execute(tpm.transport)
-	if err != nil {
-		tpm.logger.Error(err)
-		return tpm20Info{}, err
-	}
-
-	firmware, err := response.CapabilityData.Data.TPMProperties()
-	if err != nil {
-		tpm.logger.Error(err)
-		return tpm20Info{}, err
-	}
-
-	var vendor TCGVendorID = TCGVendorID(manufacturer.TPMProperty[0].Value)
-	fw := firmware.TPMProperty[0].Value
-
-	tpm.logger.Debugf("vendorInfo: %+v", vendorInfo)
-	tpm.logger.Debugf("response: %+v", response)
-	tpm.logger.Debugf("data: %+v", response.CapabilityData.Data)
-
-	return tpm20Info{
-		vendor:       strings.Trim(vendorInfo, "\x00"),
-		manufacturer: vendor,
-		fwMajor:      int((fw & 0xffff0000) >> 16),
-		fwMinor:      int(fw & 0x0000ffff),
-	}, nil
 }
 
 // Flushes a handle from TPM memory
@@ -2098,9 +1173,36 @@ func intelEKURL(ekPub *rsa.PublicKey) string {
 }
 
 // Downloads the EK certificate from the manufactuers EK cert service
-func (tpm *TPM2) downloadEKCertFromManufacturer() ([]byte, error) {
+func (tpm *TPM2) downloadEKCertFromManufacturer(ekCertIndex tpm2.TPMHandle) ([]byte, error) {
 
-	url := intelEKURL(tpm.ekRSAPubKey)
+	attrs, err := tpm.TPMAttributes(tpm2.TPMHandle(ekIndex))
+	if err != nil {
+		return nil, err
+	}
+
+	ekPub := attrs.TPMAttributes.Public
+
+	if ekPub.Type != tpm2.TPMAlgRSA {
+		return nil, errors.New("ECC EK certificates unsupported at this time")
+	}
+
+	rsaDetail, err := ekPub.Parameters.RSADetail()
+	if err != nil {
+		tpm.logger.Error(err)
+		return nil, err
+	}
+	rsaUnique, err := ekPub.Unique.RSA()
+	if err != nil {
+		tpm.logger.Error(err)
+		return nil, err
+	}
+	rsaPub, err := tpm2.RSAPub(rsaDetail, rsaUnique)
+	if err != nil {
+		tpm.logger.Error(err)
+		return nil, err
+	}
+
+	url := intelEKURL(rsaPub)
 	tpm.logger.Infof("tpm: downloading EK certificate from %s", url)
 
 	resp, err := http.Get(url)
@@ -2119,7 +1221,7 @@ func (tpm *TPM2) downloadEKCertFromManufacturer() ([]byte, error) {
 		tpm.logger.Errorf("tpm: error downloading EK certificate: httpm.StatusCode: %d, body: %s",
 			resp.StatusCode, body)
 		tpm.logger.Error(err)
-		return nil, err
+		return nil, ErrEndorsementCertNotFound
 	}
 
 	buf := new(bytes.Buffer)
@@ -2131,225 +1233,7 @@ func (tpm *TPM2) downloadEKCertFromManufacturer() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Extracts a RSA Public Key from a TPM CreatePrimary response
-func (tpm *TPM2) parsePrimaryRSA(
-	response *tpm2.CreatePrimaryResponse) (Key, error) {
-
-	ekPub, err := response.OutPublic.Contents()
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, err
-	}
-	key, err := tpm.parseRSA(ekPub, nil)
-	if err != nil {
-		return key, err
-	}
-	key.Handle = response.ObjectHandle
-	key.Name = response.Name
-	key.BPublicBytes = response.OutPublic.Bytes()
-	return key, nil
-}
-
-// Extracts an ECC Public Key from a TPM CreatePrimary response
-func (tpm *TPM2) parsePrimaryECC(
-	response *tpm2.CreatePrimaryResponse) (Key, error) {
-
-	ekPub, err := response.OutPublic.Contents()
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, err
-	}
-	key, err := tpm.parseECC(ekPub)
-	if err != nil {
-		return key, err
-	}
-	key.Handle = response.ObjectHandle
-	key.Name = response.Name
-	key.BPublicBytes = response.OutPublic.Bytes()
-	return key, nil
-}
-
-// Extracts the ECC public key from the public area of a TPM response
-func (tpm *TPM2) parseECC(pub *tpm2.TPMTPublic) (Key, error) {
-	eccUnique, err := pub.Unique.ECC()
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, err
-	}
-	eccPub, err := tpm2.ECDHPubKey(ecdh.P256(), &tpm2.TPMSECCPoint{
-		X: eccUnique.X,
-		Y: eccUnique.Y,
-	})
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, err
-	}
-	eccPEM, err := store.EncodePubKey(eccPub)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, err
-	}
-	return Key{
-		Public:       *pub,
-		ECCPubKey:    eccPub,
-		PublicKeyPEM: eccPEM,
-	}, nil
-}
-
-// Extracts the RSA public key from the public area of a TPM response
-func (tpm *TPM2) parseRSA(pub *tpm2.TPMTPublic, rsaPrivBlob []byte) (Key, error) {
-	rsaDetail, err := pub.Parameters.RSADetail()
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, err
-	}
-	rsaUnique, err := pub.Unique.RSA()
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, err
-	}
-	rsaPub, err := tpm2.RSAPub(rsaDetail, rsaUnique)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, err
-	}
-	rsaDER, err := store.EncodePubKey(rsaPub)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, err
-	}
-	rsaPEM, err := ca.EncodePEM(rsaDER)
-	if err != nil {
-		tpm.logger.Error(err)
-		return Key{}, err
-	}
-	key := Key{
-		Public:         *pub,
-		RSAPubKey:      rsaPub,
-		PublicKeyBytes: rsaDER,
-		PublicKeyPEM:   rsaPEM,
-	}
-	if rsaPrivBlob != nil {
-		// Private key is encrypted: TCG Part 3 (12.1.1)
-		// https://trustedcomputinggroup.org/wp-content/uploads/TPM-Rev-2.0-Part-3-Commands-01.38.pdf
-		//
-		// rsaPriv, err := tpm.ca.ParsePrivateKey(rsaPrivBlob)
-		// if err != nil {
-		// 	tpm.logger.Error(err)
-		// 	return Key{}, err
-		// }
-		// rsaPrivPEM, err := tpm.ca.EncodePrivKeyPEM(rsaPrivBlob)
-		// if err != nil {
-		// 	tpm.logger.Error(err)
-		// 	return Key{}, err
-		// }
-		//key.RSAPrivKey = rsaPriv
-		//key.PrivateKeyPEM = rsaPrivPEM
-		key.PrivateKeyBytes = rsaPrivBlob
-	}
-	return key, nil
-}
-
-// Returns the Endorsement Key (EK) policy secret
-func (tpm *TPM2) ekPolicy(t transport.TPM, handle tpm2.TPMISHPolicy, nonceTPM tpm2.TPM2BNonce) error {
-	cmd := tpm2.PolicySecret{
-		AuthHandle:    tpm2.TPMRHEndorsement,
-		PolicySession: handle,
-		NonceTPM:      nonceTPM,
-	}
-	_, err := cmd.Execute(t)
-	if err != nil {
-		tpm.logger.Error(err)
-		return err
-	}
-	return err
-}
-
-// Encodes bytes to hexidecimal form
-func (tpm *TPM2) Encode(bytes []byte) string {
-	return hex.EncodeToString(bytes)
-}
-
-// Decodes hexidecimal form to byte array
-func (tpm *TPM2) Decode(s string) ([]byte, error) {
-	return hex.DecodeString(s)
-}
-
-func (tpm *TPM2) DebugPrimaryKey(key Key) {
-	tpm.logger.Debugf("--- Primary / Hierarchy Key ---")
-	tpm.logger.Debugf("Handle: 0x%x", key.Handle)
-	tpm.logger.Debugf("Name: 0x%x", key.Name.Buffer)
-	tpm.logger.Debugf("Public: %+v", key.Public)
-	tpm.logger.Debugf("Auth: %s", key.Auth)
-
-	tpm.logger.Debug("RSA Public Key:")
-	tpm.logger.Debugf("  Modulus: %d", key.RSAPubKey.N)
-	tpm.logger.Debugf("  Exponent: %d", key.RSAPubKey.E)
-}
-
-func (tpm *TPM2) DebugAttestationKey(ak DerivedKey) {
-	tpm.DebugPrimaryKey(ak.Key)
-	tpm.logger.Debugf("\t--- Attestation Key (AK) ---")
-	tpm.logger.Debugf("\tCreationHash: 0x%x", tpm.Encode(ak.CreationHash))
-	tpm.logger.Debugf("\tCreationData: 0x%x", tpm.Encode(ak.CreationData))
-	tpm.logger.Debugf("\tCreationTicket: 0x%x", tpm.Encode(ak.CreationTicket))
-	tpm.logger.Debugf("\tPrivateKeyPEM: %s", ak.PrivateKeyPEM)
-	tpm.logger.Debugf("\tPublicKeyPEM: %x", ak.PublicKeyPEM)
-}
-
 func (tpm *TPM2) tpmDeviceName() string {
 	filename := filepath.Base(tpm.config.Device)
 	return strings.ReplaceAll(filename, "tpmrm", "tpm")
 }
-
-// Returns a parsed TPM Event Log
-// func (tpm *TPM2) MeasurementLog(logpath []byte) (*EventLog, error) {
-// 	if logpath == nil {
-// 		measurementLog, err := os.ReadFile("/sys/kernel/security/tpm0/binary_bios_measurements")
-// 		if err != nil {
-// 			tpm.logger.Error("tpm: error reading event log: %s", err)
-// 			return nil, err
-// 		}
-// 		tpm.logger.Infof("tpm: read %d bytes from event log", len(measurementLog))
-// 		return ParseEventLog(measurementLog)
-// 	}
-// 	tpm.logger.Infof("tpm: parsing event log: %+v", logpath)
-// 	return ParseEventLog(logpath)
-// }
-
-// // Imports an Attestation Key x509 certificate to the CA blob store
-// func (tpm *TPM2) ImportAKCert(service string, akDER []byte) error {
-// 	// Build cert path
-// 	akCertPathDER := fmt.Sprintf(
-// 		"%s/%s%s",
-// 		service, akCertBlobName, ca.FSEXT_DER)
-// 	blobKeyDER := tpm.ca.TPMBlobKey(tpm.domain, akCertPathDER)
-
-// 	// Create signing options - store the cert, digest and checksum
-// 	sigOpts, err := ca.NewSigningOpts(tpm.ca.Hash(), akDER)
-// 	sigOpts.BlobKey = &blobKeyDER
-// 	sigOpts.BlobData = akDER
-// 	sigOpts.StoreSignature = true
-
-// 	// Sign the DER digest
-// 	if _, err = tpm.ca.Sign(tpm.random, sigOpts.Digest(), sigOpts); err != nil {
-// 		return err
-// 	}
-
-// 	// Encode the AK DER cert to PEM
-// 	akPEM, err := tpm.ca.EncodePEM(akDER)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	// Save the PEM cert
-// 	akCertPathPEM := fmt.Sprintf(
-// 		"%s/%s.%s",
-// 		service, akCertBlobName, ca.FSEXT_PEM)
-// 	blobKeyPEM := tpm.ca.TPMBlobKey(tpm.domain, akCertPathPEM)
-// 	if err := tpm.ca.ImportBlob(blobKeyPEM, akPEM); err != nil {
-// 		return err
-// 	}
-
-// 	return nil
-// }

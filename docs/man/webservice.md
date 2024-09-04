@@ -1,4 +1,4 @@
-% trusted-platform webservice | TPM Commands Manual
+% tpadm webservice | Trusted Platform Commands Manual
 
 # NAME
 
@@ -6,7 +6,7 @@
 
 # SYNOPSIS
 
-**tpm import-ek** [*OPTIONS*] [*ARGUMENT*]
+**webservice** [*OPTIONS*] [*ARGUMENT*]
 
 # DESCRIPTION
 
@@ -29,7 +29,7 @@ information many users may expect.
 
 # EXAMPLES
 
-## Import EK certificate from NV Index, local disk, or TPM manufacturer
+## Start the embedded web server
 ```bash
-trusted-platform webservice --debug
+tpadm webservice
 ```

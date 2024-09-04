@@ -40,6 +40,7 @@ func (systemRouter *SystemRouter) RegisterRoutes(router *mux.Router, baseURI str
 		systemRouter.endpoints(router, baseURI),
 		systemRouter.status(router, baseURI),
 		systemRouter.pubkey(router, baseURI),
+		systemRouter.certificate(router, baseURI),
 		systemRouter.config(router, baseURI),
 		systemRouter.eventlog(router, baseURI)}
 }
@@ -69,7 +70,7 @@ func (systemRouter *SystemRouter) status(router *mux.Router, baseURI string) str
 	return system
 }
 
-// @Summary Retrieve RSA pubilc key
+// @Summary Retrieve the server pubilc key
 // @Description Returns the server public RSA key
 // @Tags System
 // @Produce  json
@@ -77,8 +78,20 @@ func (systemRouter *SystemRouter) status(router *mux.Router, baseURI string) str
 // @Router /pubkey [get]
 func (systemRouter *SystemRouter) pubkey(router *mux.Router, baseURI string) string {
 	pubkey := fmt.Sprintf("%s/pubkey", baseURI)
-	router.HandleFunc(pubkey, systemRouter.systemRestService.RSAPublicKey)
+	router.HandleFunc(pubkey, systemRouter.systemRestService.PublicKey)
 	return pubkey
+}
+
+// @Summary Retrieve the server x509 certificate
+// @Description Returns the server public RSA key
+// @Tags System
+// @Produce  json
+// @Success 200 {string} certificate
+// @Router /certificate [get]
+func (systemRouter *SystemRouter) certificate(router *mux.Router, baseURI string) string {
+	certificate := fmt.Sprintf("%s/certificate", baseURI)
+	router.HandleFunc(certificate, systemRouter.systemRestService.Certificate)
+	return certificate
 }
 
 // @Summary System configuration

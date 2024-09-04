@@ -7,17 +7,19 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/model"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
 type SystemRestServicer interface {
-	Endpoints(w http.ResponseWriter, r *http.Request)
-	Status(w http.ResponseWriter, r *http.Request)
-	RSAPublicKey(w http.ResponseWriter, r *http.Request)
 	Config(w http.ResponseWriter, r *http.Request)
+	Certificate(w http.ResponseWriter, r *http.Request)
+	Endpoints(w http.ResponseWriter, r *http.Request)
 	EventsPage(w http.ResponseWriter, r *http.Request)
+	PublicKey(w http.ResponseWriter, r *http.Request)
+	Status(w http.ResponseWriter, r *http.Request)
 }
 
 type SystemRestService struct {
@@ -43,12 +45,36 @@ func (restService *SystemRestService) Endpoints(w http.ResponseWriter, r *http.R
 	restService.httpWriter.Write(w, r, http.StatusOK, restService.endpointList)
 }
 
-// Writes the web servers RSA public key
-func (restService *SystemRestService) RSAPublicKey(w http.ResponseWriter, r *http.Request) {
-	attrs := restService.app.CA.CAKeyAttributes(nil)
-	cert, err := restService.app.CA.PEM(attrs)
-	if err == ca.ErrCertNotFound {
-		restService.httpWriter.Error404(w, r, err)
+// Writes the web server public key in PEM form
+func (restService *SystemRestService) PublicKey(w http.ResponseWriter, r *http.Request) {
+	keyAttrs := restService.app.ServerKeyAttributes
+	cert, err := restService.app.CA.Certificate(keyAttrs)
+	if err != nil {
+		if err == certstore.ErrCertNotFound {
+			restService.httpWriter.Error404(w, r, err)
+			return
+		}
+		restService.httpWriter.Error500(w, r, err)
+		return
+	}
+	pubPEM, err := keystore.EncodePubKeyPEM(cert.PublicKey)
+	if err != nil {
+		restService.httpWriter.Error500(w, r, err)
+		return
+	}
+	restService.httpWriter.Write(w, r, http.StatusOK, string(pubPEM))
+}
+
+// Writes the web server x509 certificate in PEM form
+func (restService *SystemRestService) Certificate(w http.ResponseWriter, r *http.Request) {
+	keyAttrs := restService.app.ServerKeyAttributes
+	cert, err := restService.app.CA.PEM(keyAttrs)
+	if err != nil {
+		if err == certstore.ErrCertNotFound {
+			restService.httpWriter.Error404(w, r, err)
+			return
+		}
+		restService.httpWriter.Error500(w, r, err)
 		return
 	}
 	restService.httpWriter.Write(w, r, http.StatusOK, string(cert))

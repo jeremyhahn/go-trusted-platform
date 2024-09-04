@@ -8,37 +8,37 @@ import (
 )
 
 type SignerOpts struct {
-	KeyAttributes KeyAttributes
+	Backend       KeyBackend
+	KeyAttributes *KeyAttributes
 
 	// Optional PSS Salt Length when using RSA PSS.
 	// Default rsa.PSSSaltLengthAuto
 	PSSOptions *rsa.PSSOptions
-	BlobCN     *string
+	BlobCN     []byte
 	BlobData   []byte
 
-	digest    []byte
 	blobStore blobstore.BlobStorer
 	crypto.SignerOpts
 }
 
 func NewSignerOpts(
-	attrs KeyAttributes,
-	data []byte) (SignerOpts, error) {
+	attrs *KeyAttributes,
+	data []byte) *SignerOpts {
 
-	digest, err := Digest(attrs.Hash, data)
-	if err != nil {
-		return SignerOpts{}, err
-	}
-	return SignerOpts{
+	return &SignerOpts{
 		KeyAttributes: attrs,
-		digest:        digest,
-	}, nil
+		BlobData:      data,
+	}
 }
 
 func (opts SignerOpts) HashFunc() crypto.Hash {
 	return opts.KeyAttributes.Hash
 }
 
-func (opts SignerOpts) Digest() []byte {
-	return opts.digest
+func (opts SignerOpts) Digest() ([]byte, error) {
+	digest, err := Digest(opts.KeyAttributes.Hash, opts.BlobData)
+	if err != nil {
+		return nil, err
+	}
+	return digest, nil
 }

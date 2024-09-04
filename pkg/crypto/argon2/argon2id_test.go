@@ -27,7 +27,7 @@ func TestCreateArgon2(t *testing.T) {
 
 	password := "$ecret!"
 
-	params := Argon2Params{
+	params := Argon2Config{
 		Memory:      1,
 		Iterations:  1,
 		Parallelism: 1,

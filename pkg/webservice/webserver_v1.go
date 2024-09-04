@@ -35,6 +35,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -48,7 +49,6 @@ const (
 	HTTP_SERVER_READ_TIMEOUT  = 5 * time.Second
 	HTTP_SERVER_WRITE_TIMEOUT = 30 * time.Second //10 * time.Second
 	HTTP_SERVER_IDLE_TIMEOUT  = 120 * time.Second
-	HTTP_PUBLIC_HTML          = "public_html"
 )
 
 var (
@@ -67,19 +67,21 @@ type WebServerV1 struct {
 	httpServer          *http.Server
 	restServiceRegistry rest.RestServiceRegistry
 	middleware          middleware.JsonWebTokenMiddleware
-	password            []byte
 	closeChan           chan bool
 }
 
 func NewWebServerV1(
 	app *app.App,
-	password []byte,
 	restServiceRegistry rest.RestServiceRegistry) *WebServerV1 {
+
+	if app.CA == nil {
+		app.Logger.Fatal(ca.ErrNotInitialized)
+	}
 
 	webserver := &WebServerV1{
 		app:                 app,
-		password:            password,
 		baseURI:             "/api/v1",
+		config:              app.WebService,
 		eventType:           "WebServer",
 		endpointList:        make([]string, 0),
 		routerMutex:         &sync.Mutex{},
@@ -101,7 +103,7 @@ func (server *WebServerV1) Run() {
 
 	server.buildRoutes()
 
-	fs := http.FileServer(http.Dir(HTTP_PUBLIC_HTML))
+	fs := http.FileServer(http.Dir(server.config.Home))
 	server.router.PathPrefix("/").Handler(fs)
 	http.Handle("/", server.httpServer.Handler)
 
@@ -138,7 +140,6 @@ func (server *WebServerV1) startHttp() {
 		log.Fatal(err)
 	}
 
-	//err = http.Serve(ipv4Listener, server.router)
 	err = server.httpServer.Serve(ipv4Listener)
 	if err != nil {
 		server.app.Logger.Fatalf("webserver: unable to start web services: %s", err.Error())
@@ -152,7 +153,7 @@ func (server *WebServerV1) startHttps() {
 	server.app.Logger.Debugf(message)
 
 	// Retrieve a TLS config ready to go from the CA
-	tlsconf, err := server.app.CA.TLSConfig(server.app.ServerKeyAttributes, false)
+	tlsconf, err := server.app.CA.TLSConfig(server.app.ServerKeyAttributes)
 	if err != nil {
 		server.app.Logger.Fatal(err)
 	}
