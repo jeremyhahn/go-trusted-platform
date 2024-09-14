@@ -1,7 +1,9 @@
 package ca
 
 import (
+	"crypto/elliptic"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"os"
@@ -9,7 +11,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/pkcs11"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/pkcs8"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
+	"github.com/spf13/afero"
 
 	"github.com/op/go-logging"
 
@@ -28,11 +33,11 @@ type Config struct {
 }
 
 type Identity struct {
-	KeyChainConfig *platform.KeyChainConfig `yaml:"keystores" json:"keystores" mapstructure:"keystores"`
-	Keys           []*keystore.KeyConfig    `yaml:"keys" json:"keys" mapstructure:"keys"`
-	SANS           *SubjectAlternativeNames `yaml:"sans" json:"sans" mapstructure:"sans"`
-	Subject        Subject                  `yaml:"subject" json:"subject" mapstructure:"subject"`
-	Valid          int                      `yaml:"valid" json:"valid" mapstructure:"valid"`
+	KeyringConfig *platform.KeyringConfig  `yaml:"keystores" json:"keystores" mapstructure:"keystores"`
+	Keys          []*keystore.KeyConfig    `yaml:"keys" json:"keys" mapstructure:"keys"`
+	SANS          *SubjectAlternativeNames `yaml:"sans" json:"sans" mapstructure:"sans"`
+	Subject       Subject                  `yaml:"subject" json:"subject" mapstructure:"subject"`
+	Valid         int                      `yaml:"valid" json:"valid" mapstructure:"valid"`
 }
 
 type Subject struct {
@@ -59,9 +64,10 @@ type CAParams struct {
 	Config       Config
 	Debug        bool
 	DebugSecrets bool
+	Fs           afero.Fs
 	Home         string
 	Identity     Identity
-	KeyChain     *platform.KeyChain
+	Keyring      *platform.Keyring
 	Logger       *logging.Logger
 	Random       io.Reader
 	SelectedCA   int
@@ -69,74 +75,261 @@ type CAParams struct {
 	TPM          tpm2.TrustedPlatformModule
 }
 
-// Returns a default RSA config
-func DefaultConfigRSA(rootIdentity, intermediateIdentity Identity) Config {
-	return Config{
-		AutoImportIssuingCA: true,
-		RequireKeyPassword:  true,
-		Identity: []Identity{
-			rootIdentity,
-			intermediateIdentity},
-	}
-}
+var (
 
-// Returns a minimal RSA config with RSA configured as the only
-// signing algorithm
-func MinimalConfigRSA(rootIdentity, intermediateIdentity Identity) Config {
-	return Config{
-		AutoImportIssuingCA: true,
-		RequireKeyPassword:  true,
+	// Default PKCS #8, PKCS #11, and TPM 2.0 key stores
+	DefaultPKCS11Config = Config{
+		AutoImportIssuingCA:   true,
+		RequireKeyPassword:    true,
+		PlatformCA:            1,
+		DefaultValidityPeriod: 10,
+		DefaultIDevIDCN:       "default-device-id",
+		IncludeLocalhostSANS:  true,
+		SystemCertPool:        false,
 		Identity: []Identity{
-			rootIdentity,
-			intermediateIdentity},
+			// Root CA
+			{
+				Valid: 1, // year
+				Subject: Subject{
+					CommonName:   "root-ca",
+					Organization: "Example Corporation",
+					Country:      "US",
+					Locality:     "Miami",
+					Address:      "123 acme street",
+					PostalCode:   "12345"},
+				SANS: &SubjectAlternativeNames{
+					DNS: []string{
+						"root-ca",
+						"root-ca.localhost",
+						"root-ca.localhost.localdomain",
+					},
+					IPs: []string{
+						"127.0.0.1",
+					},
+					Email: []string{
+						"root@localhost",
+						"root@test.com",
+					},
+				},
+				KeyringConfig: pkcs11Keyring,
+				Keys:          append(keys, pkcs11Keys...),
+			},
+			// Intermediate CA
+			{
+				Valid: 1, // year
+				Subject: Subject{
+					CommonName:   "intermediate-ca",
+					Organization: "Example Corporation",
+					Country:      "US",
+					Locality:     "Miami",
+					Address:      "123 acme street",
+					PostalCode:   "12345"},
+				SANS: &SubjectAlternativeNames{
+					DNS: []string{
+						"intermediate-ca",
+						"intermediate-ca.localhost",
+						"intermediate-ca.localhost.localdomain",
+					},
+					IPs: []string{
+						"127.0.0.1",
+					},
+					Email: []string{
+						"root@localhost",
+						"root@test.com",
+					},
+				},
+				KeyringConfig: pkcs11Keyring,
+				Keys:          append(keys, pkcs11Keys...),
+			}},
 	}
-}
 
-// Returns a default ECDSA config
-func DefaultConfigECDSA(rootIdentity, intermediateIdentity Identity) Config {
-	return Config{
-		AutoImportIssuingCA: true,
-		RequireKeyPassword:  true,
-		Identity: []Identity{
-			rootIdentity,
-			intermediateIdentity},
+	pkcs11Keys = []*keystore.KeyConfig{
+		{
+			Debug:              true,
+			SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
+			RSAConfig: &keystore.RSAConfig{
+				KeySize: 2048,
+			},
+			Password:       keystore.DEFAULT_PASSWORD,
+			PlatformPolicy: true,
+			KeyAlgorithm:   x509.RSA.String(),
+			StoreType:      string(keystore.STORE_PKCS11),
+			Hash:           "SHA-256",
+		},
+		{
+			Debug:              true,
+			SignatureAlgorithm: x509.ECDSAWithSHA256.String(),
+			ECCConfig: &keystore.ECCConfig{
+				Curve: elliptic.P256().Params().Name,
+			},
+			Password:       keystore.DEFAULT_PASSWORD,
+			PlatformPolicy: true,
+			KeyAlgorithm:   x509.ECDSA.String(),
+			StoreType:      string(keystore.STORE_PKCS11),
+			Hash:           "SHA-256",
+		},
 	}
-}
 
-// Returns a minimal ECDSA config with ECDSA configured
-// as the only signing algorithm
-func MinimalConfigECDSA(rootIdentity, intermediateIdentity Identity) Config {
-	return Config{
-		AutoImportIssuingCA: true,
-		RequireKeyPassword:  true,
-		Identity: []Identity{
-			rootIdentity,
-			intermediateIdentity},
+	slot          = 0
+	pkcs11Keyring = &platform.KeyringConfig{
+		PKCS8Config: &pkcs8.Config{
+			PlatformPolicy: true,
+		},
+		PKCS11Config: &pkcs11.Config{
+			Library:        "/usr/local/lib/softhsm/libsofthsm2.so",
+			LibraryConfig:  "trusted-data/etc/softhsm.conf",
+			Slot:           &slot,
+			TokenLabel:     "SoftHSM",
+			SOPin:          keystore.DEFAULT_PASSWORD,
+			Pin:            keystore.DEFAULT_PASSWORD,
+			PlatformPolicy: true,
+		},
+		TPMConfig: &tpm2.KeyStoreConfig{
+			SRKHandle:      0x81000003,
+			SRKAuth:        keystore.DEFAULT_PASSWORD,
+			PlatformPolicy: true,
+		},
 	}
-}
 
-// Returns a default Ed25519 config
-func DefaultConfigEd25119(rootIdentity, intermediateIdentity Identity) Config {
-	return Config{
-		AutoImportIssuingCA: true,
-		RequireKeyPassword:  true,
+	// Default PKCS #8 and TPM 2.0 key store configuration
+	DefaultConfig = Config{
+		AutoImportIssuingCA:   true,
+		RequireKeyPassword:    true,
+		PlatformCA:            1,
+		DefaultValidityPeriod: 10,
+		DefaultIDevIDCN:       "default-device-id",
+		IncludeLocalhostSANS:  true,
+		SystemCertPool:        false,
 		Identity: []Identity{
-			rootIdentity,
-			intermediateIdentity},
+			// Root CA
+			{
+				Valid: 1, // year
+				Subject: Subject{
+					CommonName:   "root-ca",
+					Organization: "Example Corporation",
+					Country:      "US",
+					Locality:     "Miami",
+					Address:      "123 acme street",
+					PostalCode:   "12345"},
+				SANS: &SubjectAlternativeNames{
+					DNS: []string{
+						"root-ca",
+						"root-ca.localhost",
+						"root-ca.localhost.localdomain",
+					},
+					IPs: []string{
+						"127.0.0.1",
+					},
+					Email: []string{
+						"root@localhost",
+						"root@test.com",
+					},
+				},
+				KeyringConfig: keyring,
+				Keys:          keys,
+			},
+			// Intermediate CA
+			{
+				Valid: 1, // year
+				Subject: Subject{
+					CommonName:   "intermediate-ca",
+					Organization: "Example Corporation",
+					Country:      "US",
+					Locality:     "Miami",
+					Address:      "123 acme street",
+					PostalCode:   "12345"},
+				SANS: &SubjectAlternativeNames{
+					DNS: []string{
+						"intermediate-ca",
+						"intermediate-ca.localhost",
+						"intermediate-ca.localhost.localdomain",
+					},
+					IPs: []string{
+						"127.0.0.1",
+					},
+					Email: []string{
+						"root@localhost",
+						"root@test.com",
+					},
+				},
+				KeyringConfig: keyring,
+				Keys:          keys,
+			}},
 	}
-}
 
-// Returns a minimal Ed25519 config with Ed25119 configured
-// as the only signing algorithm
-func MinimalConfigEd25119(rootIdentity, intermediateIdentity Identity) Config {
-	return Config{
-		AutoImportIssuingCA: true,
-		RequireKeyPassword:  true,
-		Identity: []Identity{
-			rootIdentity,
-			intermediateIdentity},
+	keys = []*keystore.KeyConfig{
+		// PKCS #8 keys
+		{
+			Debug:              true,
+			SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
+			RSAConfig: &keystore.RSAConfig{
+				KeySize: 2048,
+			},
+			Password:       keystore.DEFAULT_PASSWORD,
+			PlatformPolicy: true,
+			KeyAlgorithm:   x509.RSA.String(),
+			StoreType:      string(keystore.STORE_PKCS8),
+			Hash:           "SHA-256",
+		},
+		{
+			Debug:              true,
+			SignatureAlgorithm: x509.ECDSAWithSHA256.String(),
+			ECCConfig: &keystore.ECCConfig{
+				Curve: elliptic.P256().Params().Name,
+			},
+			Password:       keystore.DEFAULT_PASSWORD,
+			PlatformPolicy: true,
+			KeyAlgorithm:   x509.ECDSA.String(),
+			StoreType:      string(keystore.STORE_PKCS8),
+			Hash:           "SHA-256",
+		},
+		{
+			Debug:              true,
+			SignatureAlgorithm: x509.PureEd25519.String(),
+			Password:           keystore.DEFAULT_PASSWORD,
+			PlatformPolicy:     true,
+			KeyAlgorithm:       x509.Ed25519.String(),
+			StoreType:          string(keystore.STORE_PKCS8),
+			Hash:               "SHA-256",
+		},
+		// TPM 2.0 keys
+		{
+			Debug:              true,
+			SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
+			RSAConfig: &keystore.RSAConfig{
+				KeySize: 2048,
+			},
+			Password:       keystore.DEFAULT_PASSWORD,
+			PlatformPolicy: true,
+			KeyAlgorithm:   x509.RSA.String(),
+			StoreType:      string(keystore.STORE_TPM2),
+			Hash:           "SHA-256",
+		},
+		{
+			Debug:              true,
+			SignatureAlgorithm: x509.ECDSAWithSHA256.String(),
+			ECCConfig: &keystore.ECCConfig{
+				Curve: elliptic.P256().Params().Name,
+			},
+			Password:       keystore.DEFAULT_PASSWORD,
+			PlatformPolicy: true,
+			KeyAlgorithm:   x509.ECDSA.String(),
+			StoreType:      string(keystore.STORE_TPM2),
+			Hash:           "SHA-256",
+		},
 	}
-}
+
+	keyring = &platform.KeyringConfig{
+		PKCS8Config: &pkcs8.Config{
+			PlatformPolicy: true,
+		},
+		TPMConfig: &tpm2.KeyStoreConfig{
+			SRKHandle:      0x81000003,
+			SRKAuth:        keystore.DEFAULT_PASSWORD,
+			PlatformPolicy: true,
+		},
+	}
+)
 
 // Debug prints the secure, supported TLD cipher suites
 func DebugCipherSuites(logger *logging.Logger) {
@@ -160,9 +353,9 @@ func DebugInsecureCipherSuites(logger *logging.Logger) {
 
 // Parses the home directory for the provided CA parameters and platform
 // root directory.
-func HomeDirectory(platformDir, cn string) string {
+func HomeDirectory(fs afero.Fs, platformDir, cn string) string {
 	caDir := fmt.Sprintf("%s/ca/%s", platformDir, cn)
-	if err := os.MkdirAll(caDir, os.ModePerm); err != nil {
+	if err := fs.MkdirAll(caDir, os.ModePerm); err != nil {
 		panic(err)
 	}
 	return caDir

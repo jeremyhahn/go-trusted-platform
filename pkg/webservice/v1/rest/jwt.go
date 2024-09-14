@@ -11,11 +11,11 @@ import (
 
 	jwt "github.com/dgrijalva/jwt-go"
 	"github.com/dgrijalva/jwt-go/request"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/op/go-logging"
 )
 
 // https://gist.github.com/soulmachine/b368ce7292ddd7f91c15accccc02b8df
@@ -27,14 +27,14 @@ type JsonWebTokenServicer interface {
 }
 
 type JWTService struct {
-	app            *app.App
+	claimsIssuer   string
 	expiration     time.Duration
 	responseWriter response.HttpWriter
 	publicKey      *rsa.PublicKey
-	keyAttributes  *keystore.KeyAttributes
-	keystore       keystore.KeyStorer
 	JsonWebTokenServicer
+	logger *logging.Logger
 	middleware.JsonWebTokenMiddleware
+	signer crypto.Signer
 }
 
 type JsonWebTokenClaims struct {
@@ -50,45 +50,19 @@ type JsonWebToken struct {
 	Error string `json:"error"`
 }
 
-// Creates a new JsonWebTokenService with default configuration
+// Instantiate a new JsonWebTokenService
 func NewJsonWebTokenService(
-	app *app.App,
-	keyAttributes *keystore.KeyAttributes,
-	keystore keystore.KeyStorer,
-	responseWriter response.HttpWriter) (JsonWebTokenServicer, error) {
-
-	return CreateJsonWebTokenService(
-		app,
-		responseWriter,
-		app.WebService.JWTExpiration,
-		keyAttributes,
-		keystore)
-}
-
-// Createa a new JsonWebBokenService with custom expiration
-func CreateJsonWebTokenService(
-	app *app.App,
 	responseWriter response.HttpWriter,
 	expiration int,
-	keyAttributes *keystore.KeyAttributes,
-	keystore keystore.KeyStorer) (JsonWebTokenServicer, error) {
+	signer crypto.Signer,
+	claimsIssuer string) (JsonWebTokenServicer, error) {
 
 	return &JWTService{
-		app:            app,
+		claimsIssuer:   claimsIssuer,
 		responseWriter: responseWriter,
 		expiration:     time.Duration(expiration),
-		keystore:       keystore,
-		keyAttributes:  keyAttributes}, nil
-}
-
-// Returns a crypto.Signer backed by the underlying key store
-// opaque private key and web server TLS certificate.
-func (jwtService *JWTService) signer() crypto.Signer {
-	signer, err := jwtService.app.CA.Signer(jwtService.keyAttributes)
-	if err != nil {
-		jwtService.app.Logger.Fatal(err)
-	}
-	return signer
+		logger:         util.Logger(),
+		signer:         signer}, nil
 }
 
 // Creates a new web service session by parsing the organization and Service from
@@ -97,14 +71,14 @@ func (jwtService *JWTService) signer() crypto.Signer {
 func (jwtService *JWTService) CreateSession(w http.ResponseWriter,
 	r *http.Request) (service.Session, error) {
 
-	jwtService.app.Logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
+	jwtService.logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
 		r.URL.Path, r.Method, r.RemoteAddr, r.RequestURI)
 
 	_, claims, err := jwtService.parseToken(w, r)
 	if err != nil {
 		return nil, err
 	}
-	jwtService.app.Logger.Debugf("Claims: %+v", claims)
+	jwtService.logger.Debugf("Claims: %+v", claims)
 
 	serviceClaims, err := jwtService.parseServiceClaims(claims.Services)
 	if err != nil {
@@ -112,19 +86,19 @@ func (jwtService *JWTService) CreateSession(w http.ResponseWriter,
 	}
 
 	return service.CreateSession(
-		jwtService.app.Logger,
+		jwtService.logger,
 		serviceClaims,
 		serviceClaims[0].ID), nil
 }
 
 func (jwtService *JWTService) GenerateToken(w http.ResponseWriter, req *http.Request) {
 
-	jwtService.app.Logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
+	jwtService.logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
 		req.URL.Path, req.Method, req.RemoteAddr, req.RequestURI)
 
 	var user service.UserCredentials
 	err := json.NewDecoder(req.Body).Decode(&user)
-	// jwtService.app.Logger.Debugf("Decoded userCredentials: %v+", user)
+	// jwtService.logger.Debugf("Decoded userCredentials: %v+", user)
 	if err != nil {
 		jwtService.responseWriter.Error400(w, req, err)
 		return
@@ -133,7 +107,7 @@ func (jwtService *JWTService) GenerateToken(w http.ResponseWriter, req *http.Req
 	// userService := jwtService.serviceRegistry.GetUserService()
 	// userAccount, orgs, Services, err := userService.Login(&user)
 	// if err != nil {
-	// 	jwtService.app.Logger.Errorf("GenerateToken login error: %s", err)
+	// 	jwtService.logger.Errorf("GenerateToken login error: %s", err)
 	// 	jwtService.responseWriter.Write(w, req, http.StatusForbidden,
 	// 		JsonWebToken{Error: "Invalid credentials"})
 	// 	return
@@ -147,11 +121,11 @@ func (jwtService *JWTService) GenerateToken(w http.ResponseWriter, req *http.Req
 	// 			Name: jwtService.defaultRole.Name}})
 	// }
 
-	// jwtService.app.Logger.Debugf("user: %+v", user)
-	// jwtService.app.Logger.Debugf("userAccount: %+v", userAccount)
-	// jwtService.app.Logger.Debugf("orgs: %+v", orgs)
-	// jwtService.app.Logger.Debugf("org.len: %+v", len(orgs))
-	// jwtService.app.Logger.Debugf("Services.len: %+v", len(Services))
+	// jwtService.logger.Debugf("user: %+v", user)
+	// jwtService.logger.Debugf("userAccount: %+v", userAccount)
+	// jwtService.logger.Debugf("orgs: %+v", orgs)
+	// jwtService.logger.Debugf("org.len: %+v", len(orgs))
+	// jwtService.logger.Debugf("Services.len: %+v", len(Services))
 
 	// roleClaims := make([]string, len(userAccount.GetRoles()))
 	// for j, role := range userAccount.GetRoles() {
@@ -195,18 +169,18 @@ func (jwtService *JWTService) GenerateToken(w http.ResponseWriter, req *http.Req
 		Email:    "root@example.com",
 		//Services: string(serviceClaimsJson),
 		StandardClaims: jwt.StandardClaims{
-			Issuer:    app.Name,
+			Issuer:    jwtService.claimsIssuer,
 			IssuedAt:  time.Now().Unix(),
 			ExpiresAt: time.Now().Add(time.Minute * jwtService.expiration).Unix()}})
 
-	tokenString, err := token.SignedString(jwtService.signer())
+	tokenString, err := token.SignedString(jwtService.signer)
 	if err != nil {
 		jwtService.responseWriter.Write(w, req,
 			http.StatusInternalServerError, JsonWebToken{Error: "Error signing token"})
 		return
 	}
 
-	jwtService.app.Logger.Debugf("Generated JSON token: %s", tokenString)
+	jwtService.logger.Debugf("Generated JSON token: %s", tokenString)
 
 	jwtViewModel := JsonWebToken{Value: tokenString}
 	jwtService.responseWriter.Write(w, req, http.StatusOK, jwtViewModel)
@@ -214,19 +188,19 @@ func (jwtService *JWTService) GenerateToken(w http.ResponseWriter, req *http.Req
 
 func (jwtService *JWTService) RefreshToken(w http.ResponseWriter, req *http.Request) {
 
-	jwtService.app.Logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
+	jwtService.logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
 		req.URL.Path, req.Method, req.RemoteAddr, req.RequestURI)
 
 	token, claims, err := jwtService.parseToken(w, req)
 	if err == nil {
 		if token.Valid {
 
-			jwtService.app.Logger.Debugf("claims: %+v", claims)
+			jwtService.logger.Debugf("claims: %+v", claims)
 
 			// userService := jwtService.serviceRegistry.GetUserService()
 			// userAccount, services, err := userService.Refresh(claims.UserID)
 			// if err != nil {
-			// 	jwtService.app.Logger.Errorf("Error refreshing token: %s", err)
+			// 	jwtService.logger.Errorf("Error refreshing token: %s", err)
 			// 	jwtService.responseWriter.Write(w, req, http.StatusUnauthorized,
 			// 		JsonWebToken{Error: "Invalid token"})
 			// 	return
@@ -259,24 +233,24 @@ func (jwtService *JWTService) RefreshToken(w http.ResponseWriter, req *http.Requ
 				Email:    "root@example.com",
 				//Services: string(serviceClaimsJson),
 				StandardClaims: jwt.StandardClaims{
-					Issuer:    app.Name,
+					Issuer:    jwtService.claimsIssuer,
 					IssuedAt:  time.Now().Unix(),
 					ExpiresAt: time.Now().Add(time.Minute * jwtService.expiration).Unix()}})
 
-			tokenString, err := token.SignedString(jwtService.signer())
+			tokenString, err := token.SignedString(jwtService.signer)
 			if err != nil {
 				jwtService.responseWriter.Write(w, req, http.StatusInternalServerError,
 					JsonWebToken{Error: "Error signing token"})
 				return
 			}
 
-			jwtService.app.Logger.Debugf("Refreshed JSON token: %s", tokenString)
+			jwtService.logger.Debugf("Refreshed JSON token: %s", tokenString)
 
 			tokenDTO := JsonWebToken{Value: tokenString}
 			jwtService.responseWriter.Write(w, req, http.StatusOK, tokenDTO)
 
 		} else {
-			jwtService.app.Logger.Errorf("Invalid token: %s", token.Raw)
+			jwtService.logger.Errorf("Invalid token: %s", token.Raw)
 			jwtService.responseWriter.Write(w, req, http.StatusUnauthorized,
 				JsonWebToken{Error: "Invalid token"})
 		}
@@ -285,7 +259,7 @@ func (jwtService *JWTService) RefreshToken(w http.ResponseWriter, req *http.Requ
 		if errmsg == "no token present in request" {
 			errmsg = "Authentication required"
 		}
-		jwtService.app.Logger.Errorf("Error: %s", errmsg)
+		jwtService.logger.Errorf("Error: %s", errmsg)
 		http.Error(w, errmsg, http.StatusBadRequest)
 	}
 }
@@ -294,7 +268,7 @@ func (jwtService *JWTService) RefreshToken(w http.ResponseWriter, req *http.Requ
 // is used by the negroni middleware to enforce authenticated access to procted resources.
 func (jwtService *JWTService) Validate(w http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
 
-	jwtService.app.Logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
+	jwtService.logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
 		r.URL.Path, r.Method, r.RemoteAddr, r.RequestURI)
 
 	token, claims, err := jwtService.parseToken(w, r)
@@ -302,21 +276,21 @@ func (jwtService *JWTService) Validate(w http.ResponseWriter, r *http.Request, n
 		if token.Valid {
 			if claims.UserID <= 0 {
 				errmsg := "Invalid request. id claim required."
-				jwtService.app.Logger.Errorf("%s", errmsg)
-				jwtService.app.Logger.Errorf("token: %+v", token.Raw)
+				jwtService.logger.Errorf("%s", errmsg)
+				jwtService.logger.Errorf("token: %+v", token.Raw)
 				http.Error(w, errmsg, http.StatusBadRequest)
 				return
 			}
 			if claims.Email == "" {
 				errmsg := "Invalid request. email claim required"
-				jwtService.app.Logger.Errorf("%s", errmsg)
-				jwtService.app.Logger.Errorf("token: %+v", token.Raw)
+				jwtService.logger.Errorf("%s", errmsg)
+				jwtService.logger.Errorf("token: %+v", token.Raw)
 				http.Error(w, errmsg, http.StatusBadRequest)
 				return
 			}
 			next(w, r)
 		} else {
-			jwtService.app.Logger.Errorf("invalid token: %s", token.Raw)
+			jwtService.logger.Errorf("invalid token: %s", token.Raw)
 			http.Error(w, "invalid token", http.StatusUnauthorized)
 		}
 	} else {
@@ -324,7 +298,7 @@ func (jwtService *JWTService) Validate(w http.ResponseWriter, r *http.Request, n
 		if errmsg == "no token present in request" {
 			errmsg = "Authentication required"
 		}
-		jwtService.app.Logger.Errorf("Error: %s", errmsg)
+		jwtService.logger.Errorf("Error: %s", errmsg)
 		http.Error(w, errmsg, http.StatusBadRequest)
 	}
 }
@@ -345,7 +319,7 @@ func (jwtService *JWTService) parseServiceClaims(ServiceJson string) ([]service.
 	reader := strings.NewReader(ServiceJson)
 	decoder := json.NewDecoder(reader)
 	if err := decoder.Decode(&serviceClaims); err != nil {
-		jwtService.app.Logger.Errorf("parseServiceClaims error: %s", err)
+		jwtService.logger.Errorf("parseServiceClaims error: %s", err)
 		return []service.ServiceClaim{}, err
 	}
 	return serviceClaims, nil
@@ -368,7 +342,7 @@ func (jwtService *JWTService) parseClaims(r *http.Request, extractor request.Ext
 	if err != nil {
 		return nil, nil, err
 	}
-	jwtService.app.Logger.Debugf("claims: %+v", claims)
+	jwtService.logger.Debugf("claims: %+v", claims)
 	return token, claims, nil
 }
 
@@ -391,9 +365,9 @@ func (jwtService *JWTService) parseToken(w http.ResponseWriter, r *http.Request)
 	}
 	if err != nil {
 		errmsg := err.Error()
-		jwtService.app.Logger.Errorf("parseToken error: %s", errmsg)
+		jwtService.logger.Errorf("parseToken error: %s", errmsg)
 		return nil, nil, errors.New(errmsg)
 	}
-	jwtService.app.Logger.Debugf("token=%+v", token)
+	jwtService.logger.Debugf("token=%+v", token)
 	return token, claims, err
 }

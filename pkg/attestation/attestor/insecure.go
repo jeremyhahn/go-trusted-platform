@@ -7,6 +7,8 @@ import (
 	pb "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/proto"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/op/go-logging"
 	"google.golang.org/grpc/peer"
 )
@@ -44,8 +46,10 @@ func (s *InsecureAttestor) GetCABundle(
 	// config.
 	// verifier := ""
 	allowed := false
-	// Parse the CA bundle into an array of x509 certs
-	certs, err := s.ca.ParseCABundle(in.Bundle)
+
+	var storeType keystore.StoreType
+
+	certs, err := s.ca.ParseBundle(in.Bundle)
 	if err != nil {
 		return nil, err
 	}
@@ -62,6 +66,10 @@ BREAK:
 			if _verifier == cert.Subject.CommonName {
 				allowed = true
 				keyAlgorithm = cert.PublicKeyAlgorithm
+				storeType, err = certstore.ParseKeyStoreType(cert)
+				if err != nil {
+					s.logger.Warning(err)
+				}
 				// verifier = _verifier
 				break BREAK
 			}
@@ -75,6 +83,7 @@ BREAK:
 			}
 		}
 	}
+
 	// Refuse the request with ErrUnknownVerifier if not on
 	// the allow list.
 	if !allowed {
@@ -89,14 +98,13 @@ BREAK:
 		return nil, err
 	}
 
-	// Send our CA certs to the Verifier so they can terminate
-	// the insecure connection and establish a new mTLS connection
-	attestorBundle, err := s.ca.CABundle(nil, &keyAlgorithm)
+	// Send the local Root CA certificate to the Verifier so a new
+	// mTLS connection can be established
+	bundle, err := s.ca.CABundle(&storeType, &keyAlgorithm)
 	if err != nil {
 		s.logger.Error(err)
 		return nil, err
 	}
 
-	// Return our CA bundle to the Verifier / Service Provider
-	return &pb.CABundleReply{Bundle: attestorBundle}, nil
+	return &pb.CABundleReply{Bundle: bundle}, nil
 }

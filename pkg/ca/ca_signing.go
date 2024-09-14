@@ -14,14 +14,14 @@ import (
 func (ca *CA) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) (signature []byte, err error) {
 	signerOpts, ok := opts.(*keystore.SignerOpts)
 	if ok {
-		signer, err := ca.keychain.Signer(signerOpts.KeyAttributes)
+		signer, err := ca.keyring.Signer(signerOpts.KeyAttributes)
 		if err != nil {
 			return nil, err
 		}
 		return signer.Sign(rand, digest, signerOpts)
 	}
 	// No signing opts passed, sign using the default CA key
-	signer, err := ca.keychain.Signer(ca.defaultKeyAttributes)
+	signer, err := ca.keyring.Signer(&ca.defaultKeyAttributes)
 	if err != nil {
 		return nil, err
 	}
@@ -75,21 +75,21 @@ func (ca *CA) VerifySignature(digest, signature []byte, opts *keystore.VerifyOpt
 		}
 		// Verify using the dedicated signing key provided by verify opts
 		attrs := opts.KeyAttributes
-		signer, err := ca.keychain.Signer(attrs)
+		signer, err := ca.keyring.Signer(attrs)
 		if err != nil {
 			return err
 		}
-		verifier := ca.keychain.Verifier(attrs, opts)
+		verifier := ca.keyring.Verifier(attrs, opts)
 		return verifier.Verify(
 			signer.Public(), attrs.Hash, digest, signature, opts)
 	}
 
 	// Verify using the CA's matching algorithm key
 	caKeyAttrs, err := ca.CAKeyAttributes(
-		&opts.KeyAttributes.StoreType, &opts.KeyAttributes.KeyAlgorithm)
+		opts.KeyAttributes.StoreType, opts.KeyAttributes.KeyAlgorithm)
 	if err != nil {
 		return err
 	}
-	verifier := ca.keychain.Verifier(caKeyAttrs, nil)
+	verifier := ca.keyring.Verifier(caKeyAttrs, nil)
 	return verifier.Verify(ca.Public(), ca.Hash(), digest, signature, nil)
 }

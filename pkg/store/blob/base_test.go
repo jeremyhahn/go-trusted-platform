@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/op/go-logging"
+	"github.com/spf13/afero"
 )
 
 var (
@@ -61,7 +62,8 @@ func defaultStore() BlobStorer {
 	caCN := "example.com"
 	TEST_TMP_DIR = fmt.Sprintf("%s/%s/%s", TEST_DATA_DIR, tmpDir, caCN)
 
-	store, err := NewFSBlobStore(logger, TEST_TMP_DIR, nil)
+	fs := afero.NewMemMapFs()
+	store, err := NewFSBlobStore(logger, fs, TEST_TMP_DIR, nil)
 	if err != nil {
 		logger.Fatal(err)
 	}

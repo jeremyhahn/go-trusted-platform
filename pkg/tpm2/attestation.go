@@ -1,6 +1,10 @@
 package tpm2
 
 import (
+	"crypto/x509"
+	"encoding/asn1"
+	"math/big"
+
 	"github.com/google/go-tpm/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/aesgcm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
@@ -209,16 +213,35 @@ func (tpm *TPM2) Quote(pcrs []uint, nonce []byte) (Quote, error) {
 		return Quote{}, err
 	}
 
+	var signature []byte
+
 	var rsaSig *tpm2.TPMSSignatureRSA
-	if keystore.IsRSAPSS(tpm.iakAttrs.SignatureAlgorithm) {
-		rsaSig, err = q.Signature.Signature.RSAPSS()
+	if tpm.iakAttrs.KeyAlgorithm == x509.RSA {
+
+		if keystore.IsRSAPSS(tpm.iakAttrs.SignatureAlgorithm) {
+			rsaSig, err = q.Signature.Signature.RSAPSS()
+			if err != nil {
+				return quote, err
+			}
+		} else {
+			rsaSig, err = q.Signature.Signature.RSASSA()
+			if err != nil {
+				tpm.logger.Error(err)
+				return quote, err
+			}
+		}
+		signature = rsaSig.Sig.Buffer
+
+	} else if tpm.iakAttrs.KeyAlgorithm == x509.ECDSA {
+		sig, err := q.Signature.Signature.ECDSA()
 		if err != nil {
 			return quote, err
 		}
-	} else {
-		rsaSig, err = q.Signature.Signature.RSASSA()
+		r := big.NewInt(0).SetBytes(sig.SignatureR.Buffer)
+		s := big.NewInt(0).SetBytes(sig.SignatureS.Buffer)
+		asn1Struct := struct{ R, S *big.Int }{r, s}
+		signature, err = asn1.Marshal(asn1Struct)
 		if err != nil {
-			tpm.logger.Error(err)
 			return quote, err
 		}
 	}
@@ -262,11 +285,12 @@ func (tpm *TPM2) Quote(pcrs []uint, nonce []byte) (Quote, error) {
 		Nonce:     nonce,
 		PCRs:      pcrBytes,
 		Quoted:    q.Quoted.Bytes(),
-		Signature: rsaSig.Sig.Buffer,
+		Signature: signature,
 	}, nil
 }
 
-func (tpm *TPM2) LocalQuote(
+// Create a random nonce and issue a quote command to the TPM
+func (tpm *TPM2) PlatformQuote(
 	keyAttrs *keystore.KeyAttributes) (Quote, []byte, error) {
 
 	tpm.logger.Info("Performing local TPM 2.0 Quote")

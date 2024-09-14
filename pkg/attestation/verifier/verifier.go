@@ -5,11 +5,11 @@ import (
 	"context"
 	"crypto"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
-	"os"
 	"time"
 
 	"google.golang.org/grpc"
@@ -97,7 +97,10 @@ type Verification struct {
 
 func main() {
 	flag.Parse()
-	app := app.NewApp().Init(nil)
+	app, err := app.NewApp().Init(nil)
+	if err != nil {
+		app.Logger.Fatal(err)
+	}
 	verifier, err := NewVerifier(app, *attestorHostname)
 	if err != nil {
 		app.Logger.Fatal(err)
@@ -158,22 +161,49 @@ func newTLSGRPCClient(
 		logger.Error("verifier: InsecureSkipVerify is enabled, allowing man-in-the-middle attacks!")
 	}
 
-	// Build root cert pool, including the CA bundle presented
-	// by the Attestor if the platform configuration file is allowing
-	// self-signed Attestor TLS certificates.
-	rootCAs, err := buildRootCertPool(
-		logger, config, ca, attestorCN, serverKeyAttrs)
-	if err != nil {
-		return nil, err
+	rootCAs := x509.NewCertPool()
+
+	// Start concatenating a list of DER encoded certs
+	if config.AllowAttestorSelfCA {
+		// Connect to the Attestor on insecure gRPC port and
+		// exchange CA bundles to prepare an mTLS connection
+		bundle, err := getAttestorCABundle(
+			logger, config, ca, attestorCN, serverKeyAttrs)
+		if err != nil {
+			return nil, err
+		}
+		certs, err := ca.ParseBundle(bundle)
+		if err != nil {
+			return nil, err
+		}
+		for _, cert := range certs {
+			if err := ca.ImportCertificate(cert); err != nil {
+				return nil, err
+			}
+			pem, err := certstore.EncodePEM(cert.Raw)
+			if err != nil {
+				return nil, err
+			}
+			if !rootCAs.AppendCertsFromPEM(pem) {
+				return nil, ErrInvalidCACertificate
+			}
+		}
+	} else {
+		serverCert, err := ca.Certificate(serverKeyAttrs)
+		if err != nil {
+			return nil, err
+		}
+		rootCAs, err = ca.TrustedRootCertPool(serverCert)
 	}
 
-	// Get the web services TLS config from the CA
-	tlsConfig, err := ca.TLSConfig(serverKeyAttrs)
+	tlsCert, err := ca.TLSCertificate(serverKeyAttrs)
 	if err != nil {
-		logger.Error(err)
 		return nil, err
 	}
-	tlsConfig.RootCAs = rootCAs
+	tlsConfig := &tls.Config{
+		RootCAs:      rootCAs,
+		Certificates: []tls.Certificate{tlsCert},
+	}
 
 	ce := credentials.NewTLS(tlsConfig)
 	conn, err := grpc.NewClient(socket, grpc.WithTransportCredentials(ce))
@@ -183,72 +213,6 @@ func newTLSGRPCClient(
 	}
 
 	return conn, nil
-}
-
-// Creates Trusted Root CA CertPool to verify the Attestor's
-// gRPC TLS server certificate.
-func buildRootCertPool(
-	logger *logging.Logger,
-	config config.Attestation,
-	ca ca.CertificateAuthority,
-	attestorCN string,
-	serverKeyAttrs *keystore.KeyAttributes) (*x509.CertPool, error) {
-
-	if config.ClientCACert != "" {
-		// Load client CA certs from location specified in config
-		caPEM, err := os.ReadFile(config.ClientCACert)
-		if err != nil {
-			logger.Error(err)
-			return nil, err
-		}
-		rootCAs := x509.NewCertPool()
-		if !rootCAs.AppendCertsFromPEM(caPEM) {
-			return nil, ErrInvalidCACertificate
-		}
-		return rootCAs, nil
-	}
-
-	serverCert, err := ca.Certificate(serverKeyAttrs)
-	if err != nil {
-		return nil, err
-	}
-
-	if config.AllowAttestorSelfCA {
-		// Connect to the Attestor on insecure gRPC port and
-		// exchange CA bundles to prepare an mTLS connection
-		pool, err := ca.TrustedRootCertPool(serverCert)
-		if err != nil {
-			return nil, err
-		}
-		bundle, err := getAttestorCABundle(
-			logger, config, ca, attestorCN, serverKeyAttrs)
-		if err != nil {
-			return nil, err
-		}
-		if !pool.AppendCertsFromPEM(bundle) {
-			return nil, ErrInvalidCACertificate
-		}
-		certs, err := ca.ParseCABundle(bundle)
-		if err != nil {
-			return nil, err
-		}
-		for _, cert := range certs {
-			if err := ca.ImportCertificate(cert); err != nil {
-				return nil, err
-			}
-		}
-		return pool, nil
-	}
-
-	// Set up the mTLS connection using the Operating System
-	// trusted root store and the Verifier / Service Provider
-	// Certificate Authority Trusted Root and Intermediate
-	// certificate store. This requires the client's gRPC TLS
-	// server use either a certificate issued from a public
-	// trusted CA whose root certificates are installed in the
-	// Operating System trusted root store or a certificate issued
-	// from the Verifier / Service Provider's Certificate Authority.
-	return ca.TrustedRootCertPool(serverCert)
 }
 
 // Retrieves the CA certificate(s) used to sign the Attestor's
@@ -262,8 +226,8 @@ func getAttestorCABundle(
 	attestorCN string,
 	serverKeyAttrs *keystore.KeyAttributes) ([]byte, error) {
 
-	// Get the web services TLS bundle
-	bundle, err := ca.TLSBundlePEM(serverKeyAttrs)
+	// Get the CA root and intermediate bundle
+	bundle, err := ca.CABundle(&serverKeyAttrs.StoreType, &serverKeyAttrs.KeyAlgorithm)
 	if err != nil {
 		return nil, err
 	}
@@ -643,7 +607,7 @@ func (verifier *Verification) importAndSignAK(akAttrs *keystore.KeyAttributes) e
 	// Sign the AK DER cert bytes with the CA's private key
 	// and save it to blob storage with digest and checksum
 	caKeyAttrs, err := verifier.ca.CAKeyAttributes(
-		&akAttrs.StoreType, &akAttrs.KeyAlgorithm)
+		akAttrs.StoreType, akAttrs.KeyAlgorithm)
 	if err != nil {
 		verifier.logger.Error(err)
 		return nil

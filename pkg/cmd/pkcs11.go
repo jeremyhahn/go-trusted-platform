@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/fatih/color"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/pkcs11"
 	"github.com/spf13/cobra"
 )
@@ -49,7 +50,8 @@ Hardware Security Modules`,
 		}
 
 		if module == "" {
-			App.Logger.Fatal("invalid PKCS #11 module path")
+			color.New(color.FgRed).Println("invalid PKCS #11 module path")
+			return
 		}
 
 		fmt.Printf("Command Info\n")

@@ -16,6 +16,72 @@
             ],
         },
         {
+            "name": "tpadm platform keyring generate (password auth)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceRoot}/pkg",
+            "args": [ 
+                "platform",
+                "keyring",
+                "generate",
+                "www.test.com",
+                "pkcs8",
+                "rsa",
+                "--password", "secret"
+            ],
+        },
+        {
+            "name": "tpadm platform keyring generate (policy auth)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceRoot}/pkg",
+            "args": [ 
+                "platform",
+                "keyring",
+                "generate",
+                "www.test.com",
+                "pkcs8",
+                "rsa",
+                "--parent-policy",
+                "--policy"
+            ],
+        },
+        {
+            "name": "tpadm platform keyring delete",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceRoot}/pkg",
+            "args": [ 
+                "platform",
+                "keyring",
+                "delete",
+                "www.example.com",
+                "pkcs8",
+                "rsa",
+                // "--parent-password", "test",
+                // "--parent-policy=false",
+                // "--policy=false"
+            ],
+        },
+        {
+            "name": "tpadm platform keyring info",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceRoot}/pkg",
+            "args": [ 
+                "platform",
+                "keyring",
+                "info",
+                "www.example.com",
+                "tpm2",
+                "rsa"
+            ],
+        },
+        {
             "name": "tpadm platform install",
             "type": "go",
             "request": "launch",
@@ -39,7 +105,6 @@
             "args": [
                 "platform",
                 "provision",
-                "--init",
                 "--raw-so-pin", "test",
                 "--raw-pin", "test"
             ],
@@ -66,11 +131,11 @@
             "args": [
                 "platform",
                 "password",
-                "--cn", "root-ca.example.com",
-                "--store", "pkcs8",
-                "--algorithm", "rsa",
-                "--raw-so-pin", "test",
-                "--raw-pin", "test"
+                "www.example.com",
+                "pkcs8",
+                "rsa",
+                // "--raw-so-pin", "test",
+                // "--raw-pin", "test"
             ],
         },
         {
@@ -109,35 +174,97 @@
             ],
         },
         {
-            "name": "tpadm ca show",
+            "name": "tpadm ca info",
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_pkcs11",
             "program": "${workspaceRoot}/pkg",
             "args": [ 
                 "ca",
-                "show",
-                "--init",
+                "info",
                 "--cn", "intermediate-ca.example.com",
-                "--raw-so-pin", "test",
                 "--raw-pin", "test"
             ],
         },
+
         {
-            "name": "tpadm ca pem",
+            "name": "tpadm ca keyring generate (password auth)",
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_pkcs11",
             "program": "${workspaceRoot}/pkg",
             "args": [ 
                 "ca",
-                "pem",
-                "--init",
-                "--cn", "intermediate-ca.example.com",
-                "--raw-so-pin", "test",
-                "--raw-pin", "test"
+                "keyring",
+                "generate",
+                "www.test.com",
+                "pkcs8",
+                "rsa",
+                "--password", "secret"
+            ],
+        },
+        {
+            "name": "tpadm ca keyring generate (policy auth)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceRoot}/pkg",
+            "args": [ 
+                "ca",
+                "keyring",
+                "generate",
+                "www.test.com",
+                "pkcs8",
+                "rsa",
+                "--parent-policy",
+                "--policy"
+            ],
+        },
+        {
+            "name": "tpadm ca keyring delete",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceRoot}/pkg",
+            "args": [ 
+                "ca",
+                "keyring",
+                "delete",
+                "www.example.com",
+                "pkcs8",
+                "rsa",
+                // "--parent-password", "test",
+                // "--parent-policy=false",
+                // "--policy=false"
+            ],
+        },
+        {
+            "name": "tpadm ca keyring info",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceRoot}/pkg",
+            "args": [ 
+                "ca",
+                "keyring",
+                "info",
+                "www.example.com",
+                "tpm2",
+                "rsa"
+            ],
+        },
+        {
+            "name": "tpadm ca certificate",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceRoot}/pkg",
+            "args": [ 
+                "ca",
+                "certificate",
+                "www.example.com",
+                "tpm2",
+                "rsa",
             ],
         },
         {
@@ -145,15 +272,13 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_pkcs11",
             "program": "${workspaceRoot}/pkg",
             "args": [ 
                 "ca",
                 "issue",
-                "--init",
-                "--cn", "test.example2.com",
-                "--raw-so-pin", "test",
-                "--raw-pin", "test"
+                "test.example2.com",
+                "tpm2",
+                "rsa"
             ],
         },
         {
@@ -161,31 +286,24 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "rm_trusted_data",
             "program": "${workspaceRoot}/pkg",
             "args": [
                 "ca",
                 "install-ca-certificates",
-                "--debug",
-                "--init",
-                "--raw-so-pin", "123456",
-                "--raw-pin", "123456"
             ],
         }, 
         {
-            "name": "tpadm ca revoke (clean)",
+            "name": "tpadm ca revoke",
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_pkcs11",
             "program": "${workspaceRoot}/pkg",
             "args": [
                 "ca",
                 "revoke",
-                "--init",
-                "--cn", "example.com",
-                "--raw-so-pin", "123456",
-                "--raw-pin", "123456"
+                "example.com",
+                "pkcs8",
+                "rsa"
             ],
         },
         {
@@ -193,7 +311,6 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_pkcs11",
             "program": "${workspaceRoot}/pkg",
             "args": [
                 "ca",
@@ -202,23 +319,18 @@
                 "--raw-so-pin", "123456",
                 "--raw-pin", "123456"
             ],
-        }, 
+        },
         {
-            "name": "tpadm ca revoke",
+            "name": "tpadm tpm info",
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_pkcs11",
             "program": "${workspaceRoot}/pkg",
-            "args": [
-                "ca",
-                "revoke",
-                "--init",
-                "--cn", "example.com",
-                "--raw-so-pin", "123456",
-                "--raw-pin", "123456"
+            "args": [ 
+                "tpm",
+                "info",
             ],
-        }, 
+        },
         {
             "name": "tpadm tpm eventlog",
             "type": "go",
@@ -232,6 +344,80 @@
             ],
         },
         {
+            "name": "tpadm policy create",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "tpm",
+                "policy",
+                "create",
+            ],
+        },
+        {
+            "name": "tpadm policy (show)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "tpm",
+                "policy",
+            ],
+        },
+        // {
+        //     "name": "tpadm tpm seal x509 key",
+        //     "type": "go",
+        //     "request": "launch",
+        //     "mode": "debug",
+        //     "program": "${workspaceRoot}/pkg",
+        //     "args": [
+        //         "tpm",
+        //         "seal",
+        //         "customid2",
+        //         "this is a secret key to seal to a keyed hash object",
+        //     ],
+        // },
+        // {
+        //     "name": "tpadm tpm unseal x509 key",
+        //     "type": "go",
+        //     "request": "launch",
+        //     "mode": "debug",
+        //     "program": "${workspaceRoot}/pkg",
+        //     "args": [
+        //         "tpm",
+        //         "unseal",
+        //         "customid2",
+        //         "rsa",
+        //     ],
+        // },
+        {
+            "name": "tpadm tpm seal hmac key",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "tpm",
+                "seal",
+                "custom-hmac",
+                "this is a secret key to seal to a keyed hash object",
+            ],
+        },
+        {
+            "name": "tpadm tpm unseal hmac key",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "tpm",
+                "unseal",
+                "custom-hmac",
+            ],
+        },
+        {
             "name": "tpadm tpm ek",
             "type": "go",
             "request": "launch",
@@ -241,9 +427,77 @@
             "args": [
                 "tpm",
                 "ek",
-                "--init",
                 "--raw-so-pin", "123456",
                 "--raw-pin", "123456"
+            ],
+        },
+        {
+            "name": "tpadm tpm srk delete-key",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "preLaunchTask": "rm_trusted_data",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "tpm",
+                "srk",
+                "delete-key"
+            ],
+        },
+        {
+            "name": "tpadm tpm srk create-key (w/policy)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "preLaunchTask": "rm_trusted_data",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "tpm",
+                "srk",
+                "create-key",
+                "--handle", "0x81000002",
+                "--persistent", "true",
+                "--password", "test",
+                "--policy", "true",
+            ],
+        },
+        {
+            "name": "tpadm tpm srk create-key",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "preLaunchTask": "rm_trusted_data",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "tpm",
+                "srk",
+                "create-key"
+            ],
+        },
+        {
+            "name": "tpadm tpm ek create-key",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "preLaunchTask": "rm_trusted_data",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "tpm",
+                "ek",
+                "create-key"
+            ],
+        },
+        {
+            "name": "tpadm tpm ek delete-key",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "preLaunchTask": "rm_trusted_data",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "tpm",
+                "ek",
+                "delete-key"
             ],
         },
         {
@@ -307,14 +561,13 @@
             "preLaunchTask": "verifier_init",
             "program": "${workspaceRoot}/pkg",
             "args": ["verifier",
-                "--debug",
+                // "--debug",
                 "--init",
                 "--platform-dir", "../attestation/verifier/trusted-data",
                 "--config-dir", "../attestation/verifier/trusted-data/etc",
                 "--log-dir", "../attestation/verifier/trusted-data/log",
                 "--ca-dir", "../attestation/verifier/trusted-data/ca",
                 "--attestor", "www.attestor.example.com",
-                "--ak-password", "ak-password",
                 "--raw-so-pin", "123456",
                 "--raw-pin", "123456"
             ],
@@ -344,7 +597,7 @@
             "preLaunchTask": "attestor_init",
             "program": "${workspaceRoot}/pkg",
             "args": ["attestor",
-                "--debug",
+                // "--debug",
                 "--init",
                 "--platform-dir", "../attestation/attestor/trusted-data",
                 "--config-dir", "../attestation/attestor/trusted-data/etc",

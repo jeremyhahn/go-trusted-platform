@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/ThalesIgnite/crypto11"
@@ -14,6 +15,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/miekg/pkcs11"
 	"github.com/op/go-logging"
+	"github.com/spf13/afero"
 
 	libtpm2 "github.com/google/go-tpm/tpm2"
 	tpm2ks "github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/tpm2"
@@ -22,11 +24,12 @@ import (
 
 type Params struct {
 	Backend      keystore.KeyBackend
-	Logger       *logging.Logger
-	DebugSecrets bool
 	Config       *Config
-	SignerStore  keystore.SignerStorer
+	DebugSecrets bool
+	Fs           afero.Fs
+	Logger       *logging.Logger
 	Random       io.Reader
+	SignerStore  keystore.SignerStorer
 	TPMKS        tpm2ks.PlatformKeyStorer
 }
 
@@ -42,6 +45,10 @@ func NewKeyStore(params *Params) (keystore.KeyStorer, error) {
 
 	ks := &KeyStore{params: params}
 
+	if strings.Contains(params.Config.Library, "libsofthsm2.so") {
+		os.Setenv("SOFTHSM2_CONF", params.Config.LibraryConfig)
+	}
+
 	pinSecret, err := ks.pin()
 	if err != nil {
 		return nil, err
@@ -52,6 +59,8 @@ func NewKeyStore(params *Params) (keystore.KeyStorer, error) {
 			return ks, keystore.ErrNotInitalized
 		}
 		return nil, err
+	} else {
+		params.Config.Pin = pin
 	}
 
 	// Open an "admin connection" using the low level PKCS #11 lib
@@ -110,32 +119,32 @@ func (ks *KeyStore) Initialize(soPIN, userPIN keystore.Password) error {
 
 	ks.params.Logger.Info("Initializing PKCS #11 Key Store")
 
+	var pin string
 	var err error
 
 	if ks.params.Backend == nil {
 		ks.params.Logger.Fatal("pkcs11: backend required")
 	}
 
-	// // Security Officer PIN checks & setup
-	// if soPIN == nil {
-	// 	ks.params.Logger.Error(ErrInvalidSOPIN)
-	// 	return keystore.ErrSOPinRequired
-	// }
-	// soPin, err := soPIN.String()
-	// if err != nil {
-	// 	return err
-	// }
-	// if soPin == "" || ks.params.Config.SOPin == keystore.DEFAULT_PASSWORD {
-	// 	ks.params.Logger.Error(ErrInvalidSOPIN)
-	// 	return keystore.ErrSOPinRequired
-	// }
-	ks.params.Config.SOPin, err = soPIN.String()
-	if err != nil {
-		return err
+	if soPIN != nil {
+		sopin, err := soPIN.String()
+		if err != nil {
+			return err
+		}
+		if len(sopin) < 4 {
+			return ErrInvalidSOPINLength
+		}
+		ks.params.Config.SOPin = sopin
 	}
-
-	if len(ks.params.Config.SOPin) < 4 {
-		return ErrInvalidPINLength
+	if userPIN != nil {
+		pin, err = userPIN.String()
+		if err != nil {
+			return err
+		}
+		if len(pin) < 4 {
+			return ErrInvalidSOPINLength
+		}
+		ks.params.Config.Pin = pin
 	}
 
 	// Token label check
@@ -152,18 +161,17 @@ func (ks *KeyStore) Initialize(soPIN, userPIN keystore.Password) error {
 	}
 
 	// Generate new PIN if not provided
-	var pin string
 	if userPIN == nil {
 		pinBytes := aesgcm.NewAESGCM(
 			ks.params.Logger, ks.params.DebugSecrets, ks.params.Random).GenerateKey()
 		userPIN = keystore.NewClearPassword(pinBytes)
 		pin = string(pinBytes)
 	} else {
-		pin, err = userPIN.String()
-		if err != nil {
-			ks.params.Logger.Error(err)
-			return err
-		}
+		// pin, err = userPIN.String()
+		// if err != nil {
+		// 	ks.params.Logger.Error(err)
+		// 	return err
+		// }
 		if pin == keystore.DEFAULT_PASSWORD {
 			pinBytes := aesgcm.NewAESGCM(
 				ks.params.Logger, ks.params.DebugSecrets, ks.params.Random).GenerateKey()
@@ -304,7 +312,9 @@ func (ks *KeyStore) GenerateKey(
 func (ks *KeyStore) GenerateRSA(
 	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
-	if attrs.TPMAttributes == nil {
+	ks.params.Logger.Debug("keystore/pkcs11: generating RSA key")
+
+	if attrs.Parent == nil {
 		attrs.Parent = ks.params.TPMKS.SRKAttributes()
 	}
 
@@ -324,6 +334,8 @@ func (ks *KeyStore) GenerateRSA(
 		return nil, err
 	}
 
+	keystore.DebugKeyAttributes(ks.params.Logger, attrs)
+
 	return keystore.NewOpaqueKey(ks, attrs, signerDecrypter.Public()), nil
 }
 
@@ -332,6 +344,12 @@ func (ks *KeyStore) GenerateRSA(
 // the underlying PKCS #11 HSM module.
 func (ks *KeyStore) GenerateECDSA(
 	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
+
+	ks.params.Logger.Debug("keystore/pkcs11: generating ECDSA key")
+
+	if attrs.Parent == nil {
+		attrs.Parent = ks.params.TPMKS.SRKAttributes()
+	}
 
 	if attrs.ECCAttributes == nil {
 		attrs.ECCAttributes = &keystore.ECCAttributes{
@@ -348,6 +366,8 @@ func (ks *KeyStore) GenerateECDSA(
 		ks.params.Logger.Error(err)
 		return nil, err
 	}
+
+	keystore.DebugKeyAttributes(ks.params.Logger, attrs)
 
 	return keystore.NewOpaqueKey(ks, attrs, signerDecrypter.Public()), nil
 }

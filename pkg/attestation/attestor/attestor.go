@@ -63,7 +63,10 @@ func main() {
 	initParams := app.AppInitParams{}
 	initParams.ListenAddress = *fListenAddress
 
-	app := app.NewApp().Init(&initParams)
+	app, err := app.NewApp().Init(&initParams)
+	if err != nil {
+		app.Logger.Fatal(err)
+	}
 
 	if _, err := NewAttestor(app); err != nil {
 		app.Logger.Fatal(err)

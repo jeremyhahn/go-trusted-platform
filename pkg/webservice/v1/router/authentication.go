@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/gorilla/mux"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 )
 
@@ -15,7 +14,6 @@ type AuthenticationRouter struct {
 
 // Creates a new web service authentication router
 func NewAuthenticationRouter(
-	app *app.App,
 	middleware middleware.AuthMiddleware) WebServiceRouter {
 
 	return &AuthenticationRouter{

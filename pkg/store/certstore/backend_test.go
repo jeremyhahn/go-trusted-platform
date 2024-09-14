@@ -8,6 +8,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -51,7 +52,8 @@ func defaultStore() (CertificateBackend, string) {
 	caCN := "example.com"
 	temp := fmt.Sprintf("%s/%s/%s", TEST_DATA_DIR, tmpDir, caCN)
 
-	blobStore, err := blob.NewFSBlobStore(logger, TEST_DATA_DIR, nil)
+	fs := afero.NewMemMapFs()
+	blobStore, err := blob.NewFSBlobStore(logger, fs, TEST_DATA_DIR, nil)
 	if err != nil {
 		logger.Fatal(err)
 	}

@@ -40,13 +40,18 @@ func (tpm *TPM2) Seal(
 		}
 	}
 
-	// Create new seal key under the SRK to store the platform secret
-	// attaching the policy digest that requires the Golden Integrity
-	// Measurement specified in the PolicyPCR.
-	sealKeyTemplate := KeyedHashTemplate
+	if keyAttrs.TPMAttributes == nil {
+		keyAttrs.TPMAttributes = &keystore.TPMAttributes{
+			Template: KeyedHashTemplate,
+		}
+	}
+	if keyAttrs.TPMAttributes.Template.Type == 0 {
+		keyAttrs.TPMAttributes.Template = KeyedHashTemplate
+	}
+
 	if keyAttrs.PlatformPolicy {
 		// Attach platform PCR policy digest if configured
-		sealKeyTemplate.AuthPolicy = tpm.policyDigest
+		keyAttrs.TPMAttributes.Template.AuthPolicy = tpm.PlatformPolicyDigest()
 	}
 
 	if keyAttrs.Secret == nil {
@@ -60,11 +65,13 @@ func (tpm *TPM2) Seal(
 		} else {
 			keyAttrs.Secret = keystore.NewClearPassword(secretBytes)
 		}
-
 	} else {
 		secretBytes, err = keyAttrs.Secret.Bytes()
 		if err != nil {
 			return nil, err
+		}
+		if secretBytes == nil {
+			return nil, keystore.ErrInvalidKeyedHashSecret
 		}
 	}
 
@@ -87,7 +94,7 @@ func (tpm *TPM2) Seal(
 			Name:   srkName,
 			Auth:   session,
 		},
-		InPublic: tpm2.New2B(sealKeyTemplate),
+		InPublic: tpm2.New2B(keyAttrs.TPMAttributes.Template),
 		InSensitive: tpm2.TPM2BSensitiveCreate{
 			Sensitive: &tpm2.TPMSSensitiveCreate{
 				UserAuth: tpm2.TPM2BAuth{
@@ -105,10 +112,9 @@ func (tpm *TPM2) Seal(
 		tpm.logger.Error(err)
 		return nil, err
 	}
-	closer() // CreateSession
+	closer() // tpm2.Create CreateSession
 
-	// If the key has platform policy, create a session for it
-	// if keyAttrs.PlatformPolicy {
+	// Create a new tpm2.Load session
 	session, closer, err = tpm.CreateSession(keyAttrs)
 	if err != nil {
 		tpm.logger.Error(err)
@@ -177,7 +183,7 @@ func (tpm *TPM2) Unseal(
 	var closer func() error
 	var err error
 
-	// Create parent session to load the key
+	// Create session from parent key attributes
 	session, closer, err = tpm.CreateSession(keyAttrs)
 	if err != nil {
 		return nil, err
@@ -193,8 +199,7 @@ func (tpm *TPM2) Unseal(
 	defer tpm.Flush(sealKey.ObjectHandle)
 
 	// Create key session
-	session2, closer2, err2 := tpm.CreateKeySession(keyAttrs, &session)
-	// session2, closer2, err2 := tpm.CreateSession(keyAttrs)
+	session2, closer2, err2 := tpm.CreateKeySession(keyAttrs)
 	if err2 != nil {
 		tpm.logger.Error(err)
 		return nil, err

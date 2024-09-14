@@ -169,26 +169,22 @@ func (ks *KeyStore) GenerateKey(attrs *keystore.KeyAttributes) (keystore.OpaqueK
 
 // Generate new RSA private key and return an OpaqueKey implementing crypto.Signer
 func (ks *KeyStore) GenerateRSA(attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
-
+	ks.params.Logger.Debug("keystore/pkcs8: generating RSA key")
 	// Provide default key size if not specified or less than 512 bits
 	if attrs.RSAAttributes.KeySize == 0 || attrs.RSAAttributes.KeySize < 512 {
 		attrs.RSAAttributes.KeySize = 2048
 	}
-
 	// Generate the key
 	privateKey, err := rsa.GenerateKey(ks.params.Random, attrs.RSAAttributes.KeySize)
 	if err != nil {
 		return nil, err
 	}
-
 	// Save the key to the key store.
 	err = ks.save(attrs, privateKey)
 	if err != nil {
 		return nil, err
 	}
-
 	keystore.DebugKeyAttributes(ks.params.Logger, attrs)
-
 	// Return the new key as an opaque private key implementing
 	// crypto.Signer and crypto.Decrypter
 	return keystore.NewOpaqueKey(ks, attrs, &privateKey.PublicKey), nil
@@ -197,6 +193,7 @@ func (ks *KeyStore) GenerateRSA(attrs *keystore.KeyAttributes) (keystore.OpaqueK
 // Generates a new ECDSA private key and return and OpaqueKey
 // implementing crypto.Signer
 func (ks *KeyStore) GenerateECDSA(attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
+	ks.params.Logger.Debug("keystore/pkcs8: generating ECDSA key")
 	privateKey, err := ecdsa.GenerateKey(attrs.ECCAttributes.Curve, ks.params.Random)
 	if err != nil {
 		return nil, err
@@ -205,15 +202,14 @@ func (ks *KeyStore) GenerateECDSA(attrs *keystore.KeyAttributes) (keystore.Opaqu
 	if err != nil {
 		return nil, err
 	}
-
 	keystore.DebugKeyAttributes(ks.params.Logger, attrs)
-
 	return keystore.NewOpaqueKey(ks, attrs, &privateKey.PublicKey), nil
 }
 
 // Generates a new Ed25519 private key and return and OpaqueKey
 // implementing crypto.Signer
 func (ks *KeyStore) GenerateEd25519(attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
+	ks.params.Logger.Debug("keystore/pkcs8: generating Ed25519 key")
 	publicKey, privateKey, err := ed25519.GenerateKey(ks.params.Random)
 	if err != nil {
 		return nil, err
@@ -222,9 +218,7 @@ func (ks *KeyStore) GenerateEd25519(attrs *keystore.KeyAttributes) (keystore.Opa
 	if err != nil {
 		return nil, err
 	}
-
 	keystore.DebugKeyAttributes(ks.params.Logger, attrs)
-
 	return keystore.NewOpaqueKey(ks, attrs, publicKey), nil
 }
 

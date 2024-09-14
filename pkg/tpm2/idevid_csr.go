@@ -2,13 +2,13 @@ package tpm2
 
 import (
 	"bytes"
-	"crypto"
-	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/binary"
 	"errors"
+	"math/big"
+	"os"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
@@ -151,7 +151,12 @@ func (tpm *TPM2) createIDevIDContent(
 
 	bootEventLog, err := tpm.EventLog()
 	if err != nil {
-		return nil, err
+		if !errors.Is(err, os.ErrNotExist) {
+			// /sys/kernel/security/tpm0/binary_bios_measurements: no such file or directory
+			return nil, ErrSecureBootNotEnabled
+		} else {
+			return nil, err
+		}
 	}
 
 	akPublicBytes := akAttrs.TPMAttributes.BPublic.Bytes()
@@ -838,27 +843,40 @@ func (tpm *TPM2) VerifyCSR(
 		return nil, nil, err
 	}
 
+	// Set the TCG and crypto hash algorithm
+	hashAlgo := tpm2.TPMAlgID(unpacked.CsrContents.HashAlgoId)
+	cryptoHash, err := hashAlgo.Hash()
+	if err != nil {
+		return nil, nil, err
+	}
+
 	// Load the AK public area
 	loadRsp, err := tpm2.LoadExternal{
 		Hierarchy: tpm2.TPMRHEndorsement,
-		InPublic:  tpm2.BytesAs2B[tpm2.TPMTPublic](unpacked.CsrContents.AttestPub),
+		InPublic: tpm2.BytesAs2B[tpm2.TPMTPublic](
+			unpacked.CsrContents.AttestPub),
 	}.Execute(tpm.transport)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer tpm.Flush(loadRsp.ObjectHandle)
 
-	// Set the hash algorithm
-	hashAlgo := tpm2.TPMAlgID(unpacked.CsrContents.HashAlgoId)
-
 	// Load default TPM attributes for the AK
-	keyAttrs, err := tpm.TPMAttributes(loadRsp.ObjectHandle)
+	keyAttrs, err := tpm.KeyAttributes(loadRsp.ObjectHandle)
 	if err != nil {
 		return nil, nil, err
 	}
-	keyAttrs.TPMAttributes.HashAlg = hashAlgo
-	keyAttrs.SignatureAlgorithm = signatureAlgorithm
 	keyAttrs.Parent = ekAttrs
+	keyAttrs.SignatureAlgorithm = signatureAlgorithm
+	keyAttrs.StoreType = keystore.STORE_TPM2
+	keyAttrs.TPMAttributes.HashAlg = hashAlgo
+
+	// Set the key algorithm
+	if keystore.IsECDSA(signatureAlgorithm) {
+		keyAttrs.KeyAlgorithm = x509.ECDSA
+	} else {
+		keyAttrs.KeyAlgorithm = x509.RSA
+	}
 
 	pub := keyAttrs.TPMAttributes.Public
 
@@ -885,8 +903,6 @@ func (tpm *TPM2) VerifyCSR(
 		return nil, nil, err
 	}
 
-	var publicKey crypto.PublicKey
-
 	if pub.Type == tpm2.TPMAlgRSA {
 
 		rsaDetail, err := pub.Parameters.RSADetail()
@@ -905,17 +921,16 @@ func (tpm *TPM2) VerifyCSR(
 			tpm.logger.Error(err)
 			return nil, nil, err
 		}
-		publicKey = rsaPub
 
 		if keystore.IsRSAPSS(keyAttrs.SignatureAlgorithm) {
 
 			// RSA PSS
 			pssOpts := &rsa.PSSOptions{
 				SaltLength: rsa.PSSSaltLengthAuto,
-				Hash:       keyAttrs.Hash,
+				Hash:       cryptoHash,
 			}
 			err = rsa.VerifyPSS(
-				rsaPub, keyAttrs.Hash, digest, csr.Signature, pssOpts)
+				rsaPub, cryptoHash, digest, csr.Signature, pssOpts)
 			if err != nil {
 				tpm.logger.Error(err)
 				return nil, nil, ErrInvalidSignature
@@ -946,7 +961,7 @@ func (tpm *TPM2) VerifyCSR(
 
 		} else {
 
-			err = rsa.VerifyPKCS1v15(rsaPub, keyAttrs.Hash, digest, csr.Signature)
+			err = rsa.VerifyPKCS1v15(rsaPub, cryptoHash, digest, csr.Signature)
 			if err != nil {
 				tpm.logger.Error(err)
 				return nil, nil, ErrInvalidSignature
@@ -977,23 +992,31 @@ func (tpm *TPM2) VerifyCSR(
 
 	} else if pub.Type == tpm2.TPMAlgECC {
 
-		eccUnique, err := pub.Unique.ECC()
+		ecDetail, err := pub.Parameters.ECCDetail()
 		if err != nil {
-			tpm.logger.Error(err)
 			return nil, nil, err
 		}
-		publicKey, err = tpm2.ECDHPubKey(ecdh.P256(), &tpm2.TPMSECCPoint{
-			X: eccUnique.X,
-			Y: eccUnique.Y,
-		})
-		ecdsaPub := publicKey.(*ecdsa.PublicKey)
+
+		crv, err := ecDetail.CurveID.Curve()
+		if err != nil {
+			return nil, nil, err
+		}
+
+		eccUnique, err := pub.Unique.ECC()
+		if err != nil {
+			return nil, nil, err
+		}
+
+		ecdsaPub := &ecdsa.PublicKey{
+			Curve: crv,
+			X:     big.NewInt(0).SetBytes(eccUnique.X.Buffer),
+			Y:     big.NewInt(0).SetBytes(eccUnique.Y.Buffer),
+		}
+
 		if !ecdsa.VerifyASN1(ecdsaPub, digest, csr.Signature) {
 			tpm.logger.Error(err)
 			return nil, nil, ErrInvalidSignature
 		}
-
-	} else {
-		return nil, nil, keystore.ErrInvalidKeyAlgorithm
 	}
 
 	return keyAttrs, unpacked, nil

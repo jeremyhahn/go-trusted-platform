@@ -147,7 +147,7 @@ tpm:
     # cert-handle is not defined, the certificate is saved to the certificate
     # store instead of NV RAM.
     # RSA 2048: 0x01C00002
-    # ECC P256: 0x01c0000a
+    # ECC P-256: 0x01c0000a
     # cert-handle: 0x01C00002
 
     # True to log key secrets and passwords
@@ -177,7 +177,7 @@ tpm:
 
     # ECC key parameters
     #ecc:
-    #  curve: P256
+    #  curve: P-256
 
     # The TCG recommended guidance allows an optional EK auth policy. 
     # Enabling this option will apply the platform PCR policy to the EK
@@ -412,7 +412,7 @@ certificate-authority:
         # PKCS #8 ECDSA
         - algorithm: ECDSA
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: pkcs8
@@ -423,7 +423,7 @@ certificate-authority:
         # TPM 2.0 ECDSA
         - algorithm: ECDSA
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
@@ -434,7 +434,7 @@ certificate-authority:
         # PKCS #8 Ed25519
         - algorithm: Ed25519
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: Ed25519
           hash: SHA-256
           store: pkcs8
@@ -502,7 +502,7 @@ certificate-authority:
         # PKCS #8 ECDSA
         - algorithm: ECDSA
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: pkcs8
@@ -513,7 +513,7 @@ certificate-authority:
         # TPM 2.0 ECDSA
         - algorithm: ECDSA
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
@@ -524,7 +524,7 @@ certificate-authority:
         # PKCS #8 Ed25519
         - algorithm: Ed25519
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: Ed25519
           hash: SHA-256
           store: pkcs8
@@ -573,7 +573,7 @@ webservice:
     #
     # algorithm: ECDSA
     # ecc:
-    #   curve: P256
+    #   curve: P-256
     # signature-algorithm: ECDSA-SHA256
     # hash: SHA-256
     # store: pkcs8
@@ -583,7 +583,7 @@ webservice:
     #
     # algorithm: Ed25519
     # ecc:
-    #   curve: P256
+    #   curve: P-256
     # signature-algorithm: Ed25519
     # hash: SHA-256
     # store: pkcs8

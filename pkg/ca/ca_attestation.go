@@ -27,7 +27,7 @@ func (ca *CA) ImportEndorsementKeyCertificate(
 
 	blobKey := ca.tpmBlobKey(ekAttrs)
 
-	caKeyAttrs, err := ca.CAKeyAttributes(&ekAttrs.StoreType, &ekAttrs.KeyAlgorithm)
+	caKeyAttrs, err := ca.CAKeyAttributes(ekAttrs.StoreType, ekAttrs.KeyAlgorithm)
 	if err != nil {
 		return err
 	}
@@ -55,7 +55,7 @@ func (ca *CA) EndorsementKeyCertificate() ([]byte, error) {
 		return nil, err
 	}
 
-	attrs, err := ca.CAKeyAttributes(&ekAttrs.StoreType, &ekAttrs.KeyAlgorithm)
+	attrs, err := ca.CAKeyAttributes(ekAttrs.StoreType, ekAttrs.KeyAlgorithm)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,7 @@ func (ca *CA) ImportAttestationKeyCertificate(
 	attrs.CN = fmt.Sprintf(akCertBlobName, certstore.FSEXT_DER)
 	blobKeyDER := ca.tpmBlobKey(attrs)
 
-	caKeyAttrs, err := ca.CAKeyAttributes(&attrs.StoreType, &attrs.KeyAlgorithm)
+	caKeyAttrs, err := ca.CAKeyAttributes(attrs.StoreType, attrs.KeyAlgorithm)
 	if err != nil {
 		return err
 	}
@@ -185,7 +185,7 @@ func (ca *CA) ImportAttestation(
 		return ErrInvalidAttestationBlobType
 	}
 
-	caKeyAttrs, err := ca.CAKeyAttributes(&akAttrs.StoreType, &akAttrs.KeyAlgorithm)
+	caKeyAttrs, err := ca.CAKeyAttributes(akAttrs.StoreType, akAttrs.KeyAlgorithm)
 	if err != nil {
 		return keystore.ErrInvalidKeyAlgorithm
 	}
@@ -360,7 +360,7 @@ func (ca *CA) VerifyQuote(akAttrs *keystore.KeyAttributes, quote tpm2.Quote, non
 }
 
 func (ca *CA) VerifyAttestationQuote(akAttrs *keystore.KeyAttributes, quote []byte) error {
-	caKeyAttrs, err := ca.CAKeyAttributes(&akAttrs.StoreType, &akAttrs.KeyAlgorithm)
+	caKeyAttrs, err := ca.CAKeyAttributes(akAttrs.StoreType, akAttrs.KeyAlgorithm)
 	if err != nil {
 		return err
 	}
@@ -411,7 +411,7 @@ func (ca *CA) VerifyAttestationEventLog(akAttrs *keystore.KeyAttributes, eventLo
 
 func (ca *CA) VerifyAttestationPCRs(akAttrs *keystore.KeyAttributes, pcrs []byte) error {
 
-	caKeyAttrs, err := ca.CAKeyAttributes(&akAttrs.StoreType, &akAttrs.KeyAlgorithm)
+	caKeyAttrs, err := ca.CAKeyAttributes(akAttrs.StoreType, akAttrs.KeyAlgorithm)
 	if err != nil {
 		return err
 	}

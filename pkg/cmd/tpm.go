@@ -2,23 +2,21 @@ package cmd
 
 import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cmd/tpm"
-	subcmd "github.com/jeremyhahn/go-trusted-platform/pkg/cmd/tpm"
 	"github.com/spf13/cobra"
-)
 
-var (
-	tpmDevicePath string
+	subcmd "github.com/jeremyhahn/go-trusted-platform/pkg/cmd/tpm"
 )
 
 func init() {
 
-	caCmd.PersistentFlags().StringVar(&tpmDevicePath, "device", "/dev/tpm0", "The TPM device path")
-
 	tpmCmd.AddCommand(tpm.ClearCmd)
 	tpmCmd.AddCommand(tpm.EKCmd)
-	tpmCmd.AddCommand(tpm.EventLogEKCmd)
+	tpmCmd.AddCommand(tpm.EventLogCmd)
 	tpmCmd.AddCommand(tpm.InfoCmd)
 	tpmCmd.AddCommand(tpm.ProvisionCmd)
+	tpmCmd.AddCommand(tpm.UnsealCmd)
+	tpmCmd.AddCommand(tpm.SealCmd)
+	tpmCmd.AddCommand(tpm.SRKCmd)
 
 	rootCmd.AddCommand(tpmCmd)
 }
@@ -27,7 +25,6 @@ func initTPM() {
 
 	subcmd.App = App
 	subcmd.InitParams = InitParams
-	subcmd.DevicePath = tpmDevicePath
 }
 
 var tpmCmd = &cobra.Command{
@@ -62,7 +59,6 @@ TPM 2.0  Provisioning Guidance:
 * Section 11: Platform Administrator Provisioning
 https://trustedcomputinggroup.org/wp-content/uploads/TCG-TPM-v2.0-Provisioning-Guidance-Published-v1r1.pdf
 `,
-	Run: func(cmd *cobra.Command, args []string) {
-
-	},
+	// Run: func(cmd *cobra.Command, args []string) {
+	// },
 }

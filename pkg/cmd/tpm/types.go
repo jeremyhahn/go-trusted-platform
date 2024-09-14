@@ -7,7 +7,6 @@ import (
 var (
 	App        *app.App
 	InitParams *app.AppInitParams
-	DevicePath string
 )
 
 func init() {

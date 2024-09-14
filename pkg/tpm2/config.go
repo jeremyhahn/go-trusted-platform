@@ -1,6 +1,7 @@
 package tpm2
 
 import (
+	"crypto"
 	"crypto/x509"
 	"errors"
 
@@ -8,16 +9,52 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 )
 
-type HierarchyType string
-
 var (
 	ErrInvalidHierarchyType = errors.New("tpm2: invalid hierarchy type")
-)
 
-const (
-	HIERARCHY_TYPE_ENDORSEMENT = "ENDORSEMENT"
-	HIERARCHY_TYPE_OWNER       = "OWNER"
-	HIERARCHY_TYPE_PLATFORM    = "PLATFORM"
+	DefaultConfig = Config{
+		EncryptSession: false,
+		UseEntropy:     false,
+		Device:         "/dev/tpmrm0",
+		UseSimulator:   true,
+		Hash:           "SHA-256",
+		EK: &EKConfig{
+			CertHandle:    0x01C00002,
+			Handle:        0x81010001,
+			HierarchyAuth: keystore.DEFAULT_PASSWORD,
+			RSAConfig: &keystore.RSAConfig{
+				KeySize: 2048,
+			},
+		},
+		FileIntegrity: []string{
+			"./",
+		},
+		IAK: &IAKConfig{
+			CN:           "device-id-001",
+			Debug:        true,
+			Hash:         crypto.SHA256.String(),
+			Handle:       uint32(0x81010002),
+			KeyAlgorithm: x509.RSA.String(),
+			RSAConfig: &keystore.RSAConfig{
+				KeySize: 2048,
+			},
+			SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
+		},
+		KeyStore: &KeyStoreConfig{
+			SRKAuth:        "platform",
+			SRKHandle:      0x81000002,
+			PlatformPolicy: true,
+		},
+		PlatformPCR: uint(16),
+		SSRK: &SRKConfig{
+			Handle:        0x81000001,
+			HierarchyAuth: keystore.DEFAULT_PASSWORD,
+			KeyAlgorithm:  x509.RSA.String(),
+			RSAConfig: &keystore.RSAConfig{
+				KeySize: 2048,
+			},
+		},
+	}
 )
 
 type Config struct {

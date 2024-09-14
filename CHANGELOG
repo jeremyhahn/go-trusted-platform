@@ -1,14 +1,3 @@
-- Add PKCS #11 key store module
-- Add TPM 2.0 key store module
-- Decouple key and certificate backends from CA and each other
-- Complete initial key and certificate store implementations
-- Create IAK, IDevID keys and certificates
-- Generate, sign & verify TCG-CSR-IDEVID compliant CSR
-- Add TCG specific OIDs to generated certificates
-- Add Trusted Platform custom OIDs for key store types
-- Introduce initial docker support
-- Introduce initial yubikey support
-- Clean up documentation
-- Add man pages for all currently implemented CLI commands
-- Create CHANGELOG
-- Version bump
+- Clean up current CLI commands
+- Add tests for CLI commands
+- Misc bug fixes

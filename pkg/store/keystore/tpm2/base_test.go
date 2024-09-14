@@ -15,6 +15,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/op/go-logging"
+	"github.com/spf13/afero"
 )
 
 var currentWorkingDirectory, _ = os.Getwd()
@@ -61,7 +62,8 @@ func createKeyStore(
 	hexVal := hex.EncodeToString(buf)
 	tmp := fmt.Sprintf("%s/%s", TEST_DIR, hexVal)
 
-	blobStore, err := blob.NewFSBlobStore(logger, tmp, nil)
+	fs := afero.NewMemMapFs()
+	blobStore, err := blob.NewFSBlobStore(logger, fs, tmp, nil)
 	if err != nil {
 		logger.Fatal(err)
 	}
@@ -71,7 +73,7 @@ func createKeyStore(
 		logger.Fatal(err)
 	}
 
-	keyBackend := keystore.NewFileBackend(logger, tmp)
+	keyBackend := keystore.NewFileBackend(logger, afero.NewMemMapFs(), tmp)
 
 	signerStore := keystore.NewSignerStore(blobStore)
 

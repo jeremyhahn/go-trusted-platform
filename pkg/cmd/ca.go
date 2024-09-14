@@ -9,25 +9,21 @@ import (
 
 func init() {
 
-	// Init CA flags
-	caCmd.PersistentFlags().StringVar(&subcmd.CN, "cn", "", "Subject common name")
-	caCmd.PersistentFlags().StringVar(&subcmd.Algorithm, "algorithm", "RSA", "The certificate key store")
-	caCmd.PersistentFlags().StringVar(&subcmd.KeyStore, "store", "pkcs8", "The certificate key store")
-	caCmd.PersistentFlags().StringVar(&subcmd.KeyType, "type", "TLS", "The certificate / key type")
+	// CA options
 	caCmd.PersistentFlags().StringVar(&subcmd.SansDNS, "sans-dns", "", "Comma separated list of SANS DNS names (ex: domain1.com,domain2.com)")
 	caCmd.PersistentFlags().StringVar(&subcmd.SansIPs, "sans-ips", "", "Comma separated list of SANS IP Addresses (ex: 1.2.3.4,5.6.7.8)")
 	caCmd.PersistentFlags().StringVar(&subcmd.SansEmails, "sans-emails", "", "Comma separated list of SANS IP Email addresses (ex: me@domain1.com,me@domain2.com)")
 
-	// Init CA subcommands
+	// Add CA subcommands
+	caCmd.AddCommand(subcmd.CertificateCmd)
 	caCmd.AddCommand(subcmd.InfoCmd)
 	caCmd.AddCommand(subcmd.InitCmd)
 	caCmd.AddCommand(subcmd.InstallCmd)
 	caCmd.AddCommand(subcmd.IssueCmd)
 	caCmd.AddCommand(subcmd.RevokeCmd)
-	caCmd.AddCommand(subcmd.ShowCmd)
 	caCmd.AddCommand(subcmd.UninstallCmd)
 
-	// Add CA command to root command
+	// Add CA commands to root
 	rootCmd.AddCommand(caCmd)
 }
 
@@ -41,8 +37,9 @@ func initCA() {
 			DebugSecrets: App.DebugSecretsFlag,
 			Logger:       App.Logger,
 			Config:       *App.CAConfig,
+			Fs:           App.FS,
 			SelectedCA:   InitParams.PlatformCA,
-			Random:       App.TPM,
+			Random:       App.Random,
 			BlobStore:    App.BlobStore,
 			SignerStore:  App.SignerStore,
 			TPM:          App.TPM,
@@ -63,7 +60,6 @@ services to the platform. Create, install, issue, and revoke certificates,
 secure web services, mTLS, encryption, perform identity management, remote
 attestation and more, build trusts with with other Certificate Authorities
 and more..`,
-	Run: func(cmd *cobra.Command, args []string) {
-
-	},
+	// Run: func(cmd *cobra.Command, args []string) {
+	// },
 }

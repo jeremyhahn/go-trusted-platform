@@ -12,3 +12,7 @@ var (
 	CAParams   *ca.CAParams
 	InitParams *app.AppInitParams
 )
+
+func init() {
+	InitParams = &app.AppInitParams{}
+}

@@ -6,11 +6,11 @@ import (
 	"strconv"
 
 	"github.com/gorilla/mux"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/model"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/op/go-logging"
 )
 
 type SystemRestServicer interface {
@@ -23,20 +23,25 @@ type SystemRestServicer interface {
 }
 
 type SystemRestService struct {
-	app          *app.App
-	httpWriter   response.HttpWriter
-	endpointList *[]string
+	ca                  ca.CertificateAuthority
+	endpointList        *[]string
+	httpWriter          response.HttpWriter
+	logger              *logging.Logger
+	serverKeyAttributes *keystore.KeyAttributes
 	SystemRestServicer
 }
 
 func NewSystemRestService(
-	app *app.App,
+	ca ca.CertificateAuthority,
+	serverKeyAttributes *keystore.KeyAttributes,
 	httpWriter response.HttpWriter,
+	logger *logging.Logger,
 	endpointList *[]string) SystemRestServicer {
 
 	return &SystemRestService{
-		app:          app,
+		ca:           ca,
 		httpWriter:   httpWriter,
+		logger:       logger,
 		endpointList: endpointList}
 }
 
@@ -47,8 +52,8 @@ func (restService *SystemRestService) Endpoints(w http.ResponseWriter, r *http.R
 
 // Writes the web server public key in PEM form
 func (restService *SystemRestService) PublicKey(w http.ResponseWriter, r *http.Request) {
-	keyAttrs := restService.app.ServerKeyAttributes
-	cert, err := restService.app.CA.Certificate(keyAttrs)
+	keyAttrs := restService.serverKeyAttributes
+	cert, err := restService.ca.Certificate(keyAttrs)
 	if err != nil {
 		if err == certstore.ErrCertNotFound {
 			restService.httpWriter.Error404(w, r, err)
@@ -67,8 +72,8 @@ func (restService *SystemRestService) PublicKey(w http.ResponseWriter, r *http.R
 
 // Writes the web server x509 certificate in PEM form
 func (restService *SystemRestService) Certificate(w http.ResponseWriter, r *http.Request) {
-	keyAttrs := restService.app.ServerKeyAttributes
-	cert, err := restService.app.CA.PEM(keyAttrs)
+	keyAttrs := restService.serverKeyAttributes
+	cert, err := restService.ca.PEM(keyAttrs)
 	if err != nil {
 		if err == certstore.ErrCertNotFound {
 			restService.httpWriter.Error404(w, r, err)
@@ -82,29 +87,35 @@ func (restService *SystemRestService) Certificate(w http.ResponseWriter, r *http
 
 // Writes the application configuration
 func (restService *SystemRestService) Config(w http.ResponseWriter, r *http.Request) {
-	restService.httpWriter.Success200(w, r, restService.app)
+	// restService.httpWriter.Success200(w, r, restService.app)
 }
 
 // Writes the current system status and metrics
 func (restService *SystemRestService) Status(w http.ResponseWriter, r *http.Request) {
 	memstats := &runtime.MemStats{}
 	runtime.ReadMemStats(memstats)
-	systemStatus := &model.SystemStruct{
-		Version: app.GetVersion(),
-		Runtime: &model.SystemRuntime{
-			Version:     runtime.Version(),
-			Cpus:        runtime.NumCPU(),
-			Cgo:         runtime.NumCgoCall(),
-			Goroutines:  runtime.NumGoroutine(),
-			HeapSize:    memstats.HeapAlloc, // essentially what the profiler is giving you (active heap memory)
-			Alloc:       memstats.Alloc,     // similar to HeapAlloc, but for all go managed memory
-			Sys:         memstats.Sys,       // the total amount of memory (address space) requested from the OS
-			Mallocs:     memstats.Mallocs,
-			Frees:       memstats.Frees,
-			NumGC:       memstats.NumGC,
-			NumForcedGC: memstats.NumForcedGC}}
+	// systemStatus := &model.SystemStruct{}
+	// systemStatus, err := system.SystemInfo()
+	// if err != nil {
+	// 	restService.httpWriter.Error500(w, r, err)
+	// 	return
+	// }
+	// systemStatus := &model.SystemStruct{
+	// 	Version: app.GetVersion(),
+	// 	Runtime: &model.SystemRuntime{
+	// 		Version:     runtime.Version(),
+	// 		Cpus:        runtime.NumCPU(),
+	// 		Cgo:         runtime.NumCgoCall(),
+	// 		Goroutines:  runtime.NumGoroutine(),
+	// 		HeapSize:    memstats.HeapAlloc, // essentially what the profiler is giving you (active heap memory)
+	// 		Alloc:       memstats.Alloc,     // similar to HeapAlloc, but for all go managed memory
+	// 		Sys:         memstats.Sys,       // the total amount of memory (address space) requested from the OS
+	// 		Mallocs:     memstats.Mallocs,
+	// 		Frees:       memstats.Frees,
+	// 		NumGC:       memstats.NumGC,
+	// 		NumForcedGC: memstats.NumForcedGC}}
 
-	restService.httpWriter.Success200(w, r, systemStatus)
+	// restService.httpWriter.Success200(w, r, systemStatus)
 }
 
 // Writes a page of system event log entries
@@ -119,7 +130,7 @@ func (restService *SystemRestService) EventsPage(w http.ResponseWriter, r *http.
 		return
 	}
 
-	restService.app.Logger.Debugf("EventsPage: page %s requested", page)
+	restService.logger.Debugf("EventsPage: page %s requested", page)
 
 	restService.httpWriter.Success200(w, r, p)
 }
