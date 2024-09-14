@@ -2,7 +2,6 @@ package tpm2
 
 import (
 	"crypto/x509"
-	"encoding/hex"
 	"fmt"
 	"os"
 
@@ -52,7 +51,8 @@ func (tpm *TPM2) Install(soPIN keystore.Password) error {
 		if err == tpm2.TPMRC(0x18b) {
 			// TPM_RC_HANDLE (handle 1): the handle is not correct for the use
 			tpm.logger.Info("Creating Endorsement Key")
-			ekAttrs, err = EKAttributesFromConfig(*tpm.config.EK, &tpm.policyDigest)
+			policyDigest := tpm.PlatformPolicyDigest()
+			ekAttrs, err = EKAttributesFromConfig(*tpm.config.EK, &policyDigest)
 			if err != nil {
 				return err
 			}
@@ -72,7 +72,8 @@ func (tpm *TPM2) Install(soPIN keystore.Password) error {
 	if err != nil {
 		if err == tpm2.TPMRC(0x18b) {
 			tpm.logger.Info("Creating Shared SRK")
-			ssrkAttrs, err = SRKAttributesFromConfig(*tpm.config.SSRK, &tpm.policyDigest)
+			policyDigest := tpm.PlatformPolicyDigest()
+			ssrkAttrs, err = SRKAttributesFromConfig(*tpm.config.SSRK, &policyDigest)
 			if err != nil {
 				return err
 			}
@@ -367,9 +368,50 @@ func (tpm *TPM2) GoldenMeasurements() []byte {
 	return gold
 }
 
+// Reads the current PCR value and returns it's digest buffer
+func (tpm *TPM2) PlatformPolicyDigestHash() ([]byte, error) {
+
+	// TODO: read from config
+	hashAlg := tpm2.TPMAlgSHA256
+
+	cryptoHashAlg, err := hashAlg.Hash()
+	if err != nil {
+		return nil, err
+	}
+
+	pcrReadRsp, err := tpm2.PCRRead{
+		PCRSelectionIn: tpm2.TPMLPCRSelection{
+			PCRSelections: []tpm2.TPMSPCRSelection{{
+				Hash:      hashAlg,
+				PCRSelect: tpm2.PCClientCompatible.PCRs(uint(tpm.config.PlatformPCR)),
+			},
+			},
+		},
+	}.Execute(tpm.transport)
+	if err != nil {
+		tpm.logger.Error(err)
+		return nil, err
+	}
+	buffer := pcrReadRsp.PCRValues.Digests[0].Buffer
+
+	// Create digest of the golden PCR
+	hash := cryptoHashAlg.New()
+	hash.Reset()
+	hash.Write(buffer)
+	digest := hash.Sum(nil)
+
+	tpm.logger.Debugf("PlatformPolicyDigest: PCRRead buffer: %x", buffer)
+	tpm.logger.Debugf("PlatformPolicyDigest: PCRRead digest: %x", digest)
+
+	return digest, nil
+}
+
 // Returns the Golden Integrity Measurement and Policy Digest ready
 // to be attached to a key.
 func (tpm *TPM2) CreatePlatformPolicy() error {
+
+	// TODO: read from config
+	hashAlg := tpm2.TPMAlgSHA256
 
 	// Capture platform measurements and extend the Golden
 	// Integrity Measurement into the platform selected PCR
@@ -388,7 +430,7 @@ func (tpm *TPM2) CreatePlatformPolicy() error {
 		Digests: tpm2.TPMLDigestValues{
 			Digests: []tpm2.TPMTHA{
 				{
-					HashAlg: tpm2.TPMAlgSHA256,
+					HashAlg: hashAlg,
 					Digest:  measurement,
 				},
 			},
@@ -399,26 +441,15 @@ func (tpm *TPM2) CreatePlatformPolicy() error {
 		return err
 	}
 
-	// Read the golden PCR value - this is the value that's
-	// needed to satisfy future PolicySessions
-	pcrReadRsp, err := tpm2.PCRRead{
-		PCRSelectionIn: tpm2.TPMLPCRSelection{
-			PCRSelections: []tpm2.TPMSPCRSelection{{
-				Hash:      tpm2.TPMAlgSHA256,
-				PCRSelect: tpm2.PCClientCompatible.PCRs(uint(tpm.config.PlatformPCR)),
-			},
-			},
-		},
-	}.Execute(tpm.transport)
+	// Get a digest of the current PCR value
+	hash, err := tpm.PlatformPolicyDigestHash()
 	if err != nil {
-		tpm.logger.Error(err)
 		return err
 	}
-	goldenPCR := pcrReadRsp.PCRValues.Digests[0].Buffer
 
-	// Create a trial session to calculate the SRK policy digest
+	// Create a trial session to calculate the policy digest
 	trialSession, closer, err := tpm2.PolicySession(
-		tpm.transport, tpm2.TPMAlgSHA256, 16, tpm2.Trial())
+		tpm.transport, hashAlg, 16, tpm2.Trial())
 	if err != nil {
 		tpm.logger.Error(err)
 		return err
@@ -434,7 +465,7 @@ func (tpm *TPM2) CreatePlatformPolicy() error {
 	sel := tpm2.TPMLPCRSelection{
 		PCRSelections: []tpm2.TPMSPCRSelection{
 			{
-				Hash:      tpm2.TPMAlgSHA256,
+				Hash:      hashAlg,
 				PCRSelect: tpm2.PCClientCompatible.PCRs(tpm.config.PlatformPCR),
 			},
 		},
@@ -446,33 +477,41 @@ func (tpm *TPM2) CreatePlatformPolicy() error {
 		Pcrs: tpm2.TPMLPCRSelection{
 			PCRSelections: sel.PCRSelections,
 		},
+		PcrDigest: tpm2.TPM2BDigest{
+			Buffer: hash,
+		},
 	}.Execute(tpm.transport)
 	if err != nil {
 		tpm.logger.Error(err)
 		return err
 	}
 
-	// Calculate the policy digest using the trial session
 	pgd, err := tpm2.PolicyGetDigest{
 		PolicySession: trialSession.Handle(),
 	}.Execute(tpm.transport)
 	if err != nil {
-		tpm.logger.Error(err)
 		return err
 	}
 
-	tpm.logger.Debugf("Golden Integrity Measurements: 0x%s", hex.EncodeToString(measurement))
-	tpm.logger.Debugf("Platform PCR: 0x%s", hex.EncodeToString(goldenPCR))
+	tpm.logger.Debugf("tpm: Golden Integrity Measurements: %x", measurement)
+	tpm.logger.Debugf("tpm: pgd.PolicyDigest.Buffer: %x", pgd.PolicyDigest.Buffer)
+	tpm.logger.Debugf("tpm: hash: %x", hash)
 
 	tpm.policyDigest = pgd.PolicyDigest
 
 	return nil
 }
 
-// Returns the platform PCR policy digest
-func (tpm *TPM2) PlatformPolicyDigest() tpm2.TPM2BDigest {
-	return tpm.policyDigest
-}
+// // Returns the platform policy digest of the Golden
+// // Integrity Measurements with the Policy PCR.
+// func (tpm *TPM2) PlatformPolicyDigest() tpm2.TPM2BDigest {
+// 	if tpm.policyDigest.Buffer == nil {
+// 		if err := tpm.CreatePlatformPolicy(); err != nil {
+// 			tpm.logger.Fatal(err)
+// 		}
+// 	}
+// 	return tpm.policyDigest
+// }
 
 // Recursively sums a directory path using the Hash function
 // specified in the TPM section of the platform configuration

@@ -1,9 +1,8 @@
 package ca
 
 import (
-	"fmt"
-
-	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
 	"github.com/spf13/cobra"
 )
 
@@ -14,24 +13,15 @@ var InstallCmd = &cobra.Command{
 to the operating system trusted certificate store.`,
 	Run: func(cmd *cobra.Command, args []string) {
 
+		prompt.PrintBanner(app.Version)
+
 		App.Init(InitParams)
 
-		rootCA, intermediateCA, err := ca.NewCA(CAParams)
-		if err != nil {
-			App.Logger.Fatal(err)
+		intermediateCN := App.CA.Identity().Subject.CommonName
+		if err := App.CA.OSTrustStore().Install(intermediateCN); err != nil {
+			cmd.PrintErrln(err)
 		}
 
-		if err := rootCA.TrustStore().Install(
-			App.CAConfig.Identity[0].Subject.CommonName); err != nil {
-
-			App.Logger.Fatal(err)
-		}
-
-		intermediateCN := App.CAConfig.Identity[CAParams.SelectedCA].Subject.CommonName
-		if err := intermediateCA.TrustStore().Install(intermediateCN); err != nil {
-			App.Logger.Fatal(err)
-		}
-
-		fmt.Println("CA certificates successfully installed")
+		cmd.Println("CA certificates successfully installed")
 	},
 }

@@ -112,13 +112,21 @@ func (tpm *TPM2) PlatformPolicySession() (tpm2.Session, func() error, error) {
 	var closer func() error
 	var err error
 
+	// TODO: read from config
+	hashAlg := tpm2.TPMAlgSHA256
+
 	// Create PCR selection using "platform-pcr" defined in the platform
 	// configuration file TPM section.
 	sel := tpm2.TPMLPCRSelection{
 		PCRSelections: []tpm2.TPMSPCRSelection{{
-			Hash:      tpm2.TPMAlgSHA256,
+			Hash:      hashAlg,
 			PCRSelect: tpm2.PCClientCompatible.PCRs(tpm.config.PlatformPCR),
 		}},
+	}
+
+	digest, err := tpm.PlatformPolicyDigestHash()
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Create the policy session
@@ -135,11 +143,26 @@ func (tpm *TPM2) PlatformPolicySession() (tpm2.Session, func() error, error) {
 		Pcrs: tpm2.TPMLPCRSelection{
 			PCRSelections: sel.PCRSelections,
 		},
+		PcrDigest: tpm2.TPM2BDigest{
+			Buffer: digest,
+		},
 	}.Execute(tpm.transport)
 	if err != nil {
 		tpm.logger.Error(err)
 		return nil, nil, err
 	}
+
+	pgd, err := tpm2.PolicyGetDigest{
+		PolicySession: session.Handle(),
+	}.Execute(tpm.transport)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tpm.logger.Debugf("tpm: platform PCR policy session digest: %x", digest)
+	tpm.logger.Debugf("tpm: pgd.PolicyDigest.Buffer: %x", pgd.PolicyDigest.Buffer)
+
+	tpm.policyDigest = pgd.PolicyDigest
 
 	return session, closer, nil
 }
@@ -194,10 +217,14 @@ func (tpm *TPM2) CreateSession(
 	var err error
 	var parentAuth []byte
 
+	closer := func() error { return nil }
+
 	if keyAttrs.Parent == nil {
-		return session, nil, keystore.ErrInvalidKeyAttributes
+		return tpm.CreateKeySession(keyAttrs)
 	}
 
+	// Extract the parent authorization password if the parent doesn't have
+	// a platform PCR policy applied
 	if keyAttrs.Parent.Password != nil && !keyAttrs.Parent.PlatformPolicy {
 		parentAuth, err = keyAttrs.Parent.Password.Bytes()
 		if err != nil {
@@ -205,81 +232,66 @@ func (tpm *TPM2) CreateSession(
 		}
 	}
 
-	// if keyAttrs.Password != nil && !keyAttrs.PlatformPolicy {
-	// 	keyAuth, err = keyAttrs.Password.Bytes()
-	// 	if err != nil {
-	// 		return session, nil, err
-	// 	}
-	// }
-
-	closer := func() error { return nil }
-
 	parentHandle := tpm2.TPMHandle(keyAttrs.Parent.TPMAttributes.Handle)
-
-	// Get the parent public area
 	_, parentPub, err := tpm.ReadHandle(parentHandle)
 	if err != nil {
 		return session, nil, err
 	}
 
-	// Create platform policy session if key attributes contains policy flag
 	if keyAttrs.Parent.PlatformPolicy {
+
+		// Create platform PCR policy session
 		session, closer, err = tpm.PlatformPolicySession()
 		if err != nil {
 			return session, nil, err
 		}
+		// dont forget to call closer() when finished
 		// defer closer()
 		tpm.logger.Debugf(
 			"tpm: created platform policy session for %s", keyAttrs.CN)
-	} else {
 
-		if tpm.config.EncryptSession {
-
-			// var ekAuth []byte
-			// ekAttrs := tpm.EKAttributes()
-			// if ekAttrs.Password != nil && !ekAttrs.PlatformPolicy {
-			// 	ekAuth, err = ekAttrs.Password.Bytes()
-			// 	if err != nil {
-			// 		return session, nil, err
-			// 	}
-			// }
-
-			// // Create salted (encrypted?) session using EK
-			// session, closer, err = tpm.HMACSaltedSession(
-			// 	ekAttrs.TPMAttributes.Handle,
-			// 	ekAttrs.TPMAttributes.Public,
-			// 	ekAuth)
-			// if err != nil {
-			// 	tpm.logger.Error(err)
-			// 	return session, nil, err
-			// }
-
-			// Create salted (encrypted?) session using EK
-			session, closer, err = tpm.HMACSaltedSession(
-				parentHandle,
-				parentPub,
-				parentAuth)
-			if err != nil {
-				tpm.logger.Error(err)
-				return session, nil, err
-			}
-			// defer closer()
-
-		} else {
-			// Create unencrypted, authenticated password session
-			// if keyAttrs.Parent.TPMAttributes.HierarchyAuth != nil {
-			// 	parentAuth, err = keyAttrs.Parent.TPMAttributes.HierarchyAuth.Bytes()
-			// 	if err != nil {
-			// 		return session, nil, err
-			// 	}
-			// }
-			session = tpm2.PasswordAuth(parentAuth)
+		if err != nil {
+			return session, nil, err
 		}
-	}
-	if err != nil {
-		return session, nil, err
+		return session, closer, nil
 	}
 
+	if tpm.config.EncryptSession {
+
+		// var ekAuth []byte
+		// ekAttrs := tpm.EKAttributes()
+		// if ekAttrs.Password != nil && !ekAttrs.PlatformPolicy {
+		// 	ekAuth, err = ekAttrs.Password.Bytes()
+		// 	if err != nil {
+		// 		return session, nil, err
+		// 	}
+		// }
+
+		// // Create salted (encrypted?) session using EK
+		// session, closer, err = tpm.HMACSaltedSession(
+		// 	ekAttrs.TPMAttributes.Handle,
+		// 	ekAttrs.TPMAttributes.Public,
+		// 	ekAuth)
+		// if err != nil {
+		// 	tpm.logger.Error(err)
+		// 	return session, nil, err
+		// }
+
+		// Create salted (encrypted?) session using parent (EK)
+		session, closer, err = tpm.HMACSaltedSession(
+			parentHandle,
+			parentPub,
+			parentAuth)
+		if err != nil {
+			tpm.logger.Error(err)
+			return session, nil, err
+		}
+		// dont forget to call closer() when finished
+		// defer closer()
+		return session, closer, nil
+	}
+
+	session = tpm2.PasswordAuth(parentAuth)
 	return session, closer, nil
 }
 
@@ -292,17 +304,15 @@ func (tpm *TPM2) CreateSession(
 // a session closer function that needs to be called to close the session when
 // complete.
 func (tpm *TPM2) CreateKeySession(
-	keyAttrs *keystore.KeyAttributes,
-	parentSession *tpm2.Session) (tpm2.Session, func() error, error) {
+	keyAttrs *keystore.KeyAttributes) (tpm2.Session, func() error, error) {
 
 	var session tpm2.Session
 	var closer func() error
 	var err error
 	var keyAuth []byte
 
-	// Create platform policy session if key attributes contains policy flag
-	// if keyAttrs.PlatformPolicy {
-	if keyAttrs.PlatformPolicy && keyAttrs.Parent.PlatformPolicy {
+	// if keyAttrs.PlatformPolicy && keyAttrs.Parent.PlatformPolicy {
+	if keyAttrs.PlatformPolicy {
 		session, closer, err = tpm.PlatformPolicySession()
 		if err != nil {
 			return session, nil, err
@@ -310,20 +320,15 @@ func (tpm *TPM2) CreateKeySession(
 		// defer closer()
 	} else {
 
-		// Get key authorization password from key attributes
 		if keyAttrs.Password != nil {
 			keyAuth, err = keyAttrs.Password.Bytes()
 			if err != nil {
 				return session, nil, err
 			}
-			// Create unencrypted, authenticated password session
 			session = tpm2.PasswordAuth(keyAuth)
 		} else {
 			session = tpm2.PasswordAuth(nil)
 		}
-	}
-	if err != nil {
-		return session, nil, err
 	}
 
 	if closer == nil {
@@ -334,7 +339,8 @@ func (tpm *TPM2) CreateKeySession(
 }
 
 // Loads the requested TPMAlgKeyedHash encrypted public and private
-// blobs from blob storage.
+// blobs from blob storage. The returned handle must be closed when
+// finished to prevent memory leaks / exhaustion.
 func (tpm *TPM2) LoadKeyPair(
 	keyAttrs *keystore.KeyAttributes,
 	session *tpm2.Session,

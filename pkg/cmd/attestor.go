@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/attestor"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/spf13/cobra"
 )
 
@@ -24,13 +23,8 @@ var attestorCmd = &cobra.Command{
 verification requests from the Verifier to begin Remote Attestation`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App.Init(InitParams)
-
-		sopin := keystore.NewClearPassword(InitParams.SOPin)
-		pin := keystore.NewClearPassword(InitParams.Pin)
-
-		if App.CA == nil {
-			App.InitCA(InitParams.PlatformCA, sopin, pin)
+		if _, err := App.Init(InitParams); err != nil {
+			App.Logger.Fatal(err)
 		}
 
 		_, err := attestor.NewAttestor(App)

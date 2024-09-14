@@ -2,6 +2,9 @@ package certstore
 
 import (
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/rsa"
+	"crypto/sha1"
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
@@ -52,8 +55,8 @@ type CertificateStorer interface {
 	Get(keyAttrs *keystore.KeyAttributes) (*x509.Certificate, error)
 	ImportCertificate(certificate *x509.Certificate) error
 	ImportCRL(cn string, crlDER []byte) error
-	IsRevoked(certificate *x509.Certificate, issuerCert *x509.Certificate) (bool, error)
-	IsRevokedAtDistributionPoints(certificate *x509.Certificate) (bool, error)
+	IsRevoked(certificate *x509.Certificate, issuerCert *x509.Certificate) error
+	IsRevokedAtDistributionPoints(certificate *x509.Certificate) error
 	Revoke(certificate *x509.Certificate, issuerCert *x509.Certificate, signer crypto.Signer) error
 	Save(certificate *x509.Certificate, partition Partition) error
 }
@@ -148,69 +151,116 @@ func KeyAttributesFromCertificate(certificate *x509.Certificate) (*keystore.KeyA
 	}, nil
 }
 
-func DebugCertificate(logger *logging.Logger, cert *x509.Certificate) {
+func DebugCertificate(logger *logging.Logger, certificate *x509.Certificate) {
 	logger.Debug("X509 Certificate")
-	logger.Debugf("  Common Name: %s", cert.Subject.CommonName)
-	logger.Debugf("  Serial Number: %s", cert.SerialNumber.String())
-	logger.Debugf("  Key Algorithm: %s", cert.PublicKeyAlgorithm.String())
-	logger.Debugf("  Signature Algorithm: %s", cert.SignatureAlgorithm.String())
+	logger.Debugf("  Common Name: %s", certificate.Subject.CommonName)
+	logger.Debugf("  Serial Number: %s", certificate.SerialNumber.String())
+	logger.Debugf("  Key Algorithm: %s", certificate.PublicKeyAlgorithm.String())
+	logger.Debugf("  Signature Algorithm: %s", certificate.SignatureAlgorithm.String())
+	logger.Debugf("  Subject Key Identifier: %x", certificate.SubjectKeyId)
+	logger.Debugf("  SHA-1 Fingerprint: %x", sha1.Sum(certificate.Raw))
 
-	logger.Debugf("  Issuer Common Name: %s", cert.Issuer.CommonName)
-	logger.Debugf("  Issuer Serial Number: %s", cert.Issuer.SerialNumber)
+	logger.Debugf("  Issuer Common Name: %s", certificate.Issuer.CommonName)
+	logger.Debugf("  Issuer Serial Number: %s", certificate.Issuer.SerialNumber)
 
-	for i, dns := range cert.DNSNames {
+	for i, dns := range certificate.DNSNames {
 		logger.Debugf("  dns.%d: %s", i, dns)
 	}
 
-	for i, ip := range cert.IPAddresses {
+	for i, ip := range certificate.IPAddresses {
 		logger.Debugf("  ip.%d: %s", i, ip)
 	}
 
-	for i, email := range cert.EmailAddresses {
+	for i, email := range certificate.EmailAddresses {
 		logger.Debugf("  email.%d: %s", i, email)
 	}
 
-	logger.Debugf("  Signature: %s", cert.Signature)
-	logger.Debugf("  Public Key: %+v", cert.PublicKey)
+	logger.Debugf("  Signature: %s", hex.EncodeToString(certificate.Signature))
 
-	pem, err := EncodePEM(cert.Raw)
+	fmt.Println("  Public Key:")
+	switch certificate.PublicKey.(type) {
+	case *rsa.PublicKey:
+		logger.Debugf("    Exponent: %d\n", certificate.PublicKey.(*rsa.PublicKey).E)
+		logger.Debugf("    Modulus: %d\n", certificate.PublicKey.(*rsa.PublicKey).N)
+	case *ecdsa.PublicKey:
+		params := certificate.PublicKey.(*ecdsa.PublicKey).Curve.Params()
+		logger.Debugf("    Curve: %s\n", params.Name)
+		logger.Debugf("    X: %d\n", certificate.PublicKey.(*ecdsa.PublicKey).X)
+		logger.Debugf("    Y: %d\n", certificate.PublicKey.(*ecdsa.PublicKey).Y)
+	}
+
+	pem, err := EncodePEM(certificate.Raw)
 	if err != nil {
 		logger.Error(err)
 	}
 	logger.Debugf("PEM: \n%s", string(pem))
 }
 
-func PrintCertificate(certificate *x509.Certificate) {
+func ToString(certificate *x509.Certificate) string {
+
 	if certificate == nil {
-		return
+		return "nil"
 	}
+
+	var sb strings.Builder
 
 	storeType, _ := ParseKeyStoreType(certificate)
 
-	fmt.Println("X509 Certificate")
-	fmt.Printf("  Common Name: %s\n", certificate.Subject.CommonName)
-	fmt.Printf("  Serial Number: %s\n", certificate.SerialNumber.String())
-	fmt.Printf("  Key Store: %s\n", storeType)
-	fmt.Printf("  Key Algorithm: %s\n", certificate.PublicKeyAlgorithm.String())
-	fmt.Printf("  Signature Algorithm: %s\n",
-		certificate.SignatureAlgorithm.String())
+	sb.WriteString("X509 Certificate\n")
+	sb.WriteString(fmt.Sprintf("  Common Name: %s\n", certificate.Subject.CommonName))
+	sb.WriteString(fmt.Sprintf("  Serial Number: %x\n", certificate.SerialNumber.Bytes()))
+	sb.WriteString(fmt.Sprintf("  Key Store: %s\n", storeType))
+	sb.WriteString(fmt.Sprintf("  Key Algorithm: %s\n", certificate.PublicKeyAlgorithm.String()))
+	sb.WriteString(fmt.Sprintf("  Signature Algorithm: %s\n",
+		certificate.SignatureAlgorithm.String()))
+	sb.WriteString(fmt.Sprintf("  SHA-1 Fingerprint: %x\n", sha1.Sum(certificate.Raw)))
+	sb.WriteString(fmt.Sprintf("  Subject Key Identifier: %x\n", certificate.SubjectKeyId))
 
-	fmt.Printf("  Issuer Common Name: %s\n", certificate.Issuer.CommonName)
-	fmt.Printf("  Issuing Certificate URL: %s\n",
-		strings.Join(certificate.IssuingCertificateURL, ", "))
+	sb.WriteString("  Subject Name:\n")
+	sb.WriteString(fmt.Sprintf("     Country: %s\n", certificate.Subject.Country[0]))
+	sb.WriteString(fmt.Sprintf("     State: %s\n", certificate.Subject.Province[0]))
+	sb.WriteString(fmt.Sprintf("     Locality: %s\n", certificate.Subject.Locality[0]))
+	sb.WriteString(fmt.Sprintf("     Street: %s\n", certificate.Subject.StreetAddress[0]))
+	sb.WriteString(fmt.Sprintf("     Organization: %s\n", certificate.Subject.Organization[0]))
+	sb.WriteString(fmt.Sprintf("     Organizational Unit: %s\n", certificate.Subject.OrganizationalUnit[0]))
+	sb.WriteString(fmt.Sprintf("     Common Name: %s\n", certificate.Subject.CommonName))
+
+	sb.WriteString("  Issuer Name:\n")
+	sb.WriteString(fmt.Sprintf("     Country: %s\n", certificate.Issuer.Country[0]))
+	sb.WriteString(fmt.Sprintf("     State: %s\n", certificate.Issuer.Province[0]))
+	sb.WriteString(fmt.Sprintf("     Locality: %s\n", certificate.Issuer.Locality[0]))
+	sb.WriteString(fmt.Sprintf("     Street: %s\n", certificate.Issuer.StreetAddress[0]))
+	sb.WriteString(fmt.Sprintf("     Organization: %s\n", certificate.Issuer.Organization[0]))
+	sb.WriteString(fmt.Sprintf("     Organizational Unit: %s\n", certificate.Issuer.OrganizationalUnit[0]))
+	sb.WriteString(fmt.Sprintf("     Common Name: %s\n", certificate.Issuer.CommonName))
+
+	sb.WriteString(fmt.Sprintf("  Issuing Certificate URL: %s\n",
+		strings.Join(certificate.IssuingCertificateURL, ", ")))
 
 	for i, dns := range certificate.DNSNames {
-		fmt.Printf("  dns.%d: %s\n", i, dns)
+		sb.WriteString(fmt.Sprintf("  dns.%d: %s\n", i, dns))
 	}
 
 	for i, ip := range certificate.IPAddresses {
-		fmt.Printf("  ip.%d: %s\n", i, ip)
+		sb.WriteString(fmt.Sprintf("  ip.%d: %s\n", i, ip))
 	}
 
 	for i, email := range certificate.EmailAddresses {
-		fmt.Printf("  email.%d: %s\n", i, email)
+		sb.WriteString(fmt.Sprintf("  email.%d: %s\n", i, email))
 	}
 
-	fmt.Printf("  Signature: %s\n", hex.EncodeToString(certificate.Signature))
-	fmt.Printf("  Public Key: %+v\n", certificate.PublicKey)
+	sb.WriteString(fmt.Sprintf("  Signature: %s\n", hex.EncodeToString(certificate.Signature)))
+
+	sb.WriteString("  Public Key:\n")
+
+	der, err := x509.MarshalPKIXPublicKey(certificate.PublicKey)
+	if err != nil {
+		sb.WriteString(err.Error())
+	}
+	sb.WriteString(fmt.Sprintf("    SHA-1 Fingerprint: %x\n", sha1.Sum(der)))
+
+	sb.WriteString(keystore.PublicKeyToString(certificate.PublicKey))
+
+	return sb.String()
+
 }

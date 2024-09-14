@@ -11,7 +11,8 @@ import (
 func init() {
 
 	platformCmd.AddCommand(platform.DestroyCmd)
-	platformCmd.AddCommand(platform.PasswordCmd)
+	platformCmd.AddCommand(platform.KeyringCmd)
+	platformCmd.AddCommand(platform.PolicyCmd)
 	platformCmd.AddCommand(platform.ProvisionCmd)
 	platformCmd.AddCommand(platform.InstallCmd)
 
@@ -29,7 +30,6 @@ var platformCmd = &cobra.Command{
 	Use:   "platform",
 	Short: "Platform Operations",
 	Long:  `Perform Platform Administrator operations`,
-	Run: func(cmd *cobra.Command, args []string) {
-
-	},
+	// Run: func(cmd *cobra.Command, args []string) {
+	// },
 }

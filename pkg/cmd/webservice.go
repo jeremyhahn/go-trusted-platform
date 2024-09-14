@@ -25,10 +25,19 @@ var webserverCmd = &cobra.Command{
 		App.Init(InitParams)
 
 		// Build rest service registry
-		restRegistry := rest.NewRestServiceRegistry(App)
+		restRegistry := rest.NewRestServiceRegistry(
+			App.Logger,
+			App.CA,
+			App.ServerKeyAttributes,
+		)
+
 		webserver := webservice.NewWebServerV1(
-			App,
-			restRegistry)
+			App.Logger,
+			App.CA,
+			App.WebService,
+			App.ListenAddress,
+			restRegistry,
+			App.ServerKeyAttributes)
 
 		// Start the web server in a background goroutine
 		go webserver.Run()

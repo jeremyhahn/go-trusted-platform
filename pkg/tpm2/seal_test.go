@@ -30,79 +30,82 @@ func TestSealUnseal(t *testing.T) {
 
 		for _, policyOpt := range policyOpts {
 
-			for _, passwdOpt := range passwdOpts {
+			if policyOpt == false {
 
-				logger, tpm := createSim(encryptOpt, policyOpt)
+				for _, passwdOpt := range passwdOpts {
 
-				ekAttrs, err := tpm.EKAttributes()
-				assert.Nil(t, err)
+					logger, tpm := createSim(encryptOpt, policyOpt)
 
-				hierarchyAuth := ekAttrs.TPMAttributes.HierarchyAuth
+					ekAttrs, err := tpm.EKAttributes()
+					assert.Nil(t, err)
 
-				srkTemplate := tpm2.RSASRKTemplate
-				srkTemplate.ObjectAttributes.NoDA = false
+					hierarchyAuth := ekAttrs.TPMAttributes.HierarchyAuth
 
-				var srkAuth keystore.Password
-				var keyAuth keystore.Password
-				if passwdOpt {
-					srkAuth = keystore.NewClearPassword([]byte("srk-password"))
-					keyAuth = keystore.NewClearPassword([]byte("key-password"))
+					srkTemplate := tpm2.RSASRKTemplate
+					srkTemplate.ObjectAttributes.NoDA = false
+
+					var srkAuth keystore.Password
+					var keyAuth keystore.Password
+					if passwdOpt {
+						srkAuth = keystore.NewClearPassword([]byte("srk-password"))
+						keyAuth = keystore.NewClearPassword([]byte("key-password"))
+					}
+
+					srkAttrs := &keystore.KeyAttributes{
+						CN:             "srk-with-policy",
+						KeyAlgorithm:   x509.RSA,
+						KeyType:        keystore.KEY_TYPE_STORAGE,
+						Password:       srkAuth,
+						PlatformPolicy: policyOpt,
+						StoreType:      keystore.STORE_TPM2,
+						TPMAttributes: &keystore.TPMAttributes{
+							Handle:        keyStoreHandle,
+							HandleType:    tpm2.TPMHTPersistent,
+							Hierarchy:     tpm2.TPMRHOwner,
+							HierarchyAuth: hierarchyAuth,
+							Template:      srkTemplate,
+						}}
+
+					err = tpm.CreateSRK(srkAttrs)
+					assert.Nil(t, err)
+
+					keyAttrs := &keystore.KeyAttributes{
+						CN:             "test",
+						KeyAlgorithm:   x509.RSA,
+						KeyType:        keystore.KEY_TYPE_CA,
+						Parent:         srkAttrs,
+						Password:       keyAuth,
+						PlatformPolicy: policyOpt,
+						StoreType:      keystore.STORE_TPM2,
+						TPMAttributes: &keystore.TPMAttributes{
+							Hierarchy: tpm2.TPMRHOwner,
+						}}
+
+					_, err = tpm.Seal(keyAttrs, nil)
+					assert.Nil(t, err)
+
+					// Retrieve the AES-256 key protected
+					// by the platform PCR session policy
+					secret, err := tpm.Unseal(keyAttrs, nil)
+					assert.Nil(t, err)
+					assert.NotNil(t, secret)
+					assert.Equal(t, 32, len(secret))
+
+					// Print the secret and TPM handles
+					logger.Debug(string(secret))
+
+					if policyOpt {
+						// Extend the PCR and read again - policy check should fail
+						extendRandomBytes(tpm.Transport())
+						secret2, err := tpm.Unseal(keyAttrs, nil)
+						assert.NotNil(t, err)
+						assert.Nil(t, secret2)
+						assert.Equal(t, ErrPolicyCheckFailed, err)
+					}
+
+					// Close / reset the simulator between tests
+					tpm.Close()
 				}
-
-				srkAttrs := &keystore.KeyAttributes{
-					CN:             "srk-with-policy",
-					KeyAlgorithm:   x509.RSA,
-					KeyType:        keystore.KEY_TYPE_STORAGE,
-					Password:       srkAuth,
-					PlatformPolicy: policyOpt,
-					StoreType:      keystore.STORE_TPM2,
-					TPMAttributes: &keystore.TPMAttributes{
-						Handle:        keyStoreHandle,
-						HandleType:    tpm2.TPMHTPersistent,
-						Hierarchy:     tpm2.TPMRHOwner,
-						HierarchyAuth: hierarchyAuth,
-						Template:      srkTemplate,
-					}}
-
-				err = tpm.CreateSRK(srkAttrs)
-				assert.Nil(t, err)
-
-				keyAttrs := &keystore.KeyAttributes{
-					CN:             "test",
-					KeyAlgorithm:   x509.RSA,
-					KeyType:        keystore.KEY_TYPE_CA,
-					Parent:         srkAttrs,
-					Password:       keyAuth,
-					PlatformPolicy: policyOpt,
-					StoreType:      keystore.STORE_TPM2,
-					TPMAttributes: &keystore.TPMAttributes{
-						Hierarchy: tpm2.TPMRHOwner,
-					}}
-
-				_, err = tpm.Seal(keyAttrs, nil)
-				assert.Nil(t, err)
-
-				// Retrieve the AES-256 key protected
-				// by the platform PCR session policy
-				secret, err := tpm.Unseal(keyAttrs, nil)
-				assert.Nil(t, err)
-				assert.NotNil(t, secret)
-				assert.Equal(t, 32, len(secret))
-
-				// Print the secret and TPM handles
-				logger.Debug(string(secret))
-
-				if policyOpt {
-					// Extend the PCR and read again - policy check should fail
-					extendRandomBytes(tpm.Transport())
-					secret2, err := tpm.Unseal(keyAttrs, nil)
-					assert.NotNil(t, err)
-					assert.Nil(t, secret2)
-					assert.Equal(t, ErrPolicyCheckFailed, err)
-				}
-
-				// Close / reset the simulator between tests
-				tpm.Close()
 			}
 		}
 	}

@@ -11,52 +11,54 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/pkcs8"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
 	"github.com/op/go-logging"
+	"github.com/spf13/afero"
 
 	tpm2ks "github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/tpm2"
 )
 
 var (
-	ErrInvalidKeyChainCN       = errors.New("keychain: invalid configuration, missing CN")
-	ErrInvalidPlatformKeyStore = errors.New("keychain: invalid platform key store")
+	ErrInvalidKeyringCN        = errors.New("Keyring: invalid configuration, missing CN")
+	ErrInvalidPlatformKeyStore = errors.New("Keyring: invalid platform key store")
 )
 
-type KeyChainConfig struct {
+type KeyringConfig struct {
 	CN           string               `yaml:"cn" json:"cn" mapstructure:"cn"`
 	PKCS8Config  *pkcs8.Config        `yaml:"pkcs8" json:"pkcs8" mapstructure:"pkcs8"`
 	PKCS11Config *pkcs11.Config       `yaml:"pkcs11" json:"pkcs11" mapstructure:"pkcs11"`
 	TPMConfig    *tpm2.KeyStoreConfig `yaml:"tpm2" json:"tpm2" mapstructure:"tpm2"`
 }
 
-// The KeyChain provides access to all of the underlying Key Store Modules
+// The Keyring provides access to all of the underlying Key Store Modules
 // through a common API that abstracts away the implementation details of
-// the underlying store. The KeyChain also implements the key store interface
+// the underlying store. The Keyring also implements the key store interface
 // itself, using the StoreType property in the KeyAttributes to route the
 // operation to the correct Key Store Module.
-type KeyChain struct {
+type Keyring struct {
 	backend    keystore.KeyBackend
 	logger     *logging.Logger
-	config     *KeyChainConfig
+	config     *KeyringConfig
 	platformKS tpm2ks.PlatformKeyStorer
 	storeMap   map[keystore.StoreType]keystore.KeyStorer
 	tpm        tpm2.TrustedPlatformModule
 	keystore.KeyStorer
 }
 
-// Generates a new keychain using the provided configuration to instantiate
+// Generates a new Keyring using the provided configuration to instantiate
 // the underlying key store modules.
-func NewKeyChain(
+func NewKeyring(
 	logger *logging.Logger,
 	debugSecrets bool,
+	fs afero.Fs,
 	rootDir string,
 	random io.Reader,
-	config *KeyChainConfig,
+	config *KeyringConfig,
 	keyBackend keystore.KeyBackend,
 	blobStore blob.BlobStorer,
 	signerStore keystore.SignerStorer,
 	tpm tpm2.TrustedPlatformModule,
 	platformKS tpm2ks.PlatformKeyStorer,
 	soPIN keystore.Password,
-	userPIN keystore.Password) (keychain *KeyChain, err error) {
+	userPIN keystore.Password) (*Keyring, error) {
 
 	// // Ensure PIN meets requirements
 	// userPIN, err = ensurePIN(logger, debugSecrets, random, userPIN)
@@ -69,7 +71,7 @@ func NewKeyChain(
 	}
 
 	if config.CN == "" {
-		return nil, ErrInvalidKeyChainCN
+		return nil, ErrInvalidKeyringCN
 	}
 
 	// Set the TPM key store name to the name of the CA
@@ -93,6 +95,7 @@ func NewKeyChain(
 			Logger:           logger,
 			DebugSecrets:     debugSecrets,
 			Config:           config.TPMConfig,
+			Random:           random,
 			PlatformKeyStore: platformKS,
 			SignerStore:      signerStore,
 			TPM:              tpm,
@@ -143,6 +146,7 @@ func NewKeyChain(
 			Backend:      keyBackend,
 			Config:       config.PKCS11Config,
 			DebugSecrets: debugSecrets,
+			Fs:           fs,
 			Logger:       logger,
 			Random:       random,
 			SignerStore:  signerStore,
@@ -155,6 +159,8 @@ func NewKeyChain(
 					params.Logger.Error(err)
 					return nil, err
 				}
+			} else if err == keystore.ErrAlreadyInitialized {
+				params.Logger.Warning("CKR_CRYPTOKI_ALREADY_INITIALIZED")
 			} else {
 				return nil, err
 			}
@@ -162,7 +168,7 @@ func NewKeyChain(
 		storeMap[keystore.STORE_PKCS11] = pkcs11Store
 	}
 
-	return &KeyChain{
+	return &Keyring{
 		backend:    keyBackend,
 		logger:     logger,
 		config:     config,
@@ -177,66 +183,66 @@ func NewKeyChain(
 // caching it on the heap. If the key  doesn't have any data sealed,
 // ErrPasswordRequired is returned so the password may be provided
 // by the user.
-func (keychain *KeyChain) Password(
+func (Keyring *Keyring) Password(
 	attrs *keystore.KeyAttributes) (keystore.Password, error) {
 
 	if attrs.Parent == nil {
-		srkAttrs := keychain.platformKS.SRKAttributes()
+		srkAttrs := Keyring.platformKS.SRKAttributes()
 		attrs.Parent = srkAttrs
 	}
 	return tpm2.NewPlatformPassword(
-		keychain.logger,
-		keychain.tpm,
+		Keyring.logger,
+		Keyring.tpm,
 		attrs,
-		keychain.platformKS.Backend(),
+		Keyring.platformKS.Backend(),
 	), nil
 }
 
 // Calls close on each of the key stores and deletes
 // the store from the internal store map.
-func (keychain *KeyChain) Close() {
-	for k, v := range keychain.storeMap {
+func (Keyring *Keyring) Close() {
+	for k, v := range Keyring.storeMap {
 		if err := v.Close(); err != nil {
-			keychain.logger.Error(err)
+			Keyring.logger.Error(err)
 		}
-		delete(keychain.storeMap, k)
+		delete(Keyring.storeMap, k)
 	}
 }
 
 // Returns the configured key stores in the key chain
-func (keychain *KeyChain) Stores() []keystore.KeyStorer {
+func (Keyring *Keyring) Stores() []keystore.KeyStorer {
 	stores := make([]keystore.KeyStorer, 0)
-	for _, v := range keychain.storeMap {
+	for _, v := range Keyring.storeMap {
 		stores = append(stores, v)
 	}
 	return stores
 }
 
 // Returns the PKCS #8 key store
-func (keychain *KeyChain) PKCS8() keystore.KeyStorer {
-	pkcs8, _ := keychain.storeMap[keystore.STORE_PKCS8]
+func (Keyring *Keyring) PKCS8() keystore.KeyStorer {
+	pkcs8, _ := Keyring.storeMap[keystore.STORE_PKCS8]
 	return pkcs8
 }
 
 // Returns the PKCS #11 key store
-func (keychain *KeyChain) PKCS11() keystore.KeyStorer {
-	pkcs11, _ := keychain.storeMap[keystore.STORE_PKCS11]
+func (Keyring *Keyring) PKCS11() keystore.KeyStorer {
+	pkcs11, _ := Keyring.storeMap[keystore.STORE_PKCS11]
 	return pkcs11
 }
 
 // Returns the TPM 2.0 key store
-func (keychain *KeyChain) TPM2() keystore.KeyStorer {
-	tpm, _ := keychain.storeMap[keystore.STORE_TPM2]
+func (Keyring *Keyring) TPM2() keystore.KeyStorer {
+	tpm, _ := Keyring.storeMap[keystore.STORE_TPM2]
 	return tpm
 }
 
 // Generates a new key pair using the provided key attributes
 // and returns an OpaqueKey implementing crypto.Signer and
 // crypto.Decrypter backed by the underlying Key Store Module.
-func (keychain *KeyChain) GenerateKey(
+func (Keyring *Keyring) GenerateKey(
 	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
-	s, ok := keychain.storeMap[attrs.StoreType]
+	s, ok := Keyring.storeMap[attrs.StoreType]
 	if !ok {
 		return nil, keystore.ErrInvalidKeyStore
 	}
@@ -245,10 +251,10 @@ func (keychain *KeyChain) GenerateKey(
 
 // Returns a RSA OpaqueKey for the provided key attributes. The
 // underlying Key Store Module must support the algorithm.
-func (keychain *KeyChain) GenerateRSA(
+func (Keyring *Keyring) GenerateRSA(
 	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
-	s, ok := keychain.storeMap[attrs.StoreType]
+	s, ok := Keyring.storeMap[attrs.StoreType]
 	if !ok {
 		return nil, keystore.ErrInvalidKeyStore
 	}
@@ -257,10 +263,10 @@ func (keychain *KeyChain) GenerateRSA(
 
 // Returns an ECDSA OpaqueKey for the provided key attributes. The
 // underlying Key Store Module must support the algorithm.
-func (keychain *KeyChain) GenerateECDSA(
+func (Keyring *Keyring) GenerateECDSA(
 	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
-	s, ok := keychain.storeMap[attrs.StoreType]
+	s, ok := Keyring.storeMap[attrs.StoreType]
 	if !ok {
 		return nil, keystore.ErrInvalidKeyStore
 	}
@@ -269,10 +275,10 @@ func (keychain *KeyChain) GenerateECDSA(
 
 // Returns an Ed25519 OpaqueKey for the provided key attributes. The
 // underlying Key Store Module must support the algorithm.
-func (keychain *KeyChain) GenerateEd25519(
+func (Keyring *Keyring) GenerateEd25519(
 	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
-	s, ok := keychain.storeMap[attrs.StoreType]
+	s, ok := Keyring.storeMap[attrs.StoreType]
 	if !ok {
 		return nil, keystore.ErrInvalidKeyStore
 	}
@@ -280,22 +286,19 @@ func (keychain *KeyChain) GenerateEd25519(
 }
 
 // Deletes the key pair associated with the provided key attributes
-func (keychain *KeyChain) Delete(attrs *keystore.KeyAttributes) error {
-	s, ok := keychain.storeMap[attrs.StoreType]
+func (Keyring *Keyring) Delete(attrs *keystore.KeyAttributes) error {
+	s, ok := Keyring.storeMap[attrs.StoreType]
 	if !ok {
 		return keystore.ErrInvalidKeyStore
 	}
-	if err := s.Delete(attrs); err != nil {
-		return err
-	}
-	return keychain.platformKS.Delete(attrs)
+	return s.Delete(attrs)
 }
 
 // Returns a crypto.Decrypter for the provided key attributes
-func (keychain *KeyChain) Decrypter(
+func (Keyring *Keyring) Decrypter(
 	attrs *keystore.KeyAttributes) (crypto.Decrypter, error) {
 
-	s, ok := keychain.storeMap[attrs.StoreType]
+	s, ok := Keyring.storeMap[attrs.StoreType]
 	if !ok {
 		return nil, keystore.ErrInvalidKeyStore
 	}
@@ -303,10 +306,10 @@ func (keychain *KeyChain) Decrypter(
 }
 
 // Returns an OpaqueKey  for the provided key attributes
-func (keychain *KeyChain) Key(
+func (Keyring *Keyring) Key(
 	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
-	s, ok := keychain.storeMap[attrs.StoreType]
+	s, ok := Keyring.storeMap[attrs.StoreType]
 	if !ok {
 		return nil, keystore.ErrInvalidKeyStore
 	}
@@ -314,10 +317,10 @@ func (keychain *KeyChain) Key(
 }
 
 // Returns a crypto.Signer for the provided key attributes
-func (keychain *KeyChain) Signer(
+func (Keyring *Keyring) Signer(
 	attrs *keystore.KeyAttributes) (crypto.Signer, error) {
 
-	s, ok := keychain.storeMap[attrs.StoreType]
+	s, ok := Keyring.storeMap[attrs.StoreType]
 	if !ok {
 		return nil, keystore.ErrInvalidKeyStore
 	}
@@ -327,11 +330,11 @@ func (keychain *KeyChain) Signer(
 // Returns a software runtime verifier to perform
 // signature verifications. The verifier supports
 // RSA PKCS1v15, RSA-PSS, ECDSA, and Ed25519.
-func (keychain *KeyChain) Verifier(
+func (Keyring *Keyring) Verifier(
 	attrs *keystore.KeyAttributes,
 	opts *keystore.VerifyOpts) keystore.Verifier {
 
-	s, ok := keychain.storeMap[attrs.StoreType]
+	s, ok := Keyring.storeMap[attrs.StoreType]
 	if !ok {
 		panic(keystore.ErrInvalidKeyStore)
 	}

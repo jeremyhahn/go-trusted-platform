@@ -83,6 +83,8 @@ func createKeystoreSoftHSM2() (*logging.Logger, *PKCS11) {
 		logger.Fatal(err)
 	}
 
+	os.Setenv("SOFTHSM2_CONF", softhsm_conf)
+
 	var slot int = 0
 	config := &Config{
 		Library:       "/usr/local/lib/softhsm/libsofthsm2.so",

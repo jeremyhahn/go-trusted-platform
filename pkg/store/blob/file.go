@@ -3,13 +3,12 @@ package blob
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/op/go-logging"
+	"github.com/spf13/afero"
 )
 
 const (
@@ -28,6 +27,7 @@ type BlobStorer interface {
 
 type BlobStore struct {
 	logger        *logging.Logger
+	fs            afero.Fs
 	blobDir       string
 	signedBlobDir string
 	partition     string
@@ -42,6 +42,7 @@ func NewKey(root, path string) []byte {
 // Creates a new local file system backed blob store
 func NewFSBlobStore(
 	logger *logging.Logger,
+	fs afero.Fs,
 	rootDir string,
 	partition *string) (BlobStorer, error) {
 
@@ -52,13 +53,14 @@ func NewFSBlobStore(
 		partitionName = *partition
 	}
 	dir := fmt.Sprintf("%s/%s", rootDir, partitionName)
-	if err := os.MkdirAll(dir, fs.ModePerm); err != nil {
+	if err := fs.MkdirAll(dir, os.ModePerm); err != nil {
 		logger.Error(err)
 		return nil, err
 	}
 	return &BlobStore{
 		logger:    logger,
 		blobDir:   dir,
+		fs:        fs,
 		partition: partitionName,
 	}, nil
 }
@@ -70,12 +72,12 @@ func NewFSBlobStore(
 func (store *BlobStore) Save(key, data []byte) error {
 	trimmed := strings.TrimLeft(string(key), "/")
 	dir := fmt.Sprintf("%s/%s", store.blobDir, filepath.Dir(trimmed))
-	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+	if err := store.fs.MkdirAll(dir, os.ModePerm); err != nil {
 		store.logger.Errorf("%s: %s", err, trimmed)
 		return err
 	}
 	blobFile := fmt.Sprintf("%s/%s", store.blobDir, trimmed)
-	if err := os.WriteFile(blobFile, data, 0644); err != nil {
+	if err := afero.WriteFile(store.fs, blobFile, data, 0644); err != nil {
 		store.logger.Errorf("%s: %s", err, trimmed)
 		return err
 	}
@@ -87,12 +89,12 @@ func (store *BlobStore) Save(key, data []byte) error {
 func (store *BlobStore) Get(key []byte) ([]byte, error) {
 	trimmed := strings.TrimLeft(string(key), "/")
 	dir := fmt.Sprintf("%s/%s/", store.blobDir, filepath.Dir(trimmed))
-	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+	if err := store.fs.MkdirAll(dir, os.ModePerm); err != nil {
 		store.logger.Error("%s: %s", err, key)
 		return nil, err
 	}
 	blobFile := fmt.Sprintf("%s/%s", store.blobDir, trimmed)
-	bytes, err := os.ReadFile(blobFile)
+	bytes, err := afero.ReadFile(store.fs, blobFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			store.logger.Errorf("store/blob: error retrieving blob: %s, key: %s",
@@ -110,7 +112,7 @@ func (store *BlobStore) Get(key []byte) ([]byte, error) {
 func (store *BlobStore) Delete(key []byte) error {
 	trimmed := strings.TrimLeft(string(key), "/")
 	blobFile := fmt.Sprintf("%s/%s", store.blobDir, trimmed)
-	if !util.FileExists(blobFile) {
+	if _, err := store.fs.Stat(blobFile); err != nil {
 		store.logger.Errorf("%s: %s", ErrBlobNotFound, trimmed)
 		return ErrBlobNotFound
 	}

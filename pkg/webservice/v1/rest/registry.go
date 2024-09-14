@@ -1,33 +1,43 @@
 package rest
 
 import (
-	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"crypto"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/op/go-logging"
 )
 
 type RestRegistry struct {
-	app                 *app.App
+	claimsIssuer        string
+	jwtExpiration       int
+	logger              *logging.Logger
 	jsonWebTokenService JsonWebTokenServicer
+	signer              crypto.Signer
 	systemRestService   SystemRestServicer
 	endpointList        *[]string
 	RestServiceRegistry
 }
 
-func NewRestServiceRegistry(app *app.App) RestServiceRegistry {
+func NewRestServiceRegistry(
+	logger *logging.Logger,
+	ca ca.CertificateAuthority,
+	serverKeyAttributes *keystore.KeyAttributes) RestServiceRegistry {
 
 	endpointList := make([]string, 0)
 	registry := &RestRegistry{
-		app:          app,
 		endpointList: &endpointList}
 
-	httpWriter := response.NewResponseWriter(app.Logger, nil)
+	httpWriter := response.NewResponseWriter(logger, nil)
 
-	registry.createJsonWebTokenService(app.ServerKeyAttributes)
+	registry.createJsonWebTokenService(serverKeyAttributes)
 
 	registry.systemRestService = NewSystemRestService(
-		app,
+		ca,
+		serverKeyAttributes,
 		httpWriter,
+		logger,
 		registry.endpointList)
 
 	return registry
@@ -42,7 +52,7 @@ func (registry *RestRegistry) SystemRestService() SystemRestServicer {
 }
 
 func (registry *RestRegistry) createJsonWebTokenService(keyAttributes *keystore.KeyAttributes) {
-	httpWriter := response.NewResponseWriter(registry.app.Logger, nil)
+	httpWriter := response.NewResponseWriter(registry.logger, nil)
 	// keyfactory, err := registry.app.KeyChainFromConfig(
 	// 	registry.app.WebService.Certificate.KeyChainConfig,
 	// 	registry.app.PlatformDir,
@@ -51,16 +61,14 @@ func (registry *RestRegistry) createJsonWebTokenService(keyAttributes *keystore.
 	// if err != nil {
 	// 	registry.app.Logger.Fatal(err)
 	// }
-	jsonWebTokenService, err := CreateJsonWebTokenService(
-		registry.app,
+	jsonWebTokenService, err := NewJsonWebTokenService(
 		httpWriter,
-		registry.app.WebService.JWTExpiration,
-		keyAttributes,
-		// keyfactory.PKCS8(),
-		registry.app.PlatformKS,
-	)
+		registry.jwtExpiration,
+		registry.signer,
+		registry.claimsIssuer)
+
 	if err != nil {
-		registry.app.Logger.Fatal(err)
+		registry.logger.Fatal(err)
 	}
 	registry.jsonWebTokenService = jsonWebTokenService
 }

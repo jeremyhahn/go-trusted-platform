@@ -2,8 +2,6 @@ package tpm
 
 import (
 	"github.com/spf13/cobra"
-
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 )
 
 var (
@@ -24,20 +22,23 @@ provisioning guidance.`,
 
 		ekAttrs, err := App.TPM.EKAttributes()
 		if err != nil {
-			App.Logger.Fatal(err)
+			cmd.PrintErrln(err)
+			return
 		}
-		keystore.PrintKeyAttributes(ekAttrs)
+		cmd.Println(ekAttrs)
 
 		ssrkAttrs, err := App.TPM.SSRKAttributes()
 		if err != nil {
-			App.Logger.Fatal(err)
+			cmd.PrintErrln(err)
+			return
 		}
-		keystore.PrintKeyAttributes(ssrkAttrs)
+		cmd.Println(ssrkAttrs)
 
 		iakAttrs, err := App.TPM.IAKAttributes()
 		if err != nil {
-			App.Logger.Fatal(err)
+			cmd.PrintErrln(err)
+			return
 		}
-		keystore.PrintKeyAttributes(iakAttrs)
+		cmd.Println(iakAttrs)
 	},
 }

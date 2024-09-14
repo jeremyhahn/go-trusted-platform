@@ -20,6 +20,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/op/go-logging"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 
 	tptpm2 "github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
@@ -79,7 +80,7 @@ func setup() {
 	os.RemoveAll(TESTDATA_DIR)
 }
 
-func TestKeyChain_ECDSA(t *testing.T) {
+func TestKeyring_ECDSA(t *testing.T) {
 
 	logger, tpm, ownerAttrs := createTPM()
 
@@ -91,16 +92,17 @@ func TestKeyChain_ECDSA(t *testing.T) {
 	hexVal := hex.EncodeToString(buf)
 	tmp := fmt.Sprintf("%s/%s", TESTDATA_DIR, hexVal)
 
-	keyBackend := keystore.NewFileBackend(logger, tmp)
+	keyBackend := keystore.NewFileBackend(logger, afero.NewMemMapFs(), tmp)
 
-	blobStore, err := blob.NewFSBlobStore(logger, tmp, nil)
+	fs := afero.NewMemMapFs()
+	blobStore, err := blob.NewFSBlobStore(logger, fs, tmp, nil)
 	if err != nil {
 		logger.Fatal(err)
 	}
 
 	signerStore := keystore.NewSignerStore(blobStore)
 
-	config := &KeyChainConfig{
+	config := &KeyringConfig{
 		PKCS8Config:  pkcs8Config(),
 		PKCS11Config: pkcs11Config(),
 		TPMConfig:    tpmKeyStoreConfig(),
@@ -119,9 +121,10 @@ func TestKeyChain_ECDSA(t *testing.T) {
 		logger.Fatal(err)
 	}
 
-	kf, err := NewKeyChain(
+	kf, err := NewKeyring(
 		util.Logger(),
 		true,
+		fs,
 		TESTDATA_DIR,
 		rand.Reader,
 		config,
@@ -203,7 +206,7 @@ func TestKeyChain_ECDSA(t *testing.T) {
 	assert.True(t, ok)
 }
 
-func TestKeyChain_RSSPSS(t *testing.T) {
+func TestKeyring_RSSPSS(t *testing.T) {
 
 	logger, tpm, ownerAttrs := createTPM()
 
@@ -215,16 +218,17 @@ func TestKeyChain_RSSPSS(t *testing.T) {
 	hexVal := hex.EncodeToString(buf)
 	tmp := fmt.Sprintf("%s/%s", TESTDATA_DIR, hexVal)
 
-	keyBackend := keystore.NewFileBackend(logger, tmp)
+	keyBackend := keystore.NewFileBackend(logger, afero.NewMemMapFs(), tmp)
 
-	blobStore, err := blob.NewFSBlobStore(logger, tmp, nil)
+	fs := afero.NewMemMapFs()
+	blobStore, err := blob.NewFSBlobStore(logger, fs, tmp, nil)
 	if err != nil {
 		logger.Fatal(err)
 	}
 
 	signerStore := keystore.NewSignerStore(blobStore)
 
-	config := &KeyChainConfig{
+	config := &KeyringConfig{
 		PKCS8Config:  pkcs8Config(),
 		PKCS11Config: pkcs11Config(),
 		TPMConfig:    tpmKeyStoreConfig(),
@@ -243,9 +247,10 @@ func TestKeyChain_RSSPSS(t *testing.T) {
 		logger.Fatal(err)
 	}
 
-	kf, err := NewKeyChain(
+	kf, err := NewKeyring(
 		util.Logger(),
 		true,
+		fs,
 		TESTDATA_DIR,
 		rand.Reader,
 		config,
@@ -345,7 +350,7 @@ func TestKeyChain_RSSPSS(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func TestKeyChain_PKCS1v15(t *testing.T) {
+func TestKeyring_PKCS1v15(t *testing.T) {
 
 	logger, tpm, ownerAttrs := createTPM()
 
@@ -357,16 +362,17 @@ func TestKeyChain_PKCS1v15(t *testing.T) {
 	hexVal := hex.EncodeToString(buf)
 	tmp := fmt.Sprintf("%s/%s", TESTDATA_DIR, hexVal)
 
-	keyBackend := keystore.NewFileBackend(logger, tmp)
+	keyBackend := keystore.NewFileBackend(logger, afero.NewMemMapFs(), tmp)
 
-	blobStore, err := blob.NewFSBlobStore(logger, tmp, nil)
+	fs := afero.NewMemMapFs()
+	blobStore, err := blob.NewFSBlobStore(logger, fs, tmp, nil)
 	if err != nil {
 		logger.Fatal(err)
 	}
 
 	signerStore := keystore.NewSignerStore(blobStore)
 
-	config := &KeyChainConfig{
+	config := &KeyringConfig{
 		PKCS8Config:  pkcs8Config(),
 		PKCS11Config: pkcs11Config(),
 		TPMConfig:    tpmKeyStoreConfig(),
@@ -385,9 +391,10 @@ func TestKeyChain_PKCS1v15(t *testing.T) {
 		logger.Fatal(err)
 	}
 
-	kf, err := NewKeyChain(
+	kf, err := NewKeyring(
 		util.Logger(),
 		true,
+		fs,
 		TESTDATA_DIR,
 		rand.Reader,
 		config,
@@ -537,12 +544,13 @@ func createTPM() (*logging.Logger, tptpm2.TrustedPlatformModule, *keystore.KeyAt
 	hexVal := hex.EncodeToString(buf)
 	tmp := fmt.Sprintf("%s/%s", TESTDATA_DIR, hexVal)
 
-	blobStore, err := blob.NewFSBlobStore(logger, tmp, nil)
+	fs := afero.NewMemMapFs()
+	blobStore, err := blob.NewFSBlobStore(logger, fs, tmp, nil)
 	if err != nil {
 		logger.Fatal(err)
 	}
 
-	fileBackend := keystore.NewFileBackend(logger, tmp)
+	fileBackend := keystore.NewFileBackend(logger, afero.NewMemMapFs(), tmp)
 
 	signerStore := keystore.NewSignerStore(blobStore)
 
@@ -608,7 +616,8 @@ func createKeyStore() (*logging.Logger, keystore.KeyStorer, tptpm2.TrustedPlatfo
 	hexVal := hex.EncodeToString(buf)
 	tmp := fmt.Sprintf("%s/%s", TESTDATA_DIR, hexVal)
 
-	blobStore, err := blob.NewFSBlobStore(logger, tmp, nil)
+	fs := afero.NewMemMapFs()
+	blobStore, err := blob.NewFSBlobStore(logger, fs, tmp, nil)
 	if err != nil {
 		logger.Fatal(err)
 	}

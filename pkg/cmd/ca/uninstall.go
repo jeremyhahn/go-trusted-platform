@@ -1,9 +1,6 @@
 package ca
 
 import (
-	"fmt"
-
-	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/spf13/cobra"
 )
 
@@ -16,19 +13,11 @@ from the operating system trusted certificate store.`,
 
 		App.Init(InitParams)
 
-		rootCA, intermediateCA, err := ca.NewCA(CAParams)
-		if err != nil {
-			App.Logger.Fatal(err)
+		intermediateCN := App.CA.Identity().Subject.CommonName
+		if err := App.CA.OSTrustStore().Uninstall(intermediateCN); err != nil {
+			cmd.PrintErrln(err)
 		}
-		if err := rootCA.TrustStore().Uninstall(
-			App.CAConfig.Identity[0].Subject.CommonName); err != nil {
 
-			App.Logger.Fatal(err)
-		}
-		intermediateCN := App.CAConfig.Identity[1].Subject.CommonName
-		if err := intermediateCA.TrustStore().Uninstall(intermediateCN); err != nil {
-			App.Logger.Fatal(err)
-		}
-		fmt.Println("CA certificates successfully uninstalled")
+		cmd.Println("CA certificates successfully uninstalled")
 	},
 }

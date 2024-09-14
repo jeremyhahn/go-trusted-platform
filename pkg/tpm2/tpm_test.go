@@ -1,6 +1,7 @@
 package tpm2
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -45,5 +46,5 @@ func TestInfo(t *testing.T) {
 	assert.NotNil(t, props.FwMajor)
 	assert.NotNil(t, props.FwMinor)
 
-	tpm.DebugCapabilities()
+	fmt.Println(props)
 }

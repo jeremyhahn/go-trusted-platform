@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/op/go-logging"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 
 	blobstore "github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
@@ -252,14 +253,15 @@ func createKeystore() (*logging.Logger,
 	}
 	tmpDir := hex.EncodeToString(buf)
 
+	fs := afero.NewMemMapFs()
 	rootDir := fmt.Sprintf("%s/%s", TEST_DATA_DIR, tmpDir)
-	blobStore, err := blobstore.NewFSBlobStore(logger, rootDir, nil)
+	blobStore, err := blobstore.NewFSBlobStore(logger, fs, rootDir, nil)
 	if err != nil {
 		logger.Fatal(err)
 	}
 
 	signerStore := keystore.NewSignerStore(blobStore)
-	backend := keystore.NewFileBackend(logger, rootDir)
+	backend := keystore.NewFileBackend(logger, afero.NewMemMapFs(), rootDir)
 	caTemplate := keystore.TemplateRSA
 
 	params := &Params{

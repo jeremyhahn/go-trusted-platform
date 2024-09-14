@@ -16,6 +16,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/op/go-logging"
+	"github.com/spf13/afero"
 )
 
 var (
@@ -152,12 +153,13 @@ func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule) {
 	hexVal := hex.EncodeToString(buf)
 	tmp := fmt.Sprintf("%s/%s", TEST_DIR, hexVal)
 
-	blobStore, err := blob.NewFSBlobStore(logger, tmp, nil)
+	fs := afero.NewMemMapFs()
+	blobStore, err := blob.NewFSBlobStore(logger, fs, tmp, nil)
 	if err != nil {
 		logger.Fatal(err)
 	}
 
-	fileBackend := keystore.NewFileBackend(logger, tmp)
+	fileBackend := keystore.NewFileBackend(logger, afero.NewMemMapFs(), tmp)
 
 	config := &Config{
 		EncryptSession: encrypt,

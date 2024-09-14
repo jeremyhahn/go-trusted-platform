@@ -106,9 +106,6 @@ func init() {
 }
 
 func Execute() error {
-
-	prompt.PrintBanner(app.Version)
-
 	if err := rootCmd.Execute(); err != nil {
 		log.Fatal(err)
 	}

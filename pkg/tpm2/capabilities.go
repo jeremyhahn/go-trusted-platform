@@ -16,6 +16,7 @@ type PropertiesFixed struct {
 	AuthSessionsLoaded      uint32
 	AuthSessionsLoadedAvail uint32
 	Family                  string
+	Fips1402                bool
 	FwMajor                 int
 	FwMinor                 int
 	LoadedCurves            uint32
@@ -36,6 +37,22 @@ type PropertiesFixed struct {
 	TransientAvail          uint32
 	TransientMin            uint32
 	VendorID                string
+}
+
+func (tpm *TPM2) IsFIPS140_2() (bool, error) {
+	modesResp, err := tpm2.GetCapability{
+		Capability:    tpm2.TPMCapTPMProperties,
+		Property:      uint32(tpm2.TPMPTModes),
+		PropertyCount: 1,
+	}.Execute(tpm.transport)
+	if err != nil {
+		return false, err
+	}
+	modes, err := modesResp.CapabilityData.Data.TPMProperties()
+	if err != nil {
+		return false, err
+	}
+	return modes.TPMProperty[0].Value == 1, nil
 }
 
 func (tpm *TPM2) FixedProperties() (*PropertiesFixed, error) {
@@ -83,6 +100,10 @@ func (tpm *TPM2) FixedProperties() (*PropertiesFixed, error) {
 	if err != nil {
 		return nil, err
 	}
+	fips1402, err := tpm.IsFIPS140_2()
+	if err != nil {
+		return nil, err
+	}
 	fwMajor, fwMinor, err := firmware(tpm.transport)
 	if err != nil {
 		return nil, err
@@ -95,11 +116,11 @@ func (tpm *TPM2) FixedProperties() (*PropertiesFixed, error) {
 	if err != nil {
 		return nil, err
 	}
-	model, err := model(tpm.transport)
+	maxAuthFail, err := maxAuthFail(tpm.transport)
 	if err != nil {
 		return nil, err
 	}
-	maxAuthFail, err := maxAuthFail(tpm.transport)
+	model, err := model(tpm.transport)
 	if err != nil {
 		return nil, err
 	}
@@ -134,6 +155,7 @@ func (tpm *TPM2) FixedProperties() (*PropertiesFixed, error) {
 		AuthSessionsLoaded:      authSessionsLoaded,
 		AuthSessionsLoadedAvail: authSessionsLoadedAvail,
 		Family:                  family,
+		Fips1402:                fips1402,
 		FwMajor:                 fwMajor,
 		FwMinor:                 fwMinor,
 		LockoutCounter:          lockoutCounter,
@@ -577,84 +599,91 @@ func vendorID(transport transport.TPM) (string, error) {
 	return vendorString, nil
 }
 
-func (tpm *TPM2) DebugCapabilities() error {
+// func (tpm *TPM2) DebugCapabilities() error {
+// 	caps, err := tpm.FixedProperties()
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	tpm.logger.Debugf("Manufacturer: %s\n", caps.Manufacturer)
+// 	tpm.logger.Debugf("Model: %s\n", caps.Model)
+// 	tpm.logger.Debugf("Family: %s\n", caps.Family)
+// 	tpm.logger.Debugf("Vendor ID: %s\n", caps.VendorID)
+// 	tpm.logger.Debugf("Revision: %s\n", caps.Revision)
+// 	tpm.logger.Debugf("Firmware: %d.%d\n", caps.FwMajor, caps.FwMinor)
+// 	tpm.logger.Debugf("FIPS 140-2: %t\n", caps.Fips1402)
+
+// 	tpm.logger.Debugf("Authorization Sessions Active: %d", caps.AuthSessionsActive)
+// 	tpm.logger.Debugf("Authorization Sessions Active Available: %d", caps.AuthSessionsActiveAvail)
+
+// 	tpm.logger.Debugf("Authorization Sessions Used: %d", caps.AuthSessionsLoaded)
+// 	tpm.logger.Debugf("Authorization Sessions Loaded Available: %d", caps.AuthSessionsLoadedAvail)
+
+// 	tpm.logger.Debugf("Max Auth Failures: %d", caps.MaxAuthFail)
+// 	tpm.logger.Debugf("Memory: %d", caps.PersistentLoaded)
+
+// 	tpm.logger.Debugf("Loaded Curves: %d", caps.LockoutCounter)
+
+// 	tpm.logger.Debugf("Lockout Counter: %d", caps.LockoutCounter)
+// 	tpm.logger.Debugf("Lockout Interval: %d", caps.LockoutInterval)
+// 	tpm.logger.Debugf("Lockout Recovery: %d", caps.LockoutRecovery)
+
+// 	tpm.logger.Debugf("NV Indexes Defined: %d", caps.NVIndexesDefined)
+// 	tpm.logger.Debugf("NV Indexes Max: %d", caps.NVIndexesMax)
+// 	tpm.logger.Debugf("NV Write Recovery: %d", caps.NVIndexesMax)
+
+// 	tpm.logger.Debugf("Persistent Used: %d", caps.PersistentLoaded)
+// 	tpm.logger.Debugf("Persistent Available: %d", caps.PersistentAvail)
+
+// 	tpm.logger.Debugf("Transient Min: %d", caps.TransientMin)
+// 	tpm.logger.Debugf("Transient Available: %d", caps.TransientAvail)
+
+// 	return nil
+// }
+
+func (tpm *TPM2) Info() (string, error) {
 	caps, err := tpm.FixedProperties()
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	tpm.logger.Debugf("Manufacturer: %s\n", caps.Manufacturer)
-	tpm.logger.Debugf("Model: %s\n", caps.Model)
-	tpm.logger.Debugf("Family: %s\n", caps.Family)
-	tpm.logger.Debugf("Vendor ID: %s\n", caps.VendorID)
-	tpm.logger.Debugf("Revision: %s\n", caps.Revision)
-	tpm.logger.Debugf("Firmware: %d.%d\n", caps.FwMajor, caps.FwMinor)
+	var sb strings.Builder
 
-	tpm.logger.Debugf("Authorization Sessions Active: %d", caps.AuthSessionsActive)
-	tpm.logger.Debugf("Authorization Sessions Active Available: %d", caps.AuthSessionsActiveAvail)
+	sb.WriteString("TPM Information\n")
+	sb.WriteString(fmt.Sprintf("Manufacturer: %s\n", caps.Manufacturer))
+	sb.WriteString(fmt.Sprintf("Vendor ID:    %s\n", caps.VendorID))
+	sb.WriteString(fmt.Sprintf("Family:       %s\n", caps.Family))
+	sb.WriteString(fmt.Sprintf("Revision:     %s\n", caps.Revision))
+	sb.WriteString(fmt.Sprintf("Firmware:     %d.%d\n", caps.FwMajor, caps.FwMinor))
+	sb.WriteString(fmt.Sprintf("Memory:       %d\n", caps.PersistentLoaded))
+	sb.WriteString(fmt.Sprintf("Model:        %s\n", caps.Model))
+	sb.WriteString(fmt.Sprintf("FIPS 140-2:   %t\n", caps.Fips1402))
+	fmt.Println()
 
-	tpm.logger.Debugf("Authorization Sessions Used: %d", caps.AuthSessionsLoaded)
-	tpm.logger.Debugf("Authorization Sessions Loaded Available: %d", caps.AuthSessionsLoadedAvail)
+	sb.WriteString(fmt.Sprintf("Max Auth Failures: %d\n", caps.MaxAuthFail))
+	sb.WriteString(fmt.Sprintf("Loaded Curves: %d\n", caps.LockoutCounter))
+	fmt.Println()
 
-	tpm.logger.Debugf("Max Auth Failures: %d", caps.MaxAuthFail)
-	tpm.logger.Debugf("Memory: %d", caps.PersistentLoaded)
+	sb.WriteString(fmt.Sprintf("Authorization Sessions Active:           %d\n", caps.AuthSessionsActive))
+	sb.WriteString(fmt.Sprintf("Authorization Sessions Active Available: %d\n", caps.AuthSessionsActiveAvail))
 
-	tpm.logger.Debugf("Loaded Curves: %d", caps.LockoutCounter)
+	sb.WriteString(fmt.Sprintf("Authorization Sessions Used:             %d\n", caps.AuthSessionsLoaded))
+	sb.WriteString(fmt.Sprintf("Authorization Sessions Loaded Available: %d\n", caps.AuthSessionsLoadedAvail))
 
-	tpm.logger.Debugf("Lockout Counter: %d", caps.LockoutCounter)
-	tpm.logger.Debugf("Lockout Interval: %d", caps.LockoutInterval)
-	tpm.logger.Debugf("Lockout Recovery: %d", caps.LockoutRecovery)
+	sb.WriteString(fmt.Sprintf("Lockout Counter:  %d\n", caps.LockoutCounter))
+	sb.WriteString(fmt.Sprintf("Lockout Interval: %d\n", caps.LockoutInterval))
+	sb.WriteString(fmt.Sprintf("Lockout Recovery: %d\n", caps.LockoutRecovery))
 
-	tpm.logger.Debugf("NV Indexes Defined: %d", caps.NVIndexesDefined)
-	tpm.logger.Debugf("NV Indexes Max: %d", caps.NVIndexesMax)
-	tpm.logger.Debugf("NV Write Recovery: %d", caps.NVIndexesMax)
+	sb.WriteString(fmt.Sprintf("NV Indexes Defined: %d\n", caps.NVIndexesDefined))
+	sb.WriteString(fmt.Sprintf("NV Indexes Max:     %d\n", caps.NVIndexesMax))
+	sb.WriteString(fmt.Sprintf("NV Write Recovery:  %d\n", caps.NVIndexesMax))
 
-	tpm.logger.Debugf("Persistent Used: %d", caps.PersistentLoaded)
-	tpm.logger.Debugf("Persistent Available: %d", caps.PersistentAvail)
+	sb.WriteString(fmt.Sprintf("Persistent Used:      %d\n", caps.PersistentLoaded))
+	sb.WriteString(fmt.Sprintf("Persistent Available: %d\n", caps.PersistentAvail))
 
-	tpm.logger.Debugf("Transient Min: %d", caps.TransientMin)
-	tpm.logger.Debugf("Transient Available: %d", caps.TransientAvail)
+	sb.WriteString(fmt.Sprintf("Transient Min:       %d\n", caps.TransientMin))
+	sb.WriteString(fmt.Sprintf("Transient Available: %d\n", caps.TransientAvail))
+	fmt.Println()
 
-	return nil
-}
-
-func (tpm *TPM2) PrintCapabilities() error {
-	caps, err := tpm.FixedProperties()
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("Manufacturer: %s\n", caps.Manufacturer)
-	fmt.Printf("Model: %s\n", caps.Model)
-	fmt.Printf("Family: %s\n", caps.Family)
-	fmt.Printf("Vendor ID: %s\n", caps.VendorID)
-	fmt.Printf("Revision: %s\n", caps.Revision)
-	fmt.Printf("Firmware: %d.%d\n", caps.FwMajor, caps.FwMinor)
-
-	fmt.Printf("Authorization Sessions Active: %d\n", caps.AuthSessionsActive)
-	fmt.Printf("Authorization Sessions Active Available: %d\n", caps.AuthSessionsActiveAvail)
-
-	fmt.Printf("Authorization Sessions Used: %d\n", caps.AuthSessionsLoaded)
-	fmt.Printf("Authorization Sessions Loaded Available: %d\n", caps.AuthSessionsLoadedAvail)
-
-	fmt.Printf("Max Auth Failures: %d\n", caps.MaxAuthFail)
-	fmt.Printf("Memory: %d\n", caps.PersistentLoaded)
-
-	fmt.Printf("Loaded Curves: %d\n", caps.LockoutCounter)
-
-	fmt.Printf("Lockout Counter: %d\n", caps.LockoutCounter)
-	fmt.Printf("Lockout Interval: %d\n", caps.LockoutInterval)
-	fmt.Printf("Lockout Recovery: %d\n", caps.LockoutRecovery)
-
-	fmt.Printf("NV Indexes Defined: %d\n", caps.NVIndexesDefined)
-	fmt.Printf("NV Indexes Max: %d\n", caps.NVIndexesMax)
-	fmt.Printf("NV Write Recovery: %d\n", caps.NVIndexesMax)
-
-	fmt.Printf("Persistent Used: %d\n", caps.PersistentLoaded)
-	fmt.Printf("Persistent Available: %d\n", caps.PersistentAvail)
-
-	fmt.Printf("Transient Min: %d\n", caps.TransientMin)
-	fmt.Printf("Transient Available: %d\n", caps.TransientAvail)
-
-	return nil
+	return sb.String(), nil
 }

@@ -55,15 +55,14 @@ PLATFORM_DIR       ?= trusted-data
 CONFIG_DIR         ?= $(PLATFORM_DIR)/etc
 LOG_DIR            ?= $(PLATFORM_DIR)/log
 CA_DIR             ?= $(PLATFORM_DIR)/ca
+ATTESTATION_CONFIG ?= attestation.yaml
 
 VERIFIER_CA        ?= $(VERIFIER_DIR)/$(PLATFORM_DIR)/ca
-VERIFIER_CONFIG    ?= verifier.yaml
 VERIFIER_CONF      ?= $(VERIFIER_DIR)/$(CONFIG_DIR)/config.yaml
 VERIFIER_DOMAIN    ?= verifier.example.com
 VERIFIER_HOSTNAME  ?= www
 
 ATTESTOR_CA        ?= $(ATTESTOR_DIR)/$(PLATFORM_DIR)/ca
-ATTESTOR_CONFIG    ?= attestor.yaml
 ATTESTOR_CONF      ?= $(ATTESTOR_DIR)/$(CONFIG_DIR)/config.yaml
 ATTESTOR_HOSTNAME  ?= www
 ATTESTOR_DOMAIN    ?= attestor.example.com
@@ -247,6 +246,12 @@ config:
 	cp configs/softhsm.conf pkg/trusted-data/etc/softhsm.conf
 
 
+clear-auth:
+	sudo tpm2_changeauth -c e -p test
+	sudo tpm2_changeauth -c o -p test
+	sudo tpm2_changeauth -c l -p test
+
+
 clean:
 	cd pkg; \
 	$(GOBIN)/go clean
@@ -273,7 +278,31 @@ clean:
 		config.yaml
 
 
-test: test-tpm test-crypto test-store
+test: test-tpm test-crypto test-store test-cli
+
+test-cli: test-tpm-cli test-ca-cli test-platform-cli
+
+test-tpm-cli:
+	cd pkg/cmd/tpm && go test -v -run ^Test_EK$
+	cd pkg/cmd/tpm && go test -v -run ^Test_EK_Certificate$
+	cd pkg/cmd/tpm && go test -v -run ^Test_SRK$
+	cd pkg/cmd/tpm && go test -v -run ^Test_SealUnseal$
+	cd pkg/cmd/tpm && go test -v -run ^Test_Provision$
+	cd pkg/cmd/tpm && go test -v -run ^Test_Info$
+
+test-ca-cli:
+	cd pkg/cmd/ca && go test -v -run ^Test_Certificate$
+	cd pkg/cmd/ca && go test -v -run ^Test_Info$
+	cd pkg/cmd/ca && go test -v -run ^Test_Init$
+	cd pkg/cmd/ca && go test -v -run ^Test_Install$
+	cd pkg/cmd/ca && go test -v -run ^Test_Issue$
+	cd pkg/cmd/ca && go test -v -run ^Test_Revoke$
+
+test-platform-cli:
+	cd pkg/cmd/platform && go test -v -run ^Test_Install$
+	cd pkg/cmd/platform && go test -v -run ^Test_Keyring$
+	cd pkg/cmd/platform && go test -v -run ^Test_Policy$
+	cd pkg/cmd/platform && go test -v -run ^Test_Provision$
 
 test-ca:
 	cd pkg/ca && \
@@ -334,7 +363,7 @@ uninstall: uninstall-ansible
 # Verifier
 verifier-init:
 	mkdir -p $(VERIFIER_DIR)/$(CONFIG_DIR)
-	cp configs/platform/$(VERIFIER_CONFIG) $(VERIFIER_CONF)
+	cp configs/platform/$(ATTESTATION_CONFIG) $(VERIFIER_CONF)
 	sed -i 's/$(DOMAIN)/$(VERIFIER_DOMAIN)/' $(VERIFIER_CONF)
 	sed -i 's|trusted-data/etc/softhsm.conf|$(shell pwd)/$(VERIFIER_DIR)/$(CONFIG_DIR)/softhsm.conf|' $(VERIFIER_CONF)
 	sed -i 's/- __VERIFIER_CA__/-  $(VERIFIER_HOSTNAME).$(VERIFIER_DOMAIN)/' $(VERIFIER_CONF)
@@ -377,10 +406,10 @@ verifier-cert-chain:
 # Attestor
 attestor-init:
 	mkdir -p $(ATTESTOR_DIR)/$(CONFIG_DIR)
-	cp configs/platform/$(ATTESTOR_CONFIG) $(ATTESTOR_CONF)
+	cp configs/platform/$(ATTESTATION_CONFIG) $(ATTESTOR_CONF)
 	sed -i 's/$(DOMAIN)/$(ATTESTOR_DOMAIN)/' $(ATTESTOR_CONF)
 	sed -i 's|trusted-data/etc/softhsm.conf|$(shell pwd)/$(ATTESTOR_DIR)/$(CONFIG_DIR)/softhsm.conf|' $(ATTESTOR_CONF)
-	sed -i 's/- __VERIFIER_CA__/- $(VERIFIER_HOSTNAME).$(VERIFIER_DOMAIN)/' $(ATTESTOR_CONF)
+	sed -i 's/- __VERIFIER_CA__/- $(ROOT_CA).$(VERIFIER_DOMAIN)/' $(ATTESTOR_CONF)
 	cp configs/softhsm.conf $(ATTESTOR_DIR)/$(CONFIG_DIR)
 	sed -i 's|trusted-data/softhsm2|$(shell pwd)/$(ATTESTOR_DIR)/$(PLATFORM_DIR)|' $(ATTESTOR_DIR)/$(CONFIG_DIR)/softhsm.conf
 
@@ -412,9 +441,9 @@ attestor: attestor-clean attestor-init build
 
 attestor-verify-cert-chain:
 	openssl verify \
-		-CAfile $(ATTESTOR_CA)/$(ROOT_CA).$(DOMAIN)/$(ROOT_CA).$(DOMAIN).crt \
-		-untrusted $(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(DOMAIN)/$(INTERMEDIATE_CA).$(DOMAIN).crt \
-		$(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(DOMAIN)/issued/$(ATTESTOR_HOSTNAME).$(DOMAIN)/$(ATTESTOR_HOSTNAME).$(DOMAIN).crt
+		-CAfile $(ATTESTOR_CA)/$(ROOT_CA).$(ATTESTOR_DOMAIN)/x509/$(ROOT_CA).$(ATTESTOR_DOMAIN).tpm2.rsa.cer \
+		-untrusted $(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(ATTESTOR_DOMAIN)/x509/$(INTERMEDIATE_CA).$(ATTESTOR_DOMAIN).tpm2.rsa.cer \
+		$(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(ATTESTOR_DOMAIN)/x509/$(ATTESTOR_HOSTNAME).$(ATTESTOR_DOMAIN).tpm2.rsa.cer
 
 attestor-verify-tpm-certs:
 	openssl pkeyutl -verify \

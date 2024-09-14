@@ -34,7 +34,7 @@ func (tpm *TPM2) NVWrite(
 	var policyDigest tpm2.TPM2BDigest
 	var policyRead bool
 	if keyAttrs.PlatformPolicy {
-		policyDigest = tpm.policyDigest
+		policyDigest = tpm.PlatformPolicyDigest()
 		policyRead = true
 	}
 

@@ -5,21 +5,26 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/fatih/color"
 	"github.com/google/go-tpm/tpm2"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
+	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 )
 
 var (
-	bForce    bool
-	hierarchy string
+	clrDevicePath string
+	clrForce      bool
+	clrHierarchy  string
 )
 
 func init() {
 
-	ClearCmd.PersistentFlags().BoolVar(&bForce, "force", false, "Forces a UEFI platform TPM clear, requires root and reboot")
-	ClearCmd.PersistentFlags().StringVar(&hierarchy, "hierarchy", "l", "The hierarchy to clear. Defaults to the lockout hierarchy. [ e | o | l ]")
+	ClearCmd.PersistentFlags().StringVar(&clrDevicePath, "device", "/dev/tpmrm0", "The TPM 2.0 device path")
+	ClearCmd.PersistentFlags().BoolVar(&clrForce, "force", false, "Forces a UEFI platform TPM clear, requires root and reboot")
+	ClearCmd.PersistentFlags().StringVar(&clrHierarchy, "hierarchy", "l", "The hierarchy to clear. Defaults to the lockout hierarchy. [ e | o | l ]")
 }
 
 var ClearCmd = &cobra.Command{
@@ -59,32 +64,37 @@ https://trustedcomputinggroup.org/wp-content/uploads/TPM-2.0-1.83-Part-3-Command
 `,
 	Run: func(cmd *cobra.Command, args []string) {
 
+		if clrForce {
+			// https://github.com/tpm2-software/tpm2-tools/issues/1956
+			deviceName := filepath.Base(clrDevicePath)
+			file := fmt.Sprintf("/sys/class/tpm/%s/ppi/request", deviceName)
+			err := afero.WriteFile(App.FS, file, []byte("5"), os.ModePerm)
+			if err != nil {
+				color.New(color.FgRed).Println(err)
+				return
+			}
+			color.New(color.FgGreen).Println("Success, press any key to reboot...")
+			prompt.NoOpPrompt()
+			syscall.Reboot(syscall.LINUX_REBOOT_CMD_RESTART)
+			return
+		}
+
 		App.Init(InitParams)
 
 		var err error
 
 		if err := App.OpenTPM(); err != nil {
-			App.Logger.Fatal(err)
+			color.New(color.FgRed).Println(err)
+			return
 		}
 		defer func() {
 			if err := App.TPM.Close(); err != nil {
-				App.Logger.Fatal(err)
+				color.New(color.FgRed).Println(err)
+				return
 			}
 		}()
 
-		if bForce {
-			// https://github.com/tpm2-software/tpm2-tools/issues/1956
-			deviceName := filepath.Base(DevicePath)
-			file := fmt.Sprintf("/sys/class/tpm/%s/ppi/request", deviceName)
-			err = os.WriteFile(file, []byte("5"), os.ModePerm)
-			if err != nil {
-				App.Logger.Fatal(err)
-			}
-			color.New(color.FgGreen).Printf("Success, now reboot")
-			return
-		}
-
-		switch strings.ToLower(hierarchy) {
+		switch strings.ToLower(clrHierarchy) {
 		case "e":
 			err = App.TPM.Clear(InitParams.SOPin, tpm2.TPMRHEndorsement)
 		case "o":
@@ -93,7 +103,8 @@ https://trustedcomputinggroup.org/wp-content/uploads/TPM-2.0-1.83-Part-3-Command
 			err = App.TPM.Clear(InitParams.SOPin, tpm2.TPMRHLockout)
 		}
 		if err != nil {
-			App.Logger.Fatal(err)
+			color.New(color.FgRed).Println(err)
+			return
 		}
 
 		color.New(color.FgGreen).Printf("TPM successfully cleared")

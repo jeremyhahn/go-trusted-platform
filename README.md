@@ -575,6 +575,8 @@ The `main` branch will always build and run. Try it out!
 
 ## Support
 
+A [Discord server](https://discord.gg/TuJex32b) has been created for community support.
+
 Please consider supporting this project for ongoing success and sustainability. I'm a passionate open source contributor making a professional living creating free, secure, scalable, robust, enterprise grade, distributed systems and cloud native solutions.
 
 I'm also available for international consulting opportunities. Please let me know how I can assist you or your organization in achieving your desired security posture and technology goals.

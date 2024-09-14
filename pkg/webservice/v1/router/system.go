@@ -6,10 +6,12 @@ import (
 
 	"github.com/codegangsta/negroni"
 	"github.com/gorilla/mux"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest"
+	"github.com/op/go-logging"
 )
 
 type SystemRouter struct {
@@ -20,7 +22,9 @@ type SystemRouter struct {
 
 // Creates a new web service system router
 func NewSystemRouter(
-	app *app.App,
+	logger *logging.Logger,
+	ca ca.CertificateAuthority,
+	serverKeyAttributes *keystore.KeyAttributes,
 	middleware middleware.JsonWebTokenMiddleware,
 	router *mux.Router,
 	jsonWriter response.HttpWriter,
@@ -29,8 +33,10 @@ func NewSystemRouter(
 	return &SystemRouter{
 		middleware: middleware,
 		systemRestService: rest.NewSystemRestService(
-			app,
+			ca,
+			serverKeyAttributes,
 			jsonWriter,
+			logger,
 			endpointList)}
 }
 

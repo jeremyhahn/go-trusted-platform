@@ -54,7 +54,7 @@ tpm:
     # platform-policy: true 
     rsa:
       size: 2048
-    signature-algorithm: SHA256-RSAPSS
+    signature-algorithm: SHA256-RSA
   idevid:
     model: trusted-platform-edge
     serial: att-tp-e001
@@ -68,7 +68,7 @@ tpm:
     # platform-policy: true 
     rsa:
       size: 2048
-    signature-algorithm: SHA256-RSAPSS
+    signature-algorithm: SHA256-RSA
   platform-pcr: 23
   file-integrity:
     - configs
@@ -107,7 +107,7 @@ certificate-authority:
         - algorithm: RSA
           rsa:
             size: 2048
-          signature-algorithm: SHA256-RSAPSS
+          signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: pkcs8
           password: 123456
@@ -119,7 +119,7 @@ certificate-authority:
           rsa:
             size: 2048
             scheme: 
-          signature-algorithm: SHA256-RSAPSS
+          signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: pkcs11
           password: 123456
@@ -130,7 +130,7 @@ certificate-authority:
         - algorithm: RSA
           rsa:
             size: 2048
-          signature-algorithm: SHA256-RSAPSS
+          signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: tpm2
           password: 123456
@@ -140,7 +140,7 @@ certificate-authority:
         # PKCS #8 ECDSA
         - algorithm: ECDSA
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: pkcs8
@@ -151,7 +151,7 @@ certificate-authority:
         # PKCS #11 ECDSA
         - algorithm: ECDSA
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: pkcs11
@@ -162,7 +162,7 @@ certificate-authority:
         # TPM 2.0 ECDSA
         - algorithm: ECDSA
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
@@ -173,7 +173,7 @@ certificate-authority:
         # PKCS #8 Ed25519
         - algorithm: Ed25519
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: Ed25519
           hash: SHA-256
           store: pkcs8
@@ -222,7 +222,7 @@ certificate-authority:
           algorithm: RSA
           rsa:
             size: 2048
-          signature-algorithm: SHA256-RSAPSS
+          signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: pkcs8
           password: 123456
@@ -233,7 +233,7 @@ certificate-authority:
         - algorithm: RSA
           rsa:
             size: 2048
-          signature-algorithm: SHA256-RSAPSS
+          signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: pkcs11
           password: 123456
@@ -244,7 +244,7 @@ certificate-authority:
         - algorithm: RSA
           rsa:
             size: 2048
-          signature-algorithm: SHA256-RSAPSS
+          signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: tpm2
           password: 123456
@@ -254,7 +254,7 @@ certificate-authority:
         # PKCS #8 ECDSA
         - algorithm: ECDSA
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: pkcs8
@@ -265,7 +265,7 @@ certificate-authority:
         # PKCS #11 ECDSA
         - algorithm: ECDSA
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: pkcs11
@@ -276,7 +276,7 @@ certificate-authority:
         # TPM 2.0 ECDSA
         - algorithm: ECDSA
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
@@ -287,7 +287,7 @@ certificate-authority:
         # PKCS #8 Ed25519
         - algorithm: Ed25519
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: Ed25519
           hash: SHA-256
           store: pkcs8
@@ -324,16 +324,16 @@ webservice:
     algorithm: RSA
     rsa:
       size: 2048
-    signature-algorithm: SHA256-RSAPSS
+    signature-algorithm: SHA256-RSA
     hash: SHA-256
-    store: pkcs8
+    store: tpm2
     password: 123456
     platform-policy: true
     debug: true
     #
     # algorithm: ECDSA
     # ecc:
-    #   curve: P256
+    #   curve: P-256
     # signature-algorithm: ECDSA-SHA256
     # hash: SHA-256
     # store: pkcs8
@@ -343,7 +343,7 @@ webservice:
     #
     # algorithm: Ed25519
     # ecc:
-    #   curve: P256
+    #   curve: P-256
     # signature-algorithm: Ed25519
     # hash: SHA-256
     # store: pkcs8

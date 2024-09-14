@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+
+	"github.com/spf13/afero"
 )
 
 // func expectedKeyPathCA(attrs *KeyAttributes) string {
@@ -152,5 +154,5 @@ func defaultStore() KeyBackend {
 	caCN := "example.com"
 	TEST_TMP_DIR = fmt.Sprintf("%s/%s/%s", TEST_DATA_DIR, tmpDir, caCN)
 
-	return NewFileBackend(logger, TEST_TMP_DIR)
+	return NewFileBackend(logger, afero.NewMemMapFs(), TEST_TMP_DIR)
 }
