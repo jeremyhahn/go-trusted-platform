@@ -6,8 +6,8 @@ import (
 	"net/http"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
-	"github.com/op/go-logging"
 )
 
 type MutualTLSClient struct {

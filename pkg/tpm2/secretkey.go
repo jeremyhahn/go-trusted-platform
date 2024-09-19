@@ -28,7 +28,7 @@ func (tpm *TPM2) CreateSecretKey(
 
 	// Attach platform PCR policy digest if configured
 	if keyAttrs.PlatformPolicy {
-		aesTemplate.AuthPolicy = tpm.policyDigest
+		aesTemplate.AuthPolicy = tpm.PlatformPolicyDigest()
 	}
 
 	// Create the parent key authorization session

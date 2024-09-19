@@ -5,16 +5,17 @@ import (
 	"crypto/ecdsa"
 	"crypto/x509"
 	"fmt"
+	"io"
+	"log/slog"
 	"math/big"
 
 	"github.com/google/go-tpm/tpm2"
-	"github.com/google/logger"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/aesgcm"
 	tptpm2 "github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
-	"github.com/op/go-logging"
 )
 
 type KeyStore struct {
@@ -23,6 +24,7 @@ type KeyStore struct {
 	debugSecrets bool
 	logger       *logging.Logger
 	platformKS   PlatformKeyStorer
+	random       io.Reader
 	signerStore  keystore.SignerStorer
 	tpm          tptpm2.TrustedPlatformModule
 	PlatformKeyStorer
@@ -34,6 +36,7 @@ type Params struct {
 	DebugSecrets     bool
 	Config           *tptpm2.KeyStoreConfig
 	PlatformKeyStore PlatformKeyStorer
+	Random           io.Reader
 	SignerStore      keystore.SignerStorer
 	TPM              tptpm2.TrustedPlatformModule
 }
@@ -51,7 +54,7 @@ func NewKeyStore(params *Params) (PlatformKeyStorer, error) {
 
 	// Try to read the key store key from it's persistent handle.
 	// Return keystore.ErrNotInitialized if it can't be found.
-	persistedAttrs, err := ks.tpm.TPMAttributes(tpm2.TPMHandle(params.Config.SRKHandle))
+	persistedAttrs, err := ks.tpm.KeyAttributes(tpm2.TPMHandle(params.Config.SRKHandle))
 	if err != nil {
 		if err == tpm2.TPMRC(0x184) {
 			// TPM_RC_VALUE (handle 1): value is out of range or is not correct for the context
@@ -60,7 +63,7 @@ func NewKeyStore(params *Params) (PlatformKeyStorer, error) {
 			// TPM_RC_HANDLE (handle 1): the handle is not correct for the use
 			return ks, keystore.ErrNotInitalized
 		} else {
-			logger.Fatal(err)
+			params.Logger.FatalError(err)
 		}
 	}
 
@@ -109,26 +112,35 @@ func (ks *KeyStore) Initialize(soPIN, userPIN keystore.Password) error {
 
 	ekAttrs.TPMAttributes.HierarchyAuth = soPIN
 
-	var newPin string
+	var pin string
 	var pinBytes []byte
 
 	if userPIN == nil {
-		pinBytes = aesgcm.NewAESGCM(
-			ks.logger, ks.debugSecrets, ks.tpm).GenerateKey()
+		pinBytes = aesgcm.NewAESGCM(ks.random).GenerateKey()
 		userPIN = keystore.NewClearPassword(pinBytes)
-		newPin = string(pinBytes)
+		pin = string(pinBytes)
 	} else {
-		newPin, err = userPIN.String()
+		pin, err = userPIN.String()
 		if err != nil {
-			logger.Error(err)
+			ks.logger.Error(err)
 			return err
 		}
-		if newPin == keystore.DEFAULT_PASSWORD {
-			pinBytes = aesgcm.NewAESGCM(
-				ks.logger, ks.debugSecrets, ks.tpm).GenerateKey()
+		if pin == keystore.DEFAULT_PASSWORD {
+			pinBytes = aesgcm.NewAESGCM(ks.random).GenerateKey()
 			userPIN = keystore.NewClearPassword(pinBytes)
-			newPin = string(pinBytes)
+			pin = string(pinBytes)
 		}
+	}
+
+	if ks.debugSecrets {
+		sopin, err := soPIN.Bytes()
+		if err != nil {
+			return err
+		}
+		ks.logger.Debug("TPM key store PINs",
+			slog.String("soPIN", string(sopin)),
+			slog.String("userPIN", pin),
+		)
 	}
 
 	// Generate dedicated key store SRK
@@ -184,10 +196,10 @@ func (ks *KeyStore) SRKAttributes() *keystore.KeyAttributes {
 
 	ekAttrs, err := ks.tpm.EKAttributes()
 	if err != nil {
-		ks.logger.Fatal(err)
+		ks.logger.FatalError(err)
 	}
 
-	srkAttrs, err = ks.tpm.TPMAttributes(srkHandle)
+	srkAttrs, err = ks.tpm.KeyAttributes(srkHandle)
 	if err != nil {
 
 		if err == tpm2.TPMRC(0x18b) || err == keystore.ErrFileNotFound {
@@ -207,12 +219,11 @@ func (ks *KeyStore) SRKAttributes() *keystore.KeyAttributes {
 					Hierarchy:  tpm2.TPMRHOwner,
 					Template:   srkTemplate,
 				}}
-
 			if ks.config.PlatformPolicy {
-				srkTemplate.AuthPolicy = ks.tpm.PolicyDigest()
+				srkTemplate.AuthPolicy = ks.tpm.PlatformPolicyDigest()
 			}
 		} else {
-			ks.logger.Fatal(err)
+			ks.logger.FatalError(err)
 		}
 	}
 	srkAttrs.Parent = ekAttrs
@@ -257,8 +268,26 @@ func (ks *KeyStore) KeyAttributes() *keystore.KeyAttributes {
 	return ksAttrs
 }
 
-// Deletes a key pair from the key store
+// Deletes a key pair from the key store. First a session is created
+// to authenticate the request to ensure the caller has ownership of
+// the key, then deleted from the backend.
 func (ks *KeyStore) Delete(attrs *keystore.KeyAttributes) error {
+	if attrs.Parent == nil {
+		// Help the caller out and populate the parent attributes
+		attrs.Parent = ks.SRKAttributes()
+	}
+	// Create a session and load the key to authenticate the
+	// request
+	session, closer, err := ks.TPM2().CreateSession(attrs)
+	if err != nil {
+		return err
+	}
+	defer closer()
+	loadResp, err := ks.TPM2().LoadKeyPair(attrs, &session, ks.backend)
+	if err != nil {
+		return err
+	}
+	defer ks.TPM2().Flush(loadResp.ObjectHandle)
 	return ks.backend.Delete(attrs)
 }
 
@@ -285,7 +314,9 @@ func (ks *KeyStore) GenerateKey(
 func (ks *KeyStore) GenerateRSA(
 	keyAttrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
-	if keyAttrs.TPMAttributes == nil {
+	ks.logger.Debug("keystore/tpm2: generating RSA key")
+
+	if keyAttrs.Parent == nil {
 		keyAttrs.Parent = ks.SRKAttributes()
 	}
 	if keyAttrs.Password != nil {
@@ -297,6 +328,7 @@ func (ks *KeyStore) GenerateRSA(
 	if err != nil {
 		return nil, err
 	}
+	keystore.DebugKeyAttributes(ks.logger, keyAttrs)
 	return keystore.NewOpaqueKey(ks, keyAttrs, rsaPub), nil
 }
 
@@ -306,7 +338,9 @@ func (ks *KeyStore) GenerateRSA(
 func (ks *KeyStore) GenerateECDSA(
 	keyAttrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
-	if keyAttrs.TPMAttributes == nil {
+	ks.logger.Debug("keystore/tpm2: generating ECDSA key")
+
+	if keyAttrs.Parent == nil {
 		keyAttrs.Parent = ks.SRKAttributes()
 	}
 	if keyAttrs.Password != nil {
@@ -318,6 +352,7 @@ func (ks *KeyStore) GenerateECDSA(
 	if err != nil {
 		return nil, err
 	}
+	keystore.DebugKeyAttributes(ks.logger, keyAttrs)
 	return keystore.NewOpaqueKey(ks, keyAttrs, eccPub), nil
 }
 
@@ -376,7 +411,7 @@ func (ks *KeyStore) Key(
 		}
 		handle = key.ObjectHandle
 		if keyAttrs.TPMAttributes == nil {
-			attrs, err := ks.tpm.TPMAttributes(handle)
+			attrs, err := ks.tpm.KeyAttributes(handle)
 			if err != nil {
 				return nil, err
 			}
@@ -460,6 +495,8 @@ func (ks *KeyStore) Password(
 	if attrs.PlatformPolicy {
 		return tptpm2.NewPlatformPassword(
 			ks.logger, ks.tpm, attrs, ks.backend), nil
+	} else if attrs.Password != nil {
+		return attrs.Password, nil
 	} else {
 		// return password.NewRequiredPassword(), nil
 		return keystore.NewClearPassword(nil), nil
@@ -530,12 +567,15 @@ func (ks *KeyStore) CreatePassword(
 		return err
 	}
 
+	if len(passwd) == 0 {
+		return nil
+	}
+
 	// Copy the password to the Secret field - the TPM seal operation
 	// seals the Secret field, not the password field.
 
 	if string(passwd) == keystore.DEFAULT_PASSWORD {
-		passwd = aesgcm.NewAESGCM(
-			ks.logger, ks.debugSecrets, ks.tpm).GenerateKey()
+		passwd = aesgcm.NewAESGCM(ks.tpm).GenerateKey()
 		keyAttrs.Secret = keystore.NewClearPassword(passwd)
 	} else {
 		keyAttrs.Secret = keyAttrs.Password

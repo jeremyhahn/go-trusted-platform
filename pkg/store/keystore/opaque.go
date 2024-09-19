@@ -52,7 +52,7 @@ func (opaque *Opaque) Sign(
 		// Sign using the provided signing key
 		signer, err = opaque.keyStore.Signer(signerOpts.KeyAttributes)
 	} else {
-		// Sign using the CA's private key
+		// Sign using the opaque key attributes
 		signer, err = opaque.keyStore.Signer(opaque.attrs)
 	}
 	if err != nil {

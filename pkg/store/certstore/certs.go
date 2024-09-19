@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
-	"github.com/op/go-logging"
 )
 
 type CertStore struct {
@@ -71,10 +71,6 @@ func (cs *CertStore) Save(certificate *x509.Certificate, partition Partition) er
 // Returns true if the requested Certificate Revocation List  exists in the certificate store
 func (cs *CertStore) HasCRL(keyAttrs *keystore.KeyAttributes) bool {
 	crlFileName := cs.crl(keyAttrs)
-	// // crlFile := fmt.Sprintf("%s/%s", PARTITION_CRL, crlFileName)
-	// return util.FileExists(crlFileName)
-
-	// id := []byte(fmt.Sprintf("%s/%s", PARTITION_CRL, crlFileName))
 	if _, err := cs.blobStore.Get([]byte(crlFileName)); err != nil {
 		return false
 	}
@@ -92,33 +88,34 @@ func (cs *CertStore) ImportCRL(cn string, crlDER []byte) error {
 
 // Returns true if the certificate is found in the local Certificate Authority
 // revocation list and if its associated certificates were moved to the revoked partition.
-func (cs *CertStore) IsRevoked(certificate *x509.Certificate, issuerCert *x509.Certificate) (bool, error) {
+func (cs *CertStore) IsRevoked(
+	certificate *x509.Certificate, issuerCert *x509.Certificate) error {
 	revocationList, err := cs.loadCRL(issuerCert)
 	if err != nil {
 		if err == blob.ErrBlobNotFound {
-			return false, nil
+			return nil
 		}
 		cs.logger.Error(err)
-		return false, err
+		return err
 	}
 	if revocationList != nil {
 		for _, entry := range revocationList.RevokedCertificateEntries {
 			if entry.SerialNumber.Cmp(certificate.SerialNumber) == 0 {
-				return true, nil
+				return ErrCertRevoked
 			}
 		}
 	}
-	return false, nil
+	return nil
 }
 
 // Returns true if the certificate is found in any of the imported Distrubution
 // Point Certificate Revocation Lists.
 func (cs *CertStore) IsRevokedAtDistributionPoints(
-	certificate *x509.Certificate) (bool, error) {
+	certificate *x509.Certificate) error {
 
 	keyAttrs, err := KeyAttributesFromCertificate(certificate)
 	if err != nil {
-		return false, err
+		return nil
 	}
 	caKeyAttrs := *keyAttrs
 	caKeyAttrs.CN = certificate.Issuer.CommonName
@@ -127,25 +124,25 @@ func (cs *CertStore) IsRevokedAtDistributionPoints(
 	revocationLists, err := cs.CRLs(certificate)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
+			return nil
 		}
 		if err == ErrMissingDistributionPointURL {
-			return false, nil
+			return nil
 		}
 		cs.logger.Error(err)
-		return false, err
+		return err
 	}
 	// Check the CRL's to see if the certificate has been revoked
 	for _, revocationList := range revocationLists {
 		if revocationList != nil {
 			for _, entry := range revocationList.RevokedCertificateEntries {
 				if entry.SerialNumber.Cmp(certificate.SerialNumber) == 0 {
-					return true, nil
+					return ErrCertRevoked
 				}
 			}
 		}
 	}
-	return false, nil
+	return nil
 }
 
 // Adds the specified certificate to the Certicicate Authority revocation list
@@ -189,7 +186,7 @@ func (cs *CertStore) Revoke(
 			RevocationTime: time.Now()})
 
 	// Create a new revocation list serial number
-	serialNumber, err := util.X509SerialNumber()
+	serialNumber, err := util.SerialNumber()
 	if err != nil {
 		cs.logger.Error(err)
 		return err
@@ -218,67 +215,10 @@ func (cs *CertStore) Revoke(
 	}
 	crlFile := cs.caCRL(keyAttrs)
 
-	// if err = os.WriteFile(crlFile, crlDER, 0644); err != nil {
-	// 	cs.logger.Error(err)
-	// 	return err
-	// }
 	if err := cs.blobStore.Save([]byte(crlFile), crlDER); err != nil {
-		cs.logger.Error("%s: %s", err, crlFile)
+		cs.logger.Errorf("%s: %s", err, crlFile)
 		return err
 	}
-
-	// // Get a reference to the "issued" certificates partition
-	// certDir, err := certstore.fileBackend.PartitionKey(attrs)
-	// if err != nil {
-	// 	certstore.logger.Error(err)
-	// 	return err
-	// }
-	// certDir = fmt.Sprintf("%s/%s", certDir, attrs.CN)
-
-	// Delete or move certiticates in "issued" to "revoked"
-	// TODO: Need to move this into the backend without imposing on the API
-	// commonExtensions := []FSExtension{
-	// 	FSExtension(keystore.FSEXT_PUBLIC_PEM),
-	// 	FSExtension(keystore.FSEXT_PUBLIC_PKCS1),
-	// 	FSExtension(keystore.FSEXT_PRIVATE_PKCS8),
-	// 	FSExtension(keystore.FSEXT_PRIVATE_PKCS8_PEM),
-	// 	FSEXT_DER,
-	// 	FSEXT_PEM,
-	// 	FSEXT_CSR}
-	// if certstore.retainRevoked {
-	// 	revokedDir := fmt.Sprintf("%s/%s/%s", certstore.caDir, PARTITION_REVOKED, attrs.CN)
-	// 	for _, ext := range commonExtensions {
-	// 		// Include the key algorithm in the file name
-	// 		keyExt := keystore.KeyFileExtension(attrs.KeyAlgorithm, keystore.FSExtension(ext), nil)
-	// 		// Construct source and destination paths
-	// 		src := fmt.Sprintf("%s/%s.%s%s", certDir, attrs.CN, attrs.KeyStore, keyExt)
-	// 		dst := fmt.Sprintf("%s/%s.%s%s", revokedDir, attrs.CN, attrs.KeyStore, keyExt)
-	// 		// Ensure revoked destination path exists
-	// 		if err := os.MkdirAll(revokedDir, fs.ModePerm); err != nil {
-	// 			return err
-	// 		}
-	// 		err = os.Rename(src, dst)
-	// 		if err != nil {
-	// 			if os.IsNotExist(err) {
-	// 				// ignore errors for missing files. some certs
-	// 				// may be generated without them, for example,
-	// 				// end entities with signed CSRs who manage their
-	// 				// own private keys, or CA managed opaque keys stored
-	// 				// in an HSM/TPM, CSRs generated by end entities, etc.
-	// 				continue
-	// 			}
-	// 			certstore.logger.Error(err)
-	// 			return err
-	// 		}
-	// 	}
-	// }
-
-	// // Delete the certificate data directory with
-	// // all of its contents
-	// if err := os.RemoveAll(certDir); err != nil {
-	// 	certstore.logger.Error(err)
-	// 	return err
-	// }
 
 	return cs.blobStore.Delete(certID)
 }
@@ -294,9 +234,6 @@ func (cs *CertStore) CRLs(certificate *x509.Certificate) ([]*x509.RevocationList
 	revocationLists := make([]*x509.RevocationList, len(certificate.CRLDistributionPoints))
 
 	for i, _ := range certificate.CRLDistributionPoints {
-
-		// crlFileName := filepath.Base(crl)
-		// crlFile := fmt.Sprintf("%s/%s", PARTITION_CRL, crlFileName)
 
 		keyAttrs, err := KeyAttributesFromCertificate(certificate)
 		if err != nil {
@@ -346,7 +283,7 @@ func (cs *CertStore) loadCRL(certificate *x509.Certificate) (*x509.RevocationLis
 
 	crlDER, err := cs.blobStore.Get([]byte(caCRL))
 	if err != nil {
-		cs.logger.Warningf("%s: %s", err, caCRL)
+		cs.logger.Warnf("%s: %s", err, caCRL)
 		return nil, err
 	}
 

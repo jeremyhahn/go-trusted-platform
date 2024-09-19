@@ -15,15 +15,6 @@
 
 # OPTIONS
 
-  * **-f**, **\--file**=_FILE_ or _STDOUT_:
-
-    The file containing the Endorsement key certificate. If the option isn't specified all the EK certificates retrieved either from the manufacturer
-    web hosting, TPM NV indices, or local disk, are output to stdout.
-
-  * **-p**, **\--ca-password**:
-
-    The Certificate Auhority private key password.
-
 ## References
 
 [common options](common/options.md) collection of common options that provide

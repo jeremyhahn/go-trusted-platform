@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-
-	"github.com/op/go-logging"
 )
 
 var (
@@ -19,7 +17,6 @@ var (
 )
 
 type AESGCM struct {
-	logger       *logging.Logger
 	debugSecrets bool
 	random       io.Reader
 }
@@ -34,18 +31,12 @@ type AESGCM struct {
 // servers.
 // https://pkg.go.dev/crypto/cipher
 // https://datatracker.ietf.org/doc/html/rfc8452
-func NewAESGCM(
-	logger *logging.Logger,
-	debugSecrets bool,
-	random io.Reader) AESGCM {
-
+func NewAESGCM(random io.Reader) AESGCM {
 	if random == nil {
 		random = rand.Reader
 	}
 	return AESGCM{
-		logger:       logger,
-		debugSecrets: debugSecrets,
-		random:       random,
+		random: random,
 	}
 }
 
@@ -85,15 +76,6 @@ func (this AESGCM) Seal(key, data, additionalData []byte) ([]byte, []byte, error
 
 	ciphertext := aesgcm.Seal(nil, nonce, data, additionalData)
 
-	if this.debugSecrets {
-		this.logger.Debugf("aesgcm/Seal: key: %s", string(key))
-		this.logger.Debugf("aesgcm/Seal: data: %s", string(data))
-		this.logger.Debugf("aesgcm/Seal: additionalData: %s", string(data))
-	}
-
-	this.logger.Debugf("aesgcm/Seal: ciphtertext: %x\n", ciphertext)
-	this.logger.Debugf("aesgcm/Seal: nonce: %x\n", nonce)
-
 	return ciphertext, nonce, nil
 }
 
@@ -102,25 +84,21 @@ func (this AESGCM) Seal(key, data, additionalData []byte) ([]byte, []byte, error
 func (this AESGCM) Open(key, ciphertext, nonce, additionalData []byte) (plaintext []byte, err error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		this.logger.Error(err)
 		return nil, err
 	}
 	aesgcm, err := cipher.NewGCM(block)
 	if err != nil {
-		this.logger.Error(err)
 		return nil, err
 	}
 	defer func() error {
 		// Recover from panic to keep prevent servers from crashing
 		if r := recover(); r != nil {
-			this.logger.Debugf("aesgcm/Open: panic: %s", r)
-			err = fmt.Errorf("%s", r)
+			err = errors.New(fmt.Sprintf("%s", r))
 		}
 		return nil
 	}()
 	plaintext, err = aesgcm.Open(nil, nonce, ciphertext, additionalData)
 	if err != nil {
-		this.logger.Error(err)
 		return nil, err
 	}
 

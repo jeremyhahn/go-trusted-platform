@@ -1,16 +1,16 @@
 package pkcs11
 
 import (
+	"errors"
 	"fmt"
-	"io/fs"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
-	"github.com/op/go-logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 var SOFTHSM_CONF = []byte(`
@@ -47,38 +47,42 @@ type Config struct {
 // Initializes SoftHSM with an external shell command to softhsm2-util
 func InitSoftHSM(logger *logging.Logger, config *Config) {
 
-	// Set required OS env var
-	os.Setenv("SOFTHSM2_CONF", config.LibraryConfig)
+	// NOTE: The Golang command package doesn't work with Afero memory fs
 
-	if !util.FileExists(config.LibraryConfig) {
+	if _, err := os.Stat(config.LibraryConfig); err != nil {
 		dir := filepath.Dir(config.LibraryConfig)
 		if err := os.MkdirAll(dir, os.ModePerm); err != nil {
-			logger.Fatal(err)
+			slog.Error(err.Error())
+			os.Exit(-1)
 		}
 		conf := fmt.Sprintf("%s/softhsm.conf", dir)
-		if err := os.WriteFile(conf, SOFTHSM_CONF, fs.ModePerm); err != nil {
-			logger.Fatal(err)
+		if err := os.WriteFile(conf, SOFTHSM_CONF, os.ModePerm); err != nil {
+			slog.Error(err.Error())
+			os.Exit(-1)
 		}
 	}
 
 	conf, err := os.ReadFile(config.LibraryConfig)
 	if err != nil {
-		logger.Fatal(err)
+		slog.Error(err.Error())
+		os.Exit(-1)
 	}
 
 	// Create SoftHSM2 directory structure
 	re, err := regexp.Compile(`directories.tokendir.*\n`)
 	if err != nil {
-		logger.Fatal(err)
+		slog.Error(err.Error())
+		os.Exit(-1)
 	}
 	matches := re.FindAllString(string(conf), -1)
 	if len(matches) > 0 {
 		pieces := strings.Split(matches[len(matches)-1], "=")
 		if len(pieces) == 2 {
 			path := strings.TrimSpace(pieces[1])
-			if !util.FileExists(path) {
-				if err := os.MkdirAll(path, os.ModePerm); err != nil {
-					logger.Error(err)
+			if _, err = os.Stat(config.LibraryConfig); err != nil {
+				if err = os.MkdirAll(path, os.ModePerm); err != nil {
+					slog.Error(err.Error())
+					os.Exit(-1)
 				}
 			}
 
@@ -98,7 +102,10 @@ func InitSoftHSM(logger *logging.Logger, config *Config) {
 	stdout, err := cmd.Output()
 	// For some reason exit status is 1 for success
 	if err != nil {
-		logger.Warning(err)
+		if e := (&exec.ExitError{}); errors.As(err, &e) {
+			logger.Error(e)
+			slog.Error(string(e.Stderr))
+		}
 	}
 	logger.Debug(string(stdout))
 }

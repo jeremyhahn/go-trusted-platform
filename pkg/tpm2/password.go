@@ -2,9 +2,9 @@ package tpm2
 
 import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/aesgcm"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/password"
-	"github.com/op/go-logging"
 )
 
 type PlatformPassword struct {
@@ -74,8 +74,7 @@ func (p PlatformPassword) Create() error {
 			return err
 		}
 		if string(passwd) == keystore.DEFAULT_PASSWORD {
-			passwd = aesgcm.NewAESGCM(
-				p.logger, p.keyAttrs.Debug, p.tpm).GenerateKey()
+			passwd = aesgcm.NewAESGCM(p.tpm).GenerateKey()
 			p.keyAttrs.Password = keystore.NewClearPassword(passwd)
 		}
 	}

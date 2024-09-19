@@ -1,7 +1,7 @@
 package platform
 
 import (
-	"github.com/fatih/color"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
 	"github.com/spf13/cobra"
@@ -21,18 +21,16 @@ installation. This operation is safe and idempotent, and will not modify or
 destroy existing data.`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		InitParams.Initialize = true
-		App.Init(InitParams)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			if err != tpm2.ErrNotInitialized {
+				cmd.PrintErrln(err)
+				return
+			}
+		}
 
 		sopin := keystore.NewClearPassword(InitParams.SOPin)
 		pin := keystore.NewClearPassword(InitParams.Pin)
-
-		// Open a connection to the TPM
-		if err := App.OpenTPM(); err != nil {
-			if err != tpm2.ErrNotInitialized {
-				App.Logger.Fatal(err)
-			}
-		}
 
 		if App.DebugSecretsFlag {
 			App.Logger.Debugf(
@@ -51,16 +49,29 @@ destroy existing data.`,
 					// TODO: Perform ACME device enrollment instead of
 					// self-signed CA cert with tpm2-software attestation
 					// procedure.
-					App.InitCA(InitParams.PlatformCA, sopin, pin)
+					if _, err := App.InitCA(InitParams.PlatformCA, sopin, pin); err != nil {
+						cmd.PrintErrln(err)
+						return
+					}
 				}
 
 				// Create missing EK cert
-				App.ImportEndorsementKey()
+				cert, err := App.ImportEndorsementKeyCertificate()
+				if err != nil {
+					cmd.PrintErrln(err)
+					return
+				}
+				pem, err := certstore.EncodePEM(cert.Raw)
+				if err != nil {
+					cmd.PrintErrln(err)
+					return
+				}
+				cmd.Println(string(pem))
+
 			} else {
-				App.Logger.Fatal(err)
+				cmd.PrintErrln(err)
+				return
 			}
 		}
-
-		color.New(color.FgGreen).Printf("Platform installed successfully")
 	},
 }

@@ -1,9 +1,7 @@
 package ca
 
 import (
-	"fmt"
-
-	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/spf13/cobra"
 )
 
@@ -14,21 +12,23 @@ var UninstallCmd = &cobra.Command{
 from the operating system trusted certificate store.`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App.Init(InitParams)
-
-		rootCA, intermediateCA, err := ca.NewCA(CAParams)
+		App, err = App.Init(InitParams)
 		if err != nil {
-			App.Logger.Fatal(err)
+			cmd.PrintErrln(err)
+			return
 		}
-		if err := rootCA.TrustStore().Uninstall(
-			App.CAConfig.Identity[0].Subject.CommonName); err != nil {
 
-			App.Logger.Fatal(err)
+		userPIN := keystore.NewClearPassword(InitParams.Pin)
+		if err := App.LoadCA(userPIN); err != nil {
+			cmd.PrintErrln(err)
+			return
 		}
-		intermediateCN := App.CAConfig.Identity[1].Subject.CommonName
-		if err := intermediateCA.TrustStore().Uninstall(intermediateCN); err != nil {
-			App.Logger.Fatal(err)
+
+		intermediateCN := App.CA.Identity().Subject.CommonName
+		if err := App.CA.OSTrustStore().Uninstall(intermediateCN); err != nil {
+			cmd.PrintErrln(err)
 		}
-		fmt.Println("CA certificates successfully uninstalled")
+
+		cmd.Println("CA certificates successfully uninstalled")
 	},
 }

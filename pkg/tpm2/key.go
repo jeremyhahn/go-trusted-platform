@@ -30,7 +30,7 @@ func (tpm *TPM2) EKPublic() (tpm2.TPM2BName, tpm2.TPMTPublic) {
 	ekHandle := tpm2.TPMHandle(tpm.config.EK.Handle)
 	name, pub, err := tpm.ReadHandle(ekHandle)
 	if err != nil {
-		tpm.logger.Fatal(err)
+		tpm.logger.FatalError(err)
 	}
 	return name, pub
 }
@@ -42,15 +42,15 @@ func (tpm *TPM2) EKRSA() *rsa.PublicKey {
 		_, ekPub := tpm.EKPublic()
 		rsaDetail, err := ekPub.Parameters.RSADetail()
 		if err != nil {
-			tpm.logger.Fatal(err)
+			tpm.logger.FatalError(err)
 		}
 		rsaUnique, err := ekPub.Unique.RSA()
 		if err != nil {
-			tpm.logger.Fatal(err)
+			tpm.logger.FatalError(err)
 		}
 		rsaPub, err := tpm2.RSAPub(rsaDetail, rsaUnique)
 		if err != nil {
-			tpm.logger.Fatal(err)
+			tpm.logger.FatalError(err)
 		}
 		tpm.ekRSAPubKey = rsaPub
 	}
@@ -64,15 +64,15 @@ func (tpm *TPM2) EKECC() *ecdsa.PublicKey {
 		_, ekPub := tpm.EKPublic()
 		ecDetail, err := ekPub.Parameters.ECCDetail()
 		if err != nil {
-			tpm.logger.Fatal(err)
+			tpm.logger.FatalError(err)
 		}
 		curve, err := ecDetail.CurveID.Curve()
 		if err != nil {
-			tpm.logger.Fatal(err)
+			tpm.logger.FatalError(err)
 		}
 		eccUnique, err := ekPub.Unique.ECC()
 		if err != nil {
-			tpm.logger.Fatal(err)
+			tpm.logger.FatalError(err)
 		}
 		eccPub := &ecdsa.PublicKey{
 			Curve: curve,
@@ -90,7 +90,7 @@ func (tpm *TPM2) SSRKPublic() (tpm2.TPM2BName, tpm2.TPMTPublic) {
 	srkHandle := tpm2.TPMHandle(tpm.config.SSRK.Handle)
 	name, pub, err := tpm.ReadHandle(srkHandle)
 	if err != nil {
-		tpm.logger.Fatal(err)
+		tpm.logger.FatalError(err)
 	}
 	return name, pub
 }
@@ -99,7 +99,7 @@ func (tpm *TPM2) SSRKPublic() (tpm2.TPM2BName, tpm2.TPMTPublic) {
 func (tpm *TPM2) IAKAttributes() (*keystore.KeyAttributes, error) {
 	if tpm.iakAttrs == nil {
 		iakHandle := tpm2.TPMHandle(tpm.config.IAK.Handle)
-		iakAttrs, err := tpm.TPMAttributes(iakHandle)
+		iakAttrs, err := tpm.KeyAttributes(iakHandle)
 		if err != nil {
 			return nil, err
 		}
@@ -123,7 +123,7 @@ func (tpm *TPM2) IAK() crypto.PublicKey {
 	}
 	pub, err := x509.ParsePKIXPublicKey(tpm.iakAttrs.TPMAttributes.PublicKeyBytes)
 	if err != nil {
-		tpm.logger.Fatal(err)
+		tpm.logger.FatalError(err)
 	}
 	return pub
 }
@@ -132,10 +132,16 @@ func (tpm *TPM2) IAK() crypto.PublicKey {
 func (tpm *TPM2) IDevIDAttributes() (*keystore.KeyAttributes, error) {
 	if tpm.idevidAttrs == nil {
 		idevidHandle := tpm2.TPMHandle(tpm.config.IDevID.Handle)
-		idevidAttrs, err := tpm.TPMAttributes(idevidHandle)
+		signatureAlgorithm, err := keystore.ParseSignatureAlgorithm(tpm.config.IDevID.SignatureAlgorithm)
 		if err != nil {
 			return nil, err
 		}
+		idevidAttrs, err := tpm.KeyAttributes(idevidHandle)
+		if err != nil {
+			return nil, err
+		}
+		idevidAttrs.CN = tpm.config.IDevID.CN
+		idevidAttrs.SignatureAlgorithm = signatureAlgorithm
 		tpm.idevidAttrs = idevidAttrs
 	}
 	return tpm.idevidAttrs, nil
@@ -144,11 +150,11 @@ func (tpm *TPM2) IDevIDAttributes() (*keystore.KeyAttributes, error) {
 // Returns the Initial Attestation Key Attributes
 func (tpm *TPM2) IDevID() crypto.PublicKey {
 	if tpm.idevidAttrs == nil {
-		tpm.logger.Fatal(ErrNotInitialized)
+		tpm.logger.FatalError(ErrNotInitialized)
 	}
 	pub, err := x509.ParsePKIXPublicKey(tpm.iakAttrs.TPMAttributes.PublicKeyBytes)
 	if err != nil {
-		tpm.logger.Fatal(err)
+		tpm.logger.FatalError(err)
 	}
 	return pub
 }
@@ -158,7 +164,7 @@ func (tpm *TPM2) IDevID() crypto.PublicKey {
 func (tpm *TPM2) EKAttributes() (*keystore.KeyAttributes, error) {
 	if tpm.ekAttrs == nil {
 		ekHandle := tpm2.TPMHandle(tpm.config.EK.Handle)
-		ekAttrs, err := tpm.TPMAttributes(ekHandle)
+		ekAttrs, err := tpm.KeyAttributes(ekHandle)
 		if err != nil {
 			return nil, err
 		}
@@ -197,7 +203,7 @@ func (tpm *TPM2) EKAttributes() (*keystore.KeyAttributes, error) {
 func (tpm *TPM2) SSRKAttributes() (*keystore.KeyAttributes, error) {
 	if tpm.ssrkAttrs == nil {
 		srkHandle := tpm2.TPMHandle(tpm.config.SSRK.Handle)
-		srkAttrs, err := tpm.TPMAttributes(srkHandle)
+		srkAttrs, err := tpm.KeyAttributes(srkHandle)
 		if err != nil {
 			return nil, err
 		}
@@ -217,7 +223,7 @@ func (tpm *TPM2) SSRKAttributes() (*keystore.KeyAttributes, error) {
 // Reads the public area of the provided persistent TPM handle
 // and returns a default set of KeyAttributes with the name,
 // public area and algorithm set.
-func (tpm *TPM2) TPMAttributes(
+func (tpm *TPM2) KeyAttributes(
 	handle tpm2.TPMHandle) (*keystore.KeyAttributes, error) {
 
 	pub, err := tpm2.ReadPublic{
@@ -258,7 +264,7 @@ func (tpm *TPM2) TPMAttributes(
 		TPMAttributes: &keystore.TPMAttributes{
 			BPublic:        pub.OutPublic,
 			Handle:         handle,
-			HandleType:     tpm2.TPMHTPersistent,
+			HandleType:     tpm2.TPMHTTransient,
 			HashAlg:        tpm2.TPMAlgSHA256,
 			Hierarchy:      tpm2.TPMRHOwner,
 			Name:           pub.Name,
@@ -282,31 +288,32 @@ func (tpm *TPM2) TPMAttributes(
 // Hierarchy. Optionally encrypts bus communication between the CPU <-> TPM
 // if enabled in the platform configuration file.
 func (tpm *TPM2) CreateEK(
-	keyAttrs *keystore.KeyAttributes) error {
+	ekAttrs *keystore.KeyAttributes) error {
 
 	var err error
 
-	tpmAttrs := keyAttrs.TPMAttributes
-	hierarchy := tpm2.TPMHandle(tpmAttrs.Hierarchy)
+	hierarchy := tpm2.TPMHandle(ekAttrs.TPMAttributes.Hierarchy)
 
 	var hierarchyAuth, userAuth []byte
-	if tpmAttrs.HierarchyAuth != nil {
-		hierarchyAuth, err = tpmAttrs.HierarchyAuth.Bytes()
+	if ekAttrs.TPMAttributes.HierarchyAuth != nil {
+		hierarchyAuth, err = ekAttrs.TPMAttributes.HierarchyAuth.Bytes()
 		if err != nil {
 			return err
 		}
 	}
 
-	if keyAttrs.Password != nil {
-		userAuth, err = keyAttrs.Password.Bytes()
+	if ekAttrs.Password != nil {
+		userAuth, err = ekAttrs.Password.Bytes()
 		if err != nil {
 			return err
 		}
 	}
 
-	if keyAttrs.PlatformPolicy {
-		tpmAttrs.Template.AuthPolicy = tpm.policyDigest
+	if ekAttrs.PlatformPolicy {
+		ekAttrs.TPMAttributes.Template.AuthPolicy = tpm.PlatformPolicyDigest()
 	}
+
+	tpm.logger.Debugf("tpm: creating %s EK...", ekAttrs.KeyAlgorithm.String())
 
 	// Create new EK primary key under the Endorsement Hierarchy
 	primaryKey, err := tpm2.CreatePrimary{
@@ -314,7 +321,7 @@ func (tpm *TPM2) CreateEK(
 			Handle: tpm2.TPMRHEndorsement,
 			Auth:   tpm2.PasswordAuth(hierarchyAuth),
 		},
-		InPublic: tpm2.New2B(tpmAttrs.Template),
+		InPublic: tpm2.New2B(ekAttrs.TPMAttributes.Template),
 		InSensitive: tpm2.TPM2BSensitiveCreate{
 			Sensitive: &tpm2.TPMSSensitiveCreate{
 				UserAuth: tpm2.TPM2BAuth{
@@ -328,10 +335,13 @@ func (tpm *TPM2) CreateEK(
 		return err
 	}
 
-	tpm.logger.Debugf("tpm: Created %s EK: 0x%x",
-		keyAttrs.KeyAlgorithm.String(), primaryKey.ObjectHandle)
+	tpm.logger.Debugf("tpm: %s EK: 0x%x",
+		ekAttrs.KeyAlgorithm.String(), primaryKey.ObjectHandle)
 
 	ekHandle := tpm2.TPMHandle(tpm.config.EK.Handle)
+	if ekAttrs.TPMAttributes.Handle != 0 {
+		ekHandle = ekAttrs.TPMAttributes.Handle
+	}
 
 	// Make the EK persistent
 	_, err = tpm2.EvictControl{
@@ -352,7 +362,7 @@ func (tpm *TPM2) CreateEK(
 		return err
 	}
 
-	tpm.logger.Debugf("tpm: EK persisted to 0x%x", tpmAttrs.Handle)
+	tpm.logger.Debugf("tpm: EK persisted to 0x%x", ekAttrs.TPMAttributes.Handle)
 
 	// Extract the public area
 	pub, err := primaryKey.OutPublic.Contents()
@@ -364,10 +374,22 @@ func (tpm *TPM2) CreateEK(
 	tpm.logger.Debugf("tpm: EK Hierarchy: %s", HierarchyName(hierarchy))
 	tpm.logger.Debugf("tpm: EK Name: 0x%x", Encode(primaryKey.Name.Buffer))
 
-	keyAttrs.KeyType = keystore.KEY_TYPE_ENDORSEMENT
-	tpmAttrs.Handle = ekHandle
-	tpmAttrs.Name = primaryKey.Name
-	tpmAttrs.Public = *pub
+	ekAttrs.KeyType = keystore.KEY_TYPE_ENDORSEMENT
+	ekAttrs.TPMAttributes.Handle = ekHandle
+	ekAttrs.TPMAttributes.Name = primaryKey.Name
+	ekAttrs.TPMAttributes.Public = *pub
+
+	publicKey, err := tpm.ParsePublicKey(primaryKey.OutPublic.Bytes())
+	if err != nil {
+		return err
+	}
+	der, err := x509.MarshalPKIXPublicKey(publicKey)
+	if err != nil {
+		return err
+	}
+	ekAttrs.TPMAttributes.PublicKeyBytes = der
+
+	keystore.DebugKeyAttributes(tpm.logger, ekAttrs)
 
 	return nil
 }
@@ -380,31 +402,31 @@ func (tpm *TPM2) CreateEK(
 // unflushed and the caller is responsible for flushing it when
 // done.
 func (tpm *TPM2) CreateSRK(
-	keyAttrs *keystore.KeyAttributes) error {
+	srkAttrs *keystore.KeyAttributes) error {
 
-	tpmAttrs := keyAttrs.TPMAttributes
-	hierarchy := tpm2.TPMHandle(tpmAttrs.Hierarchy)
+	hierarchy := tpm2.TPMHandle(srkAttrs.TPMAttributes.Hierarchy)
 
 	var primaryKey *tpm2.CreatePrimaryResponse
 	var err error
-	// var hierarchyAuth, userAuth []byte
-	var hierarchyAuth, userAuth, secretBytes []byte
+	// var hierarchyAuth, userAuth, secretBytes []byte
+	var hierarchyAuth, userAuth []byte
 
-	if tpmAttrs.HierarchyAuth != nil {
-		hierarchyAuth, err = tpmAttrs.HierarchyAuth.Bytes()
-		if err != nil {
-			return err
-		}
-	}
-	if keyAttrs.Password != nil {
-		userAuth, err = keyAttrs.Password.Bytes()
+	if srkAttrs.TPMAttributes.HierarchyAuth != nil {
+		hierarchyAuth, err = srkAttrs.TPMAttributes.HierarchyAuth.Bytes()
 		if err != nil {
 			return err
 		}
 	}
 
-	if keyAttrs.PlatformPolicy {
-		tpmAttrs.Template.AuthPolicy = tpm.policyDigest
+	if srkAttrs.Password != nil {
+		userAuth, err = srkAttrs.Password.Bytes()
+		if err != nil {
+			return err
+		}
+	}
+
+	if srkAttrs.PlatformPolicy {
+		srkAttrs.TPMAttributes.Template.AuthPolicy = tpm.PlatformPolicyDigest()
 	}
 
 	// Create SRK
@@ -413,7 +435,7 @@ func (tpm *TPM2) CreateSRK(
 			Handle: hierarchy,
 			Auth:   tpm2.PasswordAuth(hierarchyAuth),
 		},
-		InPublic: tpm2.New2B(tpmAttrs.Template),
+		InPublic: tpm2.New2B(srkAttrs.TPMAttributes.Template),
 		InSensitive: tpm2.TPM2BSensitiveCreate{
 			Sensitive: &tpm2.TPMSSensitiveCreate{
 				UserAuth: tpm2.TPM2BAuth{
@@ -423,88 +445,44 @@ func (tpm *TPM2) CreateSRK(
 		},
 	}
 
-	// Attach PCR creation policy if platform policy is set
-	if keyAttrs.PlatformPolicy {
-		primaryKeyCMD.CreationPCR = tpm2.TPMLPCRSelection{
-			PCRSelections: []tpm2.TPMSPCRSelection{
-				{
-					Hash: tpm2.TPMAlgSHA256,
-					PCRSelect: tpm2.PCClientCompatible.PCRs(
-						tpm.config.PlatformPCR),
-				},
-			},
-		}
-	}
-
 	// // Add secret if provided, otherwise generate AES-256 key
-	// if keyAttrs.Secret == nil {
+	// if srkAttrs.Secret == nil {
 	// 	tpm.logger.Info("Generating SRK seal secret")
 	// 	secretBytes = aesgcm.NewAESGCM(
 	// 		tpm.logger, tpm.debugSecrets, tpm).GenerateKey()
 
-	// 	if keyAttrs.PlatformPolicy {
+	// 	if srkAttrs.PlatformPolicy {
 	// 		//  keyAttrs.Secret = NewPlatformSecret(tpm, keyAttrs)
-	// 		keyAttrs.Secret = keystore.NewClearPassword(secretBytes)
+	// 		srkAttrs.Secret = keystore.NewClearPassword(secretBytes)
 	// 	} else {
-	// 		keyAttrs.Secret = keystore.NewClearPassword(secretBytes)
+	// 		srkAttrs.Secret = keystore.NewClearPassword(secretBytes)
 	// 	}
 
 	// } else {
-	// 	secretBytes, err = keyAttrs.Secret.Bytes()
+	// 	secretBytes, err = srkAttrs.Secret.Bytes()
 	// 	if err != nil {
 	// 		return err
 	// 	}
+	// 	primaryKeyCMD.InSensitive.Sensitive.Data = tpm2.NewTPMUSensitiveCreate(
+	// 		&tpm2.TPM2BSensitiveData{
+	// 			Buffer: secretBytes,
+	// 		},
+	// 	)
+	// 	if tpm.debugSecrets {
+	// 		tpm.logger.Debugf("Sealing SRK secret: %s", secretBytes)
+	// 	}
 	// }
 
-	// Add secret to creation data if provided
-	if keyAttrs.Secret != nil {
-		secretBytes, err = keyAttrs.Secret.Bytes()
-		if err != nil {
-			return err
-		}
-	}
+	if tpm.config.EncryptSession && srkAttrs.Parent != nil {
 
-	if tpm.debugSecrets {
-		tpm.logger.Debugf("Sealing SRK secret: %s", secretBytes)
-	}
-
-	primaryKeyCMD.InSensitive.Sensitive.Data = tpm2.NewTPMUSensitiveCreate(
-		&tpm2.TPM2BSensitiveData{
-			Buffer: secretBytes,
-		},
-	)
-
-	if tpm.config.EncryptSession && keyAttrs.Parent != nil {
-
-		ekHandle := tpm2.TPMHandle(keyAttrs.Parent.TPMAttributes.Handle)
-
-		// Get the persisted EK primary key to build salted HMAC session
-		_, ekPub, err := tpm.ReadHandle(ekHandle)
+		session, closer, err := tpm.CreateSession(srkAttrs)
 		if err != nil {
 			tpm.logger.Error(err)
 			return err
 		}
+		defer closer()
 
-		// Create salted, (encrypted?) session using EK
-		ekSession, closer, err := tpm.HMACSaltedSession(
-			tpm2.TPMHandle(ekHandle),
-			ekPub,
-			// tpmAttrs.Parent.Password)
-			nil)
-		if err != nil {
-			tpm.logger.Error(err)
-			return err
-		}
-		if keyAttrs.TPMAttributes.HandleType == tpm2.TPMHTTransient {
-			// Leave the session unflushed if this is a transient handle.
-			// Set the closer so the caller can close the session when done
-			//
-			keyAttrs.TPMAttributes.SessionCloser = closer
-		} else {
-			defer closer()
-		}
-
-		primaryKey, err = primaryKeyCMD.Execute(tpm.transport, ekSession)
+		primaryKey, err = primaryKeyCMD.Execute(tpm.transport, session)
 
 	} else {
 		primaryKey, err = primaryKeyCMD.Execute(tpm.transport)
@@ -514,16 +492,9 @@ func (tpm *TPM2) CreateSRK(
 		return err
 	}
 
-	// TODO: either the go-tpm lib or the TPM seems to return a nil
-	// response without any errors when hierarchy authorization fails...
-	if primaryKey == nil {
-		// return ErrHierarchyAuthFailed
-		return keystore.ErrSOPinRequired
-	}
-
 	tpm.logger.Debugf("tpm: Created SRK: 0x%x", primaryKey.ObjectHandle)
 
-	if keyAttrs.TPMAttributes.HandleType == tpm2.TPMHTPersistent {
+	if srkAttrs.TPMAttributes.HandleType == tpm2.TPMHTPersistent {
 
 		// Make the SRK persistent
 		_, err = tpm2.EvictControl{
@@ -536,7 +507,7 @@ func (tpm *TPM2) CreateSRK(
 				Name:   primaryKey.Name,
 				Auth:   tpm2.PasswordAuth(hierarchyAuth),
 			},
-			PersistentHandle: tpm2.TPMHandle(tpmAttrs.Handle),
+			PersistentHandle: tpm2.TPMHandle(srkAttrs.TPMAttributes.Handle),
 		}.Execute(tpm.transport)
 
 		tpm.Flush(primaryKey.ObjectHandle)
@@ -546,10 +517,10 @@ func (tpm *TPM2) CreateSRK(
 			return err
 		}
 		tpm.logger.Debugf("tpm: SRK persisted to 0x%x",
-			tpm2.TPMHandle(tpmAttrs.Handle))
+			tpm2.TPMHandle(srkAttrs.TPMAttributes.Handle))
 
 	} else {
-		keyAttrs.TPMAttributes.Handle = primaryKey.ObjectHandle
+		srkAttrs.TPMAttributes.Handle = primaryKey.ObjectHandle
 	}
 
 	// Extract the public area
@@ -559,12 +530,24 @@ func (tpm *TPM2) CreateSRK(
 		return err
 	}
 
-	keyAttrs.KeyType = keystore.KEY_TYPE_STORAGE
-	tpmAttrs.Name = primaryKey.Name
-	tpmAttrs.Public = *pub
+	srkAttrs.KeyType = keystore.KEY_TYPE_STORAGE
+	srkAttrs.TPMAttributes.Name = primaryKey.Name
+	srkAttrs.TPMAttributes.Public = *pub
 
 	tpm.logger.Debugf("tpm: SRK Hierarchy: %s", HierarchyName(hierarchy))
 	tpm.logger.Debugf("tpm: SRK Name: 0x%s", Encode(primaryKey.Name.Buffer))
+
+	publicKey, err := tpm.ParsePublicKey(primaryKey.OutPublic.Bytes())
+	if err != nil {
+		return err
+	}
+	der, err := x509.MarshalPKIXPublicKey(publicKey)
+	if err != nil {
+		return err
+	}
+	srkAttrs.TPMAttributes.PublicKeyBytes = der
+
+	keystore.DebugKeyAttributes(tpm.logger, srkAttrs)
 
 	return err
 }
@@ -597,12 +580,13 @@ func (tpm *TPM2) CreateIAK(
 	}
 
 	// Create IAK key attributes from platform configuration file
+	policyDigest := tpm.PlatformPolicyDigest()
 	iakAttrs, err := IAKAttributesFromConfig(
 		ekAttrs.TPMAttributes.HierarchyAuth,
 		tpm.config.IAK,
-		&tpm.policyDigest)
+		&policyDigest)
 	if err != nil {
-		tpm.logger.Fatal(err)
+		tpm.logger.FatalError(err)
 	}
 	iakAttrs.Parent = ekAttrs
 
@@ -863,6 +847,8 @@ func (tpm *TPM2) CreateIAK(
 	// Cache the IAK
 	tpm.iakAttrs = iakAttrs
 
+	keystore.DebugKeyAttributes(tpm.logger, iakAttrs)
+
 	return iakAttrs, nil
 }
 
@@ -899,8 +885,9 @@ func (tpm *TPM2) CreateIDevID(
 	// }
 
 	// Create IDevID key attributes from platform configuration file
+	policyDigest := tpm.PlatformPolicyDigest()
 	idevidAttrs, err := IDevIDAttributesFromConfig(
-		*tpm.config.IDevID, &tpm.policyDigest)
+		*tpm.config.IDevID, &policyDigest)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -964,17 +951,17 @@ func (tpm *TPM2) CreateIDevID(
 		},
 		CreationPCR: akAttrs.TPMAttributes.PCRSelection,
 	}
-	unique := tpm2.NewTPMUPublicID(
-		tpm2.TPMAlgRSA,
-		&tpm2.TPM2BPublicKeyRSA{
-			Buffer: []byte(idevidAttrs.CN),
-		},
-	)
-	inPub, err := primaryKeyCMD.InPublic.Contents()
-	if err != nil {
-		return nil, nil, err
-	}
-	inPub.Unique = unique
+	// unique := tpm2.NewTPMUPublicID(
+	// 	tpm2.TPMAlgRSA,
+	// 	&tpm2.TPM2BPublicKeyRSA{
+	// 		Buffer: []byte(idevidAttrs.CN),
+	// 	},
+	// )
+	// inPub, err := primaryKeyCMD.InPublic.Contents()
+	// if err != nil {
+	// 	return nil, nil, err
+	// }
+	// inPub.Unique = unique
 
 	primaryKey, err := primaryKeyCMD.Execute(tpm.transport)
 	if err != nil {
@@ -992,7 +979,7 @@ func (tpm *TPM2) CreateIDevID(
 		ObjectHandle: &tpm2.AuthHandle{
 			Handle: primaryKey.ObjectHandle,
 			Name:   primaryKey.Name,
-			Auth:   tpm2.PasswordAuth(hierarchyAuth),
+			Auth:   tpm2.PasswordAuth(akAuth),
 		},
 		PersistentHandle: tpm2.TPMHandle(idevidAttrs.TPMAttributes.Handle),
 	}.Execute(tpm.transport)
@@ -1007,8 +994,6 @@ func (tpm *TPM2) CreateIDevID(
 		return nil, nil, err
 	}
 
-	originalBuffer := []byte("test nonce")
-
 	certify := tpm2.Certify{
 		ObjectHandle: tpm2.AuthHandle{
 			Handle: primaryKey.ObjectHandle,
@@ -1021,7 +1006,7 @@ func (tpm *TPM2) CreateIDevID(
 			Auth:   tpm2.PasswordAuth(akAuth),
 		},
 		QualifyingData: tpm2.TPM2BData{
-			Buffer: originalBuffer,
+			Buffer: []byte{},
 		},
 		InScheme: tpm2.TPMTSigScheme{
 			Scheme: tpm2.TPMAlgNull,
@@ -1146,7 +1131,10 @@ func (tpm *TPM2) CreateIDevID(
 		return nil, nil, err
 	}
 
+	// Cache the IDevID
 	tpm.idevidAttrs = idevidAttrs
+
+	keystore.DebugKeyAttributes(tpm.logger, idevidAttrs)
 
 	return idevidAttrs, &tcgCSR, nil
 }
@@ -1155,9 +1143,35 @@ func (tpm *TPM2) DeleteKey(
 	keyAttrs *keystore.KeyAttributes,
 	backend keystore.KeyBackend) error {
 
-	// Ensure the caller owns the key
-	_, err := tpm.Unseal(keyAttrs, backend)
-	if err != nil {
+	if keyAttrs.TPMAttributes.HandleType == tpm2.TPMHTPersistent {
+		var err error
+		var hierarchyAuth []byte
+		if keyAttrs.TPMAttributes.HierarchyAuth != nil {
+			hierarchyAuth, err = keyAttrs.TPMAttributes.HierarchyAuth.Bytes()
+			if err != nil {
+				return err
+			}
+		}
+		_, err = tpm2.EvictControl{
+			Auth: tpm2.AuthHandle{
+				Handle: tpm2.TPMRHOwner,
+				Auth:   tpm2.PasswordAuth(hierarchyAuth),
+			},
+			ObjectHandle: &tpm2.NamedHandle{
+				Handle: keyAttrs.TPMAttributes.Handle,
+				Name:   keyAttrs.TPMAttributes.Name,
+			},
+			PersistentHandle: keyAttrs.TPMAttributes.Handle,
+		}.Execute(tpm.transport)
+		if err != nil {
+			tpm.logger.Error(err)
+			return err
+		}
+		return nil
+	}
+
+	// Perform an unseal operation to ensure the caller owns the key
+	if _, err := tpm.Unseal(keyAttrs, backend); err != nil {
 		return err
 	}
 

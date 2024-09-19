@@ -55,3 +55,12 @@ func Prompt(message string) []byte {
 
 	return []byte(response)
 }
+
+func NoOpPrompt() []byte {
+	reader := bufio.NewReader(os.Stdin)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		log.Fatal(err)
+	}
+	return []byte(response)
+}

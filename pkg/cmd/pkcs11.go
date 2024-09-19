@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/fatih/color"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/pkcs11"
 	"github.com/spf13/cobra"
 )
@@ -36,7 +37,11 @@ var pkcs11Cmd = &cobra.Command{
 Hardware Security Modules`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App.Init(InitParams)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 
 		if bYKCS11 {
 			module = "/usr/local/lib/libykcs11.so"
@@ -49,7 +54,8 @@ Hardware Security Modules`,
 		}
 
 		if module == "" {
-			App.Logger.Fatal("invalid PKCS #11 module path")
+			color.New(color.FgRed).Println("invalid PKCS #11 module path")
+			return
 		}
 
 		fmt.Printf("Command Info\n")
@@ -75,7 +81,7 @@ Hardware Security Modules`,
 		}
 		hsm, err := pkcs11.NewPKCS11(App.Logger, config)
 		if err != nil {
-			App.Logger.Fatal(err)
+			App.Logger.FatalError(err)
 		}
 
 		hsm.PrintLibraryInfo()

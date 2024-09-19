@@ -4,6 +4,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/spf13/afero"
 )
 
 // func expectedKeyPathCA(attrs *KeyAttributes) string {
@@ -138,7 +141,7 @@ import (
 
 func defaultStore() KeyBackend {
 
-	logger := defaultLogger()
+	logger := logging.DefaultLogger()
 
 	// Create a temp directory for each instantiation
 	// so parallel tests don't corrupt each other.
@@ -152,5 +155,5 @@ func defaultStore() KeyBackend {
 	caCN := "example.com"
 	TEST_TMP_DIR = fmt.Sprintf("%s/%s/%s", TEST_DATA_DIR, tmpDir, caCN)
 
-	return NewFileBackend(logger, TEST_TMP_DIR)
+	return NewFileBackend(logger, afero.NewMemMapFs(), TEST_TMP_DIR)
 }

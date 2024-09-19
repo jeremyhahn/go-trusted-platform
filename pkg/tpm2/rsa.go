@@ -18,6 +18,10 @@ func (tpm *TPM2) CreateRSA(
 
 	// var keyUserAuth, secretBytes []byte
 	var keyUserAuth []byte
+	var handle tpm2.TPMHandle
+	var name tpm2.TPM2BName
+	var private tpm2.TPM2BPrivate
+	var public tpm2.TPM2BPublic
 
 	// Get the persisted SRK
 	srkHandle := tpm2.TPMHandle(keyAttrs.Parent.TPMAttributes.Handle)
@@ -44,27 +48,8 @@ func (tpm *TPM2) CreateRSA(
 
 	// Attach platform PCR policy digest if configured
 	if keyAttrs.PlatformPolicy {
-		rsaTemplate.AuthPolicy = tpm.policyDigest
+		rsaTemplate.AuthPolicy = tpm.PlatformPolicyDigest()
 	}
-
-	// if keyAttrs.Secret == nil {
-	// 	tpm.logger.Info("Generating RSA seal secret")
-	// 	secretBytes = aesgcm.NewAESGCM(
-	// 		tpm.logger, tpm.debugSecrets, tpm).GenerateKey()
-
-	// 	if keyAttrs.PlatformPolicy {
-	// 		// keyAttrs.Secret = NewPlatformSecret(tpm, keyAttrs)
-	// 		keyAttrs.Secret = keystore.NewClearPassword(secretBytes)
-	// 	} else {
-	// 		keyAttrs.Secret = keystore.NewClearPassword(secretBytes)
-	// 	}
-
-	// } else {
-	// 	secretBytes, err = keyAttrs.Secret.Bytes()
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// }
 
 	// Create the parent key authorization session
 	session, closer, err := tpm.CreateSession(keyAttrs)
@@ -89,44 +74,85 @@ func (tpm *TPM2) CreateRSA(
 		},
 	}.Execute(tpm.transport)
 	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
+		if err == ErrCommandNotSupported {
+			// Perform create and load using logacy command sequence
+			createRsp, err := tpm2.Create{
+				ParentHandle: tpm2.AuthHandle{
+					Handle: srkHandle,
+					Name:   srkName,
+					Auth:   session,
+				},
+				InPublic: tpm2.New2B(rsaTemplate),
+				InSensitive: tpm2.TPM2BSensitiveCreate{
+					Sensitive: &tpm2.TPMSSensitiveCreate{
+						UserAuth: tpm2.TPM2BAuth{
+							Buffer: keyUserAuth,
+						},
+					},
+				},
+			}.Execute(tpm.transport)
+			if err != nil {
+				return nil, err
+			}
+
+			session2, closer, err := tpm.CreateSession(keyAttrs)
+			if err != nil {
+				return nil, err
+			}
+			defer closer()
+
+			loadResponse, err := tpm2.Load{
+				ParentHandle: tpm2.AuthHandle{
+					Handle: keyAttrs.Parent.TPMAttributes.Handle,
+					Name:   keyAttrs.Parent.TPMAttributes.Name,
+					Auth:   session2,
+				},
+				InPrivate: tpm2.TPM2BPrivate{
+					Buffer: createRsp.OutPrivate.Buffer,
+				},
+				InPublic: tpm2.BytesAs2B[tpm2.TPMTPublic](createRsp.OutPublic.Bytes()),
+			}.Execute(tpm.transport)
+			if err != nil {
+				tpm.logger.Errorf("%s: %s", err, keyAttrs.CN)
+				return nil, err
+			}
+			handle = loadResponse.ObjectHandle
+			name = loadResponse.Name
+			private = createRsp.OutPrivate
+			public = createRsp.OutPublic
+			defer tpm.Flush(loadResponse.ObjectHandle)
+		} else {
+			tpm.logger.Error(err)
+			return nil, err
+		}
+	} else {
+		handle = response.ObjectHandle
+		name = response.Name
+		private = response.OutPrivate
+		public = response.OutPublic
+		defer tpm.Flush(response.ObjectHandle)
 	}
-	defer tpm.Flush(response.ObjectHandle)
 
-	tpm.logger.Debugf(
-		"tpm: Key loaded to transient handle 0x%x",
-		response.ObjectHandle)
-
-	tpm.logger.Debugf(
-		"tpm: Key Name: %s",
-		Encode(response.Name.Buffer))
-
-	tpm.logger.Debugf(
-		"tpm: Parent (SRK) Name: %s",
-		Encode(srkName.Buffer))
+	tpm.logger.Debugf("tpm: RSA Key loaded to transient handle 0x%x", handle)
+	tpm.logger.Debugf("tpm: RSA Key Name: %s", Encode(name.Buffer))
+	tpm.logger.Debugf("tpm: RSA Parent (SRK) Name: %s", Encode(srkName.Buffer))
 
 	if keyAttrs.TPMAttributes == nil {
 		keyAttrs.TPMAttributes = &keystore.TPMAttributes{
-			Name:   response.Name,
-			Handle: response.ObjectHandle,
+			Name:   name,
+			Handle: handle,
 		}
 	} else {
-		keyAttrs.TPMAttributes.Name = response.Name
-		keyAttrs.TPMAttributes.Handle = response.ObjectHandle
+		keyAttrs.TPMAttributes.Name = name
+		keyAttrs.TPMAttributes.Handle = handle
 	}
 
 	// Save the public and private areas to blob storage
-	if err := tpm.SaveKeyPair(
-		keyAttrs,
-		response.OutPrivate,
-		response.OutPublic,
-		backend); err != nil {
-
+	if err := tpm.SaveKeyPair(keyAttrs, private, public, backend); err != nil {
 		return nil, err
 	}
 
-	pub, err := response.OutPublic.Contents()
+	pub, err := public.Contents()
 	if err != nil {
 		tpm.logger.Error(err)
 		return nil, err
@@ -150,14 +176,10 @@ func (tpm *TPM2) CreateRSA(
 	return rsaPub, nil
 }
 
-// Decrypts an encrypted blob using the requested Attestation Key (AK)
-// pointed to by akHandle.
-func (tpm *TPM2) RSADecrypt(
-	akHandle tpm2.TPMHandle,
-	blob []byte) ([]byte, error) {
-
+// Performs RSA decryption
+func (tpm *TPM2) RSADecrypt(handle tpm2.TPMHandle, blob []byte) ([]byte, error) {
 	response, err := tpm2.RSADecrypt{
-		KeyHandle:  akHandle,
+		KeyHandle:  handle,
 		CipherText: tpm2.TPM2BPublicKeyRSA{Buffer: blob},
 		InScheme: tpm2.TPMTRSADecrypt{
 			Scheme: tpm2.TPMAlgOAEP,
@@ -176,14 +198,11 @@ func (tpm *TPM2) RSADecrypt(
 	return response.Message.Buffer, nil
 }
 
-// Encrypts the message using the requested Attestation Key (AK)
-// pointed to by akHandle.
-func (tpm *TPM2) RSAEncrypt(
-	akHandle tpm2.TPMHandle,
-	message []byte) ([]byte, error) {
+// Performs RSA encryption
+func (tpm *TPM2) RSAEncrypt(handle tpm2.TPMHandle, message []byte) ([]byte, error) {
 
 	response, err := tpm2.RSAEncrypt{
-		KeyHandle: akHandle,
+		KeyHandle: handle,
 		Message:   tpm2.TPM2BPublicKeyRSA{Buffer: message},
 		InScheme: tpm2.TPMTRSADecrypt{
 			Scheme: tpm2.TPMAlgOAEP,

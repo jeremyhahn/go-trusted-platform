@@ -8,17 +8,16 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
-	"io/fs"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	blobstore "github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
-	"github.com/op/go-logging"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 
 	tpm2ks "github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/tpm2"
@@ -179,7 +178,7 @@ func TestSignRSAPSS_WithoutFileIntegrityCheck(t *testing.T) {
 	assert.NotNil(t, digest)
 
 	pssOpts := &rsa.PSSOptions{
-		// Note that (at present) the crypto.rsa.PSSSaltLengthAuto option is
+		// Note that (at present) the crypto.rsa.PSSSaltLengthEqualsHash option is
 		// not supported. The caller must either use
 		// crypto.rsa.PSSSaltLengthEqualsHash (recommended) or pass an
 		// explicit salt length. Moreover the underlying PKCS#11
@@ -246,7 +245,7 @@ func TestSignRSAPSS_WithFileIntegrityCheck(t *testing.T) {
 	assert.NotNil(t, digest)
 
 	pssOpts := &rsa.PSSOptions{
-		// Note that (at present) the crypto.rsa.PSSSaltLengthAuto option is
+		// Note that (at present) the crypto.rsa.PSSSaltLengthEqualsHash option is
 		// not supported. The caller must either use
 		// crypto.rsa.PSSSaltLengthEqualsHash (recommended) or pass an
 		// explicit salt length. Moreover the underlying PKCS#11
@@ -323,16 +322,18 @@ func createKeystore() (
 
 	rootDir := fmt.Sprintf("%s/%s", TEST_DATA_DIR, temp)
 
-	os.MkdirAll(rootDir, fs.ModePerm)
+	fs := afero.NewOsFs()
 
-	blobStore, err := blobstore.NewFSBlobStore(logger, rootDir, nil)
+	fs.MkdirAll(rootDir, os.ModePerm)
+
+	blobStore, err := blobstore.NewFSBlobStore(logger, fs, rootDir, nil)
 	if err != nil {
 		return nil, nil, nil, nil, "", err
 	}
 
 	softhsm_conf := fmt.Sprintf("%s/softhsm.conf", temp)
 	conf := strings.ReplaceAll(string(TEST_SOFTHSM_CONF), "testdata/", temp)
-	err = os.WriteFile(softhsm_conf, []byte(conf), fs.ModePerm)
+	err = os.WriteFile(softhsm_conf, []byte(conf), os.ModePerm)
 	if err != nil {
 		return nil, nil, nil, nil, "", err
 	}
@@ -351,7 +352,7 @@ func createKeystore() (
 		return nil, nil, nil, nil, "", err
 	}
 
-	keyBackend := keystore.NewFileBackend(logger, temp)
+	keyBackend := keystore.NewFileBackend(logger, afero.NewMemMapFs(), temp)
 
 	// Generate new platform key store to seal the PKCS11 pin
 	tpmksParams := &tpm2ks.Params{
@@ -379,13 +380,14 @@ func createKeystore() (
 	}
 
 	pkcs11Params := &Params{
-		Logger:       logger,
-		DebugSecrets: true,
-		Config:       config,
-		SignerStore:  signerStore,
-		Random:       rand.Reader,
-		TPMKS:        tpmks,
 		Backend:      keyBackend,
+		Config:       config,
+		DebugSecrets: true,
+		Fs:           fs,
+		Logger:       logger,
+		Random:       rand.Reader,
+		SignerStore:  signerStore,
+		TPMKS:        tpmks,
 	}
 
 	pkcs11store, err := NewKeyStore(pkcs11Params)
@@ -406,7 +408,7 @@ func createTPM(
 	soPIN, userPIN []byte,
 	platformPolicy bool) (*logging.Logger, tpm2.TrustedPlatformModule, string, error) {
 
-	logger := util.Logger()
+	logger := logging.DefaultLogger()
 
 	if CACHED_TPM != nil {
 		return logger, CACHED_TPM, CACHED_DIR, nil
@@ -427,12 +429,16 @@ func createTPM(
 	// 	return logger, TPM, tmp, nil
 	// }
 
-	blobStore, err := blob.NewFSBlobStore(logger, tmp, nil)
+	// fs := afero.NewMemMapFs()
+	fs := afero.NewOsFs()
+	fs.MkdirAll(tmp, os.ModePerm)
+
+	blobStore, err := blob.NewFSBlobStore(logger, fs, tmp, nil)
 	if err != nil {
 		return nil, nil, "", err
 	}
 
-	fileBackend := keystore.NewFileBackend(logger, tmp)
+	fileBackend := keystore.NewFileBackend(logger, fs, tmp)
 
 	signerStore := keystore.NewSignerStore(blobStore)
 

@@ -393,7 +393,7 @@ const docTemplate = `{
                     }
                 },
                 "keystores": {
-                    "$ref": "#/definitions/platform.KeyChainConfig"
+                    "$ref": "#/definitions/platform.KeyringConfig"
                 },
                 "sans": {
                     "$ref": "#/definitions/ca.SubjectAlternativeNames"
@@ -472,9 +472,6 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
-                },
-                "client_ca_cert": {
-                    "type": "string"
                 },
                 "insecure_port": {
                     "type": "integer"
@@ -630,7 +627,7 @@ const docTemplate = `{
                 }
             }
         },
-        "platform.KeyChainConfig": {
+        "platform.KeyringConfig": {
             "type": "object",
             "properties": {
                 "cn": {

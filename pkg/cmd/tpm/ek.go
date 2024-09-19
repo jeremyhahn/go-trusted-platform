@@ -1,64 +1,177 @@
 package tpm
 
 import (
+	"crypto/x509"
 	"fmt"
 
+	libtpm2 "github.com/google/go-tpm/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
 	"github.com/spf13/cobra"
 )
 
 var (
-	bCertificate,
-	bRSA,
-	bECC bool
+	ekCA             bool
+	ekCert           bool
+	ekCN             string
+	ekECC            bool
+	ekHandle         uint32
+	ekMAC            bool
+	ekParentHandle   uint32
+	ekParentPassword string
+	ekParentPolicy   bool
+	ekPassword       string
+	ekPersistent     bool
+	ekPolicy         bool
+	ekRSA            bool
+	ekTLS            bool
 )
 
 func init() {
 
-	EKCmd.PersistentFlags().BoolVar(&bRSA, "rsa", false, "Retrieve the TPM 2.0 RSA Endorsement Key")
-	EKCmd.PersistentFlags().BoolVar(&bECC, "ecc", false, "Retrieve the TPM 2.0 ECC ENdorsement Key")
-	EKCmd.PersistentFlags().BoolVar(&bCertificate, "cert", true, "Retrieve the TPM 2.0 ENdorsement Key Certificate")
+	// Options
+	EKCmd.PersistentFlags().Uint32Var(&ekHandle, "handle", 0x81010001, "Defaults to the TCG recommended EK index")
+	EKCmd.PersistentFlags().StringVar(&ekCN, "cn", "", "The EK common name")
+
+	// Flags
+	EKCmd.PersistentFlags().BoolVar(&ekRSA, "rsa", false, "RSA Endorsement Key")
+	EKCmd.PersistentFlags().BoolVar(&ekECC, "ecdsa", false, "ECC Endorsement Key")
+	EKCmd.PersistentFlags().BoolVar(&ekCert, "cert", true, "Endorsement Key Certificate")
+	EKCmd.PersistentFlags().StringVar(&ekPassword, "password", "", "The key authorization password")
+	EKCmd.PersistentFlags().BoolVar(&ekPersistent, "persistent", true, "Persistent handle flag")
+	EKCmd.PersistentFlags().BoolVar(&ekPolicy, "policy", false, "True to save the password as a keyed hash with platform PCR policy authorization")
 }
 
 var EKCmd = &cobra.Command{
-	Use:   "ek",
-	Short: "Retrieve TPM 2.0 Public Endorsement Key",
-	Long:  `Display TPM 2.0 Endorsement Public Key in PEM form`,
+	Use:   "ek [action]",
+	Short: "TPM 2.0 Endorsement Key Operations",
+	Long:  `Perform operations on a TPM 2.0 Endorsement Key`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App.Init(InitParams)
-
-		if err := App.OpenTPM(); err != nil {
-			App.Logger.Warning(err)
-		}
-		defer func() {
-			if err := App.TPM.Close(); err != nil {
-				App.Logger.Fatal(err)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			if err != tpm2.ErrNotInitialized {
+				cmd.PrintErrln(err)
+				return
 			}
-		}()
+		}
 
-		if !bRSA && !bRSA {
+		soPIN := keystore.NewClearPassword(InitParams.SOPin)
+
+		keyAlg := x509.RSA
+		template := libtpm2.RSASRKTemplate
+
+		if ekECC {
+			keyAlg = x509.ECDSA
+			template = libtpm2.ECCSRKTemplate
+		}
+
+		if !ekRSA && !ekECC {
 			fmt.Println("No algorithm flags, defaulting to RSA...")
-			bRSA = true
 		}
 
-		if bRSA {
-			rsaPub := App.TPM.EKRSA()
-			fmt.Println(keystore.EncodePubKey(rsaPub))
+		handleType := libtpm2.TPMHTTransient
+		if ekPersistent {
+			handleType = libtpm2.TPMHTPersistent
 		}
 
-		if bECC {
-			eccPub := App.TPM.EKECC()
-			fmt.Println(keystore.EncodePubKey(eccPub))
+		var passwd keystore.Password
+		if len(ekPassword) > 0 {
+			passwd = keystore.NewClearPassword([]byte(ekPassword))
 		}
 
-		if bCertificate {
+		ekAttrs := &keystore.KeyAttributes{
+			CN:             ekCN,
+			Password:       passwd,
+			KeyAlgorithm:   keyAlg,
+			KeyType:        keystore.KEY_TYPE_ENDORSEMENT,
+			PlatformPolicy: ekPolicy,
+			TPMAttributes: &keystore.TPMAttributes{
+				Handle:        libtpm2.TPMHandle(ekHandle),
+				HandleType:    handleType,
+				Hierarchy:     libtpm2.TPMRHEndorsement,
+				HierarchyAuth: soPIN,
+				Template:      template,
+			},
+		}
+
+		// No args, display the EK public key in PEM form
+		if len(args) == 0 {
+			keyAttrs, err := App.TPM.KeyAttributes(libtpm2.TPMHandle(ekHandle))
+			if err != nil {
+				cmd.PrintErrln(err)
+				return
+			}
+			keyAttrs.TPMAttributes.HandleType = libtpm2.TPMHTPersistent
+			cmd.Println(keyAttrs)
+
+			pem, err := keystore.EncodePEM(keyAttrs.TPMAttributes.PublicKeyBytes)
+			if err != nil {
+				cmd.PrintErrln(err)
+				return
+			}
+			cmd.Println(string(pem))
+			return
+		}
+
+		switch args[0] {
+
+		case "certificate":
 			cert, err := App.TPM.EKCertificate()
 			if err != nil {
-				App.Logger.Fatal(err)
+				cmd.PrintErrln(err)
+				return
 			}
-			fmt.Println(certstore.EncodePEM(cert.Raw))
+			pem, err := certstore.EncodePEM(cert.Raw)
+			if err != nil {
+				cmd.PrintErrln(err)
+				return
+			}
+			cmd.Println(string(pem))
+
+		case "create-key":
+			err := App.TPM.CreateEK(ekAttrs)
+			if err != nil {
+				cmd.PrintErrln(err)
+				return
+			}
+			pem, err := keystore.EncodePEM(ekAttrs.TPMAttributes.PublicKeyBytes)
+			if err != nil {
+				cmd.PrintErrln(err)
+				return
+			}
+			cmd.Println(string(pem))
+
+		case "delete-key":
+			name, _, err := App.TPM.ReadHandle(libtpm2.TPMHandle(ekHandle))
+			ekAttrs.TPMAttributes.Name = name
+			if err != nil {
+				cmd.PrintErrln(err)
+				return
+			}
+			if err := App.TPM.DeleteKey(ekAttrs, nil); err != nil {
+				cmd.PrintErrln(err)
+				return
+			}
+
+		case "import-certificate":
+			cert, err := App.ImportEndorsementKeyCertificate()
+			if err != nil {
+				cmd.PrintErrln(err)
+				return
+			}
+			pem, err := certstore.EncodePEM(cert.Raw)
+			if err != nil {
+				cmd.PrintErrln(err)
+				return
+			}
+			cmd.Println(string(pem))
+
+		default:
+			cmd.Help()
+			return
 		}
+
 	},
 }

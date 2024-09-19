@@ -8,5 +8,6 @@ var (
 	ErrInvalidSOPIN            = errors.New("keystore/pkcs11: invalid security officer pin")
 	ErrInvalidUserPIN          = errors.New("keystore/pkcs11: invalid user pin")
 	ErrInvalidTokenLabel       = errors.New("keystore/pkcs11: invalid token label")
+	ErrInvalidSOPINLength      = errors.New("keystore/pkcs11: invalid SO pin length, must be at least 4 characters")
 	ErrInvalidPINLength        = errors.New("keystore/pkcs11: invalid pin length, must be at least 4 characters")
 )

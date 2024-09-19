@@ -25,6 +25,7 @@ var (
 	bSOPin     bool
 	SOPin      string
 	Pin        string
+	err        error
 
 	EXIT_CODE_FAILURE = 255
 )
@@ -106,9 +107,6 @@ func init() {
 }
 
 func Execute() error {
-
-	prompt.PrintBanner(app.Version)
-
 	if err := rootCmd.Execute(); err != nil {
 		log.Fatal(err)
 	}

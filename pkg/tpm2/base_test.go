@@ -6,16 +6,15 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"os"
 	"testing"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
-	"github.com/op/go-logging"
+	"github.com/spf13/afero"
 )
 
 var (
@@ -90,7 +89,7 @@ func extendRandomBytes(transport transport.TPM) {
 		},
 	}.Execute(transport)
 	if err != nil {
-		log.Fatal(err)
+		logging.DefaultLogger().FatalError(err)
 	}
 }
 
@@ -103,7 +102,7 @@ func createKey(
 
 	ekAttrs, err := tpm.EKAttributes()
 	if err != nil {
-		log.Fatal(err)
+		logging.DefaultLogger().FatalError(err)
 	}
 
 	srkAttrs := &keystore.KeyAttributes{
@@ -123,7 +122,7 @@ func createKey(
 		}}
 	err = tpm.CreateSRK(srkAttrs)
 	if err != nil {
-		log.Fatal(err)
+		logging.DefaultLogger().FatalError(err)
 	}
 
 	return &keystore.KeyAttributes{
@@ -142,22 +141,23 @@ func createKey(
 // Creates a connection a simulated TPM (without creating a CA)
 func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule) {
 
-	logger := util.Logger()
+	logger := logging.DefaultLogger()
 
 	buf := make([]byte, 8)
 	_, err := rand.Reader.Read(buf)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 	hexVal := hex.EncodeToString(buf)
 	tmp := fmt.Sprintf("%s/%s", TEST_DIR, hexVal)
 
-	blobStore, err := blob.NewFSBlobStore(logger, tmp, nil)
+	fs := afero.NewMemMapFs()
+	blobStore, err := blob.NewFSBlobStore(logger, fs, tmp, nil)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
-	fileBackend := keystore.NewFileBackend(logger, tmp)
+	fileBackend := keystore.NewFileBackend(logger, afero.NewMemMapFs(), tmp)
 
 	config := &Config{
 		EncryptSession: encrypt,
@@ -205,7 +205,7 @@ func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule) {
 	}
 
 	params := &Params{
-		Logger:       util.Logger(),
+		Logger:       logging.DefaultLogger(),
 		DebugSecrets: true,
 		Config:       config,
 		BlobStore:    blobStore,
@@ -217,10 +217,10 @@ func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule) {
 	if err != nil {
 		if err == ErrNotInitialized {
 			if err = tpm.Provision(nil); err != nil {
-				logger.Fatal(err)
+				logger.FatalError(err)
 			}
 		} else {
-			logger.Fatal(err)
+			logger.FatalError(err)
 		}
 	}
 

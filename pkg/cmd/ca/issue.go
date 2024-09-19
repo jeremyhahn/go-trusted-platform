@@ -1,7 +1,6 @@
 package ca
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
@@ -9,21 +8,29 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func init() {
-	IssueCmd.PersistentFlags().StringVar(&CN, "cn", "", "The common name for the certificate. Ex: --cn example.com")
-	IssueCmd.PersistentFlags().StringVarP(&KeyStore, "store", "s", "tpm2", "Key store type [ pkcs8 | pkcs11 | tpm2 ]")
-	IssueCmd.PersistentFlags().StringVarP(&Algorithm, "algorithm", "a", "ecdsa", "The key algorithm [ rsa | ecdsa | ed25519 ]")
-}
-
 var IssueCmd = &cobra.Command{
-	Use:   "issue",
+	Use:   "issue [cn] [store] [algorithm]",
 	Short: "Issues a new x509 Certificate",
 	Long:  `Issue a new x509 certificate from the Certificate Authority.`,
 	Run: func(cmd *cobra.Command, args []string) {
 
 		var subject ca.Subject
 
-		App.Init(InitParams)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
+
+		userPIN := keystore.NewClearPassword(InitParams.Pin)
+		if err := App.LoadCA(userPIN); err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
+
+		cn := args[0]
+		store := args[1]
+		algorithm := args[2]
 
 		dnsNames := []string{}
 		ips := []string{}
@@ -39,30 +46,30 @@ var IssueCmd = &cobra.Command{
 			emails = strings.Split(SansEmails, ",")
 		}
 
-		storeType, err := keystore.ParseStoreType(KeyStore)
+		storeType, err := keystore.ParseStoreType(store)
 		if err != nil {
-			App.Logger.Fatal(err)
-		}
-		keyAlgo, err := keystore.ParseKeyAlgorithm(Algorithm)
-		if err != nil {
-			App.Logger.Fatal(err)
+			cmd.PrintErrln(err)
+			return
 		}
 
-		fmt.Printf("Key common name: %s\n", CN)
-		fmt.Printf("Key store: %s\n", KeyStore)
-		fmt.Printf("Key algorithm: %s\n", Algorithm)
+		keyAlgo, err := keystore.ParseKeyAlgorithm(algorithm)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 
 		attrs, err := keystore.Template(keyAlgo)
 		if err != nil {
-			App.Logger.Fatal(err)
+			cmd.PrintErrln(err)
+			return
 		}
 
-		attrs.CN = CN
+		attrs.CN = cn
 		attrs.KeyAlgorithm = keyAlgo
 		attrs.KeyType = keystore.KEY_TYPE_TLS
 		attrs.StoreType = storeType
 
-		subject.CommonName = CN
+		subject.CommonName = cn
 
 		request := ca.CertificateRequest{
 			KeyAttributes: attrs,
@@ -73,16 +80,17 @@ var IssueCmd = &cobra.Command{
 				IPs:   ips,
 				Email: emails}}
 
-		_, err = App.CA.IssueCertificate(request)
-		if err != nil {
-			App.Logger.Error(err)
+		if _, err = App.CA.IssueCertificate(request); err != nil {
+			cmd.PrintErrln(err)
+			return
 		}
 
 		cert, err := App.CA.PEM(attrs)
 		if err != nil {
-			App.Logger.Error(err)
+			cmd.PrintErrln(err)
+			return
 		}
 
-		fmt.Println(string(cert))
+		cmd.Println(string(cert))
 	},
 }

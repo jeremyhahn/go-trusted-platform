@@ -387,7 +387,7 @@
                     }
                 },
                 "keystores": {
-                    "$ref": "#/definitions/platform.KeyChainConfig"
+                    "$ref": "#/definitions/platform.KeyringConfig"
                 },
                 "sans": {
                     "$ref": "#/definitions/ca.SubjectAlternativeNames"
@@ -466,9 +466,6 @@
                     "items": {
                         "type": "string"
                     }
-                },
-                "client_ca_cert": {
-                    "type": "string"
                 },
                 "insecure_port": {
                     "type": "integer"
@@ -624,7 +621,7 @@
                 }
             }
         },
-        "platform.KeyChainConfig": {
+        "platform.KeyringConfig": {
             "type": "object",
             "properties": {
                 "cn": {

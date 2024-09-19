@@ -7,9 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
-	"github.com/op/go-logging"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -61,27 +60,29 @@ func TestInitHSM(t *testing.T) {
 
 	info, err := pkcs11.ctx.GetInfo()
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	assert.Equal(t, "SoftHSM", info.ManufacturerID)
 
-	util.Logger().Debug(info)
+	logging.DefaultLogger().Debugf("%+v", info)
 }
 
 func createKeystoreSoftHSM2() (*logging.Logger, *PKCS11) {
 
-	logger := util.Logger()
+	logger := logging.DefaultLogger()
 
 	if err := os.MkdirAll(TEST_DATA_DIR, fs.ModePerm); err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	softhsm_conf := fmt.Sprintf("%s/softhsm.conf", TEST_DATA_DIR)
 	err := os.WriteFile(softhsm_conf, TEST_SOFTHSM_CONF, fs.ModePerm)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
+
+	os.Setenv("SOFTHSM2_CONF", softhsm_conf)
 
 	var slot int = 0
 	config := &Config{
@@ -99,7 +100,7 @@ func createKeystoreSoftHSM2() (*logging.Logger, *PKCS11) {
 			InitSoftHSM(logger, config)
 			pkcs11, err = NewPKCS11(logger, config)
 			if err != nil {
-				logger.Fatal(err)
+				logger.FatalError(err)
 			}
 			// err = pkcs11.ctx.InitToken(0, "123456", "test")
 			// if err != nil {
@@ -178,7 +179,7 @@ func createKeystoreSoftHSM2() (*logging.Logger, *PKCS11) {
 // // 	// 	log.Fatal(err)
 // // 	// }
 
-// // 	logger := util.Logger()
+// // 	logger := logging.DefaultLogger()
 
 // // 	yubikey, closer, err := getYubikey("654321", "87654321")
 // // 	if err != nil {
@@ -221,7 +222,7 @@ func createKeystoreSoftHSM2() (*logging.Logger, *PKCS11) {
 
 // func createKeystoreOpenSC(slot int) (*logging.Logger, *PKCS11) {
 
-// 	logger := util.Logger()
+// 	logger := logging.DefaultLogger()
 
 // 	config := &Config{
 // 		Library:    "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so",
@@ -239,7 +240,7 @@ func createKeystoreSoftHSM2() (*logging.Logger, *PKCS11) {
 
 // func createKeystoreYubiKey(slot int) (*logging.Logger, *PKCS11) {
 
-// 	logger := util.Logger()
+// 	logger := logging.DefaultLogger()
 
 // 	config := &Config{
 // 		Library:    "/usr/local/lib/libykcs11.so.2.5.2",
@@ -257,7 +258,7 @@ func createKeystoreSoftHSM2() (*logging.Logger, *PKCS11) {
 
 // func createKeystoreYubiKey2(slot int) (*logging.Logger, *PKCS11) {
 
-// 	logger := util.Logger()
+// 	logger := logging.DefaultLogger()
 
 // 	config := &Config{
 // 		Library:    "/usr/local/lib/libykcs11.so.2.5.2",
@@ -275,7 +276,7 @@ func createKeystoreSoftHSM2() (*logging.Logger, *PKCS11) {
 
 // func createKeystoreTPM() (*logging.Logger, *PKCS11) {
 
-// 	logger := util.Logger()
+// 	logger := logging.DefaultLogger()
 
 // 	var slot int = 0
 // 	config := &Config{

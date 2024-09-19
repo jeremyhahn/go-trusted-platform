@@ -12,7 +12,7 @@ type SignerOpts struct {
 	KeyAttributes *KeyAttributes
 
 	// Optional PSS Salt Length when using RSA PSS.
-	// Default rsa.PSSSaltLengthAuto
+	// Default rsa.PSSSaltLengthEqualsHash
 	PSSOptions *rsa.PSSOptions
 	BlobCN     []byte
 	BlobData   []byte

@@ -3,7 +3,6 @@ package tpm2
 import (
 	"bytes"
 	"crypto"
-	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -13,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -27,13 +27,12 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 
-	"github.com/op/go-logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 type TrustedPlatformModule interface {
 	ActivateCredential(credentialBlob, encryptedSecret []byte) ([]byte, error)
 	AKProfile() (AKProfile, error)
-	Info() (tpm20Info, error)
 	Clear(hierarchyAuth []byte, hierarchy tpm2.TPMHandle) error
 	Close() error
 	Config() *Config
@@ -46,20 +45,19 @@ type TrustedPlatformModule interface {
 		backend keystore.KeyBackend) error
 	CreateIAK(ekAttrs *keystore.KeyAttributes) (*keystore.KeyAttributes, error)
 	CreateIDevID(akAttrs *keystore.KeyAttributes, ekCert *x509.Certificate) (*keystore.KeyAttributes, *TCG_CSR_IDEVID, error)
-	CreateKeySession(
-		keyAttrs *keystore.KeyAttributes,
-		parentSession *tpm2.Session) (tpm2.Session, func() error, error)
 	CreatePlatformPolicy() error
 	CreateRSA(
 		keyAttrs *keystore.KeyAttributes,
 		backend keystore.KeyBackend) (*rsa.PublicKey, error)
-	CreateSession(keyAttrs *keystore.KeyAttributes) (tpm2.Session, func() error, error)
+	CreateKeySession(
+		keyAttrs *keystore.KeyAttributes) (tpm2.Session, func() error, error)
+	CreateSession(
+		keyAttrs *keystore.KeyAttributes) (tpm2.Session, func() error, error)
 	CreateSRK(keyAttrs *keystore.KeyAttributes) error
 	CreateTCG_CSR_IDEVID(
 		ekCert *x509.Certificate,
 		akAttrs *keystore.KeyAttributes,
 		idevidAttrs *keystore.KeyAttributes) (TCG_CSR_IDEVID, error)
-	DebugCapabilities() error
 	DeleteKey(keyAttrs *keystore.KeyAttributes, backend keystore.KeyBackend) error
 	Device() string
 	EK() crypto.PublicKey
@@ -82,12 +80,14 @@ type TrustedPlatformModule interface {
 	IAKAttributes() (*keystore.KeyAttributes, error)
 	IDevID() crypto.PublicKey
 	IDevIDAttributes() (*keystore.KeyAttributes, error)
+	Info() (string, error)
+	IsFIPS140_2() (bool, error)
 	Install(soPIN keystore.Password) error
+	KeyAttributes(handle tpm2.TPMHandle) (*keystore.KeyAttributes, error)
 	LoadKeyPair(
 		keyAttrs *keystore.KeyAttributes,
 		session *tpm2.Session,
 		backend keystore.KeyBackend) (*tpm2.LoadResponse, error)
-	LocalQuote(keyAttrs *keystore.KeyAttributes) (Quote, []byte, error)
 	MakeCredential(
 		akName tpm2.TPM2BName,
 		secret []byte) ([]byte, []byte, []byte, error)
@@ -97,10 +97,10 @@ type TrustedPlatformModule interface {
 	Open() error
 	ParseEKCertificate(ekCert []byte) (*x509.Certificate, error)
 	ParsePublicKey(tpm2BPublic []byte) (crypto.PublicKey, error)
+	PlatformPolicyDigestHash() ([]byte, error)
 	PlatformPolicyDigest() tpm2.TPM2BDigest
 	PlatformPolicySession() (tpm2.Session, func() error, error)
-	PolicyDigest() tpm2.TPM2BDigest
-	PrintCapabilities() error
+	PlatformQuote(keyAttrs *keystore.KeyAttributes) (Quote, []byte, error)
 	Provision(soPIN keystore.Password) error
 	ProvisionEKCert(hierarchyAuth, ekCert []byte) error
 	ProvisionOwner(hierarchyAuth keystore.Password) (*keystore.KeyAttributes, error)
@@ -126,7 +126,6 @@ type TrustedPlatformModule interface {
 	SRKPublic() (tpm2.TPM2BName, tpm2.TPMTPublic)
 	SSRKAttributes() (*keystore.KeyAttributes, error)
 	Transport() transport.TPM
-	TPMAttributes(handle tpm2.TPMHandle) (*keystore.KeyAttributes, error)
 	Unseal(keyAttrs *keystore.KeyAttributes, backend keystore.KeyBackend) ([]byte, error)
 	WriteEKCert(ekCert []byte) error
 
@@ -207,7 +206,8 @@ func NewTPM2(params *Params) (TrustedPlatformModule, error) {
 		}
 		tpmTransport = transport.FromReadWriter(sim)
 	} else {
-		params.Logger.Infof("%s %s", infoOpeningDevice, params.Config.Device)
+		params.Logger.Info(infoOpeningDevice,
+			slog.String("device", params.Config.Device))
 		device, err = os.OpenFile(params.Config.Device, os.O_RDWR, 0)
 		if err != nil {
 			params.Logger.Error(err)
@@ -273,8 +273,7 @@ func (tpm *TPM2) Open() error {
 		tpm.simulator = sim
 		t = transport.FromReadWriter(sim)
 	} else {
-
-		tpm.logger.Infof("%s %s", infoOpeningDevice, tpm.config.Device)
+		tpm.logger.Info(infoOpeningDevice, slog.String("device", tpm.config.Device))
 		f, err := os.OpenFile(tpm.config.Device, os.O_RDWR, 0)
 		if err != nil {
 			tpm.logger.Error(err)
@@ -327,25 +326,46 @@ func (tpm *TPM2) ParsePublicKey(tpm2BPublic []byte) (crypto.PublicKey, error) {
 			return nil, err
 		}
 		return rsaPub, nil
+
 	} else if pub.Type == tpm2.TPMAlgECC {
+
+		eccDetail, err := pub.Parameters.ECCDetail()
+		if err != nil {
+			return nil, err
+		}
 
 		eccUnique, err := pub.Unique.ECC()
 		if err != nil {
 			return nil, err
 		}
-		eccPub, err := tpm2.ECDHPubKey(ecdh.P256(), &tpm2.TPMSECCPoint{
-			X: eccUnique.X,
-			Y: eccUnique.Y,
-		})
+
+		curve, err := eccDetail.CurveID.Curve()
+		if err != nil {
+			return nil, err
+		}
+
+		eccPub := &ecdsa.PublicKey{
+			Curve: curve,
+			X:     big.NewInt(0).SetBytes(eccUnique.X.Buffer),
+			Y:     big.NewInt(0).SetBytes(eccUnique.Y.Buffer),
+		}
+
 		return eccPub, nil
 	}
 
 	return nil, keystore.ErrInvalidKeyAlgorithm
 }
 
-// Returns the platform policy digest of the Golden
-// Integrity Measurements with the Policy PCR.
-func (tpm *TPM2) PolicyDigest() tpm2.TPM2BDigest {
+// Returns the platform policy digest used to satisfy
+// platform PCR authorization values
+func (tpm *TPM2) PlatformPolicyDigest() tpm2.TPM2BDigest {
+	if tpm.policyDigest.Buffer == nil {
+		_, closer, err := tpm.PlatformPolicySession()
+		if err != nil {
+			tpm.logger.FatalError(err)
+		}
+		defer closer()
+	}
 	return tpm.policyDigest
 }
 
@@ -401,7 +421,8 @@ func (tpm *TPM2) SetHierarchyAuth(oldPasswd, newPasswd keystore.Password, hierar
 		case tpm2.TPMRHOwner:
 			sHierarchy = "Owner"
 		}
-		tpm.logger.Debugf("tpm: Setting %s hierarchy authorization password", sHierarchy)
+		tpm.logger.Debug("tpm: Setting hierarchy authorization password",
+			slog.String("hierarchy", sHierarchy))
 	} else {
 		tpm.logger.Debug("tpm: Setting hierarchy authorization passwords")
 	}
@@ -420,9 +441,10 @@ func (tpm *TPM2) SetHierarchyAuth(oldPasswd, newPasswd keystore.Password, hierar
 		}
 	}
 	if tpm.debugSecrets {
-		tpm.logger.Debugf(
-			"tpm: old password: %s, new password: %s",
-			oldPassword, newPassword)
+		tpm.logger.Debug(
+			"tpm: passwords",
+			slog.String("old", string(oldPassword)),
+			slog.String("new", string(newPassword)))
 	}
 	var hierarchies []tpm2.TPMHandle
 	if hierarchy != nil {
@@ -466,7 +488,8 @@ func (tpm *TPM2) EKCertificate() (*x509.Certificate, error) {
 
 	tpm.logger.Debug("tpm: retrieving EK certificate")
 
-	ekAttrs, err := EKAttributesFromConfig(*tpm.config.EK, &tpm.policyDigest)
+	policyDigest := tpm.PlatformPolicyDigest()
+	ekAttrs, err := EKAttributesFromConfig(*tpm.config.EK, &policyDigest)
 	if err != nil {
 		return nil, err
 	}
@@ -482,21 +505,21 @@ func (tpm *TPM2) EKCertificate() (*x509.Certificate, error) {
 		return ekCert, nil
 	}
 
-	// Load the EK cert from TPM NV RAM
-	ekCertIndex := tpm2.TPMHandle(ekCertIndex)
-
+	// Load the EK cert
+	var ekCertIndex tpm2.TPMHandle
 	if ekAttrs.TPMAttributes != nil && ekAttrs.TPMAttributes.CertHandle > 0 {
-		// Load the EK cert index provided by TPM attributes
+		// ... using EK cert index provided by TPM attributes
 		ekCertIndex = tpm2.TPMHandle(ekAttrs.TPMAttributes.CertHandle)
 
 	} else if tpm.config.EK.CertHandle > 0 {
 
-		// Load EK cert index provided by platform configuration
+		// ... using Load EK cert index provided by platform configuration
 		ekCertIndex = tpm2.TPMHandle(tpm.config.EK.CertHandle)
 
 	} else {
 
-		// Load EK cert that matches the key attributes algorithm
+		// Load the EK cert using the recommended indexes for
+		// the key algorithm
 		if ekAttrs.KeyAlgorithm == x509.RSA {
 			ekCertIndex = tpm2.TPMHandle(ekCertIndexRSA2048)
 		} else if ekAttrs.KeyAlgorithm == x509.ECDSA {
@@ -510,7 +533,6 @@ func (tpm *TPM2) EKCertificate() (*x509.Certificate, error) {
 	response, err := tpm2.NVReadPublic{
 		NVIndex: ekCertIndex,
 	}.Execute(tpm.transport)
-
 	if err != nil {
 
 		tpm.logger.Error(err)
@@ -560,6 +582,9 @@ func (tpm *TPM2) Sign(
 	// Create parent session to load the key
 	session, closer, err = tpm.CreateSession(keyAttrs)
 	if err != nil {
+		if closer != nil {
+			closer()
+		}
 		return nil, err
 	}
 	defer closer()
@@ -622,7 +647,7 @@ func (tpm *TPM2) Sign(
 			} else if opts.HashFunc() == crypto.SHA512 {
 				algo = tpm2.TPMAlgSHA512
 			} else {
-				tpm.logger.Error("%s: %s",
+				tpm.logger.Errorf("%s: %s",
 					keystore.ErrInvalidHashFunction, opts.HashFunc())
 				return nil, keystore.ErrInvalidHashFunction
 			}
@@ -706,14 +731,14 @@ func (tpm *TPM2) Sign(
 		} else if opts.HashFunc() == crypto.SHA512 {
 			algo = tpm2.TPMAlgSHA512
 		} else {
-			tpm.logger.Error("%s: %s",
+			tpm.logger.Errorf("%s: %s",
 				keystore.ErrInvalidHashFunction, opts.HashFunc())
 			return nil, keystore.ErrInvalidHashFunction
 		}
 	}
 
 	// Create key session to sign with
-	session2, closer2, err2 := tpm.CreateKeySession(keyAttrs, &session)
+	session2, closer2, err2 := tpm.CreateKeySession(keyAttrs)
 	if err2 != nil {
 		tpm.logger.Error(err)
 		return nil, err
@@ -747,6 +772,7 @@ func (tpm *TPM2) Sign(
 			Validation: validation,
 		}.Execute(tpm.transport)
 		if err != nil {
+			tpm.logger.Error(err)
 			return nil, err
 		}
 
@@ -758,6 +784,39 @@ func (tpm *TPM2) Sign(
 			if err != nil {
 				return nil, err
 			}
+
+			pubKey, err := tpm.ParsePublicKey(pub.OutPublic.Bytes())
+			if err != nil {
+				return nil, err
+			}
+			err = rsa.VerifyPSS(
+				pubKey.(*rsa.PublicKey),
+				crypto.SHA256,
+				digest,
+				rsaSig.Sig.Buffer,
+				&rsa.PSSOptions{
+					SaltLength: rsa.PSSSaltLengthEqualsHash,
+					Hash:       crypto.SHA256,
+				})
+			if err != nil {
+				return nil, err
+			}
+			fips140_2, err := tpm.IsFIPS140_2()
+			if err != nil {
+				return nil, err
+			}
+			if !fips140_2 {
+				// TPM's that aren't FIPS 140-2 compliant don't sign
+				// RSA-PSS using a salt length the same size as the
+				// hash length, which is incompatible with TLS v1.3
+				// and non-compliant with FIPS 140-2.
+				//
+				// The Golang crypto/rsa/pss.go doesn't expose a public
+				// API to perform PSS padding, so punting on synthesizing
+				// the functionality on behalf of incompatible TPMs for now.
+				tpm.logger.FatalError(ErrRSAPSSNotSupported)
+			}
+
 		} else {
 			rsaSig, err = signResponse.Signature.Signature.RSASSA()
 			if err != nil {
@@ -831,25 +890,34 @@ func (tpm *TPM2) Hash(
 }
 
 // Performs a hash sequence using TPM2_HashSequenceStart,
-// TPM2_SequenceUpdate, TPM2_SequenceComplete.
+// TPM2_SequenceUpdate, TPM2_SequenceComplete under the
+// Endorsement Hierarchy, using the Hierarchy Authorization
+// provided in the key attributes Parent field.
 func (tpm *TPM2) HashSequence(
 	keyAttrs *keystore.KeyAttributes,
 	data []byte) ([]byte, []byte, error) {
 
-	var akAuth []byte
+	// var auth []byte
 	var err error
 	var maxDigestBuffer = 1024
 
-	if keyAttrs.Password != nil {
-		akAuth, err = keyAttrs.Password.Bytes()
-		if err != nil {
-			return nil, nil, err
-		}
+	// if keyAttrs.Password != nil {
+	// 	auth, err = keyAttrs.Password.Bytes()
+	// 	if err != nil {
+	// 		return nil, nil, err
+	// 	}
+	// }
+
+	hierarchyAuth, err := keyAttrs.Parent.TPMAttributes.HierarchyAuth.Bytes()
+	if err != nil {
+		return nil, nil, err
 	}
+
+	auth := hierarchyAuth
 
 	hashSequenceStart := tpm2.HashSequenceStart{
 		Auth: tpm2.TPM2BAuth{
-			Buffer: akAuth,
+			Buffer: auth,
 		},
 		HashAlg: keyAttrs.TPMAttributes.HashAlg,
 	}
@@ -861,9 +929,9 @@ func (tpm *TPM2) HashSequence(
 	authHandle := tpm2.AuthHandle{
 		Handle: rspHSS.SequenceHandle,
 		Name: tpm2.TPM2BName{
-			Buffer: akAuth,
+			Buffer: auth,
 		},
-		Auth: tpm2.PasswordAuth(akAuth),
+		Auth: tpm2.PasswordAuth(hierarchyAuth),
 	}
 
 	for len(data) > maxDigestBuffer {
@@ -889,7 +957,6 @@ func (tpm *TPM2) HashSequence(
 		Hierarchy: tpm2.TPMRHEndorsement,
 	}
 
-	// Complete the hashing sequence and retrieve the digest
 	rspSC, err := sequenceComplete.Execute(tpm.transport)
 	if err != nil {
 		return nil, nil, err
@@ -1129,7 +1196,7 @@ Exit:
 			response, err := pcrRead.Execute(tpm.transport)
 			if err != nil {
 				if strings.Contains(err.Error(), ErrHashAlgorithmNotSupported.Error()) {
-					tpm.logger.Warningf("tpm/ReadPCRs: error reading PCR Bank %s: %s", algo, err)
+					tpm.logger.Warnf("tpm/ReadPCRs: error reading PCR Bank %s: %s", algo, err)
 					return banks, nil
 				}
 			}
@@ -1175,7 +1242,7 @@ func intelEKURL(ekPub *rsa.PublicKey) string {
 // Downloads the EK certificate from the manufactuers EK cert service
 func (tpm *TPM2) downloadEKCertFromManufacturer(ekCertIndex tpm2.TPMHandle) ([]byte, error) {
 
-	attrs, err := tpm.TPMAttributes(tpm2.TPMHandle(ekIndex))
+	attrs, err := tpm.KeyAttributes(tpm2.TPMHandle(ekIndex))
 	if err != nil {
 		return nil, err
 	}
@@ -1220,7 +1287,6 @@ func (tpm *TPM2) downloadEKCertFromManufacturer(ekCertIndex tpm2.TPMHandle) ([]b
 		}
 		tpm.logger.Errorf("tpm: error downloading EK certificate: httpm.StatusCode: %d, body: %s",
 			resp.StatusCode, body)
-		tpm.logger.Error(err)
 		return nil, ErrEndorsementCertNotFound
 	}
 

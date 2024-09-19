@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -36,7 +36,7 @@ func TestRandBytesEncrypted(t *testing.T) {
 
 func TestRandom(t *testing.T) {
 
-	logger := util.Logger()
+	logger := logging.DefaultLogger()
 
 	_, tpm := createSim(false, false)
 	defer tpm.Close()

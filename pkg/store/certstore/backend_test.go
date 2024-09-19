@@ -4,12 +4,25 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 )
+
+func FileExists(path string) bool {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true
+	}
+	if os.IsNotExist(err) {
+		return false
+	}
+	return false
+}
 
 func TestSaveAndGetCA(t *testing.T) {
 
@@ -25,11 +38,11 @@ func TestSaveAndGetCA(t *testing.T) {
 
 	err = backend.ImportCertificate(id, cert)
 	assert.Nil(t, err)
-	assert.True(t, util.FileExists(expectedPath))
+	assert.True(t, FileExists(expectedPath))
 
 	err = backend.DeleteCertificate(id)
 	assert.Nil(t, err)
-	assert.False(t, util.FileExists(expectedPath))
+	assert.False(t, FileExists(expectedPath))
 
 	_, err = backend.Get(id)
 	assert.Equal(t, ErrCertNotFound, err)
@@ -37,7 +50,7 @@ func TestSaveAndGetCA(t *testing.T) {
 
 func defaultStore() (CertificateBackend, string) {
 
-	logger := util.Logger()
+	logger := logging.DefaultLogger()
 
 	// Create a temp directory for each instantiation
 	// so parallel tests don't corrupt each other.
@@ -51,9 +64,10 @@ func defaultStore() (CertificateBackend, string) {
 	caCN := "example.com"
 	temp := fmt.Sprintf("%s/%s/%s", TEST_DATA_DIR, tmpDir, caCN)
 
-	blobStore, err := blob.NewFSBlobStore(logger, TEST_DATA_DIR, nil)
+	fs := afero.NewMemMapFs()
+	blobStore, err := blob.NewFSBlobStore(logger, fs, TEST_DATA_DIR, nil)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	return NewBlobStoreBackend(blobStore), temp

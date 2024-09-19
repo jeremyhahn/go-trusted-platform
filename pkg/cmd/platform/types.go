@@ -11,4 +11,9 @@ var (
 	TPM        tpm2.TrustedPlatformModule
 	CAParams   *ca.CAParams
 	InitParams *app.AppInitParams
+	err        error
 )
+
+func init() {
+	InitParams = &app.AppInitParams{}
+}
