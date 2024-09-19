@@ -209,7 +209,7 @@ func (ca *CA) ImportAttestation(
 	// signing algorithm
 	if keystore.IsRSAPSS(akAttrs.SignatureAlgorithm) {
 		opts.PSSOptions = &rsa.PSSOptions{
-			SaltLength: rsa.PSSSaltLengthAuto,
+			SaltLength: rsa.PSSSaltLengthEqualsHash,
 			Hash:       akAttrs.Hash,
 		}
 	}
@@ -306,7 +306,7 @@ func (ca *CA) VerifyQuote(akAttrs *keystore.KeyAttributes, quote tpm2.Quote, non
 		rsaPub := pubKey.(*rsa.PublicKey)
 		if keystore.IsRSAPSS(akAttrs.SignatureAlgorithm) {
 			pssOpts := &rsa.PSSOptions{
-				SaltLength: rsa.PSSSaltLengthAuto,
+				SaltLength: rsa.PSSSaltLengthEqualsHash,
 				Hash:       akAttrs.Hash,
 			}
 			err = rsa.VerifyPSS(

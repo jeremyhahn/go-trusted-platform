@@ -12,10 +12,13 @@ import (
 
 var (
 	DefaultConfig = config.WebService{
-		Home:          "public_html",
-		Port:          8080,
-		JWTExpiration: 525960, // 1 year
-		TLSPort:       8443,
+		Home: "public_html",
+		Port: 8080,
+		JWT: config.JWT{
+			Expiration: 525960, // 1 year
+			Algorithm:  "PS256",
+		},
+		TLSPort: 8443,
 		Certificate: config.Identity{
 			Valid: 365, // days
 			Subject: ca.Subject{

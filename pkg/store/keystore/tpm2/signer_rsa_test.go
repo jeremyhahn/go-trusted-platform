@@ -51,7 +51,7 @@ func TestSignerRSA_PSS(t *testing.T) {
 
 	// Define RSA PSS opts
 	pssOpts := &rsa.PSSOptions{
-		SaltLength: rsa.PSSSaltLengthAuto,
+		SaltLength: rsa.PSSSaltLengthEqualsHash,
 		Hash:       caKey.Hash,
 	}
 

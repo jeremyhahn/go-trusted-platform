@@ -15,7 +15,11 @@ required to the system file.
 
 TODO: Needs parsing to human-readable format.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		App.Init(InitParams)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 		eventLog, err := App.TPM.EventLog()
 		if err != nil {
 			color.New(color.FgRed).Println(err)

@@ -36,11 +36,11 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest"
-	"github.com/op/go-logging"
 
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
 )
@@ -61,7 +61,7 @@ type WebServerV1 struct {
 	baseURI             string
 	ca                  ca.CertificateAuthority
 	closeChan           chan bool
-	config              config.WebService
+	config              *config.WebService
 	endpointList        []string
 	eventType           string
 	httpServer          *http.Server
@@ -77,13 +77,13 @@ type WebServerV1 struct {
 func NewWebServerV1(
 	logger *logging.Logger,
 	_ca ca.CertificateAuthority,
-	config config.WebService,
+	config *config.WebService,
 	listenAddress string,
 	restServiceRegistry rest.RestServiceRegistry,
 	serverKeyAttributes *keystore.KeyAttributes) *WebServerV1 {
 
 	if _ca == nil {
-		logger.Fatal(ca.ErrNotInitialized)
+		logger.FatalError(ca.ErrNotInitialized)
 	}
 
 	webserver := &WebServerV1{
@@ -123,8 +123,7 @@ func (server *WebServerV1) Run() {
 	} else {
 		go server.startHttp()
 	}
-
-	// server.app.DropPrivileges()
+	go server.startHttp()
 
 	<-server.closeChan
 }
@@ -166,8 +165,35 @@ func (server *WebServerV1) startHttps() {
 	// Retrieve a TLS config ready to go from the CA
 	tlsconf, err := server.ca.TLSConfig(server.serverKeyAttributes)
 	if err != nil {
-		server.logger.Fatal(err)
+		server.logger.FatalError(err)
 	}
+	// if !keystore.IsRSAPSS(server.serverKeyAttributes.SignatureAlgorithm) {
+	// w, err := os.OpenFile("key.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	// if err != nil {
+	// 	fmt.Printf("failed to open file err %+v", err)
+	// 	return
+	// }
+	// 	server.logger.Warn("using TLS v1.2")
+	// 	tlsconf.MaxVersion = tls.VersionTLS12
+	// 	tlsconf.MinVersion = tls.VersionTLS12
+	// 	tlsconf.KeyLogWriter = w
+	// 	tlsconf.Certificates[0].SupportedSignatureAlgorithms = []tls.SignatureScheme{
+	// 		// tls.PKCS1WithSHA1,
+	// 		tls.PKCS1WithSHA256,
+	// 		tls.PKCS1WithSHA384,
+	// 		tls.PKCS1WithSHA512,
+	// 		tls.ECDSAWithP256AndSHA256,
+	// 		tls.ECDSAWithP384AndSHA384,
+	// 		tls.ECDSAWithP521AndSHA512,
+	// 		tls.Ed25519,
+	// 	}
+	// 	// opaque, err := server.ca.Keyring().Key(server.serverKeyAttributes)
+	// 	// if err != nil {
+	// 	// 	server.logger.Error(err)
+	// 	// 	return
+	// 	// }
+	// 	// tlsconf.Certificates[0].PrivateKey = opaque
+	// }
 	server.httpServer.TLSConfig = tlsconf
 
 	// Create the TLS listener on the configured port

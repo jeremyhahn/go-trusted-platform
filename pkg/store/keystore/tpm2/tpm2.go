@@ -6,16 +6,16 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 
 	"github.com/google/go-tpm/tpm2"
-	"github.com/google/logger"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/aesgcm"
 	tptpm2 "github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
-	"github.com/op/go-logging"
 )
 
 type KeyStore struct {
@@ -63,7 +63,7 @@ func NewKeyStore(params *Params) (PlatformKeyStorer, error) {
 			// TPM_RC_HANDLE (handle 1): the handle is not correct for the use
 			return ks, keystore.ErrNotInitalized
 		} else {
-			logger.Fatal(err)
+			params.Logger.FatalError(err)
 		}
 	}
 
@@ -112,26 +112,35 @@ func (ks *KeyStore) Initialize(soPIN, userPIN keystore.Password) error {
 
 	ekAttrs.TPMAttributes.HierarchyAuth = soPIN
 
-	var newPin string
+	var pin string
 	var pinBytes []byte
 
 	if userPIN == nil {
-		pinBytes = aesgcm.NewAESGCM(
-			ks.logger, ks.debugSecrets, ks.random).GenerateKey()
+		pinBytes = aesgcm.NewAESGCM(ks.random).GenerateKey()
 		userPIN = keystore.NewClearPassword(pinBytes)
-		newPin = string(pinBytes)
+		pin = string(pinBytes)
 	} else {
-		newPin, err = userPIN.String()
+		pin, err = userPIN.String()
 		if err != nil {
-			logger.Error(err)
+			ks.logger.Error(err)
 			return err
 		}
-		if newPin == keystore.DEFAULT_PASSWORD {
-			pinBytes = aesgcm.NewAESGCM(
-				ks.logger, ks.debugSecrets, ks.random).GenerateKey()
+		if pin == keystore.DEFAULT_PASSWORD {
+			pinBytes = aesgcm.NewAESGCM(ks.random).GenerateKey()
 			userPIN = keystore.NewClearPassword(pinBytes)
-			newPin = string(pinBytes)
+			pin = string(pinBytes)
 		}
+	}
+
+	if ks.debugSecrets {
+		sopin, err := soPIN.Bytes()
+		if err != nil {
+			return err
+		}
+		ks.logger.Debug("TPM key store PINs",
+			slog.String("soPIN", string(sopin)),
+			slog.String("userPIN", pin),
+		)
 	}
 
 	// Generate dedicated key store SRK
@@ -187,7 +196,7 @@ func (ks *KeyStore) SRKAttributes() *keystore.KeyAttributes {
 
 	ekAttrs, err := ks.tpm.EKAttributes()
 	if err != nil {
-		ks.logger.Fatal(err)
+		ks.logger.FatalError(err)
 	}
 
 	srkAttrs, err = ks.tpm.KeyAttributes(srkHandle)
@@ -214,7 +223,7 @@ func (ks *KeyStore) SRKAttributes() *keystore.KeyAttributes {
 				srkTemplate.AuthPolicy = ks.tpm.PlatformPolicyDigest()
 			}
 		} else {
-			ks.logger.Fatal(err)
+			ks.logger.FatalError(err)
 		}
 	}
 	srkAttrs.Parent = ekAttrs
@@ -558,12 +567,15 @@ func (ks *KeyStore) CreatePassword(
 		return err
 	}
 
+	if len(passwd) == 0 {
+		return nil
+	}
+
 	// Copy the password to the Secret field - the TPM seal operation
 	// seals the Secret field, not the password field.
 
 	if string(passwd) == keystore.DEFAULT_PASSWORD {
-		passwd = aesgcm.NewAESGCM(
-			ks.logger, ks.debugSecrets, ks.tpm).GenerateKey()
+		passwd = aesgcm.NewAESGCM(ks.tpm).GenerateKey()
 		keyAttrs.Secret = keystore.NewClearPassword(passwd)
 	} else {
 		keyAttrs.Secret = keyAttrs.Password

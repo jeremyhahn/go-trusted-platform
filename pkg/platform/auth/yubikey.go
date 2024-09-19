@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/GeertJohan/yubigo"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
-	"github.com/op/go-logging"
 )
 
 type YubiAuth struct {

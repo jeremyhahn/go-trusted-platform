@@ -10,7 +10,6 @@ import (
 	"github.com/fatih/color"
 	"github.com/google/go-tpm/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
-	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 )
 
@@ -22,7 +21,7 @@ var (
 
 func init() {
 
-	ClearCmd.PersistentFlags().StringVar(&clrDevicePath, "device", "/dev/tpmrm0", "The TPM 2.0 device path")
+	ClearCmd.PersistentFlags().StringVar(&clrDevicePath, "device", "/dev/tpm0", "The TPM 2.0 device path")
 	ClearCmd.PersistentFlags().BoolVar(&clrForce, "force", false, "Forces a UEFI platform TPM clear, requires root and reboot")
 	ClearCmd.PersistentFlags().StringVar(&clrHierarchy, "hierarchy", "l", "The hierarchy to clear. Defaults to the lockout hierarchy. [ e | o | l ]")
 }
@@ -68,7 +67,7 @@ https://trustedcomputinggroup.org/wp-content/uploads/TPM-2.0-1.83-Part-3-Command
 			// https://github.com/tpm2-software/tpm2-tools/issues/1956
 			deviceName := filepath.Base(clrDevicePath)
 			file := fmt.Sprintf("/sys/class/tpm/%s/ppi/request", deviceName)
-			err := afero.WriteFile(App.FS, file, []byte("5"), os.ModePerm)
+			err := os.WriteFile(file, []byte("5"), os.ModePerm)
 			if err != nil {
 				color.New(color.FgRed).Println(err)
 				return
@@ -79,20 +78,11 @@ https://trustedcomputinggroup.org/wp-content/uploads/TPM-2.0-1.83-Part-3-Command
 			return
 		}
 
-		App.Init(InitParams)
-
-		var err error
-
-		if err := App.OpenTPM(); err != nil {
-			color.New(color.FgRed).Println(err)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
 			return
 		}
-		defer func() {
-			if err := App.TPM.Close(); err != nil {
-				color.New(color.FgRed).Println(err)
-				return
-			}
-		}()
 
 		switch strings.ToLower(clrHierarchy) {
 		case "e":

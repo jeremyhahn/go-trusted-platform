@@ -56,9 +56,7 @@ func (tpm *TPM2) Seal(
 
 	if keyAttrs.Secret == nil {
 		tpm.logger.Infof("Generating %s HMAC seal secret", keyAttrs.CN)
-		secretBytes = aesgcm.NewAESGCM(
-			tpm.logger, tpm.debugSecrets, tpm).GenerateKey()
-
+		secretBytes = aesgcm.NewAESGCM(tpm).GenerateKey()
 		if keyAttrs.PlatformPolicy {
 			// keyAttrs.Secret = NewPlatformSecret(tpm, keyAttrs)
 			keyAttrs.Secret = keystore.NewClearPassword(secretBytes)
@@ -185,10 +183,10 @@ func (tpm *TPM2) Unseal(
 
 	// Create session from parent key attributes
 	session, closer, err = tpm.CreateSession(keyAttrs)
+	defer closer()
 	if err != nil {
 		return nil, err
 	}
-	defer closer()
 
 	// Load the key pair from disk using the parent session
 	sealKey, err := tpm.LoadKeyPair(keyAttrs, &session, backend)
@@ -200,11 +198,11 @@ func (tpm *TPM2) Unseal(
 
 	// Create key session
 	session2, closer2, err2 := tpm.CreateKeySession(keyAttrs)
+	defer closer2()
 	if err2 != nil {
 		tpm.logger.Error(err)
 		return nil, err
 	}
-	defer closer2()
 
 	// Unseal the data using the key session
 	unseal, err := tpm2.Unseal{

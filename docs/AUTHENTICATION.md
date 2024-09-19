@@ -1,11 +1,12 @@
 # Platform Authentication
 
-Trusted Platform administrators perform authentication via the
-Certificate Authority.
+Trusted Platform Security Officer's log in via the Security Officer PIN.
 
-When the platform starts up, the configuration file is inspected for
-the presence of a PKCS #11 module. If not defined, a PKCS #8 key store
-is created.
+Trusted Platform Administrators and/or Users perform authentication via
+user PIN or WebAuthn.
+
+Trusted Platform web service consumers authenticate using WebAuthn and
+JSON Web Tokens.
 
 
 #### PKCS #11
@@ -36,19 +37,5 @@ an example using SoftHSM:
     # development and testing.
     pin: 5678
 
-
-#### PKCS #8
-
-2 passwords are required to setup and subsequently access the platform. The
-Root password is used to password protect the Root Certifiate Authority Private
-Key. The operator password is used to password protect the first Intermediate Certifiate Authority that is created by default, during platform setup. After
-setup, the Root Certificate Authority Private Key should be removed from the
-system and the CA taken offline. Future operations should be performed using
-an Intermediate Certificate Authority, either the default created during setup,
-or an additional created afterwards.
-
-Passwords should never be set in the platform configuration file while in a
-production environment, however, can be useful during testing and development.
-
-Use the `key-password` property for the Certificate Authority Identity to set the
-password in the configuration file.
+    # Seal the PIN to the TPM using the platform PCR policy
+    platform-policy: true

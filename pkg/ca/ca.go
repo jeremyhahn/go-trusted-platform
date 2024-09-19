@@ -209,7 +209,7 @@ func NewCA(params *CAParams) (CertificateAuthority, CertificateAuthority, error)
 func NewParentCA(params *CAParams) (CertificateAuthority, error) {
 
 	if len(params.Config.Identity) < 2 {
-		params.Logger.Error("certificate-authority: Root and at least 1 Intermediate CA required")
+		params.Logger.Errorf("certificate-authority: Root and at least 1 Intermediate CA required")
 		return nil, ErrInvalidConfig
 	}
 
@@ -260,7 +260,7 @@ func NewIntermediateCA(params *CAParams) (CertificateAuthority, error) {
 func (ca *CA) Public() crypto.PublicKey {
 	signer, err := ca.Signer(&ca.defaultKeyAttributes)
 	if err != nil {
-		ca.params.Logger.Fatal(err)
+		ca.params.Logger.FatalError(err)
 	}
 	return signer.Public()
 }
@@ -277,11 +277,6 @@ func (ca *CA) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm {
 
 // Load CA key attributes. Any errors during Load are treated as Fatal.
 func (ca *CA) Load() error {
-
-	if len(ca.keyAttributesMap) > 0 {
-		ca.params.Logger.Warning("certificate-authority: already loaded")
-		return nil
-	}
 
 	ca.params.Logger.Infof("Loading Certificate Authority: %s", ca.commonName)
 
@@ -335,7 +330,7 @@ func (ca *CA) Load() error {
 		// Print the CA bundle to the log if in debug mode
 		bundle, err := ca.CABundle(&caKeyAttrs.StoreType, &caKeyAttrs.KeyAlgorithm)
 		if err != nil {
-			ca.params.Logger.Fatal(err)
+			ca.params.Logger.FatalError(err)
 		}
 		ca.params.Logger.Debugf(
 			"certificate-authority: %s bundle:",
@@ -360,7 +355,7 @@ func (ca *CA) IsInitialized() (bool, error) {
 		}
 		keyAttrs, err := keystore.KeyAttributesFromConfig(keyConfig)
 		if err != nil {
-			ca.params.Logger.Fatal(err)
+			ca.params.Logger.FatalError(err)
 		}
 		keyAttrs.KeyType = keystore.KEY_TYPE_CA
 		keyAttrs.CN = ca.commonName
@@ -401,7 +396,7 @@ func (ca *CA) IsInitialized() (bool, error) {
 			keyAttrs.Password = keystore.NewClearPassword([]byte(keyConfig.Password))
 		}
 		if _, err = ca.keyring.Key(keyAttrs); err != nil {
-			ca.params.Logger.Warning(err)
+			ca.params.Logger.MaybeError(err)
 			keystore.DebugKeyAttributes(ca.params.Logger, keyAttrs)
 			return false, nil
 		}
@@ -463,7 +458,7 @@ func (ca *CA) Init(parentCA CertificateAuthority) error {
 		}
 
 		// Create a new CA certificate serial number
-		serialNumber, err := util.X509SerialNumber()
+		serialNumber, err := util.SerialNumber()
 		if err != nil {
 			ca.params.Logger.Error(err)
 			return err
@@ -620,7 +615,7 @@ func (ca *CA) CAKeyAttributes(
 	}
 	key, ok := storeMap[keyAlgorithm]
 	if !ok {
-		ca.params.Logger.Error("%s: %s",
+		ca.params.Logger.Errorf("%s: %s",
 			keystore.ErrInvalidKeyAttributes, keyAlgorithm)
 		return nil, keystore.ErrInvalidKeyAttributes
 	}
@@ -660,31 +655,6 @@ func (ca *CA) TrustedRootCertPool(
 
 	pool := x509.NewCertPool()
 
-	// storeType, err := certstore.ParseKeyStoreType(certificate)
-	// if err == keystore.ErrInvalidKeyStore {
-	// 	storeType = ca.defaultKeyAttributes.StoreType
-	// }
-
-	// var rootCert *x509.Certificate
-	// issuerCN := certificate.Issuer.CommonName
-	// for issuerCN != "" {
-	// 	parentAttrs, ok := ca.keyAttributesMap[storeType][certificate.PublicKeyAlgorithm]
-	// 	parentAttrs.CN = issuerCN
-	// 	if !ok {
-	// 		return nil, keystore.ErrInvalidKeyAlgorithm
-	// 	}
-	// 	rootCert, err = ca.Certificate(&parentAttrs)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	if rootCert.Issuer.CommonName == rootCert.Subject.CommonName {
-	// 		break
-	// 	}
-	// 	issuerCN = rootCert.Issuer.CommonName
-	// }
-	// if !rootCert.IsCA {
-	// 	return nil, ErrInvalidIssuer
-	// }
 	rootCert, err := ca.RootCertificateFor(certificate)
 	if err != nil {
 		return nil, err
@@ -702,40 +672,6 @@ func (ca *CA) TrustedRootCertPool(
 
 	return pool, nil
 }
-
-// // Returns a cert pool initialized with the root certificate for the
-// // provided certificate.
-// func (ca *CA) TrustedRootCertficate(
-// 	certificate *x509.Certificate) (*x509.Certificate, error) {
-
-// 	storeType, err := certstore.ParseKeyStoreType(certificate)
-// 	if err == keystore.ErrInvalidKeyStore {
-// 		storeType = ca.defaultKeyAttributes.StoreType
-// 	}
-
-// 	var rootCert *x509.Certificate
-// 	issuerCN := certificate.Issuer.CommonName
-// 	for issuerCN != "" {
-// 		parentAttrs, ok := ca.keyAttributesMap[storeType][certificate.PublicKeyAlgorithm]
-// 		if !ok {
-// 			return nil, keystore.ErrInvalidKeyAlgorithm
-// 		}
-// 		parentAttrs.CN = issuerCN
-// 		rootCert, err = ca.Certificate(&parentAttrs)
-// 		if err != nil {
-// 			return nil, err
-// 		}
-// 		if rootCert.Issuer.CommonName == rootCert.Subject.CommonName {
-// 			break
-// 		}
-// 		issuerCN = rootCert.Issuer.CommonName
-// 	}
-// 	if !rootCert.IsCA {
-// 		return nil, ErrInvalidIssuer
-// 	}
-
-// 	return rootCert, nil
-// }
 
 // Returns a cert pool initialized with the root certificate for the
 // provided certificate. TrustedRootFor
@@ -845,16 +781,6 @@ func (ca *CA) CreateCSR(request CertificateRequest) ([]byte, error) {
 	}
 
 	// keystore.DebugKeyAttributes(ca.params.Logger, request.KeyAttributes)
-
-	// storeType := request.KeyAttributes.StoreType
-	// signatureAlgorithm := request.KeyAttributes.SignatureAlgorithm
-	// keyAlgorithm := request.KeyAttributes.KeyAlgorithm
-
-	// // Get the key attributes for the requested store and algorithm
-	// caKeyAttributes, ok := ca.keyAttributesMap[storeType][keyAlgorithm]
-	// if !ok {
-	// 	return nil, keystore.ErrInvalidKeyAttributes
-	// }
 
 	caKeyAttrs, err := ca.matchingKeyOrDefault(request.KeyAttributes)
 	if err != nil {
@@ -972,7 +898,7 @@ func (ca *CA) SignCSR(csrBytes []byte, request CertificateRequest) ([]byte, erro
 	}
 
 	// Create new serial number
-	serialNumber, err := util.X509SerialNumber()
+	serialNumber, err := util.SerialNumber()
 	if err != nil {
 		ca.params.Logger.Error(err)
 		return nil, err
@@ -1119,58 +1045,20 @@ func (ca *CA) SignTCGCSRIDevID(
 		return nil, err
 	}
 
-	// akPub, err := x509.ParsePKIXPublicKey(unpackedCSR.CsrContents.AttestPub)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// idevidPub, err := x509.ParseCertificate(unpackedCSR.CsrContents.SigningPub)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// caStoreType := ca.defaultKeyAttributes.StoreType
-
 	var keyAlgo x509.PublicKeyAlgorithm
-	// var sigAlgo x509.SignatureAlgorithm
-	// if request != nil && request.KeyAttributes != nil {
-	// 	keyAlgo = request.KeyAttributes.KeyAlgorithm
-	// 	sigAlgo = request.KeyAttributes.SignatureAlgorithm
-
-	// 	// Allow the client to request the CA key store
-	// 	caStoreType = request.KeyAttributes.StoreType
-	// } else {
-	// 	keyAlgo = ca.defaultKeyAttributes.KeyAlgorithm
-	// 	sigAlgo = ca.defaultKeyAttributes.SignatureAlgorithm
-	// }
-
-	// var caKeyAttributes keystore.KeyAttributes
-	// var ok bool
-
 	switch idevidPubKey.(type) {
 	case *rsa.PublicKey:
-		// caKeyAttributes, ok = ca.keyAttributesMap[caStoreType][x509.RSA]
 		keyAlgo = x509.RSA
 	case *ecdsa.PublicKey:
-		// caKeyAttributes, ok = ca.keyAttributesMap[caStoreType][x509.ECDSA]
 		keyAlgo = x509.ECDSA
 	case ed25519.PublicKey:
-		// caKeyAttributes, ok = ca.keyAttributesMap[caStoreType][x509.Ed25519]
 		keyAlgo = x509.Ed25519
 	default:
 		return nil, keystore.ErrInvalidKeyAlgorithm
 	}
-	// if !ok {
-	// 	return nil, keystore.ErrInvalidKeyAlgorithm
-	// }
-
-	// caKeyAttrs, err := ca.matchingKeyOrDefault(request.KeyAttributes)
-	// if err != nil {
-	// 	return nil, err
-	// }
 
 	// Create new serial number
-	serialNumber, err := util.X509SerialNumber()
+	serialNumber, err := util.SerialNumber()
 	if err != nil {
 		ca.params.Logger.Error(err)
 		return nil, err
@@ -1209,30 +1097,15 @@ func (ca *CA) SignTCGCSRIDevID(
 		return nil, err
 	}
 
-	// Build PKIX subject
-	var subject pkix.Name
-	if request == nil {
-		subject = pkix.Name{
-			CommonName:         ca.params.Config.DefaultIDevIDCN,
-			Organization:       []string{caCertificate.Subject.Organization[0]},
-			OrganizationalUnit: []string{caCertificate.Subject.OrganizationalUnit[0]},
-			Country:            []string{caCertificate.Subject.Country[0]},
-			Province:           []string{caCertificate.Subject.Province[0]},
-			Locality:           []string{caCertificate.Subject.Locality[0]},
-			StreetAddress:      []string{caCertificate.Subject.StreetAddress[0]},
-			PostalCode:         []string{caCertificate.Subject.PostalCode[0]},
-		}
-	} else {
-		subject = pkix.Name{
-			CommonName:         request.Subject.CommonName,
-			Organization:       []string{request.Subject.Organization},
-			OrganizationalUnit: []string{request.Subject.OrganizationalUnit},
-			Country:            []string{request.Subject.Country},
-			Province:           []string{request.Subject.Province},
-			Locality:           []string{request.Subject.Locality},
-			StreetAddress:      []string{request.Subject.Address},
-			PostalCode:         []string{request.Subject.PostalCode},
-		}
+	subject := pkix.Name{
+		CommonName:         request.Subject.CommonName,
+		Organization:       []string{request.Subject.Organization},
+		OrganizationalUnit: []string{request.Subject.OrganizationalUnit},
+		Country:            []string{request.Subject.Country},
+		Province:           []string{request.Subject.Province},
+		Locality:           []string{request.Subject.Locality},
+		StreetAddress:      []string{request.Subject.Address},
+		PostalCode:         []string{request.Subject.PostalCode},
 	}
 
 	// Create new x509 certificate template
@@ -1374,16 +1247,6 @@ func (ca *CA) IssueCertificate(request CertificateRequest) ([]byte, error) {
 
 	// keystore.DebugKeyAttributes(ca.params.Logger, request.KeyAttributes)
 
-	// storeType := request.KeyAttributes.StoreType
-	// keyAlgorithm := request.KeyAttributes.KeyAlgorithm
-	// signatureAlgorithm := request.KeyAttributes.SignatureAlgorithm
-
-	// // Get the key attributes for the requested store and algorithm
-	// caKeyAttributes, ok := ca.keyAttributesMap[storeType][keyAlgorithm]
-	// if !ok {
-	// 	return nil, keystore.ErrInvalidKeyAttributes
-	// }
-
 	caKeyAttrs, err := ca.matchingKeyOrDefault(request.KeyAttributes)
 	if err != nil {
 		return nil, err
@@ -1406,7 +1269,7 @@ func (ca *CA) IssueCertificate(request CertificateRequest) ([]byte, error) {
 
 	dnsNames = append(dnsNames, request.Subject.CommonName)
 
-	serialNumber, err := util.X509SerialNumber()
+	serialNumber, err := util.SerialNumber()
 	if err != nil {
 		ca.params.Logger.Error(err)
 		return nil, err
@@ -1529,7 +1392,7 @@ func (ca *CA) IssueEKCertificate(
 
 	dnsNames = append(dnsNames, request.Subject.CommonName)
 
-	serialNumber, err := util.X509SerialNumber()
+	serialNumber, err := util.SerialNumber()
 	if err != nil {
 		ca.params.Logger.Error(err)
 		return nil, err
@@ -1708,7 +1571,7 @@ func (ca *CA) IssueAKCertificate(
 	}
 
 	// Create new serial number
-	serialNumber, err := util.X509SerialNumber()
+	serialNumber, err := util.SerialNumber()
 	if err != nil {
 		ca.params.Logger.Error(err)
 		return nil, err
@@ -1972,10 +1835,10 @@ func (ca *CA) Verify(certificate *x509.Certificate) error {
 			// and import the CA certificate chain and verify
 			// the leaf certificate again.
 			if ca.params.Config.AutoImportIssuingCA {
-				ca.params.Logger.Warningf(
+				ca.params.Logger.Warnf(
 					"certificate-authority: UnknownAuthorityError: %s with %s key store",
 					certAttrs.CN, certAttrs.StoreType)
-				ca.params.Logger.Warning(
+				ca.params.Logger.Warnf(
 					"certificate-authority: attempting auto-import of Issuer CA chain")
 				if err := ca.ImportIssuingCAs(certificate); err != nil {
 					return err
@@ -2024,7 +1887,7 @@ func (ca *CA) parseIssuerCommonName(cert *x509.Certificate) (string, error) {
 	}
 
 	if len(cert.IssuingCertificateURL) > 1 {
-		ca.params.Logger.Error("certificate-authority: multiple issuing CAs not supported: %s", cn)
+		ca.params.Logger.Errorf("certificate-authority: multiple issuing CAs not supported: %s", cn)
 		return "", ErrCertNotSupported
 	}
 
@@ -2375,7 +2238,7 @@ func (ca *CA) ParseBundle(bundle []byte) ([]*x509.Certificate, error) {
 		// 	}
 		// 	keys = append(keys, key)
 		default:
-			ca.params.Logger.Error("certificate-authority: invalid certificate in bundle")
+			ca.params.Logger.Errorf("certificate-authority: invalid certificate in bundle")
 			return nil, certstore.ErrCertInvalid
 		}
 	}
@@ -2491,26 +2354,6 @@ func (ca *CA) TLSBundle(attrs *keystore.KeyAttributes) ([][]byte, *x509.Certific
 
 	return certs, leaf, nil
 }
-
-// // Creates a TLS "bundle" containing the requested leaf certificate,
-// // the Certificate Authority's certificate, and any cross-signed
-// // certificates in ASN.1 DER form, and returns the certificate bundle
-// // and leaf.
-// func (ca *CA) TLSBundlePEM(attrs *keystore.KeyAttributes) ([]byte, error) {
-// 	certs, _, err := ca.TLSBundle(attrs)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	pemBytes := make([]byte, 0)
-// 	for _, der := range certs {
-// 		pem, err := certstore.EncodePEM(der)
-// 		if err != nil {
-// 			return nil, err
-// 		}
-// 		pemBytes = append(pemBytes, pem...)
-// 	}
-// 	return pemBytes, nil
-// }
 
 // Returns the requested blob from the blob store
 func (ca *CA) Blob(key []byte) ([]byte, error) {

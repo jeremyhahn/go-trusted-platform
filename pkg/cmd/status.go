@@ -21,10 +21,10 @@ installation, including TPM keys & certificates, Certificate Authority, and
 running services.`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App.Init(InitParams)
-
-		if err := App.OpenTPM(); err != nil {
-			App.Logger.Fatal(err)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
 		}
 
 		info, err := App.TPM.Info()

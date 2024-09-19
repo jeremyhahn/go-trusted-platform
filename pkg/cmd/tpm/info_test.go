@@ -12,6 +12,7 @@ func Test_Info(t *testing.T) {
 
 	InitParams.Pin = []byte("test")
 	InitParams.SOPin = []byte("test")
+	InitParams.Initialize = true
 
 	App = app.DefaultTestConfig()
 

@@ -9,13 +9,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"os"
 	"os/user"
 	"runtime"
 	"strconv"
 	"syscall"
 
-	logging "github.com/op/go-logging"
 	"github.com/spf13/afero"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v2"
@@ -24,6 +24,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/aesgcm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/argon2"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
@@ -34,6 +35,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 
+	libtpm2 "github.com/google/go-tpm/tpm2"
 	tpm2ks "github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/tpm2"
 )
 
@@ -51,11 +53,11 @@ var (
 		CAConfig:    &ca.DefaultConfig,
 		ConfigDir:   "/etc/trusted-platform",
 		LogDir:      "trusted-data/log",
-		Logger:      util.Logger(),
+		Logger:      logging.DefaultLogger(),
 		PlatformDir: "trusted-data",
 		Random:      rand.Reader,
 		TPMConfig:   tpm2.DefaultConfig,
-		WebService:  webservice.DefaultConfigECDSA,
+		WebService:  &webservice.DefaultConfigECDSA,
 	}
 )
 
@@ -99,7 +101,7 @@ type App struct {
 	SignerStore         keystore.SignerStorer       `yaml:"-" json:"-" mapstructure:"-"`
 	TPM                 tpm2.TrustedPlatformModule  `yaml:"-" json:"-" mapstructure:"-"`
 	TPMConfig           tpm2.Config                 `yaml:"tpm" json:"tpm" mapstructure:"tpm"`
-	WebService          config.WebService           `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
+	WebService          *config.WebService          `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
 	ServerKeyAttributes *keystore.KeyAttributes     `yaml:"-" json:"-" mapstructure:"-"`
 }
 
@@ -139,7 +141,9 @@ func (app *App) Init(initParams *AppInitParams) (*App, error) {
 	if app.FS == nil {
 		app.FS = afero.NewOsFs()
 	}
-	app.initConfig(initParams.Env)
+	if err := app.initConfig(initParams.Env); err != nil {
+		return nil, err
+	}
 	app.initLogger()
 	if err := app.initStores(); err != nil {
 		return nil, err
@@ -158,16 +162,12 @@ func (app *App) Init(initParams *AppInitParams) (*App, error) {
 		}
 		return app, nil
 	}
-
 	if err := app.OpenTPM(); err != nil {
-		app.Logger.Warning(err)
+		return app, err
 	}
 	if err := app.InitPlatformKeyStore(soPIN, userPIN); err != nil {
-		app.Logger.Warning(err)
+		return app, err
 	}
-	// if app.CAConfig != nil {
-	// 	app.LoadCA(initParams.PlatformCA, userPIN)
-	// }
 	return app, nil
 }
 
@@ -177,7 +177,7 @@ func (app *App) FQDN() string {
 }
 
 // Read and parse the platform configuration file
-func (app *App) initConfig(env string) {
+func (app *App) initConfig(env string) error {
 
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
@@ -194,51 +194,42 @@ func (app *App) initConfig(env string) {
 			envConfig := fmt.Sprintf("config.%s", env)
 			viper.SetConfigName(envConfig)
 			if err := viper.ReadInConfig(); err != nil {
-				panic(err)
+				return err
 			}
 		} else {
-			panic(err)
+			return err
 		}
 	}
 
 	if err := viper.Unmarshal(app); err != nil {
-		panic(err)
+		return err
 	}
+
+	return nil
 }
 
 // Creates a new file and STDOUT logger. If the global DebugFlag is set,
 // the logger is initialized in debug mode, executing all logger.Debug*
 // statements.
 func (app *App) initLogger() {
-	logFormat := logging.MustStringFormatter(
-		`%{color}%{time:15:04:05.000} %{shortpkg}.%{shortfunc} %{level:.4s} %{id:03x}%{color:reset} %{message}`,
-	)
-	f := app.InitLogFile(os.Getuid(), os.Getgid())
-	stdout := logging.NewLogBackend(os.Stdout, "", 0)
-	logfile := logging.NewLogBackend(f, "", log.Lshortfile)
-	logFormatter := logging.NewBackendFormatter(logfile, logFormat)
-	stdoutFormatter := logging.NewBackendFormatter(stdout, logFormat)
-	//syslog, _ := logging.NewSyslogBackend(appName)
-	var backends logging.LeveledBackend
 	if app.DebugFlag {
-		backends = logging.MultiLogger(stdoutFormatter, logFormatter)
+		app.Logger = logging.DefaultLogger()
 	} else {
-		backends = logging.MultiLogger(logFormatter)
-	}
-	logging.SetBackend(backends)
-	logger := logging.MustGetLogger(Name)
-	if app.DebugFlag {
-		logging.SetLevel(logging.DEBUG, "")
-		logger.Debug("Starting logger in debug mode...")
-		for k, v := range viper.AllSettings() {
-			logger.Debugf("%s: %+v", k, v)
+		if err := app.FS.MkdirAll(app.LogDir, os.ModePerm); err != nil {
+			panic(err)
 		}
-	} else {
-		logging.SetLevel(logging.ERROR, "")
+		logfile := fmt.Sprintf("%s/%s.log", app.LogDir, Name)
+		if err := app.FS.MkdirAll(app.LogDir, os.ModePerm); err != nil {
+			panic(err)
+		}
+		file, err := app.FS.Create(logfile)
+		if err != nil {
+			panic(err)
+		}
+		app.Logger = logging.NewLogger(slog.LevelError, file)
 	}
-	app.Logger = logging.MustGetLogger(Name)
-
-	app.Logger.Infof("Using configuration file: %s\n", viper.ConfigFileUsed())
+	app.Logger.Info("platform configuration",
+		slog.String("file", viper.ConfigFileUsed()))
 }
 
 // Initialize blob and signer stores
@@ -273,19 +264,17 @@ func (app *App) ParsePINs(soPIN, userPIN []byte) (keystore.Password, keystore.Pa
 
 	// Generate random SO pin if its set to the default password
 	if bytes.Compare(soPIN, []byte(keystore.DEFAULT_PASSWORD)) == 0 {
-		soPIN = aesgcm.NewAESGCM(
-			app.Logger, app.DebugSecretsFlag, rand.Reader).GenerateKey()
+		soPIN = aesgcm.NewAESGCM(rand.Reader).GenerateKey()
 
 		if app.DebugSecretsFlag {
-			app.Logger.Debugf(
+			app.Logger.Debug(
 				"app: generated new SO PIN: %s", soPIN)
 		}
 	}
 
 	// Generate random SO pin if its set to the default password
 	if bytes.Compare(userPIN, []byte(keystore.DEFAULT_PASSWORD)) == 0 {
-		userPIN = aesgcm.NewAESGCM(
-			app.Logger, app.DebugSecretsFlag, rand.Reader).GenerateKey()
+		userPIN = aesgcm.NewAESGCM(rand.Reader).GenerateKey()
 
 		if app.DebugSecretsFlag {
 			app.Logger.Debugf(
@@ -324,6 +313,9 @@ func (app *App) InitTPM(selectedCA int, soPIN, userPIN []byte) error {
 // and un-attested connection. A TPM software simulator is used if enabled
 // in the TPM section of the platform configuration file.
 func (app *App) OpenTPM() error {
+	if app.TPMConfig.EK == nil {
+		return tpm2.ErrNotInitialized
+	}
 	path := fmt.Sprintf("%s/platform/keystore", app.PlatformDir)
 	backend := keystore.NewFileBackend(app.Logger, app.FS, path)
 	if app.TPM == nil {
@@ -359,10 +351,6 @@ func (app *App) OpenTPM() error {
 		if err != nil {
 			return err
 		}
-		// // Load the platform PCR policy
-		// if err := app.TPM.LoadPlatformPolicy(); err != nil {
-		// 	return err
-		// }
 	}
 	return nil
 }
@@ -438,6 +426,11 @@ func (app *App) ProvisionPlatform(
 		return nil, err
 	}
 
+	ekAttrs, err := app.TPM.EKAttributes()
+	if err != nil {
+		return nil, err
+	}
+
 	// Imports the TPM Endorsement Key into the Certificate Authority
 	ekCert, err := app.ImportEndorsementKeyCertificate()
 	if err != nil {
@@ -476,7 +469,27 @@ func (app *App) ProvisionPlatform(
 		}
 
 		// Sign TCG_CSR_IDEVID, create IDevID x509 device certificate
-		_, err = app.CA.SignTCGCSRIDevID(idevidAttrs.CN, tcgCSRIDevID, nil)
+		_, err = app.CA.SignTCGCSRIDevID(idevidAttrs.CN, tcgCSRIDevID, &ca.CertificateRequest{
+			KeyAttributes: ekAttrs,
+			Valid:         0, // Valid until 99991231235959Z
+			Subject: ca.Subject{
+				CommonName:   idevidAttrs.CN,
+				Organization: app.WebService.Certificate.Subject.Organization,
+				Country:      app.WebService.Certificate.Subject.Country,
+				Locality:     app.WebService.Certificate.Subject.Locality,
+				Address:      app.WebService.Certificate.Subject.Address,
+				PostalCode:   app.WebService.Certificate.Subject.PostalCode,
+			},
+			SANS: &ca.SubjectAlternativeNames{
+				DNS: []string{
+					app.Domain,
+				},
+				IPs: []string{},
+				Email: []string{
+					app.Hostmaster,
+				},
+			},
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -494,25 +507,12 @@ func (app *App) ProvisionPlatform(
 		}
 	}
 
-	// Build web service key attributes
-	serverKeyAttrs, err := keystore.KeyAttributesFromConfig(
-		app.WebService.Key)
-	if err != nil {
-		return nil, err
-	}
-	serverKeyAttrs.Parent = app.PlatformKS.SRKAttributes()
-	serverKeyAttrs.CN = app.WebService.Certificate.Subject.CommonName
-	serverKeyAttrs.KeyType = keystore.KEY_TYPE_TLS
-	serverKeyAttrs.TPMAttributes = &keystore.TPMAttributes{}
-	app.ServerKeyAttributes = serverKeyAttrs
-
 	// Create web services / device TLS certificate
-	// TODO: Replace this certificate with IDevID / LDevID
 	if err := app.InitWebServices(); err != nil {
 		return nil, err
 	}
 
-	return serverKeyAttrs, nil
+	return idevidAttrs, nil
 }
 
 // Import TPM Endorsement Certificate - EK Credential Profile. Attempts
@@ -543,7 +543,7 @@ func (app *App) ImportEndorsementKeyCertificate() (*x509.Certificate, error) {
 			} else if app.TPMConfig.EK.KeyAlgorithm == x509.ECDSA.String() {
 				publicKey = app.TPM.EKECC()
 			} else {
-				app.Logger.Error(
+				app.Logger.Errorf(
 					"unsupported TPM EK algorithm %s",
 					app.TPMConfig.EK.KeyAlgorithm)
 				return nil, keystore.ErrInvalidKeyAlgorithm
@@ -596,7 +596,7 @@ func (app *App) ImportEndorsementKeyCertificate() (*x509.Certificate, error) {
 				// instead of TPM NV RAM.
 				if len(ekCert.Raw) > 1024 && app.TPMConfig.UseSimulator {
 					if app.TPMConfig.EK.CertHandle > 0 {
-						app.Logger.Warning(warnSimulatorWithEKCertHandle)
+						app.Logger.MaybeError(warnSimulatorWithEKCertHandle)
 					}
 				} else {
 					app.Logger.Error(err)
@@ -931,7 +931,38 @@ func (app *App) VerifyLocalQuote(
 // if it doesn't exist.
 func (app *App) InitWebServices() error {
 
-	if app.DebugSecretsFlag {
+	if app.WebService == nil {
+		app.Logger.Warn("web services disabled")
+		return nil
+	}
+
+	if app.TPMConfig.IDevID != nil &&
+		app.TPMConfig.IDevID.CN == app.WebService.Certificate.Subject.CommonName {
+
+		app.Logger.Info("using IDevID certificate for TLS")
+		idevidAttrs, err := app.TPM.IDevIDAttributes()
+		if err != nil {
+			app.Logger.Error(err)
+		}
+		if app.TPMConfig.IDevID.Handle != 0 {
+			idevidAttrs.TPMAttributes.HandleType = libtpm2.TPMHTPersistent
+		}
+		idevidAttrs.KeyType = keystore.KEY_TYPE_IDEVID
+		app.ServerKeyAttributes = idevidAttrs
+	} else {
+		app.Logger.Info("using dedicated web server certificate for TLS")
+		serverKeyAttrs, err := keystore.KeyAttributesFromConfig(app.WebService.Key)
+		if err != nil {
+			return err
+		}
+		serverKeyAttrs.Parent = app.PlatformKS.SRKAttributes()
+		serverKeyAttrs.CN = app.WebService.Certificate.Subject.CommonName
+		serverKeyAttrs.KeyType = keystore.KEY_TYPE_TLS
+		serverKeyAttrs.TPMAttributes = &keystore.TPMAttributes{}
+		app.ServerKeyAttributes = serverKeyAttrs
+	}
+
+	if app.DebugSecretsFlag || app.ServerKeyAttributes.Debug {
 		app.Logger.Debug("Initializing web services")
 		// app.Logger.Debugf("CA Private Key Password: %s", app.CA.CAKeyAttributes(nil).Password)
 		app.Logger.Debugf("TLS Private Key Password: %s", app.ServerKeyAttributes.Password)
@@ -947,7 +978,8 @@ func (app *App) InitWebServices() error {
 				KeyAttributes: app.ServerKeyAttributes,
 				Valid:         365, // days
 				Subject: ca.Subject{
-					CommonName:   app.WebService.Certificate.Subject.CommonName,
+					// CommonName:   app.WebService.Certificate.Subject.CommonName,
+					CommonName:   app.ServerKeyAttributes.CN,
 					Organization: app.WebService.Certificate.Subject.Organization,
 					Country:      app.WebService.Certificate.Subject.Country,
 					Province:     app.WebService.Certificate.Subject.Province,

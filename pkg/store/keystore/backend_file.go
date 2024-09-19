@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/op/go-logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/spf13/afero"
 )
 
@@ -124,7 +124,7 @@ func (fb *FileBackend) Get(
 	bytes, err := afero.ReadFile(fb.fs, file)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fb.logger.Warningf("%s: %s", ErrFileNotFound, file)
+			fb.logger.Warnf("%s: %s", ErrFileNotFound, file)
 			return nil, ErrFileNotFound
 		}
 		return nil, err

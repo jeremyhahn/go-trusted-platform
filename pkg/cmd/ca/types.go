@@ -14,6 +14,7 @@ var (
 	SansDNS,
 	SansIPs,
 	SansEmails string
+	err error
 )
 
 func init() {

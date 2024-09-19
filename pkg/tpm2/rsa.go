@@ -51,25 +51,6 @@ func (tpm *TPM2) CreateRSA(
 		rsaTemplate.AuthPolicy = tpm.PlatformPolicyDigest()
 	}
 
-	// if keyAttrs.Secret == nil {
-	// 	tpm.logger.Info("Generating RSA seal secret")
-	// 	secretBytes = aesgcm.NewAESGCM(
-	// 		tpm.logger, tpm.debugSecrets, tpm).GenerateKey()
-
-	// 	if keyAttrs.PlatformPolicy {
-	// 		// keyAttrs.Secret = NewPlatformSecret(tpm, keyAttrs)
-	// 		keyAttrs.Secret = keystore.NewClearPassword(secretBytes)
-	// 	} else {
-	// 		keyAttrs.Secret = keystore.NewClearPassword(secretBytes)
-	// 	}
-
-	// } else {
-	// 	secretBytes, err = keyAttrs.Secret.Bytes()
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// }
-
 	// Create the parent key authorization session
 	session, closer, err := tpm.CreateSession(keyAttrs)
 	if err != nil {

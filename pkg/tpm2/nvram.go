@@ -10,7 +10,6 @@ func (tpm *TPM2) NVWrite(
 	keyAttrs *keystore.KeyAttributes) error {
 
 	var hierarchyAuth, secretBytes []byte
-	// var secretBytes []byte
 	var closer func() error
 	var session tpm2.Session
 	var err error
@@ -151,15 +150,6 @@ func (tpm *TPM2) NVRead(
 	tpm.logger.Debugf("Name: %x", Encode(readPubRsp.NVName.Buffer))
 
 	readRsp, err := tpm2.NVRead{
-		// AuthHandle: tpm2.AuthHandle{
-		// 	Handle: keyAttrs.TPMAttributes.Hierarchy,
-		// 	Auth:   tpm2.PasswordAuth(hierarchyAuth),
-		// },
-		// NVIndex: tpm2.AuthHandle{
-		// 	Handle: keyAttrs.TPMAttributes.Handle,
-		// 	Name:   readPubRsp.NVName,
-		// 	Auth:   session,
-		// },
 		AuthHandle: tpm2.AuthHandle{
 			Handle: keyAttrs.TPMAttributes.Hierarchy,
 			Auth:   tpm2.PasswordAuth(hierarchyAuth),
@@ -180,55 +170,3 @@ func (tpm *TPM2) NVRead(
 
 	return readRsp.Data.Buffer, nil
 }
-
-// // Unseals data from NV RAM index protected by the Platform PCR policy
-// func (tpm *TPM2) NVReadWithoutPolicy(
-// 	keyAttrs *keystore.KeyAttributes,
-// 	dataSize uint16) ([]byte, error) {
-
-// 	var session tpm2.Session
-// 	var err error
-
-// 	if keyAttrs.TPMAttributes == nil {
-// 		return nil, keystore.ErrInvalidKeyAttributes
-// 	}
-
-// 	hierarchyAuth, err := keyAttrs.TPMAttributes.HierarchyAuth.Bytes()
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	// Create unencrypted, authenticated password session
-// 	session = tpm2.PasswordAuth(hierarchyAuth)
-
-// 	// Read the NV RAM bytes
-// 	readPubRsp, err := tpm2.NVReadPublic{
-// 		NVIndex: keyAttrs.TPMAttributes.Handle,
-// 	}.Execute(tpm.transport)
-// 	if err != nil {
-// 		tpm.logger.Error(err)
-// 		return nil, err
-// 	}
-// 	tpm.logger.Debugf("Name: %x", Encode(readPubRsp.NVName.Buffer))
-
-// 	readRsp, err := tpm2.NVRead{
-// 		AuthHandle: tpm2.AuthHandle{
-// 			Handle: keyAttrs.TPMAttributes.Hierarchy,
-// 			Name:   readPubRsp.NVName,
-// 			Auth:   session,
-// 		},
-// 		NVIndex: tpm2.NamedHandle{
-// 			Handle: keyAttrs.TPMAttributes.Handle,
-// 			Name:   readPubRsp.NVName,
-// 		},
-// 		Size: dataSize,
-// 	}.Execute(tpm.transport)
-// 	if err != nil {
-// 		tpm.logger.Error(err)
-// 		return nil, err
-// 	}
-
-// 	tpm.logger.Debugf("NVReadSecret: retrieved secret: %s", string(readRsp.Data.Buffer))
-
-// 	return readRsp.Data.Buffer, nil
-// }

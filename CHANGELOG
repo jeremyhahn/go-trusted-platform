@@ -1,3 +1,9 @@
-- Clean up current CLI commands
-- Add tests for CLI commands
-- Misc bug fixes
+- Clean up CLI commands and add tests
+- Misc bug fixes and cleanup
+- Initial migration to slog
+- Add initial datastore package w/ user, role & org models
+- Migrate to latest version of go-jwt
+- Create custom go-jwt signing method that uses opaque signing keys
+- Clean up webservice package, implement opaque JWT signer
+- Start preparing for webauthn integration
+- Import xxhash library as the platform hasher

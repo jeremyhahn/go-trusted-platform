@@ -16,10 +16,20 @@ about a Certificate Authority.`,
 
 		prompt.PrintBanner(app.Version)
 
-		App.Init(InitParams)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 
-		if len(App.CAConfig.Identity) == 0 {
-			App.Logger.Fatal("No Certificate Authorities configured")
+		if App.CAConfig == nil || len(App.CAConfig.Identity) == 0 {
+			App.Logger.Fatal("Certificate Authority not configured")
+		}
+
+		userPIN := keystore.NewClearPassword(InitParams.Pin)
+		if err := App.LoadCA(userPIN); err != nil {
+			cmd.PrintErrln(err)
+			return
 		}
 
 		initialized, err := App.CA.IsInitialized()
@@ -28,7 +38,7 @@ about a Certificate Authority.`,
 			return
 		}
 
-		cmd.Printf("Initialized: %t:\n", initialized)
+		cmd.Printf("Initialized: %t\n", initialized)
 
 		identity := App.CAConfig.Identity[App.CAConfig.PlatformCA]
 

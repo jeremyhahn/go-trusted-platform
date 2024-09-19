@@ -1,10 +1,10 @@
-package model
+package entities
 
 import (
 	"fmt"
 )
 
-type SystemStruct struct {
+type System struct {
 	BIOS     BIOS           `yaml:"bios" json:"bios"`
 	Board    Board          `yaml:"board" json:"board"`
 	Chassis  Chassis        `yaml:"chassis" json:"chassis"`
@@ -12,7 +12,6 @@ type SystemStruct struct {
 	Product  Product        `yaml:"product" json:"product"`
 	Runtime  *SystemRuntime `yaml:"runtime" json:"runtime"`
 	Services int            `yaml:"services" json:"services"`
-	// Version  *app.AppVersion `yaml:"version" json:"version"`
 }
 
 type BIOS struct {

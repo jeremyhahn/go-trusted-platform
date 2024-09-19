@@ -3,72 +3,82 @@ package service
 import (
 	"fmt"
 
-	logging "github.com/op/go-logging"
+	logging "github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 )
 
 type Session interface {
-	GetLogger() *logging.Logger
-	SetLogger(*logging.Logger)
-	GetRequestedServiceID() uint64
 	Close()
+	Logger() *logging.Logger
+	RequestedOrganizationID() uint64
+	RequestedServiceID() uint64
+	SetLogger(*logging.Logger)
+	User() *entities.User
 }
 
-type DefaultSession struct {
+type ServiceSession struct {
 	logger             *logging.Logger
+	orgClaims          []uint64
+	requestedOrgID     uint64
 	requestedServiceID uint64
-	serviceClaims      []ServiceClaim
+	serviceClaims      []uint64
+	user               *entities.User
 	Session
 }
 
 func CreateSession(
 	logger *logging.Logger,
-	serviceClaims []ServiceClaim,
-	requestedServiceID uint64) Session {
+	orgClaims []uint64,
+	requestedOrgID uint64,
+	requestedServiceID uint64,
+	serviceClaims []uint64,
+	user *entities.User) Session {
 
-	return &DefaultSession{
+	return &ServiceSession{
 		logger:             logger,
+		orgClaims:          orgClaims,
+		requestedOrgID:     requestedOrgID,
 		requestedServiceID: requestedServiceID,
-		serviceClaims:      serviceClaims}
+		serviceClaims:      serviceClaims,
+		user:               user}
 }
 
-func CreateSystemSession(logger *logging.Logger) Session {
-
-	return &DefaultSession{
-		logger: logger}
-}
-
-func (session *DefaultSession) GetLogger() *logging.Logger {
+func (session *ServiceSession) Logger() *logging.Logger {
 	return session.logger
 }
 
-func (session *DefaultSession) SetLogger(logger *logging.Logger) {
-	session.logger = logger
+func (session *ServiceSession) RequestedOrganizationID() uint64 {
+	return session.requestedOrgID
 }
 
-func (session *DefaultSession) GetRequestedServiceID() uint64 {
+func (session *ServiceSession) RequestedServiceID() uint64 {
 	return session.requestedServiceID
 }
 
-func (session *DefaultSession) IsMemberOfOrganization(organizationID uint64) bool {
-	for _, orgClaim := range session.serviceClaims {
-		if orgClaim.ID == organizationID {
+func (session *ServiceSession) IsMemberOfOrganization(organizationID uint64) bool {
+	for _, orgClaim := range session.orgClaims {
+		if orgClaim == organizationID {
 			return true
 		}
 	}
 	return false
 }
 
-func (session *DefaultSession) Close() {
+func (session *ServiceSession) User() *entities.User {
+	return session.user
+}
+
+func (session *ServiceSession) Close() {
 	if session.logger != nil {
-		session.GetLogger().Debugf("session: closing session")
+		session.logger.Debugf("service/session: closing session")
 	}
 }
 
-func (session *DefaultSession) String() string {
+func (session *ServiceSession) String() string {
 	return fmt.Sprintf("user=%s, serviceID=%d",
 		"", session.requestedServiceID)
 }
 
-func (session *DefaultSession) Error(err error) {
-	session.logger.Error("session: %+v, error: %s", session, err)
+func (session *ServiceSession) Error(err error) {
+	session.logger.Error(fmt.Errorf("session: %+v, error: %s", session, err))
 }

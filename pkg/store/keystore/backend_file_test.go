@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/spf13/afero"
 )
 
@@ -140,7 +141,7 @@ import (
 
 func defaultStore() KeyBackend {
 
-	logger := defaultLogger()
+	logger := logging.DefaultLogger()
 
 	// Create a temp directory for each instantiation
 	// so parallel tests don't corrupt each other.

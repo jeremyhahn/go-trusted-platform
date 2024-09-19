@@ -31,14 +31,17 @@ var CertificateCmd = &cobra.Command{
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App.Init(InitParams)
-
-		userPIN := keystore.NewClearPassword(InitParams.Pin)
-
 		cn := args[0]
 		storeType := args[1]
 		algorithm := args[2]
 
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
+
+		userPIN := keystore.NewClearPassword(InitParams.Pin)
 		if err := App.LoadCA(userPIN); err != nil {
 			cmd.PrintErrln(err)
 			return

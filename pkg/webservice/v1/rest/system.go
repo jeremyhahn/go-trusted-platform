@@ -7,10 +7,10 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	"github.com/op/go-logging"
 )
 
 type SystemRestServicer interface {
@@ -39,10 +39,11 @@ func NewSystemRestService(
 	endpointList *[]string) SystemRestServicer {
 
 	return &SystemRestService{
-		ca:           ca,
-		httpWriter:   httpWriter,
-		logger:       logger,
-		endpointList: endpointList}
+		ca:                  ca,
+		httpWriter:          httpWriter,
+		logger:              logger,
+		serverKeyAttributes: serverKeyAttributes,
+		endpointList:        endpointList}
 }
 
 // Writes a list of webservice REST and WebSocket endpoints
@@ -52,8 +53,7 @@ func (restService *SystemRestService) Endpoints(w http.ResponseWriter, r *http.R
 
 // Writes the web server public key in PEM form
 func (restService *SystemRestService) PublicKey(w http.ResponseWriter, r *http.Request) {
-	keyAttrs := restService.serverKeyAttributes
-	cert, err := restService.ca.Certificate(keyAttrs)
+	cert, err := restService.ca.Certificate(restService.serverKeyAttributes)
 	if err != nil {
 		if err == certstore.ErrCertNotFound {
 			restService.httpWriter.Error404(w, r, err)

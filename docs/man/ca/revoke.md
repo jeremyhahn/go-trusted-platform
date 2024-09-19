@@ -26,17 +26,17 @@ revokermation many users may expect.
 
 ## Revoke RSA TPM 2.0 end entity certificate
 ```bash
-sudo tpadm ca revoke --cn webserver.mydomain.com --store tpm2 --algorithm rsa
+tpadm ca revoke webserver.mydomain.com tpm2 rsa
 ```
 
 ## Revoke ECDSA PKCS #11 end entity certificate
 ```bash
-sudo tpadm ca revoke --cn webserver.mydomain.com --store pkcs11 --algorithm ecdsa
+tpadm ca revoke webserver.mydomain.com pkcs11 ecdsa
 ```
 
 ## Remove PKCS #8 Ed25519 end entity certificate
 ```bash
-sudo tpadm ca revoke --cn webserver.mydomain.com --store pkcs8 --algorithm ed25519
+tpadm ca revoke webserver.mydomain.com pkcs8 ed25519
 ```
 
 # AUTHOR

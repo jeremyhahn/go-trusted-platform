@@ -25,6 +25,7 @@ var (
 	bSOPin     bool
 	SOPin      string
 	Pin        string
+	err        error
 
 	EXIT_CODE_FAILURE = 255
 )

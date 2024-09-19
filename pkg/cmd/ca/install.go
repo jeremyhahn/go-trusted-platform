@@ -15,7 +15,11 @@ to the operating system trusted certificate store.`,
 
 		prompt.PrintBanner(app.Version)
 
-		App.Init(InitParams)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 
 		intermediateCN := App.CA.Identity().Subject.CommonName
 		if err := App.CA.OSTrustStore().Install(intermediateCN); err != nil {

@@ -21,11 +21,9 @@ func (tpm *TPM2) AKProfile() (AKProfile, error) {
 		return AKProfile{}, ErrNotInitialized
 	}
 	return AKProfile{
-		EKPub:  tpm.ekAttrs.TPMAttributes.PublicKeyBytes,
-		AKPub:  tpm.iakAttrs.TPMAttributes.PublicKeyBytes,
-		AKName: tpm.iakAttrs.TPMAttributes.Name,
-		// Hash:               tpm.iakAttrs.Hash,
-		// KeyAlgorithm:       tpm.iakAttrs.KeyAlgorithm,
+		EKPub:              tpm.ekAttrs.TPMAttributes.PublicKeyBytes,
+		AKPub:              tpm.iakAttrs.TPMAttributes.PublicKeyBytes,
+		AKName:             tpm.iakAttrs.TPMAttributes.Name,
 		SignatureAlgorithm: tpm.iakAttrs.SignatureAlgorithm,
 	}, nil
 }
@@ -45,7 +43,7 @@ func (tpm *TPM2) MakeCredential(
 	}
 
 	if secret == nil {
-		secret = aesgcm.NewAESGCM(tpm.logger, tpm.debugSecrets, tpm).GenerateKey()
+		secret = aesgcm.NewAESGCM(tpm).GenerateKey()
 	}
 	digest := tpm2.TPM2BDigest{Buffer: secret}
 
@@ -245,16 +243,6 @@ func (tpm *TPM2) Quote(pcrs []uint, nonce []byte) (Quote, error) {
 			return quote, err
 		}
 	}
-
-	// digest := sha256.Sum256([]byte(q.Quoted.Bytes()))
-	// pubKey, err := tpm.ParsePublicKey(tpm.iakAttrs.TPMAttributes.BPublic.Bytes())
-	// if err != nil {
-	// 	return Quote{}, err
-	// }
-	// err = rsa.VerifyPSS(pubKey.(*rsa.PublicKey), crypto.SHA256, digest[:], rsaSig.Sig.Buffer, nil)
-	// if err != nil {
-	// 	return Quote{}, err
-	// }
 
 	// Get the event log:
 	// Rather than parsing the event log and secure boot state,

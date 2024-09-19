@@ -16,9 +16,11 @@ provisioning guidance.`,
 	Run: func(cmd *cobra.Command, args []string) {
 
 		InitParams.Initialize = true
-		App.Init(InitParams)
-
-		App.InitTPM(InitParams.PlatformCA, InitParams.SOPin, InitParams.Pin)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 
 		ekAttrs, err := App.TPM.EKAttributes()
 		if err != nil {

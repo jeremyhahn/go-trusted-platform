@@ -19,11 +19,11 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
-	"github.com/op/go-logging"
 
 	pb "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/proto"
 
@@ -99,14 +99,14 @@ func main() {
 	flag.Parse()
 	app, err := app.NewApp().Init(nil)
 	if err != nil {
-		app.Logger.Fatal(err)
+		app.Logger.FatalError(err)
 	}
 	verifier, err := NewVerifier(app, *attestorHostname)
 	if err != nil {
-		app.Logger.Fatal(err)
+		app.Logger.FatalError(err)
 	}
 	if err := verifier.Attest(); err != nil {
-		app.Logger.Fatal(err)
+		app.Logger.FatalError(err)
 	}
 }
 
@@ -158,7 +158,7 @@ func newTLSGRPCClient(
 	logger.Debugf("verifier: gRPC client socket: %s", socket)
 
 	if config.InsecureSkipVerify {
-		logger.Error("verifier: InsecureSkipVerify is enabled, allowing man-in-the-middle attacks!")
+		logger.Errorf("verifier: InsecureSkipVerify is enabled, allowing man-in-the-middle attacks!")
 	}
 
 	rootCAs := x509.NewCertPool()
@@ -305,7 +305,7 @@ func (verifier *Verification) AKProfile(
 
 	_, ok := ekCert.PublicKey.(*rsa.PublicKey)
 	if !ok {
-		verifier.logger.Error("verifier: EK certificate")
+		verifier.logger.Errorf("verifier: EK certificate")
 		return nil, tpm2.AKProfile{}, err
 	}
 
@@ -364,16 +364,12 @@ func (verifier *Verification) MakeCredential(
 		return makeCredentialResponse{}, err
 	}
 
+	verifier.logger.Debugf(
+		"verifier: TPM2_MakeCredential Attestation Key Name: %s",
+		tpm2.Encode(akName.Buffer))
+
 	// Print some helpful information if secret debugging is enabled
 	if verifier.app.DebugSecretsFlag {
-
-		verifier.logger.Debugf(
-			"verifier: TPM2_MakeCredential Attestation Key Name (raw): %s",
-			akName)
-
-		verifier.logger.Debugf(
-			"verifier: TPM2_MakeCredential Attestation Key Name (hex): %s",
-			tpm2.Encode(akName.Buffer))
 
 		verifier.logger.Debugf(
 			"verifier: TPM2_MakeCredential credential blob (raw): %s",
@@ -433,7 +429,7 @@ func (verifier *Verification) ActivateCredential(
 
 	// Compare the Attestor and Verifier secret
 	if bytes.Compare(response.Secret, makeCredentialResponse.secret) != 0 {
-		verifier.logger.Error("verifier: attestor failed to activate credential")
+		verifier.logger.Errorf("verifier: attestor failed to activate credential")
 		return ErrInvalidCredential
 	}
 

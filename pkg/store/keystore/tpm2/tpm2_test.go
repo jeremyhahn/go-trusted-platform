@@ -159,7 +159,7 @@ func TestRSA_PSS_WithPasswordWithoutPolicy(t *testing.T) {
 	data := []byte("test")
 	signerOpts := keystore.NewSignerOpts(keyAttrs, data)
 	signerOpts.PSSOptions = &rsa.PSSOptions{
-		SaltLength: rsa.PSSSaltLengthAuto,
+		SaltLength: rsa.PSSSaltLengthEqualsHash,
 		Hash:       keyAttrs.Hash,
 	}
 

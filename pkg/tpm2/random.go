@@ -29,7 +29,7 @@ func (tpm *TPM2) Read(data []byte) (n int, err error) {
 		}.Execute(tpm.transport)
 		if err != nil {
 
-			tpm.logger.Warning(err)
+			tpm.logger.MaybeError(err)
 
 			ekAttrs, err := tpm.EKAttributes()
 			if err != nil {

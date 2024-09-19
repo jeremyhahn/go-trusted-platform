@@ -4,9 +4,9 @@ import (
 	"log"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/spf13/cobra"
 )
 
@@ -38,7 +38,11 @@ components referenced in the platform configuration file are initialized.`,
 
 		InitParams.Initialize = true
 
-		App.Init(InitParams)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 
 		props, err := App.TPM.FixedProperties()
 		if err != nil {
@@ -58,7 +62,7 @@ components referenced in the platform configuration file are initialized.`,
 
 func ykauth() {
 	ykauth, err := auth.NewYubiKeyAuthenticator(
-		util.Logger(),
+		logging.DefaultLogger(),
 		yubiClientID,
 		nil)
 	if err != nil {

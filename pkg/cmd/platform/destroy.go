@@ -23,7 +23,11 @@ manufacturer and OEM factory settings.`,
 
 		prompt.PrintBanner(app.Version)
 
-		App.Init(InitParams)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 
 		fmt.Println("")
 		color.Red(
@@ -46,8 +50,8 @@ manufacturer and OEM factory settings.`,
 
 			// Delete platform data directory
 			if err := App.FS.RemoveAll(App.PlatformDir); err != nil {
-				App.Logger.Error("Failed to delete platform data")
-				color.New(color.FgRed).Println(err)
+				App.Logger.Errorf("Failed to delete platform data")
+				cmd.PrintErrln(err)
 				return
 			}
 			App.Logger.Info("Platform data successfully destroyed")
@@ -57,17 +61,17 @@ manufacturer and OEM factory settings.`,
 				App.Logger.Fatal("TPM not initialized")
 			} else {
 				if err := App.TPM.Clear(lockoutAuth, tpm2.TPMRHLockout); err != nil {
-					App.Logger.Error("Failed to clear Lockout hierarchy")
+					App.Logger.Errorf("Failed to clear Lockout hierarchy")
 					cmd.PrintErrln(err)
 					return
 				}
 				if err := App.TPM.Clear(endorsementAuth, tpm2.TPMRHEndorsement); err != nil {
-					App.Logger.Error("Failed to clear Endorsement hierarchy")
+					App.Logger.Errorf("Failed to clear Endorsement hierarchy")
 					cmd.PrintErrln(err)
 					return
 				}
 				if err := App.TPM.Clear(ownerAuth, tpm2.TPMRHOwner); err != nil {
-					App.Logger.Error("Failed to clear Owner hierarchy")
+					App.Logger.Errorf("Failed to clear Owner hierarchy")
 					cmd.PrintErrln(err)
 					return
 				}

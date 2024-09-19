@@ -13,13 +13,12 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/pkcs11"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/pkcs8"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/tpm2"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
-	"github.com/op/go-logging"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 
@@ -82,62 +81,7 @@ func setup() {
 
 func TestKeyring_ECDSA(t *testing.T) {
 
-	logger, tpm, ownerAttrs := createTPM()
-
-	buf := make([]byte, 8)
-	_, err := rand.Reader.Read(buf)
-	if err != nil {
-		logger.Fatal(err)
-	}
-	hexVal := hex.EncodeToString(buf)
-	tmp := fmt.Sprintf("%s/%s", TESTDATA_DIR, hexVal)
-
-	keyBackend := keystore.NewFileBackend(logger, afero.NewMemMapFs(), tmp)
-
-	fs := afero.NewMemMapFs()
-	blobStore, err := blob.NewFSBlobStore(logger, fs, tmp, nil)
-	if err != nil {
-		logger.Fatal(err)
-	}
-
-	signerStore := keystore.NewSignerStore(blobStore)
-
-	config := &KeyringConfig{
-		PKCS8Config:  pkcs8Config(),
-		PKCS11Config: pkcs11Config(),
-		TPMConfig:    tpmKeyStoreConfig(),
-	}
-
-	ksparams := &tpm2.Params{
-		Logger:       logger,
-		DebugSecrets: true,
-		Config:       tpmKeyStoreConfig(),
-		SignerStore:  signerStore,
-		TPM:          tpm,
-	}
-
-	tpmks, err := tpm2.NewKeyStore(ksparams)
-	if err != nil {
-		logger.Fatal(err)
-	}
-
-	kf, err := NewKeyring(
-		util.Logger(),
-		true,
-		fs,
-		TESTDATA_DIR,
-		rand.Reader,
-		config,
-		keyBackend,
-		blobStore,
-		signerStore,
-		tpm,
-		tpmks,
-		ownerAttrs.TPMAttributes.HierarchyAuth,
-		nil)
-
-	assert.Nil(t, err)
-	assert.Equal(t, 3, len(kf.Stores()))
+	keyring := createKeyring()
 
 	keyAttrs := &keystore.KeyAttributes{
 		CN:             "test",
@@ -154,7 +98,7 @@ func TestKeyring_ECDSA(t *testing.T) {
 	}
 
 	// PKCS #8: Create key
-	opaque, err := kf.GenerateKey(keyAttrs)
+	opaque, err := keyring.GenerateKey(keyAttrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, opaque.Public())
 
@@ -175,7 +119,7 @@ func TestKeyring_ECDSA(t *testing.T) {
 
 	// PKCS #11: Create key
 	keyAttrs.StoreType = keystore.STORE_PKCS11
-	opaque, err = kf.GenerateKey(keyAttrs)
+	opaque, err = keyring.GenerateKey(keyAttrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, opaque.Public())
 
@@ -191,7 +135,7 @@ func TestKeyring_ECDSA(t *testing.T) {
 	// TPM: Create key
 	keyAttrs.StoreType = keystore.STORE_TPM2
 	keyAttrs.PlatformPolicy = true
-	opaque, err = kf.GenerateKey(keyAttrs)
+	opaque, err = keyring.GenerateKey(keyAttrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, opaque.Public())
 
@@ -208,62 +152,7 @@ func TestKeyring_ECDSA(t *testing.T) {
 
 func TestKeyring_RSSPSS(t *testing.T) {
 
-	logger, tpm, ownerAttrs := createTPM()
-
-	buf := make([]byte, 8)
-	_, err := rand.Reader.Read(buf)
-	if err != nil {
-		logger.Fatal(err)
-	}
-	hexVal := hex.EncodeToString(buf)
-	tmp := fmt.Sprintf("%s/%s", TESTDATA_DIR, hexVal)
-
-	keyBackend := keystore.NewFileBackend(logger, afero.NewMemMapFs(), tmp)
-
-	fs := afero.NewMemMapFs()
-	blobStore, err := blob.NewFSBlobStore(logger, fs, tmp, nil)
-	if err != nil {
-		logger.Fatal(err)
-	}
-
-	signerStore := keystore.NewSignerStore(blobStore)
-
-	config := &KeyringConfig{
-		PKCS8Config:  pkcs8Config(),
-		PKCS11Config: pkcs11Config(),
-		TPMConfig:    tpmKeyStoreConfig(),
-	}
-
-	ksparams := &tpm2.Params{
-		Logger:       logger,
-		DebugSecrets: true,
-		Config:       tpmKeyStoreConfig(),
-		SignerStore:  signerStore,
-		TPM:          tpm,
-	}
-
-	tpmks, err := tpm2.NewKeyStore(ksparams)
-	if err != nil {
-		logger.Fatal(err)
-	}
-
-	kf, err := NewKeyring(
-		util.Logger(),
-		true,
-		fs,
-		TESTDATA_DIR,
-		rand.Reader,
-		config,
-		keyBackend,
-		blobStore,
-		signerStore,
-		tpm,
-		tpmks,
-		ownerAttrs.TPMAttributes.HierarchyAuth,
-		nil)
-
-	assert.Nil(t, err)
-	assert.Equal(t, 3, len(kf.Stores()))
+	keyring := createKeyring()
 
 	keyAttrs := &keystore.KeyAttributes{
 		CN:             "test",
@@ -280,7 +169,7 @@ func TestKeyring_RSSPSS(t *testing.T) {
 	}
 
 	// PKCS #8: Create key
-	opaque, err := kf.GenerateKey(keyAttrs)
+	opaque, err := keyring.GenerateKey(keyAttrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, opaque.Public())
 
@@ -310,7 +199,7 @@ func TestKeyring_RSSPSS(t *testing.T) {
 	// PKCS #11: Create key
 	keyAttrs.StoreType = keystore.STORE_PKCS11
 
-	opaque, err = kf.GenerateKey(keyAttrs)
+	opaque, err = keyring.GenerateKey(keyAttrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, opaque.Public())
 
@@ -330,7 +219,7 @@ func TestKeyring_RSSPSS(t *testing.T) {
 	// TPM: Create key
 	keyAttrs.StoreType = keystore.STORE_TPM2
 	keyAttrs.PlatformPolicy = true
-	opaque, err = kf.GenerateKey(keyAttrs)
+	opaque, err = keyring.GenerateKey(keyAttrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, opaque.Public())
 
@@ -352,62 +241,7 @@ func TestKeyring_RSSPSS(t *testing.T) {
 
 func TestKeyring_PKCS1v15(t *testing.T) {
 
-	logger, tpm, ownerAttrs := createTPM()
-
-	buf := make([]byte, 8)
-	_, err := rand.Reader.Read(buf)
-	if err != nil {
-		logger.Fatal(err)
-	}
-	hexVal := hex.EncodeToString(buf)
-	tmp := fmt.Sprintf("%s/%s", TESTDATA_DIR, hexVal)
-
-	keyBackend := keystore.NewFileBackend(logger, afero.NewMemMapFs(), tmp)
-
-	fs := afero.NewMemMapFs()
-	blobStore, err := blob.NewFSBlobStore(logger, fs, tmp, nil)
-	if err != nil {
-		logger.Fatal(err)
-	}
-
-	signerStore := keystore.NewSignerStore(blobStore)
-
-	config := &KeyringConfig{
-		PKCS8Config:  pkcs8Config(),
-		PKCS11Config: pkcs11Config(),
-		TPMConfig:    tpmKeyStoreConfig(),
-	}
-
-	ksparams := &tpm2.Params{
-		Logger:       logger,
-		DebugSecrets: true,
-		Config:       tpmKeyStoreConfig(),
-		SignerStore:  signerStore,
-		TPM:          tpm,
-	}
-
-	tpmks, err := tpm2.NewKeyStore(ksparams)
-	if err != nil {
-		logger.Fatal(err)
-	}
-
-	kf, err := NewKeyring(
-		util.Logger(),
-		true,
-		fs,
-		TESTDATA_DIR,
-		rand.Reader,
-		config,
-		keyBackend,
-		blobStore,
-		signerStore,
-		tpm,
-		tpmks,
-		ownerAttrs.TPMAttributes.HierarchyAuth,
-		nil)
-
-	assert.Nil(t, err)
-	assert.Equal(t, 3, len(kf.Stores()))
+	keyring := createKeyring()
 
 	keyAttrs := &keystore.KeyAttributes{
 		CN:             "test",
@@ -424,7 +258,7 @@ func TestKeyring_PKCS1v15(t *testing.T) {
 	}
 
 	// PKCS #8: Create key
-	opaque, err := kf.GenerateKey(keyAttrs)
+	opaque, err := keyring.GenerateKey(keyAttrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, opaque.Public())
 
@@ -449,7 +283,7 @@ func TestKeyring_PKCS1v15(t *testing.T) {
 	// PKCS #11: Create key
 	keyAttrs.StoreType = keystore.STORE_PKCS11
 
-	opaque, err = kf.GenerateKey(keyAttrs)
+	opaque, err = keyring.GenerateKey(keyAttrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, opaque.Public())
 
@@ -468,7 +302,7 @@ func TestKeyring_PKCS1v15(t *testing.T) {
 	// TPM: Create key
 	keyAttrs.StoreType = keystore.STORE_TPM2
 	keyAttrs.PlatformPolicy = true
-	opaque, err = kf.GenerateKey(keyAttrs)
+	opaque, err = keyring.GenerateKey(keyAttrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, opaque.Public())
 
@@ -499,16 +333,16 @@ func pkcs8Config() *pkcs8.Config {
 }
 
 func pkcs11Config() *pkcs11.Config {
-	logger := util.Logger()
+	logger := logging.DefaultLogger()
 
 	if err := os.MkdirAll(TESTDATA_DIR, fs.ModePerm); err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	softhsm_conf := fmt.Sprintf("%s/softhsm.conf", TESTDATA_DIR)
 	err := os.WriteFile(softhsm_conf, TEST_SOFTHSM_CONF, fs.ModePerm)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	var slot int = 0
@@ -526,34 +360,46 @@ func pkcs11Config() *pkcs11.Config {
 
 func tpmKeyStoreConfig() *tptpm2.KeyStoreConfig {
 	return &tptpm2.KeyStoreConfig{
+		CN:             "test",
 		SRKAuth:        keystore.DEFAULT_PASSWORD,
 		SRKHandle:      tpmksSRKHandle,
 		PlatformPolicy: true,
 	}
 }
 
-func createTPM() (*logging.Logger, tptpm2.TrustedPlatformModule, *keystore.KeyAttributes) {
+func createKeyring() *Keyring {
 
-	logger := util.Logger()
+	logger := logging.DefaultLogger()
 
+	soPIN := keystore.NewClearPassword([]byte("test"))
+	userPIN := keystore.NewClearPassword([]byte("test"))
+
+	// Create a temp directory (only necessary for NewOsFs()
+	// when testing PKCS #11 w/ SoftHSM)
 	buf := make([]byte, 8)
 	_, err := rand.Reader.Read(buf)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 	hexVal := hex.EncodeToString(buf)
 	tmp := fmt.Sprintf("%s/%s", TESTDATA_DIR, hexVal)
 
+	// Create memory file system abstraction
 	fs := afero.NewMemMapFs()
+
+	// Create blob store
 	blobStore, err := blob.NewFSBlobStore(logger, fs, tmp, nil)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
-	fileBackend := keystore.NewFileBackend(logger, afero.NewMemMapFs(), tmp)
+	// Create a key store backend
+	keyBackend := keystore.NewFileBackend(logger, afero.NewMemMapFs(), tmp)
 
+	// Create a signer store
 	signerStore := keystore.NewSignerStore(blobStore)
 
+	// Create TPM config
 	config := &tptpm2.Config{
 		EncryptSession: true,
 		UseEntropy:     true,
@@ -568,64 +414,63 @@ func createTPM() (*logging.Logger, tptpm2.TrustedPlatformModule, *keystore.KeyAt
 				KeySize: 2048,
 			},
 		},
-		SSRK: &tptpm2.SRKConfig{
-			Handle: srkHandle,
+		IAK: &tptpm2.IAKConfig{
+			CN:           "device-id-001",
+			Debug:        true,
+			Hash:         crypto.SHA256.String(),
+			Handle:       uint32(0x81010002),
+			KeyAlgorithm: x509.RSA.String(),
+			RSAConfig: &keystore.RSAConfig{
+				KeySize: 2048,
+			},
+			SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
 		},
-
+		SSRK: &tptpm2.SRKConfig{
+			Handle:        0x81000001,
+			HierarchyAuth: keystore.DEFAULT_PASSWORD,
+			KeyAlgorithm:  x509.RSA.String(),
+			RSAConfig: &keystore.RSAConfig{
+				KeySize: 2048,
+			},
+		},
 		PlatformPCR: platformPCR,
 		FileIntegrity: []string{
 			"./",
 		},
 	}
 
+	// Create TPM constructor params
 	params := &tptpm2.Params{
 		Logger:       logger,
 		DebugSecrets: true,
 		Config:       config,
 		BlobStore:    blobStore,
-		Backend:      fileBackend,
+		Backend:      keyBackend,
 		SignerStore:  signerStore,
 		FQDN:         "node1.example.com",
 	}
 
-	var ownerAttrs *keystore.KeyAttributes
+	// Create TPM 2.0 service
 	tpm, err := tptpm2.NewTPM2(params)
 	if err != nil {
 		if err == tptpm2.ErrNotInitialized {
-			if err = tpm.Provision(nil); err != nil {
-				logger.Fatal(err)
+			if err = tpm.Provision(soPIN); err != nil {
+				logger.FatalError(err)
 			}
 		} else {
-			logger.Fatal(err)
+			logger.FatalError(err)
 		}
 	}
 
-	return logger, tpm, ownerAttrs
-
-}
-
-func createKeyStore() (*logging.Logger, keystore.KeyStorer, tptpm2.TrustedPlatformModule) {
-
-	logger := util.Logger()
-
-	buf := make([]byte, 8)
-	_, err := rand.Reader.Read(buf)
-	if err != nil {
-		logger.Fatal(err)
-	}
-	hexVal := hex.EncodeToString(buf)
-	tmp := fmt.Sprintf("%s/%s", TESTDATA_DIR, hexVal)
-
-	fs := afero.NewMemMapFs()
-	blobStore, err := blob.NewFSBlobStore(logger, fs, tmp, nil)
-	if err != nil {
-		logger.Fatal(err)
+	// Create keyring config
+	keyringConfig := &KeyringConfig{
+		CN:           "test",
+		PKCS8Config:  pkcs8Config(),
+		PKCS11Config: pkcs11Config(),
+		TPMConfig:    tpmKeyStoreConfig(),
 	}
 
-	signerStore := keystore.NewSignerStore(blobStore)
-
-	_, tpm, _ := createTPM()
-
+	// Create TPM 2.0 key store
 	ksparams := &tpm2.Params{
 		Logger:       logger,
 		DebugSecrets: true,
@@ -633,11 +478,36 @@ func createKeyStore() (*logging.Logger, keystore.KeyStorer, tptpm2.TrustedPlatfo
 		SignerStore:  signerStore,
 		TPM:          tpm,
 	}
-
-	ks, err := tpm2.NewKeyStore(ksparams)
+	tpmks, err := tpm2.NewKeyStore(ksparams)
 	if err != nil {
-		logger.Fatal(err)
+		if err == keystore.ErrNotInitalized {
+			if err := tpmks.Initialize(soPIN, userPIN); err != nil {
+				logger.FatalError(err)
+			}
+		} else {
+			logger.FatalError(err)
+		}
 	}
 
-	return logger, ks, tpm
+	// Create a new keyring with PKCS #8, PKCS #11,
+	// and TPM 2.0 key stores
+	keyring, err := NewKeyring(
+		logging.DefaultLogger(),
+		true,
+		fs,
+		TESTDATA_DIR,
+		rand.Reader,
+		keyringConfig,
+		keyBackend,
+		blobStore,
+		signerStore,
+		tpm,
+		tpmks,
+		soPIN,
+		userPIN)
+	if err != nil {
+		logger.FatalError(err)
+	}
+
+	return keyring
 }

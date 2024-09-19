@@ -74,7 +74,7 @@ definitions:
           $ref: '#/definitions/keystore.KeyConfig'
         type: array
       keystores:
-        $ref: '#/definitions/platform.KeyChainConfig'
+        $ref: '#/definitions/platform.KeyringConfig'
       sans:
         $ref: '#/definitions/ca.SubjectAlternativeNames'
       subject:
@@ -126,8 +126,6 @@ definitions:
         items:
           type: string
         type: array
-      client_ca_cert:
-        type: string
       insecure_port:
         type: integer
       insecure_skip_verify:
@@ -228,7 +226,7 @@ definitions:
       so_pin:
         type: string
     type: object
-  platform.KeyChainConfig:
+  platform.KeyringConfig:
     properties:
       cn:
         type: string

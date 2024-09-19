@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 
-	"github.com/op/go-logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/spf13/afero"
 )
 

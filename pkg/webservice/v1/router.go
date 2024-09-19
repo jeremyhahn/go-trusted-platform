@@ -7,12 +7,12 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
-	"github.com/op/go-logging"
 )
 
 type RouterV1 struct {
@@ -98,6 +98,6 @@ func (v1Router *RouterV1) systemRoutes() []string {
 
 func (v1Router *RouterV1) authenticationRoutes() []string {
 	registrationRouter := router.NewAuthenticationRouter(
-		v1Router.jsonWebTokenMiddleware.(middleware.AuthMiddleware))
+		v1Router.jsonWebTokenMiddleware)
 	return registrationRouter.RegisterRoutes(v1Router.router, v1Router.baseURI)
 }

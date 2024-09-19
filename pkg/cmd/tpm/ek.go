@@ -4,11 +4,10 @@ import (
 	"crypto/x509"
 	"fmt"
 
-	"github.com/google/go-tpm/tpm2"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
+	libtpm2 "github.com/google/go-tpm/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
 	"github.com/spf13/cobra"
 )
 
@@ -50,25 +49,31 @@ var EKCmd = &cobra.Command{
 	Long:  `Perform operations on a TPM 2.0 Endorsement Key`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App.Init(InitParams)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			if err != tpm2.ErrNotInitialized {
+				cmd.PrintErrln(err)
+				return
+			}
+		}
 
 		soPIN := keystore.NewClearPassword(InitParams.SOPin)
 
 		keyAlg := x509.RSA
-		template := tpm2.RSASRKTemplate
+		template := libtpm2.RSASRKTemplate
 
 		if ekECC {
 			keyAlg = x509.ECDSA
-			template = tpm2.ECCSRKTemplate
+			template = libtpm2.ECCSRKTemplate
 		}
 
 		if !ekRSA && !ekECC {
 			fmt.Println("No algorithm flags, defaulting to RSA...")
 		}
 
-		handleType := tpm2.TPMHTTransient
+		handleType := libtpm2.TPMHTTransient
 		if ekPersistent {
-			handleType = tpm2.TPMHTPersistent
+			handleType = libtpm2.TPMHTPersistent
 		}
 
 		var passwd keystore.Password
@@ -83,9 +88,9 @@ var EKCmd = &cobra.Command{
 			KeyType:        keystore.KEY_TYPE_ENDORSEMENT,
 			PlatformPolicy: ekPolicy,
 			TPMAttributes: &keystore.TPMAttributes{
-				Handle:        tpm2.TPMHandle(ekHandle),
+				Handle:        libtpm2.TPMHandle(ekHandle),
 				HandleType:    handleType,
-				Hierarchy:     tpm2.TPMRHEndorsement,
+				Hierarchy:     libtpm2.TPMRHEndorsement,
 				HierarchyAuth: soPIN,
 				Template:      template,
 			},
@@ -93,12 +98,12 @@ var EKCmd = &cobra.Command{
 
 		// No args, display the EK public key in PEM form
 		if len(args) == 0 {
-			keyAttrs, err := App.TPM.KeyAttributes(tpm2.TPMHandle(ekHandle))
+			keyAttrs, err := App.TPM.KeyAttributes(libtpm2.TPMHandle(ekHandle))
 			if err != nil {
 				cmd.PrintErrln(err)
 				return
 			}
-			keyAttrs.TPMAttributes.HandleType = tpm2.TPMHTPersistent
+			keyAttrs.TPMAttributes.HandleType = libtpm2.TPMHTPersistent
 			cmd.Println(keyAttrs)
 
 			pem, err := keystore.EncodePEM(keyAttrs.TPMAttributes.PublicKeyBytes)
@@ -139,8 +144,7 @@ var EKCmd = &cobra.Command{
 			cmd.Println(string(pem))
 
 		case "delete-key":
-			prompt.PrintBanner(app.Version)
-			name, _, err := App.TPM.ReadHandle(tpm2.TPMHandle(ekHandle))
+			name, _, err := App.TPM.ReadHandle(libtpm2.TPMHandle(ekHandle))
 			ekAttrs.TPMAttributes.Name = name
 			if err != nil {
 				cmd.PrintErrln(err)
