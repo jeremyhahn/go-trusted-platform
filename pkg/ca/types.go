@@ -10,6 +10,8 @@ var (
 	ErrInvalidIssuingURL = errors.New("certificate-authority: invalid issuing URL")
 	ErrUnsealFailure     = errors.New("certificate-authority: key unseal operation failed")
 
+	InfoUsingDefaultCAKey = errors.New("certificate-authority: no matching key algorithm, using default CA key")
+
 	ATTEST_BLOB_ROOT     string = "tpm"
 	ATTEST_AK_NAME              = "ak"
 	ATTEST_BLOB_QUOTE           = "quote"

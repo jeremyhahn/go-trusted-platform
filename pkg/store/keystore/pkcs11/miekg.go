@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/miekg/pkcs11"
 	libpkcs11 "github.com/miekg/pkcs11"
-	"github.com/op/go-logging"
 )
 
 var (
@@ -31,7 +31,7 @@ func NewPKCS11(
 	// Instantiate miekg's PKCS11 wrapper
 	ctx := libpkcs11.New(config.Library)
 	if err = ctx.Initialize(); err != nil {
-		logger.Warning(err)
+		logger.MaybeError(err)
 	}
 	// defer ctx.Destroy()
 	// defer ctx.Finalize()
@@ -140,7 +140,7 @@ func (pkcs11 *PKCS11) Destroy() error {
 func (pkcs11 *PKCS11) DebugLibraryInfo() {
 	info, err := pkcs11.ctx.GetInfo()
 	if err != nil {
-		pkcs11.logger.Fatal(err)
+		pkcs11.logger.FatalError(err)
 	}
 	pkcs11.logger.Debug("PKCS #11 Library Info")
 	pkcs11.logger.Debugf("  Manufacturer: %s", info.ManufacturerID)
@@ -157,21 +157,21 @@ func (pkcs11 *PKCS11) DebugSlots() {
 
 	slots, err := pkcs11.ctx.GetSlotList(true)
 	if err != nil {
-		pkcs11.logger.Fatal(err)
+		pkcs11.logger.FatalError(err)
 	}
 
 	for _, slot := range slots {
 
 		info, err := pkcs11.ctx.GetSlotInfo(slot)
 		if err != nil {
-			pkcs11.logger.Fatal(err)
+			pkcs11.logger.FatalError(err)
 		}
 
 		pkcs11.logger.Debugf("PKCS #11 Hardware Info - Slot %d", slot)
 
 		token, err := pkcs11.ctx.GetTokenInfo(slot)
 		if err != nil {
-			pkcs11.logger.Fatal(err)
+			pkcs11.logger.FatalError(err)
 		}
 
 		pkcs11.logger.Debugf("  Label:\t\t    %s", token.Label)
@@ -198,7 +198,7 @@ func (pkcs11 *PKCS11) DebugSlots() {
 func (pkcs11 *PKCS11) PrintLibraryInfo() {
 	info, err := pkcs11.ctx.GetInfo()
 	if err != nil {
-		pkcs11.logger.Fatal(err)
+		pkcs11.logger.FatalError(err)
 	}
 	fmt.Printf("PKCS #11 Library Info\n")
 	fmt.Printf("  Manufacturer:\t%s\n", info.ManufacturerID)
@@ -216,21 +216,21 @@ func (pkcs11 *PKCS11) PrintTokenInfo() {
 
 	slots, err := pkcs11.ctx.GetSlotList(true)
 	if err != nil {
-		pkcs11.logger.Fatal(err)
+		pkcs11.logger.FatalError(err)
 	}
 
 	for _, slot := range slots {
 
 		info, err := pkcs11.ctx.GetSlotInfo(slot)
 		if err != nil {
-			pkcs11.logger.Fatal(err)
+			pkcs11.logger.FatalError(err)
 		}
 
 		fmt.Printf("PKCS #11 Hardware Info - Slot %d\n", slot)
 
 		token, err := pkcs11.ctx.GetTokenInfo(slot)
 		if err != nil {
-			pkcs11.logger.Fatal(err)
+			pkcs11.logger.FatalError(err)
 		}
 
 		fmt.Printf("  Label:\t\t%s\n", token.Label)

@@ -9,28 +9,33 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"os"
 	"os/user"
 	"runtime"
 	"strconv"
 	"syscall"
 
-	logging "github.com/op/go-logging"
+	"github.com/spf13/afero"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v2"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/aesgcm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/argon2"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 
+	libtpm2 "github.com/google/go-tpm/tpm2"
 	tpm2ks "github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/tpm2"
 )
 
@@ -43,6 +48,17 @@ var (
 	ENV_DEV     Environment = "dev"
 	ENV_PREPROD Environment = "preprod"
 	ENV_PROD    Environment = "prod"
+
+	DefaultConfig = App{
+		CAConfig:    &ca.DefaultConfig,
+		ConfigDir:   "/etc/trusted-platform",
+		LogDir:      "trusted-data/log",
+		Logger:      logging.DefaultLogger(),
+		PlatformDir: "trusted-data",
+		Random:      rand.Reader,
+		TPMConfig:   tpm2.DefaultConfig,
+		WebService:  &webservice.DefaultConfigECDSA,
+	}
 )
 
 type Environment string
@@ -71,6 +87,7 @@ type App struct {
 	DebugSecretsFlag    bool                        `yaml:"debug-secrets" json:"debug-secrets" mapstructure:"debug-secrets"`
 	Domain              string                      `yaml:"domain" json:"domain" mapstructure:"domain"`
 	Environment         Environment                 `yaml:"-" json:"-" mapstructure:"-"`
+	FS                  afero.Fs                    `yaml:"-" json:"-" mapstructure:"-"`
 	Hostname            string                      `yaml:"hostname" json:"hostname" mapstructure:"hostname"`
 	Hostmaster          string                      `yaml:"hostmaster" json:"hostmaster" mapstructure:"hostmaster"`
 	ListenAddress       string                      `yaml:"listen" json:"listen" mapstructure:"listen"`
@@ -84,7 +101,7 @@ type App struct {
 	SignerStore         keystore.SignerStorer       `yaml:"-" json:"-" mapstructure:"-"`
 	TPM                 tpm2.TrustedPlatformModule  `yaml:"-" json:"-" mapstructure:"-"`
 	TPMConfig           tpm2.Config                 `yaml:"tpm" json:"tpm" mapstructure:"tpm"`
-	WebService          config.WebService           `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
+	WebService          *config.WebService          `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
 	ServerKeyAttributes *keystore.KeyAttributes     `yaml:"-" json:"-" mapstructure:"-"`
 }
 
@@ -111,7 +128,7 @@ type AppInitParams struct {
 
 // Initialize the platform by loading the platform configuration
 // file and initializing the platform logger.
-func (app *App) Init(initParams *AppInitParams) *App {
+func (app *App) Init(initParams *AppInitParams) (*App, error) {
 	// Override config file with CLI options
 	if initParams != nil {
 		app.DebugFlag = initParams.Debug
@@ -121,31 +138,37 @@ func (app *App) Init(initParams *AppInitParams) *App {
 		app.LogDir = initParams.LogDir
 		app.ListenAddress = initParams.ListenAddress
 	}
-	app.initConfig(initParams.Env)
+	if app.FS == nil {
+		app.FS = afero.NewOsFs()
+	}
+	if err := app.initConfig(initParams.Env); err != nil {
+		return nil, err
+	}
 	app.initLogger()
-	app.initStores()
+	if err := app.initStores(); err != nil {
+		return nil, err
+	}
 
 	soPIN := keystore.NewClearPassword(initParams.SOPin)
 	userPIN := keystore.NewClearPassword(initParams.Pin)
 
 	if initParams.Initialize {
-		app.InitTPM(
+		err := app.InitTPM(
 			initParams.PlatformCA,
 			initParams.SOPin,
 			initParams.Pin)
-		return app
+		if err != nil {
+			return nil, err
+		}
+		return app, nil
 	}
-
 	if err := app.OpenTPM(); err != nil {
-		app.Logger.Fatal(err)
+		return app, err
 	}
 	if err := app.InitPlatformKeyStore(soPIN, userPIN); err != nil {
-		app.Logger.Fatal(err)
+		return app, err
 	}
-	if app.CAConfig != nil {
-		app.LoadCA(initParams.PlatformCA, userPIN)
-	}
-	return app
+	return app, nil
 }
 
 // Returns the platform publicly routable Fully Qualified Domain Name
@@ -154,11 +177,12 @@ func (app *App) FQDN() string {
 }
 
 // Read and parse the platform configuration file
-func (app *App) initConfig(env string) {
+func (app *App) initConfig(env string) error {
 
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(app.ConfigDir)
+	viper.AddConfigPath(fmt.Sprintf("etc/config/%s", Name))
 	viper.AddConfigPath(fmt.Sprintf("%s/etc", app.PlatformDir))
 	viper.AddConfigPath(fmt.Sprintf("$HOME/.%s/", Name))
 	viper.AddConfigPath(".")
@@ -170,66 +194,58 @@ func (app *App) initConfig(env string) {
 			envConfig := fmt.Sprintf("config.%s", env)
 			viper.SetConfigName(envConfig)
 			if err := viper.ReadInConfig(); err != nil {
-				panic(err)
+				return err
 			}
 		} else {
-			panic(err)
+			return err
 		}
 	}
 
 	if err := viper.Unmarshal(app); err != nil {
-		panic(err)
+		return err
 	}
+
+	return nil
 }
 
 // Creates a new file and STDOUT logger. If the global DebugFlag is set,
 // the logger is initialized in debug mode, executing all logger.Debug*
 // statements.
 func (app *App) initLogger() {
-	logFormat := logging.MustStringFormatter(
-		`%{color}%{time:15:04:05.000} %{shortpkg}.%{shortfunc} %{level:.4s} %{id:03x}%{color:reset} %{message}`,
-	)
-	f := app.InitLogFile(os.Getuid(), os.Getgid())
-	stdout := logging.NewLogBackend(os.Stdout, "", 0)
-	logfile := logging.NewLogBackend(f, "", log.Lshortfile)
-	logFormatter := logging.NewBackendFormatter(logfile, logFormat)
-	stdoutFormatter := logging.NewBackendFormatter(stdout, logFormat)
-	//syslog, _ := logging.NewSyslogBackend(appName)
-	var backends logging.LeveledBackend
 	if app.DebugFlag {
-		backends = logging.MultiLogger(stdoutFormatter, logFormatter)
+		app.Logger = logging.DefaultLogger()
 	} else {
-		backends = logging.MultiLogger(logFormatter)
-	}
-	logging.SetBackend(backends)
-	logger := logging.MustGetLogger(Name)
-	if app.DebugFlag {
-		logging.SetLevel(logging.DEBUG, "")
-		logger.Debug("Starting logger in debug mode...")
-		for k, v := range viper.AllSettings() {
-			logger.Debugf("%s: %+v", k, v)
+		if err := app.FS.MkdirAll(app.LogDir, os.ModePerm); err != nil {
+			panic(err)
 		}
-	} else {
-		logging.SetLevel(logging.ERROR, "")
+		logfile := fmt.Sprintf("%s/%s.log", app.LogDir, Name)
+		if err := app.FS.MkdirAll(app.LogDir, os.ModePerm); err != nil {
+			panic(err)
+		}
+		file, err := app.FS.Create(logfile)
+		if err != nil {
+			panic(err)
+		}
+		app.Logger = logging.NewLogger(slog.LevelError, file)
 	}
-	app.Logger = logging.MustGetLogger(Name)
-
-	app.Logger.Infof("Using configuration file: %s\n", viper.ConfigFileUsed())
+	app.Logger.Info("platform configuration",
+		slog.String("file", viper.ConfigFileUsed()))
 }
 
 // Initialize blob and signer stores
-func (app *App) initStores() {
-	blobstore, err := blob.NewFSBlobStore(app.Logger, app.PlatformDir, nil)
+func (app *App) initStores() error {
+	blobstore, err := blob.NewFSBlobStore(app.Logger, app.FS, app.PlatformDir, nil)
 	if err != nil {
-		app.Logger.Fatal(err)
+		return err
 	}
 	app.BlobStore = blobstore
 	app.SignerStore = keystore.NewSignerStore(app.BlobStore)
 	cs, err := app.NewCertificateStore(app.BlobStore)
 	if err != nil {
-		app.Logger.Fatal(err)
+		return err
 	}
 	app.PlatformCertStore = cs
+	return nil
 }
 
 // Parses the Security Officer and User PINs and returns a key store
@@ -248,19 +264,17 @@ func (app *App) ParsePINs(soPIN, userPIN []byte) (keystore.Password, keystore.Pa
 
 	// Generate random SO pin if its set to the default password
 	if bytes.Compare(soPIN, []byte(keystore.DEFAULT_PASSWORD)) == 0 {
-		soPIN = aesgcm.NewAESGCM(
-			app.Logger, app.DebugSecretsFlag, rand.Reader).GenerateKey()
+		soPIN = aesgcm.NewAESGCM(rand.Reader).GenerateKey()
 
 		if app.DebugSecretsFlag {
-			app.Logger.Debugf(
+			app.Logger.Debug(
 				"app: generated new SO PIN: %s", soPIN)
 		}
 	}
 
 	// Generate random SO pin if its set to the default password
 	if bytes.Compare(userPIN, []byte(keystore.DEFAULT_PASSWORD)) == 0 {
-		userPIN = aesgcm.NewAESGCM(
-			app.Logger, app.DebugSecretsFlag, rand.Reader).GenerateKey()
+		userPIN = aesgcm.NewAESGCM(rand.Reader).GenerateKey()
 
 		if app.DebugSecretsFlag {
 			app.Logger.Debugf(
@@ -277,27 +291,33 @@ func (app *App) ParsePINs(soPIN, userPIN []byte) (keystore.Password, keystore.Pa
 // byte cryptographic PIN will be generated. The random input source for
 // entropy is the Golang runtime rand.Reader. Possibly in the future this
 // will support a HSM TRNG.
-func (app *App) InitTPM(selectedCA int, soPIN, userPIN []byte) {
+func (app *App) InitTPM(selectedCA int, soPIN, userPIN []byte) error {
 	if err := app.OpenTPM(); err != nil {
 		if err == tpm2.ErrNotInitialized {
 			sopin, userpin, err := app.ParsePINs(soPIN, userPIN)
 			if err != nil {
-				app.Logger.Fatal(err)
+				return err
 			}
 			// Provision local TPM 2.0 per TCG recommended guidance
-			app.ProvisionPlatform(selectedCA, sopin, userpin)
+			if _, err := app.ProvisionPlatform(selectedCA, sopin, userpin); err != nil {
+				return err
+			}
 		} else {
-			app.Logger.Fatal(err)
+			return err
 		}
 	}
+	return nil
 }
 
 // Opens a connection to the TPM, using an unauthenticated, unverified
 // and un-attested connection. A TPM software simulator is used if enabled
 // in the TPM section of the platform configuration file.
 func (app *App) OpenTPM() error {
+	if app.TPMConfig.EK == nil {
+		return tpm2.ErrNotInitialized
+	}
 	path := fmt.Sprintf("%s/platform/keystore", app.PlatformDir)
-	backend := keystore.NewFileBackend(app.Logger, path)
+	backend := keystore.NewFileBackend(app.Logger, app.FS, path)
 	if app.TPM == nil {
 		var certStore certstore.CertificateStorer
 		var err error
@@ -305,7 +325,7 @@ func (app *App) OpenTPM() error {
 			// Use the certificate store for the EK cert instead of NV RAM
 			certStore, err = app.NewCertificateStore(nil)
 			if err != nil {
-				app.Logger.Fatal(err)
+				return err
 			}
 		}
 		params := &tpm2.Params{
@@ -342,7 +362,7 @@ func (app *App) InitPlatformKeyStore(soPIN, userPIN keystore.Password) error {
 	app.Logger.Info("Initializing platform (TPM 2.0) key store")
 	if app.PlatformKS == nil {
 		path := fmt.Sprintf("%s/platform/keystore", app.PlatformDir)
-		backend := keystore.NewFileBackend(app.Logger, path)
+		backend := keystore.NewFileBackend(app.Logger, app.FS, path)
 		if app.TPMConfig.KeyStore.CN == "" {
 			app.TPMConfig.KeyStore.CN = "platform"
 		}
@@ -379,33 +399,43 @@ func (app *App) InitPlatformKeyStore(soPIN, userPIN keystore.Password) error {
 // https://trustedcomputinggroup.org/wp-content/uploads/TCG-TPM-v2.0-Provisioning-Guidance-Published-v1r1.pdf
 func (app *App) ProvisionPlatform(
 	selectedCA int,
-	soPIN, userPIN keystore.Password) *keystore.KeyAttributes {
+	soPIN, userPIN keystore.Password) (*keystore.KeyAttributes, error) {
 
 	fmt.Println("Provisioning TPM 2.0")
 
 	// Provision the TPM
 	if err := app.TPM.Provision(soPIN); err != nil {
-		app.Logger.Fatal(err)
+		return nil, err
 	}
 
 	// Provision the platform TPM 2.0 key store
 	if err := app.InitPlatformKeyStore(soPIN, userPIN); err != nil {
-		app.Logger.Fatal(err)
+		return nil, err
 	}
 
 	// Initialize the Certificate Authorities
 	if app.CAConfig != nil {
-		app.InitCA(selectedCA, soPIN, userPIN)
+		if _, err := app.InitCA(selectedCA, soPIN, userPIN); err != nil {
+			return nil, err
+		}
 	}
 
 	// Get the Initial Attestation Key attributes
 	iakAttrs, err := app.TPM.IAKAttributes()
 	if err != nil {
-		app.Logger.Fatal(err)
+		return nil, err
+	}
+
+	ekAttrs, err := app.TPM.EKAttributes()
+	if err != nil {
+		return nil, err
 	}
 
 	// Imports the TPM Endorsement Key into the Certificate Authority
-	ekCert := app.ImportEndorsementKey()
+	ekCert, err := app.ImportEndorsementKeyCertificate()
+	if err != nil {
+		return nil, err
+	}
 
 	var idevidAttrs *keystore.KeyAttributes
 
@@ -416,7 +446,7 @@ func (app *App) ProvisionPlatform(
 		var tcgCSRIDevID *tpm2.TCG_CSR_IDEVID
 		idevidAttrs, tcgCSRIDevID, err = app.TPM.CreateIDevID(iakAttrs, ekCert)
 		if err != nil {
-			app.Logger.Fatal(err)
+			return nil, err
 		}
 		keystore.DebugKeyAttributes(app.Logger, idevidAttrs)
 
@@ -424,7 +454,7 @@ func (app *App) ProvisionPlatform(
 		credentialBlob, encryptedSecret, secret, err := app.CA.VerifyTCGCSRIDevID(
 			tcgCSRIDevID, iakAttrs.SignatureAlgorithm)
 		if err != nil {
-			app.Logger.Fatal(err)
+			return nil, err
 		}
 
 		// Release the secret using TPM2_ActivateCredential and
@@ -432,19 +462,40 @@ func (app *App) ProvisionPlatform(
 		releasedCertInfo, err := app.TPM.ActivateCredential(
 			credentialBlob, encryptedSecret)
 		if err != nil {
-			app.Logger.Fatal(err)
+			return nil, err
 		}
 		if bytes.Compare(releasedCertInfo, secret) != 0 {
-			app.Logger.Fatal(tpm2.ErrInvalidActivationCredential)
+			return nil, tpm2.ErrInvalidActivationCredential
 		}
 
 		// Sign TCG_CSR_IDEVID, create IDevID x509 device certificate
-		_, err = app.CA.SignTCGCSRIDevID(idevidAttrs.CN, tcgCSRIDevID, nil)
+		_, err = app.CA.SignTCGCSRIDevID(idevidAttrs.CN, tcgCSRIDevID, &ca.CertificateRequest{
+			KeyAttributes: ekAttrs,
+			Valid:         0, // Valid until 99991231235959Z
+			Subject: ca.Subject{
+				CommonName:   idevidAttrs.CN,
+				Organization: app.WebService.Certificate.Subject.Organization,
+				Country:      app.WebService.Certificate.Subject.Country,
+				Locality:     app.WebService.Certificate.Subject.Locality,
+				Address:      app.WebService.Certificate.Subject.Address,
+				PostalCode:   app.WebService.Certificate.Subject.PostalCode,
+			},
+			SANS: &ca.SubjectAlternativeNames{
+				DNS: []string{
+					app.Domain,
+				},
+				IPs: []string{},
+				Email: []string{
+					app.Hostmaster,
+				},
+			},
+		})
 		if err != nil {
-			app.Logger.Fatal(err)
+			return nil, err
 		}
 
-		// Perform local TPM Quote
+		// Perform local TPM Quote - log errors but don't fail. Some embedded
+		// systems don't support secure boot, or it may not be enabled.
 		quote, nonce, err := app.AttestLocal(iakAttrs)
 		if err != nil {
 			app.Logger.Error(err)
@@ -456,23 +507,12 @@ func (app *App) ProvisionPlatform(
 		}
 	}
 
-	// Build web service key attributes
-	serverKeyAttrs, err := keystore.KeyAttributesFromConfig(
-		app.WebService.Key)
-	if err != nil {
-		app.Logger.Fatal(err)
-	}
-	serverKeyAttrs.Parent = app.PlatformKS.SRKAttributes()
-	serverKeyAttrs.CN = app.WebService.Certificate.Subject.CommonName
-	serverKeyAttrs.KeyType = keystore.KEY_TYPE_TLS
-	serverKeyAttrs.TPMAttributes = &keystore.TPMAttributes{}
-	app.ServerKeyAttributes = serverKeyAttrs
-
 	// Create web services / device TLS certificate
-	// TODO: Replace this certificate with IDevID / LDevID
-	app.InitWebServices()
+	if err := app.InitWebServices(); err != nil {
+		return nil, err
+	}
 
-	return serverKeyAttrs
+	return idevidAttrs, nil
 }
 
 // Import TPM Endorsement Certificate - EK Credential Profile. Attempts
@@ -480,15 +520,15 @@ func (app *App) ProvisionPlatform(
 // certificate is not found, and the ek-gen options are set in the
 // platform configuration file, a new EK certificate will be generated
 // and imported into the TPM or certificate store.
-func (app *App) ImportEndorsementKey() *x509.Certificate {
+func (app *App) ImportEndorsementKeyCertificate() (*x509.Certificate, error) {
 
-	if app.CA == nil {
-		app.Logger.Fatal(ErrMissingEKWithoutEnabledCA)
+	if app.CAConfig == nil {
+		return nil, ErrMissingEKWithoutEnabledCA
 	}
 
 	ekAttrs, err := app.TPM.EKAttributes()
 	if err != nil {
-		app.Logger.Fatal(err)
+		return nil, err
 	}
 
 	ekCert, err := app.TPM.EKCertificate()
@@ -503,9 +543,11 @@ func (app *App) ImportEndorsementKey() *x509.Certificate {
 			} else if app.TPMConfig.EK.KeyAlgorithm == x509.ECDSA.String() {
 				publicKey = app.TPM.EKECC()
 			} else {
-				app.Logger.Fatal(
+				app.Logger.Errorf(
 					"unsupported TPM EK algorithm %s",
 					app.TPMConfig.EK.KeyAlgorithm)
+				return nil, keystore.ErrInvalidKeyAlgorithm
+
 			}
 
 			certReq := ca.CertificateRequest{
@@ -533,7 +575,7 @@ func (app *App) ImportEndorsementKey() *x509.Certificate {
 			// Generate new Endorsement Key x509 Certificate
 			ekCert, err = app.CA.IssueEKCertificate(certReq, publicKey)
 			if err != nil {
-				app.Logger.Fatal(err)
+				return nil, err
 			}
 
 			certstore.DebugCertificate(app.Logger, ekCert)
@@ -541,7 +583,7 @@ func (app *App) ImportEndorsementKey() *x509.Certificate {
 			// Write the EK cert to TPM NV RAM
 			hierarchyAuth, err := ekAttrs.TPMAttributes.HierarchyAuth.Bytes()
 			if err != nil {
-				app.Logger.Fatal(err)
+				return nil, err
 			}
 
 			if err := app.TPM.ProvisionEKCert(
@@ -554,102 +596,105 @@ func (app *App) ImportEndorsementKey() *x509.Certificate {
 				// instead of TPM NV RAM.
 				if len(ekCert.Raw) > 1024 && app.TPMConfig.UseSimulator {
 					if app.TPMConfig.EK.CertHandle > 0 {
-						app.Logger.Warning(warnSimulatorWithEKCertHandle)
+						app.Logger.MaybeError(warnSimulatorWithEKCertHandle)
 					}
 				} else {
 					app.Logger.Error(err)
 				}
 			}
-			return ekCert
+			return ekCert, nil
 
 		} else {
-			app.Logger.Fatal(err)
+			return nil, err
 		}
 	}
 	err = app.CA.ImportEndorsementKeyCertificate(ekAttrs, ekCert.Raw)
 	if err != nil {
-		app.Logger.Fatal(err)
+		return nil, err
 	}
 
-	return ekCert
+	return ekCert, nil
 }
 
 // Loads an initialized Certificate Authority
-func (app *App) LoadCA(selectedCA int, userPIN keystore.Password) {
+func (app *App) LoadCA(userPIN keystore.Password) error {
 
 	params := &ca.CAParams{
 		Debug:        app.DebugFlag,
 		DebugSecrets: app.DebugSecretsFlag,
 		Logger:       app.Logger,
 		Config:       *app.CAConfig,
-		SelectedCA:   selectedCA,
-		Random:       app.TPM,
+		Fs:           app.FS,
+		SelectedCA:   app.CAConfig.PlatformCA,
+		Random:       app.Random,
 		BlobStore:    app.BlobStore,
 		SignerStore:  app.SignerStore,
 		TPM:          app.TPM,
 	}
-	params.Identity = app.CAConfig.Identity[selectedCA]
+	params.Identity = app.CAConfig.Identity[app.CAConfig.PlatformCA]
 
-	caRoot := ca.HomeDirectory(app.PlatformDir,
+	caRoot := ca.HomeDirectory(app.FS, app.PlatformDir,
 		params.Identity.Subject.CommonName)
 
-	params.Backend = keystore.NewFileBackend(params.Logger, caRoot)
+	params.Backend = keystore.NewFileBackend(params.Logger, app.FS, caRoot)
 
 	// Create x509 certificate store backend
 	certBackend, err := blob.NewFSBlobStore(
-		app.Logger, caRoot, &certPartition)
+		app.Logger, app.FS, caRoot, &certPartition)
 	if err != nil {
-		app.Logger.Fatal(err)
+		return err
 	}
 
 	// Create the x509 certificate store
 	certStore, err := app.NewCertificateStore(certBackend)
 	if err != nil {
-		params.Logger.Fatal(err)
+		return err
 	}
 	params.CertStore = certStore
 
 	// Set the name of all of the key stores to the CA common name
-	params.Identity.KeyChainConfig.CN = params.Identity.Subject.CommonName
+	params.Identity.KeyringConfig.CN = params.Identity.Subject.CommonName
 
 	// Create a new key store file backend under the CA home directory
-	backend := keystore.NewFileBackend(params.Logger, caRoot)
+	backend := keystore.NewFileBackend(params.Logger, app.FS, caRoot)
 
 	// Create keychain for the CA
-	keychain, err := app.KeyChainFromConfig(
-		params.Identity.KeyChainConfig,
+	keychain, err := app.KeyringFromConfig(
+		params.Identity.KeyringConfig,
+		app.FS,
 		caRoot,
 		nil,
 		userPIN,
 		backend)
 	if err != nil {
-		app.Logger.Fatal(err)
+		return err
 	}
-	params.KeyChain = keychain
+	params.Keyring = keychain
 	params.TPM = app.TPM
 	params.Random = app.Random
 	params.Debug = app.DebugFlag
 	params.DebugSecrets = app.DebugSecretsFlag
 
-	if selectedCA == 0 {
+	if app.CAConfig.PlatformCA == 0 {
 
 		parentCA, err := ca.NewParentCA(params)
 		if err != nil {
-			app.Logger.Fatal(err)
+			return err
 		} else {
 			app.CA = parentCA
 		}
 	} else {
-		params.Identity = app.CAConfig.Identity[selectedCA]
+		params.Identity = app.CAConfig.Identity[app.CAConfig.PlatformCA]
 		intermediateCA, err := ca.NewIntermediateCA(params)
 		if err != nil {
-			app.Logger.Fatal(err)
+			return err
 		}
 		if err := intermediateCA.Load(); err != nil {
-			app.Logger.Fatal(err)
+			return err
 		}
 		app.CA = intermediateCA
 	}
+	return nil
 }
 
 // Initializes all Certificate Authorities provided in the
@@ -657,18 +702,18 @@ func (app *App) LoadCA(selectedCA int, userPIN keystore.Password) {
 // "Platform CA" as the default CA used for Platform operations.
 func (app *App) InitCA(
 	selectedCA int,
-	soPIN, userPIN keystore.Password) ca.CertificateAuthority {
+	soPIN, userPIN keystore.Password) (ca.CertificateAuthority, error) {
 
 	if app.TPM == nil {
 		if err := app.OpenTPM(); err != nil {
-			app.Logger.Fatal(err)
+			return nil, err
 		}
 	}
 
 	var platformCA ca.CertificateAuthority
 
 	if len(app.CAConfig.Identity) == 0 {
-		app.Logger.Fatal(ca.ErrInvalidConfig)
+		return nil, ca.ErrInvalidConfig
 	}
 
 	params := &ca.CAParams{
@@ -676,74 +721,82 @@ func (app *App) InitCA(
 		DebugSecrets: app.DebugSecretsFlag,
 		Logger:       app.Logger,
 		Config:       *app.CAConfig,
+		Fs:           app.FS,
 		SelectedCA:   selectedCA,
-		Random:       app.TPM,
+		Random:       app.Random,
 		BlobStore:    app.BlobStore,
 		SignerStore:  app.SignerStore,
 		TPM:          app.TPM,
 	}
 
-	rootCA := app.InitRootCA(params, soPIN, userPIN)
+	rootCA, err := app.InitRootCA(params, soPIN, userPIN)
+	if err != nil {
+		return nil, err
+	}
 
 	for i := 1; i < len(app.CAConfig.Identity); i++ {
 		thisCA := app.CAConfig.Identity[i]
-		intermediateCA := app.InitIntermediateCA(
+		intermediateCA, err := app.InitIntermediateCA(
 			params, thisCA, rootCA, soPIN, userPIN)
-		if i == app.CAConfig.PlatformCA {
+		if err != nil {
+			return nil, err
+		}
+		if i == app.CAConfig.PlatformCA || i == len(app.CAConfig.Identity)-1 {
 			platformCA = intermediateCA
 		}
 	}
 
 	app.CA = platformCA
 
-	return platformCA
+	return platformCA, nil
 }
 
 // Initializes a Root / Parent Certificate Authority
 func (app *App) InitRootCA(
 	params *ca.CAParams,
-	soPIN, userPIN keystore.Password) ca.CertificateAuthority {
+	soPIN, userPIN keystore.Password) (ca.CertificateAuthority, error) {
 
 	fmt.Println("Initializing Root / Parent Certificate Authority")
 
 	params.Identity = app.CAConfig.Identity[0]
 
-	caRoot := ca.HomeDirectory(app.PlatformDir,
+	caRoot := ca.HomeDirectory(app.FS, app.PlatformDir,
 		params.Identity.Subject.CommonName)
 
-	params.Backend = keystore.NewFileBackend(params.Logger, caRoot)
+	params.Backend = keystore.NewFileBackend(params.Logger, app.FS, caRoot)
 
 	// Create x509 certificate store backend
 	certBackend, err := blob.NewFSBlobStore(
-		app.Logger, caRoot, &certPartition)
+		app.Logger, app.FS, caRoot, &certPartition)
 	if err != nil {
-		app.Logger.Fatal(err)
+		return nil, err
 	}
 
 	// Create the x509 certificate store
 	certStore, err := app.NewCertificateStore(certBackend)
 	if err != nil {
-		params.Logger.Fatal(err)
+		return nil, err
 	}
 	params.CertStore = certStore
 
 	// Set the name of all of the key stores to the CA common name
-	params.Identity.KeyChainConfig.CN = params.Identity.Subject.CommonName
+	params.Identity.KeyringConfig.CN = params.Identity.Subject.CommonName
 
 	// Create a new key store file backend under the CA home directory
-	keyBackend := keystore.NewFileBackend(params.Logger, caRoot)
+	keyBackend := keystore.NewFileBackend(params.Logger, app.FS, caRoot)
 
 	// Create keychain for the Parent / Root CA
-	keychain, err := app.KeyChainFromConfig(
-		params.Identity.KeyChainConfig,
+	keychain, err := app.KeyringFromConfig(
+		params.Identity.KeyringConfig,
+		app.FS,
 		caRoot,
 		soPIN,
 		userPIN,
 		keyBackend)
 	if err != nil {
-		app.Logger.Fatal(err)
+		return nil, err
 	}
-	params.KeyChain = keychain
+	params.Keyring = keychain
 	params.TPM = app.TPM
 	params.Random = app.Random
 	params.Debug = app.DebugFlag
@@ -752,12 +805,12 @@ func (app *App) InitRootCA(
 	// Creates a new Parent / Root Certificate Authority
 	rootCA, err := ca.NewParentCA(params)
 	if err != nil {
-		app.Logger.Fatal(err)
+		return nil, err
 	}
 
 	// Initialize the CA by creating new keys and certificates
 	if err := rootCA.Init(nil); err != nil {
-		app.Logger.Fatal(err)
+		return nil, err
 	}
 
 	// Set the Root CA as the platform CA if it's the only
@@ -766,7 +819,7 @@ func (app *App) InitRootCA(
 		app.CA = rootCA
 	}
 
-	return rootCA
+	return rootCA, nil
 }
 
 // Initializes an Intermediate Certificate Authority
@@ -774,49 +827,50 @@ func (app *App) InitIntermediateCA(
 	caParams *ca.CAParams,
 	identity ca.Identity,
 	parentCA ca.CertificateAuthority,
-	soPIN, userPIN keystore.Password) ca.CertificateAuthority {
+	soPIN, userPIN keystore.Password) (ca.CertificateAuthority, error) {
 
 	fmt.Println("Initializing Intermediate Certificate Authority")
 
 	params := *caParams
 	params.Identity = identity
 
-	caRoot := ca.HomeDirectory(app.PlatformDir,
+	caRoot := ca.HomeDirectory(app.FS, app.PlatformDir,
 		params.Identity.Subject.CommonName)
 
-	params.Backend = keystore.NewFileBackend(params.Logger, caRoot)
+	params.Backend = keystore.NewFileBackend(params.Logger, app.FS, caRoot)
 
 	// Create x509 certificate store backend
 	certBackend, err := blob.NewFSBlobStore(
-		app.Logger, caRoot, &certPartition)
+		app.Logger, app.FS, caRoot, &certPartition)
 	if err != nil {
-		app.Logger.Fatal(err)
+		return nil, err
 	}
 
 	// Create the x509 certificate store
 	certStore, err := app.NewCertificateStore(certBackend)
 	if err != nil {
-		params.Logger.Fatal(err)
+		return nil, err
 	}
 	params.CertStore = certStore
 
 	// Set the name of all of the key stores to the CA common name
-	params.Identity.KeyChainConfig.CN = identity.Subject.CommonName
+	params.Identity.KeyringConfig.CN = identity.Subject.CommonName
 
 	// Create a new key store file backend under the CA home directory
-	backend := keystore.NewFileBackend(params.Logger, caRoot)
+	backend := keystore.NewFileBackend(params.Logger, app.FS, caRoot)
 
 	// Create keychain for the Intermediate CA
-	keychain, err := app.KeyChainFromConfig(
-		params.Identity.KeyChainConfig,
+	keychain, err := app.KeyringFromConfig(
+		params.Identity.KeyringConfig,
+		app.FS,
 		caRoot,
 		soPIN,
 		userPIN,
 		backend)
 	if err != nil {
-		app.Logger.Fatal(err)
+		return nil, err
 	}
-	params.KeyChain = keychain
+	params.Keyring = keychain
 	params.TPM = app.TPM
 	params.Random = app.Random
 	params.Debug = app.DebugFlag
@@ -825,25 +879,25 @@ func (app *App) InitIntermediateCA(
 	// Create the new Intermediate CA
 	intermediateCA, err := ca.NewIntermediateCA(&params)
 	if err != nil {
-		app.Logger.Fatal(err)
+		return nil, err
 	}
 
 	// Initialize the CA by creating new keys and certificates, using
 	// the parentCA to sign for this new intermediate
 	if err := intermediateCA.Init(parentCA); err != nil {
-		app.Logger.Fatal(err)
+		return nil, err
 	}
 
 	// Set the platform CA
 	app.CA = intermediateCA
 
-	return intermediateCA
+	return intermediateCA, nil
 }
 
 // Performs a local TPM 2.0 attestation
 func (app *App) AttestLocal(serverAttrs *keystore.KeyAttributes) (tpm2.Quote, []byte, error) {
 	fmt.Println("Performing local attestation")
-	quote, nonce, err := app.TPM.LocalQuote(serverAttrs)
+	quote, nonce, err := app.TPM.PlatformQuote(serverAttrs)
 	if err != nil {
 		return tpm2.Quote{}, nil, err
 	}
@@ -874,10 +928,41 @@ func (app *App) VerifyLocalQuote(
 }
 
 // Check the CA for a TLS web server certificate. Create a new certificate
-// if it doesn't exist. Any encountered errors are treated as Fatal.
-func (app *App) InitWebServices() {
+// if it doesn't exist.
+func (app *App) InitWebServices() error {
 
-	if app.DebugSecretsFlag {
+	if app.WebService == nil {
+		app.Logger.Warn("web services disabled")
+		return nil
+	}
+
+	if app.TPMConfig.IDevID != nil &&
+		app.TPMConfig.IDevID.CN == app.WebService.Certificate.Subject.CommonName {
+
+		app.Logger.Info("using IDevID certificate for TLS")
+		idevidAttrs, err := app.TPM.IDevIDAttributes()
+		if err != nil {
+			app.Logger.Error(err)
+		}
+		if app.TPMConfig.IDevID.Handle != 0 {
+			idevidAttrs.TPMAttributes.HandleType = libtpm2.TPMHTPersistent
+		}
+		idevidAttrs.KeyType = keystore.KEY_TYPE_IDEVID
+		app.ServerKeyAttributes = idevidAttrs
+	} else {
+		app.Logger.Info("using dedicated web server certificate for TLS")
+		serverKeyAttrs, err := keystore.KeyAttributesFromConfig(app.WebService.Key)
+		if err != nil {
+			return err
+		}
+		serverKeyAttrs.Parent = app.PlatformKS.SRKAttributes()
+		serverKeyAttrs.CN = app.WebService.Certificate.Subject.CommonName
+		serverKeyAttrs.KeyType = keystore.KEY_TYPE_TLS
+		serverKeyAttrs.TPMAttributes = &keystore.TPMAttributes{}
+		app.ServerKeyAttributes = serverKeyAttrs
+	}
+
+	if app.DebugSecretsFlag || app.ServerKeyAttributes.Debug {
 		app.Logger.Debug("Initializing web services")
 		// app.Logger.Debugf("CA Private Key Password: %s", app.CA.CAKeyAttributes(nil).Password)
 		app.Logger.Debugf("TLS Private Key Password: %s", app.ServerKeyAttributes.Password)
@@ -893,9 +978,11 @@ func (app *App) InitWebServices() {
 				KeyAttributes: app.ServerKeyAttributes,
 				Valid:         365, // days
 				Subject: ca.Subject{
-					CommonName:   app.WebService.Certificate.Subject.CommonName,
+					// CommonName:   app.WebService.Certificate.Subject.CommonName,
+					CommonName:   app.ServerKeyAttributes.CN,
 					Organization: app.WebService.Certificate.Subject.Organization,
 					Country:      app.WebService.Certificate.Subject.Country,
+					Province:     app.WebService.Certificate.Subject.Province,
 					Locality:     app.WebService.Certificate.Subject.Locality,
 					Address:      app.WebService.Certificate.Subject.Address,
 					PostalCode:   app.WebService.Certificate.Subject.PostalCode,
@@ -917,7 +1004,7 @@ func (app *App) InitWebServices() {
 				// Parse list of usable local IPs
 				ips, err := util.LocalAddresses()
 				if err != nil {
-					app.Logger.Fatal(err)
+					return err
 				}
 				certReq.SANS.DNS = append(certReq.SANS.DNS, "localhost")
 				certReq.SANS.DNS = append(certReq.SANS.DNS, "localhost.localdomain")
@@ -930,47 +1017,50 @@ func (app *App) InitWebServices() {
 			// Issue the web server certificate
 			der, err := app.CA.IssueCertificate(certReq)
 			if err != nil {
-				app.Logger.Fatal(err)
+				return err
 			}
 
 			if app.DebugFlag {
 				pem, err = certstore.EncodePEM(der)
 				if err != nil {
-					app.Logger.Fatal(err)
+					return err
 				}
 				app.Logger.Debug("Web Server HTTPS certificate (PEM)")
 				app.Logger.Debug(string(pem))
 			}
 
 		} else {
-			app.Logger.Fatal(err)
+			return err
 		}
 	}
+	return nil
 }
 
 // Returns a new platform keychain given a "keystores" config,
 // the key directory, security officer secret and user pin. An
 // optional key backend may be provided to override the default
 // storage location.
-func (app *App) KeyChainFromConfig(
-	config *platform.KeyChainConfig,
+func (app *App) KeyringFromConfig(
+	config *platform.KeyringConfig,
+	fs afero.Fs,
 	keyDir string,
 	soPIN keystore.Password,
 	userPIN keystore.Password,
-	backend keystore.KeyBackend) (*platform.KeyChain, error) {
+	backend keystore.KeyBackend) (*platform.Keyring, error) {
 
 	if app.PlatformKS == nil {
 		app.InitPlatformKeyStore(soPIN, userPIN)
 	}
 
 	if backend == nil {
-		backend = keystore.NewFileBackend(app.Logger, keyDir)
+		backend = keystore.NewFileBackend(app.Logger, app.FS, keyDir)
 	}
-	factory, err := platform.NewKeyChain(
+	factory, err := platform.NewKeyring(
 		app.Logger,
 		app.DebugSecretsFlag,
+		app.FS,
 		keyDir,
-		app.TPM,
+		app.Random,
 		config,
 		backend,
 		app.BlobStore,
@@ -1003,21 +1093,22 @@ func (app *App) NewCertificateStore(
 }
 
 // Initialize the platform log file
-func (app *App) InitLogFile(uid, gid int) *os.File {
+func (app *App) InitLogFile(uid, gid int) afero.File {
+
 	logFile := fmt.Sprintf("%s/%s.log", app.LogDir, Name)
-	if err := os.MkdirAll(app.LogDir, os.ModePerm); err != nil {
+	if err := app.FS.MkdirAll(app.LogDir, os.ModePerm); err != nil {
 		log.Fatal(err)
 	}
-	var f *os.File
+	var f afero.File
 	var err error
-	f, err = os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, os.ModePerm)
+	f, err = app.FS.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, os.ModePerm)
 	if err != nil {
 		log.Fatal(err)
 	}
-	_, err = os.Stat(logFile)
+	_, err = app.FS.Stat(logFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			_, err2 := os.Create(logFile)
+			_, err2 := app.FS.Create(logFile)
 			if err2 != nil {
 				log.Fatal(err2)
 			}
@@ -1025,15 +1116,15 @@ func (app *App) InitLogFile(uid, gid int) *os.File {
 		log.Fatal(err)
 	}
 	if uid == 0 {
-		if err = os.Chown(logFile, uid, gid); err != nil {
+		if err = app.FS.Chown(logFile, uid, gid); err != nil {
 			log.Fatal(err)
 		}
 		if app.DebugFlag {
-			if err = os.Chmod(logFile, os.ModePerm); err != nil {
+			if err = app.FS.Chmod(logFile, os.ModePerm); err != nil {
 				log.Fatal(err)
 			}
 		} else {
-			if err = os.Chmod(logFile, 0644); err != nil {
+			if err = app.FS.Chmod(logFile, 0644); err != nil {
 				log.Fatal(err)
 			}
 		}
@@ -1074,4 +1165,53 @@ func (app *App) DropPrivileges() {
 		}
 		app.InitLogFile(int(uid), int(gid))
 	}
+}
+
+func DefaultTestConfig() *App {
+	return TestConfigWithFS(afero.NewMemMapFs())
+}
+
+func TestConfigWithFS(fs afero.Fs) *App {
+
+	Name = "trusted-platform"
+
+	app := NewApp()
+	app.DebugFlag = true
+	app.DebugSecretsFlag = true
+
+	configYaml, err := yaml.Marshal(DefaultConfig)
+	if err != nil {
+		panic(err)
+	}
+
+	app.FS = fs
+
+	app.FS.MkdirAll("/var/log", os.ModePerm)
+	afero.WriteFile(
+		app.FS,
+		fmt.Sprintf("%s/trusted-platform.log", DefaultConfig.LogDir),
+		[]byte{},
+		os.ModePerm)
+
+	// Write app config to virtual fs
+	configFile := fmt.Sprintf("%s//config.yaml", DefaultConfig.ConfigDir)
+	app.FS.MkdirAll(DefaultConfig.ConfigDir, os.ModePerm)
+	afero.WriteFile(app.FS, configFile, configYaml, os.ModePerm)
+
+	// Configure viper
+	viper.SetFs(app.FS)
+	viper.AddConfigPath(DefaultConfig.ConfigDir)
+	viper.SetConfigFile(configFile)
+
+	// Debug info
+	fmt.Println(viper.GetViper().ConfigFileUsed())
+	if err = viper.ReadInConfig(); err != nil {
+		panic(err)
+	}
+
+	if err := viper.Unmarshal(app); err != nil {
+		panic(err)
+	}
+
+	return app
 }

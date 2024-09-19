@@ -2,22 +2,23 @@ package keystore
 
 import (
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
-	"github.com/op/go-logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 type FSExtension string
 type Partition string
-type Curve string
-type StoreType string
 
 type KeyHalf uint8
 
@@ -48,11 +49,6 @@ const (
 	STORE_PKCS11  StoreType = "pkcs11"
 	STORE_TPM2    StoreType = "tpm2"
 	STORE_UNKNOWN StoreType = "unknown"
-
-	CURVE_P224 Curve = "P224"
-	CURVE_P256 Curve = "P256"
-	CURVE_P384 Curve = "P384"
-	CURVE_P521 Curve = "P521"
 
 	KEYHALF_PRIVATE KeyHalf = 1 + iota
 	KEYHALF_PUBLIC
@@ -87,6 +83,7 @@ const (
 var (
 	ErrAlreadyInitialized        = errors.New("store/keystore: already initialized")
 	ErrNotInitalized             = errors.New("store/keystore: not initialized")
+	ErrInvalidKeyedHashSecret    = errors.New("store/keystore: invalid keyed hash secret")
 	ErrInvalidKeyType            = errors.New("store/keystore: invalid key type")
 	ErrInvalidKeyAlgorithm       = errors.New("store/keystore: invalid key algorithm")
 	ErrInvalidParentAttributes   = errors.New("store/keystore: invalid parent key attributes")
@@ -157,6 +154,12 @@ type TPMAttributes struct {
 	SessionCloser        func() error
 	Signature            []byte
 	Template             tpm2.TPMTPublic
+}
+
+type StoreType string
+
+func (st StoreType) String() string {
+	return string(st)
 }
 
 type Verifier interface {
@@ -268,6 +271,57 @@ func (algo WrapAlgorithm) String() string {
 	panic("store/keystore: invalid key wrap algorithm")
 }
 
+func (attrs KeyAttributes) String() string {
+
+	var sb strings.Builder
+
+	var password, secret string
+
+	if attrs.Debug {
+		if attrs.Password != nil {
+			var err error
+			if attrs.Password != nil {
+				password, err = attrs.Password.String()
+				if err != nil {
+					fmt.Println(err)
+				}
+			}
+			if attrs.Secret != nil {
+				secret, err = attrs.Secret.String()
+				if err != nil {
+					fmt.Println(err)
+				}
+			}
+		}
+	}
+
+	sb.WriteString("Key Attributes\n")
+	sb.WriteString(fmt.Sprintf("  Common Name: %s\n", attrs.CN))
+	sb.WriteString(fmt.Sprintf("  Debug: %t\n", attrs.Debug))
+	sb.WriteString(fmt.Sprintf("  Hash: %s\n", attrs.Hash.String()))
+	sb.WriteString(fmt.Sprintf("  Key Algorithm: %s\n", attrs.KeyAlgorithm))
+	sb.WriteString(fmt.Sprintf("  Platform Policy: %t\n", attrs.PlatformPolicy))
+	sb.WriteString(fmt.Sprintf("  Signature Algorithm: %s\n", attrs.SignatureAlgorithm.String()))
+	sb.WriteString(fmt.Sprintf("  Store: %s\n", attrs.StoreType))
+	sb.WriteString(fmt.Sprintf("  Type: %s\n", attrs.KeyType))
+
+	if attrs.ECCAttributes != nil {
+		sb.WriteString("ECC Attributes\n")
+		sb.WriteString(fmt.Sprintf("  Curve: %+v\n", attrs.ECCAttributes.Curve.Params().Name))
+	} else if attrs.RSAAttributes != nil {
+		sb.WriteString("RSA Attributes\n")
+		sb.WriteString(fmt.Sprintf("  Size: %d\n", attrs.RSAAttributes.KeySize))
+	}
+
+	if attrs.Debug {
+		sb.WriteString("Secrets\n")
+		sb.WriteString(fmt.Sprintf("  Password: %s\n", password))
+		sb.WriteString(fmt.Sprintf("  Secret: %s\n", secret))
+	}
+
+	return sb.String()
+}
+
 func DebugKeyAttributes(logger *logging.Logger, attrs *KeyAttributes) {
 
 	var password, secret string
@@ -275,18 +329,6 @@ func DebugKeyAttributes(logger *logging.Logger, attrs *KeyAttributes) {
 	if attrs.Debug {
 		if attrs.Password != nil {
 			var err error
-			// if attrs.PlatformPolicy {
-			// 	// TODO: Calling PlatformSecret.String() here causes
-			// 	// an infinite loop because KeyedHashSecret lookup
-			// 	// currently calls this debug method -- probably
-			// 	// need to remove the calls to this method
-			// 	password = "policy"
-			// } else {
-			// 	password, err = attrs.Password.String()
-			// 	if err != nil {
-			// 		logger.Error(err)
-			// 	}
-			// }
 			if attrs.Password != nil {
 				password, err = attrs.Password.String()
 				if err != nil {
@@ -302,114 +344,50 @@ func DebugKeyAttributes(logger *logging.Logger, attrs *KeyAttributes) {
 		}
 	}
 
-	// if attrs.Parent != nil {
-	// 	logger.Debug("Parent Key Attributes")
-	// 	DebugKeyAttributes(logger, attrs.Parent)
-	// } else {
-	// 	logger.Debug("Key Attributes")
-	// }
-
-	logger.Debug("Key Attributes")
-
-	logger.Debugf("  Common Name: %s\n", attrs.CN)
-	logger.Debugf("  Debug: %t\n", attrs.Debug)
-	logger.Debugf("  Hash: %s\n", attrs.Hash.String())
-	logger.Debugf("  Key Algorithm: %s\n", attrs.KeyAlgorithm)
-	logger.Debugf("  Platform Policy: %t\n", attrs.PlatformPolicy)
-	logger.Debugf("  Signature Algorithm: %s\n", attrs.SignatureAlgorithm.String())
-	logger.Debugf("  Store: %s\n", attrs.StoreType)
-	logger.Debugf("  Type: %s\n", attrs.KeyType)
-
-	if attrs.WrapAttributes != nil {
-		logger.Debug("  Wrapping Key")
-		logger.Debugf("   Common Name: %s\n", attrs.WrapAttributes.CN)
-		logger.Debugf("   Hash: %s\n", attrs.WrapAttributes.Hash.String())
-		logger.Debugf("   Key Algorithm: %s\n", attrs.WrapAttributes.KeyAlgorithm)
-		logger.Debugf("   Signature Algorithm: %s\n", attrs.WrapAttributes.SignatureAlgorithm.String())
-		logger.Debugf("   Type: %s\n", attrs.WrapAttributes.KeyType)
+	params := []any{
+		slog.String("commonName", attrs.CN),
+		slog.Bool("debug", attrs.Debug),
+		slog.String("hash", attrs.Hash.String()),
+		slog.String("algorithm", attrs.KeyAlgorithm.String()),
+		slog.Bool("policy", attrs.PlatformPolicy),
+		slog.String("signatureAlgorithm", attrs.SignatureAlgorithm.String()),
+		slog.String("store", attrs.StoreType.String()),
+		slog.String("type", attrs.KeyType.String()),
+		slog.String("commonName", attrs.CN),
 	}
 
 	if attrs.ECCAttributes != nil {
-		logger.Debug("ECC Attributes")
-		logger.Debugf("  Curve: %+v", attrs.ECCAttributes.Curve.Params().Name)
+		params = append(params, slog.String("curve", attrs.ECCAttributes.Curve.Params().Name))
 	} else if attrs.RSAAttributes != nil {
-		logger.Debug("RSA Attributes")
-		logger.Debugf("  Size: %d", attrs.RSAAttributes.KeySize)
+		params = append(params, slog.Int("key-size", attrs.RSAAttributes.KeySize))
 	}
 
 	if attrs.Debug {
-		logger.Debug("Secrets")
-		logger.Debugf("  Password: %s", password)
-		logger.Debugf("  Secret: %s", secret)
+		params = append(params,
+			slog.String("password", password),
+			slog.String("secret", secret))
 	}
+
+	logger.Debug("Key Attributes", slog.Group("attributes", params...))
+
 }
 
-func PrintKeyAttributes(attrs *KeyAttributes) {
-
-	if attrs == nil {
-		return
+func PublicKeyToString(pub crypto.PublicKey) string {
+	var sb strings.Builder
+	sb.WriteString("Public Key:\n")
+	switch pub.(type) {
+	case *rsa.PublicKey:
+		sb.WriteString(fmt.Sprintf("    Exponent: %d\n", pub.(*rsa.PublicKey).E))
+		sb.WriteString(fmt.Sprintf("    Modulus: %d\n", pub.(*rsa.PublicKey).N))
+	case *ecdsa.PublicKey:
+		params := pub.(*ecdsa.PublicKey).Curve.Params()
+		sb.WriteString(fmt.Sprintf("    Curve: %s\n", params.Name))
+		sb.WriteString(fmt.Sprintf("    X: %d\n", pub.(*ecdsa.PublicKey).X))
+		sb.WriteString(fmt.Sprintf("    Y: %d\n", pub.(*ecdsa.PublicKey).Y))
+	case ed25519.PublicKey:
+		sb.WriteString(fmt.Sprintf("    %+v\n", pub.(ed25519.PublicKey)))
 	}
-
-	var password, secret string
-
-	// if attrs.Parent != nil {
-	// 	fmt.Println("Parent Key Attributes")
-	// 	PrintKeyAttributes(attrs.Parent)
-	// } else {
-	// 	fmt.Println("Key Attributes")
-	// }
-
-	fmt.Println("Key Attributes")
-
-	if attrs.Debug {
-		if attrs.Password != nil {
-			var err error
-			if attrs.Password != nil {
-				password, err = attrs.Password.String()
-				if err != nil {
-					fmt.Println(err)
-				}
-			}
-			if attrs.Secret != nil {
-				secret, err = attrs.Secret.String()
-				if err != nil {
-					fmt.Println(err)
-				}
-			}
-		}
-	}
-
-	fmt.Printf("  Common Name: %s\n", attrs.CN)
-	fmt.Printf("  Debug: %t\n", attrs.Debug)
-	fmt.Printf("  Hash: %s\n", attrs.Hash.String())
-	fmt.Printf("  Key Algorithm: %s\n", attrs.KeyAlgorithm)
-	fmt.Printf("  Platform Policy: %t\n", attrs.PlatformPolicy)
-	fmt.Printf("  Signature Algorithm: %s\n", attrs.SignatureAlgorithm.String())
-	fmt.Printf("  Store: %s\n", attrs.StoreType)
-	fmt.Printf("  Type: %s\n", attrs.KeyType)
-
-	if attrs.WrapAttributes != nil {
-		fmt.Println("  Wrapping Key")
-		fmt.Printf("   Common Name: %s\n", attrs.WrapAttributes.CN)
-		fmt.Printf("   Hash: %s\n", attrs.WrapAttributes.Hash.String())
-		fmt.Printf("   Key Algorithm: %s\n", attrs.WrapAttributes.KeyAlgorithm)
-		fmt.Printf("   Signature Algorithm: %s\n", attrs.WrapAttributes.SignatureAlgorithm.String())
-		fmt.Printf("   Type: %s\n", attrs.WrapAttributes.KeyType)
-	}
-
-	if attrs.ECCAttributes != nil {
-		fmt.Println("ECC Attributes")
-		fmt.Printf("  Curve: %+v\n", attrs.ECCAttributes.Curve.Params().Name)
-	} else if attrs.RSAAttributes != nil {
-		fmt.Println("RSA Attributes")
-		fmt.Printf("  Size: %d\n", attrs.RSAAttributes.KeySize)
-	}
-
-	if attrs.Debug {
-		fmt.Println("Secrets")
-		fmt.Printf("  Password: %s\n", password)
-		fmt.Printf("  Secret: %s\n", secret)
-	}
+	return sb.String()
 }
 
 // Creates a new digest using the specified hash function
@@ -531,7 +509,11 @@ func KeyFileExtension(
 
 	keyExt := FSEXTKeyAlgorithm(algo)
 	if keyType != nil && *keyType == KEY_TYPE_HMAC {
-		return FSExtension(fmt.Sprintf("%s.hmac%s", keyExt, extension))
+		if algo == x509.PublicKeyAlgorithm(tpm2.TPMAlgKeyedHash) {
+			return FSExtension(fmt.Sprintf(".hmac%s", extension))
+		} else {
+			return FSExtension(fmt.Sprintf("%s.hmac%s", keyExt, extension))
+		}
 	}
 	return FSExtension(fmt.Sprintf("%s%s", keyExt, extension))
 }
@@ -555,9 +537,27 @@ func HashFileExtension(hash crypto.Hash) string {
 
 // Returns true if the signature algorithm is one of RSA PSS
 func IsRSAPSS(sigAlgo x509.SignatureAlgorithm) bool {
+	return sigAlgo == x509.SHA256WithRSAPSS || sigAlgo == x509.SHA384WithRSAPSS ||
+		sigAlgo == x509.SHA512WithRSAPSS
+}
+
+func IsECDSA(sigAlgo x509.SignatureAlgorithm) bool {
+	return sigAlgo == x509.ECDSAWithSHA256 || sigAlgo == x509.ECDSAWithSHA384 ||
+		sigAlgo == x509.ECDSAWithSHA512
+}
+
+func KeyAlgorithmFromSignatureAlgorithm(
+	sigAlgo x509.SignatureAlgorithm) (x509.PublicKeyAlgorithm, error) {
+
 	switch sigAlgo {
-	case x509.SHA256WithRSAPSS, x509.SHA384WithRSAPSS, x509.SHA512WithRSAPSS:
-		return true
+	case x509.ECDSAWithSHA256, x509.ECDSAWithSHA384, x509.ECDSAWithSHA512:
+		return x509.ECDSA, nil
+	case x509.SHA256WithRSA, x509.SHA256WithRSAPSS,
+		x509.SHA384WithRSA, x509.SHA384WithRSAPSS,
+		x509.SHA512WithRSA, x509.SHA512WithRSAPSS:
+		return x509.RSA, nil
+	case x509.PureEd25519:
+		return x509.Ed25519, nil
 	}
-	return false
+	return 0, ErrInvalidSignatureAlgorithm
 }

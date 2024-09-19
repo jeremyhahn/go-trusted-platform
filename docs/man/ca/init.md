@@ -23,13 +23,11 @@ information many users may expect.
 
 # NOTES
 
-This command requires root or sudo privileges.
-
 # EXAMPLES
 
-## Import EK certificate from NV Index, local disk, or TPM manufacturer
+## Initialize the Certificate Authority
 ```bash
-sudo tpadm ca init
+tpadm ca init
 ```
 
 # AUTHOR

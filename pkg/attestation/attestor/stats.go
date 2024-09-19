@@ -3,7 +3,7 @@ package attestor
 import (
 	"context"
 
-	"github.com/op/go-logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/stats"
 )

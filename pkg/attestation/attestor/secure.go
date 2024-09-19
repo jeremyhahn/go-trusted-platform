@@ -9,9 +9,9 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	pb "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/proto"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
-	"github.com/op/go-logging"
 	"google.golang.org/grpc/peer"
 )
 
@@ -177,8 +177,7 @@ func (s *SecureAttestor) Quote(
 func (s *SecureAttestor) logConnection(ctx context.Context, method string) {
 	p, ok := peer.FromContext(ctx)
 	if !ok {
-		s.logger.Warning("secure-server: unable to parse peer from context")
-		s.logger.Debugf("%+v")
+		s.logger.Errorf("secure-server: unable to parse peer from context")
 		return
 	}
 	s.logger.Debugf("secure-server/%s: Received connection from: %v",

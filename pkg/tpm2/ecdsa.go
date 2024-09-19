@@ -18,6 +18,10 @@ func (tpm *TPM2) CreateECDSA(
 	}
 
 	var keyUserAuth []byte
+	var handle tpm2.TPMHandle
+	var name tpm2.TPM2BName
+	var private tpm2.TPM2BPrivate
+	var public tpm2.TPM2BPublic
 
 	// Get the persisted SRK
 	srkHandle := tpm2.TPMHandle(keyAttrs.Parent.TPMAttributes.Handle)
@@ -44,7 +48,7 @@ func (tpm *TPM2) CreateECDSA(
 	eccTemplate := ECCP256Template
 	if keyAttrs.PlatformPolicy {
 		// Attach platform PCR policy digest if configured
-		eccTemplate.AuthPolicy = tpm.policyDigest
+		eccTemplate.AuthPolicy = tpm.PlatformPolicyDigest()
 	}
 
 	// Create ECC key
@@ -64,40 +68,85 @@ func (tpm *TPM2) CreateECDSA(
 		},
 	}.Execute(tpm.transport)
 	if err != nil {
-		tpm.logger.Error(err)
-		return nil, err
+		if err == ErrCommandNotSupported {
+			// Perform create and load using logacy command sequence
+			createRsp, err := tpm2.Create{
+				ParentHandle: tpm2.AuthHandle{
+					Handle: srkHandle,
+					Name:   srkName,
+					Auth:   session,
+				},
+				InPublic: tpm2.New2B(eccTemplate),
+				InSensitive: tpm2.TPM2BSensitiveCreate{
+					Sensitive: &tpm2.TPMSSensitiveCreate{
+						UserAuth: tpm2.TPM2BAuth{
+							Buffer: keyUserAuth,
+						},
+					},
+				},
+			}.Execute(tpm.transport)
+			if err != nil {
+				return nil, err
+			}
+
+			session2, closer, err := tpm.CreateKeySession(keyAttrs)
+			if err != nil {
+				return nil, err
+			}
+			defer closer()
+
+			loadResponse, err := tpm2.Load{
+				ParentHandle: tpm2.AuthHandle{
+					Handle: keyAttrs.Parent.TPMAttributes.Handle,
+					Name:   keyAttrs.Parent.TPMAttributes.Name,
+					Auth:   session2,
+				},
+				InPrivate: tpm2.TPM2BPrivate{
+					Buffer: createRsp.OutPrivate.Buffer,
+				},
+				InPublic: tpm2.BytesAs2B[tpm2.TPMTPublic](createRsp.OutPublic.Bytes()),
+			}.Execute(tpm.transport)
+			if err != nil {
+				tpm.logger.Errorf("%s: %s", err, keyAttrs.CN)
+				return nil, err
+			}
+			handle = loadResponse.ObjectHandle
+			name = loadResponse.Name
+			private = createRsp.OutPrivate
+			public = createRsp.OutPublic
+			defer tpm.Flush(loadResponse.ObjectHandle)
+		} else {
+			tpm.logger.Error(err)
+			return nil, err
+		}
+	} else {
+		handle = response.ObjectHandle
+		name = response.Name
+		private = response.OutPrivate
+		public = response.OutPublic
+		defer tpm.Flush(response.ObjectHandle)
 	}
-	defer tpm.Flush(response.ObjectHandle)
 
-	tpm.logger.Debugf(
-		"tpm: Key loaded to transient handle 0x%x",
-		response.ObjectHandle)
-
-	tpm.logger.Debugf(
-		"tpm: Key Name: %s",
-		Encode(response.Name.Buffer))
+	tpm.logger.Debugf("tpm: ECC Key loaded to transient handle 0x%x", handle)
+	tpm.logger.Debugf("tpm: ECC Key Name: %s", Encode(name.Buffer))
+	tpm.logger.Debugf("tpm: ECC Parent (SRK) Name: %s", Encode(srkName.Buffer))
 
 	if keyAttrs.TPMAttributes == nil {
 		keyAttrs.TPMAttributes = &keystore.TPMAttributes{
-			Name:   response.Name,
-			Handle: response.ObjectHandle,
+			Name:   name,
+			Handle: handle,
 		}
 	} else {
-		keyAttrs.TPMAttributes.Name = response.Name
-		keyAttrs.TPMAttributes.Handle = response.ObjectHandle
+		keyAttrs.TPMAttributes.Name = name
+		keyAttrs.TPMAttributes.Handle = handle
 	}
 
 	// Save the public and private areas to blob storage
-	if err := tpm.SaveKeyPair(
-		keyAttrs,
-		response.OutPrivate,
-		response.OutPublic,
-		backend); err != nil {
-
+	if err := tpm.SaveKeyPair(keyAttrs, private, public, backend); err != nil {
 		return nil, err
 	}
 
-	outPub, err := response.OutPublic.Contents()
+	outPub, err := public.Contents()
 	if err != nil {
 		tpm.logger.Error(err)
 		return nil, err

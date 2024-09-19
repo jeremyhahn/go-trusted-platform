@@ -11,15 +11,10 @@ var (
 	TPM        tpm2.TrustedPlatformModule
 	CAParams   *ca.CAParams
 	InitParams *app.AppInitParams
-	CN,
-	KeyStore,
-	KeyType,
-	Algorithm,
-	KeyName,
-	EKCert,
 	SansDNS,
 	SansIPs,
 	SansEmails string
+	err error
 )
 
 func init() {

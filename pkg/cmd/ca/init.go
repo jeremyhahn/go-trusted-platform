@@ -1,7 +1,8 @@
 package ca
 
 import (
-	"github.com/fatih/color"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
 	"github.com/spf13/cobra"
 )
 
@@ -12,16 +13,24 @@ var InitCmd = &cobra.Command{
 Intermediates as specified in the platform configuration file.`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App.Init(InitParams)
+		prompt.PrintBanner(app.Version)
+
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 
 		soPIN, userPIN, err := App.ParsePINs(InitParams.SOPin, InitParams.Pin)
 		if err != nil {
-			App.Logger.Fatal(err)
+			App.Logger.FatalError(err)
 		}
 
-		App.InitCA(InitParams.PlatformCA, soPIN, userPIN)
+		if _, err := App.InitCA(InitParams.PlatformCA, soPIN, userPIN); err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 
-		color.New(color.FgGreen).Printf(
-			"Certificate Authority successfully initialized")
+		cmd.Println("Certificate Authority successfully initialized")
 	},
 }

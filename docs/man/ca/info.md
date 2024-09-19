@@ -23,13 +23,11 @@ information many users may expect.
 
 # NOTES
 
-This command requires root or sudo privileges.
-
 # EXAMPLES
 
 ## Display Certificate Authority Information
 ```bash
-sudo tpadm ca info
+tpadm ca info
 ```
 
 # AUTHOR

@@ -1,9 +1,18 @@
 package rest
 
 import (
+	"errors"
+
 	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	"github.com/op/go-logging"
+)
+
+var (
+	ErrAuthorizationHeaderRequired = errors.New("authorization header required")
+	ErrInvalidToken                = errors.New("invalid token")
+	ErrInvalidUserClaim            = errors.New("invalid user id claim")
+	ErrInvalidEmailClaim           = errors.New("invalid email claim")
 )
 
 type RestService interface {

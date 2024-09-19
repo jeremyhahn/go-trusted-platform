@@ -10,7 +10,7 @@ GOBIN                   := $(shell dirname `which go`)
 PYTHONBIN               ?= /usr/bin/python3.8
 PIPBIN                  ?= pip
 
-ARM_CC                  ?= arm-linux-gnueabihf-gcc-8
+ARM_CC                  ?= arm-linux-gnueabihf-gcc
 ARM_CC_64				?= aarch64-linux-gnu-gcc
 
 REPO                    ?= github.com
@@ -55,15 +55,14 @@ PLATFORM_DIR       ?= trusted-data
 CONFIG_DIR         ?= $(PLATFORM_DIR)/etc
 LOG_DIR            ?= $(PLATFORM_DIR)/log
 CA_DIR             ?= $(PLATFORM_DIR)/ca
+ATTESTATION_CONFIG ?= attestation.yaml
 
 VERIFIER_CA        ?= $(VERIFIER_DIR)/$(PLATFORM_DIR)/ca
-VERIFIER_CONFIG    ?= verifier.yaml
 VERIFIER_CONF      ?= $(VERIFIER_DIR)/$(CONFIG_DIR)/config.yaml
 VERIFIER_DOMAIN    ?= verifier.example.com
 VERIFIER_HOSTNAME  ?= www
 
 ATTESTOR_CA        ?= $(ATTESTOR_DIR)/$(PLATFORM_DIR)/ca
-ATTESTOR_CONFIG    ?= attestor.yaml
 ATTESTOR_CONF      ?= $(ATTESTOR_DIR)/$(CONFIG_DIR)/config.yaml
 ATTESTOR_HOSTNAME  ?= www
 ATTESTOR_DOMAIN    ?= attestor.example.com
@@ -233,18 +232,26 @@ build-arm64-debug-static:
 	$(GOBIN)/go build -gcflags "all=-N -l" -o ../$(APPBIN) --ldflags '-extldflags -static -v ${LDFLAGS}'
 
 
-build-local: clean build-debug
+build-dev: clean build-debug
 	sudo chown $(USER):$(USER) /dev/tpmrm0
 	-sudo chown $(USER):$(USER) /sys/kernel/security/tpm0/binary_bios_measurements
 	mkdir -p $(PLATFORM_DIR)/etc/
 	cp configs/platform/config.dev.yaml config.yaml
 	cp configs/softhsm.conf $(PLATFORM_DIR)/etc/softhsm.conf
+	cp configs/platform/config.debug.yaml pkg/config.yaml
+	cp -R public_html pkg/
 
 
 config:
 	mkdir -p pkg/$(PLATFORM_DIR)/etc/
 	cp configs/platform/$(CONFIG_YAML) pkg/config.yaml
 	cp configs/softhsm.conf pkg/trusted-data/etc/softhsm.conf
+
+
+clear-auth:
+	sudo tpm2_changeauth -c e -p test
+	sudo tpm2_changeauth -c o -p test
+	sudo tpm2_changeauth -c l -p test
 
 
 clean:
@@ -273,7 +280,31 @@ clean:
 		config.yaml
 
 
-test: test-tpm test-crypto test-store
+test: test-tpm test-crypto test-store test-webservice test-cli
+
+test-cli: test-tpm-cli test-ca-cli test-platform-cli
+
+test-tpm-cli:
+	cd pkg/cmd/tpm && go test -v -run ^Test_EK$
+	cd pkg/cmd/tpm && go test -v -run ^Test_EK_Certificate$
+	cd pkg/cmd/tpm && go test -v -run ^Test_SRK$
+	cd pkg/cmd/tpm && go test -v -run ^Test_SealUnseal$
+	cd pkg/cmd/tpm && go test -v -run ^Test_Provision$
+	cd pkg/cmd/tpm && go test -v -run ^Test_Info$
+
+test-ca-cli:
+	cd pkg/cmd/ca && go test -v -run ^Test_Certificate$
+	cd pkg/cmd/ca && go test -v -run ^Test_Info$
+	cd pkg/cmd/ca && go test -v -run ^Test_Init$
+	cd pkg/cmd/ca && go test -v -run ^Test_Install$
+	cd pkg/cmd/ca && go test -v -run ^Test_Issue$
+	cd pkg/cmd/ca && go test -v -run ^Test_Revoke$
+
+test-platform-cli:
+	cd pkg/cmd/platform && go test -v -run ^Test_Install$
+	cd pkg/cmd/platform && go test -v -run ^Test_Keyring$
+	cd pkg/cmd/platform && go test -v -run ^Test_Policy$
+	cd pkg/cmd/platform && go test -v -run ^Test_Provision$
 
 test-ca:
 	cd pkg/ca && \
@@ -293,10 +324,9 @@ test-crypto:
 	cd pkg/crypto/aesgcm && go test -v
 	cd pkg/crypto/argon2 && go test -v
 
-test-store:
+test-store: test-store-pkcs11 test-store-tpm2 test-store-datastore
 	cd pkg/store/keystore && go test -v
 	cd pkg/store/keystore/pkcs8 && go test -v
-	$(MAKE) test-store-pkcs11 test-store-tpm2
 
 test-store-pkcs11:
 	cd pkg/store/keystore/pkcs11 && \
@@ -319,6 +349,21 @@ test-store-tpm2:
 		go test -v -run ^TestKeyStoreGenerateRSAWithPolicy$ && \
 		go test -v -run ^TestRSA_PSS_WithPasswordWithoutPolicy$
 
+test-store-datastore:
+	cd pkg/store/datastore && \
+		go test -v
+	cd pkg/store/datastore/kvstore && \
+		go test -v
+
+test-webservice: test-webservice-jwt
+
+test-webservice-jwt:
+	cd pkg/webservice/v1/jwt && \
+		go test -v -run ^TestSigningMethodRS$ && \
+		go test -v -run ^TestSigningMethodPS$ && \
+		go test -v -run ^TestSigningMethodES$ && \
+		go test -v -run ^TestSigningMethodES_Ed25519$
+
 proto:
 	cd pkg/$(ATTESTATION_DIR) && $(PROTOC) \
 		--go_out=. \
@@ -334,7 +379,7 @@ uninstall: uninstall-ansible
 # Verifier
 verifier-init:
 	mkdir -p $(VERIFIER_DIR)/$(CONFIG_DIR)
-	cp configs/platform/$(VERIFIER_CONFIG) $(VERIFIER_CONF)
+	cp configs/platform/$(ATTESTATION_CONFIG) $(VERIFIER_CONF)
 	sed -i 's/$(DOMAIN)/$(VERIFIER_DOMAIN)/' $(VERIFIER_CONF)
 	sed -i 's|trusted-data/etc/softhsm.conf|$(shell pwd)/$(VERIFIER_DIR)/$(CONFIG_DIR)/softhsm.conf|' $(VERIFIER_CONF)
 	sed -i 's/- __VERIFIER_CA__/-  $(VERIFIER_HOSTNAME).$(VERIFIER_DOMAIN)/' $(VERIFIER_CONF)
@@ -377,10 +422,10 @@ verifier-cert-chain:
 # Attestor
 attestor-init:
 	mkdir -p $(ATTESTOR_DIR)/$(CONFIG_DIR)
-	cp configs/platform/$(ATTESTOR_CONFIG) $(ATTESTOR_CONF)
+	cp configs/platform/$(ATTESTATION_CONFIG) $(ATTESTOR_CONF)
 	sed -i 's/$(DOMAIN)/$(ATTESTOR_DOMAIN)/' $(ATTESTOR_CONF)
 	sed -i 's|trusted-data/etc/softhsm.conf|$(shell pwd)/$(ATTESTOR_DIR)/$(CONFIG_DIR)/softhsm.conf|' $(ATTESTOR_CONF)
-	sed -i 's/- __VERIFIER_CA__/- $(VERIFIER_HOSTNAME).$(VERIFIER_DOMAIN)/' $(ATTESTOR_CONF)
+	sed -i 's/- __VERIFIER_CA__/- $(ROOT_CA).$(VERIFIER_DOMAIN)/' $(ATTESTOR_CONF)
 	cp configs/softhsm.conf $(ATTESTOR_DIR)/$(CONFIG_DIR)
 	sed -i 's|trusted-data/softhsm2|$(shell pwd)/$(ATTESTOR_DIR)/$(PLATFORM_DIR)|' $(ATTESTOR_DIR)/$(CONFIG_DIR)/softhsm.conf
 
@@ -412,9 +457,9 @@ attestor: attestor-clean attestor-init build
 
 attestor-verify-cert-chain:
 	openssl verify \
-		-CAfile $(ATTESTOR_CA)/$(ROOT_CA).$(DOMAIN)/$(ROOT_CA).$(DOMAIN).crt \
-		-untrusted $(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(DOMAIN)/$(INTERMEDIATE_CA).$(DOMAIN).crt \
-		$(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(DOMAIN)/issued/$(ATTESTOR_HOSTNAME).$(DOMAIN)/$(ATTESTOR_HOSTNAME).$(DOMAIN).crt
+		-CAfile $(ATTESTOR_CA)/$(ROOT_CA).$(ATTESTOR_DOMAIN)/x509/$(ROOT_CA).$(ATTESTOR_DOMAIN).tpm2.rsa.cer \
+		-untrusted $(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(ATTESTOR_DOMAIN)/x509/$(INTERMEDIATE_CA).$(ATTESTOR_DOMAIN).tpm2.rsa.cer \
+		$(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(ATTESTOR_DOMAIN)/x509/$(ATTESTOR_HOSTNAME).$(ATTESTOR_DOMAIN).tpm2.rsa.cer
 
 attestor-verify-tpm-certs:
 	openssl pkeyutl -verify \

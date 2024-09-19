@@ -3,9 +3,9 @@ package tpm2
 import (
 	"fmt"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
-	"github.com/op/go-logging"
 )
 
 type PlatformSecret struct {

@@ -86,7 +86,7 @@ func DecodePrivKeyPEM(bytes []byte, password Password) (crypto.PrivateKey, error
 	return key.(crypto.PrivateKey), nil
 }
 
-// Encodes a public key ASN.1 DER form public key to PEM form
+// Encodes a public key to PEM form
 func EncodePubKeyPEM(pub crypto.PublicKey) ([]byte, error) {
 	der, err := x509.MarshalPKIXPublicKey(pub)
 	if err != nil {
@@ -94,6 +94,19 @@ func EncodePubKeyPEM(pub crypto.PublicKey) ([]byte, error) {
 	}
 	pubPEM := new(bytes.Buffer)
 	err = pem.Encode(pubPEM, &pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: der,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return pubPEM.Bytes(), err
+}
+
+// Encodes an ASN.1 DER form public key to PEM form
+func EncodePEM(der []byte) ([]byte, error) {
+	pubPEM := new(bytes.Buffer)
+	err := pem.Encode(pubPEM, &pem.Block{
 		Type:  "PUBLIC KEY",
 		Bytes: der,
 	})

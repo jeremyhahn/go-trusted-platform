@@ -34,9 +34,10 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest"
@@ -57,45 +58,55 @@ var (
 )
 
 type WebServerV1 struct {
-	app                 *app.App
-	config              config.WebService
 	baseURI             string
-	eventType           string
-	endpointList        []string
-	routerMutex         *sync.Mutex
-	router              *mux.Router
-	httpServer          *http.Server
-	restServiceRegistry rest.RestServiceRegistry
-	middleware          middleware.JsonWebTokenMiddleware
+	ca                  ca.CertificateAuthority
 	closeChan           chan bool
+	config              *config.WebService
+	endpointList        []string
+	eventType           string
+	httpServer          *http.Server
+	listenAddress       string
+	logger              *logging.Logger
+	middleware          middleware.JsonWebTokenMiddleware
+	restServiceRegistry rest.RestServiceRegistry
+	router              *mux.Router
+	routerMutex         *sync.Mutex
+	serverKeyAttributes *keystore.KeyAttributes
 }
 
 func NewWebServerV1(
-	app *app.App,
-	restServiceRegistry rest.RestServiceRegistry) *WebServerV1 {
+	logger *logging.Logger,
+	_ca ca.CertificateAuthority,
+	config *config.WebService,
+	listenAddress string,
+	restServiceRegistry rest.RestServiceRegistry,
+	serverKeyAttributes *keystore.KeyAttributes) *WebServerV1 {
 
-	if app.CA == nil {
-		app.Logger.Fatal(ca.ErrNotInitialized)
+	if _ca == nil {
+		logger.FatalError(ca.ErrNotInitialized)
 	}
 
 	webserver := &WebServerV1{
-		app:                 app,
 		baseURI:             "/api/v1",
-		config:              app.WebService,
-		eventType:           "WebServer",
+		ca:                  _ca,
+		closeChan:           make(chan bool, 1),
+		config:              config,
 		endpointList:        make([]string, 0),
-		routerMutex:         &sync.Mutex{},
-		router:              mux.NewRouter().StrictSlash(true),
-		restServiceRegistry: restServiceRegistry,
+		eventType:           "WebServer",
+		logger:              logger,
 		middleware:          restServiceRegistry.JsonWebTokenService(),
-		closeChan:           make(chan bool, 1)}
+		restServiceRegistry: restServiceRegistry,
+		router:              mux.NewRouter().StrictSlash(true),
+		routerMutex:         &sync.Mutex{},
+		serverKeyAttributes: serverKeyAttributes,
+	}
 
 	webserver.httpServer = &http.Server{
+		Handler:      webserver.router,
+		IdleTimeout:  HTTP_SERVER_IDLE_TIMEOUT,
 		ReadTimeout:  HTTP_SERVER_READ_TIMEOUT,
 		WriteTimeout: HTTP_SERVER_WRITE_TIMEOUT,
-		IdleTimeout:  HTTP_SERVER_IDLE_TIMEOUT,
-		Handler:      webserver.router}
-
+	}
 	return webserver
 }
 
@@ -107,19 +118,18 @@ func (server *WebServerV1) Run() {
 	server.router.PathPrefix("/").Handler(fs)
 	http.Handle("/", server.httpServer.Handler)
 
-	if server.app.WebService.TLSPort > 0 {
+	if server.config.TLSPort > 0 {
 		go server.startHttps()
 	} else {
 		go server.startHttp()
 	}
-
-	server.app.DropPrivileges()
+	go server.startHttp()
 
 	<-server.closeChan
 }
 
 func (server WebServerV1) Shutdown() {
-	server.app.Logger.Info("webserver: shutting down")
+	server.logger.Info("webserver: shutting down")
 	server.closeChan <- true
 	close(server.closeChan)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -129,11 +139,11 @@ func (server WebServerV1) Shutdown() {
 
 func (server *WebServerV1) startHttp() {
 
-	sWebPort := fmt.Sprintf(":%d", server.app.WebService.Port)
+	sWebPort := fmt.Sprintf(":%d", server.config.Port)
 
 	insecureWebServicesMsg := fmt.Sprintf(
 		"webserver: starting insecure web services on plain-text HTTP port %s", sWebPort)
-	server.app.Logger.Infof(insecureWebServicesMsg)
+	server.logger.Infof(insecureWebServicesMsg)
 
 	ipv4Listener, err := net.Listen("tcp4", sWebPort)
 	if err != nil {
@@ -142,43 +152,72 @@ func (server *WebServerV1) startHttp() {
 
 	err = server.httpServer.Serve(ipv4Listener)
 	if err != nil {
-		server.app.Logger.Fatalf("webserver: unable to start web services: %s", err.Error())
+		server.logger.Fatalf("webserver: unable to start web services: %s", err.Error())
 	}
 }
 
 func (server *WebServerV1) startHttps() {
 
-	sTlsAddr := fmt.Sprintf("%s:%d", server.app.ListenAddress, server.app.WebService.TLSPort)
+	sTlsAddr := fmt.Sprintf("%s:%d", server.listenAddress, server.config.TLSPort)
 	message := fmt.Sprintf("webserver: starting secure TLS web services on %s", sTlsAddr)
-	server.app.Logger.Debugf(message)
+	server.logger.Debugf(message)
 
 	// Retrieve a TLS config ready to go from the CA
-	tlsconf, err := server.app.CA.TLSConfig(server.app.ServerKeyAttributes)
+	tlsconf, err := server.ca.TLSConfig(server.serverKeyAttributes)
 	if err != nil {
-		server.app.Logger.Fatal(err)
+		server.logger.FatalError(err)
 	}
+	// if !keystore.IsRSAPSS(server.serverKeyAttributes.SignatureAlgorithm) {
+	// w, err := os.OpenFile("key.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	// if err != nil {
+	// 	fmt.Printf("failed to open file err %+v", err)
+	// 	return
+	// }
+	// 	server.logger.Warn("using TLS v1.2")
+	// 	tlsconf.MaxVersion = tls.VersionTLS12
+	// 	tlsconf.MinVersion = tls.VersionTLS12
+	// 	tlsconf.KeyLogWriter = w
+	// 	tlsconf.Certificates[0].SupportedSignatureAlgorithms = []tls.SignatureScheme{
+	// 		// tls.PKCS1WithSHA1,
+	// 		tls.PKCS1WithSHA256,
+	// 		tls.PKCS1WithSHA384,
+	// 		tls.PKCS1WithSHA512,
+	// 		tls.ECDSAWithP256AndSHA256,
+	// 		tls.ECDSAWithP384AndSHA384,
+	// 		tls.ECDSAWithP521AndSHA512,
+	// 		tls.Ed25519,
+	// 	}
+	// 	// opaque, err := server.ca.Keyring().Key(server.serverKeyAttributes)
+	// 	// if err != nil {
+	// 	// 	server.logger.Error(err)
+	// 	// 	return
+	// 	// }
+	// 	// tlsconf.Certificates[0].PrivateKey = opaque
+	// }
 	server.httpServer.TLSConfig = tlsconf
 
 	// Create the TLS listener on the configured port
 	tlsListener, err := tls.Listen("tcp4", sTlsAddr, tlsconf)
 	if err != nil {
-		server.app.Logger.Fatalf("%s: %d", ErrBindPort, server.app.WebService.TLSPort)
+		server.logger.Fatalf("%s: %d", ErrBindPort, server.config.TLSPort)
 	}
 
-	server.app.Logger.Debugf("Lsitening for incoming web service connections on %s", sTlsAddr)
+	server.logger.Debugf("Lsitening for incoming web service connections on %s", sTlsAddr)
 
 	// Start the http server and start serving requests
 	err = server.httpServer.Serve(tlsListener)
 	if err != nil {
-		server.app.Logger.Fatalf("Unable to start TLS web server: %s", err.Error())
+		server.logger.Fatalf("Unable to start TLS web server: %s", err.Error())
 	}
 }
 
 func (server *WebServerV1) buildRoutes() {
 	muxRouter := mux.NewRouter().StrictSlash(true)
-	responseWriter := response.NewResponseWriter(server.app.Logger, nil)
+	responseWriter := response.NewResponseWriter(server.logger, nil)
 	endpointList := v1.NewRouterV1(
-		server.app,
+		server.logger,
+		server.ca,
+		server.serverKeyAttributes,
 		server.restServiceRegistry,
 		muxRouter,
 		responseWriter).RegisterRoutes(muxRouter, server.baseURI)
@@ -193,28 +232,28 @@ func (server *WebServerV1) buildRoutes() {
 // 	err := server.router.Walk(func(route *mux.Route, router *mux.Router, ancestors []*mux.Route) error {
 // 		pathTemplate, err := route.GetPathTemplate()
 // 		if err == nil {
-// 			server.app.Logger.Debug("ROUTE:", pathTemplate)
+// 			server.logger.Debug("ROUTE:", pathTemplate)
 // 		}
 // 		pathRegexp, err := route.GetPathRegexp()
 // 		if err == nil {
-// 			server.app.Logger.Debug("Path regexp:", pathRegexp)
+// 			server.logger.Debug("Path regexp:", pathRegexp)
 // 		}
 // 		queriesTemplates, err := route.GetQueriesTemplates()
 // 		if err == nil {
-// 			server.app.Logger.Debug("Queries templates:", strings.Join(queriesTemplates, ","))
+// 			server.logger.Debug("Queries templates:", strings.Join(queriesTemplates, ","))
 // 		}
 // 		queriesRegexps, err := route.GetQueriesRegexp()
 // 		if err == nil {
-// 			server.app.Logger.Debug("Queries regexps:", strings.Join(queriesRegexps, ","))
+// 			server.logger.Debug("Queries regexps:", strings.Join(queriesRegexps, ","))
 // 		}
 // 		methods, err := route.GetMethods()
 // 		if err == nil {
-// 			server.app.Logger.Debug("Methods:", strings.Join(methods, ","))
+// 			server.logger.Debug("Methods:", strings.Join(methods, ","))
 // 		}
-// 		server.app.Logger.Debug("")
+// 		server.logger.Debug("")
 // 		return nil
 // 	})
 // 	if err != nil {
-// 		server.app.Logger.Errorf("[WebServer.WalkRoutes] Error: err", err)
+// 		server.logger.Errorf("[WebServer.WalkRoutes] Error: err", err)
 // 	}
 // }

@@ -33,15 +33,15 @@ tpm:
     handle: 0x81010001
     hash: SHA-256
     password:
-    rsa:
-      size: 2048
+    ecc:
+     curve: P-256
   ssrk:
     handle: 0x81000001
     hierarchy-auth: 
     password: 
     platform-policy: true 
-    rsa:
-      size: 2048
+    ecc:
+     curve: P-256
   iak:
     auth:
     cn: device-id-001
@@ -49,9 +49,9 @@ tpm:
     handle: 0x81010002
     password: 
     # platform-policy: true 
-    rsa:
-      size: 2048
-    signature-algorithm: SHA256-RSAPSS
+    ecc:
+     curve: P-256
+    signature-algorithm: ECDSA-SHA256
   idevid:
     model: trusted-platform-edge
     serial: att-tp-e001
@@ -62,9 +62,9 @@ tpm:
     pad: true
     password: 
     # platform-policy: true 
-    rsa:
-      size: 2048
-    signature-algorithm: SHA256-RSAPSS
+    ecc:
+     curve: P-256
+    signature-algorithm: ECDSA-SHA256
   platform-pcr: 23
   file-integrity:
     - configs
@@ -78,15 +78,13 @@ certificate-authority:
   platform-ca: 1
   auto-import-issuing-ca: false
   system-cert-pool: false
-  default-validity: 365
+  default-validity: 60
   default-idevid-cn: default-device-id
   sans-include-localhost: true
   require-password: true
   identity:
     - 
       keystores:
-        pkcs8:
-          platform-policy: true
         pkcs11:
           library: /usr/local/lib/softhsm/libsofthsm2.so
           config: trusted-data/etc/softhsm.conf
@@ -99,16 +97,6 @@ certificate-authority:
           srk-auth: 123456
           platform-policy: true
       keys:
-        # PKCS #8 RSA w/ PSS
-        - algorithm: RSA
-          rsa:
-            size: 2048
-          signature-algorithm: SHA256-RSAPSS
-          hash: SHA-256
-          store: pkcs8
-          password: 123456
-          platform-policy: true
-
         # PKCS #11 RSA w/ PSS
         - algorithm: RSA
           rsa:
@@ -130,20 +118,10 @@ certificate-authority:
           password: 123456
           platform-policy: true
 
-        # PKCS #8 ECDSA
-        - algorithm: ECDSA
-          ecc:
-            curve: P256
-          signature-algorithm: ECDSA-SHA256
-          hash: SHA-256
-          store: pkcs8
-          password: 123456
-          platform-policy: true
-
         # PKCS #11 ECDSA
         - algorithm: ECDSA
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: pkcs11
@@ -153,24 +131,14 @@ certificate-authority:
         # TPM 2.0 ECDSA
         - algorithm: ECDSA
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
           password: 123456
           platform-policy: true
 
-        # PKCS #8 Ed25519
-        - algorithm: Ed25519
-          ecc:
-            curve: P256
-          signature-algorithm: Ed25519
-          hash: SHA-256
-          store: pkcs8
-          password: 123456
-          platform-policy: true
-
-      valid: 50
+      valid: 10
       subject:
         cn: root-ca.example.com
         organization: Trusted Platform
@@ -193,8 +161,6 @@ certificate-authority:
 
     - # Intermediate Certificate Authority
       keystores:
-        pkcs8:
-          platform-policy: true
         pkcs11:
           library: /usr/local/lib/softhsm/libsofthsm2.so
           config: trusted-data/etc/softhsm.conf
@@ -207,16 +173,6 @@ certificate-authority:
           srk-auth: 123456
           platform-policy: true
       keys:
-        - # PKCS #8 RSA w/ PSS
-          algorithm: RSA
-          rsa:
-            size: 2048
-          signature-algorithm: SHA256-RSAPSS
-          hash: SHA-256
-          store: pkcs8
-          password: 123456
-          platform-policy: true
-
         # PKCS #11 RSA w/ PSS
         - algorithm: RSA
           rsa:
@@ -237,20 +193,10 @@ certificate-authority:
           password: 123456
           platform-policy: true
 
-        # PKCS #8 ECDSA
-        - algorithm: ECDSA
-          ecc:
-            curve: P256
-          signature-algorithm: ECDSA-SHA256
-          hash: SHA-256
-          store: pkcs8
-          password: 123456
-          platform-policy: true
-
         # PKCS #11 ECDSA
         - algorithm: ECDSA
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: pkcs11
@@ -260,22 +206,13 @@ certificate-authority:
         # TPM 2.0 ECDSA
         - algorithm: ECDSA
           ecc:
-            curve: P256
+            curve: P-256
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
           password: 123456
           platform-policy: true
 
-        # PKCS #8 Ed25519
-        - algorithm: Ed25519
-          ecc:
-            curve: P256
-          signature-algorithm: Ed25519
-          hash: SHA-256
-          store: pkcs8
-          password: 123456
-          platform-policy: true
       valid: 10
       subject:
         cn: intermediate-ca.example.com
@@ -300,21 +237,27 @@ webservice:
   home: public_html
   port: 8080
   tls-port: 8443
-  jwt-expiration: 525960
+  jwt:
+    expiration: 525960
+    # ES256 | ES384 | ES512
+    # PS256 | PS384 | PS512
+    # RS256 | RS384 | RS512
+    algorithm: PS256
+    issuer: my_org_id
   key:
-    # PKCS #8 RSA w/ PSS
-    algorithm: RSA
-    rsa:
-      size: 2048
-    signature-algorithm: SHA256-RSAPSS
-    hash: SHA-256
-    store: pkcs8
-    password: 123456
-    platform-policy: true
+    # TPM 2.0 ECDSA
+    - algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: tpm2
+      password: 123456
+      platform-policy: true
     #
     # algorithm: ECDSA
     # ecc:
-    #   curve: P256
+    #   curve: P-256
     # signature-algorithm: ECDSA-SHA256
     # hash: SHA-256
     # store: pkcs8
@@ -324,7 +267,7 @@ webservice:
     #
     # algorithm: Ed25519
     # ecc:
-    #   curve: P256
+    #   curve: P-256
     # signature-algorithm: Ed25519
     # hash: SHA-256
     # store: pkcs8

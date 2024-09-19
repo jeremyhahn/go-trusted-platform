@@ -3,10 +3,10 @@ package keystore
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 
-	"github.com/op/go-logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/spf13/afero"
 )
 
 var (
@@ -31,6 +31,7 @@ type KeyBackend interface {
 
 type FileBackend struct {
 	logger          *logging.Logger
+	fs              afero.Fs
 	rootDir         string
 	partitionDirMap map[Partition]string
 	keyPartitionMap map[KeyType]Partition
@@ -38,7 +39,10 @@ type FileBackend struct {
 	KeyBackend
 }
 
-func NewFileBackend(logger *logging.Logger, rootDir string) KeyBackend {
+func NewFileBackend(
+	logger *logging.Logger,
+	fs afero.Fs,
+	rootDir string) KeyBackend {
 
 	// Provides O(1) constant time access to key paritions
 	keyPartitionMap := make(map[KeyType]Partition, len(Partitions))
@@ -51,6 +55,7 @@ func NewFileBackend(logger *logging.Logger, rootDir string) KeyBackend {
 	keyPartitionMap[KEY_TYPE_TPM] = PARTITION_ROOT
 	keyPartitionMap[KEY_TYPE_SECRET] = PARTITION_SECRETS
 	keyPartitionMap[KEY_TYPE_SIGNING] = PARTITION_SIGNING_KEYS
+	keyPartitionMap[KEY_TYPE_STORAGE] = PARTITION_ROOT
 	keyPartitionMap[KEY_TYPE_TLS] = PARTITION_TLS
 
 	// Provides O(1) constant time access to key file extensions
@@ -66,7 +71,7 @@ func NewFileBackend(logger *logging.Logger, rootDir string) KeyBackend {
 	partitionDirMap := make(map[Partition]string, len(Partitions))
 	for _, partition := range Partitions {
 		dir := fmt.Sprintf("%s/%s", rootDir, partition)
-		if err := os.MkdirAll(dir, fs.ModePerm); err != nil {
+		if err := fs.MkdirAll(dir, os.ModePerm); err != nil {
 			panic(err)
 		}
 		if partition == PARTITION_ROOT {
@@ -78,6 +83,7 @@ func NewFileBackend(logger *logging.Logger, rootDir string) KeyBackend {
 
 	return &FileBackend{
 		logger:          logger,
+		fs:              fs,
 		rootDir:         rootDir,
 		partitionDirMap: partitionDirMap,
 		keyPartitionMap: keyPartitionMap,
@@ -95,8 +101,8 @@ func (fb *FileBackend) Save(
 		fb.logger.Errorf("%s: %s", err, file)
 		return err
 	}
-	if _, err := os.Stat(file); errors.Is(err, os.ErrNotExist) {
-		if err = os.WriteFile(file, data, 0644); err != nil {
+	if _, err := fb.fs.Stat(file); errors.Is(err, os.ErrNotExist) {
+		if err = afero.WriteFile(fb.fs, file, data, 0644); err != nil {
 			fb.logger.Errorf("%s: %s", err, file)
 			return err
 		}
@@ -115,10 +121,10 @@ func (fb *FileBackend) Get(
 		fb.logger.Errorf("%s: %s", err, file)
 		return nil, err
 	}
-	bytes, err := os.ReadFile(file)
+	bytes, err := afero.ReadFile(fb.fs, file)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fb.logger.Warningf("%s: %s", ErrFileNotFound, file)
+			fb.logger.Warnf("%s: %s", ErrFileNotFound, file)
 			return nil, ErrFileNotFound
 		}
 		return nil, err
@@ -133,7 +139,7 @@ func (fb *FileBackend) Delete(attrs *KeyAttributes) error {
 		fb.logger.Errorf("%s: %s", err, attrs.CN)
 		return err
 	}
-	if err := os.RemoveAll(partitionDir); err != nil {
+	if err := fb.fs.RemoveAll(partitionDir); err != nil {
 		fb.logger.Errorf("%s: %s", err, partitionDir)
 		return err
 	}
@@ -144,7 +150,7 @@ func (fb *FileBackend) Delete(attrs *KeyAttributes) error {
 	if err != nil {
 		return err
 	}
-	if err := os.RemoveAll(partitionDir); err != nil {
+	if err := fb.fs.RemoveAll(partitionDir); err != nil {
 		fb.logger.Errorf("%s: %s", err, partitionDir)
 		return err
 	}
@@ -174,7 +180,7 @@ func (fb *FileBackend) partitionKey(attrs *KeyAttributes) (string, error) {
 	}
 
 	cnDir = fmt.Sprintf("%s/%s", partitionDir, attrs.CN)
-	if err := os.MkdirAll(cnDir, os.ModePerm); err != nil {
+	if err := fb.fs.MkdirAll(cnDir, os.ModePerm); err != nil {
 		fb.logger.Errorf("%s: %s", err, cnDir)
 		return "", err
 	}

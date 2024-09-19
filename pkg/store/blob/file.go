@@ -3,13 +3,14 @@ package blob
 import (
 	"errors"
 	"fmt"
-	"io/fs"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
-	"github.com/op/go-logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/spf13/afero"
 )
 
 const (
@@ -22,26 +23,24 @@ var (
 
 type BlobStorer interface {
 	Delete(key []byte) error
+	Exists(key []byte) bool
 	Get(key []byte) ([]byte, error)
 	Save(key, data []byte) error
+	Count(partition *string) (int, error)
 }
 
 type BlobStore struct {
-	logger        *logging.Logger
-	blobDir       string
-	signedBlobDir string
-	partition     string
+	logger    *logging.Logger
+	fs        afero.Fs
+	blobDir   string
+	partition string
 	BlobStorer
-}
-
-// Creates a new blob key using the provided root and file name
-func NewKey(root, path string) []byte {
-	return []byte(fmt.Sprintf("%s/%s", root, path))
 }
 
 // Creates a new local file system backed blob store
 func NewFSBlobStore(
 	logger *logging.Logger,
+	fs afero.Fs,
 	rootDir string,
 	partition *string) (BlobStorer, error) {
 
@@ -51,14 +50,18 @@ func NewFSBlobStore(
 	} else {
 		partitionName = *partition
 	}
+	if rootDir[len(rootDir)-1] == '/' {
+		rootDir = strings.TrimRight(rootDir, "/")
+	}
 	dir := fmt.Sprintf("%s/%s", rootDir, partitionName)
-	if err := os.MkdirAll(dir, fs.ModePerm); err != nil {
+	if err := fs.MkdirAll(dir, os.ModePerm); err != nil {
 		logger.Error(err)
 		return nil, err
 	}
 	return &BlobStore{
 		logger:    logger,
 		blobDir:   dir,
+		fs:        fs,
 		partition: partitionName,
 	}, nil
 }
@@ -70,13 +73,13 @@ func NewFSBlobStore(
 func (store *BlobStore) Save(key, data []byte) error {
 	trimmed := strings.TrimLeft(string(key), "/")
 	dir := fmt.Sprintf("%s/%s", store.blobDir, filepath.Dir(trimmed))
-	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
-		store.logger.Errorf("%s: %s", err, trimmed)
+	if err := store.fs.MkdirAll(dir, os.ModePerm); err != nil {
+		store.logger.Error(err, slog.String("key", trimmed))
 		return err
 	}
 	blobFile := fmt.Sprintf("%s/%s", store.blobDir, trimmed)
-	if err := os.WriteFile(blobFile, data, 0644); err != nil {
-		store.logger.Errorf("%s: %s", err, trimmed)
+	if err := afero.WriteFile(store.fs, blobFile, data, 0644); err != nil {
+		store.logger.Error(err, slog.String("key", trimmed))
 		return err
 	}
 	return nil
@@ -87,17 +90,15 @@ func (store *BlobStore) Save(key, data []byte) error {
 func (store *BlobStore) Get(key []byte) ([]byte, error) {
 	trimmed := strings.TrimLeft(string(key), "/")
 	dir := fmt.Sprintf("%s/%s/", store.blobDir, filepath.Dir(trimmed))
-	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
-		store.logger.Error("%s: %s", err, key)
+	if err := store.fs.MkdirAll(dir, os.ModePerm); err != nil {
+		store.logger.Error(err, slog.String("key", trimmed))
 		return nil, err
 	}
 	blobFile := fmt.Sprintf("%s/%s", store.blobDir, trimmed)
-	bytes, err := os.ReadFile(blobFile)
+	bytes, err := afero.ReadFile(store.fs, blobFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			store.logger.Errorf("store/blob: error retrieving blob: %s, key: %s",
-				blobFile, key)
-			store.logger.Warningf("%s: %s", ErrBlobNotFound, trimmed)
+			store.logger.MaybeError(ErrBlobNotFound, slog.String("key", trimmed))
 			return nil, ErrBlobNotFound
 		}
 		return nil, err
@@ -110,9 +111,45 @@ func (store *BlobStore) Get(key []byte) ([]byte, error) {
 func (store *BlobStore) Delete(key []byte) error {
 	trimmed := strings.TrimLeft(string(key), "/")
 	blobFile := fmt.Sprintf("%s/%s", store.blobDir, trimmed)
-	if !util.FileExists(blobFile) {
-		store.logger.Errorf("%s: %s", ErrBlobNotFound, trimmed)
+	if _, err := store.fs.Stat(blobFile); err != nil {
+		store.logger.Error(err, slog.String("key", trimmed))
 		return ErrBlobNotFound
 	}
-	return os.RemoveAll(blobFile)
+	return store.fs.RemoveAll(blobFile)
+}
+
+// Returns true if the file exists
+func (store *BlobStore) Exists(key []byte) bool {
+	trimmed := strings.TrimLeft(string(key), "/")
+	blobFile := fmt.Sprintf("%s/%s", store.blobDir, trimmed)
+	if _, err := store.fs.Stat(blobFile); err != nil {
+		return false
+	}
+	return true
+}
+
+// Deleted blob the blob store. ErrBlobNotFound is returned if the
+// provided blob key could not be found.
+func (store *BlobStore) Count(partition *string) (int, error) {
+	count := 0
+	limit := 50
+	dir := store.blobDir
+	if partition != nil {
+		trimmed := strings.TrimLeft(*partition, "/")
+		dir = fmt.Sprintf("%s/%s", store.blobDir, trimmed)
+	}
+	f, err := store.fs.Open(dir)
+	if err != nil {
+		return 0, err
+	}
+	var list []string
+	for err != io.EOF {
+		list, err = f.Readdirnames(limit)
+		count = count + len(list)
+	}
+	f.Close()
+	if err != nil && err != io.EOF {
+		return 0, err
+	}
+	return count, nil
 }

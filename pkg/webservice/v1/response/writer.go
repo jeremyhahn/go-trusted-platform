@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"reflect"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
-	"github.com/op/go-logging"
 	"gopkg.in/yaml.v2"
 )
 
@@ -18,6 +18,7 @@ type HttpWriter interface {
 	Success200(w http.ResponseWriter, r *http.Request, payload interface{})
 	Success404(w http.ResponseWriter, r *http.Request, payload interface{}, err error)
 	Error200(w http.ResponseWriter, r *http.Request, err error)
+	Error401(w http.ResponseWriter, r *http.Request, err error)
 	Error400(w http.ResponseWriter, r *http.Request, err error)
 	Error404(w http.ResponseWriter, r *http.Request, err error)
 	Error403(w http.ResponseWriter, r *http.Request, err error, payload interface{})
@@ -133,6 +134,15 @@ func (writer *ResponseWriter) Error200(w http.ResponseWriter, r *http.Request, e
 		Code:    http.StatusOK,
 		Success: false,
 		Payload: err.Error()})
+}
+
+func (writer *ResponseWriter) Error401(w http.ResponseWriter, r *http.Request, err error) {
+	writer.logError(r, err)
+	writer.Write(w, r, http.StatusUnauthorized, WebServiceResponse{
+		Code:    http.StatusNotFound,
+		Error:   err.Error(),
+		Success: false,
+		Payload: nil})
 }
 
 func (writer *ResponseWriter) Error400(w http.ResponseWriter, r *http.Request, err error) {

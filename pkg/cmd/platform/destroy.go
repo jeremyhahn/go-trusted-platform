@@ -2,13 +2,13 @@ package platform
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/fatih/color"
 	"github.com/google/go-tpm/tpm2"
 	"github.com/spf13/cobra"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
 )
 
@@ -21,7 +21,13 @@ A TPM2_Clear command is sent to the TPM, restoring it to the TPM
 manufacturer and OEM factory settings.`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App.Init(InitParams)
+		prompt.PrintBanner(app.Version)
+
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 
 		fmt.Println("")
 		color.Red(
@@ -43,9 +49,10 @@ manufacturer and OEM factory settings.`,
 			ownerAuth := prompt.PasswordPrompt("Owner Hierarchy Password")
 
 			// Delete platform data directory
-			if err := os.RemoveAll(App.PlatformDir); err != nil {
-				App.Logger.Error("Failed to delete platform data")
-				App.Logger.Fatal(err)
+			if err := App.FS.RemoveAll(App.PlatformDir); err != nil {
+				App.Logger.Errorf("Failed to delete platform data")
+				cmd.PrintErrln(err)
+				return
 			}
 			App.Logger.Info("Platform data successfully destroyed")
 
@@ -54,23 +61,23 @@ manufacturer and OEM factory settings.`,
 				App.Logger.Fatal("TPM not initialized")
 			} else {
 				if err := App.TPM.Clear(lockoutAuth, tpm2.TPMRHLockout); err != nil {
-					App.Logger.Error("Failed to clear Lockout hierarchy")
-					App.Logger.Fatal(err)
+					App.Logger.Errorf("Failed to clear Lockout hierarchy")
+					cmd.PrintErrln(err)
+					return
 				}
 				if err := App.TPM.Clear(endorsementAuth, tpm2.TPMRHEndorsement); err != nil {
-					App.Logger.Error("Failed to clear Endorsement hierarchy")
-					App.Logger.Fatal(err)
+					App.Logger.Errorf("Failed to clear Endorsement hierarchy")
+					cmd.PrintErrln(err)
+					return
 				}
 				if err := App.TPM.Clear(ownerAuth, tpm2.TPMRHOwner); err != nil {
-					App.Logger.Error("Failed to clear Owner hierarchy")
-					App.Logger.Fatal(err)
+					App.Logger.Errorf("Failed to clear Owner hierarchy")
+					cmd.PrintErrln(err)
+					return
 				}
 				App.Logger.Info("TPM 2.0 successfully cleared")
 			}
 
-		} else {
-			fmt.Println("")
-			color.Green("Whew, that was close!")
 		}
 	},
 }

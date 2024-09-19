@@ -21,17 +21,21 @@ var verifierCmd = &cobra.Command{
 	Long:  `Performs Remote Attestation with the specified Attestor`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App.Init(InitParams)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 
 		// Create new verifier
 		verifier, err := verifier.NewVerifier(App, VFAttestor)
 		if err != nil {
-			App.Logger.Fatal(err)
+			App.Logger.FatalError(err)
 		}
 
 		// Perform remote attestation
 		if err := verifier.Attest(); err != nil {
-			App.Logger.Fatal(err)
+			App.Logger.FatalError(err)
 		}
 	},
 }

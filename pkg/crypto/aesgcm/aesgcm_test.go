@@ -3,19 +3,15 @@ package aesgcm
 import (
 	"crypto/rand"
 	"io"
-	"os"
 	"testing"
 
-	"github.com/op/go-logging"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestSealWithoutAdditionalData(t *testing.T) {
 
-	logger := createLogger()
-
 	// Use rand.Reader for entropy
-	aesgcm := NewAESGCM(logger, true, nil)
+	aesgcm := NewAESGCM(nil)
 
 	// Generate a key
 	key := make([]byte, 32)
@@ -39,10 +35,8 @@ func TestSealWithoutAdditionalData(t *testing.T) {
 
 func TestSealWithAdditionalData(t *testing.T) {
 
-	logger := createLogger()
-
 	// Use rand.Reader for entropy
-	aesgcm := NewAESGCM(logger, true, nil)
+	aesgcm := NewAESGCM(nil)
 
 	// Generate a key
 	key := make([]byte, 32)
@@ -66,20 +60,4 @@ func TestSealWithAdditionalData(t *testing.T) {
 	// Ensure failure when additional data doesnt match
 	_, err = aesgcm.Open(key, ciphertext, nonce, []byte("foo"))
 	assert.NotNil(t, err)
-}
-
-// Create a logger for the tests
-func createLogger() *logging.Logger {
-	stdout := logging.NewLogBackend(os.Stdout, "", 0)
-	logging.SetBackend(stdout)
-	logger := logging.MustGetLogger("tpm")
-
-	logFormat := logging.MustStringFormatter(
-		`%{color}%{time:15:04:05.000} %{shortpkg}.%{shortfunc} %{level:.4s} %{id:03x}%{color:reset} %{message}`,
-	)
-	logFormatter := logging.NewBackendFormatter(stdout, logFormat)
-	backends := logging.MultiLogger(stdout, logFormatter)
-	logging.SetBackend(backends)
-
-	return logger
 }

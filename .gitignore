@@ -24,3 +24,6 @@ attestation/verifier/config.yaml
 python-venv/
 tpadm
 config.yaml
+pkg/public_html
+pkg/trusted-data
+trusted-data

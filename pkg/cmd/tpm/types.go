@@ -7,7 +7,7 @@ import (
 var (
 	App        *app.App
 	InitParams *app.AppInitParams
-	DevicePath string
+	err        error
 )
 
 func init() {

@@ -5,6 +5,8 @@ import (
 	"crypto/elliptic"
 	"crypto/x509"
 	"strings"
+
+	"github.com/google/go-tpm/tpm2"
 )
 
 func ParseKeyAlgorithm(algorithm string) (x509.PublicKeyAlgorithm, error) {
@@ -15,6 +17,10 @@ func ParseKeyAlgorithm(algorithm string) (x509.PublicKeyAlgorithm, error) {
 		return x509.ECDSA, nil
 	case strings.ToLower(x509.Ed25519.String()):
 		return x509.Ed25519, nil
+	// This is a hack to allow processing TPM keyed hash objects
+	// the same way as x509 keys
+	case "hmac":
+		return x509.PublicKeyAlgorithm(tpm2.TPMAlgKeyedHash), nil
 	default:
 		return x509.UnknownPublicKeyAlgorithm, ErrInvalidKeyAlgorithm
 	}
@@ -35,17 +41,6 @@ func ParseKeyAlgorithmFromSignatureAlgorithm(
 	return x509.UnknownPublicKeyAlgorithm, ErrInvalidKeyAlgorithm
 }
 
-// func ParseRSAScheme(scheme string) (RSAScheme, error) {
-// 		switch scheme {
-// 	case string(RSA_SCHEME_RSAPSS):
-// 		return RSA_SCHEME_RSAPSS, nil
-// 	case string(RSA_SCHEME_PKCS1v15):
-// 		return RSA_SCHEME_PKCS1v15, nil
-// 	default:
-// 		return RSA_SCHEME_RSAPSS, ErrInvalidSignatureScheme
-// 	}
-// }
-
 func ParseSignatureAlgorithm(algorithm string) (x509.SignatureAlgorithm, error) {
 	supportedAlgos := AvailableSignatureAlgorithms()
 	algo, ok := supportedAlgos[algorithm]
@@ -56,15 +51,15 @@ func ParseSignatureAlgorithm(algorithm string) (x509.SignatureAlgorithm, error) 
 }
 
 func ParseCurve(curve string) (elliptic.Curve, error) {
-	c := Curve(strings.ToUpper(curve))
+	c := strings.ToUpper(curve)
 	switch c {
-	case CURVE_P224:
+	case elliptic.P224().Params().Name:
 		return elliptic.P224(), nil
-	case CURVE_P256:
+	case elliptic.P256().Params().Name:
 		return elliptic.P256(), nil
-	case CURVE_P384:
+	case elliptic.P384().Params().Name:
 		return elliptic.P384(), nil
-	case CURVE_P521:
+	case elliptic.P521().Params().Name:
 		return elliptic.P521(), nil
 	}
 	return nil, ErrInvalidCurve

@@ -5,6 +5,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest"
 	"github.com/spf13/cobra"
@@ -22,13 +23,40 @@ var webserverCmd = &cobra.Command{
 
 		sigChan := make(chan os.Signal, 1)
 
-		App.Init(InitParams)
+		if _, err := App.Init(InitParams); err != nil {
+			App.Logger.Error(err)
+			cmd.PrintErrln(err)
+			return
+		}
 
-		// Build rest service registry
-		restRegistry := rest.NewRestServiceRegistry(App)
+		userPIN := keystore.NewClearPassword(InitParams.Pin)
+		if err := App.LoadCA(userPIN); err != nil {
+			App.Logger.Error(err)
+			cmd.PrintErrln(err)
+			return
+		}
+
+		if err := App.InitWebServices(); err != nil {
+			App.Logger.Error(err)
+			cmd.PrintErrln(err)
+			return
+		}
+
+		restRegistry := rest.NewRestServiceRegistry(
+			App.Logger,
+			App.CA,
+			App.ServerKeyAttributes,
+			App.WebService,
+			App.Domain,
+		)
+
 		webserver := webservice.NewWebServerV1(
-			App,
-			restRegistry)
+			App.Logger,
+			App.CA,
+			App.WebService,
+			App.ListenAddress,
+			restRegistry,
+			App.ServerKeyAttributes)
 
 		// Start the web server in a background goroutine
 		go webserver.Run()

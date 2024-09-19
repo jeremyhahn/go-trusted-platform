@@ -1,45 +1,66 @@
 package ca
 
 import (
-	"github.com/fatih/color"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/spf13/cobra"
 )
 
-func init() {
-	RevokeCmd.PersistentFlags().StringVar(&CN, "cn", "", "The common name of the certificate to revoke")
-	RevokeCmd.PersistentFlags().StringVarP(&Algorithm, "algorithm", "a", "", "Optional key algorithm. [ RSA | ECDSA | Ed35519 ]")
-}
-
 var RevokeCmd = &cobra.Command{
-	Use:   "revoke",
+	Use:   "revoke [cn] [store] [algorithm]",
 	Short: "Revokes an issued certificate",
 	Long: `Add the certificate to the CA Certificate Revocation List and delete
 the certificate and any keys from the stores.`,
+	Args: cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App.Init(InitParams)
-
-		algo, err := keystore.ParseKeyAlgorithm(Algorithm)
+		App, err = App.Init(InitParams)
 		if err != nil {
-			App.Logger.Fatal(err)
+			cmd.PrintErrln(err)
+			return
 		}
 
-		keyAttrs, err := keystore.Template(algo)
-		if err != nil {
-			App.Logger.Fatal(err)
+		userPIN := keystore.NewClearPassword(InitParams.Pin)
+		if err := App.LoadCA(userPIN); err != nil {
+			cmd.PrintErrln(err)
+			return
 		}
+
+		cn := args[0]
+		store := args[1]
+		algorithm := args[2]
+
+		storeType, err := keystore.ParseStoreType(store)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
+
+		keyAlgo, err := keystore.ParseKeyAlgorithm(algorithm)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
+
+		keyAttrs, err := keystore.Template(keyAlgo)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
+		keyAttrs.CN = cn
+		keyAttrs.KeyAlgorithm = keyAlgo
+		keyAttrs.StoreType = storeType
 
 		certificate, err := App.CA.Certificate(keyAttrs)
 		if err != nil {
-			App.Logger.Fatal(err)
+			cmd.PrintErrln(err)
+			return
 		}
 
 		err = App.CA.Revoke(certificate)
 		if err != nil {
-			App.Logger.Fatal(err)
+			cmd.PrintErrln(err)
+			return
 		}
 
-		color.New(color.FgGreen).Printf("Successfully revoked certificate")
 	},
 }

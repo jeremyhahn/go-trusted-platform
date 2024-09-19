@@ -9,12 +9,12 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
-	"github.com/op/go-logging"
+	"github.com/spf13/afero"
 )
 
 var currentWorkingDirectory, _ = os.Getwd()
@@ -51,27 +51,28 @@ func createKeyStore(
 	soPIN, userPIN []byte,
 	platformPolicy bool) (*logging.Logger, PlatformKeyStorer, tpm2.TrustedPlatformModule, error) {
 
-	logger := util.Logger()
+	logger := logging.DefaultLogger()
 
 	buf := make([]byte, 8)
 	_, err := rand.Reader.Read(buf)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 	hexVal := hex.EncodeToString(buf)
 	tmp := fmt.Sprintf("%s/%s", TEST_DIR, hexVal)
 
-	blobStore, err := blob.NewFSBlobStore(logger, tmp, nil)
+	fs := afero.NewMemMapFs()
+	blobStore, err := blob.NewFSBlobStore(logger, fs, tmp, nil)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	certStore, err := certstore.NewCertificateStore(logger, blobStore)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
-	keyBackend := keystore.NewFileBackend(logger, tmp)
+	keyBackend := keystore.NewFileBackend(logger, afero.NewMemMapFs(), tmp)
 
 	signerStore := keystore.NewSignerStore(blobStore)
 

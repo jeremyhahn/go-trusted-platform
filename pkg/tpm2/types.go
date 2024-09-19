@@ -78,7 +78,6 @@ var (
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 	}
 
-	// ErrHierarchyAuthFailed         = errors.New("tpm: hierarchy authorization failed")
 	ErrInvalidAKAttributes          = errors.New("tpm: invalid AK attributes")
 	ErrInvalidEKCertFormat          = errors.New("tpm: invalid endorsement certificate format")
 	ErrInvalidEKAttributes          = errors.New("tpm: invalid EK attributes")
@@ -98,6 +97,12 @@ var (
 	ErrEndorsementCertNotFound      = errors.New("tpm: endorsement certificate not found")
 	ErrInvalidKeyStoreConfiguration = errors.New("tpm: invalid key store configuration")
 	ErrInvalidHashFunction          = errors.New("tpm: invalid hash function")
+	ErrInvalidSessionAuthorization  = errors.New("tpm: invalid session authorization")
+	ErrSecureBootNotEnabled         = errors.New("tpm: secure boot not enabled")
+	ErrRSAPSSNotSupported           = errors.New("tpm: RSA-PSS not supported by this TPM")
+
+	// TPM_RC errors
+	ErrCommandNotSupported = tpm2.TPMRC(0xb0143)
 
 	warnMissingLocalAttestationPCRs = errors.New("tpm: Local attestation PCRs missing from configuration file")
 
@@ -773,7 +778,7 @@ func ParseHashAlg(hash crypto.Hash) (tpm2.TPMIAlgHash, error) {
 	return 0, ErrInvalidHashFunction
 }
 
-func ParseHashSize(hash crypto.Hash) (tpm2.TPMIAlgHash, error) {
+func ParseHashSize(hash crypto.Hash) (uint32, error) {
 	switch hash {
 	case crypto.SHA256:
 		return 32, nil

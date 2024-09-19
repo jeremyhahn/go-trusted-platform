@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/op/go-logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 
 	blobstore "github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 )
 
 var (
@@ -149,7 +149,7 @@ func TestSignRSAPSS(t *testing.T) {
 
 	// Define RSA PSS opts
 	pssOpts := &rsa.PSSOptions{
-		SaltLength: rsa.PSSSaltLengthAuto,
+		SaltLength: rsa.PSSSaltLengthEqualsHash,
 		Hash:       testKeyAttrs.Hash,
 	}
 
@@ -241,25 +241,26 @@ func TestSignED25519(t *testing.T) {
 func createKeystore() (*logging.Logger,
 	keystore.KeyStorer, *keystore.KeyAttributes, blobstore.BlobStorer) {
 
-	logger := util.Logger()
+	logger := logging.DefaultLogger()
 
 	// Generate a temp directory for each instantiation
 	// so parallel tests don't corrupt each other.
 	buf := make([]byte, 8)
 	_, err := rand.Reader.Read(buf)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 	tmpDir := hex.EncodeToString(buf)
 
+	fs := afero.NewMemMapFs()
 	rootDir := fmt.Sprintf("%s/%s", TEST_DATA_DIR, tmpDir)
-	blobStore, err := blobstore.NewFSBlobStore(logger, rootDir, nil)
+	blobStore, err := blobstore.NewFSBlobStore(logger, fs, rootDir, nil)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	signerStore := keystore.NewSignerStore(blobStore)
-	backend := keystore.NewFileBackend(logger, rootDir)
+	backend := keystore.NewFileBackend(logger, afero.NewMemMapFs(), rootDir)
 	caTemplate := keystore.TemplateRSA
 
 	params := &Params{
@@ -273,7 +274,7 @@ func createKeystore() (*logging.Logger,
 
 	pkcs8Store, err := NewKeyStore(params)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	return logger, pkcs8Store, caTemplate, blobStore
