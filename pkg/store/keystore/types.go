@@ -9,11 +9,12 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
-	"github.com/op/go-logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 type FSExtension string
@@ -322,7 +323,53 @@ func (attrs KeyAttributes) String() string {
 }
 
 func DebugKeyAttributes(logger *logging.Logger, attrs *KeyAttributes) {
-	logger.Debug(attrs.String())
+
+	var password, secret string
+
+	if attrs.Debug {
+		if attrs.Password != nil {
+			var err error
+			if attrs.Password != nil {
+				password, err = attrs.Password.String()
+				if err != nil {
+					logger.Error(err)
+				}
+			}
+			if attrs.Secret != nil {
+				secret, err = attrs.Secret.String()
+				if err != nil {
+					logger.Error(err)
+				}
+			}
+		}
+	}
+
+	params := []any{
+		slog.String("commonName", attrs.CN),
+		slog.Bool("debug", attrs.Debug),
+		slog.String("hash", attrs.Hash.String()),
+		slog.String("algorithm", attrs.KeyAlgorithm.String()),
+		slog.Bool("policy", attrs.PlatformPolicy),
+		slog.String("signatureAlgorithm", attrs.SignatureAlgorithm.String()),
+		slog.String("store", attrs.StoreType.String()),
+		slog.String("type", attrs.KeyType.String()),
+		slog.String("commonName", attrs.CN),
+	}
+
+	if attrs.ECCAttributes != nil {
+		params = append(params, slog.String("curve", attrs.ECCAttributes.Curve.Params().Name))
+	} else if attrs.RSAAttributes != nil {
+		params = append(params, slog.Int("key-size", attrs.RSAAttributes.KeySize))
+	}
+
+	if attrs.Debug {
+		params = append(params,
+			slog.String("password", password),
+			slog.String("secret", secret))
+	}
+
+	logger.Debug("Key Attributes", slog.Group("attributes", params...))
+
 }
 
 func PublicKeyToString(pub crypto.PublicKey) string {

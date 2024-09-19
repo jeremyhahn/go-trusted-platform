@@ -12,12 +12,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	blobstore "github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
-	"github.com/op/go-logging"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 
@@ -179,7 +178,7 @@ func TestSignRSAPSS_WithoutFileIntegrityCheck(t *testing.T) {
 	assert.NotNil(t, digest)
 
 	pssOpts := &rsa.PSSOptions{
-		// Note that (at present) the crypto.rsa.PSSSaltLengthAuto option is
+		// Note that (at present) the crypto.rsa.PSSSaltLengthEqualsHash option is
 		// not supported. The caller must either use
 		// crypto.rsa.PSSSaltLengthEqualsHash (recommended) or pass an
 		// explicit salt length. Moreover the underlying PKCS#11
@@ -246,7 +245,7 @@ func TestSignRSAPSS_WithFileIntegrityCheck(t *testing.T) {
 	assert.NotNil(t, digest)
 
 	pssOpts := &rsa.PSSOptions{
-		// Note that (at present) the crypto.rsa.PSSSaltLengthAuto option is
+		// Note that (at present) the crypto.rsa.PSSSaltLengthEqualsHash option is
 		// not supported. The caller must either use
 		// crypto.rsa.PSSSaltLengthEqualsHash (recommended) or pass an
 		// explicit salt length. Moreover the underlying PKCS#11
@@ -409,7 +408,7 @@ func createTPM(
 	soPIN, userPIN []byte,
 	platformPolicy bool) (*logging.Logger, tpm2.TrustedPlatformModule, string, error) {
 
-	logger := util.Logger()
+	logger := logging.DefaultLogger()
 
 	if CACHED_TPM != nil {
 		return logger, CACHED_TPM, CACHED_DIR, nil

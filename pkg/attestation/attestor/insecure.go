@@ -7,9 +7,9 @@ import (
 	pb "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/proto"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
-	"github.com/op/go-logging"
 	"google.golang.org/grpc/peer"
 )
 
@@ -68,7 +68,7 @@ BREAK:
 				keyAlgorithm = cert.PublicKeyAlgorithm
 				storeType, err = certstore.ParseKeyStoreType(cert)
 				if err != nil {
-					s.logger.Warning(err)
+					s.logger.MaybeError(err)
 				}
 				// verifier = _verifier
 				break BREAK

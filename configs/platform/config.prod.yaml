@@ -237,7 +237,13 @@ webservice:
   home: public_html
   port: 8080
   tls-port: 8443
-  jwt-expiration: 525960
+  jwt:
+    expiration: 525960
+    # ES256 | ES384 | ES512
+    # PS256 | PS384 | PS512
+    # RS256 | RS384 | RS512
+    algorithm: PS256
+    issuer: my_org_id
   key:
     # TPM 2.0 ECDSA
     - algorithm: ECDSA

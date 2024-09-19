@@ -2,12 +2,13 @@
 {
     "version": "0.2.0",
     "configurations": [
+        
         {
             "name": "tpadm status",
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_pkcs11",
+            "preLaunchTask": "debug_config_clean",
             "program": "${workspaceRoot}/pkg",
             "args": [
                 "status",
@@ -86,7 +87,7 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_pkcs11",
+            "preLaunchTask": "debug_config_clean",
             "program": "${workspaceRoot}/pkg",
             "args": [
                 "platform",
@@ -100,7 +101,7 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_pkcs11",
+            "preLaunchTask": "debug_config_clean",
             "program": "${workspaceRoot}/pkg",
             "args": [
                 "platform",
@@ -114,7 +115,7 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_pkcs11",
+            "preLaunchTask": "debug_config_clean",
             "program": "${workspaceRoot}/pkg",
             "args": [
                 "platform",
@@ -143,7 +144,7 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_pkcs11",
+            "preLaunchTask": "debug_config_clean",
             "program": "${workspaceRoot}/pkg",
             "args": [ 
                 "tpm",
@@ -166,7 +167,7 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_pkcs11",
+            "preLaunchTask": "debug_config_clean",
             "program": "${workspaceRoot}/pkg",
             "args": [ 
                 "pkcs11",
@@ -178,15 +179,17 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
+            "preLaunchTask": "debug_config_clean",
             "program": "${workspaceRoot}/pkg",
             "args": [ 
                 "ca",
                 "info",
-                "--cn", "intermediate-ca.example.com",
-                "--raw-pin", "test"
+                "intermediate-ca.example.com",
+                "--raw-so-pin", "test",
+                "--raw-pin", "test",
+                "--init"
             ],
         },
-
         {
             "name": "tpadm ca keyring generate (password auth)",
             "type": "go",
@@ -366,32 +369,6 @@
                 "policy",
             ],
         },
-        // {
-        //     "name": "tpadm tpm seal x509 key",
-        //     "type": "go",
-        //     "request": "launch",
-        //     "mode": "debug",
-        //     "program": "${workspaceRoot}/pkg",
-        //     "args": [
-        //         "tpm",
-        //         "seal",
-        //         "customid2",
-        //         "this is a secret key to seal to a keyed hash object",
-        //     ],
-        // },
-        // {
-        //     "name": "tpadm tpm unseal x509 key",
-        //     "type": "go",
-        //     "request": "launch",
-        //     "mode": "debug",
-        //     "program": "${workspaceRoot}/pkg",
-        //     "args": [
-        //         "tpm",
-        //         "unseal",
-        //         "customid2",
-        //         "rsa",
-        //     ],
-        // },
         {
             "name": "tpadm tpm seal hmac key",
             "type": "go",
@@ -501,11 +478,11 @@
             ],
         },
         {
-            "name": "tpadm webservice",
+            "name": "tpadm webservice (dev)",
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_pkcs11",
+            "preLaunchTask": "dev_config",
             "program": "${workspaceRoot}/pkg",
             "args": ["webservice",
                 "--debug",

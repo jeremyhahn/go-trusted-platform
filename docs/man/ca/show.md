@@ -24,9 +24,9 @@ showrmation many users may expect.
 
 # EXAMPLES
 
-## Display Certificate Authority Information
+## Display certificate information
 ```bash
-sudo tpadm ca show --cn intermediate-ca.example.com
+tpadm ca show intermediate-ca.example.com
 ```
 
 # AUTHOR

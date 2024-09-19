@@ -16,7 +16,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
 	"github.com/spf13/afero"
 
-	"github.com/op/go-logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 
 	blobstore "github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 )
@@ -24,7 +24,6 @@ import (
 type Config struct {
 	AutoImportIssuingCA   bool       `yaml:"auto-import-issuing-ca" json:"auto_import_issuing_ca" mapstructure:"auto-import-issuing-ca"`
 	DefaultValidityPeriod int        `yaml:"default-validity" json:"default_validity" mapstructure:"default-validity"`
-	DefaultIDevIDCN       string     `yaml:"default-idevid-cn" json:"default_idevid_cn" mapstructure:"default-idevid-cn"`
 	Identity              []Identity `yaml:"identity" json:"identity" mapstructure:"identity"`
 	IncludeLocalhostSANS  bool       `yaml:"sans-include-localhost" json:"sans_include_localhost" mapstructure:"sans-include-localhost"`
 	PlatformCA            int        `yaml:"platform-ca" json:"platform_ca" mapstructure:"platform-ca"`
@@ -83,7 +82,6 @@ var (
 		RequireKeyPassword:    true,
 		PlatformCA:            1,
 		DefaultValidityPeriod: 10,
-		DefaultIDevIDCN:       "default-device-id",
 		IncludeLocalhostSANS:  true,
 		SystemCertPool:        false,
 		Identity: []Identity{
@@ -197,7 +195,6 @@ var (
 		RequireKeyPassword:    true,
 		PlatformCA:            1,
 		DefaultValidityPeriod: 10,
-		DefaultIDevIDCN:       "default-device-id",
 		IncludeLocalhostSANS:  true,
 		SystemCertPool:        false,
 		Identity: []Identity{

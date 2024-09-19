@@ -30,20 +30,24 @@ var PasswordCmd = &cobra.Command{
 	Long:  `Performs a TPM password unseal operation on the requested key.`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App.Init(InitParams)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 
 		if err := App.OpenTPM(); err != nil {
-			App.Logger.Fatal(err)
+			App.Logger.FatalError(err)
 		}
 
 		store, err := keystore.ParseStoreType(storeType)
 		if err != nil {
-			App.Logger.Fatal(err)
+			App.Logger.FatalError(err)
 		}
 
 		keyAlg, err := keystore.ParseKeyAlgorithm(algorithm)
 		if err != nil {
-			App.Logger.Fatal(err)
+			App.Logger.FatalError(err)
 		}
 
 		srkAttrs := App.PlatformKS.SRKAttributes()
@@ -62,7 +66,7 @@ var PasswordCmd = &cobra.Command{
 		}
 		password, err := App.TPM.Unseal(keyAttrs, nil)
 		if err != nil {
-			App.Logger.Fatal(err)
+			App.Logger.FatalError(err)
 		}
 
 		fmt.Println(string(password))

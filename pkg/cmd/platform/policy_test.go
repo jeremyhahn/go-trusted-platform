@@ -15,6 +15,7 @@ func Test_Policy(t *testing.T) {
 	// NV RAM
 	app.DefaultConfig.TPMConfig.EK.CertHandle = 0
 
+	InitParams.Initialize = true
 	InitParams.Pin = []byte("test")
 	InitParams.SOPin = []byte("test")
 

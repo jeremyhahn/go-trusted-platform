@@ -5,20 +5,21 @@ import (
 	"errors"
 	"io"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/pkcs11"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/pkcs8"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
-	"github.com/op/go-logging"
 	"github.com/spf13/afero"
 
 	tpm2ks "github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/tpm2"
 )
 
 var (
-	ErrInvalidKeyringCN        = errors.New("Keyring: invalid configuration, missing CN")
-	ErrInvalidPlatformKeyStore = errors.New("Keyring: invalid platform key store")
+	ErrInvalidKeyringCN        = errors.New("keyring: invalid configuration, missing CN")
+	ErrInvalidPlatformKeyStore = errors.New("keyring: invalid platform key store")
+	ErrInvalidStoreType        = errors.New("keyring: invalid store type")
 )
 
 type KeyringConfig struct {
@@ -74,7 +75,10 @@ func NewKeyring(
 		return nil, ErrInvalidKeyringCN
 	}
 
-	// Set the TPM key store name to the name of the CA
+	// Set the key store names to the keychain name so that all
+	// of the created key store objects (HMAC PINs) share the same
+	// name. Their file names will contain the store type to differentiate
+	// them.
 	if config.TPMConfig != nil {
 		config.TPMConfig.CN = config.CN
 	}
@@ -160,7 +164,7 @@ func NewKeyring(
 					return nil, err
 				}
 			} else if err == keystore.ErrAlreadyInitialized {
-				params.Logger.Warning("CKR_CRYPTOKI_ALREADY_INITIALIZED")
+				params.Logger.Warn("CKR_CRYPTOKI_ALREADY_INITIALIZED")
 			} else {
 				return nil, err
 			}
@@ -183,66 +187,75 @@ func NewKeyring(
 // caching it on the heap. If the key  doesn't have any data sealed,
 // ErrPasswordRequired is returned so the password may be provided
 // by the user.
-func (Keyring *Keyring) Password(
+func (keyring *Keyring) Password(
 	attrs *keystore.KeyAttributes) (keystore.Password, error) {
 
 	if attrs.Parent == nil {
-		srkAttrs := Keyring.platformKS.SRKAttributes()
+		srkAttrs := keyring.platformKS.SRKAttributes()
 		attrs.Parent = srkAttrs
 	}
 	return tpm2.NewPlatformPassword(
-		Keyring.logger,
-		Keyring.tpm,
+		keyring.logger,
+		keyring.tpm,
 		attrs,
-		Keyring.platformKS.Backend(),
+		keyring.platformKS.Backend(),
 	), nil
 }
 
 // Calls close on each of the key stores and deletes
 // the store from the internal store map.
-func (Keyring *Keyring) Close() {
-	for k, v := range Keyring.storeMap {
+func (keyring *Keyring) Close() {
+	for k, v := range keyring.storeMap {
 		if err := v.Close(); err != nil {
-			Keyring.logger.Error(err)
+			keyring.logger.Error(err)
 		}
-		delete(Keyring.storeMap, k)
+		delete(keyring.storeMap, k)
 	}
 }
 
 // Returns the configured key stores in the key chain
-func (Keyring *Keyring) Stores() []keystore.KeyStorer {
+func (keyring *Keyring) Stores() []keystore.KeyStorer {
 	stores := make([]keystore.KeyStorer, 0)
-	for _, v := range Keyring.storeMap {
+	for _, v := range keyring.storeMap {
 		stores = append(stores, v)
 	}
 	return stores
 }
 
+// Returns the requested Key Store Module
+func (keyring *Keyring) Store(storeType string) (keystore.KeyStorer, error) {
+	store, ok := keyring.storeMap[keystore.StoreType(storeType)]
+	if !ok {
+		return nil, ErrInvalidStoreType
+	}
+	return store, nil
+}
+
 // Returns the PKCS #8 key store
-func (Keyring *Keyring) PKCS8() keystore.KeyStorer {
-	pkcs8, _ := Keyring.storeMap[keystore.STORE_PKCS8]
+func (keyring *Keyring) PKCS8() keystore.KeyStorer {
+	pkcs8, _ := keyring.storeMap[keystore.STORE_PKCS8]
 	return pkcs8
 }
 
 // Returns the PKCS #11 key store
-func (Keyring *Keyring) PKCS11() keystore.KeyStorer {
-	pkcs11, _ := Keyring.storeMap[keystore.STORE_PKCS11]
+func (keyring *Keyring) PKCS11() keystore.KeyStorer {
+	pkcs11, _ := keyring.storeMap[keystore.STORE_PKCS11]
 	return pkcs11
 }
 
 // Returns the TPM 2.0 key store
-func (Keyring *Keyring) TPM2() keystore.KeyStorer {
-	tpm, _ := Keyring.storeMap[keystore.STORE_TPM2]
+func (keyring *Keyring) TPM2() keystore.KeyStorer {
+	tpm, _ := keyring.storeMap[keystore.STORE_TPM2]
 	return tpm
 }
 
 // Generates a new key pair using the provided key attributes
 // and returns an OpaqueKey implementing crypto.Signer and
 // crypto.Decrypter backed by the underlying Key Store Module.
-func (Keyring *Keyring) GenerateKey(
+func (keyring *Keyring) GenerateKey(
 	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
-	s, ok := Keyring.storeMap[attrs.StoreType]
+	s, ok := keyring.storeMap[attrs.StoreType]
 	if !ok {
 		return nil, keystore.ErrInvalidKeyStore
 	}
@@ -251,10 +264,10 @@ func (Keyring *Keyring) GenerateKey(
 
 // Returns a RSA OpaqueKey for the provided key attributes. The
 // underlying Key Store Module must support the algorithm.
-func (Keyring *Keyring) GenerateRSA(
+func (keyring *Keyring) GenerateRSA(
 	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
-	s, ok := Keyring.storeMap[attrs.StoreType]
+	s, ok := keyring.storeMap[attrs.StoreType]
 	if !ok {
 		return nil, keystore.ErrInvalidKeyStore
 	}
@@ -263,10 +276,10 @@ func (Keyring *Keyring) GenerateRSA(
 
 // Returns an ECDSA OpaqueKey for the provided key attributes. The
 // underlying Key Store Module must support the algorithm.
-func (Keyring *Keyring) GenerateECDSA(
+func (keyring *Keyring) GenerateECDSA(
 	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
-	s, ok := Keyring.storeMap[attrs.StoreType]
+	s, ok := keyring.storeMap[attrs.StoreType]
 	if !ok {
 		return nil, keystore.ErrInvalidKeyStore
 	}
@@ -275,10 +288,10 @@ func (Keyring *Keyring) GenerateECDSA(
 
 // Returns an Ed25519 OpaqueKey for the provided key attributes. The
 // underlying Key Store Module must support the algorithm.
-func (Keyring *Keyring) GenerateEd25519(
+func (keyring *Keyring) GenerateEd25519(
 	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
-	s, ok := Keyring.storeMap[attrs.StoreType]
+	s, ok := keyring.storeMap[attrs.StoreType]
 	if !ok {
 		return nil, keystore.ErrInvalidKeyStore
 	}
@@ -286,8 +299,8 @@ func (Keyring *Keyring) GenerateEd25519(
 }
 
 // Deletes the key pair associated with the provided key attributes
-func (Keyring *Keyring) Delete(attrs *keystore.KeyAttributes) error {
-	s, ok := Keyring.storeMap[attrs.StoreType]
+func (keyring *Keyring) Delete(attrs *keystore.KeyAttributes) error {
+	s, ok := keyring.storeMap[attrs.StoreType]
 	if !ok {
 		return keystore.ErrInvalidKeyStore
 	}
@@ -295,10 +308,10 @@ func (Keyring *Keyring) Delete(attrs *keystore.KeyAttributes) error {
 }
 
 // Returns a crypto.Decrypter for the provided key attributes
-func (Keyring *Keyring) Decrypter(
+func (keyring *Keyring) Decrypter(
 	attrs *keystore.KeyAttributes) (crypto.Decrypter, error) {
 
-	s, ok := Keyring.storeMap[attrs.StoreType]
+	s, ok := keyring.storeMap[attrs.StoreType]
 	if !ok {
 		return nil, keystore.ErrInvalidKeyStore
 	}
@@ -306,10 +319,10 @@ func (Keyring *Keyring) Decrypter(
 }
 
 // Returns an OpaqueKey  for the provided key attributes
-func (Keyring *Keyring) Key(
+func (keyring *Keyring) Key(
 	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
-	s, ok := Keyring.storeMap[attrs.StoreType]
+	s, ok := keyring.storeMap[attrs.StoreType]
 	if !ok {
 		return nil, keystore.ErrInvalidKeyStore
 	}
@@ -317,10 +330,10 @@ func (Keyring *Keyring) Key(
 }
 
 // Returns a crypto.Signer for the provided key attributes
-func (Keyring *Keyring) Signer(
+func (keyring *Keyring) Signer(
 	attrs *keystore.KeyAttributes) (crypto.Signer, error) {
 
-	s, ok := Keyring.storeMap[attrs.StoreType]
+	s, ok := keyring.storeMap[attrs.StoreType]
 	if !ok {
 		return nil, keystore.ErrInvalidKeyStore
 	}
@@ -330,11 +343,11 @@ func (Keyring *Keyring) Signer(
 // Returns a software runtime verifier to perform
 // signature verifications. The verifier supports
 // RSA PKCS1v15, RSA-PSS, ECDSA, and Ed25519.
-func (Keyring *Keyring) Verifier(
+func (keyring *Keyring) Verifier(
 	attrs *keystore.KeyAttributes,
 	opts *keystore.VerifyOpts) keystore.Verifier {
 
-	s, ok := Keyring.storeMap[attrs.StoreType]
+	s, ok := keyring.storeMap[attrs.StoreType]
 	if !ok {
 		panic(keystore.ErrInvalidKeyStore)
 	}

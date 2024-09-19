@@ -22,6 +22,7 @@ var (
 			CertHandle:    0x01C00002,
 			Handle:        0x81010001,
 			HierarchyAuth: keystore.DEFAULT_PASSWORD,
+			KeyAlgorithm:  x509.RSA.String(),
 			RSAConfig: &keystore.RSAConfig{
 				KeySize: 2048,
 			},

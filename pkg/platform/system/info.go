@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/model"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 )
 
 func PrintSystemInfo() error {
@@ -33,32 +33,32 @@ func PrintSystemInfo() error {
 	return nil
 }
 
-func SystemInfo() (model.SystemStruct, error) {
+func SystemInfo() (entities.System, error) {
 	memstats := &runtime.MemStats{}
 	runtime.ReadMemStats(memstats)
 	bios, err := BIOS()
 	if err != nil {
-		return model.SystemStruct{}, err
+		return entities.System{}, err
 	}
 	board, err := Board()
 	if err != nil {
-		return model.SystemStruct{}, err
+		return entities.System{}, err
 	}
 	chassis, err := Chassis()
 	if err != nil {
-		return model.SystemStruct{}, err
+		return entities.System{}, err
 	}
 	product, err := Product()
 	if err != nil {
-		return model.SystemStruct{}, err
+		return entities.System{}, err
 	}
-	return model.SystemStruct{
+	return entities.System{
 		BIOS:    bios,
 		Board:   board,
 		Chassis: chassis,
 		Product: product,
 		// Version: app.GetVersion(),
-		Runtime: &model.SystemRuntime{
+		Runtime: &entities.SystemRuntime{
 			Version:     runtime.Version(),
 			Cpus:        runtime.NumCPU(),
 			Cgo:         runtime.NumCgoCall(),
@@ -74,24 +74,24 @@ func SystemInfo() (model.SystemStruct, error) {
 	}, nil
 }
 
-func BIOS() (model.BIOS, error) {
+func BIOS() (entities.BIOS, error) {
 	date, err := os.ReadFile("/sys/class/dmi/id/bios_date")
 	if err != nil {
-		return model.BIOS{}, err
+		return entities.BIOS{}, err
 	}
 	release, err := os.ReadFile("/sys/class/dmi/id/bios_release")
 	if err != nil {
-		return model.BIOS{}, err
+		return entities.BIOS{}, err
 	}
 	vendor, err := os.ReadFile("/sys/class/dmi/id/bios_vendor")
 	if err != nil {
-		return model.BIOS{}, err
+		return entities.BIOS{}, err
 	}
 	version, err := os.ReadFile("/sys/class/dmi/id/bios_version")
 	if err != nil {
-		return model.BIOS{}, err
+		return entities.BIOS{}, err
 	}
-	return model.BIOS{
+	return entities.BIOS{
 		Date:    strings.TrimSpace(string(date)),
 		Release: strings.TrimSpace(string(release)),
 		Vendor:  strings.TrimSpace(string(vendor)),
@@ -99,28 +99,28 @@ func BIOS() (model.BIOS, error) {
 	}, nil
 }
 
-func Board() (model.Board, error) {
+func Board() (entities.Board, error) {
 	assetTag, err := os.ReadFile("/sys/class/dmi/id/board_asset_tag")
 	if err != nil {
-		return model.Board{}, err
+		return entities.Board{}, err
 	}
 	name, err := os.ReadFile("/sys/class/dmi/id/board_name")
 	if err != nil {
-		return model.Board{}, err
+		return entities.Board{}, err
 	}
 	serial, err := os.ReadFile("/sys/class/dmi/id/board_serial")
 	if err != nil {
-		return model.Board{}, err
+		return entities.Board{}, err
 	}
 	vendor, err := os.ReadFile("/sys/class/dmi/id/board_vendor")
 	if err != nil {
-		return model.Board{}, err
+		return entities.Board{}, err
 	}
 	version, err := os.ReadFile("/sys/class/dmi/id/board_version")
 	if err != nil {
-		return model.Board{}, err
+		return entities.Board{}, err
 	}
-	return model.Board{
+	return entities.Board{
 		AssetTag: strings.TrimSpace(string(assetTag)),
 		Name:     strings.TrimSpace(string(name)),
 		Serial:   strings.TrimSpace(string(serial)),
@@ -129,28 +129,28 @@ func Board() (model.Board, error) {
 	}, nil
 }
 
-func Chassis() (model.Chassis, error) {
+func Chassis() (entities.Chassis, error) {
 	assetTag, err := os.ReadFile("/sys/class/dmi/id/chassis_asset_tag")
 	if err != nil {
-		return model.Chassis{}, err
+		return entities.Chassis{}, err
 	}
 	chassisType, err := os.ReadFile("/sys/class/dmi/id/chassis_type")
 	if err != nil {
-		return model.Chassis{}, err
+		return entities.Chassis{}, err
 	}
 	serial, err := os.ReadFile("/sys/class/dmi/id/chassis_serial")
 	if err != nil {
-		return model.Chassis{}, err
+		return entities.Chassis{}, err
 	}
 	vendor, err := os.ReadFile("/sys/class/dmi/id/chassis_vendor")
 	if err != nil {
-		return model.Chassis{}, err
+		return entities.Chassis{}, err
 	}
 	version, err := os.ReadFile("/sys/class/dmi/id/chassis_version")
 	if err != nil {
-		return model.Chassis{}, err
+		return entities.Chassis{}, err
 	}
-	return model.Chassis{
+	return entities.Chassis{
 		AssetTag: strings.TrimSpace(string(assetTag)),
 		Serial:   strings.TrimSpace(string(serial)),
 		Type:     strings.TrimSpace(string(chassisType)),
@@ -159,32 +159,32 @@ func Chassis() (model.Chassis, error) {
 	}, nil
 }
 
-func Product() (model.Product, error) {
+func Product() (entities.Product, error) {
 	family, err := os.ReadFile("/sys/class/dmi/id/product_family")
 	if err != nil {
-		return model.Product{}, err
+		return entities.Product{}, err
 	}
 	name, err := os.ReadFile("/sys/class/dmi/id/product_name")
 	if err != nil {
-		return model.Product{}, err
+		return entities.Product{}, err
 	}
 	serial, err := os.ReadFile("/sys/class/dmi/id/product_serial")
 	if err != nil {
-		return model.Product{}, err
+		return entities.Product{}, err
 	}
 	sku, err := os.ReadFile("/sys/class/dmi/id/product_sku")
 	if err != nil {
-		return model.Product{}, err
+		return entities.Product{}, err
 	}
 	uuid, err := os.ReadFile("/sys/class/dmi/id/product_uuid")
 	if err != nil {
-		return model.Product{}, err
+		return entities.Product{}, err
 	}
 	version, err := os.ReadFile("/sys/class/dmi/id/product_version")
 	if err != nil {
-		return model.Product{}, err
+		return entities.Product{}, err
 	}
-	return model.Product{
+	return entities.Product{
 		Family:  strings.TrimSpace(string(family)),
 		Name:    strings.TrimSpace(string(name)),
 		Serial:  strings.TrimSpace(string(serial)),

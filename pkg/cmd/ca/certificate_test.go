@@ -2,6 +2,7 @@ package ca
 
 import (
 	"crypto/elliptic"
+	"crypto/x509"
 	"regexp"
 	"strings"
 	"testing"
@@ -37,6 +38,7 @@ func Test_Certificate(t *testing.T) {
 			app.DefaultConfig.TPMConfig.EK.CertHandle = 0
 
 			if algo == "ecdsa" {
+				app.DefaultConfig.TPMConfig.EK.KeyAlgorithm = x509.ECDSA.String()
 				app.DefaultConfig.TPMConfig.EK.RSAConfig = nil
 				app.DefaultConfig.TPMConfig.EK.ECCConfig = &keystore.ECCConfig{
 					Curve: elliptic.P256().Params().Name,

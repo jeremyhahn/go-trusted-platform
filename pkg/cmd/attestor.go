@@ -24,12 +24,12 @@ verification requests from the Verifier to begin Remote Attestation`,
 	Run: func(cmd *cobra.Command, args []string) {
 
 		if _, err := App.Init(InitParams); err != nil {
-			App.Logger.Fatal(err)
+			App.Logger.FatalError(err)
 		}
 
 		_, err := attestor.NewAttestor(App)
 		if err != nil {
-			App.Logger.Fatal(err)
+			App.Logger.FatalError(err)
 		}
 
 		// Run forever

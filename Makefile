@@ -10,7 +10,7 @@ GOBIN                   := $(shell dirname `which go`)
 PYTHONBIN               ?= /usr/bin/python3.8
 PIPBIN                  ?= pip
 
-ARM_CC                  ?= arm-linux-gnueabihf-gcc-8
+ARM_CC                  ?= arm-linux-gnueabihf-gcc
 ARM_CC_64				?= aarch64-linux-gnu-gcc
 
 REPO                    ?= github.com
@@ -232,12 +232,14 @@ build-arm64-debug-static:
 	$(GOBIN)/go build -gcflags "all=-N -l" -o ../$(APPBIN) --ldflags '-extldflags -static -v ${LDFLAGS}'
 
 
-build-local: clean build-debug
+build-dev: clean build-debug
 	sudo chown $(USER):$(USER) /dev/tpmrm0
 	-sudo chown $(USER):$(USER) /sys/kernel/security/tpm0/binary_bios_measurements
 	mkdir -p $(PLATFORM_DIR)/etc/
 	cp configs/platform/config.dev.yaml config.yaml
 	cp configs/softhsm.conf $(PLATFORM_DIR)/etc/softhsm.conf
+	cp configs/platform/config.debug.yaml pkg/config.yaml
+	cp -R public_html pkg/
 
 
 config:
@@ -278,7 +280,7 @@ clean:
 		config.yaml
 
 
-test: test-tpm test-crypto test-store test-cli
+test: test-tpm test-crypto test-store test-webservice test-cli
 
 test-cli: test-tpm-cli test-ca-cli test-platform-cli
 
@@ -322,10 +324,9 @@ test-crypto:
 	cd pkg/crypto/aesgcm && go test -v
 	cd pkg/crypto/argon2 && go test -v
 
-test-store:
+test-store: test-store-pkcs11 test-store-tpm2 test-store-datastore
 	cd pkg/store/keystore && go test -v
 	cd pkg/store/keystore/pkcs8 && go test -v
-	$(MAKE) test-store-pkcs11 test-store-tpm2
 
 test-store-pkcs11:
 	cd pkg/store/keystore/pkcs11 && \
@@ -347,6 +348,21 @@ test-store-tpm2:
 		go test -v -run ^TestRSA_PKCS1v15_WithPasswordWithoutPolicy$ && \
 		go test -v -run ^TestKeyStoreGenerateRSAWithPolicy$ && \
 		go test -v -run ^TestRSA_PSS_WithPasswordWithoutPolicy$
+
+test-store-datastore:
+	cd pkg/store/datastore && \
+		go test -v
+	cd pkg/store/datastore/kvstore && \
+		go test -v
+
+test-webservice: test-webservice-jwt
+
+test-webservice-jwt:
+	cd pkg/webservice/v1/jwt && \
+		go test -v -run ^TestSigningMethodRS$ && \
+		go test -v -run ^TestSigningMethodPS$ && \
+		go test -v -run ^TestSigningMethodES$ && \
+		go test -v -run ^TestSigningMethodES_Ed25519$
 
 proto:
 	cd pkg/$(ATTESTATION_DIR) && $(PROTOC) \

@@ -17,8 +17,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
-	"github.com/op/go-logging"
 
 	pb "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/proto"
 )
@@ -65,11 +65,11 @@ func main() {
 
 	app, err := app.NewApp().Init(&initParams)
 	if err != nil {
-		app.Logger.Fatal(err)
+		app.Logger.FatalError(err)
 	}
 
 	if _, err := NewAttestor(app); err != nil {
-		app.Logger.Fatal(err)
+		app.Logger.FatalError(err)
 	}
 	// Run forever
 }
@@ -109,7 +109,7 @@ func NewAttestor(app *app.App) (Attestor, error) {
 			insecureService,
 			app.ListenAddress)
 		if err != nil {
-			app.Logger.Fatal(err)
+			app.Logger.FatalError(err)
 		}
 	}()
 
@@ -121,7 +121,7 @@ func NewAttestor(app *app.App) (Attestor, error) {
 			app.ServerKeyAttributes,
 			secureService,
 			app.ListenAddress); err != nil {
-			app.Logger.Fatal(err)
+			app.Logger.FatalError(err)
 		}
 	}()
 
@@ -178,7 +178,7 @@ func (attestor *Attest) newTLSGRPCServer(
 	creds := credentials.NewTLS(tlsConfig)
 	listener, err := net.Listen("tcp", socket)
 	if err != nil {
-		attestor.logger.Fatalf("failed to listen: %v", err)
+		attestor.logger.Fatal(fmt.Sprintf("failed to listen: %s"))
 	}
 
 	statsHandler := &handler{
@@ -203,7 +203,7 @@ func (attestor *Attest) newTLSGRPCServer(
 	go func() {
 		// Run forever
 		if err := attestor.secureGRPCServer.Serve(listener); err != nil {
-			attestor.logger.Fatal(err)
+			attestor.logger.FatalError(err)
 		}
 	}()
 

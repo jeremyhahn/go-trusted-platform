@@ -141,13 +141,13 @@ func (tpm *TPM2) Provision(soPIN keystore.Password) error {
 	tpm.logger.Info("Clearing TPM Endorsement and Owner Hierarchies")
 	// Clear endorsement and owner hierarchies
 	if err := tpm.Clear(nil, tpm2.TPMRHEndorsement); err != nil {
-		tpm.logger.Warning("tpm: failed to clear Endorsement hierarchy")
-		tpm.logger.Warning(err)
+		tpm.logger.Warn("tpm: failed to clear Endorsement hierarchy")
+		tpm.logger.MaybeError(err)
 		//return nil, err
 	}
 	if err := tpm.Clear(nil, tpm2.TPMRHOwner); err != nil {
-		tpm.logger.Warning("tpm: failed to clear Owner hierarchy")
-		tpm.logger.Warning(err)
+		tpm.logger.Warn("tpm: failed to clear Owner hierarchy")
+		tpm.logger.MaybeError(err)
 		// return nil, err
 	}
 
@@ -332,7 +332,7 @@ func (tpm *TPM2) ProvisionEKCert(hierarchyAuth, ekCertDER []byte) error {
 // Performs a sum across all PCR banks and their associated
 // values using the hash function defined in the TPM section
 // of the platform configuration file. Any errors encountered
-// are treated as Fatal.
+// are treated as FatalError.
 //
 // TCG-TPM-v2.0-Provisioning-Guidance-Published-v1r1.pdf
 // https://trustedcomputinggroup.org/wp-content/uploads/TCG-TPM-v2.0-Provisioning-Guidance-Published-v1r1.pdf
@@ -344,7 +344,7 @@ func (tpm *TPM2) GoldenMeasurements() []byte {
 	// Read all available banks and their PCR values
 	banks, err := tpm.ReadPCRs(tpm2SupportedPCRs)
 	if err != nil {
-		tpm.logger.Fatal(err)
+		tpm.logger.FatalError(err)
 	}
 	// Create golden PCR that stores the final sum of
 	// all PCR values across all banks.
@@ -502,17 +502,6 @@ func (tpm *TPM2) CreatePlatformPolicy() error {
 	return nil
 }
 
-// // Returns the platform policy digest of the Golden
-// // Integrity Measurements with the Policy PCR.
-// func (tpm *TPM2) PlatformPolicyDigest() tpm2.TPM2BDigest {
-// 	if tpm.policyDigest.Buffer == nil {
-// 		if err := tpm.CreatePlatformPolicy(); err != nil {
-// 			tpm.logger.Fatal(err)
-// 		}
-// 	}
-// 	return tpm.policyDigest
-// }
-
 // Recursively sums a directory path using the Hash function
 // specified in the TPM section of the platform configuration
 // file.
@@ -522,7 +511,12 @@ func (tpm *TPM2) fileIntegritySum(dir string) []byte {
 	digest.Reset()
 
 	tpm.logger.Info("Processing file integrity checks")
-	tpm.logger.Info(yaml.Marshal(viper.Get("tpm.file-integrity")))
+
+	marshalled, err := yaml.Marshal(viper.Get("tpm.file-integrity"))
+	if err != nil {
+		tpm.logger.FatalError(err)
+	}
+	tpm.logger.Infof(string(marshalled))
 
 	var extendDir func(string) []byte
 	extendDir = func(dir string) []byte {
@@ -549,7 +543,7 @@ func (tpm *TPM2) fileIntegritySum(dir string) []byte {
 
 			bytes, err = os.ReadFile(path)
 			if err != nil {
-				tpm.logger.Fatal(err)
+				tpm.logger.FatalError(err)
 			}
 
 			tpm.logger.Debug(path)

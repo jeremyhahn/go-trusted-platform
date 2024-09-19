@@ -14,7 +14,6 @@
 
 # OPTIONS
 
-
 ## References
 
 [common options](common/options.md) collection of common options that provide
@@ -26,17 +25,17 @@ issuermation many users may expect.
 
 ## Issue new TPM 2.0 RSA TLS certificate
 ```bash
-sudo tpadm ca issue --cn webserver.mydomain.com --store tpm2 --algorithm rsa
+tpadm ca issue webserver.mydomain.com tpm2 rsa
 ```
 
 ## Issue new PKCS #11 ECDSA TLS certificate
 ```bash
-sudo tpadm ca issue --cn webserver.mydomain.com --store pkcs11 --algorithm ecdsa
+tpadm ca issue webserver.mydomain.com pkcs11 ecdsa
 ```
 
 ## Issue new PKCS #8 Ed25519 TLS certificate
 ```bash
-sudo tpadm ca issue --cn webserver.mydomain.com --store pkcs8 --algorithm ed25519
+tpadm ca issue webserver.mydomain.com pkcs8 ed25519
 ```
 
 # AUTHOR

@@ -49,7 +49,11 @@ var SRKCmd = &cobra.Command{
 	Long:  `Perform operations on a TPM 2.0 Storage Root Key`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App.Init(InitParams)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 
 		soPIN := keystore.NewClearPassword(InitParams.SOPin)
 

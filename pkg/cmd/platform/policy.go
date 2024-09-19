@@ -11,7 +11,11 @@ var PolicyCmd = &cobra.Command{
 	Long:  `Perform platform PCR policy operations.`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App.Init(InitParams)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 
 		var digestHash []byte
 		var err error

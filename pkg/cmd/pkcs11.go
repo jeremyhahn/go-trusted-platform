@@ -37,7 +37,11 @@ var pkcs11Cmd = &cobra.Command{
 Hardware Security Modules`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App.Init(InitParams)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 
 		if bYKCS11 {
 			module = "/usr/local/lib/libykcs11.so"
@@ -77,7 +81,7 @@ Hardware Security Modules`,
 		}
 		hsm, err := pkcs11.NewPKCS11(App.Logger, config)
 		if err != nil {
-			App.Logger.Fatal(err)
+			App.Logger.FatalError(err)
 		}
 
 		hsm.PrintLibraryInfo()

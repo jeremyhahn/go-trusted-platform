@@ -8,13 +8,13 @@ import (
 )
 
 type AuthenticationRouter struct {
-	middleware middleware.AuthMiddleware
+	middleware middleware.JsonWebTokenMiddleware
 	WebServiceRouter
 }
 
 // Creates a new web service authentication router
 func NewAuthenticationRouter(
-	middleware middleware.AuthMiddleware) WebServiceRouter {
+	middleware middleware.JsonWebTokenMiddleware) WebServiceRouter {
 
 	return &AuthenticationRouter{
 		middleware: middleware}
@@ -30,7 +30,7 @@ func (authenticationRouter *AuthenticationRouter) RegisterRoutes(router *mux.Rou
 // @Summary Authenticate and obtain JWT
 // @Description Authenticate a user and returns a new JWT
 // @Tags Authentication
-// @Param UserCredentials body service.UserCredentials true "UserCredentials struct"
+// @Param UserCredential body service.UserCredential true "UserCredential struct"
 // @Accept json
 // @Produce json
 // @Success 200 {object} rest.JsonWebToken

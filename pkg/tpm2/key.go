@@ -30,7 +30,7 @@ func (tpm *TPM2) EKPublic() (tpm2.TPM2BName, tpm2.TPMTPublic) {
 	ekHandle := tpm2.TPMHandle(tpm.config.EK.Handle)
 	name, pub, err := tpm.ReadHandle(ekHandle)
 	if err != nil {
-		tpm.logger.Fatal(err)
+		tpm.logger.FatalError(err)
 	}
 	return name, pub
 }
@@ -42,15 +42,15 @@ func (tpm *TPM2) EKRSA() *rsa.PublicKey {
 		_, ekPub := tpm.EKPublic()
 		rsaDetail, err := ekPub.Parameters.RSADetail()
 		if err != nil {
-			tpm.logger.Fatal(err)
+			tpm.logger.FatalError(err)
 		}
 		rsaUnique, err := ekPub.Unique.RSA()
 		if err != nil {
-			tpm.logger.Fatal(err)
+			tpm.logger.FatalError(err)
 		}
 		rsaPub, err := tpm2.RSAPub(rsaDetail, rsaUnique)
 		if err != nil {
-			tpm.logger.Fatal(err)
+			tpm.logger.FatalError(err)
 		}
 		tpm.ekRSAPubKey = rsaPub
 	}
@@ -64,15 +64,15 @@ func (tpm *TPM2) EKECC() *ecdsa.PublicKey {
 		_, ekPub := tpm.EKPublic()
 		ecDetail, err := ekPub.Parameters.ECCDetail()
 		if err != nil {
-			tpm.logger.Fatal(err)
+			tpm.logger.FatalError(err)
 		}
 		curve, err := ecDetail.CurveID.Curve()
 		if err != nil {
-			tpm.logger.Fatal(err)
+			tpm.logger.FatalError(err)
 		}
 		eccUnique, err := ekPub.Unique.ECC()
 		if err != nil {
-			tpm.logger.Fatal(err)
+			tpm.logger.FatalError(err)
 		}
 		eccPub := &ecdsa.PublicKey{
 			Curve: curve,
@@ -90,7 +90,7 @@ func (tpm *TPM2) SSRKPublic() (tpm2.TPM2BName, tpm2.TPMTPublic) {
 	srkHandle := tpm2.TPMHandle(tpm.config.SSRK.Handle)
 	name, pub, err := tpm.ReadHandle(srkHandle)
 	if err != nil {
-		tpm.logger.Fatal(err)
+		tpm.logger.FatalError(err)
 	}
 	return name, pub
 }
@@ -123,7 +123,7 @@ func (tpm *TPM2) IAK() crypto.PublicKey {
 	}
 	pub, err := x509.ParsePKIXPublicKey(tpm.iakAttrs.TPMAttributes.PublicKeyBytes)
 	if err != nil {
-		tpm.logger.Fatal(err)
+		tpm.logger.FatalError(err)
 	}
 	return pub
 }
@@ -132,10 +132,16 @@ func (tpm *TPM2) IAK() crypto.PublicKey {
 func (tpm *TPM2) IDevIDAttributes() (*keystore.KeyAttributes, error) {
 	if tpm.idevidAttrs == nil {
 		idevidHandle := tpm2.TPMHandle(tpm.config.IDevID.Handle)
+		signatureAlgorithm, err := keystore.ParseSignatureAlgorithm(tpm.config.IDevID.SignatureAlgorithm)
+		if err != nil {
+			return nil, err
+		}
 		idevidAttrs, err := tpm.KeyAttributes(idevidHandle)
 		if err != nil {
 			return nil, err
 		}
+		idevidAttrs.CN = tpm.config.IDevID.CN
+		idevidAttrs.SignatureAlgorithm = signatureAlgorithm
 		tpm.idevidAttrs = idevidAttrs
 	}
 	return tpm.idevidAttrs, nil
@@ -144,11 +150,11 @@ func (tpm *TPM2) IDevIDAttributes() (*keystore.KeyAttributes, error) {
 // Returns the Initial Attestation Key Attributes
 func (tpm *TPM2) IDevID() crypto.PublicKey {
 	if tpm.idevidAttrs == nil {
-		tpm.logger.Fatal(ErrNotInitialized)
+		tpm.logger.FatalError(ErrNotInitialized)
 	}
 	pub, err := x509.ParsePKIXPublicKey(tpm.iakAttrs.TPMAttributes.PublicKeyBytes)
 	if err != nil {
-		tpm.logger.Fatal(err)
+		tpm.logger.FatalError(err)
 	}
 	return pub
 }
@@ -580,7 +586,7 @@ func (tpm *TPM2) CreateIAK(
 		tpm.config.IAK,
 		&policyDigest)
 	if err != nil {
-		tpm.logger.Fatal(err)
+		tpm.logger.FatalError(err)
 	}
 	iakAttrs.Parent = ekAttrs
 
@@ -988,8 +994,6 @@ func (tpm *TPM2) CreateIDevID(
 		return nil, nil, err
 	}
 
-	originalBuffer := []byte("test nonce")
-
 	certify := tpm2.Certify{
 		ObjectHandle: tpm2.AuthHandle{
 			Handle: primaryKey.ObjectHandle,
@@ -1002,7 +1006,7 @@ func (tpm *TPM2) CreateIDevID(
 			Auth:   tpm2.PasswordAuth(akAuth),
 		},
 		QualifyingData: tpm2.TPM2BData{
-			Buffer: originalBuffer,
+			Buffer: []byte{},
 		},
 		InScheme: tpm2.TPMTSigScheme{
 			Scheme: tpm2.TPMAlgNull,

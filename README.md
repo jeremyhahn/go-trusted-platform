@@ -66,6 +66,17 @@ The Trusted Platform will try to read the TPM Endorsement Key Certificate from N
 The development and example attestation configs uses a TPM simulator which is reset every time the platform starts. Be sure to set the simulator to false in the platform configuration file to start using your real TPM device. The included prod config file provides some example defaults intended for a production environment.
 
 
+## Algorithm Safety
+
+Selecting secure encryption and hash function algorithms, padding schemes, and cipher suites are critical to the final security posture of an application. Many algorithms and schemes that are in wide use today have been found to contain vulnerabilities. Be sure to check out the [Safe Curves](https://safecurves.cr.yp.to/) website for the latest updates on EC algorithms. The NIST recommends a minimum RSA key size of 2048 until the year 2030, however, many RSA users are already moving towards larger key sizes.
+
+Note that many low cost HSM's don't offer RSA 4096 bit keys or Curve25519. Check your HSM documentation closely prior to purchase.
+
+The TPM 2.0 spec does not support Curve25519, but does support ECDSA. Unfortunately, as can be seen on the Safe Curves website, many ECDSA curves used in the wild are not up to par. For the best security, I recommend preferring RSA over EC for TPM 2.0. Note that the TPM must support FIPS 140-2 to perform RSA-PSS signatures. This can be confirmed by issuing the `TPM2_GetCapability` and inspecing the `TPM_PT_MODES` property, or checking the manufacturer datasheet. 
+
+If you're looking for general guidance, EdDSA Curve25519 provides the best security by modern standards, followed by RSA (PSS) using strong keys, preferably 4096 bit. The [NitroKey 3](https://www.nitrokey.com/products/nitrokeys) is a cost effective PKCS #11 solution providing both RSA 4096 bit keys and Curve25519.
+
+
 ##### Web Services
 
 The platform includes a built-in web server to host the REST API. The provided configuration files start the web server on HTTP port 8080 and TLS port 8443. The OpenAPI docs can be browsed at `https://localhost:8443/swagger`.

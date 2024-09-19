@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -26,7 +27,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 
-	"github.com/op/go-logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 type TrustedPlatformModule interface {
@@ -205,7 +206,8 @@ func NewTPM2(params *Params) (TrustedPlatformModule, error) {
 		}
 		tpmTransport = transport.FromReadWriter(sim)
 	} else {
-		params.Logger.Infof("%s %s", infoOpeningDevice, params.Config.Device)
+		params.Logger.Info(infoOpeningDevice,
+			slog.String("device", params.Config.Device))
 		device, err = os.OpenFile(params.Config.Device, os.O_RDWR, 0)
 		if err != nil {
 			params.Logger.Error(err)
@@ -271,8 +273,7 @@ func (tpm *TPM2) Open() error {
 		tpm.simulator = sim
 		t = transport.FromReadWriter(sim)
 	} else {
-
-		tpm.logger.Infof("%s %s", infoOpeningDevice, tpm.config.Device)
+		tpm.logger.Info(infoOpeningDevice, slog.String("device", tpm.config.Device))
 		f, err := os.OpenFile(tpm.config.Device, os.O_RDWR, 0)
 		if err != nil {
 			tpm.logger.Error(err)
@@ -361,7 +362,7 @@ func (tpm *TPM2) PlatformPolicyDigest() tpm2.TPM2BDigest {
 	if tpm.policyDigest.Buffer == nil {
 		_, closer, err := tpm.PlatformPolicySession()
 		if err != nil {
-			tpm.logger.Fatal(err)
+			tpm.logger.FatalError(err)
 		}
 		defer closer()
 	}
@@ -420,7 +421,8 @@ func (tpm *TPM2) SetHierarchyAuth(oldPasswd, newPasswd keystore.Password, hierar
 		case tpm2.TPMRHOwner:
 			sHierarchy = "Owner"
 		}
-		tpm.logger.Debugf("tpm: Setting %s hierarchy authorization password", sHierarchy)
+		tpm.logger.Debug("tpm: Setting hierarchy authorization password",
+			slog.String("hierarchy", sHierarchy))
 	} else {
 		tpm.logger.Debug("tpm: Setting hierarchy authorization passwords")
 	}
@@ -439,9 +441,10 @@ func (tpm *TPM2) SetHierarchyAuth(oldPasswd, newPasswd keystore.Password, hierar
 		}
 	}
 	if tpm.debugSecrets {
-		tpm.logger.Debugf(
-			"tpm: old password: %s, new password: %s",
-			oldPassword, newPassword)
+		tpm.logger.Debug(
+			"tpm: passwords",
+			slog.String("old", string(oldPassword)),
+			slog.String("new", string(newPassword)))
 	}
 	var hierarchies []tpm2.TPMHandle
 	if hierarchy != nil {
@@ -579,6 +582,9 @@ func (tpm *TPM2) Sign(
 	// Create parent session to load the key
 	session, closer, err = tpm.CreateSession(keyAttrs)
 	if err != nil {
+		if closer != nil {
+			closer()
+		}
 		return nil, err
 	}
 	defer closer()
@@ -641,7 +647,7 @@ func (tpm *TPM2) Sign(
 			} else if opts.HashFunc() == crypto.SHA512 {
 				algo = tpm2.TPMAlgSHA512
 			} else {
-				tpm.logger.Error("%s: %s",
+				tpm.logger.Errorf("%s: %s",
 					keystore.ErrInvalidHashFunction, opts.HashFunc())
 				return nil, keystore.ErrInvalidHashFunction
 			}
@@ -725,7 +731,7 @@ func (tpm *TPM2) Sign(
 		} else if opts.HashFunc() == crypto.SHA512 {
 			algo = tpm2.TPMAlgSHA512
 		} else {
-			tpm.logger.Error("%s: %s",
+			tpm.logger.Errorf("%s: %s",
 				keystore.ErrInvalidHashFunction, opts.HashFunc())
 			return nil, keystore.ErrInvalidHashFunction
 		}
@@ -766,6 +772,7 @@ func (tpm *TPM2) Sign(
 			Validation: validation,
 		}.Execute(tpm.transport)
 		if err != nil {
+			tpm.logger.Error(err)
 			return nil, err
 		}
 
@@ -807,7 +814,7 @@ func (tpm *TPM2) Sign(
 				// The Golang crypto/rsa/pss.go doesn't expose a public
 				// API to perform PSS padding, so punting on synthesizing
 				// the functionality on behalf of incompatible TPMs for now.
-				tpm.logger.Fatal(ErrRSAPSSNotSupported)
+				tpm.logger.FatalError(ErrRSAPSSNotSupported)
 			}
 
 		} else {
@@ -1189,7 +1196,7 @@ Exit:
 			response, err := pcrRead.Execute(tpm.transport)
 			if err != nil {
 				if strings.Contains(err.Error(), ErrHashAlgorithmNotSupported.Error()) {
-					tpm.logger.Warningf("tpm/ReadPCRs: error reading PCR Bank %s: %s", algo, err)
+					tpm.logger.Warnf("tpm/ReadPCRs: error reading PCR Bank %s: %s", algo, err)
 					return banks, nil
 				}
 			}
@@ -1280,7 +1287,6 @@ func (tpm *TPM2) downloadEKCertFromManufacturer(ekCertIndex tpm2.TPMHandle) ([]b
 		}
 		tpm.logger.Errorf("tpm: error downloading EK certificate: httpm.StatusCode: %d, body: %s",
 			resp.StatusCode, body)
-		tpm.logger.Error(err)
 		return nil, ErrEndorsementCertNotFound
 	}
 

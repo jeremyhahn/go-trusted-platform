@@ -4,14 +4,15 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/x509"
 	"fmt"
 	"io"
 	"strings"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
-	"github.com/op/go-logging"
 
 	"github.com/google/go-tpm/tpm2"
 	libtpm2 "github.com/google/go-tpm/tpm2"
@@ -171,6 +172,11 @@ func (ks *KeyStore) GenerateKey(attrs *keystore.KeyAttributes) (keystore.OpaqueK
 func (ks *KeyStore) GenerateRSA(attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 	ks.params.Logger.Debug("keystore/pkcs8: generating RSA key")
 	// Provide default key size if not specified or less than 512 bits
+	if attrs.RSAAttributes == nil {
+		attrs.RSAAttributes = &keystore.RSAAttributes{
+			KeySize: 2048,
+		}
+	}
 	if attrs.RSAAttributes.KeySize == 0 || attrs.RSAAttributes.KeySize < 512 {
 		attrs.RSAAttributes.KeySize = 2048
 	}
@@ -194,6 +200,14 @@ func (ks *KeyStore) GenerateRSA(attrs *keystore.KeyAttributes) (keystore.OpaqueK
 // implementing crypto.Signer
 func (ks *KeyStore) GenerateECDSA(attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 	ks.params.Logger.Debug("keystore/pkcs8: generating ECDSA key")
+	if attrs.ECCAttributes == nil {
+		attrs.ECCAttributes = &keystore.ECCAttributes{
+			Curve: elliptic.P256(),
+		}
+	}
+	if attrs.ECCAttributes.Curve.Params() == nil {
+		attrs.ECCAttributes.Curve = elliptic.P256()
+	}
 	privateKey, err := ecdsa.GenerateKey(attrs.ECCAttributes.Curve, ks.params.Random)
 	if err != nil {
 		return nil, err

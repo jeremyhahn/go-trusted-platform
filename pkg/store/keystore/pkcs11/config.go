@@ -10,8 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
-	"github.com/op/go-logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 var SOFTHSM_CONF = []byte(`
@@ -63,19 +62,6 @@ func InitSoftHSM(logger *logging.Logger, config *Config) {
 		}
 	}
 
-	// if !util.FileExists(config.LibraryConfig) {
-	// 	dir := filepath.Dir(config.LibraryConfig)
-	// 	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
-	// 		slog.Error(err.Error())
-	// 		os.Exit(-1)
-	// 	}
-	// 	conf := fmt.Sprintf("%s/softhsm.conf", dir)
-	// 	if err := afero.WriteFile(fs, conf, SOFTHSM_CONF, os.ModePerm); err != nil {
-	// 		slog.Error(err.Error())
-	// 		os.Exit(-1)
-	// 	}
-	// }
-
 	conf, err := os.ReadFile(config.LibraryConfig)
 	if err != nil {
 		slog.Error(err.Error())
@@ -93,8 +79,8 @@ func InitSoftHSM(logger *logging.Logger, config *Config) {
 		pieces := strings.Split(matches[len(matches)-1], "=")
 		if len(pieces) == 2 {
 			path := strings.TrimSpace(pieces[1])
-			if !util.FileExists(path) {
-				if err := os.MkdirAll(path, os.ModePerm); err != nil {
+			if _, err = os.Stat(config.LibraryConfig); err != nil {
+				if err = os.MkdirAll(path, os.ModePerm); err != nil {
 					slog.Error(err.Error())
 					os.Exit(-1)
 				}
@@ -102,13 +88,6 @@ func InitSoftHSM(logger *logging.Logger, config *Config) {
 
 		}
 	}
-
-	// cmd2 := exec.Command("cat " + config.LibraryConfig)
-	// out, err := cmd2.CombinedOutput()
-	// if err != nil {
-	// 	slog.Error(err.Error())
-	// }
-	// fmt.Printf("%s\n", out)
 
 	// softhsm2-util --init-token --slot x --label xxxx --so-pin xxxx --pin xxxx
 	app := "softhsm2-util"
@@ -124,7 +103,7 @@ func InitSoftHSM(logger *logging.Logger, config *Config) {
 	// For some reason exit status is 1 for success
 	if err != nil {
 		if e := (&exec.ExitError{}); errors.As(err, &e) {
-			logger.Error(e.Error())
+			logger.Error(e)
 			slog.Error(string(e.Stderr))
 		}
 	}

@@ -8,12 +8,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func init() {
-	// IssueCmd.PersistentFlags().StringVar(&CN, "cn", "", "The common name for the certificate. Ex: --cn example.com")
-	// IssueCmd.PersistentFlags().StringVarP(&KeyStore, "store", "s", "tpm2", "Key store type [ pkcs8 | pkcs11 | tpm2 ]")
-	// IssueCmd.PersistentFlags().StringVarP(&Algorithm, "algorithm", "a", "ecdsa", "The key algorithm [ rsa | ecdsa | ed25519 ]")
-}
-
 var IssueCmd = &cobra.Command{
 	Use:   "issue [cn] [store] [algorithm]",
 	Short: "Issues a new x509 Certificate",
@@ -22,7 +16,17 @@ var IssueCmd = &cobra.Command{
 
 		var subject ca.Subject
 
-		App.Init(InitParams)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
+
+		userPIN := keystore.NewClearPassword(InitParams.Pin)
+		if err := App.LoadCA(userPIN); err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 
 		cn := args[0]
 		store := args[1]

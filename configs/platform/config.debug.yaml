@@ -1,192 +1,41 @@
 # Trusted Platform Configuration File
 
-
-# Global platform configs
 debug: true
 debug-secrets: true
-
-# Directory for platform data
 platform-dir: trusted-data
-
-# Directory for configuration files
 config-dir: trusted-data/etc
-
-# Directory for log files
 log-dir: trusted-data/log
-
-# Platform server(s) listen address
 listen: localhost
-
-# The platform network host name
 hostname: node1
-
-# The platform network domain / DNS zone name
 domain: example.com
-
-# The hostmaster responsible for the platform
 hostmaster: root@example.com
-
-
-# The Security Officer PIN. This should never be set for anything but
-# test and development. If the default value is provided, a cryptographic
-# random 32 byte, 256 bit AES key is generated. The SO PIN is never saved
-# and needs to be entered each time the Privacy Administrator credentials
-# are required.
-so-pin: 123456
-
-# The User PIN. This should never be set for anything but test and
-# development. If the default value is provided, a cryptographic random
-# 32 byte, 256 bit AES key is generated. The PIN is used to set the
-# Platform Addministrator and key store passwords, and is optionally sealed
-# to the TPM using the platform PCR policy.
-pin: 123456
-
-# True to seal the PIN to the TPM using the platform PCR policy. If this
-# is enabled, the Trusted Platform will automatically unseal itself and
-# the configured key stores when started. When disabled, the PIN will be
-# required to start as well as any subsequent operations that require it.
 pin-seal-policy: true
 
 
-# Local & Remote Attestation
 attestation:
-
-  # This option allows any device to enroll an Attestation Key and obtain
-  # an Attestation Certificate from the Trusted Platform Certificate Authority,
-  # and is intended for a factory based enrollment process or SOHO owner
-  # performing local device enrollment. The AK certificate is used to 
-  # authenticate to the network, request access to resources, and perform
-  # Remote Attestation. When disabled, the device will need to be pre-provisioned with an Initial Attestation Key and x509
-  # with a certificate using an OEM provisioning procedure as documented in
-  # TCG Provisioning Guidance and TPM 2.0 Keys for Device Identity and Attestation.
-  # https://trustedcomputinggroup.org/wp-content/uploads/TPM-2p0-Keys-for-Device-Identity-and-Attestation_v1_r12_pub10082021.pdf
-  # https://trustedcomputinggroup.org/wp-content/uploads/TCG-TPM-v2.0-Provisioning-Guidance-Published-v1r1.pdf
   allow-open-enrollment: true
-
-  # This option allows the Attestor to use a self-signed certificate
-  # to establish an mTLS connection with the secure gRPC Verifier service.
-  # 
-  # During the initial insecure connection, CA bundles are exchanged
-  # between the Verifier and Attestor to allow a verified TLS connection
-  # on the secure gRPC port. This option supports the Open Enrollment feature.
   allow-attestor-self-ca: true
-
-  # gRPC ports used by the Verifier and Attestor
-  # to perform Remote Attestation
   tls-port: 8082
   insecure-port: 8083
-  
-  # Skip TLS verification. This can be helpful in a test environment but should
-  # never be used in production due to exposure to man-in-the-middle attacks.
   insecure-skip-verify: false
-
-  # Defines the verifier CA common names allowed to connect to the attestors
-  # gRPC service. TLS certificate bundle provided by verifiers must be issued
-  # from a common or SANS name on this list or the connection is refused with
-  # ErrUnknownVerifier.
   allowed-verifiers:
     - __VERIFIER_CA__
-
-  # PCRs used for Quote/Verify
   quote-pcrs: 23
 
-  # # The Attestation Key algorithm [ RSA | ECC ]
-  # key-algorithm: RSA
 
-  # The Attestation key hash function. Any valid crypto.Hash:
-  # # https://pkg.go.dev/crypto#Hash
-  # hash: SHA-256
-
-
-# Trusted Platform Module
-# The default values are in alignment with the TCG Provisioning Guidance
-# and TPM 2.0 Keys for Device Identity and Attestation.
-# https://trustedcomputinggroup.org/wp-content/uploads/TPM-2p0-Keys-for-Device-Identity-and-Attestation_v1_r12_pub10082021.pdf
-# https://trustedcomputinggroup.org/wp-content/uploads/TCG-TPM-v2.0-Provisioning-Guidance-Published-v1r1.pdf
 tpm:
-
-  # Key Handle Assignments:
-  # TCG Registry of Reserved TPM Handles and Localities - Section 2.3.1
-  #
-  # Key Handle Assignments:
-  # Endorsement: 81 01 80 00 – 81 01 FF FF
-  # Storage:     81 00 80 00 – 81 00 FF FF
-
-  # The TPM 2.0 resource manager device path
   device: /dev/tpmrm0
-
-  # Use TPM Simulator instead of real TPM
   simulator: true
-
-  # Encrypt CPU <-> TPM bus communication
   encrypt-sessions: false
-  
-  # Use TPM for entropy operations (RNG source)
-  # If false, the Golang rand.Reader will be used
   entropy: false
-
   hash: SHA-256
-
-  # # Hierarchies password, used to take ownership of the TPM by
-  # # setting the Platform, Owner, Endorsement and Lockout authorization
-  # # passwords, as described in TCG TPM 2.0 Part 1 - Architecture -
-  # # Section 13.8.1 - Taking Ownership
-  # # https://trustedcomputinggroup.org/wp-content/uploads/TPM-2.0-1.83-Part-1-Architecture.pdf
-  # # This should never be set for anything other than testing or development.
-  # # Default value: Replace with generated password
-  # # Empty value: Load from TPM or prompt for manual entry. 
-  # hierarchy-auth: 123456
-
-  # The Endorsement Key under the Endorsement Hierarchy as documented
-  # in TCG Provisioning Guidance Section 7.4.1 - Endorsement Primary Keys.
   ek:
-
-    # The x509 EK certificate handle. Defaults to the TCG recommended index.
-    # If a handle is not provided here, and an EK is not found in NV RAM at the
-    # TCG recommended indexes, an EK certificate will be generated. If the
-    # cert-handle is not defined, the certificate is saved to the certificate
-    # store instead of NV RAM.
-    # RSA 2048: 0x01C00002
-    # ECC P-256: 0x01c0000a
-    # cert-handle: 0x01C00002
-
-    # True to log key secrets and passwords
     debug: true
-
-    # The persistent handle for the Endorsement Key stored under the
-    # Endorsement Hierarchy. Default is the TCG recommended EK index.
     handle: 0x81010001
-
-    # The hash function used by the TPM for global hashing operations
-    # such as file integrity monitoring
     hash: SHA-256
-
-    # # The endorsement hierarchy authorization password as documented in
-    # # TCG Provisioning Gudance Section 7.4 - Endorsement Hierarchy.
-    # # If the default value is provided, it will be set to the Security
-    # # Officer PIN instead.
-    # hierarchy-auth: 123456
-
-    # The Endorsement Key authorization password. Default is no password
-    # authorization.
     password:
-
-    # RSA key parameters
     rsa:
       size: 2048
-
-    # ECC key parameters
-    #ecc:
-    #  curve: P-256
-
-    # The TCG recommended guidance allows an optional EK auth policy. 
-    # Enabling this option will apply the platform PCR policy to the EK
-    # authorization value (allow authentication using the PCR policy).
-    # platform-policy
-
-  # The Shared Storage Root Key under the Owner Hierarchy as documented
-  # in TCG Provisioning Guidance Section 7.5.1 - Storage Primary Key (SRK)
-  # Templates.
   ssrk:
     debug: true
     handle: 0x81000001
@@ -195,10 +44,6 @@ tpm:
     platform-policy: true 
     rsa:
       size: 2048
-
-  # The Initial Attestation Identity Key under the Endorsement Hierarchy
-  # as documented in TPM 2.0 Keys for Device Identity and Attestation
-  # Section 3.7 - TPM Key Types, Options and Restrictions
   iak:
     auth:
     cn: device-id-001
@@ -210,12 +55,6 @@ tpm:
     rsa:
       size: 2048
     signature-algorithm: SHA256-RSAPSS
-
-  # The Initial Device Identifier under the Owner Hierarchy as
-  # documented in TCG Provisioning Guidance Section 7.4.2 - IDevID Keys
-  # The pad option enables or disables the padding defined by the TCG spec
-  # when creating the TCG-CSR-IDEVID structure. Disabling the padding
-  # shrinks the payload by a multiple of 16 bytes, but deviates from the spec.
   idevid:
     model: trusted-platform-edge
     serial: att-tp-e001
@@ -230,172 +69,61 @@ tpm:
     rsa:
       size: 2048
     signature-algorithm: SHA256-RSAPSS
-
-  # The PCR owned by the Trusted Platform. Note, PCR 16 is a special
-  # debug register that should be replaced with an available PCR in
-  # your TPM. Use the included toolset or tpm2_pcrread to list your
-  # PCRs and enter a free bank number below (all 0's or F's).
   platform-pcr: 23
-
-  # Directories listed here are included in the File Integrity Monitoring
-  # features of the platform. Each directory is recursively summed and 
-  # included in the Golden Measurements written to the Platform PCR. and
-  # must remain unmodified to unseal the platform or release keys from the
-  # TPM.
   file-integrity:
-    - .
-
-  # The platform key store. This key store is the master store used by the
-  # Trusted Platform to store passwords, secrets, Key Encryption Keys, etc
-  # on the local device.
+    - ./
   keystore:
-
-    # The key store home directory where it's data is stored. This is
-    # a relative path to the platform home / data directory.
-    # home: platform/tpm2
-
-     # The persistent handle for the platform key store
     srk-handle: 0x81000002
-
-    # The password authorization value for the platform key store
     srk-auth: 123456
-
-    # When true, the platform PCR authorization policy is applied to the
-    # key, allowing use as long as the platform selected PCR is in it's
-    # expected state.
     platform-policy: true
 
 
-# x509 Certificate Authority
 certificate-authority:
-
-  # The default Certificate Authority used by the platform.
-  # This is the array index of the CA "identity" as configured
-  # below. For example:
-  #
-  # For a Root only configuration, only define a single CA identity
-  # below and then use 0 for the default-ca value.
-  #
-  # For a Root and single Intermediate, define 2 CA identities
-  # and set the default-ca value to 1. This is the default.
-  #
-  # For N intermediates, define a Root and N identities, then set
-  # default-ca to Y, with Y being the selected index of the
-  # intermediate in the identity list to make the default.
   platform-ca: 1
-
-  # Automatically download and import Issuing CAs
-  # when importing leaf certificates (so the leaf
-  # can be verified).
   auto-import-issuing-ca: true
-  
-  # Use the Operating System trusted certificate store
-  # when verifying certificates. If disabled, only
-  # certificates in the Certificate Authority will be
-  # trusted and used for verifying leaf certificates.
   system-cert-pool: false
-  
-  # Default validity / expiration time for issued certificates (days)
   default-validity: 365
-
-  # Default IDevID common name used for TCG-CSR-IDEVID requests
-  # that don't explicitly pass key attributes along with the TCG CSR.
   default-idevid-cn: default-device-id
-  
-  # True includes "localhost" in SANS names
   sans-include-localhost: true
-  
-  # Requires passwords for private keys (FIPS 140-3)
   require-password: true
-
-  # The Certificate Authority Subject Identities and unique
-  # configurations.
   identity:
- 
-    - # Root / Parent Certificate Authority
-
-      # Key stores supported by the CA. Multiple key stores
-      # may be configured 
+    - 
       keystores:
-
-        # PKCS #8 File System (AES256CBC)
         pkcs8:
-
-          # When true, the PKCS #8 encryption password is sealed to a TPM
-          # keyed hash object with the platform PCR policy digest attached,
-          # allowing retrieval as long as the platform PCR is in it's expected
-          # state.
           platform-policy: true
-
-        # Trusted Platform Module key store. When enabled, the CA generates
-        # a new Primary Key under the Owner Storage Hierarchy (SRK) and uses
-        # the TPM as a key store and perform CA signature operations. Keys
-        # created by the CA for issued certificates are wrapped under the CA's
-        # SRK.
+        pkcs11:
+          library: /usr/local/lib/softhsm/libsofthsm2.so
+          config: trusted-data/etc/softhsm.conf
+          slot: 0
+          label: SoftHSM
+          pin: 123456
+          platform-policy: true
         tpm2:
-
-          # The key store home directory where data is stored
-          # Leave empty to inherit from key chain
-          # home: trusted-data/keystores/ca/tpm2
-
-          # The handle assigned to the CA's dedicated SRK
           srk-handle: 0x81000003
-
-          # The CA's SRK authorization password. If the default value is
-          # provided, a randomly generated value will be created. If omitted,
-          # the SRK auth will need to be provided for any operations that 
-          # require it.
           srk-auth: 123456
-
-          # When true, the platform PCR policy digest will be attached to
-          # the SRK, allowing use as long as the platform PCR is in it's
-          # expected state.
           platform-policy: true
-
-
-      # Keys owned and used by the CA
       keys:
-        # The first key for a CA is implicitly used as the "default key". 
-        # The default key attributes are used anytime a request is received
-        # which does not explicity request a key algorithm, signature algorithm
-        # or key store type.
-
-        # Trusted Platform supported algorithms: RSA, ECDSA, Ed25519
-
         # PKCS #8 RSA w/ PSS
         - algorithm: RSA
-
           rsa:
             size: 2048
-
-          # The key signature algorithm. Any fully supported algorithm:
-          # https://pkg.go.dev/crypto/x509#SignatureAlgorithm
-          # signature-algorithm: SHA256-RSA
           signature-algorithm: SHA256-RSAPSS
-
-          # The default hash function for signing and encryption opreations
-          # Supported hash functions: Any valid crypto.Hash
-          # https://pkg.go.dev/crypto#Hash
           hash: SHA-256
-
-          # The key store responsbile for the key
           store: pkcs8
-
-          # The key password. If the underlying key store supports 
-          # encryption (PKCS #8) or password protection (TPM2) this
-          # password will be used to implement that store's protection
-          # mechanism. If the default password is provided, a random
-          # password will be generated. If platform-policy is set to
-          # true, the password will be sealed to the TPM and the
-          # platform PCR policy digest will be attached to the seal
-          # key, allowing the platform to use it when needed, as long
-          # as platform PCR is in it's expected state. If omitted, the
-          # password must be provided each time an operation is invoked
-          # that requires it.
           password: 123456
           platform-policy: true
+          debug: true
 
-          # True to enable key secret debug output
+        # PKCS #11 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+            scheme: 
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
           debug: true
 
         # TPM 2.0 RSA w/ PSS
@@ -416,6 +144,17 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #11 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs11
           password: 123456
           platform-policy: true
           debug: true
@@ -442,10 +181,7 @@ certificate-authority:
           platform-policy: true
           debug: true
 
-      # CA cert expiration (years)
       valid: 50
-
-      # Subject identity
       subject:
         cn: root-ca.example.com
         organization: Trusted Platform
@@ -470,20 +206,36 @@ certificate-authority:
       keystores:
         pkcs8:
           platform-policy: true
+        pkcs11:
+          library: /usr/local/lib/softhsm/libsofthsm2.so
+          config: trusted-data/etc/softhsm.conf
+          slot: 0
+          label: SoftHSM
+          pin: 123456
+          platform-policy: true
         tpm2:
           srk-handle: 0x81000004
           srk-auth: 123456
           platform-policy: true
-
       keys:
-        - 
-          # PKCS #8 RSA w/ PSS
+        - # PKCS #8 RSA w/ PSS
           algorithm: RSA
           rsa:
             size: 2048
           signature-algorithm: SHA256-RSAPSS
           hash: SHA-256
           store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #11 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs11
           password: 123456
           platform-policy: true
           debug: true
@@ -510,6 +262,17 @@ certificate-authority:
           platform-policy: true
           debug: true
 
+        # PKCS #11 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
+          debug: true
+
         # TPM 2.0 ECDSA
         - algorithm: ECDSA
           ecc:
@@ -531,7 +294,6 @@ certificate-authority:
           password: 123456
           platform-policy: true
           debug: true
-
       valid: 10
       subject:
         cn: intermediate-ca.example.com
@@ -552,24 +314,28 @@ certificate-authority:
           - root@localhost
           - root@localhost.localdomain
 
-
-# Web Services
 webservice:
   home: public_html
   port: 8080
   tls-port: 8443
-  jwt-expiration: 525960
+  jwt:
+    expiration: 525960
+    # ES256 | ES384 | ES512
+    # PS256 | PS384 | PS512
+    # RS256 | RS384 | RS512
+    algorithm: PS256
+    issuer: my_org_id
   key:
     # PKCS #8 RSA w/ PSS
     algorithm: RSA
+    debug: true
+    hash: SHA-256
+    password: 123456
+    platform-policy: true
     rsa:
       size: 2048
     signature-algorithm: SHA256-RSAPSS
-    hash: SHA-256
     store: pkcs8
-    password: 123456
-    platform-policy: true
-    debug: true
     #
     # algorithm: ECDSA
     # ecc:

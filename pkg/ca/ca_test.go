@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
@@ -21,7 +22,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/pkcs11"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore/pkcs8"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 
@@ -285,7 +285,7 @@ func TestIssueCertificate_CA_RSA_WITH_LEAF_ECDSA(t *testing.T) {
 		config, performInit, encrypt, entropy)
 	defer tpm.Close()
 
-	logger := util.Logger()
+	logger := logging.DefaultLogger()
 	DebugCipherSuites(logger)
 	DebugInsecureCipherSuites(logger)
 
@@ -510,7 +510,7 @@ func createService(
 	encrypt, entropy bool) (CertificateAuthority,
 	CertificateAuthority, tpm2.TrustedPlatformModule, string, error) {
 
-	logger := util.Logger()
+	logger := logging.DefaultLogger()
 
 	soPinBytes := []byte("so-pin-test")
 	pinBytes := []byte("user-pin-test")
@@ -522,7 +522,7 @@ func createService(
 	buf := make([]byte, 8)
 	_, err := rand.Reader.Read(buf)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 	hexVal := hex.EncodeToString(buf)
 	tmp := fmt.Sprintf("%s/%s", TEST_DATA_DIR, hexVal)
@@ -536,7 +536,7 @@ func createService(
 	fs := afero.NewOsFs()
 	platformBlobStore, err := blob.NewFSBlobStore(logger, fs, tmp, nil)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	// Write SoftHSM config
@@ -597,7 +597,7 @@ func createService(
 		},
 	}
 	tpmParams := &tpm2.Params{
-		Logger:       util.Logger(),
+		Logger:       logging.DefaultLogger(),
 		DebugSecrets: true,
 		Config:       tpmConfig,
 		BlobStore:    platformBlobStore,
@@ -610,10 +610,10 @@ func createService(
 	if err != nil {
 		if err == tpm2.ErrNotInitialized {
 			if err = tpm.Provision(soPIN); err != nil {
-				logger.Fatal(err)
+				logger.FatalError(err)
 			}
 		} else {
-			logger.Fatal(err)
+			logger.FatalError(err)
 		}
 	}
 
@@ -640,10 +640,10 @@ func createService(
 		if err == keystore.ErrNotInitalized {
 			err = platformKS.Initialize(soPIN, userPIN)
 			if err != nil {
-				logger.Fatal(err)
+				logger.FatalError(err)
 			}
 		} else {
-			logger.Fatal(err)
+			logger.FatalError(err)
 		}
 	}
 
@@ -659,7 +659,7 @@ func createService(
 	rootBlobStore, err := blob.NewFSBlobStore(
 		logger, fs, rootHome, &config.Identity[0].Subject.CommonName)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	rootSignerStore := keystore.NewSignerStore(rootBlobStore)
@@ -668,7 +668,7 @@ func createService(
 	rootCertStore, err := certstore.NewCertificateStore(
 		logger, rootBlobStore)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	// Create root CA key chain
@@ -711,7 +711,7 @@ func createService(
 		soPIN,
 		userPIN)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	rootParams := CAParams{
@@ -736,12 +736,12 @@ func createService(
 	// Creates a new Parent / Root Certificate Authority
 	rootCA, err := NewParentCA(&rootParams)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	// Initialize the CA by creating new keys and certificates
 	if err := rootCA.Init(nil); err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	//
@@ -757,7 +757,7 @@ func createService(
 	intermediateBlobStore, err := blob.NewFSBlobStore(
 		logger, fs, intermediateHome, &config.Identity[1].Subject.CommonName)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	intermediateSignerStore := keystore.NewSignerStore(intermediateBlobStore)
@@ -766,7 +766,7 @@ func createService(
 	intermediateCertStore, err := certstore.NewCertificateStore(
 		logger, intermediateBlobStore)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	intermediateKeyringConfig := &platform.KeyringConfig{
@@ -826,13 +826,13 @@ func createService(
 
 	intermediateCA, err := NewIntermediateCA(&intermediateParams)
 	if err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	// Initialize the CA by creating new keys and certificates, using
 	// the parentCA to sign for this new intermediate
 	if err := intermediateCA.Init(rootCA); err != nil {
-		logger.Fatal(err)
+		logger.FatalError(err)
 	}
 
 	return rootCA, intermediateCA, tpm, tmp, nil

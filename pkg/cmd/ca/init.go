@@ -15,11 +15,15 @@ Intermediates as specified in the platform configuration file.`,
 
 		prompt.PrintBanner(app.Version)
 
-		App.Init(InitParams)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			cmd.PrintErrln(err)
+			return
+		}
 
 		soPIN, userPIN, err := App.ParsePINs(InitParams.SOPin, InitParams.Pin)
 		if err != nil {
-			App.Logger.Fatal(err)
+			App.Logger.FatalError(err)
 		}
 
 		if _, err := App.InitCA(InitParams.PlatformCA, soPIN, userPIN); err != nil {

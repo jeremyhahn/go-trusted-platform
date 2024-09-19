@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
-	"github.com/op/go-logging"
 )
 
 type CertStore struct {
@@ -71,10 +71,6 @@ func (cs *CertStore) Save(certificate *x509.Certificate, partition Partition) er
 // Returns true if the requested Certificate Revocation List  exists in the certificate store
 func (cs *CertStore) HasCRL(keyAttrs *keystore.KeyAttributes) bool {
 	crlFileName := cs.crl(keyAttrs)
-	// // crlFile := fmt.Sprintf("%s/%s", PARTITION_CRL, crlFileName)
-	// return util.FileExists(crlFileName)
-
-	// id := []byte(fmt.Sprintf("%s/%s", PARTITION_CRL, crlFileName))
 	if _, err := cs.blobStore.Get([]byte(crlFileName)); err != nil {
 		return false
 	}
@@ -190,7 +186,7 @@ func (cs *CertStore) Revoke(
 			RevocationTime: time.Now()})
 
 	// Create a new revocation list serial number
-	serialNumber, err := util.X509SerialNumber()
+	serialNumber, err := util.SerialNumber()
 	if err != nil {
 		cs.logger.Error(err)
 		return err
@@ -220,7 +216,7 @@ func (cs *CertStore) Revoke(
 	crlFile := cs.caCRL(keyAttrs)
 
 	if err := cs.blobStore.Save([]byte(crlFile), crlDER); err != nil {
-		cs.logger.Error("%s: %s", err, crlFile)
+		cs.logger.Errorf("%s: %s", err, crlFile)
 		return err
 	}
 
@@ -287,7 +283,7 @@ func (cs *CertStore) loadCRL(certificate *x509.Certificate) (*x509.RevocationLis
 
 	crlDER, err := cs.blobStore.Get([]byte(caCRL))
 	if err != nil {
-		cs.logger.Warningf("%s: %s", err, caCRL)
+		cs.logger.Warnf("%s: %s", err, caCRL)
 		return nil, err
 	}
 

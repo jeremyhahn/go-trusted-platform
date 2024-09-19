@@ -21,7 +21,13 @@ installation. This operation is safe and idempotent, and will not modify or
 destroy existing data.`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App.Init(InitParams)
+		App, err = App.Init(InitParams)
+		if err != nil {
+			if err != tpm2.ErrNotInitialized {
+				cmd.PrintErrln(err)
+				return
+			}
+		}
 
 		sopin := keystore.NewClearPassword(InitParams.SOPin)
 		pin := keystore.NewClearPassword(InitParams.Pin)

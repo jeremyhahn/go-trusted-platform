@@ -7,6 +7,7 @@ import (
 var (
 	App        *app.App
 	InitParams *app.AppInitParams
+	err        error
 )
 
 func init() {
