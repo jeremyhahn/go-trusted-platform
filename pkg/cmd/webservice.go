@@ -1,13 +1,18 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/kvstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest"
+	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 )
 
@@ -42,10 +47,31 @@ var webserverCmd = &cobra.Command{
 			return
 		}
 
+		datastoreFactory, err := kvstore.NewFactory(&kvstore.Params{
+			Fs:             afero.NewOsFs(),
+			Logger:         App.Logger,
+			ReadBufferSize: 50,
+			RootDir:        fmt.Sprintf("%s/datastore", App.PlatformDir),
+			Serializer:     datastore.SERIALIZER_YAML,
+		})
+		if err != nil {
+			App.Logger.Error(err)
+			cmd.PrintErrln(err)
+			return
+		}
+
+		serviceRegistry, err := service.NewRegistry(App.Logger, datastoreFactory)
+		if err != nil {
+			App.Logger.Error(err)
+			cmd.PrintErrln(err)
+			return
+		}
+
 		restRegistry := rest.NewRestServiceRegistry(
 			App.Logger,
 			App.CA,
 			App.ServerKeyAttributes,
+			serviceRegistry,
 			App.WebService,
 			App.Domain,
 		)

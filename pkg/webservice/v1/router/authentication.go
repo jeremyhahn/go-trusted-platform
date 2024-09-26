@@ -33,10 +33,10 @@ func (authenticationRouter *AuthenticationRouter) RegisterRoutes(router *mux.Rou
 // @Param UserCredential body service.UserCredential true "UserCredential struct"
 // @Accept json
 // @Produce json
-// @Success 200 {object} rest.JsonWebToken
-// @Failure 400 {object} rest.JsonWebToken
-// @Failure 403 {object} rest.JsonWebToken
-// @Failure 500 {object} rest.JsonWebToken
+// @Success 200 {object} jwt.JsonWebTokenClaims
+// @Failure 400 {object} jwt.JsonWebTokenClaims
+// @Failure 403 {object} jwt.JsonWebTokenClaims
+// @Failure 500 {object} jwt.JsonWebTokenClaims
 // @Router /login [post]
 func (authenticationRouter *AuthenticationRouter) login(router *mux.Router, baseURI string) string {
 	login := fmt.Sprintf("%s/login", baseURI)
@@ -49,10 +49,10 @@ func (authenticationRouter *AuthenticationRouter) login(router *mux.Router, base
 // @Tags Authentication
 // @Accept json
 // @Consume json
-// @Success 200 {object} rest.JsonWebToken
-// @Failure 400 {object} rest.JsonWebToken
-// @Failure 401 {object} rest.JsonWebToken
-// @Failure 500 {object} rest.JsonWebToken
+// @Success 200 {object} jwt.JsonWebTokenClaims
+// @Failure 400 {object} jwt.JsonWebTokenClaims
+// @Failure 401 {object} jwt.JsonWebTokenClaims
+// @Failure 500 {object} jwt.JsonWebTokenClaims
 // @Router /login/refresh [get]
 // @Security JWT
 func (authenticationRouter *AuthenticationRouter) refreshToken(router *mux.Router, baseURI string) string {

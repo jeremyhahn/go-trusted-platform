@@ -495,7 +495,7 @@
             ],
         },
         {
-            "name": "tpadm webservice (clean)",
+            "name": "tpadm webservice (clean, dev)",
             "type": "go",
             "request": "launch",
             "mode": "debug",

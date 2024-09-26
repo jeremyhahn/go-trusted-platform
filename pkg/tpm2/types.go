@@ -98,7 +98,7 @@ var (
 	ErrInvalidKeyStoreConfiguration = errors.New("tpm: invalid key store configuration")
 	ErrInvalidHashFunction          = errors.New("tpm: invalid hash function")
 	ErrInvalidSessionAuthorization  = errors.New("tpm: invalid session authorization")
-	ErrSecureBootNotEnabled         = errors.New("tpm: secure boot not enabled")
+	ErrMissingMeasurementLog        = errors.New("tpm: binary measurement log not found")
 	ErrRSAPSSNotSupported           = errors.New("tpm: RSA-PSS not supported by this TPM")
 
 	// TPM_RC errors

@@ -1,15 +1,19 @@
 package kvstore
 
 import (
-	"errors"
-
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+	"github.com/spf13/afero"
 )
 
-var (
-	ErrRecordNotFound = errors.New("datastore/kvstore: record not found")
-)
+type Params struct {
+	Fs             afero.Fs
+	Logger         *logging.Logger
+	Partition      string
+	ReadBufferSize int
+	RootDir        string
+	Serializer     datastore.Serializer
+}
 
 type KVStore[E any] struct {
 	dao    datastore.GenericDAO[E]

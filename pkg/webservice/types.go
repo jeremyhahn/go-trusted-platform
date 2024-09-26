@@ -16,7 +16,6 @@ var (
 		Port: 8080,
 		JWT: config.JWT{
 			Expiration: 525960, // 1 year
-			Algorithm:  "PS256",
 		},
 		TLSPort: 8443,
 		Certificate: config.Identity{

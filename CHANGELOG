@@ -1,9 +1,5 @@
-- Clean up CLI commands and add tests
-- Misc bug fixes and cleanup
-- Initial migration to slog
-- Add initial datastore package w/ user, role & org models
-- Migrate to latest version of go-jwt
-- Create custom go-jwt signing method that uses opaque signing keys
-- Clean up webservice package, implement opaque JWT signer
-- Start preparing for webauthn integration
-- Import xxhash library as the platform hasher
+- Create initial datastore package using Afero
+- Create org, role, and user enities
+- Implement basic WebAuthn/JWT login
+- Create example policy which adds CA root certs to firefox
+

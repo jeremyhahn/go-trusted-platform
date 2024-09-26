@@ -43,7 +43,7 @@ func (service *Organization) Create(organization *entities.Organization) error {
 	return service.orgDAO.Save(organization)
 }
 
-// Returns a list of User entities that belong to the organization
+// Returns a single page of organization entities
 func (service *Organization) Page(session Session,
 	pageQuery datastore.PageQuery) (datastore.PageResult[*entities.Organization], error) {
 
@@ -58,7 +58,7 @@ func (service *Organization) GetUsers(session Session) ([]*entities.User, error)
 	if !session.User().HasRole(common.ROLE_ADMIN) {
 		return nil, ErrPermissionDenied
 	}
-	users, err := service.orgDAO.GetUsers(session.RequestedOrganizationID())
+	users, err := service.orgDAO.GetUsers(session.RequestedOrganizationID(), session.ConsistencyLevel())
 	if err != nil {
 		service.logger.Error(err)
 		return nil, err
