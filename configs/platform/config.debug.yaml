@@ -325,13 +325,20 @@ webservice:
     # RS256 | RS384 | RS512
     algorithm: PS256
     issuer: my_org_id
+  webauthn:
+    display-name: Trusted Platform
+    id: localhost
+    origins:
+      - https://localhost
+      - https://localhost:8443
+      - http://localhost:3000
   key:
     # PKCS #8 RSA w/ PSS
     algorithm: RSA
     debug: true
     hash: SHA-256
-    password: 123456
-    platform-policy: true
+    password:
+    platform-policy:
     rsa:
       size: 2048
     signature-algorithm: SHA256-RSAPSS

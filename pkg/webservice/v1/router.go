@@ -9,23 +9,21 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
 )
 
 type RouterV1 struct {
-	baseURI                string
-	baseFarmURI            string
-	ca                     ca.CertificateAuthority
-	restServiceRegistry    rest.RestServiceRegistry
-	jsonWebTokenMiddleware middleware.JsonWebTokenMiddleware
-	logger                 *logging.Logger
-	router                 *mux.Router
-	responseWriter         response.HttpWriter
-	serverKeyAttributes    *keystore.KeyAttributes
-	endpointList           []string
+	baseURI             string
+	baseServiceURI      string
+	ca                  ca.CertificateAuthority
+	restServiceRegistry rest.RestServiceRegistry
+	logger              *logging.Logger
+	router              *mux.Router
+	responseWriter      response.HttpWriter
+	serverKeyAttributes *keystore.KeyAttributes
+	endpointList        []string
 	router.WebServiceRouter
 }
 
@@ -38,25 +36,25 @@ func NewRouterV1(
 	responseWriter response.HttpWriter) router.WebServiceRouter {
 
 	return &RouterV1{
-		ca:                     ca,
-		logger:                 logger,
-		restServiceRegistry:    restServiceRegistry,
-		jsonWebTokenMiddleware: restServiceRegistry.JsonWebTokenService(),
-		router:                 router,
-		serverKeyAttributes:    serverKeyAttribtues,
-		responseWriter:         responseWriter,
-		endpointList:           make([]string, 0)}
+		ca:                  ca,
+		logger:              logger,
+		restServiceRegistry: restServiceRegistry,
+		router:              router,
+		serverKeyAttributes: serverKeyAttribtues,
+		responseWriter:      responseWriter,
+		endpointList:        make([]string, 0)}
 }
 
-// Registers all routes for standalone mode
+// Registers all websocket and REST services
 func (v1Router *RouterV1) RegisterRoutes(router *mux.Router, baseURI string) []string {
 
 	v1Router.baseURI = baseURI
-	v1Router.baseFarmURI = fmt.Sprintf("%s/farms/{farmID}", baseURI)
+	v1Router.baseServiceURI = fmt.Sprintf("%s/services/{id}", baseURI)
 
 	endpointList := make([]string, 0)
 	endpointList = append(endpointList, v1Router.systemRoutes()...)
 	endpointList = append(endpointList, v1Router.authenticationRoutes()...)
+	endpointList = append(endpointList, v1Router.webAuthnRoutes()...)
 
 	endpoints := v1Router.sortAndDeDupe(endpointList)
 	v1Router.logger.Debug(strings.Join(endpoints[:], "\n"))
@@ -90,6 +88,7 @@ func (v1Router *RouterV1) systemRoutes() []string {
 		v1Router.ca,
 		v1Router.serverKeyAttributes,
 		v1Router.restServiceRegistry.JsonWebTokenService(),
+		v1Router.restServiceRegistry.WebAuthnRestService(),
 		v1Router.router,
 		v1Router.responseWriter,
 		&v1Router.endpointList)
@@ -98,6 +97,13 @@ func (v1Router *RouterV1) systemRoutes() []string {
 
 func (v1Router *RouterV1) authenticationRoutes() []string {
 	registrationRouter := router.NewAuthenticationRouter(
-		v1Router.jsonWebTokenMiddleware)
+		v1Router.restServiceRegistry.JsonWebTokenService())
 	return registrationRouter.RegisterRoutes(v1Router.router, v1Router.baseURI)
+}
+
+func (v1Router *RouterV1) webAuthnRoutes() []string {
+	webAuthnRouter := router.NewWebAuthnRouter(
+		v1Router.restServiceRegistry.JsonWebTokenService(),
+		v1Router.restServiceRegistry.WebAuthnRestService())
+	return webAuthnRouter.RegisterRoutes(v1Router.router, v1Router.baseURI)
 }

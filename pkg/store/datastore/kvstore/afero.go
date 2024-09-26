@@ -2,7 +2,6 @@ package kvstore
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,10 +15,6 @@ import (
 	"github.com/spf13/afero"
 )
 
-var (
-	ErrInvalidReadBufferSize = errors.New("kvstore/afero: invalid read buffer size")
-)
-
 type AferoDAO[E any] struct {
 	readBufferSize int
 	logger         *logging.Logger
@@ -29,29 +24,25 @@ type AferoDAO[E any] struct {
 }
 
 // Creates a key/value blob storage backend
-func NewAferoDAO[E any](logger *logging.Logger,
-	fs afero.Fs,
-	rootDir string,
-	partition string,
-	serializer datastore.Serializer,
-	readBufferSize int) (datastore.GenericDAO[E], error) {
+func NewAferoDAO[E any](params *Params) (*AferoDAO[E], error) {
 
-	if rootDir[len(rootDir)-1] == '/' {
+	rootDir := params.RootDir
+	if params.RootDir[len(rootDir)-1] == '/' {
 		rootDir = strings.TrimRight(rootDir, "/")
 	}
-	partitionDir := fmt.Sprintf("%s/%s", rootDir, partition)
-	if err := fs.MkdirAll(partitionDir, os.ModePerm); err != nil {
-		logger.Error(err)
+	partitionDir := fmt.Sprintf("%s/%s", rootDir, params.Partition)
+	if err := params.Fs.MkdirAll(partitionDir, os.ModePerm); err != nil {
+		params.Logger.Error(err)
 		return nil, err
 	}
-	if readBufferSize == 0 {
-		return nil, ErrInvalidReadBufferSize
+	if params.ReadBufferSize == 0 {
+		params.ReadBufferSize = 50
 	}
 	return &AferoDAO[E]{
-		logger:         logger,
-		fs:             fs,
+		logger:         params.Logger,
+		fs:             params.Fs,
 		partitionDir:   partitionDir,
-		readBufferSize: readBufferSize,
+		readBufferSize: params.ReadBufferSize,
 	}, nil
 }
 
@@ -59,7 +50,6 @@ func NewAferoDAO[E any](logger *logging.Logger,
 // an error if the entity can't be found or if it can't be unmarshalled.
 func (aferoDAO *AferoDAO[E]) Get(id uint64, CONSISTENCY_LEVEL int) (E, error) {
 	key := fmt.Sprintf("%d.%s", id, "json")
-	// bytes, err := blobDAO.datastore.Get([]byte(key))
 	trimmed := strings.TrimLeft(string(key), "/")
 	dir := fmt.Sprintf("%s/%s/", aferoDAO.partitionDir, filepath.Dir(trimmed))
 	if err := aferoDAO.fs.MkdirAll(dir, os.ModePerm); err != nil {
@@ -70,8 +60,8 @@ func (aferoDAO *AferoDAO[E]) Get(id uint64, CONSISTENCY_LEVEL int) (E, error) {
 	bytes, err := afero.ReadFile(aferoDAO.fs, blobFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			aferoDAO.logger.MaybeError(ErrRecordNotFound, slog.String("key", trimmed))
-			return *new(E), ErrRecordNotFound
+			aferoDAO.logger.MaybeError(datastore.ErrRecordNotFound, slog.String("key", trimmed))
+			return *new(E), datastore.ErrRecordNotFound
 		}
 		return *new(E), err
 	}
@@ -109,7 +99,7 @@ func (aferoDAO *AferoDAO[E]) Delete(entity E) error {
 	blobFile := fmt.Sprintf("%s/%s", aferoDAO.partitionDir, key)
 	if _, err := aferoDAO.fs.Stat(blobFile); err != nil {
 		aferoDAO.logger.Error(err, slog.String("key", key))
-		return ErrRecordNotFound
+		return datastore.ErrRecordNotFound
 	}
 	return aferoDAO.fs.RemoveAll(blobFile)
 }

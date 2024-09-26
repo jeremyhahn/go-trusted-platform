@@ -7,6 +7,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -385,7 +386,7 @@ func PublicKeyToString(pub crypto.PublicKey) string {
 		sb.WriteString(fmt.Sprintf("    X: %d\n", pub.(*ecdsa.PublicKey).X))
 		sb.WriteString(fmt.Sprintf("    Y: %d\n", pub.(*ecdsa.PublicKey).Y))
 	case ed25519.PublicKey:
-		sb.WriteString(fmt.Sprintf("    %+v\n", pub.(ed25519.PublicKey)))
+		sb.WriteString(fmt.Sprintf("    %s\n", hex.EncodeToString(pub.(ed25519.PublicKey))))
 	}
 	return sb.String()
 }

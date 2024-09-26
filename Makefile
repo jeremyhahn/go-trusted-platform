@@ -87,6 +87,9 @@ SOFTHSM_LIB        ?= /usr/local/lib/softhsm/libsofthsm2.so
 SOFTHSM_TOKEN_DIR  ?= /var/lib/softhsm/tokens
 SOFTHSM_CONFIG     ?= configs/softhsm2.conf
 
+WEB_PUBLIC_HTML    ?= public_html
+WEB_SRC            ?= ../go-trusted-platform-web
+
 
 .PHONY: deps build build-debug build-static build-debug-static clean test initlog \
 	swagger verifier attestor proto
@@ -128,27 +131,29 @@ env:
 	@echo "VERIFIER_HOSTNAME: \t$(VERIFIER_HOSTNAME)"
 	@echo "ATTESTOR_HOSTNAME: \t$(ATTESTOR_HOSTNAME)"
 	@echo "CONFIG_YAML: \t\t$(CONFIG_YAML)"
+	@echo "WEB_PUBLIC_HTML: \t\t$(WEB_PUBLIC_HTML)"
 
 
 deps:
 	go install -v golang.org/x/tools/gopls@latest
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.28
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.2
+	go install github.com/swaggo/swag/cmd/swag@latest
 
 
 swagger:
-	swag init \
-		--dir pkg/webservice,pkg/webservice/v1/router,pkg/webservice/v1/response,pkg/app,pkg/config \
+	~/go/bin/swag init \
+		--dir pkg/webservice,pkg/webservice/v1/router,pkg/webservice/v1/response,pkg/app,pkg/config,pkg/crypto/argon2 \
 		--generalInfo webserver_v1.go \
 		--parseDependency \
 		--parseInternal \
 		--parseDepth 1 \
-		--output public_html/swagger
+		--output $(WEB_PUBLIC_HTML)/swagger
 
 swagger-ui:
-	mkdir -p public_html/swagger
+	mkdir -p $(WEB_PUBLIC_HTML)/swagger
 	git clone --depth=1 https://github.com/swagger-api/swagger-ui.git && \
-		cp -R swagger-ui/dist/* public_html/swagger && \
+		cp -R swagger-ui/dist/* $(WEB_PUBLIC_HTML)/swagger && \
 		rm -rf swagger-ui
 
 
@@ -235,15 +240,34 @@ build-arm64-debug-static:
 build-dev: clean build-debug
 	sudo chown $(USER):$(USER) /dev/tpmrm0
 	-sudo chown $(USER):$(USER) /sys/kernel/security/tpm0/binary_bios_measurements
-	mkdir -p $(PLATFORM_DIR)/etc/
+	mkdir -p $(PLATFORM_DIR)/etc/ $(PLATFORM_DIR)/softhsm2 pkg/$(PLATFORM_DIR)/softhsm2
 	cp configs/platform/config.dev.yaml config.yaml
 	cp configs/softhsm.conf $(PLATFORM_DIR)/etc/softhsm.conf
 	cp configs/platform/config.debug.yaml pkg/config.yaml
-	cp -R public_html pkg/
+	cp -R $(WEB_PUBLIC_HTML) pkg/
 
+
+firefox:
+	sudo mkdir -p /etc/firefox/policies/ /etc/firefox/certificates
+	sudo cp configs/firefox/policies.json /etc/firefox/policies/policies.json
+	sudo rm -rf /etc/firefox/certificates/*.cer
+	sudo cp $(PLATFORM_DIR)/ca/$(ROOT_CA).$(DOMAIN)/x509/*.cer /etc/firefox/certificates
+	/usr/bin/firefox https://localhost:8443/
+
+firefox-debug:
+	sudo mkdir -p /etc/firefox/policies/ /etc/firefox/certificates /usr/local/share/ca-certificates/
+	sudo cp configs/firefox/policies.json /etc/firefox/policies/policies.json
+	sudo rm -rf /etc/firefox/certificates/*.cer /usr/local/share/ca-certificates/*.cer
+	sudo cp pkg/$(PLATFORM_DIR)/ca/$(ROOT_CA).$(DOMAIN)/x509/*.cer /etc/firefox/certificates
+	sudo cp pkg/$(PLATFORM_DIR)/ca/$(ROOT_CA).$(DOMAIN)/x509/*.cer /usr/local/share/ca-certificates/
+	sudo update-ca-certificates
+	/usr/bin/firefox https://localhost:8443/
+
+firefox-bin:
+	/usr/bin/firefox https://localhost:8443/
 
 config:
-	mkdir -p pkg/$(PLATFORM_DIR)/etc/
+	mkdir -p pkg/$(PLATFORM_DIR)/etc/ pkg/$(PLATFORM_DIR)/softhsm2
 	cp configs/platform/$(CONFIG_YAML) pkg/config.yaml
 	cp configs/softhsm.conf pkg/trusted-data/etc/softhsm.conf
 
@@ -264,7 +288,7 @@ clean:
 		$(ATTESTATION_DIR) \
 		pkg/$(PLATFORM_DIR) \
 		pkg/config.yaml \
-		pkg/public_html \
+		pkg/$(WEB_PUBLIC_HTML) \
 		pkg/ca/testdata \
 		pkg/platform/testdata \
 		pkg/store/blob/testdata \
@@ -564,9 +588,13 @@ rpi-qemu:
 		-kernel vmlinux \
 		-initrd initramfs
 
-#  http://localhost:3000/
-webapp-run:
-	cd public_html/$(APPNAME) && npm run dev
+
+webapp-build:
+	cd webapp && \
+		yarn build && \
+		cp -R ../$(WEB_SRC)/out/* ../$(WEB_PUBLIC_HTML)/ && \
+		cp -R ../$(WEB_SRC)/out/* ../pkg/$(WEB_PUBLIC_HTML)/
+
 
 # Docker
 docker-load-builder: build-debug

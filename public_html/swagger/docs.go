@@ -157,12 +157,12 @@ const docTemplate = `{
                 "summary": "Authenticate and obtain JWT",
                 "parameters": [
                     {
-                        "description": "UserCredentials struct",
-                        "name": "UserCredentials",
+                        "description": "UserCredential struct",
+                        "name": "UserCredential",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/service.UserCredentials"
+                            "$ref": "#/definitions/service.UserCredential"
                         }
                     }
                 ],
@@ -170,25 +170,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/rest.JsonWebToken"
+                            "$ref": "#/definitions/jwt.JsonWebTokenClaims"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/rest.JsonWebToken"
+                            "$ref": "#/definitions/jwt.JsonWebTokenClaims"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/rest.JsonWebToken"
+                            "$ref": "#/definitions/jwt.JsonWebTokenClaims"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/rest.JsonWebToken"
+                            "$ref": "#/definitions/jwt.JsonWebTokenClaims"
                         }
                     }
                 }
@@ -213,25 +213,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/rest.JsonWebToken"
+                            "$ref": "#/definitions/jwt.JsonWebTokenClaims"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/rest.JsonWebToken"
+                            "$ref": "#/definitions/jwt.JsonWebTokenClaims"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/rest.JsonWebToken"
+                            "$ref": "#/definitions/jwt.JsonWebTokenClaims"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/rest.JsonWebToken"
+                            "$ref": "#/definitions/jwt.JsonWebTokenClaims"
                         }
                     }
                 }
@@ -275,6 +275,119 @@ const docTemplate = `{
                 "responses": {
                     "200": {
                         "description": "OK"
+                    }
+                }
+            }
+        },
+        "/webauthn/registration/begin": {
+            "post": {
+                "description": "Begins a new WebAuthn registration flow",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "WebAuthn"
+                ],
+                "summary": "Begin Registration",
+                "parameters": [
+                    {
+                        "description": "UserCredential struct",
+                        "name": "UserCredential",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.UserCredential"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.WebServiceResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.WebServiceResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/webauthn/registration/finish": {
+            "post": {
+                "description": "Completes a pending WebAuthn login flow",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "WebAuthn"
+                ],
+                "summary": "Finish Login",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.WebServiceResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.WebServiceResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.WebServiceResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/webauthn/registration/status": {
+            "get": {
+                "description": "Provides the current registration status for the Conditional UI",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "WebAuthn"
+                ],
+                "summary": "Registration Status",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.WebServiceResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.WebServiceResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.WebServiceResponse"
+                        }
                     }
                 }
             }
@@ -356,9 +469,6 @@ const docTemplate = `{
             "properties": {
                 "auto_import_issuing_ca": {
                     "type": "boolean"
-                },
-                "default_idevid_cn": {
-                    "type": "string"
                 },
                 "default_validity": {
                     "type": "integer"
@@ -504,6 +614,34 @@ const docTemplate = `{
                 }
             }
         },
+        "config.JWT": {
+            "type": "object",
+            "properties": {
+                "expiration": {
+                    "type": "integer"
+                },
+                "issuer": {
+                    "type": "string"
+                }
+            }
+        },
+        "config.WebAuthn": {
+            "type": "object",
+            "properties": {
+                "display_name": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "origins": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "config.WebService": {
             "type": "object",
             "properties": {
@@ -513,8 +651,8 @@ const docTemplate = `{
                 "home": {
                     "type": "string"
                 },
-                "jwt_expiration": {
-                    "type": "integer"
+                "jwt": {
+                    "$ref": "#/definitions/config.JWT"
                 },
                 "key": {
                     "$ref": "#/definitions/keystore.KeyConfig"
@@ -524,6 +662,84 @@ const docTemplate = `{
                 },
                 "tls_port": {
                     "type": "integer"
+                },
+                "webauthn": {
+                    "$ref": "#/definitions/config.WebAuthn"
+                }
+            }
+        },
+        "jwt.JsonWebTokenClaims": {
+            "type": "object",
+            "properties": {
+                "aud": {
+                    "description": "the ` + "`" + `aud` + "`" + ` (Audience) claim. See https://datatracker.ietf.org/doc/html/rfc7519#section-4.1.3",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "exp": {
+                    "description": "the ` + "`" + `exp` + "`" + ` (Expiration Time) claim. See https://datatracker.ietf.org/doc/html/rfc7519#section-4.1.4",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/jwt.NumericDate"
+                        }
+                    ]
+                },
+                "iat": {
+                    "description": "the ` + "`" + `iat` + "`" + ` (Issued At) claim. See https://datatracker.ietf.org/doc/html/rfc7519#section-4.1.6",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/jwt.NumericDate"
+                        }
+                    ]
+                },
+                "iss": {
+                    "description": "the ` + "`" + `iss` + "`" + ` (Issuer) claim. See https://datatracker.ietf.org/doc/html/rfc7519#section-4.1.1",
+                    "type": "string"
+                },
+                "jti": {
+                    "description": "the ` + "`" + `jti` + "`" + ` (JWT ID) claim. See https://datatracker.ietf.org/doc/html/rfc7519#section-4.1.7",
+                    "type": "string"
+                },
+                "nbf": {
+                    "description": "the ` + "`" + `nbf` + "`" + ` (Not Before) claim. See https://datatracker.ietf.org/doc/html/rfc7519#section-4.1.5",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/jwt.NumericDate"
+                        }
+                    ]
+                },
+                "orgs": {
+                    "description": "Email          string",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "sub": {
+                    "description": "the ` + "`" + `sub` + "`" + ` (Subject) claim. See https://datatracker.ietf.org/doc/html/rfc7519#section-4.1.2",
+                    "type": "string"
+                },
+                "svcs": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "uid": {
+                    "type": "integer"
+                },
+                "webAuthnClaims": {
+                    "$ref": "#/definitions/webauthn.SessionData"
+                }
+            }
+        },
+        "jwt.NumericDate": {
+            "type": "object",
+            "properties": {
+                "time.Time": {
+                    "type": "string"
                 }
             }
         },
@@ -644,6 +860,26 @@ const docTemplate = `{
                 }
             }
         },
+        "protocol.AuthenticationExtensions": {
+            "type": "object",
+            "additionalProperties": {}
+        },
+        "protocol.UserVerificationRequirement": {
+            "type": "string",
+            "enum": [
+                "required",
+                "preferred",
+                "discouraged"
+            ],
+            "x-enum-comments": {
+                "VerificationPreferred": "This is the default"
+            },
+            "x-enum-varnames": [
+                "VerificationRequired",
+                "VerificationPreferred",
+                "VerificationDiscouraged"
+            ]
+        },
         "response.WebServiceResponse": {
             "type": "object",
             "properties": {
@@ -659,22 +895,17 @@ const docTemplate = `{
                 }
             }
         },
-        "rest.JsonWebToken": {
+        "service.UserCredential": {
             "type": "object",
             "properties": {
-                "error": {
-                    "type": "string"
+                "authType": {
+                    "type": "integer"
                 },
-                "token": {
-                    "type": "string"
-                }
-            }
-        },
-        "service.UserCredentials": {
-            "type": "object",
-            "properties": {
                 "email": {
                     "type": "string"
+                },
+                "org": {
+                    "type": "integer"
                 },
                 "password": {
                     "type": "string"
@@ -894,6 +1125,41 @@ const docTemplate = `{
                 },
                 "rsa": {
                     "$ref": "#/definitions/keystore.RSAConfig"
+                }
+            }
+        },
+        "webauthn.SessionData": {
+            "type": "object",
+            "properties": {
+                "allowed_credentials": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "challenge": {
+                    "type": "string"
+                },
+                "expires": {
+                    "type": "string"
+                },
+                "extensions": {
+                    "$ref": "#/definitions/protocol.AuthenticationExtensions"
+                },
+                "rpId": {
+                    "type": "string"
+                },
+                "userVerification": {
+                    "$ref": "#/definitions/protocol.UserVerificationRequirement"
+                },
+                "user_id": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
                 }
             }
         }

@@ -9,6 +9,10 @@ import (
 type JsonWebTokenMiddleware interface {
 	CreateSession(w http.ResponseWriter, r *http.Request) (service.Session, error)
 	GenerateToken(w http.ResponseWriter, req *http.Request)
+	AuthMiddleware
+}
+
+type AuthMiddleware interface {
 	RefreshToken(w http.ResponseWriter, req *http.Request)
-	Validate(w http.ResponseWriter, r *http.Request, next http.HandlerFunc)
+	Verify(w http.ResponseWriter, r *http.Request, next http.HandlerFunc)
 }

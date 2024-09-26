@@ -12,30 +12,35 @@ var (
 // Aggretate root used to manage key/value entity relationships
 type AggregateRoot struct {
 	References         []KeyValueEntity `yaml:"-" json:"-"`
-	referencePartition string           `yaml:"-" json:"-"`
+	ReferencePartition string           `yaml:"-" json:"-"`
 	Root               KeyValueEntity   `yaml:"-" json:"-"`
-	rootPartition      string           `yaml:"-" json:"-"`
+	RootPartition      string           `yaml:"-" json:"-"`
 }
 
 // Create a new key/value aggregate root
-func NewAggregateRoot(root KeyValueEntity, references []KeyValueEntity) (*AggregateRoot, error) {
+func NewAggregateRoot(
+	root KeyValueEntity,
+	rootPartition string,
+	references []KeyValueEntity,
+	referencesPartition string) (*AggregateRoot, error) {
+
 	if len(references) <= 0 {
 		return nil, ErrEmptyReferencesSlice
 	}
 	return &AggregateRoot{
-		References:         references,
-		referencePartition: references[0].Partition(),
 		Root:               root,
-		rootPartition:      root.Partition(),
+		RootPartition:      rootPartition,
+		References:         references,
+		ReferencePartition: referencesPartition,
 	}, nil
 }
 
 // Returns the aggregate root partition
 func (aggregate *AggregateRoot) Partition() string {
 	var sb strings.Builder
-	sb.WriteString(aggregate.rootPartition)
+	sb.WriteString(aggregate.RootPartition)
 	sb.WriteString("_")
-	sb.WriteString(aggregate.referencePartition)
+	sb.WriteString(aggregate.ReferencePartition)
 	return sb.String()
 }
 
