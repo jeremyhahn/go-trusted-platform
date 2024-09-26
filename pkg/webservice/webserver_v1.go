@@ -28,8 +28,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -114,9 +117,11 @@ func (server *WebServerV1) Run() {
 
 	server.buildRoutes()
 
-	fs := http.FileServer(http.Dir(server.config.Home))
-	server.router.PathPrefix("/").Handler(fs)
-	http.Handle("/", server.httpServer.Handler)
+	// r := http.FileServer(http.Dir(server.config.Home))
+	// server.router.PathPrefix("/").Handler(fs)
+	// http.Handle("/", server.httpServer.Handler)
+	server.router.PathPrefix("/").HandlerFunc(
+		serveStaticFiles(server.config.Home, "index.html"))
 
 	if server.config.TLSPort > 0 {
 		go server.startHttps()
@@ -135,6 +140,31 @@ func (server WebServerV1) Shutdown() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	server.httpServer.Shutdown(ctx)
 	cancel()
+}
+
+func serveStaticFiles(staticDir string, indexFile string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		slog.Debug(r.URL.Path)
+
+		// Try to find the file
+		path := filepath.Join(staticDir, r.URL.Path)
+
+		// Check if the file exists
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+
+			slog.Debug("file doesnt exist, serviing index.html")
+
+			// If the file doesn't exist, serve index.html
+			http.ServeFile(w, r, filepath.Join(staticDir, indexFile))
+			return
+		}
+
+		slog.Debug("serving requested file", slog.String("path", path))
+
+		// Otherwise, serve the static file
+		http.ServeFile(w, r, path)
+	}
 }
 
 func (server *WebServerV1) startHttp() {
@@ -214,6 +244,20 @@ func (server *WebServerV1) startHttps() {
 func (server *WebServerV1) buildRoutes() {
 	muxRouter := mux.NewRouter().StrictSlash(true)
 	responseWriter := response.NewResponseWriter(server.logger, nil)
+
+	// Define allowed CORS options
+	corsOptions := middleware.CORSOptions{
+		// AllowedOrigins:   []string{"http://localhost:3000"}, // Replace with your frontend domain
+		// AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		// AllowedHeaders:   []string{"Content-Type", "Authorization"},
+		// AllowCredentials: true, // Set to true if you need to allow cookies or other credentials
+		AllowedOrigins:   []string{"*"}, // Replace with your frontend domain
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"*"},
+		AllowCredentials: true, // Set to true if you need to allow cookies or other credentials
+	}
+	muxRouter.Use(middleware.CORSMiddleware(corsOptions))
+
 	endpointList := v1.NewRouterV1(
 		server.logger,
 		server.ca,

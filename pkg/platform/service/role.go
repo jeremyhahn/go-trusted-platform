@@ -32,7 +32,7 @@ func NewRoleService(
 		roleDAO: roleDAO}
 }
 
-// Returns a list of all Role entities in the database
+// Returns a single page of role entities from the database
 func (service *RoleService) Page(pageQuery datastore.PageQuery) (datastore.PageResult[*entities.Role], error) {
 	return service.roleDAO.Page(pageQuery, datastore.CONSISTENCY_LOCAL)
 }

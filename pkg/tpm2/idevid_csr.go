@@ -153,7 +153,7 @@ func (tpm *TPM2) createIDevIDContent(
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			// /sys/kernel/security/tpm0/binary_bios_measurements: no such file or directory
-			return nil, ErrSecureBootNotEnabled
+			return nil, ErrMissingMeasurementLog
 		} else {
 			return nil, err
 		}

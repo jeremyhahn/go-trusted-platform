@@ -12,6 +12,7 @@ type WebService struct {
 	Key         *keystore.KeyConfig `yaml:"key" json:"key" mapstructure:"key"`
 	Port        int                 `yaml:"port" json:"port" mapstructure:"port"`
 	TLSPort     int                 `yaml:"tls-port" json:"tls_port" mapstructure:"tls-port"`
+	WebAuthn    *WebAuthn           `yaml:"webauthn" json:"webauthn" mapstructure:"webauthn"`
 }
 
 type Identity struct {
@@ -21,7 +22,12 @@ type Identity struct {
 }
 
 type JWT struct {
-	Algorithm  string `yaml:"algorithm" json:"algorithm" mapstructure:"algorithm"`
 	Expiration int64  `yaml:"expiration" json:"expiration" mapstructure:"expiration"`
 	Issuer     string `yaml:"issuer" json:"issuer" mapstructure:"issuer"`
+}
+
+type WebAuthn struct {
+	RPDisplayName string   `yaml:"display-name" json:"display_name" mapstructure:"display-name"`
+	RPID          string   `yaml:"id" json:"id" mapstructure:"id"`
+	RPOrigins     []string `yaml:"origins" json:"origins" mapstructure:"origins"`
 }

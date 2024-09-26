@@ -15,7 +15,8 @@ import (
 )
 
 type SystemRouter struct {
-	middleware        middleware.JsonWebTokenMiddleware
+	authMiddleware    middleware.AuthMiddleware
+	jwtMiddleware     middleware.JsonWebTokenMiddleware
 	systemRestService rest.SystemRestServicer
 	WebServiceRouter
 }
@@ -25,13 +26,15 @@ func NewSystemRouter(
 	logger *logging.Logger,
 	ca ca.CertificateAuthority,
 	serverKeyAttributes *keystore.KeyAttributes,
-	middleware middleware.JsonWebTokenMiddleware,
+	jwtMiddleware middleware.JsonWebTokenMiddleware,
+	authMiddleware middleware.AuthMiddleware,
 	router *mux.Router,
 	jsonWriter response.HttpWriter,
 	endpointList *[]string) WebServiceRouter {
 
 	return &SystemRouter{
-		middleware: middleware,
+		authMiddleware: authMiddleware,
+		jwtMiddleware:  jwtMiddleware,
 		systemRestService: rest.NewSystemRestService(
 			ca,
 			serverKeyAttributes,
@@ -112,7 +115,8 @@ func (systemRouter *SystemRouter) certificate(router *mux.Router, baseURI string
 func (systemRouter *SystemRouter) config(router *mux.Router, baseURI string) string {
 	config := fmt.Sprintf("%s/config", baseURI)
 	router.Handle(config, negroni.New(
-		negroni.HandlerFunc(systemRouter.middleware.Validate),
+		negroni.HandlerFunc(systemRouter.authMiddleware.Verify),
+		negroni.HandlerFunc(systemRouter.jwtMiddleware.Verify),
 		negroni.Wrap(http.HandlerFunc(systemRouter.systemRestService.Config)),
 	))
 	return config
@@ -132,7 +136,8 @@ func (systemRouter *SystemRouter) eventlog(router *mux.Router, baseURI string) s
 	eventlog := fmt.Sprintf("%s/events/{page}", baseURI)
 	router.Handle(eventlog, negroni.New(
 		negroni.NewLogger(),
-		negroni.HandlerFunc(systemRouter.middleware.Validate),
+		negroni.HandlerFunc(systemRouter.authMiddleware.Verify),
+		negroni.HandlerFunc(systemRouter.jwtMiddleware.Verify),
 		negroni.Wrap(http.HandlerFunc(systemRouter.systemRestService.EventsPage)),
 	))
 	return eventlog

@@ -4,11 +4,14 @@ import (
 	"fmt"
 
 	logging "github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 )
 
 type Session interface {
+	ConsistencyLevel() int
 	Close()
+	IsSystemSession() bool
 	Logger() *logging.Logger
 	RequestedOrganizationID() uint64
 	RequestedServiceID() uint64
@@ -17,6 +20,7 @@ type Session interface {
 }
 
 type ServiceSession struct {
+	consistencyLevel   int
 	logger             *logging.Logger
 	orgClaims          []uint64
 	requestedOrgID     uint64
@@ -24,6 +28,12 @@ type ServiceSession struct {
 	serviceClaims      []uint64
 	user               *entities.User
 	Session
+}
+
+func NewSession() Session {
+	return &ServiceSession{
+		consistencyLevel: datastore.CONSISTENCY_LOCAL,
+	}
 }
 
 func CreateSession(
@@ -41,6 +51,10 @@ func CreateSession(
 		requestedServiceID: requestedServiceID,
 		serviceClaims:      serviceClaims,
 		user:               user}
+}
+
+func (session *ServiceSession) ConsistencyLevel() int {
+	return session.consistencyLevel
 }
 
 func (session *ServiceSession) Logger() *logging.Logger {
@@ -81,4 +95,8 @@ func (session *ServiceSession) String() string {
 
 func (session *ServiceSession) Error(err error) {
 	session.logger.Error(fmt.Errorf("session: %+v, error: %s", session, err))
+}
+
+func (session *ServiceSession) IsSystemSession() bool {
+	return session.logger == nil
 }

@@ -9,19 +9,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
-	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestKV(t *testing.T) {
-
-	fs := afero.NewMemMapFs()
-
-	logger := logging.NewLogger(slog.LevelDebug, nil)
-
-	rootDir := "./test"
-	partition := "organizations"
-	readBufferSize := 50
 
 	serializers := []datastore.Serializer{
 		datastore.SERIALIZER_JSON,
@@ -30,11 +21,13 @@ func TestKV(t *testing.T) {
 
 	for _, serializer := range serializers {
 
-		aferoDAO, err := NewAferoDAO[*entities.Organization](
-			logger, fs, rootDir, partition, serializer, readBufferSize)
+		params := aferoTestParams()
+		params.Serializer = serializer
+
+		aferoDAO, err := NewAferoDAO[*entities.Organization](params)
 		assert.Nil(t, err)
 
-		kvstore := New(logger, aferoDAO)
+		kvstore := New(params.Logger, aferoDAO)
 
 		// Create new org
 		org := entities.NewOrganization("Example Org")
@@ -42,8 +35,8 @@ func TestKV(t *testing.T) {
 		assert.Nil(t, err)
 
 		// Ensure it exists
-		expected := fmt.Sprintf("%s/%s/%d.json", rootDir, org.Partition(), org.ID)
-		_, err = fs.Stat(expected)
+		expected := fmt.Sprintf("%s/%s/%d.json", params.RootDir, org.Partition(), org.ID)
+		_, err = params.Fs.Stat(expected)
 		assert.Nil(t, err)
 
 		// Retrieve the org
@@ -58,19 +51,13 @@ func TestKV(t *testing.T) {
 		// Ensure it's deleted
 		_, err = kvstore.Get(org.ID, datastore.CONSISTENCY_LOCAL)
 		assert.NotNil(t, err)
-		assert.True(t, errors.Is(err, ErrRecordNotFound))
+		assert.True(t, errors.Is(err, datastore.ErrRecordNotFound))
 	}
 }
 
 func TestKVCount(t *testing.T) {
 
-	fs := afero.NewMemMapFs()
-
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-
-	rootDir := "./test"
-	partition := "organizations"
-	readBufferSize := 50
 
 	serializers := []datastore.Serializer{
 		datastore.SERIALIZER_JSON,
@@ -79,8 +66,10 @@ func TestKVCount(t *testing.T) {
 
 	for _, serializer := range serializers {
 
-		aferoDAO, err := NewAferoDAO[*entities.Organization](
-			logger, fs, rootDir, partition, serializer, readBufferSize)
+		params := aferoTestParams()
+		params.Serializer = serializer
+
+		aferoDAO, err := NewAferoDAO[*entities.Organization](params)
 		assert.Nil(t, err)
 
 		kvstore := New(logger, aferoDAO)
@@ -100,13 +89,7 @@ func TestKVCount(t *testing.T) {
 
 func TestKVPage(t *testing.T) {
 
-	fs := afero.NewMemMapFs()
-
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-
-	rootDir := "./test"
-	partition := "organizations"
-	readBufferSize := 50
 
 	serializers := []datastore.Serializer{
 		datastore.SERIALIZER_JSON,
@@ -115,8 +98,10 @@ func TestKVPage(t *testing.T) {
 
 	for _, serializer := range serializers {
 
-		aferoDAO, err := NewAferoDAO[*entities.Organization](
-			logger, fs, rootDir, partition, serializer, readBufferSize)
+		params := aferoTestParams()
+		params.Serializer = serializer
+
+		aferoDAO, err := NewAferoDAO[*entities.Organization](params)
 		assert.Nil(t, err)
 
 		kvstore := New(logger, aferoDAO)
@@ -164,13 +149,7 @@ func TestKVPage(t *testing.T) {
 
 func TestKVForEachPage(t *testing.T) {
 
-	fs := afero.NewMemMapFs()
-
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-
-	rootDir := "./test"
-	partition := "organizations"
-	readBufferSize := 50
 
 	serializers := []datastore.Serializer{
 		datastore.SERIALIZER_JSON,
@@ -179,8 +158,10 @@ func TestKVForEachPage(t *testing.T) {
 
 	for _, serializer := range serializers {
 
-		aferoDAO, err := NewAferoDAO[*entities.Organization](
-			logger, fs, rootDir, partition, serializer, readBufferSize)
+		params := aferoTestParams()
+		params.Serializer = serializer
+
+		aferoDAO, err := NewAferoDAO[*entities.Organization](params)
 		assert.Nil(t, err)
 
 		kvstore := New(logger, aferoDAO)

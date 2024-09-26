@@ -6,13 +6,11 @@ import (
 	"net/http"
 	"strconv"
 
-	libjwt "github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -29,7 +27,8 @@ type JsonWebTokenServicer interface {
 type JsonWebTokenRestService struct {
 	logger         *logging.Logger
 	responseWriter response.HttpWriter
-	service        *jwt.Service
+	jwtService     *jwt.Service
+	userService    service.UserServicer
 	JsonWebTokenServicer
 }
 
@@ -37,12 +36,13 @@ type JsonWebTokenRestService struct {
 func NewJsonWebTokenRestService(
 	logger *logging.Logger,
 	responseWriter response.HttpWriter,
-	service *jwt.Service) (JsonWebTokenServicer, error) {
+	jwtService *jwt.Service,
+	userService service.UserServicer) (JsonWebTokenServicer, error) {
 
 	return &JsonWebTokenRestService{
 		logger:         logger,
 		responseWriter: responseWriter,
-		service:        service}, nil
+		jwtService:     jwtService}, nil
 }
 
 // Creates a new web service session from the parsed JWT
@@ -53,7 +53,7 @@ func (restService *JsonWebTokenRestService) CreateSession(
 	restService.logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
 		r.URL.Path, r.Method, r.RemoteAddr, r.RequestURI)
 
-	_, claims, err := restService.parseToken(w, r)
+	_, claims, err := restService.jwtService.ParseToken(w, r)
 	if err != nil {
 		return nil, err
 	}
@@ -78,9 +78,10 @@ func (restService *JsonWebTokenRestService) CreateSession(
 		requestedServiceID, _ = strconv.ParseUint(serviceIDParam, 10, 64)
 	}
 
-	user := &entities.User{
-		ID:    util.NewID([]byte(claims.Email)),
-		Email: claims.Email,
+	user, err := restService.userService.Get(claims.UserID)
+	if err != nil {
+		restService.responseWriter.Error400(w, r, err)
+		return nil, err
 	}
 
 	return service.CreateSession(
@@ -166,7 +167,7 @@ func (restService *JsonWebTokenRestService) GenerateToken(w http.ResponseWriter,
 
 	user := entities.NewUser(userCred.Email)
 
-	tokenString, err := restService.service.GenerateToken(user)
+	tokenString, err := restService.jwtService.GenerateToken(user)
 	if err != nil {
 		restService.responseWriter.Error500(w, req, err)
 		return
@@ -183,7 +184,7 @@ func (restService *JsonWebTokenRestService) RefreshToken(w http.ResponseWriter, 
 	restService.logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
 		r.URL.Path, r.Method, r.RemoteAddr, r.RequestURI)
 
-	token, claims, err := restService.parseToken(w, r)
+	token, claims, err := restService.jwtService.ParseToken(w, r)
 	if err != nil {
 		restService.responseWriter.Error400(w, r, err)
 		return
@@ -226,9 +227,11 @@ func (restService *JsonWebTokenRestService) RefreshToken(w http.ResponseWriter, 
 	// 	return
 	// }
 
-	user := entities.NewUser(claims.Email)
+	user := &entities.User{
+		ID: claims.UserID,
+	}
 
-	tokenString, err := restService.service.GenerateToken(user)
+	tokenString, err := restService.jwtService.GenerateToken(user)
 	if err != nil {
 		restService.responseWriter.Error500(w, r, err)
 		return
@@ -247,53 +250,16 @@ func (restService *JsonWebTokenRestService) Verify(
 	restService.logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
 		r.URL.Path, r.Method, r.RemoteAddr, r.RequestURI)
 
-	token, _, err := restService.parseToken(w, r)
+	token, _, err := restService.jwtService.ParseToken(w, r)
 	if err != nil {
 		// Error response already sent
 		return
 	}
 
-	if !token.Valid {
-		restService.responseWriter.Error401(w, r, ErrInvalidToken)
+	if err := restService.jwtService.Verify(token); err != nil {
+		restService.responseWriter.Error400(w, r, err)
 		return
 	}
 
-	// if claims.UserID < 1 {
-	// 	restService.responseWriter.Error400(w, r, ErrInvalidUserClaim)
-	// 	return
-	// }
-
-	// if claims.Email == "" {
-	// 	restService.responseWriter.Error400(w, r, ErrInvalidEmailClaim)
-	// 	return
-	// }
-
 	next(w, r)
-}
-
-// Parses the JsonWebTokenClaims from the HTTP request using either an OAuth2 or
-// Authorization header based on their presence in the HTTP request.
-func (restService *JsonWebTokenRestService) parseToken(
-	w http.ResponseWriter, r *http.Request) (*libjwt.Token, *jwt.JsonWebTokenClaims, error) {
-
-	tokenString := r.Header.Get("Authorization")
-	if tokenString == "" {
-		restService.responseWriter.Error401(w, r, ErrAuthorizationHeaderRequired)
-		return nil, nil, ErrAuthorizationHeaderRequired
-	}
-	tokenString = tokenString[len("Bearer "):]
-
-	token, err := restService.service.ParseToken(tokenString)
-	if err != nil {
-		restService.responseWriter.Error401(w, r, err)
-		return nil, nil, err
-	}
-
-	claims, ok := token.Claims.(*jwt.JsonWebTokenClaims)
-	if !ok {
-		restService.responseWriter.Error401(w, r, ErrInvalidToken)
-		return nil, nil, err
-	}
-
-	return token, claims, nil
 }

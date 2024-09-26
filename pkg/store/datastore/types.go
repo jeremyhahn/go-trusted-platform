@@ -1,10 +1,18 @@
 package datastore
 
-import "github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
+import (
+	"errors"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
+)
 
 const (
 	CONSISTENCY_LOCAL int = iota
 	CONSISTENCY_QUORUM
+)
+
+var (
+	ErrRecordNotFound = errors.New("datastore: record not found")
 )
 
 type PagerProcFunc[E any] func(entities []E) error
@@ -57,7 +65,6 @@ type Pager[E any] interface {
 	Page(pageQuery PageQuery, CONSISTENCY_LEVEL int) (PageResult[E], error)
 	ForEachPage(pageQuery PageQuery, pagerProcFunc PagerProcFunc[E], CONSISTENCY_LEVEL int) error
 }
-
 type GenericDAO[E any] interface {
 	Save(entity E) error
 	Get(id uint64, CONSISTENCY_LEVEL int) (E, error)
@@ -67,7 +74,7 @@ type GenericDAO[E any] interface {
 }
 
 type OrganizationDAO interface {
-	GetUsers(id uint64) ([]*entities.User, error)
+	GetUsers(id uint64, CONSISTENCY_LEVEL int) ([]*entities.User, error)
 	GenericDAO[*entities.Organization]
 }
 
@@ -75,7 +82,23 @@ type UserDAO interface {
 	GenericDAO[*entities.User]
 }
 
+type RegistrationDAO interface {
+	GenericDAO[*entities.Registration]
+}
+
 type RoleDAO interface {
 	GetByName(name string, CONSISTENCY_LEVEL int) (*entities.Role, error)
 	GenericDAO[*entities.Role]
+}
+
+type WebAuthnDAO interface {
+	GenericDAO[*entities.Blob]
+}
+
+type Factory interface {
+	OrganizationDAO() (OrganizationDAO, error)
+	UserDAO() (UserDAO, error)
+	RegistrationDAO() (RegistrationDAO, error)
+	RoleDAO() (RoleDAO, error)
+	WebAuthnDAO() (WebAuthnDAO, error)
 }

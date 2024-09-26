@@ -25,7 +25,7 @@ attestation:
 
 tpm:
   device: /dev/tpmrm0
-  simulator: false
+  simulator: true
   encrypt-sessions: false
   entropy: false
   hash: SHA-256
@@ -54,7 +54,7 @@ tpm:
     # platform-policy: true 
     rsa:
       size: 2048
-    signature-algorithm: SHA256-RSA
+    signature-algorithm: SHA256-RSAPSS
   idevid:
     model: trusted-platform-edge
     serial: att-tp-e001
@@ -68,7 +68,7 @@ tpm:
     # platform-policy: true 
     rsa:
       size: 2048
-    signature-algorithm: SHA256-RSA
+    signature-algorithm: SHA256-RSAPSS
   platform-pcr: 23
   file-integrity:
     - ./
@@ -106,7 +106,7 @@ certificate-authority:
         - algorithm: RSA
           rsa:
             size: 2048
-          signature-algorithm: SHA256-RSA
+          signature-algorithm: SHA256-RSAPSS
           hash: SHA-256
           store: pkcs8
           password: 123456
@@ -129,7 +129,7 @@ certificate-authority:
         - algorithm: RSA
           rsa:
             size: 2048
-          signature-algorithm: SHA256-RSA
+          signature-algorithm: SHA256-RSAPSS
           hash: SHA-256
           store: tpm2
           password: 123456
@@ -221,7 +221,7 @@ certificate-authority:
           algorithm: RSA
           rsa:
             size: 2048
-          signature-algorithm: SHA256-RSA
+          signature-algorithm: SHA256-RSAPSS
           hash: SHA-256
           store: pkcs8
           password: 123456
@@ -243,7 +243,7 @@ certificate-authority:
         - algorithm: RSA
           rsa:
             size: 2048
-          signature-algorithm: SHA256-RSA
+          signature-algorithm: SHA256-RSAPSS
           hash: SHA-256
           store: tpm2
           password: 123456
@@ -319,11 +319,13 @@ webservice:
   tls-port: 8443
   jwt:
     expiration: 525960
-    # ES256 | ES384 | ES512
-    # PS256 | PS384 | PS512
-    # RS256 | RS384 | RS512
-    algorithm: PS256
     issuer: my_org_id
+  webauthn:
+    display-name: Trusted Platform
+    id: localhost
+    origins:
+      - https://localhost
+      - https://localhost:8443
   key:
     algorithm: ECDSA
     ecc:
@@ -367,7 +369,7 @@ webservice:
   certificate:
     valid: 365
     subject:
-      cn: www.example.com
+      cn: localhost
       organization: Trusted Platform
       country: US
       province: Kernel
