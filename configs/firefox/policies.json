@@ -1,0 +1,17 @@
+{
+    "policies": {
+      "Certificates": {
+       "ImportEnterpriseRoots": true,
+            "Install": [
+                "/etc/firefox/certificates/root-ca.example.com.pkcs11.ecdsa.cer",
+                "/etc/firefox/certificates/root-ca.example.com.pkcs11.rsa.cer",
+                "/etc/firefox/certificates/root-ca.example.com.pkcs8.ecdsa.cer",
+                "/etc/firefox/certificates/root-ca.example.com.pkcs8.ed25519.cer",
+                "/etc/firefox/certificates/root-ca.example.com.pkcs8.rsa.cer",
+                "/etc/firefox/certificates/root-ca.example.com.tpm2.ecdsa.cer",
+                "/etc/firefox/certificates/root-ca.example.com.tpm2.rsa.cer"
+            ]
+
+      }
+    }
+  }

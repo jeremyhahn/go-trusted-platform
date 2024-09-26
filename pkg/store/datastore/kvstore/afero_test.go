@@ -13,15 +13,17 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func aferoTestParams() *Params {
+	return &Params{
+		Fs:             afero.NewMemMapFs(),
+		Logger:         logging.NewLogger(slog.LevelDebug, nil),
+		Partition:      "organizations",
+		RootDir:        "./test",
+		ReadBufferSize: 50,
+	}
+}
+
 func TestAferoCRUD(t *testing.T) {
-
-	fs := afero.NewMemMapFs()
-
-	logger := logging.NewLogger(slog.LevelDebug, nil)
-
-	rootDir := "./test"
-	partition := "organizations"
-	readBufferSize := 50
 
 	serializers := []datastore.Serializer{
 		datastore.SERIALIZER_JSON,
@@ -30,8 +32,10 @@ func TestAferoCRUD(t *testing.T) {
 
 	for _, serializer := range serializers {
 
-		aferoDAO, err := NewAferoDAO[*entities.Organization](
-			logger, fs, rootDir, partition, serializer, readBufferSize)
+		params := aferoTestParams()
+		params.Serializer = serializer
+
+		aferoDAO, err := NewAferoDAO[*entities.Organization](params)
 		assert.Nil(t, err)
 
 		// Create new org
@@ -40,8 +44,8 @@ func TestAferoCRUD(t *testing.T) {
 		assert.Nil(t, err)
 
 		// Ensure it exists
-		expected := fmt.Sprintf("%s/%s/%d.json", rootDir, org.Partition(), org.ID)
-		_, err = fs.Stat(expected)
+		expected := fmt.Sprintf("%s/%s/%d.json", params.RootDir, org.Partition(), org.ID)
+		_, err = params.Fs.Stat(expected)
 		assert.Nil(t, err)
 
 		// Retrieve the org
@@ -56,19 +60,11 @@ func TestAferoCRUD(t *testing.T) {
 		// Ensure it's deleted
 		_, err = aferoDAO.Get(org.ID, datastore.CONSISTENCY_LOCAL)
 		assert.NotNil(t, err)
-		assert.True(t, errors.Is(err, ErrRecordNotFound))
+		assert.True(t, errors.Is(err, datastore.ErrRecordNotFound))
 	}
 }
 
 func TestAferoCount(t *testing.T) {
-
-	fs := afero.NewMemMapFs()
-
-	logger := logging.NewLogger(slog.LevelDebug, nil)
-
-	rootDir := "./test"
-	partition := "organizations"
-	readBufferSize := 50
 
 	serializers := []datastore.Serializer{
 		datastore.SERIALIZER_JSON,
@@ -77,8 +73,10 @@ func TestAferoCount(t *testing.T) {
 
 	for _, serializer := range serializers {
 
-		aferoDAO, err := NewAferoDAO[*entities.Organization](
-			logger, fs, rootDir, partition, serializer, readBufferSize)
+		params := aferoTestParams()
+		params.Serializer = serializer
+
+		aferoDAO, err := NewAferoDAO[*entities.Organization](params)
 		assert.Nil(t, err)
 
 		count := 1000
@@ -96,14 +94,6 @@ func TestAferoCount(t *testing.T) {
 
 func TestAferoPage(t *testing.T) {
 
-	fs := afero.NewMemMapFs()
-
-	logger := logging.NewLogger(slog.LevelDebug, nil)
-
-	rootDir := "./test"
-	partition := "organizations"
-	readBufferSize := 50
-
 	serializers := []datastore.Serializer{
 		datastore.SERIALIZER_JSON,
 		datastore.SERIALIZER_YAML,
@@ -111,7 +101,10 @@ func TestAferoPage(t *testing.T) {
 
 	for _, serializer := range serializers {
 
-		aferoDAO, err := NewAferoDAO[*entities.Organization](logger, fs, rootDir, partition, serializer, readBufferSize)
+		params := aferoTestParams()
+		params.Serializer = serializer
+
+		aferoDAO, err := NewAferoDAO[*entities.Organization](params)
 		assert.Nil(t, err)
 
 		count := 1000
@@ -157,14 +150,6 @@ func TestAferoPage(t *testing.T) {
 
 func TestAferoForEachPage(t *testing.T) {
 
-	fs := afero.NewMemMapFs()
-
-	logger := logging.NewLogger(slog.LevelDebug, nil)
-
-	rootDir := "./test"
-	partition := "organizations"
-	readBufferSize := 50
-
 	serializers := []datastore.Serializer{
 		datastore.SERIALIZER_JSON,
 		datastore.SERIALIZER_YAML,
@@ -172,7 +157,10 @@ func TestAferoForEachPage(t *testing.T) {
 
 	for _, serializer := range serializers {
 
-		aferoDAO, err := NewAferoDAO[*entities.Organization](logger, fs, rootDir, partition, serializer, readBufferSize)
+		params := aferoTestParams()
+		params.Serializer = serializer
+
+		aferoDAO, err := NewAferoDAO[*entities.Organization](params)
 		assert.Nil(t, err)
 
 		count := 1000

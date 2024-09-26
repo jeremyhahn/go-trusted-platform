@@ -9,10 +9,9 @@ import (
 )
 
 var (
-	ErrAuthorizationHeaderRequired = errors.New("authorization header required")
-	ErrInvalidToken                = errors.New("invalid token")
-	ErrInvalidUserClaim            = errors.New("invalid user id claim")
-	ErrInvalidEmailClaim           = errors.New("invalid email claim")
+	ErrInvalidToken      = errors.New("invalid token")
+	ErrInvalidUserClaim  = errors.New("invalid user id claim")
+	ErrInvalidEmailClaim = errors.New("invalid email claim")
 )
 
 type RestService interface {
@@ -22,6 +21,7 @@ type RestService interface {
 type RestServiceRegistry interface {
 	JsonWebTokenService() JsonWebTokenServicer
 	SystemRestService() SystemRestServicer
+	WebAuthnRestService() WebAuthnRestServicer
 }
 
 type GenericRestService[E any] struct {
