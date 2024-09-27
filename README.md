@@ -410,8 +410,7 @@ The `main` branch will always build and run. Try it out!
         - [x] Private trusted root certificate store
         - [x] Private trusted intermediate certificate store
         - [x] Distinct CA, TLS, encryption & signing keys
-        - [x] RSA, ECDSA & Ed21159 signing keys
-        - [x] SHA-256, 385, 512 w/ RSA PKCS1v15, PSS, ECDSA, & Ed25519 signature algorithms
+        - [x] RSA, ECDSA, Ed21159 & x25519Kyber768Draft00 support
         - [x] Create & Sign Certificate Signing Requests (CSR)
         - [x] x509 Certificate Revocation Lists (CRLs)
         - [x] Encoding & Decoding support for DER and PEM
