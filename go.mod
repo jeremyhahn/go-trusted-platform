@@ -20,6 +20,7 @@ require (
 	github.com/gorilla/mux v1.8.1
 	github.com/mdobak/go-xerrors v0.3.1
 	github.com/miekg/pkcs11 v1.1.1
+	github.com/open-quantum-safe/liboqs-go v0.0.0-20240412174151-8a109c3b4878
 	github.com/samber/slog-multi v1.2.1
 	github.com/spf13/afero v1.11.0
 	github.com/spf13/cobra v1.8.1

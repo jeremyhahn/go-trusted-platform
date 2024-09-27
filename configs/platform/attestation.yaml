@@ -86,6 +86,7 @@ certificate-authority:
   default-idevid-cn: default-device-id
   sans-include-localhost: true
   require-password: true
+  quantum-safe: false
   identity:
     - 
       keystores:
