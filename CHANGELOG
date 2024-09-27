@@ -1,5 +1,1 @@
-- Create initial datastore package using Afero
-- Create org, role, and user enities
-- Implement basic WebAuthn/JWT login
-- Create example policy which adds CA root certs to firefox
-
+- Add initial Dilithium2 post quantum support

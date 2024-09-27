@@ -558,14 +558,20 @@ func (ca *CA) Init(parentCA CertificateAuthority) error {
 			caKeyAttrs.SignatureAlgorithm)
 
 		// Create the new CA certificate
-		caDerCert, err := x509.CreateCertificate(rand.Reader,
+		certDER, err := x509.CreateCertificate(rand.Reader,
 			template, signingCert, publicKey, opaque)
 		if err != nil {
 			ca.params.Logger.Error(err)
 			return err
 		}
 
-		cert, err := x509.ParseCertificate(caDerCert)
+		if ca.params.Config.QuantumSafe {
+			// Add quantum safe extensions
+			extensions := quantumSafeExtentions(keystore.QUANTUM_ALGORITHM_DILITHIUM2, certDER)
+			template.ExtraExtensions = append(template.ExtraExtensions, extensions...)
+		}
+
+		cert, err := x509.ParseCertificate(certDER)
 		if err != nil {
 			return err
 		}
@@ -2309,6 +2315,19 @@ func (ca *CA) TLSConfig(attrs *keystore.KeyAttributes) (*tls.Config, error) {
 		MinVersion: tls.VersionTLS13,
 		MaxVersion: tls.VersionTLS13,
 	}, nil
+}
+
+// Returns a tls.Config for the requested common name populated with the
+// Certificate Authority, cross-signed intermediates if any, and
+// the end entity leaf certificate, defaulting to a hybrid, quantum-safe
+// X25519 / Kyber768 key exchange.
+func (ca *CA) QuantumSafeTLSConfig(attrs *keystore.KeyAttributes) (*tls.Config, error) {
+	tlsConfig, err := ca.TLSConfig(attrs)
+	if err != nil {
+		return nil, err
+	}
+	tlsConfig.CurvePreferences = nil
+	return tlsConfig, nil
 }
 
 // Creates a TLS "bundle" containing the requested leaf certificate,
