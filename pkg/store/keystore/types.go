@@ -20,7 +20,6 @@ import (
 
 type FSExtension string
 type Partition string
-
 type KeyHalf uint8
 
 const (
@@ -67,6 +66,8 @@ const (
 	KEY_TYPE_STORAGE
 	KEY_TYPE_TLS
 	KEY_TYPE_TPM
+
+	QUANTUM_ALGORITHM_DILITHIUM2 QuantumAlgorithm = 1 + iota
 
 	ENCRYPT_ALGORITHM_RSA_PKCS1v15 = 1 + iota
 	ENCRYPT_ALGORITHM_RSA_OAEP
@@ -188,6 +189,7 @@ type KeyAttributes struct {
 	Parent             *KeyAttributes
 	Password           Password
 	PlatformPolicy     bool
+	QuantumAlgorithm   *QuantumAlgorithm
 	RSAAttributes      *RSAAttributes
 	Secret             Password
 	SignatureAlgorithm x509.SignatureAlgorithm
@@ -202,6 +204,12 @@ type ECCAttributes struct {
 
 type RSAAttributes struct {
 	KeySize int
+}
+
+type QuantumAlgorithm int
+
+func (algo QuantumAlgorithm) String() string {
+	return "Dilithium2"
 }
 
 type EncryptionAlgorithm uint8

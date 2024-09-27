@@ -85,6 +85,7 @@ certificate-authority:
   default-validity: 365
   sans-include-localhost: true
   require-password: true
+  quantum-safe: true
   identity:
     - 
       keystores:
