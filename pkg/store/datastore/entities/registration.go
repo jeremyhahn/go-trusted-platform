@@ -19,10 +19,6 @@ func NewRegistration(email string) *Registration {
 	}
 }
 
-func (r *Registration) Partition() string {
-	return "registrations"
-}
-
 func (r *Registration) EntityID() uint64 {
 	return r.ID
 }

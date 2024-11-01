@@ -41,9 +41,9 @@ func EncodeCSR(csr []byte) ([]byte, error) {
 }
 
 // Decodes CSR bytes to x509.CertificateRequest
-func DecodeCSR(bytes []byte) (*x509.CertificateRequest, error) {
+func DecodeCSR(csrPEM []byte) (*x509.CertificateRequest, error) {
 	var block *pem.Block
-	if block, _ = pem.Decode(bytes); block == nil {
+	if block, _ = pem.Decode(csrPEM); block == nil {
 		return nil, keystore.ErrInvalidEncodingPEM
 	}
 	return x509.ParseCertificateRequest(block.Bytes)

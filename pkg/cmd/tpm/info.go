@@ -10,9 +10,10 @@ var InfoCmd = &cobra.Command{
 	Long:  `Display TPM 2.0 Endorsement Public Key in PEM form`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App, err = App.Init(InitParams)
-		if err != nil {
-			cmd.PrintErrln(err)
+		App, _ = App.Init(InitParams)
+
+		if App.TPM == nil {
+			cmd.PrintErrln("Failed to initialze TPM")
 			return
 		}
 

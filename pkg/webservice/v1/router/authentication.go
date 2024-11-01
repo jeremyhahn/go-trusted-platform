@@ -1,8 +1,6 @@
 package router
 
 import (
-	"fmt"
-
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 )
@@ -21,10 +19,9 @@ func NewAuthenticationRouter(
 }
 
 // Registers all of the authentication endpoints at the root of the webservice (/api/v1)
-func (authenticationRouter *AuthenticationRouter) RegisterRoutes(router *mux.Router, baseURI string) []string {
-	return []string{
-		authenticationRouter.login(router, baseURI),
-		authenticationRouter.refreshToken(router, baseURI)}
+func (authenticationRouter *AuthenticationRouter) RegisterRoutes(router *mux.Router) {
+	authenticationRouter.login(router)
+	authenticationRouter.refreshToken(router)
 }
 
 // @Summary Authenticate and obtain JWT
@@ -38,10 +35,8 @@ func (authenticationRouter *AuthenticationRouter) RegisterRoutes(router *mux.Rou
 // @Failure 403 {object} jwt.JsonWebTokenClaims
 // @Failure 500 {object} jwt.JsonWebTokenClaims
 // @Router /login [post]
-func (authenticationRouter *AuthenticationRouter) login(router *mux.Router, baseURI string) string {
-	login := fmt.Sprintf("%s/login", baseURI)
-	router.HandleFunc(login, authenticationRouter.middleware.GenerateToken)
-	return login
+func (authenticationRouter *AuthenticationRouter) login(router *mux.Router) {
+	router.HandleFunc("/login", authenticationRouter.middleware.GenerateToken)
 }
 
 // @Summary Refresh JWT
@@ -55,8 +50,6 @@ func (authenticationRouter *AuthenticationRouter) login(router *mux.Router, base
 // @Failure 500 {object} jwt.JsonWebTokenClaims
 // @Router /login/refresh [get]
 // @Security JWT
-func (authenticationRouter *AuthenticationRouter) refreshToken(router *mux.Router, baseURI string) string {
-	refreshToken := fmt.Sprintf("%s/login/refresh", baseURI)
-	router.HandleFunc(refreshToken, authenticationRouter.middleware.RefreshToken)
-	return refreshToken
+func (authenticationRouter *AuthenticationRouter) refreshToken(router *mux.Router) {
+	router.HandleFunc("/login/refresh", authenticationRouter.middleware.RefreshToken)
 }

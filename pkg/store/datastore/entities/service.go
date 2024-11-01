@@ -25,7 +25,3 @@ func (service *Service) SetEntityID(id uint64) {
 func (service *Service) EntityID() uint64 {
 	return service.ID
 }
-
-func (service *Service) Partition() string {
-	return "services"
-}

@@ -7,14 +7,15 @@ import (
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/serializer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 )
 
-func aferoTestParams() *Params {
-	return &Params{
+func aferoTestParams[E any]() *Params[E] {
+	return &Params[E]{
 		Fs:             afero.NewMemMapFs(),
 		Logger:         logging.NewLogger(slog.LevelDebug, nil),
 		Partition:      "organizations",
@@ -25,17 +26,17 @@ func aferoTestParams() *Params {
 
 func TestAferoCRUD(t *testing.T) {
 
-	serializers := []datastore.Serializer{
-		datastore.SERIALIZER_JSON,
-		datastore.SERIALIZER_YAML,
+	serializers := []serializer.Serializer[*entities.Organization]{
+		serializer.NewJSONSerializer[*entities.Organization](),
+		serializer.NewYAMLSerializer[*entities.Organization](),
 	}
 
 	for _, serializer := range serializers {
 
-		params := aferoTestParams()
+		params := aferoTestParams[*entities.Organization]()
 		params.Serializer = serializer
 
-		aferoDAO, err := NewAferoDAO[*entities.Organization](params)
+		aferoDAO, err := NewAferoDAO(params)
 		assert.Nil(t, err)
 
 		// Create new org
@@ -44,7 +45,8 @@ func TestAferoCRUD(t *testing.T) {
 		assert.Nil(t, err)
 
 		// Ensure it exists
-		expected := fmt.Sprintf("%s/%s/%d.json", params.RootDir, org.Partition(), org.ID)
+		expected := fmt.Sprintf("%s/%s/%d%s",
+			params.RootDir, organization_partition, org.ID, serializer.Extension())
 		_, err = params.Fs.Stat(expected)
 		assert.Nil(t, err)
 
@@ -66,17 +68,17 @@ func TestAferoCRUD(t *testing.T) {
 
 func TestAferoCount(t *testing.T) {
 
-	serializers := []datastore.Serializer{
-		datastore.SERIALIZER_JSON,
-		datastore.SERIALIZER_YAML,
+	serializers := []serializer.Serializer[*entities.Organization]{
+		serializer.NewJSONSerializer[*entities.Organization](),
+		serializer.NewYAMLSerializer[*entities.Organization](),
 	}
 
 	for _, serializer := range serializers {
 
-		params := aferoTestParams()
+		params := aferoTestParams[*entities.Organization]()
 		params.Serializer = serializer
 
-		aferoDAO, err := NewAferoDAO[*entities.Organization](params)
+		aferoDAO, err := NewAferoDAO(params)
 		assert.Nil(t, err)
 
 		count := 1000
@@ -94,17 +96,17 @@ func TestAferoCount(t *testing.T) {
 
 func TestAferoPage(t *testing.T) {
 
-	serializers := []datastore.Serializer{
-		datastore.SERIALIZER_JSON,
-		datastore.SERIALIZER_YAML,
+	serializers := []serializer.Serializer[*entities.Organization]{
+		serializer.NewJSONSerializer[*entities.Organization](),
+		serializer.NewYAMLSerializer[*entities.Organization](),
 	}
 
 	for _, serializer := range serializers {
 
-		params := aferoTestParams()
+		params := aferoTestParams[*entities.Organization]()
 		params.Serializer = serializer
 
-		aferoDAO, err := NewAferoDAO[*entities.Organization](params)
+		aferoDAO, err := NewAferoDAO(params)
 		assert.Nil(t, err)
 
 		count := 1000
@@ -150,17 +152,17 @@ func TestAferoPage(t *testing.T) {
 
 func TestAferoForEachPage(t *testing.T) {
 
-	serializers := []datastore.Serializer{
-		datastore.SERIALIZER_JSON,
-		datastore.SERIALIZER_YAML,
+	serializers := []serializer.Serializer[*entities.Organization]{
+		serializer.NewJSONSerializer[*entities.Organization](),
+		serializer.NewYAMLSerializer[*entities.Organization](),
 	}
 
 	for _, serializer := range serializers {
 
-		params := aferoTestParams()
+		params := aferoTestParams[*entities.Organization]()
 		params.Serializer = serializer
 
-		aferoDAO, err := NewAferoDAO[*entities.Organization](params)
+		aferoDAO, err := NewAferoDAO(params)
 		assert.Nil(t, err)
 
 		count := 1000

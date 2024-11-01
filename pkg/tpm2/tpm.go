@@ -5,10 +5,13 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
+	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -33,6 +36,7 @@ import (
 type TrustedPlatformModule interface {
 	ActivateCredential(credentialBlob, encryptedSecret []byte) ([]byte, error)
 	AKProfile() (AKProfile, error)
+	CalculateName(algID tpm2.TPMAlgID, publicArea []byte)
 	Clear(hierarchyAuth []byte, hierarchy tpm2.TPMHandle) error
 	Close() error
 	Config() *Config
@@ -129,7 +133,7 @@ type TrustedPlatformModule interface {
 	Unseal(keyAttrs *keystore.KeyAttributes, backend keystore.KeyBackend) ([]byte, error)
 	WriteEKCert(ekCert []byte) error
 
-	VerifyCSR(
+	VerifyTCG_CSR_IAK(
 		csr *TCG_CSR_IDEVID,
 		sigAlgo x509.SignatureAlgorithm) (*keystore.KeyAttributes, *UNPACKED_TCG_CSR_IDEVID, error)
 	SignValidate(
@@ -1100,7 +1104,7 @@ func (tpm *TPM2) SignValidate(
 				},
 				Tag: tpm2.TPMSTHashCheck,
 			},
-		}.Execute(tpm.Transport())
+		}.Execute(tpm.transport)
 		if err != nil {
 			return nil, err
 		}
@@ -1302,4 +1306,35 @@ func (tpm *TPM2) downloadEKCertFromManufacturer(ekCertIndex tpm2.TPMHandle) ([]b
 func (tpm *TPM2) tpmDeviceName() string {
 	filename := filepath.Base(tpm.config.Device)
 	return strings.ReplaceAll(filename, "tpmrm", "tpm")
+}
+
+// Calculates the key name of the provided public area using the specified algorithm
+func CalculateName(algID tpm2.TPMAlgID, publicArea []byte) ([]byte, error) {
+	var hash []byte
+	switch algID {
+	case tpm2.TPMAlgSHA1:
+		h := sha1.New()
+		h.Write(publicArea)
+		hash = h.Sum(nil)
+	case tpm2.TPMAlgSHA256:
+		h := sha256.New()
+		h.Write(publicArea)
+		hash = h.Sum(nil)
+	case tpm2.TPMAlgSHA3384:
+		h := sha512.New384()
+		h.Write(publicArea)
+		hash = h.Sum(nil)
+	case tpm2.TPMAlgSHA512:
+		h := sha512.New()
+		h.Write(publicArea)
+		hash = h.Sum(nil)
+	default:
+		return nil, fmt.Errorf("unsupported algorithm ID: %d", algID)
+	}
+
+	name := make([]byte, 2+len(hash)) // 2 bytes for Algorithm ID + hash length
+	binary.BigEndian.PutUint16(name, uint16(algID))
+	copy(name[2:], hash) // Copy the hash into the name after the Algorithm ID
+
+	return name, nil
 }

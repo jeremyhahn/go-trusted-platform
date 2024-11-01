@@ -5,6 +5,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	revokeDeleteKeys bool
+)
+
+func init() {
+	CertificateCmd.PersistentFlags().BoolVar(&revokeDeleteKeys, "delete-keys", true, "True to delete associated key pair")
+}
+
 var RevokeCmd = &cobra.Command{
 	Use:   "revoke [cn] [store] [algorithm]",
 	Short: "Revokes an issued certificate",
@@ -56,7 +64,7 @@ the certificate and any keys from the stores.`,
 			return
 		}
 
-		err = App.CA.Revoke(certificate)
+		err = App.CA.Revoke(certificate, revokeDeleteKeys)
 		if err != nil {
 			cmd.PrintErrln(err)
 			return

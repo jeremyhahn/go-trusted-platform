@@ -5,12 +5,15 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/acme"
 )
 
 type RestRegistry struct {
+	acmeRestService     acme.RestServicer
 	claimsIssuer        string
 	jwtExpiration       int
 	logger              *logging.Logger
@@ -22,15 +25,14 @@ type RestRegistry struct {
 	RestServiceRegistry
 }
 
-func NewRestServiceRegistry(
+func NewHandlerRegistry(
 	logger *logging.Logger,
 	ca ca.CertificateAuthority,
+	daoFactory datastore.Factory,
 	serverKeyAttributes *keystore.KeyAttributes,
 	serviceRegistry *service.Registry,
 	config *config.WebService,
 	jwtClaimsIssuer string) RestServiceRegistry {
-
-	endpointList := make([]string, 0)
 
 	httpWriter := response.NewResponseWriter(logger, nil)
 
@@ -48,6 +50,23 @@ func NewRestServiceRegistry(
 		logger.FatalError(err)
 	}
 
+	acmeRestService, err := acme.NewRestService(
+		config.Certificate.Subject.CommonName,
+		daoFactory,
+		ca,
+		logger,
+		config,
+		datastore.CONSISTENCY_LOCAL)
+	if err != nil {
+		logger.FatalError(err)
+	}
+
+	systemService := NewSystemRestService(
+		ca,
+		serverKeyAttributes,
+		httpWriter,
+		logger)
+
 	webAuthnRestService, err := NewWebAuthnRestService(
 		logger,
 		config,
@@ -57,21 +76,13 @@ func NewRestServiceRegistry(
 		serviceRegistry.RegistrationService(),
 		serviceRegistry.WebAuthnSessionService())
 
-	registry := &RestRegistry{
-		endpointList:        &endpointList,
+	return &RestRegistry{
+		acmeRestService:     acmeRestService,
 		jsonWebTokenService: jsonWebTokenService,
 		serviceRegistry:     serviceRegistry,
+		systemRestService:   systemService,
 		webauthnRestService: webAuthnRestService,
 	}
-
-	registry.systemRestService = NewSystemRestService(
-		ca,
-		serverKeyAttributes,
-		httpWriter,
-		logger,
-		registry.endpointList)
-
-	return registry
 }
 
 func (registry *RestRegistry) JsonWebTokenService() JsonWebTokenServicer {
@@ -84,4 +95,8 @@ func (registry *RestRegistry) SystemRestService() SystemRestServicer {
 
 func (registry *RestRegistry) WebAuthnRestService() WebAuthnRestServicer {
 	return registry.webauthnRestService
+}
+
+func (registry *RestRegistry) ACMERestService() acme.RestServicer {
+	return registry.acmeRestService
 }

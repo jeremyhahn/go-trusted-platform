@@ -2,8 +2,6 @@ package certstore
 
 import (
 	"crypto"
-	"crypto/ecdsa"
-	"crypto/rsa"
 	"crypto/sha1"
 	"crypto/x509"
 	"encoding/hex"
@@ -12,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 )
 
@@ -57,6 +54,7 @@ type CertificateStorer interface {
 	ImportCRL(cn string, crlDER []byte) error
 	IsRevoked(certificate *x509.Certificate, issuerCert *x509.Certificate) error
 	IsRevokedAtDistributionPoints(certificate *x509.Certificate) error
+	Issued(cn string) bool
 	Revoke(certificate *x509.Certificate, issuerCert *x509.Certificate, signer crypto.Signer) error
 	Save(certificate *x509.Certificate, partition Partition) error
 }
@@ -81,7 +79,6 @@ var (
 
 func ParseKeyStoreType(certificate *x509.Certificate) (keystore.StoreType, error) {
 	for _, ext := range certificate.Extensions {
-
 		if ext.Id.Equal(common.OIDTPKeyStore) {
 			return keystore.ParseStoreType(fmt.Sprintf("%s", ext.Value))
 		}
@@ -94,7 +91,6 @@ func ParseKeyType(certificate *x509.Certificate) (keystore.KeyType, error) {
 		return keystore.KEY_TYPE_CA, nil
 	}
 	for _, ext := range certificate.Extensions {
-
 		if ext.Id.Equal(common.OIDTCGManufacturer) ||
 			ext.Id.Equal(common.OIDTCGModel) ||
 			ext.Id.Equal(common.OIDTCGVersion) {
@@ -151,51 +147,6 @@ func KeyAttributesFromCertificate(certificate *x509.Certificate) (*keystore.KeyA
 	}, nil
 }
 
-func DebugCertificate(logger *logging.Logger, certificate *x509.Certificate) {
-	logger.Debug("X509 Certificate")
-	logger.Debugf("  Common Name: %s", certificate.Subject.CommonName)
-	logger.Debugf("  Serial Number: %s", certificate.SerialNumber.String())
-	logger.Debugf("  Key Algorithm: %s", certificate.PublicKeyAlgorithm.String())
-	logger.Debugf("  Signature Algorithm: %s", certificate.SignatureAlgorithm.String())
-	logger.Debugf("  Subject Key Identifier: %x", certificate.SubjectKeyId)
-	logger.Debugf("  SHA-1 Fingerprint: %x", sha1.Sum(certificate.Raw))
-
-	logger.Debugf("  Issuer Common Name: %s", certificate.Issuer.CommonName)
-	logger.Debugf("  Issuer Serial Number: %s", certificate.Issuer.SerialNumber)
-
-	for i, dns := range certificate.DNSNames {
-		logger.Debugf("  dns.%d: %s", i, dns)
-	}
-
-	for i, ip := range certificate.IPAddresses {
-		logger.Debugf("  ip.%d: %s", i, ip)
-	}
-
-	for i, email := range certificate.EmailAddresses {
-		logger.Debugf("  email.%d: %s", i, email)
-	}
-
-	logger.Debugf("  Signature: %s", hex.EncodeToString(certificate.Signature))
-
-	fmt.Println("  Public Key:")
-	switch certificate.PublicKey.(type) {
-	case *rsa.PublicKey:
-		logger.Debugf("    Exponent: %d\n", certificate.PublicKey.(*rsa.PublicKey).E)
-		logger.Debugf("    Modulus: %d\n", certificate.PublicKey.(*rsa.PublicKey).N)
-	case *ecdsa.PublicKey:
-		params := certificate.PublicKey.(*ecdsa.PublicKey).Curve.Params()
-		logger.Debugf("    Curve: %s\n", params.Name)
-		logger.Debugf("    X: %d\n", certificate.PublicKey.(*ecdsa.PublicKey).X)
-		logger.Debugf("    Y: %d\n", certificate.PublicKey.(*ecdsa.PublicKey).Y)
-	}
-
-	pem, err := EncodePEM(certificate.Raw)
-	if err != nil {
-		logger.Error(err)
-	}
-	logger.Debugf("PEM: \n%s", string(pem))
-}
-
 func ToString(certificate *x509.Certificate) string {
 
 	if certificate == nil {
@@ -204,12 +155,9 @@ func ToString(certificate *x509.Certificate) string {
 
 	var sb strings.Builder
 
-	storeType, _ := ParseKeyStoreType(certificate)
-
 	sb.WriteString("X509 Certificate\n")
 	sb.WriteString(fmt.Sprintf("  Common Name: %s\n", certificate.Subject.CommonName))
 	sb.WriteString(fmt.Sprintf("  Serial Number: %x\n", certificate.SerialNumber.Bytes()))
-	sb.WriteString(fmt.Sprintf("  Key Store: %s\n", storeType))
 	sb.WriteString(fmt.Sprintf("  Key Algorithm: %s\n", certificate.PublicKeyAlgorithm.String()))
 	sb.WriteString(fmt.Sprintf("  Signature Algorithm: %s\n",
 		certificate.SignatureAlgorithm.String()))
@@ -260,6 +208,16 @@ func ToString(certificate *x509.Certificate) string {
 	sb.WriteString(fmt.Sprintf("    SHA-1 Fingerprint: %x\n", sha1.Sum(der)))
 
 	sb.WriteString(keystore.PublicKeyToString(certificate.PublicKey))
+
+	storeType, err := ParseKeyStoreType(certificate)
+	if err == nil {
+		sb.WriteString("  Key Attributes:\n")
+		sb.WriteString(fmt.Sprintf("    Store: %s\n", storeType))
+		keyType, err := ParseKeyType(certificate)
+		if err == nil {
+			sb.WriteString(fmt.Sprintf("    Type: %s\n", keyType))
+		}
+	}
 
 	return sb.String()
 

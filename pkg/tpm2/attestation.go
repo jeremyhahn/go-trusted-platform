@@ -3,7 +3,9 @@ package tpm2
 import (
 	"crypto/x509"
 	"encoding/asn1"
+	"errors"
 	"math/big"
+	"os"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/aesgcm"
@@ -253,7 +255,13 @@ func (tpm *TPM2) Quote(pcrs []uint, nonce []byte) (Quote, error) {
 	// https://github.com/google/go-attestation/blob/master/docs/event-log-disclosure.md
 	eventLog, err := tpm.EventLog()
 	if err != nil {
-		return Quote{}, err
+		if !errors.Is(err, os.ErrNotExist) {
+			// Some embedded systems may not have a measurement log or there may be a permission
+			// problem. Log the warning and carry on...
+			tpm.logger.Warn(ErrMissingMeasurementLog.Error())
+		} else {
+			return Quote{}, err
+		}
 	}
 
 	allBanks, err := tpm.ReadPCRs(pcrs)

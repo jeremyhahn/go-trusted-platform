@@ -1,5 +1,2 @@
-- Create initial datastore package using Afero
-- Create org, role, and user enities
-- Implement basic WebAuthn/JWT login
-- Create example policy which adds CA root certs to firefox
-
+- Create ACME server & client
+- Remove React dashboard from public_html

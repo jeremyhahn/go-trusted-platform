@@ -6,13 +6,14 @@ import (
 )
 
 type WebService struct {
-	Certificate Identity            `yaml:"certificate" json:"certificate" mapstructure:"certificate"`
-	Home        string              `yaml:"home" json:"home" mapstructure:"home"`
-	JWT         JWT                 `yaml:"jwt" json:"jwt" mapstructure:"jwt"`
-	Key         *keystore.KeyConfig `yaml:"key" json:"key" mapstructure:"key"`
-	Port        int                 `yaml:"port" json:"port" mapstructure:"port"`
-	TLSPort     int                 `yaml:"tls-port" json:"tls_port" mapstructure:"tls-port"`
-	WebAuthn    *WebAuthn           `yaml:"webauthn" json:"webauthn" mapstructure:"webauthn"`
+	Certificate        Identity            `yaml:"certificate" json:"certificate" mapstructure:"certificate"`
+	Home               string              `yaml:"home" json:"home" mapstructure:"home"`
+	JWT                JWT                 `yaml:"jwt" json:"jwt" mapstructure:"jwt"`
+	Key                *keystore.KeyConfig `yaml:"key" json:"key" mapstructure:"key"`
+	Port               int                 `yaml:"port" json:"port" mapstructure:"port"`
+	TermsOfServicePath string              `yaml:"terms-of-service" json:"terms_of_service" mapstructure:"terms-of-service"`
+	TLSPort            int                 `yaml:"tls-port" json:"tls_port" mapstructure:"tls-port"`
+	WebAuthn           *WebAuthn           `yaml:"webauthn" json:"webauthn" mapstructure:"webauthn"`
 }
 
 type Identity struct {

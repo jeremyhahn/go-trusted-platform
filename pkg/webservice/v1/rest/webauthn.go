@@ -395,6 +395,10 @@ func (restService *WebAuthnRestService) RegistrationStatus(w http.ResponseWriter
 
 	userID, err := getUserID(r)
 	if err != nil {
+		if err == ErrInvalidUserIDHeader {
+			restService.responseWriter.Write(w, r, http.StatusOK, "not_registered")
+			return
+		}
 		restService.responseWriter.Error400(w, r, err)
 		return
 	}

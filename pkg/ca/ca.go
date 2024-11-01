@@ -77,6 +77,7 @@ type CertificateAuthority interface {
 	DefaultKeyAlgorithm() x509.PublicKeyAlgorithm
 	DefaultValidityPeriod() int
 	EndorsementKeyCertificate() ([]byte, error)
+	Exists(cn string, algorithm x509.PublicKeyAlgorithm) bool
 	Hash() crypto.Hash
 	Identity() Identity
 	Init(parentCA CertificateAuthority) error
@@ -93,6 +94,7 @@ type CertificateAuthority interface {
 	ImportLocalAttestation(keyAttrs *keystore.KeyAttributes, quote tpm2.Quote, backend keystore.KeyBackend) error
 	ImportIssuingCAs(certificate *x509.Certificate) error
 	IssueCertificate(request CertificateRequest) ([]byte, error)
+	Issued(cn string) bool
 	ImportCertificatePEM(attrs *keystore.KeyAttributes, pemBytes []byte) error
 	IssueAKCertificate(request CertificateRequest, pubKey crypto.PublicKey) (*x509.Certificate, error)
 	IssueEKCertificate(request CertificateRequest, ekPubKey crypto.PublicKey) (*x509.Certificate, error)
@@ -102,14 +104,14 @@ type CertificateAuthority interface {
 	ParseBundle(bundle []byte) ([]*x509.Certificate, error)
 	PEM(attrs *keystore.KeyAttributes) ([]byte, error)
 	Public() crypto.PublicKey
-	Revoke(certificate *x509.Certificate) error
+	Revoke(certificate *x509.Certificate, deleteKeys bool) error
 	RootCertificate(storeType keystore.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) (*x509.Certificate, error)
 	RootCertificateFor(certificate *x509.Certificate) (*x509.Certificate, error)
 	Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) (signature []byte, err error)
 	SignedBlob(key []byte) ([]byte, error)
 	Signature(key string) ([]byte, error)
 	IsSigned(key string) (bool, error)
-	SignCSR(csrBytes []byte, request CertificateRequest) ([]byte, error)
+	SignCSR(csrPEM []byte, request *CertificateRequest) (*x509.Certificate, error)
 	SignedDigest(key string, hash crypto.Hash) (bool, error)
 	Signer(attrs *keystore.KeyAttributes) (crypto.Signer, error)
 	SignTCGCSRIDevID(
@@ -273,6 +275,28 @@ func (ca *CA) Hash() crypto.Hash {
 // Returns the CA's default key algorithm
 func (ca *CA) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm {
 	return ca.defaultKeyAttributes.KeyAlgorithm
+}
+
+// Returns true if the provided common name can be located in
+// the certificate store.
+func (ca *CA) Exists(cn string, algorithm x509.PublicKeyAlgorithm) bool {
+	for _, store := range ca.Keyring().Stores() {
+		keyAttrs := &keystore.KeyAttributes{
+			CN:           cn,
+			KeyAlgorithm: algorithm,
+			StoreType:    store.Type(),
+		}
+		cert, err := ca.certStore.Get(keyAttrs)
+		if err == nil && cert != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// Returns true if the provided common name has an issued certificate
+func (ca *CA) Issued(cn string) bool {
+	return ca.certStore.Issued(cn)
 }
 
 // Load CA key attributes. Any errors during Load are treated as Fatal.
@@ -558,14 +582,20 @@ func (ca *CA) Init(parentCA CertificateAuthority) error {
 			caKeyAttrs.SignatureAlgorithm)
 
 		// Create the new CA certificate
-		caDerCert, err := x509.CreateCertificate(rand.Reader,
+		certDER, err := x509.CreateCertificate(rand.Reader,
 			template, signingCert, publicKey, opaque)
 		if err != nil {
 			ca.params.Logger.Error(err)
 			return err
 		}
 
-		cert, err := x509.ParseCertificate(caDerCert)
+		if ca.params.Config.QuantumSafe {
+			// Add quantum safe extensions
+			extensions := quantumSafeExtentions(keystore.QUANTUM_ALGORITHM_DILITHIUM2, certDER)
+			template.ExtraExtensions = append(template.ExtraExtensions, extensions...)
+		}
+
+		cert, err := x509.ParseCertificate(certDER)
 		if err != nil {
 			return err
 		}
@@ -765,7 +795,7 @@ func (ca *CA) TrustedIntermediateCertPool(
 	return pool, nil
 }
 
-// Creates a new Certificate Signing Request (CSR)
+// Creates a new Certificate Signing Request (CSR) and return it in ASN.1 DER form.
 func (ca *CA) CreateCSR(request CertificateRequest) ([]byte, error) {
 
 	if request.KeyAttributes == nil {
@@ -827,6 +857,18 @@ func (ca *CA) CreateCSR(request CertificateRequest) ([]byte, error) {
 		DNSNames:           dnsNames,
 		IPAddresses:        ipAddresses,
 		// EmailAddresses:     emailAddresses,
+		Extensions: []pkix.Extension{
+			{
+				Id:       common.OIDTPIssuerKeyStore,
+				Value:    []byte(caKeyAttrs.StoreType),
+				Critical: false,
+			},
+			{
+				Id:       common.OIDTPKeyStore,
+				Value:    []byte(request.KeyAttributes.StoreType),
+				Critical: false,
+			},
+		},
 	}
 
 	// Set DNS names as SANS
@@ -854,47 +896,74 @@ func (ca *CA) CreateCSR(request CertificateRequest) ([]byte, error) {
 		return nil, err
 	}
 
-	// Encode CSR to PEM form
-	csrPEM, err := EncodeCSR(csrBytes)
-	if err != nil {
-		ca.params.Logger.Error(err)
-		return nil, err
-	}
+	// // Encode CSR to PEM form
+	// csrPEM, err := EncodeCSR(csrBytes)
+	// if err != nil {
+	// 	ca.params.Logger.Error(err)
+	// 	return nil, err
+	// }
 
-	ca.params.Logger.Debug(string(csrPEM))
+	// ca.params.Logger.Debug(string(csrPEM))
 
-	return csrPEM, nil
+	// return csrPEM, nil
+
+	return csrBytes, nil
 }
 
 // Signs a Certificate Signing Request (CSR) and save it to the cert store
 // in DER and PEM form. This method returns the raw DER encoded []byte array
 // as returned from x509.CreateCertificate.
-func (ca *CA) SignCSR(csrBytes []byte, request CertificateRequest) ([]byte, error) {
+func (ca *CA) SignCSR(csrPEM []byte, request *CertificateRequest) (*x509.Certificate, error) {
 
-	if request.KeyAttributes == nil {
-		return nil, keystore.ErrInvalidKeyAttributes
-	}
-
-	if request.KeyAttributes.KeyAlgorithm == x509.UnknownPublicKeyAlgorithm {
-		return nil, keystore.ErrInvalidKeyAlgorithm
-	}
-
-	if request.KeyAttributes.SignatureAlgorithm == x509.UnknownSignatureAlgorithm {
-		return nil, keystore.ErrInvalidSignatureAlgorithm
-	}
-
-	// keystore.DebugKeyAttributes(ca.params.Logger, request.KeyAttributes)
-
-	caKeyAttrs, err := ca.matchingKeyOrDefault(request.KeyAttributes)
-	if err != nil {
-		return nil, err
-	}
+	var caKeyAttrs *keystore.KeyAttributes
+	var valid int
+	var extensions []pkix.Extension
+	var err error
 
 	// Decode the CSR
-	csr, err := DecodeCSR(csrBytes)
+	csr, err := DecodeCSR(csrPEM)
 	if err != nil {
 		ca.params.Logger.Error(err)
 		return nil, err
+	}
+
+	if request != nil {
+		caKeyAttrs, err = ca.matchingKeyOrDefault(request.KeyAttributes)
+		if err != nil {
+			return nil, err
+		}
+		valid = request.Valid
+		extensions = []pkix.Extension{
+			{
+				Id:       common.OIDTPIssuerKeyStore,
+				Value:    []byte(caKeyAttrs.StoreType),
+				Critical: false,
+			},
+			{
+				Id:       common.OIDTPKeyStore,
+				Value:    []byte(request.KeyAttributes.StoreType),
+				Critical: false,
+			},
+		}
+
+	} else {
+		caKeyAttrs, err = ca.preferredKeyOrDefault(csr.PublicKeyAlgorithm)
+		if err != nil {
+			return nil, err
+		}
+		valid = ca.params.Config.DefaultValidityPeriod
+		extensions = []pkix.Extension{
+			{
+				Id:       common.OIDTPIssuerKeyStore,
+				Value:    []byte(caKeyAttrs.StoreType),
+				Critical: false,
+			},
+			{
+				Id:       common.OIDTPKeyStore,
+				Value:    []byte(keystore.STORE_PKCS8),
+				Critical: false,
+			},
+		}
 	}
 
 	// Create new serial number
@@ -922,24 +991,13 @@ func (ca *CA) SignCSR(csrBytes []byte, request CertificateRequest) ([]byte, erro
 		AuthorityKeyId:     caCertificate.SubjectKeyId,
 		SubjectKeyId:       caCertificate.SubjectKeyId,
 		NotBefore:          time.Now(),
-		NotAfter:           time.Now().AddDate(0, 0, request.Valid),
+		NotAfter:           time.Now().AddDate(0, 0, valid),
 		KeyUsage:           x509.KeyUsageDigitalSignature | x509.KeyUsageKeyAgreement,
 		ExtKeyUsage:        []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		IPAddresses:        csr.IPAddresses,
 		DNSNames:           csr.DNSNames,
 		EmailAddresses:     csr.EmailAddresses,
-		ExtraExtensions: []pkix.Extension{
-			{
-				Id:       common.OIDTPIssuerKeyStore,
-				Value:    []byte(caKeyAttrs.StoreType),
-				Critical: false,
-			},
-			{
-				Id:       common.OIDTPKeyStore,
-				Value:    []byte(request.KeyAttributes.StoreType),
-				Critical: false,
-			},
-		},
+		ExtraExtensions:    extensions,
 	}
 	template.DNSNames = csr.DNSNames
 
@@ -950,8 +1008,8 @@ func (ca *CA) SignCSR(csrBytes []byte, request CertificateRequest) ([]byte, erro
 
 	ca.params.Logger.Infof(
 		"Signing %s CSR for %s with %s %s %s key",
-		request.KeyAttributes.KeyAlgorithm,
-		request.Subject.CommonName,
+		csr.PublicKeyAlgorithm,
+		csr.Subject.CommonName,
 		caKeyAttrs.StoreType,
 		caKeyAttrs.KeyAlgorithm,
 		caKeyAttrs.SignatureAlgorithm)
@@ -973,7 +1031,7 @@ func (ca *CA) SignCSR(csrBytes []byte, request CertificateRequest) ([]byte, erro
 		return nil, err
 	}
 
-	return derBytes, nil
+	return certificate, nil
 }
 
 // Verifies a TCG_CSR_IDEVID Certificate Signing Request (CSR) per TCG TPM 2.0
@@ -997,7 +1055,7 @@ func (ca *CA) VerifyTCGCSRIDevID(
 	tcgCSRIDevID *tpm2.TCG_CSR_IDEVID,
 	signatureAlgorithm x509.SignatureAlgorithm) ([]byte, []byte, []byte, error) {
 
-	akAttrs, unpackedCSR, err := ca.params.TPM.VerifyCSR(
+	akAttrs, unpackedCSR, err := ca.params.TPM.VerifyTCG_CSR_IAK(
 		tcgCSRIDevID, signatureAlgorithm)
 	if err != nil {
 		return nil, nil, nil, err
@@ -1033,7 +1091,7 @@ func (ca *CA) SignTCGCSRIDevID(
 	request *CertificateRequest) ([]byte, error) {
 
 	// Unpack the binary CSR
-	unpackedCSR, err := tpm2.TransformIDevIDCSR(tcgCSRIDevID)
+	unpackedCSR, err := tpm2.UnpackIDevIDCSR(tcgCSRIDevID)
 	if err != nil {
 		return nil, err
 	}
@@ -1723,7 +1781,7 @@ func (ca *CA) IssueAKCertificate(
 }
 
 // Revoke a certificate
-func (ca *CA) Revoke(certificate *x509.Certificate) error {
+func (ca *CA) Revoke(certificate *x509.Certificate, deleteKeys bool) error {
 
 	ca.params.Logger.Infof("Revoking certificate: %s",
 		certificate.Subject.CommonName)
@@ -1755,7 +1813,13 @@ func (ca *CA) Revoke(certificate *x509.Certificate) error {
 		}
 	}
 
-	return ca.keyring.Delete(keyAttrs)
+	if deleteKeys {
+		if err := ca.keyring.Delete(keyAttrs); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Verifies a certificate by checking the CA revocation list
@@ -2311,6 +2375,19 @@ func (ca *CA) TLSConfig(attrs *keystore.KeyAttributes) (*tls.Config, error) {
 	}, nil
 }
 
+// Returns a tls.Config for the requested common name populated with the
+// Certificate Authority, cross-signed intermediates if any, and
+// the end entity leaf certificate, defaulting to a hybrid, quantum-safe
+// X25519 / Kyber768 key exchange.
+func (ca *CA) QuantumSafeTLSConfig(attrs *keystore.KeyAttributes) (*tls.Config, error) {
+	tlsConfig, err := ca.TLSConfig(attrs)
+	if err != nil {
+		return nil, err
+	}
+	tlsConfig.CurvePreferences = nil
+	return tlsConfig, nil
+}
+
 // Creates a TLS "bundle" containing the requested leaf certificate,
 // the Certificate Authority's certificate, and any cross-signed
 // certificates in ASN.1 DER form, and returns the certificate bundle
@@ -2394,10 +2471,7 @@ func (ca *CA) initCRL(caAttrs *keystore.KeyAttributes) error {
 		ca.params.Logger.Error(err)
 		return err
 	}
-
-	err = ca.Revoke(certificate)
-
-	return err
+	return ca.Revoke(certificate, true)
 }
 
 // Return the CA key attributes that match the provided key attribute's
@@ -2415,6 +2489,31 @@ func (ca *CA) matchingKeyOrDefault(
 	attrs, ok := storeMap[keyAttrs.KeyAlgorithm]
 	if !ok {
 		ca.params.Logger.Debugf("%s: %s", InfoUsingDefaultCAKey, keyAttrs.CN)
+		return &ca.defaultKeyAttributes, nil
+	}
+
+	return &attrs, nil
+}
+
+// Return the CA key attributes in order of preference starting with PKCS #11,
+// then TPM 2.0, and finally PKCS #8, or return the default CA key attributes.
+func (ca *CA) preferredKeyOrDefault(algorithm x509.PublicKeyAlgorithm) (*keystore.KeyAttributes, error) {
+
+	var storeMap map[x509.PublicKeyAlgorithm]keystore.KeyAttributes
+	var ok bool
+
+	storeMap, ok = ca.keyAttributesMap[keystore.STORE_PKCS11]
+	if !ok {
+		storeMap, ok = ca.keyAttributesMap[keystore.STORE_TPM2]
+		if !ok {
+			storeMap, ok = ca.keyAttributesMap[keystore.STORE_PKCS8]
+			return &ca.defaultKeyAttributes, nil
+		}
+	}
+
+	attrs, ok := storeMap[algorithm]
+	if !ok {
+		ca.params.Logger.Debugf("%s: %s", InfoUsingDefaultCAKey, algorithm.String())
 		return &ca.defaultKeyAttributes, nil
 	}
 

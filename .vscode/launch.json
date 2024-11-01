@@ -2,7 +2,36 @@
 {
     "version": "0.2.0",
     "configurations": [
-        
+        {
+            "name": "tpadm acme enroll",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "preLaunchTask": "debug_config_clean",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "acme",
+                "enroll", "root@localhost", "test.example.com",
+                "--init",
+                "--raw-so-pin", "test",
+                "--raw-pin", "test"
+            ],
+        },
+        {
+            "name": "tpadm acme new-account",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "preLaunchTask": "debug_config_clean",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "acme",
+                "register", "www.testme.com",
+                "--init",
+                "--raw-so-pin", "test",
+                "--raw-pin", "test"
+            ],
+        },
         {
             "name": "tpadm status",
             "type": "go",

@@ -14,7 +14,7 @@ var (
 
 type RoleServicer interface {
 	GetPage(pageQuery datastore.PageQuery) (datastore.PageResult[*entities.Role], error)
-	GetByName(name string, CONSISTENCY_LEVEL int) (*entities.Role, error)
+	GetByName(name string, CONSISTENCY_LEVEL datastore.ConsistencyLevel) (*entities.Role, error)
 }
 
 type RoleService struct {
@@ -38,6 +38,6 @@ func (service *RoleService) Page(pageQuery datastore.PageQuery) (datastore.PageR
 }
 
 // Returns the role with the given name
-func (service *RoleService) GetByName(name string, CONSISTENCY_LEVEL int) (*entities.Role, error) {
+func (service *RoleService) GetByName(name string, CONSISTENCY_LEVEL datastore.ConsistencyLevel) (*entities.Role, error) {
 	return service.roleDAO.GetByName(name, CONSISTENCY_LEVEL)
 }

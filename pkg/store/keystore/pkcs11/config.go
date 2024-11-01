@@ -79,13 +79,12 @@ func InitSoftHSM(logger *logging.Logger, config *Config) {
 		pieces := strings.Split(matches[len(matches)-1], "=")
 		if len(pieces) == 2 {
 			path := strings.TrimSpace(pieces[1])
-			if _, err = os.Stat(config.LibraryConfig); err != nil {
-				if err = os.MkdirAll(path, os.ModePerm); err != nil {
-					slog.Error(err.Error())
-					os.Exit(-1)
-				}
+			// if _, err = os.Stat(config.LibraryConfig); err != nil {
+			if err = os.MkdirAll(path, os.ModePerm); err != nil {
+				slog.Error(err.Error())
+				os.Exit(-1)
 			}
-
+			// }
 		}
 	}
 
