@@ -153,7 +153,11 @@ func (tpm *TPM2) createIDevIDContent(
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			// /sys/kernel/security/tpm0/binary_bios_measurements: no such file or directory
-			return nil, ErrMissingMeasurementLog
+			// return nil, ErrMissingMeasurementLog
+
+			// Some embedded systems may not have a measurement log or there may be a permission
+			// problem. Log the warning and carry on...
+			tpm.logger.Warn(ErrMissingMeasurementLog.Error())
 		} else {
 			return nil, err
 		}
@@ -397,7 +401,7 @@ func PackIDevIDContent(content *TCG_IDEVID_CONTENT) ([]byte, error) {
 }
 
 // Unpacks a TCG_CSR_IDEVID big endian byte array
-func TransformIDevIDCSR(
+func UnpackIDevIDCSR(
 	tcgCSRIDevID *TCG_CSR_IDEVID) (*UNPACKED_TCG_CSR_IDEVID, error) {
 
 	tcgCSR := UNPACKED_TCG_CSR_IDEVID{}
@@ -616,7 +620,7 @@ func TransformIDevIDCSR(
 // c. Verify the attributes (TPMA_OBJECT bits) of the IAK Public Area to ensure
 // that the key is a Restricted, fixedTPM, fixedParent signing key. Ensure all
 // other attributes meet CA policy.
-func (tpm *TPM2) VerifyCSR(
+func (tpm *TPM2) VerifyTCG_CSR_IAK(
 	csr *TCG_CSR_IDEVID,
 	signatureAlgorithm x509.SignatureAlgorithm) (*keystore.KeyAttributes, *UNPACKED_TCG_CSR_IDEVID, error) {
 
@@ -626,7 +630,7 @@ func (tpm *TPM2) VerifyCSR(
 	}
 
 	// Unpack CSR to UNPACKED_TCG_CSR_IDEVID
-	unpacked, err := TransformIDevIDCSR(csr)
+	unpacked, err := UnpackIDevIDCSR(csr)
 	if err != nil {
 		return nil, nil, err
 	}

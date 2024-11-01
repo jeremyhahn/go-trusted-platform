@@ -8,6 +8,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/system"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -16,7 +17,7 @@ import (
 type SystemRestServicer interface {
 	Config(w http.ResponseWriter, r *http.Request)
 	Certificate(w http.ResponseWriter, r *http.Request)
-	Endpoints(w http.ResponseWriter, r *http.Request)
+	// Endpoints(w http.ResponseWriter, r *http.Request)
 	EventsPage(w http.ResponseWriter, r *http.Request)
 	PublicKey(w http.ResponseWriter, r *http.Request)
 	Status(w http.ResponseWriter, r *http.Request)
@@ -35,20 +36,13 @@ func NewSystemRestService(
 	ca ca.CertificateAuthority,
 	serverKeyAttributes *keystore.KeyAttributes,
 	httpWriter response.HttpWriter,
-	logger *logging.Logger,
-	endpointList *[]string) SystemRestServicer {
+	logger *logging.Logger) SystemRestServicer {
 
 	return &SystemRestService{
 		ca:                  ca,
 		httpWriter:          httpWriter,
 		logger:              logger,
-		serverKeyAttributes: serverKeyAttributes,
-		endpointList:        endpointList}
-}
-
-// Writes a list of webservice REST and WebSocket endpoints
-func (restService *SystemRestService) Endpoints(w http.ResponseWriter, r *http.Request) {
-	restService.httpWriter.Write(w, r, http.StatusOK, restService.endpointList)
+		serverKeyAttributes: serverKeyAttributes}
 }
 
 // Writes the web server public key in PEM form
@@ -94,12 +88,11 @@ func (restService *SystemRestService) Config(w http.ResponseWriter, r *http.Requ
 func (restService *SystemRestService) Status(w http.ResponseWriter, r *http.Request) {
 	memstats := &runtime.MemStats{}
 	runtime.ReadMemStats(memstats)
-	// systemStatus := &model.SystemStruct{}
-	// systemStatus, err := system.SystemInfo()
-	// if err != nil {
-	// 	restService.httpWriter.Error500(w, r, err)
-	// 	return
-	// }
+	systemStatus, err := system.SystemInfo()
+	if err != nil {
+		restService.httpWriter.Error500(w, r, err)
+		return
+	}
 	// systemStatus := &model.SystemStruct{
 	// 	Version: app.GetVersion(),
 	// 	Runtime: &model.SystemRuntime{
@@ -115,7 +108,7 @@ func (restService *SystemRestService) Status(w http.ResponseWriter, r *http.Requ
 	// 		NumGC:       memstats.NumGC,
 	// 		NumForcedGC: memstats.NumForcedGC}}
 
-	// restService.httpWriter.Success200(w, r, systemStatus)
+	restService.httpWriter.Success200(w, r, systemStatus)
 }
 
 // Writes a page of system event log entries

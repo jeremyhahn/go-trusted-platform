@@ -21,8 +21,6 @@ import (
 type FSExtension string
 type Partition string
 
-type KeyHalf uint8
-
 const (
 	DEFAULT_PASSWORD = "123456"
 
@@ -51,9 +49,6 @@ const (
 	STORE_TPM2    StoreType = "tpm2"
 	STORE_UNKNOWN StoreType = "unknown"
 
-	KEYHALF_PRIVATE KeyHalf = 1 + iota
-	KEYHALF_PUBLIC
-
 	// Internal types not stored in the platform configuration file
 	KEY_TYPE_ATTESTATION KeyType = 1 + iota
 	KEY_TYPE_CA
@@ -67,6 +62,8 @@ const (
 	KEY_TYPE_STORAGE
 	KEY_TYPE_TLS
 	KEY_TYPE_TPM
+
+	QUANTUM_ALGORITHM_DILITHIUM2 QuantumAlgorithm = 1 + iota
 
 	ENCRYPT_ALGORITHM_RSA_PKCS1v15 = 1 + iota
 	ENCRYPT_ALGORITHM_RSA_OAEP
@@ -83,39 +80,40 @@ const (
 
 var (
 	ErrAlreadyInitialized        = errors.New("store/keystore: already initialized")
-	ErrNotInitalized             = errors.New("store/keystore: not initialized")
-	ErrInvalidKeyedHashSecret    = errors.New("store/keystore: invalid keyed hash secret")
-	ErrInvalidKeyType            = errors.New("store/keystore: invalid key type")
+	ErrFileIntegrityCheckFailed  = errors.New("store/keystore: file integrity check failed")
+	ErrInvalidBlobName           = errors.New("store/keystore: invalid blob name")
+	ErrInvalidCurve              = errors.New("store/keystore: invalid ECC curve")
+	ErrInvalidECCAttributes      = errors.New("store/keystore: invalid ECC key attributes")
+	ErrInvalidEncodingPEM        = errors.New("store/keystore: invalid PEM encoding")
+	ErrInvalidHashFunction       = errors.New("store/keystore: invalid hash function")
 	ErrInvalidKeyAlgorithm       = errors.New("store/keystore: invalid key algorithm")
+	ErrInvalidKeyAttributes      = errors.New("store/keystore: invalid key attributes")
+	ErrInvalidKeyID              = errors.New("store/keystore: invalid key ID")
+	ErrInvalidKeyPartition       = errors.New("store/keystore: invalid key partition")
+	ErrInvalidKeyStore           = errors.New("store/keystore: invalid key store")
+	ErrInvalidKeyType            = errors.New("store/keystore: invalid key type")
+	ErrInvalidKeyedHashSecret    = errors.New("store/keystore: invalid keyed hash secret")
+	ErrInvalidOPAquePrivateKey   = errors.New("store/keystore: invalid opaque private key")
 	ErrInvalidParentAttributes   = errors.New("store/keystore: invalid parent key attributes")
+	ErrInvalidPassword           = errors.New("store/keystore: invalid password")
 	ErrInvalidPrivateKey         = errors.New("store/keystore: invalid private key")
-	ErrInvalidPrivateKeyRSA      = errors.New("store/keystore: invalid RSA private key")
 	ErrInvalidPrivateKeyECDSA    = errors.New("store/keystore: invalid ECDSA private key")
 	ErrInvalidPrivateKeyEd25519  = errors.New("store/keystore: invalid Ed25519 private key")
-	ErrInvalidOpaquePrivateKey   = errors.New("store/keystore: invalid opaque private key")
-	ErrInvalidSignerOpts         = errors.New("store/keystore: invalid signer opts, password required")
-	ErrInvalidKeyStore           = errors.New("store/keystore: invalid key store")
+	ErrInvalidPrivateKeyRSA      = errors.New("store/keystore: invalid RSA private key")
+	ErrInvalidRSAAttributes      = errors.New("store/keystore: invalid RSA key attributes")
 	ErrInvalidSignatureAlgorithm = errors.New("store/keystore: unsupported signing algorithm")
 	ErrInvalidSignatureScheme    = errors.New("store/keystore: invalid signature scheme")
-	ErrKeyAlreadyExists          = errors.New("store/keystore: key already exists")
-	ErrFileIntegrityCheckFailed  = errors.New("store/keystore: file integrity check failed")
-	ErrInvalidPublicKeyRSA       = errors.New("store/keystore: invalid RSA public key")
+	ErrInvalidSignerOpts         = errors.New("store/keystore: invalid signer opts, password required")
 	ErrInvalidPublicKeyECDSA     = errors.New("store/keystore: invalid ECDSA public key")
-	ErrSingatureVerification     = errors.New("store/keystore: signature verification failed")
-	ErrInvalidCurve              = errors.New("store/keystore: invalid ECC curve")
-	ErrInvalidHashFunction       = errors.New("store/keystore: invalid hash function")
-	ErrInvalidKeyAttributes      = errors.New("store/keystore: invalid key attributes")
-	ErrInvalidRSAAttributes      = errors.New("store/keystore: invalid RSA key attributes")
-	ErrInvalidECCAttributes      = errors.New("store/keystore: invalid ECC key attributes")
-	ErrInvalidBlobName           = errors.New("store/keystore: invalid blob name")
+	ErrInvalidPublicKeyRSA       = errors.New("store/keystore: invalid RSA public key")
 	ErrIssuerAttributeRequired   = errors.New("store/keystore: issuer common name attribute required")
-	ErrSOPinRequired             = errors.New("store/keystore: security officer PIN required")
-	ErrUserPinRequired           = errors.New("store/keystore: user PIN required")
-	ErrInvalidPassword           = errors.New("store/keystore: invalid password")
-	ErrInvalidKeyPartition       = errors.New("store/keystore: invalid key partition")
-	ErrInvalidEncodingPEM        = errors.New("store/keystore: invalid PEM encoding")
-	ErrUnsupportedKeyAlgorithm   = errors.New("store/keystore: unsupported key algorithm")
+	ErrKeyAlreadyExists          = errors.New("store/keystore: key already exists")
+	ErrNotInitalized             = errors.New("store/keystore: not initialized")
 	ErrPasswordRequired          = errors.New("store/keystore: password required")
+	ErrSingatureVerification     = errors.New("store/keystore: signature verification failed")
+	ErrSOPinRequired             = errors.New("store/keystore: security officer PIN required")
+	ErrUnsupportedKeyAlgorithm   = errors.New("store/keystore: unsupported key algorithm")
+	ErrUserPinRequired           = errors.New("store/keystore: user PIN required")
 )
 
 // The Key Store Module interface
@@ -152,6 +150,7 @@ type TPMAttributes struct {
 	PublicKeyBytes       []byte
 	Public               tpm2.TPMTPublic
 	PrivateKeyBlob       []byte
+	QualifyingData       []byte
 	SessionCloser        func() error
 	Signature            []byte
 	Template             tpm2.TPMTPublic
@@ -188,6 +187,7 @@ type KeyAttributes struct {
 	Parent             *KeyAttributes
 	Password           Password
 	PlatformPolicy     bool
+	QuantumAlgorithm   *QuantumAlgorithm
 	RSAAttributes      *RSAAttributes
 	Secret             Password
 	SignatureAlgorithm x509.SignatureAlgorithm
@@ -202,6 +202,12 @@ type ECCAttributes struct {
 
 type RSAAttributes struct {
 	KeySize int
+}
+
+type QuantumAlgorithm int
+
+func (algo QuantumAlgorithm) String() string {
+	return "Dilithium2"
 }
 
 type EncryptionAlgorithm uint8

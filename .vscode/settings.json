@@ -1,3 +1,6 @@
 {
     "makefile.configureOnOpen": false,
+    "go.buildFlags": [
+        "-tags", "quantum_safe"
+    ]
 }

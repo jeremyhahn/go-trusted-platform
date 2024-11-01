@@ -1,62 +1,90 @@
 package datastore
 
-import (
-	"encoding/json"
-	"errors"
+// import (
+// 	"errors"
+// )
 
-	"gopkg.in/yaml.v2"
-)
+// const (
+// 	SERIALIZER_JSON SerializerType = iota
+// 	SERIALIZER_YAML
+// )
 
-type Serializer int
+// var (
+// 	ErrInvalidSerializer = errors.New("serializer: invalid serializer type")
+// )
 
-const (
-	SERIALIZER_JSON Serializer = iota
-	SERIALIZER_YAML
-)
+// type SerializerType int
 
-var (
-	ErrInvalidSerializer = errors.New("serializer: invalid serializer type")
-)
+// func (s SerializerType) String() string {
+// 	switch s {
+// 	case SERIALIZER_JSON:
+// 		return "json"
+// 	case SERIALIZER_YAML:
+// 		return "yaml"
+// 	default:
+// 		return ""
+// 	}
+// }
 
-// Serializes the provided data using the specified serializer
-func Serialize(data interface{}, serializer Serializer) ([]byte, error) {
-	switch serializer {
-	case SERIALIZER_JSON:
-		return json.Marshal(data)
-	case SERIALIZER_YAML:
-		return yaml.Marshal(data)
-	default:
-		return nil, ErrInvalidSerializer
-	}
-}
+// // Responsible for entity serialization and deserialization
+// type Serializer[E any] interface {
+// 	Deserialize(data []byte, e any) error
+// 	Extension() string
+// 	Name() string
+// 	Serialize(entity E) ([]byte, error)
+// 	Type() SerializerType
+// }
 
-// Deserializes the provided data using the specified serializer
-func Deserialize[E any](data []byte, serializer Serializer) (E, error) {
-	var err error
-	e := new(E)
-	switch serializer {
-	case SERIALIZER_JSON:
-		if err = json.Unmarshal(data, &e); err != nil {
-			return *e, err
-		}
-	case SERIALIZER_YAML:
-		if err = yaml.Unmarshal(data, &e); err != nil {
-			return *e, err
-		}
-	default:
-		return *e, ErrInvalidSerializer
-	}
-	return *e, nil
-}
+// // Serializer factory method
+// func NewSerializer[T any](st SerializerType) (Serializer[T], error) {
+// 	switch st {
+// 	case SERIALIZER_JSON:
+// 		return NewJSONSerializer[T](), nil
+// 	case SERIALIZER_YAML:
+// 		return NewYAMLSerializer[T](), nil
+// 	default:
+// 		return nil, ErrInvalidSerializer
+// 	}
+// }
 
-// Returns the file extension for the provided serializer
-func SerializerExtension(serializer Serializer) string {
-	switch serializer {
-	case SERIALIZER_JSON:
-		return ".json"
-	case SERIALIZER_YAML:
-		return ".yaml"
-	default:
-		return ""
-	}
-}
+// // Serializes the provided data using the specified serializer
+// func Serialize[E any](entity E, serializer SerializerType) ([]byte, error) {
+// 	s, err := NewSerializer[E](serializer)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	return s.Serialize(entity)
+// }
+
+// // Deserializes the provided data using the specified serializer
+// func Deserialize[E any](data []byte, e E, serializer SerializerType) error {
+// 	s, err := NewSerializer[E](serializer)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	return s.Deserialize(data, e)
+// }
+
+// // Returns the file extension for the provided serializer
+// func SerializerExtension(serializer SerializerType) string {
+// 	switch serializer {
+// 	case SERIALIZER_JSON:
+// 		return ".json"
+// 	case SERIALIZER_YAML:
+// 		return ".yaml"
+// 	default:
+// 		return ""
+// 	}
+// }
+
+// // Parses the serializer type from the provided string
+// func ParseSerializer(serializer string) (SerializerType, error) {
+// 	switch serializer {
+// 	case "json":
+// 		return SERIALIZER_JSON, nil
+// 	case "yaml":
+// 		return SERIALIZER_YAML, nil
+// 	default:
+// 		return 0, ErrInvalidSerializer
+// 	}
+// }

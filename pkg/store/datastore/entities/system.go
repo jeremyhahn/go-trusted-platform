@@ -5,11 +5,11 @@ import (
 )
 
 type System struct {
-	BIOS     BIOS           `yaml:"bios" json:"bios"`
-	Board    Board          `yaml:"board" json:"board"`
-	Chassis  Chassis        `yaml:"chassis" json:"chassis"`
+	BIOS     *BIOS          `yaml:"bios" json:"bios,omitempty"`
+	Board    *Board         `yaml:"board" json:"board,omitempty"`
+	Chassis  *Chassis       `yaml:"chassis" json:"chassis,omitempty"`
 	Mode     string         `yaml:"mode" json:"mode"`
-	Product  Product        `yaml:"product" json:"product"`
+	Product  *Product       `yaml:"product" json:"product"`
 	Runtime  *SystemRuntime `yaml:"runtime" json:"runtime"`
 	Services int            `yaml:"services" json:"services"`
 }

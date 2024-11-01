@@ -8,18 +8,22 @@ require (
 	github.com/GeertJohan/yubigo v0.0.0-20190917122436-175bc097e60e
 	github.com/SSSaaS/sssa-golang v0.0.0-20170502204618-d37d7782d752
 	github.com/ThalesIgnite/crypto11 v1.2.5
+	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/codegangsta/negroni v1.0.0
 	github.com/fatih/color v1.17.0
+	github.com/fxamacker/cbor/v2 v2.7.0
+	github.com/go-jose/go-jose/v4 v4.0.4
 	github.com/go-webauthn/webauthn v0.11.2
 	github.com/golang-jwt/jwt/v5 v5.2.1
-	github.com/golang/protobuf v1.5.4
 	github.com/google/go-tpm v0.9.1
 	github.com/google/go-tpm-tools v0.4.4
 	github.com/google/logger v1.1.1
 	github.com/gorilla/mux v1.8.1
 	github.com/mdobak/go-xerrors v0.3.1
 	github.com/miekg/pkcs11 v1.1.1
+	github.com/open-quantum-safe/liboqs-go v0.0.0-20240412174151-8a109c3b4878
+	github.com/peterhellberg/link v1.2.0
 	github.com/samber/slog-multi v1.2.1
 	github.com/spf13/afero v1.11.0
 	github.com/spf13/cobra v1.8.1
@@ -40,7 +44,6 @@ require (
 	github.com/PuerkitoBio/urlesc v0.0.0-20170810143723-de5bf2ad4578 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
-	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
 	github.com/go-openapi/jsonpointer v0.19.5 // indirect
 	github.com/go-openapi/jsonreference v0.19.6 // indirect
 	github.com/go-openapi/spec v0.20.4 // indirect

@@ -6,6 +6,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/acme"
 )
 
 var (
@@ -19,6 +20,7 @@ type RestService interface {
 }
 
 type RestServiceRegistry interface {
+	ACMERestService() acme.RestServicer
 	JsonWebTokenService() JsonWebTokenServicer
 	SystemRestService() SystemRestServicer
 	WebAuthnRestService() WebAuthnRestServicer

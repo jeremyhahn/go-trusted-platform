@@ -58,6 +58,12 @@ func (cs *CertStore) Get(keyAttrs *keystore.KeyAttributes) (*x509.Certificate, e
 	return x509.ParseCertificate(der)
 }
 
+// Returns true if the provided common name has an issued certificate
+func (cs *CertStore) Issued(cn string) bool {
+	partition := fmt.Sprintf("%s/%s", PARTITION_ISSUED, cn)
+	return cs.blobStore.Exists([]byte(partition))
+}
+
 // Imports a certificate to the certificate store
 func (cs *CertStore) Save(certificate *x509.Certificate, partition Partition) error {
 	id, err := ParseCertificateID(certificate, &partition)

@@ -12,6 +12,36 @@ hostmaster: root@example.com
 pin-seal-policy: true
 
 
+acme:
+  client:
+    consistency-level: local
+    directory: https://localhost:8443/api/v1/acme/directory
+    account:
+      email: root@localhost
+      #kid: "tpm2:0x01C90000"
+      key:
+        # PKCS #8 RSA w/ PSS
+        algorithm: RSA
+        cn: acme-account
+        debug: true
+        hash: SHA-256
+        password: 123456
+        platform-policy: true
+        rsa:
+          size: 2048
+        signature-algorithm: SHA256-RSAPSS
+        store: pkcs8
+    # enrollment:
+    #   challenge: device-attest-01
+    #   attestation:
+    #     key-id: idevid
+    #     format: tpm
+    # orders:
+    #   # days before certificate expires
+    #   auto-renew: true
+    #   renewal: 15
+
+
 attestation:
   allow-open-enrollment: true
   allow-attestor-self-ca: true
@@ -21,6 +51,14 @@ attestation:
   allowed-verifiers:
     - __VERIFIER_CA__
   quote-pcrs: 23
+
+
+datastore:
+  backend: fs
+  consistency-level: local
+  home: trusted-data/datastore
+  read-buffer-size: 50
+  serializer: json
 
 
 tpm:
@@ -79,6 +117,7 @@ tpm:
 
 
 certificate-authority:
+  acme-server: https://localhost:8443/api/v1
   platform-ca: 1
   auto-import-issuing-ca: true
   system-cert-pool: false
@@ -86,6 +125,7 @@ certificate-authority:
   default-idevid-cn: default-device-id
   sans-include-localhost: true
   require-password: true
+  quantum-safe: true
   identity:
     - 
       keystores:
@@ -316,14 +356,12 @@ certificate-authority:
 
 webservice:
   home: public_html
+  terms-of-service: /tos.html
   port: 8080
   tls-port: 8443
   jwt:
     expiration: 525960
-    # ES256 | ES384 | ES512
-    # PS256 | PS384 | PS512
-    # RS256 | RS384 | RS512
-    algorithm: PS256
+    # algorithm: PS256
     issuer: my_org_id
   webauthn:
     display-name: Trusted Platform
@@ -366,7 +404,7 @@ webservice:
   certificate:
     valid: 365
     subject:
-      cn: www.example.com
+      cn: localhost
       organization: Trusted Platform
       country: US
       province: Kernel
@@ -374,10 +412,6 @@ webservice:
       address: 123 Example Street
       postal-code: 12345
     sans:
-      dns:
-        - www.example.com
-        - localhost
-        - localhost.localdomain
       ips:
         - 127.0.0.1
       email:

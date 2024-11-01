@@ -753,6 +753,9 @@ func (tpm *TPM2) CreateIAK(
 		CreationHash:   iakPrimary.CreationHash,
 		InScheme:       inScheme,
 		CreationTicket: iakPrimary.CreationTicket,
+		QualifyingData: tpm2.TPM2BData{
+			Buffer: iakAttrs.TPMAttributes.QualifyingData,
+		},
 	}
 	rspCC, err := certifyCreation.Execute(tpm.transport)
 	if err != nil {
@@ -1006,7 +1009,7 @@ func (tpm *TPM2) CreateIDevID(
 			Auth:   tpm2.PasswordAuth(akAuth),
 		},
 		QualifyingData: tpm2.TPM2BData{
-			Buffer: []byte{},
+			Buffer: akAttrs.TPMAttributes.QualifyingData,
 		},
 		InScheme: tpm2.TPMTSigScheme{
 			Scheme: tpm2.TPMAlgNull,

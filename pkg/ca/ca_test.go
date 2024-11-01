@@ -469,27 +469,24 @@ func TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 	assert.NotNil(t, csrBytes)
 
 	// openssl x509 -in testme.example.com.crt -text -noout
-	derBytes, err := intermediateCA.SignCSR(csrBytes, certReq)
+	cert, err := intermediateCA.SignCSR(csrBytes, &certReq)
 	assert.Nil(t, err)
-	assert.NotNil(t, derBytes)
+	assert.NotNil(t, cert)
 
 	// Encode from ASN.1 DER to PEM
-	pem, err := EncodePEM(derBytes)
+	pem, err := EncodePEM(cert.Raw)
 	assert.Nil(t, err)
 	assert.NotNil(t, pem)
-
-	cert, err := x509.ParseCertificate(derBytes)
-	assert.Nil(t, err)
 
 	// Make sure the cert is valid
 	err = intermediateCA.Verify(cert)
 	assert.Nil(t, err)
 
-	err = intermediateCA.Revoke(cert)
+	err = intermediateCA.Revoke(cert, true)
 	assert.Nil(t, err)
 
 	// Revoke the certificate again to ensure it errors
-	err = intermediateCA.Revoke(cert)
+	err = intermediateCA.Revoke(cert, true)
 	assert.Equal(t, certstore.ErrCertRevoked, err)
 
 	// Make sure the cert is no longer valid

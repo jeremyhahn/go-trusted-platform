@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v2"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/aesgcm"
@@ -27,8 +28,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/serializer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/blob"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice"
 
@@ -48,10 +51,18 @@ var (
 	ENV_DEV     Environment = "dev"
 	ENV_PREPROD Environment = "preprod"
 	ENV_PROD    Environment = "prod"
+	ENV_TEST    Environment = "test"
 
 	DefaultConfig = App{
-		CAConfig:    &ca.DefaultConfig,
-		ConfigDir:   "/etc/trusted-platform",
+		CAConfig:  &ca.DefaultConfig,
+		ConfigDir: "/etc/trusted-platform",
+		DatastoreConfig: &datastore.Config{
+			Backend:          datastore.BACKEND_AFERO_MEMORY.String(),
+			ConsistencyLevel: datastore.CONSISTENCY_LOCAL.String(),
+			ReadBufferSize:   50,
+			RootDir:          "trusted-data/datastore",
+			Serializer:       serializer.SERIALIZER_YAML.String(),
+		},
 		LogDir:      "trusted-data/log",
 		Logger:      logging.DefaultLogger(),
 		PlatformDir: "trusted-data",
@@ -62,6 +73,10 @@ var (
 )
 
 type Environment string
+
+func (e Environment) String() string {
+	return string(e)
+}
 
 func ParseEnvironment(env string) Environment {
 	switch env {
@@ -77,12 +92,14 @@ func ParseEnvironment(env string) Environment {
 }
 
 type App struct {
+	ACMEConfig          *acme.Config                `yaml:"acme" json:"acme" mapstructure:"acme"`
 	Argon2              argon2.Argon2Config         `yaml:"argon2" json:"argon2" mapstructure:"argon2"`
 	AttestationConfig   config.Attestation          `yaml:"attestation" json:"attestation" mapstructure:"attestation"`
 	BlobStore           blob.BlobStorer             `yaml:"-" json:"-" mapstructure:"-"`
 	CA                  ca.CertificateAuthority     `yaml:"-" json:"-" mapstructure:"-"`
 	CAConfig            *ca.Config                  `yaml:"certificate-authority" json:"certificate_authority" mapstructure:"certificate-authority"`
 	ConfigDir           string                      `yaml:"config-dir" json:"config_dir" mapstructure:"config-dir"`
+	DatastoreConfig     *datastore.Config           `yaml:"datastore" json:"datastore" mapstructure:"datastore"`
 	DebugFlag           bool                        `yaml:"debug" json:"debug" mapstructure:"debug"`
 	DebugSecretsFlag    bool                        `yaml:"debug-secrets" json:"debug-secrets" mapstructure:"debug-secrets"`
 	Domain              string                      `yaml:"domain" json:"domain" mapstructure:"domain"`
@@ -99,14 +116,11 @@ type App struct {
 	Random              io.Reader                   `yaml:"-" json:"-" mapstructure:"-"`
 	RuntimeUser         string                      `yaml:"runtime-user" json:"runtime_user" mapstructure:"runtime-user"`
 	SignerStore         keystore.SignerStorer       `yaml:"-" json:"-" mapstructure:"-"`
+	ShutdownChan        chan bool                   `yaml:"-" json:"-" mapstructure:"-"`
 	TPM                 tpm2.TrustedPlatformModule  `yaml:"-" json:"-" mapstructure:"-"`
 	TPMConfig           tpm2.Config                 `yaml:"tpm" json:"tpm" mapstructure:"tpm"`
 	WebService          *config.WebService          `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
 	ServerKeyAttributes *keystore.KeyAttributes     `yaml:"-" json:"-" mapstructure:"-"`
-}
-
-func NewApp() *App {
-	return new(App)
 }
 
 type AppInitParams struct {
@@ -124,6 +138,12 @@ type AppInitParams struct {
 	Pin           []byte
 	RuntimeUser   string
 	SOPin         []byte
+}
+
+func NewApp() *App {
+	app := new(App)
+	app.ShutdownChan = make(chan bool, 1)
+	return app
 }
 
 // Initialize the platform by loading the platform configuration
@@ -578,7 +598,7 @@ func (app *App) ImportEndorsementKeyCertificate() (*x509.Certificate, error) {
 				return nil, err
 			}
 
-			certstore.DebugCertificate(app.Logger, ekCert)
+			fmt.Println(certstore.ToString(ekCert))
 
 			// Write the EK cert to TPM NV RAM
 			hierarchyAuth, err := ekAttrs.TPMAttributes.HierarchyAuth.Bytes()
@@ -1194,7 +1214,7 @@ func TestConfigWithFS(fs afero.Fs) *App {
 		os.ModePerm)
 
 	// Write app config to virtual fs
-	configFile := fmt.Sprintf("%s//config.yaml", DefaultConfig.ConfigDir)
+	configFile := fmt.Sprintf("%s/config.yaml", DefaultConfig.ConfigDir)
 	app.FS.MkdirAll(DefaultConfig.ConfigDir, os.ModePerm)
 	afero.WriteFile(app.FS, configFile, configYaml, os.ModePerm)
 
@@ -1212,6 +1232,8 @@ func TestConfigWithFS(fs afero.Fs) *App {
 	if err := viper.Unmarshal(app); err != nil {
 		panic(err)
 	}
+
+	app.Logger = logging.NewLogger(slog.LevelDebug, os.Stdout)
 
 	return app
 }

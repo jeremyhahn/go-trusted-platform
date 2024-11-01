@@ -1,31 +1,32 @@
 package kvstore
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/serializer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/spf13/afero"
 )
 
 type AferoDAO[E any] struct {
-	readBufferSize int
-	logger         *logging.Logger
 	fs             afero.Fs
+	logger         *logging.Logger
 	partitionDir   string
+	readBufferSize int
+	serializer     serializer.Serializer[E]
 	datastore.GenericDAO[E]
 }
 
 // Creates a key/value blob storage backend
-func NewAferoDAO[E any](params *Params) (*AferoDAO[E], error) {
-
+func NewAferoDAO[E any](params *Params[E]) (*AferoDAO[E], error) {
 	rootDir := params.RootDir
 	if params.RootDir[len(rootDir)-1] == '/' {
 		rootDir = strings.TrimRight(rootDir, "/")
@@ -43,13 +44,14 @@ func NewAferoDAO[E any](params *Params) (*AferoDAO[E], error) {
 		fs:             params.Fs,
 		partitionDir:   partitionDir,
 		readBufferSize: params.ReadBufferSize,
+		serializer:     params.Serializer,
 	}, nil
 }
 
 // Retrieves the entity with the provided ID from the blob datastore. Returns
 // an error if the entity can't be found or if it can't be unmarshalled.
-func (aferoDAO *AferoDAO[E]) Get(id uint64, CONSISTENCY_LEVEL int) (E, error) {
-	key := fmt.Sprintf("%d.%s", id, "json")
+func (aferoDAO *AferoDAO[E]) Get(id uint64, CONSISTENCY_LEVEL datastore.ConsistencyLevel) (E, error) {
+	key := fmt.Sprintf("%d%s", id, aferoDAO.serializer.Extension())
 	trimmed := strings.TrimLeft(string(key), "/")
 	dir := fmt.Sprintf("%s/%s/", aferoDAO.partitionDir, filepath.Dir(trimmed))
 	if err := aferoDAO.fs.MkdirAll(dir, os.ModePerm); err != nil {
@@ -60,13 +62,15 @@ func (aferoDAO *AferoDAO[E]) Get(id uint64, CONSISTENCY_LEVEL int) (E, error) {
 	bytes, err := afero.ReadFile(aferoDAO.fs, blobFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			aferoDAO.logger.MaybeError(datastore.ErrRecordNotFound, slog.String("key", trimmed))
+			aferoDAO.logger.MaybeError(datastore.ErrRecordNotFound, slog.String("key", blobFile))
 			return *new(E), datastore.ErrRecordNotFound
 		}
 		return *new(E), err
 	}
+	// e := new(E)
+	// err = json.Unmarshal(bytes, e)
 	e := new(E)
-	err = json.Unmarshal(bytes, e)
+	err = aferoDAO.serializer.Deserialize(bytes, e)
 	if err != nil {
 		return *new(E), err
 	}
@@ -78,11 +82,16 @@ func (aferoDAO *AferoDAO[E]) Get(id uint64, CONSISTENCY_LEVEL int) (E, error) {
 // blob storage.
 func (aferoDAO *AferoDAO[E]) Save(entity E) error {
 	kvEntity := any(entity).(entities.KeyValueEntity)
-	data, err := json.Marshal(entity)
+	data, err := aferoDAO.serializer.Serialize(entity)
 	if err != nil {
 		return err
 	}
-	key := fmt.Sprintf("%d.%s", kvEntity.EntityID(), "json")
+	entityID := kvEntity.EntityID()
+	if entityID == 0 {
+		entityID = uint64(time.Now().UnixNano())
+		kvEntity.SetEntityID(entityID)
+	}
+	key := fmt.Sprintf("%d%s", kvEntity.EntityID(), aferoDAO.serializer.Extension())
 	blobFile := fmt.Sprintf("%s/%s", aferoDAO.partitionDir, key)
 	if err := afero.WriteFile(aferoDAO.fs, blobFile, data, 0644); err != nil {
 		aferoDAO.logger.Error(err, slog.String("key", key))
@@ -95,7 +104,7 @@ func (aferoDAO *AferoDAO[E]) Save(entity E) error {
 // error if the provided entity can't be found.
 func (aferoDAO *AferoDAO[E]) Delete(entity E) error {
 	kvEntity := any(entity).(entities.KeyValueEntity)
-	key := fmt.Sprintf("%d.%s", kvEntity.EntityID(), "json")
+	key := fmt.Sprintf("%d%s", kvEntity.EntityID(), aferoDAO.serializer.Extension())
 	blobFile := fmt.Sprintf("%s/%s", aferoDAO.partitionDir, key)
 	if _, err := aferoDAO.fs.Stat(blobFile); err != nil {
 		aferoDAO.logger.Error(err, slog.String("key", key))
@@ -106,7 +115,7 @@ func (aferoDAO *AferoDAO[E]) Delete(entity E) error {
 
 // Returns the number of items in the blob store partition using a buffered
 // read
-func (aferoDAO *AferoDAO[E]) Count(CONSISTENCY_LEVEL int) (int, error) {
+func (aferoDAO *AferoDAO[E]) Count(CONSISTENCY_LEVEL datastore.ConsistencyLevel) (int, error) {
 	count := 0
 	f, err := aferoDAO.fs.Open(aferoDAO.partitionDir)
 	if err != nil {
@@ -127,7 +136,7 @@ func (aferoDAO *AferoDAO[E]) Count(CONSISTENCY_LEVEL int) (int, error) {
 // Returns a page of items in the blob store partition
 func (aferoDAO *AferoDAO[E]) Page(
 	pageQuery datastore.PageQuery,
-	CONSISTENCY_LEVEL int) (datastore.PageResult[E], error) {
+	CONSISTENCY_LEVEL datastore.ConsistencyLevel) (datastore.PageResult[E], error) {
 
 	pageResult := datastore.PageResult[E]{
 		Page:     pageQuery.Page,
@@ -177,7 +186,7 @@ func (aferoDAO *AferoDAO[E]) Page(
 					return pageResult, nil
 				}
 				e := new(E)
-				err = json.Unmarshal(bytes, e)
+				err = aferoDAO.serializer.Deserialize(bytes, e)
 				if err != nil {
 					return pageResult, err
 				}
@@ -199,7 +208,7 @@ func (aferoDAO *AferoDAO[E]) Page(
 func (aferoDAO *AferoDAO[E]) ForEachPage(
 	pageQuery datastore.PageQuery,
 	pagerProcFunc datastore.PagerProcFunc[E],
-	CONSISTENCY_LEVEL int) error {
+	CONSISTENCY_LEVEL datastore.ConsistencyLevel) error {
 
 	pageResult, err := aferoDAO.Page(pageQuery, CONSISTENCY_LEVEL)
 	if err != nil {
@@ -218,3 +227,66 @@ func (aferoDAO *AferoDAO[E]) ForEachPage(
 
 	return nil
 }
+
+// /////
+
+// func (aferoDAO *AferoDAO[E]) GetByIndex(
+// 	index entities.Index,
+// 	CONSISTENCY_LEVEL int) (E, error) {
+
+// 	// Retrieve the index record
+// 	key := fmt.Sprintf("%s/%d%s", index.Name(), index.EntityID(), aferoDAO.serializer.Extension())
+// 	trimmed := strings.TrimLeft(string(key), "/")
+// 	dir := fmt.Sprintf("%s/%s/", aferoDAO.partitionDir, filepath.Dir(trimmed))
+// 	if err := aferoDAO.fs.MkdirAll(dir, os.ModePerm); err != nil {
+// 		aferoDAO.logger.Error(err, slog.String("key", trimmed))
+// 		return *new(E), err
+// 	}
+// 	blobFile := fmt.Sprintf("%s/%s", aferoDAO.partitionDir, trimmed)
+// 	bytes, err := afero.ReadFile(aferoDAO.fs, blobFile)
+// 	if err != nil {
+// 		if os.IsNotExist(err) {
+// 			aferoDAO.logger.MaybeError(datastore.ErrRecordNotFound, slog.String("key", trimmed))
+// 			return *new(E), datastore.ErrRecordNotFound
+// 		}
+// 		return *new(E), err
+// 	}
+
+// 	e := new(E)
+
+// 	// Deserialize the index
+
+// 	idx, err := aferoDAO.serializer.Deserialize(bytes)
+// 	if err != nil {
+// 		return *e, err
+// 	}
+
+// 	idx, ok := any(e).(entities.Index)
+// 	if !ok {
+// 		return *e, ErrInvalidIndexEntity
+// 	}
+
+// 	err = json.Unmarshal(bytes, e)
+// 	if err != nil {
+// 		return *new(E), err
+// 	}
+// 	return *e, nil
+// }
+
+// // Saves the provided index to the blob datastore. Returns an error if
+// // the entity can not be serialized or there is a problem saving to
+// // blob storage.
+// func (aferoDAO *AferoDAO[E]) SaveIndex(entity *entities.Index) error {
+// 	idx := any(entity).(entities.Index)
+// 	data, err := json.Marshal(entity)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	key := fmt.Sprintf("%s/%d.%s", idx.Name(), idx.EntityID(), "json")
+// 	blobFile := fmt.Sprintf("%s/%s", aferoDAO.partitionDir, key)
+// 	if err := afero.WriteFile(aferoDAO.fs, blobFile, data, 0644); err != nil {
+// 		aferoDAO.logger.Error(err, slog.String("key", key))
+// 		return err
+// 	}
+// 	return nil
+// }

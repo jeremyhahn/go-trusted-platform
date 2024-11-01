@@ -23,6 +23,14 @@ attestation:
   quote-pcrs: 23
 
 
+datastore:
+  backend: fs
+  consistency-level: local
+  home: trusted-data/datastore
+  read-buffer-size: 50
+  serializer: json
+  
+
 tpm:
   device: /dev/tpmrm0
   simulator: true
@@ -85,6 +93,7 @@ certificate-authority:
   default-validity: 365
   sans-include-localhost: true
   require-password: true
+  quantum-safe: true
   identity:
     - 
       keystores:

@@ -14,7 +14,7 @@ type RoleDAO struct {
 	*AferoDAO[*entities.Role]
 }
 
-func NewRoleDAO(params *Params) (datastore.RoleDAO, error) {
+func NewRoleDAO(params *Params[*entities.Role]) (datastore.RoleDAO, error) {
 	if params.Partition == "" {
 		params.Partition = role_partition
 	}
@@ -27,38 +27,38 @@ func NewRoleDAO(params *Params) (datastore.RoleDAO, error) {
 	}, nil
 }
 
-func (roleDAO *RoleDAO) Save(entity *entities.Role) error {
-	return roleDAO.AferoDAO.Save(entity)
-}
+// func (roleDAO *RoleDAO) Save(entity *entities.Role) error {
+// 	return roleDAO.AferoDAO.Save(entity)
+// }
 
-func (roleDAO *RoleDAO) Get(id uint64, CONSISTENCY_LEVEL int) (*entities.Role, error) {
-	return roleDAO.AferoDAO.Get(id, CONSISTENCY_LEVEL)
-}
+// func (roleDAO *RoleDAO) Get(id uint64, CONSISTENCY_LEVEL int) (*entities.Role, error) {
+// 	return roleDAO.AferoDAO.Get(id, CONSISTENCY_LEVEL)
+// }
 
-func (roleDAO *RoleDAO) Delete(entity *entities.Role) error {
-	return roleDAO.AferoDAO.Delete(entity)
-}
+// func (roleDAO *RoleDAO) Delete(entity *entities.Role) error {
+// 	return roleDAO.AferoDAO.Delete(entity)
+// }
 
-func (roleDAO *RoleDAO) Count(CONSISTENCY_LEVEL int) (int, error) {
-	return roleDAO.AferoDAO.Count(CONSISTENCY_LEVEL)
-}
+// func (roleDAO *RoleDAO) Count(CONSISTENCY_LEVEL int) (int, error) {
+// 	return roleDAO.AferoDAO.Count(CONSISTENCY_LEVEL)
+// }
 
-func (roleDAO *RoleDAO) Page(
-	pageQuery datastore.PageQuery,
-	CONSISTENCY_LEVEL int) (datastore.PageResult[*entities.Role], error) {
+// func (roleDAO *RoleDAO) Page(
+// 	pageQuery datastore.PageQuery,
+// 	CONSISTENCY_LEVEL int) (datastore.PageResult[*entities.Role], error) {
 
-	return roleDAO.AferoDAO.Page(pageQuery, CONSISTENCY_LEVEL)
-}
+// 	return roleDAO.AferoDAO.Page(pageQuery, CONSISTENCY_LEVEL)
+// }
 
-func (roleDAO *RoleDAO) ForEachPage(
-	pageQuery datastore.PageQuery,
-	pagerProcFunc datastore.PagerProcFunc[*entities.Role],
-	CONSISTENCY_LEVEL int) error {
+// func (roleDAO *RoleDAO) ForEachPage(
+// 	pageQuery datastore.PageQuery,
+// 	pagerProcFunc datastore.PagerProcFunc[*entities.Role],
+// 	CONSISTENCY_LEVEL int) error {
 
-	return roleDAO.AferoDAO.ForEachPage(pageQuery, pagerProcFunc, CONSISTENCY_LEVEL)
-}
+// 	return roleDAO.AferoDAO.ForEachPage(pageQuery, pagerProcFunc, CONSISTENCY_LEVEL)
+// }
 
-func (roleDAO *RoleDAO) GetByName(name string, CONSISTENCY_LEVEL int) (*entities.Role, error) {
+func (roleDAO *RoleDAO) GetByName(name string, CONSISTENCY_LEVEL datastore.ConsistencyLevel) (*entities.Role, error) {
 	id := util.NewID([]byte(name))
 	return roleDAO.Get(id, CONSISTENCY_LEVEL)
 }

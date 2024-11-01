@@ -16,17 +16,25 @@ func PrintSystemInfo() error {
 		return err
 	}
 
-	sys.BIOS.Print()
-	fmt.Println()
+	if sys.BIOS != nil {
+		sys.BIOS.Print()
+		fmt.Println()
+	}
 
-	sys.Board.Print()
-	fmt.Println()
+	if sys.Board != nil {
+		sys.Board.Print()
+		fmt.Println()
+	}
 
-	sys.Chassis.Print()
-	fmt.Println()
+	if sys.Chassis != nil {
+		sys.Chassis.Print()
+		fmt.Println()
+	}
 
-	sys.Product.Print()
-	fmt.Println()
+	if sys.Product != nil {
+		sys.Product.Print()
+		fmt.Println()
+	}
 
 	sys.Runtime.Print()
 	fmt.Println()
@@ -34,30 +42,11 @@ func PrintSystemInfo() error {
 }
 
 func SystemInfo() (entities.System, error) {
+
 	memstats := &runtime.MemStats{}
 	runtime.ReadMemStats(memstats)
-	bios, err := BIOS()
-	if err != nil {
-		return entities.System{}, err
-	}
-	board, err := Board()
-	if err != nil {
-		return entities.System{}, err
-	}
-	chassis, err := Chassis()
-	if err != nil {
-		return entities.System{}, err
-	}
-	product, err := Product()
-	if err != nil {
-		return entities.System{}, err
-	}
-	return entities.System{
-		BIOS:    bios,
-		Board:   board,
-		Chassis: chassis,
-		Product: product,
-		// Version: app.GetVersion(),
+
+	systemInfo := entities.System{
 		Runtime: &entities.SystemRuntime{
 			Version:     runtime.Version(),
 			Cpus:        runtime.NumCPU(),
@@ -71,7 +60,32 @@ func SystemInfo() (entities.System, error) {
 			NumGC:       memstats.NumGC,
 			NumForcedGC: memstats.NumForcedGC,
 		},
-	}, nil
+	}
+
+	if os.Geteuid() == 0 {
+		bios, err := BIOS()
+		if err != nil {
+			return entities.System{}, err
+		}
+		board, err := Board()
+		if err != nil {
+			return entities.System{}, err
+		}
+		chassis, err := Chassis()
+		if err != nil {
+			return entities.System{}, err
+		}
+		product, err := Product()
+		if err != nil {
+			return entities.System{}, err
+		}
+		systemInfo.BIOS = &bios
+		systemInfo.Board = &board
+		systemInfo.Chassis = &chassis
+		systemInfo.Product = &product
+	}
+
+	return systemInfo, nil
 }
 
 func BIOS() (entities.BIOS, error) {
