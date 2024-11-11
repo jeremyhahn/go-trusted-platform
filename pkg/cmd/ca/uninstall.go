@@ -1,7 +1,6 @@
 package ca
 
 import (
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/spf13/cobra"
 )
 
@@ -18,10 +17,17 @@ from the operating system trusted certificate store.`,
 			return
 		}
 
-		userPIN := keystore.NewClearPassword(InitParams.Pin)
-		if err := App.LoadCA(userPIN); err != nil {
-			cmd.PrintErrln(err)
-			return
+		if App.CA == nil {
+			soPIN, userPIN, err := App.ParsePINs(InitParams.SOPin, InitParams.Pin)
+			if err != nil {
+				App.Logger.Error(err)
+				cmd.PrintErrln(err)
+				return
+			}
+			if err := App.LoadCA(soPIN, userPIN); err != nil {
+				cmd.PrintErrln(err)
+				return
+			}
 		}
 
 		intermediateCN := App.CA.Identity().Subject.CommonName

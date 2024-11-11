@@ -27,10 +27,17 @@ the certificate and any keys from the stores.`,
 			return
 		}
 
-		userPIN := keystore.NewClearPassword(InitParams.Pin)
-		if err := App.LoadCA(userPIN); err != nil {
-			cmd.PrintErrln(err)
-			return
+		if App.CA == nil {
+			soPIN, userPIN, err := App.ParsePINs(InitParams.SOPin, InitParams.Pin)
+			if err != nil {
+				App.Logger.Error(err)
+				cmd.PrintErrln(err)
+				return
+			}
+			if err := App.LoadCA(soPIN, userPIN); err != nil {
+				cmd.PrintErrln(err)
+				return
+			}
 		}
 
 		cn := args[0]

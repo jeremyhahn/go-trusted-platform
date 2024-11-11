@@ -13,7 +13,7 @@ type RegistrationDAO struct {
 	*AferoDAO[*entities.Registration]
 }
 
-func NewRegistrationDAO(params *Params[*entities.Registration]) (datastore.RegistrationDAO, error) {
+func NewRegistrationDAO(params *datastore.Params[*entities.Registration]) (datastore.RegistrationDAO, error) {
 	if params.Partition == "" {
 		params.Partition = registration_partition
 	}

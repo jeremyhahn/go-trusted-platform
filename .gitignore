@@ -23,7 +23,12 @@ attestation/verifier/logs
 attestation/verifier/config.yaml
 python-venv/
 tpadm
-config.yaml
+./config.yaml
+./pkg/config.yaml
 pkg/public_html
 pkg/trusted-data
 trusted-data
+build/packer/output-arm-image/
+build/packer/packer_cache/
+build/packer/trusted-platform-*
+trusted-platform.iso

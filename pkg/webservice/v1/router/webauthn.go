@@ -3,19 +3,19 @@ package router
 import (
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/webauthn"
 )
 
 type WebAuthnRouter struct {
 	middleware          middleware.JsonWebTokenMiddleware
-	webAuthnRestService rest.WebAuthnRestServicer
+	webAuthnRestService webauthn.RestHandler
 	WebServiceRouter
 }
 
 // Creates a new webauthn router
 func NewWebAuthnRouter(
 	middleware middleware.JsonWebTokenMiddleware,
-	webAuthnRestService rest.WebAuthnRestServicer) WebServiceRouter {
+	webAuthnRestService webauthn.RestHandler) WebServiceRouter {
 
 	return &WebAuthnRouter{
 		middleware:          middleware,
@@ -84,7 +84,7 @@ func (webAuthnRouter *WebAuthnRouter) finishRegistration(router *mux.Router) {
 // @Failure 400 {object} response.WebServiceResponse
 // @Failure 401 {object} response.WebServiceResponse
 // @Failure 500 {object} response.WebServiceResponse
-// @Router /webauthn/registration/finish [post]
+// @Router /webauthn/login/begin [post]
 func (webAuthnRouter *WebAuthnRouter) beginLogin(router *mux.Router) {
 	router.HandleFunc("/login/begin", webAuthnRouter.webAuthnRestService.BeginLogin)
 }
@@ -98,9 +98,9 @@ func (webAuthnRouter *WebAuthnRouter) beginLogin(router *mux.Router) {
 // @Failure 400 {object} response.WebServiceResponse
 // @Failure 401 {object} response.WebServiceResponse
 // @Failure 500 {object} response.WebServiceResponse
-// @Router /webauthn/registration/finish [post]
+// @Router /webauthn/login/finish [post]
 func (webAuthnRouter *WebAuthnRouter) finishLogin(router *mux.Router) {
-	router.HandleFunc("/login/begin", webAuthnRouter.webAuthnRestService.FinishLogin)
+	router.HandleFunc("/login/finish", webAuthnRouter.webAuthnRestService.FinishLogin)
 }
 
 // @Summary Registration Status

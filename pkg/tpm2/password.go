@@ -78,7 +78,7 @@ func (p PlatformPassword) Create() error {
 			p.keyAttrs.Password = keystore.NewClearPassword(passwd)
 		}
 	}
-	if _, err := p.tpm.Seal(p.keyAttrs, p.backend); err != nil {
+	if _, err := p.tpm.Seal(p.keyAttrs, p.backend, false); err != nil {
 		return err
 	}
 	if p.keyAttrs.PlatformPolicy {

@@ -1,26 +1,22 @@
 package cmd
 
 import (
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"log"
-	"net/http"
-	"os"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/kvstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/spf13/cobra"
 )
 
 var (
-	acmeAuthzType    string
-	acmeDirectoryURL string
-	acmeCACert       string
-	acmeAccountEmail string
+	acmeAuthzType     string
+	acmeChallengeType string
+	acmeDirectoryURL  string
+	acmeCACert        string
+	acmeAccountEmail  string
 
 	acmeSubjectCN                 string
 	acmeSubjectOrganization       string
@@ -41,14 +37,10 @@ var (
 
 func init() {
 
-	// Global client flags
-	acmeCmd.PersistentFlags().StringVar(&acmeAuthzType, "authz-type", acme.AuthzTypePermanentIdentifier.String(), "The ACME authorization type (dns, ip, permanent-identifier)")
+	acmeCmd.PersistentFlags().StringVar(&acmeAuthzType, "authz", acme.AuthzTypeDNS.String(), "The ACME authorization type (dns, ip, permanent-identifier)")
+	acmeCmd.PersistentFlags().StringVar(&acmeChallengeType, "challenge", acme.ChallengeTypeHTTP01.String(), "The ACME challenge type (http-01, dns-01, endorse-01, device-01, device-attest-01")
 	acmeCmd.PersistentFlags().StringVar(&acmeCACert, "ca-cert", "ca-bundle.pem", "The ACME server root certificate")
 	acmeCmd.PersistentFlags().StringVar(&acmeDirectoryURL, "directory", "https://localhost:8443/api/v1/acme/directory", "The ACME server directory URL")
-
-	// // Account and Order Key ID flags
-	// acmeCmd.PersistentFlags().StringVar(&acmeAccountKID, "account-kid", keystore.STORE_TPM2.String(), "The Key Store Module used for the ACME account private key")
-	// acmeCmd.PersistentFlags().StringVar(&acmeOrderKID, "order-kid", keystore.STORE_TPM2.String(), "The Key Store Module used to place a new ACME order")
 
 	acmeCmd.PersistentFlags().StringVar(&acmeAccountEmail, "email", "", "The ACME account email address")
 
@@ -67,6 +59,10 @@ func init() {
 	acmeCmd.PersistentFlags().StringArrayVar(&acmeSANSEmails, "sans-email", []string{}, "Subject Alternative Name (SAN) email addresses")
 	acmeCmd.PersistentFlags().StringArrayVar(&acmeSANSIPs, "sans-ip", []string{}, "Subject Alternative Name (SAN) IP addresses")
 
+	// // Account and Order Key ID flags
+	// acmeCmd.PersistentFlags().StringVar(&acmeAccountKID, "account-kid", keystore.STORE_TPM2.String(), "The Key Store Module used for the ACME account private key")
+	// acmeCmd.PersistentFlags().StringVar(&acmeOrderKID, "order-kid", keystore.STORE_TPM2.String(), "The Key Store Module used to place a new ACME order")
+
 	rootCmd.AddCommand(acmeCmd)
 }
 
@@ -74,7 +70,7 @@ var acmeCmd = &cobra.Command{
 	Use:   "acme [action]",
 	Short: "ACME certificate management",
 	Long: `Performs x509 certificate management operations using the Automated
-Certificate Management Environment (ACME) protocol`,
+Certificate Management Environment (ACME) client`,
 	Args: cobra.MinimumNArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 
@@ -86,99 +82,71 @@ Certificate Management Environment (ACME) protocol`,
 			return
 		}
 
-		rootCAs, err := x509.SystemCertPool()
-		if err != nil {
-			log.Fatalf("Failed to load system root CAs: %v", err)
-		}
-
-		if acmeCACert != "" {
-			cacert, err := os.ReadFile(acmeCACert)
-			if err != nil {
-				cmd.PrintErrln("Failed to read CA certificate")
-			}
-			if ok := rootCAs.AppendCertsFromPEM(cacert); !ok {
-				cmd.PrintErrln("Failed to append CA certificate to the cert pool")
-			}
-		}
-
-		transport := &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs: rootCAs,
-			},
-		}
-
-		httpClient := &http.Client{
-			Transport: transport,
-		}
-
-		// Default the account key to the IDevID key if not provided
-		if App.ACMEConfig == nil {
-			if acmeAccountEmail == "" {
-				cmd.PrintErrln("Missing required account email")
-				return
-			}
-			App.ACMEConfig = &acme.Config{
-				Client: &acme.ClientConfig{
-					DirectoryURL: acmeDirectoryURL,
-					Account: &acme.AccountConfig{
-						Email: acmeAccountEmail,
-						Key:   parseOrCreateAccountKeyConfig(),
-					},
-				},
-			}
-		}
-
-		daoFactory, err := kvstore.New(
-			App.Logger,
-			App.DatastoreConfig,
-		)
-		if err != nil {
-			App.Logger.Error(err)
-			cmd.PrintErrln(err)
-			return
-		}
-
-		client, err := acme.NewClient(
-			*App.ACMEConfig.Client, httpClient, App.CA, daoFactory, App.TPM)
-		if err != nil {
-			cmd.PrintErrln(err)
-			return
-		}
-
 		switch action {
 
-		// case "download":
-		// _, err := client.DownloadCertificate()
-		// if err != nil {
-		// 	cmd.PrintErrln(err)
-		// 	return
-		// }
-
-		case "enroll":
-			authzType, err := acme.ParseAuthzType(acmeAuthzType)
+		case "download":
+			if App.ACMEClient == nil {
+				if err := App.InitACMEClient(InitParams.Initialize); err != nil {
+					cmd.PrintErrln(err)
+					return
+				}
+			}
+			certs, err := App.ACMEClient.DownloadCertificates(
+				App.WebServiceConfig.Certificate.ACME.ChallengeType,
+				App.ServerKeyAttributes,
+				false,
+				App.WebServiceConfig.Certificate.ACME.CrossSigner)
 			if err != nil {
 				cmd.PrintErrln(err)
 				return
 			}
-			account, err := client.RegisterAccount()
-			if err != nil {
-				cmd.PrintErrln(err)
-				return
+			for _, cert := range certs {
+				fmt.Println(certstore.ToString(cert))
 			}
-			cert, err := client.RequestCertificate(account, authzType, certificateRequest())
-			if err != nil {
-				cmd.PrintErrln(err)
-				return
-			}
-
-			fmt.Println(certstore.ToString(cert))
 
 		case "register":
-			_, err := client.RegisterAccount()
+			var err error
+			if acmeAccountEmail == "" {
+				_, err = App.ACMEClient.RegisterAccount()
+			} else {
+				_, err = App.ACMEClient.RegisterAccountWithEmail(acmeAccountEmail)
+			}
 			if err != nil {
 				cmd.PrintErrln(err)
 				return
 			}
+			fmt.Println(keystore.PublicKeyToString(App.ACMEClient.AccountSigner().Public()))
+
+		case "renew":
+			if App.ACMEClient == nil {
+				if err := App.InitACMEClient(InitParams.Initialize); err != nil {
+					cmd.PrintErrln(err)
+					return
+				}
+			}
+			certReq := certificateRequest()
+			cert, xsigned, err := App.ACMEClient.RequestCertificate(certReq, false)
+			if err != nil {
+				cmd.PrintErrln(err)
+				return
+			}
+			fmt.Println(certstore.ToString(cert))
+			if xsigned != nil {
+				fmt.Println(certstore.ToString(xsigned))
+			}
+
+		case "rotate-key":
+			if App.ACMEClient == nil {
+				if err := App.InitACMEClient(InitParams.Initialize); err != nil {
+					cmd.PrintErrln(err)
+					return
+				}
+			}
+			if err := App.ACMEClient.KeyChange(); err != nil {
+				cmd.PrintErrln(err)
+				return
+			}
+			fmt.Println(keystore.PublicKeyToString(App.ACMEClient.AccountSigner().Public()))
 
 		default:
 			cmd.PrintErrln("Invalid command")
@@ -189,10 +157,11 @@ Certificate Management Environment (ACME) protocol`,
 	},
 }
 
-func certificateRequest() ca.CertificateRequest {
+func certificateRequest() acme.CertificateRequest {
 	subject := parseOrCreateSubject()
 	sans := parseOrCreateSANS()
-	return ca.CertificateRequest{
+	return acme.CertificateRequest{
+		ChallengeType: acmeChallengeType,
 		Valid:         365,
 		KeyAttributes: parseOrCreateOrderKeyAttributes(),
 		SANS:          &sans,
@@ -211,24 +180,26 @@ func parseOrCreateOrderKeyAttributes() *keystore.KeyAttributes {
 	// }
 	// return App.ServerKeyAttributes
 
-	keyAttrs, err := App.TPM.IDevIDAttributes()
-	if err != nil {
-		log.Fatalf("Failed to get IDevID key attributes: %v", err)
-	}
-	return keyAttrs
+	// keyAttrs, err := App.TPM.IDevIDAttributes()
+	// if err != nil {
+	// 	log.Fatalf("Failed to get IDevID key attributes: %v", err)
+	// }
+	// return keyAttrs
+
+	return App.ServerKeyAttributes
 }
 
 func parseOrCreateAccountKeyConfig() *keystore.KeyConfig {
 	return &keystore.KeyConfig{
-		Debug:              App.TPMConfig.IDevID.Debug,
-		ECCConfig:          App.TPMConfig.IDevID.ECCConfig,
-		CN:                 App.TPMConfig.IDevID.CN,
-		Hash:               App.TPMConfig.IDevID.Hash,
-		KeyAlgorithm:       App.TPMConfig.IDevID.KeyAlgorithm,
-		Password:           App.TPMConfig.IDevID.Password,
-		PlatformPolicy:     App.TPMConfig.IDevID.PlatformPolicy,
-		RSAConfig:          App.TPMConfig.IDevID.RSAConfig,
-		SignatureAlgorithm: App.TPMConfig.IDevID.SignatureAlgorithm,
+		Debug:              App.WebServiceConfig.Key.Debug,
+		ECCConfig:          App.WebServiceConfig.Key.ECCConfig,
+		CN:                 App.WebServiceConfig.Key.CN,
+		Hash:               App.WebServiceConfig.Key.Hash,
+		KeyAlgorithm:       App.WebServiceConfig.Key.KeyAlgorithm,
+		Password:           App.WebServiceConfig.Key.Password,
+		PlatformPolicy:     App.WebServiceConfig.Key.PlatformPolicy,
+		RSAConfig:          App.WebServiceConfig.Key.RSAConfig,
+		SignatureAlgorithm: App.WebServiceConfig.Key.SignatureAlgorithm,
 		StoreType:          keystore.STORE_TPM2.String(),
 	}
 }
@@ -244,7 +215,7 @@ func parseOrCreateSANS() ca.SubjectAlternativeNames {
 			IPs:   acmeSANSIPs,
 		}
 	}
-	return *App.WebService.Certificate.SANS
+	return *App.WebServiceConfig.Certificate.SANS
 }
 
 // Returns a subject using the parsed CLI options if provided, otherwise
@@ -279,5 +250,5 @@ func parseOrCreateSubject() ca.Subject {
 		}
 	}
 
-	return App.WebService.Certificate.Subject
+	return App.WebServiceConfig.Certificate.Subject
 }

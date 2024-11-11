@@ -49,9 +49,9 @@ func TestHttpClientWithTable(t *testing.T) {
 			// client := &http.Client{
 			// 	Transport: &MockTransport{},
 			// }
-			client := server.Client()
+			// client := server.Client()
 
-			acmeClient, err := acme.NewClient(acme.ClientConfig{}, client, nil, nil, nil)
+			acmeClient, err := acme.NewClient(acme.ClientConfig{}, nil, nil, nil, 80, nil, nil, nil)
 			assert.Nil(t, err)
 
 			_, err = acmeClient.RegisterAccount()

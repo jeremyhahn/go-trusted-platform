@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
@@ -50,7 +51,9 @@ type CertificateBackend interface {
 type CertificateStorer interface {
 	CRLs(certificate *x509.Certificate) ([]*x509.RevocationList, error)
 	Get(keyAttrs *keystore.KeyAttributes) (*x509.Certificate, error)
+	GetXSigned(keyAttrs *keystore.KeyAttributes) (*x509.Certificate, error)
 	ImportCertificate(certificate *x509.Certificate) error
+	ImportXSignedCertificate(certificate *x509.Certificate) error
 	ImportCRL(cn string, crlDER []byte) error
 	IsRevoked(certificate *x509.Certificate, issuerCert *x509.Certificate) error
 	IsRevokedAtDistributionPoints(certificate *x509.Certificate) error
@@ -71,14 +74,98 @@ var (
 	ErrCertNotFound                 = errors.New("store/x509: certificate not found")
 	ErrCertInvalid                  = errors.New("store/x509: certificate invalid")
 	ErrCertRevoked                  = errors.New("store/x509: certificate revoked")
-	ErrInvalidIssuingURL            = errors.New("store/x509: invalid issuing URL")
 	ErrInvalidAttributes            = errors.New("store/x509: invalid x509 attributes")
+	ErrInvalidIssuingURL            = errors.New("store/x509: invalid issuing URL")
+	ErrInvalidPlatformModel         = errors.New("store/x509: invalid platform model")
+	ErrInvalidPlatformSerial        = errors.New("store/x509: invalid platform serial")
 	ErrInvalidSerialNumber          = errors.New("store/x509: invalid serial number")
 	ErrInvalidCertificateAttributes = errors.New("store/x509: invalid certificate attributes")
+
+	ErrInvalidTPMManufacturer    = errors.New("store/x509: invalid TPM manufacturer OID")
+	ErrInvalidTPMModel           = errors.New("store/x509: invalid TPM model OID")
+	ErrInvalidTPMVersion         = errors.New("store/x509: invalid TPM version OID")
+	ErrInvalidTPMFirmwareVersion = errors.New("store/x509: invalid TPM firmware version OID")
+	ErrInvalidFIPS1402           = errors.New("store/x509: invalid FIPS 140-2 OID")
 )
 
-func ParseKeyStoreType(certificate *x509.Certificate) (keystore.StoreType, error) {
-	for _, ext := range certificate.Extensions {
+func ParseCertificateRequestPermanentIdentifier(csr *x509.CertificateRequest) (string, error) {
+	for _, ext := range csr.Extensions {
+		if ext.Id.Equal(common.OIDTCGPermanentIdentifier) {
+			return string(ext.Value), nil
+		}
+	}
+	return "", keystore.ErrInvalidPermanentIdentifier
+}
+
+func ParseCertificateRequestPlatformModel(csr *x509.CertificateRequest) (string, error) {
+	for _, ext := range csr.Extensions {
+		if ext.Id.Equal(common.OIDTCGPlatformModel) {
+			return string(ext.Value), nil
+		}
+	}
+	return "", ErrInvalidPlatformModel
+}
+
+func ParseCertificateRequestPlatformSerial(csr *x509.CertificateRequest) (string, error) {
+	for _, ext := range csr.Extensions {
+		if ext.Id.Equal(common.OIDTCGPlatformSerial) {
+			return string(ext.Value), nil
+		}
+	}
+	return "", ErrInvalidPlatformSerial
+}
+
+func ParseCertificateRequestTPMManufacturer(csr *x509.CertificateRequest) (string, error) {
+	for _, ext := range csr.Extensions {
+		if ext.Id.Equal(common.OIDTCGTPMManufacturer) {
+			return string(ext.Value), nil
+		}
+	}
+	return "", ErrInvalidTPMManufacturer
+}
+
+func ParseCertificateRequestTPMModel(csr *x509.CertificateRequest) (string, error) {
+	for _, ext := range csr.Extensions {
+		if ext.Id.Equal(common.OIDTCGTPMModel) {
+			return string(ext.Value), nil
+		}
+	}
+	return "", ErrInvalidTPMModel
+}
+
+func ParseCertificateRequestTPMVersion(csr *x509.CertificateRequest) (string, error) {
+	for _, ext := range csr.Extensions {
+		if ext.Id.Equal(common.OIDTCGTPMVersion) {
+			return string(ext.Value), nil
+		}
+	}
+	return "", ErrInvalidTPMVersion
+}
+
+func ParseCertificateRequestTPMFirmwareVersion(csr *x509.CertificateRequest) (string, error) {
+	for _, ext := range csr.Extensions {
+		if ext.Id.Equal(common.OIDTCGTPMFirmwareVersion) {
+			return string(ext.Value), nil
+		}
+	}
+	return "", ErrInvalidTPMFirmwareVersion
+}
+
+func ParseCertificateRequestTPMFIPS1402(csr *x509.CertificateRequest) (bool, error) {
+	for _, ext := range csr.Extensions {
+		if ext.Id.Equal(common.OIDTPFIPS140) {
+			value, err := strconv.ParseBool(string(ext.Value))
+			if err != nil {
+				return false, err
+			}
+			return value, nil
+		}
+	}
+	return false, ErrInvalidFIPS1402
+}
+
+func ParseCertificateRequestKeyStoreType(csr *x509.CertificateRequest) (keystore.StoreType, error) {
+	for _, ext := range csr.Extensions {
 		if ext.Id.Equal(common.OIDTPKeyStore) {
 			return keystore.ParseStoreType(fmt.Sprintf("%s", ext.Value))
 		}
@@ -86,20 +173,45 @@ func ParseKeyStoreType(certificate *x509.Certificate) (keystore.StoreType, error
 	return "", keystore.ErrInvalidKeyStore
 }
 
+func ParseKeyStoreType(certificate *x509.Certificate) (keystore.StoreType, error) {
+	for _, ext := range certificate.Extensions {
+		if ext.Id.Equal(common.OIDTPKeyStore) {
+			return keystore.ParseStoreType(fmt.Sprintf("%s", ext.Value))
+		}
+	}
+	// return "", keystore.ErrInvalidKeyStore
+	return keystore.STORE_UNKNOWN, nil
+}
+
 func ParseKeyType(certificate *x509.Certificate) (keystore.KeyType, error) {
 	if certificate.IsCA {
 		return keystore.KEY_TYPE_CA, nil
 	}
 	for _, ext := range certificate.Extensions {
-		if ext.Id.Equal(common.OIDTCGManufacturer) ||
-			ext.Id.Equal(common.OIDTCGModel) ||
-			ext.Id.Equal(common.OIDTCGVersion) {
+		if ext.Id.Equal(common.OIDTCGTPMManufacturer) ||
+			ext.Id.Equal(common.OIDTCGTPMModel) ||
+			ext.Id.Equal(common.OIDTCGTPMVersion) {
 
 			return keystore.KEY_TYPE_ENDORSEMENT, nil
 		}
 	}
 	// return 0, keystore.ErrInvalidKeyType
 	return keystore.KEY_TYPE_TLS, nil
+}
+
+func ParseIssuerCN(certificate *x509.Certificate) (string, error) {
+	if len(certificate.IssuingCertificateURL) == 0 {
+		return "", ErrInvalidIssuingURL
+	}
+
+	issuerURL := certificate.IssuingCertificateURL[0]
+	urlParts := strings.Split(issuerURL, "/")
+	if len(urlParts) < 3 {
+		return "", ErrInvalidIssuingURL
+	}
+
+	fqdn := urlParts[2]
+	return fqdn, nil
 }
 
 func ParseCertificateID(certificate *x509.Certificate, partition *Partition) ([]byte, error) {
@@ -114,8 +226,36 @@ func ParseCertificateID(certificate *x509.Certificate, partition *Partition) ([]
 		ksType = keystore.STORE_UNKNOWN
 	}
 
-	// Naming convention: common_name.key_store.key_algorithm.cer
+	// Naming convention: leaf_cn.key_store.key_algorithm.cer
 	id := fmt.Sprintf("%s.%s.%s%s",
+		certificate.Subject.CommonName,
+		ksType,
+		strings.ToLower(certificate.PublicKeyAlgorithm.String()),
+		ext)
+
+	return []byte(id), nil
+}
+
+func ParseXSignedCertificateID(certificate *x509.Certificate, partition *Partition) ([]byte, error) {
+
+	ext := FSEXT_DER
+	if partition != nil && *partition == PARTITION_CRL {
+		ext = FSEXT_CRL
+	}
+
+	ksType, err := ParseKeyStoreType(certificate)
+	if err != nil {
+		ksType = keystore.STORE_UNKNOWN
+	}
+
+	issuerCN, err := ParseIssuerCN(certificate)
+	if err != nil {
+		return nil, err
+	}
+
+	// Naming convention: issuer_cn.leaf_cn.key_store.key_algorithm.cer
+	id := fmt.Sprintf("%s/%s.%s.%s%s",
+		issuerCN,
 		certificate.Subject.CommonName,
 		ksType,
 		strings.ToLower(certificate.PublicKeyAlgorithm.String()),

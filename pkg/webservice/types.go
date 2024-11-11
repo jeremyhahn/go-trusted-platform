@@ -6,19 +6,19 @@ import (
 	"crypto/x509"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
+	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
 )
 
 var (
-	DefaultConfig = config.WebService{
+	DefaultConfig = v1.Config{
 		Home: "public_html",
 		Port: 8080,
-		JWT: config.JWT{
+		JWT: v1.JWT{
 			Expiration: 525960, // 1 year
 		},
 		TLSPort: 8443,
-		Certificate: config.Identity{
+		Certificate: v1.Identity{
 			Valid: 365, // days
 			Subject: ca.Subject{
 				CommonName:         "www.example.com",

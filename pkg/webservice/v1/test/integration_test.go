@@ -12,16 +12,20 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/kvstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest"
+	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/webauthn"
+
+	acmedao "github.com/jeremyhahn/go-trusted-platform/pkg/acme/dao/afero"
 )
 
 var (
 	App                 *app.App
 	WebServer           *webservice.WebServerV1
 	ServiceRegistry     *service.Registry
-	RestServiceRegistry rest.RestServiceRegistry
+	RestServiceRegistry v1.RestHandlerRegistry
 	JWT                 string
-	TESTDATA_DIR        = "testdata"
+	TESTDATA_DIR        = "./testdata"
 )
 
 func TestMain(m *testing.M) {
@@ -66,7 +70,13 @@ func setup() {
 	soPIN := []byte("123456")
 	userPIN := []byte("123456")
 
-	if err := App.InitTPM(selectedCA, soPIN, userPIN); err != nil {
+	initParams := &app.AppInitParams{
+		PlatformCA: selectedCA,
+		SOPin:      soPIN,
+		Pin:        userPIN,
+	}
+
+	if err := App.InitTPM(nil, nil, initParams); err != nil {
 		App.Logger.FatalError(err)
 	}
 
@@ -75,26 +85,47 @@ func setup() {
 		App.Logger.FatalError(err)
 	}
 
-	serviceRegistry, err := service.NewRegistry(App.Logger, datastore)
+	acmeDAOFactory, err := acmedao.NewFactory(App.Logger, App.DatastoreConfig)
 	if err != nil {
 		App.Logger.FatalError(err)
 	}
 
-	restServiceRegistry := rest.NewHandlerRegistry(
-		App.Logger,
-		App.CA,
-		datastore,
-		App.ServerKeyAttributes,
-		serviceRegistry,
-		App.WebService,
-		"Trusted Platform",
-	)
+	serviceRegistry, err := service.NewRegistry(App.Logger, nil, nil, datastore)
+	if err != nil {
+		App.Logger.FatalError(err)
+	}
+
+	registryParams := v1.RegistryParams{
+		ACMEConfig:     App.ACMEConfig,
+		ACMEDAOFactory: acmeDAOFactory,
+		CA:             App.CA,
+		Debug:          App.DebugFlag,
+		// EndpointList:   &App.EndpointList,
+		HTTPWriter:          response.NewResponseWriter(App.Logger, nil),
+		Keyring:             App.CA.Keyring(),
+		JWTAudience:         App.WebServiceConfig.Certificate.Subject.CommonName,
+		JWTClaimsIssuer:     app.Name,
+		JWTExpiration:       3600,
+		Logger:              App.Logger,
+		ServerKeyAttributes: App.ServerKeyAttributes,
+		ServiceRegistry:     serviceRegistry,
+		TPM:                 App.TPM,
+		WebServiceConfig:    App.WebServiceConfig,
+		WebAuthnConfig: &webauthn.Config{
+			RPDisplayName: App.WebServiceConfig.WebAuthn.RPDisplayName,
+			RPID:          App.WebServiceConfig.WebAuthn.RPID,
+			RPOrigins:     App.WebServiceConfig.WebAuthn.RPOrigins,
+		},
+	}
+
+	restHandlerRegistry := v1.NewHandlerRegistry(registryParams)
 
 	WebServer = webservice.NewWebServerV1(
+		App.DebugFlag,
 		App.Logger,
 		App.CA,
-		App.WebService,
-		restServiceRegistry,
+		App.WebServiceConfig,
+		restHandlerRegistry,
 		App.ServerKeyAttributes,
 	)
 
@@ -107,7 +138,7 @@ func setup() {
 
 	// Set up test variables
 	ServiceRegistry = serviceRegistry
-	RestServiceRegistry = restServiceRegistry
+	RestServiceRegistry = restHandlerRegistry
 }
 
 // Obtain a JWT using the default username and password
@@ -128,7 +159,7 @@ func login() {
 		rr := httptest.NewRecorder()
 
 		// Set the handler function an serve the request
-		handler := http.HandlerFunc(RestServiceRegistry.JsonWebTokenService().GenerateToken)
+		handler := http.HandlerFunc(RestServiceRegistry.JSONWebTokenHandler().GenerateToken)
 
 		// Send the request and record the response
 		handler.ServeHTTP(rr, req)

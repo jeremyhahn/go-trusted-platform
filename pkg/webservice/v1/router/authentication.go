@@ -30,10 +30,10 @@ func (authenticationRouter *AuthenticationRouter) RegisterRoutes(router *mux.Rou
 // @Param UserCredential body service.UserCredential true "UserCredential struct"
 // @Accept json
 // @Produce json
-// @Success 200 {object} jwt.JsonWebTokenClaims
-// @Failure 400 {object} jwt.JsonWebTokenClaims
-// @Failure 403 {object} jwt.JsonWebTokenClaims
-// @Failure 500 {object} jwt.JsonWebTokenClaims
+// @Success 200 {object} jwt.TokenClaims
+// @Failure 400 {object} jwt.TokenClaims
+// @Failure 403 {object} jwt.TokenClaims
+// @Failure 500 {object} jwt.TokenClaims
 // @Router /login [post]
 func (authenticationRouter *AuthenticationRouter) login(router *mux.Router) {
 	router.HandleFunc("/login", authenticationRouter.middleware.GenerateToken)
@@ -44,10 +44,10 @@ func (authenticationRouter *AuthenticationRouter) login(router *mux.Router) {
 // @Tags Authentication
 // @Accept json
 // @Consume json
-// @Success 200 {object} jwt.JsonWebTokenClaims
-// @Failure 400 {object} jwt.JsonWebTokenClaims
-// @Failure 401 {object} jwt.JsonWebTokenClaims
-// @Failure 500 {object} jwt.JsonWebTokenClaims
+// @Success 200 {object} jwt.TokenClaims
+// @Failure 400 {object} jwt.TokenClaims
+// @Failure 401 {object} jwt.TokenClaims
+// @Failure 500 {object} jwt.TokenClaims
 // @Router /login/refresh [get]
 // @Security JWT
 func (authenticationRouter *AuthenticationRouter) refreshToken(router *mux.Router) {

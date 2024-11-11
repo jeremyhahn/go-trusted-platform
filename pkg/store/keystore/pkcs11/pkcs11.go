@@ -2,7 +2,10 @@ package pkcs11
 
 import (
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/rsa"
 	"crypto/x509"
 	"fmt"
 	"io"
@@ -240,7 +243,7 @@ func (ks *KeyStore) Initialize(soPIN, userPIN keystore.Password) error {
 	keyAttrs.Password = userPIN
 	keyAttrs.Parent = srkAttrs
 	keyAttrs.TPMAttributes.Hierarchy = srkAttrs.TPMAttributes.Hierarchy
-	if err := ks.params.TPMKS.CreatePassword(keyAttrs, nil); err != nil {
+	if err := ks.params.TPMKS.CreatePassword(keyAttrs, nil, false); err != nil {
 		return err
 	}
 
@@ -327,6 +330,13 @@ func (ks *KeyStore) GenerateKey(
 func (ks *KeyStore) GenerateRSA(
 	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
+	return ks.generateRSA(attrs, false)
+}
+
+func (ks *KeyStore) generateRSA(
+	attrs *keystore.KeyAttributes,
+	overwrite bool) (keystore.OpaqueKey, error) {
+
 	ks.params.Logger.Debug("keystore/pkcs11: generating RSA key")
 
 	if attrs.Parent == nil {
@@ -360,6 +370,13 @@ func (ks *KeyStore) GenerateRSA(
 func (ks *KeyStore) GenerateECDSA(
 	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
+	return ks.generateECDSA(attrs, false)
+}
+
+func (ks *KeyStore) generateECDSA(
+	attrs *keystore.KeyAttributes,
+	overwrite bool) (keystore.OpaqueKey, error) {
+
 	ks.params.Logger.Debug("keystore/pkcs11: generating ECDSA key")
 
 	if attrs.Parent == nil {
@@ -387,7 +404,9 @@ func (ks *KeyStore) GenerateECDSA(
 	return keystore.NewOpaqueKey(ks, attrs, signerDecrypter.Public()), nil
 }
 
-// Returns ErrUnsupportedKeyAlgorithm
+// Returns ErrUnsupportedKeyAlgorithm as the Thales PKCS #11 library
+// doesn't support this operation. TODO: use miekg's PKCS #11 library
+// to implement this operation.
 func (ks *KeyStore) GenerateEd25519(
 	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
@@ -406,12 +425,58 @@ func (ks *KeyStore) Decrypter(
 	return decrypter.(crypto.Decrypter), nil
 }
 
-// Panics if called because the underlying PKCS #11 library
-// doesn't provide an API to perform an equal operation.
+// Compares the provided keys and returns true if they have
+// the same Modulus / Curve.
 func (store *KeyStore) Equal(
-	opaque keystore.Opaque, x crypto.PrivateKey) bool {
+	opaque keystore.OpaqueKey, x crypto.PrivateKey) bool {
 
-	panic(ErrUnsupportedOperation)
+	// crypto.PrivateKey is the "any" type; perform type
+	// assertion to determine the key type. This parser
+	// supports RSA, ECDSA, Ed25519, public and private
+	// keys, as well as they custom keystore.OpaqueKey.
+
+	var xPub crypto.PublicKey
+	switch x.(type) {
+
+	case *rsa.PrivateKey:
+		xPub = x.(*rsa.PrivateKey).Public()
+		return opaque.Public().(*rsa.PublicKey).Equal(xPub)
+
+	case *ecdsa.PrivateKey:
+		xPub = x.(*ecdsa.PrivateKey).Public()
+		return opaque.Public().(*ecdsa.PublicKey).Equal(xPub)
+
+	case ed25519.PrivateKey:
+		xPub = x.(ed25519.PrivateKey).Public()
+		return opaque.Public().(ed25519.PublicKey).Equal(xPub)
+
+	case crypto.PrivateKey:
+		if _, ok := x.(*rsa.PublicKey); ok {
+			xPub = x.(crypto.PublicKey)
+			return opaque.Public().(*rsa.PublicKey).Equal(xPub)
+		}
+		if _, ok := x.(*ecdsa.PublicKey); ok {
+			xPub = x.(crypto.PublicKey)
+			return opaque.Public().(*ecdsa.PublicKey).Equal(xPub)
+		}
+		if _, ok := x.(ed25519.PublicKey); ok {
+			xPub = x.(crypto.PublicKey)
+			return opaque.Public().(ed25519.PublicKey).Equal(xPub)
+		}
+		if _, ok := x.(keystore.OpaqueKey); ok {
+			xPub := x.(keystore.OpaqueKey).Public()
+			switch xPub.(type) {
+			case *rsa.PublicKey:
+				return opaque.Public().(*rsa.PublicKey).Equal(xPub)
+			case *ecdsa.PublicKey:
+				return opaque.Public().(*ecdsa.PublicKey).Equal(xPub)
+			case ed25519.PublicKey:
+				return opaque.Public().(ed25519.PublicKey).Equal(xPub)
+			}
+		}
+	}
+
+	return false
 }
 
 // Returns a PKCS #11 crypto.Signer for the requested key
@@ -439,6 +504,23 @@ func (ks *KeyStore) GenerateSecretKey(
 		return err
 	}
 	return nil
+}
+
+// Rotates an existing key by generating a new key pair and overwriting
+// the existing key. This is a destructive operation that will cause the
+// existing key pair to be irrecoverable.
+func (ks *KeyStore) RotateKey(
+	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
+
+	switch attrs.KeyAlgorithm {
+	case x509.RSA:
+		return ks.generateRSA(attrs, true)
+	case x509.ECDSA:
+		return ks.generateECDSA(attrs, true)
+	case x509.Ed25519:
+		return ks.GenerateEd25519(attrs)
+	}
+	return nil, keystore.ErrInvalidKeyAlgorithm
 }
 
 // Returns a PKCS #11 crypto.Signer

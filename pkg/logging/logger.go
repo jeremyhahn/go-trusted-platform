@@ -1,18 +1,55 @@
 package logging
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/mdobak/go-xerrors"
 	slogmulti "github.com/samber/slog-multi"
 	"github.com/spf13/afero"
 )
 
+// SecurityLogEntry defines the structure of a security log entry.
+type SecurityLogEntry struct {
+	Timestamp       time.Time `json:"timestamp"`
+	Severity        string    `json:"severity"`
+	Category        string    `json:"category"`
+	Description     string    `json:"description"`
+	Details         string    `json:"details,omitempty"`
+	Source          string    `json:"source,omitempty"`
+	OffenderAddress string    `json:"offender_address,omitempty"`
+	OffenderID      string    `json:"offender_id,omitempty"`
+}
+
 const (
-	LevelTrace = slog.Level(-8)
-	LevelFatal = slog.Level(12)
+	LevelTrace    = slog.Level(-8)
+	LevelFatal    = slog.Level(12)
+	LevelSecurity = slog.Level(16)
+
+	SeverityLow      = "Low"
+	SeverityMedium   = "Medium"
+	SeverityHigh     = "High"
+	SeverityCritical = "Critical"
+
+	CategoryAccessControl    = "Access Control"
+	CategoryAuthentication   = "Authentication"
+	CategoryAuthorization    = "Authorization"
+	CategoryDataBreach       = "Data Breach"
+	CategoryMalwareDetection = "Malware Detection"
+	CategoryNetworkSecurity  = "Network Security"
+	CategoryPolicyViolation  = "Policy Violation"
+	CategorySystemIntegrity  = "System Integrity"
+	CategoryUserBehavior     = "User Behavior"
+
+	SourceAccessControl  = "access_control"
+	SourceAuthentication = "authentication"
+	SourceDNS            = "dns"
+	SourceNetwork        = "network"
+	SourceSystem         = "system"
+	SourceUserActivity   = "user_activity"
 )
 
 type Logger struct {
@@ -27,28 +64,30 @@ func NewLogger(level slog.Level, logFile afero.File) *Logger {
 
 	var logger *slog.Logger
 
+	logfileHandler := slog.NewJSONHandler(logFile, &slog.HandlerOptions{
+		Level:       level,
+		ReplaceAttr: replaceAttr,
+	})
+
 	if level == slog.LevelDebug {
 
-		logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		textHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 			Level:       level,
 			ReplaceAttr: replaceAttr,
-		}))
+		})
+
+		// stdoutHandler := slog.NewJSONHandler(logFile, &slog.HandlerOptions{
+		// 	Level:       level,
+		// 	ReplaceAttr: replaceAttr,
+		// })
+
+		logger = slog.New(
+			slogmulti.Fanout(logfileHandler, textHandler),
+		)
 
 	} else {
 
-		logfileHandler := slog.NewJSONHandler(logFile, &slog.HandlerOptions{
-			Level:       level,
-			ReplaceAttr: replaceAttr,
-		})
-
-		stdoutHandler := slog.NewJSONHandler(logFile, &slog.HandlerOptions{
-			Level:       level,
-			ReplaceAttr: replaceAttr,
-		})
-
-		logger = slog.New(
-			slogmulti.Fanout(logfileHandler, stdoutHandler),
-		)
+		logger = slog.New(logfileHandler)
 	}
 
 	return &Logger{
@@ -88,7 +127,7 @@ func (l *Logger) Error(err error, args ...any) {
 	if l == nil || l.logger == nil {
 		// Error occurred before the logger was
 		// initialized
-		slog.Error(err.Error())
+		slog.Error(err.Error(), args)
 		return
 	}
 	xerr := xerrors.New(err)
@@ -116,4 +155,22 @@ func (l *Logger) Fatalf(message string, args ...any) {
 func (l *Logger) FatalError(err error) {
 	l.Error(err)
 	os.Exit(-1)
+}
+
+// Logs a security issue with standardized fields to faciliate
+// processing security issues by external systems.
+func (l *Logger) Security(issue SecurityLogEntry) {
+	l.logger.LogAttrs(
+		context.TODO(),
+		LevelSecurity,
+		"security_log",
+		slog.Time("timestamp", issue.Timestamp),
+		slog.String("severity", issue.Severity),
+		slog.String("category", issue.Category),
+		slog.String("description", issue.Description),
+		slog.String("details", issue.Details),
+		slog.String("source", issue.Source),
+		slog.String("offender_address", issue.OffenderAddress),
+		slog.String("offender_id", issue.OffenderID),
+	)
 }

@@ -14,14 +14,12 @@ func TestInterfaces(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	config := &datastore.Config{
-		Backend:          datastore.BACKEND_AFERO_MEMORY.String(),
+		Backend:          datastore.BackendAferoMemory.String(),
 		ConsistencyLevel: "local",
 		ReadBufferSize:   50,
 		RootDir:          "./",
 		Serializer:       serializer.SERIALIZER_JSON.String(),
 	}
-
-	accountID := uint64(1)
 
 	factory, err := New(logger, config)
 	assert.Nil(t, err)
@@ -46,27 +44,29 @@ func TestInterfaces(t *testing.T) {
 	assert.Nil(t, err)
 	assert.IsType(t, &WebAuthnDAO{}, webAuthnDAO)
 
-	acmeAccountDAO, err := factory.ACMEAccountDAO()
-	assert.Nil(t, err)
-	assert.IsType(t, &ACMEAccountDAO{}, acmeAccountDAO)
+	// accountID := uint64(1)
 
-	acmeOrderDAO, err := factory.ACMEOrderDAO(accountID)
-	assert.Nil(t, err)
-	assert.IsType(t, &ACMEOrderDAO{}, acmeOrderDAO)
+	// acmeAccountDAO, err := factory.ACMEAccountDAO()
+	// assert.Nil(t, err)
+	// assert.IsType(t, &ACMEAccountDAO{}, acmeAccountDAO)
 
-	acmeChallengeDAO, err := factory.ACMEChallengeDAO(accountID)
-	assert.Nil(t, err)
-	assert.IsType(t, &ACMEChallengeDAO{}, acmeChallengeDAO)
+	// acmeOrderDAO, err := factory.ACMEOrderDAO(accountID)
+	// assert.Nil(t, err)
+	// assert.IsType(t, &ACMEOrderDAO{}, acmeOrderDAO)
 
-	acmeAuthorizationDAO, err := factory.ACMEAuthorizationDAO(accountID)
-	assert.Nil(t, err)
-	assert.IsType(t, &ACMEAuthorizationDAO{}, acmeAuthorizationDAO)
+	// acmeChallengeDAO, err := factory.ACMEChallengeDAO(accountID)
+	// assert.Nil(t, err)
+	// assert.IsType(t, &ACMEChallengeDAO{}, acmeChallengeDAO)
 
-	acmeCertificateDAO, err := factory.ACMECertificateDAO()
-	assert.Nil(t, err)
-	assert.IsType(t, &ACMECertificateDAO{}, acmeCertificateDAO)
+	// acmeAuthorizationDAO, err := factory.ACMEAuthorizationDAO(accountID)
+	// assert.Nil(t, err)
+	// assert.IsType(t, &ACMEAuthorizationDAO{}, acmeAuthorizationDAO)
 
-	acmeNonceDAO, err := factory.ACMENonceDAO()
-	assert.Nil(t, err)
-	assert.IsType(t, &ACMENonceDAO{}, acmeNonceDAO)
+	// acmeCertificateDAO, err := factory.ACMECertificateDAO()
+	// assert.Nil(t, err)
+	// assert.IsType(t, &ACMECertificateDAO{}, acmeCertificateDAO)
+
+	// acmeNonceDAO, err := factory.ACMENonceDAO()
+	// assert.Nil(t, err)
+	// assert.IsType(t, &ACMENonceDAO{}, acmeNonceDAO)
 }

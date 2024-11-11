@@ -20,6 +20,7 @@ func Test_Info(t *testing.T) {
 	InitParams.Initialize = true
 	InitParams.Pin = []byte("test")
 	InitParams.SOPin = []byte("test")
+	InitParams.Env = app.EnvTest.String()
 
 	App = app.DefaultTestConfig()
 	// Provision the TPM simulator and CA so the platform

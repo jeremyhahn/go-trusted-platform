@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/acme"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/acme/server/handlers"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
 	"github.com/stretchr/testify/assert"
 )
@@ -26,10 +26,10 @@ func TestKeyChangeHandler(t *testing.T) {
 	acmeURL := "https://localhost:8443/api/v1/acme/account/16268186706719120207"
 
 	// Define the key-change request body
-	keyChangeRequest := acme.KeyChangeRequest{
+	keyChangeRequest := handlers.KeyChangeRequest{
 		AccountURL: acmeURL,
-		OldKey:     "mock-old-key",
-		NewKey:     "mock-new-key",
+		// OldKey:     "mock-old-key",
+		// NewKey:     "mock-new-key",
 	}
 
 	// Convert the request body to JSON

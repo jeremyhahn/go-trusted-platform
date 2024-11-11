@@ -1,6 +1,7 @@
 package system
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"runtime"
@@ -14,6 +15,11 @@ func PrintSystemInfo() error {
 	sys, err := SystemInfo()
 	if err != nil {
 		return err
+	}
+
+	if sys.CPU != nil {
+		sys.CPU.Print()
+		fmt.Println()
 	}
 
 	if sys.BIOS != nil {
@@ -41,6 +47,64 @@ func PrintSystemInfo() error {
 	return nil
 }
 
+func CPUInfo() (entities.CPUInfo, error) {
+
+	var cpuInfo entities.CPUInfo
+	totalThreads := 0
+
+	file, err := os.Open("/proc/cpuinfo")
+	if err != nil {
+		return cpuInfo, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		parts := strings.Split(line, ":")
+		if len(parts) != 2 {
+			continue
+		}
+
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+
+		switch key {
+		case "processor":
+			totalThreads++
+		case "model name":
+			if cpuInfo.ModelName == "" {
+				cpuInfo.ModelName = value
+			}
+		case "cpu cores":
+			if cpuInfo.Cores == 0 {
+				fmt.Sscanf(value, "%d", &cpuInfo.Cores)
+			}
+		case "cache size":
+			if cpuInfo.CacheSize == "" {
+				cpuInfo.CacheSize = value
+			}
+		case "flags":
+			if len(cpuInfo.Flags) == 0 {
+				cpuInfo.Flags = strings.Fields(value) // Split flags by whitespace
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return cpuInfo, err
+	}
+
+	cpuInfo.Threads = totalThreads
+
+	return cpuInfo, nil
+
+}
+
 func SystemInfo() (entities.System, error) {
 
 	memstats := &runtime.MemStats{}
@@ -61,6 +125,12 @@ func SystemInfo() (entities.System, error) {
 			NumForcedGC: memstats.NumForcedGC,
 		},
 	}
+
+	cpuInfo, err := CPUInfo()
+	if err != nil {
+		return systemInfo, err
+	}
+	systemInfo.CPU = &cpuInfo
 
 	if os.Geteuid() == 0 {
 		bios, err := BIOS()

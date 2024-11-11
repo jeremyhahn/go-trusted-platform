@@ -6,7 +6,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
 )
 
@@ -14,7 +13,7 @@ type Router struct {
 	baseURI             string
 	baseServiceURI      string
 	ca                  ca.CertificateAuthority
-	restServiceRegistry rest.RestServiceRegistry
+	restHandlerRegistry RestHandlerRegistry
 	logger              *logging.Logger
 	router              *mux.Router
 	responseWriter      response.HttpWriter
@@ -26,13 +25,13 @@ func NewRouter(
 	logger *logging.Logger,
 	ca ca.CertificateAuthority,
 	serverKeyAttribtues *keystore.KeyAttributes,
-	restServiceRegistry rest.RestServiceRegistry,
+	restHandlerRegistry RestHandlerRegistry,
 	responseWriter response.HttpWriter) router.WebServiceRouter {
 
 	return &Router{
 		ca:                  ca,
 		logger:              logger,
-		restServiceRegistry: restServiceRegistry,
+		restHandlerRegistry: restHandlerRegistry,
 		serverKeyAttributes: serverKeyAttribtues,
 		responseWriter:      responseWriter}
 }
@@ -51,8 +50,8 @@ func (v1Router *Router) systemRoutes() {
 		v1Router.logger,
 		v1Router.ca,
 		v1Router.serverKeyAttributes,
-		v1Router.restServiceRegistry.JsonWebTokenService(),
-		v1Router.restServiceRegistry.WebAuthnRestService(),
+		v1Router.restHandlerRegistry.JSONWebTokenHandler(),
+		v1Router.restHandlerRegistry.WebAuthnRestService(),
 		v1Router.router,
 		v1Router.responseWriter)
 	systemRouter.RegisterRoutes(v1Router.router)
@@ -60,19 +59,22 @@ func (v1Router *Router) systemRoutes() {
 
 func (v1Router *Router) authenticationRoutes() {
 	registrationRouter := router.NewAuthenticationRouter(
-		v1Router.restServiceRegistry.JsonWebTokenService())
+		v1Router.restHandlerRegistry.JSONWebTokenHandler())
 	registrationRouter.RegisterRoutes(v1Router.router)
 }
 
 func (v1Router *Router) webAuthnRoutes() {
 	webAuthnRouter := router.NewWebAuthnRouter(
-		v1Router.restServiceRegistry.JsonWebTokenService(),
-		v1Router.restServiceRegistry.WebAuthnRestService())
+		v1Router.restHandlerRegistry.JSONWebTokenHandler(),
+		v1Router.restHandlerRegistry.WebAuthnRestService())
 	webAuthnRouter.RegisterRoutes(v1Router.router)
 }
 
 func (v1Router *Router) acmeRoutes() {
+	if v1Router.restHandlerRegistry.ACMERestService() == nil {
+		return
+	}
 	acmeRouter := router.NewACMERouter(
-		v1Router.restServiceRegistry.ACMERestService())
+		v1Router.restHandlerRegistry.ACMERestService())
 	acmeRouter.RegisterRoutes(v1Router.router)
 }

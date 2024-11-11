@@ -21,7 +21,7 @@ func TestEncodeDecodePrivKey(t *testing.T) {
 	assert.Nil(t, err)
 
 	backend := defaultStore()
-	err = backend.Save(attrs, der, FSEXT_PRIVATE_PKCS8)
+	err = backend.Save(attrs, der, FSEXT_PRIVATE_PKCS8, false)
 	assert.Nil(t, err)
 
 	persisted, err := backend.Get(attrs, FSEXT_PRIVATE_PKCS8)
@@ -42,7 +42,7 @@ func TestEncodeDecodePrivKeyPEM(t *testing.T) {
 	assert.Nil(t, err)
 
 	backend := defaultStore()
-	err = backend.Save(attrs, pem, FSEXT_PRIVATE_PKCS8_PEM)
+	err = backend.Save(attrs, pem, FSEXT_PRIVATE_PKCS8_PEM, false)
 	assert.Nil(t, err)
 
 	persisted, err := backend.Get(attrs, FSEXT_PRIVATE_PKCS8_PEM)
@@ -64,7 +64,7 @@ func TestEncodeDecodePrivKeyPEM_WithPassword(t *testing.T) {
 	assert.Nil(t, err)
 
 	backend := defaultStore()
-	err = backend.Save(attrs, pem, FSEXT_PRIVATE_PKCS8_PEM)
+	err = backend.Save(attrs, pem, FSEXT_PRIVATE_PKCS8_PEM, false)
 	assert.Nil(t, err)
 
 	persisted, err := backend.Get(attrs, FSEXT_PRIVATE_PKCS8_PEM)

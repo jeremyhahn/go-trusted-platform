@@ -463,13 +463,23 @@ func TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 		},
 	}
 
-	// openssl req -in testme.example.com.csr -noout -text
-	csrBytes, err := intermediateCA.CreateCSR(certReq)
+	// Generate the key
+	key, err := intermediateCA.Keyring().GenerateKey(attrs)
 	assert.Nil(t, err)
-	assert.NotNil(t, csrBytes)
+	assert.NotNil(t, key)
+
+	// openssl req -in testme.example.com.csr -noout -text
+	csrDER, err := intermediateCA.CreateCSR(certReq)
+	assert.Nil(t, err)
+	assert.NotNil(t, csrDER)
+
+	// Encode from ASN.1 DER to PEM
+	csrPEM, err := certstore.EncodePEM(csrDER)
+	assert.Nil(t, err)
+	assert.NotNil(t, csrPEM)
 
 	// openssl x509 -in testme.example.com.crt -text -noout
-	cert, err := intermediateCA.SignCSR(csrBytes, &certReq)
+	cert, err := intermediateCA.SignCSR(csrPEM, &certReq)
 	assert.Nil(t, err)
 	assert.NotNil(t, cert)
 

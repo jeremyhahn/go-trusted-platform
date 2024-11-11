@@ -41,7 +41,7 @@ func TestConnection(t *testing.T) {
 	assert.Equal(t, err, keystore.ErrAlreadyInitialized)
 }
 
-func TestSignEd25519_WithoutFileIntegrityCheck(t *testing.T) {
+func TestRotateKey(t *testing.T) {
 
 	_, ks, _, _, tmp, err := createKeystore()
 	assert.Nil(t, err)
@@ -52,9 +52,39 @@ func TestSignEd25519_WithoutFileIntegrityCheck(t *testing.T) {
 
 	// Generate new key attributes using the pre-defined
 	// key store RSA template
-	testKeyAttrs := keystore.TemplateEd25519
+	testKeyAttrs := keystore.TemplateRSA
 
 	// Generate a new RSA test key
+	opaqueRSA, err := ks.GenerateKey(testKeyAttrs)
+	assert.Nil(t, err)
+
+	// Rotate the key
+	newOpaqueRSA, err := ks.RotateKey(testKeyAttrs)
+	assert.Nil(t, err)
+
+	// Make sure they're different keys
+	isEqual := opaqueRSA.Equal(newOpaqueRSA.Public())
+	assert.False(t, isEqual)
+
+	// Make sure the new key is equal to itself
+	wantTrue := newOpaqueRSA.Equal(newOpaqueRSA)
+	assert.True(t, wantTrue)
+}
+
+func TestSignEd25519_WithoutFileIntegrityCheck(t *testing.T) {
+
+	_, ks, _, _, tmp, err := createKeystore()
+	assert.Nil(t, err)
+	defer func() {
+		ks.Close()
+		cleanTempDir(tmp)
+	}()
+
+	// Generate new key attributes using the pre-defined
+	// key store Ed25519 template
+	testKeyAttrs := keystore.TemplateEd25519
+
+	// Generate a new Ed25519 test key
 	_, err = ks.GenerateKey(testKeyAttrs)
 	assert.Equal(t, ErrUnsupportedOperation, err)
 }
@@ -70,10 +100,10 @@ func TestSignECDSA_WithoutFileIntegrityCheck(t *testing.T) {
 	}()
 
 	// Generate new key attributes using the pre-defined
-	// key store RSA template
+	// key store ECDSA template
 	testKeyAttrs := keystore.TemplateECDSA
 
-	// Generate a new RSA test key
+	// Generate a new ECDSA test key
 	opaqueKey, err := ks.GenerateKey(testKeyAttrs)
 	assert.Nil(t, err)
 	assert.NotNil(t, opaqueKey)

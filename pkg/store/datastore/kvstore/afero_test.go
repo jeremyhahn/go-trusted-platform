@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func aferoTestParams[E any]() *Params[E] {
-	return &Params[E]{
+func aferoTestParams[E any]() *datastore.Params[E] {
+	return &datastore.Params[E]{
 		Fs:             afero.NewMemMapFs(),
 		Logger:         logging.NewLogger(slog.LevelDebug, nil),
 		Partition:      "organizations",
@@ -51,7 +51,7 @@ func TestAferoCRUD(t *testing.T) {
 		assert.Nil(t, err)
 
 		// Retrieve the org
-		persisted, err := aferoDAO.Get(org.ID, datastore.CONSISTENCY_LOCAL)
+		persisted, err := aferoDAO.Get(org.ID, datastore.ConsistencyLevelLocal)
 		assert.Nil(t, err)
 		assert.True(t, persisted.ID == org.ID)
 
@@ -60,7 +60,7 @@ func TestAferoCRUD(t *testing.T) {
 		assert.Nil(t, err)
 
 		// Ensure it's deleted
-		_, err = aferoDAO.Get(org.ID, datastore.CONSISTENCY_LOCAL)
+		_, err = aferoDAO.Get(org.ID, datastore.ConsistencyLevelLocal)
 		assert.NotNil(t, err)
 		assert.True(t, errors.Is(err, datastore.ErrRecordNotFound))
 	}
@@ -88,7 +88,7 @@ func TestAferoCount(t *testing.T) {
 			assert.Nil(t, err)
 		}
 
-		_count, err := aferoDAO.Count(datastore.CONSISTENCY_LOCAL)
+		_count, err := aferoDAO.Count(datastore.ConsistencyLevelLocal)
 		assert.Nil(t, err)
 		assert.True(t, _count == count)
 	}
@@ -120,30 +120,30 @@ func TestAferoPage(t *testing.T) {
 
 		pageSize := 100
 
-		page1, err := aferoDAO.Page(datastore.PageQuery{Page: 1, PageSize: pageSize}, datastore.CONSISTENCY_LOCAL)
+		page1, err := aferoDAO.Page(datastore.PageQuery{Page: 1, PageSize: pageSize}, datastore.ConsistencyLevelLocal)
 		assert.Nil(t, err)
 		assert.Equal(t, pageSize, len(page1.Entities))
 		assert.True(t, page1.HasMore)
 		// assert.Equal(t, created[0].ID, page1.Entities[0].ID)
 
-		page2, err := aferoDAO.Page(datastore.PageQuery{Page: 2, PageSize: pageSize}, datastore.CONSISTENCY_LOCAL)
+		page2, err := aferoDAO.Page(datastore.PageQuery{Page: 2, PageSize: pageSize}, datastore.ConsistencyLevelLocal)
 		assert.Nil(t, err)
 		assert.Equal(t, pageSize, len(page2.Entities))
 		assert.True(t, page2.HasMore)
 		// assert.Equal(t, created[5].ID, page2.Entities[0].ID)
 
-		page3, err := aferoDAO.Page(datastore.PageQuery{Page: 3, PageSize: pageSize}, datastore.CONSISTENCY_LOCAL)
+		page3, err := aferoDAO.Page(datastore.PageQuery{Page: 3, PageSize: pageSize}, datastore.ConsistencyLevelLocal)
 		assert.Nil(t, err)
 		assert.Equal(t, pageSize, len(page3.Entities))
 		assert.True(t, page3.HasMore)
 		// assert.Equal(t, created[10].ID, page3.Entities[0].ID)
 
-		page4, err := aferoDAO.Page(datastore.PageQuery{Page: 10, PageSize: pageSize}, datastore.CONSISTENCY_LOCAL)
+		page4, err := aferoDAO.Page(datastore.PageQuery{Page: 10, PageSize: pageSize}, datastore.ConsistencyLevelLocal)
 		assert.Nil(t, err)
 		assert.Equal(t, pageSize, len(page4.Entities))
 		assert.False(t, page4.HasMore)
 
-		page5, err := aferoDAO.Page(datastore.PageQuery{Page: 11, PageSize: pageSize}, datastore.CONSISTENCY_LOCAL)
+		page5, err := aferoDAO.Page(datastore.PageQuery{Page: 11, PageSize: pageSize}, datastore.ConsistencyLevelLocal)
 		assert.Nil(t, err)
 		assert.Equal(t, 0, len(page5.Entities))
 		assert.False(t, page5.HasMore)
@@ -184,7 +184,7 @@ func TestAferoForEachPage(t *testing.T) {
 
 		pageQuery := datastore.PageQuery{Page: 1, PageSize: pageSize}
 
-		err = aferoDAO.ForEachPage(pageQuery, pagerProcFunc, datastore.CONSISTENCY_LOCAL)
+		err = aferoDAO.ForEachPage(pageQuery, pagerProcFunc, datastore.ConsistencyLevelLocal)
 		assert.Nil(t, err)
 		assert.Equal(t, 10, pages)
 	}

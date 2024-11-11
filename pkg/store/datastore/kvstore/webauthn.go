@@ -13,7 +13,7 @@ type WebAuthnDAO struct {
 	*AferoDAO[*entities.Blob]
 }
 
-func NewWebAuthnDAO(params *Params[*entities.Blob]) (datastore.WebAuthnDAO, error) {
+func NewWebAuthnDAO(params *datastore.Params[*entities.Blob]) (datastore.WebAuthnDAO, error) {
 	if params.Partition == "" {
 		params.Partition = webauthn_partition
 	}
