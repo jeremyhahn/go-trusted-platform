@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -42,17 +43,19 @@ type TrustedPlatformModule interface {
 	Config() *Config
 	CreateECDSA(
 		keyAttrs *keystore.KeyAttributes,
-		backend keystore.KeyBackend) (*ecdsa.PublicKey, error)
+		backend keystore.KeyBackend,
+		overwrite bool) (*ecdsa.PublicKey, error)
 	CreateEK(keyAttrs *keystore.KeyAttributes) error
 	CreateSecretKey(
 		keyAttrs *keystore.KeyAttributes,
 		backend keystore.KeyBackend) error
-	CreateIAK(ekAttrs *keystore.KeyAttributes) (*keystore.KeyAttributes, error)
-	CreateIDevID(akAttrs *keystore.KeyAttributes, ekCert *x509.Certificate) (*keystore.KeyAttributes, *TCG_CSR_IDEVID, error)
+	CreateIAK(ekAttrs *keystore.KeyAttributes, qualifyingData []byte) (*keystore.KeyAttributes, error)
+	CreateIDevID(akAttrs *keystore.KeyAttributes, ekCert *x509.Certificate, qualifyingData []byte) (*keystore.KeyAttributes, *TCG_CSR_IDEVID, error)
 	CreatePlatformPolicy() error
 	CreateRSA(
 		keyAttrs *keystore.KeyAttributes,
-		backend keystore.KeyBackend) (*rsa.PublicKey, error)
+		backend keystore.KeyBackend,
+		overwrite bool) (*rsa.PublicKey, error)
 	CreateKeySession(
 		keyAttrs *keystore.KeyAttributes) (tpm2.Session, func() error, error)
 	CreateSession(
@@ -100,6 +103,7 @@ type TrustedPlatformModule interface {
 	NVWrite(keyAttrs *keystore.KeyAttributes) error
 	Open() error
 	ParseEKCertificate(ekCert []byte) (*x509.Certificate, error)
+	ParsedEventLog() ([]Event, error)
 	ParsePublicKey(tpm2BPublic []byte) (crypto.PublicKey, error)
 	PlatformPolicyDigestHash() ([]byte, error)
 	PlatformPolicyDigest() tpm2.TPM2BDigest
@@ -112,17 +116,22 @@ type TrustedPlatformModule interface {
 	Random() ([]byte, error)
 	RandomBytes(fixedLength int) ([]byte, error)
 	RandomHex(fixedLength int) ([]byte, error)
+	RandomSource() io.Reader
 	Read(data []byte) (n int, err error)
 	ReadHandle(handle tpm2.TPMHandle) (tpm2.TPM2BName, tpm2.TPMTPublic, error)
 	ReadPCRs(pcrList []uint) ([]PCRBank, error)
+	RSADecrypt(handle tpm2.TPMHandle, blob []byte) ([]byte, error)
+	RSAEncrypt(handle tpm2.TPMHandle, message []byte) ([]byte, error)
 	SaveKeyPair(
 		keyAttrs *keystore.KeyAttributes,
 		outPrivate tpm2.TPM2BPrivate,
 		outPublic tpm2.TPM2B[tpm2.TPMTPublic, *tpm2.TPMTPublic],
-		backend keystore.KeyBackend) error
+		backend keystore.KeyBackend,
+		overwrite bool) error
 	Seal(
 		keyAttrs *keystore.KeyAttributes,
-		backend keystore.KeyBackend) (*tpm2.CreateResponse, error)
+		backend keystore.KeyBackend,
+		overwrite bool) (*tpm2.CreateResponse, error)
 	Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) (signature []byte, err error)
 	SetHierarchyAuth(oldSecret, newSecret keystore.Password, hierarchy *tpm2.TPMHandle) error
 	SecretFromShares(shares []string) (string, error)
@@ -133,9 +142,15 @@ type TrustedPlatformModule interface {
 	Unseal(keyAttrs *keystore.KeyAttributes, backend keystore.KeyBackend) ([]byte, error)
 	WriteEKCert(ekCert []byte) error
 
+	VerifyTCGCSR(
+		csr *TCG_CSR_IDEVID,
+		sigAlgo x509.SignatureAlgorithm) (*keystore.KeyAttributes, *UNPACKED_TCG_CSR_IDEVID, error)
 	VerifyTCG_CSR_IAK(
 		csr *TCG_CSR_IDEVID,
 		sigAlgo x509.SignatureAlgorithm) (*keystore.KeyAttributes, *UNPACKED_TCG_CSR_IDEVID, error)
+	VerifyTCG_CSR_IDevID(
+		csr *TCG_CSR_IDEVID,
+		signatureAlgorithm x509.SignatureAlgorithm) (*keystore.KeyAttributes, *UNPACKED_TCG_CSR_IDEVID, error)
 	SignValidate(
 		keyAttrs *keystore.KeyAttributes,
 		digest, validationDigest []byte) ([]byte, error)
@@ -171,6 +186,7 @@ type TPM2 struct {
 	idevidAttrs  *keystore.KeyAttributes
 	logger       *logging.Logger
 	policyDigest tpm2.TPM2BDigest
+	random       io.Reader
 	signerStore  keystore.SignerStorer
 	simulator    *simulator.Simulator
 	ssrkAttrs    *keystore.KeyAttributes
@@ -238,6 +254,12 @@ func NewTPM2(params *Params) (TrustedPlatformModule, error) {
 		hash:         hash,
 		simulator:    sim,
 		transport:    tpmTransport}
+
+	if params.Config.UseEntropy {
+		tpm.random = tpm
+	} else {
+		tpm.random = rand.Reader
+	}
 
 	// Return ErrNotInitialized if the EK persistent handle can't be read
 	_, err = tpm2.ReadPublic{
@@ -481,19 +503,16 @@ func (tpm *TPM2) SetHierarchyAuth(oldPasswd, newPasswd keystore.Password, hierar
 	return nil
 }
 
-// Retrieve the requested Endorsement Key Certificate from the Certificate
-// Authority signed blob store. If the certificate can not be found, treat
-// this as an initial setup and try to load the cert from TPM NVRAM. If that
-// fails, try to download the certificate from the Manufacturer's EK cert
-// service. If that fails, try to load the certificate from the current
-// working directory as a final attempt, using the EKCert name defined
-// in the platform configuration file.
+// Retrieve the Endorsement Key Certificate. If the EK cert-handle is 0, the EK certificate
+// is managed using an internal certificate store. If an EK cert-handle is defined, the
+// certificate is retrieved from TPM NVRAM. If the certificate is not found in NVRAM, an
+// attempt is made to download the certificate from the Manufacturer's EK cert service.
 func (tpm *TPM2) EKCertificate() (*x509.Certificate, error) {
 
 	tpm.logger.Debug("tpm: retrieving EK certificate")
 
 	policyDigest := tpm.PlatformPolicyDigest()
-	ekAttrs, err := EKAttributesFromConfig(*tpm.config.EK, &policyDigest)
+	ekAttrs, err := EKAttributesFromConfig(*tpm.config.EK, &policyDigest, tpm.config.IDevID)
 	if err != nil {
 		return nil, err
 	}
@@ -570,10 +589,6 @@ func (tpm *TPM2) Sign(
 	var closer func() error
 
 	keyAttrs := ksSignerOpts.KeyAttributes
-
-	if keyAttrs.Parent == nil {
-		return nil, keystore.ErrInvalidParentAttributes
-	}
 
 	// Default to the platform backend
 	backend := tpm.backend
@@ -818,7 +833,7 @@ func (tpm *TPM2) Sign(
 				// The Golang crypto/rsa/pss.go doesn't expose a public
 				// API to perform PSS padding, so punting on synthesizing
 				// the functionality on behalf of incompatible TPMs for now.
-				tpm.logger.FatalError(ErrRSAPSSNotSupported)
+				return nil, ErrRSAPSSNotSupported
 			}
 
 		} else {
@@ -1131,7 +1146,7 @@ func (tpm *TPM2) SignValidate(
 // Retrieves the raw event log from /sys/kernel/security/tpm*/binary_bios_measurements
 func (tpm *TPM2) EventLog() ([]byte, error) {
 	measurementLogPath := fmt.Sprintf(
-		"/sys/kernel/security/%s/binary_bios_measurements",
+		binaryMeasurementsFileNameTemplate,
 		tpm.tpmDeviceName())
 	bytes, err := os.ReadFile(measurementLogPath)
 	if err != nil {
@@ -1139,6 +1154,14 @@ func (tpm *TPM2) EventLog() ([]byte, error) {
 		return nil, err
 	}
 	return bytes, nil
+}
+
+// Returns a parsed event log from /sys/kernel/security/tpm*/binary_bios_measurements
+func (tpm *TPM2) ParsedEventLog() ([]Event, error) {
+	measurementLogPath := fmt.Sprintf(
+		binaryMeasurementsFileNameTemplate,
+		tpm.tpmDeviceName())
+	return ParseEventLog(measurementLogPath)
 }
 
 // Returns the name and public area for the provided handle

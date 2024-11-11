@@ -10,13 +10,13 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/system"
 )
 
 type SystemRouter struct {
 	authMiddleware    middleware.AuthMiddleware
 	jwtMiddleware     middleware.JsonWebTokenMiddleware
-	systemRestService rest.SystemRestServicer
+	systemRestHandler system.RestHandler
 	WebServiceRouter
 }
 
@@ -33,7 +33,7 @@ func NewSystemRouter(
 	return &SystemRouter{
 		authMiddleware: authMiddleware,
 		jwtMiddleware:  jwtMiddleware,
-		systemRestService: rest.NewSystemRestService(
+		systemRestHandler: system.NewHandler(
 			ca,
 			serverKeyAttributes,
 			jsonWriter,
@@ -42,7 +42,6 @@ func NewSystemRouter(
 
 // Registers all of the system endpoints at the root of the webservice (/api/v1)
 func (systemRouter *SystemRouter) RegisterRoutes(router *mux.Router) {
-
 	systemRouter.status(router)
 	systemRouter.pubkey(router)
 	systemRouter.certificate(router)
@@ -58,7 +57,7 @@ func (systemRouter *SystemRouter) RegisterRoutes(router *mux.Router) {
 // @Router /status [get]
 // @Security JWT
 func (systemRouter *SystemRouter) status(router *mux.Router) {
-	router.HandleFunc("/status", systemRouter.systemRestService.Status)
+	router.HandleFunc("/status", systemRouter.systemRestHandler.Status)
 }
 
 // @Summary Retrieve the server pubilc key
@@ -68,7 +67,7 @@ func (systemRouter *SystemRouter) status(router *mux.Router) {
 // @Success 200 {string} pubkey
 // @Router /pubkey [get]
 func (systemRouter *SystemRouter) pubkey(router *mux.Router) {
-	router.HandleFunc("/pubkey", systemRouter.systemRestService.PublicKey)
+	router.HandleFunc("/pubkey", systemRouter.systemRestHandler.PublicKey)
 }
 
 // @Summary Retrieve the server x509 certificate
@@ -78,7 +77,7 @@ func (systemRouter *SystemRouter) pubkey(router *mux.Router) {
 // @Success 200 {string} certificate
 // @Router /certificate [get]
 func (systemRouter *SystemRouter) certificate(router *mux.Router) {
-	router.HandleFunc("/certificate", systemRouter.systemRestService.Certificate)
+	router.HandleFunc("/certificate", systemRouter.systemRestHandler.Certificate)
 }
 
 // @Summary System configuration
@@ -94,7 +93,7 @@ func (systemRouter *SystemRouter) config(router *mux.Router) {
 	router.Handle("/config", negroni.New(
 		negroni.HandlerFunc(systemRouter.authMiddleware.Verify),
 		negroni.HandlerFunc(systemRouter.jwtMiddleware.Verify),
-		negroni.Wrap(http.HandlerFunc(systemRouter.systemRestService.Config)),
+		negroni.Wrap(http.HandlerFunc(systemRouter.systemRestHandler.Config)),
 	))
 }
 
@@ -113,6 +112,6 @@ func (systemRouter *SystemRouter) eventlog(router *mux.Router) {
 		negroni.NewLogger(),
 		negroni.HandlerFunc(systemRouter.authMiddleware.Verify),
 		negroni.HandlerFunc(systemRouter.jwtMiddleware.Verify),
-		negroni.Wrap(http.HandlerFunc(systemRouter.systemRestService.EventsPage)),
+		negroni.Wrap(http.HandlerFunc(systemRouter.systemRestHandler.EventsPage)),
 	))
 }

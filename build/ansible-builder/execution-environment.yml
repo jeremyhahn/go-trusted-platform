@@ -1,0 +1,187 @@
+---
+version: 3
+images:
+  base_image:
+    name: quay.io/ansible/ansible-runner:latest
+dependencies:
+  ansible_core:
+    package_pip: ansible-core>=2.12,<2.13.13
+  galaxy: |
+    ---
+    collections:
+      - name: geerlingguy.apache
+  system: |
+    git [platform:dpkg]
+  python: |
+    ansible
+    jinja2>=2.11.2
+    awxkit>=19.0.0
+    netaddr>=0.8.0
+    pyprowl>=3.0.1
+    passlib>=1.7.4
+    pyapi-gitlab>=7.8.5
+    pysnow>=0.7.17
+    aiohttp>=3.8.3
+    pymssql>=2.2.5
+    sendgrid==1.6.22
+    bs4>=0.0.1
+    html5lib>=1.1
+    openstacksdk>=1.0
+    paramiko==2.12.0
+    pandas    
+  
+
+
+
+# ---
+# version: 3
+# images:
+#   base_image:
+#     name: quay.io/ansible/ansible-runner:latest
+# dependencies:
+#   ansible_core:
+#     package_pip: ansible-core>=2.12,<2.13.13
+#   galaxy: |
+#     ---
+#     collections:
+#       - name: awx.awx
+#       - name: azure.azcollection
+#       - name: amazon.aws
+#       - name: amazon.cloud
+#       - name: theforeman.foreman
+#       - name: google.cloud
+#       - name: openstack.cloud
+#       - name: community.vmware
+#         version: 3.9.0  # pinning until 4.0.1 is released with pr #1919
+#       - name: community.aws
+#       - name: community.crypto
+#       - name: ovirt.ovirt
+#       - name: ansible.posix
+#       - name: ansible.windows
+#       - name: community.general
+#       - name: community.windows
+#       - name: community.azure
+#       - name: community.kubernetes
+#     #  - name: community.kubevirt # disable as it's not compatible with the latest version of Ansible
+#       - name: community.okd
+#       - name: community.postgresql
+#       - name: community.mysql
+#       - name: kubernetes.core
+#       - name: ansible.netcommon
+#       - name: vmware.vmware_rest
+#       #- name: chocolatey.chocolatey # requirements conflict with community.vmware
+#       - name: https://github.com/oatakan/chocolatey-ansible.git#/chocolatey/
+#         type: git
+#         version: update_reqs
+#       - name: microsoft.ad
+#   system: |
+#     python38-devel [platform:rpm compile]
+#     subversion [platform:rpm]
+#     subversion [platform:dpkg]
+#     git-lfs [platform:rpm]
+#     mkisofs [platform:rpm]
+#     openssl [platform:rpm]
+#     coreos-installer [platform:rpm]
+#     libnsl [platform:rpm]
+#     unzip [platform:rpm]
+#     file [platform:rpm]
+#     aria2 [platform:rpm]
+#     cabextract [platform:rpm]
+#     wimlib-utils [platform:rpm]
+#     genisoimage [platform:rpm]
+#     libcurl-devel [platform:rpm compile]
+#     gcc [platform:rpm]
+#     gcc-c++ [platform:rpm]
+#     openssl-devel [compile]
+#   python: |
+#     ansible
+#     jinja2>=2.11.2
+#     awxkit>=19.0.0
+#     netaddr>=0.8.0
+#     pyprowl>=3.0.1
+#     passlib>=1.7.4
+#     pyapi-gitlab>=7.8.5
+#     pysnow>=0.7.17
+#     aiohttp>=3.8.3
+#     pymssql>=2.2.5
+#     sendgrid==1.6.22
+#     bs4>=0.0.1
+#     html5lib>=1.1
+#     openstacksdk>=1.0
+#     paramiko==2.12.0
+#     pandas
+# additional_build_steps:
+#   append_base:
+#     - RUN sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
+#     - RUN sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
+#     - RUN dnf update -y
+#     - RUN dnf install -y yum-utils
+#     - RUN yum-config-manager --enable epel
+#     - RUN $PYCMD -m pip install --upgrade pip setuptools wheel
+#     - RUN alternatives --set python /usr/bin/python3
+#     - COPY --from=quay.io/project-receptor/receptor:latest /usr/bin/receptor /usr/bin/receptor
+#     - RUN mkdir -p /var/run/receptor
+#     - RUN pip uninstall ansible-runner -y && pip install git+https://github.com/ansible/ansible-runner.git@2.3.4#egg=ansible-runner
+#     - RUN pip uninstall urllib3 requests -y && pip install urllib3 requests
+#     - RUN pip uninstall pyOpenSSL cryptography -y && pip install pyOpenSSL==23.0.0
+#     - RUN dnf install -y https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/33/Everything/x86_64/os/Packages/c/chntpw-1.00-7.140201.fc33.x86_64.rpm
+#     - RUN dnf install -y dnf-plugins-core
+#     - RUN dnf install -y nfs-utils fuse fuse-devel libnfs libnfs-devel gcc git make automake autoconf libtool
+#     - RUN git clone https://github.com/sahlberg/fuse-nfs.git && cd fuse-nfs && ./setup.sh && ./configure && make && make install
+#   append_final:
+#     - RUN alternatives --set python /usr/bin/python3
+#     - COPY --from=quay.io/project-receptor/receptor:latest /usr/bin/receptor /usr/bin/receptor
+#     - RUN mkdir -p /var/run/receptor
+#     - RUN pip uninstall urllib3 requests -y && pip install urllib3 requests
+#     - RUN dnf install -y https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/33/Everything/x86_64/os/Packages/c/chntpw-1.00-7.140201.fc33.x86_64.rpm
+
+
+
+
+# ---
+# version: 3
+# images:
+#   base_image:
+#     name: quay.io/ansible/ansible-runner:latest
+# dependencies:
+#   ansible_core:
+#     package_pip: ansible-core>=2.13,<2.15
+#   galaxy: |
+#     ---
+#     collections:
+#       - name: community.general
+#       - name: ansible.netcommon
+#   system: |
+#     git [platform:dpkg]
+#   python: |
+#     ansible
+#     jinja2>=2.11.2
+#     awxkit>=19.0.0
+#     netaddr>=0.8.0
+#     pyprowl>=3.0.1
+#     passlib>=1.7.4
+#     pyapi-gitlab>=7.8.5
+#     pysnow>=0.7.17
+#     aiohttp>=3.8.3
+#     pymssql>=2.2.5
+#     sendgrid==1.6.22
+#     bs4>=0.0.1
+#     html5lib>=1.1
+#     openstacksdk>=1.0
+#     paramiko==2.12.0
+#     pandas    
+  
+
+
+# ---
+# version: 3
+# dependencies:
+#   galaxy: requirements.yml
+#   python: requirements.txt
+#   system: bindep.txt
+
+# additional_build_steps:
+#   prepend: |
+#     RUN pip3 install --upgrade pip setuptools
+#   append:
+#     - RUN ls -la /etc

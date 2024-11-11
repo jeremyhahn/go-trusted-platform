@@ -14,7 +14,7 @@ type RoleDAO struct {
 	*AferoDAO[*entities.Role]
 }
 
-func NewRoleDAO(params *Params[*entities.Role]) (datastore.RoleDAO, error) {
+func NewRoleDAO(params *datastore.Params[*entities.Role]) (datastore.RoleDAO, error) {
 	if params.Partition == "" {
 		params.Partition = role_partition
 	}

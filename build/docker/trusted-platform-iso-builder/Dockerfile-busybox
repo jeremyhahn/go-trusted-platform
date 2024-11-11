@@ -1,0 +1,324 @@
+
+# === Stage 1: Create Golang builder ===
+FROM ubuntu:24.04 AS golang-builder
+
+ARG GOLANG_VERSION=1.23.3
+ARG GOLANG_BINARY_NAME=myprogram
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget --no-check-certificate ca-certificates build-essential make git xz-utils && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Golang
+RUN wget --no-check-certificate -q https://go.dev/dl/go${GOLANG_VERSION}.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf go${GOLANG_VERSION}.linux-amd64.tar.gz && \
+    rm go${GOLANG_VERSION}.linux-amd64.tar.gz
+ENV PATH="/usr/local/go/bin:$PATH"
+
+# Build using the Makefile
+WORKDIR /trusted-platform
+COPY ./ .
+RUN make clean deps build
+
+
+
+# === Stage 2: Prepare Root Filesystem ===
+FROM ubuntu:24.04 AS rootfs-builder
+
+ARG BUSYBOX_VERSION=1.35.0
+ARG BUSYBOX_URL=https://busybox.net/downloads/binaries/${BUSYBOX_VERSION}-x86_64-linux-musl/busybox
+
+# Install dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget squashfs-tools cpio && \
+    rm -rf /var/lib/apt/lists/*
+
+# Prepare root filesystem
+WORKDIR /rootfs
+RUN wget --no-check-certificate -O busybox "$BUSYBOX_URL" && \
+    chmod +x busybox && \
+    mkdir -p bin sbin etc proc sys usr/bin usr/sbin tmp && \
+    mv busybox bin/ && \
+    for cmd in sh ls mkdir mount ps cat echo; do ln -s /bin/busybox bin/$cmd; done
+
+RUN echo '#!/bin/sh\n\
+mount -t proc proc /proc\n\
+mount -t sysfs sys /sys\n\
+mount -t tmpfs tmpfs /tmp\n\
+mount -t devtmpfs dev /dev\n\
+exec /bin/sh' > /rootfs/init && \
+    chmod +x /rootfs/init
+
+# Create initramfs image
+RUN mkdir -p /boot && \
+    (cd /rootfs && find . | cpio -H newc -o | gzip > /boot/initramfs.img)
+
+# Create SquashFS image
+RUN mksquashfs /rootfs /rootfs.squashfs -noappend -comp xz
+
+
+
+
+# === Stage 3: Build the Linux Kernel ===
+FROM ubuntu:24.04 AS kernel-builder
+
+
+ARG KERNEL_VERSION=6.8
+
+
+# Install dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential wget xz-utils flex bison \
+    libelf-dev bc libssl-dev zlib1g-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+
+# Download and build kernel
+WORKDIR /kernel
+# RUN set -x && \
+#     wget --no-check-certificate https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_VERSION}.tar.xz && \
+#     tar -xf linux-${KERNEL_VERSION}.tar.xz && \
+#     cd linux-${KERNEL_VERSION} && \
+#     make defconfig && \
+#     make -j$(nproc) bzImage && \
+#     cp arch/x86/boot/bzImage /boot/vmlinuz
+
+RUN set -x && \
+    wget --no-check-certificate https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_VERSION}.tar.xz && \
+    tar -xf linux-${KERNEL_VERSION}.tar.xz && \
+    cd linux-${KERNEL_VERSION}
+
+
+# Configure and build kernel
+WORKDIR /kernel/linux-${KERNEL_VERSION}
+RUN set -x && \
+    make mrproper && \
+    make defconfig && \
+    ./scripts/config \
+        --enable CONFIG_SQUASHFS \
+        --enable CONFIG_BLK_DEV_INITRD \
+        --enable CONFIG_DEVTMPFS \
+        --enable CONFIG_DEVTMPFS_MOUNT \
+        --enable CONFIG_TMPFS \
+        --enable CONFIG_PROC_FS \
+        --enable CONFIG_SYSFS \
+        --enable CONFIG_VT \
+        --enable CONFIG_VT_CONSOLE \
+        --enable CONFIG_INPUT=y \
+        --enable CONFIG_INPUT_EVDEV=y \
+        --enable CONFIG_INPUT_KEYBOARD=y \
+        --enable CONFIG_INPUT_MOUSEDEV=y \
+        # --disable CONFIG_MOUSE_PS2 \
+    #  --enable CONFIG_UNIX98_PTYS && \
+    #  --enable CONFIG_SERIAL_8250 && \
+    #  --enable CONFIG_SERIAL_8250_CONSOLE && \
+    #  --enable CONFIG_RD_GZIP && \
+    #  --set-str CONFIG_INITRAMFS_SOURCE "/boot/initramfs.img" && \
+        --enable CONFIG_INITRAMFS_COMPRESSION_GZIP && \
+    make olddefconfig && \
+    make -j$(nproc) bzImage && \
+    # make -j$(nproc) bzImage > /kernel/build.log 2>&1 || { \
+    #     echo "Kernel build failed. Full logs below:"; \
+    #     cat /kernel/build.log; \
+    #     exit 1; \
+    # } && \
+    cp arch/x86/boot/bzImage /boot/vmlinuz
+
+
+
+
+# === Stage 4: Create the ISO with GRUB ===
+FROM ubuntu:24.04 AS iso-builder
+
+ARG OUTPUT_ISO=trusted-platform.iso
+
+# Install dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    grub-common grub-pc-bin grub-efi-amd64-bin xorriso mtools && \
+    rm -rf /var/lib/apt/lists/*
+
+# Prepare ISO directory
+WORKDIR /iso
+RUN mkdir -p boot/grub /iso/EFI/boot
+COPY --from=kernel-builder /boot/vmlinuz boot/
+COPY --from=rootfs-builder /boot/initramfs.img boot/
+COPY --from=rootfs-builder /rootfs.squashfs boot/
+
+# BIOS GRUB Configuration
+RUN echo 'set default=0\n\
+set timeout=10\n\
+menuentry "Trusted Platform (BIOS)" --class os {\n\
+    insmod gzio\n\
+    insmod part_msdos\n\
+    linux /boot/vmlinuz root=/dev/ram0 init=/init rw quiet console=ttyS0,115200n8 console=tty0 loglevel=7\n\
+    initrd /boot/initramfs.img\n\
+}' > /iso/boot/grub/grub.cfg
+
+# UEFI GRUB Configuration
+RUN echo 'set default=0\n\
+set timeout=10\n\
+insmod efi_gop\n\
+insmod font\n\
+if loadfont /boot/grub/fonts/unicode.pf2\n\
+then\n\
+    insmod gfxterm\n\
+    set gfxmode=auto\n\
+    set gfxpayload=keep\n\
+    terminal_output gfxterm\n\
+fi\n\
+menuentry "Trusted Platform (UEFI)" --class os {\n\
+    insmod gzio\n\
+    insmod part_msdos\n\
+    linux /boot/vmlinuz root=/dev/ram0 init=/init rw quiet\n\
+    initrd /boot/initramfs.img\n\
+}' > /iso/boot/grub/grub-efi.cfg
+
+# RUN grub-mkimage \
+#   -o /iso/EFI/boot/bootx64.efi \
+#   -p /boot/grub \
+#   -O x86_64-efi \
+#   linux normal iso9660 memdisk search efi_uga efi_gop configfile
+
+  # Add GRUB EFI bootloader
+RUN grub-mkimage \
+    -o /iso/EFI/boot/bootx64.efi \
+    -p /boot/grub \
+    -O x86_64-efi \
+    linux normal iso9660 memdisk search efi_uga efi_gop configfile && \
+    grub-mkrescue -o /${OUTPUT_ISO} /iso
+
+
+
+# === Stage 5: Export ISO ===
+FROM scratch AS final
+COPY --from=iso-builder /${OUTPUT_ISO} /
+CMD ["echo", "Build completed. The ISO is available at /trusted-platform.iso"]
+
+
+
+
+
+
+
+
+
+
+
+# # === Build the Trusted Platform ISO ===
+
+# # === Stage 1: Create Golang builder ===
+# FROM ubuntu:24.04 AS golang-builder
+
+# ARG GOLANG_VERSION=1.23.3
+# ARG GOLANG_BINARY_NAME=myprogram
+
+# # Install build dependencies
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     wget ca-certificates build-essential make git xz-utils && \
+#     rm -rf /var/lib/apt/lists/*
+
+# # Install Golang
+# RUN wget -q https://go.dev/dl/go${GOLANG_VERSION}.linux-amd64.tar.gz && \
+#     tar -C /usr/local -xzf go${GOLANG_VERSION}.linux-amd64.tar.gz && \
+#     rm go${GOLANG_VERSION}.linux-amd64.tar.gz
+# ENV PATH="/usr/local/go/bin:$PATH"
+
+# # Build using the Makefile
+# WORKDIR /trusted-platform
+# COPY ./ .
+# RUN make clean deps build
+
+# # === Stage 2: Prepare Root Filesystem ===
+# FROM ubuntu:24.04 AS rootfs-builder
+
+# ARG BUSYBOX_VERSION=1.35.0
+# ARG BUSYBOX_URL=https://busybox.net/downloads/binaries/${BUSYBOX_VERSION}-x86_64-linux-musl/busybox
+
+# # Install dependencies
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     wget squashfs-tools && \
+#     rm -rf /var/lib/apt/lists/*
+
+# # Prepare root filesystem
+# WORKDIR /rootfs
+# RUN wget -O busybox "$BUSYBOX_URL" || { \
+#         echo "Download failed. Retrying..."; \
+#         wget --no-check-certificate -O busybox "$BUSYBOX_URL"; \
+#     } && \
+#     chmod +x busybox && \
+#     mkdir -p bin sbin etc proc sys usr/bin usr/sbin tmp && \
+#     mv busybox bin/ && \
+#     for cmd in sh ls mkdir mount ps cat echo; do ln -s /bin/busybox bin/$cmd; done
+
+# # Add the Golang binary
+# COPY --from=golang-builder /trusted-platform/${GOLANG_BINARY_NAME} /rootfs/usr/bin/
+
+# # Create init script
+# RUN echo '#!/bin/sh\nmount -t proc proc /proc\nmount -t sysfs sys /sys\nexec /bin/sh' > init && \
+#     chmod +x init
+
+# # Create initramfs image
+# RUN cd /rootfs && \
+#     find . | cpio -H newc -o | gzip > /boot/initramfs.img
+
+# # Package root filesystem
+# RUN mksquashfs /rootfs /rootfs.squashfs -noappend -comp xz
+
+# # === Stage 3: Build the Linux Kernel ===
+# FROM ubuntu:24.04 AS kernel-builder
+
+# ARG KERNEL_VERSION=6.11
+
+# # Install dependencies
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     build-essential wget xz-utils flex bison libelf-dev bc libssl-dev && \
+#     rm -rf /var/lib/apt/lists/*
+
+# # Download and build kernel
+# WORKDIR /kernel
+# RUN set -x && \
+#     wget --no-check-certificate https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_VERSION}.tar.xz && \
+#     tar -xf linux-${KERNEL_VERSION}.tar.xz && \
+#     cd linux-${KERNEL_VERSION} && \
+#     make defconfig && \
+#     make -j$(nproc) bzImage && \
+#     cp arch/x86/boot/bzImage /boot/vmlinuz
+
+# # === Stage 4: Create the ISO ===
+# FROM ubuntu:24.04 AS iso-builder
+
+# ARG OUTPUT_ISO=trusted-platform.iso
+
+# # Install dependencies
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     xorriso syslinux isolinux syslinux-common && \
+#     rm -rf /var/lib/apt/lists/*
+
+# # Prepare ISO directory
+# WORKDIR /iso
+# RUN mkdir -p boot isolinux
+# COPY --from=kernel-builder /boot/vmlinuz boot/
+# COPY --from=rootfs-builder /boot/initramfs.img boot/
+# COPY --from=rootfs-builder /rootfs.squashfs boot/
+
+# # Create bootloader configuration
+# RUN echo 'DEFAULT linux\nLABEL linux\n    KERNEL /boot/vmlinuz\n    APPEND root=/dev/ram0 init=/init rw quiet initrd=/boot/initramfs.img' > isolinux/isolinux.cfg && \
+#     cp /usr/lib/ISOLINUX/isolinux.bin isolinux/ && \
+#     cp $(find /usr -name "ldlinux.c32" | head -n 1) isolinux/
+
+# # Create the ISO
+# RUN xorriso -as mkisofs \
+#     -o /${OUTPUT_ISO} \
+#     -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin \
+#     -c isolinux/boot.cat \
+#     -b isolinux/isolinux.bin \
+#     -no-emul-boot \
+#     -boot-load-size 4 \
+#     -boot-info-table \
+#     .
+
+# # === Stage 5: Export ISO ===
+# FROM scratch AS final
+# COPY --from=iso-builder /${OUTPUT_ISO} /
+# CMD ["echo", "This is a placeholder command"]

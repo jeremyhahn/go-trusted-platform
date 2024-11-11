@@ -3,6 +3,8 @@ package tpm2
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
 	"crypto/x509"
 	"fmt"
 	"io"
@@ -132,7 +134,7 @@ func (ks *KeyStore) Initialize(soPIN, userPIN keystore.Password) error {
 		}
 	}
 
-	if ks.debugSecrets {
+	if ks.debugSecrets && soPIN != nil {
 		sopin, err := soPIN.Bytes()
 		if err != nil {
 			return err
@@ -162,11 +164,11 @@ func (ks *KeyStore) Initialize(soPIN, userPIN keystore.Password) error {
 
 	if ks.platformKS == nil {
 		// This is the platform key store - seal the PIN and store to this backend
-		_, err = ks.tpm.Seal(ksAttrs, ks.backend)
+		_, err = ks.tpm.Seal(ksAttrs, ks.backend, false)
 	} else {
 		// This is the TPM 2.0 key store - seal the PIN and store to PLATFORM backend
 		// to keep all key store PINs in the same backend
-		_, err = ks.tpm.Seal(ksAttrs, ks.platformKS.Backend())
+		_, err = ks.tpm.Seal(ksAttrs, ks.platformKS.Backend(), false)
 	}
 	if err != nil {
 		return err
@@ -314,17 +316,24 @@ func (ks *KeyStore) GenerateKey(
 func (ks *KeyStore) GenerateRSA(
 	keyAttrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
+	return ks.generateRSA(keyAttrs, false)
+}
+
+func (ks *KeyStore) generateRSA(
+	keyAttrs *keystore.KeyAttributes,
+	overwrite bool) (keystore.OpaqueKey, error) {
+
 	ks.logger.Debug("keystore/tpm2: generating RSA key")
 
 	if keyAttrs.Parent == nil {
 		keyAttrs.Parent = ks.SRKAttributes()
 	}
 	if keyAttrs.Password != nil {
-		if err := ks.CreatePassword(keyAttrs, ks.backend); err != nil {
+		if err := ks.CreatePassword(keyAttrs, ks.backend, overwrite); err != nil {
 			return nil, err
 		}
 	}
-	rsaPub, err := ks.tpm.CreateRSA(keyAttrs, ks.backend)
+	rsaPub, err := ks.tpm.CreateRSA(keyAttrs, ks.backend, overwrite)
 	if err != nil {
 		return nil, err
 	}
@@ -338,17 +347,24 @@ func (ks *KeyStore) GenerateRSA(
 func (ks *KeyStore) GenerateECDSA(
 	keyAttrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
+	return ks.generateECDSA(keyAttrs, false)
+}
+
+func (ks *KeyStore) generateECDSA(
+	keyAttrs *keystore.KeyAttributes,
+	overwrite bool) (keystore.OpaqueKey, error) {
+
 	ks.logger.Debug("keystore/tpm2: generating ECDSA key")
 
 	if keyAttrs.Parent == nil {
 		keyAttrs.Parent = ks.SRKAttributes()
 	}
 	if keyAttrs.Password != nil {
-		if err := ks.CreatePassword(keyAttrs, ks.backend); err != nil {
+		if err := ks.CreatePassword(keyAttrs, ks.backend, overwrite); err != nil {
 			return nil, err
 		}
 	}
-	eccPub, err := ks.tpm.CreateECDSA(keyAttrs, ks.backend)
+	eccPub, err := ks.tpm.CreateECDSA(keyAttrs, ks.backend, overwrite)
 	if err != nil {
 		return nil, err
 	}
@@ -356,7 +372,8 @@ func (ks *KeyStore) GenerateECDSA(
 	return keystore.NewOpaqueKey(ks, keyAttrs, eccPub), nil
 }
 
-// Returns keystore.ErrInvalidKeyAlgorithm
+// Returns keystore.ErrInvalidKeyAlgorithm as this is an
+// unsupported TPM 2.0 algorithm
 func (ks *KeyStore) GenerateEd25519(
 	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
 
@@ -377,12 +394,58 @@ func (ks *KeyStore) Decrypter(
 	return nil, keystore.ErrUnsupportedKeyAlgorithm
 }
 
-// Panics if called because the underlying Trusted Platform
-// Module doesn't provide an API to perform an equal operation.
+// Compares the provided opaque key with the provided private key
+// and returns true if they have the same Modulus / Curve.
 func (ks *KeyStore) Equal(
-	opaque keystore.Opaque, x crypto.PrivateKey) bool {
+	opaque keystore.OpaqueKey, x crypto.PrivateKey) bool {
 
-	panic(keystore.ErrUnsupportedKeyAlgorithm)
+	// crypto.PrivateKey is the "any" type; perform type
+	// assertion to determine the key type. This parser
+	// supports RSA, ECDSA, Ed25519, public and private
+	// keys, as well as they custom keystore.OpaqueKey.
+
+	var xPub crypto.PublicKey
+	switch x.(type) {
+
+	case *rsa.PrivateKey:
+		xPub = x.(*rsa.PrivateKey).Public()
+		return opaque.Public().(*rsa.PublicKey).Equal(xPub)
+
+	case *ecdsa.PrivateKey:
+		xPub = x.(*ecdsa.PrivateKey).Public()
+		return opaque.Public().(*ecdsa.PublicKey).Equal(xPub)
+
+	case ed25519.PrivateKey:
+		xPub = x.(ed25519.PrivateKey).Public()
+		return opaque.Public().(ed25519.PublicKey).Equal(xPub)
+
+	case crypto.PrivateKey:
+		if _, ok := x.(*rsa.PublicKey); ok {
+			xPub = x.(crypto.PublicKey)
+			return opaque.Public().(*rsa.PublicKey).Equal(xPub)
+		}
+		if _, ok := x.(*ecdsa.PublicKey); ok {
+			xPub = x.(crypto.PublicKey)
+			return opaque.Public().(*ecdsa.PublicKey).Equal(xPub)
+		}
+		if _, ok := x.(ed25519.PublicKey); ok {
+			xPub = x.(crypto.PublicKey)
+			return opaque.Public().(ed25519.PublicKey).Equal(xPub)
+		}
+		if _, ok := x.(keystore.OpaqueKey); ok {
+			xPub := x.(keystore.OpaqueKey).Public()
+			switch xPub.(type) {
+			case *rsa.PublicKey:
+				return opaque.Public().(*rsa.PublicKey).Equal(xPub)
+			case *ecdsa.PublicKey:
+				return opaque.Public().(*ecdsa.PublicKey).Equal(xPub)
+			case ed25519.PublicKey:
+				return opaque.Public().(ed25519.PublicKey).Equal(xPub)
+			}
+		}
+	}
+
+	return false
 }
 
 // Returns a TPM 2.0 OpaqueKey for the requested key.
@@ -503,6 +566,26 @@ func (ks *KeyStore) Password(
 	}
 }
 
+// TPM key rotation is a no-op at this time because all of the
+// key types implemented thus far are deterministic based on
+// the Endorsement Primary Seed (EPS). Therefore, generating a
+// new key will result in the same key. This method is here for
+// compatibility with the keystore.KeyStorer interface and will
+// be implemented in the future.
+func (ks *KeyStore) RotateKey(
+	attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
+
+	switch attrs.KeyAlgorithm {
+	case x509.RSA:
+		return ks.generateRSA(attrs, true)
+	case x509.ECDSA:
+		return ks.generateECDSA(attrs, true)
+	case x509.Ed25519:
+		return ks.GenerateEd25519(attrs)
+	}
+	return nil, keystore.ErrInvalidKeyAlgorithm
+}
+
 // Returns a TPM 2.0 crypto.Signer
 func (ks *KeyStore) Signer(
 	attrs *keystore.KeyAttributes) (crypto.Signer, error) {
@@ -551,7 +634,9 @@ func (ks *KeyStore) Verifier(
 // store, optionally using the provided backend. If nil, the default
 // backend provider will be used.
 func (ks *KeyStore) CreatePassword(
-	keyAttrs *keystore.KeyAttributes, backend keystore.KeyBackend) error {
+	keyAttrs *keystore.KeyAttributes,
+	backend keystore.KeyBackend,
+	overwrite bool) error {
 
 	if keyAttrs.Password == nil {
 		return nil
@@ -593,7 +678,7 @@ func (ks *KeyStore) CreatePassword(
 	secretAttrs.KeyType = keystore.KEY_TYPE_HMAC
 
 	// Seal the secret to the TPM
-	if _, err := ks.tpm.Seal(&secretAttrs, nil); err != nil {
+	if _, err := ks.tpm.Seal(&secretAttrs, nil, overwrite); err != nil {
 		return err
 	}
 

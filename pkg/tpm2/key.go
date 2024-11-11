@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/asn1"
+	"fmt"
 	"math/big"
 
 	"github.com/google/go-tpm/tpm2"
@@ -168,8 +169,15 @@ func (tpm *TPM2) EKAttributes() (*keystore.KeyAttributes, error) {
 		if err != nil {
 			return nil, err
 		}
+		// If no EK common name is provided, try to use the device model and serial
+		// naming convention if a IDevID is defined, otherwise use "ek" as the CN.
 		if tpm.config.EK.CN == "" {
-			ekAttrs.CN = "ek"
+			if tpm.config.IDevID != nil {
+				ekAttrs.CN = fmt.Sprintf("ek-%s-%s",
+					tpm.config.IDevID.Model, tpm.config.IDevID.Serial)
+			} else {
+				ekAttrs.CN = "ek"
+			}
 		}
 		ekAttrs.KeyType = keystore.KEY_TYPE_ENDORSEMENT
 		ekAttrs.StoreType = keystore.STORE_TPM2
@@ -554,7 +562,8 @@ func (tpm *TPM2) CreateSRK(
 
 // Create an Initial Attestation Key
 func (tpm *TPM2) CreateIAK(
-	ekAttrs *keystore.KeyAttributes) (*keystore.KeyAttributes, error) {
+	ekAttrs *keystore.KeyAttributes,
+	qualifyingData []byte) (*keystore.KeyAttributes, error) {
 
 	// + Endorsement Hierarchy
 	//   - Endorsement Key
@@ -754,7 +763,7 @@ func (tpm *TPM2) CreateIAK(
 		InScheme:       inScheme,
 		CreationTicket: iakPrimary.CreationTicket,
 		QualifyingData: tpm2.TPM2BData{
-			Buffer: iakAttrs.TPMAttributes.QualifyingData,
+			Buffer: qualifyingData,
 		},
 	}
 	rspCC, err := certifyCreation.Execute(tpm.transport)
@@ -865,7 +874,8 @@ func (tpm *TPM2) CreateIAK(
 // https://trustedcomputinggroup.org/wp-content/uploads/TCG_IWG_DevID_v1r2_02dec2020.pdf
 func (tpm *TPM2) CreateIDevID(
 	akAttrs *keystore.KeyAttributes,
-	ekCert *x509.Certificate) (*keystore.KeyAttributes, *TCG_CSR_IDEVID, error) {
+	ekCert *x509.Certificate,
+	qualifyingData []byte) (*keystore.KeyAttributes, *TCG_CSR_IDEVID, error) {
 
 	// + Endorsement Hierarchy
 	//   - Endorsement Key
@@ -997,6 +1007,8 @@ func (tpm *TPM2) CreateIDevID(
 		return nil, nil, err
 	}
 
+	// Certify the new IDevID primary key using the AK to sign the
+	// TPMB_Attest structure
 	certify := tpm2.Certify{
 		ObjectHandle: tpm2.AuthHandle{
 			Handle: primaryKey.ObjectHandle,
@@ -1009,7 +1021,7 @@ func (tpm *TPM2) CreateIDevID(
 			Auth:   tpm2.PasswordAuth(akAuth),
 		},
 		QualifyingData: tpm2.TPM2BData{
-			Buffer: akAttrs.TPMAttributes.QualifyingData,
+			Buffer: qualifyingData,
 		},
 		InScheme: tpm2.TPMTSigScheme{
 			Scheme: tpm2.TPMAlgNull,
@@ -1134,7 +1146,7 @@ func (tpm *TPM2) CreateIDevID(
 		return nil, nil, err
 	}
 
-	// Cache the IDevID
+	// Cache the IDevID key attributes
 	tpm.idevidAttrs = idevidAttrs
 
 	keystore.DebugKeyAttributes(tpm.logger, idevidAttrs)

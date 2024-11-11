@@ -1,6 +1,18 @@
 package tpm2
 
-import "github.com/google/go-tpm/tpm2"
+import (
+	"io"
+
+	"github.com/google/go-tpm/tpm2"
+)
+
+// Returns the TPM Random Number Generator source. If "entropy" is
+// enabled in the platform configuration file, the TPM will be used
+// as the source of entropy. If "entropy" is disabled, the system
+// random number generator will be used as the source of entropy.
+func (tpm *TPM2) RandomSource() io.Reader {
+	return tpm.random
+}
 
 // Reads random bytes from the TPM into the data buffer. Optionally
 // uses the EK to encrypt the session between the CPU <-> TPM if

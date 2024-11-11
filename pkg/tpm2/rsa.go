@@ -10,7 +10,8 @@ import (
 // Creates a new RSA child key using the provided key attributes
 func (tpm *TPM2) CreateRSA(
 	keyAttrs *keystore.KeyAttributes,
-	backend keystore.KeyBackend) (*rsa.PublicKey, error) {
+	backend keystore.KeyBackend,
+	overwrite bool) (*rsa.PublicKey, error) {
 
 	if keyAttrs.Parent == nil {
 		return nil, keystore.ErrInvalidKeyAttributes
@@ -148,7 +149,7 @@ func (tpm *TPM2) CreateRSA(
 	}
 
 	// Save the public and private areas to blob storage
-	if err := tpm.SaveKeyPair(keyAttrs, private, public, backend); err != nil {
+	if err := tpm.SaveKeyPair(keyAttrs, private, public, backend, overwrite); err != nil {
 		return nil, err
 	}
 
@@ -175,6 +176,32 @@ func (tpm *TPM2) CreateRSA(
 
 	return rsaPub, nil
 }
+
+// func (tpm *TPM2) RSADecrypt(
+// 	keyAttrs *keystore.KeyAttributes, blob []byte) ([]byte, error) {
+// 	response, err := tpm2.RSADecrypt{
+// 		KeyHandle: tpm2.NamedHandle{
+// 			Handle: keyAttrs.TPMAttributes.Handle,
+// 			Name:   keyAttrs.TPMAttributes.Name,
+// 			// Auth:   tpm2.PasswordAuth(keyAuth),
+// 		},
+// 		CipherText: tpm2.TPM2BPublicKeyRSA{Buffer: blob},
+// 		InScheme: tpm2.TPMTRSADecrypt{
+// 			Scheme: tpm2.TPMAlgOAEP,
+// 			Details: tpm2.NewTPMUAsymScheme(
+// 				tpm2.TPMAlgOAEP,
+// 				&tpm2.TPMSEncSchemeOAEP{
+// 					HashAlg: tpm2.TPMAlgSHA256,
+// 				},
+// 			),
+// 		},
+// 	}.Execute(tpm.transport)
+// 	if err != nil {
+// 		tpm.logger.Error(err)
+// 		return nil, err
+// 	}
+// 	return response.Message.Buffer, nil
+// }
 
 // Performs RSA decryption
 func (tpm *TPM2) RSADecrypt(handle tpm2.TPMHandle, blob []byte) ([]byte, error) {

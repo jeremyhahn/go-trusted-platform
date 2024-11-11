@@ -26,7 +26,7 @@ type AferoDAO[E any] struct {
 }
 
 // Creates a key/value blob storage backend
-func NewAferoDAO[E any](params *Params[E]) (*AferoDAO[E], error) {
+func NewAferoDAO[E any](params *datastore.Params[E]) (*AferoDAO[E], error) {
 	rootDir := params.RootDir
 	if params.RootDir[len(rootDir)-1] == '/' {
 		rootDir = strings.TrimRight(rootDir, "/")

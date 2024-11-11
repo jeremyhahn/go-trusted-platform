@@ -22,7 +22,6 @@ import (
 )
 
 type Config struct {
-	ACMEServerURL         string     `yaml:"acme-server" json:"acme_server" mapstructure:"acme-server"`
 	AutoImportIssuingCA   bool       `yaml:"auto-import-issuing-ca" json:"auto_import_issuing_ca" mapstructure:"auto-import-issuing-ca"`
 	DefaultValidityPeriod int        `yaml:"default-validity" json:"default_validity" mapstructure:"default-validity"`
 	Identity              []Identity `yaml:"identity" json:"identity" mapstructure:"identity"`
@@ -168,6 +167,8 @@ var (
 			StoreType:      string(keystore.STORE_PKCS11),
 			Hash:           "SHA-256",
 		},
+		// Thales PKCS 11 lib doesn't support Ed25519
+		// TODO: Create a low level implementation that supports it
 	}
 
 	slot          = 0

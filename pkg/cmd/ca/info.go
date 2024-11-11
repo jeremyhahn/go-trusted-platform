@@ -26,10 +26,17 @@ about a Certificate Authority.`,
 			App.Logger.Fatal("Certificate Authority not configured")
 		}
 
-		userPIN := keystore.NewClearPassword(InitParams.Pin)
-		if err := App.LoadCA(userPIN); err != nil {
-			cmd.PrintErrln(err)
-			return
+		if App.CA == nil {
+			soPIN, userPIN, err := App.ParsePINs(InitParams.SOPin, InitParams.Pin)
+			if err != nil {
+				App.Logger.Error(err)
+				cmd.PrintErrln(err)
+				return
+			}
+			if err := App.LoadCA(soPIN, userPIN); err != nil {
+				cmd.PrintErrln(err)
+				return
+			}
 		}
 
 		initialized, err := App.CA.IsInitialized()

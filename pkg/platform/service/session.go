@@ -32,7 +32,7 @@ type ServiceSession struct {
 
 func NewSession() Session {
 	return &ServiceSession{
-		consistencyLevel: datastore.CONSISTENCY_LOCAL,
+		consistencyLevel: datastore.ConsistencyLevelLocal,
 	}
 }
 

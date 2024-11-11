@@ -13,7 +13,7 @@ type OrganizationDAO struct {
 	*AferoDAO[*entities.Organization]
 }
 
-func NewOrganizationDAO(params *Params[*entities.Organization]) (datastore.OrganizationDAO, error) {
+func NewOrganizationDAO(params *datastore.Params[*entities.Organization]) (datastore.OrganizationDAO, error) {
 	if params.Partition == "" {
 		params.Partition = organization_partition
 	}

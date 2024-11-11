@@ -21,54 +21,45 @@ installation. This operation is safe and idempotent, and will not modify or
 destroy existing data.`,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		App, err = App.Init(InitParams)
-		if err != nil {
-			if err != tpm2.ErrNotInitialized {
+		var soPIN, userPIN keystore.Password
+		if App.CA == nil {
+			soPIN, userPIN, err = App.ParsePINs(InitParams.SOPin, InitParams.Pin)
+			if err != nil {
+				App.Logger.Error(err)
 				cmd.PrintErrln(err)
 				return
 			}
 		}
 
-		sopin := keystore.NewClearPassword(InitParams.SOPin)
-		pin := keystore.NewClearPassword(InitParams.Pin)
+		App.OpenTPM(false)
 
-		if App.DebugSecretsFlag {
-			App.Logger.Debugf(
-				"Setting Security Officer / hierarchy authorization PIN: %s",
-				InitParams.SOPin)
-
-			App.Logger.Debugf("Setting user PIN: %s", InitParams.Pin)
-		}
-
-		// Perform platform installation
-		if err := App.TPM.Install(sopin); err != nil {
+		if err := App.TPM.Install(soPIN); err != nil {
 
 			if err == tpm2.ErrEndorsementCertNotFound {
 
 				if App.CA == nil {
-					// TODO: Perform ACME device enrollment instead of
-					// self-signed CA cert with tpm2-software attestation
-					// procedure.
-					if _, err := App.InitCA(InitParams.PlatformCA, sopin, pin); err != nil {
+					if _, err := App.InitCA(soPIN, userPIN, InitParams); err != nil {
 						cmd.PrintErrln(err)
 						return
 					}
 				}
 
-				// Create missing EK cert
 				cert, err := App.ImportEndorsementKeyCertificate()
 				if err != nil {
 					cmd.PrintErrln(err)
 					return
 				}
+
 				pem, err := certstore.EncodePEM(cert.Raw)
 				if err != nil {
 					cmd.PrintErrln(err)
 					return
 				}
+
 				cmd.Println(string(pem))
 
 			} else {
+
 				cmd.PrintErrln(err)
 				return
 			}

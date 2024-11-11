@@ -3,7 +3,7 @@ package acme
 import (
 	"net/http"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/acme/entities"
 )
 
 // Error definitions as per RFC 8555

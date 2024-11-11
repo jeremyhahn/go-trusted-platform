@@ -81,7 +81,7 @@ func TestSealUnseal(t *testing.T) {
 							Hierarchy: tpm2.TPMRHOwner,
 						}}
 
-					_, err = tpm.Seal(keyAttrs, nil)
+					_, err = tpm.Seal(keyAttrs, nil, false)
 					assert.Nil(t, err)
 
 					// Retrieve the AES-256 key protected
@@ -173,28 +173,28 @@ func TestCreateKeyWithPolicy(t *testing.T) {
 				TPMAttributes: &keystore.TPMAttributes{
 					Hierarchy: tpm2.TPMRHOwner,
 				}}
-			rsaPub, err := tpm.CreateRSA(keyAttrs, nil)
+			rsaPub, err := tpm.CreateRSA(keyAttrs, nil, false)
 			assert.Nil(t, err)
 			assert.NotNil(t, rsaPub)
 
 			// nil password with policy auth - should succeed
 			keyAttrs.Parent.Password = nil
 			keyAttrs.CN = "test4"
-			rsaPub4, err4 := tpm.CreateRSA(keyAttrs, nil)
+			rsaPub4, err4 := tpm.CreateRSA(keyAttrs, nil, false)
 			assert.Nil(t, err4)
 			assert.NotNil(t, rsaPub4)
 
 			// incorrect password with policy auth - should work
 			keyAttrs.Parent.Password = keystore.NewClearPassword([]byte("foo"))
 			keyAttrs.CN = "test5"
-			rsaPub5, err5 := tpm.CreateRSA(keyAttrs, nil)
+			rsaPub5, err5 := tpm.CreateRSA(keyAttrs, nil, false)
 			assert.Nil(t, err5)
 			assert.NotNil(t, rsaPub5)
 
 			// correct password with policy auth - should work
 			keyAttrs.Parent.Password = srkAuth
 			keyAttrs.CN = "test6"
-			rsaPub6, err6 := tpm.CreateRSA(keyAttrs, nil)
+			rsaPub6, err6 := tpm.CreateRSA(keyAttrs, nil, false)
 			assert.Nil(t, err6)
 			assert.NotNil(t, rsaPub6)
 
@@ -271,7 +271,7 @@ func TestCreateKeyWithoutPolicy(t *testing.T) {
 				TPMAttributes: &keystore.TPMAttributes{
 					Hierarchy: tpm2.TPMRHOwner,
 				}}
-			rsaPub, err := tpm.CreateRSA(keyAttrs, nil)
+			rsaPub, err := tpm.CreateRSA(keyAttrs, nil, false)
 			assert.Nil(t, err)
 			assert.NotNil(t, rsaPub)
 
@@ -279,7 +279,7 @@ func TestCreateKeyWithoutPolicy(t *testing.T) {
 				// nil password without policy auth - should fail
 				keyAttrs.Parent.Password = nil
 				keyAttrs.CN = "test4"
-				rsaPub2, err2 := tpm.CreateRSA(keyAttrs, nil)
+				rsaPub2, err2 := tpm.CreateRSA(keyAttrs, nil, false)
 				assert.NotNil(t, err2)
 				assert.Nil(t, rsaPub2)
 				assert.Equal(t, ErrAuthFailWithDA, err2)
@@ -287,7 +287,7 @@ func TestCreateKeyWithoutPolicy(t *testing.T) {
 				// nil password without policy auth - should work
 				keyAttrs.Parent.Password = nil
 				keyAttrs.CN = "test4"
-				rsaPub2, err2 := tpm.CreateRSA(keyAttrs, nil)
+				rsaPub2, err2 := tpm.CreateRSA(keyAttrs, nil, false)
 				assert.Nil(t, err2)
 				assert.NotNil(t, rsaPub2)
 			}
@@ -295,7 +295,7 @@ func TestCreateKeyWithoutPolicy(t *testing.T) {
 			// incorrect password without policy auth - should fail
 			keyAttrs.Parent.Password = keystore.NewClearPassword([]byte("foo"))
 			keyAttrs.CN = "test5"
-			rsaPub3, err3 := tpm.CreateRSA(keyAttrs, nil)
+			rsaPub3, err3 := tpm.CreateRSA(keyAttrs, nil, false)
 			assert.NotNil(t, err3)
 			assert.Nil(t, rsaPub3)
 			assert.Equal(t, ErrAuthFailWithDA, err3)
@@ -303,7 +303,7 @@ func TestCreateKeyWithoutPolicy(t *testing.T) {
 			// correct password without policy auth - should work
 			keyAttrs.Parent.Password = srkAuth
 			keyAttrs.CN = "test6"
-			rsaPub6, err6 := tpm.CreateRSA(keyAttrs, nil)
+			rsaPub6, err6 := tpm.CreateRSA(keyAttrs, nil, false)
 			assert.Nil(t, err6)
 			assert.NotNil(t, rsaPub6)
 

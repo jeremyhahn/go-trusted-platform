@@ -8,10 +8,27 @@ type System struct {
 	BIOS     *BIOS          `yaml:"bios" json:"bios,omitempty"`
 	Board    *Board         `yaml:"board" json:"board,omitempty"`
 	Chassis  *Chassis       `yaml:"chassis" json:"chassis,omitempty"`
+	CPU      *CPUInfo       `yaml:"cpu" json:"cpu"`
 	Mode     string         `yaml:"mode" json:"mode"`
 	Product  *Product       `yaml:"product" json:"product"`
 	Runtime  *SystemRuntime `yaml:"runtime" json:"runtime"`
 	Services int            `yaml:"services" json:"services"`
+}
+
+type CPUInfo struct {
+	ModelName string   `yaml:"model" json:"model"`
+	Cores     int      `yaml:"cores" json:"cores"`
+	CacheSize string   `yaml:"cache" json:"cache"`
+	Flags     []string `yaml:"flags" json:"flags"`
+	Threads   int      `yaml:"threads" json:"threads"`
+}
+
+func (c CPUInfo) Print() {
+	fmt.Printf("CPU model:             %s\n", c.ModelName)
+	fmt.Printf("CPU cores:             %d\n", c.Cores)
+	fmt.Printf("CPU threads:           %d\n", c.Threads)
+	fmt.Printf("CPU cache size:        %s\n", c.CacheSize)
+	fmt.Printf("CPU Flags:             %s\n", c.Flags)
 }
 
 type BIOS struct {

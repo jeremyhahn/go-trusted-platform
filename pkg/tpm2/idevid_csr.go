@@ -2,6 +2,7 @@ package tpm2
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/x509"
@@ -27,6 +28,19 @@ func (tpm *TPM2) CreateTCG_CSR_IDEVID(
 	ekCert *x509.Certificate,
 	akAttrs *keystore.KeyAttributes,
 	idevidAttrs *keystore.KeyAttributes) (TCG_CSR_IDEVID, error) {
+
+	var signerAttrs *keystore.KeyAttributes
+
+	enrollmentStrategy := ParseIdentityProvisioningStrategy(tpm.config.IdentityProvisioningStrategy)
+
+	switch enrollmentStrategy {
+	case EnrollmentStrategyIAK:
+		signerAttrs = akAttrs
+	case EnrollmentStrategyIAK_IDEVID_SINGLE_PASS:
+		signerAttrs = idevidAttrs
+	default:
+		return TCG_CSR_IDEVID{}, ErrInvalidEnrollmentStrategy
+	}
 
 	tcgContent := &TCG_IDEVID_CONTENT{}
 
@@ -118,12 +132,12 @@ func (tpm *TPM2) CreateTCG_CSR_IDEVID(
 		return TCG_CSR_IDEVID{}, err
 	}
 
-	digest, validationDigest, err := tpm.HashSequence(akAttrs, packedContents)
+	digest, validationDigest, err := tpm.HashSequence(signerAttrs, packedContents)
 	if err != nil {
 		return TCG_CSR_IDEVID{}, err
 	}
 
-	signature, err := tpm.SignValidate(akAttrs, digest, validationDigest)
+	signature, err := tpm.SignValidate(signerAttrs, digest, validationDigest)
 	if err != nil {
 		return TCG_CSR_IDEVID{}, err
 	}
@@ -151,7 +165,7 @@ func (tpm *TPM2) createIDevIDContent(
 
 	bootEventLog, err := tpm.EventLog()
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
+		if os.IsNotExist(err) {
 			// /sys/kernel/security/tpm0/binary_bios_measurements: no such file or directory
 			// return nil, ErrMissingMeasurementLog
 
@@ -400,6 +414,191 @@ func PackIDevIDContent(content *TCG_IDEVID_CONTENT) ([]byte, error) {
 	return csr.Bytes(), nil
 }
 
+// Unmarshalls a fixed size big endian byte array into a uint32
+func bytesToUint32(b [4]byte) uint32 {
+	return binary.BigEndian.Uint32(b[:])
+}
+
+// Unmarshalls a TCG_CSR_IDEVID big endian byte array
+func UnmarshalIDevIDCSR(csrBytes []byte) (*TCG_CSR_IDEVID, error) {
+
+	reader := bytes.NewReader(csrBytes)
+
+	var structVer [4]byte
+	if err := binary.Read(reader, binary.BigEndian, &structVer); err != nil {
+		return nil, err
+	}
+
+	var contents [4]byte
+	if err := binary.Read(reader, binary.BigEndian, &contents); err != nil {
+		return nil, err
+	}
+
+	var sigSz [4]byte
+	if err := binary.Read(reader, binary.BigEndian, &sigSz); err != nil {
+		return nil, err
+	}
+
+	csr := TCG_CSR_IDEVID{
+		StructVer: structVer,
+		Contents:  contents,
+		SigSz:     sigSz,
+	}
+
+	csrContentBytes := make([]byte, 0)
+	if _, err := reader.Read(csrContentBytes); err != nil {
+		return nil, err
+	}
+
+	csrContents, err := UnpackIDevIDContent(reader)
+	if err != nil {
+		return nil, err
+	}
+	csr.CsrContents = *csrContents
+
+	csr.Signature = make([]byte, bytesToUint32(sigSz))
+	if _, err := reader.Read(csr.Signature); err != nil {
+		return nil, err
+	}
+
+	return &csr, nil
+}
+
+func UnpackIDevIDContent(reader *bytes.Reader) (*TCG_IDEVID_CONTENT, error) {
+	content := &TCG_IDEVID_CONTENT{}
+
+	if err := binary.Read(reader, binary.BigEndian, &content.StructVer); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Read(reader, binary.BigEndian, &content.HashAlgoId); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Read(reader, binary.BigEndian, &content.HashSz); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Read(reader, binary.BigEndian, &content.ProdModelSz); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Read(reader, binary.BigEndian, &content.ProdSerialSz); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Read(reader, binary.BigEndian, &content.ProdCaDataSz); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Read(reader, binary.BigEndian, &content.BootEvntLogSz); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Read(reader, binary.BigEndian, &content.EkCertSZ); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Read(reader, binary.BigEndian, &content.AttestPubSZ); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Read(reader, binary.BigEndian, &content.AtCreateTktSZ); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Read(reader, binary.BigEndian, &content.AtCertifyInfoSZ); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Read(reader, binary.BigEndian, &content.AtCertifyInfoSignatureSZ); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Read(reader, binary.BigEndian, &content.SigningPubSZ); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Read(reader, binary.BigEndian, &content.SgnCertifyInfoSZ); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Read(reader, binary.BigEndian, &content.SgnCertifyInfoSignatureSZ); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Read(reader, binary.BigEndian, &content.PadSz); err != nil {
+		return nil, err
+	}
+
+	content.ProdModel = make([]byte, bytesToUint32(content.ProdModelSz))
+	if _, err := reader.Read(content.ProdModel); err != nil {
+		return nil, err
+	}
+
+	content.ProdSerial = make([]byte, bytesToUint32(content.ProdSerialSz))
+	if _, err := reader.Read(content.ProdSerial); err != nil {
+		return nil, err
+	}
+
+	content.ProdCaData = make([]byte, bytesToUint32(content.ProdCaDataSz))
+	if _, err := reader.Read(content.ProdCaData); err != nil {
+		return nil, err
+	}
+
+	content.BootEvntLog = make([]byte, bytesToUint32(content.BootEvntLogSz))
+	if _, err := reader.Read(content.BootEvntLog); err != nil {
+		return nil, err
+	}
+
+	content.EkCert = make([]byte, bytesToUint32(content.EkCertSZ))
+	if _, err := reader.Read(content.EkCert); err != nil {
+		return nil, err
+	}
+
+	content.AttestPub = make([]byte, bytesToUint32(content.AttestPubSZ))
+	if _, err := reader.Read(content.AttestPub); err != nil {
+		return nil, err
+	}
+
+	content.AtCreateTkt = make([]byte, bytesToUint32(content.AtCreateTktSZ))
+	if _, err := reader.Read(content.AtCreateTkt); err != nil {
+		return nil, err
+	}
+
+	content.AtCertifyInfo = make([]byte, bytesToUint32(content.AtCertifyInfoSZ))
+	if _, err := reader.Read(content.AtCertifyInfo); err != nil {
+		return nil, err
+	}
+
+	content.AtCertifyInfoSig = make([]byte, bytesToUint32(content.AtCertifyInfoSignatureSZ))
+	if _, err := reader.Read(content.AtCertifyInfoSig); err != nil {
+		return nil, err
+	}
+
+	content.SigningPub = make([]byte, bytesToUint32(content.SigningPubSZ))
+	if _, err := reader.Read(content.SigningPub); err != nil {
+		return nil, err
+	}
+
+	content.SgnCertifyInfo = make([]byte, bytesToUint32(content.SgnCertifyInfoSZ))
+	if _, err := reader.Read(content.SgnCertifyInfo); err != nil {
+		return nil, err
+	}
+
+	content.SgnCertifyInfoSig = make([]byte, bytesToUint32(content.SgnCertifyInfoSignatureSZ))
+	if _, err := reader.Read(content.SgnCertifyInfoSig); err != nil {
+		return nil, err
+	}
+
+	content.Pad = make([]byte, bytesToUint32(content.PadSz))
+	if _, err := reader.Read(content.Pad); err != nil {
+		return nil, err
+	}
+
+	return content, nil
+}
+
 // Unpacks a TCG_CSR_IDEVID big endian byte array
 func UnpackIDevIDCSR(
 	tcgCSRIDevID *TCG_CSR_IDEVID) (*UNPACKED_TCG_CSR_IDEVID, error) {
@@ -608,9 +807,27 @@ func UnpackIDevIDCSR(
 	return &tcgCSR, nil
 }
 
+// Verifies the TCG-CSR-IDEVID using the Identity Provisioning strategy defined in the
+// platform configuration file. If a strategy is not defined, the method defined in
+// Section 6.2 - OEM Installation of IAK and IDevID in a Single Pass of the TCG TPM 2.0
+// Keys for Device Identity and Attestation specification is used as the default strategy.
+func (tpm *TPM2) VerifyTCGCSR(
+	csr *TCG_CSR_IDEVID,
+	signatureAlgorithm x509.SignatureAlgorithm) (*keystore.KeyAttributes, *UNPACKED_TCG_CSR_IDEVID, error) {
+
+	enrollmentStrategy := ParseIdentityProvisioningStrategy(tpm.config.IdentityProvisioningStrategy)
+	switch enrollmentStrategy {
+	case EnrollmentStrategyIAK:
+		return tpm.VerifyTCG_CSR_IAK(csr, signatureAlgorithm)
+	case EnrollmentStrategyIAK_IDEVID_SINGLE_PASS:
+		return tpm.VerifyTCG_CSR_IDevID(csr, signatureAlgorithm)
+	}
+	return nil, nil, ErrInvalidEnrollmentStrategy
+}
+
 // Extracts the Attestation Public Key from TCG_CSR_IDEVID and performs
-// verification per TCG TPM 2.0 Keys for Device Identity and Attestation -
-// Section 6.1.2 - Procedure.
+// verification per TCG TPM 2.0 Keys for Device Identity and Attestation
+// per Section 6.1.2 - Procedure for OEM Creation of an IAK Certificate.
 // 5. The CA verifies the received data:
 // a. Verify the signature on the TCG-CSR-IDEVID:
 // i. Extract the IAK Public Key from the IAK Public Area in the TCG-CSR-IDEVID.
@@ -620,6 +837,8 @@ func UnpackIDevIDCSR(
 // c. Verify the attributes (TPMA_OBJECT bits) of the IAK Public Area to ensure
 // that the key is a Restricted, fixedTPM, fixedParent signing key. Ensure all
 // other attributes meet CA policy.
+// NOTE: Step b is not implemented here. The EK certificate should be verified by
+// the CA package using the Verify(certificate *x509.Certificate) method.
 func (tpm *TPM2) VerifyTCG_CSR_IAK(
 	csr *TCG_CSR_IDEVID,
 	signatureAlgorithm x509.SignatureAlgorithm) (*keystore.KeyAttributes, *UNPACKED_TCG_CSR_IDEVID, error) {
@@ -637,7 +856,7 @@ func (tpm *TPM2) VerifyTCG_CSR_IAK(
 
 	// Set the TCG and crypto hash algorithm
 	hashAlgo := tpm2.TPMAlgID(unpacked.CsrContents.HashAlgoId)
-	cryptoHash, err := hashAlgo.Hash()
+	hash, err := hashAlgo.Hash()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -672,7 +891,10 @@ func (tpm *TPM2) VerifyTCG_CSR_IAK(
 
 	pub := keyAttrs.TPMAttributes.Public
 
-	// Ensure the AK is a restricted signing key
+	// Ensure the AK is a Restricted, fixedTPM, fixedParent signing key
+	if !pub.ObjectAttributes.Restricted {
+		return nil, nil, keystore.ErrInvalidKeyAttributes
+	}
 	if !pub.ObjectAttributes.FixedTPM {
 		return nil, nil, keystore.ErrInvalidKeyAttributes
 	}
@@ -683,35 +905,180 @@ func (tpm *TPM2) VerifyTCG_CSR_IAK(
 		return nil, nil, keystore.ErrInvalidKeyAttributes
 	}
 
-	// Re-pack the CSR contents to get a digest
-	packedContents, err := PackIDevIDContent(&csr.CsrContents)
+	// Verify the CSR using the IAK public key
+	if err := tpm.verifyTCGCSRSignature(csr, hash, keyAttrs); err != nil {
+		return nil, nil, err
+	}
+
+	return keyAttrs, unpacked, nil
+}
+
+// Extracts the Attestation Public Key from TCG_CSR_IDEVID and performs
+// verification per TCG TPM 2.0 Keys for Device Identity and Attestation
+// per Section 6.2.2 - Procedure for OEM Installation of IAK and IDevID
+// in a Single Pass.
+// 7. The CA verifies the received data:
+// a. Extract IDevID public key and verify the signature on TCG-CSR-IDEVID
+// b. Verify the EK Certificate using the indicated TPM manufacturer’s public key
+// c. Verify TPM residency of IDevID key using the IAK public key to validate the signature of the
+// TPMB_Attest structure.
+// d. Verify the attributes of the IDevID key public area.
+// e. Verify the attributes of the IAK public area.
+// f. Calculate the Name of the IAK, by hashing its public area with its associated hash algorithm,
+// prepended with the Algorithm ID of the hashing algorithm. Refer to TPM 2.0 Library Specification [2]
+// Part 1, Section 16, “Names”.
+// g. Using the sequence described in the TPM 2.0 Library Specification [2] Part 3, section 12.6.3
+// (TPM2_MakeCredential Detailed Actions), create the encrypted “credential” structure to be sent to
+// the device. When building this encrypted structure, objectName is the Name of the IAK calculated in
+// step ‘a’ and Certificate (which is the payload field) holds a nonce (whose size matches the Name
+// hash). Retain the nonce for use in later steps.
+// NOTE: Step b is not implemented here. The EK certificate should be verified by
+// the CA package using the Verify(certificate *x509.Certificate) method.
+func (tpm *TPM2) VerifyTCG_CSR_IDevID(
+	csr *TCG_CSR_IDEVID,
+	signatureAlgorithm x509.SignatureAlgorithm) (*keystore.KeyAttributes, *UNPACKED_TCG_CSR_IDEVID, error) {
+
+	ekAttrs, err := tpm.EKAttributes()
 	if err != nil {
 		return nil, nil, err
+	}
+
+	// Unpack CSR to UNPACKED_TCG_CSR_IDEVID
+	unpacked, err := UnpackIDevIDCSR(csr)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// // Set the TCG and crypto hash algorithm
+	hashAlgo := tpm2.TPMAlgID(unpacked.CsrContents.HashAlgoId)
+	hash, err := hashAlgo.Hash()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Load the IAK public area
+	iakLoadRsp, err := tpm2.LoadExternal{
+		Hierarchy: tpm2.TPMRHEndorsement,
+		InPublic: tpm2.BytesAs2B[tpm2.TPMTPublic](
+			unpacked.CsrContents.AttestPub),
+	}.Execute(tpm.transport)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Load default TPM attributes for the IAK
+	iakAttrs, err := tpm.KeyAttributes(iakLoadRsp.ObjectHandle)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tpm.Flush(iakLoadRsp.ObjectHandle)
+
+	iakPub := iakAttrs.TPMAttributes.Public
+
+	// Ensure the AK is a Restricted, fixedTPM, fixedParent signing key
+	if !iakPub.ObjectAttributes.Restricted {
+		return nil, nil, keystore.ErrInvalidKeyAttributes
+	}
+	if !iakPub.ObjectAttributes.FixedTPM {
+		return nil, nil, keystore.ErrInvalidKeyAttributes
+	}
+	if !iakPub.ObjectAttributes.FixedParent {
+		return nil, nil, keystore.ErrInvalidKeyAttributes
+	}
+	if !iakPub.ObjectAttributes.SignEncrypt {
+		return nil, nil, keystore.ErrInvalidKeyAttributes
+	}
+
+	// Load the IDevID public area
+	idevidLoadRsp, err := tpm2.LoadExternal{
+		Hierarchy: tpm2.TPMRHEndorsement,
+		InPublic: tpm2.BytesAs2B[tpm2.TPMTPublic](
+			unpacked.CsrContents.SigningPub),
+	}.Execute(tpm.transport)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Load default TPM attributes for the IDevID
+	idevidAttrs, err := tpm.KeyAttributes(idevidLoadRsp.ObjectHandle)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tpm.Flush(idevidLoadRsp.ObjectHandle)
+
+	idevidAttrs.Parent = ekAttrs
+	idevidAttrs.SignatureAlgorithm = signatureAlgorithm
+	idevidAttrs.StoreType = keystore.STORE_TPM2
+	idevidAttrs.TPMAttributes.HashAlg = hashAlgo
+
+	idevidPub := idevidAttrs.TPMAttributes.Public
+
+	// Ensure the IDevID is an Unrestricted, fixedTPM, fixedParent signing key
+	if idevidPub.ObjectAttributes.Restricted {
+		return nil, nil, keystore.ErrInvalidKeyAttributes
+	}
+	if !idevidPub.ObjectAttributes.FixedTPM {
+		return nil, nil, keystore.ErrInvalidKeyAttributes
+	}
+	if !idevidPub.ObjectAttributes.FixedParent {
+		return nil, nil, keystore.ErrInvalidKeyAttributes
+	}
+	if !idevidPub.ObjectAttributes.SignEncrypt {
+		return nil, nil, keystore.ErrInvalidKeyAttributes
+	}
+
+	// Set the signing key algorithm
+	if keystore.IsECDSA(signatureAlgorithm) {
+		idevidAttrs.KeyAlgorithm = x509.ECDSA
+	} else {
+		idevidAttrs.KeyAlgorithm = x509.RSA
+	}
+
+	// Verify the CSR using the IDevID public key
+	if err := tpm.verifyTCGCSRSignature(csr, hash, idevidAttrs); err != nil {
+		return nil, nil, err
+	}
+
+	return idevidAttrs, unpacked, nil
+}
+
+// Verifies the TCG-CSR-IDEVID signature using the provided hash and key attributes
+func (tpm *TPM2) verifyTCGCSRSignature(
+	csr *TCG_CSR_IDEVID,
+	hash crypto.Hash,
+	keyAttrs *keystore.KeyAttributes) error {
+
+	pub := keyAttrs.TPMAttributes.Public
+
+	// Re-pack the CSR contents to get the digest
+	packedContents, err := PackIDevIDContent(&csr.CsrContents)
+	if err != nil {
+		return err
 	}
 
 	// Perform hash sequence on the (large) digest
 	digest, _, err := tpm.HashSequence(keyAttrs, packedContents)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 
+	// Verify the TCG-CSR-IDEVID signature
 	if pub.Type == tpm2.TPMAlgRSA {
 
 		rsaDetail, err := pub.Parameters.RSADetail()
 		if err != nil {
-			tpm.logger.Error(err)
-			return nil, nil, err
+			return err
 		}
 
 		rsaUnique, err := pub.Unique.RSA()
 		if err != nil {
-			tpm.logger.Error(err)
-			return nil, nil, err
+			return err
 		}
 		rsaPub, err := tpm2.RSAPub(rsaDetail, rsaUnique)
 		if err != nil {
-			tpm.logger.Error(err)
-			return nil, nil, err
+			return err
 		}
 
 		if keystore.IsRSAPSS(keyAttrs.SignatureAlgorithm) {
@@ -719,13 +1086,12 @@ func (tpm *TPM2) VerifyTCG_CSR_IAK(
 			// RSA PSS
 			pssOpts := &rsa.PSSOptions{
 				SaltLength: rsa.PSSSaltLengthEqualsHash,
-				Hash:       cryptoHash,
+				Hash:       hash,
 			}
 			err = rsa.VerifyPSS(
-				rsaPub, cryptoHash, digest, csr.Signature, pssOpts)
+				rsaPub, hash, digest, csr.Signature, pssOpts)
 			if err != nil {
-				tpm.logger.Error(err)
-				return nil, nil, ErrInvalidSignature
+				return ErrInvalidSignature
 			}
 
 			// _, err = tpm2.VerifySignature{
@@ -753,10 +1119,9 @@ func (tpm *TPM2) VerifyTCG_CSR_IAK(
 
 		} else {
 
-			err = rsa.VerifyPKCS1v15(rsaPub, cryptoHash, digest, csr.Signature)
+			err = rsa.VerifyPKCS1v15(rsaPub, hash, digest, csr.Signature)
 			if err != nil {
-				tpm.logger.Error(err)
-				return nil, nil, ErrInvalidSignature
+				return ErrInvalidSignature
 			}
 
 			// _, err = tpm2.VerifySignature{
@@ -786,17 +1151,17 @@ func (tpm *TPM2) VerifyTCG_CSR_IAK(
 
 		ecDetail, err := pub.Parameters.ECCDetail()
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
 
 		crv, err := ecDetail.CurveID.Curve()
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
 
 		eccUnique, err := pub.Unique.ECC()
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
 
 		ecdsaPub := &ecdsa.PublicKey{
@@ -806,10 +1171,9 @@ func (tpm *TPM2) VerifyTCG_CSR_IAK(
 		}
 
 		if !ecdsa.VerifyASN1(ecdsaPub, digest, csr.Signature) {
-			tpm.logger.Error(err)
-			return nil, nil, ErrInvalidSignature
+			return ErrInvalidSignature
 		}
 	}
 
-	return keyAttrs, unpacked, nil
+	return nil
 }

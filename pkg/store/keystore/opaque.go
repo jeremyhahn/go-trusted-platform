@@ -7,6 +7,7 @@ import (
 
 type OpaqueKey interface {
 	Digest(data []byte) ([]byte, error)
+	Equal(x crypto.PrivateKey) bool
 	KeyAttributes() *KeyAttributes
 	crypto.PrivateKey
 	crypto.Signer
@@ -85,7 +86,7 @@ func (opaque *Opaque) Decrypt(
 // Implements crypto.PrivateKey
 // https://pkg.go.dev/crypto#PrivateKey
 func (opaque *Opaque) Equal(x crypto.PrivateKey) bool {
-	return opaque.keyStore.Equal(*opaque, x)
+	return opaque.keyStore.Equal(opaque, x)
 }
 
 // Creates a digest using the hash function defined by the key's

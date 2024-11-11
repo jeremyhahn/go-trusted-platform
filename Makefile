@@ -27,7 +27,6 @@ BUILD_DATE              = $(shell date '+%Y-%m-%d_%H:%M:%S')
 VERSION_FILE            ?= VERSION
 
 ENV                     ?= dev
-RPI_HOST                ?= rpi
 
 ifneq ("$(wildcard $(VERSION_FILE))","")
     APP_VERSION = $(shell cat $(VERSION_FILE))
@@ -48,53 +47,76 @@ LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.Version=${APP_VERSION}
 GREEN=\033[0;32m
 NO_COLOR=\033[0m
 
-ATTESTATION_DIR    ?= attestation
-ATTESTOR_DIR       ?= $(ATTESTATION_DIR)/attestor
-VERIFIER_DIR       ?= $(ATTESTATION_DIR)/verifier
-PLATFORM_DIR       ?= trusted-data
-CONFIG_DIR         ?= $(PLATFORM_DIR)/etc
-LOG_DIR            ?= $(PLATFORM_DIR)/log
-CA_DIR             ?= $(PLATFORM_DIR)/ca
-ATTESTATION_CONFIG ?= attestation.yaml
+PLATFORM_DIR             ?= trusted-data
+CONFIG_DIR               ?= configs
+EXAMPLE_DIR              ?= examples
+PLATFORM_CONFIG_DIR      ?= $(CONFIG_DIR)/platform
 
-VERIFIER_CA        ?= $(VERIFIER_DIR)/$(PLATFORM_DIR)/ca
-VERIFIER_CONF      ?= $(VERIFIER_DIR)/$(CONFIG_DIR)/config.yaml
-VERIFIER_DOMAIN    ?= verifier.example.com
-VERIFIER_HOSTNAME  ?= www
+CONFIG_YAML              ?= config.debug.pkcs11.yaml
 
-ATTESTOR_CA        ?= $(ATTESTOR_DIR)/$(PLATFORM_DIR)/ca
-ATTESTOR_CONF      ?= $(ATTESTOR_DIR)/$(CONFIG_DIR)/config.yaml
-ATTESTOR_HOSTNAME  ?= www
-ATTESTOR_DOMAIN    ?= attestor.example.com
+ROOT_CA                  ?= root-ca
+INTERMEDIATE_CA          ?= intermediate-ca
+DOMAIN                   ?= trusted-platform.io
 
-CONFIG_YAML        ?= config.debug.pkcs11.yaml
+ANSIBLE_USER             ?= ansible
 
-PROTO_DIR          ?= proto
-PROTOC             ?= protoc
+LUKS_KEYFILE             ?= luks.key
+LUKS_SIZE                ?= 5G
+LUKS_TYPE                ?= luks2
 
-ROOT_CA            ?= root-ca
-INTERMEDIATE_CA    ?= intermediate-ca
-DOMAIN             ?= example.com
+SOFTHSM_DIR              ?= /usr/local/bin
+SOFTHSM_LIB              ?= /usr/local/lib/softhsm/libsofthsm2.so
+SOFTHSM_TOKEN_DIR        ?= /var/lib/softhsm/tokens
+SOFTHSM_CONFIG           ?= configs/softhsm2.conf
 
-ANSIBLE_USER       ?= ansible
+WEB_PUBLIC_HTML          ?= public_html
+WEB_PACKAGE              ?= $(PACKAGE)-web
+WEB_SRC                  ?= ../$(WEB_PACKAGE)
 
-LUKS_KEYFILE       ?= luks.key
-LUKS_SIZE          ?= 5G
-LUKS_TYPE          ?= luks2
+SWAGGER_HOST             ?= $(DOMAIN)
 
-SOFTHSM_DIR        ?= /usr/local/bin
-SOFTHSM_LIB        ?= /usr/local/lib/softhsm/libsofthsm2.so
-SOFTHSM_TOKEN_DIR  ?= /var/lib/softhsm/tokens
-SOFTHSM_CONFIG     ?= configs/softhsm2.conf
+DOCKER_HOME              ?= build/docker
+DOCKER_ISO_BUILDER       ?= trusted-platform-iso-builder
+DOCKER_ISO_TAG           ?= latest
 
-WEB_PUBLIC_HTML    ?= public_html
-WEB_SRC            ?= ../go-trusted-platform-web
+ISO_NAME                 ?= trusted-platform.iso
+
+PACKER_HOME              ?= build/packer
+PACKER_FILE              ?= $(PACKER_HOME)/rpi/raspios-bookworm-arm64.json
+PACKER_BUILDER_RASPIOS64 ?= raspios-bookworm-arm64
+PACKER_BUILDER_UBUNTU64  ?= ubuntu-20.04.01-arm64
+PACKER_BUILDER           ?= $(PACKER_BUILDER_RASPIOS64)
+
+ANSIBLE_HOME             ?= build/ansible
+ANSIBLE_ROLES 		     ?= $(ANSIBLE_HOME)/roles/$(APP)
+ANSIBLE_FILES            ?= $(ANSIBLE_CROPDROID)/files
+
+RPI_IMAGE_NAME		     ?= $(APPNAME)-$(APP_VERSION)-$(ENV)
+RPI_IMAGE_FILENAME       ?= $(RPI_IMAGE_NAME).img
+RPI_IMAGE_ARTIFACT       ?= $(PACKER_HOME)/$(RPI_IMAGE_FILENAME)
+RPI_SDCARD               ?= /dev/sda
+RPI_HOST                 ?= rpi
+
+VM_DISK_SIZE_MB          ?= 2000
+
+UID                      := $(shell id -u)
+GID                      := $(shell id -g)
 
 
-.PHONY: deps build build-debug build-static build-debug-static clean test initlog \
-	swagger verifier attestor proto
+.PHONY: env run deps swagger swagger-ui build build-debug build-static build-debug-static \
+		build-x86 build-x86-debug build-x86-static build-x86-debug-static build-arm \
+		build-arm-static build-arm-debug build-arm-debug-static build-arm64 build-arm64-static \
+		build-arm64-debug build-arm64-debug-static build-dev build-public-html firefox firefox-debug \
+		firefox-bin config clear-auth clean test test-cli test-tpm-cli test-ca-cli test-platform-cli \
+		test-ca test-tpm test-crypto test-store test-store-pkcs11 test-store-tpm2 test-store-datastore \
+		test-webservice test-webservice-jwt install uninstall luks-create luks-mount luks-umount \
+		ansible-install ansible-setup rpi-sync rpi-sync-ansible rpi-qemu docker-load-builder \
+		docker-run docker-run-builder-with-usb docker-run-yubico-piv-tool packer packer-builder-arm \
+		iso
 
-default: proto build
+
+default: build
+
 
 env:
 	@echo "ORG: \t\t\t$(ORG)"
@@ -112,38 +134,48 @@ env:
 	@echo "GIT_BRANCH: \t\t$(GIT_BRANCH)"
 	@echo "BUILD_DATE: \t\t$(BUILD_DATE)"
 	@echo "VERSION_FILE: \t\t$(VERSION_FILE)"
-	@echo "ATTESTATION_DIR: \t$(ATTESTATION_DIR)"
-	@echo "ATTESTOR_DIR: \t\t$(ATTESTOR_DIR)"
-	@echo "VERIFIER_DIR: \t\t$(VERIFIER_DIR)"
 	@echo "PLATFORM_DIR: \t\t$(PLATFORM_DIR)"
 	@echo "CONFIG_DIR: \t\t$(CONFIG_DIR)"
 	@echo "LOG_DIR: \t\t$(LOG_DIR)"
 	@echo "CA_DIR: \t\t$(CA_DIR)"
-	@echo "VERIFIER_CONF: \t\t$(VERIFIER_CONF)"
-	@echo "VERIFIER_CA: \t\t$(VERIFIER_CA)"
-	@echo "ATTESTOR_CONF: \t\t$(ATTESTOR_CONF)"
-	@echo "ATTESTOR_CA: \t\t$(ATTESTOR_CA)"
 	@echo "PROTO_DIR: \t\t$(PROTO_DIR)"
 	@echo "PROTOC: \t\t$(PROTOC)"
 	@echo "ROOT_CA: \t\t$(ROOT_CA)"
 	@echo "INTERMEDIATE_CA: \t$(INTERMEDIATE_CA)"
 	@echo "DOMAIN: \t\t$(DOMAIN)"
-	@echo "VERIFIER_HOSTNAME: \t$(VERIFIER_HOSTNAME)"
-	@echo "ATTESTOR_HOSTNAME: \t$(ATTESTOR_HOSTNAME)"
 	@echo "CONFIG_YAML: \t\t$(CONFIG_YAML)"
 	@echo "WEB_PUBLIC_HTML: \t\t$(WEB_PUBLIC_HTML)"
 
 
-deps:
-	go install -v golang.org/x/tools/gopls@latest
-	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.28
-	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.2
+run:
+	cp $(EXAMPLE_DIR)/config.yaml config.yaml
+	./$(APPBIN) webservice \
+		--debug \
+		--init \
+		--platform-dir trusted-data \
+		--config-dir trusted-data/etc \
+		--log-dir trusted-data/log \
+		--ca-dir trusted-data/ca \
+		--raw-so-pin 123456 \
+		--raw-pin 123456
+
+
+ensure-root:
+	@if [ "$$(id -u)" -ne 0 ]; then \
+		echo "Root required, starting sudo session..."; \
+		exec sudo $(MAKE) $(MAKECMDGOALS); \
+	fi
+
+
+deps: ensure-root
 	go install github.com/swaggo/swag/cmd/swag@latest
+	apt-get -y update
+	apt-get install -y libssl-dev softhsm2 libsofthsm2
 
 
 swagger:
 	~/go/bin/swag init \
-		--dir pkg/webservice,pkg/webservice/v1/router,pkg/webservice/v1/response,pkg/app,pkg/config,pkg/crypto/argon2 \
+		--dir pkg/webservice,pkg/webservice/v1/jwt,pkg/webservice/v1/router,pkg/webservice/v1/response,pkg/acme/server/handlers,pkg/store/datastore/entities,pkg/acme,pkg/app,pkg/config,pkg/crypto/argon2 \
 		--generalInfo webserver_v1.go \
 		--parseDependency \
 		--parseInternal \
@@ -160,37 +192,37 @@ swagger-ui:
 # x86_64
 build:
 	cd pkg; \
-	$(GOBIN)/go build -o ../$(APPBIN) -ldflags="-w -s ${LDFLAGS}"
+	CGO_ENABLED=1 $(GOBIN)/go build -o ../$(APPBIN) -ldflags="-w -s ${LDFLAGS}"
 
 build-debug:
 	cd pkg; \
-	$(GOBIN)/go build -gcflags='all=-N -l' -o ../$(APPBIN) -gcflags='all=-N -l' -ldflags="-w -s ${LDFLAGS}"
+	CGO_ENABLED=1 $(GOBIN)/go build -gcflags='all=-N -l' -o ../$(APPBIN) -gcflags='all=-N -l' -ldflags="-w -s ${LDFLAGS}"
 
 build-static:
 	cd pkg; \
-	$(GOBIN)/go build -o ../$(APPBIN) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
+	CGO_ENABLED=1 $(GOBIN)/go build -o ../$(APPBIN) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
 
 build-debug-static:
 	cd pkg; \
-	$(GOBIN)/go build -o ../$(APPBIN) -gcflags='all=-N -l' --ldflags '-extldflags -static -v ${LDFLAGS}'
+	CGO_ENABLED=1 $(GOBIN)/go build -o ../$(APPBIN) -gcflags='all=-N -l' --ldflags '-extldflags -static -v ${LDFLAGS}'
 
 
 # x86
 build-x86:
 	cd pkg; \
-	GOARCH=386 $(GOBIN)/go build -o ../$(APPBIN) -ldflags="-w -s ${LDFLAGS}"
+	CGO_ENABLED=1 GOARCH=386 $(GOBIN)/go build -o ../$(APPBIN) -ldflags="-w -s ${LDFLAGS}"
 
 build-x86-debug:
 	cd pkg; \
-	GOARCH=386 $(GOBIN)/go build -gcflags='all=-N -l' -o ../$(APPBIN) -gcflags='all=-N -l' -ldflags="-w -s ${LDFLAGS}"
+	GCGO_ENABLED=1 OARCH=386 $(GOBIN)/go build -gcflags='all=-N -l' -o ../$(APPBIN) -gcflags='all=-N -l' -ldflags="-w -s ${LDFLAGS}"
 
 build-x86-static:
 	cd pkg; \
-	GOARCH=386 $(GOBIN)/go build -o ../$(APPBIN) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
+	CGO_ENABLED=1 GOARCH=386 $(GOBIN)/go build -o ../$(APPBIN) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
 
 build-x86-debug-static:
 	cd pkg; \
-	GOARCH=386 $(GOBIN)/go build -o ../$(APPBIN) -gcflags='all=-N -l' --ldflags '-extldflags -static -v ${LDFLAGS}'
+	CGO_ENABLED=1 GOARCH=386 $(GOBIN)/go build -o ../$(APPBIN) -gcflags='all=-N -l' --ldflags '-extldflags -static -v ${LDFLAGS}'
 
 
 # ARM 32-bit
@@ -247,6 +279,36 @@ build-dev: clean build-debug
 	cp -R $(WEB_PUBLIC_HTML) pkg/
 
 
+
+# Build the public_html directory
+build-public-html:
+	# Start with a clean directory
+	rm -rf $(WEB_PUBLIC_HTML)/ pkg/$(WEB_PUBLIC_HTML)/
+	mkdir -p $(WEB_PUBLIC_HTML)/ pkg/$(WEB_PUBLIC_HTML)/
+	
+	# Build the swagger / OpenAPI docs 
+	make swagger
+	make swagger-ui
+	
+	# Configure SwaggerInfo
+	sed -i '/var SwaggerInfo = &swag.Spec{/,/}}/c\var SwaggerInfo = \&swag.Spec{\n\tVersion:          "$(APP_VERSION)",\n\tHost:             "$(SWAGGER_HOST)",\n\tBasePath:         "/api/v1",\n\tSchemes:          []string{},\n\tTitle:            "Trusted Platform",\n\tDescription:      "The Trusted Platform RESTful Web Services API",\n\tInfoInstanceName: "swagger",\n\tSwaggerTemplate:  docTemplate,\n\tLeftDelim:        "{{",\n\tRightDelim:       "}}",' $(WEB_PUBLIC_HTML)/swagger/docs.go
+
+	# Configure the web server annotations
+	sed -i 's|@version .*|@version $(APP_VERSION)|g' pkg/webservice/webserver_v1.go
+	sed -i 's|@host .*|@host $(SWAGGER_HOST)|g' pkg/webservice/webserver_v1.go
+
+	# Copy into the pkg directory for debugging
+	-cp -R $(WEB_PUBLIC_HTML)/swagger pkg/$(WEB_PUBLIC_HTML)/	
+
+	# Build the go-trusted-platform-web project
+	cd $(WEB_SRC) && \
+		yarn build && \
+		cp -R out/* ../$(PACKAGE)/$(WEB_PUBLIC_HTML)/
+
+	# Copy into the pkg directory for debugging
+	cp -R $(WEB_SRC)/out/* ../$(PACKAGE)/pkg/$(WEB_PUBLIC_HTML)/
+
+
 firefox:
 	sudo mkdir -p /etc/firefox/policies/ /etc/firefox/certificates
 	sudo cp configs/firefox/policies.json /etc/firefox/policies/policies.json
@@ -285,7 +347,10 @@ clean:
 		$(APPBIN) \
 		/usr/local/bin/$(APPBIN) \
 		$(PLATFORM_DIR) \
-		$(ATTESTATION_DIR) \
+		examples/tss/attestor/$(PLATFORM_DIR) \
+		examples/tss/verifier/$(PLATFORM_DIR) \
+		examples/client/$(PLATFORM_DIR) \
+		examples/server/$(PLATFORM_DIR) \
 		pkg/$(PLATFORM_DIR) \
 		pkg/config.yaml \
 		pkg/$(WEB_PUBLIC_HTML) \
@@ -388,117 +453,9 @@ test-webservice-jwt:
 		go test -v -run ^TestSigningMethodES$ && \
 		go test -v -run ^TestSigningMethodES_Ed25519$
 
-proto:
-	cd pkg/$(ATTESTATION_DIR) && $(PROTOC) \
-		--go_out=. \
-		--go_opt=paths=source_relative \
-    	--go-grpc_out=. \
-		--go-grpc_opt=paths=source_relative \
-		$(PROTO_DIR)/attestation.proto
 
 install: luks-create ansible-install ansible-setup
 uninstall: uninstall-ansible
-
-
-# Verifier
-verifier-init:
-	mkdir -p $(VERIFIER_DIR)/$(CONFIG_DIR)
-	cp configs/platform/$(ATTESTATION_CONFIG) $(VERIFIER_CONF)
-	sed -i 's/$(DOMAIN)/$(VERIFIER_DOMAIN)/' $(VERIFIER_CONF)
-	sed -i 's|trusted-data/etc/softhsm.conf|$(shell pwd)/$(VERIFIER_DIR)/$(CONFIG_DIR)/softhsm.conf|' $(VERIFIER_CONF)
-	sed -i 's/- __VERIFIER_CA__/-  $(VERIFIER_HOSTNAME).$(VERIFIER_DOMAIN)/' $(VERIFIER_CONF)
-	cp configs/softhsm.conf $(VERIFIER_DIR)/$(CONFIG_DIR)
-	sed -i 's|trusted-data/softhsm2|$(shell pwd)/$(VERIFIER_DIR)/$(PLATFORM_DIR)|' $(VERIFIER_DIR)/$(CONFIG_DIR)/softhsm.conf
-
-verifier-no-clean: build verifier-init
-	cd $(VERIFIER_DIR) && \
-		../../$(APPBIN) verifier \
-			--debug \
-			--config-dir $(CONFIG_DIR) \
-			--platform-dir $(PLATFORM_DIR) \
-			--log-dir $(LOG_DIR)
-
-verifier: verifier-clean verifier-init build
-	cd $(VERIFIER_DIR) && \
-		../../$(APPBIN) verifier \
-			--debug \
-			--init \
-			--config-dir $(CONFIG_DIR) \
-			--platform-dir $(PLATFORM_DIR) \
-			--log-dir $(LOG_DIR) \
-			--ca-dir $(PLATFORM_DIR)/ca \
-			--attestor $(ATTESTOR_HOSTNAME).$(ATTESTOR_DOMAIN) \
-			--raw-so-pin 123456 \
-            --raw-pin 123456
-
-verifier-clean: 
-	rm -rf \
-		$(VERIFIER_DIR)/$(PLATFORM_DIR) \
-		pkg/$(PLATFORM_DIR)
-
-verifier-cert-chain:
-	openssl verify \
-		-CAfile $(VERIFIER_CA)/$(ROOT_CA).$(DOMAIN)/$(ROOT_CA).$(DOMAIN).crt \
-		-untrusted $(VERIFIER_CA)/$(INTERMEDIATE_CA).$(DOMAIN)/$(INTERMEDIATE_CA).$(DOMAIN).crt \
-		$(VERIFIER_CA)/$(INTERMEDIATE_CA).$(DOMAIN)/issued/$(VERIFIER_HOSTNAME).$(DOMAIN)/$(VERIFIER_HOSTNAME).$(DOMAIN).crt
-
-
-# Attestor
-attestor-init:
-	mkdir -p $(ATTESTOR_DIR)/$(CONFIG_DIR)
-	cp configs/platform/$(ATTESTATION_CONFIG) $(ATTESTOR_CONF)
-	sed -i 's/$(DOMAIN)/$(ATTESTOR_DOMAIN)/' $(ATTESTOR_CONF)
-	sed -i 's|trusted-data/etc/softhsm.conf|$(shell pwd)/$(ATTESTOR_DIR)/$(CONFIG_DIR)/softhsm.conf|' $(ATTESTOR_CONF)
-	sed -i 's/- __VERIFIER_CA__/- $(ROOT_CA).$(VERIFIER_DOMAIN)/' $(ATTESTOR_CONF)
-	cp configs/softhsm.conf $(ATTESTOR_DIR)/$(CONFIG_DIR)
-	sed -i 's|trusted-data/softhsm2|$(shell pwd)/$(ATTESTOR_DIR)/$(PLATFORM_DIR)|' $(ATTESTOR_DIR)/$(CONFIG_DIR)/softhsm.conf
-
-
-attestor-clean: 
-	rm -rf \
-		$(ATTESTOR_DIR)/$(PLATFORM_DIR) \
-		pkg/$(PLATFORM_DIR)
-
-attestor-no-clean: build attestor-init
-	cd $(ATTESTOR_DIR) && \
-		../../$(APPBIN) attestor \
-			--debug \
-			--config-dir $(CONFIG_DIR) \
-			--platform-dir $(PLATFORM_DIR) \
-			--log-dir $(PLATFORM_DIR)/$(LOG_DIR)
-
-attestor: attestor-clean attestor-init build
-	cd $(ATTESTOR_DIR) && \
-		../../$(APPBIN) attestor \
-			--debug \
-			--init \
-			--config-dir $(CONFIG_DIR) \
-			--platform-dir $(PLATFORM_DIR) \
-			--log-dir $(LOG_DIR) \
-			--ca-dir $(PLATFORM_DIR)/ca \
-			--raw-so-pin 123456 \
-            --raw-pin 123456
-
-attestor-verify-cert-chain:
-	openssl verify \
-		-CAfile $(ATTESTOR_CA)/$(ROOT_CA).$(ATTESTOR_DOMAIN)/x509/$(ROOT_CA).$(ATTESTOR_DOMAIN).tpm2.rsa.cer \
-		-untrusted $(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(ATTESTOR_DOMAIN)/x509/$(INTERMEDIATE_CA).$(ATTESTOR_DOMAIN).tpm2.rsa.cer \
-		$(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(ATTESTOR_DOMAIN)/x509/$(ATTESTOR_HOSTNAME).$(ATTESTOR_DOMAIN).tpm2.rsa.cer
-
-attestor-verify-tpm-certs:
-	openssl pkeyutl -verify \
-		-in $(ATTESTOR_DIR)/$(PLATFORM_DIR)/ca/$(INTERMEDIATE_CA).$(DOMAIN)/blobs/tpm/$(ATTESTOR_HOSTNAME).$(DOMAIN)/$(INTERMEDIATE_CA).$(DOMAIN)/attestation-key.cer.digest \
-		-sigfile $(ATTESTOR_DIR)/$(PLATFORM_DIR)/ca/$(INTERMEDIATE_CA).$(DOMAIN)/blobs/tpm/$(ATTESTOR_HOSTNAME).$(DOMAIN)/$(INTERMEDIATE_CA).$(DOMAIN)/attestation-key.cer.sig \
-		-inkey $(ATTESTOR_DIR)/$(PLATFORM_DIR)/ca/$(INTERMEDIATE_CA).$(DOMAIN)/$(INTERMEDIATE_CA).$(DOMAIN).key
-
-attestor-verify-tls:
-	cd $(ATTESTATION_DIR) && \
-	openssl s_client \
-		-connect localhost:8082 \
-		-showcerts \
-		-servername localhost \
-		-CAfile $(ATTESTOR_CA)/$(INTERMEDIATE_CA).$(DOMAIN)/$(INTERMEDIATE_CA).$(DOMAIN).bundle.crt \
-		| openssl x509 -noout -text
 
 
 # Web Services
@@ -506,12 +463,11 @@ webservice: build-debug config
 	cd pkg && ../$(APPBIN) webservice --init
 
 webservice-verify-tls:
-	cd $(ATTESTATION_DIR) && \
 	openssl s_client \
 		-connect localhost:8443 \
 		-showcerts \
 		-servername localhost \
-		-CAfile pkg/$(PLATFORM_DIR)/ca/$(INTERMEDIATE_CA).$(DOMAIN)/x509/$(ROOT_CA).$(DOMAIN).pkcs8.rsa.crt \
+		-CAfile pkg/$(PLATFORM_DIR)/ca/$(INTERMEDIATE_CA).$(DOMAIN)/x509/$(ROOT_CA).$(DOMAIN).pkcs8.rsa.pem \
 		| openssl x509 -noout -text
 
 
@@ -550,10 +506,8 @@ softhsm-init:
 
 # Ansible
 ansible-install:
-	$(PYTHONBIN) -m venv python-venv
-	cd python-venv && \
-		./bin/python3 -m pip install --upgrade pip && \
-		./bin/python3 -m pip install cryptography==3.0
+	sudo apt-get install python3 pipx docker.io ansible-core
+	pipx install ansible ansible-builder
 
 ansible-setup:
 	cd python-venv && \
@@ -570,11 +524,10 @@ ansible-setup:
 	    -e platform_build_dir=$(PLATFORM_DIR)/build \
 		--ask-become-pass
 
+
 # Raspbery PI
 rpi-sync:
-	rsync -av --progress \
-		../$(PACKAGE) $(RPI_HOST): \
-		--exclude ../$(PACKAGE)/.git/
+	rsync -av --progress ../$(PACKAGE) $(RPI_HOST): --exclude ./.git/
 
 rpi-sync-ansible:
 	rsync -av --progress \
@@ -587,13 +540,6 @@ rpi-qemu:
 		-m 1024 \
 		-kernel vmlinux \
 		-initrd initramfs
-
-
-webapp-build:
-	cd webapp && \
-		yarn build && \
-		cp -R ../$(WEB_SRC)/out/* ../$(WEB_PUBLIC_HTML)/ && \
-		cp -R ../$(WEB_SRC)/out/* ../pkg/$(WEB_PUBLIC_HTML)/
 
 
 # Docker
@@ -617,7 +563,7 @@ docker-run-builder-with-usb:
 		bash
 		# /usr/local/bin/yubico-piv-tool -astatus
 
-docker-run-builder2:
+docker-run-yubico-piv-tool:
 	docker run -ti --rm \
 		-v /dev/bus/usb:/dev/bus/usb \
 		-v /sys/bus/usb/:/sys/bus/usb/ \
@@ -628,3 +574,59 @@ docker-run-builder2:
 		--privileged \
 		$(APPNAME)-builder \
 		/usr/local/bin/yubico-piv-tool -astatus
+
+
+# Packer
+packer:
+	PACKER_FILE=$(PACKER_BUILDER).json \
+	$(MAKE) packer-build
+
+packer-builder-arm:
+	docker run \
+		--rm \
+		--privileged \
+		-v /dev:/dev \
+		-v ${HOME}:${HOME} \
+		-v ${PWD}:/build:ro \
+		-v ${PWD}/build/packer/packer_cache:/build/packer_cache \
+		-v ${PWD}/build/packer/output-arm-image:/build/output-arm-image \
+		ghcr.io/solo-io/packer-plugin-arm-image build \
+			-var ssh_key_src="$(HOME)/.ssh/id_rsa.pub" \
+			-var "aws_access_key_id=$(AWS_ACCESS_KEY_ID)" \
+			-var "aws_secret_access_key=$(AWS_SECRET_ACCESS_KEY)" \
+			-var "aws_region=${AWS_REGION}" \
+			-var "aws_profile=${AWS_PROFILE}" \
+			-var "local_user=$(USER)" \
+			-var "appname=$(APP)" \
+			-var "apptype=$(APPTYPE)" \
+			-var "appenv=$(ENV)" \
+			-var "timezone=$(TIMEZONE)" \
+			-var "hostname=$(HOSTNAME)" \
+			-var "platform_home=$(DEPLOY_HOME)" \
+			-var "eth0_cidr=$(ETH0_CIDR)" \
+			-var "eth0_routers=$(ETH0_ROUTERS)" \
+			-var "eth0_dns=$(ETH0_DNS)" \
+			-var "wlan_cidr=$(WLAN_CIDR)" \
+			-var "wlan_routers=$(WLAN_ROUTERS)" \
+			-var "wlan_dns=$(WLAN_DNS)" \
+			-var "wlan_ssid=$(WLAN_SSID)" \
+			-var "wlan_psk=$(WLAN_PSK)" \
+			-var "wlan_key_mgmt=$(WLAN_KEY_MGMT)" \
+			-var "wlan_country=$(WLAN_COUNTRY)" \
+			-var "datastore=$(CROPDROID_DATASTORE)" \
+			$(PACKER_FILE)
+	sudo -E cp ${PWD}/build/packer/output-arm-image/image $(RPI_IMAGE_ARTIFACT)
+	sudo chown $(USER) $(RPI_IMAGE_ARTIFACT) ${PWD}/build/packer/output-arm-image/image
+
+
+# ISO
+iso:
+	docker build \
+		--memory 32g \
+		--build-arg CONFIG_DIR=$(DOCKER_HOME)/$(DOCKER_ISO_BUILDER)/ \
+		--load \
+		-t $(DOCKER_ISO_BUILDER) \
+		-f build/docker/$(DOCKER_ISO_BUILDER)/Dockerfile .
+	docker create --name $(DOCKER_ISO_BUILDER)-container $(DOCKER_ISO_BUILDER):$(DOCKER_ISO_TAG)
+	docker cp $(DOCKER_ISO_BUILDER)-container:/root/LIVE_BOOT_TRUSTED_PLATFORM/TrustedPlatformOS-1.0.iso ./$(ISO_NAME)
+	docker rm $(DOCKER_ISO_BUILDER)-container

@@ -7,24 +7,39 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 )
 
+var (
+	DefaultConfig = Config{
+		ConsistencyLevel: "local",
+		Backend:          "fs",
+		Serializer:       "json",
+		ReadBufferSize:   50,
+		RootDir:          "datastore",
+	}
+
+	ErrRecordNotFound     = errors.New("datastore: record not found")
+	ErrInvalidIndexEntity = errors.New("datastore: invalid index entity")
+	ErrInvalidStoreType   = errors.New("datastore: invalid store type")
+)
+
+type StoreType string
+
+func (s StoreType) String() string {
+	return string(s)
+}
+
 type ConsistencyLevel int
 
 const (
-	CONSISTENCY_LOCAL ConsistencyLevel = iota
-	CONSISTENCY_QUORUM
+	ConsistencyLevelLocal ConsistencyLevel = iota
+	ConsistencyLevelQuorum
 )
 
 func (c ConsistencyLevel) String() string {
-	if c == CONSISTENCY_QUORUM {
+	if c == ConsistencyLevelQuorum {
 		return "quorum"
 	}
 	return "local"
 }
-
-var (
-	ErrRecordNotFound     = errors.New("datastore: record not found")
-	ErrInvalidIndexEntity = errors.New("datastore: invalid index entity")
-)
 
 type PagerProcFunc[E any] func(entities []E) error
 
@@ -75,6 +90,7 @@ type Pager[E any] interface {
 	Page(pageQuery PageQuery, CONSISTENCY_LEVEL ConsistencyLevel) (PageResult[E], error)
 	ForEachPage(pageQuery PageQuery, pagerProcFunc PagerProcFunc[E], CONSISTENCY_LEVEL ConsistencyLevel) error
 }
+
 type GenericDAO[E any] interface {
 	Save(entity E) error
 	Get(id uint64, CONSISTENCY_LEVEL ConsistencyLevel) (E, error)
@@ -105,45 +121,8 @@ type WebAuthnDAO interface {
 	GenericDAO[*entities.Blob]
 }
 
-// ACME DAOs
-type ACMEAccountDAO interface {
-	GenericDAO[*entities.ACMEAccount]
-}
-
-type ACMEAuthorizationDAO interface {
-	// GetAuthorizationByURL(url string, CONSISTENCY_LEVEL int) (*entities.ACMEAuthorization, error)
-	GenericDAO[*entities.ACMEAuthorization]
-}
-
-type ACMECertificateDAO interface {
-	GenericDAO[*entities.ACMECertificate]
-}
-
-type ACMEChallengeDAO interface {
-	GenericDAO[*entities.ACMEChallenge]
-}
-
-type ACMEOrderDAO interface {
-	GetByAccountID(accountID uint64, CONSISTENCY_LEVEL ConsistencyLevel) (PageResult[*entities.ACMEOrder], error)
-	GenericDAO[*entities.ACMEOrder]
-}
-
-type ACMEIdentifierDAO interface {
-	GenericDAO[*entities.ACMEIdentifier]
-}
-
-type ACMENonceDAO interface {
-	GenericDAO[*entities.ACMENonce]
-}
-
 // DAO Factory interface
 type Factory interface {
-	ACMEAccountDAO() (ACMEAccountDAO, error)
-	ACMEAuthorizationDAO(accountID uint64) (ACMEAuthorizationDAO, error)
-	ACMECertificateDAO() (ACMECertificateDAO, error)
-	ACMEChallengeDAO(accountID uint64) (ACMEChallengeDAO, error)
-	ACMEOrderDAO(accountID uint64) (ACMEOrderDAO, error)
-	ACMENonceDAO() (ACMENonceDAO, error)
 	OrganizationDAO() (OrganizationDAO, error)
 	UserDAO() (UserDAO, error)
 	RegistrationDAO() (RegistrationDAO, error)

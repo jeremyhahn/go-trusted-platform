@@ -36,7 +36,7 @@ var PasswordCmd = &cobra.Command{
 			return
 		}
 
-		if err := App.OpenTPM(); err != nil {
+		if err := App.OpenTPM(InitParams.Initialize); err != nil {
 			App.Logger.FatalError(err)
 		}
 

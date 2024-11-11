@@ -13,7 +13,7 @@ type UserDAO struct {
 	*AferoDAO[*entities.User]
 }
 
-func NewUserDAO(params *Params[*entities.User]) (datastore.UserDAO, error) {
+func NewUserDAO(params *datastore.Params[*entities.User]) (datastore.UserDAO, error) {
 	if params.Partition == "" {
 		params.Partition = user_partition
 	}
