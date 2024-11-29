@@ -142,6 +142,15 @@ func NewKeyring(
 			}
 		}
 		storeMap[keystore.STORE_PKCS8] = pkcs8Store
+
+		// TODO: this needs to at least be configurable if not
+		// revisted entirely. The unknown store type is used
+		// when working with x509 certificates that didn't
+		// originate from this platform software / CA and
+		// therefore don't have the Trusted Platform OIDs for
+		// the key store type. Setting the unknown key store
+		// to PKCS #8 is a temporary solution for now.
+		storeMap[keystore.STORE_UNKNOWN] = pkcs8Store
 	}
 
 	// Generate PKCS #11 key store
@@ -179,6 +188,12 @@ func NewKeyring(
 		platformKS: platformKS,
 		storeMap:   storeMap,
 		tpm:        tpm}, nil
+}
+
+// Returns the backend used by the key store modules in
+// the keyring.
+func (keyring *Keyring) Backend() keystore.KeyBackend {
+	return keyring.backend
 }
 
 // Returns a sealed key password from the TPM using the platform
@@ -327,6 +342,18 @@ func (keyring *Keyring) Key(
 		return nil, keystore.ErrInvalidKeyStore
 	}
 	return s.Key(attrs)
+}
+
+// Rotates a key by overwriting the existing key with a newly
+// generated key.
+func (keyring *Keyring) RotateKey(
+	attrs *keystore.KeyAttributes) (crypto.Signer, error) {
+
+	s, ok := keyring.storeMap[attrs.StoreType]
+	if !ok {
+		return nil, keystore.ErrInvalidKeyStore
+	}
+	return s.RotateKey(attrs)
 }
 
 // Returns a crypto.Signer for the provided key attributes

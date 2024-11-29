@@ -55,7 +55,8 @@ func (tpm *TPM2) CreateSecretKey(
 		keyAttrs,
 		response.OutPrivate,
 		response.OutPublic,
-		backend); err != nil {
+		backend,
+		false); err != nil {
 
 		return err
 	}

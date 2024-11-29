@@ -53,7 +53,7 @@ func (service *User) Delete(session Session, userID uint64) error {
 
 // Retrieves a user with the given id or ErrRecordNotFound
 func (service *User) Get(userID uint64) (*entities.User, error) {
-	userEntity, err := service.userDAO.Get(userID, datastore.CONSISTENCY_LOCAL)
+	userEntity, err := service.userDAO.Get(userID, datastore.ConsistencyLevelLocal)
 	if err != nil {
 		return nil, err
 	}

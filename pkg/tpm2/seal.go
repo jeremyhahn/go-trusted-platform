@@ -15,7 +15,8 @@ import (
 // done.
 func (tpm *TPM2) Seal(
 	keyAttrs *keystore.KeyAttributes,
-	backend keystore.KeyBackend) (*tpm2.CreateResponse, error) {
+	backend keystore.KeyBackend,
+	overwrite bool) (*tpm2.CreateResponse, error) {
 
 	if keyAttrs.Parent == nil {
 		return nil, keystore.ErrInvalidParentAttributes
@@ -159,7 +160,8 @@ func (tpm *TPM2) Seal(
 		keyAttrs,
 		sealKeyResponse.OutPrivate,
 		sealKeyResponse.OutPublic,
-		backend); err != nil {
+		backend,
+		overwrite); err != nil {
 
 		return nil, err
 	}
@@ -183,17 +185,28 @@ func (tpm *TPM2) Unseal(
 
 	// Create session from parent key attributes
 	session, closer, err = tpm.CreateSession(keyAttrs)
-	defer closer()
 	if err != nil {
+		if closer != nil {
+			closer()
+		}
+		tpm.logger.Error(err)
 		return nil, err
 	}
+
+	// Not using defer closer() here because the session needs
+	// to be flushed as soon as possible to prevent too many
+	// sessions open at one time causing TPM_RC_SESSION_MEMORY
 
 	// Load the key pair from disk using the parent session
 	sealKey, err := tpm.LoadKeyPair(keyAttrs, &session, backend)
 	if err != nil {
+		if closer != nil {
+			closer()
+		}
 		tpm.logger.Error(err)
 		return nil, err
 	}
+	closer()
 	defer tpm.Flush(sealKey.ObjectHandle)
 
 	// Create key session

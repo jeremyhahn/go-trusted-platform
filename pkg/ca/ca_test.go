@@ -463,33 +463,40 @@ func TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 		},
 	}
 
-	// openssl req -in testme.example.com.csr -noout -text
-	csrBytes, err := intermediateCA.CreateCSR(certReq)
+	// Generate the key
+	key, err := intermediateCA.Keyring().GenerateKey(attrs)
 	assert.Nil(t, err)
-	assert.NotNil(t, csrBytes)
+	assert.NotNil(t, key)
 
-	// openssl x509 -in testme.example.com.crt -text -noout
-	derBytes, err := intermediateCA.SignCSR(csrBytes, certReq)
+	// openssl req -in testme.example.com.csr -noout -text
+	csrDER, err := intermediateCA.CreateCSR(certReq)
 	assert.Nil(t, err)
-	assert.NotNil(t, derBytes)
+	assert.NotNil(t, csrDER)
 
 	// Encode from ASN.1 DER to PEM
-	pem, err := EncodePEM(derBytes)
+	csrPEM, err := certstore.EncodePEM(csrDER)
+	assert.Nil(t, err)
+	assert.NotNil(t, csrPEM)
+
+	// openssl x509 -in testme.example.com.crt -text -noout
+	cert, err := intermediateCA.SignCSR(csrPEM, &certReq)
+	assert.Nil(t, err)
+	assert.NotNil(t, cert)
+
+	// Encode from ASN.1 DER to PEM
+	pem, err := EncodePEM(cert.Raw)
 	assert.Nil(t, err)
 	assert.NotNil(t, pem)
-
-	cert, err := x509.ParseCertificate(derBytes)
-	assert.Nil(t, err)
 
 	// Make sure the cert is valid
 	err = intermediateCA.Verify(cert)
 	assert.Nil(t, err)
 
-	err = intermediateCA.Revoke(cert)
+	err = intermediateCA.Revoke(cert, true)
 	assert.Nil(t, err)
 
 	// Revoke the certificate again to ensure it errors
-	err = intermediateCA.Revoke(cert)
+	err = intermediateCA.Revoke(cert, true)
 	assert.Equal(t, certstore.ErrCertRevoked, err)
 
 	// Make sure the cert is no longer valid

@@ -9,6 +9,8 @@ import (
 	"github.com/google/go-tpm/tpm2"
 )
 
+type EnrollmentStrategy string
+
 // https://trustedcomputinggroup.org/wp-content/uploads/TCG-TPM-v2.0-Provisioning-Guidance-Published-v1r1.pdf
 const (
 	tpmPtManufacturer = 0x00000100 + 5  // PT_FIXED + offset of 5
@@ -58,15 +60,13 @@ const (
 	infoOpeningDevice     = "tpm: opening TPM 2.0 device"
 	infoClosingConnection = "tpm: closing TPM 2.0"
 
-	blobStoreRoot = "tpm"
-	// platformKeyName = "platform"
-	// ownerKeyName    = "owner"
+	EnrollmentStrategyIAK                    = EnrollmentStrategy("IAK")
+	EnrollmentStrategyIAK_IDEVID_SINGLE_PASS = EnrollmentStrategy("IAK_IDEVID_SINGLE_PASS")
+
+	binaryMeasurementsFileNameTemplate = "/sys/kernel/security/%s/binary_bios_measurements"
 )
 
 var (
-	ekCertBlobName = []byte("ek-cert")
-	akCertBlobName = []byte("ak-cert")
-
 	debugPCR = uint(16)
 
 	tpm2SupportedPCRs = []uint{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
@@ -99,7 +99,8 @@ var (
 	ErrInvalidHashFunction          = errors.New("tpm: invalid hash function")
 	ErrInvalidSessionAuthorization  = errors.New("tpm: invalid session authorization")
 	ErrMissingMeasurementLog        = errors.New("tpm: binary measurement log not found")
-	ErrRSAPSSNotSupported           = errors.New("tpm: RSA-PSS not supported by this TPM")
+	ErrRSAPSSNotSupported           = errors.New("tpm: RSA-PSS / FIPS 140-2 not supported by this TPM")
+	ErrInvalidEnrollmentStrategy    = errors.New("tpm: invalid enrollment strategy")
 
 	// TPM_RC errors
 	ErrCommandNotSupported = tpm2.TPMRC(0xb0143)
@@ -551,17 +552,6 @@ var vendors = map[TCGVendorID]string{
 func (id TCGVendorID) String() string {
 	return vendors[id]
 }
-
-// // Wrapper to hold TCG_CSR_IDEVID with packed
-// // TCG_IDEVID_CONTENT for transmission over a
-// // network.
-// type TCG_CSR_IDEVID_PACKET struct {
-// 	StructVer   [4]byte
-// 	Contents    [4]byte
-// 	SigSz       [4]byte
-// 	CsrContents []byte
-// 	Signature   []byte
-// }
 
 // TPM 2.0 Keys for Device Identity and Attestation -
 // Section 13.1 - TCG-CSR-IDEVID

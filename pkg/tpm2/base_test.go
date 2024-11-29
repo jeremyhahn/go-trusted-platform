@@ -173,6 +173,7 @@ func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule) {
 				KeySize: 2048,
 			},
 		},
+		IdentityProvisioningStrategy: string(EnrollmentStrategyIAK),
 		FileIntegrity: []string{
 			"./",
 		},

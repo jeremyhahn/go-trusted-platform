@@ -1,0 +1,787 @@
+# Trusted Platform Configuration File (dev server)
+
+# Configuration for the Trusted Platform
+# dev.trusted-platform.io environment, 
+# running the platform software as a server
+# fulfilling the role of the "Enterprise Platform"
+# with the Enterprise / Privacy CA validating and
+# issuing certificates for the devices and services
+# running on the "Enterprise Network".
+
+# With this configuration, the server performs
+# the following steps:
+
+# 1. Start-up using TPM simulator
+# 2. Provision the base platform, create local CA
+#    and platform keys. Start the local CA. Start
+#    the DNS server and listen for requests.
+# 3. Issue a self-signed EK certificate for the TPM.
+# 4. Issue self-signed IAK and IDevID certificates.
+# 5. Issue public TLS certificate for the web server
+#    from Let's Encrypt staging.
+# 6. Start the web server and listen for requests.
+
+# A public DNS server is started with a zone file
+# hosting dev.trusted-platform.io. A private DNS
+# server is hosting dev.trusted-platform.internal.
+# Both internal and public DNS servers are configured
+# to forward requests to public DNS servers. The public
+# DNS server will not resolve internal zones, and will
+# log a security event if it receives a request for an
+# internal zone.
+
+# Upon successful device enrollment via the ACME enroll-01
+# challenge, a DNS record is created if the internal DNS
+# zone for the device. It is instantly resolvable by the
+# internal DNS server. The device is issued an IAK and IDevID
+# certificate. The IDevID certificate is used to authenticate
+# to the network going forward.
+
+# The device is then issues a request for a public TLS certificate
+# for the web server using Let's Encrypt CA with an http-01 challenge.
+# This requires the web server to be publicly accessible and listening
+# on port 80 for Let's Encrypt to validate the challenge.
+
+# This configuration assumes the client and server are both running
+# on the same local host, and the server is the software receiving
+# requests on standard port 80, and therefore, the client is unable
+# to receive the cross-signing validation challenges from Let's Encrypt.
+# Therefore, this web server contains a virtual host configuration for 
+# the client that forwards the http-01 challenges matching it's HOST header
+# using the proxy config defined for the dashboard.dev.trusted-platform.io
+# virtual host.
+
+# The device is now able to authenticate to the Enterprise
+# Network, request resources, and participate in client/server
+# activities using mTLSv1.3 connections on both the internal
+# network and public internet. Trust chains can be resolved
+# for both internal and external clients. It can also be accessed
+# via the public internet via the server's reverse proxy configuration
+# and DNS is both internally and publicly resolvable.
+
+
+debug: true
+debug-secrets: true
+platform-dir: trusted-data
+config-dir: trusted-data/etc
+log-dir: trusted-data/log
+domain: dev.trusted-platform.io
+hostmaster: hostmaster@dev.trusted-platform.io
+pin-seal-policy: true
+
+
+acme:
+  server:
+    directory: https://dev.trusted-platform.io/api/v1/acme/directory
+    terms-of-service: /tos.html
+    challenges:
+      - enroll-01
+      - device-attest-01
+      - dns-01
+      - endorse-01
+      - http-01
+      # Custom http-01 challenges that listen
+      # on ports 8080 and 8081. These challenges
+      # use the custom httpx challenge which uses
+      # the port number defined in this challenge
+      # name to serve the http-01 challenge on a 
+      # custom, user-defined port. Enter any valid
+      # port number following http- to have the http-01
+      # challenge served on that port.
+      - http-8080
+      - http-8081
+      - enroll-8080
+      - enroll-8081
+  client:
+    directory: https://dev.trusted-platform.io/api/v1/acme/directory
+    account:
+      email: hostmaster@dashboard.dev.trusted-platform.io
+      key:
+        # PKCS #8 RSA w/ PSS
+        algorithm: RSA
+        cn: acme-account
+        debug: true
+        hash: SHA-256
+        password: 123456
+        platform-policy: true
+        rsa:
+          size: 2048
+        signature-algorithm: SHA256-RSAPSS
+        store: pkcs8
+      register: true
+      
+
+dns:
+  allow-registration: true
+  allow-external-registraation: true
+  allow-internal-registration: true
+  datastore:
+    backend: AFERO_FS
+    consistency-level: local
+    home: trusted-data/datastore
+    read-buffer-size: 50
+    serializer: json
+  default-ttl: 3600
+  public:
+    port: 8053
+    forwarders:
+      - 4.4.4.4
+      - 8.8.8.8
+    zone:
+      description: Public zone for dev.trusted-platform.io
+      name: dev.trusted-platform.io.
+      ttl: 3600
+      records:
+        soa:
+          name: dev.trusted-platform.io.
+          mname: ns1.dev.trusted-platform.io.
+          rname: hostmaster.dev.trusted-platform.io.
+          serial: 1
+          refresh: 86400
+          retry: 7200
+          expire: 86400
+          minimum_ttl: 3600
+          ttl: 3600
+        ns:
+          - name: dev.trusted-platform.io.
+            value: ns1.dev.trusted-platform.io.
+            ttl: 3600
+          - name: dev.trusted-platform.io.
+            value: ns2.dev.trusted-platform.io.
+            ttl: 3600
+          - name: dev.trusted-platform.io.
+            value: ns3.dev.trusted-platform.io.
+            ttl: 3600
+        a:
+          - name: "@"
+            value: ${PUBLIC_IPv4}
+            ttl: 3600
+          - name: ns1
+            value: ${PUBLIC_IPv4}
+            ttl: 3600
+          - name: ns2
+            value: ${PUBLIC_IPv4}
+            ttl: 3600
+          - name: ns3
+            value: ${PUBLIC_IPv4}
+            ttl: 3600
+          - name: www
+            value: ${PUBLIC_IPv4}
+            ttl: 3600
+        cname:
+          - name: www
+            value: dev.trusted-platform.io.
+            ttl: 3600
+        mx:
+          - name: dev.trusted-platform.io.
+            value: mail.dev.trusted-platform.io.
+            priority: 10
+            ttl: 3600
+        txt:
+          - name: dev.trusted-platform.io.
+            value: v=spf1 include:_spf.google.com ~all
+            ttl: 3600
+  internal:
+    port: 8054
+    forwarders:
+      - 192.168.1.1
+      - 192.168.2.1
+      - 192.168.3.1
+    zone:
+      description: Internal zone for dev.trusted-platform.internal
+      name: dev.trusted-platform.internal.
+      ttl: 3600
+      internal: true
+      records:
+        soa:
+          name: dev.trusted-platform.internal.
+          mname: ns1.dev.trusted-platform.internal.
+          rname: hostmaster.dev.trusted-platform.internal.
+          serial: 1
+          refresh: 86400
+          retry: 7200
+          expire: 86400
+          minimum_ttl: 3600
+          ttl: 3600
+        ns:
+          - name: dev.trusted-platform.internal.
+            value: ns1.dev.trusted-platform.internal.
+            ttl: 3600
+          - name: dev.trusted-platform.internal.
+            value: ns2.dev.trusted-platform.internal.
+            ttl: 3600
+          - name: dev.trusted-platform.internal.
+            value: ns3.dev.trusted-platform.internal.
+            ttl: 3600
+        a:
+          - name: "@"
+            value: ${PRIVATE_IPv4}
+            ttl: 3600
+          - name: ns1
+            value: ${PRIVATE_IPv4}
+            ttl: 3600
+          - name: ns2
+            value: 192.168.2.1
+            ttl: 3600
+          - name: ns3
+            value: 192.168.3.1
+            ttl: 3600
+          - name: ${HOSTNAME}
+            value: ${PRIVATE_IPv4}
+            ttl: 3600
+        cname:
+          - name: www
+            value: dev.trusted-platform.internal.
+            ttl: 3600
+
+  
+
+datastore:
+  backend: AFERO_FS
+  consistency-level: local
+  home: trusted-data/datastore
+  read-buffer-size: 50
+  serializer: json
+
+
+tpm:
+  device: /dev/tpmrm0
+  simulator: true
+  encrypt-sessions: false
+  entropy: false
+  hash: SHA-256
+  ek:
+    debug: true
+    handle: 0x81010001
+    hash: SHA-256
+    password:
+    rsa:
+      size: 2048
+  ssrk:
+    debug: true
+    handle: 0x81000001
+    hierarchy-auth: 
+    password: 
+    platform-policy: true 
+    rsa:
+      size: 2048
+  iak:
+    auth:
+    debug: true
+    hash: SHA-256
+    handle: 0x81010002
+    password: 
+    # platform-policy: true 
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSAPSS
+  idevid:
+    model: trusted-edge
+    serial: att-tp-e001
+    cert-handle: 0x01C90000
+    debug: true
+    handle: 0x81020000
+    hash: SHA-256
+    pad: true
+    password: 
+    # platform-policy: true 
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSAPSS
+  platform-pcr: 23
+  file-integrity:
+    - ./
+  keystore:
+    srk-handle: 0x81000002
+    srk-auth: 123456
+    platform-policy: true
+
+
+certificate-authority:
+  platform-ca: 1
+  auto-import-issuing-ca: true
+  system-cert-pool: false
+  default-validity: 365
+  default-idevid-cn: default-device-id
+  sans-include-localhost: true
+  require-password: true
+  quantum-safe: true
+  identity:
+    - 
+      keystores:
+        pkcs8:
+          platform-policy: true
+        pkcs11:
+          library: /usr/local/lib/softhsm/libsofthsm2.so
+          config: trusted-data/etc/softhsm.conf
+          slot: 0
+          label: SoftHSM
+          pin: 123456
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000003
+          srk-auth: 123456
+          platform-policy: true
+      keys:
+        # PKCS #8 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #11 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+            scheme: 
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #11 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 Ed25519
+        - algorithm: Ed25519
+          ecc:
+            curve: P-256
+          signature-algorithm: Ed25519
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+
+      valid: 50
+      subject:
+        cn: root-ca.dev.trusted-platform.io
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns: 
+          - root-ca.dev.trusted-platform.io
+        email:
+          - hostmaster@dev.trusted-platform.io
+
+    - # Intermediate Certificate Authority
+      keystores:
+        pkcs8:
+          platform-policy: true
+        pkcs11:
+          library: /usr/local/lib/softhsm/libsofthsm2.so
+          config: trusted-data/etc/softhsm.conf
+          slot: 0
+          label: SoftHSM
+          pin: 123456
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000004
+          srk-auth: 123456
+          platform-policy: true
+      keys:
+        - # PKCS #8 RSA w/ PSS
+          algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #11 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #11 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 Ed25519
+        - algorithm: Ed25519
+          ecc:
+            curve: P-256
+          signature-algorithm: Ed25519
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+      valid: 10
+      subject:
+        cn: ca01.dev.trusted-platform.io
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns:
+          - ca01.dev.trusted-platform.io
+          - ca.dev.trusted-platform.io
+        email:
+          - hostmaster@dev.trusted-platform.io
+
+
+webservice:
+  home: public_html
+  port: 8080
+  tls-port: 8443
+  index: index.html
+  rewrite:
+  - pattern: "^/test.html$"
+    target: /swagger/
+  jwt:
+    expiration: 525960
+    issuer: trusted-platform
+  webauthn:
+    display-name: Trusted Platform (Dev)
+    #id: dev.trusted-platform.io
+    id: localhost
+    origins:
+      - https://dev.trusted-platform.io
+      - http://dev.trusted-platform.io
+      - https://localhost
+      - http://localhost
+      - http://localhost:8080
+      - https://localhost:8443
+      - http://localhost:3000
+  cors:
+    allowed-origins:
+      - https://dev.trusted-platform.io
+      - http://dev.trusted-platform.io
+      - https://localhost
+      - http://localhost
+      - http://localhost:8080
+      - https://localhost:8443
+      - http://localhost:3000
+    allowed-methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+    allowed-headers:
+      - "*"
+    allow-credentials: true
+  key:
+    algorithm: ECDSA
+    ecc:
+      curve: P-256
+    signature-algorithm: ECDSA-SHA256
+    hash: SHA-256
+    store: pkcs8
+    password: 123456
+    platform-policy: true
+    debug: true
+  certificate:
+    acme:
+      challenge: http-01
+      renew: 15
+      cross-sign:
+        directory: https://acme-staging-v02.api.letsencrypt.org/directory
+        challenge: http-01
+    subject:
+      cn: dev.trusted-platform.io
+      organization: Automate The Things, LLC
+      country: US
+      province: Florida
+      locality: West Palm Beach
+      address: 123 Automation Street
+      postal-code: 12345
+    sans:
+      dns:
+        - dev.trusted-platform.io
+        - www.dev.trusted-platform.io
+      email:
+        - hostmaster@dev.trusted-platform.io
+  virtual-hosts:
+    # Virtual host for edge01.dev.trusted-platform.io
+    - home: edge01.dev.trusted-platform.io
+      index: index.html
+      hosts:
+        - edge01.dev.trusted-platform.io
+      cors:
+        allowed-origins:
+          - https://edge01.dev.trusted-platform.io
+          - http://edge01.dev.trusted-platform.io
+          - https://localhost
+          - http://localhost
+          - http://localhost:8081
+          - https://localhost:8443
+          - http://localhost:3000
+        allowed-methods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        allowed-headers:
+          - "*"
+        allow-credentials: true
+      # Proxy requests to the client running on the local
+      # system so public ACME cross-signing challenges are
+      # routed to the correct host.
+      proxy:
+        backends:
+          - https://localhost:8444
+      key:
+        algorithm: ECDSA
+        ecc:
+          curve: P-256
+        signature-algorithm: ECDSA-SHA256
+        hash: SHA-256
+        store: pkcs8
+        password: 123456
+        platform-policy: true
+      certificate:
+        acme:
+          challenge: http-01
+          renew: 15
+        valid: 365
+        subject:
+          cn: edge01.dev.trusted-platform.io
+          organization: Automate The Things, LLC
+          country: US
+          province: Kernel
+          locality: Hypervisor
+          address: 456 Virtual Street
+          postal-code: 67890
+        sans:
+          dns:
+            - edge01.dev.trusted-platform.io
+          email:
+            - hostmaster@dev.trusted-platform.io
+
+    # Virtual host for dashboard.dev.trusted-platform.io
+    - home: dashboard.dev.trusted-platform.io
+      index: index.html
+      hosts:
+        - dashboard.dev.trusted-platform.io
+      cors:
+        allowed-origins:
+          - https://dashboard.dev.trusted-platform.io
+          - http://dashboard.dev.trusted-platform.io
+          - https://localhost
+          - http://localhost
+          - http://localhost:8081
+          - https://localhost:8443
+          - http://localhost:3000
+        allowed-methods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        allowed-headers:
+          - "*"
+        allow-credentials: true
+      # Proxy requests to a 2nd instance of the platform software
+      # running as a client on the same local system so public ACME
+      # server http-01 challenges are routed to the correct host
+      # during testing.
+      proxy:
+        backends:
+          - http://localhost:8081
+      key:
+        algorithm: ECDSA
+        ecc:
+          curve: P-256
+        signature-algorithm: ECDSA-SHA256
+        hash: SHA-256
+        store: pkcs8
+        password: 123456
+        platform-policy: true
+      certificate:
+        acme:
+          challenge: http-01
+          renew: 15
+        valid: 365
+        subject:
+          cn: dashboard.dev.trusted-platform.io
+          organization: Automate The Things, LLC
+          country: US
+          province: Kernel
+          locality: Hypervisor
+          address: 456 Virtual Street
+          postal-code: 67890
+        sans:
+          dns:
+            - dashboard.dev.trusted-platform.io
+          email:
+            - hostmaster@dashboard.dev.trusted-platform.io
+
+    # Virtual Host for 3 node docker HA cluster
+    - home: cluster01.dev.trusted-platform.io
+      index: index.html
+      hosts:
+        - cluster01.dev.trusted-platform.io
+        - api01.dev.trusted-platform.io
+        - dashboard01.dev.trusted-platform.io
+      proxy:
+        backends:
+          - http://172.16.1.10:8080
+          - http://172.16.2.10:8080
+          - http://172.16.3.10:8080
+      cors:
+        allowed-origins:
+          - https://dev.trusted-platform.io
+          - http://dev.trusted-platform.io
+          - https://localhost
+          - http://localhost
+          - http://localhost:8080
+          - https://localhost:8443
+          - http://localhost:3000
+        allowed-methods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        allowed-headers:
+          - "*"
+        allow-credentials: true
+      key:
+        algorithm: ECDSA
+        ecc:
+          curve: P-256
+        signature-algorithm: ECDSA-SHA256
+        hash: SHA-256
+        store: pkcs8
+        password: 123456
+        platform-policy: true
+      certificate:
+        acme:
+          challenge: http-01
+          renew: 15
+        valid: 365
+        subject:
+          cn: cluster01.dev.trusted-platform.io
+          organization: Automate The Things, LLC
+          country: US
+          province: Kernel
+          locality: Hypervisor
+          address: 456 Virtual Street
+          postal-code: 67890
+        sans:
+          dns:
+            - cluster01.dev.trusted-platform.io
+            - api01.dev.trusted-platform.io
+            - dashboard01.dev.trusted-platform.io
+          email:
+            - hostmaster@dev.trusted-platform.io
+    
+
+
+
+# Argon2 Password Hashing
+# https://github.com/P-H-C/phc-winner-argon2
+# https://pkg.go.dev/golang.org/x/crypto/argon2
+argon2:
+  memory: 1
+  iterations: 1
+  parallelism: 1
+  saltLen: 16
+  keyLen: 32

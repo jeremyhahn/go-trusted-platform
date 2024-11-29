@@ -1,0 +1,30 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+       {
+            "name": "verifier (clean, config, init)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "preLaunchTask": "verifier_clean_config",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "-init=true",
+                "-attestor", "www.attestor.local",
+                "-so-pin", "123456",
+                "-pin",    "123456",
+            ],
+        }, {
+            "name": "verifier",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "-listen", "localhost:8090",
+                "-so-pin", "123456",
+                "-pin",    "123456",
+            ],
+        }
+    ]
+}

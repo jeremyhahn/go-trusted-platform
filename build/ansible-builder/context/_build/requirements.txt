@@ -1,0 +1,16 @@
+ansible
+jinja2>=2.11.2
+awxkit>=19.0.0
+netaddr>=0.8.0
+pyprowl>=3.0.1
+passlib>=1.7.4
+pyapi-gitlab>=7.8.5
+pysnow>=0.7.17
+aiohttp>=3.8.3
+pymssql>=2.2.5
+sendgrid==1.6.22
+bs4>=0.0.1
+html5lib>=1.1
+openstacksdk>=1.0
+paramiko==2.12.0
+pandas    

@@ -1,0 +1,398 @@
+# Trusted Platform Configuration File
+
+debug: true
+debug-secrets: true
+platform-dir: trusted-data
+config-dir: trusted-data/etc
+log-dir: trusted-data/log
+listen: verifier.localhost
+hostname: node1
+domain: verifier.local
+hostmaster: root@verifier.local
+pin-seal-policy: true
+
+
+attestation:
+  allow-open-enrollment: true
+  allow-attestor-self-ca: true
+  tls-port: 8082
+  insecure-port: 8083
+  insecure-skip-verify: false
+  allowed-verifiers:
+    -  www.verifier.local
+  quote-pcrs: 23
+
+
+datastore:
+  backend: fs
+  consistency-level: verifier.local
+  home: trusted-data/datastore
+  read-buffer-size: 50
+  serializer: json
+  
+
+tpm:
+  device: /dev/tpmrm0
+  simulator: true
+  encrypt-sessions: false
+  entropy: false
+  hash: SHA-256
+  ek:
+    debug: true
+    handle: 0x81010001
+    hash: SHA-256
+    password:
+    rsa:
+      size: 2048
+  ssrk:
+    debug: true
+    handle: 0x81000001
+    hierarchy-auth: 
+    password: 
+    platform-policy: true 
+    rsa:
+      size: 2048
+  iak:
+    auth:
+    cn: device-id-001
+    debug: true
+    hash: SHA-256
+    handle: 0x81010002
+    password: 
+    # platform-policy: true 
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSAPSS
+  idevid:
+    model: trusted-platform-edge
+    serial: att-tp-e001
+    cert-handle: 0x01C90000
+    cn: device-id-001
+    debug: true
+    handle: 0x81020000
+    hash: SHA-256
+    pad: true
+    password: 
+    # platform-policy: true 
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSAPSS
+  platform-pcr: 23
+  file-integrity:
+    - ./
+  keystore:
+    srk-handle: 0x81000002
+    srk-auth: 123456
+    platform-policy: true
+
+
+certificate-authority:
+  platform-ca: 1
+  auto-import-issuing-ca: true
+  system-cert-pool: false
+  default-validity: 365
+  default-idevid-cn: default-device-id
+  sans-include-verifier.localhost: true
+  require-password: true
+  quantum-safe: false
+  identity:
+    - 
+      keystores:
+        pkcs8:
+          platform-policy: true
+        pkcs11:
+          library: /usr/local/lib/softhsm/libsofthsm2.so
+          config: trusted-data/etc/softhsm.conf
+          slot: 0
+          label: SoftHSM
+          pin: 123456
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000003
+          srk-auth: 123456
+          platform-policy: true
+      keys:
+        # PKCS #8 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #11 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+            scheme: 
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #11 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 Ed25519
+        - algorithm: Ed25519
+          ecc:
+            curve: P-256
+          signature-algorithm: Ed25519
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+
+      valid: 50
+      subject:
+        cn: root-ca.verifier.local
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        verifier.locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns: 
+          - root-ca.verifier.local
+          - root-ca
+          - root-ca.verifier.localdomain
+          - root-ca.dev.verifier.local
+        ips:
+          - 127.0.0.1
+        email:
+          - root@verifier.localhost
+          - root@verifier.localhost.localdomain
+
+    - # Intermediate Certificate Authority
+      keystores:
+        pkcs8:
+          platform-policy: true
+        pkcs11:
+          library: /usr/local/lib/softhsm/libsofthsm2.so
+          config: trusted-data/etc/softhsm.conf
+          slot: 0
+          label: SoftHSM
+          pin: 123456
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000004
+          srk-auth: 123456
+          platform-policy: true
+      keys:
+        - # PKCS #8 RSA w/ PSS
+          algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #11 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #11 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 Ed25519
+        - algorithm: Ed25519
+          ecc:
+            curve: P-256
+          signature-algorithm: Ed25519
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+      valid: 10
+      subject:
+        cn: intermediate-ca.verifier.local
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        verifier.locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns:
+          - intermediate-ca.verifier.local
+          - intermediate-ca
+          - intermediate-ca.verifier.localdomain
+        ips:
+          - 127.0.0.1
+        email:
+          - root@verifier.localhost
+          - root@verifier.localhost.localdomain
+
+webservice:
+  home: public_html
+  port: 8080
+  tls-port: 8443
+  jwt:
+    expiration: 525960
+    # ES256 | ES384 | ES512
+    # PS256 | PS384 | PS512
+    # RS256 | RS384 | RS512
+    algorithm: PS256
+    issuer: my_org_id
+  key:
+    # PKCS #8 RSA w/ PSS
+    algorithm: RSA
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSAPSS
+    hash: SHA-256
+    store: pkcs8
+    password: 123456
+    platform-policy: true
+    debug: true
+    #
+    # algorithm: ECDSA
+    # ecc:
+    #   curve: P-256
+    # signature-algorithm: ECDSA-SHA256
+    # hash: SHA-256
+    # store: pkcs8
+    # password: 123456
+    # platform-policy: true
+    # debug: true
+    #
+    # algorithm: Ed25519
+    # ecc:
+    #   curve: P-256
+    # signature-algorithm: Ed25519
+    # hash: SHA-256
+    # store: pkcs8
+    # password: 123456
+    # platform-policy: true
+    # debug: true
+  certificate:
+    valid: 365
+    subject:
+      cn: www.verifier.local
+      organization: Trusted Platform
+      country: US
+      province: Kernel
+      verifier.locality: Hypervisor
+      address: 123 Example Street
+      postal-code: 12345
+    sans:
+      dns:
+        - www.verifier.local
+        - verifier.localhost
+        - verifier.localhost.localdomain
+      ips:
+        - 127.0.0.1
+      email:
+        - root@verifier.localhost
+        - root@verifier.localhost.localdomain
+
+
+# Argon2 Password Hashing
+# https://github.com/P-H-C/phc-winner-argon2
+# https://pkg.go.dev/golang.org/x/crypto/argon2
+argon2:
+  memory: 1
+  iterations: 1
+  parallelism: 1
+  saltLen: 16
+  keyLen: 32

@@ -22,7 +22,3 @@ func (role *Role) SetEntityID(id uint64) {
 func (role *Role) EntityID() uint64 {
 	return role.ID
 }
-
-func (role *Role) Partition() string {
-	return "roles"
-}

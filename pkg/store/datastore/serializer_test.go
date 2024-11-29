@@ -4,36 +4,30 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/serializer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestJsonSerializer(t *testing.T) {
+func TestSerializers(t *testing.T) {
 
 	org := entities.NewOrganization("test")
-	bytes, err := Serialize(org, SERIALIZER_JSON)
-	assert.Nil(t, err)
 
-	fmt.Println(string(bytes))
+	serializers := []serializer.Serializer[*entities.Organization]{
+		serializer.NewJSONSerializer[*entities.Organization](),
+		serializer.NewYAMLSerializer[*entities.Organization](),
+	}
 
-	entity, err := Deserialize[entities.Organization](bytes, SERIALIZER_JSON)
-	assert.Nil(t, err)
-	assert.Equal(t, "test", entity.Name)
+	for _, serializer := range serializers {
+		bytes, err := serializer.Serialize(org)
+		assert.Nil(t, err)
+		assert.NotNil(t, bytes)
 
-	assert.Equal(t, ".json", SerializerExtension(SERIALIZER_JSON))
-}
+		fmt.Println(string(bytes))
 
-func TestYamlSerializer(t *testing.T) {
-
-	org := entities.NewOrganization("test")
-	bytes, err := Serialize(org, SERIALIZER_YAML)
-	assert.Nil(t, err)
-
-	fmt.Println(string(bytes))
-
-	entity, err := Deserialize[entities.Organization](bytes, SERIALIZER_YAML)
-	assert.Nil(t, err)
-	assert.Equal(t, "test", entity.Name)
-
-	assert.Equal(t, ".yaml", SerializerExtension(SERIALIZER_YAML))
+		org := &entities.Organization{}
+		err = serializer.Deserialize(bytes, org)
+		assert.Nil(t, err)
+		assert.Equal(t, "test", org.Name)
+	}
 }

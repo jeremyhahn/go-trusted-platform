@@ -1,6 +1,7 @@
 package system
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"runtime"
@@ -16,48 +17,100 @@ func PrintSystemInfo() error {
 		return err
 	}
 
-	sys.BIOS.Print()
-	fmt.Println()
+	if sys.CPU != nil {
+		sys.CPU.Print()
+		fmt.Println()
+	}
 
-	sys.Board.Print()
-	fmt.Println()
+	if sys.BIOS != nil {
+		sys.BIOS.Print()
+		fmt.Println()
+	}
 
-	sys.Chassis.Print()
-	fmt.Println()
+	if sys.Board != nil {
+		sys.Board.Print()
+		fmt.Println()
+	}
 
-	sys.Product.Print()
-	fmt.Println()
+	if sys.Chassis != nil {
+		sys.Chassis.Print()
+		fmt.Println()
+	}
+
+	if sys.Product != nil {
+		sys.Product.Print()
+		fmt.Println()
+	}
 
 	sys.Runtime.Print()
 	fmt.Println()
 	return nil
 }
 
+func CPUInfo() (entities.CPUInfo, error) {
+
+	var cpuInfo entities.CPUInfo
+	totalThreads := 0
+
+	file, err := os.Open("/proc/cpuinfo")
+	if err != nil {
+		return cpuInfo, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		parts := strings.Split(line, ":")
+		if len(parts) != 2 {
+			continue
+		}
+
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+
+		switch key {
+		case "processor":
+			totalThreads++
+		case "model name":
+			if cpuInfo.ModelName == "" {
+				cpuInfo.ModelName = value
+			}
+		case "cpu cores":
+			if cpuInfo.Cores == 0 {
+				fmt.Sscanf(value, "%d", &cpuInfo.Cores)
+			}
+		case "cache size":
+			if cpuInfo.CacheSize == "" {
+				cpuInfo.CacheSize = value
+			}
+		case "flags":
+			if len(cpuInfo.Flags) == 0 {
+				cpuInfo.Flags = strings.Fields(value) // Split flags by whitespace
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return cpuInfo, err
+	}
+
+	cpuInfo.Threads = totalThreads
+
+	return cpuInfo, nil
+
+}
+
 func SystemInfo() (entities.System, error) {
+
 	memstats := &runtime.MemStats{}
 	runtime.ReadMemStats(memstats)
-	bios, err := BIOS()
-	if err != nil {
-		return entities.System{}, err
-	}
-	board, err := Board()
-	if err != nil {
-		return entities.System{}, err
-	}
-	chassis, err := Chassis()
-	if err != nil {
-		return entities.System{}, err
-	}
-	product, err := Product()
-	if err != nil {
-		return entities.System{}, err
-	}
-	return entities.System{
-		BIOS:    bios,
-		Board:   board,
-		Chassis: chassis,
-		Product: product,
-		// Version: app.GetVersion(),
+
+	systemInfo := entities.System{
 		Runtime: &entities.SystemRuntime{
 			Version:     runtime.Version(),
 			Cpus:        runtime.NumCPU(),
@@ -71,7 +124,38 @@ func SystemInfo() (entities.System, error) {
 			NumGC:       memstats.NumGC,
 			NumForcedGC: memstats.NumForcedGC,
 		},
-	}, nil
+	}
+
+	cpuInfo, err := CPUInfo()
+	if err != nil {
+		return systemInfo, err
+	}
+	systemInfo.CPU = &cpuInfo
+
+	if os.Geteuid() == 0 {
+		bios, err := BIOS()
+		if err != nil {
+			return entities.System{}, err
+		}
+		board, err := Board()
+		if err != nil {
+			return entities.System{}, err
+		}
+		chassis, err := Chassis()
+		if err != nil {
+			return entities.System{}, err
+		}
+		product, err := Product()
+		if err != nil {
+			return entities.System{}, err
+		}
+		systemInfo.BIOS = &bios
+		systemInfo.Board = &board
+		systemInfo.Chassis = &chassis
+		systemInfo.Product = &product
+	}
+
+	return systemInfo, nil
 }
 
 func BIOS() (entities.BIOS, error) {

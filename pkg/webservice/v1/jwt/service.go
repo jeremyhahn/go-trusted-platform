@@ -8,7 +8,6 @@ import (
 
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
@@ -21,8 +20,7 @@ var (
 	ErrInvalidEmailClaim           = errors.New("jwt/service: invalid email claim")
 )
 
-type JsonWebTokenClaims struct {
-	// Email          string
+type TokenClaims struct {
 	Organizations  []uint64 `json:"orgs"`
 	Services       []uint64 `json:"svcs"`
 	UserID         uint64   `json:"uid"`
@@ -30,26 +28,31 @@ type JsonWebTokenClaims struct {
 	jwt.RegisteredClaims
 }
 
+type ServiceParams struct {
+	Audience   string
+	Expiration int
+	Issuer     string
+	KeyAttrs   *keystore.KeyAttributes
+	Keyring    *platform.Keyring
+}
+
 type Service struct {
-	config        *config.WebService
+	params        ServiceParams
 	signer        crypto.Signer
 	signingMethod jwt.SigningMethod
 }
 
-func NewService(config *config.WebService,
-	keyring *platform.Keyring,
-	keyAttrs *keystore.KeyAttributes) (*Service, error) {
-
-	signingMethod, err := NewSigningMethod(keyAttrs)
+func NewService(params ServiceParams) (*Service, error) {
+	signingMethod, err := NewSigningMethod(params.KeyAttrs)
 	if err != nil {
 		return nil, err
 	}
-	signer, err := keyring.Signer(keyAttrs)
+	signer, err := params.Keyring.Signer(params.KeyAttrs)
 	if err != nil {
 		return nil, err
 	}
 	return &Service{
-		config:        config,
+		params:        params,
 		signer:        signer,
 		signingMethod: signingMethod,
 	}, nil
@@ -57,15 +60,15 @@ func NewService(config *config.WebService,
 
 func (service *Service) GenerateToken(user *entities.User) (string, error) {
 	now := time.Now()
-	token := jwt.NewWithClaims(service.signingMethod, JsonWebTokenClaims{
+	token := jwt.NewWithClaims(service.signingMethod, TokenClaims{
 		UserID: user.ID,
 		// Email:  user.Email,
 		RegisteredClaims: jwt.RegisteredClaims{
-			Audience: jwt.ClaimStrings{service.config.Certificate.Subject.CommonName},
-			Issuer:   service.config.JWT.Issuer,
+			Audience: jwt.ClaimStrings{service.params.Audience},
+			Issuer:   service.params.Issuer,
 			IssuedAt: jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(
-				now.Add(time.Minute * time.Duration(service.config.JWT.Expiration))),
+				now.Add(time.Minute * time.Duration(service.params.Expiration))),
 			NotBefore: jwt.NewNumericDate(now),
 		},
 	})
@@ -73,7 +76,7 @@ func (service *Service) GenerateToken(user *entities.User) (string, error) {
 }
 
 func (service *Service) ParseToken(
-	w http.ResponseWriter, r *http.Request) (*jwt.Token, *JsonWebTokenClaims, error) {
+	w http.ResponseWriter, r *http.Request) (*jwt.Token, *TokenClaims, error) {
 
 	tokenString := r.Header.Get("Authorization")
 	if tokenString == "" {
@@ -86,7 +89,7 @@ func (service *Service) ParseToken(
 		return nil, nil, err
 	}
 
-	claims, ok := token.Claims.(*JsonWebTokenClaims)
+	claims, ok := token.Claims.(*TokenClaims)
 	if !ok {
 		return nil, nil, ErrInvalidToken
 	}
@@ -96,7 +99,7 @@ func (service *Service) ParseToken(
 
 func (service *Service) ParseTokenString(tokenString string) (*jwt.Token, error) {
 	parser := jwt.NewParser()
-	claims := &JsonWebTokenClaims{}
+	claims := &TokenClaims{}
 	token, err := parser.ParseWithClaims(tokenString, claims, service.KeyFunc)
 	if err != nil {
 		return nil, err
@@ -116,6 +119,6 @@ func (service *Service) Verify(token *jwt.Token) error {
 	if !token.Valid {
 		return ErrInvalidToken
 	}
-	opts := jwt.WithAudience(service.config.Certificate.Subject.CommonName)
+	opts := jwt.WithAudience(service.params.Audience)
 	return jwt.NewValidator(opts).Validate(token.Claims)
 }

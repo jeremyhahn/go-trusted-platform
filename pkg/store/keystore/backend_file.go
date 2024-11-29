@@ -25,7 +25,7 @@ var (
 
 type KeyBackend interface {
 	Get(attrs *KeyAttributes, extension FSExtension) ([]byte, error)
-	Save(attrs *KeyAttributes, data []byte, extension FSExtension) error
+	Save(attrs *KeyAttributes, data []byte, extension FSExtension, overwrite bool) error
 	Delete(attrs *KeyAttributes) error
 }
 
@@ -94,12 +94,20 @@ func NewFileBackend(
 func (fb *FileBackend) Save(
 	attrs *KeyAttributes,
 	data []byte,
-	extension FSExtension) error {
+	extension FSExtension,
+	overwrite bool) error {
 
 	file, err := fb.fileNameFromKeyAttributes(attrs, extension)
 	if err != nil {
 		fb.logger.Errorf("%s: %s", err, file)
 		return err
+	}
+	if overwrite {
+		if err = afero.WriteFile(fb.fs, file, data, 0644); err != nil {
+			fb.logger.Errorf("%s: %s", err, file)
+			return err
+		}
+		return nil
 	}
 	if _, err := fb.fs.Stat(file); errors.Is(err, os.ErrNotExist) {
 		if err = afero.WriteFile(fb.fs, file, data, 0644); err != nil {
