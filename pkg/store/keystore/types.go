@@ -16,11 +16,12 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/serializer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 )
 
 type FSExtension string
 type Partition string
-type KeyHalf uint8
 
 const (
 	DEFAULT_PASSWORD = "123456"
@@ -49,9 +50,6 @@ const (
 	STORE_PKCS11  StoreType = "pkcs11"
 	STORE_TPM2    StoreType = "tpm2"
 	STORE_UNKNOWN StoreType = "unknown"
-
-	KEYHALF_PRIVATE KeyHalf = 1 + iota
-	KEYHALF_PUBLIC
 
 	// Internal types not stored in the platform configuration file
 	KEY_TYPE_ATTESTATION KeyType = 1 + iota
@@ -83,40 +81,43 @@ const (
 )
 
 var (
-	ErrAlreadyInitialized        = errors.New("store/keystore: already initialized")
-	ErrNotInitalized             = errors.New("store/keystore: not initialized")
-	ErrInvalidKeyedHashSecret    = errors.New("store/keystore: invalid keyed hash secret")
-	ErrInvalidKeyType            = errors.New("store/keystore: invalid key type")
-	ErrInvalidKeyAlgorithm       = errors.New("store/keystore: invalid key algorithm")
-	ErrInvalidParentAttributes   = errors.New("store/keystore: invalid parent key attributes")
-	ErrInvalidPrivateKey         = errors.New("store/keystore: invalid private key")
-	ErrInvalidPrivateKeyRSA      = errors.New("store/keystore: invalid RSA private key")
-	ErrInvalidPrivateKeyECDSA    = errors.New("store/keystore: invalid ECDSA private key")
-	ErrInvalidPrivateKeyEd25519  = errors.New("store/keystore: invalid Ed25519 private key")
-	ErrInvalidOpaquePrivateKey   = errors.New("store/keystore: invalid opaque private key")
-	ErrInvalidSignerOpts         = errors.New("store/keystore: invalid signer opts, password required")
-	ErrInvalidKeyStore           = errors.New("store/keystore: invalid key store")
-	ErrInvalidSignatureAlgorithm = errors.New("store/keystore: unsupported signing algorithm")
-	ErrInvalidSignatureScheme    = errors.New("store/keystore: invalid signature scheme")
-	ErrKeyAlreadyExists          = errors.New("store/keystore: key already exists")
-	ErrFileIntegrityCheckFailed  = errors.New("store/keystore: file integrity check failed")
-	ErrInvalidPublicKeyRSA       = errors.New("store/keystore: invalid RSA public key")
-	ErrInvalidPublicKeyECDSA     = errors.New("store/keystore: invalid ECDSA public key")
-	ErrSingatureVerification     = errors.New("store/keystore: signature verification failed")
-	ErrInvalidCurve              = errors.New("store/keystore: invalid ECC curve")
-	ErrInvalidHashFunction       = errors.New("store/keystore: invalid hash function")
-	ErrInvalidKeyAttributes      = errors.New("store/keystore: invalid key attributes")
-	ErrInvalidRSAAttributes      = errors.New("store/keystore: invalid RSA key attributes")
-	ErrInvalidECCAttributes      = errors.New("store/keystore: invalid ECC key attributes")
-	ErrInvalidBlobName           = errors.New("store/keystore: invalid blob name")
-	ErrIssuerAttributeRequired   = errors.New("store/keystore: issuer common name attribute required")
-	ErrSOPinRequired             = errors.New("store/keystore: security officer PIN required")
-	ErrUserPinRequired           = errors.New("store/keystore: user PIN required")
-	ErrInvalidPassword           = errors.New("store/keystore: invalid password")
-	ErrInvalidKeyPartition       = errors.New("store/keystore: invalid key partition")
-	ErrInvalidEncodingPEM        = errors.New("store/keystore: invalid PEM encoding")
-	ErrUnsupportedKeyAlgorithm   = errors.New("store/keystore: unsupported key algorithm")
-	ErrPasswordRequired          = errors.New("store/keystore: password required")
+	ErrAlreadyInitialized            = errors.New("store/keystore: already initialized")
+	ErrNotInitalized                 = errors.New("store/keystore: not initialized")
+	ErrInvalidJOSESignatureAlgorithm = errors.New("store/keystore: invalid JOSE signature algorithm")
+	ErrInvalidKeyedHashSecret        = errors.New("store/keystore: invalid keyed hash secret")
+	ErrInvalidKeyType                = errors.New("store/keystore: invalid key type")
+	ErrInvalidKeyAlgorithm           = errors.New("store/keystore: invalid key algorithm")
+	ErrInvalidParentAttributes       = errors.New("store/keystore: invalid parent key attributes")
+	ErrInvalidPrivateKey             = errors.New("store/keystore: invalid private key")
+	ErrInvalidPrivateKeyRSA          = errors.New("store/keystore: invalid RSA private key")
+	ErrInvalidPrivateKeyECDSA        = errors.New("store/keystore: invalid ECDSA private key")
+	ErrInvalidPrivateKeyEd25519      = errors.New("store/keystore: invalid Ed25519 private key")
+	ErrInvalidOpaquePrivateKey       = errors.New("store/keystore: invalid opaque private key")
+	ErrInvalidSignerOpts             = errors.New("store/keystore: invalid signer opts, password required")
+	ErrInvalidKeyStore               = errors.New("store/keystore: invalid key store")
+	ErrInvalidPermanentIdentifier    = errors.New("store/keystore: invalid permanent-identifier")
+	ErrInvalidSignatureAlgorithm     = errors.New("store/keystore: unsupported signing algorithm")
+	ErrInvalidSignatureScheme        = errors.New("store/keystore: invalid signature scheme")
+	ErrKeyAlreadyExists              = errors.New("store/keystore: key already exists")
+	ErrFileIntegrityCheckFailed      = errors.New("store/keystore: file integrity check failed")
+	ErrInvalidPublicKeyRSA           = errors.New("store/keystore: invalid RSA public key")
+	ErrInvalidPublicKeyECDSA         = errors.New("store/keystore: invalid ECDSA public key")
+	ErrSingatureVerification         = errors.New("store/keystore: signature verification failed")
+	ErrInvalidCurve                  = errors.New("store/keystore: invalid ECC curve")
+	ErrInvalidHashFunction           = errors.New("store/keystore: invalid hash function")
+	ErrInvalidKeyAttributes          = errors.New("store/keystore: invalid key attributes")
+	ErrInvalidRSAAttributes          = errors.New("store/keystore: invalid RSA key attributes")
+	ErrInvalidECCAttributes          = errors.New("store/keystore: invalid ECC key attributes")
+	ErrInvalidBlobName               = errors.New("store/keystore: invalid blob name")
+	ErrIssuerAttributeRequired       = errors.New("store/keystore: issuer common name attribute required")
+	ErrSOPinRequired                 = errors.New("store/keystore: security officer PIN required")
+	ErrUserPinRequired               = errors.New("store/keystore: user PIN required")
+	ErrInvalidPassword               = errors.New("store/keystore: invalid password")
+	ErrInvalidKeyPartition           = errors.New("store/keystore: invalid key partition")
+	ErrInvalidEncodingPEM            = errors.New("store/keystore: invalid PEM encoding")
+	ErrUnsupportedKeyAlgorithm       = errors.New("store/keystore: unsupported key algorithm")
+	ErrPasswordRequired              = errors.New("store/keystore: password required")
+	ErrInvalidKeyID                  = errors.New("store/keystore: invalid key ID")
 )
 
 // The Key Store Module interface
@@ -130,9 +131,11 @@ type KeyStorer interface {
 	GenerateEd25519(attrs *KeyAttributes) (OpaqueKey, error)
 	GenerateSecretKey(attrs *KeyAttributes) error
 	Decrypter(attrs *KeyAttributes) (crypto.Decrypter, error)
-	Equal(opaque Opaque, x crypto.PrivateKey) bool
+	Equal(opaque OpaqueKey, x crypto.PrivateKey) bool
+	Find(attrs *KeyAttributes) (OpaqueKey, error)
 	Initialize(soPIN, userPIN Password) error
 	Key(attrs *KeyAttributes) (OpaqueKey, error)
+	RotateKey(attrs *KeyAttributes) (OpaqueKey, error)
 	Signer(attrs *KeyAttributes) (crypto.Signer, error)
 	Type() StoreType
 	Verifier(attrs *KeyAttributes, opts *VerifyOpts) Verifier
@@ -162,6 +165,11 @@ type StoreType string
 
 func (st StoreType) String() string {
 	return string(st)
+}
+
+func (st StoreType) IsValid() bool {
+	return st == STORE_PKCS8 ||
+		st == STORE_PKCS11 || st == STORE_TPM2
 }
 
 type Verifier interface {
@@ -569,4 +577,15 @@ func KeyAlgorithmFromSignatureAlgorithm(
 		return x509.Ed25519, nil
 	}
 	return 0, ErrInvalidSignatureAlgorithm
+}
+
+// Serializes the public key using the specified serializer and returns a
+// non-cryptographic hash of the serialized key.
+func PublicKeyID(pubKey crypto.PublicKey, serializerType serializer.SerializerType) uint64 {
+	serializer, err := NewSerializer(serializerType)
+	if err != nil {
+		return 0
+	}
+	serializedKey, err := serializer.Serialize(pubKey)
+	return util.NewID(serializedKey)
 }

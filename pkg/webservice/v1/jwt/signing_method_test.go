@@ -88,6 +88,9 @@ func TestSigningMethodRS(t *testing.T) {
 
 			err = signingMethod.Verify(string(digest), signature, pub)
 			assert.Nil(t, err)
+
+			err = keyring.Delete(keyAttrs)
+			assert.Nil(t, err)
 		}
 	}
 }
@@ -166,6 +169,9 @@ func TestSigningMethodPS(t *testing.T) {
 
 			err = signingMethod.Verify(string(digest), signature, pub)
 			assert.Nil(t, err)
+
+			err = keyring.Delete(keyAttrs)
+			assert.Nil(t, err)
 		}
 	}
 }
@@ -241,6 +247,9 @@ func TestSigningMethodES(t *testing.T) {
 
 			err = signingMethod.Verify(string(digest), signature, pub)
 			assert.Nil(t, err)
+
+			err = keyring.Delete(keyAttrs)
+			assert.Nil(t, err)
 		}
 	}
 }
@@ -305,6 +314,9 @@ func TestSigningMethodES_Ed25519(t *testing.T) {
 		assert.True(t, ok)
 
 		err = signingMethod.Verify(string(digest), signature, pub)
+		assert.Nil(t, err)
+
+		err = keyring.Delete(keyAttrs)
 		assert.Nil(t, err)
 	}
 }

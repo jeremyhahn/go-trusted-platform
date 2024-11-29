@@ -91,6 +91,20 @@ func ParseStoreType(storeType string) (StoreType, error) {
 		return STORE_PKCS11, nil
 	case STORE_TPM2:
 		return STORE_TPM2, nil
+	case STORE_UNKNOWN:
+		return STORE_UNKNOWN, nil
 	}
 	return "", ErrInvalidKeyStore
+}
+
+func ParseKeyID(kid string) (StoreType, string, error) {
+	pieces := strings.Split(kid, ":")
+	if len(pieces) != 2 {
+		return "", "", ErrInvalidKeyID
+	}
+	storeType, err := ParseStoreType(pieces[0])
+	if err != nil {
+		return "", "", ErrInvalidKeyID
+	}
+	return storeType, pieces[1], nil
 }

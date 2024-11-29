@@ -74,10 +74,6 @@ func (user *User) EntityID() uint64 {
 	return user.ID
 }
 
-func (user *User) Partition() string {
-	return "users"
-}
-
 func (user *User) AddRole(role *Role) {
 	user.Roles = append(user.Roles, role)
 }

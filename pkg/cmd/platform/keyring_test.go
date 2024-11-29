@@ -41,16 +41,37 @@ func Test_Keyring(t *testing.T) {
 			app.DefaultConfig.TPMConfig.EK.CertHandle = 0
 
 			if algo == "ecdsa" {
+
 				app.DefaultConfig.TPMConfig.EK.KeyAlgorithm = x509.ECDSA.String()
 				app.DefaultConfig.TPMConfig.EK.RSAConfig = nil
 				app.DefaultConfig.TPMConfig.EK.ECCConfig = &keystore.ECCConfig{
 					Curve: elliptic.P256().Params().Name,
 				}
+
+				app.DefaultConfig.TPMConfig.SSRK.KeyAlgorithm = x509.ECDSA.String()
+				app.DefaultConfig.TPMConfig.SSRK.ECCConfig = &keystore.ECCConfig{
+					Curve: elliptic.P256().Params().Name,
+				}
+
+				app.DefaultConfig.TPMConfig.IAK.KeyAlgorithm = x509.ECDSA.String()
+				app.DefaultConfig.TPMConfig.IAK.RSAConfig = nil
+				app.DefaultConfig.TPMConfig.IAK.ECCConfig = &keystore.ECCConfig{
+					Curve: elliptic.P256().Params().Name,
+				}
+				app.DefaultConfig.TPMConfig.IAK.SignatureAlgorithm = x509.ECDSAWithSHA256.String()
+
+				app.DefaultConfig.TPMConfig.IDevID.KeyAlgorithm = x509.ECDSA.String()
+				app.DefaultConfig.TPMConfig.IDevID.RSAConfig = nil
+				app.DefaultConfig.TPMConfig.IDevID.ECCConfig = &keystore.ECCConfig{
+					Curve: elliptic.P256().Params().Name,
+				}
+				app.DefaultConfig.TPMConfig.IDevID.SignatureAlgorithm = x509.ECDSAWithSHA256.String()
 			}
 
 			InitParams.Initialize = true
 			InitParams.Pin = []byte("test")
 			InitParams.SOPin = []byte("test")
+			InitParams.Env = app.EnvTest.String()
 
 			App = app.DefaultTestConfig()
 

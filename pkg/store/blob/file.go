@@ -22,11 +22,13 @@ var (
 )
 
 type BlobStorer interface {
+	Count(partition *string) (int, error)
 	Delete(key []byte) error
 	Exists(key []byte) bool
 	Get(key []byte) ([]byte, error)
+	Home() string
+	Partition() string
 	Save(key, data []byte) error
-	Count(partition *string) (int, error)
 }
 
 type BlobStore struct {
@@ -66,6 +68,16 @@ func NewFSBlobStore(
 	}, nil
 }
 
+// Returns the blob store's home directory
+func (store *BlobStore) Home() string {
+	return store.blobDir
+}
+
+// Returns the blob store's partition name
+func (store *BlobStore) Partition() string {
+	return store.partition
+}
+
 // Saves a blob to the blob store. If the blob key contains forward slashes,
 // a directory hierarchy will be created to match the key. For example, the
 // blob key /my/secret/blob.dat would get saved to
@@ -85,7 +97,7 @@ func (store *BlobStore) Save(key, data []byte) error {
 	return nil
 }
 
-// Retrieves a signed blob from the "signed" partition. ErrBlobNotFound is
+// Retrieves a blob from the blob store. ErrBlobNotFound is
 // returned if the signed data could not be found.
 func (store *BlobStore) Get(key []byte) ([]byte, error) {
 	trimmed := strings.TrimLeft(string(key), "/")
@@ -106,8 +118,8 @@ func (store *BlobStore) Get(key []byte) ([]byte, error) {
 	return bytes, nil
 }
 
-// Deleted blob the blob store. ErrBlobNotFound is returned if the
-// provided blob key could not be found.
+// Deletes a blob from the blob store. ErrBlobNotFound is returned
+// if the provided blob key could not be found.
 func (store *BlobStore) Delete(key []byte) error {
 	trimmed := strings.TrimLeft(string(key), "/")
 	blobFile := fmt.Sprintf("%s/%s", store.blobDir, trimmed)
@@ -118,7 +130,7 @@ func (store *BlobStore) Delete(key []byte) error {
 	return store.fs.RemoveAll(blobFile)
 }
 
-// Returns true if the file exists
+// Returns true if the blob with the provided key exists
 func (store *BlobStore) Exists(key []byte) bool {
 	trimmed := strings.TrimLeft(string(key), "/")
 	blobFile := fmt.Sprintf("%s/%s", store.blobDir, trimmed)

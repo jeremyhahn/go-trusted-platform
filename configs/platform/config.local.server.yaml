@@ -1,0 +1,517 @@
+# Trusted Platform Configuration File
+
+debug: true
+debug-secrets: true
+platform-dir: trusted-data
+config-dir: trusted-data/etc
+log-dir: trusted-data/log
+domain: trusted-platform.local
+hostmaster: hostmaster@trusted-platform.local
+pin-seal-policy: true
+
+
+acme:
+  # ACME challenges supported by the server
+  challenges:
+    - device-01
+    - device-attest-01
+    - dns-01
+    - endorse-01
+    - http-01
+    # Custom http-01 challenges that listen
+    # on ports 8080 and 8081. These challenges
+    # use the custom httpx challenge which uses
+    # the port number defined in this challenge
+    # name to serve the http-01 challenge on a 
+    # custom, user-defined port. Enter any valid
+    # port number following http- to have the http-01
+    # challenge served on that port.
+    - http-8080
+    - http-8081
+    - device-8080
+    - device-8081
+
+
+dns:
+  datastore:
+    backend: AFERO_FS
+    consistency-level: local
+    home: trusted-data/datastore
+    read-buffer-size: 50
+    serializer: json
+  internal:
+    port: 8054
+    forwarders:
+      - 192.168.1.1
+      - 192.168.2.1
+      - 192.168.3.1
+    zone:
+      description: Internal zone for trusted-platform.internal
+      name: trusted-platform.internal.
+      ttl: 3600
+      internal: true
+      records:
+        soa:
+          name: trusted-platform.internal.
+          mname: ns1.trusted-platform.internal.
+          rname: hostmaster.trusted-platform.internal.
+          serial: 1
+          refresh: 86400
+          retry: 7200
+          expire: 86400
+          minimum_ttl: 3600
+          ttl: 3600
+        ns:
+          - name: trusted-platform.internal.
+            value: ns1.trusted-platform.internal.
+            ttl: 3600
+          - name: trusted-platform.internal.
+            value: ns2.trusted-platform.internal.
+            ttl: 3600
+          - name: trusted-platform.internal.
+            value: ns3.trusted-platform.internal.
+            ttl: 3600
+        a:
+          - name: ns1
+            value: ${PRIVATE_IPv4}
+            ttl: 3600
+          - name: ns2
+            value: 192.168.2.1
+            ttl: 3600
+          - name: ns3
+            value: 192.168.3.1
+            ttl: 3600
+          - name: ${HOSTNAME}
+            value: ${PRIVATE_IPv4}
+            ttl: 3600
+        cname:
+          - name: www
+            value: trusted-platform.internal.
+            ttl: 3600
+
+  
+
+datastore:
+  backend: AFERO_FS
+  consistency-level: local
+  home: trusted-data/datastore
+  read-buffer-size: 50
+  serializer: json
+
+
+tpm:
+  device: /dev/tpmrm0
+  simulator: true
+  encrypt-sessions: false
+  entropy: false
+  hash: SHA-256
+  ek:
+    debug: true
+    handle: 0x81010001
+    hash: SHA-256
+    password:
+    rsa:
+      size: 2048
+  ssrk:
+    debug: true
+    handle: 0x81000001
+    hierarchy-auth: 
+    password: 
+    platform-policy: true 
+    rsa:
+      size: 2048
+  iak:
+    auth:
+    debug: true
+    hash: SHA-256
+    handle: 0x81010002
+    password: 
+    # platform-policy: true 
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSAPSS
+  idevid:
+    model: trusted-edge
+    serial: att-tp-e001
+    cert-handle: 0x01C90000
+    debug: true
+    handle: 0x81020000
+    hash: SHA-256
+    pad: true
+    password: 
+    # platform-policy: true 
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSAPSS
+  platform-pcr: 23
+  file-integrity:
+    - ./
+  keystore:
+    srk-handle: 0x81000002
+    srk-auth: 123456
+    platform-policy: true
+
+
+certificate-authority:
+  acme-server: https://trusted-platform.local/api/v1
+  platform-ca: 1
+  auto-import-issuing-ca: true
+  system-cert-pool: false
+  default-validity: 365
+  default-idevid-cn: default-device-id
+  sans-include-localhost: true
+  require-password: true
+  quantum-safe: true
+  identity:
+    - 
+      keystores:
+        pkcs8:
+          platform-policy: true
+        pkcs11:
+          library: /usr/local/lib/softhsm/libsofthsm2.so
+          config: trusted-data/etc/softhsm.conf
+          slot: 0
+          label: SoftHSM
+          pin: 123456
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000003
+          srk-auth: 123456
+          platform-policy: true
+      keys:
+        # PKCS #8 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #11 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+            scheme: 
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #11 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 Ed25519
+        - algorithm: Ed25519
+          ecc:
+            curve: P-256
+          signature-algorithm: Ed25519
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+
+      valid: 50
+      subject:
+        cn: root-ca.trusted-platform.local
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns: 
+          - root-ca.trusted-platform.local
+        email:
+          - hostmaster@trusted-platform.local
+
+    - # Intermediate Certificate Authority
+      keystores:
+        pkcs8:
+          platform-policy: true
+        pkcs11:
+          library: /usr/local/lib/softhsm/libsofthsm2.so
+          config: trusted-data/etc/softhsm.conf
+          slot: 0
+          label: SoftHSM
+          pin: 123456
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000004
+          srk-auth: 123456
+          platform-policy: true
+      keys:
+        - # PKCS #8 RSA w/ PSS
+          algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #11 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #11 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 Ed25519
+        - algorithm: Ed25519
+          ecc:
+            curve: P-256
+          signature-algorithm: Ed25519
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+          debug: true
+      valid: 10
+      subject:
+        cn: ca01.trusted-platform.local
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns:
+          - ca01.trusted-platform.local
+          - ca.trusted-platform.local
+        email:
+          - hostmaster@trusted-platform.local
+
+
+webservice:
+  home: public_html
+  terms-of-service: /tos.html
+  port: 8080
+  tls-port: 8443
+  index: index.html
+  rewrite:
+  - pattern: "^/test.html$"
+    target: /swagger/
+  jwt:
+    expiration: 525960
+    issuer: trusted-platform.local
+  webauthn:
+    display-name: Trusted Platform (Dev)
+    id: trusted-platform.local
+    origins:
+      - https://trusted-platform.local
+      - http://trusted-platform.local
+  key:
+    algorithm: ECDSA
+    ecc:
+      curve: P-256
+    signature-algorithm: ECDSA-SHA256
+    hash: SHA-256
+    store: pkcs8
+    password: 123456
+    platform-policy: true
+    debug: true
+  certificate:
+    acme:
+      challenge: http-01
+      renew: 15
+    subject:
+      cn: trusted-platform.local
+      organization: Automate The Things, LLC
+      country: US
+      province: Florida
+      locality: West Palm Beach
+      address: 123 Automation Street
+      postal-code: 12345
+    sans:
+      dns:
+        - trusted-platform.local
+        - www.trusted-platform.local
+      email:
+        - hostmaster@trusted-platform.local
+  virtual-hosts:
+    # Virtual host for dashboard.trusted-platform.io
+    - home: dashboard.trusted-platform.local
+      index: index.html
+      hosts:
+        - dashboard.trusted-platform.local
+      key:
+        algorithm: ECDSA
+        ecc:
+          curve: P-256
+        signature-algorithm: ECDSA-SHA256
+        hash: SHA-256
+        store: pkcs8
+        password: 123456
+        platform-policy: true
+      certificate:
+        acme:
+          challenge: http-01
+          renew: 15
+        valid: 365
+        subject:
+          cn: dashboard.trusted-platform.local
+          organization: Automate The Things, LLC
+          country: US
+          province: Kernel
+          locality: Hypervisor
+          address: 456 Virtual Street
+          postal-code: 67890
+        sans:
+          dns:
+            - dashboard.trusted-platform.local
+          email:
+            - hostmaster@trusted-platform.local
+
+    # Virtual Host for 3 node HA cluster
+    - home: cluster01.trusted-platform.local
+      index: index.html
+      hosts:
+        - cluster01.trusted-platform.local
+        - api01.trusted-platform.local
+        - dashboard01.trusted-platform.local
+      proxy:
+        backends:
+          - http://172.16.1.10:8080
+          - http://172.16.2.10:8080
+          - http://172.16.3.10:8080
+      key:
+        algorithm: ECDSA
+        ecc:
+          curve: P-256
+        signature-algorithm: ECDSA-SHA256
+        hash: SHA-256
+        store: pkcs8
+        password: 123456
+        platform-policy: true
+      certificate:
+        acme:
+          challenge: http-01
+          renew: 15
+        valid: 365
+        subject:
+          cn: cluster01.trusted-platform.local
+          organization: Automate The Things, LLC
+          country: US
+          province: Kernel
+          locality: Hypervisor
+          address: 456 Virtual Street
+          postal-code: 67890
+        sans:
+          dns:
+            - cluster01.trusted-platform.local
+            - api01.trusted-platform.local
+            - dashboard01.trusted-platform.local
+          email:
+            - hostmaster@trusted-platform.local
+    
+
+
+
+# Argon2 Password Hashing
+# https://github.com/P-H-C/phc-winner-argon2
+# https://pkg.go.dev/golang.org/x/crypto/argon2
+argon2:
+  memory: 65536
+  iterations: 3
+  parallelism: 2
+  saltLen: 16
+  keyLen: 32

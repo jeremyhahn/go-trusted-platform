@@ -13,7 +13,7 @@ type WebAuthnDAO struct {
 	*AferoDAO[*entities.Blob]
 }
 
-func NewWebAuthnDAO(params *Params) (datastore.WebAuthnDAO, error) {
+func NewWebAuthnDAO(params *datastore.Params[*entities.Blob]) (datastore.WebAuthnDAO, error) {
 	if params.Partition == "" {
 		params.Partition = webauthn_partition
 	}
@@ -26,33 +26,33 @@ func NewWebAuthnDAO(params *Params) (datastore.WebAuthnDAO, error) {
 	}, nil
 }
 
-func (webauthnDAO *WebAuthnDAO) Save(entity *entities.Blob) error {
-	return webauthnDAO.AferoDAO.Save(entity)
-}
+// func (webauthnDAO *WebAuthnDAO) Save(entity *entities.Blob) error {
+// 	return webauthnDAO.AferoDAO.Save(entity)
+// }
 
-func (webauthnDAO *WebAuthnDAO) Get(id uint64, CONSISTENCY_LEVEL int) (*entities.Blob, error) {
-	return webauthnDAO.AferoDAO.Get(id, CONSISTENCY_LEVEL)
-}
+// func (webauthnDAO *WebAuthnDAO) Get(id uint64, CONSISTENCY_LEVEL int) (*entities.Blob, error) {
+// 	return webauthnDAO.AferoDAO.Get(id, CONSISTENCY_LEVEL)
+// }
 
-func (webauthnDAO *WebAuthnDAO) Delete(entity *entities.Blob) error {
-	return webauthnDAO.AferoDAO.Delete(entity)
-}
+// func (webauthnDAO *WebAuthnDAO) Delete(entity *entities.Blob) error {
+// 	return webauthnDAO.AferoDAO.Delete(entity)
+// }
 
-func (webauthnDAO *WebAuthnDAO) Count(CONSISTENCY_LEVEL int) (int, error) {
-	return webauthnDAO.AferoDAO.Count(CONSISTENCY_LEVEL)
-}
+// func (webauthnDAO *WebAuthnDAO) Count(CONSISTENCY_LEVEL int) (int, error) {
+// 	return webauthnDAO.AferoDAO.Count(CONSISTENCY_LEVEL)
+// }
 
-func (webauthnDAO *WebAuthnDAO) Page(
-	pageQuery datastore.PageQuery,
-	CONSISTENCY_LEVEL int) (datastore.PageResult[*entities.Blob], error) {
+// func (webauthnDAO *WebAuthnDAO) Page(
+// 	pageQuery datastore.PageQuery,
+// 	CONSISTENCY_LEVEL int) (datastore.PageResult[*entities.Blob], error) {
 
-	return webauthnDAO.AferoDAO.Page(pageQuery, CONSISTENCY_LEVEL)
-}
+// 	return webauthnDAO.AferoDAO.Page(pageQuery, CONSISTENCY_LEVEL)
+// }
 
-func (webauthnDAO *WebAuthnDAO) ForEachPage(
-	pageQuery datastore.PageQuery,
-	pagerProcFunc datastore.PagerProcFunc[*entities.Blob],
-	CONSISTENCY_LEVEL int) error {
+// func (webauthnDAO *WebAuthnDAO) ForEachPage(
+// 	pageQuery datastore.PageQuery,
+// 	pagerProcFunc datastore.PagerProcFunc[*entities.Blob],
+// 	CONSISTENCY_LEVEL int) error {
 
-	return webauthnDAO.AferoDAO.ForEachPage(pageQuery, pagerProcFunc, CONSISTENCY_LEVEL)
-}
+// 	return webauthnDAO.AferoDAO.ForEachPage(pageQuery, pagerProcFunc, CONSISTENCY_LEVEL)
+// }

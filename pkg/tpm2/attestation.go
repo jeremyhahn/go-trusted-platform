@@ -3,7 +3,10 @@ package tpm2
 import (
 	"crypto/x509"
 	"encoding/asn1"
+	"errors"
+	"fmt"
 	"math/big"
+	"os"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/aesgcm"
@@ -115,13 +118,26 @@ func (tpm *TPM2) ActivateCredential(
 		return nil, err
 	}
 
+	// Set the activation key handle to the appropriate key based on the
+	// enrollment strategy defined in the platform configuration file.
+	var keyAttrs *keystore.KeyAttributes
+	EnrollmentStrategy := ParseIdentityProvisioningStrategy(tpm.config.IdentityProvisioningStrategy)
+	switch EnrollmentStrategy {
+	case EnrollmentStrategyIAK:
+		keyAttrs = tpm.iakAttrs
+	case EnrollmentStrategyIAK_IDEVID_SINGLE_PASS:
+		keyAttrs = tpm.idevidAttrs
+	default:
+		return nil, ErrInvalidEnrollmentStrategy
+	}
+
 	// Activate the credential, proving the AK and EK are both loaded
 	// into the same TPM, and the EK is able to decrypt the secret.
 	tpm.logger.Debug("tpm2: activating credential")
 	activateCredentialsResponse, err := tpm2.ActivateCredential{
 		ActivateHandle: tpm2.NamedHandle{
-			Handle: tpm.iakAttrs.TPMAttributes.Handle,
-			Name:   tpm.iakAttrs.TPMAttributes.Name,
+			Handle: keyAttrs.TPMAttributes.Handle,
+			Name:   keyAttrs.TPMAttributes.Name,
 		},
 		KeyHandle: tpm2.AuthHandle{
 			Handle: ekAttrs.TPMAttributes.Handle,
@@ -136,6 +152,7 @@ func (tpm *TPM2) ActivateCredential(
 		},
 	}.Execute(tpm.transport)
 	if err != nil {
+		fmt.Println(err)
 		tpm.logger.Error(err)
 		return nil, ErrInvalidActivationCredential
 	}
@@ -253,7 +270,13 @@ func (tpm *TPM2) Quote(pcrs []uint, nonce []byte) (Quote, error) {
 	// https://github.com/google/go-attestation/blob/master/docs/event-log-disclosure.md
 	eventLog, err := tpm.EventLog()
 	if err != nil {
-		return Quote{}, err
+		if !errors.Is(err, os.ErrNotExist) {
+			// Some embedded systems may not have a measurement log or there may be a permission
+			// problem. Log the warning and carry on...
+			tpm.logger.Warn(ErrMissingMeasurementLog.Error())
+		} else {
+			return Quote{}, err
+		}
 	}
 
 	allBanks, err := tpm.ReadPCRs(pcrs)
@@ -277,7 +300,8 @@ func (tpm *TPM2) Quote(pcrs []uint, nonce []byte) (Quote, error) {
 	}, nil
 }
 
-// Create a random nonce and issue a quote command to the TPM
+// Create a random nonce and issue a quote command to the TPM for the PCR specified
+// in the platform configuration file.
 func (tpm *TPM2) PlatformQuote(
 	keyAttrs *keystore.KeyAttributes) (Quote, []byte, error) {
 

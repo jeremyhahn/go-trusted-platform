@@ -3,17 +3,43 @@ package datastore
 import (
 	"errors"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/serializer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 )
 
-const (
-	CONSISTENCY_LOCAL int = iota
-	CONSISTENCY_QUORUM
+var (
+	DefaultConfig = Config{
+		ConsistencyLevel: "local",
+		Backend:          "fs",
+		Serializer:       "json",
+		ReadBufferSize:   50,
+		RootDir:          "datastore",
+	}
+
+	ErrRecordNotFound     = errors.New("datastore: record not found")
+	ErrInvalidIndexEntity = errors.New("datastore: invalid index entity")
+	ErrInvalidStoreType   = errors.New("datastore: invalid store type")
 )
 
-var (
-	ErrRecordNotFound = errors.New("datastore: record not found")
+type StoreType string
+
+func (s StoreType) String() string {
+	return string(s)
+}
+
+type ConsistencyLevel int
+
+const (
+	ConsistencyLevelLocal ConsistencyLevel = iota
+	ConsistencyLevelQuorum
 )
+
+func (c ConsistencyLevel) String() string {
+	if c == ConsistencyLevelQuorum {
+		return "quorum"
+	}
+	return "local"
+}
 
 type PagerProcFunc[E any] func(entities []E) error
 
@@ -60,21 +86,21 @@ func NewPageResultFromQuery[E any](q PageQuery) PageResult[E] {
 }
 
 // DAO interfaces
-
 type Pager[E any] interface {
-	Page(pageQuery PageQuery, CONSISTENCY_LEVEL int) (PageResult[E], error)
-	ForEachPage(pageQuery PageQuery, pagerProcFunc PagerProcFunc[E], CONSISTENCY_LEVEL int) error
+	Page(pageQuery PageQuery, CONSISTENCY_LEVEL ConsistencyLevel) (PageResult[E], error)
+	ForEachPage(pageQuery PageQuery, pagerProcFunc PagerProcFunc[E], CONSISTENCY_LEVEL ConsistencyLevel) error
 }
+
 type GenericDAO[E any] interface {
 	Save(entity E) error
-	Get(id uint64, CONSISTENCY_LEVEL int) (E, error)
+	Get(id uint64, CONSISTENCY_LEVEL ConsistencyLevel) (E, error)
 	Delete(entity E) error
-	Count(CONSISTENCY_LEVEL int) (int, error)
+	Count(CONSISTENCY_LEVEL ConsistencyLevel) (int, error)
 	Pager[E]
 }
 
 type OrganizationDAO interface {
-	GetUsers(id uint64, CONSISTENCY_LEVEL int) ([]*entities.User, error)
+	GetUsers(id uint64, CONSISTENCY_LEVEL ConsistencyLevel) ([]*entities.User, error)
 	GenericDAO[*entities.Organization]
 }
 
@@ -87,7 +113,7 @@ type RegistrationDAO interface {
 }
 
 type RoleDAO interface {
-	GetByName(name string, CONSISTENCY_LEVEL int) (*entities.Role, error)
+	GetByName(name string, CONSISTENCY_LEVEL ConsistencyLevel) (*entities.Role, error)
 	GenericDAO[*entities.Role]
 }
 
@@ -95,10 +121,12 @@ type WebAuthnDAO interface {
 	GenericDAO[*entities.Blob]
 }
 
+// DAO Factory interface
 type Factory interface {
 	OrganizationDAO() (OrganizationDAO, error)
 	UserDAO() (UserDAO, error)
 	RegistrationDAO() (RegistrationDAO, error)
 	RoleDAO() (RoleDAO, error)
+	SerializerType() serializer.SerializerType
 	WebAuthnDAO() (WebAuthnDAO, error)
 }

@@ -12,6 +12,7 @@ func Test_Provision(t *testing.T) {
 
 	InitParams.Pin = []byte("test")
 	InitParams.SOPin = []byte("test")
+	InitParams.Env = app.EnvTest.String()
 
 	App = app.DefaultTestConfig()
 

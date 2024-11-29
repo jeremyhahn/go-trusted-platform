@@ -21,6 +21,31 @@ var (
 	TEST_DATA_DIR = "./testdata"
 )
 
+func TestRotateKey(t *testing.T) {
+
+	_, ks, _, _ := createKeystore()
+
+	// Generate new key attributes using the pre-defined
+	// key store RSA template
+	testKeyAttrs := keystore.TemplateRSA
+
+	// Generate a new RSA test key
+	opaqueRSA, err := ks.GenerateKey(testKeyAttrs)
+	assert.Nil(t, err)
+
+	// Rotate the key
+	newOpaqueRSA, err := ks.RotateKey(testKeyAttrs)
+	assert.Nil(t, err)
+
+	// Make sure they're different keys
+	isEqual := opaqueRSA.Equal(newOpaqueRSA.Public())
+	assert.False(t, isEqual)
+
+	// Make sure the new key is equal to itself
+	wantTrue := newOpaqueRSA.Equal(newOpaqueRSA)
+	assert.True(t, wantTrue)
+}
+
 func TestSignPKCS1v15_WithoutFileIntegrityCheck(t *testing.T) {
 
 	_, ks, _, _ := createKeystore()

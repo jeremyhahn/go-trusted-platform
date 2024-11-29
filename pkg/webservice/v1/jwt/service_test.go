@@ -11,18 +11,13 @@ import (
 
 func TestGenerateToken(t *testing.T) {
 
-	keyring := createKeyring()
-	config := testConfig()
+	params := testServiceParams()
+	params.KeyAttrs.KeyType = keystore.KEY_TYPE_TLS
 
-	keyAttrs, err := keystore.KeyAttributesFromConfig(config.Key)
+	_, err := params.Keyring.GenerateKey(params.KeyAttrs)
 	assert.Nil(t, err)
 
-	keyAttrs.KeyType = keystore.KEY_TYPE_TLS
-
-	_, err = keyring.GenerateKey(keyAttrs)
-	assert.Nil(t, err)
-
-	service, err := NewService(config, keyring, keyAttrs)
+	service, err := NewService(params)
 	assert.Nil(t, err)
 	assert.NotNil(t, service)
 

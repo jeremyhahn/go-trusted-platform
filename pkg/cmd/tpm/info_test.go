@@ -10,9 +10,10 @@ import (
 
 func Test_Info(t *testing.T) {
 
+	InitParams.Initialize = true
 	InitParams.Pin = []byte("test")
 	InitParams.SOPin = []byte("test")
-	InitParams.Initialize = true
+	InitParams.Env = app.EnvTest.String()
 
 	App = app.DefaultTestConfig()
 

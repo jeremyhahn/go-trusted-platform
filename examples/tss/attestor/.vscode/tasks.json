@@ -1,0 +1,31 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "clean_trusted_data",
+            "command": "rm",
+            "args": [
+                "-rf",
+                "pkg/trusted-data",
+            ]
+        },
+        {
+            "type": "shell",
+            "label": "copy_trusted_data",
+            "command": "cp",
+            "args": [
+                "-R",
+                "trusted-data",
+                "pkg/",
+            ]
+        },
+        {
+            "type": "shell",
+            "label": "attestor_clean_config",
+            "dependsOn": [
+                "clean_trusted_data",
+                "copy_trusted_data",
+            ],
+        }
+]}

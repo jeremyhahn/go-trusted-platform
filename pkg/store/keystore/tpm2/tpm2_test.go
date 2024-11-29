@@ -18,6 +18,58 @@ var (
 	ErrAuthFailWithDA = tpm2.TPMRC(0x98e)
 )
 
+func TestRotateKey(t *testing.T) {
+
+	soPIN := []byte("so-pin")
+	userPIN := []byte("testme")
+	keyPass := keystore.NewClearPassword([]byte("key-pass"))
+
+	soSecret := keystore.NewClearPassword(soPIN)
+	userSecret := keystore.NewClearPassword(userPIN)
+
+	_, tpmks, _, err := createKeyStore(true, soPIN, userPIN, false)
+	defer tpmks.Close()
+
+	assert.NotNil(t, tpmks)
+	assert.Equal(t, keystore.ErrNotInitalized, err)
+
+	err = tpmks.Initialize(soSecret, userSecret)
+	assert.Nil(t, err)
+
+	ksSRKAttrs := tpmks.(*KeyStore).SRKAttributes()
+	ksSRKAttrs.Password = userSecret
+
+	// Generate RSA child key under the key store SRK
+	keyAttrs := &keystore.KeyAttributes{
+		CN:           "test",
+		Hash:         crypto.SHA256,
+		KeyAlgorithm: x509.RSA,
+		KeyType:      keystore.KEY_TYPE_TPM,
+		Password:     keyPass,
+		Parent:       ksSRKAttrs,
+		StoreType:    keystore.STORE_TPM2,
+		TPMAttributes: &keystore.TPMAttributes{
+			Hierarchy:  tpm2.TPMRHOwner,
+			HandleType: tpm2.TPMHTTransient,
+		}}
+
+	// Generate a new RSA test key
+	opaqueRSA, err := tpmks.GenerateKey(keyAttrs)
+	assert.Nil(t, err)
+
+	// Rotate the key
+	newOpaqueRSA, err := tpmks.RotateKey(keyAttrs)
+	assert.Nil(t, err)
+
+	// Make sure the keys are different
+	isEqual := opaqueRSA.Equal(newOpaqueRSA.Public())
+	assert.False(t, isEqual)
+
+	// Make sure the new key is equal to itself
+	wantTrue := newOpaqueRSA.Equal(newOpaqueRSA)
+	assert.True(t, wantTrue)
+}
+
 func TestRSA_PKCS1v15_WithPasswordWithoutPolicy(t *testing.T) {
 
 	soPIN := []byte("so-pin")

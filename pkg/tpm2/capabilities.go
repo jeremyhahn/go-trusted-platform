@@ -17,8 +17,8 @@ type PropertiesFixed struct {
 	AuthSessionsLoadedAvail uint32
 	Family                  string
 	Fips1402                bool
-	FwMajor                 int
-	FwMinor                 int
+	FwMajor                 int64
+	FwMinor                 int64
 	LoadedCurves            uint32
 	LockoutCounter          uint32
 	LockoutInterval         uint32
@@ -370,7 +370,7 @@ func family(transport transport.TPM) (string, error) {
 	return string(buf), nil
 }
 
-func firmware(transport transport.TPM) (int, int, error) {
+func firmware(transport transport.TPM) (int64, int64, error) {
 	response, err := tpm2.GetCapability{
 		Capability:    tpm2.TPMCapTPMProperties,
 		Property:      tpmPtFwVersion1,
@@ -384,8 +384,8 @@ func firmware(transport transport.TPM) (int, int, error) {
 		return 0, 0, err
 	}
 	fw := firmware.TPMProperty[0].Value
-	var fwMajor = int((fw & 0xffff0000) >> 16)
-	var fwMinor = int(fw & 0x0000ffff)
+	var fwMajor = int64((fw & 0xffff0000) >> 16)
+	var fwMinor = int64(fw & 0x0000ffff)
 	return fwMajor, fwMinor, nil
 }
 

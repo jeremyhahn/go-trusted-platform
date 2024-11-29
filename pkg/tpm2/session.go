@@ -159,8 +159,8 @@ func (tpm *TPM2) PlatformPolicySession() (tpm2.Session, func() error, error) {
 		return nil, nil, err
 	}
 
-	tpm.logger.Debugf("tpm: platform PCR policy session digest: %x", digest)
-	tpm.logger.Debugf("tpm: pgd.PolicyDigest.Buffer: %x", pgd.PolicyDigest.Buffer)
+	// tpm.logger.Debugf("tpm: platform PCR policy session digest: %x", digest)
+	// tpm.logger.Debugf("tpm: pgd.PolicyDigest.Buffer: %x", pgd.PolicyDigest.Buffer)
 
 	tpm.policyDigest = pgd.PolicyDigest
 
@@ -228,14 +228,14 @@ func (tpm *TPM2) CreateSession(
 	if keyAttrs.Parent.Password != nil && !keyAttrs.Parent.PlatformPolicy {
 		parentAuth, err = keyAttrs.Parent.Password.Bytes()
 		if err != nil {
-			return session, nil, err
+			return session, closer, err
 		}
 	}
 
 	parentHandle := tpm2.TPMHandle(keyAttrs.Parent.TPMAttributes.Handle)
 	_, parentPub, err := tpm.ReadHandle(parentHandle)
 	if err != nil {
-		return session, nil, err
+		return session, closer, err
 	}
 
 	if keyAttrs.Parent.PlatformPolicy {
@@ -243,7 +243,7 @@ func (tpm *TPM2) CreateSession(
 		// Create platform PCR policy session
 		session, closer, err = tpm.PlatformPolicySession()
 		if err != nil {
-			return session, nil, err
+			return session, closer, err
 		}
 		// dont forget to call closer() when finished
 		// defer closer()
@@ -251,7 +251,7 @@ func (tpm *TPM2) CreateSession(
 			"tpm: created platform policy session for %s", keyAttrs.CN)
 
 		if err != nil {
-			return session, nil, err
+			return session, closer, err
 		}
 		return session, closer, nil
 	}
@@ -284,7 +284,7 @@ func (tpm *TPM2) CreateSession(
 			parentAuth)
 		if err != nil {
 			tpm.logger.Error(err)
-			return session, nil, err
+			return session, closer, err
 		}
 		// dont forget to call closer() when finished
 		// defer closer()
@@ -315,7 +315,7 @@ func (tpm *TPM2) CreateKeySession(
 	if keyAttrs.PlatformPolicy {
 		session, closer, err = tpm.PlatformPolicySession()
 		if err != nil {
-			return session, nil, err
+			return session, closer, err
 		}
 		// defer closer()
 	} else {
@@ -323,7 +323,7 @@ func (tpm *TPM2) CreateKeySession(
 		if keyAttrs.Password != nil {
 			keyAuth, err = keyAttrs.Password.Bytes()
 			if err != nil {
-				return session, nil, err
+				return session, closer, err
 			}
 			session = tpm2.PasswordAuth(keyAuth)
 		} else {
@@ -416,18 +416,19 @@ func (tpm *TPM2) SaveKeyPair(
 	keyAttrs *keystore.KeyAttributes,
 	outPrivate tpm2.TPM2BPrivate,
 	outPublic tpm2.TPM2B[tpm2.TPMTPublic, *tpm2.TPMTPublic],
-	backend keystore.KeyBackend) error {
+	backend keystore.KeyBackend,
+	overwrite bool) error {
 
 	tpm.logger.Debugf("tpm: saving key pair: %s", keyAttrs.CN)
 
 	if backend == nil {
 		backend = tpm.backend
 	}
-	err := backend.Save(keyAttrs, outPrivate.Buffer, keystore.FSEXT_PRIVATE_BLOB)
+	err := backend.Save(keyAttrs, outPrivate.Buffer, keystore.FSEXT_PRIVATE_BLOB, overwrite)
 	if err != nil {
 		return err
 	}
-	err = backend.Save(keyAttrs, outPublic.Bytes(), keystore.FSEXT_PUBLIC_BLOB)
+	err = backend.Save(keyAttrs, outPublic.Bytes(), keystore.FSEXT_PUBLIC_BLOB, overwrite)
 	if err != nil {
 		return err
 	}

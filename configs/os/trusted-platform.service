@@ -1,0 +1,13 @@
+# /lib/systemd/system/trusted-platform.service
+[Unit]
+Description=Trusted Platform
+
+[Service]
+WorkingDirectory=/opt/trusted-platform/
+Type=simple
+Restart=always
+RestartSec=5s
+ExecStart=/usr/local/bin/tpadm webservice --debug --platform-dir /opt/trusted-platform/trusted-data --log-dir /opt/trusted-platform/trusted-data/log --ca-dir /opt/trusted-data/trusted-data/ca
+
+[Install]
+WantedBy=multi-user.target
