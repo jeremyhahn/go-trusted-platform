@@ -43,7 +43,7 @@ func (service *Registration) Delete(session Session, registrationID uint64) erro
 
 // Looks up the registration account by registration ID
 func (service *Registration) Get(session Session, registrationID uint64) (*entities.Registration, error) {
-	entity, err := service.registrationDAO.Get(registrationID, datastore.CONSISTENCY_LOCAL)
+	entity, err := service.registrationDAO.Get(registrationID, datastore.ConsistencyLevelLocal)
 	if err != nil {
 		return nil, err
 	}

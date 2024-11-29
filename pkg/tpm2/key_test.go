@@ -72,7 +72,7 @@ func TestRSA(t *testing.T) {
 		TPMAttributes: &keystore.TPMAttributes{
 			Hierarchy: tpm2.TPMRHOwner,
 		}}
-	rsaPub, err := tpm.CreateRSA(keyAttrs, nil)
+	rsaPub, err := tpm.CreateRSA(keyAttrs, nil, false)
 	assert.Nil(t, err)
 	assert.NotNil(t, rsaPub)
 }
@@ -119,7 +119,7 @@ func TestECDSA(t *testing.T) {
 		TPMAttributes: &keystore.TPMAttributes{
 			Hierarchy: tpm2.TPMRHOwner,
 		}}
-	rsaPub, err := tpm.CreateECDSA(keyAttrs, nil)
+	rsaPub, err := tpm.CreateECDSA(keyAttrs, nil, false)
 	assert.Nil(t, err)
 	assert.NotNil(t, rsaPub)
 }

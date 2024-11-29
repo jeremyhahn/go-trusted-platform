@@ -18,6 +18,7 @@ func Test_Policy(t *testing.T) {
 	InitParams.Initialize = true
 	InitParams.Pin = []byte("test")
 	InitParams.SOPin = []byte("test")
+	InitParams.Env = app.EnvTest.String()
 
 	App = app.DefaultTestConfig()
 

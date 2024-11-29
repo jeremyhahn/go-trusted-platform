@@ -17,6 +17,7 @@ var (
 	slParentPolicy   bool
 	slPassword       string
 	slPolicy         bool
+	slOverwrite      bool
 )
 
 func init() {
@@ -27,6 +28,7 @@ func init() {
 
 	SealCmd.PersistentFlags().StringVar(&slPassword, "password", "", "The seal keyed hash password")
 	SealCmd.PersistentFlags().BoolVar(&slPolicy, "policy", true, "True to attach the platform policy digest to the keyed hash object")
+	SealCmd.PersistentFlags().BoolVar(&slOverwrite, "overwrite", false, "True to overwrite an existing key")
 }
 
 var SealCmd = &cobra.Command{
@@ -95,7 +97,7 @@ var SealCmd = &cobra.Command{
 		keyAttrs.Secret = keystore.NewClearPassword(secret)
 		keyAttrs.StoreType = keystore.STORE_TPM2
 
-		if _, err := App.TPM.Seal(keyAttrs, nil); err != nil {
+		if _, err := App.TPM.Seal(keyAttrs, nil, slOverwrite); err != nil {
 			cmd.PrintErrln(err)
 		}
 	},

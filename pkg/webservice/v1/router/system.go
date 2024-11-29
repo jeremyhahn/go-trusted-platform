@@ -1,7 +1,6 @@
 package router
 
 import (
-	"fmt"
 	"net/http"
 
 	"github.com/codegangsta/negroni"
@@ -11,13 +10,13 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/system"
 )
 
 type SystemRouter struct {
 	authMiddleware    middleware.AuthMiddleware
 	jwtMiddleware     middleware.JsonWebTokenMiddleware
-	systemRestService rest.SystemRestServicer
+	systemRestHandler system.RestHandler
 	WebServiceRouter
 }
 
@@ -29,41 +28,25 @@ func NewSystemRouter(
 	jwtMiddleware middleware.JsonWebTokenMiddleware,
 	authMiddleware middleware.AuthMiddleware,
 	router *mux.Router,
-	jsonWriter response.HttpWriter,
-	endpointList *[]string) WebServiceRouter {
+	jsonWriter response.HttpWriter) WebServiceRouter {
 
 	return &SystemRouter{
 		authMiddleware: authMiddleware,
 		jwtMiddleware:  jwtMiddleware,
-		systemRestService: rest.NewSystemRestService(
+		systemRestHandler: system.NewHandler(
 			ca,
 			serverKeyAttributes,
 			jsonWriter,
-			logger,
-			endpointList)}
+			logger)}
 }
 
 // Registers all of the system endpoints at the root of the webservice (/api/v1)
-func (systemRouter *SystemRouter) RegisterRoutes(router *mux.Router, baseURI string) []string {
-	return []string{
-		systemRouter.endpoints(router, baseURI),
-		systemRouter.status(router, baseURI),
-		systemRouter.pubkey(router, baseURI),
-		systemRouter.certificate(router, baseURI),
-		systemRouter.config(router, baseURI),
-		systemRouter.eventlog(router, baseURI)}
-}
-
-// @Summary REST API Endpoints
-// @Description Returns a list of REST API endpoints
-// @Tags System
-// @Produce  json
-// @Success 200
-// @Router /endpoints [get]
-func (systemRouter *SystemRouter) endpoints(router *mux.Router, baseURI string) string {
-	endpoints := fmt.Sprintf("%s/endpoints", baseURI)
-	router.HandleFunc(endpoints, systemRouter.systemRestService.Endpoints)
-	return endpoints
+func (systemRouter *SystemRouter) RegisterRoutes(router *mux.Router) {
+	systemRouter.status(router)
+	systemRouter.pubkey(router)
+	systemRouter.certificate(router)
+	systemRouter.config(router)
+	systemRouter.eventlog(router)
 }
 
 // @Summary System Status
@@ -73,10 +56,8 @@ func (systemRouter *SystemRouter) endpoints(router *mux.Router, baseURI string) 
 // @Success 200
 // @Router /status [get]
 // @Security JWT
-func (systemRouter *SystemRouter) status(router *mux.Router, baseURI string) string {
-	system := fmt.Sprintf("%s/status", baseURI)
-	router.HandleFunc(system, systemRouter.systemRestService.Status)
-	return system
+func (systemRouter *SystemRouter) status(router *mux.Router) {
+	router.HandleFunc("/status", systemRouter.systemRestHandler.Status)
 }
 
 // @Summary Retrieve the server pubilc key
@@ -85,10 +66,8 @@ func (systemRouter *SystemRouter) status(router *mux.Router, baseURI string) str
 // @Produce  json
 // @Success 200 {string} pubkey
 // @Router /pubkey [get]
-func (systemRouter *SystemRouter) pubkey(router *mux.Router, baseURI string) string {
-	pubkey := fmt.Sprintf("%s/pubkey", baseURI)
-	router.HandleFunc(pubkey, systemRouter.systemRestService.PublicKey)
-	return pubkey
+func (systemRouter *SystemRouter) pubkey(router *mux.Router) {
+	router.HandleFunc("/pubkey", systemRouter.systemRestHandler.PublicKey)
 }
 
 // @Summary Retrieve the server x509 certificate
@@ -97,10 +76,8 @@ func (systemRouter *SystemRouter) pubkey(router *mux.Router, baseURI string) str
 // @Produce  json
 // @Success 200 {string} certificate
 // @Router /certificate [get]
-func (systemRouter *SystemRouter) certificate(router *mux.Router, baseURI string) string {
-	certificate := fmt.Sprintf("%s/certificate", baseURI)
-	router.HandleFunc(certificate, systemRouter.systemRestService.Certificate)
-	return certificate
+func (systemRouter *SystemRouter) certificate(router *mux.Router) {
+	router.HandleFunc("/certificate", systemRouter.systemRestHandler.Certificate)
 }
 
 // @Summary System configuration
@@ -112,14 +89,12 @@ func (systemRouter *SystemRouter) certificate(router *mux.Router, baseURI string
 // @Failure 401 {object} response.WebServiceResponse
 // @Router /config [get]
 // @Security JWT
-func (systemRouter *SystemRouter) config(router *mux.Router, baseURI string) string {
-	config := fmt.Sprintf("%s/config", baseURI)
-	router.Handle(config, negroni.New(
+func (systemRouter *SystemRouter) config(router *mux.Router) {
+	router.Handle("/config", negroni.New(
 		negroni.HandlerFunc(systemRouter.authMiddleware.Verify),
 		negroni.HandlerFunc(systemRouter.jwtMiddleware.Verify),
-		negroni.Wrap(http.HandlerFunc(systemRouter.systemRestService.Config)),
+		negroni.Wrap(http.HandlerFunc(systemRouter.systemRestHandler.Config)),
 	))
-	return config
 }
 
 // @Summary System Event Log
@@ -132,13 +107,11 @@ func (systemRouter *SystemRouter) config(router *mux.Router, baseURI string) str
 // @Param   page	path	string	false	"string valid"	minlength(1)	maxlength(20)
 // @Router /events/{page} [get]
 // @Security JWT
-func (systemRouter *SystemRouter) eventlog(router *mux.Router, baseURI string) string {
-	eventlog := fmt.Sprintf("%s/events/{page}", baseURI)
-	router.Handle(eventlog, negroni.New(
+func (systemRouter *SystemRouter) eventlog(router *mux.Router) {
+	router.Handle("/events/{page}", negroni.New(
 		negroni.NewLogger(),
 		negroni.HandlerFunc(systemRouter.authMiddleware.Verify),
 		negroni.HandlerFunc(systemRouter.jwtMiddleware.Verify),
-		negroni.Wrap(http.HandlerFunc(systemRouter.systemRestService.EventsPage)),
+		negroni.Wrap(http.HandlerFunc(systemRouter.systemRestHandler.EventsPage)),
 	))
-	return eventlog
 }

@@ -16,7 +16,7 @@ import (
 var SOFTHSM_CONF = []byte(`
 # SoftHSM v2 configuration file
 
-directories.tokendir = trusted-data/softhsm2
+directories.tokendir = %s
 objectstore.backend = file
 objectstore.umask = 0077
 
@@ -55,8 +55,9 @@ func InitSoftHSM(logger *logging.Logger, config *Config) {
 			slog.Error(err.Error())
 			os.Exit(-1)
 		}
+		content := fmt.Sprintf(string(SOFTHSM_CONF), dir)
 		conf := fmt.Sprintf("%s/softhsm.conf", dir)
-		if err := os.WriteFile(conf, SOFTHSM_CONF, os.ModePerm); err != nil {
+		if err := os.WriteFile(conf, []byte(content), os.ModePerm); err != nil {
 			slog.Error(err.Error())
 			os.Exit(-1)
 		}
@@ -79,13 +80,12 @@ func InitSoftHSM(logger *logging.Logger, config *Config) {
 		pieces := strings.Split(matches[len(matches)-1], "=")
 		if len(pieces) == 2 {
 			path := strings.TrimSpace(pieces[1])
-			if _, err = os.Stat(config.LibraryConfig); err != nil {
-				if err = os.MkdirAll(path, os.ModePerm); err != nil {
-					slog.Error(err.Error())
-					os.Exit(-1)
-				}
+			// if _, err = os.Stat(config.LibraryConfig); err != nil {
+			if err = os.MkdirAll(path, os.ModePerm); err != nil {
+				slog.Error(err.Error())
+				os.Exit(-1)
 			}
-
+			// }
 		}
 	}
 

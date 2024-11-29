@@ -6,7 +6,7 @@ import (
 )
 
 type PlatformKeyStorer interface {
-	CreatePassword(keyAttrs *keystore.KeyAttributes, backend keystore.KeyBackend) error
+	CreatePassword(keyAttrs *keystore.KeyAttributes, backend keystore.KeyBackend, overwrite bool) error
 	KeyAttributes() *keystore.KeyAttributes
 	Password(keyAttrs *keystore.KeyAttributes) (keystore.Password, error)
 	SRKAttributes() *keystore.KeyAttributes

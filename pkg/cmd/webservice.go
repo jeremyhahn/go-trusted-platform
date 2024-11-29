@@ -1,19 +1,19 @@
 package cmd
 
 import (
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/kvstore"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest"
-	"github.com/spf13/afero"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/webauthn"
 	"github.com/spf13/cobra"
+
+	acmedao "github.com/jeremyhahn/go-trusted-platform/pkg/acme/dao/afero"
+
+	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
 )
 
 func init() {
@@ -34,67 +34,77 @@ var webserverCmd = &cobra.Command{
 			return
 		}
 
-		userPIN := keystore.NewClearPassword(InitParams.Pin)
-		if err := App.LoadCA(userPIN); err != nil {
-			App.Logger.Error(err)
-			cmd.PrintErrln(err)
-			return
+		if App.CA == nil {
+			soPIN, userPIN, err := App.ParsePINs(InitParams.SOPin, InitParams.Pin)
+			if err != nil {
+				App.Logger.Error(err)
+				cmd.PrintErrln(err)
+				return
+			}
+			if err := App.LoadCA(soPIN, userPIN); err != nil {
+				App.Logger.Error(err)
+				cmd.PrintErrln(err)
+				return
+			}
 		}
 
-		if err := App.InitWebServices(); err != nil {
-			App.Logger.Error(err)
-			cmd.PrintErrln(err)
-			return
+		if App.ServerKeyAttributes == nil {
+			if err := App.InitWebServer(); err != nil {
+				App.Logger.Error(err)
+				cmd.PrintErrln(err)
+				return
+			}
 		}
 
-		datastoreFactory, err := kvstore.NewFactory(&kvstore.Params{
-			Fs:             afero.NewOsFs(),
-			Logger:         App.Logger,
-			ReadBufferSize: 50,
-			RootDir:        fmt.Sprintf("%s/datastore", App.PlatformDir),
-			Serializer:     datastore.SERIALIZER_YAML,
-		})
-		if err != nil {
-			App.Logger.Error(err)
-			cmd.PrintErrln(err)
-			return
-		}
-
-		serviceRegistry, err := service.NewRegistry(App.Logger, datastoreFactory)
-		if err != nil {
-			App.Logger.Error(err)
-			cmd.PrintErrln(err)
-			return
-		}
-
-		restRegistry := rest.NewRestServiceRegistry(
+		acmeDAOFactory, err := acmedao.NewFactory(
 			App.Logger,
-			App.CA,
-			App.ServerKeyAttributes,
-			serviceRegistry,
-			App.WebService,
-			App.Domain,
+			App.DatastoreConfig,
 		)
+		if err != nil {
+			App.Logger.Error(err)
+			cmd.PrintErrln(err)
+			return
+		}
+
+		restHandlerRegistry := v1.NewHandlerRegistry(v1.RegistryParams{
+			ACMEConfig:          App.ACMEConfig,
+			ACMEDAOFactory:      acmeDAOFactory,
+			CA:                  App.CA,
+			Debug:               App.DebugFlag,
+			HTTPWriter:          response.NewResponseWriter(App.Logger, nil),
+			Keyring:             App.CA.Keyring(),
+			JWTAudience:         App.WebServiceConfig.Certificate.Subject.CommonName,
+			JWTClaimsIssuer:     app.Name,
+			JWTExpiration:       3600,
+			Logger:              App.Logger,
+			ServerKeyAttributes: App.ServerKeyAttributes,
+			ServiceRegistry:     App.ServiceRegistry(),
+			TPM:                 App.TPM,
+			WebServiceConfig:    App.WebServiceConfig,
+			WebAuthnConfig: &webauthn.Config{
+				RPDisplayName: App.WebServiceConfig.WebAuthn.RPDisplayName,
+				RPID:          App.WebServiceConfig.WebAuthn.RPID,
+				RPOrigins:     App.WebServiceConfig.WebAuthn.RPOrigins,
+			},
+		})
 
 		webserver := webservice.NewWebServerV1(
+			App.DebugFlag,
 			App.Logger,
 			App.CA,
-			App.WebService,
-			App.ListenAddress,
-			restRegistry,
+			App.WebServiceConfig,
+			restHandlerRegistry,
 			App.ServerKeyAttributes)
 
-		// Start the web server in a background goroutine
 		go webserver.Run()
 
 		// Set CTRL+C handler to stop the web service and
 		// shut down the platform
 		signal.Notify(sigChan, syscall.SIGINT) //syscall.SIGTERM, syscall.SIGHUP)
 
-		// Wait for the signal notification
 		<-sigChan
 		close(sigChan)
 
-		App.Logger.Info("Shutting down")
+		App.Logger.Info("Graceful shutdown complete")
 	},
 }

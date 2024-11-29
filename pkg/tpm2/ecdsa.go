@@ -11,7 +11,8 @@ import (
 // Creates a new ECDSA child key using the provided key attributes
 func (tpm *TPM2) CreateECDSA(
 	keyAttrs *keystore.KeyAttributes,
-	backend keystore.KeyBackend) (*ecdsa.PublicKey, error) {
+	backend keystore.KeyBackend,
+	overwrite bool) (*ecdsa.PublicKey, error) {
 
 	if keyAttrs.Parent == nil {
 		return nil, keystore.ErrInvalidParentAttributes
@@ -142,7 +143,7 @@ func (tpm *TPM2) CreateECDSA(
 	}
 
 	// Save the public and private areas to blob storage
-	if err := tpm.SaveKeyPair(keyAttrs, private, public, backend); err != nil {
+	if err := tpm.SaveKeyPair(keyAttrs, private, public, backend, overwrite); err != nil {
 		return nil, err
 	}
 

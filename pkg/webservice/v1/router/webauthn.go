@@ -1,24 +1,21 @@
 package router
 
 import (
-	"fmt"
-
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/webauthn"
 )
 
 type WebAuthnRouter struct {
-	baseAuthURI         string
 	middleware          middleware.JsonWebTokenMiddleware
-	webAuthnRestService rest.WebAuthnRestServicer
+	webAuthnRestService webauthn.RestHandler
 	WebServiceRouter
 }
 
 // Creates a new webauthn router
 func NewWebAuthnRouter(
 	middleware middleware.JsonWebTokenMiddleware,
-	webAuthnRestService rest.WebAuthnRestServicer) WebServiceRouter {
+	webAuthnRestService webauthn.RestHandler) WebServiceRouter {
 
 	return &WebAuthnRouter{
 		middleware:          middleware,
@@ -26,7 +23,7 @@ func NewWebAuthnRouter(
 }
 
 // Registers all of the webauthn endpoints at the root of the webservice (/api/v1/webauthn)
-func (webAuthnRouter *WebAuthnRouter) RegisterRoutes(router *mux.Router, baseURI string) []string {
+func (webAuthnRouter *WebAuthnRouter) RegisterRoutes(router *mux.Router) {
 
 	// // Define allowed CORS options
 	// corsOptions := middleware.CORSOptions{
@@ -41,13 +38,13 @@ func (webAuthnRouter *WebAuthnRouter) RegisterRoutes(router *mux.Router, baseURI
 	// }
 	// router.Use(middleware.CORSMiddleware(corsOptions))
 
-	webAuthnRouter.baseAuthURI = fmt.Sprintf("%s/webauthn", baseURI)
-	return []string{
-		webAuthnRouter.beginRegistration(router, webAuthnRouter.baseAuthURI),
-		webAuthnRouter.finishRegistration(router, webAuthnRouter.baseAuthURI),
-		webAuthnRouter.beginLogin(router, webAuthnRouter.baseAuthURI),
-		webAuthnRouter.finishLogin(router, webAuthnRouter.baseAuthURI),
-		webAuthnRouter.registerStatus(router, webAuthnRouter.baseAuthURI)}
+	subrouter := router.PathPrefix("/webauthn").Subrouter()
+
+	webAuthnRouter.beginRegistration(subrouter)
+	webAuthnRouter.finishRegistration(subrouter)
+	webAuthnRouter.beginLogin(subrouter)
+	webAuthnRouter.finishLogin(subrouter)
+	webAuthnRouter.registerStatus(subrouter)
 }
 
 // @Summary Begin Registration
@@ -60,10 +57,8 @@ func (webAuthnRouter *WebAuthnRouter) RegisterRoutes(router *mux.Router, baseURI
 // @Failure 400 {object} response.WebServiceResponse
 // @Failure 500 {object} response.WebServiceResponse
 // @Router /webauthn/registration/begin [post]
-func (webAuthnRouter *WebAuthnRouter) beginRegistration(router *mux.Router, baseURI string) string {
-	beginRegistration := fmt.Sprintf("%s/registration/begin", baseURI)
-	router.HandleFunc(beginRegistration, webAuthnRouter.webAuthnRestService.BeginRegistration)
-	return beginRegistration
+func (webAuthnRouter *WebAuthnRouter) beginRegistration(router *mux.Router) {
+	router.HandleFunc("/registration/begin", webAuthnRouter.webAuthnRestService.BeginRegistration)
 }
 
 // @Summary Finish Registration
@@ -76,10 +71,8 @@ func (webAuthnRouter *WebAuthnRouter) beginRegistration(router *mux.Router, base
 // @Failure 401 {object} response.WebServiceResponse
 // @Failure 500 {object} response.WebServiceResponse
 // @Router /webauthn/registration/finish [post]
-func (webAuthnRouter *WebAuthnRouter) finishRegistration(router *mux.Router, baseURI string) string {
-	finishRegistration := fmt.Sprintf("%s/registration/finish", baseURI)
-	router.HandleFunc(finishRegistration, webAuthnRouter.webAuthnRestService.FinishRegistration)
-	return finishRegistration
+func (webAuthnRouter *WebAuthnRouter) finishRegistration(router *mux.Router) {
+	router.HandleFunc("/registration/finish", webAuthnRouter.webAuthnRestService.FinishRegistration)
 }
 
 // @Summary Begin Login
@@ -91,11 +84,9 @@ func (webAuthnRouter *WebAuthnRouter) finishRegistration(router *mux.Router, bas
 // @Failure 400 {object} response.WebServiceResponse
 // @Failure 401 {object} response.WebServiceResponse
 // @Failure 500 {object} response.WebServiceResponse
-// @Router /webauthn/registration/finish [post]
-func (webAuthnRouter *WebAuthnRouter) beginLogin(router *mux.Router, baseURI string) string {
-	beginLogin := fmt.Sprintf("%s/login/begin", baseURI)
-	router.HandleFunc(beginLogin, webAuthnRouter.webAuthnRestService.BeginLogin)
-	return beginLogin
+// @Router /webauthn/login/begin [post]
+func (webAuthnRouter *WebAuthnRouter) beginLogin(router *mux.Router) {
+	router.HandleFunc("/login/begin", webAuthnRouter.webAuthnRestService.BeginLogin)
 }
 
 // @Summary Finish Login
@@ -107,11 +98,9 @@ func (webAuthnRouter *WebAuthnRouter) beginLogin(router *mux.Router, baseURI str
 // @Failure 400 {object} response.WebServiceResponse
 // @Failure 401 {object} response.WebServiceResponse
 // @Failure 500 {object} response.WebServiceResponse
-// @Router /webauthn/registration/finish [post]
-func (webAuthnRouter *WebAuthnRouter) finishLogin(router *mux.Router, baseURI string) string {
-	finishLogin := fmt.Sprintf("%s/login/finish", baseURI)
-	router.HandleFunc(finishLogin, webAuthnRouter.webAuthnRestService.FinishLogin)
-	return finishLogin
+// @Router /webauthn/login/finish [post]
+func (webAuthnRouter *WebAuthnRouter) finishLogin(router *mux.Router) {
+	router.HandleFunc("/login/finish", webAuthnRouter.webAuthnRestService.FinishLogin)
 }
 
 // @Summary Registration Status
@@ -124,8 +113,6 @@ func (webAuthnRouter *WebAuthnRouter) finishLogin(router *mux.Router, baseURI st
 // @Failure 401 {object} response.WebServiceResponse
 // @Failure 500 {object} response.WebServiceResponse
 // @Router /webauthn/registration/status [get]
-func (webAuthnRouter *WebAuthnRouter) registerStatus(router *mux.Router, baseURI string) string {
-	statusEndpoint := fmt.Sprintf("%s/registration/status", baseURI)
-	router.HandleFunc(statusEndpoint, webAuthnRouter.webAuthnRestService.RegistrationStatus).Methods("GET")
-	return statusEndpoint
+func (webAuthnRouter *WebAuthnRouter) registerStatus(router *mux.Router) {
+	router.HandleFunc("/registration/status", webAuthnRouter.webAuthnRestService.RegistrationStatus).Methods("GET")
 }

@@ -13,7 +13,7 @@ type RegistrationDAO struct {
 	*AferoDAO[*entities.Registration]
 }
 
-func NewRegistrationDAO(params *Params) (datastore.RegistrationDAO, error) {
+func NewRegistrationDAO(params *datastore.Params[*entities.Registration]) (datastore.RegistrationDAO, error) {
 	if params.Partition == "" {
 		params.Partition = registration_partition
 	}
@@ -26,33 +26,33 @@ func NewRegistrationDAO(params *Params) (datastore.RegistrationDAO, error) {
 	}, nil
 }
 
-func (registrationDAO *RegistrationDAO) Save(entity *entities.Registration) error {
-	return registrationDAO.AferoDAO.Save(entity)
-}
+// func (registrationDAO *RegistrationDAO) Save(entity *entities.Registration) error {
+// 	return registrationDAO.AferoDAO.Save(entity)
+// }
 
-func (registrationDAO *RegistrationDAO) Get(id uint64, CONSISTENCY_LEVEL int) (*entities.Registration, error) {
-	return registrationDAO.AferoDAO.Get(id, CONSISTENCY_LEVEL)
-}
+// func (registrationDAO *RegistrationDAO) Get(id uint64, CONSISTENCY_LEVEL int) (*entities.Registration, error) {
+// 	return registrationDAO.AferoDAO.Get(id, CONSISTENCY_LEVEL)
+// }
 
-func (registrationDAO *RegistrationDAO) Delete(entity *entities.Registration) error {
-	return registrationDAO.AferoDAO.Delete(entity)
-}
+// func (registrationDAO *RegistrationDAO) Delete(entity *entities.Registration) error {
+// 	return registrationDAO.AferoDAO.Delete(entity)
+// }
 
-func (registrationDAO *RegistrationDAO) Count(CONSISTENCY_LEVEL int) (int, error) {
-	return registrationDAO.AferoDAO.Count(CONSISTENCY_LEVEL)
-}
+// func (registrationDAO *RegistrationDAO) Count(CONSISTENCY_LEVEL int) (int, error) {
+// 	return registrationDAO.AferoDAO.Count(CONSISTENCY_LEVEL)
+// }
 
-func (registrationDAO *RegistrationDAO) Page(
-	pageQuery datastore.PageQuery,
-	CONSISTENCY_LEVEL int) (datastore.PageResult[*entities.Registration], error) {
+// func (registrationDAO *RegistrationDAO) Page(
+// 	pageQuery datastore.PageQuery,
+// 	CONSISTENCY_LEVEL int) (datastore.PageResult[*entities.Registration], error) {
 
-	return registrationDAO.AferoDAO.Page(pageQuery, CONSISTENCY_LEVEL)
-}
+// 	return registrationDAO.AferoDAO.Page(pageQuery, CONSISTENCY_LEVEL)
+// }
 
-func (registrationDAO *RegistrationDAO) ForEachPage(
-	pageQuery datastore.PageQuery,
-	pagerProcFunc datastore.PagerProcFunc[*entities.Registration],
-	CONSISTENCY_LEVEL int) error {
+// func (registrationDAO *RegistrationDAO) ForEachPage(
+// 	pageQuery datastore.PageQuery,
+// 	pagerProcFunc datastore.PagerProcFunc[*entities.Registration],
+// 	CONSISTENCY_LEVEL int) error {
 
-	return registrationDAO.AferoDAO.ForEachPage(pageQuery, pagerProcFunc, CONSISTENCY_LEVEL)
-}
+// 	return registrationDAO.AferoDAO.ForEachPage(pageQuery, pagerProcFunc, CONSISTENCY_LEVEL)
+// }

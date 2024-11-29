@@ -170,6 +170,12 @@ func (ks *KeyStore) GenerateKey(attrs *keystore.KeyAttributes) (keystore.OpaqueK
 
 // Generate new RSA private key and return an OpaqueKey implementing crypto.Signer
 func (ks *KeyStore) GenerateRSA(attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
+	return ks.generateRSA(attrs, false)
+}
+
+func (ks *KeyStore) generateRSA(
+	attrs *keystore.KeyAttributes, overwrite bool) (keystore.OpaqueKey, error) {
+
 	ks.params.Logger.Debug("keystore/pkcs8: generating RSA key")
 	// Provide default key size if not specified or less than 512 bits
 	if attrs.RSAAttributes == nil {
@@ -186,7 +192,7 @@ func (ks *KeyStore) GenerateRSA(attrs *keystore.KeyAttributes) (keystore.OpaqueK
 		return nil, err
 	}
 	// Save the key to the key store.
-	err = ks.save(attrs, privateKey)
+	err = ks.save(attrs, privateKey, overwrite)
 	if err != nil {
 		return nil, err
 	}
@@ -199,6 +205,12 @@ func (ks *KeyStore) GenerateRSA(attrs *keystore.KeyAttributes) (keystore.OpaqueK
 // Generates a new ECDSA private key and return and OpaqueKey
 // implementing crypto.Signer
 func (ks *KeyStore) GenerateECDSA(attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
+	return ks.generateECDSA(attrs, false)
+}
+
+func (ks *KeyStore) generateECDSA(
+	attrs *keystore.KeyAttributes, overwrite bool) (keystore.OpaqueKey, error) {
+
 	ks.params.Logger.Debug("keystore/pkcs8: generating ECDSA key")
 	if attrs.ECCAttributes == nil {
 		attrs.ECCAttributes = &keystore.ECCAttributes{
@@ -212,7 +224,7 @@ func (ks *KeyStore) GenerateECDSA(attrs *keystore.KeyAttributes) (keystore.Opaqu
 	if err != nil {
 		return nil, err
 	}
-	err = ks.save(attrs, privateKey)
+	err = ks.save(attrs, privateKey, overwrite)
 	if err != nil {
 		return nil, err
 	}
@@ -223,12 +235,19 @@ func (ks *KeyStore) GenerateECDSA(attrs *keystore.KeyAttributes) (keystore.Opaqu
 // Generates a new Ed25519 private key and return and OpaqueKey
 // implementing crypto.Signer
 func (ks *KeyStore) GenerateEd25519(attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
+	return ks.generateEd25519(attrs, false)
+}
+
+func (ks *KeyStore) generateEd25519(
+	attrs *keystore.KeyAttributes,
+	overwrite bool) (keystore.OpaqueKey, error) {
+
 	ks.params.Logger.Debug("keystore/pkcs8: generating Ed25519 key")
 	publicKey, privateKey, err := ed25519.GenerateKey(ks.params.Random)
 	if err != nil {
 		return nil, err
 	}
-	err = ks.save(attrs, privateKey)
+	err = ks.save(attrs, privateKey, overwrite)
 	if err != nil {
 		return nil, err
 	}
@@ -252,6 +271,21 @@ func (ks *KeyStore) GenerateSecretKey(
 	// return nil
 
 	return ks.params.TPMKS.GenerateSecretKey(attrs)
+}
+
+// Rotates an existing key by generating a new key pair and overwriting
+// the existing key. This is a destructive operation that will cause the
+// existing key pair to be irrecoverable.
+func (ks *KeyStore) RotateKey(attrs *keystore.KeyAttributes) (keystore.OpaqueKey, error) {
+	switch attrs.KeyAlgorithm {
+	case x509.RSA:
+		return ks.generateRSA(attrs, true)
+	case x509.ECDSA:
+		return ks.generateECDSA(attrs, true)
+	case x509.Ed25519:
+		return ks.generateEd25519(attrs, true)
+	}
+	return nil, keystore.ErrInvalidKeyAlgorithm
 }
 
 // Returns a PKCS #8 crypto.Signer based on the provided key attributes
@@ -372,19 +406,58 @@ func (ks *KeyStore) PrivateKey(attrs *keystore.KeyAttributes) (crypto.Signer, er
 // This is the PKCA #8 key store. implementation for
 // the opaque key's  crypto.PrivateKey implementation
 // https://pkg.go.dev/crypto#PrivateKey
-func (ks *KeyStore) Equal(opaque keystore.Opaque, x crypto.PrivateKey) bool {
-	rsaPriv, ok := x.(*rsa.PrivateKey)
-	if !ok {
-		return false
+func (ks *KeyStore) Equal(opaque keystore.OpaqueKey, x crypto.PrivateKey) bool {
+
+	var xPub crypto.PublicKey
+	switch x.(type) {
+
+	case *rsa.PrivateKey:
+		xPub = x.(*rsa.PrivateKey).Public()
+		return opaque.Public().(*rsa.PublicKey).Equal(xPub)
+
+	case *ecdsa.PrivateKey:
+		xPub = x.(*ecdsa.PrivateKey).Public()
+		return opaque.Public().(*ecdsa.PublicKey).Equal(xPub)
+
+	case ed25519.PrivateKey:
+		xPub = x.(ed25519.PrivateKey).Public()
+		return opaque.Public().(ed25519.PublicKey).Equal(xPub)
+
+	case crypto.PrivateKey:
+		if _, ok := x.(*rsa.PublicKey); ok {
+			xPub = x.(crypto.PublicKey)
+			return opaque.Public().(*rsa.PublicKey).Equal(xPub)
+		}
+		if _, ok := x.(*ecdsa.PublicKey); ok {
+			xPub = x.(crypto.PublicKey)
+			return opaque.Public().(*ecdsa.PublicKey).Equal(xPub)
+		}
+		if _, ok := x.(ed25519.PublicKey); ok {
+			xPub = x.(crypto.PublicKey)
+			return opaque.Public().(ed25519.PublicKey).Equal(xPub)
+		}
+		if _, ok := x.(keystore.OpaqueKey); ok {
+			xPub := x.(keystore.OpaqueKey).Public()
+			switch xPub.(type) {
+			case *rsa.PublicKey:
+				return opaque.Public().(*rsa.PublicKey).Equal(xPub)
+			case *ecdsa.PublicKey:
+				return opaque.Public().(*ecdsa.PublicKey).Equal(xPub)
+			case ed25519.PublicKey:
+				return opaque.Public().(ed25519.PublicKey).Equal(xPub)
+			}
+		}
 	}
-	return rsaPriv.Equal(x)
+
+	return false
 }
 
 // Extracts the public key from the private key, encodes both to supported
 // formats (DER, PEM, PKCS1, PKCS8), and saves them to the key store .
 func (ks *KeyStore) save(
 	attrs *keystore.KeyAttributes,
-	privateKey crypto.PrivateKey) error {
+	privateKey crypto.PrivateKey,
+	overwrite bool) error {
 
 	var err error
 	var pubKeyDER, password []byte
@@ -392,7 +465,7 @@ func (ks *KeyStore) save(
 	// If the key is configured with a platform policy, save the password
 	// to the platform key store with the platform PCR authorization policy
 	if attrs.Password != nil {
-		if err := ks.params.TPMKS.CreatePassword(attrs, ks.params.Backend); err != nil {
+		if err := ks.params.TPMKS.CreatePassword(attrs, ks.params.Backend, overwrite); err != nil {
 			return err
 		}
 		password, err = attrs.Password.Bytes()
@@ -435,13 +508,13 @@ func (ks *KeyStore) save(
 
 	// Private Key: Marshal to DER ASN.1 PKCS #8
 	pkcs8, err := keystore.EncodePrivKey(privateKey, password)
-	err = ks.params.Backend.Save(attrs, pkcs8, keystore.FSEXT_PRIVATE_PKCS8)
+	err = ks.params.Backend.Save(attrs, pkcs8, keystore.FSEXT_PRIVATE_PKCS8, overwrite)
 	if err != nil {
 		return err
 	}
 
 	// Public Key: Save the ASN.1 DER PKCS1 form
-	err = ks.params.Backend.Save(attrs, pubKeyDER, keystore.FSEXT_PUBLIC_PKCS1)
+	err = ks.params.Backend.Save(attrs, pubKeyDER, keystore.FSEXT_PUBLIC_PKCS1, overwrite)
 	if err != nil {
 		return err
 	}
@@ -461,6 +534,19 @@ func (ks *KeyStore) privKey(attrs *keystore.KeyAttributes) (crypto.PrivateKey, e
 		}
 		password, err = attrs.Password.Bytes()
 		if err != nil {
+			// This code could is intended to save a caller who doesnt set the
+			// PlatformPassword properly, but im undecided on implementing it
+			// as it complicates the logic here and is possibly black-box magic
+			// that makes debugging difficult.
+			// if attrs.PlatformPolicy {
+			// 	password, err = tptpm2.NewPlatformPassword(
+			// 		ks.params.Logger, ks.params.TPMKS.TPM2(), attrs, ks.params.Backend).Bytes()
+			// 	if err == keystore.ErrFileNotFound {
+			// 		password, err = attrs.Password.Bytes()
+			// 	}
+			// } else {
+			// 	return nil, err
+			// }
 			return nil, err
 		}
 	}
@@ -474,6 +560,7 @@ func (ks *KeyStore) privKey(attrs *keystore.KeyAttributes) (crypto.PrivateKey, e
 			if ks.params.DebugSecrets || attrs.Debug {
 				ks.params.Logger.Debugf("%s: %s:%s", err, attrs.CN, password)
 			}
+			return nil, keystore.ErrInvalidPassword
 		}
 		return nil, err
 	}

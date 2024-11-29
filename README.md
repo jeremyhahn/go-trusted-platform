@@ -1,27 +1,30 @@
 ![alt text](https://github.com/jeremyhahn/go-trusted-platform/blob/main/public_html/images/logo.png?raw=true)
 
 
-The `Trusted Platform` uses a [Trusted Platform Module (TPM)](https://en.wikipedia.org/wiki/Trusted_Platform_Module), [Secure Boot](https://en.wikipedia.org/wiki/UEFI), and a provided [Certificate Authority](https://en.wikipedia.org/wiki/Certificate_authority) to establish a Platform Root of Trust for Storage & Reporting, perform Local and [Remote Attestation](https://tpm2-software.github.io/tpm2-tss/getting-started/2019/12/18/Remote-Attestation.html), encryption, signing, x509 certificate management, data integrity, intrusion detection, licensing, device provisioning and more.
-
-
 ## Overview
 
-This project provides a toolkit and framework for building [Trusted Computing](https://en.wikipedia.org/wiki/Trusted_Computing) architectures and web services in Golang.
+The `Trusted Platform` uses a [Trusted Platform Module (TPM)](https://en.wikipedia.org/wiki/Trusted_Platform_Module), [Secure Boot](https://en.wikipedia.org/wiki/UEFI), and a provided [Certificate Authority](https://en.wikipedia.org/wiki/Certificate_authority) to establish a Platform Root of Trust for Storage & Reporting, perform Local and [Remote Attestation](https://tpm2-software.github.io/tpm2-tss/getting-started/2019/12/18/Remote-Attestation.html), encryption, signing, x509 certificate management, data integrity, intrusion detection, licensing, device provisioning and more.
 
-This project supports the following use cases:
+This software is intended for use by device manufacturers, enterprise administrators, platform administrators and end users to be used as `Platform Software` as described by the [Trusted Computing Group](https://trustedcomputinggroup.org/), a framework for building secure and/or "trusted" services, or a library for building custom platforms and services based on Trusted, Confidential Computing technologies.
 
-* Original Equipment Manufacturer
-* Platform Administrator / User
-* IoT Cloud
-* DevOps Automation
+Some use cases include:
+
+* Private / Public / Hybrid Cloud Service Providers
+* OEM Device Manufacturing
+* Automated Device Provisioning
+- Automated Device Fleet Management
+* DevOps Automation Platform
+* TCG Enterprise Admin, Platform Admin, & User operations
+* Automated Certificate Management
 * Enterprise Network Management
 * Mobile Device Management
-* Secure Key Store
+* Secure Key, Password & Secret Store
 * Trusted Web Services Framework
-* WebAuthN / FIDO2
-* Automated Certificate Management
+* WebAuthN / FIDO2 Integration
+* Single Sign-On & MFA
 * PKI-as-a-Service
-* Single Sign-On
+* OEM & Cloud Service Provider Licensing
+* Digital Rights Management
 
 
 For detailed documentation on the components used in this project, please refer to the [docs](docs/OVERVIEW.md).
@@ -59,7 +62,7 @@ Use the included `Makefile` to build and perform initial setup.
 
 #### Configuration
 
-Copy the [config file](configs/platform/config.prod.yaml) to `./config.yaml` (where you will run the `tpadm` binary). Edit the configuration file according to your environment and requirements.
+Copy a [config file](configs/platform/config.dev.yaml) to `./config.yaml` (where you will run the `tpadm` binary). Edit the configuration file according to your environment and requirements.
 
 The Trusted Platform will try to read the TPM Endorsement Key Certificate from NVRAM, however, not all TPM's have their certificates flashed to NVRAM. Next it will attempt to download the EK certificate from the Manufacturer website (currently only Intel is supported). If neither of these methods is able to locate your TPM EK certificate, an EK certificate will be generated. If an EK `cert-handle` is defined, the generated certificate will be written to NV RAM. It may optionally be stored in the x509 certificate store.
 
@@ -72,7 +75,7 @@ Selecting secure encryption and hash function algorithms, padding schemes, and c
 
 Note that many low cost HSM's don't offer RSA 4096 bit keys or Curve25519. Check your HSM documentation closely prior to purchase.
 
-The TPM 2.0 spec does not support Curve25519, but does support ECDSA. Unfortunately, as can be seen on the Safe Curves website, many ECDSA curves used in the wild are not up to par. For the best security, I recommend preferring RSA over EC for TPM 2.0. Note that the TPM must support FIPS 140-2 to perform RSA-PSS signatures. This can be confirmed by issuing the `TPM2_GetCapability` and inspecing the `TPM_PT_MODES` property, or checking the manufacturer datasheet. 
+The TPM 2.0 spec does not support Curve25519, but does support ECDSA. Unfortunately, as can be seen on the Safe Curves website, many ECDSA curves used in the wild are not up to par. For the best security, I recommend preferring RSA over EC for TPM 2.0. Note that the TPM must support FIPS 140-2 to perform RSA-PSS signatures. This can be confirmed by issuing `TPM2_GetCapability` and inspecing the `TPM_PT_MODES` property, or checking the manufacturer datasheet. 
 
 If you're looking for general guidance, EdDSA Curve25519 provides the best security by modern standards, followed by RSA (PSS) using strong keys, preferably 4096 bit. The [NitroKey 3](https://www.nitrokey.com/products/nitrokeys) is a cost effective PKCS #11 solution providing both RSA 4096 bit keys and Curve25519.
 
@@ -101,26 +104,31 @@ The Trusted Platform currently includes PKCS #8, PKCS #11 and TPM 2.0 key store 
 
 There are a few important concepts to understand regarding the key stores. 
 
-The first is the `Platform Key Store`, the general purpose key store that acts as a central repository for key store module PINs, secondary key passwords and generic passwords stored by the platform or applications.
+The first is the `Platform Key Store`, the general purpose key store that acts as a central repository for key store module PINs, secondary key passwords and generic passwords and secrets stored by the platform software (this software).
 
-The second is the `Keychain`, which is a collection of `Key Store Module` configurations, and the keys that belong to the keychain.
+The second is the `Keychain`, which is a collection of `Key Store Module` configurations, and the keys that belong to each store.
 
-A Keychain may be configured with any or all of the supported Key Store Modules, and must contain a valid configuration for any keys on the keychain using that particular module.
+A Keychain may be configured with any or all of the supported Key Store Modules, and must contain a valid configuration for any keys referncing that particular module.
 
-Each Certificate Authority has it's own keychain and keys. The PIN / password for the Key Store Modules, if enabled with a `platform-policy`, are stored in the general purpose `Platform Key Store` and automatically retrieved by the Trusted Platform as necessary using a PCR policy session which releases the passwords as long as the chosen platform PCR is in it's valid state.
+Each Certificate Authority has it's own keychain and keys. The PIN / password for the Key Store Modules, if enabled with a `platform-policy`, are stored in the general purpose `Platform Key Store` and automatically retrieved by the Trusted Platform as necessary using a PCR policy session which releases the passwords from the TPM as long as the chosen `Platform PCR` is in it's expected well-known state.
 
 
 ##### Passwords
 
 The PKCS #8 and TPM 2.0 key store modules support secondary key passwords. 
 
-These passwords, if configured with the `platform-policy`, are stored in the *Platform Key Store*, and automatically retrieved by the Trusted Platform as necessary using a PCR policy session which releases the password as long as the chosen platform PCR is in it's valid state. If `platform-policy` is not true, the password will not be stored, and in the case of PKCS #8 and TPM 2.0, will require the password entered when necessary.
+These passwords, if configured with the `platform-policy` attribute, are stored in the *Platform Key Store*, and automatically retrieved by the Trusted Platform as necessary using a PCR policy session which releases the password as long as the chosen platform PCR is in it's expected well-known state. If `platform-policy` is not set, the password will not be stored, and in the case of PKCS #8 and TPM 2.0, will require the password entered when necessary.
 
 PKCS #11 does not support secondary key passwords.
 
+Specifying the *default password* of `123456` for a key's password or secret attributes, will result in an auto-generated 32 byte, 256 bit password or secret.
+
+    If a `platform-policy` attribute is not set for the key, it's password will need to be manually entered anytime an operation that requires it's password is performed.
+
+
 ## LUKS
 
-At this time, preliminary support for LUKS is included in the `Makefile`. In the future, full LUKS integration will be provided through the platform.
+At this time, preliminary support for LUKS is included in the `Makefile`. In the future, full LUKS integration will be provided through the platform software.
 
 To setup an ecnrypted LUKS `trusted-data` volume for platform data, use the included `luks-create` Makefile target. 
 
@@ -145,9 +153,13 @@ Don't forget to remove your LUKS key from the system. In the future, this step w
 
 ## Platform Startup & Local Attestation
 
-When the platform starts up, the Certificate Authorities are initialized, resulting in a Root and Intermediate CA with public / private keys and a signing certificates for each of the keys listed in the platform configuration file. The Intermediate CA will have the Root certificate imported to its trusted root store. A Certificate Revocation List is created and initialized with a dummy certificate for each of the configured key algorithms, in each of the configured Key Store Modules.
+Upon startup, the TPM is initialized according to the platform configuration file. A minimum configuration requires EK and SSRK TPM key attributes defined. The [IEEE 802.1AR Secure Device Identity](https://1.ieee802.org/security/802-1ar/) and [TPM 2.0 Keys for Device Identity and Attestation](https://trustedcomputinggroup.org/wp-content/uploads/TCG_IWG_DevID_v1r2_02dec2020.pdf) specifications RECOMMEND also provisioning devices with an IAK & IDevID certificate, and as such, is included in the default configuration file. These keys, however, can be omitted for minimal provisioning, for example, if you're only using the TPM for a local secure key or password store, and not interested in any attestation features.
 
-After the CA is initialized, local system platform measurements are taken according to the platform configuration file, signed by the CA, and placed into internal blob storage, along with the digest, signature, and checksum of the measurements. On subsequent startups, new system measurements are taken, a new digest is created and verified against the initial platform measurements signature. If the signature does not match (the state is different / unexpected), the platform will return a fatal error and terminate. In the future, it will also integrate with LUKS volumes and run a set of custom event handlers that allow responding to the unexpected state of the system using a plugin architecture.
+When the platform starts up, the `Local Certificate Authorities` are initialized, resulting in a Root and Intermediate CA with public / private keys and signing certificates for each of the keys listed in the platform configuration file. The Intermediate CA will have the Root certificate imported to its trusted root store. A Certificate Revocation List is created and initialized with a dummy certificate for each of the configured key algorithms, in each of the configured Key Store Modules. The local Certificate Authority is also exposed as an ACME server, which allows the platform to operate as an Enterprise or Privacy CA, depending on how the configuration provided to the platform software at startup. See the [server](configs/platform/config.debug.server.yaml) and [client](configs/platform/config.debug.client.yaml) examples on starting the platform as a client or server.
+
+After the CA is initialized, local system platform measurements are taken according to the platform configuration file, signed by the CA, and placed into internal blob storage, along with the digest, signature, and checksum of the measurements. On subsequent startups and/or ongoing timer basis, new system measurements are taken, a new digest is created and verified against the initial platform measurements. If the signature does not match (the state is different / unexpected), the platform will return a fatal error and terminate. In the future, it will also integrate with LUKS volumes and run a set of custom event handlers that allow responding to the unexpected state of the system using a plugin architecture, to perform operations such as re-sealing the platform, unmounting sensitive volumes, notifying intrusion detection and/or monitoring systems, etc.
+
+If an ACME client configuration is enabled in the platform configuration file, the platform will start in "client mode", where it contacts the ACME server endpoint specified in the configuration to perform an automatic device enrollment using custom `endorse-01` and `device-01` challenges to enroll the device with the Enterprise / Privacy CA. After successful enrollment, the platform and TPM will be fully provisioned with an EK, IAK, and IDevID keys and certificates issued by the Enterprise CA. The platform will be ready to fulfill future network device authentication and attestation requirements defined by the Enterprise Administrator, as well as request TLS certificates for public web services. As such, the ACME client requests a final TLS certificate from the Enterprise / Privacy ACME server for the embedded web server, and upon successful completion of the configured challenge, the TLS certificate is issued and automatically configured for the embedded web server, and the platform is started and ready to begin answering web service requests or making authenticated client requests for resources on the network.
 
 
 ## Remote Attestation
@@ -162,13 +174,13 @@ To test it out using the provided `Makefile` targets.
     # Verifier
     make verifier
 
-After attestation completes, you should see a new `attestation` folder appear that looks something like this (on the verifier side):
+After attestation completes, you should see a new `attestation` folder appear that looks something like the exaample below (on the verifier side):
 
 This example demonstrates a Certificate Authority with PKCS #8, PKCS #11, and TPM 2.0 key store modules configured with RSA (PSS), ECDSA and Ed25519 keys configured to enable simultaneous signing with any of the configured keys. In addition, PKCS #8 and TPM 2.0 keys support secondary password protection, using key level passwords in addition to the PIN used to secure the keys at the hardware level. The passwords are stored in the *Platform Key Store* as HMAC secrets with an optional PCR policy that allows retrieval of the password as long as the platform is in it's approved state. The key store PINs have the `.pin` extension in their file names, while secondary passwords are stored using only their common names.
 
 Note that the TPM 2.0 spec does not support Twisted Edward Curves (Ed25519). Many budget friendly HSM's also don't support twisted curves. Be sure to check the specifications on your HSM and to confirm support.
 
- ```
+```
 attestation/verifier/trusted-data/
 ├── b3177f70-89ed-6019-f568-07379867db76
 │   ├── 050095df-a7c0-98c1-0b06-3ad5d80c8e8d.lock
@@ -369,7 +381,6 @@ attestation/verifier/trusted-data/
         └── signing-keys
 ```
 
-
 ## Status
 
 
@@ -377,15 +388,22 @@ This project is under active development, APIs can change at any moment.
 
 The `main` branch will always build and run. Try it out!
 
+The current list of intended features and their status are shown below.
+
 
 - [ ] Trusted Platform
-    - [ ] Supported Use Cases
-        - [x] TPM Manufacturer
-        - [x] Original Equipment (Device) Manufacturer
-        - [x] Platform Administrator / End User
-        - [x] Enterprise Network
-        - [x] SOHO Network
     - [ ] Certificate Authority
+        - [x] Automated Certificate Management Environment (ACME)
+            - [x] RFC 8555 compliant server
+            - [x] RFC 8555 compliant client
+            - [x] Supported Challenges
+                - [x] [http-01](https://datatracker.ietf.org/doc/html/rfc8555)
+                - [x] [dns-01](https://datatracker.ietf.org/doc/html/rfc8555)
+                - [x] [device-attest-01](https://datatracker.ietf.org/doc/html/draft-acme-device-attest-03)
+                - [x] http-x (custom - http-01 w/ configurable port)
+                - [x] endorse-01 (custom - Issue EK cert)
+                - [x] device-01 (custom - TCG-CSR-IDEVID device enrollment)
+            - [x] Cross-Signed Certificates (Let's Encrypt or any ACME server)
         - [x] Key Storage Modules
             - [x] [PKCS 8](https://en.wikipedia.org/wiki/PKCS_8)
             - [x] [PKCS 11](https://en.wikipedia.org/wiki/PKCS_11)
@@ -405,37 +423,34 @@ The `main` branch will always build and run. Try it out!
         - [x] Root CA
         - [x] Intermediate CA(s)
         - [x] RSA, ECDSA & EdDSA Key Algorithms
-        - [x] Simultaneous issue/sign/verify using any supported algorithm
+        - [x] Simultaneous issue/sign/verify using any supported algorithm and key store
         - [x] Certificate & Key storage & retrieval
-        - [x] Private trusted root certificate store
-        - [x] Private trusted intermediate certificate store
-        - [x] Distinct CA, TLS, encryption & signing keys
+        - [x] Private trusted root & intermediate certificate store
+        - [x] Distinct CA, TLS, Device encryption & signing keys
         - [x] RSA, ECDSA, Ed21159 & x25519Kyber768Draft00 support
         - [x] Create & Sign Certificate Signing Requests (CSR)
+        - [x] Generate, Sign & Verify TCG-CSR-IDEVID
+        - [ ] Generate, Sign & Verify TCG-CSR-LDEVID
         - [x] x509 Certificate Revocation Lists (CRLs)
+            - [ ] Web service endpoint
         - [x] Encoding & Decoding support for DER and PEM
         - [x] Automatic download & import Issuer CA(s) to trust store
         - [x] Automatic download & import Revocation Lists (CRLs)
-        - [x] Parse & Create CA bundles
+        - [x] Create & Parse CA bundles
         - [x] Create Golang CertPool objects pre-initialized with CA certificates
-        - [x] Create Golang tls.Config objects pre-initialized with Root & Client CA bundle and x509 Certificates (mTLS)
+        - [x] Create Golang tls.Config objects pre-initialized for mTLS
         - [x] Signed blob storage
         - [x] Install / Uninstall CA certificates to Operating System trust store
-        - [ ] Online Certificate Status Protocol (OCSP)
-        - [x] Sign TCG-CSR-IDEVID
-        - [ ] Sign TCG-CSR-LDEVID
         - [x] Generate TCG compliant EK certificate
         - [x] Generate Attestation Key Certificate
         - [x] Forge Certificates (force specified public key)
-        - [ ] Automatic Certificate Management Environment (ACME)
-            - [ ] [acme-device-attest-03](https://datatracker.ietf.org/doc/html/draft-acme-device-attest-03)
-        - [ ] Cross-Signed Certificates with Let's Encrypt CA
+    - [x] ACME Client
     - [ ] TPM 2.0
         - [x] Provisioning per TCG recommended best practices
         - [x] Read Endorsement Key Certificate from NVRAM
         - [x] Download Endorsement Key Certificate from Manufacturer
             - [x] Intel
-            - [ ] Optiga
+            - [ ] Infineon
         - [x] Read Endorsement Key Certificate from x509 certificate store
         - [x] Create EK Certificates
         - [x] Auto-import TPM Manufacturer CA chain
@@ -449,67 +464,36 @@ The `main` branch will always build and run. Try it out!
         - [x] Quote / Verify
         - [x] Create TCG-CSR-IDEVID certificate request
         - [ ] Create TCG-CSR-LDEVID certificate request
-    - [ ] [Command Line Interface](docs/man)
-        - [ ] CA
-            - [x] info
-            - [x] init
-            - [x] install
-            - [x] issue
-            - [x] revoke
-            - [x] show
-            - [x] uninstall
-        - [ ] Platform
-            - [x] destroy
-            - [x] install
-            - [x] password
-            - [x] provision
-        - [ ] TPM
-            - [x] clear
-            - [x] ek
-            - [x] eventlog
-            - [x] info
-            - [x] provision
-        - [x] Remote Attestation
-            - [x] Attestor (service consumer / server socket)
-                - [x] gRPC service
-                - [x] Insecure service
-                    - [x] Exchange CA certificate bundle with Verifier
-                    - [x] mTLS auto-negotiation
-                    - [x] Require TLSv1.3
-                - [x] Secure service (requires mTLS)
-                    - [x] Get Endorsement Key (EK) and Certificate
-                    - [x] Create Endorsement Key
-                    - [x] Create Attestation Key
-                    - [x] Activate Credential
-                    - [x] Quote
-                    - [ ] Accept service registration key
-                    - [ ] DNS registration
-                    - [ ] ACME device-attest enrollment
-            - [ ] Verifier (service provider / client socket)
-                - [x] Auto-negotiated mTLSv1.3
-                - [x] Get Endorsement Key (EK) and Certificate
-                - [x] Get Attestation Key Profile (EK, AK, AK Name)
-                - [x] Credential Challenge (TPM2_MakeCredential)
-                - [x] Activate Credential (TPM2_ActivateCredential)
-                - [x] Issue Attestation Key x509 Certificate
-                - [x] Verify Quote
-                - [x] Provide AK Certificate w/ Secret
-                - [ ] DNS registration
-                - [ ] ACME device-attest enrollment
+    - [ ] DNS Server
+        - [x] Public zones
+        - [x] Internal zones
+        - [x] Zone registration via ACME dns-01
+        - [ ] DNSSec w/ Opaque keys
+    - [ ] DNS client
+        - [ ] Dynamic DNS updates
     - [ ] Web Services
-        - [x] TLS 1.3
-        - [x] Web server
-        - [x] TLS Web Server
-            - [x] Opaque private key
-            - [ ] mTLS
-        - [x] REST API
-            - [x] Swagger / OpenAPI Docs
-        - [ ] JSON Web Tokens
+        - [x] HTTP/1, HTTP/2, HTTP/3
+        - [x] Transport Layer Security (TLS)
+            - [x] TLS 1.3 only
+            - [x] Opaque private keys
+            - [x] mTLS
+        - [x] WebAuthn
+            - [x] Begin Registration
+            - [x] Finish Registration
+            - [x] Begin Login
+            - [x] Finish Login
+        - [x] JSON Web Tokens
             - [x] Generate Token
             - [x] Refresh Token
             - [x] Validate Token
             - [x] Encrypted private key
             - [x] Opaque Private Key
+        - [x] REST API
+            - [x] Swagger / OpenAPI Docs
+            - [ ] Service Plugin Architecture
+        - [x] Rewrite rules
+        - [x] Reverse proxy
+        - [x] Virtual Hosts
     - [ ] gRPC Remote Attestation
         - [x] TLS 1.3
         - [x] Verifier (Service Provider)
@@ -530,34 +514,63 @@ The `main` branch will always build and run. Try it out!
             - [x] Activate Credential
             - [x] Quote / Verify
             - [x] Automatic Device enrollment
-    - [ ] Plugin System
+    - [ ] Password & Secrets Manager
+        - [ ] CLI
+        - [ ] Web Service
+        - [ ] gRPC Service
+    - [ ] Platform Plugin Architecture
+        - [ ] Build and publish
         - [ ] Install / uninstall
         - [ ] Sign / verify
     - [ ] Volume Encryption (LUKS)
-        - [x] Preliminary Luks support for setup
+        - [x] Preliminary Luks support (Makefile)
         - [ ] Full LUKS integration to create and manage volumes
     - [ ] Automated Setup and Provisioning
-        - [ ] Platform
-            - [x] Create LUKS encrypted trusted-data volume
-            - [x] Install and configure platform dependencies
+        - [ ] Trusted Platform
+            - [ ] PXE Boot
+            - [ ] Bare Metal (ISO)
+            - [ ] Raspberry PI (SD Image)
+            - [ ] Docker
+            - [ ] Kubernetes
+            - [ ] Amazon Web Services
+            - [ ] Google Cloud
+            - [ ] Azure
+        - [ ] NetOps (Routing, Switching, Firewalling, Load Balancing, VPN)
+            - [ ] Cisco Application Centric Infrastructure (ACI)
+            - [ ] VyOS
+            - [ ] AWS VPC
+            - [ ] Google Cloud VPC
+            - [ ] Azure VPC
+        - [ ] Configuration Management
+            - [ ] Ansible
         - [ ] Embedded Systems
-            - [ ] Raspberry PI
+            - [ ] [Raspberry PI](https://www.raspberrypi.com/)
                 - [ ] Image builder
                     - [ ] Secure Boot
-                    - [ ] OTP Password
+                    - [ ] One-Time Programmable Memory
                     - [ ] SD Card Writer
                     - [ ] Device Provisioning
                     - [ ] Device Onboarding
                 - [x] Ansible system configuration
-            - [ ] Arduino
+            - [ ] [Arduino](https://www.arduino.cc/en/hardware)
                 - [ ] ROM integrity check
                 - [ ] Platform firmware
                 - [ ] Firmware flasher
                 - [ ] Device Provisioning
                 - [ ] Device Onboarding
-    - [ ] DNS Server
-        - [ ] Automatic edge device registration
-        - [ ] Dynamic DNS updates
+            - [x] FPGA Accelerators
+                - [x] [AMD KR-260](https://www.amd.com/en/products/system-on-modules/kria/k26/kr260-robotics-starter-kit.html)
+            - [ ] AI Machine Learning
+                - [ ] [Google Coral TPU](https://coral.ai/products/)
+    - [ ] Continuous Integration & Delivery
+        - [ ] Git Integration
+            - [ ] Build Arbitrary Repos
+            - [ ] Code Signing
+            - [ ] Automated Deployments
+        - [ ] Over-the-air Updates
+    - [ ] Peer-to-Peer Networking
+        - [ ] [libp2p](https://libp2p.io/)
+        - [ ] [OpenThread](https://openthread.io/)
     - [ ] High Availability
         - [ ] Gossip [(Partition Tolerance & Availability)](https://en.wikipedia.org/wiki/CAP_theorem)
             - [ ] Real-time platform network statistics
@@ -565,7 +578,8 @@ The `main` branch will always build and run. Try it out!
             - [ ] WAN Database Replication
             - [ ] Automated provisioning event system
         - [ ] Raft [(Consistency & Availability)](https://en.wikipedia.org/wiki/CAP_theorem)
-            - [ ] LAN Database Replication
+            - [ ] Datastore Replication
+            - [ ] Key replication
     - [ ] Intrusion Detection
         - [x] File Integrity Monitoring
         - [ ] Detect unauthorized software or hardware changes
@@ -575,12 +589,30 @@ The `main` branch will always build and run. Try it out!
                 - [ ] Unmount luks container (re-sealing the platform)
                 - [ ] Delete luks volume & platform binary
                 - [ ] Wipe file system
+    - [ ] Data Vaults
+        - [ ] Data storage
+            - [ ] Local
+            - [ ] IPFS
+            - [ ] S3
+            - [ ] ...
+        - [ ] Encryption & Signing
+        - [ ] Share w/ Digital Rights Management
+    - [ ] Monetization Features
+        - [ ] [Stripe](https://stripe.com/) Integration
+        - [ ] Data Vaults
+        - [ ] Web Service Endpoints
+        - [ ] Platform & Device Licensing
+    - [ ] Blockchain & Smart Contract Integration
+        - [ ] [Ethereum](https://ethereum.org/en/)
+        - [ ] [Tangle](https://www.iota.org/get-started/what-is-iota)
+
+
 
 ## Sponsors
 
 |  |  |
 | ------- | ----- |
-| <img src="https://www.nitrokey.com/sites/all/themes/nitrokey/logo.svg" width="64">| Thanks for 3 NetHSM devices to assist in PKCS #11 & Raft development! |
+| <img src="https://www.nitrokey.com/sites/all/themes/nitrokey/logo.svg" width="64">| Thanks for 3 NitroKey HSM 2 devices to assist in PKCS #11 & Raft development! |
 
 
 ## Support
