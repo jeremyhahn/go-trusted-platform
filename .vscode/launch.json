@@ -2,13 +2,86 @@
 {
     "version": "0.2.0",
     "configurations": [
-        
+        {
+            "name": "tpadm dns",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "preLaunchTask": "debug_server_config_clean",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "dns",
+                "--init",
+                "--raw-so-pin", "test",
+                "--raw-pin", "test"
+            ],
+        },
+        {
+            "name": "tpadm acme download",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "preLaunchTask": "debug_client_config_clean",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "acme",
+                "download", "root@localhost", "test.example.com",
+                "--init",
+                "--raw-so-pin", "test",
+                "--raw-pin", "test"
+            ],
+        },
+        {
+            "name": "tpadm acme rotate-key",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "preLaunchTask": "debug_client_config_clean",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "acme",
+                "rotate-key", "root@localhost", "test.example.com",
+                "--init",
+                "--raw-so-pin", "test",
+                "--raw-pin", "test"
+            ],
+        },
+        {
+            "name": "tpadm acme renew",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "preLaunchTask": "debug_client_config_clean",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "acme",
+                "renew", "root@localhost", "test.example.com",
+                "--init",
+                "--raw-so-pin", "test",
+                "--raw-pin", "test"
+            ],
+        },
+        {
+            "name": "tpadm acme new-account",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "preLaunchTask": "debug_client_config_clean",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "acme",
+                "register", "root@localhost",
+                "--init",
+                "--raw-so-pin", "test",
+                "--raw-pin", "test"
+            ],
+        },
         {
             "name": "tpadm status",
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_clean",
+            "preLaunchTask": "debug_client_config_clean",
             "program": "${workspaceRoot}/pkg",
             "args": [
                 "status",
@@ -62,9 +135,6 @@
                 "www.example.com",
                 "pkcs8",
                 "rsa",
-                // "--parent-password", "test",
-                // "--parent-policy=false",
-                // "--policy=false"
             ],
         },
         {
@@ -87,7 +157,7 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_clean",
+            "preLaunchTask": "debug_client_config_clean",
             "program": "${workspaceRoot}/pkg",
             "args": [
                 "platform",
@@ -101,7 +171,7 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_clean",
+            "preLaunchTask": "debug_client_config_clean",
             "program": "${workspaceRoot}/pkg",
             "args": [
                 "platform",
@@ -115,7 +185,7 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_clean",
+            "preLaunchTask": "debug_client_config_clean",
             "program": "${workspaceRoot}/pkg",
             "args": [
                 "platform",
@@ -135,8 +205,6 @@
                 "www.example.com",
                 "pkcs8",
                 "rsa",
-                // "--raw-so-pin", "test",
-                // "--raw-pin", "test"
             ],
         },
         {
@@ -144,7 +212,7 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_clean",
+            "preLaunchTask": "debug_client_config_clean",
             "program": "${workspaceRoot}/pkg",
             "args": [ 
                 "tpm",
@@ -167,7 +235,7 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_clean",
+            "preLaunchTask": "debug_client_config_clean",
             "program": "${workspaceRoot}/pkg",
             "args": [ 
                 "pkcs11",
@@ -179,7 +247,7 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_clean",
+            "preLaunchTask": "debug_client_config_clean",
             "program": "${workspaceRoot}/pkg",
             "args": [ 
                 "ca",
@@ -236,9 +304,6 @@
                 "www.example.com",
                 "pkcs8",
                 "rsa",
-                // "--parent-password", "test",
-                // "--parent-policy=false",
-                // "--policy=false"
             ],
         },
         {
@@ -478,14 +543,15 @@
             ],
         },
         {
-            "name": "tpadm webservice (dev)",
+            "name": "tpadm webservice (clean, init, client)",
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "dev_config",
+            "preLaunchTask": "debug_client_config_clean",
             "program": "${workspaceRoot}/pkg",
             "args": ["webservice",
                 "--debug",
+                "--init",
                 "--platform-dir", "trusted-data",
                 "--config-dir", "trusted-data/etc",
                 "--log-dir", "trusted-data/log",
@@ -495,11 +561,11 @@
             ],
         },
         {
-            "name": "tpadm webservice (clean, dev)",
+            "name": "tpadm webservice (clean, init, server)",
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_clean",
+            "preLaunchTask": "debug_server_config_clean",
             "program": "${workspaceRoot}/pkg",
             "args": ["webservice",
                 "--debug",
@@ -508,97 +574,37 @@
                 "--config-dir", "trusted-data/etc",
                 "--log-dir", "trusted-data/log",
                 "--ca-dir", "trusted-data/ca",
-                "--raw-so-pin", "123456",
-                "--raw-pin", "123456"
+                "--raw-so-pin", "test",
+                "--raw-pin", "test"
             ],
         },
         {
-            "name": "tpadm webservice (clean, pkcs11)",
+            "name": "tpadm webservice (client)",
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "debug_config_clean_pkcs11",
             "program": "${workspaceRoot}/pkg",
             "args": ["webservice",
                 "--debug",
-                "--init",
                 "--platform-dir", "trusted-data",
                 "--config-dir", "trusted-data/etc",
                 "--log-dir", "trusted-data/log",
                 "--ca-dir", "trusted-data/ca",
-                "--raw-so-pin", "123456",
-                "--raw-pin", "123456"
             ],
-        }, {
-            
-            "name": "tpadm verifier (init)",
+        },
+        {
+            "name": "tpadm webservice (server)",
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "preLaunchTask": "verifier_init",
             "program": "${workspaceRoot}/pkg",
-            "args": ["verifier",
-                // "--debug",
-                "--init",
-                "--platform-dir", "../attestation/verifier/trusted-data",
-                "--config-dir", "../attestation/verifier/trusted-data/etc",
-                "--log-dir", "../attestation/verifier/trusted-data/log",
-                "--ca-dir", "../attestation/verifier/trusted-data/ca",
-                "--attestor", "www.attestor.example.com",
-                "--raw-so-pin", "123456",
-                "--raw-pin", "123456"
-            ],
-        }, {
-            "name": "tpadm verifier",
-            "type": "go",
-            "request": "launch",
-            "mode": "debug",
-            // "preLaunchTask": "debug_config",
-            "program": "${workspaceRoot}/pkg",
-            "args": ["verifier",
+            "args": ["webservice",
                 "--debug",
-                "--platform-dir", "../attestation/verifier/trusted-data",
-                "--config-dir", "../attestation/verifier/trusted-data/etc",
-                "--log-dir", "../attestation/verifier/trusted-data/log",
-                "--ca-dir", "../attestation/verifier/trusted-data/ca",
-                "--attestor", "www.attestor.example.com",
-                "--ak-password", "ak-password",
-                "--raw-so-pin", "123456",
-                "--raw-pin", "123456"
+                "--platform-dir", "trusted-data",
+                "--config-dir", "trusted-data/etc",
+                "--log-dir", "trusted-data/log",
+                "--ca-dir", "trusted-data/ca",
             ],
-        }, {
-            "name": "tpadm attestor (init)",
-            "type": "go",
-            "request": "launch",
-            "mode": "debug",
-            "preLaunchTask": "attestor_init",
-            "program": "${workspaceRoot}/pkg",
-            "args": ["attestor",
-                // "--debug",
-                "--init",
-                "--platform-dir", "../attestation/attestor/trusted-data",
-                "--config-dir", "../attestation/attestor/trusted-data/etc",
-                "--log-dir", "../attestation/attestor/trusted-data/log",
-                "--ca-dir", "../attestation/attestor/trusted-data/ca",
-                "--raw-so-pin", "123456",
-                "--raw-pin", "123456"
-            ],
-        }, {
-            "name": "tpadm attestor",
-            "type": "go",
-            "request": "launch",
-            "mode": "debug",
-            "preLaunchTask": "debug_config",
-            "program": "${workspaceRoot}/pkg",
-            "args": ["attestor",
-                "--debug",
-                "--platform-dir", "../attestation/attestor/trusted-data",
-                "--config-dir", "../attestation/attestor/trusted-data/etc",
-                "--log-dir", "../attestation/attestor/trusted-data/log",
-                "--ca-dir", "../attestation/attestor/trusted-data/ca",
-                "--raw-so-pin", "123456",
-                "--raw-pin", "123456"
-            ],
-        }
+        },
     ]
 }

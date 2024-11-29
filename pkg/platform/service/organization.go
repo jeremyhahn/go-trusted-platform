@@ -50,7 +50,7 @@ func (service *Organization) Page(session Session,
 	if !session.User().HasRole(common.ROLE_ADMIN) {
 		return datastore.PageResult[*entities.Organization]{}, ErrPermissionDenied
 	}
-	return service.orgDAO.Page(pageQuery, datastore.CONSISTENCY_LOCAL)
+	return service.orgDAO.Page(pageQuery, datastore.ConsistencyLevelLocal)
 }
 
 // Returns a list of User entities that belong to the organization

@@ -9,7 +9,7 @@ import (
 )
 
 type Session interface {
-	ConsistencyLevel() int
+	ConsistencyLevel() datastore.ConsistencyLevel
 	Close()
 	IsSystemSession() bool
 	Logger() *logging.Logger
@@ -20,7 +20,7 @@ type Session interface {
 }
 
 type ServiceSession struct {
-	consistencyLevel   int
+	consistencyLevel   datastore.ConsistencyLevel
 	logger             *logging.Logger
 	orgClaims          []uint64
 	requestedOrgID     uint64
@@ -32,7 +32,7 @@ type ServiceSession struct {
 
 func NewSession() Session {
 	return &ServiceSession{
-		consistencyLevel: datastore.CONSISTENCY_LOCAL,
+		consistencyLevel: datastore.ConsistencyLevelLocal,
 	}
 }
 
@@ -53,7 +53,7 @@ func CreateSession(
 		user:               user}
 }
 
-func (session *ServiceSession) ConsistencyLevel() int {
+func (session *ServiceSession) ConsistencyLevel() datastore.ConsistencyLevel {
 	return session.consistencyLevel
 }
 

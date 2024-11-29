@@ -22,7 +22,3 @@ func (organization *Organization) SetEntityID(id uint64) {
 func (organization *Organization) EntityID() uint64 {
 	return organization.ID
 }
-
-func (organization *Organization) Partition() string {
-	return "organizations"
-}

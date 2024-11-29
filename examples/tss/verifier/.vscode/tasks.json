@@ -1,0 +1,38 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "make_config",
+            "command": "make",
+            "args": ["config"]
+        },
+        {
+            "type": "shell",
+            "label": "clean_trusted_data",
+            "command": "rm",
+            "args": [
+                "-rf",
+                "pkg/trusted-data",
+            ]
+        },
+        {
+            "type": "shell",
+            "label": "copy_trusted_data",
+            "command": "cp",
+            "args": [
+                "-R",
+                "trusted-data",
+                "pkg/",
+            ]
+        },
+        {
+            "type": "shell",
+            "label": "verifier_clean_config",
+            "dependsOn": [
+                "clean_trusted_data",
+                "make_config",
+                "copy_trusted_data",
+            ],
+        }
+]}

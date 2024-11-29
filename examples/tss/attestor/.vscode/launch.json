@@ -1,0 +1,31 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+       {
+            "name": "attestor (clean_config)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "preLaunchTask": "attestor_clean_config",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "-init=true",
+                "-listen", "localhost:8090",
+                "-so-pin", "123456",
+                "-pin",    "123456",
+            ],
+        }, {
+            "name": "attestor",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceRoot}/pkg",
+            "args": [
+                "-init=true",
+                "-listen", "localhost:8090",
+                "-so-pin", "123456",
+                "-pin",    "123456",
+            ],
+        }
+    ]
+}

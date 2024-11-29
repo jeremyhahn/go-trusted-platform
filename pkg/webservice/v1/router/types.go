@@ -5,5 +5,5 @@ import (
 )
 
 type WebServiceRouter interface {
-	RegisterRoutes(router *mux.Router, baseURI string) []string
+	RegisterRoutes(router *mux.Router)
 }

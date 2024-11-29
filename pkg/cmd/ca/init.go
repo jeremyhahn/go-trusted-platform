@@ -3,6 +3,7 @@ package ca
 import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 	"github.com/spf13/cobra"
 )
 
@@ -21,12 +22,22 @@ Intermediates as specified in the platform configuration file.`,
 			return
 		}
 
-		soPIN, userPIN, err := App.ParsePINs(InitParams.SOPin, InitParams.Pin)
-		if err != nil {
-			App.Logger.FatalError(err)
+		var soPIN, userPIN keystore.Password
+		if App.CA == nil {
+			soPIN, userPIN, err = App.ParsePINs(InitParams.SOPin, InitParams.Pin)
+			if err != nil {
+				App.Logger.Error(err)
+				cmd.PrintErrln(err)
+				return
+			}
+			if err := App.LoadCA(soPIN, userPIN); err != nil {
+				App.Logger.Error(err)
+				cmd.PrintErrln(err)
+				return
+			}
 		}
 
-		if _, err := App.InitCA(InitParams.PlatformCA, soPIN, userPIN); err != nil {
+		if _, err := App.InitCA(soPIN, userPIN, InitParams); err != nil {
 			cmd.PrintErrln(err)
 			return
 		}

@@ -5,6 +5,12 @@ type KeyValueEntity interface {
 	EntityID() uint64
 }
 
+type Index interface {
+	Name() string
+	RefID() uint64
+	KeyValueEntity
+}
+
 type TimeSeriesIndexer interface {
 	KeyValueEntity
 	SetTimestamp(timestamp uint64)

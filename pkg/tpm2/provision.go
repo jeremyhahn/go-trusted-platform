@@ -52,7 +52,7 @@ func (tpm *TPM2) Install(soPIN keystore.Password) error {
 			// TPM_RC_HANDLE (handle 1): the handle is not correct for the use
 			tpm.logger.Info("Creating Endorsement Key")
 			policyDigest := tpm.PlatformPolicyDigest()
-			ekAttrs, err = EKAttributesFromConfig(*tpm.config.EK, &policyDigest)
+			ekAttrs, err = EKAttributesFromConfig(*tpm.config.EK, &policyDigest, tpm.config.IDevID)
 			if err != nil {
 				return err
 			}
@@ -95,7 +95,7 @@ func (tpm *TPM2) Install(soPIN keystore.Password) error {
 	// Create IAK if it doesnt exist
 	if _, err = tpm.IAKAttributes(); err == ErrNotInitialized {
 		tpm.logger.Info("Creating Initial Attesation Key")
-		if _, err := tpm.CreateIAK(ekAttrs); err != nil {
+		if _, err := tpm.CreateIAK(ekAttrs, nil); err != nil {
 			return err
 		}
 	}
@@ -196,7 +196,7 @@ func (tpm *TPM2) Provision(soPIN keystore.Password) error {
 	}
 
 	// Provision Initial Attestation Key (IAK)
-	if _, err := tpm.CreateIAK(srkAttrs.Parent); err != nil {
+	if _, err := tpm.CreateIAK(srkAttrs.Parent, nil); err != nil {
 		return err
 	}
 
@@ -213,7 +213,7 @@ func (tpm *TPM2) ProvisionOwner(
 	tpm.logger.Info("Provisioning Owner Hierarchy")
 
 	// Create EK
-	ekAttrs, err := EKAttributesFromConfig(*tpm.config.EK, &tpm.policyDigest)
+	ekAttrs, err := EKAttributesFromConfig(*tpm.config.EK, &tpm.policyDigest, tpm.config.IDevID)
 	if err != nil {
 		return nil, err
 	}
@@ -236,11 +236,14 @@ func (tpm *TPM2) ProvisionOwner(
 	return srkAttrs, nil
 }
 
-// Writes an Endorsement Certificate to NV RAM. WARNING - this
-// operation will overwrite an OEM certificate if it exists!
-// If cert-handle is not provided, the certificate is saved to
+// Writes an Endorsement Certificate to TPM NVRAM.
+//
+// WARNING: This is a potentially destructive operation that will overwrite
+// a TPM manufacturer or OEM certificate if it exists!
+//
+// If an EK cert-handle is not configured, the certificate is saved to
 // the x509 certificate store instead of writing to NV RAM.
-// This provides to work around the 1024 byte limitation in the
+// This provides a workaround for the 1024 byte limitation in the
 // simulator and/or allows a user to conserve NV RAM in a real TPM.
 func (tpm *TPM2) ProvisionEKCert(hierarchyAuth, ekCertDER []byte) error {
 
@@ -400,8 +403,8 @@ func (tpm *TPM2) PlatformPolicyDigestHash() ([]byte, error) {
 	hash.Write(buffer)
 	digest := hash.Sum(nil)
 
-	tpm.logger.Debugf("PlatformPolicyDigest: PCRRead buffer: %x", buffer)
-	tpm.logger.Debugf("PlatformPolicyDigest: PCRRead digest: %x", digest)
+	// tpm.logger.Debugf("PlatformPolicyDigest: PCRRead buffer: %x", buffer)
+	// tpm.logger.Debugf("PlatformPolicyDigest: PCRRead digest: %x", digest)
 
 	return digest, nil
 }

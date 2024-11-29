@@ -1,0 +1,463 @@
+# Trusted Platform Configuration File (prod client)
+
+platform-dir: trusted-data
+config-dir: trusted-data/etc
+log-dir: trusted-data/log
+domain: edge01.trusted-platform.io
+hostmaster: hostmaster@edge01.trusted-platform.io
+pin-seal-policy: true
+
+
+acme:
+  client:
+    directory: https://trusted-platform.io/api/v1/acme/directory
+    enrollment:
+      challenge: enroll-8081
+      ip: ${PREFERRED_IP}
+    request-server-bundle: true
+    account:
+      email: hostmaster@edge01.trusted-platform.io
+      key:
+        # TPM 2.0 RSA w/ PSS
+        algorithm: RSA
+        cn: acme-account
+        hash: SHA-256
+        password: 123456
+        platform-policy: true
+        rsa:
+          size: 2048
+        signature-algorithm: SHA256-RSAPSS
+        store: tpm2
+      register: true
+
+
+datastore:
+  backend: AFERO_FS
+  consistency-level: local
+  home: trusted-data/datastore
+  read-buffer-size: 50
+  serializer: json
+
+
+tpm:
+  device: /dev/tpmrm0
+  simulator: true
+  encrypt-sessions: false
+  entropy: false
+  hash: SHA-256
+  ek:
+    handle: 0x81010001
+    hash: SHA-256
+    password:
+    rsa:
+      size: 2048
+  ssrk:
+    handle: 0x81000001
+    hierarchy-auth: 
+    password: 
+    platform-policy: true 
+    rsa:
+      size: 2048
+  iak:
+    auth:
+    hash: SHA-256
+    handle: 0x81010002
+    password: 
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSAPSS
+  idevid:
+    model: edge
+    serial: mfg-serial-e002
+    cert-handle: 0x01C90000
+    handle: 0x81020000
+    hash: SHA-256
+    pad: true
+    password: 
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSAPSS
+  platform-pcr: 23
+  file-integrity:
+    - ./
+  keystore:
+    srk-handle: 0x81000002
+    srk-auth: 123456
+    platform-policy: true
+
+
+certificate-authority:
+  platform-ca: 1
+  auto-import-issuing-ca: true
+  system-cert-pool: false
+  default-validity: 365
+  default-idevid-cn: default-device-id
+  sans-include-localhost: true
+  require-password: true
+  quantum-safe: true
+  identity:
+    - 
+      keystores:
+        pkcs8:
+          platform-policy: true
+        pkcs11:
+          library: /usr/local/lib/softhsm/libsofthsm2.so
+          config: trusted-data/etc/softhsm.conf
+          slot: 0
+          label: SoftHSM
+          pin: 123456
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000003
+          srk-auth: 123456
+          platform-policy: true
+      keys:
+        # PKCS #8 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+
+        # PKCS #11 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+            scheme: 
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
+
+        # TPM 2.0 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+
+        # PKCS #11 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+
+        # PKCS #8 Ed25519
+        - algorithm: Ed25519
+          ecc:
+            curve: P-256
+          signature-algorithm: Ed25519
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+
+      valid: 50
+      subject:
+        cn: root-ca.edge01.trusted-platform.io
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns: 
+          - root-ca.edge01.trusted-platform.io
+        email:
+          - hostmaster@edge01.trusted-platform.io
+
+    - # Intermediate Certificate Authority
+      keystores:
+        pkcs8:
+          platform-policy: true
+        pkcs11:
+          library: /usr/local/lib/softhsm/libsofthsm2.so
+          config: trusted-data/etc/softhsm.conf
+          slot: 0
+          label: SoftHSM
+          pin: 123456
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000004
+          srk-auth: 123456
+          platform-policy: true
+      keys:
+        - # PKCS #8 RSA w/ PSS
+          algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+
+        # PKCS #11 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
+
+        # TPM 2.0 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSAPSS
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+
+        # PKCS #11 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: pkcs11
+          password: 123456
+          platform-policy: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+
+        # PKCS #8 Ed25519
+        - algorithm: Ed25519
+          ecc:
+            curve: P-256
+          signature-algorithm: Ed25519
+          hash: SHA-256
+          store: pkcs8
+          password: 123456
+          platform-policy: true
+      valid: 10
+      subject:
+        cn: ca01.edge01.trusted-platform.io
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns:
+          - ca01.edge01.trusted-platform.io
+        email:
+          - hostmaster@edge01.trusted-platform.io
+
+
+webservice:
+  home: public_html
+  port: 8081
+  tls-port: 8444
+  index: index.html
+  jwt:
+    expiration: 525960
+    issuer: edge01.trusted-platform.io
+  webauthn:
+    display-name: Trusted Platform (Dev)
+    #id: edge01.trusted-platform.io
+    id: localhost
+    origins:
+      - https://edge01.trusted-platform.io
+      - https://edge01.trusted-platform.io:8443
+      - http://edge01.trusted-platform.io:8080
+      - https://localhost
+      - http://localhost
+      - http://localhost:8080
+      - https://localhost:8443
+      - http://localhost:3000      
+  cors:
+    allowed-origins:
+      - https://edge01.trusted-platform.io
+      - http://edge01.trusted-platform.io
+      - https://localhost
+      - http://localhost
+      - http://localhost:8080
+      - https://localhost:8443
+      - http://localhost:3000
+    allowed-methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+    allowed-headers:
+      - "*"
+    allow-credentials: true
+  key:
+    algorithm: ECDSA
+    ecc:
+      curve: P-256
+    signature-algorithm: ECDSA-SHA256
+    hash: SHA-256
+    store: pkcs8
+    password: 123456
+    platform-policy: true
+  certificate:
+    acme:
+      challenge: device-attest-01
+      renew: 15
+      cross-sign:
+        directory: https://acme-staging-v02.api.letsencrypt.org/directory
+        challenge: http-01
+    subject:
+      cn: edge01.trusted-platform.io
+      organization: Automate The Things, LLC
+      country: US
+      province: Florida
+      locality: West Palm Beach
+      address: 123 Automation Street
+      postal-code: 12345
+    sans:
+      dns:
+        - edge01.trusted-platform.io
+      email:
+        - hostmaster@edge01.trusted-platform.io
+  virtual-hosts:
+
+    # Virtual Host for API gateway running on the client
+    - home: api.edge01.trusted-platform.io
+      index: index.html
+      hosts:
+        - api.edge01.trusted-platform.io
+        - vhost1.edge01.trusted-platform.io
+        - vhost2.edge01.trusted-platform.io
+      key:
+        algorithm: ECDSA
+        ecc:
+          curve: P-256
+        signature-algorithm: ECDSA-SHA256
+        hash: SHA-256
+        store: pkcs8
+        password: 123456
+        platform-policy: true
+      certificate:
+        acme:
+          challenge: http-01
+          renew: 15
+          cross-sign:
+            directory: https://acme-staging-v02.api.letsencrypt.org/directory
+            challenge: http-01
+        valid: 365
+        subject:
+          cn: api.edge01.trusted-platform.io
+          organization: Automate The Things, LLC
+          country: US
+          province: Kernel
+          locality: Hypervisor
+          address: 456 Virtual Street
+          postal-code: 67890
+        sans:
+          dns:
+            - api.edge01.trusted-platform.io
+            - vhost1.edge01.trusted-platform.io
+            - vhost2.edge01.trusted-platform.io
+          email:
+            - hostmaster@edge01.trusted-platform.io
+
+    # Virtual Host for 3 node docker HA cluster running on the client
+    - home: cluster01.trusted-platform.io
+      index: index.html
+      hosts:
+        - cluster01.edge01.trusted-platform.io
+        - cluster01.edge01.trusted-platform.io
+      proxy:
+        backends:
+          - http://172.16.1.10:8080
+          - http://172.16.2.10:8080
+          - http://172.16.3.10:8080
+      key:
+        algorithm: ECDSA
+        ecc:
+          curve: P-256
+        signature-algorithm: ECDSA-SHA256
+        hash: SHA-256
+        store: pkcs8
+        password: 123456
+        platform-policy: true
+      certificate:
+        acme:
+          challenge: http-01
+          renew: 15
+          cross-sign:
+            directory: https://acme-staging-v02.api.letsencrypt.org/directory
+            challenge: http-01
+        valid: 365
+        subject:
+          cn: cluster01.edge01.trusted-platform.io
+          organization: Automate The Things, LLC
+          country: US
+          province: Kernel
+          locality: Hypervisor
+          address: 456 Virtual Street
+          postal-code: 67890
+        sans:
+          dns:
+            - cluster01.edge01.trusted-platform.io
+          email:
+            - hostmaster@cluster01.edge01.trusted-platform.io
+
+
+# Argon2 Password Hashing
+# https://github.com/P-H-C/phc-winner-argon2
+# https://pkg.go.dev/golang.org/x/crypto/argon2
+argon2:
+  memory: 65536
+  iterations: 3
+  parallelism: 2
+  saltLen: 16
+  keyLen: 32

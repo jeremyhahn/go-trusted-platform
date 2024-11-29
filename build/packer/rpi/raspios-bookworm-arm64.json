@@ -1,0 +1,51 @@
+{
+  "variables": {
+    "ssh_key_src": "{{env `HOME`}}/.ssh/id_rsa.pub",
+    "image_home_dir": "/home/pi"
+  },
+  "builders": [
+    {
+      "type": "arm-image",
+      "iso_url": "https://downloads.raspberrypi.com/raspios_arm64/images/raspios_arm64-2024-03-15/2024-03-15-raspios-bookworm-arm64.img.xz",
+      "iso_checksum": "sha256:7e53a46aab92051d523d7283c080532bebb52ce86758629bf1951be9b4b0560f",
+      "target_image_size": 16000000000,
+      "qemu_binary": "qemu-aarch64-static"
+    }
+  ],
+  "provisioners": [
+    {
+      "inline": [
+        "apt-get install -y vim ssh git build-essential python3-pip",
+        "curl https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o awscliv2.zip",
+        "unzip awscliv2.zip",
+        "./aws/install"
+      ],
+      "type": "shell"
+    },
+    {
+      "type": "shell",
+      "inline": [
+        "mkdir {{user `image_home_dir`}}/.ssh"
+      ]
+    },
+    {
+      "type": "file",
+      "source": "{{user `ssh_key_src`}}",
+      "destination": "{{user `image_home_dir`}}/.ssh/authorized_keys"
+    },
+    {
+      "type": "shell",
+      "inline": [
+        "touch /boot/ssh"
+      ]
+    },
+    {
+      "type": "shell",
+      "inline": [
+        "sed '/PasswordAuthentication/d' -i /etc/ssh/sshd_config",
+        "echo >> /etc/ssh/sshd_config",
+        "echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config"
+      ]
+    }
+  ]
+}

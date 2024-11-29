@@ -90,7 +90,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&InitParams.CADir, "ca-dir", "", "trusted-data/ca", "Certificate Authority data directory")
 	rootCmd.PersistentFlags().StringVarP(&InitParams.RuntimeUser, "setuid", "", "root", "Ther operating system user to run as")
 	rootCmd.PersistentFlags().IntVarP(&InitParams.PlatformCA, "intermediate", "", 1, "The target Certificate Authority. This number is the Identity array index of the target CA.")
-	rootCmd.PersistentFlags().StringVarP(&InitParams.ListenAddress, "listen", "", "", "The listen address for platform services")
 	rootCmd.PersistentFlags().BoolVar(&bSOPin, "so-pin", false, "Security Officer PIN / password")
 	rootCmd.PersistentFlags().BoolVar(&bPin, "pin", false, "Platform Administrator or user PIN / password")
 	rootCmd.PersistentFlags().BoolVar(&InitParams.Initialize, "init", false, "True to automatically initialize and provision the platform")

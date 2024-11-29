@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"fmt"
+	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
@@ -22,7 +23,7 @@ func (ca *CA) ImportEndorsementKeyCertificate(
 
 	keystore.DebugKeyAttributes(ca.params.Logger, ekAttrs)
 
-	certName := fmt.Sprintf("ek-cert%s", certstore.FSEXT_DER)
+	certName := fmt.Sprintf("%s%s", ca.ekCertName(), certstore.FSEXT_DER)
 	ekAttrs.CN = certName
 
 	blobKey := ca.tpmBlobKey(ekAttrs)
@@ -59,7 +60,7 @@ func (ca *CA) EndorsementKeyCertificate() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	attrs.CN = fmt.Sprintf("ak-cert%s", certstore.FSEXT_DER)
+	attrs.CN = fmt.Sprintf("%s%s", ca.ekCertName(), certstore.FSEXT_DER)
 
 	keystore.DebugKeyAttributes(ca.params.Logger, attrs)
 
@@ -85,8 +86,7 @@ func (ca *CA) ImportAttestationKeyCertificate(
 	ca.params.Logger.Info("Importing Attestation Key Certificate")
 	keystore.DebugKeyAttributes(ca.params.Logger, attrs)
 
-	akCertBlobName := "ak-cert%s"
-	attrs.CN = fmt.Sprintf(akCertBlobName, certstore.FSEXT_DER)
+	attrs.CN = fmt.Sprintf("%s%s", ca.akCertName(), certstore.FSEXT_DER)
 	blobKeyDER := ca.tpmBlobKey(attrs)
 
 	caKeyAttrs, err := ca.CAKeyAttributes(attrs.StoreType, attrs.KeyAlgorithm)
@@ -284,13 +284,26 @@ func (ca *CA) VerifyQuote(akAttrs *keystore.KeyAttributes, quote tpm2.Quote, non
 
 	// If this is a TPM restricted signing key, get the public key
 	// from it's TPM attributes
-	if akAttrs.TPMAttributes != nil &&
-		akAttrs.TPMAttributes.Public.ObjectAttributes.Restricted &&
-		akAttrs.TPMAttributes.Public.ObjectAttributes.SignEncrypt {
+	if akAttrs.TPMAttributes != nil {
 
-		pubKey, err = ca.params.TPM.ParsePublicKey(akAttrs.TPMAttributes.BPublic.Bytes())
-		if err != nil {
-			return err
+		if akAttrs.TPMAttributes.Public.ObjectAttributes.Restricted &&
+			akAttrs.TPMAttributes.Public.ObjectAttributes.SignEncrypt {
+
+			pubKey, err = ca.params.TPM.ParsePublicKey(akAttrs.TPMAttributes.BPublic.Bytes())
+			if err != nil {
+				return err
+			}
+		} else if akAttrs.TPMAttributes.PublicKeyBytes != nil {
+			// This supports the TSS attestor / verifier flow. The "AK Profile" mentioned in
+			// that spec only provides the public key and nothing else
+			// pubKey, err = ca.params.TPM.ParsePublicKey(akAttrs.TPMAttributes.BPublic.Bytes())
+			// if err != nil {
+			// 	return err
+			// }
+			pubKey, err = x509.ParsePKIXPublicKey(akAttrs.TPMAttributes.PublicKeyBytes)
+			if err != nil {
+				return err
+			}
 		}
 	} else {
 		// Get the public key from the x509 certificate (store)
@@ -448,15 +461,37 @@ func (ca *CA) VerifyAttestationPCRs(akAttrs *keystore.KeyAttributes, pcrs []byte
 // and attestation related blobs, given the owner's key
 // attributes.
 func (ca *CA) tpmBlobKey(attrs *keystore.KeyAttributes) []byte {
-	return []byte(fmt.Sprintf("tpm/%s/%s", attrs.CN, attrs.CN))
+	return []byte(fmt.Sprintf("%s/%s/%s", ATTEST_BLOB_ROOT, attrs.CN, attrs.CN))
 }
 
 // Returns the file path for a TPM attestation blob given the device
-// common name and blob name
-func (ca *CA) akBlobKey(cn, blobType string) []byte {
+// common name and blob names
+func (ca *CA) akBlobKey(cn string, blobType string) []byte {
+
+	// Default the path to the provided CN
 	path := fmt.Sprintf("%s/%s/%s",
 		ATTEST_BLOB_ROOT, cn, blobType)
-	return []byte(path)
+
+	// Provided cn takes precedence
+	if cn != "" {
+		return []byte(path)
+	}
+
+	// Use the device model-serial number naming convention if configured
+	config := ca.params.TPM.Config()
+	if config.IDevID != nil {
+		if config.IDevID.Model != "" && config.IDevID.Serial != "" {
+			path = fmt.Sprintf("%s/%s/%s/%s",
+				ATTEST_BLOB_ROOT,
+				strings.ReplaceAll(config.IDevID.Model, " ", "-"),
+				strings.ReplaceAll(config.IDevID.Serial, " ", "-"),
+				blobType)
+			return []byte(path)
+		}
+	}
+
+	// Use a default name
+	return []byte("default-attestation-key")
 }
 
 func (ca *CA) quoteBlobCN(cn string) []byte {
@@ -469,4 +504,30 @@ func (ca *CA) eventLogBlobCN(cn string) []byte {
 
 func (ca *CA) pcrsBlobCN(cn string) []byte {
 	return ca.akBlobKey(cn, ATTEST_BLOB_PCRS)
+}
+
+func (ca *CA) ekCertName() string {
+	config := ca.params.TPM.Config()
+	if config.IDevID != nil {
+		if config.IDevID.Model == "" || config.IDevID.Serial == "" {
+			return "ek"
+		}
+		return fmt.Sprintf("ek-%s-%s",
+			config.IDevID.Model,
+			config.IDevID.Serial)
+	}
+	return "ek"
+}
+
+func (ca *CA) akCertName() string {
+	config := ca.params.TPM.Config()
+	if config.IDevID != nil {
+		if config.IDevID.Model == "" || config.IDevID.Serial == "" {
+			return "ak"
+		}
+		return fmt.Sprintf("ak-%s-%s",
+			config.IDevID.Model,
+			config.IDevID.Serial)
+	}
+	return "ak"
 }

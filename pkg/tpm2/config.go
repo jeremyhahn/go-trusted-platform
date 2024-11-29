@@ -4,6 +4,7 @@ import (
 	"crypto"
 	"crypto/x509"
 	"errors"
+	"fmt"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
@@ -13,13 +14,15 @@ var (
 	ErrInvalidHierarchyType = errors.New("tpm2: invalid hierarchy type")
 
 	DefaultConfig = Config{
-		EncryptSession: false,
-		UseEntropy:     false,
-		Device:         "/dev/tpmrm0",
-		UseSimulator:   true,
-		Hash:           "SHA-256",
+		EncryptSession:               false,
+		UseEntropy:                   false,
+		Device:                       "/dev/tpmrm0",
+		UseSimulator:                 true,
+		Hash:                         "SHA-256",
+		IdentityProvisioningStrategy: string(EnrollmentStrategyIAK_IDEVID_SINGLE_PASS),
 		EK: &EKConfig{
 			CertHandle:    0x01C00002,
+			Debug:         true,
 			Handle:        0x81010001,
 			HierarchyAuth: keystore.DEFAULT_PASSWORD,
 			KeyAlgorithm:  x509.RSA.String(),
@@ -31,14 +34,27 @@ var (
 			"./",
 		},
 		IAK: &IAKConfig{
-			CN:           "device-id-001",
 			Debug:        true,
 			Hash:         crypto.SHA256.String(),
-			Handle:       uint32(0x81010002),
+			Handle:       0x81010002,
 			KeyAlgorithm: x509.RSA.String(),
 			RSAConfig: &keystore.RSAConfig{
 				KeySize: 2048,
 			},
+			SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
+		},
+		IDevID: &IDevIDConfig{
+			CertHandle:   0x01C90000,
+			Debug:        true,
+			Hash:         crypto.SHA256.String(),
+			Handle:       0x81020000,
+			KeyAlgorithm: x509.RSA.String(),
+			Model:        "edge",
+			// Password:           keystore.DEFAULT_PASSWORD,
+			Pad:                true,
+			PlatformPolicy:     true,
+			RSAConfig:          &keystore.RSAConfig{KeySize: 2048},
+			Serial:             "001",
 			SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
 		},
 		KeyStore: &KeyStoreConfig{
@@ -46,11 +62,13 @@ var (
 			SRKHandle:      0x81000002,
 			PlatformPolicy: true,
 		},
-		PlatformPCR: uint(16),
+		PlatformPCR: 16,
 		SSRK: &SRKConfig{
-			Handle:        0x81000001,
-			HierarchyAuth: keystore.DEFAULT_PASSWORD,
-			KeyAlgorithm:  x509.RSA.String(),
+			Debug:  true,
+			Handle: 0x81000001,
+			// HierarchyAuth: keystore.DEFAULT_PASSWORD,
+			PlatformPolicy: true,
+			KeyAlgorithm:   x509.RSA.String(),
 			RSAConfig: &keystore.RSAConfig{
 				KeySize: 2048,
 			},
@@ -59,19 +77,20 @@ var (
 )
 
 type Config struct {
-	Device         string          `yaml:"device" json:"device" mapstructure:"device"`
-	EncryptSession bool            `yaml:"encrypt-sessions" json:"encrypt_sessions" mapstructure:"encrypt-sessions"`
-	EK             *EKConfig       `yaml:"ek" json:"ek" mapstructure:"ek"`
-	FileIntegrity  []string        `yaml:"file-integrity" json:"file_integrity" mapstructure:"file-integrity"`
-	Hash           string          `yaml:"hash" json:"hash" mapstructure:"hash"`
-	IAK            *IAKConfig      `yaml:"iak" json:"iak" mapstructure:"iak"`
-	IDevID         *IDevIDConfig   `yaml:"idevid" json:"idevid" mapstructure:"idevid"`
-	KeyStore       *KeyStoreConfig `yaml:"keystore" json:"keystore" mapstructure:"keystore"`
-	LockoutAuth    string          `yaml:"lockout-auth" json:"lockout-auth" mapstructure:"lockout-auth"`
-	PlatformPCR    uint            `yaml:"platform-pcr" json:"platform_pcr" mapstructure:"platform-pcr"`
-	SSRK           *SRKConfig      `yaml:"ssrk" json:"ssrk" mapstructure:"ssrk"`
-	UseEntropy     bool            `yaml:"entropy" json:"entropy" mapstructure:"entropyr"`
-	UseSimulator   bool            `yaml:"simulator" json:"simulator" mapstructure:"simulator"`
+	Device                       string          `yaml:"device" json:"device" mapstructure:"device"`
+	EncryptSession               bool            `yaml:"encrypt-sessions" json:"encrypt_sessions" mapstructure:"encrypt-sessions"`
+	EK                           *EKConfig       `yaml:"ek" json:"ek" mapstructure:"ek"`
+	FileIntegrity                []string        `yaml:"file-integrity" json:"file_integrity" mapstructure:"file-integrity"`
+	Hash                         string          `yaml:"hash" json:"hash" mapstructure:"hash"`
+	IAK                          *IAKConfig      `yaml:"iak" json:"iak" mapstructure:"iak"`
+	IdentityProvisioningStrategy string          `yaml:"identity-provisioning" json:"identity_provisioning" mapstructure:"identity-provisioning"`
+	IDevID                       *IDevIDConfig   `yaml:"idevid" json:"idevid" mapstructure:"idevid"`
+	KeyStore                     *KeyStoreConfig `yaml:"keystore" json:"keystore" mapstructure:"keystore"`
+	LockoutAuth                  string          `yaml:"lockout-auth" json:"lockout-auth" mapstructure:"lockout-auth"`
+	PlatformPCR                  uint            `yaml:"platform-pcr" json:"platform_pcr" mapstructure:"platform-pcr"`
+	SSRK                         *SRKConfig      `yaml:"ssrk" json:"ssrk" mapstructure:"ssrk"`
+	UseEntropy                   bool            `yaml:"entropy" json:"entropy" mapstructure:"entropyr"`
+	UseSimulator                 bool            `yaml:"simulator" json:"simulator" mapstructure:"simulator"`
 }
 
 type KeyStoreConfig struct {
@@ -168,10 +187,14 @@ type LAKConfig struct {
 	SignatureAlgorithm string              `yaml:"signature-algorithm" json:"signature-algorithm" mapstructure:"signature-algorithm"`
 }
 
-func EKAttributesFromConfig(config EKConfig, policyDigest *tpm2.TPM2BDigest) (*keystore.KeyAttributes, error) {
+func EKAttributesFromConfig(config EKConfig, policyDigest *tpm2.TPM2BDigest, idevidConfig *IDevIDConfig) (*keystore.KeyAttributes, error) {
 
 	if config.CN == "" {
-		config.CN = "ek"
+		if idevidConfig != nil {
+			config.CN = fmt.Sprintf("ek-%s-%s", idevidConfig.Model, idevidConfig.Serial)
+		} else {
+			config.CN = "ek"
+		}
 	}
 
 	algorithm, err := keystore.ParseKeyAlgorithm(config.KeyAlgorithm)
@@ -308,10 +331,6 @@ func IAKAttributesFromConfig(
 	config *IAKConfig,
 	policyDigest *tpm2.TPM2BDigest) (*keystore.KeyAttributes, error) {
 
-	if config.CN == "" {
-		config.CN = "iak"
-	}
-
 	algorithm, err := keystore.ParseKeyAlgorithm(config.KeyAlgorithm)
 	if err != nil {
 		if config.RSAConfig != nil {
@@ -393,8 +412,12 @@ func IDevIDAttributesFromConfig(
 	config IDevIDConfig,
 	policyDigest *tpm2.TPM2BDigest) (*keystore.KeyAttributes, error) {
 
+	// Use the CN if specified, otherwise generate a default to model-serial
+	// naming convention.
 	if config.CN == "" {
-		config.CN = "idevid"
+		if config.Model != "" && config.Serial != "" {
+			config.CN = fmt.Sprintf("%s-%s", config.Model, config.Serial)
+		}
 	}
 
 	algorithm, err := keystore.ParseKeyAlgorithm(config.KeyAlgorithm)
@@ -565,4 +588,19 @@ func ParseHierarchy(hierarchyType string) (tpm2.TPMIRHHierarchy, error) {
 		return tpm2.TPMRHPlatform, nil
 	}
 	return 0, ErrInvalidHierarchyType
+}
+
+// Parses the identity provisioning strategy, using one of the mentioned methods
+// in "TPM 2.0 Keys for Device Identity and Attestation", section 6 - Identity Provisioning.
+func ParseIdentityProvisioningStrategy(strategy string) EnrollmentStrategy {
+	switch strategy {
+	// 6.1 OEM Creation of an IAK Certificate
+	case string(EnrollmentStrategyIAK):
+		return EnrollmentStrategyIAK
+	// 6.2 OEM Installation of IAK and IDevID in a Single Pass
+	case string(EnrollmentStrategyIAK_IDEVID_SINGLE_PASS):
+		return EnrollmentStrategyIAK_IDEVID_SINGLE_PASS
+	default:
+		return EnrollmentStrategyIAK_IDEVID_SINGLE_PASS
+	}
 }
