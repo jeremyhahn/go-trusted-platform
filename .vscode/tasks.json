@@ -9,6 +9,6 @@
     {
         "type": "shell",
         "label": "debug_server_config_clean",
-        "command": "rm -rf pkg/trusted-data && mkdir -p pkg/trusted-data/etc && cp configs/platform/config.dev.server.nonfips.yaml pkg/trusted-data/etc/config.yaml",
+        "command": "rm -rf pkg/trusted-data && mkdir -p pkg/trusted-data/etc && cp configs/platform/config.dev.server.yaml pkg/trusted-data/etc/config.yaml",
     }]
 }
