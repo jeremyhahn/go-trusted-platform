@@ -422,16 +422,6 @@ func (ac *Client) caBundleCerts(
 	return certs, caBundleBytes, nil
 }
 
-// Reloads the ACME client using the specified account key attributes
-func (ac *Client) reloadClient() error {
-	client, err := createClient(ac)
-	if err != nil {
-		return err
-	}
-	ac.client = client
-	return nil
-}
-
 // Returns the ACME account key attributes
 func (ac *Client) AccountKeyAttributes() *keystore.KeyAttributes {
 	return ac.accountKeyAttrs
@@ -886,7 +876,7 @@ func (ac *Client) RequestCertificate(
 	operation := func() error {
 
 		primaryOrder, err = ac.client.AuthorizeOrder(context.Background(), []acme.AuthzID{
-			acme.AuthzID{
+			{
 				Type:  *acmeCertRequest.AuthzID.Type,
 				Value: *acmeCertRequest.AuthzID.Value,
 			},
@@ -1044,7 +1034,7 @@ func (ac *Client) RequestCertificate(
 		if acmeCertRequest.CrossSigner != nil && !ac.isCrossSigner {
 
 			if acmeCertRequest.CrossSigner.DirectoryURL == ac.client.DirectoryURL {
-				// The same directory should only be conf
+				// The cross-signer has the same directory URL. Invalid use case.
 				return ErrCrossSignerSameDirectoryURL
 			}
 
@@ -1088,8 +1078,12 @@ func (ac *Client) RequestCertificate(
 				URL:            xsignedOrder.URI,
 			}
 
+			issuerCN, err := util.ParseFQDN(acmeCertRequest.CrossSigner.DirectoryURL)
+			if err != nil {
+				return err
+			}
 			// Import the new cross-signed certificate into the CA certificate store
-			if err := ac.ca.ImportXSignedCertificate(xsignedCert); err != nil {
+			if err := ac.ca.ImportXSignedCertificate(issuerCN, xsignedCert); err != nil {
 				return err
 			}
 		}
@@ -1245,8 +1239,12 @@ func (ac *Client) CrossSign(
 		return nil, fmt.Errorf("failed to save order: %v", err)
 	}
 
+	issuerCN, err := util.ParseFQDN(acmeCertRequest.CrossSigner.DirectoryURL)
+	if err != nil {
+		return nil, err
+	}
 	// Import the new cross-signed certificate into the CA certificate store
-	if err := ac.ca.ImportXSignedCertificate(xsignedCert); err != nil {
+	if err := ac.ca.ImportXSignedCertificate(issuerCN, xsignedCert); err != nil {
 		return nil, err
 	}
 

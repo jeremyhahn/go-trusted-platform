@@ -95,6 +95,7 @@ RPI_IMAGE_NAME		     ?= $(APPNAME)-$(APP_VERSION)-$(ENV)
 RPI_IMAGE_FILENAME       ?= $(RPI_IMAGE_NAME).img
 RPI_IMAGE_ARTIFACT       ?= $(PACKER_HOME)/$(RPI_IMAGE_FILENAME)
 RPI_SDCARD               ?= /dev/sda
+RPI_USER                 ?= jhahn
 RPI_HOST                 ?= rpi
 
 VM_DISK_SIZE_MB          ?= 2000
@@ -527,7 +528,7 @@ ansible-setup:
 
 # Raspbery PI
 rpi-sync:
-	rsync -av --progress ../$(PACKAGE) $(RPI_HOST): --exclude ./.git/
+	rsync -av --progress ../$(PACKAGE) $(RPI_USER)@$(RPI_HOST): --exclude .git/
 
 rpi-sync-ansible:
 	rsync -av --progress \

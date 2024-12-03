@@ -44,6 +44,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 
@@ -463,14 +464,18 @@ func (server *WebServerV1) startHTTPS() {
 	server.logger.Info("starting secure TLS web services",
 		slog.String("address", sTlsAddr))
 
-	// var xSignedPEM []byte
-	// if server.config.Certificate.ACME != nil && server.config.Certificate.ACME != nil &&
-	// 	server.config.Certificate.ACME.CrossSigner != nil {
-
-	// }
-
 	// Configure TLS for HTTP/1.1, HTTP/2, and HTTP/3
-	tlsconf, err := server.ca.TLSConfig(server.keyAttributes)
+	var tlsconf *tls.Config
+	var err error
+	if server.config.Certificate.ACME != nil && server.config.Certificate.ACME.CrossSigner != nil {
+		issuerCN, err := util.ParseFQDN(server.config.Certificate.ACME.CrossSigner.DirectoryURL)
+		if err != nil {
+			server.logger.FatalError(err)
+		}
+		tlsconf, err = server.ca.TLSConfigWithXSigner(server.keyAttributes, issuerCN)
+	} else {
+		tlsconf, err = server.ca.TLSConfig(server.keyAttributes)
+	}
 	if err != nil {
 		server.logger.FatalError(err)
 	}

@@ -23,7 +23,7 @@ acme:
       - enroll-8080
       - enroll-8081
   client:
-    directory: https://acme-v02.api.letsencrypt.org/directory
+    directory: https://trusted-platform.io/api/v1/acme/directory
     account:
       email: hostmaster@trusted-platform.io
       key:

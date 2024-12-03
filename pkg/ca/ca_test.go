@@ -489,7 +489,7 @@ func TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 	assert.NotNil(t, pem)
 
 	// Make sure the cert is valid
-	err = intermediateCA.Verify(cert)
+	err = intermediateCA.Verify(cert, nil)
 	assert.Nil(t, err)
 
 	err = intermediateCA.Revoke(cert, true)
@@ -500,7 +500,7 @@ func TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke(t *testing.T) {
 	assert.Equal(t, certstore.ErrCertRevoked, err)
 
 	// Make sure the cert is no longer valid
-	err = intermediateCA.Verify(cert)
+	err = intermediateCA.Verify(cert, nil)
 	assert.NotNil(t, err)
 	assert.Equal(t, certstore.ErrCertRevoked, err)
 

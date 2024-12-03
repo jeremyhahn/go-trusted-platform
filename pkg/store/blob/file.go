@@ -2,7 +2,6 @@ package blob
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -55,7 +54,7 @@ func NewFSBlobStore(
 	if rootDir[len(rootDir)-1] == '/' {
 		rootDir = strings.TrimRight(rootDir, "/")
 	}
-	dir := fmt.Sprintf("%s/%s", rootDir, partitionName)
+	dir := filepath.Join(rootDir, partitionName)
 	if err := fs.MkdirAll(dir, os.ModePerm); err != nil {
 		logger.Error(err)
 		return nil, err
@@ -84,12 +83,12 @@ func (store *BlobStore) Partition() string {
 // platform-dir/blobs/my/secret/blob.dat
 func (store *BlobStore) Save(key, data []byte) error {
 	trimmed := strings.TrimLeft(string(key), "/")
-	dir := fmt.Sprintf("%s/%s", store.blobDir, filepath.Dir(trimmed))
+	dir := filepath.Join(store.blobDir, filepath.Dir(trimmed))
 	if err := store.fs.MkdirAll(dir, os.ModePerm); err != nil {
 		store.logger.Error(err, slog.String("key", trimmed))
 		return err
 	}
-	blobFile := fmt.Sprintf("%s/%s", store.blobDir, trimmed)
+	blobFile := filepath.Join(store.blobDir, trimmed)
 	if err := afero.WriteFile(store.fs, blobFile, data, 0644); err != nil {
 		store.logger.Error(err, slog.String("key", trimmed))
 		return err
@@ -101,16 +100,16 @@ func (store *BlobStore) Save(key, data []byte) error {
 // returned if the signed data could not be found.
 func (store *BlobStore) Get(key []byte) ([]byte, error) {
 	trimmed := strings.TrimLeft(string(key), "/")
-	dir := fmt.Sprintf("%s/%s/", store.blobDir, filepath.Dir(trimmed))
+	dir := filepath.Join(store.blobDir, filepath.Dir(trimmed))
 	if err := store.fs.MkdirAll(dir, os.ModePerm); err != nil {
 		store.logger.Error(err, slog.String("key", trimmed))
 		return nil, err
 	}
-	blobFile := fmt.Sprintf("%s/%s", store.blobDir, trimmed)
+	blobFile := filepath.Join(store.blobDir, trimmed)
 	bytes, err := afero.ReadFile(store.fs, blobFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			store.logger.MaybeError(ErrBlobNotFound, slog.String("key", trimmed))
+			store.logger.MaybeError(ErrBlobNotFound, slog.String("file", blobFile))
 			return nil, ErrBlobNotFound
 		}
 		return nil, err
@@ -122,7 +121,7 @@ func (store *BlobStore) Get(key []byte) ([]byte, error) {
 // if the provided blob key could not be found.
 func (store *BlobStore) Delete(key []byte) error {
 	trimmed := strings.TrimLeft(string(key), "/")
-	blobFile := fmt.Sprintf("%s/%s", store.blobDir, trimmed)
+	blobFile := filepath.Join(store.blobDir, trimmed)
 	if _, err := store.fs.Stat(blobFile); err != nil {
 		store.logger.Error(err, slog.String("key", trimmed))
 		return ErrBlobNotFound
@@ -133,7 +132,7 @@ func (store *BlobStore) Delete(key []byte) error {
 // Returns true if the blob with the provided key exists
 func (store *BlobStore) Exists(key []byte) bool {
 	trimmed := strings.TrimLeft(string(key), "/")
-	blobFile := fmt.Sprintf("%s/%s", store.blobDir, trimmed)
+	blobFile := filepath.Join(store.blobDir, trimmed)
 	if _, err := store.fs.Stat(blobFile); err != nil {
 		return false
 	}
@@ -148,7 +147,7 @@ func (store *BlobStore) Count(partition *string) (int, error) {
 	dir := store.blobDir
 	if partition != nil {
 		trimmed := strings.TrimLeft(*partition, "/")
-		dir = fmt.Sprintf("%s/%s", store.blobDir, trimmed)
+		dir = filepath.Join(store.blobDir, trimmed)
 	}
 	f, err := store.fs.Open(dir)
 	if err != nil {
