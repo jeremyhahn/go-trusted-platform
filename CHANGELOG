@@ -1,28 +1,3 @@
-- Create RFC 8555 compliant ACME server & client
-- Create custom ACME challenge types for EK, IAK/IDevID certs to support
-  OEM device provisioning and automated onboarding to the network
-- Remove React dashboard from public_html
-- Add key rotation support to key stores
-- Add overwrite flag to key store backend and save operations
-- Add docker and packer support for the core platform and RPI
-- Create Trusted Platform ISO build scripts
-- Re-organize webservice package, decouple configs
-- Add ACME client cross-signing support
-- Create examples directory
-- Remove TSS attestation workflow from core project, move to examples
-- Remove protobuf from core project, relocate to TSS examples
-- Add support for external ACME servers (tested w/ LetsEncrypt)
-- Add DNS server w/ support for internal and public DNS zones
-- Add full support for dns-01 ACME challenge w/ DNS server integration
-- Create docker based ISO builder
-- Add support for automated ACME certificates deployed to web server
-  via external CA's (e.g. LetsEncrypt)
-- Add virtual hosts, url rewrite and reverse proxy support to web server
-- Add support for HTTP/3 QUIC
-- Create build-public-html target to automate dashboard build
-- Re-organize configs, cleanup
-- Create custom security logging facility
-- Add ACME docs, lots of cleanup
-- Fix bugs and broken tests
-- Clean up VS code tasks and targets
-- Iterate on minimal docker and ISO build targets for platform and ansible
+- Include cross-signing CA's root and intermediate
+  certs in TLS configs, cert bundles and cert pools.
+- Misc bug fixes and cleanup

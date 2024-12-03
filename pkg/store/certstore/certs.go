@@ -43,8 +43,8 @@ func (cs *CertStore) ImportCertificate(certificate *x509.Certificate) error {
 }
 
 // Imports a cross-signed certificate to the certificate store
-func (cs *CertStore) ImportXSignedCertificate(certificate *x509.Certificate) error {
-	id, err := ParseXSignedCertificateID(certificate, nil)
+func (cs *CertStore) ImportXSignedCertificate(issuerCN string, certificate *x509.Certificate) error {
+	id, err := ParseXSignedCertificateID(issuerCN, certificate, nil)
 	if err != nil {
 		return err
 	}
@@ -86,36 +86,16 @@ func (cs *CertStore) Get(keyAttrs *keystore.KeyAttributes) (*x509.Certificate, e
 }
 
 // Retrieves an x509 certificate from the certificate store.
-func (cs *CertStore) GetXSigned(keyAttrs *keystore.KeyAttributes) (*x509.Certificate, error) {
+func (cs *CertStore) GetXSigned(issuerCN string, keyAttrs *keystore.KeyAttributes) (*x509.Certificate, error) {
 	id := fmt.Sprintf("%s/%s.%s.%s%s",
-		cs.blobStore.Partition(),
+		issuerCN,
 		keyAttrs.CN,
-		keyAttrs.StoreType,
+		keystore.STORE_UNKNOWN,
 		strings.ToLower(keyAttrs.KeyAlgorithm.String()),
 		FSEXT_DER)
 	der, err := cs.blobStore.Get([]byte(id))
 	if err != nil {
-		if err == blob.ErrBlobNotFound {
-			// External certificates don't have the Trusted Platform
-			// key store OIDs, in which case the certificate ID contains
-			// "unknown" for the key store. This probably needs to be revisited
-			// later but this makes things work for now - look up the key using
-			// "unknown" as the key store.
-			id := fmt.Sprintf("%s.%s.%s%s",
-				keyAttrs.CN,
-				keystore.STORE_UNKNOWN,
-				strings.ToLower(keyAttrs.KeyAlgorithm.String()),
-				FSEXT_DER)
-			der, err = cs.blobStore.Get([]byte(id))
-			if err != nil {
-				if err == blob.ErrBlobNotFound {
-					return nil, ErrCertNotFound
-				}
-				return nil, err
-			}
-		} else {
-			return nil, err
-		}
+		return nil, err
 	}
 	return x509.ParseCertificate(der)
 }

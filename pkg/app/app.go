@@ -230,6 +230,7 @@ func (app *App) Init(initParams *AppInitParams) (*App, error) {
 		}
 		return app, nil
 	}
+
 	if err := app.OpenTPM(initParams.Initialize); err != nil {
 		return app, err
 	}
@@ -1573,11 +1574,7 @@ func (app *App) InitWebServer() error {
 					if err != nil {
 						return err
 					}
-					xsignedCert, err := x509.ParseCertificate(xsignedDER)
-					if err != nil {
-						return err
-					}
-					issuerCN, err := certstore.ParseIssuerCN(xsignedCert)
+					issuerCN, err := util.ParseFQDN(app.WebServiceConfig.Certificate.ACME.CrossSigner.DirectoryURL)
 					if err != nil {
 						return err
 					}
