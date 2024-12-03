@@ -147,8 +147,9 @@ func (s *RestService) OrderFinalizeHandler(w http.ResponseWriter, r *http.Reques
 
 	serialNumber = cert.SerialNumber.Uint64()
 
-	// Verify the certificate as a final sanity check
-	if err := s.ca.Verify(cert); err != nil {
+	// Verify the certificate as a final sanity check before delivering to
+	// the client
+	if err := s.ca.Verify(cert, nil); err != nil {
 		writeError(w, acme.ServerInternal("Failed to verify certificate"))
 		return
 	}

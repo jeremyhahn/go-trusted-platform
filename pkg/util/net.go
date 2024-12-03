@@ -1,8 +1,11 @@
 package util
 
 import (
+	"fmt"
 	"log"
 	"net"
+	"net/url"
+	"strings"
 )
 
 // Performs a logical UDP connection to an endpoint
@@ -61,4 +64,17 @@ func IsPrivateSubnet(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// Returns the Fully Qualified Domain Name for a given URL
+func ParseFQDN(anyURL string) (string, error) {
+	parsedURL, err := url.Parse(anyURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid URL: %w", err)
+	}
+	host := parsedURL.Host
+	if strings.Contains(host, ":") {
+		host = strings.Split(host, ":")[0] // Remove port if present
+	}
+	return host, nil
 }

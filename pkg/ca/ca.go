@@ -37,6 +37,7 @@ var (
 	ErrCertFuture                   = errors.New("certificate-authority: certificate issued in the future")
 	ErrCertExpired                  = errors.New("certificate-authority: certificate expired")
 	ErrDistributionPointExists      = errors.New("certificate-authority: distribution point already exists")
+	ErrEncodingPEM                  = errors.New("certificate-authority: error encoding to PEM")
 	ErrInvalidSignature             = errors.New("certificate-authority: invalid signature")
 	ErrInvalidSignatureAlgorithm    = errors.New("certificate-authority: invalid signature algorithm")
 	ErrCRLAlreadyExists             = errors.New("certificate-authority: revocation list already exists")
@@ -92,7 +93,7 @@ type CertificateAuthority interface {
 	ImportAttestationPCRs(attestatomAttrs *keystore.KeyAttributes, pcrs []byte, backend keystore.KeyBackend) error
 	ImportAttestationQuote(attestatomAttrs *keystore.KeyAttributes, data []byte, backend keystore.KeyBackend) error
 	ImportCertificate(certificate *x509.Certificate) error
-	ImportXSignedCertificate(certificate *x509.Certificate) error
+	ImportXSignedCertificate(issuerCN string, certificate *x509.Certificate) error
 	ImportDistrbutionCRLs(cert *x509.Certificate) error
 	ImportEndorsementKeyCertificate(attrs *keystore.KeyAttributes, ekCertBytes []byte) error
 	ImportLocalAttestation(keyAttrs *keystore.KeyAttributes, quote tpm2.Quote, backend keystore.KeyBackend) error
@@ -128,10 +129,11 @@ type CertificateAuthority interface {
 	TLSCertificate(attrs *keystore.KeyAttributes) (tls.Certificate, error)
 	TLSBundle(attrs *keystore.KeyAttributes) ([][]byte, *x509.Certificate, error)
 	TLSConfig(attrs *keystore.KeyAttributes) (*tls.Config, error)
+	TLSConfigWithXSigner(attrs *keystore.KeyAttributes, issuerCN string) (*tls.Config, error)
 	OSTrustStore() OSTrustStore
-	TrustedRootCertPool(certificate *x509.Certificate) (*x509.CertPool, error)
-	TrustedIntermediateCertPool(certificate *x509.Certificate) (*x509.CertPool, error)
-	Verify(certificate *x509.Certificate) error
+	TrustedRootCertPool(certificate *x509.Certificate, xsignerCN *string) (*x509.CertPool, error)
+	TrustedIntermediateCertPool(certificate *x509.Certificate, xsignerCN *string) (*x509.CertPool, error)
+	Verify(certificate *x509.Certificate, xsignerCN *string) error
 	VerifyAttestationEventLog(signerAttrs *keystore.KeyAttributes, eventLog []byte) error
 	VerifyAttestationPCRs(signerAttrs *keystore.KeyAttributes, pcrs []byte) error
 	VerifyAttestationQuote(signerAttrs *keystore.KeyAttributes, quote []byte) error
@@ -143,6 +145,7 @@ type CertificateAuthority interface {
 		tcgCSRIDevIDBytes []byte,
 		signatureAlgorithm x509.SignatureAlgorithm) ([]byte, []byte, []byte, error)
 	VerifyQuote(keyAttrs *keystore.KeyAttributes, quote tpm2.Quote, nonce []byte) error
+	XSignedIntermediateCertificates(issuerCN string, cert *x509.Certificate) ([]*x509.Certificate, error)
 }
 
 type CA struct {
@@ -704,9 +707,10 @@ func (ca *CA) OSTrustStore() OSTrustStore {
 }
 
 // Returns a cert pool initialized with the root certificate for the
-// provided certificate.
+// provided certificate. An optional cross signing CA may be provided
+// to include that CA's root certificate in the returned CertPool.
 func (ca *CA) TrustedRootCertPool(
-	certificate *x509.Certificate) (*x509.CertPool, error) {
+	certificate *x509.Certificate, xsignerCN *string) (*x509.CertPool, error) {
 
 	pool := x509.NewCertPool()
 
@@ -725,24 +729,92 @@ func (ca *CA) TrustedRootCertPool(
 		return nil, err
 	}
 
+	// cross-signed root certificates should be in the OS / browser trust store
+	// if xsignerCN != nil {
+	// 	xsignedRoot, err := ca.XSignedRootCertificate(*xsignerCN, certificate)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	xsignedPEM, err := certstore.EncodePEM(xsignedRoot.Raw)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	ok := pool.AppendCertsFromPEM(xsignedPEM)
+	// 	if !ok {
+	// 		return nil, err
+	// 	}
+	// }
+
 	return pool, nil
+}
+
+// Retrieves the root certificate for a cross signing CA
+func (ca *CA) XSignedRootCertificate(issuerCN string, cert *x509.Certificate) (*x509.Certificate, error) {
+	parent, err := ca.certStore.GetXSigned(issuerCN, &keystore.KeyAttributes{
+		CN:           cert.Issuer.CommonName,
+		KeyAlgorithm: cert.PublicKeyAlgorithm,
+		StoreType:    keystore.STORE_UNKNOWN,
+	})
+	if err != nil {
+		if err == blobstore.ErrBlobNotFound {
+			// It's impossible to know which key algorithm
+			// was used by the parent CA, so try all supported
+			// key algorithms to see if it can be found using
+			// a different algorithm
+			supportedAlgs := []x509.PublicKeyAlgorithm{
+				x509.RSA,
+				x509.ECDSA,
+				x509.Ed25519}
+			for _, alg := range supportedAlgs {
+				if alg == cert.PublicKeyAlgorithm {
+					continue
+				}
+				parent, err = ca.certStore.GetXSigned(issuerCN, &keystore.KeyAttributes{
+					CN:           cert.Issuer.CommonName,
+					KeyAlgorithm: alg,
+					StoreType:    keystore.STORE_UNKNOWN,
+				})
+				if err != nil {
+					continue
+				}
+				err = nil
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
+	}
+	if cert.IsCA && parent.Issuer.CommonName == parent.Subject.CommonName {
+		return cert, nil
+	}
+	return ca.XSignedRootCertificate(issuerCN, parent)
 }
 
 // Returns a cert pool initialized with the root certificate for the
 // provided certificate.
-func (ca *CA) RootCertificate(child *x509.Certificate) (*x509.Certificate, error) {
+func (ca *CA) RootCertificate(cert *x509.Certificate) (*x509.Certificate, error) {
 
 	var rootCert *x509.Certificate
 
 	// Parse the key store type  from the certificate
-	storeType, err := certstore.ParseKeyStoreType(child)
+	storeType, err := certstore.ParseKeyStoreType(cert)
 	if err == keystore.ErrInvalidKeyStore {
 		// No key store OID found, use the CA default store type
 		storeType = ca.defaultKeyAttributes.StoreType
 	}
 
+	// If the store type is unknown, this is likely a cross-signed or otherwise
+	// imported certificate. Attempt to locate the issuer certificate using
+	// only the common name.
+	if storeType == keystore.STORE_UNKNOWN {
+		return nil, keystore.ErrInvalidKeyAttributes
+	}
+
 	// Get the local CA key attributes for the child's public key algorithm
-	caKeyAttrs, ok := ca.keyAttributesMap[storeType][child.PublicKeyAlgorithm]
+	caKeyAttrs, ok := ca.keyAttributesMap[storeType][cert.PublicKeyAlgorithm]
 	if !ok {
 		caKeyAttrs, ok = ca.keyAttributesMap[storeType][ca.DefaultKeyAlgorithm()]
 		if !ok {
@@ -753,7 +825,7 @@ func (ca *CA) RootCertificate(child *x509.Certificate) (*x509.Certificate, error
 	// Set the caKeyAttrs CN to the actual issuer CN in the child cert
 	// to ensure the correct root certificate is returned. This could be
 	// a certificate that was issued by a different CA.
-	caKeyAttrs.CN = child.Issuer.CommonName
+	caKeyAttrs.CN = cert.Issuer.CommonName
 
 	// Get the matching certificate for this parent's key attributes
 	caCert, err := ca.Certificate(&caKeyAttrs)
@@ -766,7 +838,7 @@ func (ca *CA) RootCertificate(child *x509.Certificate) (*x509.Certificate, error
 	for issuerCN != "" {
 
 		// Build a new set of key attributes for the parent
-		parentAttrs, ok := ca.keyAttributesMap[storeType][child.PublicKeyAlgorithm]
+		parentAttrs, ok := ca.keyAttributesMap[storeType][cert.PublicKeyAlgorithm]
 		if !ok {
 			return nil, keystore.ErrInvalidKeyAlgorithm
 		}
@@ -795,10 +867,65 @@ func (ca *CA) RootCertificate(child *x509.Certificate) (*x509.Certificate, error
 	return rootCert, nil
 }
 
-// Returns a cert pool initialized with the root certificate for the
-// provided certificate.
+// Retrieves all intermediate CA certificates for the provided cross signing
+// issuer's common name and leaf certificate.
+func (ca *CA) XSignedIntermediateCertificates(
+	issuerCN string, cert *x509.Certificate) ([]*x509.Certificate, error) {
+
+	intermediates := make([]*x509.Certificate, 0)
+	var parent *x509.Certificate
+	var err error
+	for err == nil {
+		keyAttrs := &keystore.KeyAttributes{
+			CN:           cert.Issuer.CommonName,
+			KeyAlgorithm: cert.PublicKeyAlgorithm,
+			StoreType:    keystore.STORE_UNKNOWN,
+		}
+		parent, err = ca.Certificate(keyAttrs)
+		if err != nil {
+			if err == blobstore.ErrBlobNotFound || err == certstore.ErrCertNotFound {
+				// It's impossible to know which key algorithm
+				// was used by the parent CA, so try all supported
+				// key algorithms to see if it can be found using
+				// a different algorithm
+				supportedAlgs := []x509.PublicKeyAlgorithm{
+					x509.RSA,
+					x509.ECDSA,
+					x509.Ed25519}
+				for _, alg := range supportedAlgs {
+					if alg == cert.PublicKeyAlgorithm {
+						continue
+					}
+					keyAttrs.KeyAlgorithm = alg
+					parent, err = ca.Certificate(keyAttrs)
+					if err != nil {
+						continue
+					}
+					err = nil
+					break
+				}
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				return nil, err
+			}
+		}
+		if cert.IsCA && parent.Issuer.CommonName == parent.Subject.CommonName {
+			// This is the root cert
+			return intermediates, nil
+		}
+		intermediates = append(intermediates, parent)
+		cert = parent
+	}
+	return nil, err
+}
+
+// Returns a cert pool initialized with the intermediate certificate for the
+// provided leaf certificate. An optional cross-signing CA may be provided to
+// include it's intermediate certificates in the returned CertPool.
 func (ca *CA) TrustedIntermediateCertPool(
-	certificate *x509.Certificate) (*x509.CertPool, error) {
+	certificate *x509.Certificate, xsignerCN *string) (*x509.CertPool, error) {
 
 	pool := x509.NewCertPool()
 
@@ -806,6 +933,7 @@ func (ca *CA) TrustedIntermediateCertPool(
 	if err != nil {
 		return nil, err
 	}
+
 	parentAttrs.Debug = ca.params.DebugSecrets
 	parentAttrs.CN = certificate.Issuer.CommonName
 	parentAttrs.KeyType = keystore.KEY_TYPE_CA
@@ -834,6 +962,23 @@ func (ca *CA) TrustedIntermediateCertPool(
 	ok := pool.AppendCertsFromPEM(pemBytes)
 	if !ok {
 		return nil, err
+	}
+
+	if xsignerCN != nil {
+		intermediates, err := ca.XSignedIntermediateCertificates(*xsignerCN, certificate)
+		if err != nil {
+			return nil, err
+		}
+		for _, intermediate := range intermediates {
+			pem, err := certstore.EncodePEM(intermediate.Raw)
+			if err != nil {
+				return nil, err
+			}
+			ok := pool.AppendCertsFromPEM(pem)
+			if !ok {
+				return nil, err
+			}
+		}
 	}
 
 	return pool, nil
@@ -1211,19 +1356,19 @@ func (ca *CA) SignCSR(csrPEM []byte, request *CertificateRequest) (*x509.Certifi
 // one of the supported strategies.
 // The CA issues a challenge to the device to validate that the TPM has the
 // EK matching the certificate in step 2b and that the IAK whose public area
-// is included in 2c is loaded in the device’s TPM. The challenge data blob is
+// is included in 2c is loaded in the deviceâ€s TPM. The challenge data blob is
 // created using the following procedure:
 // a. Calculate the cryptographic Name of the IAK, by hashing its public area
 // with its associated hash algorithm, prepended with the Algorithm ID of the
 // hashing algorithm. Refer to TPM 2.0 Library Specification [2], Part 1,
-// Section 16 (“Names”).
+// Section 16 (â€Namesâ€).
 // b. Using the sequence described in TPM 2.0 Library Specification, Part 3,
-// section 12.6.3 (“TPM2_MakeCredential Detailed Actions”), create the
-// encrypted “credential” structure to be sent to the device. When building
+// section 12.6.3 (â€TPM2_MakeCredential Detailed Actionsâ€), create the
+// encrypted â€credentialâ€ structure to be sent to the device. When building
 // this encrypted structure, objectName is the Name of the IAK calculated in
-// step ‘a’ and Certificate (which is the payload field) holds a nonce (whose
+// step â€aâ€ and Certificate (which is the payload field) holds a nonce (whose
 // size matches the Name hash). Retain the nonce for use in later steps.
-// c. The CA sends the encrypted “credential” blob to the enrolling TPM device.
+// c. The CA sends the encrypted â€credentialâ€ blob to the enrolling TPM device.
 func (ca *CA) VerifyTCG_CSR_IDevID(
 	tcgCSRIDevID *tpm2.TCG_CSR_IDEVID,
 	signatureAlgorithm x509.SignatureAlgorithm) ([]byte, []byte, []byte, error) {
@@ -1239,7 +1384,7 @@ func (ca *CA) VerifyTCG_CSR_IDevID(
 		return nil, nil, nil, err
 	}
 
-	if err := ca.Verify(ekCert); err != nil {
+	if err := ca.Verify(ekCert, nil); err != nil {
 		return nil, nil, nil, err
 	}
 
@@ -1266,7 +1411,7 @@ func (ca *CA) VerifyTCG_CSR_IDevIDBytes(
 		return nil, nil, nil, err
 	}
 
-	if err := ca.Verify(ekCert); err != nil {
+	if err := ca.Verify(ekCert, nil); err != nil {
 		return nil, nil, nil, err
 	}
 
@@ -1945,8 +2090,11 @@ func (ca *CA) Revoke(certificate *x509.Certificate, deleteKeys bool) error {
 // root and intermediate certificate store if they exist. Issuer
 // certificates will be automatically downloaded and installed to
 // the appropriate certificate store partition if auto-import is
-// enabled in the platform configuration file.
-func (ca *CA) Verify(certificate *x509.Certificate) error {
+// enabled in the platform configuration file. An optional cross
+// signer common name may be provided to include that external CA's
+// root and intermediate certificates in the CertPool used to validate
+// the provided certificate.
+func (ca *CA) Verify(certificate *x509.Certificate, xsignerCN *string) error {
 
 	var caKeyAttrs keystore.KeyAttributes
 	var storeMap map[x509.PublicKeyAlgorithm]keystore.KeyAttributes
@@ -1984,14 +2132,14 @@ func (ca *CA) Verify(certificate *x509.Certificate) error {
 
 	// Load the Certificate Authority Root CA certificate and any other
 	// trusted root certificates that've been imported into the certificate store
-	roots, err := ca.TrustedRootCertPool(certificate)
+	roots, err := ca.TrustedRootCertPool(certificate, xsignerCN)
 	if err != nil {
 		return err
 	}
 
 	// Load the Certificate Authority Intermediate CA certificate and all
 	// imported trusted intermediate certificates from the certificate store
-	intermediates, err := ca.TrustedIntermediateCertPool(certificate)
+	intermediates, err := ca.TrustedIntermediateCertPool(certificate, xsignerCN)
 	if err != nil {
 		if err != certstore.ErrCertNotFound {
 			return err
@@ -2027,7 +2175,7 @@ func (ca *CA) Verify(certificate *x509.Certificate) error {
 				}
 				// Attempt to verify the leaf certificate again
 				// now that it's CA certs are imported.
-				if err := ca.Verify(certificate); err != nil {
+				if err := ca.Verify(certificate, xsignerCN); err != nil {
 					return err
 				}
 			} else {
@@ -2099,7 +2247,9 @@ func (ca *CA) ImportIssuingCAs(cert *x509.Certificate) error {
 
 		cn := cert.Subject.CommonName
 
-		ca.params.Logger.Infof("certificate-authority: importing CA Issuer certificate from %s", url)
+		ca.params.Logger.Info("certificate-authority: importing CA Issuer",
+			slog.String("cn", cn),
+			slog.String("utl", url))
 
 		// Download the certificate
 		resp, err := http.Get(url)
@@ -2212,8 +2362,8 @@ func (ca *CA) Certificate(keyAttrs *keystore.KeyAttributes) (*x509.Certificate, 
 }
 
 // Returns a cross-signed certificate from the certificate store
-func (ca *CA) XSignedCertificate(keyAttrs *keystore.KeyAttributes) (*x509.Certificate, error) {
-	return ca.certStore.GetXSigned(keyAttrs)
+func (ca *CA) XSignedCertificate(issuerCN string, keyAttrs *keystore.KeyAttributes) (*x509.Certificate, error) {
+	return ca.certStore.GetXSigned(issuerCN, keyAttrs)
 }
 
 // Returns a PEM certifcate from the cert store as []byte or
@@ -2259,11 +2409,14 @@ func (ca *CA) ImportCertificate(certificate *x509.Certificate) error {
 }
 
 // Import a cross-signed certificae to the certificate store
-func (ca *CA) ImportXSignedCertificate(certificate *x509.Certificate) error {
+func (ca *CA) ImportXSignedCertificate(issuerCN string, certificate *x509.Certificate) error {
+	if err := ca.ImportIssuingCAs(certificate); err != nil {
+		return err
+	}
 	// if err := ca.Verify(certificate); err != nil {
 	// 	return err
 	// }
-	if err := ca.certStore.ImportCertificate(certificate); err != nil {
+	if err := ca.certStore.ImportXSignedCertificate(issuerCN, certificate); err != nil {
 		return err
 	}
 	return nil
@@ -2490,19 +2643,21 @@ func (ca *CA) QuantumSafeTLSConfig(attrs *keystore.KeyAttributes) (*tls.Config, 
 // Certificate Authority, cross-signed intermediates if any, and
 // the end entity leaf certificate.
 func (ca *CA) TLSConfig(attrs *keystore.KeyAttributes) (*tls.Config, error) {
-	return ca.TLSConfigWithCrossSigner(attrs, nil)
+	return ca.TLSConfigWithXSigner(attrs, "")
 }
 
 // Returns a tls.Config for the requested common name populated with the
 // Certificate Authority, cross-signed intermediates if any, and
 // the end entity leaf certificate.
-func (ca *CA) TLSConfigWithCrossSigner(
-	attrs *keystore.KeyAttributes, crossSignedPEMs [][]byte) (*tls.Config, error) {
+func (ca *CA) TLSConfigWithXSigner(
+	attrs *keystore.KeyAttributes, issuerCN string) (*tls.Config, error) {
 
-	ca.params.Logger.Debugf(
-		"certificate-authority: building %s TLS config", attrs.CN)
+	ca.params.Logger.Debug(
+		"certificate-authority: building TLS config",
+		slog.String("cn", attrs.CN),
+		slog.String("issuer", issuerCN))
 
-	certs, leaf, err := ca.TLSBundleWithCrossSigner(attrs, crossSignedPEMs)
+	certs, leaf, err := ca.TLSBundleWithCrossSigner(attrs, issuerCN)
 	if err != nil {
 		return nil, err
 	}
@@ -2558,7 +2713,7 @@ func (ca *CA) TLSConfigWithCrossSigner(
 			return tlsConfig, nil
 		}
 
-		rootCAs, err = ca.TrustedRootCertPool(caCert)
+		rootCAs, err = ca.TrustedRootCertPool(caCert, &issuerCN)
 		if err != nil {
 			return nil, err
 		}
@@ -2566,7 +2721,7 @@ func (ca *CA) TLSConfigWithCrossSigner(
 	} else {
 
 		// Load this CA's root and intermediate certificates
-		rootCAs, err = ca.TrustedRootCertPool(caCert)
+		rootCAs, err = ca.TrustedRootCertPool(caCert, &issuerCN)
 		if err != nil {
 			return nil, err
 		}
@@ -2582,7 +2737,7 @@ func (ca *CA) TLSConfigWithCrossSigner(
 // certificates in ASN.1 DER form, and returns the certificate bundle
 // and leaf.
 func (ca *CA) TLSBundle(attrs *keystore.KeyAttributes) ([][]byte, *x509.Certificate, error) {
-	return ca.TLSBundleWithCrossSigner(attrs, nil)
+	return ca.TLSBundleWithCrossSigner(attrs, "")
 }
 
 // Creates a TLS "bundle" containing the requested leaf certificate,
@@ -2590,7 +2745,7 @@ func (ca *CA) TLSBundle(attrs *keystore.KeyAttributes) ([][]byte, *x509.Certific
 // certificates in ASN.1 DER form, and returns the certificate bundle
 // and leaf.
 func (ca *CA) TLSBundleWithCrossSigner(
-	attrs *keystore.KeyAttributes, crossSignedPEMs [][]byte) ([][]byte, *x509.Certificate, error) {
+	attrs *keystore.KeyAttributes, issuerCN string) ([][]byte, *x509.Certificate, error) {
 
 	// Retrieve the leaf cert
 	leaf, err := ca.Certificate(attrs)
@@ -2635,22 +2790,36 @@ func (ca *CA) TLSBundleWithCrossSigner(
 
 	// Load cross-signed certs
 	var crossSignedCerts [][]byte
-	xsignedCert, err := ca.certStore.GetXSigned(attrs)
+	xsignedLeaf, err := ca.certStore.GetXSigned(issuerCN, attrs)
 	if err == nil {
-		crossSignedCerts = make([][]byte, 1)
-		crossSignedCerts[0] = xsignedCert.Raw
+		xsignedIntermediates, err := ca.XSignedIntermediateCertificates(issuerCN, xsignedLeaf)
+		if err != nil {
+			return nil, nil, err
+		}
+		crossSignedCerts = make([][]byte, len(xsignedIntermediates)+1)
+		crossSignedCerts[0] = xsignedLeaf.Raw
+		for i := 0; i < len(xsignedIntermediates); i++ {
+			crossSignedCerts[i+1] = xsignedIntermediates[i].Raw
+		}
 	}
 
 	// Start concatenating a list of DER encoded certs
-	certs := make([][]byte, len(crossSignedCerts)+2)
-	certs[0] = leaf.Raw
-	certs[1] = caCertificate.Raw
-	// certs[2] = rootCert.Raw
+	// numCrossSigned := len(crossSignedCerts)
+	// certs := make([][]byte, numCrossSigned+2)
+	// certs[0] = leaf.Raw
+	// certs[1] = caCertificate.Raw
 
-	// Copy cross signed certs to cert buffer
-	for i, csc := range crossSignedCerts {
-		certs[i+2] = csc
-	}
+	// for i, csc := range crossSignedCerts {
+	// 	certs[i+2] = csc
+	// }
+
+	// Start concatenating a list of DER encoded certs
+	numCrossSigned := len(crossSignedCerts)
+	certs := make([][]byte, numCrossSigned+2)
+
+	copy(certs, crossSignedCerts)
+	certs[numCrossSigned] = leaf.Raw
+	certs[numCrossSigned+1] = caCertificate.Raw
 
 	return certs, leaf, nil
 }
