@@ -41,7 +41,7 @@ RUN apt-get update && \
         libpcsclite-dev \
         gengetopt \
         help2man \
-        zlib1g-dev \ 
+        zlib1g-dev \
         pcscd \
         autoconf-archive \
         libcmocka0 \

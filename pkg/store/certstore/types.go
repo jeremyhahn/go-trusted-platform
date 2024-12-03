@@ -51,9 +51,9 @@ type CertificateBackend interface {
 type CertificateStorer interface {
 	CRLs(certificate *x509.Certificate) ([]*x509.RevocationList, error)
 	Get(keyAttrs *keystore.KeyAttributes) (*x509.Certificate, error)
-	GetXSigned(keyAttrs *keystore.KeyAttributes) (*x509.Certificate, error)
+	GetXSigned(issuerCN string, keyAttrs *keystore.KeyAttributes) (*x509.Certificate, error)
 	ImportCertificate(certificate *x509.Certificate) error
-	ImportXSignedCertificate(certificate *x509.Certificate) error
+	ImportXSignedCertificate(issuerCN string, certificate *x509.Certificate) error
 	ImportCRL(cn string, crlDER []byte) error
 	IsRevoked(certificate *x509.Certificate, issuerCert *x509.Certificate) error
 	IsRevokedAtDistributionPoints(certificate *x509.Certificate) error
@@ -199,21 +199,6 @@ func ParseKeyType(certificate *x509.Certificate) (keystore.KeyType, error) {
 	return keystore.KEY_TYPE_TLS, nil
 }
 
-func ParseIssuerCN(certificate *x509.Certificate) (string, error) {
-	if len(certificate.IssuingCertificateURL) == 0 {
-		return "", ErrInvalidIssuingURL
-	}
-
-	issuerURL := certificate.IssuingCertificateURL[0]
-	urlParts := strings.Split(issuerURL, "/")
-	if len(urlParts) < 3 {
-		return "", ErrInvalidIssuingURL
-	}
-
-	fqdn := urlParts[2]
-	return fqdn, nil
-}
-
 func ParseCertificateID(certificate *x509.Certificate, partition *Partition) ([]byte, error) {
 
 	ext := FSEXT_DER
@@ -236,7 +221,10 @@ func ParseCertificateID(certificate *x509.Certificate, partition *Partition) ([]
 	return []byte(id), nil
 }
 
-func ParseXSignedCertificateID(certificate *x509.Certificate, partition *Partition) ([]byte, error) {
+func ParseXSignedCertificateID(
+	issuerCN string,
+	certificate *x509.Certificate,
+	partition *Partition) ([]byte, error) {
 
 	ext := FSEXT_DER
 	if partition != nil && *partition == PARTITION_CRL {
@@ -248,12 +236,7 @@ func ParseXSignedCertificateID(certificate *x509.Certificate, partition *Partiti
 		ksType = keystore.STORE_UNKNOWN
 	}
 
-	issuerCN, err := ParseIssuerCN(certificate)
-	if err != nil {
-		return nil, err
-	}
-
-	// Naming convention: issuer_cn.leaf_cn.key_store.key_algorithm.cer
+	// Naming convention: issuer_cn/leaf_cn.key_store.key_algorithm.cer
 	id := fmt.Sprintf("%s/%s.%s.%s%s",
 		issuerCN,
 		certificate.Subject.CommonName,

@@ -352,7 +352,7 @@ webservice:
       challenge: device-attest-01
       renew: 15
       cross-sign:
-        directory: https://acme-staging-v02.api.letsencrypt.org/directory
+        directory: https://acme-v02.api.letsencrypt.org/directory
         challenge: http-01
     subject:
       cn: edge01.trusted-platform.io
@@ -390,7 +390,7 @@ webservice:
           challenge: http-01
           renew: 15
           cross-sign:
-            directory: https://acme-staging-v02.api.letsencrypt.org/directory
+            directory: https://acme-v02.api.letsencrypt.org/directory
             challenge: http-01
         valid: 365
         subject:
@@ -434,7 +434,7 @@ webservice:
           challenge: http-01
           renew: 15
           cross-sign:
-            directory: https://acme-staging-v02.api.letsencrypt.org/directory
+            directory: https://acme-v02.api.letsencrypt.org/directory
             challenge: http-01
         valid: 365
         subject:
