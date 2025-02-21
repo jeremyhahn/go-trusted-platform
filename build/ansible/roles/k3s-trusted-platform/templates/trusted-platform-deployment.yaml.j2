@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trusted-platform
+  namespace: {{ k3s_namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trusted-platform
+  template:
+    metadata:
+      labels:
+        app: trusted-platform
+    spec:
+      containers:
+        - name: trusted-platform
+          image: {{ trusted_platform_image }}
+          ports:
+            - containerPort: {{ trusted_platform_http_port }}
+            - containerPort: {{ trusted_platform_https_port }}
+          args:
+            {% for arg in trusted_platform_default_args + trusted_platform_extra_args %}
+            - "{{ arg }}"
+            {% endfor %}
+          volumeMounts:
+            - name: trusted-data
+              mountPath: /opt/trusted-platform/trusted-data
+      volumes:
+        - name: trusted-data
+          emptyDir: {}

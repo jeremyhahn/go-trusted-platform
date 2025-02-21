@@ -1,4 +1,4 @@
-% tpadm verifier | Trusted Platform Commands Manual
+% platformd verifier | Trusted Platform Commands Manual
 
 # NAME
 
@@ -32,5 +32,5 @@ information many users may expect.
 
 ## Start the verifier service
 ```bash
-tpadm verifier
+platformd verifier
 ```

@@ -1,0 +1,13 @@
+---
+- name: Pre-populate kernel keyring with dummy key
+  shell: |
+    keyctl padd user cryptenroll "" @u || echo "Warning: Could not add dummy key."
+
+- name: Run systemd-cryptenroll to enroll TPM keyslot
+  shell: SYSTEMD_LOG_LEVEL=debug systemd-cryptenroll --tpm2-device=/dev/tpm0 --tpm2-pcrs=9 /dev/vda3
+
+- name: Update crypttab for TPM auto-unsealing
+  lineinfile:
+    path: /etc/crypttab
+    line: "crypt-root UUID={{ lookup('pipe', 'blkid -s UUID -o value /dev/vda3') }} none luks,tpm2-device=auto,tpm2-pcrs=9"
+    create: yes

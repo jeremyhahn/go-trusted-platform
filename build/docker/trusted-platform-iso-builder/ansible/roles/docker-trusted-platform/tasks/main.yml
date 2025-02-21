@@ -1,0 +1,13 @@
+---
+- name: Run Trusted Platform Docker container
+  command: >
+    docker run --rm -d
+    jeremyhahn/trusted-platform:latest
+    webservice
+    --debug
+    --init
+    --platform-dir /opt/trusted-platform/trusted-data
+    --log-dir /opt/trusted-platform/trusted-data/log
+    --ca-dir /opt/trusted-platform/trusted-data/ca
+    --raw-so-pin 123456
+    --raw-pin 123456

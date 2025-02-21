@@ -1,4 +1,4 @@
-% tpadm tpm ek | Trusted Platform Commands Manual
+% platformd tpm ek | Trusted Platform Commands Manual
 
 # NAME
 
@@ -33,12 +33,12 @@ information many users may expect.
 
 ## Retrieve TPM 2.0 RSA Endorsement Public Key
 ```bash
-tpadm tpm ek -r
+platformd tpm ek -r
 ```
 
 ## Retrieve TPM 2.0 ECC Endorsement Public Key
 ```bash
-tpadm tpm ek -e
+platformd tpm ek -e
 ```
 
 # AUTHOR

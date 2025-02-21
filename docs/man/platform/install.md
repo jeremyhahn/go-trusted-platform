@@ -1,4 +1,4 @@
-% tpadm platform install | Trusted Platform Commands Manual
+% platformd platform install | Trusted Platform Commands Manual
 
 # NAME
 
@@ -31,7 +31,7 @@ This operation is idempotent.
 
 ## Perform safe installation
 ```bash
-tpadm platform install
+platformd platform install
 ```
 
 # AUTHOR

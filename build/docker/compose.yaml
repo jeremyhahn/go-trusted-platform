@@ -1,0 +1,27 @@
+networks:
+  trustedbr0: 
+    driver: bridge
+  pxenet0: 
+    driver: bridge
+    internal: true
+
+services:
+  app:
+    image: jeremyhahn/trusted-platform
+    ports:
+      - "80:8080"
+      - "443:8443"
+    networks:
+      - trustedbr0
+    environment:
+      DEBUG: "true"
+
+  pxe:
+    image: jeremyhahn/pxe-server
+    networks:
+      - pxenet0
+
+  nfs:
+    image: jeremyhahn/nfs-server
+    networks:
+      - trustedbr0

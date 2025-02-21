@@ -1,7 +1,9 @@
 {
   "variables": {
     "ssh_key_src": "{{env `HOME`}}/.ssh/id_rsa.pub",
-    "image_home_dir": "/home/pi"
+    "image_home_dir": "/home/pi",
+    "platform_version": "v0.0.7-alpha.1",
+    "binary": "platformd-static-musl-amd64"
   },
   "builders": [
     {
@@ -36,7 +38,8 @@
     {
       "type": "shell",
       "inline": [
-        "touch /boot/ssh"
+        "touch /boot/ssh",
+        "echo 'dtoverlay=tpm-slb9670' > /boot/firmware/config.txt"
       ]
     },
     {

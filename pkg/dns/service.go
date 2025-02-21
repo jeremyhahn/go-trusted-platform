@@ -328,35 +328,30 @@ func Run(
 	// Stores the dynamically created CoreDNS Corefile
 	var corefile string
 
+	// Create internal Corefile
 	if config.InternalServer != nil {
-		// Create internal DNS server using values specified in
-		// the platform configuration file
-		corefile = fmt.Sprintf(`
-.:%d {
-	trustedPlatform
-	log
-	chaos
-	forward . %s
-}
-`, config.InternalServer.Port,
-			strings.Join(config.InternalServer.Forwarders, " "))
+		if len(config.InternalServer.Forwarders) > 0 {
+			corefile = NewCorefileWithForwarders(
+				config.InternalServer.Port, config.InternalServer.Forwarders)
+		} else {
+			corefile = NewCorefile(config.InternalServer.Port)
+		}
 	}
 
-	if config.PublicServer.Port > 0 {
-		// Create public DNS server using values specified in
-		// the platform configuration file
-		corefile += fmt.Sprintf(`
-.:%d {
-	trustedPlatform
-	log
-	chaos
-	forward . %s
-}`, config.PublicServer.Port,
-			strings.Join(config.PublicServer.Forwarders, " "))
+	// Create public Corefile
+	if config.PublicServer != nil && config.PublicServer.Port > 0 {
+		if len(config.PublicServer.Forwarders) > 0 {
+			corefile += NewCorefileWithForwarders(
+				config.PublicServer.Port, config.PublicServer.Forwarders)
+		} else {
+			corefile += NewCorefile(config.PublicServer.Port)
+		}
 	}
 
 	logger.Debug("DNS server configuration",
 		slog.String("corefile", corefile))
+
+	fmt.Println(corefile)
 
 	os.Args = []string{"coredns"}
 

@@ -1,4 +1,4 @@
-% tpadm ca init | Trusted Platform Commands Manual
+% platformd ca init | Trusted Platform Commands Manual
 
 # NAME
 
@@ -27,7 +27,7 @@ information many users may expect.
 
 ## Initialize the Certificate Authority
 ```bash
-tpadm ca init
+platformd ca init
 ```
 
 # AUTHOR

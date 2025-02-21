@@ -1,0 +1,22 @@
+ARG BASE_IMAGE="alpine:latest"
+ARG PLATFORMD="platformd"
+
+FROM $BASE_IMAGE
+
+LABEL maintainer="Jeremy Hahn <mail@jeremyhahn.com>"
+
+RUN apk update && \
+    apk upgrade && \
+    apk add --no-cache \
+        tpm2-tools
+
+WORKDIR /trusted-platform
+
+RUN mkdir -p /trusted-platform/etc /trusted-platform/log /trusted-platform/data
+
+COPY $PLATFORMD /usr/local/bin/platformd
+RUN chmod +x /usr/local/bin/platformd
+
+USER 1000
+
+ENTRYPOINT ["/usr/local/bin/platformd"]

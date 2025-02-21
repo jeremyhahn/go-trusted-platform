@@ -1,4 +1,4 @@
-% tpadm tpm info | Trusted Platform Commands Manual
+% platformd tpm info | Trusted Platform Commands Manual
 
 # NAME
 
@@ -55,7 +55,7 @@ information many users may expect.
 
 ## Retrieve TPM Information
 ```bash
-tpadm tpm provision
+platformd tpm provision
 ```
 
 # AUTHOR

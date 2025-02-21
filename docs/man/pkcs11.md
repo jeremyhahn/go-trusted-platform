@@ -1,4 +1,4 @@
-% tpadm pkcs11 | Trusted Platform Commands Manual
+% platformd pkcs11 | Trusted Platform Commands Manual
 
 # NAME
 
@@ -53,5 +53,5 @@ information many users may expect.
 
 ## Display SoftHSM2 module information
 ```bash
-tpadm pkcs11 --module /usr/local/lib/libsofthsm2.so
+platformd pkcs11 --module /usr/local/lib/libsofthsm2.so
 ```

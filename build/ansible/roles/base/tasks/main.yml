@@ -1,0 +1,11 @@
+---
+- name: Ensure user is present (if needed)
+  user:
+    name: "{{ user_name }}"
+    state: present
+
+- name: Add user to groups
+  user:
+    name: "{{ user_name }}"
+    append: yes
+    groups: "sudo"

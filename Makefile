@@ -10,18 +10,21 @@ GOBIN                   := $(shell dirname `which go`)
 PYTHONBIN               ?= /usr/bin/python3.8
 PIPBIN                  ?= pip
 
-ARM_CC                  ?= arm-linux-gnueabihf-gcc
-ARM_CC_64				?= aarch64-linux-gnu-gcc
+ARM_CC				    ?= aarch64-linux-gnu-gcc
+ARM_CXX                 ?= aarch64-linux-gnu-g++
 
-REPO                    ?= github.com
+GIT_REPO                ?= github.com
+GIT_OWNER               ?= jeremyhahn
 PACKAGE                 ?= go-trusted-platform
 APPNAME                 ?= trusted-platform
-APPBIN                  ?= tpadm
+PLATFORMD               ?= platformd
+PLATFORMCTL             ?= platformctl
 
 APP_VERSION       		?= $(shell git describe --tags --abbrev=0)
 GIT_TAG                 = $(shell git describe --tags)
 GIT_HASH                = $(shell git rev-parse HEAD)
-GIT_BRANCH              = $(shell git branch --show-current)	
+GIT_BRANCH              = $(shell git branch --show-current)
+GIT_TOKEN               ?=
 BUILD_DATE              = $(shell date '+%Y-%m-%d_%H:%M:%S')
 
 VERSION_FILE            ?= VERSION
@@ -35,7 +38,7 @@ else
 endif
 
 LDFLAGS=-X github.com/jeremyhahn/$(PACKAGE)/pkg/app.Name=${APPNAME}
-LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.Repository=${REPO}
+LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.Repository=${GIT_REPO}
 LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.Package=${PACKAGE}
 LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.GitBranch=${GIT_BRANCH}
 LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.GitHash=${GIT_HASH}
@@ -44,113 +47,83 @@ LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.BuildUser=${USER}
 LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.BuildDate=${BUILD_DATE}
 LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.Version=${APP_VERSION}
 
+PLATFORM_DIR                ?= trusted-data
+CONFIG_DIR                  ?= configs
+EXAMPLE_DIR                 ?= examples
+PLATFORM_CONFIG_DIR         ?= $(CONFIG_DIR)/platform
+
+CONFIG_YAML                 ?= config.dev.server.yaml
+
+ROOT_CA                     ?= root-ca
+INTERMEDIATE_CA             ?= intermediate-ca
+DOMAIN                      ?= trusted-platform.io
+
+SOFTHSM_DIR                 ?= /usr/local/bin
+SOFTHSM_LIB                 ?= /usr/local/lib/softhsm/libsofthsm2.so
+SOFTHSM_TOKEN_DIR           ?= /var/lib/softhsm/tokens
+SOFTHSM_CONFIG              ?= configs/softhsm2.conf
+
+WEB_PUBLIC_HTML             ?= public_html
+WEB_PACKAGE                 ?= $(PACKAGE)-web
+WEB_SRC                     ?= ../$(WEB_PACKAGE)
+
+SWAGGER_HOST                ?= $(DOMAIN)
+
+DOCKER_HOME                 ?= build/docker
+DOCKER_REPO                 ?= docker.io
+DOCKER_USER                 ?= jeremyhahn
+DOCKER_BUILDER_BASE         ?= alpine
+DOCKER_BUILDER_DOCKERFILE   ?= Dockerfile-$(DOCKER_BUILDER_BASE)
+DOCKER_PLATFORM_BUILDER     ?= trusted-platform-builder
+DOCKER_PLATFORM_BUILDER_TAG ?= latest
+DOCKER_ISO_BUILDER          ?= trusted-platform-iso-builder
+DOCKER_ISO_BUILDER_SWTPM    ?= trusted-platform-iso-builder-swtpm
+DOCKER_ISO_TAG              ?= latest
+DOCKER_ANSIBLE_BUILDER      ?= ansible-ee
+
+ISO_DIR                     ?= build/docker/$(DOCKER_ISO_BUILDER)
+ISO_NAME                    ?= trusted-platform.iso
+ISO_NAME_SWTPM		        ?= trusted-platform-swtpm.iso
+
+PACKER_HOME                 ?= build/packer
+PACKER_FILE                 ?= $(PACKER_HOME)/rpi/raspios-bookworm-arm64.json
+PACKER_BUILDER_RASPIOS64    ?= raspios-bookworm-arm64
+PACKER_BUILDER_UBUNTU64     ?= ubuntu-20.04.01-arm64
+PACKER_BUILDER              ?= $(PACKER_BUILDER_RASPIOS64)
+
+RPI_IMAGE_NAME		        ?= $(APPNAME)-$(APP_VERSION)-$(ENV)
+RPI_IMAGE_FILENAME          ?= $(RPI_IMAGE_NAME).img
+RPI_IMAGE_ARTIFACT          ?= $(PACKER_HOME)/$(RPI_IMAGE_FILENAME)
+RPI_SDCARD                  ?= /dev/sda
+RPI_USER                    ?= pi
+RPI_HOST                    ?= rpi
+
+UID                         := $(shell id -u)
+GID                         := $(shell id -g)
+
+
+# Text colors
+RED=\033[0;31m
 GREEN=\033[0;32m
+YELLOW=\033[1;33m
 NO_COLOR=\033[0m
 
-PLATFORM_DIR             ?= trusted-data
-CONFIG_DIR               ?= configs
-EXAMPLE_DIR              ?= examples
-PLATFORM_CONFIG_DIR      ?= $(CONFIG_DIR)/platform
 
-CONFIG_YAML              ?= config.debug.pkcs11.yaml
-
-ROOT_CA                  ?= root-ca
-INTERMEDIATE_CA          ?= intermediate-ca
-DOMAIN                   ?= trusted-platform.io
-
-ANSIBLE_USER             ?= ansible
-
-LUKS_KEYFILE             ?= luks.key
-LUKS_SIZE                ?= 5G
-LUKS_TYPE                ?= luks2
-
-SOFTHSM_DIR              ?= /usr/local/bin
-SOFTHSM_LIB              ?= /usr/local/lib/softhsm/libsofthsm2.so
-SOFTHSM_TOKEN_DIR        ?= /var/lib/softhsm/tokens
-SOFTHSM_CONFIG           ?= configs/softhsm2.conf
-
-WEB_PUBLIC_HTML          ?= public_html
-WEB_PACKAGE              ?= $(PACKAGE)-web
-WEB_SRC                  ?= ../$(WEB_PACKAGE)
-
-SWAGGER_HOST             ?= $(DOMAIN)
-
-DOCKER_HOME              ?= build/docker
-DOCKER_ISO_BUILDER       ?= trusted-platform-iso-builder
-DOCKER_ISO_TAG           ?= latest
-
-ISO_NAME                 ?= trusted-platform.iso
-
-PACKER_HOME              ?= build/packer
-PACKER_FILE              ?= $(PACKER_HOME)/rpi/raspios-bookworm-arm64.json
-PACKER_BUILDER_RASPIOS64 ?= raspios-bookworm-arm64
-PACKER_BUILDER_UBUNTU64  ?= ubuntu-20.04.01-arm64
-PACKER_BUILDER           ?= $(PACKER_BUILDER_RASPIOS64)
-
-ANSIBLE_HOME             ?= build/ansible
-ANSIBLE_ROLES 		     ?= $(ANSIBLE_HOME)/roles/$(APP)
-ANSIBLE_FILES            ?= $(ANSIBLE_CROPDROID)/files
-
-RPI_IMAGE_NAME		     ?= $(APPNAME)-$(APP_VERSION)-$(ENV)
-RPI_IMAGE_FILENAME       ?= $(RPI_IMAGE_NAME).img
-RPI_IMAGE_ARTIFACT       ?= $(PACKER_HOME)/$(RPI_IMAGE_FILENAME)
-RPI_SDCARD               ?= /dev/sda
-RPI_USER                 ?= jhahn
-RPI_HOST                 ?= rpi
-
-VM_DISK_SIZE_MB          ?= 2000
-
-UID                      := $(shell id -u)
-GID                      := $(shell id -g)
-
-
-.PHONY: env run deps swagger swagger-ui build build-debug build-static build-debug-static \
-		build-x86 build-x86-debug build-x86-static build-x86-debug-static build-arm \
-		build-arm-static build-arm-debug build-arm-debug-static build-arm64 build-arm64-static \
-		build-arm64-debug build-arm64-debug-static build-dev build-public-html firefox firefox-debug \
-		firefox-bin config clear-auth clean test test-cli test-tpm-cli test-ca-cli test-platform-cli \
-		test-ca test-tpm test-crypto test-store test-store-pkcs11 test-store-tpm2 test-store-datastore \
-		test-webservice test-webservice-jwt install uninstall luks-create luks-mount luks-umount \
-		ansible-install ansible-setup rpi-sync rpi-sync-ansible rpi-qemu docker-load-builder \
-		docker-run docker-run-builder-with-usb docker-run-yubico-piv-tool packer packer-builder-arm \
-		iso
-
-
+# Targets
 default: build
 
 
+.PHONY: env
 env:
-	@echo "ORG: \t\t\t$(ORG)"
-	@echo "TARGET_OS: \t\t$(TARGET_OS)"
-	@echo "TARGET_ARCH: \t\t$(TARGET_ARCH)"
-	@echo "ARCH: \t\t\t$(ARCH)"
-	@echo "OS: \t\t\t$(OS)"
-	@echo "LONG_BITS: \t\t$(LONG_BITS)"
-	@echo "GOBIN: \t\t\t$(GOBIN)"
-	@echo "REPO: \t\t\t$(REPO)"
-	@echo "PACKAGE: \t\t$(PACKAGE)"
-	@echo "APP_VERSION: \t\t$(APP_VERSION)"
-	@echo "GIT_TAG: \t\t$(GIT_TAG)"
-	@echo "GIT_HASH: \t\t$(GIT_HASH)"
-	@echo "GIT_BRANCH: \t\t$(GIT_BRANCH)"
-	@echo "BUILD_DATE: \t\t$(BUILD_DATE)"
-	@echo "VERSION_FILE: \t\t$(VERSION_FILE)"
-	@echo "PLATFORM_DIR: \t\t$(PLATFORM_DIR)"
-	@echo "CONFIG_DIR: \t\t$(CONFIG_DIR)"
-	@echo "LOG_DIR: \t\t$(LOG_DIR)"
-	@echo "CA_DIR: \t\t$(CA_DIR)"
-	@echo "PROTO_DIR: \t\t$(PROTO_DIR)"
-	@echo "PROTOC: \t\t$(PROTOC)"
-	@echo "ROOT_CA: \t\t$(ROOT_CA)"
-	@echo "INTERMEDIATE_CA: \t$(INTERMEDIATE_CA)"
-	@echo "DOMAIN: \t\t$(DOMAIN)"
-	@echo "CONFIG_YAML: \t\t$(CONFIG_YAML)"
-	@echo "WEB_PUBLIC_HTML: \t\t$(WEB_PUBLIC_HTML)"
+	@$(foreach var,$(filter-out MAKE% __%,$(.VARIABLES)),\
+		printf "%-35s %s\n" "$(var):" "$($(var))";)
 
 
+
+.PHONY: run
 run:
 	cp $(EXAMPLE_DIR)/config.yaml config.yaml
-	./$(APPBIN) webservice \
+	./$(PLATFORMD) webservice \
 		--debug \
 		--init \
 		--platform-dir trusted-data \
@@ -161,115 +134,58 @@ run:
 		--raw-pin 123456
 
 
-ensure-root:
-	@if [ "$$(id -u)" -ne 0 ]; then \
-		echo "Root required, starting sudo session..."; \
-		exec sudo $(MAKE) $(MAKECMDGOALS); \
-	fi
-
-
-deps: ensure-root
-	go install github.com/swaggo/swag/cmd/swag@latest
-	apt-get -y update
-	apt-get install -y libssl-dev softhsm2 libsofthsm2
-
-
-swagger:
-	~/go/bin/swag init \
-		--dir pkg/webservice,pkg/webservice/v1/jwt,pkg/webservice/v1/router,pkg/webservice/v1/response,pkg/acme/server/handlers,pkg/store/datastore/entities,pkg/acme,pkg/app,pkg/config,pkg/crypto/argon2 \
-		--generalInfo webserver_v1.go \
-		--parseDependency \
-		--parseInternal \
-		--parseDepth 1 \
-		--output $(WEB_PUBLIC_HTML)/swagger
-
-swagger-ui:
-	mkdir -p $(WEB_PUBLIC_HTML)/swagger
-	git clone --depth=1 https://github.com/swagger-api/swagger-ui.git && \
-		cp -R swagger-ui/dist/* $(WEB_PUBLIC_HTML)/swagger && \
-		rm -rf swagger-ui
-
-
-# x86_64
+# Native local build
+.PHONY: build
 build:
 	cd pkg; \
-	CGO_ENABLED=1 $(GOBIN)/go build -o ../$(APPBIN) -ldflags="-w -s ${LDFLAGS}"
+	go clean ; \
+	CGO_ENABLED=1 $(GOBIN)/go build -o ../$(PLATFORMD) -ldflags="-w -s ${LDFLAGS}"
 
+.PHONY: build-debug
 build-debug:
 	cd pkg; \
-	CGO_ENABLED=1 $(GOBIN)/go build -gcflags='all=-N -l' -o ../$(APPBIN) -gcflags='all=-N -l' -ldflags="-w -s ${LDFLAGS}"
+	go clean ; \
+	CGO_ENABLED=1 $(GOBIN)/go build -o ../$(PLATFORMD)-debug -gcflags='all=-N -l' -ldflags="${LDFLAGS}"
 
+.PHONY: build-static
 build-static:
 	cd pkg; \
-	CGO_ENABLED=1 $(GOBIN)/go build -o ../$(APPBIN) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
+	go clean ; \
+	CGO_ENABLED=1 $(GOBIN)/go build -o ../$(PLATFORMD)-static --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}'
 
+.PHONY: build-debug-static
 build-debug-static:
 	cd pkg; \
-	CGO_ENABLED=1 $(GOBIN)/go build -o ../$(APPBIN) -gcflags='all=-N -l' --ldflags '-extldflags -static -v ${LDFLAGS}'
+	go clean ; \
+	CGO_ENABLED=1 $(GOBIN)/go build -o ../$(PLATFORMD)-debug-static -gcflags='all=-N -l' --ldflags '-extldflags -static -v ${LDFLAGS}'
 
-
-# x86
-build-x86:
-	cd pkg; \
-	CGO_ENABLED=1 GOARCH=386 $(GOBIN)/go build -o ../$(APPBIN) -ldflags="-w -s ${LDFLAGS}"
-
-build-x86-debug:
-	cd pkg; \
-	GCGO_ENABLED=1 OARCH=386 $(GOBIN)/go build -gcflags='all=-N -l' -o ../$(APPBIN) -gcflags='all=-N -l' -ldflags="-w -s ${LDFLAGS}"
-
-build-x86-static:
-	cd pkg; \
-	CGO_ENABLED=1 GOARCH=386 $(GOBIN)/go build -o ../$(APPBIN) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
-
-build-x86-debug-static:
-	cd pkg; \
-	CGO_ENABLED=1 GOARCH=386 $(GOBIN)/go build -o ../$(APPBIN) -gcflags='all=-N -l' --ldflags '-extldflags -static -v ${LDFLAGS}'
-
-
-# ARM 32-bit
-build-arm:
-	cd pkg; \
-	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=6 \
-	$(GOBIN)/go build -o ../$(APPBIN) -ldflags="-w -s ${LDFLAGS}"
-
-build-arm-static:
-	cd pkg; \
-	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=6 \
-	$(GOBIN)/go build -v -a -o ../$(APPBIN) -v --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
-
-build-arm-debug:
-	cd pkg; \
-	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=6 \
-	$(GOBIN)/go build -gcflags "all=-N -l" -o ../$(APPBIN) --ldflags="-v $(LDFLAGS)"
-
-build-arm-debug-static:
-	cd pkg; \
-	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=6 \
-	$(GOBIN)/go build -gcflags "all=-N -l" -v -a -o ../$(APPBIN) -v --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
-
-
-# ARM 64-bit
+# Cross-compile ARM 64-bit
+.PHONY: build-arm64
 build-arm64:
 	cd pkg; \
-	CC=$(ARM_CC_64) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -o ../$(APPBIN) -ldflags="-w -s ${LDFLAGS}"
+	CC=$(ARM_CC) CXX=$(ARM_CXX) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
+	$(GOBIN)/go build -o ../$(PLATFORMD) -ldflags="-w -s ${LDFLAGS}"
 
+.PHONY: build-arm64-static
 build-arm64-static:
 	cd pkg; \
-	CC=$(ARM_CC_64) APPBIN=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -o ../$(APPBIN) --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
+	CC=$(ARM_CC) PLATFORMD=1 GOOS=linux GOARCH=arm64 \
+	$(GOBIN)/go build -o ../$(PLATFORMD)-static --ldflags '-w -s -extldflags -static -v ${LDFLAGS}'
 
+.PHONY: build-arm64-debug
 build-arm64-debug:
 	cd pkg; \
-	CC=$(ARM_CC_64) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -gcflags "all=-N -l" -o ../$(APPBIN) --ldflags="$(LDFLAGS)"
+	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
+	$(GOBIN)/go build -gcflags "all=-N -l" -o ../$(PLATFORMD)-debug --ldflags="$(LDFLAGS)"
 
+.PHONY: build-arm64-debug-static
 build-arm64-debug-static:
 	cd pkg; \
-	CC=$(ARM_CC_64) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -gcflags "all=-N -l" -o ../$(APPBIN) --ldflags '-extldflags -static -v ${LDFLAGS}'
+	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
+	$(GOBIN)/go build -gcflags "all=-N -l" -o ../$(PLATFORMD)-debug-static --ldflags '-extldflags -static -v ${LDFLAGS}'
 
 
+.PHONY: build-dev
 build-dev: clean build-debug
 	sudo chown $(USER):$(USER) /dev/tpmrm0
 	-sudo chown $(USER):$(USER) /sys/kernel/security/tpm0/binary_bios_measurements
@@ -280,74 +196,77 @@ build-dev: clean build-debug
 	cp -R $(WEB_PUBLIC_HTML) pkg/
 
 
-
 # Build the public_html directory
+.PHONY: build-public-html
 build-public-html:
 	# Start with a clean directory
 	rm -rf $(WEB_PUBLIC_HTML)/ pkg/$(WEB_PUBLIC_HTML)/
 	mkdir -p $(WEB_PUBLIC_HTML)/ pkg/$(WEB_PUBLIC_HTML)/
 	
-	# Build the swagger / OpenAPI docs 
+	# Build the swagger / OpenAPI docs
 	make swagger
 	make swagger-ui
 	
 	# Configure SwaggerInfo
 	sed -i '/var SwaggerInfo = &swag.Spec{/,/}}/c\var SwaggerInfo = \&swag.Spec{\n\tVersion:          "$(APP_VERSION)",\n\tHost:             "$(SWAGGER_HOST)",\n\tBasePath:         "/api/v1",\n\tSchemes:          []string{},\n\tTitle:            "Trusted Platform",\n\tDescription:      "The Trusted Platform RESTful Web Services API",\n\tInfoInstanceName: "swagger",\n\tSwaggerTemplate:  docTemplate,\n\tLeftDelim:        "{{",\n\tRightDelim:       "}}",' $(WEB_PUBLIC_HTML)/swagger/docs.go
 
-	# Configure the web server annotations
+	# Set the version and host annotations
 	sed -i 's|@version .*|@version $(APP_VERSION)|g' pkg/webservice/webserver_v1.go
 	sed -i 's|@host .*|@host $(SWAGGER_HOST)|g' pkg/webservice/webserver_v1.go
 
 	# Copy into the pkg directory for debugging
-	-cp -R $(WEB_PUBLIC_HTML)/swagger pkg/$(WEB_PUBLIC_HTML)/	
+	-cp -R $(WEB_PUBLIC_HTML)/swagger pkg/$(WEB_PUBLIC_HTML)/
 
 	# Build the go-trusted-platform-web project
+	if [ ! -d "${WEB_SRC}" ]; then \
+		echo "Directory '$(WEB_SRC)' does not exist. Cloning repository..."; \
+		git clone https://$(GIT_REPO)/$(GIT_OWNER)/$(WEB_PACKAGE).git $(WEB_SRC); \
+	fi
+
 	cd $(WEB_SRC) && \
+		yarn install && \
 		yarn build && \
 		cp -R out/* ../$(PACKAGE)/$(WEB_PUBLIC_HTML)/
 
 	# Copy into the pkg directory for debugging
 	cp -R $(WEB_SRC)/out/* ../$(PACKAGE)/pkg/$(WEB_PUBLIC_HTML)/
 
+.PHONY: swagger
+swagger:
+	~/go/bin/swag init \
+		--dir pkg/webservice,pkg/webservice/v1/jwt,pkg/webservice/v1/router,pkg/webservice/v1/response,pkg/acme/server/handlers,pkg/store/datastore/entities,pkg/acme,pkg/app,pkg/config,pkg/crypto/argon2 \
+		--generalInfo webserver_v1.go \
+		--parseDependency \
+		--parseInternal \
+		--parseDepth 1 \
+		--output $(WEB_PUBLIC_HTML)/swagger
 
-firefox:
-	sudo mkdir -p /etc/firefox/policies/ /etc/firefox/certificates
-	sudo cp configs/firefox/policies.json /etc/firefox/policies/policies.json
-	sudo rm -rf /etc/firefox/certificates/*.cer
-	sudo cp $(PLATFORM_DIR)/ca/$(ROOT_CA).$(DOMAIN)/x509/*.cer /etc/firefox/certificates
-	/usr/bin/firefox https://localhost:8443/
-
-firefox-debug:
-	sudo mkdir -p /etc/firefox/policies/ /etc/firefox/certificates /usr/local/share/ca-certificates/
-	sudo cp configs/firefox/policies.json /etc/firefox/policies/policies.json
-	sudo rm -rf /etc/firefox/certificates/*.cer /usr/local/share/ca-certificates/*.cer
-	sudo cp pkg/$(PLATFORM_DIR)/ca/$(ROOT_CA).$(DOMAIN)/x509/*.cer /etc/firefox/certificates
-	sudo cp pkg/$(PLATFORM_DIR)/ca/$(ROOT_CA).$(DOMAIN)/x509/*.cer /usr/local/share/ca-certificates/
-	sudo update-ca-certificates
-	/usr/bin/firefox https://localhost:8443/
-
-firefox-bin:
-	/usr/bin/firefox https://localhost:8443/
-
-config:
-	mkdir -p pkg/$(PLATFORM_DIR)/etc/ pkg/$(PLATFORM_DIR)/softhsm2
-	cp configs/platform/$(CONFIG_YAML) pkg/config.yaml
-	cp configs/softhsm.conf pkg/trusted-data/etc/softhsm.conf
+.PHONY: swagger-ui
+swagger-ui:
+	mkdir -p $(WEB_PUBLIC_HTML)/swagger
+	git clone --depth=1 https://github.com/swagger-api/swagger-ui.git && \
+		mv swagger-ui/dist/* $(WEB_PUBLIC_HTML)/swagger && \
+		rm -rf swagger-ui
+	sed -i '/var SwaggerInfo = &swag.Spec{/,/}}/c\var SwaggerInfo = \&swag.Spec{\n\tVersion:          "$(APP_VERSION)",\n\tHost:             "$(SWAGGER_HOST)",\n\tBasePath:         "/api/v1",\n\tSchemes:          []string{},\n\tTitle:            "Trusted Platform",\n\tDescription:      "The Trusted Platform RESTful Web Services API",\n\tInfoInstanceName: "swagger",\n\tSwaggerTemplate:  docTemplate,\n\tLeftDelim:        "{{",\n\tRightDelim:       "}}",' $(WEB_PUBLIC_HTML)/swagger/docs.go
+	sed -i 's|@version .*|@version $(APP_VERSION)|g' pkg/webservice/webserver_v1.go
+	sed -i 's|@host .*|@host $(SWAGGER_HOST)|g' pkg/webservice/webserver_v1.go
 
 
-clear-auth:
-	sudo tpm2_changeauth -c e -p test
-	sudo tpm2_changeauth -c o -p test
-	sudo tpm2_changeauth -c l -p test
-
-
+.PHONY: clean
 clean:
 	cd pkg; \
 	$(GOBIN)/go clean
 	rm -rf \
-		$(APPBIN) \
-		/usr/local/bin/$(APPBIN) \
+		$(PLATFORMD) \
+		$(PLATFORMD)-* \
+		/usr/local/bin/$(PLATFORMD) \
 		$(PLATFORM_DIR) \
+		build/docker/trusted-platform-iso-builder/ansible/ \
+		build/docker/trusted-platform-iso-builder/secure-boot-keys \
+		build/docker/trusted-platform-iso-builder/*.iso \
+		build/docker/trusted-platform-iso-builder/*.qcow2 \
+		build/docker/pxe-server/*.qcow2 \
+		build/docker/pxe-server/volume \
 		examples/tss/attestor/$(PLATFORM_DIR) \
 		examples/tss/verifier/$(PLATFORM_DIR) \
 		examples/client/$(PLATFORM_DIR) \
@@ -367,13 +286,17 @@ clean:
 		pkg/tpm2/blobs \
 		pkg/ca/testdata \
 		pkg/tpm2/testdata \
-		config.yaml
+		config.yaml \
+		*.iso
 
-
+# Tests
+.PHONY: test
 test: test-tpm test-crypto test-store test-webservice test-cli
 
+.PHONY: test-cli
 test-cli: test-tpm-cli test-ca-cli test-platform-cli
 
+.PHONY: test-tpm-cli
 test-tpm-cli:
 	cd pkg/cmd/tpm && go test -v -run ^Test_EK$
 	cd pkg/cmd/tpm && go test -v -run ^Test_EK_Certificate$
@@ -382,6 +305,7 @@ test-tpm-cli:
 	cd pkg/cmd/tpm && go test -v -run ^Test_Provision$
 	cd pkg/cmd/tpm && go test -v -run ^Test_Info$
 
+.PHONY: test-ca-cli
 test-ca-cli:
 	cd pkg/cmd/ca && go test -v -run ^Test_Certificate$
 	cd pkg/cmd/ca && go test -v -run ^Test_Info$
@@ -390,12 +314,14 @@ test-ca-cli:
 	cd pkg/cmd/ca && go test -v -run ^Test_Issue$
 	cd pkg/cmd/ca && go test -v -run ^Test_Revoke$
 
+.PHONY: test-platform-cli
 test-platform-cli:
 	cd pkg/cmd/platform && go test -v -run ^Test_Install$
 	cd pkg/cmd/platform && go test -v -run ^Test_Keyring$
 	cd pkg/cmd/platform && go test -v -run ^Test_Policy$
 	cd pkg/cmd/platform && go test -v -run ^Test_Provision$
 
+.PHONY: test-ca
 test-ca:
 	cd pkg/ca && \
 		go test -v -run ^TestInit$ && \
@@ -407,17 +333,21 @@ test-ca:
 		go test -v -run ^TestIssueCertificate_CA_RSA_WITH_LEAF_ECDSA$ && \
 		go test -v -run ^TestRSAGenerateAndSignCSR_Then_VerifyAndRevoke$
 
+.PHONY: test-tpm
 test-tpm:
 	cd pkg/tpm2 && go test -v
 
+.PHONY: test-crypto
 test-crypto:
 	cd pkg/crypto/aesgcm && go test -v
 	cd pkg/crypto/argon2 && go test -v
 
+.PHONY: test-store
 test-store: test-store-pkcs11 test-store-tpm2 test-store-datastore
 	cd pkg/store/keystore && go test -v
 	cd pkg/store/keystore/pkcs8 && go test -v
 
+.PHONY: test-store-pkcs11
 test-store-pkcs11:
 	cd pkg/store/keystore/pkcs11 && \
 		go test -v -run ^TestConnection$ && \
@@ -428,6 +358,7 @@ test-store-pkcs11:
 		go test -v -run ^TestSignRSAPSS_WithFileIntegrityCheck$ && \
 		go test -v -run ^TestInitHSM$
 
+.PHONY: test-store-tpm2
 test-store-tpm2:
 	cd pkg/store/keystore/tpm2 && \
 		go test -v -run ^TestKeyStoreNotInitialized$ && \
@@ -439,14 +370,17 @@ test-store-tpm2:
 		go test -v -run ^TestKeyStoreGenerateRSAWithPolicy$ && \
 		go test -v -run ^TestRSA_PSS_WithPasswordWithoutPolicy$
 
+.PHONY: test-store-datastore
 test-store-datastore:
 	cd pkg/store/datastore && \
 		go test -v
 	cd pkg/store/datastore/kvstore && \
 		go test -v
 
+.PHONY: test-webservice
 test-webservice: test-webservice-jwt
 
+.PHONY: test-webservice-jwt
 test-webservice-jwt:
 	cd pkg/webservice/v1/jwt && \
 		go test -v -run ^TestSigningMethodRS$ && \
@@ -454,107 +388,285 @@ test-webservice-jwt:
 		go test -v -run ^TestSigningMethodES$ && \
 		go test -v -run ^TestSigningMethodES_Ed25519$
 
+# Releases
+.PHONY: release
+release: clean \
+	release-version-bump \
+	release-commit \
+	docker-builder-push \
+	docker-platform-push \
+	docker-iso-builder-push \
+	docker-pxe-server-push \
+	docker-nfs-server-push \
+	release-binaries \
+	isos \
+	release-github
 
-install: luks-create ansible-install ansible-setup
-uninstall: uninstall-ansible
+.PHONY: release-local
+release-local: clean \
+	docker-builder-load \
+	docker-platform-load \
+	docker-iso-builder-load \
+	docker-pxe-server-load \
+	docker-nfs-server-load \
+	release-binaries \
+	isos
 
+.PHONY: release-commit
+release-commit:
+	git add -A
+	git commit -F CHANGELOG
+	git push $(GIT_BRANCH)
 
-# Web Services
-webservice: build-debug config
-	cd pkg && ../$(APPBIN) webservice --init
-
-webservice-verify-tls:
-	openssl s_client \
-		-connect localhost:8443 \
-		-showcerts \
-		-servername localhost \
-		-CAfile pkg/$(PLATFORM_DIR)/ca/$(INTERMEDIATE_CA).$(DOMAIN)/x509/$(ROOT_CA).$(DOMAIN).pkcs8.rsa.pem \
-		| openssl x509 -noout -text
-
-
-# LUKS Encrypted Platform Data Container
-luks-create:
-	dd if=/dev/zero of=$(PLATFORM_DIR).$(LUKS_TYPE) bs=1 count=0 seek=$(LUKS_SIZE)
-	dd if=/dev/urandom of=$(LUKS_KEYFILE) bs=2048 count=8
-	sudo cryptsetup luksFormat --type $(LUKS_TYPE) $(PLATFORM_DIR).$(LUKS_TYPE) $(LUKS_KEYFILE)
-	sudo cryptsetup luksOpen $(PLATFORM_DIR).$(LUKS_TYPE) $(APPNAME) --key-file $(LUKS_KEYFILE)
-	sudo mkfs.ext4 /dev/mapper/$(APPNAME) -L $(PLATFORM_DIR)
-
-luks-mount:
-	mkdir -p $(PLATFORM_DIR)
-	-sudo cryptsetup luksOpen $(PLATFORM_DIR).$(LUKS_TYPE) $(APPNAME) --key-file $(LUKS_KEYFILE)
-	-sudo mount /dev/mapper/$(APPNAME) $(PLATFORM_DIR)
-	sudo chown -R $(USER).$(USER) $(PLATFORM_DIR)
-
-luks-umount:
-	sudo umount $(PLATFORM_DIR)
-	sudo cryptsetup luksClose /dev/mapper/$(APPNAME)
-	rm -rf $(PLATFORM_DIR)
-
-
-# SoftHSM
-softhsm-init:
-	export SOFTHSM_CONF=$(SOFTHSM_CONFIG); \
-	chown $(USER):$(USER) $(SOFTHSM_TOKEN_DIR); \
-	$(SOFTHSM_DIR)/softhsm2-util \
-		--init-token \
-		--slot 0 \
-		--label test \
-		--so-pin 1234 \
-		--pin 5678 ; \
-	$(SOFTHSM_DIR)/softhsm2-util --show-slots
-
-
-# Ansible
-ansible-install:
-	sudo apt-get install python3 pipx docker.io ansible-core
-	pipx install ansible ansible-builder
-
-ansible-setup:
-	cd python-venv && \
-	ansible-playbook \
-		../../go-trusted-platform-ansible/setup/platform-setup.yml \
-		-e PLATFORM_DIR=$(PLATFORM_DIR) \
-		-e CONFIG_DIR=$(CONFIG_DIR) \
-		-e LOG_DIR=$(LOG_DIR) \
-		-e CA_DIR=$(CA_DIR) \
-		-e platform_dir=$(PLATFORM_DIR) \
-		-e config_dir=$(PLATFORM_DIR)/etc \
-    	-e log_dir=$(PLATFORM_DIR)/log \
-		-e ca_dir=$(PLATFORM_DIR)/ca \
-	    -e platform_build_dir=$(PLATFORM_DIR)/build \
-		--ask-become-pass
+.PHONY: release-binaries
+release-binaries:
+	# glibc
+	CONTAINER=$$(docker create $(APPNAME)-builder-debian:amd64); \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD) $(PLATFORMD)-glibc-x86_64; \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD)-debug $(PLATFORMD)-debug-glibc-x86_64
+	CONTAINER=$$(docker create $(APPNAME)-builder-debian:arm64); \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD) $(PLATFORMD)-glibc-aarch64; \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD)-debug $(PLATFORMD)-debug-glibc-aarch64
+	# musl
+	CONTAINER=$$(docker create $(APPNAME)-builder-alpine:amd64); \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD) $(PLATFORMD)-musl-x86_64; \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD)-debug $(PLATFORMD)-debug-musl-x86_64; \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD)-static $(PLATFORMD)-static-musl-x86_64; \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD)-debug-static $(PLATFORMD)-debug-static-musl-x86_64
+	CONTAINER=$$(docker create $(APPNAME)-builder-alpine:arm64); \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD) $(PLATFORMD)-musl-aarch64; \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD)-debug $(PLATFORMD)-debug-musl-aarch64; \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD)-static $(PLATFORMD)-static-musl-aarch64; \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD)-debug-static $(PLATFORMD)-debug-static-musl-aarch64
 
 
-# Raspbery PI
-rpi-sync:
-	rsync -av --progress ../$(PACKAGE) $(RPI_USER)@$(RPI_HOST): --exclude .git/
+.PHONY: release-version-bump
+release-version-bump:
+	@if [ -z "$(RELEASE_TYPE)" ]; then \
+		echo "Error: RELEASE_TYPE must be specified (e.g., make increment_version RELEASE_TYPE=major)"; \
+		exit 1; \
+	fi
+	@if [ ! -f $(VERSION_FILE) ]; then \
+		echo "Error: VERSION file not found"; \
+		exit 1; \
+	fi
+	@OLD_VERSION=$$(cat $(VERSION_FILE)); \
+	MAJOR=$$(echo $$OLD_VERSION | cut -d. -f1); \
+	MINOR=$$(echo $$OLD_VERSION | cut -d. -f2); \
+	BUGFIX=$$(echo $$OLD_VERSION | cut -d. -f3 | cut -d- -f1); \
+	PRERELEASE=$$(echo $$OLD_VERSION | grep -o -E '(-.*|$$)'); \
+	if [ "$(RELEASE_TYPE)" = "major" ]; then \
+		NEW_MAJOR=$$((MAJOR + 1)); \
+		NEW_VERSION="$$NEW_MAJOR.0.0"; \
+	elif [ "$(RELEASE_TYPE)" = "minor" ]; then \
+		NEW_MINOR=$$((MINOR + 1)); \
+		NEW_VERSION="$$MAJOR.$$NEW_MINOR.0"; \
+	elif [ "$(RELEASE_TYPE)" = "bugfix" ]; then \
+		NEW_BUGFIX=$$((BUGFIX + 1)); \
+		NEW_VERSION="$$MAJOR.$$MINOR.$$NEW_BUGFIX"; \
+	else \
+		echo "Error: Invalid RELEASE_TYPE. Use 'major', 'minor', or 'bugfix'."; \
+		exit 1; \
+	fi; \
+	if [ -n "$$PRERELEASE" ]; then \
+		NEW_VERSION="$$NEW_VERSION$$PRERELEASE"; \
+	fi; \
+	echo $$NEW_VERSION > $(VERSION_FILE); \
+	echo "Version updated: $$OLD_VERSION -> $$NEW_VERSION"
 
-rpi-sync-ansible:
-	rsync -av --progress \
-		../$(PACKAGE)-ansible $(RPI_HOST): \
-		--exclude ../$(PACKAGE)-ansible/.git/
+.PHONY: release-github
+release-github:
+	@VERSION=$$(cat $(VERSION_FILE)); \
+	echo "Creating GitHub release v$$VERSION..."; \
+	gh release create v$$VERSION \
+		-t "v$$VERSION" \
+		-F CHANGELOG \
+		$(PLATFORMD)-debug-glibc-aarch64 \
+		$(PLATFORMD)-debug-glibc-x86_64 \
+		$(PLATFORMD)-debug-musl-aarch64 \
+		$(PLATFORMD)-debug-musl-x86_64 \
+		$(PLATFORMD)-debug-static-musl-aarch64 \
+		$(PLATFORMD)-debug-static-musl-x86_64 \
+		$(PLATFORMD)-glibc-aarch64 \
+		$(PLATFORMD)-glibc-x86_64 \
+		$(PLATFORMD)-musl-aarch64 \
+		$(PLATFORMD)-musl-x86_64 \
+		$(PLATFORMD)-static-musl-aarch64 \
+		$(PLATFORMD)-static-musl-x86_64 \
+		trusted-platform.iso \
+		trusted-platform-swtpm.iso
 
-rpi-qemu:
-	qemu-system-aarch64 \
-		-machine type=raspi3 \
-		-m 1024 \
-		-kernel vmlinux \
-		-initrd initramfs
+.PHONY: release-github-delete
+release-github-delete:
+	@VERSION=$$(cat $(VERSION_FILE)); \
+	echo "Deleting GitHub release v$$VERSION..."; \
+	gh release delete v$$VERSION --yes; \
+	git push origin --delete v$$VERSION
 
 
 # Docker
-docker-load-builder: build-debug
-	docker build --load \
-		-t $(APPNAME)-builder \
-		-f build/docker/$(APPNAME)-builder/Dockerfile .
+.PHONY: docker-pxe-server-load
+docker-pxe-server-load:
+	cd build/docker/pxe-server && make -j$(shell nproc) build
 
+.PHONY: docker-pxe-server-push
+docker-pxe-server-push:
+	cd build/docker/pxe-server && make -j$(shell nproc) push
+
+# Docker :: NFS server
+.PHONY: docker-nfs-server-load
+docker-nfs-server-load:
+	cd build/docker/nfs-server && make -j$(shell nproc) build
+
+.PHONY: docker-nfs-server-push
+docker-nfs-server-push:
+	cd build/docker/nfs-server && make -j$(shell nproc) push
+
+# Docker :: Trusted Platform Builder :: Local
+.PHONY: docker-builder-load
+docker-builder-load:
+	@start_time=$$(date +%s); \
+		$(MAKE) \
+			docker-builder-load-debian \
+			docker-builder-load-alpine; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "${GREEN}Build execution time: %02d:%02d:%02d${NO_COLOR}\n" $$hours $$minutes $$seconds
+
+docker-builder-load-alpine:
+	@start_time=$$(date +%s); \
+		$(MAKE) \
+			docker-builder-load-amd64 \
+			docker-builder-load-aarch64; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "${GREEN}Alpine build execution time: %02d:%02d:%02d${NO_COLOR}\n" $$hours $$minutes $$seconds
+
+docker-builder-load-debian:
+	@start_time=$$(date +%s); \
+		DOCKER_BUILDER_BASE=debian $(MAKE) \
+			docker-builder-load-amd64 \
+			docker-builder-load-aarch64; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "${GREEN}Debian build execution time: %02d:%02d:%02d${NO_COLOR}\n" $$hours $$minutes $$seconds
+
+.PHONY: docker-builder-load-amd64
+docker-builder-load-amd64:
+	docker build --load \
+	 	--platform=linux/amd64 \
+		-t $(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
+		-f build/docker/$(APPNAME)-builder/$(DOCKER_BUILDER_DOCKERFILE) .
+
+.PHONY: docker-builder-load-aarch64
+docker-builder-load-aarch64:
+	docker build --load \
+	    --platform=linux/arm64 \
+		-t $(APPNAME)-builder-$(DOCKER_BUILDER_BASE):arm64 \
+		-f build/docker/$(APPNAME)-builder/$(DOCKER_BUILDER_DOCKERFILE) .
+
+
+# Docker :: Trusted Platform Builder :: Remote
+.PHONY: docker-builder-push
+docker-builder-push:
+	@start_time=$$(date +%s); \
+		docker build --push \
+			--platform=linux/amd64,linux/arm64 \
+			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-builder-alpine:latest \
+			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-builder-alpine:$(APP_VERSION) \
+			-f build/docker/$(APPNAME)-builder/Dockerfile-alpine .; \
+		docker build --push \
+			--platform=linux/amd64,linux/arm64 \
+			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-builder-debian:latest \
+			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-builder-debian:$(APP_VERSION) \
+			-f build/docker/$(APPNAME)-builder/Dockerfile-debian .; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "${GREEN}Docker trusted-platform-builder execution time: %02d:%02d:%02d${NO_COLOR}\n" $$hours $$minutes $$seconds
+
+# Docker :: Trusted Platform ISO Builder :: Local (x86_64 only)
+.PHONY: docker-iso-builder-load
+docker-iso-builder-load: 
+	@start_time=$$(date +%s); \
+		cd build/docker/$(APPNAME)-iso-builder && \
+			make clean secure-boot-keys ansible build-all; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "Build execution time: %02d:%02d:%02d\n" $$hours $$minutes $$seconds
+
+# Docker :: Trusted Platform ISO Builder :: Remote (x86_64 only)
+.PHONY: docker-iso-builder-push
+docker-iso-builder-push:
+	@start_time=$$(date +%s); \
+		cd build/docker/$(APPNAME)-iso-builder && \
+		make clean secure-boot-keys ansible; \
+		docker build --push \
+			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(DOCKER_ISO_BUILDER):latest \
+			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(DOCKER_ISO_BUILDER):$(APP_VERSION) \
+			-f Dockerfile .; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "Build execution time: %02d:%02d:%02d\n" $$hours $$minutes $$seconds
+
+# Docker :: Trusted Platform :: Local
+.PHONY: docker-platform-load
+docker-platform-load: 
+	@start_time=$$(date +%s); \
+		cd build/docker/$(APPNAME) && make -j20; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "Build execution time: %02d:%02d:%02d\n" $$hours $$minutes $$seconds
+
+.PHONY: docker-platform-load-amd64
+docker-platform-load-amd64:
+	docker build --load \
+		--platform=linux/arm64 \
+		--build-arg APPNAME=$(PLATFORMD)-static \
+		-t $(APPNAME) \
+		-f build/docker/$(APPNAME)/Dockerfile .
+
+
+# Docker :: Trusted Platform :: Remote
+.PHONY: docker-platform-push
+docker-platform-push:
+	docker build --push \
+		--platform=linux/amd64,linux/arm64 \
+		--build-arg APPNAME=$(PLATFORMD)-static \
+		-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME):latest \
+		-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME):$(APP_VERSION) \
+		-f build/docker/$(APPNAME)/Dockerfile .
+
+
+# Docker run targets
+.PHONY: docker-run
 docker-run: build-debug
 	docker run -it --privileged \
 	-v .:/mnt \
 	-v /dev/bus/usb:/dev/bus/usb \
 	trusted-platform-builder bash
 
+.PHONY: docker-run-builder-with-usb
 docker-run-builder-with-usb:
 	docker run -it --rm --privileged \
 		-v /dev/bus/usb:/dev/bus/usb \
@@ -564,6 +676,7 @@ docker-run-builder-with-usb:
 		bash
 		# /usr/local/bin/yubico-piv-tool -astatus
 
+.PHONY: docker-run-yubico-piv-tool
 docker-run-yubico-piv-tool:
 	docker run -ti --rm \
 		-v /dev/bus/usb:/dev/bus/usb \
@@ -577,11 +690,36 @@ docker-run-yubico-piv-tool:
 		/usr/local/bin/yubico-piv-tool -astatus
 
 
+# ISO 
+.PHONY: isos
+isos:
+	@start_time=$$(date +%s); \
+		$(MAKE) -j$(shell nproc) iso-hwtpm iso-swtpm; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "Build execution time: %02d:%02d:%02d\n" $$hours $$minutes $$seconds
+
+.PHONY: iso-hwtpm
+iso-hwtpm:
+	@echo "Building $(APPNAME).iso ..."
+	@docker run --rm -v $(PWD):/iso $(DOCKER_ISO_BUILDER)
+
+.PHONY: iso-swtpm
+iso-swtpm:
+	@echo "Building $(APPNAME)-swtpm.iso ..."
+	@docker run --rm -v $(PWD):/iso $(DOCKER_ISO_BUILDER_SWTPM)
+
+
 # Packer
+.PHONY: packer
 packer:
 	PACKER_FILE=$(PACKER_BUILDER).json \
 	$(MAKE) packer-build
 
+.PHONY: packer-builder-arm
 packer-builder-arm:
 	docker run \
 		--rm \
@@ -603,7 +741,7 @@ packer-builder-arm:
 			-var "appenv=$(ENV)" \
 			-var "timezone=$(TIMEZONE)" \
 			-var "hostname=$(HOSTNAME)" \
-			-var "platform_home=$(DEPLOY_HOME)" \
+			-var "platform_home=$(PLATFORM_HOME)" \
 			-var "eth0_cidr=$(ETH0_CIDR)" \
 			-var "eth0_routers=$(ETH0_ROUTERS)" \
 			-var "eth0_dns=$(ETH0_DNS)" \
@@ -614,20 +752,97 @@ packer-builder-arm:
 			-var "wlan_psk=$(WLAN_PSK)" \
 			-var "wlan_key_mgmt=$(WLAN_KEY_MGMT)" \
 			-var "wlan_country=$(WLAN_COUNTRY)" \
-			-var "datastore=$(CROPDROID_DATASTORE)" \
+			-var "datastore=$(PLATFORM_DS)" \
 			$(PACKER_FILE)
 	sudo -E cp ${PWD}/build/packer/output-arm-image/image $(RPI_IMAGE_ARTIFACT)
 	sudo chown $(USER) $(RPI_IMAGE_ARTIFACT) ${PWD}/build/packer/output-arm-image/image
 
 
-# ISO
-iso:
-	docker build \
-		--memory 32g \
-		--build-arg CONFIG_DIR=$(DOCKER_HOME)/$(DOCKER_ISO_BUILDER)/ \
-		--load \
-		-t $(DOCKER_ISO_BUILDER) \
-		-f build/docker/$(DOCKER_ISO_BUILDER)/Dockerfile .
-	docker create --name $(DOCKER_ISO_BUILDER)-container $(DOCKER_ISO_BUILDER):$(DOCKER_ISO_TAG)
-	docker cp $(DOCKER_ISO_BUILDER)-container:/root/LIVE_BOOT_TRUSTED_PLATFORM/TrustedPlatformOS-1.0.iso ./$(ISO_NAME)
-	docker rm $(DOCKER_ISO_BUILDER)-container
+# Platform Web Services
+.PHONY: webservice
+webservice: build-debug config
+	cd pkg && ../$(PLATFORMD) webservice --init
+
+.PHONY: webservice-verify-tls
+webservice-verify-tls:
+	openssl s_client \
+		-connect localhost:8443 \
+		-showcerts \
+		-servername localhost \
+		-CAfile pkg/$(PLATFORM_DIR)/ca/$(INTERMEDIATE_CA).$(DOMAIN)/x509/$(ROOT_CA).$(DOMAIN).pkcs8.rsa.pem \
+		| openssl x509 -noout -text
+
+
+# SoftHSM
+.PHONY: softhsm-init
+softhsm-init:
+	export SOFTHSM_CONF=$(SOFTHSM_CONFIG); \
+	chown $(USER):$(USER) $(SOFTHSM_TOKEN_DIR); \
+	$(SOFTHSM_DIR)/softhsm2-util \
+		--init-token \
+		--slot 0 \
+		--label test \
+		--so-pin 1234 \
+		--pin 5678 ; \
+	$(SOFTHSM_DIR)/softhsm2-util --show-slots
+
+
+# Raspbery PI
+.PHONY: rpi-sync
+rpi-sync:
+	rsync -av --progress ../$(PACKAGE) $(RPI_USER)@$(RPI_HOST): \
+		--exclude .git/ \
+		--exclude *.img \
+		--exclude *.iso \
+		--exclude *.xz
+
+.PHONY: rpi-sync-ansible
+rpi-sync-ansible:
+	rsync -av --progress \
+		../$(PACKAGE)-ansible $(RPI_HOST): \
+		--exclude ../$(PACKAGE)-ansible/.git/
+
+.PHONY: rpi-qemu
+rpi-qemu:
+	qemu-system-aarch64 \
+		-machine type=raspi3 \
+		-m 1024 \
+		-kernel vmlinux \
+		-initrd initramfs
+
+# Firefox
+.PHONY: firefox
+firefox:
+	sudo mkdir -p /etc/firefox/policies/ /etc/firefox/certificates
+	sudo cp configs/firefox/policies.json /etc/firefox/policies/policies.json
+	sudo rm -rf /etc/firefox/certificates/*.cer
+	sudo cp $(PLATFORM_DIR)/ca/$(ROOT_CA).$(DOMAIN)/x509/*.cer /etc/firefox/certificates
+	/usr/bin/firefox https://localhost:8443/
+
+.PHONY: firefox-debug
+firefox-debug:
+	sudo mkdir -p /etc/firefox/policies/ /etc/firefox/certificates /usr/local/share/ca-certificates/
+	sudo cp configs/firefox/policies.json /etc/firefox/policies/policies.json
+	sudo rm -rf /etc/firefox/certificates/*.cer /usr/local/share/ca-certificates/*.cer
+	sudo cp pkg/$(PLATFORM_DIR)/ca/$(ROOT_CA).$(DOMAIN)/x509/*.cer /etc/firefox/certificates
+	sudo cp pkg/$(PLATFORM_DIR)/ca/$(ROOT_CA).$(DOMAIN)/x509/*.cer /usr/local/share/ca-certificates/
+	sudo update-ca-certificates
+	/usr/bin/firefox https://localhost:8443/
+
+.PHONY: firefox-bin
+firefox-bin:
+	/usr/bin/firefox https://localhost:8443/
+
+
+# TPM 2.0
+.PHONY: clear-auth
+clear-auth:
+	sudo tpm2_changeauth -c e -p test
+	sudo tpm2_changeauth -c o -p test
+	sudo tpm2_changeauth -c l -p test
+
+.PHONY: config
+config:
+	mkdir -p pkg/$(PLATFORM_DIR)/etc/ pkg/$(PLATFORM_DIR)/softhsm2
+	cp configs/platform/$(CONFIG_YAML) pkg/config.yaml
+	cp configs/softhsm.conf pkg/trusted-data/etc/softhsm.conf

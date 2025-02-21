@@ -86,7 +86,7 @@ func (cp TrustedPlatformPlugin) ServeDNS(ctx context.Context, w dns.ResponseWrit
 	qtype := r.Question[0].Qtype          // Query type
 
 	Configuration.Logger.Info("Inbound DNS query",
-		slog.String("address", w.LocalAddr().String()),
+		slog.String("remoteAddrress", w.RemoteAddr().String()),
 		slog.String("port", port),
 		slog.String("qname", qname),
 		slog.String("qtype", dns.TypeToString[qtype]))

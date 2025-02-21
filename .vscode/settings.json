@@ -1,10 +1,6 @@
 {
     "makefile.configureOnOpen": false,
     "go.buildFlags": [
-<<<<<<< HEAD
         "-tags", "quantum_safe"
-=======
-        "-tags", "quantum_safe",
->>>>>>> feature/acme
     ]
 }

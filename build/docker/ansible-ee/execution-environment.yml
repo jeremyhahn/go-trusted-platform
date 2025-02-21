@@ -1,0 +1,23 @@
+---
+version: 3
+images:
+  base_image:
+    name: quay.io/centos/centos:stream9
+dependencies:
+  ansible_core:
+    package_pip: ansible-core>=2.12,<2.13.13
+  ansible_runner:
+    package_pip: ansible-runner
+  galaxy: |
+    ---
+    collections:
+      - ansible.netcommon
+  system: |
+    git
+    sudo
+    iputils-ping
+  python: |
+    ansible
+    jinja2>=2.11.2
+    awxkit>=19.0.0
+  

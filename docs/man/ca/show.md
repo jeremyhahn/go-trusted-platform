@@ -1,4 +1,4 @@
-% tpadm ca show | Trusted Platform Commands Manual
+% platformd ca show | Trusted Platform Commands Manual
 
 # NAME
 
@@ -26,7 +26,7 @@ showrmation many users may expect.
 
 ## Display certificate information
 ```bash
-tpadm ca show intermediate-ca.example.com
+platformd ca show intermediate-ca.example.com
 ```
 
 # AUTHOR

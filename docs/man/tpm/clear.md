@@ -1,4 +1,4 @@
-% tpadm tpm clear | Trusted Platform Commands Manual
+% platformd tpm clear | Trusted Platform Commands Manual
 
 # NAME
 
@@ -58,7 +58,7 @@ clearrmation many users may expect.
 
 ## Clear the Endorsement hierarchy
 ```bash
-tpadm tpm clear -h e
+platformd tpm clear -h e
 ```
 
 # AUTHOR

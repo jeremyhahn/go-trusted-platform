@@ -76,6 +76,12 @@ For example, to perform the http-01 challenge over port 8080, use `http-8080`. L
     If the http-01 challenge type ever offers a new version, such as http-02, the RFC compliant behvior will override the dynamic port allocation behavior in the Trusted Platform.
 
 
+## Cross-signed Certificates
+
+The Trusted Platform ACME client supports cross-signed TLS certificates with a public Certificate Authority such as [Let's Encrypt](https://letsencrypt.org/). A cross-signed certificate results in two certificates being generated - the first by the Enterprise / Privacy CA and the other from a public CA that's includes in the trusted root certificates by an OS maintainer. 
+
+This allows a web server, such as the one included in the Trusted Platform, to include both certificates when serving a TLS enabled website. The public CA certificate is served first, then the "trusted certificate" from the Enterprise / Privacy CA. This allows the TLS handshake to work as expected with common browsers without any security warnings, while providing "Trusted" clients who are interestd in, and/or speak the Trusted Computing protocols, to obtain the additional trusted certificate containing TCG OIDs, platform assertations, perform remote attestations, etc.
+
 ### Notes
 
     - **device-01**: This challenge type will be refactored to `enroll-01` upon successful integration of the [acme-device-attest](https://datatracker.ietf.org/doc/html/draft-acme-device-attest-03) challenge type to avoid confusion and more accurately

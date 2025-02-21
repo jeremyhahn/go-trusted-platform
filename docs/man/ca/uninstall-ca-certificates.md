@@ -1,4 +1,4 @@
-% tpadm ca uninstall-ca-certificates | Trusted Platform Commands Manual
+% platformd ca uninstall-ca-certificates | Trusted Platform Commands Manual
 
 # NAME
 
@@ -28,7 +28,7 @@ This command requires root or sudo privileges.
 
 ## Uninstall Certificate Authority certificates from local OS trust store
 ```bash
-sudo tpadm ca uninstall-ca-certificates
+sudo platformd ca uninstall-ca-certificates
 ```
 
 # AUTHOR

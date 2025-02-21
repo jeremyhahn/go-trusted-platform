@@ -1,4 +1,4 @@
-% tpadm platform password | Trusted Platform Commands Manual
+% platformd platform password | Trusted Platform Commands Manual
 
 # NAME
 
@@ -48,12 +48,12 @@ information many users may expect.
 
 ## Retrieve the default Root CA password (PKCS8, RSA)
 ```bash
-tpadm platform password --cn root-ca.example.com
+platformd platform password --cn root-ca.example.com
 ```
 
 ## Retrieve the Root CA password using provided store and key algorithm
 ```bash
-tpadm platform password --cn root-ca.example.com --algorithm ecdsa --store pkcs11
+platformd platform password --cn root-ca.example.com --algorithm ecdsa --store pkcs11
 ```
 
 # AUTHOR

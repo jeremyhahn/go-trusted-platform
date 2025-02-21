@@ -1,4 +1,4 @@
-% tpadm ca info | Trusted Platform Commands Manual
+% platformd ca info | Trusted Platform Commands Manual
 
 # NAME
 
@@ -27,7 +27,7 @@ information many users may expect.
 
 ## Display Certificate Authority Information
 ```bash
-tpadm ca info
+platformd ca info
 ```
 
 # AUTHOR

@@ -1,4 +1,4 @@
-APPBIN             ?= tpadm
+APPBIN             ?= platformd
 
 PLATFORM_DIR       ?= trusted-data
 CONFIG_DIR         ?= $(PLATFORM_DIR)/etc

@@ -1,0 +1,207 @@
+---
+- name: "Trusted Platform :: Bare Metal Install"
+  hosts: localhost
+
+  vars:
+    user_name: "tpadm"
+
+  tasks:
+    - name: Ensure user is present (if needed)
+      user:
+        name: "{{ user_name }}"
+        state: present
+
+    - name: Add user to groups
+      user:
+        name: "{{ user_name }}"
+        append: yes
+        groups: "sudo,docker,tss"
+
+    - name: Force iptables to use legacy mode
+      command: update-alternatives --set iptables /usr/sbin/iptables-legacy
+
+    - name: Force ip6tables to use legacy mode
+      command: update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
+
+    - name: Enable and start Docker
+      service:
+        name: docker
+        enabled: yes
+        state: started
+
+    - name: Conditionally install tpm2-abrmd
+      apt:
+        name: tpm2-abrmd
+        state: present
+      when: SWTPM | default(false)
+
+    - name: Install K3s
+      shell: "curl -sfL https://get.k3s.io | sh | tee -a /home/{{ user_name }}/install.log"
+      args:
+        chdir: /tmp
+
+    - name: Enable and start Docker service
+      systemd:
+        name: docker
+        enabled: yes
+        state: restarted
+
+    - name: Verify Docker is running
+      command: systemctl is-active docker
+      register: docker_status
+      failed_when: docker_status.stdout != "active"
+
+    - name: Disable STP on CNI bridge
+      command: ip link set dev cni0 type bridge stp_state 0
+
+    - name: Reduce bridge forward delay
+      command: ip link set dev cni0 type bridge forward_delay 0
+
+    - name: Disable IPv6 completely at runtime
+      sysctl:
+        name: "{{ item }}"
+        value: "1"
+        state: present
+      loop:
+        - net.ipv6.conf.all.disable_ipv6
+        - net.ipv6.conf.default.disable_ipv6
+        - net.ipv6.conf.lo.disable_ipv6
+        - net.ipv6.conf.enp0s3.disable_ipv6
+        - net.ipv6.conf.cni0.disable_ipv6
+
+    - name: Ensure TPM kernel Resource Manager permissions
+      file:
+        path: /dev/tpmrm0
+        mode: '0666'
+
+    - name: Ensure TPM device permissions
+      file:
+        path: /dev/tpm0
+        mode: '0666'
+
+    - name: Pre-populate kernel keyring with dummy key
+      shell: |
+        keyctl padd user cryptenroll "" @u || echo "Warning: Could not add dummy key."
+
+    - name: Run systemd-cryptenroll to enroll TPM keyslot
+      shell: SYSTEMD_LOG_LEVEL=debug systemd-cryptenroll --tpm2-device=/dev/tpmrm0 --tpm2-pcrs=9 /dev/vda3
+
+    - name: Update crypttab for TPM auto-unsealing
+      lineinfile:
+        path: /etc/crypttab
+        line: "crypt-root UUID={{ lookup('pipe', 'blkid -s UUID -o value /dev/vda3') }} none luks,tpm2-device=auto,tpm2-pcrs=9"
+        create: yes
+
+    - name: Run Trusted Platform Docker container
+      command: >
+        docker run --rm -d
+        jeremyhahn/trusted-platform:latest
+        webservice
+        --debug
+        --init
+        --platform-dir /opt/trusted-platform/trusted-data
+        --log-dir /opt/trusted-platform/trusted-data/log
+        --ca-dir /opt/trusted-platform/trusted-data/ca
+        --raw-so-pin 123456
+        --raw-pin 123456
+
+    # Disable IPv6 Router Advertisements to prevent network flapping
+    - name: Disable IPv6 Router Advertisements (RA)
+      sysctl:
+        name: "{{ item }}"
+        value: "0"
+        state: present
+      loop:
+        - net.ipv6.conf.all.accept_ra
+        - net.ipv6.conf.default.accept_ra
+        - net.ipv6.conf.eth0.accept_ra
+        - net.ipv6.conf.cni0.accept_ra
+
+    - name: Apply sysctl settings
+      command: sysctl -p
+
+    - name: Reboot system to apply key changes
+      ansible.builtin.command: /sbin/reboot
+      ignore_errors: true
+
+
+
+
+
+# ---
+# - name: "Trusted Platform :: Bare Metal Install"
+#   hosts: localhost
+
+#   vars:
+#     user_name: "tpadm"
+
+#   tasks:
+#     - name: Ensure user is present (if needed)
+#       user:
+#         name: "{{ user_name }}"
+#         state: present
+
+#     - name: Add user to groups
+#       user:
+#         name: "{{ user_name }}"
+#         append: yes
+#         groups: "sudo,docker,tss"
+
+#     - name: Enable and start Docker
+#       service:
+#         name: docker
+#         enabled: yes
+#         state: started
+
+#     - name: Conditionally install tpm2-abrmd
+#       apt:
+#         name: tpm2-abrmd
+#         state: present
+#       when: SWTPM | default(false)
+
+#     - name: Load TPM module
+#       command: modprobe tpm_tis
+
+#     - name: Install K3s
+#       shell: "curl -sfL https://get.k3s.io | sh | tee -a /home/{{ user_name }}/install.log"
+#       args:
+#         chdir: /tmp
+
+#     - name: Run Trusted Platform Docker container
+#       command: >
+#         docker run --rm -d
+#         jeremyhahn/trusted-platform:latest
+#         webservice
+#         --debug
+#         --init
+#         --platform-dir /opt/trusted-platform/trusted-data
+#         --log-dir /opt/trusted-platform/trusted-data/log
+#         --ca-dir /opt/trusted-platform/trusted-data/ca
+#         --raw-so-pin 123456
+#         --raw-pin 123456
+
+#     - name: Enroll LUKS decryption key into TPM using systemd-cryptenroll
+#       # This command enrolls a new TPM-bound keyslot into the LUKS container.
+#       command: systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=9 "{{ encrypted_partition }}"
+#       register: cryptenroll_result
+#       retries: 3
+#       delay: 10
+#       until: cryptenroll_result.rc == 0
+#       # If it hangs or fails repeatedly, you might add ignore_errors: yes
+
+#     - name: Debug systemd-cryptenroll output
+#       debug:
+#         var: cryptenroll_result.stdout
+
+#     - name: Update /etc/crypttab for TPM auto-unsealing
+#       copy:
+#         content: |
+#           crypt-root UUID={{ lookup('pipe', "blkid -s UUID -o value " + encrypted_partition) }} none luks,tpm2-device=/dev/tpmrm0,tpm2-pcrs=9
+#         dest: /etc/crypttab
+#         owner: root
+#         group: root
+#         mode: '0644'
+
+    # - name: Reboot system to apply key changes
+    #   ansible.builtin.command: /sbin/reboot
+    #   ignore_errors: true

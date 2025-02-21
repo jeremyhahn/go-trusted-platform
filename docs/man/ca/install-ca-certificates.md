@@ -1,4 +1,4 @@
-% tpadm ca install-ca-certificates | Trusted Platform Commands Manual
+% platformd ca install-ca-certificates | Trusted Platform Commands Manual
 
 # NAME
 
@@ -28,7 +28,7 @@ This command requires root or sudo privileges.
 
 ## Install Certificate Authority certificates to local OS trust store
 ```bash
-sudo tpadm ca install-ca-certificates
+sudo platformd ca install-ca-certificates
 ```
 
 # AUTHOR

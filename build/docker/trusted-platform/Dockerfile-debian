@@ -1,0 +1,28 @@
+ARG BASE_IMAGE="debian:bookworm"
+ARG BUILDER_IMAGE="trusted-platform-builder"
+ARG PLATFORMD="platformd"
+ARG BUILD_DIR="/builder"
+
+FROM $BASE_IMAGE
+
+LABEL maintainer="Jeremy Hahn <mail@jeremyhahn.com>"
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /trusted-platform
+
+RUN apt-get update && \
+    apt-get install -y \
+        bash \
+        tpm2-tools \
+        ca-certificates && \
+    rm -rf /var/cache/apt/*
+
+RUN mkdir -p /trusted-platform/etc /trusted-platform/log /trusted-platform/data
+
+COPY $PLATFORMD /usr/local/bin/platformd
+RUN chmod +x /usr/local/bin/platformd
+
+USER 1000
+
+ENTRYPOINT ["/usr/local/bin/platformd"]

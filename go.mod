@@ -2,7 +2,7 @@ module github.com/jeremyhahn/go-trusted-platform
 
 go 1.23
 
-toolchain go1.23.1
+toolchain go1.23.4
 
 replace golang.org/x/crypto => github.com/jeremyhahn/crypto v1.0.0
 
@@ -23,6 +23,8 @@ require (
 	github.com/google/go-tpm-tools v0.4.4
 	github.com/google/logger v1.1.1
 	github.com/gorilla/mux v1.8.1
+	github.com/libvirt/libvirt-go v7.4.0+incompatible
+	github.com/libvirt/libvirt-go-xml v7.4.0+incompatible
 	github.com/mdobak/go-xerrors v0.3.1
 	github.com/miekg/dns v1.1.62
 	github.com/miekg/pkcs11 v1.1.1

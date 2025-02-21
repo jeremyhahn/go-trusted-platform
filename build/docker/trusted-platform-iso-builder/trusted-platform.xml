@@ -1,0 +1,73 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
+  <name>trusted-platform</name>
+  
+  <memory unit='MiB'>2048</memory>
+  <vcpu placement='static'>2</vcpu>
+  
+  <os>
+    <type arch='x86_64' machine='pc'>hvm</type>
+    <boot dev='cdrom'/>
+    <boot dev='hd'/>
+  </os>
+  
+  <features>
+    <acpi/>
+    <apic/>
+    <pae/>
+  </features>
+  
+  <cpu mode='host-passthrough'/>
+  <cputune>
+    <vcpupin vcpu='0' cpuset='0'/>
+    <vcpupin vcpu='1' cpuset='1'/>
+  </cputune>
+  
+  <devices>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2' cache='writeback'/>
+      <source file='trusted-platform.qcow2'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    
+    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='trusted-platform.iso'/>
+      <target dev='hda' bus='ide'/>
+      <readonly/>
+    </disk>
+    <iothread id='iothread0'/>
+    
+    <interface type='bridge'>
+      <source bridge='virbr0'/>
+      <model type='virtio'/>
+    </interface>
+    
+    <video>
+      <model type='virtio'/>
+    </video>
+    
+    <graphics type='spice' port='-1' listen='127.0.0.1' keymap='en-us'
+      password='password' autoport='yes' tlsPort='-1' tlsKey=''/>
+    
+    <tpm model='tpm-tis' type='passthrough'>
+      <backend type='passthrough' path='/dev/tpm0'/>
+    </tpm>
+    
+    <qemu:commandline>
+      <qemu:arg value='-enable-kvm'/>
+      <qemu:arg value='-cpu'/>
+      <qemu:arg value='host'/>
+      <qemu:arg value='-object'/>
+      <qemu:arg value='iothread,id=iothread0'/>
+      <qemu:arg value='-tpmdev'/>
+      <qemu:arg value='passthrough,id=tpm0,path=/dev/tpm0,cancel-path=/tmp/cancel'/>
+      <qemu:arg value='-device'/>
+      <qemu:arg value='virtio-blk-pci,drive=disk0,iothread=iothread0'/>
+      <qemu:arg value='tpm-tis,tpmdev=tpm0'/>
+    </qemu:commandline>
+  </devices>
+
+  <seclabel type='none'/>
+
+</domain>

@@ -1,5 +1,5 @@
 // @title Trusted Platform
-// @version 0.0.4-alpha.1
+// @version 0.0.6-alpha.1
 // @description The Trusted Platform RESTful Web Services API
 // @termsOfService https://www.trusted-platform.io/terms
 
@@ -239,6 +239,8 @@ func (server *WebServerV1) serveStaticFiles(rootDir, index string, rewriteRules 
 	return func(w http.ResponseWriter, r *http.Request) {
 		requestPath := filepath.Clean(r.URL.Path)
 		server.logger.Debug("Incoming request",
+			slog.String("remoteAddr", r.RemoteAddr),
+			slog.String("method", r.Method),
 			slog.String("requestPath", requestPath),
 		)
 
@@ -520,6 +522,14 @@ func (server *WebServerV1) startHTTPS() {
 	}
 }
 
+// Add HTTP/3 alt-svc header to responses
+func addAltSvcHeader(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Alt-Svc", `h3=":443"; ma=86400`)
+		next.ServeHTTP(w, r)
+	})
+}
+
 // Build the routes for the web server. This is a thread safe operation that
 // can be used to dynamically update the web server routes at runtime.
 func (server *WebServerV1) buildRoutes() {
@@ -548,7 +558,7 @@ func (server *WebServerV1) buildRoutes() {
 
 	server.routerMutex.Lock()
 	server.router = muxRouter
-	server.httpServer.Handler = server.router
+	server.httpServer.Handler = addAltSvcHeader(server.router)
 	server.routerMutex.Unlock()
 
 	if server.debug {

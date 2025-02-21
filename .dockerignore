@@ -1,0 +1,6 @@
+build/docker/ansible-ee/context/
+build/docker/pxe-server/volume/
+platformd*
+*.iso
+*.qcow2*
+*.efi

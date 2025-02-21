@@ -1,3 +1,16 @@
-- Include cross-signing CA's root and intermediate
-  certs in TLS configs, cert bundles and cert pools.
-- Misc bug fixes and cleanup
+- Create docker pxe-server
+- Iterate on docker platform builder and runtime containers
+- Create docker ansible execution environment
+- Make DNS forwarders optional, remove public forwarding from configs
+- Create docker trusted-platform-iso-builder to build custom ISO w/ custom secure boot keys
+- Start integration with libvirt and docker to perform automated provisioning of compute
+  instances and deployment orchestration.
+- Create ansible playbooks to support docker, k3s and podman deployment environments
+- Integrate ansible playbooks with trusted-platform-iso-builder first boot script
+- Enable LUKS full drive encryption via ISO installer preseed
+- systemd-cryptenroll integration started but encountered bug on debian/ubuntu:
+  - https://bugs.launchpad.net/ubuntu/+source/cryptsetup/+bug/1980018
+  - https://answers.launchpad.net/ubuntu/+question/702266
+  - https://salsa.debian.org/cryptsetup-team/cryptsetup/-/merge_requests/39/diffs#00524e372ebef34fc25a9ccf26625e53d9a78a00
+- Add more documentation
+- Remove support for 32-bit architectures

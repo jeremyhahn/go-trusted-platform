@@ -1,0 +1,214 @@
+ARG BASE_IMAGE="debian:bookworm"
+
+FROM $BASE_IMAGE
+
+LABEL maintainer="Jeremy Hahn <mail@jeremyhahn.com>"
+
+ENV DEBIAN_FRONTEND=noninteractive
+ARG SRC_DIR=.
+ARG BUILD_DIR=/builder
+ARG ENTRY_POINT=build/docker/trusted-platform-builder/entrypoint.sh
+ARG GO_VERSION=go1.23.4
+ARG OPENSSL=openssl-3.3
+ARG TPM2_TSS_TAG=4.1.3
+ARG TPM2_ABRMD_TAG=3.0.0
+ARG TPM2_TOOLS_TAG=5.7
+ARG OPENSC_TAG=0.25.1
+ARG SOFTHSM_TAG=2.6.1
+ARG TPM2_PKCS11_TAG=1.9.0
+ARG YUBICO_PIV_TOOL_TAG=yubico-piv-tool-2.5.2
+ARG TPM2_PYTSS=2.3.0
+ARG TP_TAG=v0.0.6-alpha.1
+ARG NVM_VERSION=v0.39.5
+
+SHELL ["/bin/bash", "-c"]
+
+WORKDIR $BUILD_DIR
+
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y \
+        --no-install-recommends \
+        --reinstall ca-certificates \
+        vim \
+        curl \
+        autoconf \
+        build-essential \
+        git \
+        cmake \
+        libtool \
+        libssl-dev \
+        pkg-config \
+        check \
+        libpcsclite-dev \
+        gengetopt \
+        help2man \
+        zlib1g-dev \
+        pcscd \
+        autoconf-archive \
+        libcmocka0 \
+        libcmocka-dev \
+        procps \
+        iproute2 \
+        gcc \
+        automake \
+        uthash-dev \
+        doxygen \
+        libjson-c-dev \
+        libini-config-dev \
+        libcurl4-openssl-dev \
+        uuid-dev \
+        libltdl-dev \
+        libusb-1.0-0-dev \
+        libftdi-dev \
+        libglib2.0-dev \
+        wget \
+        libsqlite3-dev \
+        sqlite3 \
+        pandoc \
+        libcppunit-dev \
+        libyaml-dev \
+        python3 \
+        python3-dev \
+        python3-pip \
+        python3-yaml \
+        python3-setuptools \
+        python3-wheel \
+        python3.venv \
+        python3-pyasn1-modules \
+        python3-cryptography \
+        pipx \
+        libtss2-tcti-tabrmd-dev \
+        libvirt-dev \
+        yubikey-manager \
+        libu2f-udev && \
+    rm -rf /var/cache/apt/archives /var/lib/apt/lists/* && \
+    echo "*\t-\tmemlock\tunlimited" > /etc/security/limits.conf
+
+# RUN git clone --depth=1 --branch $OPENSSL https://github.com/openssl/openssl.git && \
+#     openssl && \
+#     ./Configure \
+#     make -j$(nproc) && \
+#     make -j$(nproc) install && \
+#     ldconfig
+
+RUN git clone --depth=1 --branch $TPM2_TSS_TAG https://github.com/tpm2-software/tpm2-tss.git && \
+    cd tpm2-tss && \
+    ./bootstrap && \
+    ./configure --with-udevrulesprefix && \
+    make -j$(nproc) && \
+    make -j$(nproc) install && \
+    ldconfig
+
+RUN git clone --depth=1 --branch $TPM2_ABRMD_TAG https://github.com/tpm2-software/tpm2-abrmd.git && \
+    cd tpm2-abrmd && \
+    ./bootstrap && \
+    ./configure && \
+    make -j$(nproc) && \
+    make -j$(nproc) install && \
+    ldconfig 
+
+RUN git clone --depth=1 --branch $TPM2_TOOLS_TAG https://github.com/tpm2-software/tpm2-tools.git && \
+    cd tpm2-tools && \
+    ./bootstrap && \
+    ./configure && \
+    make -j$(nproc) && \
+    make -j$(nproc) install && \
+    make check && \
+    ldconfig
+
+RUN mkdir ibmtpm && \
+    cd ibmtpm && \
+    wget https://sourceforge.net/projects/ibmswtpm2/files/latest/download -O ibmtpm.tar.gz && \
+    tar -zxvf ibmtpm.tar.gz && \
+    cd src && \
+    make -j$(nproc) && \
+    make -j$(nproc) install && \
+    ldconfig
+
+RUN git clone --depth=1 --branch $OPENSC_TAG https://github.com/OpenSC/OpenSC.git && \
+    cd OpenSC && \
+    ./bootstrap && \
+    ./configure && \
+    make -j$($nproc) && \
+    make -j$(nproc) install && \
+    ldconfig
+
+RUN git clone --depth=1 --branch $SOFTHSM_TAG https://github.com/opendnssec/SoftHSMv2.git && \
+    cd SoftHSMv2 && \
+    ./autogen.sh || true && \
+    ./autogen.sh && \
+    ./configure --with-objectstore-backend-db && \
+    make -j$(nproc) && \
+    make -j$(nproc) install && \
+#    make check && \
+    ldconfig
+
+RUN git clone --depth=1 --branch $TPM2_PKCS11_TAG https://github.com/tpm2-software/tpm2-pkcs11.git && \
+        cd tpm2-pkcs11 && \
+        ./bootstrap && \
+            git clone --depth=1 --branch $TPM2_PYTSS https://github.com/tpm2-software/tpm2-pytss && \
+                cd tpm2-pytss && \
+                python3 -m venv venv && \
+                source ./venv/bin/activate && \
+                pip install -U pip && \
+                pip install pyasn1_modules wheel tpm2-pytss && \
+                LD_LIBRARY_PATH=/usr/local/lib ../configure --with-fapi --enable-unit && \
+                make -j$(nproc) && \
+                make -j$(nproc) install && \
+                # make check && \
+                ldconfig
+
+RUN git clone --depth=1 --branch $YUBICO_PIV_TOOL_TAG https://github.com/Yubico/yubico-piv-tool.git && \
+    cd yubico-piv-tool && \
+    mkdir build &&  \
+    cd build && \
+    cmake .. -DOPENSSL_STATIC_LINK=ON && \
+    cmake --build . && \
+    make -j$(nproc) && \
+    make -j$(nproc) install  && \
+    ldconfig
+
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -sSL "https://go.dev/dl/${GO_VERSION}.linux-${ARCH}.tar.gz" -o go.tar.gz && \
+    rm -rf /usr/local/go && \
+    tar -C /usr/local -xzf go.tar.gz && \
+    rm go.tar.gz && \
+    ln -sf /usr/local/go/bin/* /usr/local/bin/ && \
+    go version
+
+RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh | bash && \
+    export NVM_DIR="$HOME/.nvm" && \
+    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && \
+    [ -s "$NVM_DIR/bash_completion" ] && . "$NVM_DIR/bash_completion" && \
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh | bash && \
+    export NVM_DIR="$HOME/.nvm" && \
+    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && \
+    [ -s "$NVM_DIR/bash_completion" ] && . "$NVM_DIR/bash_completion" && \
+    nvm install 21.1.0 && \
+    nvm use 21.1.0 && \
+    nvm alias default 21.1.0 && \
+    ln -sf "$NVM_DIR/versions/node/$(nvm version)/bin/node" /usr/local/bin/node && \
+    ln -sf "$NVM_DIR/versions/node/$(nvm version)/bin/npm" /usr/local/bin/npm && \
+    ln -sf "$NVM_DIR/versions/node/$(nvm version)/bin/npx" /usr/local/bin/npx && \
+    npm install --global yarn && \
+    ln -sf "$NVM_DIR/versions/node/$(nvm version)/bin/yarn" /usr/local/bin/yarn && \
+    node -v && npm -v && yarn -v
+
+# go-trusted-platform-web (dashboard)
+RUN git clone https://github.com/jeremyhahn/go-trusted-platform-web.git && \
+    cd go-trusted-platform-web && \
+    yarn install && \
+    yarn build
+
+COPY $SRC_DIR go-trusted-platform
+
+# go-trusted-platform (platform software)
+RUN cd go-trusted-platform && \
+    go install github.com/swaggo/swag/cmd/swag@latest && \
+    make build-public-html build build-debug
+
+COPY --chown=root:root --chmod=755 $ENTRY_POINT /usr/local/bin/entrypoint.sh
+COPY build/docker/trusted-platform-builder/70-u2f.rules /etc/udev/rules.d/70-u2f.rules
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

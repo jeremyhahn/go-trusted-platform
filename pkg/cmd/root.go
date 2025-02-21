@@ -42,6 +42,10 @@ connected devices.`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 	},
 	Run: func(cmd *cobra.Command, args []string) {
+		if len(args) == 0 && len(cmd.Flags().Args()) == 0 {
+			cmd.Help()
+			return
+		}
 	},
 	TraverseChildren: true,
 }

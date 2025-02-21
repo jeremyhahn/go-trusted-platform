@@ -3,18 +3,22 @@
 
 ## Overview
 
+The `Trusted Platform` is _platform software_ and tooling with a "batteries included" approach to building trusted, confidential computing platforms and networks.
+
 The `Trusted Platform` uses a [Trusted Platform Module (TPM)](https://en.wikipedia.org/wiki/Trusted_Platform_Module), [Secure Boot](https://en.wikipedia.org/wiki/UEFI), and a provided [Certificate Authority](https://en.wikipedia.org/wiki/Certificate_authority) to establish a Platform Root of Trust for Storage & Reporting, perform Local and [Remote Attestation](https://tpm2-software.github.io/tpm2-tss/getting-started/2019/12/18/Remote-Attestation.html), encryption, signing, x509 certificate management, data integrity, intrusion detection, licensing, device provisioning and more.
 
-This software is intended for use by device manufacturers, enterprise administrators, platform administrators and end users to be used as `Platform Software` as described by the [Trusted Computing Group](https://trustedcomputinggroup.org/), a framework for building secure and/or "trusted" services, or a library for building custom platforms and services based on Trusted, Confidential Computing technologies.
+This software is intended for use by device manufacturers, enterprise administrators, platform administrators and end users, as `Platform Software` as described by the [Trusted Computing Group](https://trustedcomputinggroup.org/), the consortium focusd on building specs, use cases, and frameworks for building Trusted Computing platforms.
+
+This software may be used as a program, toolkit, and/or library for building custom platforms and services based on Trusted, Confidential Computing technologies.
 
 Some use cases include:
 
 * Private / Public / Hybrid Cloud Service Providers
 * OEM Device Manufacturing
 * Automated Device Provisioning
-- Automated Device Fleet Management
+* Automated Device Fleet Management
 * DevOps Automation Platform
-* TCG Enterprise Admin, Platform Admin, & User operations
+* TCG Enterprise Admin, Platform Admin, & User tooling
 * Automated Certificate Management
 * Enterprise Network Management
 * Mobile Device Management
@@ -25,9 +29,14 @@ Some use cases include:
 * PKI-as-a-Service
 * OEM & Cloud Service Provider Licensing
 * Digital Rights Management
+* Local storage of high value assets
 
+In addition to the Trusted Computing features, this software makes hardware based security a first-class citizen, with full support for PKCS11, PIV, and FIDO2 passkeys, incorporating a full end-to-end hardware based X.509 PKI based architcture for platforms, networks, services, and end users.
+
+These features, when combined with remote attestation, provide clients on the trusted network with strong guarantees of privacy, security, and integrity, based on irrefutable, zero-trust, zero-knowledge proofs provided by modern cryptography standards and protocols.
 
 For detailed documentation on the components used in this project, please refer to the [docs](docs/OVERVIEW.md).
+
 
 ## Build
 
@@ -51,7 +60,7 @@ Optional dependencies:
 
 #### Build
 
-Use the included `Makefile` to build and perform initial setup.
+Use the included `Makefile` to build the platform software, docker container and ISOs.
 
     # Build the binary
     make
@@ -59,10 +68,24 @@ Use the included `Makefile` to build and perform initial setup.
     # Run tests
     make test
 
+    # Build docker containers
+    make docker
+
+    # Build ISOs
+    make isos
+
+
+## Install
+
+The easiest way to install the Trusted Platform is to use the ISO installer or docker container, as they include the platform software with automation capabilities that facilitate the installation and configuration for custom secure boot key enrollment, binary signing, TPM 2.0, LUKS full disk encryption, and support tooling.
+
+See the [Reference Architecture](docs/ARCHITECTURE-REF.md) doc for details on the various components and how they're configured.
+
+The [trusted-platform-iso-builder](build/docker/trusted-platform-iso-builder/) docker container contains a `Makefile` that can be used to launch QEMU instances in a couple different UEFI configurations, including plain UEFI, UEFI w/ Microsoft Secure Boot Signing Certs, and UEFI w/ Custom Secure Boot Keys & Signing Certificates.
 
 #### Configuration
 
-Copy a [config file](configs/platform/config.dev.yaml) to `./config.yaml` (where you will run the `tpadm` binary). Edit the configuration file according to your environment and requirements.
+Copy a [config file](configs/platform/) to `./config.yaml` (where you will run the `platformd` binary). Edit the configuration file according to your environment and requirements.
 
 The Trusted Platform will try to read the TPM Endorsement Key Certificate from NVRAM, however, not all TPM's have their certificates flashed to NVRAM. Next it will attempt to download the EK certificate from the Manufacturer website (currently only Intel is supported). If neither of these methods is able to locate your TPM EK certificate, an EK certificate will be generated. If an EK `cert-handle` is defined, the generated certificate will be written to NV RAM. It may optionally be stored in the x509 certificate store.
 
@@ -79,6 +102,14 @@ The TPM 2.0 spec does not support Curve25519, but does support ECDSA. Unfortunat
 
 If you're looking for general guidance, EdDSA Curve25519 provides the best security by modern standards, followed by RSA (PSS) using strong keys, preferably 4096 bit. The [NitroKey 3](https://www.nitrokey.com/products/nitrokeys) is a cost effective PKCS #11 solution providing both RSA 4096 bit keys and Curve25519.
 
+## Vulnerabilities
+
+The following critical vulnerabilities have been discovered in TPM 2.0:
+
+* [CVE-2023-1017](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2023-1017)
+* [CVE-2023-1018](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2023-1018)
+
+For a detailed description on these vulnerabilities and their impact, see [this article](https://blog.quarkslab.com/vulnerabilities-in-the-tpm-20-reference-implementation-code.html).
 
 ##### Web Services
 
@@ -91,7 +122,7 @@ Procedure to start the embedded web services for the first time:
     cp configs/platform/config.prod.yaml config.yaml
 
     # Run web services
-    ./tpadm webservice
+    ./platformd webservice
 
     # Navigate to OpenAPI docs
     xdg-open https://localhost:8443/swagger/
@@ -124,31 +155,6 @@ PKCS #11 does not support secondary key passwords.
 Specifying the *default password* of `123456` for a key's password or secret attributes, will result in an auto-generated 32 byte, 256 bit password or secret.
 
     If a `platform-policy` attribute is not set for the key, it's password will need to be manually entered anytime an operation that requires it's password is performed.
-
-
-## LUKS
-
-At this time, preliminary support for LUKS is included in the `Makefile`. In the future, full LUKS integration will be provided through the platform software.
-
-To setup an ecnrypted LUKS `trusted-data` volume for platform data, use the included `luks-create` Makefile target. 
-
-    # Setup LUKS encrypted volume w/ Makefile
-    make luks-create
-
-If you don't trust the trusted `Makefile`, you can create your own key file and volume like this:
-
-    # Generate LUKS key file
-    echo -n "my-secret" > luks.key
-
-    # Generate strong key file w/ random bytes
-    dd bs=2048 count=4 if=/dev/random of=luks.key
-
-    # Create LUKS volume
-    sudo cryptsetup luksFormat --type luks2 trusted-data.luks2 luks.key
-
-Then you can use the `luks-mount` target to mount your volume prior to starting the platform.
-
-Don't forget to remove your LUKS key from the system. In the future, this step will be fully automated and the key will be sealed to the TPM.
 
 
 ## Platform Startup & Local Attestation
@@ -381,8 +387,7 @@ attestation/verifier/trusted-data/
         └── signing-keys
 ```
 
-## Status
-
+## Roadmap / Status
 
 This project is under active development, APIs can change at any moment.
 
@@ -527,10 +532,11 @@ The current list of intended features and their status are shown below.
         - [ ] Full LUKS integration to create and manage volumes
     - [ ] Automated Setup and Provisioning
         - [ ] Trusted Platform
-            - [ ] PXE Boot
-            - [ ] Bare Metal (ISO)
-            - [ ] Raspberry PI (SD Image)
-            - [ ] Docker
+            - [x] PXE Boot
+            - [x] Bare Metal (ISO) (Secure Boot)
+            - [x] Raspberry PI (SD Image)
+            - [x] Docker (Secure Boot)
+            - [x] QEMU / KVM (Secure Boot)
             - [ ] Kubernetes
             - [ ] Amazon Web Services
             - [ ] Google Cloud
@@ -589,23 +595,20 @@ The current list of intended features and their status are shown below.
                 - [ ] Unmount luks container (re-sealing the platform)
                 - [ ] Delete luks volume & platform binary
                 - [ ] Wipe file system
-    - [ ] Data Vaults
+    - [ ] Shared Volumes
         - [ ] Data storage
             - [ ] Local
             - [ ] IPFS
             - [ ] S3
             - [ ] ...
         - [ ] Encryption & Signing
-        - [ ] Share w/ Digital Rights Management
+        - [ ] Digital Rights Management
     - [ ] Monetization Features
         - [ ] [Stripe](https://stripe.com/) Integration
-        - [ ] Data Vaults
+        - [ ] Smart Contracts
+        - [ ] Shared Volumes
         - [ ] Web Service Endpoints
-        - [ ] Platform & Device Licensing
-    - [ ] Blockchain & Smart Contract Integration
-        - [ ] [Ethereum](https://ethereum.org/en/)
-        - [ ] [Tangle](https://www.iota.org/get-started/what-is-iota)
-
+        - [ ] Digital Licensing
 
 
 ## Sponsors

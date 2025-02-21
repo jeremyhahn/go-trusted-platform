@@ -1,4 +1,4 @@
-% tpadm platform destroy | Trusted Platform Commands Manual
+% platformd platform destroy | Trusted Platform Commands Manual
 
 # NAME
 
@@ -27,7 +27,7 @@ information many users may expect.
 
 ## Clear the TPM and destroy all platform data
 ```bash
-tpadm platform destroy
+platformd platform destroy
 ```
 
 # AUTHOR

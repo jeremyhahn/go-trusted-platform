@@ -1,4 +1,4 @@
-% tpadm provision platform | Trusted Platform Commands Manual
+% platformd provision platform | Trusted Platform Commands Manual
 
 # NAME
 
@@ -38,7 +38,7 @@ information many users may expect.
 
 ## Provision a new platform per TCG recommended guidance
 ```bash
-tpadm platform provision
+platformd platform provision
 ```
 # AUTHOR
     Jeremy Hahn

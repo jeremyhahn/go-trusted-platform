@@ -1,4 +1,4 @@
-% tpadm tpm seal | Trusted Platform Commands Manual
+% platformd tpm seal | Trusted Platform Commands Manual
 
 # NAME
 
@@ -48,12 +48,12 @@ information many users may expect.
 
 ## Retrieve the default Root CA seal (PKCS8, RSA)
 ```bash
-tpadm tpm seal --cn root-ca.example.com
+platformd tpm seal --cn root-ca.example.com
 ```
 
 ## Retrieve the Root CA seal using provided store and key algorithm
 ```bash
-tpadm tpm seal --cn root-ca.example.com --algorithm ecdsa --store pkcs11
+platformd tpm seal --cn root-ca.example.com --algorithm ecdsa --store pkcs11
 ```
 
 # AUTHOR

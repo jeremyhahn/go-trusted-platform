@@ -11,6 +11,9 @@
 **/*.sig
 **/*.crl
 **/*.luks*
+**/*.iso
+**/*.qcow2*
+**/*.efi
 db/
 logs/
 ca/certs
@@ -22,7 +25,7 @@ attestation/verifier/trusted-data
 attestation/verifier/logs
 attestation/verifier/config.yaml
 python-venv/
-tpadm
+platformd-*
 ./config.yaml
 ./pkg/config.yaml
 pkg/public_html
@@ -31,4 +34,5 @@ trusted-data
 build/packer/output-arm-image/
 build/packer/packer_cache/
 build/packer/trusted-platform-*
-trusted-platform.iso
+build/docker/ansible-ee/context/
+build/docker/pxe-server/volume/

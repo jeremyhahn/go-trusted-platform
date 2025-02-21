@@ -1,4 +1,4 @@
-% tpadm ca revoke | Trusted Platform Commands Manual
+% platformd ca revoke | Trusted Platform Commands Manual
 
 # NAME
 
@@ -26,17 +26,17 @@ revokermation many users may expect.
 
 ## Revoke RSA TPM 2.0 end entity certificate
 ```bash
-tpadm ca revoke webserver.mydomain.com tpm2 rsa
+platformd ca revoke webserver.mydomain.com tpm2 rsa
 ```
 
 ## Revoke ECDSA PKCS #11 end entity certificate
 ```bash
-tpadm ca revoke webserver.mydomain.com pkcs11 ecdsa
+platformd ca revoke webserver.mydomain.com pkcs11 ecdsa
 ```
 
 ## Remove PKCS #8 Ed25519 end entity certificate
 ```bash
-tpadm ca revoke webserver.mydomain.com pkcs8 ed25519
+platformd ca revoke webserver.mydomain.com pkcs8 ed25519
 ```
 
 # AUTHOR

@@ -1,4 +1,4 @@
-% tpadm attestor | Trusted Platform Commands Manual
+% platformd attestor | Trusted Platform Commands Manual
 
 # NAME
 
@@ -33,5 +33,5 @@ information many users may expect.
 
 ## Start the attestor service
 ```bash
-tpadm attestor
+platformd attestor
 ```

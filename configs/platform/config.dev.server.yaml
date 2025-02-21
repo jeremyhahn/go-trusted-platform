@@ -124,9 +124,6 @@ dns:
   default-ttl: 3600
   public:
     port: 8053
-    forwarders:
-      - 4.4.4.4
-      - 8.8.8.8
     zone:
       description: Public zone for dev.trusted-platform.io
       name: dev.trusted-platform.io.

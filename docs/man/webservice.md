@@ -1,4 +1,4 @@
-% tpadm webservice | Trusted Platform Commands Manual
+% platformd webservice | Trusted Platform Commands Manual
 
 # NAME
 
@@ -31,5 +31,5 @@ information many users may expect.
 
 ## Start the embedded web server
 ```bash
-tpadm webservice
+platformd webservice
 ```

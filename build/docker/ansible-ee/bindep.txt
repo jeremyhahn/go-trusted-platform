@@ -1,4 +1,0 @@
-gcc
-libffi-devel
-python3-devel
-openssl-devel
