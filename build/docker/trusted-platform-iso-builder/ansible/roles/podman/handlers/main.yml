@@ -1,5 +1,0 @@
----
-- name: Restart Podman
-  systemd:
-    name: podman
-    state: restarted

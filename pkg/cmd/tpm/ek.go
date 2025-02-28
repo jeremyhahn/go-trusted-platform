@@ -12,20 +12,14 @@ import (
 )
 
 var (
-	ekCA             bool
-	ekCert           bool
-	ekCN             string
-	ekECC            bool
-	ekHandle         uint32
-	ekMAC            bool
-	ekParentHandle   uint32
-	ekParentPassword string
-	ekParentPolicy   bool
-	ekPassword       string
-	ekPersistent     bool
-	ekPolicy         bool
-	ekRSA            bool
-	ekTLS            bool
+	ekCert       bool
+	ekCN         string
+	ekECC        bool
+	ekHandle     uint32
+	ekPassword   string
+	ekPersistent bool
+	ekPolicy     bool
+	ekRSA        bool
 )
 
 func init() {

@@ -41,13 +41,16 @@ func (tpm *TPM2) Seal(
 		}
 	}
 
+	template := KeyedHashTemplate
+	template.NameAlg = tpm.algID
+
 	if keyAttrs.TPMAttributes == nil {
 		keyAttrs.TPMAttributes = &keystore.TPMAttributes{
-			Template: KeyedHashTemplate,
+			Template: template,
 		}
 	}
 	if keyAttrs.TPMAttributes.Template.Type == 0 {
-		keyAttrs.TPMAttributes.Template = KeyedHashTemplate
+		keyAttrs.TPMAttributes.Template = template
 	}
 
 	if keyAttrs.PlatformPolicy {

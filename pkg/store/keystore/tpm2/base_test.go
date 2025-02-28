@@ -23,10 +23,11 @@ var CLEAN_TMP = false
 var REAL_TPM_TESTS = false
 
 var (
-	ekHandle     uint32 = 0x81010001
-	srkHandle    uint32 = 0x81000001
-	ekCertHandle uint32 = 0x01C00002
-	platformPCR  uint   = 16
+	ekHandle        uint32 = 0x81010001
+	srkHandle       uint32 = 0x81000001
+	ekCertHandle    uint32 = 0x01C00002
+	platformPCR     uint   = 16
+	platformPCRBank string = "sha256"
 
 	ksSRKHandle uint32 = 0x81000003
 )
@@ -101,7 +102,8 @@ func createKeyStore(
 			},
 			SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
 		},
-		PlatformPCR: platformPCR,
+		PlatformPCR:     platformPCR,
+		PlatformPCRBank: platformPCRBank,
 		SSRK: &tpm2.SRKConfig{
 			Handle:        srkHandle,
 			HierarchyAuth: keystore.DEFAULT_PASSWORD,

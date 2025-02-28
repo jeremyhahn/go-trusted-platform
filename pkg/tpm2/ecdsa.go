@@ -47,6 +47,8 @@ func (tpm *TPM2) CreateECDSA(
 	defer closer()
 
 	eccTemplate := ECCP256Template
+	eccTemplate.NameAlg = tpm.algID
+
 	if keyAttrs.PlatformPolicy {
 		// Attach platform PCR policy digest if configured
 		eccTemplate.AuthPolicy = tpm.PlatformPolicyDigest()

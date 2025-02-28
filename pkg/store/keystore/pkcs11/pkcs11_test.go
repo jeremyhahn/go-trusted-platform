@@ -497,7 +497,8 @@ func createTPM(
 			},
 			SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
 		},
-		PlatformPCR: 16,
+		PlatformPCR:     16,
+		PlatformPCRBank: tpm2.PCRBankSHA256,
 		SSRK: &tpm2.SRKConfig{
 			Handle:        0x81000001,
 			HierarchyAuth: keystore.DEFAULT_PASSWORD,

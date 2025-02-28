@@ -188,7 +188,8 @@ func createSim(encrypt, entropy bool) (*logging.Logger, TrustedPlatformModule) {
 			},
 			SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
 		},
-		PlatformPCR: debugPCR,
+		PlatformPCR:     debugPCR,
+		PlatformPCRBank: debugPCRBank,
 		SSRK: &SRKConfig{
 			Handle:        0x81000001,
 			HierarchyAuth: keystore.DEFAULT_PASSWORD,

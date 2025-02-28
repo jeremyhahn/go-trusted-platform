@@ -112,14 +112,16 @@ func (tpm *TPM2) PlatformPolicySession() (tpm2.Session, func() error, error) {
 	var closer func() error
 	var err error
 
-	// TODO: read from config
-	hashAlg := tpm2.TPMAlgSHA256
+	hashAlgID, err := ParsePCRBankAlgID(tpm.config.PlatformPCRBank)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// Create PCR selection using "platform-pcr" defined in the platform
 	// configuration file TPM section.
 	sel := tpm2.TPMLPCRSelection{
 		PCRSelections: []tpm2.TPMSPCRSelection{{
-			Hash:      hashAlg,
+			Hash:      hashAlgID,
 			PCRSelect: tpm2.PCClientCompatible.PCRs(tpm.config.PlatformPCR),
 		}},
 	}
@@ -131,7 +133,7 @@ func (tpm *TPM2) PlatformPolicySession() (tpm2.Session, func() error, error) {
 
 	// Create the policy session
 	session, closer, err := tpm2.PolicySession(
-		tpm.transport, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{}...)
+		tpm.transport, hashAlgID, 16, []tpm2.AuthOption{}...)
 	if err != nil {
 		tpm.logger.Error(err)
 		return nil, nil, err

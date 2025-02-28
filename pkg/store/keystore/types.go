@@ -113,6 +113,7 @@ var (
 	ErrSOPinRequired                 = errors.New("store/keystore: security officer PIN required")
 	ErrUserPinRequired               = errors.New("store/keystore: user PIN required")
 	ErrInvalidPassword               = errors.New("store/keystore: invalid password")
+	ErrInvalidPasswordLength         = errors.New("store/keystore: invalid password length")
 	ErrInvalidKeyPartition           = errors.New("store/keystore: invalid key partition")
 	ErrInvalidEncodingPEM            = errors.New("store/keystore: invalid PEM encoding")
 	ErrUnsupportedKeyAlgorithm       = errors.New("store/keystore: unsupported key algorithm")

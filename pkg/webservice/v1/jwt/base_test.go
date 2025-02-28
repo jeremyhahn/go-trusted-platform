@@ -38,7 +38,8 @@ var (
 	tpmksSRKHandle      uint32 = 0x81000002
 	tpmksKeyHandle      uint32 = 0x81000012
 
-	platformPCR uint = 16
+	platformPCR     uint   = 16
+	platformPCRBank string = "sha256"
 )
 
 var TEST_SOFTHSM_CONF = []byte(`
@@ -254,7 +255,8 @@ func createKeyring() *platform.Keyring {
 				KeySize: 2048,
 			},
 		},
-		PlatformPCR: platformPCR,
+		PlatformPCR:     platformPCR,
+		PlatformPCRBank: platformPCRBank,
 		FileIntegrity: []string{
 			"./",
 		},

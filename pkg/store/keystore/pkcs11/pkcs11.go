@@ -284,6 +284,8 @@ func (ks *KeyStore) pin() (keystore.Password, error) {
 
 // Returns key attriibutes for the PKCS #11 key store pin
 func (ks *KeyStore) keyAttrsTemplate() *keystore.KeyAttributes {
+	template := tptpm2.KeyedHashTemplate
+	template.NameAlg = ks.params.TPMKS.TPM2().AlgID()
 	tpmkskAttrs := ks.params.TPMKS.SRKAttributes()
 	ksAttrs := &keystore.KeyAttributes{
 		CN:             fmt.Sprintf("%s.pin", ks.params.Config.CN),
@@ -297,7 +299,7 @@ func (ks *KeyStore) keyAttrsTemplate() *keystore.KeyAttributes {
 		TPMAttributes: &keystore.TPMAttributes{
 			HandleType: libtpm2.TPMHTTransient,
 			Hierarchy:  tpm2.TPMRHOwner,
-			Template:   tptpm2.KeyedHashTemplate,
+			Template:   template,
 		},
 	}
 	if ksAttrs.PlatformPolicy {

@@ -67,7 +67,8 @@ const (
 )
 
 var (
-	debugPCR = uint(16)
+	debugPCR     = uint(16)
+	debugPCRBank = PCRBankSHA256
 
 	tpm2SupportedPCRs = []uint{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
 		11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23}
@@ -101,6 +102,7 @@ var (
 	ErrMissingMeasurementLog        = errors.New("tpm: binary measurement log not found")
 	ErrRSAPSSNotSupported           = errors.New("tpm: RSA-PSS / FIPS 140-2 not supported by this TPM")
 	ErrInvalidEnrollmentStrategy    = errors.New("tpm: invalid enrollment strategy")
+	ErrInvalidCryptoHashAlgID       = errors.New("tpm: crypto.Hash doesn't map to a supported TPMAlgID")
 
 	// TPM_RC errors
 	ErrCommandNotSupported = tpm2.TPMRC(0xb0143)
@@ -746,6 +748,8 @@ func HierarchyName(hierarchy tpm2.TPMHandle) string {
 
 func ParseHashAlgFromString(hash string) (tpm2.TPMIAlgHash, error) {
 	switch strings.ToUpper(hash) {
+	case crypto.SHA1.String():
+		return tpm2.TPMAlgSHA1, nil
 	case crypto.SHA256.String():
 		return tpm2.TPMAlgSHA256, nil
 	case crypto.SHA384.String():
@@ -758,6 +762,8 @@ func ParseHashAlgFromString(hash string) (tpm2.TPMIAlgHash, error) {
 
 func ParseHashAlg(hash crypto.Hash) (tpm2.TPMIAlgHash, error) {
 	switch hash {
+	case crypto.SHA1:
+		return tpm2.TPMAlgSHA1, nil
 	case crypto.SHA256:
 		return tpm2.TPMAlgSHA256, nil
 	case crypto.SHA384:
@@ -770,6 +776,8 @@ func ParseHashAlg(hash crypto.Hash) (tpm2.TPMIAlgHash, error) {
 
 func ParseHashSize(hash crypto.Hash) (uint32, error) {
 	switch hash {
+	case crypto.SHA1:
+		return 20, nil
 	case crypto.SHA256:
 		return 32, nil
 	case crypto.SHA384:

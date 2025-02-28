@@ -117,11 +117,7 @@ certificate-authority:
   default-idevid-cn: default-device-id
   sans-include-localhost: true
   require-password: true
-<<<<<<< HEAD:configs/platform/config.prod.yaml
   quantum-safe: false
-=======
-  quantum-safe: true
->>>>>>> feature/acme:examples/client/config.yaml
   identity:
     - 
       keystores:

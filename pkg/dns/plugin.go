@@ -206,11 +206,15 @@ func setup(c *caddy.Controller) error {
 	}
 
 	// Process internal and public server zones
-	if err := processZone(Configuration.InternalServer.Zone, zoneDAO, "internal"); err != nil {
-		return fmt.Errorf("failed to process internal zone: %w", err)
+	if Configuration.InternalServer != nil {
+		if err := processZone(Configuration.InternalServer.Zone, zoneDAO, "internal"); err != nil {
+			return fmt.Errorf("failed to process internal zone: %w", err)
+		}
 	}
-	if err := processZone(Configuration.PublicServer.Zone, zoneDAO, "public"); err != nil {
-		return fmt.Errorf("failed to process public zone: %w", err)
+	if Configuration.PublicServer != nil {
+		if err := processZone(Configuration.PublicServer.Zone, zoneDAO, "public"); err != nil {
+			return fmt.Errorf("failed to process public zone: %w", err)
+		}
 	}
 
 	// Register the plugin in the middleware chain

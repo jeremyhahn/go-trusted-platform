@@ -57,6 +57,11 @@ Optional dependencies:
 
     For FIPS compliance, a FIPS certified token is required.
 
+Supported Operating Systems:
+
+* [Debian](https://www.debian.org/)
+* [Alpine](https://www.alpinelinux.org/)
+
 
 #### Build
 

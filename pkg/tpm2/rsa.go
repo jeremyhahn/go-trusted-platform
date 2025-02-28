@@ -43,8 +43,11 @@ func (tpm *TPM2) CreateRSA(
 	// protected by the platform auth policy that requires the platform
 	// PCR value with the Golden Integrity Measurements to release.
 	rsaTemplate := RSASSATemplate
+	rsaTemplate.NameAlg = tpm.algID
+
 	if keystore.IsRSAPSS(keyAttrs.SignatureAlgorithm) {
 		rsaTemplate = RSAPSSTemplate
+		rsaTemplate.NameAlg = tpm.algID
 	}
 
 	// Attach platform PCR policy digest if configured

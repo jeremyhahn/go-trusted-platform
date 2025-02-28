@@ -263,17 +263,22 @@ func (tpm *TPM2) KeyAttributes(
 		return nil, err
 	}
 
+	hash, err := tpm.algID.Hash()
+	if err != nil {
+		return nil, err
+	}
+
 	attrs := &keystore.KeyAttributes{
 		Debug:        tpm.debugSecrets,
 		KeyAlgorithm: keyAlgo,
 		KeyType:      keystore.KEY_TYPE_TPM,
 		StoreType:    keystore.STORE_TPM2,
-		Hash:         tpm.hash,
+		Hash:         hash,
 		TPMAttributes: &keystore.TPMAttributes{
 			BPublic:        pub.OutPublic,
 			Handle:         handle,
 			HandleType:     tpm2.TPMHTTransient,
-			HashAlg:        tpm2.TPMAlgSHA256,
+			HashAlg:        tpm.algID,
 			Hierarchy:      tpm2.TPMRHOwner,
 			Name:           pub.Name,
 			Public:         *keyPub,
@@ -416,7 +421,6 @@ func (tpm *TPM2) CreateSRK(
 
 	var primaryKey *tpm2.CreatePrimaryResponse
 	var err error
-	// var hierarchyAuth, userAuth, secretBytes []byte
 	var hierarchyAuth, userAuth []byte
 
 	if srkAttrs.TPMAttributes.HierarchyAuth != nil {

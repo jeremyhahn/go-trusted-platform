@@ -117,6 +117,8 @@ func (ks *KeyStore) Initialize(soPIN, userPIN keystore.Password) error {
 // Returns key attriibutes for the PKCS #8 key store pin
 func (ks *KeyStore) keyAttrsTemplate() *keystore.KeyAttributes {
 	tpmkskAttrs := ks.params.TPMKS.SRKAttributes()
+	template := tptpm2.KeyedHashTemplate
+	template.NameAlg = ks.params.TPMKS.TPM2().AlgID()
 	return &keystore.KeyAttributes{
 		CN:             fmt.Sprintf("%s.pin", ks.params.Config.CN),
 		Debug:          ks.params.DebugSecrets,
@@ -129,7 +131,7 @@ func (ks *KeyStore) keyAttrsTemplate() *keystore.KeyAttributes {
 		TPMAttributes: &keystore.TPMAttributes{
 			HandleType: libtpm2.TPMHTTransient,
 			Hierarchy:  tpm2.TPMRHOwner,
-			Template:   tptpm2.KeyedHashTemplate,
+			Template:   template,
 		},
 	}
 }

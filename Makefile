@@ -261,6 +261,7 @@ clean:
 		$(PLATFORMD)-* \
 		/usr/local/bin/$(PLATFORMD) \
 		$(PLATFORM_DIR) \
+		build/docker/trusted-platform/platformd \
 		build/docker/trusted-platform-iso-builder/ansible/ \
 		build/docker/trusted-platform-iso-builder/secure-boot-keys \
 		build/docker/trusted-platform-iso-builder/*.iso \

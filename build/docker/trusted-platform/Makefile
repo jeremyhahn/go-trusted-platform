@@ -12,7 +12,7 @@ volume:
 .PHONY: config
 config:
 	CONTAINER=$$(docker create $(APPNAME)-builder-alpine:amd64); \
-	docker cp $$CONTAINER:/builder/go-trusted-platform/configs/platform/config.dev.server.yaml $(VOLUME)/etc/config.yaml
+	docker cp $$CONTAINER:/builder/go-trusted-platform/configs/platform/config.local.server.yaml $(VOLUME)/etc/config.yaml
 
 .PHONY: binaries
 binaries:
@@ -51,8 +51,8 @@ build-alpine:
 		-t $(APPNAME)-alpine:arm64 \
 		-f Dockerfile-alpine .
 
-.PHONY: run-debian
-run-debian: volume config
+.PHONY: run-debian-amd64
+run-debian-amd64: volume config
 	docker run -it --rm \
 		-v $(VOLUME):/trusted-platform \
 		$(APPNAME)-debian:amd64 \
@@ -66,8 +66,8 @@ run-debian: volume config
 				--raw-so-pin 123456 \
 				--raw-pin 123456
 
-.PHONY: run-alpine
-run-alpine: volume config
+.PHONY: run-alpine-amd64
+run-alpine-amd64: volume config
 	docker run -it --rm \
 		-v $(VOLUME):/trusted-platform \
 		$(APPNAME)-alpine:amd64 \

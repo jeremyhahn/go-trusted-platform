@@ -27,6 +27,7 @@ type PropertiesFixed struct {
 	Model                   string
 	MaxAuthFail             uint32
 	Memory                  uint32
+	NVBufferMax             uint32
 	NVIndexesDefined        uint32
 	NVIndexesMax            uint32
 	NVWriteRecovery         uint32
@@ -124,6 +125,10 @@ func (tpm *TPM2) FixedProperties() (*PropertiesFixed, error) {
 	if err != nil {
 		return nil, err
 	}
+	nvBufferMax, err := nvBufferMax(tpm.transport)
+	if err != nil {
+		return nil, err
+	}
 	nvIndexesDefined, err := nvIndexesDefined(tpm.transport)
 	if err != nil {
 		return nil, err
@@ -163,6 +168,7 @@ func (tpm *TPM2) FixedProperties() (*PropertiesFixed, error) {
 		MaxAuthFail:             maxAuthFail,
 		Memory:                  memory,
 		Model:                   model,
+		NVBufferMax:             nvBufferMax,
 		NVIndexesDefined:        nvIndexesDefined,
 		NVIndexesMax:            nvIndexesMax,
 		NVWriteRecovery:         nvWriteRecovery,
@@ -536,6 +542,22 @@ func nvIndexesMax(transport transport.TPM) (uint32, error) {
 	return nvIndexesMax.TPMProperty[0].Value, nil
 }
 
+func nvBufferMax(transport transport.TPM) (uint32, error) {
+	nvBufferMaxResp, err := tpm2.GetCapability{
+		Capability:    tpm2.TPMCapTPMProperties,
+		Property:      uint32(tpm2.TPMPTNVBufferMax),
+		PropertyCount: 1,
+	}.Execute(transport)
+	if err != nil {
+		return 0, err
+	}
+	nvBufferMax, err := nvBufferMaxResp.CapabilityData.Data.TPMProperties()
+	if err != nil {
+		return 0, err
+	}
+	return nvBufferMax.TPMProperty[0].Value, nil
+}
+
 func nvWriteRecovery(transport transport.TPM) (uint32, error) {
 	nvWriteRecoveryResp, err := tpm2.GetCapability{
 		Capability:    tpm2.TPMCapTPMProperties,
@@ -599,48 +621,6 @@ func vendorID(transport transport.TPM) (string, error) {
 	return vendorString, nil
 }
 
-// func (tpm *TPM2) DebugCapabilities() error {
-// 	caps, err := tpm.FixedProperties()
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	tpm.logger.Debugf("Manufacturer: %s\n", caps.Manufacturer)
-// 	tpm.logger.Debugf("Model: %s\n", caps.Model)
-// 	tpm.logger.Debugf("Family: %s\n", caps.Family)
-// 	tpm.logger.Debugf("Vendor ID: %s\n", caps.VendorID)
-// 	tpm.logger.Debugf("Revision: %s\n", caps.Revision)
-// 	tpm.logger.Debugf("Firmware: %d.%d\n", caps.FwMajor, caps.FwMinor)
-// 	tpm.logger.Debugf("FIPS 140-2: %t\n", caps.Fips1402)
-
-// 	tpm.logger.Debugf("Authorization Sessions Active: %d", caps.AuthSessionsActive)
-// 	tpm.logger.Debugf("Authorization Sessions Active Available: %d", caps.AuthSessionsActiveAvail)
-
-// 	tpm.logger.Debugf("Authorization Sessions Used: %d", caps.AuthSessionsLoaded)
-// 	tpm.logger.Debugf("Authorization Sessions Loaded Available: %d", caps.AuthSessionsLoadedAvail)
-
-// 	tpm.logger.Debugf("Max Auth Failures: %d", caps.MaxAuthFail)
-// 	tpm.logger.Debugf("Memory: %d", caps.PersistentLoaded)
-
-// 	tpm.logger.Debugf("Loaded Curves: %d", caps.LockoutCounter)
-
-// 	tpm.logger.Debugf("Lockout Counter: %d", caps.LockoutCounter)
-// 	tpm.logger.Debugf("Lockout Interval: %d", caps.LockoutInterval)
-// 	tpm.logger.Debugf("Lockout Recovery: %d", caps.LockoutRecovery)
-
-// 	tpm.logger.Debugf("NV Indexes Defined: %d", caps.NVIndexesDefined)
-// 	tpm.logger.Debugf("NV Indexes Max: %d", caps.NVIndexesMax)
-// 	tpm.logger.Debugf("NV Write Recovery: %d", caps.NVIndexesMax)
-
-// 	tpm.logger.Debugf("Persistent Used: %d", caps.PersistentLoaded)
-// 	tpm.logger.Debugf("Persistent Available: %d", caps.PersistentAvail)
-
-// 	tpm.logger.Debugf("Transient Min: %d", caps.TransientMin)
-// 	tpm.logger.Debugf("Transient Available: %d", caps.TransientAvail)
-
-// 	return nil
-// }
-
 func (tpm *TPM2) Info() (string, error) {
 	caps, err := tpm.FixedProperties()
 	if err != nil {
@@ -674,6 +654,7 @@ func (tpm *TPM2) Info() (string, error) {
 	sb.WriteString(fmt.Sprintf("Lockout Interval: %d\n", caps.LockoutInterval))
 	sb.WriteString(fmt.Sprintf("Lockout Recovery: %d\n", caps.LockoutRecovery))
 
+	sb.WriteString(fmt.Sprintf("NV Buffer Max:      %d\n", caps.NVBufferMax))
 	sb.WriteString(fmt.Sprintf("NV Indexes Defined: %d\n", caps.NVIndexesDefined))
 	sb.WriteString(fmt.Sprintf("NV Indexes Max:     %d\n", caps.NVIndexesMax))
 	sb.WriteString(fmt.Sprintf("NV Write Recovery:  %d\n", caps.NVIndexesMax))

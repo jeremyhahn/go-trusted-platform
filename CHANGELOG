@@ -14,3 +14,5 @@
   - https://salsa.debian.org/cryptsetup-team/cryptsetup/-/merge_requests/39/diffs#00524e372ebef34fc25a9ccf26625e53d9a78a00
 - Add more documentation
 - Remove support for 32-bit architectures
+- Remove hard coded sha256 PCR bank and NameAlg references from tpm2 package
+- Add TPM_PT_NV_BUFFER_MAX to tpm2 capabilities info 

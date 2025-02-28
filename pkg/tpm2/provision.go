@@ -268,6 +268,8 @@ func (tpm *TPM2) ProvisionEKCert(hierarchyAuth, ekCertDER []byte) error {
 		return nil
 	}
 
+	tpm.logger.Debugf("NVDefineSpace: EK Certificate size: %d", len(ekCertDER))
+
 	defs := tpm2.NVDefineSpace{
 		AuthHandle: tpm2.AuthHandle{
 			Handle: ekAttrs.TPMAttributes.Hierarchy,
@@ -276,14 +278,14 @@ func (tpm *TPM2) ProvisionEKCert(hierarchyAuth, ekCertDER []byte) error {
 		PublicInfo: tpm2.New2B(
 			tpm2.TPMSNVPublic{
 				NVIndex: ekCertHandle,
-				NameAlg: tpm2.TPMAlgSHA256,
+				NameAlg: tpm.algID,
 				Attributes: tpm2.TPMANV{
-					AuthRead:   true,
-					NT:         tpm2.TPMNTOrdinary,
-					OwnerRead:  true,
 					OwnerWrite: true,
-					PolicyRead: true,
+					AuthWrite:  true,
+					OwnerRead:  true,
+					AuthRead:   true,
 					NoDA:       true,
+					NT:         tpm2.TPMNT(0x01),
 				},
 				DataSize: uint16(len(ekCertDER)),
 			}),
@@ -293,6 +295,8 @@ func (tpm *TPM2) ProvisionEKCert(hierarchyAuth, ekCertDER []byte) error {
 		tpm.logger.Error(err)
 		return err
 	}
+
+	//  NV index type 4 = TPM_NT_ORDINARY
 
 	pub, err := defs.PublicInfo.Contents()
 	if err != nil {
@@ -342,7 +346,11 @@ func (tpm *TPM2) ProvisionEKCert(hierarchyAuth, ekCertDER []byte) error {
 func (tpm *TPM2) GoldenMeasurements() []byte {
 	tpm.logger.Info("Calculating Platform Golden Measurement")
 	var gold, extend []byte
-	digest := tpm.hash.New()
+	hash, err := ParsePCRBankCryptoHash(tpm.config.PlatformPCRBank)
+	if err != nil {
+		tpm.logger.FatalError(err)
+	}
+	digest := hash.New()
 	digest.Reset()
 	// Read all available banks and their PCR values
 	banks, err := tpm.ReadPCRs(tpm2SupportedPCRs)
@@ -374,10 +382,12 @@ func (tpm *TPM2) GoldenMeasurements() []byte {
 // Reads the current PCR value and returns it's digest buffer
 func (tpm *TPM2) PlatformPolicyDigestHash() ([]byte, error) {
 
-	// TODO: read from config
-	hashAlg := tpm2.TPMAlgSHA256
+	hashAlgID, err := ParsePCRBankAlgID(tpm.config.PlatformPCRBank)
+	if err != nil {
+		return nil, err
+	}
 
-	cryptoHashAlg, err := hashAlg.Hash()
+	cryptoHashAlg, err := hashAlgID.Hash()
 	if err != nil {
 		return nil, err
 	}
@@ -385,7 +395,7 @@ func (tpm *TPM2) PlatformPolicyDigestHash() ([]byte, error) {
 	pcrReadRsp, err := tpm2.PCRRead{
 		PCRSelectionIn: tpm2.TPMLPCRSelection{
 			PCRSelections: []tpm2.TPMSPCRSelection{{
-				Hash:      hashAlg,
+				Hash:      hashAlgID,
 				PCRSelect: tpm2.PCClientCompatible.PCRs(uint(tpm.config.PlatformPCR)),
 			},
 			},
@@ -413,8 +423,10 @@ func (tpm *TPM2) PlatformPolicyDigestHash() ([]byte, error) {
 // to be attached to a key.
 func (tpm *TPM2) CreatePlatformPolicy() error {
 
-	// TODO: read from config
-	hashAlg := tpm2.TPMAlgSHA256
+	hashAlgID, err := ParsePCRBankAlgID(tpm.config.PlatformPCRBank)
+	if err != nil {
+		return err
+	}
 
 	// Capture platform measurements and extend the Golden
 	// Integrity Measurement into the platform selected PCR
@@ -422,10 +434,10 @@ func (tpm *TPM2) CreatePlatformPolicy() error {
 	measurement := tpm.GoldenMeasurements()
 
 	tpm.logger.Debugf(
-		"tpm: extending golden integrity measurement to PCR %d",
-		tpm.config.PlatformPCR)
+		"tpm: extending golden integrity measurement %x to PCR %s:%d",
+		measurement, tpm.config.PlatformPCRBank, tpm.config.PlatformPCR)
 
-	_, err := tpm2.PCRExtend{
+	_, err = tpm2.PCRExtend{
 		PCRHandle: tpm2.AuthHandle{
 			Handle: tpm2.TPMHandle(tpm.config.PlatformPCR),
 			Auth:   tpm2.PasswordAuth(nil),
@@ -433,7 +445,7 @@ func (tpm *TPM2) CreatePlatformPolicy() error {
 		Digests: tpm2.TPMLDigestValues{
 			Digests: []tpm2.TPMTHA{
 				{
-					HashAlg: hashAlg,
+					HashAlg: hashAlgID,
 					Digest:  measurement,
 				},
 			},
@@ -452,7 +464,7 @@ func (tpm *TPM2) CreatePlatformPolicy() error {
 
 	// Create a trial session to calculate the policy digest
 	trialSession, closer, err := tpm2.PolicySession(
-		tpm.transport, hashAlg, 16, tpm2.Trial())
+		tpm.transport, hashAlgID, 16, tpm2.Trial())
 	if err != nil {
 		tpm.logger.Error(err)
 		return err
@@ -468,7 +480,7 @@ func (tpm *TPM2) CreatePlatformPolicy() error {
 	sel := tpm2.TPMLPCRSelection{
 		PCRSelections: []tpm2.TPMSPCRSelection{
 			{
-				Hash:      hashAlg,
+				Hash:      hashAlgID,
 				PCRSelect: tpm2.PCClientCompatible.PCRs(tpm.config.PlatformPCR),
 			},
 		},
@@ -510,7 +522,11 @@ func (tpm *TPM2) CreatePlatformPolicy() error {
 // file.
 func (tpm *TPM2) fileIntegritySum(dir string) []byte {
 	var sum, extend []byte
-	digest := tpm.hash.New()
+	hash, err := ParsePCRBankCryptoHash(tpm.config.PlatformPCRBank)
+	if err != nil {
+		tpm.logger.FatalError(err)
+	}
+	digest := hash.New()
 	digest.Reset()
 
 	tpm.logger.Info("Processing file integrity checks")
@@ -531,7 +547,7 @@ func (tpm *TPM2) fileIntegritySum(dir string) []byte {
 
 		tpm.logger.Debugf(
 			"Calculating %s integrity checksums in %s",
-			tpm.hash.String(), dir)
+			hash.String(), dir)
 
 		for _, f := range files {
 			var bytes []byte

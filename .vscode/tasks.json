@@ -10,5 +10,15 @@
         "type": "shell",
         "label": "debug_server_config_clean",
         "command": "rm -rf pkg/trusted-data && mkdir -p pkg/trusted-data/etc && cp configs/platform/config.dev.server.yaml pkg/trusted-data/etc/config.yaml",
+    },
+    {
+        "type": "shell",
+        "label": "local_client_config_clean",
+        "command": "rm -rf pkg/trusted-data && mkdir -p pkg/trusted-data/etc && cp configs/platform/config.local.client.yaml pkg/trusted-data/etc/config.yaml",
+    },
+    {
+        "type": "shell",
+        "label": "local_server_config_clean",
+        "command": "rm -rf pkg/trusted-data && mkdir -p pkg/trusted-data/etc && cp configs/platform/config.local.server.yaml pkg/trusted-data/etc/config.yaml",
     }]
 }

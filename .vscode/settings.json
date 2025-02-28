@@ -1,6 +1,7 @@
 {
     "makefile.configureOnOpen": false,
     "go.buildFlags": [
-        "-tags", "quantum_safe"
+        "-tags=quantum_safe",
+        "-ldflags=-X github.com/jeremyhahn/go-trusted-platform/pkg/app.Name=trusted-platform"
     ]
 }

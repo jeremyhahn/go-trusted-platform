@@ -1,9 +1,0 @@
----
-- name: Install K3s Trusted Platform
-  hosts: localhost
-  roles:
-    - base
-    - tpm2
-    - luks-tpm2
-    - k3s
-    - k3s-trusted-platform

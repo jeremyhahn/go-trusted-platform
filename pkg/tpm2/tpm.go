@@ -13,6 +13,7 @@ import (
 	"encoding/asn1"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -37,6 +38,7 @@ import (
 type TrustedPlatformModule interface {
 	ActivateCredential(credentialBlob, encryptedSecret []byte) ([]byte, error)
 	AKProfile() (AKProfile, error)
+	AlgID() tpm2.TPMAlgID
 	CalculateName(algID tpm2.TPMAlgID, publicArea []byte)
 	Clear(hierarchyAuth []byte, hierarchy tpm2.TPMHandle) error
 	Close() error
@@ -171,6 +173,7 @@ type Params struct {
 }
 
 type TPM2 struct {
+	algID        tpm2.TPMAlgID
 	backend      keystore.KeyBackend
 	blobStore    blob.BlobStorer
 	certStore    certstore.CertificateStorer
@@ -181,7 +184,7 @@ type TPM2 struct {
 	ekECCPubKey  *ecdsa.PublicKey
 	ekRSAPubKey  *rsa.PublicKey
 	fqdn         string
-	hash         crypto.Hash
+	// hash         crypto.Hash
 	iakAttrs     *keystore.KeyAttributes
 	idevidAttrs  *keystore.KeyAttributes
 	logger       *logging.Logger
@@ -241,7 +244,13 @@ func NewTPM2(params *Params) (TrustedPlatformModule, error) {
 		return nil, keystore.ErrInvalidHashFunction
 	}
 
+	algID, err := ParseCryptoHashAlgID(hash)
+	if err != nil {
+		return nil, err
+	}
+
 	tpm := &TPM2{
+		algID:        algID,
 		logger:       params.Logger,
 		backend:      params.Backend,
 		blobStore:    params.BlobStore,
@@ -251,9 +260,9 @@ func NewTPM2(params *Params) (TrustedPlatformModule, error) {
 		config:       params.Config,
 		device:       device,
 		fqdn:         params.FQDN,
-		hash:         hash,
-		simulator:    sim,
-		transport:    tpmTransport}
+		// hash:         hash,
+		simulator: sim,
+		transport: tpmTransport}
 
 	if params.Config.UseEntropy {
 		tpm.random = tpm
@@ -380,6 +389,12 @@ func (tpm *TPM2) ParsePublicKey(tpm2BPublic []byte) (crypto.PublicKey, error) {
 	}
 
 	return nil, keystore.ErrInvalidKeyAlgorithm
+}
+
+// Returns the configured TPM_ALG_ID (per TCG algorithm registry).
+// See definition in Part 2: Structures, section 6.3.
+func (tpm *TPM2) AlgID() tpm2.TPMAlgID {
+	return tpm.algID
 }
 
 // Returns the platform policy digest used to satisfy
@@ -562,12 +577,7 @@ func (tpm *TPM2) EKCertificate() (*x509.Certificate, error) {
 
 		// As a last resort, try downloading from the manufacturer
 		// EK certificate service
-		manufacuterCert, err := tpm.downloadEKCertFromManufacturer(ekCertIndex)
-		if err == nil && len(manufacuterCert) > 0 {
-			return x509.ParseCertificate(manufacuterCert)
-		}
-
-		return nil, ErrEndorsementCertNotFound
+		return tpm.downloadEKCertFromManufacturer(ekCertIndex)
 	}
 
 	return x509.ParseCertificate(response.NVPublic.Bytes())
@@ -1234,6 +1244,10 @@ Exit:
 				tpm.logger.Errorf("tpm/ReadPCRs: error reading PCR bank %s: %s", name, err)
 				return banks, nil
 			}
+			if len(response.PCRValues.Digests) == 0 {
+				// Strange issue encountered: PCR bank present but doesn't have any populated PCR digests
+				break Exit
+			}
 			buf := response.PCRValues.Digests[0].Buffer
 			encoded := []byte(Encode(buf))
 			bank.PCRs = append(bank.PCRs, PCR{
@@ -1267,7 +1281,7 @@ func intelEKURL(ekPub *rsa.PublicKey) string {
 }
 
 // Downloads the EK certificate from the manufactuers EK cert service
-func (tpm *TPM2) downloadEKCertFromManufacturer(ekCertIndex tpm2.TPMHandle) ([]byte, error) {
+func (tpm *TPM2) downloadEKCertFromManufacturer(ekCertIndex tpm2.TPMHandle) (*x509.Certificate, error) {
 
 	attrs, err := tpm.KeyAttributes(tpm2.TPMHandle(ekIndex))
 	if err != nil {
@@ -1323,7 +1337,23 @@ func (tpm *TPM2) downloadEKCertFromManufacturer(ekCertIndex tpm2.TPMHandle) ([]b
 		return nil, err
 	}
 
-	return buf.Bytes(), nil
+	result := make(map[string]interface{})
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		return nil, err
+	}
+
+	certificate, ok := result["certificate"].(string)
+	if !ok {
+		return nil, errors.New("failed to parse certificate from EK certificate service")
+	}
+
+	cert, err := x509.ParseCertificate([]byte(certificate))
+	if err != nil {
+		tpm.logger.Error(err)
+		return nil, ErrEndorsementCertNotFound
+	}
+
+	return cert, nil
 }
 
 func (tpm *TPM2) tpmDeviceName() string {

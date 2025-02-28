@@ -5,13 +5,52 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
 )
 
+type PCRBankAlgo string
+
+var (
+	PCRBankSHA1   = "sha1"
+	PCRBankSHA256 = "sha256"
+	PCRBankSHA384 = "sha384"
+	PCRBankSHA512 = "sha512"
+
+	pcrBankAlgIDMap = map[string]tpm2.TPMAlgID{
+		PCRBankSHA1:   tpm2.TPMAlgSHA1,
+		PCRBankSHA256: tpm2.TPMAlgSHA256,
+		PCRBankSHA384: tpm2.TPMAlgSHA384,
+		PCRBankSHA512: tpm2.TPMAlgSHA512,
+	}
+
+	cryptoHashAlgIDMap = map[string]tpm2.TPMAlgID{
+		"SHA-1":    tpm2.TPMAlgSHA1,
+		"SHA-256":  tpm2.TPMAlgSHA256,
+		"SHA-384":  tpm2.TPMAlgSHA384,
+		"SHA-512":  tpm2.TPMAlgSHA512,
+		"SHA3-256": tpm2.TPMAlgSHA3256,
+		"SHA3-384": tpm2.TPMAlgSHA3384,
+		"SHA3-512": tpm2.TPMAlgSHA3512,
+	}
+
+	pcrBankCryptoHashMap = map[string]crypto.Hash{
+		PCRBankSHA1:   crypto.SHA1,
+		PCRBankSHA256: crypto.SHA256,
+		PCRBankSHA384: crypto.SHA3_384,
+		PCRBankSHA512: crypto.SHA512,
+	}
+)
+
+func (pcrBankAlgo PCRBankAlgo) String() string {
+	return string(pcrBankAlgo)
+}
+
 var (
 	ErrInvalidHierarchyType = errors.New("tpm2: invalid hierarchy type")
+	ErrInvalidPCRBankType   = errors.New("tpm2: invalid PCR bank")
 
 	DefaultConfig = Config{
 		EncryptSession:               false,
@@ -62,7 +101,8 @@ var (
 			SRKHandle:      0x81000002,
 			PlatformPolicy: true,
 		},
-		PlatformPCR: 16,
+		PlatformPCR:     16,
+		PlatformPCRBank: PCRBankSHA256,
 		SSRK: &SRKConfig{
 			Debug:  true,
 			Handle: 0x81000001,
@@ -88,6 +128,7 @@ type Config struct {
 	KeyStore                     *KeyStoreConfig `yaml:"keystore" json:"keystore" mapstructure:"keystore"`
 	LockoutAuth                  string          `yaml:"lockout-auth" json:"lockout-auth" mapstructure:"lockout-auth"`
 	PlatformPCR                  uint            `yaml:"platform-pcr" json:"platform_pcr" mapstructure:"platform-pcr"`
+	PlatformPCRBank              string          `yaml:"platform-pcr-bank" json:"platform_pcr_bank" mapstructure:"platform-pcr-bank"`
 	SSRK                         *SRKConfig      `yaml:"ssrk" json:"ssrk" mapstructure:"ssrk"`
 	UseEntropy                   bool            `yaml:"entropy" json:"entropy" mapstructure:"entropyr"`
 	UseSimulator                 bool            `yaml:"simulator" json:"simulator" mapstructure:"simulator"`
@@ -603,4 +644,28 @@ func ParseIdentityProvisioningStrategy(strategy string) EnrollmentStrategy {
 	default:
 		return EnrollmentStrategyIAK_IDEVID_SINGLE_PASS
 	}
+}
+
+func ParsePCRBankAlgID(pcrBank string) (tpm2.TPMAlgID, error) {
+	tpmAlgID, ok := pcrBankAlgIDMap[strings.ToLower(pcrBank)]
+	if !ok {
+		return 0, ErrInvalidPCRBankType
+	}
+	return tpmAlgID, nil
+}
+
+func ParsePCRBankCryptoHash(pcrBank string) (crypto.Hash, error) {
+	hash, ok := pcrBankCryptoHashMap[strings.ToLower(pcrBank)]
+	if !ok {
+		return 0, ErrInvalidPCRBankType
+	}
+	return hash, nil
+}
+
+func ParseCryptoHashAlgID(hash crypto.Hash) (tpm2.TPMAlgID, error) {
+	tpmAlgID, ok := cryptoHashAlgIDMap[hash.String()]
+	if !ok {
+		return 0, ErrInvalidCryptoHashAlgID
+	}
+	return tpmAlgID, nil
 }

@@ -376,10 +376,10 @@ func (app *App) initConfig(env string) error {
 
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
-	viper.AddConfigPath(app.ConfigDir)
 	viper.AddConfigPath(fmt.Sprintf("etc/config/%s", Name))
 	viper.AddConfigPath(fmt.Sprintf("%s/etc", app.PlatformDir))
 	viper.AddConfigPath(fmt.Sprintf("$HOME/.%s/", Name))
+	viper.AddConfigPath(app.ConfigDir)
 	viper.AddConfigPath(".")
 
 	if err := viper.ReadInConfig(); err != nil {
@@ -933,7 +933,6 @@ func (app *App) ImportEndorsementKeyCertificate() (*x509.Certificate, error) {
 					"unsupported TPM EK algorithm %s",
 					app.TPMConfig.EK.KeyAlgorithm)
 				return nil, keystore.ErrInvalidKeyAlgorithm
-
 			}
 
 			certReq := ca.CertificateRequest{
@@ -965,7 +964,8 @@ func (app *App) ImportEndorsementKeyCertificate() (*x509.Certificate, error) {
 					return nil, err
 				}
 			} else {
-				// Generate new Endorsement Key x509 Certificate using the local CA
+				// Generate new Endorsement Key x509 Certificate using the local CA and save
+				// the certificate to blob storage.
 				ekCert, err = app.CA.IssueEKCertificate(certReq, publicKey)
 				if err != nil {
 					return nil, err
@@ -979,9 +979,7 @@ func (app *App) ImportEndorsementKeyCertificate() (*x509.Certificate, error) {
 				return nil, err
 			}
 
-			if err := app.TPM.ProvisionEKCert(
-				hierarchyAuth, ekCert.Raw); err != nil {
-
+			if err := app.TPM.ProvisionEKCert(hierarchyAuth, ekCert.Raw); err != nil {
 				// NOTE: TPM simulator throws an error here for certs
 				// greater than 1024 bytes. To work around this, a warning
 				// is emitted and the cert-handle attribute is ignored so
@@ -993,6 +991,10 @@ func (app *App) ImportEndorsementKeyCertificate() (*x509.Certificate, error) {
 					}
 				} else {
 					app.Logger.Error(err)
+					err = app.CA.ImportEndorsementKeyCertificate(ekAttrs, ekCert.Raw)
+					if err != nil {
+						return nil, err
+					}
 				}
 			}
 			return ekCert, nil

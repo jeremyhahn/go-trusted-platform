@@ -207,6 +207,7 @@ func (ks *KeyStore) SRKAttributes() *keystore.KeyAttributes {
 		if err == tpm2.TPMRC(0x18b) || err == keystore.ErrFileNotFound {
 			// TPM_RC_HANDLE (handle 1): the handle is not correct for the use
 			srkTemplate := tpm2.RSASRKTemplate
+			srkTemplate.NameAlg = ks.tpm.AlgID()
 			srkTemplate.ObjectAttributes.NoDA = false
 
 			srkAttrs = &keystore.KeyAttributes{
@@ -240,6 +241,8 @@ func (ks *KeyStore) SRKAttributes() *keystore.KeyAttributes {
 
 // Returns the key attributes for the key store secret sealed to the SRK
 func (ks *KeyStore) KeyAttributes() *keystore.KeyAttributes {
+	template := tptpm2.KeyedHashTemplate
+	template.NameAlg = ks.tpm.AlgID()
 	srkAttrs := ks.SRKAttributes()
 	ksAttrs := &keystore.KeyAttributes{
 		CN:             fmt.Sprintf("%s.pin", ks.config.CN),
@@ -252,7 +255,7 @@ func (ks *KeyStore) KeyAttributes() *keystore.KeyAttributes {
 		TPMAttributes: &keystore.TPMAttributes{
 			HandleType: tpm2.TPMHTTransient,
 			Hierarchy:  tpm2.TPMRHOwner,
-			Template:   tptpm2.KeyedHashTemplate,
+			Template:   template,
 		},
 	}
 	if ksAttrs.PlatformPolicy {
@@ -658,11 +661,29 @@ func (ks *KeyStore) CreatePassword(
 
 	// Copy the password to the Secret field - the TPM seal operation
 	// seals the Secret field, not the password field.
+	//
+	// Ensure the password is set to the hash algorithm size
+	// to be sure it fits in NVRAM
+	hash, err := ks.tpm.AlgID().Hash()
+	if err != nil {
+		return err
+	}
+	hashLen, err := tptpm2.ParseHashSize(hash)
+	if err != nil {
+		return err
+	}
 
 	if string(passwd) == keystore.DEFAULT_PASSWORD {
 		passwd = aesgcm.NewAESGCM(ks.tpm).GenerateKey()
-		keyAttrs.Secret = keystore.NewClearPassword(passwd)
+		keyAttrs.Secret = keystore.NewClearPassword(passwd[:hashLen])
 	} else {
+		passwd, err := keyAttrs.Password.Bytes()
+		if err != nil {
+			return err
+		}
+		if len(passwd) > int(hashLen) {
+			return keystore.ErrInvalidPasswordLength
+		}
 		keyAttrs.Secret = keyAttrs.Password
 	}
 

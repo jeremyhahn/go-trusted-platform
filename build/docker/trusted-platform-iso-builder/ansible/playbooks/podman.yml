@@ -1,9 +1,0 @@
----
-- name: "Trusted Platform :: Install with Podman"
-  hosts: localhost
-  roles:
-    - base
-    # - tpm2
-    # - luks-tpm2
-    - podman
-    - podman-trusted-platform

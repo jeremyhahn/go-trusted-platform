@@ -5,14 +5,14 @@ debug-secrets: true
 platform-dir: trusted-data
 config-dir: trusted-data/etc
 log-dir: trusted-data/log
-domain: edge01.dev.trusted-platform.local
-hostmaster: hostmaster@edge01.dev.trusted-platform.local
+domain: trusted-node01.local
+hostmaster: hostmaster@trusted-node01.local
 pin-seal-policy: true
 
 
 acme:
   client:
-    directory: https://dev.trusted-platform.local/api/v1/acme/directory
+    directory: https://trusted-node01.local/api/v1/acme/directory
     enrollment-challenge: device-8081
     request-server-bundle: true
     account:
