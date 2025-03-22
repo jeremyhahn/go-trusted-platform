@@ -91,16 +91,17 @@ ISO_DIR                     ?= build/docker/$(DOCKER_ISO_BUILDER)
 ISO_NAME                    ?= trusted-platform.iso
 ISO_NAME_SWTPM		        ?= trusted-platform-swtpm.iso
 
-PACKER_HOME                 ?= build/packer
-PACKER_FILE                 ?= $(PACKER_HOME)/rpi/raspios-bookworm-arm64.json
-PACKER_BUILDER_RASPIOS64    ?= raspios-bookworm-arm64
-PACKER_BUILDER_UBUNTU64     ?= ubuntu-20.04.01-arm64
-PACKER_BUILDER              ?= $(PACKER_BUILDER_RASPIOS64)
-
+RPI_OS                      ?= raspios
 RPI_IMAGE_NAME		        ?= $(APPNAME)-$(APP_VERSION)-$(ENV)
 RPI_IMAGE_FILENAME          ?= $(RPI_IMAGE_NAME).img
 RPI_IMAGE_ARTIFACT          ?= $(PACKER_HOME)/$(RPI_IMAGE_FILENAME)
 RPI_SDCARD                  ?= /dev/sda
+
+PACKER_HOME                 ?= build/packer
+PACKER_FILE                 ?= $(PACKER_HOME)/rpi/$(RPI_OS).json
+PACKER_BUILDER_RASPIOS64    ?= raspbian
+PACKER_BUILDER_UBUNTU64     ?= ubuntu-20.04.01-arm64
+PACKER_BUILDER              ?= $(PACKER_BUILDER_RASPIOS64)
 
 UID                         := $(shell id -u)
 GID                         := $(shell id -g)
@@ -486,7 +487,7 @@ release-local: clean \
 release-commit:
 	git add -A
 	git commit -F CHANGELOG
-	git push $(GIT_BRANCH)
+	git push origin $(GIT_BRANCH)
 
 .PHONY: release-binaries
 release-binaries:
