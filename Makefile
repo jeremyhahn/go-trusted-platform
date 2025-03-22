@@ -10,8 +10,8 @@ GOBIN                   := $(shell dirname `which go`)
 PYTHONBIN               ?= /usr/bin/python3.8
 PIPBIN                  ?= pip
 
-ARM_CC				    ?= aarch64-linux-gnu-gcc
-ARM_CXX                 ?= aarch64-linux-gnu-g++
+ARM_CC				    ?= aarch64-linux-gnu-gcc-14
+ARM_CXX                 ?= aarch64-linux-gnu-g++-14
 
 GIT_REPO                ?= github.com
 GIT_OWNER               ?= jeremyhahn
@@ -69,6 +69,9 @@ WEB_SRC                     ?= ../$(WEB_PACKAGE)
 
 SWAGGER_HOST                ?= $(DOMAIN)
 
+SYNC_USER                   ?= pi
+SYNC_HOST                   ?= rpi
+
 DOCKER_HOME                 ?= build/docker
 DOCKER_REPO                 ?= docker.io
 DOCKER_USER                 ?= jeremyhahn
@@ -80,6 +83,9 @@ DOCKER_ISO_BUILDER          ?= trusted-platform-iso-builder
 DOCKER_ISO_BUILDER_SWTPM    ?= trusted-platform-iso-builder-swtpm
 DOCKER_ISO_TAG              ?= latest
 DOCKER_ANSIBLE_BUILDER      ?= ansible-ee
+DOCKER_AARCH64_CONTEXT      ?= arm64
+DOCKER_AARCH64_HOST         ?= $(SYNC_HOST)
+DOCKER_AARCH64_SSHKEY       ?= ~/.ssh/id_rsa
 
 ISO_DIR                     ?= build/docker/$(DOCKER_ISO_BUILDER)
 ISO_NAME                    ?= trusted-platform.iso
@@ -95,12 +101,11 @@ RPI_IMAGE_NAME		        ?= $(APPNAME)-$(APP_VERSION)-$(ENV)
 RPI_IMAGE_FILENAME          ?= $(RPI_IMAGE_NAME).img
 RPI_IMAGE_ARTIFACT          ?= $(PACKER_HOME)/$(RPI_IMAGE_FILENAME)
 RPI_SDCARD                  ?= /dev/sda
-RPI_USER                    ?= pi
-RPI_HOST                    ?= rpi
 
 UID                         := $(shell id -u)
 GID                         := $(shell id -g)
 
+BUILDKIT_WORKER_CONCURRENCY = $(shell nproc)
 
 # Text colors
 RED=\033[0;31m
@@ -109,15 +114,42 @@ YELLOW=\033[1;33m
 NO_COLOR=\033[0m
 
 
-# Targets
 default: build
+
+
+.PHONY: init
+init:
+	-docker buildx rm $(DOCKER_BUILDER_AMD64)
+	-docker buildx rm $(DOCKER_BUILDER_AAARCH64)
+	-docker context rm $(DOCKER_AARCH64_HOST)
+	sudo apt-get install -y \
+		libssl-dev \
+		docker.io \
+		docker-buildx \
+		efitools \
+		binfmt-support \
+		qemu-user-static \
+		rsync \
+		pipx
+	pipx ensurepath
+	pipx install virt-firmware
+	sudo mkdir -p /etc/qemu/
+	sudo /bin/bash -c 'echo "allow virbr0" > /etc/qemu/bridge.conf'
+	sudo chmod u+s /usr/lib/qemu/qemu-bridge-helper
+	docker run --rm --privileged multiarch/qemu-user-static --reset -p yes || true
+	docker context create $(DOCKER_AARCH64_CONTEXT) --docker "host=ssh://$(DOCKER_AARCH64_HOST)"
+	ssh-copy-id -i $(DOCKER_AARCH64_SSHKEY) $(DOCKER_AARCH64_HOST) || true
+
+
+.PHONY: tools
+tools:
+	sudo apt-get install -y tpm2-tools
 
 
 .PHONY: env
 env:
 	@$(foreach var,$(filter-out MAKE% __%,$(.VARIABLES)),\
 		printf "%-35s %s\n" "$(var):" "$($(var))";)
-
 
 
 .PHONY: run
@@ -139,25 +171,25 @@ run:
 build:
 	cd pkg; \
 	go clean ; \
-	CGO_ENABLED=1 $(GOBIN)/go build -o ../$(PLATFORMD) -ldflags="-w -s ${LDFLAGS}"
+	CGO_ENABLED=1 $(GOBIN)/go build -v -o ../$(PLATFORMD) -ldflags="-w -s ${LDFLAGS}"
 
 .PHONY: build-debug
 build-debug:
 	cd pkg; \
 	go clean ; \
-	CGO_ENABLED=1 $(GOBIN)/go build -o ../$(PLATFORMD)-debug -gcflags='all=-N -l' -ldflags="${LDFLAGS}"
+	CGO_ENABLED=1 $(GOBIN)/go build -v -o ../$(PLATFORMD)-debug -gcflags='all=-N -l' -ldflags="${LDFLAGS}"
 
 .PHONY: build-static
 build-static:
 	cd pkg; \
 	go clean ; \
-	CGO_ENABLED=1 $(GOBIN)/go build -o ../$(PLATFORMD)-static --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}'
+	CGO_ENABLED=1 $(GOBIN)/go build -v -o ../$(PLATFORMD)-static --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}'
 
 .PHONY: build-debug-static
 build-debug-static:
 	cd pkg; \
 	go clean ; \
-	CGO_ENABLED=1 $(GOBIN)/go build -o ../$(PLATFORMD)-debug-static -gcflags='all=-N -l' --ldflags '-extldflags -static -v ${LDFLAGS}'
+	CGO_ENABLED=1 $(GOBIN)/go build -v -o ../$(PLATFORMD)-debug-static -gcflags='all=-N -l' --ldflags '-extldflags -static -v ${LDFLAGS}'
 
 # Cross-compile ARM 64-bit
 .PHONY: build-arm64
@@ -261,7 +293,11 @@ clean:
 		$(PLATFORMD)-* \
 		/usr/local/bin/$(PLATFORMD) \
 		$(PLATFORM_DIR) \
+		$(WEB_PUBLIC_HTML) \
+		$(WEB_PUBLIC_HTML).tar.gz \
 		build/docker/trusted-platform/platformd \
+		build/docker/trusted-platform/platformd-debug \
+		build/docker/trusted-platform/trusted-data \
 		build/docker/trusted-platform-iso-builder/ansible/ \
 		build/docker/trusted-platform-iso-builder/secure-boot-keys \
 		build/docker/trusted-platform-iso-builder/*.iso \
@@ -289,6 +325,35 @@ clean:
 		pkg/tpm2/testdata \
 		config.yaml \
 		*.iso
+	cd build/packer/rpi && sudo make clean
+
+# Platform Web Services
+.PHONY: webservice
+webservice: build-debug config
+	cd pkg && ../$(PLATFORMD) webservice --init
+
+.PHONY: webservice-verify-tls
+webservice-verify-tls:
+	openssl s_client \
+		-connect localhost:8443 \
+		-showcerts \
+		-servername localhost \
+		-CAfile pkg/$(PLATFORM_DIR)/ca/$(INTERMEDIATE_CA).$(DOMAIN)/x509/$(ROOT_CA).$(DOMAIN).pkcs8.rsa.pem \
+		| openssl x509 -noout -text
+
+
+# SoftHSM
+.PHONY: softhsm-init
+softhsm-init:
+	export SOFTHSM_CONF=$(SOFTHSM_CONFIG); \
+	chown $(USER):$(USER) $(SOFTHSM_TOKEN_DIR); \
+	$(SOFTHSM_DIR)/softhsm2-util \
+		--init-token \
+		--slot 0 \
+		--label test \
+		--so-pin 1234 \
+		--pin 5678 ; \
+	$(SOFTHSM_DIR)/softhsm2-util --show-slots
 
 # Tests
 .PHONY: test
@@ -399,8 +464,10 @@ release: clean \
 	docker-iso-builder-push \
 	docker-pxe-server-push \
 	docker-nfs-server-push \
+	release-public-html \
 	release-binaries \
 	isos \
+	packer-rpi \
 	release-github
 
 .PHONY: release-local
@@ -410,8 +477,10 @@ release-local: clean \
 	docker-iso-builder-load \
 	docker-pxe-server-load \
 	docker-nfs-server-load \
+	release-public-html \
 	release-binaries \
-	isos
+	isos \
+	packer-rpi
 
 .PHONY: release-commit
 release-commit:
@@ -440,6 +509,11 @@ release-binaries:
 		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD)-static $(PLATFORMD)-static-musl-aarch64; \
 		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD)-debug-static $(PLATFORMD)-debug-static-musl-aarch64
 
+.PHONY:
+release-public-html:
+	CONTAINER=$$(docker create $(APPNAME)-builder-debian:amd64); \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/public_html/ .; \
+		tar czf public_html.tar.gz public_html
 
 .PHONY: release-version-bump
 release-version-bump:
@@ -495,7 +569,9 @@ release-github:
 		$(PLATFORMD)-static-musl-aarch64 \
 		$(PLATFORMD)-static-musl-x86_64 \
 		trusted-platform.iso \
-		trusted-platform-swtpm.iso
+		trusted-platform-swtpm.iso \
+		trusted-platform-raspbian.img \
+		$(WEB_PUBLIC_HTML).tar.gz
 
 .PHONY: release-github-delete
 release-github-delete:
@@ -506,6 +582,21 @@ release-github-delete:
 
 
 # Docker
+.PHONY: docker-bake-load
+docker-bake-load:
+	docker context use default
+	docker buildx bake amd64 --load
+	docker context use $(DOCKER_AARCH64_CONTEXT)
+	docker buildx bake arm64 --load
+
+.PHONY: docker-bake-push
+docker-bake-push:
+	docker context use default
+	docker buildx bake amd64 --push
+	docker context use $(DOCKER_AARCH64_CONTEXT)
+	docker buildx bake arm64 --push
+
+# Docker :: PXE server
 .PHONY: docker-pxe-server-load
 docker-pxe-server-load:
 	cd build/docker/pxe-server && make -j$(shell nproc) build
@@ -563,14 +654,16 @@ docker-builder-load-debian:
 
 .PHONY: docker-builder-load-amd64
 docker-builder-load-amd64:
-	docker build --load \
+	BUILDKIT_DEBUG=1 docker buildx build --load \
+		--progress=plain \
 	 	--platform=linux/amd64 \
 		-t $(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
 		-f build/docker/$(APPNAME)-builder/$(DOCKER_BUILDER_DOCKERFILE) .
 
 .PHONY: docker-builder-load-aarch64
 docker-builder-load-aarch64:
-	docker build --load \
+	BUILDKIT_DEBUG=1 docker buildx build --load \
+		--progress=plain \
 	    --platform=linux/arm64 \
 		-t $(APPNAME)-builder-$(DOCKER_BUILDER_BASE):arm64 \
 		-f build/docker/$(APPNAME)-builder/$(DOCKER_BUILDER_DOCKERFILE) .
@@ -580,12 +673,12 @@ docker-builder-load-aarch64:
 .PHONY: docker-builder-push
 docker-builder-push:
 	@start_time=$$(date +%s); \
-		docker build --push \
+		docker buildx build --push \
 			--platform=linux/amd64,linux/arm64 \
 			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-builder-alpine:latest \
 			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-builder-alpine:$(APP_VERSION) \
 			-f build/docker/$(APPNAME)-builder/Dockerfile-alpine .; \
-		docker build --push \
+		docker buildx build --push \
 			--platform=linux/amd64,linux/arm64 \
 			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-builder-debian:latest \
 			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-builder-debian:$(APP_VERSION) \
@@ -616,7 +709,7 @@ docker-iso-builder-push:
 	@start_time=$$(date +%s); \
 		cd build/docker/$(APPNAME)-iso-builder && \
 		make clean secure-boot-keys ansible; \
-		docker build --push \
+		docker buildx build --push \
 			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(DOCKER_ISO_BUILDER):latest \
 			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(DOCKER_ISO_BUILDER):$(APP_VERSION) \
 			-f Dockerfile .; \
@@ -641,7 +734,7 @@ docker-platform-load:
 
 .PHONY: docker-platform-load-amd64
 docker-platform-load-amd64:
-	docker build --load \
+	docker buildx build --load \
 		--platform=linux/arm64 \
 		--build-arg APPNAME=$(PLATFORMD)-static \
 		-t $(APPNAME) \
@@ -651,7 +744,7 @@ docker-platform-load-amd64:
 # Docker :: Trusted Platform :: Remote
 .PHONY: docker-platform-push
 docker-platform-push:
-	docker build --push \
+	docker buildx build --push \
 		--platform=linux/amd64,linux/arm64 \
 		--build-arg APPNAME=$(PLATFORMD)-static \
 		-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME):latest \
@@ -715,101 +808,36 @@ iso-swtpm:
 
 
 # Packer
-.PHONY: packer
-packer:
-	PACKER_FILE=$(PACKER_BUILDER).json \
-	$(MAKE) packer-build
-
-.PHONY: packer-builder-arm
-packer-builder-arm:
-	docker run \
-		--rm \
-		--privileged \
-		-v /dev:/dev \
-		-v ${HOME}:${HOME} \
-		-v ${PWD}:/build:ro \
-		-v ${PWD}/build/packer/packer_cache:/build/packer_cache \
-		-v ${PWD}/build/packer/output-arm-image:/build/output-arm-image \
-		ghcr.io/solo-io/packer-plugin-arm-image build \
-			-var ssh_key_src="$(HOME)/.ssh/id_rsa.pub" \
-			-var "aws_access_key_id=$(AWS_ACCESS_KEY_ID)" \
-			-var "aws_secret_access_key=$(AWS_SECRET_ACCESS_KEY)" \
-			-var "aws_region=${AWS_REGION}" \
-			-var "aws_profile=${AWS_PROFILE}" \
-			-var "local_user=$(USER)" \
-			-var "appname=$(APP)" \
-			-var "apptype=$(APPTYPE)" \
-			-var "appenv=$(ENV)" \
-			-var "timezone=$(TIMEZONE)" \
-			-var "hostname=$(HOSTNAME)" \
-			-var "platform_home=$(PLATFORM_HOME)" \
-			-var "eth0_cidr=$(ETH0_CIDR)" \
-			-var "eth0_routers=$(ETH0_ROUTERS)" \
-			-var "eth0_dns=$(ETH0_DNS)" \
-			-var "wlan_cidr=$(WLAN_CIDR)" \
-			-var "wlan_routers=$(WLAN_ROUTERS)" \
-			-var "wlan_dns=$(WLAN_DNS)" \
-			-var "wlan_ssid=$(WLAN_SSID)" \
-			-var "wlan_psk=$(WLAN_PSK)" \
-			-var "wlan_key_mgmt=$(WLAN_KEY_MGMT)" \
-			-var "wlan_country=$(WLAN_COUNTRY)" \
-			-var "datastore=$(PLATFORM_DS)" \
-			$(PACKER_FILE)
-	sudo -E cp ${PWD}/build/packer/output-arm-image/image $(RPI_IMAGE_ARTIFACT)
-	sudo chown $(USER) $(RPI_IMAGE_ARTIFACT) ${PWD}/build/packer/output-arm-image/image
+.PHONY: packer-rpi
+packer-rpi:
+	@start_time=$$(date +%s); \
+		cd build/packer/rpi && make && mv -f trusted-platform.img ../../../trusted-platform-raspbian.img; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "Build execution time: %02d:%02d:%02d\n" $$hours $$minutes $$seconds
 
 
-# Platform Web Services
-.PHONY: webservice
-webservice: build-debug config
-	cd pkg && ../$(PLATFORMD) webservice --init
-
-.PHONY: webservice-verify-tls
-webservice-verify-tls:
-	openssl s_client \
-		-connect localhost:8443 \
-		-showcerts \
-		-servername localhost \
-		-CAfile pkg/$(PLATFORM_DIR)/ca/$(INTERMEDIATE_CA).$(DOMAIN)/x509/$(ROOT_CA).$(DOMAIN).pkcs8.rsa.pem \
-		| openssl x509 -noout -text
-
-
-# SoftHSM
-.PHONY: softhsm-init
-softhsm-init:
-	export SOFTHSM_CONF=$(SOFTHSM_CONFIG); \
-	chown $(USER):$(USER) $(SOFTHSM_TOKEN_DIR); \
-	$(SOFTHSM_DIR)/softhsm2-util \
-		--init-token \
-		--slot 0 \
-		--label test \
-		--so-pin 1234 \
-		--pin 5678 ; \
-	$(SOFTHSM_DIR)/softhsm2-util --show-slots
-
-
-# Raspbery PI
-.PHONY: rpi-sync
-rpi-sync:
-	rsync -av --progress ../$(PACKAGE) $(RPI_USER)@$(RPI_HOST): \
+# rsync
+.PHONY: rsync
+rsync:
+	rsync \
+		-av \
+		--progress \
 		--exclude .git/ \
 		--exclude *.img \
 		--exclude *.iso \
-		--exclude *.xz
+		--exclude *.xz \
+		../$(PACKAGE) $(SYNC_USER)@$(SYNC_HOST):
 
-.PHONY: rpi-sync-ansible
-rpi-sync-ansible:
+.PHONY: rsync-ansible
+rsync-ansible:
 	rsync -av --progress \
-		../$(PACKAGE)-ansible $(RPI_HOST): \
+		../$(PACKAGE)-ansible $(SYNC_HOST): \
 		--exclude ../$(PACKAGE)-ansible/.git/
 
-.PHONY: rpi-qemu
-rpi-qemu:
-	qemu-system-aarch64 \
-		-machine type=raspi3 \
-		-m 1024 \
-		-kernel vmlinux \
-		-initrd initramfs
 
 # Firefox
 .PHONY: firefox

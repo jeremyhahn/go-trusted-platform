@@ -1,0 +1,9 @@
+---
+
+platformd_home: /opt/trusted-platform
+platformd_binary: platformd-glibc-x86_64
+platformd_log: /var/log/platformd.log
+platformd_user: tpadm
+platformd_version: v0.0.7-alpha.1
+owner: tpadm
+group: tpadm

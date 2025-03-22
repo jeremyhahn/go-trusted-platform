@@ -1,0 +1,211 @@
+ARG BASE_IMAGE=alpine:latest
+
+FROM ${BASE_IMAGE}
+
+LABEL maintainer="Jeremy Hahn <mail@jeremyhahn.com>"
+
+ARG SRC_DIR=.
+ARG BUILD_DIR=/builder
+ARG ENTRY_POINT=build/docker/trusted-platform-builder/entrypoint.sh
+ARG GO_VERSION=go1.24.0
+ARG OPENSSL_VERSION=openssl-3.3
+ARG TPM2_TSS_TAG=4.1.3
+ARG TPM2_ABRMD_TAG=3.0.0
+ARG TPM2_TOOLS_TAG=5.7
+ARG OPENSC_TAG=0.25.1
+ARG SOFTHSM_TAG=2.6.1
+ARG TPM2_PKCS11_TAG=1.9.0
+ARG YUBICO_PIV_TOOL_TAG=yubico-piv-tool-2.5.2
+ARG TPM2_PYTSS=2.3.0
+ARG TP_TAG=v0.0.6-alpha.1
+ARG NVM_VERSION=v0.39.5
+
+WORKDIR $BUILD_DIR
+
+RUN apk update && \
+    apk upgrade && \
+    apk add --no-cache \
+        curl \
+        autoconf \
+        automake \
+        build-base \
+        git \
+        cmake \
+        libtool \
+        openssl-dev \
+        pkgconf \
+        check \
+        pcsc-lite-dev \
+        gengetopt \
+        help2man \
+        zlib-dev \
+        pcsc-lite \
+        autoconf-archive \
+        cmocka-dev \
+        procps \
+        iproute2 \
+        doxygen \
+        json-c-dev \
+        curl-dev \
+        libuuid \
+        libusb-dev \
+        glib-dev \
+        wget \
+        sqlite-dev \
+        sqlite \
+        pandoc \
+        cppunit-dev \
+        yaml-dev \
+        python3 \
+        python3-dev \
+        py3-pip \
+        coreutils \
+        libvirt-dev \
+        libftdi1-dev \
+        py3-yaml \
+        py3-asn1-modules \
+        py3-cryptography \
+        acl \
+        libbsd-dev \
+        meson \
+        ninja-build \
+        gnutls-dev \
+        libtirpc-dev \
+        acl-dev \
+        libcap-ng-dev \
+        fuse3-dev \
+        libxml2-dev \
+        libpciaccess-dev  \
+        py3-docutils \
+        linux-headers \
+        libnl3-dev \
+        nodejs \
+        npm
+
+RUN npm install --global yarn
+
+# openssl
+RUN git clone --depth=1 --branch $OPENSSL_VERSION https://github.com/openssl/openssl.git && \
+    cd openssl && \
+    ./config no-shared --prefix=/usr/local/openssl && \
+    make -j$(nproc) && \
+    make -j$(nproc) install
+    
+# tpm2-tss
+RUN git clone --depth=1 --branch $TPM2_TSS_TAG https://github.com/tpm2-software/tpm2-tss.git && \
+    cd tpm2-tss && \
+    ./bootstrap && \
+    ./configure --with-udevrulesprefix && \
+    make -j$(nproc) && \
+    make -j$(nproc) install
+
+# tpm2-abrmd
+RUN git clone --depth=1 --branch $TPM2_ABRMD_TAG https://github.com/tpm2-software/tpm2-abrmd.git && \
+    cd tpm2-abrmd && \
+    ./bootstrap && \
+    ./configure && \
+    make -j$(nproc) && \
+    make -j$(nproc) install
+
+# tpm2-tools
+RUN git clone --depth=1 --branch $TPM2_TOOLS_TAG https://github.com/tpm2-software/tpm2-tools.git && \
+    cd tpm2-tools && \
+    ./bootstrap && \
+    ./configure && \
+    make -j$(nproc) && \
+    make -j$(nproc) install && \
+    make check
+
+# RUN mkdir ibmtpm && \
+#     cd ibmtpm && \
+#     wget https://sourceforge.net/projects/ibmswtpm2/files/latest/download -O ibmtpm.tar.gz && \
+#     tar -zxvf ibmtpm.tar.gz && \
+#     cd src && \
+#     make -j$(nproc) && \
+#     make -j$(nproc) install
+
+# OpenSC
+RUN git clone --depth=1 --branch $OPENSC_TAG https://github.com/OpenSC/OpenSC.git && \
+    cd OpenSC && \
+    ./bootstrap && \
+    CFLAGS="-D_LIBBSD_SOURCE" LDFLAGS="-lbsd" ./configure && \
+    make -j$($nproc) && \
+    make -j$(nproc) install
+
+# SoftHSMv2
+RUN git clone --depth=1 --branch $SOFTHSM_TAG https://github.com/opendnssec/SoftHSMv2.git && \
+    cd SoftHSMv2 && \
+    ./autogen.sh || true && \
+    ./autogen.sh && \
+    ./configure --with-objectstore-backend-db && \
+    make -j$(nproc) && \
+    make -j$(nproc) install
+#    make check
+
+# tpm2-pkcs11
+RUN git clone --depth=1 --branch $TPM2_PKCS11_TAG https://github.com/tpm2-software/tpm2-pkcs11.git && \
+        cd tpm2-pkcs11 && \
+        ./bootstrap && \
+            git clone --depth=1 --branch $TPM2_PYTSS https://github.com/tpm2-software/tpm2-pytss && \
+                cd tpm2-pytss && \
+                python3 -m venv venv && \
+                source ./venv/bin/activate && \
+                pip install -U pip && \
+                pip install pyasn1_modules wheel tpm2-pytss && \
+                LD_LIBRARY_PATH=/usr/local/lib ../configure --with-fapi --enable-unit && \
+                make -j$(nproc) && \
+                make -j$(nproc) install
+                # make check
+
+# Golang
+RUN ARCH=$(uname -m) && \
+    if [[ "$ARCH" = "x86_64" ]]; then \
+        ARCH=amd64; \
+    fi && \
+    if [[ "$ARCH" = "aarch64" ]]; then \
+        ARCH=arm64; \
+    fi && \
+    echo "https://go.dev/dl/${GO_VERSION}.linux-${ARCH}.tar.gz" && \
+    curl -sSL "https://go.dev/dl/${GO_VERSION}.linux-${ARCH}.tar.gz" -o go.tar.gz && \
+    rm -rf /usr/local/go && \
+    tar -C /usr/local -xzf go.tar.gz && \
+    rm go.tar.gz && \
+    ln -sf /usr/local/go/bin/* /usr/local/bin/ && \
+    go version
+
+# ARG LIBVIRT_VERSION=11.0.0
+# RUN wget "https://download.libvirt.org/libvirt-${LIBVIRT_VERSION}.tar.xz" -O libvirt.tar.xz && \
+#     tar xf libvirt.tar.xz && \
+#     cd libvirt-${LIBVIRT_VERSION} && \
+#     meson setup build \
+#         -Dsystem=true \
+#         -Ddriver_qemu=enabled \
+#         -Dapparmor=disabled \
+#         -Ddefault_library=static \
+#         -Dlibnl=enabled && \
+#     ninja -C build install
+# ENV CGO_LDFLAGS="-static -L/usr/local/openssl/lib -L/usr/local/openssl/lib64 -L/usr/local/lib"
+
+# go-trusted-platform-web (dashboard)
+RUN git clone https://github.com/jeremyhahn/go-trusted-platform-web.git && \
+    cd go-trusted-platform-web && \
+    yarn install && \
+    yarn build
+
+COPY $SRC_DIR go-trusted-platform
+
+# Build go-trusted-platform (platform software)
+RUN cd go-trusted-platform && \
+    go install github.com/swaggo/swag/cmd/swag@latest && \
+    make build-public-html
+
+RUN cd go-trusted-platform && \
+    make build build-debug
+
+RUN cd go-trusted-platform && \
+    CGO_LDFLAGS="-static -L/usr/local/openssl/lib -L/usr/local/openssl/lib64 -L/usr/local/lib" \
+    make build-static build-debug-static
+
+COPY $ENTRY_POINT /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+CMD $ENTRY_POINT

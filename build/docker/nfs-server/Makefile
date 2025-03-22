@@ -8,11 +8,11 @@ init:
 
 .PHONY: build
 build:
-	docker build --load -t nfs-server .
+	docker buildx build --load -t nfs-server .
 
 .PHONY: push
 push:
-	docker build --push -t jeremyhahn/nfs-server .
+	docker buildx build --push -t jeremyhahn/nfs-server .
 
 .PHONY: run
 run: clean

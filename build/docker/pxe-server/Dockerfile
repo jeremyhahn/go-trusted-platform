@@ -28,14 +28,12 @@ RUN apt-get install -y \
     vim \
     wget \
     supervisor \
-    p7zip-full \
     pxelinux \
     libc-bin \
     curl \
     build-essential \
     libssl-dev \
     pkg-config \
-    && curl -sSf https://sh.rustup.rs | sh -s -- -y \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 RUN ln -s /usr/sbin/dhcpd /usr/sbin/isc-dhcp-server && \

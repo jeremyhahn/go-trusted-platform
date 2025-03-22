@@ -1,0 +1,84 @@
+---
+
+- name: Create Trusted Platform home directory
+  file:
+    path: "{{ platformd_home }}"
+    mode: 0755
+    state: directory
+
+- name: Create Trusted Platform config directory
+  file:
+    path: "{{ platformd_home }}/etc"
+    mode: 0774
+    state: directory
+    owner: "{{ owner }}"
+    group: "{{ platformd_user }}"
+
+- name: Create Trusted Platform log directory
+  file:
+    path: "{{ platformd_home }}/log"
+    mode: 0774
+    state: directory
+    owner: "{{ owner }}"
+    group: "{{ platformd_user }}"
+
+- name: Create Trusted Platform data directory
+  file:
+    path: "{{ platformd_home }}/data"
+    mode: 0774
+    state: directory
+    owner: "{{ owner }}"
+    group: "{{ platformd_user }}"
+
+- name: Download Trusted Platform public_html directory
+  ansible.builtin.get_url:
+    url: "https://github.com/jeremyhahn/go-trusted-platform/releases/download/{{ platform_version }}/{{ platform_binary }}"
+    dest: "{{ platformd_home }}/public_html"
+    owner: "{{ owner }}"
+    group: "{{ platformd_user }}"
+    mode: 0640
+
+- name: Download Trusted Platform binary
+  ansible.builtin.get_url:
+    url: "https://github.com/jeremyhahn/go-trusted-platform/releases/download/{{ platform_version }}/{{ platform_binary }}"
+    dest: "{{ platformd_home }}/platformd"
+    owner: "{{ owner }}"
+    group: "{{ group }}"
+    mode: 0777
+  notify:
+    - Start platformd
+
+- name: Check if Trusted Platform log file exists
+  stat:
+    path: "{{ cropdroid_home }}/log/trusted-platform.log"
+  register: log_file
+
+- name: Provision TPM 2.0 and initialize the platform
+  command: "platformd platform provision --raw-so-pin 123456 --raw-user-pin 123456"
+  args:
+    chdir: "{{ platformd_home }}"
+  when: not log_file.stat.exists
+
+- name: Create Trusted Platform systemd service (platformd)
+  template:
+    src: platformd.service
+    dest: /lib/systemd/system/platformd.service
+    owner: root
+    group: root
+    mode: 0644
+  notify:
+    - Start platformd
+
+- name: Start platformd service, if not started
+  service:
+    name: platformd
+    state: started
+    enabled: yes
+
+- name: Ensure first-boot-service is removed
+  service:
+    name:    first-boot-service
+    enabled: no
+    state:   stopped
+  register: firstboot_service_result
+  failed_when: "firstboot_service_result is failed and 'Could not find the requested service' not in firstboot_service_result.msg"

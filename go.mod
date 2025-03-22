@@ -1,8 +1,6 @@
 module github.com/jeremyhahn/go-trusted-platform
 
-go 1.23
-
-toolchain go1.23.4
+go 1.24.1
 
 replace golang.org/x/crypto => github.com/jeremyhahn/crypto v1.0.0
 

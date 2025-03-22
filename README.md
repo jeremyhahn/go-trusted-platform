@@ -40,12 +40,22 @@ For detailed documentation on the components used in this project, please refer 
 
 ## Build
 
-#### Dependencies
+The included [Makefile](Makefile) provides automated builds on 64-bit x86 Debian based operating systems.
+
+    # Initialize the build environment
+    make init
+
+    # Build the platform binaries, docker images, and ISOs
+    make release-local
+
+#### Core Dependencies
 
 * [Linux](https://www.debian.org/)
 * [Make](https://www.gnu.org/software/make/)
 * [Golang](https://go.dev/)
 * [Trusted Platform Module](https://trustedcomputinggroup.org/resource/trusted-platform-module-tpm-summary/)
+* [Docker](https://www.docker.com/get-started/)
+* [Buildkit](https://docs.docker.com/build/buildkit/)
 
 Optional dependencies:
 
@@ -63,21 +73,17 @@ Supported Operating Systems:
 * [Alpine](https://www.alpinelinux.org/)
 
 
-#### Build
+The Makefile `init` target automates the installation of build dependencies.
 
-Use the included `Makefile` to build the platform software, docker container and ISOs.
+#### Binaries
 
-    # Build the binary
-    make
+Platform binaries are created for both glibc and musl libc. If you're not sure which one to use, you most likely want glibc.
 
-    # Run tests
-    make test
+The glibc binaries are compiled with dynamically linked libraries using glibc, while the musl libc binaries are statically linked using musl libc.
 
-    # Build docker containers
-    make docker
+The debug binaries are compiled with debug symbols, while their counterparts have these symbols stripped.
 
-    # Build ISOs
-    make isos
+You can use the linux `file` command to inspect each of the binaries to see how they differ.
 
 
 ## Install

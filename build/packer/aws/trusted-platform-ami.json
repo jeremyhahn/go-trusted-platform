@@ -1,13 +1,13 @@
 {
     "variables": {
-      "region": "us-east-1",
+      "region": "{{env `AWS_REGION`}}",
       "aws_access_key": "{{env `AWS_ACCESS_KEY_ID`}}",
       "aws_secret_key": "{{env `AWS_SECRET_ACCESS_KEY`}}"
     },
     "builders": [
       {
         "type": "docker",
-        "image": "trusted-platform-iso:latest",
+        "image": "trusted-platform:latest",
         "commit": true
       }
     ],

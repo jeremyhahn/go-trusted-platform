@@ -4,3 +4,6 @@ platformd*
 *.iso
 *.qcow2*
 *.efi
+*.img
+.packer_cache/
+public_html.tar.gz

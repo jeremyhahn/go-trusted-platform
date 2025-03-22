@@ -15,6 +15,12 @@ RUN apt-get update && \
     apt-get install -y \
         bash \
         tpm2-tools \
+        opensc \
+        softhsm2 \
+        libssl-dev \
+        libtpm2-pkcs11-1 \
+        yubikey-manager \
+        libu2f-udev \
         ca-certificates && \
     rm -rf /var/cache/apt/*
 

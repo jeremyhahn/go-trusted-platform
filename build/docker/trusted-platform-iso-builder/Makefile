@@ -36,11 +36,14 @@ deps:
 # Docker Build
 .PHONY: build
 build:
-	docker build --load -t $(IMAGE_NAME) .
+	docker buildx build --load \
+	--platform linux/amd64 \
+	-t $(IMAGE_NAME) .
 
 .PHONY: build-swtpm
 build-swtpm:
-	docker build --load \
+	docker buildx build --load \
+		--platform linux/amd64 \
 		--build-arg UEFI_GRUB_DEFAULT=1 \
 		--build-arg BIOS_GRUB_DEFAULT=auto-install-swtpm \
 		--build-arg ISO_NAME=trusted-platform-swtpm \

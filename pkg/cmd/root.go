@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"syscall"
 
-	"github.com/fatih/color"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
@@ -26,8 +25,6 @@ var (
 	SOPin      string
 	Pin        string
 	err        error
-
-	EXIT_CODE_FAILURE = 255
 )
 
 var rootCmd = &cobra.Command{
@@ -114,9 +111,4 @@ func Execute() error {
 		log.Fatal(err)
 	}
 	return nil
-}
-
-func fatal(message string) {
-	color.New(color.FgRed).Println(message)
-	os.Exit(EXIT_CODE_FAILURE)
 }

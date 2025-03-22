@@ -1,5 +1,5 @@
 ---
-- name: "Trusted Platform :: Install with Podman"
+- name: Trusted Platform for Podman
   hosts: localhost
   roles:
     - base

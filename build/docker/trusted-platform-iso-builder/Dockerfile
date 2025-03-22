@@ -4,10 +4,10 @@ FROM $BASE_IMAGE
 
 ARG ISO_NAME=trusted-platform
 ARG UEFI_GRUB_DEFAULT=0
-ARG DEBIAN_VERSION=12.9.0
+ARG DEBIAN_VERSION=12.10.0
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV ISO_NAME=${ISO_NAME}
+ENV ISO_NAME=$ISO_NAME
 
 RUN rm -rf /etc/apt/sources.list.d/* && \
     echo "deb [arch=amd64] http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware" > /etc/apt/sources.list && \
@@ -130,6 +130,4 @@ RUN xorriso -as mkisofs \
     debian_iso
 
 # Copy the final ISO to the /iso directory using the ISO_NAME argument
-# CMD ["cp", "/build/${ISO_NAME}.iso", "/iso/${ISO_NAME}.iso"]
-
 CMD cp /build/${ISO_NAME}.iso /iso/${ISO_NAME}.iso

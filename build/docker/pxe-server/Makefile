@@ -51,16 +51,16 @@ init:
 
 .PHONY: build
 build:
-	docker build --load \
+	docker buildx build --load \
 		--platform=linux/amd64 \
 		-t $(IMAGE_NAME) .
-	docker build --load \
+	docker buildx build --load \
 		--platform=linux/arm64 \
 		-t $(IMAGE_NAME) .
 
 .PHONY: push
 push: 
-	docker build --push \
+	docker buildx build --push \
 		--platform=linux/amd64,linux/arm64 \
 		-t jeremyhahn/$(IMAGE_NAME) .
 

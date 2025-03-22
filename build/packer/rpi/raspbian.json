@@ -1,0 +1,79 @@
+{
+  "variables": {
+    "ssh_key_src": "/ssh-keys/mail_jeremyhahn_com.pub",
+    "platform_user": "tpadm",
+    "platform_home": "/opt/trusted-platform",
+    "platform_version": "v0.0.7-alpha.1",
+    "platform_binary": "platformd-static-musl-aarch64"
+  },
+  "builders": [{
+    "type": "arm",
+    "file_urls" : ["http://downloads.raspberrypi.org/raspios_lite_arm64/images/raspios_lite_arm64-2024-11-19/2024-11-19-raspios-bookworm-arm64-lite.img.xz"],
+    "file_checksum_url": "http://downloads.raspberrypi.org/raspios_lite_arm64/images/raspios_lite_arm64-2024-11-19/2024-11-19-raspios-bookworm-arm64-lite.img.xz.sha256",
+    "file_checksum_type": "sha256",
+    "file_target_extension": "xz",
+    "file_unarchive_cmd": ["xz", "--decompress", "$ARCHIVE_PATH"],
+    "image_build_method": "resize",
+    "image_path": "trusted-platform.img",
+    "image_size": "4G",
+    "image_type": "dos",
+    "image_partitions": [
+      {
+        "name": "boot",
+        "type": "c",
+        "start_sector": "8192",
+        "filesystem": "vfat",
+        "size": "256M",
+        "mountpoint": "/boot"
+      },
+      {
+        "name": "root",
+        "type": "83",
+        "start_sector": "532480",
+        "filesystem": "ext4",
+        "size": "0",
+        "mountpoint": "/"
+      }
+    ],
+    "image_chroot_env": ["PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"],
+    "qemu_binary_source_path": "/usr/bin/qemu-aarch64-static",
+    "qemu_binary_destination_path": "/usr/bin/qemu-aarch64-static"
+  }],
+  "provisioners": [
+    {
+      "type": "shell",
+      "inline": [
+        "apt-get update",
+        "apt-get install -y sudo vim wget tpm2-tools"
+      ]
+    },
+    {
+      "type": "shell",
+      "inline": [
+        "useradd -m -s /bin/bash {{user `platform_user`}}",
+        "echo '{{user `platform_user`}} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/{{user `platform_user`}}",
+        "mkdir /home/{{user `platform_user`}}/.ssh",
+        "mkdir -p {{user `platform_home`}}/etc",
+        "mkdir -p {{user `platform_home`}}/log",
+        "mkdir -p {{user `platform_home`}}/data",
+        "wget  https://github.com/jeremyhahn/go-trusted-platform/releases/download/{{user `platform_version`}}/{{user `platform_binary`}} -O {{user `platform_home`}}/platformd",
+        "chmod +x {{user `platform_home`}}/platformd"
+      ]
+    },
+    {
+      "type": "file",
+      "source": "{{user `ssh_key_src`}}",
+      "destination": "/home/{{user `platform_user`}}/.ssh/authorized_keys"
+    },
+    {
+      "type": "shell",
+      "inline": [
+        "touch /boot/ssh",
+        "echo 'dtoverlay=tpm-slb9670' > /boot/config.txt",
+        "sed '/PasswordAuthentication/d' -i /etc/ssh/sshd_config",
+        "echo >> /etc/ssh/sshd_config",
+        "echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config"
+      ]
+    }
+  ]
+}

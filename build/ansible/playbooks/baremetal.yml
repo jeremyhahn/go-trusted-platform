@@ -1,0 +1,9 @@
+---
+- name: Trusted Platform for Bare Metal
+  hosts: localhost
+  roles:
+    - base
+    - tpm2
+    # https://bugs.launchpad.net/ubuntu/+source/cryptsetup/+bug/1980018
+    # - luks-tpm2
+    - trusted-platform

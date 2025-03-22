@@ -1,0 +1,4 @@
+---
+
+- name: Start platformd
+  service: name=platformd state=started

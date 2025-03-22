@@ -1,5 +1,5 @@
 ---
-- name: Install K3s Trusted Platform
+- name: Trusted Platform for Docker
   hosts: localhost
   roles:
     - base

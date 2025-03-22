@@ -456,9 +456,9 @@ systemctl start getty@tty0.service || true
 # Install first-boot TPM enrollment service
 echo "Setting up systemd first-boot playbook service..."
 if [ "$SWTPM" = "true" ]; then
-    FIRSTBOOT_CMD="ANSIBLE_CONFIG=/home/tpadm/.ansible/ansible.cfg /usr/bin/ansible-playbook /home/tpadm/ansible/playbooks/podman.yml -e SWTPM=true -i /etc/ansible/hosts -vvv | tee -a /var/log/ansible.log"
+    FIRSTBOOT_CMD="ANSIBLE_CONFIG=/home/tpadm/.ansible/ansible.cfg /usr/bin/ansible-playbook /home/tpadm/ansible/playbooks/baremetal.yml -e SWTPM=true -i /etc/ansible/hosts -vvv | tee -a /var/log/ansible.log"
 else
-    FIRSTBOOT_CMD="ANSIBLE_CONFIG=/home/tpadm/.ansible/ansible.cfg /usr/bin/ansible-playbook /home/tpadm/ansible/playbooks/podman.yml -i /etc/ansible/hosts -vvv | tee -a /var/log/ansible.log"
+    FIRSTBOOT_CMD="ANSIBLE_CONFIG=/home/tpadm/.ansible/ansible.cfg /usr/bin/ansible-playbook /home/tpadm/ansible/playbooks/baremetal.yml -i /etc/ansible/hosts -vvv | tee -a /var/log/ansible.log"
 fi
 cat << EOF > /etc/systemd/system/first-boot-playbook.service
 [Unit]
