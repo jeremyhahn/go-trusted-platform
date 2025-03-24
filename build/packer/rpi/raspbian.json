@@ -1,9 +1,8 @@
 {
   "variables": {
-    "ssh_key_src": "/ssh-keys/mail_jeremyhahn_com.pub",
+    "ssh_key": "id_rsa.pub",
     "platform_user": "tpadm",
     "platform_home": "/opt/trusted-platform",
-    "platform_version": "v0.0.7-alpha.1",
     "platform_binary": "platformd-static-musl-aarch64"
   },
   "builders": [{
@@ -44,8 +43,14 @@
       "type": "shell",
       "inline": [
         "apt-get update",
-        "apt-get install -y sudo vim wget tpm2-tools"
+        "apt-get install -y sudo vim wget tpm2-tools",
+        "mkdir -p {{user `platform_home`}}"
       ]
+    },
+    {
+      "type": "file",
+      "source": "{{ user `platform_binary` }}",
+      "destination": "{{user `platform_home`}}/platformd"
     },
     {
       "type": "shell",
@@ -56,13 +61,12 @@
         "mkdir -p {{user `platform_home`}}/etc",
         "mkdir -p {{user `platform_home`}}/log",
         "mkdir -p {{user `platform_home`}}/data",
-        "wget  https://github.com/jeremyhahn/go-trusted-platform/releases/download/{{user `platform_version`}}/{{user `platform_binary`}} -O {{user `platform_home`}}/platformd",
         "chmod +x {{user `platform_home`}}/platformd"
       ]
     },
     {
       "type": "file",
-      "source": "{{user `ssh_key_src`}}",
+      "source": "{{user `ssh_key`}}",
       "destination": "/home/{{user `platform_user`}}/.ssh/authorized_keys"
     },
     {

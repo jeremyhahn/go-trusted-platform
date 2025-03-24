@@ -49,8 +49,8 @@ RUN npm install --global yarn
 RUN git clone --depth=1 --branch $OPENSSL_VERSION https://github.com/openssl/openssl.git && \
     cd openssl && \
     ./config no-shared --prefix=/usr/local/openssl && \
-    make -j$(nproc) && \
-    make -j$(nproc) install
+    make && \
+    make install
 
 # Golang
 RUN ARCH=$(uname -m) && \

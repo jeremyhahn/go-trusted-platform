@@ -41,4 +41,4 @@ build/docker/pxe-server/volume/
 build/docker/trusted-platform-iso-builder/ansible
 build/docker/trusted-platform-iso-builder/secure-boot-keys
 **/.packer_cache/
-public_html.tar.gz
+public_html*

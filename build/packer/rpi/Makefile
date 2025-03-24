@@ -1,7 +1,3 @@
-PACKER_BUILDER_RASPIOS64    ?= raspios-bookworm-arm64
-PACKER_BUILDER_UBUNTU64     ?= ubuntu-20.04.01-arm64
-PACKER_BUILDER              ?= $(PACKER_BUILDER_RASPIOS64)
-
 RPI_OS                      ?= raspbian
 RPI_KERNEL                  ?= kernel8.img
 RPI_DTB                     ?= bcm2710-rpi-3-b-plus.dtb
@@ -11,9 +7,16 @@ RPI_SDCARD                  ?= /dev/sda
 RPI_USER                    ?= pi
 RPI_HOST                    ?= rpi
 
+PACKER_BUILDER_RASPIOS64    ?= raspios-bookworm-arm64
+PACKER_BUILDER_UBUNTU64     ?= ubuntu-20.04.01-arm64
+PACKER_BUILDER              ?= $(PACKER_BUILDER_RASPIOS64)
+
+PACKER_ENV_SSH_KEY          ?= /ssh-keys/id_rsa.pub
+PACKER_ENV_PLATFORM_USER	?= tpadm
+PACKER_ENV_PLATFORM_HOME	?= /opt/trusted-platform
+PACKER_ENV_PLATFORM_BINARY  ?= platformd-static-musl-aarch64
 
 PACKER_LOG=1
-PACKER_LOG_PATH=packerlog.txt
 
 
 default: build
@@ -26,7 +29,8 @@ clean:
 		qemu-rpi-kernel \
 		$(RPI_IMAGE_FILENAME) \
 		$(RPI_KERNEL) \
-		$(RPI_DTB)
+		$(RPI_DTB) \
+		$(PACKER_ENV_PLATFORM_BINARY)
 #		~/.packer.d/plugins/packer-builder-arm
 
 .PHONY: deps
@@ -46,13 +50,20 @@ deps:
 
 .PHONY: build
 build:
+	cp ../../../$(PACKER_ENV_PLATFORM_BINARY) .
 	docker run \
 		--rm \
 		--privileged \
 	 	-v ~/.ssh:/ssh-keys \
 		-v /dev:/dev \
 		-v $(PWD):/build \
-		mkaczanowski/packer-builder-arm:latest build $(RPI_OS).json
+		mkaczanowski/packer-builder-arm:latest build \
+			-var ssh_key=$(PACKER_ENV_SSH_KEY) \
+			-var platform_user=$(PACKER_ENV_PLATFORM_USER) \
+			-var platform_home=$(PACKER_ENV_PLATFORM_HOME) \
+			-var platform_version=$(PACKER_ENV_PLATFORM_VERSION) \
+			-var platform_binary=$(PACKER_ENV_PLATFORM_BINARY) \
+			 $(RPI_OS).json
 
 .PHONY: qemu-deps
 qemu-deps:

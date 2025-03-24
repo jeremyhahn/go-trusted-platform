@@ -748,9 +748,15 @@ docker-platform-push:
 	docker buildx build --push \
 		--platform=linux/amd64,linux/arm64 \
 		--build-arg APPNAME=$(PLATFORMD)-static \
-		-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME):latest \
-		-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME):$(APP_VERSION) \
-		-f build/docker/$(APPNAME)/Dockerfile .
+		-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-alpine:latest \
+		-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-alpine:$(APP_VERSION) \
+		-f build/docker/$(APPNAME)/Dockerfile-alpine .
+	docker buildx build --push \
+		--platform=linux/amd64,linux/arm64 \
+		--build-arg APPNAME=$(PLATFORMD)-static \
+		-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-debian:latest \
+		-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-debian:$(APP_VERSION) \
+		-f build/docker/$(APPNAME)/Dockerfile-alpine .
 
 
 # Docker run targets
