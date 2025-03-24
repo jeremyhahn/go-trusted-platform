@@ -292,6 +292,8 @@ clean:
 	rm -rf \
 		$(PLATFORMD) \
 		$(PLATFORMD)-* \
+		*.img \
+		*.iso \
 		/usr/local/bin/$(PLATFORMD) \
 		$(PLATFORM_DIR) \
 		$(WEB_PUBLIC_HTML) \
@@ -324,8 +326,7 @@ clean:
 		pkg/tpm2/blobs \
 		pkg/ca/testdata \
 		pkg/tpm2/testdata \
-		config.yaml \
-		*.iso
+		config.yaml
 	cd build/packer/rpi && sudo make clean
 
 # Platform Web Services
