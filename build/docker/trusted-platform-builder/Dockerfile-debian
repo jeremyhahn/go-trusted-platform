@@ -26,7 +26,7 @@ RUN apt-get update && \
         curl \
         git \
         build-essential \
-        clang \
+        # clang \
         libssl-dev && \
     rm -rf /var/cache/apt/archives /var/lib/apt/lists/* && \
     echo "*\t-\tmemlock\tunlimited" > /etc/security/limits.conf
@@ -64,8 +64,8 @@ RUN git clone $DASHBOARD_REPO && \
 
 COPY $SRC_DIR go-trusted-platform
 
-ENV CGO_CFLAGS_ALLOW="-Qunused-arguments"
-ENV CC="clang"
+# ENV CGO_CFLAGS_ALLOW="-Qunused-arguments"
+# ENV CC="clang"
 
 RUN cd go-trusted-platform && \
     go install github.com/swaggo/swag/cmd/swag@latest && \
@@ -74,4 +74,4 @@ RUN cd go-trusted-platform && \
 # COPY --chown=root:root --chmod=755 $ENTRY_POINT /usr/local/bin/entrypoint.sh
 # COPY build/docker/trusted-platform-builder/70-u2f.rules /etc/udev/rules.d/70-u2f.rules
 
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+# ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

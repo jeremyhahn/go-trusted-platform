@@ -674,14 +674,18 @@ docker-builder-load-aarch64:
 # Docker :: Trusted Platform Builder :: Remote
 .PHONY: docker-builder-push
 docker-builder-push:
-	@start_time=$$(date +%s); \
+	start_time=$$(date +%s); \
 		docker buildx build --push \
+			--memory=16g \
 			--platform=linux/amd64,linux/arm64 \
+			--progress=plain \
 			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-builder-alpine:latest \
 			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-builder-alpine:$(APP_VERSION) \
 			-f build/docker/$(APPNAME)-builder/Dockerfile-alpine .; \
 		docker buildx build --push \
+			--memory=16g \
 			--platform=linux/amd64,linux/arm64 \
+			--progress=plain \
 			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-builder-debian:latest \
 			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-builder-debian:$(APP_VERSION) \
 			-f build/docker/$(APPNAME)-builder/Dockerfile-debian .; \
