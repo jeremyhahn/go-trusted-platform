@@ -36,16 +36,8 @@ RUN apk update && \
         nodejs \
         npm \
         openssl-libs-static
-#        clang
 
 RUN npm install --global yarn
-
-# # openssl
-# RUN git clone --depth=1 --branch $OPENSSL_VERSION https://github.com/openssl/openssl.git && \
-#     cd openssl && \
-#     ./config no-shared --prefix=/usr/local/openssl && \
-#     make -j1 && \
-#     make install
 
 # Golang
 RUN ARCH=$(uname -m) && \
@@ -89,11 +81,11 @@ RUN cd go-trusted-platform && \
     go install github.com/swaggo/swag/cmd/swag@latest && \
     make build-public-html
 
+# Build dynamically linked binaries
 RUN cd go-trusted-platform && \
     make build build-debug
 
-#ENV CC="clang"
-
+# Build statically linked binaries
 RUN cd go-trusted-platform && \
     go clean && \
     CGO_LDFLAGS="-static -L/usr/local/openssl/lib -L/usr/local/openssl/lib64 -L/usr/local/lib" \

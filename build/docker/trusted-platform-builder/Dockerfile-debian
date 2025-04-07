@@ -26,7 +26,6 @@ RUN apt-get update && \
         curl \
         git \
         build-essential \
-        # clang \
         libssl-dev && \
     rm -rf /var/cache/apt/archives /var/lib/apt/lists/* && \
     echo "*\t-\tmemlock\tunlimited" > /etc/security/limits.conf
@@ -63,9 +62,6 @@ RUN git clone $DASHBOARD_REPO && \
     yarn build
 
 COPY $SRC_DIR go-trusted-platform
-
-# ENV CGO_CFLAGS_ALLOW="-Qunused-arguments"
-# ENV CC="clang"
 
 RUN cd go-trusted-platform && \
     go install github.com/swaggo/swag/cmd/swag@latest && \

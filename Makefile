@@ -106,8 +106,6 @@ PACKER_BUILDER              ?= $(PACKER_BUILDER_RASPIOS64)
 UID                         := $(shell id -u)
 GID                         := $(shell id -g)
 
-BUILDKIT_WORKER_CONCURRENCY = $(shell nproc)
-
 # Text colors
 RED=\033[0;31m
 GREEN=\033[0;32m
@@ -124,14 +122,15 @@ init:
 	-docker buildx rm $(DOCKER_BUILDER_AAARCH64)
 	-docker context rm $(DOCKER_AARCH64_HOST)
 	sudo apt-get install -y \
-		libssl-dev \
 		docker.io \
+		virt-manager \
 		docker-buildx \
 		efitools \
 		binfmt-support \
 		qemu-user-static \
 		rsync \
-		pipx
+		pipx \
+		libssl-dev
 	pipx ensurepath
 	pipx install virt-firmware
 	sudo mkdir -p /etc/qemu/
