@@ -1,0 +1,378 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+import "tpm.proto";
+import "sdn.proto";
+import "compute.proto";
+
+// PlatformDaemon is the main service exposed by platformd over unix socket.
+// This is an INTERNAL API for root-level operations.
+// Clients: platformctl (local), platform-api (REST gateway)
+service PlatformDaemon {
+  // System operations
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+  rpc Provision(ProvisionRequest) returns (ProvisionResponse);
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+  rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
+
+  // Configuration operations
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+  rpc UpdateConfig(UpdateConfigRequest) returns (UpdateConfigResponse);
+  rpc ReloadConfig(ReloadConfigRequest) returns (ReloadConfigResponse);
+
+  // Service management
+  rpc StartService(StartServiceRequest) returns (StartServiceResponse);
+  rpc StopService(StopServiceRequest) returns (StopServiceResponse);
+  rpc RestartService(RestartServiceRequest) returns (RestartServiceResponse);
+  rpc GetServiceStatus(GetServiceStatusRequest) returns (GetServiceStatusResponse);
+  rpc ListServices(ListServicesRequest) returns (ListServicesResponse);
+
+  // Event streaming
+  rpc StreamEvents(StreamEventsRequest) returns (stream Event);
+  rpc StreamLogs(StreamLogsRequest) returns (stream LogEntry);
+  rpc StreamMetrics(StreamMetricsRequest) returns (stream MetricData);
+
+  // Database operations
+  rpc ListEntityTypes(ListEntityTypesRequest) returns (ListEntityTypesResponse);
+  rpc DumpEntityType(DumpEntityTypeRequest) returns (stream DumpEntityTypeResponse);
+}
+
+// System status
+enum SystemStatus {
+  SYSTEM_STATUS_UNSPECIFIED = 0;
+  SYSTEM_STATUS_INITIALIZING = 1;
+  SYSTEM_STATUS_READY = 2;
+  SYSTEM_STATUS_DEGRADED = 3;
+  SYSTEM_STATUS_UNAVAILABLE = 4;
+  SYSTEM_STATUS_SHUTTING_DOWN = 5;
+}
+
+// Service type
+enum ServiceType {
+  SERVICE_TYPE_UNSPECIFIED = 0;
+  SERVICE_TYPE_TPM = 1;
+  SERVICE_TYPE_SDN = 2;
+  SERVICE_TYPE_COMPUTE = 3;
+  SERVICE_TYPE_DNS = 4;
+  SERVICE_TYPE_ACME = 5;
+  SERVICE_TYPE_WEBSERVICE = 6;
+  SERVICE_TYPE_ATTESTATION = 7;
+}
+
+// Service status
+enum ServiceStatus {
+  SERVICE_STATUS_UNSPECIFIED = 0;
+  SERVICE_STATUS_STOPPED = 1;
+  SERVICE_STATUS_STARTING = 2;
+  SERVICE_STATUS_RUNNING = 3;
+  SERVICE_STATUS_STOPPING = 4;
+  SERVICE_STATUS_ERROR = 5;
+}
+
+// Platform information
+message PlatformInfo {
+  string hostname = 1;
+  string platform_id = 2;
+  string version = 3;
+  string build_time = 4;
+  string git_commit = 5;
+  bool fips_mode = 6;
+  TPMInfo tpm_info = 7;
+  SystemInfo system_info = 8;
+}
+
+// System information
+message SystemInfo {
+  string os = 1;
+  string arch = 2;
+  string kernel_version = 3;
+  uint32 num_cpus = 4;
+  uint64 total_memory_mb = 5;
+  uint64 available_memory_mb = 6;
+  google.protobuf.Timestamp boot_time = 7;
+  uint64 uptime_seconds = 8;
+}
+
+// TPM information (subset of TPMInfoResponse)
+message TPMInfo {
+  TPMVersion version = 1;
+  string manufacturer = 2;
+  string firmware_version = 3;
+  bool is_simulator = 4;
+  bool fips_mode = 5;
+}
+
+// Service information
+message ServiceInfo {
+  ServiceType type = 1;
+  string name = 2;
+  ServiceStatus status = 3;
+  google.protobuf.Timestamp started_at = 4;
+  uint64 uptime_seconds = 5;
+  HealthStatus health = 6;
+  string version = 7;
+  map<string, string> metadata = 8;
+}
+
+// Event type
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_SYSTEM_STARTUP = 1;
+  EVENT_TYPE_SYSTEM_SHUTDOWN = 2;
+  EVENT_TYPE_SERVICE_STARTED = 3;
+  EVENT_TYPE_SERVICE_STOPPED = 4;
+  EVENT_TYPE_SERVICE_ERROR = 5;
+  EVENT_TYPE_VM_CREATED = 6;
+  EVENT_TYPE_VM_STARTED = 7;
+  EVENT_TYPE_VM_STOPPED = 8;
+  EVENT_TYPE_VM_DELETED = 9;
+  EVENT_TYPE_CONTAINER_CREATED = 10;
+  EVENT_TYPE_CONTAINER_STARTED = 11;
+  EVENT_TYPE_CONTAINER_STOPPED = 12;
+  EVENT_TYPE_CONTAINER_DELETED = 13;
+  EVENT_TYPE_BRIDGE_CREATED = 14;
+  EVENT_TYPE_BRIDGE_DELETED = 15;
+  EVENT_TYPE_PORT_ADDED = 16;
+  EVENT_TYPE_PORT_DELETED = 17;
+  EVENT_TYPE_PORT_AUTHENTICATED = 18;
+  EVENT_TYPE_ATTESTATION_REQUESTED = 19;
+  EVENT_TYPE_ATTESTATION_VERIFIED = 20;
+  EVENT_TYPE_CERTIFICATE_ISSUED = 21;
+  EVENT_TYPE_CERTIFICATE_REVOKED = 22;
+  EVENT_TYPE_TPM_PROVISIONED = 23;
+  EVENT_TYPE_CONFIG_CHANGED = 24;
+  EVENT_TYPE_ERROR = 100;
+}
+
+// Event severity
+enum EventSeverity {
+  EVENT_SEVERITY_UNSPECIFIED = 0;
+  EVENT_SEVERITY_DEBUG = 1;
+  EVENT_SEVERITY_INFO = 2;
+  EVENT_SEVERITY_WARNING = 3;
+  EVENT_SEVERITY_ERROR = 4;
+  EVENT_SEVERITY_CRITICAL = 5;
+}
+
+// Event
+message Event {
+  string id = 1;
+  EventType type = 2;
+  EventSeverity severity = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  string source = 5;
+  string message = 6;
+  map<string, string> metadata = 7;
+}
+
+// Metric type
+enum MetricType {
+  METRIC_TYPE_UNSPECIFIED = 0;
+  METRIC_TYPE_COUNTER = 1;
+  METRIC_TYPE_GAUGE = 2;
+  METRIC_TYPE_HISTOGRAM = 3;
+  METRIC_TYPE_SUMMARY = 4;
+}
+
+// Metric data
+message MetricData {
+  string name = 1;
+  MetricType type = 2;
+  double value = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  map<string, string> labels = 5;
+  string unit = 6;
+}
+
+// Configuration section
+message ConfigSection {
+  string section = 1;
+  map<string, string> values = 2;
+}
+
+// System request/response
+message GetStatusRequest {}
+
+message GetStatusResponse {
+  SystemStatus status = 1;
+  PlatformInfo info = 2;
+  repeated ServiceInfo services = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message GetHealthRequest {
+  bool detailed = 1;
+}
+
+message GetHealthResponse {
+  HealthStatus status = 1;
+  repeated ComponentHealth components = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+message ProvisionRequest {
+  string owner_password = 1;
+  string endorsement_password = 2;
+  bool provision_tpm = 3;
+  bool provision_ca = 4;
+  bool provision_network = 5;
+  map<string, string> options = 6;
+}
+
+message ProvisionResponse {
+  Status status = 1;
+  repeated string steps_completed = 2;
+  map<string, string> results = 3;
+}
+
+message ShutdownRequest {
+  bool graceful = 1;
+  uint32 timeout_seconds = 2;
+}
+
+message ShutdownResponse {
+  Status status = 1;
+}
+
+message GetVersionRequest {}
+
+message GetVersionResponse {
+  string version = 1;
+  string build_time = 2;
+  string git_commit = 3;
+  string go_version = 4;
+  map<string, string> components = 5;
+}
+
+// Configuration request/response
+message GetConfigRequest {
+  string section = 1; // empty = all sections
+}
+
+message GetConfigResponse {
+  repeated ConfigSection sections = 1;
+}
+
+message UpdateConfigRequest {
+  ConfigSection section = 1;
+  bool persist = 2;
+}
+
+message UpdateConfigResponse {
+  Status status = 1;
+}
+
+message ReloadConfigRequest {}
+
+message ReloadConfigResponse {
+  Status status = 1;
+  repeated string reloaded_sections = 2;
+}
+
+// Service request/response
+message StartServiceRequest {
+  ServiceType service = 1;
+  map<string, string> options = 2;
+}
+
+message StartServiceResponse {
+  Status status = 1;
+  ServiceInfo service = 2;
+}
+
+message StopServiceRequest {
+  ServiceType service = 1;
+  bool force = 2;
+  uint32 timeout_seconds = 3;
+}
+
+message StopServiceResponse {
+  Status status = 1;
+}
+
+message RestartServiceRequest {
+  ServiceType service = 1;
+  uint32 timeout_seconds = 2;
+}
+
+message RestartServiceResponse {
+  Status status = 1;
+  ServiceInfo service = 2;
+}
+
+message GetServiceStatusRequest {
+  ServiceType service = 1;
+}
+
+message GetServiceStatusResponse {
+  ServiceInfo service = 1;
+}
+
+message ListServicesRequest {
+  repeated ServiceType types = 1;
+  repeated ServiceStatus statuses = 2;
+}
+
+message ListServicesResponse {
+  repeated ServiceInfo services = 1;
+}
+
+// Event streaming request
+message StreamEventsRequest {
+  repeated EventType types = 1;
+  repeated EventSeverity min_severity = 2;
+  repeated string sources = 3;
+  google.protobuf.Timestamp since = 4;
+}
+
+// Log streaming request
+message StreamLogsRequest {
+  ServiceType service = 1;
+  string level = 2; // debug, info, warn, error
+  bool follow = 3;
+  uint32 tail_lines = 4;
+  google.protobuf.Timestamp since = 5;
+}
+
+// Metrics streaming request
+message StreamMetricsRequest {
+  repeated string metric_names = 1;
+  map<string, string> label_selector = 2;
+  uint32 interval_seconds = 3;
+}
+
+// Database entity type info
+// QuicBaaS stores entities grouped by type using key prefixes in PebbleDB
+message EntityTypeInfo {
+  string name = 1;
+  uint64 entity_count = 2;
+  string status = 3; // "active" or "empty"
+}
+
+// Database operations request/response
+message ListEntityTypesRequest {}
+
+message ListEntityTypesResponse {
+  repeated EntityTypeInfo entity_types = 1;
+  uint64 total_entities = 2;
+  uint32 active_types = 3;
+  string database_path = 4;
+}
+
+message DumpEntityTypeRequest {
+  string entity_type = 1;  // empty = all entity types
+  string format = 2;       // "json" or "yaml"
+  bool pretty = 3;
+}
+
+message DumpEntityTypeResponse {
+  string entity_type = 1;
+  uint64 entity_id = 2;
+  bytes data = 3;
+}

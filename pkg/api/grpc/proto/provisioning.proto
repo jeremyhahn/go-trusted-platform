@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+
+// ProvisioningGateway is the gRPC service that gatewayd uses to communicate
+// with platformd during the PXE provisioning workflow. It enables gateways to
+// register newly discovered devices, request boot configurations, report state
+// transitions, and forward installation completion notifications.
+service ProvisioningGateway {
+  // RegisterPXEDevice reports a new device discovered on the provisioning VLAN.
+  rpc RegisterPXEDevice(RegisterProvisioningDeviceRequest) returns (RegisterProvisioningDeviceResponse);
+
+  // GetBootConfig requests the iPXE boot configuration for a device by MAC.
+  rpc GetBootConfig(GetBootConfigRequest) returns (GetBootConfigResponse);
+
+  // ReportDeviceState reports a device state transition from gatewayd to platformd.
+  rpc ReportDeviceState(ReportDeviceStateRequest) returns (ReportDeviceStateResponse);
+
+  // NotifyInstallComplete forwards the autoinstall webhook to platformd.
+  rpc NotifyInstallComplete(NotifyInstallCompleteRequest) returns (NotifyInstallCompleteResponse);
+}
+
+// RegisterProvisioningDeviceRequest is sent by gatewayd when a new device is
+// discovered on the provisioning VLAN via DHCP or ARP.
+message RegisterProvisioningDeviceRequest {
+  // MAC address of the discovered device.
+  string mac_address = 1;
+
+  // OVS port identifier where the device was seen.
+  string port_id = 2;
+
+  // Identifying the reporting gateway.
+  string gateway_id = 3;
+}
+
+// RegisterProvisioningDeviceResponse contains the result of device registration.
+message RegisterProvisioningDeviceResponse {
+  // Platform-assigned device identifier.
+  string device_id = 1;
+
+  // Registration outcome: "registered" or "already_registered".
+  string status = 2;
+}
+
+// GetBootConfigRequest requests the iPXE boot configuration for a device.
+message GetBootConfigRequest {
+  // MAC address of the device requesting boot configuration.
+  string mac_address = 1;
+}
+
+// GetBootConfigResponse contains the iPXE boot configuration for a device.
+message GetBootConfigResponse {
+  // URL to the kernel image (vmlinuz).
+  string kernel_url = 1;
+
+  // URL to the initrd image (initramfs).
+  string initrd_url = 2;
+
+  // URL for configuration delivery (platformd address).
+  string config_server_url = 3;
+
+  // Device role (control-plane, gateway, worker).
+  string role = 4;
+
+  // Hostname to assign to the device.
+  string hostname = 5;
+
+  // Bootstrap trust strategy (dane, noise, spki, auto).
+  string bootstrap_strategy = 6;
+
+  // Additional kernel arguments.
+  repeated string extra_kernel_args = 7;
+
+  // Whether a matching device profile was found.
+  bool found = 8;
+}
+
+// ReportDeviceStateRequest reports a device state transition.
+message ReportDeviceStateRequest {
+  // MAC address of the device.
+  string mac_address = 1;
+
+  // New state (discovered, booting, installing, etc.).
+  string state = 2;
+
+  // Human-readable reason for the state transition.
+  string reason = 3;
+
+  // Identifying the reporting gateway.
+  string gateway_id = 4;
+}
+
+// ReportDeviceStateResponse is the acknowledgement of a state report.
+message ReportDeviceStateResponse {}
+
+// NotifyInstallCompleteRequest forwards the autoinstall completion webhook.
+message NotifyInstallCompleteRequest {
+  // MAC address of the device that completed installation.
+  string mac_address = 1;
+
+  // Installation outcome: "success" or "failure".
+  string status = 2;
+
+  // When the installation completed.
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// NotifyInstallCompleteResponse is the acknowledgement of an install notification.
+message NotifyInstallCompleteResponse {}

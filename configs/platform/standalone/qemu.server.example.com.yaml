@@ -1,0 +1,735 @@
+# Trusted Platform Configuration (Server)
+# - Installation (disk, OS, network, TPM sealing)
+# - Provisioning (TPM, CA, keys)
+# - Runtime (webservice, DNS, ACME)
+
+debug: true
+debug-secrets: true
+platform-dir: /var/lib/trusted-platform
+config-dir: /etc/trusted-platform
+log-dir: /var/log/trusted-platform
+ca-dir: /var/log/trusted-platform/ca
+domain: server.example.com
+hostmaster: hostmaster@server.example.com
+tenant-id: platform
+pin-seal-policy: true
+
+
+# =============================================================================
+# INSTALLATION CONFIGURATION (System Manifest)
+# =============================================================================
+
+# Disk configuration for system installation
+disk:
+  device: ""
+  partition-table: gpt
+  efi-partition-size: 538
+  root-filesystem: lvm
+  lvm-volume-group: vg0
+  lvm-logical-volume: root
+  encryption:
+    version: luks2
+    cipher: aes-xts-plain64
+    key-size: 512
+    hash: sha256
+    pbkdf: argon2id
+    mapped-name: cryptroot
+
+# Operating system configuration
+os:
+  os: alpine
+  version: "3.22.2"
+  architecture: x86_64
+  hostname: server
+  packages:
+    - bash
+    - vim
+    - curl
+    - wget
+    - htop
+    - lsblk
+    - parted
+    - e2fsprogs
+    - lvm2
+    - tpm2-tools
+    - dracut
+    - softhsm
+  filesystem-type: lvm
+  fips: false
+  lockdown: true
+  lockdown-mode: confidentiality
+  tpm-auto-upgrade-seal: true
+  enable-fido2: false
+  ima:
+    enabled: false
+    policy: tcb
+    hash-algorithm: sha256
+    evm: false
+    appraise-mode: off
+    audit-enabled: true
+
+# Network configuration for installed system
+network:
+  dns:
+    nameservers:
+      - 8.8.8.8
+      - 8.8.4.4
+    search-domains: []
+  interfaces: []
+  bridges: []
+  bonds: []
+  vlans: []
+  wait-online: true
+  wait-timeout: 30
+
+# UKI (Unified Kernel Image) configuration
+uki:
+  cmdline: "root=/dev/mapper/vg0-root ro quiet"
+  kernel-path: /boot/vmlinuz-lts
+  initramfs-path: /boot/initramfs-lts
+
+# Secure Boot configuration
+secure-boot:
+  key-path: /boot/efi/secure-boot/db.key
+  cert-path: /boot/efi/secure-boot/db.crt
+
+# Enable TPM-based LUKS key sealing
+enable-tpm-sealing: true
+
+# PCR registers to seal LUKS keys against
+# This is THE SINGLE SOURCE OF TRUTH for seal PCRs used by:
+# - Installer (initial LUKS key sealing)
+# - Initrd firstboot (writes to pcr-banks file)
+# - Initrd boot (reads from config or pcr-banks file)
+#
+# Common PCRs:
+#   0: BIOS/UEFI firmware
+#   7: Secure Boot state
+#   9: Kernel command line
+#   10: Linux IMA - DON'T USE for LUKS (changes on every boot)
+seal-pcrs:
+  - 0
+  - 7
+  - 9
+
+# FIDO2 configuration
+enable-fido2-enrollment: false
+fido2:
+  relying-party-id: server.example.com
+  keyslot: 3
+  user-presence-required: true
+  timeout: 60
+
+
+# =============================================================================
+# ACME CLIENT CONFIGURATION
+# =============================================================================
+
+acme:
+  client:
+    directory: https://server.example.internal:9443/api/v1/acme/directory
+    account:
+      email: hostmaster@server.example.com
+      key:
+        # TPM 2.0 ECDSA
+        algorithm: ECDSA
+        cn: acme-account
+        debug: true
+        hash: SHA-256
+        password: 123456
+        platform-policy: true
+        ecc:
+          curve: P-256
+        signature-algorithm: ECDSA-SHA256
+        store: tpm2
+      register: true
+
+
+# =============================================================================
+# DNS CONFIGURATION
+# =============================================================================
+
+dns:
+  resolver:
+    servers:
+      - address: "127.0.0.1"
+        port: 8053
+    fallback:
+      - "1.1.1.1:53"
+      - "8.8.8.8:53"
+    local-forwarder:
+      enabled: false
+  allow-registration: true
+  allow-external-registration: true
+  allow-internal-registration: true
+  quicbaas:
+    data-dir: /var/lib/trusted-platform/quicbaas
+    storage-backend: file
+    node-id: 1
+    cache-size: 67108864
+    log-level: warn
+    consistency-level: linearizable
+    request-timeout: 30s
+  default-ttl: 3600
+  dnssec:
+    enabled: true  # Uses QuicBaaS KMS for DNSSEC key management
+    default-key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+    signature-expiry: 30d
+    nsec-mode: nsec3
+    nsec3-iterations: 1
+    nsec3-salt: ""
+    ksk:
+      lifetime: 365d
+      ttl: 86400
+    zsk:
+      lifetime: 30d
+      ttl: 3600
+  dane:
+    enabled: true
+    auto-generate: true
+    default-port: 8443
+    ttl: 3600
+    default-usage: 2
+    default-selector: 1
+    default-matching-type: 1
+    publish-dane-ee: true
+    key-reuse: true
+    rollover-ttl: 0
+  public:
+    port: 8053
+    forwarders:
+      - 1.1.1.1
+      - 8.8.8.8
+    zone:
+      description: Public zone for server.example.com
+      name: example.com.
+      ttl: 3600
+      records:
+        soa:
+          name: server.example.com.
+          mname: ns1.server.example.com.
+          rname: hostmaster.server.example.com.
+          serial: 1
+          refresh: 86400
+          retry: 7200
+          expire: 86400
+          minimum_ttl: 3600
+          ttl: 3600
+        ns:
+          - name: server.example.com.
+            value: ns1.server.example.com.
+            ttl: 3600
+        a:
+          - name: "@"
+            value: ${PUBLIC_IPv4}
+            ttl: 3600
+          - name: ns1
+            value: ${PUBLIC_IPv4}
+            ttl: 3600
+          - name: www
+            value: ${PUBLIC_IPv4}
+            ttl: 3600
+        cname:
+          - name: www
+            value: server.example.com.
+            ttl: 3600
+        mx:
+          - name: server.example.com.
+            value: mail.server.example.com.
+            priority: 10
+            ttl: 3600
+        txt:
+          - name: server.example.com.
+            value: v=spf1 include:_spf.google.com ~all
+            ttl: 3600
+  internal:
+    port: 9053
+    forwarders:
+      - 127.0.0.1:8053
+    zone:
+      description: Internal zone for example.internal
+      name: example.internal.
+      ttl: 3600
+      internal: true
+      records:
+        soa:
+          name: example.internal.
+          mname: ns1.example.internal.
+          rname: hostmaster.example.internal.
+          serial: 1
+          refresh: 86400
+          retry: 7200
+          expire: 86400
+          minimum_ttl: 3600
+          ttl: 3600
+        ns:
+          - name: example.internal.
+            value: ns1.example.internal.
+            ttl: 3600
+        a:
+          - name: "@"
+            value: ${PRIVATE_IPv4}
+            ttl: 3600
+          - name: ns1
+            value: ${PRIVATE_IPv4}
+            ttl: 3600
+          - name: ${HOSTNAME}
+            value: ${PRIVATE_IPv4}
+            ttl: 3600
+        cname:
+          - name: www
+            value: example.internal.
+            ttl: 3600
+
+
+
+# =============================================================================
+# DATASTORE CONFIGURATION
+# =============================================================================
+
+
+# =============================================================================
+# BOOTSTRAP CONFIGURATION
+# =============================================================================
+
+bootstrap:
+  noise:
+    enabled: false
+    listen-addr: ":9446"
+    max-connections: 100
+    read-timeout: 10s
+    write-timeout: 10s
+
+quicbaas:
+  data-dir: /var/lib/trusted-platform/quicbaas
+  storage-backend: file
+  node-id: 1
+  cache-size: 67108864
+  log-level: warn
+  consistency-level: linearizable
+  request-timeout: 30s
+
+
+# =============================================================================
+# TPM CONFIGURATION
+# =============================================================================
+
+tpm:
+  device: /dev/tpmrm0
+  simulator: false
+  encrypt-sessions: false
+  entropy: false
+  hash: SHA-256
+  ek:
+    debug: true
+    handle: 0x81010001
+    hash: SHA-256
+    password:
+    rsa:
+      size: 2048
+  ssrk:
+    debug: true
+    handle: 0x81000001
+    hierarchy-auth:
+    password:
+    platform-policy: false
+    rsa:
+      size: 2048
+  iak:
+    auth:
+    debug: true
+    hash: SHA-256
+    handle: 0x81010002
+    password:
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSA
+  idevid:
+    model: edge
+    serial: tp-server-01
+    cert-handle: 0x01C90000
+    debug: true
+    handle: 0x81020000
+    hash: SHA-256
+    pad: true
+    password:
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSA
+  platform-pcr: 23
+  platform-pcr-bank: sha256
+  # Golden PCRs for platform policy (separate from seal-pcrs)
+  # NOTE: PCR 10 (IMA) changes on every boot - DO NOT include for LUKS unlock!
+  # PCR 10 is only suitable for post-boot application key sealing when IMA measurements are complete.
+  golden-pcrs: [7, 9]
+  platform-srk:
+    srk-handle: 0x81000002
+    srk-auth: 123456
+    platform-policy: true
+
+
+# =============================================================================
+# CERTIFICATE AUTHORITY CONFIGURATION
+# =============================================================================
+
+certificate-authority:
+  platform-ca: 1
+  auto-import-issuing-ca: true
+  system-cert-pool: false
+  default-validity: 365
+  default-idevid-cn: default-device-id
+  sans-include-localhost: true
+  require-password: true
+  quantum-safe: true
+  identity:
+    - # Root Certificate Authority
+      is-root: true
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000001
+          srk-auth: 123456
+          platform-policy: true
+      keys:
+        # PKCS #8 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 Ed25519
+        - algorithm: Ed25519
+          ecc:
+            curve: P-256
+          signature-algorithm: Ed25519
+          hash: SHA-256
+          store: software
+          password: 123456
+          platform-policy: true
+          debug: true
+
+      valid: 50
+      subject:
+        cn: root-ca.server.example.com
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns:
+          - root-ca.server.example.com
+        email:
+          - hostmaster@server.example.com
+
+    - # Intermediate Certificate Authority
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000001
+          srk-auth: 123456
+          platform-policy: true
+      keys:
+        - # PKCS #8 RSA w/ PSS
+          algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 Ed25519
+        - algorithm: Ed25519
+          ecc:
+            curve: P-256
+          signature-algorithm: Ed25519
+          hash: SHA-256
+          store: software
+          password: 123456
+          platform-policy: true
+          debug: true
+      valid: 10
+      subject:
+        cn: ca01.server.example.com
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns:
+          - ca01.server.example.com
+          - ca.server.example.com
+        email:
+          - hostmaster@server.example.com
+
+
+# =============================================================================
+# WEBSERVICES CONFIGURATION
+# =============================================================================
+
+webservices:
+  # Public webservice - external/internet facing
+  - name: public
+    home: /var/lib/trusted-platform/public_html
+    port: 8080
+    tls-port: 8443
+    index: index.html
+    acme:
+      enabled: true
+      directory: https://server.example.com/api/v1/acme/directory
+      terms-of-service: /tos.html
+      challenges:
+        - enroll-01
+        - device-attest-01
+        - dns-01
+        - endorse-01
+        - http-01
+        - http-8080
+        - http-8081
+        - enroll-8080
+        - enroll-8081
+    rewrite:
+    - pattern: "^/test.html$"
+      target: /swagger/
+    jwt:
+      expiration: 525960
+      issuer: trusted-platform
+    webauthn:
+      display-name: Trusted Platform
+      id: server.example.com
+      origins:
+        - https://server.example.com
+        - https://server.example.com:8443
+        - http://server.example.com
+        - http://server.example.com:8080
+        - https://localhost
+        - https://localhost:8443
+        - http://localhost
+        - http://localhost:8080
+        - http://localhost:3000
+    cors:
+      allowed-origins:
+        - https://server.example.com
+        - https://server.example.com:8443
+        - http://server.example.com
+        - http://server.example.com:8080
+        - https://localhost
+        - https://localhost:8443
+        - http://localhost
+        - http://localhost:8080
+        - http://localhost:3000
+      allowed-methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+      allowed-headers:
+        - "*"
+      allow-credentials: true
+    key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+      password: 123456
+      platform-policy: true
+      debug: true
+    certificate:
+      acme:
+        challenge: http-01
+        renew: 15
+      subject:
+        cn: server.example.com
+        organization: ACME Corporation
+        country: US
+        province: Florida
+        locality: West Palm Beach
+        address: 123 Automation Street
+        postal-code: 12345
+      sans:
+        dns:
+          - server.example.com
+          - www.server.example.com
+        email:
+          - hostmaster@server.example.com
+
+  # Internal webservice - local network facing
+  - name: internal
+    home: /var/lib/trusted-platform/public_html
+    port: 9080
+    tls-port: 9443
+    index: index.html
+    acme:
+      enabled: true
+      directory: https://server.example.internal:9443/api/v1/acme/directory
+      terms-of-service: /tos.html
+      challenges:
+        - enroll-01
+        - device-attest-01
+        - dns-01
+        - endorse-01
+        - http-01
+        - http-8080
+        - http-8081
+        - enroll-8080
+        - enroll-8081
+    jwt:
+      expiration: 525960
+      issuer: trusted-platform
+    cors:
+      allowed-origins:
+        - https://server.example.internal
+        - http://server.example.internal
+        - https://localhost
+        - http://localhost
+      allowed-methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+      allowed-headers:
+        - "*"
+      allow-credentials: true
+    webauthn:
+      display-name: Trusted Platform Internal
+      id: server.example.internal
+      origins:
+        - https://server.example.internal
+        - https://server.example.internal:9443
+        - http://server.example.internal
+        - http://server.example.internal:9080
+        - https://localhost
+        - https://localhost:9443
+        - http://localhost
+        - http://localhost:9080
+    key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+      password: 123456
+      platform-policy: true
+      debug: true
+    certificate:
+      subject:
+        cn: server.example.internal
+        organization: ACME Corporation
+        country: US
+        province: Florida
+        locality: West Palm Beach
+        address: 123 Automation Street
+        postal-code: 12345
+      sans:
+        dns:
+          - server.example.internal
+        email:
+          - hostmaster@server.example.com
+
+
+# =============================================================================
+# PASSWORD HASHING (Argon2)
+# =============================================================================
+
+argon2:
+  memory: 1
+  iterations: 1
+  parallelism: 1
+  saltLen: 16
+  keyLen: 32

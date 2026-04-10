@@ -1,0 +1,1302 @@
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01HBdsDxe: failed to load Boot0001 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x2,0xFFFF,0x0): Not Found
+BdsDxe: loading Boot0002 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x4,0x0)
+BdsDxe: starting Boot0002 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x4,0x0)
+EFI stub: Loaded initrd from LINUX_EFI_INITRD_MEDIA_GUID device path
+EFI stub: Measured initrd data into PCR 9
+[    0.000000] Linux version 6.12.67-0-lts (buildozer@build-3-22-x86_64) (cc (Alpine 14.2.0) 14.2.0, GNU ld (GNU Binutils) 2.44) #1-Alpine SMP PREEMPT_DYNAMIC 2026-01-27 02:08:12
+[    0.000000] Command line: root=/dev/mapper/vg0-root rd.luks.uuid=369be381-fed9-49da-a836-13efaffa396c rd.luks.name=369be381-fed9-49da-a836-13efaffa396c=cryptroot rd.lvm=1 rootfstype=ext4 ro console=tty0 console=ttyS0,115200n8 loglevel=7 lockdown=confidentiality ima=on ima_policy=tcb ima_hash=sha256 ima_audit=1 ima_appraise=log
+[    0.000000] BIOS-provided physical RAM map:
+[    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009ffff] usable
+[    0.000000] BIOS-e820: [mem 0x0000000000100000-0x0000000000805fff] usable
+[    0.000000] BIOS-e820: [mem 0x0000000000806000-0x0000000000807fff] ACPI NVS
+[    0.000000] BIOS-e820: [mem 0x0000000000808000-0x000000000080ffff] usable
+[    0.000000] BIOS-e820: [mem 0x0000000000810000-0x00000000008fffff] ACPI NVS
+[    0.000000] BIOS-e820: [mem 0x0000000000900000-0x000000006ee54fff] usable
+[    0.000000] BIOS-e820: [mem 0x000000006ee55000-0x000000006ef56fff] reserved
+[    0.000000] BIOS-e820: [mem 0x000000006ef57000-0x000000006f8ebfff] usable
+[    0.000000] BIOS-e820: [mem 0x000000006f8ec000-0x000000006fb6bfff] reserved
+[    0.000000] BIOS-e820: [mem 0x000000006fb6c000-0x000000006fb7dfff] ACPI data
+[    0.000000] BIOS-e820: [mem 0x000000006fb7e000-0x000000006fbfdfff] ACPI NVS
+[    0.000000] BIOS-e820: [mem 0x000000006fbfe000-0x000000007febbfff] usable
+[    0.000000] BIOS-e820: [mem 0x000000007febc000-0x000000007ff3ffff] reserved
+[    0.000000] BIOS-e820: [mem 0x000000007ff40000-0x000000007fffffff] ACPI NVS
+[    0.000000] BIOS-e820: [mem 0x00000000b0000000-0x00000000bfffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000ffc00000-0x00000000ffffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x0000000100000000-0x000000027fffffff] usable
+[    0.000000] Kernel is locked down from command line; see man kernel_lockdown.7
+[    0.000000] NX (Execute Disable) protection: active
+[    0.000000] APIC: Static calls initialized
+[    0.000000] extended physical RAM map:
+[    0.000000] reserve setup_data: [mem 0x0000000000000000-0x000000000009ffff] usable
+[    0.000000] reserve setup_data: [mem 0x0000000000100000-0x0000000000805fff] usable
+[    0.000000] reserve setup_data: [mem 0x0000000000806000-0x0000000000807fff] ACPI NVS
+[    0.000000] reserve setup_data: [mem 0x0000000000808000-0x000000000080ffff] usable
+[    0.000000] reserve setup_data: [mem 0x0000000000810000-0x00000000008fffff] ACPI NVS
+[    0.000000] reserve setup_data: [mem 0x0000000000900000-0x000000006c216017] usable
+[    0.000000] reserve setup_data: [mem 0x000000006c216018-0x000000006c252e57] usable
+[    0.000000] reserve setup_data: [mem 0x000000006c252e58-0x000000006c253017] usable
+[    0.000000] reserve setup_data: [mem 0x000000006c253018-0x000000006c25cc57] usable
+[    0.000000] reserve setup_data: [mem 0x000000006c25cc58-0x000000006ee54fff] usable
+[    0.000000] reserve setup_data: [mem 0x000000006ee55000-0x000000006ef56fff] reserved
+[    0.000000] reserve setup_data: [mem 0x000000006ef57000-0x000000006f8ebfff] usable
+[    0.000000] reserve setup_data: [mem 0x000000006f8ec000-0x000000006fb6bfff] reserved
+[    0.000000] reserve setup_data: [mem 0x000000006fb6c000-0x000000006fb7dfff] ACPI data
+[    0.000000] reserve setup_data: [mem 0x000000006fb7e000-0x000000006fbfdfff] ACPI NVS
+[    0.000000] reserve setup_data: [mem 0x000000006fbfe000-0x000000007febbfff] usable
+[    0.000000] reserve setup_data: [mem 0x000000007febc000-0x000000007ff3ffff] reserved
+[    0.000000] reserve setup_data: [mem 0x000000007ff40000-0x000000007fffffff] ACPI NVS
+[    0.000000] reserve setup_data: [mem 0x00000000b0000000-0x00000000bfffffff] reserved
+[    0.000000] reserve setup_data: [mem 0x00000000ffc00000-0x00000000ffffffff] reserved
+[    0.000000] reserve setup_data: [mem 0x0000000100000000-0x000000027fffffff] usable
+[    0.000000] efi: EFI v2.7 by EDK II
+[    0.000000] efi: TPMFinalLog=0x6fbe6000 SMBIOS=0x6f920000 ACPI=0x6fb7d000 ACPI 2.0=0x6fb7d014 MEMATTR=0x6e99a698 INITRD=0x6e99cf98 RNG=0x6fb71018 TPMEventLog=0x6fb6f018 
+[    0.000000] random: crng init done
+[    0.000000] efi: Remove mem134: MMIO range=[0xffc00000-0xffffffff] (4MB) from e820 map
+[    0.000000] SMBIOS 2.8 present.
+[    0.000000] DMI: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 0.0.0 02/06/2015
+[    0.000000] DMI: Memory slots populated: 1/1
+[    0.000000] Hypervisor detected: KVM
+[    0.000000] last_pfn = 0x7febc max_arch_pfn = 0x400000000
+[    0.000000] kvm-clock: Using msrs 4b564d01 and 4b564d00
+[    0.000001] kvm-clock: using sched offset of 14833787119 cycles
+[    0.000004] clocksource: kvm-clock: mask: 0xffffffffffffffff max_cycles: 0x1cd42e4dffb, max_idle_ns: 881590591483 ns
+[    0.000010] tsc: Detected 2394.374 MHz processor
+[    0.001200] last_pfn = 0x280000 max_arch_pfn = 0x400000000
+[    0.001678] MTRR map: 4 entries (2 fixed + 2 variable; max 18), built from 8 variable MTRRs
+[    0.001697] x86/PAT: Configuration [0-7]: WB  WC  UC- UC  WB  WP  UC- WT  
+[    0.002239] last_pfn = 0x7febc max_arch_pfn = 0x400000000
+[    0.020726] Using GB pages for direct mapping
+[    0.022194] Secure boot disabled
+[    0.022195] RAMDISK: [mem 0x693fe000-0x6b182fff]
+[    0.022200] ACPI: Early table checksum verification disabled
+[    0.022204] ACPI: RSDP 0x000000006FB7D014 000024 (v02 BOCHS )
+[    0.022210] ACPI: XSDT 0x000000006FB7C0E8 00005C (v01 BOCHS  BXPC     00000001      01000013)
+[    0.022218] ACPI: FACP 0x000000006FB78000 0000F4 (v03 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.022227] ACPI: DSDT 0x000000006FB79000 00258B (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.022243] ACPI: FACS 0x000000006FBB4000 000040
+[    0.022247] ACPI: APIC 0x000000006FB77000 0000B0 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.022253] ACPI: HPET 0x000000006FB76000 000038 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.022258] ACPI: TPM2 0x000000006FB75000 00004C (v04 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.022264] ACPI: MCFG 0x000000006FB74000 00003C (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.022269] ACPI: WAET 0x000000006FB73000 000028 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.022274] ACPI: BGRT 0x000000006FB72000 000038 (v01 INTEL  EDK2     00000002      01000013)
+[    0.022278] ACPI: Reserving FACP table memory at [mem 0x6fb78000-0x6fb780f3]
+[    0.022281] ACPI: Reserving DSDT table memory at [mem 0x6fb79000-0x6fb7b58a]
+[    0.022282] ACPI: Reserving FACS table memory at [mem 0x6fbb4000-0x6fbb403f]
+[    0.022284] ACPI: Reserving APIC table memory at [mem 0x6fb77000-0x6fb770af]
+[    0.022285] ACPI: Reserving HPET table memory at [mem 0x6fb76000-0x6fb76037]
+[    0.022286] ACPI: Reserving TPM2 table memory at [mem 0x6fb75000-0x6fb7504b]
+[    0.022288] ACPI: Reserving MCFG table memory at [mem 0x6fb74000-0x6fb7403b]
+[    0.022289] ACPI: Reserving WAET table memory at [mem 0x6fb73000-0x6fb73027]
+[    0.022291] ACPI: Reserving BGRT table memory at [mem 0x6fb72000-0x6fb72037]
+[    0.025167] No NUMA configuration found
+[    0.025169] Faking a node at [mem 0x0000000000000000-0x000000027fffffff]
+[    0.025177] NODE_DATA(0) allocated [mem 0x27fffae80-0x27fffffff]
+[    0.025900] Zone ranges:
+[    0.025902]   DMA      [mem 0x0000000000001000-0x0000000000ffffff]
+[    0.025905]   DMA32    [mem 0x0000000001000000-0x00000000ffffffff]
+[    0.025907]   Normal   [mem 0x0000000100000000-0x000000027fffffff]
+[    0.025909]   Device   empty
+[    0.025910] Movable zone start for each node
+[    0.025912] Early memory node ranges
+[    0.025912]   node   0: [mem 0x0000000000001000-0x000000000009ffff]
+[    0.025914]   node   0: [mem 0x0000000000100000-0x0000000000805fff]
+[    0.025916]   node   0: [mem 0x0000000000808000-0x000000000080ffff]
+[    0.025917]   node   0: [mem 0x0000000000900000-0x000000006ee54fff]
+[    0.025919]   node   0: [mem 0x000000006ef57000-0x000000006f8ebfff]
+[    0.025920]   node   0: [mem 0x000000006fbfe000-0x000000007febbfff]
+[    0.025922]   node   0: [mem 0x0000000100000000-0x000000027fffffff]
+[    0.025924] Initmem setup node 0 [mem 0x0000000000001000-0x000000027fffffff]
+[    0.026333] On node 0, zone DMA: 1 pages in unavailable ranges
+[    0.026375] On node 0, zone DMA: 96 pages in unavailable ranges
+[    0.026377] On node 0, zone DMA: 2 pages in unavailable ranges
+[    0.026416] On node 0, zone DMA: 240 pages in unavailable ranges
+[    0.041766] On node 0, zone DMA32: 258 pages in unavailable ranges
+[    0.043914] On node 0, zone DMA32: 786 pages in unavailable ranges
+[    0.093691] On node 0, zone Normal: 324 pages in unavailable ranges
+[    0.097920] ACPI: PM-Timer IO Port: 0x608
+[    0.097987] ACPI: LAPIC_NMI (acpi_id[0xff] dfl dfl lint[0x1])
+[    0.098194] IOAPIC[0]: apic_id 0, version 17, address 0xfec00000, GSI 0-23
+[    0.098200] ACPI: INT_SRC_OVR (bus 0 bus_irq 0 global_irq 2 dfl dfl)
+[    0.098203] ACPI: INT_SRC_OVR (bus 0 bus_irq 5 global_irq 5 high level)
+[    0.098206] ACPI: INT_SRC_OVR (bus 0 bus_irq 9 global_irq 9 high level)
+[    0.098208] ACPI: INT_SRC_OVR (bus 0 bus_irq 10 global_irq 10 high level)
+[    0.098210] ACPI: INT_SRC_OVR (bus 0 bus_irq 11 global_irq 11 high level)
+[    0.098217] ACPI: Using ACPI (MADT) for SMP configuration information
+[    0.098219] ACPI: HPET id: 0x8086a201 base: 0xfed00000
+[    0.098262] TSC deadline timer available
+[    0.098270] CPU topo: Max. logical packages:   1
+[    0.098271] CPU topo: Max. logical dies:       1
+[    0.098272] CPU topo: Max. dies per package:   1
+[    0.098280] CPU topo: Max. threads per core:   1
+[    0.098281] CPU topo: Num. cores per package:     8
+[    0.098282] CPU topo: Num. threads per package:   8
+[    0.098283] CPU topo: Allowing 8 present CPUs plus 0 hotplug CPUs
+[    0.098351] kvm-guest: APIC: eoi() replaced with kvm_guest_apic_eoi_write()
+[    0.098455] kvm-guest: KVM setup pv remote TLB flush
+[    0.098501] kvm-guest: setup PV sched yield
+[    0.098530] PM: hibernation: Registered nosave memory: [mem 0x00000000-0x00000fff]
+[    0.098533] PM: hibernation: Registered nosave memory: [mem 0x000a0000-0x000fffff]
+[    0.098536] PM: hibernation: Registered nosave memory: [mem 0x00806000-0x00807fff]
+[    0.098539] PM: hibernation: Registered nosave memory: [mem 0x00810000-0x008fffff]
+[    0.098542] PM: hibernation: Registered nosave memory: [mem 0x6dfec000-0x6dff4fff]
+[    0.098545] PM: hibernation: Registered nosave memory: [mem 0x6ee55000-0x6ef56fff]
+[    0.098548] PM: hibernation: Registered nosave memory: [mem 0x6f8ec000-0x6fbfdfff]
+[    0.098551] PM: hibernation: Registered nosave memory: [mem 0x7febc000-0xffffffff]
+[    0.098553] [mem 0xc0000000-0xffffffff] available for PCI devices
+[    0.098556] Booting paravirtualized kernel on KVM
+[    0.098559] clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1910969940391419 ns
+[    0.105964] setup_percpu: NR_CPUS:256 nr_cpumask_bits:8 nr_cpu_ids:8 nr_node_ids:1
+[    0.110788] percpu: Embedded 61 pages/cpu s210136 r8192 d31528 u262144
+[    0.110978] Kernel command line: root=/dev/mapper/vg0-root rd.luks.uuid=369be381-fed9-49da-a836-13efaffa396c rd.luks.name=369be381-fed9-49da-a836-13efaffa396c=cryptroot rd.lvm=1 rootfstype=ext4 ro console=tty0 console=ttyS0,115200n8 loglevel=7 lockdown=confidentiality ima=on ima_policy=tcb ima_hash=sha256 ima_audit=1 ima_appraise=log
+[    0.111218] Unknown kernel command line parameters "ima=on ima_policy=tcb ima_hash=sha256 ima_audit=1 ima_appraise=log", will be passed to user space.
+[    0.117932] Dentry cache hash table entries: 1048576 (order: 11, 8388608 bytes, linear)
+[    0.121661] Inode-cache hash table entries: 524288 (order: 10, 4194304 bytes, linear)
+[    0.122008] Fallback order for Node 0: 0 
+[    0.122015] Built 1 zonelists, mobility grouping on.  Total pages: 2095445
+[    0.122017] Policy zone: Normal
+[    0.123993] mem auto-init: stack:all(zero), heap alloc:on, heap free:off
+[    0.124002] software IO TLB: area num 8.
+[    0.212807] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=8, Nodes=1
+[    0.212814] kmemleak: Kernel memory leak detector disabled
+[    0.212890] ftrace: allocating 44710 entries in 175 pages
+[    0.223106] ftrace: allocated 175 pages with 6 groups
+[    0.223111] Lockdown: swapper: use of tracefs is restricted; see man kernel_lockdown.7
+[    0.223113] Tracing disabled due to lockdown
+[    0.224007] Dynamic Preempt: voluntary
+[    0.225071] rcu: Preemptible hierarchical RCU implementation.
+[    0.225073] rcu: 	RCU restricting CPUs from NR_CPUS=256 to nr_cpu_ids=8.
+[    0.225075] 	Trampoline variant of Tasks RCU enabled.
+[    0.225076] 	Rude variant of Tasks RCU enabled.
+[    0.225077] 	Tracing variant of Tasks RCU enabled.
+[    0.225078] rcu: RCU calculated value of scheduler-enlistment delay is 100 jiffies.
+[    0.225079] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=8
+[    0.225099] RCU Tasks: Setting shift to 3 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=8.
+[    0.225102] RCU Tasks Rude: Setting shift to 3 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=8.
+[    0.225105] RCU Tasks Trace: Setting shift to 3 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=8.
+[    0.230011] NR_IRQS: 16640, nr_irqs: 488, preallocated irqs: 16
+[    0.230478] rcu: srcu_init: Setting srcu_struct sizes based on contention.
+[    0.230706] kfence: initialized - using 2097152 bytes for 255 objects at 0x(____ptrval____)-0x(____ptrval____)
+[    0.230806] Console: colour dummy device 80x25
+[    0.230811] printk: legacy console [tty0] enabled
+[    0.231691] printk: legacy console [ttyS0] enabled
+[    1.411611] ACPI: Core revision 20240827
+[    1.416181] clocksource: hpet: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604467 ns
+[    1.425394] APIC: Switch to symmetric I/O mode setup
+[    1.432350] x2apic enabled
+[    1.437453] APIC: Switched APIC routing to: physical x2apic
+[    1.442919] kvm-guest: APIC: send_IPI_mask() replaced with kvm_send_ipi_mask()
+[    1.449711] kvm-guest: APIC: send_IPI_mask_allbutself() replaced with kvm_send_ipi_mask_allbutself()
+[    1.458394] kvm-guest: setup PV IPIs
+[    1.471660] ..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
+[    1.477732] clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x228374dae5d, max_idle_ns: 440795268352 ns
+[    1.487890] Calibrating delay loop (skipped) preset value.. 4788.74 BogoMIPS (lpj=2394374)
+[    1.491005] x86/cpu: User Mode Instruction Prevention (UMIP) activated
+[    1.493328] Last level iTLB entries: 4KB 0, 2MB 0, 4MB 0
+[    1.493893] Last level dTLB entries: 4KB 0, 2MB 0, 4MB 0, 1GB 0
+[    1.494978] Spectre V1 : Mitigation: usercopy/swapgs barriers and __user pointer sanitization
+[    1.495915] Spectre V2 : Spectre BHI mitigation: SW BHB clearing on syscall and VM exit
+[    1.496894] Spectre V2 : Mitigation: Enhanced / Automatic IBRS
+[    1.497893] Spectre V2 : Spectre v2 / PBRSB-eIBRS: Retire a single CALL on VMEXIT
+[    1.498894] RETBleed: Mitigation: Enhanced IBRS
+[    1.499897] Spectre V2 : mitigation: Enabling conditional Indirect Branch Prediction Barrier
+[    1.500918] Speculative Store Bypass: Mitigation: Speculative Store Bypass disabled via prctl
+[    1.501902] TAA: Mitigation: TSX disabled
+[    1.502891] MMIO Stale Data: Vulnerable: Clear CPU buffers attempted, no microcode
+[    1.503895] GDS: Unknown: Dependent on hypervisor status
+[    1.504893] active return thunk: its_return_thunk
+[    1.505892] ITS: Mitigation: Aligned branch/return thunks
+[    1.507197] x86/fpu: Supporting XSAVE feature 0x001: 'x87 floating point registers'
+[    1.507894] x86/fpu: Supporting XSAVE feature 0x002: 'SSE registers'
+[    1.508893] x86/fpu: Supporting XSAVE feature 0x004: 'AVX registers'
+[    1.509894] x86/fpu: Supporting XSAVE feature 0x008: 'MPX bounds registers'
+[    1.510894] x86/fpu: Supporting XSAVE feature 0x010: 'MPX CSR'
+[    1.511893] x86/fpu: Supporting XSAVE feature 0x020: 'AVX-512 opmask'
+[    1.512893] x86/fpu: Supporting XSAVE feature 0x040: 'AVX-512 Hi256'
+[    1.513893] x86/fpu: Supporting XSAVE feature 0x080: 'AVX-512 ZMM_Hi256'
+[    1.514893] x86/fpu: Supporting XSAVE feature 0x200: 'Protection Keys User registers'
+[    1.515902] x86/fpu: xstate_offset[2]:  576, xstate_sizes[2]:  256
+[    1.516893] x86/fpu: xstate_offset[3]:  832, xstate_sizes[3]:   64
+[    1.517893] x86/fpu: xstate_offset[4]:  896, xstate_sizes[4]:   64
+[    1.518895] x86/fpu: xstate_offset[5]:  960, xstate_sizes[5]:   64
+[    1.519901] x86/fpu: xstate_offset[6]: 1024, xstate_sizes[6]:  512
+[    1.520893] x86/fpu: xstate_offset[7]: 1536, xstate_sizes[7]: 1024
+[    1.521893] x86/fpu: xstate_offset[9]: 2560, xstate_sizes[9]:    8
+[    1.522893] x86/fpu: Enabled xstate features 0x2ff, context size is 2568 bytes, using 'compacted' format.
+[    1.606479] Freeing SMP alternatives memory: 40K
+[    1.606899] pid_max: default: 32768 minimum: 301
+[    1.622112] LSM: initializing lsm=lockdown,capability,landlock,yama
+[    1.623000] landlock: Up and running.
+[    1.623894] Yama: becoming mindful.
+[    1.624986] Mount-cache hash table entries: 16384 (order: 5, 131072 bytes, linear)
+[    1.625943] Mountpoint-cache hash table entries: 16384 (order: 5, 131072 bytes, linear)
+[    1.627684] smpboot: CPU0: Intel(R) Xeon(R) Platinum 8260 CPU @ 2.40GHz (family: 0x6, model: 0x55, stepping: 0x7)
+[    1.628367] Performance Events: Skylake events, full-width counters, Intel PMU driver.
+[    1.628925] ... version:                2
+[    1.629905] ... bit width:              48
+[    1.630905] ... generic registers:      4
+[    1.631905] ... value mask:             0000ffffffffffff
+[    1.632927] ... max period:             00007fffffffffff
+[    1.633905] ... fixed-purpose events:   3
+[    1.634904] ... event mask:             000000070000000f
+[    1.636266] signal: max sigframe size: 3632
+[    1.636971] rcu: Hierarchical SRCU implementation.
+[    1.637906] rcu: 	Max phase no-delay instances is 400.
+[    1.639001] Timer migration: 1 hierarchy levels; 8 children per group; 1 crossnode level
+[    1.643938] smp: Bringing up secondary CPUs ...
+[    1.645312] smpboot: x86: Booting SMP configuration:
+[    1.645909] .... node  #0, CPUs:      #1 #2 #3 #4 #5 #6 #7
+[    1.676066] smp: Brought up 1 node, 8 CPUs
+[    1.677906] smpboot: Total of 8 processors activated (38309.98 BogoMIPS)
+[    1.688370] Memory: 8087468K/8381780K available (16384K kernel code, 2076K rwdata, 10712K rodata, 3656K init, 3960K bss, 288304K reserved, 0K cma-reserved)
+[    1.690047] devtmpfs: initialized
+[    1.690964] x86/mm: Memory block size: 128MB
+[    1.693586] ACPI: PM: Registering ACPI NVS region [mem 0x00806000-0x00807fff] (8192 bytes)
+[    1.693912] ACPI: PM: Registering ACPI NVS region [mem 0x00810000-0x008fffff] (983040 bytes)
+[    1.694931] ACPI: PM: Registering ACPI NVS region [mem 0x6fb7e000-0x6fbfdfff] (524288 bytes)
+[    1.695933] ACPI: PM: Registering ACPI NVS region [mem 0x7ff40000-0x7fffffff] (786432 bytes)
+[    1.697885] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1911260446275000 ns
+[    1.705967] futex hash table entries: 2048 (order: 5, 131072 bytes, linear)
+[    1.711936] Lockdown: swapper/0: use of tracefs is restricted; see man kernel_lockdown.7
+[    1.720908] Can not register tracer function_graph due to lockdown
+[    1.727047] pinctrl core: initialized pinctrl subsystem
+[    1.736986] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    1.744145] audit: initializing netlink subsys (disabled)
+[    1.751081] thermal_sys: Registered thermal governor 'fair_share'
+[    1.751084] thermal_sys: Registered thermal governor 'bang_bang'
+[    1.750919] audit: type=2000 audit(1770215274.841:1): state=initialized audit_enabled=0 res=1
+[    1.755904] thermal_sys: Registered thermal governor 'step_wise'
+[    1.755906] thermal_sys: Registered thermal governor 'user_space'
+[    1.774903] cpuidle: using governor ladder
+[    1.786902] cpuidle: using governor menu
+[    1.790813] acpiphp: ACPI Hot Plug PCI Controller Driver version: 0.5
+[    1.797626] PCI: ECAM [mem 0xb0000000-0xbfffffff] (base 0xb0000000) for domain 0000 [bus 00-ff]
+[    1.806918] PCI: ECAM [mem 0xb0000000-0xbfffffff] reserved as E820 entry
+[    1.813977] PCI: Using configuration type 1 for base access
+[    1.828004] kprobes: kprobe jump-optimization is enabled. All kprobes are optimized if possible.
+[    1.846731] HugeTLB: registered 1.00 GiB page size, pre-allocated 0 pages
+[    1.852908] HugeTLB: 16380 KiB vmemmap can be freed for a 1.00 GiB page
+[    1.858908] HugeTLB: registered 2.00 MiB page size, pre-allocated 0 pages
+[    1.865906] HugeTLB: 28 KiB vmemmap can be freed for a 2.00 MiB page
+[    1.874025] fbcon: Taking over console
+[    1.877956] ACPI: Added _OSI(Module Device)
+[    1.882907] ACPI: Added _OSI(Processor Device)
+[    1.884906] ACPI: Added _OSI(Processor Aggregator Device)
+[    1.893055] ACPI: 1 ACPI AML tables successfully acquired and loaded
+[    1.905153] ACPI: Interpreter enabled
+[    1.908925] ACPI: PM: (supports S0 S3 S4 S5)
+[    1.912919] ACPI: Using IOAPIC for interrupt routing
+[    1.917942] PCI: Using host bridge windows from ACPI; if necessary, use "pci=nocrs" and report a bug
+[    1.923908] PCI: Using E820 reservations for host bridge windows
+[    1.930649] ACPI: Enabled 2 GPEs in block 00 to 3F
+[    1.941002] ACPI: PCI Root Bridge [PCI0] (domain 0000 [bus 00-ff])
+[    1.946912] acpi PNP0A08:00: _OSC: OS supports [ExtendedConfig ASPM ClockPM Segments MSI HPX-Type3]
+[    1.954975] acpi PNP0A08:00: _OSC: platform does not support [PCIeHotplug LTR]
+[    1.962018] acpi PNP0A08:00: _OSC: OS now controls [SHPCHotplug PME AER PCIeCapability]
+[    1.969603] PCI host bridge to bus 0000:00
+[    1.973911] pci_bus 0000:00: root bus resource [io  0x0000-0x0cf7 window]
+[    1.978906] pci_bus 0000:00: root bus resource [io  0x0d00-0xffff window]
+[    1.984913] pci_bus 0000:00: root bus resource [mem 0x000a0000-0x000bffff window]
+[    1.991908] pci_bus 0000:00: root bus resource [mem 0x80000000-0xafffffff window]
+[    1.998908] pci_bus 0000:00: root bus resource [mem 0xc0000000-0xfebfffff window]
+[    2.004907] pci_bus 0000:00: root bus resource [mem 0x380000000000-0x3807ffffffff window]
+[    2.012909] pci_bus 0000:00: root bus resource [mem 0xfed40000-0xfed44fff]
+[    2.018907] pci_bus 0000:00: root bus resource [bus 00-ff]
+[    2.024251] pci 0000:00:00.0: [8086:29c0] type 00 class 0x060000 conventional PCI endpoint
+[    2.035342] pci 0000:00:01.0: [1234:1111] type 00 class 0x030000 conventional PCI endpoint
+[    2.065991] pci 0000:00:01.0: BAR 0 [mem 0xc0000000-0xc0ffffff pref]
+[    2.081990] pci 0000:00:01.0: BAR 2 [mem 0xc1044000-0xc1044fff]
+[    2.113986] pci 0000:00:01.0: ROM [mem 0xffff0000-0xffffffff pref]
+[    2.122903] pci 0000:00:01.0: Video device with shadowed ROM at [mem 0x000c0000-0x000dffff]
+[    2.133912] pci 0000:00:01.0: pci_fixup_video+0x0/0x110 took 11718 usecs
+[    2.142593] pci 0000:00:02.0: [1af4:1000] type 00 class 0x020000 conventional PCI endpoint
+[    2.157885] pci 0000:00:02.0: BAR 0 [io  0x6100-0x611f]
+[    2.169904] pci 0000:00:02.0: BAR 1 [mem 0xc1043000-0xc1043fff]
+[    2.188911] pci 0000:00:02.0: BAR 4 [mem 0x380000000000-0x380000003fff 64bit pref]
+[    2.207782] pci 0000:00:02.0: ROM [mem 0xfffc0000-0xffffffff pref]
+[    2.219507] pci 0000:00:03.0: [1af4:1005] type 00 class 0x00ff00 conventional PCI endpoint
+[    2.227902] pci 0000:00:03.0: BAR 0 [io  0x60e0-0x60ff]
+[    2.234903] pci 0000:00:03.0: BAR 1 [mem 0xc1042000-0xc1042fff]
+[    2.256903] pci 0000:00:03.0: BAR 4 [mem 0x380000004000-0x380000007fff 64bit pref]
+[    2.283369] pci 0000:00:04.0: [1af4:1001] type 00 class 0x010000 conventional PCI endpoint
+[    2.293904] pci 0000:00:04.0: BAR 0 [io  0x6000-0x607f]
+[    2.302903] pci 0000:00:04.0: BAR 1 [mem 0xc1041000-0xc1041fff]
+[    2.319904] pci 0000:00:04.0: BAR 4 [mem 0x380000008000-0x38000000bfff 64bit pref]
+[    2.338883] pci 0000:00:1f.0: [8086:2918] type 00 class 0x060100 conventional PCI endpoint
+[    2.352625] pci 0000:00:1f.0: quirk: [io  0x0600-0x067f] claimed by ICH6 ACPI/GPIO/TCO
+[    2.363036] pci 0000:00:1f.2: [8086:2922] type 00 class 0x010601 conventional PCI endpoint
+[    2.382902] pci 0000:00:1f.2: BAR 4 [io  0x60c0-0x60df]
+[    2.390903] pci 0000:00:1f.2: BAR 5 [mem 0xc1040000-0xc1040fff]
+[    2.401402] pci 0000:00:1f.3: [8086:2930] type 00 class 0x0c0500 conventional PCI endpoint
+[    2.414423] pci 0000:00:1f.3: BAR 4 [io  0x6080-0x60bf]
+[    2.421885] ACPI: PCI: Interrupt link LNKA configured for IRQ 10
+[    2.425352] ACPI: PCI: Interrupt link LNKB configured for IRQ 10
+[    2.432253] ACPI: PCI: Interrupt link LNKC configured for IRQ 11
+[    2.438360] ACPI: PCI: Interrupt link LNKD configured for IRQ 11
+[    2.445242] ACPI: PCI: Interrupt link LNKE configured for IRQ 10
+[    2.451342] ACPI: PCI: Interrupt link LNKF configured for IRQ 10
+[    2.457358] ACPI: PCI: Interrupt link LNKG configured for IRQ 11
+[    2.460271] ACPI: PCI: Interrupt link LNKH configured for IRQ 11
+[    2.467127] ACPI: PCI: Interrupt link GSIA configured for IRQ 16
+[    2.472922] ACPI: PCI: Interrupt link GSIB configured for IRQ 17
+[    2.478922] ACPI: PCI: Interrupt link GSIC configured for IRQ 18
+[    2.484938] ACPI: PCI: Interrupt link GSID configured for IRQ 19
+[    2.490922] ACPI: PCI: Interrupt link GSIE configured for IRQ 20
+[    2.493922] ACPI: PCI: Interrupt link GSIF configured for IRQ 21
+[    2.499922] ACPI: PCI: Interrupt link GSIG configured for IRQ 22
+[    2.505922] ACPI: PCI: Interrupt link GSIH configured for IRQ 23
+[    2.514005] iommu: Default domain type: Translated
+[    2.518906] iommu: DMA domain TLB invalidation policy: lazy mode
+[    2.525445] pps_core: LinuxPPS API ver. 1 registered
+[    2.529906] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
+[    2.536918] PTP clock support registered
+[    2.542885] EDAC MC: Ver: 3.0.0
+[    2.547045] efivars: Registered efivars operations
+[    2.552885] PCI: Using ACPI for IRQ routing
+[    3.097008] pci 0000:00:01.0: vgaarb: setting as boot VGA device
+[    3.097885] pci 0000:00:01.0: vgaarb: bridge control possible
+[    3.097885] pci 0000:00:01.0: vgaarb: VGA device added: decodes=io+mem,owns=io+mem,locks=none
+[    3.114905] vgaarb: loaded
+[    3.118163] hpet0: at MMIO 0xfed00000, IRQs 2, 8, 0
+[    3.122907] hpet0: 3 comparators, 64-bit 100.000000 MHz counter
+[    3.150946] clocksource: Switched to clocksource kvm-clock
+[    3.156234] Lockdown: swapper/0: use of tracefs is restricted; see man kernel_lockdown.7
+[    3.163777] Tracing disabled due to lockdown
+[    3.167897] Lockdown: swapper/0: use of tracefs is restricted; see man kernel_lockdown.7
+[    3.177460] Tracing disabled due to lockdown
+[    3.181481] Lockdown: swapper/0: use of tracefs is restricted; see man kernel_lockdown.7
+[    3.192333] Tracing disabled due to lockdown
+[    3.196893] Lockdown: swapper/0: use of tracefs is restricted; see man kernel_lockdown.7
+[    3.205624] Tracing disabled due to lockdown
+[    3.218517] Lockdown: swapper/0: use of tracefs is restricted; see man kernel_lockdown.7
+[    3.231853] Tracing disabled due to lockdown
+[    3.237070] Lockdown: swapper/0: use of tracefs is restricted; see man kernel_lockdown.7
+[    3.244633] Tracing disabled due to lockdown
+[    3.250559] VFS: Disk quotas dquot_6.6.0
+[    3.254378] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+[    3.261888] pnp: PnP ACPI init
+[    3.265166] system 00:05: [mem 0xb0000000-0xbfffffff window] has been reserved
+[    3.273069] pnp: PnP ACPI: found 6 devices
+[    3.291831] clocksource: acpi_pm: mask: 0xffffff max_cycles: 0xffffff, max_idle_ns: 2085701024 ns
+[    3.300529] NET: Registered PF_INET protocol family
+[    3.308204] IP idents hash table entries: 131072 (order: 8, 1048576 bytes, linear)
+[    3.342969] tcp_listen_portaddr_hash hash table entries: 4096 (order: 4, 65536 bytes, linear)
+[    3.351228] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    3.358914] TCP established hash table entries: 65536 (order: 7, 524288 bytes, linear)
+[    3.370858] TCP bind hash table entries: 65536 (order: 9, 2097152 bytes, linear)
+[    3.381295] TCP: Hash tables configured (established 65536 bind 65536)
+[    3.398212] MPTCP token hash table entries: 8192 (order: 6, 196608 bytes, linear)
+[    3.412699] UDP hash table entries: 4096 (order: 5, 131072 bytes, linear)
+[    3.419294] UDP-Lite hash table entries: 4096 (order: 5, 131072 bytes, linear)
+[    3.426167] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    3.431606] NET: Registered PF_XDP protocol family
+[    3.436194] pci 0000:00:02.0: ROM [mem 0xfffc0000-0xffffffff pref]: can't claim; no compatible bridge window
+[    3.449700] pci 0000:00:02.0: ROM [mem 0x80000000-0x8003ffff pref]: assigned
+[    3.463633] pci_bus 0000:00: resource 4 [io  0x0000-0x0cf7 window]
+[    3.473238] pci_bus 0000:00: resource 5 [io  0x0d00-0xffff window]
+[    3.483634] pci_bus 0000:00: resource 6 [mem 0x000a0000-0x000bffff window]
+[    3.490146] pci_bus 0000:00: resource 7 [mem 0x80000000-0xafffffff window]
+[    3.499979] pci_bus 0000:00: resource 8 [mem 0xc0000000-0xfebfffff window]
+[    3.509873] pci_bus 0000:00: resource 9 [mem 0x380000000000-0x3807ffffffff window]
+[    3.520450] pci_bus 0000:00: resource 10 [mem 0xfed40000-0xfed44fff]
+[    3.528127] PCI: CLS 0 bytes, default 64
+[    3.532331] PCI-DMA: Using software bounce buffering for IO (SWIOTLB)
+[    3.532557] Trying to unpack rootfs image as initramfs...
+[    3.538319] software IO TLB: mapped [mem 0x00000000653fe000-0x00000000693fe000] (64MB)
+[    3.538535] clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x228374dae5d, max_idle_ns: 440795268352 ns
+[    3.563843] Lockdown: swapper/0: use of tracefs is restricted; see man kernel_lockdown.7
+[    3.572539] Can not register tracer mmiotrace due to lockdown
+[    3.578315] Initialise system trusted keyrings
+[    3.583006] workingset: timestamp_bits=40 max_order=21 bucket_order=0
+[    3.613243] Key type asymmetric registered
+[    3.617779] Asymmetric key parser 'x509' registered
+[    3.623194] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 246)
+[    3.633658] io scheduler mq-deadline registered
+[    3.638544] io scheduler kyber registered
+[    3.642618] io scheduler bfq registered
+[    3.655860] shpchp: Standard Hot Plug PCI Controller Driver version: 0.4
+[    3.669978] ERST DBG: ERST support is disabled.
+[    3.676147] Serial: 8250/16550 driver, 4 ports, IRQ sharing enabled
+[    3.688009] 00:03: ttyS0 at I/O 0x3f8 (irq = 4, base_baud = 115200) is a 16550A
+[    3.704034] Linux agpgart interface v0.103
+[    3.708145] ACPI: bus type drm_connector registered
+[    3.719357] brd: module loaded
+[    3.722811] i8042: PNP: PS/2 Controller [PNP0303:KBD,PNP0f13:MOU] at 0x60,0x64 irq 1,12
+[    3.735374] serio: i8042 KBD port at 0x60,0x64 irq 1
+[    3.741097] serio: i8042 AUX port at 0x60,0x64 irq 12
+[    3.751589] rtc_cmos 00:04: RTC can wake from S4
+[    3.762218] input: AT Translated Set 2 keyboard as /devices/platform/i8042/serio0/input/input1
+[    3.770085] rtc_cmos 00:04: registered as rtc0
+[    3.779254] rtc_cmos 00:04: setting system clock to 2026-02-04T14:27:57 UTC (1770215277)
+[    3.787295] rtc_cmos 00:04: alarms up to one day, y3k, 242 bytes nvram
+[    3.793492] intel_pstate: CPU model not supported
+[    3.799603] [drm] Initialized simpledrm 1.0.0 for simple-framebuffer.0 on minor 0
+[    3.835601] Console: switching to colour frame buffer device 160x50
+[    3.848166] simple-framebuffer simple-framebuffer.0: [drm] fb0: simpledrmdrmfb frame buffer device
+[    3.862123] gre: GRE over IPv4 demultiplexor driver
+[    3.867140] NET: Registered PF_INET6 protocol family
+[    4.091164] Freeing initrd memory: 30228K
+[    4.120113] Segment Routing with IPv6
+[    4.123801] In-situ OAM (IOAM) with IPv6
+[    4.128319] can: controller area network core
+[    4.133196] NET: Registered PF_CAN protocol family
+[    4.139037] Key type dns_resolver registered
+[    4.161691] resctrl: No MBM correction factor available
+[    4.166853] IPI shorthand broadcast: enabled
+[    4.177994] registered taskstats version 1
+[    4.182212] Loading compiled-in X.509 certificates
+[    4.194851] Loaded X.509 cert 'alpinelinux.org: Alpine Linux kernel key: d76a695f66ad9cd28f5c22a8508f36e91f521f7a'
+[    4.211079] Demotion targets for Node 0: null
+[    4.216515] Key type .fscrypt registered
+[    4.220741] Key type fscrypt-provisioning registered
+[    4.234004] Lockdown: swapper/0: hibernation is restricted; see man kernel_lockdown.7
+[    4.241499] Can not set tracing clock due to lockdown
+[    4.246349] clk: Disabling unused clocks
+[    4.250171] PM: genpd: Disabling unused power domains
+[    4.263969] Freeing unused kernel image (initmem) memory: 3656K
+[    4.267732] Write protecting the kernel read-only data: 28672k
+[    4.277418] Freeing unused kernel image (rodata/data gap) memory: 1576K
+[    4.281257] Run /init as init process
+[    4.406983] dracut: dracut-107
+[    4.571060] device-mapper: uevent: version 1.0.3
+[    4.576276] device-mapper: ioctl: 4.48.0-ioctl (2023-03-01) initialised: dm-devel@lists.linux.dev
+[    4.620017] systemd-udevd[682]: starting version 3.2.14
+[    4.628334] udevd[683]: starting eudev-3.2.14
+[    4.794903] cryptd: max_cpu_qlen set to 1000
+[    5.005924] SCSI subsystem initialized
+[    5.018078] input: VirtualPS/2 VMware VMMouse as /devices/platform/i8042/serio1/input/input4
+[    5.034100] input: VirtualPS/2 VMware VMMouse as /devices/platform/i8042/serio1/input/input3
+[    5.043451] ACPI: \_SB_.GSIG: Enabled at IRQ 22
+[    5.065947] tpm_tis MSFT0101:00: 2.0 TPM (device-id 0x1, rev-id 1)
+[    5.068742] ACPI: \_SB_.GSIH: Enabled at IRQ 23
+[    5.087048] ACPI: \_SB_.GSIE: Enabled at IRQ 20
+[    5.189641] AES CTR mode by8 optimization enabled
+[    5.496872] virtio_blk virtio2: 8/0/0 default/read/poll queues
+[    5.535242] virtio_blk virtio2: [vda] 20971520 512-byte logical blocks (10.7 GB/10.0 GiB)
+[    5.556042]  vda: vda1 vda2
+[    5.615357] ACPI: \_SB_.GSIA: Enabled at IRQ 16
+[    5.629901] ahci 0000:00:1f.2: AHCI vers 0001.0000, 32 command slots, 1.5 Gbps, SATA mode
+[    5.639062] ahci 0000:00:1f.2: 6/6 ports implemented (port mask 0x3f)
+[    5.646162] ahci 0000:00:1f.2: flags: 64bit ncq only 
+[    5.669906] scsi host0: ahci
+[    5.679939] scsi host1: ahci
+[    5.685905] scsi host2: ahci
+[    5.695958] scsi host3: ahci
+[    5.713935] scsi host4: ahci
+[    5.719139] scsi host5: ahci
+[    5.721794] ata1: SATA max UDMA/133 abar m4096@0xc1040000 port 0xc1040100 irq 38 lpm-pol 1
+[    5.727056] ata2: SATA max UDMA/133 abar m4096@0xc1040000 port 0xc1040180 irq 38 lpm-pol 1
+[    5.732286] ata3: SATA max UDMA/133 abar m4096@0xc1040000 port 0xc1040200 irq 38 lpm-pol 1
+[    5.737525] ata4: SATA max UDMA/133 abar m4096@0xc1040000 port 0xc1040280 irq 38 lpm-pol 1
+[    5.743170] ata5: SATA max UDMA/133 abar m4096@0xc1040000 port 0xc1040300 irq 38 lpm-pol 1
+[    5.748383] ata6: SATA max UDMA/133 abar m4096@0xc1040000 port 0xc1040380 irq 38 lpm-pol 1
+[    6.068381] ata1: SATA link down (SStatus 0 SControl 300)
+[    6.081454] ata2: SATA link down (SStatus 0 SControl 300)
+[    6.090311] ata4: SATA link down (SStatus 0 SControl 300)
+[    6.098233] ata3: SATA link up 1.5 Gbps (SStatus 113 SControl 300)
+[    6.102837] ata3.00: LPM support broken, forcing max_power
+[    6.106647] ata3.00: ATAPI: QEMU DVD-ROM, 2.5+, max UDMA/100
+[    6.111907] ata3.00: applying bridge limits
+[    6.119163] ata5: SATA link down (SStatus 0 SControl 300)
+[    6.128174] ata6: SATA link down (SStatus 0 SControl 300)
+[    6.132123] ata3.00: LPM support broken, forcing max_power
+[    6.135927] ata3.00: configured for UDMA/100
+[    6.145532] scsi 2:0:0:0: CD-ROM            QEMU     QEMU DVD-ROM     2.5+ PQ: 0 ANSI: 5
+[    6.257142] sr 2:0:0:0: [sr0] scsi3-mmc drive: 4x/4x cd/rw xa/form2 tray
+[    6.261708] cdrom: Uniform CD-ROM driver Revision: 3.20
+[    6.663485] dracut: PLATFORMD: Starting unlock process...
+[    6.670959] dracut: PLATFORMD: rd.luks.name: UUID=369be381-fed9-49da-a836-13efaffa396c NAME=cryptroot
+[    6.679106] dracut: PLATFORMD: Target device: /dev/disk/by-uuid/369be381-fed9-49da-a836-13efaffa396c -> cryptroot
+[    6.688067] dracut: PLATFORMD: Checking boot mode on /dev/vda1...
+[    6.738241] FAT-fs (vda1): utf8 is not a recommended IO charset for FAT filesystems, filesystem will be case sensitive!
+[    6.762360] dracut: PLATFORMD: Detected FIRSTBOOT mode (installer.luks exists)
+[    6.768345] dracut: PLATFORMD: Bringing up network for ACME enrollment...
+[    6.813035] e1000: Intel(R) PRO/1000 Network Driver
+[    6.816913] e1000: Copyright (c) 1999-2006 Intel Corporation.
+[    6.828324] dracut: PLATFORMD: Reading network config from /boot/efi/tpm2/network.conf
+[    6.834580] dracut: PLATFORMD: Network config: iface=eth0 type=dhcp ip= gw= dns=8.8.8.8 8.8.4.4 hostname=server
+[    6.841352] dracut: PLATFORMD: Setting hostname to server
+[    6.869774] dracut: PLATFORMD: Configuring network interface eth0...
+[    6.882114] dracut: PLATFORMD: Configuring DHCP on eth0...
+[    6.899710] dracut: PLATFORMD: DHCP did not configure DNS, using fallback
+    inet6 fe80::5054:ff:fe12:3456/64 scope link [    6.908649] dracut: PLATFORMD: DNS configuration:
+tentative 
+nameserver 8.8.8.8
+[    6.927113] dracut Warning: PLATFORMD: No network connectivity - ACME enrollment may fail
+dracut Warning: PLATFORMD: No network connectivity - ACME enrollment may fail
+[    6.977946] loop: module loaded
+[    6.992954] dracut: PLATFORMD: Loading TPM kernel modules...
+[    8.017626] dracut: PLATFORMD: Triggering TPM driver initialization...
+[    8.027725] dracut: PLATFORMD: Mounting securityfs for TPM event log...
+[    8.042812] dracut: PLATFORMD: TPM event log file exists but empty, waiting... (1/10)
+[    9.057804] dracut: PLATFORMD: TPM event log file exists but empty, waiting... (2/10)
+[   10.080909] dracut: PLATFORMD: TPM event log file exists but empty, waiting... (3/10)
+[   11.100303] dracut: PLATFORMD: TPM event log file exists but empty, waiting... (4/10)
+[   12.132539] dracut: PLATFORMD: TPM event log file exists but empty, waiting... (5/10)
+[   13.162537] dracut: PLATFORMD: TPM event log file exists but empty, waiting... (6/10)
+[   14.196486] dracut: PLATFORMD: TPM event log file exists but empty, waiting... (7/10)
+[   15.228544] dracut: PLATFORMD: TPM event log file exists but empty, waiting... (8/10)
+[   16.258124] dracut: PLATFORMD: TPM event log file exists but empty, waiting... (9/10)
+[   17.291492] dracut: PLATFORMD: TPM event log file exists but empty, waiting... (10/10)
+[   18.315900] dracut Warning: PLATFORMD: TPM event log not available or empty - attestation data will be incomplete
+dracut Warning: PLATFORMD: TPM event log not available or empty - attestation data will be incomplete
+[   18.334864] dracut Warning: PLATFORMD: This may indicate the kernel has not processed the ACPI TPM event log yet
+dracut Warning: PLATFORMD: This may indicate the kernel has not processed the ACPI TPM event log yet
+[   18.343455] dracut: PLATFORMD: Running platform-initrd boot (mode: firstboot)...
+{"time":"2026-02-04T14:28:12.10078292Z","level":"INFO","msg":"St[   18.384510] loop0: detected capacity change from 0 to 204800
+arting platform-initrd boot sequence","device":"/dev/disk/by-uuid/369be381-fed9-49da-a836-13efaffa396c","mapping":"cryptroot","version":"dev"}
+[BOOT] Found installer.luks - attempting to mount using go-luks2
+[BOOT] Loop device created: /dev/loop0
+[   21.916470] Key type trusted registered
+[   21.971366] Key type encrypted registered
+[BOOT] Installer unlocked successfully
+[   22.232323] EXT4-fs (dm-0): mounted filesystem 1011a7c4-841e-4f40-8095-196dcb3c0a69 r/w with ordered data mode. Quota mode: none.
+[BOOT] Installer mounted at /mnt/installer (using go-luks2)
+{"time":"2026-02-04T14:28:15.965595872Z","level":"INFO","msg":"Loaded seal-pcrs from config","path":"/mnt/installer/etc/trusted-platform/config.yaml","pcrs":[0,7,9]}
+{"time":"2026-02-04T14:28:15.971914619Z","level":"INFO","msg":"Loaded seal-pcrs from config.yaml","pcrs":[0,7,9]}
+[BOOT] Creating platform manager
+{"time":"2026-02-04T14:28:15.977724832Z","level":"INFO","msg":"createManager: input tpmDevicePath","path":"/dev/tpmrm0"}
+{"time":"2026-02-04T14:28:15.982362202Z","level":"INFO","msg":"createManager: No TPM2TOOLS_TCTI, found /dev/tpmrm0"}
+{"time":"2026-02-04T14:28:15.986923846Z","level":"INFO","msg":"createManager: Final TPM device path","device":"/dev/tpmrm0"}
+{"time":"2026-02-04T14:28:15.99637699Z","level":"INFO","msg":"Loaded platform config from file","path":"/mnt/installer/etc/trusted-platform/config.yaml","platform_pcr":23,"keystore_srk_handle":"0x81000002"}
+{"time":"2026-02-04T14:28:16.004003152Z","level":"INFO","msg":"Using TPM config","platform_pcr":23,"platform_pcr_bank":"sha256","keystore_srk_handle":"0x81000002","ssrk_handle":"0x81000001"}
+2026-02-04 14:28:16.011077 I | INFO tpm: opening Linux TPM 2.0 Device device=/dev/tpmrm0
+{"time":"2026-02-04T14:28:16.016859284Z","level":"INFO","msg":"TPM opened successfully (not yet provisioned)","attempt":1}
+{"time":"2026-02-04T14:28:16.021630443Z","level":"INFO","msg":"Registering default unlock strategies"}
+{"time":"2026-02-04T14:28:16.025697022Z","level":"INFO","msg":"Registering unlock strategy","name":"Keyfile","priority":80}
+{"time":"2026-02-04T14:28:16.030428306Z","level":"INFO","msg":"Registering unlock strategy","name":"TPM-PCR","priority":1}
+{"time":"2026-02-04T14:28:16.035054193Z","level":"INFO","msg":"Registering unlock strategy","name":"TPM-Upgrade","priority":2}
+{"time":"2026-02-04T14:28:16.039865244Z","level":"WARN","msg":"FIDO2 method configured but handler not available"}
+{"time":"2026-02-04T14:28:16.044279567Z","level":"INFO","msg":"Registering unlock strategy","name":"Password","priority":100}
+{"time":"2026-02-04T14:28:16.04898589Z","level":"INFO","msg":"Registered unlock strategies","count":4}
+{"time":"2026-02-04T14:28:16.053013676Z","level":"INFO","msg":"NewManager: About to return manager"}
+[BOOT] Manager created successfully
+[BOOT] Initializing platform components
+{"time":"2026-02-04T14:28:16.06025781Z","level":"INFO","msg":"Initializing boot environment"}
+{"time":"2026-02-04T14:28:16.06391018Z","level":"INFO","msg":"Boot environment initialized"}
+[BOOT] Platform initialized successfully
+[BOOT] Executing boot unlock sequence
+[INITRD-BOOT] Starting normal boot sequence
+[INITRD-BOOT] Initializing platform
+{"time":"2026-02-04T14:28:16.074310279Z","level":"INFO","msg":"Using minimal boot mode with direct backend access"}
+[INITRD-BOOT] Building volume config
+[INITRD-BOOT] Executing unlock with audit
+[INITRD-BOOT] Getting strategy list
+[INITRD-BOOT] Found 4 strategies
+[INITRD-BOOT] Checking strategy 1: TPM-PCR
+[INITRD-BOOT] Calling CanUnlock for TPM-PCR
+[INITRD-BOOT] CanUnlock returned: false
+[INITRD-BOOT] Strategy TPM-PCR cannot unlock, skipping
+[INITRD-BOOT] Checking strategy 2: TPM-Upgrade
+[INITRD-BOOT] Calling CanUnlock for TPM-Upgrade
+[INITRD-BOOT] CanUnlock returned: false
+[INITRD-BOOT] Strategy TPM-Upgrade cannot unlock, skipping
+[INITRD-BOOT] Checking strategy 3: Keyfile
+[INITRD-BOOT] Calling CanUnlock for Keyfile
+{"time":"2026-02-04T14:28:16.106001895Z","level":"INFO","msg":"[KEYFILE] Keyfile is available for unlock: /mnt/installer/luks-key.bin"}
+[INITRD-BOOT] CanUnlock returned: true
+[INITRD-BOOT] Attempting unlock with strategy: Keyfile
+{"time":"2026-02-04T14:28:16.115434916Z","level":"INFO","msg":"[KEYFILE] Attempting keyfile unlock for /dev/disk/by-uuid/369be381-fed9-49da-a836-13efaffa396c"}
+{"time":"2026-02-04T14:28:16.123753523Z","level":"INFO","msg":"[KEYFILE] Using keyfile: /mnt/installer/luks-key.bin"}
+{"time":"2026-02-04T14:28:16.13152741Z","level":"INFO","msg":"[KEYFILE] Keyfile read successfully (32 bytes), attempting unlock..."}
+{"time":"2026-02-04T14:28:22.776103697Z","level":"INFO","msg":"[KEYFILE] Successfully unlocked /dev/disk/by-uuid/369be381-fed9-49da-a836-13efaffa396c with keyfile from /mnt/installer/luks-key.bin"}
+{"time":"2026-02-04T14:28:22.782990542Z","level":"INFO","msg":"[KEYFILE] Keyfile will be deleted by firstboot service after TPM provisioning"}
+{"time":"2026-02-04T14:28:22.786811699Z","level":"INFO","msg":"Successfully unlocked with strategy: Keyfile in 6682ms"}
+{"time":"2026-02-04T14:28:22.787773556Z","level":"INFO","msg":"Audit Log Summary:"}
+{"time":"2026-02-04T14:28:22.787806738Z","level":"INFO","msg":"  Mode: boot"}
+{"time":"2026-02-04T14:28:22.788770536Z","level":"INFO","msg":"  Attempts: 1"}
+{"time":"2026-02-04T14:28:22.788782042Z","level":"INFO","msg":"  Success: true"}
+{"time":"2026-02-04T14:28:22.789775078Z","level":"INFO","msg":"  Total Duration: 6715ms"}
+{"time":"2026-02-04T14:28:22.789788594Z","level":"INFO","msg":"  Attempt 1: Keyfile - SUCCESS (6682ms)"}
+{"time":"2026-02-04T14:28:22.789796542Z","level":"INFO","msg":"Boot sequence completed in 6715ms"}
+{"time":"2026-02-04T14:28:22.789805038Z","level":"INFO","msg":"Boot unlock completed successfully","device":"/dev/disk/by-uuid/369be381-fed9-49da-a836-13efaffa396c","mapping":"cryptroot","duration":10689038477}
+{"time":"2026-02-04T14:28:22.7907879Z","level":"INFO","msg":"Closing initrd manager"}
+2026-02-04 14:28:22.790817 I | INFO tpm: closing TPM 2.0
+[BOOT] Cleaning up installer mount
+[   29.126320] EXT4-fs (dm-0): unmounting filesystem 1011a7c4-841e-4f40-8095-196dcb3c0a69.
+[BOOT] Installer cleanup complete
+[   29.275170] dracut: PLATFORMD: Boot successful
+[   29.295334] dracut: PLATFORMD: Activating LVM volumes...
+[   29.395730] systemd-udevd[1569]: conflicting device node '/dev/mapper/vg0-root' found, link to '/dev/dm-0' will not be created
+[   29.397092] dracut: PLATFORMD: LVM activation successful: /dev/mapper/vg0-root
+[   29.546168] EXT4-fs (dm-0): orphan cleanup on readonly fs
+[   29.549904] EXT4-fs (dm-0): mounted filesystem 7ef78efc-5a5c-412b-be77-14c5b556b688 ro with ordered data mode. Quota mode: none.
+[   29.610869] dracut: Mounted root filesystem /dev/mapper/vg0-root
+[   29.696038] dracut: Switching root
+
+   OpenRC 0.62.6 is starting up Linux 6.12.67-0-lts (x86_64)
+
+ * /proc is already mounted
+ * /run/openrc: creating directory
+ * /run/lock: correcting mode
+ * /run/lock: correcting owner
+ * Caching service dependencies ... [ ok ]
+ * Executing: /usr/libexec/rc/sh/openrc-run.sh /usr/libexec/rc/sh/openrc-run.sh /etc/init.d/auditd start
+ * Starting auditd ... * start-stop-daemon: fopen `/var/run/auditd.pid': No such file or directory
+ *   start-stop-daemon: failed to start `/usr/sbin/auditd'
+ * Detaching to start `/usr/sbin/auditd' ... [ !! ]
+ * ERROR: auditd failed to start
+ * Executing: /usr/libexec/rc/sh/openrc-run.sh /usr/libexec/rc/sh/openrc-run.sh /etc/init.d/fsck start
+ * Checking local filesystems  ...root: clean, 14602/620160 files, 327421/2478080 blocks
+fsck.fat 4.2 (2021-01-31)
+/dev/vda1: 7 files, 36512/137451 clusters
+ [ ok ]
+ * Executing: /usr/libexec/rc/sh/openrc-run.sh /usr/libexec/rc/sh/openrc-run.sh /etc/init.d/root start
+ * Remounting root filesystem read/write ...[   30.588205] EXT4-fs (dm-0): re-mounted 7ef78efc-5a5c-412b-be77-14c5b556b688 r/w.
+ [ ok ]
+ * Remounting filesystems ...[   30.627545] EXT4-fs (dm-0): re-mounted 7ef78efc-5a5c-412b-be77-14c5b556b688.
+ [ ok ]
+ * Executing: /usr/libexec/rc/sh/openrc-run.sh /usr/libexec/rc/sh/openrc-run.sh /etc/init.d/localmount start
+ * Mounting local filesystems ...[   30.698959] FAT-fs (vda1): utf8 is not a recommended IO charset for FAT filesystems, filesystem will be case sensitive!
+ [ ok ]
+ * Executing: /usr/libexec/rc/sh/openrc-run.sh /usr/libexec/rc/sh/openrc-run.sh /etc/init.d/hostname start
+ * Setting hostname ... [ ok ]
+ * Executing: /usr/libexec/rc/sh/openrc-run.sh /usr/libexec/rc/sh/openrc-run.sh /etc/init.d/sysfs start
+ * Mounting debug filesystem ... [ ok ]
+ * Mounting persistent storage (pstore) filesystem ... [ ok ]
+ * Mounting efivarfs filesystem ... [ ok ]
+ * Mounting bpf filesystem ... [ ok ]
+ * Executing: /usr/libexec/rc/sh/openrc-run.sh /usr/libexec/rc/sh/openrc-run.sh /etc/init.d/devfs start
+ * Remounting devtmpfs on /dev ... [ ok ]
+ * Mounting /dev/mqueue ... [ ok ]
+ * Executing: /usr/libexec/rc/sh/openrc-run.sh /usr/libexec/rc/sh/openrc-run.sh /etc/init.d/udev start
+ * Starting udev ... * start-stop-daemon: fopen `/run/udev.pid': No such file or directory
+ * Detaching to start `/sbin/udevd' ... [ ok ][   31.034798] udevd[2085]: starting version 3.2.14
+
+ * Executing: /usr/libexec/rc/sh/openrc-run.sh /usr/libexec/rc/sh/openrc-run.sh /etc/init.d/udev-settle start
+[   31.057536] udevd[2085]: starting eudev-3.2.14
+ * Waiting for uevents to be processed ... [ ok ]
+ * Executing: /usr/libexec/rc/sh/openrc-run.sh /usr/libexec/rc/sh/openrc-run.sh /etc/init.d/networking start
+ * Starting networking ... *   lo ... [ ok ]
+ *   eth0 ...udhcpc: started, v1.37.0
+[   31.304800] NET: Registered PF_PACKET protocol family
+udhcpc: broadcasting discover
+udhcpc: broadcasting select for 10.0.2.15, server 10.0.2.2
+udhcpc: lease of 10.0.2.15 obtained from 10.0.2.2, lease time 86400
+ [ ok ]
+ * Executing: /usr/libexec/rc/sh/openrc-run.sh /usr/libexec/rc/sh/openrc-run.sh /etc/init.d/tpm-firstboot-seal start
+ * Running platformd TPM sealing ... * Found LUKS UUID: 369be381-fed9-49da-a836-13efaffa396c
+ * Using device path: /dev/disk/by-uuid/369be381-fed9-49da-a836-13efaffa396c
+ * Created /var/lib/tpm2/ directory for marker file
+ * Running firstboot provisioning and TPM sealing...
+Starting firstboot TPM sealing workflow...
+{"time":"2026-02-04T14:28:27.608547518Z","level":"INFO","msg":"Starting platformctl firstboot","tpm_path":"/dev/tpmrm0","efi_mount":"/boot/efi"}
+{"time":"2026-02-04T14:28:27.614587363Z","level":"INFO","msg":"Loaded PCRs from config","pcrs":[0,7,9]}
+{"time":"2026-02-04T14:28:27.615058485Z","level":"INFO","msg":"Initializing firstboot executor"}
+{"time":"2026-02-04T14:28:27.615071939Z","level":"INFO","msg":"Found TPM device at [   33.911744] loop0: detected capacity change from 0 to 204800
+/dev/tpmrm0"}
+{"time":"2026-02-04T14:28:27.61508303Z","level":"INFO","msg":"Detected TPM device","path":"/dev/tpmrm0"}
+{"time":"2026-02-04T14:28:27.617618322Z","level":"INFO","msg":"Loaded platform config from file","path":"/etc/trusted-platform/config.yaml","platform_pcr":23,"keystore_srk_handle":"0x81000002"}
+{"time":"2026-02-04T14:28:27.617729258Z","level":"INFO","msg":"Using TPM config","platform_pcr":23,"platform_pcr_bank":"sha256","keystore_srk_handle":"0x81000002","ssrk_handle":"0x81000001"}
+2026-02-04 14:28:27.618718 I | INFO tpm: opening Linux TPM 2.0 Device device=/dev/tpmrm0
+{"time":"2026-02-04T14:28:27.626079837Z","level":"INFO","msg":"TPM opened successfully (not yet provisioned)","attempt":1}
+[FIRSTBOOT-SEAL] First boot detected - installer.luks exists, no sealed blobs
+{"time":"2026-02-04T14:28:27.628818073Z","level":"INFO","msg":"Running firstboot TPM sealing..."}
+[FIRSTBOOT-SEAL] ========================================
+[FIRSTBOOT-SEAL] FIRST BOOT - ENCRYPTED INSTALLER APPROACH
+[FIRSTBOOT-SEAL] All provisioning happens inside encrypted container
+[FIRSTBOOT-SEAL] ========================================
+[FIRSTBOOT-SEAL] ----------------------------------------
+[FIRSTBOOT-SEAL] STEP 1: Opening encrypted installer container
+[FIRSTBOOT-SEAL] ----------------------------------------
+[FIRSTBOOT-SEAL] Setting up loop device for installer...
+[FIRSTBOOT-SEAL] Unlocking installer (forensic protection password)...
+[   37.032099] EXT4-fs (dm-2): mounted filesystem 1011a7c4-841e-4f40-8095-196dcb3c0a69 r/w with ordered data mode. Quota mode: none.
+[FIRSTBOOT-SEAL] Installer mounted at /mnt/installer
+[FIRSTBOOT-SEAL] ----------------------------------------
+[FIRSTBOOT-SEAL] STEP 2: Reading keys from installer
+[FIRSTBOOT-SEAL] ----------------------------------------
+[FIRSTBOOT-SEAL] LUKS key read (32 bytes)
+[FIRSTBOOT-SEAL] DEBUG: LUKS key hash (first 8 bytes): d6a216497a23078b
+[FIRSTBOOT-SEAL] Recovery key read
+[FIRSTBOOT-SEAL] ----------------------------------------
+[FIRSTBOOT-SEAL] STEP 3: Provisioning platform inside installer
+[FIRSTBOOT-SEAL] All output encrypted - maximum security
+[FIRSTBOOT-SEAL] ----------------------------------------
+[FIRSTBOOT-SEAL] Securityfs already mounted (tpm0 exists)
+[FIRSTBOOT-SEAL] TPM event log file exists but empty (1/10)...
+[FIRSTBOOT-SEAL] TPM event log file exists but empty (2/10)...
+[FIRSTBOOT-SEAL] TPM event log file exists but empty (3/10)...
+[FIRSTBOOT-SEAL] TPM event log file exists but empty (4/10)...
+[FIRSTBOOT-SEAL] TPM event log file exists but empty (5/10)...
+[FIRSTBOOT-SEAL] TPM event log file exists but empty (6/10)...
+[FIRSTBOOT-SEAL] TPM event log file exists but empty (7/10)...
+[FIRSTBOOT-SEAL] TPM event log file exists but empty (8/10)...
+[FIRSTBOOT-SEAL] TPM event log file exists but empty (9/10)...
+[FIRSTBOOT-SEAL] TPM event log file exists but empty (10/10)...
+[FIRSTBOOT-SEAL] WARNING: TPM event log NOT available or empty
+[FIRSTBOOT-SEAL] Attestation data will be incomplete
+[FIRSTBOOT-SEAL] Running in-process platform provisioning...
+[FIRSTBOOT-SEAL] Created directory structure in installer
+[FIRSTBOOT-SEAL] Using config from: /mnt/installer/etc/trusted-platform/config.yaml
+[FIRSTBOOT-SEAL] Config loaded from installer
+[FIRSTBOOT-SEAL] Platform policy enabled: true
+[FIRSTBOOT-SEAL] TPMConfig.EK present: true
+[FIRSTBOOT-SEAL] TPMConfig.Device: /dev/tpmrm0
+[FIRSTBOOT-SEAL] Provisioning paths (inside encrypted installer):
+[FIRSTBOOT-SEAL]   PlatformDir: /mnt/installer/var/lib/trusted-platform
+[FIRSTBOOT-SEAL]   LogDir: /mnt/installer/var/log/trusted-platform
+[FIRSTBOOT-SEAL]   ConfigDir: /mnt/installer/etc/trusted-platform
+[FIRSTBOOT-SEAL]   CADir: /mnt/installer/var/lib/trusted-platform/ca
+
+.:9053 {
+	trustedPlatform
+	log
+	chaos
+	forward . 127.0.0.1:8053
+}
+
+.:8053 {
+	trustedPlatform
+	log
+	chaos
+	forward . 1.1.1.1 8.8.8.8
+}
+
+DEBUG: OpenTPM called, initialize=true, TPMConfig.EK=&{0  true <nil> 2164326401    false 0xc0408e69c0}, TPMConfig.Device=/dev/tpmrm0
+2026-02-04 14:28:41.632674 I | [INFO] plugin/trustedPlatform: Using injected datastore factory for DNS zone storage
+2026-02-04 14:28:41.640858 I | [INFO] plugin/trustedPlatform: Zone example.internal. (internal server) not found in datastore, saving...
+2026-02-04 14:28:41.641456 I | [WARNING] plugin/trustedPlatform: DNSSEC is enabled but Keychain adapter is not yet available for zone example.internal. - skipping signing (will sign when adapter is ready)
+2026-02-04 14:28:41.644021 I | [INFO] plugin/trustedPlatform: Zone example.internal. (internal server) saved to datastore
+2026-02-04 14:28:41.644304 I | [INFO] plugin/trustedPlatform: Zone example.com. (public server) not found in datastore, saving...
+2026-02-04 14:28:41.644764 I | [WARNING] plugin/trustedPlatform: DNSSEC is enabled but Keychain adapter is not yet available for zone example.com. - skipping signing (will sign when adapter is ready)
+2026-02-04 14:28:41.647108 I | [INFO] plugin/trustedPlatform: Zone example.com. (public server) saved to datastore
+2026-02-04 14:28:41.648847 I | [INFO] plugin/trustedPlatform: Using injected datastore factory for DNS zone storage
+2026-02-04 14:28:41.650195 I | [INFO] plugin/trustedPlatform: Zone example.internal. (internal server) needs DNSSEC signing, signing...
+2026-02-04 14:28:41.650523 I | [WARNING] plugin/trustedPlatform: DNSSEC is enabled but Keychain adapter is not yet available for zone example.internal. - skipping signing (will sign when adapter is ready)
+2026-02-04 14:28:41.650639 I | [INFO] plugin/trustedPlatform: Zone example.internal. (internal server) DNSSEC signed and saved
+2026-02-04 14:28:41.651344 I | [INFO] plugin/trustedPlatform: Zone example.com. (public server) needs DNSSEC signing, signing...
+2026-02-04 14:28:41.651810 I | [WARNING] plugin/trustedPlatform: DNSSEC is enabled but Keychain adapter is not yet available for zone example.com. - skipping signing (will sign when adapter is ready)
+2026-02-04 14:28:41.651917 I | [INFO] plugin/trustedPlatform: Zone example.com. (public server) DNSSEC signed and saved
+.:8053
+.:9053
+WARNING: File descriptor limit 4095 is too low for production servers. At least 8192 is recommended. Fix with `ulimit -n 8192`.
+2026-02-04 14:28:43.722588 I | [LOCAL] ✓ PUT 'keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:43.725524 I | [LOCAL] ✓ PUT 'meta/software:signing:ca.root-ca.server.example.com.rsa:rsa' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:signing:ca.root-ca.server.example.com.rsa:rsa (128 B)
+2026-02-04 14:28:43.727406 I | PKCS8.GenerateKey: stored metadata for key software:signing:ca.root-ca.server.example.com.rsa:rsa at meta/software:signing:ca.root-ca.server.example.com.rsa:rsa with exportable=false
+2026-02-04 14:28:43.727523 I | [LOCAL] ✓ GET 'keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:43.732109 I | [LOCAL] ✓ GET 'keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:43.735099 I | [LOCAL] ✓ PUT 'mnt/installer/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/root-ca.server.example.com.pem' → mnt/installer/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/root-ca.server.example.com.pem (1.5 KB)
+2026-02-04 14:28:43.735322 I | [LOCAL] ✓ GET 'keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:43.736449 I | [LOCAL] ✓ GET 'keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:43.737492 I | [LOCAL] ✓ GET 'keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:43.739994 I | [LOCAL] ✓ PUT 'mnt/installer/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/ca01.server.example.com.pem' → mnt/installer/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/ca01.server.example.com.pem (1.6 KB)
+2026-02-04 14:28:43.740306 I | [LOCAL] ✓ GET 'keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:43.741440 I | [LOCAL] ✓ GET 'mnt/installer/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/root-ca.server.example.com.pem' ← mnt/installer/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/root-ca.server.example.com.pem (1.5 KB)
+2026-02-04 14:28:43.765919 I | [LOCAL] ✓ PUT 'keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:43.766127 I | [LOCAL] ✓ PUT 'meta/software:signing:ca.ca01.server.example.com.rsa:rsa' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:signing:ca.ca01.server.example.com.rsa:rsa (125 B)
+2026-02-04 14:28:43.766669 I | PKCS8.GenerateKey: stored metadata for key software:signing:ca.ca01.server.example.com.rsa:rsa at meta/software:signing:ca.ca01.server.example.com.rsa:rsa with exportable=false
+2026-02-04 14:28:43.767262 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:43.767924 I | [LOCAL] ✓ GET 'keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:43.768706 I | [LOCAL] ✓ GET 'keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:43.770899 I | [LOCAL] ✓ PUT 'mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/ca01.server.example.com.pem' → mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/ca01.server.example.com.pem (1.6 KB)
+2026-02-04 14:28:43.771549 I | [LOCAL] ✓ PUT 'mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/ca01.server.example.com.pem' → mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/ca01.server.example.com.pem (1.6 KB)
+2026-02-04 14:28:43.772115 I | [LOCAL] ✓ PUT 'mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/ca01.server.example.com.chain.pem' → mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/ca01.server.example.com.chain.pem (3.1 KB)
+2026-02-04 14:28:44.004770 I | [LOCAL] ✓ PUT 'keys/software:ca:software:ca:rsa:ca01.server.example.com:rsa.key' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:ca:software:ca:rsa:ca01.server.example.com:rsa.key (1.2 KB)
+2026-02-04 14:28:44.007731 I | [LOCAL] ✓ PUT 'meta/software:ca:software:ca:rsa:ca01.server.example.com:rsa' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:ca:software:ca:rsa:ca01.server.example.com:rsa (129 B)
+2026-02-04 14:28:44.009704 I | PKCS8.GenerateKey: stored metadata for key software:ca:software:ca:rsa:ca01.server.example.com:rsa at meta/software:ca:software:ca:rsa:ca01.server.example.com:rsa with exportable=false
+2026-02-04 14:28:44.009879 I | [LOCAL] ✓ GET 'keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:44.013564 I | [LOCAL] ✓ PUT 'certs/software:ca:rsa:ca01.server.example.com.pem' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/certs/software:ca:rsa:ca01.server.example.com.pem (1.2 KB)
+2026-02-04 14:28:44.013929 I | WARN skipping key config - backend not available storeType=tpm2 error="keystore: backend not found: tpm2"
+2026-02-04 14:28:44.016937 I | [LOCAL] ✓ PUT 'keys/software:ca:software:ca:ecdsa:ca01.server.example.com:ecdsa.key' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:ca:software:ca:ecdsa:ca01.server.example.com:ecdsa.key (138 B)
+2026-02-04 14:28:44.017665 I | [LOCAL] ✓ PUT 'meta/software:ca:software:ca:ecdsa:ca01.server.example.com:ecdsa' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:ca:software:ca:ecdsa:ca01.server.example.com:ecdsa (133 B)
+2026-02-04 14:28:44.019230 I | PKCS8.GenerateKey: stored metadata for key software:ca:software:ca:ecdsa:ca01.server.example.com:ecdsa at meta/software:ca:software:ca:ecdsa:ca01.server.example.com:ecdsa with exportable=false
+2026-02-04 14:28:44.020219 I | [LOCAL] ✓ GET 'keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:44.023292 I | [LOCAL] ✓ PUT 'certs/software:ca:ecdsa:ca01.server.example.com.pem' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/certs/software:ca:ecdsa:ca01.server.example.com.pem (976 B)
+2026-02-04 14:28:44.023417 I | WARN skipping key config - backend not available storeType=tpm2 error="keystore: backend not found: tpm2"
+2026-02-04 14:28:44.025963 I | [LOCAL] ✓ PUT 'keys/software:ca:software:ca:ed25519:ca01.server.example.com:ed25519.key' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:ca:software:ca:ed25519:ca01.server.example.com:ed25519.key (48 B)
+2026-02-04 14:28:44.026125 I | [LOCAL] ✓ PUT 'meta/software:ca:software:ca:ed25519:ca01.server.example.com:ed25519' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:ca:software:ca:ed25519:ca01.server.example.com:ed25519 (137 B)
+2026-02-04 14:28:44.026655 I | PKCS8.GenerateKey: stored metadata for key software:ca:software:ca:ed25519:ca01.server.example.com:ed25519 at meta/software:ca:software:ca:ed25519:ca01.server.example.com:ed25519 with exportable=false
+2026-02-04 14:28:44.027295 I | [LOCAL] ✓ GET 'keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:44.029491 I | [LOCAL] ✓ PUT 'certs/software:ca:ed25519:ca01.server.example.com.pem' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/certs/software:ca:ed25519:ca01.server.example.com.pem (929 B)
+2026-02-04 14:28:44.029983 I | [LOCAL] ✓ GET 'mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/ca01.server.example.com.pem' ← mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/ca01.server.example.com.pem (1.6 KB)
+2026-02-04 14:28:44.045898 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:44.046635 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:44.048668 I | [LOCAL] ✓ PUT 'mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/ek-edge-tp-server-01.pem' → mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/ek-edge-tp-server-01.pem (1.7 KB)
+2026-02-04 14:28:44.049779 I | [LOCAL] ✓ PUT 'mnt/installer/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/ek-edge-tp-server-01.pem' → mnt/installer/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/ek-edge-tp-server-01.pem (1.7 KB)
+═══════════════════════════════════════════════════════════════════════════════
+                           CERTIFICATE DETAILS                                  
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─ Subject ─────────────────────────────────────────────────────────────────────
+│  Common Name:        ek-edge-tp-server-01
+│  Organization:       ACME Corporation
+│  Org Unit:           
+│  Country:            US
+│  State/Province:     
+│  Locality:           West Palm Beach
+
+┌─ Issuer ──────────────────────────────────────────────────────────────────────
+│  Common Name:        ca01.server.example.com
+│  Organization:       Trusted Platform
+
+┌─ Validity ────────────────────────────────────────────────────────────────────
+│  Serial Number:      73879645195807347048739764174385815523
+│  SHA-1 Fingerprint:  fb3f36954d6044574b643750c94fc41d534394e3
+│  Not Before:         2026-02-04T14:27:44Z
+│  Not After:          9999-12-31T23:59:59Z
+│  Signature Algo:     SHA256-RSA
+
+┌─ Public Key ──────────────────────────────────────────────────────────────────
+│  Type:               RSA-2048 bits
+│  Subject Key ID:     00000000244948577c1ef406208c5248a572c12e
+
+┌─ Basic Constraints ──────────────────────────────────────────────────────────
+│  Is CA:              false
+
+┌─ Key Usage ───────────────────────────────────────────────────────────────────
+│  Key Usage:          KeyEncipherment
+│  Ext Key Usage:      ClientAuth, ServerAuth
+
+┌─ Subject Alternative Names ───────────────────────────────────────────────────
+│  DNS:                server.example.com
+│  Email:              hostmaster@server.example.com
+
+┌─ TCG Extensions (Trusted Computing Group) ───────────────────────────────────
+│  tcg-kp-EKCertificate:     
+│  tcg-at-tpmSpecification:  300b1303322e30020100020100
+
+┌─ Trusted Platform Extensions ────────────────────────────────────────────────
+│  tp-keyStore:              TPM2
+│  tp-issuerKeyStore:        software
+
+┌─ Standard X.509 Extensions ──────────────────────────────────────────────────
+│  keyUsage:                 03020520 [CRITICAL]
+│  extKeyUsage:              301406082b0601050507030206082b06010505070301
+│  subjectKeyIdentifier:     00000000244948577c1ef406208c5248a572c12e
+│  authorityKeyIdentifier:   KeyID: ab3c26de4f5c2bab02e9b39eb1a69d51fbd0d1fe
+│  subjectAltName:           303382127365727665722e6578616d706c652e636f6d811d686f73746d617374...
+
+═══════════════════════════════════════════════════════════════════════════════
+
+2026-02-04 14:28:44.327346 I | [LOCAL] ✓ PUT 'mnt/installer/var/lib/trusted-platform/objects/tpm2/ek-edge-tp-server-01.pem' → mnt/installer/var/lib/trusted-platform/objects/tpm2/ek-edge-tp-server-01.pem (1.7 KB)
+2026-02-04 14:28:47.483587 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:47.487672 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:47.493240 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:47.496186 I | [LOCAL] ✓ PUT 'mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/server-idevid.pem' → mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/server-idevid.pem (1.7 KB)
+2026-02-04 14:28:47.496423 I | [LOCAL] ✓ PUT 'mnt/installer/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/server-idevid.pem' → mnt/installer/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/server-idevid.pem (1.7 KB)
+2026-02-04 14:28:47.497542 I | [LOCAL] ✓ PUT 'mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/server-idevid.pem' → mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/server-idevid.pem (1.8 KB)
+2026-02-04 14:28:47.498517 I | [LOCAL] ✓ PUT 'mnt/installer/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/server-idevid.pem' → mnt/installer/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/server-idevid.pem (1.8 KB)
+Performing local attestation
+2026-02-04 14:28:47.577994 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:47.579633 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:47.581897 I | [LOCAL] ✓ PUT 'attestation/server-iak/quote/data' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/quote/data (145 B)
+2026-02-04 14:28:47.582492 I | [LOCAL] ✓ PUT 'attestation/server-iak/quote/signature' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/quote/signature (256 B)
+2026-02-04 14:28:47.583211 I | [LOCAL] ✓ PUT 'attestation/server-iak/quote/digest' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/quote/digest (32 B)
+2026-02-04 14:28:47.583966 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:47.584824 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:47.586942 I | [LOCAL] ✓ PUT 'attestation/server-iak/eventlog/data' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/eventlog/data (4.7 KB)
+2026-02-04 14:28:47.586990 I | [LOCAL] ✓ PUT 'attestation/server-iak/eventlog/signature' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/eventlog/signature (256 B)
+2026-02-04 14:28:47.587574 I | [LOCAL] ✓ PUT 'attestation/server-iak/eventlog/digest' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/eventlog/digest (32 B)
+2026-02-04 14:28:47.588100 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:47.588791 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:47.590849 I | [LOCAL] ✓ PUT 'attestation/server-iak/pcrs/data' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/pcrs/data (198 B)
+2026-02-04 14:28:47.590901 I | [LOCAL] ✓ PUT 'attestation/server-iak/pcrs/signature' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/pcrs/signature (256 B)
+2026-02-04 14:28:47.591501 I | [LOCAL] ✓ PUT 'attestation/server-iak/pcrs/digest' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/pcrs/digest (32 B)
+2026-02-04 14:28:48.030003 I | [LOCAL] ✓ PUT 'server.example.com.blob' → /mnt/installer/var/lib/trusted-platform/platform/keystore/server.example.com.blob (158 B)
+2026-02-04 14:28:48.032830 I | [LOCAL] ✓ PUT 'server.example.com.pub' → /mnt/installer/var/lib/trusted-platform/platform/keystore/server.example.com.pub (78 B)
+2026-02-04 14:28:48.097278 I | [LOCAL] ✓ PUT 'keys/software:signing:ca.ca01.server.example.com.ecdsa:ecdsa.key' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.ecdsa:ecdsa.key (138 B)
+2026-02-04 14:28:48.098876 I | [LOCAL] ✓ PUT 'meta/software:signing:ca.ca01.server.example.com.ecdsa:ecdsa' → /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:signing:ca.ca01.server.example.com.ecdsa:ecdsa (129 B)
+2026-02-04 14:28:48.099565 I | PKCS8.GenerateKey: stored metadata for key software:signing:ca.ca01.server.example.com.ecdsa:ecdsa at meta/software:signing:ca.ca01.server.example.com.ecdsa:ecdsa with exportable=false
+2026-02-04 14:28:48.100410 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.ecdsa:ecdsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.ecdsa:ecdsa.key (138 B)
+2026-02-04 14:28:48.101371 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:48.102562 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:48.105077 I | [LOCAL] ✓ PUT 'mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/server.example.com.pem' → mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/server.example.com.pem (1.4 KB)
+2026-02-04 14:28:48.106653 I | [LOCAL] ✓ PUT 'mnt/installer/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/server.example.com.pem' → mnt/installer/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/server.example.com.pem (1.4 KB)
+Web Server TLS Certificate (public):
+═══════════════════════════════════════════════════════════════════════════════
+                           CERTIFICATE DETAILS                                  
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─ Subject ─────────────────────────────────────────────────────────────────────
+│  Common Name:        server.example.com
+│  Organization:       ACME Corporation
+│  Org Unit:           
+│  Country:            US
+│  State/Province:     Florida
+│  Locality:           West Palm Beach
+
+┌─ Issuer ──────────────────────────────────────────────────────────────────────
+│  Common Name:        ca01.server.example.com
+│  Organization:       Trusted Platform
+
+┌─ Validity ────────────────────────────────────────────────────────────────────
+│  Serial Number:      127553089211254438728837316848028198058
+│  SHA-1 Fingerprint:  0dad92d5fd66d9d594e2d2ad1cf111aa0321f116
+│  Not Before:         2026-02-04T14:27:48Z
+│  Not After:          2027-02-04T14:28:48Z
+│  Signature Algo:     SHA256-RSA
+
+┌─ Public Key ──────────────────────────────────────────────────────────────────
+│  Type:               ECDSA P-256
+
+┌─ Basic Constraints ──────────────────────────────────────────────────────────
+│  Is CA:              false
+
+┌─ Key Usage ───────────────────────────────────────────────────────────────────
+│  Key Usage:          DigitalSignature, KeyEncipherment
+
+┌─ Subject Alternative Names ───────────────────────────────────────────────────
+│  DNS:                server.example.com
+│  DNS:                www.server.example.com
+│  DNS:                localhost
+│  DNS:                localhost.localdomain
+│  IP:                 10.0.2.15
+│  Email:              hostmaster@server.example.com
+│  Email:              root@localhost
+│  Email:              root@example.com
+
+┌─ Standard X.509 Extensions ──────────────────────────────────────────────────
+│  keyUsage:                 030205a0 [CRITICAL]
+│  authorityKeyIdentifier:   KeyID: ab3c26de4f5c2bab02e9b39eb1a69d51fbd0d1fe
+│  subjectAltName:           30819582127365727665722e6578616d706c652e636f6d82167777772e736572...
+
+═══════════════════════════════════════════════════════════════════════════════
+
+2026-02-04 14:28:48.697280 I | [LOCAL] ✓ PUT 'server.example.internal.blob' → /mnt/installer/var/lib/trusted-platform/platform/keystore/server.example.internal.blob (158 B)
+2026-02-04 14:28:48.700169 I | [LOCAL] ✓ PUT 'server.example.internal.pub' → /mnt/installer/var/lib/trusted-platform/platform/keystore/server.example.internal.pub (78 B)
+2026-02-04 14:28:48.765851 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.ecdsa:ecdsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.ecdsa:ecdsa.key (138 B)
+2026-02-04 14:28:48.768050 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:48.769597 I | [LOCAL] ✓ GET 'keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key' ← /mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key (1.2 KB)
+2026-02-04 14:28:48.772587 I | [LOCAL] ✓ PUT 'mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/server.example.internal.pem' → mnt/installer/var/lib/trusted-platform/ca/ca01.server.example.com/x509/server.example.internal.pem (1.4 KB)
+2026-02-04 14:28:48.772705 I | [LOCAL] ✓ PUT 'mnt/installer/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/server.example.internal.pem' → mnt/installer/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/server.example.internal.pem (1.4 KB)
+Web Server TLS Certificate (internal):
+═══════════════════════════════════════════════════════════════════════════════
+                           CERTIFICATE DETAILS                                  
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─ Subject ─────────────────────────────────────────────────────────────────────
+│  Common Name:        server.example.internal
+│  Organization:       ACME Corporation
+│  Org Unit:           
+│  Country:            US
+│  State/Province:     Florida
+│  Locality:           West Palm Beach
+
+┌─ Issuer ──────────────────────────────────────────────────────────────────────
+│  Common Name:        ca01.server.example.com
+│  Organization:       Trusted Platform
+
+┌─ Validity ────────────────────────────────────────────────────────────────────
+│  Serial Number:      57425638612128499507654677361235591779
+│  SHA-1 Fingerprint:  ec35d7d5ae7cd5e996e4fa0f2f334d16e7aaad26
+│  Not Before:         2026-02-04T14:27:48Z
+│  Not After:          2027-02-04T14:28:48Z
+│  Signature Algo:     SHA256-RSA
+
+┌─ Public Key ──────────────────────────────────────────────────────────────────
+│  Type:               ECDSA P-256
+
+┌─ Basic Constraints ──────────────────────────────────────────────────────────
+│  Is CA:              false
+
+┌─ Key Usage ───────────────────────────────────────────────────────────────────
+│  Key Usage:          DigitalSignature, KeyEncipherment
+
+┌─ Subject Alternative Names ───────────────────────────────────────────────────
+│  DNS:                server.example.internal
+│  DNS:                localhost
+│  DNS:                localhost.localdomain
+│  IP:                 10.0.2.15
+│  Email:              hostmaster@server.example.com
+│  Email:              root@localhost
+│  Email:              root@example.com
+
+┌─ Standard X.509 Extensions ──────────────────────────────────────────────────
+│  keyUsage:                 030205a0 [CRITICAL]
+│  authorityKeyIdentifier:   KeyID: ab3c26de4f5c2bab02e9b39eb1a69d51fbd0d1fe
+│  subjectAltName:           30818282177365727665722e6578616d706c652e696e7465726e616c82096c6f...
+
+═══════════════════════════════════════════════════════════════════════════════
+
+[FIRSTBOOT-SEAL] Shutting down platform services...
+[FIRSTBOOT-SEAL] Platform provisioning completed inside installer
+[FIRSTBOOT-SEAL] Platform provisioned inside encrypted installer
+[FIRSTBOOT-SEAL] ----------------------------------------
+[FIRSTBOOT-SEAL] STEP 4: Sealing LUKS key to TPM
+[FIRSTBOOT-SEAL] ----------------------------------------
+[FIRSTBOOT-SEAL] Opening TPM for sealing...
+[FIRSTBOOT-SEAL] Using Platform SRK for sealing: 0x81000002 (platform-policy=true)
+[FIRSTBOOT-SEAL] PCR selection: [0 7 9]
+[FIRSTBOOT-SEAL] Sealing key to TPM with PCR policy...
+2026-02-04 14:28:49.123979 I | INFO tpm: PlatformPolicySession - PCR digest pcr=23 digest=4a442d8ac5a7aa5216b5c7a850c0fe3ec28aa0c9783397d9c4b905c1adff8767
+2026-02-04 14:28:49.199593 I | INFO tpm: PlatformPolicySession - PCR policy digest digest=4a442d8ac5a7aa5216b5c7a850c0fe3ec28aa0c9783397d9c4b905c1adff8767
+2026-02-04 14:28:49.202375 I | INFO tpm: PlatformPolicySession - session policy digest digest=c5c6cafdf60f6eae180ee1bc7b73a053e02f9a0d1a371b43135dc8823eda1632
+2026-02-04 14:28:49.239979 I | INFO tpm: PlatformPolicySession - PCR digest pcr=23 digest=4a442d8ac5a7aa5216b5c7a850c0fe3ec28aa0c9783397d9c4b905c1adff8767
+2026-02-04 14:28:49.315684 I | INFO tpm: PlatformPolicySession - PCR policy digest digest=4a442d8ac5a7aa5216b5c7a850c0fe3ec28aa0c9783397d9c4b905c1adff8767
+2026-02-04 14:28:49.318397 I | INFO tpm: PlatformPolicySession - session policy digest digest=c5c6cafdf60f6eae180ee1bc7b73a053e02f9a0d1a371b43135dc8823eda1632
+2026-02-04 14:28:49.400123 I | INFO tpm: PlatformPolicySession - PCR digest pcr=23 digest=4a442d8ac5a7aa5216b5c7a850c0fe3ec28aa0c9783397d9c4b905c1adff8767
+2026-02-04 14:28:49.477789 I | INFO tpm: PlatformPolicySession - PCR policy digest digest=4a442d8ac5a7aa5216b5c7a850c0fe3ec28aa0c9783397d9c4b905c1adff8767
+2026-02-04 14:28:49.480512 I | INFO tpm: PlatformPolicySession - session policy digest digest=c5c6cafdf60f6eae180ee1bc7b73a053e02f9a0d1a371b43135dc8823eda1632
+2026-02-04 14:28:49.536633 I | [LOCAL] ✓ PUT 'luks-root.blob' → /boot/efi/tpm2/luks-root.blob (158 B)
+2026-02-04 14:28:49.538976 I | [LOCAL] ✓ PUT 'luks-root.pub' → /boot/efi/tpm2/luks-root.pub (78 B)
+[FIRSTBOOT-SEAL] Sealed blobs written to EFI
+[FIRSTBOOT-SEAL] Platform config in pcr-banks: platform-pcr=23
+[FIRSTBOOT-SEAL] LUKS key sealed to TPM with PCR policy
+[FIRSTBOOT-SEAL] Setting TRUSTED_PLATFORM EFI variable...
+[FIRSTBOOT-SEAL] TRUSTED_PLATFORM EFI variable set to 'true'
+[FIRSTBOOT-SEAL] ----------------------------------------
+[FIRSTBOOT-SEAL] STEP 5: Unlocking LUKS root partition
+[FIRSTBOOT-SEAL] ----------------------------------------
+[FIRSTBOOT-SEAL] LUKS root partition already unlocked (mapping cryptroot exists)
+[FIRSTBOOT-SEAL] DEBUG: Checking device nodes after unlock...
+[FIRSTBOOT-SEAL] DEBUG: /dev/mapper/ contents:
+total 0
+drwxr-xr-x  2 root root      120 Feb  4 14:28 .
+drwxr-xr-x 12 root root     2900 Feb  4 14:28 ..
+crw-------  1 root root  10, 236 Feb  4 14:27 control
+lrwxrwxrwx  1 root root        7 Feb  4 14:28 cryptroot -> ../dm-1
+lrwxrwxrwx  1 root root        7 Feb  4 14:28 installer -> ../dm-2
+brw-------  1 root root 253,   0 Feb  4 14:28 vg0-root
+
+[FIRSTBOOT-SEAL] DEBUG: /dev/dm-* devices:
+brw------- 1 root root 253, 0 Feb  4 14:28 /dev/dm-0
+brw------- 1 root root 253, 1 Feb  4 14:28 /dev/dm-1
+brw-rw---- 1 root disk 253, 2 Feb  4 14:28 /dev/dm-2
+
+[FIRSTBOOT-SEAL] DEBUG: /dev/mapper/cryptroot exists, mode=Lrwxrwxrwx
+[FIRSTBOOT-SEAL] DEBUG: /dev/mapper/cryptroot -> ../dm-1
+[FIRSTBOOT-SEAL] DEBUG: Target ../dm-1 does NOT exist: stat ../dm-1: no such file or directory
+[FIRSTBOOT-SEAL] DEBUG: /dev/mapper/cryptroot is readable
+[FIRSTBOOT-SEAL] DEBUG: First 64 bytes of decrypted device:
+[FIRSTBOOT-SEAL] DEBUG: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+[FIRSTBOOT-SEAL] DEBUG: NO LVM signature at offset 0 (expected LABELONE)
+[FIRSTBOOT-SEAL] DEBUG: Device node check complete
+[FIRSTBOOT-SEAL] ----------------------------------------
+[FIRSTBOOT-SEAL] STEP 6: Copying installer contents to root filesystem
+[FIRSTBOOT-SEAL] ----------------------------------------
+[FIRSTBOOT-SEAL] Loaded config: useLVM=true vg=vg0 lv=root
+[FIRSTBOOT-SEAL] Activating LVM volumes...
+[FIRSTBOOT-SEAL] DEBUG: Checking devices before LVM activation...
+[FIRSTBOOT-SEAL] DEBUG: pvs --all output:
+  PV                    VG  Fmt  Attr PSize PFree DevSize PV UUID                               
+  /dev/loop0                     ---     0     0  100.00m                                       
+  /dev/mapper/cryptroot vg0 lvm2 a--  9.45g    0   <9.46g MZXoNK-8uSv-uqFh-oAsX-IzsY-kNng-0eJf8U
+  /dev/mapper/installer          ---     0     0   84.00m                                       
+  /dev/ram0                      ---     0     0    4.00m                                       
+  /dev/ram1                      ---     0     0    4.00m                                       
+  /dev/ram10                     ---     0     0    4.00m                                       
+  /dev/ram11                     ---     0     0    4.00m                                       
+  /dev/ram12                     ---     0     0    4.00m                                       
+  /dev/ram13                     ---     0     0    4.00m                                       
+  /dev/ram14                     ---     0     0    4.00m                                       
+  /dev/ram15                     ---     0     0    4.00m                                       
+  /dev/ram2                      ---     0     0    4.00m                                       
+  /dev/ram3                      ---     0     0    4.00m                                       
+  /dev/ram4                      ---     0     0    4.00m                                       
+  /dev/ram5                      ---     0     0    4.00m                                       
+  /dev/ram6                      ---     0     0    4.00m                                       
+  /dev/ram7                      ---     0     0    4.00m                                       
+  /dev/ram8                      ---     0     0    4.00m                                       
+  /dev/ram9                      ---     0     0    4.00m                                       
+  /dev/vda1                      ---     0     0  538.00m                                       
+  /dev/vda2                      ---     0     0    9.47g                                       
+
+[FIRSTBOOT-SEAL] DEBUG: lvmdiskscan output:
+  /dev/ram0             [       4.00 MiB] 
+  /dev/ram1             [       4.00 MiB] 
+  /dev/ram10            [       4.00 MiB] 
+  /dev/ram11            [       4.00 MiB] 
+  /dev/ram12            [       4.00 MiB] 
+  /dev/ram13            [       4.00 MiB] 
+  /dev/ram14            [       4.00 MiB] 
+  /dev/ram15            [       4.00 MiB] 
+  /dev/ram2             [       4.00 MiB] 
+  /dev/ram3             [       4.00 MiB] 
+  /dev/ram4             [       4.00 MiB] 
+  /dev/ram5             [       4.00 MiB] 
+  /dev/ram6             [       4.00 MiB] 
+  /dev/ram7             [       4.00 MiB] 
+  /dev/ram8             [       4.00 MiB] 
+  /dev/ram9             [       4.00 MiB] 
+  /dev/vda1             [     538.00 MiB] 
+  /dev/vda2             [       9.47 GiB] 
+  /dev/mapper/cryptroot [      <9.46 GiB] LVM physical volume
+  /dev/mapper/installer [      84.00 MiB] 
+  /dev/loop0            [     100.00 MiB] 
+  1 disk
+  19 partitions
+  1 LVM physical volume whole disk
+  0 LVM physical volumes
+
+[FIRSTBOOT-SEAL] DEBUG: pvs after pvscan:
+  PV                    VG  Fmt  Attr PSize PFree
+  /dev/mapper/cryptroot vg0 lvm2 a--  9.45g    0 
+
+[   56.784099] udevd[2296]: conflicting device node '/dev/mapper/vg0-root' found, link to '/dev/dm-0' will not be created
+[FIRSTBOOT-SEAL] Using LVM root device: /dev/mapper/vg0-root
+[FIRSTBOOT-SEAL] Mounting root at /mnt/root-tmp...
+[FIRSTBOOT-SEAL] Root filesystem mounted
+[FIRSTBOOT-SEAL] Copying /mnt/installer/var/lib/trusted-platform -> /mnt/root-tmp/var/lib/trusted-platform
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/eventlog/data
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/eventlog/data.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/eventlog/digest
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/eventlog/digest.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/eventlog/signature
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/eventlog/signature.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/pcrs/data
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/pcrs/data.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/pcrs/digest
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/pcrs/digest.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/pcrs/signature
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/pcrs/signature.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/quote/data
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/quote/data.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/quote/digest
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/quote/digest.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/quote/signature
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/attestation/server-iak/quote/signature.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/certs/software:ca:ecdsa:ca01.server.example.com.pem
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/certs/software:ca:ecdsa:ca01.server.example.com.pem.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/certs/software:ca:ed25519:ca01.server.example.com.pem
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/certs/software:ca:ed25519:ca01.server.example.com.pem.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/certs/software:ca:rsa:ca01.server.example.com.pem
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/certs/software:ca:rsa:ca01.server.example.com.pem.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:ca:software:ca:ecdsa:ca01.server.example.com:ecdsa.key
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:ca:software:ca:ecdsa:ca01.server.example.com:ecdsa.key.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:ca:software:ca:ed25519:ca01.server.example.com:ed25519.key
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:ca:software:ca:ed25519:ca01.server.example.com:ed25519.key.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:ca:software:ca:rsa:ca01.server.example.com:rsa.key
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:ca:software:ca:rsa:ca01.server.example.com:rsa.key.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.ecdsa:ecdsa.key
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.ecdsa:ecdsa.key.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.ca01.server.example.com.rsa:rsa.key.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/keys/software:signing:ca.root-ca.server.example.com.rsa:rsa.key.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:ca:software:ca:ecdsa:ca01.server.example.com:ecdsa
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:ca:software:ca:ecdsa:ca01.server.example.com:ecdsa.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:ca:software:ca:ed25519:ca01.server.example.com:ed25519
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:ca:software:ca:ed25519:ca01.server.example.com:ed25519.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:ca:software:ca:rsa:ca01.server.example.com:rsa
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:ca:software:ca:rsa:ca01.server.example.com:rsa.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:signing:ca.ca01.server.example.com.ecdsa:ecdsa
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:signing:ca.ca01.server.example.com.ecdsa:ecdsa.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:signing:ca.ca01.server.example.com.rsa:rsa
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:signing:ca.ca01.server.example.com.rsa:rsa.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:signing:ca.root-ca.server.example.com.rsa:rsa
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/meta/software:signing:ca.root-ca.server.example.com.rsa:rsa.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/x509/ca01.server.example.com.chain.pem
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/x509/ca01.server.example.com.chain.pem.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/x509/ca01.server.example.com.pem
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/x509/ca01.server.example.com.pem.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/x509/ek-edge-tp-server-01.pem
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/x509/ek-edge-tp-server-01.pem.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/x509/server-idevid.pem
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/x509/server-idevid.pem.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/x509/server.example.com.pem
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/x509/server.example.com.pem.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/x509/server.example.internal.pem
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/ca01.server.example.com/x509/server.example.internal.pem.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/ca01.server.example.com.pem
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/ca01.server.example.com.pem.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/ek-edge-tp-server-01.pem
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/ek-edge-tp-server-01.pem.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/root-ca.server.example.com.pem
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/root-ca.server.example.com.pem.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/server-idevid.pem
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/server-idevid.pem.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/server.example.com.pem
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/server.example.com.pem.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/server.example.internal.pem
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/ca/root-ca.server.example.com/x509/server.example.internal.pem.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/objects/tpm2/ek-edge-tp-server-01.pem
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/objects/tpm2/ek-edge-tp-server-01.pem.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/platform/keystore/server.example.com.blob
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/platform/keystore/server.example.com.blob.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/platform/keystore/server.example.com.pub
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/platform/keystore/server.example.com.pub.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/platform/keystore/server.example.internal.blob
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/platform/keystore/server.example.internal.blob.metadata.json
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/platform/keystore/server.example.internal.pub
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/lib/trusted-platform/platform/keystore/server.example.internal.pub.metadata.json
+[FIRSTBOOT-SEAL] Copying /mnt/installer/var/log/trusted-platform -> /mnt/root-tmp/var/log/trusted-platform
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/var/log/trusted-platform/trusted-platform.log
+[FIRSTBOOT-SEAL] Copying /mnt/installer/etc/trusted-platform -> /mnt/root-tmp/etc/trusted-platform
+[FIRSTBOOT-SEAL] Copied: /mnt/root-tmp/etc/trusted-platform/config.yaml
+[FIRSTBOOT-SEAL] Recovery key written to /mnt/root-tmp/root/luks-recovery.txt
+[FIRSTBOOT-SEAL] IMPORTANT: Back up this key securely!
+[FIRSTBOOT-SEAL] Created .initialized flag
+[FIRSTBOOT-SEAL] Created .tpm-sealed marker
+[FIRSTBOOT-SEAL] Installer contents copied to root filesystem
+[FIRSTBOOT-SEAL] Installer contents copied to root filesystem
+[FIRSTBOOT-SEAL] Deleted luks-key.bin from installer
+[FIRSTBOOT-SEAL] ========================================
+[FIRSTBOOT-SEAL] FIRST BOOT COMPLETE
+[FIRSTBOOT-SEAL] ========================================
+[FIRSTBOOT-SEAL] - Platform provisioned inside encrypted installer
+[FIRSTBOOT-SEAL] - LUKS key sealed to TPM Platform SRK (handle 0x81000002)
+[FIRSTBOOT-SEAL] - Root partition unlocked
+[FIRSTBOOT-SEAL] - Installer contents copied to root filesystem
+[FIRSTBOOT-SEAL] - Recovery key written to /root/luks-recovery.txt
+[FIRSTBOOT-SEAL] ========================================
+[FIRSTBOOT-SEAL] Closing installer...
+[FIRSTBOOT-SEAL] Stopping DNS service...
+[FIRSTBOOT-SEAL] DNS service stopped
+[FIRSTBOOT-SEAL] Checking for processes using installer mount...
+[FIRSTBOOT-SEAL] Processes using mount: 2256
+[FIRSTBOOT-SEAL] Unmounting installer (lazy)...
+[FIRSTBOOT-SEAL] Lazy unmount succeeded
+[FIRSTBOOT-SEAL] Waiting for file handles to be released...
+[FIRSTBOOT-SEAL] Closing LUKS container...
+[FIRSTBOOT-SEAL] LUKS close attempt 1 failed: failed to remove device-mapper: dm ioctl (cmd=0xc138fd04): device or resource busy, retrying in 200ms...
+[FIRSTBOOT-SEAL] LUKS close attempt 2 failed: failed to remove device-mapper: dm ioctl (cmd=0xc138fd04): device or resource busy, retrying in 400ms...
+[FIRSTBOOT-SEAL] LUKS close attempt 3 failed: failed to remove device-mapper: dm ioctl (cmd=0xc138fd04): device or resource busy, retrying in 600ms...
+[FIRSTBOOT-SEAL] LUKS close attempt 4 failed: failed to remove device-mapper: dm ioctl (cmd=0xc138fd04): device or resource busy, retrying in 800ms...
+[FIRSTBOOT-SEAL] dmsetup remove --force failed: device-mapper: remove ioctl on installer  failed: Resource busy
+Command failed.
+[FIRSTBOOT-SEAL] LUKS close attempt 5 failed: failed to remove device-mapper: dm ioctl (cmd=0xc138fd04): device or resource busy, retrying in 1s...
+[FIRSTBOOT-SEAL] dmsetup remove --force failed: device-mapper: remove ioctl on installer  failed: Resource busy
+Command failed.
+[FIRSTBOOT-SEAL] LUKS close attempt 6 failed: failed to remove device-mapper: dm ioctl (cmd=0xc138fd04): device or resource busy, retrying in 1.2s...
+[FIRSTBOOT-SEAL] dmsetup remove --force failed: device-mapper: remove ioctl on installer  failed: Resource busy
+Command failed.
+[FIRSTBOOT-SEAL] LUKS close attempt 7 failed: failed to remove device-mapper: dm ioctl (cmd=0xc138fd04): device or resource busy, retrying in 1.4s...
+[FIRSTBOOT-SEAL] dmsetup remove --force failed: device-mapper: remove ioctl on installer  failed: Resource busy
+Command failed.
+[FIRSTBOOT-SEAL] LUKS close attempt 8 failed: failed to remove device-mapper: dm ioctl (cmd=0xc138fd04): device or resource busy, retrying in 1.6s...
+[FIRSTBOOT-SEAL] dmsetup remove --force failed: device-mapper: remove ioctl on installer  failed: Resource busy
+Command failed.
+[FIRSTBOOT-SEAL] LUKS close attempt 9 failed: failed to remove device-mapper: dm ioctl (cmd=0xc138fd04): device or resource busy, retrying in 1.8s...
+[FIRSTBOOT-SEAL] dmsetup remove --force failed: device-mapper: remove ioctl on installer  failed: Resource busy
+Command failed.
+[FIRSTBOOT-SEAL] WARNING: Failed to close LUKS container: failed to remove device-mapper: dm ioctl (cmd=0xc138fd04): device or resource busy
+[FIRSTBOOT-SEAL] LUKS container scheduled for deferred removal
+[FIRSTBOOT-SEAL] Loop device detached
+[FIRSTBOOT-SEAL] ----------------------------------------
+[FIRSTBOOT-SEAL] SECURE WIPE: Destroying installer.luks (1 passes)
+[FIRSTBOOT-SEAL] ----------------------------------------
+[FIRSTBOOT-SEAL] Secure wipe: 1 passes
+[FIRSTBOOT-SEAL] Final pass 1/1: random + TRIM
+[FIRSTBOOT-SEAL] installer.luks securely wiped
+[FIRSTBOOT-SEAL] Installer cleanup complete
+{"time":"2026-02-04T14:29:02.374786738Z","level":"INFO","msg":"Firstboot completed successfully","duration":34770663196}
+Firstboot completed successfully in 34.770663196s
+2026-02-04 14:29:02.381839 I | INFO tpm: closing TPM 2.0
+[   68.725211] EXT4-fs (dm-2): unmounting filesystem 1011a7c4-841e-4f40-8095-196dcb3c0a69.
+[   68.730424] Buffer I/O error on dev dm-2, logical block 32769, lost sync page write
+[   68.733940] JBD2: I/O error when updating journal superblock for dm-2-8.
+[   68.737565] Aborting journal on device dm-2-8.
+[   68.740085] Buffer I/O error on dev dm-2, logical block 32769, lost sync page write
+[   68.743855] JBD2: I/O error when updating journal superblock for dm-2-8.
+[   68.747210] EXT4-fs error (device dm-2): ext4_put_super:1329: comm ld-musl-x86_64.: Couldn't clean up the journal
+[   68.752139] Buffer I/O error on dev dm-2, logical block 1, lost sync page write
+[   68.765808] EXT4-fs (dm-2): I/O error while writing superblock
+[   68.770292] EXT4-fs (dm-2): Remounting filesystem read-only
+[   68.773979] Buffer I/O error on dev dm-2, logical block 1, lost sync page write
+[   68.778067] EXT4-fs (dm-2): I/O error while writing superblock
+[   68.786604] device-mapper: ioctl: remove_all left 2 open device(s)
+ * TPM sealing completed successfully
+ * Platform marked as initialized
+ * System will reboot to verify sealed boot works...
+ [ ok ]
+ * Executing: /usr/libexec/rc/sh/openrc-run.sh /usr/libexec/rc/sh/openrc-run.sh /etc/init.d/platformd start
+ * Starting platformd ... * start-stop-daemon: fopen `/run/platformd.pid': No such file or directory
+ * Detaching to start `/usr/sbin/platformd' ... [ ok ]
+ * Executing: /usr/libexec/rc/sh/openrc-run.sh /usr/libexec/rc/sh/openrc-run.sh /etc/init.d/sshd start
+ * Starting sshd ... * start-stop-daemon: fopen `/run/sshd.pid': No such file or directory
+ * Detaching to start `/usr/sbin/sshd' ... [ ok ]
+ * Executing: /usr/libexec/rc/sh/openrc-run.sh /usr/libexec/rc/sh/openrc-run.sh /etc/init.d/local start
+ * Starting local ... *   Executing "/etc/local.d/ima.start" ...IMA not available in kernel
+ [ ok ]
+ *   Executing "/etc/local.d/platformd-debug.start" ...

@@ -1,0 +1,409 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>swtpm: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/jeremyhahn/go-trusted-platform/pkg/swtpm/swtpm.go (87.3%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">no coverage</span>
+				<span class="cov1">low coverage</span>
+				<span class="cov2">*</span>
+				<span class="cov3">*</span>
+				<span class="cov4">*</span>
+				<span class="cov5">*</span>
+				<span class="cov6">*</span>
+				<span class="cov7">*</span>
+				<span class="cov8">*</span>
+				<span class="cov9">*</span>
+				<span class="cov10">high coverage</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package swtpm
+
+import (
+        "context"
+        "fmt"
+        "os"
+        "os/exec"
+        "path/filepath"
+        "strings"
+        "sync"
+        "syscall"
+        "time"
+
+        "github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+)
+
+// Config holds the configuration for a software TPM instance
+type Config struct {
+        StateDir   string   // TPM state directory
+        SocketPath string   // Socket path for QEMU connection
+        PCRBanks   []string // PCR banks (e.g., ["sha256"])
+        LogLevel   int      // Log level (default: 20)
+        Debug      bool     // Enable debug mode
+}
+
+// SWTPM represents a software TPM instance
+type SWTPM struct {
+        config *Config
+        logger *logging.Logger
+        cmd    *exec.Cmd
+        mu     sync.RWMutex
+        pid    int
+}
+
+// NewSWTPM creates a new software TPM instance
+func NewSWTPM(config *Config, logger *logging.Logger) (*SWTPM, error) <span class="cov10" title="17">{
+        if config == nil </span><span class="cov1" title="1">{
+                return nil, ErrInvalidConfig
+        }</span>
+
+        <span class="cov9" title="16">if config.StateDir == "" </span><span class="cov1" title="1">{
+                return nil, fmt.Errorf("%w: StateDir is required", ErrInvalidConfig)
+        }</span>
+
+        <span class="cov9" title="15">if config.SocketPath == "" </span><span class="cov8" title="12">{
+                config.SocketPath = filepath.Join(config.StateDir, "swtpm.sock")
+        }</span>
+
+        <span class="cov9" title="15">if len(config.PCRBanks) == 0 </span><span class="cov9" title="13">{
+                config.PCRBanks = []string{"sha256"}
+        }</span>
+
+        <span class="cov9" title="15">if config.LogLevel == 0 </span><span class="cov9" title="14">{
+                config.LogLevel = 20
+        }</span>
+
+        <span class="cov9" title="15">if logger == nil </span><span class="cov1" title="1">{
+                logger = logging.DefaultLogger()
+        }</span>
+
+        // Check if swtpm is installed
+        <span class="cov9" title="15">if _, err := exec.LookPath("swtpm"); err != nil </span><span class="cov1" title="1">{
+                return nil, ErrSWTPMNotInstalled
+        }</span>
+
+        <span class="cov9" title="14">if _, err := exec.LookPath("swtpm_setup"); err != nil </span><span class="cov0" title="0">{
+                return nil, ErrSWTPMNotInstalled
+        }</span>
+
+        <span class="cov9" title="14">return &amp;SWTPM{
+                config: config,
+                logger: logger,
+        }, nil</span>
+}
+
+// Initialize initializes the TPM state using swtpm_setup
+func (s *SWTPM) Initialize(ctx context.Context) error <span class="cov7" title="7">{
+        s.mu.Lock()
+        defer s.mu.Unlock()
+
+        s.logger.Infof("Initializing swtpm state directory: %s", s.config.StateDir)
+
+        // Create state directory if it doesn't exist
+        if err := os.MkdirAll(s.config.StateDir, 0755); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("%w: failed to create state directory: %v", ErrInitFailed, err)
+        }</span>
+
+        // Build swtpm_setup command
+        <span class="cov7" title="7">args := []string{
+                "--tpm2",
+                "--tpmstate", s.config.StateDir,
+                "--pcr-banks", strings.Join(s.config.PCRBanks, ","),
+                "--overwrite",
+        }
+
+        cmd := exec.CommandContext(ctx, "swtpm_setup", args...)
+
+        // Only show output in debug mode
+        if s.config.Debug </span><span class="cov6" title="5">{
+                cmd.Stdout = os.Stdout
+                cmd.Stderr = os.Stderr
+        }</span>
+
+        <span class="cov7" title="7">s.logger.Debugf("Running: swtpm_setup %s", strings.Join(args, " "))
+
+        if err := cmd.Run(); err != nil </span><span class="cov1" title="1">{
+                return fmt.Errorf("%w: swtpm_setup failed: %v", ErrInitFailed, err)
+        }</span>
+
+        <span class="cov6" title="6">s.logger.Info("swtpm initialization completed successfully")
+        return nil</span>
+}
+
+// Start starts the swtpm daemon
+func (s *SWTPM) Start(ctx context.Context) error <span class="cov6" title="6">{
+        s.mu.Lock()
+        defer s.mu.Unlock()
+
+        if s.cmd != nil &amp;&amp; s.cmd.Process != nil </span><span class="cov1" title="1">{
+                return ErrAlreadyRunning
+        }</span>
+
+        <span class="cov6" title="5">s.logger.Info("Starting swtpm daemon")
+
+        // Verify state directory exists
+        if _, err := os.Stat(s.config.StateDir); os.IsNotExist(err) </span><span class="cov1" title="1">{
+                return fmt.Errorf("state directory does not exist: %s", s.config.StateDir)
+        }</span>
+
+        // Build swtpm socket command
+        <span class="cov5" title="4">args := []string{
+                "socket",
+                "--tpmstate", fmt.Sprintf("dir=%s", s.config.StateDir),
+                "--ctrl", fmt.Sprintf("type=unixio,path=%s", s.config.SocketPath),
+                "--tpm2",
+                "--flags", "not-need-init",
+                "--daemon",
+                "--log", fmt.Sprintf("level=%d", s.config.LogLevel),
+        }
+
+        // Create log file in state directory
+        logFile := filepath.Join(s.config.StateDir, "swtpm.log")
+        args = append(args, "--log", fmt.Sprintf("file=%s", logFile))
+
+        cmd := exec.CommandContext(ctx, "swtpm", args...)
+
+        // Set process group to allow clean shutdown
+        cmd.SysProcAttr = &amp;syscall.SysProcAttr{
+                Setpgid: true,
+        }
+
+        if s.config.Debug </span><span class="cov4" title="3">{
+                cmd.Stdout = os.Stdout
+                cmd.Stderr = os.Stderr
+        }</span>
+
+        <span class="cov5" title="4">s.logger.Debugf("Running: swtpm %s", strings.Join(args, " "))
+
+        if err := cmd.Start(); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to start swtpm: %w", err)
+        }</span>
+
+        <span class="cov5" title="4">s.cmd = cmd
+        s.pid = cmd.Process.Pid
+
+        s.logger.Infof("swtpm daemon started with PID %d", s.pid)
+
+        return nil</span>
+}
+
+// Stop stops the swtpm daemon
+func (s *SWTPM) Stop() error <span class="cov6" title="5">{
+        s.mu.Lock()
+        defer s.mu.Unlock()
+
+        if s.cmd == nil || s.cmd.Process == nil </span><span class="cov1" title="1">{
+                return ErrNotRunning
+        }</span>
+
+        <span class="cov5" title="4">s.logger.Infof("Stopping swtpm daemon (PID %d)", s.pid)
+
+        // Send SIGTERM for graceful shutdown
+        if err := s.cmd.Process.Signal(syscall.SIGTERM); err != nil </span><span class="cov0" title="0">{
+                s.logger.Warnf("Failed to send SIGTERM to swtpm: %v", err)
+                // Try SIGKILL as fallback
+                if killErr := s.cmd.Process.Kill(); killErr != nil </span><span class="cov0" title="0">{
+                        return fmt.Errorf("failed to kill swtpm process: %w", killErr)
+                }</span>
+        }
+
+        // Wait for process to exit with timeout
+        <span class="cov5" title="4">done := make(chan error, 1)
+        go func() </span><span class="cov5" title="4">{
+                done &lt;- s.cmd.Wait()
+        }</span>()
+
+        <span class="cov5" title="4">select </span>{
+        case err := &lt;-done:<span class="cov5" title="4">
+                if err != nil </span><span class="cov4" title="3">{
+                        s.logger.Debugf("swtpm exited with error: %v", err)
+                }</span>
+        case &lt;-time.After(5 * time.Second):<span class="cov0" title="0">
+                s.logger.Warn("swtpm did not exit in time, forcing kill")
+                if err := s.cmd.Process.Kill(); err != nil </span><span class="cov0" title="0">{
+                        return fmt.Errorf("failed to force kill swtpm: %w", err)
+                }</span>
+                <span class="cov0" title="0">&lt;-done</span> // Wait for process to be reaped
+        }
+
+        <span class="cov5" title="4">s.cmd = nil
+        s.pid = 0
+
+        s.logger.Info("swtpm daemon stopped successfully")
+        return nil</span>
+}
+
+// IsRunning checks if swtpm is running
+func (s *SWTPM) IsRunning() bool <span class="cov9" title="15">{
+        s.mu.RLock()
+        defer s.mu.RUnlock()
+
+        if s.cmd == nil || s.cmd.Process == nil </span><span class="cov4" title="3">{
+                return false
+        }</span>
+
+        // Check if process is still alive
+        <span class="cov8" title="12">process, err := os.FindProcess(s.pid)
+        if err != nil </span><span class="cov0" title="0">{
+                return false
+        }</span>
+
+        // Send signal 0 to check if process exists
+        <span class="cov8" title="12">err = process.Signal(syscall.Signal(0))
+        return err == nil</span>
+}
+
+// WaitForSocket waits for the socket to be ready
+func (s *SWTPM) WaitForSocket(timeout time.Duration) error <span class="cov3" title="2">{
+        s.logger.Debugf("Waiting for swtpm socket to be ready: %s", s.config.SocketPath)
+
+        deadline := time.Now().Add(timeout)
+        ticker := time.NewTicker(100 * time.Millisecond)
+        defer ticker.Stop()
+
+        for </span><span class="cov6" title="6">{
+                select </span>{
+                case &lt;-ticker.C:<span class="cov6" title="6">
+                        // Check if socket file exists
+                        if _, err := os.Stat(s.config.SocketPath); err == nil </span><span class="cov1" title="1">{
+                                s.logger.Info("swtpm socket is ready")
+                                return nil
+                        }</span>
+
+                        <span class="cov6" title="5">if time.Now().After(deadline) </span><span class="cov1" title="1">{
+                                return fmt.Errorf("%w: socket not ready after %v", ErrSocketNotReady, timeout)
+                        }</span>
+                }
+        }
+}
+
+// StopExisting stops any existing swtpm processes for the given state directory
+func StopExisting(stateDir string) error <span class="cov1" title="1">{
+        // Find processes using the state directory
+        cmd := exec.Command("pkill", "-f", fmt.Sprintf("swtpm.*%s", stateDir))
+        if err := cmd.Run(); err != nil </span><span class="cov1" title="1">{
+                // pkill returns non-zero if no processes are found, which is not an error
+                if exitErr, ok := err.(*exec.ExitError); ok </span><span class="cov1" title="1">{
+                        if exitErr.ExitCode() == 1 </span><span class="cov1" title="1">{
+                                // No processes found, this is expected
+                                return nil
+                        }</span>
+                }
+                <span class="cov0" title="0">return fmt.Errorf("failed to stop existing swtpm processes: %w", err)</span>
+        }
+
+        // Wait a moment for processes to terminate
+        <span class="cov0" title="0">time.Sleep(500 * time.Millisecond)
+
+        return nil</span>
+}
+
+// SocketPath returns the path to the swtpm socket
+func (s *SWTPM) SocketPath() string <span class="cov8" title="12">{
+        return s.config.SocketPath
+}</span>
+
+// StateDir returns the state directory path
+func (s *SWTPM) StateDir() string <span class="cov8" title="11">{
+        return s.config.StateDir
+}</span>
+
+// PID returns the process ID of the running swtpm daemon
+func (s *SWTPM) PID() int <span class="cov9" title="13">{
+        s.mu.RLock()
+        defer s.mu.RUnlock()
+        return s.pid
+}</span>
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>

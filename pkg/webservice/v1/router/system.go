@@ -1,0 +1,134 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package router
+
+import (
+	"net/http"
+
+	"github.com/codegangsta/negroni"
+	"github.com/gorilla/mux"
+	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/system"
+	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+)
+
+type SystemRouter struct {
+	authMiddleware    middleware.AuthMiddleware
+	jwtMiddleware     middleware.JsonWebTokenMiddleware
+	systemRestHandler system.RestHandler
+	WebServiceRouter
+}
+
+// Creates a new web service system router
+func NewSystemRouter(
+	logger *logging.Logger,
+	certAuth trustedca.CACertificateAuthority,
+	caConfig *trustedca.CAConfig,
+	serverKeyAttributes *xkmssdk.KeyAttributes,
+	jwtMiddleware middleware.JsonWebTokenMiddleware,
+	authMiddleware middleware.AuthMiddleware,
+	router *mux.Router,
+	jsonWriter response.HttpWriter,
+	tpm xkmssdk.TrustedPlatformModule) WebServiceRouter {
+
+	return &SystemRouter{
+		authMiddleware: authMiddleware,
+		jwtMiddleware:  jwtMiddleware,
+		systemRestHandler: system.NewHandler(
+			certAuth,
+			caConfig,
+			serverKeyAttributes,
+			jsonWriter,
+			logger,
+			tpm)}
+}
+
+// Registers all of the system endpoints at the root of the webservice (/api/v1)
+func (systemRouter *SystemRouter) RegisterRoutes(router *mux.Router) {
+	systemRouter.status(router)
+	systemRouter.pubkey(router)
+	systemRouter.certificate(router)
+	systemRouter.config(router)
+	systemRouter.eventlog(router)
+}
+
+// @Summary System Status
+// @Description Returns current system status metrics
+// @Tags System
+// @Produce  json
+// @Success 200
+// @Router /status [get]
+// @Security JWT
+func (systemRouter *SystemRouter) status(router *mux.Router) {
+	router.HandleFunc("/status", systemRouter.systemRestHandler.Status)
+}
+
+// @Summary Retrieve the server pubilc key
+// @Description Returns the server public RSA key
+// @Tags System
+// @Produce  json
+// @Success 200 {string} pubkey
+// @Router /pubkey [get]
+func (systemRouter *SystemRouter) pubkey(router *mux.Router) {
+	router.HandleFunc("/pubkey", systemRouter.systemRestHandler.PublicKey)
+}
+
+// @Summary Retrieve the server x509 certificate
+// @Description Returns the server public RSA key
+// @Tags System
+// @Produce  json
+// @Success 200 {string} certificate
+// @Router /certificate [get]
+func (systemRouter *SystemRouter) certificate(router *mux.Router) {
+	router.HandleFunc("/certificate", systemRouter.systemRestHandler.Certificate)
+}
+
+// @Summary System configuration
+// @Description Returns the server configuration
+// @Tags System
+// @Produce  json
+// @Success 200 {object} app.App
+// @Failure 400 {object} response.WebServiceResponse
+// @Failure 401 {object} response.WebServiceResponse
+// @Router /config [get]
+// @Security JWT
+func (systemRouter *SystemRouter) config(router *mux.Router) {
+	router.Handle("/config", negroni.New(
+		negroni.HandlerFunc(systemRouter.authMiddleware.Verify),
+		negroni.HandlerFunc(systemRouter.jwtMiddleware.Verify),
+		negroni.Wrap(http.HandlerFunc(systemRouter.systemRestHandler.Config)),
+	))
+}
+
+// @Summary System Event Log
+// @Description Returns a page of system event log entries
+// @Tags System
+// @Produce  json
+// @Success 200
+// @Failure 400 {object} response.WebServiceResponse
+// @Failure 401 {object} response.WebServiceResponse
+// @Param   page	path	string	false	"string valid"	minlength(1)	maxlength(20)
+// @Router /events/{page} [get]
+// @Security JWT
+func (systemRouter *SystemRouter) eventlog(router *mux.Router) {
+	router.Handle("/events/{page}", negroni.New(
+		negroni.NewLogger(),
+		negroni.HandlerFunc(systemRouter.authMiddleware.Verify),
+		negroni.HandlerFunc(systemRouter.jwtMiddleware.Verify),
+		negroni.Wrap(http.HandlerFunc(systemRouter.systemRestHandler.EventsPage)),
+	))
+}

@@ -1,0 +1,16 @@
+# Build artifacts and work directories
+work-*/
+work/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test artifacts
+*.log
+coverage/
+
+# Node modules (web UI has its own Dockerfile)
+web/node_modules/

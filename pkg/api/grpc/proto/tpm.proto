@@ -1,0 +1,399 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// TPM service for Trusted Platform Module operations
+service TPMService {
+  // Info returns TPM capabilities and information
+  rpc Info(TPMInfoRequest) returns (TPMInfoResponse);
+
+  // Provision initializes the TPM with required keys
+  rpc Provision(TPMProvisionRequest) returns (TPMProvisionResponse);
+
+  // Clear clears the TPM (requires owner authorization)
+  rpc Clear(TPMClearRequest) returns (TPMClearResponse);
+
+  // EK operations
+  rpc CreateEK(CreateEKRequest) returns (CreateEKResponse);
+  rpc GetEK(GetEKRequest) returns (GetEKResponse);
+  rpc GetEKCertificate(GetEKCertificateRequest) returns (GetEKCertificateResponse);
+  rpc ImportEKCertificate(ImportEKCertificateRequest) returns (ImportEKCertificateResponse);
+  rpc DeleteEK(DeleteEKRequest) returns (DeleteEKResponse);
+
+  // SRK operations
+  rpc CreateSRK(CreateSRKRequest) returns (CreateSRKResponse);
+  rpc GetSRK(GetSRKRequest) returns (GetSRKResponse);
+  rpc DeleteSRK(DeleteSRKRequest) returns (DeleteSRKResponse);
+
+  // AK/IAK operations
+  rpc CreateAK(CreateAKRequest) returns (CreateAKResponse);
+  rpc GetAK(GetAKRequest) returns (GetAKResponse);
+  rpc DeleteAK(DeleteAKRequest) returns (DeleteAKResponse);
+
+  // Seal/Unseal operations
+  rpc Seal(SealRequest) returns (SealResponse);
+  rpc Unseal(UnsealRequest) returns (UnsealResponse);
+
+  // Attestation operations
+  rpc Quote(QuoteRequest) returns (QuoteResponse);
+  rpc VerifyQuote(VerifyQuoteRequest) returns (VerifyQuoteResponse);
+  rpc GetEventLog(GetEventLogRequest) returns (GetEventLogResponse);
+  rpc GetPCRs(GetPCRsRequest) returns (GetPCRsResponse);
+
+  // NVRAM operations
+  rpc DefineNVRAM(DefineNVRAMRequest) returns (DefineNVRAMResponse);
+  rpc WriteNVRAM(WriteNVRAMRequest) returns (WriteNVRAMResponse);
+  rpc ReadNVRAM(ReadNVRAMRequest) returns (ReadNVRAMResponse);
+  rpc UndefineNVRAM(UndefineNVRAMRequest) returns (UndefineNVRAMResponse);
+
+  // Random number generation
+  rpc GetRandom(GetRandomRequest) returns (GetRandomResponse);
+}
+
+// TPM version
+enum TPMVersion {
+  TPM_VERSION_UNSPECIFIED = 0;
+  TPM_VERSION_1_2 = 1;
+  TPM_VERSION_2_0 = 2;
+}
+
+// TPM manufacturer
+message TPMManufacturer {
+  string name = 1;
+  uint32 id = 2;
+  string model = 3;
+  string firmware_version = 4;
+}
+
+// TPM capability
+message TPMCapability {
+  string name = 1;
+  bool supported = 2;
+  string value = 3;
+}
+
+// TPM PCR bank
+enum PCRBank {
+  PCR_BANK_UNSPECIFIED = 0;
+  PCR_BANK_SHA1 = 1;
+  PCR_BANK_SHA256 = 2;
+  PCR_BANK_SHA384 = 3;
+  PCR_BANK_SHA512 = 4;
+  PCR_BANK_SM3_256 = 5;
+}
+
+// PCR value
+message PCRValue {
+  uint32 index = 1;
+  PCRBank bank = 2;
+  bytes value = 3;
+}
+
+// TPM Info request/response
+message TPMInfoRequest {}
+
+message TPMInfoResponse {
+  TPMVersion version = 1;
+  TPMManufacturer manufacturer = 2;
+  repeated TPMCapability capabilities = 3;
+  repeated PCRBank pcr_banks = 4;
+  uint32 max_nvram_size = 5;
+  bool is_simulator = 6;
+  bool fips_mode = 7;
+  map<string, string> properties = 8;
+}
+
+// Provision request/response
+message TPMProvisionRequest {
+  string owner_password = 1;
+  string endorsement_password = 2;
+  bool create_ek = 3;
+  bool create_srk = 4;
+  bool create_ak = 5;
+  KeyAttributes ek_attributes = 6;
+  KeyAttributes srk_attributes = 7;
+  KeyAttributes ak_attributes = 8;
+}
+
+message TPMProvisionResponse {
+  Status status = 1;
+  bytes ek_public = 2;
+  bytes srk_public = 3;
+  bytes ak_public = 4;
+  bytes ek_certificate = 5;
+}
+
+// Clear request/response
+message TPMClearRequest {
+  string owner_password = 1;
+  bool confirm = 2;
+}
+
+message TPMClearResponse {
+  Status status = 1;
+}
+
+// EK request/response
+message CreateEKRequest {
+  KeyAttributes attributes = 1;
+  bool persistent = 2;
+}
+
+message CreateEKResponse {
+  Status status = 1;
+  bytes public_key = 2;
+  uint32 handle = 3;
+}
+
+message GetEKRequest {
+  KeyAlgorithm algorithm = 1;
+  uint32 handle = 2;
+}
+
+message GetEKResponse {
+  bytes public_key = 1;
+  uint32 handle = 2;
+  KeyAlgorithm algorithm = 3;
+}
+
+message GetEKCertificateRequest {
+  KeyAlgorithm algorithm = 1;
+  uint32 handle = 2;
+}
+
+message GetEKCertificateResponse {
+  bytes certificate = 1;
+  string format = 2; // PEM or DER
+}
+
+message ImportEKCertificateRequest {
+  bytes certificate = 1;
+  string format = 2; // PEM or DER
+  uint32 nvram_index = 3;
+}
+
+message ImportEKCertificateResponse {
+  Status status = 1;
+}
+
+message DeleteEKRequest {
+  uint32 handle = 1;
+  KeyAlgorithm algorithm = 2;
+  string password = 3;
+}
+
+message DeleteEKResponse {
+  Status status = 1;
+}
+
+// SRK request/response
+message CreateSRKRequest {
+  KeyAttributes attributes = 1;
+  bool persistent = 2;
+  uint32 parent_handle = 3; // EK handle
+  string parent_password = 4;
+}
+
+message CreateSRKResponse {
+  Status status = 1;
+  bytes public_key = 2;
+  uint32 handle = 3;
+}
+
+message GetSRKRequest {
+  KeyAlgorithm algorithm = 1;
+  uint32 handle = 2;
+}
+
+message GetSRKResponse {
+  bytes public_key = 1;
+  uint32 handle = 2;
+  KeyAlgorithm algorithm = 3;
+}
+
+message DeleteSRKRequest {
+  uint32 handle = 1;
+  KeyAlgorithm algorithm = 2;
+  string password = 3;
+}
+
+message DeleteSRKResponse {
+  Status status = 1;
+}
+
+// AK/IAK request/response
+message CreateAKRequest {
+  KeyAttributes attributes = 1;
+  bool persistent = 2;
+  uint32 parent_handle = 3; // SRK handle
+  string parent_password = 4;
+}
+
+message CreateAKResponse {
+  Status status = 1;
+  bytes public_key = 2;
+  uint32 handle = 3;
+  bytes credential_blob = 4; // For credential activation
+}
+
+message GetAKRequest {
+  KeyAlgorithm algorithm = 1;
+  uint32 handle = 2;
+}
+
+message GetAKResponse {
+  bytes public_key = 1;
+  uint32 handle = 2;
+  KeyAlgorithm algorithm = 3;
+}
+
+message DeleteAKRequest {
+  uint32 handle = 1;
+  KeyAlgorithm algorithm = 2;
+  string password = 3;
+}
+
+message DeleteAKResponse {
+  Status status = 1;
+}
+
+// Seal/Unseal request/response
+message SealRequest {
+  bytes data = 1;
+  string cn = 2; // Common name for the sealed object
+  uint32 parent_handle = 3; // SRK handle
+  string parent_password = 4;
+  string password = 5;
+  repeated uint32 pcr_indices = 6;
+  PCRBank pcr_bank = 7;
+  bool overwrite = 8;
+}
+
+message SealResponse {
+  Status status = 1;
+  bytes sealed_data = 2;
+  bytes public_key = 3;
+  bytes private_key = 4;
+}
+
+message UnsealRequest {
+  string cn = 1; // Common name of sealed object
+  uint32 parent_handle = 2; // SRK handle
+  string parent_password = 3;
+  string password = 4;
+  repeated uint32 pcr_indices = 5;
+  PCRBank pcr_bank = 6;
+}
+
+message UnsealResponse {
+  Status status = 1;
+  bytes data = 2;
+}
+
+// Attestation request/response
+message QuoteRequest {
+  uint32 ak_handle = 1;
+  string ak_password = 2;
+  repeated uint32 pcr_indices = 3;
+  PCRBank pcr_bank = 4;
+  bytes nonce = 5;
+}
+
+message QuoteResponse {
+  Status status = 1;
+  bytes quote = 2;
+  bytes signature = 3;
+  repeated PCRValue pcr_values = 4;
+  bytes event_log = 5;
+}
+
+message VerifyQuoteRequest {
+  bytes quote = 1;
+  bytes signature = 2;
+  bytes ak_public = 3;
+  bytes nonce = 4;
+  repeated PCRValue expected_pcrs = 5;
+}
+
+message VerifyQuoteResponse {
+  Status status = 1;
+  bool verified = 2;
+  string message = 3;
+  repeated PCRValue actual_pcrs = 4;
+}
+
+message GetEventLogRequest {
+  string format = 1; // json, binary, text
+}
+
+message GetEventLogResponse {
+  bytes event_log = 1;
+  string format = 2;
+  uint64 event_count = 3;
+}
+
+message GetPCRsRequest {
+  repeated uint32 indices = 1;
+  PCRBank bank = 2;
+}
+
+message GetPCRsResponse {
+  repeated PCRValue pcr_values = 1;
+}
+
+// NVRAM request/response
+message DefineNVRAMRequest {
+  uint32 index = 1;
+  uint32 size = 2;
+  string password = 3;
+  repeated string attributes = 4; // AUTHWRITE, AUTHREAD, etc.
+}
+
+message DefineNVRAMResponse {
+  Status status = 1;
+}
+
+message WriteNVRAMRequest {
+  uint32 index = 1;
+  bytes data = 2;
+  string password = 3;
+  uint32 offset = 4;
+}
+
+message WriteNVRAMResponse {
+  Status status = 1;
+}
+
+message ReadNVRAMRequest {
+  uint32 index = 1;
+  string password = 2;
+  uint32 offset = 3;
+  uint32 size = 4;
+}
+
+message ReadNVRAMResponse {
+  bytes data = 1;
+}
+
+message UndefineNVRAMRequest {
+  uint32 index = 1;
+  string password = 2;
+}
+
+message UndefineNVRAMResponse {
+  Status status = 1;
+}
+
+// Random request/response
+message GetRandomRequest {
+  uint32 num_bytes = 1;
+}
+
+message GetRandomResponse {
+  bytes random_bytes = 1;
+}

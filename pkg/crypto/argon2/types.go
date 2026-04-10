@@ -1,0 +1,27 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package argon2
+
+type Argon2Config struct {
+	Memory      uint32 `yaml:"memory" json:"memory" mapstructure:"memory"`
+	Iterations  uint32 `yaml:"iterations" json:"iterations" mapstructure:"iterations"`
+	Parallelism uint8  `yaml:"parallelism" json:"parallelism" mapstructure:"parallelism"`
+	SaltLength  uint32 `yaml:"saltLen" json:"saltLen" mapstructure:"saltLen"`
+	KeyLength   uint32 `yaml:"keyLen" json:"keyLen" mapstructure:"keyLen"`
+}
+
+type Argon2 interface {
+	Hash(password string) (string, error)
+	Compare(password, hash string) (match bool, err error)
+}

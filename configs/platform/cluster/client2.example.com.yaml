@@ -1,0 +1,484 @@
+# Trusted Platform System Manifest Configuration (Client2 - Cluster)
+# This is the SINGLE SOURCE OF TRUTH for all platform configuration:
+# - Installation (disk, OS, network, TPM sealing)
+# - Provisioning (TPM, CA, keys)
+# - Runtime (webservice, ACME enrollment)
+
+debug: true
+debug-secrets: true
+platform-dir: /var/lib/trusted-platform
+config-dir: /etc/trusted-platform
+log-dir: /var/log/trusted-platform
+ca-dir: /var/lib/trusted-platform/ca
+domain: client2.example.com
+hostmaster: hostmaster@client2.example.com
+tenant-id: platform
+pin-seal-policy: true
+
+
+# =============================================================================
+# INSTALLATION CONFIGURATION (System Manifest)
+# =============================================================================
+
+# Disk configuration for system installation
+disk:
+  device: ""
+  partition-table: gpt
+  efi-partition-size: 538
+  root-filesystem: lvm
+  lvm-volume-group: vg0
+  lvm-logical-volume: root
+  encryption:
+    version: luks2
+    cipher: aes-xts-plain64
+    key-size: 512
+    hash: sha256
+    pbkdf: argon2id
+    mapped-name: cryptroot
+
+# Operating system configuration
+os:
+  os: alpine
+  version: "3.22.2"
+  architecture: x86_64
+  hostname: client2
+  packages:
+    - bash
+    - vim
+    - curl
+    - wget
+    - htop
+    - lsblk
+    - parted
+    - e2fsprogs
+    - lvm2
+    - tpm2-tools
+    - dracut
+  filesystem-type: lvm
+  fips: false
+  lockdown: true
+  lockdown-mode: confidentiality
+  tpm-auto-upgrade-seal: true
+  enable-fido2: false
+  ima:
+    enabled: false
+    policy: tcb
+    hash-algorithm: sha256
+    evm: false
+    appraise-mode: off
+    audit-enabled: true
+
+# Network configuration for installed system
+# DNS resolution: dnsmasq (127.0.0.1:53) forwards to server1's internal DNS
+# NOTE: upstream-servers MUST use IP address - hostname would create chicken-and-egg problem
+network:
+  dns:
+    nameservers:
+      - 127.0.0.1
+    search-domains:
+      - example.internal
+  dnsmasq:
+    enabled: true
+    upstream-servers:
+      - 10.0.1.1:9053
+    local-domain: example.internal
+    custom-records:
+      - name: custom.example.com
+        type: A
+        value: 10.0.2.2
+      - name: custom.example.internal
+        type: A
+        value: 10.0.2.2
+  interfaces: []
+  bridges: []
+  bonds: []
+  vlans: []
+  wait-online: true
+  wait-timeout: 30
+
+# UKI (Unified Kernel Image) configuration
+uki:
+  cmdline: "root=/dev/mapper/vg0-root ro quiet"
+  kernel-path: /boot/vmlinuz-lts
+  initramfs-path: /boot/initramfs-lts
+
+# Secure Boot configuration
+secure-boot:
+  key-path: /boot/efi/secure-boot/db.key
+  cert-path: /boot/efi/secure-boot/db.crt
+
+# Enable TPM-based LUKS key sealing
+enable-tpm-sealing: true
+
+# PCR registers to seal LUKS keys against
+# This is THE SINGLE SOURCE OF TRUTH for seal PCRs used by:
+# - Installer (initial LUKS key sealing)
+# - Initrd firstboot (writes to pcr-banks file)
+# - Initrd boot (reads from config or pcr-banks file)
+#
+# Common PCRs:
+#   0: BIOS/UEFI firmware
+#   7: Secure Boot state
+#   9: Kernel command line
+#   10: Linux IMA - DON'T USE for LUKS (changes on every boot)
+seal-pcrs:
+  - 7
+  - 9
+
+# FIDO2 configuration
+enable-fido2-enrollment: false
+fido2:
+  relying-party-id: client2.example.com
+  keyslot: 3
+  user-presence-required: true
+  timeout: 60
+
+
+# =============================================================================
+# ACME CLIENT CONFIGURATION
+# =============================================================================
+
+acme:
+  client:
+    directory: https://10.0.1.1:9443/api/v1/acme/directory
+    # Use OS system certificate pool for CA trust.
+    # The platform CA is installed to the system trust store during ISO installation
+    # via /usr/local/share/ca-certificates/ and update-ca-certificates.
+    # This is more secure than insecure-bootstrap which disables TLS verification.
+    system-cert-pool: true
+    enrollment:
+      challenge: enroll-01
+      ip: ${PREFERRED_IP}
+    account:
+      email: hostmaster@client2.example.com
+      key:
+        # PKCS #8 RSA w/ PSS (for initial enrollment before TPM is provisioned)
+        algorithm: RSA
+        cn: acme-account
+        debug: true
+        hash: SHA-256
+        password: 123456
+        platform-policy: true
+        rsa:
+          size: 2048
+        signature-algorithm: SHA256-RSAPSS
+        store: software
+      register: true
+
+
+# =============================================================================
+# DATASTORE CONFIGURATION
+# =============================================================================
+
+quicbaas:
+  storage-backend: pebble
+  data-dir: /var/lib/trusted-platform/quicbaas
+  wal-dir: /var/lib/trusted-platform/quicbaas/wal
+  cache-size: 67108864
+  log-level: warn
+  consistency-level: linearizable
+
+
+
+# =============================================================================
+# TPM CONFIGURATION
+# =============================================================================
+
+tpm:
+  device: /dev/tpmrm0
+  simulator: false
+  encrypt-sessions: false
+  entropy: false
+  hash: SHA-256
+  ek:
+    debug: true
+    handle: 0x81010001
+    hash: SHA-256
+    password:
+    rsa:
+      size: 2048
+  ssrk:
+    debug: true
+    handle: 0x81000001
+    hierarchy-auth:
+    password:
+    platform-policy: false
+    rsa:
+      size: 2048
+  iak:
+    auth:
+    debug: true
+    hash: SHA-256
+    handle: 0x81010002
+    password:
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSA
+  idevid:
+    model: edge
+    serial: tp-client-cluster-02
+    cert-handle: 0x01C90000
+    debug: true
+    handle: 0x81020000
+    hash: SHA-256
+    pad: true
+    password:
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSA
+  platform-pcr: 23
+  platform-pcr-bank: sha256
+  # Golden PCRs for platform policy (separate from seal-pcrs)
+  # NOTE: PCR 10 (IMA) changes on every boot - DO NOT include for LUKS unlock!
+  golden-pcrs: [7, 9]
+  platform-srk:
+    srk-handle: 0x81000002
+    srk-auth: 123456
+    platform-policy: true
+
+
+# =============================================================================
+# CERTIFICATE AUTHORITY CONFIGURATION
+# =============================================================================
+
+certificate-authority:
+  platform-ca: 1
+  auto-import-issuing-ca: true
+  system-cert-pool: true
+  default-validity: 365
+  default-idevid-cn: default-device-id
+  sans-include-localhost: true
+  require-password: true
+  quantum-safe: true
+  identity:
+    - # Root Certificate Authority
+      is-root: true
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000003
+          srk-auth: 123456
+          platform-policy: true
+      keys:
+        # PKCS #8 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 RSA
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 Ed25519
+        - algorithm: Ed25519
+          ecc:
+            curve: P-256
+          signature-algorithm: Ed25519
+          hash: SHA-256
+          store: software
+          password: 123456
+          platform-policy: true
+          debug: true
+
+      valid: 50
+      subject:
+        cn: root-ca.client2.example.com
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns:
+          - root-ca.client2.example.com
+        email:
+          - hostmaster@client2.example.com
+
+    - # Intermediate Certificate Authority
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000004
+          srk-auth: 123456
+          platform-policy: true
+      keys:
+        - # PKCS #8 RSA
+          algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 RSA
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: 123456
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 Ed25519
+        - algorithm: Ed25519
+          ecc:
+            curve: P-256
+          signature-algorithm: Ed25519
+          hash: SHA-256
+          store: software
+          password: 123456
+          platform-policy: true
+          debug: true
+      valid: 10
+      subject:
+        cn: ca01.client2.example.com
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns:
+          - ca01.client2.example.com
+        email:
+          - hostmaster@client2.example.com
+
+
+# =============================================================================
+# WEBSERVICE CONFIGURATION (Client-side, minimal)
+# =============================================================================
+
+webservice:
+  home: /var/lib/trusted-platform/public_html
+  port: 9080
+  tls-port: 9443
+  index: index.html
+  jwt:
+    expiration: 525960
+    issuer: client2.example.internal
+  cors:
+    allowed-origins:
+      - https://client2.example.internal
+      - http://client2.example.internal
+      - https://client2.example.com
+      - http://client2.example.com
+      - https://localhost
+      - http://localhost
+    allowed-methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+    allowed-headers:
+      - "*"
+    allow-credentials: true
+  key:
+    algorithm: ECDSA
+    ecc:
+      curve: P-256
+    signature-algorithm: ECDSA-SHA256
+    hash: SHA-256
+    store: software
+    password: 123456
+    platform-policy: true
+    debug: true
+  certificate:
+    subject:
+      cn: client2.example.internal
+      organization: Trusted Platform
+      country: US
+      province: Florida
+      locality: West Palm Beach
+      address: 123 Automation Street
+      postal-code: 12345
+    sans:
+      dns:
+        - client2.example.com
+        - client2.example.internal
+      email:
+        - hostmaster@client2.example.com
+
+
+# =============================================================================
+# PASSWORD HASHING (Argon2)
+# =============================================================================
+
+argon2:
+  memory: 65536
+  iterations: 3
+  parallelism: 2
+  saltLen: 16
+  keyLen: 32

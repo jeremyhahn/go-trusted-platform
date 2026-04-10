@@ -1,0 +1,483 @@
+# DNS Architecture
+
+## System Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           Trusted Platform                              │
+│                    (Single Binary, Modular Features)                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                       DNS Module (pkg/dns/)                       │  │
+│  │                        [Enabled via config]                       │  │
+│  │                                                                   │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌───────────┐ │  │
+│  │  │    DNS      │  │  Trusted    │  │    Zone     │  │   Query   │ │  │
+│  │  │   Service   │  │  Platform   │  │     DAO     │  │   Parser  │ │  │
+│  │  │             │  │   Plugin    │  │             │  │           │ │  │
+│  │  │ - Register  │  │ - ServeDNS  │  │ - kvstore   │  │ - Validate│ │  │
+│  │  │ - Zones     │  │ - Security  │  │ - objstore  │  │ - Parse RR│ │  │
+│  │  │ - Resolver  │  │ - Logging   │  │ - CRUD      │  │ - RFC 1035│ │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘  └───────────┘ │  │
+│  │                                                                   │  │
+│  │  ┌─────────────────────────────────────────────────────────────┐  │  │
+│  │  │                    CoreDNS Integration                      │  │  │
+│  │  │                                                             │  │  │
+│  │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────────┐  │  │  │
+│  │  │  │ Corefile │─▶│ Plugin   │─▶│ Forward  │─▶│   Query     │  │  │  │
+│  │  │  │ (Dynamic)│  │ Chain    │  │ (Ext)    │  │ Resolution  │  │  │  │
+│  │  │  └──────────┘  └──────────┘  └──────────┘  └─────────────┘  │  │  │
+│  │  └─────────────────────────────────────────────────────────────┘  │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│                                    │                                    │
+│                                    │ uses                               │
+│                                    ▼                                    │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                     Dual-Server Architecture                      │  │
+│  │                                                                   │  │
+│  │  ┌──────────────────────────┐   ┌──────────────────────────┐      │  │
+│  │  │    Internal Server       │   │    Public Server         │      │  │
+│  │  │    (Port 9053)           │   │    (Port 8053)           │      │  │
+│  │  │                          │   │                          │      │  │
+│  │  │ - Private zones          │   │ - Public zones           │      │  │
+│  │  │ - Private TLDs           │   │ - IANA TLDs              │      │  │
+│  │  │ - Internal forwarders    │   │ - External forwarders    │      │  │
+│  │  │ - LAN resolution         │   │ - Internet resolution    │      │  │
+│  │  └──────────────────────────┘   └──────────────────────────┘      │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│                                    │                                    │
+│                                    │ stores                             │
+│                                    ▼                                    │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                     Datastore (dns/zones)                         │  │
+│  │                                                                   │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌───────────┐ │  │
+│  │  │   kvstore   │  │  objstore   │  │    JSON     │  │  Memory   │ │  │
+│  │  │   (LOCAL)   │  │  (Objects)  │  │  Serializer │  │  Backend  │ │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘  └───────────┘ │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+## Components
+
+### DNS Service
+
+The DNS Service (`pkg/dns/service.go`) provides the core zone and record management operations:
+
+- Zone CRUD operations (Save, Delete, Zone)
+- Host and device registration
+- Internal/external zone separation
+- Custom net.Resolver for platform DNS lookups
+- Domain name parsing and validation
+
+### TrustedPlatformPlugin
+
+The TrustedPlatformPlugin (`pkg/dns/plugin.go`) integrates with CoreDNS as a custom plugin:
+
+- Implements `plugin.Handler` interface
+- Handles incoming DNS queries via `ServeDNS`
+- Zone lookup by query name
+- Security enforcement for internal/public zone separation
+- RFC 1035 compliant query validation
+- Security logging for policy violations
+
+### Zone DAO
+
+Zone Data Access Object provides persistence abstraction:
+
+| Backend | Package | Storage Type |
+|---------|---------|--------------|
+| kvstore | `pkg/dns/dao/kvstore` | Key-value storage |
+| objstore | `pkg/dns/dao/objstore` | Object storage |
+
+Both backends support:
+- Generic CRUD operations via `datastore.GenericDAO`
+- Zone lookup by name via `GetByName`
+- Pagination support
+
+### Parser
+
+The Parser (`pkg/dns/parser.go`) handles DNS record parsing and validation:
+
+- Record type parsing (A, AAAA, MX, CNAME, NS, SOA, TXT, SRV)
+- Query validation per RFC 1035
+- Domain name parsing via publicsuffix
+- Hostname, subdomain, and TLD extraction
+
+### Configuration
+
+Configuration (`pkg/dns/config.go`) defines the DNS module settings:
+
+- Dual-server configuration (internal/public)
+- Zone definitions embedded in config
+- Forwarder lists for upstream DNS
+- Registration policy settings
+- IP address configuration (IPv4/IPv6)
+
+## Data Model
+
+### Zone Entity
+
+```go
+type Zone struct {
+    ID          uint64    // Unique zone identifier
+    Name        string    // Zone name (e.g., "example.com.")
+    TenantID    string    // Tenant that owns this zone (multi-tenant isolation)
+    TTL         uint32    // Default TTL for records
+    RecordSet   RecordSet // All DNS records
+    Description string    // Zone description
+    Internal    bool      // Internal vs public zone flag
+}
+
+// IsOwnedBy checks if the zone belongs to the specified tenant
+func (z *Zone) IsOwnedBy(tenantID string) bool {
+    return z.TenantID == tenantID
+}
+```
+
+### Multi-Tenant Zone Isolation
+
+The DNS service implements tenant-based zone isolation to support multi-tenant deployments:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Multi-Tenant DNS Architecture                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   ┌─────────────────────────────────────────────────────────┐   │
+│   │                   DNS Service Layer                     │   │
+│   │                                                         │   │
+│   │   TenantID: "platform"                                  │   │
+│   │   ┌──────────────────────────────────────────────────┐  │   │
+│   │   │  authorizeZoneAccess(zone, action)               │  │   │
+│   │   │  • Verify caller TenantID matches zone TenantID  │  │   │
+│   │   │  • Log unauthorized access attempts              │  │   │
+│   │   │  • Return ErrUnauthorizedZoneAccess if denied    │  │   │
+│   │   └──────────────────────────────────────────────────┘  │   │
+│   └─────────────────────────────────────────────────────────┘   │
+│                              │                                   │
+│              ┌───────────────┼───────────────┐                   │
+│              ▼               ▼               ▼                   │
+│   ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐   │
+│   │ Zone: example.  │ │ Zone: internal. │ │ Zone: tenant-b. │   │
+│   │ TenantID:       │ │ TenantID:       │ │ TenantID:       │   │
+│   │ "platform"      │ │ "platform"      │ │ "tenant-b"      │   │
+│   │                 │ │                 │ │                 │   │
+│   │ ✓ Accessible    │ │ ✓ Accessible    │ │ ✗ Denied        │   │
+│   └─────────────────┘ └─────────────────┘ └─────────────────┘   │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key Features:**
+
+| Feature | Description |
+|---------|-------------|
+| Automatic TenantID Assignment | New zones inherit TenantID from the DNS service |
+| Ownership Verification | All zone operations check tenant ownership |
+| DNSSEC Key Isolation | Keys stored in tenant-scoped paths: `dnssec/{tenant}/{zone}/{key}` |
+| Audit Logging | Unauthorized access attempts logged with full context |
+
+### RecordSet
+
+```go
+type RecordSet struct {
+    ARecords      []*ARecord      // IPv4 address records
+    AAAARecords   []*AAAARecord   // IPv6 address records
+    CNAMERecords  []*CNAMERecord  // Canonical name records
+    DNSKEYRecords []*DNSKEYRecord // DNSSEC public keys
+    DSRecords     []*DSRecord     // Delegation signer records
+    MXRecords     []*MXRecord     // Mail exchange records
+    NSRecords     []*NSRecord     // Name server records
+    RRSIGRecords  []*RRSIGRecord  // Resource record signatures
+    SOARecord     SOARecord       // Start of authority
+    SRVRecords    []*SRVRecord    // Service records
+    TXTRecords    []*TXTRecord    // Text records
+}
+```
+
+### DNSSEC Records
+
+| Record Type | Purpose |
+|-------------|---------|
+| DNSKEY | Zone signing public key |
+| DS | Delegation signer for chain of trust |
+| RRSIG | Signature over resource record sets |
+
+### Datastore Partition
+
+All DNS zone data is stored under the partition:
+```
+dns/zones
+```
+
+Zone IDs are generated using `util.NewID([]byte(zoneName))` for consistent, deterministic identification.
+
+## CoreDNS Integration
+
+### Dynamic Corefile Generation
+
+The platform dynamically generates CoreDNS Corefiles at runtime:
+
+```go
+// Basic Corefile
+.:{port} {
+    trustedPlatform
+    log
+    chaos
+}
+
+// With forwarders
+.:{port} {
+    trustedPlatform
+    log
+    chaos
+    forward . {forwarder1} {forwarder2}
+}
+```
+
+### Plugin Registration
+
+The TrustedPlatformPlugin registers with CoreDNS during initialization:
+
+```go
+dnsserver.Directives = []string{
+    "trustedPlatform",
+    "log",
+    "chaos",
+    "forward",
+}
+```
+
+### Query Handling Flow
+
+```
+Client                  CoreDNS                TrustedPlatformPlugin        ZoneDAO
+   |                       |                          |                        |
+   | 1. DNS Query          |                          |                        |
+   |---------------------->|                          |                        |
+   |                       |                          |                        |
+   |                       | 2. Route to plugin       |                        |
+   |                       |------------------------->|                        |
+   |                       |                          |                        |
+   |                       |                          | 3. Validate query      |
+   |                       |                          | (RFC 1035)             |
+   |                       |                          |                        |
+   |                       |                          | 4. Get zone            |
+   |                       |                          |----------------------->|
+   |                       |                          |                        |
+   |                       |                          | 5. Zone data           |
+   |                       |                          |<-----------------------|
+   |                       |                          |                        |
+   |                       |                          | 6. Security check      |
+   |                       |                          | (internal/public)      |
+   |                       |                          |                        |
+   |                       |                          | 7. Parse records       |
+   |                       |                          |                        |
+   |                       | 8. DNS Response          |                        |
+   |<----------------------|<-------------------------|                        |
+```
+
+## DNSSEC Architecture (Planned)
+
+### DNSSECService
+
+Future DNSSEC implementation will provide:
+
+- Zone signing with KSK and ZSK
+- NSEC/NSEC3 authenticated denial of existence
+- Key rollover support
+- Signature expiration management
+
+### ZoneSigner
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                         DNSSEC Zone Signing                           │
+├───────────────────────────────────────────────────────────────────────┤
+│                                                                       │
+│   Step 1: Key Generation                                              │
+│   ┌─────────────────────────────────────────────────────────────────┐ │
+│   │  KMS Service ─▶ KeyGenerator ─▶ DNSKEY Records                  │ │
+│   │  • KSK (Key Signing Key): flags=257, algorithm=13 (ECDSAP256)   │ │
+│   │  • ZSK (Zone Signing Key): flags=256, algorithm=13              │ │
+│   └─────────────────────────────────────────────────────────────────┘ │
+│                                                                       │
+│   Step 2: Record Signing                                              │
+│   ┌─────────────────────────────────────────────────────────────────┐ │
+│   │  For each RRset:                                                │ │
+│   │  • Canonical ordering                                           │ │
+│   │  • RRSIG generation using ZSK                                   │ │
+│   │  • Signature validity period                                    │ │
+│   └─────────────────────────────────────────────────────────────────┘ │
+│                                                                       │
+│   Step 3: Chain Generation                                            │
+│   ┌─────────────────────────────────────────────────────────────────┐ │
+│   │  NSEC/NSEC3:                                                    │ │
+│   │  • Sorted zone records                                          │ │
+│   │  • Next secure record chain                                     │ │
+│   │  • Type bitmaps                                                 │ │
+│   └─────────────────────────────────────────────────────────────────┘ │
+│                                                                       │
+│   Step 4: DS Record                                                   │
+│   ┌─────────────────────────────────────────────────────────────────┐ │
+│   │  DS = Digest(DNSKEY)                                            │ │
+│   │  • Submitted to parent zone                                     │ │
+│   │  • Establishes chain of trust                                   │ │
+│   └─────────────────────────────────────────────────────────────────┘ │
+│                                                                       │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+### KeyGenerator with go-quicbaas
+
+DNSSEC keys will be managed through the platform's KMS:
+
+- TPM-backed key storage
+- Hardware security module support
+- Key lifecycle management
+- Automated rotation policies
+
+## Key Management Integration
+
+### go-quicbaas KMSService
+
+The DNS module integrates with the platform's key management:
+
+| Feature | Description |
+|---------|-------------|
+| Multi-backend | TPM, HSM, Software |
+| TPM Protection | Hardware-bound keys |
+| Key Hierarchy | KSK/ZSK separation |
+| Rotation | Automated key rollover |
+
+### TPM Key Protection
+
+For high-security deployments:
+
+- DNSSEC keys sealed to TPM
+- Platform attestation binding
+- Non-exportable key storage
+- Hardware random generation
+
+## Security Architecture
+
+### Query Validation
+
+All DNS queries undergo RFC 1035 validation:
+
+- Maximum domain length (253 characters)
+- Label length validation (1-63 characters)
+- Character set validation (alphanumeric, hyphen)
+- IP address rejection (forward lookups only)
+- Injection prevention
+
+### Internal vs Public Zone Separation
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                       Zone Separation Security                        │
+├───────────────────────────────────────────────────────────────────────┤
+│                                                                       │
+│   Public Server (Port 8053)                                           │
+│   ┌─────────────────────────────────────────────────────────────────┐ │
+│   │  • Serves only public zones (Internal=false)                    │ │
+│   │  • Rejects queries for internal zones                           │ │
+│   │  • Logs security violations                                     │ │
+│   │  • No error response revealing internal structure               │ │
+│   └─────────────────────────────────────────────────────────────────┘ │
+│                                                                       │
+│   Internal Server (Port 9053)                                         │
+│   ┌─────────────────────────────────────────────────────────────────┐ │
+│   │  • Serves both internal and public zones                        │ │
+│   │  • Internal network access only                                 │ │
+│   │  • Full resolution capabilities                                 │ │
+│   │  • Forwards unknown queries to configured forwarders            │ │
+│   └─────────────────────────────────────────────────────────────────┘ │
+│                                                                       │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+### Security Logging
+
+Violations are logged with structured security entries:
+
+```go
+SecurityLogEntry{
+    Category:        CategoryNetworkSecurity,
+    Description:     "Ignoring public query for internal zone",
+    Details:         qname,
+    OffenderAddress: remoteAddr,
+    Source:          SourceDNS,
+    Severity:        SeverityHigh,
+    Timestamp:       time.Now(),
+}
+```
+
+### ABAC Integration
+
+Future authorization integration:
+
+- Policy-based zone access control
+- Tenant-scoped DNS zones
+- Fine-grained record permissions
+- Audit logging for all operations
+
+## Configuration Reference
+
+### Registration Policies
+
+| Setting | Description |
+|---------|-------------|
+| `AllowRegistration` | Enable/disable device registration |
+| `AllowExternalRegistration` | Allow external domain registration |
+| `AllowInternalRegistration` | Allow internal domain registration |
+
+### Server Configuration
+
+```yaml
+dns:
+  internal:
+    port: 9053
+    forwarders:
+      - 192.168.1.1
+    zone:
+      name: "trusted-platform.internal."
+      internal: true
+  public:
+    port: 8053
+    forwarders:
+      - 8.8.8.8
+      - 4.4.4.4
+    zone:
+      name: "trusted-platform.io."
+      internal: false
+```
+
+### Macro Expansion
+
+Configuration supports macro variables:
+
+| Macro | Description |
+|-------|-------------|
+| `${PUBLIC_IPv4}` | Public IPv4 address |
+| `${PUBLIC_IPv6}` | Public IPv6 address |
+| `${PRIVATE_IPv4}` | Private IPv4 address |
+| `${PRIVATE_IPv6}` | Private IPv6 address |
+| `${HOSTNAME}` | Local hostname |
+| `${PUBLIC_DOMAIN}` | Public zone name |
+| `${PRIVATE_DOMAIN}` | Private zone name |
+| `${PUBLIC_FQDN}` | Full public FQDN |
+| `${PRIVATE_FQDN}` | Full private FQDN |
+
+## TLD Validation
+
+The DNS module validates TLDs against the IANA registry:
+
+- Fetches official TLD list from data.iana.org
+- Caches TLDs in memory for fast lookup
+- Distinguishes public TLDs from private extensions
+- Prevents registration of reserved domains

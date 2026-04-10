@@ -1,0 +1,291 @@
+# Docker Compose configuration for go-trusted-platform integration testing
+# Provides full SDN/OVS/QEMU capabilities for comprehensive testing
+#
+# All containers use "trusted-platform-" prefix to avoid conflicts with
+# other projects (go-xkms, go-quicbaas, etc.) running on the same system.
+
+services:
+  # Main development and testing service
+  devcontainer:
+    image: trusted-platform-dev:latest
+    container_name: trusted-platform-devcontainer
+    hostname: trusted-platform-devcontainer
+
+    # Build configuration
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - NVM_VERSION=v0.39.5
+        - NODE_VERSION=21.1.0
+        - QEMU_VERSION=8.2.0
+
+    # Privileged mode required for OVS and QEMU
+    privileged: true
+
+    # Capabilities needed for networking and kernel modules
+    cap_add:
+      - NET_ADMIN         # Network administration (bridges, interfaces)
+      - NET_RAW           # Raw sockets for networking tests
+      - SYS_MODULE        # Load kernel modules (tun, openvswitch, kvm)
+      - SYS_PTRACE        # Debugging and tracing
+      - SYS_ADMIN         # System administration (mount, etc.)
+      - DAC_OVERRIDE      # File permission overrides
+      - SETFCAP           # Set file capabilities
+      - IPC_LOCK          # Lock memory for TPM operations
+
+    # Device access for KVM and network virtualization
+    devices:
+      - /dev/net/tun:/dev/net/tun     # TUN/TAP networking
+      - /dev/kvm:/dev/kvm             # KVM acceleration (if available)
+
+    # Volume mounts
+    volumes:
+      # Project workspace
+      - ../../../:/workspace:cached
+
+      # Mount sibling projects for local go.mod replace directives
+      # These match the paths in go.mod: replace ... => /home/jhahn/sources/go-*
+      - ../../../../go-trusted-ca:/home/jhahn/sources/go-trusted-ca:cached
+      - ../../../../go-quicbaas:/home/jhahn/sources/go-quicbaas:cached
+      - ../../../../go-xkms:/home/jhahn/sources/go-xkms:cached
+      - ../../../../go-objstore:/home/jhahn/sources/go-objstore:cached
+      - ../../../../go-qrdb:/home/jhahn/sources/go-qrdb:cached
+      - ../../../../go-quicraft:/home/jhahn/sources/go-quicraft:cached
+      - ../../../../go-truststrap:/home/jhahn/sources/go-truststrap:cached
+      - ../../../../go-frost:/home/jhahn/sources/go-frost:cached
+      - ../../../../go-auth:/home/jhahn/sources/go-auth:cached
+      - ../../../../go-codec:/home/jhahn/sources/go-codec:cached
+      - ../../../../go-luks2:/home/jhahn/sources/go-luks2:cached
+      - ../../../../go-signal:/home/jhahn/sources/go-signal:cached
+
+      # Private deployment configs (read-only)
+      - ../../../../automatethethings:/home/jhahn/sources/automatethethings:ro
+
+      # Go module cache for faster builds
+      - trusted-platform-go-mod-cache:/go/pkg/mod
+
+      # Go build cache
+      - trusted-platform-go-build-cache:/root/.cache/go-build
+
+      # Node module cache for faster npm installs
+      - trusted-platform-node-modules-cache:/workspace/web/node_modules
+
+      # Playwright browsers cache
+      - trusted-platform-playwright-browsers:/ms-playwright
+
+      # OVS persistent data (optional)
+      - trusted-platform-ovs-db:/etc/openvswitch
+      - trusted-platform-ovs-run:/var/run/openvswitch
+      - trusted-platform-ovs-log:/var/log/openvswitch
+
+      # swtpm persistent data (optional)
+      - trusted-platform-swtpm-data:/var/lib/swtpm
+
+    # Working directory
+    working_dir: /workspace
+
+    # Environment variables
+    environment:
+      # Auto-start OVS on container launch
+      AUTO_START_OVS: "true"
+
+      # Go environment
+      GOPATH: /go
+      GOCACHE: /root/.cache/go-build
+      GOMODCACHE: /go/pkg/mod
+      CGO_ENABLED: "1"
+
+      # Integration test flags
+      INTEGRATION_TEST: "1"
+
+      # Networking configuration
+      OVS_MANAGER: "tcp:127.0.0.1:6640"
+
+      # Platform API configuration
+      PLATFORM_REST_PORT: "8443"
+      PLATFORM_GRPC_PORT: "10443"
+      PLATFORM_QUIC_PORT: "9444"
+      PLATFORM_MCP_PORT: "9445"
+      PLATFORM_SOCKET_PATH: "/run/platformd.sock"
+
+      # Frontend configuration
+      NEXT_PUBLIC_API_URL: "https://localhost:8443"
+      NEXT_PUBLIC_GRPC_URL: "https://localhost:10443"
+      NEXT_PUBLIC_QUIC_URL: "https://localhost:9444"
+      NEXT_PUBLIC_MCP_URL: "http://localhost:9445"
+
+      # Playwright configuration
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "0"
+
+      # Development settings
+      ENV: dev
+      NODE_ENV: development
+
+    # Resource limits
+    ulimits:
+      memlock:
+        soft: -1    # Unlimited for TPM operations
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    # Shared memory size for QEMU
+    shm_size: '2gb'
+
+    # Port mappings for multi-protocol API access
+    ports:
+      - "3000:3000"       # Next.js dev server
+      - "8443:8443"       # REST/HTTPS
+      - "10443:10443"     # gRPC TCP
+      - "9444:9444/udp"   # QUIC (UDP)
+      - "9445:9445"       # MCP
+
+    # Network configuration
+    networks:
+      - trusted-platform-net
+
+    # Keep container running
+    stdin_open: true
+    tty: true
+
+    # Default command
+    command: bash
+
+  # OVS standalone service (for dedicated OVS testing)
+  ovs:
+    image: trusted-platform-dev:latest
+    container_name: trusted-platform-ovs
+    hostname: trusted-platform-ovs
+    privileged: true
+
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_MODULE
+
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
+    volumes:
+      - trusted-platform-ovs-standalone-db:/etc/openvswitch
+      - trusted-platform-ovs-standalone-run:/var/run/openvswitch
+      - trusted-platform-ovs-standalone-log:/var/log/openvswitch
+
+    environment:
+      AUTO_START_OVS: "true"
+
+    networks:
+      - trusted-platform-net
+
+    # Just run OVS and keep alive
+    command: >
+      bash -c "
+        /usr/local/bin/entrypoint.sh ovs-start &&
+        tail -f /dev/null
+      "
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "ovs-vsctl", "show"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # QEMU test VM coordinator (for E2E tests)
+  qemu:
+    image: trusted-platform-dev:latest
+    container_name: trusted-platform-qemu
+    hostname: trusted-platform-qemu
+    privileged: true
+
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+      - IPC_LOCK
+
+    devices:
+      - /dev/net/tun:/dev/net/tun
+      - /dev/kvm:/dev/kvm
+
+    volumes:
+      - ../../../:/workspace:cached
+      - trusted-platform-qemu-images:/var/lib/qemu
+      - trusted-platform-swtpm-coord-data:/var/lib/swtpm
+      - trusted-platform-go-mod-cache:/go/pkg/mod
+
+    working_dir: /workspace
+
+    environment:
+      AUTO_START_OVS: "true"
+      INTEGRATION_TEST: "1"
+      QEMU_ENABLE_KVM: "true"
+
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+
+    shm_size: '4gb'
+
+    networks:
+      - trusted-platform-net
+
+    depends_on:
+      ovs:
+        condition: service_healthy
+
+    stdin_open: true
+    tty: true
+    command: bash
+
+# Named volumes for persistent data (all prefixed with trusted-platform-)
+volumes:
+  # Go caches (shared across services)
+  trusted-platform-go-mod-cache:
+    driver: local
+  trusted-platform-go-build-cache:
+    driver: local
+
+  # Node.js and frontend caches
+  trusted-platform-node-modules-cache:
+    driver: local
+  trusted-platform-playwright-browsers:
+    driver: local
+
+  # OVS data for main devcontainer
+  trusted-platform-ovs-db:
+    driver: local
+  trusted-platform-ovs-run:
+    driver: local
+  trusted-platform-ovs-log:
+    driver: local
+
+  # OVS data for standalone service
+  trusted-platform-ovs-standalone-db:
+    driver: local
+  trusted-platform-ovs-standalone-run:
+    driver: local
+  trusted-platform-ovs-standalone-log:
+    driver: local
+
+  # QEMU and swtpm data
+  trusted-platform-qemu-images:
+    driver: local
+  trusted-platform-swtpm-data:
+    driver: local
+  trusted-platform-swtpm-coord-data:
+    driver: local
+
+# Custom network for inter-service communication
+networks:
+  trusted-platform-net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
+          gateway: 172.28.0.1

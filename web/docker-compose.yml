@@ -1,0 +1,103 @@
+# Docker Compose configuration for web development
+# Backend runs in container, frontend runs on host for best hot-reload experience
+#
+# Usage: make dev (from web/ directory)
+#
+# This is separate from the main devcontainer to avoid port conflicts
+# and allow parallel development/testing workflows.
+#
+# All containers use "trusted-platform-" prefix to avoid conflicts with
+# other projects (go-xkms, go-quicbaas, etc.) running on the same system.
+
+services:
+  # Web development backend service
+  webdev:
+    image: trusted-platform-dev:latest
+    container_name: trusted-platform-webdev
+    hostname: trusted-platform-webdev
+
+    # Build configuration (uses same Dockerfile as main devcontainer)
+    build:
+      context: ../build/docker/devcontainer
+      dockerfile: Dockerfile
+      args:
+        - NVM_VERSION=v0.39.5
+        - NODE_VERSION=21.1.0
+
+    # Privileged mode for TPM simulator
+    privileged: true
+
+    # Capabilities needed
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+      - IPC_LOCK
+
+    # Volume mounts
+    volumes:
+      # Project workspace
+      - ../:/workspace:cached
+
+      # Mount sibling projects for local go.mod replace directives
+      - ../../go-trusted-ca:/home/jhahn/sources/go-trusted-ca:cached
+      - ../../go-quicbaas:/home/jhahn/sources/go-quicbaas:cached
+      - ../../go-xkms:/home/jhahn/sources/go-xkms:cached
+      - ../../go-objstore:/home/jhahn/sources/go-objstore:cached
+
+      # Go module cache for faster builds
+      - trusted-platform-webdev-go-mod-cache:/go/pkg/mod
+
+      # Go build cache
+      - trusted-platform-webdev-go-build-cache:/root/.cache/go-build
+
+    # Working directory
+    working_dir: /workspace
+
+    # Environment variables
+    environment:
+      # Go environment
+      GOPATH: /go
+      GOCACHE: /root/.cache/go-build
+      GOMODCACHE: /go/pkg/mod
+      CGO_ENABLED: "1"
+
+      # Platform API configuration
+      PLATFORM_REST_PORT: "8443"
+      PLATFORM_GRPC_PORT: "10443"
+      PLATFORM_QUIC_PORT: "9444"
+      PLATFORM_MCP_PORT: "9445"
+      PLATFORM_SOCKET_PATH: "/run/platformd.sock"
+
+      # Development settings
+      ENV: dev
+      NODE_ENV: development
+
+    # Resource limits
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    # Port mappings - NO port 3000 (frontend runs on host)
+    ports:
+      - "8443:8443"       # REST/HTTPS
+      - "10443:10443"     # gRPC TCP
+      - "9444:9444/udp"   # QUIC (UDP)
+      - "9445:9445"       # MCP
+
+    # Keep container running
+    stdin_open: true
+    tty: true
+
+    # Default command
+    command: bash
+
+# Named volumes for persistent data (all prefixed with trusted-platform-)
+volumes:
+  trusted-platform-webdev-go-mod-cache:
+    driver: local
+  trusted-platform-webdev-go-build-cache:
+    driver: local

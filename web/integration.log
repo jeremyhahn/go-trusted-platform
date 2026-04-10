@@ -1,0 +1,350 @@
+Starting backend server...
+Backend starting (PID: 3797743)
+Waiting for backend to be ready...
+Waiting... (1/10)
+Waiting... (2/10)
+Waiting... (3/10)
+Waiting... (4/10)
+Waiting... (5/10)
+Waiting... (6/10)
+Waiting... (7/10)
+Waiting... (8/10)
+Waiting... (9/10)
+Waiting... (10/10)
+Running integration tests against real backend...
+Results will be in playwright.log
+npx playwright test --config playwright.integration.config.ts
+
+[Global Setup] Starting integration test setup...
+[Global Setup] Checking frontend at http://localhost:3000...
+[Global Setup] Frontend is accessible
+[Global Setup] Checking backend at https://localhost:8443...
+[Global Setup] Setup complete
+
+
+Running 310 tests using 2 workers
+
+[1A[2K[1/310] [chromium] › ../test/integration/web/api-integration.spec.ts:22:9 › API Integration - With Mocked Data › Users API › should display users from API
+[1A[2K[2/310] [chromium] › ../test/integration/web/api-integration.spec.ts:52:9 › API Integration - With Mocked Data › Users API › should handle users API error
+[1A[2K[3/310] [chromium] › ../test/integration/web/api-integration.spec.ts:80:9 › API Integration - With Mocked Data › Users API › should handle empty users list
+[1A[2K[4/310] [chromium] › ../test/integration/web/api-integration.spec.ts:108:9 › API Integration - With Mocked Data › Roles API › should display roles from API
+[1A[2K[5/310] [chromium] › ../test/integration/web/api-integration.spec.ts:128:9 › API Integration - With Mocked Data › Roles API › should handle roles API error
+[1A[2K[6/310] [chromium] › ../test/integration/web/api-integration.spec.ts:150:9 › API Integration - With Mocked Data › Tenant API › should display tenant info from API
+[1A[2K[7/310] [chromium] › ../test/integration/web/api-integration.spec.ts:186:9 › API Integration - With Mocked Data › Tenant API › should handle tenant API 401 unauthorized
+[1A[2K[8/310] [chromium] › ../test/integration/web/api-integration.spec.ts:209:9 › API Integration - With Mocked Data › Devices API › should display devices from API
+[1A[2K[9/310] [chromium] › ../test/integration/web/api-integration.spec.ts:229:9 › API Integration - With Mocked Data › Devices API › should handle devices API error
+[1A[2K[10/310] [chromium] › ../test/integration/web/api-integration.spec.ts:252:9 › API Integration - With Mocked Data › Certificates API › should display certificates from API
+[1A[2K[11/310] [chromium] › ../test/integration/web/api-integration.spec.ts:271:9 › API Integration - With Mocked Data › Certificates API › should handle certificates API 403 forbidden
+[1A[2K[12/310] [chromium] › ../test/integration/web/api-integration.spec.ts:294:9 › API Integration - With Mocked Data › KMS Keys API › should display keys from API
+[1A[2K[13/310] [chromium] › ../test/integration/web/api-integration.spec.ts:313:9 › API Integration - With Mocked Data › KMS Keys API › should handle keys API network error
+[1A[2K[14/310] [chromium] › ../test/integration/web/api-integration.spec.ts:331:9 › CRUD Operations › Create User Flow › should submit create user form
+[1A[2K[15/310] [chromium] › ../test/integration/web/api-integration.spec.ts:394:9 › CRUD Operations › Delete Operations › should handle delete confirmation
+[1A[2K[16/310] [chromium] › ../test/integration/web/api-integration.spec.ts:441:7 › Real-time Updates › should refresh data after create
+[1A[2K[17/310] [chromium] › ../test/integration/web/auth.spec.ts:12:9 › Authentication Flow › WebAuthn Page Access › should display WebAuthn authentication page at /auth/webauthn
+[1A[2K[18/310] [chromium] › ../test/integration/web/auth.spec.ts:27:9 › Authentication Flow › WebAuthn Page Access › should display registration form by default
+[1A[2K[19/310] [chromium] › ../test/integration/web/auth.spec.ts:34:9 › Authentication Flow › WebAuthn Page Access › should display login form when status=registered
+[1A[2K[20/310] [chromium] › ../test/integration/web/auth.spec.ts:41:9 › Authentication Flow › WebAuthn Page Access › should toggle between registration and login forms
+[1A[2K[21/310] [chromium] › ../test/integration/web/auth.spec.ts:58:9 › Authentication Flow › Protected Route Redirection › should redirect unauthenticated users from /dashboard to /auth/webauthn
+[1A[2K[22/310] [chromium] › ../test/integration/web/auth.spec.ts:71:9 › Authentication Flow › Protected Route Redirection › should redirect unauthenticated users from /tenant to /auth/webauthn
+[1A[2K[23/310] [chromium] › ../test/integration/web/auth.spec.ts:79:9 › Authentication Flow › Protected Route Redirection › should redirect unauthenticated users from /iam/users to /auth/webauthn
+[1A[2K[24/310] [chromium] › ../test/integration/web/auth.spec.ts:87:9 › Authentication Flow › Protected Route Redirection › should redirect unauthenticated users from /devices to /auth/webauthn
+[1A[2K[25/310] [chromium] › ../test/integration/web/auth.spec.ts:95:9 › Authentication Flow › Protected Route Redirection › should redirect unauthenticated users from /ca/certificates to /auth/webauthn
+[1A[2K[26/310] [chromium] › ../test/integration/web/auth.spec.ts:103:9 › Authentication Flow › Protected Route Redirection › should redirect unauthenticated users from /kms to /auth/webauthn
+[1A[2K[27/310] [chromium] › ../test/integration/web/auth.spec.ts:111:9 › Authentication Flow › Authenticated Access › should allow authenticated users to access /dashboard
+[1A[2K[28/310] [chromium] › ../test/integration/web/auth.spec.ts:121:9 › Authentication Flow › Authenticated Access › should allow authenticated users to access /tenant
+[1A[2K[29/310] [chromium] › ../test/integration/web/auth.spec.ts:126:9 › Authentication Flow › Authenticated Access › should allow authenticated users to access /iam/users
+[1A[2K[30/310] [chromium] › ../test/integration/web/auth.spec.ts:133:9 › Authentication Flow › Form Validation › should show validation error for empty username on registration
+[1A[2K[31/310] [chromium] › ../test/integration/web/auth.spec.ts:143:9 › Authentication Flow › Form Validation › should show validation error for empty username on login
+[1A[2K[32/310] [chromium] › ../test/integration/web/auth.spec.ts:155:9 › Authentication Flow › Invitation Flow › should show invitation UI when invitation token is present
+[1A[2K[33/310] [chromium] › ../test/integration/web/auth.spec.ts:166:7 › WebAuthn Virtual Authenticator › should detect WebAuthn support in browser
+[1A[2K[34/310] [chromium] › ../test/integration/web/auth.spec.ts:177:7 › WebAuthn Virtual Authenticator › should detect platform authenticator availability
+[1A[2K[35/310] [chromium] › ../test/integration/web/ca-kms.spec.ts:72:9 › CA - Certificates Page › Page Loading › should load certificates page
+[1A[2K[chromium] › ../test/integration/web/auth.spec.ts:177:7 › WebAuthn Virtual Authenticator › should detect platform authenticator availability
+Platform authenticator available: [33mfalse[39m
+
+[1A[2K[36/310] [chromium] › ../test/integration/web/ca-kms.spec.ts:105:9 › CA - Certificates Page › Page Loading › should display certificates table or empty state
+[1A[2K[37/310] [chromium] › ../test/integration/web/ca-kms.spec.ts:139:9 › CA - Certificates Page › Page Loading › should have Issue Certificate button
+[1A[2K[38/310] [chromium] › ../test/integration/web/ca-kms.spec.ts:161:9 › CA - Certificates Page › Certificate Actions › should open issue certificate dialog
+[1A[2K[39/310] [chromium] › ../test/integration/web/ca-kms.spec.ts:191:9 › CA - Certificates Page › Certificate Actions › should close issue dialog on cancel
+[1A[2K[40/310] [chromium] › ../test/integration/web/ca-kms.spec.ts:221:9 › CA - Certificates Page › Error Handling › should display error state when API fails
+[1A[2K[41/310] [chromium] › ../test/integration/web/ca-kms.spec.ts:243:7 › CA - Certificate Requests Page › should load certificate requests page
+[1A[2K[42/310] [chromium] › ../test/integration/web/ca-kms.spec.ts:266:7 › CA - Certificate Requests Page › should display requests or empty state
+[1A[2K[43/310] [chromium] › ../test/integration/web/ca-kms.spec.ts:294:7 › CA - Certificate Detail Page › should handle non-existent certificate gracefully
+[1A[2K[44/310] [chromium] › ../test/integration/web/ca-kms.spec.ts:316:9 › KMS - Keys Page › Page Loading › should load KMS keys page
+[1A[2K[45/310] [chromium] › ../test/integration/web/ca-kms.spec.ts:342:9 › KMS - Keys Page › Page Loading › should display keys table or empty state
+[1A[2K[46/310] [chromium] › ../test/integration/web/ca-kms.spec.ts:373:9 › KMS - Keys Page › Page Loading › should have Generate Key button
+[1A[2K[47/310] [chromium] › ../test/integration/web/ca-kms.spec.ts:402:9 › KMS - Keys Page › Key Actions › should open generate key dialog
+[1A[2K[48/310] [chromium] › ../test/integration/web/ca-kms.spec.ts:439:9 › KMS - Keys Page › Key Actions › should have algorithm selection
+[1A[2K[49/310] [chromium] › ../test/integration/web/ca-kms.spec.ts:475:7 › KMS - Key Detail Page › should handle non-existent key gracefully
+[1A[2K[50/310] [chromium] › ../test/integration/web/compute.spec.ts:100:9 › Snapshots Page › Page Loading › should load snapshots page
+[1A[2K[51/310] [chromium] › ../test/integration/web/compute.spec.ts:126:9 › Snapshots Page › Page Loading › should display snapshots table
+[1A[2K[52/310] [chromium] › ../test/integration/web/compute.spec.ts:140:9 › Snapshots Page › Page Loading › should display snapshot statistics cards
+[1A[2K[53/310] [chromium] › ../test/integration/web/compute.spec.ts:156:9 › Snapshots Page › Page Loading › should have Create Snapshot button
+[1A[2K[54/310] [chromium] › ../test/integration/web/compute.spec.ts:165:9 › Snapshots Page › Page Loading › should have refresh button
+[1A[2K[55/310] [chromium] › ../test/integration/web/compute.spec.ts:177:9 › Snapshots Page › Data Display › should display snapshot rows in table
+[1A[2K[56/310] [chromium] › ../test/integration/web/compute.spec.ts:192:9 › Snapshots Page › Data Display › should display snapshot status badges
+[1A[2K[57/310] [chromium] › ../test/integration/web/compute.spec.ts:203:9 › Snapshots Page › Data Display › should display source type badges
+[1A[2K[58/310] [chromium] › ../test/integration/web/compute.spec.ts:214:9 › Snapshots Page › Data Display › should display action dropdown menu
+[1A[2K[59/310] [chromium] › ../test/integration/web/compute.spec.ts:233:9 › Snapshots Page › Filter Functionality › should display filter controls
+[1A[2K[60/310] [chromium] › ../test/integration/web/compute.spec.ts:246:9 › Snapshots Page › Filter Functionality › should filter snapshots by status
+[1A[2K[61/310] [chromium] › ../test/integration/web/compute.spec.ts:270:9 › Snapshots Page › Filter Functionality › should filter snapshots by type
+[1A[2K[62/310] [chromium] › ../test/integration/web/compute.spec.ts:296:9 › Images Page › Page Loading › should load images page
+[1A[2K[63/310] [chromium] › ../test/integration/web/compute.spec.ts:322:9 › Images Page › Page Loading › should display images table
+[1A[2K[64/310] [chromium] › ../test/integration/web/compute.spec.ts:336:9 › Images Page › Page Loading › should display image statistics cards
+[1A[2K[65/310] [chromium] › ../test/integration/web/compute.spec.ts:352:9 › Images Page › Page Loading › should have Pull from Registry button
+[1A[2K[66/310] [chromium] › ../test/integration/web/compute.spec.ts:361:9 › Images Page › Page Loading › should have Upload button
+[1A[2K[67/310] [chromium] › ../test/integration/web/compute.spec.ts:370:9 › Images Page › Page Loading › should have refresh button
+[1A[2K[68/310] [chromium] › ../test/integration/web/compute.spec.ts:382:9 › Images Page › Data Display › should display image rows in table
+[1A[2K[69/310] [chromium] › ../test/integration/web/compute.spec.ts:397:9 › Images Page › Data Display › should display image status badges
+[1A[2K[70/310] [chromium] › ../test/integration/web/compute.spec.ts:408:9 › Images Page › Data Display › should display image type badges
+[1A[2K[71/310] [chromium] › ../test/integration/web/compute.spec.ts:419:9 › Images Page › Data Display › should display architecture badges
+[1A[2K[72/310] [chromium] › ../test/integration/web/compute.spec.ts:430:9 › Images Page › Data Display › should display image tags
+[1A[2K[73/310] [chromium] › ../test/integration/web/compute.spec.ts:440:9 › Images Page › Data Display › should display action dropdown menu
+[1A[2K[74/310] [chromium] › ../test/integration/web/compute.spec.ts:457:9 › Images Page › Data Display › should display usage count
+[1A[2K[75/310] [chromium] › ../test/integration/web/compute.spec.ts:469:9 › Images Page › Filter Functionality › should display filter controls
+[1A[2K[76/310] [chromium] › ../test/integration/web/compute.spec.ts:485:9 › Images Page › Filter Functionality › should filter images by status
+[1A[2K[77/310] [chromium] › ../test/integration/web/compute.spec.ts:507:9 › Images Page › Filter Functionality › should filter images by type
+[1A[2K[78/310] [chromium] › ../test/integration/web/compute.spec.ts:529:9 › Images Page › Filter Functionality › should filter images by architecture
+[1A[2K[79/310] [chromium] › ../test/integration/web/compute.spec.ts:551:9 › Images Page › Filter Functionality › should show empty state when filters return no results
+[1A[2K[80/310] [chromium] › ../test/integration/web/compute.spec.ts:576:7 › Compute Navigation › should navigate between snapshots and images pages
+[1A[2K[81/310] [chromium] › ../test/integration/web/dashboard.spec.ts:12:7 › Dashboard Layout › should render dashboard layout with sidebar
+[1A[2K[82/310] [chromium] › ../test/integration/web/dashboard.spec.ts:24:7 › Dashboard Layout › should display dashboard statistics
+[1A[2K[83/310] [chromium] › ../test/integration/web/dashboard.spec.ts:36:7 › Dashboard Layout › should display page title
+[1A[2K[84/310] [chromium] › ../test/integration/web/dashboard.spec.ts:46:7 › Sidebar Navigation › should navigate to IAM Users page
+[1A[2K[85/310] [chromium] › ../test/integration/web/dashboard.spec.ts:57:7 › Sidebar Navigation › should navigate to IAM Roles page
+[1A[2K[86/310] [chromium] › ../test/integration/web/dashboard.spec.ts:67:7 › Sidebar Navigation › should navigate to Devices page
+[1A[2K[87/310] [chromium] › ../test/integration/web/dashboard.spec.ts:77:7 › Sidebar Navigation › should navigate to Certificates page
+[1A[2K[88/310] [chromium] › ../test/integration/web/dashboard.spec.ts:89:7 › Sidebar Navigation › should navigate to KMS Keys page
+[1A[2K[89/310] [chromium] › ../test/integration/web/dashboard.spec.ts:99:7 › Sidebar Navigation › should navigate to Tenant page
+[1A[2K[90/310] [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Dashboard page without errors
+[1A[2K[91/310] [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Tenant Overview page without errors
+[1A[2K[92/310] [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load IAM Users page without errors
+[1A[2K[93/310] [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load IAM Roles page without errors
+[1A[2K[94/310] [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load IAM Permissions page without errors
+[1A[2K[95/310] [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Devices page without errors
+[1A[2K[96/310] [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Certificates page without errors
+[1A[2K[97/310] [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Certificate Requests page without errors
+[1A[2K[98/310] [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load KMS Keys page without errors
+[1A[2K[99/310] [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Attestation page without errors
+[1A[2K[100/310] [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Platform Health page without errors
+[1A[2K[101/310] [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Platform Logs page without errors
+[1A[2K[102/310] [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load DNS page without errors
+[1A[2K[103/310] [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load SDN page without errors
+[1A[2K[104/310] [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Virtual Machines page without errors
+[1A[2K[105/310] [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Containers page without errors
+[1A[2K[106/310] [chromium] › ../test/integration/web/dashboard.spec.ts:162:7 › Header Navigation › should display user menu in header
+[1A[2K[107/310] [chromium] › ../test/integration/web/dashboard.spec.ts:178:7 › Header Navigation › should have logout functionality
+[1A[2K[108/310] [chromium] › ../test/integration/web/dashboard.spec.ts:195:7 › Responsive Layout › should work on mobile viewport
+[1A[2K[109/310] [chromium] › ../test/integration/web/dashboard.spec.ts:209:7 › Responsive Layout › should work on tablet viewport
+[1A[2K[110/310] [chromium] › ../test/integration/web/devices.spec.ts:63:9 › Devices Page › Page Loading › should load devices page
+[1A[2K[111/310] [chromium] › ../test/integration/web/devices.spec.ts:89:9 › Devices Page › Page Loading › should display devices table or empty state
+[1A[2K[112/310] [chromium] › ../test/integration/web/devices.spec.ts:128:9 › Devices Page › Page Loading › should have Register Device button
+[1A[2K[113/310] [chromium] › ../test/integration/web/devices.spec.ts:155:9 › Devices Page › Page Loading › should display filter controls
+[1A[2K[114/310] [chromium] › ../test/integration/web/devices.spec.ts:192:9 › Devices Page › Device Filtering › should filter devices by search
+[1A[2K[115/310] [chromium] › ../test/integration/web/devices.spec.ts:228:9 › Devices Page › Device Filtering › should filter devices by type
+[1A[2K[116/310] [chromium] › ../test/integration/web/devices.spec.ts:267:9 › Devices Page › Device Filtering › should filter devices by status
+[1A[2K[117/310] [chromium] › ../test/integration/web/devices.spec.ts:306:9 › Devices Page › Device Filtering › should clear filters
+[1A[2K[118/310] [chromium] › ../test/integration/web/devices.spec.ts:353:9 › Devices Page › Device Registration › should open register device dialog
+[1A[2K[119/310] [chromium] › ../test/integration/web/devices.spec.ts:385:9 › Devices Page › Device Registration › should have device name input
+[1A[2K[120/310] [chromium] › ../test/integration/web/devices.spec.ts:419:9 › Devices Page › Device Registration › should have device type selection
+[1A[2K[121/310] [chromium] › ../test/integration/web/devices.spec.ts:455:9 › Devices Page › Device Registration › should close dialog on cancel
+[1A[2K[122/310] [chromium] › ../test/integration/web/devices.spec.ts:491:7 › Device Detail Page › should handle non-existent device gracefully
+[1A[2K[123/310] [chromium] › ../test/integration/web/devices.spec.ts:512:7 › vTPM Devices Page › should load vTPM devices page
+[1A[2K[124/310] [chromium] › ../test/integration/web/devices.spec.ts:534:7 › vTPM Devices Page › should display vTPM devices or empty state
+[1A[2K[125/310] [chromium] › ../test/integration/web/devices.spec.ts:561:7 › IDevID Devices Page › should load IDevID devices page
+[1A[2K[126/310] [chromium] › ../test/integration/web/devices.spec.ts:583:7 › IDevID Devices Page › should display IDevID devices or empty state
+[1A[2K[127/310] [chromium] › ../test/integration/web/iam.spec.ts:13:9 › IAM Users Page › Page Loading › should load users page
+[1A[2K[128/310] [chromium] › ../test/integration/web/iam.spec.ts:50:9 › IAM Users Page › Page Loading › should display users table or empty state
+[1A[2K[129/310] [chromium] › ../test/integration/web/iam.spec.ts:87:9 › IAM Users Page › Page Loading › should display stats cards
+[1A[2K[130/310] [chromium] › ../test/integration/web/iam.spec.ts:126:9 › IAM Users Page › Page Loading › should have Add User button
+[1A[2K[131/310] [chromium] › ../test/integration/web/iam.spec.ts:155:9 › IAM Users Page › User Actions › should open create user dialog
+[1A[2K[132/310] [chromium] › ../test/integration/web/iam.spec.ts:219:9 › IAM Users Page › User Actions › should close create user dialog on cancel
+[1A[2K[133/310] [chromium] › ../test/integration/web/iam.spec.ts:278:9 › IAM Users Page › User Actions › should have search functionality
+[1A[2K[134/310] [chromium] › ../test/integration/web/iam.spec.ts:312:9 › IAM Roles Page › Page Loading › should load roles page
+[1A[2K[135/310] [chromium] › ../test/integration/web/iam.spec.ts:331:9 › IAM Roles Page › Page Loading › should display roles table or empty state
+[1A[2K[136/310] [chromium] › ../test/integration/web/iam.spec.ts:357:9 › IAM Roles Page › Page Loading › should have Add Role button
+[1A[2K[137/310] [chromium] › ../test/integration/web/iam.spec.ts:378:9 › IAM Roles Page › Role Actions › should navigate to create role page or dialog
+[1A[2K[138/310] [chromium] › ../test/integration/web/iam.spec.ts:420:7 › IAM Permissions Page › should load permissions page
+[1A[2K[139/310] [chromium] › ../test/integration/web/iam.spec.ts:460:7 › IAM Permissions Page › should display permissions list
+[1A[2K[140/310] [chromium] › ../test/integration/web/iam.spec.ts:501:7 › IAM Tokens Page › should load tokens page
+[1A[2K[141/310] [chromium] › ../test/integration/web/iam.spec.ts:509:7 › User Detail Page › should handle non-existent user gracefully
+[1A[2K[142/310] [chromium] › ../test/integration/web/iam.spec.ts:535:7 › Role Detail Page › should handle non-existent role gracefully
+[1A[2K[143/310] [chromium] › ../test/integration/web/networking.spec.ts:213:9 › SDN Ports Page › Page Loading › should load SDN ports page
+[1A[2K[144/310] [chromium] › ../test/integration/web/networking.spec.ts:232:9 › SDN Ports Page › Page Loading › should display ports table
+[1A[2K[145/310] [chromium] › ../test/integration/web/networking.spec.ts:254:9 › SDN Ports Page › Page Loading › should display port status badges
+[1A[2K[146/310] [chromium] › ../test/integration/web/networking.spec.ts:276:9 › SDN Ports Page › Page Loading › should have Add Port button
+[1A[2K[147/310] [chromium] › ../test/integration/web/networking.spec.ts:294:9 › SDN Ports Page › Page Loading › should display statistics cards
+[1A[2K[148/310] [chromium] › ../test/integration/web/networking.spec.ts:313:9 › SDN Ports Page › Page Loading › should display search input
+[1A[2K[149/310] [chromium] › ../test/integration/web/networking.spec.ts:333:9 › SDN Ports Page › Port Data Display › should display MAC addresses
+[1A[2K[150/310] [chromium] › ../test/integration/web/networking.spec.ts:352:9 › SDN Ports Page › Port Data Display › should display switch information
+[1A[2K[151/310] [chromium] › ../test/integration/web/networking.spec.ts:371:9 › SDN Ports Page › Port Data Display › should display VLAN tags
+[1A[2K[152/310] [chromium] › ../test/integration/web/networking.spec.ts:394:9 › OpenFlow Flows Page › Page Loading › should load OpenFlow flows page
+[1A[2K[153/310] [chromium] › ../test/integration/web/networking.spec.ts:403:9 › OpenFlow Flows Page › Page Loading › should display flows table
+[1A[2K[154/310] [chromium] › ../test/integration/web/networking.spec.ts:414:9 › OpenFlow Flows Page › Page Loading › should display flow status badges
+[1A[2K[155/310] [chromium] › ../test/integration/web/networking.spec.ts:426:9 › OpenFlow Flows Page › Page Loading › should have Add Flow Rule button
+[1A[2K[156/310] [chromium] › ../test/integration/web/networking.spec.ts:436:9 › OpenFlow Flows Page › Page Loading › should display statistics cards
+[1A[2K[157/310] [chromium] › ../test/integration/web/networking.spec.ts:448:9 › OpenFlow Flows Page › Page Loading › should display search input
+[1A[2K[158/310] [chromium] › ../test/integration/web/networking.spec.ts:462:9 › OpenFlow Flows Page › Flow Data Display › should display flow priority
+[1A[2K[159/310] [chromium] › ../test/integration/web/networking.spec.ts:473:9 › OpenFlow Flows Page › Flow Data Display › should display flow table number
+[1A[2K[160/310] [chromium] › ../test/integration/web/networking.spec.ts:484:9 › OpenFlow Flows Page › Flow Data Display › should display packet statistics
+[1A[2K[161/310] [chromium] › ../test/integration/web/networking.spec.ts:500:9 › VLANs Page › Page Loading › should load VLANs page
+[1A[2K[162/310] [chromium] › ../test/integration/web/networking.spec.ts:519:9 › VLANs Page › Page Loading › should display VLANs table
+[1A[2K[163/310] [chromium] › ../test/integration/web/networking.spec.ts:530:9 › VLANs Page › Page Loading › should display VLAN status badges
+[1A[2K[164/310] [chromium] › ../test/integration/web/networking.spec.ts:552:9 › VLANs Page › Page Loading › should have Create VLAN button
+[1A[2K[165/310] [chromium] › ../test/integration/web/networking.spec.ts:570:9 › VLANs Page › Page Loading › should display statistics cards
+[1A[2K[166/310] [chromium] › ../test/integration/web/networking.spec.ts:589:9 › VLANs Page › Page Loading › should display search input
+[1A[2K[167/310] [chromium] › ../test/integration/web/networking.spec.ts:609:9 › VLANs Page › VLAN Data Display › should display VLAN IDs
+[1A[2K[168/310] [chromium] › ../test/integration/web/networking.spec.ts:629:9 › VLANs Page › VLAN Data Display › should display IP ranges
+[1A[2K[169/310] [chromium] › ../test/integration/web/networking.spec.ts:648:9 › VLANs Page › VLAN Data Display › should display gateway addresses
+[1A[2K[170/310] [chromium] › ../test/integration/web/networking.spec.ts:667:9 › VLANs Page › VLAN Data Display › should display layer badges
+[1A[2K[171/310] [chromium] › ../test/integration/web/networking.spec.ts:686:9 › VLANs Page › VLAN Data Display › should display MTU values
+[1A[2K[172/310] [chromium] › ../test/integration/web/networking.spec.ts:705:9 › VLANs Page › VLAN Data Display › should display port count badges
+[1A[2K[173/310] [chromium] › ../test/integration/web/networking.spec.ts:717:9 › VLANs Page › VLAN Data Display › should display routing status badges
+[1A[2K[174/310] [chromium] › ../test/integration/web/networking.spec.ts:738:9 › VLANs Page › Status Badge Colors › should show green badge for active VLANs
+[1A[2K[175/310] [chromium] › ../test/integration/web/networking.spec.ts:758:9 › VLANs Page › Status Badge Colors › should show yellow badge for suspended VLANs
+[1A[2K[176/310] [chromium] › ../test/integration/web/networking.spec.ts:778:9 › VLANs Page › Status Badge Colors › should show red badge for error VLANs
+[1A[2K[177/310] [chromium] › ../test/integration/web/platform.spec.ts:168:9 › Platform Services Page › Page Loading › should load services page
+[1A[2K[178/310] [chromium] › ../test/integration/web/platform.spec.ts:187:9 › Platform Services Page › Page Loading › should display services table or loading state
+[1A[2K[179/310] [chromium] › ../test/integration/web/platform.spec.ts:213:9 › Platform Services Page › Page Loading › should have Refresh button
+[1A[2K[180/310] [chromium] › ../test/integration/web/platform.spec.ts:227:9 › Platform Services Page › Service Statistics › should display statistics cards
+[1A[2K[181/310] [chromium] › ../test/integration/web/platform.spec.ts:239:9 › Platform Services Page › Service Statistics › should show running, stopped, and error counts
+[1A[2K[182/310] [chromium] › ../test/integration/web/platform.spec.ts:271:9 › Platform Services Page › Service Status Indicators › should display status badges for services
+[1A[2K[183/310] [chromium] › ../test/integration/web/platform.spec.ts:283:9 › Platform Services Page › Service Status Indicators › should show service control buttons
+[1A[2K[184/310] [chromium] › ../test/integration/web/platform.spec.ts:311:9 › Platform Services Page › Service Filtering › should have search input for services
+[1A[2K[185/310] [chromium] › ../test/integration/web/platform.spec.ts:340:9 › Platform Events Page › Page Loading › should load events page
+[1A[2K[186/310] [chromium] › ../test/integration/web/platform.spec.ts:359:9 › Platform Events Page › Page Loading › should display events stream or empty state
+[1A[2K[187/310] [chromium] › ../test/integration/web/platform.spec.ts:370:9 › Platform Events Page › Page Loading › should have streaming controls
+[1A[2K[188/310] [chromium] › ../test/integration/web/platform.spec.ts:384:9 › Platform Events Page › Event Statistics › should display event statistics cards
+[1A[2K[189/310] [chromium] › ../test/integration/web/platform.spec.ts:404:9 › Platform Events Page › Event Statistics › should show event severity counts
+[1A[2K[190/310] [chromium] › ../test/integration/web/platform.spec.ts:432:9 › Platform Events Page › Event Filtering › should have severity filter
+[1A[2K[191/310] [chromium] › ../test/integration/web/platform.spec.ts:456:9 › Platform Events Page › Event Filtering › should have category filter
+[1A[2K[192/310] [chromium] › ../test/integration/web/platform.spec.ts:482:9 › Platform Events Page › Event Export › should have export button
+[1A[2K[193/310] [chromium] › ../test/integration/web/platform.spec.ts:498:9 › Platform Metrics Page › Page Loading › should load metrics page
+[1A[2K[194/310] [chromium] › ../test/integration/web/platform.spec.ts:517:9 › Platform Metrics Page › Page Loading › should display metrics dashboard or loading state
+[1A[2K[195/310] [chromium] › ../test/integration/web/platform.spec.ts:540:9 › Platform Metrics Page › Page Loading › should have time range selector
+[1A[2K[196/310] [chromium] › ../test/integration/web/platform.spec.ts:564:9 › Platform Metrics Page › Page Loading › should have auto-refresh toggle
+[1A[2K[197/310] [chromium] › ../test/integration/web/platform.spec.ts:580:9 › Platform Metrics Page › System Metrics › should display system overview cards
+[1A[2K[198/310] [chromium] › ../test/integration/web/platform.spec.ts:592:9 › Platform Metrics Page › System Metrics › should show uptime information
+[1A[2K[199/310] [chromium] › ../test/integration/web/platform.spec.ts:604:9 › Platform Metrics Page › System Metrics › should display resource usage metrics
+[1A[2K[200/310] [chromium] › ../test/integration/web/platform.spec.ts:632:9 › Platform Metrics Page › System Metrics › should show progress bars for resource usage
+[1A[2K[201/310] [chromium] › ../test/integration/web/platform.spec.ts:646:9 › Platform Metrics Page › Service Metrics › should display service metrics section
+[1A[2K[202/310] [chromium] › ../test/integration/web/platform.spec.ts:658:9 › Platform Metrics Page › Service Metrics › should show service performance data
+[1A[2K[203/310] [chromium] › ../test/integration/web/platform.spec.ts:672:9 › Platform Metrics Page › Metrics Controls › should have refresh button
+[1A[2K[204/310] [chromium] › ../test/integration/web/platform.spec.ts:686:9 › Platform Metrics Page › Metrics Controls › should show last update timestamp
+[1A[2K[205/310] [chromium] › ../test/integration/web/platform.spec.ts:703:7 › Platform Page Error Handling › should handle services API error gracefully
+[1A[2K[206/310] [chromium] › ../test/integration/web/platform.spec.ts:722:7 › Platform Page Error Handling › should handle events API error gracefully
+[1A[2K[207/310] [chromium] › ../test/integration/web/platform.spec.ts:741:7 › Platform Page Error Handling › should handle metrics API error gracefully
+[1A[2K[208/310] [chromium] › ../test/integration/web/storage.spec.ts:356:9 › Object Storage Page › Page Loading › should load object storage page
+[1A[2K[209/310] [chromium] › ../test/integration/web/storage.spec.ts:368:9 › Object Storage Page › Page Loading › should display buckets and objects table or empty state
+[1A[2K[210/310] [chromium] › ../test/integration/web/storage.spec.ts:387:9 › Object Storage Page › Page Loading › should display statistics cards
+[1A[2K[211/310] [chromium] › ../test/integration/web/storage.spec.ts:410:9 › Object Storage Page › Page Loading › should have Create Bucket button
+[1A[2K[212/310] [chromium] › ../test/integration/web/storage.spec.ts:423:9 › Object Storage Page › Page Loading › should have Upload Object button
+[1A[2K[213/310] [chromium] › ../test/integration/web/storage.spec.ts:438:9 › Object Storage Page › Filter Functionality › should have search input
+[1A[2K[214/310] [chromium] › ../test/integration/web/storage.spec.ts:454:9 › Object Storage Page › Filter Functionality › should have bucket filter
+[1A[2K[215/310] [chromium] › ../test/integration/web/storage.spec.ts:471:9 › Object Storage Page › Filter Functionality › should filter objects by search
+[1A[2K[216/310] [chromium] › ../test/integration/web/storage.spec.ts:493:9 › Object Storage Page › Filter Functionality › should clear filters
+[1A[2K[217/310] [chromium] › ../test/integration/web/storage.spec.ts:526:9 › Object Storage Page › Create Bucket Dialog › should open create bucket dialog
+[1A[2K[218/310] [chromium] › ../test/integration/web/storage.spec.ts:542:9 › Object Storage Page › Create Bucket Dialog › should have bucket name input
+[1A[2K[219/310] [chromium] › ../test/integration/web/storage.spec.ts:562:9 › Object Storage Page › Create Bucket Dialog › should close dialog on cancel
+[1A[2K[220/310] [chromium] › ../test/integration/web/storage.spec.ts:585:9 › Object Storage Page › Error Handling › should display error state when API fails
+[1A[2K[221/310] [chromium] › ../test/integration/web/storage.spec.ts:607:9 › Key-Value Store Page › Page Loading › should load KV store page
+[1A[2K[222/310] [chromium] › ../test/integration/web/storage.spec.ts:619:9 › Key-Value Store Page › Page Loading › should display KV entries table or empty state
+[1A[2K[223/310] [chromium] › ../test/integration/web/storage.spec.ts:636:9 › Key-Value Store Page › Page Loading › should display statistics cards
+[1A[2K[224/310] [chromium] › ../test/integration/web/storage.spec.ts:653:9 › Key-Value Store Page › Page Loading › should have Add Entry button
+[1A[2K[225/310] [chromium] › ../test/integration/web/storage.spec.ts:666:9 › Key-Value Store Page › Page Loading › should have Create Namespace button
+[1A[2K[226/310] [chromium] › ../test/integration/web/storage.spec.ts:681:9 › Key-Value Store Page › Filter Functionality › should have search input
+[1A[2K[227/310] [chromium] › ../test/integration/web/storage.spec.ts:697:9 › Key-Value Store Page › Filter Functionality › should have namespace filter
+[1A[2K[228/310] [chromium] › ../test/integration/web/storage.spec.ts:713:9 › Key-Value Store Page › Filter Functionality › should filter entries by search
+[1A[2K[229/310] [chromium] › ../test/integration/web/storage.spec.ts:733:9 › Key-Value Store Page › Create Entry Dialog › should open add entry dialog
+[1A[2K[230/310] [chromium] › ../test/integration/web/storage.spec.ts:746:9 › Key-Value Store Page › Create Entry Dialog › should have key and value inputs
+[1A[2K[231/310] [chromium] › ../test/integration/web/storage.spec.ts:773:9 › Time Series Page › Page Loading › should load time series page
+[1A[2K[232/310] [chromium] › ../test/integration/web/storage.spec.ts:785:9 › Time Series Page › Page Loading › should display metrics table or empty state
+[1A[2K[233/310] [chromium] › ../test/integration/web/storage.spec.ts:802:9 › Time Series Page › Page Loading › should display statistics cards
+[1A[2K[234/310] [chromium] › ../test/integration/web/storage.spec.ts:821:9 › Time Series Page › Page Loading › should have Create Metric button
+[1A[2K[235/310] [chromium] › ../test/integration/web/storage.spec.ts:834:9 › Time Series Page › Page Loading › should have Query Data button
+[1A[2K[236/310] [chromium] › ../test/integration/web/storage.spec.ts:849:9 › Time Series Page › Filter Functionality › should have search input
+[1A[2K[237/310] [chromium] › ../test/integration/web/storage.spec.ts:865:9 › Time Series Page › Filter Functionality › should have type filter
+[1A[2K[238/310] [chromium] › ../test/integration/web/storage.spec.ts:881:9 › Time Series Page › Filter Functionality › should filter metrics by search
+[1A[2K[239/310] [chromium] › ../test/integration/web/storage.spec.ts:901:9 › Time Series Page › Create Metric Dialog › should open create metric dialog
+[1A[2K[240/310] [chromium] › ../test/integration/web/storage.spec.ts:914:9 › Time Series Page › Create Metric Dialog › should have metric name and type inputs
+[1A[2K[241/310] [chromium] › ../test/integration/web/storage.spec.ts:939:9 › Time Series Page › Query Dialog › should open query dialog
+[1A[2K[242/310] [chromium] › ../test/integration/web/storage.spec.ts:959:9 › Vector Database Page › Page Loading › should load vector database page
+[1A[2K[243/310] [chromium] › ../test/integration/web/storage.spec.ts:971:9 › Vector Database Page › Page Loading › should display collections table or empty state
+[1A[2K[244/310] [chromium] › ../test/integration/web/storage.spec.ts:988:9 › Vector Database Page › Page Loading › should display statistics cards
+[1A[2K[245/310] [chromium] › ../test/integration/web/storage.spec.ts:1007:9 › Vector Database Page › Page Loading › should have Create Collection button
+[1A[2K[246/310] [chromium] › ../test/integration/web/storage.spec.ts:1020:9 › Vector Database Page › Page Loading › should have Search Vectors button
+[1A[2K[247/310] [chromium] › ../test/integration/web/storage.spec.ts:1035:9 › Vector Database Page › Filter Functionality › should have search input
+[1A[2K[248/310] [chromium] › ../test/integration/web/storage.spec.ts:1051:9 › Vector Database Page › Filter Functionality › should filter collections by search
+[1A[2K[249/310] [chromium] › ../test/integration/web/storage.spec.ts:1071:9 › Vector Database Page › Create Collection Dialog › should open create collection dialog
+[1A[2K[250/310] [chromium] › ../test/integration/web/storage.spec.ts:1084:9 › Vector Database Page › Create Collection Dialog › should have name, dimensions, and distance metric inputs
+[1A[2K[251/310] [chromium] › ../test/integration/web/storage.spec.ts:1111:9 › Vector Database Page › Search Dialog › should open search dialog
+[1A[2K[252/310] [chromium] › ../test/integration/web/storage.spec.ts:1131:9 › Backup Page › Page Loading › should load backup page
+[1A[2K[253/310] [chromium] › ../test/integration/web/storage.spec.ts:1143:9 › Backup Page › Page Loading › should display backups table or empty state
+[1A[2K[254/310] [chromium] › ../test/integration/web/storage.spec.ts:1160:9 › Backup Page › Page Loading › should display statistics cards
+[1A[2K[255/310] [chromium] › ../test/integration/web/storage.spec.ts:1181:9 › Backup Page › Page Loading › should have Create Backup button
+[1A[2K[256/310] [chromium] › ../test/integration/web/storage.spec.ts:1194:9 › Backup Page › Page Loading › should have Create Schedule button
+[1A[2K[257/310] [chromium] › ../test/integration/web/storage.spec.ts:1207:9 › Backup Page › Page Loading › should have tabs for Backups and Schedules
+[1A[2K[258/310] [chromium] › ../test/integration/web/storage.spec.ts:1223:9 › Backup Page › Filter Functionality › should have search input
+[1A[2K[259/310] [chromium] › ../test/integration/web/storage.spec.ts:1239:9 › Backup Page › Filter Functionality › should have status filter
+[1A[2K[260/310] [chromium] › ../test/integration/web/storage.spec.ts:1255:9 › Backup Page › Filter Functionality › should have type filter
+[1A[2K[261/310] [chromium] › ../test/integration/web/storage.spec.ts:1271:9 › Backup Page › Filter Functionality › should filter backups by search
+[1A[2K[262/310] [chromium] › ../test/integration/web/storage.spec.ts:1291:9 › Backup Page › Create Backup Dialog › should open create backup dialog
+[1A[2K[263/310] [chromium] › ../test/integration/web/storage.spec.ts:1304:9 › Backup Page › Create Backup Dialog › should have backup name, source, and destination inputs
+[1A[2K[264/310] [chromium] › ../test/integration/web/storage.spec.ts:1337:9 › Backup Page › Create Backup Dialog › should have backup type selection
+[1A[2K[265/310] [chromium] › ../test/integration/web/storage.spec.ts:1360:9 › Backup Page › Create Schedule Dialog › should open create schedule dialog
+[1A[2K[266/310] [chromium] › ../test/integration/web/storage.spec.ts:1376:9 › Backup Page › Create Schedule Dialog › should have schedule name and cron expression inputs
+[1A[2K[267/310] [chromium] › ../test/integration/web/storage.spec.ts:1399:9 › Backup Page › Tab Navigation › should switch between backups and schedules tabs
+[1A[2K[268/310] [chromium] › ../test/integration/web/storage.spec.ts:1418:9 › Backup Page › Error Handling › should display error state when API fails
+[1A[2K[269/310] [chromium] › ../test/integration/web/tenant.spec.ts:52:9 › Tenant Overview Page › Page Loading › should load tenant page
+[1A[2K[270/310] [chromium] › ../test/integration/web/tenant.spec.ts:71:9 › Tenant Overview Page › Page Loading › should display tenant information or loading state
+[1A[2K[271/310] [chromium] › ../test/integration/web/tenant.spec.ts:98:9 › Tenant Overview Page › Page Loading › should display member count
+[1A[2K[272/310] [chromium] › ../test/integration/web/tenant.spec.ts:123:9 › Tenant Overview Page › Navigation › should navigate to members page
+[1A[2K[273/310] [chromium] › ../test/integration/web/tenant.spec.ts:147:9 › Tenant Overview Page › Navigation › should navigate to invitations page
+[1A[2K[274/310] [chromium] › ../test/integration/web/tenant.spec.ts:173:9 › Tenant Overview Page › Quick Settings › should display quick settings section
+[1A[2K[275/310] [chromium] › ../test/integration/web/tenant.spec.ts:199:7 › Tenant Members Page › should load members page
+[1A[2K[276/310] [chromium] › ../test/integration/web/tenant.spec.ts:222:7 › Tenant Members Page › should display members list or empty state
+[1A[2K[277/310] [chromium] › ../test/integration/web/tenant.spec.ts:258:7 › Tenant Invitations Page › should load invitations page
+[1A[2K[278/310] [chromium] › ../test/integration/web/tenant.spec.ts:281:7 › Tenant Invitations Page › should display invitations list or empty state
+[1A[2K[279/310] [chromium] › ../test/integration/web/tenant.spec.ts:308:7 › Tenant Invitations Page › should have create invitation button
+[1A[2K[280/310] [chromium] › ../test/integration/web/tenant.spec.ts:341:7 › Error Handling › should handle tenant API errors gracefully
+[1A[2K[281/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:249:9 › TPM Status Page › Page Loading › should load TPM status page
+[1A[2K[282/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:261:9 › TPM Status Page › Page Loading › should display TPM status information
+[1A[2K[283/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:282:9 › TPM Status Page › Page Loading › should display TPM capabilities
+[1A[2K[284/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:295:9 › TPM Status Page › Page Loading › should have refresh button
+[1A[2K[285/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:317:9 › TPM Status Page › Error Handling › should handle TPM not available gracefully
+[1A[2K[286/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:342:9 › TPM Keys Page › Page Loading › should load TPM keys page
+[1A[2K[287/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:354:9 › TPM Keys Page › Page Loading › should display keys table or empty state
+[1A[2K[288/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:373:9 › TPM Keys Page › Page Loading › should display key type badges
+[1A[2K[289/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:390:9 › TPM Keys Page › Page Loading › should display key statistics cards
+[1A[2K[290/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:407:9 › TPM Keys Page › Page Loading › should have refresh button
+[1A[2K[291/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:421:9 › TPM PCRs Page › Page Loading › should load PCR banks page
+[1A[2K[292/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:433:9 › TPM PCRs Page › Page Loading › should display PCR values table
+[1A[2K[293/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:449:9 › TPM PCRs Page › Page Loading › should display algorithm selector
+[1A[2K[294/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:465:9 › TPM PCRs Page › Page Loading › should display PCR statistics
+[1A[2K[295/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:481:9 › TPM PCRs Page › Page Loading › should have refresh and copy buttons
+[1A[2K[296/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:502:9 › Attestation Manifests Page › Page Loading › should load attestation manifests page
+[1A[2K[297/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:514:9 › Attestation Manifests Page › Page Loading › should display manifests table or empty state
+[1A[2K[298/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:533:9 › Attestation Manifests Page › Page Loading › should display manifest statistics cards
+[1A[2K[299/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:549:9 › Attestation Manifests Page › Page Loading › should have Create Manifest button
+[1A[2K[300/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:561:9 › Attestation Manifests Page › Page Loading › should have refresh button
+[1A[2K[301/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:571:9 › Attestation Manifests Page › Page Loading › should display status badges
+[1A[2K[302/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:590:9 › Attestation Manifests Page › Filtering › should have search functionality
+[1A[2K[303/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:614:9 › Attestation Quotes Page › Page Loading › should load attestation quotes page
+[1A[2K[304/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:626:9 › Attestation Quotes Page › Page Loading › should display quotes table or empty state
+[1A[2K[305/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:645:9 › Attestation Quotes Page › Page Loading › should display quote statistics cards
+[1A[2K[306/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:661:9 › Attestation Quotes Page › Page Loading › should display verification status badges
+[1A[2K[307/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:678:9 › Attestation Quotes Page › Page Loading › should have refresh button
+[1A[2K[308/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:690:9 › Attestation Quotes Page › Filtering › should have search functionality
+[1A[2K[309/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:713:7 › TPM Navigation › should navigate between TPM pages
+[1A[2K[310/310] [chromium] › ../test/integration/web/tpm-attestation.spec.ts:738:7 › Attestation Navigation › should navigate between Attestation pages
+
+[Global Teardown] Starting cleanup...
+[Global Teardown] Cleanup complete
+
+[1A[2K  310 passed (6.9m)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report ../test/integration/web/playwright-report[39m
+[36m[39m
+Test results saved to playwright.log

@@ -1,0 +1,167 @@
+# Trusted Platform Standalone Reference Architecture
+#
+# Deploys a single gateway, server, and client node for development/testing.
+# Uses the devcontainer image and builds binaries at runtime.
+#
+# Prerequisites:
+#   docker build -t go-trusted-platform-dev:latest build/docker/devcontainer/
+#
+# Usage:
+#   docker compose up -d                    # Start all services
+#   docker compose up -d server             # Start server only
+#   docker compose logs -f server           # Follow server logs
+#   docker compose down                     # Stop all services
+#   docker compose down -v                  # Stop and remove volumes
+#
+# Network:
+#   gateway: 10.99.99.1
+#   server:  10.99.99.2
+#   client:  10.99.99.3
+
+networks:
+  platform-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.99.99.0/24
+          gateway: 10.99.99.254
+
+volumes:
+  gateway-data:
+  server-data:
+  client-data:
+  go-mod-cache:
+  go-build-cache:
+
+x-common-env: &common-env
+  TZ: UTC
+  PASSWORD: test
+  TPM_SIMULATOR: "true"
+  GOPATH: /go
+  GOCACHE: /root/.cache/go-build
+  GOMODCACHE: /go/pkg/mod
+  CGO_ENABLED: "1"
+
+x-healthcheck: &healthcheck
+  interval: 10s
+  timeout: 5s
+  retries: 5
+  start_period: 60s
+
+services:
+  # ==========================================================================
+  # SERVER (Controller)
+  # Must start first - provides CA, DNS, ACME services
+  # ==========================================================================
+  server:
+    image: go-trusted-platform-dev:latest
+    container_name: tp-server
+    hostname: server
+    domainname: example.com
+    networks:
+      platform-net:
+        ipv4_address: 10.99.99.2
+    ports:
+      - "8443:8443"   # Public HTTPS
+      - "9443:9443"   # Internal HTTPS
+      - "8053:8053"   # Public DNS
+      - "9053:9053"   # Internal DNS
+    volumes:
+      - ../../../:/workspace:cached
+      - /home/jhahn/sources/go-trusted-ca:/home/jhahn/sources/go-trusted-ca:cached
+      - /home/jhahn/sources/go-quicbaas:/home/jhahn/sources/go-quicbaas:cached
+      - /home/jhahn/sources/go-xkms:/home/jhahn/sources/go-xkms:cached
+      - /home/jhahn/sources/go-objstore:/home/jhahn/sources/go-objstore:cached
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+      - server-data:/var/lib/trusted-platform
+    environment:
+      <<: *common-env
+      HOSTNAME: server
+      PUBLIC_IPv4: 10.99.99.2
+      PRIVATE_IPv4: 10.99.99.2
+    working_dir: /workspace
+    command: ["bash", "-c", "if [ ! -f /workspace/bin/platformd ]; then echo 'Building platformd...' && cd /workspace && make build 2>&1 | tail -20; fi && echo 'Starting server...' && /workspace/bin/platformd serve --config /workspace/configs/platform/standalone/qemu.server.example.com.yaml --platform-dir /var/lib/trusted-platform --log-dir /var/lib/trusted-platform/log --ca-dir /var/lib/trusted-platform/ca --init --debug --raw-so-pin test --raw-pin test --test-mode --skip-iam-validation"]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "sh", "-c", "nc -z localhost 10443 || exit 1"]
+    restart: unless-stopped
+
+  # ==========================================================================
+  # GATEWAY (Load Balancer / Reverse Proxy)
+  # Routes traffic to server and client backends
+  # ==========================================================================
+  gateway:
+    image: go-trusted-platform-dev:latest
+    container_name: tp-gateway
+    hostname: gateway
+    domainname: example.com
+    networks:
+      platform-net:
+        ipv4_address: 10.99.99.1
+    ports:
+      - "80:80"       # HTTP (redirect to HTTPS)
+      - "443:443"     # HTTPS
+    volumes:
+      - ../../../:/workspace:cached
+      - /home/jhahn/sources/go-trusted-ca:/home/jhahn/sources/go-trusted-ca:cached
+      - /home/jhahn/sources/go-quicbaas:/home/jhahn/sources/go-quicbaas:cached
+      - /home/jhahn/sources/go-xkms:/home/jhahn/sources/go-xkms:cached
+      - /home/jhahn/sources/go-objstore:/home/jhahn/sources/go-objstore:cached
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+      - gateway-data:/var/lib/trusted-platform
+    environment:
+      <<: *common-env
+      HOSTNAME: gateway
+      PUBLIC_IPv4: 10.99.99.1
+      PRIVATE_IPv4: 10.99.99.1
+    working_dir: /workspace
+    command: ["bash", "-c", "if [ ! -f /workspace/bin/gatewayd ]; then echo 'Building gatewayd...' && cd /workspace && make build-gatewayd 2>&1 | tail -20; fi && echo 'Starting gateway...' && /workspace/bin/gatewayd serve --config /workspace/configs/platform/standalone/qemu.gateway.example.com.yaml --data-dir /var/lib/trusted-platform --debug --modes transit"]
+    depends_on:
+      server:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-sf", "http://localhost:80/health"]
+    restart: unless-stopped
+
+  # ==========================================================================
+  # CLIENT (Application Server)
+  # Runs custom.example.com service
+  # ==========================================================================
+  client:
+    image: go-trusted-platform-dev:latest
+    container_name: tp-client
+    hostname: client
+    domainname: example.com
+    networks:
+      platform-net:
+        ipv4_address: 10.99.99.3
+    ports:
+      - "9080:9080"   # HTTP
+      - "9444:9443"   # HTTPS (mapped to 9444 to avoid conflict with server)
+    volumes:
+      - ../../../:/workspace:cached
+      - /home/jhahn/sources/go-trusted-ca:/home/jhahn/sources/go-trusted-ca:cached
+      - /home/jhahn/sources/go-quicbaas:/home/jhahn/sources/go-quicbaas:cached
+      - /home/jhahn/sources/go-xkms:/home/jhahn/sources/go-xkms:cached
+      - /home/jhahn/sources/go-objstore:/home/jhahn/sources/go-objstore:cached
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+      - client-data:/var/lib/trusted-platform
+    environment:
+      <<: *common-env
+      HOSTNAME: client
+      PUBLIC_IPv4: 10.99.99.3
+      PRIVATE_IPv4: 10.99.99.3
+      PREFERRED_IP: 10.99.99.3
+    working_dir: /workspace
+    command: ["bash", "-c", "if [ ! -f /workspace/bin/platformd ]; then echo 'Building platformd...' && cd /workspace && make build 2>&1 | tail -20; fi && echo 'Starting client...' && /workspace/bin/platformd serve --config /workspace/configs/platform/standalone/qemu.client.example.com.yaml --platform-dir /var/lib/trusted-platform --log-dir /var/lib/trusted-platform/log --ca-dir /var/lib/trusted-platform/ca --init --debug --raw-so-pin test --raw-pin test"]
+    depends_on:
+      server:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-sfk", "https://localhost:9443/api/v1/status"]
+    restart: unless-stopped

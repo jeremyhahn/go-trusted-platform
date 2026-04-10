@@ -1,0 +1,114 @@
+.container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh; /* Full viewport height to center vertically */
+    background-color: #ffffff; /* Set white background for the entire page */
+    padding: 20px;
+    box-sizing: border-box;
+  }
+  
+  .card {
+    background-color: #ffffff;
+    padding: 40px 30px;
+    border-radius: 12px;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+    max-width: 400px;
+    width: 100%;
+    text-align: center;
+    transition: box-shadow 0.3s ease;
+  }
+  
+  .card:hover {
+    /* Keep the dialog box stationary by not applying any transform */
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15);
+  }
+  
+  .title {
+    font-size: 24px;
+    font-weight: 700;
+    margin-bottom: 15px;
+    color: #333333;
+  }
+  
+  .message {
+    font-size: 16px;
+    color: #555555;
+    margin-bottom: 25px;
+  }
+  
+  .button {
+    width: 100%;
+    padding: 14px 20px;
+    margin: 10px 0;
+    border-radius: 8px;
+    border: none;
+    font-size: 18px;
+    cursor: pointer;
+    background-color: #dc3545; /* Bootstrap's danger color for logout */
+    color: #ffffff;
+    transition: background-color 0.3s ease;
+  }
+  
+  .button:hover {
+    background-color: #c82333; /* Darker shade on hover */
+  }
+  
+  .button:disabled {
+    background-color: #f5c6cb;
+    cursor: not-allowed;
+  }
+  
+  .errorMessage {
+    color: #d9534f;
+    font-size: 14px;
+    margin-bottom: 15px;
+  }
+  
+  .successMessage {
+    color: #28a745;
+    font-size: 14px;
+    margin-bottom: 15px;
+  }
+  
+  .switchButton {
+    background-color: transparent;
+    color: #007bff;
+    border: none;
+    cursor: pointer;
+    margin-top: 15px;
+    font-size: 16px;
+    text-decoration: none;
+    transition: color 0.3s ease;
+  }
+  
+  .switchButton:hover {
+    color: #0056b3;
+  }
+  
+  /* Responsive Design */
+  
+  @media (max-width: 480px) {
+    .card {
+      padding: 30px 20px;
+      margin: 30px auto;
+    }
+  
+    .title {
+      font-size: 20px;
+    }
+  
+    .message {
+      font-size: 14px;
+    }
+  
+    .button {
+      font-size: 16px;
+      padding: 14px 20px;
+    }
+  
+    .switchButton {
+      font-size: 14px;
+    }
+  }
+  

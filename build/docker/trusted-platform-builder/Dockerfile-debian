@@ -1,0 +1,83 @@
+ARG BASE_IMAGE="golang:1.26-bookworm"
+
+FROM $BASE_IMAGE
+
+LABEL maintainer="Jeremy Hahn <mail@jeremyhahn.com>"
+
+ARG SRC_DIR=.
+ARG BUILD_DIR=/builder
+ARG ENTRY_POINT=build/docker/trusted-platform-builder/entrypoint.sh
+ARG TP_TAG=v0.0.6-alpha.1
+ARG NVM_VERSION=v0.39.5
+ARG WITH_WEB=false
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+SHELL ["/bin/bash", "-c"]
+
+WORKDIR $BUILD_DIR
+
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y \
+        --no-install-recommends \
+        --reinstall ca-certificates \
+        curl \
+        git \
+        build-essential \
+        libssl-dev && \
+    rm -rf /var/cache/apt/archives /var/lib/apt/lists/* && \
+    echo "*\t-\tmemlock\tunlimited" > /etc/security/limits.conf
+
+RUN go version
+
+RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh | bash && \
+    export NVM_DIR="$HOME/.nvm" && \
+    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && \
+    [ -s "$NVM_DIR/bash_completion" ] && . "$NVM_DIR/bash_completion" && \
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh | bash && \
+    export NVM_DIR="$HOME/.nvm" && \
+    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && \
+    [ -s "$NVM_DIR/bash_completion" ] && . "$NVM_DIR/bash_completion" && \
+    nvm install 21.1.0 && \
+    nvm use 21.1.0 && \
+    nvm alias default 21.1.0 && \
+    ln -sf "$NVM_DIR/versions/node/$(nvm version)/bin/node" /usr/local/bin/node && \
+    ln -sf "$NVM_DIR/versions/node/$(nvm version)/bin/npm" /usr/local/bin/npm && \
+    ln -sf "$NVM_DIR/versions/node/$(nvm version)/bin/npx" /usr/local/bin/npx && \
+    npm install --global yarn && \
+    ln -sf "$NVM_DIR/versions/node/$(nvm version)/bin/yarn" /usr/local/bin/yarn && \
+    node -v && npm -v && yarn -v
+
+COPY $SRC_DIR go-trusted-platform
+
+# Build the web frontend
+# Copy SDK first so web's package.json can resolve "file:../sdk/javascript"
+COPY sdk /builder/sdk
+RUN cd /builder/sdk/javascript && \
+    npm install && \
+    npm run build
+COPY web /builder/web
+RUN cd /builder/web && \
+    yarn install && \
+    yarn build
+
+# If WITH_WEB=true, copy to embed location and build with platform_web tag
+# If WITH_WEB=false, copy built output to /var/www/html for nginx/file serving
+RUN if [ "$WITH_WEB" = "true" ]; then \
+        mkdir -p /builder/go-trusted-platform/pkg/webserver/embed/dist && \
+        cp -r /builder/web/out/* /builder/go-trusted-platform/pkg/webserver/embed/dist/; \
+    else \
+        mkdir -p /var/www/html && \
+        cp -r /builder/web/out/* /var/www/html/; \
+    fi
+
+# Note: We don't build go-trusted-platform here because:
+# 1. The go.mod has replace directives pointing to host paths not available in Docker build
+# 2. Integration tests mount the source code at runtime and build/test there
+# 3. The Docker image is used as a build environment with necessary tools
+
+# COPY --chown=root:root --chmod=755 $ENTRY_POINT /usr/local/bin/entrypoint.sh
+# COPY build/docker/trusted-platform-builder/70-u2f.rules /etc/udev/rules.d/70-u2f.rules
+
+# ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

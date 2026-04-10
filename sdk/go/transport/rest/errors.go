@@ -1,0 +1,97 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+// Package rest provides the REST transport adapter for the platform SDK.
+package rest
+
+import "fmt"
+
+// ErrHTTPStatus represents an HTTP error response.
+type ErrHTTPStatus struct {
+	StatusCode int
+	Status     string
+	Body       string
+}
+
+// Error implements the error interface.
+func (e ErrHTTPStatus) Error() string {
+	if e.Body != "" {
+		return fmt.Sprintf("HTTP %d %s: %s", e.StatusCode, e.Status, e.Body)
+	}
+	return fmt.Sprintf("HTTP %d %s", e.StatusCode, e.Status)
+}
+
+// ErrRequestFailed represents a request failure.
+type ErrRequestFailed struct {
+	Method string
+	Path   string
+	Err    error
+}
+
+// Error implements the error interface.
+func (e ErrRequestFailed) Error() string {
+	return fmt.Sprintf("request %s %s failed: %v", e.Method, e.Path, e.Err)
+}
+
+// Unwrap returns the underlying error.
+func (e ErrRequestFailed) Unwrap() error {
+	return e.Err
+}
+
+// ErrMarshalFailed represents a JSON marshaling failure.
+type ErrMarshalFailed struct {
+	Err error
+}
+
+// Error implements the error interface.
+func (e ErrMarshalFailed) Error() string {
+	return fmt.Sprintf("failed to marshal request: %v", e.Err)
+}
+
+// Unwrap returns the underlying error.
+func (e ErrMarshalFailed) Unwrap() error {
+	return e.Err
+}
+
+// ErrUnmarshalFailed represents a JSON unmarshaling failure.
+type ErrUnmarshalFailed struct {
+	Err error
+}
+
+// Error implements the error interface.
+func (e ErrUnmarshalFailed) Error() string {
+	return fmt.Sprintf("failed to unmarshal response: %v", e.Err)
+}
+
+// Unwrap returns the underlying error.
+func (e ErrUnmarshalFailed) Unwrap() error {
+	return e.Err
+}
+
+// ErrClientClosed indicates the client has been closed.
+type ErrClientClosed struct{}
+
+// Error implements the error interface.
+func (e ErrClientClosed) Error() string {
+	return "REST client is closed"
+}
+
+// ErrNotImplemented indicates a method is not implemented for REST transport.
+type ErrNotImplemented struct {
+	Method string
+}
+
+// Error implements the error interface.
+func (e ErrNotImplemented) Error() string {
+	return fmt.Sprintf("method not implemented for REST transport: %s", e.Method)
+}

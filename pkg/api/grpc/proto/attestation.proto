@@ -1,0 +1,564 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// AttestationService provides host attestation and manifest management operations.
+// It enables building, signing, and verifying attestation manifests that include
+// host TPM attestation, VM attestations, and container attestations.
+service AttestationService {
+  // ==========================================================================
+  // Manifest Operations
+  // ==========================================================================
+
+  // GetManifest retrieves an existing attestation manifest by ID.
+  // Returns NotFound if the manifest does not exist.
+  rpc GetManifest(GetManifestRequest) returns (GetManifestResponse);
+
+  // BuildManifest builds a new attestation manifest for the host and its workloads.
+  // Collects TPM quotes, PCR values, and builds a Merkle tree over all attestations.
+  rpc BuildManifest(BuildManifestRequest) returns (BuildManifestResponse);
+
+  // VerifyManifest verifies an attestation manifest including signature and Merkle root.
+  // Returns detailed verification results for each component.
+  rpc VerifyManifest(VerifyManifestRequest) returns (VerifyManifestResponse);
+
+  // ListManifests lists attestation manifests with optional filtering.
+  rpc ListManifests(ListManifestsRequest) returns (ListManifestsResponse);
+
+  // DeleteManifest removes an attestation manifest.
+  // Returns NotFound if the manifest does not exist.
+  rpc DeleteManifest(DeleteManifestRequest) returns (DeleteManifestResponse);
+
+  // ==========================================================================
+  // Quote Operations
+  // ==========================================================================
+
+  // GetAttestationQuote generates a TPM quote for the specified PCRs.
+  // The quote is signed by the Attestation Key (AK/IAK).
+  rpc GetAttestationQuote(GetAttestationQuoteRequest) returns (GetAttestationQuoteResponse);
+
+  // VerifyAttestationQuote verifies a TPM quote against expected values.
+  // Validates signature, nonce, and PCR values.
+  rpc VerifyAttestationQuote(VerifyAttestationQuoteRequest) returns (VerifyAttestationQuoteResponse);
+
+  // ==========================================================================
+  // Attestation Collection Operations
+  // ==========================================================================
+
+  // CollectHostAttestation collects attestation data from the host TPM.
+  rpc CollectHostAttestation(CollectHostAttestationRequest) returns (CollectHostAttestationResponse);
+
+  // CollectVMAttestation collects attestation data from a VM's vTPM.
+  rpc CollectVMAttestation(CollectVMAttestationRequest) returns (CollectVMAttestationResponse);
+
+  // CollectContainerAttestation collects attestation data for a container.
+  rpc CollectContainerAttestation(CollectContainerAttestationRequest) returns (CollectContainerAttestationResponse);
+}
+
+// =============================================================================
+// Enums
+// =============================================================================
+
+// AttestationHashAlgorithm specifies the hash algorithm for attestation operations.
+enum AttestationHashAlgorithm {
+  ATTESTATION_HASH_ALGORITHM_UNSPECIFIED = 0;
+  ATTESTATION_HASH_ALGORITHM_SHA1 = 1;
+  ATTESTATION_HASH_ALGORITHM_SHA256 = 2;
+  ATTESTATION_HASH_ALGORITHM_SHA384 = 3;
+  ATTESTATION_HASH_ALGORITHM_SHA512 = 4;
+}
+
+// ManifestVerificationStatus represents the overall verification status.
+enum ManifestVerificationStatus {
+  MANIFEST_VERIFICATION_STATUS_UNSPECIFIED = 0;
+  MANIFEST_VERIFICATION_STATUS_UNKNOWN = 1;
+  MANIFEST_VERIFICATION_STATUS_PENDING = 2;
+  MANIFEST_VERIFICATION_STATUS_VERIFIED = 3;
+  MANIFEST_VERIFICATION_STATUS_FAILED = 4;
+}
+
+// =============================================================================
+// Configuration Messages
+// =============================================================================
+
+// ManifestBuilderConfig configures manifest building operations.
+message ManifestBuilderConfig {
+  // HostID is the host identifier for the manifest.
+  string host_id = 1;
+
+  // HashAlgorithm is the hash algorithm for Merkle tree construction.
+  AttestationHashAlgorithm hash_algorithm = 2;
+
+  // PCRIndices are the PCR indices to include in host attestation.
+  repeated uint32 pcr_indices = 3;
+
+  // NonceSize is the size of generated nonces in bytes (minimum 16).
+  uint32 nonce_size = 4;
+
+  // Version is the manifest format version.
+  string version = 5;
+
+  // IncludeWorkloadPCR includes PCR 14 (workload chain) in quotes.
+  bool include_workload_pcr = 6;
+}
+
+// ManifestVerifierConfig configures manifest verification operations.
+message ManifestVerifierConfig {
+  // MaxManifestAge is the maximum age of a manifest in seconds (0 = no limit).
+  int64 max_manifest_age = 1;
+
+  // RequireHostAttestation requires valid host attestation.
+  bool require_host_attestation = 2;
+
+  // VerifyMerkleRoot requires Merkle root verification.
+  bool verify_merkle_root = 3;
+
+  // HashAlgorithm is the hash algorithm for Merkle tree verification.
+  AttestationHashAlgorithm hash_algorithm = 4;
+
+  // PlatformCACertPEM is the Platform CA certificate in PEM format for chain validation.
+  bytes platform_ca_cert_pem = 5;
+
+  // TrustedRootsPEM contains additional trusted root certificates in PEM format.
+  repeated bytes trusted_roots_pem = 6;
+}
+
+// AttestationQuoteConfig configures TPM quote generation for attestation.
+message AttestationQuoteConfig {
+  // AKHandle is the TPM handle for the Attestation Key.
+  uint32 ak_handle = 1;
+
+  // PCRIndices are the PCR indices to include in the quote.
+  repeated uint32 pcr_indices = 2;
+
+  // HashAlgorithm is the hash algorithm for the quote.
+  AttestationHashAlgorithm hash_algorithm = 3;
+}
+
+// =============================================================================
+// Data Messages
+// =============================================================================
+
+// AttestationPCRValue represents a single PCR index and its value.
+message AttestationPCRValue {
+  // Index is the PCR index (0-23).
+  uint32 index = 1;
+
+  // Value is the PCR digest value.
+  bytes value = 2;
+
+  // Algorithm is the hash algorithm used for this PCR bank.
+  AttestationHashAlgorithm algorithm = 3;
+}
+
+// HostAttestation represents the physical TPM attestation from the host.
+message HostAttestation {
+  // QuoteData is the raw TPM quote structure (TPMS_ATTEST).
+  bytes quote_data = 1;
+
+  // Signature is the AK signature over the quote data.
+  bytes signature = 2;
+
+  // SignatureAlgorithm is the algorithm used for signing.
+  string signature_algorithm = 3;
+
+  // PCRs contains the PCR values included in the quote.
+  repeated AttestationPCRValue pcrs = 4;
+
+  // PCRDigest is the hash of the PCR values.
+  bytes pcr_digest = 5;
+
+  // Nonce is the anti-replay nonce included in the quote.
+  bytes nonce = 6;
+
+  // Timestamp is when the quote was generated.
+  google.protobuf.Timestamp timestamp = 7;
+
+  // AKPublicKey is the public key of the AK used for signing.
+  bytes ak_public_key = 8;
+
+  // IDevIDCertificate is the host's IDevID certificate for identification.
+  bytes idevid_certificate = 9;
+
+  // HashAlgorithm is the hash algorithm used for the quote.
+  AttestationHashAlgorithm hash_algorithm = 10;
+
+  // FirmwareVersion is the TPM firmware version.
+  string firmware_version = 11;
+}
+
+// VMAttestation represents the vTPM attestation from a VM.
+message VMAttestation {
+  // VMID is the unique identifier for the virtual machine.
+  string vm_id = 1;
+
+  // HostID is the host running this VM.
+  string host_id = 2;
+
+  // QuoteData is the raw TPM quote structure (TPMS_ATTEST).
+  bytes quote_data = 3;
+
+  // Signature is the AIK/AK signature over the quote data.
+  bytes signature = 4;
+
+  // SignatureAlgorithm is the algorithm used for signing.
+  string signature_algorithm = 5;
+
+  // PCRs contains the PCR values included in the quote.
+  repeated AttestationPCRValue pcrs = 6;
+
+  // PCRDigest is the hash of the PCR values.
+  bytes pcr_digest = 7;
+
+  // Nonce is the anti-replay nonce included in the quote.
+  bytes nonce = 8;
+
+  // Timestamp is when the quote was generated.
+  google.protobuf.Timestamp timestamp = 9;
+
+  // AIKPublicKey is the public key of the AIK/AK used for signing.
+  bytes aik_public_key = 10;
+
+  // EKCertificate is the vTPM EK certificate.
+  bytes ek_certificate = 11;
+
+  // WorkloadPCR is the PCR 14 value (workload chain) from the vTPM.
+  bytes workload_pcr = 12;
+
+  // HashAlgorithm is the hash algorithm used for the quote.
+  AttestationHashAlgorithm hash_algorithm = 13;
+
+  // Metadata contains additional VM-specific metadata.
+  map<string, string> metadata = 14;
+}
+
+// ContainerAttestation represents the PCR 14 chain attestation for a container.
+message ContainerAttestation {
+  // ContainerID is the unique identifier for the container.
+  string container_id = 1;
+
+  // ImageID is the container image ID.
+  string image_id = 2;
+
+  // ImageDigest is the digest of the container image.
+  string image_digest = 3;
+
+  // Digest is the measurement hash for this container.
+  bytes digest = 4;
+
+  // PCRValue is the PCR 14 value after this container's extension.
+  bytes pcr_value = 5;
+
+  // Timestamp is when the container was measured.
+  google.protobuf.Timestamp timestamp = 6;
+
+  // Metadata contains additional container-specific metadata.
+  map<string, string> metadata = 7;
+}
+
+// HostManifest represents a comprehensive attestation of a host and its workloads.
+message HostManifest {
+  // ID is a unique identifier for this manifest.
+  string id = 1;
+
+  // HostID is the host identifier from the IDevID certificate.
+  string host_id = 2;
+
+  // Timestamp is when the manifest was generated.
+  google.protobuf.Timestamp timestamp = 3;
+
+  // Nonce is the fresh nonce used for anti-replay protection.
+  bytes nonce = 4;
+
+  // Host contains the physical TPM attestation.
+  HostAttestation host = 5;
+
+  // VMs contains attestations from all VMs on the host.
+  repeated VMAttestation vms = 6;
+
+  // Containers contains attestations from all containers.
+  repeated ContainerAttestation containers = 7;
+
+  // MerkleRoot is the root hash of the Merkle tree over all attestation data.
+  bytes merkle_root = 8;
+
+  // Signature is the AK signature over the manifest.
+  bytes signature = 9;
+
+  // SignatureAlgorithm is the algorithm used for signing.
+  string signature_algorithm = 10;
+
+  // Version is the manifest format version.
+  string version = 11;
+
+  // Metadata contains additional manifest metadata.
+  map<string, string> metadata = 12;
+}
+
+// ManifestVerificationResult represents the outcome of manifest verification.
+message ManifestVerificationResult {
+  // Status indicates the overall verification status.
+  ManifestVerificationStatus status = 1;
+
+  // SignatureValid indicates if the manifest signature is valid.
+  bool signature_valid = 2;
+
+  // MerkleRootValid indicates if the Merkle root is valid.
+  bool merkle_root_valid = 3;
+
+  // NonceValid indicates if the nonce matches expected value.
+  bool nonce_valid = 4;
+
+  // TimestampValid indicates if the manifest is not expired.
+  bool timestamp_valid = 5;
+
+  // HostAttestationValid indicates if host attestation is valid.
+  bool host_attestation_valid = 6;
+
+  // VMAttestationsValid indicates if all VM attestations are valid.
+  bool vm_attestations_valid = 7;
+
+  // ContainerAttestationsValid indicates if all container attestations are valid.
+  bool container_attestations_valid = 8;
+
+  // VerifiedAt is when the verification was performed.
+  google.protobuf.Timestamp verified_at = 9;
+
+  // Errors contains any errors encountered during verification.
+  repeated string errors = 10;
+
+  // VMErrors contains errors for specific VM attestations.
+  map<string, string> vm_errors = 11;
+
+  // ContainerErrors contains errors for specific container attestations.
+  map<string, string> container_errors = 12;
+}
+
+// AttestationQuote represents a TPM quote with signature and PCR values.
+message AttestationQuote {
+  // QuoteData is the raw TPM quote structure (TPMS_ATTEST).
+  bytes quote_data = 1;
+
+  // Signature is the AK signature over the quote.
+  bytes signature = 2;
+
+  // PCRValues contains the PCR values included in the quote.
+  repeated AttestationPCRValue pcr_values = 3;
+
+  // Nonce is the nonce included in the quote.
+  bytes nonce = 4;
+
+  // EventLog contains the TPM event log.
+  bytes event_log = 5;
+}
+
+// =============================================================================
+// Manifest Request/Response Messages
+// =============================================================================
+
+message GetManifestRequest {
+  // ID is the manifest identifier.
+  string id = 1;
+}
+
+message GetManifestResponse {
+  // Manifest is the retrieved manifest.
+  HostManifest manifest = 1;
+}
+
+message BuildManifestRequest {
+  // Config is the manifest builder configuration.
+  ManifestBuilderConfig config = 1;
+
+  // Nonce is an optional externally-provided nonce for anti-replay.
+  // If empty, a fresh nonce will be generated.
+  bytes nonce = 2;
+
+  // IncludeVMs specifies whether to include VM attestations.
+  bool include_vms = 3;
+
+  // IncludeContainers specifies whether to include container attestations.
+  bool include_containers = 4;
+
+  // VMIDs specifies specific VM IDs to include (empty = all).
+  repeated string vm_ids = 5;
+
+  // ContainerIDs specifies specific container IDs to include (empty = all).
+  repeated string container_ids = 6;
+
+  // Sign specifies whether to sign the manifest after building.
+  bool sign = 7;
+}
+
+message BuildManifestResponse {
+  // Status indicates the operation status.
+  Status status = 1;
+
+  // Manifest is the built manifest.
+  HostManifest manifest = 2;
+}
+
+message VerifyManifestRequest {
+  // Manifest is the manifest to verify.
+  HostManifest manifest = 1;
+
+  // Config is the verifier configuration.
+  ManifestVerifierConfig config = 2;
+
+  // ExpectedNonce is the expected nonce value for anti-replay verification.
+  bytes expected_nonce = 3;
+
+  // PublicKeyPEM is the public key for signature verification in PEM format.
+  bytes public_key_pem = 4;
+
+  // ExpectedPCRs contains expected PCR values for validation.
+  map<uint32, bytes> expected_pcrs = 5;
+}
+
+message VerifyManifestResponse {
+  // Status indicates the operation status.
+  Status status = 1;
+
+  // Result is the detailed verification result.
+  ManifestVerificationResult result = 2;
+}
+
+message ListManifestsRequest {
+  // HostID filters manifests by host ID.
+  string host_id = 1;
+
+  // StartTime filters manifests created after this time.
+  google.protobuf.Timestamp start_time = 2;
+
+  // EndTime filters manifests created before this time.
+  google.protobuf.Timestamp end_time = 3;
+
+  // Limit is the maximum number of manifests to return.
+  uint32 limit = 4;
+
+  // Offset is the offset for pagination.
+  uint32 offset = 5;
+}
+
+message ListManifestsResponse {
+  // Manifests is the list of manifests matching the filter.
+  repeated HostManifest manifests = 1;
+
+  // Total is the total count of matching manifests.
+  uint32 total = 2;
+}
+
+message DeleteManifestRequest {
+  // ID is the manifest identifier to delete.
+  string id = 1;
+}
+
+message DeleteManifestResponse {
+  // Status indicates the operation status.
+  Status status = 1;
+}
+
+// =============================================================================
+// Quote Request/Response Messages
+// =============================================================================
+
+message GetAttestationQuoteRequest {
+  // Config is the quote configuration.
+  AttestationQuoteConfig config = 1;
+
+  // Nonce is the anti-replay nonce to include in the quote.
+  bytes nonce = 2;
+}
+
+message GetAttestationQuoteResponse {
+  // Status indicates the operation status.
+  Status status = 1;
+
+  // Quote is the generated quote.
+  AttestationQuote quote = 2;
+}
+
+message VerifyAttestationQuoteRequest {
+  // Quote is the quote to verify.
+  AttestationQuote quote = 1;
+
+  // AKPublicKeyPEM is the AK public key for signature verification in PEM format.
+  bytes ak_public_key_pem = 2;
+
+  // ExpectedNonce is the expected nonce value.
+  bytes expected_nonce = 3;
+
+  // ExpectedPCRs contains expected PCR values for validation.
+  repeated AttestationPCRValue expected_pcrs = 4;
+}
+
+message VerifyAttestationQuoteResponse {
+  // Status indicates the operation status.
+  Status status = 1;
+
+  // Verified indicates if the quote is valid.
+  bool verified = 2;
+
+  // Message contains additional verification details.
+  string message = 3;
+
+  // ActualPCRs contains the actual PCR values from the quote.
+  repeated AttestationPCRValue actual_pcrs = 4;
+}
+
+// =============================================================================
+// Attestation Collection Request/Response Messages
+// =============================================================================
+
+message CollectHostAttestationRequest {
+  // Config is the quote configuration.
+  AttestationQuoteConfig config = 1;
+
+  // Nonce is the anti-replay nonce.
+  bytes nonce = 2;
+}
+
+message CollectHostAttestationResponse {
+  // Status indicates the operation status.
+  Status status = 1;
+
+  // Attestation is the collected host attestation.
+  HostAttestation attestation = 2;
+}
+
+message CollectVMAttestationRequest {
+  // VMID is the VM identifier.
+  string vm_id = 1;
+
+  // Config is the quote configuration.
+  AttestationQuoteConfig config = 2;
+
+  // Nonce is the anti-replay nonce.
+  bytes nonce = 3;
+}
+
+message CollectVMAttestationResponse {
+  // Status indicates the operation status.
+  Status status = 1;
+
+  // Attestation is the collected VM attestation.
+  VMAttestation attestation = 2;
+}
+
+message CollectContainerAttestationRequest {
+  // ContainerID is the container identifier.
+  string container_id = 1;
+}
+
+message CollectContainerAttestationResponse {
+  // Status indicates the operation status.
+  Status status = 1;
+
+  // Attestation is the collected container attestation.
+  ContainerAttestation attestation = 2;
+}

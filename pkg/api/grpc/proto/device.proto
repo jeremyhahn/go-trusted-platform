@@ -1,0 +1,424 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// DeviceService provides device management operations
+service DeviceService {
+  // Device CRUD operations
+  rpc CreateDevice(CreateDeviceRequest) returns (CreateDeviceResponse);
+  rpc GetDevice(GetDeviceRequest) returns (GetDeviceResponse);
+  rpc UpdateDevice(UpdateDeviceRequest) returns (UpdateDeviceResponse);
+  rpc DeleteDevice(DeleteDeviceRequest) returns (DeleteDeviceResponse);
+  rpc ListDevices(ListDevicesRequest) returns (ListDevicesResponse);
+
+  // Device lookup operations
+  rpc FindDeviceBySerial(FindDeviceBySerialRequest) returns (FindDeviceBySerialResponse);
+  rpc CountDevices(CountDevicesRequest) returns (CountDevicesResponse);
+
+  // Profile CRUD operations
+  rpc CreateProfile(CreateProfileRequest) returns (CreateProfileResponse);
+  rpc GetProfile(GetProfileRequest) returns (GetProfileResponse);
+  rpc UpdateProfile(UpdateProfileRequest) returns (UpdateProfileResponse);
+  rpc DeleteProfile(DeleteProfileRequest) returns (DeleteProfileResponse);
+  rpc ListProfiles(ListProfilesRequest) returns (ListProfilesResponse);
+
+  // Profile lookup operations
+  rpc FindProfileByMACAddress(FindProfileByMACAddressRequest) returns (FindProfileByMACAddressResponse);
+  rpc FindProfileBySerial(FindProfileBySerialRequest) returns (FindProfileBySerialResponse);
+  rpc FindMatchingProfile(FindMatchingProfileRequest) returns (FindMatchingProfileResponse);
+  rpc CountProfiles(CountProfilesRequest) returns (CountProfilesResponse);
+
+  // Device activation
+  rpc ActivateDevice(ActivateDeviceRequest) returns (ActivateDeviceResponse);
+
+  // Template CRUD operations
+  rpc CreateTemplate(CreateTemplateRequest) returns (CreateTemplateResponse);
+  rpc GetTemplate(GetTemplateRequest) returns (GetTemplateResponse);
+  rpc UpdateTemplate(UpdateTemplateRequest) returns (UpdateTemplateResponse);
+  rpc DeleteTemplate(DeleteTemplateRequest) returns (DeleteTemplateResponse);
+  rpc ListTemplates(ListTemplatesRequest) returns (ListTemplatesResponse);
+  rpc FindTemplateByName(FindTemplateByNameRequest) returns (FindTemplateByNameResponse);
+
+  // Template operations
+  rpc CreateProfileFromTemplate(CreateProfileFromTemplateRequest) returns (CreateProfileResponse);
+
+  // Profile lookup by device identity
+  rpc FindConfigForDevice(FindConfigForDeviceRequest) returns (FindConfigForDeviceResponse);
+
+  // Profile assignment
+  rpc AssignProfileToDevice(AssignProfileToDeviceRequest) returns (AssignProfileToDeviceResponse);
+}
+
+// DeviceRole represents the role or function of a device
+enum DeviceRole {
+  DEVICE_ROLE_UNSPECIFIED = 0;
+  DEVICE_ROLE_UNKNOWN = 1;
+  DEVICE_ROLE_SERVER = 2;
+  DEVICE_ROLE_CLIENT = 3;
+  DEVICE_ROLE_WORKSTATION = 4;
+  DEVICE_ROLE_EDGE = 5;
+  DEVICE_ROLE_IOT = 6;
+  DEVICE_ROLE_GATEWAY = 7;
+  DEVICE_ROLE_LOAD_BALANCER = 8;
+}
+
+// AuthMethod represents the authentication method for network access
+enum AuthMethod {
+  AUTH_METHOD_UNSPECIFIED = 0;
+  AUTH_METHOD_NONE = 1;
+  AUTH_METHOD_802_1X = 2;
+}
+
+// Device represents a registered device
+message Device {
+  uint64 id = 1;
+  string attest_pub = 2;
+  string ek_cert = 3;
+  bytes event_log = 4;
+  uint32 hash_algo_id = 5;
+  string model = 6;
+  string serial = 7;
+  string signing_pub = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+// DHCPPoolConfig defines DHCP pool configuration
+message DHCPPoolConfig {
+  string network = 1;
+  string range_start = 2;
+  string range_end = 3;
+  int32 lease_time = 4;
+}
+
+// ACLConfig defines access control list configuration
+message ACLConfig {
+  int32 priority = 1;
+  string protocol = 2;
+  string src_ip = 3;
+  string dst_ip = 4;
+  uint32 src_port = 5;
+  uint32 dst_port = 6;
+  string action = 7;
+}
+
+// NetworkPhaseConfig defines network configuration for a provisioning phase
+message NetworkPhaseConfig {
+  uint32 vlan = 1;
+  DHCPPoolConfig dhcp_pool = 2;
+  string static_ip = 3;
+  string gateway = 4;
+  repeated string dns = 5;
+  AuthMethod auth_method = 6;
+  repeated ACLConfig acls = 7;
+  string subnet = 8;
+  repeated string dns_servers = 9;
+  bool dhcp = 10;
+  string firewall_zone = 11;
+}
+
+// PlatformdConfigRef represents a reference to platformd configuration
+message PlatformdConfigRef {
+  string config_type = 1;
+  bytes inline = 2;
+  string reference = 3;
+  string config_name = 4;
+  string config_path = 5;
+  string version = 6;
+}
+
+// ProfileMatchRules defines rules for matching devices to profiles
+message ProfileMatchRules {
+  string mac_prefix = 1;
+  string serial_prefix = 2;
+  string model = 3;
+  string model_pattern = 4;
+  string serial_pattern = 5;
+  string manufacturer_match = 6;
+  string tpm_vendor = 7;
+  map<string, string> custom_attributes = 8;
+}
+
+// BMCConfig holds baseboard management controller connection configuration
+// for bare metal provisioning via IPMI or Redfish.
+message BMCConfig {
+  string address = 1;
+  int32 port = 2;
+  string username = 3;
+  string password = 4;
+  string protocol = 5;
+}
+
+// DeviceProfile represents a device profile configuration
+message DeviceProfile {
+  uint64 id = 1;
+  string name = 2;
+  string model = 3;
+  DeviceRole role = 4;
+  bytes event_log = 5;
+  NetworkPhaseConfig provisioning_network = 6;
+  NetworkPhaseConfig production_network = 7;
+  NetworkPhaseConfig quarantine_network = 8;
+  PlatformdConfigRef platformd_config = 9;
+  ProfileMatchRules match_rules = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+  bytes config = 13;
+  string ek_serial = 14;
+  string mac_address = 15;
+  bool assigned = 16;
+  google.protobuf.Timestamp assigned_at = 17;
+  BMCConfig bmc = 18;
+}
+
+// DeviceTemplate is a reusable configuration blueprint for device provisioning
+message DeviceTemplate {
+  uint64 id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  string description = 4;
+  DeviceRole role = 5;
+  bytes config = 6;
+  ProfileMatchRules match_rules = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+  BMCConfig bmc = 10;
+}
+
+// Device CRUD messages
+
+message CreateDeviceRequest {
+  Device device = 1;
+}
+
+message CreateDeviceResponse {
+  Status status = 1;
+  Device device = 2;
+}
+
+message GetDeviceRequest {
+  uint64 id = 1;
+}
+
+message GetDeviceResponse {
+  Device device = 1;
+}
+
+message UpdateDeviceRequest {
+  Device device = 1;
+}
+
+message UpdateDeviceResponse {
+  Status status = 1;
+  Device device = 2;
+}
+
+message DeleteDeviceRequest {
+  uint64 id = 1;
+}
+
+message DeleteDeviceResponse {
+  Status status = 1;
+}
+
+message ListDevicesRequest {
+  PaginationRequest pagination = 1;
+  LabelSelector selector = 2;
+}
+
+message ListDevicesResponse {
+  repeated Device devices = 1;
+  PaginationResponse pagination = 2;
+}
+
+message FindDeviceBySerialRequest {
+  string serial = 1;
+}
+
+message FindDeviceBySerialResponse {
+  Device device = 1;
+}
+
+message CountDevicesRequest {}
+
+message CountDevicesResponse {
+  int32 count = 1;
+}
+
+// Profile CRUD messages
+
+message CreateProfileRequest {
+  DeviceProfile profile = 1;
+}
+
+message CreateProfileResponse {
+  Status status = 1;
+  DeviceProfile profile = 2;
+}
+
+message GetProfileRequest {
+  uint64 id = 1;
+}
+
+message GetProfileResponse {
+  DeviceProfile profile = 1;
+}
+
+message UpdateProfileRequest {
+  DeviceProfile profile = 1;
+}
+
+message UpdateProfileResponse {
+  Status status = 1;
+  DeviceProfile profile = 2;
+}
+
+message DeleteProfileRequest {
+  uint64 id = 1;
+}
+
+message DeleteProfileResponse {
+  Status status = 1;
+}
+
+message ListProfilesRequest {
+  PaginationRequest pagination = 1;
+  LabelSelector selector = 2;
+}
+
+message ListProfilesResponse {
+  repeated DeviceProfile profiles = 1;
+  PaginationResponse pagination = 2;
+}
+
+message FindProfileByMACAddressRequest {
+  string mac_address = 1;
+}
+
+message FindProfileByMACAddressResponse {
+  DeviceProfile profile = 1;
+}
+
+message FindProfileBySerialRequest {
+  string serial = 1;
+}
+
+message FindProfileBySerialResponse {
+  DeviceProfile profile = 1;
+}
+
+message FindMatchingProfileRequest {
+  string mac_address = 1;
+  string serial = 2;
+  string model = 3;
+}
+
+message FindMatchingProfileResponse {
+  DeviceProfile profile = 1;
+}
+
+message CountProfilesRequest {}
+
+message CountProfilesResponse {
+  int32 count = 1;
+}
+
+// Device activation messages
+
+message ActivateDeviceRequest {
+  string serial = 1;
+  string mac_address = 2;
+}
+
+message ActivateDeviceResponse {
+  Status status = 1;
+  string activation_status = 2;
+  uint32 vlan = 3;
+  google.protobuf.Timestamp transitioned_at = 4;
+}
+
+// Template CRUD messages
+
+message CreateTemplateRequest {
+  DeviceTemplate template = 1;
+}
+
+message CreateTemplateResponse {
+  DeviceTemplate template = 1;
+}
+
+message GetTemplateRequest {
+  uint64 id = 1;
+}
+
+message GetTemplateResponse {
+  DeviceTemplate template = 1;
+}
+
+message UpdateTemplateRequest {
+  DeviceTemplate template = 1;
+}
+
+message UpdateTemplateResponse {
+  DeviceTemplate template = 1;
+}
+
+message DeleteTemplateRequest {
+  uint64 id = 1;
+}
+
+message DeleteTemplateResponse {}
+
+message ListTemplatesRequest {
+  uint64 page = 1;
+  uint64 page_size = 2;
+}
+
+message ListTemplatesResponse {
+  repeated DeviceTemplate templates = 1;
+  uint64 total = 2;
+}
+
+message FindTemplateByNameRequest {
+  string tenant_id = 1;
+  string name = 2;
+}
+
+message FindTemplateByNameResponse {
+  DeviceTemplate template = 1;
+}
+
+// Template operation messages
+
+message CreateProfileFromTemplateRequest {
+  uint64 template_id = 1;
+  DeviceProfile overrides = 2;
+}
+
+// Config delivery messages
+
+message FindConfigForDeviceRequest {
+  string ek_serial = 1;
+  string mac_address = 2;
+}
+
+message FindConfigForDeviceResponse {
+  DeviceProfile profile = 1;
+}
+
+// Profile assignment messages
+
+message AssignProfileToDeviceRequest {
+  uint64 profile_id = 1;
+  string ek_serial = 2;
+  string mac_address = 3;
+}
+
+message AssignProfileToDeviceResponse {
+  DeviceProfile profile = 1;
+}

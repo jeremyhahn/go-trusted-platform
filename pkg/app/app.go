@@ -1,0 +1,3365 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package app
+
+import (
+	"bytes"
+	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/user"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/go-viper/mapstructure/v2"
+	"github.com/spf13/viper"
+	"gopkg.in/yaml.v2"
+
+	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+
+	// QuicBaaS ObjectStorage client
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
+
+	// go-trusted-ca SDK
+	casdk "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	acmequicbaas "github.com/jeremyhahn/go-trusted-platform/pkg/acme/storage/quicbaas"
+
+	// Local platform imports
+	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/aesgcm"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/argon2"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+
+	// QuicBaaS service for KMS access
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	quicbaasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
+	localcertstore "github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/object"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice"
+	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
+
+	libtpm2 "github.com/google/go-tpm/tpm2"
+)
+
+var (
+	ErrMissingEKWithoutEnabledCA        = errors.New("trusted-platform: EK certificate not found and unable to generate because the certificate authority is not enabled")
+	ErrInvalidLocalAttestationSignature = errors.New("trusted-platform: local attestation signature verification failed")
+	warnSimulatorWithEKCertHandle       = errors.New("trusted-platform: TPM Simulator w/ EK certificate (> 1024 bytes) configured for NV RAM storage. Using certificate store instead.")
+
+	EnvDev     Environment = "dev"
+	EnvPreProd Environment = "preprod"
+	EnvProd    Environment = "prod"
+	EnvTest    Environment = "test"
+
+	TestConfig = App{
+		CAConfig:         defaultCAConfig(),
+		DebugFlag:        true,
+		DebugSecretsFlag: true,
+		ConfigDir:        "/etc/trusted-platform",
+		QuicBaaSConfig: &quicbaas.Config{
+			TransportStr:     "embedded",
+			Transport:        quicbaas.TransportEmbedded,
+			StorageBackend:   "pebble",
+			DataDir:          "trusted-data/quicbaas",
+			WALDir:           "trusted-data/quicbaas/wal",
+			NodeID:           1,
+			CacheSize:        64 * 1024 * 1024, // 64MB
+			LogLevel:         "warn",
+			ConsistencyLevel: quicbaas.ConsistencyLinearizable,
+		},
+		LogDir:           "trusted-data/log",
+		Logger:           logging.DefaultLogger(),
+		LogFormat:        "json",
+		PlatformDir:      "trusted-data",
+		Random:           rand.Reader,
+		TPMConfig:        xkmssdk.DefaultTPMConfig,
+		WebServiceConfig: &webservice.DefaultConfigECDSA,
+		WebServices:      []*v1.Config{&webservice.DefaultConfigECDSA},
+	}
+)
+
+func defaultCAConfig() *casdk.CAConfig {
+	cfg := casdk.CADefaultConfig()
+	// Ensure KeyAlgorithmStr is set for YAML serialization since
+	// casdk.CADefaultConfig() only sets KeyAlgorithm (which is yaml:"-")
+	for i := range cfg.Identity {
+		if cfg.Identity[i].KeyAlgorithmStr == "" {
+			switch cfg.Identity[i].KeyAlgorithm {
+			case x509.RSA:
+				cfg.Identity[i].KeyAlgorithmStr = "RSA"
+			case x509.ECDSA:
+				cfg.Identity[i].KeyAlgorithmStr = "ECDSA"
+			case x509.Ed25519:
+				cfg.Identity[i].KeyAlgorithmStr = "Ed25519"
+			}
+		}
+	}
+	return &cfg
+}
+
+// newKeyBackend creates a new KeyBackend using go-xkms native file storage.
+// It creates a file-based storage backend at the given path.
+func newKeyBackend(logger *logging.Logger, path string) (xkmssdk.TPMKeyBackend, error) {
+	storageBackend, err := xkmssdk.NewFileStorageBackend(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create storage backend: %w", err)
+	}
+	return xkmssdk.NewFileBackend(logger.Slog(), storageBackend), nil
+}
+
+// initXKMSService initializes the global XKMS service with the appropriate backends
+// and returns the keystore for direct use with go-trusted-ca.
+//
+// This function creates the keystore without any wrapper - TPM password sealing is handled
+// by go-trusted-platform at a higher level before calling CA methods, using go-xkms's
+// xkmssdk.PlatformPassword for just-in-time unsealing.
+func (app *App) initXKMSService(caRoot string, soPIN, userPIN xkmssdk.Password) (xkmssdk.ServiceBackend, error) {
+	// If XKMS was pre-initialized (in initStores before QuicBaaS start),
+	// return the existing software keystore. This ensures QuicBaaS's KMS uses
+	// persistent filesystem storage rather than the in-memory storage that
+	// QuicBaaS's startKMS() would otherwise create.
+	if xkmssdk.ServiceIsInitialized() {
+		ks, err := xkmssdk.ServiceGetBackend("software")
+		if err == nil {
+			app.Logger.Debug("XKMS already initialized, using existing software backend")
+			return ks, nil
+		}
+		app.Logger.Warn("XKMS initialized but software backend not found, re-initializing",
+			"error", err)
+		xkmssdk.ServiceReset()
+	}
+
+	var keyStorageBackend, certStorageBackend xkmssdk.StorageBackend
+	var err error
+
+	// Use memory storage for test environment, xkms file storage for production
+	if app.Environment == EnvTest {
+		keyStorageBackend = xkmssdk.NewStorageMemory()
+		certStorageBackend = xkmssdk.NewStorageMemory()
+	} else {
+		// Use go-xkms native file storage for persistent key/cert backends
+		keyStorageBackend, err = xkmssdk.NewFileStorageBackend(caRoot)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create key storage: %w", err)
+		}
+		certStorageBackend, err = xkmssdk.NewFileStorageBackend(caRoot)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create cert storage: %w", err)
+		}
+	}
+
+	// Create software backend (unified backend supporting asymmetric + symmetric operations)
+	softwareBackend, err := xkmssdk.NewSoftwareBackend(&xkmssdk.SoftwareBackendConfig{
+		KeyStorage: keyStorageBackend,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create software backend: %w", err)
+	}
+
+	// Create software keystore
+	softwareKS, err := xkmssdk.NewServiceBackend(&xkmssdk.ServiceBackendConfig{
+		Backend:     softwareBackend,
+		CertStorage: certStorageBackend,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create software keystore: %w", err)
+	}
+
+	// Initialize XKMS service with backends (for code that uses xkmssdk.ServiceGetBackend())
+	backends := map[string]xkmssdk.ServiceBackend{
+		"software": softwareKS,
+	}
+
+	// If TPM is available, create and register a TPM2 backend
+	if app.TPM != nil && app.PlatformKS != nil {
+		tpm2Back, err := xkmssdk.NewTPM2BackendWithTPM(&xkmssdk.TPM2BackendExternalConfig{
+			TPM:        app.TPM,
+			KeyBackend: app.PlatformKS.Backend(),
+			// Logger: nil - uses go-xkms's default logger
+		})
+		if err != nil {
+			// Log warning but continue - tpm2 backend is optional
+			app.Logger.Warn("Failed to create TPM2 backend for XKMS service", "error", err)
+		} else {
+			// Create TPM2 keystore with same cert storage as software backend
+			tpm2KS, err := xkmssdk.NewServiceBackend(&xkmssdk.ServiceBackendConfig{
+				Backend:     tpm2Back,
+				CertStorage: certStorageBackend,
+			})
+			if err != nil {
+				app.Logger.Warn("Failed to create TPM2 keystore for XKMS service", "error", err)
+			} else {
+				backends["tpm2"] = tpm2KS
+				app.Logger.Debug("TPM2 backend registered with XKMS service")
+			}
+		}
+	}
+
+	if err := xkmssdk.ServiceInitialize(&xkmssdk.ServiceConfig{
+		Backends:       backends,
+		DefaultBackend: "software",
+	}); err != nil {
+		return nil, fmt.Errorf("failed to initialize XKMS service: %w", err)
+	}
+
+	app.Logger.Debug("XKMS service initialized", "backends", len(backends))
+	return softwareKS, nil
+}
+
+var DefaultConfig = App{
+	CAConfig:         defaultCAConfig(),
+	DebugFlag:        true,
+	DebugSecretsFlag: true,
+	ConfigDir:        "/etc/trusted-platform",
+	QuicBaaSConfig: &quicbaas.Config{
+		TransportStr:     "embedded",
+		Transport:        quicbaas.TransportEmbedded,
+		StorageBackend:   "pebble",
+		DataDir:          "trusted-data/quicbaas",
+		WALDir:           "trusted-data/quicbaas/wal",
+		NodeID:           1,
+		CacheSize:        64 * 1024 * 1024, // 64MB
+		LogLevel:         "warn",
+		ConsistencyLevel: quicbaas.ConsistencyLinearizable,
+	},
+	LogDir:           "trusted-data/log",
+	Logger:           logging.DefaultLogger(),
+	LogFormat:        "json",
+	PlatformDir:      "trusted-data",
+	Random:           rand.Reader,
+	TPMConfig:        xkmssdk.DefaultTPMConfig,
+	WebServiceConfig: &webservice.DefaultConfigECDSA,
+	WebServices:      []*v1.Config{&webservice.DefaultConfigECDSA},
+}
+
+type Environment string
+
+func (e Environment) String() string {
+	return string(e)
+}
+
+func ParseEnvironment(env string) Environment {
+	switch env {
+	case string(EnvDev):
+		return EnvDev
+	case string(EnvPreProd):
+		return EnvPreProd
+	case string(EnvProd):
+		return EnvProd
+	case string(EnvTest):
+		return EnvTest
+	default:
+		// Return user-defined environment
+		return Environment(env)
+	}
+}
+
+// PlatformInitConfig holds platform initialization settings including PINs.
+// PIN values can be set in the YAML config to enable non-interactive startup,
+// for example when using autogen:// URIs resolved by the secrets engine.
+type PlatformInitConfig struct {
+	SOPin   string `yaml:"so-pin,omitempty" json:"so-pin,omitempty" mapstructure:"so-pin"`
+	UserPin string `yaml:"user-pin,omitempty" json:"user-pin,omitempty" mapstructure:"user-pin"`
+}
+
+type App struct {
+	ACMEConfig              *casdk.ACMEConfig                 `yaml:"acme" json:"acme" mapstructure:"acme" swaggerignore:"true"`
+	ACMEClient              *casdk.ACMEClient                 `yaml:"-" json:"-" mapstructure:"-"`
+	Argon2                  argon2.Argon2Config               `yaml:"argon2" json:"argon2" mapstructure:"argon2"`
+	AttestationConfig       config.Attestation                `yaml:"attestation" json:"attestation" mapstructure:"attestation"`
+	ObjectStore             object.ObjectStorer               `yaml:"-" json:"-" mapstructure:"-"`
+	CA                      casdk.CACertificateAuthority      `yaml:"-" json:"-" mapstructure:"-"`
+	CAConfig                *casdk.CAConfig                   `yaml:"certificate-authority" json:"certificate_authority" mapstructure:"certificate-authority" swaggerignore:"true"`
+	ConfigDir               string                            `yaml:"config-dir" json:"config_dir" mapstructure:"config-dir"`
+	QuicBaaSConfig          *quicbaas.Config                  `yaml:"quicbaas" json:"quicbaas" mapstructure:"quicbaas"`
+	DebugFlag               bool                              `yaml:"debug" json:"debug" mapstructure:"debug"`
+	DebugSecretsFlag        bool                              `yaml:"debug-secrets" json:"debug-secrets" mapstructure:"debug-secrets"`
+	DNSConfig               *dns.Config                       `yaml:"dns" json:"dns" mapstructure:"dns"`
+	DNSService              *dns.Service                      `yaml:"-" json:"-" mapstructure:"-"`
+	Domain                  string                            `yaml:"domain" json:"domain" mapstructure:"domain"`
+	Environment             Environment                       `yaml:"environment" json:"environment" mapstructure:"environment"`
+	Storage                 objectstorage.Client              `yaml:"-" json:"-" mapstructure:"-"`
+	Hostname                string                            `yaml:"hostname" json:"hostname" mapstructure:"hostname"`
+	Hostmaster              string                            `yaml:"hostmaster" json:"hostmaster" mapstructure:"hostmaster"`
+	LogDir                  string                            `yaml:"log-dir" json:"log_dir" mapstructure:"log-dir"`
+	LogFormat               string                            `yaml:"log-format" json:"log_format" mapstructure:"log-format"`
+	Logger                  *logging.Logger                   `yaml:"-" json:"-" mapstructure:"-"`
+	PlatformDir             string                            `yaml:"platform-dir" json:"platform_dir" mapstructure:"platform-dir"`
+	PlatformKS              xkmssdk.PlatformKeyStorer         `yaml:"-" json:"-" mapstructure:"-"`
+	PlatformCertStore       xkmssdk.CertStore                 `yaml:"-" json:"-" mapstructure:"-"`
+	PlatformConfig          *PlatformInitConfig               `yaml:"platform,omitempty" json:"platform,omitempty" mapstructure:"platform"`
+	SecretsConfig           *SecretsConfig                    `yaml:"secrets,omitempty" json:"secrets,omitempty" mapstructure:"secrets"`
+	BMCConfig               *bmc.Config                       `yaml:"bmc,omitempty" json:"bmc,omitempty" mapstructure:"bmc"`
+	SDNConfig               *sdn.Config                       `yaml:"sdn,omitempty" json:"sdn,omitempty" mapstructure:"sdn"`
+	PublicIPv4              net.IP                            `yaml:"-" json:"-" mapstructure:"-"`
+	PublicIPv6              net.IP                            `yaml:"-" json:"-" mapstructure:"-"`
+	PrivateIPv4             net.IP                            `yaml:"-" json:"-" mapstructure:"-"`
+	PrivateIPv6             net.IP                            `yaml:"-" json:"-" mapstructure:"-"`
+	Random                  io.Reader                         `yaml:"-" json:"-" mapstructure:"-"`
+	RuntimeUser             string                            `yaml:"runtime-user" json:"runtime_user" mapstructure:"runtime-user"`
+	TenantID                string                            `yaml:"tenant-id" json:"tenant_id" mapstructure:"tenant-id"`
+	ShutdownChan            chan bool                         `yaml:"-" json:"-" mapstructure:"-"`
+	TPM                     xkmssdk.TrustedPlatformModule     `yaml:"-" json:"-" mapstructure:"-"`
+	TPMCertStore            xkmssdk.TPMCertificateStorer      `yaml:"-" json:"-" mapstructure:"-"`
+	TPMConfig               xkmssdk.TPMConfig                 `yaml:"tpm" json:"tpm" mapstructure:"tpm" swaggerignore:"true"`
+	WebServiceConfig        *v1.Config                        `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
+	WebServices             []*v1.Config                      `yaml:"webservices" json:"webservices" mapstructure:"webservices"`
+	WebServiceKeyAttributes map[string]*xkmssdk.KeyAttributes `yaml:"-" json:"-" mapstructure:"-"`
+
+	// Installer Configuration (System Manifest)
+	// These fields define how the system is installed, provisioned, and configured.
+	// They are used by the installer, initrd, and runtime components.
+
+	// Disk configuration for system installation (partitioning, encryption, LVM)
+	DiskConfig *installer.DiskConfig `yaml:"disk,omitempty" json:"disk,omitempty" mapstructure:"disk"`
+
+	// Operating system configuration (OS type, version, packages, IMA)
+	OSConfig *installer.OSConfig `yaml:"os,omitempty" json:"os,omitempty" mapstructure:"os"`
+
+	// Network configuration for installed system (interfaces, bridges, bonds, VLANs)
+	NetworkConfig *installer.NetworkConfig `yaml:"network,omitempty" json:"network,omitempty" mapstructure:"network"`
+
+	// Unified Kernel Image configuration (kernel, initramfs, cmdline)
+	UKIConfig *installer.UKIConfig `yaml:"uki,omitempty" json:"uki,omitempty" mapstructure:"uki"`
+
+	// Secure Boot signing configuration (key, cert paths)
+	SecureBootConfig *installer.SecureBootConfig `yaml:"secure-boot,omitempty" json:"secure_boot,omitempty" mapstructure:"secure-boot"`
+
+	// Enable TPM-based LUKS key sealing
+	EnableTPMSealing bool `yaml:"enable-tpm-sealing" json:"enable_tpm_sealing" mapstructure:"enable-tpm-sealing"`
+
+	// PCR registers to seal LUKS keys against (e.g., [0, 7, 9])
+	// This is the SINGLE SOURCE OF TRUTH for seal PCRs used by:
+	// - Installer (initial LUKS key sealing)
+	// - Initrd firstboot (writes to pcr-banks file)
+	// - Initrd boot (reads from config or pcr-banks file)
+	// - Runtime (TPM key sealing operations)
+	SealPCRs []uint `yaml:"seal-pcrs,omitempty" json:"seal_pcrs,omitempty" mapstructure:"seal-pcrs"`
+
+	// Number of overwrite passes for secure wipe of installer.luks
+	// Options:
+	//   1 = Single random pass + TRIM (NIST SP 800-88, recommended for SSDs)
+	//   3 = DoD 5220.22-M (zeros, ones, random) - for compliance/HDDs
+	//   7 = DoD 5220.22-M ECE (extended) - maximum security
+	// Default: 1 (modern SSD-optimized)
+	SecureWipePasses int `yaml:"secure-wipe-passes,omitempty" json:"secure_wipe_passes,omitempty" mapstructure:"secure-wipe-passes"`
+
+	// Enable FIDO2 enrollment for LUKS
+	EnableFIDO2Enrollment bool `yaml:"enable-fido2-enrollment" json:"enable_fido2_enrollment" mapstructure:"enable-fido2-enrollment"`
+
+	// FIDO2 configuration for LUKS enrollment
+	FIDO2Config *installer.FIDO2Config `yaml:"fido2,omitempty" json:"fido2,omitempty" mapstructure:"fido2"`
+
+	serviceRegistry *service.Registry `yaml:"-" json:"-" mapstructure:"-"`
+	daoFactory      datastore.Factory `yaml:"-" json:"-" mapstructure:"-"`
+
+	// KMS is accessed via app.KMS() method which returns QuicBaaS's KMSService directly.
+	// No configuration needed - KMS uses the QuicBaaS backend configured in QuicBaaSConfig.
+
+	// vTPM Configuration
+	// Provides pre-provisioned virtual TPM bundle management for VMs.
+	VTPMConfig *vtpm.Config `yaml:"vtpm,omitempty" json:"vtpm,omitempty" mapstructure:"vtpm"`
+
+	// Barrier configuration for platform-wide encryption at rest.
+	BarrierConfig *barrier.Config `yaml:"barrier,omitempty" json:"barrier,omitempty" mapstructure:"barrier"`
+
+	// barrier is the runtime barrier manager (not serialized).
+	barrier *barrier.Manager
+
+	// BootstrapConfig configures trust bootstrap services including the Noise_NK
+	// server and DANE TLSA auto-publication.
+	BootstrapConfig *bootstrap.Config `yaml:"bootstrap,omitempty" json:"bootstrap,omitempty" mapstructure:"bootstrap"`
+
+	// BootstrapClientConfig configures client-side trust bootstrap for fetching
+	// the CA certificate bundle from a remote server.
+	BootstrapClientConfig *bootstrap.ClientConfig `yaml:"bootstrap-client,omitempty" json:"bootstrap_client,omitempty" mapstructure:"bootstrap-client"`
+
+	// danePublisher is the runtime DANE TLSA publisher (not serialized).
+	danePublisher *bootstrap.DANEPublisher
+
+	// ovsClient is the runtime OVS client (not serialized).
+	ovsClient ovs.ClientInterface
+
+	// ipamAllocator is the runtime IPAM allocator (not serialized).
+	ipamAllocator ipam.Allocator
+}
+
+type AppInitParams struct {
+	CADir        string
+	ConfigDir    string
+	ConfigFile   string
+	Debug        bool
+	DebugSecrets bool
+	Env          string
+	EKCert       string
+	Initialize   bool
+	PlatformCA   int
+	PlatformDir  string
+	LogDir       string
+	Pin          []byte
+	RuntimeUser  string
+	SOPin        []byte
+}
+
+func NewApp() *App {
+	app := new(App)
+	app.ShutdownChan = make(chan bool, 1)
+	return app
+}
+
+// Initialize and start the platform based on the provided
+// initialization parameters.
+func (app *App) Init(initParams *AppInitParams) (*App, error) {
+	// Override config file with CLI options FIRST (matching original behavior)
+	// The config file is loaded next and will overwrite these with config values
+	// This allows config file settings (like debug: true) to take effect
+	// Only override directory paths if they are explicitly set (non-empty)
+	if initParams != nil {
+		app.DebugFlag = initParams.Debug
+		app.DebugSecretsFlag = initParams.DebugSecrets
+		if initParams.PlatformDir != "" {
+			app.PlatformDir = initParams.PlatformDir
+		}
+		if initParams.ConfigDir != "" {
+			app.ConfigDir = initParams.ConfigDir
+		}
+		if initParams.LogDir != "" {
+			app.LogDir = initParams.LogDir
+		}
+		app.Environment = ParseEnvironment(initParams.Env)
+	}
+
+	// Initialize the configuration from file
+	// viper.Unmarshal will overwrite app fields with config values (including DebugFlag)
+	// This is the key behavior that allows config's debug: true to prevent PIN prompts
+	// Note: viper.ConfigFileUsed() returns the path set by SetConfigFile even before ReadInConfig is called,
+	// so we check if TPMConfig.Device is empty to determine if config needs to be loaded
+	if app.TPMConfig.Device == "" {
+		env := ""
+		if initParams != nil {
+			env = initParams.Env
+		}
+		if err := app.initConfig(env); err != nil {
+			return nil, err
+		}
+	}
+
+	// Initialize the logger
+	app.initLogger()
+
+	// Debug: Log the environment value
+	app.Logger.Debug("Environment configuration",
+		"environment", string(app.Environment),
+		"is_test", app.Environment == EnvTest)
+
+	// Set the hostname
+	if app.Hostname == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			panic("Unable to get the local hostname")
+		}
+		app.Hostname = hostname
+	}
+
+	// TenantID is defaulted to "default" via viper.SetDefault in
+	// pkg/daemon/commands/root.go. A blank value here indicates a
+	// programming error (App constructed outside the viper-driven
+	// path); we refuse to silently fill it in with a fallback.
+
+	// Resolve autogen:// URIs in config before platform initialization.
+	// This must run before ParsePINs() and InitTPM() so that generated
+	// values (PINs, passwords, keys) are available for platform bootstrap.
+	if app.SecretsConfig != nil && app.SecretsConfig.Enabled && app.SecretsConfig.AutoGenerate {
+		if result, err := app.resolveAutoGenSecrets(context.Background()); err != nil {
+			app.Logger.Warnf("Bootstrap secret resolution failed: %v", err)
+		} else if result.ErrorCount() > 0 {
+			for _, resolveErr := range result.Errors {
+				app.Logger.Warnf("Bootstrap secret error: %v", resolveErr)
+			}
+		}
+	}
+
+	// Parse private and public IP addresses
+	if err := app.parsePrivateAndPublicIPs(); err != nil {
+		return nil, err
+	}
+
+	// Initialize the platform datastores
+	if err := app.initStores(); err != nil {
+		return nil, err
+	}
+
+	// Initialize the barrier manager if configured
+	if app.BarrierConfig != nil {
+		if err := app.initBarrier(context.Background()); err != nil {
+			return nil, err
+		}
+	}
+
+	// Initialize the SDN controller (OVS bridge, IPAM pools)
+	// Non-fatal: SDN may not be available during early boot or on non-controller nodes
+	if err := app.initSDN(context.Background()); err != nil {
+		app.Logger.Warnf("SDN initialization deferred: %v", err)
+	}
+
+	// Starts the embedded DNS server
+	app.StartDNS()
+
+	// Parse the Security Officer and User PINs
+	// When config has debug: true, prompts are skipped (matching original behavior)
+	soPIN, userPIN, err := app.ParsePINs(initParams.SOPin, initParams.Pin)
+	if err != nil {
+		return app, err
+	}
+
+	// Initialize the TPM / platform
+	if initParams.Initialize {
+		err := app.InitTPM(soPIN, userPIN, initParams)
+		if err != nil {
+			return nil, err
+		}
+		return app, nil
+	}
+
+	if err := app.OpenTPM(initParams.Initialize); err != nil {
+		return app, err
+	}
+
+	if err := app.InitPlatformKeyStore(soPIN, userPIN); err != nil {
+		return app, err
+	}
+
+	// KMS is now accessed via app.KMS() which uses QuicBaaS's KMSService directly.
+	// No separate initialization needed - the QuicBaaS datastore factory is already started above.
+
+	// NOTE: CA loading is intentionally NOT done here.
+	// Some commands require the platform not be fully initialized.
+	// Commands that need the CA (like webservice) should call LoadCA() explicitly.
+	// This matches the original go-trusted-platform behavior.
+	// if app.CA == nil {
+	// 	if err := app.LoadCA(soPIN, userPIN); err != nil {
+	// 		return nil, err
+	// 	}
+	// }
+	// if app.ACMEClient == nil {
+	// 	if err := app.InitACMEClient(); err != nil {
+	// 		return nil, err
+	// 	}
+	// }
+	// if err := app.InitWebServices(); err != nil {
+	// 	return nil, err
+	// }
+
+	return app, nil
+}
+
+// Parses the public and private IP addresses from the system
+func (app *App) parsePrivateAndPublicIPs() error {
+	app.PrivateIPv4 = util.PreferredIPv4()
+	app.PrivateIPv6 = util.PreferredIPv6()
+
+	publicIPv4, publicPv6, err := parsePublicIPs(app.Environment)
+	if err != nil {
+		// Public IP lookup failure is non-fatal - platform can work without it
+		// This commonly happens in air-gapped, NAT, or firewalled environments
+		app.Logger.Warn("Failed to detect public IP addresses (non-fatal)", "error", err)
+		// Leave public IPs as nil - zone generation will omit records that require public IP
+	} else {
+		app.PublicIPv4 = publicIPv4
+		app.PublicIPv6 = publicPv6
+	}
+
+	publicIPv4Str := "<none>"
+	publicIPv6Str := "<none>"
+	if app.PublicIPv4 != nil {
+		publicIPv4Str = app.PublicIPv4.String()
+	}
+	if app.PublicIPv6 != nil {
+		publicIPv6Str = app.PublicIPv6.String()
+	}
+
+	app.Logger.Debug("IP Addresses",
+		slog.String("Private IPv4", app.PrivateIPv4.String()),
+		slog.String("Private IPv6", app.PrivateIPv6.String()),
+		slog.String("Public IPv4", publicIPv4Str),
+		slog.String("Public IPv6", publicIPv6Str))
+
+	return nil
+}
+
+// Returns a singleton instance of the platform service registry
+func (app *App) ServiceRegistry() *service.Registry {
+
+	if app.serviceRegistry != nil {
+		return app.serviceRegistry
+	}
+
+	// Create DAO factory if not already created
+	if app.daoFactory == nil {
+		daoFactory, err := quicbaas.NewFactory(
+			app.QuicBaaSConfig,
+			app.Logger,
+			nil, // CA injected later
+		)
+		if err != nil {
+			app.Logger.FatalError(err)
+		}
+
+		// Start the QuicBaaS factory
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if err := daoFactory.Start(ctx); err != nil {
+			app.Logger.FatalError(err)
+		}
+		app.Logger.Info("Started QuicBaaS factory")
+
+		app.daoFactory = daoFactory
+	}
+
+	// Create device datastore from QuicBaaS factory
+	dbFactory, ok := app.daoFactory.(*quicbaas.Factory)
+	if !ok {
+		app.Logger.FatalError(fmt.Errorf("device service requires QuicBaaS factory, got %T", app.daoFactory))
+	}
+	deviceDatastore := device.NewDatastore(dbFactory.Client(), app.Logger)
+	deviceService, err := device.NewService(deviceDatastore)
+	if err != nil {
+		app.Logger.FatalError(err)
+	}
+	profileService, err := device.NewProfileService(deviceDatastore)
+	if err != nil {
+		app.Logger.FatalError(err)
+	}
+
+	var dnsService *dns.Service
+	if app.DNSConfig != nil && app.DNSConfig.HasServer() {
+		dnsService, err = app.newDNSService()
+		if err != nil {
+			app.Logger.FatalError(err)
+		}
+		// Assign to app field so it's accessible from serve.go for webservice DNS registration
+		app.DNSService = dnsService
+	}
+
+	registry, err := service.NewRegistry(app.Logger, deviceService, profileService, dnsService, app.daoFactory)
+	if err != nil {
+		app.Logger.FatalError(err)
+	}
+
+	app.serviceRegistry = registry
+
+	return registry
+}
+
+// KMS returns the QuicBaaS KMSService for key management operations.
+// The service uses go-xkms types directly (xkmssdk.KeyAttributes) for all operations.
+// Returns nil if the datastore backend is not QuicBaaS.
+func (app *App) KMS() quicbaasservice.KMSService {
+	if app.daoFactory == nil {
+		app.Logger.Debug("KMS: daoFactory is nil")
+		return nil
+	}
+
+	// Only QuicBaaS backend supports KMS
+	dbFactory, ok := app.daoFactory.(*quicbaas.Factory)
+	if !ok {
+		app.Logger.Debug("KMS: daoFactory is not *quicbaas.Factory")
+		return nil
+	}
+
+	// Get the QuicBaaS service and return KMS
+	client := dbFactory.Client()
+	if client == nil {
+		app.Logger.Debug("KMS: QuicBaaS client is nil")
+		return nil
+	}
+	if !client.IsStarted() {
+		app.Logger.Debug("KMS: QuicBaaS client not started")
+		return nil
+	}
+
+	dbSvc := client.Service()
+	if dbSvc == nil {
+		app.Logger.Debug("KMS: QuicBaaS service is nil")
+		return nil
+	}
+
+	kms := dbSvc.KMS()
+	if kms == nil {
+		app.Logger.Debug("KMS: QuicBaaS KMS service is nil - KMS may not be enabled in QuicBaaS config")
+	}
+	return kms
+}
+
+// QuicBaaSService returns the full QuicBaaS service for advanced integrations.
+// This provides access to all QuicBaaS capabilities including KV, Auth, IAM, and KMS.
+// Returns nil if the datastore backend is not QuicBaaS.
+func (app *App) QuicBaaSService() quicbaasservice.QuicBaaS {
+	if app.daoFactory == nil {
+		return nil
+	}
+
+	// Only QuicBaaS backend supports this
+	dbFactory, ok := app.daoFactory.(*quicbaas.Factory)
+	if !ok {
+		return nil
+	}
+
+	// Get the QuicBaaS client
+	client := dbFactory.Client()
+	if client == nil || !client.IsStarted() {
+		return nil
+	}
+
+	return client.Service()
+}
+
+// IAMProvider is an interface for obtaining the PolicyEngine from QuicBaaS.
+// This is satisfied by QuicBaaS when built with the iam tag.
+type IAMProvider interface {
+	GetPolicyEngine(ctx context.Context) (*quicbaassdk.IAMDomainPolicyEngine, error)
+}
+
+// DAOFactory returns the datastore factory.
+// This provides access to the underlying data access layer.
+func (app *App) DAOFactory() datastore.Factory {
+	return app.daoFactory
+}
+
+// QuicBaaSSDKClient returns the go-quicbaas SDK client for direct SDK access.
+// This provides access to all 28 QuicBaaS services via the unified SDK interface.
+// Returns nil if the DAO factory is not initialized or is not a QuicBaaS factory.
+func (app *App) QuicBaaSSDKClient() quicbaassdk.Client {
+	if app.daoFactory == nil {
+		return nil
+	}
+	dbFactory, ok := app.daoFactory.(*quicbaas.Factory)
+	if !ok {
+		return nil
+	}
+	return dbFactory.SDK()
+}
+
+// Close gracefully shuts down the application and releases all resources.
+// This should be called when the application is terminating.
+func (app *App) Close(ctx context.Context) error {
+	var errs []error
+
+	// Stop the DAO factory if it supports lifecycle management
+	if app.daoFactory != nil {
+		if lifecycleFactory, ok := app.daoFactory.(datastore.LifecycleFactory); ok {
+			if lifecycleFactory.IsStarted() {
+				app.Logger.Info("Stopping lifecycle factory (QuicBaaS)")
+				if err := lifecycleFactory.Stop(ctx); err != nil {
+					errs = append(errs, fmt.Errorf("failed to stop DAO factory: %w", err))
+				}
+			}
+		}
+	}
+
+	// KMS cleanup is handled by QuicBaaS lifecycle - no separate close needed
+
+	// Signal shutdown to any listeners
+	if app.ShutdownChan != nil {
+		select {
+		case app.ShutdownChan <- true:
+		default:
+		}
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+// Creates a new DNS service
+func (app *App) newDNSService() (*dns.Service, error) {
+
+	app.DNSConfig.Logger = app.Logger
+
+	// Only set IP values if not already configured via YAML
+	// This allows manual override for environments where auto-detection fails
+	if app.DNSConfig.PrivateIPv4 == "" {
+		app.DNSConfig.PrivateIPv4 = app.PrivateIPv4.String()
+	}
+	if app.DNSConfig.PrivateIPv6 == "" {
+		app.DNSConfig.PrivateIPv6 = app.PrivateIPv6.String()
+	}
+	if app.DNSConfig.PublicIPv4 == "" {
+		app.DNSConfig.PublicIPv4 = app.PublicIPv4.String()
+	}
+	if app.DNSConfig.PublicIPv6 == "" {
+		app.DNSConfig.PublicIPv6 = app.PublicIPv6.String()
+	}
+
+	// Get QuicBaaS factory for storage
+	dbFactory, ok := app.daoFactory.(*quicbaas.Factory)
+	if !ok {
+		return nil, fmt.Errorf("DNS requires QuicBaaS factory, got %T", app.daoFactory)
+	}
+
+	// Create DNSSEC key store using QuicBaaS KMS if DNSSEC is enabled
+	var dnssecKeyStore dns.DNSSECKeyStore
+	if app.DNSConfig.DNSSEC != nil && app.DNSConfig.DNSSEC.Enabled {
+		// Get the QuicBaaS SDK client for KMS operations
+		sdkClient := dbFactory.Client().SDK()
+		if sdkClient == nil {
+			return nil, fmt.Errorf("QuicBaaS SDK client not available for DNSSEC key store")
+		}
+		var err error
+		dnssecKeyStore, err = dns.NewQuicBaaSKMSKeyStore(sdkClient)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create QuicBaaS KMS key store for DNSSEC: %w", err)
+		}
+		app.Logger.Info("DNSSEC enabled with QuicBaaS KMS key store")
+	}
+
+	params := &dns.Params{
+		AppName:        Name,
+		AppVersion:     Version,
+		Config:         app.DNSConfig,
+		TenantID:       app.TenantID, // Pass platform tenant for zone authorization
+		PrivateIPv4:    app.PrivateIPv4,
+		PrivateIPv6:    app.PrivateIPv6,
+		PublicIPv4:     app.PublicIPv4,
+		PublicIPv6:     app.PublicIPv6,
+		Datastore:      dns.NewDatastore(dbFactory.Client(), app.Logger),
+		DNSSECKeyStore: dnssecKeyStore, // DNSSEC key management via QuicBaaS KMS
+	}
+
+	return dns.NewService(params)
+}
+
+// StartDNS starts the embedded CoreDNS server. CoreDNS is only launched
+// when the configuration includes a PublicServer or InternalServer.
+// A resolver-only configuration is passive and does not start a server.
+func (app *App) StartDNS() {
+	if app.DNSConfig == nil {
+		return
+	}
+	if !app.DNSConfig.HasServer() {
+		app.Logger.Debug("DNS config present but no server configured, skipping CoreDNS startup")
+		return
+	}
+	app.Logger.Debug("Starting DNS service")
+	// Only set IP values if not already configured via YAML
+	if app.DNSConfig.PrivateIPv4 == "" {
+		app.DNSConfig.PrivateIPv4 = app.PrivateIPv4.String()
+	}
+	if app.DNSConfig.PrivateIPv6 == "" {
+		app.DNSConfig.PrivateIPv6 = app.PrivateIPv6.String()
+	}
+	if app.DNSConfig.PublicIPv4 == "" {
+		app.DNSConfig.PublicIPv4 = app.PublicIPv4.String()
+	}
+	if app.DNSConfig.PublicIPv6 == "" {
+		app.DNSConfig.PublicIPv6 = app.PublicIPv6.String()
+	}
+	// Inject the shared QuicBaaS factory to avoid creating a duplicate
+	// (Pebble holds an exclusive lock on the database)
+	dbFactory, _ := app.daoFactory.(*quicbaas.Factory)
+	if dbFactory != nil {
+		dns.DatastoreFactory = dbFactory
+		app.Logger.Debug("QuicBaaS factory injected for DNS zone storage")
+	}
+
+	// CRITICAL: publish the DNSSEC keystore into the plugin-level
+	// global BEFORE dns.Run loads any zones. The CoreDNS plugin's
+	// signZoneIfEnabled reads from the dns.KeyStore package var,
+	// not from the Service struct built by newDNSService() which
+	// runs LATER in the startup sequence. Without this, the first
+	// zone load after Run starts fails with "DNSSEC enabled but
+	// no key store and no XKMS adapter are configured" and the
+	// DNS server never starts. Observed on lab-node-2 2026-04-08.
+	//
+	// We replicate the keystore construction from newDNSService
+	// here — extracting a helper is overkill for two call sites
+	// that use slightly different error propagation (one FatalErrors,
+	// this one logs and continues).
+	if app.DNSConfig.DNSSEC != nil && app.DNSConfig.DNSSEC.Enabled && dns.KeyStore == nil {
+		if dbFactory == nil {
+			app.Logger.Error(nil, "DNSSEC enabled but QuicBaaS factory unavailable; CoreDNS will fail to load zones")
+		} else if sdkClient := dbFactory.Client().SDK(); sdkClient == nil {
+			app.Logger.Error(nil, "DNSSEC enabled but QuicBaaS SDK client unavailable; CoreDNS will fail to load zones")
+		} else if ks, err := dns.NewQuicBaaSKMSKeyStore(sdkClient); err != nil {
+			app.Logger.Errorf("failed to create QuicBaaS DNSSEC key store: %v", err)
+		} else if setErr := dns.SetDNSSECKeyStore(ks); setErr != nil {
+			app.Logger.Errorf("failed to publish DNSSEC key store to plugin global: %v", setErr)
+		} else {
+			app.Logger.Info("DNSSEC key store published to plugin global (pre-CoreDNS)")
+		}
+	}
+
+	// Ensure zones carry the global tenant identifier. DNSSEC signing
+	// requires a non-empty TenantID on every zone; config-loaded zones
+	// do not set this, so we stamp app.TenantID (defaulted to "default"
+	// via viper.SetDefault in pkg/daemon/commands/root.go) onto any
+	// zone missing one.
+	if app.DNSConfig.PublicServer != nil && app.DNSConfig.PublicServer.Zone.TenantID == "" {
+		app.DNSConfig.PublicServer.Zone.TenantID = app.TenantID
+	}
+	if app.DNSConfig.InternalServer != nil && app.DNSConfig.InternalServer.Zone.TenantID == "" {
+		app.DNSConfig.InternalServer.Zone.TenantID = app.TenantID
+	}
+
+	dns.Run(Name, Version, app.Logger, app.DNSConfig)
+}
+
+// Returns the platform publicly routable Fully Qualified Domain Name
+func (app *App) FQDN() string {
+	return fmt.Sprintf("%s.%s", app.Hostname, app.Domain)
+}
+
+// GetInstallerConfig extracts an installer.Config from the App fields.
+// This allows code to use the unified App config while still working with
+// installer.Config for backwards compatibility.
+func (app *App) GetInstallerConfig() *installer.Config {
+	return &installer.Config{
+		Disk:                  app.DiskConfig,
+		OS:                    app.OSConfig,
+		Network:               app.NetworkConfig,
+		UKI:                   app.UKIConfig,
+		SecureBoot:            app.SecureBootConfig,
+		EnableTPMSealing:      app.EnableTPMSealing,
+		PCRs:                  app.SealPCRs,
+		EnableFIDO2Enrollment: app.EnableFIDO2Enrollment,
+		FIDO2:                 app.FIDO2Config,
+		Debug:                 app.DebugFlag,
+		Environment:           string(app.Environment),
+	}
+}
+
+// SetInstallerConfig populates App fields from an installer.Config.
+// This is useful when loading a legacy installer config file.
+func (app *App) SetInstallerConfig(cfg *installer.Config) {
+	if cfg == nil {
+		return
+	}
+	app.DiskConfig = cfg.Disk
+	app.OSConfig = cfg.OS
+	app.NetworkConfig = cfg.Network
+	app.UKIConfig = cfg.UKI
+	app.SecureBootConfig = cfg.SecureBoot
+	app.EnableTPMSealing = cfg.EnableTPMSealing
+	app.SealPCRs = cfg.PCRs
+	app.EnableFIDO2Enrollment = cfg.EnableFIDO2Enrollment
+	app.FIDO2Config = cfg.FIDO2
+	if cfg.Debug {
+		app.DebugFlag = cfg.Debug
+	}
+	if cfg.Environment != "" {
+		app.Environment = ParseEnvironment(cfg.Environment)
+	}
+}
+
+// WebService returns a webservice config by name, or nil if not found
+func (app *App) WebService(name string) *v1.Config {
+	for _, ws := range app.WebServices {
+		if ws.Name == name {
+			return ws
+		}
+	}
+	return nil
+}
+
+// PrimaryWebService returns the primary webservice config.
+// It first checks WebServiceConfig (singular, from yaml "webservice:"),
+// then falls back to WebServices[0] (plural, from yaml "webservices:"),
+// or returns nil if none configured.
+func (app *App) PrimaryWebService() *v1.Config {
+	if app.WebServiceConfig != nil {
+		return app.WebServiceConfig
+	}
+	if len(app.WebServices) > 0 {
+		return app.WebServices[0]
+	}
+	return nil
+}
+
+// Initializes the Viper configuration library and unmarshals it
+// into this App struct.
+func (app *App) initConfig(env string) error {
+	// Check if a specific config file was already set via --config flag
+	// If so, use that directly instead of searching for config.yaml
+	configFile := viper.ConfigFileUsed()
+	if configFile != "" {
+		// Config file was explicitly specified - read it directly
+		if err := viper.ReadInConfig(); err != nil {
+			return err
+		}
+	} else {
+		// No explicit config file - search for config.yaml in standard paths
+		viper.SetConfigName("config")
+		viper.SetConfigType("yaml")
+		viper.AddConfigPath(fmt.Sprintf("etc/config/%s", Name))
+		viper.AddConfigPath(fmt.Sprintf("%s/etc", app.PlatformDir))
+		viper.AddConfigPath(fmt.Sprintf("$HOME/.%s/", Name))
+		viper.AddConfigPath(app.ConfigDir)
+		viper.AddConfigPath(".")
+
+		if err := viper.ReadInConfig(); err != nil {
+			_, ok := err.(viper.ConfigFileNotFoundError)
+			if ok {
+				// Try to load a config based on the environment flag
+				envConfig := fmt.Sprintf("config.%s", env)
+				viper.SetConfigName(envConfig)
+				if err := viper.ReadInConfig(); err != nil {
+					return err
+				}
+			} else {
+				return err
+			}
+		}
+	}
+
+	// Unmarshal with TextUnmarshaler support for custom types
+	// (e.g., quicbaas.ConsistencyLevel, Environment)
+	if err := viper.Unmarshal(app, viper.DecodeHook(
+		mapstructure.ComposeDecodeHookFunc(
+			mapstructure.TextUnmarshallerHookFunc(),
+			mapstructure.StringToTimeDurationHookFunc(),
+			mapstructure.StringToSliceHookFunc(","),
+		),
+	)); err != nil {
+		return err
+	}
+
+	// Manually parse the environment from viper since the custom type
+	// doesn't get decoded properly by mapstructure
+	if envStr := viper.GetString("environment"); envStr != "" {
+		app.Environment = ParseEnvironment(envStr)
+	}
+
+	// Populate WebServices from WebServiceConfig if WebServices is empty
+	// This supports both "webservice:" (singular) and "webservices:" (plural) config formats
+	if len(app.WebServices) == 0 && app.WebServiceConfig != nil {
+		app.WebServices = []*v1.Config{app.WebServiceConfig}
+	}
+
+	return nil
+}
+
+// Creates a new file and STDOUT logger. If the global DebugFlag is set,
+// the logger is initialized in debug mode, executing all logger.Debug*
+// statements.
+func (app *App) initLogger() {
+	if err := os.MkdirAll(app.LogDir, os.ModePerm); err != nil {
+		panic(err)
+	}
+	logfile := fmt.Sprintf("%s/%s.log", app.LogDir, Name)
+	file, err := os.Create(logfile)
+	if err != nil {
+		panic(err)
+	}
+	format := logging.ParseFormat(app.LogFormat)
+	if app.DebugFlag {
+		app.Logger = logging.NewLoggerWithFormat(slog.LevelDebug, format, file)
+	} else {
+		app.Logger = logging.NewLoggerWithFormat(slog.LevelError, format, file)
+	}
+	app.Logger.Info("platform configuration",
+		slog.String("file", viper.ConfigFileUsed()),
+		slog.String("config-dir", app.ConfigDir),
+		slog.String("log-dir", app.LogDir))
+}
+
+// Initialize object and certificate stores
+func (app *App) initStores() error {
+	// Pre-initialize XKMS with filesystem storage before QuicBaaS starts.
+	// QuicBaaS's embedded server startKMS() initializes go-xkms with
+	// in-memory storage. Since xkmssdk.ServiceInitialize() uses sync.Once, whoever
+	// calls it first wins. By initializing here with filesystem storage,
+	// QuicBaaS's second Initialize() call becomes a no-op, and all KMS
+	// operations use persistent filesystem storage that survives reboots.
+	if app.CAConfig != nil && len(app.CAConfig.Identity) > 0 {
+		selectedCA := app.CAConfig.SelectedCA
+		if selectedCA == 0 && len(app.CAConfig.Identity) > 1 {
+			selectedCA = 1
+		}
+		issuingIdentity := app.CAConfig.Identity[selectedCA]
+		caRoot := fmt.Sprintf("%s/ca/%s", app.PlatformDir, issuingIdentity.Subject.CommonName)
+
+		if app.Environment != EnvTest {
+			keyStorageBackend, storageErr := xkmssdk.NewFileStorageBackend(caRoot)
+			if storageErr != nil {
+				return fmt.Errorf("failed to create key storage for xkms pre-init: %w", storageErr)
+			}
+			certStorageBackend, storageErr := xkmssdk.NewFileStorageBackend(caRoot)
+			if storageErr != nil {
+				return fmt.Errorf("failed to create cert storage for xkms pre-init: %w", storageErr)
+			}
+
+			softwareBackend, backendErr := xkmssdk.NewSoftwareBackend(&xkmssdk.SoftwareBackendConfig{
+				KeyStorage: keyStorageBackend,
+			})
+			if backendErr != nil {
+				return fmt.Errorf("failed to create software backend for xkms pre-init: %w", backendErr)
+			}
+
+			softwareKS, ksErr := xkmssdk.NewServiceBackend(&xkmssdk.ServiceBackendConfig{
+				Backend:     softwareBackend,
+				CertStorage: certStorageBackend,
+			})
+			if ksErr != nil {
+				return fmt.Errorf("failed to create xkms keystore for pre-init: %w", ksErr)
+			}
+
+			if initErr := xkmssdk.ServiceInitialize(&xkmssdk.ServiceConfig{
+				Backends:       map[string]xkmssdk.ServiceBackend{"software": softwareKS},
+				DefaultBackend: "software",
+			}); initErr != nil {
+				return fmt.Errorf("failed to pre-initialize xkms: %w", initErr)
+			}
+
+			app.Logger.Info("Pre-initialized xkms with filesystem storage",
+				slog.String("caRoot", caRoot))
+		}
+	}
+
+	// Initialize QuicBaaS factory early so DNS can share it
+	// (DNS starts in a goroutine and needs the factory before ProvisionPlatform runs)
+	if app.daoFactory == nil && app.QuicBaaSConfig != nil {
+		// Parse transport configuration from YAML string value
+		// This converts the transport string (e.g., "embedded", "grpc", "unix") to the Transport enum
+		if err := app.QuicBaaSConfig.ParseTransportFromConfig(); err != nil {
+			return fmt.Errorf("failed to parse QuicBaaS transport config: %w", err)
+		}
+
+		app.Logger.Info("Initializing QuicBaaS",
+			slog.String("transport", app.QuicBaaSConfig.Transport.String()),
+			slog.String("address", app.QuicBaaSConfig.Address),
+			slog.String("unix_socket", app.QuicBaaSConfig.UnixSocket),
+			slog.String("data_dir", app.QuicBaaSConfig.DataDir))
+
+		daoFactory, err := quicbaas.NewFactory(
+			app.QuicBaaSConfig,
+			app.Logger,
+			nil, // CA injected later
+		)
+		if err != nil {
+			return fmt.Errorf("failed to create QuicBaaS factory: %w", err)
+		}
+
+		// Start the QuicBaaS factory
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if err := daoFactory.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start QuicBaaS factory: %w", err)
+		}
+		app.Logger.Info("Started QuicBaaS factory",
+			slog.String("transport", app.QuicBaaSConfig.Transport.String()))
+
+		app.daoFactory = daoFactory
+
+		// Get ObjectStorage client from the started QuicBaaS factory
+		if app.Storage == nil {
+			dbFactory, ok := app.daoFactory.(*quicbaas.Factory)
+			if !ok {
+				return fmt.Errorf("expected *quicbaas.Factory, got %T", app.daoFactory)
+			}
+			sdkClient := dbFactory.SDKClient()
+			if sdkClient == nil {
+				return fmt.Errorf("QuicBaaS SDK client not available for ObjectStorage")
+			}
+			app.Storage = sdkClient.ObjectStorage()
+			if app.Storage == nil {
+				return fmt.Errorf("QuicBaaS ObjectStorage client not available")
+			}
+		}
+	}
+
+	// Create object store and certificate store using QuicBaaS ObjectStorage
+	objectStore, err := object.NewObjectStore(app.Logger, app.Storage, app.PlatformDir, nil)
+	if err != nil {
+		return err
+	}
+	app.ObjectStore = objectStore
+	cs, err := app.NewCertificateStore(objectStore)
+	if err != nil {
+		return err
+	}
+	app.PlatformCertStore = cs
+
+	return nil
+}
+
+// Parses the Security Officer and User PINs and returns a key store
+// password object for each. If the provided PINs are set to the default
+// password, a new AES-256 32 byte key is generated as a password.
+func (app *App) ParsePINs(soPIN, userPIN []byte) (xkmssdk.Password, xkmssdk.Password, error) {
+
+	// Check config for PIN values (may be autogen:// URIs already resolved
+	// by the secrets engine before platform initialization)
+	if soPIN == nil && app.PlatformConfig != nil && app.PlatformConfig.SOPin != "" {
+		soPIN = []byte(app.PlatformConfig.SOPin)
+	}
+	if userPIN == nil && app.PlatformConfig != nil && app.PlatformConfig.UserPin != "" {
+		userPIN = []byte(app.PlatformConfig.UserPin)
+	}
+
+	// When config has debug: true, skip prompts (config is loaded via viper.Unmarshal
+	// which overwrites app.DebugFlag with the config file value)
+	if !app.DebugFlag {
+		if soPIN == nil {
+			soPIN = prompt.SOPin()
+		}
+		if userPIN == nil {
+			userPIN = prompt.Pin()
+		}
+	}
+
+	// Generate random SO pin if its set to the default password
+	if bytes.Equal(soPIN, []byte(xkmssdk.DEFAULT_PASSWORD)) {
+		soPIN = aesgcm.NewAESGCM(rand.Reader).GenerateKey()
+
+		if app.DebugSecretsFlag {
+			app.Logger.Debug(
+				"generated new Security Officer PIN", slog.String("sopin", string(soPIN)))
+		}
+	}
+
+	// Generate random SO pin if its set to the default password
+	if bytes.Equal(userPIN, []byte(xkmssdk.DEFAULT_PASSWORD)) {
+		userPIN = aesgcm.NewAESGCM(rand.Reader).GenerateKey()
+
+		if app.DebugSecretsFlag {
+			app.Logger.Debug(
+				"generated new User PIN", slog.String("pin", string(userPIN)))
+		}
+	}
+	sopin := xkmssdk.NewPassword(soPIN)
+	userpin := xkmssdk.NewPassword(userPIN)
+	return sopin, userpin, nil
+}
+
+// Initializes the Trusted Platform Module and provisions the platform. If
+// a Security Officer or User PIN is set to the default, new random 32
+// byte cryptographic PIN will be generated. The random input source for
+// entropy is the Golang runtime rand.Reader. Possibly in the future this
+// will support a HSM TRNG.
+func (app *App) InitTPM(soPIN, userPIN xkmssdk.Password, initParams *AppInitParams) error {
+	err := app.OpenTPM(initParams.Initialize)
+	if err != nil {
+		if err == xkmssdk.ErrTPMNotInitialized {
+			// TPM not provisioned — if --init is set, factory reset any stale
+			// platform handles (preserving EKs) before provisioning fresh.
+			if initParams.Initialize && app.TPM != nil {
+				app.Logger.Info("TPM not fully provisioned, checking for stale platform handles...")
+				if resetErr := app.TPM.FactoryReset(soPIN.Bytes()); resetErr != nil {
+					app.Logger.Warnf("Factory reset failed (may be clean TPM): %v", resetErr)
+				} else {
+					app.Logger.Info("Factory reset complete - stale platform handles cleared, EKs preserved")
+				}
+			}
+			if _, err := app.ProvisionPlatform(soPIN, userPIN, initParams); err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+	}
+
+	// CRITICAL: Extend PCR 23 with golden measurements on EVERY boot.
+	// PCR values reset to 0 on power cycle. The PlatformSRK policy
+	// references PCR 23, so it MUST be extended before any seal/unseal.
+	// This runs regardless of whether we just provisioned or opened existing state.
+	if app.TPM != nil {
+
+		// === PCR DEBUG: Log PCR values before CreatePlatformPolicy ===
+		debugPCRs := []uint{7, 9, 23}
+		if banks, pcrErr := app.TPM.ReadPCRs(debugPCRs); pcrErr != nil {
+			app.Logger.Warn("InitTPM: failed to read debug PCRs before CreatePlatformPolicy",
+				slog.String("error", pcrErr.Error()))
+		} else {
+			for _, bank := range banks {
+				for _, pcr := range bank.PCRs {
+					app.Logger.Info("InitTPM: PCR value BEFORE CreatePlatformPolicy",
+						slog.String("algorithm", bank.Algorithm),
+						slog.Int("pcr", int(pcr.ID)),
+						slog.String("value", fmt.Sprintf("%x", pcr.Value)))
+				}
+			}
+		}
+		// Log configured golden PCRs and platform PCR settings
+		app.Logger.Info("InitTPM: platform PCR configuration",
+			slog.String("golden_pcrs", fmt.Sprintf("%v", app.TPMConfig.GoldenPCRs)),
+			slog.Uint64("platform_pcr", uint64(app.TPMConfig.PlatformPCR)),
+			slog.String("platform_pcr_bank", app.TPMConfig.PlatformPCRBank))
+
+		// Log SRK auth policy from the persistent handle
+		if app.TPMConfig.PlatformSRK != nil {
+			srkHandle := app.TPMConfig.PlatformSRK.SRKHandle
+			_, pub, readErr := app.TPM.ReadHandle(libtpm2.TPMHandle(srkHandle))
+			if readErr != nil {
+				app.Logger.Warn("InitTPM: failed to read SRK public area",
+					slog.String("handle", fmt.Sprintf("0x%08X", srkHandle)),
+					slog.String("error", readErr.Error()))
+			} else {
+				app.Logger.Info("InitTPM: SRK auth policy from TPM",
+					slog.String("handle", fmt.Sprintf("0x%08X", srkHandle)),
+					slog.String("auth_policy", fmt.Sprintf("%x", pub.AuthPolicy.Buffer)),
+					slog.Int("auth_policy_len", len(pub.AuthPolicy.Buffer)))
+			}
+		}
+		// === END PCR DEBUG ===
+
+		extended, pcrErr := app.TPM.IsPlatformPCRExtended()
+		if pcrErr != nil {
+			app.Logger.Warnf("Failed to check platform PCR state: %v", pcrErr)
+		} else if !extended {
+			app.Logger.Info("Platform PCR not extended, restoring golden measurements...")
+			if pcrErr := app.TPM.CreatePlatformPolicy(); pcrErr != nil {
+				return fmt.Errorf("failed to restore platform policy: %w", pcrErr)
+			}
+			app.Logger.Info("Platform PCR 23 extended with golden measurements")
+
+			// === PCR DEBUG: Log PCR values AFTER CreatePlatformPolicy ===
+			if banks, dbgErr := app.TPM.ReadPCRs(debugPCRs); dbgErr != nil {
+				app.Logger.Warn("InitTPM: failed to read debug PCRs after CreatePlatformPolicy",
+					slog.String("error", dbgErr.Error()))
+			} else {
+				for _, bank := range banks {
+					for _, pcr := range bank.PCRs {
+						app.Logger.Info("InitTPM: PCR value AFTER CreatePlatformPolicy",
+							slog.String("algorithm", bank.Algorithm),
+							slog.Int("pcr", int(pcr.ID)),
+							slog.String("value", fmt.Sprintf("%x", pcr.Value)))
+					}
+				}
+			}
+			// Log the policy digest that was just computed
+			policyDigest, pdErr := app.TPM.PlatformPolicyDigest()
+			if pdErr != nil {
+				app.Logger.Warn("InitTPM: failed to get platform policy digest after extension",
+					slog.String("error", pdErr.Error()))
+			} else {
+				app.Logger.Info("InitTPM: platform policy digest AFTER CreatePlatformPolicy",
+					slog.String("digest", fmt.Sprintf("%x", policyDigest.Buffer)))
+			}
+			pcrDigestHash, pdErr := app.TPM.PlatformPolicyDigestHash()
+			if pdErr != nil {
+				app.Logger.Warn("InitTPM: failed to get PCR digest hash after extension",
+					slog.String("error", pdErr.Error()))
+			} else {
+				app.Logger.Info("InitTPM: PCR digest hash AFTER CreatePlatformPolicy",
+					slog.Uint64("pcr", uint64(app.TPMConfig.PlatformPCR)),
+					slog.String("hash", fmt.Sprintf("%x", pcrDigestHash)))
+			}
+			// === END PCR DEBUG ===
+
+		} else {
+			app.Logger.Debug("Platform PCR already extended")
+		}
+	}
+
+	return nil
+}
+
+// Opens a connection to the TPM, using an unauthenticated, unverified
+// and un-attested connection. A TPM software simulator is used if enabled
+// in the TPM section of the platform configuration file.
+func (app *App) OpenTPM(initialize bool) error {
+	path := fmt.Sprintf("%s/platform/keystore", app.PlatformDir)
+	backend, err := newKeyBackend(app.Logger, path)
+	if err != nil {
+		return err
+	}
+	if app.TPM == nil {
+		var tpmCertStore xkmssdk.TPMCertificateStorer
+		tpmPartition := "objects/tpm2"
+		tpmObjectStore, err := object.NewObjectStore(app.Logger, app.Storage, app.PlatformDir, &tpmPartition)
+		if err != nil {
+			return err
+		}
+		// Wrap the object store for go-xkms compatibility
+		tpmObjectStoreAdapter := object.NewXKMSObjectAdapter(tpmObjectStore)
+		// Always create the certificate store - it's used as a fallback when NVRAM fails
+		// (e.g., swtpm with certs > 1024 bytes) even if CertHandle > 0
+		// Use NewCertificateStoreWithStorage to get direct storage access for custom key operations
+		cs, storage, err := localcertstore.NewCertificateStoreWithStorage(app.Logger, tpmObjectStore)
+		if err != nil {
+			return err
+		}
+		// Wrap for TPM xkmssdk.TPMCertificateStorer interface with storage access
+		tpmCertStore = localcertstore.NewTPM2CertStoreAdapterWithStorage(app.Logger, cs, storage)
+		// Store reference for fallback access when NVRAM provisioning fails
+		app.TPMCertStore = tpmCertStore
+		// Ensure IAK and IDevID CNs are set to hostname if not explicitly configured
+		// This provides meaningful attestation directory and certificate names
+		if app.TPMConfig.IAK != nil && app.TPMConfig.IAK.CN == "" {
+			app.TPMConfig.IAK.CN = fmt.Sprintf("%s-iak", app.Hostname)
+			app.Logger.Info("Set IAK CN from hostname", "cn", app.TPMConfig.IAK.CN)
+		}
+		if app.TPMConfig.IDevID != nil && app.TPMConfig.IDevID.CN == "" {
+			app.TPMConfig.IDevID.CN = fmt.Sprintf("%s-idevid", app.Hostname)
+			app.Logger.Info("Set IDevID CN from hostname", "cn", app.TPMConfig.IDevID.CN)
+		}
+
+		// Create go-xkms logger (using slog directly)
+		xkmsLogger := app.Logger.Slog()
+		params := &xkmssdk.TPMParams{
+			Backend:      backend,
+			BlobStore:    tpmObjectStoreAdapter,
+			CertStore:    tpmCertStore,
+			Config:       &app.TPMConfig,
+			DebugSecrets: app.DebugSecretsFlag,
+			FQDN:         app.FQDN(),
+			Logger:       xkmsLogger,
+		}
+		var tpm xkmssdk.TrustedPlatformModule
+		tpm, err = xkmssdk.NewTPM2(params)
+		// set required globals before checking / returning errors
+		app.TPM = tpm
+		if app.TPMConfig.UseEntropy {
+			app.Random = app.TPM
+		} else {
+			app.Random = rand.Reader
+		}
+		// now check and return errors if encountered
+		if err != nil {
+			return err
+		}
+	}
+
+	// Check if EK is provisioned. The TPM object is created above so
+	// callers (InitTPM → ProvisionPlatform) can use app.TPM even when
+	// this returns ErrTPMNotInitialized.
+	if app.TPMConfig.EK == nil {
+		return xkmssdk.ErrTPMNotInitialized
+	}
+
+	// Post-provisioning checks — only run when EK exists (TPM is fully provisioned).
+	// Re-extend the platform PCR with golden measurements if not already extended.
+	// This is required on every boot to restore PCR values for TPM-sealed secrets.
+	// PCR values are volatile and reset to 0 on every power cycle.
+	// NOTE: This must run regardless of EK state — PCR extension doesn't
+	// depend on the EK and is needed for PlatformSRK policy verification.
+	extended, err := app.TPM.IsPlatformPCRExtended()
+	if err != nil {
+		app.Logger.Warnf("Failed to check platform PCR state: %v", err)
+	} else if !extended {
+		app.Logger.Info("Platform PCR not extended, restoring golden measurements...")
+		if err := app.TPM.CreatePlatformPolicy(); err != nil {
+			return fmt.Errorf("failed to restore platform policy: %w", err)
+		}
+		app.Logger.Info("Platform PCR extended with golden measurements")
+	} else {
+		app.Logger.Debug("Platform PCR already extended")
+	}
+
+	// Check if EK is already provisioned in the TPM.
+	// If initialize=true but EK exists (e.g., swtpm state carried over),
+	// log a warning and continue without re-initialization.
+	if ekAttrs, err := app.TPM.EKAttributes(); err == nil && ekAttrs != nil {
+		if initialize {
+			app.Logger.Warn("Initialize flag set but EK already exists in TPM. " +
+				"Skipping re-initialization (swtpm state may have been carried over).")
+			app.Logger.Debugf("Existing EK: %s", ekAttrs.CN)
+		}
+	}
+
+	return nil
+}
+
+// Returns the Platform key store. This is a TPM 2.0 key store used as
+// a generic key and password store by the platform. The key store will
+// be created and initialized if it doesn't already exist.
+//
+// The Platform KeyStore has its own dedicated SRK at handle 0x81000002
+// (configured via TPMConfig.PlatformSRK.SRKHandle). This is different from
+// the SSRK at 0x81000001.
+//
+// If the Platform KeyStore SRK doesn't exist, Initialize() is called
+// to create it with the provided PINs.
+func (app *App) InitPlatformKeyStore(soPIN, userPIN xkmssdk.Password) error {
+	app.Logger.Info("Initializing platform (TPM 2.0) key store")
+	if app.PlatformKS == nil {
+		path := fmt.Sprintf("%s/platform/keystore", app.PlatformDir)
+		backend, err := newKeyBackend(app.Logger, path)
+		if err != nil {
+			return err
+		}
+
+		// Set default CN if not configured
+		if app.TPMConfig.PlatformSRK.CN == "" {
+			app.TPMConfig.PlatformSRK.CN = "platform"
+		}
+
+		// Create the Platform KeyStore - this checks if SRK exists at configured handle
+		ks, err := platform.NewPlatformKeyStore(
+			app.TPM,
+			backend,
+			app.TPMConfig.PlatformSRK,
+		)
+		if err != nil {
+			// Check if it's an initialization error - if so, initialize the Platform KeyStore SRK
+			if errors.Is(err, platform.ErrXKMSNotInitialized) {
+				app.Logger.Info("Platform KeyStore SRK not found, initializing...",
+					"handle", fmt.Sprintf("0x%08x", app.TPMConfig.PlatformSRK.SRKHandle),
+					"platform_policy", app.TPMConfig.PlatformSRK.PlatformPolicy)
+
+				// Decide between Initialize(soPIN, userPIN) and
+				// InitializeWithDefaults() based on whether the TPM owner
+				// hierarchy actually has auth set. The platform keystore
+				// SRK is created in the OWNER hierarchy; passing a non-nil
+				// hierarchy-auth when the TPM has empty owner auth fails
+				// with TPM_RC_BAD_AUTH.
+				//
+				// Signal: TPMConfig.SSRK.HierarchyAuth. The SSRK and
+				// PlatformSRK share the same (OWNER) hierarchy, so if the
+				// operator configured an empty owner auth for SSRK, it
+				// must also be empty for PlatformSRK. Previously the code
+				// unconditionally used Initialize() with a randomly
+				// autogenerated soPIN as hierarchy auth, which failed on
+				// every fresh TPM because firstboot intentionally leaves
+				// owner auth empty per
+				// docs/installer/factory-reset.md. Diagnosed 2026-04-08
+				// on lab-node-2: hierarchy_auth_hex showed the 8-digit
+				// autogen numeric soPIN instead of the expected empty.
+				useDefaults := app.TPMConfig.SSRK == nil || app.TPMConfig.SSRK.HierarchyAuth == ""
+				if useDefaults {
+					app.Logger.Info("Platform KeyStore: TPM owner hierarchy is unauthenticated (SSRK.HierarchyAuth empty), initializing with defaults")
+					if err := ks.InitializeWithDefaults(); err != nil {
+						return fmt.Errorf("failed to initialize Platform KeyStore SRK (defaults): %w", err)
+					}
+				} else {
+					app.Logger.Info("Platform KeyStore: TPM owner hierarchy is authenticated, initializing with soPIN/userPIN")
+					if err := ks.Initialize(string(soPIN.Bytes()), string(userPIN.Bytes())); err != nil {
+						return fmt.Errorf("failed to initialize Platform KeyStore SRK: %w", err)
+					}
+				}
+				app.Logger.Info("Platform KeyStore SRK created successfully")
+			} else {
+				return fmt.Errorf("failed to create Platform KeyStore: %w", err)
+			}
+		}
+
+		app.PlatformKS = ks
+	}
+	return nil
+}
+
+// Initializes a new ACME client using the account email provided in the
+// platform configuration.
+func (app *App) InitACMEClient(initialize bool) error {
+	if app.ACMEConfig == nil || app.ACMEConfig.Client == nil {
+		return nil
+	}
+
+	// Get account signer from CA
+	if app.CA == nil {
+		return errors.New("CA not configured")
+	}
+	signer, err := app.CA.Signer()
+	if err != nil {
+		return fmt.Errorf("failed to get account signer: %w", err)
+	}
+
+	// Create ACME storage factory using QuicBaaS ObjectStorage
+	storageFactory, err := acmequicbaas.NewFactory(app.Storage)
+	if err != nil {
+		return fmt.Errorf("failed to create storage factory: %w", err)
+	}
+
+	// Create account and certificate storage DAOs
+	accountDAO, err := storageFactory.AccountDAO()
+	if err != nil {
+		return fmt.Errorf("failed to create account DAO: %w", err)
+	}
+	certDAO, err := storageFactory.CertificateDAO()
+	if err != nil {
+		return fmt.Errorf("failed to create certificate DAO: %w", err)
+	}
+
+	// Get account email
+	var accountEmail string
+	if app.ACMEConfig.Client.Account != nil {
+		accountEmail = app.ACMEConfig.Client.Account.Email
+	}
+
+	// Build ACME client config with trusted roots
+	trustedRoots := app.ACMEConfig.Client.TrustedRoots
+	if trustedRoots == nil {
+		trustedRoots = []string{}
+	}
+
+	// Load CA bundle from well-known file paths as fallback
+	// This provides reliable trust bootstrapping when:
+	// 1. The OS trust store isn't properly updated
+	// 2. request-server-bundle fails due to network issues
+	// 3. The CA bundle was embedded in the ISO during installation
+	caBundlePaths := []string{
+		"/usr/local/share/ca-certificates/trusted-platform-ca.crt", // Alpine installer target
+		filepath.Join(app.ConfigDir, "ca-bundle.pem"),              // Config directory
+		filepath.Join(app.PlatformDir, "ca-bundle.pem"),            // Platform directory
+		"/media/cdrom/configs/ca-bundle.pem",                       // ISO mount point
+	}
+	for _, bundlePath := range caBundlePaths {
+		if bundleData, err := os.ReadFile(bundlePath); err == nil {
+			app.Logger.Info("Loaded CA bundle from file", "path", bundlePath)
+			trustedRoots = append(trustedRoots, string(bundleData))
+			break // Use the first one found
+		}
+	}
+
+	clientConfig := &casdk.ACMEClientConfig{
+		DirectoryURL:        app.ACMEConfig.Client.DirectoryURL,
+		SystemCertPool:      app.ACMEConfig.Client.SystemCertPool,
+		RequestServerBundle: app.ACMEConfig.Client.RequestServerBundle,
+		TrustedRoots:        trustedRoots,
+	}
+
+	app.Logger.Info("ACME client config",
+		"directoryURL", clientConfig.DirectoryURL,
+		"systemCertPool", clientConfig.SystemCertPool,
+		"requestServerBundle", clientConfig.RequestServerBundle,
+		"trustedRootsCount", len(clientConfig.TrustedRoots))
+
+	// Get DNS resolver for ACME operations.
+	// Priority: 1) ACME client dns-server, 2) dns.resolver, 3) DNS service, 4) System resolver
+	dnsResolver := app.DNSResolverForService(app.ACMEConfig.Client.DNSServer)
+	if dnsResolver != nil {
+		server := app.PrimaryDNSServer(app.ACMEConfig.Client.DNSServer)
+		app.Logger.Info("ACME using DNS resolver", "server", server)
+	} else if serviceRegistry := app.ServiceRegistry(); serviceRegistry != nil {
+		// Fall back to the running DNS service resolver
+		if dnsService := serviceRegistry.DNSService(); dnsService != nil {
+			app.Logger.Debug("ACME using platform DNS service resolver")
+			dnsResolver = dnsService.Resolver()
+		}
+	}
+
+	if dnsResolver == nil {
+		app.Logger.Warn("ACME client will use system DNS resolver - internal domains may not resolve!")
+	}
+
+	// Create the ACME client directly using go-trusted-ca
+	client, err := casdk.NewACMEClient(&casdk.ACMEClientParams{
+		AccountEmail:       accountEmail,
+		AccountSigner:      signer,
+		Config:             clientConfig,
+		Logger:             app.Logger.Slog(),
+		Storage:            accountDAO,
+		CertificateStorage: certDAO,
+		OrderStorage:       nil, // Created later with valid account ID
+	})
+	if err != nil {
+		return err
+	}
+	app.ACMEClient = client
+
+	// Only register account if both initialize=true AND config.register=true
+	// The server uses its own ACME client to obtain TLS certificates from its own CA (self-referential)
+	// Registration requires the webservice to be running to serve the ACME endpoints
+	if initialize && app.ACMEConfig.Client.Account != nil && app.ACMEConfig.Client.Account.Register {
+		if _, err := app.ACMEClient.RegisterAccount(); err != nil {
+			return err
+		}
+	}
+
+	// Handle cross-signer if configured
+	primaryWS := app.PrimaryWebService()
+	if primaryWS != nil && primaryWS.Certificate.ACME != nil &&
+		primaryWS.Certificate.ACME.CrossSigner != nil &&
+		app.ACMEConfig != nil && app.ACMEConfig.Client != nil &&
+		app.ACMEConfig.Client.Account != nil &&
+		app.ACMEConfig.Client.Account.Register {
+
+		xsigner, err := casdk.ACMECrossSignerFromClient(
+			app.ACMEClient, primaryWS.Certificate.ACME.CrossSigner)
+		if err != nil {
+			return err
+		}
+		if initialize {
+			if _, err = xsigner.RegisterAccount(); err != nil {
+				app.Logger.Warn(err.Error())
+			}
+		}
+	}
+	return nil
+}
+
+// Initializes a new ACME cross-signer client using the account email
+// provided in the platform configuration.
+func (app *App) NewACMECrossSigner(crossSigner *casdk.ACMECrossSignConfig, initialize bool) (*casdk.ACMEClient, error) {
+	if app.ACMEConfig == nil {
+		return nil, nil
+	}
+	if app.ACMEClient == nil {
+		return nil, casdk.ACMEErrInvalidConfiguration
+	}
+	client, err := casdk.ACMECrossSignerFromClient(app.ACMEClient, crossSigner)
+	if err != nil {
+		return nil, err
+	}
+	if initialize {
+		if _, err := client.RegisterAccount(); err != nil {
+			return nil, err
+		}
+	}
+	return client, nil
+}
+
+// Provisions the TPM per the platform configuration file and
+// TCG provisioning guidance. This operation assumes a new
+// TPM whose hierarchy authorizations are empty. This function
+// clears the TPM, set's the hierarchy authorizations, creates
+// a persistent EK, Shared SRK, and if configured, an IAK and
+// IDevID in accordance with TCG and IEEE 802.1 AR for secure
+// device identification and authentication.
+// https://trustedcomputinggroup.org/wp-content/uploads/TCG-TPM-v2.0-Provisioning-Guidance-Published-v1r1.pdf
+func (app *App) ProvisionPlatform(
+	soPIN, userPIN xkmssdk.Password,
+	initParams *AppInitParams) (*xkmssdk.KeyAttributes, error) {
+
+	app.Logger.Debug("Provisioning TPM 2.0")
+
+	// Provision the TPM
+	if err := app.TPM.Provision(soPIN); err != nil {
+		return nil, err
+	}
+
+	// Provision the platform TPM 2.0 key store
+	if err := app.InitPlatformKeyStore(soPIN, userPIN); err != nil {
+		return nil, err
+	}
+
+	// Initialize the Certificate Authorities
+	if app.CAConfig != nil {
+		if _, err := app.InitCA(soPIN, userPIN, initParams); err != nil {
+			return nil, err
+		}
+	}
+
+	// Initialize the ACME client if configured
+	if app.ACMEClient == nil && app.ACMEConfig != nil && app.ACMEConfig.Client != nil {
+		// Check if any webservice has an ACME server with the same directory URL as the client
+		// This indicates self-referential operation where the ACME client uses the local ACME server
+		selfReferential := false
+		for _, ws := range app.WebServices {
+			if ws.ACME != nil && ws.ACME.Enabled && ws.ACME.DirectoryURL == app.ACMEConfig.Client.DirectoryURL {
+				selfReferential = true
+				app.Logger.Info("Detected self-referential ACME configuration",
+					"client_directory", app.ACMEConfig.Client.DirectoryURL,
+					"webservice", ws.Name)
+				break
+			}
+		}
+
+		if selfReferential {
+			// Skip ACME client initialization when self-referential (client directory URL
+			// matches a local webservice's ACME server). The webservice needs to bootstrap
+			// first before the ACME client can request/renew certificates from itself.
+			app.Logger.Info("Skipping ACME client init during provisioning (self-referential)")
+		} else {
+			// External ACME server - initialize client now.
+			// Try first without trust bootstrap — the CA bundle may already be in
+			// the OS trust store (e.g., installed by the trusted-platform ISO
+			// installer or platform-initrd). Only fall back to BootstrapTrust when
+			// the initial attempt fails, which covers non-trusted OS environments.
+			if err := app.InitACMEClient(true); err != nil {
+				app.Logger.Warn("ACME client init failed, attempting trust bootstrap",
+					"error", err)
+				if bsErr := app.BootstrapTrust(context.Background()); bsErr != nil {
+					app.Logger.Error(bsErr, "Trust bootstrap also failed")
+					return nil, fmt.Errorf("ACME client init failed: %w (bootstrap: %v)", err, bsErr)
+				}
+				// Retry after bootstrap installed the server CA bundle
+				if err := app.InitACMEClient(true); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
+	// Imports the TPM Endorsement Key into the Certificate Authority
+	ekCert, err := app.ImportEndorsementKeyCertificate()
+	if err != nil {
+		return nil, err
+	}
+
+	policyDigest, policyErr := app.TPM.PlatformPolicyDigest()
+	if policyErr != nil {
+		return nil, policyErr
+	}
+	idevidAttrs, err := xkmssdk.IDevIDAttributesFromConfig(
+		*app.TPMConfig.IDevID, &policyDigest)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create IAK & IDevID keys and certificates
+	if app.TPMConfig.IAK != nil && app.TPMConfig.IDevID != nil {
+
+		// If an ACME client configuration is provided with an
+		// enrollment challenge, enroll the device with the OEM
+		// Enterprise / Privacy CA.
+		if app.ACMEConfig != nil && app.ACMEConfig.Client != nil &&
+			app.ACMEConfig.Client.Enrollment != nil {
+
+			if app.ACMEClient == nil {
+				if err := app.InitACMEClient(initParams.Initialize); err != nil {
+					return nil, err
+				}
+			}
+
+			// Create context with timeout for enrollment
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			// Convert YAML enrollment config to runtime enrollment config
+			// Wrap go-xkms's TPM with the ACME client adapter
+
+			// Resolve ${PREFERRED_IP} macro before passing to go-trusted-ca
+			// go-trusted-ca accepts plain IP addresses
+			enrollmentIP := app.ACMEConfig.Client.Enrollment.IPAddress
+			if enrollmentIP == "${PREFERRED_IP}" {
+				enrollmentIP = util.PreferredIPv4().String()
+				app.Logger.Info("Resolved PREFERRED_IP for ACME enrollment", "ip", enrollmentIP)
+			}
+
+			enrollConfig := &casdk.ACMEEnrollmentConfig{
+				Challenge:  app.ACMEConfig.Client.Enrollment.Challenge,
+				IPAddress:  enrollmentIP,
+				TPMModule:  casdk.NewACMEXKMSTPMAdapter(app.TPM),
+				CommonName: app.Hostname,
+			}
+			enrollResult, err := app.ACMEClient.EnrollDevice(ctx, enrollConfig)
+			if err != nil {
+				return nil, err
+			}
+
+			// Import the IAK certificate from ACME enrollment
+			if enrollResult.IAKCertificate != nil {
+				app.Logger.Info("Importing IAK certificate from ACME enrollment",
+					slog.String("subject", enrollResult.IAKCertificate.Subject.CommonName))
+				if err := app.CA.ImportCertificate(enrollResult.IAKCertificate); err != nil {
+					app.Logger.Error(err, slog.String("context", "Failed to import IAK certificate"))
+				}
+				fmt.Println("IAK Certificate:")
+				fmt.Println(localcertstore.ToString(enrollResult.IAKCertificate))
+			}
+
+			// Import the IDevID certificate from ACME enrollment
+			if enrollResult.IDevIDCertificate != nil {
+				app.Logger.Info("Importing IDevID certificate from ACME enrollment",
+					slog.String("subject", enrollResult.IDevIDCertificate.Subject.CommonName))
+				if err := app.CA.ImportCertificate(enrollResult.IDevIDCertificate); err != nil {
+					app.Logger.Error(err, slog.String("context", "Failed to import IDevID certificate"))
+				}
+				fmt.Println("IDevID Certificate:")
+				fmt.Println(localcertstore.ToString(enrollResult.IDevIDCertificate))
+
+				// Perform post-enrollment provisioning: fetch profile and activate
+				// This uses mTLS with the IDevID certificate to authenticate
+				profile, activateResp, provErr := app.FetchProfileAndActivate(ctx, enrollResult.IDevIDCertificate)
+				if provErr != nil {
+					app.Logger.Warn("Post-enrollment provisioning failed (non-fatal)",
+						slog.String("error", provErr.Error()))
+				} else if profile != nil && activateResp != nil {
+					app.Logger.Info("Post-enrollment provisioning completed",
+						slog.String("serial", profile.SerialNumber),
+						slog.Int("production_vlan", int(profile.ProductionNetwork.VLAN)),
+						slog.String("activation_status", activateResp.Status))
+				}
+			}
+
+		} else { // No ACME client config, create IAK and IDevID certificates using local CA
+
+			// ekAttrs, err := app.TPM.EKAttributes()
+			// if err != nil {
+			// 	return nil, err
+			// }
+
+			iakAttrs, err := app.TPM.IAKAttributes()
+			if err != nil {
+				return nil, err
+			}
+
+			// Provision IDevID Key
+			var tcgCSRIDevID *xkmssdk.TCG_CSR_IDEVID
+			idevidAttrs, tcgCSRIDevID, err = app.TPM.CreateIDevID(iakAttrs, ekCert, nil)
+			if err != nil {
+				return nil, err
+			}
+			xkmssdk.DebugKeyAttributes(app.Logger.Slog(), idevidAttrs)
+
+			// Pack the TCG_CSR_IDEVID to bytes for verification
+			packedCSR, err := xkmssdk.PackIDevIDCSR(tcgCSRIDevID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to pack TCG_CSR_IDEVID: %w", err)
+			}
+
+			// Verify the TCG_CSR_IDEVID and receive the encrypted challenge
+			credentialBlob, encryptedSecret, secret, err := app.CA.VerifyTCG_CSR_IDevIDBytes(
+				packedCSR, iakAttrs.SignatureAlgorithm)
+			if err != nil {
+				return nil, err
+			}
+
+			// Release the secret using TPM2_ActivateCredential and
+			// verify the secrets match
+			releasedCertInfo, err := app.TPM.ActivateCredential(
+				credentialBlob, encryptedSecret)
+			if err != nil {
+				return nil, err
+			}
+			if !bytes.Equal(releasedCertInfo, secret) {
+				return nil, xkmssdk.ErrTPMInvalidActivationCredential
+			}
+
+			// Sign TCG_CSR_IDEVID, create IDevID x509 device certificate
+			iakDER, idevidDER, err := app.CA.SignTCGCSRIDevID(tcgCSRIDevID, &casdk.CACertificateRequest{
+				// KeyAttributes: ekAttrs,
+				KeyAttributes: idevidAttrs,
+				Valid:         0, // Valid until 99991231235959Z
+				Subject: casdk.CASubject{
+					CommonName:   idevidAttrs.CN,
+					Organization: app.PrimaryWebService().Certificate.Subject.Organization,
+					Country:      app.PrimaryWebService().Certificate.Subject.Country,
+					Locality:     app.PrimaryWebService().Certificate.Subject.Locality,
+					Address:      app.PrimaryWebService().Certificate.Subject.Address,
+					PostalCode:   app.PrimaryWebService().Certificate.Subject.PostalCode,
+				},
+				SANS: &casdk.CASubjectAlternativeNames{
+					DNS: []string{
+						app.Domain,
+					},
+					IPs: []string{},
+					Email: []string{
+						app.Hostmaster,
+					},
+				},
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			// Import the IAK certificate
+			iakCert, err := x509.ParseCertificate(iakDER)
+			if err != nil {
+				return nil, err
+			}
+			if err := app.CA.ImportCertificate(iakCert); err != nil {
+				return nil, err
+			}
+
+			// Import the IDevID certificate
+			idevidCert, err := x509.ParseCertificate(idevidDER)
+			if err != nil {
+				return nil, err
+			}
+			if err := app.CA.ImportCertificate(idevidCert); err != nil {
+				return nil, err
+			}
+
+			// Perform local TPM Quote and store attestation
+			quote, nonce, err := app.AttestLocal(iakAttrs)
+			if err != nil {
+				return nil, fmt.Errorf("failed to perform local attestation: %w", err)
+			}
+
+			// Verify the quote and import attestation data
+			if err := app.VerifyLocalQuote(iakAttrs, quote, nonce); err != nil {
+				return nil, fmt.Errorf("failed to verify local quote: %w", err)
+			}
+		}
+	}
+
+	if err := app.InitWebServer(); err != nil {
+		return nil, err
+	}
+
+	return idevidAttrs, nil
+}
+
+// FetchProfileAndActivate performs the post-ACME-enrollment provisioning flow:
+// 1. Creates an mTLS client using the IDevID certificate
+// 2. Fetches the device profile from the provisioning server
+// 3. Signals activation readiness for network transition
+//
+// This should be called after ACME enrollment completes and the IDevID certificate
+// is available. The provisioning server is derived from the ACME directory URL.
+//
+// Returns the profile and activation response, or an error if provisioning fails.
+func (app *App) FetchProfileAndActivate(
+	ctx context.Context,
+	idevidCert *x509.Certificate,
+) (*provisioning.ProfileResponse, *provisioning.ActivateResponse, error) {
+
+	if idevidCert == nil {
+		return nil, nil, provisioning.ErrMissingCertificate
+	}
+
+	// Get the provisioning server URL from ACME config
+	// The provisioning API is on the same server as ACME
+	if app.ACMEConfig == nil || app.ACMEConfig.Client == nil || app.ACMEConfig.Client.DirectoryURL == "" {
+		app.Logger.Warn("ACME client not configured, skipping provisioning")
+		return nil, nil, nil
+	}
+
+	// Extract base URL from ACME directory URL
+	// e.g., "https://server.example.com:8443/acme/directory" -> "https://server.example.com:8443"
+	serverURL, err := util.ExtractBaseURL(app.ACMEConfig.Client.DirectoryURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to extract server URL from ACME directory: %w", err)
+	}
+
+	app.Logger.Info("Starting post-enrollment provisioning",
+		slog.String("server", serverURL),
+		slog.String("idevid_cn", idevidCert.Subject.CommonName))
+
+	// Get IDevID key attributes for TPM signing
+	idevidAttrs, err := app.TPM.IDevIDAttributes()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get IDevID key attributes: %w", err)
+	}
+
+	// Create TPM signer for IDevID key
+	tpmSigner := platform.NewTPMSigner(
+		app.TPM,
+		idevidAttrs,
+		app.PlatformKS.Backend(),
+	)
+
+	// Get CA certificate pool for server verification.
+	// TLS verification is mandatory — the platform cannot provision securely
+	// without a trusted root certificate pool.
+	rootCert, err := app.CA.RootCertificate(idevidCert)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get root certificate for IDevID: %w", err)
+	}
+	caPool, err := app.CA.TrustedRootCertPool(rootCert, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get trusted root cert pool: %w", err)
+	}
+
+	// Create provisioning client config
+	provConfig := &provisioning.ClientConfig{
+		ServerURL:   serverURL,
+		Certificate: idevidCert,
+		PrivateKey:  tpmSigner, // crypto.Signer is compatible with crypto.PrivateKey
+		CACertPool:  caPool,
+		Timeout:     30 * time.Second,
+	}
+
+	// Create provisioning client
+	provClient, err := provisioning.NewClient(provConfig, app.Logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create provisioning client: %w", err)
+	}
+	defer provClient.Close()
+
+	// Fetch profile and activate
+	profile, activateResp, err := provClient.FetchProfileAndActivate(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("provisioning failed: %w", err)
+	}
+
+	app.Logger.Info("Device provisioning complete",
+		slog.String("serial", profile.SerialNumber),
+		slog.Int("vlan", int(profile.ProductionNetwork.VLAN)),
+		slog.String("status", activateResp.Status))
+
+	return profile, activateResp, nil
+}
+
+// Import TPM Endorsement Certificate - EK Credential Profile. Attempts
+// to import the EK certificate from the TPM into the CA. If an EK
+// certificate is not found, and the ek-gen options are set in the
+// platform configuration file, a new EK certificate will be generated
+// and imported into the TPM or certificate store. If the ACME client
+// is configured, the EK certificate is requested from the Enterprise CA,
+// otherwise, the EK certificate is generated using the local CA.
+func (app *App) ImportEndorsementKeyCertificate() (*x509.Certificate, error) {
+
+	if app.CAConfig == nil {
+		return nil, ErrMissingEKWithoutEnabledCA
+	}
+
+	ekAttrs, err := app.TPM.EKAttributes()
+	if err != nil {
+		return nil, err
+	}
+
+	ekCert, err := app.TPM.EKCertificate()
+	if err != nil {
+
+		if err == xkmssdk.ErrTPMEndorsementCertNotFound {
+
+			var publicKey crypto.PublicKey
+
+			if app.TPMConfig.EK.KeyAlgorithm == x509.RSA.String() {
+				rsaKey, rsaErr := app.TPM.EKRSA()
+				if rsaErr != nil {
+					return nil, rsaErr
+				}
+				publicKey = rsaKey
+			} else if app.TPMConfig.EK.KeyAlgorithm == x509.ECDSA.String() {
+				eccKey, eccErr := app.TPM.EKECC()
+				if eccErr != nil {
+					return nil, eccErr
+				}
+				publicKey = eccKey
+			} else {
+				app.Logger.Errorf(
+					"unsupported TPM EK algorithm %s",
+					app.TPMConfig.EK.KeyAlgorithm)
+				return nil, xkmssdk.ErrInvalidKeyAlgorithm
+			}
+
+			certReq := casdk.CACertificateRequest{
+				KeyAttributes: ekAttrs,
+				Subject: casdk.CASubject{
+					CommonName:   ekAttrs.CN,
+					Organization: app.PrimaryWebService().Certificate.Subject.Organization,
+					Country:      app.PrimaryWebService().Certificate.Subject.Country,
+					Locality:     app.PrimaryWebService().Certificate.Subject.Locality,
+					Address:      app.PrimaryWebService().Certificate.Subject.Address,
+					PostalCode:   app.PrimaryWebService().Certificate.Subject.PostalCode,
+				},
+				SANS: &casdk.CASubjectAlternativeNames{
+					DNS: []string{
+						app.Domain,
+					},
+					IPs: []string{},
+					Email: []string{
+						app.Hostmaster,
+					},
+				},
+			}
+
+			// Check if ACME client is configured with enrollment - if so, request
+			// the EK certificate from the Enterprise CA using the endorse-01 challenge.
+			// This is the proper flow for devices without manufacturer EK certificates
+			// (e.g., swtpm, virtual TPMs, or custom enterprise provisioning).
+			if app.ACMEClient != nil && app.ACMEConfig != nil &&
+				app.ACMEConfig.Client != nil && app.ACMEConfig.Client.Enrollment != nil {
+
+				app.Logger.Info("Requesting EK certificate from Enterprise CA via endorse-01")
+
+				// Resolve IP address macro before passing to ACME client
+				enrollmentIP := app.ACMEConfig.Client.Enrollment.IPAddress
+				if enrollmentIP == "${PREFERRED_IP}" {
+					enrollmentIP = util.PreferredIPv4().String()
+					app.Logger.Info("Resolved PREFERRED_IP for endorse-01 enrollment", "ip", enrollmentIP)
+				}
+
+				// Create context with timeout for EK certificate request
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				defer cancel()
+
+				// Request EK certificate from Enterprise CA using endorse-01 challenge
+				ekConfig := &casdk.ACMEEnrollmentConfig{
+					Challenge:  "endorse-01",
+					IPAddress:  enrollmentIP,
+					TPMModule:  casdk.NewACMEXKMSTPMAdapter(app.TPM),
+					CommonName: app.Hostname,
+				}
+				ekCert, err = app.ACMEClient.RequestEndorsementKeyCertificate(ctx, ekConfig)
+				if err != nil {
+					return nil, fmt.Errorf("failed to request EK certificate via endorse-01: %w", err)
+				}
+				app.Logger.Info("EK certificate obtained from Enterprise CA")
+			} else {
+				// Generate new Endorsement Key x509 Certificate using the local CA and save
+				// the certificate to blob storage.
+				ekCert, err = app.CA.IssueEKCertificate(&certReq, publicKey)
+				if err != nil {
+					return nil, err
+				}
+			}
+			fmt.Println(xkmssdk.CertToString(ekCert))
+
+			// Write the EK cert to TPM NV RAM
+			// Get hierarchy auth from config since ekAttrs from KeyAttributes() doesn't include it
+			var hierarchyAuth []byte
+			if app.TPMConfig.EK.HierarchyAuth != "" {
+				hierarchyAuth = []byte(app.TPMConfig.EK.HierarchyAuth)
+			} else if ekAttrs.TPMAttributes != nil && ekAttrs.TPMAttributes.HierarchyAuth != nil {
+				hierarchyAuth = ekAttrs.TPMAttributes.HierarchyAuth.Bytes()
+			}
+
+			if err := app.TPM.ProvisionEKCert(hierarchyAuth, ekCert.Raw); err != nil {
+				// NOTE: TPM simulator throws an error here for certs
+				// greater than 1024 bytes. To work around this, a warning
+				// is emitted and the cert-handle attribute is ignored so
+				// the certificate can be imported to the certificate store
+				// instead of TPM NV RAM.
+				if len(ekCert.Raw) > 1024 && app.TPMConfig.UseSimulator {
+					if app.TPMConfig.EK.CertHandle > 0 {
+						app.Logger.Warn(warnSimulatorWithEKCertHandle.Error())
+					}
+					// Fall back to saving EK cert in TPM's certificate store
+					// since NVRAM write failed for simulator with large certs
+					if app.TPMCertStore != nil {
+						app.Logger.Info("Saving EK certificate to TPM cert store (NVRAM fallback)")
+						if err := app.TPMCertStore.Save(ekAttrs, ekCert); err != nil {
+							app.Logger.Errorf("Failed to save EK cert to TPM cert store: %v", err)
+							return nil, fmt.Errorf("failed to save EK certificate: %w", err)
+						}
+					} else {
+						app.Logger.Warn("TPMCertStore not initialized, cannot save EK certificate")
+					}
+				} else {
+					// NVRAM provisioning failed for non-simulator case, fall back to CA import
+					app.Logger.Warnf("failed to provision EK cert to TPM NVRAM, falling back to CA import: %v", err)
+					if importErr := app.CA.ImportEndorsementKeyCertificate(ekCert); importErr != nil {
+						return nil, fmt.Errorf("failed to import EK certificate after NVRAM provisioning failure: %w (original error: %v)", importErr, err)
+					}
+				}
+			}
+			return ekCert, nil
+
+		} else {
+			return nil, err
+		}
+	}
+	err = app.CA.ImportEndorsementKeyCertificate(ekCert)
+	if err != nil {
+		return nil, err
+	}
+
+	return ekCert, nil
+}
+
+// Loads an initialized Certificate Authority
+func (app *App) LoadCA(soPIN, userPIN xkmssdk.Password) error {
+
+	if len(app.CAConfig.Identity) == 0 {
+		return casdk.CAErrInvalidConfig
+	}
+
+	// Ensure SelectedCA (platform-ca) is properly set when an intermediate CA is configured
+	// If SelectedCA is 0 but there's more than one identity, default to 1 (intermediate)
+	if app.CAConfig.SelectedCA == 0 && len(app.CAConfig.Identity) > 1 {
+		app.Logger.Debug("SelectedCA is 0 but intermediate CA exists, defaulting to 1")
+		app.CAConfig.SelectedCA = 1
+	}
+
+	// Get the issuing CA identity (intermediate when SelectedCA > 0)
+	issuingIdentity := app.CAConfig.Identity[app.CAConfig.SelectedCA]
+
+	// Build CA home directory path for XKMS service
+	// Uses the ISSUING CA's CommonName for backward compatibility
+	caRoot := fmt.Sprintf("%s/ca/%s", app.PlatformDir, issuingIdentity.Subject.CommonName)
+
+	// Initialize platform key store before XKMS service
+	// This ensures TPM password sealing is available for keys with PlatformPolicy=true
+	if app.TPM != nil && app.PlatformKS == nil {
+		if err := app.InitPlatformKeyStore(soPIN, userPIN); err != nil {
+			return fmt.Errorf("failed to initialize platform key store: %w", err)
+		}
+	}
+
+	// Initialize XKMS service before creating CA
+	_, err := app.initXKMSService(caRoot, soPIN, userPIN)
+	if err != nil {
+		return fmt.Errorf("failed to initialize XKMS service: %w", err)
+	}
+
+	// Set LazyInitialization to load existing CA
+	app.CAConfig.LazyInitialization = true
+
+	// Parse key algorithm strings to x509.PublicKeyAlgorithm values
+	// This is required after loading config from YAML since KeyAlgorithm is yaml:"-"
+	if err := app.CAConfig.ParseKeyAlgorithms(); err != nil {
+		return fmt.Errorf("failed to parse CA key algorithms: %w", err)
+	}
+
+	// Create per-CA store factory
+	// This creates separate keystores, certstores, and objectstores for each CA (root, intermediate)
+	// following the original go-trusted-platform architecture
+	storeFactory := NewCAStoreFactory(app, app.PlatformDir, app.Storage, soPIN, userPIN)
+
+	// Create CA using NewWithParams with per-CA store factories
+	// Each CA will have its own keystore, certstore, and objectstore at platformDir/ca/<ca-cn>/
+	caInstance, err := casdk.CANewWithParams(casdk.CAParams{
+		Config:             *app.CAConfig,
+		KeyStoreFactory:    storeFactory,
+		CertStoreFactory:   storeFactory,
+		ObjectStoreFactory: storeFactory,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create CA: %w", err)
+	}
+
+	// Load existing CA
+	if err := caInstance.Load(); err != nil {
+		return fmt.Errorf("failed to load CA: %w", err)
+	}
+
+	// Set TPM for enrollment operations
+	if app.TPM != nil {
+		caInstance.SetTPM(app.TPM)
+	}
+
+	app.CA = caInstance
+	return nil
+}
+
+// Initializes all Certificate Authorities provided in the
+// platform configuration file and returns the selected
+// "Platform CA" as the default CA used for Platform operations.
+func (app *App) InitCA(soPIN, userPIN xkmssdk.Password, initParams *AppInitParams) (casdk.CACertificateAuthority, error) {
+
+	if app.TPM == nil {
+		if err := app.OpenTPM(initParams.Initialize); err != nil {
+			// TPM not available - continue without it for software-only CA keystores.
+			// If the CA config requires TPM-based keystores, it will fail during
+			// key creation with a clear error message.
+			app.Logger.Warn("TPM not available for CA initialization (software-only CA will work)",
+				"error", err)
+		}
+	}
+
+	if len(app.CAConfig.Identity) == 0 {
+		return nil, casdk.CAErrInvalidConfig
+	}
+
+	// Set the selected CA index (use intermediate by default if available)
+	app.CAConfig.SelectedCA = initParams.PlatformCA
+	if app.CAConfig.SelectedCA == 0 && len(app.CAConfig.Identity) > 1 {
+		app.CAConfig.SelectedCA = 1
+	}
+
+	// Get the issuing CA identity (intermediate when SelectedCA > 0)
+	issuingIdentity := app.CAConfig.Identity[app.CAConfig.SelectedCA]
+
+	// Build CA home directory path for XKMS service
+	// Uses the ISSUING CA's CommonName for backward compatibility
+	caRoot := fmt.Sprintf("%s/ca/%s", app.PlatformDir, issuingIdentity.Subject.CommonName)
+
+	// Initialize platform key store before XKMS service
+	// This ensures TPM password sealing is available for keys with PlatformPolicy=true
+	if app.TPM != nil && app.PlatformKS == nil {
+		if err := app.InitPlatformKeyStore(soPIN, userPIN); err != nil {
+			return nil, fmt.Errorf("failed to initialize platform key store: %w", err)
+		}
+	}
+
+	// Initialize XKMS service
+	_, err := app.initXKMSService(caRoot, soPIN, userPIN)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize XKMS service: %w", err)
+	}
+
+	// Set HomeDir in config
+	app.CAConfig.HomeDir = app.PlatformDir
+
+	// Ensure LazyInitialization is false so casdk.CANewWithParams() will auto-initialize
+	// This is important when InitCA is called after LoadCA fails, because
+	// LoadCA sets LazyInitialization to true
+	app.CAConfig.LazyInitialization = false
+
+	// Parse key algorithm strings to x509.PublicKeyAlgorithm values
+	// This is required after loading config from YAML since KeyAlgorithm is yaml:"-"
+	if err := app.CAConfig.ParseKeyAlgorithms(); err != nil {
+		return nil, fmt.Errorf("failed to parse CA key algorithms: %w", err)
+	}
+
+	// Create per-CA store factory
+	// This creates separate keystores, certstores, and objectstores for each CA (root, intermediate)
+	// following the original go-trusted-platform architecture
+	storeFactory := NewCAStoreFactory(app, app.PlatformDir, app.Storage, soPIN, userPIN)
+
+	// Create CA using NewWithParams with per-CA store factories
+	// Each CA will have its own keystore, certstore, and objectstore at platformDir/ca/<ca-cn>/
+	// Note: NewWithParams() auto-initializes when LazyInitialization is false
+	caInstance, err := casdk.CANewWithParams(casdk.CAParams{
+		Config:             *app.CAConfig,
+		KeyStoreFactory:    storeFactory,
+		CertStoreFactory:   storeFactory,
+		ObjectStoreFactory: storeFactory,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create CA: %w", err)
+	}
+
+	// Set TPM for enrollment operations
+	if app.TPM != nil {
+		caInstance.SetTPM(app.TPM)
+	}
+
+	app.CA = caInstance
+
+	return caInstance, nil
+}
+
+// Performs a local TPM 2.0 attestation
+func (app *App) AttestLocal(serverAttrs *xkmssdk.KeyAttributes) (xkmssdk.Quote, []byte, error) {
+	fmt.Println("Performing local attestation")
+	quote, nonce, err := app.TPM.PlatformQuote(serverAttrs)
+	if err != nil {
+		return xkmssdk.Quote{}, nil, err
+	}
+	return quote, nonce, nil
+}
+
+// Verifies a local TPM 2.0 quote
+func (app *App) VerifyLocalQuote(
+	akAttrs *xkmssdk.KeyAttributes,
+	quote xkmssdk.Quote,
+	nonce []byte) error {
+
+	if err := app.CA.VerifyQuote(akAttrs, &quote, nonce); err != nil {
+		// DEFERRED: Re-seal the CA, run intrusion detection handlers,
+		// wipe the file system, etc. Blocked by: intrusion detection subsystem not yet designed.
+		return fmt.Errorf("%w: %v", ErrInvalidLocalAttestationSignature, err)
+	}
+
+	if err := app.CA.ImportLocalAttestation(akAttrs, &quote); err != nil {
+		return fmt.Errorf("failed to import local attestation: %w", err)
+	}
+
+	return nil
+}
+
+// isCertNotFoundError returns true if the error indicates a certificate was
+// not found. Checks for casdk.CAErrCertificateNotFound which is the canonical
+// sentinel returned by the CA layer for missing certificates.
+func isCertNotFoundError(err error) bool {
+	return errors.Is(err, casdk.CAErrCertificateNotFound)
+}
+
+// InitWebServer starts the embedded web server. When the initialize parameter is true,
+// the web server's TLS certificate configuration is used to generate a new
+// pre-configured TLS cert for the web server. If the common name matches the
+// common name of the IDevID key attributes, then the IDevID key is used to generate
+// the TLS certificate, otherwise, a new key will be generated whose common name
+// matches the common name configured in the web server's TLS certificate configuration.
+// If an ACME client section has been provided in the platform configuration,
+// the ACME directory specified in this block will be used to sign the generated CSR.
+// If an ACME cross-sign configuration is also present in the certificate configuration,
+// the ACME directory provided in the cross-signing configuration will be used to
+// cross-sign the certificate.
+func (app *App) InitWebServer() error {
+
+	if len(app.WebServices) == 0 {
+		app.Logger.Warn("web services disabled")
+		return nil
+	}
+
+	// Check if PlatformKS is available - required for webservice TLS certificates
+	if app.PlatformKS == nil {
+		app.Logger.Warn("PlatformKS not available - web services cannot be initialized without TPM platform keystore")
+		app.Logger.Warn("This is expected during initial provisioning. Web services will be available after TPM is provisioned.")
+		return nil
+	}
+
+	app.Logger.Info("Initializing web services")
+
+	// Initialize the map to store key attributes for each webservice
+	app.WebServiceKeyAttributes = make(map[string]*xkmssdk.KeyAttributes)
+
+	// Process each webservice
+	for _, wsConfig := range app.WebServices {
+		wsName := wsConfig.Name
+		if wsName == "" {
+			wsName = "default"
+		}
+
+		if err := app.initWebServiceKeyAttributes(wsConfig); err != nil {
+			return fmt.Errorf("failed to initialize webservice %s: %w", wsName, err)
+		}
+	}
+
+	return nil
+}
+
+// initWebServiceKeyAttributes initializes the key attributes and TLS certificate
+// for a single webservice. This is called for each configured webservice.
+func (app *App) initWebServiceKeyAttributes(wsConfig *v1.Config) error {
+	wsName := wsConfig.Name
+	if wsName == "" {
+		wsName = "default"
+	}
+
+	app.Logger.Info("Initializing webservice", "name", wsName, "cn", wsConfig.Certificate.Subject.CommonName)
+
+	var keyAttrs *xkmssdk.KeyAttributes
+
+	// Check if this webservice should use IDevID certificate
+	if app.TPMConfig.IDevID != nil &&
+		app.TPMConfig.IDevID.CN == wsConfig.Certificate.Subject.CommonName {
+
+		app.Logger.Info("using IDevID certificate for TLS", "webservice", wsName)
+		idevidAttrs, err := app.TPM.IDevIDAttributes()
+		if err != nil {
+			app.Logger.Error(err)
+			return err
+		}
+		if app.TPMConfig.IDevID.Handle != 0 {
+			idevidAttrs.TPMAttributes.HandleType = libtpm2.TPMHTPersistent
+		}
+		idevidAttrs.KeyType = xkmssdk.KeyTypeIDevID
+		keyAttrs = idevidAttrs
+	} else {
+		app.Logger.Info("using dedicated web server certificate for TLS", "webservice", wsName)
+		serverKeyAttrs, err := wsConfig.Key.ToKeyAttributes()
+		if err != nil {
+			return err
+		}
+		// Check if PlatformKS is available before accessing SRK attributes
+		if app.PlatformKS != nil {
+			serverKeyAttrs.Parent = app.PlatformKS.SRKAttributes()
+		}
+		if serverKeyAttrs.Parent == nil {
+			err := fmt.Errorf("failed to get SRK attributes: TPM SSRK not available - check if TPM is properly initialized")
+			app.Logger.Error(err)
+			return err
+		}
+		serverKeyAttrs.CN = wsConfig.Certificate.Subject.CommonName
+		serverKeyAttrs.KeyType = xkmssdk.KeyTypeTLS
+		serverKeyAttrs.TPMAttributes = &xkmssdk.TPMAttributes{}
+		keyAttrs = serverKeyAttrs
+	}
+	xkmssdk.DebugKeyAttributes(app.Logger.Slog(), keyAttrs)
+
+	// Set up PlatformPassword before any certificate operations if PlatformPolicy is enabled.
+	// This is needed both for loading existing certs and creating new ones.
+	var platformPassword xkmssdk.Password
+	if keyAttrs.PlatformPolicy && app.TPM != nil && app.PlatformKS != nil {
+		// Ensure parent SRK attributes are set
+		if keyAttrs.Parent == nil {
+			keyAttrs.Parent = app.PlatformKS.SRKAttributes()
+		}
+
+		// Create the platform password wrapper for TPM-sealed password access
+		// IMPORTANT: Don't set keyAttrs.Password yet - Create() needs the original
+		// password from config to seal it. We'll set it after Create() succeeds or
+		// when loading an existing cert.
+		platformPassword = xkmssdk.NewPlatformPassword(
+			app.Logger.Slog(),
+			app.TPM,
+			keyAttrs,
+			app.PlatformKS.Backend(),
+		)
+		app.Logger.Debug("PlatformPassword created for webservice",
+			"webservice", wsName,
+			"cn", keyAttrs.CN)
+	}
+
+	// Try to load the web services TLS cert
+	// For existing certs, we need PlatformPassword to unseal
+	if platformPassword != nil {
+		// Temporarily set PlatformPassword to attempt loading existing cert
+		originalPassword := keyAttrs.Password
+		keyAttrs.Password = platformPassword
+
+		app.Logger.Debug("Checking for existing TLS certificate",
+			"webservice", wsName,
+			"cn", keyAttrs.CN)
+
+		_, err := app.CA.PEM(keyAttrs)
+		if err == nil {
+			// Cert exists and loaded successfully, keep PlatformPassword
+			app.Logger.Debug("PlatformPassword configured for webservice (existing cert)",
+				"webservice", wsName,
+				"cn", keyAttrs.CN)
+			goto certLoaded
+		}
+
+		app.Logger.Debug("Certificate lookup returned error",
+			"webservice", wsName,
+			"cn", keyAttrs.CN,
+			"error", err.Error(),
+			"error_type", fmt.Sprintf("%T", err),
+			"is_cert_not_found", isCertNotFoundError(err))
+
+		// Restore original password for Create() to use
+		keyAttrs.Password = originalPassword
+
+		// Check for cert not found error
+		if !isCertNotFoundError(err) {
+			// Unexpected error
+			return fmt.Errorf("failed to load certificate for webservice %s: %w", wsName, err)
+		}
+
+		app.Logger.Info("Certificate not found, will issue new certificate",
+			"webservice", wsName,
+			"cn", keyAttrs.CN)
+
+		// Seal password to TPM before generating keys
+		if pp, ok := platformPassword.(*xkmssdk.PlatformPassword); ok {
+			app.Logger.Info("Sealing webservice key password to TPM",
+				"webservice", wsName,
+				"cn", keyAttrs.CN)
+			if err := pp.Create(); err != nil {
+				// Check if error is "key already exists" - this is OK, we can reuse it
+				if strings.Contains(err.Error(), "already exists") {
+					app.Logger.Info("Using existing sealed password for webservice",
+						"webservice", wsName,
+						"cn", keyAttrs.CN)
+				} else {
+					return fmt.Errorf("failed to seal password to TPM for webservice %s: %w", wsName, err)
+				}
+			} else {
+				app.Logger.Info("Password sealed to TPM for webservice",
+					"webservice", wsName,
+					"cn", keyAttrs.CN)
+			}
+			// Now set the PlatformPassword for future use
+			keyAttrs.Password = platformPassword
+		}
+	} else {
+		// No PlatformPolicy, just try to load cert normally
+		app.Logger.Debug("Checking for existing TLS certificate",
+			"webservice", wsName,
+			"cn", keyAttrs.CN)
+
+		_, err := app.CA.PEM(keyAttrs)
+		if err == nil {
+			goto certLoaded
+		}
+
+		app.Logger.Debug("Certificate lookup returned error",
+			"webservice", wsName,
+			"cn", keyAttrs.CN,
+			"error", err.Error(),
+			"error_type", fmt.Sprintf("%T", err),
+			"is_cert_not_found", isCertNotFoundError(err))
+
+		// Check for cert not found error
+		if !isCertNotFoundError(err) {
+			// Unexpected error
+			return fmt.Errorf("failed to load certificate for webservice %s: %w", wsName, err)
+		}
+
+		app.Logger.Info("Certificate not found, will issue new certificate",
+			"webservice", wsName,
+			"cn", keyAttrs.CN)
+	}
+
+	// Issue new certificate
+	if err := app.issueWebServiceCertificate(wsName, wsConfig, keyAttrs); err != nil {
+		return err
+	}
+
+certLoaded:
+	// Store the key attributes in the map
+	app.WebServiceKeyAttributes[wsName] = keyAttrs
+	return nil
+}
+
+// issueWebServiceCertificate issues a new TLS certificate for a webservice
+func (app *App) issueWebServiceCertificate(wsName string, wsConfig *v1.Config, keyAttrs *xkmssdk.KeyAttributes) error {
+	var certDER, xsignedDER []byte
+
+	// Check if this webservice runs an ACME server
+	useLocalCA := false
+	if wsConfig.ACME != nil && wsConfig.ACME.Enabled {
+		useLocalCA = true
+		app.Logger.Info("Webservice has ACME server enabled, using local CA for TLS cert",
+			"webservice", wsName,
+			"acme_directory", wsConfig.ACME.DirectoryURL)
+	}
+
+	// Build SANS from webservice config
+	var sans *casdk.CASubjectAlternativeNames
+	if wsConfig.Certificate.SANS != nil {
+		sans = wsConfig.Certificate.SANS
+	} else {
+		sans = &casdk.CASubjectAlternativeNames{
+			DNS:   []string{keyAttrs.CN},
+			IPs:   []string{},
+			Email: []string{app.Hostmaster},
+		}
+	}
+
+	// Include localhost SANS if configured
+	if app.CAConfig.IncludeLocalhostSANS {
+		ips, err := util.LocalAddresses()
+		if err != nil {
+			app.Logger.Error(err, "Failed to get local addresses for SANS", "webservice", wsName)
+			return fmt.Errorf("failed to get local addresses for webservice %s SANS: %w", wsName, err)
+		}
+		sans.DNS = append(sans.DNS, "localhost", "localhost.localdomain")
+		sans.Email = append(sans.Email, "root@localhost", "root@example.com")
+		sans.IPs = append(sans.IPs, ips...)
+	}
+
+	app.Logger.Debug("Building certificate request for webservice",
+		"webservice", wsName,
+		"cn", keyAttrs.CN,
+		"sans_dns", sans.DNS,
+		"use_local_ca", useLocalCA)
+
+	// Use ACME client if configured and pointing to an external ACME server.
+	// This matches the original go-trusted-platform behavior where the decision
+	// is based on whether the ACME client directory URL differs from any local
+	// ACME server (indicating an external Enterprise/Privacy CA). The per-webservice
+	// Certificate.ACME config is optional - defaults are used when not present.
+	if app.ACMEConfig != nil && app.ACMEConfig.Client != nil &&
+		app.ACMEConfig.Client.DirectoryURL != "" && !useLocalCA {
+
+		app.Logger.Info("Requesting TLS certificate via ACME client",
+			"webservice", wsName,
+			"cn", keyAttrs.CN,
+			"directory", app.ACMEConfig.Client.DirectoryURL)
+
+		if app.ACMEClient == nil {
+			// Try ACME client init — the CA bundle is typically already in the OS
+			// trust store (installed by ISO installer or platform-initrd). Fall
+			// back to BootstrapTrust only on TLS failure.
+			if err := app.InitACMEClient(true); err != nil {
+				app.Logger.Warn("ACME client init failed, attempting trust bootstrap",
+					"webservice", wsName, "error", err)
+				if bsErr := app.BootstrapTrust(context.Background()); bsErr != nil {
+					app.Logger.Error(bsErr, "Trust bootstrap also failed", "webservice", wsName)
+					return fmt.Errorf("failed to initialize ACME client for webservice %s: %w (bootstrap: %v)", wsName, err, bsErr)
+				}
+				if err := app.InitACMEClient(true); err != nil {
+					app.Logger.Error(err, "ACME client init failed after trust bootstrap", "webservice", wsName)
+					return fmt.Errorf("failed to initialize ACME client for webservice %s after bootstrap: %w", wsName, err)
+				}
+			}
+		}
+
+		// Use per-webservice ACME config if available, otherwise use defaults
+		var challengeType, authzType string
+		if wsConfig.Certificate.ACME != nil && wsConfig.Certificate.ACME.Request != nil {
+			challengeType = wsConfig.Certificate.ACME.Request.ChallengeType
+			authzType = wsConfig.Certificate.ACME.Request.AuthzType
+		}
+		if challengeType == "" {
+			challengeType = "http-01"
+		}
+		if authzType == "" {
+			authzType = "dns"
+		}
+
+		csrDER, err := app.CA.CreateCSR(&casdk.CACertificateRequest{
+			KeyAttributes: keyAttrs,
+			Valid:         365,
+			Subject: casdk.CASubject{
+				CommonName:   keyAttrs.CN,
+				Organization: wsConfig.Certificate.Subject.Organization,
+				Country:      wsConfig.Certificate.Subject.Country,
+				Province:     wsConfig.Certificate.Subject.Province,
+				Locality:     wsConfig.Certificate.Subject.Locality,
+				Address:      wsConfig.Certificate.Subject.Address,
+				PostalCode:   wsConfig.Certificate.Subject.PostalCode,
+			},
+			SANS: sans,
+		})
+		if err != nil {
+			app.Logger.Error(err, "Failed to create CSR for ACME", "webservice", wsName, "cn", keyAttrs.CN)
+			return fmt.Errorf("failed to create CSR for ACME webservice %s: %w", wsName, err)
+		}
+
+		acmeCertRequest := &casdk.ACMECertificateRequest{
+			AuthzType:     authzType,
+			AuthzValue:    keyAttrs.CN,
+			ChallengeType: challengeType,
+			CSR:           csrDER,
+		}
+		cert, err := app.ACMEClient.RequestCertificate(context.Background(), acmeCertRequest)
+		if err != nil {
+			app.Logger.Error(err, "Failed to request certificate via ACME",
+				"webservice", wsName, "cn", keyAttrs.CN, "challenge_type", challengeType)
+			return fmt.Errorf("failed to request ACME certificate for webservice %s: %w", wsName, err)
+		}
+		certDER = cert.Raw
+
+		app.Logger.Info("TLS certificate obtained via ACME",
+			"webservice", wsName, "cn", keyAttrs.CN, "serial", cert.SerialNumber.String())
+
+	} else {
+		// Issue from local CA
+		app.Logger.Info("Issuing TLS certificate from local CA", "webservice", wsName, "cn", keyAttrs.CN)
+
+		certReq := &casdk.CACertificateRequest{
+			Subject: casdk.CASubject{
+				CommonName:   keyAttrs.CN,
+				Organization: wsConfig.Certificate.Subject.Organization,
+				Country:      wsConfig.Certificate.Subject.Country,
+				Province:     wsConfig.Certificate.Subject.Province,
+				Locality:     wsConfig.Certificate.Subject.Locality,
+				Address:      wsConfig.Certificate.Subject.Address,
+				PostalCode:   wsConfig.Certificate.Subject.PostalCode,
+			},
+			SANS:          sans,
+			Valid:         365,
+			KeyAttributes: keyAttrs,
+		}
+
+		localCert, err := app.CA.IssueCertificate(certReq)
+		if err != nil {
+			app.Logger.Error(err, "Failed to issue TLS certificate from local CA", "webservice", wsName, "cn", keyAttrs.CN)
+			return fmt.Errorf("failed to issue certificate for webservice %s: %w", wsName, err)
+		}
+		certDER = localCert.Raw
+
+		app.Logger.Info("TLS certificate issued successfully from local CA",
+			"webservice", wsName, "cn", keyAttrs.CN, "serial", localCert.SerialNumber.String())
+
+		// Cross-sign if configured
+		if wsConfig.Certificate.ACME != nil && wsConfig.Certificate.ACME.CrossSigner != nil {
+			app.Logger.Info("Cross-signing TLS certificate",
+				"webservice", wsName, "cn", keyAttrs.CN,
+				"cross_signer", wsConfig.Certificate.ACME.CrossSigner.DirectoryURL)
+
+			csrDER, err := app.CA.CreateCSR(certReq)
+			if err != nil {
+				app.Logger.Error(err, "Failed to create CSR for cross-signing", "webservice", wsName, "cn", keyAttrs.CN)
+				return fmt.Errorf("failed to create CSR for cross-signing webservice %s: %w", wsName, err)
+			}
+
+			crossSigner, err := app.NewACMECrossSigner(wsConfig.Certificate.ACME.CrossSigner, true)
+			if err != nil {
+				app.Logger.Error(err, "Failed to create ACME cross-signer", "webservice", wsName, "cn", keyAttrs.CN)
+				return fmt.Errorf("failed to create ACME cross-signer for webservice %s: %w", wsName, err)
+			}
+			xsignedCert, err := crossSigner.CrossSign(context.Background(), csrDER, localCert.Raw)
+			if err != nil {
+				app.Logger.Error(err, "Failed to cross-sign certificate", "webservice", wsName, "cn", keyAttrs.CN)
+				return fmt.Errorf("failed to cross-sign certificate for webservice %s: %w", wsName, err)
+			}
+			xsignedDER = xsignedCert.Raw
+
+			app.Logger.Info("TLS certificate cross-signed successfully", "webservice", wsName, "cn", keyAttrs.CN)
+		}
+	}
+
+	if app.DebugFlag {
+		cert, err := x509.ParseCertificate(certDER)
+		if err != nil {
+			return fmt.Errorf("failed to parse TLS certificate: %w", err)
+		}
+		fmt.Printf("Web Server TLS Certificate (%s):\n", wsName)
+		fmt.Println(xkmssdk.CertToString(cert))
+
+		if xsignedDER != nil {
+			xsignedCert, err := x509.ParseCertificate(xsignedDER)
+			if err != nil {
+				return fmt.Errorf("failed to parse cross-signed certificate: %w", err)
+			}
+			issuerCN, err := util.ParseFQDN(wsConfig.Certificate.ACME.CrossSigner.DirectoryURL)
+			if err != nil {
+				app.Logger.Error(err, "Failed to parse cross-signer directory URL",
+					"webservice", wsName, "url", wsConfig.Certificate.ACME.CrossSigner.DirectoryURL)
+				return fmt.Errorf("failed to parse cross-signer directory URL for webservice %s: %w", wsName, err)
+			}
+			fmt.Printf("Cross-Signed (%s) TLS Certificate:\n", issuerCN)
+			fmt.Println(xkmssdk.CertToString(xsignedCert))
+		}
+	}
+
+	// Publish DANE TLSA records for the webservice certificate
+	if err := app.publishDANETLSA(wsName, certDER, keyAttrs); err != nil {
+		app.Logger.Warn("failed to publish DANE TLSA records",
+			"webservice", wsName, "error", err)
+		// Non-fatal: webservice can still operate without DANE records
+	}
+
+	return nil
+}
+
+// publishDANETLSA publishes DANE TLSA records for a webservice TLS certificate.
+// It publishes DANE-TA (Usage=2) from the CA certificate and optionally DANE-EE
+// (Usage=3) from the leaf certificate if configured. Publication failure is
+// non-fatal; callers should log and continue.
+func (app *App) publishDANETLSA(wsName string, certDER []byte, keyAttrs *xkmssdk.KeyAttributes) error {
+	if app.DNSConfig == nil || app.DNSConfig.DANE == nil || !app.DNSConfig.DANE.Enabled {
+		return nil
+	}
+	if !app.DNSConfig.DANE.AutoGenerate {
+		return nil
+	}
+	// Ensure the service registry (and DNS service) are initialized.
+	// The service registry uses lazy initialization, so the DNS service
+	// may not be created yet when webservice certs are issued during startup.
+	if app.DNSService == nil {
+		app.ServiceRegistry()
+	}
+	if app.DNSService == nil {
+		app.Logger.Debug("DNS service not available, skipping DANE TLSA publication",
+			"webservice", wsName)
+		return nil
+	}
+
+	// Lazily create the DANE publisher
+	if app.danePublisher == nil {
+		app.danePublisher = bootstrap.NewDANEPublisher(app.DNSService, app.DNSConfig.DANE, app.Logger)
+	}
+
+	// Parse the leaf certificate from DER
+	leafCert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		return &ErrDANECertParse{Cause: err}
+	}
+
+	// Get the CA certificate for DANE-TA record.
+	// Prefer intermediate CA; fall back to root CA.
+	var caCert *x509.Certificate
+	caCert, err = app.CA.TrustedIntermediate()
+	if err != nil || caCert == nil {
+		caCert, err = app.CA.TrustedRoot()
+		if err != nil {
+			return &ErrDANEPublish{
+				Hostname: leafCert.Subject.CommonName,
+				Cause:    err,
+			}
+		}
+	}
+
+	// Determine the hostname from the certificate CN
+	hostname := leafCert.Subject.CommonName
+
+	// Determine the zone name by matching the hostname against known DNS zones
+	zoneName, err := app.resolveDANEZone(hostname)
+	if err != nil {
+		return err
+	}
+
+	port := app.DNSConfig.DANE.DefaultPort
+	if port == 0 {
+		port = 443
+	}
+
+	ctx := context.Background()
+	if err := app.danePublisher.PublishForCertificate(ctx, leafCert, caCert, hostname, port, zoneName); err != nil {
+		return &ErrDANEPublish{
+			Hostname: hostname,
+			Cause:    err,
+		}
+	}
+
+	app.Logger.Info("DANE TLSA records published",
+		"webservice", wsName,
+		"hostname", hostname,
+		"zone", zoneName,
+		"port", port)
+
+	return nil
+}
+
+// resolveDANEZone determines the DNS zone name for a given hostname by checking
+// the platform's configured internal and public DNS zones.
+func (app *App) resolveDANEZone(hostname string) (string, error) {
+	if app.DNSConfig == nil {
+		return "", &ErrDANENoZone{Hostname: hostname}
+	}
+
+	// Normalize hostname to FQDN with trailing dot
+	fqdn := hostname
+	if !strings.HasSuffix(fqdn, ".") {
+		fqdn = fqdn + "."
+	}
+
+	// Check internal zone
+	if app.DNSConfig.InternalServer != nil {
+		zone := app.DNSConfig.InternalServer.Zone.Name
+		if zone != "" && strings.HasSuffix(fqdn, "."+zone) {
+			return zone, nil
+		}
+	}
+
+	// Check public zone
+	if app.DNSConfig.PublicServer != nil {
+		zone := app.DNSConfig.PublicServer.Zone.Name
+		if zone != "" && strings.HasSuffix(fqdn, "."+zone) {
+			return zone, nil
+		}
+	}
+
+	// Try to extract domain suffix from hostname
+	// e.g., "server.example.com" -> "example.com."
+	parts := strings.SplitN(fqdn, ".", 2)
+	if len(parts) == 2 && parts[1] != "" {
+		candidateZone := parts[1]
+		// Verify the zone exists in the DNS service
+		ctx := context.Background()
+		if _, err := app.DNSService.Zone(ctx, candidateZone); err == nil {
+			return candidateZone, nil
+		}
+	}
+
+	return "", &ErrDANENoZone{Hostname: hostname}
+}
+
+// Returns a new platform XKMS backend given a "keystores" config,
+// the key directory, security officer secret and user pin. An
+// optional key backend may be provided to override the default
+// storage location.
+func (app *App) XKMSFromConfig(
+	config *platform.XKMSConfig,
+	keyDir string,
+	soPIN xkmssdk.Password,
+	userPIN xkmssdk.Password,
+	backend xkmssdk.TPMKeyBackend) (*platform.XKMS, error) {
+
+	if app.PlatformKS == nil {
+		app.InitPlatformKeyStore(soPIN, userPIN)
+	}
+
+	if backend == nil {
+		var err error
+		backend, err = newKeyBackend(app.Logger, keyDir)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Create storage backends for keys and certs using xkms native file storage
+	keyStorage, err := xkmssdk.NewFileStorageBackend(keyDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create key storage: %w", err)
+	}
+	certStorage, err := xkmssdk.NewFileStorageBackend(keyDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cert storage: %w", err)
+	}
+
+	kc, err := platform.NewXKMS(
+		app.Logger.Slog(),
+		config,
+		backend,
+		keyStorage,
+		certStorage,
+		app.TPM,
+		app.PlatformKS)
+	if err != nil {
+		return nil, err
+	}
+	return kc, nil
+}
+
+// Creates a new x509 certificate store, with an optional object
+// store backend to override the default storage location.
+func (app *App) NewCertificateStore(
+	objStore object.ObjectStorer) (localcertstore.CertificateStorer, error) {
+
+	if objStore == nil {
+		objStore = app.ObjectStore
+	}
+	if objStore == nil {
+		return nil, ErrNilObjectStore{}
+	}
+	certStore, err := localcertstore.NewCertificateStore(
+		app.Logger,
+		objStore)
+	if err != nil {
+		return nil, err
+	}
+	return certStore, nil
+}
+
+// Initialize the platform log file
+func (app *App) InitLogFile(uid, gid int) *os.File {
+	logFile := fmt.Sprintf("%s/%s.log", app.LogDir, Name)
+	if err := os.MkdirAll(app.LogDir, os.ModePerm); err != nil {
+		log.Fatal(err)
+	}
+	f, err := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, os.ModePerm)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if uid == 0 {
+		if err = os.Chown(logFile, uid, gid); err != nil {
+			log.Fatal(err)
+		}
+		perm := os.FileMode(0644)
+		if app.DebugFlag {
+			perm = os.ModePerm
+		}
+		if err = os.Chmod(logFile, perm); err != nil {
+			log.Fatal(err)
+		}
+	}
+	return f
+}
+
+// If started as root, drop the privileges after startup to
+// the lesser privileged app user.
+func (app *App) DropPrivileges() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	if syscall.Getuid() == 0 && app.RuntimeUser != "root" {
+		app.Logger.Debugf("Running as root, downgrading to user %s", app.RuntimeUser)
+		user, err := user.Lookup(app.RuntimeUser)
+		if err != nil {
+			log.Fatalf("setuid %s user not found! Error: %s", app.RuntimeUser, err)
+		}
+		uid, err := strconv.ParseInt(user.Uid, 10, 32)
+		if err != nil {
+			app.Logger.Fatalf("Unable to parse UID: %s", err)
+		}
+		gid, err := strconv.ParseInt(user.Gid, 10, 32)
+		if err != nil {
+			app.Logger.Fatalf("Unable to parse GID: %s", err)
+		}
+		cerr := syscall.Setgid(int(gid))
+		if cerr != nil {
+			app.Logger.Fatalf("Unable to setgid: message=%s", cerr)
+		}
+		cerr = syscall.Setuid(int(uid))
+		if cerr != nil {
+			app.Logger.Fatalf("Unable to setuid: message=%s", cerr)
+		}
+		app.InitLogFile(int(uid), int(gid))
+	}
+}
+
+func DefaultTestConfig() *App {
+	// Storage is nil initially; tests must start the QuicBaaS factory
+	// to get an ObjectStorage client, or inject one via TestConfigWithStorage.
+	return TestConfigWithStorage(nil)
+}
+
+func TestConfigWithStorage(storage objectstorage.Client) *App {
+	Name = "trusted-platform"
+
+	app := NewApp()
+	app.DebugFlag = true
+	app.DebugSecretsFlag = true
+	app.Storage = storage
+
+	// Create a test-specific config with paths that don't require root
+	testConfig := DefaultConfig
+	testConfig.ConfigDir = "trusted-data/etc"
+	testConfig.LogDir = "trusted-data/log"
+	testConfig.PlatformDir = "trusted-data"
+
+	configYaml, err := yaml.Marshal(testConfig)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println("Test configuration:")
+	fmt.Println(string(configYaml))
+
+	// Create log directory on real filesystem for tests
+	if err := os.MkdirAll(testConfig.LogDir, os.ModePerm); err != nil {
+		panic(err)
+	}
+	logFile := fmt.Sprintf("%s/trusted-platform.log", testConfig.LogDir)
+	if err := os.WriteFile(logFile, []byte{}, os.ModePerm); err != nil {
+		panic(err)
+	}
+
+	// Write app config to real filesystem for viper
+	if err := os.MkdirAll(testConfig.ConfigDir, os.ModePerm); err != nil {
+		panic(err)
+	}
+	configFile := fmt.Sprintf("%s/config.yaml", testConfig.ConfigDir)
+	if err := os.WriteFile(configFile, configYaml, os.ModePerm); err != nil {
+		panic(err)
+	}
+
+	// Configure viper with real filesystem
+	viper.AddConfigPath(testConfig.ConfigDir)
+	viper.SetConfigFile(configFile)
+
+	// Debug info
+	fmt.Println(viper.GetViper().ConfigFileUsed())
+	if err = viper.ReadInConfig(); err != nil {
+		panic(err)
+	}
+
+	// Unmarshal with TextUnmarshaler support for custom types
+	if err := viper.Unmarshal(app, viper.DecodeHook(
+		mapstructure.ComposeDecodeHookFunc(
+			mapstructure.TextUnmarshallerHookFunc(),
+			mapstructure.StringToTimeDurationHookFunc(),
+			mapstructure.StringToSliceHookFunc(","),
+		),
+	)); err != nil {
+		panic(err)
+	}
+
+	app.Logger = logging.NewLoggerWithFormat(slog.LevelDebug, logging.FormatJSON, os.Stdout)
+
+	return app
+}
+
+func parsePublicIPs(_ Environment) (net.IP, net.IP, error) {
+	// Configure HTTP client with transport settings optimized for NAT environments
+	transport := &http.Transport{
+		// Disable HTTP keep-alive to avoid connection reuse issues through NAT
+		DisableKeepAlives: true,
+		// Ensure TCP connections are fresh for each request
+		MaxIdleConns:        0,
+		MaxIdleConnsPerHost: 0,
+	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Second,
+	}
+
+	ipv4Resp, err := client.Get("https://api.ipify.org?format=json")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer ipv4Resp.Body.Close()
+
+	var ipv4Data struct {
+		IP string `json:"ip"`
+	}
+	if err := json.NewDecoder(ipv4Resp.Body).Decode(&ipv4Data); err != nil {
+		return nil, nil, err
+	}
+	ipv4 := net.ParseIP(ipv4Data.IP)
+
+	ipv6Resp, err := client.Get("https://api64.ipify.org?format=json")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer ipv6Resp.Body.Close()
+
+	var ipv6Data struct {
+		IP string `json:"ip"`
+	}
+	if err := json.NewDecoder(ipv6Resp.Body).Decode(&ipv6Data); err != nil {
+		return nil, nil, err
+	}
+	ipv6 := net.ParseIP(ipv6Data.IP)
+
+	return ipv4, ipv6, nil
+}
+
+// DNSResolverForService returns a net.Resolver using the service-level override
+// if set, falling back to the platform-wide dns.resolver config, then to the
+// system resolver. The serviceOverride parameter is the service-specific DNS
+// server address in "ip:port" format (e.g., from acme.client.dns-server).
+func (app *App) DNSResolverForService(serviceOverride string) *net.Resolver {
+	// Priority 1: Service-level override
+	if serviceOverride != "" {
+		return &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				d := net.Dialer{Timeout: 10 * time.Second}
+				return d.DialContext(ctx, "udp", serviceOverride)
+			},
+		}
+	}
+
+	// Priority 2: Platform-wide dns.resolver
+	if app.DNSConfig != nil && app.DNSConfig.Resolver != nil {
+		if resolver := app.DNSConfig.Resolver.NetResolver(); resolver != nil {
+			return resolver
+		}
+	}
+
+	// Priority 3: System resolver (nil means use default)
+	return nil
+}
+
+// PrimaryDNSServer returns the primary DNS server address in "ip:port" format.
+// PrimaryDNSServer checks the service-level override first, then falls back to
+// the platform-wide dns.resolver config. An empty string is returned when
+// neither is configured.
+func (app *App) PrimaryDNSServer(serviceOverride string) string {
+	if serviceOverride != "" {
+		return serviceOverride
+	}
+	if app.DNSConfig != nil && app.DNSConfig.Resolver != nil {
+		return app.DNSConfig.Resolver.PrimaryServer()
+	}
+	return ""
+}
+
+const (
+	// defaultSystemTrustCertPath is the default path for installing the CA bundle
+	// to the system trust store on Debian/Alpine systems.
+	defaultSystemTrustCertPath = "/usr/local/share/ca-certificates/trusted-platform-ca.crt"
+)
+
+// BootstrapTrust performs runtime trust bootstrap by fetching the server's CA
+// certificate bundle using the configured bootstrap strategy. The bundle is
+// installed to the system trust store if configured. This method is a no-op
+// when the strategy is "embedded" (trust comes from the ISO-embedded CA bundle).
+// When the bootstrap client's DNSServer is empty, it is populated from the
+// platform-wide dns.resolver config so that DANE lookups use the correct server.
+func (app *App) BootstrapTrust(ctx context.Context) error {
+	if app.BootstrapClientConfig == nil {
+		app.Logger.Debug("No bootstrap client config, skipping trust bootstrap")
+		return nil
+	}
+
+	if app.BootstrapClientConfig.Strategy == bootstrap.StrategyEmbedded {
+		app.Logger.Debug("Bootstrap strategy is embedded, skipping runtime trust fetch")
+		return nil
+	}
+
+	// Populate DNSServer from platform-wide resolver when not explicitly set
+	if app.BootstrapClientConfig.DNSServer == "" {
+		if server := app.PrimaryDNSServer(""); server != "" {
+			app.Logger.Info("Bootstrap using platform DNS resolver", "server", server)
+			app.BootstrapClientConfig.DNSServer = server
+		}
+	}
+
+	client, err := bootstrap.NewClient(app.BootstrapClientConfig, app.Logger)
+	if err != nil {
+		return ErrBootstrapClientInit{Cause: err}
+	}
+
+	bundlePEM, err := client.FetchCABundle(ctx)
+	if err != nil {
+		return ErrBootstrapFetchBundle{Cause: err}
+	}
+
+	if len(bundlePEM) == 0 {
+		app.Logger.Warn("Bootstrap returned empty CA bundle, skipping installation")
+		return nil
+	}
+
+	if app.BootstrapClientConfig.InstallToSystemTrust {
+		certPath := defaultSystemTrustCertPath
+		if err := client.InstallToSystemTrust(bundlePEM, certPath); err != nil {
+			return ErrBootstrapInstallBundle{Path: certPath, Cause: err}
+		}
+		app.Logger.Infof("CA bundle installed to %s. Run 'update-ca-certificates' to update the system trust store.", certPath)
+	}
+
+	return nil
+}

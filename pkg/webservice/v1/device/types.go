@@ -1,0 +1,230 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package device
+
+import "time"
+
+// ContextKey is a custom type for context keys in the device package.
+type ContextKey string
+
+// ContextKeyDeviceSerial is the context key for the device serial number.
+const ContextKeyDeviceSerial ContextKey = "device_serial"
+
+// DeviceRequest represents the request body for device creation/update
+type DeviceRequest struct {
+	ID         uint64 `json:"id"`
+	AttestPub  string `json:"attest_pub,omitempty"`
+	EKCert     string `json:"ek_cert,omitempty"`
+	EventLog   []byte `json:"event_log,omitempty"`
+	HashAlgoID uint32 `json:"hash_algo_id,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Serial     string `json:"serial,omitempty"`
+	SigningPub string `json:"signing_pub,omitempty"`
+}
+
+// DeviceResponse represents a device in API responses
+type DeviceResponse struct {
+	ID         uint64 `json:"id"`
+	AttestPub  string `json:"attest_pub,omitempty"`
+	EKCert     string `json:"ek_cert,omitempty"`
+	EventLog   []byte `json:"event_log,omitempty"`
+	HashAlgoID uint32 `json:"hash_algo_id,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Serial     string `json:"serial,omitempty"`
+	SigningPub string `json:"signing_pub,omitempty"`
+}
+
+// DeviceListResponse represents a paginated list of devices
+type DeviceListResponse struct {
+	Devices    []DeviceResponse   `json:"devices"`
+	Pagination PaginationResponse `json:"pagination"`
+}
+
+// ProfileRequest represents the request body for profile creation/update
+type ProfileRequest struct {
+	ID                  uint64                  `json:"id"`
+	Name                string                  `json:"name"`
+	Model               string                  `json:"model,omitempty"`
+	Role                string                  `json:"role,omitempty"`
+	EventLog            []byte                  `json:"event_log,omitempty"`
+	ProvisioningNetwork *NetworkPhaseRequest    `json:"provisioning_network,omitempty"`
+	ProductionNetwork   *NetworkPhaseRequest    `json:"production_network,omitempty"`
+	QuarantineNetwork   *NetworkPhaseRequest    `json:"quarantine_network,omitempty"`
+	PlatformdConfig     *PlatformdConfigRequest `json:"platformd_config,omitempty"`
+	MatchRules          *MatchRulesRequest      `json:"match_rules,omitempty"`
+}
+
+// NetworkPhaseRequest represents network configuration for a phase
+type NetworkPhaseRequest struct {
+	VLAN         uint16           `json:"vlan"`
+	DHCPPool     *DHCPPoolRequest `json:"dhcp_pool,omitempty"`
+	StaticIP     string           `json:"static_ip,omitempty"`
+	Gateway      string           `json:"gateway,omitempty"`
+	DNS          []string         `json:"dns,omitempty"`
+	AuthMethod   string           `json:"auth_method,omitempty"`
+	ACLs         []ACLRequest     `json:"acls,omitempty"`
+	Subnet       string           `json:"subnet,omitempty"`
+	DNSServers   []string         `json:"dns_servers,omitempty"`
+	DHCP         bool             `json:"dhcp"`
+	FirewallZone string           `json:"firewall_zone,omitempty"`
+}
+
+// DHCPPoolRequest represents DHCP pool configuration
+type DHCPPoolRequest struct {
+	Network    string `json:"network"`
+	RangeStart string `json:"range_start"`
+	RangeEnd   string `json:"range_end"`
+	LeaseTime  int    `json:"lease_time"`
+}
+
+// ACLRequest represents an ACL entry
+type ACLRequest struct {
+	Priority int    `json:"priority"`
+	Protocol string `json:"protocol"`
+	SrcIP    string `json:"src_ip,omitempty"`
+	DstIP    string `json:"dst_ip,omitempty"`
+	SrcPort  uint16 `json:"src_port,omitempty"`
+	DstPort  uint16 `json:"dst_port,omitempty"`
+	Action   string `json:"action"`
+}
+
+// PlatformdConfigRequest represents platformd configuration reference
+type PlatformdConfigRequest struct {
+	ConfigType string `json:"config_type"`
+	Reference  string `json:"reference,omitempty"`
+	ConfigName string `json:"config_name,omitempty"`
+	ConfigPath string `json:"config_path,omitempty"`
+	Version    string `json:"version,omitempty"`
+}
+
+// MatchRulesRequest represents profile matching rules
+type MatchRulesRequest struct {
+	MACPrefix         string            `json:"mac_prefix,omitempty"`
+	SerialPrefix      string            `json:"serial_prefix,omitempty"`
+	Model             string            `json:"model,omitempty"`
+	ModelPattern      string            `json:"model_pattern,omitempty"`
+	SerialPattern     string            `json:"serial_pattern,omitempty"`
+	ManufacturerMatch string            `json:"manufacturer_match,omitempty"`
+	TPMVendor         string            `json:"tpm_vendor,omitempty"`
+	CustomAttributes  map[string]string `json:"custom_attributes,omitempty"`
+}
+
+// ProfileListResponse represents a paginated list of profiles
+type ProfileListResponse struct {
+	Profiles   []ProfileFullResponse `json:"profiles"`
+	Pagination PaginationResponse    `json:"pagination"`
+}
+
+// ProfileFullResponse represents a complete device profile
+type ProfileFullResponse struct {
+	ID                  uint64                   `json:"id"`
+	Name                string                   `json:"name"`
+	Model               string                   `json:"model,omitempty"`
+	Role                string                   `json:"role,omitempty"`
+	EventLog            []byte                   `json:"event_log,omitempty"`
+	ProvisioningNetwork *NetworkPhaseResponse    `json:"provisioning_network,omitempty"`
+	ProductionNetwork   *NetworkPhaseResponse    `json:"production_network,omitempty"`
+	QuarantineNetwork   *NetworkPhaseResponse    `json:"quarantine_network,omitempty"`
+	PlatformdConfig     *PlatformdConfigResponse `json:"platformd_config,omitempty"`
+	MatchRules          *MatchRulesResponse      `json:"match_rules,omitempty"`
+}
+
+// NetworkPhaseResponse represents network configuration in response
+type NetworkPhaseResponse struct {
+	VLAN         uint16            `json:"vlan"`
+	DHCPPool     *DHCPPoolResponse `json:"dhcp_pool,omitempty"`
+	StaticIP     string            `json:"static_ip,omitempty"`
+	Gateway      string            `json:"gateway,omitempty"`
+	DNS          []string          `json:"dns,omitempty"`
+	AuthMethod   string            `json:"auth_method,omitempty"`
+	ACLs         []ACLResponse     `json:"acls,omitempty"`
+	Subnet       string            `json:"subnet,omitempty"`
+	DNSServers   []string          `json:"dns_servers,omitempty"`
+	DHCP         bool              `json:"dhcp"`
+	FirewallZone string            `json:"firewall_zone,omitempty"`
+}
+
+// DHCPPoolResponse represents DHCP pool in response
+type DHCPPoolResponse struct {
+	Network    string `json:"network"`
+	RangeStart string `json:"range_start"`
+	RangeEnd   string `json:"range_end"`
+	LeaseTime  int    `json:"lease_time"`
+}
+
+// ACLResponse represents an ACL entry in response
+type ACLResponse struct {
+	Priority int    `json:"priority"`
+	Protocol string `json:"protocol"`
+	SrcIP    string `json:"src_ip,omitempty"`
+	DstIP    string `json:"dst_ip,omitempty"`
+	SrcPort  uint16 `json:"src_port,omitempty"`
+	DstPort  uint16 `json:"dst_port,omitempty"`
+	Action   string `json:"action"`
+}
+
+// PlatformdConfigResponse represents platformd configuration in response
+type PlatformdConfigResponse struct {
+	ConfigType string `json:"config_type"`
+	Reference  string `json:"reference,omitempty"`
+	ConfigName string `json:"config_name,omitempty"`
+	ConfigPath string `json:"config_path,omitempty"`
+	Version    string `json:"version,omitempty"`
+}
+
+// MatchRulesResponse represents profile matching rules in response
+type MatchRulesResponse struct {
+	MACPrefix         string            `json:"mac_prefix,omitempty"`
+	SerialPrefix      string            `json:"serial_prefix,omitempty"`
+	Model             string            `json:"model,omitempty"`
+	ModelPattern      string            `json:"model_pattern,omitempty"`
+	SerialPattern     string            `json:"serial_pattern,omitempty"`
+	ManufacturerMatch string            `json:"manufacturer_match,omitempty"`
+	TPMVendor         string            `json:"tpm_vendor,omitempty"`
+	CustomAttributes  map[string]string `json:"custom_attributes,omitempty"`
+}
+
+// PaginationResponse represents pagination metadata
+type PaginationResponse struct {
+	Page       int  `json:"page"`
+	PageSize   int  `json:"page_size"`
+	Total      int  `json:"total"`
+	TotalPages int  `json:"total_pages"`
+	HasMore    bool `json:"has_more"`
+}
+
+// CountResponse represents a count response
+type CountResponse struct {
+	Count int `json:"count"`
+}
+
+// ActivationRequest represents device activation request
+type ActivationRequest struct {
+	Serial     string `json:"serial"`
+	MACAddress string `json:"mac_address,omitempty"`
+}
+
+// ActivationResponse represents device activation response
+type ActivationResponse struct {
+	Status         string    `json:"status"`
+	VLAN           uint16    `json:"vlan"`
+	TransitionedAt time.Time `json:"transitioned_at"`
+}
+
+// FindMatchingProfileRequest represents the request for finding matching profile
+type FindMatchingProfileRequest struct {
+	MACAddress string `json:"mac_address,omitempty"`
+	Serial     string `json:"serial,omitempty"`
+	Model      string `json:"model,omitempty"`
+}

@@ -1,0 +1,573 @@
+# Dell PowerEdge R640 - Gateway Template
+# UNTESTED - Phase 2 hardware
+#
+# TLS termination, reverse proxy, and load balancing
+# Customize: domain, IPs, passwords, serial number, NIC names
+
+debug: false
+debug-secrets: false
+platform-dir: /var/lib/trusted-platform
+config-dir: /etc/trusted-platform
+log-dir: /var/log/trusted-platform
+ca-dir: /var/lib/trusted-platform/ca
+domain: gateway.example.com
+hostmaster: hostmaster@gateway.example.com
+tenant-id: platform
+pin-seal-policy: true
+
+secrets:
+  enabled: true
+  auto-generate: true
+  local-kms: true
+  migrate-to-kms: true
+  update-config-file: true
+
+platform:
+  so-pin: autogen://6/numeric
+  user-pin: autogen://6/numeric
+
+
+# =============================================================================
+# INSTALLATION CONFIGURATION (System Manifest)
+# =============================================================================
+
+# Disk configuration for system installation
+disk:
+  device: ""
+  partition-table: gpt
+  efi-partition-size: 538
+  root-filesystem: lvm
+  lvm-volume-group: vg0
+  lvm-logical-volume: root
+  encryption:
+    version: luks2
+    cipher: aes-xts-plain64
+    key-size: 512
+    hash: sha256
+    pbkdf: argon2id
+    mapped-name: cryptroot
+
+# Operating system configuration
+os:
+  os: alpine
+  version: "3.22.2"
+  architecture: x86_64
+  hostname: gateway
+  kernel-modules:
+    - igb
+    - ixgbe
+    - i40e
+    - ice
+    - bnxt_en
+    - openvswitch
+    - vxlan
+  packages:
+    - bash
+    - vim
+    - curl
+    - wget
+    - htop
+    - lsblk
+    - parted
+    - e2fsprogs
+    - lvm2
+    - tpm2-tools
+    - dracut
+    - openvswitch
+    - openvswitch-openrc
+  filesystem-type: lvm
+  fips: false
+  lockdown: true
+  lockdown-mode: confidentiality
+  tpm-auto-upgrade-seal: true
+  enable-fido2: false
+  ima:
+    enabled: false
+    policy: tcb
+    hash-algorithm: sha256
+    evm: false
+    appraise-mode: off
+    audit-enabled: true
+
+# Network configuration for installed system
+network:
+  dns:
+    nameservers:
+      - 127.0.0.1
+    search-domains:
+      - example.internal
+  dnsmasq:
+    enabled: true
+    upstream-servers:
+      - 198.18.0.1:9053
+    local-domain: example.internal
+  interfaces:
+    - name: eno1
+      type: static
+      ipv4-address: 198.18.0.2/24
+      ipv4-gateway: 198.18.0.1
+      auto-start: true
+  bridges:
+    - name: trusted0
+      members:
+        - ens2f0
+  bonds: []
+  vlans: []
+  wait-online: true
+  wait-timeout: 30
+
+# UKI (Unified Kernel Image) configuration
+uki:
+  cmdline: "root=/dev/mapper/vg0-root ro quiet"
+  kernel-path: /boot/vmlinuz-lts
+  initramfs-path: /boot/initramfs-lts
+
+# Secure Boot configuration
+secure-boot:
+  key-path: /boot/efi/secure-boot/db.key
+  cert-path: /boot/efi/secure-boot/db.crt
+
+# Enable TPM-based LUKS key sealing
+enable-tpm-sealing: true
+
+# PCR registers to seal LUKS keys against
+seal-pcrs:
+  - 7
+  - 9
+
+# FIDO2 configuration
+enable-fido2-enrollment: false
+fido2:
+  relying-party-id: gateway.example.com
+  keyslot: 3
+  user-presence-required: true
+  timeout: 60
+
+
+# =============================================================================
+# ACME CLIENT CONFIGURATION
+# =============================================================================
+
+acme:
+  client:
+    directory: https://server.example.internal:9443/api/v1/acme/directory
+    system-cert-pool: true
+    enrollment:
+      challenge: enroll-01
+      ip: ${PREFERRED_IP}
+    account:
+      email: hostmaster@gateway.example.com
+      key:
+        algorithm: RSA
+        cn: acme-account
+        debug: true
+        hash: SHA-256
+        password: autogen://32/base64
+        platform-policy: true
+        rsa:
+          size: 2048
+        signature-algorithm: SHA256-RSAPSS
+        store: software
+      register: true
+
+
+# =============================================================================
+# DATASTORE CONFIGURATION
+# =============================================================================
+
+bmc:
+  address: 198.18.0.2
+  port: 623
+  username: admin
+  password: autogen://16/base64
+  protocol: ipmi
+
+quicbaas:
+  storage-backend: pebble
+  data-dir: /var/lib/trusted-platform/quicbaas
+  node-id: 1
+  cache-size: 67108864
+  log-level: warn
+  consistency-level: linearizable
+
+
+# =============================================================================
+# SDN CONFIGURATION
+# =============================================================================
+
+sdn:
+  enabled: true
+  controller: false
+  ovs:
+    socket: /var/run/openvswitch/db.sock
+    bridge: trusted0
+    datapath: system
+    protocols:
+      - OpenFlow13
+      - OpenFlow15
+  ipam:
+    backend: quicbaas
+    pools: []
+  dhcp:
+    enabled: false
+    interface: trusted0
+  networks:
+    production:
+      vlan: 200
+      pool: production
+    dmz-public:
+      vlan: 210
+      pool: dmz-public
+  overlay:
+    enabled: true
+    vxlan-port: 4789
+  gateway:
+    enabled: true
+
+
+# =============================================================================
+# TPM CONFIGURATION
+# =============================================================================
+
+tpm:
+  device: /dev/tpmrm0
+  simulator: false
+  encrypt-sessions: false
+  entropy: false
+  hash: SHA-256
+  ek:
+    debug: true
+    handle: 0x81010001
+    hash: SHA-256
+    password:
+    rsa:
+      size: 2048
+  ssrk:
+    debug: true
+    handle: 0x81000001
+    hierarchy-auth:
+    password:
+    platform-policy: false
+    rsa:
+      size: 2048
+  iak:
+    auth:
+    debug: true
+    hash: SHA-256
+    handle: 0x81010002
+    password:
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSA
+  idevid:
+    model: r640
+    serial: DELL-R640-GW-01
+    cert-handle: 0x01C90000
+    debug: true
+    handle: 0x81020000
+    hash: SHA-256
+    pad: true
+    password:
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSA
+  platform-pcr: 23
+  platform-pcr-bank: sha256
+  golden-pcrs: [7, 9]
+  platform-srk:
+    srk-handle: 0x81000002
+    srk-auth: autogen://32/base64
+    platform-policy: true
+
+
+# =============================================================================
+# CERTIFICATE AUTHORITY CONFIGURATION
+# =============================================================================
+
+certificate-authority:
+  platform-ca: 1
+  auto-import-issuing-ca: true
+  system-cert-pool: true
+  default-validity: 365
+  default-idevid-cn: default-device-id
+  sans-include-localhost: true
+  require-password: true
+  quantum-safe: true
+  identity:
+    - # Root Certificate Authority
+      is-root: true
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000003
+          srk-auth: autogen://32/base64
+          platform-policy: true
+      keys:
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: autogen://32/base64
+          platform-policy: true
+          debug: true
+
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: autogen://32/base64
+          platform-policy: true
+          debug: true
+
+      valid: 50
+      subject:
+        cn: root-ca.gateway.example.com
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns:
+          - root-ca.gateway.example.com
+        email:
+          - hostmaster@gateway.example.com
+
+    - # Intermediate Certificate Authority
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000004
+          srk-auth: autogen://32/base64
+          platform-policy: true
+      keys:
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: autogen://32/base64
+          platform-policy: true
+          debug: true
+
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: autogen://32/base64
+          platform-policy: true
+          debug: true
+      valid: 10
+      subject:
+        cn: ca01.gateway.example.com
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns:
+          - ca01.gateway.example.com
+        email:
+          - hostmaster@gateway.example.com
+
+
+# =============================================================================
+# GATEWAY CONFIGURATION
+# =============================================================================
+
+gateway:
+  enabled: true
+  id: gateway-standalone
+  node-id: 1
+  modes:
+    - transit
+  tier: datacenter
+  min-reputation: 0.85
+  min-age-days: 175
+  min-uptime-pct: 95.0
+  anycast-ip: "10.0.0.1"
+  ipv6-pool: ""
+  ipv4-pool: ""
+  uplinks:
+    - name: eno1
+      vlan: 0
+  edge-config:
+    enabled: false
+  nat-config:
+    enabled: false
+  load-balancer:
+    enabled: true
+    algorithm: round-robin
+    health-check-interval: 5s
+    health-check-timeout: 3s
+    max-backends: 10
+
+
+# =============================================================================
+# WEBSERVICES CONFIGURATION (Gateway - Reverse Proxy)
+# =============================================================================
+
+webservices:
+  # Public webservice - internet facing with TLS termination
+  - name: public
+    home: /var/lib/trusted-platform/public_html
+    port: 80
+    tls-port: 443
+    index: index.html
+    acme:
+      enabled: true
+      directory: https://server.example.internal:9443/api/v1/acme/directory
+      terms-of-service: /tos.html
+      challenges:
+        - http-01
+        - dns-01
+    jwt:
+      expiration: 525960
+      issuer: trusted-platform
+    cors:
+      allowed-origins:
+        - https://gateway.example.com
+        - https://server.example.com
+        - https://custom.example.com
+      allowed-methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+      allowed-headers:
+        - "*"
+      allow-credentials: true
+    key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+      password: autogen://32/base64
+      platform-policy: true
+      debug: true
+    certificate:
+      acme:
+        challenge: http-01
+        renew: 15
+      subject:
+        cn: gateway.example.com
+        organization: Trusted Platform
+        country: US
+        province: Florida
+        locality: West Palm Beach
+        address: 123 Automation Street
+        postal-code: 12345
+      sans:
+        dns:
+          - gateway.example.com
+          - "*.example.com"
+        email:
+          - hostmaster@gateway.example.com
+    # Virtual hosts with proxy backends
+    virtual-hosts:
+      # Route custom.example.com to client nodes
+      - hosts:
+          - custom.example.com
+        proxy:
+          backends:
+            - "https://client.example.internal:9443"
+      # Route all other *.example.com to server
+      - hosts:
+          - "*.example.com"
+        proxy:
+          backends:
+            - "https://server.example.internal:8443"
+
+  # Internal webservice - internal network facing
+  - name: internal
+    home: /var/lib/trusted-platform/public_html
+    port: 9080
+    tls-port: 9443
+    index: index.html
+    jwt:
+      expiration: 525960
+      issuer: trusted-platform
+    cors:
+      allowed-origins:
+        - https://gateway.example.internal
+        - https://server.example.internal
+        - https://custom.example.internal
+      allowed-methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+      allowed-headers:
+        - "*"
+      allow-credentials: true
+    key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+      password: autogen://32/base64
+      platform-policy: true
+      debug: true
+    certificate:
+      subject:
+        cn: gateway.example.internal
+        organization: Trusted Platform
+        country: US
+        province: Florida
+        locality: West Palm Beach
+        address: 123 Automation Street
+        postal-code: 12345
+      sans:
+        dns:
+          - gateway.example.internal
+          - "*.example.internal"
+        email:
+          - hostmaster@gateway.example.com
+    # Virtual hosts for internal traffic
+    virtual-hosts:
+      - hosts:
+          - custom.example.internal
+        proxy:
+          backends:
+            - "https://client.example.internal:9443"
+      - hosts:
+          - "*.example.internal"
+        proxy:
+          backends:
+            - "https://server.example.internal:9443"
+
+
+# =============================================================================
+# PASSWORD HASHING (Argon2)
+# =============================================================================
+
+argon2:
+  memory: 65536
+  iterations: 3
+  parallelism: 2
+  saltLen: 16
+  keyLen: 32

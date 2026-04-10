@@ -1,0 +1,125 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+
+// Common error codes used across all services
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_NOT_FOUND = 1;
+  ERROR_CODE_ALREADY_EXISTS = 2;
+  ERROR_CODE_INVALID_ARGUMENT = 3;
+  ERROR_CODE_PERMISSION_DENIED = 4;
+  ERROR_CODE_RESOURCE_EXHAUSTED = 5;
+  ERROR_CODE_FAILED_PRECONDITION = 6;
+  ERROR_CODE_ABORTED = 7;
+  ERROR_CODE_OUT_OF_RANGE = 8;
+  ERROR_CODE_UNIMPLEMENTED = 9;
+  ERROR_CODE_INTERNAL = 10;
+  ERROR_CODE_UNAVAILABLE = 11;
+  ERROR_CODE_UNAUTHENTICATED = 12;
+  ERROR_CODE_DEADLINE_EXCEEDED = 13;
+  ERROR_CODE_CANCELLED = 14;
+}
+
+// Common error details
+message ErrorDetail {
+  ErrorCode code = 1;
+  string message = 2;
+  map<string, string> metadata = 3;
+}
+
+// Common status response
+message Status {
+  bool success = 1;
+  string message = 2;
+  ErrorDetail error = 3;
+}
+
+// Key algorithm types
+enum KeyAlgorithm {
+  KEY_ALGORITHM_UNSPECIFIED = 0;
+  KEY_ALGORITHM_RSA_2048 = 1;
+  KEY_ALGORITHM_RSA_3072 = 2;
+  KEY_ALGORITHM_RSA_4096 = 3;
+  KEY_ALGORITHM_ECDSA_P256 = 4;
+  KEY_ALGORITHM_ECDSA_P384 = 5;
+  KEY_ALGORITHM_ECDSA_P521 = 6;
+  KEY_ALGORITHM_ED25519 = 7;
+  KEY_ALGORITHM_DILITHIUM2 = 8;
+  KEY_ALGORITHM_DILITHIUM3 = 9;
+  KEY_ALGORITHM_DILITHIUM5 = 10;
+}
+
+// Hash algorithm types
+enum HashAlgorithm {
+  HASH_ALGORITHM_UNSPECIFIED = 0;
+  HASH_ALGORITHM_SHA1 = 1;
+  HASH_ALGORITHM_SHA256 = 2;
+  HASH_ALGORITHM_SHA384 = 3;
+  HASH_ALGORITHM_SHA512 = 4;
+  HASH_ALGORITHM_SHA3_256 = 5;
+  HASH_ALGORITHM_SHA3_384 = 6;
+  HASH_ALGORITHM_SHA3_512 = 7;
+}
+
+// Key attributes
+message KeyAttributes {
+  string cn = 1;
+  KeyAlgorithm algorithm = 2;
+  HashAlgorithm hash = 3;
+  uint32 handle = 4;
+  bool persistent = 5;
+  string password = 6;
+  map<string, string> metadata = 7;
+}
+
+// Resource limits
+message ResourceLimits {
+  uint64 max_memory_mb = 1;
+  uint32 max_cpus = 2;
+  uint64 max_disk_gb = 3;
+  uint32 max_instances = 4;
+}
+
+// Label selector for filtering
+message LabelSelector {
+  map<string, string> match_labels = 1;
+  repeated string match_expressions = 2;
+}
+
+// Pagination request
+message PaginationRequest {
+  uint32 page = 1;
+  uint32 page_size = 2;
+  string sort_by = 3;
+  bool ascending = 4;
+}
+
+// Pagination response
+message PaginationResponse {
+  uint32 page = 1;
+  uint32 page_size = 2;
+  uint32 total_pages = 3;
+  uint64 total_items = 4;
+}
+
+// Health check status
+enum HealthStatus {
+  HEALTH_STATUS_UNSPECIFIED = 0;
+  HEALTH_STATUS_HEALTHY = 1;
+  HEALTH_STATUS_DEGRADED = 2;
+  HEALTH_STATUS_UNHEALTHY = 3;
+}
+
+// Component health
+message ComponentHealth {
+  string name = 1;
+  HealthStatus status = 2;
+  string message = 3;
+  google.protobuf.Timestamp last_check = 4;
+  map<string, string> details = 5;
+}

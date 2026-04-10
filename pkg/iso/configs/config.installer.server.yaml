@@ -1,0 +1,3 @@
+version: 1.4.0
+tpm:
+  seal-pcrs: [0,7]

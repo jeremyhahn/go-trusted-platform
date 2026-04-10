@@ -1,0 +1,86 @@
+# /lib/systemd/system/platformd.service
+# Trusted Platform :: Platformd Daemon
+# gRPC service for platform management and orchestration
+# Runs as root for privileged operations: TPM, OVS, network configuration
+
+[Unit]
+Description=Trusted Platform Daemon (platformd)
+Documentation=file:///usr/share/doc/trusted-platform/platformd.md
+After=network-online.target systemd-tmpfiles-setup.service
+Wants=network-online.target
+ConditionVirtualization=!container
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# Working directory
+WorkingDirectory=/var/lib/trusted-platform
+
+# Load environment configuration
+EnvironmentFile=-/etc/trusted-platform/platformd.env
+
+# Service execution
+# Listens on Unix socket at /var/run/platformd.sock for gRPC IPC
+ExecStart=/usr/local/bin/platformd --config=/etc/trusted-platform/config.yaml --socket=/var/run/platformd.sock --log-dir=/var/log/trusted-platform ${PLATFORMD_DEBUG}
+
+# Process management
+Restart=on-failure
+RestartSec=5s
+StartLimitInterval=60s
+StartLimitBurst=3
+
+# Standard output/error to journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=platformd
+
+# Security: Keep UID/GID privileges (required for TPM, OVS, device access)
+PrivateUsers=no
+
+# Security: Use strict service isolation
+PrivateTmp=yes
+PrivateDevices=no
+PrivateNetwork=no
+NoNewPrivileges=true
+
+# Security: Protect system directories (with exceptions for required paths)
+ProtectSystem=strict
+ProtectHome=yes
+
+# Security: Read-only paths
+ReadOnlyPaths=/etc/ssl/certs /usr/share/ca-certificates
+
+# Security: Read-write paths (required for operation)
+ReadWritePaths=/var/lib/trusted-platform /var/log/trusted-platform /var/run /run /etc/trusted-platform
+
+# Security: Device access (TPM and OVS)
+PrivateDevices=no
+DeviceAllow=/dev/tpm0 rw
+DeviceAllow=/dev/tpmrm0 rw
+DeviceAllow=/dev/mem r
+DeviceAllow=/dev/kmem r
+DeviceAllow=/dev/port r
+DeviceAllow=/dev/fuse rw
+
+# Security: Capability restrictions
+# CAP_SYS_ADMIN  - for TPM operations, device management, namespaces
+# CAP_NET_ADMIN  - for OVS and network configuration
+# CAP_SYS_PTRACE - for process introspection if needed
+# CAP_SYS_RESOURCE - for resource limits
+# CAP_DAC_OVERRIDE - for file access across users
+AmbientCapabilities=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SYS_PTRACE CAP_SYS_RESOURCE CAP_DAC_OVERRIDE
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SYS_PTRACE CAP_SYS_RESOURCE CAP_DAC_OVERRIDE CAP_NET_RAW
+
+# Security: System call filtering
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Security: Memory/resource limits
+MemoryAccounting=yes
+MemoryMax=1G
+TasksMax=4096
+
+[Install]
+WantedBy=multi-user.target

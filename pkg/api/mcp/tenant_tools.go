@@ -1,0 +1,1226 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package mcp
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
+)
+
+// TenantError represents a tenant operation error.
+type TenantError struct {
+	Code    string
+	Message string
+}
+
+func (e *TenantError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// Tenant-specific error types.
+var (
+	ErrTenantServiceUnavailable = &TenantError{
+		Code:    "TENANT_SERVICE_UNAVAILABLE",
+		Message: "tenant management service is not available",
+	}
+
+	ErrTenantIDRequired = &TenantError{
+		Code:    "TENANT_ID_REQUIRED",
+		Message: "tenant ID is required",
+	}
+
+	ErrTenantNameRequired = &TenantError{
+		Code:    "TENANT_NAME_REQUIRED",
+		Message: "tenant name is required",
+	}
+
+	ErrTenantVLANRequired = &TenantError{
+		Code:    "TENANT_VLAN_REQUIRED",
+		Message: "VLAN ID is required",
+	}
+
+	ErrTenantResourceTypeRequired = &TenantError{
+		Code:    "TENANT_RESOURCE_TYPE_REQUIRED",
+		Message: "resource type is required",
+	}
+
+	ErrTenantAmountRequired = &TenantError{
+		Code:    "TENANT_AMOUNT_REQUIRED",
+		Message: "amount is required",
+	}
+
+	ErrTenantInvalidResourceType = &TenantError{
+		Code:    "TENANT_INVALID_RESOURCE_TYPE",
+		Message: "invalid resource type",
+	}
+)
+
+// TenantServiceProvider is an interface for accessing the tenant management service.
+type TenantServiceProvider interface {
+	TenantManager() *tenant.Manager
+}
+
+// getTenantManager returns the tenant manager from the service provider.
+func (r *ToolRegistry) getTenantManager() *tenant.Manager {
+	if provider, ok := r.service.(TenantServiceProvider); ok {
+		return provider.TenantManager()
+	}
+	return nil
+}
+
+// registerTenantTools registers all tenant management MCP tools.
+func (r *ToolRegistry) registerTenantTools() {
+	// tenant_list - List all tenants with pagination
+	r.addTool(ToolDefinition{
+		Name:        "tenant_list",
+		Description: "List all tenants with pagination support",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"limit": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of tenants to return (default: 100)",
+					"default":     100,
+				},
+				"offset": map[string]interface{}{
+					"type":        "integer",
+					"description": "Number of tenants to skip for pagination (default: 0)",
+					"default":     0,
+				},
+			},
+		},
+	})
+
+	// tenant_get - Get tenant by ID
+	r.addTool(ToolDefinition{
+		Name:        "tenant_get",
+		Description: "Get detailed information about a tenant by its ID",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Unique tenant identifier (UUID)",
+				},
+			},
+			"required": []string{"tenant_id"},
+		},
+	})
+
+	// tenant_get_by_name - Get tenant by name
+	r.addTool(ToolDefinition{
+		Name:        "tenant_get_by_name",
+		Description: "Get detailed information about a tenant by its name",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "Unique tenant name",
+				},
+			},
+			"required": []string{"name"},
+		},
+	})
+
+	// tenant_create - Create new tenant
+	r.addTool(ToolDefinition{
+		Name:        "tenant_create",
+		Description: "Create a new tenant with optional VLAN range and quotas. Automatically provisions OVS bridge and allocates VLAN range.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "Unique tenant name (required)",
+				},
+				"display_name": map[string]interface{}{
+					"type":        "string",
+					"description": "Human-readable display name",
+				},
+				"vlan_start": map[string]interface{}{
+					"type":        "integer",
+					"description": "Starting VLAN ID for tenant range (1-4094, optional - auto-allocated if not specified)",
+				},
+				"vlan_end": map[string]interface{}{
+					"type":        "integer",
+					"description": "Ending VLAN ID for tenant range (1-4094, optional - auto-allocated if not specified)",
+				},
+				"labels": map[string]interface{}{
+					"type":        "object",
+					"description": "Key-value labels for tenant metadata",
+				},
+				"annotations": map[string]interface{}{
+					"type":        "object",
+					"description": "Key-value annotations for tenant metadata",
+				},
+				"max_vms": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of VMs (compute quota)",
+				},
+				"max_containers": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of containers (compute quota)",
+				},
+				"max_vcpus": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of vCPUs (compute quota)",
+				},
+				"max_memory_mb": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum memory in MB (compute quota)",
+				},
+				"max_disk_gb": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum disk space in GB (compute quota)",
+				},
+				"max_bridges": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of network bridges (network quota)",
+				},
+				"max_ports": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of network ports (network quota)",
+				},
+				"max_bandwidth_mbps": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum network bandwidth in Mbps (network quota)",
+				},
+				"max_volumes_gb": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum total volume storage in GB (storage quota)",
+				},
+				"max_snapshots": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of snapshots (storage quota)",
+				},
+			},
+			"required": []string{"name"},
+		},
+	})
+
+	// tenant_update - Update tenant metadata
+	r.addTool(ToolDefinition{
+		Name:        "tenant_update",
+		Description: "Update tenant metadata including display name, labels, and annotations",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID (required)",
+				},
+				"display_name": map[string]interface{}{
+					"type":        "string",
+					"description": "New human-readable display name",
+				},
+				"labels": map[string]interface{}{
+					"type":        "object",
+					"description": "Key-value labels to set (replaces existing labels)",
+				},
+				"annotations": map[string]interface{}{
+					"type":        "object",
+					"description": "Key-value annotations to set (replaces existing annotations)",
+				},
+			},
+			"required": []string{"tenant_id"},
+		},
+	})
+
+	// tenant_delete - Delete tenant
+	r.addTool(ToolDefinition{
+		Name:        "tenant_delete",
+		Description: "Delete a tenant and all its associated resources including OVS bridge and VLAN allocation",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID to delete (required)",
+				},
+			},
+			"required": []string{"tenant_id"},
+		},
+	})
+
+	// tenant_suspend - Suspend tenant
+	r.addTool(ToolDefinition{
+		Name:        "tenant_suspend",
+		Description: "Suspend a tenant, blocking all network traffic on its bridge",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID to suspend (required)",
+				},
+			},
+			"required": []string{"tenant_id"},
+		},
+	})
+
+	// tenant_resume - Resume tenant
+	r.addTool(ToolDefinition{
+		Name:        "tenant_resume",
+		Description: "Resume a suspended tenant, restoring network traffic on its bridge",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID to resume (required)",
+				},
+			},
+			"required": []string{"tenant_id"},
+		},
+	})
+
+	// tenant_get_quotas - Get tenant quotas
+	r.addTool(ToolDefinition{
+		Name:        "tenant_get_quotas",
+		Description: "Get compute, network, and storage quotas for a tenant",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID (required)",
+				},
+			},
+			"required": []string{"tenant_id"},
+		},
+	})
+
+	// tenant_update_quotas - Update tenant quotas
+	r.addTool(ToolDefinition{
+		Name:        "tenant_update_quotas",
+		Description: "Update compute, network, and storage quotas for a tenant",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID (required)",
+				},
+				"max_vms": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of VMs",
+				},
+				"max_containers": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of containers",
+				},
+				"max_vcpus": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of vCPUs",
+				},
+				"max_memory_mb": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum memory in MB",
+				},
+				"max_disk_gb": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum disk space in GB",
+				},
+				"max_bridges": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of network bridges",
+				},
+				"max_ports": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of network ports",
+				},
+				"max_bandwidth_mbps": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum network bandwidth in Mbps",
+				},
+				"max_volumes_gb": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum total volume storage in GB",
+				},
+				"max_snapshots": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of snapshots",
+				},
+			},
+			"required": []string{"tenant_id"},
+		},
+	})
+
+	// tenant_get_usage - Get tenant usage stats
+	r.addTool(ToolDefinition{
+		Name:        "tenant_get_usage",
+		Description: "Get current resource usage statistics for a tenant",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID (required)",
+				},
+			},
+			"required": []string{"tenant_id"},
+		},
+	})
+
+	// tenant_check_quota - Check quota availability
+	r.addTool(ToolDefinition{
+		Name:        "tenant_check_quota",
+		Description: "Check if a tenant has sufficient quota for a resource request",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID (required)",
+				},
+				"resource_type": map[string]interface{}{
+					"type":        "string",
+					"description": "Resource type to check (vms, containers, vcpus, memory, disk, bridges, ports, bandwidth, volumes, snapshots)",
+				},
+				"amount": map[string]interface{}{
+					"type":        "integer",
+					"description": "Amount of resource to request",
+				},
+			},
+			"required": []string{"tenant_id", "resource_type", "amount"},
+		},
+	})
+
+	// tenant_validate_vlan - Validate VLAN for tenant
+	r.addTool(ToolDefinition{
+		Name:        "tenant_validate_vlan",
+		Description: "Validate that a VLAN ID is within the tenant's allocated range",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID (required)",
+				},
+				"vlan_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "VLAN ID to validate (1-4094)",
+				},
+			},
+			"required": []string{"tenant_id", "vlan_id"},
+		},
+	})
+
+	// tenant_get_bridge - Get OVS bridge name
+	r.addTool(ToolDefinition{
+		Name:        "tenant_get_bridge",
+		Description: "Get the OVS bridge name assigned to a tenant",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID (required)",
+				},
+			},
+			"required": []string{"tenant_id"},
+		},
+	})
+
+	// tenant_sync - Synchronize tenant state
+	r.addTool(ToolDefinition{
+		Name:        "tenant_sync",
+		Description: "Synchronize tenant manager state with external systems (VLAN allocator, bridge manager, usage tracker)",
+		InputSchema: map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+	})
+
+	// tenant_rotate_dek - Rotate the Data Encryption Key for a tenant
+	r.addTool(ToolDefinition{
+		Name:        "tenant_rotate_dek",
+		Description: "Rotate the Data Encryption Key for a tenant",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID (required)",
+				},
+				"background": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Run re-encryption in background (optional, default: false)",
+					"default":     false,
+				},
+			},
+			"required": []string{"tenant_id"},
+		},
+	})
+
+	// tenant_get_dek_status - Get DEK status including usage and rotation progress
+	r.addTool(ToolDefinition{
+		Name:        "tenant_get_dek_status",
+		Description: "Get DEK status including usage and rotation progress",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID (required)",
+				},
+			},
+			"required": []string{"tenant_id"},
+		},
+	})
+}
+
+// executeTenantList handles the tenant_list tool execution.
+func (r *ToolRegistry) executeTenantList(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	limit := getInt(args, "limit")
+	if limit <= 0 {
+		limit = 100
+	}
+	offset := getInt(args, "offset")
+
+	tenants, total, err := mgr.ListTenants(ctx, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"tenants": formatTenantList(tenants),
+		"count":   len(tenants),
+		"total":   total,
+		"limit":   limit,
+		"offset":  offset,
+	}, nil
+}
+
+// executeTenantGet handles the tenant_get tool execution.
+func (r *ToolRegistry) executeTenantGet(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	tenantID := getString(args, "tenant_id")
+	if tenantID == "" {
+		return nil, ErrTenantIDRequired
+	}
+
+	entity, err := mgr.GetTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	return formatTenantEntity(entity), nil
+}
+
+// executeTenantGetByName handles the tenant_get_by_name tool execution.
+func (r *ToolRegistry) executeTenantGetByName(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	name := getString(args, "name")
+	if name == "" {
+		return nil, ErrTenantNameRequired
+	}
+
+	entity, err := mgr.GetTenantByName(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+
+	return formatTenantEntity(entity), nil
+}
+
+// executeTenantCreate handles the tenant_create tool execution.
+func (r *ToolRegistry) executeTenantCreate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	name := getString(args, "name")
+	if name == "" {
+		return nil, ErrTenantNameRequired
+	}
+
+	req := &tenant.CreateTenantRequest{
+		Name:        name,
+		DisplayName: getString(args, "display_name"),
+		Labels:      getStringMap(args, "labels"),
+		Annotations: getStringMap(args, "annotations"),
+	}
+
+	// Handle VLAN range if specified
+	vlanStart := getInt(args, "vlan_start")
+	vlanEnd := getInt(args, "vlan_end")
+	if vlanStart > 0 && vlanEnd > 0 {
+		req.VLANRange = &tenant.VLANRange{
+			Start: uint16(vlanStart),
+			End:   uint16(vlanEnd),
+		}
+	}
+
+	// Handle compute quota overrides
+	if hasComputeQuotaArgs(args) {
+		req.ComputeQuota = &tenant.ComputeQuota{
+			MaxVMs:        getInt64(args, "max_vms"),
+			MaxContainers: getInt64(args, "max_containers"),
+			MaxVCPUs:      getInt64(args, "max_vcpus"),
+			MaxMemoryMB:   getInt64(args, "max_memory_mb"),
+			MaxDiskGB:     getInt64(args, "max_disk_gb"),
+		}
+	}
+
+	// Handle network quota overrides
+	if hasNetworkQuotaArgs(args) {
+		req.NetworkQuota = &tenant.NetworkQuota{
+			MaxBridges:       getInt64(args, "max_bridges"),
+			MaxPorts:         getInt64(args, "max_ports"),
+			MaxBandwidthMbps: getInt64(args, "max_bandwidth_mbps"),
+		}
+	}
+
+	// Handle storage quota overrides
+	if hasStorageQuotaArgs(args) {
+		req.StorageQuota = &tenant.StorageQuota{
+			MaxVolumesGB: getInt64(args, "max_volumes_gb"),
+			MaxSnapshots: getInt64(args, "max_snapshots"),
+		}
+	}
+
+	entity, err := mgr.CreateTenant(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"tenant":  formatTenantEntity(entity),
+		"message": fmt.Sprintf("tenant '%s' created successfully", name),
+	}, nil
+}
+
+// executeTenantUpdate handles the tenant_update tool execution.
+func (r *ToolRegistry) executeTenantUpdate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	tenantID := getString(args, "tenant_id")
+	if tenantID == "" {
+		return nil, ErrTenantIDRequired
+	}
+
+	req := &tenant.UpdateTenantRequest{}
+
+	if displayName := getString(args, "display_name"); displayName != "" {
+		req.DisplayName = &displayName
+	}
+
+	if labels := getStringMap(args, "labels"); labels != nil {
+		req.Labels = labels
+	}
+
+	if annotations := getStringMap(args, "annotations"); annotations != nil {
+		req.Annotations = annotations
+	}
+
+	entity, err := mgr.UpdateTenant(ctx, tenantID, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"tenant":  formatTenantEntity(entity),
+		"message": "tenant updated successfully",
+	}, nil
+}
+
+// executeTenantDelete handles the tenant_delete tool execution.
+func (r *ToolRegistry) executeTenantDelete(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	tenantID := getString(args, "tenant_id")
+	if tenantID == "" {
+		return nil, ErrTenantIDRequired
+	}
+
+	err := mgr.DeleteTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success":   true,
+		"tenant_id": tenantID,
+		"message":   "tenant deleted successfully",
+	}, nil
+}
+
+// executeTenantSuspend handles the tenant_suspend tool execution.
+func (r *ToolRegistry) executeTenantSuspend(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	tenantID := getString(args, "tenant_id")
+	if tenantID == "" {
+		return nil, ErrTenantIDRequired
+	}
+
+	err := mgr.SuspendTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get updated tenant info
+	entity, err := mgr.GetTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"tenant":  formatTenantEntity(entity),
+		"message": "tenant suspended successfully",
+	}, nil
+}
+
+// executeTenantResume handles the tenant_resume tool execution.
+func (r *ToolRegistry) executeTenantResume(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	tenantID := getString(args, "tenant_id")
+	if tenantID == "" {
+		return nil, ErrTenantIDRequired
+	}
+
+	err := mgr.ResumeTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get updated tenant info
+	entity, err := mgr.GetTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"tenant":  formatTenantEntity(entity),
+		"message": "tenant resumed successfully",
+	}, nil
+}
+
+// executeTenantGetQuotas handles the tenant_get_quotas tool execution.
+func (r *ToolRegistry) executeTenantGetQuotas(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	tenantID := getString(args, "tenant_id")
+	if tenantID == "" {
+		return nil, ErrTenantIDRequired
+	}
+
+	quotas, err := mgr.GetQuotas(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"tenant_id": tenantID,
+		"compute": map[string]interface{}{
+			"max_vms":        quotas.Compute.MaxVMs,
+			"max_containers": quotas.Compute.MaxContainers,
+			"max_vcpus":      quotas.Compute.MaxVCPUs,
+			"max_memory_mb":  quotas.Compute.MaxMemoryMB,
+			"max_disk_gb":    quotas.Compute.MaxDiskGB,
+		},
+		"network": map[string]interface{}{
+			"max_bridges":        quotas.Network.MaxBridges,
+			"max_ports":          quotas.Network.MaxPorts,
+			"max_bandwidth_mbps": quotas.Network.MaxBandwidthMbps,
+		},
+		"storage": map[string]interface{}{
+			"max_volumes_gb": quotas.Storage.MaxVolumesGB,
+			"max_snapshots":  quotas.Storage.MaxSnapshots,
+		},
+	}, nil
+}
+
+// executeTenantUpdateQuotas handles the tenant_update_quotas tool execution.
+func (r *ToolRegistry) executeTenantUpdateQuotas(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	tenantID := getString(args, "tenant_id")
+	if tenantID == "" {
+		return nil, ErrTenantIDRequired
+	}
+
+	// Get current quotas first
+	currentQuotas, err := mgr.GetQuotas(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Update with any provided values
+	quotas := &tenant.TenantQuotas{
+		Compute: currentQuotas.Compute,
+		Network: currentQuotas.Network,
+		Storage: currentQuotas.Storage,
+	}
+
+	// Apply compute quota updates
+	if v := getInt64(args, "max_vms"); v > 0 {
+		quotas.Compute.MaxVMs = v
+	}
+	if v := getInt64(args, "max_containers"); v > 0 {
+		quotas.Compute.MaxContainers = v
+	}
+	if v := getInt64(args, "max_vcpus"); v > 0 {
+		quotas.Compute.MaxVCPUs = v
+	}
+	if v := getInt64(args, "max_memory_mb"); v > 0 {
+		quotas.Compute.MaxMemoryMB = v
+	}
+	if v := getInt64(args, "max_disk_gb"); v > 0 {
+		quotas.Compute.MaxDiskGB = v
+	}
+
+	// Apply network quota updates
+	if v := getInt64(args, "max_bridges"); v > 0 {
+		quotas.Network.MaxBridges = v
+	}
+	if v := getInt64(args, "max_ports"); v > 0 {
+		quotas.Network.MaxPorts = v
+	}
+	if v := getInt64(args, "max_bandwidth_mbps"); v > 0 {
+		quotas.Network.MaxBandwidthMbps = v
+	}
+
+	// Apply storage quota updates
+	if v := getInt64(args, "max_volumes_gb"); v > 0 {
+		quotas.Storage.MaxVolumesGB = v
+	}
+	if v := getInt64(args, "max_snapshots"); v > 0 {
+		quotas.Storage.MaxSnapshots = v
+	}
+
+	err = mgr.UpdateQuotas(ctx, tenantID, quotas)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success":   true,
+		"tenant_id": tenantID,
+		"compute": map[string]interface{}{
+			"max_vms":        quotas.Compute.MaxVMs,
+			"max_containers": quotas.Compute.MaxContainers,
+			"max_vcpus":      quotas.Compute.MaxVCPUs,
+			"max_memory_mb":  quotas.Compute.MaxMemoryMB,
+			"max_disk_gb":    quotas.Compute.MaxDiskGB,
+		},
+		"network": map[string]interface{}{
+			"max_bridges":        quotas.Network.MaxBridges,
+			"max_ports":          quotas.Network.MaxPorts,
+			"max_bandwidth_mbps": quotas.Network.MaxBandwidthMbps,
+		},
+		"storage": map[string]interface{}{
+			"max_volumes_gb": quotas.Storage.MaxVolumesGB,
+			"max_snapshots":  quotas.Storage.MaxSnapshots,
+		},
+		"message": "quotas updated successfully",
+	}, nil
+}
+
+// executeTenantGetUsage handles the tenant_get_usage tool execution.
+func (r *ToolRegistry) executeTenantGetUsage(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	tenantID := getString(args, "tenant_id")
+	if tenantID == "" {
+		return nil, ErrTenantIDRequired
+	}
+
+	usage, err := mgr.GetUsage(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"tenant_id": tenantID,
+		"usage": map[string]interface{}{
+			"vms":            usage.VMs,
+			"containers":     usage.Containers,
+			"vcpus":          usage.VCPUs,
+			"memory_mb":      usage.MemoryMB,
+			"disk_gb":        usage.DiskGB,
+			"bridges":        usage.Bridges,
+			"ports":          usage.Ports,
+			"bandwidth_mbps": usage.BandwidthMbps,
+			"volumes":        usage.Volumes,
+			"snapshots":      usage.Snapshots,
+		},
+		"timestamp": usage.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
+	}, nil
+}
+
+// executeTenantCheckQuota handles the tenant_check_quota tool execution.
+func (r *ToolRegistry) executeTenantCheckQuota(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	tenantID := getString(args, "tenant_id")
+	if tenantID == "" {
+		return nil, ErrTenantIDRequired
+	}
+
+	resourceType := getString(args, "resource_type")
+	if resourceType == "" {
+		return nil, ErrTenantResourceTypeRequired
+	}
+
+	amount := getInt64(args, "amount")
+	if amount <= 0 {
+		return nil, ErrTenantAmountRequired
+	}
+
+	// Convert string to ResourceType
+	rt := quota.ResourceType(resourceType)
+	if !rt.IsValid() {
+		return nil, ErrTenantInvalidResourceType
+	}
+
+	err := mgr.CheckQuota(ctx, tenantID, rt, amount)
+	available := err == nil
+
+	result := map[string]interface{}{
+		"tenant_id":     tenantID,
+		"resource_type": resourceType,
+		"amount":        amount,
+		"available":     available,
+	}
+
+	if err != nil {
+		result["error"] = err.Error()
+	}
+
+	return result, nil
+}
+
+// executeTenantValidateVLAN handles the tenant_validate_vlan tool execution.
+func (r *ToolRegistry) executeTenantValidateVLAN(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	tenantID := getString(args, "tenant_id")
+	if tenantID == "" {
+		return nil, ErrTenantIDRequired
+	}
+
+	vlanID := getInt(args, "vlan_id")
+	if vlanID <= 0 || vlanID > 4094 {
+		return nil, ErrTenantVLANRequired
+	}
+
+	err := mgr.ValidateVLAN(ctx, tenantID, uint16(vlanID))
+	valid := err == nil
+
+	result := map[string]interface{}{
+		"tenant_id": tenantID,
+		"vlan_id":   vlanID,
+		"valid":     valid,
+	}
+
+	if err != nil {
+		result["error"] = err.Error()
+	}
+
+	return result, nil
+}
+
+// executeTenantGetBridge handles the tenant_get_bridge tool execution.
+func (r *ToolRegistry) executeTenantGetBridge(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	tenantID := getString(args, "tenant_id")
+	if tenantID == "" {
+		return nil, ErrTenantIDRequired
+	}
+
+	bridgeName, err := mgr.GetBridgeName(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"tenant_id":   tenantID,
+		"bridge_name": bridgeName,
+	}, nil
+}
+
+// executeTenantSync handles the tenant_sync tool execution.
+func (r *ToolRegistry) executeTenantSync(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	err := mgr.Sync(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"message": "tenant manager state synchronized successfully",
+	}, nil
+}
+
+// executeTenantRotateDEK handles the tenant_rotate_dek tool execution.
+func (r *ToolRegistry) executeTenantRotateDEK(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	tenantID := getString(args, "tenant_id")
+	if tenantID == "" {
+		return nil, ErrTenantIDRequired
+	}
+
+	// Get the current DEK status to retrieve the old version
+	oldStatus, err := mgr.GetTenantDEKStatus(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	oldVersion := oldStatus.Version
+
+	// Rotate the DEK
+	err = mgr.RotateTenantDEK(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the new DEK status to retrieve the new version
+	newStatus, err := mgr.GetTenantDEKStatus(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success":     true,
+		"tenant_id":   tenantID,
+		"old_version": oldVersion,
+		"new_version": newStatus.Version,
+		"timestamp":   time.Now().Format("2006-01-02T15:04:05Z07:00"),
+		"message":     "DEK rotated successfully",
+	}, nil
+}
+
+// executeTenantGetDEKStatus handles the tenant_get_dek_status tool execution.
+func (r *ToolRegistry) executeTenantGetDEKStatus(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	tenantID := getString(args, "tenant_id")
+	if tenantID == "" {
+		return nil, ErrTenantIDRequired
+	}
+
+	status, err := mgr.GetTenantDEKStatus(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := map[string]interface{}{
+		"tenant_id":       tenantID,
+		"path":            status.Path,
+		"version":         status.Version,
+		"algorithm":       status.Algorithm,
+		"status":          status.Status,
+		"is_default":      status.IsDefault,
+		"created_at":      status.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		"rotated_at":      status.RotatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		"usage_count":     status.UsageCount,
+		"bytes_used":      status.BytesUsed,
+		"max_usage_count": status.MaxUsageCount,
+		"max_bytes_used":  status.MaxBytesUsed,
+		"warning_percent": status.WarningPercent,
+		"usage_percent":   status.UsagePercent,
+		"needs_rotation":  status.NeedsRotation,
+	}
+
+	// Include re-encryption progress if available
+	if status.ReencryptProgress != nil {
+		result["reencrypt_progress"] = map[string]interface{}{
+			"in_progress":          status.ReencryptProgress.InProgress,
+			"total_keys":           status.ReencryptProgress.TotalKeys,
+			"processed_keys":       status.ReencryptProgress.ProcessedKeys,
+			"failed_keys":          status.ReencryptProgress.FailedKeys,
+			"started_at":           status.ReencryptProgress.StartedAt.Format("2006-01-02T15:04:05Z07:00"),
+			"estimated_completion": status.ReencryptProgress.EstimatedCompletion.Format("2006-01-02T15:04:05Z07:00"),
+		}
+	}
+
+	return result, nil
+}
+
+// formatTenantEntity formats a TenantEntity for MCP response.
+func formatTenantEntity(entity *tenant.TenantEntity) map[string]interface{} {
+	if entity == nil {
+		return nil
+	}
+
+	result := map[string]interface{}{
+		"id":           entity.ID,
+		"name":         entity.Name,
+		"display_name": entity.DisplayName,
+		"state":        string(entity.State),
+		"ovs_bridge":   entity.OVSBridge,
+		"created_at":   entity.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		"updated_at":   entity.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
+
+	// Include VLAN range if allocated
+	if !entity.VLANRange.IsEmpty() {
+		result["vlan_range"] = map[string]interface{}{
+			"start": entity.VLANRange.Start,
+			"end":   entity.VLANRange.End,
+		}
+	}
+
+	// Include DEK handle if set
+	if entity.DEKHandle() != 0 {
+		result["dek_handle"] = entity.DEKHandle()
+	}
+
+	// Include quotas
+	result["compute_quota"] = map[string]interface{}{
+		"max_vms":        entity.ComputeQuota.MaxVMs,
+		"max_containers": entity.ComputeQuota.MaxContainers,
+		"max_vcpus":      entity.ComputeQuota.MaxVCPUs,
+		"max_memory_mb":  entity.ComputeQuota.MaxMemoryMB,
+		"max_disk_gb":    entity.ComputeQuota.MaxDiskGB,
+	}
+
+	result["network_quota"] = map[string]interface{}{
+		"max_bridges":        entity.NetworkQuota.MaxBridges,
+		"max_ports":          entity.NetworkQuota.MaxPorts,
+		"max_bandwidth_mbps": entity.NetworkQuota.MaxBandwidthMbps,
+	}
+
+	result["storage_quota"] = map[string]interface{}{
+		"max_volumes_gb": entity.StorageQuota.MaxVolumesGB,
+		"max_snapshots":  entity.StorageQuota.MaxSnapshots,
+	}
+
+	// Include labels if present
+	if len(entity.Labels) > 0 {
+		result["labels"] = entity.Labels
+	}
+
+	// Include annotations if present
+	if len(entity.Annotations) > 0 {
+		result["annotations"] = entity.Annotations
+	}
+
+	// Include deleted timestamp if set
+	if entity.DeletedAt != nil {
+		result["deleted_at"] = entity.DeletedAt.Format("2006-01-02T15:04:05Z07:00")
+	}
+
+	return result
+}
+
+// formatTenantList formats a slice of TenantEntity for MCP response.
+func formatTenantList(tenants []*tenant.TenantEntity) []map[string]interface{} {
+	result := make([]map[string]interface{}, 0, len(tenants))
+	for _, t := range tenants {
+		result = append(result, formatTenantEntity(t))
+	}
+	return result
+}
+
+// hasComputeQuotaArgs checks if any compute quota arguments were provided.
+func hasComputeQuotaArgs(args map[string]interface{}) bool {
+	keys := []string{"max_vms", "max_containers", "max_vcpus", "max_memory_mb", "max_disk_gb"}
+	for _, key := range keys {
+		if _, ok := args[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// hasNetworkQuotaArgs checks if any network quota arguments were provided.
+func hasNetworkQuotaArgs(args map[string]interface{}) bool {
+	keys := []string{"max_bridges", "max_ports", "max_bandwidth_mbps"}
+	for _, key := range keys {
+		if _, ok := args[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// hasStorageQuotaArgs checks if any storage quota arguments were provided.
+func hasStorageQuotaArgs(args map[string]interface{}) bool {
+	keys := []string{"max_volumes_gb", "max_snapshots"}
+	for _, key := range keys {
+		if _, ok := args[key]; ok {
+			return true
+		}
+	}
+	return false
+}

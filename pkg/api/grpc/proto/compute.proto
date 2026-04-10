@@ -1,0 +1,656 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+import "tpm.proto";
+
+// Compute service for VM and container lifecycle management
+service ComputeService {
+  // VM operations
+  rpc CreateVM(CreateVMRequest) returns (CreateVMResponse);
+  rpc StartVM(StartVMRequest) returns (StartVMResponse);
+  rpc StopVM(StopVMRequest) returns (StopVMResponse);
+  rpc RebootVM(RebootVMRequest) returns (RebootVMResponse);
+  rpc DeleteVM(DeleteVMRequest) returns (DeleteVMResponse);
+  rpc GetVM(GetVMRequest) returns (GetVMResponse);
+  rpc ListVMs(ListVMsRequest) returns (ListVMsResponse);
+
+  // VM console and monitoring
+  rpc AttachVMConsole(AttachVMConsoleRequest) returns (stream ConsoleOutput);
+  rpc SendVMConsoleInput(stream ConsoleInput) returns (ConsoleInputResponse);
+  rpc GetVMLogs(GetVMLogsRequest) returns (stream LogEntry);
+  rpc GetVMMetrics(GetVMMetricsRequest) returns (VMMetricsResponse);
+
+  // VM disk operations
+  rpc AttachDisk(AttachDiskRequest) returns (AttachDiskResponse);
+  rpc DetachDisk(DetachDiskRequest) returns (DetachDiskResponse);
+  rpc ResizeDisk(ResizeDiskRequest) returns (ResizeDiskResponse);
+
+  // VM snapshot operations
+  rpc CreateSnapshot(CreateSnapshotRequest) returns (CreateSnapshotResponse);
+  rpc RestoreSnapshot(RestoreSnapshotRequest) returns (RestoreSnapshotResponse);
+  rpc DeleteSnapshot(DeleteSnapshotRequest) returns (DeleteSnapshotResponse);
+  rpc ListSnapshots(ListSnapshotsRequest) returns (ListSnapshotsResponse);
+
+  // VM migration
+  rpc MigrateVM(MigrateVMRequest) returns (MigrateVMResponse);
+
+  // Container operations
+  rpc CreateContainer(CreateContainerRequest) returns (CreateContainerResponse);
+  rpc StartContainer(StartContainerRequest) returns (StartContainerResponse);
+  rpc StopContainer(StopContainerRequest) returns (StopContainerResponse);
+  rpc DeleteContainer(DeleteContainerRequest) returns (DeleteContainerResponse);
+  rpc GetContainer(GetContainerRequest) returns (GetContainerResponse);
+  rpc ListContainers(ListContainersRequest) returns (ListContainersResponse);
+
+  // Container console and monitoring
+  rpc AttachContainer(AttachContainerRequest) returns (stream ConsoleOutput);
+  rpc ExecContainer(ExecContainerRequest) returns (ExecContainerResponse);
+  rpc GetContainerLogs(GetContainerLogsRequest) returns (stream LogEntry);
+  rpc GetContainerMetrics(GetContainerMetricsRequest) returns (ContainerMetricsResponse);
+
+  // VM attestation
+  rpc AttestVM(AttestVMRequest) returns (AttestVMResponse);
+  rpc VerifyVMAttestation(VerifyVMAttestationRequest) returns (VerifyVMAttestationResponse);
+}
+
+// VM state
+enum VMState {
+  VM_STATE_UNSPECIFIED = 0;
+  VM_STATE_STOPPED = 1;
+  VM_STATE_STARTING = 2;
+  VM_STATE_RUNNING = 3;
+  VM_STATE_PAUSED = 4;
+  VM_STATE_STOPPING = 5;
+  VM_STATE_REBOOTING = 6;
+  VM_STATE_MIGRATING = 7;
+  VM_STATE_ERROR = 8;
+}
+
+// Firmware type
+enum FirmwareType {
+  FIRMWARE_TYPE_UNSPECIFIED = 0;
+  FIRMWARE_TYPE_BIOS = 1;
+  FIRMWARE_TYPE_UEFI = 2;
+  FIRMWARE_TYPE_UEFI_SECURE_BOOT = 3;
+}
+
+// Boot device
+enum BootDevice {
+  BOOT_DEVICE_UNSPECIFIED = 0;
+  BOOT_DEVICE_DISK = 1;
+  BOOT_DEVICE_CDROM = 2;
+  BOOT_DEVICE_NETWORK = 3;
+}
+
+// Disk type
+enum DiskType {
+  DISK_TYPE_UNSPECIFIED = 0;
+  DISK_TYPE_RAW = 1;
+  DISK_TYPE_QCOW2 = 2;
+  DISK_TYPE_VDI = 3;
+  DISK_TYPE_VMDK = 4;
+}
+
+// Disk bus
+enum DiskBus {
+  DISK_BUS_UNSPECIFIED = 0;
+  DISK_BUS_IDE = 1;
+  DISK_BUS_SATA = 2;
+  DISK_BUS_SCSI = 3;
+  DISK_BUS_VIRTIO = 4;
+  DISK_BUS_NVME = 5;
+}
+
+// Network model
+enum NetworkModel {
+  NETWORK_MODEL_UNSPECIFIED = 0;
+  NETWORK_MODEL_E1000 = 1;
+  NETWORK_MODEL_VIRTIO = 2;
+  NETWORK_MODEL_RTL8139 = 3;
+}
+
+// Graphics type
+enum GraphicsType {
+  GRAPHICS_TYPE_UNSPECIFIED = 0;
+  GRAPHICS_TYPE_NONE = 1;
+  GRAPHICS_TYPE_VNC = 2;
+  GRAPHICS_TYPE_SPICE = 3;
+  GRAPHICS_TYPE_SDL = 4;
+}
+
+// CPU configuration
+message CPUConfig {
+  uint32 cores = 1;
+  uint32 sockets = 2;
+  uint32 threads = 3;
+  string model = 4;
+  repeated string features = 5;
+}
+
+// Memory configuration
+message MemoryConfig {
+  uint64 size_mb = 1;
+  bool hugepages = 2;
+  bool shared = 3;
+}
+
+// Disk configuration
+message DiskConfig {
+  string id = 1;
+  string path = 2;
+  DiskType type = 3;
+  DiskBus bus = 4;
+  uint64 size_gb = 5;
+  bool readonly = 6;
+  bool bootable = 7;
+  string backing_file = 8;
+}
+
+// Network interface configuration
+message NetworkConfig {
+  string id = 1;
+  string bridge = 2;
+  string mac_address = 3;
+  NetworkModel model = 4;
+  uint32 vlan = 5;
+  uint64 bandwidth_limit_mbps = 6;
+}
+
+// Graphics configuration
+message GraphicsConfig {
+  GraphicsType type = 1;
+  string listen = 2;
+  uint32 port = 3;
+  string password = 4;
+  string keymap = 5;
+}
+
+// TPM configuration
+message TPMConfig {
+  bool enabled = 1;
+  TPMVersion version = 2;
+  string device_path = 3;
+  bool emulated = 4;
+  string state_dir = 5;
+}
+
+// VM configuration
+message VMConfig {
+  string name = 1;
+  string description = 2;
+  FirmwareType firmware = 3;
+  BootDevice boot_device = 4;
+  CPUConfig cpu = 5;
+  MemoryConfig memory = 6;
+  repeated DiskConfig disks = 7;
+  repeated NetworkConfig networks = 8;
+  GraphicsConfig graphics = 9;
+  TPMConfig tpm = 10;
+  bool secure_boot = 11;
+  bytes nvram = 12; // UEFI NVRAM vars
+  map<string, string> labels = 13;
+  map<string, string> metadata = 14;
+}
+
+// VM information
+message VM {
+  string id = 1;
+  VMConfig config = 2;
+  VMState state = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  string host_id = 6;
+  VMMetrics metrics = 7;
+}
+
+// VM metrics
+message VMMetrics {
+  double cpu_usage_percent = 1;
+  uint64 memory_used_mb = 2;
+  uint64 memory_available_mb = 3;
+  uint64 disk_read_bytes = 4;
+  uint64 disk_write_bytes = 5;
+  uint64 network_rx_bytes = 6;
+  uint64 network_tx_bytes = 7;
+  uint32 uptime_seconds = 8;
+}
+
+// Snapshot configuration
+message SnapshotConfig {
+  string name = 1;
+  string description = 2;
+  bool memory_snapshot = 3;
+  bool disk_snapshot = 4;
+}
+
+// Snapshot information
+message Snapshot {
+  string id = 1;
+  string vm_id = 2;
+  SnapshotConfig config = 3;
+  google.protobuf.Timestamp created_at = 4;
+  uint64 size_bytes = 5;
+  VMState vm_state = 6;
+}
+
+// Container state
+enum ContainerState {
+  CONTAINER_STATE_UNSPECIFIED = 0;
+  CONTAINER_STATE_CREATED = 1;
+  CONTAINER_STATE_STARTING = 2;
+  CONTAINER_STATE_RUNNING = 3;
+  CONTAINER_STATE_PAUSED = 4;
+  CONTAINER_STATE_STOPPING = 5;
+  CONTAINER_STATE_STOPPED = 6;
+  CONTAINER_STATE_EXITED = 7;
+  CONTAINER_STATE_ERROR = 8;
+}
+
+// Container restart policy
+enum RestartPolicy {
+  RESTART_POLICY_UNSPECIFIED = 0;
+  RESTART_POLICY_NO = 1;
+  RESTART_POLICY_ON_FAILURE = 2;
+  RESTART_POLICY_ALWAYS = 3;
+  RESTART_POLICY_UNLESS_STOPPED = 4;
+}
+
+// Volume mount
+message VolumeMount {
+  string source = 1;
+  string destination = 2;
+  bool readonly = 3;
+  string type = 4; // bind, volume, tmpfs
+  map<string, string> options = 5;
+}
+
+// Port mapping
+message PortMapping {
+  uint32 host_port = 1;
+  uint32 container_port = 2;
+  string protocol = 3; // tcp, udp
+  string host_ip = 4;
+}
+
+// Environment variable
+message EnvVar {
+  string name = 1;
+  string value = 2;
+  string value_from = 3; // secret, configmap
+}
+
+// Container configuration
+message ContainerConfig {
+  string name = 1;
+  string image = 2;
+  string image_hash = 3;
+  repeated string command = 4;
+  repeated string args = 5;
+  repeated EnvVar env = 6;
+  string working_dir = 7;
+  repeated VolumeMount volumes = 8;
+  repeated PortMapping ports = 9;
+  bool privileged = 10;
+  repeated string capabilities = 11;
+  ResourceLimits resources = 12;
+  RestartPolicy restart_policy = 13;
+  bool tpm_access = 14; // Mount host TPM device
+  string network = 15;
+  map<string, string> labels = 16;
+  map<string, string> metadata = 17;
+}
+
+// Container information
+message Container {
+  string id = 1;
+  ContainerConfig config = 2;
+  ContainerState state = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp started_at = 5;
+  google.protobuf.Timestamp finished_at = 6;
+  int32 exit_code = 7;
+  string host_id = 8;
+  ContainerMetrics metrics = 9;
+}
+
+// Container metrics
+message ContainerMetrics {
+  double cpu_usage_percent = 1;
+  uint64 memory_used_mb = 2;
+  uint64 memory_limit_mb = 3;
+  uint64 disk_read_bytes = 4;
+  uint64 disk_write_bytes = 5;
+  uint64 network_rx_bytes = 6;
+  uint64 network_tx_bytes = 7;
+  uint32 uptime_seconds = 8;
+}
+
+// Console output
+message ConsoleOutput {
+  bytes data = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  string stream = 3; // stdout, stderr
+}
+
+// Console input
+message ConsoleInput {
+  bytes data = 1;
+}
+
+// Console input response
+message ConsoleInputResponse {
+  Status status = 1;
+}
+
+// Log entry
+message LogEntry {
+  google.protobuf.Timestamp timestamp = 1;
+  string level = 2;
+  string message = 3;
+  string source = 4;
+  map<string, string> metadata = 5;
+}
+
+// VM request/response
+message CreateVMRequest {
+  VMConfig config = 1;
+  bool start = 2;
+}
+
+message CreateVMResponse {
+  Status status = 1;
+  VM vm = 2;
+}
+
+message StartVMRequest {
+  string id = 1;
+}
+
+message StartVMResponse {
+  Status status = 1;
+}
+
+message StopVMRequest {
+  string id = 1;
+  bool force = 2;
+  uint32 timeout_seconds = 3;
+}
+
+message StopVMResponse {
+  Status status = 1;
+}
+
+message RebootVMRequest {
+  string id = 1;
+  bool force = 2;
+}
+
+message RebootVMResponse {
+  Status status = 1;
+}
+
+message DeleteVMRequest {
+  string id = 1;
+  bool delete_disks = 2;
+}
+
+message DeleteVMResponse {
+  Status status = 1;
+}
+
+message GetVMRequest {
+  string id = 1;
+}
+
+message GetVMResponse {
+  VM vm = 1;
+}
+
+message ListVMsRequest {
+  LabelSelector selector = 1;
+  PaginationRequest pagination = 2;
+  repeated VMState states = 3;
+}
+
+message ListVMsResponse {
+  repeated VM vms = 1;
+  PaginationResponse pagination = 2;
+}
+
+// VM console request
+message AttachVMConsoleRequest {
+  string id = 1;
+}
+
+// VM logs request
+message GetVMLogsRequest {
+  string id = 1;
+  bool follow = 2;
+  uint32 tail_lines = 3;
+  google.protobuf.Timestamp since = 4;
+}
+
+// VM metrics request/response
+message GetVMMetricsRequest {
+  string id = 1;
+}
+
+message VMMetricsResponse {
+  VMMetrics metrics = 1;
+}
+
+// Disk request/response
+message AttachDiskRequest {
+  string vm_id = 1;
+  DiskConfig disk = 2;
+}
+
+message AttachDiskResponse {
+  Status status = 1;
+}
+
+message DetachDiskRequest {
+  string vm_id = 1;
+  string disk_id = 2;
+}
+
+message DetachDiskResponse {
+  Status status = 1;
+}
+
+message ResizeDiskRequest {
+  string vm_id = 1;
+  string disk_id = 2;
+  uint64 new_size_gb = 3;
+}
+
+message ResizeDiskResponse {
+  Status status = 1;
+}
+
+// Snapshot request/response
+message CreateSnapshotRequest {
+  string vm_id = 1;
+  SnapshotConfig config = 2;
+}
+
+message CreateSnapshotResponse {
+  Status status = 1;
+  Snapshot snapshot = 2;
+}
+
+message RestoreSnapshotRequest {
+  string vm_id = 1;
+  string snapshot_id = 2;
+}
+
+message RestoreSnapshotResponse {
+  Status status = 1;
+}
+
+message DeleteSnapshotRequest {
+  string vm_id = 1;
+  string snapshot_id = 2;
+}
+
+message DeleteSnapshotResponse {
+  Status status = 1;
+}
+
+message ListSnapshotsRequest {
+  string vm_id = 1;
+}
+
+message ListSnapshotsResponse {
+  repeated Snapshot snapshots = 1;
+}
+
+// Migration request/response
+message MigrateVMRequest {
+  string vm_id = 1;
+  string destination_host = 2;
+  bool live_migration = 3;
+  uint64 bandwidth_limit_mbps = 4;
+}
+
+message MigrateVMResponse {
+  Status status = 1;
+}
+
+// Container request/response
+message CreateContainerRequest {
+  ContainerConfig config = 1;
+  bool start = 2;
+}
+
+message CreateContainerResponse {
+  Status status = 1;
+  Container container = 2;
+}
+
+message StartContainerRequest {
+  string id = 1;
+}
+
+message StartContainerResponse {
+  Status status = 1;
+}
+
+message StopContainerRequest {
+  string id = 1;
+  uint32 timeout_seconds = 2;
+}
+
+message StopContainerResponse {
+  Status status = 1;
+}
+
+message DeleteContainerRequest {
+  string id = 1;
+  bool force = 2;
+  bool delete_volumes = 3;
+}
+
+message DeleteContainerResponse {
+  Status status = 1;
+}
+
+message GetContainerRequest {
+  string id = 1;
+}
+
+message GetContainerResponse {
+  Container container = 1;
+}
+
+message ListContainersRequest {
+  LabelSelector selector = 1;
+  PaginationRequest pagination = 2;
+  repeated ContainerState states = 3;
+}
+
+message ListContainersResponse {
+  repeated Container containers = 1;
+  PaginationResponse pagination = 2;
+}
+
+// Container console request
+message AttachContainerRequest {
+  string id = 1;
+  bool stdin = 2;
+  bool stdout = 3;
+  bool stderr = 4;
+  bool tty = 5;
+}
+
+// Container exec request/response
+message ExecContainerRequest {
+  string id = 1;
+  repeated string command = 2;
+  repeated EnvVar env = 3;
+  string working_dir = 4;
+  bool tty = 5;
+}
+
+message ExecContainerResponse {
+  Status status = 1;
+  int32 exit_code = 2;
+  bytes stdout = 3;
+  bytes stderr = 4;
+}
+
+// Container logs request
+message GetContainerLogsRequest {
+  string id = 1;
+  bool follow = 2;
+  uint32 tail_lines = 3;
+  google.protobuf.Timestamp since = 4;
+  bool stdout = 5;
+  bool stderr = 6;
+}
+
+// Container metrics request/response
+message GetContainerMetricsRequest {
+  string id = 1;
+}
+
+message ContainerMetricsResponse {
+  ContainerMetrics metrics = 1;
+}
+
+// VM attestation request/response
+message AttestVMRequest {
+  string vm_id = 1;
+  bytes nonce = 2;
+  repeated uint32 pcr_indices = 3;
+  PCRBank pcr_bank = 4;
+}
+
+message AttestVMResponse {
+  Status status = 1;
+  bytes quote = 2;
+  bytes signature = 3;
+  repeated PCRValue pcr_values = 4;
+  bytes event_log = 5;
+  bytes ak_public = 6;
+}
+
+message VerifyVMAttestationRequest {
+  string vm_id = 1;
+  bytes quote = 2;
+  bytes signature = 3;
+  bytes nonce = 4;
+  repeated PCRValue expected_pcrs = 5;
+}
+
+message VerifyVMAttestationResponse {
+  Status status = 1;
+  bool verified = 2;
+  string message = 3;
+  repeated PCRValue actual_pcrs = 4;
+}

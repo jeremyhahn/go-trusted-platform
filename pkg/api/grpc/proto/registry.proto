@@ -1,0 +1,299 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// RegistryService provides container and artifact registry operations including
+// push, pull, list, inspect, delete, and status operations.
+service RegistryService {
+  // Push pushes an artifact or container image to the registry.
+  rpc Push(stream PushRequest) returns (PushResponse);
+
+  // Pull pulls an artifact or container image from the registry.
+  rpc Pull(PullRequest) returns (stream PullResponse);
+
+  // List returns a paginated list of artifacts in the registry.
+  rpc List(ListArtifactsRequest) returns (ListArtifactsResponse);
+
+  // Inspect retrieves detailed metadata about an artifact.
+  rpc Inspect(InspectArtifactRequest) returns (InspectArtifactResponse);
+
+  // Delete removes an artifact from the registry.
+  rpc Delete(DeleteArtifactRequest) returns (DeleteArtifactResponse);
+
+  // Status returns the current status of the registry.
+  rpc Status(RegistryStatusRequest) returns (RegistryStatusResponse);
+}
+
+// ArtifactType defines the type of artifact stored in the registry.
+enum ArtifactType {
+  ARTIFACT_TYPE_UNSPECIFIED = 0;
+  ARTIFACT_TYPE_CONTAINER_IMAGE = 1;
+  ARTIFACT_TYPE_HELM_CHART = 2;
+  ARTIFACT_TYPE_OCI_ARTIFACT = 3;
+  ARTIFACT_TYPE_WASM_MODULE = 4;
+  ARTIFACT_TYPE_BINARY = 5;
+}
+
+// ArtifactState represents the state of an artifact.
+enum ArtifactState {
+  ARTIFACT_STATE_UNSPECIFIED = 0;
+  ARTIFACT_STATE_UPLOADING = 1;
+  ARTIFACT_STATE_AVAILABLE = 2;
+  ARTIFACT_STATE_QUARANTINED = 3;
+  ARTIFACT_STATE_DELETING = 4;
+  ARTIFACT_STATE_DELETED = 5;
+}
+
+// CompressionType defines the compression algorithm used for artifacts.
+enum CompressionType {
+  COMPRESSION_TYPE_UNSPECIFIED = 0;
+  COMPRESSION_TYPE_NONE = 1;
+  COMPRESSION_TYPE_GZIP = 2;
+  COMPRESSION_TYPE_ZSTD = 3;
+}
+
+// ArtifactLayer represents a single layer of a container image or artifact.
+message ArtifactLayer {
+  string digest = 1;
+  int64 size = 2;
+  string media_type = 3;
+  CompressionType compression = 4;
+  map<string, string> annotations = 5;
+}
+
+// ArtifactManifest represents the manifest of a container image or artifact.
+message ArtifactManifest {
+  string digest = 1;
+  string media_type = 2;
+  int64 size = 3;
+  string config_digest = 4;
+  repeated ArtifactLayer layers = 5;
+  map<string, string> annotations = 6;
+}
+
+// Artifact represents an artifact stored in the registry.
+message Artifact {
+  string id = 1;
+  string repository = 2;
+  string tag = 3;
+  string digest = 4;
+  ArtifactType type = 5;
+  ArtifactState state = 6;
+  int64 size = 7;
+  ArtifactManifest manifest = 8;
+  map<string, string> labels = 9;
+  map<string, string> annotations = 10;
+  string os = 11;
+  string architecture = 12;
+  string author = 13;
+  google.protobuf.Timestamp created_at = 14;
+  google.protobuf.Timestamp updated_at = 15;
+  google.protobuf.Timestamp pushed_at = 16;
+  google.protobuf.Timestamp last_pulled_at = 17;
+  int64 pull_count = 18;
+}
+
+// ArtifactSignature represents a signature attached to an artifact.
+message ArtifactSignature {
+  string key_id = 1;
+  string algorithm = 2;
+  bytes signature = 3;
+  google.protobuf.Timestamp signed_at = 4;
+  string signer = 5;
+}
+
+// VulnerabilitySeverity defines the severity level of a vulnerability.
+enum VulnerabilitySeverity {
+  VULNERABILITY_SEVERITY_UNSPECIFIED = 0;
+  VULNERABILITY_SEVERITY_LOW = 1;
+  VULNERABILITY_SEVERITY_MEDIUM = 2;
+  VULNERABILITY_SEVERITY_HIGH = 3;
+  VULNERABILITY_SEVERITY_CRITICAL = 4;
+}
+
+// Vulnerability represents a security vulnerability found in an artifact.
+message Vulnerability {
+  string id = 1;
+  VulnerabilitySeverity severity = 2;
+  string package_name = 3;
+  string package_version = 4;
+  string fixed_version = 5;
+  string description = 6;
+  string link = 7;
+}
+
+// ScanResult represents the result of a vulnerability scan.
+message ScanResult {
+  string scanner = 1;
+  google.protobuf.Timestamp scanned_at = 2;
+  repeated Vulnerability vulnerabilities = 3;
+  int32 low_count = 4;
+  int32 medium_count = 5;
+  int32 high_count = 6;
+  int32 critical_count = 7;
+}
+
+// ArtifactDetail provides comprehensive information about an artifact.
+message ArtifactDetail {
+  Artifact artifact = 1;
+  repeated ArtifactSignature signatures = 2;
+  ScanResult scan_result = 3;
+  repeated string tags = 4;
+}
+
+// =============================================================================
+// Push Request/Response Messages
+// =============================================================================
+
+// PushRequest is a streaming request for pushing artifact data.
+message PushRequest {
+  oneof data {
+    PushMetadata metadata = 1;
+    bytes chunk = 2;
+  }
+}
+
+// PushMetadata contains metadata for the push operation.
+message PushMetadata {
+  string repository = 1;
+  string tag = 2;
+  ArtifactType type = 3;
+  string media_type = 4;
+  int64 total_size = 5;
+  string digest = 6;
+  map<string, string> labels = 7;
+  map<string, string> annotations = 8;
+  string os = 9;
+  string architecture = 10;
+}
+
+// PushResponse contains the result of the push operation.
+message PushResponse {
+  Status status = 1;
+  Artifact artifact = 2;
+  int64 bytes_received = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// =============================================================================
+// Pull Request/Response Messages
+// =============================================================================
+
+// PullRequest specifies the artifact to pull.
+message PullRequest {
+  string repository = 1;
+  string reference = 2;
+  string digest = 3;
+}
+
+// PullResponse is a streaming response containing artifact data.
+message PullResponse {
+  oneof data {
+    PullMetadata metadata = 1;
+    bytes chunk = 2;
+  }
+}
+
+// PullMetadata contains metadata about the artifact being pulled.
+message PullMetadata {
+  Artifact artifact = 1;
+  int64 total_size = 2;
+}
+
+// =============================================================================
+// List Request/Response Messages
+// =============================================================================
+
+// ListArtifactsRequest specifies filters and pagination for listing artifacts.
+message ListArtifactsRequest {
+  string repository = 1;
+  ArtifactType type = 2;
+  LabelSelector selector = 3;
+  int32 limit = 4;
+  int32 offset = 5;
+  string cursor = 6;
+  string sort_by = 7;
+  bool ascending = 8;
+}
+
+// ListArtifactsResponse contains the list of artifacts.
+message ListArtifactsResponse {
+  repeated Artifact artifacts = 1;
+  int32 total = 2;
+  string next_cursor = 3;
+  bool has_more = 4;
+  PaginationResponse pagination = 5;
+}
+
+// =============================================================================
+// Inspect Request/Response Messages
+// =============================================================================
+
+// InspectArtifactRequest specifies the artifact to inspect.
+message InspectArtifactRequest {
+  string repository = 1;
+  string reference = 2;
+  string digest = 3;
+  bool include_signatures = 4;
+  bool include_scan_result = 5;
+}
+
+// InspectArtifactResponse contains detailed artifact information.
+message InspectArtifactResponse {
+  Status status = 1;
+  ArtifactDetail detail = 2;
+}
+
+// =============================================================================
+// Delete Request/Response Messages
+// =============================================================================
+
+// DeleteArtifactRequest specifies the artifact to delete.
+message DeleteArtifactRequest {
+  string repository = 1;
+  string reference = 2;
+  string digest = 3;
+  bool force = 4;
+}
+
+// DeleteArtifactResponse contains the result of the delete operation.
+message DeleteArtifactResponse {
+  Status status = 1;
+  string digest = 2;
+  int64 bytes_freed = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// =============================================================================
+// Status Request/Response Messages
+// =============================================================================
+
+// RegistryStatusRequest is an empty request for registry status.
+message RegistryStatusRequest {}
+
+// StorageStats contains storage usage statistics.
+message StorageStats {
+  int64 total_bytes = 1;
+  int64 used_bytes = 2;
+  int64 available_bytes = 3;
+  int64 artifact_count = 4;
+  int64 layer_count = 5;
+  int64 repository_count = 6;
+}
+
+// RegistryStatusResponse contains the registry status information.
+message RegistryStatusResponse {
+  Status status = 1;
+  HealthStatus health = 2;
+  string version = 3;
+  StorageStats storage = 4;
+  bool read_only = 5;
+  repeated ComponentHealth components = 6;
+  google.protobuf.Timestamp started_at = 7;
+  google.protobuf.Timestamp timestamp = 8;
+}

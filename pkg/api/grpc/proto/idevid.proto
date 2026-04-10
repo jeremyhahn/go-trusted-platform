@@ -1,0 +1,522 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// IDevIDService provides device identity management operations for
+// IDevID (Initial Device Identifier) and IAK (Initial Attestation Key)
+// per TCG (Trusted Computing Group) specifications.
+service IDevIDService {
+  // ==========================================================================
+  // IDevID Operations
+  // ==========================================================================
+
+  // GenerateIDevID creates a new IDevID key in the TPM.
+  // Returns AlreadyExists if a key exists at the handle and Overwrite is false.
+  rpc GenerateIDevID(GenerateIDevIDRequest) returns (GenerateIDevIDResponse);
+
+  // GetIDevIDInfo retrieves information about the IDevID key.
+  // Returns NotFound if no key exists.
+  rpc GetIDevIDInfo(GetIDevIDInfoRequest) returns (GetIDevIDInfoResponse);
+
+  // HasIDevID checks if an IDevID key exists in the TPM.
+  rpc HasIDevID(HasIDevIDRequest) returns (HasIDevIDResponse);
+
+  // DeleteIDevID removes the IDevID key from the TPM.
+  // Returns NotFound if no key exists.
+  rpc DeleteIDevID(DeleteIDevIDRequest) returns (DeleteIDevIDResponse);
+
+  // ==========================================================================
+  // IAK Operations
+  // ==========================================================================
+
+  // GenerateIAK creates a new IAK (Initial Attestation Key) in the TPM.
+  // Returns AlreadyExists if a key exists at the handle and Overwrite is false.
+  rpc GenerateIAK(GenerateIAKRequest) returns (GenerateIAKResponse);
+
+  // GetIAKInfo retrieves information about the IAK key.
+  // Returns NotFound if no key exists.
+  rpc GetIAKInfo(GetIAKInfoRequest) returns (GetIAKInfoResponse);
+
+  // HasIAK checks if an IAK key exists in the TPM.
+  rpc HasIAK(HasIAKRequest) returns (HasIAKResponse);
+
+  // DeleteIAK removes the IAK key from the TPM.
+  // Returns NotFound if no key exists.
+  rpc DeleteIAK(DeleteIAKRequest) returns (DeleteIAKResponse);
+
+  // ==========================================================================
+  // CSR Operations
+  // ==========================================================================
+
+  // CreateIDevIDCSR creates a certificate signing request for the IDevID key.
+  // The CSR includes TCG-specific attributes in the SAN.
+  rpc CreateIDevIDCSR(CreateIDevIDCSRRequest) returns (CreateIDevIDCSRResponse);
+
+  // CreateIAKCSR creates a certificate signing request for the IAK key.
+  // The CSR includes TCG-specific attributes in the SAN.
+  rpc CreateIAKCSR(CreateIAKCSRRequest) returns (CreateIAKCSRResponse);
+
+  // ==========================================================================
+  // Certificate Operations
+  // ==========================================================================
+
+  // InstallIDevIDCertificate installs an IDevID certificate.
+  // The certificate public key must match the IDevID key in the TPM.
+  rpc InstallIDevIDCertificate(InstallIDevIDCertificateRequest) returns (InstallIDevIDCertificateResponse);
+
+  // InstallIAKCertificate installs an IAK certificate.
+  // The certificate public key must match the IAK key in the TPM.
+  rpc InstallIAKCertificate(InstallIAKCertificateRequest) returns (InstallIAKCertificateResponse);
+
+  // GetIDevIDCertificate retrieves the installed IDevID certificate.
+  // Returns NotFound if no certificate is installed.
+  rpc GetIDevIDCertificate(GetIDevIDCertificateRequest) returns (GetIDevIDCertificateResponse);
+
+  // GetIAKCertificate retrieves the installed IAK certificate.
+  // Returns NotFound if no certificate is installed.
+  rpc GetIAKCertificate(GetIAKCertificateRequest) returns (GetIAKCertificateResponse);
+
+  // DeleteIDevIDCertificate removes the installed IDevID certificate.
+  // Returns NotFound if no certificate is installed.
+  rpc DeleteIDevIDCertificate(DeleteIDevIDCertificateRequest) returns (DeleteIDevIDCertificateResponse);
+
+  // DeleteIAKCertificate removes the installed IAK certificate.
+  // Returns NotFound if no certificate is installed.
+  rpc DeleteIAKCertificate(DeleteIAKCertificateRequest) returns (DeleteIAKCertificateResponse);
+
+  // ==========================================================================
+  // Device Attributes
+  // ==========================================================================
+
+  // GetDeviceAttributes retrieves TCG device attributes from TPM and platform.
+  // These attributes are used in CSR generation for the Subject Alternative Name.
+  rpc GetDeviceAttributes(GetDeviceAttributesRequest) returns (GetDeviceAttributesResponse);
+
+  // ==========================================================================
+  // TPM Context Management
+  // ==========================================================================
+
+  // FlushTransientContexts flushes all transient TPM contexts.
+  // This helps prevent TPM_RC_OBJECT_MEMORY errors by freeing temporary handles.
+  rpc FlushTransientContexts(FlushTransientContextsRequest) returns (FlushTransientContextsResponse);
+
+  // ==========================================================================
+  // TPM Binding Verification
+  // ==========================================================================
+
+  // ActivateCredential decrypts a credential blob using the EK and AK.
+  // Used to prove TPM binding during enrollment.
+  rpc ActivateCredential(ActivateCredentialRequest) returns (ActivateCredentialResponse);
+}
+
+// =============================================================================
+// Enums
+// =============================================================================
+
+// DeviceKeyAlgorithm specifies the algorithm for device identity keys.
+enum DeviceKeyAlgorithm {
+  DEVICE_KEY_ALGORITHM_UNSPECIFIED = 0;
+  // ECDSA with P-256 curve (recommended by TCG).
+  DEVICE_KEY_ALGORITHM_ECDSA_P256 = 1;
+  // ECDSA with P-384 curve.
+  DEVICE_KEY_ALGORITHM_ECDSA_P384 = 2;
+  // RSA with 2048-bit modulus.
+  DEVICE_KEY_ALGORITHM_RSA_2048 = 3;
+  // RSA with 3072-bit modulus.
+  DEVICE_KEY_ALGORITHM_RSA_3072 = 4;
+}
+
+// CertStorageType specifies where certificates are stored.
+enum CertStorageType {
+  CERT_STORAGE_TYPE_UNSPECIFIED = 0;
+  // Store certificates in TPM NVRAM.
+  CERT_STORAGE_TYPE_NVRAM = 1;
+  // Store certificates on the filesystem.
+  CERT_STORAGE_TYPE_FILESYSTEM = 2;
+}
+
+// =============================================================================
+// Configuration Messages
+// =============================================================================
+
+// IDevIDConfig configures IDevID key generation and certificate management.
+message IDevIDConfig {
+  // Algorithm specifies the key algorithm (default: ECDSA-P256).
+  DeviceKeyAlgorithm algorithm = 1;
+
+  // Handle is the persistent TPM handle for the IDevID key.
+  // Default: 0x81010100.
+  uint32 handle = 2;
+
+  // Hierarchy specifies the TPM hierarchy for key creation.
+  // Values: "endorsement", "owner", "platform". Default: "endorsement".
+  string hierarchy = 3;
+
+  // SubjectCommonName is the CN for the certificate subject.
+  // If empty, uses the device serial number.
+  string subject_common_name = 4;
+
+  // SubjectOrganization is the O for the certificate subject.
+  string subject_organization = 5;
+
+  // Storage specifies where to store the certificate.
+  CertStorageType storage = 6;
+
+  // StoragePath is the filesystem path for certificate storage.
+  // Only used when storage is CERT_STORAGE_TYPE_FILESYSTEM.
+  string storage_path = 7;
+
+  // NVIndex is the NVRAM index for certificate storage.
+  // Only used when storage is CERT_STORAGE_TYPE_NVRAM.
+  // Default: 0x01C00100.
+  uint32 nv_index = 8;
+
+  // OwnerAuth is the TPM owner hierarchy authorization value.
+  string owner_auth = 9;
+
+  // EndorsementAuth is the TPM endorsement hierarchy authorization value.
+  string endorsement_auth = 10;
+
+  // Overwrite allows overwriting an existing key at the handle.
+  bool overwrite = 11;
+}
+
+// IAKConfig configures IAK key generation and certificate management.
+message IAKConfig {
+  // Algorithm specifies the key algorithm (default: ECDSA-P256).
+  DeviceKeyAlgorithm algorithm = 1;
+
+  // Handle is the persistent TPM handle for the IAK key.
+  // Default: 0x81010101.
+  uint32 handle = 2;
+
+  // Hierarchy specifies the TPM hierarchy for key creation.
+  // Values: "endorsement", "owner", "platform". Default: "endorsement".
+  string hierarchy = 3;
+
+  // SubjectCommonName is the CN for the certificate subject.
+  // If empty, uses the device serial number with "-ak" suffix.
+  string subject_common_name = 4;
+
+  // SubjectOrganization is the O for the certificate subject.
+  string subject_organization = 5;
+
+  // Storage specifies where to store the certificate.
+  CertStorageType storage = 6;
+
+  // StoragePath is the filesystem path for certificate storage.
+  // Only used when storage is CERT_STORAGE_TYPE_FILESYSTEM.
+  string storage_path = 7;
+
+  // NVIndex is the NVRAM index for certificate storage.
+  // Only used when storage is CERT_STORAGE_TYPE_NVRAM.
+  // Default: 0x01C00101.
+  uint32 nv_index = 8;
+
+  // OwnerAuth is the TPM owner hierarchy authorization value.
+  string owner_auth = 9;
+
+  // EndorsementAuth is the TPM endorsement hierarchy authorization value.
+  string endorsement_auth = 10;
+
+  // Overwrite allows overwriting an existing key at the handle.
+  bool overwrite = 11;
+}
+
+// CSRTemplate configures CSR generation.
+message CSRTemplate {
+  // CommonName is the subject CN.
+  string common_name = 1;
+
+  // Organization is the subject O.
+  string organization = 2;
+
+  // OrganizationalUnit is the subject OU.
+  string organizational_unit = 3;
+
+  // Country is the subject C.
+  string country = 4;
+
+  // Province is the subject ST.
+  string province = 5;
+
+  // Locality is the subject L.
+  string locality = 6;
+
+  // EmailAddresses contains email addresses for the SAN.
+  repeated string email_addresses = 7;
+
+  // DNSNames contains DNS names for the SAN.
+  repeated string dns_names = 8;
+
+  // TCGAttributes contains TCG-specific attributes for the SAN.
+  TCGDeviceAttributes tcg_attributes = 9;
+}
+
+// =============================================================================
+// Data Messages
+// =============================================================================
+
+// TCGDeviceAttributes contains TCG-specific device attributes.
+// These are used in CSR generation for the Subject Alternative Name
+// as defined by TCG specifications.
+message TCGDeviceAttributes {
+  // TPMManufacturer is the TPM manufacturer identifier (OID 2.23.133.2.1).
+  string tpm_manufacturer = 1;
+
+  // TPMModel is the TPM model/family identifier (OID 2.23.133.2.2).
+  string tpm_model = 2;
+
+  // TPMVersion is the TPM firmware version (OID 2.23.133.2.3).
+  string tpm_version = 3;
+
+  // PlatformManufacturer is the platform/system manufacturer (OID 2.23.133.2.4).
+  string platform_manufacturer = 4;
+
+  // PlatformModel is the platform/system model (OID 2.23.133.2.5).
+  string platform_model = 5;
+
+  // PlatformVersion is the platform/system version (OID 2.23.133.2.6).
+  string platform_version = 6;
+
+  // PlatformSerial is the platform/system serial number.
+  string platform_serial = 7;
+}
+
+// DeviceKeyInfo contains information about a device identity key.
+message DeviceKeyInfo {
+  // Handle is the TPM persistent handle.
+  uint32 handle = 1;
+
+  // Algorithm is the key algorithm.
+  DeviceKeyAlgorithm algorithm = 2;
+
+  // PublicKeyPEM is the PEM-encoded public key.
+  bytes public_key_pem = 3;
+
+  // CreatedAt is when the key was created.
+  google.protobuf.Timestamp created_at = 4;
+
+  // HasCertificate indicates if a certificate is installed.
+  bool has_certificate = 5;
+
+  // CertificateInfo contains certificate details if installed.
+  DeviceIdentityCertificate certificate_info = 6;
+}
+
+// DeviceIdentityCertificate represents a device identity certificate.
+message DeviceIdentityCertificate {
+  // PEM is the PEM-encoded certificate.
+  bytes pem = 1;
+
+  // DER is the DER-encoded certificate.
+  bytes der = 2;
+
+  // KeyType identifies the type of key (IDevID, IAK, LDevID, LAK).
+  string key_type = 3;
+
+  // TPMHandle is the TPM persistent handle for the associated key.
+  uint32 tpm_handle = 4;
+
+  // IssuedAt is when the certificate was issued.
+  google.protobuf.Timestamp issued_at = 5;
+
+  // ExpiresAt is when the certificate expires.
+  google.protobuf.Timestamp expires_at = 6;
+
+  // IssuerCN is the issuer common name.
+  string issuer_cn = 7;
+
+  // SubjectCN is the subject common name.
+  string subject_cn = 8;
+
+  // SerialNumber is the certificate serial number (hex encoded).
+  string serial_number = 9;
+
+  // Fingerprint is the SHA-256 fingerprint of the certificate (hex encoded).
+  string fingerprint = 10;
+
+  // KeyAlgorithm is the public key algorithm (RSA, ECDSA, Ed25519).
+  string key_algorithm = 11;
+
+  // SignatureAlgorithm is the signature algorithm used to sign the certificate.
+  string signature_algorithm = 12;
+
+  // KeySize is the key size in bits.
+  uint32 key_size = 13;
+}
+
+// =============================================================================
+// IDevID Request/Response Messages
+// =============================================================================
+
+message GenerateIDevIDRequest {
+  IDevIDConfig config = 1;
+}
+
+message GenerateIDevIDResponse {
+  Status status = 1;
+}
+
+message GetIDevIDInfoRequest {}
+
+message GetIDevIDInfoResponse {
+  DeviceKeyInfo key_info = 1;
+}
+
+message HasIDevIDRequest {}
+
+message HasIDevIDResponse {
+  bool exists = 1;
+}
+
+message DeleteIDevIDRequest {}
+
+message DeleteIDevIDResponse {
+  Status status = 1;
+}
+
+// =============================================================================
+// IAK Request/Response Messages
+// =============================================================================
+
+message GenerateIAKRequest {
+  IAKConfig config = 1;
+}
+
+message GenerateIAKResponse {
+  Status status = 1;
+}
+
+message GetIAKInfoRequest {}
+
+message GetIAKInfoResponse {
+  DeviceKeyInfo key_info = 1;
+}
+
+message HasIAKRequest {}
+
+message HasIAKResponse {
+  bool exists = 1;
+}
+
+message DeleteIAKRequest {}
+
+message DeleteIAKResponse {
+  Status status = 1;
+}
+
+// =============================================================================
+// CSR Request/Response Messages
+// =============================================================================
+
+message CreateIDevIDCSRRequest {
+  CSRTemplate template = 1;
+}
+
+message CreateIDevIDCSRResponse {
+  Status status = 1;
+  // CsrPEM is the PEM-encoded certificate signing request.
+  bytes csr_pem = 2;
+}
+
+message CreateIAKCSRRequest {
+  CSRTemplate template = 1;
+}
+
+message CreateIAKCSRResponse {
+  Status status = 1;
+  // CsrPEM is the PEM-encoded certificate signing request.
+  bytes csr_pem = 2;
+}
+
+// =============================================================================
+// Certificate Request/Response Messages
+// =============================================================================
+
+message InstallIDevIDCertificateRequest {
+  // CertificatePEM is the PEM-encoded certificate to install.
+  bytes certificate_pem = 1;
+}
+
+message InstallIDevIDCertificateResponse {
+  Status status = 1;
+}
+
+message InstallIAKCertificateRequest {
+  // CertificatePEM is the PEM-encoded certificate to install.
+  bytes certificate_pem = 1;
+}
+
+message InstallIAKCertificateResponse {
+  Status status = 1;
+}
+
+message GetIDevIDCertificateRequest {}
+
+message GetIDevIDCertificateResponse {
+  DeviceIdentityCertificate certificate = 1;
+}
+
+message GetIAKCertificateRequest {}
+
+message GetIAKCertificateResponse {
+  DeviceIdentityCertificate certificate = 1;
+}
+
+message DeleteIDevIDCertificateRequest {}
+
+message DeleteIDevIDCertificateResponse {
+  Status status = 1;
+}
+
+message DeleteIAKCertificateRequest {}
+
+message DeleteIAKCertificateResponse {
+  Status status = 1;
+}
+
+// =============================================================================
+// Device Attributes Request/Response Messages
+// =============================================================================
+
+message GetDeviceAttributesRequest {}
+
+message GetDeviceAttributesResponse {
+  TCGDeviceAttributes attributes = 1;
+}
+
+// =============================================================================
+// TPM Binding Verification Request/Response Messages
+// =============================================================================
+
+message ActivateCredentialRequest {
+  // CredentialBlob is the encrypted credential from TPM2_MakeCredential.
+  bytes credential_blob = 1;
+
+  // Secret is the encrypted secret from TPM2_MakeCredential.
+  bytes secret = 2;
+}
+
+message ActivateCredentialResponse {
+  Status status = 1;
+  // DecryptedSecret is the decrypted secret value.
+  bytes decrypted_secret = 2;
+}
+
+// =============================================================================
+// TPM Context Management Request/Response Messages
+// =============================================================================
+
+message FlushTransientContextsRequest {}
+
+message FlushTransientContextsResponse {
+  Status status = 1;
+  // FlushedCount is the number of transient handles that were flushed.
+  uint32 flushed_count = 2;
+}

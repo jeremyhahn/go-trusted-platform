@@ -1,0 +1,446 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package mcp
+
+import (
+	"fmt"
+)
+
+// =============================================================================
+// Device Error Types
+// =============================================================================
+
+// DeviceError represents a device operation error.
+type DeviceError struct {
+	Code    string
+	Message string
+}
+
+func (e *DeviceError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// ErrDeviceServiceUnavailable indicates the device service is not available.
+var ErrDeviceServiceUnavailable = &DeviceError{
+	Code:    "DEVICE_SERVICE_UNAVAILABLE",
+	Message: "device service is not available",
+}
+
+// ErrDeviceSerialRequired indicates a device serial is required.
+var ErrDeviceSerialRequired = &DeviceError{
+	Code:    "DEVICE_SERIAL_REQUIRED",
+	Message: "device serial is required",
+}
+
+// ErrDeviceIDRequired indicates a device ID is required.
+var ErrDeviceIDRequired = &DeviceError{
+	Code:    "DEVICE_ID_REQUIRED",
+	Message: "device ID is required",
+}
+
+// ErrDeviceNotFound indicates a device was not found.
+var ErrDeviceNotFound = &DeviceError{
+	Code:    "DEVICE_NOT_FOUND",
+	Message: "device not found",
+}
+
+// ErrProfileNameRequired indicates a profile name is required.
+var ErrProfileNameRequired = &DeviceError{
+	Code:    "PROFILE_NAME_REQUIRED",
+	Message: "profile name is required",
+}
+
+// ErrProfileIDRequired indicates a profile ID is required.
+var ErrProfileIDRequired = &DeviceError{
+	Code:    "PROFILE_ID_REQUIRED",
+	Message: "profile ID is required",
+}
+
+// ErrProfileNotFound indicates a profile was not found.
+var ErrProfileNotFound = &DeviceError{
+	Code:    "PROFILE_NOT_FOUND",
+	Message: "profile not found",
+}
+
+// =============================================================================
+// Device Tool Registration
+// =============================================================================
+
+// registerDeviceToolsV2 registers extended device and profile management MCP tools.
+// This replaces the basic device tools with comprehensive device and profile management.
+func (r *ToolRegistry) registerDeviceToolsV2() {
+	// Device CRUD operations
+	r.addTool(ToolDefinition{
+		Name:        "device_create",
+		Description: "Register a new device in the system with its TPM credentials and attestation keys",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"serial": map[string]interface{}{
+					"type":        "string",
+					"description": "Device serial number (required, unique identifier)",
+				},
+				"model": map[string]interface{}{
+					"type":        "string",
+					"description": "Device model name",
+				},
+				"attest_pub": map[string]interface{}{
+					"type":        "string",
+					"description": "PEM-encoded attestation public key",
+				},
+				"signing_pub": map[string]interface{}{
+					"type":        "string",
+					"description": "PEM-encoded signing public key",
+				},
+				"ek_cert": map[string]interface{}{
+					"type":        "string",
+					"description": "PEM-encoded endorsement key certificate",
+				},
+				"event_log": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded TPM event log",
+				},
+				"hash_algo_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Hash algorithm ID for PCR calculations",
+				},
+			},
+			"required": []string{"serial"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "device_get_by_id",
+		Description: "Get device details by numeric ID",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Device ID",
+				},
+			},
+			"required": []string{"id"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "device_get_by_serial",
+		Description: "Get device details by serial number",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"serial": map[string]interface{}{
+					"type":        "string",
+					"description": "Device serial number",
+				},
+			},
+			"required": []string{"serial"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "device_list_all",
+		Description: "List all devices with optional pagination",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"page": map[string]interface{}{
+					"type":        "integer",
+					"description": "Page number (1-based)",
+					"default":     1,
+				},
+				"page_size": map[string]interface{}{
+					"type":        "integer",
+					"description": "Number of devices per page",
+					"default":     50,
+				},
+			},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "device_update_by_id",
+		Description: "Update device properties by ID",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Device ID",
+				},
+				"serial": map[string]interface{}{
+					"type":        "string",
+					"description": "New device serial number",
+				},
+				"model": map[string]interface{}{
+					"type":        "string",
+					"description": "New device model name",
+				},
+				"attest_pub": map[string]interface{}{
+					"type":        "string",
+					"description": "New PEM-encoded attestation public key",
+				},
+				"signing_pub": map[string]interface{}{
+					"type":        "string",
+					"description": "New PEM-encoded signing public key",
+				},
+				"ek_cert": map[string]interface{}{
+					"type":        "string",
+					"description": "New PEM-encoded endorsement key certificate",
+				},
+				"event_log": map[string]interface{}{
+					"type":        "string",
+					"description": "New base64-encoded TPM event log",
+				},
+				"hash_algo_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "New hash algorithm ID",
+				},
+			},
+			"required": []string{"id"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "device_delete_by_id",
+		Description: "Delete a device by ID",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Device ID",
+				},
+			},
+			"required": []string{"id"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "device_get_status",
+		Description: "Get the current status of a device including attestation state",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Device ID",
+				},
+			},
+			"required": []string{"id"},
+		},
+	})
+
+	// Profile CRUD operations
+	r.addTool(ToolDefinition{
+		Name:        "profile_create",
+		Description: "Create a new device profile with network configuration and matching rules",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "Profile name (required, unique identifier)",
+				},
+				"model": map[string]interface{}{
+					"type":        "string",
+					"description": "Target device model for this profile",
+				},
+				"role": map[string]interface{}{
+					"type":        "string",
+					"description": "Device role (server, client, workstation, edge, iot, gateway, load-balancer)",
+				},
+				"event_log": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded reference event log for attestation",
+				},
+				"provisioning_network": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"vlan":        map[string]interface{}{"type": "integer", "description": "VLAN ID"},
+						"static_ip":   map[string]interface{}{"type": "string", "description": "Static IP address"},
+						"gateway":     map[string]interface{}{"type": "string", "description": "Default gateway"},
+						"dns":         map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "DNS servers"},
+						"auth_method": map[string]interface{}{"type": "string", "description": "Auth method (none, 802.1x)"},
+					},
+					"description": "Network configuration for provisioning phase",
+				},
+				"production_network": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"vlan":        map[string]interface{}{"type": "integer", "description": "VLAN ID"},
+						"static_ip":   map[string]interface{}{"type": "string", "description": "Static IP address"},
+						"gateway":     map[string]interface{}{"type": "string", "description": "Default gateway"},
+						"dns":         map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "DNS servers"},
+						"auth_method": map[string]interface{}{"type": "string", "description": "Auth method (none, 802.1x)"},
+					},
+					"description": "Network configuration for production phase",
+				},
+				"quarantine_network": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"vlan":        map[string]interface{}{"type": "integer", "description": "VLAN ID"},
+						"static_ip":   map[string]interface{}{"type": "string", "description": "Static IP address"},
+						"gateway":     map[string]interface{}{"type": "string", "description": "Default gateway"},
+						"dns":         map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "DNS servers"},
+						"auth_method": map[string]interface{}{"type": "string", "description": "Auth method (none, 802.1x)"},
+					},
+					"description": "Network configuration for quarantine phase",
+				},
+				"match_rules": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"mac_prefix":    map[string]interface{}{"type": "string", "description": "MAC address prefix to match"},
+						"serial_prefix": map[string]interface{}{"type": "string", "description": "Serial number prefix to match"},
+						"model":         map[string]interface{}{"type": "string", "description": "Device model to match"},
+					},
+					"description": "Rules for auto-assigning this profile to devices",
+				},
+			},
+			"required": []string{"name"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "profile_get_by_id",
+		Description: "Get profile details by ID",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Profile ID",
+				},
+			},
+			"required": []string{"id"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "profile_list_all",
+		Description: "List all profiles with optional pagination",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"page": map[string]interface{}{
+					"type":        "integer",
+					"description": "Page number (1-based)",
+					"default":     1,
+				},
+				"page_size": map[string]interface{}{
+					"type":        "integer",
+					"description": "Number of profiles per page",
+					"default":     50,
+				},
+			},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "profile_update_by_id",
+		Description: "Update profile properties by ID",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Profile ID",
+				},
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "New profile name",
+				},
+				"model": map[string]interface{}{
+					"type":        "string",
+					"description": "New target device model",
+				},
+				"role": map[string]interface{}{
+					"type":        "string",
+					"description": "New device role",
+				},
+				"event_log": map[string]interface{}{
+					"type":        "string",
+					"description": "New base64-encoded reference event log",
+				},
+				"provisioning_network": map[string]interface{}{
+					"type":        "object",
+					"description": "New provisioning network configuration",
+				},
+				"production_network": map[string]interface{}{
+					"type":        "object",
+					"description": "New production network configuration",
+				},
+				"quarantine_network": map[string]interface{}{
+					"type":        "object",
+					"description": "New quarantine network configuration",
+				},
+				"match_rules": map[string]interface{}{
+					"type":        "object",
+					"description": "New match rules configuration",
+				},
+			},
+			"required": []string{"id"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "profile_delete_by_id",
+		Description: "Delete a profile by ID",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Profile ID",
+				},
+			},
+			"required": []string{"id"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "profile_assign_to_device",
+		Description: "Assign a profile to a device",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"device_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Device ID to assign the profile to",
+				},
+				"profile_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Profile ID to assign",
+				},
+			},
+			"required": []string{"device_id", "profile_id"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "profile_unassign_from_device",
+		Description: "Remove profile assignment from a device",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"device_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Device ID to remove profile assignment from",
+				},
+			},
+			"required": []string{"device_id"},
+		},
+	})
+}

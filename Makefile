@@ -1,0 +1,3383 @@
+ORG                     := automatethethingsllc
+TARGET_OS               := linux
+TARGET_ARCH             := $(shell uname -m)
+
+# =============================================================================
+# Build Configuration Variables
+# =============================================================================
+#
+# This section defines all WITH_* variables for fine-grained build customization.
+# Variables are organized by project/feature area and use ?= for override support.
+#
+# Usage:
+#   make build WITH_AWS=1 WITH_RAFT=1
+#   make integration-test WITH_RAFT=1
+#   WITH_AWS=1 WITH_GCP=1 make build
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Cloud Provider Group Variables (enables ALL features for a provider)
+# These cascade down to enable individual project features
+# -----------------------------------------------------------------------------
+WITH_AWS                ?= 0    # Enable ALL AWS features (KMS, S3, etc.) across all projects
+WITH_GCP                ?= 0    # Enable ALL GCP features (KMS, GCS, etc.) across all projects
+WITH_AZURE              ?= 0    # Enable ALL Azure features (KeyVault, Blob, etc.) across all projects
+
+# -----------------------------------------------------------------------------
+# go-quicbaas Build Variables
+# See: go-quicbaas/Makefile for full documentation
+# -----------------------------------------------------------------------------
+
+# Distributed Features
+WITH_RAFT               ?= 1    # Raft cluster mode (required for embedded QuicBaaS)
+WITH_IAM                ?= 1    # ABAC/IAM advanced authorization
+
+# Data Model Features
+WITH_TIMESERIES         ?= 1    # Time series metrics with aggregations, retention, downsampling
+WITH_VECTOR             ?= 0    # Vector database with HNSW index
+WITH_RAG                ?= 0    # Retrieval Augmented Generation (requires WITH_VECTOR=1)
+
+# API Servers
+WITH_REST               ?= 1    # REST/HTTP API
+WITH_QUIC               ?= 1    # QUIC protocol
+WITH_MCP                ?= 1    # Model Context Protocol (LLM tools)
+
+# WebSocket Messaging Protocols
+WITH_MQTT               ?= 0    # MQTT 3.1.1/5.0 over WebSocket
+WITH_AMQP               ?= 0    # AMQP 0-9-1 over WebSocket
+WITH_STOMP              ?= 0    # STOMP 1.2 over WebSocket
+
+# External Dependencies
+WITH_L2_REDIS           ?= 0    # L2 Redis cache (requires external Redis)
+
+# -----------------------------------------------------------------------------
+# go-xkms Build Variables
+# See: go-xkms/Makefile for full documentation
+# -----------------------------------------------------------------------------
+
+# Cryptography Backends
+WITH_PKCS8              ?= 1    # PKCS#8 software key storage (default backend)
+WITH_TPM2               ?= 0    # TPM 2.0 hardware key support
+WITH_PKCS11             ?= 0    # PKCS#11 HSM hardware support (requires CGO)
+WITH_QUANTUM            ?= 0    # Quantum-safe cryptography (Dilithium, Kyber via liboqs)
+WITH_FROST              ?= 1    # FROST threshold signatures (RFC 9591)
+
+# Cloud KMS Backends (individual control)
+WITH_AWS_KMS            ?= 0    # AWS Key Management Service
+WITH_GCP_KMS            ?= 0    # Google Cloud KMS
+WITH_AZURE_KV           ?= 0    # Azure Key Vault
+WITH_VAULT              ?= 0    # HashiCorp Vault
+
+# -----------------------------------------------------------------------------
+# go-objstore Build Variables
+# Object storage backend selection
+# -----------------------------------------------------------------------------
+WITH_OBJSTORE_LOCAL     ?= 1    # Local filesystem storage (always enabled)
+WITH_OBJSTORE_S3        ?= 0    # AWS S3 storage
+WITH_OBJSTORE_MINIO     ?= 0    # MinIO storage
+WITH_OBJSTORE_GCS       ?= 0    # Google Cloud Storage
+WITH_OBJSTORE_AZURE     ?= 0    # Azure Blob Storage
+
+# -----------------------------------------------------------------------------
+# go-trusted-platform Build Variables
+# Platform-specific features
+# -----------------------------------------------------------------------------
+WITH_WEB                ?= 0    # Embed web frontend into binary (off by default for dev speed; fallback copies public_html.tar.gz into ISO)
+WITH_DESKTOP            ?= 0    # Build desktop GUI (requires Wails v2)
+WITH_P2P                ?= 0    # P2P/libp2p networking support
+
+# -----------------------------------------------------------------------------
+# Codec Build Variables
+# Serialization format support
+# -----------------------------------------------------------------------------
+WITH_CODEC_JSON         ?= 1    # JSON codec
+WITH_CODEC_MSGPACK      ?= 1    # MessagePack codec
+WITH_CODEC_CBOR         ?= 1    # CBOR codec
+WITH_CODEC_YAML         ?= 0    # YAML codec
+WITH_CODEC_TOML         ?= 0    # TOML codec
+WITH_CODEC_BSON         ?= 0    # BSON codec
+WITH_CODEC_AVRO         ?= 0    # Avro codec
+WITH_CODEC_PROTOBUF     ?= 0    # Protocol Buffers codec
+
+# =============================================================================
+# Cloud Provider Group Variable Expansion
+# When WITH_AWS=1, enable all AWS features across all projects
+# =============================================================================
+ifeq ($(strip $(WITH_AWS)),1)
+    WITH_AWS_KMS        := 1
+    WITH_OBJSTORE_S3    := 1
+endif
+ifeq ($(strip $(WITH_GCP)),1)
+    WITH_GCP_KMS        := 1
+    WITH_OBJSTORE_GCS   := 1
+endif
+ifeq ($(strip $(WITH_AZURE)),1)
+    WITH_AZURE_KV       := 1
+    WITH_OBJSTORE_AZURE := 1
+endif
+
+# =============================================================================
+# Feature Dependency Validation
+# =============================================================================
+ifeq ($(strip $(WITH_RAG)),1)
+    ifneq ($(strip $(WITH_VECTOR)),1)
+        $(error WITH_RAG=1 requires WITH_VECTOR=1)
+    endif
+endif
+
+# =============================================================================
+# BUILD_TAGS Construction
+# Dynamically assembled based on WITH_* variables
+# Note: Using $(strip) to handle trailing whitespace from inline comments
+# =============================================================================
+BUILD_TAGS :=
+
+# go-quicbaas tags
+ifeq ($(strip $(WITH_RAFT)),1)
+    BUILD_TAGS += raft
+endif
+ifeq ($(strip $(WITH_IAM)),1)
+    BUILD_TAGS += iam
+endif
+ifeq ($(strip $(WITH_TIMESERIES)),1)
+    BUILD_TAGS += timeseries
+endif
+ifeq ($(strip $(WITH_VECTOR)),1)
+    BUILD_TAGS += vector
+endif
+ifeq ($(strip $(WITH_RAG)),1)
+    BUILD_TAGS += rag
+endif
+ifeq ($(strip $(WITH_REST)),1)
+    BUILD_TAGS += rest
+endif
+ifeq ($(strip $(WITH_QUIC)),1)
+    BUILD_TAGS += quic
+endif
+ifeq ($(strip $(WITH_MCP)),1)
+    BUILD_TAGS += mcp
+endif
+ifeq ($(strip $(WITH_MQTT)),1)
+    BUILD_TAGS += quicbaas_mqtt
+endif
+ifeq ($(strip $(WITH_AMQP)),1)
+    BUILD_TAGS += quicbaas_amqp
+endif
+ifeq ($(strip $(WITH_STOMP)),1)
+    BUILD_TAGS += quicbaas_stomp
+endif
+ifeq ($(strip $(WITH_L2_REDIS)),1)
+    BUILD_TAGS += l2_redis
+endif
+
+# go-xkms tags
+ifeq ($(strip $(WITH_PKCS8)),1)
+    BUILD_TAGS += pkcs8
+endif
+ifeq ($(strip $(WITH_TPM2)),1)
+    BUILD_TAGS += tpm2
+endif
+ifeq ($(strip $(WITH_PKCS11)),1)
+    BUILD_TAGS += pkcs11
+endif
+ifeq ($(strip $(WITH_QUANTUM)),1)
+    BUILD_TAGS += quantum
+endif
+ifeq ($(strip $(WITH_FROST)),1)
+    BUILD_TAGS += frost
+endif
+ifeq ($(strip $(WITH_AWS_KMS)),1)
+    BUILD_TAGS += awskms
+endif
+ifeq ($(strip $(WITH_GCP_KMS)),1)
+    BUILD_TAGS += gcpkms
+endif
+ifeq ($(strip $(WITH_AZURE_KV)),1)
+    BUILD_TAGS += azurekv
+endif
+ifeq ($(strip $(WITH_VAULT)),1)
+    BUILD_TAGS += vault
+endif
+
+# go-objstore tags
+ifeq ($(strip $(WITH_OBJSTORE_LOCAL)),1)
+    BUILD_TAGS += local
+endif
+ifeq ($(strip $(WITH_OBJSTORE_S3)),1)
+    BUILD_TAGS += awss3
+endif
+ifeq ($(strip $(WITH_OBJSTORE_MINIO)),1)
+    BUILD_TAGS += minio
+endif
+ifeq ($(strip $(WITH_OBJSTORE_GCS)),1)
+    BUILD_TAGS += gcpstorage
+endif
+ifeq ($(strip $(WITH_OBJSTORE_AZURE)),1)
+    BUILD_TAGS += azureblob
+endif
+# Always include objstore base tag when any backend is enabled
+ifneq ($(strip $(WITH_OBJSTORE_LOCAL)$(WITH_OBJSTORE_S3)$(WITH_OBJSTORE_MINIO)$(WITH_OBJSTORE_GCS)$(WITH_OBJSTORE_AZURE)),00000)
+    BUILD_TAGS += objstore
+endif
+
+# go-trusted-platform tags
+ifeq ($(strip $(WITH_WEB)),1)
+    BUILD_TAGS += platform_web
+endif
+ifeq ($(strip $(WITH_DESKTOP)),1)
+    BUILD_TAGS += desktop
+endif
+ifeq ($(strip $(WITH_P2P)),1)
+    BUILD_TAGS += platform_p2p
+endif
+
+# Codec tags
+ifeq ($(strip $(WITH_CODEC_JSON)),1)
+    BUILD_TAGS += codec_json
+endif
+ifeq ($(strip $(WITH_CODEC_MSGPACK)),1)
+    BUILD_TAGS += codec_msgpack
+endif
+ifeq ($(strip $(WITH_CODEC_CBOR)),1)
+    BUILD_TAGS += codec_cbor
+endif
+ifeq ($(strip $(WITH_CODEC_YAML)),1)
+    BUILD_TAGS += codec_yaml
+endif
+ifeq ($(strip $(WITH_CODEC_TOML)),1)
+    BUILD_TAGS += codec_toml
+endif
+ifeq ($(strip $(WITH_CODEC_BSON)),1)
+    BUILD_TAGS += codec_bson
+endif
+ifeq ($(strip $(WITH_CODEC_AVRO)),1)
+    BUILD_TAGS += codec_avro
+endif
+ifeq ($(strip $(WITH_CODEC_PROTOBUF)),1)
+    BUILD_TAGS += codec_protobuf
+endif
+
+# =============================================================================
+# Build Tag Flags
+# =============================================================================
+BUILD_TAGS_ARG          := $(if $(strip $(BUILD_TAGS)),-tags '$(strip $(BUILD_TAGS))',)
+
+# Integration tests always need codec tags for QUIC protocol support.
+# The go-codec library uses build tags to compile real codecs vs stubs.
+INTEGRATION_CODEC_TAGS  := codec_msgpack codec_json codec_cbor
+TEST_BUILD_TAGS         := integration $(INTEGRATION_CODEC_TAGS) $(strip $(BUILD_TAGS))
+TEST_BUILD_TAGS_ARG     := -tags '$(strip $(TEST_BUILD_TAGS))'
+
+# Web embed directory
+WEB_EMBED_DIR           := pkg/webserver/embed/dist
+
+# Desktop frontend directories
+DESKTOP_FRONTEND_SRC    := cmd/platformctl/frontend
+DESKTOP_FRONTEND_DIST   := cmd/platformctl/frontend/dist
+
+ARCH                    := $(shell go env GOARCH)
+OS                      := $(shell go env GOOS)
+LONG_BITS               := $(shell getconf LONG_BIT)
+
+GOBIN                   := $(shell dirname `which go`)
+PYTHONBIN               ?= /usr/bin/python3.8
+PIPBIN                  ?= pip
+
+ARM_CC				    ?= aarch64-linux-gnu-gcc-14
+ARM_CXX                 ?= aarch64-linux-gnu-g++-14
+
+GIT_REPO                ?= github.com
+GIT_OWNER               ?= jeremyhahn
+PACKAGE                 ?= go-trusted-platform
+APPNAME                 ?= trusted-platform
+PLATFORMD               ?= bin/platformd
+PLATFORMCTL             ?= bin/platformctl
+PLATFORM_INITRD         ?= bin/platform-initrd
+GATEWAYD                ?= bin/gatewayd
+
+APP_VERSION       		?= $(shell git describe --tags --abbrev=0)
+GIT_TAG                 = $(shell git describe --tags)
+GIT_HASH                = $(shell git rev-parse HEAD)
+GIT_BRANCH              = $(shell git branch --show-current)
+GIT_TOKEN               ?=
+BUILD_DATE              = $(shell date '+%Y-%m-%d_%H:%M:%S')
+
+VERSION_FILE            ?= VERSION
+
+ENV                     ?= dev
+
+ifneq ("$(wildcard $(VERSION_FILE))","")
+    APP_VERSION = $(shell cat $(VERSION_FILE))
+else
+    APP_VERSION = $(shell git branch --show-current)
+endif
+
+LDFLAGS=-X github.com/jeremyhahn/$(PACKAGE)/pkg/app.Name=${APPNAME}
+LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.Repository=${GIT_REPO}
+LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.Package=${PACKAGE}
+LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.GitBranch=${GIT_BRANCH}
+LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.GitHash=${GIT_HASH}
+LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.GitTag=${GIT_TAG}
+LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.BuildUser=${USER}
+LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.BuildDate=${BUILD_DATE}
+LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.Version=${APP_VERSION}
+
+PLATFORM_DIR                ?= trusted-data
+CONFIG_DIR                  ?= configs
+EXAMPLE_DIR                 ?= examples
+PLATFORM_CONFIG_DIR         ?= $(CONFIG_DIR)/platform
+
+CONFIG_YAML                 ?= config.dev.server.yaml
+
+ROOT_CA                     ?= root-ca
+INTERMEDIATE_CA             ?= intermediate-ca
+DOMAIN                      ?= trusted-platform.io
+
+SOFTHSM_DIR                 ?= /usr/local/bin
+SOFTHSM_LIB                 ?= /usr/local/lib/softhsm/libsofthsm2.so
+SOFTHSM_TOKEN_DIR           ?= /var/lib/softhsm/tokens
+SOFTHSM_CONFIG              ?= configs/softhsm2.conf
+
+WEB_PUBLIC_HTML             ?= public_html
+WEB_PACKAGE                 ?= trusted-platform-web
+WEB_SRC                     ?= web
+
+SWAGGER_HOST                ?= $(DOMAIN)
+
+SYNC_USER                   ?= pi
+SYNC_HOST                   ?= rpi
+
+DOCKER_HOME                 ?= build/docker
+DOCKER_REPO                 ?= docker.io
+DOCKER_USER                 ?= jeremyhahn
+DOCKER_BUILDER_BASE         ?= alpine
+DOCKER_BUILDER_DOCKERFILE   ?= Dockerfile-$(DOCKER_BUILDER_BASE)
+DOCKER_PLATFORM_BUILDER     ?= trusted-platform-builder
+DOCKER_PLATFORM_BUILDER_TAG ?= latest
+DOCKER_BUILDER_IMAGE        ?= $(DOCKER_REPO)/$(DOCKER_USER)/$(DOCKER_PLATFORM_BUILDER):$(DOCKER_PLATFORM_BUILDER_TAG)
+DOCKER_ISO_BUILDER          ?= trusted-platform-iso-builder
+DOCKER_ISO_BUILDER_SWTPM    ?= trusted-platform-iso-builder-swtpm
+DOCKER_ISO_TAG              ?= latest
+DOCKER_ANSIBLE_BUILDER      ?= ansible-ee
+DOCKER_AARCH64_CONTEXT      ?= arm64
+DOCKER_AARCH64_HOST         ?= $(SYNC_HOST)
+DOCKER_AARCH64_SSHKEY       ?= ~/.ssh/id_rsa
+
+ISO_DIR                     ?= build/docker/$(DOCKER_ISO_BUILDER)
+ISO_NAME                    ?= trusted-platform.iso
+ISO_NAME_SWTPM		        ?= trusted-platform-swtpm.iso
+
+RPI_OS                      ?= raspios
+RPI_IMAGE_NAME		        ?= $(APPNAME)-$(APP_VERSION)-$(ENV)
+RPI_IMAGE_FILENAME          ?= $(RPI_IMAGE_NAME).img
+RPI_IMAGE_ARTIFACT          ?= $(PACKER_HOME)/$(RPI_IMAGE_FILENAME)
+RPI_SDCARD                  ?= /dev/sda
+
+PACKER_HOME                 ?= build/packer
+PACKER_FILE                 ?= $(PACKER_HOME)/rpi/$(RPI_OS).json
+PACKER_BUILDER_RASPIOS64    ?= raspbian
+PACKER_BUILDER_UBUNTU64     ?= ubuntu-20.04.01-arm64
+PACKER_BUILDER              ?= $(PACKER_BUILDER_RASPIOS64)
+
+UID                         := $(shell id -u)
+GID                         := $(shell id -g)
+
+# Build and coverage directories
+BUILD_DIR                   := build
+COVERAGE_DIR                := $(BUILD_DIR)/coverage
+COVERAGE_FILE               := $(COVERAGE_DIR)/coverage.out
+COVERAGE_HTML               := $(COVERAGE_DIR)/coverage.html
+
+# Test configuration
+GO                          := go
+GOTEST                      := $(GO) test
+GOVET                       := $(GO) vet
+GOFMT                       := gofmt
+TEST_FLAGS                  := -v -race
+COVERAGE_THRESHOLD          := 90
+
+# Security scanning configuration
+# Gosec exclusions with rationale:
+#   G103: unsafe package - required for TPM and low-level crypto operations
+#   G104: unhandled errors - false positives on deferred Close() calls
+#   G115: integer overflow - false positives on type conversions with bounds checks
+#   G304: file path from variable - required for config-driven file operations
+#   G401: MD5/SHA1 - required for certificate thumbprints, PKCS standards
+#   G407: hardcoded nonce - false positive, nonces are random not hardcoded
+#   G505: crypto/sha1 import - required for PKCS standards, WebAuthn
+GOSEC_EXCLUDE               := G102,G103,G104,G107,G109,G110,G115,G118,G122,G204,G301,G302,G304,G305,G306,G401,G402,G407,G505,G702,G703,G704
+
+# Text colors
+RED=\033[0;31m
+GREEN=\033[0;32m
+YELLOW=\033[1;33m
+CYAN=\033[0;36m
+BLUE=\033[0;34m
+BOLD=\033[1m
+RESET=\033[0m
+NO_COLOR=\033[0m
+
+
+default: build
+
+
+.PHONY: init
+init:
+	-docker buildx rm $(DOCKER_BUILDER_AMD64)
+	-docker buildx rm $(DOCKER_BUILDER_AAARCH64)
+	-docker context rm $(DOCKER_AARCH64_HOST)
+	sudo apt-get install -y \
+		docker.io \
+		virt-manager \
+		docker-buildx \
+		efitools \
+		binfmt-support \
+		qemu-user-static \
+		rsync \
+		pipx \
+		libssl-dev
+	pipx ensurepath
+	pipx install virt-firmware
+	sudo mkdir -p /etc/qemu/
+	sudo /bin/bash -c 'echo "allow virbr0" > /etc/qemu/bridge.conf'
+	sudo chmod u+s /usr/lib/qemu/qemu-bridge-helper
+	docker run --rm --privileged multiarch/qemu-user-static --reset -p yes || true
+	docker context create $(DOCKER_AARCH64_CONTEXT) --docker "host=ssh://$(DOCKER_AARCH64_HOST)"
+	ssh-copy-id -i $(DOCKER_AARCH64_SSHKEY) $(DOCKER_AARCH64_HOST) || true
+
+
+.PHONY: tools
+tools:
+	sudo apt-get install -y tpm2-tools
+
+
+.PHONY: env
+env:
+	@$(foreach var,$(filter-out MAKE% __%,$(.VARIABLES)),\
+		printf "%-35s %s\n" "$(var):" "$($(var))";)
+
+
+.PHONY: run
+run:
+	cp $(EXAMPLE_DIR)/config.yaml config.yaml
+	./$(PLATFORMD) serve \
+		--debug \
+		--init \
+		--platform-dir trusted-data \
+		--config-dir trusted-data/etc \
+		--log-dir trusted-data/log \
+		--ca-dir trusted-data/ca \
+		--raw-so-pin 123456 \
+		--raw-pin 123456
+
+
+# Prepare web embed directory when WITH_WEB is set
+.PHONY: _web-embed-prepare
+_web-embed-prepare:
+ifeq ($(strip $(WITH_WEB)),1)
+	@echo "$(CYAN)→ Building web frontend for embedding...$(RESET)"
+	@cd sdk/javascript && npm install --silent && npm run build
+	@cd $(WEB_SRC) && npm install --silent && npm run build
+	@mkdir -p $(WEB_EMBED_DIR)
+	@rm -rf $(WEB_EMBED_DIR)/*
+	@cp -r $(WEB_SRC)/out/* $(WEB_EMBED_DIR)/
+	@echo "$(GREEN)✓ Web frontend prepared for embedding$(RESET)"
+endif
+
+# Build desktop frontend (Svelte 5 for Wails)
+.PHONY: build-desktop-frontend
+build-desktop-frontend:
+	@echo "$(CYAN)→ Building desktop frontend...$(RESET)"
+	@cd $(DESKTOP_FRONTEND_SRC) && npm install --silent && npm run build
+	@echo "$(GREEN)✓ Desktop frontend built$(RESET)"
+
+# Build platformctl with desktop GUI (requires Wails v2)
+.PHONY: build-desktop
+build-desktop: build-desktop-frontend
+	@mkdir -p bin
+	@echo "$(CYAN)→ Building platformctl with desktop GUI...$(RESET)"
+	CGO_ENABLED=1 $(GOBIN)/go build -tags "desktop $(BUILD_TAGS)" -v -o $(PLATFORMCTL) -ldflags="-w -s ${LDFLAGS}" ./cmd/platformctl
+	@echo "$(GREEN)✓ Desktop build complete$(RESET)"
+
+# Wails dev mode with hot reload (requires Wails CLI)
+.PHONY: dev-desktop
+dev-desktop:
+	cd cmd/platformctl && wails dev -tags "desktop $(BUILD_TAGS)"
+
+# Build without web frontend (for CI)
+.PHONY: build-no-web
+build-no-web:
+	@mkdir -p bin
+	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(PLATFORMD) -ldflags="-w -s ${LDFLAGS}" ./cmd/platformd
+	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(PLATFORMCTL) -ldflags="-w -s ${LDFLAGS}" ./cmd/platformctl
+	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(GATEWAYD) -ldflags="-w -s ${LDFLAGS}" ./cmd/gatewayd
+
+# Native local build (builds both platformd and platformctl)
+# Produces static binaries with embedded web frontend
+# Set WITH_WEB=0 to skip web frontend embedding (default is enabled)
+# Set WITH_P2P=1 to include P2P/libp2p support in gatewayd
+.PHONY: build
+build: _web-embed-prepare
+	@mkdir -p bin
+	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(PLATFORMD) --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}' ./cmd/platformd
+	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(PLATFORMCTL) --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}' ./cmd/platformctl
+	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(GATEWAYD) --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}' ./cmd/gatewayd
+
+.PHONY: build-debug
+build-debug: _web-embed-prepare
+	@mkdir -p bin
+	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(PLATFORMD) -gcflags='all=-N -l' --ldflags '-linkmode external -extldflags -static -v ${LDFLAGS}' ./cmd/platformd
+	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(PLATFORMCTL) -gcflags='all=-N -l' --ldflags '-linkmode external -extldflags -static -v ${LDFLAGS}' ./cmd/platformctl
+
+.PHONY: build-static
+build-static: build
+	@echo "build-static target is deprecated. Use 'make build' instead (now produces static binaries by default)."
+
+.PHONY: build-debug-static
+build-debug-static: build-debug
+	@echo "build-debug-static target is deprecated. Use 'make build-debug' instead (now produces static binaries by default)."
+
+# Cross-compile ARM 64-bit (produces static binaries)
+.PHONY: build-arm64
+build-arm64: _web-embed-prepare
+	@mkdir -p bin
+	CC=$(ARM_CC) CXX=$(ARM_CXX) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
+	$(GOBIN)/go build -tags "$(BUILD_TAGS)" -o $(PLATFORMD) --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}' ./cmd/platformd
+	CC=$(ARM_CC) CXX=$(ARM_CXX) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
+	$(GOBIN)/go build -tags "$(BUILD_TAGS)" -o $(PLATFORMCTL) --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}' ./cmd/platformctl
+
+.PHONY: build-arm64-static
+build-arm64-static: build-arm64
+	@echo "build-arm64-static target is deprecated. Use 'make build-arm64' instead (now produces static binaries by default)."
+
+.PHONY: build-arm64-debug
+build-arm64-debug: _web-embed-prepare
+	@mkdir -p bin
+	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
+	$(GOBIN)/go build -tags "$(BUILD_TAGS)" -gcflags "all=-N -l" -o $(PLATFORMD) --ldflags='-linkmode external -extldflags -static -v ${LDFLAGS}' ./cmd/platformd
+	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
+	$(GOBIN)/go build -tags "$(BUILD_TAGS)" -gcflags "all=-N -l" -o $(PLATFORMCTL) --ldflags='-linkmode external -extldflags -static -v ${LDFLAGS}' ./cmd/platformctl
+
+.PHONY: build-arm64-debug-static
+build-arm64-debug-static: build-arm64-debug
+	@echo "build-arm64-debug-static target is deprecated. Use 'make build-arm64-debug' instead (now produces static binaries by default)."
+
+
+# ==============================================================================
+# Platform-initrd Build Targets (minimal initramfs binary)
+# ==============================================================================
+# platform-initrd contains ONLY boot and recovery commands for initramfs.
+# Firstboot functionality has been moved to platformctl (runs after switch_root).
+# Target binary size: ~22MB (heavy deps excluded via package separation)
+# Uses CGO_ENABLED=0 for static linking without C dependencies
+# Build tags: initrd,osusergo,netgo for pure Go implementations
+
+# Initrd build tags - minimal dependencies for initramfs binary
+# osusergo,netgo: Pure Go implementations without cgo
+# local: Required for go-objstore local storage backend registration
+# Note: Heavy dependencies (firstboot, app, installer) excluded via package separation
+INITRD_BUILD_TAGS       := osusergo,netgo,local
+
+.PHONY: platform-initrd
+platform-initrd:
+	@mkdir -p bin
+	@echo "Building platform-initrd (size-optimized static binary for initramfs)..."
+	CGO_ENABLED=0 $(GOBIN)/go build -tags "$(INITRD_BUILD_TAGS)" \
+		-ldflags="-s -w ${LDFLAGS}" \
+		-o $(PLATFORM_INITRD) ./cmd/platform-initrd
+	@echo "Binary size: $$(du -h $(PLATFORM_INITRD) | cut -f1)"
+
+.PHONY: platform-initrd-debug
+platform-initrd-debug:
+	@mkdir -p bin
+	CGO_ENABLED=0 $(GOBIN)/go build -tags "$(INITRD_BUILD_TAGS)" \
+		-gcflags='all=-N -l' \
+		-ldflags="${LDFLAGS}" \
+		-o $(PLATFORM_INITRD) ./cmd/platform-initrd
+	@echo "Binary size: $$(du -h $(PLATFORM_INITRD) | cut -f1)"
+
+.PHONY: platform-initrd-static
+platform-initrd-static: platform-initrd
+	@echo "platform-initrd-static target is deprecated. Use 'make platform-initrd' instead (already produces static binaries)."
+
+# Cross-compile ARM 64-bit for initrd (produces static binaries)
+.PHONY: platform-initrd-arm64
+platform-initrd-arm64:
+	@mkdir -p bin
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+	$(GOBIN)/go build -tags "$(INITRD_BUILD_TAGS)" \
+		-ldflags="-s -w ${LDFLAGS}" \
+		-o $(PLATFORM_INITRD) ./cmd/platform-initrd
+	@echo "Binary size: $$(du -h $(PLATFORM_INITRD) | cut -f1)"
+
+.PHONY: platform-initrd-arm64-static
+platform-initrd-arm64-static: platform-initrd-arm64
+	@echo "platform-initrd-arm64-static target is deprecated. Use 'make platform-initrd-arm64' instead (already produces static binaries)."
+
+
+# ==============================================================================
+# Gateway Daemon Build Targets (standalone SDN gateway binary)
+# ==============================================================================
+# gatewayd is a standalone gateway daemon supporting three operational modes:
+#   - Overlay: VXLAN tunneling for east-west VM/container traffic (EVPN Type-2/3/5)
+#   - Edge: IoT device onboarding, DHT bootstrap, NAT traversal
+#   - Transit: Announce platform IPv4/IPv6 blocks to ISPs/fabric
+#
+# Build without P2P: make build-gatewayd
+# Build with P2P:    make build-gatewayd WITH_P2P=1
+
+# Gateway daemon build tags - core SDN functionality
+GATEWAYD_BUILD_TAGS     := $(BUILD_TAGS)
+
+.PHONY: build-gatewayd
+build-gatewayd:
+	@mkdir -p bin
+	@echo "Building gatewayd (SDN gateway daemon - static)..."
+	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(GATEWAYD_BUILD_TAGS)" \
+		--ldflags="-w -s -linkmode external -extldflags '-static' -v ${LDFLAGS}" \
+		-o $(GATEWAYD) ./cmd/gatewayd
+	@echo "Binary size: $$(du -h $(GATEWAYD) | cut -f1)"
+
+.PHONY: build-gatewayd-debug
+build-gatewayd-debug:
+	@mkdir -p bin
+	@echo "Building gatewayd-debug (with debug symbols - static)..."
+	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(GATEWAYD_BUILD_TAGS)" \
+		-gcflags='all=-N -l' \
+		--ldflags="-linkmode external -extldflags '-static' -v ${LDFLAGS}" \
+		-o $(GATEWAYD) ./cmd/gatewayd
+	@echo "Binary size: $$(du -h $(GATEWAYD) | cut -f1)"
+
+.PHONY: build-gatewayd-static
+build-gatewayd-static: build-gatewayd
+	@echo "build-gatewayd-static target is deprecated. Use 'make build-gatewayd' instead (now produces static binaries by default)."
+
+# Cross-compile ARM 64-bit for gatewayd (produces static binaries)
+.PHONY: build-gatewayd-arm64
+build-gatewayd-arm64:
+	@mkdir -p bin
+	@echo "Building gatewayd for ARM64 (static)..."
+	CC=$(ARM_CC) CXX=$(ARM_CXX) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
+	$(GOBIN)/go build -tags "$(GATEWAYD_BUILD_TAGS)" \
+		--ldflags="-w -s -linkmode external -extldflags '-static' -v ${LDFLAGS}" \
+		-o $(GATEWAYD) ./cmd/gatewayd
+	@echo "Binary size: $$(du -h $(GATEWAYD) | cut -f1)"
+
+.PHONY: build-gatewayd-arm64-static
+build-gatewayd-arm64-static: build-gatewayd-arm64
+	@echo "build-gatewayd-arm64-static target is deprecated. Use 'make build-gatewayd-arm64' instead (now produces static binaries by default)."
+# ==============================================================================
+
+.PHONY: build-dev
+build-dev: clean build-debug
+	sudo chown $(USER):$(USER) /dev/tpmrm0
+	-sudo chown $(USER):$(USER) /sys/kernel/security/tpm0/binary_bios_measurements
+	mkdir -p $(PLATFORM_DIR)/etc/ $(PLATFORM_DIR)/softhsm2 pkg/$(PLATFORM_DIR)/softhsm2
+	cp configs/platform/config.dev.yaml config.yaml
+	cp configs/softhsm.conf $(PLATFORM_DIR)/etc/softhsm.conf
+	cp configs/platform/config.debug.yaml pkg/config.yaml
+	cp -R $(WEB_PUBLIC_HTML) pkg/
+
+# Build the public_html directory using devcontainer
+# This target uses docker to ensure consistent builds regardless of host environment
+.PHONY: build-public-html
+build-public-html:
+	@echo "Building WebUI using devcontainer (monorepo web/ directory)..."
+	@# Ensure devcontainer image exists
+	@if ! docker images | grep -q "$(DEVCONTAINER_IMAGE)"; then \
+		echo "Building devcontainer image (first time only)..."; \
+		docker build -t $(DEVCONTAINER_IMAGE) build/docker/devcontainer/; \
+	fi
+	@# Run the build inside devcontainer (web/ is now part of the monorepo)
+	docker run --rm \
+		-v $(CURDIR):/workspace \
+		-w /workspace \
+		-e HOME=/root \
+		$(DEVCONTAINER_IMAGE) \
+		/bin/bash -c '\
+			set -e; \
+			echo "[WebUI] Starting build (monorepo web/ directory)..."; \
+			\
+			# Clean up previous builds \
+			rm -rf $(WEB_PUBLIC_HTML)/ pkg/$(WEB_PUBLIC_HTML)/; \
+			mkdir -p $(WEB_PUBLIC_HTML)/ pkg/$(WEB_PUBLIC_HTML)/; \
+			\
+			# Build swagger docs \
+			echo "[WebUI] Generating Swagger/OpenAPI documentation..."; \
+			/go/bin/swag init \
+				--dir pkg/webservice,pkg/webservice/v1/jwt,pkg/webservice/v1/router,pkg/webservice/v1/response,pkg/store/datastore/entities,pkg/app,pkg/config,pkg/crypto/argon2 \
+				--generalInfo webserver_v1.go \
+				--parseDependency \
+				--parseInternal \
+				--parseDepth 1 \
+				--output $(WEB_PUBLIC_HTML)/swagger || true; \
+			\
+			# Download swagger-ui \
+			echo "[WebUI] Setting up Swagger UI..."; \
+			mkdir -p $(WEB_PUBLIC_HTML)/swagger; \
+			git clone --depth=1 https://github.com/swagger-api/swagger-ui.git /tmp/swagger-ui && \
+				mv /tmp/swagger-ui/dist/* $(WEB_PUBLIC_HTML)/swagger/ && \
+				rm -rf /tmp/swagger-ui; \
+			\
+			# Build the Next.js web project from monorepo web/ directory \
+			echo "[WebUI] Installing dependencies..."; \
+			cd /workspace/$(WEB_SRC) && yarn install --frozen-lockfile 2>/dev/null || yarn install; \
+			echo "[WebUI] Building Next.js application..."; \
+			cd /workspace/$(WEB_SRC) && yarn build; \
+			\
+			# Copy build output to public_html \
+			echo "[WebUI] Copying build artifacts..."; \
+			cp -R /workspace/$(WEB_SRC)/out/* /workspace/$(WEB_PUBLIC_HTML)/; \
+			\
+			# Create tarball for ISO building \
+			echo "[WebUI] Creating public_html.tar.gz..."; \
+			cd /workspace && tar czf public_html.tar.gz $(WEB_PUBLIC_HTML)/; \
+			\
+			echo "[WebUI] Build complete!"; \
+			echo "[WebUI] Output: $(WEB_PUBLIC_HTML)/ and public_html.tar.gz"; \
+		'
+	@echo "WebUI build complete: public_html.tar.gz"
+
+
+# Build public_html on host (legacy - use build-public-html instead for consistent builds)
+.PHONY: build-public-html-host
+build-public-html-host:
+	# Start with a clean directory
+	rm -rf $(WEB_PUBLIC_HTML)/ pkg/$(WEB_PUBLIC_HTML)/
+	mkdir -p $(WEB_PUBLIC_HTML)/ pkg/$(WEB_PUBLIC_HTML)/
+
+	# Build the swagger / OpenAPI docs
+	make swagger
+	make swagger-ui
+
+	# Configure SwaggerInfo
+	sed -i '/var SwaggerInfo = &swag.Spec{/,/}}/c\var SwaggerInfo = \&swag.Spec{\n\tVersion:          "$(APP_VERSION)",\n\tHost:             "$(SWAGGER_HOST)",\n\tBasePath:         "/api/v1",\n\tSchemes:          []string{},\n\tTitle:            "Trusted Platform",\n\tDescription:      "The Trusted Platform RESTful Web Services API",\n\tInfoInstanceName: "swagger",\n\tSwaggerTemplate:  docTemplate,\n\tLeftDelim:        "{{",\n\tRightDelim:       "}}",' $(WEB_PUBLIC_HTML)/swagger/docs.go
+
+	# Set the version and host annotations
+	sed -i 's|@version .*|@version $(APP_VERSION)|g' pkg/webservice/webserver_v1.go
+	sed -i 's|@host .*|@host $(SWAGGER_HOST)|g' pkg/webservice/webserver_v1.go
+
+	# Copy into the pkg directory for debugging
+	-cp -R $(WEB_PUBLIC_HTML)/swagger pkg/$(WEB_PUBLIC_HTML)/
+
+	# Build the Next.js web project from monorepo web/ directory
+	cd $(WEB_SRC) && \
+		yarn install && \
+		yarn build && \
+		cp -R out/* ../$(WEB_PUBLIC_HTML)/
+
+	# Copy into the pkg directory for debugging
+	cp -R $(WEB_SRC)/out/* pkg/$(WEB_PUBLIC_HTML)/
+
+	# Create tarball for ISO building
+	tar czf public_html.tar.gz $(WEB_PUBLIC_HTML)/
+
+.PHONY: swagger
+swagger:
+	~/go/bin/swag init \
+		--dir pkg/webservice,pkg/webservice/v1/jwt,pkg/webservice/v1/router,pkg/webservice/v1/response,pkg/store/datastore/entities,pkg/app,pkg/config,pkg/crypto/argon2 \
+		--generalInfo webserver_v1.go \
+		--parseDependency \
+		--parseInternal \
+		--parseDepth 1 \
+		--output $(WEB_PUBLIC_HTML)/swagger
+
+.PHONY: swagger-ui
+swagger-ui:
+	mkdir -p $(WEB_PUBLIC_HTML)/swagger
+	git clone --depth=1 https://github.com/swagger-api/swagger-ui.git && \
+		mv swagger-ui/dist/* $(WEB_PUBLIC_HTML)/swagger && \
+		rm -rf swagger-ui
+	sed -i '/var SwaggerInfo = &swag.Spec{/,/}}/c\var SwaggerInfo = \&swag.Spec{\n\tVersion:          "$(APP_VERSION)",\n\tHost:             "$(SWAGGER_HOST)",\n\tBasePath:         "/api/v1",\n\tSchemes:          []string{},\n\tTitle:            "Trusted Platform",\n\tDescription:      "The Trusted Platform RESTful Web Services API",\n\tInfoInstanceName: "swagger",\n\tSwaggerTemplate:  docTemplate,\n\tLeftDelim:        "{{",\n\tRightDelim:       "}}",' $(WEB_PUBLIC_HTML)/swagger/docs.go
+	sed -i 's|@version .*|@version $(APP_VERSION)|g' pkg/webservice/webserver_v1.go
+	sed -i 's|@host .*|@host $(SWAGGER_HOST)|g' pkg/webservice/webserver_v1.go
+
+
+# =============================================================================
+# Frontend (Next.js) - monorepo web/ directory
+# =============================================================================
+
+.PHONY: web-install
+web-install:
+	@echo "[Web] Installing npm dependencies..."
+	cd $(WEB_SRC) && npm install
+
+.PHONY: web-build
+web-build:
+	@echo "[Web] Building Next.js frontend..."
+	cd $(WEB_SRC) && npm run build
+	@echo "[Web] Copying build output to $(WEB_PUBLIC_HTML)/"
+	mkdir -p $(WEB_PUBLIC_HTML)
+	cp -R $(WEB_SRC)/out/* $(WEB_PUBLIC_HTML)/
+	tar czf public_html.tar.gz $(WEB_PUBLIC_HTML)/
+
+.PHONY: web-test
+web-test:
+	@echo "[Web] Running Playwright E2E tests..."
+	cd $(WEB_SRC) && npm run test:e2e
+
+.PHONY: web-test-ui
+web-test-ui:
+	@echo "[Web] Running Playwright E2E tests with UI..."
+	cd $(WEB_SRC) && npm run test:e2e:ui
+
+# WebAuthn E2E tests — pass FRONTEND_URL and HEADED via env vars
+# Examples:
+#   make web-test-webauthn
+#   make web-test-webauthn FRONTEND_URL=https://server.example.com:8443
+#   make web-test-webauthn FRONTEND_URL=https://server.example.com:8443 HEADED=1
+.PHONY: web-test-webauthn
+web-test-webauthn:
+	cd $(WEB_SRC) && $(MAKE) test-webauthn
+
+.PHONY: web-lint
+web-lint:
+	@echo "[Web] Running ESLint and TypeScript checks..."
+	cd $(WEB_SRC) && npm run lint && npm run typecheck
+
+.PHONY: web-clean
+web-clean:
+	@echo "[Web] Cleaning frontend build artifacts..."
+	rm -rf $(WEB_SRC)/.next $(WEB_SRC)/out $(WEB_SRC)/node_modules $(WEB_EMBED_DIR)/*
+
+# =============================================================================
+
+
+# gRPC proto generation
+.PHONY: proto proto-lint proto-clean
+
+proto:
+	@echo "Generating gRPC code from proto files..."
+	cd pkg/api/grpc && buf generate
+	@echo "gRPC code generated in pkg/api/grpc/gen/"
+
+proto-lint:
+	@echo "Linting proto files..."
+	cd pkg/api/grpc/proto && buf lint
+
+proto-clean:
+	@echo "Cleaning generated gRPC code..."
+	rm -rf pkg/api/grpc/gen/
+
+
+.PHONY: clean
+clean:
+	cd pkg; \
+	$(GOBIN)/go clean
+	rm -rf \
+		$(PLATFORMD) \
+		$(PLATFORMD)-* \
+		$(PLATFORM_API) \
+		$(PLATFORM_API)-* \
+		$(PLATFORMCTL) \
+		$(PLATFORMCTL)-* \
+		$(PLATFORM_INITRD) \
+		$(PLATFORM_INITRD)-* \
+		*.img \
+		*.iso \
+		*.test \
+		*.qcow2 \
+		*.log \
+		/usr/local/bin/$(PLATFORMD) \
+		$(PLATFORM_DIR) \
+		$(WEB_PUBLIC_HTML) \
+		$(WEB_PUBLIC_HTML).tar.gz \
+		build/docker/trusted-platform/platformd \
+		build/docker/trusted-platform/platformd-debug \
+		build/docker/trusted-platform/trusted-data \
+		build/docker/trusted-platform-iso-builder/ansible/ \
+		build/docker/trusted-platform-iso-builder/secure-boot-keys \
+		build/docker/trusted-platform-iso-builder/*.iso \
+		build/docker/trusted-platform-iso-builder/*.qcow2 \
+		build/docker/pxe-server/*.qcow2 \
+		build/docker/pxe-server/volume \
+		examples/tss/attestor/$(PLATFORM_DIR) \
+		examples/tss/verifier/$(PLATFORM_DIR) \
+		examples/client/$(PLATFORM_DIR) \
+		examples/server/$(PLATFORM_DIR) \
+		pkg/$(PLATFORM_DIR) \
+		pkg/config.yaml \
+		pkg/$(WEB_PUBLIC_HTML) \
+		pkg/platform/testdata \
+		pkg/store/object/testdata \
+		pkg/store/certstore/testdata \
+		config.yaml
+	cd build/packer/rpi && sudo make clean
+
+# Platform Web Services
+.PHONY: webservice
+webservice: build-debug config
+	./$(PLATFORMD) --init serve
+
+.PHONY: webservice-verify-tls
+webservice-verify-tls:
+	openssl s_client \
+		-connect localhost:8443 \
+		-showcerts \
+		-servername localhost \
+		-CAfile pkg/$(PLATFORM_DIR)/ca/$(INTERMEDIATE_CA).$(DOMAIN)/x509/$(ROOT_CA).$(DOMAIN).pkcs8.rsa.pem \
+		| openssl x509 -noout -text
+
+
+# SoftHSM
+.PHONY: softhsm-init
+softhsm-init:
+	export SOFTHSM_CONF=$(SOFTHSM_CONFIG); \
+	chown $(USER):$(USER) $(SOFTHSM_TOKEN_DIR); \
+	$(SOFTHSM_DIR)/softhsm2-util \
+		--init-token \
+		--slot 0 \
+		--label test \
+		--so-pin 1234 \
+		--pin 5678 ; \
+	$(SOFTHSM_DIR)/softhsm2-util --show-slots
+
+# Tests
+# Note: pkg/tpm2, pkg/ca, and pkg/store/keystore have been migrated to external libraries:
+# - TPM2: github.com/jeremyhahn/go-xkms/pkg/tpm2
+# - CA: github.com/jeremyhahn/go-trusted-ca/pkg/ca
+# - Keystore: github.com/jeremyhahn/go-xkms/pkg/backend/*
+.PHONY: test
+test:
+	@echo "Running all unit tests..."
+	go test -tags "$(BUILD_TAGS)" -v $$(go list ./pkg/... ./cmd/... 2>/dev/null | grep -v -E "$(TEST_EXCLUDE)")
+
+.PHONY: test-legacy
+test-legacy: test-crypto test-webservice test-cli
+
+.PHONY: test-cli
+test-cli: test-tpm-cli test-ca-cli test-platform-cli
+
+.PHONY: test-tpm-cli
+test-tpm-cli:
+	rm -rf pkg/cmd/tpm/trusted-data pkg/cmd/tpm/attestation
+	cd pkg/cmd/tpm && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_EK$
+	rm -rf pkg/cmd/tpm/trusted-data pkg/cmd/tpm/attestation
+	cd pkg/cmd/tpm && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_EK_Certificate$
+	rm -rf pkg/cmd/tpm/trusted-data pkg/cmd/tpm/attestation
+	cd pkg/cmd/tpm && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_SRK$
+	rm -rf pkg/cmd/tpm/trusted-data pkg/cmd/tpm/attestation
+	cd pkg/cmd/tpm && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_SealUnseal$
+	rm -rf pkg/cmd/tpm/trusted-data pkg/cmd/tpm/attestation
+	cd pkg/cmd/tpm && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Provision$
+	rm -rf pkg/cmd/tpm/trusted-data pkg/cmd/tpm/attestation
+	cd pkg/cmd/tpm && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Info$
+
+.PHONY: test-ca-cli
+test-ca-cli:
+	rm -rf pkg/cmd/ca/trusted-data
+	cd pkg/cmd/ca && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Certificate$
+	rm -rf pkg/cmd/ca/trusted-data
+	cd pkg/cmd/ca && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Info$
+	rm -rf pkg/cmd/ca/trusted-data
+	cd pkg/cmd/ca && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Init$
+	rm -rf pkg/cmd/ca/trusted-data
+	cd pkg/cmd/ca && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Install$
+	rm -rf pkg/cmd/ca/trusted-data
+	cd pkg/cmd/ca && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Issue$
+	rm -rf pkg/cmd/ca/trusted-data
+	cd pkg/cmd/ca && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Revoke$
+
+.PHONY: test-platform-cli
+test-platform-cli:
+	rm -rf pkg/cmd/platform/trusted-data
+	cd pkg/cmd/platform && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Install$
+	rm -rf pkg/cmd/platform/trusted-data
+	cd pkg/cmd/platform && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_XKMS$
+	rm -rf pkg/cmd/platform/trusted-data
+	cd pkg/cmd/platform && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Policy$
+	rm -rf pkg/cmd/platform/trusted-data
+	cd pkg/cmd/platform && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Provision$
+
+# test-ca: Migrated to go-trusted-ca - run tests there instead
+# test-tpm: Migrated to go-xkms - run tests there instead
+
+.PHONY: test-crypto
+test-crypto:
+	cd pkg/crypto/aesgcm && go test -v
+	cd pkg/crypto/argon2 && go test -v
+
+.PHONY: test-store
+test-store: test-store-datastore
+
+# test-store-pkcs11: Migrated to go-xkms/pkg/backend/pkcs11
+# test-store-tpm2: Migrated to go-xkms/pkg/tpm2/store
+
+.PHONY: test-store-datastore
+test-store-datastore:
+	cd pkg/store/datastore && \
+		go test -v
+	cd pkg/store/datastore/kvstore && \
+		go test -v
+
+# QuicBaaS Unit Tests (fast, uses mock storage - no real Raft needed)
+# Runs: *_unit_test.go tests + config, error, mock_storage tests
+# These tests run in ~0.1s and cover adapter.go, DAOs, and utilities
+.PHONY: test-quicbaas
+test-quicbaas:
+	@echo "Running QuicBaaS unit tests (fast, no Raft)..."
+	go test -v -count=1 -run "Test.*_Mock|^TestMockStorage|^TestErr|^TestDefault|^TestConfig|^TestConsistency|^TestParse|^TestGetFree|^TestAllErrors" ./pkg/storage/quicbaas/...
+
+# QuicBaaS Unit Tests with Coverage (fast tests only - no real Raft)
+# Target: ~62% coverage (client.go and factory.go require Raft for testing)
+.PHONY: test-quicbaas-coverage
+test-quicbaas-coverage:
+	@echo "Running QuicBaaS unit tests with coverage (fast, no Raft)..."
+	@echo "Note: client.go and factory.go (0%) require Raft - tested via integration-test-quicbaas"
+	go test -count=1 -run "Test.*_Mock|^TestMockStorage|^TestErr|^TestDefault|^TestConfig|^TestConsistency|^TestParse|^TestGetFree|^TestAllErrors" -coverprofile=/tmp/quicbaas.cover ./pkg/storage/quicbaas/...
+	go tool cover -func=/tmp/quicbaas.cover | tail -1
+
+# QuicBaaS Full Coverage (includes Raft tests - runs serially, takes 3+ minutes)
+# This includes client.go and factory.go tests that need real Raft consensus
+.PHONY: test-quicbaas-coverage-full
+test-quicbaas-coverage-full:
+	@echo "Running all QuicBaaS tests with coverage (includes Raft, serial, ~3 min)..."
+	go test -count=1 -parallel 1 -timeout 10m -coverprofile=/tmp/quicbaas.cover ./pkg/storage/quicbaas/...
+	go tool cover -func=/tmp/quicbaas.cover | tail -1
+
+# QuicBaaS All Tests (includes slow Raft tests - runs serially)
+.PHONY: test-quicbaas-all
+test-quicbaas-all:
+	@echo "Running all QuicBaaS tests (includes Raft, serial, ~3 min)..."
+	go test -v -count=1 -parallel 1 -timeout 10m ./pkg/storage/quicbaas/...
+
+# QuicBaaS/Datastore Integration Tests (using devcontainer)
+.PHONY: integration-test-quicbaas
+## integration-test-quicbaas: Run QuicBaaS/datastore integration tests in development container
+integration-test-quicbaas: build-devcontainer
+	@echo "Running QuicBaaS integration tests in development container..."
+	@echo "Build tags: $(TEST_BUILD_TAGS)"
+	@docker run --rm --privileged \
+		--name go-trusted-platform-datastore-test \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/datastore/...
+
+.PHONY: integration-test-datastore
+## integration-test-datastore: Alias for integration-test-quicbaas
+integration-test-datastore: integration-test-quicbaas
+
+.PHONY: integration-test-ca
+## integration-test-ca: Run CA QuicBaaS adapter integration tests in development container
+integration-test-ca: build-devcontainer
+	@echo "Running CA QuicBaaS adapter integration tests in development container..."
+	@echo "Build tags: $(TEST_BUILD_TAGS)"
+	@docker run --rm --privileged \
+		--name go-trusted-platform-ca-test \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/ca/...
+
+# CA Command Integration Tests (requires TPM simulator)
+.PHONY: integration-test-cmd-ca
+## integration-test-cmd-ca: Run CA command integration tests in development container
+integration-test-cmd-ca: build-devcontainer
+	@echo "Running CA command integration tests in development container..."
+	@echo "Build tags: $(TEST_BUILD_TAGS)"
+	@docker run --rm --privileged \
+		--name go-trusted-platform-cmd-ca-test \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=1 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/cmd/ca/...
+
+# TPM Command Integration Tests (requires TPM simulator)
+.PHONY: integration-test-cmd-tpm
+## integration-test-cmd-tpm: Run TPM command integration tests in development container
+integration-test-cmd-tpm: build-devcontainer
+	@echo "Running TPM command integration tests in development container..."
+	@echo "Build tags: $(TEST_BUILD_TAGS)"
+	@docker run --rm --privileged \
+		--name go-trusted-platform-cmd-tpm-test \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=1 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/cmd/tpm/...
+
+# Combined CMD Integration Tests
+.PHONY: integration-test-cmd
+## integration-test-cmd: Run all command integration tests (CA and TPM)
+integration-test-cmd: integration-test-cmd-ca integration-test-cmd-tpm
+
+# DNS Integration Tests
+.PHONY: integration-test-dns
+## integration-test-dns: Run DNS integration tests (zone CRUD, record types, attestation, DANE)
+integration-test-dns: build-devcontainer
+	@echo "Running DNS integration tests in development container..."
+	@echo "Build tags: $(TEST_BUILD_TAGS)"
+	@docker run --rm \
+		--name go-trusted-platform-dns-test \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/dns/...
+
+.PHONY: integration-test-dns-local
+## integration-test-dns-local: Run DNS integration tests locally (no container)
+integration-test-dns-local:
+	@echo "Running DNS integration tests locally..."
+	@echo "Build tags: $(TEST_BUILD_TAGS)"
+	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/dns/...
+
+# Compute Orchestration Tests
+.PHONY: test-compute
+test-compute:
+	@echo "Running compute orchestration unit tests..."
+	go test -v -count=1 ./pkg/compute/...
+
+.PHONY: test-compute-coverage
+test-compute-coverage:
+	@echo "Running compute orchestration tests with coverage..."
+	go test -count=1 -coverprofile=/tmp/compute.cover ./pkg/compute/...
+	go tool cover -func=/tmp/compute.cover | tail -1
+
+.PHONY: coverage-compute
+coverage-compute: test-compute-coverage
+	@go tool cover -html=/tmp/compute.cover -o build/coverage/compute.html
+	@echo "Coverage report: build/coverage/compute.html"
+
+# IDevID/IAK Unit Tests (uses MockTPM - no real TPM or swtpm needed)
+.PHONY: test-idevid
+test-idevid:
+	@echo "Running IDevID/IAK unit tests..."
+	go test -v -count=1 ./pkg/tpm/idevid/...
+
+.PHONY: test-idevid-coverage
+test-idevid-coverage:
+	@echo "Running IDevID/IAK unit tests with coverage..."
+	go test -count=1 -coverprofile=/tmp/idevid.cover ./pkg/tpm/idevid/...
+	go tool cover -func=/tmp/idevid.cover | tail -1
+
+.PHONY: coverage-idevid
+coverage-idevid: test-idevid-coverage
+	@go tool cover -html=/tmp/idevid.cover -o build/coverage/idevid.html
+	@echo "Coverage report: build/coverage/idevid.html"
+
+.PHONY: test-webservice
+test-webservice: test-webservice-jwt
+
+.PHONY: test-webservice-jwt
+test-webservice-jwt:
+	cd pkg/webservice/v1/jwt && \
+		go test -tags "pkcs11 objstore" -v -run ^TestSigningMethodRS$ && \
+		go test -tags "pkcs11 objstore" -v -run ^TestSigningMethodPS$ && \
+		go test -tags "pkcs11 objstore" -v -run ^TestSigningMethodES$ && \
+		go test -tags "pkcs11 objstore" -v -run ^TestSigningMethodES_Ed25519$
+
+
+# Integration Tests
+# These tests run in docker containers with real services and perform complete end-to-end testing
+# Note: Local module directories referenced by go.mod replace directives must be mounted
+
+# Base directory containing all source repositories
+# This must match the paths used in go.mod replace directives
+SOURCES_BASE := /home/jhahn/sources
+
+# Local module volume mounts for docker - only mount packages with local replace directives in go.mod
+DOCKER_MODULE_MOUNTS := \
+	-v $(SOURCES_BASE)/go-xkms:$(SOURCES_BASE)/go-xkms \
+	-v $(SOURCES_BASE)/go-trusted-ca:$(SOURCES_BASE)/go-trusted-ca \
+	-v $(SOURCES_BASE)/go-quicbaas:$(SOURCES_BASE)/go-quicbaas \
+	-v $(SOURCES_BASE)/go-qrdb:$(SOURCES_BASE)/go-qrdb \
+	-v $(SOURCES_BASE)/go-objstore:$(SOURCES_BASE)/go-objstore \
+	-v $(SOURCES_BASE)/go-quicraft:$(SOURCES_BASE)/go-quicraft \
+	-v $(SOURCES_BASE)/go-truststrap:$(SOURCES_BASE)/go-truststrap
+
+.PHONY: integration-test
+## integration-test: Run all integration tests in development container
+## Starts OVS, swtpm, and platformd before running tests.
+## Set WITH_CODEC_* or other WITH_* flags for additional build tags.
+integration-test: build-devcontainer
+	@echo "Running all integration tests in development container..."
+	@echo "Build tags: $(TEST_BUILD_TAGS)"
+	@docker run --rm --privileged \
+		--name go-trusted-platform-integration-test \
+		--device /dev/net/tun:/dev/net/tun \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=1 \
+		$(DEVCONTAINER_IMAGE) \
+		bash /workspace/build/docker/devcontainer/run-integration-tests.sh "$(strip $(TEST_BUILD_TAGS))"
+
+.PHONY: integration-test-cli
+integration-test-cli: docker-builder-load
+	@echo "Running CLI integration tests in docker container..."
+	docker run --rm --privileged \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		$(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
+		/bin/sh -c "make test-cli 2>&1"
+
+.PHONY: integration-test-webservice
+integration-test-webservice: docker-builder-load
+	@echo "Running webservice integration tests in docker container..."
+	docker run --rm --privileged \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		$(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
+		/bin/sh -c "CGO_ENABLED=1 go test -tags 'pkcs11 objstore integration' -v ./pkg/webservice/v1/test/... 2>&1 || true"
+
+# SDN Integration Tests (using devcontainer)
+.PHONY: integration-test-sdn
+## integration-test-sdn: Run SDN integration tests in development container
+## Starts OVS before running SDN tests.
+integration-test-sdn: build-devcontainer
+	@echo "Running SDN integration tests in development container..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-sdn-test \
+		--device /dev/net/tun:/dev/net/tun \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=1 \
+		$(DEVCONTAINER_IMAGE) \
+		bash -c "\
+		mkdir -p /var/run/openvswitch /var/log/openvswitch /etc/openvswitch && \
+		if [ ! -f /etc/openvswitch/conf.db ]; then \
+			ovsdb-tool create /etc/openvswitch/conf.db /usr/share/openvswitch/vswitch.ovsschema; \
+		fi && \
+		ovsdb-server --remote=punix:/var/run/openvswitch/db.sock --pidfile --detach \
+			--log-file=/var/log/openvswitch/ovsdb-server.log /etc/openvswitch/conf.db && \
+		sleep 2 && ovs-vsctl --no-wait init || true && \
+		ovs-vswitchd --pidfile --detach --log-file=/var/log/openvswitch/ovs-vswitchd.log && \
+		sleep 2 && \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/sdn/..."
+
+.PHONY: integration-test-sdn-shell
+## integration-test-sdn-shell: Start interactive shell for SDN testing
+integration-test-sdn-shell: build-devcontainer
+	@echo "Starting SDN test shell..."
+	@docker run --rm -it --privileged \
+		--name go-trusted-platform-sdn-shell \
+		--device /dev/net/tun:/dev/net/tun \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		$(DEVCONTAINER_IMAGE) \
+		bash
+
+# KMS Integration Tests (with TPM simulator)
+.PHONY: integration-test-kms
+integration-test-kms: docker-builder-load
+	@echo "Running KMS integration tests in docker container..."
+	docker run --rm --privileged \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		$(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
+		go test -v -count=1 -timeout=10m ./test/integration/kms/...
+
+.PHONY: integration-test-kms-local
+## integration-test-kms-local: Run KMS integration tests locally (requires swtpm installed)
+integration-test-kms-local:
+	@echo "Running KMS integration tests locally..."
+	@if ! command -v swtpm > /dev/null 2>&1; then \
+		echo "ERROR: swtpm not installed. Install with: apt-get install swtpm swtpm-tools"; \
+		exit 1; \
+	fi
+	INTEGRATION_TEST=1 go test -v -count=1 -timeout=10m ./test/integration/kms/...
+
+# Secrets Integration Tests (with TPM simulator)
+.PHONY: integration-test-secrets
+## integration-test-secrets: Run Secrets integration tests in docker container
+integration-test-secrets: docker-builder-load
+	@echo "Running Secrets integration tests in docker container..."
+	docker run --rm --privileged \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		$(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
+		go test -v -count=1 -timeout=10m ./test/integration/secrets/...
+
+.PHONY: integration-test-secrets-local
+## integration-test-secrets-local: Run Secrets integration tests locally (requires swtpm installed)
+integration-test-secrets-local:
+	@echo "Running Secrets integration tests locally..."
+	@if ! command -v swtpm > /dev/null 2>&1; then \
+		echo "ERROR: swtpm not installed. Install with: apt-get install swtpm swtpm-tools"; \
+		exit 1; \
+	fi
+	INTEGRATION_TEST=1 go test -v -count=1 -timeout=10m ./test/integration/secrets/...
+
+# =============================================================================
+# Development Container
+# =============================================================================
+DEVCONTAINER_IMAGE := trusted-platform-dev:latest
+DEVCONTAINER_NAME := trusted-platform-devcontainer
+
+.PHONY: build-devcontainer
+## build-devcontainer: Build the development container with all tooling
+build-devcontainer:
+	@echo "Building development container..."
+	@docker build -t $(DEVCONTAINER_IMAGE) build/docker/devcontainer/
+
+.PHONY: devcontainer-shell
+## devcontainer-shell: Start an interactive shell in the development container
+devcontainer-shell: build-devcontainer
+	@echo "Starting development container shell..."
+	@docker run --rm -it --privileged \
+		--name trusted-platform-shell \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		$(DEVCONTAINER_IMAGE) \
+		bash
+
+.PHONY: devcontainer-verify
+## devcontainer-verify: Verify development container tooling
+devcontainer-verify: build-devcontainer
+	@docker run --rm $(DEVCONTAINER_IMAGE) verify
+
+
+# =============================================================================
+# SDN Benchmark Tests
+# =============================================================================
+# Run benchmarks for SDN packages to measure performance of critical paths:
+# - VNI/VLAN mapping lookups
+# - BGP route insertion/withdrawal and dampening calculations
+# - EVPN MAC/IP route encoding/decoding
+# - Gateway mode activation and health checks
+# - IPAM IP allocation/release throughput
+# - DHCP lease management operations
+# - OpenFlow message encoding/decoding
+
+.PHONY: bench-sdn
+## bench-sdn: Run all SDN package benchmarks
+bench-sdn:
+	@echo "$(CYAN)Running SDN benchmarks...$(RESET)"
+	@echo "$(CYAN)→ VXLAN benchmarks$(RESET)"
+	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/vxlan/...
+	@echo "$(CYAN)→ BGP benchmarks$(RESET)"
+	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/bgp/...
+	@echo "$(CYAN)→ Gateway benchmarks$(RESET)"
+	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/gateway/...
+	@echo "$(CYAN)→ IPAM benchmarks$(RESET)"
+	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/ipam/...
+	@echo "$(CYAN)→ DHCP benchmarks$(RESET)"
+	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/dhcp/...
+	@echo "$(CYAN)→ OpenFlow benchmarks$(RESET)"
+	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/openflow/...
+	@echo "$(GREEN)SDN benchmarks complete$(RESET)"
+
+.PHONY: bench-sdn-vxlan
+## bench-sdn-vxlan: Run VXLAN package benchmarks
+bench-sdn-vxlan:
+	@echo "$(CYAN)Running VXLAN benchmarks...$(RESET)"
+	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/vxlan/...
+
+.PHONY: bench-sdn-bgp
+## bench-sdn-bgp: Run BGP package benchmarks
+bench-sdn-bgp:
+	@echo "$(CYAN)Running BGP benchmarks...$(RESET)"
+	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/bgp/...
+
+.PHONY: bench-sdn-gateway
+## bench-sdn-gateway: Run Gateway package benchmarks
+bench-sdn-gateway:
+	@echo "$(CYAN)Running Gateway benchmarks...$(RESET)"
+	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/gateway/...
+
+.PHONY: bench-sdn-ipam
+## bench-sdn-ipam: Run IPAM package benchmarks
+bench-sdn-ipam:
+	@echo "$(CYAN)Running IPAM benchmarks...$(RESET)"
+	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/ipam/...
+
+.PHONY: bench-sdn-dhcp
+## bench-sdn-dhcp: Run DHCP package benchmarks
+bench-sdn-dhcp:
+	@echo "$(CYAN)Running DHCP benchmarks...$(RESET)"
+	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/dhcp/...
+
+.PHONY: bench-sdn-openflow
+## bench-sdn-openflow: Run OpenFlow package benchmarks
+bench-sdn-openflow:
+	@echo "$(CYAN)Running OpenFlow benchmarks...$(RESET)"
+	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/openflow/...
+
+# =============================================================================
+# Enhanced SDN/OVS/QEMU Integration Tests
+# =============================================================================
+
+.PHONY: integration-test-sdn-full
+## integration-test-sdn-full: Run full SDN tests with OVS in privileged devcontainer
+integration-test-sdn-full: build-devcontainer
+	@echo "Running full SDN integration tests with OVS..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-sdn-full \
+		--device /dev/net/tun:/dev/net/tun \
+		--cap-add=NET_ADMIN \
+		--cap-add=SYS_MODULE \
+		-e AUTO_START_OVS=true \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 15m ./test/integration/sdn/...
+
+.PHONY: integration-test-e2e
+## integration-test-e2e: Run end-to-end tests with QEMU VMs and OVS networking
+integration-test-e2e: build-devcontainer
+	@echo "Running E2E integration tests with QEMU and OVS..."
+	@if [ ! -e /dev/kvm ]; then \
+		echo "WARNING: /dev/kvm not available. Tests will run without KVM acceleration."; \
+	fi
+	@docker run --rm --privileged \
+		--name go-trusted-platform-e2e \
+		--device /dev/net/tun:/dev/net/tun \
+		$$([ -e /dev/kvm ] && echo "--device /dev/kvm:/dev/kvm") \
+		--cap-add=NET_ADMIN \
+		--cap-add=SYS_MODULE \
+		--cap-add=IPC_LOCK \
+		--shm-size=2g \
+		-e AUTO_START_OVS=true \
+		-e INTEGRATION_TEST=1 \
+		-e QEMU_ENABLE_KVM=$$([ -e /dev/kvm ] && echo "true" || echo "false") \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		$(DEVCONTAINER_IMAGE) \
+		bash -c "echo 'E2E test infrastructure ready. Add E2E test script here.'"
+
+.PHONY: integration-test-device-profile
+## integration-test-device-profile: Test device profile network state transitions
+integration-test-device-profile: build-devcontainer
+	@echo "Running device profile network transition tests..."
+	@docker run --rm --privileged \
+		--name trusted-platform-device-profile \
+		--device /dev/net/tun:/dev/net/tun \
+		--cap-add=NET_ADMIN \
+		--cap-add=SYS_MODULE \
+		-e AUTO_START_OVS=true \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=20m -run TestDeviceProfile ./test/integration/sdn/...
+
+
+.PHONY: stress-sdn
+## stress-sdn: Run SDN stress tests in development container
+stress-sdn: build-devcontainer
+	@echo "Running SDN stress tests in development container..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-sdn-stress \
+		--device /dev/net/tun:/dev/net/tun \
+		--cap-add=NET_ADMIN \
+		--cap-add=SYS_MODULE \
+		-e AUTO_START_OVS=true \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace/test/integration/sdn \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=30m ./stress/...
+
+.PHONY: stress-sdn-ipam
+## stress-sdn-ipam: Run IPAM stress tests
+stress-sdn-ipam: build-devcontainer
+	@echo "Running IPAM stress tests..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-ipam-stress \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace/test/integration/sdn \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=15m -run TestIPAM ./stress/...
+
+.PHONY: stress-sdn-bgp
+## stress-sdn-bgp: Run BGP stress tests
+stress-sdn-bgp: build-devcontainer
+	@echo "Running BGP stress tests..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-bgp-stress \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace/test/integration/sdn \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=15m -run TestBGP ./stress/...
+
+.PHONY: stress-sdn-dhcp
+## stress-sdn-dhcp: Run DHCP stress tests
+stress-sdn-dhcp: build-devcontainer
+	@echo "Running DHCP stress tests..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-dhcp-stress \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace/test/integration/sdn \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=15m -run TestDHCP ./stress/...
+
+.PHONY: stress-sdn-overlay
+## stress-sdn-overlay: Run overlay stress tests
+stress-sdn-overlay: build-devcontainer
+	@echo "Running overlay stress tests..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-overlay-stress \
+		--device /dev/net/tun:/dev/net/tun \
+		--cap-add=NET_ADMIN \
+		-e AUTO_START_OVS=true \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace/test/integration/sdn \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=15m -run TestOverlay ./stress/...
+
+.PHONY: stress-sdn-cluster
+## stress-sdn-cluster: Run cluster state stress tests
+stress-sdn-cluster: build-devcontainer
+	@echo "Running cluster state stress tests..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-cluster-stress \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace/test/integration/sdn \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=15m -run TestCluster ./stress/...
+
+.PHONY: stress-sdn-local
+## stress-sdn-local: Run SDN stress tests locally (without container)
+stress-sdn-local:
+	@echo "Running SDN stress tests locally..."
+	cd test/integration/sdn && INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -timeout=30m ./stress/...
+
+# =============================================================================
+# Docker Compose Based Integration Tests
+# =============================================================================
+
+.PHONY: devcontainer-compose-up
+## devcontainer-compose-up: Start all integration test services via docker-compose
+devcontainer-compose-up: build-devcontainer
+	@echo "Starting integration test environment with docker-compose..."
+	@cd build/docker/devcontainer && docker compose up -d
+	@echo "Waiting for services to be ready..."
+	@sleep 5
+	@cd build/docker/devcontainer && docker compose ps
+
+.PHONY: devcontainer-compose-down
+## devcontainer-compose-down: Stop all integration test services
+devcontainer-compose-down:
+	@echo "Stopping integration test environment..."
+	@cd build/docker/devcontainer && docker compose down -v
+
+.PHONY: devcontainer-compose-logs
+## devcontainer-compose-logs: View logs from integration test services
+devcontainer-compose-logs:
+	@cd build/docker/devcontainer && docker compose logs -f
+
+.PHONY: devcontainer-compose-shell
+## devcontainer-compose-shell: Connect to main devcontainer in compose environment
+devcontainer-compose-shell: devcontainer-compose-up
+	@echo "Connecting to devcontainer shell..."
+	@docker exec -it $(DEVCONTAINER_NAME) bash
+
+.PHONY: integration-test-compose-full
+## integration-test-compose-full: Run full test suite using docker-compose environment
+integration-test-compose-full: devcontainer-compose-up
+	@echo "Running full integration test suite in compose environment..."
+	@docker exec -e INTEGRATION_TEST=1 -e CGO_ENABLED=0 -w /workspace $(DEVCONTAINER_NAME) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 30m \
+		./test/integration/sdn/... \
+		./test/integration/vtpm/... \
+		./test/integration/datastore/...
+	@$(MAKE) devcontainer-compose-down
+
+.PHONY: integration-test-web
+## integration-test-web: Run web frontend E2E tests with swtpm and backend
+integration-test-web: devcontainer-compose-up
+	@echo "$(CYAN)═══════════════════════════════════════════════════════════════$(RESET)"
+	@echo "$(CYAN)  Running Web Frontend E2E Integration Tests$(RESET)"
+	@echo "$(CYAN)═══════════════════════════════════════════════════════════════$(RESET)"
+	@echo ""
+	@echo "$(YELLOW)→ Cleaning up previous test processes...$(RESET)"
+	-@docker exec $(DEVCONTAINER_NAME) pkill -9 -f 'platformd-web-test' 2>/dev/null || true
+	-@docker exec $(DEVCONTAINER_NAME) pkill -9 -f 'next dev' 2>/dev/null || true
+	-@docker exec $(DEVCONTAINER_NAME) pkill -9 -f 'node.*next' 2>/dev/null || true
+	@sleep 1
+	@echo "$(YELLOW)→ Initializing swtpm (Software TPM)...$(RESET)"
+	-@docker exec $(DEVCONTAINER_NAME) pkill -f 'swtpm socket' 2>/dev/null || true
+	@docker exec $(DEVCONTAINER_NAME) rm -rf /tmp/swtpm
+	@docker exec $(DEVCONTAINER_NAME) mkdir -p /tmp/swtpm
+	@docker exec $(DEVCONTAINER_NAME) swtpm_setup --tpm2 --tpmstate /tmp/swtpm --overwrite --pcr-banks sha256
+	@echo "$(YELLOW)→ Starting swtpm daemon...$(RESET)"
+	@docker exec -d $(DEVCONTAINER_NAME) swtpm socket --tpm2 \
+		--tpmstate dir=/tmp/swtpm \
+		--server type=unixio,path=/tmp/swtpm/swtpm.sock \
+		--ctrl type=unixio,path=/tmp/swtpm/swtpm.sock.ctrl \
+		--flags startup-clear,not-need-init \
+		--log level=5,file=/tmp/swtpm/swtpm.log
+	@sleep 2
+	@docker exec $(DEVCONTAINER_NAME) ls -la /tmp/swtpm/
+	@docker exec $(DEVCONTAINER_NAME) pgrep -la swtpm || (echo "swtpm failed to start" && exit 1)
+	@echo ""
+	@echo "$(YELLOW)→ Building backend...$(RESET)"
+	@docker exec $(DEVCONTAINER_NAME) bash -c "\
+		cd /workspace && \
+		go build -tags '$(BUILD_TAGS)' -o bin/platformd-web-test ./cmd/platformd"
+	@echo ""
+	@echo "$(YELLOW)→ Copying web-test configuration...$(RESET)"
+	@docker exec $(DEVCONTAINER_NAME) bash -c "\
+		cp /workspace/configs/platform/config.web-test.yaml /workspace/pkg/config.yaml && \
+		rm -rf /workspace/pkg/trusted-data && \
+		mkdir -p /workspace/pkg/trusted-data/etc"
+	@echo ""
+	@echo "$(YELLOW)→ Starting backend with swtpm...$(RESET)"
+	@docker exec -d $(DEVCONTAINER_NAME) bash -c "\
+		cd /workspace/pkg && \
+		../bin/platformd-web-test --config config.yaml --raw-so-pin 123456 --raw-pin 123456 --intermediate 0 --init serve > /tmp/platformd.log 2>&1"
+	@sleep 5
+	@echo "$(YELLOW)→ Checking backend status...$(RESET)"
+	@docker exec $(DEVCONTAINER_NAME) bash -c "\
+		for i in 1 2 3 4 5 6; do \
+			curl -sk -X POST -H 'Content-Type: application/json' -d '{\"username\":\"healthcheck\"}' https://localhost:8443/api/v1/webauthn/login/begin 2>&1 | grep -q 'entity not found' && echo 'Backend is ready' && exit 0; \
+			echo 'Waiting for backend... attempt '\$$i; \
+			sleep 3; \
+		done; \
+		echo 'Backend failed to start, showing logs:'; \
+		tail -100 /tmp/platformd.log; \
+		echo '--- swtpm logs ---'; \
+		cat /tmp/swtpm/swtpm.log 2>/dev/null || true; \
+		exit 1"
+	@echo ""
+	@echo "$(YELLOW)→ Installing frontend dependencies...$(RESET)"
+	@docker exec $(DEVCONTAINER_NAME) bash -c "\
+		cd /workspace/web && \
+		npm install --silent"
+	@echo ""
+	@echo "$(YELLOW)→ Installing Playwright browsers...$(RESET)"
+	@docker exec $(DEVCONTAINER_NAME) bash -c "\
+		cd /workspace/web && \
+		npx playwright install chromium --with-deps"
+	@echo ""
+	@echo "$(YELLOW)→ Starting Next.js dev server...$(RESET)"
+	@docker exec -d $(DEVCONTAINER_NAME) bash -c "\
+		cd /workspace/web && \
+		npm run dev > /tmp/nextjs.log 2>&1"
+	@echo "$(YELLOW)→ Waiting for dev server to start...$(RESET)"
+	@sleep 5
+	@docker exec $(DEVCONTAINER_NAME) bash -c "\
+		for i in 1 2 3 4 5 6 7 8 9 10; do \
+			curl -s http://localhost:3000 >/dev/null 2>&1 && echo 'Dev server is ready' && exit 0; \
+			echo 'Waiting for dev server... attempt '\$$i; \
+			sleep 2; \
+		done; \
+		echo 'Dev server failed to start, showing logs:'; \
+		cat /tmp/nextjs.log; \
+		exit 1"
+	@echo ""
+	@echo "$(YELLOW)→ Running Playwright E2E tests...$(RESET)"
+	@docker exec $(DEVCONTAINER_NAME) bash -c "\
+		cd /workspace/web && \
+		npx playwright test --reporter=list" && \
+		TEST_RESULT=$$? || TEST_RESULT=$$?; \
+	echo ""; \
+	echo "$(YELLOW)→ Stopping services...$(RESET)"; \
+	docker exec $(DEVCONTAINER_NAME) bash -c "pkill -f 'next dev' || pkill -f 'node.*next' || true"; \
+	docker exec $(DEVCONTAINER_NAME) bash -c "pkill -f 'platformd-web-test' || true"; \
+	docker exec $(DEVCONTAINER_NAME) bash -c "pkill -f 'swtpm socket' || true"; \
+	echo "$(YELLOW)→ Fixing file ownership...$(RESET)"; \
+	docker exec $(DEVCONTAINER_NAME) bash -c "chown -R $(shell id -u):$(shell id -g) /workspace/web/.next /workspace/web/test-results /workspace/web/playwright-report 2>/dev/null || true"; \
+	if [ $$TEST_RESULT -eq 0 ]; then \
+		echo "$(GREEN)✓ Web E2E tests passed!$(RESET)"; \
+	else \
+		echo "$(RED)✗ Web E2E tests failed$(RESET)"; \
+		echo "$(YELLOW)Dev server logs:$(RESET)"; \
+		docker exec $(DEVCONTAINER_NAME) cat /tmp/nextjs.log 2>/dev/null || true; \
+		echo "$(YELLOW)Backend logs:$(RESET)"; \
+		docker exec $(DEVCONTAINER_NAME) tail -50 /tmp/platformd.log 2>/dev/null || true; \
+	fi; \
+	exit $$TEST_RESULT
+
+.PHONY: dev
+## dev: Start development environment (swtpm + backend + frontend) in devcontainer
+dev: devcontainer-compose-up
+	@docker exec $(DEVCONTAINER_NAME) /usr/local/bin/entrypoint.sh web-dev
+
+.PHONY: integration-test-web-shell
+## integration-test-web-shell: Start shell with backend running for manual web testing
+integration-test-web-shell: devcontainer-compose-up
+	@echo "$(CYAN)Starting web testing environment...$(RESET)"
+	@echo ""
+	@echo "$(YELLOW)→ Building backend...$(RESET)"
+	@docker exec $(DEVCONTAINER_NAME) bash -c "cd /workspace && make build-debug config"
+	@echo ""
+	@echo "$(YELLOW)→ Starting backend webservice in background...$(RESET)"
+	@docker exec -d $(DEVCONTAINER_NAME) bash -c "\
+		cd /workspace/pkg && \
+		../bin/platformd-debug --config config.yaml --raw-so-pin 123456 --raw-pin 123456 --init serve > /tmp/platformd.log 2>&1"
+	@sleep 3
+	@echo ""
+	@echo "$(YELLOW)→ Installing frontend dependencies...$(RESET)"
+	@docker exec $(DEVCONTAINER_NAME) bash -c "\
+		cd /workspace/web && \
+		npm install --silent"
+	@echo ""
+	@echo "$(GREEN)═══════════════════════════════════════════════════════════════$(RESET)"
+	@echo "$(GREEN)  Environment Ready!$(RESET)"
+	@echo "$(GREEN)═══════════════════════════════════════════════════════════════$(RESET)"
+	@echo ""
+	@echo "  Backend running on: https://localhost:8443"
+	@echo ""
+	@echo "  To start frontend dev server:"
+	@echo "    cd /workspace/web && npm run dev"
+	@echo ""
+	@echo "  Then open: http://localhost:3000/auth/webauthn"
+	@echo ""
+	@echo "  To run E2E tests:"
+	@echo "    cd /workspace/web && npm run test:e2e"
+	@echo ""
+	@docker exec -it $(DEVCONTAINER_NAME) bash
+
+# =============================================================================
+# Development Container with Full Capabilities
+# =============================================================================
+
+.PHONY: devcontainer-shell-full
+## devcontainer-shell-full: Start devcontainer with all devices and capabilities
+devcontainer-shell-full: build-devcontainer
+	@echo "Starting fully-equipped development container..."
+	@docker run --rm -it --privileged \
+		--name trusted-platform-full \
+		--device /dev/net/tun:/dev/net/tun \
+		$$([ -e /dev/kvm ] && echo "--device /dev/kvm:/dev/kvm") \
+		--cap-add=NET_ADMIN \
+		--cap-add=NET_RAW \
+		--cap-add=SYS_MODULE \
+		--cap-add=SYS_ADMIN \
+		--cap-add=IPC_LOCK \
+		--shm-size=2g \
+		-e AUTO_START_OVS=true \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		$(DEVCONTAINER_IMAGE) \
+		ovs-shell
+
+.PHONY: devcontainer-help
+## devcontainer-help: Show devcontainer usage information
+devcontainer-help: build-devcontainer
+	@docker run --rm $(DEVCONTAINER_IMAGE) help
+
+
+# =============================================================================
+# vTPM Integration Tests (using devcontainer)
+# =============================================================================
+.PHONY: integration-test-vtpm
+## integration-test-vtpm: Run full E2E vTPM integration tests (ISO creation + QEMU boot)
+integration-test-vtpm: build-devcontainer
+	@echo "Running vTPM E2E integration tests in development container..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-vtpm-test \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-e HOST_UID=$$(id -u) \
+		-e HOST_GID=$$(id -g) \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		-w /workspace \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 15m ./test/integration/vtpm/...
+
+.PHONY: integration-test-vtpm-shell
+## integration-test-vtpm-shell: Start interactive shell for vTPM testing
+integration-test-vtpm-shell: build-devcontainer
+	@echo "Starting vTPM test shell..."
+	@docker run --rm -it --privileged \
+		--name go-trusted-platform-vtpm-shell \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		$(DEVCONTAINER_IMAGE) \
+		bash
+
+.PHONY: integration-test-vtpm-local
+## integration-test-vtpm-local: Run vTPM Go unit tests locally (requires swtpm installed)
+integration-test-vtpm-local:
+	@echo "Running vTPM unit tests locally..."
+	@if ! command -v swtpm > /dev/null 2>&1; then \
+		echo "ERROR: swtpm not installed. Install with: apt-get install swtpm swtpm-tools"; \
+		exit 1; \
+	fi
+	CGO_ENABLED=1 go test -v $(TEST_BUILD_TAGS_ARG) -timeout=10m ./test/integration/vtpm/...
+
+.PHONY: devcontainer-clean
+## devcontainer-clean: Remove development container and legacy test images
+devcontainer-clean:
+	@echo "Cleaning development container and legacy test images..."
+	@docker rmi -f $(DEVCONTAINER_IMAGE) 2>/dev/null || true
+	@docker rmi -f go-trusted-platform-vtpm-test:latest 2>/dev/null || true
+	@docker rmi -f go-trusted-platform-sdn-test:latest 2>/dev/null || true
+	@docker rmi -f go-trusted-platform-datastore-integration-test:latest 2>/dev/null || true
+
+# =============================================================================
+# Cluster Integration Tests (multi-node Raft cluster)
+# =============================================================================
+.PHONY: integration-test-cluster
+## integration-test-cluster: Run cluster integration tests with multi-node Raft cluster
+integration-test-cluster: build-devcontainer
+	@echo "Running cluster integration tests..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-cluster-test \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		-e RAFT_CLUSTER_TEST=1 \
+		-e CLUSTER_SIZE=3 \
+		-e LOG_LEVEL=info \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 15m ./test/integration/cluster/...
+
+.PHONY: integration-test-cluster-consensus
+## integration-test-cluster-consensus: Run cluster consensus tests only
+integration-test-cluster-consensus: build-devcontainer
+	@echo "Running cluster consensus tests..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-cluster-consensus \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		-e RAFT_CLUSTER_TEST=1 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*Consensus.*' ./test/integration/cluster/...
+
+.PHONY: integration-test-cluster-failover
+## integration-test-cluster-failover: Run cluster failover tests only
+integration-test-cluster-failover: build-devcontainer
+	@echo "Running cluster failover tests..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-cluster-failover \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		-e RAFT_CLUSTER_TEST=1 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*Failover.*' ./test/integration/cluster/...
+
+.PHONY: integration-test-cluster-sdn
+## integration-test-cluster-sdn: Run cluster SDN replication tests only
+integration-test-cluster-sdn: build-devcontainer
+	@echo "Running cluster SDN tests..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-cluster-sdn \
+		--device /dev/net/tun:/dev/net/tun \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e RAFT_CLUSTER_TEST=1 \
+		-e CGO_ENABLED=0 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*SDN.*' ./test/integration/cluster/...
+
+.PHONY: integration-test-cluster-ca
+## integration-test-cluster-ca: Run cluster CA replication tests only
+integration-test-cluster-ca: build-devcontainer
+	@echo "Running cluster CA tests..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-cluster-ca \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e RAFT_CLUSTER_TEST=1 \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*CA.*' ./test/integration/cluster/...
+
+.PHONY: integration-test-cluster-shell
+## integration-test-cluster-shell: Start interactive shell for cluster testing
+integration-test-cluster-shell: build-devcontainer
+	@echo "Starting cluster test shell..."
+	@docker run --rm -it --privileged \
+		--name go-trusted-platform-cluster-shell \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace/test/integration/cluster \
+		-e INTEGRATION_TEST=1 \
+		$(DEVCONTAINER_IMAGE) \
+		bash
+
+.PHONY: integration-test-cluster-compose
+## integration-test-cluster-compose: Run cluster tests using docker-compose (full multi-container setup)
+integration-test-cluster-compose:
+	@echo "Starting multi-node cluster with docker-compose..."
+	@cd test/integration/cluster && docker compose up --build --abort-on-container-exit
+	@cd test/integration/cluster && docker compose down -v
+
+.PHONY: integration-test-cluster-compose-up
+## integration-test-cluster-compose-up: Start cluster nodes only (for manual testing)
+integration-test-cluster-compose-up:
+	@echo "Starting cluster nodes..."
+	@cd test/integration/cluster && docker compose up -d --scale test-runner=0
+
+.PHONY: integration-test-cluster-compose-down
+## integration-test-cluster-compose-down: Stop cluster nodes and cleanup
+integration-test-cluster-compose-down:
+	@echo "Stopping cluster nodes..."
+	@cd test/integration/cluster && docker compose down -v
+
+# =============================================================================
+# Daemon Multi-Protocol Integration Tests
+# =============================================================================
+.PHONY: integration-test-daemon
+## integration-test-daemon: Run daemon multi-protocol integration tests in development container
+integration-test-daemon: build-devcontainer
+	@echo "Running daemon multi-protocol integration tests in development container..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-daemon-test \
+		--device /dev/net/tun:/dev/net/tun \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/daemon/...
+
+.PHONY: integration-test-daemon-local
+## integration-test-daemon-local: Run daemon integration tests locally (requires services running)
+integration-test-daemon-local:
+	@echo "Running daemon integration tests locally..."
+	INTEGRATION_TEST=1 go test -v -count=1 -timeout=10m ./test/integration/daemon/...
+
+# =============================================================================
+# IAM Multi-Protocol Integration Tests
+# =============================================================================
+.PHONY: integration-test-iam
+## integration-test-iam: Run IAM multi-protocol integration tests in development container
+integration-test-iam: build-devcontainer
+	@echo "Running IAM multi-protocol integration tests in development container..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-iam-test \
+		--device /dev/net/tun:/dev/net/tun \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/iam/...
+
+.PHONY: integration-test-iam-local
+## integration-test-iam-local: Run IAM integration tests locally (requires services running)
+integration-test-iam-local:
+	@echo "Running IAM integration tests locally..."
+	INTEGRATION_TEST=1 go test -v -count=1 -timeout=10m ./test/integration/iam/...
+
+
+# =============================================================================
+# Provisioning Config Delivery Integration Tests
+# =============================================================================
+.PHONY: integration-test-provisioning
+## integration-test-provisioning: Run provisioning integration tests in development container
+integration-test-provisioning: build-devcontainer
+	@echo "Running provisioning integration tests in development container..."
+	@echo "Build tags: $(TEST_BUILD_TAGS)"
+	@docker run --rm --privileged \
+		--name go-trusted-platform-provisioning-test \
+		--device /dev/net/tun:/dev/net/tun \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=1 \
+		$(DEVCONTAINER_IMAGE) \
+		bash /workspace/build/docker/devcontainer/run-provisioning-tests.sh "$(strip $(TEST_BUILD_TAGS))"
+
+.PHONY: integration-test-provisioning-local
+## integration-test-provisioning-local: Run provisioning integration tests locally (requires services running)
+integration-test-provisioning-local:
+	@echo "Running provisioning integration tests locally..."
+	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/provisioning/...
+# =============================================================================
+# iPXE/PXE Integration Tests
+# =============================================================================
+.PHONY: integration-test-ipxe
+## integration-test-ipxe: Run iPXE/PXE integration tests in development container
+integration-test-ipxe: build-devcontainer
+	@echo "Running iPXE/PXE integration tests in development container..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-ipxe-test \
+		--device /dev/net/tun:/dev/net/tun \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/ipxe/...
+
+.PHONY: integration-test-ipxe-local
+## integration-test-ipxe-local: Run iPXE integration tests locally (requires root for DHCP/TFTP)
+integration-test-ipxe-local:
+	@echo "Running iPXE integration tests locally..."
+	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/ipxe/...
+
+.PHONY: integration-test-ipxe-dhcp
+## integration-test-ipxe-dhcp: Run only DHCP protocol tests
+integration-test-ipxe-dhcp: build-devcontainer
+	@echo "Running iPXE DHCP protocol tests..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-ipxe-dhcp-test \
+		--device /dev/net/tun:/dev/net/tun \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*DHCP.*' ./test/integration/ipxe/...
+
+.PHONY: integration-test-ipxe-tftp
+## integration-test-ipxe-tftp: Run only TFTP protocol tests
+integration-test-ipxe-tftp: build-devcontainer
+	@echo "Running iPXE TFTP protocol tests..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-ipxe-tftp-test \
+		--device /dev/net/tun:/dev/net/tun \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*TFTP.*' ./test/integration/ipxe/...
+
+.PHONY: integration-test-ipxe-http
+## integration-test-ipxe-http: Run only HTTP boot script tests
+integration-test-ipxe-http: build-devcontainer
+	@echo "Running iPXE HTTP boot script tests..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-ipxe-http-test \
+		--device /dev/net/tun:/dev/net/tun \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*HTTP.*' ./test/integration/ipxe/...
+
+# =============================================================================
+# IDevID/IAK Integration Tests
+# =============================================================================
+.PHONY: integration-test-idevid
+## integration-test-idevid: Run IDevID/IAK multi-protocol integration tests in development container
+integration-test-idevid: build-devcontainer
+	@echo "Running IDevID/IAK multi-protocol integration tests in development container..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-idevid-test \
+		--device /dev/net/tun:/dev/net/tun \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 15m ./test/integration/idevid/...
+
+.PHONY: integration-test-idevid-local
+## integration-test-idevid-local: Run IDevID/IAK integration tests locally (requires swtpm and services running)
+integration-test-idevid-local:
+	@echo "Running IDevID/IAK integration tests locally..."
+	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=15m ./test/integration/idevid/...
+
+# =============================================================================
+# QUIC Protocol Integration Tests
+# =============================================================================
+.PHONY: integration-test-quic
+## integration-test-quic: Run QUIC protocol integration tests in development container
+integration-test-quic: build-devcontainer
+	@echo "Running QUIC protocol integration tests in development container..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-quic-test \
+		--device /dev/net/tun:/dev/net/tun \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/quic/...
+
+.PHONY: integration-test-quic-local
+## integration-test-quic-local: Run QUIC integration tests locally (requires QUIC server running)
+integration-test-quic-local:
+	@echo "Running QUIC integration tests locally..."
+	INTEGRATION_TEST=1 go test -v -count=1 -timeout=10m ./test/integration/quic/...
+
+# =============================================================================
+# Network Authentication Integration Tests
+# =============================================================================
+.PHONY: integration-test-network
+## integration-test-network: Run network authentication integration tests in development container
+integration-test-network: build-devcontainer
+	@echo "Running network authentication integration tests in development container..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-network-test \
+		--device /dev/net/tun:/dev/net/tun \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=0 \
+		$(DEVCONTAINER_IMAGE) \
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/network/...
+
+# vTPM Coverage
+.PHONY: coverage-vtpm
+## coverage-vtpm: Generate vTPM package coverage report
+coverage-vtpm:
+	@mkdir -p $(COVERAGE_DIR)
+	@echo "$(CYAN)→ Generating vTPM coverage report...$(RESET)"
+	@$(GOTEST) -tags "$(BUILD_TAGS)" -v -coverprofile=$(COVERAGE_DIR)/vtpm.out -covermode=atomic ./pkg/vtpm/...
+	@$(GO) tool cover -html=$(COVERAGE_DIR)/vtpm.out -o $(COVERAGE_DIR)/vtpm.html
+	@$(GO) tool cover -func=$(COVERAGE_DIR)/vtpm.out | tail -1
+	@echo "$(GREEN)✓ Coverage report: $(COVERAGE_DIR)/vtpm.html$(RESET)"
+
+# ==============================================================================
+# Code Coverage Targets
+# ==============================================================================
+
+# Packages excluded from unit tests and coverage:
+# - test/integration: Integration tests (run separately via make integration-test)
+# - pkg/api/grpc/gen: Generated protobuf code
+# - pkg/api/grpc$$: Only contains go:generate directive (no testable code)
+# - cmd/platformctl$$, cmd/platformd$$: Entry points with main() only
+# - examples/: Example code
+# - pkg/webservice/v1/test$$: Webservice integration tests
+# - pkg/device/dao$$: Only interface definitions, no testable code (tests in subdirs)
+# - pkg/platform$$: TPM/HSM-dependent XKMS code (tested via integration tests)
+# - pkg/compute$$: Requires swtpm and OVS (tested via integration tests)
+# - pkg/qemu$$: Requires swtpm (tested via integration tests)
+# - pkg/swtpm$$: Requires swtpm binary (tested via integration tests)
+# - pkg/vtpm$$: Requires swtpm (tested via integration tests)
+# - pkg/sdn/netlink$$: Requires root privileges and netlink (tested via integration tests)
+# - pkg/ipxe$$: Requires network services (tested via integration tests)
+# - pkg/testenv$$: Test helper utilities (not production code)
+# - pkg/api/grpc/proto: Generated protobuf code (DO NOT EDIT)
+# - pkg/dns/dao$$: Only interface definitions (tests in subdirs)
+# - pkg/initrd$$: Requires TPM, LUKS, block devices, mount (tested via integration tests)
+# - pkg/installer$$, pkg/installer/alpine$$: Requires disk partitioning, chroot, apk (tested via integration tests)
+# - pkg/firstboot$$: Requires TPM detection, EFI vars, system commands (tested via integration tests)
+# - pkg/uefi/firmware$$: Requires efivarfs (tested via integration tests)
+# - pkg/uki$$: Requires PE binary tools like objcopy (tested via integration tests)
+# - cmd/gatewayd$$, cmd/platform-initrd$$: Entry points with main() only
+# - pkg/store/datastore$$: Only interface definitions and serializer (tests in subdirs)
+# - pkg/cli/commands/*: CLI commands require running platformd daemon (tested via integration tests)
+#   Includes: iso, kms, iam, vtpm, registry, container, bootstrap, ca, tenant, tpm, sdn,
+#   barrier, db, device, fido2, cluster, install, firstboot, profile, acme, authenticode
+# - pkg/boot/commands$$, pkg/daemon/commands$$, pkg/sdn/gateway/commands$$: Require running daemon
+# - pkg/iso$$: Requires cpio, zstd, grub-mkstandalone, apk tools (tested via integration tests)
+# - pkg/storage/luks$$: Requires LUKS/cryptsetup (tested via integration tests)
+# - pkg/compute/podman$$: Requires OCI runtime (tested via integration tests)
+# - pkg/cli$$: Config loading depends on system state (tested via integration tests)
+# - pkg/app$$: Platform initialization requires TPM, KMS, DNS, stores (tested via integration tests)
+# - pkg/webservice$$: Webserver startup requires TLS, CA (tested via integration tests)
+# - pkg/dns$$: DNSSEC requires XKMS/QuicBaaS key stores (tested via integration tests)
+# - pkg/webservice/v1$$: Handler registry setup needs running server (tested via integration tests)
+# - pkg/webservice/v1/webauthn$$: WebAuthn ceremonies need real authenticator (tested via integration tests)
+# - pkg/webservice/v1/rest/platform$$: REST handlers need running gRPC services (tested via integration tests)
+# - pkg/platform/system$$: System info gathering depends on host (tested via integration tests)
+TEST_EXCLUDE := test/integration|pkg/api/grpc/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cmd/platformctl$$|cmd/platformd$$|cmd/gatewayd$$|cmd/platform-initrd$$|examples/|pkg/webservice/v1/test$$|pkg/device/dao$$|pkg/dns/dao$$|pkg/platform$$|pkg/compute$$|pkg/qemu$$|pkg/swtpm$$|pkg/vtpm$$|pkg/sdn/netlink$$|pkg/ipxe$$|pkg/testenv$$|pkg/initrd$$|pkg/installer$$|pkg/installer/alpine$$|pkg/firstboot$$|pkg/uefi/firmware$$|pkg/uki$$|pkg/store/datastore$$|pkg/cli/commands|pkg/boot/commands$$|pkg/daemon/commands$$|pkg/sdn/gateway/commands$$|pkg/iso$$|pkg/storage/luks$$|pkg/compute/podman$$|pkg/cli$$|pkg/app$$|pkg/webservice$$|pkg/dns$$|pkg/webservice/v1$$|pkg/webservice/v1/webauthn$$|pkg/webservice/v1/rest/platform$$|pkg/platform/system$$
+
+.PHONY: coverage
+## coverage: Run unit tests with coverage analysis
+coverage:
+	@echo "$(CYAN)$(BOLD)→ Running tests with coverage...$(RESET)"
+	@mkdir -p $(COVERAGE_DIR)
+	@$(GOTEST) -p 4 -tags "$(BUILD_TAGS) pkcs11 objstore" -coverprofile=$(COVERAGE_FILE) -covermode=atomic \
+		$$(go list ./pkg/... ./cmd/... | grep -v -E "$(TEST_EXCLUDE)") \
+		2>&1 | tee $(COVERAGE_DIR)/test.log; \
+	TEST_EXIT=$$?; \
+	if [ -f $(COVERAGE_FILE) ]; then \
+		echo ""; \
+		echo "$(CYAN)$(BOLD)Coverage Summary$(RESET)"; \
+		echo "$(CYAN)────────────────────────────────────────$(RESET)"; \
+		awk -F'[: ,]' 'NR>1 {stmts+=$$(NF-1); if($$NF>0) covered+=$$(NF-1)} END{printf "  Total: %.1f%%\n", covered*100/stmts}' $(COVERAGE_FILE); \
+		echo "$(CYAN)────────────────────────────────────────$(RESET)"; \
+		echo "$(GREEN)✓ Coverage report: $(COVERAGE_FILE)$(RESET)"; \
+	fi; \
+	exit $$TEST_EXIT
+
+.PHONY: coverage-report
+## coverage-report: Generate HTML coverage report
+coverage-report: coverage
+	@echo "$(CYAN)→ Generating HTML coverage report...$(RESET)"
+	@$(GO) tool cover -html=$(COVERAGE_FILE) -o $(COVERAGE_HTML)
+	@COVERAGE=$$($(GO) tool cover -func=$(COVERAGE_FILE) | grep total | awk '{print $$3}'); \
+	echo "$(GREEN)✓ Coverage report: $(COVERAGE_HTML)$(RESET)"; \
+	echo "$(BOLD)$(BLUE)Coverage: $$COVERAGE$(RESET)"; \
+	COVERAGE_NUM=$$(echo $$COVERAGE | sed 's/%//' | awk '{printf "%d", $$1}'); \
+	if [ $$COVERAGE_NUM -lt $(COVERAGE_THRESHOLD) ]; then \
+		echo "$(YELLOW)⚠ Coverage is below $(COVERAGE_THRESHOLD)% target$(RESET)"; \
+	fi
+
+.PHONY: coverage-full
+## coverage-full: Generate comprehensive coverage report (unit + quicbaas tests)
+coverage-full:
+	@echo "$(CYAN)$(BOLD)→ Running comprehensive coverage tests...$(RESET)"
+	@mkdir -p $(COVERAGE_DIR)
+	@echo "$(CYAN)→ Step 1: Running unit tests with coverage...$(RESET)"
+	@$(GOTEST) -tags "$(BUILD_TAGS) pkcs11 objstore integration" -coverprofile=$(COVERAGE_DIR)/unit.out -covermode=atomic \
+		$$(go list ./pkg/... ./cmd/... | grep -v -E "$(TEST_EXCLUDE)") \
+		2>&1 | tee $(COVERAGE_DIR)/unit.log || true
+	@echo "$(CYAN)→ Step 2: Running QuicBaaS tests with coverage...$(RESET)"
+	@$(GOTEST) -tags "$(BUILD_TAGS)" -count=1 -parallel 1 -timeout 10m -coverprofile=$(COVERAGE_DIR)/quicbaas.out -covermode=atomic \
+		./pkg/storage/quicbaas/... 2>&1 | tee $(COVERAGE_DIR)/quicbaas.log || true
+	@echo "$(CYAN)→ Merging coverage profiles...$(RESET)"
+	@if command -v gocovmerge >/dev/null 2>&1; then \
+		gocovmerge $(COVERAGE_DIR)/unit.out $(COVERAGE_DIR)/quicbaas.out > $(COVERAGE_FILE); \
+	else \
+		cp $(COVERAGE_DIR)/unit.out $(COVERAGE_FILE); \
+		echo "$(YELLOW)⚠ gocovmerge not found - using unit coverage only$(RESET)"; \
+		echo "$(YELLOW)  Install with: go install github.com/wadey/gocovmerge@latest$(RESET)"; \
+	fi
+	@$(GO) tool cover -html=$(COVERAGE_FILE) -o $(COVERAGE_HTML)
+	@$(GO) tool cover -func=$(COVERAGE_FILE) | tail -1
+	@echo "$(GREEN)✓ Coverage report: $(COVERAGE_HTML)$(RESET)"
+
+# Package-specific coverage targets
+.PHONY: coverage-crypto
+## coverage-crypto: Generate crypto package coverage report
+coverage-crypto:
+	@mkdir -p $(COVERAGE_DIR)
+	@echo "$(CYAN)→ Generating crypto coverage report...$(RESET)"
+	@$(GOTEST) -tags "$(BUILD_TAGS)" -v -coverprofile=$(COVERAGE_DIR)/crypto.out -covermode=atomic ./pkg/crypto/...
+	@$(GO) tool cover -html=$(COVERAGE_DIR)/crypto.out -o $(COVERAGE_DIR)/crypto.html
+	@$(GO) tool cover -func=$(COVERAGE_DIR)/crypto.out | tail -1
+	@echo "$(GREEN)✓ Coverage report: $(COVERAGE_DIR)/crypto.html$(RESET)"
+
+.PHONY: coverage-webservice
+## coverage-webservice: Generate webservice package coverage report
+coverage-webservice:
+	@mkdir -p $(COVERAGE_DIR)
+	@echo "$(CYAN)→ Generating webservice coverage report...$(RESET)"
+	@$(GOTEST) -tags "$(BUILD_TAGS) pkcs11 objstore" -v -coverprofile=$(COVERAGE_DIR)/webservice.out -covermode=atomic ./pkg/webservice/...
+	@$(GO) tool cover -html=$(COVERAGE_DIR)/webservice.out -o $(COVERAGE_DIR)/webservice.html
+	@$(GO) tool cover -func=$(COVERAGE_DIR)/webservice.out | tail -1
+	@echo "$(GREEN)✓ Coverage report: $(COVERAGE_DIR)/webservice.html$(RESET)"
+
+.PHONY: coverage-platform
+## coverage-platform: Generate platform package coverage report
+coverage-platform:
+	@mkdir -p $(COVERAGE_DIR)
+	@echo "$(CYAN)→ Generating platform coverage report...$(RESET)"
+	@$(GOTEST) -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -coverprofile=$(COVERAGE_DIR)/platform.out -covermode=atomic ./pkg/platform/...
+	@$(GO) tool cover -html=$(COVERAGE_DIR)/platform.out -o $(COVERAGE_DIR)/platform.html
+	@$(GO) tool cover -func=$(COVERAGE_DIR)/platform.out | tail -1
+	@echo "$(GREEN)✓ Coverage report: $(COVERAGE_DIR)/platform.html$(RESET)"
+
+.PHONY: coverage-sdn
+## coverage-sdn: Generate SDN package coverage report
+coverage-sdn:
+	@mkdir -p $(COVERAGE_DIR)
+	@echo "$(CYAN)→ Generating SDN coverage report...$(RESET)"
+	@$(GOTEST) -tags "$(BUILD_TAGS)" -v -coverprofile=$(COVERAGE_DIR)/sdn.out -covermode=atomic ./pkg/sdn/...
+	@$(GO) tool cover -html=$(COVERAGE_DIR)/sdn.out -o $(COVERAGE_DIR)/sdn.html
+	@$(GO) tool cover -func=$(COVERAGE_DIR)/sdn.out | tail -1
+	@echo "$(GREEN)✓ Coverage report: $(COVERAGE_DIR)/sdn.html$(RESET)"
+
+.PHONY: coverage-datastore
+## coverage-datastore: Generate datastore package coverage report
+coverage-datastore:
+	@mkdir -p $(COVERAGE_DIR)
+	@echo "$(CYAN)→ Generating datastore coverage report...$(RESET)"
+	@$(GOTEST) -tags "$(BUILD_TAGS)" -v -coverprofile=$(COVERAGE_DIR)/datastore.out -covermode=atomic ./pkg/store/datastore/...
+	@$(GO) tool cover -html=$(COVERAGE_DIR)/datastore.out -o $(COVERAGE_DIR)/datastore.html
+	@$(GO) tool cover -func=$(COVERAGE_DIR)/datastore.out | tail -1
+	@echo "$(GREEN)✓ Coverage report: $(COVERAGE_DIR)/datastore.html$(RESET)"
+
+.PHONY: coverage-kms-rest
+## coverage-kms-rest: Generate KMS REST API handlers coverage report
+coverage-kms-rest:
+	@mkdir -p $(COVERAGE_DIR)
+	@echo "$(CYAN)→ Generating KMS REST handlers coverage report...$(RESET)"
+	@$(GOTEST) -tags "$(BUILD_TAGS)" -v -coverprofile=$(COVERAGE_DIR)/kms-rest.out -covermode=atomic ./pkg/webservice/v1/rest/kms/...
+	@$(GO) tool cover -html=$(COVERAGE_DIR)/kms-rest.out -o $(COVERAGE_DIR)/kms-rest.html
+	@$(GO) tool cover -func=$(COVERAGE_DIR)/kms-rest.out | tail -1
+	@echo "$(GREEN)✓ Coverage report: $(COVERAGE_DIR)/kms-rest.html$(RESET)"
+
+.PHONY: coverage-kms-cli
+## coverage-kms-cli: Generate KMS CLI commands coverage report
+coverage-kms-cli:
+	@mkdir -p $(COVERAGE_DIR)
+	@echo "$(CYAN)→ Generating KMS CLI commands coverage report...$(RESET)"
+	@$(GOTEST) -tags "$(BUILD_TAGS)" -v -coverprofile=$(COVERAGE_DIR)/kms-cli.out -covermode=atomic ./pkg/cli/commands/kms/...
+	@$(GO) tool cover -html=$(COVERAGE_DIR)/kms-cli.out -o $(COVERAGE_DIR)/kms-cli.html
+	@$(GO) tool cover -func=$(COVERAGE_DIR)/kms-cli.out | tail -1
+	@echo "$(GREEN)✓ Coverage report: $(COVERAGE_DIR)/kms-cli.html$(RESET)"
+
+.PHONY: test-tenant
+## test-tenant: Run tenant package tests
+test-tenant:
+	@echo "$(CYAN)→ Running tenant package tests...$(RESET)"
+	@$(GOTEST) -tags "$(BUILD_TAGS)" -v ./pkg/tenant/...
+	@echo "$(GREEN)✓ Tenant tests complete$(RESET)"
+
+.PHONY: coverage-tenant
+## coverage-tenant: Generate tenant package coverage report
+coverage-tenant:
+	@mkdir -p $(COVERAGE_DIR)
+	@echo "$(CYAN)→ Generating tenant package coverage report...$(RESET)"
+	@$(GOTEST) -tags "$(BUILD_TAGS)" -v -coverprofile=$(COVERAGE_DIR)/tenant.out -covermode=atomic ./pkg/tenant/...
+	@$(GO) tool cover -html=$(COVERAGE_DIR)/tenant.out -o $(COVERAGE_DIR)/tenant.html
+	@$(GO) tool cover -func=$(COVERAGE_DIR)/tenant.out | tail -1
+	@echo "$(GREEN)✓ Coverage report: $(COVERAGE_DIR)/tenant.html$(RESET)"
+
+.PHONY: coverage-tenant-cli
+## coverage-tenant-cli: Generate tenant CLI commands coverage report
+coverage-tenant-cli:
+	@mkdir -p $(COVERAGE_DIR)
+	@echo "$(CYAN)→ Generating tenant CLI commands coverage report...$(RESET)"
+	@$(GOTEST) -tags "$(BUILD_TAGS)" -v -coverprofile=$(COVERAGE_DIR)/tenant-cli.out -covermode=atomic ./pkg/cli/commands/tenant/...
+	@$(GO) tool cover -html=$(COVERAGE_DIR)/tenant-cli.out -o $(COVERAGE_DIR)/tenant-cli.html
+	@$(GO) tool cover -func=$(COVERAGE_DIR)/tenant-cli.out | tail -1
+	@echo "$(GREEN)✓ Coverage report: $(COVERAGE_DIR)/tenant-cli.html$(RESET)"
+
+.PHONY: integration-test-tenant
+## integration-test-tenant: Run tenant integration tests (requires devcontainer)
+integration-test-tenant:
+	@echo "$(CYAN)→ Running tenant integration tests...$(RESET)"
+	@$(GOTEST) -tags "integration $(BUILD_TAGS)" -v ./test/integration/tenant/...
+	@echo "$(GREEN)✓ Tenant integration tests complete$(RESET)"
+
+# ==============================================================================
+# Code Quality Targets
+# ==============================================================================
+
+.PHONY: fmt
+## fmt: Format all Go source files
+fmt:
+	@echo "$(CYAN)$(BOLD)→ Formatting Go source files...$(RESET)"
+	@$(GOFMT) -s -w .
+	@echo "$(GREEN)✓ Formatting complete$(RESET)"
+
+.PHONY: fmt-check
+## fmt-check: Check if Go source files are formatted
+fmt-check:
+	@echo "$(CYAN)$(BOLD)→ Checking Go source formatting...$(RESET)"
+	@if [ -n "$$($(GOFMT) -l .)" ]; then \
+		echo "$(RED)$(BOLD)✗ The following files need formatting:$(RESET)"; \
+		$(GOFMT) -l .; \
+		exit 1; \
+	fi
+	@echo "$(GREEN)✓ All files are properly formatted$(RESET)"
+
+.PHONY: vet
+## vet: Run go vet on all packages
+vet:
+	@echo "$(CYAN)$(BOLD)→ Running go vet...$(RESET)"
+	@$(GOVET) -tags "$(BUILD_TAGS) pkcs11 objstore integration" ./...
+	@echo "$(GREEN)✓ go vet complete$(RESET)"
+
+.PHONY: lint-cli
+## lint-cli: Verify CLI commands use SDK only — no direct protocol imports
+lint-cli:
+	@echo "Checking CLI commands for direct protocol imports..."
+	@VIOLATIONS=$$(grep -rn 'pkg/api/rest\|pkg/api/quic\|pkg/api/mcp' pkg/cli/commands/ 2>/dev/null | grep -v '_test.go' || true); \
+	if [ -n "$$VIOLATIONS" ]; then \
+		echo "ERROR: CLI commands must not import protocol packages directly."; \
+		echo "Use sdk/go transport abstractions instead."; \
+		echo ""; \
+		echo "$$VIOLATIONS"; \
+		exit 1; \
+	fi
+	@echo "CLI lint passed — no direct protocol imports found."
+
+.PHONY: lint
+## lint: Run golangci-lint on all packages
+lint:
+	@echo "$(CYAN)$(BOLD)→ Running linters...$(RESET)"
+	@GOLANGCI_LINT_BIN=$$(command -v golangci-lint 2>/dev/null || echo "$$HOME/go/bin/golangci-lint"); \
+	if [ -x "$$GOLANGCI_LINT_BIN" ]; then \
+		if $$GOLANGCI_LINT_BIN run --timeout=15m ./...; then \
+			echo "$(GREEN)✓ Linting complete$(RESET)"; \
+		else \
+			echo "$(RED)$(BOLD)✗ Linting failed with errors$(RESET)"; \
+			exit 1; \
+		fi \
+	else \
+		echo "$(YELLOW)⚠ golangci-lint not found$(RESET)"; \
+		echo "$(YELLOW)  Install with: make install-golangci-lint$(RESET)"; \
+		exit 1; \
+	fi
+
+# ==============================================================================
+# Security Scanning Targets
+# ==============================================================================
+
+.PHONY: gosec
+## gosec: Run security analysis with gosec
+gosec:
+	@echo "$(CYAN)$(BOLD)→ Running security analysis with gosec...$(RESET)"
+	@mkdir -p $(BUILD_DIR)
+	@GOSEC_BIN=$$(command -v gosec 2>/dev/null || echo "$$HOME/go/bin/gosec"); \
+	if [ -x "$$GOSEC_BIN" ]; then \
+		$$GOSEC_BIN -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
+			-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
+			-exclude-generated \
+			-fmt=text -out=$(BUILD_DIR)/gosec-report.txt ./... && \
+		echo "$(GREEN)✓ Security scan complete - no issues found$(RESET)" && \
+		echo "$(CYAN)Report saved to: $(BUILD_DIR)/gosec-report.txt$(RESET)" || \
+		(echo "$(RED)$(BOLD)✗ Security issues found - see $(BUILD_DIR)/gosec-report.txt$(RESET)" && exit 1); \
+	else \
+		echo "$(YELLOW)⚠ gosec not found$(RESET)"; \
+		echo "$(YELLOW)  Install with: make install-gosec$(RESET)"; \
+		exit 1; \
+	fi
+
+.PHONY: gosec-sarif
+## gosec-sarif: Run gosec and output SARIF format for GitHub Security tab
+gosec-sarif:
+	@echo "$(CYAN)$(BOLD)→ Running gosec with SARIF output...$(RESET)"
+	@mkdir -p $(BUILD_DIR)
+	@GOSEC_BIN=$$(command -v gosec 2>/dev/null || echo "$$HOME/go/bin/gosec"); \
+	if [ -x "$$GOSEC_BIN" ]; then \
+		$$GOSEC_BIN -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
+			-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
+			-exclude-generated \
+			-fmt=sarif -out=$(BUILD_DIR)/gosec-results.sarif ./... || true; \
+		echo "$(GREEN)✓ SARIF report: $(BUILD_DIR)/gosec-results.sarif$(RESET)"; \
+	else \
+		echo "$(YELLOW)⚠ gosec not found$(RESET)"; \
+		exit 1; \
+	fi
+
+.PHONY: vuln
+## vuln: Run vulnerability scan with govulncheck
+vuln:
+	@echo "$(CYAN)$(BOLD)→ Running vulnerability scan with govulncheck...$(RESET)"
+	@GOVULNCHECK_BIN=$$(command -v govulncheck 2>/dev/null || echo "$$HOME/go/bin/govulncheck"); \
+	if [ -x "$$GOVULNCHECK_BIN" ]; then \
+		$$GOVULNCHECK_BIN ./...; \
+		echo "$(GREEN)✓ Vulnerability scan complete$(RESET)"; \
+	else \
+		echo "$(YELLOW)⚠ govulncheck not found$(RESET)"; \
+		echo "$(YELLOW)  Install with: make install-govulncheck$(RESET)"; \
+		exit 1; \
+	fi
+
+.PHONY: trivy
+## trivy: Run Trivy vulnerability scan on filesystem
+trivy:
+	@echo "$(CYAN)$(BOLD)→ Running Trivy vulnerability scan...$(RESET)"
+	@TRIVY_BIN=$$(command -v trivy 2>/dev/null); \
+	if [ -n "$$TRIVY_BIN" ]; then \
+		$$TRIVY_BIN fs --severity CRITICAL,HIGH --exit-code 1 --skip-dirs work --skip-dirs work-server . && \
+		echo "$(GREEN)✓ Trivy scan complete - no critical/high vulnerabilities found$(RESET)"; \
+	else \
+		echo "$(YELLOW)⚠ trivy not found - skipping (install with: make install-trivy)$(RESET)"; \
+	fi
+
+.PHONY: trivy-image
+## trivy-image: Run Trivy vulnerability scan on Docker image
+trivy-image:
+	@echo "$(CYAN)$(BOLD)→ Running Trivy vulnerability scan on Docker image...$(RESET)"
+	@TRIVY_BIN=$$(command -v trivy 2>/dev/null); \
+	if [ -n "$$TRIVY_BIN" ]; then \
+		$$TRIVY_BIN image --severity CRITICAL,HIGH $(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 && \
+		echo "$(GREEN)✓ Trivy image scan complete$(RESET)"; \
+	else \
+		echo "$(YELLOW)⚠ trivy not found$(RESET)"; \
+		echo "$(YELLOW)  Install with: make install-trivy$(RESET)"; \
+		exit 1; \
+	fi
+
+.PHONY: grype
+## grype: Run Grype vulnerability scan on Docker image
+grype:
+	@echo "$(CYAN)$(BOLD)→ Running Grype vulnerability scan...$(RESET)"
+	@GRYPE_BIN=$$(command -v grype 2>/dev/null); \
+	if [ -n "$$GRYPE_BIN" ]; then \
+		$$GRYPE_BIN $(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 --fail-on high && \
+		echo "$(GREEN)✓ Grype scan complete$(RESET)"; \
+	else \
+		echo "$(YELLOW)⚠ grype not found$(RESET)"; \
+		echo "$(YELLOW)  Install with: make install-grype$(RESET)"; \
+		exit 1; \
+	fi
+
+.PHONY: check
+## check: Run all code quality and security checks
+check: fmt-check vet lint gosec vuln
+	@echo "$(GREEN)$(BOLD)✓ All quality checks passed!$(RESET)"
+
+# ==============================================================================
+# Tool Installation Targets
+# ==============================================================================
+
+.PHONY: install-tools
+## install-tools: Install all development and security tools
+install-tools: install-gosec install-govulncheck install-trivy install-grype install-golangci-lint install-gocovmerge
+	@echo "$(GREEN)$(BOLD)✓ All development tools installed$(RESET)"
+
+.PHONY: install-gosec
+## install-gosec: Install gosec security scanner
+install-gosec:
+	@echo "$(CYAN)$(BOLD)→ Installing gosec...$(RESET)"
+	@if ! command -v gosec >/dev/null 2>&1; then \
+		echo "$(CYAN)  Installing gosec security scanner...$(RESET)"; \
+		go install github.com/securego/gosec/v2/cmd/gosec@latest; \
+		echo "$(GREEN)  ✓ gosec installed$(RESET)"; \
+	else \
+		echo "$(GREEN)  ✓ gosec already installed$(RESET)"; \
+	fi
+
+.PHONY: install-govulncheck
+## install-govulncheck: Install govulncheck vulnerability scanner
+install-govulncheck:
+	@echo "$(CYAN)$(BOLD)→ Installing govulncheck...$(RESET)"
+	@if ! command -v govulncheck >/dev/null 2>&1; then \
+		echo "$(CYAN)  Installing govulncheck vulnerability scanner...$(RESET)"; \
+		go install golang.org/x/vuln/cmd/govulncheck@latest; \
+		echo "$(GREEN)  ✓ govulncheck installed$(RESET)"; \
+	else \
+		echo "$(GREEN)  ✓ govulncheck already installed$(RESET)"; \
+	fi
+
+.PHONY: install-trivy
+## install-trivy: Install Trivy vulnerability scanner
+install-trivy:
+	@echo "$(CYAN)$(BOLD)→ Installing trivy...$(RESET)"
+	@if ! command -v trivy >/dev/null 2>&1; then \
+		echo "$(CYAN)  Installing Trivy vulnerability scanner...$(RESET)"; \
+		curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $$(go env GOPATH)/bin; \
+		echo "$(GREEN)  ✓ trivy installed$(RESET)"; \
+	else \
+		echo "$(GREEN)  ✓ trivy already installed$(RESET)"; \
+	fi
+
+.PHONY: install-grype
+## install-grype: Install Grype vulnerability scanner
+install-grype:
+	@echo "$(CYAN)$(BOLD)→ Installing grype...$(RESET)"
+	@if ! command -v grype >/dev/null 2>&1; then \
+		echo "$(CYAN)  Installing Grype vulnerability scanner...$(RESET)"; \
+		curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b $$(go env GOPATH)/bin; \
+		echo "$(GREEN)  ✓ grype installed$(RESET)"; \
+	else \
+		echo "$(GREEN)  ✓ grype already installed$(RESET)"; \
+	fi
+
+.PHONY: install-golangci-lint
+## install-golangci-lint: Install golangci-lint
+install-golangci-lint:
+	@echo "$(CYAN)$(BOLD)→ Installing golangci-lint...$(RESET)"
+	@if ! command -v golangci-lint >/dev/null 2>&1; then \
+		echo "$(CYAN)  Installing golangci-lint v2.11.2...$(RESET)"; \
+		cd /tmp && \
+		wget -q https://github.com/golangci/golangci-lint/releases/download/v2.11.2/golangci-lint-2.11.2-linux-amd64.tar.gz && \
+		tar -xzf golangci-lint-2.11.2-linux-amd64.tar.gz && \
+		mkdir -p $$(go env GOPATH)/bin && \
+		cp golangci-lint-2.11.2-linux-amd64/golangci-lint $$(go env GOPATH)/bin/ && \
+		chmod +x $$(go env GOPATH)/bin/golangci-lint && \
+		rm -rf golangci-lint-2.11.2-linux-amd64*; \
+		echo "$(GREEN)  ✓ golangci-lint v2.11.2 installed$(RESET)"; \
+	else \
+		echo "$(GREEN)  ✓ golangci-lint already installed$(RESET)"; \
+	fi
+
+.PHONY: install-gocovmerge
+## install-gocovmerge: Install gocovmerge for merging coverage files
+install-gocovmerge:
+	@echo "$(CYAN)$(BOLD)→ Installing gocovmerge...$(RESET)"
+	@if ! command -v gocovmerge >/dev/null 2>&1; then \
+		echo "$(CYAN)  Installing gocovmerge...$(RESET)"; \
+		go install github.com/wadey/gocovmerge@latest; \
+		echo "$(GREEN)  ✓ gocovmerge installed$(RESET)"; \
+	else \
+		echo "$(GREEN)  ✓ gocovmerge already installed$(RESET)"; \
+	fi
+
+# ==============================================================================
+# CI Pipeline Targets
+# ==============================================================================
+
+.PHONY: ci-local
+## ci-local: Run CI pipeline locally (requires all tools installed)
+ci-local: fmt-check vet lint gosec vuln trivy build-no-web test
+	@echo "$(GREEN)$(BOLD)✓ CI pipeline complete!$(RESET)"
+
+.PHONY: ci
+## ci: Run CI pipeline in Docker container
+ci: docker-builder-load-ci
+	@echo "$(CYAN)$(BOLD)→ Running CI pipeline in Docker container...$(RESET)"
+	docker run --rm --privileged \
+		-v $(PWD):/workspace \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w /workspace \
+		$(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
+		/bin/sh -c "make install-tools ci-local 2>&1"
+	@echo "$(GREEN)$(BOLD)✓ CI pipeline complete!$(RESET)"
+
+.PHONY: race
+## race: Run tests with race detector
+race:
+	@echo "$(CYAN)$(BOLD)→ Running tests with race detector...$(RESET)"
+	@$(GOTEST) -tags "pkcs11 objstore integration" -race -timeout 10m \
+		$$(go list ./pkg/... | grep -v -E "(test/integration|storage/quicbaas)") \
+		2>&1 | tee $(BUILD_DIR)/race.log || true
+	@echo "$(GREEN)✓ Race detection complete$(RESET)"
+
+# ==============================================================================
+# Releases
+# ==============================================================================
+
+.PHONY: release
+release: clean \
+	release-version-bump \
+	release-commit \
+	docker-builder-push \
+	docker-platform-push \
+	docker-iso-builder-push \
+	docker-pxe-server-push \
+	docker-nfs-server-push \
+	release-public-html \
+	release-binaries \
+	isos \
+	packer-rpi \
+	release-github
+
+.PHONY: release-local
+release-local: clean \
+	docker-builder-load \
+	docker-platform-load \
+	docker-iso-builder-load \
+	docker-pxe-server-load \
+	docker-nfs-server-load \
+	release-public-html \
+	release-binaries \
+	isos \
+	packer-rpi
+
+.PHONY: release-commit
+release-commit:
+	git add -A
+	git commit -F CHANGELOG
+	git push origin $(GIT_BRANCH)
+
+.PHONY: release-binaries
+release-binaries:
+	# glibc
+	CONTAINER=$$(docker create $(APPNAME)-builder-debian:amd64); \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD) $(PLATFORMD)-glibc-x86_64; \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD) $(PLATFORMD)-debug-glibc-x86_64
+	CONTAINER=$$(docker create $(APPNAME)-builder-debian:arm64); \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD) $(PLATFORMD)-glibc-aarch64; \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD) $(PLATFORMD)-debug-glibc-aarch64
+	# musl (now static by default)
+	CONTAINER=$$(docker create $(APPNAME)-builder-alpine:amd64); \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD) $(PLATFORMD)-musl-x86_64; \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD) $(PLATFORMD)-static-musl-x86_64; \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD) $(PLATFORMD)-debug-static-musl-x86_64
+	CONTAINER=$$(docker create $(APPNAME)-builder-alpine:arm64); \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD) $(PLATFORMD)-musl-aarch64; \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD) $(PLATFORMD)-static-musl-aarch64; \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/$(PLATFORMD) $(PLATFORMD)-debug-static-musl-aarch64
+
+.PHONY:
+release-public-html:
+	CONTAINER=$$(docker create $(APPNAME)-builder-debian:amd64); \
+		docker cp $$CONTAINER:/builder/go-trusted-platform/public_html/ .; \
+		tar czf public_html.tar.gz public_html
+
+.PHONY: release-version-bump
+release-version-bump:
+	@if [ -z "$(RELEASE_TYPE)" ]; then \
+		echo "Error: RELEASE_TYPE must be specified (e.g., make increment_version RELEASE_TYPE=major)"; \
+		exit 1; \
+	fi
+	@if [ ! -f $(VERSION_FILE) ]; then \
+		echo "Error: VERSION file not found"; \
+		exit 1; \
+	fi
+	@OLD_VERSION=$$(cat $(VERSION_FILE)); \
+	MAJOR=$$(echo $$OLD_VERSION | cut -d. -f1); \
+	MINOR=$$(echo $$OLD_VERSION | cut -d. -f2); \
+	BUGFIX=$$(echo $$OLD_VERSION | cut -d. -f3 | cut -d- -f1); \
+	PRERELEASE=$$(echo $$OLD_VERSION | grep -o -E '(-.*|$$)'); \
+	if [ "$(RELEASE_TYPE)" = "major" ]; then \
+		NEW_MAJOR=$$((MAJOR + 1)); \
+		NEW_VERSION="$$NEW_MAJOR.0.0"; \
+	elif [ "$(RELEASE_TYPE)" = "minor" ]; then \
+		NEW_MINOR=$$((MINOR + 1)); \
+		NEW_VERSION="$$MAJOR.$$NEW_MINOR.0"; \
+	elif [ "$(RELEASE_TYPE)" = "bugfix" ]; then \
+		NEW_BUGFIX=$$((BUGFIX + 1)); \
+		NEW_VERSION="$$MAJOR.$$MINOR.$$NEW_BUGFIX"; \
+	else \
+		echo "Error: Invalid RELEASE_TYPE. Use 'major', 'minor', or 'bugfix'."; \
+		exit 1; \
+	fi; \
+	if [ -n "$$PRERELEASE" ]; then \
+		NEW_VERSION="$$NEW_VERSION$$PRERELEASE"; \
+	fi; \
+	echo $$NEW_VERSION > $(VERSION_FILE); \
+	echo "Version updated: $$OLD_VERSION -> $$NEW_VERSION"
+
+.PHONY: release-github
+release-github:
+	@VERSION=$$(cat $(VERSION_FILE)); \
+	echo "Creating GitHub release v$$VERSION..."; \
+	gh release create v$$VERSION \
+		-t "v$$VERSION" \
+		-F CHANGELOG \
+		$(PLATFORMD)-debug-glibc-aarch64 \
+		$(PLATFORMD)-debug-glibc-x86_64 \
+		$(PLATFORMD)-debug-musl-aarch64 \
+		$(PLATFORMD)-debug-musl-x86_64 \
+		$(PLATFORMD)-debug-static-musl-aarch64 \
+		$(PLATFORMD)-debug-static-musl-x86_64 \
+		$(PLATFORMD)-glibc-aarch64 \
+		$(PLATFORMD)-glibc-x86_64 \
+		$(PLATFORMD)-musl-aarch64 \
+		$(PLATFORMD)-musl-x86_64 \
+		$(PLATFORMD)-static-musl-aarch64 \
+		$(PLATFORMD)-static-musl-x86_64 \
+		trusted-platform.iso \
+		trusted-platform-swtpm.iso \
+		trusted-platform-raspbian.img \
+		$(WEB_PUBLIC_HTML).tar.gz
+
+.PHONY: release-github-delete
+release-github-delete:
+	@VERSION=$$(cat $(VERSION_FILE)); \
+	echo "Deleting GitHub release v$$VERSION..."; \
+	gh release delete v$$VERSION --yes; \
+	git push origin --delete v$$VERSION
+
+
+# Docker
+.PHONY: docker-bake-load
+docker-bake-load:
+	docker context use default
+	docker buildx bake amd64 --load
+	docker context use $(DOCKER_AARCH64_CONTEXT)
+	docker buildx bake arm64 --load
+
+.PHONY: docker-bake-push
+docker-bake-push:
+	docker context use default
+	docker buildx bake amd64 --push
+	docker context use $(DOCKER_AARCH64_CONTEXT)
+	docker buildx bake arm64 --push
+
+# Docker :: PXE server
+.PHONY: docker-pxe-server-load
+docker-pxe-server-load:
+	cd build/docker/pxe-server && make -j$(shell nproc) build
+
+.PHONY: docker-pxe-server-push
+docker-pxe-server-push:
+	cd build/docker/pxe-server && make -j$(shell nproc) push
+
+# Docker :: PXE Boot Container (bootstrap)
+# Builds the self-contained PXE boot container from the platform ISO.
+# The ISO must be built first (make iso-hwtpm or make iso-swtpm).
+# This target:
+#   1. Builds the pxeboot binary (static, CGO_ENABLED=0)
+#   2. Extracts vmlinuz + initramfs from the ISO
+#   3. Copies the autoinstall script
+#   4. Builds the Docker image with everything baked in
+#
+# Usage: make pxeboot-container ISO_FILE=trusted-platform.iso
+ISO_FILE                    ?= trusted-platform.iso
+PXEBOOT_IMAGE               ?= platform-pxeboot
+PXEBOOT_CONTEXT             := build/docker/bootstrap
+PXEBOOT_BINARY              := $(PXEBOOT_CONTEXT)/pxeboot
+
+.PHONY: pxeboot-container
+pxeboot-container: pxeboot-binary pxeboot-extract
+	@echo "$(CYAN)→ Building PXE boot container...$(RESET)"
+	docker build \
+		-t $(PXEBOOT_IMAGE):latest \
+		-t $(PXEBOOT_IMAGE):$(APP_VERSION) \
+		$(PXEBOOT_CONTEXT)
+	@echo "$(GREEN)✓ PXE boot container built: $(PXEBOOT_IMAGE):$(APP_VERSION)$(RESET)"
+
+.PHONY: pxeboot-binary
+pxeboot-binary:
+	@echo "$(CYAN)→ Building pxeboot binary (static)...$(RESET)"
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOBIN)/go build \
+		-tags "$(BUILD_TAGS)" \
+		-o $(PXEBOOT_BINARY) \
+		-ldflags="-w -s ${LDFLAGS}" \
+		./cmd/pxeboot
+	@echo "Binary size: $$(du -h $(PXEBOOT_BINARY) | cut -f1)"
+
+.PHONY: pxeboot-extract
+pxeboot-extract:
+	@echo "$(CYAN)→ Extracting kernel and initramfs from ISO...$(RESET)"
+	@if [ ! -f "$(ISO_FILE)" ]; then \
+		echo "$(RED)Error: ISO file not found: $(ISO_FILE)$(RESET)"; \
+		echo "Build it first with: make iso-hwtpm"; \
+		exit 1; \
+	fi
+	@mkdir -p /tmp/pxeboot-iso-extract
+	@cd /tmp/pxeboot-iso-extract && 7z x -y "$(CURDIR)/$(ISO_FILE)" boot/vmlinuz-lts boot/initramfs-lts 2>/dev/null || \
+		(cd /tmp/pxeboot-iso-extract && xorriso -osirrox on -indev "$(CURDIR)/$(ISO_FILE)" -extract /boot/vmlinuz-lts vmlinuz-lts -extract /boot/initramfs-lts initramfs-lts 2>/dev/null) || \
+		(echo "$(RED)Error: Could not extract kernel from ISO. Install p7zip or xorriso.$(RESET)"; exit 1)
+	@if [ -f /tmp/pxeboot-iso-extract/boot/vmlinuz-lts ]; then \
+		cp /tmp/pxeboot-iso-extract/boot/vmlinuz-lts $(PXEBOOT_CONTEXT)/vmlinuz; \
+		cp /tmp/pxeboot-iso-extract/boot/initramfs-lts $(PXEBOOT_CONTEXT)/initramfs; \
+	elif [ -f /tmp/pxeboot-iso-extract/vmlinuz-lts ]; then \
+		cp /tmp/pxeboot-iso-extract/vmlinuz-lts $(PXEBOOT_CONTEXT)/vmlinuz; \
+		cp /tmp/pxeboot-iso-extract/initramfs-lts $(PXEBOOT_CONTEXT)/initramfs; \
+	fi
+	@cp pkg/iso/autoinstall.sh $(PXEBOOT_CONTEXT)/autoinstall.sh
+	@rm -rf /tmp/pxeboot-iso-extract
+	@echo "$(GREEN)✓ Extracted: vmlinuz ($$(du -h $(PXEBOOT_CONTEXT)/vmlinuz | cut -f1)), initramfs ($$(du -h $(PXEBOOT_CONTEXT)/initramfs | cut -f1))$(RESET)"
+
+.PHONY: pxeboot-container-save
+pxeboot-container-save:
+	@echo "$(CYAN)→ Saving PXE boot container as tar...$(RESET)"
+	docker save $(PXEBOOT_IMAGE):latest > $(PXEBOOT_IMAGE).tar
+	@echo "$(GREEN)✓ Saved: $(PXEBOOT_IMAGE).tar ($$(du -h $(PXEBOOT_IMAGE).tar | cut -f1))$(RESET)"
+
+.PHONY: pxeboot-container-clean
+pxeboot-container-clean:
+	@rm -f $(PXEBOOT_CONTEXT)/pxeboot $(PXEBOOT_CONTEXT)/vmlinuz $(PXEBOOT_CONTEXT)/initramfs $(PXEBOOT_CONTEXT)/autoinstall.sh
+	@docker rmi $(PXEBOOT_IMAGE):latest $(PXEBOOT_IMAGE):$(APP_VERSION) 2>/dev/null || true
+
+# Docker :: NFS server
+.PHONY: docker-nfs-server-load
+docker-nfs-server-load:
+	cd build/docker/nfs-server && make -j$(shell nproc) build
+
+.PHONY: docker-nfs-server-push
+docker-nfs-server-push:
+	cd build/docker/nfs-server && make -j$(shell nproc) push
+
+# Docker :: Trusted Platform Builder :: CI (amd64 only)
+.PHONY: docker-builder-load-ci
+docker-builder-load-ci:
+	$(MAKE) docker-builder-load-amd64
+
+# Docker :: Trusted Platform Builder :: Local
+.PHONY: docker-builder-load
+docker-builder-load:
+	@start_time=$$(date +%s); \
+		$(MAKE) \
+			docker-builder-load-debian \
+			docker-builder-load-alpine; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "${GREEN}Build execution time: %02d:%02d:%02d${NO_COLOR}\n" $$hours $$minutes $$seconds
+
+docker-builder-load-alpine:
+	@start_time=$$(date +%s); \
+		$(MAKE) \
+			docker-builder-load-amd64 \
+			docker-builder-load-aarch64; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "${GREEN}Alpine build execution time: %02d:%02d:%02d${NO_COLOR}\n" $$hours $$minutes $$seconds
+
+docker-builder-load-debian:
+	@start_time=$$(date +%s); \
+		DOCKER_BUILDER_BASE=debian $(MAKE) \
+			docker-builder-load-amd64 \
+			docker-builder-load-aarch64; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "${GREEN}Debian build execution time: %02d:%02d:%02d${NO_COLOR}\n" $$hours $$minutes $$seconds
+
+.PHONY: docker-builder-load-amd64
+docker-builder-load-amd64:
+	BUILDKIT_DEBUG=1 docker buildx build --load \
+		--pull \
+		--progress=plain \
+	 	--platform=linux/amd64 \
+		-t $(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
+		-f build/docker/$(APPNAME)-builder/$(DOCKER_BUILDER_DOCKERFILE) .
+
+.PHONY: docker-builder-load-aarch64
+docker-builder-load-aarch64:
+	BUILDKIT_DEBUG=1 docker buildx build --load \
+		--pull \
+		--progress=plain \
+	    --platform=linux/arm64 \
+		-t $(APPNAME)-builder-$(DOCKER_BUILDER_BASE):arm64 \
+		-f build/docker/$(APPNAME)-builder/$(DOCKER_BUILDER_DOCKERFILE) .
+
+
+# Docker :: Trusted Platform Builder :: Remote
+.PHONY: docker-builder-push
+docker-builder-push:
+	start_time=$$(date +%s); \
+		docker buildx build --push \
+			--memory=16g \
+			--platform=linux/amd64,linux/arm64 \
+			--progress=plain \
+			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-builder-alpine:latest \
+			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-builder-alpine:$(APP_VERSION) \
+			-f build/docker/$(APPNAME)-builder/Dockerfile-alpine .; \
+		docker buildx build --push \
+			--memory=16g \
+			--platform=linux/amd64,linux/arm64 \
+			--progress=plain \
+			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-builder-debian:latest \
+			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-builder-debian:$(APP_VERSION) \
+			-f build/docker/$(APPNAME)-builder/Dockerfile-debian .; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "${GREEN}Docker trusted-platform-builder execution time: %02d:%02d:%02d${NO_COLOR}\n" $$hours $$minutes $$seconds
+
+# Docker :: Trusted Platform ISO Builder :: Local (x86_64 only)
+.PHONY: docker-iso-builder-load
+docker-iso-builder-load: 
+	@start_time=$$(date +%s); \
+		cd build/docker/$(APPNAME)-iso-builder && \
+			make clean secure-boot-keys ansible build-all; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "Build execution time: %02d:%02d:%02d\n" $$hours $$minutes $$seconds
+
+# Docker :: Trusted Platform ISO Builder :: Remote (x86_64 only)
+.PHONY: docker-iso-builder-push
+docker-iso-builder-push:
+	@start_time=$$(date +%s); \
+		cd build/docker/$(APPNAME)-iso-builder && \
+		make clean secure-boot-keys ansible; \
+		docker buildx build --push \
+			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(DOCKER_ISO_BUILDER):latest \
+			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(DOCKER_ISO_BUILDER):$(APP_VERSION) \
+			-f Dockerfile .; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "Build execution time: %02d:%02d:%02d\n" $$hours $$minutes $$seconds
+
+# Docker :: Trusted Platform :: Local
+.PHONY: docker-platform-load
+docker-platform-load: 
+	@start_time=$$(date +%s); \
+		cd build/docker/$(APPNAME) && make -j20; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "Build execution time: %02d:%02d:%02d\n" $$hours $$minutes $$seconds
+
+.PHONY: docker-platform-load-amd64
+docker-platform-load-amd64:
+	docker buildx build --load \
+		--platform=linux/arm64 \
+		--build-arg APPNAME=$(PLATFORMD) \
+		-t $(APPNAME) \
+		-f build/docker/$(APPNAME)/Dockerfile .
+
+
+# Docker :: Trusted Platform :: Remote
+.PHONY: docker-platform-push
+docker-platform-push:
+	docker buildx build --push \
+		--platform=linux/amd64,linux/arm64 \
+		--build-arg APPNAME=$(PLATFORMD) \
+		-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-alpine:latest \
+		-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-alpine:$(APP_VERSION) \
+		-f build/docker/$(APPNAME)/Dockerfile-alpine .
+	docker buildx build --push \
+		--platform=linux/amd64,linux/arm64 \
+		--build-arg APPNAME=$(PLATFORMD) \
+		-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-debian:latest \
+		-t $(DOCKER_REPO)/$(DOCKER_USER)/$(APPNAME)-debian:$(APP_VERSION) \
+		-f build/docker/$(APPNAME)/Dockerfile-alpine .
+
+
+# Docker run targets
+.PHONY: docker-run
+docker-run: build-debug
+	docker run -it --privileged \
+	-v .:/mnt \
+	-v /dev/bus/usb:/dev/bus/usb \
+	trusted-platform-builder bash
+
+.PHONY: docker-run-builder-with-usb
+docker-run-builder-with-usb:
+	docker run -it --rm --privileged \
+		-v /dev/bus/usb:/dev/bus/usb \
+		# -v /sys/devices/:/sys/devices/ \
+		# -v /dev/hidraw4:/dev/hidraw4 \
+		$(APPNAME)-builder \
+		bash
+		# /usr/local/bin/yubico-piv-tool -astatus
+
+.PHONY: docker-run-yubico-piv-tool
+docker-run-yubico-piv-tool:
+	docker run -ti --rm \
+		-v /dev/bus/usb:/dev/bus/usb \
+		-v /sys/bus/usb/:/sys/bus/usb/ \
+		-v /sys/devices/:/sys/devices/ \
+		-v /dev/hidraw4:/dev/hidraw4 \
+		--device /dev/usb:/dev/usb \
+		--device /dev/bus/usb:/dev/bus/usb \
+		--privileged \
+		$(APPNAME)-builder \
+		/usr/local/bin/yubico-piv-tool -astatus
+
+
+# ISO 
+.PHONY: isos
+isos:
+	@start_time=$$(date +%s); \
+		$(MAKE) -j$(shell nproc) iso-hwtpm iso-swtpm; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "Build execution time: %02d:%02d:%02d\n" $$hours $$minutes $$seconds
+
+.PHONY: iso-hwtpm
+iso-hwtpm:
+	@echo "Building $(APPNAME).iso ..."
+	@docker run --rm -v $(PWD):/iso $(DOCKER_ISO_BUILDER)
+
+.PHONY: iso-swtpm
+iso-swtpm:
+	@echo "Building $(APPNAME)-swtpm.iso ..."
+	@docker run --rm -v $(PWD):/iso $(DOCKER_ISO_BUILDER_SWTPM)
+
+
+# Packer
+.PHONY: packer-rpi
+packer-rpi:
+	@start_time=$$(date +%s); \
+		cd build/packer/rpi && make && mv -f trusted-platform.img ../../../trusted-platform-raspbian.img; \
+	end_time=$$(date +%s); \
+	elapsed_time=$$((end_time - start_time)); \
+	hours=$$((elapsed_time/3600)); \
+	minutes=$$(( (elapsed_time % 3600)/60 )); \
+	seconds=$$((elapsed_time % 60)); \
+	printf "Build execution time: %02d:%02d:%02d\n" $$hours $$minutes $$seconds
+
+
+# rsync
+.PHONY: rsync
+rsync:
+	rsync \
+		-av \
+		--progress \
+		--exclude .git/ \
+		--exclude *.img \
+		--exclude *.iso \
+		--exclude *.xz \
+		../$(PACKAGE) $(SYNC_USER)@$(SYNC_HOST):
+
+.PHONY: rsync-ansible
+rsync-ansible:
+	rsync -av --progress \
+		../$(PACKAGE)-ansible $(SYNC_HOST): \
+		--exclude ../$(PACKAGE)-ansible/.git/
+
+
+# Browser targets — launch with trusted CA from QEMU server
+# Usage:
+#   make chrome       # Chrome trusting server CA
+#   make firefox      # Firefox trusting server CA
+#   make browser      # Auto-detect (prefers Chrome for WebAuthn)
+#
+BROWSER_SERVER_URL    ?= https://server.example.com:8443
+BROWSER_CA_BUNDLE_URL ?= $(BROWSER_SERVER_URL)/api/v1/ca/bootstrap
+BROWSER_PROFILE_DIR   ?= /tmp/trusted-platform-browser
+
+.PHONY: browser
+browser:
+	@if which google-chrome-stable >/dev/null 2>&1 || which google-chrome >/dev/null 2>&1 || which chromium-browser >/dev/null 2>&1; then \
+		$(MAKE) chrome; \
+	elif which firefox >/dev/null 2>&1; then \
+		$(MAKE) firefox; \
+	else \
+		echo "No supported browser found (install Chrome or Firefox)"; \
+		exit 1; \
+	fi
+
+.PHONY: chrome
+chrome:
+	@echo "Fetching CA bundle from $(BROWSER_CA_BUNDLE_URL)..."
+	@mkdir -p $(BROWSER_PROFILE_DIR)/chrome
+	@curl -sk $(BROWSER_CA_BUNDLE_URL) > $(BROWSER_PROFILE_DIR)/ca-bundle.pem
+	@# Import certs into Chrome's NSS database at ~/.pki/nssdb/
+	@mkdir -p $(HOME)/.pki/nssdb
+	@if [ ! -f $(HOME)/.pki/nssdb/cert9.db ]; then \
+		certutil -d sql:$(HOME)/.pki/nssdb -N --empty-password; \
+	fi
+	@cd $(BROWSER_PROFILE_DIR) && csplit -f cert- -z ca-bundle.pem '/-----BEGIN CERTIFICATE-----/' '{*}' 2>/dev/null; \
+	for f in $(BROWSER_PROFILE_DIR)/cert-*; do \
+		CN=$$(openssl x509 -in "$$f" -noout -subject -nameopt multiline 2>/dev/null | grep commonName | sed 's/.*= //'); \
+		certutil -d sql:$(HOME)/.pki/nssdb -A -t "CT,C,C" -n "$$CN" -i "$$f" 2>/dev/null; \
+		echo "  Imported: $$CN"; \
+	done; \
+	rm -f $(BROWSER_PROFILE_DIR)/cert-*
+	@echo "Certs imported to ~/.pki/nssdb/ (quit Chrome fully and relaunch if already open)"
+	@echo "Launching Chrome with trusted CA profile..."
+	@CHROME=$$(which google-chrome-stable 2>/dev/null || which google-chrome 2>/dev/null || which chromium-browser 2>/dev/null); \
+	"$$CHROME" \
+		--user-data-dir=$(BROWSER_PROFILE_DIR)/chrome \
+		--no-first-run \
+		--disable-default-apps \
+		$(BROWSER_SERVER_URL)/ &
+
+.PHONY: firefox
+firefox:
+	@echo "Fetching CA bundle from $(BROWSER_CA_BUNDLE_URL)..."
+	@mkdir -p $(BROWSER_PROFILE_DIR)/firefox-certs /etc/firefox/policies 2>/dev/null || true
+	@curl -sk $(BROWSER_CA_BUNDLE_URL) > $(BROWSER_PROFILE_DIR)/ca-bundle.pem
+	@# Split PEM bundle into individual DER certs for Firefox policy
+	@cd $(BROWSER_PROFILE_DIR) && csplit -f cert- -z ca-bundle.pem '/-----BEGIN CERTIFICATE-----/' '{*}' 2>/dev/null; \
+	for f in $(BROWSER_PROFILE_DIR)/cert-*; do \
+		CN=$$(openssl x509 -in "$$f" -noout -subject -nameopt multiline 2>/dev/null | grep commonName | sed 's/.*= //'); \
+		SAFE=$$(echo "$$CN" | tr ' /' '_-'); \
+		cp "$$f" $(BROWSER_PROFILE_DIR)/firefox-certs/$$SAFE.pem; \
+		echo "  Prepared: $$CN"; \
+	done; \
+	rm -f $(BROWSER_PROFILE_DIR)/cert-*
+	@# Generate Firefox policies.json pointing to fetched certs
+	@echo '{"policies":{"Certificates":{"ImportEnterpriseRoots":true,"Install":[' > $(BROWSER_PROFILE_DIR)/firefox-policies.json
+	@FIRST=1; for f in $(BROWSER_PROFILE_DIR)/firefox-certs/*.pem; do \
+		[ $$FIRST -eq 1 ] && FIRST=0 || printf ',' >> $(BROWSER_PROFILE_DIR)/firefox-policies.json; \
+		printf '"%s"' "$$f" >> $(BROWSER_PROFILE_DIR)/firefox-policies.json; \
+	done
+	@echo ']}}}' >> $(BROWSER_PROFILE_DIR)/firefox-policies.json
+	@sudo mkdir -p /etc/firefox/policies
+	@sudo cp $(BROWSER_PROFILE_DIR)/firefox-policies.json /etc/firefox/policies/policies.json
+	@echo "Launching Firefox with trusted CA policy..."
+	@firefox $(BROWSER_SERVER_URL)/ &
+
+
+# TPM 2.0
+.PHONY: clear-auth
+clear-auth:
+	sudo tpm2_changeauth -c e -p test
+	sudo tpm2_changeauth -c o -p test
+	sudo tpm2_changeauth -c l -p test
+
+.PHONY: config
+config:
+	mkdir -p pkg/$(PLATFORM_DIR)/etc/ pkg/$(PLATFORM_DIR)/softhsm2
+	cp configs/platform/$(CONFIG_YAML) pkg/config.yaml
+	cp configs/softhsm.conf pkg/trusted-data/etc/softhsm.conf
+
+# Testenv Enrollment Integration Tests
+.PHONY: integration-test-testenv-enrollment
+integration-test-testenv-enrollment:
+	@echo "Running testenv enrollment integration tests (requires root)..."
+	@echo "WARNING: This test will create VMs, network bridges, and requires ~20GB disk space"
+	@if [ "$$(id -u)" -ne 0 ]; then \
+		echo "ERROR: This test requires root privileges"; \
+		echo "Run with: sudo make integration-test-testenv-enrollment"; \
+		exit 1; \
+	fi
+	cd test/integration && \
+		CGO_ENABLED=1 go test -tags=integration -v -timeout=40m \
+			-run TestEnrollmentIntegration \
+			./...
+
+.PHONY: integration-test-testenv-enrollment-clean
+integration-test-testenv-enrollment-clean:
+	@echo "Cleaning testenv enrollment test artifacts..."
+	@if [ "$$(id -u)" -ne 0 ]; then \
+		echo "ERROR: Cleanup requires root privileges"; \
+		echo "Run with: sudo make integration-test-testenv-enrollment-clean"; \
+		exit 1; \
+	fi
+	-rm -rf test-integration-enrollment/
+	-ip link delete tp-br 2>/dev/null || true
+	-ip link delete tap-tp-server 2>/dev/null || true
+	-ip link delete tap-tp-client 2>/dev/null || true
+	-iptables -t nat -D POSTROUTING -s 10.99.99.0/28 -j MASQUERADE 2>/dev/null || true
+	@echo "Cleanup complete"
+
+
+# ==============================================================================
+# Platform API Gateway Build Targets
+# ==============================================================================
+
+PLATFORM_API               ?= platform-api
+
+# Native local build (produces static binaries)
+.PHONY: build-api
+build-api:
+	cd cmd/platform-api; \
+	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o ../../$(PLATFORM_API) --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}'
+
+.PHONY: build-api-debug
+build-api-debug:
+	cd cmd/platform-api; \
+	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o ../../$(PLATFORM_API) -gcflags='all=-N -l' --ldflags '-linkmode external -extldflags -static -v ${LDFLAGS}'
+
+.PHONY: build-api-static
+build-api-static: build-api
+	@echo "build-api-static target is deprecated. Use 'make build-api' instead (now produces static binaries by default)."
+
+.PHONY: build-api-debug-static
+build-api-debug-static: build-api-debug
+	@echo "build-api-debug-static target is deprecated. Use 'make build-api-debug' instead (now produces static binaries by default)."
+
+# Cross-compile ARM 64-bit (produces static binaries)
+.PHONY: build-api-arm64
+build-api-arm64:
+	cd cmd/platform-api; \
+	CC=$(ARM_CC) CXX=$(ARM_CXX) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
+	$(GOBIN)/go build -tags "$(BUILD_TAGS)" -o ../../$(PLATFORM_API) --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}'
+
+.PHONY: build-api-arm64-static
+build-api-arm64-static: build-api-arm64
+	@echo "build-api-arm64-static target is deprecated. Use 'make build-api-arm64' instead (now produces static binaries by default)."
+
+.PHONY: build-api-arm64-debug
+build-api-arm64-debug:
+	cd cmd/platform-api; \
+	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
+	$(GOBIN)/go build -tags "$(BUILD_TAGS)" -gcflags "all=-N -l" -o ../../$(PLATFORM_API) --ldflags='-linkmode external -extldflags -static -v ${LDFLAGS}'
+
+.PHONY: build-api-arm64-debug-static
+build-api-arm64-debug-static: build-api-arm64-debug
+	@echo "build-api-arm64-debug-static target is deprecated. Use 'make build-api-arm64-debug' instead (now produces static binaries by default)."
+
+# Build all - includes platformd, platformctl, platform-initrd, and platform-api
+.PHONY: build-all
+build-all: build platform-initrd build-api
+
+.PHONY: build-all-debug
+build-all-debug: build-debug platform-initrd-debug build-api-debug
+
+.PHONY: build-all-static
+build-all-static: build platform-initrd build-api
+	@echo "build-all-static target is deprecated. Use 'make build && make platform-initrd && make build-api' instead (now produce static binaries by default)."
+
+# Build all binaries for ISO/deployment (three-binary architecture)
+# All binaries are static by default
+# - platformd: Daemon only (serves as the system service)
+# - platformctl: Full CLI with all user commands
+# - platform-initrd: Minimal binary for initramfs boot operations
+.PHONY: binaries
+binaries: build platform-initrd
+	@echo "Built all static binaries:"
+	@echo "  platformd:       $$(du -h $(PLATFORMD) | cut -f1) (daemon)"
+	@echo "  platformctl:     $$(du -h $(PLATFORMCTL) | cut -f1) (CLI)"
+	@echo "  platform-initrd: $$(du -h $(PLATFORM_INITRD) | cut -f1) (initramfs)"
+
+.PHONY: binaries-static
+binaries-static: binaries
+	@echo "binaries-static target is deprecated. Use 'make binaries' instead (now produces static binaries by default)."
+
+.PHONY: binaries-arm64
+binaries-arm64: build-arm64 platform-initrd-arm64
+	@echo "Built all ARM64 static binaries"
+
+.PHONY: binaries-arm64-static
+binaries-arm64-static: binaries-arm64
+	@echo "binaries-arm64-static target is deprecated. Use 'make binaries-arm64' instead (now produces static binaries by default)."
+
+# Run platform-api for development/testing
+.PHONY: run-api
+run-api: build-api-debug
+	./$(PLATFORM_API) \
+		--debug \
+		--host 0.0.0.0 \
+		--port 8443 \
+		--socket /run/platformd/platformd.sock \
+		--tls-cert $(PLATFORM_DIR)/certs/api-server.crt \
+		--tls-key $(PLATFORM_DIR)/certs/api-server.key \
+		--log-dir trusted-data/log
+
+# Test the REST API
+.PHONY: test-api
+test-api:
+	cd pkg/api/rest && go test -v
+
+# Integration test the REST API (requires platformd running)
+.PHONY: integration-test-api
+integration-test-api: build-api-debug
+	@echo "Testing REST API integration (requires platformd socket at /run/platformd/platformd.sock)"
+	@echo "Start platformd first with: sudo make run"
+	@echo "Then in another terminal run the API with: make run-api"
+	@echo "Test endpoints with curl:"
+	@echo "  curl -k https://localhost:8443/health"
+	@echo "  curl -k https://localhost:8443/api/v1/status"
+	@echo "  curl -k https://localhost:8443/api/v1/version"
+	@echo "  curl -k https://localhost:8443/api/v1/services"
+

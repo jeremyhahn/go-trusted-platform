@@ -1,0 +1,383 @@
+# Docker Compose configuration for multi-node Raft cluster integration testing
+# Provides a 3-node QuicBaaS/Raft cluster for comprehensive distributed testing
+#
+# Usage:
+#   docker-compose up -d                    # Start all nodes
+#   docker-compose up -d --scale test-runner=0  # Start nodes without test runner
+#   docker-compose logs -f cluster-node-1   # Watch specific node logs
+#   docker-compose exec cluster-node-1 bash # Shell into specific node
+#   docker-compose down -v                  # Stop and clean up
+
+services:
+  # ============================================================================
+  # Cluster Node 1 - Bootstrap node (initial leader)
+  # ============================================================================
+  cluster-node-1:
+    image: go-trusted-platform-dev:latest
+    container_name: cluster-node-1
+    hostname: cluster-node-1
+
+    volumes:
+      # Project workspace
+      - ../../../:/workspace:cached
+      # Go module cache for faster builds
+      - go-mod-cache:/go/pkg/mod
+      # Go build cache
+      - go-build-cache:/root/.cache/go-build
+      # Node-specific data directory
+      - node1-data:/data/node1
+
+    working_dir: /workspace
+
+    environment:
+      # Node identity
+      NODE_ID: "1"
+      NODE_NAME: "cluster-node-1"
+
+      # Raft configuration
+      RAFT_ADDRESS: "cluster-node-1:7001"
+      RAFT_PORT: "7001"
+      API_PORT: "8001"
+
+      # Cluster discovery - node 1 is bootstrap, no peers initially
+      CLUSTER_PEERS: ""
+      IS_BOOTSTRAP: "true"
+
+      # QuicBaaS configuration
+      QUICBAAS_DATA_DIR: "/data/node1/quicbaas"
+      QUICBAAS_WAL_DIR: "/data/node1/quicbaas/wal"
+      QUICBAAS_CACHE_SIZE: "67108864"
+
+      # Logging
+      LOG_LEVEL: "debug"
+      LOG_FORMAT: "json"
+
+      # Go environment
+      GOPATH: /go
+      GOCACHE: /root/.cache/go-build
+      GOMODCACHE: /go/pkg/mod
+      CGO_ENABLED: "1"
+
+      # Integration test flags
+      INTEGRATION_TEST: "1"
+
+    networks:
+      cluster-net:
+        ipv4_address: 172.30.0.11
+
+    # Expose ports for external access and debugging
+    ports:
+      - "7001:7001"   # Raft communication
+      - "8001:8001"   # API port
+
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 7001 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+    stdin_open: true
+    tty: true
+
+    command: >
+      bash -c "
+        echo 'Cluster Node 1 starting...';
+        mkdir -p /data/node1/quicbaas/wal;
+        echo 'Node 1 ready, waiting for cluster operations...';
+        tail -f /dev/null
+      "
+
+  # ============================================================================
+  # Cluster Node 2 - Follower node
+  # ============================================================================
+  cluster-node-2:
+    image: go-trusted-platform-dev:latest
+    container_name: cluster-node-2
+    hostname: cluster-node-2
+
+    volumes:
+      - ../../../:/workspace:cached
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+      - node2-data:/data/node2
+
+    working_dir: /workspace
+
+    environment:
+      # Node identity
+      NODE_ID: "2"
+      NODE_NAME: "cluster-node-2"
+
+      # Raft configuration
+      RAFT_ADDRESS: "cluster-node-2:7002"
+      RAFT_PORT: "7002"
+      API_PORT: "8002"
+
+      # Cluster discovery - join node 1
+      CLUSTER_PEERS: "cluster-node-1:7001"
+      IS_BOOTSTRAP: "false"
+
+      # QuicBaaS configuration
+      QUICBAAS_DATA_DIR: "/data/node2/quicbaas"
+      QUICBAAS_WAL_DIR: "/data/node2/quicbaas/wal"
+      QUICBAAS_CACHE_SIZE: "67108864"
+
+      # Logging
+      LOG_LEVEL: "debug"
+      LOG_FORMAT: "json"
+
+      # Go environment
+      GOPATH: /go
+      GOCACHE: /root/.cache/go-build
+      GOMODCACHE: /go/pkg/mod
+      CGO_ENABLED: "1"
+      INTEGRATION_TEST: "1"
+
+    networks:
+      cluster-net:
+        ipv4_address: 172.30.0.12
+
+    ports:
+      - "7002:7002"
+      - "8002:8002"
+
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 7002 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+    depends_on:
+      cluster-node-1:
+        condition: service_healthy
+
+    stdin_open: true
+    tty: true
+
+    command: >
+      bash -c "
+        echo 'Cluster Node 2 starting...';
+        mkdir -p /data/node2/quicbaas/wal;
+        echo 'Waiting for Node 1 to be available...';
+        while ! nc -z cluster-node-1 7001; do sleep 1; done;
+        echo 'Node 2 ready, waiting for cluster operations...';
+        tail -f /dev/null
+      "
+
+  # ============================================================================
+  # Cluster Node 3 - Follower node
+  # ============================================================================
+  cluster-node-3:
+    image: go-trusted-platform-dev:latest
+    container_name: cluster-node-3
+    hostname: cluster-node-3
+
+    volumes:
+      - ../../../:/workspace:cached
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+      - node3-data:/data/node3
+
+    working_dir: /workspace
+
+    environment:
+      # Node identity
+      NODE_ID: "3"
+      NODE_NAME: "cluster-node-3"
+
+      # Raft configuration
+      RAFT_ADDRESS: "cluster-node-3:7003"
+      RAFT_PORT: "7003"
+      API_PORT: "8003"
+
+      # Cluster discovery - join existing cluster
+      CLUSTER_PEERS: "cluster-node-1:7001,cluster-node-2:7002"
+      IS_BOOTSTRAP: "false"
+
+      # QuicBaaS configuration
+      QUICBAAS_DATA_DIR: "/data/node3/quicbaas"
+      QUICBAAS_WAL_DIR: "/data/node3/quicbaas/wal"
+      QUICBAAS_CACHE_SIZE: "67108864"
+
+      # Logging
+      LOG_LEVEL: "debug"
+      LOG_FORMAT: "json"
+
+      # Go environment
+      GOPATH: /go
+      GOCACHE: /root/.cache/go-build
+      GOMODCACHE: /go/pkg/mod
+      CGO_ENABLED: "1"
+      INTEGRATION_TEST: "1"
+
+    networks:
+      cluster-net:
+        ipv4_address: 172.30.0.13
+
+    ports:
+      - "7003:7003"
+      - "8003:8003"
+
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 7003 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+    depends_on:
+      cluster-node-1:
+        condition: service_healthy
+      cluster-node-2:
+        condition: service_healthy
+
+    stdin_open: true
+    tty: true
+
+    command: >
+      bash -c "
+        echo 'Cluster Node 3 starting...';
+        mkdir -p /data/node3/quicbaas/wal;
+        echo 'Waiting for Nodes 1 and 2 to be available...';
+        while ! nc -z cluster-node-1 7001; do sleep 1; done;
+        while ! nc -z cluster-node-2 7002; do sleep 1; done;
+        echo 'Node 3 ready, waiting for cluster operations...';
+        tail -f /dev/null
+      "
+
+  # ============================================================================
+  # Test Runner - Executes integration tests against the cluster
+  # ============================================================================
+  test-runner:
+    image: go-trusted-platform-dev:latest
+    container_name: cluster-test-runner
+    hostname: cluster-test-runner
+
+    volumes:
+      - ../../../:/workspace:cached
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+      # Test results output
+      - test-results:/workspace/test/integration/cluster/results
+
+    working_dir: /workspace
+
+    environment:
+      # Cluster endpoints for tests
+      CLUSTER_NODE_1: "cluster-node-1:7001"
+      CLUSTER_NODE_2: "cluster-node-2:7002"
+      CLUSTER_NODE_3: "cluster-node-3:7003"
+
+      CLUSTER_API_1: "cluster-node-1:8001"
+      CLUSTER_API_2: "cluster-node-2:8002"
+      CLUSTER_API_3: "cluster-node-3:8003"
+
+      # Full cluster peer list for tests
+      CLUSTER_PEERS: "cluster-node-1:7001,cluster-node-2:7002,cluster-node-3:7003"
+
+      # Node IPs for direct access
+      CLUSTER_NODE_1_IP: "172.30.0.11"
+      CLUSTER_NODE_2_IP: "172.30.0.12"
+      CLUSTER_NODE_3_IP: "172.30.0.13"
+
+      # Test configuration
+      TEST_TIMEOUT: "10m"
+      LOG_LEVEL: "debug"
+
+      # Go environment
+      GOPATH: /go
+      GOCACHE: /root/.cache/go-build
+      GOMODCACHE: /go/pkg/mod
+      CGO_ENABLED: "1"
+      INTEGRATION_TEST: "1"
+
+    networks:
+      cluster-net:
+        ipv4_address: 172.30.0.100
+
+    depends_on:
+      cluster-node-1:
+        condition: service_healthy
+      cluster-node-2:
+        condition: service_healthy
+      cluster-node-3:
+        condition: service_healthy
+
+    command: >
+      bash -c "
+        echo '=== Cluster Integration Test Runner ===';
+        echo 'Waiting for all cluster nodes to be healthy...';
+
+        # Verify connectivity to all nodes
+        for node in cluster-node-1:7001 cluster-node-2:7002 cluster-node-3:7003; do
+          host=$${node%%:*};
+          port=$${node##*:};
+          echo \"Checking connectivity to $$host:$$port...\";
+          while ! nc -z $$host $$port; do
+            echo \"  Waiting for $$host:$$port...\";
+            sleep 2;
+          done;
+          echo \"  $$host:$$port is reachable\";
+        done;
+
+        echo '';
+        echo 'All cluster nodes are healthy!';
+        echo 'Cluster endpoints:';
+        echo '  Node 1: cluster-node-1:7001 (API: 8001)';
+        echo '  Node 2: cluster-node-2:7002 (API: 8002)';
+        echo '  Node 3: cluster-node-3:7003 (API: 8003)';
+        echo '';
+
+        # Create results directory
+        mkdir -p /workspace/test/integration/cluster/results;
+
+        echo 'Running cluster integration tests...';
+        cd /workspace;
+
+        # Run the cluster integration tests
+        go test -v -timeout $${TEST_TIMEOUT:-10m} \
+          -tags=integration \
+          ./test/integration/cluster/... \
+          2>&1 | tee /workspace/test/integration/cluster/results/test-output.log;
+
+        EXIT_CODE=$$?;
+        echo '';
+        echo \"Tests completed with exit code: $$EXIT_CODE\";
+        exit $$EXIT_CODE;
+      "
+
+# ============================================================================
+# Named volumes for persistent data and caches
+# ============================================================================
+volumes:
+  # Go caches (shared across services)
+  go-mod-cache:
+    driver: local
+  go-build-cache:
+    driver: local
+
+  # Node-specific data directories
+  node1-data:
+    driver: local
+  node2-data:
+    driver: local
+  node3-data:
+    driver: local
+
+  # Test results
+  test-results:
+    driver: local
+
+# ============================================================================
+# Custom network for inter-node communication
+# ============================================================================
+networks:
+  cluster-net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.30.0.0/24
+          gateway: 172.30.0.1

@@ -1,0 +1,245 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+//go:build integration
+
+package iso
+
+import (
+	"fmt"
+	"os"
+	"testing"
+)
+
+// Environment variable names for service endpoints
+const (
+	EnvPlatformGRPCEndpoint = "PLATFORM_GRPC_ENDPOINT"
+	EnvPlatformRESTEndpoint = "PLATFORM_REST_ENDPOINT"
+	EnvPlatformQUICEndpoint = "PLATFORM_QUIC_ENDPOINT"
+	EnvPlatformMCPEndpoint  = "PLATFORM_MCP_ENDPOINT"
+	EnvPlatformUnixSocket   = "PLATFORM_UNIX_SOCKET"
+	EnvPlatformCTL          = "PLATFORMCTL_PATH"
+	EnvIntegrationTest      = "INTEGRATION_TEST"
+	EnvISOTestWorkDir       = "ISO_TEST_WORK_DIR"
+	EnvISOTestSkipCleanup   = "ISO_TEST_SKIP_CLEANUP"
+)
+
+// Default test values
+const (
+	DefaultAlpineVersion = "3.22.2"
+	DefaultArch          = "x86_64"
+	DefaultMirror        = "http://mirror.cs.odu.edu/alpine"
+	DefaultWorkDir       = "work-test"
+	DefaultDiskSize      = "10G"
+	DefaultMemoryMB      = 4096
+	DefaultCPUs          = 2
+)
+
+// ServiceEndpoints contains default endpoints for all protocols.
+type ServiceEndpoints struct {
+	PlatformGRPC string
+	PlatformREST string
+	PlatformQUIC string
+	PlatformMCP  string
+	PlatformUnix string
+	PlatformCTL  string
+}
+
+// GetServiceEndpoints returns the default service endpoints.
+func GetServiceEndpoints() *ServiceEndpoints {
+	return &ServiceEndpoints{
+		PlatformGRPC: "localhost:10443",
+		PlatformREST: "https://localhost:8443",
+		PlatformQUIC: "localhost:9444",
+		PlatformMCP:  "localhost:9445",
+		PlatformUnix: "/run/platformd.sock",
+		PlatformCTL:  "platformctl",
+	}
+}
+
+// SkipIfNotIntegration skips the test if not running integration tests.
+func SkipIfNotIntegration(t *testing.T) {
+	if os.Getenv(EnvIntegrationTest) == "" {
+		t.Skip("Skipping integration test: INTEGRATION_TEST not set")
+	}
+}
+
+// GetTestWorkDir returns the work directory for ISO tests.
+func GetTestWorkDir() string {
+	if dir := os.Getenv(EnvISOTestWorkDir); dir != "" {
+		return dir
+	}
+	return DefaultWorkDir
+}
+
+// ShouldSkipCleanup returns true if cleanup should be skipped after tests.
+func ShouldSkipCleanup() bool {
+	return os.Getenv(EnvISOTestSkipCleanup) != ""
+}
+
+// =============================================================================
+// Error Types
+// =============================================================================
+
+// ErrConnectionFailed indicates a connection failure.
+type ErrConnectionFailed struct {
+	Protocol string
+	Endpoint string
+	Err      error
+}
+
+func (e ErrConnectionFailed) Error() string {
+	return fmt.Sprintf("%s connection failed to %s: %v", e.Protocol, e.Endpoint, e.Err)
+}
+
+func (e ErrConnectionFailed) Unwrap() error {
+	return e.Err
+}
+
+// ErrCallFailed indicates a protocol call failure.
+type ErrCallFailed struct {
+	Protocol string
+	Method   string
+	Err      error
+}
+
+func (e ErrCallFailed) Error() string {
+	return fmt.Sprintf("%s call %s failed: %v", e.Protocol, e.Method, e.Err)
+}
+
+func (e ErrCallFailed) Unwrap() error {
+	return e.Err
+}
+
+// ErrISONotFound indicates an ISO file was not found.
+type ErrISONotFound struct {
+	Path string
+}
+
+func (e ErrISONotFound) Error() string {
+	return fmt.Sprintf("ISO file not found: %s", e.Path)
+}
+
+// ErrProfileNotFound indicates a profile was not found.
+type ErrProfileNotFound struct {
+	ProfileName string
+}
+
+func (e ErrProfileNotFound) Error() string {
+	return fmt.Sprintf("profile not found: %s", e.ProfileName)
+}
+
+// ErrDiskNotFound indicates a disk image was not found.
+type ErrDiskNotFound struct {
+	Path string
+}
+
+func (e ErrDiskNotFound) Error() string {
+	return fmt.Sprintf("disk image not found: %s", e.Path)
+}
+
+// ErrDirectoryNotFound indicates a directory was not found.
+type ErrDirectoryNotFound struct {
+	Path string
+}
+
+func (e ErrDirectoryNotFound) Error() string {
+	return fmt.Sprintf("directory not found: %s", e.Path)
+}
+
+// ErrValidationFailed indicates validation failure.
+type ErrValidationFailed struct {
+	Reason string
+}
+
+func (e ErrValidationFailed) Error() string {
+	return fmt.Sprintf("validation failed: %s", e.Reason)
+}
+
+// ErrCommandTimeout indicates a command timed out.
+type ErrCommandTimeout struct {
+	Command string
+	Timeout string
+}
+
+func (e ErrCommandTimeout) Error() string {
+	return fmt.Sprintf("command %s timed out after %s", e.Command, e.Timeout)
+}
+
+// =============================================================================
+// Test Helper Functions
+// =============================================================================
+
+// CreateTestWorkDir creates a temporary work directory for tests.
+func CreateTestWorkDir(t *testing.T, prefix string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", prefix)
+	if err != nil {
+		t.Fatalf("Failed to create test work directory: %v", err)
+	}
+	return dir
+}
+
+// CleanupTestWorkDir removes a test work directory.
+func CleanupTestWorkDir(t *testing.T, dir string) {
+	t.Helper()
+	if ShouldSkipCleanup() {
+		t.Logf("Skipping cleanup of: %s", dir)
+		return
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Logf("Warning: Failed to cleanup test work directory %s: %v", dir, err)
+	}
+}
+
+// FileExists checks if a file exists.
+func FileExists(path string) bool {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return false
+	}
+	return !info.IsDir()
+}
+
+// DirExists checks if a directory exists.
+func DirExists(path string) bool {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return false
+	}
+	return info.IsDir()
+}
+
+// GetFileSize returns the size of a file in bytes.
+func GetFileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
+// CountFilesInDir returns the number of files in a directory (non-recursive).
+func CountFilesInDir(dir string) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			count++
+		}
+	}
+	return count, nil
+}

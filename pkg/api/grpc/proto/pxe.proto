@@ -1,0 +1,314 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+import "device.proto";
+
+// PXEService provides PXE provisioning operations for device lifecycle management.
+// It handles device discovery, registration, state transitions, and network authorization
+// during the PXE boot provisioning workflow.
+service PXEService {
+  // Device registration and management
+  rpc RegisterDevice(RegisterPXEDeviceRequest) returns (RegisterPXEDeviceResponse);
+  rpc GetDevice(GetPXEDeviceRequest) returns (GetPXEDeviceResponse);
+  rpc GetDeviceByMAC(GetPXEDeviceByMACRequest) returns (GetPXEDeviceByMACResponse);
+  rpc ListDevices(ListPXEDevicesRequest) returns (ListPXEDevicesResponse);
+  rpc RemoveDevice(RemovePXEDeviceRequest) returns (RemovePXEDeviceResponse);
+
+  // State transitions
+  rpc UpdateState(UpdatePXEStateRequest) returns (UpdatePXEStateResponse);
+  rpc SetDeviceEnrolled(SetPXEDeviceEnrolledRequest) returns (SetPXEDeviceEnrolledResponse);
+  rpc Authorize(AuthorizePXEDeviceRequest) returns (AuthorizePXEDeviceResponse);
+  rpc Quarantine(QuarantinePXEDeviceRequest) returns (QuarantinePXEDeviceResponse);
+  rpc Retry(RetryPXEDeviceRequest) returns (RetryPXEDeviceResponse);
+
+  // Events
+  rpc GetEvents(GetPXEEventsRequest) returns (GetPXEEventsResponse);
+
+  // Service lifecycle
+  rpc GetStatus(GetPXEStatusRequest) returns (GetPXEStatusResponse);
+  rpc StartService(StartPXEServiceRequest) returns (StartPXEServiceResponse);
+  rpc StopService(StopPXEServiceRequest) returns (StopPXEServiceResponse);
+
+  // Webhook callback for OS installation completion
+  rpc WebhookComplete(PXEWebhookCompleteRequest) returns (PXEWebhookCompleteResponse);
+}
+
+// ProvisioningState represents the current state of a device in the provisioning workflow.
+enum ProvisioningState {
+  PROVISIONING_STATE_UNSPECIFIED = 0;
+  PROVISIONING_STATE_UNKNOWN = 1;
+  PROVISIONING_STATE_DISCOVERED = 2;
+  PROVISIONING_STATE_BOOTING = 3;
+  PROVISIONING_STATE_INSTALLING = 4;
+  PROVISIONING_STATE_INSTALL_COMPLETE = 5;
+  PROVISIONING_STATE_ENROLLING = 6;
+  PROVISIONING_STATE_ENROLLED = 7;
+  PROVISIONING_STATE_AUTHORIZING = 8;
+  PROVISIONING_STATE_AUTHORIZED = 9;
+  PROVISIONING_STATE_FAILED = 10;
+  PROVISIONING_STATE_QUARANTINED = 11;
+}
+
+// ProvisioningEventType represents the type of provisioning event.
+enum ProvisioningEventType {
+  PROVISIONING_EVENT_TYPE_UNSPECIFIED = 0;
+  PROVISIONING_EVENT_TYPE_DEVICE_DISCOVERED = 1;
+  PROVISIONING_EVENT_TYPE_PXE_BOOT_STARTED = 2;
+  PROVISIONING_EVENT_TYPE_INSTALL_STARTED = 3;
+  PROVISIONING_EVENT_TYPE_INSTALL_COMPLETED = 4;
+  PROVISIONING_EVENT_TYPE_ENROLLMENT_STARTED = 5;
+  PROVISIONING_EVENT_TYPE_ENROLLMENT_COMPLETED = 6;
+  PROVISIONING_EVENT_TYPE_AUTHORIZATION_STARTED = 7;
+  PROVISIONING_EVENT_TYPE_AUTHORIZATION_COMPLETED = 8;
+  PROVISIONING_EVENT_TYPE_QUARANTINED = 9;
+  PROVISIONING_EVENT_TYPE_FAILED = 10;
+  PROVISIONING_EVENT_TYPE_RETRY = 11;
+}
+
+// PXEDeviceInfo tracks a device through the provisioning workflow.
+message PXEDeviceInfo {
+  // ID is the unique identifier for this device (typically MAC-based).
+  string id = 1;
+
+  // MAC address of the device.
+  string mac_address = 2;
+
+  // OVS port identifier for this device.
+  string port_id = 3;
+
+  // Current provisioning state.
+  ProvisioningState state = 4;
+
+  // Reason for the current state.
+  string state_reason = 5;
+
+  // Device profile linked to this device.
+  DeviceProfile profile = 6;
+
+  // Serial number of the certificate after enrollment.
+  string certificate_serial = 7;
+
+  // VLAN the device is currently assigned to.
+  uint32 current_vlan = 8;
+
+  // VLAN the device should be moved to (from profile).
+  uint32 target_vlan = 9;
+
+  // When the device was first discovered.
+  google.protobuf.Timestamp created_at = 10;
+
+  // When the device was last updated.
+  google.protobuf.Timestamp updated_at = 11;
+
+  // When the device last changed state.
+  google.protobuf.Timestamp state_changed_at = 12;
+
+  // Number of retry attempts.
+  int32 retry_count = 13;
+
+  // Audit trail of provisioning events.
+  repeated ProvisioningEvent events = 14;
+}
+
+// PXEDeviceFilter provides filtering options for listing devices.
+message PXEDeviceFilter {
+  // Filter by provisioning state.
+  ProvisioningState state = 1;
+
+  // Filter by MAC address (exact or prefix match).
+  string mac_address = 2;
+
+  // Filter by current VLAN assignment.
+  uint32 vlan = 3;
+
+  // Maximum number of results to return.
+  int32 limit = 4;
+
+  // Number of results to skip.
+  int32 offset = 5;
+}
+
+// ProvisioningEvent represents an event in the provisioning workflow.
+message ProvisioningEvent {
+  // Unique identifier for this event.
+  string id = 1;
+
+  // ID of the device this event belongs to.
+  string device_id = 2;
+
+  // When the event occurred.
+  google.protobuf.Timestamp timestamp = 3;
+
+  // Type of event.
+  ProvisioningEventType event_type = 4;
+
+  // State before the event.
+  ProvisioningState from_state = 5;
+
+  // State after the event.
+  ProvisioningState to_state = 6;
+
+  // Additional event-specific information.
+  map<string, string> details = 7;
+
+  // Error information if the event represents a failure.
+  string error = 8;
+}
+
+// PXEServiceStatus represents the current status of the PXE provisioning service.
+message PXEServiceStatus {
+  // Whether the service is running.
+  bool running = 1;
+
+  // Number of devices being tracked.
+  int32 device_count = 2;
+
+  // When the service was started.
+  google.protobuf.Timestamp start_time = 3;
+
+  // Address of the iPXE server.
+  string ipxe_server_addr = 4;
+
+  // VLAN ID for quarantined devices.
+  uint32 quarantine_vlan = 5;
+
+  // VLAN ID for provisioning devices.
+  uint32 provisioning_vlan = 6;
+}
+
+// Request/Response messages
+
+message RegisterPXEDeviceRequest {
+  string mac_address = 1;
+  string port_id = 2;
+}
+
+message RegisterPXEDeviceResponse {
+  Status status = 1;
+  PXEDeviceInfo device = 2;
+}
+
+message GetPXEDeviceRequest {
+  string device_id = 1;
+}
+
+message GetPXEDeviceResponse {
+  PXEDeviceInfo device = 1;
+}
+
+message GetPXEDeviceByMACRequest {
+  string mac_address = 1;
+}
+
+message GetPXEDeviceByMACResponse {
+  PXEDeviceInfo device = 1;
+}
+
+message ListPXEDevicesRequest {
+  PXEDeviceFilter filter = 1;
+}
+
+message ListPXEDevicesResponse {
+  repeated PXEDeviceInfo devices = 1;
+  int32 total_count = 2;
+}
+
+message RemovePXEDeviceRequest {
+  string device_id = 1;
+}
+
+message RemovePXEDeviceResponse {
+  Status status = 1;
+}
+
+message UpdatePXEStateRequest {
+  string device_id = 1;
+  ProvisioningState state = 2;
+  string reason = 3;
+}
+
+message UpdatePXEStateResponse {
+  Status status = 1;
+  PXEDeviceInfo device = 2;
+}
+
+message SetPXEDeviceEnrolledRequest {
+  string device_id = 1;
+  string certificate_serial = 2;
+}
+
+message SetPXEDeviceEnrolledResponse {
+  Status status = 1;
+  PXEDeviceInfo device = 2;
+}
+
+message AuthorizePXEDeviceRequest {
+  string device_id = 1;
+  uint32 target_vlan = 2;
+}
+
+message AuthorizePXEDeviceResponse {
+  Status status = 1;
+  PXEDeviceInfo device = 2;
+}
+
+message QuarantinePXEDeviceRequest {
+  string device_id = 1;
+  string reason = 2;
+}
+
+message QuarantinePXEDeviceResponse {
+  Status status = 1;
+  PXEDeviceInfo device = 2;
+}
+
+message RetryPXEDeviceRequest {
+  string device_id = 1;
+}
+
+message RetryPXEDeviceResponse {
+  Status status = 1;
+  PXEDeviceInfo device = 2;
+}
+
+message GetPXEEventsRequest {
+  string device_id = 1;
+}
+
+message GetPXEEventsResponse {
+  repeated ProvisioningEvent events = 1;
+}
+
+message GetPXEStatusRequest {}
+
+message GetPXEStatusResponse {
+  PXEServiceStatus status = 1;
+}
+
+message StartPXEServiceRequest {}
+
+message StartPXEServiceResponse {
+  Status status = 1;
+}
+
+message StopPXEServiceRequest {}
+
+message StopPXEServiceResponse {
+  Status status = 1;
+}
+
+message PXEWebhookCompleteRequest {
+  string mac_address = 1;
+  string hostname = 2;
+  bool success = 3;
+  string message = 4;
+}
+
+message PXEWebhookCompleteResponse {
+  Status status = 1;
+}

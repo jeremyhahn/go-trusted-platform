@@ -1,0 +1,642 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// SDN service for Software-Defined Networking operations
+service SDNService {
+  // Bridge operations
+  rpc CreateBridge(CreateBridgeRequest) returns (CreateBridgeResponse);
+  rpc DeleteBridge(DeleteBridgeRequest) returns (DeleteBridgeResponse);
+  rpc GetBridge(GetBridgeRequest) returns (GetBridgeResponse);
+  rpc ListBridges(ListBridgesRequest) returns (ListBridgesResponse);
+
+  // Port operations
+  rpc AddPort(AddPortRequest) returns (AddPortResponse);
+  rpc DeletePort(DeletePortRequest) returns (DeletePortResponse);
+  rpc GetPort(GetPortRequest) returns (GetPortResponse);
+  rpc ListPorts(ListPortsRequest) returns (ListPortsResponse);
+  rpc SetPortState(SetPortStateRequest) returns (SetPortStateResponse);
+
+  // Flow operations
+  rpc AddFlow(AddFlowRequest) returns (AddFlowResponse);
+  rpc DeleteFlow(DeleteFlowRequest) returns (DeleteFlowResponse);
+  rpc ListFlows(ListFlowsRequest) returns (ListFlowsResponse);
+  rpc FlushFlows(FlushFlowsRequest) returns (FlushFlowsResponse);
+
+  // VLAN operations
+  rpc CreateVLAN(CreateVLANRequest) returns (CreateVLANResponse);
+  rpc DeleteVLAN(DeleteVLANRequest) returns (DeleteVLANResponse);
+  rpc ListVLANs(ListVLANsRequest) returns (ListVLANsResponse);
+
+  // Port authentication (x509-based)
+  rpc AuthenticatePort(AuthenticatePortRequest) returns (AuthenticatePortResponse);
+  rpc RevokePortAuth(RevokePortAuthRequest) returns (RevokePortAuthResponse);
+
+  // Network statistics
+  rpc GetPortStats(GetPortStatsRequest) returns (GetPortStatsResponse);
+  rpc GetFlowStats(GetFlowStatsRequest) returns (GetFlowStatsResponse);
+
+  // Policy operations
+  rpc ApplyPolicy(ApplyPolicyRequest) returns (ApplyPolicyResponse);
+  rpc GetPolicy(GetPolicyRequest) returns (GetPolicyResponse);
+  rpc ListPolicies(ListPoliciesRequest) returns (ListPoliciesResponse);
+  rpc DeletePolicy(DeletePolicyRequest) returns (DeletePolicyResponse);
+
+  // Streaming logs
+  rpc StreamFlowLogs(StreamFlowLogsRequest) returns (stream FlowLogEntry);
+}
+
+// Bridge type
+enum BridgeType {
+  BRIDGE_TYPE_UNSPECIFIED = 0;
+  BRIDGE_TYPE_OVS = 1;          // Open vSwitch
+  BRIDGE_TYPE_LINUX = 2;        // Linux bridge
+  BRIDGE_TYPE_VXLAN = 3;        // VXLAN overlay
+}
+
+// Port type
+enum PortType {
+  PORT_TYPE_UNSPECIFIED = 0;
+  PORT_TYPE_INTERNAL = 1;
+  PORT_TYPE_PHYSICAL = 2;
+  PORT_TYPE_TAP = 3;
+  PORT_TYPE_VETH = 4;
+  PORT_TYPE_VXLAN = 5;
+  PORT_TYPE_GRE = 6;
+}
+
+// Bridge configuration
+message BridgeConfig {
+  string name = 1;
+  BridgeType type = 2;
+  string datapath_id = 3;
+  bool stp_enabled = 4;
+  uint32 mtu = 5;
+  repeated string controllers = 6; // OpenFlow controllers
+  map<string, string> options = 7;
+  map<string, string> labels = 8;
+}
+
+// Bridge status
+enum BridgeStatus {
+  BRIDGE_STATUS_UNSPECIFIED = 0;
+  BRIDGE_STATUS_UP = 1;
+  BRIDGE_STATUS_DOWN = 2;
+  BRIDGE_STATUS_ERROR = 3;
+}
+
+// Bridge information
+message Bridge {
+  string id = 1;
+  BridgeConfig config = 2;
+  BridgeStatus status = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  repeated Port ports = 6;
+  BridgeStats stats = 7;
+}
+
+// Bridge statistics
+message BridgeStats {
+  uint64 total_ports = 1;
+  uint64 total_flows = 2;
+  uint64 packets_received = 3;
+  uint64 packets_sent = 4;
+  uint64 bytes_received = 5;
+  uint64 bytes_sent = 6;
+  uint64 errors = 7;
+}
+
+// Port configuration
+message PortConfig {
+  string name = 1;
+  PortType type = 2;
+  uint32 vlan = 3;
+  repeated uint32 trunk_vlans = 4;
+  string mac_address = 5;
+  uint32 mtu = 6;
+  bool promiscuous = 7;
+  map<string, string> options = 8;
+  map<string, string> labels = 9;
+}
+
+// Port status
+enum PortStatus {
+  PORT_STATUS_UNSPECIFIED = 0;
+  PORT_STATUS_UP = 1;
+  PORT_STATUS_DOWN = 2;
+  PORT_STATUS_BLOCKED = 3;
+  PORT_STATUS_LEARNING = 4;
+  PORT_STATUS_FORWARDING = 5;
+}
+
+// Port information
+message Port {
+  string id = 1;
+  string bridge_id = 2;
+  PortConfig config = 3;
+  PortStatus status = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  PortStats stats = 7;
+  PortAuth auth = 8;
+}
+
+// Port statistics
+message PortStats {
+  uint64 packets_received = 1;
+  uint64 packets_sent = 2;
+  uint64 bytes_received = 3;
+  uint64 bytes_sent = 4;
+  uint64 errors = 5;
+  uint64 dropped = 6;
+}
+
+// Port authentication
+message PortAuth {
+  bool authenticated = 1;
+  string certificate_cn = 2;
+  bytes certificate = 3;
+  google.protobuf.Timestamp authenticated_at = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  repeated uint32 authorized_vlans = 6;
+}
+
+// Flow match criteria
+message FlowMatch {
+  string in_port = 1;
+  uint32 vlan_id = 2;
+  string eth_src = 3;
+  string eth_dst = 4;
+  uint32 eth_type = 5;
+  string ip_src = 6;
+  string ip_dst = 7;
+  uint32 ip_proto = 8;
+  uint32 tcp_src = 9;
+  uint32 tcp_dst = 10;
+  uint32 udp_src = 11;
+  uint32 udp_dst = 12;
+  map<string, string> metadata = 13;
+}
+
+// Flow action
+enum FlowActionType {
+  FLOW_ACTION_UNSPECIFIED = 0;
+  FLOW_ACTION_OUTPUT = 1;
+  FLOW_ACTION_DROP = 2;
+  FLOW_ACTION_SET_VLAN = 3;
+  FLOW_ACTION_STRIP_VLAN = 4;
+  FLOW_ACTION_SET_FIELD = 5;
+  FLOW_ACTION_GOTO_TABLE = 6;
+  FLOW_ACTION_CONTROLLER = 7;
+}
+
+// Flow action
+message FlowAction {
+  FlowActionType type = 1;
+  string port = 2;
+  uint32 vlan_id = 3;
+  string field = 4;
+  string value = 5;
+  uint32 table_id = 6;
+}
+
+// OpenFlow table
+enum FlowTable {
+  FLOW_TABLE_UNSPECIFIED = 0;
+  FLOW_TABLE_0 = 1;
+  FLOW_TABLE_1 = 2;
+  FLOW_TABLE_2 = 3;
+  FLOW_TABLE_3 = 4;
+  FLOW_TABLE_DROP = 255;
+}
+
+// Flow priority
+enum FlowPriority {
+  FLOW_PRIORITY_UNSPECIFIED = 0;
+  FLOW_PRIORITY_LOW = 100;
+  FLOW_PRIORITY_MEDIUM = 500;
+  FLOW_PRIORITY_HIGH = 1000;
+  FLOW_PRIORITY_CRITICAL = 5000;
+}
+
+// Flow configuration
+message FlowConfig {
+  string bridge_id = 1;
+  FlowTable table = 2;
+  uint32 priority = 3;
+  FlowMatch match = 4;
+  repeated FlowAction actions = 5;
+  uint32 idle_timeout = 6;
+  uint32 hard_timeout = 7;
+  map<string, string> metadata = 8;
+}
+
+// Flow information
+message Flow {
+  string id = 1;
+  FlowConfig config = 2;
+  google.protobuf.Timestamp created_at = 3;
+  FlowStats stats = 4;
+}
+
+// Flow statistics
+message FlowStats {
+  uint64 packet_count = 1;
+  uint64 byte_count = 2;
+  uint32 duration_seconds = 3;
+}
+
+// VLAN configuration
+message VLANConfig {
+  uint32 vlan_id = 1;
+  string name = 2;
+  string bridge_id = 3;
+  repeated string ports = 4;
+  map<string, string> labels = 5;
+}
+
+// VLAN information
+message VLAN {
+  string id = 1;
+  VLANConfig config = 2;
+  google.protobuf.Timestamp created_at = 3;
+  VLANStats stats = 4;
+}
+
+// VLAN statistics
+message VLANStats {
+  uint32 port_count = 1;
+  uint64 packets = 2;
+  uint64 bytes = 3;
+}
+
+// Flow log entry
+message FlowLogEntry {
+  google.protobuf.Timestamp timestamp = 1;
+  string bridge_id = 2;
+  string flow_id = 3;
+  string action = 4;
+  FlowMatch match = 5;
+  string src_ip = 6;
+  string dst_ip = 7;
+  uint32 src_port = 8;
+  uint32 dst_port = 9;
+  string protocol = 10;
+  uint64 bytes = 11;
+  map<string, string> metadata = 12;
+}
+
+// Policy type
+enum PolicyType {
+  POLICY_TYPE_UNSPECIFIED = 0;
+  POLICY_TYPE_ACL = 1;
+  POLICY_TYPE_QOS = 2;
+  POLICY_TYPE_NAT = 3;
+  POLICY_TYPE_FIREWALL = 4;
+  POLICY_TYPE_ROUTING = 5;
+}
+
+// Policy status
+enum PolicyStatus {
+  POLICY_STATUS_UNSPECIFIED = 0;
+  POLICY_STATUS_ACTIVE = 1;
+  POLICY_STATUS_INACTIVE = 2;
+  POLICY_STATUS_ERROR = 3;
+  POLICY_STATUS_PENDING = 4;
+}
+
+// Policy rule action
+enum PolicyRuleAction {
+  POLICY_RULE_ACTION_UNSPECIFIED = 0;
+  POLICY_RULE_ACTION_ALLOW = 1;
+  POLICY_RULE_ACTION_DENY = 2;
+  POLICY_RULE_ACTION_RATE_LIMIT = 3;
+  POLICY_RULE_ACTION_REDIRECT = 4;
+  POLICY_RULE_ACTION_MIRROR = 5;
+  POLICY_RULE_ACTION_LOG = 6;
+}
+
+// Policy rule match criteria
+message PolicyRuleMatch {
+  string source_ip = 1;
+  string destination_ip = 2;
+  uint32 source_port = 3;
+  uint32 destination_port = 4;
+  string protocol = 5;
+  string direction = 6;
+  string interface = 7;
+  uint32 vlan_id = 8;
+  uint32 dscp = 9;
+  string application = 10;
+}
+
+// Policy rule
+message PolicyRule {
+  string rule_id = 1;
+  int32 priority = 2;
+  PolicyRuleMatch match = 3;
+  PolicyRuleAction action = 4;
+  string action_value = 5;
+  bool log = 6;
+  bool counter = 7;
+}
+
+// Policy target type
+enum PolicyTargetType {
+  POLICY_TARGET_TYPE_UNSPECIFIED = 0;
+  POLICY_TARGET_TYPE_BRIDGE = 1;
+  POLICY_TARGET_TYPE_PORT = 2;
+  POLICY_TARGET_TYPE_VLAN = 3;
+  POLICY_TARGET_TYPE_INTERFACE = 4;
+}
+
+// Policy target
+message PolicyTarget {
+  PolicyTargetType type = 1;
+  string id = 2;
+  string direction = 3;
+}
+
+// Policy schedule
+message PolicySchedule {
+  string start_time = 1;
+  string end_time = 2;
+  repeated string days = 3;
+  string timezone = 4;
+  bool enabled = 5;
+}
+
+// Policy configuration
+message PolicyConfig {
+  string name = 1;
+  string description = 2;
+  PolicyType type = 3;
+  int32 priority = 4;
+  bool enabled = 5;
+  repeated PolicyRule rules = 6;
+  repeated PolicyTarget targets = 7;
+  PolicySchedule schedule = 8;
+}
+
+// Policy information
+message Policy {
+  string id = 1;
+  PolicyConfig config = 2;
+  PolicyStatus status = 3;
+  uint64 hit_count = 4;
+  uint64 byte_count = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+// Bridge request/response
+message CreateBridgeRequest {
+  BridgeConfig config = 1;
+}
+
+message CreateBridgeResponse {
+  Status status = 1;
+  Bridge bridge = 2;
+}
+
+message DeleteBridgeRequest {
+  string id = 1;
+  bool force = 2;
+}
+
+message DeleteBridgeResponse {
+  Status status = 1;
+}
+
+message GetBridgeRequest {
+  string id = 1;
+}
+
+message GetBridgeResponse {
+  Bridge bridge = 1;
+}
+
+message ListBridgesRequest {
+  LabelSelector selector = 1;
+  PaginationRequest pagination = 2;
+}
+
+message ListBridgesResponse {
+  repeated Bridge bridges = 1;
+  PaginationResponse pagination = 2;
+}
+
+// Port request/response
+message AddPortRequest {
+  string bridge_id = 1;
+  PortConfig config = 2;
+}
+
+message AddPortResponse {
+  Status status = 1;
+  Port port = 2;
+}
+
+message DeletePortRequest {
+  string bridge_id = 1;
+  string port_id = 2;
+}
+
+message DeletePortResponse {
+  Status status = 1;
+}
+
+message GetPortRequest {
+  string bridge_id = 1;
+  string port_id = 2;
+}
+
+message GetPortResponse {
+  Port port = 1;
+}
+
+message ListPortsRequest {
+  string bridge_id = 1;
+  LabelSelector selector = 2;
+  PaginationRequest pagination = 3;
+}
+
+message ListPortsResponse {
+  repeated Port ports = 1;
+  PaginationResponse pagination = 2;
+}
+
+// SetPortState request/response
+message SetPortStateRequest {
+  string bridge_id = 1;
+  string port_id = 2;
+  string admin_state = 3;
+  uint64 ingress_rate = 4;
+  uint64 egress_rate = 5;
+  uint64 ingress_burst = 6;
+  uint64 egress_burst = 7;
+}
+
+message SetPortStateResponse {
+  Status status = 1;
+  Port port = 2;
+}
+
+// Flow request/response
+message AddFlowRequest {
+  FlowConfig config = 1;
+}
+
+message AddFlowResponse {
+  Status status = 1;
+  Flow flow = 2;
+}
+
+message DeleteFlowRequest {
+  string bridge_id = 1;
+  string flow_id = 2;
+}
+
+message DeleteFlowResponse {
+  Status status = 1;
+}
+
+message ListFlowsRequest {
+  string bridge_id = 1;
+  FlowTable table = 2;
+  PaginationRequest pagination = 3;
+}
+
+message ListFlowsResponse {
+  repeated Flow flows = 1;
+  PaginationResponse pagination = 2;
+}
+
+message FlushFlowsRequest {
+  string bridge_id = 1;
+  FlowTable table = 2;
+}
+
+message FlushFlowsResponse {
+  Status status = 1;
+  uint32 deleted_count = 2;
+}
+
+// VLAN request/response
+message CreateVLANRequest {
+  VLANConfig config = 1;
+}
+
+message CreateVLANResponse {
+  Status status = 1;
+  VLAN vlan = 2;
+}
+
+message DeleteVLANRequest {
+  string bridge_id = 1;
+  uint32 vlan_id = 2;
+}
+
+message DeleteVLANResponse {
+  Status status = 1;
+}
+
+message ListVLANsRequest {
+  string bridge_id = 1;
+  LabelSelector selector = 2;
+}
+
+message ListVLANsResponse {
+  repeated VLAN vlans = 1;
+}
+
+// Port authentication request/response
+message AuthenticatePortRequest {
+  string bridge_id = 1;
+  string port_id = 2;
+  bytes certificate = 3;
+  string format = 4; // PEM or DER
+}
+
+message AuthenticatePortResponse {
+  Status status = 1;
+  PortAuth auth = 2;
+}
+
+message RevokePortAuthRequest {
+  string bridge_id = 1;
+  string port_id = 2;
+}
+
+message RevokePortAuthResponse {
+  Status status = 1;
+}
+
+// Statistics request/response
+message GetPortStatsRequest {
+  string bridge_id = 1;
+  string port_id = 2;
+}
+
+message GetPortStatsResponse {
+  PortStats stats = 1;
+}
+
+message GetFlowStatsRequest {
+  string bridge_id = 1;
+  string flow_id = 2;
+}
+
+message GetFlowStatsResponse {
+  FlowStats stats = 1;
+}
+
+// Policy request/response
+message ApplyPolicyRequest {
+  string policy_id = 1;
+  PolicyConfig config = 2;
+}
+
+message ApplyPolicyResponse {
+  Status status = 1;
+  Policy policy = 2;
+}
+
+message GetPolicyRequest {
+  string policy_id = 1;
+}
+
+message GetPolicyResponse {
+  Policy policy = 1;
+}
+
+message ListPoliciesRequest {
+  string type = 1;
+  string target_id = 2;
+  PaginationRequest pagination = 3;
+}
+
+message ListPoliciesResponse {
+  repeated Policy policies = 1;
+  PaginationResponse pagination = 2;
+}
+
+message DeletePolicyRequest {
+  string policy_id = 1;
+}
+
+message DeletePolicyResponse {
+  Status status = 1;
+}
+
+// Streaming request
+message StreamFlowLogsRequest {
+  string bridge_id = 1;
+  FlowMatch filter = 2;
+}

@@ -1,0 +1,596 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// KeyManagementService provides comprehensive key management and cryptographic operations.
+// It supports key lifecycle management, encryption, decryption, signing, verification,
+// hashing, HMAC, and random number generation operations.
+service KeyManagementService {
+  // Key Management Operations
+
+  // GenerateKey creates a new cryptographic key with the specified parameters.
+  rpc GenerateKey(GenerateKeyRequest) returns (GenerateKeyResponse);
+
+  // ImportKey imports an existing key into the KMS.
+  rpc ImportKey(ImportKeyRequest) returns (ImportKeyResponse);
+
+  // GetKey retrieves key information by ID.
+  rpc GetKey(GetKeyRequest) returns (GetKeyResponse);
+
+  // ListKeys returns a paginated list of keys.
+  rpc ListKeys(ListKeysRequest) returns (ListKeysResponse);
+
+  // DeleteKey schedules a key for deletion.
+  rpc DeleteKey(DeleteKeyRequest) returns (DeleteKeyResponse);
+
+  // RotateKey creates a new version of an existing key.
+  rpc RotateKey(RotateKeyRequest) returns (RotateKeyResponse);
+
+  // UpdateKeyStatus changes the status of a key (enable/disable).
+  rpc UpdateKeyStatus(UpdateKeyStatusRequest) returns (UpdateKeyStatusResponse);
+
+  // ExportKey exports a key (if allowed by key policy).
+  rpc ExportKey(ExportKeyRequest) returns (ExportKeyResponse);
+
+  // GetKeyVersions lists all versions of a key.
+  rpc GetKeyVersions(GetKeyVersionsRequest) returns (GetKeyVersionsResponse);
+
+  // Cryptographic Operations
+
+  // Encrypt encrypts data using a specified key.
+  rpc Encrypt(EncryptRequest) returns (EncryptResponse);
+
+  // Decrypt decrypts data using a specified key.
+  rpc Decrypt(DecryptRequest) returns (DecryptResponse);
+
+  // BatchEncrypt encrypts multiple items in a single request for improved throughput.
+  rpc BatchEncrypt(BatchEncryptRequest) returns (BatchEncryptResponse);
+
+  // BatchDecrypt decrypts multiple items in a single request for improved throughput.
+  rpc BatchDecrypt(BatchDecryptRequest) returns (BatchDecryptResponse);
+
+  // Rewrap re-encrypts ciphertext with the latest key version without exposing plaintext.
+  rpc Rewrap(RewrapRequest) returns (RewrapResponse);
+
+  // Sign creates a digital signature.
+  rpc Sign(SignRequest) returns (SignResponse);
+
+  // Verify verifies a digital signature.
+  rpc Verify(VerifyRequest) returns (VerifyResponse);
+
+  // Hash computes a cryptographic hash.
+  rpc Hash(HashRequest) returns (HashResponse);
+
+  // HMAC computes an HMAC.
+  rpc HMAC(HMACRequest) returns (HMACResponse);
+
+  // VerifyHMAC verifies an HMAC.
+  rpc VerifyHMAC(VerifyHMACRequest) returns (VerifyHMACResponse);
+
+  // Utility Operations
+
+  // GenerateRandom generates cryptographically secure random bytes.
+  rpc GenerateRandom(GenerateRandomRequest) returns (GenerateRandomResponse);
+
+  // GenerateDataKey generates a data encryption key and returns it encrypted.
+  rpc GenerateDataKey(GenerateDataKeyRequest) returns (GenerateDataKeyResponse);
+
+  // GenerateWrappedDataKey generates a data encryption key wrapped by another key.
+  rpc GenerateWrappedDataKey(GenerateWrappedDataKeyRequest) returns (GenerateWrappedDataKeyResponse);
+
+  // BackendStatus returns the status of the KMS backend.
+  rpc BackendStatus(BackendStatusRequest) returns (BackendStatusResponse);
+}
+
+// KMS-specific key algorithm including symmetric algorithms
+enum KMSKeyAlgorithm {
+  KMS_KEY_ALGORITHM_UNSPECIFIED = 0;
+  // Asymmetric algorithms
+  KMS_KEY_ALGORITHM_RSA_2048 = 1;
+  KMS_KEY_ALGORITHM_RSA_3072 = 2;
+  KMS_KEY_ALGORITHM_RSA_4096 = 3;
+  KMS_KEY_ALGORITHM_ECDSA_P256 = 4;
+  KMS_KEY_ALGORITHM_ECDSA_P384 = 5;
+  KMS_KEY_ALGORITHM_ECDSA_P521 = 6;
+  KMS_KEY_ALGORITHM_ED25519 = 7;
+  // Post-quantum algorithms
+  KMS_KEY_ALGORITHM_DILITHIUM2 = 8;
+  KMS_KEY_ALGORITHM_DILITHIUM3 = 9;
+  KMS_KEY_ALGORITHM_DILITHIUM5 = 10;
+  // Symmetric algorithms
+  KMS_KEY_ALGORITHM_AES_128 = 20;
+  KMS_KEY_ALGORITHM_AES_192 = 21;
+  KMS_KEY_ALGORITHM_AES_256 = 22;
+  KMS_KEY_ALGORITHM_CHACHA20_POLY1305 = 23;
+  // HMAC algorithms
+  KMS_KEY_ALGORITHM_HMAC_SHA256 = 30;
+  KMS_KEY_ALGORITHM_HMAC_SHA384 = 31;
+  KMS_KEY_ALGORITHM_HMAC_SHA512 = 32;
+}
+
+// Key usage defines what operations a key can perform
+enum KeyUsage {
+  KEY_USAGE_UNSPECIFIED = 0;
+  KEY_USAGE_ENCRYPT = 1;
+  KEY_USAGE_DECRYPT = 2;
+  KEY_USAGE_SIGN = 3;
+  KEY_USAGE_VERIFY = 4;
+  KEY_USAGE_WRAP = 5;
+  KEY_USAGE_UNWRAP = 6;
+  KEY_USAGE_DERIVE = 7;
+  KEY_USAGE_HMAC = 8;
+}
+
+// Key status indicates the current state of a key
+enum KeyStatus {
+  KEY_STATUS_UNSPECIFIED = 0;
+  KEY_STATUS_ENABLED = 1;
+  KEY_STATUS_DISABLED = 2;
+  KEY_STATUS_PENDING_DELETION = 3;
+  KEY_STATUS_DESTROYED = 4;
+  KEY_STATUS_PENDING_IMPORT = 5;
+}
+
+// Key export format
+enum KeyExportFormat {
+  KEY_EXPORT_FORMAT_UNSPECIFIED = 0;
+  KEY_EXPORT_FORMAT_RAW = 1;
+  KEY_EXPORT_FORMAT_PKCS8 = 2;
+  KEY_EXPORT_FORMAT_JWK = 3;
+  KEY_EXPORT_FORMAT_PEM = 4;
+}
+
+// Wrapping algorithm for key export/import
+enum WrappingAlgorithm {
+  WRAPPING_ALGORITHM_UNSPECIFIED = 0;
+  WRAPPING_ALGORITHM_RSA_OAEP_SHA256 = 1;
+  WRAPPING_ALGORITHM_RSA_OAEP_SHA384 = 2;
+  WRAPPING_ALGORITHM_RSA_OAEP_SHA512 = 3;
+  WRAPPING_ALGORITHM_AES_GCM = 4;
+  WRAPPING_ALGORITHM_AES_KWP = 5;
+}
+
+// Key specification for key generation
+message KMSKeySpec {
+  KMSKeyAlgorithm algorithm = 1;
+  int32 key_size = 2;
+  repeated KeyUsage usage = 3;
+  bool exportable = 4;
+  bool deletion_protection = 5;
+}
+
+// Key handle represents a reference to a key
+message KMSKeyHandle {
+  string key_id = 1;
+  uint64 version = 2;
+  KMSKeyAlgorithm algorithm = 3;
+  KeyStatus status = 4;
+  int64 created_at = 5;
+}
+
+// Key metadata contains detailed information about a key
+message KMSKeyMetadata {
+  string key_id = 1;
+  string name = 2;
+  string description = 3;
+  KMSKeyAlgorithm algorithm = 4;
+  KeyStatus status = 5;
+  repeated KeyUsage usage = 6;
+  uint64 version = 7;
+  bool exportable = 8;
+  bool deletion_protection = 9;
+  int64 created_at = 10;
+  int64 updated_at = 11;
+  int64 last_used_at = 12;
+  map<string, string> tags = 13;
+  string owner = 14;
+}
+
+// Key version information
+message KMSKeyVersionInfo {
+  uint64 version = 1;
+  KeyStatus status = 2;
+  KMSKeyAlgorithm algorithm = 3;
+  int64 created_at = 4;
+  int64 disabled_at = 5;
+}
+
+// GenerateKey request/response
+message GenerateKeyRequest {
+  KMSKeySpec key_spec = 1;
+  string name = 2;
+  string description = 3;
+  map<string, string> tags = 4;
+  string owner = 5;
+}
+
+message GenerateKeyResponse {
+  Status status = 1;
+  KMSKeyHandle key = 2;
+  KMSKeyMetadata metadata = 3;
+  int64 timestamp = 4;
+}
+
+// ImportKey request/response
+message ImportKeyRequest {
+  bytes key_material = 1;
+  string wrapping_key_id = 2;
+  KMSKeySpec key_spec = 3;
+  string name = 4;
+  string description = 5;
+  map<string, string> tags = 6;
+}
+
+message ImportKeyResponse {
+  Status status = 1;
+  KMSKeyHandle key = 2;
+  KMSKeyMetadata metadata = 3;
+  int64 timestamp = 4;
+}
+
+// GetKey request/response
+message GetKeyRequest {
+  string key_id = 1;
+  uint64 version = 2;
+}
+
+message GetKeyResponse {
+  KMSKeyHandle key = 1;
+  KMSKeyMetadata metadata = 2;
+  int64 timestamp = 3;
+}
+
+// ListKeys request/response
+message ListKeysRequest {
+  int32 limit = 1;
+  string cursor = 2;
+  map<string, string> filter = 3;
+}
+
+message ListKeysResponse {
+  repeated KMSKeyHandle keys = 1;
+  string next_cursor = 2;
+  bool has_more = 3;
+  int32 total_count = 4;
+  int64 timestamp = 5;
+}
+
+// DeleteKey request/response
+message DeleteKeyRequest {
+  string key_id = 1;
+  int32 pending_window_days = 2;
+  bool force = 3;
+}
+
+message DeleteKeyResponse {
+  Status status = 1;
+  string key_id = 2;
+  KeyStatus key_status = 3;
+  int64 deletion_date = 4;
+  int64 timestamp = 5;
+}
+
+// RotateKey request/response
+message RotateKeyRequest {
+  string key_id = 1;
+  bool retain_old_version = 2;
+}
+
+message RotateKeyResponse {
+  Status status = 1;
+  string key_id = 2;
+  uint64 old_version = 3;
+  uint64 new_version = 4;
+  int64 timestamp = 5;
+}
+
+// UpdateKeyStatus request/response
+message UpdateKeyStatusRequest {
+  string key_id = 1;
+  uint64 version = 2;
+  KeyStatus status = 3;
+}
+
+message UpdateKeyStatusResponse {
+  Status status = 1;
+  string key_id = 2;
+  uint64 version = 3;
+  KeyStatus key_status = 4;
+  int64 timestamp = 5;
+}
+
+// ExportKey request/response
+message ExportKeyRequest {
+  string key_id = 1;
+  string wrapping_key_id = 2;
+  WrappingAlgorithm wrapping_algorithm = 3;
+  KeyExportFormat format = 4;
+  uint64 version = 5;
+}
+
+message ExportKeyResponse {
+  Status status = 1;
+  string key_id = 2;
+  KeyExportFormat format = 3;
+  string wrapping_key_id = 4;
+  WrappingAlgorithm wrapping_algorithm = 5;
+  bytes wrapped_material = 6;
+  uint64 version = 7;
+  int64 timestamp = 8;
+}
+
+// GetKeyVersions request/response
+message GetKeyVersionsRequest {
+  string key_id = 1;
+  int32 limit = 2;
+  string cursor = 3;
+}
+
+message GetKeyVersionsResponse {
+  string key_id = 1;
+  repeated KMSKeyVersionInfo versions = 2;
+  string next_cursor = 3;
+  bool has_more = 4;
+  int64 timestamp = 5;
+}
+
+// Encrypt request/response
+message EncryptRequest {
+  string key_id = 1;
+  bytes plaintext = 2;
+  bytes context = 3;
+  bytes nonce = 4;
+}
+
+message EncryptResponse {
+  Status status = 1;
+  string key_id = 2;
+  uint64 key_version = 3;
+  bytes ciphertext = 4;
+  bytes nonce = 5;
+  int64 timestamp = 6;
+}
+
+// Decrypt request/response
+message DecryptRequest {
+  string key_id = 1;
+  bytes ciphertext = 2;
+  bytes context = 3;
+  bytes nonce = 4;
+  uint64 key_version = 5;
+}
+
+message DecryptResponse {
+  Status status = 1;
+  string key_id = 2;
+  uint64 key_version = 3;
+  bytes plaintext = 4;
+  int64 timestamp = 5;
+}
+
+// BatchEncryptItem represents a single item to encrypt in a batch operation
+message BatchEncryptItem {
+  string item_id = 1;       // Client-provided identifier for correlation
+  bytes plaintext = 2;      // Data to encrypt
+  bytes context = 3;        // Optional encryption context (AAD)
+  bytes nonce = 4;          // Optional nonce (if not provided, one will be generated)
+}
+
+// BatchEncryptResultItem represents the result of encrypting a single item
+message BatchEncryptResultItem {
+  string item_id = 1;       // Correlation identifier from the request
+  Status status = 2;        // Status of this individual encryption
+  bytes ciphertext = 3;     // Encrypted data (empty if failed)
+  bytes nonce = 4;          // Nonce used for encryption
+  uint64 key_version = 5;   // Key version used for encryption
+}
+
+// BatchEncrypt request/response
+message BatchEncryptRequest {
+  string key_id = 1;                    // Key to use for all encryptions
+  repeated BatchEncryptItem items = 2;  // Items to encrypt (max 100)
+}
+
+message BatchEncryptResponse {
+  Status status = 1;                          // Overall operation status
+  string key_id = 2;                          // Key used for encryption
+  repeated BatchEncryptResultItem results = 3; // Results for each item
+  int32 success_count = 4;                    // Number of successful encryptions
+  int32 failure_count = 5;                    // Number of failed encryptions
+  int64 timestamp = 6;                        // Operation timestamp
+}
+
+// BatchDecryptItem represents a single item to decrypt in a batch operation
+message BatchDecryptItem {
+  string item_id = 1;       // Client-provided identifier for correlation
+  bytes ciphertext = 2;     // Data to decrypt
+  bytes context = 3;        // Optional decryption context (AAD)
+  bytes nonce = 4;          // Nonce used during encryption
+  uint64 key_version = 5;   // Key version used during encryption (0 for latest)
+}
+
+// BatchDecryptResultItem represents the result of decrypting a single item
+message BatchDecryptResultItem {
+  string item_id = 1;       // Correlation identifier from the request
+  Status status = 2;        // Status of this individual decryption
+  bytes plaintext = 3;      // Decrypted data (empty if failed)
+  uint64 key_version = 4;   // Key version used for decryption
+}
+
+// BatchDecrypt request/response
+message BatchDecryptRequest {
+  string key_id = 1;                    // Key to use for all decryptions
+  repeated BatchDecryptItem items = 2;  // Items to decrypt (max 100)
+}
+
+message BatchDecryptResponse {
+  Status status = 1;                          // Overall operation status
+  string key_id = 2;                          // Key used for decryption
+  repeated BatchDecryptResultItem results = 3; // Results for each item
+  int32 success_count = 4;                    // Number of successful decryptions
+  int32 failure_count = 5;                    // Number of failed decryptions
+  int64 timestamp = 6;                        // Operation timestamp
+}
+
+// Rewrap request/response - re-encrypts ciphertext with the latest key version
+message RewrapRequest {
+  string key_id = 1;        // Key used for both decryption and re-encryption
+  bytes ciphertext = 2;     // Ciphertext to rewrap
+  bytes context = 3;        // Optional encryption context (AAD)
+  bytes nonce = 4;          // Nonce used during original encryption
+  uint64 source_version = 5; // Original key version (0 to auto-detect if supported)
+}
+
+message RewrapResponse {
+  Status status = 1;              // Operation status
+  string key_id = 2;              // Key used for rewrap
+  uint64 source_version = 3;      // Original key version used for decryption
+  uint64 target_version = 4;      // New key version used for re-encryption
+  bytes ciphertext = 5;           // Re-encrypted ciphertext
+  bytes nonce = 6;                // New nonce used for re-encryption
+  int64 timestamp = 7;            // Operation timestamp
+}
+
+// Sign request/response
+message SignRequest {
+  string key_id = 1;
+  bytes message = 2;
+  HashAlgorithm hash_algorithm = 3;
+}
+
+message SignResponse {
+  Status status = 1;
+  string key_id = 2;
+  uint64 key_version = 3;
+  bytes signature = 4;
+  HashAlgorithm hash_algorithm = 5;
+  int64 timestamp = 6;
+}
+
+// Verify request/response
+message VerifyRequest {
+  string key_id = 1;
+  bytes message = 2;
+  bytes signature = 3;
+  HashAlgorithm hash_algorithm = 4;
+  uint64 key_version = 5;
+}
+
+message VerifyResponse {
+  Status status = 1;
+  string key_id = 2;
+  uint64 key_version = 3;
+  bool valid = 4;
+  int64 timestamp = 5;
+}
+
+// Hash request/response
+message HashRequest {
+  bytes data = 1;
+  HashAlgorithm algorithm = 2;
+}
+
+message HashResponse {
+  Status status = 1;
+  HashAlgorithm algorithm = 2;
+  bytes hash = 3;
+  int64 timestamp = 4;
+}
+
+// HMAC request/response
+message HMACRequest {
+  string key_id = 1;
+  bytes message = 2;
+  HashAlgorithm hash_algorithm = 3;
+}
+
+message HMACResponse {
+  Status status = 1;
+  string key_id = 2;
+  uint64 key_version = 3;
+  bytes hmac = 4;
+  HashAlgorithm hash_algorithm = 5;
+  int64 timestamp = 6;
+}
+
+// VerifyHMAC request/response
+message VerifyHMACRequest {
+  string key_id = 1;
+  bytes message = 2;
+  bytes hmac = 3;
+  HashAlgorithm hash_algorithm = 4;
+  uint64 key_version = 5;
+}
+
+message VerifyHMACResponse {
+  Status status = 1;
+  string key_id = 2;
+  uint64 key_version = 3;
+  bool valid = 4;
+  int64 timestamp = 5;
+}
+
+// GenerateRandom request/response
+message GenerateRandomRequest {
+  int32 num_bytes = 1;
+}
+
+message GenerateRandomResponse {
+  Status status = 1;
+  bytes random_bytes = 2;
+  int64 timestamp = 3;
+}
+
+// GenerateDataKey request/response
+message GenerateDataKeyRequest {
+  string key_id = 1;
+  KMSKeyAlgorithm algorithm = 2;
+  int32 key_size = 3;
+  bytes context = 4;
+}
+
+message GenerateDataKeyResponse {
+  Status status = 1;
+  bytes plaintext_key = 2;
+  bytes encrypted_key = 3;
+  string key_id = 4;
+  int64 timestamp = 5;
+}
+
+// GenerateWrappedDataKey request/response
+message GenerateWrappedDataKeyRequest {
+  string wrapping_key_id = 1;
+  WrappingAlgorithm wrapping_algorithm = 2;
+  KMSKeyAlgorithm key_algorithm = 3;
+  int32 key_size = 4;
+  bytes context = 5;
+}
+
+message GenerateWrappedDataKeyResponse {
+  Status status = 1;
+  bytes wrapped_key = 2;
+  string wrapping_key_id = 3;
+  WrappingAlgorithm wrapping_algorithm = 4;
+  int64 timestamp = 5;
+}
+
+// BackendStatus request/response
+message BackendStatusRequest {}
+
+message BackendStatusResponse {
+  Status status = 1;
+  string backend_type = 2;
+  string backend_status = 3;
+  string device = 4;
+  string region = 5;
+  string key_id = 6;
+  repeated string pcr_banks = 7;
+  repeated int32 pcr_registers = 8;
+  map<string, bool> capabilities = 9;
+  int64 timestamp = 10;
+}

@@ -1,0 +1,331 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// TenantService provides multi-tenant platform operations including
+// VLAN isolation, OVS bridge management, quota enforcement, and state synchronization.
+service TenantService {
+  // Tenant CRUD operations
+  rpc ListTenants(ListTenantsRequest) returns (ListTenantsResponse);
+  rpc GetTenant(GetTenantRequest) returns (GetTenantResponse);
+  rpc GetTenantByName(GetTenantByNameRequest) returns (GetTenantByNameResponse);
+  rpc CreateTenant(CreateTenantRequest) returns (CreateTenantResponse);
+  rpc UpdateTenant(UpdateTenantRequest) returns (UpdateTenantResponse);
+  rpc DeleteTenant(DeleteTenantRequest) returns (DeleteTenantResponse);
+
+  // Tenant lifecycle operations
+  rpc SuspendTenant(SuspendTenantRequest) returns (SuspendTenantResponse);
+  rpc ResumeTenant(ResumeTenantRequest) returns (ResumeTenantResponse);
+
+  // Quota management
+  rpc GetQuotas(GetQuotasRequest) returns (GetQuotasResponse);
+  rpc UpdateQuotas(UpdateQuotasRequest) returns (UpdateQuotasResponse);
+  rpc GetUsage(GetUsageRequest) returns (GetUsageResponse);
+  rpc CheckQuota(CheckQuotaRequest) returns (CheckQuotaResponse);
+
+  // Network isolation
+  rpc ValidateVLAN(ValidateVLANRequest) returns (ValidateVLANResponse);
+  rpc GetBridgeName(GetBridgeNameRequest) returns (GetBridgeNameResponse);
+
+  // State synchronization
+  rpc Sync(SyncTenantsRequest) returns (SyncTenantsResponse);
+
+  // DEK management
+  rpc RotateTenantDEK(RotateTenantDEKRequest) returns (RotateTenantDEKResponse);
+  rpc GetTenantDEKStatus(GetTenantDEKStatusRequest) returns (GetTenantDEKStatusResponse);
+}
+
+// TenantState represents the state of a tenant.
+enum TenantState {
+  TENANT_STATE_UNSPECIFIED = 0;
+  TENANT_STATE_PENDING = 1;
+  TENANT_STATE_ACTIVE = 2;
+  TENANT_STATE_SUSPENDED = 3;
+  TENANT_STATE_DELETING = 4;
+  TENANT_STATE_DELETED = 5;
+}
+
+// ComputeQuota represents compute resource quotas.
+message ComputeQuota {
+  int64 max_vms = 1;
+  int64 max_containers = 2;
+  int64 max_vcpus = 3;
+  int64 max_memory_mb = 4;
+}
+
+// NetworkQuota represents network resource quotas.
+message NetworkQuota {
+  int64 max_bridges = 1;
+  int64 max_ports = 2;
+  int64 max_bandwidth_mbps = 3;
+}
+
+// StorageQuota represents storage resource quotas.
+message StorageQuota {
+  int64 max_volumes_gb = 1;
+  int64 max_snapshots = 2;
+}
+
+// Tenant represents a tenant in the multi-tenant platform.
+message Tenant {
+  string id = 1;
+  string name = 2;
+  string display_name = 3;
+  TenantState state = 4;
+  string ovs_bridge = 5;
+  uint32 vlan_start = 6;
+  uint32 vlan_end = 7;
+  string dek_path = 8;
+  uint32 dek_handle = 9 [deprecated = true];
+  ComputeQuota compute_quota = 10;
+  NetworkQuota network_quota = 11;
+  StorageQuota storage_quota = 12;
+  map<string, string> labels = 13;
+  map<string, string> annotations = 14;
+  google.protobuf.Timestamp created_at = 15;
+  google.protobuf.Timestamp updated_at = 16;
+}
+
+// TenantUsage represents current resource usage for a tenant.
+message TenantUsage {
+  string tenant_id = 1;
+  int64 vms = 2;
+  int64 containers = 3;
+  int64 vcpus = 4;
+  int64 memory_mb = 5;
+  int64 disk_gb = 6;
+  int64 bridges = 7;
+  int64 ports = 8;
+  int64 bandwidth_mbps = 9;
+  int64 volumes = 10;
+  int64 snapshots = 11;
+  google.protobuf.Timestamp timestamp = 12;
+}
+
+// DEKReencryptionProgress contains re-encryption progress information.
+message DEKReencryptionProgress {
+  bool in_progress = 1;
+  int32 total_keys = 2;
+  int32 processed_keys = 3;
+  int32 failed_keys = 4;
+  google.protobuf.Timestamp started_at = 5;
+  google.protobuf.Timestamp estimated_completion = 6;
+}
+
+// TenantDEKStatus contains the DEK status for a tenant.
+message TenantDEKStatus {
+  string tenant_id = 1;
+  string path = 2;
+  uint64 version = 3;
+  string algorithm = 4;
+  string status = 5;
+  bool is_default = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp rotated_at = 8;
+  uint64 usage_count = 9;
+  uint64 bytes_used = 10;
+  uint64 max_usage_count = 11;
+  uint64 max_bytes_used = 12;
+  int32 warning_percent = 13;
+  double usage_percent = 14;
+  bool needs_rotation = 15;
+  DEKReencryptionProgress reencrypt_progress = 16;
+}
+
+// =============================================================================
+// Request/Response Messages
+// =============================================================================
+
+// ListTenants request/response
+message ListTenantsRequest {
+  int32 limit = 1;
+  int32 offset = 2;
+  LabelSelector selector = 3;
+}
+
+message ListTenantsResponse {
+  repeated Tenant tenants = 1;
+  int32 total = 2;
+  PaginationResponse pagination = 3;
+}
+
+// GetTenant request/response
+message GetTenantRequest {
+  string tenant_id = 1;
+}
+
+message GetTenantResponse {
+  Tenant tenant = 1;
+}
+
+// GetTenantByName request/response
+message GetTenantByNameRequest {
+  string name = 1;
+}
+
+message GetTenantByNameResponse {
+  Tenant tenant = 1;
+}
+
+// CreateTenant request/response
+message CreateTenantRequest {
+  string name = 1;
+  string display_name = 2;
+  uint32 vlan_range_start = 3;
+  uint32 vlan_range_end = 4;
+  map<string, string> labels = 5;
+  map<string, string> annotations = 6;
+  ComputeQuota compute_quota = 7;
+  NetworkQuota network_quota = 8;
+  StorageQuota storage_quota = 9;
+}
+
+message CreateTenantResponse {
+  Status status = 1;
+  Tenant tenant = 2;
+}
+
+// UpdateTenant request/response
+message UpdateTenantRequest {
+  string tenant_id = 1;
+  string display_name = 2;
+  map<string, string> labels = 3;
+  map<string, string> annotations = 4;
+}
+
+message UpdateTenantResponse {
+  Status status = 1;
+  Tenant tenant = 2;
+}
+
+// DeleteTenant request/response
+message DeleteTenantRequest {
+  string tenant_id = 1;
+}
+
+message DeleteTenantResponse {
+  Status status = 1;
+}
+
+// SuspendTenant request/response
+message SuspendTenantRequest {
+  string tenant_id = 1;
+}
+
+message SuspendTenantResponse {
+  Status status = 1;
+}
+
+// ResumeTenant request/response
+message ResumeTenantRequest {
+  string tenant_id = 1;
+}
+
+message ResumeTenantResponse {
+  Status status = 1;
+}
+
+// GetQuotas request/response
+message GetQuotasRequest {
+  string tenant_id = 1;
+}
+
+message GetQuotasResponse {
+  string tenant_id = 1;
+  ComputeQuota compute = 2;
+  NetworkQuota network = 3;
+  StorageQuota storage = 4;
+}
+
+// UpdateQuotas request/response
+message UpdateQuotasRequest {
+  string tenant_id = 1;
+  ComputeQuota compute = 2;
+  NetworkQuota network = 3;
+  StorageQuota storage = 4;
+}
+
+message UpdateQuotasResponse {
+  Status status = 1;
+}
+
+// GetUsage request/response
+message GetUsageRequest {
+  string tenant_id = 1;
+}
+
+message GetUsageResponse {
+  TenantUsage usage = 1;
+}
+
+// CheckQuota request/response
+message CheckQuotaRequest {
+  string tenant_id = 1;
+  string resource = 2;
+  int64 amount = 3;
+}
+
+message CheckQuotaResponse {
+  string tenant_id = 1;
+  string resource = 2;
+  int64 amount = 3;
+  bool available = 4;
+  string message = 5;
+}
+
+// ValidateVLAN request/response
+message ValidateVLANRequest {
+  string tenant_id = 1;
+  uint32 vlan_id = 2;
+}
+
+message ValidateVLANResponse {
+  string tenant_id = 1;
+  uint32 vlan_id = 2;
+  bool valid = 3;
+  string message = 4;
+}
+
+// GetBridgeName request/response
+message GetBridgeNameRequest {
+  string tenant_id = 1;
+}
+
+message GetBridgeNameResponse {
+  string tenant_id = 1;
+  string bridge_name = 2;
+}
+
+// Sync request/response
+message SyncTenantsRequest {}
+
+message SyncTenantsResponse {
+  Status status = 1;
+}
+
+// RotateTenantDEK request/response
+message RotateTenantDEKRequest {
+  string tenant_id = 1;
+  bool background = 2;
+}
+
+message RotateTenantDEKResponse {
+  string tenant_id = 1;
+  uint32 old_version = 2;
+  uint32 new_version = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// GetTenantDEKStatus request/response
+message GetTenantDEKStatusRequest {
+  string tenant_id = 1;
+}
+
+message GetTenantDEKStatusResponse {
+  TenantDEKStatus dek_status = 1;
+}

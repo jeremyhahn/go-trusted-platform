@@ -1,0 +1,74 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package router
+
+import (
+	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
+)
+
+// BMCRouter handles BMC-related routes including power control, boot device
+// management, virtual media, sensors, system info, and bare metal provisioning.
+type BMCRouter struct {
+	handler bmc.RestHandler
+	WebServiceRouter
+}
+
+// NewBMCRouter creates a BMCRouter with the given handler.
+func NewBMCRouter(handler bmc.RestHandler) WebServiceRouter {
+	return &BMCRouter{
+		handler: handler,
+	}
+}
+
+// RegisterRoutes registers all BMC routes on the provided router.
+func (r *BMCRouter) RegisterRoutes(router *mux.Router) {
+	// Power management
+	// POST /api/v1/bmc/{profileID}/power - Execute power action (on, off, reset, cycle)
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/power", r.handler.PowerAction).Methods("POST")
+
+	// GET /api/v1/bmc/{profileID}/power - Get power status
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/power", r.handler.PowerStatus).Methods("GET")
+
+	// Boot device management
+	// POST /api/v1/bmc/{profileID}/boot-device - Set boot device
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/boot-device", r.handler.SetBootDevice).Methods("POST")
+
+	// GET /api/v1/bmc/{profileID}/boot-device - Get boot device
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/boot-device", r.handler.GetBootDevice).Methods("GET")
+
+	// Virtual media management
+	// POST /api/v1/bmc/{profileID}/virtual-media - Mount ISO
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", r.handler.MountISO).Methods("POST")
+
+	// DELETE /api/v1/bmc/{profileID}/virtual-media - Unmount ISO
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", r.handler.UnmountISO).Methods("DELETE")
+
+	// GET /api/v1/bmc/{profileID}/virtual-media - Get virtual media status
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", r.handler.VirtualMediaStatus).Methods("GET")
+
+	// Hardware information
+	// GET /api/v1/bmc/{profileID}/sensors - Get sensor readings
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/sensors", r.handler.GetSensors).Methods("GET")
+
+	// GET /api/v1/bmc/{profileID}/system-info - Get system info
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/system-info", r.handler.GetSystemInfo).Methods("GET")
+
+	// Bare metal provisioning
+	// POST /api/v1/bmc/{profileID}/provision - Trigger provisioning
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/provision", r.handler.Provision).Methods("POST")
+
+	// GET /api/v1/bmc/{profileID}/provision - Get provisioning status
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/provision", r.handler.ProvisionStatus).Methods("GET")
+}

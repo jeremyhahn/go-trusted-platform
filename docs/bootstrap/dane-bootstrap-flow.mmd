@@ -1,0 +1,164 @@
+%%{init: {
+  "theme": "base",
+  "themeVariables": {
+    "primaryColor": "#1e3a5f",
+    "primaryTextColor": "#ffffff",
+    "primaryBorderColor": "#4a90d9",
+    "lineColor": "#4a90d9",
+    "secondaryColor": "#2d5016",
+    "tertiaryColor": "#3d2b00",
+    "background": "#0d1117",
+    "mainBkg": "#161b22",
+    "nodeBorder": "#30363d",
+    "clusterBkg": "#161b22",
+    "titleColor": "#e6edf3",
+    "edgeLabelBackground": "#21262d",
+    "actorBkg": "#1e3a5f",
+    "actorBorder": "#4a90d9",
+    "actorTextColor": "#e6edf3",
+    "actorLineColor": "#4a90d9",
+    "signalColor": "#79c0ff",
+    "signalTextColor": "#e6edf3",
+    "labelBoxBkgColor": "#21262d",
+    "labelBoxBorderColor": "#30363d",
+    "labelTextColor": "#e6edf3",
+    "loopTextColor": "#e6edf3",
+    "noteBkgColor": "#3d2b00",
+    "noteTextColor": "#e6edf3",
+    "noteBorderColor": "#d29922",
+    "activationBkgColor": "#2d5016",
+    "activationBorderColor": "#3fb950",
+    "sequenceNumberColor": "#e6edf3",
+    "sectionFill0": "#1e3a5f",
+    "sectionFill1": "#2d5016"
+  }
+}}%%
+
+sequenceDiagram
+    %% ─── Participants ────────────────────────────────────────────────
+    participant PD  as platformd<br/>(Server VM)
+    participant CA  as CA<br/>(go-trusted-ca)
+    participant DNS as DNS Service<br/>(CoreDNS + DNSSEC<br/>:8053 / :9053)
+    participant DP  as DANEPublisher
+    participant API as REST API<br/>(:8443)
+    participant TT  as Test Tool<br/>(Host)
+    participant TS  as truststrap Client<br/>(DANE Bootstrapper)
+    participant CV  as Client VM<br/>(platformd)
+
+    %% ═══════════════════════════════════════════════════════════════════
+    rect rgb(20, 40, 70)
+        Note over PD,API: ── SERVER STARTUP FLOW ──────────────────────────────────────────
+
+        PD->>PD: platformd starts
+        PD->>PD: App.Init()
+
+        %% DNS startup
+        PD->>DNS: Start DNS service (:8053 public, :9053 internal)
+        activate DNS
+        DNS-->>PD: DNS service running
+
+        Note over DNS: [FIX] Zones created with EMPTY tenant IDs initially.<br/>Tenant claims happen lazily in ensureZoneTenantID() (step g).
+        DNS->>DNS: Create zones: example.com. / example.internal.<br/>(tenant IDs = "" at this point)
+        DNS->>DNS: DNSSEC sign zones (KSK + ZSK generated)
+        DNS-->>PD: Zones ready, DNSSEC active
+
+        %% CA initialization
+        PD->>CA: Load / initialize CA
+        activate CA
+        CA->>CA: Initialize root CA
+        CA->>CA: Initialize intermediate CA
+        CA-->>PD: CA ready (root + intermediate)
+
+        %% Web server initialization
+        PD->>PD: InitWebServer()
+
+        loop For each webservice (public :8443, internal)
+            PD->>CA: issueWebServiceCertificate()
+            CA->>CA: Issue TLS leaf cert signed by intermediate CA
+            CA-->>PD: TLS certificate (leaf + chain)
+
+            Note over PD,DP: publishDANETLSA() hook fires after certificate issuance
+
+            PD->>PD: publishDANETLSA()
+
+            Note over PD: [FIX] ServiceRegistry() lazy-inits the DNS service reference<br/>on App. Was previously nil when publishDANETLSA ran.
+            PD->>DNS: ServiceRegistry() — lazy-init DNS service ref on App
+            DNS-->>PD: DNS service ref resolved
+
+            PD->>DP: DANEPublisher.PublishForCertificate(cert, caCert)
+            activate DP
+
+            DP->>DP: Compute DANE-TA (Usage=2)<br/>SPKI SHA-256 from CA cert
+            DP->>DP: Compute DANE-EE (Usage=3)<br/>SPKI SHA-256 from leaf cert (if enabled)
+
+            Note over DP,DNS: [FIX] ensureZoneTenantID() claims the zone for "platform"<br/>tenant on first TLSA write — resolves the empty tenant ID.
+            DP->>DNS: AddTLSARecord()<br/>→ get zone from DAO<br/>→ ensureZoneTenantID() claims zone for "platform" tenant<br/>→ insert TLSA record
+            DNS-->>DP: Record added
+
+            DP->>DNS: SaveAndSign()<br/>DNSSEC re-signs zone with new TLSA records
+            DNS-->>DP: Zone re-signed, AD flag valid
+            deactivate DP
+
+            DNS-->>PD: TLSA records published
+        end
+
+        %% REST API ready
+        PD->>API: Start REST API (:8443)
+        activate API
+        API->>API: Register /api/v1/ca/bootstrap
+        API-->>PD: REST API listening
+
+        PD-->>PD: Server READY<br/>(ping + :8053 DNS + :8443 HTTPS all responding)
+    end
+
+    %% ═══════════════════════════════════════════════════════════════════
+    rect rgb(20, 55, 20)
+        Note over TT,CV: ── CLIENT BOOTSTRAP FLOW (Test Tool → Client VM) ──────────────
+
+        TT->>TT: waitForCSServerReady()<br/>polls ping + DNS(:8053) + HTTPS(:8443)
+        TT-->>TT: Server detected as ready
+
+        TT->>TT: fetchCSCABundle()
+        TT->>TT: Resolve DNS server from config<br/>dns.resolver.servers[0] = 10.99.99.2:8053
+
+        Note over TT: [FIX] Server hostname resolved from server config<br/>(domain = server.example.com), NOT the IP address.<br/>Prevents bogus TLSA lookup on _8443._tcp.10.99.99.2.
+        TT->>TT: Resolve server hostname from server config<br/>domain = server.example.com
+
+        TT->>TS: Create bootstrap.Client (strategy = DANE)
+        activate TS
+
+        TT->>TS: bootstrap.Client.FetchCABundle()
+
+        TS->>TS: Create truststrap DANEBootstrapper:<br/>  ServerURL  = https://10.99.99.2:8443<br/>  Hostname   = server.example.com<br/>  DNSServer  = 10.99.99.2:8053
+
+        Note over TS: [FIX] dane.Resolver is auto-created from the DNSServer field.<br/>Was previously nil, causing a nil-pointer panic at TLSA lookup.
+        TS->>TS: Create dane.Resolver from DNSServer (10.99.99.2:8053)
+
+        TS->>DNS: TLSA query: _8443._tcp.server.example.com. TLSA<br/>@ 10.99.99.2:8053
+        DNS-->>TS: TLSA records returned (DANE-TA Usage=2,<br/>CA cert SPKI SHA-256 hash)
+
+        TS->>TS: Verify DNSSEC AD flag (authenticated data)<br/>on TLSA response
+
+        Note over TS,API: TLS verification uses DANE (TLSA records),<br/>NOT the system CA trust store
+        TS->>API: GET https://10.99.99.2:8443/api/v1/ca/bootstrap<br/>(TLS verified via DANE / TLSA)
+        API-->>TS: PEM certificate bundle (root + intermediate)
+
+        TS->>TS: Verify CA bundle SPKI hash<br/>against retrieved TLSA records
+
+        TS-->>TT: CA bundle verified
+        deactivate TS
+
+        TT->>TT: Write CA bundle to disk
+
+        alt Strategy = "embedded"
+            TT->>CV: Embed CA bundle in client ISO<br/>(available at first boot, no runtime fetch needed)
+            CV-->>TT: Bundle embedded
+        else Strategy = "dane"
+            Note over CV: Client VM bootstraps at runtime:<br/>performs its own DANE lookup + CA fetch on startup
+            CV->>CV: Runtime DANE bootstrap<br/>(same truststrap flow, runs on VM boot)
+        end
+    end
+
+    deactivate CA
+    deactivate DNS
+    deactivate API

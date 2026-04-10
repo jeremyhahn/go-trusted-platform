@@ -1,0 +1,765 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "tpm.proto";
+import "common.proto";
+
+// VTPMService provides virtual TPM bundle management operations.
+// Bundles are complete vTPM provisioning packages containing TPM state,
+// OVMF NVRAM, and optional Secure Boot keys for VM deployment.
+service VTPMService {
+  // Bundle CRUD operations
+  rpc CreateBundle(CreateBundleRequest) returns (CreateBundleResponse);
+  rpc GetBundle(GetBundleRequest) returns (GetBundleResponse);
+  rpc DeleteBundle(DeleteBundleRequest) returns (DeleteBundleResponse);
+  rpc ListBundles(ListBundlesRequest) returns (ListBundlesResponse);
+
+  // Template operations
+  rpc CreateTemplate(CreateTemplateRequest) returns (CreateTemplateResponse);
+  rpc GetTemplate(GetTemplateRequest) returns (GetTemplateResponse);
+  rpc DeleteTemplate(DeleteTemplateRequest) returns (DeleteTemplateResponse);
+  rpc ListTemplates(ListTemplatesRequest) returns (ListTemplatesResponse);
+  rpc CloneTemplate(CloneTemplateRequest) returns (CloneTemplateResponse);
+
+  // Export/Import operations
+  rpc ExportBundle(ExportBundleRequest) returns (stream ExportBundleResponse);
+  rpc ImportBundle(stream ImportBundleRequest) returns (ImportBundleResponse);
+
+  // Validation
+  rpc ValidateBundle(ValidateBundleRequest) returns (ValidateBundleResponse);
+
+  // Path getters
+  rpc GetBundlePath(GetBundlePathRequest) returns (GetBundlePathResponse);
+  rpc GetTPMSocketPath(GetTPMSocketPathRequest) returns (GetTPMSocketPathResponse);
+  rpc GetNVRAMPath(GetNVRAMPathRequest) returns (GetNVRAMPathResponse);
+
+  // Runtime TPM operations
+  rpc StartVTPM(StartVTPMRequest) returns (StartVTPMResponse);
+  rpc StopVTPM(StopVTPMRequest) returns (StopVTPMResponse);
+  rpc IsVTPMRunning(IsVTPMRunningRequest) returns (IsVTPMRunningResponse);
+  rpc QuoteVTPM(QuoteVTPMRequest) returns (QuoteVTPMResponse);
+  rpc SealVTPM(SealVTPMRequest) returns (SealVTPMResponse);
+  rpc UnsealVTPM(UnsealVTPMRequest) returns (UnsealVTPMResponse);
+  rpc ExtendVTPMPCR(ExtendVTPMPCRRequest) returns (ExtendVTPMPCRResponse);
+  rpc ReadVTPMPCR(ReadVTPMPCRRequest) returns (ReadVTPMPCRResponse);
+}
+
+// VTPMInstanceService provides vTPM instance generation and lifecycle management.
+// This service manages the lifecycle of virtual TPM instances for device provisioning,
+// wrapping the bundle service with a simplified API focused on instance generation
+// and device profile association.
+service VTPMInstanceService {
+  // Instance CRUD operations
+  rpc CreateInstance(CreateVTPMInstanceRequest) returns (CreateVTPMInstanceResponse);
+  rpc GetInstance(GetVTPMInstanceRequest) returns (GetVTPMInstanceResponse);
+  rpc GetInstanceByProfile(GetVTPMInstanceByProfileRequest) returns (GetVTPMInstanceByProfileResponse);
+  rpc DeleteInstance(DeleteVTPMInstanceRequest) returns (DeleteVTPMInstanceResponse);
+  rpc ListInstances(ListVTPMInstancesRequest) returns (ListVTPMInstancesResponse);
+
+  // Instance lifecycle operations
+  rpc StartInstance(StartVTPMInstanceRequest) returns (StartVTPMInstanceResponse);
+  rpc StopInstance(StopVTPMInstanceRequest) returns (StopVTPMInstanceResponse);
+  rpc GetInstanceStatus(GetVTPMInstanceStatusRequest) returns (GetVTPMInstanceStatusResponse);
+
+  // EK certificate operations
+  rpc ExportEKCertificate(ExportEKCertificateRequest) returns (ExportEKCertificateResponse);
+  rpc GetEKFingerprint(GetEKFingerprintRequest) returns (GetEKFingerprintResponse);
+}
+
+// BundleMode represents the bundle creation mode.
+enum BundleMode {
+  BUNDLE_MODE_UNSPECIFIED = 0;
+  // Template creates a template without identity (EK cert issued at clone time).
+  BUNDLE_MODE_TEMPLATE = 1;
+  // PreAssigned creates a complete bundle with identity (EK cert issued at creation time).
+  BUNDLE_MODE_PRE_ASSIGNED = 2;
+}
+
+// EKAlgorithm represents the EK key algorithm.
+enum EKAlgorithm {
+  EK_ALGORITHM_UNSPECIFIED = 0;
+  // RSA uses RSA 2048 for the EK.
+  EK_ALGORITHM_RSA = 1;
+  // ECC uses ECC P-256 for the EK.
+  EK_ALGORITHM_ECC = 2;
+}
+
+// TPMVersion is imported from tpm.proto
+
+// EKCertInfo contains EK certificate metadata.
+message EKCertInfo {
+  string subject = 1;
+  string issuer = 2;
+  string serial_number = 3;
+  google.protobuf.Timestamp not_before = 4;
+  google.protobuf.Timestamp not_after = 5;
+  string fingerprint = 6;
+}
+
+// SecureBootKeyInfo contains Secure Boot key information.
+message SecureBootKeyInfo {
+  string pk_fingerprint = 1;
+  string kek_fingerprint = 2;
+  string db_fingerprint = 3;
+  string owner_guid = 4;
+}
+
+// SecureBootKeyPaths contains paths to Secure Boot key files.
+message SecureBootKeyPaths {
+  string dir = 1;
+  string pk_key = 2;
+  string pk_crt = 3;
+  string kek_key = 4;
+  string kek_crt = 5;
+  string db_key = 6;
+  string db_crt = 7;
+}
+
+// TPMState represents swtpm state files.
+message TPMState {
+  string state_dir = 1;
+  string permall_file = 2;
+  string volatile_file = 3;
+}
+
+// OVMFState represents OVMF NVRAM state.
+message OVMFState {
+  string nvram_file = 1;
+}
+
+// Manifest contains bundle metadata stored in manifest.json.
+message Manifest {
+  string version = 1;
+  string id = 2;
+  BundleMode mode = 3;
+  string hostname = 4;
+  google.protobuf.Timestamp created_at = 5;
+  EKCertInfo ek_certificate = 6;
+  EKAlgorithm ek_algorithm = 7;
+  uint32 ek_handle = 8;
+  bool secure_boot_enabled = 9;
+  SecureBootKeyInfo secure_boot_keys = 10;
+  map<string, string> checksums = 11;
+  map<string, string> labels = 12;
+  string cloned_from = 13;
+}
+
+// Bundle represents a complete vTPM bundle.
+message Bundle {
+  string id = 1;
+  BundleMode mode = 2;
+  Manifest manifest = 3;
+  TPMState tpm_state = 4;
+  OVMFState ovmf_state = 5;
+  SecureBootKeyPaths secure_boot_keys = 6;
+  google.protobuf.Timestamp created_at = 7;
+  string cloned_from = 8;
+}
+
+// Template represents a reusable vTPM template (no identity).
+message Template {
+  string id = 1;
+  string description = 2;
+  string tpm_state_dir = 3;
+  string nvram_path = 4;
+  string secure_boot_keys_dir = 5;
+  EKAlgorithm ek_algorithm = 6;
+  bool secure_boot_enabled = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+// CreateBundleOptions configures bundle creation.
+message CreateBundleOptions {
+  BundleMode mode = 1;
+  string hostname = 2;
+  EKAlgorithm ek_algorithm = 3;
+  bool secure_boot_enabled = 4;
+  map<string, string> labels = 5;
+  string template_id = 6;
+}
+
+// CreateTemplateOptions configures template creation.
+message CreateTemplateOptions {
+  string id = 1;
+  string description = 2;
+  EKAlgorithm ek_algorithm = 3;
+  bool secure_boot_enabled = 4;
+}
+
+// CloneOptions configures template cloning.
+message CloneOptions {
+  string template_id = 1;
+  string hostname = 2;
+  map<string, string> labels = 3;
+}
+
+// ListOptions for filtering bundle lists.
+message ListBundleOptions {
+  BundleMode mode = 1;
+  map<string, string> labels = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+// Bundle CRUD request/response messages
+
+message CreateBundleRequest {
+  CreateBundleOptions options = 1;
+}
+
+message CreateBundleResponse {
+  Status status = 1;
+  Bundle bundle = 2;
+}
+
+message GetBundleRequest {
+  string id = 1;
+}
+
+message GetBundleResponse {
+  Bundle bundle = 1;
+}
+
+message DeleteBundleRequest {
+  string id = 1;
+}
+
+message DeleteBundleResponse {
+  Status status = 1;
+}
+
+message ListBundlesRequest {
+  ListBundleOptions options = 1;
+}
+
+message ListBundlesResponse {
+  repeated Bundle bundles = 1;
+  int32 total = 2;
+}
+
+// Template request/response messages
+
+message CreateTemplateRequest {
+  CreateTemplateOptions options = 1;
+}
+
+message CreateTemplateResponse {
+  Status status = 1;
+  Template template = 2;
+}
+
+message GetTemplateRequest {
+  string id = 1;
+}
+
+message GetTemplateResponse {
+  Template template = 1;
+}
+
+message DeleteTemplateRequest {
+  string id = 1;
+}
+
+message DeleteTemplateResponse {
+  Status status = 1;
+}
+
+message ListTemplatesRequest {}
+
+message ListTemplatesResponse {
+  repeated Template templates = 1;
+}
+
+message CloneTemplateRequest {
+  CloneOptions options = 1;
+}
+
+message CloneTemplateResponse {
+  Status status = 1;
+  Bundle bundle = 2;
+}
+
+// Export/Import request/response messages
+
+message ExportBundleRequest {
+  string id = 1;
+}
+
+message ExportBundleResponse {
+  // Chunk of the tar.gz archive data
+  bytes data = 1;
+}
+
+message ImportBundleRequest {
+  // Chunk of the tar.gz archive data
+  bytes data = 1;
+}
+
+message ImportBundleResponse {
+  Status status = 1;
+  Bundle bundle = 2;
+}
+
+// Validation request/response messages
+
+message ValidateBundleRequest {
+  string id = 1;
+}
+
+message ValidateBundleResponse {
+  Status status = 1;
+  bool valid = 2;
+  repeated string errors = 3;
+}
+
+// Path getter request/response messages
+
+message GetBundlePathRequest {
+  string id = 1;
+}
+
+message GetBundlePathResponse {
+  string path = 1;
+}
+
+message GetTPMSocketPathRequest {
+  string id = 1;
+}
+
+message GetTPMSocketPathResponse {
+  string path = 1;
+}
+
+message GetNVRAMPathRequest {
+  string id = 1;
+}
+
+message GetNVRAMPathResponse {
+  string path = 1;
+}
+
+// =============================================================================
+// Runtime TPM request/response messages
+// =============================================================================
+
+// StartVTPMRequest requests starting the swtpm daemon for a bundle.
+message StartVTPMRequest {
+  // bundle_id is the vTPM bundle ID to start.
+  string bundle_id = 1;
+}
+
+// StartVTPMResponse contains the result of starting a vTPM.
+message StartVTPMResponse {
+  // status indicates operation success/failure.
+  Status status = 1;
+
+  // bundle_id is the vTPM bundle ID.
+  string bundle_id = 2;
+
+  // running indicates if the vTPM is now running.
+  bool running = 3;
+
+  // socket_path is the Unix socket path for TPM communication.
+  string socket_path = 4;
+}
+
+// StopVTPMRequest requests stopping the swtpm daemon for a bundle.
+message StopVTPMRequest {
+  // bundle_id is the vTPM bundle ID to stop.
+  string bundle_id = 1;
+}
+
+// StopVTPMResponse contains the result of stopping a vTPM.
+message StopVTPMResponse {
+  // status indicates operation success/failure.
+  Status status = 1;
+
+  // bundle_id is the vTPM bundle ID.
+  string bundle_id = 2;
+
+  // stopped indicates if the vTPM was stopped.
+  bool stopped = 3;
+}
+
+// IsVTPMRunningRequest checks if a vTPM is running.
+message IsVTPMRunningRequest {
+  // bundle_id is the vTPM bundle ID to check.
+  string bundle_id = 1;
+}
+
+// IsVTPMRunningResponse contains the running status of a vTPM.
+message IsVTPMRunningResponse {
+  // bundle_id is the vTPM bundle ID.
+  string bundle_id = 1;
+
+  // running indicates if the vTPM is currently running.
+  bool running = 2;
+}
+
+// QuoteVTPMRequest requests a TPM quote over specified PCRs.
+message QuoteVTPMRequest {
+  // bundle_id is the vTPM bundle ID.
+  string bundle_id = 1;
+
+  // nonce provides freshness and prevents replay attacks.
+  bytes nonce = 2;
+
+  // pcrs is the list of PCR indices to include in the quote.
+  repeated int32 pcrs = 3;
+}
+
+// QuoteVTPMResponse contains the TPM quote result.
+message QuoteVTPMResponse {
+  // status indicates operation success/failure.
+  Status status = 1;
+
+  // bundle_id is the vTPM bundle ID.
+  string bundle_id = 2;
+
+  // quote is the TPM2B_ATTEST structure containing the quote.
+  bytes quote = 3;
+
+  // signature is the signature over the quote.
+  bytes signature = 4;
+
+  // pcr_values contains the PCR values that were quoted, keyed by PCR index.
+  map<int32, bytes> pcr_values = 5;
+
+  // hash_algorithm is the hash algorithm used for the quote.
+  string hash_algorithm = 6;
+}
+
+// SealVTPMRequest requests sealing data to the TPM.
+message SealVTPMRequest {
+  // bundle_id is the vTPM bundle ID.
+  string bundle_id = 1;
+
+  // data is the plaintext data to seal.
+  bytes data = 2;
+
+  // pcrs is the optional list of PCR indices to bind the sealed data to.
+  repeated int32 pcrs = 3;
+
+  // auth_value is an optional password/auth value for the sealed data.
+  string auth_value = 4;
+}
+
+// SealVTPMResponse contains the sealed data result.
+message SealVTPMResponse {
+  // status indicates operation success/failure.
+  Status status = 1;
+
+  // bundle_id is the vTPM bundle ID.
+  string bundle_id = 2;
+
+  // sealed_data is the TPM-sealed ciphertext.
+  bytes sealed_data = 3;
+}
+
+// UnsealVTPMRequest requests unsealing data from the TPM.
+message UnsealVTPMRequest {
+  // bundle_id is the vTPM bundle ID.
+  string bundle_id = 1;
+
+  // sealed_data is the TPM-sealed ciphertext to unseal.
+  bytes sealed_data = 2;
+
+  // auth_value is the password/auth value used during sealing.
+  string auth_value = 3;
+}
+
+// UnsealVTPMResponse contains the unsealed data result.
+message UnsealVTPMResponse {
+  // status indicates operation success/failure.
+  Status status = 1;
+
+  // bundle_id is the vTPM bundle ID.
+  string bundle_id = 2;
+
+  // data is the unsealed plaintext data.
+  bytes data = 3;
+}
+
+// ExtendVTPMPCRRequest requests extending a PCR with data.
+message ExtendVTPMPCRRequest {
+  // bundle_id is the vTPM bundle ID.
+  string bundle_id = 1;
+
+  // pcr_index is the PCR index to extend.
+  int32 pcr_index = 2;
+
+  // data is the data to extend into the PCR.
+  bytes data = 3;
+}
+
+// ExtendVTPMPCRResponse contains the result of extending a PCR.
+message ExtendVTPMPCRResponse {
+  // status indicates operation success/failure.
+  Status status = 1;
+
+  // bundle_id is the vTPM bundle ID.
+  string bundle_id = 2;
+
+  // pcr_index is the PCR index that was extended.
+  int32 pcr_index = 3;
+
+  // extended indicates if the PCR was successfully extended.
+  bool extended = 4;
+}
+
+// ReadVTPMPCRRequest requests reading a PCR value.
+message ReadVTPMPCRRequest {
+  // bundle_id is the vTPM bundle ID.
+  string bundle_id = 1;
+
+  // pcr_index is the PCR index to read.
+  int32 pcr_index = 2;
+}
+
+// ReadVTPMPCRResponse contains the PCR value.
+message ReadVTPMPCRResponse {
+  // status indicates operation success/failure.
+  Status status = 1;
+
+  // bundle_id is the vTPM bundle ID.
+  string bundle_id = 2;
+
+  // pcr_index is the PCR index that was read.
+  int32 pcr_index = 3;
+
+  // value is the current PCR value.
+  bytes value = 4;
+}
+
+// =============================================================================
+// VTPMInstanceService Messages
+// =============================================================================
+
+// VTPMInstanceConfig contains configuration for vTPM instance creation.
+message VTPMInstanceConfig {
+  // tpm_version is the TPM specification version (default: 2.0).
+  TPMVersion tpm_version = 1;
+
+  // state_path is the directory where vTPM state is stored.
+  string state_path = 2;
+
+  // hostname is the hostname for the vTPM (used in EK certificate CN).
+  string hostname = 3;
+
+  // ek_algorithm specifies the EK key algorithm (default: RSA).
+  EKAlgorithm ek_algorithm = 4;
+
+  // secure_boot_enabled enables Secure Boot key generation and enrollment.
+  bool secure_boot_enabled = 5;
+
+  // labels contains custom metadata key-value pairs.
+  map<string, string> labels = 6;
+}
+
+// VTPMInstance represents a virtual TPM instance.
+message VTPMInstance {
+  // id is the unique identifier for this vTPM instance.
+  string id = 1;
+
+  // profile_id is the associated device profile ID (optional).
+  uint64 profile_id = 2;
+
+  // version is the TPM specification version.
+  TPMVersion version = 3;
+
+  // state_path is the directory containing this vTPM's state files.
+  string state_path = 4;
+
+  // socket_path is the Unix socket path for TPM communication.
+  string socket_path = 5;
+
+  // nvram_path is the path to the OVMF NVRAM file.
+  string nvram_path = 6;
+
+  // ek_fingerprint is the SHA-256 fingerprint of the EK certificate.
+  string ek_fingerprint = 7;
+
+  // srk_handle is the TPM handle for the Storage Root Key.
+  uint32 srk_handle = 8;
+
+  // running indicates if the vTPM is currently running.
+  bool running = 9;
+
+  // created_at is the instance creation timestamp.
+  google.protobuf.Timestamp created_at = 10;
+}
+
+// Instance CRUD request/response messages
+
+message CreateVTPMInstanceRequest {
+  // profile_id is the device profile to associate with this instance (optional).
+  uint64 profile_id = 1;
+
+  // config contains optional configuration for the vTPM instance.
+  VTPMInstanceConfig config = 2;
+}
+
+message CreateVTPMInstanceResponse {
+  // status indicates operation success/failure.
+  Status status = 1;
+
+  // instance is the created vTPM instance.
+  VTPMInstance instance = 2;
+}
+
+message GetVTPMInstanceRequest {
+  // id is the vTPM instance ID.
+  string id = 1;
+}
+
+message GetVTPMInstanceResponse {
+  // instance is the retrieved vTPM instance.
+  VTPMInstance instance = 1;
+}
+
+message GetVTPMInstanceByProfileRequest {
+  // profile_id is the device profile ID.
+  uint64 profile_id = 1;
+}
+
+message GetVTPMInstanceByProfileResponse {
+  // instance is the retrieved vTPM instance.
+  VTPMInstance instance = 1;
+}
+
+message DeleteVTPMInstanceRequest {
+  // id is the vTPM instance ID to delete.
+  string id = 1;
+}
+
+message DeleteVTPMInstanceResponse {
+  // status indicates operation success/failure.
+  Status status = 1;
+}
+
+message ListVTPMInstancesRequest {
+  // pagination contains pagination parameters.
+  PaginationRequest pagination = 1;
+
+  // selector contains label selector for filtering.
+  LabelSelector selector = 2;
+}
+
+message ListVTPMInstancesResponse {
+  // instances is the list of vTPM instances.
+  repeated VTPMInstance instances = 1;
+
+  // pagination contains pagination metadata.
+  PaginationResponse pagination = 2;
+}
+
+// Instance lifecycle request/response messages
+
+message StartVTPMInstanceRequest {
+  // id is the vTPM instance ID to start.
+  string id = 1;
+}
+
+message StartVTPMInstanceResponse {
+  // status indicates operation success/failure.
+  Status status = 1;
+
+  // socket_path is the Unix socket path for TPM communication.
+  string socket_path = 2;
+}
+
+message StopVTPMInstanceRequest {
+  // id is the vTPM instance ID to stop.
+  string id = 1;
+}
+
+message StopVTPMInstanceResponse {
+  // status indicates operation success/failure.
+  Status status = 1;
+}
+
+message GetVTPMInstanceStatusRequest {
+  // id is the vTPM instance ID.
+  string id = 1;
+}
+
+message GetVTPMInstanceStatusResponse {
+  // id is the vTPM instance ID.
+  string id = 1;
+
+  // running indicates if the vTPM is currently running.
+  bool running = 2;
+
+  // socket_path is the Unix socket path if running.
+  string socket_path = 3;
+}
+
+// EK certificate request/response messages
+
+message ExportEKCertificateRequest {
+  // id is the vTPM instance ID.
+  string id = 1;
+
+  // format specifies the certificate encoding format.
+  // Supported values: "PEM" (default), "DER"
+  string format = 2;
+}
+
+message ExportEKCertificateResponse {
+  // id is the vTPM instance ID.
+  string id = 1;
+
+  // certificate is the EK certificate data.
+  bytes certificate = 2;
+
+  // format is the certificate encoding format.
+  string format = 3;
+
+  // subject is the certificate subject.
+  string subject = 4;
+
+  // issuer is the certificate issuer.
+  string issuer = 5;
+
+  // serial_number is the certificate serial number.
+  string serial_number = 6;
+
+  // not_before is the certificate validity start.
+  google.protobuf.Timestamp not_before = 7;
+
+  // not_after is the certificate validity end.
+  google.protobuf.Timestamp not_after = 8;
+}
+
+message GetEKFingerprintRequest {
+  // id is the vTPM instance ID.
+  string id = 1;
+}
+
+message GetEKFingerprintResponse {
+  // id is the vTPM instance ID.
+  string id = 1;
+
+  // fingerprint is the SHA-256 fingerprint of the EK certificate.
+  string fingerprint = 2;
+
+  // algorithm is the hash algorithm used for the fingerprint (e.g., "SHA256").
+  string algorithm = 3;
+}

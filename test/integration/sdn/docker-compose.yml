@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  sdn-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: go-trusted-platform-sdn-test
+    privileged: true
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ../../../:/workspace
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+      - ovs-db:/var/run/openvswitch
+      - ovs-log:/var/log/openvswitch
+    environment:
+      - CGO_ENABLED=1
+      - GOCACHE=/tmp/go-cache
+      - GOPATH=/go
+    working_dir: /workspace/test/integration/sdn
+    command: >
+      sh -c "
+        echo 'Waiting for OVS to start...';
+        sleep 5;
+        echo 'Running integration tests...';
+        go test -v -timeout 10m ./...
+      "
+
+volumes:
+  ovs-db:
+  ovs-log:

@@ -1,0 +1,370 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package ipxe
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"os"
+	"os/signal"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+)
+
+const (
+	// readyCheckInterval is the interval for checking service readiness.
+	readyCheckInterval = 100 * time.Millisecond
+
+	// defaultReadyTimeout is the default timeout for waiting for services to be ready.
+	defaultReadyTimeout = 10 * time.Second
+)
+
+// Server represents the complete PXE server with DHCP, TFTP, and HTTP services.
+type Server struct {
+	config   *ServerConfig
+	logger   *logging.Logger
+	serverIP net.IP
+
+	httpServer *HTTPServer
+	tftpServer *TFTPServer
+	dhcpServer *DHCPServer
+
+	mu      sync.Mutex
+	running atomic.Bool
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	errChan chan error
+}
+
+// NewServer creates a new PXE server instance.
+func NewServer(cfg *ServerConfig, logger *logging.Logger) (*Server, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("%w: server config is nil", ErrInvalidConfig)
+	}
+
+	if logger == nil {
+		logger = logging.DefaultLogger()
+	}
+
+	// Validate configuration
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid server configuration: %w", err)
+	}
+
+	// Determine server IP
+	serverIPStr, err := cfg.GetServerIP()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine server IP: %w", err)
+	}
+
+	serverIP := net.ParseIP(serverIPStr)
+	if serverIP == nil {
+		return nil, fmt.Errorf("%w: invalid server IP %s", ErrNoServerIP, serverIPStr)
+	}
+
+	// Auto-detect external URL if not set
+	if cfg.ExternalURL == "" {
+		cfg.ExternalURL = fmt.Sprintf("http://%s:%d", serverIP.String(), cfg.HTTPPort)
+		logger.Info("Auto-detected external URL", "url", cfg.ExternalURL)
+	}
+
+	// Auto-detect iPXE script URL if not set
+	if cfg.IPXEScript == "" {
+		cfg.IPXEScript = fmt.Sprintf("%s/boot.ipxe", cfg.ExternalURL)
+		logger.Info("Auto-detected iPXE script URL", "url", cfg.IPXEScript)
+	}
+
+	server := &Server{
+		config:   cfg,
+		logger:   logger,
+		serverIP: serverIP,
+		errChan:  make(chan error, 3), // Buffer for HTTP, TFTP, DHCP errors
+	}
+
+	// Create HTTP server
+	server.httpServer = NewHTTPServer(cfg, logger)
+
+	// Create TFTP server
+	server.tftpServer = NewTFTPServer(cfg, serverIP, logger)
+
+	// Create DHCP server if enabled
+	if cfg.EnableDHCP {
+		dhcpConfig, err := server.buildDHCPConfig()
+		if err != nil {
+			return nil, fmt.Errorf("failed to build DHCP configuration: %w", err)
+		}
+
+		server.dhcpServer, err = NewDHCPServer(dhcpConfig, logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create DHCP server: %w", err)
+		}
+	}
+
+	return server, nil
+}
+
+// Start starts all PXE server services concurrently.
+func (s *Server) Start(ctx context.Context) error {
+	s.mu.Lock()
+	if s.running.Load() {
+		s.mu.Unlock()
+		return fmt.Errorf("server is already running")
+	}
+
+	// Create cancellable context
+	ctx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
+	s.running.Store(true)
+	s.mu.Unlock()
+
+	s.logger.Info("Starting PXE server",
+		"server_ip", s.serverIP.String(),
+		"http_port", s.config.HTTPPort,
+		"tftp_port", s.config.TFTPPort,
+		"dhcp_enabled", s.config.EnableDHCP,
+	)
+
+	// Start HTTP server
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		if err := s.httpServer.Start(ctx); err != nil && ctx.Err() == nil {
+			s.logger.Error(fmt.Errorf("HTTP server error: %w", err))
+			s.errChan <- fmt.Errorf("HTTP server failed: %w", err)
+		}
+	}()
+
+	// Start TFTP server
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		if err := s.tftpServer.Start(ctx); err != nil && ctx.Err() == nil {
+			s.logger.Error(fmt.Errorf("TFTP server error: %w", err))
+			s.errChan <- fmt.Errorf("TFTP server failed: %w", err)
+		}
+	}()
+
+	// Start DHCP server if enabled
+	if s.dhcpServer != nil {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			if err := s.dhcpServer.Start(ctx); err != nil && ctx.Err() == nil {
+				s.logger.Error(fmt.Errorf("DHCP server error: %w", err))
+				s.errChan <- fmt.Errorf("DHCP server failed: %w", err)
+			}
+		}()
+	}
+
+	// Monitor for errors or context cancellation
+	go func() {
+		select {
+		case err := <-s.errChan:
+			s.logger.Error(fmt.Errorf("server error: %w", err))
+			s.Stop()
+		case <-ctx.Done():
+			return
+		}
+	}()
+
+	// Wait for all services to complete
+	s.wg.Wait()
+
+	s.mu.Lock()
+	s.running.Store(false)
+	s.mu.Unlock()
+
+	s.logger.Info("PXE server stopped")
+	return nil
+}
+
+// Stop gracefully stops all PXE server services.
+func (s *Server) Stop() error {
+	s.mu.Lock()
+	if !s.running.Load() {
+		s.mu.Unlock()
+		return nil
+	}
+
+	s.logger.Info("Stopping PXE server")
+
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.mu.Unlock()
+
+	// Wait for all goroutines to finish with timeout
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		s.logger.Info("All services stopped gracefully")
+	case <-time.After(10 * time.Second):
+		s.logger.Warn("Timeout waiting for services to stop")
+	}
+
+	return nil
+}
+
+// ServerIP returns the server IP address.
+func (s *Server) ServerIP() net.IP {
+	return s.serverIP
+}
+
+// HTTPServer returns the underlying HTTP server for additional configuration.
+func (s *Server) HTTPServer() *HTTPServer {
+	return s.httpServer
+}
+
+// IsRunning returns whether the server is currently running.
+func (s *Server) IsRunning() bool {
+	return s.running.Load()
+}
+
+// WaitForReady waits for all services to be ready or timeout.
+func (s *Server) WaitForReady(timeout time.Duration) error {
+	if timeout == 0 {
+		timeout = defaultReadyTimeout
+	}
+
+	deadline := time.Now().Add(timeout)
+
+	s.logger.Info("Waiting for services to be ready", "timeout", timeout)
+
+	// Check HTTP server
+	httpReady := s.waitForHTTPReady(deadline)
+	if !httpReady {
+		return fmt.Errorf("HTTP server not ready within timeout")
+	}
+
+	// TFTP and DHCP servers don't have direct readiness checks
+	// They're considered ready when they start listening
+	// The firmware loading in TFTP happens during Start()
+
+	s.logger.Info("All services are ready")
+	return nil
+}
+
+// waitForHTTPReady waits for the HTTP server to be ready.
+func (s *Server) waitForHTTPReady(deadline time.Time) bool {
+	addr := net.JoinHostPort(s.serverIP.String(), fmt.Sprintf("%d", s.config.HTTPPort))
+
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			s.logger.Debug("HTTP server is ready", "address", addr)
+			return true
+		}
+
+		time.Sleep(readyCheckInterval)
+	}
+
+	return false
+}
+
+// RunWithSignals starts the server and waits for interrupt signals.
+// This is a convenience method for running the server as a standalone service.
+func (s *Server) RunWithSignals(ctx context.Context) error {
+	// Setup signal handling
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	// Create cancellable context
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Start server in goroutine
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- s.Start(ctx)
+	}()
+
+	// Wait for either signal or error
+	select {
+	case sig := <-sigChan:
+		s.logger.Info("Received signal, shutting down", "signal", sig.String())
+		cancel()
+		return s.Stop()
+	case err := <-errChan:
+		if err != nil {
+			return fmt.Errorf("server error: %w", err)
+		}
+		return nil
+	}
+}
+
+// buildDHCPConfig converts the ServerConfig to a DHCPConfig.
+func (s *Server) buildDHCPConfig() (*DHCPConfig, error) {
+	// Determine interface
+	dhcpInterface := s.config.DHCPInterface
+	if dhcpInterface == "" {
+		dhcpInterface = s.config.Interface
+	}
+
+	// Parse IPs
+	rangeStart := net.ParseIP(s.config.DHCPRangeStart)
+	if rangeStart == nil {
+		return nil, fmt.Errorf("%w: invalid range start IP %s", ErrInvalidIPRange, s.config.DHCPRangeStart)
+	}
+
+	rangeEnd := net.ParseIP(s.config.DHCPRangeEnd)
+	if rangeEnd == nil {
+		return nil, fmt.Errorf("%w: invalid range end IP %s", ErrInvalidIPRange, s.config.DHCPRangeEnd)
+	}
+
+	subnetMask := net.ParseIP(s.config.DHCPSubnetMask)
+	if subnetMask == nil {
+		return nil, fmt.Errorf("%w: invalid subnet mask %s", ErrInvalidConfig, s.config.DHCPSubnetMask)
+	}
+
+	// Calculate broadcast IP
+	broadcastIP := calculateBroadcastIP(s.serverIP, subnetMask)
+
+	dhcpConfig := &DHCPConfig{
+		Interface:      dhcpInterface,
+		ServerIP:       s.serverIP,
+		BroadcastIP:    broadcastIP,
+		SubnetMask:     subnetMask.To4(),
+		RangeStart:     rangeStart.To4(),
+		RangeEnd:       rangeEnd.To4(),
+		LeaseTime:      s.config.DHCPLeaseTime,
+		TFTPServerName: s.config.TFTPServerName,
+		TFTPServerIP:   s.serverIP, // Use same IP for TFTP
+		BootFilename:   s.config.BootFilename,
+		IPXEScript:     s.config.IPXEScript,
+		UseRawSocket:   false,
+		RespondToAll:   s.config.DHCPRespondToAll,
+	}
+
+	// Optional fields
+	if s.config.DHCPGateway != "" {
+		dhcpConfig.Router = net.ParseIP(s.config.DHCPGateway).To4()
+	}
+
+	if s.config.DHCPDNS != "" {
+		dhcpConfig.DNSServers = []net.IP{net.ParseIP(s.config.DHCPDNS).To4()}
+	}
+
+	return dhcpConfig, nil
+}

@@ -1,0 +1,127 @@
+
+> webapp@0.1.0 test:e2e
+> playwright test --config=../test/integration/web/playwright.config.ts
+
+
+[Global Setup] Starting integration test setup...
+[Global Setup] Checking frontend at http://localhost:3000...
+[Global Setup] Frontend is accessible
+[Global Setup] Checking backend at https://localhost:8443...
+[Global Setup] Backend health check failed: TypeError: fetch failed
+    at node:internal/deps/undici/undici:15845:13
+    at processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at globalSetup (/home/jhahn/sources/go-trusted-platform/test/integration/web/global-setup.ts:37:22)
+    at Object.setup (/home/jhahn/sources/go-trusted-platform/web/node_modules/playwright/lib/runner/tasks.js:174:27)
+    at taskLoop (/home/jhahn/sources/go-trusted-platform/web/node_modules/playwright/lib/runner/taskRunner.js:62:11)
+    at TaskRunner.runDeferCleanup (/home/jhahn/sources/go-trusted-platform/web/node_modules/playwright/lib/runner/taskRunner.js:78:5)
+    at TaskRunner.run (/home/jhahn/sources/go-trusted-platform/web/node_modules/playwright/lib/runner/taskRunner.js:42:33)
+    at runTasks (/home/jhahn/sources/go-trusted-platform/web/node_modules/playwright/lib/runner/tasks.js:80:18)
+    at runAllTestsWithConfig (/home/jhahn/sources/go-trusted-platform/web/node_modules/playwright/lib/runner/testRunner.js:379:18)
+    at runTests (/home/jhahn/sources/go-trusted-platform/web/node_modules/playwright/lib/program.js:242:18)
+    at r.<anonymous> (/home/jhahn/sources/go-trusted-platform/web/node_modules/playwright/lib/program.js:70:7) {
+  [cause]: Error: unable to verify the first certificate; if the root CA is installed locally, try running Node.js with --use-system-ca
+      at TLSSocket.onConnectSecure (node:_tls_wrap:1631:34)
+      at TLSSocket.emit (node:events:508:28)
+      at TLSSocket._finishInit (node:_tls_wrap:1077:8)
+      at TLSWrap.ssl.onhandshakedone (node:_tls_wrap:863:12) {
+    code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE'
+  }
+}
+[Global Setup] Some tests may be skipped if backend is unavailable
+[Global Setup] Setup complete
+
+
+Running 123 tests using 2 workers
+
+  ✓    1 [chromium] › ../test/integration/web/api-integration.spec.ts:52:9 › API Integration - With Mocked Data › Users API › should handle users API error (1.5s)
+  ✓    2 [chromium] › ../test/integration/web/api-integration.spec.ts:22:9 › API Integration - With Mocked Data › Users API › should display users from API (1.9s)
+  ✓    3 [chromium] › ../test/integration/web/api-integration.spec.ts:80:9 › API Integration - With Mocked Data › Users API › should handle empty users list (1.7s)
+  ✓    4 [chromium] › ../test/integration/web/api-integration.spec.ts:108:9 › API Integration - With Mocked Data › Roles API › should display roles from API (1.6s)
+  ✓    5 [chromium] › ../test/integration/web/api-integration.spec.ts:128:9 › API Integration - With Mocked Data › Roles API › should handle roles API error (1.6s)
+  ✓    6 [chromium] › ../test/integration/web/api-integration.spec.ts:150:9 › API Integration - With Mocked Data › Tenant API › should display tenant info from API (1.3s)
+  ✓    7 [chromium] › ../test/integration/web/api-integration.spec.ts:186:9 › API Integration - With Mocked Data › Tenant API › should handle tenant API 401 unauthorized (1.5s)
+  ✓    8 [chromium] › ../test/integration/web/api-integration.spec.ts:209:9 › API Integration - With Mocked Data › Devices API › should display devices from API (1.5s)
+  ✓    9 [chromium] › ../test/integration/web/api-integration.spec.ts:229:9 › API Integration - With Mocked Data › Devices API › should handle devices API error (1.6s)
+  ✓   10 [chromium] › ../test/integration/web/api-integration.spec.ts:252:9 › API Integration - With Mocked Data › Certificates API › should display certificates from API (1.7s)
+  ✓   11 [chromium] › ../test/integration/web/api-integration.spec.ts:271:9 › API Integration - With Mocked Data › Certificates API › should handle certificates API 403 forbidden (1.8s)
+  ✓   12 [chromium] › ../test/integration/web/api-integration.spec.ts:294:9 › API Integration - With Mocked Data › KMS Keys API › should display keys from API (1.6s)
+  ✓   13 [chromium] › ../test/integration/web/api-integration.spec.ts:313:9 › API Integration - With Mocked Data › KMS Keys API › should handle keys API network error (1.7s)
+  ✓   15 [chromium] › ../test/integration/web/api-integration.spec.ts:397:9 › CRUD Operations › Delete Operations › should handle delete confirmation (1.6s)
+  ✘   16 [chromium] › ../test/integration/web/api-integration.spec.ts:444:7 › Real-time Updates › should refresh data after create (1.6s)
+  ✘   17 [chromium] › ../test/integration/web/api-integration.spec.ts:444:7 › Real-time Updates › should refresh data after create (retry #1) (2.1s)
+  ✓   18 [chromium] › ../test/integration/web/auth.spec.ts:12:9 › Authentication Flow › WebAuthn Page Access › should display WebAuthn authentication page at /auth/webauthn (593ms)
+  ✓   19 [chromium] › ../test/integration/web/auth.spec.ts:27:9 › Authentication Flow › WebAuthn Page Access › should display registration form by default (625ms)
+  ✓   20 [chromium] › ../test/integration/web/auth.spec.ts:34:9 › Authentication Flow › WebAuthn Page Access › should display login form when status=registered (556ms)
+  ✓   21 [chromium] › ../test/integration/web/auth.spec.ts:41:9 › Authentication Flow › WebAuthn Page Access › should toggle between registration and login forms (779ms)
+  ✓   22 [chromium] › ../test/integration/web/auth.spec.ts:58:9 › Authentication Flow › Protected Route Redirection › should redirect unauthenticated users from /dashboard to /auth/webauthn (615ms)
+  ✓   23 [chromium] › ../test/integration/web/auth.spec.ts:71:9 › Authentication Flow › Protected Route Redirection › should redirect unauthenticated users from /tenant to /auth/webauthn (620ms)
+  ✓   24 [chromium] › ../test/integration/web/auth.spec.ts:79:9 › Authentication Flow › Protected Route Redirection › should redirect unauthenticated users from /iam/users to /auth/webauthn (610ms)
+  ✓   25 [chromium] › ../test/integration/web/auth.spec.ts:87:9 › Authentication Flow › Protected Route Redirection › should redirect unauthenticated users from /devices to /auth/webauthn (612ms)
+  ✓   26 [chromium] › ../test/integration/web/auth.spec.ts:95:9 › Authentication Flow › Protected Route Redirection › should redirect unauthenticated users from /ca/certificates to /auth/webauthn (628ms)
+  ✓   27 [chromium] › ../test/integration/web/auth.spec.ts:103:9 › Authentication Flow › Protected Route Redirection › should redirect unauthenticated users from /kms to /auth/webauthn (618ms)
+  ✓   28 [chromium] › ../test/integration/web/auth.spec.ts:111:9 › Authentication Flow › Authenticated Access › should allow authenticated users to access /dashboard (818ms)
+  ✓   29 [chromium] › ../test/integration/web/auth.spec.ts:121:9 › Authentication Flow › Authenticated Access › should allow authenticated users to access /tenant (693ms)
+  ✓   30 [chromium] › ../test/integration/web/auth.spec.ts:126:9 › Authentication Flow › Authenticated Access › should allow authenticated users to access /iam/users (949ms)
+  ✓   31 [chromium] › ../test/integration/web/auth.spec.ts:133:9 › Authentication Flow › Form Validation › should show validation error for empty username on registration (585ms)
+  ✘   32 [chromium] › ../test/integration/web/auth.spec.ts:143:9 › Authentication Flow › Form Validation › should show validation error for empty username on login (10.6s)
+  ✘   33 [chromium] › ../test/integration/web/auth.spec.ts:143:9 › Authentication Flow › Form Validation › should show validation error for empty username on login (retry #1) (12.0s)
+  ✓   34 [chromium] › ../test/integration/web/auth.spec.ts:155:9 › Authentication Flow › Invitation Flow › should show invitation UI when invitation token is present (615ms)
+  ✓   35 [chromium] › ../test/integration/web/auth.spec.ts:166:7 › WebAuthn Virtual Authenticator › should detect WebAuthn support in browser (497ms)
+Platform authenticator available: [33mfalse[39m
+  ✓   36 [chromium] › ../test/integration/web/auth.spec.ts:177:7 › WebAuthn Virtual Authenticator › should detect platform authenticator availability (524ms)
+  ✓   37 [chromium] › ../test/integration/web/ca-kms.spec.ts:72:9 › CA - Certificates Page › Page Loading › should load certificates page (930ms)
+  ✓   38 [chromium] › ../test/integration/web/ca-kms.spec.ts:105:9 › CA - Certificates Page › Page Loading › should display certificates table or empty state (1.6s)
+  ✓   39 [chromium] › ../test/integration/web/ca-kms.spec.ts:139:9 › CA - Certificates Page › Page Loading › should have Issue Certificate button (1.6s)
+  ✓   40 [chromium] › ../test/integration/web/ca-kms.spec.ts:161:9 › CA - Certificates Page › Certificate Actions › should open issue certificate dialog (1.9s)
+  ✓   41 [chromium] › ../test/integration/web/ca-kms.spec.ts:191:9 › CA - Certificates Page › Certificate Actions › should close issue dialog on cancel (2.0s)
+  ✓   42 [chromium] › ../test/integration/web/ca-kms.spec.ts:221:9 › CA - Certificates Page › Error Handling › should display error state when API fails (1.6s)
+  ✓   43 [chromium] › ../test/integration/web/ca-kms.spec.ts:243:7 › CA - Certificate Requests Page › should load certificate requests page (850ms)
+  ✓   44 [chromium] › ../test/integration/web/ca-kms.spec.ts:266:7 › CA - Certificate Requests Page › should display requests or empty state (1.5s)
+  ✓   45 [chromium] › ../test/integration/web/ca-kms.spec.ts:294:7 › CA - Certificate Detail Page › should handle non-existent certificate gracefully (1.6s)
+  ✓   46 [chromium] › ../test/integration/web/ca-kms.spec.ts:316:9 › KMS - Keys Page › Page Loading › should load KMS keys page (1.0s)
+  ✘   14 [chromium] › ../test/integration/web/api-integration.spec.ts:331:9 › CRUD Operations › Create User Flow › should submit create user form (1.0m)
+  ✓   47 [chromium] › ../test/integration/web/ca-kms.spec.ts:342:9 › KMS - Keys Page › Page Loading › should display keys table or empty state (1.6s)
+  ✓   49 [chromium] › ../test/integration/web/ca-kms.spec.ts:373:9 › KMS - Keys Page › Page Loading › should have Generate Key button (1.7s)
+  ✓   50 [chromium] › ../test/integration/web/ca-kms.spec.ts:402:9 › KMS - Keys Page › Key Actions › should open generate key dialog (1.9s)
+  ✓   51 [chromium] › ../test/integration/web/ca-kms.spec.ts:439:9 › KMS - Keys Page › Key Actions › should have algorithm selection (1.8s)
+  ✓   52 [chromium] › ../test/integration/web/ca-kms.spec.ts:475:7 › KMS - Key Detail Page › should handle non-existent key gracefully (1.6s)
+  ✓   53 [chromium] › ../test/integration/web/dashboard.spec.ts:12:7 › Dashboard Layout › should render dashboard layout with sidebar (799ms)
+  ✓   54 [chromium] › ../test/integration/web/dashboard.spec.ts:24:7 › Dashboard Layout › should display dashboard statistics (1.5s)
+  ✓   55 [chromium] › ../test/integration/web/dashboard.spec.ts:36:7 › Dashboard Layout › should display page title (831ms)
+  ✓   56 [chromium] › ../test/integration/web/dashboard.spec.ts:46:7 › Sidebar Navigation › should navigate to IAM Users page (817ms)
+  ✓   57 [chromium] › ../test/integration/web/dashboard.spec.ts:57:7 › Sidebar Navigation › should navigate to IAM Roles page (857ms)
+  ✓   58 [chromium] › ../test/integration/web/dashboard.spec.ts:67:7 › Sidebar Navigation › should navigate to Devices page (813ms)
+  ✓   59 [chromium] › ../test/integration/web/dashboard.spec.ts:77:7 › Sidebar Navigation › should navigate to Certificates page (830ms)
+  ✓   60 [chromium] › ../test/integration/web/dashboard.spec.ts:89:7 › Sidebar Navigation › should navigate to KMS Keys page (857ms)
+  ✓   61 [chromium] › ../test/integration/web/dashboard.spec.ts:99:7 › Sidebar Navigation › should navigate to Tenant page (888ms)
+  ✓   62 [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Dashboard page without errors (1.1s)
+  ✓   63 [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Tenant Overview page without errors (698ms)
+  ✓   64 [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load IAM Users page without errors (1.0s)
+  ✓   65 [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load IAM Roles page without errors (972ms)
+  ✓   66 [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load IAM Permissions page without errors (997ms)
+  ✓   67 [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Devices page without errors (904ms)
+  ✓   68 [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Certificates page without errors (885ms)
+  ✓   69 [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Certificate Requests page without errors (940ms)
+  ✓   70 [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load KMS Keys page without errors (1.0s)
+  ✓   71 [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Attestation page without errors (888ms)
+  ✓   72 [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Platform Health page without errors (824ms)
+  ✓   73 [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Platform Logs page without errors (998ms)
+  ✓   74 [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load DNS page without errors (1.0s)
+  ✓   75 [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load SDN page without errors (1.1s)
+  ✓   76 [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Virtual Machines page without errors (913ms)
+  ✓   77 [chromium] › ../test/integration/web/dashboard.spec.ts:131:9 › Route Loading › should load Containers page without errors (1.2s)
+  ✓   78 [chromium] › ../test/integration/web/dashboard.spec.ts:162:7 › Header Navigation › should display user menu in header (853ms)
+  ✓   79 [chromium] › ../test/integration/web/dashboard.spec.ts:178:7 › Header Navigation › should have logout functionality (1.0s)
+  ✓   80 [chromium] › ../test/integration/web/dashboard.spec.ts:195:7 › Responsive Layout › should work on mobile viewport (745ms)
+  ✓   81 [chromium] › ../test/integration/web/dashboard.spec.ts:209:7 › Responsive Layout › should work on tablet viewport (1.0s)
+  ✓   82 [chromium] › ../test/integration/web/devices.spec.ts:63:9 › Devices Page › Page Loading › should load devices page (1.1s)
+  ✘   83 [chromium] › ../test/integration/web/devices.spec.ts:89:9 › Devices Page › Page Loading › should display devices table or empty state (1.8s)
+  ✘   84 [chromium] › ../test/integration/web/devices.spec.ts:89:9 › Devices Page › Page Loading › should display devices table or empty state (retry #1) (1.9s)
+  ✘   85 [chromium] › ../test/integration/web/devices.spec.ts:122:9 › Devices Page › Page Loading › should have Register Device button (11.6s)
+  ✘   48 [chromium] › ../test/integration/web/api-integration.spec.ts:331:9 › CRUD Operations › Create User Flow › should submit create user form (retry #1) (1.1m)
+  ✓   87 [chromium] › ../test/integration/web/devices.spec.ts:149:9 › Devices Page › Page Loading › should display filter controls (1.7s)
+  ✘   86 [chromium] › ../test/integration/web/devices.spec.ts:122:9 › Devices Page › Page Loading › should have Register Device button (retry #1) (12.9s)
+  ✓   88 [chromium] › ../test/integration/web/devices.spec.ts:186:9 › Devices Page › Device Filtering › should filter devices by search (2.2s)
+  ✓   89 [chromium] › ../test/integration/web/devices.spec.ts:260:9 › Devices Page › Device Filtering › should filter devices by status (1.5s)
+  ✓   90 [chromium] › ../test/integration/web/devices.spec.ts:222:9 › Devices Page › Device Filtering › should filter devices by type (1.7s)
+  ✓   91 [chromium] › ../test/integration/web/devices.spec.ts:297:9 › Devices Page › Device Filtering › should clear filters (1.5s)

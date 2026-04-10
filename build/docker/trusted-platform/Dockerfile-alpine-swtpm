@@ -1,0 +1,53 @@
+ARG BASE_IMAGE="alpine:latest"
+
+FROM $BASE_IMAGE
+
+ARG PLATFORMD="platformd"
+ARG MOUNT_POINT="/trusted-platform"
+ARG UID=1000
+ARG GID=1000
+ARG USER="tpadm"
+ARG GROUP="tpadm"
+ARG SOFTHSM_TAG=2.6.1
+
+LABEL maintainer="Jeremy Hahn <mail@jeremyhahn.com>"
+
+RUN apk update && \
+    apk upgrade && \
+    apk add --no-cache \
+        alpine-sdk \
+        autoconf \
+        automake \
+        bash \
+        git \
+        libtool \
+        libseccomp-dev \
+        openssl-dev \
+        p11-kit-dev \
+        sqlite-dev \
+        tpm2-tools \
+        opensc \
+        softhsm \ 
+        yubikey-manager \
+        swtpm \
+        sudo
+
+RUN addgroup --gid $GID $GROUP && \
+    adduser -u $UID -S $USER -G $GROUP && \
+    echo "tpadm ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+RUN mkdir $MOUNT_POINT && \
+    chmod 777 $MOUNT_POINT && \
+    chown -R $USER:$GROUP $MOUNT_POINT
+
+COPY platformd /usr/local/bin/platformd
+RUN chmod +x /usr/local/bin/platformd
+RUN chown tpadm:tpadm /usr/local/bin/platformd
+
+WORKDIR /trusted-platform
+
+USER $USER
+
+COPY --chown=root:root --chmod=755 entrypoint-swtpm.sh /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

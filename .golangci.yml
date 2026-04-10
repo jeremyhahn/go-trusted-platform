@@ -1,0 +1,140 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - ineffassign
+    - staticcheck
+    - unused
+
+  exclusions:
+    rules:
+      # Exclude errcheck from test files
+      - linters:
+          - errcheck
+        path: _test\.go
+      # Exclude errcheck from test environment utilities
+      - linters:
+          - errcheck
+        path: pkg/testenv/
+      # Exclude errcheck from CLI commands (thin wrappers with deferred cleanup)
+      - linters:
+          - errcheck
+        path: pkg/cli/
+      # Exclude errcheck from boot commands
+      - linters:
+          - errcheck
+        path: pkg/boot/
+      # Exclude errcheck for Close/Stop/Cleanup/Shutdown calls (cleanup patterns)
+      - linters:
+          - errcheck
+        text: "Error return value of `.+\\.(Close|Stop|Cleanup|Shutdown|Kill|Signal)` is not checked"
+      # Exclude errcheck for resp.Body.Close
+      - linters:
+          - errcheck
+        text: "Error return value of `resp\\.Body\\.Close` is not checked"
+      # Exclude errcheck for LUKS cleanup operations
+      - linters:
+          - errcheck
+        text: "Error return value of `luks2\\.(Lock|DetachLoopDevice)` is not checked"
+      # Exclude errcheck for lifecycle state transitions (fire-and-forget)
+      - linters:
+          - errcheck
+        text: "Error return value of `.+\\.SetState` is not checked"
+      # Exclude errcheck for viper flag binding
+      - linters:
+          - errcheck
+        text: "Error return value of `viper\\.Bind` is not checked"
+      # Exclude errcheck for OVS cleanup operations
+      - linters:
+          - errcheck
+        text: "Error return value of `nm\\.ovs\\.Delete` is not checked"
+      # Exclude errcheck for policy engine load/unload (cleanup)
+      - linters:
+          - errcheck
+        text: "Error return value of `we\\.engine\\.(Load|Unload)Policy` is not checked"
+      # Exclude errcheck for viper.BindPFlag/BindPFlags
+      - linters:
+          - errcheck
+        text: "Error return value of `viper\\.BindP"
+      # Exclude errcheck for rand.Read (panics on failure)
+      - linters:
+          - errcheck
+        text: "Error return value of `rand\\.Read` is not checked"
+      # Exclude errcheck for IPAM pool updates (fire-and-forget in cleanup)
+      - linters:
+          - errcheck
+        text: "Error return value of `d\\.(UpdatePool|client\\.(Delete|Put))` is not checked"
+      # Exclude errcheck for OVS delete operations (cleanup)
+      - linters:
+          - errcheck
+        text: "Error return value of `nm\\."
+      # Exclude errcheck for container manager operations (cleanup)
+      - linters:
+          - errcheck
+        text: "Error return value of `o\\.podmanManager\\."
+      # Exclude errcheck for misc cleanup
+      - linters:
+          - errcheck
+        text: "Error return value of `(server\\.router\\.Walk|f\\.Seek|filepath\\.WalkDir|app\\.InitPlatformKeyStore)` is not checked"
+
+  settings:
+    errcheck:
+      check-type-assertions: false
+      check-blank: false
+      exclude-functions:
+        # IO close
+        - (*os.File).Close
+        - (*net.TCPConn).Close
+        - (*net.UDPConn).Close
+        - (*net.UnixConn).Close
+        - (*net.TCPListener).Close
+        - (*net.UnixListener).Close
+        - (*net/http.Response).Body.Close
+        # HTTP response writing
+        - (net/http.ResponseWriter).Write
+        - (*encoding/json.Encoder).Encode
+        # OS operations
+        - os.Remove
+        - os.RemoveAll
+        - os.MkdirAll
+        - os.Setenv
+        - os.Unsetenv
+        - os.WriteFile
+        - os.Chmod
+        - os.Chdir
+        # Exec
+        - (*os/exec.Cmd).Run
+        - (*os/exec.Cmd).Wait
+        # Process signals
+        - (*os.Process).Kill
+        - (*os.Process).Signal
+        # Syscall
+        - syscall.Unmount
+        # Cobra/Viper
+        - (*github.com/spf13/cobra.Command).MarkFlagRequired
+        # Color output
+        - (*github.com/fatih/color.Color).Printf
+        - (*github.com/fatih/color.Color).Println
+        - (*github.com/fatih/color.Color).Fprintf
+        - fmt.Fprintf
+        - fmt.Printf
+        - fmt.Println
+        # Crypto random
+        - rand.Read
+        - io.ReadFull
+        # Scanf
+        - fmt.Sscanf
+        # Filepath
+        - filepath.WalkDir
+
+    staticcheck:
+      checks:
+        - "SA*"
+        - "S1*"
+        - "QF*"
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

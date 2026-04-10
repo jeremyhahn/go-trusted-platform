@@ -1,0 +1,76 @@
+# Dockerfile for Raft cluster node
+# Extends go-trusted-platform-dev with cluster-specific tooling and entrypoint
+#
+# This image provides:
+# - QuicBaaS/Raft node initialization
+# - Health check endpoints
+# - Cluster management utilities
+#
+# Usage:
+#   docker build -t cluster-node -f Dockerfile.node .
+#   docker run --name node1 -e NODE_ID=1 -e RAFT_PORT=7001 cluster-node
+
+ARG BASE_IMAGE=go-trusted-platform-dev:latest
+FROM ${BASE_IMAGE}
+
+LABEL maintainer="Jeremy Hahn <mail@jeremyhahn.com>"
+LABEL description="QuicBaaS/Raft cluster node for go-trusted-platform integration testing"
+
+# Install additional cluster tooling
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Network utilities for health checks
+    netcat-openbsd \
+    # Process management
+    procps \
+    # JSON processing for API responses
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create cluster data directories
+RUN mkdir -p \
+    /data/quicbaas \
+    /data/quicbaas/wal \
+    /data/cluster \
+    /var/log/cluster \
+    /var/run/cluster
+
+# Set permissions
+RUN chmod -R 755 /data /var/log/cluster /var/run/cluster
+
+# Copy the cluster node entrypoint script
+COPY cluster-node-entrypoint.sh /usr/local/bin/cluster-node-entrypoint.sh
+RUN chmod +x /usr/local/bin/cluster-node-entrypoint.sh
+
+# Environment defaults
+ENV NODE_ID=1 \
+    NODE_NAME="cluster-node" \
+    RAFT_PORT=7001 \
+    API_PORT=8001 \
+    RAFT_ADDRESS="" \
+    CLUSTER_PEERS="" \
+    IS_BOOTSTRAP="false" \
+    QUICBAAS_DATA_DIR="/data/quicbaas" \
+    QUICBAAS_WAL_DIR="/data/quicbaas/wal" \
+    QUICBAAS_CACHE_SIZE="67108864" \
+    QUICBAAS_SYNC_WRITES="true" \
+    QUICBAAS_COMPRESSION="snappy" \
+    HEARTBEAT_INTERVAL_MS="100" \
+    ELECTION_TIMEOUT_MS="1000" \
+    SNAPSHOT_INTERVAL_SEC="300" \
+    SNAPSHOT_THRESHOLD="10000" \
+    LOG_LEVEL="info" \
+    LOG_FORMAT="json" \
+    GOPATH=/go \
+    CGO_ENABLED=1
+
+# Expose Raft and API ports
+EXPOSE 7001-7003 8001-8003
+
+# Health check using netcat to verify Raft port
+HEALTHCHECK --interval=5s --timeout=3s --start-period=10s --retries=5 \
+    CMD nc -z localhost ${RAFT_PORT} || exit 1
+
+WORKDIR /workspace
+
+ENTRYPOINT ["/usr/local/bin/cluster-node-entrypoint.sh"]
+CMD ["node"]

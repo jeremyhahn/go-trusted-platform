@@ -1,0 +1,153 @@
+# Integration Test Configuration
+#
+# Minimal production-style config for integration tests.
+# Used by run-integration-tests.sh to start a real platformd instance.
+# No webservices section (daemon-only mode with all protocol APIs).
+
+debug: true
+debug-secrets: true
+platform-dir: /tmp/platformd-integration
+config-dir: /etc/trusted-platform
+log-dir: /tmp/platformd-integration/log
+ca-dir: /tmp/platformd-integration/ca
+
+# Domain for test certificates
+domain: localhost
+
+# =============================================================================
+# QUICBAAS CONFIGURATION (Embedded, PebbleDB backend)
+# =============================================================================
+
+quicbaas:
+  data-dir: /tmp/platformd-integration/quicbaas
+  node-id: 1
+  cache-size: 67108864
+  log-level: warn
+  consistency-level: linearizable
+
+# =============================================================================
+# CERTIFICATE AUTHORITY CONFIGURATION (Software-only, no TPM)
+# =============================================================================
+
+certificate-authority:
+  platform-ca: 1
+  auto-import-issuing-ca: true
+  system-cert-pool: false
+  default-validity: 365
+  default-idevid-cn: test-device-id
+  sans-include-localhost: true
+  require-password: true
+  identity:
+    - # Root Certificate Authority
+      is-root: true
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          platform-policy: true
+      keys:
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: "123456"
+          platform-policy: true
+          debug: true
+
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: "123456"
+          platform-policy: true
+          debug: true
+
+      valid: 50
+      subject:
+        cn: root-ca.localhost
+        organization: Trusted Platform Integration Tests
+        country: US
+        province: Test
+        locality: Test
+        address: 123 Test Street
+        postal-code: 12345
+      sans:
+        dns:
+          - root-ca.localhost
+        email:
+          - test@localhost
+
+    - # Intermediate Certificate Authority
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          platform-policy: true
+      keys:
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: "123456"
+          platform-policy: true
+          debug: true
+
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: "123456"
+          platform-policy: true
+          debug: true
+
+      valid: 10
+      subject:
+        cn: ca01.localhost
+        organization: Trusted Platform Integration Tests
+        country: US
+        province: Test
+        locality: Test
+        address: 123 Test Street
+        postal-code: 12345
+      sans:
+        dns:
+          - ca01.localhost
+          - ca.localhost
+        email:
+          - test@localhost
+
+# =============================================================================
+# vTPM CONFIGURATION
+# =============================================================================
+
+vtpm:
+  base-dir: /tmp/platformd-integration/vtpm
+  pcr-banks:
+    - sha256
+  ek-algorithm: RSA
+  secure-boot-key-size: 2048
+  secure-boot-valid-years: 10
+  secure-boot-common-name: Trusted Platform Integration Tests
+  secure-boot-organization: Trusted Platform Integration Tests
+  debug: true
+
+# =============================================================================
+# PASSWORD HASHING (Argon2) - Fast settings for tests
+# =============================================================================
+
+argon2:
+  memory: 1
+  iterations: 1
+  parallelism: 1
+  saltLen: 16
+  keyLen: 32

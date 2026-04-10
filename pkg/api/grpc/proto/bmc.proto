@@ -1,0 +1,211 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+
+// BMCService provides baseboard management controller operations for
+// bare metal provisioning via IPMI 2.0 and Redfish.
+service BMCService {
+  // Power management
+  rpc PowerOn(BMCPowerRequest) returns (BMCPowerResponse);
+  rpc PowerOff(BMCPowerRequest) returns (BMCPowerResponse);
+  rpc PowerReset(BMCPowerRequest) returns (BMCPowerResponse);
+  rpc PowerCycle(BMCPowerRequest) returns (BMCPowerResponse);
+  rpc PowerStatus(BMCPowerStatusRequest) returns (BMCPowerStatusResponse);
+
+  // Boot device control
+  rpc SetBootDevice(BMCSetBootDeviceRequest) returns (BMCSetBootDeviceResponse);
+  rpc GetBootDevice(BMCGetBootDeviceRequest) returns (BMCGetBootDeviceResponse);
+
+  // Virtual media
+  rpc MountISO(BMCMountISORequest) returns (BMCMountISOResponse);
+  rpc UnmountISO(BMCUnmountISORequest) returns (BMCUnmountISOResponse);
+  rpc VirtualMediaStatus(BMCVirtualMediaStatusRequest) returns (BMCVirtualMediaStatusResponse);
+
+  // Monitoring
+  rpc GetSensors(BMCGetSensorsRequest) returns (BMCGetSensorsResponse);
+  rpc GetSystemInfo(BMCGetSystemInfoRequest) returns (BMCGetSystemInfoResponse);
+
+  // Orchestrated provisioning
+  rpc Provision(BMCProvisionRequest) returns (BMCProvisionResponse);
+  rpc ProvisionStatus(BMCProvisionStatusRequest) returns (BMCProvisionStatusResponse);
+}
+
+// BMCPowerState represents the power state of a BMC-managed system.
+enum BMCPowerState {
+  BMC_POWER_STATE_UNSPECIFIED = 0;
+  BMC_POWER_STATE_ON = 1;
+  BMC_POWER_STATE_OFF = 2;
+  BMC_POWER_STATE_UNKNOWN = 3;
+}
+
+// BMCBootDevice represents the boot device for a BMC-managed system.
+enum BMCBootDevice {
+  BMC_BOOT_DEVICE_UNSPECIFIED = 0;
+  BMC_BOOT_DEVICE_PXE = 1;
+  BMC_BOOT_DEVICE_DISK = 2;
+  BMC_BOOT_DEVICE_CDROM = 3;
+  BMC_BOOT_DEVICE_VIRTUAL_MEDIA = 4;
+  BMC_BOOT_DEVICE_NONE = 5;
+}
+
+// BMCProvisioningStatus represents the provisioning workflow state.
+enum BMCProvisioningStatus {
+  BMC_PROVISIONING_STATUS_UNSPECIFIED = 0;
+  BMC_PROVISIONING_STATUS_PENDING = 1;
+  BMC_PROVISIONING_STATUS_CONNECTING = 2;
+  BMC_PROVISIONING_STATUS_SETTING_BOOT = 3;
+  BMC_PROVISIONING_STATUS_MOUNTING_ISO = 4;
+  BMC_PROVISIONING_STATUS_POWERING_ON = 5;
+  BMC_PROVISIONING_STATUS_INSTALLING = 6;
+  BMC_PROVISIONING_STATUS_FINALIZING = 7;
+  BMC_PROVISIONING_STATUS_COMPLETE = 8;
+  BMC_PROVISIONING_STATUS_FAILED = 9;
+}
+
+// Power messages
+
+// BMCPowerRequest identifies the device profile for a power operation.
+message BMCPowerRequest {
+  uint64 profile_id = 1;
+}
+
+// BMCPowerResponse reports the previous and current power states.
+message BMCPowerResponse {
+  BMCPowerState previous_state = 1;
+  BMCPowerState current_state = 2;
+}
+
+// BMCPowerStatusRequest identifies the device profile for a power status query.
+message BMCPowerStatusRequest {
+  uint64 profile_id = 1;
+}
+
+// BMCPowerStatusResponse reports the current power state.
+message BMCPowerStatusResponse {
+  BMCPowerState state = 1;
+}
+
+// Boot device messages
+
+// BMCSetBootDeviceRequest sets the boot device for a device profile.
+message BMCSetBootDeviceRequest {
+  uint64 profile_id = 1;
+  BMCBootDevice device = 2;
+  bool persistent = 3;
+}
+
+// BMCSetBootDeviceResponse confirms the boot device was set.
+message BMCSetBootDeviceResponse {
+  BMCBootDevice device = 1;
+}
+
+// BMCGetBootDeviceRequest queries the current boot device for a device profile.
+message BMCGetBootDeviceRequest {
+  uint64 profile_id = 1;
+}
+
+// BMCGetBootDeviceResponse reports the current boot device.
+message BMCGetBootDeviceResponse {
+  BMCBootDevice device = 1;
+}
+
+// Virtual media messages
+
+// BMCMountISORequest mounts an ISO image via virtual media.
+message BMCMountISORequest {
+  uint64 profile_id = 1;
+  string iso_url = 2;
+}
+
+// BMCMountISOResponse confirms the ISO was mounted.
+message BMCMountISOResponse {
+  bool mounted = 1;
+}
+
+// BMCUnmountISORequest unmounts virtual media from a device profile.
+message BMCUnmountISORequest {
+  uint64 profile_id = 1;
+}
+
+// BMCUnmountISOResponse confirms the ISO was unmounted.
+message BMCUnmountISOResponse {}
+
+// BMCVirtualMediaStatusRequest queries virtual media status for a device profile.
+message BMCVirtualMediaStatusRequest {
+  uint64 profile_id = 1;
+}
+
+// BMCVirtualMediaStatusResponse reports the current virtual media status.
+message BMCVirtualMediaStatusResponse {
+  bool mounted = 1;
+  string image_url = 2;
+  string media_type = 3;
+}
+
+// Sensor messages
+
+// BMCSensorReading represents a single sensor reading from the BMC.
+message BMCSensorReading {
+  string name = 1;
+  double value = 2;
+  string units = 3;
+  string status = 4;
+}
+
+// BMCGetSensorsRequest queries sensor readings for a device profile.
+message BMCGetSensorsRequest {
+  uint64 profile_id = 1;
+}
+
+// BMCGetSensorsResponse reports all sensor readings.
+message BMCGetSensorsResponse {
+  repeated BMCSensorReading sensors = 1;
+}
+
+// System info messages
+
+// BMCGetSystemInfoRequest queries system information for a device profile.
+message BMCGetSystemInfoRequest {
+  uint64 profile_id = 1;
+}
+
+// BMCGetSystemInfoResponse reports hardware and firmware information.
+message BMCGetSystemInfoResponse {
+  string manufacturer = 1;
+  string product = 2;
+  string serial_number = 3;
+  string firmware_version = 4;
+  string bios_version = 5;
+  BMCPowerState power_state = 6;
+}
+
+// Provisioning messages
+
+// BMCProvisionRequest initiates an orchestrated bare metal provisioning workflow.
+message BMCProvisionRequest {
+  uint64 profile_id = 1;
+  string iso_url = 2;
+}
+
+// BMCProvisionResponse reports the provisioning workflow status.
+message BMCProvisionResponse {
+  string provision_id = 1;
+  BMCProvisioningStatus status = 2;
+}
+
+// BMCProvisionStatusRequest queries the provisioning status for a device profile.
+message BMCProvisionStatusRequest {
+  uint64 profile_id = 1;
+}
+
+// BMCProvisionStatusResponse reports the current provisioning workflow status.
+message BMCProvisionStatusResponse {
+  BMCProvisioningStatus status = 1;
+  string message = 2;
+  google.protobuf.Timestamp started_at = 3;
+  google.protobuf.Timestamp updated_at = 4;
+}

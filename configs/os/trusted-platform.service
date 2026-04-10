@@ -1,0 +1,76 @@
+# /lib/systemd/system/trusted-platform.service
+# Trusted Platform :: Trusted / Confidential Computing Platform
+# Platform daemon with web services (config-driven)
+
+[Unit]
+Description=Trusted Platform Daemon
+Documentation=file:///usr/share/doc/trusted-platform/serve.md
+After=network-online.target platformd.service
+Wants=network-online.target
+ConditionVirtualization=!container
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+WorkingDirectory=/var/lib/trusted-platform
+
+# Environment file for runtime configuration (set during install)
+EnvironmentFile=-/etc/trusted-platform/platformd.env
+
+# ExecStart uses environment variable for optional debug flag
+# PLATFORMD_DEBUG will be set to "--debug" or empty based on install options
+# Platform directories are explicitly set to match installer configuration
+ExecStart=/usr/local/bin/platformd serve --platform-dir=/var/lib/trusted-platform --config-dir=/etc/trusted-platform --log-dir=/var/log/trusted-platform ${PLATFORMD_DEBUG}
+
+# Process management
+Restart=on-failure
+RestartSec=5s
+StartLimitInterval=60s
+StartLimitBurst=3
+
+# Standard output/error to journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=platformd
+
+# Security: Keep UID/GID privileges (required for TPM and privileged operations)
+PrivateUsers=no
+
+# Security: Use strict service isolation
+PrivateTmp=yes
+PrivateDevices=no
+PrivateNetwork=no
+NoNewPrivileges=true
+
+# Security: Protect system directories (with exceptions for required paths)
+ProtectSystem=strict
+ProtectHome=yes
+
+# Security: Read-only paths
+ReadOnlyPaths=/etc/ssl/certs /usr/share/ca-certificates /sys/kernel/security
+
+# Security: Read-write paths (required for operation)
+ReadWritePaths=/var/lib/trusted-platform /var/log/trusted-platform /etc/trusted-platform
+
+# TPM access
+PrivateDevices=no
+DeviceAllow=/dev/tpm0 rw
+DeviceAllow=/dev/tpmrm0 rw
+
+# Capability restrictions (TPM and system operations)
+AmbientCapabilities=CAP_SYS_ADMIN CAP_DAC_OVERRIDE
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE
+
+# Security: System call filtering
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Memory/resource limits
+MemoryAccounting=yes
+MemoryMax=512M
+TasksMax=2048
+
+[Install]
+WantedBy=multi-user.target

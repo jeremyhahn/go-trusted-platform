@@ -1,0 +1,121 @@
+/* WebAuthnUI.module.css */
+
+.container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh; /* Full viewport height to center vertically */
+  background: none; /* Remove background */
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.card {
+  background-color: #ffffff;
+  padding: 40px 30px;
+  border-radius: 12px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+  max-width: 400px;
+  width: 100%;
+  text-align: center;
+}
+
+.title {
+  font-size: 24px;
+  font-weight: 700;
+  margin-bottom: 15px;
+  color: #333333;
+}
+
+.message {
+  font-size: 16px;
+  color: #555555;
+  margin-bottom: 25px;
+}
+
+.inputField {
+  width: 100%;
+  padding: 14px 20px;
+  margin: 10px 0 20px 0;
+  border-radius: 8px;
+  border: 1px solid #cccccc;
+  font-size: 16px;
+  transition: border-color 0.3s ease;
+  box-sizing: border-box;
+}
+
+.inputField:focus {
+  border-color: #007bff;
+  outline: none;
+}
+
+.button {
+  width: 100%;
+  padding: 14px 20px;
+  margin: 10px 0;
+  border-radius: 8px;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  background-color: #007bff;
+  color: #ffffff;
+}
+
+.button:disabled {
+  background-color: #a0c5f7;
+  cursor: not-allowed;
+}
+
+.clickableText {
+  color: #007bff;
+  cursor: pointer;
+  font-size: 16px;
+  text-decoration: none;
+  margin-top: 15px;
+}
+
+.clickableText:hover {
+  color: #0056b3;
+}
+
+.errorMessage {
+  color: #d9534f;
+  font-size: 14px;
+  margin-bottom: 15px;
+}
+
+.successMessage {
+  color: #28a745;
+  font-size: 14px;
+  margin-bottom: 15px;
+}
+
+/* Responsive Design */
+@media (max-width: 480px) {
+  .card {
+    padding: 30px 20px;
+    margin: 30px auto;
+  }
+
+  .title {
+    font-size: 20px;
+  }
+
+  .message {
+    font-size: 14px;
+  }
+
+  .inputField {
+    padding: 14px 20px;
+    font-size: 14px;
+  }
+
+  .button {
+    font-size: 16px;
+    padding: 14px 20px;
+  }
+
+  .clickableText {
+    font-size: 14px;
+  }
+}

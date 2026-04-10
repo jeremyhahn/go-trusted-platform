@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  compute-test:
+    build:
+      context: ../../../build/docker/devcontainer
+      dockerfile: Dockerfile
+    container_name: go-trusted-platform-compute-test
+    hostname: compute-test
+    privileged: true
+    network_mode: host
+
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+      - SYS_MODULE
+      - IPC_LOCK
+      - SETFCAP
+
+    devices:
+      - /dev/net/tun:/dev/net/tun
+      - /dev/kvm:/dev/kvm
+
+    volumes:
+      - ../../../:/workspace
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+      - ovs-db:/var/run/openvswitch
+      - ovs-log:/var/log/openvswitch
+      - swtpm-data:/var/lib/swtpm
+      - qemu-images:/var/lib/qemu
+
+    environment:
+      - CGO_ENABLED=1
+      - GOCACHE=/tmp/go-cache
+      - GOPATH=/go
+      - AUTO_START_OVS=true
+      - INTEGRATION_TEST=1
+      - QEMU_ENABLE_KVM=true
+
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    shm_size: '4gb'
+
+    working_dir: /workspace/test/integration/compute
+
+    command: >
+      sh -c "
+        echo 'Waiting for OVS to start...';
+        sleep 5;
+        echo 'Running compute integration tests...';
+        go test -v -timeout 30m ./...
+      "
+
+volumes:
+  ovs-db:
+  ovs-log:
+  swtpm-data:
+  qemu-images:

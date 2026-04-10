@@ -1,0 +1,444 @@
+# CA Architecture
+
+This document describes the Certificate Authority architecture, including the
+CA hierarchy, certificate types, and key storage integration.
+
+## Architecture Overview
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│                        CA Architecture                            │
+├───────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  Application Layer                                                │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │ platformctl ca  │ ACME Client │ platformd    │ Web Server  │  │
+│  └────────┬────────┴──────┬──────┴──────┬───────┴──────┬──────┘  │
+│           │               │             │              │          │
+│           └───────────────┴─────────────┴──────────────┘          │
+│                                  │                                │
+│  Service Layer                   │                                │
+│  ┌───────────────────────────┬───┴───┬───────────────────────────┐│
+│  │                        CA Service                             ││
+│  │  ┌────────────────────────────────────────────────────────┐  ││
+│  │  │ Certificate    │ CRL/OCSP    │ ACME       │ Validation │  ││
+│  │  │ Management     │ Management  │ Handler    │ Engine     │  ││
+│  │  └────────────────────────────────────────────────────────┘  ││
+│  └───────────────────────────────────────────────────────────────┘│
+│                                  │                                │
+│  Crypto Layer                    │                                │
+│  ┌───────────────────────────┬───┴───┬───────────────────────────┐│
+│  │                    Signer/Verifier                            ││
+│  │  ┌────────────────────────────────────────────────────────┐  ││
+│  │  │ go-trusted-ca Package                                  │  ││
+│  │  └────────┬───────────────────┬───────────────────┬───────┘  ││
+│  │           │                   │                   │          ││
+│  └───────────────────────────────────────────────────────────────┘│
+│              │                   │                   │            │
+│  Key Storage │                   │                   │            │
+│  ┌───────────┼───────────────────┼───────────────────┼──────────┐│
+│  │           ▼                   ▼                   ▼          ││
+│  │  ┌────────┴──────┐   ┌────────┴──────┐   ┌────────┴──────┐  ││
+│  │  │  TPM Backend  │   │ PKCS#11 Backend│   │  SW Backend   │  ││
+│  │  │  (go-xkms)│   │  (go-xkms) │   │ (go-xkms) │  ││
+│  │  └───────────────┘   └────────────────┘   └───────────────┘  ││
+│  └───────────────────────────────────────────────────────────────┘│
+│                                                                   │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+## CA Hierarchy Diagram
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│                        Trust Hierarchy                            │
+├───────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│                        [Trust Anchor]                             │
+│                             │                                     │
+│                    ┌────────┴────────┐                            │
+│                    │    Root CA      │                            │
+│                    │  (Offline/HSM)  │                            │
+│                    └────────┬────────┘                            │
+│                             │                                     │
+│         ┌───────────────────┼───────────────────┐                 │
+│         │                   │                   │                 │
+│         ▼                   ▼                   ▼                 │
+│  ┌──────┴──────┐     ┌──────┴──────┐     ┌──────┴──────┐         │
+│  │ TLS/Web CA  │     │ Device CA   │     │ Identity CA │         │
+│  │ (Online)    │     │ (IDevID)    │     │ (User/Svc)  │         │
+│  └──────┬──────┘     └──────┬──────┘     └──────┬──────┘         │
+│         │                   │                   │                 │
+│    ┌────┴────┐         ┌────┴────┐         ┌────┴────┐           │
+│    │         │         │         │         │         │           │
+│    ▼         ▼         ▼         ▼         ▼         ▼           │
+│  ┌───┐   ┌──────┐   ┌──────┐ ┌──────┐   ┌──────┐ ┌──────┐       │
+│  │TLS│   │mTLS  │   │IDevID│ │IAK   │   │User  │ │Service│      │
+│  │Srv│   │Client│   │      │ │      │   │      │ │      │       │
+│  └───┘   └──────┘   └──────┘ └──────┘   └──────┘ └──────┘       │
+│                                                                   │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+## Certificate Types
+
+### Root CA Certificate
+
+| Attribute            | Value                                    |
+|----------------------|------------------------------------------|
+| Subject CN           | Trusted Platform Root CA                 |
+| Key Usage            | keyCertSign, cRLSign                     |
+| Basic Constraints    | CA:TRUE, pathlen:1                       |
+| Validity             | 10-20 years                              |
+| Key Algorithm        | RSA-4096 or ECDSA P-384                  |
+| Key Storage          | HSM or offline TPM                       |
+
+### Intermediate CA Certificate
+
+| Attribute            | Value                                    |
+|----------------------|------------------------------------------|
+| Subject CN           | Trusted Platform [Purpose] CA            |
+| Key Usage            | keyCertSign, cRLSign                     |
+| Basic Constraints    | CA:TRUE, pathlen:0                       |
+| Validity             | 5-10 years                               |
+| Key Algorithm        | RSA-3072/4096 or ECDSA P-256/384         |
+| Key Storage          | TPM or PKCS#11 HSM                       |
+
+### TLS Server Certificate
+
+| Attribute            | Value                                    |
+|----------------------|------------------------------------------|
+| Subject CN           | server.example.com                       |
+| Key Usage            | digitalSignature, keyEncipherment        |
+| Extended Key Usage   | serverAuth                               |
+| SAN                  | DNS names, IP addresses                  |
+| Validity             | 90-365 days                              |
+| Key Algorithm        | ECDSA P-256 or RSA-2048                  |
+
+### IDevID Certificate
+
+| Attribute            | Value                                    |
+|----------------------|------------------------------------------|
+| Subject CN           | Device serial number                     |
+| Key Usage            | digitalSignature                         |
+| Extended Key Usage   | clientAuth, id-kp-cmcRA                  |
+| TCG OIDs             | tcg-at-tpmManufacturer, tcg-at-tpmModel  |
+| Validity             | Device lifetime                          |
+| Key Algorithm        | ECDSA P-256 (TPM-bound)                  |
+
+## Key Storage Integration
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│                      Key Storage Backends                         │
+├───────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  go-xkms Unified Interface                                    │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │  KeyStore Interface                                         │  │
+│  │  ┌────────────────────────────────────────────────────────┐│  │
+│  │  │ Create() │ Get() │ Sign() │ Verify() │ Delete()        ││  │
+│  │  └────────────────────────────────────────────────────────┘│  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                                                                   │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐ │
+│  │   TPM Backend    │  │  PKCS#11 Backend │  │ Software Backend │ │
+│  ├──────────────────┤  ├──────────────────┤  ├──────────────────┤ │
+│  │                  │  │                  │  │                  │ │
+│  │ • Hardware keys  │  │ • HSM keys       │  │ • File-based     │ │
+│  │ • PCR binding    │  │ • Smartcards     │  │ • Dev/test       │ │
+│  │ • Attestation    │  │ • Enterprise HSM │  │ • Encrypted      │ │
+│  │                  │  │                  │  │                  │ │
+│  └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘ │
+│           │                     │                     │           │
+│           ▼                     ▼                     ▼           │
+│  ┌────────┴─────────┐  ┌────────┴─────────┐  ┌────────┴─────────┐ │
+│  │ /dev/tpmrm0      │  │ PKCS#11 Library  │  │ ${platform-dir}/ │ │
+│  │ TPM 2.0 Device   │  │ (SoftHSM, Luna)  │  │ keys/            │ │
+│  └──────────────────┘  └──────────────────┘  └──────────────────┘ │
+│                                                                   │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+### Key Configuration
+
+```yaml
+# CA key storage configuration
+certificate-authority:
+  platform-ca: 1
+  identity:
+    - # Root CA
+      key-algorithm: ECDSA
+      key-size: 384
+      keystore-type: tpm2           # software, tpm2, pkcs11
+      keystores:
+        tpm2:
+          srk-handle: 0x81000001
+          srk-auth: "123456"
+          platform-policy: true
+      keys:
+        - algorithm: ECDSA
+          ecc:
+            curve: P-384
+          signature-algorithm: ECDSA-SHA384
+          hash: SHA-384
+          store: tpm2
+          password: "123456"
+          platform-policy: true
+      valid: 20
+      subject:
+        cn: root-ca.example.com
+        organization: Example Corp
+        country: US
+      sans:
+        dns:
+          - root-ca.example.com
+
+    - # TLS CA (Intermediate)
+      key-algorithm: RSA
+      key-size: 4096
+      keystore-type: pkcs11
+      keystores:
+        pkcs11:
+          library: /usr/lib/softhsm/libsofthsm2.so
+          slot: 0
+          label: TLS-CA-Key
+          pin: "123456"
+          platform-policy: true
+      keys:
+        - algorithm: RSA
+          rsa:
+            size: 4096
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: pkcs11
+          password: "123456"
+          platform-policy: true
+      valid: 10
+      subject:
+        cn: tls-ca.example.com
+        organization: Example Corp
+        country: US
+      sans:
+        dns:
+          - tls-ca.example.com
+
+    - # Device CA (Intermediate)
+      key-algorithm: ECDSA
+      key-size: 256
+      keystore-type: tpm2
+      keystores:
+        tpm2:
+          srk-handle: 0x81000001
+          srk-auth: "123456"
+          platform-policy: true
+      keys:
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: "123456"
+          platform-policy: true
+      valid: 10
+      subject:
+        cn: device-ca.example.com
+        organization: Example Corp
+        country: US
+      sans:
+        dns:
+          - device-ca.example.com
+```
+
+## Certificate Issuance Flow
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│                   Certificate Issuance Flow                       │
+├───────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  1. Certificate Request                                           │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │ Client                          CA Service                  │  │
+│  │                                                             │  │
+│  │ Generate Key    ─────▶                                      │  │
+│  │ (TPM/SW)                                                    │  │
+│  │                                                             │  │
+│  │ Create CSR      ─────▶   Validate Request                   │  │
+│  │ (PKCS#10)                • Subject name                     │  │
+│  │                          • Key usage                        │  │
+│  │                          • Policy compliance                │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                                                                   │
+│  2. Certificate Generation                                        │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │ CA Service                                                  │  │
+│  │                                                             │  │
+│  │ Build TBS Certificate                                       │  │
+│  │ • Subject from CSR                                          │  │
+│  │ • Issuer from CA cert                                       │  │
+│  │ • Serial number                                             │  │
+│  │ • Validity period                                           │  │
+│  │ • Extensions                                                │  │
+│  │                                                             │  │
+│  │ Sign TBS        ─────▶   KeyStore.Sign()                    │  │
+│  │                          (TPM/PKCS11/SW)                    │  │
+│  │                                                             │  │
+│  │ Encode Certificate                                          │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                                                                   │
+│  3. Certificate Delivery                                          │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │ CA Service                       Client                     │  │
+│  │                                                             │  │
+│  │ Store in CA DB  ─────▶                                      │  │
+│  │                                                             │  │
+│  │ Return Cert     ─────▶   Store Certificate                  │  │
+│  │ (PEM/DER)                (KeyStore)                         │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                                                                   │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+## Revocation Architecture
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│                   Revocation Infrastructure                       │
+├───────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  CRL Distribution                                                 │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │ CA Service                                                  │  │
+│  │                                                             │  │
+│  │ Certificate Revoked                                         │  │
+│  │       │                                                     │  │
+│  │       ▼                                                     │  │
+│  │ Update CRL Database                                         │  │
+│  │       │                                                     │  │
+│  │       ▼                                                     │  │
+│  │ Generate New CRL ───▶ Sign with CA Key                      │  │
+│  │       │                                                     │  │
+│  │       ▼                                                     │  │
+│  │ Publish to CDP (CRL Distribution Point)                     │  │
+│  │   • HTTP endpoint                                           │  │
+│  │   • File system                                             │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                                                                   │
+│  OCSP Responder                                                   │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │ Client          OCSP Responder          CA Database         │  │
+│  │                                                             │  │
+│  │ OCSP Request  ──────▶                                       │  │
+│  │ (cert serial)          Query Status  ──────▶               │  │
+│  │                                      ◀──────  Status        │  │
+│  │ ◀──────  OCSP Response                                      │  │
+│  │          (good/revoked/unknown)                             │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                                                                   │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+## Database Schema
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│                      CA Database Schema                           │
+├───────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  certificates                                                     │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │ serial_number  │ PRIMARY KEY, unique certificate ID         │  │
+│  │ subject_cn     │ Subject common name                        │  │
+│  │ issuer_cn      │ Issuing CA common name                     │  │
+│  │ not_before     │ Validity start                             │  │
+│  │ not_after      │ Validity end                               │  │
+│  │ status         │ active, revoked, expired                   │  │
+│  │ revoked_at     │ Revocation timestamp                       │  │
+│  │ revoke_reason  │ CRL reason code                            │  │
+│  │ certificate    │ DER-encoded certificate                    │  │
+│  │ key_attrs      │ Key attributes JSON                        │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                                                                   │
+│  ca_keys                                                          │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │ ca_cn          │ CA common name                             │  │
+│  │ algorithm      │ RSA, ECDSA, Ed25519                        │  │
+│  │ store_type     │ tpm, pkcs11, software                      │  │
+│  │ handle         │ TPM handle or PKCS#11 label                │  │
+│  │ certificate    │ CA certificate                             │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                                                                   │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+## Security Considerations
+
+| Concern                | Mitigation                                  |
+|------------------------|---------------------------------------------|
+| Root CA compromise     | Offline storage, HSM, ceremony procedures   |
+| Private key theft      | TPM/HSM storage, no software extraction     |
+| Unauthorized issuance  | Policy engine, audit logging                |
+| Revocation bypass      | CRL/OCSP required, short validity periods   |
+| Name collision         | Strict validation, namespace policies       |
+
+## QuicBaaS KMS Integration
+
+The CA uses QuicBaaS's KMS service for signing key management through the
+QuicBaaSKMSAdapter (`pkg/ca/quicbaas/kms_adapter.go`).
+
+### Signing Key Flow
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│                   CA Signing Key Access                           │
+├───────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  CA Service                   QuicBaaSKMSAdapter   go-quicbaas    │
+│      │                               │                  │         │
+│      │ GetSigningKey(tenant,purpose) │                  │         │
+│      │──────────────────────────────▶│                  │         │
+│      │                               │                  │         │
+│      │                               │ GetKey(keyID)    │         │
+│      │                               │─────────────────▶│         │
+│      │                               │◀─────────────────│         │
+│      │                               │                  │         │
+│      │                               │ xkms.SignerByID()      │
+│      │                               │─────────────────▶│         │
+│      │                               │◀─────────────────│         │
+│      │                               │                  │         │
+│      │◀──────────────────────────────│ crypto.Signer    │         │
+│      │                               │                  │         │
+│      │ signer.Sign(digest)           │                  │         │
+│      │ (uses TPM/HSM/SW backend)     │                  │         │
+│                                                                   │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+### Key ID Convention
+
+Keys are identified by `tenantID/purpose` format:
+- `tenant-a/tenant-root-ca` - Tenant A's root CA key
+- `tenant-a/ocsp` - Tenant A's OCSP signing key
+- `tenant-b/tls-ca` - Tenant B's TLS CA key
+
+### Backend Abstraction
+
+The CA does not interact with backends directly. QuicBaaS's XKMS
+abstracts all backend operations:
+
+| Backend | Use Case |
+|---------|----------|
+| TPM 2.0 | Hardware-bound CA keys, attestation |
+| PKCS#11 | Enterprise HSM integration, FIPS compliance |
+| Software | Development, testing, cloud deployments |
+
+## Related Documentation
+
+- [README](README.md) - CA module overview
+- [ACME](acme.md) - ACME server documentation
+- [Configuration](configuration.md) - Configuration reference
+- [API Reference](api-reference.md) - Certificate management API
+- [TPM Architecture](../tpm/architecture.md) - TPM key storage
+- [KMS Architecture](../kms/architecture.md) - Key management service

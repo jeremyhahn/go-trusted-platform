@@ -1,0 +1,165 @@
+# Docker Compose Template for SDN Test Topologies
+# This template is used by the topology manager to generate docker-compose files.
+#
+# Template variables:
+#   {{.Name}}           - Topology name
+#   {{.Description}}    - Topology description
+#   {{.Timestamp}}      - Generation timestamp
+#   {{.Networks}}       - List of networks
+#   {{.Nodes}}          - List of nodes
+#
+# Usage:
+#   The topology.Manager generates docker-compose files from Topology definitions.
+#   This template serves as documentation and a reference for manual testing.
+#
+# Example generated output:
+#
+# version: '3.8'
+#
+# networks:
+#   underlay:
+#     driver: bridge
+#     ipam:
+#       config:
+#         - subnet: 10.100.0.0/24
+#           gateway: 10.100.0.1
+#     labels:
+#       type: underlay
+#       topology: {{.Name}}
+#
+#   management:
+#     driver: bridge
+#     ipam:
+#       config:
+#         - subnet: 10.200.0.0/24
+#           gateway: 10.200.0.1
+#     labels:
+#       type: management
+#       topology: {{.Name}}
+#
+# services:
+#   gateway-1:
+#     image: go-trusted-platform-sdn:latest
+#     container_name: {{.Name}}-gateway-1
+#     hostname: gateway-1
+#     privileged: true
+#     cap_add:
+#       - NET_ADMIN
+#       - SYS_ADMIN
+#       - NET_RAW
+#     networks:
+#       - underlay
+#       - management
+#     environment:
+#       - NODE_TYPE=gateway
+#       - GATEWAY_MODES=overlay,edge,transit
+#       - BGP_ASN=64512
+#       - EVPN_ENABLED=true
+#     volumes:
+#       - /var/run/openvswitch:/var/run/openvswitch
+#       - /var/log/openvswitch:/var/log/openvswitch
+#     healthcheck:
+#       test: ["CMD", "ovs-vsctl", "show"]
+#       interval: 10s
+#       timeout: 5s
+#       start_period: 30s
+#       retries: 3
+#     labels:
+#       role: gateway
+#       topology: {{.Name}}
+#
+#   compute-1:
+#     image: go-trusted-platform-sdn:latest
+#     container_name: {{.Name}}-compute-1
+#     hostname: compute-1
+#     privileged: true
+#     cap_add:
+#       - NET_ADMIN
+#       - NET_RAW
+#     networks:
+#       - underlay
+#       - management
+#     depends_on:
+#       - gateway-1
+#     environment:
+#       - NODE_TYPE=compute
+#       - VTEP_IP=10.100.0.11
+#       - GATEWAY_IP=10.100.0.10
+#     healthcheck:
+#       test: ["CMD", "ovs-vsctl", "show"]
+#       interval: 10s
+#       timeout: 5s
+#       start_period: 30s
+#       retries: 3
+#     labels:
+#       role: compute
+#       topology: {{.Name}}
+#
+# volumes:
+#   ovs-db:
+#   ovs-log:
+
+# =============================================================================
+# Manual Testing Quick Start
+# =============================================================================
+#
+# 1. Single Node Topology:
+#    docker-compose -f single-node.yml up -d
+#    docker exec sdn-test-gateway-1 platformctl sdn status
+#    docker-compose -f single-node.yml down -v
+#
+# 2. Three Node Topology:
+#    docker-compose -f three-node.yml up -d
+#    docker exec sdn-test-gateway-1 platformctl sdn overlay vtep list
+#    docker exec sdn-test-gateway-1 platformctl sdn overlay tunnel list
+#    docker-compose -f three-node.yml down -v
+#
+# 3. Multi-Gateway Topology:
+#    docker-compose -f multi-gateway.yml up -d
+#    docker exec sdn-test-gateway-1 platformctl sdn bgp peer list
+#    docker exec sdn-test-gateway-2 platformctl sdn bgp status
+#    docker-compose -f multi-gateway.yml down -v
+#
+# 4. BGP Transit Topology:
+#    docker-compose -f bgp-transit.yml up -d
+#    docker exec sdn-test-gateway-1 platformctl sdn bgp prefix announce 10.100.0.0/24
+#    docker exec sdn-test-mock-isp vtysh -c "show bgp summary"
+#    docker-compose -f bgp-transit.yml down -v
+#
+# =============================================================================
+# Debugging Commands
+# =============================================================================
+#
+# View container logs:
+#   docker-compose -f topology.yml logs -f [service-name]
+#
+# Execute command in container:
+#   docker exec -it [container-name] bash
+#
+# Check OVS status:
+#   docker exec [container-name] ovs-vsctl show
+#
+# Check OpenFlow flows:
+#   docker exec [container-name] ovs-ofctl dump-flows [bridge-name]
+#
+# Check VXLAN tunnels:
+#   docker exec [container-name] ip link show type vxlan
+#
+# Check BGP status (FRR):
+#   docker exec [container-name] vtysh -c "show bgp summary"
+#
+# Check EVPN routes:
+#   docker exec [container-name] vtysh -c "show bgp l2vpn evpn"
+#
+# =============================================================================
+# Cleanup Commands
+# =============================================================================
+#
+# Stop and remove all:
+#   docker-compose -f topology.yml down -v --remove-orphans
+#
+# Remove all test networks:
+#   docker network prune -f
+#
+# Remove all test containers:
+#   docker rm -f $(docker ps -aq --filter "label=topology")

@@ -1,0 +1,169 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// Gateway service for multi-mode gateway operations
+service GatewayService {
+  // Gateway node operations
+  rpc GetGatewayStatus(GetGatewayStatusRequest) returns (GetGatewayStatusResponse);
+  rpc SetGatewayMode(SetGatewayModeRequest) returns (SetGatewayModeResponse);
+
+  // BGP operations (transit mode)
+  rpc GetBGPStatus(GetBGPStatusRequest) returns (GetBGPStatusResponse);
+  rpc ListBGPPeers(ListBGPPeersRequest) returns (ListBGPPeersResponse);
+  rpc AnnouncePrefix(AnnouncePrefixRequest) returns (AnnouncePrefixResponse);
+  rpc WithdrawPrefix(WithdrawPrefixRequest) returns (WithdrawPrefixResponse);
+  rpc ListAnnouncedPrefixes(ListAnnouncedPrefixesRequest) returns (ListAnnouncedPrefixesResponse);
+
+  // IPAM operations
+  rpc ListIPAMPools(ListIPAMPoolsRequest) returns (ListIPAMPoolsResponse);
+  rpc AllocateIP(AllocateIPRequest) returns (AllocateIPResponse);
+  rpc ReleaseIP(ReleaseIPRequest) returns (ReleaseIPResponse);
+  rpc ListAllocations(ListAllocationsRequest) returns (ListAllocationsResponse);
+}
+
+// Gateway mode
+enum GatewayModeEnum {
+  GATEWAY_MODE_UNSPECIFIED = 0;
+  GATEWAY_MODE_OVERLAY = 1;
+  GATEWAY_MODE_EDGE = 2;
+  GATEWAY_MODE_TRANSIT = 4;
+}
+
+// Gateway status
+message GatewayStatus {
+  string id = 1;
+  string node_id = 2;
+  uint32 modes = 3; // Bitmask of GatewayModeEnum
+  string tier = 4;  // backbone, datacenter, coordinator
+  double reputation = 5;
+  uint64 uptime_seconds = 6;
+  bool healthy = 7;
+  google.protobuf.Timestamp started_at = 8;
+}
+
+// BGP peer information
+message BGPPeer {
+  string address = 1;
+  uint32 asn = 2;
+  string state = 3;
+  string description = 4;
+  uint32 prefixes_received = 5;
+  uint32 prefixes_sent = 6;
+  google.protobuf.Timestamp uptime = 7;
+}
+
+// BGP status
+message BGPStatus {
+  uint32 local_asn = 1;
+  string router_id = 2;
+  uint32 peer_count = 3;
+  uint32 established_peers = 4;
+  uint32 prefixes_announced = 5;
+  bool running = 6;
+}
+
+// Announced prefix
+message AnnouncedPrefix {
+  string prefix = 1;
+  string next_hop = 2;
+  google.protobuf.Timestamp announced_at = 3;
+}
+
+// IPAM pool
+message IPAMPool {
+  string id = 1;
+  string cidr = 2;
+  string gateway = 3;
+  uint32 total = 4;
+  uint32 allocated = 5;
+  uint32 available = 6;
+}
+
+// IP allocation
+message IPAllocation {
+  string ip = 1;
+  string pool_id = 2;
+  string device_id = 3;
+  string hostname = 4;
+  google.protobuf.Timestamp allocated_at = 5;
+  google.protobuf.Timestamp expires_at = 6;
+}
+
+// Request/Response messages
+message GetGatewayStatusRequest {}
+message GetGatewayStatusResponse {
+  GatewayStatus status = 1;
+}
+
+message SetGatewayModeRequest {
+  uint32 modes = 1; // Bitmask of GatewayModeEnum
+}
+message SetGatewayModeResponse {
+  Status status = 1;
+  GatewayStatus gateway_status = 2;
+}
+
+message GetBGPStatusRequest {}
+message GetBGPStatusResponse {
+  BGPStatus status = 1;
+}
+
+message ListBGPPeersRequest {}
+message ListBGPPeersResponse {
+  repeated BGPPeer peers = 1;
+}
+
+message AnnouncePrefixRequest {
+  string prefix = 1;
+  string next_hop = 2;
+}
+message AnnouncePrefixResponse {
+  Status status = 1;
+}
+
+message WithdrawPrefixRequest {
+  string prefix = 1;
+}
+message WithdrawPrefixResponse {
+  Status status = 1;
+}
+
+message ListAnnouncedPrefixesRequest {}
+message ListAnnouncedPrefixesResponse {
+  repeated AnnouncedPrefix prefixes = 1;
+}
+
+message ListIPAMPoolsRequest {}
+message ListIPAMPoolsResponse {
+  repeated IPAMPool pools = 1;
+}
+
+message AllocateIPRequest {
+  string pool_id = 1;
+  string device_id = 2;
+  string hostname = 3;
+}
+message AllocateIPResponse {
+  Status status = 1;
+  IPAllocation allocation = 2;
+}
+
+message ReleaseIPRequest {
+  string ip = 1;
+}
+message ReleaseIPResponse {
+  Status status = 1;
+}
+
+message ListAllocationsRequest {
+  string pool_id = 1; // Empty for all pools
+}
+message ListAllocationsResponse {
+  repeated IPAllocation allocations = 1;
+}

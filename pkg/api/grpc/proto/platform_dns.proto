@@ -1,0 +1,411 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "common.proto";
+
+// DNSService provides DNS zone and record management operations
+service DNSService {
+  // Zone operations
+  rpc CreateZone(CreateZoneRequest) returns (CreateZoneResponse);
+  rpc GetZone(GetZoneRequest) returns (GetZoneResponse);
+  rpc UpdateZone(UpdateZoneRequest) returns (UpdateZoneResponse);
+  rpc DeleteZone(DeleteZoneRequest) returns (DeleteZoneResponse);
+  rpc ListZones(ListZonesRequest) returns (ListZonesResponse);
+
+  // Record operations
+  rpc AddRecord(AddRecordRequest) returns (AddRecordResponse);
+  rpc DeleteRecord(DeleteRecordRequest) returns (DeleteRecordResponse);
+  rpc UpdateRecord(UpdateRecordRequest) returns (UpdateRecordResponse);
+  rpc ListRecords(ListRecordsRequest) returns (ListRecordsResponse);
+
+  // DNSSEC operations
+  rpc SignZone(SignZoneRequest) returns (SignZoneResponse);
+  rpc GetDNSSECStatus(GetDNSSECStatusRequest) returns (GetDNSSECStatusResponse);
+
+  // Resolution
+  rpc Resolve(ResolveRequest) returns (ResolveResponse);
+
+  // Registration
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+}
+
+// DNS record types
+enum RecordType {
+  RECORD_TYPE_UNSPECIFIED = 0;
+  RECORD_TYPE_A = 1;
+  RECORD_TYPE_AAAA = 2;
+  RECORD_TYPE_CNAME = 3;
+  RECORD_TYPE_MX = 4;
+  RECORD_TYPE_NS = 5;
+  RECORD_TYPE_TXT = 6;
+  RECORD_TYPE_SRV = 7;
+  RECORD_TYPE_SOA = 8;
+  RECORD_TYPE_CAA = 9;
+  RECORD_TYPE_TLSA = 10;
+  RECORD_TYPE_DNSKEY = 11;
+  RECORD_TYPE_DS = 12;
+  RECORD_TYPE_RRSIG = 13;
+  RECORD_TYPE_NSEC = 14;
+  RECORD_TYPE_NSEC3 = 15;
+  RECORD_TYPE_NSEC3PARAM = 16;
+}
+
+// Zone represents a DNS zone
+message Zone {
+  uint64 id = 1;
+  string name = 2;
+  uint32 ttl = 3;
+  string description = 4;
+  bool internal = 5;
+  RecordSet records = 6;
+}
+
+// RecordSet contains all records for a zone
+message RecordSet {
+  SOARecord soa = 1;
+  repeated ARecord a_records = 2;
+  repeated AAAARecord aaaa_records = 3;
+  repeated CNAMERecord cname_records = 4;
+  repeated MXRecord mx_records = 5;
+  repeated NSRecord ns_records = 6;
+  repeated TXTRecord txt_records = 7;
+  repeated SRVRecord srv_records = 8;
+  repeated CAARecord caa_records = 9;
+  repeated TLSARecord tlsa_records = 10;
+  repeated DNSKEYRecord dnskey_records = 11;
+  repeated DSRecord ds_records = 12;
+  repeated RRSIGRecord rrsig_records = 13;
+  repeated NSECRecord nsec_records = 14;
+  repeated NSEC3Record nsec3_records = 15;
+  repeated NSEC3PARAMRecord nsec3param_records = 16;
+}
+
+// SOA Record
+message SOARecord {
+  string name = 1;
+  string mname = 2;
+  string rname = 3;
+  uint32 serial = 4;
+  uint32 refresh = 5;
+  uint32 retry = 6;
+  uint32 expire = 7;
+  uint32 minimum_ttl = 8;
+  uint32 ttl = 9;
+}
+
+// A Record
+message ARecord {
+  string name = 1;
+  string value = 2;
+  uint32 ttl = 3;
+}
+
+// AAAA Record
+message AAAARecord {
+  string name = 1;
+  string value = 2;
+  uint32 ttl = 3;
+}
+
+// CNAME Record
+message CNAMERecord {
+  string name = 1;
+  string value = 2;
+  uint32 ttl = 3;
+}
+
+// MX Record
+message MXRecord {
+  string name = 1;
+  string value = 2;
+  uint32 priority = 3;
+  uint32 ttl = 4;
+}
+
+// NS Record
+message NSRecord {
+  string name = 1;
+  string value = 2;
+  uint32 ttl = 3;
+}
+
+// TXT Record
+message TXTRecord {
+  string name = 1;
+  string value = 2;
+  uint32 ttl = 3;
+}
+
+// SRV Record
+message SRVRecord {
+  string name = 1;
+  string target = 2;
+  uint32 port = 3;
+  uint32 priority = 4;
+  uint32 weight = 5;
+  uint32 ttl = 6;
+}
+
+// CAA Record
+message CAARecord {
+  string name = 1;
+  uint32 flags = 2;
+  string tag = 3;
+  string value = 4;
+  uint32 ttl = 5;
+}
+
+// TLSA Record for DANE
+message TLSARecord {
+  string name = 1;
+  uint32 usage = 2;
+  uint32 selector = 3;
+  uint32 matching_type = 4;
+  string data = 5;
+  uint32 ttl = 6;
+}
+
+// DNSKEY Record
+message DNSKEYRecord {
+  string name = 1;
+  uint32 flags = 2;
+  uint32 protocol = 3;
+  uint32 algorithm = 4;
+  string key = 5;
+  uint32 ttl = 6;
+}
+
+// DS Record
+message DSRecord {
+  string name = 1;
+  uint32 key_tag = 2;
+  uint32 algorithm = 3;
+  uint32 digest_type = 4;
+  string digest = 5;
+  uint32 ttl = 6;
+}
+
+// RRSIG Record
+message RRSIGRecord {
+  string type_covered = 1;
+  uint32 algorithm = 2;
+  uint32 labels = 3;
+  uint32 original_ttl = 4;
+  string expiration = 5;
+  string inception = 6;
+  uint32 key_tag = 7;
+  string signer_name = 8;
+  string signature = 9;
+}
+
+// NSEC Record
+message NSECRecord {
+  string name = 1;
+  string next_domain = 2;
+  repeated uint32 type_bitmap = 3;
+  uint32 ttl = 4;
+}
+
+// NSEC3 Record
+message NSEC3Record {
+  string name = 1;
+  uint32 algorithm = 2;
+  uint32 flags = 3;
+  uint32 iterations = 4;
+  string salt = 5;
+  string next_hashed = 6;
+  repeated uint32 type_bitmap = 7;
+  uint32 ttl = 8;
+}
+
+// NSEC3PARAM Record
+message NSEC3PARAMRecord {
+  string name = 1;
+  uint32 algorithm = 2;
+  uint32 flags = 3;
+  uint32 iterations = 4;
+  string salt = 5;
+  uint32 ttl = 6;
+}
+
+// Generic record wrapper for add/update operations
+message Record {
+  RecordType type = 1;
+  oneof record {
+    ARecord a = 2;
+    AAAARecord aaaa = 3;
+    CNAMERecord cname = 4;
+    MXRecord mx = 5;
+    NSRecord ns = 6;
+    TXTRecord txt = 7;
+    SRVRecord srv = 8;
+    CAARecord caa = 9;
+    TLSARecord tlsa = 10;
+  }
+}
+
+// DNSSEC status information
+message DNSSECStatus {
+  bool enabled = 1;
+  bool zone_signed = 2;
+  repeated DNSKEYRecord keys = 3;
+  repeated DSRecord ds_records = 4;
+  string algorithm = 5;
+  string key_size = 6;
+}
+
+// Zone CRUD request/response
+
+message CreateZoneRequest {
+  string name = 1;
+  uint32 ttl = 2;
+  string description = 3;
+  bool internal = 4;
+  SOARecord soa = 5;
+  repeated NSRecord ns_records = 6;
+}
+
+message CreateZoneResponse {
+  Status status = 1;
+  Zone zone = 2;
+}
+
+message GetZoneRequest {
+  string name = 1;
+}
+
+message GetZoneResponse {
+  Zone zone = 1;
+}
+
+message UpdateZoneRequest {
+  string name = 1;
+  uint32 ttl = 2;
+  string description = 3;
+}
+
+message UpdateZoneResponse {
+  Status status = 1;
+  Zone zone = 2;
+}
+
+message DeleteZoneRequest {
+  string name = 1;
+}
+
+message DeleteZoneResponse {
+  Status status = 1;
+}
+
+message ListZonesRequest {
+  bool internal_only = 1;
+  bool public_only = 2;
+  PaginationRequest pagination = 3;
+}
+
+message ListZonesResponse {
+  repeated Zone zones = 1;
+  PaginationResponse pagination = 2;
+}
+
+// Record operations request/response
+
+message AddRecordRequest {
+  string zone_name = 1;
+  Record record = 2;
+}
+
+message AddRecordResponse {
+  Status status = 1;
+  Zone zone = 2;
+}
+
+message DeleteRecordRequest {
+  string zone_name = 1;
+  RecordType type = 2;
+  string name = 3;
+}
+
+message DeleteRecordResponse {
+  Status status = 1;
+  Zone zone = 2;
+}
+
+message UpdateRecordRequest {
+  string zone_name = 1;
+  Record old_record = 2;
+  Record new_record = 3;
+}
+
+message UpdateRecordResponse {
+  Status status = 1;
+  Zone zone = 2;
+}
+
+message ListRecordsRequest {
+  string zone_name = 1;
+  RecordType type = 2;
+}
+
+message ListRecordsResponse {
+  repeated Record records = 1;
+}
+
+// DNSSEC request/response
+
+message SignZoneRequest {
+  string zone_name = 1;
+}
+
+message SignZoneResponse {
+  Status status = 1;
+  Zone zone = 2;
+}
+
+message GetDNSSECStatusRequest {
+  string zone_name = 1;
+}
+
+message GetDNSSECStatusResponse {
+  DNSSECStatus status = 1;
+}
+
+// Resolution request/response
+
+message ResolveRequest {
+  string fqdn = 1;
+  RecordType type = 2;
+}
+
+message ResolveResponse {
+  repeated Record records = 1;
+  bool authoritative = 2;
+}
+
+// Registration request/response
+
+message RegisterRequest {
+  string fqdn = 1;
+  string ip = 2;
+}
+
+message RegisterResponse {
+  Status status = 1;
+  Zone zone = 2;
+}

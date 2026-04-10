@@ -1,0 +1,133 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package entities
+
+import (
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestDeviceTemplate_EntityID(t *testing.T) {
+	tests := []struct {
+		name     string
+		template *DeviceTemplate
+		expected uint64
+	}{
+		{
+			name: "returns correct entity ID",
+			template: &DeviceTemplate{
+				ID: 12345,
+			},
+			expected: 12345,
+		},
+		{
+			name: "returns zero for uninitialized ID",
+			template: &DeviceTemplate{
+				ID: 0,
+			},
+			expected: 0,
+		},
+		{
+			name: "returns max uint64",
+			template: &DeviceTemplate{
+				ID: ^uint64(0),
+			},
+			expected: ^uint64(0),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.template.EntityID())
+		})
+	}
+}
+
+func TestDeviceTemplate_SetEntityID(t *testing.T) {
+	tests := []struct {
+		name     string
+		id       uint64
+		expected uint64
+	}{
+		{
+			name:     "sets normal ID",
+			id:       42,
+			expected: 42,
+		},
+		{
+			name:     "sets zero ID",
+			id:       0,
+			expected: 0,
+		},
+		{
+			name:     "sets max uint64",
+			id:       ^uint64(0),
+			expected: ^uint64(0),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &DeviceTemplate{}
+			tmpl.SetEntityID(tt.id)
+			assert.Equal(t, tt.expected, tmpl.ID)
+			assert.Equal(t, tt.expected, tmpl.EntityID())
+		})
+	}
+}
+
+func TestDeviceTemplate_Fields(t *testing.T) {
+	now := time.Now()
+	configYAML := []byte("domain: example.com\nhostname: edge-01\n")
+	tmpl := &DeviceTemplate{
+		ID:          1,
+		TenantID:    "tenant-1",
+		Name:        "edge-server-template",
+		Description: "Template for edge servers",
+		Role:        DeviceRoleEdge,
+		Config:      configYAML,
+		MatchRules: &ProfileMatchRules{
+			MACPrefix: "52:54:00",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	assert.Equal(t, uint64(1), tmpl.ID)
+	assert.Equal(t, "tenant-1", tmpl.TenantID)
+	assert.Equal(t, "edge-server-template", tmpl.Name)
+	assert.Equal(t, "Template for edge servers", tmpl.Description)
+	assert.Equal(t, DeviceRoleEdge, tmpl.Role)
+	assert.NotNil(t, tmpl.Config)
+	assert.Contains(t, string(tmpl.Config), "example.com")
+	assert.NotNil(t, tmpl.MatchRules)
+	assert.Equal(t, "52:54:00", tmpl.MatchRules.MACPrefix)
+	assert.Equal(t, now, tmpl.CreatedAt)
+	assert.Equal(t, now, tmpl.UpdatedAt)
+}
+
+func TestDeviceTemplate_ZeroValue(t *testing.T) {
+	tmpl := &DeviceTemplate{}
+	assert.Equal(t, uint64(0), tmpl.EntityID())
+	assert.Empty(t, tmpl.TenantID)
+	assert.Empty(t, tmpl.Name)
+	assert.Empty(t, tmpl.Description)
+	assert.Empty(t, string(tmpl.Role))
+	assert.Nil(t, tmpl.Config)
+	assert.Nil(t, tmpl.MatchRules)
+	assert.True(t, tmpl.CreatedAt.IsZero())
+	assert.True(t, tmpl.UpdatedAt.IsZero())
+}

@@ -1,0 +1,16 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package grpc
+
+//go:generate protoc --go_out=gen --go_opt=paths=source_relative --go-grpc_out=gen --go-grpc_opt=paths=source_relative -I proto proto/common.proto proto/tpm.proto proto/sdn.proto proto/compute.proto proto/daemon.proto proto/ca.proto proto/iam.proto proto/vtpm.proto proto/device.proto proto/platform_dns.proto proto/idevid.proto proto/attestation.proto proto/kms.proto proto/invitation.proto

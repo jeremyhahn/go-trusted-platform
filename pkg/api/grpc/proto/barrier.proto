@@ -1,0 +1,126 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// BarrierService provides barrier storage management for the platform.
+// The barrier protects sensitive data at rest using encryption, supporting
+// both single-key and Shamir secret sharing unseal strategies.
+service BarrierService {
+  // Init initializes the barrier with the specified configuration.
+  // This must be called before the barrier can be used for the first time.
+  rpc Init(BarrierInitRequest) returns (BarrierInitResponse);
+
+  // GetStatus returns the current status of the barrier.
+  rpc GetStatus(BarrierStatusRequest) returns (BarrierStatusResponse);
+
+  // Unseal unseals the barrier using a secret or Shamir share.
+  rpc Unseal(BarrierUnsealRequest) returns (BarrierUnsealResponse);
+
+  // Seal seals the barrier, protecting all data at rest.
+  rpc Seal(BarrierSealRequest) returns (BarrierSealResponse);
+
+  // Rekey generates new unseal keys for the barrier.
+  rpc Rekey(BarrierRekeyRequest) returns (BarrierRekeyResponse);
+}
+
+// BarrierStrategy defines the unseal strategy for the barrier.
+enum BarrierStrategy {
+  BARRIER_STRATEGY_UNSPECIFIED = 0;
+  BARRIER_STRATEGY_SINGLE_KEY = 1;
+  BARRIER_STRATEGY_SHAMIR = 2;
+}
+
+// BarrierInitRequest contains the parameters to initialize the barrier.
+message BarrierInitRequest {
+  // secret is the initial root secret for single-key mode (optional for Shamir).
+  string secret = 1;
+  // threshold is the minimum number of shares required to unseal (Shamir mode).
+  // If threshold < 2, single-key mode is used.
+  int32 threshold = 2;
+  // shares is the total number of Shamir shares to generate.
+  int32 shares = 3;
+}
+
+// BarrierInitResponse contains the result of barrier initialization.
+message BarrierInitResponse {
+  Status status = 1;
+  // strategy is the unseal strategy that was configured.
+  BarrierStrategy strategy = 2;
+  // unseal_keys contains the generated unseal keys (Shamir shares or single key).
+  // These are only returned once during initialization and must be stored securely.
+  repeated string unseal_keys = 3;
+  // root_token is the initial root token for platform authentication.
+  string root_token = 4;
+  google.protobuf.Timestamp initialized_at = 5;
+}
+
+// BarrierStatusRequest is an empty request for barrier status.
+message BarrierStatusRequest {}
+
+// BarrierStatusResponse contains the current barrier status.
+message BarrierStatusResponse {
+  Status status = 1;
+  // sealed indicates whether the barrier is currently sealed.
+  bool sealed = 2;
+  // initialized indicates whether the barrier has been initialized.
+  bool initialized = 3;
+  // strategy is the configured unseal strategy.
+  BarrierStrategy strategy = 4;
+  // threshold is the number of shares needed to unseal (Shamir mode).
+  int32 threshold = 5;
+  // shares_total is the total number of shares (Shamir mode).
+  int32 shares_total = 6;
+  // shares_provided is the number of shares provided so far in the current unseal attempt.
+  int32 shares_provided = 7;
+  google.protobuf.Timestamp initialized_at = 8;
+}
+
+// BarrierUnsealRequest contains the unseal secret or share.
+message BarrierUnsealRequest {
+  // secret is the unseal key (single-key mode) or a Shamir share.
+  string secret = 1;
+}
+
+// BarrierUnsealResponse contains the result of an unseal attempt.
+message BarrierUnsealResponse {
+  Status status = 1;
+  // sealed indicates whether the barrier is still sealed after this attempt.
+  bool sealed = 2;
+  // shares_provided is the number of shares provided so far (Shamir mode).
+  int32 shares_provided = 3;
+  // shares_threshold is the number of shares required (Shamir mode).
+  int32 shares_threshold = 4;
+}
+
+// BarrierSealRequest is an empty request to seal the barrier.
+message BarrierSealRequest {}
+
+// BarrierSealResponse contains the result of a seal operation.
+message BarrierSealResponse {
+  Status status = 1;
+  // sealed confirms the barrier is now sealed.
+  bool sealed = 2;
+}
+
+// BarrierRekeyRequest contains the parameters for rekeying the barrier.
+message BarrierRekeyRequest {
+  // threshold is the new minimum number of shares required to unseal.
+  int32 threshold = 1;
+  // shares is the new total number of Shamir shares to generate.
+  int32 shares = 2;
+}
+
+// BarrierRekeyResponse contains the new unseal keys after rekeying.
+message BarrierRekeyResponse {
+  Status status = 1;
+  // strategy is the new unseal strategy.
+  BarrierStrategy strategy = 2;
+  // unseal_keys contains the new unseal keys.
+  // These are only returned once and must be stored securely.
+  repeated string unseal_keys = 3;
+}

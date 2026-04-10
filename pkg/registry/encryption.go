@@ -1,0 +1,432 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package registry
+
+import (
+	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/json"
+	"io"
+	"time"
+)
+
+const (
+	// DefaultKeyAlgorithm is the default algorithm for encryption keys.
+	DefaultKeyAlgorithm = "AES-256-GCM"
+
+	// DEKSize is the size of data encryption keys in bytes (256 bits).
+	DEKSize = 32
+
+	// NonceSize is the size of GCM nonce in bytes.
+	NonceSize = 12
+)
+
+// Layer represents a container image layer.
+type Layer struct {
+	// Digest is the content-addressable digest of the layer.
+	Digest string `json:"digest"`
+
+	// MediaType is the MIME type of the layer.
+	MediaType string `json:"media_type"`
+
+	// Size is the size of the layer in bytes.
+	Size int64 `json:"size"`
+
+	// Content is the layer content (compressed tar).
+	Content []byte `json:"-"`
+}
+
+// Image represents a container image with its layers.
+type Image struct {
+	// Manifest is the image manifest.
+	Manifest *ImageManifest `json:"manifest"`
+
+	// Config is the image configuration.
+	Config []byte `json:"config,omitempty"`
+
+	// Layers are the image layers.
+	Layers []Layer `json:"layers"`
+}
+
+// EncryptedLayer represents an encrypted container image layer.
+type EncryptedLayer struct {
+	// Digest is the original digest of the unencrypted layer.
+	Digest string `json:"digest"`
+
+	// MediaType is the encrypted media type.
+	MediaType string `json:"media_type"`
+
+	// Size is the size of the encrypted layer.
+	Size int64 `json:"size"`
+
+	// Encrypted is the encrypted layer content.
+	Encrypted []byte `json:"-"`
+
+	// WrappedDEK is the DEK wrapped with the KEK from QuicBaaS.
+	WrappedDEK []byte `json:"wrapped_dek"`
+
+	// KeyID is the ID of the KEK used to wrap the DEK.
+	KeyID string `json:"key_id"`
+
+	// Nonce is the GCM nonce used for encryption.
+	Nonce []byte `json:"nonce"`
+
+	// OriginalSize is the size of the original unencrypted content.
+	OriginalSize int64 `json:"original_size"`
+}
+
+// EncryptedImage represents an encrypted container image.
+type EncryptedImage struct {
+	// Manifest is the image manifest (metadata, not encrypted).
+	Manifest *ImageManifest `json:"manifest"`
+
+	// Config is the image configuration (optionally encrypted).
+	Config []byte `json:"config,omitempty"`
+
+	// EncryptedLayers are the encrypted image layers.
+	EncryptedLayers []EncryptedLayer `json:"encrypted_layers"`
+
+	// EncryptedAt is when the image was encrypted.
+	EncryptedAt time.Time `json:"encrypted_at"`
+
+	// KeyID is the primary KEK used for this image.
+	KeyID string `json:"key_id"`
+}
+
+// KMSClient defines the interface for QuicBaaS KMS operations.
+type KMSClient interface {
+	// GenerateKey generates a new encryption key.
+	GenerateKey(ctx context.Context, name, algorithm string, usage []string) (keyID string, err error)
+
+	// GetKey retrieves key information.
+	GetKey(ctx context.Context, keyID string) (*KeyInfo, error)
+
+	// Encrypt encrypts data using a key.
+	Encrypt(ctx context.Context, keyID string, plaintext, context []byte) (ciphertext []byte, keyVersion int, err error)
+
+	// Decrypt decrypts data using a key.
+	Decrypt(ctx context.Context, keyID string, ciphertext, context []byte) (plaintext []byte, err error)
+}
+
+// KeyInfo represents encryption key information from KMS.
+type KeyInfo struct {
+	KeyID     string    `json:"key_id"`
+	Name      string    `json:"name"`
+	Algorithm string    `json:"algorithm"`
+	Version   int       `json:"version"`
+	Usage     []string  `json:"usage"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ImageEncryptor handles encryption and decryption of container images.
+type ImageEncryptor struct {
+	kms          KMSClient
+	keyNamespace string
+}
+
+// EncryptorOption is a functional option for configuring ImageEncryptor.
+type EncryptorOption func(*ImageEncryptor)
+
+// WithKeyNamespace sets the key namespace for encryption keys.
+func WithKeyNamespace(ns string) EncryptorOption {
+	return func(e *ImageEncryptor) {
+		e.keyNamespace = ns
+	}
+}
+
+// NewImageEncryptor creates a new ImageEncryptor.
+func NewImageEncryptor(kms KMSClient, opts ...EncryptorOption) (*ImageEncryptor, error) {
+	if kms == nil {
+		return nil, ErrNilClient{Client: "kms"}
+	}
+
+	e := &ImageEncryptor{
+		kms:          kms,
+		keyNamespace: "container-images",
+	}
+
+	for _, opt := range opts {
+		opt(e)
+	}
+
+	return e, nil
+}
+
+// EncryptImage encrypts a container image using the specified key.
+func (e *ImageEncryptor) EncryptImage(ctx context.Context, image *Image, keyID string) (*EncryptedImage, error) {
+	if ctx == nil {
+		return nil, ErrNilContext{Operation: "EncryptImage"}
+	}
+	if image == nil {
+		return nil, ErrImageEmpty{}
+	}
+	if len(image.Layers) == 0 {
+		return nil, ErrImageEmpty{}
+	}
+	if keyID == "" {
+		return nil, ErrInvalidConfig{Field: "keyID", Reason: "key ID is required"}
+	}
+
+	// Get or create encryption key
+	keyInfo, err := e.getOrCreateKey(ctx, keyID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Encrypt each layer
+	encryptedLayers := make([]EncryptedLayer, len(image.Layers))
+	for i, layer := range image.Layers {
+		encLayer, err := e.encryptLayer(ctx, &layer, keyInfo.KeyID)
+		if err != nil {
+			return nil, ErrEncryptionFailed{LayerID: layer.Digest, Cause: err}
+		}
+		encryptedLayers[i] = *encLayer
+	}
+
+	return &EncryptedImage{
+		Manifest:        image.Manifest,
+		Config:          image.Config,
+		EncryptedLayers: encryptedLayers,
+		EncryptedAt:     time.Now().UTC(),
+		KeyID:           keyInfo.KeyID,
+	}, nil
+}
+
+// DecryptImage decrypts an encrypted container image.
+func (e *ImageEncryptor) DecryptImage(ctx context.Context, encrypted *EncryptedImage) (*Image, error) {
+	if ctx == nil {
+		return nil, ErrNilContext{Operation: "DecryptImage"}
+	}
+	if encrypted == nil {
+		return nil, ErrImageEmpty{}
+	}
+	if len(encrypted.EncryptedLayers) == 0 {
+		return nil, ErrImageEmpty{}
+	}
+
+	// Decrypt each layer
+	layers := make([]Layer, len(encrypted.EncryptedLayers))
+	for i, encLayer := range encrypted.EncryptedLayers {
+		layer, err := e.decryptLayer(ctx, &encLayer)
+		if err != nil {
+			return nil, ErrDecryptionFailed{LayerID: encLayer.Digest, Cause: err}
+		}
+		layers[i] = *layer
+	}
+
+	return &Image{
+		Manifest: encrypted.Manifest,
+		Config:   encrypted.Config,
+		Layers:   layers,
+	}, nil
+}
+
+// getOrCreateKey gets an existing key or creates a new one.
+func (e *ImageEncryptor) getOrCreateKey(ctx context.Context, keyID string) (*KeyInfo, error) {
+	// Try to get existing key
+	keyInfo, err := e.kms.GetKey(ctx, keyID)
+	if err == nil && keyInfo != nil {
+		return keyInfo, nil
+	}
+
+	// Create new key if not found
+	keyName := e.keyNamespace + "/" + keyID
+	newKeyID, err := e.kms.GenerateKey(ctx, keyName, DefaultKeyAlgorithm, []string{"encrypt", "decrypt", "wrap", "unwrap"})
+	if err != nil {
+		return nil, ErrKeyCreationFailed{KeyID: keyID, Cause: err}
+	}
+
+	return &KeyInfo{
+		KeyID:     newKeyID,
+		Name:      keyName,
+		Algorithm: DefaultKeyAlgorithm,
+		CreatedAt: time.Now().UTC(),
+	}, nil
+}
+
+// encryptLayer encrypts a single layer.
+func (e *ImageEncryptor) encryptLayer(ctx context.Context, layer *Layer, keyID string) (*EncryptedLayer, error) {
+	if len(layer.Content) == 0 {
+		// Empty layer, nothing to encrypt
+		return &EncryptedLayer{
+			Digest:       layer.Digest,
+			MediaType:    layer.MediaType + "+encrypted",
+			Size:         0,
+			Encrypted:    nil,
+			KeyID:        keyID,
+			OriginalSize: 0,
+		}, nil
+	}
+
+	// Generate per-layer DEK
+	dek, err := generateDEK()
+	if err != nil {
+		return nil, err
+	}
+
+	// Wrap DEK with KEK from QuicBaaS
+	wrappedDEK, _, err := e.kms.Encrypt(ctx, keyID, dek, []byte(layer.Digest))
+	if err != nil {
+		return nil, ErrKeyWrapFailed{KeyID: keyID, Cause: err}
+	}
+
+	// Encrypt layer content with DEK
+	encrypted, nonce, err := encryptContent(layer.Content, dek)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EncryptedLayer{
+		Digest:       layer.Digest,
+		MediaType:    layer.MediaType + "+encrypted",
+		Size:         int64(len(encrypted)),
+		Encrypted:    encrypted,
+		WrappedDEK:   wrappedDEK,
+		KeyID:        keyID,
+		Nonce:        nonce,
+		OriginalSize: layer.Size,
+	}, nil
+}
+
+// decryptLayer decrypts a single encrypted layer.
+func (e *ImageEncryptor) decryptLayer(ctx context.Context, encLayer *EncryptedLayer) (*Layer, error) {
+	if len(encLayer.Encrypted) == 0 {
+		// Empty layer
+		return &Layer{
+			Digest:    encLayer.Digest,
+			MediaType: stripEncryptedSuffix(encLayer.MediaType),
+			Size:      0,
+			Content:   nil,
+		}, nil
+	}
+
+	// Unwrap DEK using KEK from QuicBaaS
+	dek, err := e.kms.Decrypt(ctx, encLayer.KeyID, encLayer.WrappedDEK, []byte(encLayer.Digest))
+	if err != nil {
+		return nil, ErrKeyUnwrapFailed{KeyID: encLayer.KeyID, Cause: err}
+	}
+
+	// Decrypt layer content with DEK
+	content, err := decryptContent(encLayer.Encrypted, dek, encLayer.Nonce)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Layer{
+		Digest:    encLayer.Digest,
+		MediaType: stripEncryptedSuffix(encLayer.MediaType),
+		Size:      encLayer.OriginalSize,
+		Content:   content,
+	}, nil
+}
+
+// EncryptedImageMetadata returns JSON metadata about an encrypted image without layer content.
+func (e *ImageEncryptor) EncryptedImageMetadata(encrypted *EncryptedImage) ([]byte, error) {
+	// Create a copy without encrypted content for metadata
+	meta := struct {
+		Manifest        *ImageManifest       `json:"manifest"`
+		EncryptedLayers []EncryptedLayerMeta `json:"encrypted_layers"`
+		EncryptedAt     time.Time            `json:"encrypted_at"`
+		KeyID           string               `json:"key_id"`
+	}{
+		Manifest:    encrypted.Manifest,
+		EncryptedAt: encrypted.EncryptedAt,
+		KeyID:       encrypted.KeyID,
+	}
+
+	meta.EncryptedLayers = make([]EncryptedLayerMeta, len(encrypted.EncryptedLayers))
+	for i, layer := range encrypted.EncryptedLayers {
+		meta.EncryptedLayers[i] = EncryptedLayerMeta{
+			Digest:       layer.Digest,
+			MediaType:    layer.MediaType,
+			Size:         layer.Size,
+			KeyID:        layer.KeyID,
+			OriginalSize: layer.OriginalSize,
+		}
+	}
+
+	return json.Marshal(meta)
+}
+
+// EncryptedLayerMeta is metadata about an encrypted layer (without content).
+type EncryptedLayerMeta struct {
+	Digest       string `json:"digest"`
+	MediaType    string `json:"media_type"`
+	Size         int64  `json:"size"`
+	KeyID        string `json:"key_id"`
+	OriginalSize int64  `json:"original_size"`
+}
+
+// Helper functions
+
+// generateDEK generates a new data encryption key.
+func generateDEK() ([]byte, error) {
+	dek := make([]byte, DEKSize)
+	if _, err := io.ReadFull(rand.Reader, dek); err != nil {
+		return nil, ErrEncryptionFailed{Cause: err}
+	}
+	return dek, nil
+}
+
+// encryptContent encrypts content using AES-256-GCM.
+func encryptContent(plaintext, key []byte) (ciphertext, nonce []byte, err error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, nil, ErrEncryptionFailed{Cause: err}
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, nil, ErrEncryptionFailed{Cause: err}
+	}
+
+	nonce = make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, nil, ErrEncryptionFailed{Cause: err}
+	}
+
+	ciphertext = gcm.Seal(nil, nonce, plaintext, nil)
+	return ciphertext, nonce, nil
+}
+
+// decryptContent decrypts content using AES-256-GCM.
+func decryptContent(ciphertext, key, nonce []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, ErrDecryptionFailed{Cause: err}
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, ErrDecryptionFailed{Cause: err}
+	}
+
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, ErrDecryptionFailed{Cause: err}
+	}
+
+	return plaintext, nil
+}
+
+// stripEncryptedSuffix removes the "+encrypted" suffix from media type.
+func stripEncryptedSuffix(mediaType string) string {
+	const suffix = "+encrypted"
+	if len(mediaType) > len(suffix) && mediaType[len(mediaType)-len(suffix):] == suffix {
+		return mediaType[:len(mediaType)-len(suffix)]
+	}
+	return mediaType
+}

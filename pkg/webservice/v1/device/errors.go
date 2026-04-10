@@ -1,0 +1,159 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package device
+
+// ErrDeviceServiceNotInitialized indicates the device service is not initialized.
+type ErrDeviceServiceNotInitialized struct{}
+
+func (e ErrDeviceServiceNotInitialized) Error() string {
+	return "device service not initialized"
+}
+
+// ErrProfileServiceNotInitializedError indicates the profile service is not initialized.
+type ErrProfileServiceNotInitializedError struct{}
+
+func (e ErrProfileServiceNotInitializedError) Error() string {
+	return "profile service not initialized"
+}
+
+// ErrTemplateServiceNotInitialized indicates the template service is not initialized.
+type ErrTemplateServiceNotInitialized struct{}
+
+func (e ErrTemplateServiceNotInitialized) Error() string {
+	return "template service not initialized"
+}
+
+// ErrInvalidRequestBody indicates the request body is invalid.
+type ErrInvalidRequestBody struct {
+	Reason string
+}
+
+func (e ErrInvalidRequestBody) Error() string {
+	if e.Reason != "" {
+		return "invalid request body: " + e.Reason
+	}
+	return "invalid request body"
+}
+
+// ErrMissingDeviceID indicates device ID is required but not provided.
+type ErrMissingDeviceID struct{}
+
+func (e ErrMissingDeviceID) Error() string {
+	return "device id is required"
+}
+
+// ErrMissingProfileID indicates profile ID is required but not provided.
+type ErrMissingProfileID struct{}
+
+func (e ErrMissingProfileID) Error() string {
+	return "profile id is required"
+}
+
+// ErrMissingTemplateID indicates template ID is required but not provided.
+type ErrMissingTemplateID struct{}
+
+func (e ErrMissingTemplateID) Error() string {
+	return "template id is required"
+}
+
+// ErrMissingTemplateName indicates template name is required but not provided.
+type ErrMissingTemplateName struct{}
+
+func (e ErrMissingTemplateName) Error() string {
+	return "template name is required"
+}
+
+// ErrMissingSerialNumber indicates serial number is required but not provided.
+type ErrMissingSerialNumber struct{}
+
+func (e ErrMissingSerialNumber) Error() string {
+	return "serial number is required"
+}
+
+// ErrMissingMACAddress indicates MAC address is required but not provided.
+type ErrMissingMACAddress struct{}
+
+func (e ErrMissingMACAddress) Error() string {
+	return "mac address is required"
+}
+
+// ErrMissingDeviceIdentity indicates at least one device identifier is required.
+type ErrMissingDeviceIdentity struct{}
+
+func (e ErrMissingDeviceIdentity) Error() string {
+	return "at least one of ek_serial or mac_address is required"
+}
+
+// ErrDeviceNotFound indicates the device was not found.
+type ErrDeviceNotFound struct {
+	ID     uint64
+	Serial string
+}
+
+func (e ErrDeviceNotFound) Error() string {
+	if e.Serial != "" {
+		return "device not found: serial=" + e.Serial
+	}
+	return "device not found"
+}
+
+// ErrProfileNotFoundError indicates the profile was not found.
+type ErrProfileNotFoundError struct {
+	ID     uint64
+	Serial string
+	MAC    string
+}
+
+func (e ErrProfileNotFoundError) Error() string {
+	if e.Serial != "" {
+		return "profile not found: serial=" + e.Serial
+	}
+	if e.MAC != "" {
+		return "profile not found: mac=" + e.MAC
+	}
+	return "profile not found"
+}
+
+// ErrInvalidDeviceID indicates the device ID is invalid.
+type ErrInvalidDeviceID struct{}
+
+func (e ErrInvalidDeviceID) Error() string {
+	return "invalid device id"
+}
+
+// ErrInvalidProfileID indicates the profile ID is invalid.
+type ErrInvalidProfileID struct{}
+
+func (e ErrInvalidProfileID) Error() string {
+	return "invalid profile id"
+}
+
+// ErrInvalidTemplateID indicates the template ID is invalid.
+type ErrInvalidTemplateID struct{}
+
+func (e ErrInvalidTemplateID) Error() string {
+	return "invalid template id"
+}
+
+// ErrInvalidPaginationParams indicates invalid pagination parameters.
+type ErrInvalidPaginationParams struct {
+	Reason string
+}
+
+func (e ErrInvalidPaginationParams) Error() string {
+	if e.Reason != "" {
+		return "invalid pagination parameters: " + e.Reason
+	}
+	return "invalid pagination parameters"
+}

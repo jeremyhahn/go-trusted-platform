@@ -1,0 +1,26 @@
+# Minimal configuration for tenant integration tests
+
+debug: true
+debug-secrets: true
+platform-dir: /workspace/test/integration/tenant/testdata
+config-dir: /workspace/test/integration/tenant/testdata/etc
+log-dir: /workspace/test/integration/tenant/testdata/log
+
+datastore:
+  consistency-level: local
+  home: /workspace/test/integration/tenant/testdata/datastore
+  read-buffer-size: 50
+  serializer: json
+  quicbaas:
+    storage-backend: pebble
+    data-dir: /workspace/test/integration/tenant/testdata/quicbaas
+    wal-dir: /workspace/test/integration/tenant/testdata/quicbaas/wal
+    node-id: 1
+    cache-size: 67108864
+    log-level: warn
+    consistency-level: linearizable
+    kms:
+      enabled: true
+      backend: software
+    iam:
+      enabled: true

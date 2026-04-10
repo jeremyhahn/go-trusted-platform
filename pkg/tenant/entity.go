@@ -1,0 +1,352 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package tenant
+
+import (
+	"strconv"
+	"strings"
+	"time"
+
+	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// TenantEntity represents a tenant with platform-specific extensions.
+// It extends the QuicBaaS IAM Tenant with OVS bridges, VLAN isolation,
+// DEK management, and resource quotas.
+type TenantEntity struct {
+	// From QuicBaaS IAM
+	ID          string
+	Name        string
+	DisplayName string
+	State       State
+
+	// Platform-specific extensions
+	OVSBridge string    // br-tenant-{name}
+	VLANRange VLANRange // e.g., 100-199
+	DEKPath   string    // KMS DEK path: /tenant/{tenant-id}/default
+
+	// Quotas
+	ComputeQuota ComputeQuota
+	NetworkQuota NetworkQuota
+	StorageQuota StorageQuota
+
+	// Metadata
+	Labels      map[string]string
+	Annotations map[string]string
+
+	// Timestamps
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	DeletedAt *time.Time
+}
+
+// VLANRange represents a range of VLAN IDs allocated to a tenant.
+type VLANRange struct {
+	Start uint16
+	End   uint16
+}
+
+// Contains checks if a VLAN ID is within the range.
+func (v VLANRange) Contains(vlan uint16) bool {
+	return vlan >= v.Start && vlan <= v.End
+}
+
+// Size returns the number of VLANs in the range (inclusive).
+func (v VLANRange) Size() int {
+	if v.End < v.Start {
+		return 0
+	}
+	return int(v.End-v.Start) + 1
+}
+
+// Validate checks if the VLAN range is valid.
+func (v VLANRange) Validate() error {
+	// VLAN IDs must be between 1 and 4094
+	if v.Start < 1 || v.Start > 4094 {
+		return ErrInvalidVLANRange{
+			Start:  v.Start,
+			End:    v.End,
+			Reason: "start VLAN must be between 1 and 4094",
+		}
+	}
+
+	if v.End < 1 || v.End > 4094 {
+		return ErrInvalidVLANRange{
+			Start:  v.Start,
+			End:    v.End,
+			Reason: "end VLAN must be between 1 and 4094",
+		}
+	}
+
+	if v.End < v.Start {
+		return ErrInvalidVLANRange{
+			Start:  v.Start,
+			End:    v.End,
+			Reason: "end VLAN must be greater than or equal to start VLAN",
+		}
+	}
+
+	return nil
+}
+
+// IsEmpty checks if the VLAN range is empty (uninitialized).
+func (v VLANRange) IsEmpty() bool {
+	return v.Start == 0 && v.End == 0
+}
+
+// Overlaps checks if this VLAN range overlaps with another range.
+func (v VLANRange) Overlaps(other VLANRange) bool {
+	return v.Start <= other.End && other.Start <= v.End
+}
+
+// FromProto converts an IAM proto Tenant to a TenantEntity.
+// Platform-specific fields are initialized with defaults.
+func FromProto(t *iampb.Tenant) *TenantEntity {
+	if t == nil {
+		return nil
+	}
+
+	entity := &TenantEntity{
+		ID:          t.Id,
+		Name:        t.Name,
+		DisplayName: t.Name, // IAM doesn't have DisplayName, use Name
+		State:       StateCreated,
+		Labels:      make(map[string]string),
+		Annotations: make(map[string]string),
+	}
+
+	// Convert timestamps
+	if t.CreatedAt != nil {
+		entity.CreatedAt = t.CreatedAt.AsTime()
+	}
+
+	if t.UpdatedAt != nil {
+		entity.UpdatedAt = t.UpdatedAt.AsTime()
+	}
+
+	return entity
+}
+
+// ToProto converts a TenantEntity to an IAM proto Tenant.
+// Note: Platform-specific fields are not included in the proto.
+func (e *TenantEntity) ToProto() *iampb.Tenant {
+	if e == nil {
+		return nil
+	}
+
+	tenant := &iampb.Tenant{
+		Id:        e.ID,
+		Name:      e.Name,
+		CreatedAt: timestamppb.New(e.CreatedAt),
+		UpdatedAt: timestamppb.New(e.UpdatedAt),
+	}
+
+	return tenant
+}
+
+// Clone creates a deep copy of the TenantEntity.
+func (e *TenantEntity) Clone() *TenantEntity {
+	if e == nil {
+		return nil
+	}
+
+	clone := &TenantEntity{
+		ID:           e.ID,
+		Name:         e.Name,
+		DisplayName:  e.DisplayName,
+		State:        e.State,
+		OVSBridge:    e.OVSBridge,
+		VLANRange:    e.VLANRange,
+		DEKPath:      e.DEKPath,
+		ComputeQuota: e.ComputeQuota,
+		NetworkQuota: e.NetworkQuota,
+		StorageQuota: e.StorageQuota,
+		CreatedAt:    e.CreatedAt,
+		UpdatedAt:    e.UpdatedAt,
+	}
+
+	// Deep copy Labels
+	if e.Labels != nil {
+		clone.Labels = make(map[string]string, len(e.Labels))
+		for k, v := range e.Labels {
+			clone.Labels[k] = v
+		}
+	}
+
+	// Deep copy Annotations
+	if e.Annotations != nil {
+		clone.Annotations = make(map[string]string, len(e.Annotations))
+		for k, v := range e.Annotations {
+			clone.Annotations[k] = v
+		}
+	}
+
+	// Deep copy DeletedAt
+	if e.DeletedAt != nil {
+		deletedAt := *e.DeletedAt
+		clone.DeletedAt = &deletedAt
+	}
+
+	return clone
+}
+
+// Validate validates the TenantEntity fields.
+func (e *TenantEntity) Validate() error {
+	if e.ID == "" {
+		return ErrInvalidRequest{Reason: "tenant ID is required"}
+	}
+
+	if e.Name == "" {
+		return ErrInvalidRequest{Reason: "tenant name is required"}
+	}
+
+	if !e.State.IsValid() {
+		return ErrInvalidState{Current: e.State}
+	}
+
+	if !e.VLANRange.IsEmpty() {
+		if err := e.VLANRange.Validate(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// IsDeleted checks if the tenant has been deleted.
+func (e *TenantEntity) IsDeleted() bool {
+	return e.State == StateDeleted || e.DeletedAt != nil
+}
+
+// IsActive checks if the tenant is in an active state.
+func (e *TenantEntity) IsActive() bool {
+	return e.State == StateActive
+}
+
+// CanCreateResources checks if resources can be created for this tenant.
+func (e *TenantEntity) CanCreateResources() bool {
+	return e.State.AllowsResourceCreation()
+}
+
+// CanDeleteResources checks if resources can be deleted for this tenant.
+func (e *TenantEntity) CanDeleteResources() bool {
+	return e.State.AllowsResourceDeletion()
+}
+
+// SetState transitions the tenant to a new state.
+// Returns an error if the transition is not allowed.
+func (e *TenantEntity) SetState(newState State) error {
+	if !e.State.CanTransitionTo(newState) {
+		return ErrInvalidTransition{
+			From: e.State,
+			To:   newState,
+		}
+	}
+
+	e.State = newState
+	e.UpdatedAt = time.Now()
+
+	if newState == StateDeleted {
+		now := time.Now()
+		e.DeletedAt = &now
+	}
+
+	return nil
+}
+
+// GetLabel returns the value of a label or empty string if not found.
+func (e *TenantEntity) GetLabel(key string) string {
+	if e.Labels == nil {
+		return ""
+	}
+	return e.Labels[key]
+}
+
+// SetLabel sets a label on the tenant.
+func (e *TenantEntity) SetLabel(key, value string) {
+	if e.Labels == nil {
+		e.Labels = make(map[string]string)
+	}
+	e.Labels[key] = value
+	e.UpdatedAt = time.Now()
+}
+
+// GetAnnotation returns the value of an annotation or empty string if not found.
+func (e *TenantEntity) GetAnnotation(key string) string {
+	if e.Annotations == nil {
+		return ""
+	}
+	return e.Annotations[key]
+}
+
+// SetAnnotation sets an annotation on the tenant.
+func (e *TenantEntity) SetAnnotation(key, value string) {
+	if e.Annotations == nil {
+		e.Annotations = make(map[string]string)
+	}
+	e.Annotations[key] = value
+	e.UpdatedAt = time.Now()
+}
+
+// DEKHandle extracts a numeric handle from the DEK path for backward compatibility.
+// Returns 0 if the path is empty or cannot be parsed.
+// The handle is extracted from the path suffix if it contains a numeric component,
+// otherwise it returns a hash-based identifier derived from the path.
+func (e *TenantEntity) DEKHandle() uint32 {
+	if e.DEKPath == "" {
+		return 0
+	}
+
+	// Try to extract numeric suffix from path (e.g., "/tenant/123/default" -> 123)
+	parts := strings.Split(e.DEKPath, "/")
+	for i := len(parts) - 1; i >= 0; i-- {
+		if parts[i] == "" {
+			continue
+		}
+		if n, err := strconv.ParseUint(parts[i], 10, 32); err == nil {
+			return uint32(n)
+		}
+		// If we find a non-numeric part that's not empty, try to find tenant ID
+		// Format: /tenant/{tenant-id}/default
+		if i > 0 && parts[i-1] == "tenant" {
+			// Return a hash of the tenant ID for backward compat
+			return hashStringToUint32(parts[i])
+		}
+	}
+
+	// Fallback: hash the entire path
+	return hashStringToUint32(e.DEKPath)
+}
+
+// hashStringToUint32 creates a simple hash of a string for backward compatibility.
+func hashStringToUint32(s string) uint32 {
+	var h uint32 = 2166136261
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= 16777619
+	}
+	return h
+}
+
+// HasDEK returns true if the tenant has a DEK configured.
+func (e *TenantEntity) HasDEK() bool {
+	return e.DEKPath != ""
+}
+
+// BuildDEKPath constructs the standard DEK path for a tenant.
+// The path follows the convention: /tenant/{tenant-id}/default
+func BuildDEKPath(tenantID string) string {
+	return "/tenant/" + tenantID + "/default"
+}

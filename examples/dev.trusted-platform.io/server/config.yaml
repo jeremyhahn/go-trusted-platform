@@ -1,0 +1,571 @@
+acme:
+  client:
+    account:
+      email: hostmaster@dev.trusted-platform.io
+      key:
+        debug: true
+        cn: acme_dev.trusted-platform.io
+        default: false
+        hash: SHA-256
+        algorithm: RSA
+        password: "123456"
+        rsa:
+          size: 2048
+        platform-policy: true
+        signature-algorithm: SHA256-RSA
+        store: tpm2
+      register: false
+    directory: https://dev.trusted-platform.io/api/v1/acme/directory
+    request-server-bundle: false
+  server:
+    directory: https://dev.trusted-platform.io/api/v1/acme/directory
+    challenges:
+    - http-01
+    - dns-01
+    - endorse-01
+    - enroll-01
+    - device-attest-01
+    - http-8080
+    - http-8081
+    - enroll-8080
+    - enroll-8081
+    terms-of-service: /tos.html
+argon2:
+  memory: 65536
+  iterations: 3
+  parallelism: 2
+  saltLen: 16
+  keyLen: 32
+attestation:
+  allow-attestor-self-ca: false
+  allow-open-enrollment: false
+  allowed-verifiers: []
+  insecure-port: 0
+  tls-port: 0
+  quote-pcrs: []
+certificate-authority:
+  auto-import-issuing-ca: true
+  default-validity: 10
+  identity:
+  - keystores:
+      software:
+        platform-policy: true
+      pkcs11:
+        library: /usr/local/lib/softhsm/libsofthsm2.so
+        config: trusted-data/etc/softhsm.conf
+        pin: "123456"
+        platform-policy: true
+        slot: 0
+        so-pin: "123456"
+        label: SoftHSM
+      tpm2:
+        srk-auth: "123456"
+        srk-handle: 2164260867
+        platform-policy: true
+    keys:
+    - debug: true
+      default: false
+      hash: SHA-256
+      algorithm: RSA
+      password: "123456"
+      rsa:
+        size: 2048
+      platform-policy: true
+      signature-algorithm: SHA256-RSA
+      store: software
+    - debug: true
+      ecc:
+        curve: P-256
+      default: false
+      hash: SHA-256
+      algorithm: ECDSA
+      password: "123456"
+      platform-policy: true
+      signature-algorithm: ECDSA-SHA256
+      store: software
+    - debug: true
+      default: false
+      hash: SHA-256
+      algorithm: Ed25519
+      password: "123456"
+      platform-policy: true
+      signature-algorithm: Ed25519
+      store: software
+    - debug: true
+      default: false
+      hash: SHA-256
+      algorithm: RSA
+      password: "123456"
+      rsa:
+        size: 2048
+      platform-policy: true
+      signature-algorithm: SHA256-RSA
+      store: tpm2
+    - debug: true
+      ecc:
+        curve: P-256
+      default: false
+      hash: SHA-256
+      algorithm: ECDSA
+      password: "123456"
+      platform-policy: true
+      signature-algorithm: ECDSA-SHA256
+      store: tpm2
+    - debug: true
+      default: false
+      hash: SHA-256
+      algorithm: RSA
+      password: "123456"
+      rsa:
+        size: 2048
+      platform-policy: true
+      signature-algorithm: SHA256-RSA
+      store: pkcs11
+    - debug: true
+      ecc:
+        curve: P-256
+      default: false
+      hash: SHA-256
+      algorithm: ECDSA
+      password: "123456"
+      platform-policy: true
+      signature-algorithm: ECDSA-SHA256
+      store: pkcs11
+    sans:
+      dns:
+      - root-ca.dev.trusted-platform.io
+      email:
+      - hostmaster@dev.trusted-platform.io
+    subject:
+      cn: root-ca.dev.trusted-platform.io
+      organization: Example Corporation
+      country: US
+      locality: Hypervisor
+      address: 123 acme street
+      postal-code: "012345"
+    valid: 1
+  - keystores:
+      software:
+        platform-policy: true
+      pkcs11:
+        library: /usr/local/lib/softhsm/libsofthsm2.so
+        config: trusted-data/etc/softhsm.conf
+        pin: "123456"
+        platform-policy: true
+        slot: 0
+        so-pin: "123456"
+        label: SoftHSM
+      tpm2:
+        srk-auth: "123456"
+        srk-handle: 2164260867
+        platform-policy: true
+    keys:
+    - debug: true
+      default: false
+      hash: SHA-256
+      algorithm: RSA
+      password: "123456"
+      rsa:
+        size: 2048
+      platform-policy: true
+      signature-algorithm: SHA256-RSA
+      store: software
+    - debug: true
+      ecc:
+        curve: P-256
+      default: false
+      hash: SHA-256
+      algorithm: ECDSA
+      password: "123456"
+      platform-policy: true
+      signature-algorithm: ECDSA-SHA256
+      store: software
+    - debug: true
+      default: false
+      hash: SHA-256
+      algorithm: Ed25519
+      password: "123456"
+      platform-policy: true
+      signature-algorithm: Ed25519
+      store: software
+    - debug: true
+      default: false
+      hash: SHA-256
+      algorithm: RSA
+      password: "123456"
+      rsa:
+        size: 2048
+      platform-policy: true
+      signature-algorithm: SHA256-RSA
+      store: tpm2
+    - debug: true
+      ecc:
+        curve: P-256
+      default: false
+      hash: SHA-256
+      algorithm: ECDSA
+      password: "123456"
+      platform-policy: true
+      signature-algorithm: ECDSA-SHA256
+      store: tpm2
+    - debug: true
+      default: false
+      hash: SHA-256
+      algorithm: RSA
+      password: "123456"
+      rsa:
+        size: 2048
+      platform-policy: true
+      signature-algorithm: SHA256-RSA
+      store: pkcs11
+    - debug: true
+      ecc:
+        curve: P-256
+      default: false
+      hash: SHA-256
+      algorithm: ECDSA
+      password: "123456"
+      platform-policy: true
+      signature-algorithm: ECDSA-SHA256
+      store: pkcs11
+    sans:
+      dns:
+      - intermediate-ca.dev.trusted-platform.io
+      - ca.dev.trusted-platform.io
+      email:
+      - hostmaster@dev.trusted-platform.io
+    subject:
+      cn: intermediate-ca.dev.trusted-platform.io
+      organization: Example Corporation
+      country: US
+      province: Linux
+      locality: Hypervisor
+      address: 123 acme street
+      postal-code: "012345"
+    valid: 1
+  sans-include-localhost: false
+  platform-ca: 1
+  require-password: true
+  system-cert-pool: false
+  quantum-safe: false
+config-dir: /etc/trusted-platform
+datastore:
+  consistency-level: local
+  read-buffer-size: 50
+  home: trusted-data/datastore
+  serializer: yaml
+  quicbaas:
+    data-dir: trusted-data/quicbaas
+    node-id: 1
+    cache-size: 67108864
+    log-level: warn
+    consistency-level: linearizable
+debug: true
+debug-secrets: true
+dns:
+  allow-registration: true
+  allow-external-registration: true
+  allow-internal-registration: false
+  datastore:
+    consistency-level: local
+    read-buffer-size: 50
+    home: trusted-data/datastore
+    serializer: yaml
+    quicbaas:
+      data-dir: trusted-data/quicbaas
+      node-id: 1
+      cache-size: 67108864
+      log-level: warn
+      consistency-level: linearizable
+  default-ttl: 3600
+  internal:
+    port: 9053
+    forwarders:
+    - 192.168.1.1
+    - 192.168.2.1
+    - 192.168.3.1
+    zone:
+      id: 18411453967522201964
+      name: dev.trusted-platform.internal.
+      ttl: 3600
+      records:
+        a:
+        - name: '@'
+          ttl: 3600
+          value: ${PRIVATE_IPv4}
+        - name: ns1
+          ttl: 3600
+          value: ${PRIVATE_IPv4}
+        - name: ns2
+          ttl: 3600
+          value: 192.168.2.1
+        - name: ns3
+          ttl: 3600
+          value: 192.168.3.1
+        - name: ${HOSTNAME}
+          ttl: 3600
+          value: ${PRIVATE_IPv4}
+        cname:
+        - name: www
+          ttl: 3600
+          value: dev.trusted-platform.internal.
+        ns:
+        - name: dev.trusted-platform.internal.
+          ttl: 3600
+          value: ns1.dev.trusted-platform.internal.
+        - name: dev.trusted-platform.internal.
+          ttl: 3600
+          value: ns2.dev.trusted-platform.internal.
+        - name: dev.trusted-platform.internal.
+          ttl: 3600
+          value: ns3.dev.trusted-platform.internal.
+        soa:
+          expire: 86400
+          mname: ns1.dev.trusted-platform.internal.
+          min-ttl: 3600
+          name: dev.trusted-platform.internal.
+          rname: hostmaster@dev.trusted-platform.internal
+          refresh: 86400
+          retry: 7200
+          serial: 1
+          ttl: 3600
+      description: Internal zone for dev.trusted-platform.internal
+      internal: true
+  public:
+    port: 8053
+    forwarders: []
+    zone:
+      id: 440242806451558346
+      name: dev.trusted-platform.io.
+      ttl: 3600
+      records:
+        a:
+        - name: '@'
+          ttl: 3600
+          value: ${PUBLIC_IPv4}
+        - name: ns1
+          ttl: 3600
+          value: ${PUBLIC_IPv4}
+        - name: ns2
+          ttl: 3600
+          value: ${PUBLIC_IPv4}
+        - name: ns3
+          ttl: 3600
+          value: ${PUBLIC_IPv4}
+        - name: www
+          ttl: 3600
+          value: ${PUBLIC_IPv4}
+        cname:
+        - name: www
+          ttl: 3600
+          value: dev.trusted-platform.io.
+        mx:
+        - name: dev.trusted-platform.io.
+          priority: 10
+          ttl: 3600
+          value: mail.dev.trusted-platform.io.
+        ns:
+        - name: dev.trusted-platform.io.
+          ttl: 3600
+          value: ns1.dev.trusted-platform.io.
+        - name: dev.trusted-platform.io.
+          ttl: 3600
+          value: ns2.dev.trusted-platform.io.
+        - name: dev.trusted-platform.io.
+          ttl: 3600
+          value: ns3.dev.trusted-platform.io.
+        soa:
+          expire: 86400
+          mname: ns1.dev.trusted-platform.io.
+          min-ttl: 3600
+          name: dev.trusted-platform.io.
+          rname: hostmaster@dev.trusted-platform.io
+          refresh: 86400
+          retry: 7200
+          serial: 1
+          ttl: 3600
+        txt:
+        - name: dev.trusted-platform.io.
+          ttl: 3600
+          value: v=spf1 include:_spf.google.com ~all
+      description: Public zone for dev.trusted-platform.io
+      internal: false
+domain: dev.trusted-platform.io
+hostname: omega
+hostmaster: hostmaster@dev.trusted-platform.io
+log-dir: trusted-data/log
+platform-dir: trusted-data
+tpm:
+  device: /dev/tpmrm0
+  encrypt-sessions: true
+  ek:
+    cert-handle: 29360130
+    debug: true
+    handle: 2164326401
+    algorithm: RSA
+    platform-policy: false
+    rsa:
+      size: 2048
+  platform-pcr-bank: sha256
+  # PCRs to include in golden integrity measurement for TPM-sealed secrets.
+  # Leave empty to use ALL PCRs (0-23) for comprehensive boot chain measurement.
+  # This includes BIOS/UEFI firmware, kernel command line, and IMA file measurements.
+  # For specific PCRs only, use: [0, 7, 9, 10]
+  golden-pcrs: []
+  hash: SHA-256
+  iak:
+    cert-handle: 0
+    debug: true
+    handle: 2164326402
+    hash: SHA-256
+    algorithm: RSA
+    platform-policy: false
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSA
+  identity-provisioning: IAK_IDEVID_SINGLE_PASS
+  idevid:
+    cert-handle: 29949952
+    debug: true
+    handle: 2164391936
+    hash: SHA-256
+    algorithm: RSA
+    model: edge
+    pad: true
+    platform-policy: true
+    rsa:
+      size: 2048
+    serial: "001"
+    signature-algorithm: SHA256-RSA
+  keystore:
+    srk-auth: platform
+    srk-handle: 2164260866
+    platform-policy: true
+  platform-pcr: 16
+  platform-pcr-bank: sha256
+  ssrk:
+    debug: true
+    handle: 2164260865
+    algorithm: RSA
+    platform-policy: true
+    rsa:
+      size: 2048
+  entropy: false
+  simulator: false
+webservice:
+  certificate:
+    acme:
+      challenge: http-01
+      renew: 15
+    sans:
+      dns:
+      - dev.trusted-platform.io
+      email:
+      - hostmaster@dev.trusted-platform.io
+    subject:
+      cn: dev.trusted-platform.io
+      organization: Example Corporation
+      country: US
+      province: Linux
+      locality: Hypervisor
+      address: 123 acme street
+      postal-code: "012345"
+    valid: 365
+  home: public_html
+  index: index.html
+  jwt:
+    expiration: 525960
+    issuer: example
+  key:
+    debug: false
+    default: false
+    hash: SHA-256
+    algorithm: RSA
+    rsa:
+      size: 2048
+    platform-policy: false
+    signature-algorithm: SHA256-RSA
+    store: software
+  port: 8080
+  rewrite: []
+  tls-port: 8443
+  virtual-hosts:
+  - certificate:
+      acme:
+        challenge: http-01
+        renew: 15
+      sans:
+        dns:
+        - dashboard.dev.trusted-platform.io
+        email:
+        - hostmaster@dev.trusted-platform.io
+      subject:
+        cn: dashboard.dev.trusted-platform.io
+        organization: Example Corporation
+        country: US
+        province: Linux
+        locality: Hypervisor
+        address: 123 acme street
+        postal-code: "012345"
+      valid: 365
+    cors:
+      allowed-origins:
+      - https://dashboard.dev.trusted-platform.io
+      - https://dashboard.dev.trusted-platform.io:8080
+      - https://dashboard.dev.trusted-platform.io:8443
+      - https://localhost
+      - https://localhost:8080
+      - https://localhost:8443
+      - https://localhost:3000
+      allowed-methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+      allowed-headers:
+      - '*'
+      allow-credentials: true
+    home: dashboard.dev.trusted-platform.io
+    hosts:
+    - dashboard.dev.trusted-platform.io
+    index: index.html
+    key:
+      debug: true
+      ecc:
+        curve: P-256
+      default: false
+      hash: SHA-256
+      algorithm: ECDSA
+      platform-policy: false
+      signature-algorithm: ECDSA-SHA256
+      store: software
+  webauthn:
+    display-name: Example Corporation
+    id: example.com
+    origins:
+    - https://dev.trusted-platform.io
+    - https://dev.trusted-platform.io:8080
+    - https://dev.trusted-platform.io:8443
+    - https://localhost
+    - https://localhost:8080
+    - https://localhost:8443
+    - https://localhost:3000
+  cors:
+    allowed-origins:
+    - https://dev.trusted-platform.io
+    - https://dev.trusted-platform.io:8080
+    - https://dev.trusted-platform.io:8443
+    - https://localhost
+    - https://localhost:8080
+    - https://localhost:8443
+    - https://localhost:3000
+    allowed-methods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - OPTIONS
+    allowed-headers:
+    - '*'
+    allow-credentials: true

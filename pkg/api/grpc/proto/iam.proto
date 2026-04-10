@@ -1,0 +1,609 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// PlatformIAMService provides Identity and Access Management operations.
+// This service is exposed via Unix socket for local operations and can
+// be accessed via gRPC TCP for remote administration.
+service PlatformIAMService {
+  // User operations
+  rpc CreateUser(CreateIAMUserRequest) returns (IAMUserResponse);
+  rpc GetUser(GetIAMUserRequest) returns (IAMUserResponse);
+  rpc ListUsers(ListIAMUsersRequest) returns (ListIAMUsersResponse);
+  rpc UpdateUser(UpdateIAMUserRequest) returns (IAMUserResponse);
+  rpc DeleteUser(DeleteIAMUserRequest) returns (DeleteIAMUserResponse);
+
+  // Role operations
+  rpc CreateRole(CreateIAMRoleRequest) returns (IAMRoleResponse);
+  rpc GetRole(GetIAMRoleRequest) returns (IAMRoleResponse);
+  rpc ListRoles(ListIAMRolesRequest) returns (ListIAMRolesResponse);
+  rpc UpdateRole(UpdateIAMRoleRequest) returns (IAMRoleResponse);
+  rpc DeleteRole(DeleteIAMRoleRequest) returns (DeleteIAMRoleResponse);
+  rpc AssignRole(AssignIAMRoleRequest) returns (AssignIAMRoleResponse);
+  rpc RevokeRole(RevokeIAMRoleRequest) returns (RevokeIAMRoleResponse);
+
+  // Group operations
+  rpc CreateGroup(CreateIAMGroupRequest) returns (IAMGroupResponse);
+  rpc GetGroup(GetIAMGroupRequest) returns (IAMGroupResponse);
+  rpc ListGroups(ListIAMGroupsRequest) returns (ListIAMGroupsResponse);
+  rpc UpdateGroup(UpdateIAMGroupRequest) returns (IAMGroupResponse);
+  rpc DeleteGroup(DeleteIAMGroupRequest) returns (DeleteIAMGroupResponse);
+  rpc AddGroupMember(AddGroupMemberRequest) returns (AddGroupMemberResponse);
+  rpc RemoveGroupMember(RemoveGroupMemberRequest) returns (RemoveGroupMemberResponse);
+
+  // Authorization operations (passwordless - uses tokens/certificates)
+  rpc CheckPermission(CheckIAMPermissionRequest) returns (CheckIAMPermissionResponse);
+  rpc CreateToken(CreateIAMTokenRequest) returns (CreateIAMTokenResponse);
+  rpc RevokeToken(RevokeIAMTokenRequest) returns (RevokeIAMTokenResponse);
+  rpc VerifyToken(VerifyIAMTokenRequest) returns (VerifyIAMTokenResponse);
+
+  // Tenant operations
+  rpc CreateTenant(CreateIAMTenantRequest) returns (IAMTenantResponse);
+  rpc GetTenant(GetIAMTenantRequest) returns (IAMTenantResponse);
+  rpc ListTenants(ListIAMTenantsRequest) returns (ListIAMTenantsResponse);
+  rpc UpdateTenant(UpdateIAMTenantRequest) returns (IAMTenantResponse);
+  rpc DeleteTenant(DeleteIAMTenantRequest) returns (DeleteIAMTenantResponse);
+
+  // Policy operations
+  rpc CreatePolicy(CreateIAMPolicyRequest) returns (IAMPolicyResponse);
+  rpc GetPolicy(GetIAMPolicyRequest) returns (IAMPolicyResponse);
+  rpc ListPolicies(ListIAMPoliciesRequest) returns (ListIAMPoliciesResponse);
+  rpc UpdatePolicy(UpdateIAMPolicyRequest) returns (IAMPolicyResponse);
+  rpc DeletePolicy(DeleteIAMPolicyRequest) returns (DeleteIAMPolicyResponse);
+  rpc ValidatePolicy(ValidateIAMPolicyRequest) returns (ValidateIAMPolicyResponse);
+  rpc TestPolicy(TestIAMPolicyRequest) returns (TestIAMPolicyResponse);
+
+  // Application operations
+  rpc RegisterApp(RegisterIAMAppRequest) returns (IAMAppResponse);
+  rpc GetApp(GetIAMAppRequest) returns (IAMAppResponse);
+  rpc ListApps(ListIAMAppsRequest) returns (ListIAMAppsResponse);
+  rpc UpdateApp(UpdateIAMAppRequest) returns (IAMAppResponse);
+  rpc DeleteApp(DeleteIAMAppRequest) returns (DeleteIAMAppResponse);
+  rpc RotateAppSecret(RotateIAMAppSecretRequest) returns (RotateIAMAppSecretResponse);
+}
+
+// =============================================================================
+// User Messages
+// =============================================================================
+
+// IAMUser represents a user in the IAM system
+message IAMUser {
+  string id = 1;
+  string tenant_id = 2;
+  string email = 3;
+  string name = 4;
+  repeated string roles = 5;
+  repeated string groups = 6;
+  map<string, string> attributes = 7;
+  bool mfa_verified = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+  google.protobuf.Timestamp last_auth = 11;
+}
+
+message CreateIAMUserRequest {
+  string tenant_id = 1;
+  string email = 2;
+  string name = 3;
+  repeated string roles = 4;
+  repeated string groups = 5;
+  map<string, string> attributes = 6;
+}
+
+message GetIAMUserRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+}
+
+message ListIAMUsersRequest {
+  string tenant_id = 1;
+  PaginationRequest pagination = 2;
+  string email_filter = 3;
+  string role_filter = 4;
+  string group_filter = 5;
+}
+
+message UpdateIAMUserRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string email = 3;
+  string name = 4;
+  repeated string roles = 5;
+  repeated string groups = 6;
+  map<string, string> attributes = 7;
+}
+
+message DeleteIAMUserRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+}
+
+message IAMUserResponse {
+  IAMUser user = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message ListIAMUsersResponse {
+  repeated IAMUser users = 1;
+  PaginationResponse pagination = 2;
+  int64 total = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message DeleteIAMUserResponse {
+  Status status = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// =============================================================================
+// Role Messages
+// =============================================================================
+
+// IAMRole represents a role in the IAM system
+message IAMRole {
+  string id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  string description = 4;
+  repeated string permissions = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message CreateIAMRoleRequest {
+  string tenant_id = 1;
+  string id = 2;
+  string name = 3;
+  string description = 4;
+  repeated string permissions = 5;
+}
+
+message GetIAMRoleRequest {
+  string tenant_id = 1;
+  string role_id = 2;
+}
+
+message ListIAMRolesRequest {
+  string tenant_id = 1;
+  PaginationRequest pagination = 2;
+}
+
+message UpdateIAMRoleRequest {
+  string tenant_id = 1;
+  string role_id = 2;
+  string name = 3;
+  string description = 4;
+  repeated string permissions = 5;
+}
+
+message DeleteIAMRoleRequest {
+  string tenant_id = 1;
+  string role_id = 2;
+}
+
+message AssignIAMRoleRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string role_id = 3;
+}
+
+message RevokeIAMRoleRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string role_id = 3;
+}
+
+message IAMRoleResponse {
+  IAMRole role = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message ListIAMRolesResponse {
+  repeated IAMRole roles = 1;
+  PaginationResponse pagination = 2;
+  int64 total = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message DeleteIAMRoleResponse {
+  Status status = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message AssignIAMRoleResponse {
+  Status status = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message RevokeIAMRoleResponse {
+  Status status = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// =============================================================================
+// Group Messages
+// =============================================================================
+
+// IAMGroup represents a group in the IAM system
+message IAMGroup {
+  string id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  string description = 4;
+  repeated string members = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message CreateIAMGroupRequest {
+  string tenant_id = 1;
+  string id = 2;
+  string name = 3;
+  string description = 4;
+}
+
+message GetIAMGroupRequest {
+  string tenant_id = 1;
+  string group_id = 2;
+}
+
+message ListIAMGroupsRequest {
+  string tenant_id = 1;
+  PaginationRequest pagination = 2;
+}
+
+message UpdateIAMGroupRequest {
+  string tenant_id = 1;
+  string group_id = 2;
+  string name = 3;
+  string description = 4;
+}
+
+message DeleteIAMGroupRequest {
+  string tenant_id = 1;
+  string group_id = 2;
+}
+
+message AddGroupMemberRequest {
+  string tenant_id = 1;
+  string group_id = 2;
+  string user_id = 3;
+}
+
+message RemoveGroupMemberRequest {
+  string tenant_id = 1;
+  string group_id = 2;
+  string user_id = 3;
+}
+
+message IAMGroupResponse {
+  IAMGroup group = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message ListIAMGroupsResponse {
+  repeated IAMGroup groups = 1;
+  PaginationResponse pagination = 2;
+  int64 total = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message DeleteIAMGroupResponse {
+  Status status = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message AddGroupMemberResponse {
+  Status status = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message RemoveGroupMemberResponse {
+  Status status = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// =============================================================================
+// Authorization Messages (Passwordless)
+// =============================================================================
+
+message CheckIAMPermissionRequest {
+  string tenant_id = 1;
+  string subject_id = 2;
+  repeated string roles = 3;
+  repeated string groups = 4;
+  string action = 5;
+  string resource = 6;
+  map<string, string> context = 7;
+  map<string, string> attributes = 8;
+}
+
+message CheckIAMPermissionResponse {
+  bool allowed = 1;
+  string matched_policy = 2;
+  string matched_rule = 3;
+  string reason = 4;
+  int64 evaluation_time_ns = 5;
+  google.protobuf.Timestamp timestamp = 6;
+}
+
+message CreateIAMTokenRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  repeated string scopes = 3;
+  int64 expires_in = 4;
+}
+
+message CreateIAMTokenResponse {
+  string token_id = 1;
+  string access_token = 2;
+  string refresh_token = 3;
+  int64 expires_in = 4;
+  string token_type = 5;
+  google.protobuf.Timestamp timestamp = 6;
+}
+
+message RevokeIAMTokenRequest {
+  string token_id = 1;
+  string token = 2;
+}
+
+message RevokeIAMTokenResponse {
+  Status status = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message VerifyIAMTokenRequest {
+  string token = 1;
+}
+
+message VerifyIAMTokenResponse {
+  bool valid = 1;
+  string user_id = 2;
+  string tenant_id = 3;
+  repeated string scopes = 4;
+  int64 expires_at = 5;
+  google.protobuf.Timestamp timestamp = 6;
+}
+
+// =============================================================================
+// Tenant Messages
+// =============================================================================
+
+// IAMTenantSettings contains tenant configuration settings
+message IAMTenantSettings {
+  int32 max_users = 1;
+  bool mfa_required = 2;
+}
+
+// IAMTenant represents a tenant in the IAM system
+message IAMTenant {
+  string id = 1;
+  string name = 2;
+  IAMTenantSettings settings = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}
+
+message CreateIAMTenantRequest {
+  string id = 1;
+  string name = 2;
+  IAMTenantSettings settings = 3;
+}
+
+message GetIAMTenantRequest {
+  string tenant_id = 1;
+}
+
+message ListIAMTenantsRequest {
+  PaginationRequest pagination = 1;
+}
+
+message UpdateIAMTenantRequest {
+  string tenant_id = 1;
+  string name = 2;
+  IAMTenantSettings settings = 3;
+}
+
+message DeleteIAMTenantRequest {
+  string tenant_id = 1;
+}
+
+message IAMTenantResponse {
+  IAMTenant tenant = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message ListIAMTenantsResponse {
+  repeated IAMTenant tenants = 1;
+  PaginationResponse pagination = 2;
+  int64 total = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message DeleteIAMTenantResponse {
+  Status status = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// =============================================================================
+// Policy Messages
+// =============================================================================
+
+// IAMPolicy represents a policy in the IAM system
+message IAMPolicy {
+  string name = 1;
+  string tenant_id = 2;
+  string description = 3;
+  int32 priority = 4;
+  bytes spec_yaml = 5;
+  map<string, string> labels = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message CreateIAMPolicyRequest {
+  string tenant_id = 1;
+  string name = 2;
+  string description = 3;
+  int32 priority = 4;
+  bytes spec_yaml = 5;
+  map<string, string> labels = 6;
+}
+
+message GetIAMPolicyRequest {
+  string tenant_id = 1;
+  string policy_name = 2;
+}
+
+message ListIAMPoliciesRequest {
+  string tenant_id = 1;
+  PaginationRequest pagination = 2;
+}
+
+message UpdateIAMPolicyRequest {
+  string tenant_id = 1;
+  string policy_name = 2;
+  string description = 3;
+  int32 priority = 4;
+  bytes spec_yaml = 5;
+  map<string, string> labels = 6;
+}
+
+message DeleteIAMPolicyRequest {
+  string tenant_id = 1;
+  string policy_name = 2;
+}
+
+message ValidateIAMPolicyRequest {
+  string tenant_id = 1;
+  bytes spec_yaml = 2;
+}
+
+message ValidateIAMPolicyResponse {
+  bool valid = 1;
+  repeated string errors = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+message TestIAMPolicyRequest {
+  string tenant_id = 1;
+  string subject_id = 2;
+  repeated string roles = 3;
+  repeated string groups = 4;
+  string action = 5;
+  string resource = 6;
+  map<string, string> context = 7;
+  map<string, string> attributes = 8;
+}
+
+message TestIAMPolicyResponse {
+  bool allowed = 1;
+  string matched_policy = 2;
+  string matched_rule = 3;
+  int64 evaluation_time_ns = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+message IAMPolicyResponse {
+  IAMPolicy policy = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message ListIAMPoliciesResponse {
+  repeated IAMPolicy policies = 1;
+  PaginationResponse pagination = 2;
+  int64 total = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message DeleteIAMPolicyResponse {
+  Status status = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// =============================================================================
+// Application Messages
+// =============================================================================
+
+// IAMApp represents an application in the IAM system
+message IAMApp {
+  string client_id = 1;
+  string client_secret = 2;
+  string tenant_id = 3;
+  string name = 4;
+  repeated string redirect_uris = 5;
+  repeated string grant_types = 6;
+  repeated string response_types = 7;
+  string resource_prefix = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message RegisterIAMAppRequest {
+  string tenant_id = 1;
+  string name = 2;
+  repeated string redirect_uris = 3;
+  repeated string grant_types = 4;
+  repeated string response_types = 5;
+  string resource_prefix = 6;
+}
+
+message GetIAMAppRequest {
+  string tenant_id = 1;
+  string client_id = 2;
+}
+
+message ListIAMAppsRequest {
+  string tenant_id = 1;
+  PaginationRequest pagination = 2;
+}
+
+message UpdateIAMAppRequest {
+  string tenant_id = 1;
+  string client_id = 2;
+  string name = 3;
+  repeated string redirect_uris = 4;
+  repeated string grant_types = 5;
+  repeated string response_types = 6;
+  string resource_prefix = 7;
+}
+
+message DeleteIAMAppRequest {
+  string tenant_id = 1;
+  string client_id = 2;
+}
+
+message RotateIAMAppSecretRequest {
+  string tenant_id = 1;
+  string client_id = 2;
+}
+
+message RotateIAMAppSecretResponse {
+  string client_id = 1;
+  string name = 2;
+  string client_secret = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message IAMAppResponse {
+  IAMApp app = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message ListIAMAppsResponse {
+  repeated IAMApp apps = 1;
+  PaginationResponse pagination = 2;
+  int64 total = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message DeleteIAMAppResponse {
+  Status status = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}

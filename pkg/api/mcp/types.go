@@ -1,0 +1,559 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+// Package mcp implements the Model Context Protocol (MCP) transport layer for Trusted Platform.
+// MCP is a protocol for exposing tools and resources to AI/LLM systems using JSON-RPC 2.0.
+//
+// The MCP server provides:
+// - JSON-RPC 2.0 protocol over stdio or HTTP transport
+// - Platform operations exposed as MCP "tools"
+// - Data exposed as MCP "resources"
+// - Full integration with Platform Daemon
+// - Authorization enforcement for all tool executions
+//
+// Reference: https://modelcontextprotocol.io/
+package mcp
+
+import (
+	"context"
+)
+
+const (
+	// MCPVersion is the supported MCP protocol version.
+	MCPVersion = "2024-11-05"
+
+	// JSON-RPC 2.0 error codes.
+	ParseError     = -32700
+	InvalidRequest = -32600
+	MethodNotFound = -32601
+	InvalidParams  = -32602
+	InternalError  = -32603
+
+	// Custom error codes for authorization.
+	AuthenticationRequired = -32001
+	InvalidToken           = -32002
+	PermissionDenied       = -32003
+	ServiceUnavailable     = -32004
+)
+
+// JSONRPCRequest represents a JSON-RPC 2.0 request.
+type JSONRPCRequest struct {
+	JSONRPC string      `json:"jsonrpc"`
+	ID      interface{} `json:"id,omitempty"`
+	Method  string      `json:"method"`
+	Params  interface{} `json:"params,omitempty"`
+}
+
+// JSONRPCResponse represents a JSON-RPC 2.0 response.
+type JSONRPCResponse struct {
+	JSONRPC string        `json:"jsonrpc"`
+	ID      interface{}   `json:"id,omitempty"`
+	Result  interface{}   `json:"result,omitempty"`
+	Error   *JSONRPCError `json:"error,omitempty"`
+}
+
+// JSONRPCError represents a JSON-RPC 2.0 error.
+type JSONRPCError struct {
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
+}
+
+// ToolDefinition describes an MCP tool.
+type ToolDefinition struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	InputSchema map[string]interface{} `json:"inputSchema"`
+}
+
+// ResourceDefinition describes an MCP resource.
+type ResourceDefinition struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	MimeType    string `json:"mimeType,omitempty"`
+}
+
+// AuthErrorType categorizes authorization errors.
+type AuthErrorType int
+
+const (
+	// AuthErrorNone indicates no error.
+	AuthErrorNone AuthErrorType = iota
+	// AuthErrorMissingToken indicates no token was provided.
+	AuthErrorMissingToken
+	// AuthErrorInvalidToken indicates the token is invalid.
+	AuthErrorInvalidToken
+	// AuthErrorPermissionDenied indicates insufficient permissions.
+	AuthErrorPermissionDenied
+	// AuthErrorServiceUnavailable indicates auth service is not configured.
+	AuthErrorServiceUnavailable
+)
+
+// AuthorizationError represents an authorization failure.
+type AuthorizationError struct {
+	Type    AuthErrorType
+	Message string
+}
+
+func (e *AuthorizationError) Error() string {
+	return e.Message
+}
+
+// CAIssueRequest represents a certificate issuance request for MCP.
+type CAIssueRequest struct {
+	CommonName         string   `json:"common_name"`
+	Organization       string   `json:"organization,omitempty"`
+	OrganizationalUnit string   `json:"organizational_unit,omitempty"`
+	Country            string   `json:"country,omitempty"`
+	Province           string   `json:"province,omitempty"`
+	Locality           string   `json:"locality,omitempty"`
+	DNSNames           []string `json:"dns_names,omitempty"`
+	IPAddresses        []string `json:"ip_addresses,omitempty"`
+	EmailAddresses     []string `json:"email_addresses,omitempty"`
+	URIs               []string `json:"uris,omitempty"`
+	ValidDays          int      `json:"valid_days,omitempty"`
+	Algorithm          string   `json:"algorithm,omitempty"`
+	StoreType          string   `json:"store_type,omitempty"`
+	KeyUsage           []string `json:"key_usage,omitempty"`
+	ExtKeyUsage        []string `json:"ext_key_usage,omitempty"`
+	IsCA               bool     `json:"is_ca,omitempty"`
+	MaxPathLen         int      `json:"max_path_len,omitempty"`
+}
+
+// IAMCreateUserRequest represents a user creation request for MCP.
+type IAMCreateUserRequest struct {
+	TenantID   string            `json:"tenant_id"`
+	Email      string            `json:"email"`
+	Name       string            `json:"name,omitempty"`
+	Roles      []string          `json:"roles,omitempty"`
+	Groups     []string          `json:"groups,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
+}
+
+// IAMCreateRoleRequest represents a role creation request for MCP.
+type IAMCreateRoleRequest struct {
+	TenantID    string   `json:"tenant_id"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Permissions []string `json:"permissions,omitempty"`
+}
+
+// IAMAuthenticateRequest represents an authentication request for MCP.
+type IAMAuthenticateRequest struct {
+	TenantID    string `json:"tenant_id"`
+	Email       string `json:"email"`
+	Password    string `json:"password" secret:"true"`
+	TOTPCode    string `json:"totp_code,omitempty"`
+	Certificate string `json:"certificate,omitempty"`
+}
+
+// IAMCreateGroupRequest represents a group creation request for MCP.
+type IAMCreateGroupRequest struct {
+	TenantID    string `json:"tenant_id"`
+	ID          string `json:"id"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// IAMCreateTenantRequest represents a tenant creation request for MCP.
+type IAMCreateTenantRequest struct {
+	ID       string             `json:"id"`
+	Name     string             `json:"name,omitempty"`
+	Settings *IAMTenantSettings `json:"settings,omitempty"`
+}
+
+// IAMTenantSettings represents tenant configuration settings.
+type IAMTenantSettings struct {
+	MaxUsers    int32 `json:"max_users,omitempty"`
+	MFARequired bool  `json:"mfa_required,omitempty"`
+}
+
+// IAMCreateTokenRequest represents a token creation request for MCP.
+type IAMCreateTokenRequest struct {
+	TenantID    string   `json:"tenant_id"`
+	UserID      string   `json:"user_id"`
+	Scopes      []string `json:"scopes,omitempty"`
+	ExpiresIn   int64    `json:"expires_in,omitempty"`
+	Description string   `json:"description,omitempty"`
+}
+
+// KMSCreateKeyRequest represents a key creation request for MCP.
+type KMSCreateKeyRequest struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Algorithm   string   `json:"algorithm"`
+	KeyUsage    []string `json:"key_usage"`
+	KeySize     int      `json:"key_size,omitempty"`
+	Curve       string   `json:"curve,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+}
+
+// KMSEncryptRequest represents an encryption request for MCP.
+type KMSEncryptRequest struct {
+	KeyID     string `json:"key_id"`
+	Plaintext []byte `json:"plaintext"`
+	Context   []byte `json:"context,omitempty"`
+}
+
+// KMSDecryptRequest represents a decryption request for MCP.
+type KMSDecryptRequest struct {
+	KeyID      string `json:"key_id"`
+	Ciphertext []byte `json:"ciphertext"`
+	Nonce      []byte `json:"nonce,omitempty"`
+	Context    []byte `json:"context,omitempty"`
+	KeyVersion int    `json:"key_version,omitempty"`
+}
+
+// KMSSignRequest represents a signing request for MCP.
+type KMSSignRequest struct {
+	KeyID         string `json:"key_id"`
+	Message       []byte `json:"message"`
+	HashAlgorithm string `json:"hash_algorithm,omitempty"`
+}
+
+// KMSVerifyRequest represents a verification request for MCP.
+type KMSVerifyRequest struct {
+	KeyID         string `json:"key_id"`
+	Message       []byte `json:"message"`
+	Signature     []byte `json:"signature"`
+	HashAlgorithm string `json:"hash_algorithm,omitempty"`
+}
+
+// KMSGenerateDataKeyRequest represents a data key generation request for MCP.
+// Data keys are used for envelope encryption where:
+// 1. A data encryption key (DEK) is generated
+// 2. Data is encrypted locally using the DEK
+// 3. The DEK is encrypted (wrapped) by a KMS-managed key (KEK)
+// 4. Both encrypted data and wrapped DEK are stored together
+type KMSGenerateDataKeyRequest struct {
+	// KeyID is the ID of the key encryption key (KEK) to wrap the DEK
+	KeyID string `json:"key_id"`
+	// Algorithm is the DEK algorithm (default: aes-256-gcm)
+	Algorithm string `json:"algorithm,omitempty"`
+	// Context is optional encryption context (AAD) for additional authentication
+	Context string `json:"context,omitempty"`
+}
+
+// KMSGenerateWrappedDataKeyRequest represents a wrapped-only data key generation request.
+// This generates only the wrapped DEK without exposing the plaintext version.
+type KMSGenerateWrappedDataKeyRequest struct {
+	// KeyID is the ID of the key encryption key (KEK) to wrap the DEK
+	KeyID string `json:"key_id"`
+	// Algorithm is the DEK algorithm (default: aes-256-gcm)
+	Algorithm string `json:"algorithm,omitempty"`
+	// Context is optional encryption context (AAD) for additional authentication
+	Context string `json:"context,omitempty"`
+}
+
+// IPAMPoolCreateRequest represents an IPAM pool creation request for MCP.
+type IPAMPoolCreateRequest struct {
+	Name                 string   `json:"name"`
+	CIDR                 string   `json:"cidr"`
+	Gateway              string   `json:"gateway,omitempty"`
+	DNS                  []string `json:"dns,omitempty"`
+	LeaseDurationSeconds int64    `json:"lease_duration_seconds,omitempty"`
+}
+
+// ServiceProvider is the interface that MCP uses to access platform services.
+// This allows the MCP server to call platform operations.
+type ServiceProvider interface {
+	// vTPM bundle CRUD operations
+	VTPMCreate(ctx context.Context, name string, algorithm string) (interface{}, error)
+	VTPMDelete(ctx context.Context, name string) error
+	VTPMList(ctx context.Context) ([]interface{}, error)
+	VTPMGet(ctx context.Context, name string) (interface{}, error)
+	VTPMValidate(ctx context.Context, name string) (interface{}, error)
+	VTPMExport(ctx context.Context, name string) (interface{}, error)
+	VTPMImport(ctx context.Context, data []byte) (interface{}, error)
+
+	// vTPM template operations
+	VTPMCreateTemplate(ctx context.Context, id string, description string, algorithm string, secureBoot bool) (interface{}, error)
+	VTPMGetTemplate(ctx context.Context, id string) (interface{}, error)
+	VTPMDeleteTemplate(ctx context.Context, id string) error
+	VTPMListTemplates(ctx context.Context) (interface{}, error)
+	VTPMCloneTemplate(ctx context.Context, templateID string, hostname string, labels map[string]string) (interface{}, error)
+
+	// vTPM path operations
+	VTPMGetBundlePath(ctx context.Context, name string) (interface{}, error)
+	VTPMGetTPMSocketPath(ctx context.Context, name string) (interface{}, error)
+	VTPMGetNVRAMPath(ctx context.Context, name string) (interface{}, error)
+
+	// vTPM runtime TPM operations
+	VTPMStart(ctx context.Context, name string) error
+	VTPMStop(ctx context.Context, name string) error
+	VTPMIsRunning(ctx context.Context, name string) (interface{}, error)
+	VTPMQuote(ctx context.Context, name string, nonce []byte, pcrs []int) (interface{}, error)
+	VTPMSeal(ctx context.Context, name string, data []byte, pcrs []int) ([]byte, error)
+	VTPMUnseal(ctx context.Context, name string, sealed []byte) ([]byte, error)
+	VTPMExtendPCR(ctx context.Context, name string, pcr int, data []byte) error
+	VTPMReadPCR(ctx context.Context, name string, pcr int) ([]byte, error)
+
+	// DNS operations
+	DNSAddRecord(ctx context.Context, name string, recordType string, value string, ttl int) error
+	DNSDeleteRecord(ctx context.Context, name string, recordType string) error
+	DNSGetRecord(ctx context.Context, name string, recordType string) (interface{}, error)
+	DNSListRecords(ctx context.Context, zone string) ([]interface{}, error)
+	DNSResolve(ctx context.Context, name string, recordType string) ([]string, error)
+	DNSCreateZone(ctx context.Context, zone string) error
+	DNSDeleteZone(ctx context.Context, zone string) error
+	DNSListZones(ctx context.Context) ([]string, error)
+
+	// Device operations
+	DeviceRegister(ctx context.Context, name string, deviceType string, publicKey []byte) (interface{}, error)
+	DeviceGet(ctx context.Context, deviceID string) (interface{}, error)
+	DeviceList(ctx context.Context, filter map[string]string) ([]interface{}, error)
+	DeviceDelete(ctx context.Context, deviceID string) error
+	DeviceUpdate(ctx context.Context, deviceID string, updates map[string]interface{}) error
+	DeviceAttest(ctx context.Context, deviceID string, evidence []byte) (interface{}, error)
+	DeviceProvision(ctx context.Context, deviceID string, profile string) error
+
+	// SDN Bridge operations
+	SDNGetPortState(ctx context.Context, bridgeName string, portName string) (interface{}, error)
+	SDNSetPortState(ctx context.Context, bridgeName string, portName string, state string) error
+	SDNListBridges(ctx context.Context) ([]interface{}, error)
+	SDNCreateBridge(ctx context.Context, bridgeName string) error
+	SDNDeleteBridge(ctx context.Context, bridgeName string) error
+	SDNAddPort(ctx context.Context, bridgeName string, portName string, portType string) error
+	SDNDeletePort(ctx context.Context, bridgeName string, portName string) error
+	SDNApplyPolicy(ctx context.Context, policyID string, bridgeName string) error
+	SDNGetPolicy(ctx context.Context, policyID string) (interface{}, error)
+	SDNListPolicies(ctx context.Context) ([]interface{}, error)
+
+	// SDN Flow operations
+	SDNAddFlow(ctx context.Context, bridgeName string, flow map[string]interface{}) error
+	SDNDeleteFlow(ctx context.Context, bridgeName string, flowID string) error
+	SDNListFlows(ctx context.Context, bridgeName string) ([]interface{}, error)
+	SDNFlushFlows(ctx context.Context, bridgeName string) error
+
+	// SDN VLAN operations
+	SDNCreateVLAN(ctx context.Context, bridgeName string, vlanID int, name string) error
+	SDNDeleteVLAN(ctx context.Context, bridgeName string, vlanID int) error
+	SDNListVLANs(ctx context.Context, bridgeName string) ([]interface{}, error)
+
+	// SDN Port authentication
+	SDNAuthenticatePort(ctx context.Context, bridgeName string, portName string, credentials map[string]string) error
+	SDNRevokePortAuth(ctx context.Context, bridgeName string, portName string) error
+
+	// SDN Statistics
+	SDNGetPortStats(ctx context.Context, bridgeName string, portName string) (interface{}, error)
+	SDNGetFlowStats(ctx context.Context, bridgeName string) (interface{}, error)
+
+	// Overlay network operations
+	OverlayStatus(ctx context.Context) (interface{}, error)
+	OverlayVTEPList(ctx context.Context) ([]interface{}, error)
+	OverlayVTEPGet(ctx context.Context, nodeID string) (interface{}, error)
+	OverlayVNIList(ctx context.Context) ([]interface{}, error)
+	OverlayVNICreate(ctx context.Context, vni uint32, vlan uint16, name string) (interface{}, error)
+	OverlayVNIDelete(ctx context.Context, vni uint32) error
+	OverlayTunnelList(ctx context.Context, vni uint32) ([]interface{}, error)
+	OverlayMACList(ctx context.Context, vni uint32) ([]interface{}, error)
+	OverlayMACForget(ctx context.Context, mac string, vni uint32) error
+
+	// Gateway operations
+	GatewayStatus(ctx context.Context) (interface{}, error)
+	GatewayModeSet(ctx context.Context, modes []string) (interface{}, error)
+
+	// Gateway BGP operations
+	GatewayBGPStatus(ctx context.Context) (interface{}, error)
+	GatewayBGPPeers(ctx context.Context) ([]interface{}, error)
+	GatewayBGPAnnounce(ctx context.Context, prefix string, nextHop string) error
+	GatewayBGPWithdraw(ctx context.Context, prefix string) error
+	GatewayBGPPrefixes(ctx context.Context) ([]interface{}, error)
+
+	// Gateway IPAM operations
+	GatewayIPAMPools(ctx context.Context) ([]interface{}, error)
+	GatewayIPAMPoolCreate(ctx context.Context, req *IPAMPoolCreateRequest) (interface{}, error)
+	GatewayIPAMPoolDelete(ctx context.Context, poolID string) error
+	GatewayIPAMAllocate(ctx context.Context, poolID string, deviceID string, hostname string) (interface{}, error)
+	GatewayIPAMRelease(ctx context.Context, ip string) error
+	GatewayIPAMAllocations(ctx context.Context, poolID string) ([]interface{}, error)
+
+	// Health operations
+	Health(ctx context.Context) (interface{}, error)
+	Liveness(ctx context.Context) (interface{}, error)
+	Readiness(ctx context.Context) (interface{}, error)
+
+	// Daemon management operations
+	DaemonStatus(ctx context.Context) (interface{}, error)
+	DaemonVersion(ctx context.Context) (interface{}, error)
+	DaemonListServices(ctx context.Context) (interface{}, error)
+	DaemonGetService(ctx context.Context, name string) (interface{}, error)
+	DaemonStartService(ctx context.Context, name string) (interface{}, error)
+	DaemonStopService(ctx context.Context, name string) (interface{}, error)
+	DaemonRestartService(ctx context.Context, name string) (interface{}, error)
+	DaemonListProtocols(ctx context.Context) (interface{}, error)
+
+	// CA operations
+	CAInfo(ctx context.Context) (interface{}, error)
+	CAIssue(ctx context.Context, req *CAIssueRequest) (interface{}, error)
+	CAGet(ctx context.Context, serial string, includePEM bool) (interface{}, error)
+	CAList(ctx context.Context, limit int, cursor string, status string) (interface{}, error)
+	CARevoke(ctx context.Context, serial string, reason int, deleteKeys bool) (interface{}, error)
+	CARenew(ctx context.Context, serial string, extendDays int, preserveAttrs bool) (interface{}, error)
+	CAVerify(ctx context.Context, certificatePEM string, certificateDER []byte, checkRevoked bool) (interface{}, error)
+	CACRL(ctx context.Context) (interface{}, error)
+	CABundle(ctx context.Context, storeType string, algorithm string) (interface{}, error)
+
+	// IAM User operations
+	IAMCreateUser(ctx context.Context, req *IAMCreateUserRequest) (interface{}, error)
+	IAMDeleteUser(ctx context.Context, tenantID string, userID string) error
+	IAMGetUser(ctx context.Context, tenantID string, userID string) (interface{}, error)
+	IAMListUsers(ctx context.Context, tenantID string, limit int, offset int) (interface{}, error)
+
+	// IAM Role operations
+	IAMCreateRole(ctx context.Context, req *IAMCreateRoleRequest) (interface{}, error)
+	IAMDeleteRole(ctx context.Context, tenantID string, roleID string) error
+	IAMGetRole(ctx context.Context, tenantID string, roleID string) (interface{}, error)
+	IAMListRoles(ctx context.Context, tenantID string, limit int, offset int) (interface{}, error)
+
+	// IAM Role assignment operations
+	IAMAssignRole(ctx context.Context, tenantID string, userID string, role string) error
+	IAMRevokeRole(ctx context.Context, tenantID string, userID string, role string) error
+
+	// IAM Authorization operations
+	IAMCheckPermission(ctx context.Context, tenantID string, userID string, resource string, action string) (bool, error)
+	IAMAuthenticate(ctx context.Context, req *IAMAuthenticateRequest) (interface{}, error)
+
+	// IAM Group operations
+	IAMCreateGroup(ctx context.Context, req *IAMCreateGroupRequest) (interface{}, error)
+	IAMDeleteGroup(ctx context.Context, tenantID string, groupID string) error
+	IAMGetGroup(ctx context.Context, tenantID string, groupID string) (interface{}, error)
+	IAMListGroups(ctx context.Context, tenantID string, limit int, offset int) (interface{}, error)
+	IAMAddGroupMember(ctx context.Context, tenantID string, groupID string, userID string) error
+	IAMRemoveGroupMember(ctx context.Context, tenantID string, groupID string, userID string) error
+
+	// IAM Tenant operations
+	IAMCreateTenant(ctx context.Context, req *IAMCreateTenantRequest) (interface{}, error)
+	IAMDeleteTenant(ctx context.Context, tenantID string) error
+	IAMGetTenant(ctx context.Context, tenantID string) (interface{}, error)
+	IAMListTenants(ctx context.Context, limit int, offset int) (interface{}, error)
+
+	// IAM Token operations
+	IAMCreateToken(ctx context.Context, req *IAMCreateTokenRequest) (interface{}, error)
+	IAMRevokeToken(ctx context.Context, tokenID string) error
+	IAMVerifyToken(ctx context.Context, token string) (interface{}, error)
+
+	// KMS Key management operations
+	KMSCreateKey(ctx context.Context, req *KMSCreateKeyRequest) (interface{}, error)
+	KMSDeleteKey(ctx context.Context, keyID string) error
+	KMSGetKey(ctx context.Context, keyID string) (interface{}, error)
+	KMSListKeys(ctx context.Context, limit int, offset int) (interface{}, error)
+	KMSRotateKey(ctx context.Context, keyID string) (interface{}, error)
+
+	// KMS Cryptographic operations
+	KMSEncrypt(ctx context.Context, req *KMSEncryptRequest) (interface{}, error)
+	KMSDecrypt(ctx context.Context, req *KMSDecryptRequest) (interface{}, error)
+	KMSSign(ctx context.Context, req *KMSSignRequest) (interface{}, error)
+	KMSVerify(ctx context.Context, req *KMSVerifyRequest) (interface{}, error)
+
+	// KMS Random generation
+	KMSGenerateRandom(ctx context.Context, numBytes int) ([]byte, error)
+
+	// KMS Data key operations (envelope encryption)
+	KMSGenerateDataKey(ctx context.Context, req *KMSGenerateDataKeyRequest) (interface{}, error)
+	KMSGenerateWrappedDataKey(ctx context.Context, req *KMSGenerateWrappedDataKeyRequest) (interface{}, error)
+
+	// Container operations
+	ContainerCreate(ctx context.Context, name string, image string, config map[string]interface{}) (interface{}, error)
+	ContainerStart(ctx context.Context, id string) error
+	ContainerStop(ctx context.Context, id string, timeout int) error
+	ContainerRemove(ctx context.Context, id string, force bool) error
+	ContainerGet(ctx context.Context, id string) (interface{}, error)
+	ContainerList(ctx context.Context, all bool, filters map[string][]string, limit int) ([]interface{}, error)
+	ContainerLogs(ctx context.Context, id string, follow bool, stdout bool, stderr bool, tail string, timestamps bool) (string, error)
+	ContainerAttest(ctx context.Context, id string) (interface{}, error)
+
+	// IDevID operations (IEEE 802.1AR device identity)
+	IDevIDGenerate(ctx context.Context, req *IDevIDGenerateMCPRequest) (interface{}, error)
+	IDevIDInfo(ctx context.Context) (interface{}, error)
+	IDevIDDelete(ctx context.Context) error
+	IDevIDCSR(ctx context.Context, req *IDevIDCSRMCPRequest) (interface{}, error)
+	IDevIDInstallCert(ctx context.Context, certificatePEM string) (interface{}, error)
+	IDevIDGetCert(ctx context.Context, includePEM bool) (interface{}, error)
+	IDevIDDeleteCert(ctx context.Context) error
+	IDevIDExists(ctx context.Context) (bool, error)
+
+	// IAK operations (IEEE 802.1AR attestation key)
+	IAKGenerate(ctx context.Context, req *IDevIDGenerateMCPRequest) (interface{}, error)
+	IAKInfo(ctx context.Context) (interface{}, error)
+	IAKDelete(ctx context.Context) error
+	IAKCSR(ctx context.Context, req *IDevIDCSRMCPRequest) (interface{}, error)
+	IAKInstallCert(ctx context.Context, certificatePEM string) (interface{}, error)
+	IAKGetCert(ctx context.Context, includePEM bool) (interface{}, error)
+	IAKDeleteCert(ctx context.Context) error
+	IAKExists(ctx context.Context) (bool, error)
+
+	// Device attribute and credential operations
+	DeviceAttributes(ctx context.Context) (interface{}, error)
+	ActivateCredential(ctx context.Context, credentialBlob []byte, secret []byte) ([]byte, error)
+
+	// Physical TPM operations
+	TPMInfo(ctx context.Context) (interface{}, error)
+	TPMProvision(ctx context.Context, ownerPassword string) (interface{}, error)
+	TPMClear(ctx context.Context, ownerPassword string) (interface{}, error)
+	TPMGetEK(ctx context.Context) (interface{}, error)
+	TPMGetEKCert(ctx context.Context) (interface{}, error)
+	TPMImportEKCert(ctx context.Context, certDER []byte) (interface{}, error)
+	TPMCreateEK(ctx context.Context) (interface{}, error)
+	TPMDeleteEK(ctx context.Context) (interface{}, error)
+	TPMGetSRK(ctx context.Context) (interface{}, error)
+	TPMCreateSRK(ctx context.Context) (interface{}, error)
+	TPMDeleteSRK(ctx context.Context) (interface{}, error)
+	TPMGetIAK(ctx context.Context) (interface{}, error)
+	TPMCreateIAK(ctx context.Context) (interface{}, error)
+	TPMDeleteIAK(ctx context.Context) (interface{}, error)
+	TPMQuote(ctx context.Context, nonce []byte, pcrs []int) (interface{}, error)
+	TPMVerifyQuote(ctx context.Context, quote []byte, signature []byte, nonce []byte) (interface{}, error)
+	TPMReadPCRs(ctx context.Context, indices []int) (interface{}, error)
+	TPMExtendPCR(ctx context.Context, pcrIndex int, data []byte) (interface{}, error)
+	TPMEventLog(ctx context.Context) (interface{}, error)
+	TPMCapabilities(ctx context.Context) (interface{}, error)
+	TPMRandom(ctx context.Context, numBytes int) ([]byte, error)
+	TPMSeal(ctx context.Context, data []byte, pcrs []int) ([]byte, error)
+	TPMUnseal(ctx context.Context, cn string) ([]byte, error)
+	TPMCertify(ctx context.Context, keyHandle int) (interface{}, error)
+	TPMNVList(ctx context.Context) (interface{}, error)
+	TPMNVRead(ctx context.Context, index int, size int) ([]byte, error)
+	TPMNVWrite(ctx context.Context, index int, data []byte) (interface{}, error)
+	TPMNVDelete(ctx context.Context, index int) (interface{}, error)
+	TPMPlatform(ctx context.Context) (interface{}, error)
+}
+
+// AuthManager validates authentication tokens.
+type AuthManager interface {
+	ValidateToken(ctx context.Context, token string) (bool, error)
+	GetTokenClaims(ctx context.Context, token string) (map[string]interface{}, error)
+}
+
+// AuthorizationService checks permissions.
+type AuthorizationService interface {
+	CheckPermission(ctx context.Context, subject string, resource string, action string) (bool, error)
+}
+
+// Token context key type for avoiding collisions.
+type tokenContextKey struct{}
+
+// ContextWithToken adds a token to the context.
+func ContextWithToken(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, tokenContextKey{}, token)
+}
+
+// TokenFromContext extracts a token from the context.
+func TokenFromContext(ctx context.Context) string {
+	if token, ok := ctx.Value(tokenContextKey{}).(string); ok {
+		return token
+	}
+	return ""
+}

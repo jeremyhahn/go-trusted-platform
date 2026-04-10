@@ -1,0 +1,3 @@
+# This directory contains the Next.js static export for embedding.
+# Files are copied here during the build process with 'make build-web'.
+# This file ensures the directory is tracked by git.

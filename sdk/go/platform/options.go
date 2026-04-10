@@ -1,0 +1,250 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package platform
+
+import (
+	"crypto/tls"
+	"time"
+)
+
+// Default configuration values.
+const (
+	// DefaultTimeout is the default connection timeout.
+	DefaultTimeout = 5 * time.Second
+
+	// DefaultUnixSocket is the default Unix socket path for the daemon.
+	DefaultUnixSocket = "/run/platformd.sock"
+
+	// DefaultGRPCPort is the default gRPC port.
+	DefaultGRPCPort = "10443"
+
+	// DefaultRESTPort is the default REST API port.
+	DefaultRESTPort = "8443"
+
+	// DefaultQUICPort is the default QUIC port.
+	DefaultQUICPort = "9444"
+
+	// DefaultMCPPort is the default MCP port.
+	DefaultMCPPort = "9445"
+
+	// DefaultMaxMessageSize is the default maximum gRPC message size (4MB).
+	DefaultMaxMessageSize = 4 * 1024 * 1024
+)
+
+// Options contains configuration for establishing a client connection.
+type Options struct {
+	// UnixSocket is the path to the Unix domain socket.
+	// Used for local connections (requires root privileges).
+	UnixSocket string
+
+	// GRPCAddr is the gRPC server address (host:port).
+	GRPCAddr string
+
+	// RESTAddr is the REST API server address (host:port).
+	RESTAddr string
+
+	// QUICAddr is the QUIC server address (host:port).
+	QUICAddr string
+
+	// MCPAddr is the MCP server address (host:port).
+	MCPAddr string
+
+	// TLSConfig is the TLS configuration for secure connections.
+	// If nil, insecure connections may be attempted.
+	TLSConfig *tls.Config
+
+	// Timeout is the connection timeout.
+	// Defaults to DefaultTimeout if not set.
+	Timeout time.Duration
+
+	// MaxMessageSize is the maximum gRPC message size.
+	// Defaults to DefaultMaxMessageSize if not set.
+	MaxMessageSize int
+
+	// PreferredProtocol specifies a preferred protocol to try first.
+	// If empty, the default priority order is used (Unix > gRPC > REST > QUIC > MCP).
+	PreferredProtocol Protocol
+
+	// OnlyProtocol restricts connection to a single protocol.
+	// If set, only this protocol will be attempted.
+	OnlyProtocol Protocol
+
+	// EmbeddedServices holds the service registry for embedded transport.
+	// This is an opaque value that is passed to the embedded transport adapter.
+	// Type: *embedded.ServiceRegistry (stored as interface{} to avoid circular import).
+	EmbeddedServices interface{}
+}
+
+// Option is a functional option for configuring Options.
+type Option func(*Options)
+
+// NewOptions creates a new Options with defaults applied.
+func NewOptions(opts ...Option) *Options {
+	o := &Options{
+		UnixSocket:     DefaultUnixSocket,
+		Timeout:        DefaultTimeout,
+		MaxMessageSize: DefaultMaxMessageSize,
+	}
+
+	for _, opt := range opts {
+		opt(o)
+	}
+
+	return o
+}
+
+// WithUnixSocket sets the Unix socket path.
+func WithUnixSocket(path string) Option {
+	return func(o *Options) {
+		o.UnixSocket = path
+	}
+}
+
+// WithGRPCAddr sets the gRPC server address.
+func WithGRPCAddr(addr string) Option {
+	return func(o *Options) {
+		o.GRPCAddr = addr
+	}
+}
+
+// WithRESTAddr sets the REST API server address.
+func WithRESTAddr(addr string) Option {
+	return func(o *Options) {
+		o.RESTAddr = addr
+	}
+}
+
+// WithQUICAddr sets the QUIC server address.
+func WithQUICAddr(addr string) Option {
+	return func(o *Options) {
+		o.QUICAddr = addr
+	}
+}
+
+// WithMCPAddr sets the MCP server address.
+func WithMCPAddr(addr string) Option {
+	return func(o *Options) {
+		o.MCPAddr = addr
+	}
+}
+
+// WithTLSConfig sets the TLS configuration.
+func WithTLSConfig(cfg *tls.Config) Option {
+	return func(o *Options) {
+		o.TLSConfig = cfg
+	}
+}
+
+// WithTimeout sets the connection timeout.
+func WithTimeout(d time.Duration) Option {
+	return func(o *Options) {
+		o.Timeout = d
+	}
+}
+
+// WithMaxMessageSize sets the maximum message size.
+func WithMaxMessageSize(size int) Option {
+	return func(o *Options) {
+		o.MaxMessageSize = size
+	}
+}
+
+// WithPreferredProtocol sets the preferred protocol.
+func WithPreferredProtocol(p Protocol) Option {
+	return func(o *Options) {
+		o.PreferredProtocol = p
+	}
+}
+
+// WithOnlyProtocol restricts to a single protocol.
+func WithOnlyProtocol(p Protocol) Option {
+	return func(o *Options) {
+		o.OnlyProtocol = p
+	}
+}
+
+// WithEmbeddedServices provides a service registry for in-process transport.
+// The value must be a *embedded.ServiceRegistry.
+func WithEmbeddedServices(registry interface{}) Option {
+	return func(o *Options) {
+		o.EmbeddedServices = registry
+	}
+}
+
+// Validate validates the options and returns an error if invalid.
+func (o *Options) Validate() error {
+	if o.OnlyProtocol != ProtocolUnknown && !o.OnlyProtocol.IsValid() {
+		return ErrInvalidOptions{Field: "OnlyProtocol", Reason: "invalid protocol value"}
+	}
+
+	if o.PreferredProtocol != ProtocolUnknown && !o.PreferredProtocol.IsValid() {
+		return ErrInvalidOptions{Field: "PreferredProtocol", Reason: "invalid protocol value"}
+	}
+
+	if o.Timeout < 0 {
+		return ErrInvalidOptions{Field: "Timeout", Reason: "cannot be negative"}
+	}
+
+	if o.MaxMessageSize < 0 {
+		return ErrInvalidOptions{Field: "MaxMessageSize", Reason: "cannot be negative"}
+	}
+
+	return nil
+}
+
+// GetTimeout returns the timeout, defaulting to DefaultTimeout if not set.
+func (o *Options) GetTimeout() time.Duration {
+	if o.Timeout == 0 {
+		return DefaultTimeout
+	}
+	return o.Timeout
+}
+
+// GetMaxMessageSize returns the max message size, defaulting if not set.
+func (o *Options) GetMaxMessageSize() int {
+	if o.MaxMessageSize == 0 {
+		return DefaultMaxMessageSize
+	}
+	return o.MaxMessageSize
+}
+
+// HasUnixSocket returns true if a Unix socket path is configured.
+func (o *Options) HasUnixSocket() bool {
+	return o.UnixSocket != ""
+}
+
+// HasGRPCAddr returns true if a gRPC address is configured.
+func (o *Options) HasGRPCAddr() bool {
+	return o.GRPCAddr != ""
+}
+
+// HasRESTAddr returns true if a REST address is configured.
+func (o *Options) HasRESTAddr() bool {
+	return o.RESTAddr != ""
+}
+
+// HasQUICAddr returns true if a QUIC address is configured.
+func (o *Options) HasQUICAddr() bool {
+	return o.QUICAddr != ""
+}
+
+// HasMCPAddr returns true if an MCP address is configured.
+func (o *Options) HasMCPAddr() bool {
+	return o.MCPAddr != ""
+}
+
+// HasEmbeddedServices returns true if embedded services are configured.
+func (o *Options) HasEmbeddedServices() bool {
+	return o.EmbeddedServices != nil
+}

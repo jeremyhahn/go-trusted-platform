@@ -1,0 +1,9 @@
+# CVE Remediation Log (2026-03-29)
+#
+# The following CVEs were remediated by dependency upgrades:
+#
+# CVE-2026-26017 (CoreDNS DNS access control bypass) - Fixed: v1.13.2 -> v1.14.2
+# CVE-2026-26018 (CoreDNS DoS via predictable PRNG) - Fixed: v1.13.2 -> v1.14.2
+# CVE-2026-24051 (OpenTelemetry Go SDK PATH hijacking) - Fixed: v1.42.0 (already patched)
+# GHSA-h25m-26qc-wcjf (Next.js HTTP deserialization DoS) - Fixed: 16.1.1 -> 16.2.1
+# GHSA-6g7g-w4f8-9c9x (buger/jsonparser DoS) - Fixed: v1.1.1 -> v1.1.2

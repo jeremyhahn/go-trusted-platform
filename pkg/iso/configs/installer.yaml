@@ -1,0 +1,76 @@
+# Trusted Platform Installer Configuration
+# Auto-generated from ISO build configuration
+# This file matches the installer.Config structure for use with platformd initrd system-install
+
+# Disk configuration
+disk:
+  # Target disk device (auto-detected by installer if empty)
+  device: ""
+
+  # Partition table type: gpt or mbr
+  partition-table: gpt
+
+  # EFI partition size in MB
+  efi-partition-size: 538
+
+  # Root filesystem type: lvm or ext4
+  root-filesystem: lvm
+
+  # LVM volume group name (when using lvm)
+  lvm-volume-group: vg0
+
+  # LVM logical volume name (when using lvm)
+  lvm-logical-volume: root
+
+  # LUKS encryption settings
+  encryption:
+    version: luks2
+    cipher: aes-xts-plain64
+    key-size: 512
+    hash: sha256
+    pbkdf: argon2id
+    # Password will be set via --password flag or prompted during installation
+    password: ""
+    passphrase: ""
+    mapped-name: cryptroot
+
+# Operating system configuration
+os:
+  os: alpine
+  version: "3.22.2"
+  architecture: x86_64
+  hostname: trusted-platform
+  mirror: "http://example.com"
+  packages:
+    - bash
+    - vim
+    - curl
+    - wget
+    - htop
+    - lsblk
+    - parted
+    - e2fsprogs
+    - lvm2
+    - tpm2-tss
+    - tpm2-tools
+    - dracut
+    - softhsm
+  root-password: ""
+  filesystem-type: lvm
+  fips: false
+  lockdown: false
+  lockdown-mode: confidentiality
+  tpm-auto-upgrade-seal: false
+  enable-fido2: false
+  platformd-binary: ""
+
+# TPM sealing configuration (top-level, not nested under tpm:)
+enable-tpm-sealing: false
+
+# PCRs to seal LUKS keys against
+pcrs:
+  - 0
+  - 7
+
+# Enable debug mode
+debug: false

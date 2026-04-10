@@ -1,0 +1,431 @@
+# TPM Configuration
+
+This document describes the configuration options for the TPM 2.0 integration in go-trusted-platform.
+
+## Configuration Overview
+
+TPM configuration is specified in the platform configuration file (YAML format) and can be overridden via command-line flags.
+
+## Configuration File
+
+### Basic TPM Configuration
+
+```yaml
+tpm:
+  # TPM device path
+  device: /dev/tpmrm0
+
+  # Use software TPM (swtpm) instead of hardware
+  simulator: false
+
+  # Encrypt TPM command sessions
+  encrypt-sessions: false
+
+  # Use TPM as entropy source
+  entropy: false
+
+  # Default hash algorithm
+  hash: SHA-256
+```
+
+### Key Handle Configuration
+
+Each key type is configured in its own nested section:
+
+```yaml
+tpm:
+  # Endorsement Key (EK) - manufacturer-certified identity key
+  ek:
+    handle: 0x81010001
+    hash: SHA-256
+    rsa:
+      size: 2048
+
+  # Shared Storage Root Key (SSRK) - protects storage hierarchy
+  ssrk:
+    handle: 0x81000001
+    platform-policy: false
+    rsa:
+      size: 2048
+
+  # Initial Attestation Key (IAK) - for remote attestation
+  iak:
+    handle: 0x81010002
+    hash: SHA-256
+    signature-algorithm: SHA256-RSA
+    rsa:
+      size: 2048
+
+  # Initial Device ID (IDevID) - device identity certificate
+  idevid:
+    handle: 0x81020000
+    cert-handle: 0x01C90000
+    model: edge
+    serial: device-serial-001
+    hash: SHA-256
+    signature-algorithm: SHA256-RSA
+    rsa:
+      size: 2048
+```
+
+### PCR Configuration
+
+```yaml
+tpm:
+  # Platform PCR for measurements
+  platform-pcr: 23
+
+  # PCR bank to use
+  platform-pcr-bank: sha256
+
+  # PCRs for sealing (Secure Boot + kernel cmdline)
+  golden-pcrs: [7, 9]
+```
+
+### Keystore Configuration
+
+```yaml
+tpm:
+  # TPM keystore for application keys
+  keystore:
+    srk-handle: 0x81000002
+    srk-auth: ""                # SRK authorization (empty for no auth)
+    platform-policy: true       # Bind to platform PCR state
+```
+
+## Full Configuration Example
+
+```yaml
+# Platform TPM configuration
+tpm:
+  # Device configuration
+  device: /dev/tpmrm0
+  simulator: false
+  encrypt-sessions: false
+  entropy: false
+  hash: SHA-256
+
+  # Endorsement Key (EK) - manufacturer-certified identity key
+  ek:
+    handle: 0x81010001
+    hash: SHA-256
+    rsa:
+      size: 2048
+
+  # Shared Storage Root Key (SSRK) - protects storage hierarchy
+  ssrk:
+    handle: 0x81000001
+    platform-policy: false
+    rsa:
+      size: 2048
+
+  # Initial Attestation Key (IAK) - for remote attestation
+  iak:
+    handle: 0x81010002
+    hash: SHA-256
+    signature-algorithm: SHA256-RSA
+    rsa:
+      size: 2048
+
+  # Initial Device ID (IDevID) - device identity certificate
+  idevid:
+    handle: 0x81020000
+    cert-handle: 0x01C90000
+    model: edge
+    serial: device-serial-001
+    hash: SHA-256
+    signature-algorithm: SHA256-RSA
+    rsa:
+      size: 2048
+
+  # PCR configuration
+  platform-pcr: 23
+  platform-pcr-bank: sha256
+  golden-pcrs: [7, 9]
+
+  # TPM keystore for application keys
+  keystore:
+    srk-handle: 0x81000002
+    srk-auth: ""
+    platform-policy: true
+```
+
+## Command-Line Flags
+
+### Global TPM Flags
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--tpm-device` | TPM device path | `/dev/tpmrm0` |
+| `--tpm-simulator` | Use software TPM | `false` |
+| `--tpm-debug` | Enable debug logging | `false` |
+
+### Authorization Flags
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--so-pin` | Prompt for SO PIN | `false` |
+| `--raw-so-pin` | SO PIN value (automation) | - |
+| `--pin` | Prompt for user PIN | `false` |
+| `--raw-pin` | User PIN value (automation) | - |
+
+### Key Operation Flags
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--handle` | TPM handle for operation | varies |
+| `--algorithm` | Key algorithm (rsa/ecdsa) | `rsa` |
+| `--key-size` | RSA key size in bits | `2048` |
+| `--ecc-curve` | ECC curve name | `P-256` |
+| `--persistent` | Make key persistent | `true` |
+
+### Seal/Unseal Flags
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--parent` | Parent key handle | `0x81000002` |
+| `--parent-password` | Parent key password | - |
+| `--parent-policy` | Use PCR policy for parent | `true` |
+| `--password` | Sealed object password | - |
+| `--policy` | Attach PCR policy | `true` |
+| `--overwrite` | Overwrite existing object | `false` |
+
+## Environment Variables
+
+TPM configuration can also be set via environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `TPM_DEVICE` | TPM device path |
+| `TPM_SIMULATOR` | Use software TPM (true/false) |
+| `TPM_OWNER_PASSWORD` | Owner hierarchy password |
+| `TPM_ENDORSEMENT_PASSWORD` | Endorsement hierarchy password |
+| `TPM_LOCKOUT_PASSWORD` | Lockout hierarchy password |
+
+## PCR Reference
+
+### PCR Index Assignments
+
+| PCR | Measured By | Contents |
+|-----|-------------|----------|
+| 0 | Firmware | Core UEFI code |
+| 1 | Firmware | UEFI configuration |
+| 2 | Firmware | Option ROM code |
+| 3 | Firmware | Option ROM configuration |
+| 4 | Firmware | MBR/Boot loader |
+| 5 | Firmware | GPT/Partition table |
+| 6 | Firmware | Resume from S4/S5 |
+| 7 | Firmware | Secure Boot state |
+| 8 | GRUB | Kernel command line |
+| 9 | GRUB/Kernel | Kernel and initrd |
+| 10 | IMA | Runtime file measurements |
+| 11 | systemd-stub | UKI components |
+| 12 | systemd-stub | Kernel parameters |
+| 13 | systemd-stub | System extensions |
+| 14 | shim | MOK certificates |
+| 15 | systemd | Root FS encryption key |
+
+### Recommended PCR Policies
+
+| Use Case | PCRs | Description |
+|----------|------|-------------|
+| Boot Integrity | 0, 1, 2, 3, 7 | Firmware and Secure Boot |
+| Kernel Integrity | 7, 8, 9 | Secure Boot + Kernel |
+| UKI Integrity | 7, 11 | Unified Kernel Image |
+| Full Integrity | 0-3, 7-9, 11 | Complete boot chain |
+
+## Handle Allocation
+
+### TCG Recommended Handles
+
+| Handle | Key Type | Description |
+|--------|----------|-------------|
+| 0x81010001 | EK | Endorsement Key (RSA) |
+| 0x81010002 | AK/IAK | Attestation Key |
+| 0x81000001 | SRK | Storage Root Key |
+| 0x81000002 | SSRK | Shared Storage Root Key |
+| 0x81020000 | IDevID | Device Identity Key |
+| 0x81000100+ | App Keys | Application keys |
+
+### Handle Ranges
+
+| Range | Purpose |
+|-------|---------|
+| 0x81000000-0x8100FFFF | Owner hierarchy persistent |
+| 0x81010000-0x8101FFFF | Endorsement hierarchy persistent |
+| 0x81020000-0x8102FFFF | Platform hierarchy persistent |
+
+## Software TPM Configuration
+
+### swtpm for Development
+
+```yaml
+tpm:
+  simulator: true
+  device: /tmp/swtpm-sock
+
+  # swtpm startup options
+  swtpm:
+    state_dir: /var/lib/swtpm
+    log_level: 3
+```
+
+### Starting swtpm
+
+```bash
+# Create state directory
+mkdir -p /var/lib/swtpm
+
+# Start swtpm
+swtpm socket \
+  --tpmstate dir=/var/lib/swtpm \
+  --ctrl type=unixio,path=/tmp/swtpm-sock \
+  --tpm2 \
+  --log level=3
+```
+
+### QEMU Integration
+
+```bash
+# Start QEMU with vTPM
+qemu-system-x86_64 \
+  -chardev socket,id=chrtpm,path=/tmp/swtpm-sock \
+  -tpmdev emulator,id=tpm0,chardev=chrtpm \
+  -device tpm-tis,tpmdev=tpm0 \
+  ...
+```
+
+## Troubleshooting
+
+### Common Issues
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| "TPM not found" | No TPM device | Check /dev/tpmrm0 exists |
+| "Permission denied" | Insufficient permissions | Add user to tss group |
+| "TPM in lockout" | Too many auth failures | Wait or clear lockout |
+| "Handle exists" | Key already provisioned | Use --overwrite or different handle |
+
+### Verify TPM Access
+
+```bash
+# Check TPM device
+ls -la /dev/tpmrm0
+
+# Check TPM group membership
+groups $(whoami)
+
+# Add user to tss group
+sudo usermod -aG tss $(whoami)
+```
+
+### Reset TPM Lockout
+
+```bash
+# Clear lockout (requires lockout auth)
+platformctl tpm clear --so-pin
+
+# Force UEFI clear (requires reboot)
+platformctl tpm clear --force
+```
+
+## Security Recommendations
+
+### Production Configuration
+
+```yaml
+tpm:
+  # Use hardware TPM
+  device: /dev/tpmrm0
+  simulator: false
+
+  # Encrypt TPM command sessions
+  encrypt-sessions: true
+
+  # Use TPM as entropy source
+  entropy: true
+
+  # PCR configuration - bind to Secure Boot and kernel
+  platform-pcr: 23
+  platform-pcr-bank: sha256
+  golden-pcrs: [0, 1, 2, 3, 7, 8, 9, 11]
+
+  # Keystore with platform policy
+  keystore:
+    srk-handle: 0x81000002
+    srk-auth: ""
+    platform-policy: true
+```
+
+### Key Storage
+
+- Store EK and SRK as persistent keys
+- Use PCR policies for sealed objects
+- Rotate application keys periodically
+- Back up TPM-sealed recovery keys
+
+### Access Control
+
+- Restrict /dev/tpmrm0 access via udev rules
+- Use hierarchy passwords
+- Implement lockout policies
+- Audit TPM operations
+
+## Provisioning
+
+This section describes the provisioning approach used by the Trusted Platform.
+
+### Authorization Implementation
+
+The Trusted Platform uses the "less complex" implementation mentioned in Section 7.2.2 - Implementation Options - from the TCG TPM 2.0 Keys for Device Identity and Attestation specification.
+
+This approach provides a balance between security and operational complexity suitable for most deployments.
+
+### Alternative Implementations
+
+**Most Complex Implementation:**
+An enterprise may safely configure the TPM per the "most complex" implementation option using a Delegation Policy following provisioning. This can be done using the TSS command line tools.
+
+**Simplest Implementation:**
+The "simplest implementation" may also be safely implemented by the Platform Administrator or Owner following provisioning using the same TSS command line tools.
+
+### Provisioning Steps
+
+1. **Check TPM Availability**
+   ```bash
+   platformctl tpm info
+   ```
+
+2. **Provision TPM with Platform Keys**
+   ```bash
+   platformctl platform provision --tpm2
+   ```
+
+3. **Verify Key Hierarchy**
+   ```bash
+   platformctl tpm ek show
+   platformctl tpm srk show
+   ```
+
+## Related Documentation
+
+- [README](README.md) - TPM module overview
+- [Architecture](architecture.md) - TPM integration architecture
+- [CLI Usage](cli-usage.md) - Command-line reference
+- [Sealing](sealing.md) - PCR-based data protection
+- [Attestation](attestation.md) - Quote operations
+- [PCRs](pcrs.md) - Platform Configuration Register reference
+- [Security](security.md) - Security considerations and CVEs
+
+## References
+
+### TCG Specifications
+
+- [TCG TPM 2.0 Provisioning Guidance](https://trustedcomputinggroup.org/wp-content/uploads/TCG-TPM-v2.0-Provisioning-Guidance-Published-v1r1.pdf)
+- [TPM 2.0 Keys for Device Identity and Attestation](https://trustedcomputinggroup.org/wp-content/uploads/TPM-2p0-Keys-for-Device-Identity-and-Attestation_v1_r12_pub10082021.pdf)
+- [TCG OID Registry](https://trustedcomputinggroup.org/wp-content/uploads/TCG-OID-Registry-Version-1.00-Revision-0.74_10July24.pdf)
+
+### Standards
+
+- [OPC UA Device Onboarding](https://reference.opcfoundation.org/Onboarding/v105/docs/5.1)
+- [ACME Device Attestation Draft](https://datatracker.ietf.org/doc/html/draft-acme-device-attest-03)

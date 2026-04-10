@@ -1,0 +1,284 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package bootstrap
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+// templateRequest is the JSON body for uploading a device template.
+type templateRequest struct {
+	Role     string          `json:"role"`
+	Template json.RawMessage `json:"template"`
+}
+
+// templateResponse is the response after creating a device template.
+type templateResponse struct {
+	ID string `json:"id"`
+}
+
+// profileRequest is the JSON body for creating a device profile.
+type profileRequest struct {
+	MAC       string                 `json:"mac"`
+	Hostname  string                 `json:"hostname"`
+	Role      string                 `json:"role"`
+	Overrides map[string]interface{} `json:"overrides,omitempty"`
+}
+
+// SeederParams holds the dependencies for creating a Seeder.
+type SeederParams struct {
+	ControlPlaneAddr string
+	Config           *BootstrapConfig
+	Discovered       []DiscoveredNode
+	Logger           *slog.Logger
+}
+
+// Seeder uploads device templates and creates per-node profiles on the control plane.
+type Seeder struct {
+	controlPlaneAddr string
+	config           *BootstrapConfig
+	discovered       []DiscoveredNode
+	logger           *slog.Logger
+	client           *http.Client
+}
+
+// NewSeeder creates a Seeder from the given parameters.
+func NewSeeder(params SeederParams) *Seeder {
+	logger := params.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	// During bootstrap the CA is not yet trusted on the workstation running the
+	// seeder. InsecureSkipVerify is required and a warning is logged.
+	logger.Warn("bootstrap: seeder using insecure TLS (CA not yet trusted)")
+
+	return &Seeder{
+		controlPlaneAddr: params.ControlPlaneAddr,
+		config:           params.Config,
+		discovered:       params.Discovered,
+		logger:           logger,
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				// Force pure-Go DNS resolver to avoid SIGFPE in CGO's
+				// getaddrinfo when running as a statically linked binary.
+				DialContext: (&net.Dialer{
+					Timeout:  10 * time.Second,
+					Resolver: &net.Resolver{PreferGo: true},
+				}).DialContext,
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, //nolint:gosec // Required during bootstrap before CA is trusted.
+				},
+			},
+		},
+	}
+}
+
+// Seed uploads templates for each role and creates profiles for all discovered nodes.
+func (s *Seeder) Seed(ctx context.Context) error {
+	if s.controlPlaneAddr == "" {
+		return ErrMissingSeederAddr{}
+	}
+
+	// Step 1: Upload each template and collect role -> template ID.
+	templateIDs, err := s.uploadTemplates(ctx)
+	if err != nil {
+		return ErrSeedFailed{Cause: err}
+	}
+
+	// Step 2: Create a profile for each discovered node.
+	if err := s.createProfiles(ctx, templateIDs); err != nil {
+		return ErrSeedFailed{Cause: err}
+	}
+
+	s.logger.Info("bootstrap: template seeding complete",
+		slog.Int("templates", len(templateIDs)),
+		slog.Int("profiles", len(s.discovered)))
+
+	return nil
+}
+
+// uploadTemplates reads each template file and POSTs it to the control plane.
+// Returns a map of role -> template ID from the server response.
+func (s *Seeder) uploadTemplates(ctx context.Context) (map[string]string, error) {
+	templateIDs := make(map[string]string, len(s.config.Templates))
+
+	for role, path := range s.config.Templates {
+		s.logger.Info("bootstrap: uploading template",
+			slog.String("role", role),
+			slog.String("path", path))
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, ErrTemplateFileNotFound{Role: role, Path: path}
+			}
+			return nil, ErrTemplateUploadFailed{Role: role, Cause: err}
+		}
+
+		// Parse the YAML into a generic structure to strip comments and
+		// produce clean data suitable for JSON marshaling. Raw YAML bytes
+		// cannot be used as json.RawMessage because YAML comments (lines
+		// starting with '#') are not valid JSON.
+		templateJSON, err := yamlToJSON(data, role, path)
+		if err != nil {
+			return nil, err
+		}
+
+		body := templateRequest{
+			Role:     role,
+			Template: templateJSON,
+		}
+
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return nil, ErrTemplateUploadFailed{Role: role, Cause: err}
+		}
+
+		url := "https://" + s.controlPlaneAddr + "/api/v1/devices/templates"
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(encoded))
+		if err != nil {
+			return nil, ErrTemplateUploadFailed{Role: role, Cause: err}
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return nil, ErrTemplateUploadFailed{Role: role, Cause: err}
+		}
+
+		respBody, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+			return nil, ErrTemplateUploadFailed{
+				Role:       role,
+				StatusCode: resp.StatusCode,
+			}
+		}
+
+		if readErr != nil {
+			return nil, ErrTemplateUploadFailed{Role: role, Cause: readErr}
+		}
+
+		var tmplResp templateResponse
+		if err := json.Unmarshal(respBody, &tmplResp); err != nil {
+			return nil, ErrTemplateUploadFailed{Role: role, Cause: err}
+		}
+
+		templateIDs[role] = tmplResp.ID
+		s.logger.Info("bootstrap: template uploaded",
+			slog.String("role", role),
+			slog.String("template_id", tmplResp.ID))
+	}
+
+	return templateIDs, nil
+}
+
+// yamlToJSON parses raw YAML bytes into a generic structure and marshals the
+// result to JSON. This strips YAML comments and produces valid JSON suitable
+// for use as json.RawMessage. The role and path parameters are used only for
+// error context.
+func yamlToJSON(data []byte, role, path string) (json.RawMessage, error) {
+	var parsed interface{}
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		return nil, ErrTemplateYAMLParseFailed{Role: role, Path: path, Cause: err}
+	}
+
+	jsonBytes, err := json.Marshal(parsed)
+	if err != nil {
+		return nil, ErrTemplateJSONConvertFailed{Role: role, Cause: err}
+	}
+
+	return json.RawMessage(jsonBytes), nil
+}
+
+// createProfiles POSTs a profile creation request for each discovered node.
+func (s *Seeder) createProfiles(ctx context.Context, templateIDs map[string]string) error {
+	for i := range s.discovered {
+		node := &s.discovered[i]
+
+		templateID, ok := templateIDs[node.Role]
+		if !ok {
+			s.logger.Warn("bootstrap: no template uploaded for role, skipping profile",
+				slog.String("hostname", node.Hostname),
+				slog.String("role", node.Role))
+			continue
+		}
+
+		s.logger.Info("bootstrap: creating profile",
+			slog.String("hostname", node.Hostname),
+			slog.String("template_id", templateID))
+
+		body := profileRequest{
+			MAC:       primaryDiscoveredMAC(node),
+			Hostname:  node.Hostname,
+			Role:      node.Role,
+			Overrides: node.Overrides,
+		}
+
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return ErrProfileCreateFailed{Hostname: node.Hostname, Cause: err}
+		}
+
+		url := "https://" + s.controlPlaneAddr + "/api/v1/devices/templates/" + templateID + "/create-profile"
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(encoded))
+		if err != nil {
+			return ErrProfileCreateFailed{Hostname: node.Hostname, Cause: err}
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return ErrProfileCreateFailed{Hostname: node.Hostname, Cause: err}
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+			return ErrProfileCreateFailed{
+				Hostname:   node.Hostname,
+				StatusCode: resp.StatusCode,
+			}
+		}
+
+		s.logger.Info("bootstrap: profile created",
+			slog.String("hostname", node.Hostname),
+			slog.String("template_id", templateID))
+	}
+
+	return nil
+}
+
+// primaryDiscoveredMAC returns the first discovered MAC for a node, or an
+// empty string if none. The seeder profile API only accepts a single MAC; the
+// first NIC is treated as canonical.
+func primaryDiscoveredMAC(node *DiscoveredNode) string {
+	if len(node.DiscoveredMACs) == 0 {
+		return ""
+	}
+	return node.DiscoveredMACs[0]
+}

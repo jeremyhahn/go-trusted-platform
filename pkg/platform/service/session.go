@@ -1,0 +1,119 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package service
+
+import (
+	"fmt"
+
+	logging "github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
+)
+
+type Session interface {
+	ConsistencyLevel() datastore.ConsistencyLevel
+	Close()
+	IsSystemSession() bool
+	Logger() *logging.Logger
+	RequestedOrganizationID() uint64
+	RequestedServiceID() uint64
+	SetLogger(*logging.Logger)
+	User() *entities.User
+}
+
+type ServiceSession struct {
+	consistencyLevel   datastore.ConsistencyLevel
+	logger             *logging.Logger
+	orgClaims          []uint64
+	requestedOrgID     uint64
+	requestedServiceID uint64
+	serviceClaims      []uint64
+	user               *entities.User
+	Session
+}
+
+func NewSession() Session {
+	return &ServiceSession{
+		consistencyLevel: datastore.ConsistencyLevelLocal,
+	}
+}
+
+func CreateSession(
+	logger *logging.Logger,
+	orgClaims []uint64,
+	requestedOrgID uint64,
+	requestedServiceID uint64,
+	serviceClaims []uint64,
+	user *entities.User) Session {
+
+	return &ServiceSession{
+		logger:             logger,
+		orgClaims:          orgClaims,
+		requestedOrgID:     requestedOrgID,
+		requestedServiceID: requestedServiceID,
+		serviceClaims:      serviceClaims,
+		user:               user}
+}
+
+func (session *ServiceSession) ConsistencyLevel() datastore.ConsistencyLevel {
+	return session.consistencyLevel
+}
+
+func (session *ServiceSession) Logger() *logging.Logger {
+	return session.logger
+}
+
+func (session *ServiceSession) SetLogger(logger *logging.Logger) {
+	session.logger = logger
+}
+
+func (session *ServiceSession) RequestedOrganizationID() uint64 {
+	return session.requestedOrgID
+}
+
+func (session *ServiceSession) RequestedServiceID() uint64 {
+	return session.requestedServiceID
+}
+
+func (session *ServiceSession) IsMemberOfOrganization(organizationID uint64) bool {
+	for _, orgClaim := range session.orgClaims {
+		if orgClaim == organizationID {
+			return true
+		}
+	}
+	return false
+}
+
+func (session *ServiceSession) User() *entities.User {
+	return session.user
+}
+
+func (session *ServiceSession) Close() {
+	if session.logger != nil {
+		session.logger.Debugf("service/session: closing session")
+	}
+}
+
+func (session *ServiceSession) String() string {
+	return fmt.Sprintf("user=%s, serviceID=%d",
+		"", session.requestedServiceID)
+}
+
+func (session *ServiceSession) Error(err error) {
+	session.logger.Error(fmt.Errorf("session: %+v, error: %s", session, err))
+}
+
+func (session *ServiceSession) IsSystemSession() bool {
+	return session.logger == nil
+}

@@ -1,0 +1,77 @@
+ARG BASE_IMAGE="alpine:latest"
+
+FROM $BASE_IMAGE
+
+ARG PLATFORMD="platformd-debug"
+ARG MOUNT_POINT="/trusted-platform"
+ARG UID=1000
+ARG GID=1000
+ARG USER="tpadm"
+ARG GROUP="tpadm"
+ARG SOFTHSM_TAG=2.6.1
+
+LABEL maintainer="Jeremy Hahn <mail@jeremyhahn.com>"
+
+# RUN apk update && \
+#     apk upgrade && \
+#     apk add --no-cache \
+#         alpine-sdk \
+#         autoconf \
+#         automake \
+#         git \
+#         libtool \
+#         libseccomp-dev \
+#         openssl-dev \
+#         p11-kit-dev \
+#         sqlite-dev \
+#         tpm2-tools \
+#         opensc \
+#         yubikey-manager \
+#         go
+
+RUN apk update && \
+        apk upgrade && \
+        apk add --no-cache \
+            git \
+            tpm2-tools \
+            opensc \
+            softhsm \
+            yubikey-manager \
+            go
+
+# RUN CGO_ENABLED=0 go install -ldflags "-s -w -extldflags '-static'" github.com/go-delve/delve/cmd/dlv@latest
+# ENV GO111MODULE=off
+
+RUN go install github.com/go-delve/delve/cmd/dlv@latest
+
+# SoftHSMv2
+# RUN git clone --depth=1 --branch $SOFTHSM_TAG https://github.com/opendnssec/SoftHSMv2.git && \
+# cd SoftHSMv2 && \
+# ./autogen.sh || true && \
+# ./autogen.sh && \
+# ./configure --with-objectstore-backend-db && \
+# make && \
+# make install
+# #    make check
+
+RUN addgroup --gid $GID $GROUP && \
+    adduser -u $UID -S $USER -G $GROUP && \
+    echo "tpadm ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+RUN mkdir $MOUNT_POINT && \
+    chmod 777 $MOUNT_POINT && \
+    chown -R $USER:$GROUP $MOUNT_POINT
+
+COPY platformd /usr/local/bin/platformd
+RUN chmod +x /usr/local/bin/platformd
+RUN chown tpadm:tpadm /usr/local/bin/platformd
+
+WORKDIR /trusted-platform
+
+# USER $USER
+
+# ENTRYPOINT ["/usr/local/bin/platformd"]
+
+# CMD ["/bin/sh"]
+
+# CMD [ "/root/go/bin/dlv", "--listen=:4000", "--headless=true", "--log=true", "--accept-multiclient", "--api-version=2", "exec", "/usr/local/bin/platformd serve --init --config-dir /trusted-platform/volume/etc --log-dir /trusted-platform/volume/log --platform-dir /trusted-platform/volume/data --ca-dir /trusted-platform/volume/data/ca --raw-so-pin test --raw-pin test"]

@@ -1,0 +1,346 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// CAService provides Certificate Authority operations
+service CAService {
+  // GetCAInfo returns information about the Certificate Authority
+  rpc GetCAInfo(GetCAInfoRequest) returns (GetCAInfoResponse);
+
+  // InitCA initializes the Certificate Authority
+  rpc InitCA(InitCARequest) returns (InitCAResponse);
+
+  // InstallCACertificates installs CA certificates to the system trust store
+  rpc InstallCACertificates(InstallCACertificatesRequest) returns (InstallCACertificatesResponse);
+
+  // UninstallCACertificates removes CA certificates from the system trust store
+  rpc UninstallCACertificates(UninstallCACertificatesRequest) returns (UninstallCACertificatesResponse);
+
+  // IssueCertificate issues a new certificate
+  rpc IssueCertificate(IssueCertificateRequest) returns (IssueCertificateResponse);
+
+  // GetCertificate retrieves a certificate by serial number
+  rpc GetCertificate(GetCertificateRequest) returns (GetCertificateResponse);
+
+  // ListCertificates returns a paginated list of certificates
+  rpc ListCertificates(ListCertificatesRequest) returns (ListCertificatesResponse);
+
+  // RevokeCertificate revokes a certificate
+  rpc RevokeCertificate(RevokeCertificateRequest) returns (RevokeCertificateResponse);
+
+  // RenewCertificate renews an existing certificate
+  rpc RenewCertificate(RenewCertificateRequest) returns (RenewCertificateResponse);
+
+  // VerifyCertificate verifies a certificate chain
+  rpc VerifyCertificate(VerifyCertificateRequest) returns (VerifyCertificateResponse);
+
+  // GetCRL returns the current Certificate Revocation List
+  rpc GetCRL(GetCRLRequest) returns (GetCRLResponse);
+
+  // GetCABundle returns the CA certificate bundle
+  rpc GetCABundle(GetCABundleRequest) returns (GetCABundleResponse);
+}
+
+// RevocationReason specifies the reason for certificate revocation
+enum RevocationReason {
+  REVOCATION_REASON_UNSPECIFIED = 0;
+  REVOCATION_REASON_KEY_COMPROMISE = 1;
+  REVOCATION_REASON_CA_COMPROMISE = 2;
+  REVOCATION_REASON_AFFILIATION_CHANGED = 3;
+  REVOCATION_REASON_SUPERSEDED = 4;
+  REVOCATION_REASON_CESSATION_OF_OPERATION = 5;
+  REVOCATION_REASON_CERTIFICATE_HOLD = 6;
+  REVOCATION_REASON_REMOVE_FROM_CRL = 8;
+  REVOCATION_REASON_PRIVILEGE_WITHDRAWN = 9;
+  REVOCATION_REASON_AA_COMPROMISE = 10;
+}
+
+// CertificateType specifies the type of certificate
+enum CertificateType {
+  CERTIFICATE_TYPE_UNSPECIFIED = 0;
+  CERTIFICATE_TYPE_SERVER = 1;
+  CERTIFICATE_TYPE_CLIENT = 2;
+  CERTIFICATE_TYPE_CA = 3;
+  CERTIFICATE_TYPE_CODE_SIGNING = 4;
+  CERTIFICATE_TYPE_EMAIL = 5;
+}
+
+// CertificateStatus indicates the current status of a certificate
+enum CertificateStatus {
+  CERTIFICATE_STATUS_UNSPECIFIED = 0;
+  CERTIFICATE_STATUS_VALID = 1;
+  CERTIFICATE_STATUS_REVOKED = 2;
+  CERTIFICATE_STATUS_EXPIRED = 3;
+  CERTIFICATE_STATUS_PENDING = 4;
+}
+
+// Subject contains certificate subject information
+message Subject {
+  string common_name = 1;
+  string organization = 2;
+  string organizational_unit = 3;
+  string country = 4;
+  string province = 5;
+  string locality = 6;
+  string address = 7;
+  string postal_code = 8;
+}
+
+// SubjectAlternativeNames contains Subject Alternative Names
+message SubjectAlternativeNames {
+  repeated string dns_names = 1;
+  repeated string ip_addresses = 2;
+  repeated string email_addresses = 3;
+  repeated string uris = 4;
+}
+
+// KeyStoreInfo contains information about a key store
+message KeyStoreInfo {
+  string type = 1;
+  bool available = 2;
+  repeated string capabilities = 3;
+}
+
+// CAInfo contains Certificate Authority information
+message CAInfo {
+  string common_name = 1;
+  bool is_initialized = 2;
+  bool is_intermediate = 3;
+  CertificateSummary root_cert = 4;
+  repeated CertificateSummary intermediates = 5;
+  repeated KeyStoreInfo key_stores = 6;
+  string default_algorithm = 7;
+  int32 default_validity_days = 8;
+}
+
+// Certificate contains full certificate data
+message Certificate {
+  string serial = 1;
+  Subject subject = 2;
+  string issuer = 3;
+  google.protobuf.Timestamp not_before = 4;
+  google.protobuf.Timestamp not_after = 5;
+  CertificateStatus status = 6;
+  KeyAlgorithm key_algorithm = 7;
+  string signature_algorithm = 8;
+  bool is_ca = 9;
+  int32 max_path_len = 10;
+  SubjectAlternativeNames sans = 11;
+  repeated string key_usage = 12;
+  repeated string ext_key_usage = 13;
+  bytes pem = 14;
+  bytes der = 15;
+  string fingerprint_sha256 = 16;
+  map<string, string> metadata = 17;
+}
+
+// CertificateSummary contains summary certificate information for lists
+message CertificateSummary {
+  string serial = 1;
+  string common_name = 2;
+  string issuer = 3;
+  google.protobuf.Timestamp not_before = 4;
+  google.protobuf.Timestamp not_after = 5;
+  CertificateStatus status = 6;
+  KeyAlgorithm key_algorithm = 7;
+}
+
+// CertificateRequest contains certificate issuance parameters
+message CertificateRequest {
+  Subject subject = 1;
+  SubjectAlternativeNames sans = 2;
+  int32 valid_days = 3;
+  KeyAlgorithm key_algorithm = 4;
+  string store_type = 5;
+  repeated string key_usage = 6;
+  repeated string ext_key_usage = 7;
+  bool is_ca = 8;
+  int32 max_path_len = 9;
+  CertificateType certificate_type = 10;
+  map<string, string> metadata = 11;
+}
+
+// RevokedCertEntry represents a revoked certificate entry
+message RevokedCertEntry {
+  string serial = 1;
+  google.protobuf.Timestamp revocation_time = 2;
+  RevocationReason reason = 3;
+}
+
+// CRL contains Certificate Revocation List data
+message CRL {
+  bytes data = 1;
+  google.protobuf.Timestamp last_update = 2;
+  google.protobuf.Timestamp next_update = 3;
+  int32 revoked_count = 4;
+  repeated RevokedCertEntry revoked_certs = 5;
+}
+
+// CABundle contains the CA certificate bundle
+message CABundle {
+  bytes pem = 1;
+  repeated CertificateSummary certificates = 2;
+  int32 cert_count = 3;
+}
+
+// GetCAInfo request/response
+message GetCAInfoRequest {}
+
+message GetCAInfoResponse {
+  CAInfo ca_info = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// InitCA request/response
+message InitCARequest {
+  // Force re-initialization even if already initialized
+  bool force = 1;
+}
+
+message InitCAResponse {
+  Status status = 1;
+  CAInfo ca_info = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// InstallCACertificates request/response
+message InstallCACertificatesRequest {
+  // Include intermediate certificates
+  bool include_intermediates = 1;
+}
+
+message InstallCACertificatesResponse {
+  Status status = 1;
+  // Number of certificates installed
+  int32 certificates_installed = 2;
+  // Platform-specific installation path
+  string install_path = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// UninstallCACertificates request/response
+message UninstallCACertificatesRequest {
+  // Include intermediate certificates
+  bool include_intermediates = 1;
+}
+
+message UninstallCACertificatesResponse {
+  Status status = 1;
+  // Number of certificates removed
+  int32 certificates_removed = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// IssueCertificate request/response
+message IssueCertificateRequest {
+  CertificateRequest request = 1;
+}
+
+message IssueCertificateResponse {
+  Status status = 1;
+  Certificate certificate = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// GetCertificate request/response
+message GetCertificateRequest {
+  string serial = 1;
+  bool include_pem = 2;
+  bool include_der = 3;
+}
+
+message GetCertificateResponse {
+  Certificate certificate = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// ListCertificates request/response
+message ListCertificatesRequest {
+  PaginationRequest pagination = 1;
+  CertificateStatus status_filter = 2;
+  CertificateType type_filter = 3;
+  string issuer_filter = 4;
+  LabelSelector selector = 5;
+}
+
+message ListCertificatesResponse {
+  repeated CertificateSummary certificates = 1;
+  PaginationResponse pagination = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// RevokeCertificate request/response
+message RevokeCertificateRequest {
+  string serial = 1;
+  RevocationReason reason = 2;
+  bool delete_keys = 3;
+}
+
+message RevokeCertificateResponse {
+  Status status = 1;
+  string serial = 2;
+  CertificateStatus certificate_status = 3;
+  google.protobuf.Timestamp revoked_at = 4;
+  RevocationReason reason = 5;
+  google.protobuf.Timestamp timestamp = 6;
+}
+
+// RenewCertificate request/response
+message RenewCertificateRequest {
+  string serial = 1;
+  int32 valid_days = 2;
+  bool preserve_sans = 3;
+  SubjectAlternativeNames new_sans = 4;
+}
+
+message RenewCertificateResponse {
+  Status status = 1;
+  Certificate old_certificate = 2;
+  Certificate new_certificate = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// VerifyCertificate request/response
+message VerifyCertificateRequest {
+  bytes certificate_pem = 1;
+  bytes certificate_der = 2;
+  bool verify_revocation = 3;
+  bool verify_expiration = 4;
+  repeated bytes trusted_roots = 5;
+}
+
+message VerifyCertificateResponse {
+  Status status = 1;
+  bool valid = 2;
+  repeated string chain = 3;
+  repeated string errors = 4;
+  repeated string warnings = 5;
+  google.protobuf.Timestamp timestamp = 6;
+  // Whether the certificate has been revoked (checked via CRL)
+  bool revoked = 7;
+}
+
+// GetCRL request/response
+message GetCRLRequest {
+  bool include_entries = 1;
+}
+
+message GetCRLResponse {
+  CRL crl = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// GetCABundle request/response
+message GetCABundleRequest {
+  bool include_intermediates = 1;
+}
+
+message GetCABundleResponse {
+  CABundle bundle = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}

@@ -1,0 +1,158 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package iam
+
+import "fmt"
+
+// ErrMissingTenantID is returned when tenant ID is required but not provided
+type ErrMissingTenantID struct{}
+
+func (e ErrMissingTenantID) Error() string {
+	return "tenant ID is required"
+}
+
+// ErrMissingUserID is returned when user ID is required but not provided
+type ErrMissingUserID struct{}
+
+func (e ErrMissingUserID) Error() string {
+	return "user ID is required"
+}
+
+// ErrMissingGroupID is returned when group ID is required but not provided
+type ErrMissingGroupID struct{}
+
+func (e ErrMissingGroupID) Error() string {
+	return "group ID is required"
+}
+
+// ErrMissingRoleID is returned when role ID is required but not provided
+type ErrMissingRoleID struct{}
+
+func (e ErrMissingRoleID) Error() string {
+	return "role ID is required"
+}
+
+// ErrMissingPolicyID is returned when policy ID is required but not provided
+type ErrMissingPolicyID struct{}
+
+func (e ErrMissingPolicyID) Error() string {
+	return "policy ID is required"
+}
+
+// ErrMissingAppID is returned when app ID is required but not provided
+type ErrMissingAppID struct{}
+
+func (e ErrMissingAppID) Error() string {
+	return "app ID is required"
+}
+
+// ErrInvalidRequestBody is returned when the request body cannot be parsed
+type ErrInvalidRequestBody struct {
+	Reason string
+}
+
+func (e ErrInvalidRequestBody) Error() string {
+	return fmt.Sprintf("invalid request body: %s", e.Reason)
+}
+
+// ErrInvalidPaginationParams is returned when pagination parameters are invalid
+type ErrInvalidPaginationParams struct {
+	Reason string
+}
+
+func (e ErrInvalidPaginationParams) Error() string {
+	return fmt.Sprintf("invalid pagination parameters: %s", e.Reason)
+}
+
+// ErrUserNotFound is returned when a user is not found
+type ErrUserNotFound struct {
+	TenantID string
+	UserID   string
+}
+
+func (e ErrUserNotFound) Error() string {
+	return fmt.Sprintf("user not found: tenant=%s, user=%s", e.TenantID, e.UserID)
+}
+
+// ErrGroupNotFound is returned when a group is not found
+type ErrGroupNotFound struct {
+	TenantID string
+	GroupID  string
+}
+
+func (e ErrGroupNotFound) Error() string {
+	return fmt.Sprintf("group not found: tenant=%s, group=%s", e.TenantID, e.GroupID)
+}
+
+// ErrRoleNotFound is returned when a role is not found
+type ErrRoleNotFound struct {
+	TenantID string
+	RoleID   string
+}
+
+func (e ErrRoleNotFound) Error() string {
+	return fmt.Sprintf("role not found: tenant=%s, role=%s", e.TenantID, e.RoleID)
+}
+
+// ErrTenantNotFound is returned when a tenant is not found
+type ErrTenantNotFound struct {
+	TenantID string
+}
+
+func (e ErrTenantNotFound) Error() string {
+	return fmt.Sprintf("tenant not found: %s", e.TenantID)
+}
+
+// ErrPolicyNotFound is returned when a policy is not found
+type ErrPolicyNotFound struct {
+	TenantID string
+	PolicyID string
+}
+
+func (e ErrPolicyNotFound) Error() string {
+	return fmt.Sprintf("policy not found: tenant=%s, policy=%s", e.TenantID, e.PolicyID)
+}
+
+// ErrAppNotFound is returned when an application is not found
+type ErrAppNotFound struct {
+	TenantID string
+	AppID    string
+}
+
+func (e ErrAppNotFound) Error() string {
+	return fmt.Sprintf("application not found: tenant=%s, app=%s", e.TenantID, e.AppID)
+}
+
+// ErrInvalidPolicySpec is returned when policy spec is invalid
+type ErrInvalidPolicySpec struct {
+	Reason string
+}
+
+func (e ErrInvalidPolicySpec) Error() string {
+	return fmt.Sprintf("invalid policy spec: %s", e.Reason)
+}
+
+// ErrMissingRole is returned when role name is required but not provided
+type ErrMissingRole struct{}
+
+func (e ErrMissingRole) Error() string {
+	return "role is required"
+}
+
+// ErrMissingMember is returned when member ID is required but not provided
+type ErrMissingMember struct{}
+
+func (e ErrMissingMember) Error() string {
+	return "member ID is required"
+}

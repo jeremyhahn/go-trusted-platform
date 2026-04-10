@@ -1,0 +1,311 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package bootstrap
+
+import (
+	"fmt"
+	"time"
+)
+
+// ErrBootstrapFailed indicates a bootstrap phase failed.
+type ErrBootstrapFailed struct {
+	Phase string
+	Cause error
+}
+
+func (e ErrBootstrapFailed) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bootstrap: phase %s failed: %v", e.Phase, e.Cause)
+	}
+	return fmt.Sprintf("bootstrap: phase %s failed", e.Phase)
+}
+
+func (e ErrBootstrapFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrPhaseTimeout indicates a bootstrap phase exceeded its timeout.
+type ErrPhaseTimeout struct {
+	Phase   string
+	Timeout time.Duration
+}
+
+func (e ErrPhaseTimeout) Error() string {
+	return fmt.Sprintf("bootstrap: phase %s timed out after %s", e.Phase, e.Timeout)
+}
+
+// ErrNodeProvisionFailed indicates provisioning failed for a specific node.
+type ErrNodeProvisionFailed struct {
+	Hostname string
+	Role     string
+	Cause    error
+}
+
+func (e ErrNodeProvisionFailed) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bootstrap: provisioning failed for node %s (role=%s): %v", e.Hostname, e.Role, e.Cause)
+	}
+	return fmt.Sprintf("bootstrap: provisioning failed for node %s (role=%s)", e.Hostname, e.Role)
+}
+
+func (e ErrNodeProvisionFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrHealthCheckFailed indicates a health check did not succeed.
+type ErrHealthCheckFailed struct {
+	Address string
+	Cause   error
+}
+
+func (e ErrHealthCheckFailed) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bootstrap: health check failed for %s: %v", e.Address, e.Cause)
+	}
+	return fmt.Sprintf("bootstrap: health check failed for %s", e.Address)
+}
+
+func (e ErrHealthCheckFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrSeedFailed indicates template seeding failed.
+type ErrSeedFailed struct {
+	Cause error
+}
+
+func (e ErrSeedFailed) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bootstrap: template seeding failed: %v", e.Cause)
+	}
+	return "bootstrap: template seeding failed"
+}
+
+func (e ErrSeedFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrContainerDeployFailed indicates the bootstrap container failed to deploy.
+type ErrContainerDeployFailed struct {
+	Host  string
+	Cause error
+}
+
+func (e ErrContainerDeployFailed) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bootstrap: container deploy failed on host %s: %v", e.Host, e.Cause)
+	}
+	return fmt.Sprintf("bootstrap: container deploy failed on host %s", e.Host)
+}
+
+func (e ErrContainerDeployFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrContainerTeardownFailed indicates the bootstrap container teardown failed.
+type ErrContainerTeardownFailed struct {
+	Host  string
+	Cause error
+}
+
+func (e ErrContainerTeardownFailed) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bootstrap: container teardown failed on host %s: %v", e.Host, e.Cause)
+	}
+	return fmt.Sprintf("bootstrap: container teardown failed on host %s", e.Host)
+}
+
+func (e ErrContainerTeardownFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrNilOrchestratorConfig is returned when a nil config is passed to NewOrchestrator.
+type ErrNilOrchestratorConfig struct{}
+
+func (e ErrNilOrchestratorConfig) Error() string {
+	return "bootstrap: orchestrator config cannot be nil"
+}
+
+// ErrNilBMCFactory is returned when a nil BMC factory is passed to NewOrchestrator.
+type ErrNilBMCFactory struct{}
+
+func (e ErrNilBMCFactory) Error() string {
+	return "bootstrap: BMC client factory cannot be nil"
+}
+
+// ErrNoControlPlaneNode is returned when no control-plane node is found.
+type ErrNoControlPlaneNode struct{}
+
+func (e ErrNoControlPlaneNode) Error() string {
+	return "bootstrap: no control-plane node found in discovered nodes"
+}
+
+// ErrTemplateFileNotFound is returned when a template file does not exist.
+type ErrTemplateFileNotFound struct {
+	Role string
+	Path string
+}
+
+func (e ErrTemplateFileNotFound) Error() string {
+	return fmt.Sprintf("bootstrap: template file not found for role %s: %s", e.Role, e.Path)
+}
+
+// ErrTemplateUploadFailed is returned when uploading a template to the control plane fails.
+type ErrTemplateUploadFailed struct {
+	Role       string
+	StatusCode int
+	Cause      error
+}
+
+func (e ErrTemplateUploadFailed) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bootstrap: template upload failed for role %s (status=%d): %v", e.Role, e.StatusCode, e.Cause)
+	}
+	return fmt.Sprintf("bootstrap: template upload failed for role %s (status=%d)", e.Role, e.StatusCode)
+}
+
+func (e ErrTemplateUploadFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrProfileCreateFailed is returned when creating a device profile fails.
+type ErrProfileCreateFailed struct {
+	Hostname   string
+	StatusCode int
+	Cause      error
+}
+
+func (e ErrProfileCreateFailed) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bootstrap: profile creation failed for %s (status=%d): %v", e.Hostname, e.StatusCode, e.Cause)
+	}
+	return fmt.Sprintf("bootstrap: profile creation failed for %s (status=%d)", e.Hostname, e.StatusCode)
+}
+
+func (e ErrProfileCreateFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrMissingSeederAddr is returned when the control plane address is empty.
+type ErrMissingSeederAddr struct{}
+
+func (e ErrMissingSeederAddr) Error() string {
+	return "bootstrap: seeder control plane address cannot be empty"
+}
+
+// ErrDryRunBMCUnreachable indicates a BMC was not reachable during dry-run.
+type ErrDryRunBMCUnreachable struct {
+	Hostname   string
+	BMCAddress string
+	Cause      error
+}
+
+func (e ErrDryRunBMCUnreachable) Error() string {
+	return "bootstrap: dry-run: bmc unreachable for " + e.Hostname + " at " + e.BMCAddress + ": " + e.Cause.Error()
+}
+
+func (e ErrDryRunBMCUnreachable) Unwrap() error {
+	return e.Cause
+}
+
+// ErrDryRunNoNodes is returned when a dry-run is attempted with no nodes configured.
+type ErrDryRunNoNodes struct{}
+
+func (e ErrDryRunNoNodes) Error() string {
+	return "bootstrap: dry-run: no nodes configured"
+}
+
+// ErrTemplateNotFoundForRole is returned when no template is configured for a role.
+type ErrTemplateNotFoundForRole struct {
+	Role string
+}
+
+func (e ErrTemplateNotFoundForRole) Error() string {
+	return fmt.Sprintf("bootstrap: no template configured for role %s", e.Role)
+}
+
+// ErrTemplateReadFailed is returned when reading or parsing a template file fails.
+type ErrTemplateReadFailed struct {
+	Role  string
+	Path  string
+	Cause error
+}
+
+func (e ErrTemplateReadFailed) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bootstrap: failed to read template for role %s at %s: %v", e.Role, e.Path, e.Cause)
+	}
+	return fmt.Sprintf("bootstrap: failed to read template for role %s at %s", e.Role, e.Path)
+}
+
+func (e ErrTemplateReadFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrControlPlaneHealthGateFailed is returned when the control-plane health
+// verification gate fails before teardown. When this error is produced the
+// orchestrator skips bootstrap container teardown to avoid disrupting network
+// services (DHCP, DNS) that may still be provided by the container.
+type ErrControlPlaneHealthGateFailed struct {
+	Timeout time.Duration
+	Cause   error
+}
+
+func (e ErrControlPlaneHealthGateFailed) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bootstrap: control-plane health gate failed after %s: %v", e.Timeout, e.Cause)
+	}
+	return fmt.Sprintf("bootstrap: control-plane health gate failed after %s", e.Timeout)
+}
+
+func (e ErrControlPlaneHealthGateFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrTemplateYAMLParseFailed is returned when a template YAML file cannot be
+// parsed into a generic structure for JSON conversion.
+type ErrTemplateYAMLParseFailed struct {
+	Role  string
+	Path  string
+	Cause error
+}
+
+func (e ErrTemplateYAMLParseFailed) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bootstrap: failed to parse template YAML for role %s at %s: %v", e.Role, e.Path, e.Cause)
+	}
+	return fmt.Sprintf("bootstrap: failed to parse template YAML for role %s at %s", e.Role, e.Path)
+}
+
+func (e ErrTemplateYAMLParseFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrTemplateJSONConvertFailed is returned when a parsed template cannot be
+// marshaled to JSON for upload to the control plane.
+type ErrTemplateJSONConvertFailed struct {
+	Role  string
+	Cause error
+}
+
+func (e ErrTemplateJSONConvertFailed) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bootstrap: failed to convert template to JSON for role %s: %v", e.Role, e.Cause)
+	}
+	return fmt.Sprintf("bootstrap: failed to convert template to JSON for role %s", e.Role)
+}
+
+func (e ErrTemplateJSONConvertFailed) Unwrap() error {
+	return e.Cause
+}

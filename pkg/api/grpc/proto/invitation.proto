@@ -1,0 +1,217 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// InvitationService provides invitation management operations for tenant user onboarding.
+// This service handles creation, retrieval, and lifecycle management of invitations.
+service InvitationService {
+  // CreateInvitation creates a new invitation for a user to join a tenant.
+  rpc CreateInvitation(CreateInvitationRequest) returns (CreateInvitationResponse);
+
+  // GetInvitation retrieves an invitation by its ID.
+  rpc GetInvitation(GetInvitationRequest) returns (GetInvitationResponse);
+
+  // GetInvitationByToken retrieves an invitation by its secure token.
+  rpc GetInvitationByToken(GetInvitationByTokenRequest) returns (GetInvitationResponse);
+
+  // ListInvitations returns invitations for a tenant with optional filtering.
+  rpc ListInvitations(ListInvitationsRequest) returns (ListInvitationsResponse);
+
+  // RevokeInvitation revokes a pending invitation.
+  rpc RevokeInvitation(RevokeInvitationRequest) returns (RevokeInvitationResponse);
+
+  // AcceptInvitation marks an invitation as accepted.
+  rpc AcceptInvitation(AcceptInvitationRequest) returns (AcceptInvitationResponse);
+
+  // DeleteInvitation permanently removes an invitation.
+  rpc DeleteInvitation(DeleteInvitationRequest) returns (DeleteInvitationResponse);
+}
+
+// InvitationStatus represents the status of an invitation.
+enum InvitationStatus {
+  INVITATION_STATUS_UNSPECIFIED = 0;
+  INVITATION_STATUS_PENDING = 1;
+  INVITATION_STATUS_ACCEPTED = 2;
+  INVITATION_STATUS_EXPIRED = 3;
+  INVITATION_STATUS_REVOKED = 4;
+}
+
+// Invitation represents an invitation to join a tenant.
+message Invitation {
+  // Unique identifier for the invitation.
+  uint64 id = 1;
+
+  // Secure token used for accepting the invitation.
+  string token = 2;
+
+  // Tenant ID the invitation is for.
+  string tenant_id = 3;
+
+  // Email address of the invited user.
+  string email = 4;
+
+  // Role assigned to the user upon acceptance.
+  string role = 5;
+
+  // Current status of the invitation.
+  InvitationStatus status = 6;
+
+  // Timestamp when the invitation expires.
+  google.protobuf.Timestamp expires_at = 7;
+
+  // Timestamp when the invitation was created.
+  google.protobuf.Timestamp created_at = 8;
+
+  // Timestamp when the invitation was accepted (if accepted).
+  google.protobuf.Timestamp accepted_at = 9;
+
+  // ID of the user who created the invitation.
+  uint64 invited_by_id = 10;
+
+  // Timestamp when the invitation was last updated.
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+// =============================================================================
+// Request/Response Messages
+// =============================================================================
+
+// CreateInvitationRequest is the request to create a new invitation.
+message CreateInvitationRequest {
+  // Tenant ID for the invitation (required).
+  string tenant_id = 1;
+
+  // Email address of the user to invite (required).
+  string email = 2;
+
+  // Role to assign upon acceptance (required).
+  string role = 3;
+
+  // ID of the user creating the invitation (required).
+  uint64 invited_by_id = 4;
+
+  // Custom expiration duration in seconds (optional, defaults to 7 days).
+  int64 expires_in_seconds = 5;
+}
+
+// CreateInvitationResponse is the response after creating an invitation.
+message CreateInvitationResponse {
+  // The created invitation.
+  Invitation invitation = 1;
+
+  // Response timestamp.
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// GetInvitationRequest is the request to get an invitation by ID.
+message GetInvitationRequest {
+  // ID of the invitation to retrieve (required).
+  uint64 invitation_id = 1;
+}
+
+// GetInvitationByTokenRequest is the request to get an invitation by token.
+message GetInvitationByTokenRequest {
+  // Secure token of the invitation (required).
+  string token = 1;
+}
+
+// GetInvitationResponse is the response containing an invitation.
+message GetInvitationResponse {
+  // The retrieved invitation.
+  Invitation invitation = 1;
+
+  // Response timestamp.
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// ListInvitationsRequest is the request to list invitations.
+message ListInvitationsRequest {
+  // Tenant ID to filter invitations (required).
+  string tenant_id = 1;
+
+  // Pagination parameters.
+  PaginationRequest pagination = 2;
+
+  // Filter by status (optional).
+  InvitationStatus status_filter = 3;
+
+  // Filter by email (optional, partial match).
+  string email_filter = 4;
+
+  // If true, only return pending invitations.
+  bool pending_only = 5;
+}
+
+// ListInvitationsResponse is the response containing a list of invitations.
+message ListInvitationsResponse {
+  // List of invitations.
+  repeated Invitation invitations = 1;
+
+  // Pagination information.
+  PaginationResponse pagination = 2;
+
+  // Total count of invitations matching the filter.
+  int64 total = 3;
+
+  // Response timestamp.
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// RevokeInvitationRequest is the request to revoke an invitation.
+message RevokeInvitationRequest {
+  // ID of the invitation to revoke (required).
+  uint64 invitation_id = 1;
+
+  // ID of the user performing the revocation (required).
+  uint64 revoker_id = 2;
+}
+
+// RevokeInvitationResponse is the response after revoking an invitation.
+message RevokeInvitationResponse {
+  // Operation status.
+  Status status = 1;
+
+  // Response timestamp.
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// AcceptInvitationRequest is the request to accept an invitation.
+message AcceptInvitationRequest {
+  // Secure token of the invitation (required).
+  string token = 1;
+
+  // ID of the user accepting the invitation (required).
+  uint64 user_id = 2;
+}
+
+// AcceptInvitationResponse is the response after accepting an invitation.
+message AcceptInvitationResponse {
+  // Operation status.
+  Status status = 1;
+
+  // The accepted invitation.
+  Invitation invitation = 2;
+
+  // Response timestamp.
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// DeleteInvitationRequest is the request to delete an invitation.
+message DeleteInvitationRequest {
+  // ID of the invitation to delete (required).
+  uint64 invitation_id = 1;
+}
+
+// DeleteInvitationResponse is the response after deleting an invitation.
+message DeleteInvitationResponse {
+  // Operation status.
+  Status status = 1;
+
+  // Response timestamp.
+  google.protobuf.Timestamp timestamp = 2;
+}

@@ -1,0 +1,268 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package pxe
+
+import (
+	"fmt"
+	"net"
+	"os"
+	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
+)
+
+const (
+	// DefaultQuarantineVLAN is the default VLAN for quarantined devices (IEEE 802.1Q default).
+	DefaultQuarantineVLAN = uint16(1)
+
+	// DefaultProvisioningVLAN is the default VLAN for devices during provisioning.
+	DefaultProvisioningVLAN = uint16(2)
+
+	// DefaultMaxRetries is the default number of retry attempts.
+	DefaultMaxRetries = 3
+
+	// DefaultInstallTimeout is the default timeout for OS installation.
+	DefaultInstallTimeout = 30 * time.Minute
+
+	// DefaultEnrollmentTimeout is the default timeout for device enrollment.
+	DefaultEnrollmentTimeout = 5 * time.Minute
+
+	// DefaultWebhookPath is the default path for install completion webhooks.
+	DefaultWebhookPath = "/api/v1/pxe/webhook/complete"
+
+	// DefaultISORef is the default ISO registry reference.
+	DefaultISORef = "iso/platform:latest"
+
+	// DefaultUpstreamFirmwareURL is the default URL for upstream iPXE firmware.
+	DefaultUpstreamFirmwareURL = "https://boot.ipxe.org/ipxe.efi"
+
+	// FirmwareSourceUpstream indicates firmware is fetched from upstream.
+	FirmwareSourceUpstream = "upstream"
+
+	// FirmwareSourceCustom indicates firmware is loaded from a custom path.
+	FirmwareSourceCustom = "custom"
+
+	// FirmwareSourceEmbedded indicates firmware is embedded in the binary.
+	FirmwareSourceEmbedded = "embedded"
+
+	// MinVLANID is the minimum valid VLAN ID per IEEE 802.1Q.
+	MinVLANID = uint16(1)
+
+	// MaxVLANID is the maximum valid VLAN ID per IEEE 802.1Q.
+	MaxVLANID = uint16(4094)
+)
+
+// ServiceConfig holds all configuration for the PXE provisioning service.
+type ServiceConfig struct {
+	// IPXEConfig is the underlying iPXE server configuration.
+	IPXEConfig *ipxe.ServerConfig
+
+	// BridgeName is the OVS bridge name for VLAN management.
+	BridgeName string
+
+	// QuarantineVLAN is the VLAN ID for quarantined devices (default: 1).
+	QuarantineVLAN uint16
+
+	// ProvisioningVLAN is the VLAN ID for devices during provisioning (default: 2).
+	ProvisioningVLAN uint16
+
+	// Firmware contains UEFI firmware verification configuration.
+	Firmware *FirmwareConfig
+
+	// RegistryAddr is the ISO registry endpoint address.
+	RegistryAddr string
+
+	// DefaultISORef is the default ISO registry reference (default: "iso/platform:latest").
+	DefaultISORef string
+
+	// ACMEServerIPs are the IP addresses of ACME servers accessible during provisioning.
+	ACMEServerIPs []net.IP
+
+	// DNSServerIPs are the IP addresses of DNS servers accessible during provisioning.
+	DNSServerIPs []net.IP
+
+	// MaxRetries is the maximum number of retry attempts (default: 3).
+	MaxRetries int
+
+	// InstallTimeout is the timeout for OS installation (default: 30m).
+	InstallTimeout time.Duration
+
+	// EnrollmentTimeout is the timeout for device enrollment (default: 5m).
+	EnrollmentTimeout time.Duration
+
+	// EnableAutoQuarantine enables automatic quarantine on security events (default: true).
+	EnableAutoQuarantine bool
+
+	// WebhookEnabled enables the install completion webhook endpoint.
+	WebhookEnabled bool
+
+	// WebhookPath is the URL path for install completion webhooks (default: "/api/v1/pxe/webhook/complete").
+	WebhookPath string
+
+	// WebhookSecret is the HMAC secret for webhook authentication.
+	WebhookSecret string
+}
+
+// FirmwareConfig holds configuration for UEFI firmware verification.
+type FirmwareConfig struct {
+	// Source specifies the firmware source: "upstream", "custom", or "embedded".
+	Source string
+
+	// UpstreamURL is the URL for fetching upstream firmware (default: "https://boot.ipxe.org/ipxe.efi").
+	UpstreamURL string
+
+	// ExpectedDigest is the expected SHA256 digest of verified firmware (required for upstream source).
+	ExpectedDigest string
+
+	// CustomPath is the filesystem path for custom firmware (required for custom source).
+	CustomPath string
+
+	// RequireSecureBoot indicates whether UEFI Secure Boot is required (default: true).
+	RequireSecureBoot bool
+}
+
+// DefaultServiceConfig returns a ServiceConfig with sensible defaults.
+func DefaultServiceConfig() *ServiceConfig {
+	return &ServiceConfig{
+		IPXEConfig:           ipxe.DefaultServerConfig(),
+		BridgeName:           "",
+		QuarantineVLAN:       DefaultQuarantineVLAN,
+		ProvisioningVLAN:     DefaultProvisioningVLAN,
+		Firmware:             DefaultFirmwareConfig(),
+		RegistryAddr:         "",
+		DefaultISORef:        DefaultISORef,
+		ACMEServerIPs:        nil,
+		DNSServerIPs:         nil,
+		MaxRetries:           DefaultMaxRetries,
+		InstallTimeout:       DefaultInstallTimeout,
+		EnrollmentTimeout:    DefaultEnrollmentTimeout,
+		EnableAutoQuarantine: true,
+		WebhookEnabled:       false,
+		WebhookPath:          DefaultWebhookPath,
+		WebhookSecret:        "",
+	}
+}
+
+// DefaultFirmwareConfig returns a FirmwareConfig with sensible defaults.
+func DefaultFirmwareConfig() *FirmwareConfig {
+	return &FirmwareConfig{
+		Source:            FirmwareSourceEmbedded,
+		UpstreamURL:       DefaultUpstreamFirmwareURL,
+		ExpectedDigest:    "",
+		CustomPath:        "",
+		RequireSecureBoot: true,
+	}
+}
+
+// Validate validates the ServiceConfig and returns an error if invalid.
+func (c *ServiceConfig) Validate() error {
+	// IPXEConfig must be set
+	if c.IPXEConfig == nil {
+		return fmt.Errorf("%w: IPXEConfig is required", ErrInvalidConfig)
+	}
+
+	// BridgeName must not be empty
+	if c.BridgeName == "" {
+		return fmt.Errorf("%w: BridgeName is required", ErrInvalidConfig)
+	}
+
+	// Validate VLAN IDs are in valid range (1-4094)
+	if c.QuarantineVLAN < MinVLANID || c.QuarantineVLAN > MaxVLANID {
+		return fmt.Errorf("%w: QuarantineVLAN must be between %d and %d, got %d",
+			ErrInvalidVLAN, MinVLANID, MaxVLANID, c.QuarantineVLAN)
+	}
+
+	if c.ProvisioningVLAN < MinVLANID || c.ProvisioningVLAN > MaxVLANID {
+		return fmt.Errorf("%w: ProvisioningVLAN must be between %d and %d, got %d",
+			ErrInvalidVLAN, MinVLANID, MaxVLANID, c.ProvisioningVLAN)
+	}
+
+	// QuarantineVLAN must not equal ProvisioningVLAN
+	if c.QuarantineVLAN == c.ProvisioningVLAN {
+		return fmt.Errorf("%w: QuarantineVLAN and ProvisioningVLAN must be different",
+			ErrInvalidVLAN)
+	}
+
+	// Validate firmware config if present
+	if c.Firmware != nil {
+		if err := c.Firmware.Validate(); err != nil {
+			return fmt.Errorf("firmware config: %w", err)
+		}
+	}
+
+	// Validate timeouts are positive
+	if c.InstallTimeout <= 0 {
+		return fmt.Errorf("%w: InstallTimeout must be positive", ErrInvalidTimeout)
+	}
+
+	if c.EnrollmentTimeout <= 0 {
+		return fmt.Errorf("%w: EnrollmentTimeout must be positive", ErrInvalidTimeout)
+	}
+
+	// Validate MaxRetries is non-negative
+	if c.MaxRetries < 0 {
+		return fmt.Errorf("%w: MaxRetries must be non-negative", ErrInvalidConfig)
+	}
+
+	// Validate webhook secret if webhook is enabled
+	if c.WebhookEnabled && c.WebhookSecret == "" {
+		return fmt.Errorf("%w: WebhookSecret is required when WebhookEnabled is true",
+			ErrInvalidConfig)
+	}
+
+	return nil
+}
+
+// Validate validates the FirmwareConfig and returns an error if invalid.
+func (f *FirmwareConfig) Validate() error {
+	switch f.Source {
+	case FirmwareSourceUpstream:
+		// ExpectedDigest is required for upstream source
+		if f.ExpectedDigest == "" {
+			return fmt.Errorf("%w: ExpectedDigest is required for upstream firmware source",
+				ErrInvalidFirmwareConfig)
+		}
+
+		// UpstreamURL should be set (defaults to DefaultUpstreamFirmwareURL)
+		if f.UpstreamURL == "" {
+			return fmt.Errorf("%w: UpstreamURL is required for upstream firmware source",
+				ErrInvalidFirmwareConfig)
+		}
+
+	case FirmwareSourceCustom:
+		// CustomPath must exist for custom source
+		if f.CustomPath == "" {
+			return fmt.Errorf("%w: CustomPath is required for custom firmware source",
+				ErrInvalidFirmwareConfig)
+		}
+
+		// Verify the custom path exists
+		if _, err := os.Stat(f.CustomPath); os.IsNotExist(err) {
+			return fmt.Errorf("%w: CustomPath does not exist: %s",
+				ErrFirmwareNotFound, f.CustomPath)
+		}
+
+	case FirmwareSourceEmbedded:
+		// No additional validation required for embedded source
+
+	case "":
+		return fmt.Errorf("%w: Source is required", ErrInvalidFirmwareConfig)
+
+	default:
+		return fmt.Errorf("%w: unknown firmware source: %s",
+			ErrInvalidFirmwareConfig, f.Source)
+	}
+
+	return nil
+}

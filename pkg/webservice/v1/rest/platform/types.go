@@ -1,0 +1,138 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package platform
+
+import (
+	"context"
+	"time"
+
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+)
+
+// ServicesManager provides service management operations
+type ServicesManager interface {
+	ListServices(ctx context.Context, req *platformv1.ListServicesRequest) (*platformv1.ListServicesResponse, error)
+	GetServiceStatus(ctx context.Context, req *platformv1.GetServiceStatusRequest) (*platformv1.GetServiceStatusResponse, error)
+	StartService(ctx context.Context, req *platformv1.StartServiceRequest) (*platformv1.StartServiceResponse, error)
+	StopService(ctx context.Context, req *platformv1.StopServiceRequest) (*platformv1.StopServiceResponse, error)
+	RestartService(ctx context.Context, req *platformv1.RestartServiceRequest) (*platformv1.RestartServiceResponse, error)
+}
+
+// ProtocolConfig provides protocol configuration information
+type ProtocolConfig struct {
+	EnableREST     bool
+	RESTListenAddr string
+	RESTTLSEnabled bool
+	EnableGRPCTCP  bool
+	GRPCListenAddr string
+	GRPCTLSEnabled bool
+	SocketPath     string
+	EnableQUIC     bool
+	QUICListenAddr string
+	EnableMCP      bool
+	MCPHTTPAddr    string
+}
+
+// VersionInfo provides application version information
+type VersionInfo struct {
+	Version   string
+	BuildDate string
+	GitHash   string
+}
+
+// HealthResponse represents the health check response
+type HealthResponse struct {
+	Status     string                    `json:"status"`
+	Components []ComponentHealthResponse `json:"components,omitempty"`
+	Timestamp  int64                     `json:"timestamp"`
+}
+
+// ComponentHealthResponse represents individual component health
+type ComponentHealthResponse struct {
+	Name      string `json:"name"`
+	Status    string `json:"status"`
+	Message   string `json:"message,omitempty"`
+	LastCheck int64  `json:"last_check"`
+}
+
+// StatusResponse represents the daemon status response
+type StatusResponse struct {
+	Status    string             `json:"status"`
+	Version   string             `json:"version"`
+	BuildTime string             `json:"build_time"`
+	GitCommit string             `json:"git_commit"`
+	GoVersion string             `json:"go_version"`
+	System    SystemInfoResponse `json:"system"`
+	Timestamp int64              `json:"timestamp"`
+}
+
+// SystemInfoResponse represents system information
+type SystemInfoResponse struct {
+	OS                string `json:"os"`
+	Arch              string `json:"arch"`
+	NumCPUs           int    `json:"num_cpus"`
+	TotalMemoryMB     uint64 `json:"total_memory_mb"`
+	AvailableMemoryMB uint64 `json:"available_memory_mb"`
+	Uptime            string `json:"uptime"`
+}
+
+// VersionResponse represents the version response
+type VersionResponse struct {
+	Version   string `json:"version"`
+	BuildTime string `json:"build_time"`
+	GitCommit string `json:"git_commit"`
+	GoVersion string `json:"go_version"`
+}
+
+// ServiceInfoResponse represents service information
+type ServiceInfoResponse struct {
+	Name       string    `json:"name"`
+	Status     string    `json:"status"`
+	StartedAt  time.Time `json:"started_at,omitempty"`
+	Uptime     string    `json:"uptime,omitempty"`
+	StartCount uint64    `json:"start_count"`
+	StopCount  uint64    `json:"stop_count"`
+	LastError  string    `json:"last_error,omitempty"`
+}
+
+// ServicesListResponse represents the list of services
+type ServicesListResponse struct {
+	Services  []ServiceInfoResponse `json:"services"`
+	Count     int                   `json:"count"`
+	Timestamp int64                 `json:"timestamp"`
+}
+
+// ServiceActionResponse represents a service action result
+type ServiceActionResponse struct {
+	Service string `json:"service"`
+	Action  string `json:"action"`
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+// ProtocolStatusResponse represents a protocol's status
+type ProtocolStatusResponse struct {
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+	Address string `json:"address"`
+	Port    int    `json:"port"`
+	Status  string `json:"status"`
+	TLS     bool   `json:"tls"`
+}
+
+// ProtocolsResponse represents all protocol statuses
+type ProtocolsResponse struct {
+	Protocols []ProtocolStatusResponse `json:"protocols"`
+	Timestamp int64                    `json:"timestamp"`
+}

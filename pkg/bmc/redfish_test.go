@@ -1,0 +1,1101 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package bmc
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// mockRedfishServer creates an httptest.Server that simulates a Redfish BMC API.
+// It returns the server and a mutable state struct for controlling responses.
+func mockRedfishServer(t *testing.T) (*httptest.Server, *mockRedfishState) {
+	t.Helper()
+	state := &mockRedfishState{
+		powerState:  "On",
+		bootTarget:  "Hdd",
+		bootEnabled: "Once",
+		inserted:    false,
+		imageURL:    "",
+	}
+
+	mux := http.NewServeMux()
+
+	// Service root.
+	mux.HandleFunc("/redfish/v1/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/redfish/v1/" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, redfishServiceRoot{
+			Systems:  redfishRef{ODataID: "/redfish/v1/Systems"},
+			Chassis:  redfishRef{ODataID: "/redfish/v1/Chassis"},
+			Managers: redfishRef{ODataID: "/redfish/v1/Managers"},
+		})
+	})
+
+	// Systems collection.
+	mux.HandleFunc("/redfish/v1/Systems", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/redfish/v1/Systems" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, redfishCollection{
+			Members: []redfishRef{{ODataID: "/redfish/v1/Systems/1"}},
+		})
+	})
+
+	// System resource.
+	mux.HandleFunc("/redfish/v1/Systems/1", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			var patch redfishBootPatch
+			if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			state.bootTarget = patch.Boot.BootSourceOverrideTarget
+			state.bootEnabled = patch.Boot.BootSourceOverrideEnabled
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		writeJSON(w, redfishSystem{
+			Manufacturer: "TestVendor",
+			Model:        "TestServer 1000",
+			SerialNumber: "SN123456",
+			BiosVersion:  "2.1.0",
+			PowerState:   state.powerState,
+			Boot: redfishBoot{
+				BootSourceOverrideTarget:  state.bootTarget,
+				BootSourceOverrideEnabled: state.bootEnabled,
+			},
+			ProcessorSummary: redfishProcessorSummary{
+				Count: 2,
+				Model: "Intel Xeon E5-2680",
+			},
+			MemorySummary: redfishMemorySummary{
+				TotalSystemMemoryGiB: 128,
+			},
+			Actions: redfishActions{
+				ComputerSystemReset: redfishResetAction{
+					Target: "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+				},
+			},
+		})
+	})
+
+	// Reset action.
+	mux.HandleFunc("/redfish/v1/Systems/1/Actions/ComputerSystem.Reset", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body redfishResetBody
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		switch body.ResetType {
+		case "On":
+			state.powerState = "On"
+		case "ForceOff":
+			state.powerState = "Off"
+		case "ForceRestart":
+			state.powerState = "On"
+		case "PowerCycle":
+			state.powerState = "On"
+		default:
+			http.Error(w, "unknown reset type", http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Chassis collection.
+	mux.HandleFunc("/redfish/v1/Chassis", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/redfish/v1/Chassis" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, redfishCollection{
+			Members: []redfishRef{{ODataID: "/redfish/v1/Chassis/1"}},
+		})
+	})
+
+	// Thermal.
+	mux.HandleFunc("/redfish/v1/Chassis/1/Thermal", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, redfishThermal{
+			Temperatures: []redfishTemperature{
+				{
+					Name:           "CPU1 Temp",
+					ReadingCelsius: 42.5,
+					Status:         redfishStatus{Health: "OK"},
+				},
+				{
+					Name:           "Inlet Temp",
+					ReadingCelsius: 22.0,
+					Status:         redfishStatus{Health: "OK"},
+				},
+			},
+			Fans: []redfishFan{
+				{
+					Name:         "Fan1",
+					Reading:      8500,
+					ReadingUnits: "RPM",
+					Status:       redfishStatus{Health: "OK"},
+				},
+				{
+					Name:         "Fan2",
+					Reading:      8200,
+					ReadingUnits: "RPM",
+					Status:       redfishStatus{Health: "Warning"},
+				},
+			},
+		})
+	})
+
+	// Power.
+	mux.HandleFunc("/redfish/v1/Chassis/1/Power", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, redfishPower{
+			PowerControl: []redfishPowerControl{
+				{
+					Name:               "Server Power",
+					PowerConsumedWatts: 350,
+					PowerCapacityWatts: 800,
+				},
+			},
+			PowerSupplies: []redfishPowerSupply{
+				{
+					Name:                 "PSU1",
+					PowerCapacityWatts:   800,
+					LastPowerOutputWatts: 175,
+					Status:               redfishStatus{Health: "OK"},
+				},
+				{
+					Name:                 "PSU2",
+					PowerCapacityWatts:   800,
+					LastPowerOutputWatts: 175,
+					Status:               redfishStatus{Health: "OK"},
+				},
+			},
+		})
+	})
+
+	// Managers collection.
+	mux.HandleFunc("/redfish/v1/Managers", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/redfish/v1/Managers" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, redfishCollection{
+			Members: []redfishRef{{ODataID: "/redfish/v1/Managers/1"}},
+		})
+	})
+
+	// Manager resource with VirtualMedia link.
+	mux.HandleFunc("/redfish/v1/Managers/1", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/redfish/v1/Managers/1" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, struct {
+			VirtualMedia redfishRef `json:"VirtualMedia"`
+		}{
+			VirtualMedia: redfishRef{ODataID: "/redfish/v1/Managers/1/VirtualMedia"},
+		})
+	})
+
+	// Virtual media collection.
+	mux.HandleFunc("/redfish/v1/Managers/1/VirtualMedia", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/redfish/v1/Managers/1/VirtualMedia" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, redfishCollection{
+			Members: []redfishRef{{ODataID: "/redfish/v1/Managers/1/VirtualMedia/CD"}},
+		})
+	})
+
+	// Virtual media CD member.
+	mux.HandleFunc("/redfish/v1/Managers/1/VirtualMedia/CD", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/redfish/v1/Managers/1/VirtualMedia/CD" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, redfishVirtualMedia{
+			Inserted:   state.inserted,
+			Image:      state.imageURL,
+			MediaTypes: []string{"CD", "DVD"},
+			Actions: struct {
+				InsertMedia redfishRef `json:"#VirtualMedia.InsertMedia"`
+				EjectMedia  redfishRef `json:"#VirtualMedia.EjectMedia"`
+			}{
+				InsertMedia: redfishRef{ODataID: "/redfish/v1/Managers/1/VirtualMedia/CD/Actions/VirtualMedia.InsertMedia"},
+				EjectMedia:  redfishRef{ODataID: "/redfish/v1/Managers/1/VirtualMedia/CD/Actions/VirtualMedia.EjectMedia"},
+			},
+		})
+	})
+
+	// Insert media action.
+	mux.HandleFunc("/redfish/v1/Managers/1/VirtualMedia/CD/Actions/VirtualMedia.InsertMedia", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body redfishInsertMediaBody
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		state.inserted = true
+		state.imageURL = body.Image
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Eject media action.
+	mux.HandleFunc("/redfish/v1/Managers/1/VirtualMedia/CD/Actions/VirtualMedia.EjectMedia", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// Read and discard body.
+		_, _ = io.ReadAll(r.Body)
+		state.inserted = false
+		state.imageURL = ""
+		w.WriteHeader(http.StatusOK)
+	})
+
+	server := httptest.NewTLSServer(mux)
+	return server, state
+}
+
+// mockRedfishState holds mutable state for the mock Redfish server.
+type mockRedfishState struct {
+	powerState  string
+	bootTarget  string
+	bootEnabled string
+	inserted    bool
+	imageURL    string
+}
+
+// newTestRedfishClient creates a redfishClient configured to use the given test server.
+func newTestRedfishClient(t *testing.T, server *httptest.Server) *redfishClient {
+	t.Helper()
+
+	// Parse the server URL to get host and port.
+	addr := server.Listener.Addr().String()
+	parts := strings.SplitN(addr, ":", 2)
+
+	config := &Config{
+		Address:       parts[0],
+		Port:          443, // Will be overridden by baseURL
+		Username:      "admin",
+		Password:      "password",
+		Protocol:      ProtocolRedfish,
+		SkipTLSVerify: true,
+	}
+
+	logger := slog.Default()
+	rc := &redfishClient{
+		config:     config,
+		logger:     logger,
+		baseURL:    server.URL,
+		httpClient: server.Client(),
+	}
+	return rc
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v) //nolint:errcheck
+}
+
+// --- Discovery Tests ---
+
+func TestRedfishClient_Discovery(t *testing.T) {
+	server, _ := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+
+	t.Run("successful discovery", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		err := client.discover(context.Background())
+		if err != nil {
+			t.Fatalf("discovery failed: %v", err)
+		}
+
+		if got := client.getSystemPath(); got != "/redfish/v1/Systems/1" {
+			t.Errorf("systemPath = %q, want /redfish/v1/Systems/1", got)
+		}
+		if got := client.getChassisPath(); got != "/redfish/v1/Chassis/1" {
+			t.Errorf("chassisPath = %q, want /redfish/v1/Chassis/1", got)
+		}
+		if got := client.getVirtualMediaPath(); got != "/redfish/v1/Managers/1/VirtualMedia" {
+			t.Errorf("virtualMediaPath = %q, want /redfish/v1/Managers/1/VirtualMedia", got)
+		}
+		if got := client.getResetActionPath(); got != "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset" {
+			t.Errorf("resetActionPath = %q, want /redfish/v1/Systems/1/Actions/ComputerSystem.Reset", got)
+		}
+	})
+
+	t.Run("discovery with closed client", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		client.Close()
+
+		err := client.ensureDiscovered(context.Background())
+		if err == nil {
+			t.Fatal("expected error for closed client")
+		}
+		var target ErrClientClosed
+		if !errors.As(err, &target) {
+			t.Errorf("expected ErrClientClosed, got %T: %v", err, err)
+		}
+	})
+}
+
+func TestRedfishClient_Discovery_BadServer(t *testing.T) {
+	// Server that returns no members in Systems collection.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/redfish/v1/", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, redfishServiceRoot{
+			Systems:  redfishRef{ODataID: "/redfish/v1/Systems"},
+			Chassis:  redfishRef{ODataID: "/redfish/v1/Chassis"},
+			Managers: redfishRef{ODataID: "/redfish/v1/Managers"},
+		})
+	})
+	mux.HandleFunc("/redfish/v1/Systems", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, redfishCollection{Members: []redfishRef{}})
+	})
+
+	server := httptest.NewTLSServer(mux)
+	t.Cleanup(server.Close)
+
+	client := newTestRedfishClient(t, server)
+	t.Cleanup(func() { client.Close() })
+
+	err := client.discover(context.Background())
+	if err == nil {
+		t.Fatal("expected discovery error for empty Systems collection")
+	}
+	var target ErrRedfishDiscovery
+	if !errors.As(err, &target) {
+		t.Errorf("expected ErrRedfishDiscovery, got %T: %v", err, err)
+	}
+}
+
+// --- Power Tests ---
+
+func TestRedfishClient_PowerStatus(t *testing.T) {
+	server, state := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+
+	t.Run("power on", func(t *testing.T) {
+		state.powerState = "On"
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		got, err := client.PowerStatus(context.Background())
+		if err != nil {
+			t.Fatalf("PowerStatus() error: %v", err)
+		}
+		if got != PowerStateOn {
+			t.Errorf("PowerStatus() = %q, want %q", got, PowerStateOn)
+		}
+	})
+
+	t.Run("power off", func(t *testing.T) {
+		state.powerState = "Off"
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		got, err := client.PowerStatus(context.Background())
+		if err != nil {
+			t.Fatalf("PowerStatus() error: %v", err)
+		}
+		if got != PowerStateOff {
+			t.Errorf("PowerStatus() = %q, want %q", got, PowerStateOff)
+		}
+	})
+
+	t.Run("unknown power state", func(t *testing.T) {
+		state.powerState = "SomethingWeird"
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		got, err := client.PowerStatus(context.Background())
+		if err != nil {
+			t.Fatalf("PowerStatus() error: %v", err)
+		}
+		if got != PowerStateUnknown {
+			t.Errorf("PowerStatus() = %q, want %q", got, PowerStateUnknown)
+		}
+	})
+
+	t.Run("power status on closed client", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		client.Close()
+
+		_, err := client.PowerStatus(context.Background())
+		if err == nil {
+			t.Fatal("expected error for closed client")
+		}
+	})
+}
+
+func TestRedfishClient_PowerOn(t *testing.T) {
+	server, state := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+
+	t.Run("successful power on", func(t *testing.T) {
+		state.powerState = "Off"
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		err := client.PowerOn(context.Background())
+		if err != nil {
+			t.Fatalf("PowerOn() error: %v", err)
+		}
+		if state.powerState != "On" {
+			t.Errorf("server state = %q, want On", state.powerState)
+		}
+	})
+
+	t.Run("power on closed client", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		client.Close()
+
+		err := client.PowerOn(context.Background())
+		if err == nil {
+			t.Fatal("expected error for closed client")
+		}
+		var target ErrPowerOperation
+		if !errors.As(err, &target) {
+			t.Errorf("expected ErrPowerOperation, got %T: %v", err, err)
+		}
+	})
+}
+
+func TestRedfishClient_PowerOff(t *testing.T) {
+	server, state := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+
+	state.powerState = "On"
+	client := newTestRedfishClient(t, server)
+	t.Cleanup(func() { client.Close() })
+
+	err := client.PowerOff(context.Background())
+	if err != nil {
+		t.Fatalf("PowerOff() error: %v", err)
+	}
+	if state.powerState != "Off" {
+		t.Errorf("server state = %q, want Off", state.powerState)
+	}
+}
+
+func TestRedfishClient_PowerReset(t *testing.T) {
+	server, state := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+
+	state.powerState = "On"
+	client := newTestRedfishClient(t, server)
+	t.Cleanup(func() { client.Close() })
+
+	err := client.PowerReset(context.Background())
+	if err != nil {
+		t.Fatalf("PowerReset() error: %v", err)
+	}
+	if state.powerState != "On" {
+		t.Errorf("server state = %q, want On after reset", state.powerState)
+	}
+}
+
+func TestRedfishClient_PowerCycle(t *testing.T) {
+	server, state := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+
+	state.powerState = "On"
+	client := newTestRedfishClient(t, server)
+	t.Cleanup(func() { client.Close() })
+
+	err := client.PowerCycle(context.Background())
+	if err != nil {
+		t.Fatalf("PowerCycle() error: %v", err)
+	}
+	if state.powerState != "On" {
+		t.Errorf("server state = %q, want On after cycle", state.powerState)
+	}
+}
+
+// --- Boot Device Tests ---
+
+func TestRedfishClient_GetBootDevice(t *testing.T) {
+	server, state := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+
+	t.Run("HDD boot device", func(t *testing.T) {
+		state.bootTarget = "Hdd"
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		got, err := client.GetBootDevice(context.Background())
+		if err != nil {
+			t.Fatalf("GetBootDevice() error: %v", err)
+		}
+		if got != BootDeviceDisk {
+			t.Errorf("GetBootDevice() = %q, want %q", got, BootDeviceDisk)
+		}
+	})
+
+	t.Run("PXE boot device", func(t *testing.T) {
+		state.bootTarget = "Pxe"
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		got, err := client.GetBootDevice(context.Background())
+		if err != nil {
+			t.Fatalf("GetBootDevice() error: %v", err)
+		}
+		if got != BootDevicePXE {
+			t.Errorf("GetBootDevice() = %q, want %q", got, BootDevicePXE)
+		}
+	})
+
+	t.Run("unknown boot device returns none", func(t *testing.T) {
+		state.bootTarget = "UnknownDevice"
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		got, err := client.GetBootDevice(context.Background())
+		if err != nil {
+			t.Fatalf("GetBootDevice() error: %v", err)
+		}
+		if got != BootDeviceNone {
+			t.Errorf("GetBootDevice() = %q, want %q", got, BootDeviceNone)
+		}
+	})
+
+	t.Run("get boot device closed client", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		client.Close()
+
+		_, err := client.GetBootDevice(context.Background())
+		if err == nil {
+			t.Fatal("expected error for closed client")
+		}
+	})
+}
+
+func TestRedfishClient_SetBootDevice(t *testing.T) {
+	server, state := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+
+	t.Run("set PXE once", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		err := client.SetBootDevice(context.Background(), BootDevicePXE, false)
+		if err != nil {
+			t.Fatalf("SetBootDevice() error: %v", err)
+		}
+		if state.bootTarget != "Pxe" {
+			t.Errorf("server bootTarget = %q, want Pxe", state.bootTarget)
+		}
+		if state.bootEnabled != "Once" {
+			t.Errorf("server bootEnabled = %q, want Once", state.bootEnabled)
+		}
+	})
+
+	t.Run("set disk persistent", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		err := client.SetBootDevice(context.Background(), BootDeviceDisk, true)
+		if err != nil {
+			t.Fatalf("SetBootDevice() error: %v", err)
+		}
+		if state.bootTarget != "Hdd" {
+			t.Errorf("server bootTarget = %q, want Hdd", state.bootTarget)
+		}
+		if state.bootEnabled != "Continuous" {
+			t.Errorf("server bootEnabled = %q, want Continuous", state.bootEnabled)
+		}
+	})
+
+	t.Run("set CDROM", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		err := client.SetBootDevice(context.Background(), BootDeviceCDROM, false)
+		if err != nil {
+			t.Fatalf("SetBootDevice() error: %v", err)
+		}
+		if state.bootTarget != "Cd" {
+			t.Errorf("server bootTarget = %q, want Cd", state.bootTarget)
+		}
+	})
+
+	t.Run("invalid boot device", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		err := client.SetBootDevice(context.Background(), BootDevice("invalid"), false)
+		if err == nil {
+			t.Fatal("expected error for invalid boot device")
+		}
+		var target ErrInvalidBootDevice
+		if !errors.As(err, &target) {
+			t.Errorf("expected ErrInvalidBootDevice, got %T: %v", err, err)
+		}
+	})
+
+	t.Run("set boot device closed client", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		client.Close()
+
+		err := client.SetBootDevice(context.Background(), BootDevicePXE, false)
+		if err == nil {
+			t.Fatal("expected error for closed client")
+		}
+		var target ErrBootDevice
+		if !errors.As(err, &target) {
+			t.Errorf("expected ErrBootDevice, got %T: %v", err, err)
+		}
+	})
+}
+
+// --- System Info Tests ---
+
+func TestRedfishClient_GetSystemInfo(t *testing.T) {
+	server, state := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+
+	t.Run("successful system info", func(t *testing.T) {
+		state.powerState = "On"
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		info, err := client.GetSystemInfo(context.Background())
+		if err != nil {
+			t.Fatalf("GetSystemInfo() error: %v", err)
+		}
+		if info.Manufacturer != "TestVendor" {
+			t.Errorf("Manufacturer = %q, want TestVendor", info.Manufacturer)
+		}
+		if info.Product != "TestServer 1000" {
+			t.Errorf("Product = %q, want TestServer 1000", info.Product)
+		}
+		if info.SerialNumber != "SN123456" {
+			t.Errorf("SerialNumber = %q, want SN123456", info.SerialNumber)
+		}
+		if info.BIOSVersion != "2.1.0" {
+			t.Errorf("BIOSVersion = %q, want 2.1.0", info.BIOSVersion)
+		}
+		if info.PowerState != PowerStateOn {
+			t.Errorf("PowerState = %q, want %q", info.PowerState, PowerStateOn)
+		}
+	})
+
+	t.Run("system info closed client", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		client.Close()
+
+		_, err := client.GetSystemInfo(context.Background())
+		if err == nil {
+			t.Fatal("expected error for closed client")
+		}
+		var target ErrInventory
+		if !errors.As(err, &target) {
+			t.Errorf("expected ErrInventory, got %T: %v", err, err)
+		}
+	})
+}
+
+// --- Sensor Tests ---
+
+func TestRedfishClient_GetSensors(t *testing.T) {
+	server, _ := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+
+	t.Run("successful sensor read", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		sensors, err := client.GetSensors(context.Background())
+		if err != nil {
+			t.Fatalf("GetSensors() error: %v", err)
+		}
+
+		// Expected: 2 temps + 2 fans + 1 power control + 2 PSUs = 7
+		if len(sensors) != 7 {
+			t.Fatalf("got %d sensors, want 7", len(sensors))
+		}
+
+		// Check first temperature sensor.
+		if sensors[0].Name != "CPU1 Temp" {
+			t.Errorf("sensors[0].Name = %q, want CPU1 Temp", sensors[0].Name)
+		}
+		if sensors[0].Value != 42.5 {
+			t.Errorf("sensors[0].Value = %f, want 42.5", sensors[0].Value)
+		}
+		if sensors[0].Units != "degrees C" {
+			t.Errorf("sensors[0].Units = %q, want degrees C", sensors[0].Units)
+		}
+		if sensors[0].Status != "ok" {
+			t.Errorf("sensors[0].Status = %q, want ok", sensors[0].Status)
+		}
+
+		// Check a fan sensor.
+		if sensors[2].Name != "Fan1" {
+			t.Errorf("sensors[2].Name = %q, want Fan1", sensors[2].Name)
+		}
+		if sensors[2].Value != 8500 {
+			t.Errorf("sensors[2].Value = %f, want 8500", sensors[2].Value)
+		}
+
+		// Check fan with warning status.
+		if sensors[3].Status != "warning" {
+			t.Errorf("sensors[3].Status = %q, want warning", sensors[3].Status)
+		}
+
+		// Check power control.
+		if sensors[4].Name != "Server Power" {
+			t.Errorf("sensors[4].Name = %q, want Server Power", sensors[4].Name)
+		}
+		if sensors[4].Value != 350 {
+			t.Errorf("sensors[4].Value = %f, want 350", sensors[4].Value)
+		}
+	})
+
+	t.Run("sensor read closed client", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		client.Close()
+
+		_, err := client.GetSensors(context.Background())
+		if err == nil {
+			t.Fatal("expected error for closed client")
+		}
+		var target ErrSensorRead
+		if !errors.As(err, &target) {
+			t.Errorf("expected ErrSensorRead, got %T: %v", err, err)
+		}
+	})
+}
+
+// --- Virtual Media Tests ---
+
+func TestRedfishClient_MountISO(t *testing.T) {
+	server, state := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+
+	t.Run("successful mount", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		err := client.MountISO(context.Background(), "https://example.com/boot.iso")
+		if err != nil {
+			t.Fatalf("MountISO() error: %v", err)
+		}
+		if !state.inserted {
+			t.Error("expected inserted = true after mount")
+		}
+		if state.imageURL != "https://example.com/boot.iso" {
+			t.Errorf("imageURL = %q, want https://example.com/boot.iso", state.imageURL)
+		}
+	})
+
+	t.Run("mount empty URL", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		err := client.MountISO(context.Background(), "")
+		if err == nil {
+			t.Fatal("expected error for empty ISO URL")
+		}
+		var target ErrVirtualMedia
+		if !errors.As(err, &target) {
+			t.Errorf("expected ErrVirtualMedia, got %T: %v", err, err)
+		}
+	})
+
+	t.Run("mount closed client", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		client.Close()
+
+		err := client.MountISO(context.Background(), "https://example.com/boot.iso")
+		if err == nil {
+			t.Fatal("expected error for closed client")
+		}
+	})
+}
+
+func TestRedfishClient_UnmountISO(t *testing.T) {
+	server, state := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+
+	t.Run("successful unmount", func(t *testing.T) {
+		state.inserted = true
+		state.imageURL = "https://example.com/boot.iso"
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		err := client.UnmountISO(context.Background())
+		if err != nil {
+			t.Fatalf("UnmountISO() error: %v", err)
+		}
+		if state.inserted {
+			t.Error("expected inserted = false after unmount")
+		}
+		if state.imageURL != "" {
+			t.Errorf("imageURL = %q, want empty", state.imageURL)
+		}
+	})
+
+	t.Run("unmount closed client", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		client.Close()
+
+		err := client.UnmountISO(context.Background())
+		if err == nil {
+			t.Fatal("expected error for closed client")
+		}
+	})
+}
+
+func TestRedfishClient_VirtualMediaStatus(t *testing.T) {
+	server, state := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+
+	t.Run("media inserted", func(t *testing.T) {
+		state.inserted = true
+		state.imageURL = "https://example.com/boot.iso"
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		info, err := client.VirtualMediaStatus(context.Background())
+		if err != nil {
+			t.Fatalf("VirtualMediaStatus() error: %v", err)
+		}
+		if !info.Mounted {
+			t.Error("expected Mounted = true")
+		}
+		if info.ImageURL != "https://example.com/boot.iso" {
+			t.Errorf("ImageURL = %q, want https://example.com/boot.iso", info.ImageURL)
+		}
+		if info.MediaType != "cd" {
+			t.Errorf("MediaType = %q, want cd", info.MediaType)
+		}
+	})
+
+	t.Run("media not inserted", func(t *testing.T) {
+		state.inserted = false
+		state.imageURL = ""
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		info, err := client.VirtualMediaStatus(context.Background())
+		if err != nil {
+			t.Fatalf("VirtualMediaStatus() error: %v", err)
+		}
+		if info.Mounted {
+			t.Error("expected Mounted = false")
+		}
+	})
+
+	t.Run("virtual media status closed client", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		client.Close()
+
+		_, err := client.VirtualMediaStatus(context.Background())
+		if err == nil {
+			t.Fatal("expected error for closed client")
+		}
+	})
+}
+
+// --- Close Tests ---
+
+func TestRedfishClient_Close(t *testing.T) {
+	server, _ := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+
+	t.Run("close returns nil", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		err := client.Close()
+		if err != nil {
+			t.Fatalf("Close() error: %v", err)
+		}
+	})
+
+	t.Run("double close is idempotent", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		err := client.Close()
+		if err != nil {
+			t.Fatalf("first Close() error: %v", err)
+		}
+		err = client.Close()
+		if err != nil {
+			t.Fatalf("second Close() error: %v", err)
+		}
+	})
+
+	t.Run("operations after close return error", func(t *testing.T) {
+		client := newTestRedfishClient(t, server)
+		client.Close()
+
+		ctx := context.Background()
+
+		if _, err := client.PowerStatus(ctx); err == nil {
+			t.Error("PowerStatus should fail after close")
+		}
+		if err := client.PowerOn(ctx); err == nil {
+			t.Error("PowerOn should fail after close")
+		}
+		if err := client.PowerOff(ctx); err == nil {
+			t.Error("PowerOff should fail after close")
+		}
+		if err := client.PowerReset(ctx); err == nil {
+			t.Error("PowerReset should fail after close")
+		}
+		if err := client.PowerCycle(ctx); err == nil {
+			t.Error("PowerCycle should fail after close")
+		}
+		if _, err := client.GetBootDevice(ctx); err == nil {
+			t.Error("GetBootDevice should fail after close")
+		}
+		if err := client.SetBootDevice(ctx, BootDevicePXE, false); err == nil {
+			t.Error("SetBootDevice should fail after close")
+		}
+		if _, err := client.GetSystemInfo(ctx); err == nil {
+			t.Error("GetSystemInfo should fail after close")
+		}
+		if _, err := client.GetSensors(ctx); err == nil {
+			t.Error("GetSensors should fail after close")
+		}
+		if err := client.MountISO(ctx, "http://example.com/boot.iso"); err == nil {
+			t.Error("MountISO should fail after close")
+		}
+		if err := client.UnmountISO(ctx); err == nil {
+			t.Error("UnmountISO should fail after close")
+		}
+		if _, err := client.VirtualMediaStatus(ctx); err == nil {
+			t.Error("VirtualMediaStatus should fail after close")
+		}
+	})
+}
+
+// --- HTTP Error Handling Tests ---
+
+func TestRedfishClient_HTTPErrorHandling(t *testing.T) {
+	t.Run("server returns 500 with Redfish error body", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/redfish/v1/", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(redfishError{
+				Error: struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				}{
+					Code:    "Base.1.0.GeneralError",
+					Message: "internal server error occurred",
+				},
+			})
+		})
+		server := httptest.NewTLSServer(mux)
+		t.Cleanup(server.Close)
+
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		err := client.discover(context.Background())
+		if err == nil {
+			t.Fatal("expected error for 500 response")
+		}
+		if !strings.Contains(err.Error(), "internal server error occurred") {
+			t.Errorf("error message should contain Redfish error message, got: %v", err)
+		}
+	})
+
+	t.Run("server returns 401 unauthorized", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/redfish/v1/", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte("Unauthorized"))
+		})
+		server := httptest.NewTLSServer(mux)
+		t.Cleanup(server.Close)
+
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		err := client.discover(context.Background())
+		if err == nil {
+			t.Fatal("expected error for 401 response")
+		}
+		var reqErr ErrRedfishRequest
+		if errors.As(err, &reqErr) {
+			if reqErr.StatusCode != http.StatusUnauthorized {
+				t.Errorf("expected status 401, got %d", reqErr.StatusCode)
+			}
+		}
+	})
+}
+
+// --- Normalize Health Tests ---
+
+func TestNormalizeRedfishHealth(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"OK", "ok"},
+		{"Warning", "warning"},
+		{"Critical", "critical"},
+		{"", "ok"},
+		{"Unknown", "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := normalizeRedfishHealth(tt.input)
+			if got != tt.want {
+				t.Errorf("normalizeRedfishHealth(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- Context Cancellation Tests ---
+
+func TestRedfishClient_ContextCancellation(t *testing.T) {
+	server, _ := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+
+	client := newTestRedfishClient(t, server)
+	t.Cleanup(func() { client.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately.
+
+	_, err := client.PowerStatus(ctx)
+	if err == nil {
+		t.Fatal("expected error with cancelled context")
+	}
+}

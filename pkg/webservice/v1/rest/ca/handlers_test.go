@@ -1,0 +1,2050 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package ca
+
+import (
+	"bytes"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-objstore/pkg/common"
+	goca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// =============================================================================
+// Mock CA Implementation
+// =============================================================================
+
+type mockCertificateAuthority struct {
+	// Configuration
+	initialized       bool
+	identity          string
+	defaultKeyAlg     x509.PublicKeyAlgorithm
+	defaultSigAlg     x509.SignatureAlgorithm
+	defaultValidity   time.Duration
+	hash              crypto.Hash
+	isAutoImportingCA bool
+	config            goca.CAConfig
+
+	// Certificates
+	rootCert         *x509.Certificate
+	intermediateCert *x509.Certificate
+
+	// Store mocks
+	certStore   xkmssdk.CertStore
+	objectStore common.Storage
+
+	// Method overrides for testing
+	signCSRFn             func(csrPEM []byte, request *goca.CACertificateRequest) (*x509.Certificate, error)
+	caBundleFn            func(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error)
+	issueCertificateFn    func(request *goca.CACertificateRequest) (*x509.Certificate, error)
+	revokeFn              func(certificate *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error
+	parseBundleFn         func(bundle []byte) ([]*x509.Certificate, error)
+	trustedRootFn         func() (*x509.Certificate, error)
+	trustedIntermediateFn func() (*x509.Certificate, error)
+	certificateFn         func(attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error)
+	certificateStoreFn    func() xkmssdk.CertStore
+	objectStoreFn         func() common.Storage
+	signerFn              func() (crypto.Signer, error)
+	publicKeyFn           func() crypto.PublicKey
+	signFn                func(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error)
+}
+
+// Implement crypto.Signer interface
+func (m *mockCertificateAuthority) Public() crypto.PublicKey {
+	if m.publicKeyFn != nil {
+		return m.publicKeyFn()
+	}
+	// Return a dummy ECDSA public key
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	return &key.PublicKey
+}
+
+func (m *mockCertificateAuthority) Sign(randReader io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	if m.signFn != nil {
+		return m.signFn(randReader, digest, opts)
+	}
+	return []byte("mock-signature"), nil
+}
+
+// Implement CertificateAuthority interface
+func (m *mockCertificateAuthority) SignCSR(csrPEM []byte, request *goca.CACertificateRequest) (*x509.Certificate, error) {
+	if m.signCSRFn != nil {
+		return m.signCSRFn(csrPEM, request)
+	}
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) SignTCGCSRIDevID(tcgCSRIDevID *xkmssdk.TCG_CSR_IDEVID, request *goca.CACertificateRequest) ([]byte, []byte, error) {
+	return nil, nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) CABundle(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error) {
+	if m.caBundleFn != nil {
+		return m.caBundleFn(storeType, keyAlgorithm)
+	}
+	return []byte("-----BEGIN CERTIFICATE-----\nMOCK\n-----END CERTIFICATE-----"), nil
+}
+
+func (m *mockCertificateAuthority) ImportCertificate(certificate *x509.Certificate) error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) Certificate(attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
+	if m.certificateFn != nil {
+		return m.certificateFn(attrs)
+	}
+	return nil, errors.New("not found")
+}
+
+func (m *mockCertificateAuthority) CertificatePEM(cn string) ([]byte, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) Verify(certificate *x509.Certificate, xsigner crypto.Signer) ([][]*x509.Certificate, error) {
+	return nil, nil
+}
+
+func (m *mockCertificateAuthority) Signer() (crypto.Signer, error) {
+	if m.signerFn != nil {
+		return m.signerFn()
+	}
+	return m, nil
+}
+
+func (m *mockCertificateAuthority) TrustedRoot() (*x509.Certificate, error) {
+	if m.trustedRootFn != nil {
+		return m.trustedRootFn()
+	}
+	return m.rootCert, nil
+}
+
+func (m *mockCertificateAuthority) TrustedIntermediate() (*x509.Certificate, error) {
+	if m.trustedIntermediateFn != nil {
+		return m.trustedIntermediateFn()
+	}
+	return m.intermediateCert, nil
+}
+
+func (m *mockCertificateAuthority) CreateCSR(request *goca.CACertificateRequest) ([]byte, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) TLSCertificate(attrs *xkmssdk.KeyAttributes) (tls.Certificate, error) {
+	return tls.Certificate{}, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) TLSBundle(attrs *xkmssdk.KeyAttributes) ([]byte, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) TLSConfig(attrs *xkmssdk.KeyAttributes) (*tls.Config, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) TLSConfigWithXSigner(attrs *xkmssdk.KeyAttributes, xsigner interface{}) (*tls.Config, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) QuantumSafeTLSConfig(attrs *xkmssdk.KeyAttributes) (*tls.Config, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) TLSBundleWithCrossSigner(attrs *xkmssdk.KeyAttributes, issuerCN string) ([][]byte, *x509.Certificate, error) {
+	return nil, nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) IssueCertificate(request *goca.CACertificateRequest) (*x509.Certificate, error) {
+	if m.issueCertificateFn != nil {
+		return m.issueCertificateFn(request)
+	}
+	return createTestCertificate(request.Subject.CommonName), nil
+}
+
+func (m *mockCertificateAuthority) Issued(cn string) (bool, error) {
+	return false, nil
+}
+
+func (m *mockCertificateAuthority) Exists(cn string, algorithm x509.SignatureAlgorithm) (bool, error) {
+	return false, nil
+}
+
+func (m *mockCertificateAuthority) Revoke(certificate *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+	if m.revokeFn != nil {
+		return m.revokeFn(certificate, keyAttrs)
+	}
+	return nil
+}
+
+func (m *mockCertificateAuthority) ImportDistributionCRLs(cert *x509.Certificate) error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) IssueEKCertificate(request *goca.CACertificateRequest, ekPubKey crypto.PublicKey) (*x509.Certificate, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) IssueAKCertificate(request *goca.CACertificateRequest, pubKey crypto.PublicKey) (*x509.Certificate, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) ImportEndorsementKeyCertificate(cert *x509.Certificate) error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) ImportXSignedCertificate(issuerCN string, cert *x509.Certificate) error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) EndorsementKeyCertificate(cn string) (*x509.Certificate, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) SignedBlob(data interface{}) ([]byte, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) TrustedRootCertPool(cert *x509.Certificate, xsigner crypto.Signer) (*x509.CertPool, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) TrustedIntermediateCertPool(cert *x509.Certificate, xsigner crypto.Signer) (*x509.CertPool, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) CABundleCertPool(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) (*x509.CertPool, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) ImportIssuingCAs(cert *x509.Certificate) error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) ParseBundle(bundle []byte) ([]*x509.Certificate, error) {
+	if m.parseBundleFn != nil {
+		return m.parseBundleFn(bundle)
+	}
+	return []*x509.Certificate{m.rootCert}, nil
+}
+
+func (m *mockCertificateAuthority) RootCertificate(childCert *x509.Certificate) (*x509.Certificate, error) {
+	return m.rootCert, nil
+}
+
+func (m *mockCertificateAuthority) CertificateStore() xkmssdk.CertStore {
+	if m.certificateStoreFn != nil {
+		return m.certificateStoreFn()
+	}
+	return m.certStore
+}
+
+func (m *mockCertificateAuthority) ObjectStore() common.Storage {
+	if m.objectStoreFn != nil {
+		return m.objectStoreFn()
+	}
+	return m.objectStore
+}
+
+func (m *mockCertificateAuthority) PEM(attrs *xkmssdk.KeyAttributes) ([]byte, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) ImportCertificatePEM(cn string, pemData []byte) error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) Blob(key string) ([]byte, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) ImportBlob(key string, data []byte) error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) KeyStore() interface{} {
+	return nil
+}
+
+func (m *mockCertificateAuthority) Key(attrs *xkmssdk.KeyAttributes) (interface{}, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) PubKey(attrs *xkmssdk.KeyAttributes) (crypto.PublicKey, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) OSTrustStore() (*x509.CertPool, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) IsAutoImportingIssuerCAs() bool {
+	return m.isAutoImportingCA
+}
+
+func (m *mockCertificateAuthority) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm {
+	if m.defaultKeyAlg != 0 {
+		return m.defaultKeyAlg
+	}
+	return x509.ECDSA
+}
+
+func (m *mockCertificateAuthority) DefaultSignatureAlgorithm() x509.SignatureAlgorithm {
+	if m.defaultSigAlg != 0 {
+		return m.defaultSigAlg
+	}
+	return x509.ECDSAWithSHA256
+}
+
+func (m *mockCertificateAuthority) DefaultValidityPeriod() time.Duration {
+	if m.defaultValidity != 0 {
+		return m.defaultValidity
+	}
+	return 365 * 24 * time.Hour
+}
+
+func (m *mockCertificateAuthority) Hash() crypto.Hash {
+	if m.hash != 0 {
+		return m.hash
+	}
+	return crypto.SHA256
+}
+
+func (m *mockCertificateAuthority) Identity() string {
+	if m.identity != "" {
+		return m.identity
+	}
+	return "Test CA"
+}
+
+func (m *mockCertificateAuthority) CAKeyAttributes(storeType xkmssdk.StoreType) (*xkmssdk.KeyAttributes, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) CASigner(storeType xkmssdk.StoreType, algorithm x509.PublicKeyAlgorithm) (crypto.Signer, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) Init() error {
+	m.initialized = true
+	return nil
+}
+
+func (m *mockCertificateAuthority) Load() error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) IsInitialized() bool {
+	return m.initialized
+}
+
+func (m *mockCertificateAuthority) CAConfig() goca.CAConfig {
+	return m.config
+}
+
+func (m *mockCertificateAuthority) ImportAttestation(akAttrs *xkmssdk.KeyAttributes, blobType string, data []byte) error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) ImportAttestationKeyCertificate(attrs *xkmssdk.KeyAttributes, akDER []byte) error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) ImportAttestationEventLog(akAttrs *xkmssdk.KeyAttributes, eventLog []byte) error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) ImportAttestationPCRs(akAttrs *xkmssdk.KeyAttributes, pcrs []byte) error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) ImportAttestationQuote(akAttrs *xkmssdk.KeyAttributes, quote []byte) error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) ImportLocalAttestation(akAttrs *xkmssdk.KeyAttributes, quote *xkmssdk.Quote) error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) VerifyQuote(akAttrs *xkmssdk.KeyAttributes, quote *xkmssdk.Quote, nonce []byte) error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) VerifyAttestationQuote(akAttrs *xkmssdk.KeyAttributes, quote []byte) error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) VerifyAttestationEventLog(akAttrs *xkmssdk.KeyAttributes, eventLog []byte) error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) VerifyAttestationPCRs(akAttrs *xkmssdk.KeyAttributes, pcrs []byte) error {
+	return nil
+}
+
+func (m *mockCertificateAuthority) VerifyTCG_CSR_IDevIDBytes(packedCSR []byte, sigAlg interface{}) ([]byte, []byte, []byte, error) {
+	return nil, nil, nil, errors.New("not implemented")
+}
+
+func (m *mockCertificateAuthority) SetTPM(tpm xkmssdk.TrustedPlatformModule) {}
+func (m *mockCertificateAuthority) GenerateCRL() ([]byte, error) {
+	return nil, errors.New("CRL generation not supported")
+}
+func (m *mockCertificateAuthority) IsRevoked(serial *big.Int) (bool, error) {
+	return false, nil
+}
+
+// =============================================================================
+// Mock CA with CRL Generator - for testing GetCRL success path
+// =============================================================================
+
+type mockCAWithCRLGenerator struct {
+	mockCertificateAuthority
+	generateCRLFn func() ([]byte, error)
+}
+
+func (m *mockCAWithCRLGenerator) GenerateCRL() ([]byte, error) {
+	if m.generateCRLFn != nil {
+		return m.generateCRLFn()
+	}
+	return nil, errors.New("CRL generation not configured")
+}
+
+// =============================================================================
+// Mock Certificate Store - implements xkmssdk.CertStore interface
+// =============================================================================
+
+type mockCertStore struct {
+	getCertificateFn func(cn string) (*x509.Certificate, error)
+}
+
+// Basic Certificate Operations
+func (m *mockCertStore) StoreCertificate(cert *x509.Certificate) error {
+	return nil
+}
+
+func (m *mockCertStore) GetCertificate(cn string) (*x509.Certificate, error) {
+	if m.getCertificateFn != nil {
+		return m.getCertificateFn(cn)
+	}
+	return nil, errors.New("certificate not found")
+}
+
+func (m *mockCertStore) DeleteCertificate(cn string) error {
+	return nil
+}
+
+func (m *mockCertStore) ListCertificates() ([]*x509.Certificate, error) {
+	return []*x509.Certificate{}, nil
+}
+
+// Certificate Chain Operations
+func (m *mockCertStore) StoreCertificateChain(chain []*x509.Certificate) error {
+	return nil
+}
+
+func (m *mockCertStore) GetCertificateChain(cn string) ([]*x509.Certificate, error) {
+	return nil, errors.New("not found")
+}
+
+// CRL Operations
+func (m *mockCertStore) StoreCRL(crl *x509.RevocationList) error {
+	return nil
+}
+
+func (m *mockCertStore) GetCRL(issuer string) (*x509.RevocationList, error) {
+	return nil, errors.New("not found")
+}
+
+// Validation Operations
+func (m *mockCertStore) VerifyCertificate(cert *x509.Certificate, roots *x509.CertPool) error {
+	return nil
+}
+
+func (m *mockCertStore) IsRevoked(cert *x509.Certificate) (bool, error) {
+	return false, nil
+}
+
+// Lifecycle
+func (m *mockCertStore) Close() error {
+	return nil
+}
+
+// =============================================================================
+// Mock HttpWriter
+// =============================================================================
+
+type mockHttpWriter struct {
+	lastStatus  int
+	lastPayload interface{}
+	lastError   error
+}
+
+func (m *mockHttpWriter) Write(w http.ResponseWriter, r *http.Request, status int, resp interface{}) {
+	m.lastStatus = status
+	m.lastPayload = resp
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (m *mockHttpWriter) WriteYaml(w http.ResponseWriter, status int, resp interface{}) {
+	m.lastStatus = status
+	m.lastPayload = resp
+	w.WriteHeader(status)
+}
+
+func (m *mockHttpWriter) WriteJson(w http.ResponseWriter, status int, resp interface{}) {
+	m.lastStatus = status
+	m.lastPayload = resp
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (m *mockHttpWriter) Success200(w http.ResponseWriter, r *http.Request, payload interface{}) {
+	m.lastStatus = http.StatusOK
+	m.lastPayload = payload
+	w.WriteHeader(http.StatusOK)
+	resp := response.WebServiceResponse{Code: 200, Success: true, Payload: payload}
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (m *mockHttpWriter) Success201(w http.ResponseWriter, r *http.Request, payload interface{}) {
+	m.lastStatus = http.StatusCreated
+	m.lastPayload = payload
+	w.WriteHeader(http.StatusCreated)
+	resp := response.WebServiceResponse{Code: 201, Success: true, Payload: payload}
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (m *mockHttpWriter) Success404(w http.ResponseWriter, r *http.Request, payload interface{}, err error) {
+	m.lastStatus = http.StatusNotFound
+	m.lastPayload = payload
+	m.lastError = err
+	w.WriteHeader(http.StatusNotFound)
+}
+
+func (m *mockHttpWriter) Error200(w http.ResponseWriter, r *http.Request, err error) {
+	m.lastStatus = http.StatusOK
+	m.lastError = err
+	w.WriteHeader(http.StatusOK)
+}
+
+func (m *mockHttpWriter) Error400(w http.ResponseWriter, r *http.Request, err error) {
+	m.lastStatus = http.StatusBadRequest
+	m.lastError = err
+	w.WriteHeader(http.StatusBadRequest)
+	resp := response.WebServiceResponse{Code: 400, Success: false, Error: err.Error()}
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (m *mockHttpWriter) Error401(w http.ResponseWriter, r *http.Request, err error) {
+	m.lastStatus = http.StatusUnauthorized
+	m.lastError = err
+	w.WriteHeader(http.StatusUnauthorized)
+}
+
+func (m *mockHttpWriter) Error403(w http.ResponseWriter, r *http.Request, err error, payload interface{}) {
+	m.lastStatus = http.StatusForbidden
+	m.lastError = err
+	m.lastPayload = payload
+	w.WriteHeader(http.StatusForbidden)
+}
+
+func (m *mockHttpWriter) Error404(w http.ResponseWriter, r *http.Request, err error) {
+	m.lastStatus = http.StatusNotFound
+	m.lastError = err
+	w.WriteHeader(http.StatusNotFound)
+	resp := response.WebServiceResponse{Code: 404, Success: false, Error: err.Error()}
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (m *mockHttpWriter) Error500(w http.ResponseWriter, r *http.Request, err error) {
+	m.lastStatus = http.StatusInternalServerError
+	m.lastError = err
+	w.WriteHeader(http.StatusInternalServerError)
+	resp := response.WebServiceResponse{Code: 500, Success: false, Error: err.Error()}
+	json.NewEncoder(w).Encode(resp)
+}
+
+// =============================================================================
+// Test Helpers
+// =============================================================================
+
+func newTestLogger() *logging.Logger {
+	return logging.NewLogger(slog.LevelDebug, os.Stdout)
+}
+
+func newTestHandlers(ca goca.CACertificateAuthority) (*CAHandlers, *mockHttpWriter) {
+	logger := newTestLogger()
+	writer := &mockHttpWriter{}
+	handlers := NewCAHandlers(logger, ca, writer)
+	return handlers, writer
+}
+
+func createTestCertificate(cn string) *x509.Certificate {
+	serialNumber, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	now := time.Now()
+
+	return &x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName:   cn,
+			Organization: []string{"Test Org"},
+			Country:      []string{"US"},
+		},
+		Issuer: pkix.Name{
+			CommonName: "Test CA",
+		},
+		NotBefore:             now,
+		NotAfter:              now.Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		PublicKeyAlgorithm:    x509.ECDSA,
+		SignatureAlgorithm:    x509.ECDSAWithSHA256,
+	}
+}
+
+func createTestRootCertificate() *x509.Certificate {
+	cert := createTestCertificate("Test Root CA")
+	cert.IsCA = true
+	cert.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign
+	return cert
+}
+
+func createTestIntermediateCertificate() *x509.Certificate {
+	cert := createTestCertificate("Test Intermediate CA")
+	cert.IsCA = true
+	cert.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign
+	cert.Issuer = pkix.Name{
+		CommonName: "Test Root CA",
+	}
+	return cert
+}
+
+// createTestCRL creates a valid CRL DER for testing
+func createTestCRL() ([]byte, error) {
+	// Generate a key for signing
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create subject key identifier from public key
+	pubKeyBytes, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+	hash := sha256.Sum256(pubKeyBytes)
+	subjectKeyId := hash[:20]
+
+	// Create a self-signed certificate to use as the issuer
+	certTemplate := &x509.Certificate{
+		Subject: pkix.Name{
+			CommonName: "Test CA",
+		},
+		SerialNumber:          big.NewInt(1),
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCRLSign | x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		SubjectKeyId:          subjectKeyId,
+	}
+
+	// Self-sign the certificate
+	certDER, err := x509.CreateCertificate(rand.Reader, certTemplate, certTemplate, &key.PublicKey, key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse the certificate
+	issuer, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create revocation list template
+	template := &x509.RevocationList{
+		Number:     big.NewInt(1),
+		ThisUpdate: time.Now(),
+		NextUpdate: time.Now().Add(24 * time.Hour),
+		RevokedCertificateEntries: []x509.RevocationListEntry{
+			{
+				SerialNumber:   big.NewInt(12345),
+				RevocationTime: time.Now().Add(-1 * time.Hour),
+				ReasonCode:     1, // keyCompromise
+			},
+		},
+	}
+
+	// Create the CRL
+	crlDER, err := x509.CreateRevocationList(rand.Reader, template, issuer, key)
+	if err != nil {
+		return nil, err
+	}
+
+	return crlDER, nil
+}
+
+// =============================================================================
+// NewCAHandlers Tests
+// =============================================================================
+
+func TestNewCAHandlers(t *testing.T) {
+	t.Run("creates handlers with all dependencies", func(t *testing.T) {
+		logger := newTestLogger()
+		mockCA := &mockCertificateAuthority{}
+		writer := &mockHttpWriter{}
+
+		handlers := NewCAHandlers(logger, mockCA, writer)
+
+		require.NotNil(t, handlers)
+		assert.NotNil(t, handlers.logger)
+		assert.NotNil(t, handlers.ca)
+		assert.NotNil(t, handlers.respWriter)
+	})
+
+	t.Run("creates handlers with nil CA", func(t *testing.T) {
+		logger := newTestLogger()
+		writer := &mockHttpWriter{}
+
+		handlers := NewCAHandlers(logger, nil, writer)
+
+		require.NotNil(t, handlers)
+		assert.Nil(t, handlers.ca)
+	})
+}
+
+// =============================================================================
+// GetInfo Handler Tests
+// =============================================================================
+
+func TestGetInfo_Success(t *testing.T) {
+	t.Run("returns CA info when initialized", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{
+			initialized:     true,
+			identity:        "Test Root CA",
+			defaultKeyAlg:   x509.ECDSA,
+			defaultValidity: 365 * 24 * time.Hour,
+			rootCert:        createTestRootCertificate(),
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/info", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.GetInfo(rec, req)
+
+		assert.Equal(t, http.StatusOK, writer.lastStatus)
+		payload, ok := writer.lastPayload.(CAInfoResponse)
+		require.True(t, ok)
+		assert.True(t, payload.IsInitialized)
+		assert.Equal(t, "Test Root CA", payload.CommonName)
+		assert.NotNil(t, payload.RootCert)
+	})
+
+	t.Run("returns info when CA is not initialized", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{
+			initialized: false,
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/info", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.GetInfo(rec, req)
+
+		assert.Equal(t, http.StatusOK, writer.lastStatus)
+		payload, ok := writer.lastPayload.(CAInfoResponse)
+		require.True(t, ok)
+		assert.False(t, payload.IsInitialized)
+	})
+
+	t.Run("includes intermediate CA info", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{
+			initialized:      true,
+			identity:         "Test Intermediate CA",
+			rootCert:         createTestRootCertificate(),
+			intermediateCert: createTestIntermediateCertificate(),
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/info", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.GetInfo(rec, req)
+
+		assert.Equal(t, http.StatusOK, writer.lastStatus)
+		payload, ok := writer.lastPayload.(CAInfoResponse)
+		require.True(t, ok)
+		assert.True(t, payload.IsIntermediate)
+		assert.NotEmpty(t, payload.Intermediates)
+	})
+}
+
+func TestGetInfo_Error(t *testing.T) {
+	t.Run("returns error when CA is nil", func(t *testing.T) {
+		handlers, writer := newTestHandlers(nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/info", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.GetInfo(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+		assert.IsType(t, ErrCANotInitialized{}, writer.lastError)
+	})
+}
+
+// =============================================================================
+// ListCertificates Handler Tests
+// =============================================================================
+
+func TestListCertificates_Success(t *testing.T) {
+	t.Run("returns certificate list", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			rootCert:    createTestRootCertificate(),
+			certStore:   &mockCertStore{},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/certificates", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.ListCertificates(rec, req)
+
+		assert.Equal(t, http.StatusOK, writer.lastStatus)
+		payload, ok := writer.lastPayload.(CertificateListResponse)
+		require.True(t, ok)
+		assert.NotEmpty(t, payload.Certificates)
+	})
+
+	t.Run("respects pagination limit", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			rootCert:    createTestRootCertificate(),
+			certStore:   &mockCertStore{},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/certificates?limit=1", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.ListCertificates(rec, req)
+
+		assert.Equal(t, http.StatusOK, writer.lastStatus)
+		payload, ok := writer.lastPayload.(CertificateListResponse)
+		require.True(t, ok)
+		assert.LessOrEqual(t, len(payload.Certificates), 1)
+	})
+
+	t.Run("handles pagination cursor", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			rootCert:    createTestRootCertificate(),
+			certStore:   &mockCertStore{},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/certificates?cursor=abc123", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.ListCertificates(rec, req)
+
+		assert.Equal(t, http.StatusOK, writer.lastStatus)
+	})
+
+	t.Run("caps limit at maximum", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			rootCert:    createTestRootCertificate(),
+			certStore:   &mockCertStore{},
+		}
+		handlers, _ := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/certificates?limit=10000", nil)
+
+		// Test getPaginationParams directly
+		limit, _ := handlers.getPaginationParams(req)
+		assert.Equal(t, int32(1000), limit) // Should be capped at maxLimit
+	})
+}
+
+func TestListCertificates_Error(t *testing.T) {
+	t.Run("returns error when CA is nil", func(t *testing.T) {
+		handlers, writer := newTestHandlers(nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/certificates", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.ListCertificates(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+	})
+
+	t.Run("returns error when cert store is nil", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			certStore:   nil,
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/certificates", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.ListCertificates(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+	})
+}
+
+// =============================================================================
+// GetCertificate Handler Tests
+// =============================================================================
+
+func TestGetCertificate_Success(t *testing.T) {
+	t.Run("returns root certificate by serial", func(t *testing.T) {
+		rootCert := createTestRootCertificate()
+		serial := hex.EncodeToString(rootCert.SerialNumber.Bytes())
+
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			rootCert:    rootCert,
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/certificates/"+serial, nil)
+		req = mux.SetURLVars(req, map[string]string{"serial": serial})
+		rec := httptest.NewRecorder()
+
+		handlers.GetCertificate(rec, req)
+
+		assert.Equal(t, http.StatusOK, writer.lastStatus)
+		payload, ok := writer.lastPayload.(GetCertificateResponse)
+		require.True(t, ok)
+		require.NotNil(t, payload.Certificate)
+		assert.Equal(t, serial, payload.Certificate.Serial)
+	})
+
+	t.Run("returns intermediate certificate by serial", func(t *testing.T) {
+		intermediateCert := createTestIntermediateCertificate()
+		serial := hex.EncodeToString(intermediateCert.SerialNumber.Bytes())
+
+		mockCA := &mockCertificateAuthority{
+			initialized:      true,
+			rootCert:         createTestRootCertificate(),
+			intermediateCert: intermediateCert,
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/certificates/"+serial, nil)
+		req = mux.SetURLVars(req, map[string]string{"serial": serial})
+		rec := httptest.NewRecorder()
+
+		handlers.GetCertificate(rec, req)
+
+		assert.Equal(t, http.StatusOK, writer.lastStatus)
+	})
+
+	t.Run("includes PEM when requested", func(t *testing.T) {
+		rootCert := createTestRootCertificate()
+		serial := hex.EncodeToString(rootCert.SerialNumber.Bytes())
+
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			rootCert:    rootCert,
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/certificates/"+serial+"?include_pem=true", nil)
+		req = mux.SetURLVars(req, map[string]string{"serial": serial})
+		rec := httptest.NewRecorder()
+
+		handlers.GetCertificate(rec, req)
+
+		assert.Equal(t, http.StatusOK, writer.lastStatus)
+		_, ok := writer.lastPayload.(GetCertificateResponse)
+		require.True(t, ok)
+		// Note: PEM will be empty because rootCert.Raw is nil in test
+	})
+
+	t.Run("returns certificate from cert store", func(t *testing.T) {
+		testCert := createTestCertificate("test.example.com")
+		mockCertStore := &mockCertStore{
+			getCertificateFn: func(cn string) (*x509.Certificate, error) {
+				if cn == "lookup-serial" {
+					return testCert, nil
+				}
+				return nil, errors.New("not found")
+			},
+		}
+
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			rootCert:    createTestRootCertificate(),
+			certStore:   mockCertStore,
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/certificates/lookup-serial", nil)
+		req = mux.SetURLVars(req, map[string]string{"serial": "lookup-serial"})
+		rec := httptest.NewRecorder()
+
+		handlers.GetCertificate(rec, req)
+
+		assert.Equal(t, http.StatusOK, writer.lastStatus)
+	})
+}
+
+func TestGetCertificate_Error(t *testing.T) {
+	t.Run("returns error when CA is nil", func(t *testing.T) {
+		handlers, writer := newTestHandlers(nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/certificates/abc123", nil)
+		req = mux.SetURLVars(req, map[string]string{"serial": "abc123"})
+		rec := httptest.NewRecorder()
+
+		handlers.GetCertificate(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+	})
+
+	t.Run("returns error when serial is empty", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{initialized: true}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/certificates/", nil)
+		req = mux.SetURLVars(req, map[string]string{"serial": ""})
+		rec := httptest.NewRecorder()
+
+		handlers.GetCertificate(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+		assert.IsType(t, ErrInvalidSerialNumber{}, writer.lastError)
+	})
+
+	t.Run("returns 404 when certificate not found", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			rootCert:    createTestRootCertificate(),
+			certStore:   &mockCertStore{},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/certificates/nonexistent", nil)
+		req = mux.SetURLVars(req, map[string]string{"serial": "nonexistent"})
+		rec := httptest.NewRecorder()
+
+		handlers.GetCertificate(rec, req)
+
+		assert.Equal(t, http.StatusNotFound, writer.lastStatus)
+		assert.IsType(t, ErrCertificateNotFound{}, writer.lastError)
+	})
+}
+
+// =============================================================================
+// IssueCertificate Handler Tests
+// =============================================================================
+
+func TestIssueCertificate_Success(t *testing.T) {
+	t.Run("issues certificate with minimal request", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			issueCertificateFn: func(request *goca.CACertificateRequest) (*x509.Certificate, error) {
+				return createTestCertificate(request.Subject.CommonName), nil
+			},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		reqBody := CertificateIssueRequest{
+			Subject: SubjectRequest{
+				CommonName: "test.example.com",
+			},
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		handlers.IssueCertificate(rec, req)
+
+		assert.Equal(t, http.StatusCreated, writer.lastStatus)
+		payload, ok := writer.lastPayload.(IssueCertificateResponse)
+		require.True(t, ok)
+		require.NotNil(t, payload.Certificate)
+		assert.Equal(t, "test.example.com", payload.Certificate.Subject.CommonName)
+	})
+
+	t.Run("issues certificate with full request", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			issueCertificateFn: func(request *goca.CACertificateRequest) (*x509.Certificate, error) {
+				return createTestCertificate(request.Subject.CommonName), nil
+			},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		reqBody := CertificateIssueRequest{
+			Subject: SubjectRequest{
+				CommonName:   "server.example.com",
+				Organization: "Example Corp",
+				Country:      "US",
+			},
+			SANs: &SANsRequest{
+				DNS: []string{"server.example.com", "api.example.com"},
+				IPs: []string{"192.168.1.1"},
+			},
+			ValidDays:    365,
+			KeyAlgorithm: "ECDSA",
+			StoreType:    "software",
+			KeyUsage:     []string{"digitalSignature", "keyEncipherment"},
+			ExtKeyUsage:  []string{"serverAuth", "clientAuth"},
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		handlers.IssueCertificate(rec, req)
+
+		assert.Equal(t, http.StatusCreated, writer.lastStatus)
+	})
+
+	t.Run("issues CA certificate", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			issueCertificateFn: func(request *goca.CACertificateRequest) (*x509.Certificate, error) {
+				cert := createTestCertificate(request.Subject.CommonName)
+				cert.IsCA = request.IsCA
+				return cert, nil
+			},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		reqBody := CertificateIssueRequest{
+			Subject: SubjectRequest{
+				CommonName: "Intermediate CA",
+			},
+			IsCA:       true,
+			MaxPathLen: 1,
+			KeyUsage:   []string{"certSign", "crlSign"},
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		handlers.IssueCertificate(rec, req)
+
+		assert.Equal(t, http.StatusCreated, writer.lastStatus)
+	})
+}
+
+func TestIssueCertificate_Error(t *testing.T) {
+	t.Run("returns error when CA is nil", func(t *testing.T) {
+		handlers, writer := newTestHandlers(nil)
+
+		reqBody := CertificateIssueRequest{
+			Subject: SubjectRequest{CommonName: "test.com"},
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		handlers.IssueCertificate(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+	})
+
+	t.Run("returns error for invalid JSON", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{initialized: true}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader([]byte("invalid json")))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		handlers.IssueCertificate(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+		assert.IsType(t, ErrInvalidRequestBody{}, writer.lastError)
+	})
+
+	t.Run("returns error when common name is missing", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{initialized: true}
+		handlers, writer := newTestHandlers(mockCA)
+
+		reqBody := CertificateIssueRequest{
+			Subject: SubjectRequest{
+				CommonName: "",
+			},
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		handlers.IssueCertificate(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+		assert.IsType(t, ErrMissingCommonName{}, writer.lastError)
+	})
+
+	t.Run("returns error for invalid key algorithm", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{initialized: true}
+		handlers, writer := newTestHandlers(mockCA)
+
+		reqBody := CertificateIssueRequest{
+			Subject: SubjectRequest{
+				CommonName: "test.com",
+			},
+			KeyAlgorithm: "INVALID-ALG",
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		handlers.IssueCertificate(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+		assert.IsType(t, ErrInvalidKeyAlgorithm{}, writer.lastError)
+	})
+
+	t.Run("returns error when CA fails to issue", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			issueCertificateFn: func(request *goca.CACertificateRequest) (*x509.Certificate, error) {
+				return nil, errors.New("issuance failed")
+			},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		reqBody := CertificateIssueRequest{
+			Subject: SubjectRequest{CommonName: "test.com"},
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		handlers.IssueCertificate(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+	})
+}
+
+// =============================================================================
+// RevokeCertificate Handler Tests
+// =============================================================================
+
+func TestRevokeCertificate_Success(t *testing.T) {
+	t.Run("revokes certificate", func(t *testing.T) {
+		testCert := createTestCertificate("revoke.example.com")
+		mockCertStore := &mockCertStore{
+			getCertificateFn: func(cn string) (*x509.Certificate, error) {
+				return testCert, nil
+			},
+		}
+
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			certStore:   mockCertStore,
+			revokeFn: func(certificate *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+				return nil
+			},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/abc123", nil)
+		req = mux.SetURLVars(req, map[string]string{"serial": "abc123"})
+		rec := httptest.NewRecorder()
+
+		handlers.RevokeCertificate(rec, req)
+
+		assert.Equal(t, http.StatusOK, writer.lastStatus)
+		payload, ok := writer.lastPayload.(RevokeCertificateResponse)
+		require.True(t, ok)
+		assert.Equal(t, "abc123", payload.Serial)
+		assert.Equal(t, "REVOKED", payload.Status)
+	})
+
+	t.Run("revokes certificate with reason", func(t *testing.T) {
+		testCert := createTestCertificate("revoke.example.com")
+		mockCertStore := &mockCertStore{
+			getCertificateFn: func(cn string) (*x509.Certificate, error) {
+				return testCert, nil
+			},
+		}
+
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			certStore:   mockCertStore,
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		reqBody := CertificateRevokeRequest{
+			Reason:     1, // keyCompromise
+			DeleteKeys: false,
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/abc123", bytes.NewReader(body))
+		req = mux.SetURLVars(req, map[string]string{"serial": "abc123"})
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		handlers.RevokeCertificate(rec, req)
+
+		assert.Equal(t, http.StatusOK, writer.lastStatus)
+		payload, ok := writer.lastPayload.(RevokeCertificateResponse)
+		require.True(t, ok)
+		assert.Equal(t, 1, payload.Reason)
+	})
+
+	t.Run("revokes certificate and deletes keys", func(t *testing.T) {
+		testCert := createTestCertificate("revoke.example.com")
+		mockCertStore := &mockCertStore{
+			getCertificateFn: func(cn string) (*x509.Certificate, error) {
+				return testCert, nil
+			},
+		}
+
+		var capturedKeyAttrs *xkmssdk.KeyAttributes
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			certStore:   mockCertStore,
+			revokeFn: func(certificate *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+				capturedKeyAttrs = keyAttrs
+				return nil
+			},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		reqBody := CertificateRevokeRequest{
+			Reason:     3, // affiliationChanged
+			DeleteKeys: true,
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/abc123", bytes.NewReader(body))
+		req = mux.SetURLVars(req, map[string]string{"serial": "abc123"})
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		handlers.RevokeCertificate(rec, req)
+
+		assert.Equal(t, http.StatusOK, writer.lastStatus)
+		assert.NotNil(t, capturedKeyAttrs)
+	})
+}
+
+func TestRevokeCertificate_Error(t *testing.T) {
+	t.Run("returns error when CA is nil", func(t *testing.T) {
+		handlers, writer := newTestHandlers(nil)
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/abc123", nil)
+		req = mux.SetURLVars(req, map[string]string{"serial": "abc123"})
+		rec := httptest.NewRecorder()
+
+		handlers.RevokeCertificate(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+	})
+
+	t.Run("returns error when serial is empty", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{initialized: true}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/", nil)
+		req = mux.SetURLVars(req, map[string]string{"serial": ""})
+		rec := httptest.NewRecorder()
+
+		handlers.RevokeCertificate(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+	})
+
+	t.Run("returns 404 when certificate not found", func(t *testing.T) {
+		mockCertStore := &mockCertStore{
+			getCertificateFn: func(cn string) (*x509.Certificate, error) {
+				return nil, errors.New("not found")
+			},
+		}
+
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			certStore:   mockCertStore,
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/nonexistent", nil)
+		req = mux.SetURLVars(req, map[string]string{"serial": "nonexistent"})
+		rec := httptest.NewRecorder()
+
+		handlers.RevokeCertificate(rec, req)
+
+		assert.Equal(t, http.StatusNotFound, writer.lastStatus)
+	})
+
+	t.Run("returns error for invalid request body", func(t *testing.T) {
+		testCert := createTestCertificate("test.com")
+		mockCertStore := &mockCertStore{
+			getCertificateFn: func(cn string) (*x509.Certificate, error) {
+				return testCert, nil
+			},
+		}
+
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			certStore:   mockCertStore,
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/abc123", bytes.NewReader([]byte("invalid json")))
+		req = mux.SetURLVars(req, map[string]string{"serial": "abc123"})
+		req.Header.Set("Content-Type", "application/json")
+		req.ContentLength = 12
+		rec := httptest.NewRecorder()
+
+		handlers.RevokeCertificate(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+	})
+
+	t.Run("returns error when revocation fails", func(t *testing.T) {
+		testCert := createTestCertificate("test.com")
+		mockCertStore := &mockCertStore{
+			getCertificateFn: func(cn string) (*x509.Certificate, error) {
+				return testCert, nil
+			},
+		}
+
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			certStore:   mockCertStore,
+			revokeFn: func(certificate *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+				return errors.New("revocation failed")
+			},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/abc123", nil)
+		req = mux.SetURLVars(req, map[string]string{"serial": "abc123"})
+		rec := httptest.NewRecorder()
+
+		handlers.RevokeCertificate(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+	})
+}
+
+// =============================================================================
+// GetBundle Handler Tests
+// =============================================================================
+
+func TestGetBundle_Success(t *testing.T) {
+	t.Run("returns CA bundle", func(t *testing.T) {
+		rootCert := createTestRootCertificate()
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			rootCert:    rootCert,
+			caBundleFn: func(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error) {
+				return []byte("-----BEGIN CERTIFICATE-----\nMOCK\n-----END CERTIFICATE-----"), nil
+			},
+			parseBundleFn: func(bundle []byte) ([]*x509.Certificate, error) {
+				return []*x509.Certificate{rootCert}, nil
+			},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/bundle", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.GetBundle(rec, req)
+
+		assert.Equal(t, http.StatusOK, writer.lastStatus)
+		payload, ok := writer.lastPayload.(BundleResponse)
+		require.True(t, ok)
+		assert.NotEmpty(t, payload.Bundle)
+		assert.GreaterOrEqual(t, payload.CertCount, 1)
+	})
+
+	t.Run("respects store_type parameter", func(t *testing.T) {
+		var capturedStoreType xkmssdk.StoreType
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			caBundleFn: func(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error) {
+				capturedStoreType = storeType
+				return []byte("bundle"), nil
+			},
+			parseBundleFn: func(bundle []byte) ([]*x509.Certificate, error) {
+				return []*x509.Certificate{}, nil
+			},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/bundle?store_type=software", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.GetBundle(rec, req)
+
+		assert.Equal(t, http.StatusOK, writer.lastStatus)
+		assert.Equal(t, xkmssdk.StoreSoftware, capturedStoreType)
+	})
+
+	t.Run("respects algorithm parameter", func(t *testing.T) {
+		var capturedAlgorithm x509.PublicKeyAlgorithm
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			caBundleFn: func(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error) {
+				capturedAlgorithm = keyAlgorithm
+				return []byte("bundle"), nil
+			},
+			parseBundleFn: func(bundle []byte) ([]*x509.Certificate, error) {
+				return []*x509.Certificate{}, nil
+			},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/bundle?algorithm=ECDSA", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.GetBundle(rec, req)
+
+		assert.Equal(t, http.StatusOK, writer.lastStatus)
+		assert.Equal(t, x509.ECDSA, capturedAlgorithm)
+	})
+}
+
+func TestGetBundle_Error(t *testing.T) {
+	t.Run("returns error when CA is nil", func(t *testing.T) {
+		handlers, writer := newTestHandlers(nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/bundle", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.GetBundle(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+	})
+
+	t.Run("returns error for invalid algorithm", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{initialized: true}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/bundle?algorithm=INVALID", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.GetBundle(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+	})
+
+	t.Run("returns 404 when bundle is empty", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			caBundleFn: func(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error) {
+				return []byte{}, nil
+			},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/bundle", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.GetBundle(rec, req)
+
+		assert.Equal(t, http.StatusNotFound, writer.lastStatus)
+	})
+
+	t.Run("returns error when CA bundle fails", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			caBundleFn: func(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error) {
+				return nil, errors.New("bundle error")
+			},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/bundle", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.GetBundle(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+	})
+}
+
+// =============================================================================
+// GetCRL Handler Tests
+// =============================================================================
+
+func TestGetCRL_Success(t *testing.T) {
+	t.Run("returns CRL when CA supports CRL generation", func(t *testing.T) {
+		// Create a valid CRL
+		crlDER, err := createTestCRL()
+		require.NoError(t, err)
+
+		mockCA := &mockCAWithCRLGenerator{
+			mockCertificateAuthority: mockCertificateAuthority{
+				initialized: true,
+			},
+			generateCRLFn: func() ([]byte, error) {
+				return crlDER, nil
+			},
+		}
+
+		logger := newTestLogger()
+		writer := &mockHttpWriter{}
+		handlers := NewCAHandlers(logger, mockCA, writer)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/crl", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.GetCRL(rec, req)
+
+		assert.Equal(t, http.StatusOK, writer.lastStatus)
+		payload, ok := writer.lastPayload.(CRLResponse)
+		require.True(t, ok)
+		assert.NotEmpty(t, payload.CRL)
+		assert.Equal(t, 1, payload.RevokedCount)
+		assert.NotEmpty(t, payload.RevokedCerts)
+	})
+}
+
+func TestGetCRL_Error(t *testing.T) {
+	t.Run("returns error when CA is nil", func(t *testing.T) {
+		handlers, writer := newTestHandlers(nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/crl", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.GetCRL(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+	})
+
+	t.Run("returns error when CRL generation not supported", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			objectStore: nil,
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/crl", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.GetCRL(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+	})
+
+	t.Run("returns error when CRL generation fails", func(t *testing.T) {
+		mockCA := &mockCAWithCRLGenerator{
+			mockCertificateAuthority: mockCertificateAuthority{
+				initialized: true,
+			},
+			generateCRLFn: func() ([]byte, error) {
+				return nil, errors.New("CRL generation failed")
+			},
+		}
+
+		logger := newTestLogger()
+		writer := &mockHttpWriter{}
+		handlers := NewCAHandlers(logger, mockCA, writer)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/crl", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.GetCRL(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+	})
+
+	t.Run("returns error when CRL parsing fails", func(t *testing.T) {
+		mockCA := &mockCAWithCRLGenerator{
+			mockCertificateAuthority: mockCertificateAuthority{
+				initialized: true,
+			},
+			generateCRLFn: func() ([]byte, error) {
+				return []byte("invalid CRL data"), nil
+			},
+		}
+
+		logger := newTestLogger()
+		writer := &mockHttpWriter{}
+		handlers := NewCAHandlers(logger, mockCA, writer)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/crl", nil)
+		rec := httptest.NewRecorder()
+
+		handlers.GetCRL(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+	})
+}
+
+// =============================================================================
+// Helper Method Tests
+// =============================================================================
+
+func TestParseKeyAlgorithm(t *testing.T) {
+	mockCA := &mockCertificateAuthority{}
+	handlers, _ := newTestHandlers(mockCA)
+
+	testCases := []struct {
+		input    string
+		expected x509.PublicKeyAlgorithm
+		hasError bool
+	}{
+		{"RSA", x509.RSA, false},
+		{"rsa", x509.RSA, false},
+		{"RSA2048", x509.RSA, false},
+		{"RSA-2048", x509.RSA, false},
+		{"RSA4096", x509.RSA, false},
+		{"ECDSA", x509.ECDSA, false},
+		{"ecdsa", x509.ECDSA, false},
+		{"EC", x509.ECDSA, false},
+		{"P256", x509.ECDSA, false},
+		{"P384", x509.ECDSA, false},
+		{"ED25519", x509.Ed25519, false},
+		{"", x509.ECDSA, false},  // Default
+		{"INVALID", 0, true},     // Invalid
+		{"MD5", 0, true},         // Invalid
+		{"UNKNOWN-ALG", 0, true}, // Invalid
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			result, err := handlers.parseKeyAlgorithm(tc.input)
+			if tc.hasError {
+				assert.Error(t, err)
+				assert.IsType(t, ErrInvalidKeyAlgorithm{}, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tc.expected, result)
+			}
+		})
+	}
+}
+
+func TestKeyAlgorithmToString(t *testing.T) {
+	mockCA := &mockCertificateAuthority{}
+	handlers, _ := newTestHandlers(mockCA)
+
+	testCases := []struct {
+		input    x509.PublicKeyAlgorithm
+		expected string
+	}{
+		{x509.RSA, "RSA"},
+		{x509.ECDSA, "ECDSA"},
+		{x509.Ed25519, "ED25519"},
+		{x509.PublicKeyAlgorithm(99), "UNKNOWN"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.expected, func(t *testing.T) {
+			result := handlers.keyAlgorithmToString(tc.input)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+func TestParseKeyUsage(t *testing.T) {
+	mockCA := &mockCertificateAuthority{}
+	handlers, _ := newTestHandlers(mockCA)
+
+	t.Run("parses multiple key usages", func(t *testing.T) {
+		usages := []string{"digitalSignature", "keyEncipherment", "certSign"}
+		result := handlers.parseKeyUsage(usages)
+
+		assert.True(t, result&x509.KeyUsageDigitalSignature != 0)
+		assert.True(t, result&x509.KeyUsageKeyEncipherment != 0)
+		assert.True(t, result&x509.KeyUsageCertSign != 0)
+	})
+
+	t.Run("handles underscore format", func(t *testing.T) {
+		usages := []string{"DIGITAL_SIGNATURE", "KEY_ENCIPHERMENT"}
+		result := handlers.parseKeyUsage(usages)
+
+		assert.True(t, result&x509.KeyUsageDigitalSignature != 0)
+		assert.True(t, result&x509.KeyUsageKeyEncipherment != 0)
+	})
+
+	t.Run("handles empty list", func(t *testing.T) {
+		usages := []string{}
+		result := handlers.parseKeyUsage(usages)
+		assert.Equal(t, x509.KeyUsage(0), result)
+	})
+
+	t.Run("parses all key usage types", func(t *testing.T) {
+		usages := []string{
+			"contentCommitment",
+			"CONTENT_COMMITMENT",
+			"dataEncipherment",
+			"DATA_ENCIPHERMENT",
+			"keyAgreement",
+			"KEY_AGREEMENT",
+			"crlSign",
+			"CRL_SIGN",
+			"encipherOnly",
+			"ENCIPHER_ONLY",
+			"decipherOnly",
+			"DECIPHER_ONLY",
+		}
+		result := handlers.parseKeyUsage(usages)
+
+		assert.True(t, result&x509.KeyUsageContentCommitment != 0)
+		assert.True(t, result&x509.KeyUsageDataEncipherment != 0)
+		assert.True(t, result&x509.KeyUsageKeyAgreement != 0)
+		assert.True(t, result&x509.KeyUsageCRLSign != 0)
+		assert.True(t, result&x509.KeyUsageEncipherOnly != 0)
+		assert.True(t, result&x509.KeyUsageDecipherOnly != 0)
+	})
+
+	t.Run("ignores unknown key usages", func(t *testing.T) {
+		usages := []string{"unknown", "digitalSignature", "invalid"}
+		result := handlers.parseKeyUsage(usages)
+
+		assert.True(t, result&x509.KeyUsageDigitalSignature != 0)
+		// Unknown usages are silently ignored
+	})
+}
+
+func TestParseExtKeyUsage(t *testing.T) {
+	mockCA := &mockCertificateAuthority{}
+	handlers, _ := newTestHandlers(mockCA)
+
+	t.Run("parses multiple ext key usages", func(t *testing.T) {
+		usages := []string{"serverAuth", "clientAuth", "codeSigning"}
+		result := handlers.parseExtKeyUsage(usages)
+
+		assert.Contains(t, result, x509.ExtKeyUsageServerAuth)
+		assert.Contains(t, result, x509.ExtKeyUsageClientAuth)
+		assert.Contains(t, result, x509.ExtKeyUsageCodeSigning)
+	})
+
+	t.Run("handles underscore format", func(t *testing.T) {
+		usages := []string{"SERVER_AUTH", "CLIENT_AUTH"}
+		result := handlers.parseExtKeyUsage(usages)
+
+		assert.Contains(t, result, x509.ExtKeyUsageServerAuth)
+		assert.Contains(t, result, x509.ExtKeyUsageClientAuth)
+	})
+
+	t.Run("handles empty list", func(t *testing.T) {
+		usages := []string{}
+		result := handlers.parseExtKeyUsage(usages)
+		assert.Empty(t, result)
+	})
+
+	t.Run("parses all ext key usage types", func(t *testing.T) {
+		usages := []string{
+			"any",
+			"ANY",
+			"emailProtection",
+			"EMAIL_PROTECTION",
+			"timeStamping",
+			"TIME_STAMPING",
+			"ocspSigning",
+			"OCSP_SIGNING",
+		}
+		result := handlers.parseExtKeyUsage(usages)
+
+		assert.Contains(t, result, x509.ExtKeyUsageAny)
+		assert.Contains(t, result, x509.ExtKeyUsageEmailProtection)
+		assert.Contains(t, result, x509.ExtKeyUsageTimeStamping)
+		assert.Contains(t, result, x509.ExtKeyUsageOCSPSigning)
+	})
+
+	t.Run("ignores unknown ext key usages", func(t *testing.T) {
+		usages := []string{"unknown", "serverAuth", "invalid"}
+		result := handlers.parseExtKeyUsage(usages)
+
+		assert.Contains(t, result, x509.ExtKeyUsageServerAuth)
+		assert.Len(t, result, 1) // Only serverAuth
+	})
+}
+
+func TestGetPaginationParams(t *testing.T) {
+	mockCA := &mockCertificateAuthority{}
+	handlers, _ := newTestHandlers(mockCA)
+
+	t.Run("uses defaults when no params", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		limit, cursor := handlers.getPaginationParams(req)
+
+		assert.Equal(t, int32(50), limit) // defaultLimit
+		assert.Equal(t, "", cursor)
+	})
+
+	t.Run("parses limit parameter", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/test?limit=100", nil)
+		limit, _ := handlers.getPaginationParams(req)
+
+		assert.Equal(t, int32(100), limit)
+	})
+
+	t.Run("parses cursor parameter", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/test?cursor=abc123", nil)
+		_, cursor := handlers.getPaginationParams(req)
+
+		assert.Equal(t, "abc123", cursor)
+	})
+
+	t.Run("caps limit at maximum", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/test?limit=5000", nil)
+		limit, _ := handlers.getPaginationParams(req)
+
+		assert.Equal(t, int32(1000), limit) // maxLimit
+	})
+
+	t.Run("uses default for invalid limit", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/test?limit=invalid", nil)
+		limit, _ := handlers.getPaginationParams(req)
+
+		assert.Equal(t, int32(50), limit) // defaultLimit
+	})
+
+	t.Run("uses default for negative limit", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/test?limit=-10", nil)
+		limit, _ := handlers.getPaginationParams(req)
+
+		assert.Equal(t, int32(50), limit) // defaultLimit
+	})
+}
+
+func TestCertToResponse(t *testing.T) {
+	mockCA := &mockCertificateAuthority{}
+	handlers, _ := newTestHandlers(mockCA)
+
+	t.Run("converts valid certificate", func(t *testing.T) {
+		cert := createTestCertificate("test.example.com")
+		result := handlers.certToResponse(cert)
+
+		require.NotNil(t, result)
+		assert.Equal(t, "test.example.com", result.Subject.CommonName)
+		assert.Equal(t, "Test CA", result.Issuer)
+		assert.Equal(t, "ECDSA", result.KeyAlgorithm)
+		assert.Equal(t, "VALID", result.Status)
+	})
+
+	t.Run("returns nil for nil certificate", func(t *testing.T) {
+		result := handlers.certToResponse(nil)
+		assert.Nil(t, result)
+	})
+
+	t.Run("detects expired certificate", func(t *testing.T) {
+		cert := createTestCertificate("expired.example.com")
+		cert.NotAfter = time.Now().Add(-24 * time.Hour)
+		result := handlers.certToResponse(cert)
+
+		assert.Equal(t, "EXPIRED", result.Status)
+	})
+
+	t.Run("detects not yet valid certificate", func(t *testing.T) {
+		cert := createTestCertificate("future.example.com")
+		cert.NotBefore = time.Now().Add(24 * time.Hour)
+		result := handlers.certToResponse(cert)
+
+		assert.Equal(t, "NOT_YET_VALID", result.Status)
+	})
+}
+
+func TestCertToSummary(t *testing.T) {
+	mockCA := &mockCertificateAuthority{}
+	handlers, _ := newTestHandlers(mockCA)
+
+	t.Run("converts valid certificate", func(t *testing.T) {
+		cert := createTestCertificate("test.example.com")
+		result := handlers.certToSummary(cert)
+
+		assert.Equal(t, "test.example.com", result.CommonName)
+		assert.Equal(t, "Test CA", result.Issuer)
+		assert.Equal(t, "ECDSA", result.KeyAlgorithm)
+		assert.Equal(t, "VALID", result.Status)
+	})
+
+	t.Run("returns empty for nil certificate", func(t *testing.T) {
+		result := handlers.certToSummary(nil)
+		assert.Empty(t, result.Serial)
+		assert.Empty(t, result.CommonName)
+	})
+
+	t.Run("detects expired certificate in summary", func(t *testing.T) {
+		cert := createTestCertificate("expired.example.com")
+		cert.NotAfter = time.Now().Add(-24 * time.Hour)
+		result := handlers.certToSummary(cert)
+
+		assert.Equal(t, "EXPIRED", result.Status)
+	})
+
+	t.Run("detects not yet valid certificate in summary", func(t *testing.T) {
+		cert := createTestCertificate("future.example.com")
+		cert.NotBefore = time.Now().Add(24 * time.Hour)
+		result := handlers.certToSummary(cert)
+
+		assert.Equal(t, "NOT_YET_VALID", result.Status)
+	})
+}
+
+func TestFirstOrEmpty(t *testing.T) {
+	t.Run("returns first element", func(t *testing.T) {
+		result := firstOrEmpty([]string{"first", "second"})
+		assert.Equal(t, "first", result)
+	})
+
+	t.Run("returns empty for empty slice", func(t *testing.T) {
+		result := firstOrEmpty([]string{})
+		assert.Empty(t, result)
+	})
+
+	t.Run("returns empty for nil slice", func(t *testing.T) {
+		result := firstOrEmpty(nil)
+		assert.Empty(t, result)
+	})
+}

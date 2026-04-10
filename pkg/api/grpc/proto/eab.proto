@@ -1,0 +1,309 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// EABService provides External Account Binding credential management operations.
+// This service handles creation, retrieval, validation, and lifecycle management
+// of EAB credentials for ACME device enrollment.
+service EABService {
+  // CreateCredential creates a new EAB credential for device enrollment.
+  rpc CreateCredential(CreateEABCredentialRequest) returns (CreateEABCredentialResponse);
+
+  // GetCredential retrieves an EAB credential by its ID.
+  rpc GetCredential(GetEABCredentialRequest) returns (GetEABCredentialResponse);
+
+  // GetCredentialByKeyID retrieves an EAB credential by its KeyID.
+  rpc GetCredentialByKeyID(GetEABCredentialByKeyIDRequest) returns (GetEABCredentialResponse);
+
+  // ListCredentials returns EAB credentials with optional filtering.
+  rpc ListCredentials(ListEABCredentialsRequest) returns (ListEABCredentialsResponse);
+
+  // RevokeCredential marks an EAB credential as revoked.
+  rpc RevokeCredential(RevokeEABCredentialRequest) returns (RevokeEABCredentialResponse);
+
+  // ValidateCredential checks if an EAB credential is valid for use.
+  rpc ValidateCredential(ValidateEABCredentialRequest) returns (ValidateEABCredentialResponse);
+
+  // DeleteCredential permanently removes an EAB credential.
+  rpc DeleteCredential(DeleteEABCredentialRequest) returns (DeleteEABCredentialResponse);
+
+  // GetCredentialQRCode generates a QR code image for credential delivery.
+  rpc GetCredentialQRCode(GetEABCredentialQRCodeRequest) returns (GetEABCredentialQRCodeResponse);
+
+  // GetEnrollmentURL generates an enrollment URL with embedded credentials.
+  rpc GetEnrollmentURL(GetEABEnrollmentURLRequest) returns (GetEABEnrollmentURLResponse);
+
+  // MarkCredentialUsed marks a credential as used after successful enrollment.
+  rpc MarkCredentialUsed(MarkEABCredentialUsedRequest) returns (MarkEABCredentialUsedResponse);
+
+  // CleanupExpiredCredentials removes all expired credentials.
+  rpc CleanupExpiredCredentials(CleanupExpiredEABCredentialsRequest) returns (CleanupExpiredEABCredentialsResponse);
+}
+
+// EABCredentialStatus represents the status of an EAB credential.
+enum EABCredentialStatus {
+  EAB_CREDENTIAL_STATUS_UNSPECIFIED = 0;
+  EAB_CREDENTIAL_STATUS_ACTIVE = 1;
+  EAB_CREDENTIAL_STATUS_REVOKED = 2;
+  EAB_CREDENTIAL_STATUS_EXPIRED = 3;
+  EAB_CREDENTIAL_STATUS_USED = 4;
+}
+
+// EABCredential represents an External Account Binding credential.
+message EABCredential {
+  // Unique identifier for the credential.
+  uint64 id = 1;
+
+  // Key ID used for EAB binding.
+  string key_id = 2;
+
+  // HMAC key for signing (base64 encoded, only included on create).
+  string hmac_key = 3;
+
+  // Profile ID the credential is associated with.
+  uint64 profile_id = 4;
+
+  // Tenant ID the credential belongs to.
+  string tenant_id = 5;
+
+  // Current status of the credential.
+  EABCredentialStatus status = 6;
+
+  // Timestamp when the credential expires (zero if no expiration).
+  google.protobuf.Timestamp expires_at = 7;
+
+  // Timestamp when the credential was created.
+  google.protobuf.Timestamp created_at = 8;
+
+  // Timestamp when the credential was used (if used).
+  google.protobuf.Timestamp used_at = 9;
+}
+
+// =============================================================================
+// Request/Response Messages
+// =============================================================================
+
+// CreateEABCredentialRequest is the request to create a new EAB credential.
+message CreateEABCredentialRequest {
+  // Profile ID for the credential (required).
+  uint64 profile_id = 1;
+
+  // Tenant ID for the credential (required).
+  string tenant_id = 2;
+
+  // Expiration duration in seconds (optional, 0 means no expiration).
+  int64 expires_in_seconds = 3;
+
+  // HMAC key length in bytes (optional, minimum 32, default 32).
+  int32 hmac_key_length = 4;
+}
+
+// CreateEABCredentialResponse is the response after creating a credential.
+message CreateEABCredentialResponse {
+  // The created credential (includes HMAC key).
+  EABCredential credential = 1;
+
+  // Response timestamp.
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// GetEABCredentialRequest is the request to get a credential by ID.
+message GetEABCredentialRequest {
+  // ID of the credential to retrieve (required).
+  uint64 credential_id = 1;
+}
+
+// GetEABCredentialByKeyIDRequest is the request to get a credential by KeyID.
+message GetEABCredentialByKeyIDRequest {
+  // Key ID of the credential to retrieve (required).
+  string key_id = 1;
+}
+
+// GetEABCredentialResponse is the response containing a credential.
+message GetEABCredentialResponse {
+  // The retrieved credential (HMAC key not included).
+  EABCredential credential = 1;
+
+  // Response timestamp.
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// ListEABCredentialsRequest is the request to list credentials.
+message ListEABCredentialsRequest {
+  // Tenant ID to filter credentials (required).
+  string tenant_id = 1;
+
+  // Profile ID to filter credentials (optional).
+  uint64 profile_id = 2;
+
+  // Pagination parameters.
+  PaginationRequest pagination = 3;
+
+  // Filter by status (optional).
+  EABCredentialStatus status_filter = 4;
+
+  // If true, only return active credentials.
+  bool active_only = 5;
+}
+
+// ListEABCredentialsResponse is the response containing a list of credentials.
+message ListEABCredentialsResponse {
+  // List of credentials (HMAC keys not included).
+  repeated EABCredential credentials = 1;
+
+  // Pagination information.
+  PaginationResponse pagination = 2;
+
+  // Total count of credentials matching the filter.
+  int64 total = 3;
+
+  // Response timestamp.
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// RevokeEABCredentialRequest is the request to revoke a credential.
+message RevokeEABCredentialRequest {
+  // ID of the credential to revoke (required).
+  uint64 credential_id = 1;
+
+  // ID of the user performing the revocation (required).
+  uint64 revoker_id = 2;
+}
+
+// RevokeEABCredentialResponse is the response after revoking a credential.
+message RevokeEABCredentialResponse {
+  // Operation status.
+  Status status = 1;
+
+  // Response timestamp.
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// ValidateEABCredentialRequest is the request to validate a credential.
+message ValidateEABCredentialRequest {
+  // Key ID of the credential to validate (required).
+  string key_id = 1;
+
+  // HMAC key for validation (base64 encoded, required).
+  string hmac_key = 2;
+}
+
+// ValidateEABCredentialResponse is the response containing validation result.
+message ValidateEABCredentialResponse {
+  // True if the credential is valid.
+  bool valid = 1;
+
+  // The validated credential (only if valid, HMAC key not included).
+  EABCredential credential = 2;
+
+  // Error message if validation failed.
+  string error_message = 3;
+
+  // Response timestamp.
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// DeleteEABCredentialRequest is the request to delete a credential.
+message DeleteEABCredentialRequest {
+  // ID of the credential to delete (required).
+  uint64 credential_id = 1;
+}
+
+// DeleteEABCredentialResponse is the response after deleting a credential.
+message DeleteEABCredentialResponse {
+  // Operation status.
+  Status status = 1;
+
+  // Response timestamp.
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// GetEABCredentialQRCodeRequest is the request to generate a QR code.
+message GetEABCredentialQRCodeRequest {
+  // ID of the credential to generate QR code for (required).
+  uint64 credential_id = 1;
+
+  // QR code size in pixels (optional, default 256).
+  int32 size = 2;
+}
+
+// GetEABCredentialQRCodeResponse is the response containing the QR code.
+message GetEABCredentialQRCodeResponse {
+  // QR code image data (PNG format).
+  bytes qr_code = 1;
+
+  // Content type (always "image/png").
+  string content_type = 2;
+
+  // Response timestamp.
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// GetEABEnrollmentURLRequest is the request to generate an enrollment URL.
+message GetEABEnrollmentURLRequest {
+  // ID of the credential to generate URL for (required).
+  uint64 credential_id = 1;
+
+  // Custom path for the URL (optional).
+  string path = 2;
+}
+
+// GetEABEnrollmentURLResponse is the response containing the enrollment URL.
+message GetEABEnrollmentURLResponse {
+  // The generated enrollment URL.
+  string url = 1;
+
+  // Response timestamp.
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// MarkEABCredentialUsedRequest is the request to mark a credential as used.
+message MarkEABCredentialUsedRequest {
+  // ID of the credential to mark as used (required).
+  uint64 credential_id = 1;
+}
+
+// MarkEABCredentialUsedResponse is the response after marking a credential as used.
+message MarkEABCredentialUsedResponse {
+  // Operation status.
+  Status status = 1;
+
+  // Response timestamp.
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// CleanupExpiredEABCredentialsRequest is the request to cleanup expired credentials.
+message CleanupExpiredEABCredentialsRequest {
+  // Tenant ID to filter cleanup (optional, empty means all tenants).
+  string tenant_id = 1;
+}
+
+// CleanupExpiredEABCredentialsResponse is the response after cleanup.
+message CleanupExpiredEABCredentialsResponse {
+  // Number of credentials deleted.
+  int32 deleted_count = 1;
+
+  // Operation status.
+  Status status = 2;
+
+  // Response timestamp.
+  google.protobuf.Timestamp timestamp = 3;
+}

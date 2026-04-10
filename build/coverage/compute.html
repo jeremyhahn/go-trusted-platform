@@ -1,0 +1,1330 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>compute: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/jeremyhahn/go-trusted-platform/pkg/compute/config.go (100.0%)</option>
+				
+				<option value="file1">github.com/jeremyhahn/go-trusted-platform/pkg/compute/lifecycle.go (96.1%)</option>
+				
+				<option value="file2">github.com/jeremyhahn/go-trusted-platform/pkg/compute/qemu.go (49.3%)</option>
+				
+				<option value="file3">github.com/jeremyhahn/go-trusted-platform/pkg/compute/types.go (100.0%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">// Copyright (c) 2025 Jeremy Hahn
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package compute
+
+import (
+        "fmt"
+        "runtime"
+)
+
+// OrchestratorConfig holds configuration for the compute orchestrator
+type OrchestratorConfig struct {
+        // Type is the orchestrator type (vm, container)
+        Type ComputeType `json:"type" yaml:"type"`
+
+        // WorkDir is the base working directory for all instances
+        WorkDir string `json:"work_dir" yaml:"work_dir"`
+
+        // DefaultMemory is the default memory allocation in MB
+        DefaultMemory int `json:"default_memory" yaml:"default_memory"`
+
+        // DefaultCPUs is the default number of CPU cores
+        DefaultCPUs int `json:"default_cpus" yaml:"default_cpus"`
+
+        // DefaultDiskSize is the default disk size
+        DefaultDiskSize string `json:"default_disk_size" yaml:"default_disk_size"`
+
+        // MaxInstances is the maximum number of instances allowed
+        MaxInstances int `json:"max_instances" yaml:"max_instances"`
+
+        // EnableKVM enables KVM acceleration by default (VMs only)
+        EnableKVM bool `json:"enable_kvm" yaml:"enable_kvm"`
+
+        // NetworkBridge is the default network bridge name
+        NetworkBridge string `json:"network_bridge" yaml:"network_bridge"`
+
+        // OVSSocketPath is the path to the OVSDB socket
+        OVSSocketPath string `json:"ovs_socket_path" yaml:"ovs_socket_path"`
+
+        // QEMUBinary is the path to the QEMU binary (VMs only)
+        QEMUBinary string `json:"qemu_binary,omitempty" yaml:"qemu_binary,omitempty"`
+
+        // OVMFCode is the path to OVMF firmware code
+        OVMFCode string `json:"ovmf_code,omitempty" yaml:"ovmf_code,omitempty"`
+
+        // OVMFCodeSecure is the path to OVMF firmware with Secure Boot
+        OVMFCodeSecure string `json:"ovmf_code_secure,omitempty" yaml:"ovmf_code_secure,omitempty"`
+
+        // OVMFVars is the path to OVMF NVRAM template
+        OVMFVars string `json:"ovmf_vars,omitempty" yaml:"ovmf_vars,omitempty"`
+
+        // AutoCleanup enables automatic cleanup of stopped instances
+        AutoCleanup bool `json:"auto_cleanup" yaml:"auto_cleanup"`
+
+        // Debug enables debug logging
+        Debug bool `json:"debug" yaml:"debug"`
+}
+
+// DefaultOrchestratorConfig returns a configuration with sensible defaults
+func DefaultOrchestratorConfig(computeType ComputeType) *OrchestratorConfig <span class="cov8" title="1">{
+        config := &amp;OrchestratorConfig{
+                Type:            computeType,
+                WorkDir:         "/var/lib/trusted-platform/compute",
+                DefaultMemory:   4096,
+                DefaultCPUs:     runtime.NumCPU(),
+                DefaultDiskSize: "20G",
+                MaxInstances:    100,
+                EnableKVM:       true,
+                NetworkBridge:   "trusted0",
+                OVSSocketPath:   "/var/run/openvswitch/db.sock",
+                AutoCleanup:     false,
+                Debug:           false,
+        }
+
+        // VM-specific defaults
+        if computeType == ComputeTypeVM </span><span class="cov8" title="1">{
+                config.QEMUBinary = "qemu-system-x86_64"
+                config.OVMFCode = "/usr/share/OVMF/OVMF_CODE_4M.fd"
+                config.OVMFCodeSecure = "/usr/share/OVMF/OVMF_CODE_4M.secboot.fd"
+                config.OVMFVars = "/usr/share/OVMF/OVMF_VARS_4M.fd"
+        }</span>
+
+        <span class="cov8" title="1">return config</span>
+}
+
+// Validate validates the orchestrator configuration
+func (c *OrchestratorConfig) Validate() error <span class="cov8" title="1">{
+        if !c.Type.IsValid() </span><span class="cov8" title="1">{
+                return fmt.Errorf("%w: invalid compute type: %s", ErrInvalidConfiguration, c.Type)
+        }</span>
+
+        <span class="cov8" title="1">if c.WorkDir == "" </span><span class="cov8" title="1">{
+                return fmt.Errorf("%w: work directory is required", ErrInvalidConfiguration)
+        }</span>
+
+        <span class="cov8" title="1">if c.DefaultMemory &lt;= 0 </span><span class="cov8" title="1">{
+                return fmt.Errorf("%w: default memory must be greater than 0", ErrInvalidConfiguration)
+        }</span>
+
+        <span class="cov8" title="1">if c.DefaultCPUs &lt;= 0 </span><span class="cov8" title="1">{
+                return fmt.Errorf("%w: default CPUs must be greater than 0", ErrInvalidConfiguration)
+        }</span>
+
+        <span class="cov8" title="1">if c.DefaultDiskSize == "" </span><span class="cov8" title="1">{
+                return fmt.Errorf("%w: default disk size is required", ErrInvalidConfiguration)
+        }</span>
+
+        <span class="cov8" title="1">if c.MaxInstances &lt;= 0 </span><span class="cov8" title="1">{
+                return fmt.Errorf("%w: max instances must be greater than 0", ErrInvalidConfiguration)
+        }</span>
+
+        // VM-specific validation
+        <span class="cov8" title="1">if c.Type == ComputeTypeVM </span><span class="cov8" title="1">{
+                if c.QEMUBinary == "" </span><span class="cov8" title="1">{
+                        return fmt.Errorf("%w: QEMU binary path is required for VM orchestrator", ErrInvalidConfiguration)
+                }</span>
+                <span class="cov8" title="1">if c.OVMFCode == "" </span><span class="cov8" title="1">{
+                        return fmt.Errorf("%w: OVMF code path is required for VM orchestrator", ErrInvalidConfiguration)
+                }</span>
+                <span class="cov8" title="1">if c.OVMFVars == "" </span><span class="cov8" title="1">{
+                        return fmt.Errorf("%w: OVMF vars path is required for VM orchestrator", ErrInvalidConfiguration)
+                }</span>
+        }
+
+        <span class="cov8" title="1">return nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">// Copyright (c) 2025 Jeremy Hahn
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package compute
+
+import (
+        "fmt"
+        "sync"
+        "time"
+)
+
+// InstanceState represents the lifecycle state of a compute instance
+type InstanceState string
+
+const (
+        // StateUnknown represents an unknown or uninitialized state
+        StateUnknown InstanceState = "unknown"
+
+        // StateCreating represents an instance being created
+        StateCreating InstanceState = "creating"
+
+        // StateStopped represents a stopped instance
+        StateStopped InstanceState = "stopped"
+
+        // StateStarting represents an instance in the process of starting
+        StateStarting InstanceState = "starting"
+
+        // StateRunning represents a running instance
+        StateRunning InstanceState = "running"
+
+        // StateStopping represents an instance in the process of stopping
+        StateStopping InstanceState = "stopping"
+
+        // StateError represents an instance in an error state
+        StateError InstanceState = "error"
+
+        // StateDeleting represents an instance being deleted
+        StateDeleting InstanceState = "deleting"
+)
+
+// String returns the string representation of InstanceState
+func (s InstanceState) String() string <span class="cov8" title="1">{
+        return string(s)
+}</span>
+
+// IsValid checks if the InstanceState is valid
+func (s InstanceState) IsValid() bool <span class="cov8" title="1">{
+        switch s </span>{
+        case StateUnknown, StateCreating, StateStopped, StateStarting,
+                StateRunning, StateStopping, StateError, StateDeleting:<span class="cov8" title="1">
+                return true</span>
+        default:<span class="cov8" title="1">
+                return false</span>
+        }
+}
+
+// IsTerminal returns true if the state is terminal (no further transitions expected)
+func (s InstanceState) IsTerminal() bool <span class="cov8" title="1">{
+        return s == StateError || s == StateDeleting
+}</span>
+
+// CanTransitionTo checks if the current state can transition to the target state
+func (s InstanceState) CanTransitionTo(target InstanceState) bool <span class="cov8" title="1">{
+        // Terminal states can't transition
+        if s.IsTerminal() </span><span class="cov8" title="1">{
+                return false
+        }</span>
+
+        // Valid state transitions
+        <span class="cov8" title="1">validTransitions := map[InstanceState][]InstanceState{
+                StateUnknown:  {StateCreating, StateError},
+                StateCreating: {StateStopped, StateError},
+                StateStopped:  {StateStarting, StateDeleting, StateError},
+                StateStarting: {StateRunning, StateError},
+                StateRunning:  {StateStopping, StateError},
+                StateStopping: {StateStopped, StateError},
+                StateError:    {}, // Terminal state
+                StateDeleting: {}, // Terminal state
+        }
+
+        allowed, exists := validTransitions[s]
+        if !exists </span><span class="cov0" title="0">{
+                return false
+        }</span>
+
+        <span class="cov8" title="1">for _, allowedState := range allowed </span><span class="cov8" title="1">{
+                if allowedState == target </span><span class="cov8" title="1">{
+                        return true
+                }</span>
+        }
+
+        <span class="cov8" title="1">return false</span>
+}
+
+// LifecycleManager manages instance state transitions
+type LifecycleManager struct {
+        mu         sync.RWMutex
+        states     map[string]InstanceState
+        timestamps map[string]time.Time
+}
+
+// NewLifecycleManager creates a new lifecycle manager
+func NewLifecycleManager() *LifecycleManager <span class="cov8" title="1">{
+        return &amp;LifecycleManager{
+                states:     make(map[string]InstanceState),
+                timestamps: make(map[string]time.Time),
+        }
+}</span>
+
+// SetState sets the state for an instance
+func (lm *LifecycleManager) SetState(instanceID string, state InstanceState) error <span class="cov8" title="1">{
+        lm.mu.Lock()
+        defer lm.mu.Unlock()
+
+        if instanceID == "" </span><span class="cov8" title="1">{
+                return ErrInvalidInstanceID
+        }</span>
+
+        <span class="cov8" title="1">if !state.IsValid() </span><span class="cov8" title="1">{
+                return fmt.Errorf("%w: %s", ErrInvalidState, state)
+        }</span>
+
+        // Check if transition is valid
+        <span class="cov8" title="1">currentState, exists := lm.states[instanceID]
+        if exists &amp;&amp; !currentState.CanTransitionTo(state) </span><span class="cov8" title="1">{
+                return fmt.Errorf("%w: cannot transition from %s to %s", ErrInvalidState, currentState, state)
+        }</span>
+
+        <span class="cov8" title="1">lm.states[instanceID] = state
+        lm.timestamps[instanceID] = time.Now()
+
+        return nil</span>
+}
+
+// GetState returns the current state of an instance
+func (lm *LifecycleManager) GetState(instanceID string) (InstanceState, error) <span class="cov8" title="1">{
+        lm.mu.RLock()
+        defer lm.mu.RUnlock()
+
+        if instanceID == "" </span><span class="cov8" title="1">{
+                return StateUnknown, ErrInvalidInstanceID
+        }</span>
+
+        <span class="cov8" title="1">state, exists := lm.states[instanceID]
+        if !exists </span><span class="cov8" title="1">{
+                return StateUnknown, ErrInstanceNotFound
+        }</span>
+
+        <span class="cov8" title="1">return state, nil</span>
+}
+
+// GetStateTimestamp returns when the instance last changed state
+func (lm *LifecycleManager) GetStateTimestamp(instanceID string) (time.Time, error) <span class="cov8" title="1">{
+        lm.mu.RLock()
+        defer lm.mu.RUnlock()
+
+        if instanceID == "" </span><span class="cov0" title="0">{
+                return time.Time{}, ErrInvalidInstanceID
+        }</span>
+
+        <span class="cov8" title="1">ts, exists := lm.timestamps[instanceID]
+        if !exists </span><span class="cov8" title="1">{
+                return time.Time{}, ErrInstanceNotFound
+        }</span>
+
+        <span class="cov8" title="1">return ts, nil</span>
+}
+
+// DeleteInstance removes an instance from the lifecycle manager
+func (lm *LifecycleManager) DeleteInstance(instanceID string) error <span class="cov8" title="1">{
+        lm.mu.Lock()
+        defer lm.mu.Unlock()
+
+        if instanceID == "" </span><span class="cov8" title="1">{
+                return ErrInvalidInstanceID
+        }</span>
+
+        <span class="cov8" title="1">if _, exists := lm.states[instanceID]; !exists </span><span class="cov8" title="1">{
+                return ErrInstanceNotFound
+        }</span>
+
+        <span class="cov8" title="1">delete(lm.states, instanceID)
+        delete(lm.timestamps, instanceID)
+
+        return nil</span>
+}
+
+// ListInstances returns all instance IDs and their states
+func (lm *LifecycleManager) ListInstances() map[string]InstanceState <span class="cov8" title="1">{
+        lm.mu.RLock()
+        defer lm.mu.RUnlock()
+
+        result := make(map[string]InstanceState, len(lm.states))
+        for id, state := range lm.states </span><span class="cov8" title="1">{
+                result[id] = state
+        }</span>
+
+        <span class="cov8" title="1">return result</span>
+}
+
+// WaitForState waits for an instance to reach a specific state or timeout
+func (lm *LifecycleManager) WaitForState(instanceID string, targetState InstanceState, timeout time.Duration) error <span class="cov8" title="1">{
+        if instanceID == "" </span><span class="cov8" title="1">{
+                return ErrInvalidInstanceID
+        }</span>
+
+        <span class="cov8" title="1">if !targetState.IsValid() </span><span class="cov8" title="1">{
+                return fmt.Errorf("%w: %s", ErrInvalidState, targetState)
+        }</span>
+
+        <span class="cov8" title="1">ticker := time.NewTicker(100 * time.Millisecond)
+        defer ticker.Stop()
+
+        timeoutCh := time.After(timeout)
+
+        for </span><span class="cov8" title="1">{
+                select </span>{
+                case &lt;-ticker.C:<span class="cov8" title="1">
+                        state, err := lm.GetState(instanceID)
+                        if err != nil </span><span class="cov0" title="0">{
+                                return err
+                        }</span>
+                        <span class="cov8" title="1">if state == targetState </span><span class="cov8" title="1">{
+                                return nil
+                        }</span>
+                        <span class="cov8" title="1">if state == StateError </span><span class="cov8" title="1">{
+                                return fmt.Errorf("%w: instance entered error state while waiting for %s", ErrInvalidState, targetState)
+                        }</span>
+                case &lt;-timeoutCh:<span class="cov8" title="1">
+                        return ErrTimeout</span>
+                }
+        }
+}
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">// Copyright (c) 2025 Jeremy Hahn
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package compute
+
+import (
+        "context"
+        "crypto/rand"
+        "encoding/hex"
+        "fmt"
+        "os"
+        "path/filepath"
+        "sync"
+        "time"
+
+        "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+        "github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+        "github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
+        "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+)
+
+// QEMUOrchestrator implements the Orchestrator interface for QEMU virtual machines
+type QEMUOrchestrator struct {
+        config    *OrchestratorConfig
+        logger    *logging.Logger
+        lifecycle *LifecycleManager
+        ovsClient *ovs.Client
+        mu        sync.RWMutex
+        instances map[string]*qemuInstance
+}
+
+// qemuInstance holds the VM instance and its metadata
+type qemuInstance struct {
+        vm                *qemu.VM
+        instance          *Instance
+        ovsNetwork        *qemu.OVSNetwork
+        mu                sync.Mutex
+        cancelFunc        context.CancelFunc
+        waitGroup         sync.WaitGroup
+        networkAttached   bool
+        primaryPortName   string
+        primaryBridgeName string
+}
+
+// NewQEMUOrchestrator creates a new QEMU orchestrator
+func NewQEMUOrchestrator(config *OrchestratorConfig, logger *logging.Logger) (*QEMUOrchestrator, error) <span class="cov8" title="1">{
+        if config == nil </span><span class="cov8" title="1">{
+                return nil, fmt.Errorf("%w: config is required", ErrInvalidConfiguration)
+        }</span>
+
+        <span class="cov8" title="1">if logger == nil </span><span class="cov0" title="0">{
+                logger = logging.DefaultLogger()
+        }</span>
+
+        // Validate configuration
+        <span class="cov8" title="1">if err := config.Validate(); err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov8" title="1">if config.Type != ComputeTypeVM </span><span class="cov8" title="1">{
+                return nil, fmt.Errorf("%w: QEMU orchestrator requires VM compute type", ErrInvalidConfiguration)
+        }</span>
+
+        // Create work directory
+        <span class="cov8" title="1">if err := os.MkdirAll(config.WorkDir, 0755); err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to create work directory: %w", err)
+        }</span>
+
+        // Create OVS client
+        <span class="cov8" title="1">ovsClient, err := ovs.NewClient(config.OVSSocketPath)
+        if err != nil </span><span class="cov0" title="0">{
+                logger.Warnf("Failed to create OVS client: %v (OVS networking will be unavailable)", err)
+        }</span>
+
+        <span class="cov8" title="1">o := &amp;QEMUOrchestrator{
+                config:    config,
+                logger:    logger,
+                lifecycle: NewLifecycleManager(),
+                ovsClient: ovsClient,
+                instances: make(map[string]*qemuInstance),
+        }
+
+        // Connect to OVS if available
+        if o.ovsClient != nil </span><span class="cov8" title="1">{
+                ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+                defer cancel()
+                if err := o.ovsClient.Connect(ctx); err != nil </span><span class="cov8" title="1">{
+                        logger.Warnf("Failed to connect to OVS: %v (OVS networking will be unavailable)", err)
+                        o.ovsClient = nil
+                }</span>
+        }
+
+        <span class="cov8" title="1">return o, nil</span>
+}
+
+// generateInstanceID generates a unique instance ID
+func generateInstanceID() string <span class="cov8" title="1">{
+        b := make([]byte, 16)
+        rand.Read(b)
+        return hex.EncodeToString(b)
+}</span>
+
+// Create creates a new VM instance from a device profile
+func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceProfile) (*Instance, error) <span class="cov8" title="1">{
+        if profile == nil </span><span class="cov8" title="1">{
+                return nil, ErrInvalidProfile
+        }</span>
+
+        <span class="cov8" title="1">o.mu.Lock()
+        defer o.mu.Unlock()
+
+        // Check instance limit
+        if len(o.instances) &gt;= o.config.MaxInstances </span><span class="cov8" title="1">{
+                return nil, ErrResourceExhausted
+        }</span>
+
+        // Generate unique instance ID
+        <span class="cov8" title="1">instanceID := generateInstanceID()
+
+        // Check if already exists
+        if _, exists := o.instances[instanceID]; exists </span><span class="cov0" title="0">{
+                return nil, ErrInstanceAlreadyExists
+        }</span>
+
+        // Set initial state
+        <span class="cov8" title="1">if err := o.lifecycle.SetState(instanceID, StateCreating); err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        // Create instance configuration
+        <span class="cov8" title="1">instanceConfig := &amp;InstanceConfig{
+                Memory:      o.config.DefaultMemory,
+                CPUs:        o.config.DefaultCPUs,
+                DiskSize:    o.config.DefaultDiskSize,
+                WorkDir:     filepath.Join(o.config.WorkDir, instanceID),
+                SecureBoot:  false,
+                EnableKVM:   o.config.EnableKVM,
+                TPMEnabled:  true,
+                NetworkMode: "bridge",
+                BootMode:    "boot",
+        }
+
+        // Override with profile-specific settings if available
+        if profile.PlatformdConfig != nil </span>{<span class="cov0" title="0">
+                // Profile configuration can override defaults
+                // This would be implemented based on actual profile structure
+        }</span>
+
+        // Create disk path
+        <span class="cov8" title="1">instanceConfig.DiskPath = filepath.Join(instanceConfig.WorkDir, "disk.qcow2")
+
+        // Create work directory
+        if err := os.MkdirAll(instanceConfig.WorkDir, 0755); err != nil </span><span class="cov0" title="0">{
+                o.lifecycle.SetState(instanceID, StateError)
+                return nil, fmt.Errorf("failed to create instance work directory: %w", err)
+        }</span>
+
+        // Create QEMU configuration
+        <span class="cov8" title="1">qemuConfig := &amp;qemu.Config{
+                QEMUBinary:     o.config.QEMUBinary,
+                DiskPath:       instanceConfig.DiskPath,
+                DiskSize:       instanceConfig.DiskSize,
+                Memory:         instanceConfig.Memory,
+                CPUs:           instanceConfig.CPUs,
+                WorkDir:        instanceConfig.WorkDir,
+                SecureBoot:     instanceConfig.SecureBoot,
+                Debug:          o.config.Debug,
+                OVMFCode:       o.config.OVMFCode,
+                OVMFCodeSecure: o.config.OVMFCodeSecure,
+                OVMFVars:       o.config.OVMFVars,
+                EnableKVM:      instanceConfig.EnableKVM,
+                SerialConsole:  false,
+                NoGraphic:      true,
+                BootOrder:      "c",
+                NetworkMode:    instanceConfig.NetworkMode,
+                BridgeName:     o.config.NetworkBridge,
+                MACAddress:     instanceConfig.MACAddress,
+        }
+
+        // Create VM
+        vm, err := qemu.NewVM(qemuConfig, o.logger)
+        if err != nil </span><span class="cov0" title="0">{
+                o.lifecycle.SetState(instanceID, StateError)
+                return nil, fmt.Errorf("failed to create VM: %w", err)
+        }</span>
+
+        // Create disk
+        <span class="cov8" title="1">if err := vm.CreateDisk(); err != nil </span><span class="cov0" title="0">{
+                o.lifecycle.SetState(instanceID, StateError)
+                return nil, fmt.Errorf("failed to create VM disk: %w", err)
+        }</span>
+
+        // Create instance metadata
+        <span class="cov8" title="1">instance := &amp;Instance{
+                ID:                 instanceID,
+                Name:               profile.Name,
+                Type:               ComputeTypeVM,
+                State:              StateCreating,
+                Profile:            profile,
+                Config:             instanceConfig,
+                NetworkAttachments: []NetworkAttachment{},
+                CreatedAt:          time.Now(),
+                UpdatedAt:          time.Now(),
+                Metadata:           make(map[string]string),
+        }
+
+        // Store instance
+        o.instances[instanceID] = &amp;qemuInstance{
+                vm:       vm,
+                instance: instance,
+        }
+
+        // Update state to stopped
+        if err := o.lifecycle.SetState(instanceID, StateStopped); err != nil </span><span class="cov0" title="0">{
+                delete(o.instances, instanceID)
+                return nil, err
+        }</span>
+        <span class="cov8" title="1">instance.State = StateStopped
+        instance.UpdatedAt = time.Now()
+
+        o.logger.Infof("Created VM instance: %s (profile: %s)", instanceID, profile.Name)
+
+        return instance, nil</span>
+}
+
+// Start starts a stopped VM instance
+func (o *QEMUOrchestrator) Start(ctx context.Context, instanceID string) error <span class="cov0" title="0">{
+        if instanceID == "" </span><span class="cov0" title="0">{
+                return ErrInvalidInstanceID
+        }</span>
+
+        <span class="cov0" title="0">o.mu.RLock()
+        qemuInst, exists := o.instances[instanceID]
+        o.mu.RUnlock()
+
+        if !exists </span><span class="cov0" title="0">{
+                return ErrInstanceNotFound
+        }</span>
+
+        <span class="cov0" title="0">qemuInst.mu.Lock()
+        defer qemuInst.mu.Unlock()
+
+        // Check current state
+        currentState, err := o.lifecycle.GetState(instanceID)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">if currentState == StateRunning </span><span class="cov0" title="0">{
+                return ErrInstanceAlreadyRunning
+        }</span>
+
+        <span class="cov0" title="0">if currentState != StateStopped </span><span class="cov0" title="0">{
+                return fmt.Errorf("%w: cannot start instance in state %s", ErrInvalidState, currentState)
+        }</span>
+
+        // Update state to starting
+        <span class="cov0" title="0">if err := o.lifecycle.SetState(instanceID, StateStarting); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov0" title="0">qemuInst.instance.State = StateStarting
+        qemuInst.instance.UpdatedAt = time.Now()
+
+        // Determine boot mode
+        bootMode := qemuInst.instance.Config.BootMode
+        if bootMode == "" </span><span class="cov0" title="0">{
+                bootMode = "boot"
+        }</span>
+
+        // Create context for VM lifecycle
+        <span class="cov0" title="0">vmCtx, cancel := context.WithCancel(context.Background())
+        qemuInst.cancelFunc = cancel
+
+        // Start VM
+        if err := qemuInst.vm.Start(vmCtx, bootMode); err != nil </span><span class="cov0" title="0">{
+                o.lifecycle.SetState(instanceID, StateError)
+                qemuInst.instance.State = StateError
+                qemuInst.instance.UpdatedAt = time.Now()
+                return fmt.Errorf("failed to start VM: %w", err)
+        }</span>
+
+        // Update instance with PID
+        <span class="cov0" title="0">qemuInst.instance.PID = qemuInst.vm.GetPID()
+
+        // Update state to running
+        if err := o.lifecycle.SetState(instanceID, StateRunning); err != nil </span><span class="cov0" title="0">{
+                // VM is running but state update failed - try to stop it
+                qemuInst.vm.Stop()
+                return err
+        }</span>
+        <span class="cov0" title="0">qemuInst.instance.State = StateRunning
+        qemuInst.instance.UpdatedAt = time.Now()
+
+        // Start wait goroutine
+        qemuInst.waitGroup.Add(1)
+        go func() </span><span class="cov0" title="0">{
+                defer qemuInst.waitGroup.Done()
+                if err := qemuInst.vm.Wait(); err != nil </span><span class="cov0" title="0">{
+                        o.logger.Errorf("VM %s exited with error: %v", instanceID, err)
+                }</span>
+                // Update state to stopped
+                <span class="cov0" title="0">o.lifecycle.SetState(instanceID, StateStopped)
+                qemuInst.mu.Lock()
+                qemuInst.instance.State = StateStopped
+                qemuInst.instance.UpdatedAt = time.Now()
+                qemuInst.instance.PID = 0
+                qemuInst.mu.Unlock()
+                o.logger.Infof("VM %s stopped", instanceID)</span>
+        }()
+
+        <span class="cov0" title="0">o.logger.Infof("Started VM instance: %s (PID: %d)", instanceID, qemuInst.instance.PID)
+
+        return nil</span>
+}
+
+// Stop stops a running VM instance
+func (o *QEMUOrchestrator) Stop(ctx context.Context, instanceID string) error <span class="cov8" title="1">{
+        if instanceID == "" </span><span class="cov0" title="0">{
+                return ErrInvalidInstanceID
+        }</span>
+
+        <span class="cov8" title="1">o.mu.RLock()
+        qemuInst, exists := o.instances[instanceID]
+        o.mu.RUnlock()
+
+        if !exists </span><span class="cov0" title="0">{
+                return ErrInstanceNotFound
+        }</span>
+
+        <span class="cov8" title="1">qemuInst.mu.Lock()
+        defer qemuInst.mu.Unlock()
+
+        // Check current state
+        currentState, err := o.lifecycle.GetState(instanceID)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">if currentState != StateRunning </span><span class="cov8" title="1">{
+                return ErrInstanceNotRunning
+        }</span>
+
+        // Update state to stopping
+        <span class="cov0" title="0">if err := o.lifecycle.SetState(instanceID, StateStopping); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov0" title="0">qemuInst.instance.State = StateStopping
+        qemuInst.instance.UpdatedAt = time.Now()
+
+        // Stop VM
+        if err := qemuInst.vm.Stop(); err != nil </span><span class="cov0" title="0">{
+                o.lifecycle.SetState(instanceID, StateError)
+                qemuInst.instance.State = StateError
+                qemuInst.instance.UpdatedAt = time.Now()
+                return fmt.Errorf("failed to stop VM: %w", err)
+        }</span>
+
+        // Cancel context
+        <span class="cov0" title="0">if qemuInst.cancelFunc != nil </span><span class="cov0" title="0">{
+                qemuInst.cancelFunc()
+        }</span>
+
+        // Wait for VM to exit
+        <span class="cov0" title="0">qemuInst.waitGroup.Wait()
+
+        o.logger.Infof("Stopped VM instance: %s", instanceID)
+
+        return nil</span>
+}
+
+// Delete deletes a VM instance and cleans up resources
+func (o *QEMUOrchestrator) Delete(ctx context.Context, instanceID string) error <span class="cov8" title="1">{
+        if instanceID == "" </span><span class="cov8" title="1">{
+                return ErrInvalidInstanceID
+        }</span>
+
+        <span class="cov8" title="1">o.mu.Lock()
+        defer o.mu.Unlock()
+
+        qemuInst, exists := o.instances[instanceID]
+        if !exists </span><span class="cov8" title="1">{
+                return ErrInstanceNotFound
+        }</span>
+
+        <span class="cov8" title="1">qemuInst.mu.Lock()
+        defer qemuInst.mu.Unlock()
+
+        // Check current state
+        currentState, err := o.lifecycle.GetState(instanceID)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        // Stop if running
+        <span class="cov8" title="1">if currentState == StateRunning </span><span class="cov0" title="0">{
+                qemuInst.mu.Unlock()
+                o.mu.Unlock()
+                if err := o.Stop(ctx, instanceID); err != nil </span><span class="cov0" title="0">{
+                        o.mu.Lock()
+                        qemuInst.mu.Lock()
+                        return err
+                }</span>
+                <span class="cov0" title="0">o.mu.Lock()
+                qemuInst.mu.Lock()</span>
+        }
+
+        // Update state to deleting
+        <span class="cov8" title="1">if err := o.lifecycle.SetState(instanceID, StateDeleting); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">qemuInst.instance.State = StateDeleting
+        qemuInst.instance.UpdatedAt = time.Now()
+
+        // Cleanup OVS network if attached
+        if qemuInst.ovsNetwork != nil </span><span class="cov0" title="0">{
+                if err := qemuInst.ovsNetwork.Cleanup(ctx); err != nil </span><span class="cov0" title="0">{
+                        o.logger.Warnf("Failed to cleanup OVS network for instance %s: %v", instanceID, err)
+                }</span>
+        }
+
+        // Remove work directory
+        <span class="cov8" title="1">if err := os.RemoveAll(qemuInst.instance.Config.WorkDir); err != nil </span><span class="cov0" title="0">{
+                o.logger.Warnf("Failed to remove work directory for instance %s: %v", instanceID, err)
+        }</span>
+
+        // Remove from lifecycle manager
+        <span class="cov8" title="1">if err := o.lifecycle.DeleteInstance(instanceID); err != nil </span><span class="cov0" title="0">{
+                o.logger.Warnf("Failed to remove instance from lifecycle manager: %v", err)
+        }</span>
+
+        // Remove from instances map
+        <span class="cov8" title="1">delete(o.instances, instanceID)
+
+        o.logger.Infof("Deleted VM instance: %s", instanceID)
+
+        return nil</span>
+}
+
+// List returns all VM instances, optionally filtered
+func (o *QEMUOrchestrator) List(ctx context.Context, filter *InstanceFilter) ([]*Instance, error) <span class="cov8" title="1">{
+        o.mu.RLock()
+        defer o.mu.RUnlock()
+
+        result := make([]*Instance, 0, len(o.instances))
+
+        for _, qemuInst := range o.instances </span><span class="cov8" title="1">{
+                qemuInst.mu.Lock()
+                instance := qemuInst.instance
+                qemuInst.mu.Unlock()
+
+                // Apply filter if provided
+                if filter != nil &amp;&amp; !filter.Matches(instance) </span><span class="cov8" title="1">{
+                        continue</span>
+                }
+
+                // Create a copy to avoid external modifications
+                <span class="cov8" title="1">instanceCopy := *instance
+                result = append(result, &amp;instanceCopy)</span>
+        }
+
+        <span class="cov8" title="1">return result, nil</span>
+}
+
+// Get retrieves a specific VM instance by ID
+func (o *QEMUOrchestrator) Get(ctx context.Context, instanceID string) (*Instance, error) <span class="cov8" title="1">{
+        if instanceID == "" </span><span class="cov8" title="1">{
+                return nil, ErrInvalidInstanceID
+        }</span>
+
+        <span class="cov8" title="1">o.mu.RLock()
+        qemuInst, exists := o.instances[instanceID]
+        o.mu.RUnlock()
+
+        if !exists </span><span class="cov8" title="1">{
+                return nil, ErrInstanceNotFound
+        }</span>
+
+        <span class="cov8" title="1">qemuInst.mu.Lock()
+        defer qemuInst.mu.Unlock()
+
+        // Return a copy
+        instanceCopy := *qemuInst.instance
+        return &amp;instanceCopy, nil</span>
+}
+
+// AttachNetwork attaches a VM instance to an OVS network port
+func (o *QEMUOrchestrator) AttachNetwork(ctx context.Context, instanceID, portName string) error <span class="cov8" title="1">{
+        if instanceID == "" </span><span class="cov8" title="1">{
+                return ErrInvalidInstanceID
+        }</span>
+
+        <span class="cov8" title="1">if portName == "" </span><span class="cov8" title="1">{
+                return fmt.Errorf("%w: port name is required", ErrNetworkAttachmentFailed)
+        }</span>
+
+
+        <span class="cov8" title="1">o.mu.RLock()
+        qemuInst, exists := o.instances[instanceID]
+        o.mu.RUnlock()
+
+        if !exists </span><span class="cov8" title="1">{
+                return ErrInstanceNotFound
+        }</span>
+
+        <span class="cov0" title="0">if o.ovsClient == nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("%w: OVS client not available", ErrNetworkAttachmentFailed)
+        }</span>
+
+        <span class="cov0" title="0">qemuInst.mu.Lock()
+        defer qemuInst.mu.Unlock()
+
+        // Check if already attached
+        if qemuInst.networkAttached </span><span class="cov0" title="0">{
+                return fmt.Errorf("%w: network already attached", ErrNetworkAttachmentFailed)
+        }</span>
+
+        // Get or create OVS network
+        <span class="cov0" title="0">vmConfig := qemuInst.vm.GetConfig()
+        if vmConfig.OVS == nil </span><span class="cov0" title="0">{
+                vmConfig.OVS = &amp;qemu.OVSConfig{
+                        Enable:     true,
+                        BridgeName: o.config.NetworkBridge,
+                        SocketPath: o.config.OVSSocketPath,
+                        PortName:   portName,
+                }
+        }</span>
+
+        <span class="cov0" title="0">ovsNetwork, err := qemu.NewOVSNetwork(vmConfig, o.logger)
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("%w: %v", ErrNetworkAttachmentFailed, err)
+        }</span>
+
+        // Setup network (creates TAP and attaches to OVS)
+        <span class="cov0" title="0">if err := ovsNetwork.Setup(ctx); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("%w: %v", ErrNetworkAttachmentFailed, err)
+        }</span>
+
+        // Update instance
+        <span class="cov0" title="0">qemuInst.ovsNetwork = ovsNetwork
+        qemuInst.networkAttached = true
+        qemuInst.primaryPortName = portName
+        qemuInst.primaryBridgeName = o.config.NetworkBridge
+
+        // Add network attachment to instance metadata
+        attachment := NetworkAttachment{
+                PortName:   portName,
+                BridgeName: o.config.NetworkBridge,
+                AttachedAt: time.Now(),
+        }
+        qemuInst.instance.NetworkAttachments = append(qemuInst.instance.NetworkAttachments, attachment)
+        qemuInst.instance.UpdatedAt = time.Now()
+
+        o.logger.Infof("Attached network port %s to instance %s", portName, instanceID)
+
+        return nil</span>
+}
+
+// DetachNetwork detaches a VM instance from an OVS network port
+func (o *QEMUOrchestrator) DetachNetwork(ctx context.Context, instanceID, portName string) error <span class="cov8" title="1">{
+        if instanceID == "" </span><span class="cov8" title="1">{
+                return ErrInvalidInstanceID
+        }</span>
+
+        <span class="cov8" title="1">if portName == "" </span><span class="cov8" title="1">{
+                return fmt.Errorf("%w: port name is required", ErrNetworkDetachmentFailed)
+        }</span>
+
+        <span class="cov8" title="1">o.mu.RLock()
+        qemuInst, exists := o.instances[instanceID]
+        o.mu.RUnlock()
+
+        if !exists </span><span class="cov8" title="1">{
+                return ErrInstanceNotFound
+        }</span>
+
+        <span class="cov8" title="1">qemuInst.mu.Lock()
+        defer qemuInst.mu.Unlock()
+
+        if !qemuInst.networkAttached </span><span class="cov8" title="1">{
+                return fmt.Errorf("%w: no network attached", ErrNetworkDetachmentFailed)
+        }</span>
+
+        // Cleanup OVS network
+        <span class="cov0" title="0">if qemuInst.ovsNetwork != nil </span><span class="cov0" title="0">{
+                if err := qemuInst.ovsNetwork.Cleanup(ctx); err != nil </span><span class="cov0" title="0">{
+                        return fmt.Errorf("%w: %v", ErrNetworkDetachmentFailed, err)
+                }</span>
+        }
+
+        // Update instance
+        <span class="cov0" title="0">qemuInst.ovsNetwork = nil
+        qemuInst.networkAttached = false
+        qemuInst.primaryPortName = ""
+        qemuInst.primaryBridgeName = ""
+
+        // Remove network attachment from instance metadata
+        newAttachments := make([]NetworkAttachment, 0)
+        for _, att := range qemuInst.instance.NetworkAttachments </span><span class="cov0" title="0">{
+                if att.PortName != portName </span><span class="cov0" title="0">{
+                        newAttachments = append(newAttachments, att)
+                }</span>
+        }
+        <span class="cov0" title="0">qemuInst.instance.NetworkAttachments = newAttachments
+        qemuInst.instance.UpdatedAt = time.Now()
+
+        o.logger.Infof("Detached network port %s from instance %s", portName, instanceID)
+
+        return nil</span>
+}
+
+// Wait waits for a VM instance to exit
+func (o *QEMUOrchestrator) Wait(ctx context.Context, instanceID string) error <span class="cov8" title="1">{
+        if instanceID == "" </span><span class="cov0" title="0">{
+                return ErrInvalidInstanceID
+        }</span>
+
+        <span class="cov8" title="1">o.mu.RLock()
+        qemuInst, exists := o.instances[instanceID]
+        o.mu.RUnlock()
+
+        if !exists </span><span class="cov8" title="1">{
+                return ErrInstanceNotFound
+        }</span>
+
+        // Wait for the VM to exit
+        <span class="cov0" title="0">qemuInst.waitGroup.Wait()
+
+        return nil</span>
+}
+
+// GetState returns the current state of a VM instance
+func (o *QEMUOrchestrator) GetState(ctx context.Context, instanceID string) (InstanceState, error) <span class="cov8" title="1">{
+        if instanceID == "" </span><span class="cov8" title="1">{
+                return StateUnknown, ErrInvalidInstanceID
+        }</span>
+
+        <span class="cov8" title="1">return o.lifecycle.GetState(instanceID)</span>
+}
+
+// Close closes the orchestrator and releases resources
+func (o *QEMUOrchestrator) Close() error <span class="cov8" title="1">{
+        o.mu.Lock()
+        defer o.mu.Unlock()
+
+        // Stop all running instances
+        for instanceID, qemuInst := range o.instances </span><span class="cov8" title="1">{
+                if qemuInst.vm.IsRunning() </span><span class="cov0" title="0">{
+                        o.logger.Infof("Stopping instance %s during shutdown", instanceID)
+                        if err := qemuInst.vm.Stop(); err != nil </span><span class="cov0" title="0">{
+                                o.logger.Errorf("Failed to stop instance %s: %v", instanceID, err)
+                        }</span>
+                }
+        }
+
+        // Close OVS client
+        <span class="cov8" title="1">if o.ovsClient != nil </span><span class="cov0" title="0">{
+                if err := o.ovsClient.Close(); err != nil </span><span class="cov0" title="0">{
+                        o.logger.Warnf("Failed to close OVS client: %v", err)
+                }</span>
+        }
+
+        <span class="cov8" title="1">o.logger.Info("QEMU orchestrator closed")
+
+        return nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file3" style="display: none">// Copyright (c) 2025 Jeremy Hahn
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package compute
+
+import (
+        "time"
+
+        "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+)
+
+// ComputeType represents the type of compute instance
+type ComputeType string
+
+const (
+        // ComputeTypeVM represents a virtual machine
+        ComputeTypeVM ComputeType = "vm"
+
+        // ComputeTypeContainer represents a container
+        ComputeTypeContainer ComputeType = "container"
+)
+
+// String returns the string representation of ComputeType
+func (ct ComputeType) String() string <span class="cov8" title="1">{
+        return string(ct)
+}</span>
+
+// IsValid checks if the ComputeType is valid
+func (ct ComputeType) IsValid() bool <span class="cov8" title="1">{
+        return ct == ComputeTypeVM || ct == ComputeTypeContainer
+}</span>
+
+// NetworkAttachment represents a network attachment point
+type NetworkAttachment struct {
+        // PortName is the OVS port name
+        PortName string `json:"port_name" yaml:"port_name"`
+
+        // BridgeName is the OVS bridge name
+        BridgeName string `json:"bridge_name" yaml:"bridge_name"`
+
+        // VLAN is the VLAN ID (0 for untagged)
+        VLAN uint16 `json:"vlan" yaml:"vlan"`
+
+        // MACAddress is the MAC address assigned to this attachment
+        MACAddress string `json:"mac_address,omitempty" yaml:"mac_address,omitempty"`
+
+        // IPAddress is the IP address assigned to this attachment
+        IPAddress string `json:"ip_address,omitempty" yaml:"ip_address,omitempty"`
+
+        // AttachedAt is the timestamp when the attachment was created
+        AttachedAt time.Time `json:"attached_at" yaml:"attached_at"`
+}
+
+// Instance represents a compute instance (VM or container)
+type Instance struct {
+        // ID is the unique identifier for this instance
+        ID string `json:"id" yaml:"id"`
+
+        // Name is a human-readable name for the instance
+        Name string `json:"name" yaml:"name"`
+
+        // Type is the compute type (VM or container)
+        Type ComputeType `json:"type" yaml:"type"`
+
+        // State is the current lifecycle state
+        State InstanceState `json:"state" yaml:"state"`
+
+        // Profile is the device profile used to create this instance
+        Profile *entities.DeviceProfile `json:"profile,omitempty" yaml:"profile,omitempty"`
+
+        // Config is the instance-specific configuration
+        Config *InstanceConfig `json:"config,omitempty" yaml:"config,omitempty"`
+
+        // NetworkAttachments are the network ports attached to this instance
+        NetworkAttachments []NetworkAttachment `json:"network_attachments,omitempty" yaml:"network_attachments,omitempty"`
+
+        // CreatedAt is the timestamp when the instance was created
+        CreatedAt time.Time `json:"created_at" yaml:"created_at"`
+
+        // UpdatedAt is the timestamp when the instance was last updated
+        UpdatedAt time.Time `json:"updated_at" yaml:"updated_at"`
+
+        // Metadata is a map of arbitrary key-value pairs
+        Metadata map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty"`
+
+        // PID is the process ID of the running instance (VM or container)
+        PID int `json:"pid,omitempty" yaml:"pid,omitempty"`
+}
+
+// InstanceConfig holds instance-specific configuration
+type InstanceConfig struct {
+        // Memory is the amount of RAM in MB
+        Memory int `json:"memory" yaml:"memory"`
+
+        // CPUs is the number of CPU cores
+        CPUs int `json:"cpus" yaml:"cpus"`
+
+        // DiskPath is the path to the instance disk
+        DiskPath string `json:"disk_path" yaml:"disk_path"`
+
+        // DiskSize is the size of the disk (e.g., "10G", "20G")
+        DiskSize string `json:"disk_size,omitempty" yaml:"disk_size,omitempty"`
+
+        // WorkDir is the working directory for instance artifacts
+        WorkDir string `json:"work_dir" yaml:"work_dir"`
+
+        // SecureBoot enables UEFI Secure Boot (VMs only)
+        SecureBoot bool `json:"secure_boot" yaml:"secure_boot"`
+
+        // EnableKVM enables KVM acceleration (VMs only)
+        EnableKVM bool `json:"enable_kvm" yaml:"enable_kvm"`
+
+        // TPMEnabled enables virtual TPM (VMs only)
+        TPMEnabled bool `json:"tpm_enabled" yaml:"tpm_enabled"`
+
+        // NetworkMode specifies the network configuration
+        NetworkMode string `json:"network_mode,omitempty" yaml:"network_mode,omitempty"`
+
+        // MACAddress is the MAC address for the primary network interface
+        MACAddress string `json:"mac_address,omitempty" yaml:"mac_address,omitempty"`
+
+        // BootMode specifies how to boot the instance (install, boot, pxe)
+        BootMode string `json:"boot_mode,omitempty" yaml:"boot_mode,omitempty"`
+
+        // ISOPath is the path to the installation ISO (for install mode)
+        ISOPath string `json:"iso_path,omitempty" yaml:"iso_path,omitempty"`
+
+        // AdditionalDisks are additional disk images to attach
+        AdditionalDisks []string `json:"additional_disks,omitempty" yaml:"additional_disks,omitempty"`
+
+        // Environment variables for the instance
+        Environment map[string]string `json:"environment,omitempty" yaml:"environment,omitempty"`
+}
+
+// InstanceFilter is used to filter instances in List operations
+type InstanceFilter struct {
+        // Type filters by compute type
+        Type *ComputeType `json:"type,omitempty" yaml:"type,omitempty"`
+
+        // State filters by instance state
+        State *InstanceState `json:"state,omitempty" yaml:"state,omitempty"`
+
+        // Name filters by instance name (substring match)
+        Name string `json:"name,omitempty" yaml:"name,omitempty"`
+
+        // ProfileID filters by device profile ID
+        ProfileID *uint64 `json:"profile_id,omitempty" yaml:"profile_id,omitempty"`
+
+        // CreatedAfter filters instances created after this time
+        CreatedAfter *time.Time `json:"created_after,omitempty" yaml:"created_after,omitempty"`
+
+        // CreatedBefore filters instances created before this time
+        CreatedBefore *time.Time `json:"created_before,omitempty" yaml:"created_before,omitempty"`
+}
+
+// Matches returns true if the instance matches the filter
+func (f *InstanceFilter) Matches(instance *Instance) bool <span class="cov8" title="1">{
+        if instance == nil </span><span class="cov8" title="1">{
+                return false
+        }</span>
+
+        <span class="cov8" title="1">if f.Type != nil &amp;&amp; instance.Type != *f.Type </span><span class="cov8" title="1">{
+                return false
+        }</span>
+
+        <span class="cov8" title="1">if f.State != nil &amp;&amp; instance.State != *f.State </span><span class="cov8" title="1">{
+                return false
+        }</span>
+
+        <span class="cov8" title="1">if f.Name != "" &amp;&amp; instance.Name != f.Name </span><span class="cov8" title="1">{
+                return false
+        }</span>
+
+        <span class="cov8" title="1">if f.ProfileID != nil &amp;&amp; (instance.Profile == nil || instance.Profile.ID != *f.ProfileID) </span><span class="cov8" title="1">{
+                return false
+        }</span>
+
+        <span class="cov8" title="1">if f.CreatedAfter != nil &amp;&amp; instance.CreatedAt.Before(*f.CreatedAfter) </span><span class="cov8" title="1">{
+                return false
+        }</span>
+
+        <span class="cov8" title="1">if f.CreatedBefore != nil &amp;&amp; instance.CreatedAt.After(*f.CreatedBefore) </span><span class="cov8" title="1">{
+                return false
+        }</span>
+
+        <span class="cov8" title="1">return true</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>

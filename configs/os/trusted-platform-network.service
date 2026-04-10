@@ -1,0 +1,118 @@
+# SPDX-License-Identifier: Apache-2.0
+# /lib/systemd/system/trusted-platform-network.service
+# Trusted Platform :: Device Network Configuration Service
+#
+# This service fetches device profile from the platform API using mTLS
+# (IDevID certificate), applies network configuration (VLAN, static IP, gateway, DNS),
+# and triggers device activation.
+#
+# The service runs early in the boot sequence after the platform API is available,
+# configures the production network, and activates the device on the platform.
+
+[Unit]
+Description=Trusted Platform Device Network Configuration
+Documentation=file:///usr/share/doc/trusted-platform/network-setup.md
+After=network.target systemd-networkd.service platformd.service
+Wants=network.target
+Before=multi-user.target
+
+# Only run if this is not a container and if the script exists
+ConditionVirtualization=!container
+ConditionPathExists=/usr/local/bin/trusted-platform-network.sh
+ConditionPathExists=/etc/trusted-platform/certs/idevid.crt
+
+# Ensure platform API is running and available
+Requires=platform-api.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# User and group (run as root due to network configuration requirements)
+User=root
+Group=root
+
+# Working directory
+WorkingDirectory=/var/lib/trusted-platform
+
+# Environment variables can be set in /etc/trusted-platform/network.env
+EnvironmentFile=-/etc/trusted-platform/network.env
+
+# API endpoint configuration
+Environment="PLATFORM_API_ENDPOINT=https://localhost:8443"
+Environment="PLATFORM_IDEVID_CERT=/etc/trusted-platform/certs/idevid.crt"
+Environment="PLATFORM_IDEVID_KEY=/etc/trusted-platform/certs/idevid.key"
+Environment="PLATFORM_CA_CERT=/etc/trusted-platform/certs/ca.crt"
+
+# Enable debug logging if NETWORK_SETUP_DEBUG is set
+Environment="DEBUG=0"
+
+# Execute the network setup script
+ExecStart=/usr/local/bin/trusted-platform-network.sh
+
+# Restart policy: don't auto-restart as this is a one-time setup
+# Manual restart can be triggered with: systemctl restart trusted-platform-network
+Restart=no
+
+# Standard output/error to journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trusted-platform-network
+
+# Process isolation (less strict due to network configuration requirements)
+# The service needs CAP_NET_ADMIN to modify network interfaces
+PrivateTmp=yes
+PrivateDevices=no
+PrivateNetwork=no
+NoNewPrivileges=true
+
+# Protect system directories (with exceptions for required paths)
+ProtectSystem=strict
+ProtectHome=yes
+
+# Read-only paths
+ReadOnlyPaths=/etc/ssl/certs /usr/share/ca-certificates
+
+# Read-write paths (required for network configuration)
+ReadWritePaths=/etc/systemd/network
+ReadWritePaths=/var/lib/trusted-platform
+ReadWritePaths=/var/log/trusted-platform
+ReadWritePaths=/var/backups/trusted-platform
+ReadWritePaths=/etc/trusted-platform
+
+# Protect kernel and control group configuration
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+# Restrict runtime behavior
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+
+# Capability restrictions: CAP_NET_ADMIN for network interface configuration
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_DAC_OVERRIDE
+
+# Resource limits
+MemoryAccounting=yes
+MemoryMax=128M
+TasksMax=256
+LimitNOFILE=4096
+LimitNPROC=256
+
+# Timeout for script execution
+TimeoutStartSec=120
+
+# Process properties
+UMask=0077
+
+# Success exit status codes
+# 0 = successful activation
+# 1-255 = various failure conditions (see script for details)
+SuccessExitStatus=0
+
+[Install]
+WantedBy=multi-user.target

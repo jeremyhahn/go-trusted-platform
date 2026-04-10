@@ -1,0 +1,365 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package qemu
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/digitalocean/go-qemu/qmp"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestNewMonitor(t *testing.T) {
+	t.Run("creates monitor with valid parameters", func(t *testing.T) {
+		socketPath := "/tmp/qmp.sock"
+		timeout := 5 * time.Second
+
+		mon := NewMonitor(socketPath, timeout, nil)
+
+		require.NotNil(t, mon)
+		assert.Equal(t, socketPath, mon.GetSocketPath())
+		assert.Equal(t, timeout, mon.timeout)
+		assert.NotNil(t, mon.logger)
+		assert.False(t, mon.IsConnected())
+	})
+
+	t.Run("creates monitor with nil logger uses default", func(t *testing.T) {
+		mon := NewMonitor("/tmp/test.sock", time.Second, nil)
+
+		require.NotNil(t, mon)
+		assert.NotNil(t, mon.logger)
+	})
+}
+
+func TestMonitorConnectErrors(t *testing.T) {
+	t.Run("connect fails with non-existent socket", func(t *testing.T) {
+		mon := NewMonitor("/nonexistent/path/to/qmp.sock", time.Second, nil)
+		ctx := context.Background()
+
+		err := mon.Connect(ctx)
+
+		require.Error(t, err)
+		var socketErr ErrMonitorSocketNotFound
+		assert.ErrorAs(t, err, &socketErr)
+		assert.Equal(t, "/nonexistent/path/to/qmp.sock", socketErr.SocketPath)
+	})
+
+	t.Run("operations fail when not connected", func(t *testing.T) {
+		mon := NewMonitor("/tmp/test.sock", time.Second, nil)
+		ctx := context.Background()
+
+		// Status
+		_, err := mon.Status(ctx)
+		require.Error(t, err)
+		var notConnected ErrMonitorNotConnected
+		assert.ErrorAs(t, err, &notConnected)
+
+		// SystemPowerdown
+		err = mon.SystemPowerdown(ctx)
+		require.Error(t, err)
+		assert.ErrorAs(t, err, &notConnected)
+
+		// SystemReset
+		err = mon.SystemReset(ctx)
+		require.Error(t, err)
+		assert.ErrorAs(t, err, &notConnected)
+
+		// Pause
+		err = mon.Pause(ctx)
+		require.Error(t, err)
+		assert.ErrorAs(t, err, &notConnected)
+
+		// Resume
+		err = mon.Resume(ctx)
+		require.Error(t, err)
+		assert.ErrorAs(t, err, &notConnected)
+
+		// BlockDevices
+		_, err = mon.BlockDevices(ctx)
+		require.Error(t, err)
+		assert.ErrorAs(t, err, &notConnected)
+
+		// Version
+		_, err = mon.Version()
+		require.Error(t, err)
+		assert.ErrorAs(t, err, &notConnected)
+
+		// Capabilities
+		_, err = mon.Capabilities()
+		require.Error(t, err)
+		assert.ErrorAs(t, err, &notConnected)
+
+		// QueryCommands
+		_, err = mon.QueryCommands(ctx)
+		require.Error(t, err)
+		assert.ErrorAs(t, err, &notConnected)
+
+		// Run
+		_, err = mon.Run(ctx, "test-cmd", nil)
+		require.Error(t, err)
+		assert.ErrorAs(t, err, &notConnected)
+
+		// SubscribeEvents
+		err = mon.SubscribeEvents(ctx, func(event qmp.Event) {})
+		require.Error(t, err)
+		assert.ErrorAs(t, err, &notConnected)
+	})
+}
+
+func TestMonitorClose(t *testing.T) {
+	t.Run("close on unconnected monitor returns nil", func(t *testing.T) {
+		mon := NewMonitor("/tmp/test.sock", time.Second, nil)
+
+		err := mon.Close()
+
+		assert.NoError(t, err)
+	})
+}
+
+func TestMonitorUnsubscribeEvents(t *testing.T) {
+	t.Run("unsubscribe on unsubscribed monitor is safe", func(t *testing.T) {
+		mon := NewMonitor("/tmp/test.sock", time.Second, nil)
+
+		// Should not panic
+		mon.UnsubscribeEvents()
+		assert.Nil(t, mon.eventHandler)
+	})
+}
+
+func TestMonitorIsConnected(t *testing.T) {
+	t.Run("returns false for new monitor", func(t *testing.T) {
+		mon := NewMonitor("/tmp/test.sock", time.Second, nil)
+
+		assert.False(t, mon.IsConnected())
+	})
+}
+
+func TestParseVMStatus(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected VMStatus
+	}{
+		{"running", "running", VMStatusRunning},
+		{"paused", "paused", VMStatusPaused},
+		{"shutdown", "shutdown", VMStatusShutdown},
+		{"prelaunch", "prelaunch", VMStatusPrelaunch},
+		{"io-error", "io-error", VMStatusIOError},
+		{"internal-error", "internal-error", VMStatusInternalError},
+		{"suspended", "suspended", VMStatusSuspended},
+		{"guest-panicked", "guest-panicked", VMStatusGuestPanicked},
+		{"unknown status", "some-random-status", VMStatusUnknown},
+		{"empty string", "", VMStatusUnknown},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseVMStatus(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestMonitorErrors(t *testing.T) {
+	t.Run("ErrMonitorConnectionFailed error message", func(t *testing.T) {
+		err := ErrMonitorConnectionFailed{
+			SocketPath: "/tmp/test.sock",
+			Cause:      assert.AnError,
+		}
+		assert.Contains(t, err.Error(), "/tmp/test.sock")
+		assert.Contains(t, err.Error(), "failed to connect")
+		assert.Equal(t, assert.AnError, err.Unwrap())
+	})
+
+	t.Run("ErrMonitorConnectionFailed without cause", func(t *testing.T) {
+		err := ErrMonitorConnectionFailed{
+			SocketPath: "/tmp/test.sock",
+		}
+		assert.Contains(t, err.Error(), "/tmp/test.sock")
+		assert.Nil(t, err.Unwrap())
+	})
+
+	t.Run("ErrMonitorNotConnected error message", func(t *testing.T) {
+		err := ErrMonitorNotConnected{}
+		assert.Contains(t, err.Error(), "not connected")
+	})
+
+	t.Run("ErrMonitorAlreadyConnected error message", func(t *testing.T) {
+		err := ErrMonitorAlreadyConnected{}
+		assert.Contains(t, err.Error(), "already connected")
+	})
+
+	t.Run("ErrMonitorHandshakeFailed error message", func(t *testing.T) {
+		err := ErrMonitorHandshakeFailed{Cause: assert.AnError}
+		assert.Contains(t, err.Error(), "handshake failed")
+		assert.Equal(t, assert.AnError, err.Unwrap())
+	})
+
+	t.Run("ErrMonitorHandshakeFailed without cause", func(t *testing.T) {
+		err := ErrMonitorHandshakeFailed{}
+		assert.Contains(t, err.Error(), "handshake failed")
+		assert.Nil(t, err.Unwrap())
+	})
+
+	t.Run("ErrMonitorCommandFailed error message", func(t *testing.T) {
+		err := ErrMonitorCommandFailed{
+			Command: "query-status",
+			Cause:   assert.AnError,
+		}
+		assert.Contains(t, err.Error(), "query-status")
+		assert.Contains(t, err.Error(), "failed")
+		assert.Equal(t, assert.AnError, err.Unwrap())
+	})
+
+	t.Run("ErrMonitorCommandFailed without cause", func(t *testing.T) {
+		err := ErrMonitorCommandFailed{
+			Command: "test-cmd",
+		}
+		assert.Contains(t, err.Error(), "test-cmd")
+		assert.Nil(t, err.Unwrap())
+	})
+
+	t.Run("ErrMonitorTimeout error message", func(t *testing.T) {
+		err := ErrMonitorTimeout{Operation: "connect"}
+		assert.Contains(t, err.Error(), "connect")
+		assert.Contains(t, err.Error(), "timed out")
+	})
+
+	t.Run("ErrMonitorSocketNotFound error message", func(t *testing.T) {
+		err := ErrMonitorSocketNotFound{SocketPath: "/tmp/missing.sock"}
+		assert.Contains(t, err.Error(), "/tmp/missing.sock")
+		assert.Contains(t, err.Error(), "not found")
+	})
+
+	t.Run("ErrMonitorInvalidResponse error message", func(t *testing.T) {
+		err := ErrMonitorInvalidResponse{
+			Command: "query-block",
+			Cause:   assert.AnError,
+		}
+		assert.Contains(t, err.Error(), "query-block")
+		assert.Contains(t, err.Error(), "invalid")
+		assert.Equal(t, assert.AnError, err.Unwrap())
+	})
+
+	t.Run("ErrMonitorInvalidResponse without cause", func(t *testing.T) {
+		err := ErrMonitorInvalidResponse{
+			Command: "test-cmd",
+		}
+		assert.Contains(t, err.Error(), "test-cmd")
+		assert.Nil(t, err.Unwrap())
+	})
+
+	t.Run("ErrMonitorEventsNotSupported error message", func(t *testing.T) {
+		err := ErrMonitorEventsNotSupported{}
+		assert.Contains(t, err.Error(), "not supported")
+	})
+
+	t.Run("ErrMonitorDisconnected error message", func(t *testing.T) {
+		err := ErrMonitorDisconnected{}
+		assert.Contains(t, err.Error(), "closed")
+	})
+}
+
+func TestVMStatusConstants(t *testing.T) {
+	t.Run("VM status constants are correct", func(t *testing.T) {
+		assert.Equal(t, VMStatus("running"), VMStatusRunning)
+		assert.Equal(t, VMStatus("paused"), VMStatusPaused)
+		assert.Equal(t, VMStatus("shutdown"), VMStatusShutdown)
+		assert.Equal(t, VMStatus("prelaunch"), VMStatusPrelaunch)
+		assert.Equal(t, VMStatus("io-error"), VMStatusIOError)
+		assert.Equal(t, VMStatus("internal-error"), VMStatusInternalError)
+		assert.Equal(t, VMStatus("suspended"), VMStatusSuspended)
+		assert.Equal(t, VMStatus("guest-panicked"), VMStatusGuestPanicked)
+		assert.Equal(t, VMStatus("unknown"), VMStatusUnknown)
+	})
+}
+
+func TestGetSocketPath(t *testing.T) {
+	t.Run("returns configured socket path", func(t *testing.T) {
+		socketPath := "/var/run/qemu/vm1.sock"
+		mon := NewMonitor(socketPath, time.Second, nil)
+
+		assert.Equal(t, socketPath, mon.GetSocketPath())
+	})
+}
+
+func TestBlockDeviceTypes(t *testing.T) {
+	t.Run("BlockDevice struct has expected fields", func(t *testing.T) {
+		bd := BlockDevice{
+			Device:    "virtio0",
+			Locked:    false,
+			Removable: true,
+			QDev:      "/machine/peripheral/virtio-disk0/virtio-backend",
+			Type:      "unknown",
+			Inserted: &BlockDeviceInfo{
+				File:     "/var/lib/qemu/disk.qcow2",
+				NodeName: "virtio-disk0",
+				RO:       false,
+				DRV:      "qcow2",
+			},
+		}
+
+		assert.Equal(t, "virtio0", bd.Device)
+		assert.False(t, bd.Locked)
+		assert.True(t, bd.Removable)
+		assert.NotNil(t, bd.Inserted)
+		assert.Equal(t, "/var/lib/qemu/disk.qcow2", bd.Inserted.File)
+	})
+
+	t.Run("BlockDeviceInfo struct has expected fields", func(t *testing.T) {
+		info := BlockDeviceInfo{
+			File:         "/path/to/disk.qcow2",
+			NodeName:     "disk0",
+			RO:           true,
+			DRV:          "qcow2",
+			Encrypted:    true,
+			DetectZeroes: "off",
+			BPS:          0,
+			IOPS:         0,
+		}
+
+		assert.Equal(t, "/path/to/disk.qcow2", info.File)
+		assert.True(t, info.RO)
+		assert.True(t, info.Encrypted)
+	})
+
+	t.Run("Image struct has expected fields", func(t *testing.T) {
+		img := Image{
+			Filename:    "/path/to/disk.qcow2",
+			Format:      "qcow2",
+			VirtualSize: 10737418240, // 10 GB
+			ActualSize:  2147483648,  // 2 GB
+			DirtyFlag:   false,
+			ClusterSize: 65536,
+		}
+
+		assert.Equal(t, "qcow2", img.Format)
+		assert.Equal(t, int64(10737418240), img.VirtualSize)
+	})
+
+	t.Run("Cache struct has expected fields", func(t *testing.T) {
+		cache := Cache{
+			Writeback: true,
+			Direct:    false,
+			NoFlush:   false,
+		}
+
+		assert.True(t, cache.Writeback)
+		assert.False(t, cache.Direct)
+		assert.False(t, cache.NoFlush)
+	})
+}

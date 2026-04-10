@@ -1,0 +1,2482 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package container
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"os"
+	"sync"
+	"testing"
+	"time"
+)
+
+// MockPodmanBackend is a mock implementation of PodmanBackend for testing.
+type MockPodmanBackend struct {
+	mu             sync.Mutex
+	connected      bool
+	containers     map[string]*PodmanContainer
+	images         map[string]*PodmanImage
+	pullError      error
+	createError    error
+	startError     error
+	stopError      error
+	removeError    error
+	inspectError   error
+	listError      error
+	logsError      error
+	pullCalled     int
+	createCalled   int
+	startCalled    int
+	stopCalled     int
+	removeCalled   int
+	inspectCalled  int
+	listCalled     int
+	logsCalled     int
+	containerIDSeq int
+}
+
+func NewMockPodmanBackend() *MockPodmanBackend {
+	return &MockPodmanBackend{
+		containers: make(map[string]*PodmanContainer),
+		images:     make(map[string]*PodmanImage),
+	}
+}
+
+func (m *MockPodmanBackend) Connect(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.connected = true
+	return nil
+}
+
+func (m *MockPodmanBackend) PullImage(ctx context.Context, imageRef string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pullCalled++
+	if m.pullError != nil {
+		return m.pullError
+	}
+	m.images[imageRef] = &PodmanImage{
+		ID:      "img-" + imageRef,
+		Names:   []string{imageRef},
+		Created: time.Now(),
+	}
+	return nil
+}
+
+func (m *MockPodmanBackend) ListImages(ctx context.Context) ([]*PodmanImage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.listError != nil {
+		return nil, m.listError
+	}
+	result := make([]*PodmanImage, 0, len(m.images))
+	for _, img := range m.images {
+		result = append(result, img)
+	}
+	return result, nil
+}
+
+func (m *MockPodmanBackend) InspectImage(ctx context.Context, imageRef string) (*PodmanImage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.inspectError != nil {
+		return nil, m.inspectError
+	}
+	img, ok := m.images[imageRef]
+	if !ok {
+		return nil, errors.New("image not found")
+	}
+	return img, nil
+}
+
+func (m *MockPodmanBackend) CreateContainer(ctx context.Context, config *PodmanContainerConfig) (*PodmanContainer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.createCalled++
+	if m.createError != nil {
+		return nil, m.createError
+	}
+	m.containerIDSeq++
+	id := "ctr-" + config.Name
+	container := &PodmanContainer{
+		ID:        id,
+		Name:      config.Name,
+		Image:     config.Image,
+		State:     "created",
+		CreatedAt: time.Now(),
+		Labels:    config.Labels,
+	}
+	m.containers[id] = container
+	m.containers[config.Name] = container
+	return container, nil
+}
+
+func (m *MockPodmanBackend) StartContainer(ctx context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.startCalled++
+	if m.startError != nil {
+		return m.startError
+	}
+	container, ok := m.containers[id]
+	if !ok {
+		return errors.New("container not found")
+	}
+	container.State = "running"
+	now := time.Now()
+	container.StartedAt = &now
+	return nil
+}
+
+func (m *MockPodmanBackend) StopContainer(ctx context.Context, id string, timeout *int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stopCalled++
+	if m.stopError != nil {
+		return m.stopError
+	}
+	container, ok := m.containers[id]
+	if !ok {
+		return errors.New("container not found")
+	}
+	container.State = "stopped"
+	now := time.Now()
+	container.FinishedAt = &now
+	return nil
+}
+
+func (m *MockPodmanBackend) RemoveContainer(ctx context.Context, id string, force bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.removeCalled++
+	if m.removeError != nil {
+		return m.removeError
+	}
+	container, ok := m.containers[id]
+	if !ok {
+		return errors.New("container not found")
+	}
+	delete(m.containers, id)
+	delete(m.containers, container.Name)
+	return nil
+}
+
+func (m *MockPodmanBackend) InspectContainer(ctx context.Context, id string) (*PodmanContainer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.inspectCalled++
+	if m.inspectError != nil {
+		return nil, m.inspectError
+	}
+	container, ok := m.containers[id]
+	if !ok {
+		return nil, errors.New("container not found")
+	}
+	return container, nil
+}
+
+func (m *MockPodmanBackend) ListContainers(ctx context.Context, all bool) ([]*PodmanContainer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.listCalled++
+	if m.listError != nil {
+		return nil, m.listError
+	}
+	seen := make(map[string]bool)
+	result := make([]*PodmanContainer, 0)
+	for _, c := range m.containers {
+		if seen[c.ID] {
+			continue
+		}
+		if all || c.State == "running" {
+			result = append(result, c)
+			seen[c.ID] = true
+		}
+	}
+	return result, nil
+}
+
+func (m *MockPodmanBackend) GetContainerLogs(ctx context.Context, id string, follow bool, since *time.Time) (*PodmanContainerLogs, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logsCalled++
+	if m.logsError != nil {
+		return nil, m.logsError
+	}
+	_, ok := m.containers[id]
+	if !ok {
+		return nil, errors.New("container not found")
+	}
+	return &PodmanContainerLogs{
+		ContainerID: id,
+		Stdout:      []byte("test log output\n"),
+		Stderr:      []byte(""),
+		Since:       time.Now().Add(-time.Hour),
+		Until:       time.Now(),
+	}, nil
+}
+
+func (m *MockPodmanBackend) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.connected = false
+	return nil
+}
+
+// MockTPMProvider is a mock implementation of TPMProvider for testing.
+type MockTPMProvider struct {
+	mu           sync.Mutex
+	pcrValues    map[int][]byte
+	extendError  error
+	readError    error
+	quoteError   error
+	verifyError  error
+	extendCalled int
+}
+
+func NewMockTPMProvider() *MockTPMProvider {
+	return &MockTPMProvider{
+		pcrValues: make(map[int][]byte),
+	}
+}
+
+func (m *MockTPMProvider) ExtendPCR(ctx context.Context, pcrIndex int, hash []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.extendCalled++
+	if m.extendError != nil {
+		return m.extendError
+	}
+	// Simulate PCR extend
+	current := m.pcrValues[pcrIndex]
+	if current == nil {
+		current = make([]byte, 32)
+	}
+	m.pcrValues[pcrIndex] = extendHash(current, hash)
+	return nil
+}
+
+func (m *MockTPMProvider) ReadPCR(ctx context.Context, pcrIndex int) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.readError != nil {
+		return nil, m.readError
+	}
+	value, ok := m.pcrValues[pcrIndex]
+	if !ok {
+		return make([]byte, 32), nil
+	}
+	return value, nil
+}
+
+func (m *MockTPMProvider) GenerateQuote(ctx context.Context, pcrIndices []int, nonce []byte) (*Quote, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.quoteError != nil {
+		return nil, m.quoteError
+	}
+	pcrs := make(map[int][]byte)
+	for _, idx := range pcrIndices {
+		if value, ok := m.pcrValues[idx]; ok {
+			pcrs[idx] = value
+		} else {
+			pcrs[idx] = make([]byte, 32)
+		}
+	}
+	return &Quote{
+		QuoteData: []byte("mock-quote-data"),
+		Signature: []byte("mock-signature"),
+		PCRs:      pcrs,
+		Nonce:     nonce,
+		Timestamp: time.Now(),
+	}, nil
+}
+
+func (m *MockTPMProvider) VerifyQuote(ctx context.Context, quote *Quote) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.verifyError != nil {
+		return m.verifyError
+	}
+	return nil
+}
+
+// MockLifecyclePolicyEvaluator is a mock implementation of LifecyclePolicyEvaluator for testing.
+type MockLifecyclePolicyEvaluator struct {
+	mu        sync.Mutex
+	allowed   bool
+	reasons   []string
+	evalError error
+	evalCount int
+}
+
+func NewMockLifecyclePolicyEvaluator(allowed bool) *MockLifecyclePolicyEvaluator {
+	return &MockLifecyclePolicyEvaluator{
+		allowed: allowed,
+	}
+}
+
+func (m *MockLifecyclePolicyEvaluator) EvaluateContainerSpec(ctx context.Context, spec *OrchestratorContainerSpec) (bool, []string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.evalCount++
+	if m.evalError != nil {
+		return false, nil, m.evalError
+	}
+	return m.allowed, m.reasons, nil
+}
+
+// MockLifecycleNetworkManager is a mock implementation of LifecycleNetworkManager for testing.
+type MockLifecycleNetworkManager struct {
+	mu             sync.Mutex
+	setupError     error
+	teardownError  error
+	setupCalled    int
+	teardownCalled int
+}
+
+func NewMockLifecycleNetworkManager() *MockLifecycleNetworkManager {
+	return &MockLifecycleNetworkManager{}
+}
+
+func (m *MockLifecycleNetworkManager) SetupNetwork(ctx context.Context, containerID string, cfg *ContainerNetworkConfig) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.setupCalled++
+	return m.setupError
+}
+
+func (m *MockLifecycleNetworkManager) TeardownNetwork(ctx context.Context, containerID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.teardownCalled++
+	return m.teardownError
+}
+
+// Helper to create a test logger
+func testLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
+}
+
+// TestNewOrchestrator tests orchestrator creation.
+func TestNewOrchestrator(t *testing.T) {
+	t.Run("valid config", func(t *testing.T) {
+		config := OrchestratorConfig{
+			Logger:            testLogger(),
+			EnableAttestation: false,
+			EnablePolicy:      false,
+		}
+		podman := NewMockPodmanBackend()
+
+		orch, err := NewOrchestrator(config, WithPodmanBackend(podman))
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if orch == nil {
+			t.Fatal("expected orchestrator, got nil")
+		}
+		defer orch.Close()
+	})
+
+	t.Run("nil logger returns error", func(t *testing.T) {
+		config := OrchestratorConfig{
+			Logger: nil,
+		}
+
+		_, err := NewOrchestrator(config)
+		if err == nil {
+			t.Fatal("expected error for nil logger")
+		}
+	})
+
+	t.Run("negative stop timeout returns error", func(t *testing.T) {
+		config := OrchestratorConfig{
+			Logger:             testLogger(),
+			DefaultStopTimeout: -1 * time.Second,
+		}
+
+		_, err := NewOrchestrator(config)
+		if err == nil {
+			t.Fatal("expected error for negative timeout")
+		}
+	})
+
+	t.Run("with all options", func(t *testing.T) {
+		config := OrchestratorConfig{
+			Logger:            testLogger(),
+			EnableAttestation: true,
+			EnablePolicy:      true,
+			PolicyName:        "test-policy",
+		}
+		podman := NewMockPodmanBackend()
+		tpm := NewMockTPMProvider()
+		attestor, _ := NewContainerAttestor(tpm)
+		policy := NewMockLifecyclePolicyEvaluator(true)
+		network := NewMockLifecycleNetworkManager()
+
+		orch, err := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithAttestor(attestor),
+			WithLifecyclePolicyEvaluator(policy),
+			WithLifecycleNetworkManager(network),
+		)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		defer orch.Close()
+
+		if !orch.IsConnected() {
+			t.Error("expected orchestrator to be connected")
+		}
+	})
+}
+
+// TestOrchestratorCreate tests container creation.
+func TestOrchestratorCreate(t *testing.T) {
+	t.Run("create simple container", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "test-container",
+			Image: "alpine:latest",
+		}
+
+		container, err := orch.Create(context.Background(), spec)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if container == nil {
+			t.Fatal("expected container, got nil")
+		}
+		if container.Name != "test-container" {
+			t.Errorf("expected name 'test-container', got %q", container.Name)
+		}
+		if container.State != StateCreated {
+			t.Errorf("expected state %q, got %q", StateCreated, container.State)
+		}
+		if podman.createCalled != 1 {
+			t.Errorf("expected createCalled=1, got %d", podman.createCalled)
+		}
+	})
+
+	t.Run("create with attestation", func(t *testing.T) {
+		tpm := NewMockTPMProvider()
+		attestor, _ := NewContainerAttestor(tpm)
+
+		config := OrchestratorConfig{
+			Logger:            testLogger(),
+			EnableAttestation: true,
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithAttestor(attestor),
+		)
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "attested-container",
+			Image: "alpine:latest",
+		}
+
+		_, err := orch.Create(context.Background(), spec)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if tpm.extendCalled != 1 {
+			t.Errorf("expected extendCalled=1, got %d", tpm.extendCalled)
+		}
+	})
+
+	t.Run("create with policy allowed", func(t *testing.T) {
+		policy := NewMockLifecyclePolicyEvaluator(true)
+
+		config := OrchestratorConfig{
+			Logger:       testLogger(),
+			EnablePolicy: true,
+			PolicyName:   "test-policy",
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithLifecyclePolicyEvaluator(policy),
+		)
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "policy-container",
+			Image: "alpine:latest",
+		}
+
+		_, err := orch.Create(context.Background(), spec)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if policy.evalCount != 1 {
+			t.Errorf("expected evalCount=1, got %d", policy.evalCount)
+		}
+	})
+
+	t.Run("create with policy denied", func(t *testing.T) {
+		policy := NewMockLifecyclePolicyEvaluator(false)
+		policy.reasons = []string{"image not allowed"}
+
+		config := OrchestratorConfig{
+			Logger:       testLogger(),
+			EnablePolicy: true,
+			PolicyName:   "test-policy",
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithLifecyclePolicyEvaluator(policy),
+		)
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "denied-container",
+			Image: "malicious:latest",
+		}
+
+		_, err := orch.Create(context.Background(), spec)
+		if err == nil {
+			t.Fatal("expected policy denial error")
+		}
+		if !errors.Is(err, ErrPolicyDenied) {
+			t.Errorf("expected ErrPolicyDenied, got %v", err)
+		}
+	})
+
+	t.Run("create with nil spec", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		_, err := orch.Create(context.Background(), nil)
+		if err == nil {
+			t.Fatal("expected error for nil spec")
+		}
+	})
+
+	t.Run("create with invalid spec", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "", // Invalid: empty name
+			Image: "alpine:latest",
+		}
+
+		_, err := orch.Create(context.Background(), spec)
+		if err == nil {
+			t.Fatal("expected error for invalid spec")
+		}
+	})
+
+	t.Run("create duplicate container", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "duplicate-container",
+			Image: "alpine:latest",
+		}
+
+		_, err := orch.Create(context.Background(), spec)
+		if err != nil {
+			t.Fatalf("expected no error on first create, got %v", err)
+		}
+
+		_, err = orch.Create(context.Background(), spec)
+		if err == nil {
+			t.Fatal("expected error for duplicate container")
+		}
+		if !errors.Is(err, ErrContainerExists) {
+			t.Errorf("expected ErrContainerExists, got %v", err)
+		}
+	})
+
+	t.Run("create on closed orchestrator", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "closed-container",
+			Image: "alpine:latest",
+		}
+
+		_, err := orch.Create(context.Background(), spec)
+		if err == nil {
+			t.Fatal("expected error on closed orchestrator")
+		}
+	})
+}
+
+// TestOrchestratorStart tests container starting.
+func TestOrchestratorStart(t *testing.T) {
+	t.Run("start container", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "start-test",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+
+		err := orch.Start(context.Background(), container.ID)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		// Verify container state
+		updated, _ := orch.Get(context.Background(), container.ID)
+		if updated.State != StateRunning {
+			t.Errorf("expected state %q, got %q", StateRunning, updated.State)
+		}
+		if podman.startCalled != 1 {
+			t.Errorf("expected startCalled=1, got %d", podman.startCalled)
+		}
+	})
+
+	t.Run("start with SDN network", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		network := NewMockLifecycleNetworkManager()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithLifecycleNetworkManager(network),
+		)
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "sdn-container",
+			Image: "alpine:latest",
+			Network: ContainerNetworkConfig{
+				Mode: NetworkModeSDN,
+				SDN: &SDNConfig{
+					Bridge: "br-test",
+					VLANID: 100,
+				},
+			},
+		}
+		container, _ := orch.Create(context.Background(), spec)
+
+		err := orch.Start(context.Background(), container.ID)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if network.setupCalled != 1 {
+			t.Errorf("expected setupCalled=1, got %d", network.setupCalled)
+		}
+	})
+
+	t.Run("start already running container", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "running-container",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+		orch.Start(context.Background(), container.ID)
+
+		err := orch.Start(context.Background(), container.ID)
+		if err == nil {
+			t.Fatal("expected error for already running container")
+		}
+		if !errors.Is(err, ErrContainerRunning) {
+			t.Errorf("expected ErrContainerRunning, got %v", err)
+		}
+	})
+
+	t.Run("start nonexistent container", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		err := orch.Start(context.Background(), "nonexistent")
+		if err == nil {
+			t.Fatal("expected error for nonexistent container")
+		}
+	})
+
+	t.Run("start with empty ID", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		err := orch.Start(context.Background(), "")
+		if err == nil {
+			t.Fatal("expected error for empty ID")
+		}
+	})
+}
+
+// TestOrchestratorStop tests container stopping.
+func TestOrchestratorStop(t *testing.T) {
+	t.Run("stop running container", func(t *testing.T) {
+		config := OrchestratorConfig{
+			Logger:             testLogger(),
+			DefaultStopTimeout: 10 * time.Second,
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "stop-test",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+		orch.Start(context.Background(), container.ID)
+
+		err := orch.Stop(context.Background(), container.ID, 5*time.Second)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		// Verify container state
+		updated, _ := orch.Get(context.Background(), container.ID)
+		if updated.State != StateStopped {
+			t.Errorf("expected state %q, got %q", StateStopped, updated.State)
+		}
+		if podman.stopCalled != 1 {
+			t.Errorf("expected stopCalled=1, got %d", podman.stopCalled)
+		}
+	})
+
+	t.Run("stop with attestation", func(t *testing.T) {
+		tpm := NewMockTPMProvider()
+		attestor, _ := NewContainerAttestor(tpm)
+
+		config := OrchestratorConfig{
+			Logger:            testLogger(),
+			EnableAttestation: true,
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithAttestor(attestor),
+		)
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "attested-stop",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+		orch.Start(context.Background(), container.ID)
+		tpm.extendCalled = 0 // Reset counter
+
+		err := orch.Stop(context.Background(), container.ID, 5*time.Second)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if tpm.extendCalled != 1 {
+			t.Errorf("expected extendCalled=1 for stop event, got %d", tpm.extendCalled)
+		}
+	})
+
+	t.Run("stop already stopped container", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "stopped-container",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+
+		err := orch.Stop(context.Background(), container.ID, 5*time.Second)
+		if err == nil {
+			t.Fatal("expected error for already stopped container")
+		}
+		if !errors.Is(err, ErrContainerStopped) {
+			t.Errorf("expected ErrContainerStopped, got %v", err)
+		}
+	})
+}
+
+// TestOrchestratorRemove tests container removal.
+func TestOrchestratorRemove(t *testing.T) {
+	t.Run("remove stopped container", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "remove-test",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+
+		err := orch.Remove(context.Background(), container.ID, false)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		// Verify container is gone
+		_, err = orch.Get(context.Background(), container.ID)
+		if err == nil {
+			t.Error("expected container to be removed")
+		}
+		if podman.removeCalled != 1 {
+			t.Errorf("expected removeCalled=1, got %d", podman.removeCalled)
+		}
+	})
+
+	t.Run("remove running container without force", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "running-remove",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+		orch.Start(context.Background(), container.ID)
+
+		err := orch.Remove(context.Background(), container.ID, false)
+		if err == nil {
+			t.Fatal("expected error for running container without force")
+		}
+		if !errors.Is(err, ErrContainerRunning) {
+			t.Errorf("expected ErrContainerRunning, got %v", err)
+		}
+	})
+
+	t.Run("remove running container with force", func(t *testing.T) {
+		config := OrchestratorConfig{
+			Logger:             testLogger(),
+			DefaultStopTimeout: 1 * time.Second,
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "force-remove",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+		orch.Start(context.Background(), container.ID)
+
+		err := orch.Remove(context.Background(), container.ID, true)
+		if err != nil {
+			t.Fatalf("expected no error with force=true, got %v", err)
+		}
+		if podman.stopCalled != 1 {
+			t.Errorf("expected stopCalled=1, got %d", podman.stopCalled)
+		}
+	})
+}
+
+// TestOrchestratorGet tests container retrieval.
+func TestOrchestratorGet(t *testing.T) {
+	t.Run("get by ID", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "get-test",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+
+		retrieved, err := orch.Get(context.Background(), container.ID)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if retrieved.ID != container.ID {
+			t.Errorf("expected ID %q, got %q", container.ID, retrieved.ID)
+		}
+	})
+
+	t.Run("get by name", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "get-by-name",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+
+		retrieved, err := orch.Get(context.Background(), "get-by-name")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if retrieved.Name != container.Name {
+			t.Errorf("expected name %q, got %q", container.Name, retrieved.Name)
+		}
+	})
+
+	t.Run("get nonexistent container", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		_, err := orch.Get(context.Background(), "nonexistent")
+		if err == nil {
+			t.Fatal("expected error for nonexistent container")
+		}
+	})
+}
+
+// TestOrchestratorList tests container listing.
+func TestOrchestratorList(t *testing.T) {
+	t.Run("list all containers", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		// Create some containers
+		for i := 0; i < 3; i++ {
+			spec := &OrchestratorContainerSpec{
+				Name:  "list-test-" + string(rune('a'+i)),
+				Image: "alpine:latest",
+			}
+			orch.Create(context.Background(), spec)
+		}
+
+		containers, err := orch.List(context.Background(), ListOptions{All: true})
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if len(containers) != 3 {
+			t.Errorf("expected 3 containers, got %d", len(containers))
+		}
+	})
+
+	t.Run("list with limit", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		// Create some containers
+		for i := 0; i < 5; i++ {
+			spec := &OrchestratorContainerSpec{
+				Name:  "limit-test-" + string(rune('a'+i)),
+				Image: "alpine:latest",
+			}
+			orch.Create(context.Background(), spec)
+		}
+
+		containers, err := orch.List(context.Background(), ListOptions{All: true, Limit: 2})
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if len(containers) != 2 {
+			t.Errorf("expected 2 containers, got %d", len(containers))
+		}
+	})
+
+	t.Run("list with label filter", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:   "labeled-container",
+			Image:  "alpine:latest",
+			Labels: map[string]string{"app": "test"},
+		}
+		orch.Create(context.Background(), spec)
+
+		spec2 := &OrchestratorContainerSpec{
+			Name:  "unlabeled-container",
+			Image: "alpine:latest",
+		}
+		orch.Create(context.Background(), spec2)
+
+		containers, err := orch.List(context.Background(), ListOptions{
+			All:     true,
+			Filters: map[string][]string{"label": {"app=test"}},
+		})
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if len(containers) != 1 {
+			t.Errorf("expected 1 container, got %d", len(containers))
+		}
+	})
+}
+
+// TestOrchestratorLogs tests container log retrieval.
+func TestOrchestratorLogs(t *testing.T) {
+	t.Run("get container logs", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "logs-test",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+		orch.Start(context.Background(), container.ID)
+
+		reader, err := orch.Logs(context.Background(), container.ID, LogOptions{
+			Stdout: true,
+			Stderr: true,
+		})
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		defer reader.Close()
+
+		if podman.logsCalled != 1 {
+			t.Errorf("expected logsCalled=1, got %d", podman.logsCalled)
+		}
+	})
+}
+
+// TestOrchestratorAttest tests container attestation.
+func TestOrchestratorAttest(t *testing.T) {
+	t.Run("attest container", func(t *testing.T) {
+		tpm := NewMockTPMProvider()
+		attestor, _ := NewContainerAttestor(tpm)
+
+		config := OrchestratorConfig{
+			Logger:            testLogger(),
+			EnableAttestation: true,
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithAttestor(attestor),
+		)
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "attest-test",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+
+		report, err := orch.Attest(context.Background(), container.ID)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if report == nil {
+			t.Fatal("expected attestation report, got nil")
+		}
+		if report.ContainerID != container.ID {
+			t.Errorf("expected container ID %q, got %q", container.ID, report.ContainerID)
+		}
+		if len(report.Quote) == 0 {
+			t.Error("expected quote data")
+		}
+	})
+
+	t.Run("attest without attestor", func(t *testing.T) {
+		config := OrchestratorConfig{
+			Logger:            testLogger(),
+			EnableAttestation: false,
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "no-attestor",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+
+		_, err := orch.Attest(context.Background(), container.ID)
+		if err == nil {
+			t.Fatal("expected error without attestor")
+		}
+	})
+}
+
+// TestOrchestratorEvaluatePolicy tests policy evaluation.
+func TestOrchestratorEvaluatePolicy(t *testing.T) {
+	t.Run("evaluate allowed policy", func(t *testing.T) {
+		policy := NewMockLifecyclePolicyEvaluator(true)
+		config := OrchestratorConfig{
+			Logger:       testLogger(),
+			EnablePolicy: true,
+			PolicyName:   "test-policy",
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithLifecyclePolicyEvaluator(policy),
+		)
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "policy-test",
+			Image: "alpine:latest",
+		}
+
+		allowed, _, err := orch.EvaluatePolicy(context.Background(), spec)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if !allowed {
+			t.Error("expected policy to allow")
+		}
+	})
+
+	t.Run("evaluate without policy evaluator", func(t *testing.T) {
+		config := OrchestratorConfig{
+			Logger:       testLogger(),
+			EnablePolicy: false,
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "no-policy",
+			Image: "alpine:latest",
+		}
+
+		allowed, _, err := orch.EvaluatePolicy(context.Background(), spec)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if !allowed {
+			t.Error("expected default allow without policy evaluator")
+		}
+	})
+
+	t.Run("evaluate with nil spec", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		_, _, err := orch.EvaluatePolicy(context.Background(), nil)
+		if err == nil {
+			t.Fatal("expected error for nil spec")
+		}
+		if !errors.Is(err, ErrInvalidSpec) {
+			t.Errorf("expected ErrInvalidSpec, got %v", err)
+		}
+	})
+
+	t.Run("evaluate on closed orchestrator", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "closed-policy",
+			Image: "alpine:latest",
+		}
+
+		_, _, err := orch.EvaluatePolicy(context.Background(), spec)
+		if err == nil {
+			t.Fatal("expected error on closed orchestrator")
+		}
+	})
+}
+
+// TestOrchestratorClose tests orchestrator closure.
+func TestOrchestratorClose(t *testing.T) {
+	t.Run("close orchestrator", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+
+		err := orch.Close()
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		// Verify closed state
+		if orch.IsConnected() {
+			t.Error("expected orchestrator to be disconnected after close")
+		}
+
+		// Try operation after close
+		_, err = orch.Get(context.Background(), "any")
+		if err == nil {
+			t.Error("expected error after close")
+		}
+	})
+
+	t.Run("double close", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+
+		orch.Close()
+		err := orch.Close() // Second close should be no-op
+		if err != nil {
+			t.Fatalf("expected no error on double close, got %v", err)
+		}
+	})
+}
+
+// TestConvertSpecToPodmanConfig tests spec conversion.
+func TestConvertSpecToPodmanConfig(t *testing.T) {
+	t.Run("convert full spec", func(t *testing.T) {
+		spec := &OrchestratorContainerSpec{
+			Name:       "full-spec",
+			Image:      "nginx:latest",
+			Command:    []string{"nginx"},
+			Args:       []string{"-g", "daemon off;"},
+			Env:        map[string]string{"ENV": "test"},
+			Labels:     map[string]string{"app": "nginx"},
+			User:       "nginx",
+			WorkingDir: "/app",
+			Privileged: false,
+			Capabilities: CapabilityConfig{
+				Add:  []string{"NET_ADMIN"},
+				Drop: []string{"ALL"},
+			},
+			Mounts: []MountConfig{
+				{Source: "/data", Target: "/app/data", ReadOnly: true},
+			},
+			Ports: []PortMapping{
+				{ContainerPort: 80, HostPort: 8080, Protocol: "tcp"},
+			},
+			Network: ContainerNetworkConfig{
+				Mode:       NetworkModeHost,
+				DNSServers: []string{"8.8.8.8"},
+				Hostname:   "nginx-host",
+			},
+		}
+
+		config := convertSpecToPodmanConfig(spec)
+
+		if config.Name != "full-spec" {
+			t.Errorf("expected name 'full-spec', got %q", config.Name)
+		}
+		if config.Image != "nginx:latest" {
+			t.Errorf("expected image 'nginx:latest', got %q", config.Image)
+		}
+		if len(config.Command) != 3 {
+			t.Errorf("expected 3 command args, got %d", len(config.Command))
+		}
+		if config.NetworkMode != "host" {
+			t.Errorf("expected network mode 'host', got %q", config.NetworkMode)
+		}
+		if len(config.Mounts) != 1 {
+			t.Errorf("expected 1 mount, got %d", len(config.Mounts))
+		}
+		if len(config.Ports) != 1 {
+			t.Errorf("expected 1 port, got %d", len(config.Ports))
+		}
+	})
+}
+
+// TestMatchFilters tests filter matching.
+func TestMatchFilters(t *testing.T) {
+	t.Run("match label filter", func(t *testing.T) {
+		container := &Container{
+			Labels: map[string]string{"app": "test", "env": "prod"},
+		}
+
+		if !matchFilters(container, map[string][]string{"label": {"app=test"}}) {
+			t.Error("expected label filter to match")
+		}
+
+		if matchFilters(container, map[string][]string{"label": {"app=other"}}) {
+			t.Error("expected label filter to not match")
+		}
+	})
+
+	t.Run("match name filter", func(t *testing.T) {
+		container := &Container{Name: "test-container"}
+
+		if !matchFilters(container, map[string][]string{"name": {"test"}}) {
+			t.Error("expected name filter to match")
+		}
+
+		if matchFilters(container, map[string][]string{"name": {"other"}}) {
+			t.Error("expected name filter to not match")
+		}
+	})
+
+	t.Run("match status filter", func(t *testing.T) {
+		container := &Container{State: StateRunning}
+
+		if !matchFilters(container, map[string][]string{"status": {"running"}}) {
+			t.Error("expected status filter to match")
+		}
+
+		if matchFilters(container, map[string][]string{"status": {"stopped"}}) {
+			t.Error("expected status filter to not match")
+		}
+	})
+
+	t.Run("empty filters match all", func(t *testing.T) {
+		container := &Container{Name: "any"}
+
+		if !matchFilters(container, nil) {
+			t.Error("expected empty filters to match")
+		}
+	})
+}
+
+// TestMapPodmanState tests state mapping.
+func TestMapPodmanState(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected ContainerState
+	}{
+		{"created", StateCreated},
+		{"running", StateRunning},
+		{"paused", StatePaused},
+		{"stopped", StateStopped},
+		{"exited", StateExited},
+		{"removing", StateRemoving},
+		{"restarting", StateRestarting},
+		{"dead", StateDead},
+		{"RUNNING", StateRunning}, // Case insensitive
+		{"unknown", StateCreated}, // Default
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := mapPodmanState(tt.input)
+			if result != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
+
+// TestOrchestratorVerifyAttestation tests attestation verification.
+func TestOrchestratorVerifyAttestation(t *testing.T) {
+	t.Run("verify attestation success", func(t *testing.T) {
+		tpm := NewMockTPMProvider()
+		attestor, _ := NewContainerAttestor(tpm)
+
+		config := OrchestratorConfig{
+			Logger:            testLogger(),
+			EnableAttestation: true,
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithAttestor(attestor),
+		)
+		defer orch.Close()
+
+		err := orch.VerifyAttestation(context.Background(), "test-container-id", []byte("evidence"))
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("verify attestation without attestor", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		err := orch.VerifyAttestation(context.Background(), "test-container-id", []byte("evidence"))
+		if err == nil {
+			t.Fatal("expected error without attestor")
+		}
+		if !errors.Is(err, ErrAttestationFailed) {
+			t.Errorf("expected ErrAttestationFailed, got %v", err)
+		}
+	})
+
+	t.Run("verify attestation with empty ID", func(t *testing.T) {
+		tpm := NewMockTPMProvider()
+		attestor, _ := NewContainerAttestor(tpm)
+
+		config := OrchestratorConfig{
+			Logger:            testLogger(),
+			EnableAttestation: true,
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithAttestor(attestor),
+		)
+		defer orch.Close()
+
+		err := orch.VerifyAttestation(context.Background(), "", []byte("evidence"))
+		if err == nil {
+			t.Fatal("expected error for empty ID")
+		}
+		if !errors.Is(err, ErrInvalidContainerID) {
+			t.Errorf("expected ErrInvalidContainerID, got %v", err)
+		}
+	})
+
+	t.Run("verify attestation on closed orchestrator", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		orch.Close()
+
+		err := orch.VerifyAttestation(context.Background(), "test-id", []byte("evidence"))
+		if err == nil {
+			t.Fatal("expected error on closed orchestrator")
+		}
+		if !errors.Is(err, ErrOrchestratorClosed) {
+			t.Errorf("expected ErrOrchestratorClosed, got %v", err)
+		}
+	})
+}
+
+// TestOrchestratorPullImage tests image pulling.
+func TestOrchestratorPullImage(t *testing.T) {
+	t.Run("pull image with podman backend", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		err := orch.PullImage(context.Background(), "alpine:latest", PullOptions{})
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if podman.pullCalled != 1 {
+			t.Errorf("expected pullCalled=1, got %d", podman.pullCalled)
+		}
+	})
+
+	t.Run("pull image with empty ref", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		err := orch.PullImage(context.Background(), "", PullOptions{})
+		if err == nil {
+			t.Fatal("expected error for empty ref")
+		}
+		if !errors.Is(err, ErrInvalidImage) {
+			t.Errorf("expected ErrInvalidImage, got %v", err)
+		}
+	})
+
+	t.Run("pull image on closed orchestrator", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		orch.Close()
+
+		err := orch.PullImage(context.Background(), "alpine:latest", PullOptions{})
+		if err == nil {
+			t.Fatal("expected error on closed orchestrator")
+		}
+		if !errors.Is(err, ErrOrchestratorClosed) {
+			t.Errorf("expected ErrOrchestratorClosed, got %v", err)
+		}
+	})
+
+	t.Run("pull image without podman or image manager", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		orch, _ := NewOrchestrator(config)
+		defer orch.Close()
+
+		err := orch.PullImage(context.Background(), "alpine:latest", PullOptions{})
+		if err == nil {
+			t.Fatal("expected error without podman")
+		}
+		if !errors.Is(err, ErrPodmanNotAvailable) {
+			t.Errorf("expected ErrPodmanNotAvailable, got %v", err)
+		}
+	})
+}
+
+// TestOrchestratorVerifyImage tests image verification.
+func TestOrchestratorVerifyImage(t *testing.T) {
+
+	t.Run("verify image without image manager", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		result, err := orch.VerifyImage(context.Background(), "alpine:latest")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if result.Verified {
+			t.Error("expected image to be unverified without image manager")
+		}
+		if result.ImageRef != "alpine:latest" {
+			t.Errorf("expected image ref 'alpine:latest', got %q", result.ImageRef)
+		}
+	})
+
+	t.Run("verify image with empty ref", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		_, err := orch.VerifyImage(context.Background(), "")
+		if err == nil {
+			t.Fatal("expected error for empty ref")
+		}
+		if !errors.Is(err, ErrInvalidImage) {
+			t.Errorf("expected ErrInvalidImage, got %v", err)
+		}
+	})
+
+	t.Run("verify image on closed orchestrator", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		orch.Close()
+
+		_, err := orch.VerifyImage(context.Background(), "alpine:latest")
+		if err == nil {
+			t.Fatal("expected error on closed orchestrator")
+		}
+		if !errors.Is(err, ErrOrchestratorClosed) {
+			t.Errorf("expected ErrOrchestratorClosed, got %v", err)
+		}
+	})
+}
+
+// TestOrchestratorGetAttestation tests getting the attestor.
+func TestOrchestratorGetAttestation(t *testing.T) {
+	t.Run("get attestation with attestor", func(t *testing.T) {
+		tpm := NewMockTPMProvider()
+		attestor, _ := NewContainerAttestor(tpm)
+
+		config := OrchestratorConfig{
+			Logger:            testLogger(),
+			EnableAttestation: true,
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithAttestor(attestor),
+		)
+		defer orch.Close()
+
+		result := orch.GetAttestation()
+		if result == nil {
+			t.Fatal("expected attestor, got nil")
+		}
+		if result != attestor {
+			t.Error("expected same attestor instance")
+		}
+	})
+
+	t.Run("get attestation without attestor", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		result := orch.GetAttestation()
+		if result != nil {
+			t.Error("expected nil attestor")
+		}
+	})
+}
+
+// TestOrchestratorGetMeasurementLog tests getting the measurement log.
+func TestOrchestratorGetMeasurementLog(t *testing.T) {
+	t.Run("get measurement log with attestor", func(t *testing.T) {
+		tpm := NewMockTPMProvider()
+		attestor, _ := NewContainerAttestor(tpm)
+
+		config := OrchestratorConfig{
+			Logger:            testLogger(),
+			EnableAttestation: true,
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithAttestor(attestor),
+		)
+		defer orch.Close()
+
+		log := orch.GetMeasurementLog()
+		if log == nil {
+			t.Fatal("expected measurement log, got nil")
+		}
+	})
+
+	t.Run("get measurement log without attestor", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		log := orch.GetMeasurementLog()
+		if log != nil {
+			t.Error("expected nil measurement log")
+		}
+	})
+}
+
+// TestOrchestratorContainerCount tests container counting.
+func TestOrchestratorContainerCount(t *testing.T) {
+	t.Run("count containers", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		// Initial count should be 0
+		if orch.ContainerCount() != 0 {
+			t.Errorf("expected 0 containers, got %d", orch.ContainerCount())
+		}
+
+		// Create some containers
+		for i := 0; i < 3; i++ {
+			spec := &OrchestratorContainerSpec{
+				Name:  "count-test-" + string(rune('a'+i)),
+				Image: "alpine:latest",
+			}
+			orch.Create(context.Background(), spec)
+		}
+
+		if orch.ContainerCount() != 3 {
+			t.Errorf("expected 3 containers, got %d", orch.ContainerCount())
+		}
+	})
+}
+
+// TestOrchestratorString tests string representation.
+func TestOrchestratorString(t *testing.T) {
+	t.Run("string representation", func(t *testing.T) {
+		config := OrchestratorConfig{
+			Logger:            testLogger(),
+			EnableAttestation: true,
+			EnablePolicy:      true,
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		str := orch.String()
+		if str == "" {
+			t.Error("expected non-empty string")
+		}
+		// Should contain key information
+		if !containsString(str, "attestation=true") {
+			t.Error("expected string to contain attestation status")
+		}
+		if !containsString(str, "policy=true") {
+			t.Error("expected string to contain policy status")
+		}
+	})
+}
+
+// containsString is a helper to check if a string contains a substring.
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
+}
+
+func containsSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+// TestOrchestratorWithLogger tests the logger option.
+func TestOrchestratorWithLogger(t *testing.T) {
+	t.Run("with custom logger", func(t *testing.T) {
+		customLogger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		config := OrchestratorConfig{
+			Logger: testLogger(),
+		}
+		podman := NewMockPodmanBackend()
+		orch, err := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithOrchestratorLogger(customLogger),
+		)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		defer orch.Close()
+	})
+}
+
+// TestOrchestratorRemoveWithAttestation tests removal with attestation.
+func TestOrchestratorRemoveWithAttestation(t *testing.T) {
+	t.Run("remove with attestation recording", func(t *testing.T) {
+		tpm := NewMockTPMProvider()
+		attestor, _ := NewContainerAttestor(tpm)
+
+		config := OrchestratorConfig{
+			Logger:            testLogger(),
+			EnableAttestation: true,
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithAttestor(attestor),
+		)
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "attested-remove",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+		tpm.extendCalled = 0 // Reset counter
+
+		err := orch.Remove(context.Background(), container.ID, false)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if tpm.extendCalled != 1 {
+			t.Errorf("expected extendCalled=1 for remove event, got %d", tpm.extendCalled)
+		}
+	})
+}
+
+// TestOrchestratorRemoveWithNetwork tests removal with network teardown.
+func TestOrchestratorRemoveWithNetwork(t *testing.T) {
+	t.Run("remove with SDN network teardown", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		network := NewMockLifecycleNetworkManager()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithLifecycleNetworkManager(network),
+		)
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "sdn-remove",
+			Image: "alpine:latest",
+			Network: ContainerNetworkConfig{
+				Mode: NetworkModeSDN,
+				SDN: &SDNConfig{
+					Bridge: "br-test",
+					VLANID: 100,
+				},
+			},
+		}
+		container, _ := orch.Create(context.Background(), spec)
+		orch.Start(context.Background(), container.ID)
+
+		err := orch.Remove(context.Background(), container.ID, true) // Force remove running
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if network.teardownCalled < 1 {
+			t.Errorf("expected teardownCalled>=1, got %d", network.teardownCalled)
+		}
+	})
+}
+
+// TestOrchestratorLogsErrors tests log retrieval error cases.
+func TestOrchestratorLogsErrors(t *testing.T) {
+	t.Run("logs with empty container ID", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		_, err := orch.Logs(context.Background(), "", LogOptions{})
+		if err == nil {
+			t.Fatal("expected error for empty container ID")
+		}
+		if !errors.Is(err, ErrInvalidContainerID) {
+			t.Errorf("expected ErrInvalidContainerID, got %v", err)
+		}
+	})
+
+	t.Run("logs on closed orchestrator", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		orch.Close()
+
+		_, err := orch.Logs(context.Background(), "test-id", LogOptions{})
+		if err == nil {
+			t.Fatal("expected error on closed orchestrator")
+		}
+		if !errors.Is(err, ErrOrchestratorClosed) {
+			t.Errorf("expected ErrOrchestratorClosed, got %v", err)
+		}
+	})
+
+	t.Run("logs for nonexistent container", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		_, err := orch.Logs(context.Background(), "nonexistent", LogOptions{})
+		if err == nil {
+			t.Fatal("expected error for nonexistent container")
+		}
+	})
+}
+
+// TestOrchestratorAttestErrors tests attestation error cases.
+func TestOrchestratorAttestErrors(t *testing.T) {
+	t.Run("attest with empty container ID", func(t *testing.T) {
+		tpm := NewMockTPMProvider()
+		attestor, _ := NewContainerAttestor(tpm)
+
+		config := OrchestratorConfig{
+			Logger:            testLogger(),
+			EnableAttestation: true,
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithAttestor(attestor),
+		)
+		defer orch.Close()
+
+		_, err := orch.Attest(context.Background(), "")
+		if err == nil {
+			t.Fatal("expected error for empty container ID")
+		}
+		if !errors.Is(err, ErrInvalidContainerID) {
+			t.Errorf("expected ErrInvalidContainerID, got %v", err)
+		}
+	})
+
+	t.Run("attest on closed orchestrator", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		orch.Close()
+
+		_, err := orch.Attest(context.Background(), "test-id")
+		if err == nil {
+			t.Fatal("expected error on closed orchestrator")
+		}
+		if !errors.Is(err, ErrOrchestratorClosed) {
+			t.Errorf("expected ErrOrchestratorClosed, got %v", err)
+		}
+	})
+
+	t.Run("attest nonexistent container", func(t *testing.T) {
+		tpm := NewMockTPMProvider()
+		attestor, _ := NewContainerAttestor(tpm)
+
+		config := OrchestratorConfig{
+			Logger:            testLogger(),
+			EnableAttestation: true,
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithAttestor(attestor),
+		)
+		defer orch.Close()
+
+		_, err := orch.Attest(context.Background(), "nonexistent")
+		if err == nil {
+			t.Fatal("expected error for nonexistent container")
+		}
+	})
+}
+
+// TestOrchestratorGetErrors tests get error cases.
+func TestOrchestratorGetErrors(t *testing.T) {
+	t.Run("get with empty ID", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		_, err := orch.Get(context.Background(), "")
+		if err == nil {
+			t.Fatal("expected error for empty ID")
+		}
+		if !errors.Is(err, ErrInvalidContainerID) {
+			t.Errorf("expected ErrInvalidContainerID, got %v", err)
+		}
+	})
+
+	t.Run("get on closed orchestrator", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		orch.Close()
+
+		_, err := orch.Get(context.Background(), "test-id")
+		if err == nil {
+			t.Fatal("expected error on closed orchestrator")
+		}
+		if !errors.Is(err, ErrOrchestratorClosed) {
+			t.Errorf("expected ErrOrchestratorClosed, got %v", err)
+		}
+	})
+}
+
+// TestOrchestratorListErrors tests list error cases.
+func TestOrchestratorListErrors(t *testing.T) {
+	t.Run("list on closed orchestrator", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		orch.Close()
+
+		_, err := orch.List(context.Background(), ListOptions{})
+		if err == nil {
+			t.Fatal("expected error on closed orchestrator")
+		}
+		if !errors.Is(err, ErrOrchestratorClosed) {
+			t.Errorf("expected ErrOrchestratorClosed, got %v", err)
+		}
+	})
+}
+
+// TestOrchestratorRemoveErrors tests remove error cases.
+func TestOrchestratorRemoveErrors(t *testing.T) {
+	t.Run("remove with empty ID", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		err := orch.Remove(context.Background(), "", false)
+		if err == nil {
+			t.Fatal("expected error for empty ID")
+		}
+		if !errors.Is(err, ErrInvalidContainerID) {
+			t.Errorf("expected ErrInvalidContainerID, got %v", err)
+		}
+	})
+
+	t.Run("remove on closed orchestrator", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		orch.Close()
+
+		err := orch.Remove(context.Background(), "test-id", false)
+		if err == nil {
+			t.Fatal("expected error on closed orchestrator")
+		}
+		if !errors.Is(err, ErrOrchestratorClosed) {
+			t.Errorf("expected ErrOrchestratorClosed, got %v", err)
+		}
+	})
+}
+
+// TestOrchestratorStopErrors tests stop error cases.
+func TestOrchestratorStopErrors(t *testing.T) {
+	t.Run("stop on closed orchestrator", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		orch.Close()
+
+		err := orch.Stop(context.Background(), "test-id", time.Second)
+		if err == nil {
+			t.Fatal("expected error on closed orchestrator")
+		}
+		if !errors.Is(err, ErrOrchestratorClosed) {
+			t.Errorf("expected ErrOrchestratorClosed, got %v", err)
+		}
+	})
+}
+
+// TestOrchestratorStartErrors tests start error cases.
+func TestOrchestratorStartErrors(t *testing.T) {
+	t.Run("start on closed orchestrator", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		orch.Close()
+
+		err := orch.Start(context.Background(), "test-id")
+		if err == nil {
+			t.Fatal("expected error on closed orchestrator")
+		}
+		if !errors.Is(err, ErrOrchestratorClosed) {
+			t.Errorf("expected ErrOrchestratorClosed, got %v", err)
+		}
+	})
+}
+
+// TestOrchestratorGetFromPodman tests retrieval from Podman backend when not cached.
+func TestOrchestratorGetFromPodman(t *testing.T) {
+	t.Run("get from podman backend", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		// Add a container directly to podman mock, bypassing orchestrator cache
+		podman.containers["direct-container"] = &PodmanContainer{
+			ID:    "direct-container",
+			Name:  "direct-name",
+			Image: "alpine:latest",
+			State: "running",
+		}
+
+		// Get should find it via Podman inspect
+		container, err := orch.Get(context.Background(), "direct-container")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if container.ID != "direct-container" {
+			t.Errorf("expected ID 'direct-container', got %q", container.ID)
+		}
+		if container.Name != "direct-name" {
+			t.Errorf("expected name 'direct-name', got %q", container.Name)
+		}
+	})
+}
+
+// TestOrchestratorStopWithNetworkTeardown tests stop with network cleanup.
+func TestOrchestratorStopWithNetworkTeardown(t *testing.T) {
+	t.Run("stop tears down SDN network", func(t *testing.T) {
+		config := OrchestratorConfig{
+			Logger:             testLogger(),
+			DefaultStopTimeout: 10 * time.Second,
+		}
+		podman := NewMockPodmanBackend()
+		network := NewMockLifecycleNetworkManager()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithLifecycleNetworkManager(network),
+		)
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "sdn-stop-test",
+			Image: "alpine:latest",
+			Network: ContainerNetworkConfig{
+				Mode: NetworkModeSDN,
+				SDN: &SDNConfig{
+					Bridge: "br-test",
+					VLANID: 100,
+				},
+			},
+		}
+		container, _ := orch.Create(context.Background(), spec)
+		orch.Start(context.Background(), container.ID)
+		network.setupCalled = 0 // Reset
+
+		err := orch.Stop(context.Background(), container.ID, 5*time.Second)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if network.teardownCalled < 1 {
+			t.Errorf("expected teardownCalled>=1, got %d", network.teardownCalled)
+		}
+	})
+}
+
+// TestConvertPodmanContainerToContainer tests container conversion.
+func TestConvertPodmanContainerToContainer(t *testing.T) {
+	now := time.Now()
+	later := now.Add(time.Hour)
+
+	t.Run("convert full container", func(t *testing.T) {
+		podman := &PodmanContainer{
+			ID:         "test-id-123",
+			Name:       "test-container",
+			Image:      "alpine:latest",
+			State:      "running",
+			Labels:     map[string]string{"app": "test"},
+			CreatedAt:  now,
+			StartedAt:  &now,
+			FinishedAt: &later,
+		}
+
+		container := convertPodmanContainerToContainer(podman)
+
+		if container.ID != "test-id-123" {
+			t.Errorf("expected ID 'test-id-123', got %q", container.ID)
+		}
+		if container.Name != "test-container" {
+			t.Errorf("expected name 'test-container', got %q", container.Name)
+		}
+		if container.State != StateRunning {
+			t.Errorf("expected state running, got %q", container.State)
+		}
+		if container.Labels["app"] != "test" {
+			t.Error("expected labels to be copied")
+		}
+	})
+
+	t.Run("convert container with nil times", func(t *testing.T) {
+		podman := &PodmanContainer{
+			ID:        "test-id",
+			Name:      "test",
+			Image:     "alpine",
+			State:     "created",
+			CreatedAt: now,
+		}
+
+		container := convertPodmanContainerToContainer(podman)
+
+		if !container.StartedAt.IsZero() {
+			t.Error("expected nil StartedAt")
+		}
+		if !container.FinishedAt.IsZero() {
+			t.Error("expected nil FinishedAt")
+		}
+	})
+}
+
+// TestOrchestratorCreateWithNetworkSetupError tests network setup error handling.
+func TestOrchestratorCreateWithNetworkSetupError(t *testing.T) {
+	t.Run("create continues if network setup fails", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		network := NewMockLifecycleNetworkManager()
+		network.setupError = errors.New("network setup failed")
+
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithLifecycleNetworkManager(network),
+		)
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "network-error-test",
+			Image: "alpine:latest",
+			Network: ContainerNetworkConfig{
+				Mode: NetworkModeSDN,
+				SDN: &SDNConfig{
+					Bridge: "br-test",
+					VLANID: 100,
+				},
+			},
+		}
+
+		container, err := orch.Create(context.Background(), spec)
+		if err != nil {
+			t.Fatalf("expected no error on create, got %v", err)
+		}
+		if container == nil {
+			t.Fatal("expected container, got nil")
+		}
+	})
+}
+
+// TestOrchestratorRemoveNonexistent tests removing non-existent container.
+func TestOrchestratorRemoveNonexistent(t *testing.T) {
+	t.Run("remove non-existent container", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		err := orch.Remove(context.Background(), "nonexistent-id", false)
+		if err == nil {
+			t.Fatal("expected error for nonexistent container")
+		}
+	})
+}
+
+// TestOrchestratorStopNonexistent tests stopping non-existent container.
+func TestOrchestratorStopNonexistent(t *testing.T) {
+	t.Run("stop non-existent container", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		err := orch.Stop(context.Background(), "nonexistent-id", time.Second)
+		if err == nil {
+			t.Fatal("expected error for nonexistent container")
+		}
+	})
+}
+
+// TestOrchestratorCloseWithContainers tests closing orchestrator with active containers.
+func TestOrchestratorCloseWithContainers(t *testing.T) {
+	t.Run("close with running containers", func(t *testing.T) {
+		config := OrchestratorConfig{
+			Logger:             testLogger(),
+			DefaultStopTimeout: time.Second,
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+
+		// Create and start some containers
+		for i := 0; i < 3; i++ {
+			spec := &OrchestratorContainerSpec{
+				Name:  "close-test-" + string(rune('a'+i)),
+				Image: "alpine:latest",
+			}
+			container, _ := orch.Create(context.Background(), spec)
+			orch.Start(context.Background(), container.ID)
+		}
+
+		// Close should succeed even with running containers
+		err := orch.Close()
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if orch.IsConnected() {
+			t.Error("expected orchestrator to be disconnected")
+		}
+	})
+}
+
+// TestOrchestratorPullImageError tests image pull error handling.
+func TestOrchestratorPullImageError(t *testing.T) {
+	t.Run("pull fails with podman error", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		podman.pullError = errors.New("pull failed")
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		err := orch.PullImage(context.Background(), "alpine:latest", PullOptions{})
+		if err == nil {
+			t.Fatal("expected error from failed pull")
+		}
+	})
+}
+
+// TestOrchestratorCreatePodmanError tests create with podman error.
+func TestOrchestratorCreatePodmanError(t *testing.T) {
+	t.Run("create fails with podman error", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		podman.createError = errors.New("create failed")
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "create-error-test",
+			Image: "alpine:latest",
+		}
+
+		_, err := orch.Create(context.Background(), spec)
+		if err == nil {
+			t.Fatal("expected error from failed create")
+		}
+	})
+}
+
+// TestOrchestratorStartPodmanError tests start with podman error.
+func TestOrchestratorStartPodmanError(t *testing.T) {
+	t.Run("start fails with podman error", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "start-error-test",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+
+		// Now set error after container is created
+		podman.startError = errors.New("start failed")
+
+		err := orch.Start(context.Background(), container.ID)
+		if err == nil {
+			t.Fatal("expected error from failed start")
+		}
+	})
+}
+
+// TestOrchestratorStopPodmanError tests stop with podman error.
+func TestOrchestratorStopPodmanError(t *testing.T) {
+	t.Run("stop fails with podman error", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "stop-error-test",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+		orch.Start(context.Background(), container.ID)
+
+		// Now set error after container is started
+		podman.stopError = errors.New("stop failed")
+
+		err := orch.Stop(context.Background(), container.ID, time.Second)
+		if err == nil {
+			t.Fatal("expected error from failed stop")
+		}
+	})
+}
+
+// TestOrchestratorRemovePodmanError tests remove with podman error.
+func TestOrchestratorRemovePodmanError(t *testing.T) {
+	t.Run("remove fails with podman error", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "remove-error-test",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+
+		// Now set error after container is created
+		podman.removeError = errors.New("remove failed")
+
+		err := orch.Remove(context.Background(), container.ID, false)
+		if err == nil {
+			t.Fatal("expected error from failed remove")
+		}
+	})
+}
+
+// TestOrchestratorLogsPodmanError tests logs with podman error.
+func TestOrchestratorLogsPodmanError(t *testing.T) {
+	t.Run("logs fails with podman error", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "logs-error-test",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+		orch.Start(context.Background(), container.ID)
+
+		// Now set error
+		podman.logsError = errors.New("logs failed")
+
+		_, err := orch.Logs(context.Background(), container.ID, LogOptions{})
+		if err == nil {
+			t.Fatal("expected error from failed logs")
+		}
+	})
+}
+
+// TestOrchestratorListPodmanError tests list with podman error.
+func TestOrchestratorListPodmanError(t *testing.T) {
+	t.Run("list fails with podman error", func(t *testing.T) {
+		config := OrchestratorConfig{Logger: testLogger()}
+		podman := NewMockPodmanBackend()
+		podman.listError = errors.New("list failed")
+		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
+		defer orch.Close()
+
+		_, err := orch.List(context.Background(), ListOptions{All: true})
+		if err == nil {
+			t.Fatal("expected error from failed list")
+		}
+	})
+}
+
+// TestOrchestratorAttestPodmanError tests attestation with TPM error.
+func TestOrchestratorAttestPodmanError(t *testing.T) {
+	t.Run("attest fails with TPM error", func(t *testing.T) {
+		tpm := NewMockTPMProvider()
+		tpm.quoteError = errors.New("quote failed")
+		attestor, _ := NewContainerAttestor(tpm)
+
+		config := OrchestratorConfig{
+			Logger:            testLogger(),
+			EnableAttestation: true,
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithAttestor(attestor),
+		)
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "attest-error-test",
+			Image: "alpine:latest",
+		}
+		container, _ := orch.Create(context.Background(), spec)
+
+		_, err := orch.Attest(context.Background(), container.ID)
+		if err == nil {
+			t.Fatal("expected error from failed attestation")
+		}
+	})
+}
+
+// TestOrchestratorPolicyEvaluatorError tests policy evaluation error.
+func TestOrchestratorPolicyEvaluatorError(t *testing.T) {
+	t.Run("create fails with policy evaluator error", func(t *testing.T) {
+		policy := NewMockLifecyclePolicyEvaluator(false)
+		policy.evalError = errors.New("policy evaluation failed")
+
+		config := OrchestratorConfig{
+			Logger:       testLogger(),
+			EnablePolicy: true,
+			PolicyName:   "test-policy",
+		}
+		podman := NewMockPodmanBackend()
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman),
+			WithLifecyclePolicyEvaluator(policy),
+		)
+		defer orch.Close()
+
+		spec := &OrchestratorContainerSpec{
+			Name:  "policy-error-test",
+			Image: "alpine:latest",
+		}
+
+		_, err := orch.Create(context.Background(), spec)
+		if err == nil {
+			t.Fatal("expected error from failed policy evaluation")
+		}
+	})
+}

@@ -1,0 +1,1790 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+
+package daemon
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"errors"
+	"math/big"
+	"net"
+	"testing"
+	"time"
+
+	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
+	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// =============================================================================
+// Untested Error Types - Error() and Unwrap() coverage
+// =============================================================================
+
+func TestCoverageFinalUncoveredErrors(t *testing.T) {
+	t.Parallel()
+
+	sentinel := errors.New("sentinel")
+
+	tests := []struct {
+		name     string
+		err      error
+		contains string
+	}{
+		// Compute adapter errors
+		{"ErrNilOrchestrator", ErrNilOrchestrator{}, "orchestrator cannot be nil"},
+		{"ErrLogsNotSupported", ErrLogsNotSupported{}, "container logs operation not supported"},
+		{"ErrAttestNotSupported", ErrAttestNotSupported{}, "container attestation operation not supported"},
+		{"ErrVerifyAttestationNotSupported", ErrVerifyAttestationNotSupported{}, "verify attestation operation not supported"},
+		{"ErrEvaluatePolicyNotSupported", ErrEvaluatePolicyNotSupported{}, "evaluate policy operation not supported"},
+		{"ErrPullImageNotSupported", ErrPullImageNotSupported{}, "pull image operation not supported"},
+		{"ErrVerifyImageNotSupported", ErrVerifyImageNotSupported{}, "verify image operation not supported"},
+
+		// Container errors
+		{"ErrContainerServiceNotAvailable", ErrContainerServiceNotAvailable{}, "container service not available"},
+		{"ErrContainerNotFound", ErrContainerNotFound{ContainerID: "c-1"}, "container not found: c-1"},
+		{"ErrContainerOperationFailed", ErrContainerOperationFailed{Operation: "start", Cause: sentinel}, "container operation start failed"},
+		{"ErrContainerLogsNotSupported", ErrContainerLogsNotSupported{}, "container logs not supported"},
+		{"ErrContainerAttestNotSupported", ErrContainerAttestNotSupported{}, "container attestation not implemented"},
+		{"ErrContainerInvalidParameter", ErrContainerInvalidParameter{Parameter: "image", Reason: "empty"}, "invalid container parameter image: empty"},
+
+		// Authentication/Token errors
+		{"ErrQuicBaaSServiceUnavailable", ErrQuicBaaSServiceUnavailable{}, "QuicBaaS service not available"},
+		{"ErrTokenValidationFailed_with_cause", ErrTokenValidationFailed{Cause: sentinel}, "token validation failed: sentinel"},
+		{"ErrTokenValidationFailed_nil_cause", ErrTokenValidationFailed{}, "token validation failed"},
+
+		// Overlay/Gateway errors
+		{"ErrOverlayServiceNotAvailable", ErrOverlayServiceNotAvailable{}, "overlay network service not available"},
+		{"ErrOverlayOperationNotImplemented", ErrOverlayOperationNotImplemented{Operation: "create"}, "overlay operation not implemented: create"},
+		{"ErrGatewayServiceNotAvailable", ErrGatewayServiceNotAvailable{}, "gateway service not available"},
+		{"ErrGatewayOperationNotImplemented", ErrGatewayOperationNotImplemented{Operation: "delete"}, "gateway operation not implemented: delete"},
+
+		// TPM errors
+		{"ErrTPMOperationNotImplemented", ErrTPMOperationNotImplemented{Operation: "seal"}, "TPM operation not implemented: seal"},
+		{"ErrTPMInvalidSize", ErrTPMInvalidSize{Max: 64, Requested: 128}, "requested size 128 exceeds maximum 64 bytes"},
+
+		// mTLS errors
+		{"ErrMTLSNoPeerInfo", ErrMTLSNoPeerInfo{}, ""},
+		{"ErrMTLSNoTLSInfo", ErrMTLSNoTLSInfo{}, ""},
+		{"ErrMTLSNoCertificates", ErrMTLSNoCertificates{}, ""},
+
+		// IAM adapter errors
+		{"ErrStreamingNotSupported", ErrStreamingNotSupported{}, "streaming RPCs are not supported"},
+		{"ErrPEPClientNotAvailable", ErrPEPClientNotAvailable{}, ""},
+
+		// TPM2/IDevID errors
+		{"ErrInvalidCertificatePEM", ErrInvalidCertificatePEM{}, "invalid PEM-encoded certificate"},
+		{"ErrTPM2ServiceNotAvailable", ErrTPM2ServiceNotAvailable{}, "TPM2 service not available"},
+		{"ErrIDevIDNotFound", ErrIDevIDNotFound{}, "IDevID not found in TPM"},
+		{"ErrIAKNotFound", ErrIAKNotFound{}, "IAK not found in TPM"},
+		{"ErrIDevIDCertificateNotFound", ErrIDevIDCertificateNotFound{}, "IDevID certificate not installed"},
+		{"ErrIAKCertificateNotFound", ErrIAKCertificateNotFound{}, "IAK certificate not installed"},
+		{"ErrTPM2OperationFailed", ErrTPM2OperationFailed{Operation: "read", Cause: sentinel}, "TPM2 operation read failed"},
+
+		// KMS errors
+		{"ErrKMSOperationNotImplemented", ErrKMSOperationNotImplemented{Operation: "ImportKey"}, "KMS operation not implemented: ImportKey"},
+
+		// Service unavailable
+		{"ErrServiceUnavailable", ErrServiceUnavailable{Service: "ca"}, "service unavailable: ca"},
+
+		// Device errors
+		{"ErrDeviceOperationFailed", ErrDeviceOperationFailed{Operation: "provision", Cause: sentinel}, "device operation provision failed"},
+		{"ErrDeviceProfileServiceNotAvailable", ErrDeviceProfileServiceNotAvailable{}, "device: profile service not available"},
+
+		// TLS config
+		{"ErrTLSConfigFailed", ErrTLSConfigFailed{Reason: "missing cert"}, "tls config failed: missing cert"},
+
+		// Tenant DEK errors
+		{"ErrTenantDEKProvision", ErrTenantDEKProvision{TenantID: "t1", Cause: sentinel}, "failed to provision DEK for tenant t1"},
+		{"ErrTenantDEKDeprovision", ErrTenantDEKDeprovision{TenantID: "t2", Cause: sentinel}, "failed to deprovision DEK for tenant t2"},
+
+		// PXE errors
+		{"ErrPXEDeviceNotFound_by_id", ErrPXEDeviceNotFound{DeviceID: "d1"}, "PXE device not found: d1"},
+		{"ErrPXEDeviceNotFound_by_mac", ErrPXEDeviceNotFound{MACAddress: "aa:bb:cc:dd:ee:ff"}, "PXE device not found with MAC: aa:bb:cc:dd:ee:ff"},
+		{"ErrPXERegistrationFailed", ErrPXERegistrationFailed{MACAddress: "00:11:22:33:44:55", Cause: sentinel}, "PXE device registration failed"},
+		{"ErrPXEInvalidState", ErrPXEInvalidState{State: "bad"}, "invalid PXE provisioning state: bad"},
+		{"ErrPXEStateTransitionFailed", ErrPXEStateTransitionFailed{DeviceID: "d1", FromState: "new", ToState: "enrolled", Cause: sentinel}, "PXE state transition failed"},
+		{"ErrPXEEnrollmentFailed", ErrPXEEnrollmentFailed{DeviceID: "d1", Cause: sentinel}, "PXE device enrollment failed"},
+		{"ErrPXEAuthorizationFailed", ErrPXEAuthorizationFailed{DeviceID: "d1", Cause: sentinel}, "PXE device authorization failed"},
+		{"ErrPXEQuarantineFailed", ErrPXEQuarantineFailed{DeviceID: "d1", Cause: sentinel}, "PXE device quarantine failed"},
+		{"ErrPXERetryFailed", ErrPXERetryFailed{DeviceID: "d1", Cause: sentinel}, "PXE device retry failed"},
+		{"ErrPXEServiceStartFailed", ErrPXEServiceStartFailed{Cause: sentinel}, "PXE service failed to start"},
+		{"ErrPXEServiceStopFailed", ErrPXEServiceStopFailed{Cause: sentinel}, "PXE service failed to stop"},
+
+		// Tenant errors
+		{"ErrTenantNotFound", ErrTenantNotFound{TenantID: "t1"}, "tenant not found: t1"},
+		{"ErrTenantNotFoundByName", ErrTenantNotFoundByName{Name: "acme"}, "tenant not found with name: acme"},
+		{"ErrTenantCreateFailed", ErrTenantCreateFailed{Name: "acme", Cause: sentinel}, "tenant creation failed for acme"},
+		{"ErrTenantUpdateFailed", ErrTenantUpdateFailed{TenantID: "t1", Cause: sentinel}, "tenant update failed for t1"},
+		{"ErrTenantDeleteFailed", ErrTenantDeleteFailed{TenantID: "t1", Cause: sentinel}, "tenant deletion failed for t1"},
+		{"ErrTenantSuspendFailed", ErrTenantSuspendFailed{TenantID: "t1", Cause: sentinel}, "tenant suspension failed for t1"},
+		{"ErrTenantResumeFailed", ErrTenantResumeFailed{TenantID: "t1", Cause: sentinel}, "tenant resume failed for t1"},
+		{"ErrTenantQuotaUpdateFailed", ErrTenantQuotaUpdateFailed{TenantID: "t1", Cause: sentinel}, "tenant quota update failed for t1"},
+		{"ErrTenantBridgeNotFound", ErrTenantBridgeNotFound{TenantID: "t1"}, "tenant bridge not found for: t1"},
+		{"ErrTenantSyncFailed", ErrTenantSyncFailed{Cause: sentinel}, "tenant sync failed"},
+		{"ErrTenantDEKRotationFailed", ErrTenantDEKRotationFailed{TenantID: "t1", Cause: sentinel}, "tenant DEK rotation failed for t1"},
+		{"ErrTenantDEKNotFound", ErrTenantDEKNotFound{TenantID: "t1"}, "tenant DEK not found for: t1"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			msg := tc.err.Error()
+			if tc.contains != "" && !containsStr(msg, tc.contains) {
+				t.Errorf("Error() = %q, expected to contain %q", msg, tc.contains)
+			}
+			if msg == "" {
+				t.Errorf("Error() returned empty string for %T", tc.err)
+			}
+		})
+	}
+}
+
+func TestCoverageFinalUnwrapMethods(t *testing.T) {
+	t.Parallel()
+
+	sentinel := errors.New("inner")
+
+	unwrapCases := []struct {
+		name  string
+		err   error
+		inner error
+	}{
+		{"ErrTokenValidationFailed", ErrTokenValidationFailed{Cause: sentinel}, sentinel},
+		{"ErrTPM2OperationFailed", ErrTPM2OperationFailed{Operation: "x", Cause: sentinel}, sentinel},
+		{"ErrContainerOperationFailed", ErrContainerOperationFailed{Operation: "x", Cause: sentinel}, sentinel},
+		{"ErrDeviceOperationFailed", ErrDeviceOperationFailed{Operation: "x", Cause: sentinel}, sentinel},
+		{"ErrTenantDEKProvision", ErrTenantDEKProvision{TenantID: "t", Cause: sentinel}, sentinel},
+		{"ErrTenantDEKDeprovision", ErrTenantDEKDeprovision{TenantID: "t", Cause: sentinel}, sentinel},
+		{"ErrPXERegistrationFailed", ErrPXERegistrationFailed{MACAddress: "m", Cause: sentinel}, sentinel},
+		{"ErrPXEStateTransitionFailed", ErrPXEStateTransitionFailed{DeviceID: "d", FromState: "a", ToState: "b", Cause: sentinel}, sentinel},
+		{"ErrPXEEnrollmentFailed", ErrPXEEnrollmentFailed{DeviceID: "d", Cause: sentinel}, sentinel},
+		{"ErrPXEAuthorizationFailed", ErrPXEAuthorizationFailed{DeviceID: "d", Cause: sentinel}, sentinel},
+		{"ErrPXEQuarantineFailed", ErrPXEQuarantineFailed{DeviceID: "d", Cause: sentinel}, sentinel},
+		{"ErrPXERetryFailed", ErrPXERetryFailed{DeviceID: "d", Cause: sentinel}, sentinel},
+		{"ErrPXEServiceStartFailed", ErrPXEServiceStartFailed{Cause: sentinel}, sentinel},
+		{"ErrPXEServiceStopFailed", ErrPXEServiceStopFailed{Cause: sentinel}, sentinel},
+		{"ErrTenantCreateFailed", ErrTenantCreateFailed{Name: "n", Cause: sentinel}, sentinel},
+		{"ErrTenantUpdateFailed", ErrTenantUpdateFailed{TenantID: "t", Cause: sentinel}, sentinel},
+		{"ErrTenantDeleteFailed", ErrTenantDeleteFailed{TenantID: "t", Cause: sentinel}, sentinel},
+		{"ErrTenantSuspendFailed", ErrTenantSuspendFailed{TenantID: "t", Cause: sentinel}, sentinel},
+		{"ErrTenantResumeFailed", ErrTenantResumeFailed{TenantID: "t", Cause: sentinel}, sentinel},
+		{"ErrTenantQuotaUpdateFailed", ErrTenantQuotaUpdateFailed{TenantID: "t", Cause: sentinel}, sentinel},
+		{"ErrTenantSyncFailed", ErrTenantSyncFailed{Cause: sentinel}, sentinel},
+		{"ErrTenantDEKRotationFailed", ErrTenantDEKRotationFailed{TenantID: "t", Cause: sentinel}, sentinel},
+	}
+
+	for _, tc := range unwrapCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			unwrapper, ok := tc.err.(interface{ Unwrap() error })
+			if !ok {
+				t.Fatalf("%T does not implement Unwrap()", tc.err)
+			}
+			if unwrapper.Unwrap() != tc.inner {
+				t.Errorf("Unwrap() = %v, want %v", unwrapper.Unwrap(), tc.inner)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// QUIC Service Handler - normalize/convert helpers
+// =============================================================================
+
+func TestCoverageFinalNormalizeSystemStatusEnum(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"SYSTEM_STATUS_READY", "ready"},
+		{"SYSTEM_STATUS_INITIALIZING", "initializing"},
+		{"SYSTEM_STATUS_DEGRADED", "degraded"},
+		{"SYSTEM_STATUS_UNAVAILABLE", "unavailable"},
+		{"SYSTEM_STATUS_SHUTTING_DOWN", "shutting_down"},
+		{"SYSTEM_STATUS_CUSTOM", "custom"},
+		{"unknown", "unknown"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
+			got := normalizeSystemStatusEnum(tc.input)
+			if got != tc.expected {
+				t.Errorf("normalizeSystemStatusEnum(%q) = %q, want %q", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestCoverageFinalNormalizeServiceStatusEnum(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"SERVICE_STATUS_RUNNING", "running"},
+		{"SERVICE_STATUS_STOPPED", "stopped"},
+		{"SERVICE_STATUS_STARTING", "starting"},
+		{"SERVICE_STATUS_STOPPING", "stopping"},
+		{"SERVICE_STATUS_ERROR", "error"},
+		{"SERVICE_STATUS_CUSTOM", "custom"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
+			got := normalizeServiceStatusEnum(tc.input)
+			if got != tc.expected {
+				t.Errorf("normalizeServiceStatusEnum(%q) = %q, want %q", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestCoverageFinalBuildProtocolInfo(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid_address", func(t *testing.T) {
+		t.Parallel()
+		info := buildProtocolInfo("gRPC", true, "0.0.0.0:10443", true)
+		if info.Name != "gRPC" {
+			t.Errorf("Name = %q, want gRPC", info.Name)
+		}
+		if info.Port != 10443 {
+			t.Errorf("Port = %d, want 10443", info.Port)
+		}
+		if info.Status != "enabled" {
+			t.Errorf("Status = %q, want enabled", info.Status)
+		}
+		if !info.TLS {
+			t.Error("TLS should be true")
+		}
+	})
+
+	t.Run("invalid_address", func(t *testing.T) {
+		t.Parallel()
+		info := buildProtocolInfo("Unix", false, "/run/sock", false)
+		if info.Port != 0 {
+			t.Errorf("Port = %d, want 0", info.Port)
+		}
+		if info.Status != "disabled" {
+			t.Errorf("Status = %q, want disabled", info.Status)
+		}
+	})
+}
+
+func TestCoverageFinalProtocolStatus(t *testing.T) {
+	t.Parallel()
+
+	if protocolStatus(true) != "enabled" {
+		t.Error("protocolStatus(true) should be enabled")
+	}
+	if protocolStatus(false) != "disabled" {
+		t.Error("protocolStatus(false) should be disabled")
+	}
+}
+
+func TestCoverageFinalConvertServiceInfoToQUIC(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil_input", func(t *testing.T) {
+		t.Parallel()
+		result := convertServiceInfoToQUIC(nil)
+		if result.Name != "" {
+			t.Errorf("expected empty name for nil input, got %q", result.Name)
+		}
+	})
+
+	t.Run("full_info", func(t *testing.T) {
+		t.Parallel()
+		now := timestamppb.Now()
+		info := &platformv1.ServiceInfo{
+			Name:          "tpm",
+			Status:        platformv1.ServiceStatus_SERVICE_STATUS_RUNNING,
+			StartedAt:     now,
+			UptimeSeconds: 3600,
+			Metadata: map[string]string{
+				"start_count": "5",
+				"stop_count":  "2",
+				"last_error":  "timeout",
+			},
+		}
+		result := convertServiceInfoToQUIC(info)
+		if result.Name != "tpm" {
+			t.Errorf("Name = %q, want tpm", result.Name)
+		}
+		if result.Status != "running" {
+			t.Errorf("Status = %q, want running", result.Status)
+		}
+		if result.StartCount != 5 {
+			t.Errorf("StartCount = %d, want 5", result.StartCount)
+		}
+		if result.StopCount != 2 {
+			t.Errorf("StopCount = %d, want 2", result.StopCount)
+		}
+		if result.LastError != "timeout" {
+			t.Errorf("LastError = %q, want timeout", result.LastError)
+		}
+		if result.StartedAt == 0 {
+			t.Error("StartedAt should not be 0")
+		}
+	})
+
+	t.Run("no_metadata", func(t *testing.T) {
+		t.Parallel()
+		info := &platformv1.ServiceInfo{
+			Name:   "sdn",
+			Status: platformv1.ServiceStatus_SERVICE_STATUS_STOPPED,
+		}
+		result := convertServiceInfoToQUIC(info)
+		if result.StartCount != 0 {
+			t.Errorf("StartCount = %d, want 0", result.StartCount)
+		}
+	})
+}
+
+// =============================================================================
+// KMS Conversion Helpers
+// =============================================================================
+
+func TestCoverageFinalKeyAlgorithmToString(t *testing.T) {
+	t.Parallel()
+	got := keyAlgorithmToString(pb.KeyAlgorithm_KEY_ALG_RSA_2048)
+	if got == "" {
+		t.Error("keyAlgorithmToString returned empty string")
+	}
+}
+
+func TestCoverageFinalKeyStatusToString(t *testing.T) {
+	t.Parallel()
+	got := keyStatusToString(pb.KeyStatus_KEY_STATUS_ENABLED)
+	if got == "" {
+		t.Error("keyStatusToString returned empty string")
+	}
+}
+
+func TestCoverageFinalWrappingAlgorithmToString(t *testing.T) {
+	t.Parallel()
+	got := wrappingAlgorithmToString(pb.WrappingAlgorithm_WRAP_ALG_AES_KW)
+	if got == "" {
+		t.Error("wrappingAlgorithmToString returned empty string")
+	}
+}
+
+func TestCoverageFinalExportFormatToString(t *testing.T) {
+	t.Parallel()
+	got := exportFormatToString(pb.ExportFormat_EXPORT_FORMAT_PEM)
+	if got == "" {
+		t.Error("exportFormatToString returned empty string")
+	}
+}
+
+func TestCoverageFinalHashAlgorithmToString(t *testing.T) {
+	t.Parallel()
+	got := hashAlgorithmToString(pb.HashAlgorithm_HASH_ALG_SHA256)
+	if got == "" {
+		t.Error("hashAlgorithmToString returned empty string")
+	}
+}
+
+func TestCoverageFinalKeyUsagesToStrings(t *testing.T) {
+	t.Parallel()
+
+	usages := []pb.KeyUsage{
+		pb.KeyUsage_KEY_USAGE_ENCRYPT,
+		pb.KeyUsage_KEY_USAGE_SIGN,
+	}
+	result := keyUsagesToStrings(usages)
+	if len(result) != 2 {
+		t.Errorf("expected 2 strings, got %d", len(result))
+	}
+}
+
+func TestCoverageFinalStringToKeyUsage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input    string
+		expected pb.KeyUsage
+	}{
+		{"ENCRYPT", pb.KeyUsage_KEY_USAGE_ENCRYPT},
+		{"DECRYPT", pb.KeyUsage_KEY_USAGE_DECRYPT},
+		{"SIGN", pb.KeyUsage_KEY_USAGE_SIGN},
+		{"VERIFY", pb.KeyUsage_KEY_USAGE_VERIFY},
+		{"WRAP", pb.KeyUsage_KEY_USAGE_WRAP_KEY},
+		{"DERIVE", pb.KeyUsage_KEY_USAGE_DERIVE_KEY},
+		{"MAC", pb.KeyUsage_KEY_USAGE_GENERATE_MAC},
+		{"VERIFY_MAC", pb.KeyUsage_KEY_USAGE_VERIFY_MAC},
+		{"unknown", pb.KeyUsage_KEY_USAGE_UNSPECIFIED},
+		{"key-usage-encrypt", pb.KeyUsage_KEY_USAGE_ENCRYPT},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
+			got := stringToKeyUsage(tc.input)
+			if got != tc.expected {
+				t.Errorf("stringToKeyUsage(%q) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestCoverageFinalStringsToKeyUsages(t *testing.T) {
+	t.Parallel()
+
+	result := stringsToKeyUsages([]string{"ENCRYPT", "SIGN", "unknown"})
+	if len(result) != 2 {
+		t.Errorf("expected 2 usages (unknown filtered), got %d", len(result))
+	}
+}
+
+func TestCoverageFinalStringToKeyStatus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input    string
+		expected pb.KeyStatus
+	}{
+		{"ENABLED", pb.KeyStatus_KEY_STATUS_ENABLED},
+		{"DISABLED", pb.KeyStatus_KEY_STATUS_DISABLED},
+		{"PENDING_DELETION", pb.KeyStatus_KEY_STATUS_PENDING_DELETION},
+		{"DELETED", pb.KeyStatus_KEY_STATUS_DELETED},
+		{"ROTATING", pb.KeyStatus_KEY_STATUS_ROTATING},
+		{"COMPROMISED", pb.KeyStatus_KEY_STATUS_COMPROMISED},
+		{"unknown", pb.KeyStatus_KEY_STATUS_UNSPECIFIED},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
+			got := stringToKeyStatus(tc.input)
+			if got != tc.expected {
+				t.Errorf("stringToKeyStatus(%q) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestCoverageFinalStringToWrappingAlgorithm(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input    string
+		expected pb.WrappingAlgorithm
+	}{
+		{"AES_KW", pb.WrappingAlgorithm_WRAP_ALG_AES_KW},
+		{"AES_KWP", pb.WrappingAlgorithm_WRAP_ALG_AES_KWP},
+		{"AES_GCM", pb.WrappingAlgorithm_WRAP_ALG_AES_GCM},
+		{"RSA_OAEP_SHA256", pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA256},
+		{"RSA_OAEP_SHA384", pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA384},
+		{"RSA_OAEP_SHA512", pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA512},
+		{"ECDH_ES_A256KW", pb.WrappingAlgorithm_WRAP_ALG_ECDH_ES_A256KW},
+		{"unknown", pb.WrappingAlgorithm_WRAP_ALG_UNSPECIFIED},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
+			got := stringToWrappingAlgorithm(tc.input)
+			if got != tc.expected {
+				t.Errorf("stringToWrappingAlgorithm(%q) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestCoverageFinalStringToExportFormat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input    string
+		expected pb.ExportFormat
+	}{
+		{"RAW", pb.ExportFormat_EXPORT_FORMAT_RAW},
+		{"JWK", pb.ExportFormat_EXPORT_FORMAT_JWK},
+		{"PEM", pb.ExportFormat_EXPORT_FORMAT_PEM},
+		{"unknown", pb.ExportFormat_EXPORT_FORMAT_UNSPECIFIED},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
+			got := stringToExportFormat(tc.input)
+			if got != tc.expected {
+				t.Errorf("stringToExportFormat(%q) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestCoverageFinalStringToHashAlgorithm(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input    string
+		expected pb.HashAlgorithm
+	}{
+		{"SHA256", pb.HashAlgorithm_HASH_ALG_SHA256},
+		{"SHA384", pb.HashAlgorithm_HASH_ALG_SHA384},
+		{"SHA512", pb.HashAlgorithm_HASH_ALG_SHA512},
+		{"SHA3_256", pb.HashAlgorithm_HASH_ALG_SHA3_256},
+		{"SHA3_384", pb.HashAlgorithm_HASH_ALG_SHA3_384},
+		{"SHA3_512", pb.HashAlgorithm_HASH_ALG_SHA3_512},
+		{"BLAKE2B_256", pb.HashAlgorithm_HASH_ALG_BLAKE2B_256},
+		{"BLAKE2B_512", pb.HashAlgorithm_HASH_ALG_BLAKE2B_512},
+		{"unknown", pb.HashAlgorithm_HASH_ALG_UNSPECIFIED},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
+			got := stringToHashAlgorithm(tc.input)
+			if got != tc.expected {
+				t.Errorf("stringToHashAlgorithm(%q) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestCoverageFinalBuildDataKeySpecForQUIC(t *testing.T) {
+	t.Parallel()
+
+	valid := []string{
+		"aes-128-gcm", "aes128gcm", "aes128",
+		"aes-192-gcm", "aes192gcm", "aes192",
+		"aes-256-gcm", "aes256gcm", "aes256",
+		"chacha20-poly1305", "chacha20poly1305", "chacha20",
+		"xchacha20-poly1305", "xchacha20poly1305", "xchacha20",
+	}
+
+	for _, alg := range valid {
+		t.Run("valid_"+alg, func(t *testing.T) {
+			t.Parallel()
+			spec, err := buildDataKeySpecForQUIC(alg)
+			if err != nil {
+				t.Fatalf("buildDataKeySpecForQUIC(%q) error: %v", alg, err)
+			}
+			if spec == nil {
+				t.Fatal("spec should not be nil")
+			}
+		})
+	}
+
+	t.Run("invalid", func(t *testing.T) {
+		t.Parallel()
+		_, err := buildDataKeySpecForQUIC("invalid-alg")
+		if err == nil {
+			t.Fatal("expected error for invalid algorithm")
+		}
+		var errAlg ErrKMSInvalidAlgorithm
+		if !errors.As(err, &errAlg) {
+			t.Errorf("expected ErrKMSInvalidAlgorithm, got %T", err)
+		}
+	})
+}
+
+func TestCoverageFinalConvertKeyHandleToQUIC(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil", func(t *testing.T) {
+		t.Parallel()
+		if convertKeyHandleToQUIC(nil) != nil {
+			t.Error("expected nil for nil input")
+		}
+	})
+
+	t.Run("valid", func(t *testing.T) {
+		t.Parallel()
+		handle := &pb.KeyHandle{
+			KeyId:     "key-123",
+			Version:   2,
+			Algorithm: pb.KeyAlgorithm_KEY_ALG_RSA_2048,
+			Status:    pb.KeyStatus_KEY_STATUS_ENABLED,
+		}
+		result := convertKeyHandleToQUIC(handle)
+		if result == nil {
+			t.Fatal("result should not be nil")
+		}
+		if result.KeyID != "key-123" {
+			t.Errorf("KeyID = %q, want key-123", result.KeyID)
+		}
+		if result.Version != 2 {
+			t.Errorf("Version = %d, want 2", result.Version)
+		}
+	})
+}
+
+func TestCoverageFinalConvertKeyMetadataToQUIC(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil", func(t *testing.T) {
+		t.Parallel()
+		if convertKeyMetadataToQUIC(nil) != nil {
+			t.Error("expected nil for nil input")
+		}
+	})
+
+	t.Run("with_rotation_policy", func(t *testing.T) {
+		t.Parallel()
+		meta := &pb.KeyMetadata{
+			KeyId:       "key-456",
+			Name:        "test-key",
+			Description: "A test key",
+			Algorithm:   pb.KeyAlgorithm_KEY_ALG_ECDSA_P256,
+			Status:      pb.KeyStatus_KEY_STATUS_ENABLED,
+			Usage:       []pb.KeyUsage{pb.KeyUsage_KEY_USAGE_SIGN},
+			Version:     3,
+			Exportable:  true,
+			Owner:       "admin",
+			Tags:        map[string]string{"env": "test"},
+			RotationPolicy: &pb.RotationPolicy{
+				Enabled:         true,
+				IntervalSeconds: 86400,
+				RetainVersions:  5,
+				AutoRotate:      true,
+			},
+		}
+		result := convertKeyMetadataToQUIC(meta)
+		if result == nil {
+			t.Fatal("result should not be nil")
+		}
+		if result.KeyID != "key-456" {
+			t.Errorf("KeyID = %q, want key-456", result.KeyID)
+		}
+		if result.RotationPolicy == nil {
+			t.Fatal("RotationPolicy should not be nil")
+		}
+		if !result.RotationPolicy.Enabled {
+			t.Error("RotationPolicy.Enabled should be true")
+		}
+	})
+
+	t.Run("without_rotation_policy", func(t *testing.T) {
+		t.Parallel()
+		meta := &pb.KeyMetadata{
+			KeyId: "key-789",
+			Name:  "simple-key",
+		}
+		result := convertKeyMetadataToQUIC(meta)
+		if result.RotationPolicy != nil {
+			t.Error("RotationPolicy should be nil")
+		}
+	})
+}
+
+// =============================================================================
+// SDN Conversion Helpers
+// =============================================================================
+
+func TestCoverageFinalConvertPbBridgeToSDNBridge(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil", func(t *testing.T) {
+		t.Parallel()
+		if convertPbBridgeToSDNBridge(nil) != nil {
+			t.Error("expected nil for nil input")
+		}
+	})
+
+	t.Run("with_config", func(t *testing.T) {
+		t.Parallel()
+		b := &platformv1.Bridge{
+			Id: "br-uuid-1",
+			Config: &platformv1.BridgeConfig{
+				Name:       "br0",
+				StpEnabled: true,
+				Labels:     map[string]string{"role": "trunk"},
+				Options:    map[string]string{"stp_priority": "32768"},
+			},
+		}
+		result := convertPbBridgeToSDNBridge(b)
+		if result.UUID != "br-uuid-1" {
+			t.Errorf("UUID = %q", result.UUID)
+		}
+		if result.Name != "br0" {
+			t.Errorf("Name = %q", result.Name)
+		}
+		if !result.STP {
+			t.Error("STP should be true")
+		}
+	})
+
+	t.Run("no_config", func(t *testing.T) {
+		t.Parallel()
+		b := &platformv1.Bridge{Id: "br-uuid-2"}
+		result := convertPbBridgeToSDNBridge(b)
+		if result.Name != "" {
+			t.Errorf("Name should be empty, got %q", result.Name)
+		}
+	})
+}
+
+func TestCoverageFinalConvertPbPortToSDNPort(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil", func(t *testing.T) {
+		t.Parallel()
+		if convertPbPortToSDNPort(nil) != nil {
+			t.Error("expected nil for nil input")
+		}
+	})
+
+	t.Run("with_config", func(t *testing.T) {
+		t.Parallel()
+		p := &platformv1.Port{
+			Id: "port-uuid",
+			Config: &platformv1.PortConfig{
+				Name:   "eth0",
+				Vlan:   100,
+				Labels: map[string]string{"type": "access"},
+			},
+		}
+		result := convertPbPortToSDNPort(p)
+		if result.UUID != "port-uuid" {
+			t.Errorf("UUID = %q", result.UUID)
+		}
+		if result.Name != "eth0" {
+			t.Errorf("Name = %q", result.Name)
+		}
+		if result.Tag != 100 {
+			t.Errorf("Tag = %d, want 100", result.Tag)
+		}
+	})
+}
+
+func TestCoverageFinalConvertPbFlowToSDNFlow(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil", func(t *testing.T) {
+		t.Parallel()
+		if convertPbFlowToSDNFlow(nil) != nil {
+			t.Error("expected nil for nil input")
+		}
+	})
+
+	t.Run("with_config", func(t *testing.T) {
+		t.Parallel()
+		f := &platformv1.Flow{
+			Id: "flow-cookie-1",
+			Config: &platformv1.FlowConfig{
+				Table:    2,
+				Priority: 100,
+			},
+		}
+		result := convertPbFlowToSDNFlow(f)
+		if result.Cookie != "flow-cookie-1" {
+			t.Errorf("Cookie = %q", result.Cookie)
+		}
+		if result.Table != 2 {
+			t.Errorf("Table = %d", result.Table)
+		}
+		if result.Priority != 100 {
+			t.Errorf("Priority = %d", result.Priority)
+		}
+	})
+}
+
+func TestCoverageFinalConvertPbPolicyToSDNPolicy(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil", func(t *testing.T) {
+		t.Parallel()
+		if convertPbPolicyToSDNPolicy("port1", nil) != nil {
+			t.Error("expected nil for nil input")
+		}
+	})
+
+	t.Run("with_rules", func(t *testing.T) {
+		t.Parallel()
+		now := timestamppb.Now()
+		p := &platformv1.Policy{
+			CreatedAt: now,
+			Config: &platformv1.PolicyConfig{
+				Rules: []*platformv1.PolicyRule{
+					{
+						Priority: 10,
+						Action:   platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW,
+						Match: &platformv1.PolicyRuleMatch{
+							SourceIp: "10.0.0.0/8",
+						},
+					},
+				},
+			},
+		}
+		result := convertPbPolicyToSDNPolicy("port-1", p)
+		if result.PortID != "port-1" {
+			t.Errorf("PortID = %q", result.PortID)
+		}
+		if result.IssuedAt == 0 {
+			t.Error("IssuedAt should not be 0")
+		}
+		if len(result.ACLs) != 1 {
+			t.Errorf("expected 1 ACL, got %d", len(result.ACLs))
+		}
+	})
+}
+
+func TestCoverageFinalConvertSDNACLsToPbRules(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil_input", func(t *testing.T) {
+		t.Parallel()
+		if convertSDNACLsToPbRules(nil) != nil {
+			t.Error("expected nil for nil input")
+		}
+	})
+
+	t.Run("various_actions", func(t *testing.T) {
+		t.Parallel()
+		acls := []*SDNACLRule{
+			{Priority: 10, Action: "allow", Match: &SDNFlowMatch{IPv4Src: "10.0.0.0/8", IPv4Dst: "192.168.0.0/16", TCPSrc: 8080, TCPDst: 443, VLANVid: 100}},
+			{Priority: 20, Action: "deny"},
+			{Priority: 30, Action: "something"},
+		}
+		rules := convertSDNACLsToPbRules(acls)
+		if len(rules) != 3 {
+			t.Fatalf("expected 3 rules, got %d", len(rules))
+		}
+		if rules[0].Action != platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW {
+			t.Error("first rule should be ALLOW")
+		}
+		if rules[1].Action != platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY {
+			t.Error("second rule should be DENY")
+		}
+		if rules[2].Action != platformv1.PolicyRuleAction_POLICY_RULE_ACTION_UNSPECIFIED {
+			t.Error("third rule should be UNSPECIFIED")
+		}
+		if rules[0].Match.SourceIp != "10.0.0.0/8" {
+			t.Errorf("SourceIp = %q", rules[0].Match.SourceIp)
+		}
+		if rules[0].Match.SourcePort != 8080 {
+			t.Errorf("SourcePort = %d", rules[0].Match.SourcePort)
+		}
+		if rules[0].Match.VlanId != 100 {
+			t.Errorf("VlanId = %d", rules[0].Match.VlanId)
+		}
+	})
+}
+
+func TestCoverageFinalConvertPbRulesToSDNACLs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil_input", func(t *testing.T) {
+		t.Parallel()
+		if convertPbRulesToSDNACLs(nil) != nil {
+			t.Error("expected nil for nil input")
+		}
+	})
+
+	t.Run("various_actions", func(t *testing.T) {
+		t.Parallel()
+		rules := []*platformv1.PolicyRule{
+			{
+				Priority: 10,
+				Action:   platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW,
+				Match: &platformv1.PolicyRuleMatch{
+					SourceIp:        "10.0.0.0/8",
+					DestinationIp:   "192.168.0.0/16",
+					SourcePort:      8080,
+					DestinationPort: 443,
+					VlanId:          100,
+				},
+			},
+			{Priority: 20, Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY},
+			{Priority: 30, Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_UNSPECIFIED},
+		}
+		acls := convertPbRulesToSDNACLs(rules)
+		if len(acls) != 3 {
+			t.Fatalf("expected 3 ACLs, got %d", len(acls))
+		}
+		if acls[0].Action != "allow" {
+			t.Errorf("first ACL action = %q, want allow", acls[0].Action)
+		}
+		if acls[1].Action != "deny" {
+			t.Errorf("second ACL action = %q, want deny", acls[1].Action)
+		}
+		if acls[2].Action != "unspecified" {
+			t.Errorf("third ACL action = %q, want unspecified", acls[2].Action)
+		}
+		if acls[0].Match == nil {
+			t.Fatal("first ACL match should not be nil")
+		}
+		if acls[0].Match.IPv4Src != "10.0.0.0/8" {
+			t.Errorf("IPv4Src = %q", acls[0].Match.IPv4Src)
+		}
+	})
+}
+
+// =============================================================================
+// DNS Conversion Helpers
+// =============================================================================
+
+func TestCoverageFinalConvertToQUICRecord(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil", func(t *testing.T) {
+		t.Parallel()
+		if convertToQUICRecord(nil, "A") != nil {
+			t.Error("expected nil for nil input")
+		}
+	})
+
+	t.Run("A_record", func(t *testing.T) {
+		t.Parallel()
+		rec := &dnsentities.ARecord{Name: "example.com", Value: "1.2.3.4", TTL: 300}
+		result := convertToQUICRecord(rec, "A")
+		if result == nil || result.Name != "example.com" || result.Value != "1.2.3.4" {
+			t.Errorf("unexpected result: %+v", result)
+		}
+	})
+
+	t.Run("AAAA_record", func(t *testing.T) {
+		t.Parallel()
+		rec := &dnsentities.AAAARecord{Name: "v6.example.com", Value: "::1", TTL: 600}
+		result := convertToQUICRecord(rec, "AAAA")
+		if result == nil || result.RecordType != "AAAA" {
+			t.Errorf("unexpected result: %+v", result)
+		}
+	})
+
+	t.Run("CNAME_record", func(t *testing.T) {
+		t.Parallel()
+		rec := &dnsentities.CNAMERecord{Name: "www", Value: "example.com", TTL: 300}
+		result := convertToQUICRecord(rec, "CNAME")
+		if result == nil || result.Value != "example.com" {
+			t.Errorf("unexpected result: %+v", result)
+		}
+	})
+
+	t.Run("TXT_record", func(t *testing.T) {
+		t.Parallel()
+		rec := &dnsentities.TXTRecord{Name: "_dmarc", Value: "v=DMARC1", TTL: 300}
+		result := convertToQUICRecord(rec, "TXT")
+		if result == nil || result.Value != "v=DMARC1" {
+			t.Errorf("unexpected result: %+v", result)
+		}
+	})
+
+	t.Run("MX_record", func(t *testing.T) {
+		t.Parallel()
+		rec := &dnsentities.MXRecord{Name: "example.com", Value: "mail.example.com", TTL: 300, Priority: 10}
+		result := convertToQUICRecord(rec, "MX")
+		if result == nil || result.Priority != 10 {
+			t.Errorf("unexpected result: %+v", result)
+		}
+	})
+
+	t.Run("NS_record", func(t *testing.T) {
+		t.Parallel()
+		rec := &dnsentities.NSRecord{Name: "example.com", Value: "ns1.example.com", TTL: 86400}
+		result := convertToQUICRecord(rec, "NS")
+		if result == nil || result.Value != "ns1.example.com" {
+			t.Errorf("unexpected result: %+v", result)
+		}
+	})
+
+	t.Run("unknown_type", func(t *testing.T) {
+		t.Parallel()
+		if convertToQUICRecord("not a record", "X") != nil {
+			t.Error("expected nil for unknown type")
+		}
+	})
+}
+
+func TestCoverageFinalConvertInterfaceToQUICRecord(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil", func(t *testing.T) {
+		t.Parallel()
+		if convertInterfaceToQUICRecord(nil) != nil {
+			t.Error("expected nil for nil input")
+		}
+	})
+
+	t.Run("A", func(t *testing.T) {
+		t.Parallel()
+		rec := &dnsentities.ARecord{Name: "host", Value: "10.0.0.1", TTL: 300}
+		result := convertInterfaceToQUICRecord(rec)
+		if result == nil || result.RecordType != "A" {
+			t.Errorf("unexpected: %+v", result)
+		}
+	})
+
+	t.Run("AAAA", func(t *testing.T) {
+		t.Parallel()
+		result := convertInterfaceToQUICRecord(&dnsentities.AAAARecord{Name: "h", Value: "::1", TTL: 60})
+		if result == nil || result.RecordType != "AAAA" {
+			t.Error("expected AAAA record")
+		}
+	})
+
+	t.Run("CNAME", func(t *testing.T) {
+		t.Parallel()
+		result := convertInterfaceToQUICRecord(&dnsentities.CNAMERecord{Name: "w", Value: "x", TTL: 60})
+		if result == nil || result.RecordType != "CNAME" {
+			t.Error("expected CNAME record")
+		}
+	})
+
+	t.Run("TXT", func(t *testing.T) {
+		t.Parallel()
+		result := convertInterfaceToQUICRecord(&dnsentities.TXTRecord{Name: "t", Value: "v", TTL: 60})
+		if result == nil || result.RecordType != "TXT" {
+			t.Error("expected TXT record")
+		}
+	})
+
+	t.Run("MX", func(t *testing.T) {
+		t.Parallel()
+		result := convertInterfaceToQUICRecord(&dnsentities.MXRecord{Name: "m", Value: "mx", TTL: 60, Priority: 5})
+		if result == nil || result.RecordType != "MX" || result.Priority != 5 {
+			t.Error("expected MX record with priority 5")
+		}
+	})
+
+	t.Run("NS", func(t *testing.T) {
+		t.Parallel()
+		result := convertInterfaceToQUICRecord(&dnsentities.NSRecord{Name: "n", Value: "ns", TTL: 60})
+		if result == nil || result.RecordType != "NS" {
+			t.Error("expected NS record")
+		}
+	})
+
+	t.Run("unknown", func(t *testing.T) {
+		t.Parallel()
+		if convertInterfaceToQUICRecord(42) != nil {
+			t.Error("expected nil for unknown type")
+		}
+	})
+}
+
+func TestCoverageFinalCountZoneRecords(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil", func(t *testing.T) {
+		t.Parallel()
+		if countZoneRecords(nil) != 0 {
+			t.Error("expected 0 for nil zone")
+		}
+	})
+
+	t.Run("empty_zone", func(t *testing.T) {
+		t.Parallel()
+		zone := &dnsentities.Zone{}
+		if countZoneRecords(zone) != 0 {
+			t.Error("expected 0 for empty zone")
+		}
+	})
+
+	t.Run("zone_with_records", func(t *testing.T) {
+		t.Parallel()
+		zone := &dnsentities.Zone{
+			RecordSet: dnsentities.RecordSet{
+				ARecords:    []*dnsentities.ARecord{{Name: "a", Value: "1.2.3.4"}},
+				AAAARecords: []*dnsentities.AAAARecord{{Name: "aaaa", Value: "::1"}},
+				MXRecords:   []*dnsentities.MXRecord{{Name: "mx", Value: "mail"}},
+				SOARecord:   dnsentities.SOARecord{Name: "soa.example.com"},
+			},
+		}
+		count := countZoneRecords(zone)
+		if count != 4 { // 1 A + 1 AAAA + 1 MX + 1 SOA
+			t.Errorf("expected 4, got %d", count)
+		}
+	})
+}
+
+// =============================================================================
+// containsVTPMErrorPattern / containsIDevIDErrorPattern
+// =============================================================================
+
+func TestCoverageFinalContainsVTPMErrorPattern(t *testing.T) {
+	t.Parallel()
+
+	if !containsVTPMErrorPattern("vtpm not found", "not found") {
+		t.Error("should find 'not found' in 'vtpm not found'")
+	}
+	if containsVTPMErrorPattern("vtpm error", "not found") {
+		t.Error("should not find 'not found' in 'vtpm error'")
+	}
+	if containsVTPMErrorPattern("", "x") {
+		t.Error("should not match empty string")
+	}
+	if !containsVTPMErrorPattern("multiple patterns here", "not", "patterns") {
+		t.Error("should match one of multiple patterns")
+	}
+}
+
+func TestCoverageFinalContainsIDevIDErrorPattern(t *testing.T) {
+	t.Parallel()
+
+	if !containsIDevIDErrorPattern("idevid not found error", "not found") {
+		t.Error("should find pattern")
+	}
+	if containsIDevIDErrorPattern("ok", "not found") {
+		t.Error("should not find pattern")
+	}
+}
+
+// =============================================================================
+// certToQUIC / encodePublicKeyPEM
+// =============================================================================
+
+func TestCoverageFinalCertToQUIC(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil", func(t *testing.T) {
+		t.Parallel()
+		if certToQUIC(nil) != nil {
+			t.Error("expected nil")
+		}
+	})
+
+	t.Run("valid_cert", func(t *testing.T) {
+		t.Parallel()
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		template := &x509.Certificate{
+			SerialNumber: big.NewInt(1),
+			Subject:      pkix.Name{CommonName: "test-idevid"},
+			Issuer:       pkix.Name{CommonName: "test-issuer"},
+			NotBefore:    time.Now().Add(-time.Hour),
+			NotAfter:     time.Now().Add(time.Hour),
+		}
+		certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cert, err := x509.ParseCertificate(certDER)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		result := certToQUIC(cert)
+		if result == nil {
+			t.Fatal("expected non-nil result")
+		}
+		if result.SubjectCN != "test-idevid" {
+			t.Errorf("SubjectCN = %q", result.SubjectCN)
+		}
+		if result.PEM == "" {
+			t.Error("PEM should not be empty")
+		}
+		if result.Fingerprint == "" {
+			t.Error("Fingerprint should not be empty")
+		}
+	})
+}
+
+func TestCoverageFinalEncodePublicKeyPEM(t *testing.T) {
+	t.Parallel()
+	// This function is a placeholder that returns ("", nil)
+	result, err := encodePublicKeyPEM(nil)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if result != "" {
+		t.Errorf("expected empty string, got %q", result)
+	}
+}
+
+// =============================================================================
+// formatKeyAttributesMap / formatX509CertificateInfo
+// =============================================================================
+
+func TestCoverageFinalFormatKeyAttributesMap(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil", func(t *testing.T) {
+		t.Parallel()
+		result := formatKeyAttributesMap(nil)
+		if len(result) != 0 {
+			t.Errorf("expected empty map for nil, got %d entries", len(result))
+		}
+	})
+
+	t.Run("with_algorithm", func(t *testing.T) {
+		t.Parallel()
+		attrs := &xkmssdk.KeyAttributes{
+			KeyAlgorithm: x509.ECDSA,
+		}
+		result := formatKeyAttributesMap(attrs)
+		if _, ok := result["algorithm"]; !ok {
+			t.Error("expected algorithm key")
+		}
+		if _, ok := result["created_at"]; !ok {
+			t.Error("expected created_at key")
+		}
+	})
+}
+
+func TestCoverageFinalFormatX509CertificateInfo(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil", func(t *testing.T) {
+		t.Parallel()
+		result := formatX509CertificateInfo(nil)
+		if len(result) != 0 {
+			t.Errorf("expected empty map for nil, got %d entries", len(result))
+		}
+	})
+
+	t.Run("valid_cert", func(t *testing.T) {
+		t.Parallel()
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		template := &x509.Certificate{
+			SerialNumber: big.NewInt(42),
+			Subject:      pkix.Name{CommonName: "test-cn"},
+			Issuer:       pkix.Name{CommonName: "test-issuer"},
+			NotBefore:    time.Now().Add(-time.Hour),
+			NotAfter:     time.Now().Add(time.Hour),
+		}
+		certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cert, err := x509.ParseCertificate(certDER)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		result := formatX509CertificateInfo(cert)
+		if result["subject_cn"] != "test-cn" {
+			t.Errorf("subject_cn = %v", result["subject_cn"])
+		}
+		if result["fingerprint"] == "" {
+			t.Error("fingerprint should not be empty")
+		}
+	})
+}
+
+// =============================================================================
+// Tenant Conversion Helpers
+// =============================================================================
+
+func TestCoverageFinalConvertTenantEntityToResponse(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil", func(t *testing.T) {
+		t.Parallel()
+		if convertTenantEntityToResponse(nil) != nil {
+			t.Error("expected nil for nil input")
+		}
+	})
+
+	t.Run("full_entity", func(t *testing.T) {
+		t.Parallel()
+		now := time.Now()
+		entity := &tenant.TenantEntity{
+			ID:          "t-123",
+			Name:        "acme",
+			DisplayName: "ACME Corp",
+			State:       "active",
+			OVSBridge:   "br-acme",
+			VLANRange:   tenant.VLANRange{Start: 100, End: 199},
+			DEKPath:     "/tenant/t-123/default",
+			Labels:      map[string]string{"env": "prod"},
+			Annotations: map[string]string{"note": "test"},
+			ComputeQuota: tenant.ComputeQuota{
+				MaxVMs:        10,
+				MaxContainers: 50,
+				MaxVCPUs:      32,
+			},
+			NetworkQuota: tenant.NetworkQuota{
+				MaxBridges: 5,
+				MaxPorts:   100,
+			},
+			StorageQuota: tenant.StorageQuota{
+				MaxVolumesGB: 500,
+				MaxSnapshots: 20,
+			},
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+
+		result := convertTenantEntityToResponse(entity)
+		if result == nil {
+			t.Fatal("expected non-nil result")
+		}
+		if result.ID != "t-123" {
+			t.Errorf("ID = %q", result.ID)
+		}
+		if result.Name != "acme" {
+			t.Errorf("Name = %q", result.Name)
+		}
+		if result.VLANStart != 100 || result.VLANEnd != 199 {
+			t.Errorf("VLANRange = %d-%d", result.VLANStart, result.VLANEnd)
+		}
+		if result.ComputeQuota == nil {
+			t.Fatal("ComputeQuota should not be nil")
+		}
+		if result.ComputeQuota.MaxVMs != 10 {
+			t.Errorf("MaxVMs = %d", result.ComputeQuota.MaxVMs)
+		}
+		if result.NetworkQuota == nil || result.NetworkQuota.MaxBridges != 5 {
+			t.Error("NetworkQuota incorrect")
+		}
+		if result.StorageQuota == nil || result.StorageQuota.MaxVolumesGB != 500 {
+			t.Error("StorageQuota incorrect")
+		}
+	})
+}
+
+// =============================================================================
+// PXE Conversion Helpers
+// =============================================================================
+
+func TestCoverageFinalConvertDeviceInfoToPXEDevice(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil", func(t *testing.T) {
+		t.Parallel()
+		if convertDeviceInfoToPXEDevice(nil) != nil {
+			t.Error("expected nil for nil input")
+		}
+	})
+
+	t.Run("without_profile", func(t *testing.T) {
+		t.Parallel()
+		mac, _ := net.ParseMAC("aa:bb:cc:dd:ee:ff")
+		now := time.Now()
+		info := &pxe.DeviceInfo{
+			ID:                "dev-1",
+			MACAddress:        mac,
+			PortID:            "port-1",
+			State:             "discovered",
+			StateReason:       "new device",
+			CertificateSerial: "serial-123",
+			CurrentVLAN:       100,
+			TargetVLAN:        200,
+			CreatedAt:         now,
+			UpdatedAt:         now,
+			StateChangedAt:    now,
+			RetryCount:        3,
+		}
+		result := convertDeviceInfoToPXEDevice(info)
+		if result == nil {
+			t.Fatal("expected non-nil result")
+		}
+		if result.ID != "dev-1" {
+			t.Errorf("ID = %q", result.ID)
+		}
+		if result.MACAddress != "aa:bb:cc:dd:ee:ff" {
+			t.Errorf("MACAddress = %q", result.MACAddress)
+		}
+		if result.CurrentVLAN != 100 {
+			t.Errorf("CurrentVLAN = %d", result.CurrentVLAN)
+		}
+		if result.RetryCount != 3 {
+			t.Errorf("RetryCount = %d", result.RetryCount)
+		}
+		if result.ProfileID != "" {
+			t.Errorf("ProfileID should be empty, got %q", result.ProfileID)
+		}
+	})
+
+	t.Run("with_profile", func(t *testing.T) {
+		t.Parallel()
+		mac, _ := net.ParseMAC("11:22:33:44:55:66")
+		info := &pxe.DeviceInfo{
+			ID:             "dev-2",
+			MACAddress:     mac,
+			State:          "enrolled",
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
+			StateChangedAt: time.Now(),
+			Profile: &entities.DeviceProfile{
+				ID:   42,
+				Name: "default-profile",
+			},
+		}
+		result := convertDeviceInfoToPXEDevice(info)
+		if result.ProfileID != "42" {
+			t.Errorf("ProfileID = %q, want 42", result.ProfileID)
+		}
+		if result.ProfileName != "default-profile" {
+			t.Errorf("ProfileName = %q", result.ProfileName)
+		}
+	})
+}
+
+// =============================================================================
+// Service helper functions
+// =============================================================================
+
+func TestCoverageFinalServiceTypeFromName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		expected platformv1.ServiceType
+	}{
+		{"tpm", platformv1.ServiceType_SERVICE_TYPE_TPM},
+		{"sdn", platformv1.ServiceType_SERVICE_TYPE_SDN},
+		{"compute", platformv1.ServiceType_SERVICE_TYPE_COMPUTE},
+		{"dns", platformv1.ServiceType_SERVICE_TYPE_DNS},
+		{"acme", platformv1.ServiceType_SERVICE_TYPE_ACME},
+		{"webservice", platformv1.ServiceType_SERVICE_TYPE_WEBSERVICE},
+		{"attestation", platformv1.ServiceType_SERVICE_TYPE_ATTESTATION},
+		{"unknown", platformv1.ServiceType_SERVICE_TYPE_UNSPECIFIED},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := serviceTypeFromName(tc.name)
+			if got != tc.expected {
+				t.Errorf("serviceTypeFromName(%q) = %v, want %v", tc.name, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestCoverageFinalServiceNameFromType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input    platformv1.ServiceType
+		expected string
+	}{
+		{platformv1.ServiceType_SERVICE_TYPE_TPM, "tpm"},
+		{platformv1.ServiceType_SERVICE_TYPE_SDN, "sdn"},
+		{platformv1.ServiceType_SERVICE_TYPE_COMPUTE, "compute"},
+		{platformv1.ServiceType_SERVICE_TYPE_DNS, "dns"},
+		{platformv1.ServiceType_SERVICE_TYPE_ACME, "acme"},
+		{platformv1.ServiceType_SERVICE_TYPE_WEBSERVICE, "webservice"},
+		{platformv1.ServiceType_SERVICE_TYPE_ATTESTATION, "attestation"},
+		{platformv1.ServiceType_SERVICE_TYPE_UNSPECIFIED, "unknown"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.expected, func(t *testing.T) {
+			t.Parallel()
+			got := serviceNameFromType(tc.input)
+			if got != tc.expected {
+				t.Errorf("serviceNameFromType(%v) = %q, want %q", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestCoverageFinalHealthStatusFromServiceStatus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input    platformv1.ServiceStatus
+		expected platformv1.HealthStatus
+	}{
+		{platformv1.ServiceStatus_SERVICE_STATUS_RUNNING, platformv1.HealthStatus_HEALTH_STATUS_HEALTHY},
+		{platformv1.ServiceStatus_SERVICE_STATUS_ERROR, platformv1.HealthStatus_HEALTH_STATUS_UNHEALTHY},
+		{platformv1.ServiceStatus_SERVICE_STATUS_STARTING, platformv1.HealthStatus_HEALTH_STATUS_DEGRADED},
+		{platformv1.ServiceStatus_SERVICE_STATUS_STOPPING, platformv1.HealthStatus_HEALTH_STATUS_DEGRADED},
+		{platformv1.ServiceStatus_SERVICE_STATUS_STOPPED, platformv1.HealthStatus_HEALTH_STATUS_UNSPECIFIED},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input.String(), func(t *testing.T) {
+			t.Parallel()
+			got := healthStatusFromServiceStatus(tc.input)
+			if got != tc.expected {
+				t.Errorf("healthStatusFromServiceStatus(%v) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestCoverageFinalHealthStatusFromHealthStatus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input    health.HealthStatus
+		expected platformv1.HealthStatus
+	}{
+		{health.StatusHealthy, platformv1.HealthStatus_HEALTH_STATUS_HEALTHY},
+		{health.StatusDegraded, platformv1.HealthStatus_HEALTH_STATUS_DEGRADED},
+		{health.StatusUnhealthy, platformv1.HealthStatus_HEALTH_STATUS_UNHEALTHY},
+		{health.StatusUnknown, platformv1.HealthStatus_HEALTH_STATUS_UNSPECIFIED},
+		{"other", platformv1.HealthStatus_HEALTH_STATUS_UNSPECIFIED},
+	}
+
+	for _, tc := range tests {
+		t.Run(string(tc.input), func(t *testing.T) {
+			t.Parallel()
+			got := healthStatusFromHealthStatus(tc.input)
+			if got != tc.expected {
+				t.Errorf("healthStatusFromHealthStatus(%q) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// QUIC Handler Construction and Routing
+// =============================================================================
+
+func TestCoverageFinalNewQUICServiceHandler(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil_logger", func(t *testing.T) {
+		t.Parallel()
+		h := NewQUICServiceHandler(nil)
+		if h == nil {
+			t.Fatal("handler should not be nil")
+		}
+	})
+
+	t.Run("with_options", func(t *testing.T) {
+		t.Parallel()
+		logger := logging.DefaultLogger()
+		h := NewQUICServiceHandler(logger,
+			WithQUICDNSService(nil),
+			WithQUICHealthRegistry(nil),
+			WithQUICAuthMiddleware(nil),
+			WithQUICSDNService(nil),
+			WithQUICIAMService(nil),
+			WithQUICKMSService(nil),
+			WithQUICCryptoService(nil),
+			WithQUICTPM2Service(nil),
+			WithQUICDaemonService(nil),
+			WithQUICOverlayHandler(nil),
+			WithQUICGatewayHandler(nil),
+		)
+		if h == nil {
+			t.Fatal("handler should not be nil")
+		}
+	})
+}
+
+func TestCoverageFinalHandleRequestNilRequest(t *testing.T) {
+	t.Parallel()
+	h := NewQUICServiceHandler(logging.DefaultLogger())
+	resp := h.HandleRequest(context.Background(), nil)
+	if resp.Status != quic.StatusInvalidRequest {
+		t.Errorf("Status = 0x%02X, want 0x%02X", resp.Status, quic.StatusInvalidRequest)
+	}
+}
+
+func TestCoverageFinalHandleRequestUnknownOpcode(t *testing.T) {
+	t.Parallel()
+	h := NewQUICServiceHandler(logging.DefaultLogger())
+	req := &quic.Request{Opcode: 0xFE} // Unlikely to be assigned
+	resp := h.HandleRequest(context.Background(), req)
+	// Might hit a PXE extended range; if so it returns unavailable. Either way, not panic.
+	if resp == nil {
+		t.Fatal("response should not be nil")
+	}
+}
+
+func TestCoverageFinalQUICHandlerSetters(t *testing.T) {
+	t.Parallel()
+
+	h := NewQUICServiceHandler(logging.DefaultLogger())
+
+	// Test all setters don't panic
+	h.SetCAHandler(nil)
+	h.SetVTPMService(nil)
+	h.SetDeviceService(nil)
+	h.SetDNSService(nil)
+	h.SetSDNService(nil)
+	h.SetIAMService(nil)
+	h.SetKMSService(nil)
+	h.SetCryptoService(nil)
+	h.SetTPM2Service(nil)
+	h.SetContainerHandler(nil)
+	h.SetContainerOrchestrator(nil)
+	h.SetAttestationHandler(nil)
+	h.SetAttestationService(nil)
+	h.SetVMHandler(nil)
+	h.SetVMOrchestrator(nil)
+	h.SetDaemonService(nil)
+	h.SetOverlayHandler(nil)
+	h.SetGatewayHandler(nil)
+}
+
+func TestCoverageFinalQUICHandlerErrorResponse(t *testing.T) {
+	t.Parallel()
+	h := NewQUICServiceHandler(logging.DefaultLogger())
+	resp := h.errorResponse(quic.StatusInternalError, ErrQUICNilRequest{})
+	if resp.Status != quic.StatusInternalError {
+		t.Errorf("Status = 0x%02X", resp.Status)
+	}
+	if string(resp.Payload) != "QUIC request cannot be nil" {
+		t.Errorf("Payload = %q", string(resp.Payload))
+	}
+}
+
+// =============================================================================
+// QUIC Handler - Service routing with nil services
+// =============================================================================
+
+func TestCoverageFinalQUICHandlerRouting(t *testing.T) {
+	t.Parallel()
+
+	h := NewQUICServiceHandler(logging.DefaultLogger())
+	ctx := context.Background()
+
+	// Test that requests to various opcodes return unavailable when services are nil
+	routeTests := []struct {
+		name   string
+		opcode byte
+	}{
+		{"health_check", quic.OpHealth},
+		{"liveness", quic.OpLiveness},
+		{"readiness", quic.OpReadiness},
+		{"device_nil", quic.OpDeviceRegister},
+		{"cert_nil", quic.OpCertIssue},
+		{"ca_nil", quic.OpCAInfo},
+		{"daemon_nil", quic.OpDaemonStatus},
+	}
+
+	for _, tc := range routeTests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			resp := h.HandleRequest(ctx, &quic.Request{Opcode: tc.opcode})
+			if resp == nil {
+				t.Fatal("response should not be nil")
+			}
+		})
+	}
+}
+
+func TestCoverageFinalQUICHandlerOverlayCategory(t *testing.T) {
+	t.Parallel()
+
+	h := NewQUICServiceHandler(logging.DefaultLogger())
+	ctx := context.Background()
+
+	t.Run("nil_handler", func(t *testing.T) {
+		t.Parallel()
+		resp := h.HandleRequest(ctx, &quic.Request{Opcode: quic.OpOverlayCategory, Payload: []byte{0x01}})
+		if resp.Status != quic.StatusUnavailable {
+			t.Errorf("Status = 0x%02X, want StatusUnavailable", resp.Status)
+		}
+	})
+
+	t.Run("empty_payload", func(t *testing.T) {
+		t.Parallel()
+		// Need a non-nil overlay handler to test empty payload case
+		// Since we can't easily create one without dependencies, test nil handler path
+		resp := h.HandleRequest(ctx, &quic.Request{Opcode: quic.OpOverlayCategory})
+		if resp.Status != quic.StatusUnavailable {
+			t.Errorf("Status = 0x%02X", resp.Status)
+		}
+	})
+}
+
+func TestCoverageFinalQUICHandlerGatewayCategory(t *testing.T) {
+	t.Parallel()
+
+	h := NewQUICServiceHandler(logging.DefaultLogger())
+	ctx := context.Background()
+
+	resp := h.HandleRequest(ctx, &quic.Request{Opcode: quic.OpGatewayCategory, Payload: []byte{0x01}})
+	if resp.Status != quic.StatusUnavailable {
+		t.Errorf("Status = 0x%02X, want StatusUnavailable", resp.Status)
+	}
+}
+
+func TestCoverageFinalQUICHandlerIPAMCategory(t *testing.T) {
+	t.Parallel()
+
+	h := NewQUICServiceHandler(logging.DefaultLogger())
+	ctx := context.Background()
+
+	resp := h.HandleRequest(ctx, &quic.Request{Opcode: quic.OpIPAMCategory, Payload: []byte{0x01}})
+	if resp.Status != quic.StatusUnavailable {
+		t.Errorf("Status = 0x%02X, want StatusUnavailable", resp.Status)
+	}
+}
+
+func TestCoverageFinalQUICHandlerHealthCheck(t *testing.T) {
+	t.Parallel()
+
+	h := NewQUICServiceHandler(logging.DefaultLogger())
+	ctx := context.Background()
+
+	// Health check without registry
+	resp := h.HandleRequest(ctx, &quic.Request{Opcode: quic.OpHealth})
+	if resp.Status != quic.StatusOK {
+		t.Errorf("Health check without registry: Status = 0x%02X, want StatusOK", resp.Status)
+	}
+}
+
+func TestCoverageFinalQUICHandlerLiveness(t *testing.T) {
+	t.Parallel()
+
+	h := NewQUICServiceHandler(logging.DefaultLogger())
+	resp := h.HandleRequest(context.Background(), &quic.Request{Opcode: quic.OpLiveness})
+	if resp.Status != quic.StatusOK {
+		t.Errorf("Liveness: Status = 0x%02X, want StatusOK", resp.Status)
+	}
+}
+
+func TestCoverageFinalQUICHandlerReadiness(t *testing.T) {
+	t.Parallel()
+
+	h := NewQUICServiceHandler(logging.DefaultLogger())
+	resp := h.HandleRequest(context.Background(), &quic.Request{Opcode: quic.OpReadiness})
+	if resp.Status != quic.StatusOK {
+		t.Errorf("Readiness: Status = 0x%02X, want StatusOK", resp.Status)
+	}
+}
+
+// =============================================================================
+// REST ErrorResponse
+// =============================================================================
+
+func TestCoverageFinalErrorResponse(t *testing.T) {
+	t.Parallel()
+	resp := ErrorResponse{
+		Error:     "test error",
+		Code:      500,
+		Timestamp: time.Now(),
+	}
+	if resp.Error != "test error" {
+		t.Errorf("Error = %q", resp.Error)
+	}
+	if resp.Code != 500 {
+		t.Errorf("Code = %d", resp.Code)
+	}
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+func containsStr(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 || indexStr(s, substr) >= 0)
+}
+
+func indexStr(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
+}

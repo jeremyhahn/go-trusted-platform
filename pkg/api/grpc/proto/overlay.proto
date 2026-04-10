@@ -1,0 +1,158 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// Overlay service for VXLAN and multi-host networking
+service OverlayService {
+  // VTEP operations
+  rpc ListVTEPs(ListVTEPsRequest) returns (ListVTEPsResponse);
+  rpc GetVTEP(GetVTEPRequest) returns (GetVTEPResponse);
+
+  // VNI operations
+  rpc CreateVNI(CreateVNIRequest) returns (CreateVNIResponse);
+  rpc DeleteVNI(DeleteVNIRequest) returns (DeleteVNIResponse);
+  rpc ListVNIs(ListVNIsRequest) returns (ListVNIsResponse);
+
+  // Tunnel operations
+  rpc ListTunnels(ListTunnelsRequest) returns (ListTunnelsResponse);
+  rpc GetTunnelStats(GetTunnelStatsRequest) returns (GetTunnelStatsResponse);
+
+  // MAC learning
+  rpc ListRemoteMACs(ListRemoteMACsRequest) returns (ListRemoteMACsResponse);
+  rpc ForgetMAC(ForgetMACRequest) returns (ForgetMACResponse);
+
+  // Overlay status
+  rpc GetOverlayStatus(GetOverlayStatusRequest) returns (GetOverlayStatusResponse);
+}
+
+// VTEP information
+message VTEPInfo {
+  string node_id = 1;
+  string ip = 2;
+  bool healthy = 3;
+  google.protobuf.Timestamp last_seen = 4;
+  repeated uint32 vnis = 5;           // VNIs this VTEP participates in
+  uint32 mac_count = 6;               // Number of MACs associated with this VTEP
+  uint64 bytes_sent = 7;              // Total bytes sent through this VTEP
+  uint64 bytes_recv = 8;              // Total bytes received through this VTEP
+}
+
+// VNI configuration
+message VNIConfig {
+  uint32 vni = 1;
+  uint32 vlan = 2;
+  string name = 3;
+  map<string, string> labels = 4;
+}
+
+// VNI information
+message VNI {
+  string id = 1;
+  VNIConfig config = 2;
+  google.protobuf.Timestamp created_at = 3;
+  uint32 mac_count = 4;
+}
+
+// Tunnel information
+message TunnelInfo {
+  string local_vtep = 1;
+  string remote_vtep = 2;
+  uint32 vni = 3;
+  string state = 4;
+  uint64 bytes_tx = 5;
+  uint64 bytes_rx = 6;
+}
+
+// Remote MAC entry
+message RemoteMACEntry {
+  string mac = 1;
+  uint32 vni = 2;
+  string remote_vtep = 3;
+  google.protobuf.Timestamp learned_at = 4;
+}
+
+// Overlay status
+message OverlayStatus {
+  string node_id = 1;
+  string vtep_ip = 2;
+  uint32 vtep_count = 3;
+  uint32 vni_count = 4;
+  uint32 tunnel_count = 5;
+  uint32 remote_mac_count = 6;
+  bool healthy = 7;
+  uint32 vxlan_port = 8;              // VXLAN UDP port (typically 4789)
+  uint32 underlay_mtu = 9;            // MTU of the underlay network
+}
+
+// Request/Response messages
+message ListVTEPsRequest {}
+message ListVTEPsResponse {
+  repeated VTEPInfo vteps = 1;
+}
+
+message GetVTEPRequest {
+  string node_id = 1;
+}
+message GetVTEPResponse {
+  VTEPInfo vtep = 1;
+}
+
+message CreateVNIRequest {
+  VNIConfig config = 1;
+}
+message CreateVNIResponse {
+  Status status = 1;
+  VNI vni = 2;
+}
+
+message DeleteVNIRequest {
+  uint32 vni = 1;
+}
+message DeleteVNIResponse {
+  Status status = 1;
+}
+
+message ListVNIsRequest {}
+message ListVNIsResponse {
+  repeated VNI vnis = 1;
+}
+
+message ListTunnelsRequest {
+  uint32 vni = 1; // 0 for all VNIs
+}
+message ListTunnelsResponse {
+  repeated TunnelInfo tunnels = 1;
+}
+
+message GetTunnelStatsRequest {
+  string remote_vtep = 1;
+  uint32 vni = 2;
+}
+message GetTunnelStatsResponse {
+  TunnelInfo tunnel = 1;
+}
+
+message ListRemoteMACsRequest {
+  uint32 vni = 1; // 0 for all VNIs
+}
+message ListRemoteMACsResponse {
+  repeated RemoteMACEntry macs = 1;
+}
+
+message ForgetMACRequest {
+  string mac = 1;
+  uint32 vni = 2;
+}
+message ForgetMACResponse {
+  Status status = 1;
+}
+
+message GetOverlayStatusRequest {}
+message GetOverlayStatusResponse {
+  OverlayStatus status = 1;
+}

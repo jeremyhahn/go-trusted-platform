@@ -1,0 +1,36 @@
+version: "1.0"
+disk:
+  device: /dev/sda
+  partition_table: gpt
+  efi_size: 538
+  filesystem: lvm
+  lvm:
+    volume_group: vg0
+    logical_volume: root
+  encryption:
+    enabled: true
+    cipher: aes-xts-plain64
+    key_size: 512
+    hash: sha256
+    pbkdf: pbkdf2
+    password: "${INSTALL_PASSWORD}"
+    mapped_name: cryptroot
+os:
+  name: alpine
+  version: "3.22.2"
+  architecture: x86_64
+  hostname: trusted-platform
+  mirror: https://dl-cdn.alpinelinux.org/alpine
+  root_password: "${ROOT_PASSWORD}"
+  filesystem_type: lvm
+  fips: true
+  lockdown: true
+  lockdown_mode: confidentiality
+  tpm_auto_upgrade_seal: true
+  platformd_binary: /media/cdrom/platformd-bin/platformd
+security:
+  tpm:
+    enabled: true
+    seal_pcrs: [0, 1, 2, 3, 4, 5, 7, 9, 11, 12, 13, 14]
+  secure_boot:
+    enabled: true

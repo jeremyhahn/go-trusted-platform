@@ -1,0 +1,165 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// ClusterService provides cluster management operations for distributed
+// platform deployments including bootstrap, membership, and health monitoring.
+service ClusterService {
+  // Bootstrap initializes a new cluster with this node as the initial leader.
+  rpc Bootstrap(BootstrapClusterRequest) returns (BootstrapClusterResponse);
+
+  // Join adds this node to an existing cluster.
+  rpc Join(JoinClusterRequest) returns (JoinClusterResponse);
+
+  // Leave gracefully removes this node from the cluster.
+  rpc Leave(LeaveClusterRequest) returns (LeaveClusterResponse);
+
+  // GetStatus returns the current cluster status including leader and health.
+  rpc GetStatus(GetClusterStatusRequest) returns (GetClusterStatusResponse);
+
+  // ListNodes returns all nodes in the cluster with their status.
+  rpc ListNodes(ListClusterNodesRequest) returns (ListClusterNodesResponse);
+}
+
+// ClusterState represents the state of the cluster.
+enum ClusterState {
+  CLUSTER_STATE_UNSPECIFIED = 0;
+  CLUSTER_STATE_INITIALIZING = 1;
+  CLUSTER_STATE_HEALTHY = 2;
+  CLUSTER_STATE_DEGRADED = 3;
+  CLUSTER_STATE_UNAVAILABLE = 4;
+  CLUSTER_STATE_PARTITIONED = 5;
+}
+
+// NodeRole represents the role of a node in the cluster.
+enum NodeRole {
+  NODE_ROLE_UNSPECIFIED = 0;
+  NODE_ROLE_LEADER = 1;
+  NODE_ROLE_FOLLOWER = 2;
+  NODE_ROLE_CANDIDATE = 3;
+  NODE_ROLE_OBSERVER = 4;
+}
+
+// NodeState represents the state of a node in the cluster.
+enum NodeState {
+  NODE_STATE_UNSPECIFIED = 0;
+  NODE_STATE_JOINING = 1;
+  NODE_STATE_ACTIVE = 2;
+  NODE_STATE_LEAVING = 3;
+  NODE_STATE_LEFT = 4;
+  NODE_STATE_FAILED = 5;
+  NODE_STATE_UNREACHABLE = 6;
+}
+
+// ClusterNode represents a node in the cluster.
+message ClusterNode {
+  string id = 1;
+  string name = 2;
+  string address = 3;
+  uint32 port = 4;
+  NodeRole role = 5;
+  NodeState state = 6;
+  HealthStatus health = 7;
+  string version = 8;
+  google.protobuf.Timestamp joined_at = 9;
+  google.protobuf.Timestamp last_heartbeat = 10;
+  map<string, string> labels = 11;
+  map<string, string> metadata = 12;
+}
+
+// ClusterInfo contains comprehensive cluster information.
+message ClusterInfo {
+  string id = 1;
+  string name = 2;
+  ClusterState state = 3;
+  string leader_id = 4;
+  string leader_address = 5;
+  uint32 total_nodes = 6;
+  uint32 healthy_nodes = 7;
+  uint64 term = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp last_election = 10;
+  map<string, string> metadata = 11;
+}
+
+// =============================================================================
+// Request/Response Messages
+// =============================================================================
+
+// Bootstrap request/response
+message BootstrapClusterRequest {
+  string cluster_name = 1;
+  string node_name = 2;
+  string bind_address = 3;
+  uint32 bind_port = 4;
+  string advertise_address = 5;
+  uint32 advertise_port = 6;
+  map<string, string> labels = 7;
+  map<string, string> metadata = 8;
+}
+
+message BootstrapClusterResponse {
+  Status status = 1;
+  ClusterInfo cluster = 2;
+  ClusterNode node = 3;
+}
+
+// Join request/response
+message JoinClusterRequest {
+  string node_name = 1;
+  string bind_address = 2;
+  uint32 bind_port = 3;
+  string advertise_address = 4;
+  uint32 advertise_port = 5;
+  repeated string seed_addresses = 6;
+  map<string, string> labels = 7;
+  map<string, string> metadata = 8;
+}
+
+message JoinClusterResponse {
+  Status status = 1;
+  ClusterInfo cluster = 2;
+  ClusterNode node = 3;
+}
+
+// Leave request/response
+message LeaveClusterRequest {
+  string node_id = 1;
+  bool force = 2;
+  uint32 timeout_seconds = 3;
+}
+
+message LeaveClusterResponse {
+  Status status = 1;
+}
+
+// GetStatus request/response
+message GetClusterStatusRequest {
+  bool include_nodes = 1;
+}
+
+message GetClusterStatusResponse {
+  ClusterInfo cluster = 1;
+  ClusterNode local_node = 2;
+  repeated ClusterNode nodes = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// ListNodes request/response
+message ListClusterNodesRequest {
+  repeated NodeRole roles = 1;
+  repeated NodeState states = 2;
+  LabelSelector selector = 3;
+  PaginationRequest pagination = 4;
+}
+
+message ListClusterNodesResponse {
+  repeated ClusterNode nodes = 1;
+  uint32 total = 2;
+  PaginationResponse pagination = 3;
+}

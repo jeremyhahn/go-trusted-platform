@@ -1,0 +1,755 @@
+npx playwright test
+
+Running 690 tests using 1 worker
+
+[1A[2K[1/690] [chromium] › e2e/auth.spec.ts:171:7 › Authentication Flow › should display registration form by default
+[1A[2K[2/690] [chromium] › e2e/auth.spec.ts:179:7 › Authentication Flow › should display login form when status=registered
+[1A[2K[3/690] [chromium] › e2e/auth.spec.ts:186:7 › Authentication Flow › should toggle between registration and login forms
+[1A[2K[4/690] [chromium] › e2e/auth.spec.ts:201:7 › Authentication Flow › should show invitation UI when invitation token is present
+[1A[2K[5/690] [chromium] › e2e/auth.spec.ts:208:7 › Authentication Flow › should validate username input
+[1A[2K[6/690] [chromium] › e2e/auth.spec.ts:218:7 › Authentication Flow › should validate username for login
+[1A[2K[7/690] [chromium] › e2e/auth.spec.ts:235:7 › Protected Routes › should redirect to login when not authenticated
+[1A[2K[8/690] [chromium] › e2e/auth.spec.ts:242:7 › Protected Routes › should redirect to login when accessing invitations page without auth
+[1A[2K[9/690] [chromium] › e2e/auth.spec.ts:249:7 › Protected Routes › should redirect to login when accessing dashboard without auth
+[1A[2K[10/690] [chromium] › e2e/auth.spec.ts:256:7 › Protected Routes › should allow access to protected routes with valid session
+[1A[2K[11/690] [chromium] › e2e/auth.spec.ts:273:7 › Invitation Token Flow › should show correct UI when invitation token is in URL
+[1A[2K[12/690] [chromium] › e2e/auth.spec.ts:285:7 › Invitation Token Flow › should show generic invitation message without tenant name
+[1A[2K[13/690] [chromium] › e2e/auth.spec.ts:292:7 › Invitation Token Flow › should allow toggling to login even with invitation
+[1A[2K[14/690] [chromium] › e2e/auth.spec.ts:311:7 › Registration Flow › should handle successful registration and create new tenant
+[1A[2K[15/690] [chromium] › e2e/auth.spec.ts:358:7 › Registration Flow › should handle registration failure gracefully
+
+
+
+
+
+
+[1A[2K[16/690] [chromium] › e2e/auth.spec.ts:384:7 › Registration Flow › should handle existing user error during registration
+[1A[2K[17/690] [chromium] › e2e/auth.spec.ts:421:7 › Login Flow › should handle successful login
+
+
+
+
+
+
+
+
+
+
+[1A[2K[18/690] [chromium] › e2e/auth.spec.ts:468:7 › Login Flow › should handle login failure for non-existent user
+[1A[2K[19/690] [chromium] › e2e/auth.spec.ts:483:7 › Login Flow › should handle credential verification failure
+[1A[2K[20/690] [chromium] › e2e/auth.spec.ts:506:7 › Invited User Registration › should register invited user and join existing tenant
+[1A[2K[21/690] [chromium] › e2e/auth.spec.ts:560:7 › Invited User Registration › should handle expired invitation gracefully
+
+
+
+
+
+
+[1A[2K[22/690] [chromium] › e2e/auth.spec.ts:583:7 › Session Management › should redirect authenticated user from login to dashboard
+
+
+
+
+
+
+
+
+
+
+[1A[2K[23/690] [chromium] › e2e/auth.spec.ts:592:7 › Session Management › should clear session on logout and redirect to login
+[1A[2K[24/690] [chromium] › e2e/auth.spec.ts:610:7 › Session Management › should handle multiple logout attempts gracefully
+[1A[2K[25/690] [chromium] › e2e/auth.spec.ts:633:7 › Error State UI › should display error message clearly
+[1A[2K[26/690] [chromium] › e2e/auth.spec.ts:649:7 › Error State UI › should clear error when user starts typing
+[1A[2K[27/690] [chromium] › e2e/auth.spec.ts:663:7 › Error State UI › should show loading state during authentication
+
+[1A[2K[28/690] [chromium] › e2e/auth.spec.ts:735:7 › Accessibility › should have accessible form labels
+[1A[2K[29/690] [chromium] › e2e/auth.spec.ts:744:7 › Accessibility › should support keyboard navigation
+[1A[2K[30/690] [chromium] › e2e/auth.spec.ts:770:7 › Accessibility › should have visible focus indicators
+[1A[2K[31/690] [chromium] › e2e/ca.spec.ts:478:9 › Certificate Authority - Certificates Page › Certificate List › should display certificate table with certificates
+[1A[2K[32/690] [chromium] › e2e/ca.spec.ts:511:9 › Certificate Authority - Certificates Page › Certificate List › should display certificate status badges correctly
+[1A[2K[33/690] [chromium] › e2e/ca.spec.ts:532:9 › Certificate Authority - Certificates Page › Certificate List › should filter certificates using search
+[1A[2K[34/690] [chromium] › e2e/ca.spec.ts:556:9 › Certificate Authority - Certificates Page › Certificate List › should show empty state when no certificates
+[1A[2K[35/690] [chromium] › e2e/ca.spec.ts:569:9 › Certificate Authority - Certificates Page › Certificate List › should navigate to certificate details on view
+[1A[2K[36/690] [chromium] › e2e/ca.spec.ts:605:9 › Certificate Authority - Certificates Page › Certificate List › should refresh certificate list
+[1A[2K[37/690] [chromium] › e2e/ca.spec.ts:631:9 › Certificate Authority - Certificates Page › Issue Certificate › should open issue certificate dialog
+[1A[2K[38/690] [chromium] › e2e/ca.spec.ts:647:9 › Certificate Authority - Certificates Page › Issue Certificate › should display certificate form fields
+[1A[2K[39/690] [chromium] › e2e/ca.spec.ts:662:9 › Certificate Authority - Certificates Page › Issue Certificate › should submit certificate request form
+[1A[2K[40/690] [chromium] › e2e/ca.spec.ts:704:9 › Certificate Authority - Certificates Page › Issue Certificate › should require subject field
+[1A[2K[41/690] [chromium] › e2e/ca.spec.ts:719:9 › Certificate Authority - Certificates Page › Issue Certificate › should handle issue certificate error
+[1A[2K[42/690] [chromium] › e2e/ca.spec.ts:746:9 › Certificate Authority - Certificates Page › Revoke Certificate › should revoke an active certificate
+[1A[2K[43/690] [chromium] › e2e/ca.spec.ts:769:9 › Certificate Authority - Certificates Page › Revoke Certificate › should not show revoke option for revoked certificates
+[1A[2K[44/690] [chromium] › e2e/ca.spec.ts:791:9 › Certificate Authority - Certificates Page › Revoke Certificate › should handle revocation error
+[1A[2K[45/690] [chromium] › e2e/ca.spec.ts:830:9 › Certificate Authority - Certificates Page › Certificate Details › should display certificate details
+
+[1A[2K[46/690] [chromium] › e2e/ca.spec.ts:849:9 › Certificate Authority - Certificates Page › Certificate Details › should show download buttons
+[1A[2K[47/690] [chromium] › e2e/ca.spec.ts:866:9 › Certificate Authority - Certificates Page › Certificate Details › should show revoke button for active certificates
+[1A[2K[48/690] [chromium] › e2e/ca.spec.ts:881:9 › Certificate Authority - Certificates Page › Certificate Details › should hide revoke button for revoked certificates
+[1A[2K[49/690] [chromium] › e2e/ca.spec.ts:897:9 › Certificate Authority - Certificates Page › Certificate Details › should navigate back to certificate list
+[1A[2K[50/690] [chromium] › e2e/ca.spec.ts:914:9 › Certificate Authority - Certificates Page › Certificate Details › should handle certificate not found
+[1A[2K[51/690] [chromium] › e2e/ca.spec.ts:934:9 › Certificate Authority - Requests Page › Certificate Requests List › should display certificate requests page
+[1A[2K[52/690] [chromium] › e2e/ca.spec.ts:959:9 › Certificate Authority - Requests Page › Certificate Requests List › should display pending requests
+[1A[2K[53/690] [chromium] › e2e/ca.spec.ts:979:9 › Certificate Authority - Requests Page › Certificate Requests List › should show request status badges
+[1A[2K[54/690] [chromium] › e2e/ca.spec.ts:989:9 › Certificate Authority - Requests Page › Certificate Requests List › should show approve and deny actions for pending requests
+[1A[2K[55/690] [chromium] › e2e/ca.spec.ts:1005:9 › Certificate Authority - Requests Page › Approve Request › should display approve button in CSR dialog
+[1A[2K[56/690] [chromium] › e2e/ca.spec.ts:1021:9 › Certificate Authority - Requests Page › Reject Request › should display deny button in CSR dialog
+[1A[2K[57/690] [chromium] › e2e/ca.spec.ts:1037:7 › Certificate Authority - CRL Page › should display CRL management page
+[1A[2K[58/690] [chromium] › e2e/ca.spec.ts:1049:7 › Certificate Authority - CRL Page › should show coming soon message
+[1A[2K[59/690] [chromium] › e2e/ca.spec.ts:1059:7 › Certificate Authority - CRL Page › should display CRL status section
+[1A[2K[60/690] [chromium] › e2e/ca.spec.ts:1071:7 › Certificate Authority - CRL Page › should display distribution points section
+[1A[2K[61/690] [chromium] › e2e/ca.spec.ts:1080:7 › Certificate Authority - CRL Page › should show disabled generate CRL button
+[1A[2K[62/690] [chromium] › e2e/ca.spec.ts:1091:7 › Certificate Authority - CRL Page › should show disabled download CRL button
+[1A[2K[63/690] [chromium] › e2e/ca.spec.ts:1108:7 › Certificate Authority - Error States › should display error when list fetch fails
+[1A[2K[64/690] [chromium] › e2e/ca.spec.ts:1121:7 › Certificate Authority - Error States › should display error when certificate detail fetch fails
+[1A[2K[65/690] [chromium] › e2e/ca.spec.ts:1133:7 › Certificate Authority - Error States › should handle network timeout gracefully
+[1A[2K[66/690] [chromium] › e2e/ca.spec.ts:1150:7 › Certificate Authority - Access Control › should redirect unauthenticated users to login
+[1A[2K[67/690] [chromium] › e2e/ca.spec.ts:1157:7 › Certificate Authority - Access Control › should allow tenant members to view certificates
+[1A[2K[68/690] [chromium] › e2e/ca.spec.ts:1168:7 › Certificate Authority - Access Control › should allow tenant owners full access
+[1A[2K[69/690] [chromium] › e2e/ca.spec.ts:1187:9 › Certificate Authority - CA Bundle › Bundle Page Display › should display CA Bundle page header
+[1A[2K[70/690] [chromium] › e2e/ca.spec.ts:1199:9 › Certificate Authority - CA Bundle › Bundle Page Display › should display Certificate Bundle Management card
+[1A[2K[71/690] [chromium] › e2e/ca.spec.ts:1209:9 › Certificate Authority - CA Bundle › Bundle Page Display › should display Coming Soon placeholder
+[1A[2K[72/690] [chromium] › e2e/ca.spec.ts:1223:9 › Certificate Authority - CA Bundle › Bundle Page Display › should display Root CA Bundle section
+[1A[2K[73/690] [chromium] › e2e/ca.spec.ts:1233:9 › Certificate Authority - CA Bundle › Bundle Page Display › should display Intermediate Bundle section
+[1A[2K[74/690] [chromium] › e2e/ca.spec.ts:1241:9 › Certificate Authority - CA Bundle › Bundle Page Display › should display Full Chain section
+[1A[2K[75/690] [chromium] › e2e/ca.spec.ts:1256:9 › Certificate Authority - CA Bundle › Download Buttons › should display three disabled download buttons
+[1A[2K[76/690] [chromium] › e2e/ca.spec.ts:1271:9 › Certificate Authority - CA Bundle › Download Buttons › should have Root CA Bundle download button disabled
+[1A[2K[77/690] [chromium] › e2e/ca.spec.ts:1279:9 › Certificate Authority - CA Bundle › Download Buttons › should have Intermediate Bundle download button disabled
+[1A[2K[78/690] [chromium] › e2e/ca.spec.ts:1287:9 › Certificate Authority - CA Bundle › Download Buttons › should have Full Chain download button disabled
+[1A[2K[79/690] [chromium] › e2e/ca.spec.ts:1302:9 › Certificate Authority - CA Bundle › Page Layout › should display bundle sections in a grid layout
+[1A[2K[80/690] [chromium] › e2e/ca.spec.ts:1311:9 › Certificate Authority - CA Bundle › Page Layout › should display bundle sections with descriptions
+[1A[2K[81/690] [chromium] › e2e/ca.spec.ts:1324:9 › Certificate Authority - CA Bundle › Access Control › should redirect unauthenticated users to login
+[1A[2K[82/690] [chromium] › e2e/ca.spec.ts:1331:9 › Certificate Authority - CA Bundle › Access Control › should allow tenant members to view CA Bundle page
+[1A[2K[83/690] [chromium] › e2e/ca.spec.ts:1343:9 › Certificate Authority - CA Bundle › Access Control › should allow tenant owners to view CA Bundle page
+[1A[2K[84/690] [chromium] › e2e/compute.spec.ts:1070:9 › Compute Management › VMs List › should display VM table with columns
+[1A[2K[85/690] [chromium] › e2e/compute.spec.ts:1096:9 › Compute Management › VMs List › should display VM status badges correctly
+[1A[2K[86/690] [chromium] › e2e/compute.spec.ts:1113:9 › Compute Management › VMs List › should show empty state when no VMs
+[1A[2K[87/690] [chromium] › e2e/compute.spec.ts:1122:9 › Compute Management › VMs List › should show loading state
+[1A[2K[88/690] [chromium] › e2e/compute.spec.ts:1143:9 › Compute Management › VMs List › should filter VMs by status dropdown
+[1A[2K[89/690] [chromium] › e2e/compute.spec.ts:1177:9 › Compute Management › VM CRUD Operations › should open create VM dialog
+[1A[2K[90/690] [chromium] › e2e/compute.spec.ts:1191:9 › Compute Management › VM CRUD Operations › should create a new VM
+[1A[2K[91/690] [chromium] › e2e/compute.spec.ts:1220:9 › Compute Management › VM CRUD Operations › should start a stopped VM
+[1A[2K[92/690] [chromium] › e2e/compute.spec.ts:1241:9 › Compute Management › VM CRUD Operations › should stop a running VM
+[1A[2K[93/690] [chromium] › e2e/compute.spec.ts:1262:9 › Compute Management › VM CRUD Operations › should reboot a VM
+[1A[2K[94/690] [chromium] › e2e/compute.spec.ts:1285:9 › Compute Management › VM CRUD Operations › should delete a VM with confirmation
+[1A[2K[95/690] [chromium] › e2e/compute.spec.ts:1316:10 › Compute Management › VM CRUD Operations › should clone a VM
+[1A[2K[96/690] [chromium] › e2e/compute.spec.ts:1343:9 › Compute Management › Containers › should display container list
+[1A[2K[97/690] [chromium] › e2e/compute.spec.ts:1362:9 › Compute Management › Containers › should display container status badges
+[1A[2K[98/690] [chromium] › e2e/compute.spec.ts:1378:9 › Compute Management › Containers › should start a stopped container
+[1A[2K[99/690] [chromium] › e2e/compute.spec.ts:1399:9 › Compute Management › Containers › should stop a running container
+[1A[2K[100/690] [chromium] › e2e/compute.spec.ts:1420:9 › Compute Management › Containers › should delete a container
+[1A[2K[101/690] [chromium] › e2e/compute.spec.ts:1445:9 › Compute Management › Containers › should show empty state when no containers
+[1A[2K[102/690] [chromium] › e2e/compute.spec.ts:1476:9 › Compute Management › Snapshots › should display snapshot list
+[1A[2K[103/690] [chromium] › e2e/compute.spec.ts:1496:9 › Compute Management › Snapshots › should show message when no VMs exist
+[1A[2K[104/690] [chromium] › e2e/compute.spec.ts:1506:9 › Compute Management › Snapshots › should show message when no snapshots exist
+[1A[2K[105/690] [chromium] › e2e/compute.spec.ts:1518:9 › Compute Management › Snapshots › should restore from snapshot
+[1A[2K[106/690] [chromium] › e2e/compute.spec.ts:1548:9 › Compute Management › Snapshots › should delete snapshot
+[1A[2K[107/690] [chromium] › e2e/compute.spec.ts:1586:9 › Compute Management › Error States › should handle fetch VMs error
+[1A[2K[108/690] [chromium] › e2e/compute.spec.ts:1620:9 › Compute Management › Error States › should handle VM operation error
+[1A[2K[109/690] [chromium] › e2e/compute.spec.ts:1665:9 › Compute Management › Error States › should handle container operation error
+[1A[2K[110/690] [chromium] › e2e/compute.spec.ts:1715:9 › Compute Management › Access Control › should allow tenant members to view VMs
+[1A[2K[111/690] [chromium] › e2e/compute.spec.ts:1729:9 › Compute Management › Access Control › should redirect unauthenticated users to login
+[1A[2K[112/690] [chromium] › e2e/dashboard.spec.ts:218:7 › Dashboard Access › should redirect to login if not authenticated
+[1A[2K[113/690] [chromium] › e2e/dashboard.spec.ts:225:7 › Dashboard Access › should redirect to login with expired session
+[1A[2K[114/690] [chromium] › e2e/dashboard.spec.ts:236:7 › Dashboard Access › should load dashboard when authenticated
+[1A[2K[115/690] [chromium] › e2e/dashboard.spec.ts:251:7 › Dashboard Access › should show correct user info in header
+[1A[2K[116/690] [chromium] › e2e/dashboard.spec.ts:281:7 › Navigation Sidebar › should display all main navigation items
+[1A[2K[117/690] [chromium] › e2e/dashboard.spec.ts:301:7 › Navigation Sidebar › should show active state for current page
+[1A[2K[118/690] [chromium] › e2e/dashboard.spec.ts:311:7 › Navigation Sidebar › should navigate to IAM users section
+[1A[2K[119/690] [chromium] › e2e/dashboard.spec.ts:344:7 › Navigation Sidebar › should navigate to Devices section
+[1A[2K[120/690] [chromium] › e2e/dashboard.spec.ts:372:7 › Navigation Sidebar › should expand and collapse navigation groups
+[1A[2K[121/690] [chromium] › e2e/dashboard.spec.ts:391:7 › Navigation Sidebar › should display responsive menu on mobile viewport
+[1A[2K[122/690] [chromium] › e2e/dashboard.spec.ts:415:7 › Dashboard Overview › should show system stats cards with real data
+[1A[2K[123/690] [chromium] › e2e/dashboard.spec.ts:440:7 › Dashboard Overview › should show platform health status
+[1A[2K[124/690] [chromium] › e2e/dashboard.spec.ts:452:7 › Dashboard Overview › should show degraded health status when unhealthy
+[1A[2K[125/690] [chromium] › e2e/dashboard.spec.ts:463:7 › Dashboard Overview › should show tenant information
+[1A[2K[126/690] [chromium] › e2e/dashboard.spec.ts:482:7 › Dashboard Overview › should show quick actions section
+[1A[2K[127/690] [chromium] › e2e/dashboard.spec.ts:497:7 › Dashboard Overview › should navigate when clicking quick action
+[1A[2K[128/690] [chromium] › e2e/dashboard.spec.ts:530:7 › Dashboard Overview › should show system health metrics
+[1A[2K[129/690] [chromium] › e2e/dashboard.spec.ts:555:7 › Dashboard Overview › should refresh data when refresh button is clicked
+[1A[2K[130/690] [chromium] › e2e/dashboard.spec.ts:599:7 › Error Handling › should handle network failure gracefully
+[1A[2K[131/690] [chromium] › e2e/dashboard.spec.ts:611:7 › Error Handling › should show loading state while fetching data
+[1A[2K[132/690] [chromium] › e2e/dashboard.spec.ts:628:7 › Error Handling › should display API error responses gracefully
+[1A[2K[133/690] [chromium] › e2e/dashboard.spec.ts:655:7 › Loading States › should show loading state while fetching data
+[1A[2K[134/690] [chromium] › e2e/dashboard.spec.ts:672:7 › Loading States › should eventually show data after loading
+[1A[2K[135/690] [chromium] › e2e/dashboard.spec.ts:692:7 › Responsive Layout › should display correctly on mobile viewport
+[1A[2K[136/690] [chromium] › e2e/dashboard.spec.ts:705:7 › Responsive Layout › should display correctly on tablet viewport
+[1A[2K[137/690] [chromium] › e2e/dashboard.spec.ts:716:7 › Responsive Layout › should display correctly on desktop viewport
+[1A[2K[138/690] [chromium] › e2e/dashboard.spec.ts:740:7 › Member Access › should load dashboard for tenant members
+[1A[2K[139/690] [chromium] › e2e/dashboard.spec.ts:748:7 › Member Access › should display navigation for members
+[1A[2K[140/690] [chromium] › e2e/dashboard.spec.ts:771:7 › Stats Card Navigation › should navigate to users page when clicking users card
+[1A[2K[141/690] [chromium] › e2e/dashboard.spec.ts:800:7 › Stats Card Navigation › should navigate to devices page when clicking devices card
+[1A[2K[142/690] [chromium] › e2e/dashboard.spec.ts:828:7 › Stats Card Navigation › should navigate to certificates page when clicking certificates card
+[1A[2K[143/690] [chromium] › e2e/dashboard.spec.ts:875:7 › Stats Card Navigation › should navigate to health page when clicking platform health card
+[1A[2K[144/690] [chromium] › e2e/dashboard.spec.ts:929:7 › Tenant Details Navigation › should navigate to tenant details page
+[1A[2K[145/690] [chromium] › e2e/dashboard.spec.ts:985:7 › User Menu › should open user menu dropdown
+[1A[2K[146/690] [chromium] › e2e/dashboard.spec.ts:998:7 › User Menu › should logout when clicking logout
+[1A[2K[147/690] [chromium] › e2e/devices.spec.ts:710:9 › Devices Management › Device List › should display device table with columns
+[1A[2K[148/690] [chromium] › e2e/devices.spec.ts:737:9 › Devices Management › Device List › should display device status badges correctly
+[1A[2K[149/690] [chromium] › e2e/devices.spec.ts:755:9 › Devices Management › Device List › should display device type badges correctly
+[1A[2K[150/690] [chromium] › e2e/devices.spec.ts:773:9 › Devices Management › Device List › should show empty state when no devices
+[1A[2K[151/690] [chromium] › e2e/devices.spec.ts:782:9 › Devices Management › Device List › should show loading state
+[1A[2K[152/690] [chromium] › e2e/devices.spec.ts:803:9 › Devices Management › Device List › should filter devices by search query
+[1A[2K[153/690] [chromium] › e2e/devices.spec.ts:830:10 › Devices Management › Device List › should filter devices by type
+[1A[2K[154/690] [chromium] › e2e/devices.spec.ts:890:10 › Devices Management › Device List › should filter devices by status
+[1A[2K[155/690] [chromium] › e2e/devices.spec.ts:945:9 › Devices Management › Device List › should clear filters
+[1A[2K[156/690] [chromium] › e2e/devices.spec.ts:975:9 › Devices Management › Device List › should display TPM status for devices
+[1A[2K[157/690] [chromium] › e2e/devices.spec.ts:1009:9 › Devices Management › Device Details › should navigate to device details from list
+[1A[2K[158/690] [chromium] › e2e/devices.spec.ts:1067:9 › Devices Management › Device Details › should display device information
+[1A[2K[159/690] [chromium] › e2e/devices.spec.ts:1088:9 › Devices Management › Device Details › should display TPM info tab
+[1A[2K[160/690] [chromium] › e2e/devices.spec.ts:1105:9 › Devices Management › Device Details › should display attestation history tab
+[1A[2K[161/690] [chromium] › e2e/devices.spec.ts:1134:9 › Devices Management › Device Details › should display certificates tab
+[1A[2K[162/690] [chromium] › e2e/devices.spec.ts:1165:9 › Devices Management › Device Details › should show device not found when device does not exist
+[1A[2K[163/690] [chromium] › e2e/devices.spec.ts:1178:9 › Devices Management › Device Details › should navigate back to devices list
+[1A[2K[164/690] [chromium] › e2e/devices.spec.ts:1199:9 › Devices Management › CRUD Operations › should open register device dialog
+[1A[2K[165/690] [chromium] › e2e/devices.spec.ts:1213:9 › Devices Management › CRUD Operations › should create a new device
+[1A[2K[166/690] [chromium] › e2e/devices.spec.ts:1243:9 › Devices Management › CRUD Operations › should validate device name is required
+[1A[2K[167/690] [chromium] › e2e/devices.spec.ts:1259:9 › Devices Management › CRUD Operations › should delete a device with confirmation
+[1A[2K[168/690] [chromium] › e2e/devices.spec.ts:1290:9 › Devices Management › CRUD Operations › should cancel delete when dialog is dismissed
+[1A[2K[169/690] [chromium] › e2e/devices.spec.ts:1311:9 › Devices Management › CRUD Operations › should delete device from details page
+[1A[2K[170/690] [chromium] › e2e/devices.spec.ts:1332:9 › Devices Management › CRUD Operations › should toggle device status
+[1A[2K[171/690] [chromium] › e2e/devices.spec.ts:1350:9 › Devices Management › CRUD Operations › should run attestation on device with TPM
+[1A[2K[172/690] [chromium] › e2e/devices.spec.ts:1389:9 › Devices Management › Error States › should handle fetch devices error
+[1A[2K[173/690] [chromium] › e2e/devices.spec.ts:1423:9 › Devices Management › Error States › should handle fetch device details error
+[1A[2K[174/690] [chromium] › e2e/devices.spec.ts:1437:9 › Devices Management › Error States › should handle create device error
+[1A[2K[175/690] [chromium] › e2e/devices.spec.ts:1459:9 › Devices Management › Error States › should handle delete device error
+[1A[2K[176/690] [chromium] › e2e/devices.spec.ts:1488:9 › Devices Management › Access Control › should allow tenant members to view devices
+[1A[2K[177/690] [chromium] › e2e/devices.spec.ts:1504:9 › Devices Management › Access Control › should redirect unauthenticated users to login
+[1A[2K[178/690] [chromium] › e2e/devices.spec.ts:1517:9 › Devices Management › Device Details Actions › should run attestation from details page
+[1A[2K[179/690] [chromium] › e2e/devices.spec.ts:1547:9 › Devices Management › Device Details Actions › should toggle device status from details page
+[1A[2K[180/690] [chromium] › e2e/devices.spec.ts:1566:9 › Devices Management › Device Details Actions › should show empty attestation history message
+[1A[2K[181/690] [chromium] › e2e/devices.spec.ts:1585:9 › Devices Management › Device Details Actions › should show empty certificates message
+[1A[2K[182/690] [chromium] › e2e/devices.spec.ts:1612:9 › Devices Management › Device Form Validation › should select device type
+[1A[2K[183/690] [chromium] › e2e/devices.spec.ts:1630:9 › Devices Management › Device Form Validation › should fill TPM information
+[1A[2K[184/690] [chromium] › e2e/devices.spec.ts:1648:9 › Devices Management › Device Form Validation › should close dialog on cancel
+[1A[2K[185/690] [chromium] › e2e/devices.spec.ts:1676:9 › Device Profiles › Profile List › should display profiles list
+[1A[2K[186/690] [chromium] › e2e/devices.spec.ts:1705:9 › Device Profiles › Profile List › should show statistics cards
+[1A[2K[187/690] [chromium] › e2e/devices.spec.ts:1734:9 › Device Profiles › Profile List › should open create profile dialog
+[1A[2K[188/690] [chromium] › e2e/devices.spec.ts:1755:9 › Device Profiles › Profile List › should create a new profile
+[1A[2K[189/690] [chromium] › e2e/devices.spec.ts:1794:9 › Device Profiles › Profile List › should filter profiles by role
+[1A[2K[190/690] [chromium] › e2e/devices.spec.ts:1822:9 › Device Profiles › Profile List › should search profiles
+[1A[2K[191/690] [chromium] › e2e/devices.spec.ts:1846:9 › Device Profiles › Profile List › should delete profile with confirmation
+[1A[2K[192/690] [chromium] › e2e/devices.spec.ts:1877:9 › Device Profiles › Profile List › should duplicate profile
+[1A[2K[193/690] [chromium] › e2e/devices.spec.ts:1905:9 › Device Profiles › Profile List › should handle API errors gracefully
+[1A[2K[194/690] [chromium] › e2e/devices.spec.ts:1924:9 › Device Profiles › Profile List › should show empty state when no profiles
+[1A[2K[195/690] [chromium] › e2e/devices.spec.ts:1940:9 › Device Profiles › Profile Actions › should navigate to profile details
+[1A[2K[196/690] [chromium] › e2e/devices.spec.ts:1974:9 › Device Profiles › Profile Actions › should navigate to edit profile
+[1A[2K[197/690] [chromium] › e2e/devices.spec.ts:2004:9 › Device Profiles › Profile Actions › should cancel delete when dialog is dismissed
+[1A[2K[198/690] [chromium] › e2e/devices.spec.ts:2025:9 › Device Profiles › Profile Actions › should display network configurations in table
+[1A[2K[199/690] [chromium] › e2e/devices.spec.ts:2046:9 › Device Profiles › Profile Actions › should show no networks message when profile has no networks
+[1A[2K[200/690] [chromium] › e2e/devices.spec.ts:2065:9 › Device Profiles › Profile Actions › should show role badges correctly
+[1A[2K[201/690] [chromium] › e2e/devices.spec.ts:2093:9 › Device Profiles › Profile Actions › should handle create profile error
+[1A[2K[202/690] [chromium] › e2e/devices.spec.ts:2115:9 › Device Profiles › Profile Actions › should handle delete profile error
+[1A[2K[203/690] [chromium] › e2e/devices.spec.ts:2142:9 › Device Profiles › Profile Actions › should refresh profiles list
+[1A[2K[204/690] [chromium] › e2e/devices.spec.ts:2162:9 › Device Profiles › Profile Actions › should clear filters
+[1A[2K[205/690] [chromium] › e2e/devices.spec.ts:2195:9 › Device Profiles › Profile Actions › should show loading state
+[1A[2K[206/690] [chromium] › e2e/devices.spec.ts:2213:9 › Device Profiles › Profile Actions › should close create dialog on cancel
+[1A[2K[207/690] [chromium] › e2e/devices.spec.ts:2234:9 › Device Profiles › Access Control › should allow tenant members to view profiles
+[1A[2K[208/690] [chromium] › e2e/devices.spec.ts:2250:9 › Device Profiles › Access Control › should redirect unauthenticated users to login
+[1A[2K[209/690] [chromium] › e2e/devices.spec.ts:2779:9 › Device IDevID › IDevID Certificate List › should display IDevID page with table structure
+[1A[2K[210/690] [chromium] › e2e/devices.spec.ts:2803:9 › Device IDevID › IDevID Certificate List › should show empty state when no certificates
+[1A[2K[211/690] [chromium] › e2e/devices.spec.ts:2818:9 › Device IDevID › IDevID Certificate List › should display Issue IDevID button
+[1A[2K[212/690] [chromium] › e2e/devices.spec.ts:2832:9 › Device IDevID › IDevID Certificate List › should display filter controls
+[1A[2K[213/690] [chromium] › e2e/devices.spec.ts:2860:9 › Device IDevID › IDevID Filtering UI › should allow typing in search field
+[1A[2K[214/690] [chromium] › e2e/devices.spec.ts:2878:9 › Device IDevID › IDevID Filtering UI › should open status filter dropdown
+[1A[2K[215/690] [chromium] › e2e/devices.spec.ts:2899:9 › Device IDevID › IDevID Filtering UI › should open expiration filter dropdown
+[1A[2K[216/690] [chromium] › e2e/devices.spec.ts:2919:9 › Device IDevID › IDevID Filtering UI › should show clear filters button when filter is applied
+[1A[2K[217/690] [chromium] › e2e/devices.spec.ts:2950:9 › Device IDevID › Issue IDevID Certificate › should open issue IDevID dialog
+[1A[2K[218/690] [chromium] › e2e/devices.spec.ts:2968:9 › Device IDevID › Issue IDevID Certificate › should display issue form with all fields
+[1A[2K[219/690] [chromium] › e2e/devices.spec.ts:2992:9 › Device IDevID › Issue IDevID Certificate › should validate device selection is required
+[1A[2K[220/690] [chromium] › e2e/devices.spec.ts:3015:9 › Device IDevID › Issue IDevID Certificate › should validate subject is required
+[1A[2K[221/690] [chromium] › e2e/devices.spec.ts:3049:9 › Device IDevID › Issue IDevID Certificate › should show RSA key algorithm as default
+[1A[2K[222/690] [chromium] › e2e/devices.spec.ts:3072:9 › Device IDevID › Issue IDevID Certificate › should switch to ECC algorithm and show curve options
+[1A[2K[223/690] [chromium] › e2e/devices.spec.ts:3097:9 › Device IDevID › Issue IDevID Certificate › should close dialog on escape key
+[1A[2K[224/690] [chromium] › e2e/devices.spec.ts:3120:9 › Device IDevID › Issue IDevID Certificate › should issue certificate successfully
+[1A[2K[225/690] [chromium] › e2e/devices.spec.ts:3160:9 › Device IDevID › IDevID Certificate Actions › should open actions menu
+[1A[2K[226/690] [chromium] › e2e/devices.spec.ts:3179:9 › Device IDevID › IDevID Certificate Actions › should navigate to certificate details
+[1A[2K[227/690] [chromium] › e2e/devices.spec.ts:3198:9 › Device IDevID › IDevID Certificate Actions › should download certificate
+[1A[2K[228/690] [chromium] › e2e/devices.spec.ts:3217:9 › Device IDevID › IDevID Certificate Actions › should renew certificate
+[1A[2K[229/690] [chromium] › e2e/devices.spec.ts:3236:9 › Device IDevID › IDevID Certificate Actions › should revoke certificate with confirmation
+[1A[2K[230/690] [chromium] › e2e/devices.spec.ts:3261:9 › Device IDevID › IDevID Certificate Actions › should cancel revoke when dialog is dismissed
+[1A[2K[231/690] [chromium] › e2e/devices.spec.ts:3287:9 › Device IDevID › IDevID Certificate Actions › should not show renew/revoke for non-active certificates
+[1A[2K[232/690] [chromium] › e2e/devices.spec.ts:3316:9 › Device IDevID › IDevID Error States › should show empty state when no certificates exist
+[1A[2K[233/690] [chromium] › e2e/devices.spec.ts:3334:10 › Device IDevID › IDevID Error States › should handle issue certificate API error - SKIP: complex mock routing
+[1A[2K[234/690] [chromium] › e2e/devices.spec.ts:3342:10 › Device IDevID › IDevID Error States › should handle renew certificate error - SKIP: complex mock routing
+[1A[2K[235/690] [chromium] › e2e/devices.spec.ts:3364:9 › Device IDevID › IDevID Error States › should handle revoke certificate error
+[1A[2K[236/690] [chromium] › e2e/devices.spec.ts:3391:9 › Device IDevID › IDevID Error States › should handle download certificate error
+[1A[2K[237/690] [chromium] › e2e/devices.spec.ts:3415:9 › Device IDevID › IDevID Access Control › should allow tenant members to view IDevID page
+[1A[2K[238/690] [chromium] › e2e/devices.spec.ts:3430:9 › Device IDevID › IDevID Access Control › should redirect unauthenticated users to login
+[1A[2K[239/690] [chromium] › e2e/devices.spec.ts:3448:9 › Device IDevID › IDevID Table Display › should display certificate subject
+[1A[2K[240/690] [chromium] › e2e/devices.spec.ts:3466:9 › Device IDevID › IDevID Table Display › should display serial number in monospace font
+[1A[2K[241/690] [chromium] › e2e/devices.spec.ts:3485:9 › Device IDevID › IDevID Table Display › should display formatted dates
+[1A[2K[242/690] [chromium] › e2e/devices.spec.ts:3507:9 › Device IDevID › IDevID Table Display › should display multiple certificates
+[1A[2K[243/690] [chromium] › e2e/devices.spec.ts:3834:9 › Device vTPM › vTPM List › should display vTPM page header and description
+[1A[2K[244/690] [chromium] › e2e/devices.spec.ts:3845:9 › Device vTPM › vTPM List › should display vTPM table with columns
+[1A[2K[245/690] [chromium] › e2e/devices.spec.ts:3869:9 › Device vTPM › vTPM List › should display vTPM state badges correctly
+[1A[2K[246/690] [chromium] › e2e/devices.spec.ts:3887:9 › Device vTPM › vTPM List › should show empty state when no vTPM instances
+[1A[2K[247/690] [chromium] › e2e/devices.spec.ts:3896:9 › Device vTPM › vTPM List › should show loading state
+[1A[2K[248/690] [chromium] › e2e/devices.spec.ts:3914:9 › Device vTPM › vTPM List › should filter vTPM instances by search query
+[1A[2K[249/690] [chromium] › e2e/devices.spec.ts:3938:9 › Device vTPM › vTPM List › should filter vTPM instances by VM ID
+[1A[2K[250/690] [chromium] › e2e/devices.spec.ts:3961:9 › Device vTPM › vTPM List › should filter vTPM instances by state
+[1A[2K[251/690] [chromium] › e2e/devices.spec.ts:3985:9 › Device vTPM › vTPM List › should clear filters
+[1A[2K[252/690] [chromium] › e2e/devices.spec.ts:4025:9 › Device vTPM › Create vTPM › should open create vTPM dialog
+[1A[2K[253/690] [chromium] › e2e/devices.spec.ts:4039:9 › Device vTPM › Create vTPM › should display all form fields in create dialog
+[1A[2K[254/690] [chromium] › e2e/devices.spec.ts:4055:9 › Device vTPM › Create vTPM › should create a new vTPM instance
+[1A[2K[255/690] [chromium] › e2e/devices.spec.ts:4083:9 › Device vTPM › Create vTPM › should validate vTPM name is required
+[1A[2K[256/690] [chromium] › e2e/devices.spec.ts:4099:9 › Device vTPM › Create vTPM › should validate VM ID is required
+[1A[2K[257/690] [chromium] › e2e/devices.spec.ts:4118:9 › Device vTPM › Create vTPM › should validate VM name is required
+[1A[2K[258/690] [chromium] › e2e/devices.spec.ts:4138:9 › Device vTPM › Create vTPM › should close create dialog on cancel
+[1A[2K[259/690] [chromium] › e2e/devices.spec.ts:4157:9 › Device vTPM › Create vTPM › should close create dialog with Escape key
+[1A[2K[260/690] [chromium] › e2e/devices.spec.ts:4182:9 › Device vTPM › vTPM Actions › should open actions menu for vTPM
+[1A[2K[261/690] [chromium] › e2e/devices.spec.ts:4206:9 › Device vTPM › vTPM Actions › should navigate to vTPM details from actions menu
+[1A[2K[262/690] [chromium] › e2e/devices.spec.ts:4238:9 › Device vTPM › vTPM Actions › should navigate to seal data action
+[1A[2K[263/690] [chromium] › e2e/devices.spec.ts:4261:9 › Device vTPM › vTPM Actions › should show suspend info toast for active vTPM
+[1A[2K[264/690] [chromium] › e2e/devices.spec.ts:4284:9 › Device vTPM › vTPM Actions › should navigate to migrate action
+[1A[2K[265/690] [chromium] › e2e/devices.spec.ts:4307:9 › Device vTPM › vTPM Actions › should delete vTPM with confirmation
+[1A[2K[266/690] [chromium] › e2e/devices.spec.ts:4340:9 › Device vTPM › vTPM Actions › should cancel delete when dialog is dismissed
+[1A[2K[267/690] [chromium] › e2e/devices.spec.ts:4372:9 › Device vTPM › Error States › should handle fetch vTPM error
+[1A[2K[268/690] [chromium] › e2e/devices.spec.ts:4387:9 › Device vTPM › Error States › should handle create vTPM error
+[1A[2K[269/690] [chromium] › e2e/devices.spec.ts:4411:9 › Device vTPM › Error States › should handle delete vTPM error
+[1A[2K[270/690] [chromium] › e2e/devices.spec.ts:4445:9 › Device vTPM › Access Control › should allow tenant members to view vTPM instances
+[1A[2K[271/690] [chromium] › e2e/devices.spec.ts:4461:9 › Device vTPM › Access Control › should redirect unauthenticated users to login
+[1A[2K[272/690] [chromium] › e2e/devices.spec.ts:4470:9 › Device vTPM › PCR Profile Display › should display PCR profile badge for vTPM
+[1A[2K[273/690] [chromium] › e2e/devices.spec.ts:4492:9 › Device vTPM › Date Formatting › should display formatted creation date
+[1A[2K[274/690] [chromium] › e2e/devices.spec.ts:4522:9 › Device vTPM › Multiple vTPM Instances › should display multiple vTPM instances correctly
+[1A[2K[275/690] [chromium] › e2e/devices.spec.ts:4544:9 › Device vTPM › Multiple vTPM Instances › should handle actions on specific vTPM in list
+[1A[2K[276/690] [chromium] › e2e/devices.spec.ts:4577:9 › Device vTPM › Form Fields › should fill PCR profile field
+[1A[2K[277/690] [chromium] › e2e/devices.spec.ts:4591:9 › Device vTPM › Form Fields › should fill description field
+[1A[2K[278/690] [chromium] › e2e/devices.spec.ts:4605:9 › Device vTPM › Form Fields › should show form descriptions for each field
+[1A[2K[279/690] [chromium] › e2e/iam.spec.ts:1184:9 › IAM Management › Users List › should display user table with columns
+[1A[2K[280/690] [chromium] › e2e/iam.spec.ts:1218:9 › IAM Management › Users List › should display user status badges correctly
+[1A[2K[281/690] [chromium] › e2e/iam.spec.ts:1235:9 › IAM Management › Users List › should show empty state when no users
+[1A[2K[282/690] [chromium] › e2e/iam.spec.ts:1245:9 › IAM Management › Users List › should show loading state
+[1A[2K[283/690] [chromium] › e2e/iam.spec.ts:1267:9 › IAM Management › Users List › should filter users by search query
+[1A[2K[284/690] [chromium] › e2e/iam.spec.ts:1289:9 › IAM Management › Users List › should filter users by status
+[1A[2K[285/690] [chromium] › e2e/iam.spec.ts:1322:9 › IAM Management › Users List › should support pagination
+[1A[2K[286/690] [chromium] › e2e/iam.spec.ts:1350:9 › IAM Management › User CRUD › should open create user dialog
+[1A[2K[287/690] [chromium] › e2e/iam.spec.ts:1364:9 › IAM Management › User CRUD › should create a new user
+[1A[2K[288/690] [chromium] › e2e/iam.spec.ts:1401:9 › IAM Management › User CRUD › should validate required fields
+[1A[2K[289/690] [chromium] › e2e/iam.spec.ts:1417:9 › IAM Management › User CRUD › should edit user details
+[1A[2K[290/690] [chromium] › e2e/iam.spec.ts:1480:9 › IAM Management › User CRUD › should delete user with confirmation
+[1A[2K[291/690] [chromium] › e2e/iam.spec.ts:1515:9 › IAM Management › User CRUD › should disable/enable user
+[1A[2K[292/690] [chromium] › e2e/iam.spec.ts:1547:9 › IAM Management › User Details › should navigate to user details from list
+[1A[2K[293/690] [chromium] › e2e/iam.spec.ts:1569:9 › IAM Management › User Details › should display user information
+[1A[2K[294/690] [chromium] › e2e/iam.spec.ts:1591:9 › IAM Management › User Details › should show assigned roles
+[1A[2K[295/690] [chromium] › e2e/iam.spec.ts:1616:9 › IAM Management › User Details › should show group memberships
+[1A[2K[296/690] [chromium] › e2e/iam.spec.ts:1675:9 › IAM Management › User Details › should show user not found when user does not exist
+[1A[2K[297/690] [chromium] › e2e/iam.spec.ts:1688:9 › IAM Management › User Details › should navigate back to users list
+[1A[2K[298/690] [chromium] › e2e/iam.spec.ts:1712:9 › IAM Management › Roles › should display roles list
+[1A[2K[299/690] [chromium] › e2e/iam.spec.ts:1736:9 › IAM Management › Roles › should create a new role
+[1A[2K[300/690] [chromium] › e2e/iam.spec.ts:1825:9 › IAM Management › Roles › should edit role permissions
+[1A[2K[301/690] [chromium] › e2e/iam.spec.ts:1896:9 › IAM Management › Roles › should delete role
+[1A[2K[302/690] [chromium] › e2e/iam.spec.ts:1936:9 › IAM Management › Groups › should display groups list
+[1A[2K[303/690] [chromium] › e2e/iam.spec.ts:1960:9 › IAM Management › Groups › should create a new group
+[1A[2K[304/690] [chromium] › e2e/iam.spec.ts:2052:9 › IAM Management › Groups › should add member to group
+[1A[2K[305/690] [chromium] › e2e/iam.spec.ts:2179:9 › IAM Management › Groups › should remove member from group
+[1A[2K[306/690] [chromium] › e2e/iam.spec.ts:2290:9 › IAM Management › Groups › should delete group
+[1A[2K[307/690] [chromium] › e2e/iam.spec.ts:2330:9 › IAM Management › Permissions › should display permissions list
+[1A[2K[308/690] [chromium] › e2e/iam.spec.ts:2443:9 › IAM Management › Permissions › should show empty state when no permissions
+[1A[2K[309/690] [chromium] › e2e/iam.spec.ts:2457:9 › IAM Management › Permissions › should filter permissions by resource
+[1A[2K[310/690] [chromium] › e2e/iam.spec.ts:2499:9 › IAM Management › Policies › should display policies list
+[1A[2K[311/690] [chromium] › e2e/iam.spec.ts:2531:9 › IAM Management › Policies › should create a new policy
+[1A[2K[312/690] [chromium] › e2e/iam.spec.ts:2620:9 › IAM Management › Policies › should delete policy
+[1A[2K[313/690] [chromium] › e2e/iam.spec.ts:2664:9 › IAM Management › Error States › should handle fetch users error
+[1A[2K[314/690] [chromium] › e2e/iam.spec.ts:2679:9 › IAM Management › Error States › should handle fetch roles error
+[1A[2K[315/690] [chromium] › e2e/iam.spec.ts:2713:9 › IAM Management › Error States › should handle fetch groups error
+[1A[2K[316/690] [chromium] › e2e/iam.spec.ts:2747:9 › IAM Management › Error States › should handle create user error
+[1A[2K[317/690] [chromium] › e2e/iam.spec.ts:2793:9 › IAM Management › Error States › should handle delete user error
+[1A[2K[318/690] [chromium] › e2e/iam.spec.ts:2820:9 › IAM Management › Error States › should handle permission denied
+[1A[2K[319/690] [chromium] › e2e/iam.spec.ts:3042:9 › IAM Management › API Credentials / Tokens › should display API credentials list
+[1A[2K[320/690] [chromium] › e2e/iam.spec.ts:3067:9 › IAM Management › API Credentials / Tokens › should show statistics cards
+[1A[2K[321/690] [chromium] › e2e/iam.spec.ts:3092:9 › IAM Management › API Credentials / Tokens › should open register application dialog
+[1A[2K[322/690] [chromium] › e2e/iam.spec.ts:3111:9 › IAM Management › API Credentials / Tokens › should register a new application and show secret
+[1A[2K[323/690] [chromium] › e2e/iam.spec.ts:3155:9 › IAM Management › API Credentials / Tokens › should validate application name is required
+[1A[2K[324/690] [chromium] › e2e/iam.spec.ts:3174:9 › IAM Management › API Credentials / Tokens › should rotate application secret
+[1A[2K[325/690] [chromium] › e2e/iam.spec.ts:3207:9 › IAM Management › API Credentials / Tokens › should delete application with confirmation
+[1A[2K[326/690] [chromium] › e2e/iam.spec.ts:3240:9 › IAM Management › API Credentials / Tokens › should cancel delete when confirmation is rejected
+[1A[2K[327/690] [chromium] › e2e/iam.spec.ts:3270:9 › IAM Management › API Credentials / Tokens › should handle bulk delete
+[1A[2K[328/690] [chromium] › e2e/iam.spec.ts:3313:9 › IAM Management › API Credentials / Tokens › should handle API errors gracefully
+[1A[2K[329/690] [chromium] › e2e/iam.spec.ts:3336:9 › IAM Management › API Credentials / Tokens › should handle register application error
+[1A[2K[330/690] [chromium] › e2e/iam.spec.ts:3361:9 › IAM Management › API Credentials / Tokens › should handle delete error
+[1A[2K[331/690] [chromium] › e2e/iam.spec.ts:3390:9 › IAM Management › API Credentials / Tokens › should handle rotate secret error
+[1A[2K[332/690] [chromium] › e2e/iam.spec.ts:3416:9 › IAM Management › API Credentials / Tokens › should search credentials
+[1A[2K[333/690] [chromium] › e2e/iam.spec.ts:3455:9 › IAM Management › API Credentials / Tokens › should show empty state when no applications
+[1A[2K[334/690] [chromium] › e2e/iam.spec.ts:3471:9 › IAM Management › API Credentials / Tokens › should display grant types badges
+[1A[2K[335/690] [chromium] › e2e/iam.spec.ts:3495:9 › IAM Management › API Credentials / Tokens › should show loading state
+[1A[2K[336/690] [chromium] › e2e/iam.spec.ts:3515:9 › IAM Management › API Credentials / Tokens › should copy secret to clipboard
+[1A[2K[337/690] [chromium] › e2e/iam.spec.ts:3552:9 › IAM Management › API Credentials / Tokens › should show OAuth info alert
+[1A[2K[338/690] [chromium] › e2e/iam.spec.ts:3891:9 › IAM Management › Applications › should display applications list
+[1A[2K[339/690] [chromium] › e2e/iam.spec.ts:3927:9 › IAM Management › Applications › should show statistics cards
+[1A[2K[340/690] [chromium] › e2e/iam.spec.ts:3969:9 › IAM Management › Applications › should open register application dialog
+[1A[2K[341/690] [chromium] › e2e/iam.spec.ts:3997:9 › IAM Management › Applications › should show empty state when no applications
+[1A[2K[342/690] [chromium] › e2e/iam.spec.ts:4011:9 › IAM Management › Applications › should show application row actions
+[1A[2K[343/690] [chromium] › e2e/iam.spec.ts:4038:9 › IAM Management › Applications › should navigate to application details on view
+[1A[2K[344/690] [chromium] › e2e/iam.spec.ts:4071:9 › IAM Management › Applications › should delete application with confirmation
+[1A[2K[345/690] [chromium] › e2e/iam.spec.ts:4109:9 › IAM Management › Applications › should cancel delete when confirmation is declined
+[1A[2K[346/690] [chromium] › e2e/iam.spec.ts:4140:9 › IAM Management › Applications › should select multiple applications with checkboxes
+[1A[2K[347/690] [chromium] › e2e/iam.spec.ts:4176:9 › IAM Management › Applications › should handle API errors gracefully
+[1A[2K[348/690] [chromium] › e2e/iam.spec.ts:4191:9 › IAM Management › Applications › should handle delete API error
+[1A[2K[349/690] [chromium] › e2e/iam.spec.ts:4236:9 › IAM Management › Applications › should search/filter applications
+[1A[2K[350/690] [chromium] › e2e/iam.spec.ts:4275:9 › IAM Management › Applications › should display grant types badges correctly
+[1A[2K[351/690] [chromium] › e2e/iam.spec.ts:4300:9 › IAM Management › Applications › should handle row click navigation to details
+[1A[2K[352/690] [chromium] › e2e/iam.spec.ts:4323:9 › IAM Management › Applications › should show loading state
+[1A[2K[353/690] [chromium] › e2e/iam.spec.ts:4350:9 › IAM Management › Applications › should show toast when rotate secret is clicked
+[1A[2K[354/690] [chromium] › e2e/iam.spec.ts:4376:9 › IAM Management › Applications › should display client ID truncated in table
+[1A[2K[355/690] [chromium] › e2e/iam.spec.ts:4397:9 › IAM Management › Applications › should display redirect URIs count
+[1A[2K[356/690] [chromium] › e2e/iam.spec.ts:4424:9 › IAM Management › Applications › should navigate to edit on edit action
+[1A[2K[357/690] [chromium] › e2e/iam.spec.ts:4462:9 › IAM Management › Access Control › should allow tenant members to view users
+[1A[2K[358/690] [chromium] › e2e/iam.spec.ts:4478:9 › IAM Management › Access Control › should redirect unauthenticated users to login
+[1A[2K[359/690] [chromium] › e2e/invitations.spec.ts:19:9 › Invitations Management › Tenant Owner Access › should display invitation form for tenant owners
+[1A[2K[360/690] [chromium] › e2e/invitations.spec.ts:33:9 › Invitations Management › Tenant Owner Access › should display existing invitations in the list
+[1A[2K[361/690] [chromium] › e2e/invitations.spec.ts:52:9 › Invitations Management › Tenant Owner Access › should create a new invitation
+[1A[2K[362/690] [chromium] › e2e/invitations.spec.ts:76:9 › Invitations Management › Tenant Owner Access › should create invitation with admin role
+[1A[2K[363/690] [chromium] › e2e/invitations.spec.ts:90:9 › Invitations Management › Tenant Owner Access › should copy invitation link to clipboard
+[1A[2K[364/690] [chromium] › e2e/invitations.spec.ts:120:9 › Invitations Management › Tenant Owner Access › should revoke an invitation
+[1A[2K[365/690] [chromium] › e2e/invitations.spec.ts:151:9 › Invitations Management › Tenant Owner Access › should show invitation in list after creation
+[1A[2K[366/690] [chromium] › e2e/invitations.spec.ts:172:9 › Invitations Management › Tenant Owner Access › should handle API error when fetching invitations
+[1A[2K[367/690] [chromium] › e2e/invitations.spec.ts:184:9 › Invitations Management › Tenant Owner Access › should handle API error when creating invitation
+[1A[2K[368/690] [chromium] › e2e/invitations.spec.ts:203:9 › Invitations Management › Tenant Owner Access › should handle API error when revoking invitation
+[1A[2K[369/690] [chromium] › e2e/invitations.spec.ts:225:9 › Invitations Management › Tenant Owner Access › should require email input before creating invitation
+[1A[2K[370/690] [chromium] › e2e/invitations.spec.ts:249:9 › Invitations Management › Tenant Owner Access › should navigate back to dashboard
+[1A[2K[371/690] [chromium] › e2e/invitations.spec.ts:270:9 › Invitations Management › Non-Owner Access › should display access denied for non-owners
+[1A[2K[372/690] [chromium] › e2e/invitations.spec.ts:286:9 › Invitations Management › Non-Owner Access › should not show invitation form to non-owners
+[1A[2K[373/690] [chromium] › e2e/invitations.spec.ts:298:9 › Invitations Management › Non-Owner Access › should navigate back to dashboard from access denied page
+[1A[2K[374/690] [chromium] › e2e/invitations.spec.ts:320:9 › Invitations Management › Unauthenticated Access › should redirect to login when not authenticated
+[1A[2K[375/690] [chromium] › e2e/invitations.spec.ts:333:9 › Invitations Management › Multiple Invitations › should display multiple invitations with different roles
+[1A[2K[376/690] [chromium] › e2e/invitations.spec.ts:351:9 › Invitations Management › Multiple Invitations › should handle revoking specific invitation from list
+[1A[2K[377/690] [chromium] › e2e/invitations.spec.ts:390:9 › Invitations Management › Form Validation › should validate email format
+[1A[2K[378/690] [chromium] › e2e/invitations.spec.ts:402:9 › Invitations Management › Form Validation › should clear form after successful submission
+[1A[2K[379/690] [chromium] › e2e/invitations.spec.ts:418:9 › Invitations Management › Form Validation › should disable button during submission
+[1A[2K[380/690] [chromium] › e2e/kms.spec.ts:689:9 › KMS (Key Management System) › Key List › should display key table with columns
+[1A[2K[381/690] [chromium] › e2e/kms.spec.ts:728:9 › KMS (Key Management System) › Key List › should display key status badges correctly
+[1A[2K[382/690] [chromium] › e2e/kms.spec.ts:745:9 › KMS (Key Management System) › Key List › should display key algorithm badges correctly
+[1A[2K[383/690] [chromium] › e2e/kms.spec.ts:763:9 › KMS (Key Management System) › Key List › should show loading state
+[1A[2K[384/690] [chromium] › e2e/kms.spec.ts:786:9 › KMS (Key Management System) › Key List › should filter keys by search query
+[1A[2K[385/690] [chromium] › e2e/kms.spec.ts:814:9 › KMS (Key Management System) › Key Details › should navigate to key details from list
+[1A[2K[386/690] [chromium] › e2e/kms.spec.ts:858:9 › KMS (Key Management System) › Key Details › should display key metadata
+[1A[2K[387/690] [chromium] › e2e/kms.spec.ts:889:9 › KMS (Key Management System) › Key Details › should show key not found when key does not exist
+[1A[2K[388/690] [chromium] › e2e/kms.spec.ts:903:9 › KMS (Key Management System) › Key Details › should navigate back to keys list
+[1A[2K[389/690] [chromium] › e2e/kms.spec.ts:945:9 › KMS (Key Management System) › Key CRUD Operations › should open generate key dialog
+[1A[2K[390/690] [chromium] › e2e/kms.spec.ts:959:9 › KMS (Key Management System) › Key CRUD Operations › should generate a new key
+[1A[2K[391/690] [chromium] › e2e/kms.spec.ts:982:9 › KMS (Key Management System) › Key CRUD Operations › should rotate a key
+[1A[2K[392/690] [chromium] › e2e/kms.spec.ts:1004:9 › KMS (Key Management System) › Key CRUD Operations › should delete a key with confirmation
+[1A[2K[393/690] [chromium] › e2e/kms.spec.ts:1033:9 › KMS (Key Management System) › Key CRUD Operations › should cancel delete when dialog is dismissed
+[1A[2K[394/690] [chromium] › e2e/kms.spec.ts:1055:9 › KMS (Key Management System) › Key CRUD Operations › should rotate key from details page
+[1A[2K[395/690] [chromium] › e2e/kms.spec.ts:1107:9 › KMS (Key Management System) › Error States › should handle fetch keys error
+[1A[2K[396/690] [chromium] › e2e/kms.spec.ts:1148:9 › KMS (Key Management System) › Error States › should handle fetch key details error
+[1A[2K[397/690] [chromium] › e2e/kms.spec.ts:1161:9 › KMS (Key Management System) › Error States › should handle generate key error
+[1A[2K[398/690] [chromium] › e2e/kms.spec.ts:1183:9 › KMS (Key Management System) › Error States › should handle rotate key error
+[1A[2K[399/690] [chromium] › e2e/kms.spec.ts:1208:9 › KMS (Key Management System) › Error States › should handle delete key error
+[1A[2K[400/690] [chromium] › e2e/kms.spec.ts:1238:9 › KMS (Key Management System) › Access Control › should allow tenant members to view keys
+[1A[2K[401/690] [chromium] › e2e/kms.spec.ts:1252:9 › KMS (Key Management System) › Access Control › should redirect unauthenticated users to login
+[1A[2K[402/690] [chromium] › e2e/kms.spec.ts:1265:9 › KMS (Key Management System) › Key Details Actions › should disable key from details page
+[1A[2K[403/690] [chromium] › e2e/kms.spec.ts:1286:9 › KMS (Key Management System) › Key Details Actions › should delete key from details page
+[1A[2K[404/690] [chromium] › e2e/kms.spec.ts:1325:7 › Encryption Operations (Feature Not Implemented) › should navigate to encrypt page
+[1A[2K[405/690] [chromium] › e2e/kms.spec.ts:1329:7 › Encryption Operations (Feature Not Implemented) › should encrypt data with selected key
+[1A[2K[406/690] [chromium] › e2e/kms.spec.ts:1333:7 › Encryption Operations (Feature Not Implemented) › should decrypt data with selected key
+[1A[2K[407/690] [chromium] › e2e/kms.spec.ts:1337:7 › Encryption Operations (Feature Not Implemented) › should validate encryption form
+[1A[2K[408/690] [chromium] › e2e/kms.spec.ts:1341:7 › Encryption Operations (Feature Not Implemented) › should validate decryption form
+[1A[2K[409/690] [chromium] › e2e/kms.spec.ts:1345:7 › Encryption Operations (Feature Not Implemented) › should copy encrypted result to clipboard
+[1A[2K[410/690] [chromium] › e2e/kms.spec.ts:1349:7 › Encryption Operations (Feature Not Implemented) › should handle encrypt error
+[1A[2K[411/690] [chromium] › e2e/kms.spec.ts:1353:7 › Encryption Operations (Feature Not Implemented) › should handle decrypt error
+[1A[2K[412/690] [chromium] › e2e/networking.spec.ts:1425:9 › Networking Management › SDN VLANs › should display VLAN table with columns
+[1A[2K[413/690] [chromium] › e2e/networking.spec.ts:1447:9 › Networking Management › SDN VLANs › should show empty state when no VLANs
+[1A[2K[414/690] [chromium] › e2e/networking.spec.ts:1462:9 › Networking Management › SDN VLANs › should open create VLAN dialog
+[1A[2K[415/690] [chromium] › e2e/networking.spec.ts:1479:9 › Networking Management › SDN VLANs › should display create VLAN button
+[1A[2K[416/690] [chromium] › e2e/networking.spec.ts:1506:9 › Networking Management › SDN Bridges › should display bridge list
+[1A[2K[417/690] [chromium] › e2e/networking.spec.ts:1525:9 › Networking Management › SDN Bridges › should display bridge status
+[1A[2K[418/690] [chromium] › e2e/networking.spec.ts:1553:9 › Networking Management › SDN Ports › should display port list
+[1A[2K[419/690] [chromium] › e2e/networking.spec.ts:1574:9 › Networking Management › SDN Ports › should display port status indicators
+[1A[2K[420/690] [chromium] › e2e/networking.spec.ts:1595:9 › Networking Management › SDN Ports › should display port statistics
+[1A[2K[421/690] [chromium] › e2e/networking.spec.ts:1630:9 › Networking Management › SDN Flows › should display flow table
+[1A[2K[422/690] [chromium] › e2e/networking.spec.ts:1649:9 › Networking Management › SDN Flows › should display flow statistics
+[1A[2K[423/690] [chromium] › e2e/networking.spec.ts:1671:9 › Networking Management › SDN Flows › should show empty state when no flows
+[1A[2K[424/690] [chromium] › e2e/networking.spec.ts:1694:9 › Networking Management › Gateway › should display gateway status
+[1A[2K[425/690] [chromium] › e2e/networking.spec.ts:1712:9 › Networking Management › Gateway › should display BGP status
+[1A[2K[426/690] [chromium] › e2e/networking.spec.ts:1734:9 › Networking Management › Gateway › should display IPAM pools
+[1A[2K[427/690] [chromium] › e2e/networking.spec.ts:1770:9 › Networking Management › DNS › should display DNS zones
+[1A[2K[428/690] [chromium] › e2e/networking.spec.ts:1789:9 › Networking Management › DNS › should display add zone button
+[1A[2K[429/690] [chromium] › e2e/networking.spec.ts:1805:9 › Networking Management › DNS › should show empty state when no zones
+[1A[2K[430/690] [chromium] › e2e/networking.spec.ts:1828:9 › Networking Management › Overlay Networks › should display overlay status
+[1A[2K[431/690] [chromium] › e2e/networking.spec.ts:1848:9 › Networking Management › Overlay Networks › should display VNIs
+[1A[2K[432/690] [chromium] › e2e/networking.spec.ts:1867:9 › Networking Management › Overlay Networks › should display create overlay button
+[1A[2K[433/690] [chromium] › e2e/networking.spec.ts:1883:9 › Networking Management › Overlay Networks › should display overlay network table
+[1A[2K[434/690] [chromium] › e2e/networking.spec.ts:1900:9 › Networking Management › Overlay Networks › should display overlay statistics
+[1A[2K[435/690] [chromium] › e2e/networking.spec.ts:1924:9 › Networking Management › PXE › should display PXE service status
+[1A[2K[436/690] [chromium] › e2e/networking.spec.ts:1942:9 › Networking Management › PXE › should display PXE devices
+[1A[2K[437/690] [chromium] › e2e/networking.spec.ts:1961:9 › Networking Management › PXE › should display device provisioning state
+[1A[2K[438/690] [chromium] › e2e/networking.spec.ts:1982:9 › Networking Management › PXE › should show empty state when no PXE devices
+[1A[2K[439/690] [chromium] › e2e/networking.spec.ts:2005:9 › Networking Management › Error States › should handle VLANs fetch error
+[1A[2K[440/690] [chromium] › e2e/networking.spec.ts:2027:9 › Networking Management › Error States › should handle gateway fetch error
+[1A[2K[441/690] [chromium] › e2e/networking.spec.ts:2040:9 › Networking Management › Error States › should handle DNS zones fetch error
+[1A[2K[442/690] [chromium] › e2e/networking.spec.ts:2053:9 › Networking Management › Error States › should handle create VLAN button visibility
+[1A[2K[443/690] [chromium] › e2e/networking.spec.ts:2072:9 › Networking Management › Error States › should handle overlay fetch error gracefully
+[1A[2K[444/690] [chromium] › e2e/networking.spec.ts:2085:9 › Networking Management › Error States › should handle PXE fetch error gracefully
+[1A[2K[445/690] [chromium] › e2e/networking.spec.ts:2142:9 › Networking Management › Access Control › should allow tenant members to view networking
+[1A[2K[446/690] [chromium] › e2e/networking.spec.ts:2161:9 › Networking Management › Access Control › should redirect unauthenticated users to login
+[1A[2K[447/690] [chromium] › e2e/networking.spec.ts:2178:9 › Networking Management › Navigation › should navigate to networking pages directly
+[1A[2K[448/690] [chromium] › e2e/networking.spec.ts:2234:9 › Networking Management › Loading States › should show loading state for VLANs
+[1A[2K[449/690] [chromium] › e2e/networking.spec.ts:2260:9 › Networking Management › Loading States › should show loading state for gateway
+[1A[2K[450/690] [chromium] › e2e/platform.spec.ts:336:9 › Platform Management › Health Page › should display overall health status
+[1A[2K[451/690] [chromium] › e2e/platform.spec.ts:349:9 › Platform Management › Health Page › should show service health cards
+[1A[2K[452/690] [chromium] › e2e/platform.spec.ts:365:9 › Platform Management › Health Page › should toggle auto-refresh
+[1A[2K[453/690] [chromium] › e2e/platform.spec.ts:383:9 › Platform Management › Health Page › should manually refresh health data
+[1A[2K[454/690] [chromium] › e2e/platform.spec.ts:409:9 › Platform Management › Health Page › should display unhealthy service status
+[1A[2K[455/690] [chromium] › e2e/platform.spec.ts:431:9 › Platform Management › Health Page › should handle health check failure gracefully
+[1A[2K[456/690] [chromium] › e2e/platform.spec.ts:453:9 › Platform Management › Metrics Page › should display metrics dashboard
+[1A[2K[457/690] [chromium] › e2e/platform.spec.ts:463:9 › Platform Management › Metrics Page › should show resource usage metrics
+[1A[2K[458/690] [chromium] › e2e/platform.spec.ts:475:9 › Platform Management › Metrics Page › should display time range selector
+
+
+[1A[2K[459/690] [chromium] › e2e/platform.spec.ts:486:9 › Platform Management › Metrics Page › should show system info cards
+
+[1A[2K[460/690] [chromium] › e2e/platform.spec.ts:498:9 › Platform Management › Metrics Page › should handle metrics fetch failure
+
+[1A[2K[461/690] [chromium] › e2e/platform.spec.ts:541:9 › Platform Management › Services Page › should list services from health data
+[1A[2K[462/690] [chromium] › e2e/platform.spec.ts:555:9 › Platform Management › Services Page › should display service status badges
+[1A[2K[463/690] [chromium] › e2e/platform.spec.ts:565:9 › Platform Management › Services Page › should show service statistics
+[1A[2K[464/690] [chromium] › e2e/platform.spec.ts:576:9 › Platform Management › Services Page › should display service error state
+[1A[2K[465/690] [chromium] › e2e/platform.spec.ts:594:9 › Platform Management › Services Page › should handle services fetch failure
+[1A[2K[466/690] [chromium] › e2e/platform.spec.ts:615:9 › Platform Management › Events Page › should display event list derived from health data
+[1A[2K[467/690] [chromium] › e2e/platform.spec.ts:628:9 › Platform Management › Events Page › should display event statistics
+[1A[2K[468/690] [chromium] › e2e/platform.spec.ts:639:9 › Platform Management › Events Page › should have severity filter
+[1A[2K[469/690] [chromium] › e2e/platform.spec.ts:650:9 › Platform Management › Events Page › should have category filter
+[1A[2K[470/690] [chromium] › e2e/platform.spec.ts:663:9 › Platform Management › Events Page › should toggle event streaming
+[1A[2K[471/690] [chromium] › e2e/platform.spec.ts:705:9 › Platform Management › Events Page › should handle events fetch failure
+[1A[2K[472/690] [chromium] › e2e/platform.spec.ts:727:9 › Platform Management › Logs Page › should display logs page with placeholder
+[1A[2K[473/690] [chromium] › e2e/platform.spec.ts:749:9 › Platform Management › Configuration Page › should display configuration page with placeholder
+[1A[2K[474/690] [chromium] › e2e/platform.spec.ts:766:9 › Platform Management › Access Control › should allow tenant owners to access platform pages
+[1A[2K[475/690] [chromium] › e2e/platform.spec.ts:777:9 › Platform Management › Access Control › should allow tenant members to view platform health
+[1A[2K[476/690] [chromium] › e2e/platform.spec.ts:788:9 › Platform Management › Access Control › should redirect unauthenticated users to login
+[1A[2K[477/690] [chromium] › e2e/platform.spec.ts:806:9 › Platform Management › Navigation › should navigate between platform pages via sidebar
+[1A[2K[478/690] [chromium] › e2e/platform.spec.ts:843:9 › Platform Management › Real-time Updates › should update health status when auto-refresh is enabled
+[1A[2K[479/690] [chromium] › e2e/platform.spec.ts:877:9 › Platform Management › Real-time Updates › should show loading state during refresh
+[1A[2K[480/690] [chromium] › e2e/storage.spec.ts:1433:9 › Storage - Key-Value Store › KV List › should display KV entries table
+[1A[2K[481/690] [chromium] › e2e/storage.spec.ts:1449:9 › Storage - Key-Value Store › KV List › should display empty state when no entries
+[1A[2K[482/690] [chromium] › e2e/storage.spec.ts:1459:9 › Storage - Key-Value Store › KV List › should filter entries by prefix
+[1A[2K[483/690] [chromium] › e2e/storage.spec.ts:1481:9 › Storage - Key-Value Store › KV List › should show loading state
+[1A[2K[484/690] [chromium] › e2e/storage.spec.ts:1505:9 › Storage - Key-Value Store › KV CRUD Operations › should open add entry dialog
+[1A[2K[485/690] [chromium] › e2e/storage.spec.ts:1517:9 › Storage - Key-Value Store › KV CRUD Operations › should create new KV entry
+[1A[2K[486/690] [chromium] › e2e/storage.spec.ts:1541:9 › Storage - Key-Value Store › KV CRUD Operations › should validate key is required
+[1A[2K[487/690] [chromium] › e2e/storage.spec.ts:1557:9 › Storage - Key-Value Store › KV CRUD Operations › should edit existing entry
+[1A[2K[488/690] [chromium] › e2e/storage.spec.ts:1578:9 › Storage - Key-Value Store › KV CRUD Operations › should delete entry with confirmation
+[1A[2K[489/690] [chromium] › e2e/storage.spec.ts:1603:9 › Storage - Key-Value Store › KV CRUD Operations › should set TTL on entry
+[1A[2K[490/690] [chromium] › e2e/storage.spec.ts:1624:9 › Storage - Key-Value Store › KV CRUD Operations › should select value type
+[1A[2K[491/690] [chromium] › e2e/storage.spec.ts:1643:9 › Storage - Key-Value Store › KV Error States › should handle fetch error
+[1A[2K[492/690] [chromium] › e2e/storage.spec.ts:1654:9 › Storage - Key-Value Store › KV Error States › should handle create error
+[1A[2K[493/690] [chromium] › e2e/storage.spec.ts:1672:9 › Storage - Key-Value Store › KV Error States › should handle delete error
+[1A[2K[494/690] [chromium] › e2e/storage.spec.ts:1700:9 › Storage - Object Storage › Buckets › should display buckets list
+[1A[2K[495/690] [chromium] › e2e/storage.spec.ts:1716:9 › Storage - Object Storage › Buckets › should create new bucket
+[1A[2K[496/690] [chromium] › e2e/storage.spec.ts:1740:9 › Storage - Object Storage › Buckets › should validate bucket name is required
+[1A[2K[497/690] [chromium] › e2e/storage.spec.ts:1752:9 › Storage - Object Storage › Buckets › should delete bucket with confirmation
+[1A[2K[498/690] [chromium] › e2e/storage.spec.ts:1771:9 › Storage - Object Storage › Buckets › should select bucket to view objects
+[1A[2K[499/690] [chromium] › e2e/storage.spec.ts:1791:9 › Storage - Object Storage › Objects › should display objects in selected bucket
+[1A[2K[500/690] [chromium] › e2e/storage.spec.ts:1810:9 › Storage - Object Storage › Objects › should show empty state when bucket has no objects
+[1A[2K[501/690] [chromium] › e2e/storage.spec.ts:1821:9 › Storage - Object Storage › Objects › should open upload dialog
+[1A[2K[502/690] [chromium] › e2e/storage.spec.ts:1835:9 › Storage - Object Storage › Objects › should delete object with confirmation
+[1A[2K[503/690] [chromium] › e2e/storage.spec.ts:1858:9 › Storage - Object Storage › Objects › should download object
+[1A[2K[504/690] [chromium] › e2e/storage.spec.ts:1878:9 › Storage - Object Storage › Object Storage Error States › should handle list buckets error
+[1A[2K[505/690] [chromium] › e2e/storage.spec.ts:1889:9 › Storage - Object Storage › Object Storage Error States › should handle create bucket error
+[1A[2K[506/690] [chromium] › e2e/storage.spec.ts:1914:9 › Storage - Vector Database › Collections › should display collections list
+[1A[2K[507/690] [chromium] › e2e/storage.spec.ts:1930:9 › Storage - Vector Database › Collections › should display empty state when no collections
+[1A[2K[508/690] [chromium] › e2e/storage.spec.ts:1940:9 › Storage - Vector Database › Collections › should create new collection
+[1A[2K[509/690] [chromium] › e2e/storage.spec.ts:1969:9 › Storage - Vector Database › Collections › should validate collection name is required
+[1A[2K[510/690] [chromium] › e2e/storage.spec.ts:1981:9 › Storage - Vector Database › Collections › should delete collection with confirmation
+[1A[2K[511/690] [chromium] › e2e/storage.spec.ts:2002:9 › Storage - Vector Database › Vector Search › should open search dialog
+[1A[2K[512/690] [chromium] › e2e/storage.spec.ts:2016:9 › Storage - Vector Database › Vector Search › should perform vector search
+[1A[2K[513/690] [chromium] › e2e/storage.spec.ts:2039:9 › Storage - Vector Database › Vector Search › should validate vector format
+[1A[2K[514/690] [chromium] › e2e/storage.spec.ts:2063:9 › Storage - Vector Database › Vector Database Error States › should handle fetch error
+[1A[2K[515/690] [chromium] › e2e/storage.spec.ts:2074:9 › Storage - Vector Database › Vector Database Error States › should handle create error
+[1A[2K[516/690] [chromium] › e2e/storage.spec.ts:2099:9 › Storage - Time Series › Metrics List › should display sample metrics
+[1A[2K[517/690] [chromium] › e2e/storage.spec.ts:2111:9 › Storage - Time Series › Metrics List › should display metric type badges
+[1A[2K[518/690] [chromium] › e2e/storage.spec.ts:2121:9 › Storage - Time Series › Metrics List › should display statistics cards
+[1A[2K[519/690] [chromium] › e2e/storage.spec.ts:2134:9 › Storage - Time Series › Time Series Query › should open query dialog
+[1A[2K[520/690] [chromium] › e2e/storage.spec.ts:2146:9 › Storage - Time Series › Time Series Query › should query with time range
+[1A[2K[521/690] [chromium] › e2e/storage.spec.ts:2164:9 › Storage - Time Series › Time Series Query › should select aggregation function
+[1A[2K[522/690] [chromium] › e2e/storage.spec.ts:2181:9 › Storage - Time Series › Time Series Query › should query from metric row action
+[1A[2K[523/690] [chromium] › e2e/storage.spec.ts:2197:9 › Storage - Time Series › Time Series Delete › should delete metric data with confirmation
+[1A[2K[524/690] [chromium] › e2e/storage.spec.ts:2214:9 › Storage - Time Series › Time Series Error States › should handle query error
+[1A[2K[525/690] [chromium] › e2e/storage.spec.ts:2239:9 › Storage - Backup Management › Backup List › should display backups list
+[1A[2K[526/690] [chromium] › e2e/storage.spec.ts:2255:9 › Storage - Backup Management › Backup List › should display empty state when no backups
+[1A[2K[527/690] [chromium] › e2e/storage.spec.ts:2265:9 › Storage - Backup Management › Backup List › should display backup status badges
+[1A[2K[528/690] [chromium] › e2e/storage.spec.ts:2282:9 › Storage - Backup Management › Backup List › should display backup type badges
+[1A[2K[529/690] [chromium] › e2e/storage.spec.ts:2299:9 › Storage - Backup Management › Backup List › should display statistics cards
+[1A[2K[530/690] [chromium] › e2e/storage.spec.ts:2320:9 › Storage - Backup Management › Create Backup › should open create backup dialog
+[1A[2K[531/690] [chromium] › e2e/storage.spec.ts:2332:9 › Storage - Backup Management › Create Backup › should create new backup
+[1A[2K[532/690] [chromium] › e2e/storage.spec.ts:2358:9 › Storage - Backup Management › Create Backup › should validate backup name is required
+[1A[2K[533/690] [chromium] › e2e/storage.spec.ts:2372:9 › Storage - Backup Management › Restore Backup › should open restore dialog for completed backup
+[1A[2K[534/690] [chromium] › e2e/storage.spec.ts:2388:9 › Storage - Backup Management › Restore Backup › should restore from backup
+[1A[2K[535/690] [chromium] › e2e/storage.spec.ts:2409:9 › Storage - Backup Management › Restore Backup › should disable restore for non-completed backups
+[1A[2K[536/690] [chromium] › e2e/storage.spec.ts:2427:9 › Storage - Backup Management › Delete Backup › should delete backup with confirmation
+[1A[2K[537/690] [chromium] › e2e/storage.spec.ts:2449:9 › Storage - Backup Management › Backup Error States › should handle list error
+[1A[2K[538/690] [chromium] › e2e/storage.spec.ts:2460:9 › Storage - Backup Management › Backup Error States › should handle create error
+[1A[2K[539/690] [chromium] › e2e/storage.spec.ts:2476:9 › Storage - Backup Management › Backup Error States › should handle restore error
+[1A[2K[540/690] [chromium] › e2e/storage.spec.ts:2496:9 › Storage - Backup Management › Backup Schedules Tab › should display schedules tab
+[1A[2K[541/690] [chromium] › e2e/storage.spec.ts:2513:7 › Storage - Access Control › should allow tenant members to view storage pages
+[1A[2K[542/690] [chromium] › e2e/storage.spec.ts:2524:7 › Storage - Access Control › should redirect unauthenticated users to login
+[1A[2K[543/690] [chromium] › e2e/tenant-isolation.spec.ts:25:9 › Tenant Isolation › Data Isolation › should only display invitations for the current tenant
+[1A[2K[544/690] [chromium] › e2e/tenant-isolation.spec.ts:65:9 › Tenant Isolation › Data Isolation › should display correct tenant information based on JWT claims
+[1A[2K[545/690] [chromium] › e2e/tenant-isolation.spec.ts:88:9 › Tenant Isolation › Data Isolation › tenant member cannot access another tenants invitations page
+[1A[2K[546/690] [chromium] › e2e/tenant-isolation.spec.ts:112:9 › Tenant Isolation › JWT Claims Reflection › should correctly reflect is_tenant_owner claim in UI
+[1A[2K[547/690] [chromium] › e2e/tenant-isolation.spec.ts:133:9 › Tenant Isolation › JWT Claims Reflection › should correctly reflect non-owner claim in UI
+[1A[2K[548/690] [chromium] › e2e/tenant-isolation.spec.ts:154:9 › Tenant Isolation › JWT Claims Reflection › should reflect tenant_id in workspace display
+[1A[2K[549/690] [chromium] › e2e/tenant-isolation.spec.ts:182:9 › Tenant Isolation › JWT Claims Reflection › should reflect user email from JWT
+[1A[2K[550/690] [chromium] › e2e/tenant-isolation.spec.ts:207:9 › Tenant Isolation › Role-Based Access Control › owner role should have full access to tenant management
+[1A[2K[551/690] [chromium] › e2e/tenant-isolation.spec.ts:230:9 › Tenant Isolation › Role-Based Access Control › admin role without owner flag should have limited access
+[1A[2K[552/690] [chromium] › e2e/tenant-isolation.spec.ts:251:9 › Tenant Isolation › Role-Based Access Control › member role should have minimal access
+[1A[2K[553/690] [chromium] › e2e/tenant-isolation.spec.ts:278:9 › Tenant Isolation › Cross-Tenant Protection › API should be called with correct tenant context
+[1A[2K[554/690] [chromium] › e2e/tenant-isolation.spec.ts:324:9 › Tenant Isolation › Cross-Tenant Protection › switching tenant context should refresh data
+[1A[2K[555/690] [chromium] › e2e/tenant-isolation.spec.ts:364:9 › Tenant Isolation › Invitation Token Isolation › invitation links should be tenant-specific
+[1A[2K[556/690] [chromium] › e2e/tenant-isolation.spec.ts:391:9 › Tenant Isolation › Invitation Token Isolation › creating invitation should be scoped to current tenant
+[1A[2K[557/690] [chromium] › e2e/tenant-isolation.spec.ts:414:9 › Tenant Isolation › Session Boundary Tests › expired JWT should redirect to login
+[1A[2K[558/690] [chromium] › e2e/tenant-isolation.spec.ts:444:9 › Tenant Isolation › Session Boundary Tests › missing tenant_id claim should handle gracefully
+[1A[2K[559/690] [chromium] › e2e/tenant-management.spec.ts:615:9 › Tenant Members Management › Tenant Owner Access › should display list of tenant members
+[1A[2K[560/690] [chromium] › e2e/tenant-management.spec.ts:636:9 › Tenant Members Management › Tenant Owner Access › should display member count in description
+[1A[2K[561/690] [chromium] › e2e/tenant-management.spec.ts:652:9 › Tenant Members Management › Tenant Owner Access › should have search input for filtering members
+[1A[2K[562/690] [chromium] › e2e/tenant-management.spec.ts:681:9 › Tenant Members Management › Tenant Owner Access › should remove a member successfully
+[1A[2K[563/690] [chromium] › e2e/tenant-management.spec.ts:713:9 › Tenant Members Management › Tenant Owner Access › should handle member removal error
+[1A[2K[564/690] [chromium] › e2e/tenant-management.spec.ts:740:9 › Tenant Members Management › Tenant Owner Access › should handle API error when fetching members
+[1A[2K[565/690] [chromium] › e2e/tenant-management.spec.ts:754:9 › Tenant Members Management › Tenant Owner Access › should show invite member button
+[1A[2K[566/690] [chromium] › e2e/tenant-management.spec.ts:770:9 › Tenant Members Management › Empty State › should display empty state when no members
+[1A[2K[567/690] [chromium] › e2e/tenant-management.spec.ts:783:9 › Tenant Members Management › Unauthenticated Access › should redirect to login when not authenticated
+[1A[2K[568/690] [chromium] › e2e/tenant-management.spec.ts:797:9 › Tenant Quotas Management › Authenticated User Access › should display quota limits and usage
+[1A[2K[569/690] [chromium] › e2e/tenant-management.spec.ts:830:9 › Tenant Quotas Management › Authenticated User Access › should display summary cards with usage percentages
+[1A[2K[570/690] [chromium] › e2e/tenant-management.spec.ts:842:9 › Tenant Quotas Management › Authenticated User Access › should display status badges based on usage
+[1A[2K[571/690] [chromium] › e2e/tenant-management.spec.ts:862:9 › Tenant Quotas Management › Authenticated User Access › should handle quota fetch error
+[1A[2K[572/690] [chromium] › e2e/tenant-management.spec.ts:912:9 › Tenant Quotas Management › Authenticated User Access › should have refresh button
+[1A[2K[573/690] [chromium] › e2e/tenant-management.spec.ts:923:9 › Tenant Quotas Management › Unauthenticated Access › should redirect to login when not authenticated
+[1A[2K[574/690] [chromium] › e2e/tenant-management.spec.ts:937:9 › Tenant Invitations › Tenant Owner Access › should display invitations list
+[1A[2K[575/690] [chromium] › e2e/tenant-management.spec.ts:953:9 › Tenant Invitations › Tenant Owner Access › should display invitation status badges
+[1A[2K[576/690] [chromium] › e2e/tenant-management.spec.ts:971:9 › Tenant Invitations › Tenant Owner Access › should display summary cards with counts
+[1A[2K[577/690] [chromium] › e2e/tenant-management.spec.ts:989:9 › Tenant Invitations › Tenant Owner Access › should cancel an invitation
+[1A[2K[578/690] [chromium] › e2e/tenant-management.spec.ts:1016:9 › Tenant Invitations › Tenant Owner Access › should resend an invitation
+[1A[2K[579/690] [chromium] › e2e/tenant-management.spec.ts:1037:9 › Tenant Invitations › Tenant Owner Access › should handle resend error
+[1A[2K[580/690] [chromium] › e2e/tenant-management.spec.ts:1058:9 › Tenant Invitations › Tenant Owner Access › should handle fetch error
+[1A[2K[581/690] [chromium] › e2e/tenant-management.spec.ts:1080:9 › Tenant Invitations › Tenant Owner Access › should show send invitation button
+[1A[2K[582/690] [chromium] › e2e/tenant-management.spec.ts:1095:9 › Tenant Invitations › Empty State › should display empty state when no invitations
+[1A[2K[583/690] [chromium] › e2e/tenant-management.spec.ts:1106:9 › Tenant Invitations › Unauthenticated Access › should redirect to login when not authenticated
+[1A[2K[584/690] [chromium] › e2e/tenant-management.spec.ts:1120:9 › Tenant Admin Access › Admin Role Permissions › should allow admin to view members
+[1A[2K[585/690] [chromium] › e2e/tenant-management.spec.ts:1135:9 › Tenant Admin Access › Admin Role Permissions › should allow admin to view quotas
+[1A[2K[586/690] [chromium] › e2e/tenant-management.spec.ts:1151:7 › Responsive Layout › should display members page correctly on mobile
+[1A[2K[587/690] [chromium] › e2e/tenant-management.spec.ts:1163:7 › Responsive Layout › should display quotas page correctly on mobile
+[1A[2K[588/690] [chromium] › e2e/tenant-management.spec.ts:1173:7 › Responsive Layout › should display invitations page correctly on tablet
+[1A[2K[589/690] [chromium] › e2e/tenant.spec.ts:22:9 › Tenant Dashboard › Authenticated Tenant Owner › should display tenant information
+[1A[2K[590/690] [chromium] › e2e/tenant.spec.ts:42:9 › Tenant Dashboard › Authenticated Tenant Owner › should display workspace name when available
+[1A[2K[591/690] [chromium] › e2e/tenant.spec.ts:56:9 › Tenant Dashboard › Authenticated Tenant Owner › should show invitation button only for owners
+[1A[2K[592/690] [chromium] › e2e/tenant.spec.ts:66:9 › Tenant Dashboard › Authenticated Tenant Owner › should navigate to invitations page
+[1A[2K[593/690] [chromium] › e2e/tenant.spec.ts:94:9 › Tenant Dashboard › Authenticated Tenant Owner › should navigate to dashboard
+[1A[2K[594/690] [chromium] › e2e/tenant.spec.ts:121:9 › Tenant Dashboard › Authenticated Tenant Owner › should logout successfully
+[1A[2K[595/690] [chromium] › e2e/tenant.spec.ts:138:9 › Tenant Dashboard › Authenticated Tenant Owner › should handle missing tenant info gracefully
+[1A[2K[596/690] [chromium] › e2e/tenant.spec.ts:152:9 › Tenant Dashboard › Authenticated Tenant Owner › should display workspace header with tenant name
+[1A[2K[597/690] [chromium] › e2e/tenant.spec.ts:166:9 › Tenant Dashboard › Authenticated Tenant Owner › should show management section with action cards
+[1A[2K[598/690] [chromium] › e2e/tenant.spec.ts:188:9 › Tenant Dashboard › Authenticated Tenant Member › should not show invitation button for non-owners
+[1A[2K[599/690] [chromium] › e2e/tenant.spec.ts:197:9 › Tenant Dashboard › Authenticated Tenant Member › should display tenant information for members
+[1A[2K[600/690] [chromium] › e2e/tenant.spec.ts:213:9 › Tenant Dashboard › Authenticated Tenant Member › should still show dashboard navigation for members
+[1A[2K[601/690] [chromium] › e2e/tenant.spec.ts:222:9 › Tenant Dashboard › Authenticated Tenant Member › should allow members to logout
+[1A[2K[602/690] [chromium] › e2e/tenant.spec.ts:238:9 › Tenant Dashboard › User Without Tenant › should handle user without tenant
+[1A[2K[603/690] [chromium] › e2e/tenant.spec.ts:254:9 › Tenant Dashboard › Unauthenticated Access › should redirect to login when not authenticated
+[1A[2K[604/690] [chromium] › e2e/tenant.spec.ts:274:9 › Tenant Dashboard › Unauthenticated Access › should redirect to login with expired session
+[1A[2K[605/690] [chromium] › e2e/tenant.spec.ts:287:9 › Tenant Dashboard › Loading States › should show loading state while fetching tenant info
+[1A[2K[606/690] [chromium] › e2e/tenant.spec.ts:317:9 › Tenant Dashboard › Error Handling › should display error when API returns 500
+[1A[2K[607/690] [chromium] › e2e/tenant.spec.ts:331:9 › Tenant Dashboard › Error Handling › should display error when network fails
+[1A[2K[608/690] [chromium] › e2e/tenant.spec.ts:349:9 › Tenant Dashboard › Navigation › should navigate between tenant pages correctly
+[1A[2K[609/690] [chromium] › e2e/tenant.spec.ts:392:9 › Tenant Dashboard › Navigation › should preserve authentication across navigation
+[1A[2K[610/690] [chromium] › e2e/tenant.spec.ts:435:9 › Tenant Dashboard › Responsive Layout › should display correctly on mobile viewport
+[1A[2K[611/690] [chromium] › e2e/tenant.spec.ts:449:9 › Tenant Dashboard › Responsive Layout › should display correctly on tablet viewport
+[1A[2K[612/690] [chromium] › e2e/tpm-attestation.spec.ts:868:9 › TPM Management › TPM Status Page › should display TPM availability and status
+[1A[2K[613/690] [chromium] › e2e/tpm-attestation.spec.ts:883:9 › TPM Management › TPM Status Page › should show manufacturer information
+[1A[2K[614/690] [chromium] › e2e/tpm-attestation.spec.ts:893:9 › TPM Management › TPM Status Page › should show TPM version information
+[1A[2K[615/690] [chromium] › e2e/tpm-attestation.spec.ts:903:9 › TPM Management › TPM Status Page › should show capabilities and hierarchies
+[1A[2K[616/690] [chromium] › e2e/tpm-attestation.spec.ts:923:9 › TPM Management › TPM Status Page › should show ownership status
+[1A[2K[617/690] [chromium] › e2e/tpm-attestation.spec.ts:934:9 › TPM Management › TPM Status Page › should handle TPM unavailable error
+[1A[2K[618/690] [chromium] › e2e/tpm-attestation.spec.ts:948:9 › TPM Management › TPM Status Page › should refresh TPM status
+[1A[2K[619/690] [chromium] › e2e/tpm-attestation.spec.ts:970:9 › TPM Management › TPM Keys Page › should list TPM keys
+[1A[2K[620/690] [chromium] › e2e/tpm-attestation.spec.ts:985:9 › TPM Management › TPM Keys Page › should display key statistics
+[1A[2K[621/690] [chromium] › e2e/tpm-attestation.spec.ts:998:9 › TPM Management › TPM Keys Page › should show key table with columns
+[1A[2K[622/690] [chromium] › e2e/tpm-attestation.spec.ts:1012:9 › TPM Management › TPM Keys Page › should show key type badges
+[1A[2K[623/690] [chromium] › e2e/tpm-attestation.spec.ts:1024:9 › TPM Management › TPM Keys Page › should show empty state when no keys
+[1A[2K[624/690] [chromium] › e2e/tpm-attestation.spec.ts:1034:9 › TPM Management › TPM Keys Page › should display key hierarchy documentation
+[1A[2K[625/690] [chromium] › e2e/tpm-attestation.spec.ts:1051:9 › TPM Management › PCR Values Page › should display PCR table
+[1A[2K[626/690] [chromium] › e2e/tpm-attestation.spec.ts:1066:9 › TPM Management › PCR Values Page › should show PCR statistics
+[1A[2K[627/690] [chromium] › e2e/tpm-attestation.spec.ts:1078:9 › TPM Management › PCR Values Page › should display PCR hash values
+[1A[2K[628/690] [chromium] › e2e/tpm-attestation.spec.ts:1091:9 › TPM Management › PCR Values Page › should allow algorithm selection
+[1A[2K[629/690] [chromium] › e2e/tpm-attestation.spec.ts:1111:9 › TPM Management › PCR Values Page › should copy PCR values
+[1A[2K[630/690] [chromium] › e2e/tpm-attestation.spec.ts:1138:9 › TPM Management › PCR Values Page › should show PCR documentation
+[1A[2K[631/690] [chromium] › e2e/tpm-attestation.spec.ts:1156:9 › TPM Management › NVRAM Page › should display NVRAM capacity information
+[1A[2K[632/690] [chromium] › e2e/tpm-attestation.spec.ts:1170:9 › TPM Management › NVRAM Page › should show NVRAM documentation
+[1A[2K[633/690] [chromium] › e2e/tpm-attestation.spec.ts:1182:9 › TPM Management › NVRAM Page › should handle NVRAM load error
+[1A[2K[634/690] [chromium] › e2e/tpm-attestation.spec.ts:1222:9 › TPM Management › Seal/Unseal Page › should display seal/unseal operations
+[1A[2K[635/690] [chromium] › e2e/tpm-attestation.spec.ts:1236:9 › TPM Management › Seal/Unseal Page › should show PCR selection checkboxes
+[1A[2K[636/690] [chromium] › e2e/tpm-attestation.spec.ts:1249:9 › TPM Management › Seal/Unseal Page › should require common name for sealing
+[1A[2K[637/690] [chromium] › e2e/tpm-attestation.spec.ts:1263:9 › TPM Management › Seal/Unseal Page › should seal data with PCR policy
+[1A[2K[638/690] [chromium] › e2e/tpm-attestation.spec.ts:1283:9 › TPM Management › Seal/Unseal Page › should switch to unseal tab
+[1A[2K[639/690] [chromium] › e2e/tpm-attestation.spec.ts:1297:9 › TPM Management › Seal/Unseal Page › should unseal data
+[1A[2K[640/690] [chromium] › e2e/tpm-attestation.spec.ts:1316:9 › TPM Management › Seal/Unseal Page › should handle seal error
+[1A[2K[641/690] [chromium] › e2e/tpm-attestation.spec.ts:1335:9 › TPM Management › Seal/Unseal Page › should handle unseal error
+[1A[2K[642/690] [chromium] › e2e/tpm-attestation.spec.ts:1356:9 › TPM Management › Seal/Unseal Page › should show seal/unseal documentation
+[1A[2K[643/690] [chromium] › e2e/tpm-attestation.spec.ts:1376:9 › Attestation Management › Attestation List › should display attestation statistics
+[1A[2K[644/690] [chromium] › e2e/tpm-attestation.spec.ts:1435:9 › Attestation Management › Attestation List › should display attestation status badges
+[1A[2K[645/690] [chromium] › e2e/tpm-attestation.spec.ts:1451:9 › Attestation Management › Attestation List › should show attestation table
+[1A[2K[646/690] [chromium] › e2e/tpm-attestation.spec.ts:1465:9 › Attestation Management › Attestation List › should show empty state when no attestations
+[1A[2K[647/690] [chromium] › e2e/tpm-attestation.spec.ts:1475:9 › Attestation Management › Attestation List › should refresh attestation list
+[1A[2K[648/690] [chromium] › e2e/tpm-attestation.spec.ts:1493:9 › Attestation Management › Attestation List › should handle attestation fetch error
+[1A[2K[649/690] [chromium] › e2e/tpm-attestation.spec.ts:1515:9 › Attestation Management › Attestation Details › should navigate to attestation details
+[1A[2K[650/690] [chromium] › e2e/tpm-attestation.spec.ts:1543:9 › Attestation Management › Attestation Details › should show TPM quote data
+[1A[2K[651/690] [chromium] › e2e/tpm-attestation.spec.ts:1555:9 › Attestation Management › Attestation Details › should show verification result
+[1A[2K[652/690] [chromium] › e2e/tpm-attestation.spec.ts:1584:9 › Attestation Management › Attestation Details › should show device information
+[1A[2K[653/690] [chromium] › e2e/tpm-attestation.spec.ts:1614:9 › Attestation Management › Attestation Details › should handle attestation not found
+[1A[2K[654/690] [chromium] › e2e/tpm-attestation.spec.ts:1642:9 › Attestation Management › Attestation Details › should navigate back to attestation list
+[1A[2K[655/690] [chromium] › e2e/tpm-attestation.spec.ts:1759:9 › Attestation Management › Manifests Page › should list manifests
+[1A[2K[656/690] [chromium] › e2e/tpm-attestation.spec.ts:1778:9 › Attestation Management › Manifests Page › should show manifest statistics
+[1A[2K[657/690] [chromium] › e2e/tpm-attestation.spec.ts:1793:9 › Attestation Management › Manifests Page › should show manifest status badges
+[1A[2K[658/690] [chromium] › e2e/tpm-attestation.spec.ts:1808:9 › Attestation Management › Manifests Page › should show empty state when no manifests
+[1A[2K[659/690] [chromium] › e2e/tpm-attestation.spec.ts:1818:9 › Attestation Management › Manifests Page › should show create manifest button
+[1A[2K[660/690] [chromium] › e2e/tpm-attestation.spec.ts:1834:9 › Attestation Management › Quotes Page › should list TPM quotes
+[1A[2K[661/690] [chromium] › e2e/tpm-attestation.spec.ts:1853:9 › Attestation Management › Quotes Page › should show quote statistics
+[1A[2K[662/690] [chromium] › e2e/tpm-attestation.spec.ts:1868:9 › Attestation Management › Quotes Page › should show quote status badges
+[1A[2K[663/690] [chromium] › e2e/tpm-attestation.spec.ts:1880:9 › Attestation Management › Quotes Page › should show empty state when no quotes
+[1A[2K[664/690] [chromium] › e2e/tpm-attestation.spec.ts:1896:9 › Attestation Management › Event Logs Page › should list event logs
+[1A[2K[665/690] [chromium] › e2e/tpm-attestation.spec.ts:1908:9 › Attestation Management › Event Logs Page › should show event log statistics
+[1A[2K[666/690] [chromium] › e2e/tpm-attestation.spec.ts:1924:9 › Attestation Management › Event Logs Page › should show export button
+[1A[2K[667/690] [chromium] › e2e/tpm-attestation.spec.ts:1936:9 › Attestation Management › Event Logs Page › should show empty state when no event logs
+[1A[2K[668/690] [chromium] › e2e/tpm-attestation.spec.ts:1952:9 › Attestation Management › Verify Page › should display verification page
+[1A[2K[669/690] [chromium] › e2e/tpm-attestation.spec.ts:1964:9 › Attestation Management › Verify Page › should show verification statistics
+[1A[2K[670/690] [chromium] › e2e/tpm-attestation.spec.ts:1978:9 › Attestation Management › Verify Page › should show run verification button
+[1A[2K[671/690] [chromium] › e2e/tpm-attestation.spec.ts:1990:9 › Attestation Management › Verify Page › should show verification results table
+[1A[2K[672/690] [chromium] › e2e/tpm-attestation.spec.ts:2002:9 › Attestation Management › Verify Page › should show empty state when no verifications
+[1A[2K[673/690] [chromium] › e2e/tpm-attestation.spec.ts:2019:7 › Error States › should handle TPM unavailable on status page
+[1A[2K[674/690] [chromium] › e2e/tpm-attestation.spec.ts:2055:7 › Error States › should handle TPM unavailable on keys page
+[1A[2K[675/690] [chromium] › e2e/tpm-attestation.spec.ts:2071:7 › Error States › should handle attestation API error
+[1A[2K[676/690] [chromium] › e2e/tpm-attestation.spec.ts:2109:7 › Error States › should handle manifest build error
+[1A[2K[677/690] [chromium] › e2e/tpm-attestation.spec.ts:2126:7 › Access Control › should allow tenant members to view TPM status
+[1A[2K[678/690] [chromium] › e2e/tpm-attestation.spec.ts:2137:7 › Access Control › should allow tenant members to view attestations
+[1A[2K[679/690] [chromium] › e2e/tpm-attestation.spec.ts:2150:7 › Access Control › should redirect unauthenticated users to login from TPM pages
+[1A[2K[680/690] [chromium] › e2e/tpm-attestation.spec.ts:2157:7 › Access Control › should redirect unauthenticated users to login from attestation pages
+[1A[2K[681/690] [chromium] › e2e/tpm-attestation.spec.ts:2173:7 › Navigation › should navigate between TPM pages
+[1A[2K[682/690] [chromium] › e2e/tpm-attestation.spec.ts:2198:7 › Navigation › should navigate between attestation pages
+[1A[2K[683/690] [chromium] › e2e/webauthn-flow.spec.ts:56:8 › WebAuthn Full Flow Integration › should complete full registration flow with virtual authenticator
+[1A[2K[684/690] [chromium] › e2e/webauthn-flow.spec.ts:100:8 › WebAuthn Full Flow Integration › should complete full login flow after registration
+[1A[2K[685/690] [chromium] › e2e/webauthn-flow.spec.ts:135:7 › WebAuthn Full Flow Integration › should show validation error for empty username
+[1A[2K[686/690] [chromium] › e2e/webauthn-flow.spec.ts:145:7 › WebAuthn Full Flow Integration › should handle backend connection errors gracefully
+[1A[2K[687/690] [chromium] › e2e/webauthn-flow.spec.ts:172:7 › WebAuthn API Availability › should detect WebAuthn support in browser
+
+[1A[2K[688/690] [chromium] › e2e/webauthn-flow.spec.ts:203:7 › WebAuthn API Availability › should detect platform authenticator availability
+[1A[2K[chromium] › e2e/webauthn-flow.spec.ts:203:7 › WebAuthn API Availability › should detect platform authenticator availability
+Platform authenticator available: [33mfalse[39m
+
+[1A[2K[689/690] [chromium] › e2e/webauthn-flow.spec.ts:237:7 › Backend API Health › should verify backend is running and healthy
+[1A[2K[chromium] › e2e/webauthn-flow.spec.ts:237:7 › Backend API Health › should verify backend is running and healthy
+[INFO] Backend not available - skipping health check
+
+[1A[2K[INFO] This is expected when running tests without backend server
+
+[1A[2K[690/690] [chromium] › e2e/webauthn-flow.spec.ts:264:7 › Backend API Health › should verify WebAuthn endpoints exist
+[1A[2K[chromium] › e2e/webauthn-flow.spec.ts:264:7 › Backend API Health › should verify WebAuthn endpoints exist
+[INFO] Backend not available - cannot verify WebAuthn endpoints
+
+[1A[2K[INFO] This is expected when running tests without backend server
+
+[1A[2K  Slow test file: [chromium] › e2e/iam.spec.ts (5.0m)
+  Consider running tests from slow files in parallel. See: https://playwright.dev/docs/test-parallel
+  80 skipped
+  610 passed (32.8m)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

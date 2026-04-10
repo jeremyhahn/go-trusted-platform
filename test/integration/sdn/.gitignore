@@ -1,0 +1,16 @@
+# Test artifacts
+*.test
+*.out
+
+# Go module cache
+go.sum
+
+# Coverage reports
+coverage.txt
+coverage.html
+
+# OVS state
+*.db
+
+# Docker volumes
+volumes/
