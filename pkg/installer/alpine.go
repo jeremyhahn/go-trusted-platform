@@ -227,8 +227,7 @@ func (ai *alpineInstaller) InstallBase(ctx context.Context, rootPath string) err
 		"binutils",               // Provides objcopy for UKI building
 		"systemd-efistub",        // Provides EFI stub for UKI building (Alpine 3.22+)
 		"kmod",                   // For modprobe to load kernel modules
-		"gcompat",                // glibc compatibility layer for platformd binary
-		"libc6-compat",           // Additional glibc compatibility
+		// NOTE: gcompat/libc6-compat removed — platformd is statically linked
 		"ca-certificates",        // Required for update-ca-certificates to work
 		// NOTE: sbsigntool is no longer required - UKI signing uses native authenticode (pkg/authenticode)
 	}

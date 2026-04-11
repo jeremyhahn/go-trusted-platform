@@ -21,25 +21,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/clusterdek"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/bridge"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/vlan"
-	"google.golang.org/grpc"
 )
-
-// DEKClient defines the minimal interface for DEK operations.
-// This interface is satisfied by the QuicBaaS KMS DEKManagementClient.
-type DEKClient interface {
-	CreateDEK(ctx context.Context, req *pb.CreateDEKRequest, opts ...grpc.CallOption) (*pb.CreateDEKResponse, error)
-	GetDEK(ctx context.Context, req *pb.GetDEKRequest, opts ...grpc.CallOption) (*pb.GetDEKResponse, error)
-	RotateDEK(ctx context.Context, req *pb.RotateDEKRequest, opts ...grpc.CallOption) (*pb.RotateDEKResponse, error)
-	DeleteDEK(ctx context.Context, req *pb.DeleteDEKRequest, opts ...grpc.CallOption) (*pb.DeleteDEKResponse, error)
-	GetDEKStatus(ctx context.Context, req *pb.GetDEKStatusRequest, opts ...grpc.CallOption) (*pb.GetDEKStatusResponse, error)
-}
 
 // TenantBarrierClient defines the minimal interface for per-tenant barrier
 // operations. This interface is satisfied by the QRDB TenantClient
@@ -94,11 +83,11 @@ type DEKRotationResult struct {
 // for VLAN allocation, OVS bridge management, quota enforcement, DEK isolation,
 // and per-tenant barrier management.
 type Manager struct {
-	// QuicBaaS IAM client for tenant CRUD
-	iamClient iampb.IAMServiceClient
+	// QuicBaaS IAM SDK tenant client for tenant CRUD
+	iamTenantClient iam.TenantClient
 
-	// DEK client for key isolation
-	dekClient DEKClient
+	// ClusterDEK client for tenant DEK isolation
+	dekClient clusterdek.Client
 
 	// Per-tenant barrier client for barrier init/unseal
 	tenantBarrierClient TenantBarrierClient
@@ -124,8 +113,8 @@ type Manager struct {
 
 // ManagerConfig holds manager dependencies.
 type ManagerConfig struct {
-	IAMClient           iampb.IAMServiceClient
-	DEKClient           DEKClient
+	IAMTenantClient     iam.TenantClient
+	DEKClient           clusterdek.Client
 	TenantBarrierClient TenantBarrierClient
 	BarrierManager      *barrier.Manager
 	BridgeManager       *bridge.Manager
@@ -172,8 +161,8 @@ func NewManager(cfg *ManagerConfig) (*Manager, error) {
 		return nil, ErrInvalidRequest{Reason: "manager config is required"}
 	}
 
-	if cfg.IAMClient == nil {
-		return nil, ErrInvalidRequest{Reason: "IAM client is required"}
+	if cfg.IAMTenantClient == nil {
+		return nil, ErrInvalidRequest{Reason: "IAM tenant client is required"}
 	}
 
 	if cfg.Config == nil {
@@ -194,7 +183,7 @@ func NewManager(cfg *ManagerConfig) (*Manager, error) {
 	}
 
 	m := &Manager{
-		iamClient:           cfg.IAMClient,
+		iamTenantClient:     cfg.IAMTenantClient,
 		dekClient:           cfg.DEKClient,
 		tenantBarrierClient: cfg.TenantBarrierClient,
 		barrierManager:      cfg.BarrierManager,
@@ -274,7 +263,7 @@ func (m *Manager) CreateTenant(ctx context.Context, req *CreateTenantRequest) (*
 	})
 
 	// Create entity from IAM response
-	entity := FromProto(iamTenant)
+	entity := FromIAM(iamTenant)
 	entity.ID = tenantID
 	entity.DisplayName = req.DisplayName
 	if entity.DisplayName == "" {
@@ -384,7 +373,7 @@ func (m *Manager) CreateTenant(ctx context.Context, req *CreateTenantRequest) (*
 
 	// Step 5: Create DEK (if enabled)
 	if m.config.EnableDEKIsolation {
-		dekPath, err := m.createDEK(ctx, tenantID)
+		dekPath, err := m.ensureTenantDEK(ctx, tenantID)
 		if err != nil {
 			m.logger.Error("failed to create DEK",
 				slog.String("tenant_id", tenantID),
@@ -407,7 +396,7 @@ func (m *Manager) CreateTenant(ctx context.Context, req *CreateTenantRequest) (*
 			m.logger.Warn("rolling back DEK creation",
 				slog.String("tenant_id", tenantID),
 			)
-			if delErr := m.deleteDEK(ctx, tenantID, dekPath); delErr != nil {
+			if delErr := m.deleteTenantDEK(ctx, tenantID); delErr != nil {
 				m.logger.Error("failed to rollback DEK",
 					slog.String("tenant_id", tenantID),
 					slog.Any("error", delErr),
@@ -481,7 +470,7 @@ func (m *Manager) GetTenant(ctx context.Context, id string) (*TenantEntity, erro
 		return nil, ErrTenantNotFound{ID: id}
 	}
 
-	entity := FromProto(iamTenant)
+	entity := FromIAM(iamTenant)
 
 	// Enrich with VLAN allocation
 	if m.vlanAllocator != nil {
@@ -540,7 +529,7 @@ func (m *Manager) GetTenantByName(ctx context.Context, name string) (*TenantEnti
 		return nil, ErrTenantNotFound{Name: name}
 	}
 
-	entity := FromProto(iamTenant)
+	entity := FromIAM(iamTenant)
 
 	// Enrich with platform-specific data
 	if m.vlanAllocator != nil {
@@ -588,7 +577,7 @@ func (m *Manager) ListTenants(ctx context.Context, limit, offset int) ([]*Tenant
 
 	entities := make([]*TenantEntity, 0, len(tenants))
 	for _, t := range tenants {
-		entity := FromProto(t)
+		entity := FromIAM(&t)
 
 		// Enrich with platform-specific data
 		if m.vlanAllocator != nil {
@@ -722,7 +711,7 @@ func (m *Manager) DeleteTenant(ctx context.Context, id string) error {
 
 	// Step 4: Delete DEK
 	if m.config.EnableDEKIsolation && entity.DEKPath != "" {
-		if err := m.deleteDEK(ctx, id, entity.DEKPath); err != nil {
+		if err := m.deleteTenantDEK(ctx, id); err != nil {
 			m.logger.Error("failed to delete DEK",
 				slog.String("tenant_id", id),
 				slog.String("dek_path", entity.DEKPath),
@@ -1023,12 +1012,12 @@ func (m *Manager) RotateTenantDEKWithOptions(ctx context.Context, tenantID strin
 		slog.Bool("background", background),
 	)
 
-	req := &pb.RotateDEKRequest{
-		Path:       entity.DEKPath,
-		Background: background,
+	req := &clusterdek.RotateClusterDEKRequest{
+		Reason:                fmt.Sprintf("tenant DEK rotation for %s", tenantID),
+		AutoStartReencryption: background,
 	}
 
-	resp, err := m.dekClient.RotateDEK(ctx, req)
+	resp, err := m.dekClient.RotateClusterDEK(ctx, req)
 	if err != nil {
 		m.logger.Error("failed to rotate DEK",
 			slog.String("tenant_id", tenantID),
@@ -1053,7 +1042,7 @@ func (m *Manager) RotateTenantDEKWithOptions(ctx context.Context, tenantID strin
 		TenantID:   tenantID,
 		OldVersion: uint32(resp.OldVersion),
 		NewVersion: uint32(resp.NewVersion),
-		Timestamp:  time.Now(),
+		Timestamp:  resp.RotatedAt,
 	}, nil
 }
 
@@ -1080,11 +1069,7 @@ func (m *Manager) GetTenantDEKStatus(ctx context.Context, tenantID string) (*DEK
 		return nil, ErrInvalidRequest{Reason: "tenant has no DEK configured"}
 	}
 
-	req := &pb.GetDEKStatusRequest{
-		Path: entity.DEKPath,
-	}
-
-	resp, err := m.dekClient.GetDEKStatus(ctx, req)
+	resp, err := m.dekClient.GetClusterDEKStatus(ctx)
 	if err != nil {
 		m.logger.Error("failed to get DEK status",
 			slog.String("tenant_id", tenantID),
@@ -1099,42 +1084,20 @@ func (m *Manager) GetTenantDEKStatus(ctx context.Context, tenantID string) (*DEK
 	}
 
 	status := &DEKStatus{
-		Path:           resp.Dek.Path,
-		Algorithm:      protoKeyAlgorithmToString(resp.Dek.Algorithm),
-		Version:        resp.Dek.Version,
-		Status:         resp.Dek.Status,
-		IsDefault:      resp.Dek.IsDefault,
-		CreatedAt:      time.Unix(resp.Dek.CreatedAt, 0),
-		RotatedAt:      time.Unix(resp.Dek.RotatedAt, 0),
-		UsageCount:     resp.Dek.UsageCount,
-		BytesUsed:      resp.Dek.BytesUsed,
-		MaxUsageCount:  resp.Dek.MaxUsageCount,
-		MaxBytesUsed:   resp.Dek.MaxBytesUsed,
-		WarningPercent: resp.Dek.WarningPercent,
+		Path:      entity.DEKPath,
+		Algorithm: resp.Algorithm,
+		Version:   resp.CurrentVersion,
+		CreatedAt: resp.CreatedAt,
 	}
 
-	// Calculate usage percent
-	if status.MaxUsageCount > 0 {
-		status.UsagePercent = float64(status.UsageCount) / float64(status.MaxUsageCount) * 100
-	}
-
-	// Determine if rotation is needed
-	if status.MaxUsageCount > 0 && status.UsageCount >= status.MaxUsageCount {
-		status.NeedsRotation = true
-	}
-	if status.MaxBytesUsed > 0 && status.BytesUsed >= status.MaxBytesUsed {
-		status.NeedsRotation = true
+	if resp.RotatedAt != nil {
+		status.RotatedAt = *resp.RotatedAt
 	}
 
 	// Include re-encryption progress if available
-	if resp.ReencryptionProgress != nil {
+	if resp.ReencryptionInProgress {
 		status.ReencryptProgress = &ReencryptionProgress{
-			InProgress:          resp.ReencryptionProgress.InProgress,
-			TotalKeys:           resp.ReencryptionProgress.TotalKeys,
-			ProcessedKeys:       resp.ReencryptionProgress.ProcessedKeys,
-			FailedKeys:          resp.ReencryptionProgress.FailedKeys,
-			StartedAt:           time.Unix(resp.ReencryptionProgress.StartedAt, 0),
-			EstimatedCompletion: time.Unix(resp.ReencryptionProgress.EstimatedCompletion, 0),
+			InProgress: true,
 		}
 	}
 
@@ -1309,17 +1272,16 @@ func (m *Manager) GetCacheSize() int {
 }
 
 // ---------------------------------------------------------------------------
-// IAM integration methods
+// IAM integration methods (using go-quicbaas SDK)
 // ---------------------------------------------------------------------------
 
-func (m *Manager) createInIAM(ctx context.Context, id, name string) (*iampb.Tenant, error) {
-	req := &iampb.CreateTenantRequest{
-		Id:   id,
+func (m *Manager) createInIAM(ctx context.Context, id, name string) (*iam.Tenant, error) {
+	req := &iam.CreateTenantRequest{
+		ID:   id,
 		Name: name,
 	}
 
-	// IAM service returns *iampb.Tenant directly
-	tenant, err := m.iamClient.CreateTenant(ctx, req)
+	tenant, err := m.iamTenantClient.Create(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1327,13 +1289,8 @@ func (m *Manager) createInIAM(ctx context.Context, id, name string) (*iampb.Tena
 	return tenant, nil
 }
 
-func (m *Manager) getFromIAM(ctx context.Context, id string) (*iampb.Tenant, error) {
-	req := &iampb.GetTenantRequest{
-		Id: id,
-	}
-
-	// IAM service returns *iampb.Tenant directly
-	tenant, err := m.iamClient.GetTenant(ctx, req)
+func (m *Manager) getFromIAM(ctx context.Context, id string) (*iam.Tenant, error) {
+	tenant, err := m.iamTenantClient.Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -1341,133 +1298,93 @@ func (m *Manager) getFromIAM(ctx context.Context, id string) (*iampb.Tenant, err
 	return tenant, nil
 }
 
-func (m *Manager) getFromIAMByName(ctx context.Context, name string) (*iampb.Tenant, error) {
-	// Use ListTenants with a filter to find by name
-	req := &iampb.ListTenantsRequest{
-		Limit:  100,
-		Offset: 0,
+func (m *Manager) getFromIAMByName(ctx context.Context, name string) (*iam.Tenant, error) {
+	// Use List with a large page size to find by name
+	req := &iam.ListTenantsRequest{
+		PageSize: 100,
 	}
 
-	resp, err := m.iamClient.ListTenants(ctx, req)
+	resp, err := m.iamTenantClient.List(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, t := range resp.Tenants {
-		if t.Name == name {
-			return t, nil
+	for i := range resp.Tenants {
+		if resp.Tenants[i].Name == name {
+			return &resp.Tenants[i], nil
 		}
 	}
 
 	return nil, ErrTenantNotFound{Name: name}
 }
 
-func (m *Manager) listFromIAM(ctx context.Context, limit, offset int) ([]*iampb.Tenant, int, error) {
-	req := &iampb.ListTenantsRequest{
-		Limit:  int32(limit),
-		Offset: int32(offset),
+func (m *Manager) listFromIAM(ctx context.Context, limit, offset int) ([]iam.Tenant, int, error) {
+	req := &iam.ListTenantsRequest{
+		PageSize: limit,
 	}
 
-	resp, err := m.iamClient.ListTenants(ctx, req)
+	resp, err := m.iamTenantClient.List(ctx, req)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	return resp.Tenants, int(resp.Total), nil
+	// Apply offset client-side since SDK uses token-based pagination
+	tenants := resp.Tenants
+	if offset > 0 && offset < len(tenants) {
+		tenants = tenants[offset:]
+	} else if offset >= len(tenants) {
+		tenants = nil
+	}
+
+	return tenants, resp.Pagination.TotalCount, nil
 }
 
 func (m *Manager) updateInIAM(ctx context.Context, entity *TenantEntity) error {
-	req := &iampb.UpdateTenantRequest{
-		Id:   entity.ID,
-		Name: entity.Name,
+	req := &iam.UpdateTenantRequest{
+		DisplayName: entity.DisplayName,
 	}
 
-	_, err := m.iamClient.UpdateTenant(ctx, req)
+	_, err := m.iamTenantClient.Update(ctx, entity.ID, req)
 	return err
 }
 
 func (m *Manager) deleteFromIAM(ctx context.Context, id string) error {
-	req := &iampb.DeleteTenantRequest{
-		Id: id,
-	}
-
-	_, err := m.iamClient.DeleteTenant(ctx, req)
-	return err
+	return m.iamTenantClient.Delete(ctx, id)
 }
 
 // ---------------------------------------------------------------------------
-// DEK integration methods
+// DEK integration methods (using go-quicbaas ClusterDEK SDK)
 // ---------------------------------------------------------------------------
 
-func (m *Manager) createDEK(ctx context.Context, tenantID string) (string, error) {
+func (m *Manager) ensureTenantDEK(ctx context.Context, tenantID string) (string, error) {
 	if m.dekClient == nil {
 		return "", ErrInvalidRequest{Reason: "DEK client is not configured"}
 	}
 
-	dekPath := BuildDEKPath(tenantID)
-	algorithm := m.algorithmStringToProto(m.config.DEKAlgorithm)
-
-	req := &pb.CreateDEKRequest{
-		Path:           dekPath,
-		Algorithm:      algorithm,
-		Description:    fmt.Sprintf("Tenant DEK for %s", tenantID),
-		MaxOperations:  m.config.DEKMaxOperations,
-		MaxBytes:       m.config.DEKMaxBytes,
-		WarningPercent: m.config.DEKWarningPercent,
+	req := &clusterdek.EnsureTenantDEKRequest{
+		TenantID:  tenantID,
+		Algorithm: m.config.DEKAlgorithm,
 	}
 
-	resp, err := m.dekClient.CreateDEK(ctx, req)
+	resp, err := m.dekClient.EnsureTenantDEK(ctx, req)
 	if err != nil {
 		return "", err
 	}
 
-	return resp.Dek.Path, nil
+	return resp.DEKID, nil
 }
 
-func (m *Manager) deleteDEK(ctx context.Context, tenantID, dekPath string) error {
+func (m *Manager) deleteTenantDEK(ctx context.Context, tenantID string) error {
 	if m.dekClient == nil {
 		return ErrInvalidRequest{Reason: "DEK client is not configured"}
 	}
 
-	req := &pb.DeleteDEKRequest{
-		Path:  dekPath,
-		Force: true, // Force delete for tenant cleanup
+	req := &clusterdek.DeleteTenantDEKRequest{
+		TenantID: tenantID,
 	}
 
-	_, err := m.dekClient.DeleteDEK(ctx, req)
+	_, err := m.dekClient.DeleteTenantDEK(ctx, req)
 	return err
-}
-
-// algorithmStringToProto converts a string algorithm to proto enum.
-func (m *Manager) algorithmStringToProto(algorithm string) pb.KeyAlgorithm {
-	algorithmMap := map[string]pb.KeyAlgorithm{
-		DEKAlgorithmAES128GCM:         pb.KeyAlgorithm_KEY_ALG_AES_128_GCM,
-		DEKAlgorithmAES192GCM:         pb.KeyAlgorithm_KEY_ALG_AES_192_GCM,
-		DEKAlgorithmAES256GCM:         pb.KeyAlgorithm_KEY_ALG_AES_256_GCM,
-		DEKAlgorithmChaCha20Poly1305:  pb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305,
-		DEKAlgorithmXChaCha20Poly1305: pb.KeyAlgorithm_KEY_ALG_XCHACHA20_POLY1305,
-	}
-
-	if alg, ok := algorithmMap[algorithm]; ok {
-		return alg
-	}
-	return pb.KeyAlgorithm_KEY_ALG_AES_256_GCM // Default
-}
-
-// protoKeyAlgorithmToString converts a proto enum to string.
-func protoKeyAlgorithmToString(algorithm pb.KeyAlgorithm) string {
-	algorithmMap := map[pb.KeyAlgorithm]string{
-		pb.KeyAlgorithm_KEY_ALG_AES_128_GCM:        DEKAlgorithmAES128GCM,
-		pb.KeyAlgorithm_KEY_ALG_AES_192_GCM:        DEKAlgorithmAES192GCM,
-		pb.KeyAlgorithm_KEY_ALG_AES_256_GCM:        DEKAlgorithmAES256GCM,
-		pb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305:  DEKAlgorithmChaCha20Poly1305,
-		pb.KeyAlgorithm_KEY_ALG_XCHACHA20_POLY1305: DEKAlgorithmXChaCha20Poly1305,
-	}
-
-	if str, ok := algorithmMap[algorithm]; ok {
-		return str
-	}
-	return "unknown"
 }
 
 // ---------------------------------------------------------------------------

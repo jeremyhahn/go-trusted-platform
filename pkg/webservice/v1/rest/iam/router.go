@@ -16,7 +16,6 @@ package iam
 import (
 	"github.com/gorilla/mux"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
@@ -35,8 +34,8 @@ type IAMRouter struct {
 // NewIAMRouter creates a new IAMRouter instance
 func NewIAMRouter(
 	logger *logging.Logger,
-	iamClient iampb.IAMServiceClient,
-	pepClient iampb.PEPServiceClient,
+	iamClient IAMClient,
+	pepClient PEPClient,
 	respWriter response.HttpWriter,
 ) *IAMRouter {
 	return &IAMRouter{

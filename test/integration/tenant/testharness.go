@@ -28,8 +28,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"google.golang.org/grpc"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
+	grpctransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -46,16 +48,16 @@ const (
 // TestHarness provides an isolated test environment with embedded QuicBaaS
 // and gRPC server for tenant integration testing.
 type TestHarness struct {
-	mu            sync.Mutex
-	dataDir       string
-	grpcListener  net.Listener
-	grpcServer    *grpc.Server
-	quicBaaS      *quicbaas.Server
-	quicbaasConn  *grpc.ClientConn
-	tenantManager *tenant.Manager
-	logger        *logging.Logger
-	grpcAddr      string
-	started       bool
+	mu             sync.Mutex
+	dataDir        string
+	grpcListener   net.Listener
+	grpcServer     *grpc.Server
+	quicBaaS       *quicbaas.Server
+	grpcTransport  *grpctransport.Transport
+	tenantManager  *tenant.Manager
+	logger         *logging.Logger
+	grpcAddr       string
+	started        bool
 }
 
 // TestHarnessConfig contains configuration for the test harness
@@ -217,30 +219,27 @@ quicbaasReady:
 	// Small delay for gRPC server to fully accept connections
 	time.Sleep(100 * time.Millisecond)
 
-	// Connect to QuicBaaS's gRPC server to get IAM client
+	// Create SDK gRPC transport to QuicBaaS for IAM tenant operations
 	quicbaasAddr := fmt.Sprintf("127.0.0.1:%d", testQuicBaaSPort)
-	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	h.quicbaasConn, err = grpc.DialContext(dialCtx, quicbaasAddr,
-		helpers.GRPCTransportCredentials(),
-		grpc.WithBlock(),
-	)
+	h.grpcTransport, err = grpctransport.New(&transport.Config{
+		Address: quicbaasAddr,
+		Timeout: 10 * time.Second,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to connect to QuicBaaS gRPC: %w", err)
+		return fmt.Errorf("failed to create gRPC transport to QuicBaaS: %w", err)
 	}
 
-	// Create IAM client from QuicBaaS connection
-	iamClient := iampb.NewIAMServiceClient(h.quicbaasConn)
+	// Create IAM tenant client via SDK transport
+	iamTenantClient := iam.NewTenantClient(h.grpcTransport)
 
-	// Create tenant.Manager with IAM client
+	// Create tenant.Manager with SDK IAM client
 	tenantConfig := tenant.DefaultConfig()
 	tenantConfig.EnableDEKIsolation = false // Disable DEK for testing simplicity
 
 	h.tenantManager, err = tenant.NewManager(&tenant.ManagerConfig{
-		IAMClient: iamClient,
-		Config:    tenantConfig,
-		Logger:    h.logger.Slog(),
+		IAMTenantClient: iamTenantClient,
+		Config:          tenantConfig,
+		Logger:          h.logger.Slog(),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create tenant manager: %w", err)
@@ -298,9 +297,9 @@ func (h *TestHarness) Stop(ctx context.Context) error {
 		h.grpcListener.Close()
 	}
 
-	// Close QuicBaaS connection
-	if h.quicbaasConn != nil {
-		h.quicbaasConn.Close()
+	// Close SDK gRPC transport
+	if h.grpcTransport != nil {
+		h.grpcTransport.Close()
 	}
 
 	// Stop QuicBaaS

@@ -276,61 +276,61 @@ func TestIAMGRPCService_ConvertGRPCError_NonStatusError(t *testing.T) {
 // Helper Conversion Tests
 // =============================================================================
 
-func TestIAMGRPCService_DragonUserToPlatformUser_Nil(t *testing.T) {
+func TestIAMGRPCService_SDKUserToPlatformUser_Nil(t *testing.T) {
 	t.Parallel()
 
 	svc := NewIAMGRPCService(iamTestLogger(), &mockIAMServiceClient{}, nil)
-	result := svc.dragonUserToPlatformUser(nil)
+	result := sdkUserToPlatformUser(nil)
 	if result != nil {
 		t.Error("expected nil for nil input")
 	}
 }
 
-func TestIAMGRPCService_DragonRoleToPlatformRole_Nil(t *testing.T) {
+func TestIAMGRPCService_SDKRoleToPlatformRole_Nil(t *testing.T) {
 	t.Parallel()
 
 	svc := NewIAMGRPCService(iamTestLogger(), &mockIAMServiceClient{}, nil)
-	result := svc.dragonRoleToPlatformRole(nil)
+	result := sdkRoleToPlatformRole(nil)
 	if result != nil {
 		t.Error("expected nil for nil input")
 	}
 }
 
-func TestIAMGRPCService_DragonGroupToPlatformGroup_Nil(t *testing.T) {
+func TestIAMGRPCService_SDKGroupToPlatformGroup_Nil(t *testing.T) {
 	t.Parallel()
 
 	svc := NewIAMGRPCService(iamTestLogger(), &mockIAMServiceClient{}, nil)
-	result := svc.dragonGroupToPlatformGroup(nil)
+	result := sdkGroupToPlatformGroup(nil)
 	if result != nil {
 		t.Error("expected nil for nil input")
 	}
 }
 
-func TestIAMGRPCService_DragonTenantToPlatformTenant_Nil(t *testing.T) {
+func TestIAMGRPCService_SDKTenantToPlatformTenant_Nil(t *testing.T) {
 	t.Parallel()
 
 	svc := NewIAMGRPCService(iamTestLogger(), &mockIAMServiceClient{}, nil)
-	result := svc.dragonTenantToPlatformTenant(nil)
+	result := sdkTenantToPlatformTenant(nil)
 	if result != nil {
 		t.Error("expected nil for nil input")
 	}
 }
 
-func TestIAMGRPCService_DragonPolicyToPlatformPolicy_Nil(t *testing.T) {
+func TestIAMGRPCService_SDKPolicyToPlatformPolicy_Nil(t *testing.T) {
 	t.Parallel()
 
 	svc := NewIAMGRPCService(iamTestLogger(), &mockIAMServiceClient{}, nil)
-	result := svc.dragonPolicyToPlatformPolicy(nil)
+	result := sdkPolicyToPlatformPolicy(nil)
 	if result != nil {
 		t.Error("expected nil for nil input")
 	}
 }
 
-func TestIAMGRPCService_DragonAppToPlatformApp_Nil(t *testing.T) {
+func TestIAMGRPCService_SDKAppToPlatformApp_Nil(t *testing.T) {
 	t.Parallel()
 
 	svc := NewIAMGRPCService(iamTestLogger(), &mockIAMServiceClient{}, nil)
-	result := svc.dragonAppToPlatformApp(nil)
+	result := sdkAppToPlatformApp(nil)
 	if result != nil {
 		t.Error("expected nil for nil input")
 	}

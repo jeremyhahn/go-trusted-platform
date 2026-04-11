@@ -22,21 +22,16 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/clusterdek"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/vlan"
-	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// mockIAMClient implements iampb.IAMServiceClient for testing.
-// We embed the interface to auto-satisfy all methods with nil implementations.
+// mockIAMClient implements iam.TenantClient for testing.
 type mockIAMClient struct {
-	iampb.IAMServiceClient // Embed to satisfy interface
-
 	mu      sync.RWMutex
-	tenants map[string]*iampb.Tenant
+	tenants map[string]*iam.Tenant
 	nextID  int
 
 	// Error injection
@@ -49,12 +44,12 @@ type mockIAMClient struct {
 
 func newMockIAMClient() *mockIAMClient {
 	return &mockIAMClient{
-		tenants: make(map[string]*iampb.Tenant),
+		tenants: make(map[string]*iam.Tenant),
 		nextID:  1,
 	}
 }
 
-func (m *mockIAMClient) CreateTenant(ctx context.Context, req *iampb.CreateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
+func (m *mockIAMClient) Create(ctx context.Context, req *iam.CreateTenantRequest) (*iam.Tenant, error) {
 	if m.createErr != nil {
 		return nil, m.createErr
 	}
@@ -69,25 +64,27 @@ func (m *mockIAMClient) CreateTenant(ctx context.Context, req *iampb.CreateTenan
 		}
 	}
 
-	id := req.Id
+	id := req.ID
 	if id == "" {
 		id = req.Name + "-id"
 	}
 
-	tenant := &iampb.Tenant{
-		Id:        id,
-		Name:      req.Name,
-		CreatedAt: timestamppb.Now(),
-		UpdatedAt: timestamppb.Now(),
+	now := time.Now()
+	tenant := &iam.Tenant{
+		ID:          id,
+		Name:        req.Name,
+		DisplayName: req.DisplayName,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
-	m.tenants[tenant.Id] = tenant
+	m.tenants[tenant.ID] = tenant
 	m.nextID++
 
 	return tenant, nil
 }
 
-func (m *mockIAMClient) GetTenant(ctx context.Context, req *iampb.GetTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
+func (m *mockIAMClient) Get(ctx context.Context, tenantID string) (*iam.Tenant, error) {
 	if m.getErr != nil {
 		return nil, m.getErr
 	}
@@ -95,7 +92,7 @@ func (m *mockIAMClient) GetTenant(ctx context.Context, req *iampb.GetTenantReque
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	tenant, ok := m.tenants[req.Id]
+	tenant, ok := m.tenants[tenantID]
 	if !ok {
 		return nil, errors.New("tenant not found")
 	}
@@ -103,7 +100,7 @@ func (m *mockIAMClient) GetTenant(ctx context.Context, req *iampb.GetTenantReque
 	return tenant, nil
 }
 
-func (m *mockIAMClient) ListTenants(ctx context.Context, req *iampb.ListTenantsRequest, opts ...grpc.CallOption) (*iampb.ListTenantsResponse, error) {
+func (m *mockIAMClient) List(ctx context.Context, req *iam.ListTenantsRequest) (*iam.ListTenantsResponse, error) {
 	if m.listErr != nil {
 		return nil, m.listErr
 	}
@@ -111,18 +108,20 @@ func (m *mockIAMClient) ListTenants(ctx context.Context, req *iampb.ListTenantsR
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	tenants := make([]*iampb.Tenant, 0, len(m.tenants))
+	tenants := make([]iam.Tenant, 0, len(m.tenants))
 	for _, t := range m.tenants {
-		tenants = append(tenants, t)
+		tenants = append(tenants, *t)
 	}
 
-	return &iampb.ListTenantsResponse{
+	return &iam.ListTenantsResponse{
 		Tenants: tenants,
-		Total:   int32(len(tenants)),
+		Pagination: iam.PaginationInfo{
+			TotalCount: len(tenants),
+		},
 	}, nil
 }
 
-func (m *mockIAMClient) UpdateTenant(ctx context.Context, req *iampb.UpdateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
+func (m *mockIAMClient) Update(ctx context.Context, tenantID string, req *iam.UpdateTenantRequest) (*iam.Tenant, error) {
 	if m.updateErr != nil {
 		return nil, m.updateErr
 	}
@@ -130,142 +129,77 @@ func (m *mockIAMClient) UpdateTenant(ctx context.Context, req *iampb.UpdateTenan
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	tenant, ok := m.tenants[req.Id]
+	tenant, ok := m.tenants[tenantID]
 	if !ok {
 		return nil, errors.New("tenant not found")
 	}
 
-	if req.Name != "" {
-		tenant.Name = req.Name
+	if req.DisplayName != "" {
+		tenant.DisplayName = req.DisplayName
 	}
-	tenant.UpdatedAt = timestamppb.Now()
+	tenant.UpdatedAt = time.Now()
 
 	return tenant, nil
 }
 
-func (m *mockIAMClient) DeleteTenant(ctx context.Context, req *iampb.DeleteTenantRequest, opts ...grpc.CallOption) (*iampb.DeleteTenantResponse, error) {
+func (m *mockIAMClient) Delete(ctx context.Context, tenantID string) error {
 	if m.deleteErr != nil {
-		return nil, m.deleteErr
+		return m.deleteErr
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, ok := m.tenants[req.Id]; !ok {
-		return nil, errors.New("tenant not found")
+	if _, ok := m.tenants[tenantID]; !ok {
+		return errors.New("tenant not found")
 	}
 
-	delete(m.tenants, req.Id)
+	delete(m.tenants, tenantID)
 
-	return &iampb.DeleteTenantResponse{Success: true}, nil
+	return nil
 }
 
-// Note: Additional IAMServiceClient methods are inherited from the embedded interface
+// mockDEKData holds per-tenant DEK metadata for the mock.
+type mockDEKData struct {
+	TenantID  string
+	DEKID     string
+	Algorithm string
+	Version   uint64
+	CreatedAt time.Time
+	RotatedAt time.Time
+}
 
-// mockDEKClient implements DEKClient for testing.
+// mockDEKClient implements clusterdek.Client for testing.
 type mockDEKClient struct {
 	mu   sync.RWMutex
-	deks map[string]*pb.DEKMetadata
+	deks map[string]*mockDEKData // keyed by tenant ID
 
+	// Error injection
 	createErr    error
-	getErr       error
 	rotateErr    error
 	deleteErr    error
 	getStatusErr error
 
 	// For testing re-encryption progress
-	reencryptionProgress *pb.ReencryptionProgress
+	reencryptionInProgress bool
 }
 
 func newMockDEKClient() *mockDEKClient {
 	return &mockDEKClient{
-		deks: make(map[string]*pb.DEKMetadata),
+		deks: make(map[string]*mockDEKData),
 	}
 }
 
-func (m *mockDEKClient) CreateDEK(ctx context.Context, req *pb.CreateDEKRequest, opts ...grpc.CallOption) (*pb.CreateDEKResponse, error) {
-	if m.createErr != nil {
-		return nil, m.createErr
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	dek := &pb.DEKMetadata{
-		Path:           req.Path,
-		Algorithm:      req.Algorithm,
-		Version:        1,
-		Status:         "active",
-		IsDefault:      true,
-		CreatedAt:      time.Now().Unix(),
-		RotatedAt:      time.Now().Unix(),
-		MaxUsageCount:  req.MaxOperations,
-		MaxBytesUsed:   req.MaxBytes,
-		WarningPercent: req.WarningPercent,
-	}
-
-	m.deks[req.Path] = dek
-
-	return &pb.CreateDEKResponse{Dek: dek}, nil
-}
-
-func (m *mockDEKClient) GetDEK(ctx context.Context, req *pb.GetDEKRequest, opts ...grpc.CallOption) (*pb.GetDEKResponse, error) {
-	if m.getErr != nil {
-		return nil, m.getErr
-	}
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	dek, ok := m.deks[req.Path]
-	if !ok {
-		return nil, errors.New("DEK not found")
-	}
-
-	return &pb.GetDEKResponse{Dek: dek}, nil
-}
-
-func (m *mockDEKClient) RotateDEK(ctx context.Context, req *pb.RotateDEKRequest, opts ...grpc.CallOption) (*pb.RotateDEKResponse, error) {
-	if m.rotateErr != nil {
-		return nil, m.rotateErr
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	dek, ok := m.deks[req.Path]
-	if !ok {
-		return nil, errors.New("DEK not found")
-	}
-
-	oldVersion := dek.Version
-	dek.Version++
-	dek.RotatedAt = time.Now().Unix()
-
-	return &pb.RotateDEKResponse{
-		OldVersion: oldVersion,
-		NewVersion: dek.Version,
+func (m *mockDEKClient) InitializeClusterDEK(ctx context.Context, req *clusterdek.InitClusterDEKRequest) (*clusterdek.InitClusterDEKResponse, error) {
+	return &clusterdek.InitClusterDEKResponse{
+		Version:   1,
+		CreatedAt: time.Now(),
+		Algorithm: req.Algorithm,
+		KeySize:   req.KeySize,
 	}, nil
 }
 
-func (m *mockDEKClient) DeleteDEK(ctx context.Context, req *pb.DeleteDEKRequest, opts ...grpc.CallOption) (*pb.DeleteDEKResponse, error) {
-	if m.deleteErr != nil {
-		return nil, m.deleteErr
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, ok := m.deks[req.Path]; !ok {
-		return nil, errors.New("DEK not found")
-	}
-
-	delete(m.deks, req.Path)
-
-	return &pb.DeleteDEKResponse{Deleted: true}, nil
-}
-
-func (m *mockDEKClient) GetDEKStatus(ctx context.Context, req *pb.GetDEKStatusRequest, opts ...grpc.CallOption) (*pb.GetDEKStatusResponse, error) {
+func (m *mockDEKClient) GetClusterDEKStatus(ctx context.Context) (*clusterdek.ClusterDEKStatusResponse, error) {
 	if m.getStatusErr != nil {
 		return nil, m.getStatusErr
 	}
@@ -273,14 +207,155 @@ func (m *mockDEKClient) GetDEKStatus(ctx context.Context, req *pb.GetDEKStatusRe
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	dek, ok := m.deks[req.Path]
-	if !ok {
-		return nil, errors.New("DEK not found")
+	// Return a status based on the first DEK found (for testing)
+	resp := &clusterdek.ClusterDEKStatusResponse{
+		Initialized:            true,
+		CurrentVersion:         1,
+		CreatedAt:              time.Now(),
+		Algorithm:              "aes-256-gcm",
+		ReencryptionInProgress: m.reencryptionInProgress,
 	}
 
-	return &pb.GetDEKStatusResponse{
-		Dek:                  dek,
-		ReencryptionProgress: m.reencryptionProgress,
+	// If we have DEKs, use the first one's version
+	for _, dek := range m.deks {
+		resp.CurrentVersion = dek.Version
+		resp.Algorithm = dek.Algorithm
+		resp.CreatedAt = dek.CreatedAt
+		if !dek.RotatedAt.IsZero() {
+			rotatedAt := dek.RotatedAt
+			resp.RotatedAt = &rotatedAt
+		}
+		break
+	}
+
+	return resp, nil
+}
+
+func (m *mockDEKClient) RotateClusterDEK(ctx context.Context, req *clusterdek.RotateClusterDEKRequest) (*clusterdek.RotateClusterDEKResponse, error) {
+	if m.rotateErr != nil {
+		return nil, m.rotateErr
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Find any DEK and rotate it
+	for _, dek := range m.deks {
+		oldVersion := dek.Version
+		dek.Version++
+		dek.RotatedAt = time.Now()
+
+		return &clusterdek.RotateClusterDEKResponse{
+			OldVersion: oldVersion,
+			NewVersion: dek.Version,
+			RotatedAt:  dek.RotatedAt,
+		}, nil
+	}
+
+	return nil, errors.New("no DEK to rotate")
+}
+
+func (m *mockDEKClient) SyncNodeDEK(ctx context.Context, req *clusterdek.SyncNodeDEKRequest) (*clusterdek.SyncNodeDEKResponse, error) {
+	return &clusterdek.SyncNodeDEKResponse{
+		NodeID:         req.NodeID,
+		CurrentVersion: 1,
+		SyncedAt:       time.Now(),
+	}, nil
+}
+
+func (m *mockDEKClient) GetNodeDEKStatus(ctx context.Context, req *clusterdek.GetNodeDEKStatusRequest) (*clusterdek.GetNodeDEKStatusResponse, error) {
+	return &clusterdek.GetNodeDEKStatusResponse{
+		NodeID:         req.NodeID,
+		CurrentVersion: 1,
+		LastSyncedAt:   time.Now(),
+		Status:         clusterdek.NodeDEKSynced,
+	}, nil
+}
+
+func (m *mockDEKClient) StartReencryption(ctx context.Context, req *clusterdek.StartReencryptionRequest) (*clusterdek.StartReencryptionResponse, error) {
+	return &clusterdek.StartReencryptionResponse{
+		Started:   true,
+		StartedAt: time.Now(),
+	}, nil
+}
+
+func (m *mockDEKClient) GetReencryptionStatus(ctx context.Context) (*clusterdek.ReencryptionStatusResponse, error) {
+	return &clusterdek.ReencryptionStatusResponse{
+		State: clusterdek.ReencryptionCompleted,
+	}, nil
+}
+
+func (m *mockDEKClient) CancelReencryption(ctx context.Context) error {
+	return nil
+}
+
+func (m *mockDEKClient) RecoverDEK(ctx context.Context, req *clusterdek.RecoverDEKRequest) (*clusterdek.RecoverDEKResponse, error) {
+	return &clusterdek.RecoverDEKResponse{
+		Success:          true,
+		RecoveredVersion: 1,
+		RecoveredAt:      time.Now(),
+	}, nil
+}
+
+func (m *mockDEKClient) EnsureTenantDEK(ctx context.Context, req *clusterdek.EnsureTenantDEKRequest) (*clusterdek.EnsureTenantDEKResponse, error) {
+	if m.createErr != nil {
+		return nil, m.createErr
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	dekID := "dek:tenant:" + req.TenantID
+	algorithm := req.Algorithm
+	if algorithm == "" {
+		algorithm = "aes-256-gcm"
+	}
+
+	// Check if already exists
+	if existing, ok := m.deks[req.TenantID]; ok {
+		return &clusterdek.EnsureTenantDEKResponse{
+			DEKID:     existing.DEKID,
+			Created:   false,
+			Algorithm: existing.Algorithm,
+			CreatedAt: existing.CreatedAt,
+		}, nil
+	}
+
+	now := time.Now()
+	m.deks[req.TenantID] = &mockDEKData{
+		TenantID:  req.TenantID,
+		DEKID:     dekID,
+		Algorithm: algorithm,
+		Version:   1,
+		CreatedAt: now,
+	}
+
+	return &clusterdek.EnsureTenantDEKResponse{
+		DEKID:     dekID,
+		Created:   true,
+		Algorithm: algorithm,
+		CreatedAt: now,
+	}, nil
+}
+
+func (m *mockDEKClient) DeleteTenantDEK(ctx context.Context, req *clusterdek.DeleteTenantDEKRequest) (*clusterdek.DeleteTenantDEKResponse, error) {
+	if m.deleteErr != nil {
+		return nil, m.deleteErr
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	dek, ok := m.deks[req.TenantID]
+	if !ok {
+		return nil, errors.New("tenant DEK not found")
+	}
+
+	delete(m.deks, req.TenantID)
+
+	return &clusterdek.DeleteTenantDEKResponse{
+		DEKID:     dek.DEKID,
+		DeletedAt: time.Now(),
 	}, nil
 }
 
@@ -457,7 +532,7 @@ func newTestManager(t *testing.T) (*Manager, *mockIAMClient) {
 	logger := newTestLogger()
 
 	cfg := &ManagerConfig{
-		IAMClient: iamClient,
+		IAMTenantClient: iamClient,
 		Config:    DefaultConfig(),
 		Logger:    logger,
 	}
@@ -492,7 +567,7 @@ func newTestManagerWithQuota(t *testing.T) (*Manager, *mockIAMClient, *mockQuota
 	}
 
 	cfg := &ManagerConfig{
-		IAMClient:     iamClient,
+		IAMTenantClient:     iamClient,
 		QuotaEnforcer: enforcer,
 		UsageTracker:  tracker,
 		Config:        DefaultConfig(),
@@ -526,7 +601,7 @@ func newTestManagerWithVLAN(t *testing.T) (*Manager, *mockIAMClient, *mockVLANSt
 	validator := vlan.NewValidator(allocator, logger)
 
 	cfg := &ManagerConfig{
-		IAMClient:     iamClient,
+		IAMTenantClient:     iamClient,
 		VLANAllocator: allocator,
 		VLANValidator: validator,
 		Config:        DefaultConfig(),
@@ -553,7 +628,7 @@ func TestNewManager_Success(t *testing.T) {
 	config.EnableDEKIsolation = false
 
 	cfg := &ManagerConfig{
-		IAMClient: iamClient,
+		IAMTenantClient: iamClient,
 		Config:    config,
 		Logger:    logger,
 	}
@@ -567,7 +642,7 @@ func TestNewManager_Success(t *testing.T) {
 		t.Fatal("expected manager to be non-nil")
 	}
 
-	if manager.iamClient != iamClient {
+	if manager.iamTenantClient != iamClient {
 		t.Error("expected IAM client to be set")
 	}
 }
@@ -586,7 +661,7 @@ func TestNewManager_NilConfig(t *testing.T) {
 
 func TestNewManager_NilIAMClient(t *testing.T) {
 	cfg := &ManagerConfig{
-		IAMClient: nil,
+		IAMTenantClient: nil,
 		Config:    DefaultConfig(),
 	}
 
@@ -605,7 +680,7 @@ func TestNewManager_InvalidConfig(t *testing.T) {
 	iamClient := newMockIAMClient()
 
 	cfg := &ManagerConfig{
-		IAMClient: iamClient,
+		IAMTenantClient: iamClient,
 		Config: &Config{
 			DefaultVLANRangeStart: 0, // Invalid
 		},
@@ -621,7 +696,7 @@ func TestNewManager_DefaultConfig(t *testing.T) {
 	iamClient := newMockIAMClient()
 
 	cfg := &ManagerConfig{
-		IAMClient: iamClient,
+		IAMTenantClient: iamClient,
 		DEKClient: newMockDEKClient(),
 		Config:    nil, // Should use defaults
 	}
@@ -640,7 +715,7 @@ func TestNewManager_DefaultLogger(t *testing.T) {
 	iamClient := newMockIAMClient()
 
 	cfg := &ManagerConfig{
-		IAMClient: iamClient,
+		IAMTenantClient: iamClient,
 		DEKClient: newMockDEKClient(),
 		Config:    DefaultConfig(),
 		Logger:    nil, // Should use default
@@ -2436,7 +2511,7 @@ func newTestManagerWithDEK(t *testing.T) (*Manager, *mockIAMClient, *mockDEKClie
 	logger := newTestLogger()
 
 	cfg := &ManagerConfig{
-		IAMClient: iamClient,
+		IAMTenantClient: iamClient,
 		DEKClient: dekClient,
 		Config:    DefaultConfig(),
 		Logger:    logger,
@@ -2475,14 +2550,14 @@ func TestCreateTenant_WithDEKIsolation(t *testing.T) {
 		t.Error("expected DEKPath to be set")
 	}
 
-	expectedPath := BuildDEKPath(entity.ID)
-	if entity.DEKPath != expectedPath {
-		t.Errorf("DEKPath = %q, want %q", entity.DEKPath, expectedPath)
+	expectedDEKID := "dek:tenant:" + entity.ID
+	if entity.DEKPath != expectedDEKID {
+		t.Errorf("DEKPath = %q, want %q", entity.DEKPath, expectedDEKID)
 	}
 
 	// Verify DEK was created in the mock client
 	dekClient.mu.RLock()
-	_, exists := dekClient.deks[entity.DEKPath]
+	_, exists := dekClient.deks[entity.ID]
 	dekClient.mu.RUnlock()
 
 	if !exists {
@@ -2505,7 +2580,7 @@ func TestDeleteTenant_WithDEKIsolation(t *testing.T) {
 
 	// Verify DEK exists before deletion
 	dekClient.mu.RLock()
-	_, exists := dekClient.deks[created.DEKPath]
+	_, exists := dekClient.deks[created.ID]
 	dekClient.mu.RUnlock()
 	if !exists {
 		t.Fatal("expected DEK to exist before deletion")
@@ -2518,7 +2593,7 @@ func TestDeleteTenant_WithDEKIsolation(t *testing.T) {
 
 	// Verify DEK was deleted
 	dekClient.mu.RLock()
-	_, exists = dekClient.deks[created.DEKPath]
+	_, exists = dekClient.deks[created.ID]
 	dekClient.mu.RUnlock()
 	if exists {
 		t.Error("expected DEK to be deleted from mock client")
@@ -2541,7 +2616,7 @@ func TestRotateTenantDEK(t *testing.T) {
 
 	// Check initial version
 	dekClient.mu.RLock()
-	dek := dekClient.deks[created.DEKPath]
+	dek := dekClient.deks[created.ID]
 	initialVersion := dek.Version
 	dekClient.mu.RUnlock()
 
@@ -2553,7 +2628,7 @@ func TestRotateTenantDEK(t *testing.T) {
 
 	// Verify version was incremented
 	dekClient.mu.RLock()
-	dek = dekClient.deks[created.DEKPath]
+	dek = dekClient.deks[created.ID]
 	newVersion := dek.Version
 	dekClient.mu.RUnlock()
 
@@ -2642,7 +2717,7 @@ func TestNewManager_DEKClientRequired(t *testing.T) {
 	logger := newTestLogger()
 
 	cfg := &ManagerConfig{
-		IAMClient: iamClient,
+		IAMTenantClient: iamClient,
 		Config:    DefaultConfig(),
 		Logger:    logger,
 	}
@@ -2808,7 +2883,7 @@ func BenchmarkCreateTenant(b *testing.B) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	cfg := &ManagerConfig{
-		IAMClient: iamClient,
+		IAMTenantClient: iamClient,
 		Config:    DefaultConfig(),
 		Logger:    logger,
 	}
@@ -2833,7 +2908,7 @@ func BenchmarkGetTenant(b *testing.B) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	cfg := &ManagerConfig{
-		IAMClient: iamClient,
+		IAMTenantClient: iamClient,
 		Config:    DefaultConfig(),
 		Logger:    logger,
 	}
@@ -2864,7 +2939,7 @@ func BenchmarkConcurrentGetTenant(b *testing.B) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	cfg := &ManagerConfig{
-		IAMClient: iamClient,
+		IAMTenantClient: iamClient,
 		Config:    DefaultConfig(),
 		Logger:    logger,
 	}
@@ -2897,7 +2972,7 @@ func BenchmarkListTenants(b *testing.B) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	cfg := &ManagerConfig{
-		IAMClient: iamClient,
+		IAMTenantClient: iamClient,
 		Config:    DefaultConfig(),
 		Logger:    logger,
 	}
@@ -2946,7 +3021,7 @@ func TestRotateTenantDEKWithOptions_NoDEKClient(t *testing.T) {
 	logger := newTestLogger()
 
 	cfg := &ManagerConfig{
-		IAMClient: iamClient,
+		IAMTenantClient: iamClient,
 		DEKClient: nil, // No DEK client
 		Config:    DefaultConfig(),
 		Logger:    logger,
@@ -3132,16 +3207,9 @@ func TestGetTenantDEKStatus_WithReencryptionProgress(t *testing.T) {
 		t.Fatalf("failed to create tenant: %v", err)
 	}
 
-	// Set re-encryption progress
+	// Set re-encryption in progress
 	dekClient.mu.Lock()
-	dekClient.reencryptionProgress = &pb.ReencryptionProgress{
-		InProgress:          true,
-		TotalKeys:           100,
-		ProcessedKeys:       50,
-		FailedKeys:          2,
-		StartedAt:           time.Now().Unix(),
-		EstimatedCompletion: time.Now().Add(time.Hour).Unix(),
-	}
+	dekClient.reencryptionInProgress = true
 	dekClient.mu.Unlock()
 
 	status, err := manager.GetTenantDEKStatus(ctx, created.ID)
@@ -3157,73 +3225,6 @@ func TestGetTenantDEKStatus_WithReencryptionProgress(t *testing.T) {
 		t.Error("expected InProgress to be true")
 	}
 
-	if status.ReencryptProgress.TotalKeys != 100 {
-		t.Errorf("expected TotalKeys 100, got %d", status.ReencryptProgress.TotalKeys)
-	}
-
-	if status.ReencryptProgress.ProcessedKeys != 50 {
-		t.Errorf("expected ProcessedKeys 50, got %d", status.ReencryptProgress.ProcessedKeys)
-	}
-}
-
-func TestGetTenantDEKStatus_NeedsRotationByUsageCount(t *testing.T) {
-	manager, _, dekClient := newTestManagerWithDEK(t)
-	ctx := context.Background()
-
-	createReq := &CreateTenantRequest{
-		Name: "test-tenant",
-	}
-
-	created, err := manager.CreateTenant(ctx, createReq)
-	if err != nil {
-		t.Fatalf("failed to create tenant: %v", err)
-	}
-
-	// Modify DEK metadata to exceed usage limits
-	dekClient.mu.Lock()
-	dek := dekClient.deks[created.DEKPath]
-	dek.MaxUsageCount = 100
-	dek.UsageCount = 150 // Exceeded max
-	dekClient.mu.Unlock()
-
-	status, err := manager.GetTenantDEKStatus(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("failed to get DEK status: %v", err)
-	}
-
-	if !status.NeedsRotation {
-		t.Error("expected NeedsRotation to be true when usage count exceeded")
-	}
-}
-
-func TestGetTenantDEKStatus_NeedsRotationByBytesUsed(t *testing.T) {
-	manager, _, dekClient := newTestManagerWithDEK(t)
-	ctx := context.Background()
-
-	createReq := &CreateTenantRequest{
-		Name: "test-tenant",
-	}
-
-	created, err := manager.CreateTenant(ctx, createReq)
-	if err != nil {
-		t.Fatalf("failed to create tenant: %v", err)
-	}
-
-	// Modify DEK metadata to exceed bytes limit
-	dekClient.mu.Lock()
-	dek := dekClient.deks[created.DEKPath]
-	dek.MaxBytesUsed = 1000000
-	dek.BytesUsed = 1500000 // Exceeded max
-	dekClient.mu.Unlock()
-
-	status, err := manager.GetTenantDEKStatus(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("failed to get DEK status: %v", err)
-	}
-
-	if !status.NeedsRotation {
-		t.Error("expected NeedsRotation to be true when bytes used exceeded")
-	}
 }
 
 func TestCreateTenant_DEKCreateError(t *testing.T) {
@@ -3232,7 +3233,7 @@ func TestCreateTenant_DEKCreateError(t *testing.T) {
 	logger := newTestLogger()
 
 	cfg := &ManagerConfig{
-		IAMClient: iamClient,
+		IAMTenantClient: iamClient,
 		DEKClient: dekClient,
 		Config:    DefaultConfig(),
 		Logger:    logger,

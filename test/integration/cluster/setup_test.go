@@ -322,10 +322,10 @@ func (tc *testCluster) start(ctx context.Context) error {
 // createNode creates a single test node with the given configuration.
 func (tc *testCluster) createNode(cfg *cluster.Config) (*testNode, error) {
 	// Create QuicBaaS factory for this node using in-memory config
-	dragonCfg := quicbaas.MemoryTestConfig(tc.t)
-	dragonCfg.NodeID = cfg.NodeID
+	quicbaasCfg := quicbaas.MemoryTestConfig(tc.t)
+	quicbaasCfg.NodeID = cfg.NodeID
 
-	factory, err := quicbaas.NewFactory(dragonCfg, tc.logger, nil)
+	factory, err := quicbaas.NewFactory(quicbaasCfg, tc.logger, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create quicbaas factory: %w", err)
 	}

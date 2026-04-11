@@ -13,8 +13,9 @@
 
 //go:build key_safety
 
-// NOTE: This file requires go-quicbaas API features that are not yet released.
-// Enable with: go build -tags key_safety
+// NOTE: This file requires go-quicbaas KMS safety API features that are not yet
+// released in the SDK. The local request/response types below mirror the planned
+// SDK contract. Enable with: go build -tags key_safety
 
 package kms
 
@@ -23,9 +24,98 @@ import (
 
 	"github.com/spf13/cobra"
 
-	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
+
+// =============================================================================
+// Local KMS safety request/response types
+// These mirror the planned go-quicbaas SDK types for AEAD safety limits.
+// Once the SDK publishes these types, replace with SDK imports.
+// =============================================================================
+
+// SetKeySafetyRequest is the request to set AEAD safety limits for a key.
+type SetKeySafetyRequest struct {
+	KeyId          string `json:"key_id"`
+	MaxOperations  uint64 `json:"max_operations"`
+	MaxBytes       uint64 `json:"max_bytes"`
+	WarningPercent int32  `json:"warning_percent"`
+}
+
+// SetKeySafetyResponse is the response after setting AEAD safety limits.
+type SetKeySafetyResponse struct {
+	KeyId     string `json:"key_id"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+// GetKeySafetyRequest is the request to get AEAD safety stats for a key.
+type GetKeySafetyRequest struct {
+	KeyId string `json:"key_id"`
+}
+
+// GetKeySafetyResponse is the response containing AEAD safety stats.
+type GetKeySafetyResponse struct {
+	KeyId           string  `json:"key_id"`
+	MaxOperations   uint64  `json:"max_operations"`
+	MaxBytes        uint64  `json:"max_bytes"`
+	WarningPercent  int32   `json:"warning_percent"`
+	OperationsUsed  uint64  `json:"operations_used"`
+	BytesUsed       uint64  `json:"bytes_used"`
+	UsagePercent    float64 `json:"usage_percent"`
+	Status          string  `json:"status"`
+	HasCustomLimits bool    `json:"has_custom_limits"`
+	Timestamp       int64   `json:"timestamp"`
+}
+
+// ClearKeySafetyRequest is the request to clear custom AEAD safety limits.
+type ClearKeySafetyRequest struct {
+	KeyId string `json:"key_id"`
+}
+
+// ClearKeySafetyResponse is the response after clearing AEAD safety limits.
+type ClearKeySafetyResponse struct {
+	KeyId     string `json:"key_id"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+// SafetyCheckRequest is the request to check for keys approaching safety limits.
+type SafetyCheckRequest struct{}
+
+// SafetyWarning represents a single safety warning for a key or DEK.
+type SafetyWarning struct {
+	Type           string  `json:"type"`
+	Path           string  `json:"path"`
+	UsagePercent   float64 `json:"usage_percent"`
+	Status         string  `json:"status"`
+	OperationsUsed uint64  `json:"operations_used"`
+	MaxOperations  uint64  `json:"max_operations"`
+	BytesUsed      uint64  `json:"bytes_used"`
+	MaxBytes       uint64  `json:"max_bytes"`
+}
+
+// SafetyCheckResponse is the response containing safety warnings.
+type SafetyCheckResponse struct {
+	Warnings  []*SafetyWarning `json:"warnings"`
+	Timestamp int64            `json:"timestamp"`
+}
+
+// SafetyReportRequest is the request to generate a comprehensive safety report.
+type SafetyReportRequest struct{}
+
+// SafetyReportResponse is the response containing the full safety report.
+type SafetyReportResponse struct {
+	TotalKeys      int64            `json:"total_keys"`
+	TotalDeks      int64            `json:"total_deks"`
+	KeysAtWarning  int64            `json:"keys_at_warning"`
+	KeysAtCritical int64            `json:"keys_at_critical"`
+	DeksAtWarning  int64            `json:"deks_at_warning"`
+	DeksAtCritical int64            `json:"deks_at_critical"`
+	AllItems       []*SafetyWarning `json:"all_items"`
+	Timestamp      int64            `json:"timestamp"`
+}
+
+// =============================================================================
+// Error types
+// =============================================================================
 
 // ErrSetKeySafetyFailed is returned when setting key safety limits fails
 type ErrSetKeySafetyFailed struct {
@@ -74,6 +164,10 @@ type ErrGetKeySafetyFailed struct {
 func (e ErrGetKeySafetyFailed) Error() string {
 	return fmt.Sprintf("failed to get safety stats for key %s: %v", e.KeyID, e.Err)
 }
+
+// =============================================================================
+// Commands
+// =============================================================================
 
 // newKeySafetyCommand creates the key safety subcommand group
 func newKeySafetyCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
@@ -238,7 +332,7 @@ func runSetKeySafety(flags *cli.CommonFlags, keyID string, maxOperations, maxByt
 	}
 	defer base.Close()
 
-	req := &pb.SetKeySafetyRequest{
+	req := &SetKeySafetyRequest{
 		KeyId:          keyID,
 		MaxOperations:  maxOperations,
 		MaxBytes:       maxBytes,
@@ -279,7 +373,7 @@ func runGetKeySafety(flags *cli.CommonFlags, keyID string) error {
 	}
 	defer base.Close()
 
-	req := &pb.GetKeySafetyRequest{
+	req := &GetKeySafetyRequest{
 		KeyId: keyID,
 	}
 
@@ -355,7 +449,7 @@ func runClearKeySafety(flags *cli.CommonFlags, keyID string) error {
 	}
 	defer base.Close()
 
-	req := &pb.ClearKeySafetyRequest{
+	req := &ClearKeySafetyRequest{
 		KeyId: keyID,
 	}
 
@@ -390,7 +484,7 @@ func runSafetyCheck(flags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
-	req := &pb.SafetyCheckRequest{}
+	req := &SafetyCheckRequest{}
 
 	ctx := base.Context()
 	resp, err := base.Client().KMS().SafetyCheck(ctx, req)
@@ -445,7 +539,7 @@ func runSafetyReport(flags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
-	req := &pb.SafetyReportRequest{}
+	req := &SafetyReportRequest{}
 
 	ctx := base.Context()
 	resp, err := base.Client().KMS().SafetyReport(ctx, req)

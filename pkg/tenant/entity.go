@@ -18,8 +18,7 @@ import (
 	"strings"
 	"time"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
 // TenantEntity represents a tenant with platform-specific extensions.
@@ -111,49 +110,46 @@ func (v VLANRange) Overlaps(other VLANRange) bool {
 	return v.Start <= other.End && other.Start <= v.End
 }
 
-// FromProto converts an IAM proto Tenant to a TenantEntity.
+// FromIAM converts a QuicBaaS IAM SDK Tenant to a TenantEntity.
 // Platform-specific fields are initialized with defaults.
-func FromProto(t *iampb.Tenant) *TenantEntity {
+func FromIAM(t *iam.Tenant) *TenantEntity {
 	if t == nil {
 		return nil
 	}
 
 	entity := &TenantEntity{
-		ID:          t.Id,
+		ID:          t.ID,
 		Name:        t.Name,
-		DisplayName: t.Name, // IAM doesn't have DisplayName, use Name
+		DisplayName: t.DisplayName,
 		State:       StateCreated,
 		Labels:      make(map[string]string),
 		Annotations: make(map[string]string),
+		CreatedAt:   t.CreatedAt,
+		UpdatedAt:   t.UpdatedAt,
 	}
 
-	// Convert timestamps
-	if t.CreatedAt != nil {
-		entity.CreatedAt = t.CreatedAt.AsTime()
-	}
-
-	if t.UpdatedAt != nil {
-		entity.UpdatedAt = t.UpdatedAt.AsTime()
+	// Use Name as DisplayName fallback
+	if entity.DisplayName == "" {
+		entity.DisplayName = t.Name
 	}
 
 	return entity
 }
 
-// ToProto converts a TenantEntity to an IAM proto Tenant.
-// Note: Platform-specific fields are not included in the proto.
-func (e *TenantEntity) ToProto() *iampb.Tenant {
+// ToIAM converts a TenantEntity to a QuicBaaS IAM SDK Tenant.
+// Note: Platform-specific fields are not included in the SDK type.
+func (e *TenantEntity) ToIAM() *iam.Tenant {
 	if e == nil {
 		return nil
 	}
 
-	tenant := &iampb.Tenant{
-		Id:        e.ID,
-		Name:      e.Name,
-		CreatedAt: timestamppb.New(e.CreatedAt),
-		UpdatedAt: timestamppb.New(e.UpdatedAt),
+	return &iam.Tenant{
+		ID:          e.ID,
+		Name:        e.Name,
+		DisplayName: e.DisplayName,
+		CreatedAt:   e.CreatedAt,
+		UpdatedAt:   e.UpdatedAt,
 	}
-
-	return tenant
 }
 
 // Clone creates a deep copy of the TenantEntity.

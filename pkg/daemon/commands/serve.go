@@ -35,7 +35,6 @@ import (
 	"syscall"
 	"time"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	noiseapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/noise"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
@@ -510,9 +509,6 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			}
 		}
 
-		// Get IAM clients from the platform daemon if available
-		var iamServiceClient, pepServiceClient = getIAMClients(platformDaemon, logger)
-
 		restHandlerRegistry := v1.NewHandlerRegistry(v1.RegistryParams{
 			ACMEServerConfig:    acmeServerConfig,
 			ACMEStorageFactory:  acmeDAOFactory,
@@ -520,13 +516,13 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			CAConfig:            App.CAConfig,
 			Debug:               App.DebugFlag,
 			HTTPWriter:          response.NewResponseWriter(logger, nil),
-			IAMServiceClient:    iamServiceClient,
+			IAMClient:           nil,
 			XKMS:                ks,
 			JWTAudience:         wsConfig.Certificate.Subject.CommonName,
 			JWTClaimsIssuer:     app.Name,
 			JWTExpiration:       3600,
 			Logger:              logger,
-			PEPServiceClient:    pepServiceClient,
+			PEPClient:           nil,
 			ServerKeyAttributes: wsKeyAttrs,
 			ServiceRegistry:     App.ServiceRegistry(),
 			TPM:                 App.TPM,
@@ -975,32 +971,4 @@ func encodeCertKeyBundle(certDER []byte, key *ecdsa.PrivateKey) ([]byte, error) 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes})
 	return append(certPEM, keyPEM...), nil
-}
-
-// getIAMClients extracts IAM service clients from the platform daemon.
-// Returns nil clients if IAM service is not available or not configured.
-// This enables REST handlers to use IAM functionality when available.
-//
-// NOTE: The IAMService was refactored to use QuicBaaS SDK clients instead of gRPC clients.
-// The gRPC client interfaces are no longer directly available. REST handlers should be
-// updated to use the SDK clients via iamService.Client() and iamService.PEP().
-func getIAMClients(d *daemon.Daemon, logger *logging.Logger) (iampb.IAMServiceClient, iampb.PEPServiceClient) {
-	if d == nil {
-		logger.Debug("Platform daemon is nil - IAM clients not available")
-		return nil, nil
-	}
-
-	iamService := d.IAMService()
-	if iamService == nil {
-		logger.Debug("IAM service is nil - IAM clients not available")
-		return nil, nil
-	}
-
-	// IAMService now uses SDK clients instead of gRPC clients.
-	// Return nil until REST handlers are updated to use SDK clients directly.
-	logger.Debug("IAM service uses SDK clients - gRPC client interfaces not available",
-		"sdkClientAvailable", iamService.Client() != nil,
-		"pepClientAvailable", iamService.PEP() != nil)
-
-	return nil, nil
 }

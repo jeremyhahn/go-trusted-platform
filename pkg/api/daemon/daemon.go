@@ -27,7 +27,7 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	"github.com/jeremyhahn/go-codec"
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	grpccreds "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
@@ -1099,11 +1099,11 @@ func (d *Daemon) createMCPAuthAdapter() *mcp.QuicBaaSAuthAdapter {
 	tokenValidator := &quicbaasServiceWrapper{service: svcAdapter}
 
 	// Create the PEP client adapter if IAM service is available
-	var pepClient iampb.PEPServiceClient
+	var pepClient iamsdk.PEPClient
 	if d.iamService != nil {
 		sdkPEP := d.iamService.PEP()
 		if sdkPEP != nil {
-			pepClient = NewSDKPEPClientAdapter(sdkPEP)
+			pepClient = sdkPEP
 			d.logger.Debug("PEP client wired into MCP auth adapter")
 		} else {
 			d.logger.Debug("IAM PEP client not available")

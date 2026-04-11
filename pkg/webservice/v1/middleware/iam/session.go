@@ -16,13 +16,12 @@ package iam
 import (
 	"time"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
 // iamSession implements the IAMSession interface wrapping a QuicBaaS IAM User.
 type iamSession struct {
-	user                *iampb.User
+	user                *iamsdk.User
 	mfaVerified         bool
 	mfaTimestamp        time.Time
 	roleSet             map[string]struct{}
@@ -33,7 +32,7 @@ type iamSession struct {
 }
 
 // NewIAMSession creates a new IAM session from a QuicBaaS IAM User.
-func NewIAMSession(user *iampb.User) IAMSession {
+func NewIAMSession(user *iamsdk.User) IAMSession {
 	if user == nil {
 		return nil
 	}
@@ -53,16 +52,13 @@ func NewIAMSession(user *iampb.User) IAMSession {
 	}
 
 	// Extract MFA status from user
-	session.mfaVerified = user.MfaVerified
-	if user.MfaTimestamp != nil {
-		session.mfaTimestamp = user.MfaTimestamp.AsTime()
-	}
+	session.mfaVerified = user.MFAEnabled
 
 	return session
 }
 
 // NewIAMSessionWithMFA creates a new IAM session with explicit MFA status.
-func NewIAMSessionWithMFA(user *iampb.User, mfaVerified bool, mfaTimestamp time.Time) IAMSession {
+func NewIAMSessionWithMFA(user *iamsdk.User, mfaVerified bool, mfaTimestamp time.Time) IAMSession {
 	session := NewIAMSession(user)
 	if session == nil {
 		return nil
@@ -75,7 +71,7 @@ func NewIAMSessionWithMFA(user *iampb.User, mfaVerified bool, mfaTimestamp time.
 }
 
 // NewIAMSessionWithAttestation creates a new IAM session with explicit attestation status.
-func NewIAMSessionWithAttestation(user *iampb.User, mfaVerified bool, mfaTimestamp time.Time, attestationVerified bool, attestationTime time.Time, deviceID string) IAMSession {
+func NewIAMSessionWithAttestation(user *iamsdk.User, mfaVerified bool, mfaTimestamp time.Time, attestationVerified bool, attestationTime time.Time, deviceID string) IAMSession {
 	session := NewIAMSession(user)
 	if session == nil {
 		return nil
@@ -90,7 +86,7 @@ func NewIAMSessionWithAttestation(user *iampb.User, mfaVerified bool, mfaTimesta
 }
 
 // User returns the underlying IAM user.
-func (s *iamSession) User() *iampb.User {
+func (s *iamSession) User() *iamsdk.User {
 	return s.user
 }
 
@@ -99,7 +95,7 @@ func (s *iamSession) TenantID() string {
 	if s.user == nil {
 		return ""
 	}
-	return s.user.TenantId
+	return s.user.TenantID
 }
 
 // UserID returns the user identifier.
@@ -107,7 +103,7 @@ func (s *iamSession) UserID() string {
 	if s.user == nil {
 		return ""
 	}
-	return s.user.Id
+	return s.user.ID
 }
 
 // Email returns the user's email address.
@@ -123,7 +119,7 @@ func (s *iamSession) Name() string {
 	if s.user == nil {
 		return ""
 	}
-	return s.user.Name
+	return s.user.DisplayName
 }
 
 // Roles returns the user's assigned roles.
@@ -192,12 +188,12 @@ func (s *iamSession) MFATimestamp() time.Time {
 
 // Attributes returns the user's custom attributes.
 func (s *iamSession) Attributes() map[string]string {
-	if s.user == nil || s.user.Attributes == nil {
+	if s.user == nil || s.user.Metadata == nil {
 		return nil
 	}
 	// Return a copy to prevent modification
-	attrs := make(map[string]string, len(s.user.Attributes))
-	for k, v := range s.user.Attributes {
+	attrs := make(map[string]string, len(s.user.Metadata))
+	for k, v := range s.user.Metadata {
 		attrs[k] = v
 	}
 	return attrs
@@ -205,30 +201,34 @@ func (s *iamSession) Attributes() map[string]string {
 
 // GetAttribute returns a specific attribute value.
 func (s *iamSession) GetAttribute(key string) (string, bool) {
-	if s.user == nil || s.user.Attributes == nil {
+	if s.user == nil || s.user.Metadata == nil {
 		return "", false
 	}
-	val, ok := s.user.Attributes[key]
+	val, ok := s.user.Metadata[key]
 	return val, ok
 }
 
-// ToSubject converts the session to a PEP Subject for authorization checks.
-func (s *iamSession) ToSubject() *iampb.Subject {
+// ToSubject converts the session to a PEP CheckSubject for authorization checks.
+func (s *iamSession) ToSubject() *iamsdk.CheckSubject {
 	if s.user == nil {
 		return nil
 	}
 
-	subject := &iampb.Subject{
-		Id:          s.user.Id,
-		TenantId:    s.user.TenantId,
-		Roles:       s.user.Roles,
-		Groups:      s.user.Groups,
-		Attributes:  s.user.Attributes,
-		MfaVerified: s.mfaVerified,
+	// Convert metadata to interface map for CheckSubject attributes
+	var attrs map[string]interface{}
+	if s.user.Metadata != nil {
+		attrs = make(map[string]interface{}, len(s.user.Metadata))
+		for k, v := range s.user.Metadata {
+			attrs[k] = v
+		}
 	}
 
-	if !s.mfaTimestamp.IsZero() {
-		subject.MfaTimestamp = timestamppb.New(s.mfaTimestamp)
+	subject := &iamsdk.CheckSubject{
+		ID:         s.user.ID,
+		TenantID:   s.user.TenantID,
+		Roles:      s.user.Roles,
+		Groups:     s.user.Groups,
+		Attributes: attrs,
 	}
 
 	return subject

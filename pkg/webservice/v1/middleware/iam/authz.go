@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/security/audit"
@@ -234,8 +234,8 @@ func (m *AuthzMiddleware) extractResource(r *http.Request) string {
 }
 
 // extractPolicyContext extracts additional context from request headers.
-func (m *AuthzMiddleware) extractPolicyContext(r *http.Request) map[string]string {
-	context := make(map[string]string)
+func (m *AuthzMiddleware) extractPolicyContext(r *http.Request) map[string]interface{} {
+	policyCtx := make(map[string]interface{})
 
 	// Extract policy context from header (JSON encoded)
 	policyContextHeader := r.Header.Get(PolicyContextHeader)
@@ -243,21 +243,21 @@ func (m *AuthzMiddleware) extractPolicyContext(r *http.Request) map[string]strin
 		var headerContext map[string]string
 		if err := json.Unmarshal([]byte(policyContextHeader), &headerContext); err == nil {
 			for k, v := range headerContext {
-				context[k] = v
+				policyCtx[k] = v
 			}
 		}
 	}
 
 	// Add request metadata
-	context["request.method"] = r.Method
-	context["request.path"] = r.URL.Path
-	context["request.host"] = r.Host
-	context["request.remote_addr"] = r.RemoteAddr
+	policyCtx["request.method"] = r.Method
+	policyCtx["request.path"] = r.URL.Path
+	policyCtx["request.host"] = r.Host
+	policyCtx["request.remote_addr"] = r.RemoteAddr
 
 	// Add timestamp
-	context["request.time"] = time.Now().UTC().Format(time.RFC3339)
+	policyCtx["request.time"] = time.Now().UTC().Format(time.RFC3339)
 
-	return context
+	return policyCtx
 }
 
 // checkAuthorization performs the authorization check using the PEP service.
@@ -265,7 +265,7 @@ func (m *AuthzMiddleware) checkAuthorization(
 	ctx context.Context,
 	session IAMSession,
 	action, resource string,
-	policyContext map[string]string,
+	policyContext map[string]interface{},
 ) (allowed bool, matchedPolicy, matchedRule string, err error) {
 
 	// Check cache first
@@ -281,8 +281,8 @@ func (m *AuthzMiddleware) checkAuthorization(
 		return m.handleDefaultDecision(), "", "", nil
 	}
 
-	req := &iampb.CheckRequest{
-		Subject:  subject,
+	req := &iamsdk.CheckRequest{
+		Subject:  *subject,
 		Action:   action,
 		Resource: resource,
 		Context:  policyContext,
@@ -419,10 +419,18 @@ func (m *AuthzMiddleware) CheckBatch(
 		return results, nil
 	}
 
-	req := &iampb.CheckBatchRequest{
-		Subject:   subject,
-		Action:    action,
-		Resources: resources,
+	// Build individual check requests for the batch
+	checkRequests := make([]iamsdk.CheckRequest, 0, len(resources))
+	for _, resource := range resources {
+		checkRequests = append(checkRequests, iamsdk.CheckRequest{
+			Subject:  *subject,
+			Action:   action,
+			Resource: resource,
+		})
+	}
+
+	req := &iamsdk.CheckBatchRequest{
+		Requests: checkRequests,
 	}
 
 	resp, err := m.pepService.CheckBatch(ctx, req)
@@ -433,7 +441,7 @@ func (m *AuthzMiddleware) CheckBatch(
 	results := make(map[string]bool, len(resources))
 	for i, resource := range resources {
 		if i < len(resp.Results) {
-			results[resource] = resp.Results[i]
+			results[resource] = resp.Results[i].Allowed
 		} else {
 			results[resource] = m.handleDefaultDecision()
 		}

@@ -18,8 +18,7 @@ import (
 	"testing"
 	"time"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
 // BenchmarkTenantEntity_ToProto benchmarks converting a TenantEntity to proto.
@@ -30,7 +29,7 @@ func BenchmarkTenantEntity_ToProto(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		_ = entity.ToProto()
+		_ = entity.ToIAM()
 	}
 }
 
@@ -41,43 +40,43 @@ func BenchmarkTenantEntity_ToProto_Parallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_ = entity.ToProto()
+			_ = entity.ToIAM()
 		}
 	})
 }
 
-// BenchmarkTenantEntity_FromProto benchmarks converting proto to TenantEntity.
-func BenchmarkTenantEntity_FromProto(b *testing.B) {
+// BenchmarkTenantEntity_FromIAM benchmarks converting proto to TenantEntity.
+func BenchmarkTenantEntity_FromIAM(b *testing.B) {
 	now := time.Now()
-	proto := &iampb.Tenant{
-		Id:        "tenant-001",
+	proto := &iam.Tenant{
+		ID:        "tenant-001",
 		Name:      "test-tenant",
-		CreatedAt: timestamppb.New(now),
-		UpdatedAt: timestamppb.New(now),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		_ = FromProto(proto)
+		_ = FromIAM(proto)
 	}
 }
 
-// BenchmarkTenantEntity_FromProto_Parallel benchmarks concurrent proto conversion.
-func BenchmarkTenantEntity_FromProto_Parallel(b *testing.B) {
+// BenchmarkTenantEntity_FromIAM_Parallel benchmarks concurrent proto conversion.
+func BenchmarkTenantEntity_FromIAM_Parallel(b *testing.B) {
 	now := time.Now()
-	proto := &iampb.Tenant{
-		Id:        "tenant-001",
+	proto := &iam.Tenant{
+		ID:        "tenant-001",
 		Name:      "test-tenant",
-		CreatedAt: timestamppb.New(now),
-		UpdatedAt: timestamppb.New(now),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_ = FromProto(proto)
+			_ = FromIAM(proto)
 		}
 	})
 }

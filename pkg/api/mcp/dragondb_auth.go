@@ -18,8 +18,7 @@ import (
 	"fmt"
 	"strings"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
-	"google.golang.org/grpc"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
 // TokenValidator validates access tokens. This interface allows different
@@ -41,7 +40,7 @@ type TokenValidationResult struct {
 }
 
 // QuicBaaSAuthAdapter implements AuthorizationService and AuthManager
-// using QuicBaaS's PEP gRPC client for permissions and a TokenValidator
+// using QuicBaaS's SDK PEP client for permissions and a TokenValidator
 // for token validation.
 //
 // This adapter provides the bridge between MCP's authorization interfaces
@@ -50,9 +49,9 @@ type QuicBaaSAuthAdapter struct {
 	// tokenValidator validates access tokens (can be QuicBaaS embedded or SDK)
 	tokenValidator TokenValidator
 
-	// pepClient is the QuicBaaS PEP (Policy Enforcement Point) client
+	// pepClient is the QuicBaaS PEP (Policy Enforcement Point) SDK client
 	// for authorization checks
-	pepClient iampb.PEPServiceClient
+	pepClient iam.PEPClient
 
 	// defaultTenantID is used when no tenant is specified in the token
 	defaultTenantID string
@@ -66,8 +65,8 @@ type QuicBaaSAuthConfig struct {
 	// TokenValidator validates access tokens
 	TokenValidator TokenValidator
 
-	// PEPClient is the QuicBaaS PEP service gRPC client
-	PEPClient iampb.PEPServiceClient
+	// PEPClient is the QuicBaaS PEP service SDK client
+	PEPClient iam.PEPClient
 
 	// DefaultTenantID is the default tenant for operations without explicit tenant
 	DefaultTenantID string
@@ -243,16 +242,14 @@ func (a *QuicBaaSAuthAdapter) CheckPermission(ctx context.Context, token string,
 		tenantID = a.defaultTenantID
 	}
 
-	// Build the PEP check request
-	subject := &iampb.Subject{
-		Id:       result.UserID,
-		TenantId: tenantID,
-		Roles:    result.Roles,
-		Groups:   result.Groups,
-	}
-
-	checkReq := &iampb.CheckRequest{
-		Subject:  subject,
+	// Build the PEP check request using SDK types
+	checkReq := &iam.CheckRequest{
+		Subject: iam.CheckSubject{
+			ID:       result.UserID,
+			TenantID: tenantID,
+			Roles:    result.Roles,
+			Groups:   result.Groups,
+		},
 		Action:   action,
 		Resource: resource,
 	}
@@ -266,7 +263,7 @@ func (a *QuicBaaSAuthAdapter) CheckPermission(ctx context.Context, token string,
 		}
 	}
 
-	return resp.GetAllowed(), nil
+	return resp.Allowed, nil
 }
 
 // claimsMapToResult converts a claims map back to TokenValidationResult.
@@ -464,14 +461,14 @@ func (v *QuicBaaSTokenValidator) ValidateToken(ctx context.Context, token string
 //
 // Parameters:
 //   - service: QuicBaaS service implementing ValidateToken
-//   - pepClient: QuicBaaS PEP service client for permission checking
+//   - pepClient: QuicBaaS PEP SDK client for permission checking
 //   - defaultTenantID: Default tenant ID for operations without explicit tenant
 //
 // Returns a configured QuicBaaSAuthAdapter that implements both AuthorizationService
 // and AuthManager interfaces.
 func NewQuicBaaSAuthAdapterFromService(
 	service QuicBaaSService,
-	pepClient iampb.PEPServiceClient,
+	pepClient iam.PEPClient,
 	defaultTenantID string,
 ) *QuicBaaSAuthAdapter {
 	var tokenValidator TokenValidator
@@ -523,7 +520,7 @@ type PolicyCheckResponse struct {
 	Reason        string
 }
 
-// LocalPEPAdapter implements iampb.PEPServiceClient using a local PolicyEvaluator.
+// LocalPEPAdapter implements iam.PEPClient using a local PolicyEvaluator.
 // This allows the QuicBaaSAuthAdapter to work in embedded mode without gRPC.
 type LocalPEPAdapter struct {
 	evaluator PolicyEvaluator
@@ -536,8 +533,8 @@ func NewLocalPEPAdapter(evaluator PolicyEvaluator) *LocalPEPAdapter {
 	}
 }
 
-// Check implements iampb.PEPServiceClient.Check using the local policy evaluator.
-func (a *LocalPEPAdapter) Check(ctx context.Context, in *iampb.CheckRequest, opts ...grpc.CallOption) (*iampb.CheckResponse, error) {
+// Check implements iam.PEPClient.Check using the local policy evaluator.
+func (a *LocalPEPAdapter) Check(ctx context.Context, req *iam.CheckRequest) (*iam.CheckResponse, error) {
 	if a.evaluator == nil {
 		return nil, &QuicBaaSAuthError{
 			Code:    QuicBaaSAuthErrorServiceUnavailable,
@@ -545,24 +542,24 @@ func (a *LocalPEPAdapter) Check(ctx context.Context, in *iampb.CheckRequest, opt
 		}
 	}
 
-	// Convert protobuf request to local request
+	// Convert SDK request to local request
 	subject := PolicySubject{
-		ID: in.Subject.GetId(),
+		ID: req.Subject.ID,
 	}
 
-	// Handle tenant ID - check both TenantId and Tenant fields
-	if in.Subject.GetTenantId() != "" {
-		subject.TenantID = in.Subject.GetTenantId()
+	// Handle tenant ID
+	if req.Subject.TenantID != "" {
+		subject.TenantID = req.Subject.TenantID
 	}
 
 	// Copy roles and groups
-	subject.Roles = in.Subject.GetRoles()
-	subject.Groups = in.Subject.GetGroups()
+	subject.Roles = req.Subject.Roles
+	subject.Groups = req.Subject.Groups
 
 	localReq := &PolicyCheckRequest{
 		Subject:  subject,
-		Action:   in.GetAction(),
-		Resource: in.GetResource(),
+		Action:   req.Action,
+		Resource: req.Resource,
 	}
 
 	// Evaluate using local policy engine
@@ -574,8 +571,63 @@ func (a *LocalPEPAdapter) Check(ctx context.Context, in *iampb.CheckRequest, opt
 		}
 	}
 
-	// Convert local response to protobuf response
-	return &iampb.CheckResponse{
+	// Convert local response to SDK response
+	return &iam.CheckResponse{
 		Allowed: resp.Allowed,
+	}, nil
+}
+
+// CheckBatch implements iam.PEPClient.CheckBatch using the local policy evaluator.
+func (a *LocalPEPAdapter) CheckBatch(ctx context.Context, req *iam.CheckBatchRequest) (*iam.CheckBatchResponse, error) {
+	if a.evaluator == nil {
+		return nil, &QuicBaaSAuthError{
+			Code:    QuicBaaSAuthErrorServiceUnavailable,
+			Message: "policy evaluator not available",
+		}
+	}
+
+	results := make([]iam.CheckResponse, 0, len(req.Requests))
+	var allowedCount, deniedCount int
+
+	for _, checkReq := range req.Requests {
+		localReq := &PolicyCheckRequest{
+			Subject: PolicySubject{
+				ID:       checkReq.Subject.ID,
+				TenantID: checkReq.Subject.TenantID,
+				Roles:    checkReq.Subject.Roles,
+				Groups:   checkReq.Subject.Groups,
+			},
+			Action:   checkReq.Action,
+			Resource: checkReq.Resource,
+		}
+
+		resp, err := a.evaluator.Evaluate(ctx, localReq)
+		if err != nil {
+			return nil, &QuicBaaSAuthError{
+				Code:    QuicBaaSAuthErrorPermissionCheck,
+				Message: fmt.Sprintf("batch policy evaluation failed: %v", err),
+			}
+		}
+
+		checkResp := iam.CheckResponse{
+			Allowed: resp.Allowed,
+		}
+		results = append(results, checkResp)
+		if resp.Allowed {
+			allowedCount++
+		} else {
+			deniedCount++
+		}
+
+		if req.StopOnDeny && !resp.Allowed {
+			break
+		}
+	}
+
+	return &iam.CheckBatchResponse{
+		Results:      results,
+		AllAllowed:   deniedCount == 0 && len(results) > 0,
+		AllowedCount: allowedCount,
+		DeniedCount:  deniedCount,
 	}, nil
 }

@@ -29,7 +29,8 @@ import (
 	"strings"
 	"time"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
@@ -53,8 +54,8 @@ type MCPServiceProviderConfig struct {
 	SDNService           *SDNService
 	PolicyEngine         policy.PolicyEngine
 	HealthService        *Service
-	IAMClient            iampb.IAMServiceClient
-	PEPClient            iampb.PEPServiceClient
+	IAMClient            quicbaassdk.IAMClient
+	PEPClient            quicbaassdk.IAMPEPClient
 	KMSService           baasservice.KMSService
 	CryptoService        baasservice.CryptoService
 	TPM2Service          xkmssdk.TrustedPlatformModule
@@ -73,8 +74,8 @@ type MCPServiceProvider struct {
 	sdnService           *SDNService
 	policyEngine         policy.PolicyEngine
 	healthService        *Service
-	iamClient            iampb.IAMServiceClient
-	pepClient            iampb.PEPServiceClient
+	iamClient            quicbaassdk.IAMClient
+	pepClient            quicbaassdk.IAMPEPClient
 	kmsService           baasservice.KMSService
 	cryptoService        baasservice.CryptoService
 	tpm2Service          xkmssdk.TrustedPlatformModule
@@ -1642,27 +1643,26 @@ func (p *MCPServiceProvider) IAMCreateUser(ctx context.Context, req *mcp.IAMCrea
 		return nil, ErrIAMMissingParameter{Parameter: "email"}
 	}
 
-	grpcReq := &iampb.CreateUserRequest{
-		TenantId:   req.TenantID,
-		Email:      req.Email,
-		Name:       req.Name,
-		Roles:      req.Roles,
-		Groups:     req.Groups,
-		Attributes: req.Attributes,
+	sdkReq := &sdkiam.CreateUserRequest{
+		Email:       req.Email,
+		DisplayName: req.Name,
+		Roles:       req.Roles,
+		Groups:      req.Groups,
+		Metadata:    req.Attributes,
 	}
 
-	resp, err := p.iamClient.CreateUser(ctx, grpcReq)
+	resp, err := p.iamClient.User().Create(ctx, req.TenantID, sdkReq)
 	if err != nil {
 		return nil, ErrIAMOperationFailed{Operation: "CreateUser", Cause: err}
 	}
 
 	p.logger.Info("IAM user created",
 		"tenant_id", req.TenantID,
-		"user_id", resp.Id,
+		"user_id", resp.ID,
 		"email", req.Email,
 	)
 
-	return userToMap(resp), nil
+	return sdkUserToMap(resp), nil
 }
 
 // IAMDeleteUser deletes an IAM user.
@@ -1679,18 +1679,9 @@ func (p *MCPServiceProvider) IAMDeleteUser(ctx context.Context, tenantID string,
 		return ErrIAMMissingParameter{Parameter: "user_id"}
 	}
 
-	grpcReq := &iampb.DeleteUserRequest{
-		TenantId: tenantID,
-		UserId:   userID,
-	}
-
-	resp, err := p.iamClient.DeleteUser(ctx, grpcReq)
+	err := p.iamClient.User().Delete(ctx, tenantID, userID)
 	if err != nil {
 		return ErrIAMOperationFailed{Operation: "DeleteUser", Cause: err}
-	}
-
-	if !resp.Success {
-		return ErrIAMUserNotFound{TenantID: tenantID, UserID: userID}
 	}
 
 	p.logger.Info("IAM user deleted",
@@ -1715,17 +1706,12 @@ func (p *MCPServiceProvider) IAMGetUser(ctx context.Context, tenantID string, us
 		return nil, ErrIAMMissingParameter{Parameter: "user_id"}
 	}
 
-	grpcReq := &iampb.GetUserRequest{
-		TenantId: tenantID,
-		UserId:   userID,
-	}
-
-	resp, err := p.iamClient.GetUser(ctx, grpcReq)
+	resp, err := p.iamClient.User().Get(ctx, tenantID, userID)
 	if err != nil {
 		return nil, ErrIAMUserNotFound{TenantID: tenantID, UserID: userID}
 	}
 
-	return userToMap(resp), nil
+	return sdkUserToMap(resp), nil
 }
 
 // IAMListUsers lists IAM users for a tenant.
@@ -1747,25 +1733,23 @@ func (p *MCPServiceProvider) IAMListUsers(ctx context.Context, tenantID string, 
 		offset = 0
 	}
 
-	grpcReq := &iampb.ListUsersRequest{
-		TenantId: tenantID,
-		Limit:    int32(limit),
-		Offset:   int32(offset),
+	sdkReq := &sdkiam.ListUsersRequest{
+		PageSize: limit,
 	}
 
-	resp, err := p.iamClient.ListUsers(ctx, grpcReq)
+	resp, err := p.iamClient.User().List(ctx, tenantID, sdkReq)
 	if err != nil {
 		return nil, ErrIAMOperationFailed{Operation: "ListUsers", Cause: err}
 	}
 
 	users := make([]map[string]interface{}, 0, len(resp.Users))
-	for _, u := range resp.Users {
-		users = append(users, userToMap(u))
+	for i := range resp.Users {
+		users = append(users, sdkUserToMap(&resp.Users[i]))
 	}
 
 	return map[string]interface{}{
 		"users":  users,
-		"total":  resp.Total,
+		"total":  resp.Pagination.TotalCount,
 		"limit":  limit,
 		"offset": offset,
 	}, nil
@@ -1785,26 +1769,25 @@ func (p *MCPServiceProvider) IAMCreateRole(ctx context.Context, req *mcp.IAMCrea
 		return nil, ErrIAMMissingParameter{Parameter: "id"}
 	}
 
-	grpcReq := &iampb.CreateRoleRequest{
-		TenantId:    req.TenantID,
-		Id:          req.ID,
+	sdkReq := &sdkiam.CreateRoleRequest{
+		ID:          req.ID,
 		Name:        req.Name,
 		Description: req.Description,
 		Permissions: req.Permissions,
 	}
 
-	resp, err := p.iamClient.CreateRole(ctx, grpcReq)
+	resp, err := p.iamClient.Role().Create(ctx, req.TenantID, sdkReq)
 	if err != nil {
 		return nil, ErrIAMOperationFailed{Operation: "CreateRole", Cause: err}
 	}
 
 	p.logger.Info("IAM role created",
 		"tenant_id", req.TenantID,
-		"role_id", resp.Id,
+		"role_id", resp.ID,
 		"name", req.Name,
 	)
 
-	return roleToMap(resp), nil
+	return sdkRoleToMap(resp), nil
 }
 
 // IAMDeleteRole deletes an IAM role.
@@ -1821,18 +1804,9 @@ func (p *MCPServiceProvider) IAMDeleteRole(ctx context.Context, tenantID string,
 		return ErrIAMMissingParameter{Parameter: "role_id"}
 	}
 
-	grpcReq := &iampb.DeleteRoleRequest{
-		TenantId: tenantID,
-		RoleId:   roleID,
-	}
-
-	resp, err := p.iamClient.DeleteRole(ctx, grpcReq)
+	err := p.iamClient.Role().Delete(ctx, tenantID, roleID)
 	if err != nil {
 		return ErrIAMOperationFailed{Operation: "DeleteRole", Cause: err}
-	}
-
-	if !resp.Success {
-		return ErrIAMRoleNotFound{TenantID: tenantID, RoleID: roleID}
 	}
 
 	p.logger.Info("IAM role deleted",
@@ -1857,17 +1831,12 @@ func (p *MCPServiceProvider) IAMGetRole(ctx context.Context, tenantID string, ro
 		return nil, ErrIAMMissingParameter{Parameter: "role_id"}
 	}
 
-	grpcReq := &iampb.GetRoleRequest{
-		TenantId: tenantID,
-		RoleId:   roleID,
-	}
-
-	resp, err := p.iamClient.GetRole(ctx, grpcReq)
+	resp, err := p.iamClient.Role().Get(ctx, tenantID, roleID)
 	if err != nil {
 		return nil, ErrIAMRoleNotFound{TenantID: tenantID, RoleID: roleID}
 	}
 
-	return roleToMap(resp), nil
+	return sdkRoleToMap(resp), nil
 }
 
 // IAMListRoles lists IAM roles for a tenant.
@@ -1889,25 +1858,23 @@ func (p *MCPServiceProvider) IAMListRoles(ctx context.Context, tenantID string, 
 		offset = 0
 	}
 
-	grpcReq := &iampb.ListRolesRequest{
-		TenantId: tenantID,
-		Limit:    int32(limit),
-		Offset:   int32(offset),
+	sdkReq := &sdkiam.ListRolesRequest{
+		PageSize: limit,
 	}
 
-	resp, err := p.iamClient.ListRoles(ctx, grpcReq)
+	resp, err := p.iamClient.Role().List(ctx, tenantID, sdkReq)
 	if err != nil {
 		return nil, ErrIAMOperationFailed{Operation: "ListRoles", Cause: err}
 	}
 
 	roles := make([]map[string]interface{}, 0, len(resp.Roles))
-	for _, r := range resp.Roles {
-		roles = append(roles, roleToMap(r))
+	for i := range resp.Roles {
+		roles = append(roles, sdkRoleToMap(&resp.Roles[i]))
 	}
 
 	return map[string]interface{}{
 		"roles":  roles,
-		"total":  resp.Total,
+		"total":  resp.Pagination.TotalCount,
 		"limit":  limit,
 		"offset": offset,
 	}, nil
@@ -1930,19 +1897,9 @@ func (p *MCPServiceProvider) IAMAssignRole(ctx context.Context, tenantID string,
 		return ErrIAMMissingParameter{Parameter: "role"}
 	}
 
-	grpcReq := &iampb.AssignRoleRequest{
-		TenantId: tenantID,
-		UserId:   userID,
-		Role:     role,
-	}
-
-	resp, err := p.iamClient.AssignRole(ctx, grpcReq)
+	err := p.iamClient.User().AssignRole(ctx, tenantID, userID, role)
 	if err != nil {
 		return ErrIAMRoleAssignmentFailed{UserID: userID, RoleID: role, Reason: err.Error()}
-	}
-
-	if !resp.Success {
-		return ErrIAMRoleAssignmentFailed{UserID: userID, RoleID: role, Reason: "operation returned unsuccessful"}
 	}
 
 	p.logger.Info("IAM role assigned",
@@ -1971,19 +1928,9 @@ func (p *MCPServiceProvider) IAMRevokeRole(ctx context.Context, tenantID string,
 		return ErrIAMMissingParameter{Parameter: "role"}
 	}
 
-	grpcReq := &iampb.RevokeRoleRequest{
-		TenantId: tenantID,
-		UserId:   userID,
-		Role:     role,
-	}
-
-	resp, err := p.iamClient.RevokeRole(ctx, grpcReq)
+	err := p.iamClient.User().RevokeRole(ctx, tenantID, userID, role)
 	if err != nil {
 		return ErrIAMRoleRevocationFailed{UserID: userID, RoleID: role, Reason: err.Error()}
-	}
-
-	if !resp.Success {
-		return ErrIAMRoleRevocationFailed{UserID: userID, RoleID: role, Reason: "operation returned unsuccessful"}
 	}
 
 	p.logger.Info("IAM role revoked",
@@ -2015,16 +1962,16 @@ func (p *MCPServiceProvider) IAMCheckPermission(ctx context.Context, tenantID st
 		return false, ErrIAMMissingParameter{Parameter: "action"}
 	}
 
-	grpcReq := &iampb.CheckRequest{
-		Subject: &iampb.Subject{
-			Id:       userID,
-			TenantId: tenantID,
+	sdkReq := &sdkiam.CheckRequest{
+		Subject: sdkiam.CheckSubject{
+			ID:       userID,
+			TenantID: tenantID,
 		},
 		Resource: resource,
 		Action:   action,
 	}
 
-	resp, err := p.pepClient.Check(ctx, grpcReq)
+	resp, err := p.pepClient.Check(ctx, sdkReq)
 	if err != nil {
 		return false, ErrIAMOperationFailed{Operation: "CheckPermission", Cause: err}
 	}
@@ -2052,13 +1999,12 @@ func (p *MCPServiceProvider) IAMAuthenticate(ctx context.Context, req *mcp.IAMAu
 	// with proper authentication flows including password verification, MFA, etc.
 
 	// Try to get the user to verify they exist
-	grpcReq := &iampb.ListUsersRequest{
-		TenantId: req.TenantID,
-		Email:    req.Email,
-		Limit:    1,
+	sdkReq := &sdkiam.ListUsersRequest{
+		PageSize: 1,
+		Filter:   req.Email,
 	}
 
-	resp, err := p.iamClient.ListUsers(ctx, grpcReq)
+	resp, err := p.iamClient.User().List(ctx, req.TenantID, sdkReq)
 	if err != nil {
 		return nil, ErrIAMAuthenticationFailed{Reason: err.Error()}
 	}
@@ -2077,13 +2023,13 @@ func (p *MCPServiceProvider) IAMAuthenticate(ctx context.Context, req *mcp.IAMAu
 
 	p.logger.Info("IAM user authenticated",
 		"tenant_id", req.TenantID,
-		"user_id", user.Id,
+		"user_id", user.ID,
 		"email", req.Email,
 	)
 
 	return map[string]interface{}{
 		"authenticated": true,
-		"user":          userToMap(user),
+		"user":          sdkUserToMap(&user),
 		"tenant_id":     req.TenantID,
 	}, nil
 }
@@ -2106,25 +2052,24 @@ func (p *MCPServiceProvider) IAMCreateGroup(ctx context.Context, req *mcp.IAMCre
 		return nil, ErrIAMMissingParameter{Parameter: "id or name"}
 	}
 
-	grpcReq := &iampb.CreateGroupRequest{
-		TenantId:    req.TenantID,
-		Id:          req.ID,
+	sdkReq := &sdkiam.CreateGroupRequest{
+		ID:          req.ID,
 		Name:        req.Name,
 		Description: req.Description,
 	}
 
-	resp, err := p.iamClient.CreateGroup(ctx, grpcReq)
+	resp, err := p.iamClient.Group().Create(ctx, req.TenantID, sdkReq)
 	if err != nil {
 		return nil, ErrIAMOperationFailed{Operation: "CreateGroup", Cause: err}
 	}
 
 	p.logger.Info("IAM group created",
 		"tenant_id", req.TenantID,
-		"group_id", resp.Id,
+		"group_id", resp.ID,
 		"name", req.Name,
 	)
 
-	return groupToMap(resp), nil
+	return sdkGroupToMap(resp), nil
 }
 
 // IAMDeleteGroup deletes an IAM group.
@@ -2141,18 +2086,9 @@ func (p *MCPServiceProvider) IAMDeleteGroup(ctx context.Context, tenantID string
 		return ErrIAMMissingParameter{Parameter: "group_id"}
 	}
 
-	grpcReq := &iampb.DeleteGroupRequest{
-		TenantId: tenantID,
-		GroupId:  groupID,
-	}
-
-	resp, err := p.iamClient.DeleteGroup(ctx, grpcReq)
+	err := p.iamClient.Group().Delete(ctx, tenantID, groupID)
 	if err != nil {
 		return ErrIAMOperationFailed{Operation: "DeleteGroup", Cause: err}
-	}
-
-	if !resp.Success {
-		return ErrIAMGroupNotFound{TenantID: tenantID, GroupID: groupID}
 	}
 
 	p.logger.Info("IAM group deleted",
@@ -2177,17 +2113,12 @@ func (p *MCPServiceProvider) IAMGetGroup(ctx context.Context, tenantID string, g
 		return nil, ErrIAMMissingParameter{Parameter: "group_id"}
 	}
 
-	grpcReq := &iampb.GetGroupRequest{
-		TenantId: tenantID,
-		GroupId:  groupID,
-	}
-
-	resp, err := p.iamClient.GetGroup(ctx, grpcReq)
+	resp, err := p.iamClient.Group().Get(ctx, tenantID, groupID)
 	if err != nil {
 		return nil, ErrIAMGroupNotFound{TenantID: tenantID, GroupID: groupID}
 	}
 
-	return groupToMap(resp), nil
+	return sdkGroupToMap(resp), nil
 }
 
 // IAMListGroups lists IAM groups for a tenant.
@@ -2209,25 +2140,23 @@ func (p *MCPServiceProvider) IAMListGroups(ctx context.Context, tenantID string,
 		offset = 0
 	}
 
-	grpcReq := &iampb.ListGroupsRequest{
-		TenantId: tenantID,
-		Limit:    int32(limit),
-		Offset:   int32(offset),
+	sdkReq := &sdkiam.ListGroupsRequest{
+		PageSize: limit,
 	}
 
-	resp, err := p.iamClient.ListGroups(ctx, grpcReq)
+	resp, err := p.iamClient.Group().List(ctx, tenantID, sdkReq)
 	if err != nil {
 		return nil, ErrIAMOperationFailed{Operation: "ListGroups", Cause: err}
 	}
 
 	groups := make([]map[string]interface{}, 0, len(resp.Groups))
-	for _, g := range resp.Groups {
-		groups = append(groups, groupToMap(g))
+	for i := range resp.Groups {
+		groups = append(groups, sdkGroupToMap(&resp.Groups[i]))
 	}
 
 	return map[string]interface{}{
 		"groups": groups,
-		"total":  resp.Total,
+		"total":  resp.Pagination.TotalCount,
 		"limit":  limit,
 		"offset": offset,
 	}, nil
@@ -2250,19 +2179,9 @@ func (p *MCPServiceProvider) IAMAddGroupMember(ctx context.Context, tenantID str
 		return ErrIAMMissingParameter{Parameter: "user_id"}
 	}
 
-	grpcReq := &iampb.AddUserToGroupRequest{
-		TenantId: tenantID,
-		GroupId:  groupID,
-		UserId:   userID,
-	}
-
-	resp, err := p.iamClient.AddUserToGroup(ctx, grpcReq)
+	err := p.iamClient.Group().AddMember(ctx, tenantID, groupID, userID)
 	if err != nil {
 		return ErrIAMGroupMembershipFailed{GroupID: groupID, UserID: userID, Reason: err.Error()}
-	}
-
-	if !resp.Success {
-		return ErrIAMGroupMembershipFailed{GroupID: groupID, UserID: userID, Reason: "operation returned unsuccessful"}
 	}
 
 	p.logger.Info("IAM group member added",
@@ -2291,19 +2210,9 @@ func (p *MCPServiceProvider) IAMRemoveGroupMember(ctx context.Context, tenantID 
 		return ErrIAMMissingParameter{Parameter: "user_id"}
 	}
 
-	grpcReq := &iampb.RemoveUserFromGroupRequest{
-		TenantId: tenantID,
-		GroupId:  groupID,
-		UserId:   userID,
-	}
-
-	resp, err := p.iamClient.RemoveUserFromGroup(ctx, grpcReq)
+	err := p.iamClient.Group().RemoveMember(ctx, tenantID, groupID, userID)
 	if err != nil {
 		return ErrIAMGroupMembershipFailed{GroupID: groupID, UserID: userID, Reason: err.Error()}
-	}
-
-	if !resp.Success {
-		return ErrIAMGroupMembershipFailed{GroupID: groupID, UserID: userID, Reason: "operation returned unsuccessful"}
 	}
 
 	p.logger.Info("IAM group member removed",
@@ -2330,31 +2239,30 @@ func (p *MCPServiceProvider) IAMCreateTenant(ctx context.Context, req *mcp.IAMCr
 		return nil, ErrIAMMissingParameter{Parameter: "id"}
 	}
 
-	var settings *iampb.TenantSettings
+	settings := make(map[string]string)
 	if req.Settings != nil {
-		settings = &iampb.TenantSettings{
-			MaxUsers:    req.Settings.MaxUsers,
-			MfaRequired: req.Settings.MFARequired,
+		if req.Settings.MFARequired {
+			settings["mfa_required"] = "true"
 		}
 	}
 
-	grpcReq := &iampb.CreateTenantRequest{
-		Id:       req.ID,
+	sdkReq := &sdkiam.CreateTenantRequest{
+		ID:       req.ID,
 		Name:     req.Name,
 		Settings: settings,
 	}
 
-	resp, err := p.iamClient.CreateTenant(ctx, grpcReq)
+	resp, err := p.iamClient.Tenant().Create(ctx, sdkReq)
 	if err != nil {
 		return nil, ErrIAMOperationFailed{Operation: "CreateTenant", Cause: err}
 	}
 
 	p.logger.Info("IAM tenant created",
-		"tenant_id", resp.Id,
+		"tenant_id", resp.ID,
 		"name", req.Name,
 	)
 
-	return tenantToMap(resp), nil
+	return sdkTenantToMap(resp), nil
 }
 
 // IAMDeleteTenant deletes an IAM tenant.
@@ -2368,17 +2276,9 @@ func (p *MCPServiceProvider) IAMDeleteTenant(ctx context.Context, tenantID strin
 		return ErrIAMMissingParameter{Parameter: "tenant_id"}
 	}
 
-	grpcReq := &iampb.DeleteTenantRequest{
-		Id: tenantID,
-	}
-
-	resp, err := p.iamClient.DeleteTenant(ctx, grpcReq)
+	err := p.iamClient.Tenant().Delete(ctx, tenantID)
 	if err != nil {
 		return ErrIAMOperationFailed{Operation: "DeleteTenant", Cause: err}
-	}
-
-	if !resp.Success {
-		return ErrIAMTenantNotFound{TenantID: tenantID}
 	}
 
 	p.logger.Info("IAM tenant deleted",
@@ -2399,16 +2299,12 @@ func (p *MCPServiceProvider) IAMGetTenant(ctx context.Context, tenantID string) 
 		return nil, ErrIAMMissingParameter{Parameter: "tenant_id"}
 	}
 
-	grpcReq := &iampb.GetTenantRequest{
-		Id: tenantID,
-	}
-
-	resp, err := p.iamClient.GetTenant(ctx, grpcReq)
+	resp, err := p.iamClient.Tenant().Get(ctx, tenantID)
 	if err != nil {
 		return nil, ErrIAMTenantNotFound{TenantID: tenantID}
 	}
 
-	return tenantToMap(resp), nil
+	return sdkTenantToMap(resp), nil
 }
 
 // IAMListTenants lists all IAM tenants.
@@ -2425,24 +2321,23 @@ func (p *MCPServiceProvider) IAMListTenants(ctx context.Context, limit int, offs
 		offset = 0
 	}
 
-	grpcReq := &iampb.ListTenantsRequest{
-		Limit:  int32(limit),
-		Offset: int32(offset),
+	sdkReq := &sdkiam.ListTenantsRequest{
+		PageSize: limit,
 	}
 
-	resp, err := p.iamClient.ListTenants(ctx, grpcReq)
+	resp, err := p.iamClient.Tenant().List(ctx, sdkReq)
 	if err != nil {
 		return nil, ErrIAMOperationFailed{Operation: "ListTenants", Cause: err}
 	}
 
 	tenants := make([]map[string]interface{}, 0, len(resp.Tenants))
-	for _, t := range resp.Tenants {
-		tenants = append(tenants, tenantToMap(t))
+	for i := range resp.Tenants {
+		tenants = append(tenants, sdkTenantToMap(&resp.Tenants[i]))
 	}
 
 	return map[string]interface{}{
 		"tenants": tenants,
-		"total":   resp.Total,
+		"total":   resp.Pagination.TotalCount,
 		"limit":   limit,
 		"offset":  offset,
 	}, nil
@@ -2469,12 +2364,7 @@ func (p *MCPServiceProvider) IAMCreateToken(ctx context.Context, req *mcp.IAMCre
 	}
 
 	// Verify the user exists
-	userReq := &iampb.GetUserRequest{
-		TenantId: req.TenantID,
-		UserId:   req.UserID,
-	}
-
-	user, err := p.iamClient.GetUser(ctx, userReq)
+	user, err := p.iamClient.User().Get(ctx, req.TenantID, req.UserID)
 	if err != nil {
 		return nil, ErrIAMUserNotFound{TenantID: req.TenantID, UserID: req.UserID}
 	}
@@ -3059,16 +2949,19 @@ func parsePortState(state string) (policy.PortState, error) {
 	}
 }
 
-// userToMap converts an IAM User protobuf to a map for JSON serialization.
-func userToMap(u *iampb.User) map[string]interface{} {
+// sdkUserToMap converts an IAM SDK User to a map for JSON serialization.
+func sdkUserToMap(u *sdkiam.User) map[string]interface{} {
+	if u == nil {
+		return nil
+	}
 	result := map[string]interface{}{
-		"id":        u.Id,
-		"tenant_id": u.TenantId,
+		"id":        u.ID,
+		"tenant_id": u.TenantID,
 		"email":     u.Email,
 	}
 
-	if u.Name != "" {
-		result["name"] = u.Name
+	if u.DisplayName != "" {
+		result["name"] = u.DisplayName
 	}
 	if len(u.Roles) > 0 {
 		result["roles"] = u.Roles
@@ -3076,30 +2969,33 @@ func userToMap(u *iampb.User) map[string]interface{} {
 	if len(u.Groups) > 0 {
 		result["groups"] = u.Groups
 	}
-	if len(u.Attributes) > 0 {
-		result["attributes"] = u.Attributes
+	if len(u.Metadata) > 0 {
+		result["attributes"] = u.Metadata
 	}
-	if u.MfaVerified {
-		result["mfa_verified"] = u.MfaVerified
+	if u.MFAEnabled {
+		result["mfa_verified"] = u.MFAEnabled
 	}
-	if u.CreatedAt != nil {
-		result["created_at"] = u.CreatedAt.AsTime().Format(time.RFC3339)
+	if !u.CreatedAt.IsZero() {
+		result["created_at"] = u.CreatedAt.Format(time.RFC3339)
 	}
-	if u.UpdatedAt != nil {
-		result["updated_at"] = u.UpdatedAt.AsTime().Format(time.RFC3339)
+	if !u.UpdatedAt.IsZero() {
+		result["updated_at"] = u.UpdatedAt.Format(time.RFC3339)
 	}
-	if u.LastAuth != nil {
-		result["last_auth"] = u.LastAuth.AsTime().Format(time.RFC3339)
+	if u.LastLoginAt != nil {
+		result["last_auth"] = u.LastLoginAt.Format(time.RFC3339)
 	}
 
 	return result
 }
 
-// roleToMap converts an IAM Role protobuf to a map for JSON serialization.
-func roleToMap(r *iampb.Role) map[string]interface{} {
+// sdkRoleToMap converts an IAM SDK Role to a map for JSON serialization.
+func sdkRoleToMap(r *sdkiam.Role) map[string]interface{} {
+	if r == nil {
+		return nil
+	}
 	result := map[string]interface{}{
-		"id":        r.Id,
-		"tenant_id": r.TenantId,
+		"id":        r.ID,
+		"tenant_id": r.TenantID,
 	}
 
 	if r.Name != "" {
@@ -3111,11 +3007,11 @@ func roleToMap(r *iampb.Role) map[string]interface{} {
 	if len(r.Permissions) > 0 {
 		result["permissions"] = r.Permissions
 	}
-	if r.CreatedAt != nil {
-		result["created_at"] = r.CreatedAt.AsTime().Format(time.RFC3339)
+	if !r.CreatedAt.IsZero() {
+		result["created_at"] = r.CreatedAt.Format(time.RFC3339)
 	}
-	if r.UpdatedAt != nil {
-		result["updated_at"] = r.UpdatedAt.AsTime().Format(time.RFC3339)
+	if !r.UpdatedAt.IsZero() {
+		result["updated_at"] = r.UpdatedAt.Format(time.RFC3339)
 	}
 
 	return result
@@ -3242,14 +3138,14 @@ func buildDataKeyAttributes(algorithm string) (*xkmssdk.KeyAttributes, error) {
 	return attrs, nil
 }
 
-// groupToMap converts an IAM Group protobuf to a map for JSON serialization.
-func groupToMap(g *iampb.Group) map[string]interface{} {
+// sdkGroupToMap converts an IAM SDK Group to a map for JSON serialization.
+func sdkGroupToMap(g *sdkiam.Group) map[string]interface{} {
 	if g == nil {
 		return nil
 	}
 	result := map[string]interface{}{
-		"id":        g.Id,
-		"tenant_id": g.TenantId,
+		"id":        g.ID,
+		"tenant_id": g.TenantID,
 	}
 
 	if g.Name != "" {
@@ -3258,43 +3154,36 @@ func groupToMap(g *iampb.Group) map[string]interface{} {
 	if g.Description != "" {
 		result["description"] = g.Description
 	}
-	if len(g.Members) > 0 {
-		result["members"] = g.Members
+	if !g.CreatedAt.IsZero() {
+		result["created_at"] = g.CreatedAt.Format(time.RFC3339)
 	}
-	if g.CreatedAt != nil {
-		result["created_at"] = g.CreatedAt.AsTime().Format(time.RFC3339)
-	}
-	if g.UpdatedAt != nil {
-		result["updated_at"] = g.UpdatedAt.AsTime().Format(time.RFC3339)
+	if !g.UpdatedAt.IsZero() {
+		result["updated_at"] = g.UpdatedAt.Format(time.RFC3339)
 	}
 
 	return result
 }
 
-// tenantToMap converts an IAM Tenant protobuf to a map for JSON serialization.
-func tenantToMap(t *iampb.Tenant) map[string]interface{} {
+// sdkTenantToMap converts an IAM SDK Tenant to a map for JSON serialization.
+func sdkTenantToMap(t *sdkiam.Tenant) map[string]interface{} {
 	if t == nil {
 		return nil
 	}
 	result := map[string]interface{}{
-		"id": t.Id,
+		"id": t.ID,
 	}
 
 	if t.Name != "" {
 		result["name"] = t.Name
 	}
-	if t.Settings != nil {
-		settings := map[string]interface{}{
-			"max_users":    t.Settings.MaxUsers,
-			"mfa_required": t.Settings.MfaRequired,
-		}
-		result["settings"] = settings
+	if len(t.Settings) > 0 {
+		result["settings"] = t.Settings
 	}
-	if t.CreatedAt != nil {
-		result["created_at"] = t.CreatedAt.AsTime().Format(time.RFC3339)
+	if !t.CreatedAt.IsZero() {
+		result["created_at"] = t.CreatedAt.Format(time.RFC3339)
 	}
-	if t.UpdatedAt != nil {
-		result["updated_at"] = t.UpdatedAt.AsTime().Format(time.RFC3339)
+	if !t.UpdatedAt.IsZero() {
+		result["updated_at"] = t.UpdatedAt.Format(time.RFC3339)
 	}
 
 	return result

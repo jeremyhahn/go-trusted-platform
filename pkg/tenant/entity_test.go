@@ -18,8 +18,7 @@ import (
 	"testing"
 	"time"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
 func TestVLANRange_Contains(t *testing.T) {
@@ -163,71 +162,71 @@ func TestVLANRange_Overlaps(t *testing.T) {
 	}
 }
 
-func TestFromProto_NilInput(t *testing.T) {
-	result := FromProto(nil)
+func TestFromIAM_NilInput(t *testing.T) {
+	result := FromIAM(nil)
 	if result != nil {
-		t.Errorf("FromProto(nil) = %v, want nil", result)
+		t.Errorf("FromIAM(nil) = %v, want nil", result)
 	}
 }
 
-func TestFromProto_ValidInput(t *testing.T) {
+func TestFromIAM_ValidInput(t *testing.T) {
 	now := time.Now()
-	proto := &iampb.Tenant{
-		Id:        "tenant-123",
+	proto := &iam.Tenant{
+		ID:        "tenant-123",
 		Name:      "test-tenant",
-		CreatedAt: timestamppb.New(now),
-		UpdatedAt: timestamppb.New(now),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
-	result := FromProto(proto)
+	result := FromIAM(proto)
 
 	if result == nil {
-		t.Fatal("FromProto() returned nil for valid input")
+		t.Fatal("FromIAM() returned nil for valid input")
 	}
-	if result.ID != proto.Id {
-		t.Errorf("FromProto().ID = %q, want %q", result.ID, proto.Id)
+	if result.ID != proto.ID {
+		t.Errorf("FromIAM().ID = %q, want %q", result.ID, proto.ID)
 	}
 	if result.Name != proto.Name {
-		t.Errorf("FromProto().Name = %q, want %q", result.Name, proto.Name)
+		t.Errorf("FromIAM().Name = %q, want %q", result.Name, proto.Name)
 	}
 	if result.DisplayName != proto.Name {
-		t.Errorf("FromProto().DisplayName = %q, want %q", result.DisplayName, proto.Name)
+		t.Errorf("FromIAM().DisplayName = %q, want %q", result.DisplayName, proto.Name)
 	}
 	if result.State != StateCreated {
-		t.Errorf("FromProto().State = %q, want %q", result.State, StateCreated)
+		t.Errorf("FromIAM().State = %q, want %q", result.State, StateCreated)
 	}
 	if result.Labels == nil {
-		t.Error("FromProto().Labels should be initialized")
+		t.Error("FromIAM().Labels should be initialized")
 	}
 	if result.Annotations == nil {
-		t.Error("FromProto().Annotations should be initialized")
+		t.Error("FromIAM().Annotations should be initialized")
 	}
 }
 
-func TestFromProto_NilTimestamps(t *testing.T) {
-	proto := &iampb.Tenant{
-		Id:        "tenant-123",
+func TestFromIAM_NilTimestamps(t *testing.T) {
+	proto := &iam.Tenant{
+		ID:        "tenant-123",
 		Name:      "test-tenant",
-		CreatedAt: nil,
-		UpdatedAt: nil,
+		CreatedAt: time.Time{},
+		UpdatedAt: time.Time{},
 	}
 
-	result := FromProto(proto)
+	result := FromIAM(proto)
 
 	if result == nil {
-		t.Fatal("FromProto() returned nil for valid input")
+		t.Fatal("FromIAM() returned nil for valid input")
 	}
 	if !result.CreatedAt.IsZero() {
-		t.Errorf("FromProto().CreatedAt should be zero time when nil")
+		t.Errorf("FromIAM().CreatedAt should be zero time when nil")
 	}
 	if !result.UpdatedAt.IsZero() {
-		t.Errorf("FromProto().UpdatedAt should be zero time when nil")
+		t.Errorf("FromIAM().UpdatedAt should be zero time when nil")
 	}
 }
 
 func TestTenantEntity_ToProto_NilReceiver(t *testing.T) {
 	var entity *TenantEntity
-	result := entity.ToProto()
+	result := entity.ToIAM()
 	if result != nil {
 		t.Errorf("ToProto() on nil receiver = %v, want nil", result)
 	}
@@ -242,22 +241,22 @@ func TestTenantEntity_ToProto_ValidEntity(t *testing.T) {
 		UpdatedAt: now,
 	}
 
-	result := entity.ToProto()
+	result := entity.ToIAM()
 
 	if result == nil {
 		t.Fatal("ToProto() returned nil for valid entity")
 	}
-	if result.Id != entity.ID {
-		t.Errorf("ToProto().Id = %q, want %q", result.Id, entity.ID)
+	if result.ID != entity.ID {
+		t.Errorf("ToProto().Id = %q, want %q", result.ID, entity.ID)
 	}
 	if result.Name != entity.Name {
 		t.Errorf("ToProto().Name = %q, want %q", result.Name, entity.Name)
 	}
-	if result.CreatedAt == nil {
-		t.Error("ToProto().CreatedAt should not be nil")
+	if result.CreatedAt.IsZero() {
+		t.Error("ToProto().CreatedAt should not be zero")
 	}
-	if result.UpdatedAt == nil {
-		t.Error("ToProto().UpdatedAt should not be nil")
+	if result.UpdatedAt.IsZero() {
+		t.Error("ToProto().UpdatedAt should not be zero")
 	}
 }
 
@@ -794,20 +793,20 @@ func TestTenantEntity_SetAnnotation(t *testing.T) {
 	})
 }
 
-func TestFromProto_ToProto_RoundTrip(t *testing.T) {
+func TestFromIAM_ToProto_RoundTrip(t *testing.T) {
 	now := time.Now().Truncate(time.Microsecond) // Truncate for timestamp precision
-	original := &iampb.Tenant{
-		Id:        "tenant-roundtrip",
+	original := &iam.Tenant{
+		ID:        "tenant-roundtrip",
 		Name:      "roundtrip-test",
-		CreatedAt: timestamppb.New(now),
-		UpdatedAt: timestamppb.New(now),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
-	entity := FromProto(original)
-	result := entity.ToProto()
+	entity := FromIAM(original)
+	result := entity.ToIAM()
 
-	if result.Id != original.Id {
-		t.Errorf("RoundTrip Id = %q, want %q", result.Id, original.Id)
+	if result.ID != original.ID {
+		t.Errorf("RoundTrip Id = %q, want %q", result.ID, original.ID)
 	}
 	if result.Name != original.Name {
 		t.Errorf("RoundTrip Name = %q, want %q", result.Name, original.Name)

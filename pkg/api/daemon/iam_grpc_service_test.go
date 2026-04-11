@@ -2074,13 +2074,13 @@ func TestIAMGRPCService_ConvertGRPCError(t *testing.T) {
 // Type Conversion Tests
 // =============================================================================
 
-func TestIAMGRPCService_DragonUserToPlatformUser(t *testing.T) {
+func TestIAMGRPCService_SDKUserToPlatformUser(t *testing.T) {
 	t.Parallel()
 
 	svc := &IAMGRPCService{}
 
 	t.Run("nil user returns nil", func(t *testing.T) {
-		result := svc.dragonUserToPlatformUser(nil)
+		result := sdkUserToPlatformUser(nil)
 		if result != nil {
 			t.Error("expected nil result")
 		}
@@ -2088,7 +2088,7 @@ func TestIAMGRPCService_DragonUserToPlatformUser(t *testing.T) {
 
 	t.Run("converts all fields", func(t *testing.T) {
 		now := timestamppb.Now()
-		dragonUser := &iampb.User{
+		sdkUser := &iampb.User{
 			Id:          "user-123",
 			TenantId:    "tenant-1",
 			Email:       "user@example.com",
@@ -2102,7 +2102,7 @@ func TestIAMGRPCService_DragonUserToPlatformUser(t *testing.T) {
 			LastAuth:    now,
 		}
 
-		result := svc.dragonUserToPlatformUser(dragonUser)
+		result := sdkUserToPlatformUser(sdkUser)
 		if result == nil {
 			t.Fatal("expected non-nil result")
 		}
@@ -2121,20 +2121,20 @@ func TestIAMGRPCService_DragonUserToPlatformUser(t *testing.T) {
 	})
 }
 
-func TestIAMGRPCService_DragonRoleToPlatformRole(t *testing.T) {
+func TestIAMGRPCService_SDKRoleToPlatformRole(t *testing.T) {
 	t.Parallel()
 
 	svc := &IAMGRPCService{}
 
 	t.Run("nil role returns nil", func(t *testing.T) {
-		result := svc.dragonRoleToPlatformRole(nil)
+		result := sdkRoleToPlatformRole(nil)
 		if result != nil {
 			t.Error("expected nil result")
 		}
 	})
 
 	t.Run("converts all fields", func(t *testing.T) {
-		dragonRole := &iampb.Role{
+		sdkRole := &iampb.Role{
 			Id:          "role-123",
 			TenantId:    "tenant-1",
 			Name:        "admin",
@@ -2142,7 +2142,7 @@ func TestIAMGRPCService_DragonRoleToPlatformRole(t *testing.T) {
 			Permissions: []string{"read", "write", "delete"},
 		}
 
-		result := svc.dragonRoleToPlatformRole(dragonRole)
+		result := sdkRoleToPlatformRole(sdkRole)
 		if result == nil {
 			t.Fatal("expected non-nil result")
 		}
@@ -2155,20 +2155,20 @@ func TestIAMGRPCService_DragonRoleToPlatformRole(t *testing.T) {
 	})
 }
 
-func TestIAMGRPCService_DragonGroupToPlatformGroup(t *testing.T) {
+func TestIAMGRPCService_SDKGroupToPlatformGroup(t *testing.T) {
 	t.Parallel()
 
 	svc := &IAMGRPCService{}
 
 	t.Run("nil group returns nil", func(t *testing.T) {
-		result := svc.dragonGroupToPlatformGroup(nil)
+		result := sdkGroupToPlatformGroup(nil)
 		if result != nil {
 			t.Error("expected nil result")
 		}
 	})
 
 	t.Run("converts all fields", func(t *testing.T) {
-		dragonGroup := &iampb.Group{
+		sdkGroup := &iampb.Group{
 			Id:          "group-123",
 			TenantId:    "tenant-1",
 			Name:        "developers",
@@ -2176,7 +2176,7 @@ func TestIAMGRPCService_DragonGroupToPlatformGroup(t *testing.T) {
 			Members:     []string{"user-1", "user-2"},
 		}
 
-		result := svc.dragonGroupToPlatformGroup(dragonGroup)
+		result := sdkGroupToPlatformGroup(sdkGroup)
 		if result == nil {
 			t.Fatal("expected non-nil result")
 		}
@@ -2189,20 +2189,20 @@ func TestIAMGRPCService_DragonGroupToPlatformGroup(t *testing.T) {
 	})
 }
 
-func TestIAMGRPCService_DragonTenantToPlatformTenant(t *testing.T) {
+func TestIAMGRPCService_SDKTenantToPlatformTenant(t *testing.T) {
 	t.Parallel()
 
 	svc := &IAMGRPCService{}
 
 	t.Run("nil tenant returns nil", func(t *testing.T) {
-		result := svc.dragonTenantToPlatformTenant(nil)
+		result := sdkTenantToPlatformTenant(nil)
 		if result != nil {
 			t.Error("expected nil result")
 		}
 	})
 
 	t.Run("converts all fields including settings", func(t *testing.T) {
-		dragonTenant := &iampb.Tenant{
+		sdkTenant := &iampb.Tenant{
 			Id:   "tenant-123",
 			Name: "Test Tenant",
 			Settings: &iampb.TenantSettings{
@@ -2211,7 +2211,7 @@ func TestIAMGRPCService_DragonTenantToPlatformTenant(t *testing.T) {
 			},
 		}
 
-		result := svc.dragonTenantToPlatformTenant(dragonTenant)
+		result := sdkTenantToPlatformTenant(sdkTenant)
 		if result == nil {
 			t.Fatal("expected non-nil result")
 		}
@@ -2230,12 +2230,12 @@ func TestIAMGRPCService_DragonTenantToPlatformTenant(t *testing.T) {
 	})
 
 	t.Run("handles nil settings", func(t *testing.T) {
-		dragonTenant := &iampb.Tenant{
+		sdkTenant := &iampb.Tenant{
 			Id:   "tenant-123",
 			Name: "Test Tenant",
 		}
 
-		result := svc.dragonTenantToPlatformTenant(dragonTenant)
+		result := sdkTenantToPlatformTenant(sdkTenant)
 		if result == nil {
 			t.Fatal("expected non-nil result")
 		}
@@ -2245,20 +2245,20 @@ func TestIAMGRPCService_DragonTenantToPlatformTenant(t *testing.T) {
 	})
 }
 
-func TestIAMGRPCService_DragonPolicyToPlatformPolicy(t *testing.T) {
+func TestIAMGRPCService_SDKPolicyToPlatformPolicy(t *testing.T) {
 	t.Parallel()
 
 	svc := &IAMGRPCService{}
 
 	t.Run("nil policy returns nil", func(t *testing.T) {
-		result := svc.dragonPolicyToPlatformPolicy(nil)
+		result := sdkPolicyToPlatformPolicy(nil)
 		if result != nil {
 			t.Error("expected nil result")
 		}
 	})
 
 	t.Run("converts all fields", func(t *testing.T) {
-		dragonPolicy := &iampb.Policy{
+		sdkPolicy := &iampb.Policy{
 			Name:        "test-policy",
 			TenantId:    "tenant-1",
 			Description: "Test policy",
@@ -2267,7 +2267,7 @@ func TestIAMGRPCService_DragonPolicyToPlatformPolicy(t *testing.T) {
 			Labels:      map[string]string{"env": "prod"},
 		}
 
-		result := svc.dragonPolicyToPlatformPolicy(dragonPolicy)
+		result := sdkPolicyToPlatformPolicy(sdkPolicy)
 		if result == nil {
 			t.Fatal("expected non-nil result")
 		}
@@ -2280,20 +2280,20 @@ func TestIAMGRPCService_DragonPolicyToPlatformPolicy(t *testing.T) {
 	})
 }
 
-func TestIAMGRPCService_DragonAppToPlatformApp(t *testing.T) {
+func TestIAMGRPCService_SDKAppToPlatformApp(t *testing.T) {
 	t.Parallel()
 
 	svc := &IAMGRPCService{}
 
 	t.Run("nil app returns nil", func(t *testing.T) {
-		result := svc.dragonAppToPlatformApp(nil)
+		result := sdkAppToPlatformApp(nil)
 		if result != nil {
 			t.Error("expected nil result")
 		}
 	})
 
 	t.Run("converts all fields", func(t *testing.T) {
-		dragonApp := &iampb.Application{
+		sdkApp := &iampb.Application{
 			ClientId:       "client-123",
 			ClientSecret:   "secret-456",
 			TenantId:       "tenant-1",
@@ -2304,7 +2304,7 @@ func TestIAMGRPCService_DragonAppToPlatformApp(t *testing.T) {
 			ResourcePrefix: "app:",
 		}
 
-		result := svc.dragonAppToPlatformApp(dragonApp)
+		result := sdkAppToPlatformApp(sdkApp)
 		if result == nil {
 			t.Fatal("expected non-nil result")
 		}

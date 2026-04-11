@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/security/audit"
@@ -332,29 +332,22 @@ func (m *AuthMiddleware) extractIdentityFromCert(cert *x509.Certificate) string 
 }
 
 // lookupUserByEmail looks up a user by email in the IAM service.
-func (m *AuthMiddleware) lookupUserByEmail(ctx context.Context, tenantID, email string) (*iampb.User, error) {
-	resp, err := m.iamService.ListUsers(ctx, &iampb.ListUsersRequest{
-		TenantId: tenantID,
-		Email:    email,
-		Limit:    1,
-	})
+func (m *AuthMiddleware) lookupUserByEmail(ctx context.Context, tenantID, email string) (*iamsdk.User, error) {
+	users, err := m.iamService.ListUsersByEmail(ctx, tenantID, email)
 	if err != nil {
 		return nil, ErrServiceUnavailable{Service: "IAM", Reason: err.Error()}
 	}
 
-	if len(resp.Users) == 0 {
+	if len(users) == 0 {
 		return nil, ErrUserNotFound{Identifier: email}
 	}
 
-	return resp.Users[0], nil
+	return &users[0], nil
 }
 
 // lookupUserByID looks up a user by ID in the IAM service.
-func (m *AuthMiddleware) lookupUserByID(ctx context.Context, tenantID, userID string) (*iampb.User, error) {
-	user, err := m.iamService.GetUser(ctx, &iampb.GetUserRequest{
-		TenantId: tenantID,
-		UserId:   userID,
-	})
+func (m *AuthMiddleware) lookupUserByID(ctx context.Context, tenantID, userID string) (*iamsdk.User, error) {
+	user, err := m.iamService.GetUser(ctx, tenantID, userID)
 	if err != nil {
 		return nil, ErrServiceUnavailable{Service: "IAM", Reason: err.Error()}
 	}
@@ -369,14 +362,14 @@ func (m *AuthMiddleware) lookupUserByID(ctx context.Context, tenantID, userID st
 // createSessionFromClaims creates an IAM session from JWT claims when user lookup fails.
 func (m *AuthMiddleware) createSessionFromClaims(claims *JWTClaims, tenantID string) IAMSession {
 	// Create a synthetic user from claims
-	user := &iampb.User{
-		Id:          claims.Subject,
-		TenantId:    tenantID,
+	user := &iamsdk.User{
+		ID:          claims.Subject,
+		TenantID:    tenantID,
 		Email:       claims.Email,
-		Name:        claims.Name,
+		DisplayName: claims.Name,
 		Roles:       claims.Roles,
 		Groups:      claims.Groups,
-		MfaVerified: claims.MFAVerified,
+		MFAEnabled:  claims.MFAVerified,
 	}
 
 	return NewIAMSessionWithMFA(user, claims.MFAVerified, claims.MFATimestamp)

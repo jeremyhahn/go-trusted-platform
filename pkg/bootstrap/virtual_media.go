@@ -179,6 +179,23 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 		}
 		o.logger.Info("bootstrap: virtual-media: ISO mounted on BMC",
 			slog.String("hostname", node.Hostname))
+
+		// Register a deferred unmount so the virtual CD is ALWAYS ejected,
+		// even on timeout or error. Supermicro BMCs keep the mount sticky
+		// across power cycles, causing an install loop if not unmounted.
+		defer func() {
+			o.logger.Info("bootstrap: virtual-media: deferred unmount on exit",
+				slog.String("hostname", node.Hostname))
+			unmountClient, unmountErr := o.bmcFactory.NewClient(bmcConfig)
+			if unmountErr != nil {
+				o.logger.Warn("bootstrap: virtual-media: failed to create client for deferred unmount",
+					slog.String("hostname", node.Hostname),
+					slog.String("error", unmountErr.Error()))
+				return
+			}
+			defer unmountClient.Close()
+			o.bestEffortUnmount(ctx, unmountClient, node.Hostname)
+		}()
 	}
 
 	// 4. Set boot device to CD/DVD, one-shot only. After install we want

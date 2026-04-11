@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	dragoncrypto "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
+	quicbaascrypto "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
 	"github.com/stretchr/testify/assert"
@@ -40,34 +40,34 @@ import (
 // =============================================================================
 
 type mockSDKCryptoClient struct {
-	signFunc    func(ctx context.Context, req *dragoncrypto.SignRequest) (*dragoncrypto.SignResponse, error)
-	decryptFunc func(ctx context.Context, req *dragoncrypto.DecryptRequest) (*dragoncrypto.DecryptResponse, error)
-	encryptFunc func(ctx context.Context, req *dragoncrypto.EncryptRequest) (*dragoncrypto.EncryptResponse, error)
-	verifyFunc  func(ctx context.Context, req *dragoncrypto.VerifyRequest) (*dragoncrypto.VerifyResponse, error)
+	signFunc    func(ctx context.Context, req *quicbaascrypto.SignRequest) (*quicbaascrypto.SignResponse, error)
+	decryptFunc func(ctx context.Context, req *quicbaascrypto.DecryptRequest) (*quicbaascrypto.DecryptResponse, error)
+	encryptFunc func(ctx context.Context, req *quicbaascrypto.EncryptRequest) (*quicbaascrypto.EncryptResponse, error)
+	verifyFunc  func(ctx context.Context, req *quicbaascrypto.VerifyRequest) (*quicbaascrypto.VerifyResponse, error)
 }
 
-func (m *mockSDKCryptoClient) Sign(ctx context.Context, req *dragoncrypto.SignRequest) (*dragoncrypto.SignResponse, error) {
+func (m *mockSDKCryptoClient) Sign(ctx context.Context, req *quicbaascrypto.SignRequest) (*quicbaascrypto.SignResponse, error) {
 	if m.signFunc != nil {
 		return m.signFunc(ctx, req)
 	}
 	return nil, errors.New("sign not implemented")
 }
 
-func (m *mockSDKCryptoClient) Decrypt(ctx context.Context, req *dragoncrypto.DecryptRequest) (*dragoncrypto.DecryptResponse, error) {
+func (m *mockSDKCryptoClient) Decrypt(ctx context.Context, req *quicbaascrypto.DecryptRequest) (*quicbaascrypto.DecryptResponse, error) {
 	if m.decryptFunc != nil {
 		return m.decryptFunc(ctx, req)
 	}
 	return nil, errors.New("decrypt not implemented")
 }
 
-func (m *mockSDKCryptoClient) Encrypt(ctx context.Context, req *dragoncrypto.EncryptRequest) (*dragoncrypto.EncryptResponse, error) {
+func (m *mockSDKCryptoClient) Encrypt(ctx context.Context, req *quicbaascrypto.EncryptRequest) (*quicbaascrypto.EncryptResponse, error) {
 	if m.encryptFunc != nil {
 		return m.encryptFunc(ctx, req)
 	}
 	return nil, errors.New("encrypt not implemented")
 }
 
-func (m *mockSDKCryptoClient) Verify(ctx context.Context, req *dragoncrypto.VerifyRequest) (*dragoncrypto.VerifyResponse, error) {
+func (m *mockSDKCryptoClient) Verify(ctx context.Context, req *quicbaascrypto.VerifyRequest) (*quicbaascrypto.VerifyResponse, error) {
 	if m.verifyFunc != nil {
 		return m.verifyFunc(ctx, req)
 	}
@@ -1366,10 +1366,10 @@ func TestQuicBaaSSigner_Sign(t *testing.T) {
 	t.Run("signs data successfully", func(t *testing.T) {
 		expectedSignature := []byte("test-signature")
 		mockCrypto := &mockSDKCryptoClient{
-			signFunc: func(ctx context.Context, req *dragoncrypto.SignRequest) (*dragoncrypto.SignResponse, error) {
+			signFunc: func(ctx context.Context, req *quicbaascrypto.SignRequest) (*quicbaascrypto.SignResponse, error) {
 				assert.Equal(t, "test-key", req.KeyID)
 				assert.Equal(t, []byte("test-digest"), req.Data)
-				return &dragoncrypto.SignResponse{
+				return &quicbaascrypto.SignResponse{
 					Signature: expectedSignature,
 				}, nil
 			},
@@ -1389,7 +1389,7 @@ func TestQuicBaaSSigner_Sign(t *testing.T) {
 
 	t.Run("signing error is propagated", func(t *testing.T) {
 		mockCrypto := &mockSDKCryptoClient{
-			signFunc: func(ctx context.Context, req *dragoncrypto.SignRequest) (*dragoncrypto.SignResponse, error) {
+			signFunc: func(ctx context.Context, req *quicbaascrypto.SignRequest) (*quicbaascrypto.SignResponse, error) {
 				return nil, errors.New("signing failed")
 			},
 		}
@@ -1427,10 +1427,10 @@ func TestQuicBaaSDecrypter_Decrypt(t *testing.T) {
 	t.Run("decrypts data successfully", func(t *testing.T) {
 		expectedPlaintext := []byte("decrypted-data")
 		mockCrypto := &mockSDKCryptoClient{
-			decryptFunc: func(ctx context.Context, req *dragoncrypto.DecryptRequest) (*dragoncrypto.DecryptResponse, error) {
+			decryptFunc: func(ctx context.Context, req *quicbaascrypto.DecryptRequest) (*quicbaascrypto.DecryptResponse, error) {
 				assert.Equal(t, "test-key", req.KeyID)
 				assert.Equal(t, []byte("ciphertext"), req.Ciphertext)
-				return &dragoncrypto.DecryptResponse{
+				return &quicbaascrypto.DecryptResponse{
 					Plaintext: expectedPlaintext,
 				}, nil
 			},
@@ -1450,7 +1450,7 @@ func TestQuicBaaSDecrypter_Decrypt(t *testing.T) {
 
 	t.Run("decryption error is propagated", func(t *testing.T) {
 		mockCrypto := &mockSDKCryptoClient{
-			decryptFunc: func(ctx context.Context, req *dragoncrypto.DecryptRequest) (*dragoncrypto.DecryptResponse, error) {
+			decryptFunc: func(ctx context.Context, req *quicbaascrypto.DecryptRequest) (*quicbaascrypto.DecryptResponse, error) {
 				return nil, errors.New("decryption failed")
 			},
 		}

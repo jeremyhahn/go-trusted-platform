@@ -67,6 +67,22 @@ func (dm *diskManager) CreatePartitionTable(ctx context.Context, table Partition
 		return ErrInvalidConfig(fmt.Sprintf("unsupported partition table: %s", table))
 	}
 
+	// Zero the first 10MB of the disk to wipe any stale ESP/GPT data.
+	// Supermicro UEFI firmware caches old partition tables and boot
+	// entries in NVRAM; zeroing ensures the firmware sees the new
+	// partition table on the next boot instead of a stale ESP from a
+	// prior install.
+	dm.logger.Info("[DISK] Wiping old partition data", "device", dm.config.Device)
+	wipeCmd := exec.CommandContext(ctx, "dd", "if=/dev/zero", "of="+dm.config.Device, "bs=1M", "count=10", "conv=notrunc")
+	if wipeOut, wipeErr := wipeCmd.CombinedOutput(); wipeErr != nil {
+		dm.logger.Warn("[DISK] dd wipe failed (continuing)", "output", strings.TrimSpace(string(wipeOut)), "error", wipeErr)
+	}
+	// Also wipe the end of the disk where the backup GPT header lives
+	wipeEndCmd := exec.CommandContext(ctx, "sgdisk", "--zap-all", dm.config.Device)
+	if wipeEndOut, wipeEndErr := wipeEndCmd.CombinedOutput(); wipeEndErr != nil {
+		dm.logger.Warn("[DISK] sgdisk zap failed (continuing)", "output", strings.TrimSpace(string(wipeEndOut)), "error", wipeEndErr)
+	}
+
 	// Create partition table using parted
 	dm.logger.Debug("[DISK] Creating partition table using parted", "label", labelType)
 	cmd := exec.CommandContext(ctx, "parted", "-s", dm.config.Device, "mklabel", labelType)

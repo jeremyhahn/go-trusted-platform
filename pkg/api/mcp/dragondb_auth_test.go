@@ -19,8 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
-	"google.golang.org/grpc"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
 // mockTokenValidator implements TokenValidator for testing.
@@ -36,24 +35,20 @@ func (m *mockTokenValidator) ValidateToken(ctx context.Context, token string) (*
 	return m.result, nil
 }
 
-// mockPEPClient implements iampb.PEPServiceClient for testing.
+// mockPEPClient implements iam.PEPClient for testing.
 type mockPEPClient struct {
-	checkResp *iampb.CheckResponse
+	checkResp *iam.CheckResponse
 	checkErr  error
 }
 
-func (m *mockPEPClient) Check(ctx context.Context, in *iampb.CheckRequest, opts ...grpc.CallOption) (*iampb.CheckResponse, error) {
+func (m *mockPEPClient) Check(ctx context.Context, req *iam.CheckRequest) (*iam.CheckResponse, error) {
 	if m.checkErr != nil {
 		return nil, m.checkErr
 	}
 	return m.checkResp, nil
 }
 
-func (m *mockPEPClient) CheckBatch(ctx context.Context, in *iampb.CheckBatchRequest, opts ...grpc.CallOption) (*iampb.CheckBatchResponse, error) {
-	return nil, nil
-}
-
-func (m *mockPEPClient) Subscribe(ctx context.Context, in *iampb.SubscribeRequest, opts ...grpc.CallOption) (iampb.PEPService_SubscribeClient, error) {
+func (m *mockPEPClient) CheckBatch(ctx context.Context, req *iam.CheckBatchRequest) (*iam.CheckBatchResponse, error) {
 	return nil, nil
 }
 
@@ -352,7 +347,7 @@ func TestQuicBaaSAuthAdapter_CheckPermission(t *testing.T) {
 
 	t.Run("uses cached claims", func(t *testing.T) {
 		pepClient := &mockPEPClient{
-			checkResp: &iampb.CheckResponse{Allowed: true},
+			checkResp: &iam.CheckResponse{Allowed: true},
 		}
 		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
 			TokenValidator: &mockTokenValidator{
@@ -388,7 +383,7 @@ func TestQuicBaaSAuthAdapter_CheckPermission(t *testing.T) {
 			},
 		}
 		pepClient := &mockPEPClient{
-			checkResp: &iampb.CheckResponse{Allowed: true},
+			checkResp: &iam.CheckResponse{Allowed: true},
 		}
 		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
 			TokenValidator: validator,
@@ -414,7 +409,7 @@ func TestQuicBaaSAuthAdapter_CheckPermission(t *testing.T) {
 			},
 		}
 		pepClient := &mockPEPClient{
-			checkResp: &iampb.CheckResponse{Allowed: false},
+			checkResp: &iam.CheckResponse{Allowed: false},
 		}
 		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
 			TokenValidator: validator,
@@ -466,7 +461,7 @@ func TestQuicBaaSAuthAdapter_CheckPermission(t *testing.T) {
 			},
 		}
 		pepClient := &mockPEPClient{
-			checkResp: &iampb.CheckResponse{Allowed: true},
+			checkResp: &iam.CheckResponse{Allowed: true},
 		}
 		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
 			TokenValidator:  validator,
@@ -489,7 +484,7 @@ func TestQuicBaaSAuthAdapter_CheckPermission(t *testing.T) {
 			err: errors.New("token validation failed"),
 		}
 		pepClient := &mockPEPClient{
-			checkResp: &iampb.CheckResponse{Allowed: true},
+			checkResp: &iam.CheckResponse{Allowed: true},
 		}
 		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
 			TokenValidator: validator,
@@ -905,8 +900,8 @@ func TestLocalPEPAdapter_Check(t *testing.T) {
 	t.Run("returns error when evaluator is nil", func(t *testing.T) {
 		adapter := &LocalPEPAdapter{evaluator: nil}
 
-		_, err := adapter.Check(ctx, &iampb.CheckRequest{
-			Subject:  &iampb.Subject{Id: "user-123"},
+		_, err := adapter.Check(ctx, &iam.CheckRequest{
+			Subject:  iam.CheckSubject{ID: "user-123"},
 			Action:   "read",
 			Resource: "vtpm",
 		})
@@ -929,8 +924,8 @@ func TestLocalPEPAdapter_Check(t *testing.T) {
 		}
 		adapter := NewLocalPEPAdapter(evaluator)
 
-		_, err := adapter.Check(ctx, &iampb.CheckRequest{
-			Subject:  &iampb.Subject{Id: "user-123"},
+		_, err := adapter.Check(ctx, &iam.CheckRequest{
+			Subject:  iam.CheckSubject{ID: "user-123"},
 			Action:   "read",
 			Resource: "vtpm",
 		})
@@ -957,10 +952,10 @@ func TestLocalPEPAdapter_Check(t *testing.T) {
 		}
 		adapter := NewLocalPEPAdapter(evaluator)
 
-		resp, err := adapter.Check(ctx, &iampb.CheckRequest{
-			Subject: &iampb.Subject{
-				Id:       "user-123",
-				TenantId: "tenant-456",
+		resp, err := adapter.Check(ctx, &iam.CheckRequest{
+			Subject: iam.CheckSubject{
+				ID:       "user-123",
+				TenantID: "tenant-456",
 				Roles:    []string{"admin"},
 				Groups:   []string{"developers"},
 			},
@@ -985,8 +980,8 @@ func TestLocalPEPAdapter_Check(t *testing.T) {
 		}
 		adapter := NewLocalPEPAdapter(evaluator)
 
-		resp, err := adapter.Check(ctx, &iampb.CheckRequest{
-			Subject:  &iampb.Subject{Id: "user-123"},
+		resp, err := adapter.Check(ctx, &iam.CheckRequest{
+			Subject:  iam.CheckSubject{ID: "user-123"},
 			Action:   "delete",
 			Resource: "vtpm",
 		})
@@ -1001,22 +996,16 @@ func TestLocalPEPAdapter_Check(t *testing.T) {
 
 	t.Run("passes subject fields correctly", func(t *testing.T) {
 		var capturedReq *PolicyCheckRequest
-		evaluator := &mockPolicyEvaluator{
-			resp: &PolicyCheckResponse{Allowed: true},
-		}
-		// Override Evaluate to capture the request
-		originalEvaluate := evaluator.Evaluate
-		_ = originalEvaluate // prevent unused warning
 		captureAdapter := &capturingPolicyEvaluator{
 			resp:     &PolicyCheckResponse{Allowed: true},
 			captured: &capturedReq,
 		}
 		adapter := NewLocalPEPAdapter(captureAdapter)
 
-		_, err := adapter.Check(ctx, &iampb.CheckRequest{
-			Subject: &iampb.Subject{
-				Id:       "user-123",
-				TenantId: "tenant-456",
+		_, err := adapter.Check(ctx, &iam.CheckRequest{
+			Subject: iam.CheckSubject{
+				ID:       "user-123",
+				TenantID: "tenant-456",
 				Roles:    []string{"admin", "user"},
 				Groups:   []string{"devs"},
 			},

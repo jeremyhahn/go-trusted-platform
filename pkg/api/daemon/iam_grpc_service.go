@@ -14,7 +14,7 @@
 // iam_grpc_service.go implements the Platform IAM gRPC service.
 //
 // This file provides the gRPC protocol adapter for IAM operations, translating
-// between the platform's protobuf API and the underlying QuicBaaS IAM service.
+// between the platform's protobuf API and the underlying QuicBaaS IAM SDK.
 // It implements the PlatformIAMServiceServer interface defined in the platform
 // protobuf definitions.
 //
@@ -84,7 +84,7 @@
 // # Thread Safety
 //
 // IAMGRPCService is safe for concurrent use. All state is immutable after
-// construction, and the underlying gRPC clients handle connection pooling.
+// construction, and the underlying SDK clients handle connection pooling.
 
 package daemon
 
@@ -93,7 +93,8 @@ import (
 	"log/slog"
 	"time"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 
 	"google.golang.org/grpc/codes"
@@ -118,8 +119,8 @@ const (
 // IAMGRPCService implements the Platform IAM gRPC service (PlatformIAMServiceServer).
 //
 // It acts as a protocol adapter between the platform's gRPC API and the QuicBaaS
-// IAM service, handling type conversion, validation, pagination, and error mapping.
-// The service delegates actual IAM operations to the QuicBaaS IAM and PEP clients.
+// IAM SDK, handling type conversion, validation, pagination, and error mapping.
+// The service delegates actual IAM operations to the QuicBaaS IAM SDK client.
 //
 // Example usage:
 //
@@ -129,26 +130,26 @@ type IAMGRPCService struct {
 	platformv1.UnimplementedPlatformIAMServiceServer
 
 	logger    *slog.Logger
-	iamClient iampb.IAMServiceClient
-	pepClient iampb.PEPServiceClient
+	iamClient quicbaassdk.IAMClient
+	pepClient quicbaassdk.IAMPEPClient
 }
 
 // NewIAMGRPCService creates a new IAM gRPC service instance.
 //
 // Parameters:
 //   - logger: Structured logger for operation logging and error reporting
-//   - iamClient: QuicBaaS IAM service client for user, role, group, tenant,
+//   - iamClient: QuicBaaS IAM SDK client for user, role, group, tenant,
 //     policy, and application operations
-//   - pepClient: QuicBaaS PEP (Policy Enforcement Point) client for authorization
-//     checks
+//   - pepClient: QuicBaaS PEP (Policy Enforcement Point) SDK client for
+//     authorization checks
 //
 // The iamClient and pepClient may be nil if the corresponding functionality
 // is not available. Methods will return FailedPrecondition errors when called
 // without the required client.
 func NewIAMGRPCService(
 	logger *slog.Logger,
-	iamClient iampb.IAMServiceClient,
-	pepClient iampb.PEPServiceClient,
+	iamClient quicbaassdk.IAMClient,
+	pepClient quicbaassdk.IAMPEPClient,
 ) *IAMGRPCService {
 	return &IAMGRPCService{
 		logger:    logger,
@@ -186,23 +187,22 @@ func (s *IAMGRPCService) CreateUser(ctx context.Context, req *platformv1.CreateI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.CreateUserRequest{
-		TenantId:   req.GetTenantId(),
-		Email:      req.GetEmail(),
-		Name:       req.GetName(),
-		Roles:      req.GetRoles(),
-		Groups:     req.GetGroups(),
-		Attributes: req.GetAttributes(),
+	sdkReq := &sdkiam.CreateUserRequest{
+		Email:       req.GetEmail(),
+		DisplayName: req.GetName(),
+		Roles:       req.GetRoles(),
+		Groups:      req.GetGroups(),
+		Metadata:    req.GetAttributes(),
 	}
 
-	resp, err := s.iamClient.CreateUser(ctx, grpcReq)
+	resp, err := s.iamClient.User().Create(ctx, req.GetTenantId(), sdkReq)
 	if err != nil {
 		s.logger.Error("failed to create user", "error", err, "tenant_id", req.GetTenantId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMUserResponse{
-		User:      s.dragonUserToPlatformUser(resp),
+		User:      sdkUserToPlatformUser(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -228,19 +228,14 @@ func (s *IAMGRPCService) GetUser(ctx context.Context, req *platformv1.GetIAMUser
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.GetUserRequest{
-		TenantId: req.GetTenantId(),
-		UserId:   req.GetUserId(),
-	}
-
-	resp, err := s.iamClient.GetUser(ctx, grpcReq)
+	resp, err := s.iamClient.User().Get(ctx, req.GetTenantId(), req.GetUserId())
 	if err != nil {
 		s.logger.Error("failed to get user", "error", err, "tenant_id", req.GetTenantId(), "user_id", req.GetUserId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMUserResponse{
-		User:      s.dragonUserToPlatformUser(resp),
+		User:      sdkUserToPlatformUser(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -267,34 +262,34 @@ func (s *IAMGRPCService) ListUsers(ctx context.Context, req *platformv1.ListIAMU
 
 	limit, offset := s.getPagination(req.GetPagination())
 
-	grpcReq := &iampb.ListUsersRequest{
-		TenantId: req.GetTenantId(),
-		Limit:    limit,
-		Offset:   offset,
-		Email:    req.GetEmailFilter(),
-		Role:     req.GetRoleFilter(),
-		Group:    req.GetGroupFilter(),
+	sdkReq := &sdkiam.ListUsersRequest{
+		PageSize: int(limit),
+		RoleID:   req.GetRoleFilter(),
+		GroupID:  req.GetGroupFilter(),
+		Filter:   req.GetEmailFilter(),
 	}
 
-	resp, err := s.iamClient.ListUsers(ctx, grpcReq)
+	resp, err := s.iamClient.User().List(ctx, req.GetTenantId(), sdkReq)
 	if err != nil {
 		s.logger.Error("failed to list users", "error", err, "tenant_id", req.GetTenantId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
-	users := make([]*platformv1.IAMUser, 0, len(resp.GetUsers()))
-	for _, u := range resp.GetUsers() {
-		users = append(users, s.dragonUserToPlatformUser(u))
+	users := make([]*platformv1.IAMUser, 0, len(resp.Users))
+	for i := range resp.Users {
+		users = append(users, sdkUserToPlatformUser(&resp.Users[i]))
 	}
+
+	totalCount := int64(resp.Pagination.TotalCount)
 
 	return &platformv1.ListIAMUsersResponse{
 		Users: users,
 		Pagination: &platformv1.PaginationResponse{
 			Page:       uint32(offset/limit) + 1,
 			PageSize:   uint32(limit),
-			TotalItems: uint64(resp.GetTotal()),
+			TotalItems: uint64(totalCount),
 		},
-		Total:     int64(resp.GetTotal()),
+		Total:     totalCount,
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -321,24 +316,20 @@ func (s *IAMGRPCService) UpdateUser(ctx context.Context, req *platformv1.UpdateI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.UpdateUserRequest{
-		TenantId:   req.GetTenantId(),
-		UserId:     req.GetUserId(),
-		Email:      req.GetEmail(),
-		Name:       req.GetName(),
-		Roles:      req.GetRoles(),
-		Groups:     req.GetGroups(),
-		Attributes: req.GetAttributes(),
+	sdkReq := &sdkiam.UpdateUserRequest{
+		Email:       req.GetEmail(),
+		DisplayName: req.GetName(),
+		Metadata:    req.GetAttributes(),
 	}
 
-	resp, err := s.iamClient.UpdateUser(ctx, grpcReq)
+	resp, err := s.iamClient.User().Update(ctx, req.GetTenantId(), req.GetUserId(), sdkReq)
 	if err != nil {
 		s.logger.Error("failed to update user", "error", err, "tenant_id", req.GetTenantId(), "user_id", req.GetUserId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMUserResponse{
-		User:      s.dragonUserToPlatformUser(resp),
+		User:      sdkUserToPlatformUser(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -364,20 +355,15 @@ func (s *IAMGRPCService) DeleteUser(ctx context.Context, req *platformv1.DeleteI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.DeleteUserRequest{
-		TenantId: req.GetTenantId(),
-		UserId:   req.GetUserId(),
-	}
-
-	resp, err := s.iamClient.DeleteUser(ctx, grpcReq)
+	err := s.iamClient.User().Delete(ctx, req.GetTenantId(), req.GetUserId())
 	if err != nil {
 		s.logger.Error("failed to delete user", "error", err, "tenant_id", req.GetTenantId(), "user_id", req.GetUserId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.DeleteIAMUserResponse{
 		Status: &platformv1.Status{
-			Success: resp.GetSuccess(),
+			Success: true,
 			Message: "user deleted successfully",
 		},
 		Timestamp: timestamppb.Now(),
@@ -410,22 +396,21 @@ func (s *IAMGRPCService) CreateRole(ctx context.Context, req *platformv1.CreateI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.CreateRoleRequest{
-		TenantId:    req.GetTenantId(),
-		Id:          req.GetId(),
+	sdkReq := &sdkiam.CreateRoleRequest{
+		ID:          req.GetId(),
 		Name:        req.GetName(),
 		Description: req.GetDescription(),
 		Permissions: req.GetPermissions(),
 	}
 
-	resp, err := s.iamClient.CreateRole(ctx, grpcReq)
+	resp, err := s.iamClient.Role().Create(ctx, req.GetTenantId(), sdkReq)
 	if err != nil {
 		s.logger.Error("failed to create role", "error", err, "tenant_id", req.GetTenantId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMRoleResponse{
-		Role:      s.dragonRoleToPlatformRole(resp),
+		Role:      sdkRoleToPlatformRole(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -451,19 +436,14 @@ func (s *IAMGRPCService) GetRole(ctx context.Context, req *platformv1.GetIAMRole
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.GetRoleRequest{
-		TenantId: req.GetTenantId(),
-		RoleId:   req.GetRoleId(),
-	}
-
-	resp, err := s.iamClient.GetRole(ctx, grpcReq)
+	resp, err := s.iamClient.Role().Get(ctx, req.GetTenantId(), req.GetRoleId())
 	if err != nil {
 		s.logger.Error("failed to get role", "error", err, "tenant_id", req.GetTenantId(), "role_id", req.GetRoleId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMRoleResponse{
-		Role:      s.dragonRoleToPlatformRole(resp),
+		Role:      sdkRoleToPlatformRole(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -486,31 +466,31 @@ func (s *IAMGRPCService) ListRoles(ctx context.Context, req *platformv1.ListIAMR
 
 	limit, offset := s.getPagination(req.GetPagination())
 
-	grpcReq := &iampb.ListRolesRequest{
-		TenantId: req.GetTenantId(),
-		Limit:    limit,
-		Offset:   offset,
+	sdkReq := &sdkiam.ListRolesRequest{
+		PageSize: int(limit),
 	}
 
-	resp, err := s.iamClient.ListRoles(ctx, grpcReq)
+	resp, err := s.iamClient.Role().List(ctx, req.GetTenantId(), sdkReq)
 	if err != nil {
 		s.logger.Error("failed to list roles", "error", err, "tenant_id", req.GetTenantId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
-	roles := make([]*platformv1.IAMRole, 0, len(resp.GetRoles()))
-	for _, r := range resp.GetRoles() {
-		roles = append(roles, s.dragonRoleToPlatformRole(r))
+	roles := make([]*platformv1.IAMRole, 0, len(resp.Roles))
+	for i := range resp.Roles {
+		roles = append(roles, sdkRoleToPlatformRole(&resp.Roles[i]))
 	}
+
+	totalCount := int64(resp.Pagination.TotalCount)
 
 	return &platformv1.ListIAMRolesResponse{
 		Roles: roles,
 		Pagination: &platformv1.PaginationResponse{
 			Page:       uint32(offset/limit) + 1,
 			PageSize:   uint32(limit),
-			TotalItems: uint64(resp.GetTotal()),
+			TotalItems: uint64(totalCount),
 		},
-		Total:     int64(resp.GetTotal()),
+		Total:     totalCount,
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -536,22 +516,20 @@ func (s *IAMGRPCService) UpdateRole(ctx context.Context, req *platformv1.UpdateI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.UpdateRoleRequest{
-		TenantId:    req.GetTenantId(),
-		RoleId:      req.GetRoleId(),
+	sdkReq := &sdkiam.UpdateRoleRequest{
 		Name:        req.GetName(),
 		Description: req.GetDescription(),
 		Permissions: req.GetPermissions(),
 	}
 
-	resp, err := s.iamClient.UpdateRole(ctx, grpcReq)
+	resp, err := s.iamClient.Role().Update(ctx, req.GetTenantId(), req.GetRoleId(), sdkReq)
 	if err != nil {
 		s.logger.Error("failed to update role", "error", err, "tenant_id", req.GetTenantId(), "role_id", req.GetRoleId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMRoleResponse{
-		Role:      s.dragonRoleToPlatformRole(resp),
+		Role:      sdkRoleToPlatformRole(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -577,20 +555,15 @@ func (s *IAMGRPCService) DeleteRole(ctx context.Context, req *platformv1.DeleteI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.DeleteRoleRequest{
-		TenantId: req.GetTenantId(),
-		RoleId:   req.GetRoleId(),
-	}
-
-	resp, err := s.iamClient.DeleteRole(ctx, grpcReq)
+	err := s.iamClient.Role().Delete(ctx, req.GetTenantId(), req.GetRoleId())
 	if err != nil {
 		s.logger.Error("failed to delete role", "error", err, "tenant_id", req.GetTenantId(), "role_id", req.GetRoleId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.DeleteIAMRoleResponse{
 		Status: &platformv1.Status{
-			Success: resp.GetSuccess(),
+			Success: true,
 			Message: "role deleted successfully",
 		},
 		Timestamp: timestamppb.Now(),
@@ -620,21 +593,15 @@ func (s *IAMGRPCService) AssignRole(ctx context.Context, req *platformv1.AssignI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.AssignRoleRequest{
-		TenantId: req.GetTenantId(),
-		UserId:   req.GetUserId(),
-		Role:     req.GetRoleId(),
-	}
-
-	resp, err := s.iamClient.AssignRole(ctx, grpcReq)
+	err := s.iamClient.User().AssignRole(ctx, req.GetTenantId(), req.GetUserId(), req.GetRoleId())
 	if err != nil {
 		s.logger.Error("failed to assign role", "error", err, "tenant_id", req.GetTenantId(), "user_id", req.GetUserId(), "role_id", req.GetRoleId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.AssignIAMRoleResponse{
 		Status: &platformv1.Status{
-			Success: resp.GetSuccess(),
+			Success: true,
 			Message: "role assigned successfully",
 		},
 		Timestamp: timestamppb.Now(),
@@ -664,21 +631,15 @@ func (s *IAMGRPCService) RevokeRole(ctx context.Context, req *platformv1.RevokeI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.RevokeRoleRequest{
-		TenantId: req.GetTenantId(),
-		UserId:   req.GetUserId(),
-		Role:     req.GetRoleId(),
-	}
-
-	resp, err := s.iamClient.RevokeRole(ctx, grpcReq)
+	err := s.iamClient.User().RevokeRole(ctx, req.GetTenantId(), req.GetUserId(), req.GetRoleId())
 	if err != nil {
 		s.logger.Error("failed to revoke role", "error", err, "tenant_id", req.GetTenantId(), "user_id", req.GetUserId(), "role_id", req.GetRoleId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.RevokeIAMRoleResponse{
 		Status: &platformv1.Status{
-			Success: resp.GetSuccess(),
+			Success: true,
 			Message: "role revoked successfully",
 		},
 		Timestamp: timestamppb.Now(),
@@ -711,21 +672,20 @@ func (s *IAMGRPCService) CreateGroup(ctx context.Context, req *platformv1.Create
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.CreateGroupRequest{
-		TenantId:    req.GetTenantId(),
-		Id:          req.GetId(),
+	sdkReq := &sdkiam.CreateGroupRequest{
+		ID:          req.GetId(),
 		Name:        req.GetName(),
 		Description: req.GetDescription(),
 	}
 
-	resp, err := s.iamClient.CreateGroup(ctx, grpcReq)
+	resp, err := s.iamClient.Group().Create(ctx, req.GetTenantId(), sdkReq)
 	if err != nil {
 		s.logger.Error("failed to create group", "error", err, "tenant_id", req.GetTenantId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMGroupResponse{
-		Group:     s.dragonGroupToPlatformGroup(resp),
+		Group:     sdkGroupToPlatformGroup(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -751,19 +711,14 @@ func (s *IAMGRPCService) GetGroup(ctx context.Context, req *platformv1.GetIAMGro
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.GetGroupRequest{
-		TenantId: req.GetTenantId(),
-		GroupId:  req.GetGroupId(),
-	}
-
-	resp, err := s.iamClient.GetGroup(ctx, grpcReq)
+	resp, err := s.iamClient.Group().Get(ctx, req.GetTenantId(), req.GetGroupId())
 	if err != nil {
 		s.logger.Error("failed to get group", "error", err, "tenant_id", req.GetTenantId(), "group_id", req.GetGroupId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMGroupResponse{
-		Group:     s.dragonGroupToPlatformGroup(resp),
+		Group:     sdkGroupToPlatformGroup(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -786,31 +741,31 @@ func (s *IAMGRPCService) ListGroups(ctx context.Context, req *platformv1.ListIAM
 
 	limit, offset := s.getPagination(req.GetPagination())
 
-	grpcReq := &iampb.ListGroupsRequest{
-		TenantId: req.GetTenantId(),
-		Limit:    limit,
-		Offset:   offset,
+	sdkReq := &sdkiam.ListGroupsRequest{
+		PageSize: int(limit),
 	}
 
-	resp, err := s.iamClient.ListGroups(ctx, grpcReq)
+	resp, err := s.iamClient.Group().List(ctx, req.GetTenantId(), sdkReq)
 	if err != nil {
 		s.logger.Error("failed to list groups", "error", err, "tenant_id", req.GetTenantId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
-	groups := make([]*platformv1.IAMGroup, 0, len(resp.GetGroups()))
-	for _, g := range resp.GetGroups() {
-		groups = append(groups, s.dragonGroupToPlatformGroup(g))
+	groups := make([]*platformv1.IAMGroup, 0, len(resp.Groups))
+	for i := range resp.Groups {
+		groups = append(groups, sdkGroupToPlatformGroup(&resp.Groups[i]))
 	}
+
+	totalCount := int64(resp.Pagination.TotalCount)
 
 	return &platformv1.ListIAMGroupsResponse{
 		Groups: groups,
 		Pagination: &platformv1.PaginationResponse{
 			Page:       uint32(offset/limit) + 1,
 			PageSize:   uint32(limit),
-			TotalItems: uint64(resp.GetTotal()),
+			TotalItems: uint64(totalCount),
 		},
-		Total:     int64(resp.GetTotal()),
+		Total:     totalCount,
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -834,21 +789,19 @@ func (s *IAMGRPCService) UpdateGroup(ctx context.Context, req *platformv1.Update
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.UpdateGroupRequest{
-		TenantId:    req.GetTenantId(),
-		GroupId:     req.GetGroupId(),
+	sdkReq := &sdkiam.UpdateGroupRequest{
 		Name:        req.GetName(),
 		Description: req.GetDescription(),
 	}
 
-	resp, err := s.iamClient.UpdateGroup(ctx, grpcReq)
+	resp, err := s.iamClient.Group().Update(ctx, req.GetTenantId(), req.GetGroupId(), sdkReq)
 	if err != nil {
 		s.logger.Error("failed to update group", "error", err, "tenant_id", req.GetTenantId(), "group_id", req.GetGroupId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMGroupResponse{
-		Group:     s.dragonGroupToPlatformGroup(resp),
+		Group:     sdkGroupToPlatformGroup(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -874,20 +827,15 @@ func (s *IAMGRPCService) DeleteGroup(ctx context.Context, req *platformv1.Delete
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.DeleteGroupRequest{
-		TenantId: req.GetTenantId(),
-		GroupId:  req.GetGroupId(),
-	}
-
-	resp, err := s.iamClient.DeleteGroup(ctx, grpcReq)
+	err := s.iamClient.Group().Delete(ctx, req.GetTenantId(), req.GetGroupId())
 	if err != nil {
 		s.logger.Error("failed to delete group", "error", err, "tenant_id", req.GetTenantId(), "group_id", req.GetGroupId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.DeleteIAMGroupResponse{
 		Status: &platformv1.Status{
-			Success: resp.GetSuccess(),
+			Success: true,
 			Message: "group deleted successfully",
 		},
 		Timestamp: timestamppb.Now(),
@@ -918,21 +866,15 @@ func (s *IAMGRPCService) AddGroupMember(ctx context.Context, req *platformv1.Add
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.AddUserToGroupRequest{
-		TenantId: req.GetTenantId(),
-		GroupId:  req.GetGroupId(),
-		UserId:   req.GetUserId(),
-	}
-
-	resp, err := s.iamClient.AddUserToGroup(ctx, grpcReq)
+	err := s.iamClient.Group().AddMember(ctx, req.GetTenantId(), req.GetGroupId(), req.GetUserId())
 	if err != nil {
 		s.logger.Error("failed to add group member", "error", err, "tenant_id", req.GetTenantId(), "group_id", req.GetGroupId(), "user_id", req.GetUserId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.AddGroupMemberResponse{
 		Status: &platformv1.Status{
-			Success: resp.GetSuccess(),
+			Success: true,
 			Message: "member added successfully",
 		},
 		Timestamp: timestamppb.Now(),
@@ -963,21 +905,15 @@ func (s *IAMGRPCService) RemoveGroupMember(ctx context.Context, req *platformv1.
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.RemoveUserFromGroupRequest{
-		TenantId: req.GetTenantId(),
-		GroupId:  req.GetGroupId(),
-		UserId:   req.GetUserId(),
-	}
-
-	resp, err := s.iamClient.RemoveUserFromGroup(ctx, grpcReq)
+	err := s.iamClient.Group().RemoveMember(ctx, req.GetTenantId(), req.GetGroupId(), req.GetUserId())
 	if err != nil {
 		s.logger.Error("failed to remove group member", "error", err, "tenant_id", req.GetTenantId(), "group_id", req.GetGroupId(), "user_id", req.GetUserId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.RemoveGroupMemberResponse{
 		Status: &platformv1.Status{
-			Success: resp.GetSuccess(),
+			Success: true,
 			Message: "member removed successfully",
 		},
 		Timestamp: timestamppb.Now(),
@@ -1019,34 +955,48 @@ func (s *IAMGRPCService) CheckPermission(ctx context.Context, req *platformv1.Ch
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	subject := &iampb.Subject{
-		Id:         req.GetSubjectId(),
-		TenantId:   req.GetTenantId(),
-		Roles:      req.GetRoles(),
-		Groups:     req.GetGroups(),
-		Attributes: req.GetAttributes(),
+	// Convert attributes from map[string]string to map[string]interface{}
+	var attrs map[string]interface{}
+	if reqAttrs := req.GetAttributes(); len(reqAttrs) > 0 {
+		attrs = make(map[string]interface{}, len(reqAttrs))
+		for k, v := range reqAttrs {
+			attrs[k] = v
+		}
 	}
 
-	// Use CheckRequest (not CheckPermissionRequest) as per go-quicbaas's API
-	grpcReq := &iampb.CheckRequest{
-		Subject:  subject,
+	// Convert context from map[string]string to map[string]interface{}
+	var reqContext map[string]interface{}
+	if reqCtx := req.GetContext(); len(reqCtx) > 0 {
+		reqContext = make(map[string]interface{}, len(reqCtx))
+		for k, v := range reqCtx {
+			reqContext[k] = v
+		}
+	}
+
+	sdkReq := &sdkiam.CheckRequest{
+		Subject: sdkiam.CheckSubject{
+			ID:         req.GetSubjectId(),
+			TenantID:   req.GetTenantId(),
+			Roles:      req.GetRoles(),
+			Groups:     req.GetGroups(),
+			Attributes: attrs,
+		},
 		Action:   req.GetAction(),
 		Resource: req.GetResource(),
-		Context:  req.GetContext(),
+		Context:  reqContext,
 	}
 
-	// Use Check method (not CheckPermission) as per go-quicbaas's PEP API
-	resp, err := s.pepClient.Check(ctx, grpcReq)
+	resp, err := s.pepClient.Check(ctx, sdkReq)
 	if err != nil {
 		s.logger.Error("failed to check permission", "error", err, "tenant_id", req.GetTenantId(), "subject_id", req.GetSubjectId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.CheckIAMPermissionResponse{
-		Allowed:          resp.GetAllowed(),
-		MatchedPolicy:    resp.GetMatchedPolicy(),
-		MatchedRule:      resp.GetMatchedRule(),
-		EvaluationTimeNs: resp.GetEvaluationTimeNs(),
+		Allowed:          resp.Allowed,
+		MatchedPolicy:    resp.MatchedPolicy,
+		MatchedRule:      resp.MatchedRule,
+		EvaluationTimeNs: resp.EvaluationTimeNs,
 		Timestamp:        timestamppb.Now(),
 	}, nil
 }
@@ -1101,28 +1051,28 @@ func (s *IAMGRPCService) CreateTenant(ctx context.Context, req *platformv1.Creat
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	var settings *iampb.TenantSettings
+	// Convert settings to SDK format
+	settings := make(map[string]string)
 	if req.GetSettings() != nil {
-		settings = &iampb.TenantSettings{
-			MaxUsers:    req.GetSettings().GetMaxUsers(),
-			MfaRequired: req.GetSettings().GetMfaRequired(),
+		if req.GetSettings().GetMfaRequired() {
+			settings["mfa_required"] = "true"
 		}
 	}
 
-	grpcReq := &iampb.CreateTenantRequest{
-		Id:       req.GetId(),
+	sdkReq := &sdkiam.CreateTenantRequest{
+		ID:       req.GetId(),
 		Name:     req.GetName(),
 		Settings: settings,
 	}
 
-	resp, err := s.iamClient.CreateTenant(ctx, grpcReq)
+	resp, err := s.iamClient.Tenant().Create(ctx, sdkReq)
 	if err != nil {
 		s.logger.Error("failed to create tenant", "error", err, "tenant_id", req.GetId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMTenantResponse{
-		Tenant:    s.dragonTenantToPlatformTenant(resp),
+		Tenant:    sdkTenantToPlatformTenant(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1145,18 +1095,14 @@ func (s *IAMGRPCService) GetTenant(ctx context.Context, req *platformv1.GetIAMTe
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.GetTenantRequest{
-		Id: req.GetTenantId(),
-	}
-
-	resp, err := s.iamClient.GetTenant(ctx, grpcReq)
+	resp, err := s.iamClient.Tenant().Get(ctx, req.GetTenantId())
 	if err != nil {
 		s.logger.Error("failed to get tenant", "error", err, "tenant_id", req.GetTenantId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMTenantResponse{
-		Tenant:    s.dragonTenantToPlatformTenant(resp),
+		Tenant:    sdkTenantToPlatformTenant(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1174,30 +1120,31 @@ func (s *IAMGRPCService) ListTenants(ctx context.Context, req *platformv1.ListIA
 
 	limit, offset := s.getPagination(req.GetPagination())
 
-	grpcReq := &iampb.ListTenantsRequest{
-		Limit:  limit,
-		Offset: offset,
+	sdkReq := &sdkiam.ListTenantsRequest{
+		PageSize: int(limit),
 	}
 
-	resp, err := s.iamClient.ListTenants(ctx, grpcReq)
+	resp, err := s.iamClient.Tenant().List(ctx, sdkReq)
 	if err != nil {
 		s.logger.Error("failed to list tenants", "error", err)
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
-	tenants := make([]*platformv1.IAMTenant, 0, len(resp.GetTenants()))
-	for _, t := range resp.GetTenants() {
-		tenants = append(tenants, s.dragonTenantToPlatformTenant(t))
+	tenants := make([]*platformv1.IAMTenant, 0, len(resp.Tenants))
+	for i := range resp.Tenants {
+		tenants = append(tenants, sdkTenantToPlatformTenant(&resp.Tenants[i]))
 	}
+
+	totalCount := int64(resp.Pagination.TotalCount)
 
 	return &platformv1.ListIAMTenantsResponse{
 		Tenants: tenants,
 		Pagination: &platformv1.PaginationResponse{
 			Page:       uint32(offset/limit) + 1,
 			PageSize:   uint32(limit),
-			TotalItems: uint64(resp.GetTotal()),
+			TotalItems: uint64(totalCount),
 		},
-		Total:     int64(resp.GetTotal()),
+		Total:     totalCount,
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1218,28 +1165,27 @@ func (s *IAMGRPCService) UpdateTenant(ctx context.Context, req *platformv1.Updat
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	var settings *iampb.TenantSettings
+	// Convert settings to SDK format
+	settings := make(map[string]string)
 	if req.GetSettings() != nil {
-		settings = &iampb.TenantSettings{
-			MaxUsers:    req.GetSettings().GetMaxUsers(),
-			MfaRequired: req.GetSettings().GetMfaRequired(),
+		if req.GetSettings().GetMfaRequired() {
+			settings["mfa_required"] = "true"
 		}
 	}
 
-	grpcReq := &iampb.UpdateTenantRequest{
-		Id:       req.GetTenantId(),
-		Name:     req.GetName(),
-		Settings: settings,
+	sdkReq := &sdkiam.UpdateTenantRequest{
+		DisplayName: req.GetName(),
+		Settings:    settings,
 	}
 
-	resp, err := s.iamClient.UpdateTenant(ctx, grpcReq)
+	resp, err := s.iamClient.Tenant().Update(ctx, req.GetTenantId(), sdkReq)
 	if err != nil {
 		s.logger.Error("failed to update tenant", "error", err, "tenant_id", req.GetTenantId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMTenantResponse{
-		Tenant:    s.dragonTenantToPlatformTenant(resp),
+		Tenant:    sdkTenantToPlatformTenant(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1262,19 +1208,15 @@ func (s *IAMGRPCService) DeleteTenant(ctx context.Context, req *platformv1.Delet
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.DeleteTenantRequest{
-		Id: req.GetTenantId(),
-	}
-
-	resp, err := s.iamClient.DeleteTenant(ctx, grpcReq)
+	err := s.iamClient.Tenant().Delete(ctx, req.GetTenantId())
 	if err != nil {
 		s.logger.Error("failed to delete tenant", "error", err, "tenant_id", req.GetTenantId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.DeleteIAMTenantResponse{
 		Status: &platformv1.Status{
-			Success: resp.GetSuccess(),
+			Success: true,
 			Message: "tenant deleted successfully",
 		},
 		Timestamp: timestamppb.Now(),
@@ -1310,23 +1252,22 @@ func (s *IAMGRPCService) CreatePolicy(ctx context.Context, req *platformv1.Creat
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.CreatePolicyRequest{
-		TenantId:    req.GetTenantId(),
+	sdkReq := &sdkiam.CreatePolicyRequest{
 		Name:        req.GetName(),
 		Description: req.GetDescription(),
-		Priority:    req.GetPriority(),
-		SpecYaml:    req.GetSpecYaml(),
+		Priority:    int(req.GetPriority()),
+		SpecYAML:    req.GetSpecYaml(),
 		Labels:      req.GetLabels(),
 	}
 
-	resp, err := s.iamClient.CreatePolicy(ctx, grpcReq)
+	resp, err := s.iamClient.Policy().Create(ctx, req.GetTenantId(), sdkReq)
 	if err != nil {
 		s.logger.Error("failed to create policy", "error", err, "tenant_id", req.GetTenantId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMPolicyResponse{
-		Policy:    s.dragonPolicyToPlatformPolicy(resp),
+		Policy:    sdkPolicyToPlatformPolicy(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1352,19 +1293,14 @@ func (s *IAMGRPCService) GetPolicy(ctx context.Context, req *platformv1.GetIAMPo
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.GetPolicyRequest{
-		TenantId:   req.GetTenantId(),
-		PolicyName: req.GetPolicyName(),
-	}
-
-	resp, err := s.iamClient.GetPolicy(ctx, grpcReq)
+	resp, err := s.iamClient.Policy().Get(ctx, req.GetTenantId(), req.GetPolicyName())
 	if err != nil {
 		s.logger.Error("failed to get policy", "error", err, "tenant_id", req.GetTenantId(), "policy_name", req.GetPolicyName())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMPolicyResponse{
-		Policy:    s.dragonPolicyToPlatformPolicy(resp),
+		Policy:    sdkPolicyToPlatformPolicy(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1387,31 +1323,31 @@ func (s *IAMGRPCService) ListPolicies(ctx context.Context, req *platformv1.ListI
 
 	limit, offset := s.getPagination(req.GetPagination())
 
-	grpcReq := &iampb.ListPoliciesRequest{
-		TenantId: req.GetTenantId(),
-		Limit:    limit,
-		Offset:   offset,
+	sdkReq := &sdkiam.ListPoliciesRequest{
+		Limit: int(limit),
 	}
 
-	resp, err := s.iamClient.ListPolicies(ctx, grpcReq)
+	resp, err := s.iamClient.Policy().List(ctx, req.GetTenantId(), sdkReq)
 	if err != nil {
 		s.logger.Error("failed to list policies", "error", err, "tenant_id", req.GetTenantId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
-	policies := make([]*platformv1.IAMPolicy, 0, len(resp.GetPolicies()))
-	for _, p := range resp.GetPolicies() {
-		policies = append(policies, s.dragonPolicyToPlatformPolicy(p))
+	policies := make([]*platformv1.IAMPolicy, 0, len(resp.Policies))
+	for i := range resp.Policies {
+		policies = append(policies, sdkPolicyToPlatformPolicy(&resp.Policies[i]))
 	}
+
+	totalCount := resp.TotalCount
 
 	return &platformv1.ListIAMPoliciesResponse{
 		Policies: policies,
 		Pagination: &platformv1.PaginationResponse{
 			Page:       uint32(offset/limit) + 1,
 			PageSize:   uint32(limit),
-			TotalItems: uint64(resp.GetTotal()),
+			TotalItems: uint64(totalCount),
 		},
-		Total:     int64(resp.GetTotal()),
+		Total:     totalCount,
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1437,23 +1373,23 @@ func (s *IAMGRPCService) UpdatePolicy(ctx context.Context, req *platformv1.Updat
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.UpdatePolicyRequest{
-		TenantId:    req.GetTenantId(),
-		PolicyName:  req.GetPolicyName(),
-		Description: req.GetDescription(),
-		Priority:    req.GetPriority(),
-		SpecYaml:    req.GetSpecYaml(),
+	desc := req.GetDescription()
+	priority := int(req.GetPriority())
+
+	sdkReq := &sdkiam.UpdatePolicyRequest{
+		Description: &desc,
+		Priority:    &priority,
 		Labels:      req.GetLabels(),
 	}
 
-	resp, err := s.iamClient.UpdatePolicy(ctx, grpcReq)
+	resp, err := s.iamClient.Policy().Update(ctx, req.GetTenantId(), req.GetPolicyName(), sdkReq)
 	if err != nil {
 		s.logger.Error("failed to update policy", "error", err, "tenant_id", req.GetTenantId(), "policy_name", req.GetPolicyName())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMPolicyResponse{
-		Policy:    s.dragonPolicyToPlatformPolicy(resp),
+		Policy:    sdkPolicyToPlatformPolicy(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1479,20 +1415,15 @@ func (s *IAMGRPCService) DeletePolicy(ctx context.Context, req *platformv1.Delet
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.DeletePolicyRequest{
-		TenantId:   req.GetTenantId(),
-		PolicyName: req.GetPolicyName(),
-	}
-
-	resp, err := s.iamClient.DeletePolicy(ctx, grpcReq)
+	err := s.iamClient.Policy().Delete(ctx, req.GetTenantId(), req.GetPolicyName())
 	if err != nil {
 		s.logger.Error("failed to delete policy", "error", err, "tenant_id", req.GetTenantId(), "policy_name", req.GetPolicyName())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.DeleteIAMPolicyResponse{
 		Status: &platformv1.Status{
-			Success: resp.GetSuccess(),
+			Success: true,
 			Message: "policy deleted successfully",
 		},
 		Timestamp: timestamppb.Now(),
@@ -1520,20 +1451,25 @@ func (s *IAMGRPCService) ValidatePolicy(ctx context.Context, req *platformv1.Val
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.ValidatePolicyRequest{
-		TenantId: req.GetTenantId(),
-		SpecYaml: req.GetSpecYaml(),
+	policy := &sdkiam.Policy{
+		SpecYAML: req.GetSpecYaml(),
 	}
 
-	resp, err := s.iamClient.ValidatePolicy(ctx, grpcReq)
+	resp, err := s.iamClient.Policy().Validate(ctx, req.GetTenantId(), policy)
 	if err != nil {
 		s.logger.Error("failed to validate policy", "error", err, "tenant_id", req.GetTenantId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
+	}
+
+	// Convert validation errors to string slice
+	var errors []string
+	for _, ve := range resp.Errors {
+		errors = append(errors, ve.Message)
 	}
 
 	return &platformv1.ValidateIAMPolicyResponse{
-		Valid:     resp.GetValid(),
-		Errors:    resp.GetErrors(),
+		Valid:     resp.Valid,
+		Errors:    errors,
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1567,33 +1503,62 @@ func (s *IAMGRPCService) TestPolicy(ctx context.Context, req *platformv1.TestIAM
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	subject := &iampb.Subject{
-		Id:         req.GetSubjectId(),
-		TenantId:   req.GetTenantId(),
-		Roles:      req.GetRoles(),
-		Groups:     req.GetGroups(),
-		Attributes: req.GetAttributes(),
+	// Convert attributes from map[string]string to map[string]interface{}
+	var attrs map[string]interface{}
+	if reqAttrs := req.GetAttributes(); len(reqAttrs) > 0 {
+		attrs = make(map[string]interface{}, len(reqAttrs))
+		for k, v := range reqAttrs {
+			attrs[k] = v
+		}
 	}
 
-	grpcReq := &iampb.TestPolicyRequest{
-		TenantId: req.GetTenantId(),
-		Subject:  subject,
-		Action:   req.GetAction(),
-		Resource: req.GetResource(),
-		Context:  req.GetContext(),
+	// Convert context from map[string]string to map[string]interface{}
+	var reqContext map[string]interface{}
+	if reqCtx := req.GetContext(); len(reqCtx) > 0 {
+		reqContext = make(map[string]interface{}, len(reqCtx))
+		for k, v := range reqCtx {
+			reqContext[k] = v
+		}
 	}
 
-	resp, err := s.iamClient.TestPolicy(ctx, grpcReq)
+	sdkReq := &sdkiam.TestPolicyRequest{
+		TestCases: []sdkiam.TestCase{
+			{
+				Name: "check",
+				Subject: sdkiam.Subject{
+					ID:         req.GetSubjectId(),
+					TenantID:   req.GetTenantId(),
+					Roles:      req.GetRoles(),
+					Groups:     req.GetGroups(),
+					Attributes: attrs,
+				},
+				Action:   req.GetAction(),
+				Resource: req.GetResource(),
+				Context:  reqContext,
+			},
+		},
+	}
+
+	resp, err := s.iamClient.Policy().Test(ctx, req.GetTenantId(), sdkReq)
 	if err != nil {
 		s.logger.Error("failed to test policy", "error", err, "tenant_id", req.GetTenantId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
+	}
+
+	// Extract result from the first test case
+	var allowed bool
+	var matchedRule string
+	var evalTimeNs int64
+	if len(resp.Results) > 0 {
+		allowed = resp.Results[0].Passed
+		matchedRule = resp.Results[0].MatchedRule
+		evalTimeNs = resp.Results[0].EvaluationTimeNs
 	}
 
 	return &platformv1.TestIAMPolicyResponse{
-		Allowed:          resp.GetAllowed(),
-		MatchedPolicy:    resp.GetMatchedPolicy(),
-		MatchedRule:      resp.GetMatchedRule(),
-		EvaluationTimeNs: resp.GetEvaluationTimeNs(),
+		Allowed:          allowed,
+		MatchedRule:      matchedRule,
+		EvaluationTimeNs: evalTimeNs,
 		Timestamp:        timestamppb.Now(),
 	}, nil
 }
@@ -1624,23 +1589,27 @@ func (s *IAMGRPCService) RegisterApp(ctx context.Context, req *platformv1.Regist
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.RegisterAppRequest{
-		TenantId:       req.GetTenantId(),
-		Name:           req.GetName(),
-		RedirectUris:   req.GetRedirectUris(),
-		GrantTypes:     req.GetGrantTypes(),
-		ResponseTypes:  req.GetResponseTypes(),
-		ResourcePrefix: req.GetResourcePrefix(),
+	// Convert grant types from string to SDK GrantType
+	grantTypes := make([]sdkiam.GrantType, 0, len(req.GetGrantTypes()))
+	for _, gt := range req.GetGrantTypes() {
+		grantTypes = append(grantTypes, sdkiam.ParseGrantType(gt))
 	}
 
-	resp, err := s.iamClient.RegisterApp(ctx, grpcReq)
+	sdkReq := &sdkiam.RegisterAppRequest{
+		Name:          req.GetName(),
+		RedirectURIs:  req.GetRedirectUris(),
+		GrantTypes:    grantTypes,
+		ResponseTypes: req.GetResponseTypes(),
+	}
+
+	resp, err := s.iamClient.App().Register(ctx, req.GetTenantId(), sdkReq)
 	if err != nil {
 		s.logger.Error("failed to register app", "error", err, "tenant_id", req.GetTenantId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMAppResponse{
-		App:       s.dragonAppToPlatformApp(resp),
+		App:       sdkAppToPlatformApp(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1666,19 +1635,14 @@ func (s *IAMGRPCService) GetApp(ctx context.Context, req *platformv1.GetIAMAppRe
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.GetAppRequest{
-		TenantId: req.GetTenantId(),
-		ClientId: req.GetClientId(),
-	}
-
-	resp, err := s.iamClient.GetApp(ctx, grpcReq)
+	resp, err := s.iamClient.App().Get(ctx, req.GetTenantId(), req.GetClientId())
 	if err != nil {
 		s.logger.Error("failed to get app", "error", err, "tenant_id", req.GetTenantId(), "client_id", req.GetClientId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMAppResponse{
-		App:       s.dragonAppToPlatformApp(resp),
+		App:       sdkAppToPlatformApp(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1701,31 +1665,27 @@ func (s *IAMGRPCService) ListApps(ctx context.Context, req *platformv1.ListIAMAp
 
 	limit, offset := s.getPagination(req.GetPagination())
 
-	grpcReq := &iampb.ListAppsRequest{
-		TenantId: req.GetTenantId(),
-		Limit:    limit,
-		Offset:   offset,
-	}
-
-	resp, err := s.iamClient.ListApps(ctx, grpcReq)
+	resp, err := s.iamClient.App().List(ctx, req.GetTenantId())
 	if err != nil {
 		s.logger.Error("failed to list apps", "error", err, "tenant_id", req.GetTenantId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
-	apps := make([]*platformv1.IAMApp, 0, len(resp.GetApps()))
-	for _, a := range resp.GetApps() {
-		apps = append(apps, s.dragonAppToPlatformApp(a))
+	apps := make([]*platformv1.IAMApp, 0, len(resp.Applications))
+	for i := range resp.Applications {
+		apps = append(apps, sdkAppToPlatformApp(&resp.Applications[i]))
 	}
+
+	totalCount := int64(resp.TotalCount)
 
 	return &platformv1.ListIAMAppsResponse{
 		Apps: apps,
 		Pagination: &platformv1.PaginationResponse{
 			Page:       uint32(offset/limit) + 1,
 			PageSize:   uint32(limit),
-			TotalItems: uint64(resp.GetTotal()),
+			TotalItems: uint64(totalCount),
 		},
-		Total:     int64(resp.GetTotal()),
+		Total:     totalCount,
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1749,24 +1709,27 @@ func (s *IAMGRPCService) UpdateApp(ctx context.Context, req *platformv1.UpdateIA
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.UpdateAppRequest{
-		TenantId:       req.GetTenantId(),
-		ClientId:       req.GetClientId(),
-		Name:           req.GetName(),
-		RedirectUris:   req.GetRedirectUris(),
-		GrantTypes:     req.GetGrantTypes(),
-		ResponseTypes:  req.GetResponseTypes(),
-		ResourcePrefix: req.GetResourcePrefix(),
+	// Convert grant types from string to SDK GrantType
+	grantTypes := make([]sdkiam.GrantType, 0, len(req.GetGrantTypes()))
+	for _, gt := range req.GetGrantTypes() {
+		grantTypes = append(grantTypes, sdkiam.ParseGrantType(gt))
 	}
 
-	resp, err := s.iamClient.UpdateApp(ctx, grpcReq)
+	sdkReq := &sdkiam.UpdateAppRequest{
+		Name:          req.GetName(),
+		RedirectURIs:  req.GetRedirectUris(),
+		GrantTypes:    grantTypes,
+		ResponseTypes: req.GetResponseTypes(),
+	}
+
+	resp, err := s.iamClient.App().Update(ctx, req.GetTenantId(), req.GetClientId(), sdkReq)
 	if err != nil {
 		s.logger.Error("failed to update app", "error", err, "tenant_id", req.GetTenantId(), "client_id", req.GetClientId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.IAMAppResponse{
-		App:       s.dragonAppToPlatformApp(resp),
+		App:       sdkAppToPlatformApp(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1792,20 +1755,15 @@ func (s *IAMGRPCService) DeleteApp(ctx context.Context, req *platformv1.DeleteIA
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.DeleteAppRequest{
-		TenantId: req.GetTenantId(),
-		ClientId: req.GetClientId(),
-	}
-
-	resp, err := s.iamClient.DeleteApp(ctx, grpcReq)
+	err := s.iamClient.App().Delete(ctx, req.GetTenantId(), req.GetClientId())
 	if err != nil {
 		s.logger.Error("failed to delete app", "error", err, "tenant_id", req.GetTenantId(), "client_id", req.GetClientId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.DeleteIAMAppResponse{
 		Status: &platformv1.Status{
-			Success: resp.GetSuccess(),
+			Success: true,
 			Message: "app deleted successfully",
 		},
 		Timestamp: timestamppb.Now(),
@@ -1833,21 +1791,15 @@ func (s *IAMGRPCService) RotateAppSecret(ctx context.Context, req *platformv1.Ro
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	grpcReq := &iampb.RotateAppSecretRequest{
-		TenantId: req.GetTenantId(),
-		ClientId: req.GetClientId(),
-	}
-
-	resp, err := s.iamClient.RotateAppSecret(ctx, grpcReq)
+	resp, err := s.iamClient.App().RotateSecret(ctx, req.GetTenantId(), req.GetClientId())
 	if err != nil {
 		s.logger.Error("failed to rotate app secret", "error", err, "tenant_id", req.GetTenantId(), "client_id", req.GetClientId())
-		return nil, s.convertGRPCError(err)
+		return nil, s.wrapError(err)
 	}
 
 	return &platformv1.RotateIAMAppSecretResponse{
-		ClientId:     resp.GetClientId(),
-		Name:         resp.GetName(),
-		ClientSecret: resp.GetClientSecret(),
+		ClientId:     resp.ClientID,
+		ClientSecret: resp.ClientSecret,
 		Timestamp:    timestamppb.Now(),
 	}, nil
 }
@@ -1879,11 +1831,11 @@ func (s *IAMGRPCService) getPagination(req *platformv1.PaginationRequest) (limit
 	return limit, offset
 }
 
-// convertGRPCError converts gRPC status errors to the appropriate response.
+// wrapError converts errors to gRPC status errors with appropriate codes.
 //
 // If the error is already a gRPC status, it preserves the code and message.
 // Otherwise, it wraps the error as an Internal error.
-func (s *IAMGRPCService) convertGRPCError(err error) error {
+func (s *IAMGRPCService) wrapError(err error) error {
 	st, ok := status.FromError(err)
 	if !ok {
 		return status.Error(codes.Internal, err.Error())
@@ -1891,122 +1843,135 @@ func (s *IAMGRPCService) convertGRPCError(err error) error {
 	return status.Error(st.Code(), st.Message())
 }
 
-// dragonUserToPlatformUser converts a QuicBaaS user to a platform user.
+// =============================================================================
+// SDK-to-Platform Type Conversion Functions
+// =============================================================================
+
+// sdkUserToPlatformUser converts a QuicBaaS SDK user to a platform user.
 //
 // Returns nil if the input is nil, enabling safe chaining.
-func (s *IAMGRPCService) dragonUserToPlatformUser(u *iampb.User) *platformv1.IAMUser {
+func sdkUserToPlatformUser(u *sdkiam.User) *platformv1.IAMUser {
 	if u == nil {
 		return nil
 	}
-	return &platformv1.IAMUser{
-		Id:          u.GetId(),
-		TenantId:    u.GetTenantId(),
-		Email:       u.GetEmail(),
-		Name:        u.GetName(),
-		Roles:       u.GetRoles(),
-		Groups:      u.GetGroups(),
-		Attributes:  u.GetAttributes(),
-		MfaVerified: u.GetMfaVerified(),
-		CreatedAt:   u.GetCreatedAt(),
-		UpdatedAt:   u.GetUpdatedAt(),
-		LastAuth:    u.GetLastAuth(),
+
+	// Convert Metadata (map[string]string) to Attributes for platform compatibility
+	result := &platformv1.IAMUser{
+		Id:          u.ID,
+		TenantId:    u.TenantID,
+		Email:       u.Email,
+		Name:        u.DisplayName,
+		Roles:       u.Roles,
+		Groups:      u.Groups,
+		Attributes:  u.Metadata,
+		MfaVerified: u.MFAEnabled,
+		CreatedAt:   timestamppb.New(u.CreatedAt),
+		UpdatedAt:   timestamppb.New(u.UpdatedAt),
 	}
+	if u.LastLoginAt != nil {
+		result.LastAuth = timestamppb.New(*u.LastLoginAt)
+	}
+	return result
 }
 
-// dragonRoleToPlatformRole converts a QuicBaaS role to a platform role.
+// sdkRoleToPlatformRole converts a QuicBaaS SDK role to a platform role.
 //
 // Returns nil if the input is nil, enabling safe chaining.
-func (s *IAMGRPCService) dragonRoleToPlatformRole(r *iampb.Role) *platformv1.IAMRole {
+func sdkRoleToPlatformRole(r *sdkiam.Role) *platformv1.IAMRole {
 	if r == nil {
 		return nil
 	}
 	return &platformv1.IAMRole{
-		Id:          r.GetId(),
-		TenantId:    r.GetTenantId(),
-		Name:        r.GetName(),
-		Description: r.GetDescription(),
-		Permissions: r.GetPermissions(),
-		CreatedAt:   r.GetCreatedAt(),
-		UpdatedAt:   r.GetUpdatedAt(),
+		Id:          r.ID,
+		TenantId:    r.TenantID,
+		Name:        r.Name,
+		Description: r.Description,
+		Permissions: r.Permissions,
+		CreatedAt:   timestamppb.New(r.CreatedAt),
+		UpdatedAt:   timestamppb.New(r.UpdatedAt),
 	}
 }
 
-// dragonGroupToPlatformGroup converts a QuicBaaS group to a platform group.
+// sdkGroupToPlatformGroup converts a QuicBaaS SDK group to a platform group.
 //
 // Returns nil if the input is nil, enabling safe chaining.
-func (s *IAMGRPCService) dragonGroupToPlatformGroup(g *iampb.Group) *platformv1.IAMGroup {
+func sdkGroupToPlatformGroup(g *sdkiam.Group) *platformv1.IAMGroup {
 	if g == nil {
 		return nil
 	}
 	return &platformv1.IAMGroup{
-		Id:          g.GetId(),
-		TenantId:    g.GetTenantId(),
-		Name:        g.GetName(),
-		Description: g.GetDescription(),
-		Members:     g.GetMembers(),
-		CreatedAt:   g.GetCreatedAt(),
-		UpdatedAt:   g.GetUpdatedAt(),
+		Id:          g.ID,
+		TenantId:    g.TenantID,
+		Name:        g.Name,
+		Description: g.Description,
+		CreatedAt:   timestamppb.New(g.CreatedAt),
+		UpdatedAt:   timestamppb.New(g.UpdatedAt),
 	}
 }
 
-// dragonTenantToPlatformTenant converts a QuicBaaS tenant to a platform tenant.
+// sdkTenantToPlatformTenant converts a QuicBaaS SDK tenant to a platform tenant.
 //
 // Returns nil if the input is nil, enabling safe chaining.
-func (s *IAMGRPCService) dragonTenantToPlatformTenant(t *iampb.Tenant) *platformv1.IAMTenant {
+func sdkTenantToPlatformTenant(t *sdkiam.Tenant) *platformv1.IAMTenant {
 	if t == nil {
 		return nil
 	}
 	tenant := &platformv1.IAMTenant{
-		Id:        t.GetId(),
-		Name:      t.GetName(),
-		CreatedAt: t.GetCreatedAt(),
-		UpdatedAt: t.GetUpdatedAt(),
+		Id:        t.ID,
+		Name:      t.Name,
+		CreatedAt: timestamppb.New(t.CreatedAt),
+		UpdatedAt: timestamppb.New(t.UpdatedAt),
 	}
-	if t.GetSettings() != nil {
+	if t.Settings != nil {
 		tenant.Settings = &platformv1.IAMTenantSettings{
-			MaxUsers:    t.GetSettings().GetMaxUsers(),
-			MfaRequired: t.GetSettings().GetMfaRequired(),
+			MfaRequired: t.Settings["mfa_required"] == "true",
 		}
 	}
 	return tenant
 }
 
-// dragonPolicyToPlatformPolicy converts a QuicBaaS policy to a platform policy.
+// sdkPolicyToPlatformPolicy converts a QuicBaaS SDK policy to a platform policy.
 //
 // Returns nil if the input is nil, enabling safe chaining.
-func (s *IAMGRPCService) dragonPolicyToPlatformPolicy(p *iampb.Policy) *platformv1.IAMPolicy {
+func sdkPolicyToPlatformPolicy(p *sdkiam.Policy) *platformv1.IAMPolicy {
 	if p == nil {
 		return nil
 	}
 	return &platformv1.IAMPolicy{
-		Name:        p.GetName(),
-		TenantId:    p.GetTenantId(),
-		Description: p.GetDescription(),
-		Priority:    p.GetPriority(),
-		SpecYaml:    p.GetSpecYaml(),
-		Labels:      p.GetLabels(),
-		CreatedAt:   p.GetCreatedAt(),
-		UpdatedAt:   p.GetUpdatedAt(),
+		Name:        p.Name,
+		TenantId:    p.TenantID,
+		Description: p.Description,
+		Priority:    int32(p.Priority),
+		SpecYaml:    p.SpecYAML,
+		Labels:      p.Labels,
+		CreatedAt:   timestamppb.New(p.CreatedAt),
+		UpdatedAt:   timestamppb.New(p.UpdatedAt),
 	}
 }
 
-// dragonAppToPlatformApp converts a QuicBaaS application to a platform application.
+// sdkAppToPlatformApp converts a QuicBaaS SDK application to a platform application.
 //
 // Returns nil if the input is nil, enabling safe chaining.
-func (s *IAMGRPCService) dragonAppToPlatformApp(a *iampb.Application) *platformv1.IAMApp {
+func sdkAppToPlatformApp(a *sdkiam.Application) *platformv1.IAMApp {
 	if a == nil {
 		return nil
 	}
+
+	// Convert grant types to string representation
+	grantTypes := make([]string, 0, len(a.GrantTypes))
+	for _, gt := range a.GrantTypes {
+		grantTypes = append(grantTypes, gt.String())
+	}
+
 	return &platformv1.IAMApp{
-		ClientId:       a.GetClientId(),
-		ClientSecret:   a.GetClientSecret(),
-		TenantId:       a.GetTenantId(),
-		Name:           a.GetName(),
-		RedirectUris:   a.GetRedirectUris(),
-		GrantTypes:     a.GetGrantTypes(),
-		ResponseTypes:  a.GetResponseTypes(),
-		ResourcePrefix: a.GetResourcePrefix(),
-		CreatedAt:      a.GetCreatedAt(),
-		UpdatedAt:      a.GetUpdatedAt(),
+		ClientId:      a.ClientID,
+		ClientSecret:  a.ClientSecret,
+		TenantId:      a.TenantID,
+		Name:          a.Name,
+		RedirectUris:  a.RedirectURIs,
+		GrantTypes:    grantTypes,
+		ResponseTypes: a.ResponseTypes,
+		CreatedAt:     timestamppb.New(a.CreatedAt),
+		UpdatedAt:     timestamppb.New(a.UpdatedAt),
 	}
 }

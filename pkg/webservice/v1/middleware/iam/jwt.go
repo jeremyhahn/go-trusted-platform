@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -396,10 +395,7 @@ func (m *JWTMiddleware) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	// Look up user in IAM service to ensure they still exist and get updated info
 	if m.iamService != nil {
 		ctx := r.Context()
-		user, err := m.iamService.GetUser(ctx, &iampb.GetUserRequest{
-			TenantId: claims.TenantID,
-			UserId:   claims.Subject,
-		})
+		user, err := m.iamService.GetUser(ctx, claims.TenantID, claims.Subject)
 		if err != nil {
 			m.logger.Debugf("jwt: failed to look up user during refresh: %v", err)
 			m.responseWriter.Error401(w, r, ErrUserNotFound{Identifier: claims.Subject})

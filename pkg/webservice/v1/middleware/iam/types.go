@@ -19,7 +19,7 @@ import (
 	"context"
 	"time"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
 // ContextKey is a typed key for context values to avoid collisions.
@@ -45,7 +45,7 @@ const (
 // IAMSession represents an authenticated session with IAM user details.
 type IAMSession interface {
 	// User returns the underlying IAM user.
-	User() *iampb.User
+	User() *iamsdk.User
 
 	// TenantID returns the tenant identifier.
 	TenantID() string
@@ -89,8 +89,8 @@ type IAMSession interface {
 	// GetAttribute returns a specific attribute value.
 	GetAttribute(key string) (string, bool)
 
-	// ToSubject converts the session to a PEP Subject for authorization checks.
-	ToSubject() *iampb.Subject
+	// ToSubject converts the session to a PEP CheckSubject for authorization checks.
+	ToSubject() *iamsdk.CheckSubject
 
 	// IsAttestationVerified returns whether TPM attestation was verified.
 	IsAttestationVerified() bool
@@ -105,37 +105,19 @@ type IAMSession interface {
 // IAMServiceClient defines the interface for IAM service operations.
 type IAMServiceClient interface {
 	// GetUser retrieves a user by tenant and user ID.
-	GetUser(ctx context.Context, req *iampb.GetUserRequest) (*iampb.User, error)
+	GetUser(ctx context.Context, tenantID, userID string) (*iamsdk.User, error)
 
-	// ListUsers lists users with optional filters.
-	ListUsers(ctx context.Context, req *iampb.ListUsersRequest) (*iampb.ListUsersResponse, error)
+	// ListUsersByEmail lists users filtered by email.
+	ListUsersByEmail(ctx context.Context, tenantID, email string) ([]iamsdk.User, error)
 }
 
 // PEPServiceClient defines the interface for Policy Enforcement Point operations.
 type PEPServiceClient interface {
 	// Check performs an authorization check.
-	Check(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error)
+	Check(ctx context.Context, req *iamsdk.CheckRequest) (*iamsdk.CheckResponse, error)
 
 	// CheckBatch performs batch authorization checks.
-	CheckBatch(ctx context.Context, req *iampb.CheckBatchRequest) (*iampb.CheckBatchResponse, error)
-}
-
-// MFAServiceClient defines the interface for MFA service operations.
-type MFAServiceClient interface {
-	// GetStatus retrieves the MFA status for a user.
-	GetStatus(ctx context.Context, req *iampb.GetMFAStatusRequest) (*iampb.GetMFAStatusResponse, error)
-
-	// VerifyCode verifies an MFA code.
-	VerifyCode(ctx context.Context, req *iampb.VerifyMFACodeRequest) (*iampb.VerifyMFACodeResponse, error)
-}
-
-// SessionServiceClient defines the interface for session service operations.
-type SessionServiceClient interface {
-	// GetSession retrieves a session by ID.
-	GetSession(ctx context.Context, req *iampb.GetSessionRequest) (*iampb.Session, error)
-
-	// RevokeSession revokes a session.
-	RevokeSession(ctx context.Context, req *iampb.RevokeSessionRequest) (*iampb.RevokeSessionResponse, error)
+	CheckBatch(ctx context.Context, req *iamsdk.CheckBatchRequest) (*iamsdk.CheckBatchResponse, error)
 }
 
 // JWTClaims represents the claims extracted from a JWT token.

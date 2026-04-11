@@ -212,8 +212,8 @@ func (handler *WebAuthnRestHandler) BeginRegistration(w http.ResponseWriter, r *
 		handler.writeConflictError(w, r, ErrUserAlreadyExists)
 		return
 	}
-	var dragonNotFound quicbaas.ErrNotFound
-	if !isNotFoundError(err, &dragonNotFound) {
+	var notFound quicbaas.ErrNotFound
+	if !isNotFoundError(err, &notFound) {
 		handler.responseWriter.Error400(w, r, err)
 		return
 	}
@@ -293,8 +293,8 @@ func (handler *WebAuthnRestHandler) FinishRegistration(w http.ResponseWriter, r 
 
 	existingUser, err := handler.userService.Get(r.Context(), userID)
 	if err != nil {
-		var dragonNotFound quicbaas.ErrNotFound
-		if !isNotFoundError(err, &dragonNotFound) {
+		var notFound quicbaas.ErrNotFound
+		if !isNotFoundError(err, &notFound) {
 			handler.responseWriter.Error500(w, r, err)
 			return
 		}
@@ -405,8 +405,8 @@ func (handler *WebAuthnRestHandler) BeginLogin(w http.ResponseWriter, r *http.Re
 
 	user, err := handler.userService.Get(r.Context(), userID)
 	if err != nil {
-		var dragonNotFound quicbaas.ErrNotFound
-		if isNotFoundError(err, &dragonNotFound) {
+		var notFound quicbaas.ErrNotFound
+		if isNotFoundError(err, &notFound) {
 			handler.responseWriter.Error400(w, r, ErrInvalidUserID)
 			return
 		}
@@ -637,11 +637,11 @@ func (handler *WebAuthnRestHandler) writeRegistrationError(w http.ResponseWriter
 }
 
 // isNotFoundError checks if the error is a not found error.
-func isNotFoundError(err error, dragonNotFound *quicbaas.ErrNotFound) bool {
+func isNotFoundError(err error, notFound *quicbaas.ErrNotFound) bool {
 	if err == datastore.ErrRecordNotFound {
 		return true
 	}
-	if dragonNotFound != nil {
+	if notFound != nil {
 		var dnf quicbaas.ErrNotFound
 		if errAs(err, &dnf) {
 			return true

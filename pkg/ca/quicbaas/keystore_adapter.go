@@ -25,7 +25,7 @@ import (
 	"strings"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
-	dragoncrypto "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
+	quicbaascrypto "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 
 	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
@@ -674,19 +674,19 @@ func (s *quicbaasSigner) Sign(rand io.Reader, digest []byte, opts crypto.SignerO
 	ctx := context.Background()
 
 	// Map crypto.SignerOpts to QuicBaaS hash algorithm
-	hashAlg := dragoncrypto.HashSHA256
+	hashAlg := quicbaascrypto.HashSHA256
 	if opts != nil {
 		switch opts.HashFunc() {
 		case crypto.SHA384:
-			hashAlg = dragoncrypto.HashSHA384
+			hashAlg = quicbaascrypto.HashSHA384
 		case crypto.SHA512:
-			hashAlg = dragoncrypto.HashSHA512
+			hashAlg = quicbaascrypto.HashSHA512
 		default:
-			hashAlg = dragoncrypto.HashSHA256
+			hashAlg = quicbaascrypto.HashSHA256
 		}
 	}
 
-	req := &dragoncrypto.SignRequest{
+	req := &quicbaascrypto.SignRequest{
 		KeyID:     s.keyID,
 		Data:      digest,
 		HashAlg:   hashAlg,
@@ -717,7 +717,7 @@ func (d *quicbaasDecrypter) Public() crypto.PublicKey {
 func (d *quicbaasDecrypter) Decrypt(rand io.Reader, ciphertext []byte, opts crypto.DecrypterOpts) ([]byte, error) {
 	ctx := context.Background()
 
-	req := &dragoncrypto.DecryptRequest{
+	req := &quicbaascrypto.DecryptRequest{
 		KeyID:      d.keyID,
 		Ciphertext: ciphertext,
 	}

@@ -36,6 +36,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/system"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/webauthn"
@@ -44,7 +45,6 @@ import (
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 
 	proto "github.com/jeremyhahn/go-quicbaas/api/proto"
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 )
 
@@ -403,7 +403,7 @@ type RestHandlerRegistry interface {
 	ACMERestService() trustedca.ACMERestServicer
 	DeviceRestHandler() device.RestHandler
 	ConfigDeliveryHandler() configdelivery.RestHandler
-	IAMClients() (iampb.IAMServiceClient, iampb.PEPServiceClient)
+	IAMClients() (restiam.IAMClient, restiam.PEPClient)
 	JSONWebTokenHandler() jwt.TokenHandler
 	KMSClients() (proto.KeyManagementClient, proto.CryptoClient, proto.DEKManagementClient, proto.SecretsManagementClient)
 	MTLSMiddleware() middleware.MTLSMiddleware
@@ -471,14 +471,14 @@ type RegistryParams struct {
 	DEKManagementClient     proto.DEKManagementClient
 	DNSConfig               *dns.Config
 	HTTPWriter              response.HttpWriter
-	IAMServiceClient        iampb.IAMServiceClient
+	IAMClient               restiam.IAMClient
 	XKMS                    XKMSSigner
 	KeyManagementClient     proto.KeyManagementClient
 	JWTAudience             string
 	JWTClaimsIssuer         string
 	JWTExpiration           int
 	Logger                  *logging.Logger
-	PEPServiceClient        iampb.PEPServiceClient
+	PEPClient               restiam.PEPClient
 	SDNEnrollmentHook       *policy.SDNEnrollmentHook
 	SDNService              platformv1.SDNServiceServer
 	SecretsManagementClient proto.SecretsManagementClient
@@ -530,8 +530,8 @@ func (registry *HandlerRegistry) KMSClients() (proto.KeyManagementClient, proto.
 	return registry.params.KeyManagementClient, registry.params.CryptoClient, registry.params.DEKManagementClient, registry.params.SecretsManagementClient
 }
 
-func (registry *HandlerRegistry) IAMClients() (iampb.IAMServiceClient, iampb.PEPServiceClient) {
-	return registry.params.IAMServiceClient, registry.params.PEPServiceClient
+func (registry *HandlerRegistry) IAMClients() (restiam.IAMClient, restiam.PEPClient) {
+	return registry.params.IAMClient, registry.params.PEPClient
 }
 
 func (registry *HandlerRegistry) SystemRestService() system.RestHandler {
