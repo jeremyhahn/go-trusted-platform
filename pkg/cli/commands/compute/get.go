@@ -21,6 +21,7 @@ import (
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 // diskBusToString maps DiskBus enum values to human-readable strings
@@ -135,20 +136,24 @@ func printFullVMDetails(printer *cli.Printer, vm *platformv1.VM) error {
 		}
 	}
 
-	printer.PrintKeyValue("State", formatVMState(vm.State))
+	printer.PrintKeyValue("State", formatVMState(computesvc.VMState(vm.State)))
 
 	if vm.HostId != "" {
 		printer.PrintKeyValue("Host ID", vm.HostId)
 	}
 
-	printer.PrintKeyValue("Created", formatTimestamp(vm.CreatedAt))
-	printer.PrintKeyValue("Updated", formatTimestamp(vm.UpdatedAt))
+	if vm.CreatedAt != nil {
+		printer.PrintKeyValue("Created", formatTimestamp(vm.CreatedAt.AsTime()))
+	}
+	if vm.UpdatedAt != nil {
+		printer.PrintKeyValue("Updated", formatTimestamp(vm.UpdatedAt.AsTime()))
+	}
 
 	if vm.Config != nil {
 		// Configuration
 		fmt.Println()
 		printer.PrintInfo("Configuration")
-		printer.PrintKeyValue("Firmware", formatFirmwareType(vm.Config.Firmware))
+		printer.PrintKeyValue("Firmware", formatFirmwareType(computesvc.FirmwareType(vm.Config.Firmware)))
 		printer.PrintKeyValue("Secure Boot", formatBool(vm.Config.SecureBoot))
 		if vm.Config.Tpm != nil {
 			printer.PrintKeyValue("vTPM", formatBool(vm.Config.Tpm.Enabled))

@@ -114,7 +114,7 @@ func setup() {
 		App.Logger.FatalError(err)
 	}
 
-	serviceRegistry, err := service.NewRegistry(App.Logger, nil, nil, nil, datastore)
+	serviceRegistry, err := service.NewRegistry(App.Logger, nil, nil, nil, nil, datastore)
 	if err != nil {
 		App.Logger.FatalError(err)
 	}

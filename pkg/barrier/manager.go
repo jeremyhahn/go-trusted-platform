@@ -311,6 +311,187 @@ func (m *Manager) Rekey(ctx context.Context, threshold, total int) (*quicbaassdk
 	return resp, nil
 }
 
+// CeremonyInitialize starts the M-of-N officer enrollment ceremony. It
+// delegates to the go-quicbaas SDK ceremony client and maps the response
+// to platform-level types.
+func (m *Manager) CeremonyInitialize(ctx context.Context, config *CeremonyConfig) (*CeremonyInitResult, error) {
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
+	if config == nil {
+		return nil, ErrNilConfig
+	}
+	if !m.config.RequiresCeremony() {
+		return nil, ErrCeremonyNotSupported
+	}
+
+	ceremonyClient, err := m.ceremonyClient()
+	if err != nil {
+		return nil, &ManagerError{Op: "CeremonyInitialize", Err: err}
+	}
+
+	officers := make([]quicbaassdk.QRDBCeremonyOfficerRequest, len(config.Officers))
+	for i, o := range config.Officers {
+		officers[i] = quicbaassdk.QRDBCeremonyOfficerRequest{
+			Username: o.Username,
+			CSRPEM:   string(o.CSRPEM),
+		}
+	}
+
+	req := &quicbaassdk.QRDBCeremonyInitializeRequest{
+		SOPin:     config.SOPin,
+		UserPin:   config.UserPin,
+		Threshold: config.Threshold,
+		Officers:  officers,
+	}
+	resp, err := ceremonyClient.CeremonyInitialize(ctx, req)
+	if err != nil {
+		return nil, &ManagerError{Op: "CeremonyInitialize", Err: err}
+	}
+
+	m.logger.Info("Barrier ceremony initialized",
+		slog.Int("threshold", config.Threshold),
+		slog.Int("officers", len(config.Officers)),
+		slog.String("state", resp.State))
+
+	return &CeremonyInitResult{
+		SPKIPin:    resp.SPKIPin,
+		CACertPEM:  resp.CACertPEM,
+		TLSCertPEM: resp.TLSCertPEM,
+		SOCertPEM:  resp.SOCertPEM,
+		SOKeyPEM:   resp.SOKeyPEM,
+		State:      resp.State,
+		ShareCount: resp.ShareCount,
+	}, nil
+}
+
+// CeremonyStatus returns the current ceremony state.
+func (m *Manager) CeremonyStatus(ctx context.Context) (*CeremonyStatusInfo, error) {
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
+
+	ceremonyClient, err := m.ceremonyClient()
+	if err != nil {
+		return nil, &ManagerError{Op: "CeremonyStatus", Err: err}
+	}
+
+	resp, err := ceremonyClient.CeremonyStatus(ctx)
+	if err != nil {
+		return nil, &ManagerError{Op: "CeremonyStatus", Err: err}
+	}
+
+	return &CeremonyStatusInfo{
+		State:   resp.State,
+		SPKIPin: resp.SPKIPin,
+	}, nil
+}
+
+// BeginClaimCert initiates the challenge-response for a named officer.
+// The returned nonce must be signed by the officer's CSR private key and
+// submitted to CompleteClaimCert.
+func (m *Manager) BeginClaimCert(ctx context.Context, username string) (*CeremonyChallenge, error) {
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
+	if username == "" {
+		return nil, ErrEmptyUsername
+	}
+
+	ceremonyClient, err := m.ceremonyClient()
+	if err != nil {
+		return nil, &ManagerError{Op: "BeginClaimCert", Err: err}
+	}
+
+	req := &quicbaassdk.QRDBClaimCertBeginRequest{Username: username}
+	resp, err := ceremonyClient.CeremonyClaimCertBegin(ctx, req)
+	if err != nil {
+		return nil, &ManagerError{Op: "BeginClaimCert", Err: err}
+	}
+
+	m.logger.Info("Ceremony claim cert challenge issued",
+		slog.String("username", username),
+		slog.String("expires_at", resp.ExpiresAt))
+
+	return &CeremonyChallenge{
+		NonceHex:  resp.NonceHex,
+		ExpiresAt: resp.ExpiresAt,
+	}, nil
+}
+
+// CompleteClaimCert verifies the officer's signed nonce and issues their
+// certificate. The signature must be produced over the nonce bytes using
+// the private key corresponding to the CSR submitted during initialization.
+func (m *Manager) CompleteClaimCert(ctx context.Context, username, nonceHex string, signature []byte) (*CeremonyClaimCertResult, error) {
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
+	if username == "" {
+		return nil, ErrEmptyUsername
+	}
+	if nonceHex == "" {
+		return nil, ErrEmptyNonce
+	}
+	if len(signature) == 0 {
+		return nil, ErrEmptySignature
+	}
+
+	ceremonyClient, err := m.ceremonyClient()
+	if err != nil {
+		return nil, &ManagerError{Op: "CompleteClaimCert", Err: err}
+	}
+
+	req := &quicbaassdk.QRDBClaimCertCompleteRequest{
+		Username:  username,
+		NonceHex:  nonceHex,
+		Signature: string(signature),
+	}
+	resp, err := ceremonyClient.CeremonyClaimCertComplete(ctx, req)
+	if err != nil {
+		return nil, &ManagerError{Op: "CompleteClaimCert", Err: err}
+	}
+
+	m.logger.Info("Ceremony cert claimed",
+		slog.String("username", username))
+
+	return &CeremonyClaimCertResult{
+		CertPEM:   resp.CertPEM,
+		CACertPEM: resp.CACertPEM,
+	}, nil
+}
+
+// ClaimShare returns the officer's Shamir share. The share is destroyed on
+// the server after retrieval and must be securely stored by the officer.
+func (m *Manager) ClaimShare(ctx context.Context, username string) ([]byte, error) {
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
+	if username == "" {
+		return nil, ErrEmptyUsername
+	}
+
+	ceremonyClient, err := m.ceremonyClient()
+	if err != nil {
+		return nil, &ManagerError{Op: "ClaimShare", Err: err}
+	}
+
+	req := &quicbaassdk.QRDBClaimShareRequest{Username: username}
+	resp, err := ceremonyClient.CeremonyClaimShare(ctx, req)
+	if err != nil {
+		return nil, &ManagerError{Op: "ClaimShare", Err: err}
+	}
+
+	m.logger.Info("Ceremony share claimed",
+		slog.String("username", username))
+
+	return []byte(resp.ShareJSON), nil
+}
+
+// ceremonyClient returns the QRDB CeremonyClient from the SDK.
+func (m *Manager) ceremonyClient() (quicbaassdk.QRDBCeremonyClient, error) {
+	return m.sdk.BarrierCeremony()
+}
+
 // WaitReady blocks until the barrier is unsealed or the context is cancelled.
 func (m *Manager) WaitReady(ctx context.Context) error {
 	if ctx == nil {

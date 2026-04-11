@@ -647,8 +647,7 @@ func (e ErrPlainTextSecretMigration) Error() string {
 
 func (e ErrPlainTextSecretMigration) Unwrap() error { return e.Cause }
 
-// ErrNilSecretManager is returned when a nil SecretManager is provided to
-// MigratePlainTextSecrets.
+// ErrNilSecretManager is returned when a nil SecretManager is provided.
 type ErrNilSecretManager struct{}
 
 func (e ErrNilSecretManager) Error() string {

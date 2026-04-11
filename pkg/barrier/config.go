@@ -14,8 +14,14 @@
 package barrier
 
 const (
+	// SealStrategyNone disables encryption; the barrier is always open.
+	SealStrategyNone = "none"
+
 	// SealStrategySoftware uses a software-based encryption key.
 	SealStrategySoftware = "software"
+
+	// SealStrategyShamir uses M-of-N Shamir secret sharing with a ceremony.
+	SealStrategyShamir = "shamir"
 
 	// SealStrategyTPM2 uses a TPM 2.0 to seal and unseal the barrier key.
 	SealStrategyTPM2 = "tpm2"
@@ -32,7 +38,7 @@ type Config struct {
 	// AutoUnseal enables automatic unsealing via TPM at startup.
 	AutoUnseal bool `yaml:"auto_unseal" json:"auto_unseal" mapstructure:"auto_unseal"`
 
-	// SealStrategy is the preferred sealing strategy (software, tpm2, pkcs11).
+	// SealStrategy is the preferred sealing strategy (none, software, shamir, tpm2, pkcs11).
 	SealStrategy string `yaml:"seal_strategy" json:"seal_strategy" mapstructure:"seal_strategy"`
 
 	// ShamirThreshold is the M in M-of-N Shamir splitting (0 = single key).
@@ -52,12 +58,12 @@ func DefaultConfig() *Config {
 // Validate checks configuration values for correctness.
 func (c *Config) Validate() error {
 	switch c.SealStrategy {
-	case SealStrategySoftware, SealStrategyTPM2, SealStrategyPKCS11, "":
+	case SealStrategyNone, SealStrategySoftware, SealStrategyShamir, SealStrategyTPM2, SealStrategyPKCS11, "":
 		// valid
 	default:
 		return &ConfigError{
 			Field:   "SealStrategy",
-			Message: "must be one of: software, tpm2, pkcs11",
+			Message: "must be one of: none, software, shamir, tpm2, pkcs11",
 		}
 	}
 	if c.ShamirThreshold < 0 {
@@ -96,4 +102,91 @@ func (c *Config) Validate() error {
 // IsShamir returns true if the configuration specifies Shamir secret sharing.
 func (c *Config) IsShamir() bool {
 	return c.ShamirThreshold > 0 && c.ShamirShares > 0
+}
+
+// RequiresCeremony returns true when the seal strategy requires an M-of-N
+// officer enrollment ceremony before the barrier can be used.
+func (c *Config) RequiresCeremony() bool {
+	return c.SealStrategy == SealStrategyShamir ||
+		(c.SealStrategy == SealStrategySoftware && c.ShamirThreshold >= 2)
+}
+
+// CeremonyConfig holds the parameters for initiating a barrier ceremony.
+type CeremonyConfig struct {
+	// SOPin is the Security Officer PIN used to authorize the ceremony.
+	SOPin string
+
+	// UserPin is the user-level PIN issued after ceremony completion.
+	UserPin string
+
+	// Threshold is the M in M-of-N: the minimum number of shares required
+	// to reconstruct the barrier key.
+	Threshold int
+
+	// Officers is the list of security officers to enroll in the ceremony.
+	Officers []OfficerConfig
+}
+
+// OfficerConfig describes a single security officer being enrolled in the
+// M-of-N ceremony.
+type OfficerConfig struct {
+	// Username is the officer's unique identity.
+	Username string
+
+	// CSRPEM is the PEM-encoded certificate signing request submitted by
+	// the officer.
+	CSRPEM []byte
+}
+
+// CeremonyInitResult holds the result of a successful ceremony initialization.
+type CeremonyInitResult struct {
+	// SPKIPin is the SPKI fingerprint of the CA certificate.
+	SPKIPin string
+
+	// CACertPEM is the PEM-encoded CA certificate.
+	CACertPEM string
+
+	// TLSCertPEM is the PEM-encoded TLS certificate issued during ceremony.
+	TLSCertPEM string
+
+	// SOCertPEM is the PEM-encoded Security Officer certificate, if issued.
+	SOCertPEM string
+
+	// SOKeyPEM is the PEM-encoded Security Officer private key, if issued.
+	SOKeyPEM string
+
+	// State is the ceremony state after initialization (e.g., "pending_claims").
+	State string
+
+	// ShareCount is the number of Shamir shares generated.
+	ShareCount int
+}
+
+// CeremonyStatusInfo describes the current state of a ceremony.
+type CeremonyStatusInfo struct {
+	// State is the current ceremony state string (e.g., "pending_claims", "complete").
+	State string
+
+	// SPKIPin is the SPKI fingerprint once the CA has been provisioned.
+	SPKIPin string
+}
+
+// CeremonyChallenge is the challenge nonce returned by BeginClaimCert that
+// the officer must sign with their CSR private key.
+type CeremonyChallenge struct {
+	// NonceHex is the hex-encoded random nonce to be signed.
+	NonceHex string
+
+	// ExpiresAt is the RFC 3339 timestamp after which the nonce is invalid.
+	ExpiresAt string
+}
+
+// CeremonyClaimCertResult holds the certificate issued to an officer after a
+// successful challenge-response exchange.
+type CeremonyClaimCertResult struct {
+	// CertPEM is the PEM-encoded officer certificate.
+	CertPEM string
+
+	// CACertPEM is the PEM-encoded CA certificate that signed the officer cert.
+	CACertPEM string
 }

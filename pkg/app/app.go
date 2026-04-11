@@ -675,6 +675,10 @@ func (app *App) ServiceRegistry() *service.Registry {
 	if err != nil {
 		app.Logger.FatalError(err)
 	}
+	templateService, err := device.NewTemplateService(deviceDatastore)
+	if err != nil {
+		app.Logger.FatalError(err)
+	}
 
 	var dnsService *dns.Service
 	if app.DNSConfig != nil && app.DNSConfig.HasServer() {
@@ -686,7 +690,7 @@ func (app *App) ServiceRegistry() *service.Registry {
 		app.DNSService = dnsService
 	}
 
-	registry, err := service.NewRegistry(app.Logger, deviceService, profileService, dnsService, app.daoFactory)
+	registry, err := service.NewRegistry(app.Logger, deviceService, profileService, templateService, dnsService, app.daoFactory)
 	if err != nil {
 		app.Logger.FatalError(err)
 	}

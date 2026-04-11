@@ -52,6 +52,7 @@ type discoveryResult struct {
 // DiscoverNodes iterates all nodes, queries BMCs for MAC addresses on
 // BMC-managed nodes, and returns a unified list of discovered nodes.
 // BMC discovery runs concurrently across all BMC-managed nodes.
+// Nodes with SkipInstall set are included without BMC or MAC discovery.
 func DiscoverNodes(ctx context.Context, nodes []NodeConfig, logger *slog.Logger) ([]DiscoveredNode, error) {
 	if len(nodes) == 0 {
 		return nil, ErrInvalidBootstrapConfig{Reason: "no nodes to discover"}
@@ -64,6 +65,21 @@ func DiscoverNodes(ctx context.Context, nodes []NodeConfig, logger *slog.Logger)
 
 	for i := range nodes {
 		node := &nodes[i]
+
+		// SkipInstall nodes are already deployed -- no BMC or MAC
+		// discovery needed. Copy any operator-provided MACs but don't
+		// fail if none are present.
+		if node.SkipInstall {
+			logger.Info("bootstrap: skipping discovery for skip_install node",
+				slog.String("hostname", node.Hostname),
+				slog.String("role", node.Role))
+			results[i] = DiscoveredNode{
+				NodeConfig:     *node,
+				DiscoveredMACs: append([]string(nil), node.MACs...),
+				BMCManaged:     node.IsBMCManaged(),
+			}
+			continue
+		}
 
 		if node.IsManual() {
 			results[i] = DiscoveredNode{

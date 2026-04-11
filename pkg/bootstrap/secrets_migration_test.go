@@ -214,6 +214,26 @@ func TestProcessConfigSecretTagPlainText(t *testing.T) {
 		// The field should NOT have been modified since the store failed
 		// (the error is recorded but walkStruct continues)
 	})
+
+	t.Run("slice of structs with secret tags via ProcessConfig", func(t *testing.T) {
+		registry := NewResolverRegistry(logger)
+		kms := newMockSecretsClient()
+		sm, err := NewSecretManager(registry, kms, "config", logger)
+		require.NoError(t, err)
+
+		cfg := &sliceSecretConfig{
+			Servers: []serverSecretConfig{
+				{Name: "server1", Password: "pass1"},
+				{Name: "server2", Password: "pass2"},
+			},
+		}
+
+		result, err := sm.ProcessConfig(ctx, cfg)
+		require.NoError(t, err)
+		assert.Equal(t, 2, result.MigratedCount())
+		assert.Equal(t, "kms://config/servers/0/password", cfg.Servers[0].Password)
+		assert.Equal(t, "kms://config/servers/1/password", cfg.Servers[1].Password)
+	})
 }
 
 func TestProcessConfigSecretTagIdempotent(t *testing.T) {
@@ -262,188 +282,6 @@ func TestProcessConfigSecretTagIdempotent(t *testing.T) {
 
 		// KMS store was called additional times for the URI resolution path
 		assert.Greater(t, kms.storeCalled, storeCalls)
-	})
-}
-
-func TestMigratePlainTextSecrets(t *testing.T) {
-	ctx := context.Background()
-	logger := newTestMigrationLogger()
-
-	t.Run("migrates plain-text secrets", func(t *testing.T) {
-		registry := NewResolverRegistry(logger)
-		kms := newMockSecretsClient()
-		sm, err := NewSecretManager(registry, kms, "config", logger)
-		require.NoError(t, err)
-
-		cfg := &secretTagConfig{
-			Name:     "test-app",
-			Password: "plain-password",
-			APIKey:   "plain-api-key",
-			Host:     "localhost",
-		}
-
-		count, err := MigratePlainTextSecrets(ctx, sm, cfg)
-		require.NoError(t, err)
-		assert.Equal(t, 2, count)
-
-		assert.Equal(t, "kms://config/password", cfg.Password)
-		assert.Equal(t, "kms://config/api-key", cfg.APIKey)
-		assert.Equal(t, "test-app", cfg.Name)
-		assert.Equal(t, "localhost", cfg.Host)
-	})
-
-	t.Run("skips fields with existing URIs", func(t *testing.T) {
-		registry := NewResolverRegistry(logger)
-		kms := newMockSecretsClient()
-		sm, err := NewSecretManager(registry, kms, "config", logger)
-		require.NoError(t, err)
-
-		cfg := &secretTagConfig{
-			Name:     "test-app",
-			Password: "kms://already/migrated",
-			APIKey:   "encrypted://some-data",
-			Host:     "localhost",
-		}
-
-		count, err := MigratePlainTextSecrets(ctx, sm, cfg)
-		require.NoError(t, err)
-		assert.Equal(t, 0, count)
-		assert.Equal(t, 0, kms.storeCalled)
-
-		// Fields should be unchanged
-		assert.Equal(t, "kms://already/migrated", cfg.Password)
-		assert.Equal(t, "encrypted://some-data", cfg.APIKey)
-	})
-
-	t.Run("skips empty fields", func(t *testing.T) {
-		registry := NewResolverRegistry(logger)
-		kms := newMockSecretsClient()
-		sm, err := NewSecretManager(registry, kms, "config", logger)
-		require.NoError(t, err)
-
-		cfg := &secretTagConfig{
-			Name: "test-app",
-		}
-
-		count, err := MigratePlainTextSecrets(ctx, sm, cfg)
-		require.NoError(t, err)
-		assert.Equal(t, 0, count)
-	})
-
-	t.Run("nested structs with secret tags", func(t *testing.T) {
-		registry := NewResolverRegistry(logger)
-		kms := newMockSecretsClient()
-		sm, err := NewSecretManager(registry, kms, "config", logger)
-		require.NoError(t, err)
-
-		cfg := &nestedSecretConfig{
-			Name: "platform",
-			Database: dbSecretConfig{
-				Host:     "db.local",
-				Password: "db-pass",
-			},
-			BMC: &bmcSecretConfig{
-				Address:  "10.0.0.1",
-				Username: "admin",
-				Password: "bmc-pass",
-			},
-		}
-
-		count, err := MigratePlainTextSecrets(ctx, sm, cfg)
-		require.NoError(t, err)
-		assert.Equal(t, 2, count)
-		assert.Equal(t, "kms://config/database/password", cfg.Database.Password)
-		assert.Equal(t, "kms://config/bmc/password", cfg.BMC.Password)
-	})
-
-	t.Run("slice of structs with secret tags", func(t *testing.T) {
-		registry := NewResolverRegistry(logger)
-		kms := newMockSecretsClient()
-		sm, err := NewSecretManager(registry, kms, "config", logger)
-		require.NoError(t, err)
-
-		cfg := &sliceSecretConfig{
-			Servers: []serverSecretConfig{
-				{Name: "server1", Password: "pass1"},
-				{Name: "server2", Password: "pass2"},
-			},
-		}
-
-		count, err := MigratePlainTextSecrets(ctx, sm, cfg)
-		require.NoError(t, err)
-		assert.Equal(t, 2, count)
-		assert.Equal(t, "kms://config/servers/0/password", cfg.Servers[0].Password)
-		assert.Equal(t, "kms://config/servers/1/password", cfg.Servers[1].Password)
-	})
-
-	t.Run("nil SecretManager returns error", func(t *testing.T) {
-		cfg := &secretTagConfig{Password: "secret"}
-		count, err := MigratePlainTextSecrets(ctx, nil, cfg)
-		require.Error(t, err)
-		assert.IsType(t, ErrNilSecretManager{}, err)
-		assert.Equal(t, 0, count)
-	})
-
-	t.Run("nil config returns error", func(t *testing.T) {
-		registry := NewResolverRegistry(logger)
-		kms := newMockSecretsClient()
-		sm, err := NewSecretManager(registry, kms, "config", logger)
-		require.NoError(t, err)
-
-		count, err := MigratePlainTextSecrets(ctx, sm, nil)
-		require.Error(t, err)
-		assert.IsType(t, ErrNilConfig{}, err)
-		assert.Equal(t, 0, count)
-	})
-
-	t.Run("non-struct config returns error", func(t *testing.T) {
-		registry := NewResolverRegistry(logger)
-		kms := newMockSecretsClient()
-		sm, err := NewSecretManager(registry, kms, "config", logger)
-		require.NoError(t, err)
-
-		count, err := MigratePlainTextSecrets(ctx, sm, "not-a-struct")
-		require.Error(t, err)
-		assert.IsType(t, ErrInvalidConfigType{}, err)
-		assert.Equal(t, 0, count)
-	})
-
-	t.Run("KMS store failure returns error", func(t *testing.T) {
-		registry := NewResolverRegistry(logger)
-		kms := newMockSecretsClient()
-		kms.storeErr = errors.New("KMS down")
-		sm, err := NewSecretManager(registry, kms, "config", logger)
-		require.NoError(t, err)
-
-		cfg := &secretTagConfig{
-			Password: "my-secret",
-		}
-
-		count, err := MigratePlainTextSecrets(ctx, sm, cfg)
-		require.Error(t, err)
-		assert.IsType(t, ErrPlainTextSecretMigration{}, err)
-		assert.Equal(t, 0, count)
-	})
-
-	t.Run("idempotent: running twice produces same result", func(t *testing.T) {
-		registry := NewResolverRegistry(logger)
-		kms := newMockSecretsClient()
-		sm, err := NewSecretManager(registry, kms, "config", logger)
-		require.NoError(t, err)
-
-		cfg := &secretTagConfig{
-			Password: "my-secret",
-			APIKey:   "my-key",
-		}
-
-		count1, err := MigratePlainTextSecrets(ctx, sm, cfg)
-		require.NoError(t, err)
-		assert.Equal(t, 2, count1)
-
-		// Second run: all fields now have KMS URIs, should skip
-		count2, err := MigratePlainTextSecrets(ctx, sm, cfg)
-		require.NoError(t, err)
-		assert.Equal(t, 0, count2)
 	})
 }
 

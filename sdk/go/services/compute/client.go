@@ -330,3 +330,86 @@ func (c *Client) VerifyVMAttestation(ctx context.Context, req *platformv1.Verify
 	}
 	return resp, nil
 }
+
+// Domain-typed convenience methods
+//
+// These methods return domain types instead of proto types, enabling callers
+// to avoid importing platformv1 directly.
+
+// CreateVMDomain creates a new virtual machine using domain parameters.
+func (c *Client) CreateVMDomain(ctx context.Context, params *CreateVMParams) (*VM, error) {
+	req := createParamsToProto(params)
+	resp, err := c.grpc.CreateVM(ctx, req)
+	if err != nil {
+		return nil, &ErrCreateVMFailed{Cause: err}
+	}
+	return VMFromProto(resp.Vm), nil
+}
+
+// GetVMDomain retrieves a virtual machine by ID and returns a domain VM.
+func (c *Client) GetVMDomain(ctx context.Context, id string) (*VM, error) {
+	resp, err := c.grpc.GetVM(ctx, &platformv1.GetVMRequest{Id: id})
+	if err != nil {
+		return nil, &ErrGetVMFailed{ID: id, Cause: err}
+	}
+	return VMFromProto(resp.Vm), nil
+}
+
+// StartVMDomain starts a virtual machine.
+func (c *Client) StartVMDomain(ctx context.Context, id string) (*VMStatus, error) {
+	resp, err := c.grpc.StartVM(ctx, &platformv1.StartVMRequest{Id: id})
+	if err != nil {
+		return nil, &ErrStartVMFailed{ID: id, Cause: err}
+	}
+	return statusFromProto(resp.Status), nil
+}
+
+// StopVMDomain stops a virtual machine using domain parameters.
+func (c *Client) StopVMDomain(ctx context.Context, params *StopVMParams) (*VMStatus, error) {
+	resp, err := c.grpc.StopVM(ctx, &platformv1.StopVMRequest{
+		Id:             params.ID,
+		Force:          params.Force,
+		TimeoutSeconds: params.TimeoutSeconds,
+	})
+	if err != nil {
+		return nil, &ErrStopVMFailed{ID: params.ID, Cause: err}
+	}
+	return statusFromProto(resp.Status), nil
+}
+
+// DeleteVMDomain deletes a virtual machine using domain parameters.
+func (c *Client) DeleteVMDomain(ctx context.Context, params *DeleteVMParams) (*VMStatus, error) {
+	resp, err := c.grpc.DeleteVM(ctx, &platformv1.DeleteVMRequest{
+		Id:          params.ID,
+		DeleteDisks: params.DeleteDisks,
+	})
+	if err != nil {
+		return nil, &ErrDeleteVMFailed{ID: params.ID, Cause: err}
+	}
+	return statusFromProto(resp.Status), nil
+}
+
+// ListVMsDomain lists virtual machines using domain parameters.
+func (c *Client) ListVMsDomain(ctx context.Context, params *ListVMsParams) (*ListVMsResult, error) {
+	req := listParamsToProto(params)
+	resp, err := c.grpc.ListVMs(ctx, req)
+	if err != nil {
+		return nil, &ErrListVMsFailed{Cause: err}
+	}
+
+	vms := make([]*VM, len(resp.Vms))
+	for i, p := range resp.Vms {
+		vms[i] = VMFromProto(p)
+	}
+
+	result := &ListVMsResult{
+		VMs: vms,
+	}
+
+	if resp.Pagination != nil {
+		result.TotalItems = uint32(resp.Pagination.TotalItems)
+		result.TotalPages = uint32(resp.Pagination.TotalPages)
+	}
+
+	return result, nil
+}

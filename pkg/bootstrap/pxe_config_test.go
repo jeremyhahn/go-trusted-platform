@@ -539,3 +539,117 @@ func TestValidRoles(t *testing.T) {
 		}
 	}
 }
+
+// --- SkipInstall validation tests ---
+
+func TestValidate_SkipInstallNodeWithoutMACOrBMC(t *testing.T) {
+	// A skip_install node should pass validation without BMC or MAC.
+	config := &BootstrapConfig{
+		Deployer:            DeployerConfig{Host: "deploy.example.com"},
+		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Platform:            PlatformGlobalConfig{Domain: "example.com"},
+		Nodes: []NodeConfig{
+			{Hostname: "cp-0", Role: RoleControlPlane, SkipInstall: true},
+		},
+	}
+
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate returned unexpected error for skip_install node without MAC/BMC: %v", err)
+	}
+}
+
+func TestValidate_SkipInstallDoesNotRequireISO(t *testing.T) {
+	// A skip_install node with virtual-media boot method should not
+	// trigger the iso_path requirement.
+	config := &BootstrapConfig{
+		Deployer:            DeployerConfig{Host: "deploy.example.com"},
+		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Platform:            PlatformGlobalConfig{Domain: "example.com"},
+		Nodes: []NodeConfig{
+			{
+				Hostname:    "cp-0",
+				Role:        RoleControlPlane,
+				BMCAddress:  "10.200.0.10",
+				BootMethod:  BootMethodVirtualMedia,
+				SkipInstall: true,
+			},
+		},
+	}
+
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate returned unexpected error for skip_install virtual-media node without iso_path: %v", err)
+	}
+}
+
+func TestValidate_SkipInstallCountsAsControlPlane(t *testing.T) {
+	// A skip_install control-plane node should count toward the
+	// control-plane quorum.
+	config := &BootstrapConfig{
+		Deployer:            DeployerConfig{Host: "deploy.example.com"},
+		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Platform:            PlatformGlobalConfig{Domain: "example.com"},
+		Nodes: []NodeConfig{
+			{Hostname: "cp-0", Role: RoleControlPlane, SkipInstall: true},
+			{Hostname: "w-0", Role: RoleWorker, MACs: []string{"AA:BB:CC:DD:01:01"}},
+		},
+	}
+
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate returned unexpected error: %v", err)
+	}
+}
+
+func TestValidate_NonSkipInstallStillRequiresIdentity(t *testing.T) {
+	// A non-skip_install node still requires BMC or MAC.
+	config := &BootstrapConfig{
+		Deployer:            DeployerConfig{Host: "deploy.example.com"},
+		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Platform:            PlatformGlobalConfig{Domain: "example.com"},
+		Nodes: []NodeConfig{
+			{Hostname: "cp-0", Role: RoleControlPlane, SkipInstall: true},
+			{Hostname: "w-0", Role: RoleWorker}, // no MAC, no BMC, no skip_install
+		},
+	}
+
+	err := config.Validate()
+	if err == nil {
+		t.Fatal("expected error for non-skip_install node without MAC or BMC")
+	}
+
+	if _, ok := err.(ErrNodeMissingIdentity); !ok {
+		t.Errorf("expected ErrNodeMissingIdentity, got %T: %v", err, err)
+	}
+}
+
+func TestLoadBootstrapConfig_SkipInstallYAML(t *testing.T) {
+	yamlContent := `deployer:
+  host: deploy.example.com
+provisioning_network:
+  subnet: 10.100.0.0/24
+platform:
+  domain: example.com
+nodes:
+  - hostname: cp-0
+    role: control-plane
+    skip_install: true
+  - hostname: w-0
+    role: worker
+    mac: "AA:BB:CC:DD:00:01"
+`
+	path := writeYAMLFile(t, yamlContent)
+
+	config, err := LoadBootstrapConfig(path)
+	if err != nil {
+		t.Fatalf("LoadBootstrapConfig returned error: %v", err)
+	}
+
+	if len(config.Nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(config.Nodes))
+	}
+	if !config.Nodes[0].SkipInstall {
+		t.Error("expected cp-0 SkipInstall to be true")
+	}
+	if config.Nodes[1].SkipInstall {
+		t.Error("expected w-0 SkipInstall to be false")
+	}
+}

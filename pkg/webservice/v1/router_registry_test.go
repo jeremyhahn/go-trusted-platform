@@ -23,6 +23,7 @@ import (
 	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
 	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
@@ -131,6 +132,14 @@ func (r *testHandlerRegistry) VTPMService() vtpm.VTPMService {
 
 func (r *testHandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 	return r.webauthn
+}
+
+func (r *testHandlerRegistry) DeviceTemplateService() devicepkg.DeviceTemplateService {
+	return nil
+}
+
+func (r *testHandlerRegistry) DeviceProfileService() devicepkg.DeviceProfileService {
+	return nil
 }
 
 func (r *testHandlerRegistry) ConfigDeliveryHandler() configdelivery.RestHandler {

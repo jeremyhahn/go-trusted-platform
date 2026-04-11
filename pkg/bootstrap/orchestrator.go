@@ -75,6 +75,10 @@ const (
 
 	// nodeStatusFailed is the status for a failed node.
 	nodeStatusFailed = "failed"
+
+	// nodeStatusSkipped is the status for a node whose install was skipped
+	// because SkipInstall is true.
+	nodeStatusSkipped = "skipped"
 )
 
 // BootstrapResult holds the outcome of a complete bootstrap run.
@@ -402,7 +406,24 @@ func (o *Orchestrator) provisionRemainingNodes(ctx context.Context, result *Boot
 //   - "virtual-media" -> bootNodeVirtualMedia (mounts ISO via SMB on the BMC,
 //     sets one-shot CD boot, power-cycles, waits for health,
 //     then unmounts on success)
+//
+// Nodes with SkipInstall set are marked installed immediately without any
+// BMC interaction, ISO staging, or power cycling. They still participate in
+// health checks and the seed phase.
 func (o *Orchestrator) provisionNode(ctx context.Context, node *DiscoveredNode, result *BootstrapResult) error {
+
+	// SkipInstall: the node is already deployed and running. Skip the
+	// entire install flow (virtual media, PXE, BMC power control) and
+	// mark it as installed so downstream phases (seed, health gate)
+	// include it normally.
+	if node.SkipInstall {
+		o.logger.Info("bootstrap: skipping install for already-deployed node",
+			slog.String("hostname", node.Hostname),
+			slog.String("role", node.Role))
+		o.updateNodeStatus(result, node.Hostname, nodeStatusSkipped, "")
+		return nil
+	}
+
 	o.updateNodeStatus(result, node.Hostname, nodeStatusProvisioning, "")
 
 	switch node.EffectiveBootMethod() {
@@ -485,7 +506,18 @@ func (o *Orchestrator) seedTemplates(ctx context.Context) error {
 		return ErrNoControlPlaneNode{}
 	}
 
-	controlAddr := cpNodes[0].Hostname + ":8443"
+	// Resolve the control-plane IP from registration.json (uploaded by
+	// platformd after first-boot). The hostname alone won't resolve
+	// because DNS isn't running yet during bootstrap.
+	controlHost := cpNodes[0].Hostname
+	if baseURL, urlErr := installLogBaseURL(&o.config.Deployer); urlErr == nil {
+		if regIP, fetchErr := fetchRegistrationIP(baseURL, controlHost); fetchErr == nil && regIP != "" {
+			controlHost = regIP
+			o.logger.Info("bootstrap: resolved control-plane IP from registration",
+				slog.String("ip", regIP))
+		}
+	}
+	controlAddr := controlHost + ":8443"
 	o.logger.Info("bootstrap: seeding templates to control plane",
 		slog.String("address", controlAddr))
 

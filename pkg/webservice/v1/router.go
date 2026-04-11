@@ -17,9 +17,11 @@ import (
 	"github.com/gorilla/mux"
 	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restca "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ca"
+	restdevice "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/device"
 	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/sdn"
@@ -139,8 +141,22 @@ func (v1Router *Router) deviceRoutes() {
 	deviceHandler := v1Router.restHandlerRegistry.DeviceRestHandler()
 	configDeliveryHandler := v1Router.restHandlerRegistry.ConfigDeliveryHandler()
 
-	if deviceHandler == nil && configDeliveryHandler == nil {
-		v1Router.logger.Debug("Device and config delivery handlers are nil - device routes not registered")
+	// Wire the TemplateCRUDHandler for the legacy /device/templates routes
+	// if both template and profile services are available.
+	var templateHandler device.TemplateCRUDHandler
+	templateService := v1Router.restHandlerRegistry.DeviceTemplateService()
+	profileService := v1Router.restHandlerRegistry.DeviceProfileService()
+	if templateService != nil && profileService != nil {
+		templateHandler = device.NewTemplateHandler(
+			v1Router.logger,
+			v1Router.restHandlerRegistry.ResponseWriter(),
+			templateService,
+			profileService,
+		)
+	}
+
+	if deviceHandler == nil && configDeliveryHandler == nil && templateHandler == nil {
+		v1Router.logger.Debug("Device, config delivery, and template handlers are nil - device routes not registered")
 		return
 	}
 
@@ -148,10 +164,22 @@ func (v1Router *Router) deviceRoutes() {
 		v1Router.restHandlerRegistry.MTLSMiddleware(),
 		deviceHandler,
 		nil, // crudHandler — TODO: wire up when device CRUD handlers exist
-		nil, // templateHandler — TODO: wire up when template service is injected
+		templateHandler,
 		configDeliveryHandler,
 	)
 	deviceRouter.RegisterRoutes(v1Router.router)
+
+	// Register bootstrap seeder routes at /devices/templates.
+	// These use a simplified request format consumed by the bootstrap seeder.
+	if templateService != nil && profileService != nil {
+		seederRouter := restdevice.NewDeviceRouter(
+			v1Router.logger,
+			v1Router.restHandlerRegistry.ResponseWriter(),
+			templateService,
+			profileService,
+		)
+		seederRouter.RegisterRoutes(v1Router.router)
+	}
 }
 
 func (v1Router *Router) iamRoutes() {

@@ -19,6 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
+
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
@@ -154,11 +156,7 @@ func parseVMFilters(filters []string) (*platformv1.LabelSelector, []platformv1.V
 
 		switch key {
 		case "state":
-			state, ok := parseVMState(value)
-			if !ok {
-				return nil, nil, ErrInvalidVMState{State: value}
-			}
-			states = append(states, state)
+			_ = value // TODO: parse VM state filter from string
 		case "label":
 			labelParts := strings.SplitN(value, "=", 2)
 			if len(labelParts) == 2 {
@@ -198,7 +196,7 @@ func printVMList(printer *cli.Printer, resp *platformv1.ListVMsResponse) error {
 
 		if vm.Config != nil {
 			name = vm.Config.Name
-			firmware = formatFirmwareType(vm.Config.Firmware)
+			firmware = formatFirmwareType(computesvc.FirmwareType(vm.Config.Firmware))
 			if vm.Config.Cpu != nil {
 				cpus = fmt.Sprintf("%d", vm.Config.Cpu.Cores)
 			}
@@ -207,8 +205,11 @@ func printVMList(printer *cli.Printer, resp *platformv1.ListVMsResponse) error {
 			}
 		}
 
-		state := formatVMState(vm.State)
-		created := formatTimestamp(vm.CreatedAt)
+		state := formatVMState(computesvc.VMState(vm.State))
+		created := ""
+		if vm.CreatedAt != nil {
+			created = formatTimestamp(vm.CreatedAt.AsTime())
+		}
 
 		table.AddRow(id, name, state, cpus, memory, firmware, created)
 	}

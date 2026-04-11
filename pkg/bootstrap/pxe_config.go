@@ -99,7 +99,7 @@ type DeployerConfig struct {
 	// SMBHost is the address the BMC should use to mount the bootstrap
 	// container's SMB share for virtual-media boot. Defaults to Host when
 	// unset. Override when the orchestrator and the BMC reach the deployer
-	// on different interfaces — e.g. orchestrator SSHes via mgmt
+	// on different interfaces -- e.g. orchestrator SSHes via mgmt
 	// (198.51.100.91) but the BMC's L3 path lands on the bootstrap-net
 	// interface (198.18.1.91). The SMB URL becomes
 	// smb://<smb_host>/boot/<iso>.
@@ -144,7 +144,7 @@ type ProvisioningNetwork struct {
 
 // NodeConfig defines a node to be provisioned via PXE bootstrap.
 // A node must have either BMCAddress (for automatic MAC discovery) or MAC
-// (for manual specification). Both cannot be empty.
+// (for manual specification). Both cannot be empty unless SkipInstall is true.
 type NodeConfig struct {
 	BMCAddress       string                 `yaml:"bmc_address,omitempty"`
 	BMCUser          string                 `yaml:"bmc_user,omitempty"`
@@ -164,15 +164,23 @@ type NodeConfig struct {
 
 	// BootMethod selects how this node boots the platform ISO during
 	// provisioning. Valid values:
-	//   - "pxe"           (default) — node PXE-boots from the bootstrap
+	//   - "pxe"           (default) -- node PXE-boots from the bootstrap
 	//                                  container via DHCP/TFTP/HTTP. Requires
 	//                                  data-plane NIC reachable on the
 	//                                  bootstrap L2.
-	//   - "virtual-media" — bootstrap container's BMC client mounts the ISO
+	//   - "virtual-media" -- bootstrap container's BMC client mounts the ISO
 	//                       via SMB on the BMC. Use when PXE isn't viable
 	//                       (NIC not cabled, wrong VLAN, license-restricted
 	//                       Redfish, etc.). Requires bmc_address.
 	BootMethod string `yaml:"boot_method,omitempty" json:"boot_method,omitempty"`
+
+	// SkipInstall marks this node as already deployed. The orchestrator
+	// skips virtual media mount, ISO staging, power cycling, and install
+	// log polling for this node, marking it "installed" immediately.
+	// The node is still included in validation (e.g. control-plane count),
+	// health checks, and the seed phase. Use this when referencing an
+	// existing control-plane node in a config that provisions new workers.
+	SkipInstall bool `yaml:"skip_install,omitempty" json:"skip_install,omitempty"`
 }
 
 // EffectiveBootMethod returns the BootMethod with empty normalised to "pxe".
@@ -219,6 +227,7 @@ type nodeConfigYAML struct {
 	Hostname         string                 `yaml:"hostname"`
 	Overrides        map[string]interface{} `yaml:"overrides,omitempty"`
 	BootMethod       string                 `yaml:"boot_method,omitempty"`
+	SkipInstall      bool                   `yaml:"skip_install,omitempty"`
 }
 
 // UnmarshalYAML accepts both the new `macs:` slice and the legacy `mac:`
@@ -239,6 +248,7 @@ func (n *NodeConfig) UnmarshalYAML(value *yaml.Node) error {
 	n.Hostname = shadow.Hostname
 	n.Overrides = shadow.Overrides
 	n.BootMethod = shadow.BootMethod
+	n.SkipInstall = shadow.SkipInstall
 	n.MACs = append([]string(nil), shadow.MACs...)
 	if shadow.MAC != "" {
 		found := false
@@ -309,7 +319,9 @@ func (c *BootstrapConfig) Validate() error {
 		}
 
 		// Validate identity: must have either BMC address or MAC.
-		if !node.IsBMCManaged() && !node.IsManual() {
+		// SkipInstall nodes are already deployed, so they don't need
+		// BMC or MAC identity for provisioning.
+		if !node.SkipInstall && !node.IsBMCManaged() && !node.IsManual() {
 			return ErrNodeMissingIdentity{Hostname: node.Hostname}
 		}
 
@@ -324,7 +336,9 @@ func (c *BootstrapConfig) Validate() error {
 				return ErrInvalidBootMethod{Hostname: node.Hostname, Value: node.BootMethod}
 			}
 		}
-		if node.EffectiveBootMethod() == BootMethodVirtualMedia {
+		// Only count virtual-media nodes that will actually be installed.
+		// SkipInstall nodes don't need ISO staging.
+		if !node.SkipInstall && node.EffectiveBootMethod() == BootMethodVirtualMedia {
 			if node.BMCAddress == "" {
 				return ErrVirtualMediaRequiresBMC{Hostname: node.Hostname}
 			}

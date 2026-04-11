@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
@@ -412,6 +413,8 @@ type RestHandlerRegistry interface {
 	TPM() xkmssdk.TrustedPlatformModule
 	VTPMService() vtpm.VTPMService
 	WebAuthnRestService() webauthn.RestHandler
+	DeviceTemplateService() devicepkg.DeviceTemplateService
+	DeviceProfileService() devicepkg.DeviceProfileService
 }
 
 // ACMEServerConfig contains the configuration for the ACME server
@@ -630,6 +633,29 @@ func (registry *HandlerRegistry) ConfigDeliveryHandler() configdelivery.RestHand
 	return handler
 }
 
+// DeviceTemplateService returns the device template service from the service registry.
+func (registry *HandlerRegistry) DeviceTemplateService() devicepkg.DeviceTemplateService {
+	if registry.params.ServiceRegistry == nil {
+		return nil
+	}
+	templateService := registry.params.ServiceRegistry.TemplateService()
+	if templateService == nil {
+		return nil
+	}
+	return templateService
+}
+
+// DeviceProfileService returns the device profile service from the service registry.
+func (registry *HandlerRegistry) DeviceProfileService() devicepkg.DeviceProfileService {
+	if registry.params.ServiceRegistry == nil {
+		return nil
+	}
+	profileService := registry.params.ServiceRegistry.ProfileService()
+	if profileService == nil {
+		return nil
+	}
+	return profileService
+}
 func (registry *HandlerRegistry) MTLSMiddleware() middleware.MTLSMiddleware {
 	// Get the trusted root certificate from the CA
 	rootCert, err := registry.params.CA.TrustedRoot()

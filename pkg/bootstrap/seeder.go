@@ -184,15 +184,19 @@ func (s *Seeder) uploadTemplates(ctx context.Context) (map[string]string, error)
 			return nil, ErrTemplateUploadFailed{Role: role, Cause: readErr}
 		}
 
-		var tmplResp templateResponse
-		if err := json.Unmarshal(respBody, &tmplResp); err != nil {
+		// The REST API wraps responses in {code, success, payload}.
+		// Extract the payload to get the template ID.
+		var envelope struct {
+			Payload templateResponse `json:"payload"`
+		}
+		if err := json.Unmarshal(respBody, &envelope); err != nil {
 			return nil, ErrTemplateUploadFailed{Role: role, Cause: err}
 		}
 
-		templateIDs[role] = tmplResp.ID
+		templateIDs[role] = envelope.Payload.ID
 		s.logger.Info("bootstrap: template uploaded",
 			slog.String("role", role),
-			slog.String("template_id", tmplResp.ID))
+			slog.String("template_id", envelope.Payload.ID))
 	}
 
 	return templateIDs, nil

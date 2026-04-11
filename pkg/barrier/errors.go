@@ -45,6 +45,18 @@ var (
 
 	// ErrInvalidThreshold indicates an invalid threshold value.
 	ErrInvalidThreshold = errors.New("barrier: invalid threshold")
+
+	// ErrCeremonyNotSupported indicates the barrier strategy does not use a ceremony.
+	ErrCeremonyNotSupported = errors.New("barrier: ceremony not supported for this seal strategy")
+
+	// ErrEmptyUsername indicates an empty username was provided.
+	ErrEmptyUsername = errors.New("barrier: empty username")
+
+	// ErrEmptyNonce indicates an empty nonce was provided.
+	ErrEmptyNonce = errors.New("barrier: empty nonce")
+
+	// ErrEmptySignature indicates an empty signature was provided.
+	ErrEmptySignature = errors.New("barrier: empty signature")
 )
 
 // ManagerError wraps barrier manager operation failures.

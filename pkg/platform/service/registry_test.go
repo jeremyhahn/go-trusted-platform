@@ -106,7 +106,7 @@ func TestNewRegistry_Success(t *testing.T) {
 	mockFactory.On("WebAuthnDAO").Return(mockWebAuthnDAO, nil)
 	mockFactory.On("InvitationDAO").Return(mockInvitationDAO, nil)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 
 	require.NoError(t, err)
 	require.NotNil(t, registry)
@@ -120,7 +120,7 @@ func TestNewRegistry_OrganizationDAOError(t *testing.T) {
 	expectedErr := errors.New("organization dao error")
 	mockFactory.On("OrganizationDAO").Return(nil, expectedErr)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 
 	assert.Error(t, err)
 	assert.Equal(t, expectedErr, err)
@@ -138,7 +138,7 @@ func TestNewRegistry_RegistrationDAOError(t *testing.T) {
 	expectedErr := errors.New("registration dao error")
 	mockFactory.On("RegistrationDAO").Return(nil, expectedErr)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 
 	assert.Error(t, err)
 	assert.Equal(t, expectedErr, err)
@@ -158,7 +158,7 @@ func TestNewRegistry_RoleDAOError(t *testing.T) {
 	expectedErr := errors.New("role dao error")
 	mockFactory.On("RoleDAO").Return(nil, expectedErr)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 
 	assert.Error(t, err)
 	assert.Equal(t, expectedErr, err)
@@ -180,7 +180,7 @@ func TestNewRegistry_UserDAOError(t *testing.T) {
 	expectedErr := errors.New("user dao error")
 	mockFactory.On("UserDAO").Return(nil, expectedErr)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 
 	assert.Error(t, err)
 	assert.Equal(t, expectedErr, err)
@@ -204,7 +204,7 @@ func TestNewRegistry_WebAuthnDAOError(t *testing.T) {
 	expectedErr := errors.New("webauthn dao error")
 	mockFactory.On("WebAuthnDAO").Return(nil, expectedErr)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 
 	assert.Error(t, err)
 	assert.Equal(t, expectedErr, err)
@@ -231,7 +231,7 @@ func TestRegistry_DeviceService(t *testing.T) {
 
 	deviceService := &device.Service{}
 
-	registry, err := NewRegistry(logger, deviceService, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, deviceService, nil, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	result := registry.DeviceService()
@@ -255,7 +255,7 @@ func TestRegistry_DeviceService_Nil(t *testing.T) {
 	mockFactory.On("WebAuthnDAO").Return(mockWebAuthnDAO, nil)
 	mockFactory.On("InvitationDAO").Return(mockInvitationDAO, nil)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	result := registry.DeviceService()
@@ -281,7 +281,7 @@ func TestRegistry_DNSService(t *testing.T) {
 
 	dnsService := &dns.Service{}
 
-	registry, err := NewRegistry(logger, nil, nil, dnsService, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, dnsService, mockFactory)
 	require.NoError(t, err)
 
 	result := registry.DNSService()
@@ -305,7 +305,7 @@ func TestRegistry_DNSService_Nil(t *testing.T) {
 	mockFactory.On("WebAuthnDAO").Return(mockWebAuthnDAO, nil)
 	mockFactory.On("InvitationDAO").Return(mockInvitationDAO, nil)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	result := registry.DNSService()
@@ -329,7 +329,7 @@ func TestRegistry_UserService(t *testing.T) {
 	mockFactory.On("WebAuthnDAO").Return(mockWebAuthnDAO, nil)
 	mockFactory.On("InvitationDAO").Return(mockInvitationDAO, nil)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	result := registry.UserService()
@@ -354,7 +354,7 @@ func TestRegistry_RegistrationService(t *testing.T) {
 	mockFactory.On("WebAuthnDAO").Return(mockWebAuthnDAO, nil)
 	mockFactory.On("InvitationDAO").Return(mockInvitationDAO, nil)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	result := registry.RegistrationService()
@@ -379,7 +379,7 @@ func TestRegistry_WebAuthnSessionService(t *testing.T) {
 	mockFactory.On("WebAuthnDAO").Return(mockWebAuthnDAO, nil)
 	mockFactory.On("InvitationDAO").Return(mockInvitationDAO, nil)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	result := registry.WebAuthnSessionService()
@@ -407,7 +407,7 @@ func TestRegistry_AllServices(t *testing.T) {
 	deviceService := &device.Service{}
 	dnsService := &dns.Service{}
 
-	registry, err := NewRegistry(logger, deviceService, nil, dnsService, mockFactory)
+	registry, err := NewRegistry(logger, deviceService, nil, nil, dnsService, mockFactory)
 	require.NoError(t, err)
 
 	// Verify all services are accessible
@@ -435,7 +435,7 @@ func TestRegistry_ServicesAreReusable(t *testing.T) {
 	mockFactory.On("WebAuthnDAO").Return(mockWebAuthnDAO, nil)
 	mockFactory.On("InvitationDAO").Return(mockInvitationDAO, nil)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	// Call each getter multiple times and verify same instance
@@ -471,7 +471,7 @@ func TestRegistry_ProfileService(t *testing.T) {
 
 	profileService := &device.ProfileService{}
 
-	registry, err := NewRegistry(logger, nil, profileService, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, profileService, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	result := registry.ProfileService()
@@ -495,7 +495,7 @@ func TestRegistry_ProfileService_Nil(t *testing.T) {
 	mockFactory.On("WebAuthnDAO").Return(mockWebAuthnDAO, nil)
 	mockFactory.On("InvitationDAO").Return(mockInvitationDAO, nil)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	result := registry.ProfileService()
@@ -530,7 +530,7 @@ func TestRegistry_WithMockedUserService(t *testing.T) {
 	mockFactory.On("WebAuthnDAO").Return(mockWebAuthnDAO, nil)
 	mockFactory.On("InvitationDAO").Return(mockInvitationDAO, nil)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	// Test that the user service can be used
@@ -565,7 +565,7 @@ func TestRegistry_InvitationService(t *testing.T) {
 	mockFactory.On("WebAuthnDAO").Return(mockWebAuthnDAO, nil)
 	mockFactory.On("InvitationDAO").Return(mockInvitationDAO, nil)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	result := registry.InvitationService()
@@ -593,7 +593,7 @@ func TestRegistry_InvitationService_NilWhenDAOFails(t *testing.T) {
 	// InvitationDAO returns error
 	mockFactory.On("InvitationDAO").Return(nil, errors.New("invitation dao not available"))
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	result := registry.InvitationService()
@@ -620,7 +620,7 @@ func TestRegistry_TenantUserService(t *testing.T) {
 	mockFactory.On("WebAuthnDAO").Return(mockWebAuthnDAO, nil)
 	mockFactory.On("InvitationDAO").Return(mockInvitationDAO, nil)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	// TenantUserService should be nil when TenantManager is not provided
@@ -647,7 +647,7 @@ func TestRegistry_SetTenantUserService(t *testing.T) {
 	mockFactory.On("WebAuthnDAO").Return(mockWebAuthnDAO, nil)
 	mockFactory.On("InvitationDAO").Return(mockInvitationDAO, nil)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	// Initially nil
@@ -682,7 +682,7 @@ func TestRegistry_SetTenantUserService_Nil(t *testing.T) {
 	mockFactory.On("WebAuthnDAO").Return(mockWebAuthnDAO, nil)
 	mockFactory.On("InvitationDAO").Return(mockInvitationDAO, nil)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	// Set a service first
@@ -714,7 +714,7 @@ func TestRegistry_SetInvitationService(t *testing.T) {
 	// InvitationDAO returns error so initial service is nil
 	mockFactory.On("InvitationDAO").Return(nil, errors.New("not available"))
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	// Initially nil due to DAO error
@@ -749,7 +749,7 @@ func TestRegistry_SetInvitationService_Nil(t *testing.T) {
 	mockFactory.On("WebAuthnDAO").Return(mockWebAuthnDAO, nil)
 	mockFactory.On("InvitationDAO").Return(mockInvitationDAO, nil)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	// Initially has service
@@ -779,7 +779,7 @@ func TestRegistry_SetInvitationService_Replace(t *testing.T) {
 	mockFactory.On("WebAuthnDAO").Return(mockWebAuthnDAO, nil)
 	mockFactory.On("InvitationDAO").Return(mockInvitationDAO, nil)
 
-	registry, err := NewRegistry(logger, nil, nil, nil, mockFactory)
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
 	require.NoError(t, err)
 
 	// Get original service

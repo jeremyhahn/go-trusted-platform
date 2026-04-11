@@ -15,68 +15,36 @@ package compute
 
 import (
 	"strconv"
-	"strings"
 	"time"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
-
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
-// vmStateToString maps VMState enum values to human-readable strings
-var vmStateToString = map[platformv1.VMState]string{
-	platformv1.VMState_VM_STATE_STOPPED:    "STOPPED",
-	platformv1.VMState_VM_STATE_STARTING:   "STARTING",
-	platformv1.VMState_VM_STATE_RUNNING:    "RUNNING",
-	platformv1.VMState_VM_STATE_PAUSED:     "PAUSED",
-	platformv1.VMState_VM_STATE_STOPPING:   "STOPPING",
-	platformv1.VMState_VM_STATE_REBOOTING:  "REBOOTING",
-	platformv1.VMState_VM_STATE_MIGRATING:  "MIGRATING",
-	platformv1.VMState_VM_STATE_ERROR:      "ERROR",
-}
-
-// stringToVMState maps human-readable strings to VMState enum values
-var stringToVMState = map[string]platformv1.VMState{
-	"STOPPED":   platformv1.VMState_VM_STATE_STOPPED,
-	"STARTING":  platformv1.VMState_VM_STATE_STARTING,
-	"RUNNING":   platformv1.VMState_VM_STATE_RUNNING,
-	"PAUSED":    platformv1.VMState_VM_STATE_PAUSED,
-	"STOPPING":  platformv1.VMState_VM_STATE_STOPPING,
-	"REBOOTING": platformv1.VMState_VM_STATE_REBOOTING,
-	"MIGRATING": platformv1.VMState_VM_STATE_MIGRATING,
-	"ERROR":     platformv1.VMState_VM_STATE_ERROR,
-}
-
-// firmwareTypeToString maps FirmwareType enum values to human-readable strings
-var firmwareTypeToString = map[platformv1.FirmwareType]string{
-	platformv1.FirmwareType_FIRMWARE_TYPE_BIOS:             "BIOS",
-	platformv1.FirmwareType_FIRMWARE_TYPE_UEFI:             "UEFI",
-	platformv1.FirmwareType_FIRMWARE_TYPE_UEFI_SECURE_BOOT: "UEFI Secure Boot",
-}
-
-// formatVMState formats a VMState enum to a human-readable string
-func formatVMState(state platformv1.VMState) string {
-	if s, ok := vmStateToString[state]; ok {
-		return s
+// formatVMState formats a domain VMState for display.
+func formatVMState(state computesvc.VMState) string {
+	if state == "" {
+		return "UNKNOWN"
 	}
-	return "UNKNOWN"
+	return string(state)
 }
 
-// parseVMState parses a human-readable state string to a VMState enum
-func parseVMState(state string) (platformv1.VMState, bool) {
-	s, ok := stringToVMState[strings.ToUpper(strings.TrimSpace(state))]
-	return s, ok
+// formatFirmwareType formats a domain FirmwareType for display.
+func formatFirmwareType(fw computesvc.FirmwareType) string {
+	if fw == "" {
+		return "Unknown"
+	}
+	return string(fw)
 }
 
-// formatTimestamp formats a protobuf timestamp for display
-func formatTimestamp(ts *timestamppb.Timestamp) string {
-	if ts == nil {
+// formatTimestamp formats a time.Time for display.
+func formatTimestamp(t time.Time) string {
+	if t.IsZero() {
 		return "N/A"
 	}
-	return ts.AsTime().UTC().Format(time.RFC3339)
+	return t.UTC().Format(time.RFC3339)
 }
 
-// formatBool formats a boolean for display
+// formatBool formats a boolean for display.
 func formatBool(b bool) string {
 	if b {
 		return "Yes"
@@ -84,7 +52,7 @@ func formatBool(b bool) string {
 	return "No"
 }
 
-// formatBytes formats byte count for human-readable display
+// formatBytes formats byte count for human-readable display.
 func formatBytes(bytes uint64) string {
 	const (
 		KB = 1024
@@ -107,7 +75,7 @@ func formatBytes(bytes uint64) string {
 	}
 }
 
-// formatDuration formats a duration in seconds for human-readable display
+// formatDuration formats a duration in seconds for human-readable display.
 func formatDuration(seconds uint32) string {
 	d := time.Duration(seconds) * time.Second
 	if d < time.Minute {
@@ -121,18 +89,10 @@ func formatDuration(seconds uint32) string {
 	return strconv.FormatInt(int64(hours), 10) + "h" + strconv.FormatInt(int64(minutes), 10) + "m"
 }
 
-// truncateID truncates a VM ID for display
+// truncateID truncates a VM ID for display.
 func truncateID(id string) string {
 	if len(id) > 12 {
 		return id[:12]
 	}
 	return id
-}
-
-// formatFirmwareType formats a FirmwareType enum to a human-readable string
-func formatFirmwareType(fw platformv1.FirmwareType) string {
-	if s, ok := firmwareTypeToString[fw]; ok {
-		return s
-	}
-	return "Unknown"
 }

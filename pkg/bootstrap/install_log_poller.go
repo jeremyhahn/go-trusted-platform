@@ -162,16 +162,22 @@ func (p *InstallLogPoller) probe(ctx context.Context, client *http.Client, url s
 		lastMod := resp.Header.Get("Last-Modified")
 		if lastMod != "" {
 			if ts, parseErr := http.ParseTime(lastMod); parseErr == nil {
-				// Grant a small margin (2 seconds) to absorb clock
-				// skew between the orchestrator host and the pxeboot
-				// container.
 				if ts.Before(p.Since.Add(-2 * time.Second)) {
-					logger.Debug("bootstrap: install-log-poller: ignoring stale log",
+					logger.Info("bootstrap: install-log-poller: stale log (waiting for fresh)",
 						slog.Time("last_modified", ts),
 						slog.Time("since", p.Since))
 					return nil, false
 				}
+				logger.Info("bootstrap: install-log-poller: log is fresh",
+					slog.Time("last_modified", ts),
+					slog.Time("since", p.Since))
+			} else {
+				logger.Warn("bootstrap: install-log-poller: failed to parse Last-Modified",
+					slog.String("value", lastMod),
+					slog.String("error", parseErr.Error()))
 			}
+		} else {
+			logger.Info("bootstrap: install-log-poller: no Last-Modified header, accepting")
 		}
 	}
 

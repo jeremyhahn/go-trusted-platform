@@ -24,6 +24,7 @@ import (
 type Registry struct {
 	deviceService          *device.Service
 	profileService         *device.ProfileService
+	templateService        *device.TemplateService
 	dnsService             *dns.Service
 	userService            UserServicer
 	registrationService    RegistrationServicer
@@ -34,30 +35,33 @@ type Registry struct {
 
 // RegistryConfig holds configuration for creating a Registry.
 type RegistryConfig struct {
-	Logger         *logging.Logger
-	DeviceService  *device.Service
-	ProfileService *device.ProfileService
-	DNSService     *dns.Service
-	DAOFactory     datastore.Factory
-	TenantManager  *tenant.Manager
-	TokenIssuer    TokenIssuer
+	Logger          *logging.Logger
+	DeviceService   *device.Service
+	ProfileService  *device.ProfileService
+	TemplateService *device.TemplateService
+	DNSService      *dns.Service
+	DAOFactory      datastore.Factory
+	TenantManager   *tenant.Manager
+	TokenIssuer     TokenIssuer
 }
 
 func NewRegistry(
 	logger *logging.Logger,
 	deviceService *device.Service,
 	profileService *device.ProfileService,
+	templateService *device.TemplateService,
 	dnsService *dns.Service,
 	daoFactory datastore.Factory) (*Registry, error) {
 
 	return NewRegistryWithConfig(&RegistryConfig{
-		Logger:         logger,
-		DeviceService:  deviceService,
-		ProfileService: profileService,
-		DNSService:     dnsService,
-		DAOFactory:     daoFactory,
-		TenantManager:  nil,
-		TokenIssuer:    nil,
+		Logger:          logger,
+		DeviceService:   deviceService,
+		ProfileService:  profileService,
+		TemplateService: templateService,
+		DNSService:      dnsService,
+		DAOFactory:      daoFactory,
+		TenantManager:   nil,
+		TokenIssuer:     nil,
 	})
 }
 
@@ -121,6 +125,7 @@ func NewRegistryWithConfig(config *RegistryConfig) (*Registry, error) {
 	return &Registry{
 		deviceService:          config.DeviceService,
 		profileService:         config.ProfileService,
+		templateService:        config.TemplateService,
 		dnsService:             config.DNSService,
 		userService:            userService,
 		registrationService:    registrationService,
@@ -132,6 +137,11 @@ func NewRegistryWithConfig(config *RegistryConfig) (*Registry, error) {
 
 func (registry *Registry) ProfileService() *device.ProfileService {
 	return registry.profileService
+}
+
+// TemplateService returns the device template service.
+func (registry *Registry) TemplateService() *device.TemplateService {
+	return registry.templateService
 }
 
 func (registry *Registry) DeviceService() *device.Service {

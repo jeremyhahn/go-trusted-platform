@@ -21,6 +21,7 @@ import (
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 // createOptions holds the options for the create command
@@ -201,7 +202,7 @@ func printVMDetails(printer *cli.Printer, vm *platformv1.VM) {
 	printer.PrintKeyValue("ID", vm.Id)
 	if vm.Config != nil {
 		printer.PrintKeyValue("Name", vm.Config.Name)
-		printer.PrintKeyValue("Firmware", formatFirmwareType(vm.Config.Firmware))
+		printer.PrintKeyValue("Firmware", formatFirmwareType(computesvc.FirmwareType(vm.Config.Firmware)))
 		if vm.Config.Cpu != nil {
 			printer.PrintKeyValue("CPUs", fmt.Sprintf("%d", vm.Config.Cpu.Cores))
 		}
@@ -216,6 +217,6 @@ func printVMDetails(printer *cli.Printer, vm *platformv1.VM) {
 			printer.PrintKeyValue("vTPM", formatBool(vm.Config.Tpm.Enabled))
 		}
 	}
-	printer.PrintKeyValue("State", formatVMState(vm.State))
-	printer.PrintKeyValue("Created", formatTimestamp(vm.CreatedAt))
+	printer.PrintKeyValue("State", formatVMState(computesvc.VMState(vm.State)))
+	printer.PrintKeyValue("Created", formatTimestamp(vm.CreatedAt.AsTime()))
 }

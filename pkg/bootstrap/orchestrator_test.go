@@ -497,6 +497,190 @@ func TestOrchestrator_Run_MultiNode(t *testing.T) {
 	}
 }
 
+// --- SkipInstall tests ---
+
+func TestOrchestrator_Run_SkipInstallControlPlane(t *testing.T) {
+	// Scenario: existing control-plane with skip_install, new worker being provisioned.
+	cfg := &BootstrapConfig{
+		Deployer: DeployerConfig{Host: "deploy-host"},
+		ProvisioningNetwork: ProvisioningNetwork{
+			Subnet: "172.16.0.0/24",
+		},
+		Platform: PlatformGlobalConfig{
+			Domain: "test.local",
+		},
+		Nodes: []NodeConfig{
+			{
+				Hostname:    "cp1",
+				Role:        RoleControlPlane,
+				SkipInstall: true,
+			},
+			{
+				Hostname: "w1",
+				Role:     RoleWorker,
+				MACs:     []string{"aa:bb:cc:dd:ee:02"},
+			},
+		},
+	}
+	deployer := &mockDeployer{}
+	healthChk := &mockHealthChecker{err: nil}
+
+	o, err := NewOrchestrator(OrchestratorParams{
+		Config:        cfg,
+		BMCFactory:    &mockBMCFactory{client: bmc.NewMockClient()},
+		Logger:        orchTestLogger(),
+		Deployer:      deployer,
+		HealthChecker: healthChk,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ctx := context.Background()
+	result, err := o.Run(ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	if result.Phase != "complete" {
+		t.Errorf("expected phase complete, got %s", result.Phase)
+	}
+	if !result.ControlPlaneReady {
+		t.Error("control plane should be ready")
+	}
+	if len(result.Nodes) != 2 {
+		t.Fatalf("expected 2 node results, got %d", len(result.Nodes))
+	}
+
+	// Control-plane should be skipped, worker should be installed.
+	for _, n := range result.Nodes {
+		switch n.Hostname {
+		case "cp1":
+			if n.Status != nodeStatusSkipped {
+				t.Errorf("cp1 expected status %s, got %s", nodeStatusSkipped, n.Status)
+			}
+		case "w1":
+			if n.Status != nodeStatusInstalled {
+				t.Errorf("w1 expected status installed, got %s", n.Status)
+			}
+		default:
+			t.Errorf("unexpected node %s", n.Hostname)
+		}
+	}
+}
+
+func TestOrchestrator_Run_SkipInstallWorker(t *testing.T) {
+	// Scenario: control-plane being provisioned, existing worker with skip_install.
+	cfg := &BootstrapConfig{
+		Deployer: DeployerConfig{Host: "deploy-host"},
+		ProvisioningNetwork: ProvisioningNetwork{
+			Subnet: "172.16.0.0/24",
+		},
+		Platform: PlatformGlobalConfig{
+			Domain: "test.local",
+		},
+		Nodes: []NodeConfig{
+			{
+				Hostname: "cp1",
+				Role:     RoleControlPlane,
+				MACs:     []string{"aa:bb:cc:dd:ee:01"},
+			},
+			{
+				Hostname:    "w1",
+				Role:        RoleWorker,
+				SkipInstall: true,
+			},
+		},
+	}
+	deployer := &mockDeployer{}
+	healthChk := &mockHealthChecker{err: nil}
+
+	o, err := NewOrchestrator(OrchestratorParams{
+		Config:        cfg,
+		BMCFactory:    &mockBMCFactory{client: bmc.NewMockClient()},
+		Logger:        orchTestLogger(),
+		Deployer:      deployer,
+		HealthChecker: healthChk,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ctx := context.Background()
+	result, err := o.Run(ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	if result.Phase != "complete" {
+		t.Errorf("expected phase complete, got %s", result.Phase)
+	}
+
+	for _, n := range result.Nodes {
+		switch n.Hostname {
+		case "cp1":
+			if n.Status != nodeStatusInstalled {
+				t.Errorf("cp1 expected status installed, got %s", n.Status)
+			}
+		case "w1":
+			if n.Status != nodeStatusSkipped {
+				t.Errorf("w1 expected status %s, got %s", nodeStatusSkipped, n.Status)
+			}
+		default:
+			t.Errorf("unexpected node %s", n.Hostname)
+		}
+	}
+}
+
+func TestOrchestrator_Discover_SkipInstallNode(t *testing.T) {
+	// SkipInstall nodes should be discovered without BMC or MAC.
+	cfg := &BootstrapConfig{
+		Deployer: DeployerConfig{Host: "deploy-host"},
+		ProvisioningNetwork: ProvisioningNetwork{
+			Subnet: "172.16.0.0/24",
+		},
+		Platform: PlatformGlobalConfig{
+			Domain: "test.local",
+		},
+		Nodes: []NodeConfig{
+			{
+				Hostname:    "cp1",
+				Role:        RoleControlPlane,
+				SkipInstall: true,
+			},
+		},
+	}
+
+	o, err := NewOrchestrator(OrchestratorParams{
+		Config:        cfg,
+		BMCFactory:    &mockBMCFactory{client: bmc.NewMockClient()},
+		Logger:        orchTestLogger(),
+		HealthChecker: &mockHealthChecker{},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ctx := context.Background()
+	discovered, err := o.Discover(ctx)
+	if err != nil {
+		t.Fatalf("discover failed: %v", err)
+	}
+
+	if len(discovered) != 1 {
+		t.Fatalf("expected 1 discovered node, got %d", len(discovered))
+	}
+	if discovered[0].Hostname != "cp1" {
+		t.Errorf("expected hostname cp1, got %s", discovered[0].Hostname)
+	}
+	if discovered[0].SkipInstall != true {
+		t.Error("SkipInstall flag should be carried through to DiscoveredNode")
+	}
+	if discovered[0].BMCManaged {
+		t.Error("skip_install node without BMC should not be BMC managed")
+	}
+}
+
 // --- buildSwitchConfig test ---
 
 func TestBuildSwitchConfig(t *testing.T) {
