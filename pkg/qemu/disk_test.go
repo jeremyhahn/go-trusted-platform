@@ -15,6 +15,7 @@ package qemu
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -260,8 +261,8 @@ func TestVMBuildQEMUCommandInstallMode(t *testing.T) {
 	assert.Contains(t, args, "2048")
 	assert.Contains(t, args, "-smp")
 	assert.Contains(t, args, "-boot")
-	assert.Contains(t, args, "-cdrom")
-	assert.Contains(t, args, isoPath)
+	assert.Contains(t, args, fmt.Sprintf("file=%s,if=none,media=cdrom,readonly=on,id=cd0", isoPath))
+	assert.Contains(t, args, "ide-cd,drive=cd0,bus=ahci0.1")
 	assert.Contains(t, args, "-device")
 	assert.Contains(t, args, "VGA")
 	assert.Contains(t, args, "-serial")

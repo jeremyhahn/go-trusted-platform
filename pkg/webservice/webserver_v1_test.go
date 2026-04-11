@@ -928,7 +928,7 @@ func TestWriteJSONNotFound(t *testing.T) {
 }
 
 func TestServeStaticFiles_APIPathNotFallback(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	logger := logging.NewLogger(slog.LevelDebug, io.Discard)
 
 	tmpDir := t.TempDir()
 	indexContent := "<html>SPA Index</html>"
