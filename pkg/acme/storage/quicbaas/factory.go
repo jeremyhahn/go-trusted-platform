@@ -16,7 +16,6 @@ package quicbaas
 import (
 	"fmt"
 
-	qrdbsdk "github.com/jeremyhahn/go-qrdb/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	casdk "github.com/jeremyhahn/go-trusted-ca/sdk/go"
 )
@@ -55,7 +54,7 @@ func NewTenantFactory(storage objectstorage.Client, tenantID string) (*Factory, 
 }
 
 // AccountDAO returns a GenericDAO for ACME accounts.
-func (f *Factory) AccountDAO() (qrdbsdk.GenericDAO[*casdk.ACMEAccountEntity], error) {
+func (f *Factory) AccountDAO() (casdk.GenericDAO[*casdk.ACMEAccountEntity], error) {
 	return newGenericDAO[*casdk.ACMEAccountEntity](
 		f.storage, "acme/accounts", f.tenantID,
 		func() *casdk.ACMEAccountEntity { return &casdk.ACMEAccountEntity{} },
@@ -64,9 +63,9 @@ func (f *Factory) AccountDAO() (qrdbsdk.GenericDAO[*casdk.ACMEAccountEntity], er
 }
 
 // OrderDAO returns a GenericDAO for ACME orders scoped to a specific account.
-func (f *Factory) OrderDAO(accountID uint64) (qrdbsdk.GenericDAO[*casdk.ACMEOrderEntity], error) {
+func (f *Factory) OrderDAO(accountID uint64) (casdk.GenericDAO[*casdk.ACMEOrderEntity], error) {
 	if accountID == 0 {
-		return nil, qrdbsdk.DAOInvalidEntityIDError{
+		return nil, casdk.DAOInvalidEntityIDError{
 			EntityType: "order",
 			Reason:     "account ID must be non-zero",
 		}
@@ -79,9 +78,9 @@ func (f *Factory) OrderDAO(accountID uint64) (qrdbsdk.GenericDAO[*casdk.ACMEOrde
 }
 
 // AuthorizationDAO returns a GenericDAO for ACME authorizations scoped to a specific account.
-func (f *Factory) AuthorizationDAO(accountID uint64) (qrdbsdk.GenericDAO[*casdk.ACMEAuthorizationEntity], error) {
+func (f *Factory) AuthorizationDAO(accountID uint64) (casdk.GenericDAO[*casdk.ACMEAuthorizationEntity], error) {
 	if accountID == 0 {
-		return nil, qrdbsdk.DAOInvalidEntityIDError{
+		return nil, casdk.DAOInvalidEntityIDError{
 			EntityType: "authorization",
 			Reason:     "account ID must be non-zero",
 		}
@@ -94,9 +93,9 @@ func (f *Factory) AuthorizationDAO(accountID uint64) (qrdbsdk.GenericDAO[*casdk.
 }
 
 // ChallengeDAO returns a GenericDAO for ACME challenges scoped to a specific account.
-func (f *Factory) ChallengeDAO(accountID uint64) (qrdbsdk.GenericDAO[*casdk.ACMEChallengeEntity], error) {
+func (f *Factory) ChallengeDAO(accountID uint64) (casdk.GenericDAO[*casdk.ACMEChallengeEntity], error) {
 	if accountID == 0 {
-		return nil, qrdbsdk.DAOInvalidEntityIDError{
+		return nil, casdk.DAOInvalidEntityIDError{
 			EntityType: "challenge",
 			Reason:     "account ID must be non-zero",
 		}
@@ -109,7 +108,7 @@ func (f *Factory) ChallengeDAO(accountID uint64) (qrdbsdk.GenericDAO[*casdk.ACME
 }
 
 // CertificateDAO returns a GenericDAO for ACME certificates.
-func (f *Factory) CertificateDAO() (qrdbsdk.GenericDAO[*casdk.ACMECertificateEntity], error) {
+func (f *Factory) CertificateDAO() (casdk.GenericDAO[*casdk.ACMECertificateEntity], error) {
 	return newGenericDAO[*casdk.ACMECertificateEntity](
 		f.storage, "acme/certificates", f.tenantID,
 		func() *casdk.ACMECertificateEntity { return &casdk.ACMECertificateEntity{} },
@@ -118,7 +117,7 @@ func (f *Factory) CertificateDAO() (qrdbsdk.GenericDAO[*casdk.ACMECertificateEnt
 }
 
 // NonceDAO returns a GenericDAO for ACME nonces.
-func (f *Factory) NonceDAO() (qrdbsdk.GenericDAO[*casdk.ACMENonceEntity], error) {
+func (f *Factory) NonceDAO() (casdk.GenericDAO[*casdk.ACMENonceEntity], error) {
 	return newGenericDAO[*casdk.ACMENonceEntity](
 		f.storage, "acme/nonces", f.tenantID,
 		func() *casdk.ACMENonceEntity { return &casdk.ACMENonceEntity{} },
@@ -127,7 +126,7 @@ func (f *Factory) NonceDAO() (qrdbsdk.GenericDAO[*casdk.ACMENonceEntity], error)
 }
 
 // ExternalAccountBindingDAO returns a GenericDAO for external account bindings.
-func (f *Factory) ExternalAccountBindingDAO() (qrdbsdk.GenericDAO[*casdk.ACMEExternalAccountBinding], error) {
+func (f *Factory) ExternalAccountBindingDAO() (casdk.GenericDAO[*casdk.ACMEExternalAccountBinding], error) {
 	return newGenericDAO[*casdk.ACMEExternalAccountBinding](
 		f.storage, "acme/eab", f.tenantID,
 		func() *casdk.ACMEExternalAccountBinding { return &casdk.ACMEExternalAccountBinding{} },

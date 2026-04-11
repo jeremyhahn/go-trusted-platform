@@ -5,14 +5,14 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jeremyhahn/go-qrdb/pkg/dao"
+	casdk "github.com/jeremyhahn/go-trusted-ca/sdk/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// pq is a test helper to build a PageQuery.
-func pq(page, pageSize int) dao.PageQuery {
-	return dao.PageQuery{Page: page, PageSize: pageSize}
+// pq is a test helper to build a DAOPageQuery.
+func pq(page, pageSize int) casdk.DAOPageQuery {
+	return casdk.DAOPageQuery{Page: page, PageSize: pageSize}
 }
 
 func TestNewFactory(t *testing.T) {
@@ -340,17 +340,17 @@ func TestEvaluateCondition(t *testing.T) {
 	entity := &verifyEntity{ID: 42}
 
 	t.Run("value match", func(t *testing.T) {
-		cond := dao.Condition{Target: dao.ConditionValue, Value: entity}
+		cond := casdk.DAOCondition{Target: casdk.DAOConditionValue, Value: entity}
 		assert.True(t, evaluateCondition(entity, cond))
 	})
 
 	t.Run("value mismatch", func(t *testing.T) {
-		cond := dao.Condition{Target: dao.ConditionValue, Value: &verifyEntity{ID: 99}}
+		cond := casdk.DAOCondition{Target: casdk.DAOConditionValue, Value: &verifyEntity{ID: 99}}
 		assert.False(t, evaluateCondition(entity, cond))
 	})
 
 	t.Run("unknown target returns true", func(t *testing.T) {
-		cond := dao.Condition{Target: 999}
+		cond := casdk.DAOCondition{Target: 999}
 		assert.True(t, evaluateCondition(entity, cond))
 	})
 }

@@ -16,7 +16,6 @@ package quicbaas
 import (
 	"fmt"
 
-	qrdbsdk "github.com/jeremyhahn/go-qrdb/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	casdk "github.com/jeremyhahn/go-trusted-ca/sdk/go"
 )
@@ -48,7 +47,7 @@ func NewTenantAwareFactory(storage objectstorage.Client) (*TenantAwareFactory, e
 // TenantDAO returns a GenericDAO for managing tenants.
 // This DAO is platform-scoped (no tenant prefix) and is intended for
 // super-admin operations only.
-func (f *TenantAwareFactory) TenantDAO() (qrdbsdk.GenericDAO[*casdk.ACMETenant], error) {
+func (f *TenantAwareFactory) TenantDAO() (casdk.GenericDAO[*casdk.ACMETenant], error) {
 	return newGenericDAO[*casdk.ACMETenant](
 		f.storage, "acme/tenants", "",
 		func() *casdk.ACMETenant { return &casdk.ACMETenant{} },
@@ -87,7 +86,7 @@ func (f *tenantScopedFactory) prefix(base string) string {
 }
 
 // AccountDAO returns a tenant-scoped GenericDAO for ACME accounts.
-func (f *tenantScopedFactory) AccountDAO() (qrdbsdk.GenericDAO[*casdk.ACMEAccountEntity], error) {
+func (f *tenantScopedFactory) AccountDAO() (casdk.GenericDAO[*casdk.ACMEAccountEntity], error) {
 	return newGenericDAO[*casdk.ACMEAccountEntity](
 		f.storage, f.prefix("accounts"), f.tenantID,
 		func() *casdk.ACMEAccountEntity { return &casdk.ACMEAccountEntity{} },
@@ -96,9 +95,9 @@ func (f *tenantScopedFactory) AccountDAO() (qrdbsdk.GenericDAO[*casdk.ACMEAccoun
 }
 
 // OrderDAO returns a tenant-scoped GenericDAO for ACME orders.
-func (f *tenantScopedFactory) OrderDAO(accountID uint64) (qrdbsdk.GenericDAO[*casdk.ACMEOrderEntity], error) {
+func (f *tenantScopedFactory) OrderDAO(accountID uint64) (casdk.GenericDAO[*casdk.ACMEOrderEntity], error) {
 	if accountID == 0 {
-		return nil, qrdbsdk.DAOInvalidEntityIDError{
+		return nil, casdk.DAOInvalidEntityIDError{
 			EntityType: "order",
 			Reason:     "account ID must be non-zero",
 		}
@@ -111,9 +110,9 @@ func (f *tenantScopedFactory) OrderDAO(accountID uint64) (qrdbsdk.GenericDAO[*ca
 }
 
 // AuthorizationDAO returns a tenant-scoped GenericDAO for ACME authorizations.
-func (f *tenantScopedFactory) AuthorizationDAO(accountID uint64) (qrdbsdk.GenericDAO[*casdk.ACMEAuthorizationEntity], error) {
+func (f *tenantScopedFactory) AuthorizationDAO(accountID uint64) (casdk.GenericDAO[*casdk.ACMEAuthorizationEntity], error) {
 	if accountID == 0 {
-		return nil, qrdbsdk.DAOInvalidEntityIDError{
+		return nil, casdk.DAOInvalidEntityIDError{
 			EntityType: "authorization",
 			Reason:     "account ID must be non-zero",
 		}
@@ -126,9 +125,9 @@ func (f *tenantScopedFactory) AuthorizationDAO(accountID uint64) (qrdbsdk.Generi
 }
 
 // ChallengeDAO returns a tenant-scoped GenericDAO for ACME challenges.
-func (f *tenantScopedFactory) ChallengeDAO(accountID uint64) (qrdbsdk.GenericDAO[*casdk.ACMEChallengeEntity], error) {
+func (f *tenantScopedFactory) ChallengeDAO(accountID uint64) (casdk.GenericDAO[*casdk.ACMEChallengeEntity], error) {
 	if accountID == 0 {
-		return nil, qrdbsdk.DAOInvalidEntityIDError{
+		return nil, casdk.DAOInvalidEntityIDError{
 			EntityType: "challenge",
 			Reason:     "account ID must be non-zero",
 		}
@@ -141,7 +140,7 @@ func (f *tenantScopedFactory) ChallengeDAO(accountID uint64) (qrdbsdk.GenericDAO
 }
 
 // CertificateDAO returns a tenant-scoped GenericDAO for ACME certificates.
-func (f *tenantScopedFactory) CertificateDAO() (qrdbsdk.GenericDAO[*casdk.ACMECertificateEntity], error) {
+func (f *tenantScopedFactory) CertificateDAO() (casdk.GenericDAO[*casdk.ACMECertificateEntity], error) {
 	return newGenericDAO[*casdk.ACMECertificateEntity](
 		f.storage, f.prefix("certificates"), f.tenantID,
 		func() *casdk.ACMECertificateEntity { return &casdk.ACMECertificateEntity{} },
@@ -150,7 +149,7 @@ func (f *tenantScopedFactory) CertificateDAO() (qrdbsdk.GenericDAO[*casdk.ACMECe
 }
 
 // NonceDAO returns a tenant-scoped GenericDAO for ACME nonces.
-func (f *tenantScopedFactory) NonceDAO() (qrdbsdk.GenericDAO[*casdk.ACMENonceEntity], error) {
+func (f *tenantScopedFactory) NonceDAO() (casdk.GenericDAO[*casdk.ACMENonceEntity], error) {
 	return newGenericDAO[*casdk.ACMENonceEntity](
 		f.storage, f.prefix("nonces"), f.tenantID,
 		func() *casdk.ACMENonceEntity { return &casdk.ACMENonceEntity{} },
@@ -159,7 +158,7 @@ func (f *tenantScopedFactory) NonceDAO() (qrdbsdk.GenericDAO[*casdk.ACMENonceEnt
 }
 
 // ExternalAccountBindingDAO returns a tenant-scoped GenericDAO for external account bindings.
-func (f *tenantScopedFactory) ExternalAccountBindingDAO() (qrdbsdk.GenericDAO[*casdk.ACMEExternalAccountBinding], error) {
+func (f *tenantScopedFactory) ExternalAccountBindingDAO() (casdk.GenericDAO[*casdk.ACMEExternalAccountBinding], error) {
 	return newGenericDAO[*casdk.ACMEExternalAccountBinding](
 		f.storage, f.prefix("eab"), f.tenantID,
 		func() *casdk.ACMEExternalAccountBinding { return &casdk.ACMEExternalAccountBinding{} },
