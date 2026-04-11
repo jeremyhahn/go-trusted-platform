@@ -136,7 +136,7 @@ func printFullVMDetails(printer *cli.Printer, vm *platformv1.VM) error {
 		}
 	}
 
-	printer.PrintKeyValue("State", formatVMState(computesvc.VMState(vm.State)))
+	printer.PrintKeyValue("State", formatVMState(computesvc.VMStateFromProto(vm.State)))
 
 	if vm.HostId != "" {
 		printer.PrintKeyValue("Host ID", vm.HostId)
@@ -153,7 +153,7 @@ func printFullVMDetails(printer *cli.Printer, vm *platformv1.VM) error {
 		// Configuration
 		fmt.Println()
 		printer.PrintInfo("Configuration")
-		printer.PrintKeyValue("Firmware", formatFirmwareType(computesvc.FirmwareType(vm.Config.Firmware)))
+		printer.PrintKeyValue("Firmware", formatFirmwareType(computesvc.FirmwareTypeFromProto(vm.Config.Firmware)))
 		printer.PrintKeyValue("Secure Boot", formatBool(vm.Config.SecureBoot))
 		if vm.Config.Tpm != nil {
 			printer.PrintKeyValue("vTPM", formatBool(vm.Config.Tpm.Enabled))

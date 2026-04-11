@@ -146,6 +146,33 @@ func ParseVMState(state string) (VMState, bool) {
 	return s, ok
 }
 
+// VMStateFromProto converts a proto VMState enum to a domain VMState.
+// Returns StateUnspecified for unknown values.
+func VMStateFromProto(s platformv1.VMState) VMState {
+	if state, ok := protoVMStateToState[s]; ok {
+		return state
+	}
+	return StateUnspecified
+}
+
+// VMStateToProto converts a domain VMState to a proto VMState enum.
+// Returns VMState_VM_STATE_UNSPECIFIED for unknown values.
+func VMStateToProto(s VMState) platformv1.VMState {
+	if proto, ok := vmStateToProto[s]; ok {
+		return proto
+	}
+	return platformv1.VMState_VM_STATE_UNSPECIFIED
+}
+
+// FirmwareTypeFromProto converts a proto FirmwareType enum to a domain FirmwareType.
+// Returns FirmwareUnspecified for unknown values.
+func FirmwareTypeFromProto(f platformv1.FirmwareType) FirmwareType {
+	if fw, ok := protoFirmwareTypeToFirmware[f]; ok {
+		return fw
+	}
+	return FirmwareUnspecified
+}
+
 // Proto-to-domain converters
 
 // VMFromProto converts a platformv1.VM to a domain VM.

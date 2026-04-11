@@ -202,7 +202,7 @@ func printVMDetails(printer *cli.Printer, vm *platformv1.VM) {
 	printer.PrintKeyValue("ID", vm.Id)
 	if vm.Config != nil {
 		printer.PrintKeyValue("Name", vm.Config.Name)
-		printer.PrintKeyValue("Firmware", formatFirmwareType(computesvc.FirmwareType(vm.Config.Firmware)))
+		printer.PrintKeyValue("Firmware", formatFirmwareType(computesvc.FirmwareTypeFromProto(vm.Config.Firmware)))
 		if vm.Config.Cpu != nil {
 			printer.PrintKeyValue("CPUs", fmt.Sprintf("%d", vm.Config.Cpu.Cores))
 		}
@@ -217,6 +217,6 @@ func printVMDetails(printer *cli.Printer, vm *platformv1.VM) {
 			printer.PrintKeyValue("vTPM", formatBool(vm.Config.Tpm.Enabled))
 		}
 	}
-	printer.PrintKeyValue("State", formatVMState(computesvc.VMState(vm.State)))
+	printer.PrintKeyValue("State", formatVMState(computesvc.VMStateFromProto(vm.State)))
 	printer.PrintKeyValue("Created", formatTimestamp(vm.CreatedAt.AsTime()))
 }

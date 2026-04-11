@@ -18,24 +18,22 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
-
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 func TestFormatVMState_AllStates(t *testing.T) {
 	tests := []struct {
-		state    platformv1.VMState
+		state    computesvc.VMState
 		expected string
 	}{
-		{platformv1.VMState_VM_STATE_STOPPED, "STOPPED"},
-		{platformv1.VMState_VM_STATE_STARTING, "STARTING"},
-		{platformv1.VMState_VM_STATE_RUNNING, "RUNNING"},
-		{platformv1.VMState_VM_STATE_PAUSED, "PAUSED"},
-		{platformv1.VMState_VM_STATE_STOPPING, "STOPPING"},
-		{platformv1.VMState_VM_STATE_REBOOTING, "REBOOTING"},
-		{platformv1.VMState_VM_STATE_MIGRATING, "MIGRATING"},
-		{platformv1.VMState_VM_STATE_ERROR, "ERROR"},
+		{computesvc.StateStopped, "STOPPED"},
+		{computesvc.StateStarting, "STARTING"},
+		{computesvc.StateRunning, "RUNNING"},
+		{computesvc.StatePaused, "PAUSED"},
+		{computesvc.StateStopping, "STOPPING"},
+		{computesvc.StateRebooting, "REBOOTING"},
+		{computesvc.StateMigrating, "MIGRATING"},
+		{computesvc.StateError, "ERROR"},
 	}
 
 	for _, tt := range tests {
@@ -49,95 +47,30 @@ func TestFormatVMState_AllStates(t *testing.T) {
 }
 
 func TestFormatVMState_Unspecified(t *testing.T) {
-	result := formatVMState(platformv1.VMState_VM_STATE_UNSPECIFIED)
+	// Empty string triggers UNKNOWN; StateUnspecified ("UNSPECIFIED") passes through.
+	result := formatVMState("")
 	if result != "UNKNOWN" {
-		t.Errorf("expected 'UNKNOWN' for unspecified state, got %q", result)
+		t.Errorf("expected 'UNKNOWN' for empty state, got %q", result)
 	}
 }
 
 func TestFormatVMState_InvalidValue(t *testing.T) {
-	result := formatVMState(platformv1.VMState(999))
-	if result != "UNKNOWN" {
-		t.Errorf("expected 'UNKNOWN' for invalid state value, got %q", result)
+	// Non-empty unknown values pass through as-is; only empty string returns "UNKNOWN".
+	result := formatVMState(computesvc.VMState("BOGUS_999"))
+	if result != "BOGUS_999" {
+		t.Errorf("expected %q for unknown state value, got %q", "BOGUS_999", result)
 	}
 }
 
-func TestParseVMState_AllStates(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected platformv1.VMState
-	}{
-		{"STOPPED", platformv1.VMState_VM_STATE_STOPPED},
-		{"STARTING", platformv1.VMState_VM_STATE_STARTING},
-		{"RUNNING", platformv1.VMState_VM_STATE_RUNNING},
-		{"PAUSED", platformv1.VMState_VM_STATE_PAUSED},
-		{"STOPPING", platformv1.VMState_VM_STATE_STOPPING},
-		{"REBOOTING", platformv1.VMState_VM_STATE_REBOOTING},
-		{"MIGRATING", platformv1.VMState_VM_STATE_MIGRATING},
-		{"ERROR", platformv1.VMState_VM_STATE_ERROR},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			state, ok := parseVMState(tt.input)
-			if !ok {
-				t.Fatalf("parseVMState(%q) returned false", tt.input)
-			}
-			if state != tt.expected {
-				t.Errorf("expected %v, got %v", tt.expected, state)
-			}
-		})
-	}
-}
-
-func TestParseVMState_CaseInsensitive(t *testing.T) {
-	tests := []string{"running", "Running", "RUNNING", "rUnNiNg"}
-
-	for _, input := range tests {
-		t.Run(input, func(t *testing.T) {
-			state, ok := parseVMState(input)
-			if !ok {
-				t.Fatalf("parseVMState(%q) should succeed", input)
-			}
-			if state != platformv1.VMState_VM_STATE_RUNNING {
-				t.Errorf("expected VM_STATE_RUNNING, got %v", state)
-			}
-		})
-	}
-}
-
-func TestParseVMState_WithWhitespace(t *testing.T) {
-	state, ok := parseVMState("  STOPPED  ")
-	if !ok {
-		t.Fatal("parseVMState should trim whitespace")
-	}
-	if state != platformv1.VMState_VM_STATE_STOPPED {
-		t.Errorf("expected VM_STATE_STOPPED, got %v", state)
-	}
-}
-
-func TestParseVMState_Invalid(t *testing.T) {
-	invalidStates := []string{"invalid", "BOGUS", "", "UNKNOWN", "ready"}
-
-	for _, input := range invalidStates {
-		t.Run(input, func(t *testing.T) {
-			_, ok := parseVMState(input)
-			if ok {
-				t.Errorf("parseVMState(%q) should return false", input)
-			}
-		})
-	}
-}
-
-func TestFormatTimestamp_Nil(t *testing.T) {
-	result := formatTimestamp(nil)
+func TestFormatTimestamp_Zero(t *testing.T) {
+	result := formatTimestamp(time.Time{})
 	if result != "N/A" {
-		t.Errorf("expected 'N/A' for nil timestamp, got %q", result)
+		t.Errorf("expected 'N/A' for zero time, got %q", result)
 	}
 }
 
 func TestFormatTimestamp_Valid(t *testing.T) {
-	ts := timestamppb.New(time.Date(2025, 6, 15, 12, 30, 0, 0, time.UTC))
+	ts := time.Date(2025, 6, 15, 12, 30, 0, 0, time.UTC)
 
 	result := formatTimestamp(ts)
 
@@ -153,13 +86,13 @@ func TestFormatTimestamp_Valid(t *testing.T) {
 }
 
 func TestFormatTimestamp_Epoch(t *testing.T) {
-	ts := timestamppb.New(time.Unix(0, 0))
+	ts := time.Unix(1, 0).UTC() // epoch+1s to avoid zero-time short-circuit
 
 	result := formatTimestamp(ts)
 
 	_, err := time.Parse(time.RFC3339, result)
 	if err != nil {
-		t.Errorf("expected valid RFC3339 for epoch, got %q: %v", result, err)
+		t.Errorf("expected valid RFC3339 for near-epoch time, got %q: %v", result, err)
 	}
 }
 
@@ -279,12 +212,12 @@ func TestTruncateID_Empty(t *testing.T) {
 
 func TestFormatFirmwareType_AllTypes(t *testing.T) {
 	tests := []struct {
-		fw       platformv1.FirmwareType
+		fw       computesvc.FirmwareType
 		expected string
 	}{
-		{platformv1.FirmwareType_FIRMWARE_TYPE_BIOS, "BIOS"},
-		{platformv1.FirmwareType_FIRMWARE_TYPE_UEFI, "UEFI"},
-		{platformv1.FirmwareType_FIRMWARE_TYPE_UEFI_SECURE_BOOT, "UEFI Secure Boot"},
+		{computesvc.FirmwareBIOS, "BIOS"},
+		{computesvc.FirmwareUEFI, "UEFI"},
+		{computesvc.FirmwareUEFISecureBoot, "UEFI Secure Boot"},
 	}
 
 	for _, tt := range tests {
@@ -298,36 +231,17 @@ func TestFormatFirmwareType_AllTypes(t *testing.T) {
 }
 
 func TestFormatFirmwareType_Unspecified(t *testing.T) {
-	result := formatFirmwareType(platformv1.FirmwareType_FIRMWARE_TYPE_UNSPECIFIED)
+	// Empty string triggers "Unknown"; FirmwareUnspecified ("UNSPECIFIED") passes through.
+	result := formatFirmwareType("")
 	if result != "Unknown" {
-		t.Errorf("expected 'Unknown' for unspecified firmware, got %q", result)
+		t.Errorf("expected 'Unknown' for empty firmware type, got %q", result)
 	}
 }
 
 func TestFormatFirmwareType_InvalidValue(t *testing.T) {
-	result := formatFirmwareType(platformv1.FirmwareType(999))
-	if result != "Unknown" {
-		t.Errorf("expected 'Unknown' for invalid firmware type, got %q", result)
-	}
-}
-
-func TestVMStateToString_MapCompleteness(t *testing.T) {
-	expectedCount := 8 // STOPPED, STARTING, RUNNING, PAUSED, STOPPING, REBOOTING, MIGRATING, ERROR
-	if len(vmStateToString) != expectedCount {
-		t.Errorf("vmStateToString should have %d entries, got %d", expectedCount, len(vmStateToString))
-	}
-}
-
-func TestStringToVMState_MapCompleteness(t *testing.T) {
-	expectedCount := 8
-	if len(stringToVMState) != expectedCount {
-		t.Errorf("stringToVMState should have %d entries, got %d", expectedCount, len(stringToVMState))
-	}
-}
-
-func TestFirmwareTypeToString_MapCompleteness(t *testing.T) {
-	expectedCount := 3 // BIOS, UEFI, UEFI_SECURE_BOOT
-	if len(firmwareTypeToString) != expectedCount {
-		t.Errorf("firmwareTypeToString should have %d entries, got %d", expectedCount, len(firmwareTypeToString))
+	// Non-empty unknown values pass through as-is.
+	result := formatFirmwareType(computesvc.FirmwareType("BOGUS"))
+	if result != "BOGUS" {
+		t.Errorf("expected %q for unknown firmware type, got %q", "BOGUS", result)
 	}
 }

@@ -33,6 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmstpm2 "github.com/jeremyhahn/go-xkms/pkg/tpm2"
 )
 
 // =============================================================================
@@ -1539,7 +1540,7 @@ func (m *mockTPM) Info() (string, error)                                       {
 func (m *mockTPM) IsFIPS140_2() (bool, error)                                  { return false, nil }
 func (m *mockTPM) IsPlatformPCRExtended() (bool, error)                        { return false, nil }
 func (m *mockTPM) ExtendPCR(pcrIndex int, hashAlg string, data []byte) error   { return nil }
-func (m *mockTPM) Install(soPIN xkmssdk.Password) error                        { return nil }
+func (m *mockTPM) Install(soPIN xkmssdk.Password, opts *xkmstpm2.InstallOptions) error { return nil }
 func (m *mockTPM) LoadKeyPair(keyAttrs *xkmssdk.KeyAttributes, session *tpm2.Session, backend xkmssdk.TPMKeyBackend) (*tpm2.LoadResponse, error) {
 	return nil, nil
 }
@@ -1665,7 +1666,9 @@ func (m *mockTPM) Hash(keyAttrs *xkmssdk.KeyAttributes, data []byte) ([]byte, []
 func (m *mockTPM) ECDHZGen(keyAttrs *xkmssdk.KeyAttributes, peerPublicKey *tpm2.TPMSECCPoint, backend xkmssdk.TPMKeyBackend) ([]byte, error) {
 	return nil, nil
 }
-func (m *mockTPM) FactoryReset(ownerAuth []byte) error { return nil }
+func (m *mockTPM) FactoryReset(ownerAuth []byte) error          { return nil }
+func (m *mockTPM) FactoryResetWithClear(ownerAuth []byte) error { return nil }
+func (m *mockTPM) ForceClear() error                            { return nil }
 func (m *mockTPM) SSRK() *xkmssdk.SRKConfig            { return nil }
 func (m *mockTPM) PlatformKeyStore() xkmssdk.PlatformKeyStorer {
 	return nil
