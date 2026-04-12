@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -28,12 +28,12 @@ func TestPrintKMSStatusTable_Full(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &platformv1.BackendStatusResponse{
+	resp := &kmssvc.BackendStatusResult{
 		BackendStatus: "healthy",
 		BackendType:   "software",
 		Device:        "/dev/tpm0",
 		Region:        "us-east-1",
-		KeyId:         "key-123",
+		KeyID:         "key-123",
 		PcrBanks:      []string{"SHA256", "SHA384"},
 		PcrRegisters:  []int32{0, 7, 14},
 		Capabilities: map[string]bool{
@@ -58,7 +58,7 @@ func TestPrintKMSStatusTable_Minimal(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &platformv1.BackendStatusResponse{
+	resp := &kmssvc.BackendStatusResult{
 		BackendType: "software",
 	}
 
@@ -74,7 +74,7 @@ func TestPrintKMSStatusTable_WithExplicitStatus(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &platformv1.BackendStatusResponse{
+	resp := &kmssvc.BackendStatusResult{
 		BackendStatus: "degraded",
 		BackendType:   "tpm",
 	}
@@ -91,7 +91,7 @@ func TestPrintKMSStatusTable_NoPCRBanks(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &platformv1.BackendStatusResponse{
+	resp := &kmssvc.BackendStatusResult{
 		BackendType:   "software",
 		BackendStatus: "healthy",
 	}

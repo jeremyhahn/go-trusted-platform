@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 // deleteOptions holds the options for the delete command
@@ -78,18 +78,20 @@ func runDelete(flags *cli.CommonFlags, vmID string, opts *deleteOptions) error {
 	}
 	defer base.Close()
 
-	client := base.Client().Compute()
-	if client == nil {
+	grpcClient := base.Client().Compute()
+	if grpcClient == nil {
 		return ErrComputeClientNotInitialized{}
 	}
 
-	req := &platformv1.DeleteVMRequest{
-		Id:          vmID,
+	sdkClient := computesvc.NewClientFromGRPC(grpcClient)
+
+	params := &computesvc.DeleteVMParams{
+		ID:          vmID,
 		DeleteDisks: opts.deleteDisks,
 	}
 
 	ctx := base.Context()
-	resp, err := client.DeleteVM(ctx, req)
+	status, err := sdkClient.DeleteVMDomain(ctx, params)
 	if err != nil {
 		return ErrVMOperationFailed{Operation: "delete", ID: vmID, Err: err}
 	}
@@ -98,13 +100,13 @@ func runDelete(flags *cli.CommonFlags, vmID string, opts *deleteOptions) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(status)
 
 	case cli.OutputFormatTable:
-		if resp.Status != nil && resp.Status.Success {
+		if status != nil && status.Success {
 			printer.PrintSuccess(fmt.Sprintf("VM deleted successfully: %s", vmID))
-		} else if resp.Status != nil {
-			printer.PrintError(fmt.Sprintf("Failed to delete VM: %s", resp.Status.Message))
+		} else if status != nil {
+			printer.PrintError(fmt.Sprintf("Failed to delete VM: %s", status.Message))
 		}
 		return nil
 

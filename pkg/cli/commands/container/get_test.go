@@ -15,10 +15,10 @@ package container
 
 import (
 	"testing"
+	"time"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -114,14 +114,14 @@ func TestRunGet_EmptyContainerID(t *testing.T) {
 
 func TestFormatRestartPolicy(t *testing.T) {
 	tests := []struct {
-		policy   platformv1.RestartPolicy
+		policy   computesvc.RestartPolicy
 		expected string
 	}{
-		{platformv1.RestartPolicy_RESTART_POLICY_UNSPECIFIED, "Unknown"},
-		{platformv1.RestartPolicy_RESTART_POLICY_NO, "No"},
-		{platformv1.RestartPolicy_RESTART_POLICY_ON_FAILURE, "On Failure"},
-		{platformv1.RestartPolicy_RESTART_POLICY_ALWAYS, "Always"},
-		{platformv1.RestartPolicy_RESTART_POLICY_UNLESS_STOPPED, "Unless Stopped"},
+		{computesvc.RestartPolicy("unspecified"), "Unknown"},
+		{computesvc.RestartPolicy("no"), "No"},
+		{computesvc.RestartPolicy("on-failure"), "On Failure"},
+		{computesvc.RestartPolicy("always"), "Always"},
+		{computesvc.RestartPolicy("unless-stopped"), "Unless Stopped"},
 	}
 
 	for _, tt := range tests {
@@ -145,9 +145,9 @@ func TestPrintFullContainerDetails_NilContainer(t *testing.T) {
 
 func TestPrintFullContainerDetails_MinimalContainer(t *testing.T) {
 	printer := cli.NewPrinter(cli.OutputFormatTable, true)
-	container := &platformv1.Container{
-		Id:    "test-container-id",
-		State: platformv1.ContainerState_CONTAINER_STATE_RUNNING,
+	container := &computesvc.Container{
+		ID:    "test-container-id",
+		State: computesvc.ContainerStateRunning,
 	}
 
 	err := printFullContainerDetails(printer, container)
@@ -158,11 +158,11 @@ func TestPrintFullContainerDetails_MinimalContainer(t *testing.T) {
 
 func TestPrintFullContainerDetails_FullContainer(t *testing.T) {
 	printer := cli.NewPrinter(cli.OutputFormatTable, true)
-	container := &platformv1.Container{
-		Id:     "test-container-id",
-		State:  platformv1.ContainerState_CONTAINER_STATE_RUNNING,
-		HostId: "host-1",
-		Config: &platformv1.ContainerConfig{
+	container := &computesvc.Container{
+		ID:     "test-container-id",
+		State:  computesvc.ContainerStateRunning,
+		HostID: "host-1",
+		Config: &computesvc.ContainerConfig{
 			Name:       "test-container",
 			Image:      "nginx:latest",
 			ImageHash:  "sha256:abc123",
@@ -171,19 +171,19 @@ func TestPrintFullContainerDetails_FullContainer(t *testing.T) {
 			Privileged: false,
 			TpmAccess:  true,
 			Network:    "bridge",
-			Env: []*platformv1.EnvVar{
+			Env: []*computesvc.EnvVar{
 				{Name: "ENV", Value: "prod"},
 			},
-			Ports: []*platformv1.PortMapping{
+			Ports: []*computesvc.PortMapping{
 				{HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
 			},
-			Volumes: []*platformv1.VolumeMount{
+			Volumes: []*computesvc.VolumeMount{
 				{Source: "/host", Destination: "/container", Readonly: true},
 			},
 			Capabilities: []string{"NET_ADMIN"},
-			Resources: &platformv1.ResourceLimits{
-				MaxMemoryMb: 512,
-				MaxCpus:     2,
+			Resources: &computesvc.ResourceLimits{
+				MaxMemoryMB: 512,
+				MaxCPUs:     2,
 			},
 			Labels: map[string]string{
 				"app": "nginx",
@@ -191,12 +191,12 @@ func TestPrintFullContainerDetails_FullContainer(t *testing.T) {
 			Metadata: map[string]string{
 				"version": "1.0",
 			},
-			RestartPolicy: platformv1.RestartPolicy_RESTART_POLICY_ALWAYS,
+			RestartPolicy: computesvc.RestartPolicy("always"),
 		},
-		Metrics: &platformv1.ContainerMetrics{
-			CpuUsagePercent: 25.5,
-			MemoryUsedMb:    256,
-			MemoryLimitMb:   512,
+		Metrics: &computesvc.ContainerMetrics{
+			CPUUsagePercent: 25.5,
+			MemoryUsedMB:    256,
+			MemoryLimitMB:   512,
 			DiskReadBytes:   1024 * 1024,
 			DiskWriteBytes:  512 * 1024,
 			NetworkRxBytes:  2 * 1024 * 1024,
@@ -213,11 +213,11 @@ func TestPrintFullContainerDetails_FullContainer(t *testing.T) {
 
 func TestPrintFullContainerDetails_ExitedContainer(t *testing.T) {
 	printer := cli.NewPrinter(cli.OutputFormatTable, true)
-	container := &platformv1.Container{
-		Id:       "test-container-id",
-		State:    platformv1.ContainerState_CONTAINER_STATE_EXITED,
+	container := &computesvc.Container{
+		ID:       "test-container-id",
+		State:    computesvc.ContainerStateExited,
 		ExitCode: 0,
-		Config: &platformv1.ContainerConfig{
+		Config: &computesvc.ContainerConfig{
 			Name:  "exited-container",
 			Image: "alpine",
 		},
@@ -231,11 +231,11 @@ func TestPrintFullContainerDetails_ExitedContainer(t *testing.T) {
 
 func TestPrintFullContainerDetails_WithNonZeroExitCode(t *testing.T) {
 	printer := cli.NewPrinter(cli.OutputFormatTable, true)
-	container := &platformv1.Container{
-		Id:       "test-container-id",
-		State:    platformv1.ContainerState_CONTAINER_STATE_EXITED,
+	container := &computesvc.Container{
+		ID:       "test-container-id",
+		State:    computesvc.ContainerStateExited,
 		ExitCode: 1,
-		Config: &platformv1.ContainerConfig{
+		Config: &computesvc.ContainerConfig{
 			Name:  "failed-container",
 			Image: "alpine",
 		},
@@ -249,10 +249,10 @@ func TestPrintFullContainerDetails_WithNonZeroExitCode(t *testing.T) {
 
 func TestPrintFullContainerDetails_WithArgs(t *testing.T) {
 	printer := cli.NewPrinter(cli.OutputFormatTable, true)
-	container := &platformv1.Container{
-		Id:    "test-container-id",
-		State: platformv1.ContainerState_CONTAINER_STATE_RUNNING,
-		Config: &platformv1.ContainerConfig{
+	container := &computesvc.Container{
+		ID:    "test-container-id",
+		State: computesvc.ContainerStateRunning,
+		Config: &computesvc.ContainerConfig{
 			Name:  "container-with-args",
 			Image: "alpine",
 			Args:  []string{"arg1", "arg2"},
@@ -267,14 +267,14 @@ func TestPrintFullContainerDetails_WithArgs(t *testing.T) {
 
 func TestPrintFullContainerDetails_WithPortMappingAndHostIP(t *testing.T) {
 	printer := cli.NewPrinter(cli.OutputFormatTable, true)
-	container := &platformv1.Container{
-		Id:    "test-container-id",
-		State: platformv1.ContainerState_CONTAINER_STATE_RUNNING,
-		Config: &platformv1.ContainerConfig{
+	container := &computesvc.Container{
+		ID:    "test-container-id",
+		State: computesvc.ContainerStateRunning,
+		Config: &computesvc.ContainerConfig{
 			Name:  "container-with-host-ip",
 			Image: "nginx",
-			Ports: []*platformv1.PortMapping{
-				{HostPort: 8080, ContainerPort: 80, Protocol: "tcp", HostIp: "127.0.0.1"},
+			Ports: []*computesvc.PortMapping{
+				{HostPort: 8080, ContainerPort: 80, Protocol: "tcp", HostIP: "127.0.0.1"},
 			},
 		},
 	}
@@ -287,13 +287,13 @@ func TestPrintFullContainerDetails_WithPortMappingAndHostIP(t *testing.T) {
 
 func TestPrintFullContainerDetails_WithFinishedAt(t *testing.T) {
 	printer := cli.NewPrinter(cli.OutputFormatTable, true)
-	now := timestamppb.Now()
-	container := &platformv1.Container{
-		Id:         "test-container-id",
-		State:      platformv1.ContainerState_CONTAINER_STATE_EXITED,
+	now := time.Now()
+	container := &computesvc.Container{
+		ID:         "test-container-id",
+		State:      computesvc.ContainerStateExited,
 		StartedAt:  now,
 		FinishedAt: now,
-		Config: &platformv1.ContainerConfig{
+		Config: &computesvc.ContainerConfig{
 			Name:  "finished-container",
 			Image: "alpine",
 		},

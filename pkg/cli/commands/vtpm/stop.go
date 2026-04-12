@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -64,17 +64,10 @@ func runStop(flags *cli.CommonFlags, bundleID string) error {
 	}
 	defer base.Close()
 
-	client := base.Client().VTPM()
-	if client == nil {
-		return ErrVTPMNotAvailable{}
-	}
-
-	req := &platformv1.StopVTPMRequest{
-		BundleId: bundleID,
-	}
+	sdkClient := vtpmsvc.NewClientFromGRPC(base.Client().VTPM())
 
 	ctx := base.Context()
-	resp, err := client.StopVTPM(ctx, req)
+	resp, err := sdkClient.StopDomain(ctx, bundleID)
 	if err != nil {
 		return ErrStopVTPMFailed{Reason: err.Error()}
 	}
@@ -87,7 +80,7 @@ func runStop(flags *cli.CommonFlags, bundleID string) error {
 
 	case cli.OutputFormatTable:
 		if resp.Stopped {
-			printer.PrintSuccess(fmt.Sprintf("vTPM stopped for bundle: %s", resp.BundleId))
+			printer.PrintSuccess(fmt.Sprintf("vTPM stopped for bundle: %s", resp.BundleID))
 		} else {
 			printer.PrintError(fmt.Sprintf("Failed to stop vTPM for bundle: %s", bundleID))
 		}

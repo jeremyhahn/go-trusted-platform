@@ -16,11 +16,11 @@ package iam
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -29,12 +29,12 @@ import (
 // =============================================================================
 
 func TestFormatAppTimestamp(t *testing.T) {
-	t.Run("nil returns dash", func(t *testing.T) {
-		assert.Equal(t, "-", formatAppTimestamp(nil))
+	t.Run("zero returns dash", func(t *testing.T) {
+		assert.Equal(t, "-", formatAppTimestamp(time.Time{}))
 	})
 
 	t.Run("valid timestamp", func(t *testing.T) {
-		ts := timestamppb.Now()
+		ts := time.Now()
 		result := formatAppTimestamp(ts)
 		assert.NotEmpty(t, result)
 		assert.NotEqual(t, "-", result)
@@ -78,16 +78,17 @@ func TestPrintAppDetails(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	app := &platformv1.IAMApp{
-		ClientId:       "client-123",
+	now := time.Now()
+	app := &iamsvc.App{
+		ClientID:       "client-123",
 		Name:           "test-app",
-		TenantId:       "tenant-1",
-		RedirectUris:   []string{"https://example.com/callback"},
+		TenantID:       "tenant-1",
+		RedirectURIs:   []string{"https://example.com/callback"},
 		GrantTypes:     []string{"authorization_code"},
 		ResponseTypes:  []string{"code"},
 		ResourcePrefix: "app:",
-		CreatedAt:      timestamppb.Now(),
-		UpdatedAt:      timestamppb.Now(),
+		CreatedAt:      now,
+		UpdatedAt:      &now,
 	}
 
 	printAppDetails(printer, app)
@@ -102,10 +103,10 @@ func TestPrintAppDetails_NoResourcePrefix(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	app := &platformv1.IAMApp{
-		ClientId: "client-456",
+	app := &iamsvc.App{
+		ClientID: "client-456",
 		Name:     "minimal-app",
-		TenantId: "tenant-2",
+		TenantID: "tenant-2",
 	}
 
 	printAppDetails(printer, app)
@@ -122,14 +123,15 @@ func TestPrintGroupDetails_Full(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	group := &platformv1.IAMGroup{
-		Id:          "group-1",
-		TenantId:    "tenant-1",
+	now := time.Now()
+	group := &iamsvc.Group{
+		ID:          "group-1",
+		TenantID:    "tenant-1",
 		Name:        "admins",
 		Description: "Admin group",
 		Members:     []string{"user-1", "user-2"},
-		CreatedAt:   timestamppb.Now(),
-		UpdatedAt:   timestamppb.Now(),
+		CreatedAt:   now,
+		UpdatedAt:   &now,
 	}
 
 	printGroupDetails(printer, group)
@@ -144,10 +146,10 @@ func TestPrintGroupDetails_Minimal(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	group := &platformv1.IAMGroup{
-		Id:        "group-2",
-		TenantId:  "tenant-1",
-		CreatedAt: timestamppb.Now(),
+	group := &iamsvc.Group{
+		ID:        "group-2",
+		TenantID:  "tenant-1",
+		CreatedAt: time.Now(),
 	}
 
 	printGroupDetails(printer, group)
@@ -164,14 +166,15 @@ func TestPrintRoleDetails_Full(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	role := &platformv1.IAMRole{
-		Id:          "role-1",
-		TenantId:    "tenant-1",
+	now := time.Now()
+	role := &iamsvc.Role{
+		ID:          "role-1",
+		TenantID:    "tenant-1",
 		Name:        "admin",
 		Description: "Admin role",
 		Permissions: []string{"read", "write", "delete"},
-		CreatedAt:   timestamppb.Now(),
-		UpdatedAt:   timestamppb.Now(),
+		CreatedAt:   now,
+		UpdatedAt:   &now,
 	}
 
 	printRoleDetails(printer, role)
@@ -186,10 +189,10 @@ func TestPrintRoleDetails_NoPermissions(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	role := &platformv1.IAMRole{
-		Id:        "role-2",
-		TenantId:  "tenant-1",
-		CreatedAt: timestamppb.Now(),
+	role := &iamsvc.Role{
+		ID:        "role-2",
+		TenantID:  "tenant-1",
+		CreatedAt: time.Now(),
 	}
 
 	printRoleDetails(printer, role)
@@ -206,18 +209,19 @@ func TestPrintUserDetails_Full(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	user := &platformv1.IAMUser{
-		Id:          "user-1",
-		TenantId:    "tenant-1",
+	now := time.Now()
+	user := &iamsvc.User{
+		ID:          "user-1",
+		TenantID:    "tenant-1",
 		Email:       "admin@example.com",
 		Name:        "Admin User",
 		Roles:       []string{"admin"},
 		Groups:      []string{"admins"},
 		Attributes:  map[string]string{"dept": "eng"},
 		MfaVerified: true,
-		CreatedAt:   timestamppb.Now(),
-		UpdatedAt:   timestamppb.Now(),
-		LastAuth:    timestamppb.Now(),
+		CreatedAt:   now,
+		UpdatedAt:   &now,
+		LastAuth:    &now,
 	}
 
 	printUserDetails(printer, user)
@@ -233,11 +237,11 @@ func TestPrintUserDetails_Minimal(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	user := &platformv1.IAMUser{
-		Id:        "user-2",
-		TenantId:  "tenant-1",
+	user := &iamsvc.User{
+		ID:        "user-2",
+		TenantID:  "tenant-1",
 		Email:     "user@example.com",
-		CreatedAt: timestamppb.Now(),
+		CreatedAt: time.Now(),
 	}
 
 	printUserDetails(printer, user)
@@ -255,15 +259,16 @@ func TestPrintTenantDetails_Full(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	tenant := &platformv1.IAMTenant{
-		Id:   "tenant-1",
+	now := time.Now()
+	tenant := &iamsvc.Tenant{
+		ID:   "tenant-1",
 		Name: "Test Tenant",
-		Settings: &platformv1.IAMTenantSettings{
+		Settings: &iamsvc.TenantSettings{
 			MaxUsers:    100,
 			MfaRequired: true,
 		},
-		CreatedAt: timestamppb.Now(),
-		UpdatedAt: timestamppb.Now(),
+		CreatedAt: now,
+		UpdatedAt: &now,
 	}
 
 	printTenantDetails(printer, tenant)
@@ -278,10 +283,10 @@ func TestPrintTenantDetails_Minimal(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	tenant := &platformv1.IAMTenant{
-		Id:        "tenant-2",
+	tenant := &iamsvc.Tenant{
+		ID:        "tenant-2",
 		Name:      "Minimal",
-		CreatedAt: timestamppb.Now(),
+		CreatedAt: time.Now(),
 	}
 
 	printTenantDetails(printer, tenant)
@@ -294,14 +299,14 @@ func TestPrintTenantDetails_UnlimitedUsers(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	tenant := &platformv1.IAMTenant{
-		Id:   "tenant-3",
+	tenant := &iamsvc.Tenant{
+		ID:   "tenant-3",
 		Name: "Unlimited",
-		Settings: &platformv1.IAMTenantSettings{
+		Settings: &iamsvc.TenantSettings{
 			MaxUsers:    0,
 			MfaRequired: false,
 		},
-		CreatedAt: timestamppb.Now(),
+		CreatedAt: time.Now(),
 	}
 
 	printTenantDetails(printer, tenant)
@@ -318,14 +323,15 @@ func TestPrintPolicyDetails_Full(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	policy := &platformv1.IAMPolicy{
+	now := time.Now()
+	policy := &iamsvc.Policy{
 		Name:        "test-policy",
-		TenantId:    "tenant-1",
+		TenantID:    "tenant-1",
 		Description: "Test policy description",
 		Priority:    10,
 		Labels:      map[string]string{"env": "prod"},
-		CreatedAt:   timestamppb.Now(),
-		UpdatedAt:   timestamppb.Now(),
+		CreatedAt:   now,
+		UpdatedAt:   &now,
 	}
 
 	printPolicyDetails(printer, policy)
@@ -341,11 +347,11 @@ func TestPrintPolicyDetails_Minimal(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	policy := &platformv1.IAMPolicy{
+	policy := &iamsvc.Policy{
 		Name:      "minimal-policy",
-		TenantId:  "tenant-1",
+		TenantID:  "tenant-1",
 		Priority:  1,
-		CreatedAt: timestamppb.Now(),
+		CreatedAt: time.Now(),
 	}
 
 	printPolicyDetails(printer, policy)

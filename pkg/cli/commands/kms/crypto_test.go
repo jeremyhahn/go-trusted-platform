@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -318,50 +318,50 @@ func TestErrInvalidByteCount_Error(t *testing.T) {
 func TestParseHashAlgorithm(t *testing.T) {
 	tests := []struct {
 		input    string
-		expected platformv1.HashAlgorithm
+		expected kmssvc.HashAlgorithm
 		wantErr  bool
 	}{
 		// SHA1 variants
-		{"sha1", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA1, false},
-		{"sha-1", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA1, false},
-		{"SHA1", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA1, false},
-		{"SHA-1", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA1, false},
+		{"sha1", kmssvc.HashAlgorithmSHA1, false},
+		{"sha-1", kmssvc.HashAlgorithmSHA1, false},
+		{"SHA1", kmssvc.HashAlgorithmSHA1, false},
+		{"SHA-1", kmssvc.HashAlgorithmSHA1, false},
 
 		// SHA256 variants
-		{"sha256", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256, false},
-		{"sha-256", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256, false},
-		{"SHA256", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256, false},
-		{"SHA-256", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256, false},
-		{"sha_256", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256, false},
+		{"sha256", kmssvc.HashAlgorithmSHA256, false},
+		{"sha-256", kmssvc.HashAlgorithmSHA256, false},
+		{"SHA256", kmssvc.HashAlgorithmSHA256, false},
+		{"SHA-256", kmssvc.HashAlgorithmSHA256, false},
+		{"sha_256", kmssvc.HashAlgorithmSHA256, false},
 
 		// SHA384 variants
-		{"sha384", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384, false},
-		{"sha-384", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384, false},
-		{"SHA384", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384, false},
+		{"sha384", kmssvc.HashAlgorithmSHA384, false},
+		{"sha-384", kmssvc.HashAlgorithmSHA384, false},
+		{"SHA384", kmssvc.HashAlgorithmSHA384, false},
 
 		// SHA512 variants
-		{"sha512", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA512, false},
-		{"sha-512", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA512, false},
-		{"SHA512", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA512, false},
+		{"sha512", kmssvc.HashAlgorithmSHA512, false},
+		{"sha-512", kmssvc.HashAlgorithmSHA512, false},
+		{"SHA512", kmssvc.HashAlgorithmSHA512, false},
 
 		// SHA3-256 variants
-		{"sha3-256", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_256, false},
-		{"sha3256", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_256, false},
-		{"SHA3-256", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_256, false},
+		{"sha3-256", kmssvc.HashAlgorithmSHA3256, false},
+		{"sha3256", kmssvc.HashAlgorithmSHA3256, false},
+		{"SHA3-256", kmssvc.HashAlgorithmSHA3256, false},
 
 		// SHA3-384 variants
-		{"sha3-384", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_384, false},
-		{"sha3384", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_384, false},
+		{"sha3-384", kmssvc.HashAlgorithmSHA3384, false},
+		{"sha3384", kmssvc.HashAlgorithmSHA3384, false},
 
 		// SHA3-512 variants
-		{"sha3-512", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_512, false},
-		{"sha3512", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_512, false},
+		{"sha3-512", kmssvc.HashAlgorithmSHA3512, false},
+		{"sha3512", kmssvc.HashAlgorithmSHA3512, false},
 
 		// Invalid algorithms
-		{"md5", platformv1.HashAlgorithm_HASH_ALGORITHM_UNSPECIFIED, true},
-		{"invalid", platformv1.HashAlgorithm_HASH_ALGORITHM_UNSPECIFIED, true},
-		{"", platformv1.HashAlgorithm_HASH_ALGORITHM_UNSPECIFIED, true},
-		{"sha0", platformv1.HashAlgorithm_HASH_ALGORITHM_UNSPECIFIED, true},
+		{"md5", kmssvc.HashAlgorithmUnspecified, true},
+		{"invalid", kmssvc.HashAlgorithmUnspecified, true},
+		{"", kmssvc.HashAlgorithmUnspecified, true},
+		{"sha0", kmssvc.HashAlgorithmUnspecified, true},
 	}
 
 	for _, tt := range tests {
@@ -390,18 +390,18 @@ func TestParseHashAlgorithm(t *testing.T) {
 
 func TestFormatHashAlgorithm(t *testing.T) {
 	tests := []struct {
-		input    platformv1.HashAlgorithm
+		input    kmssvc.HashAlgorithm
 		expected string
 	}{
-		{platformv1.HashAlgorithm_HASH_ALGORITHM_SHA1, "SHA-1"},
-		{platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256, "SHA-256"},
-		{platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384, "SHA-384"},
-		{platformv1.HashAlgorithm_HASH_ALGORITHM_SHA512, "SHA-512"},
-		{platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_256, "SHA3-256"},
-		{platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_384, "SHA3-384"},
-		{platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_512, "SHA3-512"},
-		{platformv1.HashAlgorithm_HASH_ALGORITHM_UNSPECIFIED, "UNKNOWN"},
-		{platformv1.HashAlgorithm(999), "UNKNOWN"},
+		{kmssvc.HashAlgorithmSHA1, "SHA-1"},
+		{kmssvc.HashAlgorithmSHA256, "SHA-256"},
+		{kmssvc.HashAlgorithmSHA384, "SHA-384"},
+		{kmssvc.HashAlgorithmSHA512, "SHA-512"},
+		{kmssvc.HashAlgorithmSHA3256, "SHA3-256"},
+		{kmssvc.HashAlgorithmSHA3384, "SHA3-384"},
+		{kmssvc.HashAlgorithmSHA3512, "SHA3-512"},
+		{kmssvc.HashAlgorithmUnspecified, "UNSPECIFIED"},
+		{kmssvc.HashAlgorithm("BOGUS"), "BOGUS"},
 	}
 
 	for _, tt := range tests {
@@ -418,74 +418,74 @@ func TestFormatHashAlgorithm(t *testing.T) {
 func TestParseKMSKeyAlgorithm(t *testing.T) {
 	tests := []struct {
 		input    string
-		expected platformv1.KMSKeyAlgorithm
+		expected kmssvc.KeyAlgorithm
 		wantErr  bool
 	}{
 		// AES variants
-		{"aes-128", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128, false},
-		{"AES_128", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128, false},
-		{"aes-192", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192, false},
-		{"AES_192", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192, false},
-		{"aes-256", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256, false},
-		{"AES_256", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256, false},
+		{"aes-128", kmssvc.KeyAlgorithmAES128, false},
+		{"AES_128", kmssvc.KeyAlgorithmAES128, false},
+		{"aes-192", kmssvc.KeyAlgorithmAES192, false},
+		{"AES_192", kmssvc.KeyAlgorithmAES192, false},
+		{"aes-256", kmssvc.KeyAlgorithmAES256, false},
+		{"AES_256", kmssvc.KeyAlgorithmAES256, false},
 
 		// ChaCha20 variants
-		{"chacha20-poly1305", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305, false},
-		{"CHACHA20_POLY1305", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305, false},
+		{"chacha20-poly1305", kmssvc.KeyAlgorithmChaCha20Poly, false},
+		{"CHACHA20_POLY1305", kmssvc.KeyAlgorithmChaCha20Poly, false},
 
 		// RSA variants
-		{"rsa-2048", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048, false},
-		{"RSA_2048", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048, false},
-		{"rsa-3072", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_3072, false},
-		{"RSA_3072", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_3072, false},
-		{"rsa-4096", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_4096, false},
-		{"RSA_4096", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_4096, false},
+		{"rsa-2048", kmssvc.KeyAlgorithmRSA2048, false},
+		{"RSA_2048", kmssvc.KeyAlgorithmRSA2048, false},
+		{"rsa-3072", kmssvc.KeyAlgorithmRSA3072, false},
+		{"RSA_3072", kmssvc.KeyAlgorithmRSA3072, false},
+		{"rsa-4096", kmssvc.KeyAlgorithmRSA4096, false},
+		{"RSA_4096", kmssvc.KeyAlgorithmRSA4096, false},
 
 		// ECDSA variants
-		{"ec-p256", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256, false},
-		{"ECDSA_P256", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256, false},
-		{"ec-p384", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P384, false},
-		{"ECDSA_P384", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P384, false},
-		{"ec-p521", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P521, false},
-		{"ECDSA_P521", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P521, false},
+		{"ec-p256", kmssvc.KeyAlgorithmECDSAP256, false},
+		{"ECDSA_P256", kmssvc.KeyAlgorithmECDSAP256, false},
+		{"ec-p384", kmssvc.KeyAlgorithmECDSAP384, false},
+		{"ECDSA_P384", kmssvc.KeyAlgorithmECDSAP384, false},
+		{"ec-p521", kmssvc.KeyAlgorithmECDSAP521, false},
+		{"ECDSA_P521", kmssvc.KeyAlgorithmECDSAP521, false},
 
 		// EdDSA variants
-		{"ed25519", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ED25519, false},
-		{"ED25519", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ED25519, false},
+		{"ed25519", kmssvc.KeyAlgorithmED25519, false},
+		{"ED25519", kmssvc.KeyAlgorithmED25519, false},
 
 		// HMAC variants
-		{"hmac-sha256", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA256, false},
-		{"HMAC_SHA256", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA256, false},
-		{"hmac-sha384", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA384, false},
-		{"HMAC_SHA384", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA384, false},
-		{"hmac-sha512", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA512, false},
-		{"HMAC_SHA512", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA512, false},
+		{"hmac-sha256", kmssvc.KeyAlgorithmHMACSHA256, false},
+		{"HMAC_SHA256", kmssvc.KeyAlgorithmHMACSHA256, false},
+		{"hmac-sha384", kmssvc.KeyAlgorithmHMACSHA384, false},
+		{"HMAC_SHA384", kmssvc.KeyAlgorithmHMACSHA384, false},
+		{"hmac-sha512", kmssvc.KeyAlgorithmHMACSHA512, false},
+		{"HMAC_SHA512", kmssvc.KeyAlgorithmHMACSHA512, false},
 
 		// Invalid algorithms
-		{"invalid", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED, true},
-		{"", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED, true},
-		{"aes", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED, true},
-		{"rsa", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED, true},
+		{"invalid", kmssvc.KeyAlgorithmUnspecified, true},
+		{"", kmssvc.KeyAlgorithmUnspecified, true},
+		{"aes", kmssvc.KeyAlgorithmUnspecified, true},
+		{"rsa", kmssvc.KeyAlgorithmUnspecified, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			result, err := parseKMSKeyAlgorithm(tt.input)
+			result, err := kmssvc.ParseKeyAlgorithm(tt.input)
 
 			if tt.wantErr {
 				if err == nil {
-					t.Errorf("parseKMSKeyAlgorithm(%q) expected error, got nil", tt.input)
+					t.Errorf("kmssvc.ParseKeyAlgorithm(%q) expected error, got nil", tt.input)
 				}
-				var algErr ErrInvalidAlgorithm
+				var algErr kmssvc.ErrInvalidKeyAlgorithm
 				if !errors.As(err, &algErr) {
-					t.Errorf("expected ErrInvalidAlgorithm, got %T", err)
+					t.Errorf("expected kmssvc.ErrInvalidKeyAlgorithm, got %T", err)
 				}
 			} else {
 				if err != nil {
-					t.Errorf("parseKMSKeyAlgorithm(%q) unexpected error: %v", tt.input, err)
+					t.Errorf("kmssvc.ParseKeyAlgorithm(%q) unexpected error: %v", tt.input, err)
 				}
 				if result != tt.expected {
-					t.Errorf("parseKMSKeyAlgorithm(%q) = %v, want %v", tt.input, result, tt.expected)
+					t.Errorf("kmssvc.ParseKeyAlgorithm(%q) = %v, want %v", tt.input, result, tt.expected)
 				}
 			}
 		})

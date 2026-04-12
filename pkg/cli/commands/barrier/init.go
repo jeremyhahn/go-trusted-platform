@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	barriersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/barrier"
 )
 
 // newInitCommand creates the barrier init subcommand
@@ -64,8 +64,10 @@ func runInit(flags *cli.CommonFlags, secret string, threshold, shares int32) err
 	}
 	defer base.Close()
 
+	sdkClient := barriersvc.NewClientFromGRPC(base.Client().Barrier())
+
 	ctx := base.Context()
-	resp, err := base.Client().Barrier().Init(ctx, &platformv1.BarrierInitRequest{
+	result, err := sdkClient.Init(ctx, &barriersvc.InitParams{
 		Secret:    secret,
 		Threshold: threshold,
 		Shares:    shares,
@@ -78,10 +80,10 @@ func runInit(flags *cli.CommonFlags, secret string, threshold, shares int32) err
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		return printInitTable(printer, resp)
+		return printInitTable(printer, result)
 
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
@@ -105,27 +107,27 @@ func validateInitParams(secret string, threshold, shares int32) error {
 	return nil
 }
 
-func printInitTable(printer *cli.Printer, resp *platformv1.BarrierInitResponse) error {
+func printInitTable(printer *cli.Printer, result *barriersvc.InitResult) error {
 	printer.PrintSuccess("Barrier initialized successfully")
 	fmt.Println()
 
-	printer.PrintKeyValue("Strategy", formatStrategy(resp.Strategy))
+	printer.PrintKeyValue("Strategy", formatStrategy(result.Strategy))
 
-	if resp.InitializedAt != nil {
-		printer.PrintKeyValue("Initialized At", resp.InitializedAt.AsTime().String())
+	if result.InitializedAt != nil {
+		printer.PrintKeyValue("Initialized At", result.InitializedAt.String())
 	}
 
-	if resp.RootToken != "" {
-		printer.PrintKeyValue("Root Token", resp.RootToken)
+	if result.RootToken != "" {
+		printer.PrintKeyValue("Root Token", result.RootToken)
 	}
 
 	fmt.Println()
 
-	if len(resp.UnsealKeys) > 0 {
+	if len(result.UnsealKeys) > 0 {
 		printer.PrintWarning("Store the following unseal keys securely. They are only shown once.")
 		fmt.Println()
 
-		for i, key := range resp.UnsealKeys {
+		for i, key := range result.UnsealKeys {
 			printer.PrintKeyValue(fmt.Sprintf("Unseal Key %d", i+1), key)
 		}
 	}

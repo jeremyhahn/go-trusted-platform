@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	clustersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/cluster"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -66,52 +66,52 @@ func runNodes(flags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
-	client := base.Client().Cluster()
-	if client == nil {
+	grpcClient := base.Client().Cluster()
+	if grpcClient == nil {
 		return ErrClusterClientNotInitialized{}
 	}
 
-	req := &platformv1.ListClusterNodesRequest{}
-
+	sdkClient := clustersvc.NewClientFromGRPC(grpcClient)
 	ctx := base.Context()
-	resp, err := client.ListNodes(ctx, req)
+
+	resp, err := sdkClient.ListNodesDomain(ctx)
 	if err != nil {
 		return ErrClusterNodesFailed{Err: err}
 	}
 
 	// Convert response nodes to local NodeInfo type
-	nodes := make([]*NodeInfo, 0, len(resp.GetNodes()))
+	nodes := make([]*NodeInfo, 0, len(resp.Nodes))
 	leaderID := ""
 	voterCount := 0
 
-	for _, node := range resp.GetNodes() {
-		isLeader := node.GetRole() == platformv1.NodeRole_NODE_ROLE_LEADER
+	for _, node := range resp.Nodes {
+		isLeader := node.Role == clustersvc.NodeRoleLeader
 		if isLeader {
-			leaderID = node.GetId()
+			leaderID = node.ID
 		}
 
 		// Count voters (non-observer nodes)
-		if node.GetRole() != platformv1.NodeRole_NODE_ROLE_OBSERVER {
+		if node.Role != clustersvc.NodeRoleObserver {
 			voterCount++
 		}
 
 		nodeInfo := &NodeInfo{
-			NodeID:    node.GetId(),
-			Address:   fmt.Sprintf("%s:%d", node.GetAddress(), node.GetPort()),
-			State:     nodeStateToString(node.GetState()),
-			RaftState: nodeRoleToRaftState(node.GetRole()),
-			IsVoter:   node.GetRole() != platformv1.NodeRole_NODE_ROLE_OBSERVER,
+			NodeID:    node.ID,
+			Address:   fmt.Sprintf("%s:%d", node.Address, node.Port),
+			State:     nodeStateToString(node.State),
+			RaftState: nodeRoleToRaftState(node.Role),
+			IsVoter:   node.Role != clustersvc.NodeRoleObserver,
 			IsLeader:  isLeader,
 			LastSeen:  "N/A",
 			Uptime:    "N/A",
 		}
 
-		if node.GetLastHeartbeat() != nil {
-			nodeInfo.LastSeen = formatTimestamp(node.GetLastHeartbeat().AsTime())
+		if node.LastHeartbeat != nil {
+			nodeInfo.LastSeen = formatTimestamp(*node.LastHeartbeat)
 		}
 
-		if node.GetJoinedAt() != nil {
-			nodeInfo.Uptime = formatUptime(node.GetJoinedAt().AsTime())
+		if node.JoinedAt != nil {
+			nodeInfo.Uptime = formatUptime(*node.JoinedAt)
 		}
 
 		nodes = append(nodes, nodeInfo)
@@ -119,7 +119,7 @@ func runNodes(flags *cli.CommonFlags) error {
 
 	response := &NodeListResponse{
 		Nodes:      nodes,
-		TotalCount: int(resp.GetTotal()),
+		TotalCount: int(resp.Total),
 		VoterCount: voterCount,
 		LeaderID:   leaderID,
 	}
@@ -143,20 +143,20 @@ func runNodes(flags *cli.CommonFlags) error {
 	}
 }
 
-// nodeStateToString converts a protobuf NodeState to a local NodeState string
-func nodeStateToString(state platformv1.NodeState) string {
+// nodeStateToString converts an SDK NodeState to a local NodeState string
+func nodeStateToString(state clustersvc.NodeState) string {
 	switch state {
-	case platformv1.NodeState_NODE_STATE_ACTIVE:
+	case clustersvc.NodeStateActive:
 		return string(NodeStateAlive)
-	case platformv1.NodeState_NODE_STATE_JOINING:
+	case clustersvc.NodeStateJoining:
 		return string(NodeStateSuspect)
-	case platformv1.NodeState_NODE_STATE_LEAVING:
+	case clustersvc.NodeStateLeaving:
 		return string(NodeStateSuspect)
-	case platformv1.NodeState_NODE_STATE_LEFT:
+	case clustersvc.NodeStateLeft:
 		return string(NodeStateLeft)
-	case platformv1.NodeState_NODE_STATE_FAILED:
+	case clustersvc.NodeStateFailed:
 		return string(NodeStateDead)
-	case platformv1.NodeState_NODE_STATE_UNREACHABLE:
+	case clustersvc.NodeStateUnreachable:
 		return string(NodeStateDead)
 	default:
 		return string(NodeStateUnknown)

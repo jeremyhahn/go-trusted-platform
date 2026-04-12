@@ -22,336 +22,341 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
-// Mock gRPC clients for testing
+// Mock SDK clients for testing
 
 type mockIAMClient struct {
-	iampb.IAMServiceClient
-
 	// User methods
-	createUserFn func(ctx context.Context, req *iampb.CreateUserRequest, opts ...grpc.CallOption) (*iampb.User, error)
-	listUsersFn  func(ctx context.Context, req *iampb.ListUsersRequest, opts ...grpc.CallOption) (*iampb.ListUsersResponse, error)
-	getUserFn    func(ctx context.Context, req *iampb.GetUserRequest, opts ...grpc.CallOption) (*iampb.User, error)
-	updateUserFn func(ctx context.Context, req *iampb.UpdateUserRequest, opts ...grpc.CallOption) (*iampb.User, error)
-	deleteUserFn func(ctx context.Context, req *iampb.DeleteUserRequest, opts ...grpc.CallOption) (*iampb.DeleteUserResponse, error)
-	assignRoleFn func(ctx context.Context, req *iampb.AssignRoleRequest, opts ...grpc.CallOption) (*iampb.AssignRoleResponse, error)
-	revokeRoleFn func(ctx context.Context, req *iampb.RevokeRoleRequest, opts ...grpc.CallOption) (*iampb.RevokeRoleResponse, error)
+	createUserFn func(ctx context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error)
+	listUsersFn  func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error)
+	getUserFn    func(ctx context.Context, tenantID, userID string) (*iamsdk.User, error)
+	updateUserFn func(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error)
+	deleteUserFn func(ctx context.Context, tenantID, userID string) error
+	assignRoleFn func(ctx context.Context, tenantID, userID, roleID string) error
+	revokeRoleFn func(ctx context.Context, tenantID, userID, roleID string) error
 
 	// Group methods
-	createGroupFn         func(ctx context.Context, req *iampb.CreateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error)
-	listGroupsFn          func(ctx context.Context, req *iampb.ListGroupsRequest, opts ...grpc.CallOption) (*iampb.ListGroupsResponse, error)
-	getGroupFn            func(ctx context.Context, req *iampb.GetGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error)
-	updateGroupFn         func(ctx context.Context, req *iampb.UpdateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error)
-	deleteGroupFn         func(ctx context.Context, req *iampb.DeleteGroupRequest, opts ...grpc.CallOption) (*iampb.DeleteGroupResponse, error)
-	addUserToGroupFn      func(ctx context.Context, req *iampb.AddUserToGroupRequest, opts ...grpc.CallOption) (*iampb.AddUserToGroupResponse, error)
-	removeUserFromGroupFn func(ctx context.Context, req *iampb.RemoveUserFromGroupRequest, opts ...grpc.CallOption) (*iampb.RemoveUserFromGroupResponse, error)
+	createGroupFn      func(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error)
+	listGroupsFn       func(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error)
+	getGroupFn         func(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error)
+	updateGroupFn      func(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error)
+	deleteGroupFn      func(ctx context.Context, tenantID, groupID string) error
+	addGroupMemberFn   func(ctx context.Context, tenantID, groupID, userID string) error
+	removeGroupMemberFn func(ctx context.Context, tenantID, groupID, userID string) error
 
 	// Role methods
-	createRoleFn func(ctx context.Context, req *iampb.CreateRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error)
-	listRolesFn  func(ctx context.Context, req *iampb.ListRolesRequest, opts ...grpc.CallOption) (*iampb.ListRolesResponse, error)
-	getRoleFn    func(ctx context.Context, req *iampb.GetRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error)
-	updateRoleFn func(ctx context.Context, req *iampb.UpdateRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error)
-	deleteRoleFn func(ctx context.Context, req *iampb.DeleteRoleRequest, opts ...grpc.CallOption) (*iampb.DeleteRoleResponse, error)
+	createRoleFn func(ctx context.Context, tenantID string, req *iamsdk.CreateRoleRequest) (*iamsdk.Role, error)
+	listRolesFn  func(ctx context.Context, tenantID string, req *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error)
+	getRoleFn    func(ctx context.Context, tenantID, roleID string) (*iamsdk.Role, error)
+	updateRoleFn func(ctx context.Context, tenantID, roleID string, req *iamsdk.UpdateRoleRequest) (*iamsdk.Role, error)
+	deleteRoleFn func(ctx context.Context, tenantID, roleID string) error
 
 	// Tenant methods
-	createTenantFn func(ctx context.Context, req *iampb.CreateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error)
-	listTenantsFn  func(ctx context.Context, req *iampb.ListTenantsRequest, opts ...grpc.CallOption) (*iampb.ListTenantsResponse, error)
-	getTenantFn    func(ctx context.Context, req *iampb.GetTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error)
-	updateTenantFn func(ctx context.Context, req *iampb.UpdateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error)
-	deleteTenantFn func(ctx context.Context, req *iampb.DeleteTenantRequest, opts ...grpc.CallOption) (*iampb.DeleteTenantResponse, error)
+	createTenantFn func(ctx context.Context, req *CreateTenantRequest) (*TenantResponse, error)
+	listTenantsFn  func(ctx context.Context, limit, offset int32) (*ListTenantsResponse, error)
+	getTenantFn    func(ctx context.Context, tenantID string) (*TenantResponse, error)
+	updateTenantFn func(ctx context.Context, tenantID string, req *UpdateTenantRequest) (*TenantResponse, error)
+	deleteTenantFn func(ctx context.Context, tenantID string) error
 
 	// Policy methods
-	createPolicyFn   func(ctx context.Context, req *iampb.CreatePolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error)
-	listPoliciesFn   func(ctx context.Context, req *iampb.ListPoliciesRequest, opts ...grpc.CallOption) (*iampb.ListPoliciesResponse, error)
-	getPolicyFn      func(ctx context.Context, req *iampb.GetPolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error)
-	updatePolicyFn   func(ctx context.Context, req *iampb.UpdatePolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error)
-	deletePolicyFn   func(ctx context.Context, req *iampb.DeletePolicyRequest, opts ...grpc.CallOption) (*iampb.DeletePolicyResponse, error)
-	validatePolicyFn func(ctx context.Context, req *iampb.ValidatePolicyRequest, opts ...grpc.CallOption) (*iampb.ValidatePolicyResponse, error)
-	testPolicyFn     func(ctx context.Context, req *iampb.TestPolicyRequest, opts ...grpc.CallOption) (*iampb.TestPolicyResponse, error)
+	createPolicyFn   func(ctx context.Context, tenantID string, req *CreatePolicyRequest) (*PolicyResponse, error)
+	listPoliciesFn   func(ctx context.Context, tenantID string, limit, offset int32) (*ListPoliciesResponse, error)
+	getPolicyFn      func(ctx context.Context, tenantID, policyName string) (*PolicyResponse, error)
+	updatePolicyFn   func(ctx context.Context, tenantID, policyName string, req *UpdatePolicyRequest) (*PolicyResponse, error)
+	deletePolicyFn   func(ctx context.Context, tenantID, policyName string) error
+	validatePolicyFn func(ctx context.Context, tenantID, specYAML string) (*ValidatePolicyResponse, error)
+	testPolicyFn     func(ctx context.Context, tenantID string, req *TestPolicyRequest) (*TestPolicyResponse, error)
 
 	// App methods
-	registerAppFn     func(ctx context.Context, req *iampb.RegisterAppRequest, opts ...grpc.CallOption) (*iampb.Application, error)
-	listAppsFn        func(ctx context.Context, req *iampb.ListAppsRequest, opts ...grpc.CallOption) (*iampb.ListAppsResponse, error)
-	getAppFn          func(ctx context.Context, req *iampb.GetAppRequest, opts ...grpc.CallOption) (*iampb.Application, error)
-	updateAppFn       func(ctx context.Context, req *iampb.UpdateAppRequest, opts ...grpc.CallOption) (*iampb.Application, error)
-	deleteAppFn       func(ctx context.Context, req *iampb.DeleteAppRequest, opts ...grpc.CallOption) (*iampb.DeleteAppResponse, error)
-	rotateAppSecretFn func(ctx context.Context, req *iampb.RotateAppSecretRequest, opts ...grpc.CallOption) (*iampb.Application, error)
+	registerAppFn     func(ctx context.Context, tenantID string, req *iamsdk.RegisterAppRequest) (*iamsdk.Application, error)
+	listAppsFn        func(ctx context.Context, tenantID string, limit, offset int32) (*ListAppsResponse, error)
+	getAppFn          func(ctx context.Context, tenantID, clientID string) (*iamsdk.Application, error)
+	updateAppFn       func(ctx context.Context, tenantID, clientID string, req *iamsdk.UpdateAppRequest) (*iamsdk.Application, error)
+	deleteAppFn       func(ctx context.Context, tenantID, clientID string) error
+	rotateAppSecretFn func(ctx context.Context, tenantID, clientID string) (*RotateSecretResponse, error)
 }
 
-func (m *mockIAMClient) CreateUser(ctx context.Context, req *iampb.CreateUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
+func (m *mockIAMClient) CreateUser(ctx context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
 	if m.createUserFn != nil {
-		return m.createUserFn(ctx, req, opts...)
+		return m.createUserFn(ctx, tenantID, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) ListUsers(ctx context.Context, req *iampb.ListUsersRequest, opts ...grpc.CallOption) (*iampb.ListUsersResponse, error) {
+func (m *mockIAMClient) ListUsers(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
 	if m.listUsersFn != nil {
-		return m.listUsersFn(ctx, req, opts...)
+		return m.listUsersFn(ctx, tenantID, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) GetUser(ctx context.Context, req *iampb.GetUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
+func (m *mockIAMClient) GetUser(ctx context.Context, tenantID, userID string) (*iamsdk.User, error) {
 	if m.getUserFn != nil {
-		return m.getUserFn(ctx, req, opts...)
+		return m.getUserFn(ctx, tenantID, userID)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) UpdateUser(ctx context.Context, req *iampb.UpdateUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
+func (m *mockIAMClient) UpdateUser(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error) {
 	if m.updateUserFn != nil {
-		return m.updateUserFn(ctx, req, opts...)
+		return m.updateUserFn(ctx, tenantID, userID, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) DeleteUser(ctx context.Context, req *iampb.DeleteUserRequest, opts ...grpc.CallOption) (*iampb.DeleteUserResponse, error) {
+func (m *mockIAMClient) DeleteUser(ctx context.Context, tenantID, userID string) error {
 	if m.deleteUserFn != nil {
-		return m.deleteUserFn(ctx, req, opts...)
+		return m.deleteUserFn(ctx, tenantID, userID)
 	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
+	return status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) AssignRole(ctx context.Context, req *iampb.AssignRoleRequest, opts ...grpc.CallOption) (*iampb.AssignRoleResponse, error) {
+func (m *mockIAMClient) AssignRole(ctx context.Context, tenantID, userID, roleID string) error {
 	if m.assignRoleFn != nil {
-		return m.assignRoleFn(ctx, req, opts...)
+		return m.assignRoleFn(ctx, tenantID, userID, roleID)
 	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
+	return status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) RevokeRole(ctx context.Context, req *iampb.RevokeRoleRequest, opts ...grpc.CallOption) (*iampb.RevokeRoleResponse, error) {
+func (m *mockIAMClient) RevokeRole(ctx context.Context, tenantID, userID, roleID string) error {
 	if m.revokeRoleFn != nil {
-		return m.revokeRoleFn(ctx, req, opts...)
+		return m.revokeRoleFn(ctx, tenantID, userID, roleID)
 	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
+	return status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) CreateGroup(ctx context.Context, req *iampb.CreateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
+func (m *mockIAMClient) CreateGroup(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error) {
 	if m.createGroupFn != nil {
-		return m.createGroupFn(ctx, req, opts...)
+		return m.createGroupFn(ctx, tenantID, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) ListGroups(ctx context.Context, req *iampb.ListGroupsRequest, opts ...grpc.CallOption) (*iampb.ListGroupsResponse, error) {
+func (m *mockIAMClient) ListGroups(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
 	if m.listGroupsFn != nil {
-		return m.listGroupsFn(ctx, req, opts...)
+		return m.listGroupsFn(ctx, tenantID, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) GetGroup(ctx context.Context, req *iampb.GetGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
+func (m *mockIAMClient) GetGroup(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error) {
 	if m.getGroupFn != nil {
-		return m.getGroupFn(ctx, req, opts...)
+		return m.getGroupFn(ctx, tenantID, groupID)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) UpdateGroup(ctx context.Context, req *iampb.UpdateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
+func (m *mockIAMClient) UpdateGroup(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
 	if m.updateGroupFn != nil {
-		return m.updateGroupFn(ctx, req, opts...)
+		return m.updateGroupFn(ctx, tenantID, groupID, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) DeleteGroup(ctx context.Context, req *iampb.DeleteGroupRequest, opts ...grpc.CallOption) (*iampb.DeleteGroupResponse, error) {
+func (m *mockIAMClient) DeleteGroup(ctx context.Context, tenantID, groupID string) error {
 	if m.deleteGroupFn != nil {
-		return m.deleteGroupFn(ctx, req, opts...)
+		return m.deleteGroupFn(ctx, tenantID, groupID)
 	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
+	return status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) AddUserToGroup(ctx context.Context, req *iampb.AddUserToGroupRequest, opts ...grpc.CallOption) (*iampb.AddUserToGroupResponse, error) {
-	if m.addUserToGroupFn != nil {
-		return m.addUserToGroupFn(ctx, req, opts...)
+func (m *mockIAMClient) AddGroupMember(ctx context.Context, tenantID, groupID, userID string) error {
+	if m.addGroupMemberFn != nil {
+		return m.addGroupMemberFn(ctx, tenantID, groupID, userID)
 	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
+	return status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) RemoveUserFromGroup(ctx context.Context, req *iampb.RemoveUserFromGroupRequest, opts ...grpc.CallOption) (*iampb.RemoveUserFromGroupResponse, error) {
-	if m.removeUserFromGroupFn != nil {
-		return m.removeUserFromGroupFn(ctx, req, opts...)
+func (m *mockIAMClient) RemoveGroupMember(ctx context.Context, tenantID, groupID, userID string) error {
+	if m.removeGroupMemberFn != nil {
+		return m.removeGroupMemberFn(ctx, tenantID, groupID, userID)
 	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
+	return status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) CreateRole(ctx context.Context, req *iampb.CreateRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
+func (m *mockIAMClient) CreateRole(ctx context.Context, tenantID string, req *iamsdk.CreateRoleRequest) (*iamsdk.Role, error) {
 	if m.createRoleFn != nil {
-		return m.createRoleFn(ctx, req, opts...)
+		return m.createRoleFn(ctx, tenantID, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) ListRoles(ctx context.Context, req *iampb.ListRolesRequest, opts ...grpc.CallOption) (*iampb.ListRolesResponse, error) {
+func (m *mockIAMClient) ListRoles(ctx context.Context, tenantID string, req *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
 	if m.listRolesFn != nil {
-		return m.listRolesFn(ctx, req, opts...)
+		return m.listRolesFn(ctx, tenantID, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) GetRole(ctx context.Context, req *iampb.GetRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
+func (m *mockIAMClient) GetRole(ctx context.Context, tenantID, roleID string) (*iamsdk.Role, error) {
 	if m.getRoleFn != nil {
-		return m.getRoleFn(ctx, req, opts...)
+		return m.getRoleFn(ctx, tenantID, roleID)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) UpdateRole(ctx context.Context, req *iampb.UpdateRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
+func (m *mockIAMClient) UpdateRole(ctx context.Context, tenantID, roleID string, req *iamsdk.UpdateRoleRequest) (*iamsdk.Role, error) {
 	if m.updateRoleFn != nil {
-		return m.updateRoleFn(ctx, req, opts...)
+		return m.updateRoleFn(ctx, tenantID, roleID, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) DeleteRole(ctx context.Context, req *iampb.DeleteRoleRequest, opts ...grpc.CallOption) (*iampb.DeleteRoleResponse, error) {
+func (m *mockIAMClient) DeleteRole(ctx context.Context, tenantID, roleID string) error {
 	if m.deleteRoleFn != nil {
-		return m.deleteRoleFn(ctx, req, opts...)
+		return m.deleteRoleFn(ctx, tenantID, roleID)
 	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
+	return status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) CreateTenant(ctx context.Context, req *iampb.CreateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
+func (m *mockIAMClient) CreateTenant(ctx context.Context, req *CreateTenantRequest) (*TenantResponse, error) {
 	if m.createTenantFn != nil {
-		return m.createTenantFn(ctx, req, opts...)
+		return m.createTenantFn(ctx, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) ListTenants(ctx context.Context, req *iampb.ListTenantsRequest, opts ...grpc.CallOption) (*iampb.ListTenantsResponse, error) {
+func (m *mockIAMClient) ListTenants(ctx context.Context, limit, offset int32) (*ListTenantsResponse, error) {
 	if m.listTenantsFn != nil {
-		return m.listTenantsFn(ctx, req, opts...)
+		return m.listTenantsFn(ctx, limit, offset)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) GetTenant(ctx context.Context, req *iampb.GetTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
+func (m *mockIAMClient) GetTenant(ctx context.Context, tenantID string) (*TenantResponse, error) {
 	if m.getTenantFn != nil {
-		return m.getTenantFn(ctx, req, opts...)
+		return m.getTenantFn(ctx, tenantID)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) UpdateTenant(ctx context.Context, req *iampb.UpdateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
+func (m *mockIAMClient) UpdateTenant(ctx context.Context, tenantID string, req *UpdateTenantRequest) (*TenantResponse, error) {
 	if m.updateTenantFn != nil {
-		return m.updateTenantFn(ctx, req, opts...)
+		return m.updateTenantFn(ctx, tenantID, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) DeleteTenant(ctx context.Context, req *iampb.DeleteTenantRequest, opts ...grpc.CallOption) (*iampb.DeleteTenantResponse, error) {
+func (m *mockIAMClient) DeleteTenant(ctx context.Context, tenantID string) error {
 	if m.deleteTenantFn != nil {
-		return m.deleteTenantFn(ctx, req, opts...)
+		return m.deleteTenantFn(ctx, tenantID)
 	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
+	return status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) CreatePolicy(ctx context.Context, req *iampb.CreatePolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error) {
+func (m *mockIAMClient) CreatePolicy(ctx context.Context, tenantID string, req *CreatePolicyRequest) (*PolicyResponse, error) {
 	if m.createPolicyFn != nil {
-		return m.createPolicyFn(ctx, req, opts...)
+		return m.createPolicyFn(ctx, tenantID, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) ListPolicies(ctx context.Context, req *iampb.ListPoliciesRequest, opts ...grpc.CallOption) (*iampb.ListPoliciesResponse, error) {
+func (m *mockIAMClient) ListPolicies(ctx context.Context, tenantID string, limit, offset int32) (*ListPoliciesResponse, error) {
 	if m.listPoliciesFn != nil {
-		return m.listPoliciesFn(ctx, req, opts...)
+		return m.listPoliciesFn(ctx, tenantID, limit, offset)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) GetPolicy(ctx context.Context, req *iampb.GetPolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error) {
+func (m *mockIAMClient) GetPolicy(ctx context.Context, tenantID, policyName string) (*PolicyResponse, error) {
 	if m.getPolicyFn != nil {
-		return m.getPolicyFn(ctx, req, opts...)
+		return m.getPolicyFn(ctx, tenantID, policyName)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) UpdatePolicy(ctx context.Context, req *iampb.UpdatePolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error) {
+func (m *mockIAMClient) UpdatePolicy(ctx context.Context, tenantID, policyName string, req *UpdatePolicyRequest) (*PolicyResponse, error) {
 	if m.updatePolicyFn != nil {
-		return m.updatePolicyFn(ctx, req, opts...)
+		return m.updatePolicyFn(ctx, tenantID, policyName, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) DeletePolicy(ctx context.Context, req *iampb.DeletePolicyRequest, opts ...grpc.CallOption) (*iampb.DeletePolicyResponse, error) {
+func (m *mockIAMClient) DeletePolicy(ctx context.Context, tenantID, policyName string) error {
 	if m.deletePolicyFn != nil {
-		return m.deletePolicyFn(ctx, req, opts...)
+		return m.deletePolicyFn(ctx, tenantID, policyName)
 	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
+	return status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) ValidatePolicy(ctx context.Context, req *iampb.ValidatePolicyRequest, opts ...grpc.CallOption) (*iampb.ValidatePolicyResponse, error) {
+func (m *mockIAMClient) ValidatePolicy(ctx context.Context, tenantID, specYAML string) (*ValidatePolicyResponse, error) {
 	if m.validatePolicyFn != nil {
-		return m.validatePolicyFn(ctx, req, opts...)
+		return m.validatePolicyFn(ctx, tenantID, specYAML)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) TestPolicy(ctx context.Context, req *iampb.TestPolicyRequest, opts ...grpc.CallOption) (*iampb.TestPolicyResponse, error) {
+func (m *mockIAMClient) TestPolicy(ctx context.Context, tenantID string, req *TestPolicyRequest) (*TestPolicyResponse, error) {
 	if m.testPolicyFn != nil {
-		return m.testPolicyFn(ctx, req, opts...)
+		return m.testPolicyFn(ctx, tenantID, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) RegisterApp(ctx context.Context, req *iampb.RegisterAppRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
+func (m *mockIAMClient) RegisterApp(ctx context.Context, tenantID string, req *iamsdk.RegisterAppRequest) (*iamsdk.Application, error) {
 	if m.registerAppFn != nil {
-		return m.registerAppFn(ctx, req, opts...)
+		return m.registerAppFn(ctx, tenantID, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) ListApps(ctx context.Context, req *iampb.ListAppsRequest, opts ...grpc.CallOption) (*iampb.ListAppsResponse, error) {
+func (m *mockIAMClient) ListApps(ctx context.Context, tenantID string, limit, offset int32) (*ListAppsResponse, error) {
 	if m.listAppsFn != nil {
-		return m.listAppsFn(ctx, req, opts...)
+		return m.listAppsFn(ctx, tenantID, limit, offset)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) GetApp(ctx context.Context, req *iampb.GetAppRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
+func (m *mockIAMClient) GetApp(ctx context.Context, tenantID, clientID string) (*iamsdk.Application, error) {
 	if m.getAppFn != nil {
-		return m.getAppFn(ctx, req, opts...)
+		return m.getAppFn(ctx, tenantID, clientID)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) UpdateApp(ctx context.Context, req *iampb.UpdateAppRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
+func (m *mockIAMClient) UpdateApp(ctx context.Context, tenantID, clientID string, req *iamsdk.UpdateAppRequest) (*iamsdk.Application, error) {
 	if m.updateAppFn != nil {
-		return m.updateAppFn(ctx, req, opts...)
+		return m.updateAppFn(ctx, tenantID, clientID, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) DeleteApp(ctx context.Context, req *iampb.DeleteAppRequest, opts ...grpc.CallOption) (*iampb.DeleteAppResponse, error) {
+func (m *mockIAMClient) DeleteApp(ctx context.Context, tenantID, clientID string) error {
 	if m.deleteAppFn != nil {
-		return m.deleteAppFn(ctx, req, opts...)
+		return m.deleteAppFn(ctx, tenantID, clientID)
 	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
+	return status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) RotateAppSecret(ctx context.Context, req *iampb.RotateAppSecretRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
+func (m *mockIAMClient) RotateAppSecret(ctx context.Context, tenantID, clientID string) (*RotateSecretResponse, error) {
 	if m.rotateAppSecretFn != nil {
-		return m.rotateAppSecretFn(ctx, req, opts...)
+		return m.rotateAppSecretFn(ctx, tenantID, clientID)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
 type mockPEPClient struct {
-	iampb.PEPServiceClient
+	checkFn func(ctx context.Context, req *iamsdk.CheckRequest) (*iamsdk.CheckResponse, error)
+}
+
+func (m *mockPEPClient) Check(ctx context.Context, req *iamsdk.CheckRequest) (*iamsdk.CheckResponse, error) {
+	if m.checkFn != nil {
+		return m.checkFn(ctx, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
 // Mock HttpWriter for response handling
@@ -494,14 +499,14 @@ func TestNewIAMHandlers(t *testing.T) {
 
 func TestCreateUser_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		createUserFn: func(ctx context.Context, req *iampb.CreateUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
-			return &iampb.User{
-				Id:       "user-123",
-				TenantId: req.TenantId,
-				Email:    req.Email,
-				Name:     req.Name,
-				Roles:    req.Roles,
-				Groups:   req.Groups,
+		createUserFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
+			return &iamsdk.User{
+				ID:       "user-123",
+				TenantID: tenantID,
+				Email: req.Email,
+				DisplayName: req.DisplayName,
+				Roles: req.Roles,
+				Groups: req.Groups,
 			}, nil
 		},
 	}
@@ -558,7 +563,7 @@ func TestCreateUser_InvalidRequestBody(t *testing.T) {
 
 func TestCreateUser_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		createUserFn: func(ctx context.Context, req *iampb.CreateUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
+		createUserFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
 			return nil, status.Error(codes.AlreadyExists, "user already exists")
 		},
 	}
@@ -576,13 +581,12 @@ func TestCreateUser_GRPCError(t *testing.T) {
 
 func TestListUsers_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		listUsersFn: func(ctx context.Context, req *iampb.ListUsersRequest, opts ...grpc.CallOption) (*iampb.ListUsersResponse, error) {
-			return &iampb.ListUsersResponse{
-				Users: []*iampb.User{
-					{Id: "user-1", TenantId: req.TenantId, Email: "user1@example.com"},
-					{Id: "user-2", TenantId: req.TenantId, Email: "user2@example.com"},
+		listUsersFn: func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+			return &iamsdk.ListUsersResponse{
+				Users: []iamsdk.User{
+					{ID:       "user-1", TenantID: tenantID, Email: "user1@example.com"},
+					{ID:       "user-2", TenantID: tenantID, Email: "user2@example.com"},
 				},
-				Total: 2,
 			}, nil
 		},
 	}
@@ -603,15 +607,13 @@ func TestListUsers_Success(t *testing.T) {
 
 func TestListUsers_WithPagination(t *testing.T) {
 	iamClient := &mockIAMClient{
-		listUsersFn: func(ctx context.Context, req *iampb.ListUsersRequest, opts ...grpc.CallOption) (*iampb.ListUsersResponse, error) {
-			assert.Equal(t, int32(25), req.Limit)
-			assert.Equal(t, int32(50), req.Offset)
-			return &iampb.ListUsersResponse{
-				Users: []*iampb.User{
-					{Id: "user-51", Email: "user51@example.com"},
-				},
-				Total: 100,
-			}, nil
+		listUsersFn: func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+			assert.Equal(t, int32(25), int32(req.PageSize))
+			assert.Equal(t, int32(50), int32(0))
+			return &iamsdk.ListUsersResponse{
+				Users: []iamsdk.User{
+					{ID:       "user-51", Email: "user51@example.com"},
+				},			}, nil
 		},
 	}
 
@@ -643,14 +645,14 @@ func TestListUsers_MissingTenantID(t *testing.T) {
 
 func TestGetUser_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		getUserFn: func(ctx context.Context, req *iampb.GetUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
-			return &iampb.User{
-				Id:          req.UserId,
-				TenantId:    req.TenantId,
+		getUserFn: func(ctx context.Context, tenantID, userID string) (*iamsdk.User, error) {
+			return &iamsdk.User{
+				ID:       userID,
+				TenantID: tenantID,
 				Email:       "test@example.com",
-				Name:        "Test User",
-				MfaVerified: true,
-				CreatedAt:   timestamppb.Now(),
+				DisplayName:        "Test User",
+				MFAEnabled: true,
+				CreatedAt:   time.Now(),
 			}, nil
 		},
 	}
@@ -671,7 +673,7 @@ func TestGetUser_Success(t *testing.T) {
 
 func TestGetUser_NotFound(t *testing.T) {
 	iamClient := &mockIAMClient{
-		getUserFn: func(ctx context.Context, req *iampb.GetUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
+		getUserFn: func(ctx context.Context, tenantID, userID string) (*iamsdk.User, error) {
 			return nil, status.Error(codes.NotFound, "user not found")
 		},
 	}
@@ -701,12 +703,12 @@ func TestGetUser_MissingUserID(t *testing.T) {
 
 func TestUpdateUser_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		updateUserFn: func(ctx context.Context, req *iampb.UpdateUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
-			return &iampb.User{
-				Id:       req.UserId,
-				TenantId: req.TenantId,
-				Email:    req.Email,
-				Name:     req.Name,
+		updateUserFn: func(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error) {
+			return &iamsdk.User{
+				ID:       userID,
+				TenantID: tenantID,
+				Email: req.Email,
+				DisplayName: req.DisplayName,
 			}, nil
 		},
 	}
@@ -727,7 +729,7 @@ func TestUpdateUser_Success(t *testing.T) {
 
 func TestUpdateUser_NotFound(t *testing.T) {
 	iamClient := &mockIAMClient{
-		updateUserFn: func(ctx context.Context, req *iampb.UpdateUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
+		updateUserFn: func(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error) {
 			return nil, status.Error(codes.NotFound, "user not found")
 		},
 	}
@@ -745,8 +747,8 @@ func TestUpdateUser_NotFound(t *testing.T) {
 
 func TestDeleteUser_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		deleteUserFn: func(ctx context.Context, req *iampb.DeleteUserRequest, opts ...grpc.CallOption) (*iampb.DeleteUserResponse, error) {
-			return &iampb.DeleteUserResponse{Success: true}, nil
+		deleteUserFn: func(ctx context.Context, tenantID, userID string) error {
+			return nil
 		},
 	}
 
@@ -765,8 +767,8 @@ func TestDeleteUser_Success(t *testing.T) {
 
 func TestDeleteUser_NotFound(t *testing.T) {
 	iamClient := &mockIAMClient{
-		deleteUserFn: func(ctx context.Context, req *iampb.DeleteUserRequest, opts ...grpc.CallOption) (*iampb.DeleteUserResponse, error) {
-			return nil, status.Error(codes.NotFound, "user not found")
+		deleteUserFn: func(ctx context.Context, tenantID, userID string) error {
+			return status.Error(codes.NotFound, "user not found")
 		},
 	}
 
@@ -782,8 +784,8 @@ func TestDeleteUser_NotFound(t *testing.T) {
 
 func TestAssignUserRole_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		assignRoleFn: func(ctx context.Context, req *iampb.AssignRoleRequest, opts ...grpc.CallOption) (*iampb.AssignRoleResponse, error) {
-			return &iampb.AssignRoleResponse{Success: true}, nil
+		assignRoleFn: func(ctx context.Context, tenantID, userID, roleID string) error {
+			return nil
 		},
 	}
 
@@ -813,8 +815,8 @@ func TestAssignUserRole_MissingRole(t *testing.T) {
 
 func TestAssignUserRole_Error(t *testing.T) {
 	iamClient := &mockIAMClient{
-		assignRoleFn: func(ctx context.Context, req *iampb.AssignRoleRequest, opts ...grpc.CallOption) (*iampb.AssignRoleResponse, error) {
-			return nil, status.Error(codes.NotFound, "role not found")
+		assignRoleFn: func(ctx context.Context, tenantID, userID, roleID string) error {
+			return status.Error(codes.NotFound, "role not found")
 		},
 	}
 
@@ -830,8 +832,8 @@ func TestAssignUserRole_Error(t *testing.T) {
 
 func TestRevokeUserRole_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		revokeRoleFn: func(ctx context.Context, req *iampb.RevokeRoleRequest, opts ...grpc.CallOption) (*iampb.RevokeRoleResponse, error) {
-			return &iampb.RevokeRoleResponse{Success: true}, nil
+		revokeRoleFn: func(ctx context.Context, tenantID, userID, roleID string) error {
+			return nil
 		},
 	}
 
@@ -847,8 +849,8 @@ func TestRevokeUserRole_Success(t *testing.T) {
 
 func TestRevokeUserRole_Error(t *testing.T) {
 	iamClient := &mockIAMClient{
-		revokeRoleFn: func(ctx context.Context, req *iampb.RevokeRoleRequest, opts ...grpc.CallOption) (*iampb.RevokeRoleResponse, error) {
-			return nil, status.Error(codes.InvalidArgument, "role not assigned")
+		revokeRoleFn: func(ctx context.Context, tenantID, userID, roleID string) error {
+			return status.Error(codes.InvalidArgument, "role not assigned")
 		},
 	}
 
@@ -866,10 +868,10 @@ func TestRevokeUserRole_Error(t *testing.T) {
 
 func TestCreateGroup_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		createGroupFn: func(ctx context.Context, req *iampb.CreateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
-			return &iampb.Group{
-				Id:          req.Id,
-				TenantId:    req.TenantId,
+		createGroupFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error) {
+			return &iamsdk.Group{
+				ID:       req.ID,
+				TenantID: tenantID,
 				Name:        req.Name,
 				Description: req.Description,
 			}, nil
@@ -892,13 +894,12 @@ func TestCreateGroup_Success(t *testing.T) {
 
 func TestListGroups_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		listGroupsFn: func(ctx context.Context, req *iampb.ListGroupsRequest, opts ...grpc.CallOption) (*iampb.ListGroupsResponse, error) {
-			return &iampb.ListGroupsResponse{
-				Groups: []*iampb.Group{
-					{Id: "group-1", Name: "Group 1"},
-					{Id: "group-2", Name: "Group 2"},
+		listGroupsFn: func(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
+			return &iamsdk.ListGroupsResponse{
+				Groups: []iamsdk.Group{
+					{ID:       "group-1", Name: "Group 1"},
+					{ID:       "group-2", Name: "Group 2"},
 				},
-				Total: 2,
 			}, nil
 		},
 	}
@@ -918,11 +919,11 @@ func TestListGroups_Success(t *testing.T) {
 
 func TestGetGroup_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		getGroupFn: func(ctx context.Context, req *iampb.GetGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
-			return &iampb.Group{
-				Id:      req.GroupId,
+		getGroupFn: func(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error) {
+			return &iamsdk.Group{
+				ID:       groupID,
 				Name:    "Engineering",
-				Members: []string{"user-1", "user-2"},
+
 			}, nil
 		},
 	}
@@ -939,9 +940,9 @@ func TestGetGroup_Success(t *testing.T) {
 
 func TestUpdateGroup_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		updateGroupFn: func(ctx context.Context, req *iampb.UpdateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
-			return &iampb.Group{
-				Id:          req.GroupId,
+		updateGroupFn: func(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
+			return &iamsdk.Group{
+				ID:       groupID,
 				Name:        req.Name,
 				Description: req.Description,
 			}, nil
@@ -961,8 +962,8 @@ func TestUpdateGroup_Success(t *testing.T) {
 
 func TestDeleteGroup_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		deleteGroupFn: func(ctx context.Context, req *iampb.DeleteGroupRequest, opts ...grpc.CallOption) (*iampb.DeleteGroupResponse, error) {
-			return &iampb.DeleteGroupResponse{Success: true}, nil
+		deleteGroupFn: func(ctx context.Context, tenantID, groupID string) error {
+			return nil
 		},
 	}
 
@@ -978,8 +979,8 @@ func TestDeleteGroup_Success(t *testing.T) {
 
 func TestAddGroupMember_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		addUserToGroupFn: func(ctx context.Context, req *iampb.AddUserToGroupRequest, opts ...grpc.CallOption) (*iampb.AddUserToGroupResponse, error) {
-			return &iampb.AddUserToGroupResponse{Success: true}, nil
+		addGroupMemberFn: func(ctx context.Context, tenantID, groupID, userID string) error {
+			return nil
 		},
 	}
 
@@ -1006,8 +1007,8 @@ func TestAddGroupMember_MissingMember(t *testing.T) {
 
 func TestRemoveGroupMember_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		removeUserFromGroupFn: func(ctx context.Context, req *iampb.RemoveUserFromGroupRequest, opts ...grpc.CallOption) (*iampb.RemoveUserFromGroupResponse, error) {
-			return &iampb.RemoveUserFromGroupResponse{Success: true}, nil
+		removeGroupMemberFn: func(ctx context.Context, tenantID, groupID, userID string) error {
+			return nil
 		},
 	}
 
@@ -1025,10 +1026,10 @@ func TestRemoveGroupMember_Success(t *testing.T) {
 
 func TestCreateRole_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		createRoleFn: func(ctx context.Context, req *iampb.CreateRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
-			return &iampb.Role{
-				Id:          req.Id,
-				TenantId:    req.TenantId,
+		createRoleFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateRoleRequest) (*iamsdk.Role, error) {
+			return &iamsdk.Role{
+				ID:       req.ID,
+				TenantID: tenantID,
 				Name:        req.Name,
 				Description: req.Description,
 				Permissions: req.Permissions,
@@ -1049,13 +1050,12 @@ func TestCreateRole_Success(t *testing.T) {
 
 func TestListRoles_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		listRolesFn: func(ctx context.Context, req *iampb.ListRolesRequest, opts ...grpc.CallOption) (*iampb.ListRolesResponse, error) {
-			return &iampb.ListRolesResponse{
-				Roles: []*iampb.Role{
-					{Id: "admin", Name: "Administrator"},
-					{Id: "viewer", Name: "Viewer"},
+		listRolesFn: func(ctx context.Context, tenantID string, req *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+			return &iamsdk.ListRolesResponse{
+				Roles: []iamsdk.Role{
+					{ID:       "admin", Name: "Administrator"},
+					{ID:       "viewer", Name: "Viewer"},
 				},
-				Total: 2,
 			}, nil
 		},
 	}
@@ -1072,9 +1072,9 @@ func TestListRoles_Success(t *testing.T) {
 
 func TestGetRole_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		getRoleFn: func(ctx context.Context, req *iampb.GetRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
-			return &iampb.Role{
-				Id:          req.RoleId,
+		getRoleFn: func(ctx context.Context, tenantID, roleID string) (*iamsdk.Role, error) {
+			return &iamsdk.Role{
+				ID:       roleID,
 				Name:        "Administrator",
 				Permissions: []string{"all"},
 			}, nil
@@ -1093,9 +1093,9 @@ func TestGetRole_Success(t *testing.T) {
 
 func TestUpdateRole_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		updateRoleFn: func(ctx context.Context, req *iampb.UpdateRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
-			return &iampb.Role{
-				Id:          req.RoleId,
+		updateRoleFn: func(ctx context.Context, tenantID, roleID string, req *iamsdk.UpdateRoleRequest) (*iamsdk.Role, error) {
+			return &iamsdk.Role{
+				ID:       roleID,
 				Name:        req.Name,
 				Permissions: req.Permissions,
 			}, nil
@@ -1115,8 +1115,8 @@ func TestUpdateRole_Success(t *testing.T) {
 
 func TestDeleteRole_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		deleteRoleFn: func(ctx context.Context, req *iampb.DeleteRoleRequest, opts ...grpc.CallOption) (*iampb.DeleteRoleResponse, error) {
-			return &iampb.DeleteRoleResponse{Success: true}, nil
+		deleteRoleFn: func(ctx context.Context, tenantID, roleID string) error {
+			return nil
 		},
 	}
 
@@ -1134,9 +1134,9 @@ func TestDeleteRole_Success(t *testing.T) {
 
 func TestCreateTenant_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		createTenantFn: func(ctx context.Context, req *iampb.CreateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
-			return &iampb.Tenant{
-				Id:   req.Id,
+		createTenantFn: func(ctx context.Context, req *CreateTenantRequest) (*TenantResponse, error) {
+			return &TenantResponse{
+				ID:       req.ID,
 				Name: req.Name,
 			}, nil
 		},
@@ -1167,9 +1167,9 @@ func TestCreateTenant_MissingID(t *testing.T) {
 
 func TestCreateTenant_WithSettings(t *testing.T) {
 	iamClient := &mockIAMClient{
-		createTenantFn: func(ctx context.Context, req *iampb.CreateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
-			return &iampb.Tenant{
-				Id:       req.Id,
+		createTenantFn: func(ctx context.Context, req *CreateTenantRequest) (*TenantResponse, error) {
+			return &TenantResponse{
+				ID:       req.ID,
 				Name:     req.Name,
 				Settings: req.Settings,
 			}, nil
@@ -1196,13 +1196,12 @@ func TestCreateTenant_WithSettings(t *testing.T) {
 
 func TestListTenants_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		listTenantsFn: func(ctx context.Context, req *iampb.ListTenantsRequest, opts ...grpc.CallOption) (*iampb.ListTenantsResponse, error) {
-			return &iampb.ListTenantsResponse{
-				Tenants: []*iampb.Tenant{
-					{Id: "tenant-1", Name: "Tenant 1"},
-					{Id: "tenant-2", Name: "Tenant 2"},
+		listTenantsFn: func(ctx context.Context, limit, offset int32) (*ListTenantsResponse, error) {
+			return &ListTenantsResponse{
+				Tenants: []TenantResponse{
+					{ID:       "tenant-1", Name: "Tenant 1"},
+					{ID:       "tenant-2", Name: "Tenant 2"},
 				},
-				Total: 2,
 			}, nil
 		},
 	}
@@ -1219,9 +1218,9 @@ func TestListTenants_Success(t *testing.T) {
 
 func TestGetTenant_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		getTenantFn: func(ctx context.Context, req *iampb.GetTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
-			return &iampb.Tenant{
-				Id:   req.Id,
+		getTenantFn: func(ctx context.Context, tenantID string) (*TenantResponse, error) {
+			return &TenantResponse{
+				ID:   tenantID,
 				Name: "Acme Corporation",
 			}, nil
 		},
@@ -1239,9 +1238,9 @@ func TestGetTenant_Success(t *testing.T) {
 
 func TestUpdateTenant_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		updateTenantFn: func(ctx context.Context, req *iampb.UpdateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
-			return &iampb.Tenant{
-				Id:   req.Id,
+		updateTenantFn: func(ctx context.Context, tenantID string, req *UpdateTenantRequest) (*TenantResponse, error) {
+			return &TenantResponse{
+				ID:   tenantID,
 				Name: req.Name,
 			}, nil
 		},
@@ -1260,8 +1259,8 @@ func TestUpdateTenant_Success(t *testing.T) {
 
 func TestDeleteTenant_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		deleteTenantFn: func(ctx context.Context, req *iampb.DeleteTenantRequest, opts ...grpc.CallOption) (*iampb.DeleteTenantResponse, error) {
-			return &iampb.DeleteTenantResponse{Success: true}, nil
+		deleteTenantFn: func(ctx context.Context, tenantID string) error {
+			return nil
 		},
 	}
 
@@ -1279,13 +1278,13 @@ func TestDeleteTenant_Success(t *testing.T) {
 
 func TestCreatePolicy_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		createPolicyFn: func(ctx context.Context, req *iampb.CreatePolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error) {
-			return &iampb.Policy{
+		createPolicyFn: func(ctx context.Context, tenantID string, req *CreatePolicyRequest) (*PolicyResponse, error) {
+			return &PolicyResponse{
 				Name:        req.Name,
-				TenantId:    req.TenantId,
+				TenantID:    tenantID,
 				Description: req.Description,
 				Priority:    req.Priority,
-				SpecYaml:    req.SpecYaml,
+				SpecYAML:    req.SpecYAML,
 			}, nil
 		},
 	}
@@ -1332,13 +1331,12 @@ func TestCreatePolicy_MissingSpec(t *testing.T) {
 
 func TestListPolicies_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		listPoliciesFn: func(ctx context.Context, req *iampb.ListPoliciesRequest, opts ...grpc.CallOption) (*iampb.ListPoliciesResponse, error) {
-			return &iampb.ListPoliciesResponse{
-				Policies: []*iampb.Policy{
+		listPoliciesFn: func(ctx context.Context, tenantID string, limit, offset int32) (*ListPoliciesResponse, error) {
+			return &ListPoliciesResponse{
+				Policies: []PolicyResponse{
 					{Name: "policy-1", Priority: 100},
 					{Name: "policy-2", Priority: 200},
 				},
-				Total: 2,
 			}, nil
 		},
 	}
@@ -1355,10 +1353,10 @@ func TestListPolicies_Success(t *testing.T) {
 
 func TestGetPolicy_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		getPolicyFn: func(ctx context.Context, req *iampb.GetPolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error) {
-			return &iampb.Policy{
-				Name:     req.PolicyName,
-				TenantId: req.TenantId,
+		getPolicyFn: func(ctx context.Context, tenantID, policyName string) (*PolicyResponse, error) {
+			return &PolicyResponse{
+				Name:     policyName,
+				TenantID: tenantID,
 				Priority: 100,
 			}, nil
 		},
@@ -1376,9 +1374,9 @@ func TestGetPolicy_Success(t *testing.T) {
 
 func TestUpdatePolicy_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		updatePolicyFn: func(ctx context.Context, req *iampb.UpdatePolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error) {
-			return &iampb.Policy{
-				Name:        req.PolicyName,
+		updatePolicyFn: func(ctx context.Context, tenantID, policyName string, req *UpdatePolicyRequest) (*PolicyResponse, error) {
+			return &PolicyResponse{
+				Name:        policyName,
 				Description: req.Description,
 				Priority:    req.Priority,
 			}, nil
@@ -1398,8 +1396,8 @@ func TestUpdatePolicy_Success(t *testing.T) {
 
 func TestDeletePolicy_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		deletePolicyFn: func(ctx context.Context, req *iampb.DeletePolicyRequest, opts ...grpc.CallOption) (*iampb.DeletePolicyResponse, error) {
-			return &iampb.DeletePolicyResponse{Success: true}, nil
+		deletePolicyFn: func(ctx context.Context, tenantID, policyName string) error {
+			return nil
 		},
 	}
 
@@ -1415,8 +1413,8 @@ func TestDeletePolicy_Success(t *testing.T) {
 
 func TestValidatePolicy_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		validatePolicyFn: func(ctx context.Context, req *iampb.ValidatePolicyRequest, opts ...grpc.CallOption) (*iampb.ValidatePolicyResponse, error) {
-			return &iampb.ValidatePolicyResponse{
+		validatePolicyFn: func(ctx context.Context, tenantID, specYAML string) (*ValidatePolicyResponse, error) {
+			return &ValidatePolicyResponse{
 				Valid:  true,
 				Errors: nil,
 			}, nil
@@ -1448,8 +1446,8 @@ func TestValidatePolicy_MissingSpec(t *testing.T) {
 
 func TestValidatePolicy_Invalid(t *testing.T) {
 	iamClient := &mockIAMClient{
-		validatePolicyFn: func(ctx context.Context, req *iampb.ValidatePolicyRequest, opts ...grpc.CallOption) (*iampb.ValidatePolicyResponse, error) {
-			return &iampb.ValidatePolicyResponse{
+		validatePolicyFn: func(ctx context.Context, tenantID, specYAML string) (*ValidatePolicyResponse, error) {
+			return &ValidatePolicyResponse{
 				Valid:  false,
 				Errors: []string{"invalid syntax", "missing rules"},
 			}, nil
@@ -1473,8 +1471,8 @@ func TestValidatePolicy_Invalid(t *testing.T) {
 
 func TestTestPolicy_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		testPolicyFn: func(ctx context.Context, req *iampb.TestPolicyRequest, opts ...grpc.CallOption) (*iampb.TestPolicyResponse, error) {
-			return &iampb.TestPolicyResponse{
+		testPolicyFn: func(ctx context.Context, tenantID string, req *TestPolicyRequest) (*TestPolicyResponse, error) {
+			return &TestPolicyResponse{
 				Allowed:          true,
 				MatchedPolicy:    "admin-policy",
 				MatchedRule:      "rule-1",
@@ -1543,13 +1541,13 @@ func TestTestPolicy_MissingResource(t *testing.T) {
 
 func TestRegisterApp_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		registerAppFn: func(ctx context.Context, req *iampb.RegisterAppRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
-			return &iampb.Application{
-				ClientId:     "client-abc-123",
+		registerAppFn: func(ctx context.Context, tenantID string, req *iamsdk.RegisterAppRequest) (*iamsdk.Application, error) {
+			return &iamsdk.Application{
+				ClientID:     "client-abc-123",
 				ClientSecret: "secret-xyz",
-				TenantId:     req.TenantId,
+				TenantID:     tenantID,
 				Name:         req.Name,
-				RedirectUris: req.RedirectUris,
+				RedirectURIs: req.RedirectURIs,
 			}, nil
 		},
 	}
@@ -1586,13 +1584,12 @@ func TestRegisterApp_MissingName(t *testing.T) {
 
 func TestListApps_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		listAppsFn: func(ctx context.Context, req *iampb.ListAppsRequest, opts ...grpc.CallOption) (*iampb.ListAppsResponse, error) {
-			return &iampb.ListAppsResponse{
-				Apps: []*iampb.Application{
-					{ClientId: "app-1", Name: "App 1"},
-					{ClientId: "app-2", Name: "App 2"},
+		listAppsFn: func(ctx context.Context, tenantID string, limit, offset int32) (*ListAppsResponse, error) {
+			return &ListAppsResponse{
+				Apps: []AppResponse{
+					{ClientID: "app-1", Name: "App 1"},
+					{ClientID: "app-2", Name: "App 2"},
 				},
-				Total: 2,
 			}, nil
 		},
 	}
@@ -1609,10 +1606,10 @@ func TestListApps_Success(t *testing.T) {
 
 func TestGetApp_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		getAppFn: func(ctx context.Context, req *iampb.GetAppRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
-			return &iampb.Application{
-				ClientId: req.ClientId,
-				TenantId: req.TenantId,
+		getAppFn: func(ctx context.Context, tenantID, clientID string) (*iamsdk.Application, error) {
+			return &iamsdk.Application{
+				ClientID: clientID,
+				TenantID: tenantID,
 				Name:     "My App",
 			}, nil
 		},
@@ -1630,9 +1627,9 @@ func TestGetApp_Success(t *testing.T) {
 
 func TestUpdateApp_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		updateAppFn: func(ctx context.Context, req *iampb.UpdateAppRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
-			return &iampb.Application{
-				ClientId: req.ClientId,
+		updateAppFn: func(ctx context.Context, tenantID, clientID string, req *iamsdk.UpdateAppRequest) (*iamsdk.Application, error) {
+			return &iamsdk.Application{
+				ClientID: clientID,
 				Name:     req.Name,
 			}, nil
 		},
@@ -1651,8 +1648,8 @@ func TestUpdateApp_Success(t *testing.T) {
 
 func TestDeleteApp_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		deleteAppFn: func(ctx context.Context, req *iampb.DeleteAppRequest, opts ...grpc.CallOption) (*iampb.DeleteAppResponse, error) {
-			return &iampb.DeleteAppResponse{Success: true}, nil
+		deleteAppFn: func(ctx context.Context, tenantID, clientID string) error {
+			return nil
 		},
 	}
 
@@ -1668,10 +1665,9 @@ func TestDeleteApp_Success(t *testing.T) {
 
 func TestRotateAppSecret_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
-		rotateAppSecretFn: func(ctx context.Context, req *iampb.RotateAppSecretRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
-			return &iampb.Application{
-				ClientId:     req.ClientId,
-				Name:         "My App",
+		rotateAppSecretFn: func(ctx context.Context, tenantID, clientID string) (*RotateSecretResponse, error) {
+			return &RotateSecretResponse{
+				ClientID:     clientID,
 				ClientSecret: "new-secret-xyz",
 			}, nil
 		},
@@ -2004,7 +2000,7 @@ func TestCreateGroup_InvalidRequestBody(t *testing.T) {
 
 func TestCreateGroup_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		createGroupFn: func(ctx context.Context, req *iampb.CreateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
+		createGroupFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error) {
 			return nil, status.Error(codes.AlreadyExists, "group already exists")
 		},
 	}
@@ -2033,7 +2029,7 @@ func TestListGroups_MissingTenantID(t *testing.T) {
 
 func TestListGroups_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		listGroupsFn: func(ctx context.Context, req *iampb.ListGroupsRequest, opts ...grpc.CallOption) (*iampb.ListGroupsResponse, error) {
+		listGroupsFn: func(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
 		},
 	}
@@ -2072,7 +2068,7 @@ func TestGetGroup_MissingGroupID(t *testing.T) {
 
 func TestGetGroup_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		getGroupFn: func(ctx context.Context, req *iampb.GetGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
+		getGroupFn: func(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error) {
 			return nil, status.Error(codes.NotFound, "group not found")
 		},
 	}
@@ -2126,7 +2122,7 @@ func TestUpdateGroup_InvalidRequestBody(t *testing.T) {
 
 func TestUpdateGroup_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		updateGroupFn: func(ctx context.Context, req *iampb.UpdateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
+		updateGroupFn: func(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
 			return nil, status.Error(codes.NotFound, "group not found")
 		},
 	}
@@ -2166,8 +2162,8 @@ func TestDeleteGroup_MissingGroupID(t *testing.T) {
 
 func TestDeleteGroup_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		deleteGroupFn: func(ctx context.Context, req *iampb.DeleteGroupRequest, opts ...grpc.CallOption) (*iampb.DeleteGroupResponse, error) {
-			return nil, status.Error(codes.NotFound, "group not found")
+		deleteGroupFn: func(ctx context.Context, tenantID, groupID string) error {
+			return status.Error(codes.NotFound, "group not found")
 		},
 	}
 
@@ -2205,8 +2201,8 @@ func TestAddGroupMember_MissingGroupID(t *testing.T) {
 
 func TestAddGroupMember_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		addUserToGroupFn: func(ctx context.Context, req *iampb.AddUserToGroupRequest, opts ...grpc.CallOption) (*iampb.AddUserToGroupResponse, error) {
-			return nil, status.Error(codes.NotFound, "user or group not found")
+		addGroupMemberFn: func(ctx context.Context, tenantID, groupID, userID string) error {
+			return status.Error(codes.NotFound, "user or group not found")
 		},
 	}
 
@@ -2255,8 +2251,8 @@ func TestRemoveGroupMember_MissingMember(t *testing.T) {
 
 func TestRemoveGroupMember_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		removeUserFromGroupFn: func(ctx context.Context, req *iampb.RemoveUserFromGroupRequest, opts ...grpc.CallOption) (*iampb.RemoveUserFromGroupResponse, error) {
-			return nil, status.Error(codes.NotFound, "member not found")
+		removeGroupMemberFn: func(ctx context.Context, tenantID, groupID, userID string) error {
+			return status.Error(codes.NotFound, "member not found")
 		},
 	}
 
@@ -2299,7 +2295,7 @@ func TestCreateRole_InvalidRequestBody(t *testing.T) {
 
 func TestCreateRole_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		createRoleFn: func(ctx context.Context, req *iampb.CreateRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
+		createRoleFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateRoleRequest) (*iamsdk.Role, error) {
 			return nil, status.Error(codes.AlreadyExists, "role already exists")
 		},
 	}
@@ -2328,7 +2324,7 @@ func TestListRoles_MissingTenantID(t *testing.T) {
 
 func TestListRoles_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		listRolesFn: func(ctx context.Context, req *iampb.ListRolesRequest, opts ...grpc.CallOption) (*iampb.ListRolesResponse, error) {
+		listRolesFn: func(ctx context.Context, tenantID string, req *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
 		},
 	}
@@ -2367,7 +2363,7 @@ func TestGetRole_MissingRoleID(t *testing.T) {
 
 func TestGetRole_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		getRoleFn: func(ctx context.Context, req *iampb.GetRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
+		getRoleFn: func(ctx context.Context, tenantID, roleID string) (*iamsdk.Role, error) {
 			return nil, status.Error(codes.NotFound, "role not found")
 		},
 	}
@@ -2421,7 +2417,7 @@ func TestUpdateRole_InvalidRequestBody(t *testing.T) {
 
 func TestUpdateRole_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		updateRoleFn: func(ctx context.Context, req *iampb.UpdateRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
+		updateRoleFn: func(ctx context.Context, tenantID, roleID string, req *iamsdk.UpdateRoleRequest) (*iamsdk.Role, error) {
 			return nil, status.Error(codes.NotFound, "role not found")
 		},
 	}
@@ -2461,8 +2457,8 @@ func TestDeleteRole_MissingRoleID(t *testing.T) {
 
 func TestDeleteRole_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		deleteRoleFn: func(ctx context.Context, req *iampb.DeleteRoleRequest, opts ...grpc.CallOption) (*iampb.DeleteRoleResponse, error) {
-			return nil, status.Error(codes.NotFound, "role not found")
+		deleteRoleFn: func(ctx context.Context, tenantID, roleID string) error {
+			return status.Error(codes.NotFound, "role not found")
 		},
 	}
 
@@ -2492,7 +2488,7 @@ func TestCreateTenant_InvalidRequestBody(t *testing.T) {
 
 func TestCreateTenant_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		createTenantFn: func(ctx context.Context, req *iampb.CreateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
+		createTenantFn: func(ctx context.Context, req *CreateTenantRequest) (*TenantResponse, error) {
 			return nil, status.Error(codes.AlreadyExists, "tenant already exists")
 		},
 	}
@@ -2510,7 +2506,7 @@ func TestCreateTenant_GRPCError(t *testing.T) {
 
 func TestListTenants_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		listTenantsFn: func(ctx context.Context, req *iampb.ListTenantsRequest, opts ...grpc.CallOption) (*iampb.ListTenantsResponse, error) {
+		listTenantsFn: func(ctx context.Context, limit, offset int32) (*ListTenantsResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
 		},
 	}
@@ -2538,7 +2534,7 @@ func TestGetTenant_MissingTenantID(t *testing.T) {
 
 func TestGetTenant_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		getTenantFn: func(ctx context.Context, req *iampb.GetTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
+		getTenantFn: func(ctx context.Context, tenantID string) (*TenantResponse, error) {
 			return nil, status.Error(codes.NotFound, "tenant not found")
 		},
 	}
@@ -2580,7 +2576,7 @@ func TestUpdateTenant_InvalidRequestBody(t *testing.T) {
 
 func TestUpdateTenant_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		updateTenantFn: func(ctx context.Context, req *iampb.UpdateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
+		updateTenantFn: func(ctx context.Context, tenantID string, req *UpdateTenantRequest) (*TenantResponse, error) {
 			return nil, status.Error(codes.NotFound, "tenant not found")
 		},
 	}
@@ -2609,8 +2605,8 @@ func TestDeleteTenant_MissingTenantID(t *testing.T) {
 
 func TestDeleteTenant_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		deleteTenantFn: func(ctx context.Context, req *iampb.DeleteTenantRequest, opts ...grpc.CallOption) (*iampb.DeleteTenantResponse, error) {
-			return nil, status.Error(codes.NotFound, "tenant not found")
+		deleteTenantFn: func(ctx context.Context, tenantID string) error {
+			return status.Error(codes.NotFound, "tenant not found")
 		},
 	}
 
@@ -2653,7 +2649,7 @@ func TestCreatePolicy_InvalidRequestBody(t *testing.T) {
 
 func TestCreatePolicy_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		createPolicyFn: func(ctx context.Context, req *iampb.CreatePolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error) {
+		createPolicyFn: func(ctx context.Context, tenantID string, req *CreatePolicyRequest) (*PolicyResponse, error) {
 			return nil, status.Error(codes.AlreadyExists, "policy already exists")
 		},
 	}
@@ -2682,7 +2678,7 @@ func TestListPolicies_MissingTenantID(t *testing.T) {
 
 func TestListPolicies_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		listPoliciesFn: func(ctx context.Context, req *iampb.ListPoliciesRequest, opts ...grpc.CallOption) (*iampb.ListPoliciesResponse, error) {
+		listPoliciesFn: func(ctx context.Context, tenantID string, limit, offset int32) (*ListPoliciesResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
 		},
 	}
@@ -2721,7 +2717,7 @@ func TestGetPolicy_MissingPolicyID(t *testing.T) {
 
 func TestGetPolicy_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		getPolicyFn: func(ctx context.Context, req *iampb.GetPolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error) {
+		getPolicyFn: func(ctx context.Context, tenantID, policyName string) (*PolicyResponse, error) {
 			return nil, status.Error(codes.NotFound, "policy not found")
 		},
 	}
@@ -2775,7 +2771,7 @@ func TestUpdatePolicy_InvalidRequestBody(t *testing.T) {
 
 func TestUpdatePolicy_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		updatePolicyFn: func(ctx context.Context, req *iampb.UpdatePolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error) {
+		updatePolicyFn: func(ctx context.Context, tenantID, policyName string, req *UpdatePolicyRequest) (*PolicyResponse, error) {
 			return nil, status.Error(codes.NotFound, "policy not found")
 		},
 	}
@@ -2815,8 +2811,8 @@ func TestDeletePolicy_MissingPolicyID(t *testing.T) {
 
 func TestDeletePolicy_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		deletePolicyFn: func(ctx context.Context, req *iampb.DeletePolicyRequest, opts ...grpc.CallOption) (*iampb.DeletePolicyResponse, error) {
-			return nil, status.Error(codes.NotFound, "policy not found")
+		deletePolicyFn: func(ctx context.Context, tenantID, policyName string) error {
+			return status.Error(codes.NotFound, "policy not found")
 		},
 	}
 
@@ -2857,7 +2853,7 @@ func TestValidatePolicy_InvalidRequestBody(t *testing.T) {
 
 func TestValidatePolicy_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		validatePolicyFn: func(ctx context.Context, req *iampb.ValidatePolicyRequest, opts ...grpc.CallOption) (*iampb.ValidatePolicyResponse, error) {
+		validatePolicyFn: func(ctx context.Context, tenantID, specYAML string) (*ValidatePolicyResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
 		},
 	}
@@ -2900,7 +2896,7 @@ func TestTestPolicy_InvalidRequestBody(t *testing.T) {
 
 func TestTestPolicy_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		testPolicyFn: func(ctx context.Context, req *iampb.TestPolicyRequest, opts ...grpc.CallOption) (*iampb.TestPolicyResponse, error) {
+		testPolicyFn: func(ctx context.Context, tenantID string, req *TestPolicyRequest) (*TestPolicyResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
 		},
 	}
@@ -2945,7 +2941,7 @@ func TestRegisterApp_InvalidRequestBody(t *testing.T) {
 
 func TestRegisterApp_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		registerAppFn: func(ctx context.Context, req *iampb.RegisterAppRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
+		registerAppFn: func(ctx context.Context, tenantID string, req *iamsdk.RegisterAppRequest) (*iamsdk.Application, error) {
 			return nil, status.Error(codes.AlreadyExists, "app already exists")
 		},
 	}
@@ -2974,7 +2970,7 @@ func TestListApps_MissingTenantID(t *testing.T) {
 
 func TestListApps_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		listAppsFn: func(ctx context.Context, req *iampb.ListAppsRequest, opts ...grpc.CallOption) (*iampb.ListAppsResponse, error) {
+		listAppsFn: func(ctx context.Context, tenantID string, limit, offset int32) (*ListAppsResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
 		},
 	}
@@ -3013,7 +3009,7 @@ func TestGetApp_MissingAppID(t *testing.T) {
 
 func TestGetApp_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		getAppFn: func(ctx context.Context, req *iampb.GetAppRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
+		getAppFn: func(ctx context.Context, tenantID, clientID string) (*iamsdk.Application, error) {
 			return nil, status.Error(codes.NotFound, "app not found")
 		},
 	}
@@ -3067,7 +3063,7 @@ func TestUpdateApp_InvalidRequestBody(t *testing.T) {
 
 func TestUpdateApp_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		updateAppFn: func(ctx context.Context, req *iampb.UpdateAppRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
+		updateAppFn: func(ctx context.Context, tenantID, clientID string, req *iamsdk.UpdateAppRequest) (*iamsdk.Application, error) {
 			return nil, status.Error(codes.NotFound, "app not found")
 		},
 	}
@@ -3107,8 +3103,8 @@ func TestDeleteApp_MissingAppID(t *testing.T) {
 
 func TestDeleteApp_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		deleteAppFn: func(ctx context.Context, req *iampb.DeleteAppRequest, opts ...grpc.CallOption) (*iampb.DeleteAppResponse, error) {
-			return nil, status.Error(codes.NotFound, "app not found")
+		deleteAppFn: func(ctx context.Context, tenantID, clientID string) error {
+			return status.Error(codes.NotFound, "app not found")
 		},
 	}
 
@@ -3135,7 +3131,7 @@ func TestRotateAppSecret_MissingTenantID(t *testing.T) {
 
 func TestRotateAppSecret_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		rotateAppSecretFn: func(ctx context.Context, req *iampb.RotateAppSecretRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
+		rotateAppSecretFn: func(ctx context.Context, tenantID, clientID string) (*RotateSecretResponse, error) {
 			return nil, status.Error(codes.NotFound, "app not found")
 		},
 	}
@@ -3154,7 +3150,7 @@ func TestRotateAppSecret_GRPCError(t *testing.T) {
 
 func TestListUsers_GRPCError(t *testing.T) {
 	iamClient := &mockIAMClient{
-		listUsersFn: func(ctx context.Context, req *iampb.ListUsersRequest, opts ...grpc.CallOption) (*iampb.ListUsersResponse, error) {
+		listUsersFn: func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
 		},
 	}

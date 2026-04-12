@@ -19,7 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -95,10 +96,7 @@ func runCryptoDecrypt(flags *cli.CommonFlags, cmdFlags *decryptFlags) error {
 	}
 	defer base.Close()
 
-	client := base.Client().KMS()
-	if client == nil {
-		return ErrCryptoClientNotInitialized{}
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
 	// Read input data
 	inputData, err := readInputData(cmdFlags.inputPath)
@@ -132,16 +130,8 @@ func runCryptoDecrypt(flags *cli.CommonFlags, cmdFlags *decryptFlags) error {
 		}
 	}
 
-	req := &platformv1.DecryptRequest{
-		KeyId:      cmdFlags.keyID,
-		Ciphertext: ciphertext,
-		Context:    contextBytes,
-		Nonce:      nonceBytes,
-		KeyVersion: cmdFlags.keyVersion,
-	}
-
 	ctx := base.Context()
-	resp, err := client.Decrypt(ctx, req)
+	resp, err := sdkClient.DecryptDomain(ctx, cmdFlags.keyID, ciphertext, contextBytes, nonceBytes, cmdFlags.keyVersion)
 	if err != nil {
 		return ErrCryptoOperationFailed{Operation: "decrypt", Err: err}
 	}
@@ -156,7 +146,7 @@ func runCryptoDecrypt(flags *cli.CommonFlags, cmdFlags *decryptFlags) error {
 			Plaintext  string `json:"plaintext" yaml:"plaintext"`
 			Timestamp  string `json:"timestamp" yaml:"timestamp"`
 		}{
-			KeyID:      resp.KeyId,
+			KeyID:      resp.KeyID,
 			KeyVersion: resp.KeyVersion,
 			Plaintext:  string(resp.Plaintext),
 			Timestamp:  formatTimestamp(resp.Timestamp),
@@ -172,7 +162,7 @@ func runCryptoDecrypt(flags *cli.CommonFlags, cmdFlags *decryptFlags) error {
 		// Only show metadata if writing to file
 		if cmdFlags.outputPath != "" {
 			printer.PrintSuccess("Data decrypted successfully")
-			printer.PrintKeyValue("Key ID", resp.KeyId)
+			printer.PrintKeyValue("Key ID", resp.KeyID)
 			printer.PrintKeyValue("Key Version", fmt.Sprintf("%d", resp.KeyVersion))
 			printer.PrintKeyValue("Output", cmdFlags.outputPath)
 		}

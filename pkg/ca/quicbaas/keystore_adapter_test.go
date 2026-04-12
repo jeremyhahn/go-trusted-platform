@@ -74,6 +74,42 @@ func (m *mockSDKCryptoClient) Verify(ctx context.Context, req *quicbaascrypto.Ve
 	return nil, errors.New("verify not implemented")
 }
 
+func (m *mockSDKCryptoClient) Rewrap(ctx context.Context, req *quicbaascrypto.RewrapRequest) (*quicbaascrypto.RewrapResponse, error) {
+	return nil, errors.New("rewrap not implemented")
+}
+
+func (m *mockSDKCryptoClient) EncryptBatch(ctx context.Context, req *quicbaascrypto.EncryptBatchRequest) (*quicbaascrypto.EncryptBatchResponse, error) {
+	return nil, errors.New("encryptBatch not implemented")
+}
+
+func (m *mockSDKCryptoClient) DecryptBatch(ctx context.Context, req *quicbaascrypto.DecryptBatchRequest) (*quicbaascrypto.DecryptBatchResponse, error) {
+	return nil, errors.New("decryptBatch not implemented")
+}
+
+func (m *mockSDKCryptoClient) GenerateDataKey(ctx context.Context, req *quicbaascrypto.GenerateDataKeyRequest) (*quicbaascrypto.GenerateDataKeyResponse, error) {
+	return nil, errors.New("generateDataKey not implemented")
+}
+
+func (m *mockSDKCryptoClient) GenerateWrappedDataKey(ctx context.Context, req *quicbaascrypto.GenerateWrappedDataKeyRequest) (*quicbaascrypto.GenerateWrappedDataKeyResponse, error) {
+	return nil, errors.New("generateWrappedDataKey not implemented")
+}
+
+func (m *mockSDKCryptoClient) GenerateHMAC(ctx context.Context, req *quicbaascrypto.GenerateHMACRequest) (*quicbaascrypto.GenerateHMACResponse, error) {
+	return nil, errors.New("generateHMAC not implemented")
+}
+
+func (m *mockSDKCryptoClient) VerifyHMAC(ctx context.Context, req *quicbaascrypto.VerifyHMACRequest) (*quicbaascrypto.VerifyHMACResponse, error) {
+	return nil, errors.New("verifyHMAC not implemented")
+}
+
+func (m *mockSDKCryptoClient) GenerateRandom(ctx context.Context, req *quicbaascrypto.GenerateRandomRequest) (*quicbaascrypto.GenerateRandomResponse, error) {
+	return nil, errors.New("generateRandom not implemented")
+}
+
+func (m *mockSDKCryptoClient) Hash(ctx context.Context, req *quicbaascrypto.HashRequest) (*quicbaascrypto.HashResponse, error) {
+	return nil, errors.New("hash not implemented")
+}
+
 // =============================================================================
 // Mock CertStore
 // =============================================================================

@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
 // Certificate option functions for creating test certificates with specific extensions.
@@ -404,9 +404,9 @@ func TestAuthMiddleware_RequireTPMAttestation(t *testing.T) {
 		}
 
 		session := NewIAMSessionWithAttestation(
-			&iampb.User{
-				Id:       "user-123",
-				TenantId: "tenant-456",
+			&iamsdk.User{
+				ID:      "user-123",
+				TenantID: "tenant-456",
 			},
 			false,
 			time.Time{},
@@ -440,9 +440,9 @@ func TestAuthMiddleware_RequireTPMAttestation(t *testing.T) {
 		}
 
 		session := NewIAMSessionWithAttestation(
-			&iampb.User{
-				Id:       "user-123",
-				TenantId: "tenant-456",
+			&iamsdk.User{
+				ID:      "user-123",
+				TenantID: "tenant-456",
 			},
 			false,
 			time.Time{},
@@ -502,9 +502,9 @@ func TestIAMSession_AttestationMethods(t *testing.T) {
 	t.Run("attestation_verified_returns_correct_value", func(t *testing.T) {
 		// Test with attestation verified
 		sessionVerified := NewIAMSessionWithAttestation(
-			&iampb.User{
-				Id:       "user-123",
-				TenantId: "tenant-456",
+			&iamsdk.User{
+				ID:      "user-123",
+				TenantID: "tenant-456",
 			},
 			false,
 			time.Time{},
@@ -519,9 +519,9 @@ func TestIAMSession_AttestationMethods(t *testing.T) {
 
 		// Test with attestation not verified
 		sessionNotVerified := NewIAMSessionWithAttestation(
-			&iampb.User{
-				Id:       "user-123",
-				TenantId: "tenant-456",
+			&iamsdk.User{
+				ID:      "user-123",
+				TenantID: "tenant-456",
 			},
 			false,
 			time.Time{},
@@ -538,9 +538,9 @@ func TestIAMSession_AttestationMethods(t *testing.T) {
 	t.Run("attestation_time_returns_correct_value", func(t *testing.T) {
 		attestationTime := time.Now().Add(-1 * time.Hour)
 		session := NewIAMSessionWithAttestation(
-			&iampb.User{
-				Id:       "user-123",
-				TenantId: "tenant-456",
+			&iamsdk.User{
+				ID:      "user-123",
+				TenantID: "tenant-456",
 			},
 			false,
 			time.Time{},
@@ -559,9 +559,9 @@ func TestIAMSession_AttestationMethods(t *testing.T) {
 	t.Run("device_id_returns_correct_value", func(t *testing.T) {
 		expectedDeviceID := "device-abc-123"
 		session := NewIAMSessionWithAttestation(
-			&iampb.User{
-				Id:       "user-123",
-				TenantId: "tenant-456",
+			&iamsdk.User{
+				ID:      "user-123",
+				TenantID: "tenant-456",
 			},
 			false,
 			time.Time{},
@@ -578,9 +578,9 @@ func TestIAMSession_AttestationMethods(t *testing.T) {
 	})
 
 	t.Run("regular_session_has_no_attestation", func(t *testing.T) {
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&iamsdk.User{
+			ID:      "user-123",
+			TenantID: "tenant-456",
 		})
 
 		if session.IsAttestationVerified() {

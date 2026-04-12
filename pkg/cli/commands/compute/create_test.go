@@ -16,8 +16,9 @@ package compute
 import (
 	"bytes"
 	"testing"
+	"time"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -159,17 +160,17 @@ func TestPrintVMDetails_WithConfig(t *testing.T) {
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	vm := &platformv1.VM{
-		Id:    "test-vm-123",
-		State: platformv1.VMState_VM_STATE_RUNNING,
-		Config: &platformv1.VMConfig{
+	vm := &computesvc.VM{
+		ID:    "test-vm-123",
+		State: computesvc.StateRunning,
+		Config: &computesvc.VMConfig{
 			Name:       "test-vm",
-			Firmware:   platformv1.FirmwareType_FIRMWARE_TYPE_UEFI,
+			Firmware:   computesvc.FirmwareUEFI,
 			SecureBoot: true,
-			Cpu:        &platformv1.CPUConfig{Cores: 4},
-			Memory:     &platformv1.MemoryConfig{SizeMb: 4096},
-			Disks:      []*platformv1.DiskConfig{{SizeGb: 50, Bootable: true}},
-			Tpm:        &platformv1.TPMConfig{Enabled: true},
+			CPU:        &computesvc.CPUConfig{Cores: 4},
+			Memory:     &computesvc.MemoryConfig{SizeMB: 4096},
+			Disks:      []*computesvc.DiskConfig{{SizeGB: 50, Bootable: true}},
+			TPM:        &computesvc.TPMConfig{Enabled: true},
 		},
 	}
 
@@ -186,9 +187,9 @@ func TestPrintVMDetails_MinimalConfig(t *testing.T) {
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	vm := &platformv1.VM{
-		Id:    "minimal-vm",
-		State: platformv1.VMState_VM_STATE_STOPPED,
+	vm := &computesvc.VM{
+		ID:    "minimal-vm",
+		State: computesvc.StateStopped,
 	}
 
 	// Should not panic with nil Config
@@ -203,16 +204,16 @@ func TestPrintVMDetails_MinimalConfig(t *testing.T) {
 func TestStringToFirmwareType(t *testing.T) {
 	tests := []struct {
 		input    string
-		expected platformv1.FirmwareType
+		expected computesvc.FirmwareType
 	}{
-		{input: "bios", expected: platformv1.FirmwareType_FIRMWARE_TYPE_BIOS},
-		{input: "uefi", expected: platformv1.FirmwareType_FIRMWARE_TYPE_UEFI},
-		{input: "uefi-secure-boot", expected: platformv1.FirmwareType_FIRMWARE_TYPE_UEFI_SECURE_BOOT},
+		{input: "bios", expected: computesvc.FirmwareBIOS},
+		{input: "uefi", expected: computesvc.FirmwareUEFI},
+		{input: "uefi-secure-boot", expected: computesvc.FirmwareUEFISecureBoot},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			result, ok := stringToFirmwareType[tt.input]
+			result, ok := computesvc.StringToFirmwareType[tt.input]
 			if !ok {
 				t.Fatalf("firmware type %q not found in map", tt.input)
 			}
@@ -228,7 +229,7 @@ func TestStringToFirmwareType_Invalid(t *testing.T) {
 
 	for _, input := range invalidInputs {
 		t.Run(input, func(t *testing.T) {
-			_, ok := stringToFirmwareType[input]
+			_, ok := computesvc.StringToFirmwareType[input]
 			if ok {
 				t.Errorf("expected firmware type %q to not be found in map", input)
 			}
@@ -239,16 +240,16 @@ func TestStringToFirmwareType_Invalid(t *testing.T) {
 func TestStringToBootDevice(t *testing.T) {
 	tests := []struct {
 		input    string
-		expected platformv1.BootDevice
+		expected computesvc.BootDevice
 	}{
-		{input: "disk", expected: platformv1.BootDevice_BOOT_DEVICE_DISK},
-		{input: "cdrom", expected: platformv1.BootDevice_BOOT_DEVICE_CDROM},
-		{input: "network", expected: platformv1.BootDevice_BOOT_DEVICE_NETWORK},
+		{input: "disk", expected: computesvc.BootDeviceDisk},
+		{input: "cdrom", expected: computesvc.BootDeviceCDROM},
+		{input: "network", expected: computesvc.BootDeviceNetwork},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			result, ok := stringToBootDevice[tt.input]
+			result, ok := computesvc.StringToBootDevice[tt.input]
 			if !ok {
 				t.Fatalf("boot device %q not found in map", tt.input)
 			}
@@ -264,7 +265,7 @@ func TestStringToBootDevice_Invalid(t *testing.T) {
 
 	for _, input := range invalidInputs {
 		t.Run(input, func(t *testing.T) {
-			_, ok := stringToBootDevice[input]
+			_, ok := computesvc.StringToBootDevice[input]
 			if ok {
 				t.Errorf("expected boot device %q to not be found in map", input)
 			}
@@ -290,3 +291,6 @@ func TestRunCreate_EmptyName(t *testing.T) {
 		t.Errorf("expected ErrInvalidVMConfig, got %T: %v", err, err)
 	}
 }
+
+// Suppress unused import warning for time
+var _ = time.Now

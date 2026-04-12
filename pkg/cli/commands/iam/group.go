@@ -19,7 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -222,15 +222,10 @@ func runGroupCreate(flags *cli.CommonFlags, tenantID, groupID, name, description
 	}
 	defer base.Close()
 
-	req := &platformv1.CreateIAMGroupRequest{
-		TenantId:    tenantID,
-		Id:          groupID,
-		Name:        name,
-		Description: description,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().CreateGroup(ctx, req)
+
+	group, err := sdkClient.CreateGroupDomain(ctx, tenantID, groupID, name, description)
 	if err != nil {
 		return fmt.Errorf("failed to create group: %w", err)
 	}
@@ -239,13 +234,13 @@ func runGroupCreate(flags *cli.CommonFlags, tenantID, groupID, name, description
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(group)
 
 	case cli.OutputFormatTable:
-		if resp.Group != nil {
-			printer.PrintSuccess(fmt.Sprintf("Group created successfully: %s", resp.Group.Id))
+		if group != nil {
+			printer.PrintSuccess(fmt.Sprintf("Group created successfully: %s", group.ID))
 			fmt.Println()
-			printGroupDetails(printer, resp.Group)
+			printGroupDetails(printer, group)
 		}
 		return nil
 
@@ -268,13 +263,10 @@ func runGroupGet(flags *cli.CommonFlags, tenantID, groupID string) error {
 	}
 	defer base.Close()
 
-	req := &platformv1.GetIAMGroupRequest{
-		TenantId: tenantID,
-		GroupId:  groupID,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().GetGroup(ctx, req)
+
+	group, err := sdkClient.GetGroupDomain(ctx, tenantID, groupID)
 	if err != nil {
 		return fmt.Errorf("failed to get group: %w", err)
 	}
@@ -283,11 +275,11 @@ func runGroupGet(flags *cli.CommonFlags, tenantID, groupID string) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(group)
 
 	case cli.OutputFormatTable:
-		if resp.Group != nil {
-			printGroupDetails(printer, resp.Group)
+		if group != nil {
+			printGroupDetails(printer, group)
 		}
 		return nil
 
@@ -307,16 +299,10 @@ func runGroupList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32
 	}
 	defer base.Close()
 
-	req := &platformv1.ListIAMGroupsRequest{
-		TenantId: tenantID,
-		Pagination: &platformv1.PaginationRequest{
-			Page:     page,
-			PageSize: pageSize,
-		},
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().ListGroups(ctx, req)
+
+	result, err := sdkClient.ListGroupsDomain(ctx, tenantID, page, pageSize)
 	if err != nil {
 		return fmt.Errorf("failed to list groups: %w", err)
 	}
@@ -325,22 +311,22 @@ func runGroupList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		if len(resp.Groups) == 0 {
+		if len(result.Groups) == 0 {
 			printer.PrintInfo("No groups found")
 			return nil
 		}
 
 		table := cli.NewTableData("Group ID", "Name", "Description", "Members", "Created At")
-		for _, group := range resp.Groups {
+		for _, group := range result.Groups {
 			table.AddRow(
-				group.Id,
+				group.ID,
 				group.Name,
 				truncateString(group.Description, 40),
 				fmt.Sprintf("%d", len(group.Members)),
-				formatTimestampProto(group.CreatedAt),
+				formatTimestamp(group.CreatedAt),
 			)
 		}
 
@@ -349,7 +335,7 @@ func runGroupList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32
 		}
 
 		fmt.Println()
-		printer.PrintKeyValue("Total Count", fmt.Sprintf("%d", resp.Total))
+		printer.PrintKeyValue("Total Count", fmt.Sprintf("%d", result.Total))
 		return nil
 
 	default:
@@ -371,15 +357,10 @@ func runGroupUpdate(flags *cli.CommonFlags, tenantID, groupID, name, description
 	}
 	defer base.Close()
 
-	req := &platformv1.UpdateIAMGroupRequest{
-		TenantId:    tenantID,
-		GroupId:     groupID,
-		Name:        name,
-		Description: description,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().UpdateGroup(ctx, req)
+
+	group, err := sdkClient.UpdateGroupDomain(ctx, tenantID, groupID, name, description)
 	if err != nil {
 		return fmt.Errorf("failed to update group: %w", err)
 	}
@@ -388,13 +369,13 @@ func runGroupUpdate(flags *cli.CommonFlags, tenantID, groupID, name, description
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(group)
 
 	case cli.OutputFormatTable:
-		if resp.Group != nil {
-			printer.PrintSuccess(fmt.Sprintf("Group updated successfully: %s", resp.Group.Id))
+		if group != nil {
+			printer.PrintSuccess(fmt.Sprintf("Group updated successfully: %s", group.ID))
 			fmt.Println()
-			printGroupDetails(printer, resp.Group)
+			printGroupDetails(printer, group)
 		}
 		return nil
 
@@ -417,13 +398,10 @@ func runGroupDelete(flags *cli.CommonFlags, tenantID, groupID string) error {
 	}
 	defer base.Close()
 
-	req := &platformv1.DeleteIAMGroupRequest{
-		TenantId: tenantID,
-		GroupId:  groupID,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().DeleteGroup(ctx, req)
+
+	status, err := sdkClient.DeleteGroupDomain(ctx, tenantID, groupID)
 	if err != nil {
 		return fmt.Errorf("failed to delete group: %w", err)
 	}
@@ -432,10 +410,10 @@ func runGroupDelete(flags *cli.CommonFlags, tenantID, groupID string) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(status)
 
 	case cli.OutputFormatTable:
-		if resp.Status != nil && resp.Status.Success {
+		if status != nil && status.Success {
 			printer.PrintSuccess(fmt.Sprintf("Group deleted successfully: %s", groupID))
 		} else {
 			printer.PrintError(fmt.Sprintf("Failed to delete group: %s", groupID))
@@ -448,9 +426,9 @@ func runGroupDelete(flags *cli.CommonFlags, tenantID, groupID string) error {
 }
 
 // printGroupDetails prints detailed information about a group
-func printGroupDetails(printer *cli.Printer, group *platformv1.IAMGroup) {
-	printer.PrintKeyValue("Group ID", group.Id)
-	printer.PrintKeyValue("Tenant ID", group.TenantId)
+func printGroupDetails(printer *cli.Printer, group *iamsvc.Group) {
+	printer.PrintKeyValue("Group ID", group.ID)
+	printer.PrintKeyValue("Tenant ID", group.TenantID)
 	if group.Name != "" {
 		printer.PrintKeyValue("Name", group.Name)
 	}
@@ -462,8 +440,8 @@ func printGroupDetails(printer *cli.Printer, group *platformv1.IAMGroup) {
 	} else {
 		printer.PrintKeyValue("Members", "(none)")
 	}
-	printer.PrintKeyValue("Created At", formatTimestampProto(group.CreatedAt))
+	printer.PrintKeyValue("Created At", formatTimestamp(group.CreatedAt))
 	if group.UpdatedAt != nil {
-		printer.PrintKeyValue("Updated At", formatTimestampProto(group.UpdatedAt))
+		printer.PrintKeyValue("Updated At", formatTimestampPtr(group.UpdatedAt))
 	}
 }

@@ -3,34 +3,40 @@ package sdn
 import (
 	"testing"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	sdnsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
 )
 
 func TestParsePolicyType(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
-		expected platformv1.PolicyType
+		expected sdnsvc.PolicyType
 		wantErr  bool
 	}{
-		{"ACL", "acl", platformv1.PolicyType_POLICY_TYPE_ACL, false},
-		{"QoS", "qos", platformv1.PolicyType_POLICY_TYPE_QOS, false},
-		{"NAT", "nat", platformv1.PolicyType_POLICY_TYPE_NAT, false},
-		{"Firewall", "firewall", platformv1.PolicyType_POLICY_TYPE_FIREWALL, false},
-		{"Routing", "routing", platformv1.PolicyType_POLICY_TYPE_ROUTING, false},
-		{"Invalid", "invalid", platformv1.PolicyType_POLICY_TYPE_UNSPECIFIED, true},
-		{"Empty", "", platformv1.PolicyType_POLICY_TYPE_UNSPECIFIED, true},
+		{"ACL", "acl", sdnsvc.PolicyTypeACL, false},
+		{"QoS", "qos", sdnsvc.PolicyTypeQoS, false},
+		{"NAT", "nat", sdnsvc.PolicyTypeNAT, false},
+		{"Firewall", "firewall", sdnsvc.PolicyTypeFirewall, false},
+		{"Routing", "routing", sdnsvc.PolicyTypeRouting, false},
+		{"Invalid", "invalid", sdnsvc.PolicyTypeUnspecified, true},
+		{"Empty", "", sdnsvc.PolicyTypeUnspecified, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := parsePolicyType(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("parsePolicyType(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			result, ok := sdnsvc.ParsePolicyType(tt.input)
+			if tt.wantErr {
+				if ok {
+					t.Errorf("ParsePolicyType(%q) expected not ok, got ok", tt.input)
+				}
+				return
+			}
+			if !ok {
+				t.Errorf("ParsePolicyType(%q) expected ok, got not ok", tt.input)
 				return
 			}
 			if result != tt.expected {
-				t.Errorf("parsePolicyType(%q) = %v, want %v", tt.input, result, tt.expected)
+				t.Errorf("ParsePolicyType(%q) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
 	}

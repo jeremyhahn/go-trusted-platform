@@ -3,39 +3,45 @@ package sdn
 import (
 	"testing"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	sdnsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
 )
 
 func TestParseFlowActionType(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
-		expected platformv1.FlowActionType
+		expected sdnsvc.FlowActionType
 		wantErr  bool
 	}{
-		{"Output", "output", platformv1.FlowActionType_FLOW_ACTION_OUTPUT, false},
-		{"Drop", "drop", platformv1.FlowActionType_FLOW_ACTION_DROP, false},
-		{"Set VLAN", "set_vlan", platformv1.FlowActionType_FLOW_ACTION_SET_VLAN, false},
-		{"Strip VLAN", "strip_vlan", platformv1.FlowActionType_FLOW_ACTION_STRIP_VLAN, false},
-		{"Set field", "set_field", platformv1.FlowActionType_FLOW_ACTION_SET_FIELD, false},
-		{"Goto table", "goto_table", platformv1.FlowActionType_FLOW_ACTION_GOTO_TABLE, false},
-		{"Controller", "controller", platformv1.FlowActionType_FLOW_ACTION_CONTROLLER, false},
-		{"Normal", "normal", platformv1.FlowActionType_FLOW_ACTION_OUTPUT, false},
-		{"Flood", "flood", platformv1.FlowActionType_FLOW_ACTION_OUTPUT, false},
-		{"Uppercase", "OUTPUT", platformv1.FlowActionType_FLOW_ACTION_OUTPUT, false},
-		{"Invalid", "invalid", platformv1.FlowActionType_FLOW_ACTION_UNSPECIFIED, true},
-		{"Empty", "", platformv1.FlowActionType_FLOW_ACTION_UNSPECIFIED, true},
+		{"Output", "output", sdnsvc.FlowActionOutput, false},
+		{"Drop", "drop", sdnsvc.FlowActionDrop, false},
+		{"Set VLAN", "set_vlan", sdnsvc.FlowActionSetVLAN, false},
+		{"Strip VLAN", "strip_vlan", sdnsvc.FlowActionStripVLAN, false},
+		{"Set field", "set_field", sdnsvc.FlowActionSetField, false},
+		{"Goto table", "goto_table", sdnsvc.FlowActionGotoTable, false},
+		{"Controller", "controller", sdnsvc.FlowActionController, false},
+		{"Normal", "normal", sdnsvc.FlowActionOutput, false},
+		{"Flood", "flood", sdnsvc.FlowActionOutput, false},
+		{"Uppercase", "OUTPUT", sdnsvc.FlowActionOutput, false},
+		{"Invalid", "invalid", sdnsvc.FlowActionUnspecified, true},
+		{"Empty", "", sdnsvc.FlowActionUnspecified, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := parseFlowActionType(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("parseFlowActionType(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			result, ok := sdnsvc.ParseFlowActionType(tt.input)
+			if tt.wantErr {
+				if ok {
+					t.Errorf("ParseFlowActionType(%q) expected not ok, got ok", tt.input)
+				}
+				return
+			}
+			if !ok {
+				t.Errorf("ParseFlowActionType(%q) expected ok, got not ok", tt.input)
 				return
 			}
 			if result != tt.expected {
-				t.Errorf("parseFlowActionType(%q) = %v, want %v", tt.input, result, tt.expected)
+				t.Errorf("ParseFlowActionType(%q) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -59,22 +65,22 @@ func TestParseFlowTable(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    int
-		expected platformv1.FlowTable
+		expected sdnsvc.FlowTable
 	}{
-		{"Table 0", 0, platformv1.FlowTable_FLOW_TABLE_0},
-		{"Table 1", 1, platformv1.FlowTable_FLOW_TABLE_1},
-		{"Table 2", 2, platformv1.FlowTable_FLOW_TABLE_2},
-		{"Table 3", 3, platformv1.FlowTable_FLOW_TABLE_3},
-		{"Table 255 (drop)", 255, platformv1.FlowTable_FLOW_TABLE_DROP},
-		{"Unknown table", 99, platformv1.FlowTable_FLOW_TABLE_UNSPECIFIED},
-		{"Negative table", -1, platformv1.FlowTable_FLOW_TABLE_UNSPECIFIED},
+		{"Table 0", 0, sdnsvc.FlowTable0},
+		{"Table 1", 1, sdnsvc.FlowTable1},
+		{"Table 2", 2, sdnsvc.FlowTable2},
+		{"Table 3", 3, sdnsvc.FlowTable3},
+		{"Table 255 (drop)", 255, sdnsvc.FlowTableDrop},
+		{"Unknown table", 99, sdnsvc.FlowTableUnspecified},
+		{"Negative table", -1, sdnsvc.FlowTableUnspecified},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := parseFlowTable(tt.input)
+			result := sdnsvc.ParseFlowTable(tt.input)
 			if result != tt.expected {
-				t.Errorf("parseFlowTable(%d) = %v, want %v", tt.input, result, tt.expected)
+				t.Errorf("ParseFlowTable(%d) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -146,11 +152,11 @@ func TestFlowListCommandFlags(t *testing.T) {
 	}
 }
 
-func TestFlowActionTypeMapCompleteness(t *testing.T) {
+func TestStringToFlowActionTypeMapCompleteness(t *testing.T) {
 	expectedTypes := []string{"output", "drop", "set_vlan", "strip_vlan", "set_field", "goto_table", "controller", "normal", "flood"}
 	for _, expected := range expectedTypes {
-		if _, ok := flowActionTypeMap[expected]; !ok {
-			t.Errorf("flowActionTypeMap missing entry for %s", expected)
+		if _, ok := sdnsvc.StringToFlowActionType[expected]; !ok {
+			t.Errorf("StringToFlowActionType missing entry for %s", expected)
 		}
 	}
 }
@@ -158,8 +164,9 @@ func TestFlowActionTypeMapCompleteness(t *testing.T) {
 func TestFlowTableMapCompleteness(t *testing.T) {
 	expectedTables := []int{0, 1, 2, 3, 255}
 	for _, expected := range expectedTables {
-		if _, ok := flowTableMap[expected]; !ok {
-			t.Errorf("flowTableMap missing entry for %d", expected)
+		result := sdnsvc.ParseFlowTable(expected)
+		if result == sdnsvc.FlowTableUnspecified {
+			t.Errorf("ParseFlowTable(%d) returned unspecified", expected)
 		}
 	}
 }

@@ -17,21 +17,20 @@ import (
 	"testing"
 	"time"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
 // createTestUser creates a test IAM user with the provided options.
-func createTestUser(opts ...func(*iampb.User)) *iampb.User {
-	user := &iampb.User{
-		Id:          "user-123",
-		TenantId:    "tenant-456",
+func createTestUser(opts ...func(*sdkiam.User)) *sdkiam.User {
+	user := &sdkiam.User{
+		ID:          "user-123",
+		TenantID:    "tenant-456",
 		Email:       "test@example.com",
-		Name:        "Test User",
+		DisplayName: "Test User",
 		Roles:       []string{"admin", "user"},
 		Groups:      []string{"developers", "ops"},
-		Attributes:  map[string]string{"department": "engineering", "level": "senior"},
-		MfaVerified: true,
+		Metadata:    map[string]string{"department": "engineering", "level": "senior"},
+		MFAEnabled:  true,
 	}
 	for _, opt := range opts {
 		opt(user)
@@ -49,17 +48,17 @@ func TestNewIAMSession(t *testing.T) {
 			t.Fatal("expected session to be non-nil")
 		}
 
-		if session.UserID() != user.Id {
-			t.Errorf("expected UserID %q, got %q", user.Id, session.UserID())
+		if session.UserID() != user.ID {
+			t.Errorf("expected UserID %q, got %q", user.ID, session.UserID())
 		}
-		if session.TenantID() != user.TenantId {
-			t.Errorf("expected TenantID %q, got %q", user.TenantId, session.TenantID())
+		if session.TenantID() != user.TenantID {
+			t.Errorf("expected TenantID %q, got %q", user.TenantID, session.TenantID())
 		}
 		if session.Email() != user.Email {
 			t.Errorf("expected Email %q, got %q", user.Email, session.Email())
 		}
-		if session.Name() != user.Name {
-			t.Errorf("expected Name %q, got %q", user.Name, session.Name())
+		if session.Name() != user.DisplayName {
+			t.Errorf("expected Name %q, got %q", user.DisplayName, session.Name())
 		}
 	})
 
@@ -103,31 +102,19 @@ func TestNewIAMSession(t *testing.T) {
 	})
 
 	t.Run("extracts_mfa_status_from_user", func(t *testing.T) {
-		mfaTime := time.Now().Add(-1 * time.Hour)
-		user := createTestUser(func(u *iampb.User) {
-			u.MfaVerified = true
-			u.MfaTimestamp = timestamppb.New(mfaTime)
+		user := createTestUser(func(u *sdkiam.User) {
+			u.MFAEnabled = true
 		})
 
 		session := NewIAMSession(user)
 		if !session.IsMFAVerified() {
 			t.Error("expected MFA to be verified")
 		}
-
-		// Check timestamp is within 1 second tolerance
-		diff := session.MFATimestamp().Sub(mfaTime)
-		if diff < 0 {
-			diff = -diff
-		}
-		if diff > time.Second {
-			t.Errorf("expected MFA timestamp %v, got %v", mfaTime, session.MFATimestamp())
-		}
 	})
 
-	t.Run("handles_user_without_mfa_timestamp", func(t *testing.T) {
-		user := createTestUser(func(u *iampb.User) {
-			u.MfaVerified = false
-			u.MfaTimestamp = nil
+	t.Run("handles_user_without_mfa", func(t *testing.T) {
+		user := createTestUser(func(u *sdkiam.User) {
+			u.MFAEnabled = false
 		})
 
 		session := NewIAMSession(user)
@@ -143,8 +130,8 @@ func TestNewIAMSession(t *testing.T) {
 // TestNewIAMSessionWithMFA tests the NewIAMSessionWithMFA constructor.
 func TestNewIAMSessionWithMFA(t *testing.T) {
 	t.Run("sets_explicit_mfa_status", func(t *testing.T) {
-		user := createTestUser(func(u *iampb.User) {
-			u.MfaVerified = false
+		user := createTestUser(func(u *sdkiam.User) {
+			u.MFAEnabled = false
 		})
 		mfaTime := time.Now()
 
@@ -169,8 +156,8 @@ func TestNewIAMSessionWithMFA(t *testing.T) {
 	})
 
 	t.Run("overrides_user_mfa_status", func(t *testing.T) {
-		user := createTestUser(func(u *iampb.User) {
-			u.MfaVerified = true
+		user := createTestUser(func(u *sdkiam.User) {
+			u.MFAEnabled = true
 		})
 		mfaTime := time.Now().Add(-2 * time.Hour)
 
@@ -184,7 +171,7 @@ func TestNewIAMSessionWithMFA(t *testing.T) {
 
 // TestIAMSession_HasRole tests the HasRole method.
 func TestIAMSession_HasRole(t *testing.T) {
-	user := createTestUser(func(u *iampb.User) {
+	user := createTestUser(func(u *sdkiam.User) {
 		u.Roles = []string{"admin", "user", "viewer"}
 	})
 	session := NewIAMSession(user)
@@ -222,7 +209,7 @@ func TestIAMSession_HasRole(t *testing.T) {
 
 // TestIAMSession_HasAllRoles tests the HasAllRoles method.
 func TestIAMSession_HasAllRoles(t *testing.T) {
-	user := createTestUser(func(u *iampb.User) {
+	user := createTestUser(func(u *sdkiam.User) {
 		u.Roles = []string{"admin", "user", "viewer"}
 	})
 	session := NewIAMSession(user)
@@ -257,7 +244,7 @@ func TestIAMSession_HasAllRoles(t *testing.T) {
 
 // TestIAMSession_HasAnyRole tests the HasAnyRole method.
 func TestIAMSession_HasAnyRole(t *testing.T) {
-	user := createTestUser(func(u *iampb.User) {
+	user := createTestUser(func(u *sdkiam.User) {
 		u.Roles = []string{"admin", "user"}
 	})
 	session := NewIAMSession(user)
@@ -292,7 +279,7 @@ func TestIAMSession_HasAnyRole(t *testing.T) {
 
 // TestIAMSession_HasGroup tests the HasGroup method.
 func TestIAMSession_HasGroup(t *testing.T) {
-	user := createTestUser(func(u *iampb.User) {
+	user := createTestUser(func(u *sdkiam.User) {
 		u.Groups = []string{"developers", "ops", "security"}
 	})
 	session := NewIAMSession(user)
@@ -324,8 +311,8 @@ func TestIAMSession_HasGroup(t *testing.T) {
 
 // TestIAMSession_Attributes tests the Attributes and GetAttribute methods.
 func TestIAMSession_Attributes(t *testing.T) {
-	user := createTestUser(func(u *iampb.User) {
-		u.Attributes = map[string]string{
+	user := createTestUser(func(u *sdkiam.User) {
+		u.Metadata = map[string]string{
 			"department": "engineering",
 			"level":      "senior",
 			"location":   "remote",
@@ -367,8 +354,8 @@ func TestIAMSession_Attributes(t *testing.T) {
 	})
 
 	t.Run("handles_nil_attributes", func(t *testing.T) {
-		user := createTestUser(func(u *iampb.User) {
-			u.Attributes = nil
+		user := createTestUser(func(u *sdkiam.User) {
+			u.Metadata = nil
 		})
 		session := NewIAMSession(user)
 
@@ -400,8 +387,8 @@ func TestIAMSession_User(t *testing.T) {
 func TestIAMSession_ToSubject(t *testing.T) {
 	t.Run("converts_session_to_subject", func(t *testing.T) {
 		mfaTime := time.Now()
-		user := createTestUser(func(u *iampb.User) {
-			u.Attributes = map[string]string{"key": "value"}
+		user := createTestUser(func(u *sdkiam.User) {
+			u.Metadata = map[string]string{"key": "value"}
 		})
 		session := NewIAMSessionWithMFA(user, true, mfaTime)
 
@@ -410,26 +397,17 @@ func TestIAMSession_ToSubject(t *testing.T) {
 		if subject == nil {
 			t.Fatal("expected subject to be non-nil")
 		}
-		if subject.Id != user.Id {
-			t.Errorf("expected Id %q, got %q", user.Id, subject.Id)
+		if subject.ID != user.ID {
+			t.Errorf("expected ID %q, got %q", user.ID, subject.ID)
 		}
-		if subject.TenantId != user.TenantId {
-			t.Errorf("expected TenantId %q, got %q", user.TenantId, subject.TenantId)
+		if subject.TenantID != user.TenantID {
+			t.Errorf("expected TenantID %q, got %q", user.TenantID, subject.TenantID)
 		}
 		if len(subject.Roles) != len(user.Roles) {
 			t.Errorf("expected %d roles, got %d", len(user.Roles), len(subject.Roles))
 		}
 		if len(subject.Groups) != len(user.Groups) {
 			t.Errorf("expected %d groups, got %d", len(user.Groups), len(subject.Groups))
-		}
-		if !subject.MfaVerified {
-			t.Error("expected MfaVerified to be true")
-		}
-		if subject.MfaTimestamp == nil {
-			t.Error("expected MfaTimestamp to be non-nil")
-		}
-		if subject.Attributes["key"] != "value" {
-			t.Errorf("expected attribute key=value, got %q", subject.Attributes["key"])
 		}
 	})
 
@@ -439,11 +417,11 @@ func TestIAMSession_ToSubject(t *testing.T) {
 
 		subject := session.ToSubject()
 
-		if subject.MfaVerified {
-			t.Error("expected MfaVerified to be false")
+		if subject == nil {
+			t.Fatal("expected subject to be non-nil")
 		}
-		if subject.MfaTimestamp != nil {
-			t.Error("expected MfaTimestamp to be nil for zero time")
+		if subject.ID != user.ID {
+			t.Errorf("expected ID %q, got %q", user.ID, subject.ID)
 		}
 	})
 }

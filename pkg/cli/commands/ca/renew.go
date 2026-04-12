@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	casvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -79,19 +79,21 @@ func runRenew(flags *cli.CommonFlags, serial string, days int, force bool) error
 	}
 	defer base.Close()
 
-	client := base.Client().CA()
-	if client == nil {
+	grpcClient := base.Client().CA()
+	if grpcClient == nil {
 		return ErrCANotInitialized{}
 	}
 
-	req := &platformv1.RenewCertificateRequest{
+	sdkClient := casvc.NewClientFromGRPC(grpcClient)
+
+	params := &casvc.RenewCertificateParams{
 		Serial:       serial,
 		ValidDays:    int32(days),
-		PreserveSans: !force, // force=true means renew even if not expiring, preserveSans defaults to true
+		PreserveSANs: !force, // force=true means renew even if not expiring, preserveSans defaults to true
 	}
 
 	ctx := base.Context()
-	resp, err := client.RenewCertificate(ctx, req)
+	result, err := sdkClient.RenewCertificateDomain(ctx, params)
 	if err != nil {
 		return ErrRenewCertificateFailed{Reason: err.Error()}
 	}
@@ -100,15 +102,15 @@ func runRenew(flags *cli.CommonFlags, serial string, days int, force bool) error
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		if resp.NewCertificate != nil {
+		if result.NewCertificate != nil {
 			printer.PrintSuccess("Certificate renewed successfully")
 			fmt.Println()
 			printer.PrintKeyValue("Old Serial", serial)
-			printer.PrintKeyValue("New Serial", resp.NewCertificate.Serial)
-			printCertificateDetails(printer, resp.NewCertificate)
+			printer.PrintKeyValue("New Serial", result.NewCertificate.Serial)
+			printCertificateDetails(printer, result.NewCertificate)
 		} else {
 			printer.PrintError("Failed to renew certificate")
 		}

@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 // removeOptions holds the options for the remove command
@@ -78,19 +78,19 @@ func runRemove(flags *cli.CommonFlags, containerID string, opts *removeOptions) 
 	}
 	defer base.Close()
 
-	client := base.Client().Compute()
-	if client == nil {
+	grpcClient := base.Client().Compute()
+	if grpcClient == nil {
 		return ErrContainerClientNotInitialized{}
 	}
 
-	req := &platformv1.DeleteContainerRequest{
-		Id:            containerID,
-		Force:         opts.force,
-		DeleteVolumes: opts.deleteVolumes,
-	}
+	sdkClient := computesvc.NewClientFromGRPC(grpcClient)
 
 	ctx := base.Context()
-	resp, err := client.DeleteContainer(ctx, req)
+	status, err := sdkClient.DeleteContainerDomain(ctx, &computesvc.DeleteContainerParams{
+		ID:            containerID,
+		Force:         opts.force,
+		DeleteVolumes: opts.deleteVolumes,
+	})
 	if err != nil {
 		return ErrContainerOperationFailed{Operation: "remove", ID: containerID, Err: err}
 	}
@@ -99,13 +99,13 @@ func runRemove(flags *cli.CommonFlags, containerID string, opts *removeOptions) 
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(status)
 
 	case cli.OutputFormatTable:
-		if resp.Status != nil && resp.Status.Success {
+		if status != nil && status.Success {
 			printer.PrintSuccess(fmt.Sprintf("Container removed successfully: %s", containerID))
-		} else if resp.Status != nil {
-			printer.PrintError(fmt.Sprintf("Failed to remove container: %s", resp.Status.Message))
+		} else if status != nil {
+			printer.PrintError(fmt.Sprintf("Failed to remove container: %s", status.Message))
 		}
 		return nil
 

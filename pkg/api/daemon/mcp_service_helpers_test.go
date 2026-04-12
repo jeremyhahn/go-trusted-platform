@@ -17,31 +17,30 @@ import (
 	"testing"
 	"time"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
 func TestMCPHelperUserToMap(t *testing.T) {
-	now := time.Now()
+	now := time.Now().Truncate(time.Second)
 	oneHourAgo := now.Add(-1 * time.Hour)
 	twoHoursAgo := now.Add(-2 * time.Hour)
 
 	t.Run("fully populated user", func(t *testing.T) {
-		user := &iampb.User{
-			Id:          "user-123",
-			TenantId:    "tenant-456",
+		user := &sdkiam.User{
+			ID:          "user-123",
+			TenantID:    "tenant-456",
 			Email:       "test@example.com",
-			Name:        "Test User",
+			DisplayName: "Test User",
 			Roles:       []string{"admin", "developer"},
 			Groups:      []string{"group-a", "group-b"},
-			Attributes:  map[string]string{"department": "engineering", "location": "remote"},
-			MfaVerified: true,
-			CreatedAt:   timestamppb.New(twoHoursAgo),
-			UpdatedAt:   timestamppb.New(oneHourAgo),
-			LastAuth:    timestamppb.New(now),
+			Metadata:    map[string]string{"department": "engineering", "location": "remote"},
+			MFAEnabled:  true,
+			CreatedAt:   twoHoursAgo,
+			UpdatedAt:   oneHourAgo,
+			LastLoginAt: &now,
 		}
 
-		result := userToMap(user)
+		result := sdkUserToMap(user)
 
 		// Verify required fields
 		if result["id"] != "user-123" {
@@ -117,13 +116,13 @@ func TestMCPHelperUserToMap(t *testing.T) {
 	})
 
 	t.Run("minimal user with required fields only", func(t *testing.T) {
-		user := &iampb.User{
-			Id:       "user-minimal",
-			TenantId: "tenant-minimal",
+		user := &sdkiam.User{
+			ID:       "user-minimal",
+			TenantID: "tenant-minimal",
 			Email:    "minimal@example.com",
 		}
 
-		result := userToMap(user)
+		result := sdkUserToMap(user)
 
 		// Verify required fields are present
 		if result["id"] != "user-minimal" {
@@ -153,28 +152,27 @@ func TestMCPHelperUserToMap(t *testing.T) {
 			t.Errorf("mfa_verified should not be present when false, got %v", result["mfa_verified"])
 		}
 		if _, exists := result["created_at"]; exists {
-			t.Errorf("created_at should not be present for nil timestamp, got %v", result["created_at"])
+			t.Errorf("created_at should not be present for zero time, got %v", result["created_at"])
 		}
 		if _, exists := result["updated_at"]; exists {
-			t.Errorf("updated_at should not be present for nil timestamp, got %v", result["updated_at"])
+			t.Errorf("updated_at should not be present for zero time, got %v", result["updated_at"])
 		}
 		if _, exists := result["last_auth"]; exists {
-			t.Errorf("last_auth should not be present for nil timestamp, got %v", result["last_auth"])
+			t.Errorf("last_auth should not be present for nil pointer, got %v", result["last_auth"])
 		}
 	})
 
 	t.Run("user with empty slices and maps", func(t *testing.T) {
-		user := &iampb.User{
-			Id:         "user-empty-collections",
-			TenantId:   "tenant-empty",
-			Email:      "empty@example.com",
-			Name:       "",
-			Roles:      []string{},
-			Groups:     []string{},
-			Attributes: map[string]string{},
+		user := &sdkiam.User{
+			ID:       "user-empty-collections",
+			TenantID: "tenant-empty",
+			Email:    "empty@example.com",
+			Roles:    []string{},
+			Groups:   []string{},
+			Metadata: map[string]string{},
 		}
 
-		result := userToMap(user)
+		result := sdkUserToMap(user)
 
 		// Verify required fields
 		if result["id"] != "user-empty-collections" {
@@ -197,31 +195,31 @@ func TestMCPHelperUserToMap(t *testing.T) {
 	})
 
 	t.Run("user with mfa_verified false", func(t *testing.T) {
-		user := &iampb.User{
-			Id:          "user-no-mfa",
-			TenantId:    "tenant-no-mfa",
-			Email:       "nomfa@example.com",
-			MfaVerified: false,
+		user := &sdkiam.User{
+			ID:         "user-no-mfa",
+			TenantID:   "tenant-no-mfa",
+			Email:      "nomfa@example.com",
+			MFAEnabled: false,
 		}
 
-		result := userToMap(user)
+		result := sdkUserToMap(user)
 
-		// MfaVerified=false should not be included in the map
+		// MFAEnabled=false should not be included in the map
 		if _, exists := result["mfa_verified"]; exists {
 			t.Errorf("mfa_verified=false should not be present in map")
 		}
 	})
 
 	t.Run("user with single role and group", func(t *testing.T) {
-		user := &iampb.User{
-			Id:       "user-single",
-			TenantId: "tenant-single",
+		user := &sdkiam.User{
+			ID:       "user-single",
+			TenantID: "tenant-single",
 			Email:    "single@example.com",
 			Roles:    []string{"viewer"},
 			Groups:   []string{"readers"},
 		}
 
-		result := userToMap(user)
+		result := sdkUserToMap(user)
 
 		roles, ok := result["roles"].([]string)
 		if !ok {
@@ -241,17 +239,17 @@ func TestMCPHelperUserToMap(t *testing.T) {
 	})
 
 	t.Run("user with only timestamps set", func(t *testing.T) {
-		now := time.Now()
-		user := &iampb.User{
-			Id:        "user-timestamps",
-			TenantId:  "tenant-timestamps",
-			Email:     "timestamps@example.com",
-			CreatedAt: timestamppb.New(now),
-			UpdatedAt: timestamppb.New(now),
-			LastAuth:  timestamppb.New(now),
+		ts := time.Now()
+		user := &sdkiam.User{
+			ID:          "user-timestamps",
+			TenantID:    "tenant-timestamps",
+			Email:       "timestamps@example.com",
+			CreatedAt:   ts,
+			UpdatedAt:   ts,
+			LastLoginAt: &ts,
 		}
 
-		result := userToMap(user)
+		result := sdkUserToMap(user)
 
 		// All timestamps should be present
 		if _, exists := result["created_at"]; !exists {
@@ -267,21 +265,21 @@ func TestMCPHelperUserToMap(t *testing.T) {
 }
 
 func TestMCPHelperGroupToMap(t *testing.T) {
-	now := time.Now()
+	now := time.Now().Truncate(time.Second)
 	oneHourAgo := now.Add(-1 * time.Hour)
 
 	t.Run("fully populated group", func(t *testing.T) {
-		group := &iampb.Group{
-			Id:          "group-123",
-			TenantId:    "tenant-456",
+		group := &sdkiam.Group{
+			ID:          "group-123",
+			TenantID:    "tenant-456",
 			Name:        "Engineering Team",
 			Description: "Software engineering department",
-			Members:     []string{"user-1", "user-2", "user-3"},
-			CreatedAt:   timestamppb.New(oneHourAgo),
-			UpdatedAt:   timestamppb.New(now),
+			MemberCount: 3,
+			CreatedAt:   oneHourAgo,
+			UpdatedAt:   now,
 		}
 
-		result := groupToMap(group)
+		result := sdkGroupToMap(group)
 
 		// Verify required fields
 		if result["id"] != "group-123" {
@@ -297,14 +295,6 @@ func TestMCPHelperGroupToMap(t *testing.T) {
 		}
 		if result["description"] != "Software engineering department" {
 			t.Errorf("expected description 'Software engineering department', got %v", result["description"])
-		}
-
-		members, ok := result["members"].([]string)
-		if !ok {
-			t.Fatalf("expected members to be []string, got %T", result["members"])
-		}
-		if len(members) != 3 {
-			t.Errorf("expected 3 members, got %d", len(members))
 		}
 
 		// Verify timestamps
@@ -328,19 +318,19 @@ func TestMCPHelperGroupToMap(t *testing.T) {
 	})
 
 	t.Run("nil group returns nil", func(t *testing.T) {
-		result := groupToMap(nil)
+		result := sdkGroupToMap(nil)
 		if result != nil {
 			t.Errorf("expected nil for nil group, got %v", result)
 		}
 	})
 
 	t.Run("minimal group with required fields only", func(t *testing.T) {
-		group := &iampb.Group{
-			Id:       "group-minimal",
-			TenantId: "tenant-minimal",
+		group := &sdkiam.Group{
+			ID:       "group-minimal",
+			TenantID: "tenant-minimal",
 		}
 
-		result := groupToMap(group)
+		result := sdkGroupToMap(group)
 
 		// Verify required fields
 		if result["id"] != "group-minimal" {
@@ -357,69 +347,23 @@ func TestMCPHelperGroupToMap(t *testing.T) {
 		if _, exists := result["description"]; exists {
 			t.Errorf("description should not be present for empty string")
 		}
-		if _, exists := result["members"]; exists {
-			t.Errorf("members should not be present for nil slice")
-		}
 		if _, exists := result["created_at"]; exists {
-			t.Errorf("created_at should not be present for nil timestamp")
+			t.Errorf("created_at should not be present for zero time")
 		}
 		if _, exists := result["updated_at"]; exists {
-			t.Errorf("updated_at should not be present for nil timestamp")
-		}
-	})
-
-	t.Run("group with empty members list", func(t *testing.T) {
-		group := &iampb.Group{
-			Id:          "group-no-members",
-			TenantId:    "tenant-no-members",
-			Name:        "Empty Group",
-			Description: "A group with no members",
-			Members:     []string{},
-		}
-
-		result := groupToMap(group)
-
-		// Empty members slice should not be included
-		if _, exists := result["members"]; exists {
-			t.Errorf("empty members should not be present")
-		}
-
-		// Name and description should be present
-		if result["name"] != "Empty Group" {
-			t.Errorf("expected name 'Empty Group', got %v", result["name"])
-		}
-		if result["description"] != "A group with no members" {
-			t.Errorf("expected description 'A group with no members', got %v", result["description"])
-		}
-	})
-
-	t.Run("group with single member", func(t *testing.T) {
-		group := &iampb.Group{
-			Id:       "group-single",
-			TenantId: "tenant-single",
-			Members:  []string{"only-member"},
-		}
-
-		result := groupToMap(group)
-
-		members, ok := result["members"].([]string)
-		if !ok {
-			t.Fatalf("expected members to be []string, got %T", result["members"])
-		}
-		if len(members) != 1 || members[0] != "only-member" {
-			t.Errorf("expected members [only-member], got %v", members)
+			t.Errorf("updated_at should not be present for zero time")
 		}
 	})
 
 	t.Run("group with empty name and description", func(t *testing.T) {
-		group := &iampb.Group{
-			Id:          "group-empty-strings",
-			TenantId:    "tenant-empty-strings",
+		group := &sdkiam.Group{
+			ID:          "group-empty-strings",
+			TenantID:    "tenant-empty-strings",
 			Name:        "",
 			Description: "",
 		}
 
-		result := groupToMap(group)
+		result := sdkGroupToMap(group)
 
 		if _, exists := result["name"]; exists {
 			t.Errorf("empty name should not be present")
@@ -430,15 +374,15 @@ func TestMCPHelperGroupToMap(t *testing.T) {
 	})
 
 	t.Run("group with only timestamps", func(t *testing.T) {
-		now := time.Now()
-		group := &iampb.Group{
-			Id:        "group-timestamps",
-			TenantId:  "tenant-timestamps",
-			CreatedAt: timestamppb.New(now),
-			UpdatedAt: timestamppb.New(now),
+		ts := time.Now()
+		group := &sdkiam.Group{
+			ID:        "group-timestamps",
+			TenantID:  "tenant-timestamps",
+			CreatedAt: ts,
+			UpdatedAt: ts,
 		}
 
-		result := groupToMap(group)
+		result := sdkGroupToMap(group)
 
 		if _, exists := result["created_at"]; !exists {
 			t.Error("created_at should be present")
@@ -450,22 +394,22 @@ func TestMCPHelperGroupToMap(t *testing.T) {
 }
 
 func TestMCPHelperTenantToMap(t *testing.T) {
-	now := time.Now()
+	now := time.Now().Truncate(time.Second)
 	oneHourAgo := now.Add(-1 * time.Hour)
 
 	t.Run("fully populated tenant", func(t *testing.T) {
-		tenant := &iampb.Tenant{
-			Id:   "tenant-123",
+		tenant := &sdkiam.Tenant{
+			ID:   "tenant-123",
 			Name: "Acme Corporation",
-			Settings: &iampb.TenantSettings{
-				MaxUsers:    100,
-				MfaRequired: true,
+			Settings: map[string]string{
+				"mfa_required": "true",
+				"max_users":    "100",
 			},
-			CreatedAt: timestamppb.New(oneHourAgo),
-			UpdatedAt: timestamppb.New(now),
+			CreatedAt: oneHourAgo,
+			UpdatedAt: now,
 		}
 
-		result := tenantToMap(tenant)
+		result := sdkTenantToMap(tenant)
 
 		// Verify required fields
 		if result["id"] != "tenant-123" {
@@ -477,16 +421,16 @@ func TestMCPHelperTenantToMap(t *testing.T) {
 			t.Errorf("expected name 'Acme Corporation', got %v", result["name"])
 		}
 
-		// Verify settings
-		settings, ok := result["settings"].(map[string]interface{})
+		// Verify settings (stored as map[string]string)
+		settings, ok := result["settings"].(map[string]string)
 		if !ok {
-			t.Fatalf("expected settings to be map[string]interface{}, got %T", result["settings"])
+			t.Fatalf("expected settings to be map[string]string, got %T", result["settings"])
 		}
-		if settings["max_users"] != int32(100) {
-			t.Errorf("expected max_users 100, got %v (type %T)", settings["max_users"], settings["max_users"])
+		if settings["mfa_required"] != "true" {
+			t.Errorf("expected mfa_required 'true', got %v", settings["mfa_required"])
 		}
-		if settings["mfa_required"] != true {
-			t.Errorf("expected mfa_required true, got %v", settings["mfa_required"])
+		if settings["max_users"] != "100" {
+			t.Errorf("expected max_users '100', got %v", settings["max_users"])
 		}
 
 		// Verify timestamps
@@ -510,18 +454,18 @@ func TestMCPHelperTenantToMap(t *testing.T) {
 	})
 
 	t.Run("nil tenant returns nil", func(t *testing.T) {
-		result := tenantToMap(nil)
+		result := sdkTenantToMap(nil)
 		if result != nil {
 			t.Errorf("expected nil for nil tenant, got %v", result)
 		}
 	})
 
 	t.Run("minimal tenant with id only", func(t *testing.T) {
-		tenant := &iampb.Tenant{
-			Id: "tenant-minimal",
+		tenant := &sdkiam.Tenant{
+			ID: "tenant-minimal",
 		}
 
-		result := tenantToMap(tenant)
+		result := sdkTenantToMap(tenant)
 
 		// Verify required fields
 		if result["id"] != "tenant-minimal" {
@@ -533,24 +477,24 @@ func TestMCPHelperTenantToMap(t *testing.T) {
 			t.Errorf("name should not be present for empty string")
 		}
 		if _, exists := result["settings"]; exists {
-			t.Errorf("settings should not be present for nil settings")
+			t.Errorf("settings should not be present for nil/empty settings")
 		}
 		if _, exists := result["created_at"]; exists {
-			t.Errorf("created_at should not be present for nil timestamp")
+			t.Errorf("created_at should not be present for zero time")
 		}
 		if _, exists := result["updated_at"]; exists {
-			t.Errorf("updated_at should not be present for nil timestamp")
+			t.Errorf("updated_at should not be present for zero time")
 		}
 	})
 
 	t.Run("tenant with nil settings", func(t *testing.T) {
-		tenant := &iampb.Tenant{
-			Id:       "tenant-no-settings",
+		tenant := &sdkiam.Tenant{
+			ID:       "tenant-no-settings",
 			Name:     "No Settings Corp",
 			Settings: nil,
 		}
 
-		result := tenantToMap(tenant)
+		result := sdkTenantToMap(tenant)
 
 		if result["name"] != "No Settings Corp" {
 			t.Errorf("expected name 'No Settings Corp', got %v", result["name"])
@@ -562,78 +506,48 @@ func TestMCPHelperTenantToMap(t *testing.T) {
 	})
 
 	t.Run("tenant with empty name", func(t *testing.T) {
-		tenant := &iampb.Tenant{
-			Id:   "tenant-empty-name",
+		tenant := &sdkiam.Tenant{
+			ID:   "tenant-empty-name",
 			Name: "",
 		}
 
-		result := tenantToMap(tenant)
+		result := sdkTenantToMap(tenant)
 
 		if _, exists := result["name"]; exists {
 			t.Errorf("empty name should not be present")
 		}
 	})
 
-	t.Run("tenant with default settings values", func(t *testing.T) {
-		tenant := &iampb.Tenant{
-			Id:   "tenant-default-settings",
-			Name: "Default Settings Corp",
-			Settings: &iampb.TenantSettings{
-				MaxUsers:    0,
-				MfaRequired: false,
-			},
+	t.Run("tenant with empty settings map", func(t *testing.T) {
+		tenant := &sdkiam.Tenant{
+			ID:       "tenant-empty-settings",
+			Name:     "Empty Settings Corp",
+			Settings: map[string]string{},
 		}
 
-		result := tenantToMap(tenant)
+		result := sdkTenantToMap(tenant)
 
-		// Settings should still be present even with zero/false values
-		settings, ok := result["settings"].(map[string]interface{})
-		if !ok {
-			t.Fatalf("expected settings to be map[string]interface{}, got %T", result["settings"])
-		}
-
-		if settings["max_users"] != int32(0) {
-			t.Errorf("expected max_users 0, got %v", settings["max_users"])
-		}
-		if settings["mfa_required"] != false {
-			t.Errorf("expected mfa_required false, got %v", settings["mfa_required"])
+		// Empty settings map should not be present
+		if _, exists := result["settings"]; exists {
+			t.Errorf("empty settings map should not be present")
 		}
 	})
 
 	t.Run("tenant with only timestamps", func(t *testing.T) {
-		now := time.Now()
-		tenant := &iampb.Tenant{
-			Id:        "tenant-timestamps",
-			CreatedAt: timestamppb.New(now),
-			UpdatedAt: timestamppb.New(now),
+		ts := time.Now()
+		tenant := &sdkiam.Tenant{
+			ID:        "tenant-timestamps",
+			CreatedAt: ts,
+			UpdatedAt: ts,
 		}
 
-		result := tenantToMap(tenant)
+		result := sdkTenantToMap(tenant)
 
 		if _, exists := result["created_at"]; !exists {
 			t.Error("created_at should be present")
 		}
 		if _, exists := result["updated_at"]; !exists {
 			t.Error("updated_at should be present")
-		}
-	})
-
-	t.Run("tenant with large max_users value", func(t *testing.T) {
-		tenant := &iampb.Tenant{
-			Id: "tenant-large-max",
-			Settings: &iampb.TenantSettings{
-				MaxUsers: 2147483647, // max int32
-			},
-		}
-
-		result := tenantToMap(tenant)
-
-		settings, ok := result["settings"].(map[string]interface{})
-		if !ok {
-			t.Fatalf("expected settings to be map[string]interface{}, got %T", result["settings"])
-		}
-		if settings["max_users"] != int32(2147483647) {
-			t.Errorf("expected max_users 2147483647, got %v", settings["max_users"])
 		}
 	})
 }

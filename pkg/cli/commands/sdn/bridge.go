@@ -15,13 +15,11 @@ package sdn
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	sdnclient "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
+	sdnsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
 )
 
 // ErrInvalidBridgeType indicates an unrecognized bridge type string.
@@ -31,22 +29,6 @@ type ErrInvalidBridgeType struct {
 
 func (e ErrInvalidBridgeType) Error() string {
 	return fmt.Sprintf("invalid bridge type: %s (valid: ovs, linux, vxlan)", e.Type)
-}
-
-// bridgeTypeMap provides O(1) lookup from CLI string to protobuf enum.
-var bridgeTypeMap = map[string]platformv1.BridgeType{
-	"ovs":   platformv1.BridgeType_BRIDGE_TYPE_OVS,
-	"linux": platformv1.BridgeType_BRIDGE_TYPE_LINUX,
-	"vxlan": platformv1.BridgeType_BRIDGE_TYPE_VXLAN,
-}
-
-// parseBridgeType converts a CLI bridge type string to the protobuf enum.
-func parseBridgeType(s string) (platformv1.BridgeType, error) {
-	bt, ok := bridgeTypeMap[strings.ToLower(s)]
-	if !ok {
-		return platformv1.BridgeType_BRIDGE_TYPE_UNSPECIFIED, ErrInvalidBridgeType{Type: s}
-	}
-	return bt, nil
 }
 
 // NewBridgeCommand creates the bridge subcommand
@@ -207,9 +189,9 @@ Examples:
 func runBridgeCreate(flags *cli.CommonFlags, bridgeID, name, bridgeType,
 	description, datapathID, failMode string, stp, rstp bool, mtu int) error {
 
-	bt, err := parseBridgeType(bridgeType)
-	if err != nil {
-		return err
+	bt, ok := sdnsvc.ParseBridgeType(bridgeType)
+	if !ok {
+		return ErrInvalidBridgeType{Type: bridgeType}
 	}
 
 	base, err := cli.NewBaseCommand(flags)
@@ -218,7 +200,7 @@ func runBridgeCreate(flags *cli.CommonFlags, bridgeID, name, bridgeType,
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
 	options := make(map[string]string)
 	if failMode != "" {
@@ -231,12 +213,12 @@ func runBridgeCreate(flags *cli.CommonFlags, bridgeID, name, bridgeType,
 		options["description"] = description
 	}
 
-	config := &platformv1.BridgeConfig{
+	config := &sdnsvc.BridgeConfig{
 		Name:       name,
 		Type:       bt,
-		DatapathId: datapathID,
-		StpEnabled: stp,
-		Mtu:        uint32(mtu),
+		DatapathID: datapathID,
+		STPEnabled: stp,
+		MTU:        uint32(mtu),
 		Options:    options,
 		Labels: map[string]string{
 			"bridge_id": bridgeID,
@@ -245,7 +227,7 @@ func runBridgeCreate(flags *cli.CommonFlags, bridgeID, name, bridgeType,
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	resp, err := sdnClient.CreateBridge(ctx, config)
+	resp, err := sdkClient.CreateBridgeDomain(ctx, config)
 	if err != nil {
 		return &cli.ErrOperationFailed{Operation: "bridge create", Err: err}
 	}
@@ -260,11 +242,11 @@ func runBridgeGet(flags *cli.CommonFlags, bridgeID string) error {
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	resp, err := sdnClient.GetBridge(ctx, bridgeID)
+	resp, err := sdkClient.GetBridge(ctx, bridgeID)
 	if err != nil {
 		return &cli.ErrOperationFailed{Operation: "bridge get", Err: err}
 	}
@@ -279,9 +261,9 @@ func runBridgeList(flags *cli.CommonFlags, bridgeType, status string, limit int,
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
-	var selector *platformv1.LabelSelector
+	var selector *sdnsvc.LabelSelector
 	labels := make(map[string]string)
 	if bridgeType != "" {
 		labels["type"] = bridgeType
@@ -290,21 +272,14 @@ func runBridgeList(flags *cli.CommonFlags, bridgeType, status string, limit int,
 		labels["status"] = status
 	}
 	if len(labels) > 0 {
-		selector = &platformv1.LabelSelector{
+		selector = &sdnsvc.LabelSelector{
 			MatchLabels: labels,
-		}
-	}
-
-	var pagination *platformv1.PaginationRequest
-	if limit > 0 || cursor != "" {
-		pagination = &platformv1.PaginationRequest{
-			PageSize: uint32(limit),
 		}
 	}
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	resp, _, err := sdnClient.ListBridges(ctx, selector, pagination)
+	resp, _, err := sdkClient.ListBridgesDomain(ctx, selector, uint32(limit))
 	if err != nil {
 		return &cli.ErrOperationFailed{Operation: "bridge list", Err: err}
 	}
@@ -319,20 +294,12 @@ func runBridgeDelete(flags *cli.CommonFlags, bridgeID string, force, deletePorts
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
 
-	// Delete flows first if requested
-	if deleteFlows {
-		_, flushErr := sdnClient.FlushFlows(ctx, bridgeID, platformv1.FlowTable_FLOW_TABLE_UNSPECIFIED)
-		if flushErr != nil {
-			return &cli.ErrOperationFailed{Operation: "bridge delete (flush flows)", Err: flushErr}
-		}
-	}
-
-	if err := sdnClient.DeleteBridge(ctx, bridgeID, force); err != nil {
+	if err := sdkClient.DeleteBridgeDomain(ctx, bridgeID, force, deleteFlows); err != nil {
 		return &cli.ErrOperationFailed{Operation: "bridge delete", Err: err}
 	}
 

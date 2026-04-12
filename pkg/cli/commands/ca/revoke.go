@@ -19,7 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	casvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -84,24 +84,26 @@ func runRevoke(flags *cli.CommonFlags, serial, reason string, deleteKeys bool) e
 	}
 	defer base.Close()
 
-	client := base.Client().CA()
-	if client == nil {
+	grpcClient := base.Client().CA()
+	if grpcClient == nil {
 		return ErrCANotInitialized{}
 	}
+
+	sdkClient := casvc.NewClientFromGRPC(grpcClient)
 
 	revocationReason, err := parseRevocationReason(reason)
 	if err != nil {
 		return err
 	}
 
-	req := &platformv1.RevokeCertificateRequest{
+	params := &casvc.RevokeCertificateParams{
 		Serial:     serial,
 		Reason:     revocationReason,
 		DeleteKeys: deleteKeys,
 	}
 
 	ctx := base.Context()
-	resp, err := client.RevokeCertificate(ctx, req)
+	result, err := sdkClient.RevokeCertificateDomain(ctx, params)
 	if err != nil {
 		return ErrRevokeCertificateFailed{Reason: err.Error()}
 	}
@@ -110,22 +112,22 @@ func runRevoke(flags *cli.CommonFlags, serial, reason string, deleteKeys bool) e
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		if resp.Status != nil && resp.Status.Success {
-			printer.PrintSuccess(fmt.Sprintf("Certificate %s revoked successfully", resp.Serial))
-			printer.PrintKeyValue("Reason", resp.Reason.String())
-			if resp.RevokedAt != nil {
-				printer.PrintKeyValue("Revoked At", formatTimestamp(resp.RevokedAt))
+		if result.Success {
+			printer.PrintSuccess(fmt.Sprintf("Certificate %s revoked successfully", result.Serial))
+			printer.PrintKeyValue("Reason", string(result.Reason))
+			if !result.RevokedAt.IsZero() {
+				printer.PrintKeyValue("Revoked At", formatTime(result.RevokedAt))
 			}
 			if deleteKeys {
 				printer.PrintInfo("Associated keys have been deleted")
 			}
 		} else {
 			msg := "unknown error"
-			if resp.Status != nil && resp.Status.Message != "" {
-				msg = resp.Status.Message
+			if result.Message != "" {
+				msg = result.Message
 			}
 			printer.PrintError(fmt.Sprintf("Failed to revoke certificate: %s", msg))
 		}
@@ -136,27 +138,27 @@ func runRevoke(flags *cli.CommonFlags, serial, reason string, deleteKeys bool) e
 	}
 }
 
-// parseRevocationReason parses a revocation reason string to the protobuf enum
-func parseRevocationReason(reason string) (platformv1.RevocationReason, error) {
+// parseRevocationReason parses a revocation reason string to the SDK domain type
+func parseRevocationReason(reason string) (casvc.RevocationReason, error) {
 	switch strings.ToLower(reason) {
 	case "unspecified", "":
-		return platformv1.RevocationReason_REVOCATION_REASON_UNSPECIFIED, nil
+		return casvc.RevocationReasonUnspecified, nil
 	case "key-compromise", "keycompromise":
-		return platformv1.RevocationReason_REVOCATION_REASON_KEY_COMPROMISE, nil
+		return casvc.RevocationReasonKeyCompromise, nil
 	case "ca-compromise", "cacompromise":
-		return platformv1.RevocationReason_REVOCATION_REASON_CA_COMPROMISE, nil
+		return casvc.RevocationReasonCACompromise, nil
 	case "affiliation-changed", "affiliationchanged":
-		return platformv1.RevocationReason_REVOCATION_REASON_AFFILIATION_CHANGED, nil
+		return casvc.RevocationReasonAffiliationChanged, nil
 	case "superseded":
-		return platformv1.RevocationReason_REVOCATION_REASON_SUPERSEDED, nil
+		return casvc.RevocationReasonSuperseded, nil
 	case "cessation", "cessation-of-operation":
-		return platformv1.RevocationReason_REVOCATION_REASON_CESSATION_OF_OPERATION, nil
+		return casvc.RevocationReasonCessationOfOperation, nil
 	case "hold", "certificate-hold":
-		return platformv1.RevocationReason_REVOCATION_REASON_CERTIFICATE_HOLD, nil
+		return casvc.RevocationReasonCertificateHold, nil
 	case "privilege-withdrawn", "privilegewithdrawn":
-		return platformv1.RevocationReason_REVOCATION_REASON_PRIVILEGE_WITHDRAWN, nil
+		return casvc.RevocationReasonPrivilegeWithdrawn, nil
 	default:
-		return platformv1.RevocationReason_REVOCATION_REASON_UNSPECIFIED,
+		return casvc.RevocationReasonUnspecified,
 			ErrInvalidRevocationReason{Reason: reason}
 	}
 }

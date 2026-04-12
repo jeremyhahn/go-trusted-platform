@@ -19,7 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	casvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -76,27 +76,25 @@ func runExportBundle(flags *cli.CommonFlags, output string, includeIntermediates
 	}
 	defer base.Close()
 
-	client := base.Client().CA()
-	if client == nil {
+	grpcClient := base.Client().CA()
+	if grpcClient == nil {
 		return ErrCANotInitialized{}
 	}
 
-	req := &platformv1.GetCABundleRequest{
-		IncludeIntermediates: includeIntermediates,
-	}
-
+	sdkClient := casvc.NewClientFromGRPC(grpcClient)
 	ctx := base.Context()
-	resp, err := client.GetCABundle(ctx, req)
+
+	bundle, err := sdkClient.GetCABundleDomain(ctx, includeIntermediates)
 	if err != nil {
 		return ErrExportBundleFailed{Reason: err.Error()}
 	}
 
-	if resp.Bundle == nil || len(resp.Bundle.Pem) == 0 {
+	if bundle == nil || len(bundle.Pem) == 0 {
 		return ErrBundleEmpty{}
 	}
 
 	// Write bundle to file
-	if err := os.WriteFile(output, resp.Bundle.Pem, 0644); err != nil {
+	if err := os.WriteFile(output, bundle.Pem, 0644); err != nil {
 		return ErrExportBundleFailed{Reason: fmt.Sprintf("failed to write bundle: %v", err)}
 	}
 
@@ -107,18 +105,18 @@ func runExportBundle(flags *cli.CommonFlags, output string, includeIntermediates
 		result := map[string]interface{}{
 			"success":    true,
 			"output":     output,
-			"cert_count": resp.Bundle.CertCount,
+			"cert_count": bundle.CertCount,
 		}
 		return printer.Print(result)
 
 	case cli.OutputFormatTable:
 		printer.PrintSuccess(fmt.Sprintf("CA bundle exported to %s", output))
-		printer.PrintKeyValue("Certificates", fmt.Sprintf("%d", resp.Bundle.CertCount))
+		printer.PrintKeyValue("Certificates", fmt.Sprintf("%d", bundle.CertCount))
 
-		if len(resp.Bundle.Certificates) > 0 {
+		if len(bundle.Certificates) > 0 {
 			fmt.Println()
 			printer.PrintInfo("Bundle Contents:")
-			for i, cert := range resp.Bundle.Certificates {
+			for i, cert := range bundle.Certificates {
 				fmt.Printf("  [%d] %s (%s)\n", i+1, cert.CommonName, cert.Serial)
 			}
 		}

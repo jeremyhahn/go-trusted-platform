@@ -19,7 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	casvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -83,10 +83,12 @@ func runList(flags *cli.CommonFlags, status, issuer string, page, pageSize uint3
 	}
 	defer base.Close()
 
-	client := base.Client().CA()
-	if client == nil {
+	grpcClient := base.Client().CA()
+	if grpcClient == nil {
 		return ErrCANotInitialized{}
 	}
+
+	sdkClient := casvc.NewClientFromGRPC(grpcClient)
 
 	// Parse status filter
 	statusFilter, err := parseStatusFilter(status)
@@ -94,17 +96,15 @@ func runList(flags *cli.CommonFlags, status, issuer string, page, pageSize uint3
 		return err
 	}
 
-	req := &platformv1.ListCertificatesRequest{
-		Pagination: &platformv1.PaginationRequest{
-			Page:     page,
-			PageSize: pageSize,
-		},
+	params := &casvc.ListCertificatesParams{
 		StatusFilter: statusFilter,
 		IssuerFilter: issuer,
+		Page:         page,
+		PageSize:     pageSize,
 	}
 
 	ctx := base.Context()
-	resp, err := client.ListCertificates(ctx, req)
+	result, err := sdkClient.ListCertificatesDomain(ctx, params)
 	if err != nil {
 		return fmt.Errorf("failed to list certificates: %w", err)
 	}
@@ -113,23 +113,23 @@ func runList(flags *cli.CommonFlags, status, issuer string, page, pageSize uint3
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		if len(resp.Certificates) == 0 {
+		if len(result.Certificates) == 0 {
 			printer.PrintInfo("No certificates found")
 			return nil
 		}
 
 		table := cli.NewTableData("Serial", "Common Name", "Issuer", "Status", "Algorithm", "Not After")
-		for _, cert := range resp.Certificates {
+		for _, cert := range result.Certificates {
 			table.AddRow(
 				truncateSerial(cert.Serial, 16),
 				truncateString(cert.CommonName, 30),
 				truncateString(cert.Issuer, 20),
-				cert.Status.String(),
-				cert.KeyAlgorithm.String(),
-				formatTimestamp(cert.NotAfter),
+				string(cert.Status),
+				string(cert.KeyAlgorithm),
+				formatTime(cert.NotAfter),
 			)
 		}
 
@@ -138,10 +138,8 @@ func runList(flags *cli.CommonFlags, status, issuer string, page, pageSize uint3
 		}
 
 		fmt.Println()
-		if resp.Pagination != nil {
-			printer.PrintKeyValue("Page", fmt.Sprintf("%d of %d", resp.Pagination.Page, resp.Pagination.TotalPages))
-			printer.PrintKeyValue("Total", fmt.Sprintf("%d certificates", resp.Pagination.TotalItems))
-		}
+		printer.PrintKeyValue("Page", fmt.Sprintf("%d of %d", result.Page, result.TotalPages))
+		printer.PrintKeyValue("Total", fmt.Sprintf("%d certificates", result.TotalItems))
 		return nil
 
 	default:
@@ -149,21 +147,21 @@ func runList(flags *cli.CommonFlags, status, issuer string, page, pageSize uint3
 	}
 }
 
-// parseStatusFilter parses a status string to the protobuf enum
-func parseStatusFilter(status string) (platformv1.CertificateStatus, error) {
+// parseStatusFilter parses a status string to the SDK domain type
+func parseStatusFilter(status string) (casvc.CertificateStatus, error) {
 	switch strings.ToLower(status) {
 	case "all", "":
-		return platformv1.CertificateStatus_CERTIFICATE_STATUS_UNSPECIFIED, nil
+		return casvc.CertificateStatusUnspecified, nil
 	case "valid", "active":
-		return platformv1.CertificateStatus_CERTIFICATE_STATUS_VALID, nil
+		return casvc.CertificateStatusValid, nil
 	case "revoked":
-		return platformv1.CertificateStatus_CERTIFICATE_STATUS_REVOKED, nil
+		return casvc.CertificateStatusRevoked, nil
 	case "expired":
-		return platformv1.CertificateStatus_CERTIFICATE_STATUS_EXPIRED, nil
+		return casvc.CertificateStatusExpired, nil
 	case "pending":
-		return platformv1.CertificateStatus_CERTIFICATE_STATUS_PENDING, nil
+		return casvc.CertificateStatusPending, nil
 	default:
-		return platformv1.CertificateStatus_CERTIFICATE_STATUS_UNSPECIFIED, ErrInvalidStatus{Status: status}
+		return casvc.CertificateStatusUnspecified, ErrInvalidStatus{Status: status}
 	}
 }
 

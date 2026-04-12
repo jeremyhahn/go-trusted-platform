@@ -20,7 +20,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -235,32 +236,31 @@ func runKeyGenerate(flags *cli.CommonFlags, keyID, algorithm, purpose string, ex
 	}
 	defer base.Close()
 
-	keyAlg, err := parseKMSKeyAlgorithm(algorithm)
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
+
+	keyAlg, err := kmssvc.ParseKeyAlgorithm(algorithm)
+	if err != nil {
+		return ErrInvalidKeyAlgorithm{Algorithm: algorithm}
+	}
+
+	keyUsages, err := kmssvc.ParseKeyUsages(purpose)
 	if err != nil {
 		return err
 	}
 
-	keyUsages, err := parseKeyUsages(purpose)
-	if err != nil {
-		return err
-	}
-
-	keySpec := &platformv1.KMSKeySpec{
+	params := &kmssvc.GenerateKeyParams{
+		KeyID:              keyID,
 		Algorithm:          keyAlg,
-		Usage:              keyUsages,
+		Usages:             keyUsages,
 		Exportable:         exportable,
 		DeletionProtection: deletionProtection,
-	}
-
-	req := &platformv1.GenerateKeyRequest{
-		KeySpec:     keySpec,
-		Name:        name,
-		Description: description,
-		Owner:       owner,
+		Name:               name,
+		Description:        description,
+		Owner:              owner,
 	}
 
 	ctx := base.Context()
-	resp, err := base.Client().KMS().GenerateKey(ctx, req)
+	resp, err := sdkClient.GenerateKeyDomain(ctx, params)
 	if err != nil {
 		return fmt.Errorf("failed to generate key: %w", err)
 	}
@@ -272,12 +272,12 @@ func runKeyGenerate(flags *cli.CommonFlags, keyID, algorithm, purpose string, ex
 		return printer.Print(resp)
 
 	case cli.OutputFormatTable:
-		printer.PrintSuccess(fmt.Sprintf("Key generated successfully: %s", resp.Key.KeyId))
+		printer.PrintSuccess(fmt.Sprintf("Key generated successfully: %s", resp.Key.KeyID))
 		fmt.Println()
-		printer.PrintKeyValue("Key ID", resp.Key.KeyId)
+		printer.PrintKeyValue("Key ID", resp.Key.KeyID)
 		printer.PrintKeyValue("Version", fmt.Sprintf("%d", resp.Key.Version))
-		printer.PrintKeyValue("Algorithm", formatKMSKeyAlgorithm(resp.Key.Algorithm))
-		printer.PrintKeyValue("Status", formatKeyStatus(resp.Key.Status))
+		printer.PrintKeyValue("Algorithm", string(resp.Key.Algorithm))
+		printer.PrintKeyValue("Status", string(resp.Key.Status))
 		printer.PrintKeyValue("Created At", formatKeyTimestamp(resp.Key.CreatedAt))
 		if resp.Metadata != nil {
 			if resp.Metadata.Name != "" {
@@ -303,13 +303,10 @@ func runKeyGet(flags *cli.CommonFlags, keyID string, version uint64) error {
 	}
 	defer base.Close()
 
-	req := &platformv1.GetKeyRequest{
-		KeyId:   keyID,
-		Version: version,
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
 	ctx := base.Context()
-	resp, err := base.Client().KMS().GetKey(ctx, req)
+	resp, err := sdkClient.GetKeyDomain(ctx, keyID, version)
 	if err != nil {
 		return fmt.Errorf("failed to get key: %w", err)
 	}
@@ -321,10 +318,10 @@ func runKeyGet(flags *cli.CommonFlags, keyID string, version uint64) error {
 		return printer.Print(resp)
 
 	case cli.OutputFormatTable:
-		printer.PrintKeyValue("Key ID", resp.Key.KeyId)
+		printer.PrintKeyValue("Key ID", resp.Key.KeyID)
 		printer.PrintKeyValue("Version", fmt.Sprintf("%d", resp.Key.Version))
-		printer.PrintKeyValue("Algorithm", formatKMSKeyAlgorithm(resp.Key.Algorithm))
-		printer.PrintKeyValue("Status", formatKeyStatus(resp.Key.Status))
+		printer.PrintKeyValue("Algorithm", string(resp.Key.Algorithm))
+		printer.PrintKeyValue("Status", string(resp.Key.Status))
 		printer.PrintKeyValue("Created At", formatKeyTimestamp(resp.Key.CreatedAt))
 		if resp.Metadata != nil {
 			if resp.Metadata.Name != "" {
@@ -345,7 +342,7 @@ func runKeyGet(flags *cli.CommonFlags, keyID string, version uint64) error {
 				printer.PrintKeyValue("Last Used At", formatKeyTimestamp(resp.Metadata.LastUsedAt))
 			}
 			if len(resp.Metadata.Usage) > 0 {
-				printer.PrintKeyValue("Usage", formatKeyUsages(resp.Metadata.Usage))
+				printer.PrintKeyValue("Usage", formatDomainKeyUsages(resp.Metadata.Usage))
 			}
 		}
 		return nil
@@ -362,13 +359,10 @@ func runKeyList(flags *cli.CommonFlags, limit int32, cursor string) error {
 	}
 	defer base.Close()
 
-	req := &platformv1.ListKeysRequest{
-		Limit:  limit,
-		Cursor: cursor,
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
 	ctx := base.Context()
-	resp, err := base.Client().KMS().ListKeys(ctx, req)
+	resp, err := sdkClient.ListKeysDomain(ctx, limit, cursor)
 	if err != nil {
 		return fmt.Errorf("failed to list keys: %w", err)
 	}
@@ -388,10 +382,10 @@ func runKeyList(flags *cli.CommonFlags, limit int32, cursor string) error {
 		table := cli.NewTableData("Key ID", "Version", "Algorithm", "Status", "Created At")
 		for _, key := range resp.Keys {
 			table.AddRow(
-				key.KeyId,
+				key.KeyID,
 				fmt.Sprintf("%d", key.Version),
-				formatKMSKeyAlgorithm(key.Algorithm),
-				formatKeyStatus(key.Status),
+				string(key.Algorithm),
+				string(key.Status),
 				formatKeyTimestamp(key.CreatedAt),
 			)
 		}
@@ -419,14 +413,10 @@ func runKeyDelete(flags *cli.CommonFlags, keyID string, pendingWindowDays int32,
 	}
 	defer base.Close()
 
-	req := &platformv1.DeleteKeyRequest{
-		KeyId:             keyID,
-		PendingWindowDays: pendingWindowDays,
-		Force:             force,
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
 	ctx := base.Context()
-	resp, err := base.Client().KMS().DeleteKey(ctx, req)
+	resp, err := sdkClient.DeleteKeyDomain(ctx, keyID, pendingWindowDays, force)
 	if err != nil {
 		return fmt.Errorf("failed to delete key: %w", err)
 	}
@@ -439,12 +429,12 @@ func runKeyDelete(flags *cli.CommonFlags, keyID string, pendingWindowDays int32,
 
 	case cli.OutputFormatTable:
 		if force {
-			printer.PrintSuccess(fmt.Sprintf("Key %s deleted permanently", resp.KeyId))
+			printer.PrintSuccess(fmt.Sprintf("Key %s deleted permanently", resp.KeyID))
 		} else {
-			printer.PrintSuccess(fmt.Sprintf("Key %s scheduled for deletion", resp.KeyId))
+			printer.PrintSuccess(fmt.Sprintf("Key %s scheduled for deletion", resp.KeyID))
 			printer.PrintKeyValue("Deletion Date", formatKeyTimestamp(resp.DeletionDate))
 		}
-		printer.PrintKeyValue("Status", formatKeyStatus(resp.KeyStatus))
+		printer.PrintKeyValue("Status", string(resp.KeyStatus))
 		return nil
 
 	default:
@@ -459,13 +449,10 @@ func runKeyRotate(flags *cli.CommonFlags, keyID string, retainOldVersion bool) e
 	}
 	defer base.Close()
 
-	req := &platformv1.RotateKeyRequest{
-		KeyId:            keyID,
-		RetainOldVersion: retainOldVersion,
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
 	ctx := base.Context()
-	resp, err := base.Client().KMS().RotateKey(ctx, req)
+	resp, err := sdkClient.RotateKeyDomain(ctx, keyID, retainOldVersion)
 	if err != nil {
 		return fmt.Errorf("failed to rotate key: %w", err)
 	}
@@ -477,9 +464,9 @@ func runKeyRotate(flags *cli.CommonFlags, keyID string, retainOldVersion bool) e
 		return printer.Print(resp)
 
 	case cli.OutputFormatTable:
-		printer.PrintSuccess(fmt.Sprintf("Key %s rotated successfully", resp.KeyId))
+		printer.PrintSuccess(fmt.Sprintf("Key %s rotated successfully", resp.KeyID))
 		fmt.Println()
-		printer.PrintKeyValue("Key ID", resp.KeyId)
+		printer.PrintKeyValue("Key ID", resp.KeyID)
 		printer.PrintKeyValue("Old Version", fmt.Sprintf("%d", resp.OldVersion))
 		printer.PrintKeyValue("New Version", fmt.Sprintf("%d", resp.NewVersion))
 		printer.PrintKeyValue("Rotated At", formatKeyTimestamp(resp.Timestamp))
@@ -490,145 +477,16 @@ func runKeyRotate(flags *cli.CommonFlags, keyID string, retainOldVersion bool) e
 	}
 }
 
-// parseKeyUsages converts a comma-separated string of usages to protobuf enum values
-func parseKeyUsages(purpose string) ([]platformv1.KeyUsage, error) {
-	if purpose == "" {
-		return nil, nil
-	}
-
-	parts := strings.Split(purpose, ",")
-	usages := make([]platformv1.KeyUsage, 0, len(parts))
-
-	for _, p := range parts {
-		usage, err := parseKeyUsage(strings.TrimSpace(p))
-		if err != nil {
-			return nil, err
-		}
-		usages = append(usages, usage)
-	}
-
-	return usages, nil
-}
-
-// parseKeyUsage converts a single usage string to the protobuf enum value
-func parseKeyUsage(usage string) (platformv1.KeyUsage, error) {
-	switch strings.ToLower(strings.ReplaceAll(usage, "_", "-")) {
-	case "encrypt":
-		return platformv1.KeyUsage_KEY_USAGE_ENCRYPT, nil
-	case "decrypt":
-		return platformv1.KeyUsage_KEY_USAGE_DECRYPT, nil
-	case "sign":
-		return platformv1.KeyUsage_KEY_USAGE_SIGN, nil
-	case "verify":
-		return platformv1.KeyUsage_KEY_USAGE_VERIFY, nil
-	case "wrap", "wrap-key":
-		return platformv1.KeyUsage_KEY_USAGE_WRAP, nil
-	case "unwrap", "unwrap-key":
-		return platformv1.KeyUsage_KEY_USAGE_UNWRAP, nil
-	case "derive", "derive-key":
-		return platformv1.KeyUsage_KEY_USAGE_DERIVE, nil
-	case "hmac", "generate-mac", "mac":
-		return platformv1.KeyUsage_KEY_USAGE_HMAC, nil
-	default:
-		return platformv1.KeyUsage_KEY_USAGE_UNSPECIFIED, ErrInvalidKeyUsage{Usage: usage}
-	}
-}
-
-// formatKeyStatus converts a protobuf key status enum to a human-readable string
-func formatKeyStatus(status platformv1.KeyStatus) string {
-	switch status {
-	case platformv1.KeyStatus_KEY_STATUS_ENABLED:
-		return "ENABLED"
-	case platformv1.KeyStatus_KEY_STATUS_DISABLED:
-		return "DISABLED"
-	case platformv1.KeyStatus_KEY_STATUS_PENDING_DELETION:
-		return "PENDING DELETION"
-	case platformv1.KeyStatus_KEY_STATUS_DESTROYED:
-		return "DESTROYED"
-	case platformv1.KeyStatus_KEY_STATUS_PENDING_IMPORT:
-		return "PENDING IMPORT"
-	default:
-		return "UNKNOWN"
-	}
-}
-
-// formatKMSKeyAlgorithm converts a protobuf key algorithm enum to a human-readable string
-func formatKMSKeyAlgorithm(alg platformv1.KMSKeyAlgorithm) string {
-	switch alg {
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128:
-		return "AES-128"
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192:
-		return "AES-192"
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256:
-		return "AES-256"
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305:
-		return "ChaCha20-Poly1305"
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048:
-		return "RSA-2048"
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_3072:
-		return "RSA-3072"
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_4096:
-		return "RSA-4096"
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256:
-		return "ECDSA-P256"
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P384:
-		return "ECDSA-P384"
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P521:
-		return "ECDSA-P521"
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ED25519:
-		return "Ed25519"
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM2:
-		return "Dilithium2"
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM3:
-		return "Dilithium3"
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM5:
-		return "Dilithium5"
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA256:
-		return "HMAC-SHA256"
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA384:
-		return "HMAC-SHA384"
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA512:
-		return "HMAC-SHA512"
-	default:
-		return "UNKNOWN"
-	}
-}
-
-// formatKeyUsages converts a slice of key usages to a comma-separated string
-func formatKeyUsages(usages []platformv1.KeyUsage) string {
+// formatDomainKeyUsages converts a slice of domain key usages to a comma-separated string
+func formatDomainKeyUsages(usages []kmssvc.KeyUsage) string {
 	if len(usages) == 0 {
 		return "none"
 	}
-
 	strs := make([]string, 0, len(usages))
 	for _, u := range usages {
-		strs = append(strs, formatKeyUsage(u))
+		strs = append(strs, string(u))
 	}
 	return strings.Join(strs, ", ")
-}
-
-// formatKeyUsage converts a single key usage enum to a human-readable string
-func formatKeyUsage(usage platformv1.KeyUsage) string {
-	switch usage {
-	case platformv1.KeyUsage_KEY_USAGE_ENCRYPT:
-		return "encrypt"
-	case platformv1.KeyUsage_KEY_USAGE_DECRYPT:
-		return "decrypt"
-	case platformv1.KeyUsage_KEY_USAGE_SIGN:
-		return "sign"
-	case platformv1.KeyUsage_KEY_USAGE_VERIFY:
-		return "verify"
-	case platformv1.KeyUsage_KEY_USAGE_WRAP:
-		return "wrap"
-	case platformv1.KeyUsage_KEY_USAGE_UNWRAP:
-		return "unwrap"
-	case platformv1.KeyUsage_KEY_USAGE_DERIVE:
-		return "derive"
-	case platformv1.KeyUsage_KEY_USAGE_HMAC:
-		return "hmac"
-	default:
-		return "unknown"
-	}
 }
 
 // formatKeyTimestamp formats a Unix timestamp for display

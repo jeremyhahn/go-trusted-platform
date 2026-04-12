@@ -15,11 +15,10 @@ package vtpm
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -70,7 +69,7 @@ Examples:
 // runList executes the list command
 func runList(flags *cli.CommonFlags, mode string, limit, offset int32) error {
 	// Validate mode filter first before connecting
-	modeFilter := platformv1.BundleMode_BUNDLE_MODE_UNSPECIFIED
+	modeFilter := vtpmsvc.BundleModeUnspecified
 	if mode != "" {
 		var parseErr error
 		modeFilter, parseErr = parseBundleMode(mode)
@@ -85,21 +84,16 @@ func runList(flags *cli.CommonFlags, mode string, limit, offset int32) error {
 	}
 	defer base.Close()
 
-	client := base.Client().VTPM()
-	if client == nil {
-		return ErrVTPMNotAvailable{}
-	}
+	sdkClient := vtpmsvc.NewClientFromGRPC(base.Client().VTPM())
 
-	req := &platformv1.ListBundlesRequest{
-		Options: &platformv1.ListBundleOptions{
-			Mode:   modeFilter,
-			Limit:  limit,
-			Offset: offset,
-		},
+	listOpts := &vtpmsvc.ListBundleOptions{
+		Mode:   modeFilter,
+		Limit:  limit,
+		Offset: offset,
 	}
 
 	ctx := base.Context()
-	resp, err := client.ListBundles(ctx, req)
+	resp, err := sdkClient.ListBundlesDomain(ctx, listOpts)
 	if err != nil {
 		return ErrListBundlesFailed{Reason: err.Error()}
 	}
@@ -125,20 +119,20 @@ func runList(flags *cli.CommonFlags, mode string, limit, offset int32) error {
 
 			if bundle.Manifest != nil {
 				hostname = bundle.Manifest.Hostname
-				ekAlg = bundle.Manifest.EkAlgorithm.String()
+				ekAlg = string(bundle.Manifest.EKAlgorithm)
 				secureBoot = formatBool(bundle.Manifest.SecureBootEnabled)
 				if bundle.Manifest.CreatedAt != nil {
-					created = bundle.Manifest.CreatedAt.AsTime().Format("2006-01-02 15:04")
+					created = bundle.Manifest.CreatedAt.Format("2006-01-02 15:04")
 				}
 			}
 
 			if created == "" && bundle.CreatedAt != nil {
-				created = bundle.CreatedAt.AsTime().Format("2006-01-02 15:04")
+				created = (*bundle.CreatedAt).Format("2006-01-02 15:04")
 			}
 
 			table.AddRow(
-				truncateID(bundle.Id, 12),
-				bundle.Mode.String(),
+				truncateID(bundle.ID, 12),
+				string(bundle.Mode),
 				truncateString(hostname, 25),
 				ekAlg,
 				secureBoot,
@@ -160,15 +154,12 @@ func runList(flags *cli.CommonFlags, mode string, limit, offset int32) error {
 }
 
 // parseBundleMode parses a mode string to protobuf enum
-func parseBundleMode(mode string) (platformv1.BundleMode, error) {
-	switch strings.ToLower(mode) {
-	case "template":
-		return platformv1.BundleMode_BUNDLE_MODE_TEMPLATE, nil
-	case "pre-assigned", "preassigned":
-		return platformv1.BundleMode_BUNDLE_MODE_PRE_ASSIGNED, nil
-	default:
-		return platformv1.BundleMode_BUNDLE_MODE_UNSPECIFIED, ErrInvalidBundleMode{Mode: mode}
+func parseBundleMode(mode string) (vtpmsvc.BundleMode, error) {
+	m, ok := vtpmsvc.ParseBundleMode(mode)
+	if !ok {
+		return vtpmsvc.BundleModeUnspecified, ErrInvalidBundleMode{Mode: mode}
 	}
+	return m, nil
 }
 
 // truncateID truncates an ID for display

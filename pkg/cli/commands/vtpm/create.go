@@ -19,7 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -100,24 +100,19 @@ func runCreate(flags *cli.CommonFlags, hostname string, secureBoot bool, ekAlgor
 	}
 	defer base.Close()
 
-	client := base.Client().VTPM()
-	if client == nil {
-		return ErrVTPMNotAvailable{}
-	}
+	sdkClient := vtpmsvc.NewClientFromGRPC(base.Client().VTPM())
 
-	req := &platformv1.CreateBundleRequest{
-		Options: &platformv1.CreateBundleOptions{
-			Mode:              platformv1.BundleMode_BUNDLE_MODE_PRE_ASSIGNED,
-			Hostname:          hostname,
-			EkAlgorithm:       ekAlg,
-			SecureBootEnabled: secureBoot,
-			TemplateId:        templateID,
-			Labels:            labelMap,
-		},
+	opts := &vtpmsvc.CreateBundleOptions{
+		Mode:              vtpmsvc.BundleModePreAssigned,
+		Hostname:          hostname,
+		EKAlgorithm:       ekAlg,
+		SecureBootEnabled: secureBoot,
+		TemplateID:        templateID,
+		Labels:            labelMap,
 	}
 
 	ctx := base.Context()
-	resp, err := client.CreateBundle(ctx, req)
+	resp, err := sdkClient.CreateBundleDomain(ctx, opts)
 	if err != nil {
 		return ErrCreateBundleFailed{Reason: err.Error()}
 	}
@@ -130,7 +125,7 @@ func runCreate(flags *cli.CommonFlags, hostname string, secureBoot bool, ekAlgor
 
 	case cli.OutputFormatTable:
 		if resp.Bundle != nil {
-			printer.PrintSuccess(fmt.Sprintf("vTPM bundle created: %s", resp.Bundle.Id))
+			printer.PrintSuccess(fmt.Sprintf("vTPM bundle created: %s", resp.Bundle.ID))
 			fmt.Println()
 			printBundleDetails(printer, resp.Bundle)
 		}
@@ -142,15 +137,12 @@ func runCreate(flags *cli.CommonFlags, hostname string, secureBoot bool, ekAlgor
 }
 
 // parseEKAlgorithm parses the EK algorithm string to protobuf enum
-func parseEKAlgorithm(algorithm string) (platformv1.EKAlgorithm, error) {
-	switch strings.ToUpper(algorithm) {
-	case "RSA":
-		return platformv1.EKAlgorithm_EK_ALGORITHM_RSA, nil
-	case "ECC":
-		return platformv1.EKAlgorithm_EK_ALGORITHM_ECC, nil
-	default:
-		return platformv1.EKAlgorithm_EK_ALGORITHM_UNSPECIFIED, ErrInvalidEKAlgorithm{Algorithm: algorithm}
+func parseEKAlgorithm(algorithm string) (vtpmsvc.EKAlgorithm, error) {
+	alg, ok := vtpmsvc.ParseEKAlgorithm(algorithm)
+	if !ok {
+		return vtpmsvc.EKAlgorithmUnspecified, ErrInvalidEKAlgorithm{Algorithm: algorithm}
 	}
+	return alg, nil
 }
 
 // parseLabels parses label strings into a map
@@ -170,22 +162,22 @@ func parseLabels(labels []string) (map[string]string, error) {
 }
 
 // printBundleDetails prints bundle details in table format
-func printBundleDetails(printer *cli.Printer, bundle *platformv1.Bundle) {
-	printer.PrintKeyValue("ID", bundle.Id)
-	printer.PrintKeyValue("Mode", bundle.Mode.String())
+func printBundleDetails(printer *cli.Printer, bundle *vtpmsvc.Bundle) {
+	printer.PrintKeyValue("ID", bundle.ID)
+	printer.PrintKeyValue("Mode", string(bundle.Mode))
 
 	if bundle.Manifest != nil {
 		m := bundle.Manifest
 		if m.Hostname != "" {
 			printer.PrintKeyValue("Hostname", m.Hostname)
 		}
-		printer.PrintKeyValue("EK Algorithm", m.EkAlgorithm.String())
+		printer.PrintKeyValue("EK Algorithm", string(m.EKAlgorithm))
 		printer.PrintKeyValue("Secure Boot", formatBool(m.SecureBootEnabled))
 		if m.ClonedFrom != "" {
 			printer.PrintKeyValue("Cloned From", m.ClonedFrom)
 		}
 		if m.CreatedAt != nil {
-			printer.PrintKeyValue("Created", m.CreatedAt.AsTime().Format("2006-01-02 15:04:05 MST"))
+			printer.PrintKeyValue("Created", (*m.CreatedAt).Format("2006-01-02 15:04:05 MST"))
 		}
 		if len(m.Labels) > 0 {
 			fmt.Println()
@@ -195,7 +187,7 @@ func printBundleDetails(printer *cli.Printer, bundle *platformv1.Bundle) {
 			}
 		}
 	} else if bundle.CreatedAt != nil {
-		printer.PrintKeyValue("Created", bundle.CreatedAt.AsTime().Format("2006-01-02 15:04:05 MST"))
+		printer.PrintKeyValue("Created", (*bundle.CreatedAt).Format("2006-01-02 15:04:05 MST"))
 	}
 }
 

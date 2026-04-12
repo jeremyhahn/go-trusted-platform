@@ -19,7 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -62,13 +63,10 @@ func runKMSStatus(flags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
-	client := base.Client().KMS()
-	if client == nil {
-		return ErrKMSClientNotInitialized{}
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
 	ctx := base.Context()
-	resp, err := client.BackendStatus(ctx, &platformv1.BackendStatusRequest{})
+	resp, err := sdkClient.BackendStatusDomain(ctx)
 	if err != nil {
 		return ErrKMSStatusFailed{Err: err}
 	}
@@ -88,7 +86,7 @@ func runKMSStatus(flags *cli.CommonFlags) error {
 }
 
 // printKMSStatusTable prints KMS status in table format
-func printKMSStatusTable(printer *cli.Printer, resp *platformv1.BackendStatusResponse) error {
+func printKMSStatusTable(printer *cli.Printer, resp *kmssvc.BackendStatusResult) error {
 	// Print header based on status
 	statusStr := "UNKNOWN"
 	if resp.BackendStatus != "" {
@@ -109,8 +107,8 @@ func printKMSStatusTable(printer *cli.Printer, resp *platformv1.BackendStatusRes
 		printer.PrintKeyValue("Region", resp.Region)
 	}
 
-	if resp.KeyId != "" {
-		printer.PrintKeyValue("Key ID", resp.KeyId)
+	if resp.KeyID != "" {
+		printer.PrintKeyValue("Key ID", resp.KeyID)
 	}
 
 	// Print PCR information for TPM backends

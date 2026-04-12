@@ -16,7 +16,8 @@ package tpm
 import (
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	tpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tpm"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -67,8 +68,10 @@ func runInfo(flags *cli.CommonFlags) error {
 func runInfoWithClient(base TPMBaseCommandInterface) error {
 	defer base.Close()
 
+	sdkClient := tpmsvc.NewClientFromGRPC(base.TPMClient())
+
 	ctx := base.Context()
-	resp, err := base.TPMClient().Info(ctx, &platformv1.TPMInfoRequest{})
+	resp, err := sdkClient.InfoDomain(ctx)
 	if err != nil {
 		return ErrTPMInfoFailed{Reason: err.Error()}
 	}
@@ -92,26 +95,27 @@ func runInfoWithClient(base TPMBaseCommandInterface) error {
 }
 
 // buildTPMInfoOutput creates the structured output for JSON/YAML rendering.
-//
-// The authoritative TPM information is the comprehensive multi-line
-// report composed by go-xkms TPM2.Info(), delivered in
-// resp.Properties["info"]. We expose it as "info" alongside the two
-// structured flags clients may want to branch on programmatically.
-func buildTPMInfoOutput(resp *platformv1.TPMInfoResponse) map[string]interface{} {
+func buildTPMInfoOutput(resp *tpmsvc.InfoResponse) map[string]interface{} {
+	info := ""
+	if resp.Properties != nil {
+		info = resp.Properties["info"]
+	}
 	return map[string]interface{}{
-		"info":         resp.GetProperties()["info"],
+		"info":         info,
 		"is_simulator": resp.IsSimulator,
 	}
 }
 
 // printTPMInfoDetails prints the comprehensive xkms TPM info report in
 // table (text) format by writing the verbatim multi-line string produced
-// by go-xkms TPM2.Info(). We do not reformat or reinvent fields — the
+// by go-xkms TPM2.Info(). We do not reformat or reinvent fields -- the
 // xkms library owns the presentation layer for TPM capabilities.
-func printTPMInfoDetails(printer *cli.Printer, resp *platformv1.TPMInfoResponse) {
-	if info := resp.GetProperties()["info"]; info != "" {
-		printer.Println(info)
-		return
+func printTPMInfoDetails(printer *cli.Printer, resp *tpmsvc.InfoResponse) {
+	if resp.Properties != nil {
+		if info := resp.Properties["info"]; info != "" {
+			printer.Println(info)
+			return
+		}
 	}
 	// Fallback: server returned no info string (should not happen with
 	// a wired TPM); surface the simulator flag so the user sees something.

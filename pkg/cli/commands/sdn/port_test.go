@@ -3,37 +3,43 @@ package sdn
 import (
 	"testing"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	sdnsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
 )
 
 func TestParsePortType(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
-		expected platformv1.PortType
+		expected sdnsvc.PortType
 		wantErr  bool
 	}{
-		{"Internal", "internal", platformv1.PortType_PORT_TYPE_INTERNAL, false},
-		{"Physical", "physical", platformv1.PortType_PORT_TYPE_PHYSICAL, false},
-		{"Tap", "tap", platformv1.PortType_PORT_TYPE_TAP, false},
-		{"Veth", "veth", platformv1.PortType_PORT_TYPE_VETH, false},
-		{"VXLAN", "vxlan", platformv1.PortType_PORT_TYPE_VXLAN, false},
-		{"GRE", "gre", platformv1.PortType_PORT_TYPE_GRE, false},
-		{"Uppercase", "INTERNAL", platformv1.PortType_PORT_TYPE_INTERNAL, false},
-		{"Mixed case", "Vxlan", platformv1.PortType_PORT_TYPE_VXLAN, false},
-		{"Invalid", "invalid", platformv1.PortType_PORT_TYPE_UNSPECIFIED, true},
-		{"Empty", "", platformv1.PortType_PORT_TYPE_UNSPECIFIED, true},
+		{"Internal", "internal", sdnsvc.PortTypeInternal, false},
+		{"Physical", "physical", sdnsvc.PortTypePhysical, false},
+		{"Tap", "tap", sdnsvc.PortTypeTap, false},
+		{"Veth", "veth", sdnsvc.PortTypeVeth, false},
+		{"VXLAN", "vxlan", sdnsvc.PortTypeVXLAN, false},
+		{"GRE", "gre", sdnsvc.PortTypeGRE, false},
+		{"Uppercase", "INTERNAL", sdnsvc.PortTypeInternal, false},
+		{"Mixed case", "Vxlan", sdnsvc.PortTypeVXLAN, false},
+		{"Invalid", "invalid", sdnsvc.PortTypeUnspecified, true},
+		{"Empty", "", sdnsvc.PortTypeUnspecified, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := parsePortType(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("parsePortType(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			result, ok := sdnsvc.ParsePortType(tt.input)
+			if tt.wantErr {
+				if ok {
+					t.Errorf("ParsePortType(%q) expected not ok, got ok", tt.input)
+				}
+				return
+			}
+			if !ok {
+				t.Errorf("ParsePortType(%q) expected ok, got not ok", tt.input)
 				return
 			}
 			if result != tt.expected {
-				t.Errorf("parsePortType(%q) = %v, want %v", tt.input, result, tt.expected)
+				t.Errorf("ParsePortType(%q) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -108,11 +114,11 @@ func TestPortDeleteCommandRequiredFlags(t *testing.T) {
 	}
 }
 
-func TestPortTypeMapCompleteness(t *testing.T) {
+func TestStringToPortTypeMapCompleteness(t *testing.T) {
 	expectedTypes := []string{"internal", "physical", "tap", "veth", "vxlan", "gre"}
 	for _, expected := range expectedTypes {
-		if _, ok := portTypeMap[expected]; !ok {
-			t.Errorf("portTypeMap missing entry for %s", expected)
+		if _, ok := sdnsvc.StringToPortType[expected]; !ok {
+			t.Errorf("StringToPortType missing entry for %s", expected)
 		}
 	}
 }

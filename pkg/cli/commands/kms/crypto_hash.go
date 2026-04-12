@@ -20,7 +20,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -98,10 +99,7 @@ func runCryptoHash(flags *cli.CommonFlags, cmdFlags *hashFlags) error {
 	}
 	defer base.Close()
 
-	client := base.Client().KMS()
-	if client == nil {
-		return ErrCryptoClientNotInitialized{}
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
 	// Read input data
 	data, err := readInputData(cmdFlags.inputPath)
@@ -115,13 +113,8 @@ func runCryptoHash(flags *cli.CommonFlags, cmdFlags *hashFlags) error {
 		return err
 	}
 
-	req := &platformv1.HashRequest{
-		Data:      data,
-		Algorithm: hashAlg,
-	}
-
 	ctx := base.Context()
-	resp, err := client.Hash(ctx, req)
+	resp, err := sdkClient.HashDomain(ctx, data, hashAlg)
 	if err != nil {
 		return ErrCryptoOperationFailed{Operation: "hash", Err: err}
 	}

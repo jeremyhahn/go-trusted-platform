@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
 // TestContextKey tests that ContextKey type works correctly.
@@ -89,9 +89,9 @@ func TestHTTPMethodToAction(t *testing.T) {
 // TestGetSessionFromContext tests the GetSessionFromContext function.
 func TestGetSessionFromContext(t *testing.T) {
 	t.Run("returns_session_when_present", func(t *testing.T) {
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		ctx := context.WithValue(context.Background(), SessionContextKey, session)
@@ -140,9 +140,9 @@ func TestGetSessionFromContext(t *testing.T) {
 // TestSetSessionInContext tests the SetSessionInContext function.
 func TestSetSessionInContext(t *testing.T) {
 	t.Run("sets_session_in_context", func(t *testing.T) {
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		ctx := context.Background()
@@ -165,13 +165,13 @@ func TestSetSessionInContext(t *testing.T) {
 	})
 
 	t.Run("overwrites_existing_session", func(t *testing.T) {
-		session1 := NewIAMSession(&iampb.User{
-			Id:       "user-1",
-			TenantId: "tenant-1",
+		session1 := NewIAMSession(&sdkiam.User{
+			ID: "user-1",
+			TenantID: "tenant-1",
 		})
-		session2 := NewIAMSession(&iampb.User{
-			Id:       "user-2",
-			TenantId: "tenant-2",
+		session2 := NewIAMSession(&sdkiam.User{
+			ID: "user-2",
+			TenantID: "tenant-2",
 		})
 
 		ctx := SetSessionInContext(context.Background(), session1)
@@ -389,9 +389,9 @@ func TestAuthzConfig(t *testing.T) {
 // TestIAMSession_Interface tests that IAMSession interface is properly defined.
 func TestIAMSession_Interface(t *testing.T) {
 	t.Run("interface_has_all_required_methods", func(t *testing.T) {
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		// Test that all interface methods are callable

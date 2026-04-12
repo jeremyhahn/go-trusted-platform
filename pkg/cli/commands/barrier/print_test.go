@@ -16,12 +16,12 @@ package barrier
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	barriersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -33,9 +33,10 @@ func TestPrintInitTable_SingleKey(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &platformv1.BarrierInitResponse{
-		Strategy:      platformv1.BarrierStrategy_BARRIER_STRATEGY_SINGLE_KEY,
-		InitializedAt: timestamppb.Now(),
+	now := time.Now()
+	resp := &barriersvc.InitResult{
+		Strategy:      barriersvc.StrategySingleKey,
+		InitializedAt: &now,
 		RootToken:     "root-token-123",
 		UnsealKeys:    []string{"key-1"},
 	}
@@ -54,8 +55,8 @@ func TestPrintInitTable_Shamir(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &platformv1.BarrierInitResponse{
-		Strategy:   platformv1.BarrierStrategy_BARRIER_STRATEGY_SHAMIR,
+	resp := &barriersvc.InitResult{
+		Strategy:   barriersvc.StrategyShamir,
 		UnsealKeys: []string{"share-1", "share-2", "share-3"},
 	}
 
@@ -73,8 +74,8 @@ func TestPrintInitTable_NoUnsealKeys(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &platformv1.BarrierInitResponse{
-		Strategy: platformv1.BarrierStrategy_BARRIER_STRATEGY_SINGLE_KEY,
+	resp := &barriersvc.InitResult{
+		Strategy: barriersvc.StrategySingleKey,
 	}
 
 	err := printInitTable(printer, resp)
@@ -89,8 +90,8 @@ func TestPrintInitTable_NilInitializedAt(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &platformv1.BarrierInitResponse{
-		Strategy:   platformv1.BarrierStrategy_BARRIER_STRATEGY_SINGLE_KEY,
+	resp := &barriersvc.InitResult{
+		Strategy:   barriersvc.StrategySingleKey,
 		UnsealKeys: []string{"key-1"},
 	}
 
@@ -107,11 +108,12 @@ func TestPrintStatusTable_Unsealed(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &platformv1.BarrierStatusResponse{
+	now := time.Now()
+	resp := &barriersvc.StatusResult{
 		Initialized:   true,
 		Sealed:        false,
-		Strategy:      platformv1.BarrierStrategy_BARRIER_STRATEGY_SINGLE_KEY,
-		InitializedAt: timestamppb.Now(),
+		Strategy:      barriersvc.StrategySingleKey,
+		InitializedAt: &now,
 	}
 
 	err := printStatusTable(printer, resp)
@@ -127,14 +129,15 @@ func TestPrintStatusTable_ShamirDetails(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &platformv1.BarrierStatusResponse{
+	now := time.Now()
+	resp := &barriersvc.StatusResult{
 		Initialized:    true,
 		Sealed:         true,
-		Strategy:       platformv1.BarrierStrategy_BARRIER_STRATEGY_SHAMIR,
+		Strategy:       barriersvc.StrategyShamir,
 		Threshold:      3,
 		SharesTotal:    5,
 		SharesProvided: 1,
-		InitializedAt:  timestamppb.Now(),
+		InitializedAt:  &now,
 	}
 
 	err := printStatusTable(printer, resp)
@@ -151,10 +154,10 @@ func TestPrintStatusTable_NilInitializedAt(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &platformv1.BarrierStatusResponse{
+	resp := &barriersvc.StatusResult{
 		Initialized: false,
 		Sealed:      true,
-		Strategy:    platformv1.BarrierStrategy_BARRIER_STRATEGY_UNSPECIFIED,
+		Strategy:    barriersvc.StrategyUnspecified,
 	}
 
 	err := printStatusTable(printer, resp)
@@ -170,7 +173,7 @@ func TestPrintUnsealTable_Unsealed(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &platformv1.BarrierUnsealResponse{
+	resp := &barriersvc.UnsealResult{
 		Sealed: false,
 	}
 
@@ -183,7 +186,7 @@ func TestPrintUnsealTable_ShamirProgress(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &platformv1.BarrierUnsealResponse{
+	resp := &barriersvc.UnsealResult{
 		Sealed:          true,
 		SharesProvided:  2,
 		SharesThreshold: 3,
@@ -202,8 +205,8 @@ func TestPrintRekeyTable_Success(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &platformv1.BarrierRekeyResponse{
-		Strategy:   platformv1.BarrierStrategy_BARRIER_STRATEGY_SHAMIR,
+	resp := &barriersvc.RekeyResult{
+		Strategy:   barriersvc.StrategyShamir,
 		UnsealKeys: []string{"new-key-1", "new-key-2"},
 	}
 
@@ -221,8 +224,8 @@ func TestPrintRekeyTable_NoKeys(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &platformv1.BarrierRekeyResponse{
-		Strategy: platformv1.BarrierStrategy_BARRIER_STRATEGY_SINGLE_KEY,
+	resp := &barriersvc.RekeyResult{
+		Strategy: barriersvc.StrategySingleKey,
 	}
 
 	err := printRekeyTable(printer, resp)

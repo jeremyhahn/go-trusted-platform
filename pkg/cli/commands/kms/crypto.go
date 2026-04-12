@@ -19,11 +19,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -167,48 +167,18 @@ Examples:
 	return cmd
 }
 
-// parseHashAlgorithm converts a string to HashAlgorithm enum
-func parseHashAlgorithm(alg string) (platformv1.HashAlgorithm, error) {
-	switch strings.ToLower(strings.ReplaceAll(alg, "_", "-")) {
-	case "sha1", "sha-1":
-		return platformv1.HashAlgorithm_HASH_ALGORITHM_SHA1, nil
-	case "sha256", "sha-256":
-		return platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256, nil
-	case "sha384", "sha-384":
-		return platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384, nil
-	case "sha512", "sha-512":
-		return platformv1.HashAlgorithm_HASH_ALGORITHM_SHA512, nil
-	case "sha3-256", "sha3256":
-		return platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_256, nil
-	case "sha3-384", "sha3384":
-		return platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_384, nil
-	case "sha3-512", "sha3512":
-		return platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_512, nil
-	default:
-		return platformv1.HashAlgorithm_HASH_ALGORITHM_UNSPECIFIED, ErrInvalidHashAlgorithm{Algorithm: alg}
+// parseHashAlgorithm converts a string to SDK HashAlgorithm
+func parseHashAlgorithm(alg string) (kmssvc.HashAlgorithm, error) {
+	hashAlg, err := kmssvc.ParseHashAlgorithm(alg)
+	if err != nil {
+		return kmssvc.HashAlgorithmUnspecified, ErrInvalidHashAlgorithm{Algorithm: alg}
 	}
+	return hashAlg, nil
 }
 
-// formatHashAlgorithm converts a HashAlgorithm enum to string
-func formatHashAlgorithm(alg platformv1.HashAlgorithm) string {
-	switch alg {
-	case platformv1.HashAlgorithm_HASH_ALGORITHM_SHA1:
-		return "SHA-1"
-	case platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256:
-		return "SHA-256"
-	case platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384:
-		return "SHA-384"
-	case platformv1.HashAlgorithm_HASH_ALGORITHM_SHA512:
-		return "SHA-512"
-	case platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_256:
-		return "SHA3-256"
-	case platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_384:
-		return "SHA3-384"
-	case platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_512:
-		return "SHA3-512"
-	default:
-		return "UNKNOWN"
-	}
+// formatHashAlgorithm converts an SDK HashAlgorithm to string
+func formatHashAlgorithm(alg kmssvc.HashAlgorithm) string {
+	return string(alg)
 }
 
 // readInputData reads input data from file or stdin

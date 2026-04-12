@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 // newStartCommand creates the container start subcommand
@@ -62,17 +62,15 @@ func runStart(flags *cli.CommonFlags, containerID string) error {
 	}
 	defer base.Close()
 
-	client := base.Client().Compute()
-	if client == nil {
+	grpcClient := base.Client().Compute()
+	if grpcClient == nil {
 		return ErrContainerClientNotInitialized{}
 	}
 
-	req := &platformv1.StartContainerRequest{
-		Id: containerID,
-	}
+	sdkClient := computesvc.NewClientFromGRPC(grpcClient)
 
 	ctx := base.Context()
-	resp, err := client.StartContainer(ctx, req)
+	status, err := sdkClient.StartContainerDomain(ctx, containerID)
 	if err != nil {
 		return ErrContainerOperationFailed{Operation: "start", ID: containerID, Err: err}
 	}
@@ -81,13 +79,13 @@ func runStart(flags *cli.CommonFlags, containerID string) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(status)
 
 	case cli.OutputFormatTable:
-		if resp.Status != nil && resp.Status.Success {
+		if status != nil && status.Success {
 			printer.PrintSuccess(fmt.Sprintf("Container started successfully: %s", containerID))
-		} else if resp.Status != nil {
-			printer.PrintError(fmt.Sprintf("Failed to start container: %s", resp.Status.Message))
+		} else if status != nil {
+			printer.PrintError(fmt.Sprintf("Failed to start container: %s", status.Message))
 		}
 		return nil
 

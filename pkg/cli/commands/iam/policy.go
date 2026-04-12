@@ -20,7 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -311,17 +311,10 @@ func runPolicyCreate(flags *cli.CommonFlags, tenantID, name, description string,
 		return fmt.Errorf("failed to read policy file: %w", err)
 	}
 
-	req := &platformv1.CreateIAMPolicyRequest{
-		TenantId:    tenantID,
-		Name:        name,
-		Description: description,
-		Priority:    priority,
-		SpecYaml:    specYAML,
-		Labels:      parseAttributes(labels),
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().CreatePolicy(ctx, req)
+
+	policy, err := sdkClient.CreatePolicyDomain(ctx, tenantID, name, description, priority, specYAML, parseAttributes(labels))
 	if err != nil {
 		return fmt.Errorf("failed to create policy: %w", err)
 	}
@@ -330,13 +323,13 @@ func runPolicyCreate(flags *cli.CommonFlags, tenantID, name, description string,
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(policy)
 
 	case cli.OutputFormatTable:
-		if resp.Policy != nil {
-			printer.PrintSuccess(fmt.Sprintf("Policy created successfully: %s", resp.Policy.Name))
+		if policy != nil {
+			printer.PrintSuccess(fmt.Sprintf("Policy created successfully: %s", policy.Name))
 			fmt.Println()
-			printPolicyDetails(printer, resp.Policy)
+			printPolicyDetails(printer, policy)
 		}
 		return nil
 
@@ -352,13 +345,10 @@ func runPolicyGet(flags *cli.CommonFlags, tenantID, policyName string) error {
 	}
 	defer base.Close()
 
-	req := &platformv1.GetIAMPolicyRequest{
-		TenantId:   tenantID,
-		PolicyName: policyName,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().GetPolicy(ctx, req)
+
+	policy, err := sdkClient.GetPolicyDomain(ctx, tenantID, policyName)
 	if err != nil {
 		return fmt.Errorf("failed to get policy: %w", err)
 	}
@@ -367,15 +357,15 @@ func runPolicyGet(flags *cli.CommonFlags, tenantID, policyName string) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(policy)
 
 	case cli.OutputFormatTable:
-		if resp.Policy != nil {
-			printPolicyDetails(printer, resp.Policy)
-			if len(resp.Policy.SpecYaml) > 0 {
+		if policy != nil {
+			printPolicyDetails(printer, policy)
+			if len(policy.SpecYAML) > 0 {
 				fmt.Println()
 				printer.PrintKeyValue("Policy Spec", "")
-				fmt.Println(string(resp.Policy.SpecYaml))
+				fmt.Println(string(policy.SpecYAML))
 			}
 		}
 		return nil
@@ -392,16 +382,10 @@ func runPolicyList(flags *cli.CommonFlags, tenantID string, page, pageSize uint3
 	}
 	defer base.Close()
 
-	req := &platformv1.ListIAMPoliciesRequest{
-		TenantId: tenantID,
-		Pagination: &platformv1.PaginationRequest{
-			Page:     page,
-			PageSize: pageSize,
-		},
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().ListPolicies(ctx, req)
+
+	result, err := sdkClient.ListPoliciesDomain(ctx, tenantID, page, pageSize)
 	if err != nil {
 		return fmt.Errorf("failed to list policies: %w", err)
 	}
@@ -410,20 +394,20 @@ func runPolicyList(flags *cli.CommonFlags, tenantID string, page, pageSize uint3
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		if len(resp.Policies) == 0 {
+		if len(result.Policies) == 0 {
 			printer.PrintInfo("No policies found")
 			return nil
 		}
 
 		table := cli.NewTableData("Name", "Tenant", "Priority", "Description", "Created At")
-		for _, policy := range resp.Policies {
+		for _, policy := range result.Policies {
 			desc := truncateString(policy.Description, 40)
 			table.AddRow(
 				policy.Name,
-				policy.TenantId,
+				policy.TenantID,
 				fmt.Sprintf("%d", policy.Priority),
 				desc,
 				formatTimestamp(policy.CreatedAt),
@@ -435,7 +419,7 @@ func runPolicyList(flags *cli.CommonFlags, tenantID string, page, pageSize uint3
 		}
 
 		fmt.Println()
-		printer.PrintKeyValue("Total Count", fmt.Sprintf("%d", resp.Total))
+		printer.PrintKeyValue("Total Count", fmt.Sprintf("%d", result.Total))
 		return nil
 
 	default:
@@ -450,25 +434,20 @@ func runPolicyUpdate(flags *cli.CommonFlags, tenantID, name, description string,
 	}
 	defer base.Close()
 
-	req := &platformv1.UpdateIAMPolicyRequest{
-		TenantId:    tenantID,
-		PolicyName:  name,
-		Description: description,
-		Priority:    priority,
-		Labels:      parseAttributes(labels),
-	}
-
+	var specYAML []byte
 	// Read policy spec from file if provided
 	if file != "" {
-		specYAML, err := os.ReadFile(file)
-		if err != nil {
-			return fmt.Errorf("failed to read policy file: %w", err)
+		var readErr error
+		specYAML, readErr = os.ReadFile(file)
+		if readErr != nil {
+			return fmt.Errorf("failed to read policy file: %w", readErr)
 		}
-		req.SpecYaml = specYAML
 	}
 
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().UpdatePolicy(ctx, req)
+
+	policy, err := sdkClient.UpdatePolicyDomain(ctx, tenantID, name, description, priority, specYAML, parseAttributes(labels))
 	if err != nil {
 		return fmt.Errorf("failed to update policy: %w", err)
 	}
@@ -477,13 +456,13 @@ func runPolicyUpdate(flags *cli.CommonFlags, tenantID, name, description string,
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(policy)
 
 	case cli.OutputFormatTable:
-		if resp.Policy != nil {
-			printer.PrintSuccess(fmt.Sprintf("Policy updated successfully: %s", resp.Policy.Name))
+		if policy != nil {
+			printer.PrintSuccess(fmt.Sprintf("Policy updated successfully: %s", policy.Name))
 			fmt.Println()
-			printPolicyDetails(printer, resp.Policy)
+			printPolicyDetails(printer, policy)
 		}
 		return nil
 
@@ -499,13 +478,10 @@ func runPolicyDelete(flags *cli.CommonFlags, tenantID, policyName string) error 
 	}
 	defer base.Close()
 
-	req := &platformv1.DeleteIAMPolicyRequest{
-		TenantId:   tenantID,
-		PolicyName: policyName,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().DeletePolicy(ctx, req)
+
+	status, err := sdkClient.DeletePolicyDomain(ctx, tenantID, policyName)
 	if err != nil {
 		return fmt.Errorf("failed to delete policy: %w", err)
 	}
@@ -514,10 +490,10 @@ func runPolicyDelete(flags *cli.CommonFlags, tenantID, policyName string) error 
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(status)
 
 	case cli.OutputFormatTable:
-		if resp.Status != nil && resp.Status.Success {
+		if status != nil && status.Success {
 			printer.PrintSuccess(fmt.Sprintf("Policy %s deleted successfully from tenant %s", policyName, tenantID))
 		} else {
 			printer.PrintError(fmt.Sprintf("Failed to delete policy %s from tenant %s", policyName, tenantID))
@@ -542,13 +518,10 @@ func runPolicyValidate(flags *cli.CommonFlags, tenantID, file string) error {
 		return fmt.Errorf("failed to read policy file: %w", err)
 	}
 
-	req := &platformv1.ValidateIAMPolicyRequest{
-		TenantId: tenantID,
-		SpecYaml: specYAML,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().ValidatePolicy(ctx, req)
+
+	result, err := sdkClient.ValidatePolicyDomain(ctx, tenantID, specYAML)
 	if err != nil {
 		return fmt.Errorf("failed to validate policy: %w", err)
 	}
@@ -557,17 +530,17 @@ func runPolicyValidate(flags *cli.CommonFlags, tenantID, file string) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		if resp.Valid {
+		if result.Valid {
 			printer.PrintSuccess("Policy is valid")
 		} else {
 			printer.PrintError("Policy validation failed")
-			if len(resp.Errors) > 0 {
+			if len(result.Errors) > 0 {
 				fmt.Println()
 				printer.PrintKeyValue("Errors", "")
-				for i, e := range resp.Errors {
+				for i, e := range result.Errors {
 					fmt.Printf("  %d. %s\n", i+1, e)
 				}
 			}
@@ -586,19 +559,12 @@ func runPolicyTest(flags *cli.CommonFlags, tenantID, subjectID, roles, groups, a
 	}
 	defer base.Close()
 
-	req := &platformv1.TestIAMPolicyRequest{
-		TenantId:   tenantID,
-		SubjectId:  subjectID,
-		Roles:      parseStringSlice(roles),
-		Groups:     parseStringSlice(groups),
-		Action:     action,
-		Resource:   resource,
-		Context:    parseAttributes(context),
-		Attributes: parseAttributes(context),
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().TestPolicy(ctx, req)
+
+	result, err := sdkClient.TestPolicyDomain(ctx, tenantID, subjectID,
+		parseStringSlice(roles), parseStringSlice(groups),
+		action, resource, parseAttributes(context))
 	if err != nil {
 		return fmt.Errorf("failed to test policy: %w", err)
 	}
@@ -607,11 +573,11 @@ func runPolicyTest(flags *cli.CommonFlags, tenantID, subjectID, roles, groups, a
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
 		fmt.Println()
-		if resp.Allowed {
+		if result.Allowed {
 			printer.PrintSuccess("Access ALLOWED")
 		} else {
 			printer.PrintError("Access DENIED")
@@ -620,13 +586,13 @@ func runPolicyTest(flags *cli.CommonFlags, tenantID, subjectID, roles, groups, a
 		printer.PrintKeyValue("Subject", subjectID)
 		printer.PrintKeyValue("Action", action)
 		printer.PrintKeyValue("Resource", resource)
-		if resp.MatchedPolicy != "" {
-			printer.PrintKeyValue("Matched Policy", resp.MatchedPolicy)
+		if result.MatchedPolicy != "" {
+			printer.PrintKeyValue("Matched Policy", result.MatchedPolicy)
 		}
-		if resp.MatchedRule != "" {
-			printer.PrintKeyValue("Matched Rule", resp.MatchedRule)
+		if result.MatchedRule != "" {
+			printer.PrintKeyValue("Matched Rule", result.MatchedRule)
 		}
-		printer.PrintKeyValue("Evaluation Time", (time.Duration(resp.EvaluationTimeNs) * time.Nanosecond).String())
+		printer.PrintKeyValue("Evaluation Time", (time.Duration(result.EvaluationTimeNs) * time.Nanosecond).String())
 		return nil
 
 	default:
@@ -635,9 +601,9 @@ func runPolicyTest(flags *cli.CommonFlags, tenantID, subjectID, roles, groups, a
 }
 
 // printPolicyDetails prints policy details in a formatted way
-func printPolicyDetails(printer *cli.Printer, policy *platformv1.IAMPolicy) {
+func printPolicyDetails(printer *cli.Printer, policy *iamsvc.Policy) {
 	printer.PrintKeyValue("Name", policy.Name)
-	printer.PrintKeyValue("Tenant ID", policy.TenantId)
+	printer.PrintKeyValue("Tenant ID", policy.TenantID)
 	if policy.Description != "" {
 		printer.PrintKeyValue("Description", policy.Description)
 	}
@@ -647,6 +613,6 @@ func printPolicyDetails(printer *cli.Printer, policy *platformv1.IAMPolicy) {
 	}
 	printer.PrintKeyValue("Created At", formatTimestamp(policy.CreatedAt))
 	if policy.UpdatedAt != nil {
-		printer.PrintKeyValue("Updated At", formatTimestamp(policy.UpdatedAt))
+		printer.PrintKeyValue("Updated At", formatTimestampPtr(policy.UpdatedAt))
 	}
 }

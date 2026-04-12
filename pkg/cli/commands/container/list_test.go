@@ -16,7 +16,7 @@ package container
 import (
 	"testing"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -210,15 +210,15 @@ func TestParseFilters_MultipleFilters(t *testing.T) {
 		t.Fatal("expected selector, got nil")
 	}
 
-	if len(selector.MatchLabels) != 2 {
-		t.Errorf("expected 2 labels in selector, got %d", len(selector.MatchLabels))
+	if len(selector) != 2 {
+		t.Errorf("expected 2 labels in selector, got %d", len(selector))
 	}
 }
 
 func TestFormatPorts(t *testing.T) {
 	tests := []struct {
 		name     string
-		ports    []*platformv1.PortMapping
+		ports    []*computesvc.PortMapping
 		expected string
 	}{
 		{
@@ -228,19 +228,19 @@ func TestFormatPorts(t *testing.T) {
 		},
 		{
 			name:     "empty slice",
-			ports:    []*platformv1.PortMapping{},
+			ports:    []*computesvc.PortMapping{},
 			expected: "",
 		},
 		{
 			name: "single port",
-			ports: []*platformv1.PortMapping{
+			ports: []*computesvc.PortMapping{
 				{HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
 			},
 			expected: "8080->80/tcp",
 		},
 		{
 			name: "multiple ports",
-			ports: []*platformv1.PortMapping{
+			ports: []*computesvc.PortMapping{
 				{HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
 				{HostPort: 443, ContainerPort: 443, Protocol: "tcp"},
 			},
@@ -248,8 +248,8 @@ func TestFormatPorts(t *testing.T) {
 		},
 		{
 			name: "port with host IP",
-			ports: []*platformv1.PortMapping{
-				{HostIp: "127.0.0.1", HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
+			ports: []*computesvc.PortMapping{
+				{HostIP: "127.0.0.1", HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
 			},
 			expected: "127.0.0.1:8080->80/tcp",
 		},

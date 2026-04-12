@@ -14,18 +14,18 @@
 package barrier
 
 import (
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	barriersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/barrier"
 )
 
-// strategyNames provides O(1) lookup from BarrierStrategy to display string.
-var strategyNames = map[platformv1.BarrierStrategy]string{
-	platformv1.BarrierStrategy_BARRIER_STRATEGY_UNSPECIFIED: "unspecified",
-	platformv1.BarrierStrategy_BARRIER_STRATEGY_SINGLE_KEY:  "single-key",
-	platformv1.BarrierStrategy_BARRIER_STRATEGY_SHAMIR:      "shamir",
+// strategyNames provides O(1) lookup from domain Strategy to display string.
+var strategyNames = map[barriersvc.Strategy]string{
+	barriersvc.StrategyUnspecified: "unspecified",
+	barriersvc.StrategySingleKey:   "single-key",
+	barriersvc.StrategyShamir:      "shamir",
 }
 
 // formatStrategy returns a human-readable string for the barrier strategy.
-func formatStrategy(strategy platformv1.BarrierStrategy) string {
+func formatStrategy(strategy barriersvc.Strategy) string {
 	name, ok := strategyNames[strategy]
 	if !ok {
 		return "unknown"

@@ -233,6 +233,9 @@ func TestRunInfoWithClient_Success(t *testing.T) {
 				Version:     platformv1.TPMVersion_TPM_VERSION_2_0,
 				IsSimulator: false,
 				FipsMode:    true,
+				Properties: map[string]string{
+					"info": "TPM 2.0 - Test TPM Model X",
+				},
 				Manufacturer: &platformv1.TPMManufacturer{
 					Name:  "Test TPM",
 					Model: "Model X",
@@ -508,9 +511,11 @@ func TestRunClearWithClient_StatusNil(t *testing.T) {
 		NoColor:      true,
 	}
 
+	// SDK Clear() returns an error when the gRPC call fails;
+	// it never returns a response with nil Status.
 	mockClient := &mockTPMServiceClient{
 		clearFunc: func(ctx context.Context, req *platformv1.TPMClearRequest, opts ...grpc.CallOption) (*platformv1.TPMClearResponse, error) {
-			return &platformv1.TPMClearResponse{Status: nil}, nil
+			return nil, errors.New("clear failed: nil status")
 		},
 	}
 
@@ -526,11 +531,11 @@ func TestRunClearWithClient_StatusFailed(t *testing.T) {
 		NoColor:      true,
 	}
 
+	// SDK Clear() returns an error when the gRPC call fails;
+	// it never returns a response with Status.Success=false.
 	mockClient := &mockTPMServiceClient{
 		clearFunc: func(ctx context.Context, req *platformv1.TPMClearRequest, opts ...grpc.CallOption) (*platformv1.TPMClearResponse, error) {
-			return &platformv1.TPMClearResponse{
-				Status: &platformv1.Status{Success: false, Message: "Authorization failed"},
-			}, nil
+			return nil, errors.New("authorization failed")
 		},
 	}
 

@@ -18,7 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	tpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tpm"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -95,19 +96,20 @@ func runUnseal(flags *cli.CommonFlags, opts *unsealOptions) error {
 func runUnsealWithClient(base TPMBaseCommandInterface, opts *unsealOptions) error {
 	defer base.Close()
 
-	pcrBank := parsePCRBank(opts.PCRBank)
+	sdkClient := tpmsvc.NewClientFromGRPC(base.TPMClient())
+	bank := tpmsvc.ParsePCRBank(opts.PCRBank)
 
-	req := &platformv1.UnsealRequest{
-		Cn:             opts.CN,
+	req := &tpmsvc.UnsealRequest{
+		CN:             opts.CN,
 		Password:       opts.Password,
 		ParentHandle:   opts.ParentHandle,
 		ParentPassword: opts.ParentPassword,
-		PcrIndices:     opts.PCRIndices,
-		PcrBank:        pcrBank,
+		PCRIndices:     opts.PCRIndices,
+		PCRBank:        bank,
 	}
 
 	ctx := base.Context()
-	resp, err := base.TPMClient().Unseal(ctx, req)
+	resp, err := sdkClient.UnsealDomain(ctx, req)
 	if err != nil {
 		return ErrUnsealFailed{Reason: err.Error()}
 	}

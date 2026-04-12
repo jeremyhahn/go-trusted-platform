@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -139,16 +139,14 @@ func TestAuthMiddleware_Handler(t *testing.T) {
 
 	t.Run("wraps_handler_correctly", func(t *testing.T) {
 		// Setup mock to return a user for mTLS authentication
-		iamService.listUsersFunc = func(ctx context.Context, req *iampb.ListUsersRequest) (*iampb.ListUsersResponse, error) {
-			return &iampb.ListUsersResponse{
-				Users: []*iampb.User{
-					{
-						Id:       "user-123",
-						TenantId: req.TenantId,
-						Email:    req.Email,
-						Name:     "Test User",
-						Roles:    []string{"user"},
-					},
+		iamService.listUsersByEmailFunc = func(ctx context.Context, tenantID, email string) ([]sdkiam.User, error) {
+			return []sdkiam.User{
+				{
+					ID:          "user-123",
+					TenantID:    tenantID,
+					Email:       email,
+					DisplayName: "Test User",
+					Roles:       []string{"user"},
 				},
 			}, nil
 		}
@@ -242,16 +240,14 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 		iamService := newMockIAMServiceClient()
 
 		// Setup mock to return a user
-		iamService.listUsersFunc = func(ctx context.Context, req *iampb.ListUsersRequest) (*iampb.ListUsersResponse, error) {
-			return &iampb.ListUsersResponse{
-				Users: []*iampb.User{
-					{
-						Id:       "user-123",
-						TenantId: req.TenantId,
-						Email:    req.Email,
-						Name:     "Test User",
-						Roles:    []string{"user"},
-					},
+		iamService.listUsersByEmailFunc = func(ctx context.Context, tenantID, email string) ([]sdkiam.User, error) {
+			return []sdkiam.User{
+				{
+					ID:          "user-123",
+					TenantID:    tenantID,
+					Email:       email,
+					DisplayName: "Test User",
+					Roles:       []string{"user"},
 				},
 			}, nil
 		}
@@ -314,15 +310,13 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
 
-		iamService.listUsersFunc = func(ctx context.Context, req *iampb.ListUsersRequest) (*iampb.ListUsersResponse, error) {
-			return &iampb.ListUsersResponse{
-				Users: []*iampb.User{
-					{
-						Id:       "user-123",
-						TenantId: req.TenantId,
-						Email:    req.Email,
-						Name:     "Test User",
-					},
+		iamService.listUsersByEmailFunc = func(ctx context.Context, tenantID, email string) ([]sdkiam.User, error) {
+			return []sdkiam.User{
+				{
+					ID:          "user-123",
+					TenantID:    tenantID,
+					Email:       email,
+					DisplayName: "Test User",
 				},
 			}, nil
 		}
@@ -397,15 +391,13 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
 
-		iamService.listUsersFunc = func(ctx context.Context, req *iampb.ListUsersRequest) (*iampb.ListUsersResponse, error) {
-			return &iampb.ListUsersResponse{
-				Users: []*iampb.User{
-					{
-						Id:       "user-123",
-						TenantId: req.TenantId,
-						Email:    req.Email,
-						Name:     "Test User",
-					},
+		iamService.listUsersByEmailFunc = func(ctx context.Context, tenantID, email string) ([]sdkiam.User, error) {
+			return []sdkiam.User{
+				{
+					ID:          "user-123",
+					TenantID:    tenantID,
+					Email:       email,
+					DisplayName: "Test User",
 				},
 			}, nil
 		}
@@ -438,11 +430,11 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 			t.Fatal("expected session to be set in context")
 		}
 		// The email in IAM query should be the CN
-		if len(iamService.listUsersCalls) == 0 {
+		if len(iamService.listUsersEmailCalls) == 0 {
 			t.Fatal("expected ListUsers to be called")
 		}
-		if iamService.listUsersCalls[0].Email != "cn-identity" {
-			t.Errorf("expected email to be 'cn-identity', got %q", iamService.listUsersCalls[0].Email)
+		if iamService.listUsersEmailCalls[0].Email != "cn-identity" {
+			t.Errorf("expected email to be 'cn-identity', got %q", iamService.listUsersEmailCalls[0].Email)
 		}
 	})
 
@@ -450,15 +442,13 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
 
-		iamService.listUsersFunc = func(ctx context.Context, req *iampb.ListUsersRequest) (*iampb.ListUsersResponse, error) {
-			return &iampb.ListUsersResponse{
-				Users: []*iampb.User{
-					{
-						Id:       "user-123",
-						TenantId: req.TenantId,
-						Email:    req.Email,
-						Name:     "Test User",
-					},
+		iamService.listUsersByEmailFunc = func(ctx context.Context, tenantID, email string) ([]sdkiam.User, error) {
+			return []sdkiam.User{
+				{
+					ID:          "user-123",
+					TenantID:    tenantID,
+					Email:       email,
+					DisplayName: "Test User",
 				},
 			}, nil
 		}
@@ -492,11 +482,11 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 			t.Fatal("expected session to be set in context")
 		}
 		// The email in IAM query should be the serial number
-		if len(iamService.listUsersCalls) == 0 {
+		if len(iamService.listUsersEmailCalls) == 0 {
 			t.Fatal("expected ListUsers to be called")
 		}
-		if iamService.listUsersCalls[0].Email != "SERIAL123" {
-			t.Errorf("expected email to be 'SERIAL123', got %q", iamService.listUsersCalls[0].Email)
+		if iamService.listUsersEmailCalls[0].Email != "SERIAL123" {
+			t.Errorf("expected email to be 'SERIAL123', got %q", iamService.listUsersEmailCalls[0].Email)
 		}
 	})
 
@@ -504,7 +494,7 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
 
-		iamService.listUsersFunc = func(ctx context.Context, req *iampb.ListUsersRequest) (*iampb.ListUsersResponse, error) {
+		iamService.listUsersByEmailFunc = func(ctx context.Context, tenantID, email string) ([]sdkiam.User, error) {
 			return nil, errors.New("service unavailable")
 		}
 
@@ -626,15 +616,13 @@ func TestAuthMiddleware_ExtractTenantFromCert(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			iamService.listUsersFunc = func(ctx context.Context, req *iampb.ListUsersRequest) (*iampb.ListUsersResponse, error) {
-				return &iampb.ListUsersResponse{
-					Users: []*iampb.User{
-						{
-							Id:       "user-123",
-							TenantId: req.TenantId,
-							Email:    req.Email,
-							Name:     "Test User",
-						},
+			iamService.listUsersByEmailFunc = func(ctx context.Context, tenantID, email string) ([]sdkiam.User, error) {
+				return []sdkiam.User{
+					{
+						ID:          "user-123",
+						TenantID:    tenantID,
+						Email:       email,
+						DisplayName: "Test User",
 					},
 				}, nil
 			}
@@ -680,9 +668,9 @@ func TestAuthMiddleware_RequireRoles(t *testing.T) {
 		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID:       "user-123",
+			TenantID: "tenant-456",
 			Roles:    []string{"admin", "user"},
 		})
 
@@ -707,9 +695,9 @@ func TestAuthMiddleware_RequireRoles(t *testing.T) {
 		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID:       "user-123",
+			TenantID: "tenant-456",
 			Roles:    []string{"user"},
 		})
 
@@ -766,9 +754,9 @@ func TestAuthMiddleware_RequireAllRoles(t *testing.T) {
 		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID:       "user-123",
+			TenantID: "tenant-456",
 			Roles:    []string{"admin", "user", "viewer"},
 		})
 
@@ -793,9 +781,9 @@ func TestAuthMiddleware_RequireAllRoles(t *testing.T) {
 		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID:       "user-123",
+			TenantID: "tenant-456",
 			Roles:    []string{"admin"},
 		})
 
@@ -852,9 +840,9 @@ func TestAuthMiddleware_RequireGroups(t *testing.T) {
 		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID:       "user-123",
+			TenantID: "tenant-456",
 			Groups:   []string{"developers", "ops"},
 		})
 
@@ -879,9 +867,9 @@ func TestAuthMiddleware_RequireGroups(t *testing.T) {
 		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID:       "user-123",
+			TenantID: "tenant-456",
 			Groups:   []string{"developers"},
 		})
 
@@ -938,9 +926,9 @@ func TestAuthMiddleware_RequireMFA(t *testing.T) {
 		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
-		session := NewIAMSessionWithMFA(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSessionWithMFA(&sdkiam.User{
+			ID:       "user-123",
+			TenantID: "tenant-456",
 		}, true, time.Now())
 
 		called := false
@@ -964,9 +952,9 @@ func TestAuthMiddleware_RequireMFA(t *testing.T) {
 		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
-		session := NewIAMSessionWithMFA(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSessionWithMFA(&sdkiam.User{
+			ID:       "user-123",
+			TenantID: "tenant-456",
 		}, false, time.Time{})
 
 		called := false
@@ -1039,15 +1027,13 @@ func TestAuthMiddleware_CreateSession(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
 
-		iamService.listUsersFunc = func(ctx context.Context, req *iampb.ListUsersRequest) (*iampb.ListUsersResponse, error) {
-			return &iampb.ListUsersResponse{
-				Users: []*iampb.User{
-					{
-						Id:       "user-123",
-						TenantId: req.TenantId,
-						Email:    req.Email,
-						Name:     "Test User",
-					},
+		iamService.listUsersByEmailFunc = func(ctx context.Context, tenantID, email string) ([]sdkiam.User, error) {
+			return []sdkiam.User{
+				{
+					ID:          "user-123",
+					TenantID:    tenantID,
+					Email:       email,
+					DisplayName: "Test User",
 				},
 			}, nil
 		}
@@ -1081,10 +1067,10 @@ func TestAuthMiddleware_CreateSession(t *testing.T) {
 		iamService := newMockIAMServiceClient()
 		signingKey := []byte("test-secret-key-32-bytes-long!!!")
 
-		iamService.getUserFunc = func(ctx context.Context, req *iampb.GetUserRequest) (*iampb.User, error) {
-			return &iampb.User{
-				Id:       req.UserId,
-				TenantId: req.TenantId,
+		iamService.getUserFunc = func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
+			return &sdkiam.User{
+				ID:       userID,
+				TenantID: tenantID,
 				Email:    "user@example.com",
 			}, nil
 		}
@@ -1135,13 +1121,13 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
 
-		iamService.getUserFunc = func(ctx context.Context, req *iampb.GetUserRequest) (*iampb.User, error) {
-			return &iampb.User{
-				Id:       req.UserId,
-				TenantId: req.TenantId,
-				Email:    "user@example.com",
-				Name:     "Test User",
-				Roles:    []string{"user"},
+		iamService.getUserFunc = func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
+			return &sdkiam.User{
+				ID:          userID,
+				TenantID:    tenantID,
+				Email:       "user@example.com",
+				DisplayName: "Test User",
+				Roles:       []string{"user"},
 			}, nil
 		}
 
@@ -1190,8 +1176,8 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 		iamService := newMockIAMServiceClient()
 
 		// User lookup fails - will create session from claims
-		iamService.getUserFunc = func(ctx context.Context, req *iampb.GetUserRequest) (*iampb.User, error) {
-			return nil, ErrUserNotFound{Identifier: req.UserId}
+		iamService.getUserFunc = func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
+			return nil, ErrUserNotFound{Identifier: userID}
 		}
 
 		jwtConfig := JWTConfig{
@@ -1244,10 +1230,10 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
 
-		iamService.getUserFunc = func(ctx context.Context, req *iampb.GetUserRequest) (*iampb.User, error) {
-			return &iampb.User{
-				Id:       req.UserId,
-				TenantId: req.TenantId,
+		iamService.getUserFunc = func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
+			return &sdkiam.User{
+				ID:       userID,
+				TenantID: tenantID,
 				Email:    "user@example.com",
 			}, nil
 		}
@@ -1401,9 +1387,9 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 // TestGetSetSessionInContext tests the context helper functions.
 func TestGetSetSessionInContext(t *testing.T) {
 	t.Run("sets_and_gets_session_from_context", func(t *testing.T) {
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID:       "user-123",
+			TenantID: "tenant-456",
 		})
 
 		ctx := context.Background()
@@ -1450,7 +1436,7 @@ func TestAuthMiddleware_LookupUserByID(t *testing.T) {
 		iamService := newMockIAMServiceClient()
 
 		// Simulate service error that is not "user not found"
-		iamService.getUserFunc = func(ctx context.Context, req *iampb.GetUserRequest) (*iampb.User, error) {
+		iamService.getUserFunc = func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
 			return nil, errors.New("connection refused")
 		}
 
@@ -1496,7 +1482,7 @@ func TestAuthMiddleware_LookupUserByID(t *testing.T) {
 		iamService := newMockIAMServiceClient()
 
 		// Return nil user without error
-		iamService.getUserFunc = func(ctx context.Context, req *iampb.GetUserRequest) (*iampb.User, error) {
+		iamService.getUserFunc = func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
 			return nil, nil
 		}
 

@@ -18,9 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	sdnclient "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
+	sdnsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
 )
 
 // ErrInvalidPolicyType indicates an unrecognized policy type string.
@@ -152,10 +151,6 @@ Examples:
 }
 
 // Implementation functions
-//
-// Network policies are applied via the SDN service's ApplyPolicy RPC.
-// The server translates policies into OpenFlow rules and tracks them
-// in its policy store for retrieval and management.
 
 func runPolicyApply(flags *cli.CommonFlags, policyID, name, policyType,
 	description, bridgeID string, priority int, enabled bool) error {
@@ -166,51 +161,35 @@ func runPolicyApply(flags *cli.CommonFlags, policyID, name, policyType,
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
-	pbType, err := parsePolicyType(policyType)
-	if err != nil {
-		return err
+	pt, ok := sdnsvc.ParsePolicyType(policyType)
+	if !ok {
+		return ErrInvalidPolicyType{Type: policyType}
 	}
 
-	config := &platformv1.PolicyConfig{
+	config := &sdnsvc.PolicyConfig{
 		Name:        name,
 		Description: description,
-		Type:        pbType,
+		Type:        pt,
 		Priority:    int32(priority),
 		Enabled:     enabled,
-		Targets: []*platformv1.PolicyTarget{
+		Targets: []*sdnsvc.PolicyTarget{
 			{
-				Type: platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE,
-				Id:   bridgeID,
+				Type: sdnsvc.PolicyTargetTypeBridge,
+				ID:   bridgeID,
 			},
 		},
 	}
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	resp, err := sdnClient.ApplyPolicy(ctx, policyID, config)
+	resp, err := sdkClient.ApplyPolicyDomain(ctx, policyID, config)
 	if err != nil {
 		return &cli.ErrOperationFailed{Operation: "policy apply", Err: err}
 	}
 
 	return base.Output(resp)
-}
-
-// parsePolicyType converts a user-facing policy type string to a protobuf enum.
-func parsePolicyType(s string) (platformv1.PolicyType, error) {
-	policyTypes := map[string]platformv1.PolicyType{
-		"acl":      platformv1.PolicyType_POLICY_TYPE_ACL,
-		"qos":      platformv1.PolicyType_POLICY_TYPE_QOS,
-		"nat":      platformv1.PolicyType_POLICY_TYPE_NAT,
-		"firewall": platformv1.PolicyType_POLICY_TYPE_FIREWALL,
-		"routing":  platformv1.PolicyType_POLICY_TYPE_ROUTING,
-	}
-	pt, ok := policyTypes[s]
-	if !ok {
-		return platformv1.PolicyType_POLICY_TYPE_UNSPECIFIED, ErrInvalidPolicyType{Type: s}
-	}
-	return pt, nil
 }
 
 func runPolicyGet(flags *cli.CommonFlags, policyID string) error {
@@ -220,11 +199,11 @@ func runPolicyGet(flags *cli.CommonFlags, policyID string) error {
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	resp, err := sdnClient.GetPolicy(ctx, policyID)
+	resp, err := sdkClient.GetPolicy(ctx, policyID)
 	if err != nil {
 		return &cli.ErrOperationFailed{Operation: "policy get", Err: err}
 	}
@@ -239,18 +218,11 @@ func runPolicyList(flags *cli.CommonFlags, policyType, targetID string, limit in
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
-
-	var pagination *platformv1.PaginationRequest
-	if limit > 0 || cursor != "" {
-		pagination = &platformv1.PaginationRequest{
-			PageSize: uint32(limit),
-		}
-	}
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	resp, err := sdnClient.ListPolicies(ctx, policyType, targetID, pagination)
+	resp, err := sdkClient.ListPoliciesDomain(ctx, policyType, targetID, uint32(limit))
 	if err != nil {
 		return &cli.ErrOperationFailed{Operation: "policy list", Err: err}
 	}

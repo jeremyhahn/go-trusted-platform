@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	barriersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/barrier"
 )
 
 // newRekeyCommand creates the barrier rekey subcommand
@@ -68,8 +68,10 @@ func runRekey(flags *cli.CommonFlags, threshold, shares int32) error {
 	}
 	defer base.Close()
 
+	sdkClient := barriersvc.NewClientFromGRPC(base.Client().Barrier())
+
 	ctx := base.Context()
-	resp, err := base.Client().Barrier().Rekey(ctx, &platformv1.BarrierRekeyRequest{
+	result, err := sdkClient.Rekey(ctx, &barriersvc.RekeyParams{
 		Threshold: threshold,
 		Shares:    shares,
 	})
@@ -81,29 +83,29 @@ func runRekey(flags *cli.CommonFlags, threshold, shares int32) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		return printRekeyTable(printer, resp)
+		return printRekeyTable(printer, result)
 
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
 	}
 }
 
-func printRekeyTable(printer *cli.Printer, resp *platformv1.BarrierRekeyResponse) error {
+func printRekeyTable(printer *cli.Printer, result *barriersvc.RekeyResult) error {
 	printer.PrintSuccess("Barrier rekeyed successfully")
 	fmt.Println()
 
-	printer.PrintKeyValue("Strategy", formatStrategy(resp.Strategy))
+	printer.PrintKeyValue("Strategy", formatStrategy(result.Strategy))
 
 	fmt.Println()
 
-	if len(resp.UnsealKeys) > 0 {
+	if len(result.UnsealKeys) > 0 {
 		printer.PrintWarning("Store the following new unseal keys securely. They are only shown once.")
 		fmt.Println()
 
-		for i, key := range resp.UnsealKeys {
+		for i, key := range result.UnsealKeys {
 			printer.PrintKeyValue(fmt.Sprintf("Unseal Key %d", i+1), key)
 		}
 	}

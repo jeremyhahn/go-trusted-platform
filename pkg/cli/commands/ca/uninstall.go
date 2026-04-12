@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	casvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -69,15 +69,15 @@ func runUninstall(flags *cli.CommonFlags, includeIntermediates bool) error {
 	}
 	defer base.Close()
 
-	client := base.Client().CA()
-	if client == nil {
+	grpcClient := base.Client().CA()
+	if grpcClient == nil {
 		return ErrCANotInitialized{}
 	}
 
+	sdkClient := casvc.NewClientFromGRPC(grpcClient)
 	ctx := base.Context()
-	resp, err := client.UninstallCACertificates(ctx, &platformv1.UninstallCACertificatesRequest{
-		IncludeIntermediates: includeIntermediates,
-	})
+
+	result, err := sdkClient.UninstallCACertificatesDomain(ctx, includeIntermediates)
 	if err != nil {
 		return ErrUninstallCertificatesFailed{Reason: err.Error()}
 	}
@@ -86,12 +86,12 @@ func runUninstall(flags *cli.CommonFlags, includeIntermediates bool) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
 		printer.PrintInfo("CA certificates uninstalled successfully")
 		fmt.Println()
-		printer.PrintKeyValue("Certificates Removed", fmt.Sprintf("%d", resp.CertificatesRemoved))
+		printer.PrintKeyValue("Certificates Removed", fmt.Sprintf("%d", result.CertificatesRemoved))
 		return nil
 
 	default:

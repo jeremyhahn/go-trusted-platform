@@ -22,6 +22,9 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -205,6 +208,34 @@ func (h *IAMHandlers) handleError(w http.ResponseWriter, r *http.Request, err er
 	default:
 		h.respWriter.Error500(w, r, err)
 	}
+}
+
+// handleGRPCError maps gRPC status codes to HTTP error responses.
+func (h *IAMHandlers) handleGRPCError(w http.ResponseWriter, r *http.Request, err error) {
+	if st, ok := status.FromError(err); ok {
+		switch st.Code() {
+		case codes.NotFound:
+			h.respWriter.Error404(w, r, err)
+		case codes.InvalidArgument, codes.AlreadyExists, codes.FailedPrecondition, codes.OutOfRange:
+			h.respWriter.Error400(w, r, err)
+		case codes.PermissionDenied, codes.Unauthenticated:
+			h.respWriter.Error401(w, r, err)
+		default:
+			h.respWriter.Error500(w, r, err)
+		}
+		return
+	}
+	h.respWriter.Error500(w, r, err)
+}
+
+// timeFromTimestamp converts a protobuf Timestamp to a *time.Time.
+// Returns nil if ts is nil.
+func timeFromTimestamp(ts *timestamppb.Timestamp) *time.Time {
+	if ts == nil {
+		return nil
+	}
+	t := ts.AsTime()
+	return &t
 }
 
 // User Handlers

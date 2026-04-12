@@ -20,7 +20,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -89,17 +90,10 @@ func runCryptoRandom(flags *cli.CommonFlags, cmdFlags *randomFlags) error {
 	}
 	defer base.Close()
 
-	client := base.Client().KMS()
-	if client == nil {
-		return ErrCryptoClientNotInitialized{}
-	}
-
-	req := &platformv1.GenerateRandomRequest{
-		NumBytes: cmdFlags.numBytes,
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
 	ctx := base.Context()
-	resp, err := client.GenerateRandom(ctx, req)
+	resp, err := sdkClient.GenerateRandomDomain(ctx, cmdFlags.numBytes)
 	if err != nil {
 		return ErrCryptoOperationFailed{Operation: "generate random", Err: err}
 	}

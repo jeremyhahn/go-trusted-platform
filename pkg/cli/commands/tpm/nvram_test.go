@@ -106,9 +106,11 @@ func TestRunNVRAMDefineWithClient_StatusNil(t *testing.T) {
 		NoColor:      true,
 	}
 
+	// SDK domain methods return an error when the gRPC call fails;
+	// they never return a response with nil Status.
 	mockClient := &mockTPMServiceClient{
 		defineNVRAMFunc: func(ctx context.Context, req *platformv1.DefineNVRAMRequest, opts ...grpc.CallOption) (*platformv1.DefineNVRAMResponse, error) {
-			return &platformv1.DefineNVRAMResponse{Status: nil}, nil
+			return nil, errors.New("define failed: nil status")
 		},
 	}
 
@@ -125,11 +127,11 @@ func TestRunNVRAMDefineWithClient_StatusFailed(t *testing.T) {
 		NoColor:      true,
 	}
 
+	// SDK domain methods return an error when the gRPC call fails;
+	// they never return a response with Status.Success=false.
 	mockClient := &mockTPMServiceClient{
 		defineNVRAMFunc: func(ctx context.Context, req *platformv1.DefineNVRAMRequest, opts ...grpc.CallOption) (*platformv1.DefineNVRAMResponse, error) {
-			return &platformv1.DefineNVRAMResponse{
-				Status: &platformv1.Status{Success: false, Message: "Out of space"},
-			}, nil
+			return nil, errors.New("out of space")
 		},
 	}
 
@@ -262,9 +264,11 @@ func TestRunNVRAMWriteWithClient_StatusNil(t *testing.T) {
 		NoColor:      true,
 	}
 
+	// SDK domain methods return an error when the gRPC call fails;
+	// they never return a response with nil Status.
 	mockClient := &mockTPMServiceClient{
 		writeNVRAMFunc: func(ctx context.Context, req *platformv1.WriteNVRAMRequest, opts ...grpc.CallOption) (*platformv1.WriteNVRAMResponse, error) {
-			return &platformv1.WriteNVRAMResponse{Status: nil}, nil
+			return nil, errors.New("write failed: nil status")
 		},
 	}
 
@@ -281,11 +285,11 @@ func TestRunNVRAMWriteWithClient_StatusFailed(t *testing.T) {
 		NoColor:      true,
 	}
 
+	// SDK domain methods return an error when the gRPC call fails;
+	// they never return a response with Status.Success=false.
 	mockClient := &mockTPMServiceClient{
 		writeNVRAMFunc: func(ctx context.Context, req *platformv1.WriteNVRAMRequest, opts ...grpc.CallOption) (*platformv1.WriteNVRAMResponse, error) {
-			return &platformv1.WriteNVRAMResponse{
-				Status: &platformv1.Status{Success: false, Message: "Auth failed"},
-			}, nil
+			return nil, errors.New("auth failed")
 		},
 	}
 
@@ -544,9 +548,11 @@ func TestRunNVRAMDeleteWithClient_StatusNil(t *testing.T) {
 		NoColor:      true,
 	}
 
+	// SDK domain methods return an error when the gRPC call fails;
+	// they never return a response with nil Status.
 	mockClient := &mockTPMServiceClient{
 		undefineNVRAMFunc: func(ctx context.Context, req *platformv1.UndefineNVRAMRequest, opts ...grpc.CallOption) (*platformv1.UndefineNVRAMResponse, error) {
-			return &platformv1.UndefineNVRAMResponse{Status: nil}, nil
+			return nil, errors.New("delete failed: nil status")
 		},
 	}
 
@@ -562,11 +568,11 @@ func TestRunNVRAMDeleteWithClient_StatusFailed(t *testing.T) {
 		NoColor:      true,
 	}
 
+	// SDK domain methods return an error when the gRPC call fails;
+	// they never return a response with Status.Success=false.
 	mockClient := &mockTPMServiceClient{
 		undefineNVRAMFunc: func(ctx context.Context, req *platformv1.UndefineNVRAMRequest, opts ...grpc.CallOption) (*platformv1.UndefineNVRAMResponse, error) {
-			return &platformv1.UndefineNVRAMResponse{
-				Status: &platformv1.Status{Success: false, Message: "Not found"},
-			}, nil
+			return nil, errors.New("not found")
 		},
 	}
 

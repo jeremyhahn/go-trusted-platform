@@ -24,34 +24,33 @@ import (
 	"fmt"
 	"io"
 
-	"google.golang.org/grpc"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
-// KeyManagementClient interface for dependency injection
+// KeyManagementClient interface for dependency injection using SDK domain types.
 type KeyManagementClient interface {
-	GenerateKey(ctx context.Context, in *platformv1.GenerateKeyRequest, opts ...grpc.CallOption) (*platformv1.GenerateKeyResponse, error)
-	GetKey(ctx context.Context, in *platformv1.GetKeyRequest, opts ...grpc.CallOption) (*platformv1.GetKeyResponse, error)
-	ListKeys(ctx context.Context, in *platformv1.ListKeysRequest, opts ...grpc.CallOption) (*platformv1.ListKeysResponse, error)
-	DeleteKey(ctx context.Context, in *platformv1.DeleteKeyRequest, opts ...grpc.CallOption) (*platformv1.DeleteKeyResponse, error)
-	RotateKey(ctx context.Context, in *platformv1.RotateKeyRequest, opts ...grpc.CallOption) (*platformv1.RotateKeyResponse, error)
-	BackendStatus(ctx context.Context, in *platformv1.BackendStatusRequest, opts ...grpc.CallOption) (*platformv1.BackendStatusResponse, error)
+	GenerateKeyDomain(ctx context.Context, params *kmssvc.GenerateKeyParams) (*kmssvc.GenerateKeyResult, error)
+	GetKeyDomain(ctx context.Context, keyID string, version uint64) (*kmssvc.GetKeyResult, error)
+	ListKeysDomain(ctx context.Context, limit int32, cursor string) (*kmssvc.ListKeysResult, error)
+	DeleteKeyDomain(ctx context.Context, keyID string, pendingWindowDays int32, force bool) (*kmssvc.DeleteKeyResult, error)
+	RotateKeyDomain(ctx context.Context, keyID string, retainOldVersion bool) (*kmssvc.RotateKeyResult, error)
+	BackendStatusDomain(ctx context.Context) (*kmssvc.BackendStatusResult, error)
 }
 
-// CryptoManagementClient interface for dependency injection
+// CryptoManagementClient interface for dependency injection using SDK domain types.
 type CryptoManagementClient interface {
-	Encrypt(ctx context.Context, in *platformv1.EncryptRequest, opts ...grpc.CallOption) (*platformv1.EncryptResponse, error)
-	Decrypt(ctx context.Context, in *platformv1.DecryptRequest, opts ...grpc.CallOption) (*platformv1.DecryptResponse, error)
-	Sign(ctx context.Context, in *platformv1.SignRequest, opts ...grpc.CallOption) (*platformv1.SignResponse, error)
-	Verify(ctx context.Context, in *platformv1.VerifyRequest, opts ...grpc.CallOption) (*platformv1.VerifyResponse, error)
-	GenerateHMAC(ctx context.Context, in *platformv1.HMACRequest, opts ...grpc.CallOption) (*platformv1.HMACResponse, error)
-	VerifyHMAC(ctx context.Context, in *platformv1.VerifyHMACRequest, opts ...grpc.CallOption) (*platformv1.VerifyHMACResponse, error)
-	GenerateRandom(ctx context.Context, in *platformv1.GenerateRandomRequest, opts ...grpc.CallOption) (*platformv1.GenerateRandomResponse, error)
-	Hash(ctx context.Context, in *platformv1.HashRequest, opts ...grpc.CallOption) (*platformv1.HashResponse, error)
-	GenerateDataKey(ctx context.Context, in *platformv1.GenerateDataKeyRequest, opts ...grpc.CallOption) (*platformv1.GenerateDataKeyResponse, error)
-	GenerateWrappedDataKey(ctx context.Context, in *platformv1.GenerateWrappedDataKeyRequest, opts ...grpc.CallOption) (*platformv1.GenerateWrappedDataKeyResponse, error)
+	EncryptDomain(ctx context.Context, keyID string, plaintext, aadContext, nonce []byte) (*kmssvc.EncryptResult, error)
+	DecryptDomain(ctx context.Context, keyID string, ciphertext, aadContext, nonce []byte, keyVersion uint64) (*kmssvc.DecryptResult, error)
+	SignDomain(ctx context.Context, keyID string, message []byte, hashAlgorithm kmssvc.HashAlgorithm) (*kmssvc.SignResult, error)
+	VerifyDomain(ctx context.Context, keyID string, message, signature []byte, hashAlgorithm kmssvc.HashAlgorithm, keyVersion uint64) (*kmssvc.VerifyResult, error)
+	HMACDomain(ctx context.Context, keyID string, message []byte, hashAlgorithm kmssvc.HashAlgorithm) (*kmssvc.HMACResult, error)
+	VerifyHMACDomain(ctx context.Context, keyID string, message, hmac []byte, hashAlgorithm kmssvc.HashAlgorithm, keyVersion uint64) (*kmssvc.VerifyHMACResult, error)
+	GenerateRandomDomain(ctx context.Context, numBytes int32) (*kmssvc.GenerateRandomResult, error)
+	HashDomain(ctx context.Context, data []byte, algorithm kmssvc.HashAlgorithm) (*kmssvc.HashResult, error)
+	GenerateDataKeyDomain(ctx context.Context, keyID string, algorithm kmssvc.KeyAlgorithm, keySize int32, aadContext []byte) (*kmssvc.GenerateDataKeyResult, error)
+	GenerateWrappedDataKeyDomain(ctx context.Context, wrappingKeyID string, algorithm kmssvc.KeyAlgorithm, keySize int32, aadContext []byte) (*kmssvc.GenerateWrappedDataKeyResult, error)
 }
 
 // Printer interface for dependency injection

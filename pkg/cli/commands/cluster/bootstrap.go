@@ -20,7 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	clustersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/cluster"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -107,10 +107,12 @@ func runBootstrap(flags *cli.CommonFlags, nodeID, listenAddr, advertiseAddr, dat
 	}
 	defer base.Close()
 
-	client := base.Client().Cluster()
-	if client == nil {
+	grpcClient := base.Client().Cluster()
+	if grpcClient == nil {
 		return ErrClusterClientNotInitialized{}
 	}
+
+	sdkClient := clustersvc.NewClientFromGRPC(grpcClient)
 
 	// Parse listen address into host and port
 	bindHost, bindPortStr, splitErr := net.SplitHostPort(listenAddr)
@@ -132,39 +134,28 @@ func runBootstrap(flags *cli.CommonFlags, nodeID, listenAddr, advertiseAddr, dat
 		return ErrInvalidListenAddr{Addr: advertiseAddr, Reason: "invalid port number"}
 	}
 
-	req := &platformv1.BootstrapClusterRequest{
-		ClusterName:      nodeID, // Use node ID as cluster name for bootstrap
-		NodeName:         nodeID,
-		BindAddress:      bindHost,
-		BindPort:         uint32(bindPort),
-		AdvertiseAddress: advHost,
-		AdvertisePort:    uint32(advPort),
-	}
-
 	ctx := base.Context()
-	resp, err := client.Bootstrap(ctx, req)
+	resp, err := sdkClient.BootstrapDomain(ctx, nodeID, nodeID,
+		bindHost, uint32(bindPort), advHost, uint32(advPort))
 	if err != nil {
 		return ErrClusterBootstrapFailed{Err: err}
 	}
 
 	// Build result from response
 	result := &BootstrapResult{
-		ClusterID:  "",
-		NodeID:     nodeID,
+		ClusterID:  resp.ClusterID,
+		NodeID:     resp.NodeID,
 		ListenAddr: advertiseAddr,
 		DataDir:    dataDir,
 		Success:    true,
-		Message:    "Cluster bootstrap initiated successfully",
+		Message:    resp.Message,
 	}
 
-	if resp.GetCluster() != nil {
-		result.ClusterID = resp.GetCluster().GetId()
+	if result.NodeID == "" {
+		result.NodeID = nodeID
 	}
-	if resp.GetNode() != nil {
-		result.NodeID = resp.GetNode().GetId()
-	}
-	if resp.GetStatus() != nil && resp.GetStatus().GetMessage() != "" {
-		result.Message = resp.GetStatus().GetMessage()
+	if result.Message == "" {
+		result.Message = "Cluster bootstrap initiated successfully"
 	}
 
 	printer := base.Printer()

@@ -23,8 +23,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	dbsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/db"
 )
 
 // List command flags
@@ -69,7 +69,7 @@ Examples:
 	return cmd
 }
 
-// runList executes the list command via gRPC
+// runList executes the list command via the SDK client
 func runList(commonFlags *cli.CommonFlags, flags *listFlags) error {
 	printer := cli.NewPrinter(commonFlags.OutputFormat, commonFlags.NoColor)
 
@@ -80,25 +80,27 @@ func runList(commonFlags *cli.CommonFlags, flags *listFlags) error {
 	}
 	defer base.Close()
 
+	sdkClient := dbsvc.NewClientFromGRPC(base.Client().Daemon())
+
 	// Create request context with timeout
 	reqCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Call ListEntityTypes RPC
-	resp, err := base.Client().Daemon().ListEntityTypes(reqCtx, &platformv1.ListEntityTypesRequest{})
+	// Call ListEntityTypes via SDK client
+	result, err := sdkClient.ListEntityTypes(reqCtx)
 	if err != nil {
 		return fmt.Errorf("failed to list entity types: %w", err)
 	}
 
 	// Print header
-	printer.PrintInfo(fmt.Sprintf("QuicBaaS Entity Types (%s)", resp.DatabasePath))
+	printer.PrintInfo(fmt.Sprintf("QuicBaaS Entity Types (%s)", result.DatabasePath))
 	fmt.Println(strings.Repeat("-", 60))
 
 	// Create tabwriter for aligned output
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ENTITY TYPE\tCOUNT\tSTATUS")
 
-	for _, entityType := range resp.EntityTypes {
+	for _, entityType := range result.EntityTypes {
 		fmt.Fprintf(w, "%s\t%d\t%s\n", entityType.Name, entityType.EntityCount, entityType.Status)
 	}
 
@@ -107,7 +109,7 @@ func runList(commonFlags *cli.CommonFlags, flags *listFlags) error {
 	// Print summary
 	fmt.Println(strings.Repeat("-", 60))
 	printer.PrintSuccess(fmt.Sprintf("Total: %d entities across %d active types",
-		resp.TotalEntities, resp.ActiveTypes))
+		result.TotalEntities, result.ActiveTypes))
 
 	return nil
 }

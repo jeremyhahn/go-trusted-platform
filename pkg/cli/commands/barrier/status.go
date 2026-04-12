@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	barriersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/barrier"
 )
 
 // newStatusCommand creates the barrier status subcommand
@@ -42,8 +42,10 @@ func runStatus(flags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
+	sdkClient := barriersvc.NewClientFromGRPC(base.Client().Barrier())
+
 	ctx := base.Context()
-	resp, err := base.Client().Barrier().GetStatus(ctx, &platformv1.BarrierStatusRequest{})
+	result, err := sdkClient.Status(ctx)
 	if err != nil {
 		return ErrBarrierStatusFailed{Err: err}
 	}
@@ -52,29 +54,29 @@ func runStatus(flags *cli.CommonFlags) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		return printStatusTable(printer, resp)
+		return printStatusTable(printer, result)
 
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
 	}
 }
 
-func printStatusTable(printer *cli.Printer, resp *platformv1.BarrierStatusResponse) error {
-	printer.PrintKeyValue("Initialized", fmt.Sprintf("%v", resp.Initialized))
-	printer.PrintKeyValue("Sealed", fmt.Sprintf("%v", resp.Sealed))
-	printer.PrintKeyValue("Strategy", formatStrategy(resp.Strategy))
+func printStatusTable(printer *cli.Printer, result *barriersvc.StatusResult) error {
+	printer.PrintKeyValue("Initialized", fmt.Sprintf("%v", result.Initialized))
+	printer.PrintKeyValue("Sealed", fmt.Sprintf("%v", result.Sealed))
+	printer.PrintKeyValue("Strategy", formatStrategy(result.Strategy))
 
-	if resp.Strategy == platformv1.BarrierStrategy_BARRIER_STRATEGY_SHAMIR {
-		printer.PrintKeyValue("Threshold", fmt.Sprintf("%d", resp.Threshold))
-		printer.PrintKeyValue("Total Shares", fmt.Sprintf("%d", resp.SharesTotal))
-		printer.PrintKeyValue("Shares Provided", fmt.Sprintf("%d", resp.SharesProvided))
+	if result.Strategy == barriersvc.StrategyShamir {
+		printer.PrintKeyValue("Threshold", fmt.Sprintf("%d", result.Threshold))
+		printer.PrintKeyValue("Total Shares", fmt.Sprintf("%d", result.SharesTotal))
+		printer.PrintKeyValue("Shares Provided", fmt.Sprintf("%d", result.SharesProvided))
 	}
 
-	if resp.InitializedAt != nil {
-		printer.PrintKeyValue("Initialized At", resp.InitializedAt.AsTime().String())
+	if result.InitializedAt != nil {
+		printer.PrintKeyValue("Initialized At", result.InitializedAt.String())
 	}
 
 	return nil

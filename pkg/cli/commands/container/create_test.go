@@ -14,10 +14,10 @@
 package container
 
 import (
-	"google.golang.org/protobuf/types/known/timestamppb"
+		computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"testing"
+	"time"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -174,10 +174,10 @@ func TestPrintContainerDetails_NilContainer(t *testing.T) {
 
 func TestPrintContainerDetails_WithConfig(t *testing.T) {
 	printer := cli.NewPrinter(cli.OutputFormatTable, true)
-	container := &platformv1.Container{
-		Id:    "test-container-id",
-		State: platformv1.ContainerState_CONTAINER_STATE_RUNNING,
-		Config: &platformv1.ContainerConfig{
+	container := &computesvc.Container{
+		ID:    "test-container-id",
+		State: computesvc.ContainerStateRunning,
+		Config: &computesvc.ContainerConfig{
 			Name:       "test-container",
 			Image:      "nginx:latest",
 			WorkingDir: "/app",
@@ -194,12 +194,12 @@ func TestPrintContainerDetails_WithConfig(t *testing.T) {
 
 func TestPrintContainerDetails_WithHostIdAndTimestamps(t *testing.T) {
 	printer := cli.NewPrinter(cli.OutputFormatTable, true)
-	container := &platformv1.Container{
-		Id:        "test-container-id",
-		State:     platformv1.ContainerState_CONTAINER_STATE_RUNNING,
-		HostId:    "host-123",
-		StartedAt: timestamppb.Now(),
-		Config: &platformv1.ContainerConfig{
+	container := &computesvc.Container{
+		ID:        "test-container-id",
+		State:     computesvc.ContainerStateRunning,
+		HostID:    "host-123",
+		StartedAt: time.Now(),
+		Config: &computesvc.ContainerConfig{
 			Name:  "test-container",
 			Image: "nginx:latest",
 		},
@@ -211,10 +211,10 @@ func TestPrintContainerDetails_WithHostIdAndTimestamps(t *testing.T) {
 
 func TestPrintContainerDetails_MinimalConfig(t *testing.T) {
 	printer := cli.NewPrinter(cli.OutputFormatTable, true)
-	container := &platformv1.Container{
-		Id:    "test-container-id",
-		State: platformv1.ContainerState_CONTAINER_STATE_CREATED,
-		Config: &platformv1.ContainerConfig{
+	container := &computesvc.Container{
+		ID:    "test-container-id",
+		State: computesvc.ContainerStateCreated,
+		Config: &computesvc.ContainerConfig{
 			Name:  "minimal",
 			Image: "alpine",
 		},

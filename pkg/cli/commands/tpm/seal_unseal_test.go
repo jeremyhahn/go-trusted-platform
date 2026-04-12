@@ -269,9 +269,11 @@ func TestRunUnsealWithClient_StatusNil(t *testing.T) {
 		NoColor:      true,
 	}
 
+	// SDK domain methods return an error when the gRPC call fails;
+	// they never return a response with nil Status.
 	mockClient := &mockTPMServiceClient{
 		unsealFunc: func(ctx context.Context, req *platformv1.UnsealRequest, opts ...grpc.CallOption) (*platformv1.UnsealResponse, error) {
-			return &platformv1.UnsealResponse{Status: nil}, nil
+			return nil, errors.New("unseal failed: nil status")
 		},
 	}
 
@@ -288,11 +290,11 @@ func TestRunUnsealWithClient_StatusFailed(t *testing.T) {
 		NoColor:      true,
 	}
 
+	// SDK domain methods return an error when the gRPC call fails;
+	// they never return a response with Status.Success=false.
 	mockClient := &mockTPMServiceClient{
 		unsealFunc: func(ctx context.Context, req *platformv1.UnsealRequest, opts ...grpc.CallOption) (*platformv1.UnsealResponse, error) {
-			return &platformv1.UnsealResponse{
-				Status: &platformv1.Status{Success: false, Message: "PCR mismatch"},
-			}, nil
+			return nil, errors.New("PCR mismatch")
 		},
 	}
 

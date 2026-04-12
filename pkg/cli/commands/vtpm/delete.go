@@ -21,7 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -70,10 +70,7 @@ func runDelete(flags *cli.CommonFlags, bundleID string, force bool) error {
 	}
 	defer base.Close()
 
-	client := base.Client().VTPM()
-	if client == nil {
-		return ErrVTPMNotAvailable{}
-	}
+	sdkClient := vtpmsvc.NewClientFromGRPC(base.Client().VTPM())
 
 	printer := base.Printer()
 
@@ -95,12 +92,8 @@ func runDelete(flags *cli.CommonFlags, bundleID string, force bool) error {
 		}
 	}
 
-	req := &platformv1.DeleteBundleRequest{
-		Id: bundleID,
-	}
-
 	ctx := base.Context()
-	resp, err := client.DeleteBundle(ctx, req)
+	resp, err := sdkClient.DeleteBundleDomain(ctx, bundleID)
 	if err != nil {
 		return ErrDeleteBundleFailed{Reason: err.Error()}
 	}

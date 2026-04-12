@@ -19,7 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -164,15 +165,12 @@ func runGenerateDataKey(flags *cli.CommonFlags, cmdFlags *dataKeyFlags) error {
 	}
 	defer base.Close()
 
-	client := base.Client().KMS()
-	if client == nil {
-		return ErrCryptoClientNotInitialized{}
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
-	// Parse algorithm
-	keyAlg, err := parseKMSKeyAlgorithm(cmdFlags.algorithm)
+	// Parse algorithm using SDK parser
+	keyAlg, err := kmssvc.ParseKeyAlgorithm(cmdFlags.algorithm)
 	if err != nil {
-		return err
+		return ErrInvalidAlgorithm{Algorithm: cmdFlags.algorithm}
 	}
 
 	// Parse context if provided
@@ -181,15 +179,8 @@ func runGenerateDataKey(flags *cli.CommonFlags, cmdFlags *dataKeyFlags) error {
 		contextBytes = []byte(cmdFlags.context)
 	}
 
-	req := &platformv1.GenerateDataKeyRequest{
-		KeyId:     cmdFlags.keyID,
-		Algorithm: keyAlg,
-		KeySize:   cmdFlags.keySize,
-		Context:   contextBytes,
-	}
-
 	ctx := base.Context()
-	resp, err := client.GenerateDataKey(ctx, req)
+	resp, err := sdkClient.GenerateDataKeyDomain(ctx, cmdFlags.keyID, keyAlg, cmdFlags.keySize, contextBytes)
 	if err != nil {
 		return ErrCryptoOperationFailed{Operation: "generate data key", Err: err}
 	}
@@ -204,7 +195,7 @@ func runGenerateDataKey(flags *cli.CommonFlags, cmdFlags *dataKeyFlags) error {
 			EncryptedKey string `json:"encrypted_key" yaml:"encrypted_key"`
 			Timestamp    string `json:"timestamp" yaml:"timestamp"`
 		}{
-			KeyID:        resp.KeyId,
+			KeyID:        resp.KeyID,
 			PlaintextKey: base64.StdEncoding.EncodeToString(resp.PlaintextKey),
 			EncryptedKey: base64.StdEncoding.EncodeToString(resp.EncryptedKey),
 			Timestamp:    formatTimestamp(resp.Timestamp),
@@ -213,7 +204,7 @@ func runGenerateDataKey(flags *cli.CommonFlags, cmdFlags *dataKeyFlags) error {
 
 	case cli.OutputFormatTable:
 		printer.PrintSuccess("Data encryption key generated")
-		printer.PrintKeyValue("Key ID", resp.KeyId)
+		printer.PrintKeyValue("Key ID", resp.KeyID)
 		printer.PrintKeyValue("Algorithm", cmdFlags.algorithm)
 		printer.PrintKeyValue("Plaintext Key (base64)", base64.StdEncoding.EncodeToString(resp.PlaintextKey))
 		printer.PrintKeyValue("Encrypted Key (base64)", base64.StdEncoding.EncodeToString(resp.EncryptedKey))
@@ -240,15 +231,12 @@ func runGenerateWrappedDataKey(flags *cli.CommonFlags, cmdFlags *dataKeyFlags) e
 	}
 	defer base.Close()
 
-	client := base.Client().KMS()
-	if client == nil {
-		return ErrCryptoClientNotInitialized{}
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
-	// Parse algorithm
-	keyAlg, err := parseKMSKeyAlgorithm(cmdFlags.algorithm)
+	// Parse algorithm using SDK parser
+	keyAlg, err := kmssvc.ParseKeyAlgorithm(cmdFlags.algorithm)
 	if err != nil {
-		return err
+		return ErrInvalidAlgorithm{Algorithm: cmdFlags.algorithm}
 	}
 
 	// Parse context if provided
@@ -257,15 +245,8 @@ func runGenerateWrappedDataKey(flags *cli.CommonFlags, cmdFlags *dataKeyFlags) e
 		contextBytes = []byte(cmdFlags.context)
 	}
 
-	req := &platformv1.GenerateWrappedDataKeyRequest{
-		WrappingKeyId: cmdFlags.keyID,
-		KeyAlgorithm:  keyAlg,
-		KeySize:       cmdFlags.keySize,
-		Context:       contextBytes,
-	}
-
 	ctx := base.Context()
-	resp, err := client.GenerateWrappedDataKey(ctx, req)
+	resp, err := sdkClient.GenerateWrappedDataKeyDomain(ctx, cmdFlags.keyID, keyAlg, cmdFlags.keySize, contextBytes)
 	if err != nil {
 		return ErrCryptoOperationFailed{Operation: "generate wrapped data key", Err: err}
 	}
@@ -279,7 +260,7 @@ func runGenerateWrappedDataKey(flags *cli.CommonFlags, cmdFlags *dataKeyFlags) e
 			WrappedKey    string `json:"wrapped_key" yaml:"wrapped_key"`
 			Timestamp     string `json:"timestamp" yaml:"timestamp"`
 		}{
-			WrappingKeyID: resp.WrappingKeyId,
+			WrappingKeyID: resp.WrappingKeyID,
 			WrappedKey:    base64.StdEncoding.EncodeToString(resp.WrappedKey),
 			Timestamp:     formatTimestamp(resp.Timestamp),
 		}
@@ -293,7 +274,7 @@ func runGenerateWrappedDataKey(flags *cli.CommonFlags, cmdFlags *dataKeyFlags) e
 
 		if cmdFlags.outputPath != "" {
 			printer.PrintSuccess("Wrapped data encryption key generated")
-			printer.PrintKeyValue("Wrapping Key ID", resp.WrappingKeyId)
+			printer.PrintKeyValue("Wrapping Key ID", resp.WrappingKeyID)
 			printer.PrintKeyValue("Algorithm", cmdFlags.algorithm)
 			printer.PrintKeyValue("Output", cmdFlags.outputPath)
 		}
@@ -301,41 +282,5 @@ func runGenerateWrappedDataKey(flags *cli.CommonFlags, cmdFlags *dataKeyFlags) e
 
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
-	}
-}
-
-// parseKMSKeyAlgorithm parses a string algorithm into a KMSKeyAlgorithm
-func parseKMSKeyAlgorithm(alg string) (platformv1.KMSKeyAlgorithm, error) {
-	switch alg {
-	case "aes-128", "AES_128":
-		return platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128, nil
-	case "aes-192", "AES_192":
-		return platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192, nil
-	case "aes-256", "AES_256":
-		return platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256, nil
-	case "chacha20-poly1305", "CHACHA20_POLY1305":
-		return platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305, nil
-	case "rsa-2048", "RSA_2048":
-		return platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048, nil
-	case "rsa-3072", "RSA_3072":
-		return platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_3072, nil
-	case "rsa-4096", "RSA_4096":
-		return platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_4096, nil
-	case "ec-p256", "ECDSA_P256":
-		return platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256, nil
-	case "ec-p384", "ECDSA_P384":
-		return platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P384, nil
-	case "ec-p521", "ECDSA_P521":
-		return platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P521, nil
-	case "ed25519", "ED25519":
-		return platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ED25519, nil
-	case "hmac-sha256", "HMAC_SHA256":
-		return platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA256, nil
-	case "hmac-sha384", "HMAC_SHA384":
-		return platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA384, nil
-	case "hmac-sha512", "HMAC_SHA512":
-		return platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA512, nil
-	default:
-		return platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED, ErrInvalidAlgorithm{Algorithm: alg}
 	}
 }

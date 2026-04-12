@@ -19,107 +19,100 @@ import (
 	"testing"
 	"time"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // =============================================================================
 // Mock IAM Client
 // =============================================================================
 
-// mockIAMClientForTenant implements iampb.IAMServiceClient for tenant service testing.
+// mockIAMClientForTenant implements iam.TenantClient for tenant service testing.
 type mockIAMClientForTenant struct {
-	iampb.IAMServiceClient // Embed to satisfy interface
-
 	mu      sync.RWMutex
-	tenants map[string]*iampb.Tenant
+	tenants map[string]*sdkiam.Tenant
 	nextID  int
 }
 
 func newMockIAMClientForTenant() *mockIAMClientForTenant {
 	return &mockIAMClientForTenant{
-		tenants: make(map[string]*iampb.Tenant),
+		tenants: make(map[string]*sdkiam.Tenant),
 		nextID:  1,
 	}
 }
 
-func (m *mockIAMClientForTenant) CreateTenant(ctx context.Context, req *iampb.CreateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
+func (m *mockIAMClientForTenant) Create(ctx context.Context, req *sdkiam.CreateTenantRequest) (*sdkiam.Tenant, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	id := req.Id
+	id := req.ID
 	if id == "" {
 		id = req.Name + "-id"
 	}
 
-	tenant := &iampb.Tenant{
-		Id:        id,
-		Name:      req.Name,
-		CreatedAt: timestamppb.Now(),
-		UpdatedAt: timestamppb.Now(),
+	t := &sdkiam.Tenant{
+		ID:   id,
+		Name: req.Name,
 	}
 
-	m.tenants[tenant.Id] = tenant
+	m.tenants[t.ID] = t
 	m.nextID++
-	return tenant, nil
+	return t, nil
 }
 
-func (m *mockIAMClientForTenant) GetTenant(ctx context.Context, req *iampb.GetTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
+func (m *mockIAMClientForTenant) Get(ctx context.Context, tenantID string) (*sdkiam.Tenant, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	tenant, ok := m.tenants[req.Id]
+	t, ok := m.tenants[tenantID]
 	if !ok {
 		return nil, status.Error(codes.NotFound, "tenant not found")
 	}
-	return tenant, nil
+	return t, nil
 }
 
-func (m *mockIAMClientForTenant) ListTenants(ctx context.Context, req *iampb.ListTenantsRequest, opts ...grpc.CallOption) (*iampb.ListTenantsResponse, error) {
+func (m *mockIAMClientForTenant) List(ctx context.Context, req *sdkiam.ListTenantsRequest) (*sdkiam.ListTenantsResponse, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	tenants := make([]*iampb.Tenant, 0, len(m.tenants))
+	tenants := make([]sdkiam.Tenant, 0, len(m.tenants))
 	for _, t := range m.tenants {
-		tenants = append(tenants, t)
+		tenants = append(tenants, *t)
 	}
 
-	return &iampb.ListTenantsResponse{
-		Tenants: tenants,
-		Total:   int32(len(tenants)),
+	return &sdkiam.ListTenantsResponse{
+		Tenants:    tenants,
+		Pagination: sdkiam.PaginationInfo{TotalCount: len(tenants)},
 	}, nil
 }
 
-func (m *mockIAMClientForTenant) UpdateTenant(ctx context.Context, req *iampb.UpdateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
+func (m *mockIAMClientForTenant) Update(ctx context.Context, tenantID string, req *sdkiam.UpdateTenantRequest) (*sdkiam.Tenant, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	tenant, ok := m.tenants[req.Id]
+	t, ok := m.tenants[tenantID]
 	if !ok {
 		return nil, status.Error(codes.NotFound, "tenant not found")
 	}
 
-	if req.Name != "" {
-		tenant.Name = req.Name
+	if req.DisplayName != "" {
+		t.DisplayName = req.DisplayName
 	}
-	tenant.UpdatedAt = timestamppb.Now()
-	return tenant, nil
+	return t, nil
 }
 
-func (m *mockIAMClientForTenant) DeleteTenant(ctx context.Context, req *iampb.DeleteTenantRequest, opts ...grpc.CallOption) (*iampb.DeleteTenantResponse, error) {
+func (m *mockIAMClientForTenant) Delete(ctx context.Context, tenantID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	delete(m.tenants, req.Id)
-	return &iampb.DeleteTenantResponse{Success: true}, nil
+	delete(m.tenants, tenantID)
+	return nil
 }
 
 // =============================================================================
@@ -131,9 +124,9 @@ func createTestTenantManager(t *testing.T) *tenant.Manager {
 	cfg.EnableDEKIsolation = false // Disable for testing
 
 	mgr, err := tenant.NewManager(&tenant.ManagerConfig{
-		IAMClient: newMockIAMClientForTenant(),
-		Config:    cfg,
-		Logger:    nil,
+		IAMTenantClient: newMockIAMClientForTenant(),
+		Config:          cfg,
+		Logger:          nil,
 	})
 	require.NoError(t, err)
 	return mgr

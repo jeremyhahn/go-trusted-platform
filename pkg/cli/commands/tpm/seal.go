@@ -16,7 +16,8 @@ package tpm
 import (
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	tpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tpm"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -118,21 +119,22 @@ func runSeal(flags *cli.CommonFlags, opts *sealOptions) error {
 func runSealWithClient(base TPMBaseCommandInterface, opts *sealOptions) error {
 	defer base.Close()
 
-	pcrBank := parsePCRBank(opts.PCRBank)
+	sdkClient := tpmsvc.NewClientFromGRPC(base.TPMClient())
+	bank := tpmsvc.ParsePCRBank(opts.PCRBank)
 
-	req := &platformv1.SealRequest{
-		Cn:             opts.CN,
+	req := &tpmsvc.SealRequest{
+		CN:             opts.CN,
 		Data:           []byte(opts.Data),
 		Password:       opts.Password,
 		ParentHandle:   opts.ParentHandle,
 		ParentPassword: opts.ParentPassword,
-		PcrIndices:     opts.PCRIndices,
-		PcrBank:        pcrBank,
+		PCRIndices:     opts.PCRIndices,
+		PCRBank:        bank,
 		Overwrite:      opts.Overwrite,
 	}
 
 	ctx := base.Context()
-	resp, err := base.TPMClient().Seal(ctx, req)
+	resp, err := sdkClient.SealDomain(ctx, req)
 	if err != nil {
 		return ErrSealFailed{Reason: err.Error()}
 	}
@@ -165,23 +167,5 @@ func runSealWithClient(base TPMBaseCommandInterface, opts *sealOptions) error {
 
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
-	}
-}
-
-// parsePCRBank converts a string PCR bank name to the proto enum value
-func parsePCRBank(bank string) platformv1.PCRBank {
-	switch bank {
-	case "sha1", "SHA1":
-		return platformv1.PCRBank_PCR_BANK_SHA1
-	case "sha256", "SHA256":
-		return platformv1.PCRBank_PCR_BANK_SHA256
-	case "sha384", "SHA384":
-		return platformv1.PCRBank_PCR_BANK_SHA384
-	case "sha512", "SHA512":
-		return platformv1.PCRBank_PCR_BANK_SHA512
-	case "sm3_256", "SM3_256":
-		return platformv1.PCRBank_PCR_BANK_SM3_256
-	default:
-		return platformv1.PCRBank_PCR_BANK_SHA256
 	}
 }

@@ -19,7 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	tpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tpm"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -186,22 +187,15 @@ func runSRKCreate(flags *cli.CommonFlags, opts *srkCreateOptions) error {
 func runSRKCreateWithClient(base TPMBaseCommandInterface, opts *srkCreateOptions) error {
 	defer base.Close()
 
-	keyAlg, err := parseKeyAlgorithm(opts.Algorithm)
-	if err != nil {
-		return err
+	domainAlg, ok := tpmsvc.ParseKeyAlgorithm(opts.Algorithm)
+	if !ok {
+		return ErrInvalidKeyAlgorithm{Algorithm: opts.Algorithm}
 	}
 
-	req := &platformv1.CreateSRKRequest{
-		Attributes: &platformv1.KeyAttributes{
-			Algorithm: keyAlg,
-		},
-		Persistent:     opts.Persistent,
-		ParentHandle:   opts.ParentHandle,
-		ParentPassword: opts.ParentPassword,
-	}
+	sdkClient := tpmsvc.NewClientFromGRPC(base.TPMClient())
 
 	ctx := base.Context()
-	resp, err := base.TPMClient().CreateSRK(ctx, req)
+	resp, err := sdkClient.CreateSRKDomain(ctx, domainAlg, opts.Persistent, opts.ParentHandle, opts.ParentPassword)
 	if err != nil {
 		return ErrSRKCreateFailed{Reason: err.Error()}
 	}
@@ -256,12 +250,10 @@ func runSRKInfo(flags *cli.CommonFlags, handle uint32) error {
 func runSRKInfoWithClient(base TPMBaseCommandInterface, handle uint32) error {
 	defer base.Close()
 
-	req := &platformv1.GetSRKRequest{
-		Handle: handle,
-	}
+	sdkClient := tpmsvc.NewClientFromGRPC(base.TPMClient())
 
 	ctx := base.Context()
-	resp, err := base.TPMClient().GetSRK(ctx, req)
+	resp, err := sdkClient.GetSRKDomain(ctx, tpmsvc.KeyAlgorithmUnspecified, handle)
 	if err != nil {
 		return ErrSRKNotFound{Reason: err.Error()}
 	}
@@ -271,7 +263,7 @@ func runSRKInfoWithClient(base TPMBaseCommandInterface, handle uint32) error {
 
 	output := map[string]interface{}{
 		"handle":    fmt.Sprintf("0x%08X", resp.Handle),
-		"algorithm": formatKeyAlgorithm(resp.Algorithm),
+		"algorithm": string(resp.Algorithm),
 	}
 
 	if len(resp.PublicKey) > 0 {
@@ -284,7 +276,7 @@ func runSRKInfoWithClient(base TPMBaseCommandInterface, handle uint32) error {
 
 	case cli.OutputFormatTable:
 		printer.PrintKeyValue("Handle", fmt.Sprintf("0x%08X", resp.Handle))
-		printer.PrintKeyValue("Algorithm", formatKeyAlgorithm(resp.Algorithm))
+		printer.PrintKeyValue("Algorithm", string(resp.Algorithm))
 		return nil
 
 	default:
@@ -305,13 +297,10 @@ func runSRKDelete(flags *cli.CommonFlags, handle uint32, password string) error 
 func runSRKDeleteWithClient(base TPMBaseCommandInterface, handle uint32, password string) error {
 	defer base.Close()
 
-	req := &platformv1.DeleteSRKRequest{
-		Handle:   handle,
-		Password: password,
-	}
+	sdkClient := tpmsvc.NewClientFromGRPC(base.TPMClient())
 
 	ctx := base.Context()
-	resp, err := base.TPMClient().DeleteSRK(ctx, req)
+	resp, err := sdkClient.DeleteSRKDomain(ctx, handle, tpmsvc.KeyAlgorithmUnspecified, password)
 	if err != nil {
 		return ErrSRKDeleteFailed{Reason: err.Error()}
 	}

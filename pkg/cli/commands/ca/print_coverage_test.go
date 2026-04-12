@@ -16,11 +16,11 @@ package ca
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	casvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -31,22 +31,19 @@ import (
 func TestPrintCRLDetails_NilCRL(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
-	resp := &platformv1.GetCRLResponse{Crl: nil}
-	printCRLDetails(printer, resp)
+	printCRLDetails(printer, nil)
 	assert.Contains(t, output.String(), "No CRL data available")
 }
 
 func TestPrintCRLDetails_Empty(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
-	resp := &platformv1.GetCRLResponse{
-		Crl: &platformv1.CRL{
-			LastUpdate:   timestamppb.Now(),
-			NextUpdate:   timestamppb.Now(),
-			RevokedCount: 0,
-		},
+	crl := &casvc.CRL{
+		LastUpdate:   time.Now(),
+		NextUpdate:   time.Now(),
+		RevokedCount: 0,
 	}
-	printCRLDetails(printer, resp)
+	printCRLDetails(printer, crl)
 	out := output.String()
 	assert.Contains(t, out, "0")
 }
@@ -54,26 +51,24 @@ func TestPrintCRLDetails_Empty(t *testing.T) {
 func TestPrintCRLDetails_WithRevokedCerts(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
-	resp := &platformv1.GetCRLResponse{
-		Crl: &platformv1.CRL{
-			LastUpdate:   timestamppb.Now(),
-			NextUpdate:   timestamppb.Now(),
-			RevokedCount: 2,
-			RevokedCerts: []*platformv1.RevokedCertEntry{
-				{
-					Serial:         "ABC123",
-					RevocationTime: timestamppb.Now(),
-					Reason:         platformv1.RevocationReason_REVOCATION_REASON_KEY_COMPROMISE,
-				},
-				{
-					Serial:         "DEF456",
-					RevocationTime: timestamppb.Now(),
-					Reason:         platformv1.RevocationReason_REVOCATION_REASON_SUPERSEDED,
-				},
+	crl := &casvc.CRL{
+		LastUpdate:   time.Now(),
+		NextUpdate:   time.Now(),
+		RevokedCount: 2,
+		RevokedCerts: []*casvc.RevokedCertEntry{
+			{
+				Serial:         "ABC123",
+				RevocationTime: time.Now(),
+				Reason:         casvc.RevocationReasonKeyCompromise,
+			},
+			{
+				Serial:         "DEF456",
+				RevocationTime: time.Now(),
+				Reason:         casvc.RevocationReasonSuperseded,
 			},
 		},
 	}
-	printCRLDetails(printer, resp)
+	printCRLDetails(printer, crl)
 	out := output.String()
 	assert.Contains(t, out, "2")
 }
@@ -85,7 +80,7 @@ func TestPrintCRLDetails_WithRevokedCerts(t *testing.T) {
 func TestPrintVerificationResult_Valid(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
-	resp := &platformv1.VerifyCertificateResponse{
+	resp := &casvc.VerifyCertificateResult{
 		Valid: true,
 		Chain: []string{"CN=Root CA", "CN=Intermediate CA", "CN=leaf.example.com"},
 	}
@@ -97,7 +92,7 @@ func TestPrintVerificationResult_Valid(t *testing.T) {
 func TestPrintVerificationResult_Invalid(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
-	resp := &platformv1.VerifyCertificateResponse{
+	resp := &casvc.VerifyCertificateResult{
 		Valid:    false,
 		Errors:   []string{"certificate expired", "chain incomplete"},
 		Warnings: []string{"weak key size"},
@@ -110,7 +105,7 @@ func TestPrintVerificationResult_Invalid(t *testing.T) {
 func TestPrintVerificationResult_NoChainNoErrors(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
-	resp := &platformv1.VerifyCertificateResponse{
+	resp := &casvc.VerifyCertificateResult{
 		Valid: true,
 	}
 	printVerificationResult(printer, resp)

@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 // createOptions holds the options for the create command
@@ -128,10 +128,12 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 	}
 	defer base.Close()
 
-	client := base.Client().Compute()
-	if client == nil {
+	grpcClient := base.Client().Compute()
+	if grpcClient == nil {
 		return ErrContainerClientNotInitialized{}
 	}
+
+	sdkClient := computesvc.NewClientFromGRPC(grpcClient)
 
 	// Parse environment variables
 	envVars, err := parseEnvVars(opts.env)
@@ -168,8 +170,8 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 		return err
 	}
 
-	// Build container config
-	config := &platformv1.ContainerConfig{
+	// Build create params
+	params := &computesvc.CreateContainerParams{
 		Name:       opts.name,
 		Image:      opts.image,
 		Env:        envVars,
@@ -181,23 +183,19 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 		Command:    opts.command,
 		WorkingDir: opts.workDir,
 		TpmAccess:  opts.tpmAccess,
+		Start:      opts.start,
 	}
 
 	// Set resource limits if specified
 	if memoryMB > 0 || cpuLimit > 0 {
-		config.Resources = &platformv1.ResourceLimits{
-			MaxMemoryMb: memoryMB,
-			MaxCpus:     cpuLimit,
+		params.Resources = &computesvc.ResourceLimits{
+			MaxMemoryMB: memoryMB,
+			MaxCPUs:     cpuLimit,
 		}
 	}
 
-	req := &platformv1.CreateContainerRequest{
-		Config: config,
-		Start:  opts.start,
-	}
-
 	ctx := base.Context()
-	resp, err := client.CreateContainer(ctx, req)
+	container, err := sdkClient.CreateContainerDomain(ctx, params)
 	if err != nil {
 		return ErrContainerOperationFailed{Operation: "create", ID: opts.name, Err: err}
 	}
@@ -206,12 +204,12 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(container)
 
 	case cli.OutputFormatTable:
-		printer.PrintSuccess(fmt.Sprintf("Container created successfully: %s", resp.Container.Id))
+		printer.PrintSuccess(fmt.Sprintf("Container created successfully: %s", container.ID))
 		fmt.Println()
-		printContainerDetails(printer, resp.Container)
+		printContainerDetails(printer, container)
 		return nil
 
 	default:
@@ -220,12 +218,12 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 }
 
 // printContainerDetails prints container details in a formatted way
-func printContainerDetails(printer *cli.Printer, container *platformv1.Container) {
+func printContainerDetails(printer *cli.Printer, container *computesvc.Container) {
 	if container == nil {
 		return
 	}
 
-	printer.PrintKeyValue("ID", container.Id)
+	printer.PrintKeyValue("ID", container.ID)
 	if container.Config != nil {
 		printer.PrintKeyValue("Name", container.Config.Name)
 		printer.PrintKeyValue("Image", container.Config.Image)
@@ -243,11 +241,11 @@ func printContainerDetails(printer *cli.Printer, container *platformv1.Container
 	}
 	printer.PrintKeyValue("State", formatContainerState(container.State))
 	printer.PrintKeyValue("Created At", formatTimestamp(container.CreatedAt))
-	if container.StartedAt != nil {
+	if !container.StartedAt.IsZero() {
 		printer.PrintKeyValue("Started At", formatTimestamp(container.StartedAt))
 	}
-	if container.HostId != "" {
-		printer.PrintKeyValue("Host ID", container.HostId)
+	if container.HostID != "" {
+		printer.PrintKeyValue("Host ID", container.HostID)
 	}
 }
 

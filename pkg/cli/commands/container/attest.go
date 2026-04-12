@@ -22,8 +22,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 // attestOptions holds the options for the attest command
@@ -83,18 +83,16 @@ func runAttest(flags *cli.CommonFlags, containerID string, opts *attestOptions) 
 	defer base.Close()
 
 	// First get the container to verify it exists
-	computeClient := base.Client().Compute()
-	if computeClient == nil {
+	grpcClient := base.Client().Compute()
+	if grpcClient == nil {
 		return ErrContainerClientNotInitialized{}
 	}
 
-	// Verify container exists
-	getReq := &platformv1.GetContainerRequest{
-		Id: containerID,
-	}
+	sdkClient := computesvc.NewClientFromGRPC(grpcClient)
 
+	// Verify container exists
 	ctx := base.Context()
-	containerResp, err := computeClient.GetContainer(ctx, getReq)
+	container, err := sdkClient.GetContainerDomain(ctx, containerID)
 	if err != nil {
 		return ErrContainerNotFound{ID: containerID}
 	}
@@ -120,37 +118,24 @@ func runAttest(flags *cli.CommonFlags, containerID string, opts *attestOptions) 
 		return err
 	}
 
-	// Build attestation request using the attestation service
-	// Note: The attestation service collects container attestation data
-	req := &platformv1.CollectContainerAttestationRequest{
-		ContainerId: containerID,
-	}
-
-	// Call attestation service
-	// For now, we'll construct a response from the container data
-	// In a real implementation, this would call the attestation service
+	// Build attestation result
 	printer := base.Printer()
 
-	// Build attestation result
 	result := &containerAttestationResult{
 		ContainerID:   containerID,
 		ContainerName: "",
 		ImageID:       "",
 		ImageDigest:   "",
-		State:         formatContainerState(containerResp.Container.State),
+		State:         formatContainerState(container.State),
 		Nonce:         hex.EncodeToString(nonce),
 		PCRIndices:    pcrIndices,
 	}
 
-	if containerResp.Container.Config != nil {
-		result.ContainerName = containerResp.Container.Config.Name
-		result.ImageID = containerResp.Container.Config.Image
-		result.ImageDigest = containerResp.Container.Config.ImageHash
+	if container.Config != nil {
+		result.ContainerName = container.Config.Name
+		result.ImageID = container.Config.Image
+		result.ImageDigest = container.Config.ImageHash
 	}
-
-	// In production, we would actually call the attestation service here
-	// For now, return the request/response structure
-	_ = req
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:

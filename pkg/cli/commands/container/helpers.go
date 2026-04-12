@@ -18,41 +18,20 @@ import (
 	"strings"
 	"time"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
-
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
-// formatContainerState formats a ContainerState enum to a human-readable string
-func formatContainerState(state platformv1.ContainerState) string {
-	switch state {
-	case platformv1.ContainerState_CONTAINER_STATE_CREATED:
-		return "CREATED"
-	case platformv1.ContainerState_CONTAINER_STATE_STARTING:
-		return "STARTING"
-	case platformv1.ContainerState_CONTAINER_STATE_RUNNING:
-		return "RUNNING"
-	case platformv1.ContainerState_CONTAINER_STATE_PAUSED:
-		return "PAUSED"
-	case platformv1.ContainerState_CONTAINER_STATE_STOPPING:
-		return "STOPPING"
-	case platformv1.ContainerState_CONTAINER_STATE_STOPPED:
-		return "STOPPED"
-	case platformv1.ContainerState_CONTAINER_STATE_EXITED:
-		return "EXITED"
-	case platformv1.ContainerState_CONTAINER_STATE_ERROR:
-		return "ERROR"
-	default:
-		return "UNKNOWN"
-	}
+// formatContainerState formats a ContainerState to a human-readable string
+func formatContainerState(state computesvc.ContainerState) string {
+	return string(state)
 }
 
-// formatTimestamp formats a protobuf timestamp for display
-func formatTimestamp(ts *timestamppb.Timestamp) string {
-	if ts == nil {
+// formatTimestamp formats a time.Time for display
+func formatTimestamp(ts time.Time) string {
+	if ts.IsZero() {
 		return "N/A"
 	}
-	return ts.AsTime().UTC().Format(time.RFC3339)
+	return ts.UTC().Format(time.RFC3339)
 }
 
 // formatDuration formats a duration for display
@@ -101,23 +80,23 @@ func formatBool(b bool) string {
 }
 
 // parseEnvVar parses an environment variable specification (KEY=value)
-func parseEnvVar(spec string) (*platformv1.EnvVar, error) {
+func parseEnvVar(spec string) (*computesvc.EnvVar, error) {
 	parts := strings.SplitN(spec, "=", 2)
 	if len(parts) != 2 {
 		return nil, ErrInvalidEnvVar{Spec: spec}
 	}
-	return &platformv1.EnvVar{
+	return &computesvc.EnvVar{
 		Name:  parts[0],
 		Value: parts[1],
 	}, nil
 }
 
 // parseEnvVars parses multiple environment variable specifications
-func parseEnvVars(specs []string) ([]*platformv1.EnvVar, error) {
+func parseEnvVars(specs []string) ([]*computesvc.EnvVar, error) {
 	if len(specs) == 0 {
 		return nil, nil
 	}
-	envVars := make([]*platformv1.EnvVar, 0, len(specs))
+	envVars := make([]*computesvc.EnvVar, 0, len(specs))
 	for _, spec := range specs {
 		envVar, err := parseEnvVar(spec)
 		if err != nil {
@@ -154,7 +133,7 @@ func parseLabels(specs []string) (map[string]string, error) {
 }
 
 // parsePortMapping parses a port mapping specification (hostPort:containerPort[/protocol])
-func parsePortMapping(spec string) (*platformv1.PortMapping, error) {
+func parsePortMapping(spec string) (*computesvc.PortMapping, error) {
 	// Parse protocol if specified
 	protocol := "tcp"
 	protocolParts := strings.SplitN(spec, "/", 2)
@@ -179,7 +158,7 @@ func parsePortMapping(spec string) (*platformv1.PortMapping, error) {
 		return nil, ErrInvalidPortMapping{Mapping: spec}
 	}
 
-	return &platformv1.PortMapping{
+	return &computesvc.PortMapping{
 		HostPort:      uint32(hostPort),
 		ContainerPort: uint32(containerPort),
 		Protocol:      protocol,
@@ -187,11 +166,11 @@ func parsePortMapping(spec string) (*platformv1.PortMapping, error) {
 }
 
 // parsePortMappings parses multiple port mapping specifications
-func parsePortMappings(specs []string) ([]*platformv1.PortMapping, error) {
+func parsePortMappings(specs []string) ([]*computesvc.PortMapping, error) {
 	if len(specs) == 0 {
 		return nil, nil
 	}
-	mappings := make([]*platformv1.PortMapping, 0, len(specs))
+	mappings := make([]*computesvc.PortMapping, 0, len(specs))
 	for _, spec := range specs {
 		mapping, err := parsePortMapping(spec)
 		if err != nil {
@@ -203,13 +182,13 @@ func parsePortMappings(specs []string) ([]*platformv1.PortMapping, error) {
 }
 
 // parseMountSpec parses a mount specification (hostPath:containerPath[:ro])
-func parseMountSpec(spec string) (*platformv1.VolumeMount, error) {
+func parseMountSpec(spec string) (*computesvc.VolumeMount, error) {
 	parts := strings.Split(spec, ":")
 	if len(parts) < 2 || len(parts) > 3 {
 		return nil, ErrInvalidMountSpec{Spec: spec}
 	}
 
-	mount := &platformv1.VolumeMount{
+	mount := &computesvc.VolumeMount{
 		Source:      parts[0],
 		Destination: parts[1],
 		Readonly:    false,
@@ -225,11 +204,11 @@ func parseMountSpec(spec string) (*platformv1.VolumeMount, error) {
 }
 
 // parseMountSpecs parses multiple mount specifications
-func parseMountSpecs(specs []string) ([]*platformv1.VolumeMount, error) {
+func parseMountSpecs(specs []string) ([]*computesvc.VolumeMount, error) {
 	if len(specs) == 0 {
 		return nil, nil
 	}
-	mounts := make([]*platformv1.VolumeMount, 0, len(specs))
+	mounts := make([]*computesvc.VolumeMount, 0, len(specs))
 	for _, spec := range specs {
 		mount, err := parseMountSpec(spec)
 		if err != nil {
@@ -293,28 +272,9 @@ func parseCPU(spec string) (float64, error) {
 	return value, nil
 }
 
-// parseContainerState parses a container state string
-func parseContainerState(state string) (platformv1.ContainerState, bool) {
-	switch strings.ToUpper(strings.TrimSpace(state)) {
-	case "CREATED":
-		return platformv1.ContainerState_CONTAINER_STATE_CREATED, true
-	case "STARTING":
-		return platformv1.ContainerState_CONTAINER_STATE_STARTING, true
-	case "RUNNING":
-		return platformv1.ContainerState_CONTAINER_STATE_RUNNING, true
-	case "PAUSED":
-		return platformv1.ContainerState_CONTAINER_STATE_PAUSED, true
-	case "STOPPING":
-		return platformv1.ContainerState_CONTAINER_STATE_STOPPING, true
-	case "STOPPED":
-		return platformv1.ContainerState_CONTAINER_STATE_STOPPED, true
-	case "EXITED":
-		return platformv1.ContainerState_CONTAINER_STATE_EXITED, true
-	case "ERROR":
-		return platformv1.ContainerState_CONTAINER_STATE_ERROR, true
-	default:
-		return platformv1.ContainerState_CONTAINER_STATE_UNSPECIFIED, false
-	}
+// parseContainerState parses a container state string to a domain ContainerState
+func parseContainerState(state string) (computesvc.ContainerState, bool) {
+	return computesvc.ParseContainerState(state)
 }
 
 // truncateID truncates a container ID for display

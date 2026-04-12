@@ -18,31 +18,30 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestFormatTimestamp(t *testing.T) {
-	t.Run("nil timestamp", func(t *testing.T) {
-		result := formatTimestamp(nil)
+	t.Run("zero time", func(t *testing.T) {
+		result := formatTimestamp(time.Time{})
 		assert.Equal(t, "N/A", result)
 	})
 
 	t.Run("valid timestamp", func(t *testing.T) {
-		ts := timestamppb.New(time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC))
+		ts := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 		result := formatTimestamp(ts)
 		assert.Equal(t, "2025-06-15T12:00:00Z", result)
 	})
 }
 
-func TestFormatTimestampProto(t *testing.T) {
-	t.Run("nil delegates to formatTimestamp", func(t *testing.T) {
-		result := formatTimestampProto(nil)
+func TestFormatTimestampPtr(t *testing.T) {
+	t.Run("nil delegates to N/A", func(t *testing.T) {
+		result := formatTimestampPtr(nil)
 		assert.Equal(t, "N/A", result)
 	})
 
 	t.Run("valid delegates to formatTimestamp", func(t *testing.T) {
-		ts := timestamppb.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
-		result := formatTimestampProto(ts)
+		ts := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+		result := formatTimestampPtr(&ts)
 		assert.Equal(t, "2024-01-01T00:00:00Z", result)
 	})
 }

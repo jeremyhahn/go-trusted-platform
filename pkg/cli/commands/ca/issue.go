@@ -19,7 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	casvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -98,10 +98,12 @@ func runIssue(flags *cli.CommonFlags, cn, store, algorithm string, keySize, vali
 	}
 	defer base.Close()
 
-	client := base.Client().CA()
-	if client == nil {
+	grpcClient := base.Client().CA()
+	if grpcClient == nil {
 		return ErrCANotInitialized{}
 	}
+
+	sdkClient := casvc.NewClientFromGRPC(grpcClient)
 
 	// Parse key algorithm
 	keyAlg, err := parseKeyAlgorithm(algorithm)
@@ -110,8 +112,8 @@ func runIssue(flags *cli.CommonFlags, cn, store, algorithm string, keySize, vali
 	}
 
 	// Build certificate request
-	certReq := &platformv1.CertificateRequest{
-		Subject: &platformv1.Subject{
+	params := &casvc.IssueCertificateParams{
+		Subject: &casvc.Subject{
 			CommonName: cn,
 		},
 		KeyAlgorithm: keyAlg,
@@ -121,32 +123,28 @@ func runIssue(flags *cli.CommonFlags, cn, store, algorithm string, keySize, vali
 
 	// Add SANs if specified
 	if sansDNS != "" || sansIPs != "" || sansEmail != "" {
-		certReq.Sans = &platformv1.SubjectAlternativeNames{}
+		params.SANs = &casvc.SubjectAlternativeNames{}
 		if sansDNS != "" {
-			certReq.Sans.DnsNames = splitCSV(sansDNS)
+			params.SANs.DNSNames = splitCSV(sansDNS)
 		}
 		if sansIPs != "" {
-			certReq.Sans.IpAddresses = splitCSV(sansIPs)
+			params.SANs.IPAddresses = splitCSV(sansIPs)
 		}
 		if sansEmail != "" {
-			certReq.Sans.EmailAddresses = splitCSV(sansEmail)
+			params.SANs.EmailAddresses = splitCSV(sansEmail)
 		}
 	}
 
 	// Add key usage if specified
 	if keyUsage != "" {
-		certReq.KeyUsage = splitCSV(keyUsage)
+		params.KeyUsage = splitCSV(keyUsage)
 	}
 	if extKeyUsage != "" {
-		certReq.ExtKeyUsage = splitCSV(extKeyUsage)
-	}
-
-	req := &platformv1.IssueCertificateRequest{
-		Request: certReq,
+		params.ExtKeyUsage = splitCSV(extKeyUsage)
 	}
 
 	ctx := base.Context()
-	resp, err := client.IssueCertificate(ctx, req)
+	result, err := sdkClient.IssueCertificateDomain(ctx, params)
 	if err != nil {
 		return ErrIssueCertificateFailed{Reason: err.Error()}
 	}
@@ -155,13 +153,13 @@ func runIssue(flags *cli.CommonFlags, cn, store, algorithm string, keySize, vali
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		if resp.Certificate != nil {
-			printer.PrintSuccess(fmt.Sprintf("Certificate issued successfully: %s", resp.Certificate.Serial))
+		if result.Certificate != nil {
+			printer.PrintSuccess(fmt.Sprintf("Certificate issued successfully: %s", result.Certificate.Serial))
 			fmt.Println()
-			printCertificateDetails(printer, resp.Certificate)
+			printCertificateDetails(printer, result.Certificate)
 		}
 		return nil
 
@@ -171,7 +169,7 @@ func runIssue(flags *cli.CommonFlags, cn, store, algorithm string, keySize, vali
 }
 
 // printCertificateDetails prints full certificate details
-func printCertificateDetails(printer *cli.Printer, cert *platformv1.Certificate) {
+func printCertificateDetails(printer *cli.Printer, cert *casvc.Certificate) {
 	if cert == nil {
 		return
 	}
@@ -184,10 +182,10 @@ func printCertificateDetails(printer *cli.Printer, cert *platformv1.Certificate)
 		}
 	}
 	printer.PrintKeyValue("Issuer", cert.Issuer)
-	printer.PrintKeyValue("Not Before", formatTimestamp(cert.NotBefore))
-	printer.PrintKeyValue("Not After", formatTimestamp(cert.NotAfter))
-	printer.PrintKeyValue("Status", cert.Status.String())
-	printer.PrintKeyValue("Key Algorithm", cert.KeyAlgorithm.String())
+	printer.PrintKeyValue("Not Before", formatTime(cert.NotBefore))
+	printer.PrintKeyValue("Not After", formatTime(cert.NotAfter))
+	printer.PrintKeyValue("Status", string(cert.Status))
+	printer.PrintKeyValue("Key Algorithm", string(cert.KeyAlgorithm))
 	printer.PrintKeyValue("Signature Algorithm", cert.SignatureAlgorithm)
 	printer.PrintKeyValue("Is CA", formatBool(cert.IsCa))
 	if cert.FingerprintSha256 != "" {
@@ -195,23 +193,23 @@ func printCertificateDetails(printer *cli.Printer, cert *platformv1.Certificate)
 	}
 }
 
-// parseKeyAlgorithm parses a key algorithm string to the protobuf enum
-func parseKeyAlgorithm(algorithm string) (platformv1.KeyAlgorithm, error) {
+// parseKeyAlgorithm parses a key algorithm string to the SDK domain type
+func parseKeyAlgorithm(algorithm string) (casvc.KeyAlgorithm, error) {
 	switch strings.ToUpper(algorithm) {
 	case "RSA-2048":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048, nil
+		return casvc.KeyAlgorithmRSA2048, nil
 	case "RSA-3072":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072, nil
+		return casvc.KeyAlgorithmRSA3072, nil
 	case "RSA-4096":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096, nil
+		return casvc.KeyAlgorithmRSA4096, nil
 	case "ECDSA-P256", "EC-P256":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256, nil
+		return casvc.KeyAlgorithmECDSAP256, nil
 	case "ECDSA-P384", "EC-P384":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384, nil
+		return casvc.KeyAlgorithmECDSAP384, nil
 	case "ED25519":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519, nil
+		return casvc.KeyAlgorithmEd25519, nil
 	default:
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED, ErrInvalidKeyAlgorithm{Algorithm: algorithm}
+		return casvc.KeyAlgorithmUnspecified, ErrInvalidKeyAlgorithm{Algorithm: algorithm}
 	}
 }
 

@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 // stopOptions holds the options for the stop command
@@ -73,18 +73,18 @@ func runStop(flags *cli.CommonFlags, containerID string, opts *stopOptions) erro
 	}
 	defer base.Close()
 
-	client := base.Client().Compute()
-	if client == nil {
+	grpcClient := base.Client().Compute()
+	if grpcClient == nil {
 		return ErrContainerClientNotInitialized{}
 	}
 
-	req := &platformv1.StopContainerRequest{
-		Id:             containerID,
-		TimeoutSeconds: opts.timeout,
-	}
+	sdkClient := computesvc.NewClientFromGRPC(grpcClient)
 
 	ctx := base.Context()
-	resp, err := client.StopContainer(ctx, req)
+	status, err := sdkClient.StopContainerDomain(ctx, &computesvc.StopContainerParams{
+		ID:             containerID,
+		TimeoutSeconds: opts.timeout,
+	})
 	if err != nil {
 		return ErrContainerOperationFailed{Operation: "stop", ID: containerID, Err: err}
 	}
@@ -93,13 +93,13 @@ func runStop(flags *cli.CommonFlags, containerID string, opts *stopOptions) erro
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(status)
 
 	case cli.OutputFormatTable:
-		if resp.Status != nil && resp.Status.Success {
+		if status != nil && status.Success {
 			printer.PrintSuccess(fmt.Sprintf("Container stopped successfully: %s", containerID))
-		} else if resp.Status != nil {
-			printer.PrintError(fmt.Sprintf("Failed to stop container: %s", resp.Status.Message))
+		} else if status != nil {
+			printer.PrintError(fmt.Sprintf("Failed to stop container: %s", status.Message))
 		}
 		return nil
 

@@ -19,7 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	casvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -73,10 +73,12 @@ func runVerify(flags *cli.CommonFlags, certPath string, checkCRL, checkExpiry bo
 	}
 	defer base.Close()
 
-	client := base.Client().CA()
-	if client == nil {
+	grpcClient := base.Client().CA()
+	if grpcClient == nil {
 		return ErrCANotInitialized{}
 	}
+
+	sdkClient := casvc.NewClientFromGRPC(grpcClient)
 
 	// Read certificate file
 	certPEM, err := os.ReadFile(certPath)
@@ -84,14 +86,14 @@ func runVerify(flags *cli.CommonFlags, certPath string, checkCRL, checkExpiry bo
 		return ErrVerifyCertificateFailed{Reason: fmt.Sprintf("failed to read certificate: %v", err)}
 	}
 
-	req := &platformv1.VerifyCertificateRequest{
-		CertificatePem:   certPEM,
+	params := &casvc.VerifyCertificateParams{
+		CertificatePEM:   certPEM,
 		VerifyRevocation: checkCRL,
 		VerifyExpiration: checkExpiry,
 	}
 
 	ctx := base.Context()
-	resp, err := client.VerifyCertificate(ctx, req)
+	result, err := sdkClient.VerifyCertificateDomain(ctx, params)
 	if err != nil {
 		return ErrVerifyCertificateFailed{Reason: err.Error()}
 	}
@@ -100,10 +102,10 @@ func runVerify(flags *cli.CommonFlags, certPath string, checkCRL, checkExpiry bo
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		printVerificationResult(printer, resp)
+		printVerificationResult(printer, result)
 		return nil
 
 	default:
@@ -112,8 +114,8 @@ func runVerify(flags *cli.CommonFlags, certPath string, checkCRL, checkExpiry bo
 }
 
 // printVerificationResult prints the verification result
-func printVerificationResult(printer *cli.Printer, resp *platformv1.VerifyCertificateResponse) {
-	if resp.Valid {
+func printVerificationResult(printer *cli.Printer, result *casvc.VerifyCertificateResult) {
+	if result.Valid {
 		printer.PrintSuccess("Certificate is valid")
 	} else {
 		printer.PrintError("Certificate is invalid")
@@ -121,25 +123,25 @@ func printVerificationResult(printer *cli.Printer, resp *platformv1.VerifyCertif
 
 	fmt.Println()
 
-	if len(resp.Chain) > 0 {
+	if len(result.Chain) > 0 {
 		printer.PrintInfo("Certificate Chain:")
-		for i, cert := range resp.Chain {
+		for i, cert := range result.Chain {
 			fmt.Printf("  [%d] %s\n", i, cert)
 		}
 	}
 
-	if len(resp.Errors) > 0 {
+	if len(result.Errors) > 0 {
 		fmt.Println()
 		printer.PrintInfo("Validation Errors:")
-		for _, err := range resp.Errors {
+		for _, err := range result.Errors {
 			fmt.Printf("  - %s\n", err)
 		}
 	}
 
-	if len(resp.Warnings) > 0 {
+	if len(result.Warnings) > 0 {
 		fmt.Println()
 		printer.PrintInfo("Warnings:")
-		for _, warning := range resp.Warnings {
+		for _, warning := range result.Warnings {
 			fmt.Printf("  - %s\n", warning)
 		}
 	}

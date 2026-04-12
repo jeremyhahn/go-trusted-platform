@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	casvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -68,15 +68,15 @@ func runInstall(flags *cli.CommonFlags, includeIntermediates bool) error {
 	}
 	defer base.Close()
 
-	client := base.Client().CA()
-	if client == nil {
+	grpcClient := base.Client().CA()
+	if grpcClient == nil {
 		return ErrCANotInitialized{}
 	}
 
+	sdkClient := casvc.NewClientFromGRPC(grpcClient)
 	ctx := base.Context()
-	resp, err := client.InstallCACertificates(ctx, &platformv1.InstallCACertificatesRequest{
-		IncludeIntermediates: includeIntermediates,
-	})
+
+	result, err := sdkClient.InstallCACertificatesDomain(ctx, includeIntermediates)
 	if err != nil {
 		return ErrInstallCertificatesFailed{Reason: err.Error()}
 	}
@@ -85,14 +85,14 @@ func runInstall(flags *cli.CommonFlags, includeIntermediates bool) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
 		printer.PrintInfo("CA certificates installed successfully")
 		fmt.Println()
-		printer.PrintKeyValue("Certificates Installed", fmt.Sprintf("%d", resp.CertificatesInstalled))
-		if resp.InstallPath != "" {
-			printer.PrintKeyValue("Install Path", resp.InstallPath)
+		printer.PrintKeyValue("Certificates Installed", fmt.Sprintf("%d", result.CertificatesInstalled))
+		if result.InstallPath != "" {
+			printer.PrintKeyValue("Install Path", result.InstallPath)
 		}
 		return nil
 

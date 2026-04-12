@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 
+	tpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tpm"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
@@ -349,20 +350,20 @@ func TestNewEventlogCommand_Flags(t *testing.T) {
 	assert.Equal(t, "text", formatFlag.DefValue)
 }
 
-func TestFormatKeyAlgorithmAll(t *testing.T) {
+func TestKeyAlgorithmStringValues(t *testing.T) {
 	tests := []struct {
-		alg      platformv1.KeyAlgorithm
+		alg      tpmsvc.KeyAlgorithm
 		expected string
 	}{
-		{platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048, "RSA-2048"},
-		{platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072, "RSA-3072"},
-		{platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096, "RSA-4096"},
-		{platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256, "ECDSA-P256"},
-		{platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384, "ECDSA-P384"},
-		{platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521, "ECDSA-P521"},
-		{platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED, "Unknown"},
+		{tpmsvc.KeyAlgorithmRSA2048, "RSA-2048"},
+		{tpmsvc.KeyAlgorithmRSA3072, "RSA-3072"},
+		{tpmsvc.KeyAlgorithmRSA4096, "RSA-4096"},
+		{tpmsvc.KeyAlgorithmECDSAP256, "ECDSA-P256"},
+		{tpmsvc.KeyAlgorithmECDSAP384, "ECDSA-P384"},
+		{tpmsvc.KeyAlgorithmECDSAP521, "ECDSA-P521"},
+		{tpmsvc.KeyAlgorithmUnspecified, "UNSPECIFIED"},
 	}
 	for _, tc := range tests {
-		assert.Equal(t, tc.expected, formatKeyAlgorithm(tc.alg))
+		assert.Equal(t, tc.expected, string(tc.alg))
 	}
 }

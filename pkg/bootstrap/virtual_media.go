@@ -28,15 +28,6 @@ import (
 )
 
 const (
-	// defaultInstallLogTimeout caps how long we wait for a node's
-	// install.log to appear at the bootstrap container's forensic
-	// sink. ISO-based installs on spinning rust can legitimately run
-	// 20+ minutes because of the image write + package unpack + first
-	// boot. 45 minutes is comfortable headroom; if the log never
-	// appears after that, something is genuinely stuck and human
-	// intervention is warranted.
-	defaultInstallLogTimeout = 45 * time.Minute
-
 	// defaultInstallLogPollInterval is how often we re-check the HTTP
 	// install-log endpoint while waiting.
 	defaultInstallLogPollInterval = 10 * time.Second
@@ -52,11 +43,12 @@ const (
 	// after a PowerOn or PowerReset command before declaring the
 	// transition failed. Supermicro X10 BMCs occasionally acknowledge
 	// a power command but leave the chassis unchanged.
-	powerVerifyRetries = 5
+	powerVerifyRetries = 20
 
 	// powerVerifyInterval is the delay between consecutive PowerStatus
-	// polls during post-command verification.
-	powerVerifyInterval = 3 * time.Second
+	// polls during post-command verification. Supermicro X10 BMCs can
+	// take 30+ seconds to respond to power commands.
+	powerVerifyInterval = 5 * time.Second
 
 	// registrationFetchTimeout caps how long we wait for a single
 	// registration.json fetch from the bootstrap server. This is a
@@ -74,7 +66,7 @@ const virtualMediaShareName = "boot"
 // NodeRegistration is the JSON payload that platformd uploads to the
 // bootstrap server at /installs/<hostname>/registration.json after it
 // starts on a freshly-installed node. The IP field is the address
-// platformd is actually listening on — which may differ from the DHCP
+// platformd is actually listening on -- which may differ from the DHCP
 // IP assigned during the installer's live environment.
 type NodeRegistration struct {
 	Hostname  string            `json:"hostname"`
@@ -334,6 +326,11 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 	//    buildHostnameParam) keys the upload path to the node config,
 	//    so the orchestrator and installer agree on where the log
 	//    lives without any DNS in the picture.
+	//
+	//    The poller runs indefinitely until the install log appears or
+	//    the parent context is cancelled (e.g., user presses Ctrl-C).
+	//    There is no artificial timeout -- installs on slow hardware
+	//    with spinning rust can legitimately take a very long time.
 	installURL, urlErr := installLogBaseURL(&o.config.Deployer)
 	if urlErr != nil {
 		o.bestEffortUnmount(ctx, verifyClient, node.Hostname)
@@ -346,19 +343,28 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 		Interval: defaultInstallLogPollInterval,
 		Logger:   o.logger,
 	}
-	installCtx, installCancel := context.WithTimeout(ctx, defaultInstallLogTimeout)
-	defer installCancel()
-	logResult, installErr := poller.Wait(installCtx)
+
+	// Register a deferred power-on so the server is ALWAYS powered on
+	// when this function exits, even if the install log polling fails
+	// or the context is cancelled. Without this, a cancelled poll
+	// leaves the server powered off after the installer's `poweroff`.
+	defer func() {
+		o.deferredPowerOn(ctx, bmcConfig, node.Hostname)
+	}()
+
+	logResult, installErr := poller.Wait(ctx)
 	if installErr != nil && (logResult == nil || !logResult.Found) {
+		logURL := installURL + "/installs/" + node.Hostname + "/install.log"
 		return ErrVirtualMediaBootFailed{
 			Hostname: node.Hostname,
-			Cause:    fmt.Errorf("install log never appeared at %s/installs/%s/install.log: %w", installURL, node.Hostname, installErr),
+			Cause:    ErrInstallLogNotFound{Hostname: node.Hostname, URL: logURL, Cause: installErr},
 		}
 	}
 	if !logResult.Success() {
+		logURL := installURL + "/installs/" + node.Hostname + "/install.log"
 		return ErrVirtualMediaBootFailed{
 			Hostname: node.Hostname,
-			Cause:    fmt.Errorf("installer exited with code %d; see install.log at %s/installs/%s/install.log", logResult.ExitCode, installURL, node.Hostname),
+			Cause:    ErrInstallFailed{Hostname: node.Hostname, ExitCode: logResult.ExitCode, LogURL: logURL},
 		}
 	}
 	o.logger.Info("bootstrap: virtual-media: installer reported success",
@@ -379,7 +385,10 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 	}
 	client, err = o.bmcFactory.NewClient(bmcConfig)
 	if err != nil {
-		return ErrVirtualMediaBootFailed{Hostname: node.Hostname, Cause: fmt.Errorf("reopen BMC client for post-install ops: %w", err)}
+		return ErrVirtualMediaBootFailed{
+			Hostname: node.Hostname,
+			Cause:    ErrBMCReconnect{Hostname: node.Hostname, Operation: "post-install ops", Cause: err},
+		}
 	}
 	// Note: the deferred Close registered in step 2 still holds a
 	// reference to the ORIGINAL client (now closed). Register a new
@@ -459,7 +468,10 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 	}
 	postVerifyClient, postVerifyErr := o.bmcFactory.NewClient(bmcConfig)
 	if postVerifyErr != nil {
-		return ErrVirtualMediaBootFailed{Hostname: node.Hostname, Cause: fmt.Errorf("reopen BMC for post-install power verify: %w", postVerifyErr)}
+		return ErrVirtualMediaBootFailed{
+			Hostname: node.Hostname,
+			Cause:    ErrBMCReconnect{Hostname: node.Hostname, Operation: "post-install power verify", Cause: postVerifyErr},
+		}
 	}
 	defer func() {
 		if closeErr := postVerifyClient.Close(); closeErr != nil {
@@ -534,6 +546,53 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 		}
 	}
 	return nil
+}
+
+// deferredPowerOn ensures the server is powered on when the function exits.
+// It opens a fresh BMC client (the caller's may have timed out after a long
+// install wait), checks the power state, and issues a PowerOn if the server
+// is off. All errors are logged but not propagated -- this is a best-effort
+// safety net, not a flow-control mechanism.
+func (o *Orchestrator) deferredPowerOn(ctx context.Context, bmcConfig *bmc.Config, hostname string) {
+	o.logger.Info("bootstrap: virtual-media: deferred power-on check on exit",
+		slog.String("hostname", hostname))
+
+	powerClient, powerErr := o.bmcFactory.NewClient(bmcConfig)
+	if powerErr != nil {
+		o.logger.Warn("bootstrap: virtual-media: failed to create BMC client for deferred power-on",
+			slog.String("hostname", hostname),
+			slog.String("error", powerErr.Error()))
+		return
+	}
+	defer func() {
+		if closeErr := powerClient.Close(); closeErr != nil {
+			o.logger.Warn("bootstrap: virtual-media: deferred power-on BMC client close failed",
+				slog.String("hostname", hostname),
+				slog.String("error", closeErr.Error()))
+		}
+	}()
+
+	st, stErr := powerClient.PowerStatus(ctx)
+	if stErr != nil {
+		o.logger.Warn("bootstrap: virtual-media: deferred power-on status check failed",
+			slog.String("hostname", hostname),
+			slog.String("error", stErr.Error()))
+		return
+	}
+	if st == bmc.PowerStateOn {
+		o.logger.Info("bootstrap: virtual-media: deferred power-on: server already on",
+			slog.String("hostname", hostname))
+		return
+	}
+
+	o.logger.Info("bootstrap: virtual-media: deferred power-on: server is off, powering on",
+		slog.String("hostname", hostname),
+		slog.String("state", string(st)))
+	if onErr := powerClient.PowerOn(ctx); onErr != nil {
+		o.logger.Warn("bootstrap: virtual-media: deferred power-on failed",
+			slog.String("hostname", hostname),
+			slog.String("error", onErr.Error()))
+	}
 }
 
 // waitForHealthAny polls every candidate address until ONE of them

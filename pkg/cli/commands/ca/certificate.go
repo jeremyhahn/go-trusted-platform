@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	casvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -67,24 +67,26 @@ func runCertificate(flags *cli.CommonFlags, serial string, includePem, includeDe
 	}
 	defer base.Close()
 
-	client := base.Client().CA()
-	if client == nil {
+	grpcClient := base.Client().CA()
+	if grpcClient == nil {
 		return ErrCANotInitialized{}
 	}
 
-	req := &platformv1.GetCertificateRequest{
+	sdkClient := casvc.NewClientFromGRPC(grpcClient)
+	ctx := base.Context()
+
+	params := &casvc.GetCertificateParams{
 		Serial:     serial,
-		IncludePem: includePem || flags.OutputFormat == cli.OutputFormatTable,
-		IncludeDer: includeDer,
+		IncludePEM: includePem || flags.OutputFormat == cli.OutputFormatTable,
+		IncludeDER: includeDer,
 	}
 
-	ctx := base.Context()
-	resp, err := client.GetCertificate(ctx, req)
+	cert, err := sdkClient.GetCertificateDomain(ctx, params)
 	if err != nil {
 		return ErrGetCertificateFailed{Reason: err.Error()}
 	}
 
-	if resp.Certificate == nil {
+	if cert == nil {
 		return ErrCertificateNotFound{Serial: serial}
 	}
 
@@ -92,14 +94,14 @@ func runCertificate(flags *cli.CommonFlags, serial string, includePem, includeDe
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(cert)
 
 	case cli.OutputFormatTable:
-		if includePem && len(resp.Certificate.Pem) > 0 {
-			fmt.Println(string(resp.Certificate.Pem))
+		if includePem && len(cert.Pem) > 0 {
+			fmt.Println(string(cert.Pem))
 			return nil
 		}
-		printCertificateDetails(printer, resp.Certificate)
+		printCertificateDetails(printer, cert)
 		return nil
 
 	default:

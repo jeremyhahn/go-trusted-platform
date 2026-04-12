@@ -18,7 +18,7 @@ import (
 	"net/http"
 	"sync"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
 // mockIAMServiceClient is a mock implementation of IAMServiceClient for testing.
@@ -26,38 +26,58 @@ type mockIAMServiceClient struct {
 	mu sync.Mutex
 
 	// GetUser mock
-	getUserFunc  func(ctx context.Context, req *iampb.GetUserRequest) (*iampb.User, error)
-	getUserCalls []*iampb.GetUserRequest
+	getUserFunc  func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error)
+	getUserCalls []getUserCall
 
-	// ListUsers mock
-	listUsersFunc  func(ctx context.Context, req *iampb.ListUsersRequest) (*iampb.ListUsersResponse, error)
-	listUsersCalls []*iampb.ListUsersRequest
+	// ListUsersByEmail mock
+	listUsersByEmailFunc  func(ctx context.Context, tenantID, email string) ([]sdkiam.User, error)
+	listUsersEmailCalls   []listUsersEmailCall
+}
+
+type getUserCall struct {
+	TenantID string
+	UserID   string
+}
+
+// listUsersEmailCall records a call to ListUsersByEmail.
+// Email field is exposed so tests can inspect it directly (e.g. listUsersCalls[0].Email).
+type listUsersEmailCall struct {
+	TenantID string
+	Email    string
 }
 
 func newMockIAMServiceClient() *mockIAMServiceClient {
 	return &mockIAMServiceClient{}
 }
 
-func (m *mockIAMServiceClient) GetUser(ctx context.Context, req *iampb.GetUserRequest) (*iampb.User, error) {
+func (m *mockIAMServiceClient) GetUser(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
 	m.mu.Lock()
-	m.getUserCalls = append(m.getUserCalls, req)
+	m.getUserCalls = append(m.getUserCalls, getUserCall{TenantID: tenantID, UserID: userID})
 	m.mu.Unlock()
 
 	if m.getUserFunc != nil {
-		return m.getUserFunc(ctx, req)
+		return m.getUserFunc(ctx, tenantID, userID)
 	}
-	return nil, ErrUserNotFound{Identifier: req.UserId}
+	return nil, ErrUserNotFound{Identifier: userID}
 }
 
-func (m *mockIAMServiceClient) ListUsers(ctx context.Context, req *iampb.ListUsersRequest) (*iampb.ListUsersResponse, error) {
+func (m *mockIAMServiceClient) ListUsersByEmail(ctx context.Context, tenantID, email string) ([]sdkiam.User, error) {
 	m.mu.Lock()
-	m.listUsersCalls = append(m.listUsersCalls, req)
+	m.listUsersEmailCalls = append(m.listUsersEmailCalls, listUsersEmailCall{TenantID: tenantID, Email: email})
 	m.mu.Unlock()
 
-	if m.listUsersFunc != nil {
-		return m.listUsersFunc(ctx, req)
+	if m.listUsersByEmailFunc != nil {
+		return m.listUsersByEmailFunc(ctx, tenantID, email)
 	}
-	return &iampb.ListUsersResponse{Users: []*iampb.User{}}, nil
+	return []sdkiam.User{}, nil
+}
+
+// listUsersCalls returns the email call records, aliased for backward compatibility
+// with tests that reference iamService.listUsersCalls[0].Email.
+func (m *mockIAMServiceClient) getListUsersCalls() []listUsersEmailCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.listUsersEmailCalls
 }
 
 // mockPEPServiceClient is a mock implementation of PEPServiceClient for testing.
@@ -65,19 +85,19 @@ type mockPEPServiceClient struct {
 	mu sync.Mutex
 
 	// Check mock
-	checkFunc  func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error)
-	checkCalls []*iampb.CheckRequest
+	checkFunc  func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error)
+	checkCalls []*sdkiam.CheckRequest
 
 	// CheckBatch mock
-	checkBatchFunc  func(ctx context.Context, req *iampb.CheckBatchRequest) (*iampb.CheckBatchResponse, error)
-	checkBatchCalls []*iampb.CheckBatchRequest
+	checkBatchFunc  func(ctx context.Context, req *sdkiam.CheckBatchRequest) (*sdkiam.CheckBatchResponse, error)
+	checkBatchCalls []*sdkiam.CheckBatchRequest
 }
 
 func newMockPEPServiceClient() *mockPEPServiceClient {
 	return &mockPEPServiceClient{}
 }
 
-func (m *mockPEPServiceClient) Check(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
+func (m *mockPEPServiceClient) Check(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 	m.mu.Lock()
 	m.checkCalls = append(m.checkCalls, req)
 	m.mu.Unlock()
@@ -85,10 +105,10 @@ func (m *mockPEPServiceClient) Check(ctx context.Context, req *iampb.CheckReques
 	if m.checkFunc != nil {
 		return m.checkFunc(ctx, req)
 	}
-	return &iampb.CheckResponse{Allowed: true}, nil
+	return &sdkiam.CheckResponse{Allowed: true}, nil
 }
 
-func (m *mockPEPServiceClient) CheckBatch(ctx context.Context, req *iampb.CheckBatchRequest) (*iampb.CheckBatchResponse, error) {
+func (m *mockPEPServiceClient) CheckBatch(ctx context.Context, req *sdkiam.CheckBatchRequest) (*sdkiam.CheckBatchResponse, error) {
 	m.mu.Lock()
 	m.checkBatchCalls = append(m.checkBatchCalls, req)
 	m.mu.Unlock()
@@ -96,11 +116,7 @@ func (m *mockPEPServiceClient) CheckBatch(ctx context.Context, req *iampb.CheckB
 	if m.checkBatchFunc != nil {
 		return m.checkBatchFunc(ctx, req)
 	}
-	results := make([]bool, len(req.Resources))
-	for i := range results {
-		results[i] = true
-	}
-	return &iampb.CheckBatchResponse{Results: results}, nil
+	return &sdkiam.CheckBatchResponse{AllAllowed: true}, nil
 }
 
 // mockHttpWriter is a mock implementation of response.HttpWriter for testing.

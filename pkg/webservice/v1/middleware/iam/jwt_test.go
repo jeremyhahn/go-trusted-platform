@@ -24,7 +24,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -717,13 +717,13 @@ func TestJWTMiddleware_GenerateToken(t *testing.T) {
 		}
 		middleware, _ := NewJWTMiddleware(logger, httpWriter, config, nil)
 
-		session := NewIAMSessionWithMFA(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
-			Email:    "user@example.com",
-			Name:     "Test User",
-			Roles:    []string{"admin"},
-			Groups:   []string{"developers"},
+		session := NewIAMSessionWithMFA(&sdkiam.User{
+			ID:          "user-123",
+			TenantID:    "tenant-456",
+			Email:       "user@example.com",
+			DisplayName: "Test User",
+			Roles:       []string{"admin"},
+			Groups:      []string{"developers"},
 		}, true, time.Now())
 
 		tokenString, err := middleware.GenerateToken(session, time.Hour)
@@ -761,9 +761,9 @@ func TestJWTMiddleware_GenerateToken(t *testing.T) {
 		}
 		middleware, _ := NewJWTMiddleware(logger, httpWriter, config, nil)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		_, err := middleware.GenerateToken(session, time.Hour)
@@ -782,12 +782,11 @@ func TestJWTMiddleware_RefreshToken(t *testing.T) {
 	t.Run("refreshes_valid_token", func(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
-		iamService.getUserFunc = func(ctx context.Context, req *iampb.GetUserRequest) (*iampb.User, error) {
-			return &iampb.User{
-				Id:       req.UserId,
-				TenantId: req.TenantId,
+		iamService.getUserFunc = func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
+			return &sdkiam.User{
+				ID:       userID,
+				TenantID: tenantID,
 				Email:    "user@example.com",
-				Name:     "Test User",
 				Roles:    []string{"user"},
 			}, nil
 		}
@@ -841,8 +840,8 @@ func TestJWTMiddleware_RefreshToken(t *testing.T) {
 	t.Run("rejects_when_user_not_found", func(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
-		iamService.getUserFunc = func(ctx context.Context, req *iampb.GetUserRequest) (*iampb.User, error) {
-			return nil, ErrUserNotFound{Identifier: req.UserId}
+		iamService.getUserFunc = func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
+			return nil, ErrUserNotFound{Identifier: userID}
 		}
 
 		config := JWTConfig{

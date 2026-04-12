@@ -24,7 +24,7 @@ import (
 	"sync"
 	"testing"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -409,9 +409,9 @@ func TestLogAuthzDecision(t *testing.T) {
 			WithAuthzAuditLogger(auditLog))
 		require.NoError(t, err)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-1",
-			TenantId: "tenant-1",
+		session := NewIAMSession(&iamsdk.User{
+			ID:       "user-1",
+			TenantID: "tenant-1",
 			Email:    "test@example.com",
 			Roles:    []string{"admin"},
 		})
@@ -441,9 +441,9 @@ func TestLogAuthzDecision(t *testing.T) {
 			WithAuthzAuditLogger(auditLog))
 		require.NoError(t, err)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-2",
-			TenantId: "tenant-2",
+		session := NewIAMSession(&iamsdk.User{
+			ID:       "user-2",
+			TenantID: "tenant-2",
 		})
 
 		ctx := context.Background()
@@ -462,9 +462,9 @@ func TestLogAuthzDecision(t *testing.T) {
 		mw, err := NewAuthzMiddleware(logger, newMockHttpWriter(), config, pepClient)
 		require.NoError(t, err)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-3",
-			TenantId: "tenant-3",
+		session := NewIAMSession(&iamsdk.User{
+			ID:       "user-3",
+			TenantID: "tenant-3",
 		})
 
 		ctx := context.Background()
@@ -483,9 +483,9 @@ func TestLogAuthzDecision(t *testing.T) {
 			WithAuthzAuditLogger(auditLog))
 		require.NoError(t, err)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-4",
-			TenantId: "tenant-4",
+		session := NewIAMSession(&iamsdk.User{
+			ID:       "user-4",
+			TenantID: "tenant-4",
 		})
 
 		ctx := context.Background()

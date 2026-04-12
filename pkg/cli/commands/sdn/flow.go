@@ -16,13 +16,11 @@ package sdn
 import (
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	sdnclient "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
+	sdnsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
 )
 
 // ErrInvalidFlowActionType indicates an unrecognized flow action type string.
@@ -32,46 +30,6 @@ type ErrInvalidFlowActionType struct {
 
 func (e ErrInvalidFlowActionType) Error() string {
 	return fmt.Sprintf("invalid flow action type: %s (valid: output, normal, flood, drop, set_vlan, strip_vlan, set_field, goto_table, controller)", e.Type)
-}
-
-// flowActionTypeMap provides O(1) lookup from CLI string to protobuf enum.
-var flowActionTypeMap = map[string]platformv1.FlowActionType{
-	"output":     platformv1.FlowActionType_FLOW_ACTION_OUTPUT,
-	"drop":       platformv1.FlowActionType_FLOW_ACTION_DROP,
-	"set_vlan":   platformv1.FlowActionType_FLOW_ACTION_SET_VLAN,
-	"strip_vlan": platformv1.FlowActionType_FLOW_ACTION_STRIP_VLAN,
-	"set_field":  platformv1.FlowActionType_FLOW_ACTION_SET_FIELD,
-	"goto_table": platformv1.FlowActionType_FLOW_ACTION_GOTO_TABLE,
-	"controller": platformv1.FlowActionType_FLOW_ACTION_CONTROLLER,
-	"normal":     platformv1.FlowActionType_FLOW_ACTION_OUTPUT,
-	"flood":      platformv1.FlowActionType_FLOW_ACTION_OUTPUT,
-}
-
-// parseFlowActionType converts a CLI action type string to the protobuf enum.
-func parseFlowActionType(s string) (platformv1.FlowActionType, error) {
-	at, ok := flowActionTypeMap[strings.ToLower(s)]
-	if !ok {
-		return platformv1.FlowActionType_FLOW_ACTION_UNSPECIFIED, ErrInvalidFlowActionType{Type: s}
-	}
-	return at, nil
-}
-
-// flowTableMap provides O(1) lookup from table number to protobuf enum.
-var flowTableMap = map[int]platformv1.FlowTable{
-	0:   platformv1.FlowTable_FLOW_TABLE_0,
-	1:   platformv1.FlowTable_FLOW_TABLE_1,
-	2:   platformv1.FlowTable_FLOW_TABLE_2,
-	3:   platformv1.FlowTable_FLOW_TABLE_3,
-	255: platformv1.FlowTable_FLOW_TABLE_DROP,
-}
-
-// parseFlowTable converts a table number to the protobuf enum.
-func parseFlowTable(table int) platformv1.FlowTable {
-	ft, ok := flowTableMap[table]
-	if !ok {
-		return platformv1.FlowTable_FLOW_TABLE_UNSPECIFIED
-	}
-	return ft
 }
 
 // NewFlowCommand creates the flow subcommand
@@ -222,10 +180,10 @@ func runFlowAdd(flags *cli.CommonFlags, bridgeID, flowID string, table, priority
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
-	// Build flow match
-	match := &platformv1.FlowMatch{}
+	// Build flow match using domain types
+	match := &sdnsvc.FlowMatch{}
 	if inPort > 0 {
 		match.InPort = strconv.Itoa(inPort)
 	}
@@ -239,20 +197,20 @@ func runFlowAdd(flags *cli.CommonFlags, bridgeID, flowID string, table, priority
 		match.EthType = uint32(dlType)
 	}
 	if nwSrc != "" {
-		match.IpSrc = nwSrc
+		match.IPSrc = nwSrc
 	}
 	if nwDst != "" {
-		match.IpDst = nwDst
+		match.IPDst = nwDst
 	}
 
-	// Build flow actions
-	var flowActions []*platformv1.FlowAction
+	// Build flow actions using domain types
+	var flowActions []*sdnsvc.FlowAction
 	for _, actionStr := range actions {
-		actionType, parseErr := parseFlowActionType(actionStr)
-		if parseErr != nil {
-			return parseErr
+		actionType, ok := sdnsvc.ParseFlowActionType(actionStr)
+		if !ok {
+			return ErrInvalidFlowActionType{Type: actionStr}
 		}
-		action := &platformv1.FlowAction{
+		action := &sdnsvc.FlowAction{
 			Type: actionType,
 		}
 		if actionPort > 0 {
@@ -261,9 +219,9 @@ func runFlowAdd(flags *cli.CommonFlags, bridgeID, flowID string, table, priority
 		flowActions = append(flowActions, action)
 	}
 
-	config := &platformv1.FlowConfig{
-		BridgeId: bridgeID,
-		Table:    parseFlowTable(table),
+	config := &sdnsvc.FlowConfig{
+		BridgeID: bridgeID,
+		Table:    sdnsvc.ParseFlowTable(table),
 		Priority: uint32(priority),
 		Match:    match,
 		Actions:  flowActions,
@@ -274,7 +232,7 @@ func runFlowAdd(flags *cli.CommonFlags, bridgeID, flowID string, table, priority
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	resp, err := sdnClient.AddFlow(ctx, config)
+	resp, err := sdkClient.AddFlowDomain(ctx, config)
 	if err != nil {
 		return &cli.ErrOperationFailed{Operation: "flow add", Err: err}
 	}
@@ -289,11 +247,11 @@ func runFlowDelete(flags *cli.CommonFlags, bridgeID, flowID string) error {
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	if err := sdnClient.DeleteFlow(ctx, bridgeID, flowID); err != nil {
+	if err := sdkClient.DeleteFlow(ctx, bridgeID, flowID); err != nil {
 		return &cli.ErrOperationFailed{Operation: "flow delete", Err: err}
 	}
 
@@ -313,23 +271,16 @@ func runFlowList(flags *cli.CommonFlags, bridgeID string, table, limit int, curs
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
-	flowTable := platformv1.FlowTable_FLOW_TABLE_UNSPECIFIED
+	flowTable := sdnsvc.FlowTableUnspecified
 	if table >= 0 {
-		flowTable = parseFlowTable(table)
-	}
-
-	var pagination *platformv1.PaginationRequest
-	if limit > 0 || cursor != "" {
-		pagination = &platformv1.PaginationRequest{
-			PageSize: uint32(limit),
-		}
+		flowTable = sdnsvc.ParseFlowTable(table)
 	}
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	resp, _, err := sdnClient.ListFlows(ctx, bridgeID, flowTable, pagination)
+	resp, _, err := sdkClient.ListFlowsDomain(ctx, bridgeID, flowTable, uint32(limit))
 	if err != nil {
 		return &cli.ErrOperationFailed{Operation: "flow list", Err: err}
 	}

@@ -19,7 +19,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
@@ -37,20 +36,6 @@ type createOptions struct {
 	networkBridge string
 	label         []string
 	start         bool
-}
-
-// stringToFirmwareType maps firmware string values to FirmwareType enum values
-var stringToFirmwareType = map[string]platformv1.FirmwareType{
-	"bios":             platformv1.FirmwareType_FIRMWARE_TYPE_BIOS,
-	"uefi":             platformv1.FirmwareType_FIRMWARE_TYPE_UEFI,
-	"uefi-secure-boot": platformv1.FirmwareType_FIRMWARE_TYPE_UEFI_SECURE_BOOT,
-}
-
-// stringToBootDevice maps boot device string values to BootDevice enum values
-var stringToBootDevice = map[string]platformv1.BootDevice{
-	"disk":    platformv1.BootDevice_BOOT_DEVICE_DISK,
-	"cdrom":   platformv1.BootDevice_BOOT_DEVICE_CDROM,
-	"network": platformv1.BootDevice_BOOT_DEVICE_NETWORK,
 }
 
 // newCreateCommand creates the compute create subcommand
@@ -122,10 +107,12 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 	}
 	defer base.Close()
 
-	client := base.Client().Compute()
-	if client == nil {
+	grpcClient := base.Client().Compute()
+	if grpcClient == nil {
 		return ErrComputeClientNotInitialized{}
 	}
+
+	sdkClient := computesvc.NewClientFromGRPC(grpcClient)
 
 	// Parse labels
 	labels := make(map[string]string)
@@ -137,41 +124,34 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 		labels[parts[0]] = parts[1]
 	}
 
-	// Map firmware string to enum
-	fw, ok := stringToFirmwareType[strings.ToLower(opts.firmware)]
+	// Map firmware string to domain type
+	fw, ok := computesvc.StringToFirmwareType[strings.ToLower(opts.firmware)]
 	if !ok {
 		return ErrInvalidVMConfig{Field: "firmware", Reason: "must be bios, uefi, or uefi-secure-boot"}
 	}
 
-	// Map boot device string to enum
-	bd, ok := stringToBootDevice[strings.ToLower(opts.bootDevice)]
+	// Map boot device string to domain type
+	bd, ok := computesvc.StringToBootDevice[strings.ToLower(opts.bootDevice)]
 	if !ok {
 		return ErrInvalidVMConfig{Field: "boot-device", Reason: "must be disk, cdrom, or network"}
 	}
 
-	config := &platformv1.VMConfig{
-		Name:       opts.name,
-		Firmware:   fw,
-		BootDevice: bd,
-		Cpu:        &platformv1.CPUConfig{Cores: opts.cpus},
-		Memory:     &platformv1.MemoryConfig{SizeMb: opts.memory},
-		Disks:      []*platformv1.DiskConfig{{SizeGb: opts.diskSize, Bootable: true}},
-		SecureBoot: opts.secureBoot,
-		Tpm:        &platformv1.TPMConfig{Enabled: opts.tpm},
-		Labels:     labels,
-	}
-
-	if opts.networkBridge != "" {
-		config.Networks = []*platformv1.NetworkConfig{{Bridge: opts.networkBridge}}
-	}
-
-	req := &platformv1.CreateVMRequest{
-		Config: config,
-		Start:  opts.start,
+	params := &computesvc.CreateVMParams{
+		Name:          opts.name,
+		Firmware:      fw,
+		BootDevice:    bd,
+		CPUs:          opts.cpus,
+		MemoryMB:      opts.memory,
+		DiskSizeGB:    opts.diskSize,
+		SecureBoot:    opts.secureBoot,
+		TPM:           opts.tpm,
+		Start:         opts.start,
+		NetworkBridge: opts.networkBridge,
+		Labels:        labels,
 	}
 
 	ctx := base.Context()
-	resp, err := client.CreateVM(ctx, req)
+	vm, err := sdkClient.CreateVMDomain(ctx, params)
 	if err != nil {
 		return ErrVMOperationFailed{Operation: "create", ID: opts.name, Err: err}
 	}
@@ -180,12 +160,12 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(vm)
 
 	case cli.OutputFormatTable:
-		printer.PrintSuccess(fmt.Sprintf("VM created successfully: %s", resp.Vm.Id))
+		printer.PrintSuccess(fmt.Sprintf("VM created successfully: %s", vm.ID))
 		fmt.Println()
-		printVMDetails(printer, resp.Vm)
+		printVMDetails(printer, vm)
 		return nil
 
 	default:
@@ -194,29 +174,29 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 }
 
 // printVMDetails prints basic VM details in a formatted way
-func printVMDetails(printer *cli.Printer, vm *platformv1.VM) {
+func printVMDetails(printer *cli.Printer, vm *computesvc.VM) {
 	if vm == nil {
 		return
 	}
 
-	printer.PrintKeyValue("ID", vm.Id)
+	printer.PrintKeyValue("ID", vm.ID)
 	if vm.Config != nil {
 		printer.PrintKeyValue("Name", vm.Config.Name)
-		printer.PrintKeyValue("Firmware", formatFirmwareType(computesvc.FirmwareTypeFromProto(vm.Config.Firmware)))
-		if vm.Config.Cpu != nil {
-			printer.PrintKeyValue("CPUs", fmt.Sprintf("%d", vm.Config.Cpu.Cores))
+		printer.PrintKeyValue("Firmware", formatFirmwareType(vm.Config.Firmware))
+		if vm.Config.CPU != nil {
+			printer.PrintKeyValue("CPUs", fmt.Sprintf("%d", vm.Config.CPU.Cores))
 		}
 		if vm.Config.Memory != nil {
-			printer.PrintKeyValue("Memory", fmt.Sprintf("%d MB", vm.Config.Memory.SizeMb))
+			printer.PrintKeyValue("Memory", fmt.Sprintf("%d MB", vm.Config.Memory.SizeMB))
 		}
 		if len(vm.Config.Disks) > 0 {
-			printer.PrintKeyValue("Disk", fmt.Sprintf("%d GB", vm.Config.Disks[0].SizeGb))
+			printer.PrintKeyValue("Disk", fmt.Sprintf("%d GB", vm.Config.Disks[0].SizeGB))
 		}
 		printer.PrintKeyValue("Secure Boot", formatBool(vm.Config.SecureBoot))
-		if vm.Config.Tpm != nil {
-			printer.PrintKeyValue("vTPM", formatBool(vm.Config.Tpm.Enabled))
+		if vm.Config.TPM != nil {
+			printer.PrintKeyValue("vTPM", formatBool(vm.Config.TPM.Enabled))
 		}
 	}
-	printer.PrintKeyValue("State", formatVMState(computesvc.VMStateFromProto(vm.State)))
-	printer.PrintKeyValue("Created", formatTimestamp(vm.CreatedAt.AsTime()))
+	printer.PrintKeyValue("State", formatVMState(vm.State))
+	printer.PrintKeyValue("Created", formatTimestamp(vm.CreatedAt))
 }

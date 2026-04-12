@@ -21,7 +21,8 @@ import (
 
 	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	tpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tpm"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -135,31 +136,20 @@ func runClear(flags *cli.CommonFlags, ownerPassword string) error {
 func runClearWithClient(base TPMBaseCommandInterface, ownerPassword string) error {
 	defer base.Close()
 
-	req := &platformv1.TPMClearRequest{
-		OwnerPassword: ownerPassword,
-		Confirm:       true,
-	}
+	sdkClient := tpmsvc.NewClientFromGRPC(base.TPMClient())
 
 	ctx := base.Context()
-	resp, err := base.TPMClient().Clear(ctx, req)
+	err := sdkClient.Clear(ctx, ownerPassword, true)
 	if err != nil {
 		return ErrTPMClearFailed{Reason: err.Error()}
-	}
-
-	if resp.Status == nil || !resp.Status.Success {
-		msg := "unknown error"
-		if resp.Status != nil && resp.Status.Message != "" {
-			msg = resp.Status.Message
-		}
-		return ErrTPMClearFailed{Reason: msg}
 	}
 
 	printer := base.Printer()
 	flags := base.Flags()
 
 	output := map[string]interface{}{
-		"success": resp.Status.Success,
-		"message": resp.Status.Message,
+		"success": true,
+		"message": "TPM cleared successfully",
 	}
 
 	switch flags.OutputFormat {

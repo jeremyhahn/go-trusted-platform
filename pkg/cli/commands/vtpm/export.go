@@ -15,12 +15,11 @@ package vtpm
 
 import (
 	"fmt"
-	"io"
 	"os"
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -91,51 +90,30 @@ func runExport(flags *cli.CommonFlags, bundleID string, output string, overwrite
 	}
 	defer base.Close()
 
-	client := base.Client().VTPM()
-	if client == nil {
-		return ErrVTPMNotAvailable{}
-	}
+	sdkClient := vtpmsvc.NewClientFromGRPC(base.Client().VTPM())
 
 	printer := base.Printer()
-
-	req := &platformv1.ExportBundleRequest{
-		Id: bundleID,
-	}
-
-	ctx := base.Context()
-	stream, err := client.ExportBundle(ctx, req)
-	if err != nil {
-		return ErrExportBundleFailed{Reason: err.Error()}
-	}
 
 	// Create output file
 	file, err := os.Create(output)
 	if err != nil {
 		return ErrCreateOutputFileFailed{Path: output, Reason: err.Error()}
 	}
-	defer file.Close()
 
-	// Stream data to file
+	ctx := base.Context()
+	exportErr := sdkClient.ExportBundleDomain(ctx, bundleID, file)
+
+	// Get file size before potentially closing on error
+	fi, _ := file.Stat()
 	var totalBytes int64
-	for {
-		resp, recvErr := stream.Recv()
-		if recvErr == io.EOF {
-			break
-		}
-		if recvErr != nil {
-			// Clean up partial file on error
-			file.Close()
-			os.Remove(output)
-			return ErrExportBundleFailed{Reason: recvErr.Error()}
-		}
+	if fi != nil {
+		totalBytes = fi.Size()
+	}
+	file.Close()
 
-		n, writeErr := file.Write(resp.Data)
-		if writeErr != nil {
-			file.Close()
-			os.Remove(output)
-			return ErrExportBundleFailed{Reason: writeErr.Error()}
-		}
-		totalBytes += int64(n)
+	if exportErr != nil {
+		os.Remove(output)
+		return ErrExportBundleFailed{Reason: exportErr.Error()}
 	}
 
 	switch flags.OutputFormat {

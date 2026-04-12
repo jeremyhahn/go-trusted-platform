@@ -77,10 +77,10 @@ func (dm *diskManager) CreatePartitionTable(ctx context.Context, table Partition
 	if wipeOut, wipeErr := wipeCmd.CombinedOutput(); wipeErr != nil {
 		dm.logger.Warn("[DISK] dd wipe failed (continuing)", "output", strings.TrimSpace(string(wipeOut)), "error", wipeErr)
 	}
-	// Also wipe the end of the disk where the backup GPT header lives
-	wipeEndCmd := exec.CommandContext(ctx, "sgdisk", "--zap-all", dm.config.Device)
+	// Also wipe the backup GPT header at the end of disk (if wipefs is available)
+	wipeEndCmd := exec.CommandContext(ctx, "wipefs", "--all", "--force", dm.config.Device)
 	if wipeEndOut, wipeEndErr := wipeEndCmd.CombinedOutput(); wipeEndErr != nil {
-		dm.logger.Warn("[DISK] sgdisk zap failed (continuing)", "output", strings.TrimSpace(string(wipeEndOut)), "error", wipeEndErr)
+		dm.logger.Warn("[DISK] wipefs failed (continuing)", "output", strings.TrimSpace(string(wipeEndOut)), "error", wipeEndErr)
 	}
 
 	// Create partition table using parted

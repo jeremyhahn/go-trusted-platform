@@ -16,21 +16,22 @@ package iam
 import (
 	"strings"
 	"time"
-
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// formatTimestamp formats a protobuf timestamp for display
-func formatTimestamp(ts *timestamppb.Timestamp) string {
-	if ts == nil {
+// formatTimestamp formats a time.Time for display
+func formatTimestamp(t time.Time) string {
+	if t.IsZero() {
 		return "N/A"
 	}
-	return ts.AsTime().UTC().Format(time.RFC3339)
+	return t.UTC().Format(time.RFC3339)
 }
 
-// formatTimestampProto is an alias for formatTimestamp for consistency
-func formatTimestampProto(ts *timestamppb.Timestamp) string {
-	return formatTimestamp(ts)
+// formatTimestampPtr formats an optional time.Time for display
+func formatTimestampPtr(t *time.Time) string {
+	if t == nil {
+		return "N/A"
+	}
+	return formatTimestamp(*t)
 }
 
 // formatBool formats a boolean for display

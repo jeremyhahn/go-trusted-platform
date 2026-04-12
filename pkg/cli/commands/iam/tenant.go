@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -192,19 +192,15 @@ func runTenantCreate(flags *cli.CommonFlags, id, name string, maxUsers int32, mf
 	}
 	defer base.Close()
 
-	settings := &platformv1.IAMTenantSettings{
+	settings := &iamsvc.TenantSettings{
 		MaxUsers:    maxUsers,
 		MfaRequired: mfaRequired,
 	}
 
-	req := &platformv1.CreateIAMTenantRequest{
-		Id:       id,
-		Name:     name,
-		Settings: settings,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().CreateTenant(ctx, req)
+
+	tenant, err := sdkClient.CreateTenantDomain(ctx, id, name, settings)
 	if err != nil {
 		return fmt.Errorf("failed to create tenant: %w", err)
 	}
@@ -213,13 +209,13 @@ func runTenantCreate(flags *cli.CommonFlags, id, name string, maxUsers int32, mf
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(tenant)
 
 	case cli.OutputFormatTable:
-		if resp.Tenant != nil {
-			printer.PrintSuccess(fmt.Sprintf("Tenant created successfully: %s", resp.Tenant.Id))
+		if tenant != nil {
+			printer.PrintSuccess(fmt.Sprintf("Tenant created successfully: %s", tenant.ID))
 			fmt.Println()
-			printTenantDetails(printer, resp.Tenant)
+			printTenantDetails(printer, tenant)
 		}
 		return nil
 
@@ -235,12 +231,10 @@ func runTenantGet(flags *cli.CommonFlags, tenantID string) error {
 	}
 	defer base.Close()
 
-	req := &platformv1.GetIAMTenantRequest{
-		TenantId: tenantID,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().GetTenant(ctx, req)
+
+	tenant, err := sdkClient.GetTenantDomain(ctx, tenantID)
 	if err != nil {
 		return fmt.Errorf("failed to get tenant: %w", err)
 	}
@@ -249,11 +243,11 @@ func runTenantGet(flags *cli.CommonFlags, tenantID string) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(tenant)
 
 	case cli.OutputFormatTable:
-		if resp.Tenant != nil {
-			printTenantDetails(printer, resp.Tenant)
+		if tenant != nil {
+			printTenantDetails(printer, tenant)
 		}
 		return nil
 
@@ -269,15 +263,10 @@ func runTenantList(flags *cli.CommonFlags, page, pageSize uint32) error {
 	}
 	defer base.Close()
 
-	req := &platformv1.ListIAMTenantsRequest{
-		Pagination: &platformv1.PaginationRequest{
-			Page:     page,
-			PageSize: pageSize,
-		},
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().ListTenants(ctx, req)
+
+	result, err := sdkClient.ListTenantsDomain(ctx, page, pageSize)
 	if err != nil {
 		return fmt.Errorf("failed to list tenants: %w", err)
 	}
@@ -286,16 +275,16 @@ func runTenantList(flags *cli.CommonFlags, page, pageSize uint32) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		if len(resp.Tenants) == 0 {
+		if len(result.Tenants) == 0 {
 			printer.PrintInfo("No tenants found")
 			return nil
 		}
 
 		table := cli.NewTableData("ID", "Name", "Max Users", "MFA Required", "Created At")
-		for _, tenant := range resp.Tenants {
+		for _, tenant := range result.Tenants {
 			maxUsersStr := "unlimited"
 			mfaStr := "No"
 			if tenant.Settings != nil {
@@ -307,7 +296,7 @@ func runTenantList(flags *cli.CommonFlags, page, pageSize uint32) error {
 				}
 			}
 			table.AddRow(
-				tenant.Id,
+				tenant.ID,
 				tenant.Name,
 				maxUsersStr,
 				mfaStr,
@@ -320,7 +309,7 @@ func runTenantList(flags *cli.CommonFlags, page, pageSize uint32) error {
 		}
 
 		fmt.Println()
-		printer.PrintKeyValue("Total Count", fmt.Sprintf("%d", resp.Total))
+		printer.PrintKeyValue("Total Count", fmt.Sprintf("%d", result.Total))
 		return nil
 
 	default:
@@ -335,23 +324,24 @@ func runTenantUpdate(flags *cli.CommonFlags, id, name string, maxUsers int32, mf
 	}
 	defer base.Close()
 
-	// First get the current tenant to preserve existing settings
-	getReq := &platformv1.GetIAMTenantRequest{TenantId: id}
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	current, err := base.Client().IAM().GetTenant(ctx, getReq)
+
+	// First get the current tenant to preserve existing settings
+	current, err := sdkClient.GetTenantDomain(ctx, id)
 	if err != nil {
 		return fmt.Errorf("failed to get tenant for update: %w", err)
 	}
 
-	if current.Tenant == nil {
+	if current == nil {
 		return fmt.Errorf("tenant not found: %s", id)
 	}
 
 	// Build settings with current values as base
-	settings := &platformv1.IAMTenantSettings{}
-	if current.Tenant.Settings != nil {
-		settings.MaxUsers = current.Tenant.Settings.MaxUsers
-		settings.MfaRequired = current.Tenant.Settings.MfaRequired
+	settings := &iamsvc.TenantSettings{}
+	if current.Settings != nil {
+		settings.MaxUsers = current.Settings.MaxUsers
+		settings.MfaRequired = current.Settings.MfaRequired
 	}
 
 	// Update only specified fields
@@ -363,18 +353,12 @@ func runTenantUpdate(flags *cli.CommonFlags, id, name string, maxUsers int32, mf
 	}
 
 	// Use current name if not specified
-	updateName := current.Tenant.Name
+	updateName := current.Name
 	if name != "" {
 		updateName = name
 	}
 
-	req := &platformv1.UpdateIAMTenantRequest{
-		TenantId: id,
-		Name:     updateName,
-		Settings: settings,
-	}
-
-	resp, err := base.Client().IAM().UpdateTenant(ctx, req)
+	tenant, err := sdkClient.UpdateTenantDomain(ctx, id, updateName, settings)
 	if err != nil {
 		return fmt.Errorf("failed to update tenant: %w", err)
 	}
@@ -383,13 +367,13 @@ func runTenantUpdate(flags *cli.CommonFlags, id, name string, maxUsers int32, mf
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(tenant)
 
 	case cli.OutputFormatTable:
-		if resp.Tenant != nil {
-			printer.PrintSuccess(fmt.Sprintf("Tenant updated successfully: %s", resp.Tenant.Id))
+		if tenant != nil {
+			printer.PrintSuccess(fmt.Sprintf("Tenant updated successfully: %s", tenant.ID))
 			fmt.Println()
-			printTenantDetails(printer, resp.Tenant)
+			printTenantDetails(printer, tenant)
 		}
 		return nil
 
@@ -405,12 +389,10 @@ func runTenantDelete(flags *cli.CommonFlags, tenantID string) error {
 	}
 	defer base.Close()
 
-	req := &platformv1.DeleteIAMTenantRequest{
-		TenantId: tenantID,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().DeleteTenant(ctx, req)
+
+	status, err := sdkClient.DeleteTenantDomain(ctx, tenantID)
 	if err != nil {
 		return fmt.Errorf("failed to delete tenant: %w", err)
 	}
@@ -419,10 +401,10 @@ func runTenantDelete(flags *cli.CommonFlags, tenantID string) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(status)
 
 	case cli.OutputFormatTable:
-		if resp.Status != nil && resp.Status.Success {
+		if status != nil && status.Success {
 			printer.PrintSuccess(fmt.Sprintf("Tenant %s deleted successfully", tenantID))
 		} else {
 			printer.PrintError(fmt.Sprintf("Failed to delete tenant %s", tenantID))
@@ -435,8 +417,8 @@ func runTenantDelete(flags *cli.CommonFlags, tenantID string) error {
 }
 
 // printTenantDetails prints tenant details in a formatted way
-func printTenantDetails(printer *cli.Printer, tenant *platformv1.IAMTenant) {
-	printer.PrintKeyValue("ID", tenant.Id)
+func printTenantDetails(printer *cli.Printer, tenant *iamsvc.Tenant) {
+	printer.PrintKeyValue("ID", tenant.ID)
 	printer.PrintKeyValue("Name", tenant.Name)
 	if tenant.Settings != nil {
 		if tenant.Settings.MaxUsers > 0 {
@@ -448,6 +430,6 @@ func printTenantDetails(printer *cli.Printer, tenant *platformv1.IAMTenant) {
 	}
 	printer.PrintKeyValue("Created At", formatTimestamp(tenant.CreatedAt))
 	if tenant.UpdatedAt != nil {
-		printer.PrintKeyValue("Updated At", formatTimestamp(tenant.UpdatedAt))
+		printer.PrintKeyValue("Updated At", formatTimestampPtr(tenant.UpdatedAt))
 	}
 }

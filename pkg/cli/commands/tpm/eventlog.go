@@ -19,7 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	tpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tpm"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -74,12 +75,10 @@ func runEventlog(flags *cli.CommonFlags, format string) error {
 func runEventlogWithClient(base TPMBaseCommandInterface, format string) error {
 	defer base.Close()
 
-	req := &platformv1.GetEventLogRequest{
-		Format: format,
-	}
+	sdkClient := tpmsvc.NewClientFromGRPC(base.TPMClient())
 
 	ctx := base.Context()
-	resp, err := base.TPMClient().GetEventLog(ctx, req)
+	resp, err := sdkClient.GetEventLogDomain(ctx, format)
 	if err != nil {
 		return ErrEventLogFailed{Reason: err.Error()}
 	}

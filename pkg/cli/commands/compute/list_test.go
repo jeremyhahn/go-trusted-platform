@@ -15,12 +15,11 @@ package compute
 
 import (
 	"bytes"
+	"time"
 	"strings"
 	"testing"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
-
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -106,15 +105,15 @@ func TestParseVMFilters_ValidState(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if selector != nil {
-		t.Error("expected nil selector for state-only filter")
+	if len(selector) != 0 {
+		t.Error("expected empty selector for state-only filter")
 	}
 
 	if len(states) != 1 {
 		t.Fatalf("expected 1 state, got %d", len(states))
 	}
 
-	if states[0] != platformv1.VMState_VM_STATE_RUNNING {
+	if states[0] != computesvc.StateRunning {
 		t.Errorf("expected VM_STATE_RUNNING, got %v", states[0])
 	}
 }
@@ -135,8 +134,8 @@ func TestParseVMFilters_ValidLabel(t *testing.T) {
 		t.Fatal("expected non-nil selector for label filter")
 	}
 
-	if val, ok := selector.MatchLabels["env"]; !ok || val != "prod" {
-		t.Errorf("expected label env=prod, got %v", selector.MatchLabels)
+	if val, ok := selector["env"]; !ok || val != "prod" {
+		t.Errorf("expected label env=prod, got %v", selector)
 	}
 }
 
@@ -152,8 +151,8 @@ func TestParseVMFilters_LabelWithoutValue(t *testing.T) {
 		t.Fatal("expected non-nil selector")
 	}
 
-	if val, ok := selector.MatchLabels["mykey"]; !ok || val != "" {
-		t.Errorf("expected label mykey with empty value, got %v", selector.MatchLabels)
+	if val, ok := selector["mykey"]; !ok || val != "" {
+		t.Errorf("expected label mykey with empty value, got %v", selector)
 	}
 }
 
@@ -204,11 +203,11 @@ func TestParseVMFilters_MultipleFilters(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(states) != 1 || states[0] != platformv1.VMState_VM_STATE_STOPPED {
+	if len(states) != 1 || states[0] != computesvc.StateStopped {
 		t.Errorf("expected VM_STATE_STOPPED, got %v", states)
 	}
 
-	if selector == nil || selector.MatchLabels["env"] != "staging" {
+	if selector == nil || selector["env"] != "staging" {
 		t.Errorf("expected label env=staging, got %v", selector)
 	}
 }
@@ -219,8 +218,8 @@ func TestParseVMFilters_EmptyFilters(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if selector != nil {
-		t.Error("expected nil selector for empty filters")
+	if len(selector) != 0 {
+		t.Error("expected empty selector for empty filters")
 	}
 
 	if len(states) != 0 {
@@ -231,16 +230,16 @@ func TestParseVMFilters_EmptyFilters(t *testing.T) {
 func TestParseVMFilters_AllValidStates(t *testing.T) {
 	validStates := []struct {
 		input    string
-		expected platformv1.VMState
+		expected computesvc.VMState
 	}{
-		{"stopped", platformv1.VMState_VM_STATE_STOPPED},
-		{"starting", platformv1.VMState_VM_STATE_STARTING},
-		{"running", platformv1.VMState_VM_STATE_RUNNING},
-		{"paused", platformv1.VMState_VM_STATE_PAUSED},
-		{"stopping", platformv1.VMState_VM_STATE_STOPPING},
-		{"rebooting", platformv1.VMState_VM_STATE_REBOOTING},
-		{"migrating", platformv1.VMState_VM_STATE_MIGRATING},
-		{"error", platformv1.VMState_VM_STATE_ERROR},
+		{"stopped", computesvc.StateStopped},
+		{"starting", computesvc.StateStarting},
+		{"running", computesvc.StateRunning},
+		{"paused", computesvc.StatePaused},
+		{"stopping", computesvc.StateStopping},
+		{"rebooting", computesvc.StateRebooting},
+		{"migrating", computesvc.StateMigrating},
+		{"error", computesvc.StateError},
 	}
 
 	for _, tt := range validStates {
@@ -261,8 +260,8 @@ func TestPrintVMList_EmptyList(t *testing.T) {
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	resp := &platformv1.ListVMsResponse{
-		Vms: []*platformv1.VM{},
+	resp := &computesvc.ListVMsResult{
+		VMs: []*computesvc.VM{},
 	}
 
 	err := printVMList(printer, resp)
@@ -280,31 +279,29 @@ func TestPrintVMList_WithVMs(t *testing.T) {
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	now := timestamppb.Now()
-
-	resp := &platformv1.ListVMsResponse{
-		Vms: []*platformv1.VM{
+	resp := &computesvc.ListVMsResult{
+		VMs: []*computesvc.VM{
 			{
-				Id:    "vm-001-abcdef123456",
-				State: platformv1.VMState_VM_STATE_RUNNING,
-				Config: &platformv1.VMConfig{
+				ID:    "vm-001-abcdef123456",
+				State: computesvc.StateRunning,
+				Config: &computesvc.VMConfig{
 					Name:     "web-server",
-					Firmware: platformv1.FirmwareType_FIRMWARE_TYPE_UEFI,
-					Cpu:      &platformv1.CPUConfig{Cores: 4},
-					Memory:   &platformv1.MemoryConfig{SizeMb: 4096},
+					Firmware: computesvc.FirmwareUEFI,
+					CPU:      &computesvc.CPUConfig{Cores: 4},
+					Memory:   &computesvc.MemoryConfig{SizeMB: 4096},
 				},
-				CreatedAt: now,
+				CreatedAt: time.Now(),
 			},
 			{
-				Id:    "vm-002-abcdef789012",
-				State: platformv1.VMState_VM_STATE_STOPPED,
-				Config: &platformv1.VMConfig{
+				ID:    "vm-002-abcdef789012",
+				State: computesvc.StateStopped,
+				Config: &computesvc.VMConfig{
 					Name:     "db-server",
-					Firmware: platformv1.FirmwareType_FIRMWARE_TYPE_BIOS,
-					Cpu:      &platformv1.CPUConfig{Cores: 8},
-					Memory:   &platformv1.MemoryConfig{SizeMb: 16384},
+					Firmware: computesvc.FirmwareBIOS,
+					CPU:      &computesvc.CPUConfig{Cores: 8},
+					Memory:   &computesvc.MemoryConfig{SizeMB: 16384},
 				},
-				CreatedAt: now,
+				CreatedAt: time.Now(),
 			},
 		},
 	}
@@ -324,11 +321,11 @@ func TestPrintVMList_WithNilConfig(t *testing.T) {
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	resp := &platformv1.ListVMsResponse{
-		Vms: []*platformv1.VM{
+	resp := &computesvc.ListVMsResult{
+		VMs: []*computesvc.VM{
 			{
-				Id:    "vm-no-config-12345",
-				State: platformv1.VMState_VM_STATE_ERROR,
+				ID:    "vm-no-config-12345",
+				State: computesvc.StateError,
 			},
 		},
 	}
@@ -348,14 +345,14 @@ func TestPrintVMList_WithPartialConfig(t *testing.T) {
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	resp := &platformv1.ListVMsResponse{
-		Vms: []*platformv1.VM{
+	resp := &computesvc.ListVMsResult{
+		VMs: []*computesvc.VM{
 			{
-				Id:    "vm-partial-123456",
-				State: platformv1.VMState_VM_STATE_RUNNING,
-				Config: &platformv1.VMConfig{
+				ID:    "vm-partial-123456",
+				State: computesvc.StateRunning,
+				Config: &computesvc.VMConfig{
 					Name:     "partial-vm",
-					Firmware: platformv1.FirmwareType_FIRMWARE_TYPE_UEFI,
+					Firmware: computesvc.FirmwareUEFI,
 					// No CPU or memory config
 				},
 			},

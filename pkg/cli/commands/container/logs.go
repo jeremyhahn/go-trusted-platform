@@ -16,11 +16,13 @@ package container
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 // logsOptions holds the options for the logs command
@@ -91,11 +93,12 @@ func runLogs(flags *cli.CommonFlags, containerID string, opts *logsOptions) erro
 	}
 	defer base.Close()
 
-	client := base.Client().Compute()
-	if client == nil {
+	grpcClient := base.Client().Compute()
+	if grpcClient == nil {
 		return ErrContainerClientNotInitialized{}
 	}
 
+	// Logs streaming requires direct gRPC client access
 	req := &platformv1.GetContainerLogsRequest{
 		Id:        containerID,
 		Follow:    opts.follow,
@@ -105,7 +108,7 @@ func runLogs(flags *cli.CommonFlags, containerID string, opts *logsOptions) erro
 	}
 
 	ctx := base.Context()
-	stream, err := client.GetContainerLogs(ctx, req)
+	stream, err := grpcClient.GetContainerLogs(ctx, req)
 	if err != nil {
 		return ErrContainerOperationFailed{Operation: "logs", ID: containerID, Err: err}
 	}
@@ -118,12 +121,12 @@ func runLogs(flags *cli.CommonFlags, containerID string, opts *logsOptions) erro
 	}
 
 	// For table format, stream logs directly
-	return streamLogs(printer, stream, opts.timestamps)
+	return streamLogs(stream, opts.timestamps)
 }
 
 // collectAndPrintLogs collects all log entries and prints them in the specified format
 func collectAndPrintLogs(printer *cli.Printer, stream platformv1.ComputeService_GetContainerLogsClient, format cli.OutputFormat) error {
-	var entries []*platformv1.LogEntry
+	var entries []*computesvc.LogEntry
 
 	for {
 		entry, err := stream.Recv()
@@ -133,11 +136,21 @@ func collectAndPrintLogs(printer *cli.Printer, stream platformv1.ComputeService_
 		if err != nil {
 			return ErrContainerOperationFailed{Operation: "logs", ID: "", Err: err}
 		}
-		entries = append(entries, entry)
+
+		var ts time.Time
+		if entry.Timestamp != nil {
+			ts = entry.Timestamp.AsTime()
+		}
+
+		entries = append(entries, &computesvc.LogEntry{
+			Timestamp: ts,
+			Stream:    entry.Source,
+			Message:   entry.Message,
+		})
 	}
 
 	result := struct {
-		Entries []*platformv1.LogEntry `json:"entries" yaml:"entries"`
+		Entries []*computesvc.LogEntry `json:"entries" yaml:"entries"`
 		Count   int                    `json:"count" yaml:"count"`
 	}{
 		Entries: entries,
@@ -148,7 +161,7 @@ func collectAndPrintLogs(printer *cli.Printer, stream platformv1.ComputeService_
 }
 
 // streamLogs streams log entries to the console
-func streamLogs(printer *cli.Printer, stream platformv1.ComputeService_GetContainerLogsClient, showTimestamps bool) error {
+func streamLogs(stream platformv1.ComputeService_GetContainerLogsClient, showTimestamps bool) error {
 	for {
 		entry, err := stream.Recv()
 		if err == io.EOF {
@@ -167,7 +180,7 @@ func streamLogs(printer *cli.Printer, stream platformv1.ComputeService_GetContai
 // printLogEntry prints a single log entry
 func printLogEntry(entry *platformv1.LogEntry, showTimestamp bool) {
 	if showTimestamp && entry.Timestamp != nil {
-		ts := formatTimestamp(entry.Timestamp)
+		ts := entry.Timestamp.AsTime().UTC().Format(time.RFC3339)
 		fmt.Printf("%s %s\n", ts, entry.Message)
 	} else {
 		fmt.Println(entry.Message)

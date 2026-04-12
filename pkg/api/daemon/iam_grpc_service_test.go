@@ -18,432 +18,423 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	clipkg "github.com/jeremyhahn/go-quicbaas/pkg/cli"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // =============================================================================
-// Mock IAMServiceClient
+// Mock IAMServiceClient — implements iam.Client via sub-client delegation
 // =============================================================================
 
+// mockIAMServiceClient holds function fields for all IAM sub-client operations.
+// Sub-client adapter structs delegate each method call to the corresponding
+// function field on this parent struct.
 type mockIAMServiceClient struct {
 	// User operations
-	createUserFunc func(ctx context.Context, in *iampb.CreateUserRequest, opts ...grpc.CallOption) (*iampb.User, error)
-	getUserFunc    func(ctx context.Context, in *iampb.GetUserRequest, opts ...grpc.CallOption) (*iampb.User, error)
-	updateUserFunc func(ctx context.Context, in *iampb.UpdateUserRequest, opts ...grpc.CallOption) (*iampb.User, error)
-	deleteUserFunc func(ctx context.Context, in *iampb.DeleteUserRequest, opts ...grpc.CallOption) (*iampb.DeleteUserResponse, error)
-	listUsersFunc  func(ctx context.Context, in *iampb.ListUsersRequest, opts ...grpc.CallOption) (*iampb.ListUsersResponse, error)
+	createUserFunc func(ctx context.Context, tenantID string, req *sdkiam.CreateUserRequest) (*sdkiam.User, error)
+	getUserFunc    func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error)
+	updateUserFunc func(ctx context.Context, tenantID, userID string, req *sdkiam.UpdateUserRequest) (*sdkiam.User, error)
+	deleteUserFunc func(ctx context.Context, tenantID, userID string) error
+	listUsersFunc  func(ctx context.Context, tenantID string, req *sdkiam.ListUsersRequest) (*sdkiam.ListUsersResponse, error)
+	assignRoleFunc func(ctx context.Context, tenantID, userID, roleID string) error
+	revokeRoleFunc func(ctx context.Context, tenantID, userID, roleID string) error
 
 	// Role operations
-	createRoleFunc func(ctx context.Context, in *iampb.CreateRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error)
-	getRoleFunc    func(ctx context.Context, in *iampb.GetRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error)
-	updateRoleFunc func(ctx context.Context, in *iampb.UpdateRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error)
-	deleteRoleFunc func(ctx context.Context, in *iampb.DeleteRoleRequest, opts ...grpc.CallOption) (*iampb.DeleteRoleResponse, error)
-	listRolesFunc  func(ctx context.Context, in *iampb.ListRolesRequest, opts ...grpc.CallOption) (*iampb.ListRolesResponse, error)
-	assignRoleFunc func(ctx context.Context, in *iampb.AssignRoleRequest, opts ...grpc.CallOption) (*iampb.AssignRoleResponse, error)
-	revokeRoleFunc func(ctx context.Context, in *iampb.RevokeRoleRequest, opts ...grpc.CallOption) (*iampb.RevokeRoleResponse, error)
+	createRoleFunc func(ctx context.Context, tenantID string, req *sdkiam.CreateRoleRequest) (*sdkiam.Role, error)
+	getRoleFunc    func(ctx context.Context, tenantID, roleID string) (*sdkiam.Role, error)
+	updateRoleFunc func(ctx context.Context, tenantID, roleID string, req *sdkiam.UpdateRoleRequest) (*sdkiam.Role, error)
+	deleteRoleFunc func(ctx context.Context, tenantID, roleID string) error
+	listRolesFunc  func(ctx context.Context, tenantID string, req *sdkiam.ListRolesRequest) (*sdkiam.ListRolesResponse, error)
 
 	// Group operations
-	createGroupFunc         func(ctx context.Context, in *iampb.CreateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error)
-	getGroupFunc            func(ctx context.Context, in *iampb.GetGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error)
-	updateGroupFunc         func(ctx context.Context, in *iampb.UpdateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error)
-	deleteGroupFunc         func(ctx context.Context, in *iampb.DeleteGroupRequest, opts ...grpc.CallOption) (*iampb.DeleteGroupResponse, error)
-	listGroupsFunc          func(ctx context.Context, in *iampb.ListGroupsRequest, opts ...grpc.CallOption) (*iampb.ListGroupsResponse, error)
-	addUserToGroupFunc      func(ctx context.Context, in *iampb.AddUserToGroupRequest, opts ...grpc.CallOption) (*iampb.AddUserToGroupResponse, error)
-	removeUserFromGroupFunc func(ctx context.Context, in *iampb.RemoveUserFromGroupRequest, opts ...grpc.CallOption) (*iampb.RemoveUserFromGroupResponse, error)
+	createGroupFunc         func(ctx context.Context, tenantID string, req *sdkiam.CreateGroupRequest) (*sdkiam.Group, error)
+	getGroupFunc            func(ctx context.Context, tenantID, groupID string) (*sdkiam.Group, error)
+	updateGroupFunc         func(ctx context.Context, tenantID, groupID string, req *sdkiam.UpdateGroupRequest) (*sdkiam.Group, error)
+	deleteGroupFunc         func(ctx context.Context, tenantID, groupID string) error
+	listGroupsFunc          func(ctx context.Context, tenantID string, req *sdkiam.ListGroupsRequest) (*sdkiam.ListGroupsResponse, error)
+	addUserToGroupFunc      func(ctx context.Context, tenantID, groupID, userID string) error
+	removeUserFromGroupFunc func(ctx context.Context, tenantID, groupID, userID string) error
 
 	// Tenant operations
-	createTenantFunc func(ctx context.Context, in *iampb.CreateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error)
-	getTenantFunc    func(ctx context.Context, in *iampb.GetTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error)
-	updateTenantFunc func(ctx context.Context, in *iampb.UpdateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error)
-	deleteTenantFunc func(ctx context.Context, in *iampb.DeleteTenantRequest, opts ...grpc.CallOption) (*iampb.DeleteTenantResponse, error)
-	listTenantsFunc  func(ctx context.Context, in *iampb.ListTenantsRequest, opts ...grpc.CallOption) (*iampb.ListTenantsResponse, error)
+	createTenantFunc func(ctx context.Context, req *sdkiam.CreateTenantRequest) (*sdkiam.Tenant, error)
+	getTenantFunc    func(ctx context.Context, tenantID string) (*sdkiam.Tenant, error)
+	updateTenantFunc func(ctx context.Context, tenantID string, req *sdkiam.UpdateTenantRequest) (*sdkiam.Tenant, error)
+	deleteTenantFunc func(ctx context.Context, tenantID string) error
+	listTenantsFunc  func(ctx context.Context, req *sdkiam.ListTenantsRequest) (*sdkiam.ListTenantsResponse, error)
 
 	// Policy operations
-	createPolicyFunc   func(ctx context.Context, in *iampb.CreatePolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error)
-	getPolicyFunc      func(ctx context.Context, in *iampb.GetPolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error)
-	updatePolicyFunc   func(ctx context.Context, in *iampb.UpdatePolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error)
-	deletePolicyFunc   func(ctx context.Context, in *iampb.DeletePolicyRequest, opts ...grpc.CallOption) (*iampb.DeletePolicyResponse, error)
-	listPoliciesFunc   func(ctx context.Context, in *iampb.ListPoliciesRequest, opts ...grpc.CallOption) (*iampb.ListPoliciesResponse, error)
-	validatePolicyFunc func(ctx context.Context, in *iampb.ValidatePolicyRequest, opts ...grpc.CallOption) (*iampb.ValidatePolicyResponse, error)
-	testPolicyFunc     func(ctx context.Context, in *iampb.TestPolicyRequest, opts ...grpc.CallOption) (*iampb.TestPolicyResponse, error)
+	createPolicyFunc   func(ctx context.Context, tenantID string, req *sdkiam.CreatePolicyRequest) (*sdkiam.Policy, error)
+	getPolicyFunc      func(ctx context.Context, tenantID, policyName string) (*sdkiam.Policy, error)
+	updatePolicyFunc   func(ctx context.Context, tenantID, policyName string, req *sdkiam.UpdatePolicyRequest) (*sdkiam.Policy, error)
+	deletePolicyFunc   func(ctx context.Context, tenantID, policyName string) error
+	listPoliciesFunc   func(ctx context.Context, tenantID string, req *sdkiam.ListPoliciesRequest) (*sdkiam.ListPoliciesResponse, error)
+	validatePolicyFunc func(ctx context.Context, tenantID string, policy *sdkiam.Policy) (*sdkiam.ValidationResult, error)
+	testPolicyFunc     func(ctx context.Context, tenantID string, req *sdkiam.TestPolicyRequest) (*sdkiam.TestPolicyResponse, error)
 
 	// App operations
-	registerAppFunc     func(ctx context.Context, in *iampb.RegisterAppRequest, opts ...grpc.CallOption) (*iampb.Application, error)
-	getAppFunc          func(ctx context.Context, in *iampb.GetAppRequest, opts ...grpc.CallOption) (*iampb.Application, error)
-	updateAppFunc       func(ctx context.Context, in *iampb.UpdateAppRequest, opts ...grpc.CallOption) (*iampb.Application, error)
-	deleteAppFunc       func(ctx context.Context, in *iampb.DeleteAppRequest, opts ...grpc.CallOption) (*iampb.DeleteAppResponse, error)
-	listAppsFunc        func(ctx context.Context, in *iampb.ListAppsRequest, opts ...grpc.CallOption) (*iampb.ListAppsResponse, error)
-	rotateAppSecretFunc func(ctx context.Context, in *iampb.RotateAppSecretRequest, opts ...grpc.CallOption) (*iampb.Application, error)
+	registerAppFunc     func(ctx context.Context, tenantID string, req *sdkiam.RegisterAppRequest) (*sdkiam.Application, error)
+	getAppFunc          func(ctx context.Context, tenantID, clientID string) (*sdkiam.Application, error)
+	updateAppFunc       func(ctx context.Context, tenantID, clientID string, req *sdkiam.UpdateAppRequest) (*sdkiam.Application, error)
+	deleteAppFunc       func(ctx context.Context, tenantID, clientID string) error
+	listAppsFunc        func(ctx context.Context, tenantID string) (*sdkiam.ListAppsResponse, error)
+	rotateAppSecretFunc func(ctx context.Context, tenantID, clientID string) (*sdkiam.RotateSecretResponse, error)
 }
 
-func (m *mockIAMServiceClient) CreateUser(ctx context.Context, in *iampb.CreateUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
-	if m.createUserFunc != nil {
-		return m.createUserFunc(ctx, in, opts...)
+// Sub-client adapters
+
+type mockUserSubClient struct{ m *mockIAMServiceClient }
+
+func (c *mockUserSubClient) Create(ctx context.Context, tenantID string, req *sdkiam.CreateUserRequest) (*sdkiam.User, error) {
+	if c.m.createUserFunc != nil {
+		return c.m.createUserFunc(ctx, tenantID, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockUserSubClient) Get(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
+	if c.m.getUserFunc != nil {
+		return c.m.getUserFunc(ctx, tenantID, userID)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockUserSubClient) GetByEmail(ctx context.Context, tenantID, email string) (*sdkiam.User, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockUserSubClient) Update(ctx context.Context, tenantID, userID string, req *sdkiam.UpdateUserRequest) (*sdkiam.User, error) {
+	if c.m.updateUserFunc != nil {
+		return c.m.updateUserFunc(ctx, tenantID, userID, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockUserSubClient) Delete(ctx context.Context, tenantID, userID string) error {
+	if c.m.deleteUserFunc != nil {
+		return c.m.deleteUserFunc(ctx, tenantID, userID)
+	}
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockUserSubClient) List(ctx context.Context, tenantID string, req *sdkiam.ListUsersRequest) (*sdkiam.ListUsersResponse, error) {
+	if c.m.listUsersFunc != nil {
+		return c.m.listUsersFunc(ctx, tenantID, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockUserSubClient) AssignRole(ctx context.Context, tenantID, userID, roleID string) error {
+	if c.m.assignRoleFunc != nil {
+		return c.m.assignRoleFunc(ctx, tenantID, userID, roleID)
+	}
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockUserSubClient) RevokeRole(ctx context.Context, tenantID, userID, roleID string) error {
+	if c.m.revokeRoleFunc != nil {
+		return c.m.revokeRoleFunc(ctx, tenantID, userID, roleID)
+	}
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockUserSubClient) AddToGroup(ctx context.Context, tenantID, userID, groupID string) error {
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockUserSubClient) RemoveFromGroup(ctx context.Context, tenantID, userID, groupID string) error {
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockUserSubClient) Suspend(ctx context.Context, tenantID, userID string) error {
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockUserSubClient) Unsuspend(ctx context.Context, tenantID, userID string) error {
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+
+type mockRoleSubClient struct{ m *mockIAMServiceClient }
+
+func (c *mockRoleSubClient) Create(ctx context.Context, tenantID string, req *sdkiam.CreateRoleRequest) (*sdkiam.Role, error) {
+	if c.m.createRoleFunc != nil {
+		return c.m.createRoleFunc(ctx, tenantID, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockRoleSubClient) Get(ctx context.Context, tenantID, roleID string) (*sdkiam.Role, error) {
+	if c.m.getRoleFunc != nil {
+		return c.m.getRoleFunc(ctx, tenantID, roleID)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockRoleSubClient) Update(ctx context.Context, tenantID, roleID string, req *sdkiam.UpdateRoleRequest) (*sdkiam.Role, error) {
+	if c.m.updateRoleFunc != nil {
+		return c.m.updateRoleFunc(ctx, tenantID, roleID, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockRoleSubClient) Delete(ctx context.Context, tenantID, roleID string) error {
+	if c.m.deleteRoleFunc != nil {
+		return c.m.deleteRoleFunc(ctx, tenantID, roleID)
+	}
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockRoleSubClient) List(ctx context.Context, tenantID string, req *sdkiam.ListRolesRequest) (*sdkiam.ListRolesResponse, error) {
+	if c.m.listRolesFunc != nil {
+		return c.m.listRolesFunc(ctx, tenantID, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMServiceClient) GetUser(ctx context.Context, in *iampb.GetUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
-	if m.getUserFunc != nil {
-		return m.getUserFunc(ctx, in, opts...)
+type mockGroupSubClient struct{ m *mockIAMServiceClient }
+
+func (c *mockGroupSubClient) Create(ctx context.Context, tenantID string, req *sdkiam.CreateGroupRequest) (*sdkiam.Group, error) {
+	if c.m.createGroupFunc != nil {
+		return c.m.createGroupFunc(ctx, tenantID, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockGroupSubClient) Get(ctx context.Context, tenantID, groupID string) (*sdkiam.Group, error) {
+	if c.m.getGroupFunc != nil {
+		return c.m.getGroupFunc(ctx, tenantID, groupID)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockGroupSubClient) Update(ctx context.Context, tenantID, groupID string, req *sdkiam.UpdateGroupRequest) (*sdkiam.Group, error) {
+	if c.m.updateGroupFunc != nil {
+		return c.m.updateGroupFunc(ctx, tenantID, groupID, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockGroupSubClient) Delete(ctx context.Context, tenantID, groupID string) error {
+	if c.m.deleteGroupFunc != nil {
+		return c.m.deleteGroupFunc(ctx, tenantID, groupID)
+	}
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockGroupSubClient) List(ctx context.Context, tenantID string, req *sdkiam.ListGroupsRequest) (*sdkiam.ListGroupsResponse, error) {
+	if c.m.listGroupsFunc != nil {
+		return c.m.listGroupsFunc(ctx, tenantID, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockGroupSubClient) AddMember(ctx context.Context, tenantID, groupID, userID string) error {
+	if c.m.addUserToGroupFunc != nil {
+		return c.m.addUserToGroupFunc(ctx, tenantID, groupID, userID)
+	}
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockGroupSubClient) RemoveMember(ctx context.Context, tenantID, groupID, userID string) error {
+	if c.m.removeUserFromGroupFunc != nil {
+		return c.m.removeUserFromGroupFunc(ctx, tenantID, groupID, userID)
+	}
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockGroupSubClient) ListMembers(ctx context.Context, tenantID, groupID string) (*sdkiam.ListMembersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+type mockTenantSubClient struct{ m *mockIAMServiceClient }
+
+func (c *mockTenantSubClient) Create(ctx context.Context, req *sdkiam.CreateTenantRequest) (*sdkiam.Tenant, error) {
+	if c.m.createTenantFunc != nil {
+		return c.m.createTenantFunc(ctx, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockTenantSubClient) Get(ctx context.Context, tenantID string) (*sdkiam.Tenant, error) {
+	if c.m.getTenantFunc != nil {
+		return c.m.getTenantFunc(ctx, tenantID)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockTenantSubClient) Update(ctx context.Context, tenantID string, req *sdkiam.UpdateTenantRequest) (*sdkiam.Tenant, error) {
+	if c.m.updateTenantFunc != nil {
+		return c.m.updateTenantFunc(ctx, tenantID, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockTenantSubClient) Delete(ctx context.Context, tenantID string) error {
+	if c.m.deleteTenantFunc != nil {
+		return c.m.deleteTenantFunc(ctx, tenantID)
+	}
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockTenantSubClient) List(ctx context.Context, req *sdkiam.ListTenantsRequest) (*sdkiam.ListTenantsResponse, error) {
+	if c.m.listTenantsFunc != nil {
+		return c.m.listTenantsFunc(ctx, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMServiceClient) UpdateUser(ctx context.Context, in *iampb.UpdateUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
-	if m.updateUserFunc != nil {
-		return m.updateUserFunc(ctx, in, opts...)
+type mockPolicySubClient struct{ m *mockIAMServiceClient }
+
+func (c *mockPolicySubClient) Create(ctx context.Context, tenantID string, req *sdkiam.CreatePolicyRequest) (*sdkiam.Policy, error) {
+	if c.m.createPolicyFunc != nil {
+		return c.m.createPolicyFunc(ctx, tenantID, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockPolicySubClient) Get(ctx context.Context, tenantID, policyName string) (*sdkiam.Policy, error) {
+	if c.m.getPolicyFunc != nil {
+		return c.m.getPolicyFunc(ctx, tenantID, policyName)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockPolicySubClient) Update(ctx context.Context, tenantID, policyName string, req *sdkiam.UpdatePolicyRequest) (*sdkiam.Policy, error) {
+	if c.m.updatePolicyFunc != nil {
+		return c.m.updatePolicyFunc(ctx, tenantID, policyName, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockPolicySubClient) Delete(ctx context.Context, tenantID, policyName string) error {
+	if c.m.deletePolicyFunc != nil {
+		return c.m.deletePolicyFunc(ctx, tenantID, policyName)
+	}
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockPolicySubClient) List(ctx context.Context, tenantID string, req *sdkiam.ListPoliciesRequest) (*sdkiam.ListPoliciesResponse, error) {
+	if c.m.listPoliciesFunc != nil {
+		return c.m.listPoliciesFunc(ctx, tenantID, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockPolicySubClient) Validate(ctx context.Context, tenantID string, policy *sdkiam.Policy) (*sdkiam.ValidationResult, error) {
+	if c.m.validatePolicyFunc != nil {
+		return c.m.validatePolicyFunc(ctx, tenantID, policy)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockPolicySubClient) Test(ctx context.Context, tenantID string, req *sdkiam.TestPolicyRequest) (*sdkiam.TestPolicyResponse, error) {
+	if c.m.testPolicyFunc != nil {
+		return c.m.testPolicyFunc(ctx, tenantID, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockPolicySubClient) Simulate(ctx context.Context, tenantID string, req *sdkiam.SimulateRequest) (*sdkiam.SimulateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockPolicySubClient) GetEffectivePermissions(ctx context.Context, tenantID string, req *sdkiam.EffectivePermissionsRequest) (*sdkiam.EffectivePermissionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+type mockAppSubClient struct{ m *mockIAMServiceClient }
+
+func (c *mockAppSubClient) Register(ctx context.Context, tenantID string, req *sdkiam.RegisterAppRequest) (*sdkiam.Application, error) {
+	if c.m.registerAppFunc != nil {
+		return c.m.registerAppFunc(ctx, tenantID, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockAppSubClient) Get(ctx context.Context, tenantID, clientID string) (*sdkiam.Application, error) {
+	if c.m.getAppFunc != nil {
+		return c.m.getAppFunc(ctx, tenantID, clientID)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockAppSubClient) Update(ctx context.Context, tenantID, clientID string, req *sdkiam.UpdateAppRequest) (*sdkiam.Application, error) {
+	if c.m.updateAppFunc != nil {
+		return c.m.updateAppFunc(ctx, tenantID, clientID, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockAppSubClient) Delete(ctx context.Context, tenantID, clientID string) error {
+	if c.m.deleteAppFunc != nil {
+		return c.m.deleteAppFunc(ctx, tenantID, clientID)
+	}
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockAppSubClient) List(ctx context.Context, tenantID string) (*sdkiam.ListAppsResponse, error) {
+	if c.m.listAppsFunc != nil {
+		return c.m.listAppsFunc(ctx, tenantID)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (c *mockAppSubClient) RotateSecret(ctx context.Context, tenantID, clientID string) (*sdkiam.RotateSecretResponse, error) {
+	if c.m.rotateAppSecretFunc != nil {
+		return c.m.rotateAppSecretFunc(ctx, tenantID, clientID)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMServiceClient) DeleteUser(ctx context.Context, in *iampb.DeleteUserRequest, opts ...grpc.CallOption) (*iampb.DeleteUserResponse, error) {
-	if m.deleteUserFunc != nil {
-		return m.deleteUserFunc(ctx, in, opts...)
-	}
+// mockIAMServiceClient implements iam.Client by returning sub-client adapters.
+
+func (m *mockIAMServiceClient) User() sdkiam.UserClient    { return &mockUserSubClient{m} }
+func (m *mockIAMServiceClient) Role() sdkiam.RoleClient    { return &mockRoleSubClient{m} }
+func (m *mockIAMServiceClient) Group() sdkiam.GroupClient  { return &mockGroupSubClient{m} }
+func (m *mockIAMServiceClient) Tenant() sdkiam.TenantClient { return &mockTenantSubClient{m} }
+func (m *mockIAMServiceClient) Policy() sdkiam.PolicyClient { return &mockPolicySubClient{m} }
+func (m *mockIAMServiceClient) App() sdkiam.AppClient      { return &mockAppSubClient{m} }
+func (m *mockIAMServiceClient) PEP() sdkiam.PEPClient      { return &mockPEPServiceClient{} }
+func (m *mockIAMServiceClient) Session() sdkiam.SessionClient { return nil }
+func (m *mockIAMServiceClient) Audit() sdkiam.AuditClient  { return nil }
+func (m *mockIAMServiceClient) GDPR() sdkiam.GDPRClient    { return nil }
+func (m *mockIAMServiceClient) Admin() sdkiam.AdminClient  { return nil }
+func (m *mockIAMServiceClient) Close() error               { return nil }
+
+// Federation stubs
+func (m *mockIAMServiceClient) CreateProvider(ctx context.Context, opts *clipkg.CreateProviderOptions) (*clipkg.Provider, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (m *mockIAMServiceClient) GetProvider(ctx context.Context, tenantID, providerID string) (*clipkg.Provider, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (m *mockIAMServiceClient) UpdateProvider(ctx context.Context, opts *clipkg.UpdateProviderOptions) (*clipkg.Provider, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (m *mockIAMServiceClient) DeleteProvider(ctx context.Context, tenantID, providerID string) error {
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+func (m *mockIAMServiceClient) ListProviders(ctx context.Context, tenantID string) ([]*clipkg.Provider, error) {
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMServiceClient) ListUsers(ctx context.Context, in *iampb.ListUsersRequest, opts ...grpc.CallOption) (*iampb.ListUsersResponse, error) {
-	if m.listUsersFunc != nil {
-		return m.listUsersFunc(ctx, in, opts...)
-	}
+// Identity stubs
+func (m *mockIAMServiceClient) LinkIdentity(ctx context.Context, opts *clipkg.LinkIdentityOptions) (*clipkg.FederatedIdentity, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+func (m *mockIAMServiceClient) UnlinkIdentity(ctx context.Context, tenantID, userID, providerID string) error {
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+func (m *mockIAMServiceClient) ListUserIdentities(ctx context.Context, tenantID, userID string) ([]*clipkg.FederatedIdentity, error) {
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMServiceClient) CreateRole(ctx context.Context, in *iampb.CreateRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
-	if m.createRoleFunc != nil {
-		return m.createRoleFunc(ctx, in, opts...)
-	}
+// MFA stubs
+func (m *mockIAMServiceClient) GetMFAStatus(ctx context.Context, tenantID, userID string) (*clipkg.MFAStatus, error) {
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
-
-func (m *mockIAMServiceClient) GetRole(ctx context.Context, in *iampb.GetRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
-	if m.getRoleFunc != nil {
-		return m.getRoleFunc(ctx, in, opts...)
-	}
+func (m *mockIAMServiceClient) BeginMFAEnrollment(ctx context.Context, tenantID, userID, method string) (*clipkg.MFAEnrollment, error) {
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
-
-func (m *mockIAMServiceClient) UpdateRole(ctx context.Context, in *iampb.UpdateRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
-	if m.updateRoleFunc != nil {
-		return m.updateRoleFunc(ctx, in, opts...)
-	}
+func (m *mockIAMServiceClient) CompleteMFAEnrollment(ctx context.Context, enrollmentID, code string) error {
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+func (m *mockIAMServiceClient) DisableMFA(ctx context.Context, tenantID, userID string) error {
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+func (m *mockIAMServiceClient) GetBackupCodeStatus(ctx context.Context, tenantID, userID string) (*clipkg.BackupCodeStatus, error) {
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
-
-func (m *mockIAMServiceClient) DeleteRole(ctx context.Context, in *iampb.DeleteRoleRequest, opts ...grpc.CallOption) (*iampb.DeleteRoleResponse, error) {
-	if m.deleteRoleFunc != nil {
-		return m.deleteRoleFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) ListRoles(ctx context.Context, in *iampb.ListRolesRequest, opts ...grpc.CallOption) (*iampb.ListRolesResponse, error) {
-	if m.listRolesFunc != nil {
-		return m.listRolesFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) AssignRole(ctx context.Context, in *iampb.AssignRoleRequest, opts ...grpc.CallOption) (*iampb.AssignRoleResponse, error) {
-	if m.assignRoleFunc != nil {
-		return m.assignRoleFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) RevokeRole(ctx context.Context, in *iampb.RevokeRoleRequest, opts ...grpc.CallOption) (*iampb.RevokeRoleResponse, error) {
-	if m.revokeRoleFunc != nil {
-		return m.revokeRoleFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) CreateGroup(ctx context.Context, in *iampb.CreateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
-	if m.createGroupFunc != nil {
-		return m.createGroupFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) GetGroup(ctx context.Context, in *iampb.GetGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
-	if m.getGroupFunc != nil {
-		return m.getGroupFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) UpdateGroup(ctx context.Context, in *iampb.UpdateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
-	if m.updateGroupFunc != nil {
-		return m.updateGroupFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) DeleteGroup(ctx context.Context, in *iampb.DeleteGroupRequest, opts ...grpc.CallOption) (*iampb.DeleteGroupResponse, error) {
-	if m.deleteGroupFunc != nil {
-		return m.deleteGroupFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) ListGroups(ctx context.Context, in *iampb.ListGroupsRequest, opts ...grpc.CallOption) (*iampb.ListGroupsResponse, error) {
-	if m.listGroupsFunc != nil {
-		return m.listGroupsFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) AddUserToGroup(ctx context.Context, in *iampb.AddUserToGroupRequest, opts ...grpc.CallOption) (*iampb.AddUserToGroupResponse, error) {
-	if m.addUserToGroupFunc != nil {
-		return m.addUserToGroupFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) RemoveUserFromGroup(ctx context.Context, in *iampb.RemoveUserFromGroupRequest, opts ...grpc.CallOption) (*iampb.RemoveUserFromGroupResponse, error) {
-	if m.removeUserFromGroupFunc != nil {
-		return m.removeUserFromGroupFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) CreateTenant(ctx context.Context, in *iampb.CreateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
-	if m.createTenantFunc != nil {
-		return m.createTenantFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) GetTenant(ctx context.Context, in *iampb.GetTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
-	if m.getTenantFunc != nil {
-		return m.getTenantFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) UpdateTenant(ctx context.Context, in *iampb.UpdateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
-	if m.updateTenantFunc != nil {
-		return m.updateTenantFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) DeleteTenant(ctx context.Context, in *iampb.DeleteTenantRequest, opts ...grpc.CallOption) (*iampb.DeleteTenantResponse, error) {
-	if m.deleteTenantFunc != nil {
-		return m.deleteTenantFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) ListTenants(ctx context.Context, in *iampb.ListTenantsRequest, opts ...grpc.CallOption) (*iampb.ListTenantsResponse, error) {
-	if m.listTenantsFunc != nil {
-		return m.listTenantsFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) CreatePolicy(ctx context.Context, in *iampb.CreatePolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error) {
-	if m.createPolicyFunc != nil {
-		return m.createPolicyFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) GetPolicy(ctx context.Context, in *iampb.GetPolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error) {
-	if m.getPolicyFunc != nil {
-		return m.getPolicyFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) UpdatePolicy(ctx context.Context, in *iampb.UpdatePolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error) {
-	if m.updatePolicyFunc != nil {
-		return m.updatePolicyFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) DeletePolicy(ctx context.Context, in *iampb.DeletePolicyRequest, opts ...grpc.CallOption) (*iampb.DeletePolicyResponse, error) {
-	if m.deletePolicyFunc != nil {
-		return m.deletePolicyFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) ListPolicies(ctx context.Context, in *iampb.ListPoliciesRequest, opts ...grpc.CallOption) (*iampb.ListPoliciesResponse, error) {
-	if m.listPoliciesFunc != nil {
-		return m.listPoliciesFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) ValidatePolicy(ctx context.Context, in *iampb.ValidatePolicyRequest, opts ...grpc.CallOption) (*iampb.ValidatePolicyResponse, error) {
-	if m.validatePolicyFunc != nil {
-		return m.validatePolicyFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) TestPolicy(ctx context.Context, in *iampb.TestPolicyRequest, opts ...grpc.CallOption) (*iampb.TestPolicyResponse, error) {
-	if m.testPolicyFunc != nil {
-		return m.testPolicyFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) RegisterApp(ctx context.Context, in *iampb.RegisterAppRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
-	if m.registerAppFunc != nil {
-		return m.registerAppFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) GetApp(ctx context.Context, in *iampb.GetAppRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
-	if m.getAppFunc != nil {
-		return m.getAppFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) UpdateApp(ctx context.Context, in *iampb.UpdateAppRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
-	if m.updateAppFunc != nil {
-		return m.updateAppFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) DeleteApp(ctx context.Context, in *iampb.DeleteAppRequest, opts ...grpc.CallOption) (*iampb.DeleteAppResponse, error) {
-	if m.deleteAppFunc != nil {
-		return m.deleteAppFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) ListApps(ctx context.Context, in *iampb.ListAppsRequest, opts ...grpc.CallOption) (*iampb.ListAppsResponse, error) {
-	if m.listAppsFunc != nil {
-		return m.listAppsFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) RotateAppSecret(ctx context.Context, in *iampb.RotateAppSecretRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
-	if m.rotateAppSecretFunc != nil {
-		return m.rotateAppSecretFunc(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-// Stub methods for additional IAMServiceClient interface methods
-func (m *mockIAMServiceClient) CreateAdminAssignment(ctx context.Context, in *iampb.CreateAdminAssignmentRequest, opts ...grpc.CallOption) (*iampb.AdminAssignment, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) GetAdminAssignment(ctx context.Context, in *iampb.GetAdminAssignmentRequest, opts ...grpc.CallOption) (*iampb.AdminAssignment, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) UpdateAdminAssignment(ctx context.Context, in *iampb.UpdateAdminAssignmentRequest, opts ...grpc.CallOption) (*iampb.AdminAssignment, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) DeleteAdminAssignment(ctx context.Context, in *iampb.DeleteAdminAssignmentRequest, opts ...grpc.CallOption) (*iampb.DeleteAdminAssignmentResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) ListAdminAssignments(ctx context.Context, in *iampb.ListAdminAssignmentsRequest, opts ...grpc.CallOption) (*iampb.AdminAssignmentList, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) CheckAdminPermission(ctx context.Context, in *iampb.CheckAdminPermissionRequest, opts ...grpc.CallOption) (*iampb.CheckAdminPermissionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) StartImpersonation(ctx context.Context, in *iampb.StartImpersonationRequest, opts ...grpc.CallOption) (*iampb.ImpersonationSession, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) EndImpersonation(ctx context.Context, in *iampb.EndImpersonationRequest, opts ...grpc.CallOption) (*iampb.EndImpersonationResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) GetActiveImpersonations(ctx context.Context, in *iampb.GetActiveImpersonationsRequest, opts ...grpc.CallOption) (*iampb.ImpersonationSessionList, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) GrantConsent(ctx context.Context, in *iampb.GrantConsentRequest, opts ...grpc.CallOption) (*iampb.Consent, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) WithdrawConsent(ctx context.Context, in *iampb.WithdrawConsentRequest, opts ...grpc.CallOption) (*iampb.WithdrawConsentResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) GetConsent(ctx context.Context, in *iampb.GetConsentRequest, opts ...grpc.CallOption) (*iampb.Consent, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) ListUserConsents(ctx context.Context, in *iampb.ListUserConsentsRequest, opts ...grpc.CallOption) (*iampb.ConsentList, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) RequestExport(ctx context.Context, in *iampb.RequestExportRequest, opts ...grpc.CallOption) (*iampb.DataExportRequest, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) GetExportStatus(ctx context.Context, in *iampb.GetExportStatusRequest, opts ...grpc.CallOption) (*iampb.DataExportRequest, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) GenerateExport(ctx context.Context, in *iampb.GenerateExportRequest, opts ...grpc.CallOption) (*iampb.UserDataExport, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) RequestDeletion(ctx context.Context, in *iampb.RequestDeletionRequest, opts ...grpc.CallOption) (*iampb.DataDeletionRequest, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) CancelDeletion(ctx context.Context, in *iampb.CancelDeletionRequest, opts ...grpc.CallOption) (*iampb.CancelDeletionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) ProcessDeletion(ctx context.Context, in *iampb.ProcessDeletionRequest, opts ...grpc.CallOption) (*iampb.DeletionSummary, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockIAMServiceClient) GetDeletionStatus(ctx context.Context, in *iampb.GetDeletionStatusRequest, opts ...grpc.CallOption) (*iampb.DataDeletionRequest, error) {
+func (m *mockIAMServiceClient) GenerateBackupCodes(ctx context.Context, tenantID, userID string) ([]string, error) {
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
 // =============================================================================
-// Mock PEPServiceClient
+// Mock PEPServiceClient — implements iam.PEPClient
 // =============================================================================
 
 type mockPEPServiceClient struct {
-	checkFunc func(ctx context.Context, in *iampb.CheckRequest, opts ...grpc.CallOption) (*iampb.CheckResponse, error)
+	checkFunc func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error)
 }
 
-func (m *mockPEPServiceClient) Check(ctx context.Context, in *iampb.CheckRequest, opts ...grpc.CallOption) (*iampb.CheckResponse, error) {
+func (m *mockPEPServiceClient) Check(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 	if m.checkFunc != nil {
-		return m.checkFunc(ctx, in, opts...)
+		return m.checkFunc(ctx, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockPEPServiceClient) CheckBatch(ctx context.Context, in *iampb.CheckBatchRequest, opts ...grpc.CallOption) (*iampb.CheckBatchResponse, error) {
+func (m *mockPEPServiceClient) CheckBatch(ctx context.Context, req *sdkiam.CheckBatchRequest) (*sdkiam.CheckBatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockPEPServiceClient) Subscribe(ctx context.Context, in *iampb.SubscribeRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[iampb.PolicyUpdate], error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
+// compile-time interface checks
+var _ sdkiam.PEPClient = (*mockPEPServiceClient)(nil)
 
 // =============================================================================
 // Test Helper Functions
@@ -535,14 +526,13 @@ func TestIAMGRPCService_CreateUser(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			createUserFunc: func(ctx context.Context, in *iampb.CreateUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
-				return &iampb.User{
-					Id:       "user-123",
-					TenantId: in.TenantId,
-					Email:    in.Email,
-					Name:     in.Name,
-					Roles:    in.Roles,
-					Groups:   in.Groups,
+			createUserFunc: func(ctx context.Context, tenantID string, req *sdkiam.CreateUserRequest) (*sdkiam.User, error) {
+				return &sdkiam.User{
+					ID:          "user-123",
+					TenantID:    tenantID,
+					Email:       req.Email,
+					DisplayName: req.DisplayName,
+					Roles:       req.Roles,
 				}, nil
 			},
 		}
@@ -569,7 +559,7 @@ func TestIAMGRPCService_CreateUser(t *testing.T) {
 
 	t.Run("upstream error is propagated", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			createUserFunc: func(ctx context.Context, in *iampb.CreateUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
+			createUserFunc: func(ctx context.Context, tenantID string, req *sdkiam.CreateUserRequest) (*sdkiam.User, error) {
 				return nil, status.Error(codes.AlreadyExists, "user already exists")
 			},
 		}
@@ -625,10 +615,10 @@ func TestIAMGRPCService_GetUser(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			getUserFunc: func(ctx context.Context, in *iampb.GetUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
-				return &iampb.User{
-					Id:       in.UserId,
-					TenantId: in.TenantId,
+			getUserFunc: func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
+				return &sdkiam.User{
+					ID:       userID,
+					TenantID: tenantID,
 					Email:    "user@example.com",
 				}, nil
 			},
@@ -676,13 +666,13 @@ func TestIAMGRPCService_ListUsers(t *testing.T) {
 
 	t.Run("success with pagination", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			listUsersFunc: func(ctx context.Context, in *iampb.ListUsersRequest, opts ...grpc.CallOption) (*iampb.ListUsersResponse, error) {
-				return &iampb.ListUsersResponse{
-					Users: []*iampb.User{
-						{Id: "user-1", TenantId: in.TenantId, Email: "user1@example.com"},
-						{Id: "user-2", TenantId: in.TenantId, Email: "user2@example.com"},
+			listUsersFunc: func(ctx context.Context, tenantID string, req *sdkiam.ListUsersRequest) (*sdkiam.ListUsersResponse, error) {
+				return &sdkiam.ListUsersResponse{
+					Users: []sdkiam.User{
+						{ID: "user-1", TenantID: tenantID, Email: "user1@example.com"},
+						{ID: "user-2", TenantID: tenantID, Email: "user2@example.com"},
 					},
-					Total: 2,
+					Pagination: sdkiam.PaginationInfo{TotalCount: 2},
 				}, nil
 			},
 		}
@@ -749,12 +739,11 @@ func TestIAMGRPCService_UpdateUser(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			updateUserFunc: func(ctx context.Context, in *iampb.UpdateUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
-				return &iampb.User{
-					Id:       in.UserId,
-					TenantId: in.TenantId,
-					Email:    in.Email,
-					Name:     in.Name,
+			updateUserFunc: func(ctx context.Context, tenantID, userID string, req *sdkiam.UpdateUserRequest) (*sdkiam.User, error) {
+				return &sdkiam.User{
+					ID:          userID,
+					TenantID:    tenantID,
+					DisplayName: req.DisplayName,
 				}, nil
 			},
 		}
@@ -813,8 +802,8 @@ func TestIAMGRPCService_DeleteUser(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			deleteUserFunc: func(ctx context.Context, in *iampb.DeleteUserRequest, opts ...grpc.CallOption) (*iampb.DeleteUserResponse, error) {
-				return &iampb.DeleteUserResponse{Success: true}, nil
+			deleteUserFunc: func(ctx context.Context, tenantID, userID string) error {
+				return nil
 			},
 		}
 		svc := NewIAMGRPCService(iamTestLogger(), mockIAM, nil)
@@ -878,13 +867,13 @@ func TestIAMGRPCService_CreateRole(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			createRoleFunc: func(ctx context.Context, in *iampb.CreateRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
-				return &iampb.Role{
-					Id:          "role-123",
-					TenantId:    in.TenantId,
-					Name:        in.Name,
-					Description: in.Description,
-					Permissions: in.Permissions,
+			createRoleFunc: func(ctx context.Context, tenantID string, req *sdkiam.CreateRoleRequest) (*sdkiam.Role, error) {
+				return &sdkiam.Role{
+					ID:          "role-123",
+					TenantID:    tenantID,
+					Name:        req.Name,
+					Description: req.Description,
+					Permissions: req.Permissions,
 				}, nil
 			},
 		}
@@ -947,10 +936,10 @@ func TestIAMGRPCService_GetRole(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			getRoleFunc: func(ctx context.Context, in *iampb.GetRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
-				return &iampb.Role{
-					Id:       in.RoleId,
-					TenantId: in.TenantId,
+			getRoleFunc: func(ctx context.Context, tenantID, roleID string) (*sdkiam.Role, error) {
+				return &sdkiam.Role{
+					ID:       roleID,
+					TenantID: tenantID,
 					Name:     "admin",
 				}, nil
 			},
@@ -1024,8 +1013,8 @@ func TestIAMGRPCService_AssignRole(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			assignRoleFunc: func(ctx context.Context, in *iampb.AssignRoleRequest, opts ...grpc.CallOption) (*iampb.AssignRoleResponse, error) {
-				return &iampb.AssignRoleResponse{Success: true}, nil
+			assignRoleFunc: func(ctx context.Context, tenantID, userID, roleID string) error {
+				return nil
 			},
 		}
 		svc := NewIAMGRPCService(iamTestLogger(), mockIAM, nil)
@@ -1065,8 +1054,8 @@ func TestIAMGRPCService_RevokeRole(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			revokeRoleFunc: func(ctx context.Context, in *iampb.RevokeRoleRequest, opts ...grpc.CallOption) (*iampb.RevokeRoleResponse, error) {
-				return &iampb.RevokeRoleResponse{Success: true}, nil
+			revokeRoleFunc: func(ctx context.Context, tenantID, userID, roleID string) error {
+				return nil
 			},
 		}
 		svc := NewIAMGRPCService(iamTestLogger(), mockIAM, nil)
@@ -1128,12 +1117,12 @@ func TestIAMGRPCService_CreateGroup(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			createGroupFunc: func(ctx context.Context, in *iampb.CreateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
-				return &iampb.Group{
-					Id:          "group-123",
-					TenantId:    in.TenantId,
-					Name:        in.Name,
-					Description: in.Description,
+			createGroupFunc: func(ctx context.Context, tenantID string, req *sdkiam.CreateGroupRequest) (*sdkiam.Group, error) {
+				return &sdkiam.Group{
+					ID:          "group-123",
+					TenantID:    tenantID,
+					Name:        req.Name,
+					Description: req.Description,
 				}, nil
 			},
 		}
@@ -1210,8 +1199,8 @@ func TestIAMGRPCService_AddGroupMember(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			addUserToGroupFunc: func(ctx context.Context, in *iampb.AddUserToGroupRequest, opts ...grpc.CallOption) (*iampb.AddUserToGroupResponse, error) {
-				return &iampb.AddUserToGroupResponse{Success: true}, nil
+			addUserToGroupFunc: func(ctx context.Context, tenantID, groupID, userID string) error {
+				return nil
 			},
 		}
 		svc := NewIAMGRPCService(iamTestLogger(), mockIAM, nil)
@@ -1251,8 +1240,8 @@ func TestIAMGRPCService_RemoveGroupMember(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			removeUserFromGroupFunc: func(ctx context.Context, in *iampb.RemoveUserFromGroupRequest, opts ...grpc.CallOption) (*iampb.RemoveUserFromGroupResponse, error) {
-				return &iampb.RemoveUserFromGroupResponse{Success: true}, nil
+			removeUserFromGroupFunc: func(ctx context.Context, tenantID, groupID, userID string) error {
+				return nil
 			},
 		}
 		svc := NewIAMGRPCService(iamTestLogger(), mockIAM, nil)
@@ -1382,8 +1371,8 @@ func TestIAMGRPCService_CheckPermission(t *testing.T) {
 
 	t.Run("success - allowed", func(t *testing.T) {
 		mockPEP := &mockPEPServiceClient{
-			checkFunc: func(ctx context.Context, in *iampb.CheckRequest, opts ...grpc.CallOption) (*iampb.CheckResponse, error) {
-				return &iampb.CheckResponse{
+			checkFunc: func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+				return &sdkiam.CheckResponse{
 					Allowed:          true,
 					MatchedPolicy:    "policy-1",
 					MatchedRule:      "rule-1",
@@ -1414,8 +1403,8 @@ func TestIAMGRPCService_CheckPermission(t *testing.T) {
 
 	t.Run("success - denied", func(t *testing.T) {
 		mockPEP := &mockPEPServiceClient{
-			checkFunc: func(ctx context.Context, in *iampb.CheckRequest, opts ...grpc.CallOption) (*iampb.CheckResponse, error) {
-				return &iampb.CheckResponse{
+			checkFunc: func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+				return &sdkiam.CheckResponse{
 					Allowed: false,
 				}, nil
 			},
@@ -1472,15 +1461,12 @@ func TestIAMGRPCService_CreateTenant(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			createTenantFunc: func(ctx context.Context, in *iampb.CreateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
-				return &iampb.Tenant{
-					Id:   in.Id,
-					Name: in.Name,
-					Settings: &iampb.TenantSettings{
-						MaxUsers:    100,
-						MfaRequired: true,
-					},
-					CreatedAt: timestamppb.Now(),
+			createTenantFunc: func(ctx context.Context, req *sdkiam.CreateTenantRequest) (*sdkiam.Tenant, error) {
+				return &sdkiam.Tenant{
+					ID:        req.ID,
+					Name:      req.Name,
+					Settings:  map[string]string{"mfa_required": "true"},
+					CreatedAt: time.Now(),
 				}, nil
 			},
 		}
@@ -1531,9 +1517,9 @@ func TestIAMGRPCService_GetTenant(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			getTenantFunc: func(ctx context.Context, in *iampb.GetTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
-				return &iampb.Tenant{
-					Id:   in.Id,
+			getTenantFunc: func(ctx context.Context, tenantID string) (*sdkiam.Tenant, error) {
+				return &sdkiam.Tenant{
+					ID:   tenantID,
 					Name: "Test Tenant",
 				}, nil
 			},
@@ -1566,13 +1552,12 @@ func TestIAMGRPCService_ListTenants(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			listTenantsFunc: func(ctx context.Context, in *iampb.ListTenantsRequest, opts ...grpc.CallOption) (*iampb.ListTenantsResponse, error) {
-				return &iampb.ListTenantsResponse{
-					Tenants: []*iampb.Tenant{
-						{Id: "tenant-1", Name: "Tenant 1"},
-						{Id: "tenant-2", Name: "Tenant 2"},
+			listTenantsFunc: func(ctx context.Context, req *sdkiam.ListTenantsRequest) (*sdkiam.ListTenantsResponse, error) {
+				return &sdkiam.ListTenantsResponse{
+					Tenants: []sdkiam.Tenant{
+						{ID: "tenant-1", Name: "Tenant 1"},
+						{ID: "tenant-2", Name: "Tenant 2"},
 					},
-					Total: 2,
 				}, nil
 			},
 		}
@@ -1649,13 +1634,12 @@ func TestIAMGRPCService_CreatePolicy(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			createPolicyFunc: func(ctx context.Context, in *iampb.CreatePolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error) {
-				return &iampb.Policy{
-					Name:        in.Name,
-					TenantId:    in.TenantId,
-					Description: in.Description,
-					Priority:    in.Priority,
-					SpecYaml:    in.SpecYaml,
+			createPolicyFunc: func(ctx context.Context, tenantID string, req *sdkiam.CreatePolicyRequest) (*sdkiam.Policy, error) {
+				return &sdkiam.Policy{
+					Name:        req.Name,
+					TenantID:    tenantID,
+					Description: req.Description,
+					SpecYAML:    req.SpecYAML,
 				}, nil
 			},
 		}
@@ -1718,10 +1702,10 @@ func TestIAMGRPCService_ValidatePolicy(t *testing.T) {
 
 	t.Run("success - valid", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			validatePolicyFunc: func(ctx context.Context, in *iampb.ValidatePolicyRequest, opts ...grpc.CallOption) (*iampb.ValidatePolicyResponse, error) {
-				return &iampb.ValidatePolicyResponse{
-					Valid:  true,
-					Errors: nil,
+			validatePolicyFunc: func(ctx context.Context, tenantID string, policy *sdkiam.Policy) (*sdkiam.ValidationResult, error) {
+				return &sdkiam.ValidationResult{
+					Valid:   true,
+					Errors:  nil,
 				}, nil
 			},
 		}
@@ -1743,10 +1727,13 @@ func TestIAMGRPCService_ValidatePolicy(t *testing.T) {
 
 	t.Run("success - invalid", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			validatePolicyFunc: func(ctx context.Context, in *iampb.ValidatePolicyRequest, opts ...grpc.CallOption) (*iampb.ValidatePolicyResponse, error) {
-				return &iampb.ValidatePolicyResponse{
-					Valid:  false,
-					Errors: []string{"invalid syntax", "missing required field"},
+			validatePolicyFunc: func(ctx context.Context, tenantID string, policy *sdkiam.Policy) (*sdkiam.ValidationResult, error) {
+				return &sdkiam.ValidationResult{
+					Valid: false,
+					Errors: []sdkiam.ValidationError{
+						{Message: "invalid syntax"},
+						{Message: "missing required field"},
+					},
 				}, nil
 			},
 		}
@@ -1816,12 +1803,11 @@ func TestIAMGRPCService_TestPolicy(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			testPolicyFunc: func(ctx context.Context, in *iampb.TestPolicyRequest, opts ...grpc.CallOption) (*iampb.TestPolicyResponse, error) {
-				return &iampb.TestPolicyResponse{
-					Allowed:          true,
-					MatchedPolicy:    "test-policy",
-					MatchedRule:      "rule-1",
-					EvaluationTimeNs: 500,
+			testPolicyFunc: func(ctx context.Context, tenantID string, req *sdkiam.TestPolicyRequest) (*sdkiam.TestPolicyResponse, error) {
+				return &sdkiam.TestPolicyResponse{
+					Results: []sdkiam.TestCaseResult{
+						{Passed: true, MatchedRule: "rule-1", EvaluationTimeNs: 500},
+					},
 				}, nil
 			},
 		}
@@ -1888,13 +1874,13 @@ func TestIAMGRPCService_RegisterApp(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			registerAppFunc: func(ctx context.Context, in *iampb.RegisterAppRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
-				return &iampb.Application{
-					ClientId:     "client-123",
+			registerAppFunc: func(ctx context.Context, tenantID string, req *sdkiam.RegisterAppRequest) (*sdkiam.Application, error) {
+				return &sdkiam.Application{
+					ClientID:     "client-123",
 					ClientSecret: "secret-456",
-					TenantId:     in.TenantId,
-					Name:         in.Name,
-					RedirectUris: in.RedirectUris,
+					TenantID:     tenantID,
+					Name:         req.Name,
+					RedirectURIs: req.RedirectURIs,
 				}, nil
 			},
 		}
@@ -1956,11 +1942,10 @@ func TestIAMGRPCService_RotateAppSecret(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			rotateAppSecretFunc: func(ctx context.Context, in *iampb.RotateAppSecretRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
-				return &iampb.Application{
-					ClientId:     in.ClientId,
+			rotateAppSecretFunc: func(ctx context.Context, tenantID, clientID string) (*sdkiam.RotateSecretResponse, error) {
+				return &sdkiam.RotateSecretResponse{
+					ClientID:     clientID,
 					ClientSecret: "new-secret-789",
-					Name:         "test-app",
 				}, nil
 			},
 		}
@@ -2047,7 +2032,7 @@ func TestIAMGRPCService_ConvertGRPCError(t *testing.T) {
 
 	t.Run("preserves gRPC status error", func(t *testing.T) {
 		originalErr := status.Error(codes.NotFound, "not found")
-		convertedErr := svc.convertGRPCError(originalErr)
+		convertedErr := svc.wrapError(originalErr)
 		st, ok := status.FromError(convertedErr)
 		if !ok {
 			t.Fatal("expected gRPC status error")
@@ -2059,7 +2044,7 @@ func TestIAMGRPCService_ConvertGRPCError(t *testing.T) {
 
 	t.Run("converts non-gRPC error to Internal", func(t *testing.T) {
 		originalErr := context.DeadlineExceeded
-		convertedErr := svc.convertGRPCError(originalErr)
+		convertedErr := svc.wrapError(originalErr)
 		st, ok := status.FromError(convertedErr)
 		if !ok {
 			t.Fatal("expected gRPC status error")
@@ -2077,8 +2062,6 @@ func TestIAMGRPCService_ConvertGRPCError(t *testing.T) {
 func TestIAMGRPCService_SDKUserToPlatformUser(t *testing.T) {
 	t.Parallel()
 
-	svc := &IAMGRPCService{}
-
 	t.Run("nil user returns nil", func(t *testing.T) {
 		result := sdkUserToPlatformUser(nil)
 		if result != nil {
@@ -2087,19 +2070,20 @@ func TestIAMGRPCService_SDKUserToPlatformUser(t *testing.T) {
 	})
 
 	t.Run("converts all fields", func(t *testing.T) {
-		now := timestamppb.Now()
-		sdkUser := &iampb.User{
-			Id:          "user-123",
-			TenantId:    "tenant-1",
+		now := time.Now()
+		lastLogin := now
+		sdkUser := &sdkiam.User{
+			ID:          "user-123",
+			TenantID:    "tenant-1",
 			Email:       "user@example.com",
-			Name:        "Test User",
+			DisplayName: "Test User",
 			Roles:       []string{"admin", "user"},
 			Groups:      []string{"dev", "ops"},
-			Attributes:  map[string]string{"dept": "engineering"},
-			MfaVerified: true,
+			Metadata:    map[string]string{"dept": "engineering"},
+			MFAEnabled:  true,
 			CreatedAt:   now,
 			UpdatedAt:   now,
-			LastAuth:    now,
+			LastLoginAt: &lastLogin,
 		}
 
 		result := sdkUserToPlatformUser(sdkUser)
@@ -2113,7 +2097,7 @@ func TestIAMGRPCService_SDKUserToPlatformUser(t *testing.T) {
 			t.Errorf("expected email 'user@example.com', got %q", result.Email)
 		}
 		if !result.MfaVerified {
-			t.Error("expected MfaVerified to be true")
+			t.Error("expected MfaVerified (MFAEnabled) to be true")
 		}
 		if len(result.Roles) != 2 {
 			t.Errorf("expected 2 roles, got %d", len(result.Roles))
@@ -2124,8 +2108,6 @@ func TestIAMGRPCService_SDKUserToPlatformUser(t *testing.T) {
 func TestIAMGRPCService_SDKRoleToPlatformRole(t *testing.T) {
 	t.Parallel()
 
-	svc := &IAMGRPCService{}
-
 	t.Run("nil role returns nil", func(t *testing.T) {
 		result := sdkRoleToPlatformRole(nil)
 		if result != nil {
@@ -2134,9 +2116,9 @@ func TestIAMGRPCService_SDKRoleToPlatformRole(t *testing.T) {
 	})
 
 	t.Run("converts all fields", func(t *testing.T) {
-		sdkRole := &iampb.Role{
-			Id:          "role-123",
-			TenantId:    "tenant-1",
+		sdkRole := &sdkiam.Role{
+			ID:          "role-123",
+			TenantID:    "tenant-1",
 			Name:        "admin",
 			Description: "Administrator role",
 			Permissions: []string{"read", "write", "delete"},
@@ -2158,8 +2140,6 @@ func TestIAMGRPCService_SDKRoleToPlatformRole(t *testing.T) {
 func TestIAMGRPCService_SDKGroupToPlatformGroup(t *testing.T) {
 	t.Parallel()
 
-	svc := &IAMGRPCService{}
-
 	t.Run("nil group returns nil", func(t *testing.T) {
 		result := sdkGroupToPlatformGroup(nil)
 		if result != nil {
@@ -2168,12 +2148,11 @@ func TestIAMGRPCService_SDKGroupToPlatformGroup(t *testing.T) {
 	})
 
 	t.Run("converts all fields", func(t *testing.T) {
-		sdkGroup := &iampb.Group{
-			Id:          "group-123",
-			TenantId:    "tenant-1",
+		sdkGroup := &sdkiam.Group{
+			ID:          "group-123",
+			TenantID:    "tenant-1",
 			Name:        "developers",
 			Description: "Development team",
-			Members:     []string{"user-1", "user-2"},
 		}
 
 		result := sdkGroupToPlatformGroup(sdkGroup)
@@ -2183,16 +2162,14 @@ func TestIAMGRPCService_SDKGroupToPlatformGroup(t *testing.T) {
 		if result.Name != "developers" {
 			t.Errorf("expected name 'developers', got %q", result.Name)
 		}
-		if len(result.Members) != 2 {
-			t.Errorf("expected 2 members, got %d", len(result.Members))
+		if result.Id != "group-123" {
+			t.Errorf("expected ID 'group-123', got %q", result.Id)
 		}
 	})
 }
 
 func TestIAMGRPCService_SDKTenantToPlatformTenant(t *testing.T) {
 	t.Parallel()
-
-	svc := &IAMGRPCService{}
 
 	t.Run("nil tenant returns nil", func(t *testing.T) {
 		result := sdkTenantToPlatformTenant(nil)
@@ -2202,13 +2179,10 @@ func TestIAMGRPCService_SDKTenantToPlatformTenant(t *testing.T) {
 	})
 
 	t.Run("converts all fields including settings", func(t *testing.T) {
-		sdkTenant := &iampb.Tenant{
-			Id:   "tenant-123",
-			Name: "Test Tenant",
-			Settings: &iampb.TenantSettings{
-				MaxUsers:    100,
-				MfaRequired: true,
-			},
+		sdkTenant := &sdkiam.Tenant{
+			ID:       "tenant-123",
+			Name:     "Test Tenant",
+			Settings: map[string]string{"mfa_required": "true"},
 		}
 
 		result := sdkTenantToPlatformTenant(sdkTenant)
@@ -2221,17 +2195,14 @@ func TestIAMGRPCService_SDKTenantToPlatformTenant(t *testing.T) {
 		if result.Settings == nil {
 			t.Fatal("expected non-nil settings")
 		}
-		if result.Settings.MaxUsers != 100 {
-			t.Errorf("expected MaxUsers 100, got %d", result.Settings.MaxUsers)
-		}
 		if !result.Settings.MfaRequired {
 			t.Error("expected MfaRequired to be true")
 		}
 	})
 
 	t.Run("handles nil settings", func(t *testing.T) {
-		sdkTenant := &iampb.Tenant{
-			Id:   "tenant-123",
+		sdkTenant := &sdkiam.Tenant{
+			ID:   "tenant-123",
 			Name: "Test Tenant",
 		}
 
@@ -2248,8 +2219,6 @@ func TestIAMGRPCService_SDKTenantToPlatformTenant(t *testing.T) {
 func TestIAMGRPCService_SDKPolicyToPlatformPolicy(t *testing.T) {
 	t.Parallel()
 
-	svc := &IAMGRPCService{}
-
 	t.Run("nil policy returns nil", func(t *testing.T) {
 		result := sdkPolicyToPlatformPolicy(nil)
 		if result != nil {
@@ -2258,12 +2227,12 @@ func TestIAMGRPCService_SDKPolicyToPlatformPolicy(t *testing.T) {
 	})
 
 	t.Run("converts all fields", func(t *testing.T) {
-		sdkPolicy := &iampb.Policy{
+		sdkPolicy := &sdkiam.Policy{
 			Name:        "test-policy",
-			TenantId:    "tenant-1",
+			TenantID:    "tenant-1",
 			Description: "Test policy",
 			Priority:    10,
-			SpecYaml:    []byte("rules: []"),
+			SpecYAML:    []byte("rules: []"),
 			Labels:      map[string]string{"env": "prod"},
 		}
 
@@ -2283,8 +2252,6 @@ func TestIAMGRPCService_SDKPolicyToPlatformPolicy(t *testing.T) {
 func TestIAMGRPCService_SDKAppToPlatformApp(t *testing.T) {
 	t.Parallel()
 
-	svc := &IAMGRPCService{}
-
 	t.Run("nil app returns nil", func(t *testing.T) {
 		result := sdkAppToPlatformApp(nil)
 		if result != nil {
@@ -2293,15 +2260,13 @@ func TestIAMGRPCService_SDKAppToPlatformApp(t *testing.T) {
 	})
 
 	t.Run("converts all fields", func(t *testing.T) {
-		sdkApp := &iampb.Application{
-			ClientId:       "client-123",
-			ClientSecret:   "secret-456",
-			TenantId:       "tenant-1",
-			Name:           "test-app",
-			RedirectUris:   []string{"https://example.com/callback"},
-			GrantTypes:     []string{"authorization_code"},
-			ResponseTypes:  []string{"code"},
-			ResourcePrefix: "app:",
+		sdkApp := &sdkiam.Application{
+			ClientID:     "client-123",
+			ClientSecret: "secret-456",
+			TenantID:     "tenant-1",
+			Name:         "test-app",
+			RedirectURIs: []string{"https://example.com/callback"},
+			GrantTypes:   []sdkiam.GrantType{sdkiam.GrantTypeAuthorizationCode},
 		}
 
 		result := sdkAppToPlatformApp(sdkApp)
@@ -2350,13 +2315,12 @@ func TestIAMGRPCService_ListRoles(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			listRolesFunc: func(ctx context.Context, in *iampb.ListRolesRequest, opts ...grpc.CallOption) (*iampb.ListRolesResponse, error) {
-				return &iampb.ListRolesResponse{
-					Roles: []*iampb.Role{
-						{Id: "role-1", TenantId: in.TenantId, Name: "admin"},
-						{Id: "role-2", TenantId: in.TenantId, Name: "user"},
+			listRolesFunc: func(ctx context.Context, tenantID string, req *sdkiam.ListRolesRequest) (*sdkiam.ListRolesResponse, error) {
+				return &sdkiam.ListRolesResponse{
+					Roles: []sdkiam.Role{
+						{ID: "role-1", TenantID: tenantID, Name: "admin"},
+						{ID: "role-2", TenantID: tenantID, Name: "user"},
 					},
-					Total: 2,
 				}, nil
 			},
 		}
@@ -2416,13 +2380,13 @@ func TestIAMGRPCService_UpdateRole(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			updateRoleFunc: func(ctx context.Context, in *iampb.UpdateRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
-				return &iampb.Role{
-					Id:          in.RoleId,
-					TenantId:    in.TenantId,
-					Name:        in.Name,
-					Description: in.Description,
-					Permissions: in.Permissions,
+			updateRoleFunc: func(ctx context.Context, tenantID, roleID string, req *sdkiam.UpdateRoleRequest) (*sdkiam.Role, error) {
+				return &sdkiam.Role{
+					ID:          roleID,
+					TenantID:    tenantID,
+					Name:        req.Name,
+					Description: req.Description,
+					Permissions: req.Permissions,
 				}, nil
 			},
 		}
@@ -2485,8 +2449,8 @@ func TestIAMGRPCService_DeleteRole(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			deleteRoleFunc: func(ctx context.Context, in *iampb.DeleteRoleRequest, opts ...grpc.CallOption) (*iampb.DeleteRoleResponse, error) {
-				return &iampb.DeleteRoleResponse{Success: true}, nil
+			deleteRoleFunc: func(ctx context.Context, tenantID, roleID string) error {
+				return nil
 			},
 		}
 		svc := NewIAMGRPCService(iamTestLogger(), mockIAM, nil)
@@ -2550,10 +2514,10 @@ func TestIAMGRPCService_GetGroup(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			getGroupFunc: func(ctx context.Context, in *iampb.GetGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
-				return &iampb.Group{
-					Id:          in.GroupId,
-					TenantId:    in.TenantId,
+			getGroupFunc: func(ctx context.Context, tenantID, groupID string) (*sdkiam.Group, error) {
+				return &sdkiam.Group{
+					ID:          groupID,
+					TenantID:    tenantID,
 					Name:        "developers",
 					Description: "Developer group",
 				}, nil
@@ -2599,13 +2563,12 @@ func TestIAMGRPCService_ListGroups(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			listGroupsFunc: func(ctx context.Context, in *iampb.ListGroupsRequest, opts ...grpc.CallOption) (*iampb.ListGroupsResponse, error) {
-				return &iampb.ListGroupsResponse{
-					Groups: []*iampb.Group{
-						{Id: "group-1", TenantId: in.TenantId, Name: "developers"},
-						{Id: "group-2", TenantId: in.TenantId, Name: "admins"},
+			listGroupsFunc: func(ctx context.Context, tenantID string, req *sdkiam.ListGroupsRequest) (*sdkiam.ListGroupsResponse, error) {
+				return &sdkiam.ListGroupsResponse{
+					Groups: []sdkiam.Group{
+						{ID: "group-1", TenantID: tenantID, Name: "developers"},
+						{ID: "group-2", TenantID: tenantID, Name: "admins"},
 					},
-					Total: 2,
 				}, nil
 			},
 		}
@@ -2665,12 +2628,12 @@ func TestIAMGRPCService_UpdateGroup(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			updateGroupFunc: func(ctx context.Context, in *iampb.UpdateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
-				return &iampb.Group{
-					Id:          in.GroupId,
-					TenantId:    in.TenantId,
-					Name:        in.Name,
-					Description: in.Description,
+			updateGroupFunc: func(ctx context.Context, tenantID, groupID string, req *sdkiam.UpdateGroupRequest) (*sdkiam.Group, error) {
+				return &sdkiam.Group{
+					ID:          groupID,
+					TenantID:    tenantID,
+					Name:        req.Name,
+					Description: req.Description,
 				}, nil
 			},
 		}
@@ -2730,8 +2693,8 @@ func TestIAMGRPCService_DeleteGroup(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			deleteGroupFunc: func(ctx context.Context, in *iampb.DeleteGroupRequest, opts ...grpc.CallOption) (*iampb.DeleteGroupResponse, error) {
-				return &iampb.DeleteGroupResponse{Success: true}, nil
+			deleteGroupFunc: func(ctx context.Context, tenantID, groupID string) error {
+				return nil
 			},
 		}
 		svc := NewIAMGRPCService(iamTestLogger(), mockIAM, nil)
@@ -2781,14 +2744,10 @@ func TestIAMGRPCService_UpdateTenant(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			updateTenantFunc: func(ctx context.Context, in *iampb.UpdateTenantRequest, opts ...grpc.CallOption) (*iampb.Tenant, error) {
-				return &iampb.Tenant{
-					Id:   in.Id,
-					Name: in.Name,
-					Settings: &iampb.TenantSettings{
-						MaxUsers:    in.Settings.MaxUsers,
-						MfaRequired: in.Settings.MfaRequired,
-					},
+			updateTenantFunc: func(ctx context.Context, tenantID string, req *sdkiam.UpdateTenantRequest) (*sdkiam.Tenant, error) {
+				return &sdkiam.Tenant{
+					ID:          tenantID,
+					DisplayName: req.DisplayName,
 				}, nil
 			},
 		}
@@ -2836,8 +2795,8 @@ func TestIAMGRPCService_DeleteTenant(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			deleteTenantFunc: func(ctx context.Context, in *iampb.DeleteTenantRequest, opts ...grpc.CallOption) (*iampb.DeleteTenantResponse, error) {
-				return &iampb.DeleteTenantResponse{Success: true}, nil
+			deleteTenantFunc: func(ctx context.Context, tenantID string) error {
+				return nil
 			},
 		}
 		svc := NewIAMGRPCService(iamTestLogger(), mockIAM, nil)
@@ -2900,13 +2859,13 @@ func TestIAMGRPCService_GetPolicy(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			getPolicyFunc: func(ctx context.Context, in *iampb.GetPolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error) {
-				return &iampb.Policy{
-					Name:        in.PolicyName,
-					TenantId:    in.TenantId,
+			getPolicyFunc: func(ctx context.Context, tenantID, policyName string) (*sdkiam.Policy, error) {
+				return &sdkiam.Policy{
+					Name:        policyName,
+					TenantID:    tenantID,
 					Description: "Admin access policy",
 					Priority:    100,
-					SpecYaml:    []byte("rules: []"),
+					SpecYAML:    []byte("rules: []"),
 				}, nil
 			},
 		}
@@ -2950,13 +2909,12 @@ func TestIAMGRPCService_ListPolicies(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			listPoliciesFunc: func(ctx context.Context, in *iampb.ListPoliciesRequest, opts ...grpc.CallOption) (*iampb.ListPoliciesResponse, error) {
-				return &iampb.ListPoliciesResponse{
-					Policies: []*iampb.Policy{
-						{Name: "policy-1", TenantId: in.TenantId},
-						{Name: "policy-2", TenantId: in.TenantId},
+			listPoliciesFunc: func(ctx context.Context, tenantID string, req *sdkiam.ListPoliciesRequest) (*sdkiam.ListPoliciesResponse, error) {
+				return &sdkiam.ListPoliciesResponse{
+					Policies: []sdkiam.Policy{
+						{Name: "policy-1", TenantID: tenantID},
+						{Name: "policy-2", TenantID: tenantID},
 					},
-					Total: 2,
 				}, nil
 			},
 		}
@@ -3016,13 +2974,10 @@ func TestIAMGRPCService_UpdatePolicy(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			updatePolicyFunc: func(ctx context.Context, in *iampb.UpdatePolicyRequest, opts ...grpc.CallOption) (*iampb.Policy, error) {
-				return &iampb.Policy{
-					Name:        in.PolicyName,
-					TenantId:    in.TenantId,
-					Description: in.Description,
-					Priority:    in.Priority,
-					SpecYaml:    in.SpecYaml,
+			updatePolicyFunc: func(ctx context.Context, tenantID, policyName string, req *sdkiam.UpdatePolicyRequest) (*sdkiam.Policy, error) {
+				return &sdkiam.Policy{
+					Name:     policyName,
+					TenantID: tenantID,
 				}, nil
 			},
 		}
@@ -3082,8 +3037,8 @@ func TestIAMGRPCService_DeletePolicy(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			deletePolicyFunc: func(ctx context.Context, in *iampb.DeletePolicyRequest, opts ...grpc.CallOption) (*iampb.DeletePolicyResponse, error) {
-				return &iampb.DeletePolicyResponse{Success: true}, nil
+			deletePolicyFunc: func(ctx context.Context, tenantID, policyName string) error {
+				return nil
 			},
 		}
 		svc := NewIAMGRPCService(iamTestLogger(), mockIAM, nil)
@@ -3147,10 +3102,10 @@ func TestIAMGRPCService_GetApp(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			getAppFunc: func(ctx context.Context, in *iampb.GetAppRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
-				return &iampb.Application{
-					ClientId: in.ClientId,
-					TenantId: in.TenantId,
+			getAppFunc: func(ctx context.Context, tenantID, clientID string) (*sdkiam.Application, error) {
+				return &sdkiam.Application{
+					ClientID: clientID,
+					TenantID: tenantID,
 					Name:     "test-app",
 				}, nil
 			},
@@ -3195,13 +3150,12 @@ func TestIAMGRPCService_ListApps(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			listAppsFunc: func(ctx context.Context, in *iampb.ListAppsRequest, opts ...grpc.CallOption) (*iampb.ListAppsResponse, error) {
-				return &iampb.ListAppsResponse{
-					Apps: []*iampb.Application{
-						{ClientId: "client-1", TenantId: in.TenantId, Name: "app-1"},
-						{ClientId: "client-2", TenantId: in.TenantId, Name: "app-2"},
+			listAppsFunc: func(ctx context.Context, tenantID string) (*sdkiam.ListAppsResponse, error) {
+				return &sdkiam.ListAppsResponse{
+					Applications: []sdkiam.Application{
+						{ClientID: "client-1", TenantID: tenantID, Name: "app-1"},
+						{ClientID: "client-2", TenantID: tenantID, Name: "app-2"},
 					},
-					Total: 2,
 				}, nil
 			},
 		}
@@ -3261,13 +3215,12 @@ func TestIAMGRPCService_UpdateApp(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			updateAppFunc: func(ctx context.Context, in *iampb.UpdateAppRequest, opts ...grpc.CallOption) (*iampb.Application, error) {
-				return &iampb.Application{
-					ClientId:       in.ClientId,
-					TenantId:       in.TenantId,
-					Name:           in.Name,
-					RedirectUris:   in.RedirectUris,
-					ResourcePrefix: in.ResourcePrefix,
+			updateAppFunc: func(ctx context.Context, tenantID, clientID string, req *sdkiam.UpdateAppRequest) (*sdkiam.Application, error) {
+				return &sdkiam.Application{
+					ClientID:     clientID,
+					TenantID:     tenantID,
+					Name:         req.Name,
+					RedirectURIs: req.RedirectURIs,
 				}, nil
 			},
 		}
@@ -3330,8 +3283,8 @@ func TestIAMGRPCService_DeleteApp(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mockIAM := &mockIAMServiceClient{
-			deleteAppFunc: func(ctx context.Context, in *iampb.DeleteAppRequest, opts ...grpc.CallOption) (*iampb.DeleteAppResponse, error) {
-				return &iampb.DeleteAppResponse{Success: true}, nil
+			deleteAppFunc: func(ctx context.Context, tenantID, clientID string) error {
+				return nil
 			},
 		}
 		svc := NewIAMGRPCService(iamTestLogger(), mockIAM, nil)

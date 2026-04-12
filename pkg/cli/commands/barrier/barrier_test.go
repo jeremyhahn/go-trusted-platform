@@ -19,7 +19,7 @@ import (
 
 	"github.com/spf13/pflag"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	barriersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -280,13 +280,13 @@ func TestValidateInitParams_ShamirWithSecret(t *testing.T) {
 
 func TestFormatStrategy(t *testing.T) {
 	tests := []struct {
-		strategy platformv1.BarrierStrategy
+		strategy barriersvc.Strategy
 		expected string
 	}{
-		{strategy: platformv1.BarrierStrategy_BARRIER_STRATEGY_UNSPECIFIED, expected: "unspecified"},
-		{strategy: platformv1.BarrierStrategy_BARRIER_STRATEGY_SINGLE_KEY, expected: "single-key"},
-		{strategy: platformv1.BarrierStrategy_BARRIER_STRATEGY_SHAMIR, expected: "shamir"},
-		{strategy: platformv1.BarrierStrategy(99), expected: "unknown"},
+		{strategy: barriersvc.StrategyUnspecified, expected: "unspecified"},
+		{strategy: barriersvc.StrategySingleKey, expected: "single-key"},
+		{strategy: barriersvc.StrategyShamir, expected: "shamir"},
+		{strategy: barriersvc.Strategy("bogus"), expected: "unknown"},
 	}
 
 	for _, tt := range tests {

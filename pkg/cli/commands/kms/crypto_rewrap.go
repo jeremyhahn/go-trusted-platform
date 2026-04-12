@@ -19,7 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -101,10 +102,7 @@ func runCryptoRewrap(flags *cli.CommonFlags, cmdFlags *rewrapFlags) error {
 	}
 	defer base.Close()
 
-	client := base.Client().KMS()
-	if client == nil {
-		return ErrCryptoClientNotInitialized{}
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
 	// Read input data
 	inputData, err := readInputData(cmdFlags.inputPath)
@@ -138,16 +136,8 @@ func runCryptoRewrap(flags *cli.CommonFlags, cmdFlags *rewrapFlags) error {
 		}
 	}
 
-	req := &platformv1.RewrapRequest{
-		KeyId:         cmdFlags.keyID,
-		Ciphertext:    ciphertext,
-		Context:       contextBytes,
-		Nonce:         nonceBytes,
-		SourceVersion: cmdFlags.sourceVersion,
-	}
-
 	ctx := base.Context()
-	resp, err := client.Rewrap(ctx, req)
+	resp, err := sdkClient.RewrapDomain(ctx, cmdFlags.keyID, ciphertext, contextBytes, nonceBytes, cmdFlags.sourceVersion)
 	if err != nil {
 		return ErrCryptoOperationFailed{Operation: "rewrap", Err: err}
 	}
@@ -164,7 +154,7 @@ func runCryptoRewrap(flags *cli.CommonFlags, cmdFlags *rewrapFlags) error {
 			Nonce         string `json:"nonce" yaml:"nonce"`
 			Timestamp     string `json:"timestamp" yaml:"timestamp"`
 		}{
-			KeyID:         resp.KeyId,
+			KeyID:         resp.KeyID,
 			SourceVersion: resp.SourceVersion,
 			TargetVersion: resp.TargetVersion,
 			Ciphertext:    base64.StdEncoding.EncodeToString(resp.Ciphertext),
@@ -182,7 +172,7 @@ func runCryptoRewrap(flags *cli.CommonFlags, cmdFlags *rewrapFlags) error {
 		// Only show metadata if writing to file (not cluttering stdout)
 		if cmdFlags.outputPath != "" {
 			printer.PrintSuccess("Data rewrapped successfully")
-			printer.PrintKeyValue("Key ID", resp.KeyId)
+			printer.PrintKeyValue("Key ID", resp.KeyID)
 			printer.PrintKeyValue("Source Version", fmt.Sprintf("%d", resp.SourceVersion))
 			printer.PrintKeyValue("Target Version", fmt.Sprintf("%d", resp.TargetVersion))
 			printer.PrintKeyValue("Nonce", base64.StdEncoding.EncodeToString(resp.Nonce))

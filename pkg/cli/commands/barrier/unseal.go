@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	barriersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/barrier"
 )
 
 // newUnsealCommand creates the barrier unseal subcommand
@@ -66,8 +66,10 @@ func runUnseal(flags *cli.CommonFlags, secret, share string) error {
 	}
 	defer base.Close()
 
+	sdkClient := barriersvc.NewClientFromGRPC(base.Client().Barrier())
+
 	ctx := base.Context()
-	resp, err := base.Client().Barrier().Unseal(ctx, &platformv1.BarrierUnsealRequest{
+	result, err := sdkClient.Unseal(ctx, &barriersvc.UnsealParams{
 		Secret: unsealKey,
 	})
 	if err != nil {
@@ -78,25 +80,25 @@ func runUnseal(flags *cli.CommonFlags, secret, share string) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		return printUnsealTable(printer, resp)
+		return printUnsealTable(printer, result)
 
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
 	}
 }
 
-func printUnsealTable(printer *cli.Printer, resp *platformv1.BarrierUnsealResponse) error {
-	if !resp.Sealed {
+func printUnsealTable(printer *cli.Printer, result *barriersvc.UnsealResult) error {
+	if !result.Sealed {
 		printer.PrintSuccess("Barrier unsealed successfully")
 		return nil
 	}
 
 	// Shamir mode: show progress
 	printer.PrintInfo(fmt.Sprintf("Unseal progress: %d/%d shares provided",
-		resp.SharesProvided, resp.SharesThreshold))
+		result.SharesProvided, result.SharesThreshold))
 
 	return nil
 }

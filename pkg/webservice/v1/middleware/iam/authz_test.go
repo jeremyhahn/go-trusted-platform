@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -110,9 +110,9 @@ func TestAuthzMiddleware_Handler(t *testing.T) {
 		config := AuthzConfig{}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		called := false
@@ -141,8 +141,8 @@ func TestAuthzMiddleware_Authorize(t *testing.T) {
 	t.Run("allows_authorized_request", func(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		pepService := newMockPEPServiceClient()
-		pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
-			return &iampb.CheckResponse{
+		pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+			return &sdkiam.CheckResponse{
 				Allowed:       true,
 				MatchedPolicy: "allow-all",
 				MatchedRule:   "rule-1",
@@ -152,9 +152,9 @@ func TestAuthzMiddleware_Authorize(t *testing.T) {
 		config := AuthzConfig{DefaultDeny: true}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 			Roles:    []string{"admin"},
 		})
 
@@ -177,8 +177,8 @@ func TestAuthzMiddleware_Authorize(t *testing.T) {
 	t.Run("denies_unauthorized_request", func(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		pepService := newMockPEPServiceClient()
-		pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
-			return &iampb.CheckResponse{
+		pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+			return &sdkiam.CheckResponse{
 				Allowed:       false,
 				MatchedPolicy: "deny-policy",
 				MatchedRule:   "deny-rule",
@@ -188,9 +188,9 @@ func TestAuthzMiddleware_Authorize(t *testing.T) {
 		config := AuthzConfig{DefaultDeny: true}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		called := false
@@ -242,9 +242,9 @@ func TestAuthzMiddleware_Authorize(t *testing.T) {
 		config := AuthzConfig{RequireMFA: true}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSessionWithMFA(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSessionWithMFA(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		}, false, time.Time{})
 
 		called := false
@@ -276,9 +276,9 @@ func TestAuthzMiddleware_Authorize(t *testing.T) {
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		// MFA verified 10 minutes ago (outside grace period)
-		session := NewIAMSessionWithMFA(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSessionWithMFA(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		}, true, time.Now().Add(-10*time.Minute))
 
 		called := false
@@ -303,16 +303,16 @@ func TestAuthzMiddleware_Authorize(t *testing.T) {
 	t.Run("handles_pep_service_error", func(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		pepService := newMockPEPServiceClient()
-		pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
+		pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 			return nil, errors.New("service unavailable")
 		}
 
 		config := AuthzConfig{DefaultDeny: true}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		called := false
@@ -357,17 +357,17 @@ func TestAuthzMiddleware_HTTPMethodToAction(t *testing.T) {
 		t.Run(tt.method, func(t *testing.T) {
 			pepService := newMockPEPServiceClient()
 			var capturedAction string
-			pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
+			pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 				capturedAction = req.Action
-				return &iampb.CheckResponse{Allowed: true}, nil
+				return &sdkiam.CheckResponse{Allowed: true}, nil
 			}
 
 			config := AuthzConfig{}
 			middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-			session := NewIAMSession(&iampb.User{
-				Id:       "user-123",
-				TenantId: "tenant-456",
+			session := NewIAMSession(&sdkiam.User{
+				ID: "user-123",
+				TenantID: "tenant-456",
 			})
 
 			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
@@ -387,17 +387,17 @@ func TestAuthzMiddleware_HTTPMethodToAction(t *testing.T) {
 	t.Run("falls_back_to_lowercase_method_for_unknown", func(t *testing.T) {
 		pepService := newMockPEPServiceClient()
 		var capturedAction string
-		pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
+		pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 			capturedAction = req.Action
-			return &iampb.CheckResponse{Allowed: true}, nil
+			return &sdkiam.CheckResponse{Allowed: true}, nil
 		}
 
 		config := AuthzConfig{}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
@@ -433,17 +433,17 @@ func TestAuthzMiddleware_ExtractResource(t *testing.T) {
 		t.Run(tt.path, func(t *testing.T) {
 			pepService := newMockPEPServiceClient()
 			var capturedResource string
-			pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
+			pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 				capturedResource = req.Resource
-				return &iampb.CheckResponse{Allowed: true}, nil
+				return &sdkiam.CheckResponse{Allowed: true}, nil
 			}
 
 			config := AuthzConfig{}
 			middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-			session := NewIAMSession(&iampb.User{
-				Id:       "user-123",
-				TenantId: "tenant-456",
+			session := NewIAMSession(&sdkiam.User{
+				ID: "user-123",
+				TenantID: "tenant-456",
 			})
 
 			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
@@ -468,18 +468,18 @@ func TestAuthzMiddleware_ExtractPolicyContext(t *testing.T) {
 
 	t.Run("extracts_context_from_header", func(t *testing.T) {
 		pepService := newMockPEPServiceClient()
-		var capturedContext map[string]string
-		pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
+		var capturedContext map[string]interface{}
+		pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 			capturedContext = req.Context
-			return &iampb.CheckResponse{Allowed: true}, nil
+			return &sdkiam.CheckResponse{Allowed: true}, nil
 		}
 
 		config := AuthzConfig{}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
@@ -504,18 +504,18 @@ func TestAuthzMiddleware_ExtractPolicyContext(t *testing.T) {
 
 	t.Run("includes_request_metadata", func(t *testing.T) {
 		pepService := newMockPEPServiceClient()
-		var capturedContext map[string]string
-		pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
+		var capturedContext map[string]interface{}
+		pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 			capturedContext = req.Context
-			return &iampb.CheckResponse{Allowed: true}, nil
+			return &sdkiam.CheckResponse{Allowed: true}, nil
 		}
 
 		config := AuthzConfig{}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
@@ -550,9 +550,9 @@ func TestAuthzMiddleware_Caching(t *testing.T) {
 	t.Run("caches_authorization_decisions", func(t *testing.T) {
 		pepService := newMockPEPServiceClient()
 		checkCount := 0
-		pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
+		pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 			checkCount++
-			return &iampb.CheckResponse{
+			return &sdkiam.CheckResponse{
 				Allowed:       true,
 				MatchedPolicy: "test-policy",
 				MatchedRule:   "test-rule",
@@ -565,9 +565,9 @@ func TestAuthzMiddleware_Caching(t *testing.T) {
 		}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
@@ -590,9 +590,9 @@ func TestAuthzMiddleware_Caching(t *testing.T) {
 	t.Run("clears_cache", func(t *testing.T) {
 		pepService := newMockPEPServiceClient()
 		checkCount := 0
-		pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
+		pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 			checkCount++
-			return &iampb.CheckResponse{Allowed: true}, nil
+			return &sdkiam.CheckResponse{Allowed: true}, nil
 		}
 
 		config := AuthzConfig{
@@ -601,9 +601,9 @@ func TestAuthzMiddleware_Caching(t *testing.T) {
 		}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
@@ -629,9 +629,9 @@ func TestAuthzMiddleware_Caching(t *testing.T) {
 	t.Run("clears_user_cache", func(t *testing.T) {
 		pepService := newMockPEPServiceClient()
 		checkCount := 0
-		pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
+		pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 			checkCount++
-			return &iampb.CheckResponse{Allowed: true}, nil
+			return &sdkiam.CheckResponse{Allowed: true}, nil
 		}
 
 		config := AuthzConfig{
@@ -640,9 +640,9 @@ func TestAuthzMiddleware_Caching(t *testing.T) {
 		}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
@@ -686,16 +686,16 @@ func TestAuthzMiddleware_CheckResource(t *testing.T) {
 
 	t.Run("returns_allowed_for_authorized_resource", func(t *testing.T) {
 		pepService := newMockPEPServiceClient()
-		pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
-			return &iampb.CheckResponse{Allowed: true}, nil
+		pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+			return &sdkiam.CheckResponse{Allowed: true}, nil
 		}
 
 		config := AuthzConfig{}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		allowed, err := middleware.CheckResource(context.Background(), session, "read", "/api/users")
@@ -710,16 +710,16 @@ func TestAuthzMiddleware_CheckResource(t *testing.T) {
 
 	t.Run("returns_not_allowed_for_unauthorized_resource", func(t *testing.T) {
 		pepService := newMockPEPServiceClient()
-		pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
-			return &iampb.CheckResponse{Allowed: false}, nil
+		pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+			return &sdkiam.CheckResponse{Allowed: false}, nil
 		}
 
 		config := AuthzConfig{}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		allowed, err := middleware.CheckResource(context.Background(), session, "delete", "/api/users/123")
@@ -740,18 +740,18 @@ func TestAuthzMiddleware_CheckBatch(t *testing.T) {
 
 	t.Run("returns_results_for_batch_check", func(t *testing.T) {
 		pepService := newMockPEPServiceClient()
-		pepService.checkBatchFunc = func(ctx context.Context, req *iampb.CheckBatchRequest) (*iampb.CheckBatchResponse, error) {
-			return &iampb.CheckBatchResponse{
-				Results: []bool{true, false, true},
+		pepService.checkBatchFunc = func(ctx context.Context, req *sdkiam.CheckBatchRequest) (*sdkiam.CheckBatchResponse, error) {
+			return &sdkiam.CheckBatchResponse{
+				Results: []sdkiam.CheckResponse{{Allowed: true}, {Allowed: false}, {Allowed: true}},
 			}, nil
 		}
 
 		config := AuthzConfig{}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		resources := []string{"/api/users/1", "/api/users/2", "/api/users/3"}
@@ -776,16 +776,16 @@ func TestAuthzMiddleware_CheckBatch(t *testing.T) {
 
 	t.Run("handles_pep_service_error", func(t *testing.T) {
 		pepService := newMockPEPServiceClient()
-		pepService.checkBatchFunc = func(ctx context.Context, req *iampb.CheckBatchRequest) (*iampb.CheckBatchResponse, error) {
+		pepService.checkBatchFunc = func(ctx context.Context, req *sdkiam.CheckBatchRequest) (*sdkiam.CheckBatchResponse, error) {
 			return nil, errors.New("service unavailable")
 		}
 
 		config := AuthzConfig{}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		resources := []string{"/api/users/1", "/api/users/2"}
@@ -798,19 +798,19 @@ func TestAuthzMiddleware_CheckBatch(t *testing.T) {
 
 	t.Run("uses_default_decision_when_results_incomplete", func(t *testing.T) {
 		pepService := newMockPEPServiceClient()
-		pepService.checkBatchFunc = func(ctx context.Context, req *iampb.CheckBatchRequest) (*iampb.CheckBatchResponse, error) {
+		pepService.checkBatchFunc = func(ctx context.Context, req *sdkiam.CheckBatchRequest) (*sdkiam.CheckBatchResponse, error) {
 			// Return fewer results than requested
-			return &iampb.CheckBatchResponse{
-				Results: []bool{true},
+			return &sdkiam.CheckBatchResponse{
+				Results: []sdkiam.CheckResponse{{Allowed: true}},
 			}, nil
 		}
 
 		config := AuthzConfig{DefaultDeny: true}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSession(&iampb.User{
-			Id:       "user-123",
-			TenantId: "tenant-456",
+		session := NewIAMSession(&sdkiam.User{
+			ID: "user-123",
+			TenantID: "tenant-456",
 		})
 
 		resources := []string{"/api/users/1", "/api/users/2"}
@@ -836,17 +836,17 @@ func TestResourceAuthorizer(t *testing.T) {
 	t.Run("CanRead_checks_read_action", func(t *testing.T) {
 		pepService := newMockPEPServiceClient()
 		var capturedAction, capturedResource string
-		pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
+		pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 			capturedAction = req.Action
 			capturedResource = req.Resource
-			return &iampb.CheckResponse{Allowed: true}, nil
+			return &sdkiam.CheckResponse{Allowed: true}, nil
 		}
 
 		config := AuthzConfig{}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		authorizer := middleware.NewResourceAuthorizer("/api/users")
-		session := NewIAMSession(&iampb.User{Id: "user-123", TenantId: "tenant-456"})
+		session := NewIAMSession(&sdkiam.User{ID: "user-123", TenantID: "tenant-456"})
 
 		_, _ = authorizer.CanRead(context.Background(), session, "123")
 
@@ -861,17 +861,17 @@ func TestResourceAuthorizer(t *testing.T) {
 	t.Run("CanCreate_checks_create_action", func(t *testing.T) {
 		pepService := newMockPEPServiceClient()
 		var capturedAction, capturedResource string
-		pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
+		pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 			capturedAction = req.Action
 			capturedResource = req.Resource
-			return &iampb.CheckResponse{Allowed: true}, nil
+			return &sdkiam.CheckResponse{Allowed: true}, nil
 		}
 
 		config := AuthzConfig{}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		authorizer := middleware.NewResourceAuthorizer("/api/users")
-		session := NewIAMSession(&iampb.User{Id: "user-123", TenantId: "tenant-456"})
+		session := NewIAMSession(&sdkiam.User{ID: "user-123", TenantID: "tenant-456"})
 
 		_, _ = authorizer.CanCreate(context.Background(), session)
 
@@ -886,17 +886,17 @@ func TestResourceAuthorizer(t *testing.T) {
 	t.Run("CanUpdate_checks_update_action", func(t *testing.T) {
 		pepService := newMockPEPServiceClient()
 		var capturedAction, capturedResource string
-		pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
+		pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 			capturedAction = req.Action
 			capturedResource = req.Resource
-			return &iampb.CheckResponse{Allowed: true}, nil
+			return &sdkiam.CheckResponse{Allowed: true}, nil
 		}
 
 		config := AuthzConfig{}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		authorizer := middleware.NewResourceAuthorizer("/api/users")
-		session := NewIAMSession(&iampb.User{Id: "user-123", TenantId: "tenant-456"})
+		session := NewIAMSession(&sdkiam.User{ID: "user-123", TenantID: "tenant-456"})
 
 		_, _ = authorizer.CanUpdate(context.Background(), session, "456")
 
@@ -911,17 +911,17 @@ func TestResourceAuthorizer(t *testing.T) {
 	t.Run("CanDelete_checks_delete_action", func(t *testing.T) {
 		pepService := newMockPEPServiceClient()
 		var capturedAction, capturedResource string
-		pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
+		pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 			capturedAction = req.Action
 			capturedResource = req.Resource
-			return &iampb.CheckResponse{Allowed: true}, nil
+			return &sdkiam.CheckResponse{Allowed: true}, nil
 		}
 
 		config := AuthzConfig{}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		authorizer := middleware.NewResourceAuthorizer("/api/users")
-		session := NewIAMSession(&iampb.User{Id: "user-123", TenantId: "tenant-456"})
+		session := NewIAMSession(&sdkiam.User{ID: "user-123", TenantID: "tenant-456"})
 
 		_, _ = authorizer.CanDelete(context.Background(), session, "789")
 
@@ -941,14 +941,14 @@ func TestAuthzMiddleware_AuthorizeHandler(t *testing.T) {
 	t.Run("allows_authorized_request", func(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		pepService := newMockPEPServiceClient()
-		pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
-			return &iampb.CheckResponse{Allowed: true}, nil
+		pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+			return &sdkiam.CheckResponse{Allowed: true}, nil
 		}
 
 		config := AuthzConfig{}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSession(&iampb.User{Id: "user-123", TenantId: "tenant-456"})
+		session := NewIAMSession(&sdkiam.User{ID: "user-123", TenantID: "tenant-456"})
 
 		called := false
 		handler := middleware.AuthorizeHandler("read", "/api/users")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -969,14 +969,14 @@ func TestAuthzMiddleware_AuthorizeHandler(t *testing.T) {
 	t.Run("denies_unauthorized_request", func(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		pepService := newMockPEPServiceClient()
-		pepService.checkFunc = func(ctx context.Context, req *iampb.CheckRequest) (*iampb.CheckResponse, error) {
-			return &iampb.CheckResponse{Allowed: false}, nil
+		pepService.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+			return &sdkiam.CheckResponse{Allowed: false}, nil
 		}
 
 		config := AuthzConfig{}
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
-		session := NewIAMSession(&iampb.User{Id: "user-123", TenantId: "tenant-456"})
+		session := NewIAMSession(&sdkiam.User{ID: "user-123", TenantID: "tenant-456"})
 
 		called := false
 		handler := middleware.AuthorizeHandler("delete", "/api/admin")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

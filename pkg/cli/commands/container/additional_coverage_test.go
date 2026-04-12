@@ -16,10 +16,12 @@ package container
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -28,8 +30,8 @@ func TestPrintContainerList_EmptyList(t *testing.T) {
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	resp := &platformv1.ListContainersResponse{
-		Containers: []*platformv1.Container{},
+	resp := &computesvc.ListContainersResult{
+		Containers: []*computesvc.Container{},
 	}
 
 	err := printContainerList(printer, resp)
@@ -42,13 +44,13 @@ func TestPrintContainerList_ContainersWithNilConfig(t *testing.T) {
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	resp := &platformv1.ListContainersResponse{
-		Containers: []*platformv1.Container{
+	resp := &computesvc.ListContainersResult{
+		Containers: []*computesvc.Container{
 			{
-				Id:        "container-1",
-				State:     platformv1.ContainerState_CONTAINER_STATE_RUNNING,
+				ID:        "container-1",
+				State:     computesvc.ContainerStateRunning,
 				Config:    nil, // No config
-				CreatedAt: timestamppb.Now(),
+				CreatedAt: time.Now(),
 			},
 		},
 	}
@@ -63,29 +65,29 @@ func TestPrintContainerList_MultipleContainersWithPorts(t *testing.T) {
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	resp := &platformv1.ListContainersResponse{
-		Containers: []*platformv1.Container{
+	resp := &computesvc.ListContainersResult{
+		Containers: []*computesvc.Container{
 			{
-				Id:    "container-1",
-				State: platformv1.ContainerState_CONTAINER_STATE_RUNNING,
-				Config: &platformv1.ContainerConfig{
+				ID:    "container-1",
+				State: computesvc.ContainerStateRunning,
+				Config: &computesvc.ContainerConfig{
 					Name:  "web-app",
 					Image: "nginx:latest",
-					Ports: []*platformv1.PortMapping{
+					Ports: []*computesvc.PortMapping{
 						{HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
-						{HostPort: 443, ContainerPort: 443, Protocol: "tcp", HostIp: "0.0.0.0"},
+						{HostPort: 443, ContainerPort: 443, Protocol: "tcp", HostIP: "0.0.0.0"},
 					},
 				},
-				CreatedAt: timestamppb.Now(),
+				CreatedAt: time.Now(),
 			},
 			{
-				Id:    "container-2",
-				State: platformv1.ContainerState_CONTAINER_STATE_STOPPED,
-				Config: &platformv1.ContainerConfig{
+				ID:    "container-2",
+				State: computesvc.ContainerStateStopped,
+				Config: &computesvc.ContainerConfig{
 					Name:  "db",
 					Image: "postgres:14",
 				},
-				CreatedAt: timestamppb.Now(),
+				CreatedAt: time.Now(),
 			},
 		},
 	}
@@ -131,9 +133,9 @@ func TestParseFilters_MixedFilters(t *testing.T) {
 		t.Fatal("expected selector, got nil")
 	}
 
-	// Should have label, name, and image in matchLabels
-	if len(selector.MatchLabels) != 3 {
-		t.Errorf("expected 3 labels, got %d", len(selector.MatchLabels))
+	// Should have label, name, and image in MatchLabels
+	if len(selector) != 3 {
+		t.Errorf("expected 3 labels, got %d", len(selector))
 	}
 }
 
@@ -142,10 +144,10 @@ func TestPrintFullContainerDetails_ContainerWithNoMetrics(t *testing.T) {
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	container := &platformv1.Container{
-		Id:    "container-1",
-		State: platformv1.ContainerState_CONTAINER_STATE_RUNNING,
-		Config: &platformv1.ContainerConfig{
+	container := &computesvc.Container{
+		ID:    "container-1",
+		State: computesvc.ContainerStateRunning,
+		Config: &computesvc.ContainerConfig{
 			Name:  "app",
 			Image: "myimage:latest",
 		},
@@ -162,13 +164,13 @@ func TestPrintFullContainerDetails_ContainerWithEmptyResources(t *testing.T) {
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	container := &platformv1.Container{
-		Id:    "container-1",
-		State: platformv1.ContainerState_CONTAINER_STATE_RUNNING,
-		Config: &platformv1.ContainerConfig{
+	container := &computesvc.Container{
+		ID:    "container-1",
+		State: computesvc.ContainerStateRunning,
+		Config: &computesvc.ContainerConfig{
 			Name:      "app",
 			Image:     "myimage:latest",
-			Resources: &platformv1.ResourceLimits{}, // Empty resources
+			Resources: &computesvc.ResourceLimits{}, // Empty resources
 		},
 	}
 
@@ -182,22 +184,22 @@ func TestPrintFullContainerDetails_ContainerWithMetricsAndNoLimit(t *testing.T) 
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	container := &platformv1.Container{
-		Id:    "container-1",
-		State: platformv1.ContainerState_CONTAINER_STATE_RUNNING,
-		Config: &platformv1.ContainerConfig{
+	container := &computesvc.Container{
+		ID:    "container-1",
+		State: computesvc.ContainerStateRunning,
+		Config: &computesvc.ContainerConfig{
 			Name:  "app",
 			Image: "myimage:latest",
 		},
-		Metrics: &platformv1.ContainerMetrics{
-			CpuUsagePercent: 10.5,
-			MemoryUsedMb:    256,
-			MemoryLimitMb:   0, // No limit
-			DiskReadBytes:   1024,
-			DiskWriteBytes:  2048,
-			NetworkRxBytes:  4096,
-			NetworkTxBytes:  8192,
-			UptimeSeconds:   0, // No uptime
+		Metrics: &computesvc.ContainerMetrics{
+			CPUUsagePercent: 10.5,
+			MemoryUsedMB:   256,
+			MemoryLimitMB:  0, // No limit
+			DiskReadBytes:  1024,
+			DiskWriteBytes: 2048,
+			NetworkRxBytes: 4096,
+			NetworkTxBytes: 8192,
+			UptimeSeconds:  0, // No uptime
 		},
 	}
 
@@ -211,13 +213,13 @@ func TestPrintFullContainerDetails_ContainerWithReadonlyVolume(t *testing.T) {
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	container := &platformv1.Container{
-		Id:    "container-1",
-		State: platformv1.ContainerState_CONTAINER_STATE_RUNNING,
-		Config: &platformv1.ContainerConfig{
+	container := &computesvc.Container{
+		ID:    "container-1",
+		State: computesvc.ContainerStateRunning,
+		Config: &computesvc.ContainerConfig{
 			Name:  "app",
 			Image: "myimage:latest",
-			Volumes: []*platformv1.VolumeMount{
+			Volumes: []*computesvc.VolumeMount{
 				{Source: "/data", Destination: "/mnt/data", Readonly: false},
 				{Source: "/config", Destination: "/etc/config", Readonly: true},
 			},
@@ -235,10 +237,10 @@ func TestPrintContainerDetails_WithEmptyCommand(t *testing.T) {
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	container := &platformv1.Container{
-		Id:    "container-1",
-		State: platformv1.ContainerState_CONTAINER_STATE_CREATED,
-		Config: &platformv1.ContainerConfig{
+	container := &computesvc.Container{
+		ID:    "container-1",
+		State: computesvc.ContainerStateCreated,
+		Config: &computesvc.ContainerConfig{
 			Name:       "app",
 			Image:      "myimage:latest",
 			WorkingDir: "",
@@ -256,12 +258,11 @@ func TestPrintContainerDetails_WithNoHostID(t *testing.T) {
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	container := &platformv1.Container{
-		Id:        "container-1",
-		State:     platformv1.ContainerState_CONTAINER_STATE_RUNNING,
-		HostId:    "", // No host ID
-		StartedAt: nil,
-		Config: &platformv1.ContainerConfig{
+	container := &computesvc.Container{
+		ID:     "container-1",
+		State:  computesvc.ContainerStateRunning,
+		HostID: "", // No host ID
+		Config: &computesvc.ContainerConfig{
 			Name:  "app",
 			Image: "myimage:latest",
 		},
@@ -272,17 +273,17 @@ func TestPrintContainerDetails_WithNoHostID(t *testing.T) {
 
 // Tests for formatPorts edge cases
 func TestFormatPorts_WithEmptySlice(t *testing.T) {
-	result := formatPorts([]*platformv1.PortMapping{})
+	result := formatPorts([]*computesvc.PortMapping{})
 	if result != "" {
 		t.Errorf("expected empty string, got %q", result)
 	}
 }
 
 func TestFormatPorts_WithMixedHostIPs(t *testing.T) {
-	ports := []*platformv1.PortMapping{
+	ports := []*computesvc.PortMapping{
 		{HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
-		{HostPort: 8443, ContainerPort: 443, Protocol: "tcp", HostIp: "192.168.1.1"},
-		{HostPort: 53, ContainerPort: 53, Protocol: "udp", HostIp: ""},
+		{HostPort: 8443, ContainerPort: 443, Protocol: "tcp", HostIP: "192.168.1.1"},
+		{HostPort: 53, ContainerPort: 53, Protocol: "udp", HostIP: ""},
 	}
 
 	result := formatPorts(ports)

@@ -18,7 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	tpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tpm"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -96,16 +97,18 @@ func runProvision(flags *cli.CommonFlags, opts *provisionOptions) error {
 func runProvisionWithClient(base TPMBaseCommandInterface, opts *provisionOptions) error {
 	defer base.Close()
 
-	req := &platformv1.TPMProvisionRequest{
-		CreateEk:            opts.CreateEK,
-		CreateSrk:           opts.CreateSRK,
-		CreateAk:            opts.CreateAK,
+	sdkClient := tpmsvc.NewClientFromGRPC(base.TPMClient())
+
+	req := &tpmsvc.ProvisionRequest{
+		CreateEK:            opts.CreateEK,
+		CreateSRK:           opts.CreateSRK,
+		CreateAK:            opts.CreateAK,
 		OwnerPassword:       opts.OwnerPassword,
 		EndorsementPassword: opts.EndorsementPassword,
 	}
 
 	ctx := base.Context()
-	resp, err := base.TPMClient().Provision(ctx, req)
+	resp, err := sdkClient.ProvisionDomain(ctx, req)
 	if err != nil {
 		return ErrTPMProvisionFailed{Reason: err.Error()}
 	}
@@ -126,13 +129,13 @@ func runProvisionWithClient(base TPMBaseCommandInterface, opts *provisionOptions
 		"message": resp.Status.Message,
 	}
 
-	if len(resp.EkPublic) > 0 {
+	if len(resp.EKPublic) > 0 {
 		output["ek_created"] = true
 	}
-	if len(resp.SrkPublic) > 0 {
+	if len(resp.SRKPublic) > 0 {
 		output["srk_created"] = true
 	}
-	if len(resp.AkPublic) > 0 {
+	if len(resp.AKPublic) > 0 {
 		output["ak_created"] = true
 	}
 
@@ -143,13 +146,13 @@ func runProvisionWithClient(base TPMBaseCommandInterface, opts *provisionOptions
 	case cli.OutputFormatTable:
 		printer.PrintSuccess("TPM provisioned successfully")
 		fmt.Println()
-		if len(resp.EkPublic) > 0 {
+		if len(resp.EKPublic) > 0 {
 			printer.PrintKeyValue("EK Created", "Yes")
 		}
-		if len(resp.SrkPublic) > 0 {
+		if len(resp.SRKPublic) > 0 {
 			printer.PrintKeyValue("SRK Created", "Yes")
 		}
-		if len(resp.AkPublic) > 0 {
+		if len(resp.AKPublic) > 0 {
 			printer.PrintKeyValue("AK Created", "Yes")
 		}
 		return nil

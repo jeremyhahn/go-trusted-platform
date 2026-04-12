@@ -22,44 +22,43 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 )
 
 // =============================================================================
-// parseKeyUsage Tests
+// ParseKeyUsage Tests (via SDK)
 // =============================================================================
 
 func TestParseKeyUsage(t *testing.T) {
 	tests := []struct {
 		name      string
 		input     string
-		expected  platformv1.KeyUsage
+		expected  kmssvc.KeyUsage
 		expectErr bool
 	}{
-		{"encrypt", "encrypt", platformv1.KeyUsage_KEY_USAGE_ENCRYPT, false},
-		{"decrypt", "decrypt", platformv1.KeyUsage_KEY_USAGE_DECRYPT, false},
-		{"sign", "sign", platformv1.KeyUsage_KEY_USAGE_SIGN, false},
-		{"verify", "verify", platformv1.KeyUsage_KEY_USAGE_VERIFY, false},
-		{"wrap", "wrap", platformv1.KeyUsage_KEY_USAGE_WRAP, false},
-		{"wrap-key", "wrap-key", platformv1.KeyUsage_KEY_USAGE_WRAP, false},
-		{"unwrap", "unwrap", platformv1.KeyUsage_KEY_USAGE_UNWRAP, false},
-		{"unwrap-key", "unwrap-key", platformv1.KeyUsage_KEY_USAGE_UNWRAP, false},
-		{"derive", "derive", platformv1.KeyUsage_KEY_USAGE_DERIVE, false},
-		{"derive-key", "derive-key", platformv1.KeyUsage_KEY_USAGE_DERIVE, false},
-		{"hmac", "hmac", platformv1.KeyUsage_KEY_USAGE_HMAC, false},
-		{"generate-mac", "generate-mac", platformv1.KeyUsage_KEY_USAGE_HMAC, false},
-		{"mac", "mac", platformv1.KeyUsage_KEY_USAGE_HMAC, false},
-		{"uppercase ENCRYPT", "ENCRYPT", platformv1.KeyUsage_KEY_USAGE_ENCRYPT, false},
-		{"underscore wrap_key", "wrap_key", platformv1.KeyUsage_KEY_USAGE_WRAP, false},
-		{"invalid", "invalid", platformv1.KeyUsage_KEY_USAGE_UNSPECIFIED, true},
+		{"encrypt", "encrypt", kmssvc.KeyUsageEncrypt, false},
+		{"decrypt", "decrypt", kmssvc.KeyUsageDecrypt, false},
+		{"sign", "sign", kmssvc.KeyUsageSign, false},
+		{"verify", "verify", kmssvc.KeyUsageVerify, false},
+		{"wrap", "wrap", kmssvc.KeyUsageWrap, false},
+		{"wrap-key", "wrap-key", kmssvc.KeyUsageWrap, false},
+		{"unwrap", "unwrap", kmssvc.KeyUsageUnwrap, false},
+		{"unwrap-key", "unwrap-key", kmssvc.KeyUsageUnwrap, false},
+		{"derive", "derive", kmssvc.KeyUsageDerive, false},
+		{"derive-key", "derive-key", kmssvc.KeyUsageDerive, false},
+		{"hmac", "hmac", kmssvc.KeyUsageHMAC, false},
+		{"generate-mac", "generate-mac", kmssvc.KeyUsageHMAC, false},
+		{"mac", "mac", kmssvc.KeyUsageHMAC, false},
+		{"uppercase ENCRYPT", "ENCRYPT", kmssvc.KeyUsageEncrypt, false},
+		{"underscore wrap_key", "wrap_key", kmssvc.KeyUsageWrap, false},
+		{"invalid", "invalid", kmssvc.KeyUsageUnspecified, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := parseKeyUsage(tt.input)
+			result, err := kmssvc.ParseKeyUsage(tt.input)
 			if tt.expectErr {
 				require.Error(t, err)
-				assert.IsType(t, ErrInvalidKeyUsage{}, err)
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, tt.expected, result)
@@ -69,41 +68,40 @@ func TestParseKeyUsage(t *testing.T) {
 }
 
 // =============================================================================
-// parseKeyUsages Tests
+// ParseKeyUsages Tests (via SDK)
 // =============================================================================
 
 func TestParseKeyUsages(t *testing.T) {
 	t.Run("empty string", func(t *testing.T) {
-		result, err := parseKeyUsages("")
+		result, err := kmssvc.ParseKeyUsages("")
 		require.NoError(t, err)
 		assert.Nil(t, result)
 	})
 
 	t.Run("single usage", func(t *testing.T) {
-		result, err := parseKeyUsages("encrypt")
+		result, err := kmssvc.ParseKeyUsages("encrypt")
 		require.NoError(t, err)
-		assert.Equal(t, []platformv1.KeyUsage{platformv1.KeyUsage_KEY_USAGE_ENCRYPT}, result)
+		assert.Equal(t, []kmssvc.KeyUsage{kmssvc.KeyUsageEncrypt}, result)
 	})
 
 	t.Run("multiple usages", func(t *testing.T) {
-		result, err := parseKeyUsages("encrypt,decrypt,sign")
+		result, err := kmssvc.ParseKeyUsages("encrypt,decrypt,sign")
 		require.NoError(t, err)
 		assert.Len(t, result, 3)
-		assert.Equal(t, platformv1.KeyUsage_KEY_USAGE_ENCRYPT, result[0])
-		assert.Equal(t, platformv1.KeyUsage_KEY_USAGE_DECRYPT, result[1])
-		assert.Equal(t, platformv1.KeyUsage_KEY_USAGE_SIGN, result[2])
+		assert.Equal(t, kmssvc.KeyUsageEncrypt, result[0])
+		assert.Equal(t, kmssvc.KeyUsageDecrypt, result[1])
+		assert.Equal(t, kmssvc.KeyUsageSign, result[2])
 	})
 
 	t.Run("with spaces", func(t *testing.T) {
-		result, err := parseKeyUsages("encrypt , decrypt")
+		result, err := kmssvc.ParseKeyUsages("encrypt , decrypt")
 		require.NoError(t, err)
 		assert.Len(t, result, 2)
 	})
 
 	t.Run("invalid usage in list", func(t *testing.T) {
-		_, err := parseKeyUsages("encrypt,invalid,sign")
+		_, err := kmssvc.ParseKeyUsages("encrypt,invalid,sign")
 		require.Error(t, err)
-		assert.IsType(t, ErrInvalidKeyUsage{}, err)
 	})
 }
 

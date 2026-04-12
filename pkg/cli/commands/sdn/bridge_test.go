@@ -3,34 +3,40 @@ package sdn
 import (
 	"testing"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	sdnsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
 )
 
 func TestParseBridgeType(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
-		expected platformv1.BridgeType
+		expected sdnsvc.BridgeType
 		wantErr  bool
 	}{
-		{"OVS lowercase", "ovs", platformv1.BridgeType_BRIDGE_TYPE_OVS, false},
-		{"OVS uppercase", "OVS", platformv1.BridgeType_BRIDGE_TYPE_OVS, false},
-		{"OVS mixed case", "Ovs", platformv1.BridgeType_BRIDGE_TYPE_OVS, false},
-		{"Linux", "linux", platformv1.BridgeType_BRIDGE_TYPE_LINUX, false},
-		{"VXLAN", "vxlan", platformv1.BridgeType_BRIDGE_TYPE_VXLAN, false},
-		{"Invalid type", "invalid", platformv1.BridgeType_BRIDGE_TYPE_UNSPECIFIED, true},
-		{"Empty string", "", platformv1.BridgeType_BRIDGE_TYPE_UNSPECIFIED, true},
+		{"OVS lowercase", "ovs", sdnsvc.BridgeTypeOVS, false},
+		{"OVS uppercase", "OVS", sdnsvc.BridgeTypeOVS, false},
+		{"OVS mixed case", "Ovs", sdnsvc.BridgeTypeOVS, false},
+		{"Linux", "linux", sdnsvc.BridgeTypeLinux, false},
+		{"VXLAN", "vxlan", sdnsvc.BridgeTypeVXLAN, false},
+		{"Invalid type", "invalid", sdnsvc.BridgeTypeUnspecified, true},
+		{"Empty string", "", sdnsvc.BridgeTypeUnspecified, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := parseBridgeType(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("parseBridgeType(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			result, ok := sdnsvc.ParseBridgeType(tt.input)
+			if tt.wantErr {
+				if ok {
+					t.Errorf("ParseBridgeType(%q) expected not ok, got ok", tt.input)
+				}
+				return
+			}
+			if !ok {
+				t.Errorf("ParseBridgeType(%q) expected ok, got not ok", tt.input)
 				return
 			}
 			if result != tt.expected {
-				t.Errorf("parseBridgeType(%q) = %v, want %v", tt.input, result, tt.expected)
+				t.Errorf("ParseBridgeType(%q) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -132,11 +138,11 @@ func TestBridgeListCommandFlags(t *testing.T) {
 	}
 }
 
-func TestBridgeTypeMapCompleteness(t *testing.T) {
+func TestStringToBridgeTypeMapCompleteness(t *testing.T) {
 	expectedTypes := []string{"ovs", "linux", "vxlan"}
 	for _, expected := range expectedTypes {
-		if _, ok := bridgeTypeMap[expected]; !ok {
-			t.Errorf("bridgeTypeMap missing entry for %s", expected)
+		if _, ok := sdnsvc.StringToBridgeType[expected]; !ok {
+			t.Errorf("StringToBridgeType missing entry for %s", expected)
 		}
 	}
 }

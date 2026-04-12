@@ -15,13 +15,11 @@ package sdn
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	sdnclient "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
+	sdnsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
 )
 
 // ErrInvalidPortType indicates an unrecognized port type string.
@@ -31,25 +29,6 @@ type ErrInvalidPortType struct {
 
 func (e ErrInvalidPortType) Error() string {
 	return fmt.Sprintf("invalid port type: %s (valid: internal, physical, tap, veth, vxlan, gre)", e.Type)
-}
-
-// portTypeMap provides O(1) lookup from CLI string to protobuf enum.
-var portTypeMap = map[string]platformv1.PortType{
-	"internal": platformv1.PortType_PORT_TYPE_INTERNAL,
-	"physical": platformv1.PortType_PORT_TYPE_PHYSICAL,
-	"tap":      platformv1.PortType_PORT_TYPE_TAP,
-	"veth":     platformv1.PortType_PORT_TYPE_VETH,
-	"vxlan":    platformv1.PortType_PORT_TYPE_VXLAN,
-	"gre":      platformv1.PortType_PORT_TYPE_GRE,
-}
-
-// parsePortType converts a CLI port type string to the protobuf enum.
-func parsePortType(s string) (platformv1.PortType, error) {
-	pt, ok := portTypeMap[strings.ToLower(s)]
-	if !ok {
-		return platformv1.PortType_PORT_TYPE_UNSPECIFIED, ErrInvalidPortType{Type: s}
-	}
-	return pt, nil
 }
 
 // NewPortCommand creates the port subcommand
@@ -241,9 +220,9 @@ Examples:
 func runPortAdd(flags *cli.CommonFlags, bridgeID, portID, name, portType string,
 	tag int, iface, mac string, mtu int, adminState string) error {
 
-	pt, err := parsePortType(portType)
-	if err != nil {
-		return err
+	pt, ok := sdnsvc.ParsePortType(portType)
+	if !ok {
+		return ErrInvalidPortType{Type: portType}
 	}
 
 	base, err := cli.NewBaseCommand(flags)
@@ -252,7 +231,7 @@ func runPortAdd(flags *cli.CommonFlags, bridgeID, portID, name, portType string,
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
 	options := make(map[string]string)
 	if iface != "" {
@@ -262,12 +241,12 @@ func runPortAdd(flags *cli.CommonFlags, bridgeID, portID, name, portType string,
 		options["admin_state"] = adminState
 	}
 
-	config := &platformv1.PortConfig{
+	config := &sdnsvc.PortConfig{
 		Name:       name,
 		Type:       pt,
-		Vlan:       uint32(tag),
-		MacAddress: mac,
-		Mtu:        uint32(mtu),
+		VLAN:       uint32(tag),
+		MACAddress: mac,
+		MTU:        uint32(mtu),
 		Options:    options,
 		Labels: map[string]string{
 			"port_id": portID,
@@ -276,7 +255,7 @@ func runPortAdd(flags *cli.CommonFlags, bridgeID, portID, name, portType string,
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	resp, err := sdnClient.AddPort(ctx, bridgeID, config)
+	resp, err := sdkClient.AddPortDomain(ctx, bridgeID, config)
 	if err != nil {
 		return &cli.ErrOperationFailed{Operation: "port add", Err: err}
 	}
@@ -291,11 +270,11 @@ func runPortDelete(flags *cli.CommonFlags, bridgeID, portID string) error {
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	if err := sdnClient.DeletePort(ctx, bridgeID, portID); err != nil {
+	if err := sdkClient.DeletePort(ctx, bridgeID, portID); err != nil {
 		return &cli.ErrOperationFailed{Operation: "port delete", Err: err}
 	}
 
@@ -315,11 +294,11 @@ func runPortGetState(flags *cli.CommonFlags, bridgeID, portID string) error {
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	resp, err := sdnClient.GetPort(ctx, bridgeID, portID)
+	resp, err := sdkClient.GetPort(ctx, bridgeID, portID)
 	if err != nil {
 		return &cli.ErrOperationFailed{Operation: "port state", Err: err}
 	}
@@ -336,12 +315,12 @@ func runPortSetState(flags *cli.CommonFlags, bridgeID, portID, adminState string
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
 	// Get current port to update it
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	port, err := sdnClient.GetPort(ctx, bridgeID, portID)
+	port, err := sdkClient.GetPort(ctx, bridgeID, portID)
 	if err != nil {
 		return &cli.ErrOperationFailed{Operation: "port set-state (get current)", Err: err}
 	}
@@ -364,11 +343,11 @@ func runPortGetStats(flags *cli.CommonFlags, bridgeID, portID string) error {
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	resp, err := sdnClient.GetPortStats(ctx, bridgeID, portID)
+	resp, err := sdkClient.GetPortStats(ctx, bridgeID, portID)
 	if err != nil {
 		return &cli.ErrOperationFailed{Operation: "port stats", Err: err}
 	}

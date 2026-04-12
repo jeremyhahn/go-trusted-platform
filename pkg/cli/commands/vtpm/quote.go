@@ -21,7 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -96,19 +96,10 @@ func runQuote(flags *cli.CommonFlags, bundleID, nonce, pcrs string) error {
 	}
 	defer base.Close()
 
-	client := base.Client().VTPM()
-	if client == nil {
-		return ErrVTPMNotAvailable{}
-	}
-
-	req := &platformv1.QuoteVTPMRequest{
-		BundleId: bundleID,
-		Nonce:    nonceBytes,
-		Pcrs:     pcrIndices,
-	}
+	sdkClient := vtpmsvc.NewClientFromGRPC(base.Client().VTPM())
 
 	ctx := base.Context()
-	resp, err := client.QuoteVTPM(ctx, req)
+	resp, err := sdkClient.QuoteDomain(ctx, bundleID, pcrIndices, nonceBytes)
 	if err != nil {
 		return ErrQuoteVTPMFailed{Reason: err.Error()}
 	}
@@ -120,14 +111,14 @@ func runQuote(flags *cli.CommonFlags, bundleID, nonce, pcrs string) error {
 		return printer.Print(resp)
 
 	case cli.OutputFormatTable:
-		printer.PrintKeyValue("Bundle ID", resp.BundleId)
+		printer.PrintKeyValue("Bundle ID", resp.BundleID)
 		printer.PrintKeyValue("Hash Algorithm", resp.HashAlgorithm)
 		printer.PrintKeyValue("Quote", hex.EncodeToString(resp.Quote))
 		printer.PrintKeyValue("Signature", hex.EncodeToString(resp.Signature))
-		if len(resp.PcrValues) > 0 {
+		if len(resp.PCRValues) > 0 {
 			fmt.Println()
 			printer.PrintInfo("PCR Values:")
-			for idx, val := range resp.PcrValues {
+			for idx, val := range resp.PCRValues {
 				printer.PrintKeyValue(fmt.Sprintf("  PCR[%d]", idx), hex.EncodeToString(val))
 			}
 		}

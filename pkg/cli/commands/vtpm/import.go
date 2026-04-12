@@ -15,16 +15,13 @@ package vtpm
 
 import (
 	"fmt"
-	"io"
 	"os"
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
-
-const importChunkSize = 64 * 1024 // 64KB chunks for streaming
 
 // newImportCommand creates the import subcommand for importing bundles
 func newImportCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
@@ -73,10 +70,7 @@ func runImport(flags *cli.CommonFlags, archivePath string) error {
 	}
 	defer base.Close()
 
-	client := base.Client().VTPM()
-	if client == nil {
-		return ErrVTPMNotAvailable{}
-	}
+	sdkClient := vtpmsvc.NewClientFromGRPC(base.Client().VTPM())
 
 	printer := base.Printer()
 
@@ -88,36 +82,7 @@ func runImport(flags *cli.CommonFlags, archivePath string) error {
 	defer file.Close()
 
 	ctx := base.Context()
-	stream, err := client.ImportBundle(ctx)
-	if err != nil {
-		return ErrImportBundleFailed{Reason: err.Error()}
-	}
-
-	// Stream file data to server
-	buf := make([]byte, importChunkSize)
-	var totalSent int64
-
-	for {
-		n, readErr := file.Read(buf)
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			return ErrImportBundleFailed{Reason: readErr.Error()}
-		}
-
-		req := &platformv1.ImportBundleRequest{
-			Data: buf[:n],
-		}
-
-		if sendErr := stream.Send(req); sendErr != nil {
-			return ErrImportBundleFailed{Reason: sendErr.Error()}
-		}
-		totalSent += int64(n)
-	}
-
-	// Close send and receive response
-	resp, err := stream.CloseAndRecv()
+	resp, err := sdkClient.ImportBundleDomain(ctx, file)
 	if err != nil {
 		return ErrImportBundleFailed{Reason: err.Error()}
 	}

@@ -21,7 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -125,22 +125,17 @@ func runTemplateCreate(flags *cli.CommonFlags, id, description string, secureBoo
 	}
 	defer base.Close()
 
-	client := base.Client().VTPM()
-	if client == nil {
-		return ErrVTPMNotAvailable{}
-	}
+	sdkClient := vtpmsvc.NewClientFromGRPC(base.Client().VTPM())
 
-	req := &platformv1.CreateTemplateRequest{
-		Options: &platformv1.CreateTemplateOptions{
-			Id:                id,
+	opts := &vtpmsvc.CreateTemplateOptions{
+			ID:                id,
 			Description:       description,
-			EkAlgorithm:       ekAlg,
-			SecureBootEnabled: secureBoot,
-		},
+			EKAlgorithm:       ekAlg,
+		SecureBootEnabled: secureBoot,
 	}
 
 	ctx := base.Context()
-	resp, err := client.CreateTemplate(ctx, req)
+	resp, err := sdkClient.CreateTemplateDomain(ctx, opts)
 	if err != nil {
 		return ErrCreateTemplateFailed{Reason: err.Error()}
 	}
@@ -153,7 +148,7 @@ func runTemplateCreate(flags *cli.CommonFlags, id, description string, secureBoo
 
 	case cli.OutputFormatTable:
 		if resp.Template != nil {
-			printer.PrintSuccess(fmt.Sprintf("Template created: %s", resp.Template.Id))
+			printer.PrintSuccess(fmt.Sprintf("Template created: %s", resp.Template.ID))
 			fmt.Println()
 			printTemplateDetails(printer, resp.Template)
 		} else if resp.Status != nil && !resp.Status.Success {
@@ -199,15 +194,10 @@ func runTemplateList(flags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
-	client := base.Client().VTPM()
-	if client == nil {
-		return ErrVTPMNotAvailable{}
-	}
-
-	req := &platformv1.ListTemplatesRequest{}
+	sdkClient := vtpmsvc.NewClientFromGRPC(base.Client().VTPM())
 
 	ctx := base.Context()
-	resp, err := client.ListTemplates(ctx, req)
+	resp, err := sdkClient.ListTemplatesDomain(ctx)
 	if err != nil {
 		return ErrListTemplatesFailed{Reason: err.Error()}
 	}
@@ -228,13 +218,13 @@ func runTemplateList(flags *cli.CommonFlags) error {
 		for _, tmpl := range resp.Templates {
 			created := ""
 			if tmpl.CreatedAt != nil {
-				created = tmpl.CreatedAt.AsTime().Format("2006-01-02 15:04")
+				created = (*tmpl.CreatedAt).Format("2006-01-02 15:04")
 			}
 
 			table.AddRow(
-				truncateID(tmpl.Id, 20),
+				truncateID(tmpl.ID, 20),
 				truncateString(tmpl.Description, 30),
-				tmpl.EkAlgorithm.String(),
+				string(tmpl.EKAlgorithm),
 				formatBool(tmpl.SecureBootEnabled),
 				created,
 			)
@@ -298,10 +288,7 @@ func runTemplateDelete(flags *cli.CommonFlags, templateID string, force bool) er
 	}
 	defer base.Close()
 
-	client := base.Client().VTPM()
-	if client == nil {
-		return ErrVTPMNotAvailable{}
-	}
+	sdkClient := vtpmsvc.NewClientFromGRPC(base.Client().VTPM())
 
 	printer := base.Printer()
 
@@ -323,12 +310,8 @@ func runTemplateDelete(flags *cli.CommonFlags, templateID string, force bool) er
 		}
 	}
 
-	req := &platformv1.DeleteTemplateRequest{
-		Id: templateID,
-	}
-
 	ctx := base.Context()
-	resp, err := client.DeleteTemplate(ctx, req)
+	resp, err := sdkClient.DeleteTemplateDomain(ctx, templateID)
 	if err != nil {
 		return ErrDeleteTemplateFailed{Reason: err.Error()}
 	}
@@ -355,25 +338,25 @@ func runTemplateDelete(flags *cli.CommonFlags, templateID string, force bool) er
 }
 
 // printTemplateDetails prints template details in table format
-func printTemplateDetails(printer *cli.Printer, tmpl *platformv1.Template) {
-	printer.PrintKeyValue("ID", tmpl.Id)
+func printTemplateDetails(printer *cli.Printer, tmpl *vtpmsvc.Template) {
+	printer.PrintKeyValue("ID", tmpl.ID)
 	if tmpl.Description != "" {
 		printer.PrintKeyValue("Description", tmpl.Description)
 	}
-	printer.PrintKeyValue("EK Algorithm", tmpl.EkAlgorithm.String())
+	printer.PrintKeyValue("EK Algorithm", string(tmpl.EKAlgorithm))
 	printer.PrintKeyValue("Secure Boot", formatBool(tmpl.SecureBootEnabled))
 
-	if tmpl.TpmStateDir != "" {
-		printer.PrintKeyValue("TPM State Dir", tmpl.TpmStateDir)
+	if tmpl.TPMStateDir != "" {
+		printer.PrintKeyValue("TPM State Dir", tmpl.TPMStateDir)
 	}
-	if tmpl.NvramPath != "" {
-		printer.PrintKeyValue("NVRAM Path", tmpl.NvramPath)
+	if tmpl.NVRAMPath != "" {
+		printer.PrintKeyValue("NVRAM Path", tmpl.NVRAMPath)
 	}
 	if tmpl.SecureBootKeysDir != "" {
 		printer.PrintKeyValue("Secure Boot Keys Dir", tmpl.SecureBootKeysDir)
 	}
 
 	if tmpl.CreatedAt != nil {
-		printer.PrintKeyValue("Created", tmpl.CreatedAt.AsTime().Format("2006-01-02 15:04:05 MST"))
+		printer.PrintKeyValue("Created", (*tmpl.CreatedAt).Format("2006-01-02 15:04:05 MST"))
 	}
 }

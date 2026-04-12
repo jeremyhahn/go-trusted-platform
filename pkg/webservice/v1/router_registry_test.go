@@ -20,7 +20,6 @@ import (
 	"github.com/gorilla/mux"
 
 	proto "github.com/jeremyhahn/go-quicbaas/api/proto"
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
 	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
@@ -31,6 +30,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/webauthn"
 	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
@@ -94,7 +94,7 @@ func (r *testHandlerRegistry) DeviceRestHandler() device.RestHandler {
 	return r.deviceHandler
 }
 
-func (r *testHandlerRegistry) IAMClients() (iampb.IAMServiceClient, iampb.PEPServiceClient) {
+func (r *testHandlerRegistry) IAMClients() (restiam.IAMClient, restiam.PEPClient) {
 	return nil, nil
 }
 

@@ -19,9 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	sdnclient "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
+	sdnsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
 )
 
 // ErrInvalidVLANID indicates a VLAN ID that could not be parsed.
@@ -156,7 +155,7 @@ func runVLANCreate(flags *cli.CommonFlags, vlanID int32, name, description strin
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
 	// The gRPC VLANConfig requires a single bridge_id. If multiple bridges
 	// are specified, create the VLAN on the first bridge. The labels store
@@ -171,16 +170,16 @@ func runVLANCreate(flags *cli.CommonFlags, vlanID int32, name, description strin
 		labels["description"] = description
 	}
 
-	config := &platformv1.VLANConfig{
-		VlanId:   uint32(vlanID),
+	config := &sdnsvc.VLANConfig{
+		VlanID:   uint32(vlanID),
 		Name:     name,
-		BridgeId: bridgeID,
+		BridgeID: bridgeID,
 		Labels:   labels,
 	}
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	resp, err := sdnClient.CreateVLAN(ctx, config)
+	resp, err := sdkClient.CreateVLANDomain(ctx, config)
 	if err != nil {
 		return &cli.ErrOperationFailed{Operation: "vlan create", Err: err}
 	}
@@ -195,11 +194,11 @@ func runVLANDelete(flags *cli.CommonFlags, bridgeID string, vlanID int32) error 
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	if err := sdnClient.DeleteVLAN(ctx, bridgeID, uint32(vlanID)); err != nil {
+	if err := sdkClient.DeleteVLAN(ctx, bridgeID, uint32(vlanID)); err != nil {
 		return &cli.ErrOperationFailed{Operation: "vlan delete", Err: err}
 	}
 
@@ -218,14 +217,11 @@ func runVLANList(flags *cli.CommonFlags, bridgeID string, limit int32, cursor st
 	}
 	defer base.Close()
 
-	sdnClient := sdnclient.NewClientFromGRPC(base.Client().SDN())
-
-	var selector *platformv1.LabelSelector
-	// Label selector is used for additional filtering beyond bridge ID
+	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	resp, err := sdnClient.ListVLANs(ctx, bridgeID, selector)
+	resp, err := sdkClient.ListVLANsDomain(ctx, bridgeID, nil)
 	if err != nil {
 		return &cli.ErrOperationFailed{Operation: "vlan list", Err: err}
 	}

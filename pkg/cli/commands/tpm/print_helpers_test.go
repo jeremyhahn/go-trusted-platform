@@ -22,6 +22,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	tpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -34,43 +35,10 @@ func TestPrintTPMInfoDetails(t *testing.T) {
 		output := &bytes.Buffer{}
 		printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-		resp := &platformv1.TPMInfoResponse{
-			Version:     platformv1.TPMVersion_TPM_VERSION_2_0,
+		resp := &tpmsvc.InfoResponse{
 			IsSimulator: true,
-			FipsMode:    false,
-			Manufacturer: &platformv1.TPMManufacturer{
-				Name:            "Test TPM",
-				Model:           "Model X",
-				FirmwareVersion: "1.0.0",
-			},
-			PcrBanks: []platformv1.PCRBank{
-				platformv1.PCRBank_PCR_BANK_SHA1,
-				platformv1.PCRBank_PCR_BANK_SHA256,
-			},
-			MaxNvramSize: 4096,
-		}
-
-		printTPMInfoDetails(printer, resp)
-
-		result := output.String()
-		assert.Contains(t, result, "2.0")
-		assert.Contains(t, result, "Test TPM")
-		assert.Contains(t, result, "Model X")
-		assert.Contains(t, result, "1.0.0")
-		assert.Contains(t, result, "Yes") // IsSimulator
-		assert.Contains(t, result, "4096")
-	})
-
-	t.Run("without manufacturer model", func(t *testing.T) {
-		output := &bytes.Buffer{}
-		printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
-
-		resp := &platformv1.TPMInfoResponse{
-			Version:     platformv1.TPMVersion_TPM_VERSION_2_0,
-			IsSimulator: false,
-			FipsMode:    true,
-			Manufacturer: &platformv1.TPMManufacturer{
-				Name: "Test TPM",
+			Properties: map[string]string{
+				"info": "TPM Information\nVersion: 2.0\nManufacturer: Test TPM\nModel: Model X\nFirmware: 1.0.0\nMax NVRAM: 4096\nPCR Banks: SHA1, SHA256\nFIPS Mode: No\nSimulator: Yes",
 			},
 		}
 
@@ -79,39 +47,52 @@ func TestPrintTPMInfoDetails(t *testing.T) {
 		result := output.String()
 		assert.Contains(t, result, "2.0")
 		assert.Contains(t, result, "Test TPM")
-		assert.NotContains(t, result, "Model")
-		assert.NotContains(t, result, "Firmware")
 	})
 
-	t.Run("without manufacturer", func(t *testing.T) {
+	t.Run("without properties", func(t *testing.T) {
 		output := &bytes.Buffer{}
 		printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-		resp := &platformv1.TPMInfoResponse{
-			Version:     platformv1.TPMVersion_TPM_VERSION_1_2,
+		resp := &tpmsvc.InfoResponse{
 			IsSimulator: false,
-			FipsMode:    false,
+		}
+
+		printTPMInfoDetails(printer, resp)
+
+		// Should not panic
+		_ = output.String()
+	})
+
+	t.Run("empty properties", func(t *testing.T) {
+		output := &bytes.Buffer{}
+		printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
+
+		resp := &tpmsvc.InfoResponse{
+			IsSimulator: false,
+			Properties:  map[string]string{},
+		}
+
+		printTPMInfoDetails(printer, resp)
+
+		// Should not panic
+		_ = output.String()
+	})
+
+	t.Run("info property only", func(t *testing.T) {
+		output := &bytes.Buffer{}
+		printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
+
+		resp := &tpmsvc.InfoResponse{
+			IsSimulator: true,
+			Properties: map[string]string{
+				"info": "TPM Information\nVersion: 1.2",
+			},
 		}
 
 		printTPMInfoDetails(printer, resp)
 
 		result := output.String()
 		assert.Contains(t, result, "1.2")
-	})
-
-	t.Run("without pcr banks", func(t *testing.T) {
-		output := &bytes.Buffer{}
-		printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
-
-		resp := &platformv1.TPMInfoResponse{
-			Version: platformv1.TPMVersion_TPM_VERSION_2_0,
-		}
-
-		printTPMInfoDetails(printer, resp)
-
-		result := output.String()
-		assert.Contains(t, result, "2.0")
-		// Should not contain PCR Banks line
 	})
 }
 

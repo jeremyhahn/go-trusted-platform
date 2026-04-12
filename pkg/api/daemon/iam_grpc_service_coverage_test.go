@@ -17,9 +17,8 @@ import (
 	"context"
 	"testing"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -78,8 +77,8 @@ func TestIAMGRPCService_RevokeRole_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		revokeRoleFunc: func(ctx context.Context, in *iampb.RevokeRoleRequest, opts ...grpc.CallOption) (*iampb.RevokeRoleResponse, error) {
-			return nil, status.Error(codes.NotFound, "role not found")
+		revokeRoleFunc: func(ctx context.Context, tenantID, userID, roleID string) error {
+			return status.Error(codes.NotFound, "role not found")
 		},
 	}
 	svc := NewIAMGRPCService(iamTestLogger(), mockIAM, nil)
@@ -148,8 +147,8 @@ func TestIAMGRPCService_RemoveGroupMember_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		removeUserFromGroupFunc: func(ctx context.Context, in *iampb.RemoveUserFromGroupRequest, opts ...grpc.CallOption) (*iampb.RemoveUserFromGroupResponse, error) {
-			return nil, status.Error(codes.NotFound, "group not found")
+		removeUserFromGroupFunc: func(ctx context.Context, tenantID, groupID, userID string) error {
+			return status.Error(codes.NotFound, "group not found")
 		},
 	}
 	svc := NewIAMGRPCService(iamTestLogger(), mockIAM, nil)
@@ -218,8 +217,8 @@ func TestIAMGRPCService_AssignRole_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		assignRoleFunc: func(ctx context.Context, in *iampb.AssignRoleRequest, opts ...grpc.CallOption) (*iampb.AssignRoleResponse, error) {
-			return nil, status.Error(codes.AlreadyExists, "role already assigned")
+		assignRoleFunc: func(ctx context.Context, tenantID, userID, roleID string) error {
+			return status.Error(codes.AlreadyExists, "role already assigned")
 		},
 	}
 	svc := NewIAMGRPCService(iamTestLogger(), mockIAM, nil)
@@ -244,7 +243,7 @@ func TestIAMGRPCService_ConvertGRPCError_NonStatusError(t *testing.T) {
 
 	// Use a mock that returns a non-gRPC status error
 	mockIAM := &mockIAMServiceClient{
-		getUserFunc: func(ctx context.Context, in *iampb.GetUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
+		getUserFunc: func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
 			return nil, context.DeadlineExceeded // Not a gRPC status error
 		},
 	}
@@ -279,7 +278,6 @@ func TestIAMGRPCService_ConvertGRPCError_NonStatusError(t *testing.T) {
 func TestIAMGRPCService_SDKUserToPlatformUser_Nil(t *testing.T) {
 	t.Parallel()
 
-	svc := NewIAMGRPCService(iamTestLogger(), &mockIAMServiceClient{}, nil)
 	result := sdkUserToPlatformUser(nil)
 	if result != nil {
 		t.Error("expected nil for nil input")
@@ -289,7 +287,6 @@ func TestIAMGRPCService_SDKUserToPlatformUser_Nil(t *testing.T) {
 func TestIAMGRPCService_SDKRoleToPlatformRole_Nil(t *testing.T) {
 	t.Parallel()
 
-	svc := NewIAMGRPCService(iamTestLogger(), &mockIAMServiceClient{}, nil)
 	result := sdkRoleToPlatformRole(nil)
 	if result != nil {
 		t.Error("expected nil for nil input")
@@ -299,7 +296,6 @@ func TestIAMGRPCService_SDKRoleToPlatformRole_Nil(t *testing.T) {
 func TestIAMGRPCService_SDKGroupToPlatformGroup_Nil(t *testing.T) {
 	t.Parallel()
 
-	svc := NewIAMGRPCService(iamTestLogger(), &mockIAMServiceClient{}, nil)
 	result := sdkGroupToPlatformGroup(nil)
 	if result != nil {
 		t.Error("expected nil for nil input")
@@ -309,7 +305,6 @@ func TestIAMGRPCService_SDKGroupToPlatformGroup_Nil(t *testing.T) {
 func TestIAMGRPCService_SDKTenantToPlatformTenant_Nil(t *testing.T) {
 	t.Parallel()
 
-	svc := NewIAMGRPCService(iamTestLogger(), &mockIAMServiceClient{}, nil)
 	result := sdkTenantToPlatformTenant(nil)
 	if result != nil {
 		t.Error("expected nil for nil input")
@@ -319,7 +314,6 @@ func TestIAMGRPCService_SDKTenantToPlatformTenant_Nil(t *testing.T) {
 func TestIAMGRPCService_SDKPolicyToPlatformPolicy_Nil(t *testing.T) {
 	t.Parallel()
 
-	svc := NewIAMGRPCService(iamTestLogger(), &mockIAMServiceClient{}, nil)
 	result := sdkPolicyToPlatformPolicy(nil)
 	if result != nil {
 		t.Error("expected nil for nil input")
@@ -329,7 +323,6 @@ func TestIAMGRPCService_SDKPolicyToPlatformPolicy_Nil(t *testing.T) {
 func TestIAMGRPCService_SDKAppToPlatformApp_Nil(t *testing.T) {
 	t.Parallel()
 
-	svc := NewIAMGRPCService(iamTestLogger(), &mockIAMServiceClient{}, nil)
 	result := sdkAppToPlatformApp(nil)
 	if result != nil {
 		t.Error("expected nil for nil input")
@@ -426,7 +419,7 @@ func TestIAMGRPCService_CreateUser_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		createUserFunc: func(ctx context.Context, in *iampb.CreateUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
+		createUserFunc: func(ctx context.Context, tenantID string, req *sdkiam.CreateUserRequest) (*sdkiam.User, error) {
 			return nil, status.Error(codes.AlreadyExists, "user already exists")
 		},
 	}
@@ -446,7 +439,7 @@ func TestIAMGRPCService_ListUsers_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		listUsersFunc: func(ctx context.Context, in *iampb.ListUsersRequest, opts ...grpc.CallOption) (*iampb.ListUsersResponse, error) {
+		listUsersFunc: func(ctx context.Context, tenantID string, req *sdkiam.ListUsersRequest) (*sdkiam.ListUsersResponse, error) {
 			return nil, status.Error(codes.Unavailable, "service unavailable")
 		},
 	}
@@ -465,7 +458,7 @@ func TestIAMGRPCService_UpdateUser_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		updateUserFunc: func(ctx context.Context, in *iampb.UpdateUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
+		updateUserFunc: func(ctx context.Context, tenantID, userID string, req *sdkiam.UpdateUserRequest) (*sdkiam.User, error) {
 			return nil, status.Error(codes.NotFound, "user not found")
 		},
 	}
@@ -486,8 +479,8 @@ func TestIAMGRPCService_DeleteUser_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		deleteUserFunc: func(ctx context.Context, in *iampb.DeleteUserRequest, opts ...grpc.CallOption) (*iampb.DeleteUserResponse, error) {
-			return nil, status.Error(codes.PermissionDenied, "permission denied")
+		deleteUserFunc: func(ctx context.Context, tenantID, userID string) error {
+			return status.Error(codes.PermissionDenied, "permission denied")
 		},
 	}
 	svc := NewIAMGRPCService(iamTestLogger(), mockIAM, nil)
@@ -506,7 +499,7 @@ func TestIAMGRPCService_GetUser_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		getUserFunc: func(ctx context.Context, in *iampb.GetUserRequest, opts ...grpc.CallOption) (*iampb.User, error) {
+		getUserFunc: func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
 			return nil, status.Error(codes.NotFound, "user not found")
 		},
 	}
@@ -526,7 +519,7 @@ func TestIAMGRPCService_CreateRole_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		createRoleFunc: func(ctx context.Context, in *iampb.CreateRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
+		createRoleFunc: func(ctx context.Context, tenantID string, req *sdkiam.CreateRoleRequest) (*sdkiam.Role, error) {
 			return nil, status.Error(codes.AlreadyExists, "role already exists")
 		},
 	}
@@ -546,7 +539,7 @@ func TestIAMGRPCService_GetRole_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		getRoleFunc: func(ctx context.Context, in *iampb.GetRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
+		getRoleFunc: func(ctx context.Context, tenantID, roleID string) (*sdkiam.Role, error) {
 			return nil, status.Error(codes.NotFound, "role not found")
 		},
 	}
@@ -566,7 +559,7 @@ func TestIAMGRPCService_ListRoles_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		listRolesFunc: func(ctx context.Context, in *iampb.ListRolesRequest, opts ...grpc.CallOption) (*iampb.ListRolesResponse, error) {
+		listRolesFunc: func(ctx context.Context, tenantID string, req *sdkiam.ListRolesRequest) (*sdkiam.ListRolesResponse, error) {
 			return nil, status.Error(codes.Unavailable, "service unavailable")
 		},
 	}
@@ -585,7 +578,7 @@ func TestIAMGRPCService_UpdateRole_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		updateRoleFunc: func(ctx context.Context, in *iampb.UpdateRoleRequest, opts ...grpc.CallOption) (*iampb.Role, error) {
+		updateRoleFunc: func(ctx context.Context, tenantID, roleID string, req *sdkiam.UpdateRoleRequest) (*sdkiam.Role, error) {
 			return nil, status.Error(codes.NotFound, "role not found")
 		},
 	}
@@ -605,8 +598,8 @@ func TestIAMGRPCService_DeleteRole_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		deleteRoleFunc: func(ctx context.Context, in *iampb.DeleteRoleRequest, opts ...grpc.CallOption) (*iampb.DeleteRoleResponse, error) {
-			return nil, status.Error(codes.PermissionDenied, "permission denied")
+		deleteRoleFunc: func(ctx context.Context, tenantID, roleID string) error {
+			return status.Error(codes.PermissionDenied, "permission denied")
 		},
 	}
 	svc := NewIAMGRPCService(iamTestLogger(), mockIAM, nil)
@@ -625,7 +618,7 @@ func TestIAMGRPCService_CreateGroup_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		createGroupFunc: func(ctx context.Context, in *iampb.CreateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
+		createGroupFunc: func(ctx context.Context, tenantID string, req *sdkiam.CreateGroupRequest) (*sdkiam.Group, error) {
 			return nil, status.Error(codes.AlreadyExists, "group already exists")
 		},
 	}
@@ -645,7 +638,7 @@ func TestIAMGRPCService_GetGroup_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		getGroupFunc: func(ctx context.Context, in *iampb.GetGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
+		getGroupFunc: func(ctx context.Context, tenantID, groupID string) (*sdkiam.Group, error) {
 			return nil, status.Error(codes.NotFound, "group not found")
 		},
 	}
@@ -665,7 +658,7 @@ func TestIAMGRPCService_ListGroups_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		listGroupsFunc: func(ctx context.Context, in *iampb.ListGroupsRequest, opts ...grpc.CallOption) (*iampb.ListGroupsResponse, error) {
+		listGroupsFunc: func(ctx context.Context, tenantID string, req *sdkiam.ListGroupsRequest) (*sdkiam.ListGroupsResponse, error) {
 			return nil, status.Error(codes.Unavailable, "service unavailable")
 		},
 	}
@@ -684,7 +677,7 @@ func TestIAMGRPCService_UpdateGroup_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		updateGroupFunc: func(ctx context.Context, in *iampb.UpdateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
+		updateGroupFunc: func(ctx context.Context, tenantID, groupID string, req *sdkiam.UpdateGroupRequest) (*sdkiam.Group, error) {
 			return nil, status.Error(codes.NotFound, "group not found")
 		},
 	}
@@ -704,8 +697,8 @@ func TestIAMGRPCService_DeleteGroup_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		deleteGroupFunc: func(ctx context.Context, in *iampb.DeleteGroupRequest, opts ...grpc.CallOption) (*iampb.DeleteGroupResponse, error) {
-			return nil, status.Error(codes.PermissionDenied, "permission denied")
+		deleteGroupFunc: func(ctx context.Context, tenantID, groupID string) error {
+			return status.Error(codes.PermissionDenied, "permission denied")
 		},
 	}
 	svc := NewIAMGRPCService(iamTestLogger(), mockIAM, nil)
@@ -724,8 +717,8 @@ func TestIAMGRPCService_AddGroupMember_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockIAM := &mockIAMServiceClient{
-		addUserToGroupFunc: func(ctx context.Context, in *iampb.AddUserToGroupRequest, opts ...grpc.CallOption) (*iampb.AddUserToGroupResponse, error) {
-			return nil, status.Error(codes.AlreadyExists, "user already in group")
+		addUserToGroupFunc: func(ctx context.Context, tenantID, groupID, userID string) error {
+			return status.Error(codes.AlreadyExists, "user already in group")
 		},
 	}
 	svc := NewIAMGRPCService(iamTestLogger(), mockIAM, nil)
@@ -745,7 +738,7 @@ func TestIAMGRPCService_CheckPermission_BackendError(t *testing.T) {
 	ctx := context.Background()
 
 	mockPEP := &mockPEPServiceClient{
-		checkFunc: func(ctx context.Context, in *iampb.CheckRequest, opts ...grpc.CallOption) (*iampb.CheckResponse, error) {
+		checkFunc: func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 			return nil, status.Error(codes.Unavailable, "PEP service unavailable")
 		},
 	}

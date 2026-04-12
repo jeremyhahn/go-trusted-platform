@@ -18,95 +18,95 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 )
 
 // =============================================================================
-// formatKMSKeyAlgorithm Tests (not yet covered)
+// KeyAlgorithm string() Tests
 // =============================================================================
 
-func TestCoverageFormatKMSKeyAlgorithm_All(t *testing.T) {
+func TestCoverageKeyAlgorithm_All(t *testing.T) {
 	tests := []struct {
-		alg      platformv1.KMSKeyAlgorithm
+		alg      kmssvc.KeyAlgorithm
 		expected string
 	}{
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128, "AES-128"},
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192, "AES-192"},
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256, "AES-256"},
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305, "ChaCha20-Poly1305"},
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048, "RSA-2048"},
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_3072, "RSA-3072"},
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_4096, "RSA-4096"},
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256, "ECDSA-P256"},
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P384, "ECDSA-P384"},
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P521, "ECDSA-P521"},
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ED25519, "Ed25519"},
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM2, "Dilithium2"},
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM3, "Dilithium3"},
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM5, "Dilithium5"},
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA256, "HMAC-SHA256"},
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA384, "HMAC-SHA384"},
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA512, "HMAC-SHA512"},
-		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED, "UNKNOWN"},
+		{kmssvc.KeyAlgorithmAES128, "AES-128"},
+		{kmssvc.KeyAlgorithmAES192, "AES-192"},
+		{kmssvc.KeyAlgorithmAES256, "AES-256"},
+		{kmssvc.KeyAlgorithmChaCha20Poly, "ChaCha20-Poly1305"},
+		{kmssvc.KeyAlgorithmRSA2048, "RSA-2048"},
+		{kmssvc.KeyAlgorithmRSA3072, "RSA-3072"},
+		{kmssvc.KeyAlgorithmRSA4096, "RSA-4096"},
+		{kmssvc.KeyAlgorithmECDSAP256, "ECDSA-P256"},
+		{kmssvc.KeyAlgorithmECDSAP384, "ECDSA-P384"},
+		{kmssvc.KeyAlgorithmECDSAP521, "ECDSA-P521"},
+		{kmssvc.KeyAlgorithmED25519, "Ed25519"},
+		{kmssvc.KeyAlgorithmDilithium2, "Dilithium2"},
+		{kmssvc.KeyAlgorithmDilithium3, "Dilithium3"},
+		{kmssvc.KeyAlgorithmDilithium5, "Dilithium5"},
+		{kmssvc.KeyAlgorithmHMACSHA256, "HMAC-SHA256"},
+		{kmssvc.KeyAlgorithmHMACSHA384, "HMAC-SHA384"},
+		{kmssvc.KeyAlgorithmHMACSHA512, "HMAC-SHA512"},
+		{kmssvc.KeyAlgorithmUnspecified, "UNSPECIFIED"},
 	}
 	for _, tc := range tests {
-		assert.Equal(t, tc.expected, formatKMSKeyAlgorithm(tc.alg))
+		assert.Equal(t, tc.expected, string(tc.alg))
 	}
 }
 
 // =============================================================================
-// formatKeyStatus Tests (not yet covered)
+// KeyStatus string() Tests
 // =============================================================================
 
-func TestCoverageFormatKeyStatus_All(t *testing.T) {
+func TestCoverageKeyStatus_All(t *testing.T) {
 	tests := []struct {
-		status   platformv1.KeyStatus
+		status   kmssvc.KeyStatus
 		expected string
 	}{
-		{platformv1.KeyStatus_KEY_STATUS_ENABLED, "ENABLED"},
-		{platformv1.KeyStatus_KEY_STATUS_DISABLED, "DISABLED"},
-		{platformv1.KeyStatus_KEY_STATUS_PENDING_DELETION, "PENDING DELETION"},
-		{platformv1.KeyStatus_KEY_STATUS_DESTROYED, "DESTROYED"},
-		{platformv1.KeyStatus_KEY_STATUS_PENDING_IMPORT, "PENDING IMPORT"},
-		{platformv1.KeyStatus_KEY_STATUS_UNSPECIFIED, "UNKNOWN"},
+		{kmssvc.KeyStatusEnabled, "ENABLED"},
+		{kmssvc.KeyStatusDisabled, "DISABLED"},
+		{kmssvc.KeyStatusPendingDeletion, "PENDING DELETION"},
+		{kmssvc.KeyStatusDestroyed, "DESTROYED"},
+		{kmssvc.KeyStatusPendingImport, "PENDING IMPORT"},
+		{kmssvc.KeyStatusUnspecified, "UNKNOWN"},
 	}
 	for _, tc := range tests {
-		assert.Equal(t, tc.expected, formatKeyStatus(tc.status))
+		assert.Equal(t, tc.expected, string(tc.status))
 	}
 }
 
 // =============================================================================
-// formatKeyUsage / formatKeyUsages Tests (not yet covered)
+// KeyUsage string() Tests
 // =============================================================================
 
-func TestCoverageFormatKeyUsage_All(t *testing.T) {
+func TestCoverageKeyUsage_All(t *testing.T) {
 	tests := []struct {
-		usage    platformv1.KeyUsage
+		usage    kmssvc.KeyUsage
 		expected string
 	}{
-		{platformv1.KeyUsage_KEY_USAGE_ENCRYPT, "encrypt"},
-		{platformv1.KeyUsage_KEY_USAGE_DECRYPT, "decrypt"},
-		{platformv1.KeyUsage_KEY_USAGE_SIGN, "sign"},
-		{platformv1.KeyUsage_KEY_USAGE_VERIFY, "verify"},
-		{platformv1.KeyUsage_KEY_USAGE_WRAP, "wrap"},
-		{platformv1.KeyUsage_KEY_USAGE_UNWRAP, "unwrap"},
-		{platformv1.KeyUsage_KEY_USAGE_DERIVE, "derive"},
-		{platformv1.KeyUsage_KEY_USAGE_HMAC, "hmac"},
-		{platformv1.KeyUsage_KEY_USAGE_UNSPECIFIED, "unknown"},
+		{kmssvc.KeyUsageEncrypt, "encrypt"},
+		{kmssvc.KeyUsageDecrypt, "decrypt"},
+		{kmssvc.KeyUsageSign, "sign"},
+		{kmssvc.KeyUsageVerify, "verify"},
+		{kmssvc.KeyUsageWrap, "wrap"},
+		{kmssvc.KeyUsageUnwrap, "unwrap"},
+		{kmssvc.KeyUsageDerive, "derive"},
+		{kmssvc.KeyUsageHMAC, "hmac"},
+		{kmssvc.KeyUsageUnspecified, "unspecified"},
 	}
 	for _, tc := range tests {
-		assert.Equal(t, tc.expected, formatKeyUsage(tc.usage))
+		assert.Equal(t, tc.expected, string(tc.usage))
 	}
 }
 
-func TestCoverageFormatKeyUsages_Multiple(t *testing.T) {
-	usages := []platformv1.KeyUsage{platformv1.KeyUsage_KEY_USAGE_ENCRYPT, platformv1.KeyUsage_KEY_USAGE_DECRYPT}
-	result := formatKeyUsages(usages)
+func TestCoverageFormatDomainKeyUsages_Multiple(t *testing.T) {
+	usages := []kmssvc.KeyUsage{kmssvc.KeyUsageEncrypt, kmssvc.KeyUsageDecrypt}
+	result := formatDomainKeyUsages(usages)
 	assert.Equal(t, "encrypt, decrypt", result)
 }
 
-func TestCoverageFormatKeyUsages_Empty(t *testing.T) {
-	assert.Equal(t, "none", formatKeyUsages(nil))
+func TestCoverageFormatDomainKeyUsages_Empty(t *testing.T) {
+	assert.Equal(t, "none", formatDomainKeyUsages(nil))
 }
 
 // =============================================================================

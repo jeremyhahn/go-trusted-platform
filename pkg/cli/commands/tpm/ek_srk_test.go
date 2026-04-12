@@ -383,9 +383,11 @@ func TestRunEKDeleteWithClient_StatusNil(t *testing.T) {
 		NoColor:      true,
 	}
 
+	// SDK domain methods return an error when the gRPC call fails;
+	// they never return a response with nil Status.
 	mockClient := &mockTPMServiceClient{
 		deleteEKFunc: func(ctx context.Context, req *platformv1.DeleteEKRequest, opts ...grpc.CallOption) (*platformv1.DeleteEKResponse, error) {
-			return &platformv1.DeleteEKResponse{Status: nil}, nil
+			return nil, errors.New("delete failed: nil status")
 		},
 	}
 
@@ -401,11 +403,11 @@ func TestRunEKDeleteWithClient_StatusFailed(t *testing.T) {
 		NoColor:      true,
 	}
 
+	// SDK domain methods return an error when the gRPC call fails;
+	// they never return a response with Status.Success=false.
 	mockClient := &mockTPMServiceClient{
 		deleteEKFunc: func(ctx context.Context, req *platformv1.DeleteEKRequest, opts ...grpc.CallOption) (*platformv1.DeleteEKResponse, error) {
-			return &platformv1.DeleteEKResponse{
-				Status: &platformv1.Status{Success: false, Message: "Not found"},
-			}, nil
+			return nil, errors.New("not found")
 		},
 	}
 
@@ -736,9 +738,11 @@ func TestRunSRKDeleteWithClient_StatusNil(t *testing.T) {
 		NoColor:      true,
 	}
 
+	// SDK domain methods return an error when the gRPC call fails;
+	// they never return a response with nil Status.
 	mockClient := &mockTPMServiceClient{
 		deleteSRKFunc: func(ctx context.Context, req *platformv1.DeleteSRKRequest, opts ...grpc.CallOption) (*platformv1.DeleteSRKResponse, error) {
-			return &platformv1.DeleteSRKResponse{Status: nil}, nil
+			return nil, errors.New("delete failed: nil status")
 		},
 	}
 
@@ -754,11 +758,11 @@ func TestRunSRKDeleteWithClient_StatusFailed(t *testing.T) {
 		NoColor:      true,
 	}
 
+	// SDK domain methods return an error when the gRPC call fails;
+	// they never return a response with Status.Success=false.
 	mockClient := &mockTPMServiceClient{
 		deleteSRKFunc: func(ctx context.Context, req *platformv1.DeleteSRKRequest, opts ...grpc.CallOption) (*platformv1.DeleteSRKResponse, error) {
-			return &platformv1.DeleteSRKResponse{
-				Status: &platformv1.Status{Success: false, Message: "Not found"},
-			}, nil
+			return nil, errors.New("not found")
 		},
 	}
 

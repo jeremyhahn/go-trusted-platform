@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -64,17 +64,10 @@ func runStart(flags *cli.CommonFlags, bundleID string) error {
 	}
 	defer base.Close()
 
-	client := base.Client().VTPM()
-	if client == nil {
-		return ErrVTPMNotAvailable{}
-	}
-
-	req := &platformv1.StartVTPMRequest{
-		BundleId: bundleID,
-	}
+	sdkClient := vtpmsvc.NewClientFromGRPC(base.Client().VTPM())
 
 	ctx := base.Context()
-	resp, err := client.StartVTPM(ctx, req)
+	resp, err := sdkClient.StartDomain(ctx, bundleID)
 	if err != nil {
 		return ErrStartVTPMFailed{Reason: err.Error()}
 	}
@@ -87,7 +80,7 @@ func runStart(flags *cli.CommonFlags, bundleID string) error {
 
 	case cli.OutputFormatTable:
 		if resp.Running {
-			printer.PrintSuccess(fmt.Sprintf("vTPM started for bundle: %s", resp.BundleId))
+			printer.PrintSuccess(fmt.Sprintf("vTPM started for bundle: %s", resp.BundleID))
 			if resp.SocketPath != "" {
 				printer.PrintKeyValue("Socket Path", resp.SocketPath)
 			}

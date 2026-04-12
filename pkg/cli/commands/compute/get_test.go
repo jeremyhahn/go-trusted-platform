@@ -18,10 +18,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
-
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -116,62 +115,62 @@ func TestPrintFullVMDetails_WithFullConfig(t *testing.T) {
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	now := timestamppb.Now()
+	now := time.Now()
 
-	vm := &platformv1.VM{
-		Id:     "full-vm-123456789012",
-		State:  platformv1.VMState_VM_STATE_RUNNING,
-		HostId: "host-001",
-		Config: &platformv1.VMConfig{
+	vm := &computesvc.VM{
+		ID:     "full-vm-123456789012",
+		State:  computesvc.StateRunning,
+		HostID: "host-001",
+		Config: &computesvc.VMConfig{
 			Name:        "full-test-vm",
 			Description: "A fully configured test VM",
-			Firmware:    platformv1.FirmwareType_FIRMWARE_TYPE_UEFI_SECURE_BOOT,
+			Firmware:    computesvc.FirmwareUEFISecureBoot,
 			SecureBoot:  true,
-			Tpm:         &platformv1.TPMConfig{Enabled: true, Emulated: true},
-			Cpu: &platformv1.CPUConfig{
+			TPM:         &computesvc.TPMConfig{Enabled: true, Emulated: true},
+			CPU: &computesvc.CPUConfig{
 				Cores:    8,
 				Sockets:  2,
 				Threads:  2,
 				Model:    "host",
 				Features: []string{"aes", "avx2"},
 			},
-			Memory: &platformv1.MemoryConfig{
-				SizeMb:    8192,
+			Memory: &computesvc.MemoryConfig{
+				SizeMB:    8192,
 				Hugepages: true,
 				Shared:    false,
 			},
-			Disks: []*platformv1.DiskConfig{
+			Disks: []*computesvc.DiskConfig{
 				{
-					Id:       "disk-001",
-					SizeGb:   100,
-					Type:     platformv1.DiskType_DISK_TYPE_QCOW2,
-					Bus:      platformv1.DiskBus_DISK_BUS_VIRTIO,
+					ID:       "disk-001",
+					SizeGB:   100,
+					Type:     computesvc.DiskTypeQCOW2,
+					Bus:      computesvc.DiskBusVirtIO,
 					Bootable: true,
 					Path:     "/var/lib/vms/full-test-vm/disk0.qcow2",
 				},
 			},
-			Networks: []*platformv1.NetworkConfig{
+			Networks: []*computesvc.NetworkConfig{
 				{
-					Id:                 "nic-001",
+					ID:                 "nic-001",
 					Bridge:             "br0",
-					MacAddress:         "52:54:00:ab:cd:ef",
-					Vlan:               100,
-					Model:              platformv1.NetworkModel_NETWORK_MODEL_VIRTIO,
+					MACAddress:         "52:54:00:ab:cd:ef",
+					VLAN:               100,
+					Model:              computesvc.NetworkModelVirtIO,
 					BandwidthLimitMbps: 1000,
 				},
 			},
 			Labels:   map[string]string{"env": "production", "team": "platform"},
 			Metadata: map[string]string{"created-by": "test"},
 		},
-		Metrics: &platformv1.VMMetrics{
-			CpuUsagePercent:   45.67,
-			MemoryUsedMb:      4096,
-			MemoryAvailableMb: 4096,
-			DiskReadBytes:     1073741824,
-			DiskWriteBytes:    536870912,
-			NetworkRxBytes:    104857600,
-			NetworkTxBytes:    52428800,
-			UptimeSeconds:     86400,
+		Metrics: &computesvc.VMMetrics{
+			CPUUsagePercent:   45.67,
+			MemoryUsedMB:     4096,
+			MemoryAvailableMB: 4096,
+			DiskReadBytes:    1073741824,
+			DiskWriteBytes:   536870912,
+			NetworkRxBytes:   104857600,
+			NetworkTxBytes:   52428800,
+			UptimeSeconds:    86400,
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -206,9 +205,9 @@ func TestPrintFullVMDetails_MinimalVM(t *testing.T) {
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	vm := &platformv1.VM{
-		Id:    "minimal-vm",
-		State: platformv1.VMState_VM_STATE_STOPPED,
+	vm := &computesvc.VM{
+		ID:    "minimal-vm",
+		State: computesvc.StateStopped,
 	}
 
 	err := printFullVMDetails(printer, vm)
@@ -237,24 +236,21 @@ func TestRunGet_EmptyVMID(t *testing.T) {
 	}
 }
 
-func TestDiskBusToString_AllValues(t *testing.T) {
+func TestDiskBusValues(t *testing.T) {
 	tests := []struct {
-		bus      platformv1.DiskBus
+		bus      computesvc.DiskBus
 		expected string
 	}{
-		{platformv1.DiskBus_DISK_BUS_IDE, "IDE"},
-		{platformv1.DiskBus_DISK_BUS_SATA, "SATA"},
-		{platformv1.DiskBus_DISK_BUS_SCSI, "SCSI"},
-		{platformv1.DiskBus_DISK_BUS_VIRTIO, "VirtIO"},
-		{platformv1.DiskBus_DISK_BUS_NVME, "NVMe"},
+		{computesvc.DiskBusIDE, "IDE"},
+		{computesvc.DiskBusSATA, "SATA"},
+		{computesvc.DiskBusSCSI, "SCSI"},
+		{computesvc.DiskBusVirtIO, "VirtIO"},
+		{computesvc.DiskBusNVMe, "NVMe"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.expected, func(t *testing.T) {
-			result, ok := diskBusToString[tt.bus]
-			if !ok {
-				t.Fatalf("disk bus %v not found in map", tt.bus)
-			}
+			result := string(tt.bus)
 			if result != tt.expected {
 				t.Errorf("expected %q, got %q", tt.expected, result)
 			}
@@ -262,23 +258,20 @@ func TestDiskBusToString_AllValues(t *testing.T) {
 	}
 }
 
-func TestDiskTypeToString_AllValues(t *testing.T) {
+func TestDiskTypeValues(t *testing.T) {
 	tests := []struct {
-		diskType platformv1.DiskType
+		diskType computesvc.DiskType
 		expected string
 	}{
-		{platformv1.DiskType_DISK_TYPE_RAW, "RAW"},
-		{platformv1.DiskType_DISK_TYPE_QCOW2, "QCOW2"},
-		{platformv1.DiskType_DISK_TYPE_VDI, "VDI"},
-		{platformv1.DiskType_DISK_TYPE_VMDK, "VMDK"},
+		{computesvc.DiskTypeRAW, "RAW"},
+		{computesvc.DiskTypeQCOW2, "QCOW2"},
+		{computesvc.DiskTypeVDI, "VDI"},
+		{computesvc.DiskTypeVMDK, "VMDK"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.expected, func(t *testing.T) {
-			result, ok := diskTypeToString[tt.diskType]
-			if !ok {
-				t.Fatalf("disk type %v not found in map", tt.diskType)
-			}
+			result := string(tt.diskType)
 			if result != tt.expected {
 				t.Errorf("expected %q, got %q", tt.expected, result)
 			}
@@ -286,22 +279,19 @@ func TestDiskTypeToString_AllValues(t *testing.T) {
 	}
 }
 
-func TestNetworkModelToString_AllValues(t *testing.T) {
+func TestNetworkModelValues(t *testing.T) {
 	tests := []struct {
-		model    platformv1.NetworkModel
+		model    computesvc.NetworkModel
 		expected string
 	}{
-		{platformv1.NetworkModel_NETWORK_MODEL_E1000, "e1000"},
-		{platformv1.NetworkModel_NETWORK_MODEL_VIRTIO, "virtio"},
-		{platformv1.NetworkModel_NETWORK_MODEL_RTL8139, "rtl8139"},
+		{computesvc.NetworkModelE1000, "e1000"},
+		{computesvc.NetworkModelVirtIO, "virtio"},
+		{computesvc.NetworkModelRTL8139, "rtl8139"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.expected, func(t *testing.T) {
-			result, ok := networkModelToString[tt.model]
-			if !ok {
-				t.Fatalf("network model %v not found in map", tt.model)
-			}
+			result := string(tt.model)
 			if result != tt.expected {
 				t.Errorf("expected %q, got %q", tt.expected, result)
 			}
@@ -313,17 +303,17 @@ func TestPrintFullVMDetails_WithMetrics_NoUptime(t *testing.T) {
 	var buf bytes.Buffer
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 
-	vm := &platformv1.VM{
-		Id:    "metrics-vm",
-		State: platformv1.VMState_VM_STATE_RUNNING,
-		Metrics: &platformv1.VMMetrics{
-			CpuUsagePercent: 10.5,
-			MemoryUsedMb:    512,
-			DiskReadBytes:   1024,
-			DiskWriteBytes:  2048,
-			NetworkRxBytes:  4096,
-			NetworkTxBytes:  8192,
-			UptimeSeconds:   0,
+	vm := &computesvc.VM{
+		ID:    "metrics-vm",
+		State: computesvc.StateRunning,
+		Metrics: &computesvc.VMMetrics{
+			CPUUsagePercent: 10.5,
+			MemoryUsedMB:   512,
+			DiskReadBytes:  1024,
+			DiskWriteBytes: 2048,
+			NetworkRxBytes: 4096,
+			NetworkTxBytes: 8192,
+			UptimeSeconds:  0,
 		},
 	}
 

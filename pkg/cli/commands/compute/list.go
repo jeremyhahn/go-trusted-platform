@@ -19,10 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
-
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 // listOptions holds the options for the list command
@@ -85,41 +83,41 @@ func runList(flags *cli.CommonFlags, opts *listOptions) error {
 	}
 	defer base.Close()
 
-	client := base.Client().Compute()
-	if client == nil {
+	grpcClient := base.Client().Compute()
+	if grpcClient == nil {
 		return ErrComputeClientNotInitialized{}
 	}
 
-	// Build request
-	req := &platformv1.ListVMsRequest{
-		Pagination: &platformv1.PaginationRequest{
-			PageSize: uint32(opts.pageSize),
-		},
+	sdkClient := computesvc.NewClientFromGRPC(grpcClient)
+
+	// Build domain params
+	params := &computesvc.ListVMsParams{
+		PageSize: uint32(opts.pageSize),
 	}
 
 	// If not showing all, filter to running VMs only
 	if !opts.all {
-		req.States = []platformv1.VMState{
-			platformv1.VMState_VM_STATE_RUNNING,
+		params.States = []computesvc.VMState{
+			computesvc.StateRunning,
 		}
 	}
 
 	// Parse and apply filters
 	if len(opts.filter) > 0 {
-		selector, states, err := parseVMFilters(opts.filter)
-		if err != nil {
-			return err
+		labels, states, filterErr := parseVMFilters(opts.filter)
+		if filterErr != nil {
+			return filterErr
 		}
-		if selector != nil {
-			req.Selector = selector
+		if len(labels) > 0 {
+			params.Labels = labels
 		}
 		if len(states) > 0 {
-			req.States = states
+			params.States = states
 		}
 	}
 
 	ctx := base.Context()
-	resp, err := client.ListVMs(ctx, req)
+	result, err := sdkClient.ListVMsDomain(ctx, params)
 	if err != nil {
 		return ErrVMOperationFailed{Operation: "list", ID: "", Err: err}
 	}
@@ -128,20 +126,19 @@ func runList(flags *cli.CommonFlags, opts *listOptions) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		return printVMList(printer, resp)
+		return printVMList(printer, result)
 
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
 	}
 }
 
-// parseVMFilters parses filter strings into selector and states
-func parseVMFilters(filters []string) (*platformv1.LabelSelector, []platformv1.VMState, error) {
-	var selector *platformv1.LabelSelector
-	var states []platformv1.VMState
+// parseVMFilters parses filter strings into labels and states
+func parseVMFilters(filters []string) (map[string]string, []computesvc.VMState, error) {
+	var states []computesvc.VMState
 
 	labels := make(map[string]string)
 
@@ -160,7 +157,7 @@ func parseVMFilters(filters []string) (*platformv1.LabelSelector, []platformv1.V
 			if !ok {
 				return nil, nil, ErrInvalidVMState{State: value}
 			}
-			states = append(states, computesvc.VMStateToProto(domainState))
+			states = append(states, domainState)
 		case "label":
 			labelParts := strings.SplitN(value, "=", 2)
 			if len(labelParts) == 2 {
@@ -173,26 +170,20 @@ func parseVMFilters(filters []string) (*platformv1.LabelSelector, []platformv1.V
 		}
 	}
 
-	if len(labels) > 0 {
-		selector = &platformv1.LabelSelector{
-			MatchLabels: labels,
-		}
-	}
-
-	return selector, states, nil
+	return labels, states, nil
 }
 
 // printVMList prints the VM list in table format
-func printVMList(printer *cli.Printer, resp *platformv1.ListVMsResponse) error {
-	if len(resp.Vms) == 0 {
+func printVMList(printer *cli.Printer, result *computesvc.ListVMsResult) error {
+	if len(result.VMs) == 0 {
 		printer.PrintInfo("No virtual machines found")
 		return nil
 	}
 
 	table := cli.NewTableData("ID", "NAME", "STATE", "CPUS", "MEMORY", "FIRMWARE", "CREATED")
 
-	for _, vm := range resp.Vms {
-		id := truncateID(vm.Id)
+	for _, vm := range result.VMs {
+		id := truncateID(vm.ID)
 		name := ""
 		cpus := ""
 		memory := ""
@@ -200,19 +191,19 @@ func printVMList(printer *cli.Printer, resp *platformv1.ListVMsResponse) error {
 
 		if vm.Config != nil {
 			name = vm.Config.Name
-			firmware = formatFirmwareType(computesvc.FirmwareTypeFromProto(vm.Config.Firmware))
-			if vm.Config.Cpu != nil {
-				cpus = fmt.Sprintf("%d", vm.Config.Cpu.Cores)
+			firmware = formatFirmwareType(vm.Config.Firmware)
+			if vm.Config.CPU != nil {
+				cpus = fmt.Sprintf("%d", vm.Config.CPU.Cores)
 			}
 			if vm.Config.Memory != nil {
-				memory = fmt.Sprintf("%d MB", vm.Config.Memory.SizeMb)
+				memory = fmt.Sprintf("%d MB", vm.Config.Memory.SizeMB)
 			}
 		}
 
-		state := formatVMState(computesvc.VMStateFromProto(vm.State))
+		state := formatVMState(vm.State)
 		created := ""
-		if vm.CreatedAt != nil {
-			created = formatTimestamp(vm.CreatedAt.AsTime())
+		if !vm.CreatedAt.IsZero() {
+			created = formatTimestamp(vm.CreatedAt)
 		}
 
 		table.AddRow(id, name, state, cpus, memory, firmware, created)
@@ -223,7 +214,7 @@ func printVMList(printer *cli.Printer, resp *platformv1.ListVMsResponse) error {
 	}
 
 	fmt.Println()
-	printer.PrintKeyValue("Total", fmt.Sprintf("%d VM(s)", len(resp.Vms)))
+	printer.PrintKeyValue("Total", fmt.Sprintf("%d VM(s)", len(result.VMs)))
 
 	return nil
 }

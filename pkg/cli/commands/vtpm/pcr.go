@@ -19,7 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -113,19 +113,10 @@ func runPCRExtend(flags *cli.CommonFlags, bundleID string, pcrIndex int32, data 
 	}
 	defer base.Close()
 
-	client := base.Client().VTPM()
-	if client == nil {
-		return ErrVTPMNotAvailable{}
-	}
-
-	req := &platformv1.ExtendVTPMPCRRequest{
-		BundleId: bundleID,
-		PcrIndex: pcrIndex,
-		Data:     dataBytes,
-	}
+	sdkClient := vtpmsvc.NewClientFromGRPC(base.Client().VTPM())
 
 	ctx := base.Context()
-	resp, err := client.ExtendVTPMPCR(ctx, req)
+	resp, err := sdkClient.ExtendPCRDomain(ctx, bundleID, int32(pcrIndex), dataBytes)
 	if err != nil {
 		return ErrExtendPCRFailed{Reason: err.Error()}
 	}
@@ -138,7 +129,7 @@ func runPCRExtend(flags *cli.CommonFlags, bundleID string, pcrIndex int32, data 
 
 	case cli.OutputFormatTable:
 		if resp.Extended {
-			printer.PrintSuccess(fmt.Sprintf("PCR[%d] extended for bundle: %s", resp.PcrIndex, resp.BundleId))
+			printer.PrintSuccess(fmt.Sprintf("PCR[%d] extended for bundle: %s", resp.PCRIndex, resp.BundleID))
 		} else {
 			printer.PrintError(fmt.Sprintf("Failed to extend PCR[%d] for bundle: %s", pcrIndex, bundleID))
 		}
@@ -199,18 +190,10 @@ func runPCRRead(flags *cli.CommonFlags, bundleID string, pcrIndex int32) error {
 	}
 	defer base.Close()
 
-	client := base.Client().VTPM()
-	if client == nil {
-		return ErrVTPMNotAvailable{}
-	}
-
-	req := &platformv1.ReadVTPMPCRRequest{
-		BundleId: bundleID,
-		PcrIndex: pcrIndex,
-	}
+	sdkClient := vtpmsvc.NewClientFromGRPC(base.Client().VTPM())
 
 	ctx := base.Context()
-	resp, err := client.ReadVTPMPCR(ctx, req)
+	resp, err := sdkClient.ReadPCRDomain(ctx, bundleID, int32(pcrIndex))
 	if err != nil {
 		return ErrReadPCRFailed{Reason: err.Error()}
 	}
@@ -222,8 +205,8 @@ func runPCRRead(flags *cli.CommonFlags, bundleID string, pcrIndex int32) error {
 		return printer.Print(resp)
 
 	case cli.OutputFormatTable:
-		printer.PrintKeyValue("Bundle ID", resp.BundleId)
-		printer.PrintKeyValue(fmt.Sprintf("PCR[%d]", resp.PcrIndex), hex.EncodeToString(resp.Value))
+		printer.PrintKeyValue("Bundle ID", resp.BundleID)
+		printer.PrintKeyValue(fmt.Sprintf("PCR[%d]", resp.PCRIndex), hex.EncodeToString(resp.Value))
 		return nil
 
 	default:

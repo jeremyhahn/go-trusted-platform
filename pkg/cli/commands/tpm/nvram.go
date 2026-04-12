@@ -19,7 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	tpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tpm"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -273,15 +274,10 @@ func runNVRAMDefine(flags *cli.CommonFlags, opts *nvramDefineOptions) error {
 func runNVRAMDefineWithClient(base TPMBaseCommandInterface, opts *nvramDefineOptions) error {
 	defer base.Close()
 
-	req := &platformv1.DefineNVRAMRequest{
-		Index:      opts.Index,
-		Size:       opts.Size,
-		Password:   opts.Password,
-		Attributes: opts.Attributes,
-	}
+	sdkClient := tpmsvc.NewClientFromGRPC(base.TPMClient())
 
 	ctx := base.Context()
-	resp, err := base.TPMClient().DefineNVRAM(ctx, req)
+	resp, err := sdkClient.DefineNVRAMDomain(ctx, opts.Index, opts.Size, opts.Password, opts.Attributes)
 	if err != nil {
 		return ErrNVRAMDefineFailed{Index: opts.Index, Reason: err.Error()}
 	}
@@ -329,15 +325,10 @@ func runNVRAMWrite(flags *cli.CommonFlags, opts *nvramWriteOptions) error {
 func runNVRAMWriteWithClient(base TPMBaseCommandInterface, opts *nvramWriteOptions) error {
 	defer base.Close()
 
-	req := &platformv1.WriteNVRAMRequest{
-		Index:    opts.Index,
-		Data:     []byte(opts.Data),
-		Password: opts.Password,
-		Offset:   opts.Offset,
-	}
+	sdkClient := tpmsvc.NewClientFromGRPC(base.TPMClient())
 
 	ctx := base.Context()
-	resp, err := base.TPMClient().WriteNVRAM(ctx, req)
+	resp, err := sdkClient.WriteNVRAMDomain(ctx, opts.Index, []byte(opts.Data), opts.Password, opts.Offset)
 	if err != nil {
 		return ErrNVRAMWriteFailed{Index: opts.Index, Reason: err.Error()}
 	}
@@ -385,15 +376,10 @@ func runNVRAMRead(flags *cli.CommonFlags, opts *nvramReadOptions) error {
 func runNVRAMReadWithClient(base TPMBaseCommandInterface, opts *nvramReadOptions) error {
 	defer base.Close()
 
-	req := &platformv1.ReadNVRAMRequest{
-		Index:    opts.Index,
-		Password: opts.Password,
-		Offset:   opts.Offset,
-		Size:     opts.Size,
-	}
+	sdkClient := tpmsvc.NewClientFromGRPC(base.TPMClient())
 
 	ctx := base.Context()
-	resp, err := base.TPMClient().ReadNVRAM(ctx, req)
+	resp, err := sdkClient.ReadNVRAMDomain(ctx, opts.Index, opts.Password, opts.Offset, opts.Size)
 	if err != nil {
 		return ErrNVRAMReadFailed{Index: opts.Index, Reason: err.Error()}
 	}
@@ -443,13 +429,10 @@ func runNVRAMDelete(flags *cli.CommonFlags, index uint32, password string) error
 func runNVRAMDeleteWithClient(base TPMBaseCommandInterface, index uint32, password string) error {
 	defer base.Close()
 
-	req := &platformv1.UndefineNVRAMRequest{
-		Index:    index,
-		Password: password,
-	}
+	sdkClient := tpmsvc.NewClientFromGRPC(base.TPMClient())
 
 	ctx := base.Context()
-	resp, err := base.TPMClient().UndefineNVRAM(ctx, req)
+	resp, err := sdkClient.UndefineNVRAMDomain(ctx, index, password)
 	if err != nil {
 		return ErrNVRAMDeleteFailed{Index: index, Reason: err.Error()}
 	}

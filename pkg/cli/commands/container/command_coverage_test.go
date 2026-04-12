@@ -346,8 +346,8 @@ func TestParseFilters_ImageFilter(t *testing.T) {
 		t.Fatal("expected selector, got nil")
 	}
 
-	if val, ok := selector.MatchLabels["image"]; !ok || val != "nginx:latest" {
-		t.Errorf("expected image=nginx:latest in labels, got %v", selector.MatchLabels)
+	if val, ok := selector["image"]; !ok || val != "nginx:latest" {
+		t.Errorf("expected image=nginx:latest in labels, got %v", selector)
 	}
 }
 
@@ -364,7 +364,7 @@ func TestParseFilters_LabelKeyOnly(t *testing.T) {
 		t.Fatal("expected selector, got nil")
 	}
 
-	if val, ok := selector.MatchLabels["environment"]; !ok || val != "" {
+	if val, ok := selector["environment"]; !ok || val != "" {
 		t.Errorf("expected empty value for environment, got %q", val)
 	}
 }

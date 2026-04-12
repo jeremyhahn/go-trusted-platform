@@ -19,8 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 // newGetCommand creates the container get subcommand
@@ -65,17 +65,15 @@ func runGet(flags *cli.CommonFlags, containerID string) error {
 	}
 	defer base.Close()
 
-	client := base.Client().Compute()
-	if client == nil {
+	grpcClient := base.Client().Compute()
+	if grpcClient == nil {
 		return ErrContainerClientNotInitialized{}
 	}
 
-	req := &platformv1.GetContainerRequest{
-		Id: containerID,
-	}
+	sdkClient := computesvc.NewClientFromGRPC(grpcClient)
 
 	ctx := base.Context()
-	resp, err := client.GetContainer(ctx, req)
+	container, err := sdkClient.GetContainerDomain(ctx, containerID)
 	if err != nil {
 		return ErrContainerNotFound{ID: containerID}
 	}
@@ -84,10 +82,10 @@ func runGet(flags *cli.CommonFlags, containerID string) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp.Container)
+		return printer.Print(container)
 
 	case cli.OutputFormatTable:
-		return printFullContainerDetails(printer, resp.Container)
+		return printFullContainerDetails(printer, container)
 
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
@@ -95,14 +93,14 @@ func runGet(flags *cli.CommonFlags, containerID string) error {
 }
 
 // printFullContainerDetails prints comprehensive container details
-func printFullContainerDetails(printer *cli.Printer, container *platformv1.Container) error {
+func printFullContainerDetails(printer *cli.Printer, container *computesvc.Container) error {
 	if container == nil {
 		return nil
 	}
 
 	// Basic information
 	printer.PrintInfo("Container Information")
-	printer.PrintKeyValue("ID", container.Id)
+	printer.PrintKeyValue("ID", container.ID)
 
 	if container.Config != nil {
 		printer.PrintKeyValue("Name", container.Config.Name)
@@ -115,18 +113,18 @@ func printFullContainerDetails(printer *cli.Printer, container *platformv1.Conta
 	printer.PrintKeyValue("State", formatContainerState(container.State))
 	printer.PrintKeyValue("Created At", formatTimestamp(container.CreatedAt))
 
-	if container.StartedAt != nil {
+	if !container.StartedAt.IsZero() {
 		printer.PrintKeyValue("Started At", formatTimestamp(container.StartedAt))
 	}
-	if container.FinishedAt != nil {
+	if !container.FinishedAt.IsZero() {
 		printer.PrintKeyValue("Finished At", formatTimestamp(container.FinishedAt))
 	}
-	if container.ExitCode != 0 || container.State == platformv1.ContainerState_CONTAINER_STATE_EXITED {
+	if container.ExitCode != 0 || container.State == computesvc.ContainerStateExited {
 		printer.PrintKeyValue("Exit Code", fmt.Sprintf("%d", container.ExitCode))
 	}
 
-	if container.HostId != "" {
-		printer.PrintKeyValue("Host ID", container.HostId)
+	if container.HostID != "" {
+		printer.PrintKeyValue("Host ID", container.HostID)
 	}
 
 	// Configuration details
@@ -153,7 +151,7 @@ func printFullContainerDetails(printer *cli.Printer, container *platformv1.Conta
 			printer.PrintKeyValue("Network", container.Config.Network)
 		}
 
-		if container.Config.RestartPolicy != platformv1.RestartPolicy_RESTART_POLICY_UNSPECIFIED {
+		if container.Config.RestartPolicy != computesvc.RestartPolicyUnspecified {
 			printer.PrintKeyValue("Restart Policy", formatRestartPolicy(container.Config.RestartPolicy))
 		}
 
@@ -172,8 +170,8 @@ func printFullContainerDetails(printer *cli.Printer, container *platformv1.Conta
 			printer.PrintInfo("Port Mappings")
 			for _, port := range container.Config.Ports {
 				mapping := fmt.Sprintf("%d -> %d/%s", port.HostPort, port.ContainerPort, port.Protocol)
-				if port.HostIp != "" {
-					mapping = fmt.Sprintf("%s:%s", port.HostIp, mapping)
+				if port.HostIP != "" {
+					mapping = fmt.Sprintf("%s:%s", port.HostIP, mapping)
 				}
 				printer.PrintKeyValue("  Port", mapping)
 			}
@@ -203,11 +201,11 @@ func printFullContainerDetails(printer *cli.Printer, container *platformv1.Conta
 		if container.Config.Resources != nil {
 			fmt.Println()
 			printer.PrintInfo("Resource Limits")
-			if container.Config.Resources.MaxMemoryMb > 0 {
-				printer.PrintKeyValue("  Max Memory", fmt.Sprintf("%d MB", container.Config.Resources.MaxMemoryMb))
+			if container.Config.Resources.MaxMemoryMB > 0 {
+				printer.PrintKeyValue("  Max Memory", fmt.Sprintf("%d MB", container.Config.Resources.MaxMemoryMB))
 			}
-			if container.Config.Resources.MaxCpus > 0 {
-				printer.PrintKeyValue("  Max CPUs", fmt.Sprintf("%d", container.Config.Resources.MaxCpus))
+			if container.Config.Resources.MaxCPUs > 0 {
+				printer.PrintKeyValue("  Max CPUs", fmt.Sprintf("%d", container.Config.Resources.MaxCPUs))
 			}
 		}
 
@@ -234,10 +232,10 @@ func printFullContainerDetails(printer *cli.Printer, container *platformv1.Conta
 	if container.Metrics != nil {
 		fmt.Println()
 		printer.PrintInfo("Metrics")
-		printer.PrintKeyValue("  CPU Usage", fmt.Sprintf("%.2f%%", container.Metrics.CpuUsagePercent))
-		printer.PrintKeyValue("  Memory Used", fmt.Sprintf("%d MB", container.Metrics.MemoryUsedMb))
-		if container.Metrics.MemoryLimitMb > 0 {
-			printer.PrintKeyValue("  Memory Limit", fmt.Sprintf("%d MB", container.Metrics.MemoryLimitMb))
+		printer.PrintKeyValue("  CPU Usage", fmt.Sprintf("%.2f%%", container.Metrics.CPUUsagePercent))
+		printer.PrintKeyValue("  Memory Used", fmt.Sprintf("%d MB", container.Metrics.MemoryUsedMB))
+		if container.Metrics.MemoryLimitMB > 0 {
+			printer.PrintKeyValue("  Memory Limit", fmt.Sprintf("%d MB", container.Metrics.MemoryLimitMB))
 		}
 		printer.PrintKeyValue("  Disk Read", formatBytes(container.Metrics.DiskReadBytes))
 		printer.PrintKeyValue("  Disk Write", formatBytes(container.Metrics.DiskWriteBytes))
@@ -252,15 +250,15 @@ func printFullContainerDetails(printer *cli.Printer, container *platformv1.Conta
 }
 
 // formatRestartPolicy formats a restart policy for display
-func formatRestartPolicy(policy platformv1.RestartPolicy) string {
+func formatRestartPolicy(policy computesvc.RestartPolicy) string {
 	switch policy {
-	case platformv1.RestartPolicy_RESTART_POLICY_NO:
+	case computesvc.RestartPolicyNo:
 		return "No"
-	case platformv1.RestartPolicy_RESTART_POLICY_ON_FAILURE:
+	case computesvc.RestartPolicyOnFailure:
 		return "On Failure"
-	case platformv1.RestartPolicy_RESTART_POLICY_ALWAYS:
+	case computesvc.RestartPolicyAlways:
 		return "Always"
-	case platformv1.RestartPolicy_RESTART_POLICY_UNLESS_STOPPED:
+	case computesvc.RestartPolicyUnlessStopped:
 		return "Unless Stopped"
 	default:
 		return "Unknown"

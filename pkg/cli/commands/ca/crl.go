@@ -19,7 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	casvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -69,17 +69,15 @@ func runCRL(flags *cli.CommonFlags, includeEntries bool) error {
 	}
 	defer base.Close()
 
-	client := base.Client().CA()
-	if client == nil {
+	grpcClient := base.Client().CA()
+	if grpcClient == nil {
 		return ErrCANotInitialized{}
 	}
 
-	req := &platformv1.GetCRLRequest{
-		IncludeEntries: includeEntries,
-	}
-
+	sdkClient := casvc.NewClientFromGRPC(grpcClient)
 	ctx := base.Context()
-	resp, err := client.GetCRL(ctx, req)
+
+	crl, err := sdkClient.GetCRLDomain(ctx, includeEntries)
 	if err != nil {
 		return ErrGetCRLFailed{Reason: err.Error()}
 	}
@@ -88,10 +86,10 @@ func runCRL(flags *cli.CommonFlags, includeEntries bool) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(crl)
 
 	case cli.OutputFormatTable:
-		printCRLDetails(printer, resp)
+		printCRLDetails(printer, crl)
 		return nil
 
 	default:
@@ -100,16 +98,14 @@ func runCRL(flags *cli.CommonFlags, includeEntries bool) error {
 }
 
 // printCRLDetails prints CRL information in table format
-func printCRLDetails(printer *cli.Printer, resp *platformv1.GetCRLResponse) {
-	if resp.Crl == nil {
+func printCRLDetails(printer *cli.Printer, crl *casvc.CRL) {
+	if crl == nil {
 		printer.PrintInfo("No CRL data available")
 		return
 	}
 
-	crl := resp.Crl
-
-	printer.PrintKeyValue("Last Update", formatTimestamp(crl.LastUpdate))
-	printer.PrintKeyValue("Next Update", formatTimestamp(crl.NextUpdate))
+	printer.PrintKeyValue("Last Update", formatTime(crl.LastUpdate))
+	printer.PrintKeyValue("Next Update", formatTime(crl.NextUpdate))
 	printer.PrintKeyValue("Revoked Certificates", fmt.Sprintf("%d", crl.RevokedCount))
 
 	if len(crl.RevokedCerts) > 0 {
@@ -118,8 +114,8 @@ func printCRLDetails(printer *cli.Printer, resp *platformv1.GetCRLResponse) {
 		for _, entry := range crl.RevokedCerts {
 			fmt.Printf("  Serial: %s  Revoked: %s  Reason: %s\n",
 				entry.Serial,
-				formatTimestamp(entry.RevocationTime),
-				entry.Reason.String(),
+				formatTime(entry.RevocationTime),
+				string(entry.Reason),
 			)
 		}
 	}
@@ -163,26 +159,24 @@ func runCRLExport(flags *cli.CommonFlags, output string) error {
 	}
 	defer base.Close()
 
-	client := base.Client().CA()
-	if client == nil {
+	grpcClient := base.Client().CA()
+	if grpcClient == nil {
 		return ErrCANotInitialized{}
 	}
 
-	req := &platformv1.GetCRLRequest{
-		IncludeEntries: false,
-	}
-
+	sdkClient := casvc.NewClientFromGRPC(grpcClient)
 	ctx := base.Context()
-	resp, err := client.GetCRL(ctx, req)
+
+	crl, err := sdkClient.GetCRLDomain(ctx, false)
 	if err != nil {
 		return ErrGetCRLFailed{Reason: err.Error()}
 	}
 
-	if resp.Crl == nil || len(resp.Crl.Data) == 0 {
+	if crl == nil || len(crl.Data) == 0 {
 		return ErrCRLEmpty{}
 	}
 
-	if err := os.WriteFile(output, resp.Crl.Data, 0644); err != nil {
+	if err := os.WriteFile(output, crl.Data, 0644); err != nil {
 		return ErrCRLExportFailed{Reason: err.Error()}
 	}
 

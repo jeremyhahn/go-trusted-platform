@@ -20,7 +20,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -238,10 +239,7 @@ func runBatchEncrypt(flags *cli.CommonFlags, cmdFlags *batchEncryptFlags) error 
 	}
 	defer base.Close()
 
-	client := base.Client().KMS()
-	if client == nil {
-		return ErrCryptoClientNotInitialized{}
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
 	// Read input data
 	inputData, err := readInputData(cmdFlags.inputPath)
@@ -259,17 +257,17 @@ func runBatchEncrypt(flags *cli.CommonFlags, cmdFlags *batchEncryptFlags) error 
 		return ErrInvalidBatchFormat{Reason: "empty input array"}
 	}
 
-	// Build request items
-	items := make([]*platformv1.BatchEncryptItem, 0, len(inputItems))
+	// Build SDK request items
+	items := make([]*kmssvc.BatchEncryptItemInput, 0, len(inputItems))
 	for i, input := range inputItems {
-		item := &platformv1.BatchEncryptItem{
-			ItemId:    input.ItemID,
+		item := &kmssvc.BatchEncryptItemInput{
+			ItemID:    input.ItemID,
 			Plaintext: []byte(input.Plaintext),
 		}
 
 		// Auto-generate item ID if not provided
-		if item.ItemId == "" {
-			item.ItemId = fmt.Sprintf("item-%d", i)
+		if item.ItemID == "" {
+			item.ItemID = fmt.Sprintf("item-%d", i)
 		}
 
 		// Parse context if provided
@@ -281,7 +279,7 @@ func runBatchEncrypt(flags *cli.CommonFlags, cmdFlags *batchEncryptFlags) error 
 		if input.Nonce != "" {
 			nonceBytes, err := base64.StdEncoding.DecodeString(input.Nonce)
 			if err != nil {
-				return ErrInvalidBase64{Field: fmt.Sprintf("nonce for item %s", item.ItemId), Err: err}
+				return ErrInvalidBase64{Field: fmt.Sprintf("nonce for item %s", item.ItemID), Err: err}
 			}
 			item.Nonce = nonceBytes
 		}
@@ -289,13 +287,8 @@ func runBatchEncrypt(flags *cli.CommonFlags, cmdFlags *batchEncryptFlags) error 
 		items = append(items, item)
 	}
 
-	req := &platformv1.BatchEncryptRequest{
-		KeyId: cmdFlags.keyID,
-		Items: items,
-	}
-
 	ctx := base.Context()
-	resp, err := client.BatchEncrypt(ctx, req)
+	resp, err := sdkClient.BatchEncryptDomain(ctx, cmdFlags.keyID, items)
 	if err != nil {
 		return ErrBatchOperationFailed{Operation: "encrypt", Err: err}
 	}
@@ -306,19 +299,17 @@ func runBatchEncrypt(flags *cli.CommonFlags, cmdFlags *batchEncryptFlags) error 
 	outputItems := make([]BatchEncryptOutputItem, 0, len(resp.Results))
 	for _, result := range resp.Results {
 		output := BatchEncryptOutputItem{
-			ItemID:     result.ItemId,
+			ItemID:     result.ItemID,
 			KeyVersion: result.KeyVersion,
 		}
 
-		if result.Status != nil && result.Status.Success {
+		if result.Success {
 			output.Status = "success"
 			output.Ciphertext = base64.StdEncoding.EncodeToString(result.Ciphertext)
 			output.Nonce = base64.StdEncoding.EncodeToString(result.Nonce)
 		} else {
 			output.Status = "failed"
-			if result.Status != nil {
-				output.Error = result.Status.Message
-			}
+			output.Error = result.Message
 		}
 
 		outputItems = append(outputItems, output)
@@ -333,7 +324,7 @@ func runBatchEncrypt(flags *cli.CommonFlags, cmdFlags *batchEncryptFlags) error 
 			Timestamp    string                   `json:"timestamp" yaml:"timestamp"`
 			Results      []BatchEncryptOutputItem `json:"results" yaml:"results"`
 		}{
-			KeyID:        resp.KeyId,
+			KeyID:        resp.KeyID,
 			SuccessCount: resp.SuccessCount,
 			FailureCount: resp.FailureCount,
 			Timestamp:    formatTimestamp(resp.Timestamp),
@@ -344,7 +335,7 @@ func runBatchEncrypt(flags *cli.CommonFlags, cmdFlags *batchEncryptFlags) error 
 	case cli.OutputFormatTable:
 		printer.PrintSuccess(fmt.Sprintf("Batch encryption completed: %d succeeded, %d failed",
 			resp.SuccessCount, resp.FailureCount))
-		printer.PrintKeyValue("Key ID", resp.KeyId)
+		printer.PrintKeyValue("Key ID", resp.KeyID)
 		printer.PrintKeyValue("Timestamp", formatTimestamp(resp.Timestamp))
 
 		table := cli.NewTableData("Item ID", "Status", "Ciphertext", "Nonce", "Key Version")
@@ -386,10 +377,7 @@ func runBatchDecrypt(flags *cli.CommonFlags, cmdFlags *batchDecryptFlags) error 
 	}
 	defer base.Close()
 
-	client := base.Client().KMS()
-	if client == nil {
-		return ErrCryptoClientNotInitialized{}
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
 	// Read input data
 	inputData, err := readInputData(cmdFlags.inputPath)
@@ -407,26 +395,26 @@ func runBatchDecrypt(flags *cli.CommonFlags, cmdFlags *batchDecryptFlags) error 
 		return ErrInvalidBatchFormat{Reason: "empty input array"}
 	}
 
-	// Build request items
-	items := make([]*platformv1.BatchDecryptItem, 0, len(inputItems))
+	// Build SDK request items
+	items := make([]*kmssvc.BatchDecryptItemInput, 0, len(inputItems))
 	for i, input := range inputItems {
-		item := &platformv1.BatchDecryptItem{
-			ItemId:     input.ItemID,
+		item := &kmssvc.BatchDecryptItemInput{
+			ItemID:     input.ItemID,
 			KeyVersion: input.KeyVersion,
 		}
 
 		// Auto-generate item ID if not provided
-		if item.ItemId == "" {
-			item.ItemId = fmt.Sprintf("item-%d", i)
+		if item.ItemID == "" {
+			item.ItemID = fmt.Sprintf("item-%d", i)
 		}
 
 		// Parse ciphertext (base64 encoded)
 		if input.Ciphertext == "" {
-			return ErrInvalidBatchFormat{Reason: fmt.Sprintf("missing ciphertext for item %s", item.ItemId)}
+			return ErrInvalidBatchFormat{Reason: fmt.Sprintf("missing ciphertext for item %s", item.ItemID)}
 		}
 		ciphertext, err := base64.StdEncoding.DecodeString(input.Ciphertext)
 		if err != nil {
-			return ErrInvalidBase64{Field: fmt.Sprintf("ciphertext for item %s", item.ItemId), Err: err}
+			return ErrInvalidBase64{Field: fmt.Sprintf("ciphertext for item %s", item.ItemID), Err: err}
 		}
 		item.Ciphertext = ciphertext
 
@@ -439,7 +427,7 @@ func runBatchDecrypt(flags *cli.CommonFlags, cmdFlags *batchDecryptFlags) error 
 		if input.Nonce != "" {
 			nonceBytes, err := base64.StdEncoding.DecodeString(input.Nonce)
 			if err != nil {
-				return ErrInvalidBase64{Field: fmt.Sprintf("nonce for item %s", item.ItemId), Err: err}
+				return ErrInvalidBase64{Field: fmt.Sprintf("nonce for item %s", item.ItemID), Err: err}
 			}
 			item.Nonce = nonceBytes
 		}
@@ -447,13 +435,8 @@ func runBatchDecrypt(flags *cli.CommonFlags, cmdFlags *batchDecryptFlags) error 
 		items = append(items, item)
 	}
 
-	req := &platformv1.BatchDecryptRequest{
-		KeyId: cmdFlags.keyID,
-		Items: items,
-	}
-
 	ctx := base.Context()
-	resp, err := client.BatchDecrypt(ctx, req)
+	resp, err := sdkClient.BatchDecryptDomain(ctx, cmdFlags.keyID, items)
 	if err != nil {
 		return ErrBatchOperationFailed{Operation: "decrypt", Err: err}
 	}
@@ -464,18 +447,16 @@ func runBatchDecrypt(flags *cli.CommonFlags, cmdFlags *batchDecryptFlags) error 
 	outputItems := make([]BatchDecryptOutputItem, 0, len(resp.Results))
 	for _, result := range resp.Results {
 		output := BatchDecryptOutputItem{
-			ItemID:     result.ItemId,
+			ItemID:     result.ItemID,
 			KeyVersion: result.KeyVersion,
 		}
 
-		if result.Status != nil && result.Status.Success {
+		if result.Success {
 			output.Status = "success"
 			output.Plaintext = string(result.Plaintext)
 		} else {
 			output.Status = "failed"
-			if result.Status != nil {
-				output.Error = result.Status.Message
-			}
+			output.Error = result.Message
 		}
 
 		outputItems = append(outputItems, output)
@@ -490,7 +471,7 @@ func runBatchDecrypt(flags *cli.CommonFlags, cmdFlags *batchDecryptFlags) error 
 			Timestamp    string                   `json:"timestamp" yaml:"timestamp"`
 			Results      []BatchDecryptOutputItem `json:"results" yaml:"results"`
 		}{
-			KeyID:        resp.KeyId,
+			KeyID:        resp.KeyID,
 			SuccessCount: resp.SuccessCount,
 			FailureCount: resp.FailureCount,
 			Timestamp:    formatTimestamp(resp.Timestamp),
@@ -501,7 +482,7 @@ func runBatchDecrypt(flags *cli.CommonFlags, cmdFlags *batchDecryptFlags) error 
 	case cli.OutputFormatTable:
 		printer.PrintSuccess(fmt.Sprintf("Batch decryption completed: %d succeeded, %d failed",
 			resp.SuccessCount, resp.FailureCount))
-		printer.PrintKeyValue("Key ID", resp.KeyId)
+		printer.PrintKeyValue("Key ID", resp.KeyID)
 		printer.PrintKeyValue("Timestamp", formatTimestamp(resp.Timestamp))
 
 		table := cli.NewTableData("Item ID", "Status", "Plaintext", "Key Version")

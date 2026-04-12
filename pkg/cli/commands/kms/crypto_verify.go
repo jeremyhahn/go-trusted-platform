@@ -19,7 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -98,10 +99,7 @@ func runCryptoVerify(flags *cli.CommonFlags, cmdFlags *verifyFlags) error {
 	}
 	defer base.Close()
 
-	client := base.Client().KMS()
-	if client == nil {
-		return ErrCryptoClientNotInitialized{}
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
 	// Read message
 	message, err := readInputData(cmdFlags.inputPath)
@@ -139,16 +137,8 @@ func runCryptoVerify(flags *cli.CommonFlags, cmdFlags *verifyFlags) error {
 		return err
 	}
 
-	req := &platformv1.VerifyRequest{
-		KeyId:         cmdFlags.keyID,
-		Message:       message,
-		Signature:     signatureBytes,
-		HashAlgorithm: hashAlg,
-		KeyVersion:    cmdFlags.keyVersion,
-	}
-
 	ctx := base.Context()
-	resp, err := client.Verify(ctx, req)
+	resp, err := sdkClient.VerifyDomain(ctx, cmdFlags.keyID, message, signatureBytes, hashAlg, cmdFlags.keyVersion)
 	if err != nil {
 		return ErrCryptoOperationFailed{Operation: "verify", Err: err}
 	}
@@ -163,7 +153,7 @@ func runCryptoVerify(flags *cli.CommonFlags, cmdFlags *verifyFlags) error {
 			Valid      bool   `json:"valid" yaml:"valid"`
 			Timestamp  string `json:"timestamp" yaml:"timestamp"`
 		}{
-			KeyID:      resp.KeyId,
+			KeyID:      resp.KeyID,
 			KeyVersion: resp.KeyVersion,
 			Valid:      resp.Valid,
 			Timestamp:  formatTimestamp(resp.Timestamp),
@@ -176,7 +166,7 @@ func runCryptoVerify(flags *cli.CommonFlags, cmdFlags *verifyFlags) error {
 		} else {
 			printer.PrintError("Signature verification FAILED")
 		}
-		printer.PrintKeyValue("Key ID", resp.KeyId)
+		printer.PrintKeyValue("Key ID", resp.KeyID)
 		printer.PrintKeyValue("Key Version", fmt.Sprintf("%d", resp.KeyVersion))
 		printer.PrintKeyValue("Valid", fmt.Sprintf("%t", resp.Valid))
 		return nil

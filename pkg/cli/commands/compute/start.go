@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 // newStartCommand creates the compute start subcommand
@@ -62,17 +62,15 @@ func runStart(flags *cli.CommonFlags, vmID string) error {
 	}
 	defer base.Close()
 
-	client := base.Client().Compute()
-	if client == nil {
+	grpcClient := base.Client().Compute()
+	if grpcClient == nil {
 		return ErrComputeClientNotInitialized{}
 	}
 
-	req := &platformv1.StartVMRequest{
-		Id: vmID,
-	}
+	sdkClient := computesvc.NewClientFromGRPC(grpcClient)
 
 	ctx := base.Context()
-	resp, err := client.StartVM(ctx, req)
+	status, err := sdkClient.StartVMDomain(ctx, vmID)
 	if err != nil {
 		return ErrVMOperationFailed{Operation: "start", ID: vmID, Err: err}
 	}
@@ -81,13 +79,13 @@ func runStart(flags *cli.CommonFlags, vmID string) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(status)
 
 	case cli.OutputFormatTable:
-		if resp.Status != nil && resp.Status.Success {
+		if status != nil && status.Success {
 			printer.PrintSuccess(fmt.Sprintf("VM started successfully: %s", vmID))
-		} else if resp.Status != nil {
-			printer.PrintError(fmt.Sprintf("Failed to start VM: %s", resp.Status.Message))
+		} else if status != nil {
+			printer.PrintError(fmt.Sprintf("Failed to start VM: %s", status.Message))
 		}
 		return nil
 

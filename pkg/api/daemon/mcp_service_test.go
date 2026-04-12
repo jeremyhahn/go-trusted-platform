@@ -20,10 +20,9 @@ import (
 	"testing"
 	"time"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // =============================================================================
@@ -336,39 +335,39 @@ func TestBuildKeyAttributes(t *testing.T) {
 
 func TestUserToMap(t *testing.T) {
 	now := time.Now()
-	nowPb := timestamppb.New(now)
+	lastLogin := now
 
 	tests := []struct {
 		name string
-		user *iampb.User
+		user *sdkiam.User
 	}{
 		{
 			name: "minimal user",
-			user: &iampb.User{Id: "user-123", TenantId: "tenant-456", Email: "test@example.com"},
+			user: &sdkiam.User{ID: "user-123", TenantID: "tenant-456", Email: "test@example.com"},
 		},
 		{
 			name: "user with name",
-			user: &iampb.User{Id: "user-123", TenantId: "tenant-456", Email: "test@example.com", Name: "Test User"},
+			user: &sdkiam.User{ID: "user-123", TenantID: "tenant-456", Email: "test@example.com", DisplayName: "Test User"},
 		},
 		{
 			name: "user with roles",
-			user: &iampb.User{Id: "user-123", TenantId: "tenant-456", Email: "test@example.com", Roles: []string{"admin", "user"}},
+			user: &sdkiam.User{ID: "user-123", TenantID: "tenant-456", Email: "test@example.com", Roles: []string{"admin", "user"}},
 		},
 		{
 			name: "user with timestamps",
-			user: &iampb.User{Id: "user-123", TenantId: "tenant-456", Email: "test@example.com", CreatedAt: nowPb, UpdatedAt: nowPb, LastAuth: nowPb},
+			user: &sdkiam.User{ID: "user-123", TenantID: "tenant-456", Email: "test@example.com", CreatedAt: now, UpdatedAt: now, LastLoginAt: &lastLogin},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := userToMap(tt.user)
+			got := sdkUserToMap(tt.user)
 
-			if got["id"] != tt.user.Id {
-				t.Errorf("id = %v, want %v", got["id"], tt.user.Id)
+			if got["id"] != tt.user.ID {
+				t.Errorf("id = %v, want %v", got["id"], tt.user.ID)
 			}
-			if got["tenant_id"] != tt.user.TenantId {
-				t.Errorf("tenant_id = %v, want %v", got["tenant_id"], tt.user.TenantId)
+			if got["tenant_id"] != tt.user.TenantID {
+				t.Errorf("tenant_id = %v, want %v", got["tenant_id"], tt.user.TenantID)
 			}
 			if got["email"] != tt.user.Email {
 				t.Errorf("email = %v, want %v", got["email"], tt.user.Email)
@@ -379,25 +378,24 @@ func TestUserToMap(t *testing.T) {
 
 func TestRoleToMap(t *testing.T) {
 	now := time.Now()
-	nowPb := timestamppb.New(now)
 
 	tests := []struct {
 		name string
-		role *iampb.Role
+		role *sdkiam.Role
 	}{
-		{name: "minimal role", role: &iampb.Role{Id: "role-123", TenantId: "tenant-456"}},
-		{name: "role with name", role: &iampb.Role{Id: "role-123", TenantId: "tenant-456", Name: "Admin"}},
-		{name: "role with timestamps", role: &iampb.Role{Id: "role-123", TenantId: "tenant-456", CreatedAt: nowPb, UpdatedAt: nowPb}},
+		{name: "minimal role", role: &sdkiam.Role{ID: "role-123", TenantID: "tenant-456"}},
+		{name: "role with name", role: &sdkiam.Role{ID: "role-123", TenantID: "tenant-456", Name: "Admin"}},
+		{name: "role with timestamps", role: &sdkiam.Role{ID: "role-123", TenantID: "tenant-456", CreatedAt: now, UpdatedAt: now}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := roleToMap(tt.role)
-			if got["id"] != tt.role.Id {
-				t.Errorf("id = %v, want %v", got["id"], tt.role.Id)
+			got := sdkRoleToMap(tt.role)
+			if got["id"] != tt.role.ID {
+				t.Errorf("id = %v, want %v", got["id"], tt.role.ID)
 			}
-			if got["tenant_id"] != tt.role.TenantId {
-				t.Errorf("tenant_id = %v, want %v", got["tenant_id"], tt.role.TenantId)
+			if got["tenant_id"] != tt.role.TenantID {
+				t.Errorf("tenant_id = %v, want %v", got["tenant_id"], tt.role.TenantID)
 			}
 		})
 	}

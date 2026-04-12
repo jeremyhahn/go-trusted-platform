@@ -19,7 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -181,10 +182,7 @@ func runHMACGenerate(flags *cli.CommonFlags, cmdFlags *hmacGenerateFlags) error 
 	}
 	defer base.Close()
 
-	client := base.Client().KMS()
-	if client == nil {
-		return ErrCryptoClientNotInitialized{}
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
 	// Read input data
 	message, err := readInputData(cmdFlags.inputPath)
@@ -198,14 +196,8 @@ func runHMACGenerate(flags *cli.CommonFlags, cmdFlags *hmacGenerateFlags) error 
 		return err
 	}
 
-	req := &platformv1.HMACRequest{
-		KeyId:         cmdFlags.keyID,
-		Message:       message,
-		HashAlgorithm: hashAlg,
-	}
-
 	ctx := base.Context()
-	resp, err := client.HMAC(ctx, req)
+	resp, err := sdkClient.HMACDomain(ctx, cmdFlags.keyID, message, hashAlg)
 	if err != nil {
 		return ErrCryptoOperationFailed{Operation: "generate HMAC", Err: err}
 	}
@@ -221,9 +213,9 @@ func runHMACGenerate(flags *cli.CommonFlags, cmdFlags *hmacGenerateFlags) error 
 			HashAlgorithm string `json:"hash_algorithm" yaml:"hash_algorithm"`
 			Timestamp     string `json:"timestamp" yaml:"timestamp"`
 		}{
-			KeyID:         resp.KeyId,
+			KeyID:         resp.KeyID,
 			KeyVersion:    resp.KeyVersion,
-			HMAC:          base64.StdEncoding.EncodeToString(resp.Hmac),
+			HMAC:          base64.StdEncoding.EncodeToString(resp.HMAC),
 			HashAlgorithm: formatHashAlgorithm(resp.HashAlgorithm),
 			Timestamp:     formatTimestamp(resp.Timestamp),
 		}
@@ -231,14 +223,14 @@ func runHMACGenerate(flags *cli.CommonFlags, cmdFlags *hmacGenerateFlags) error 
 
 	case cli.OutputFormatTable:
 		// Write HMAC to output
-		if err := writeOutputData(cmdFlags.outputPath, resp.Hmac, cmdFlags.base64Out); err != nil {
+		if err := writeOutputData(cmdFlags.outputPath, resp.HMAC, cmdFlags.base64Out); err != nil {
 			return err
 		}
 
 		// Show metadata if writing to file
 		if cmdFlags.outputPath != "" {
 			printer.PrintSuccess("HMAC generated successfully")
-			printer.PrintKeyValue("Key ID", resp.KeyId)
+			printer.PrintKeyValue("Key ID", resp.KeyID)
 			printer.PrintKeyValue("Key Version", fmt.Sprintf("%d", resp.KeyVersion))
 			printer.PrintKeyValue("Hash Algorithm", formatHashAlgorithm(resp.HashAlgorithm))
 			printer.PrintKeyValue("Output", cmdFlags.outputPath)
@@ -258,10 +250,7 @@ func runHMACVerify(flags *cli.CommonFlags, cmdFlags *hmacVerifyFlags) error {
 	}
 	defer base.Close()
 
-	client := base.Client().KMS()
-	if client == nil {
-		return ErrCryptoClientNotInitialized{}
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
 	// Read message
 	message, err := readInputData(cmdFlags.inputPath)
@@ -299,16 +288,8 @@ func runHMACVerify(flags *cli.CommonFlags, cmdFlags *hmacVerifyFlags) error {
 		return err
 	}
 
-	req := &platformv1.VerifyHMACRequest{
-		KeyId:         cmdFlags.keyID,
-		Message:       message,
-		Hmac:          hmacBytes,
-		HashAlgorithm: hashAlg,
-		KeyVersion:    cmdFlags.keyVersion,
-	}
-
 	ctx := base.Context()
-	resp, err := client.VerifyHMAC(ctx, req)
+	resp, err := sdkClient.VerifyHMACDomain(ctx, cmdFlags.keyID, message, hmacBytes, hashAlg, cmdFlags.keyVersion)
 	if err != nil {
 		return ErrCryptoOperationFailed{Operation: "verify HMAC", Err: err}
 	}
@@ -323,7 +304,7 @@ func runHMACVerify(flags *cli.CommonFlags, cmdFlags *hmacVerifyFlags) error {
 			Valid      bool   `json:"valid" yaml:"valid"`
 			Timestamp  string `json:"timestamp" yaml:"timestamp"`
 		}{
-			KeyID:      resp.KeyId,
+			KeyID:      resp.KeyID,
 			KeyVersion: resp.KeyVersion,
 			Valid:      resp.Valid,
 			Timestamp:  formatTimestamp(resp.Timestamp),
@@ -336,7 +317,7 @@ func runHMACVerify(flags *cli.CommonFlags, cmdFlags *hmacVerifyFlags) error {
 		} else {
 			printer.PrintError("HMAC verification FAILED")
 		}
-		printer.PrintKeyValue("Key ID", resp.KeyId)
+		printer.PrintKeyValue("Key ID", resp.KeyID)
 		printer.PrintKeyValue("Key Version", fmt.Sprintf("%d", resp.KeyVersion))
 		printer.PrintKeyValue("Valid", fmt.Sprintf("%t", resp.Valid))
 		return nil

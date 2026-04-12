@@ -19,7 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -187,16 +187,10 @@ func runRoleCreate(flags *cli.CommonFlags, tenantID, roleID, name, description s
 	}
 	defer base.Close()
 
-	req := &platformv1.CreateIAMRoleRequest{
-		TenantId:    tenantID,
-		Id:          roleID,
-		Name:        name,
-		Description: description,
-		Permissions: permissions,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().CreateRole(ctx, req)
+
+	role, err := sdkClient.CreateRoleDomain(ctx, tenantID, roleID, name, description, permissions)
 	if err != nil {
 		return fmt.Errorf("failed to create role: %w", err)
 	}
@@ -205,13 +199,13 @@ func runRoleCreate(flags *cli.CommonFlags, tenantID, roleID, name, description s
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(role)
 
 	case cli.OutputFormatTable:
-		if resp.Role != nil {
-			printer.PrintSuccess(fmt.Sprintf("Role created successfully: %s", resp.Role.Id))
+		if role != nil {
+			printer.PrintSuccess(fmt.Sprintf("Role created successfully: %s", role.ID))
 			fmt.Println()
-			printRoleDetails(printer, resp.Role)
+			printRoleDetails(printer, role)
 		}
 		return nil
 
@@ -234,13 +228,10 @@ func runRoleGet(flags *cli.CommonFlags, tenantID, roleID string) error {
 	}
 	defer base.Close()
 
-	req := &platformv1.GetIAMRoleRequest{
-		TenantId: tenantID,
-		RoleId:   roleID,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().GetRole(ctx, req)
+
+	role, err := sdkClient.GetRoleDomain(ctx, tenantID, roleID)
 	if err != nil {
 		return fmt.Errorf("failed to get role: %w", err)
 	}
@@ -249,11 +240,11 @@ func runRoleGet(flags *cli.CommonFlags, tenantID, roleID string) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(role)
 
 	case cli.OutputFormatTable:
-		if resp.Role != nil {
-			printRoleDetails(printer, resp.Role)
+		if role != nil {
+			printRoleDetails(printer, role)
 		}
 		return nil
 
@@ -273,16 +264,10 @@ func runRoleList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32)
 	}
 	defer base.Close()
 
-	req := &platformv1.ListIAMRolesRequest{
-		TenantId: tenantID,
-		Pagination: &platformv1.PaginationRequest{
-			Page:     page,
-			PageSize: pageSize,
-		},
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().ListRoles(ctx, req)
+
+	result, err := sdkClient.ListRolesDomain(ctx, tenantID, page, pageSize)
 	if err != nil {
 		return fmt.Errorf("failed to list roles: %w", err)
 	}
@@ -291,19 +276,19 @@ func runRoleList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32)
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		if len(resp.Roles) == 0 {
+		if len(result.Roles) == 0 {
 			printer.PrintInfo("No roles found")
 			return nil
 		}
 
 		table := cli.NewTableData("Role ID", "Name", "Description", "Permissions", "Created At")
-		for _, role := range resp.Roles {
+		for _, role := range result.Roles {
 			permDisplay := formatPermissions(role.Permissions)
 			table.AddRow(
-				role.Id,
+				role.ID,
 				role.Name,
 				truncateString(role.Description, 30),
 				permDisplay,
@@ -316,7 +301,7 @@ func runRoleList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32)
 		}
 
 		fmt.Println()
-		printer.PrintKeyValue("Total Count", fmt.Sprintf("%d", resp.Total))
+		printer.PrintKeyValue("Total Count", fmt.Sprintf("%d", result.Total))
 		return nil
 
 	default:
@@ -338,16 +323,10 @@ func runRoleUpdate(flags *cli.CommonFlags, tenantID, roleID, name, description s
 	}
 	defer base.Close()
 
-	req := &platformv1.UpdateIAMRoleRequest{
-		TenantId:    tenantID,
-		RoleId:      roleID,
-		Name:        name,
-		Description: description,
-		Permissions: permissions,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().UpdateRole(ctx, req)
+
+	role, err := sdkClient.UpdateRoleDomain(ctx, tenantID, roleID, name, description, permissions)
 	if err != nil {
 		return fmt.Errorf("failed to update role: %w", err)
 	}
@@ -356,13 +335,13 @@ func runRoleUpdate(flags *cli.CommonFlags, tenantID, roleID, name, description s
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(role)
 
 	case cli.OutputFormatTable:
-		if resp.Role != nil {
-			printer.PrintSuccess(fmt.Sprintf("Role updated successfully: %s", resp.Role.Id))
+		if role != nil {
+			printer.PrintSuccess(fmt.Sprintf("Role updated successfully: %s", role.ID))
 			fmt.Println()
-			printRoleDetails(printer, resp.Role)
+			printRoleDetails(printer, role)
 		}
 		return nil
 
@@ -385,13 +364,10 @@ func runRoleDelete(flags *cli.CommonFlags, tenantID, roleID string) error {
 	}
 	defer base.Close()
 
-	req := &platformv1.DeleteIAMRoleRequest{
-		TenantId: tenantID,
-		RoleId:   roleID,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().DeleteRole(ctx, req)
+
+	status, err := sdkClient.DeleteRoleDomain(ctx, tenantID, roleID)
 	if err != nil {
 		return fmt.Errorf("failed to delete role: %w", err)
 	}
@@ -400,10 +376,10 @@ func runRoleDelete(flags *cli.CommonFlags, tenantID, roleID string) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(status)
 
 	case cli.OutputFormatTable:
-		if resp.Status != nil && resp.Status.Success {
+		if status != nil && status.Success {
 			printer.PrintSuccess(fmt.Sprintf("Role deleted successfully: %s", roleID))
 		} else {
 			printer.PrintError(fmt.Sprintf("Failed to delete role: %s", roleID))
@@ -416,9 +392,9 @@ func runRoleDelete(flags *cli.CommonFlags, tenantID, roleID string) error {
 }
 
 // printRoleDetails prints detailed information about a role
-func printRoleDetails(printer *cli.Printer, role *platformv1.IAMRole) {
-	printer.PrintKeyValue("Role ID", role.Id)
-	printer.PrintKeyValue("Tenant ID", role.TenantId)
+func printRoleDetails(printer *cli.Printer, role *iamsvc.Role) {
+	printer.PrintKeyValue("Role ID", role.ID)
+	printer.PrintKeyValue("Tenant ID", role.TenantID)
 	if role.Name != "" {
 		printer.PrintKeyValue("Name", role.Name)
 	}
@@ -432,7 +408,7 @@ func printRoleDetails(printer *cli.Printer, role *platformv1.IAMRole) {
 	}
 	printer.PrintKeyValue("Created At", formatTimestamp(role.CreatedAt))
 	if role.UpdatedAt != nil {
-		printer.PrintKeyValue("Updated At", formatTimestamp(role.UpdatedAt))
+		printer.PrintKeyValue("Updated At", formatTimestampPtr(role.UpdatedAt))
 	}
 }
 

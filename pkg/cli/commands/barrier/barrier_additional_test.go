@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	barriersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/barrier"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,14 +29,14 @@ func TestValidateInitParams_ShamirThresholdOne(t *testing.T) {
 
 func TestFormatStrategy_AllValues(t *testing.T) {
 	tests := []struct {
-		strategy platformv1.BarrierStrategy
+		strategy barriersvc.Strategy
 		expected string
 	}{
-		{platformv1.BarrierStrategy_BARRIER_STRATEGY_UNSPECIFIED, "unspecified"},
-		{platformv1.BarrierStrategy_BARRIER_STRATEGY_SINGLE_KEY, "single-key"},
-		{platformv1.BarrierStrategy_BARRIER_STRATEGY_SHAMIR, "shamir"},
-		{platformv1.BarrierStrategy(100), "unknown"},
-		{platformv1.BarrierStrategy(-1), "unknown"},
+		{barriersvc.StrategyUnspecified, "unspecified"},
+		{barriersvc.StrategySingleKey, "single-key"},
+		{barriersvc.StrategyShamir, "shamir"},
+		{barriersvc.Strategy("unknown-strategy"), "unknown"},
+		{barriersvc.Strategy(""), "unknown"},
 	}
 
 	for _, tt := range tests {
@@ -47,9 +47,9 @@ func TestFormatStrategy_AllValues(t *testing.T) {
 
 func TestStrategyNamesMap(t *testing.T) {
 	assert.Len(t, strategyNames, 3)
-	assert.Contains(t, strategyNames, platformv1.BarrierStrategy_BARRIER_STRATEGY_UNSPECIFIED)
-	assert.Contains(t, strategyNames, platformv1.BarrierStrategy_BARRIER_STRATEGY_SINGLE_KEY)
-	assert.Contains(t, strategyNames, platformv1.BarrierStrategy_BARRIER_STRATEGY_SHAMIR)
+	assert.Contains(t, strategyNames, barriersvc.StrategyUnspecified)
+	assert.Contains(t, strategyNames, barriersvc.StrategySingleKey)
+	assert.Contains(t, strategyNames, barriersvc.StrategyShamir)
 }
 
 func TestErrInvalidThreshold_Fields(t *testing.T) {

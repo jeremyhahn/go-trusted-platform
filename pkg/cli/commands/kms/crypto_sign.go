@@ -19,7 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -90,10 +91,7 @@ func runCryptoSign(flags *cli.CommonFlags, cmdFlags *signFlags) error {
 	}
 	defer base.Close()
 
-	client := base.Client().KMS()
-	if client == nil {
-		return ErrCryptoClientNotInitialized{}
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
 	// Read input data
 	message, err := readInputData(cmdFlags.inputPath)
@@ -107,14 +105,8 @@ func runCryptoSign(flags *cli.CommonFlags, cmdFlags *signFlags) error {
 		return err
 	}
 
-	req := &platformv1.SignRequest{
-		KeyId:         cmdFlags.keyID,
-		Message:       message,
-		HashAlgorithm: hashAlg,
-	}
-
 	ctx := base.Context()
-	resp, err := client.Sign(ctx, req)
+	resp, err := sdkClient.SignDomain(ctx, cmdFlags.keyID, message, hashAlg)
 	if err != nil {
 		return ErrCryptoOperationFailed{Operation: "sign", Err: err}
 	}
@@ -130,7 +122,7 @@ func runCryptoSign(flags *cli.CommonFlags, cmdFlags *signFlags) error {
 			HashAlgorithm string `json:"hash_algorithm" yaml:"hash_algorithm"`
 			Timestamp     string `json:"timestamp" yaml:"timestamp"`
 		}{
-			KeyID:         resp.KeyId,
+			KeyID:         resp.KeyID,
 			KeyVersion:    resp.KeyVersion,
 			Signature:     base64.StdEncoding.EncodeToString(resp.Signature),
 			HashAlgorithm: formatHashAlgorithm(resp.HashAlgorithm),
@@ -147,7 +139,7 @@ func runCryptoSign(flags *cli.CommonFlags, cmdFlags *signFlags) error {
 		// Show metadata if writing to file
 		if cmdFlags.outputPath != "" {
 			printer.PrintSuccess("Message signed successfully")
-			printer.PrintKeyValue("Key ID", resp.KeyId)
+			printer.PrintKeyValue("Key ID", resp.KeyID)
 			printer.PrintKeyValue("Key Version", fmt.Sprintf("%d", resp.KeyVersion))
 			printer.PrintKeyValue("Hash Algorithm", formatHashAlgorithm(resp.HashAlgorithm))
 			printer.PrintKeyValue("Output", cmdFlags.outputPath)

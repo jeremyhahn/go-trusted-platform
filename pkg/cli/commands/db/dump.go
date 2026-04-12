@@ -17,7 +17,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,8 +25,8 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	dbsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/db"
 )
 
 // Dump command flags
@@ -119,38 +118,27 @@ func runDump(commonFlags *cli.CommonFlags, flags *dumpFlags) error {
 		return ErrOutputDirectoryFailed{Path: flags.output, Err: err}
 	}
 
+	sdkClient := dbsvc.NewClientFromGRPC(base.Client().Daemon())
+
 	// Create request context with timeout
 	reqCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-
-	// Call DumpEntityType RPC (streaming)
-	stream, err := base.Client().Daemon().DumpEntityType(reqCtx, &platformv1.DumpEntityTypeRequest{
-		EntityType: flags.entityType,
-		Format:     format,
-		Pretty:     flags.pretty,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to start dump: %w", err)
-	}
 
 	// Track counts per entity type
 	typeCounts := make(map[string]int)
 	totalExported := 0
 
-	for {
-		resp, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("stream error: %w", err)
-		}
-
+	// Stream dump via SDK client
+	dumpErr := sdkClient.DumpEntityTypes(reqCtx, &dbsvc.DumpParams{
+		EntityType: flags.entityType,
+		Format:     format,
+		Pretty:     flags.pretty,
+	}, func(entry *dbsvc.DumpEntry) error {
 		// Create entity type directory if needed
-		entityDir := filepath.Join(flags.output, resp.EntityType)
-		if typeCounts[resp.EntityType] == 0 {
-			if err := os.MkdirAll(entityDir, 0755); err != nil {
-				return ErrOutputDirectoryFailed{Path: entityDir, Err: err}
+		entityDir := filepath.Join(flags.output, entry.EntityType)
+		if typeCounts[entry.EntityType] == 0 {
+			if mkdirErr := os.MkdirAll(entityDir, 0755); mkdirErr != nil {
+				return ErrOutputDirectoryFailed{Path: entityDir, Err: mkdirErr}
 			}
 		}
 
@@ -160,33 +148,38 @@ func runDump(commonFlags *cli.CommonFlags, flags *dumpFlags) error {
 		case "json":
 			if flags.pretty {
 				var parsed interface{}
-				if err := json.Unmarshal(resp.Data, &parsed); err != nil {
-					outputData = resp.Data
+				if jsonErr := json.Unmarshal(entry.Data, &parsed); jsonErr != nil {
+					outputData = entry.Data
 				} else {
 					outputData, _ = json.MarshalIndent(parsed, "", "  ")
 				}
 			} else {
-				outputData = resp.Data
+				outputData = entry.Data
 			}
 		case "yaml":
 			var parsed interface{}
-			if err := json.Unmarshal(resp.Data, &parsed); err != nil {
-				return ErrDeserializationFailed{EntityType: resp.EntityType, ID: resp.EntityId, Err: err}
+			if jsonErr := json.Unmarshal(entry.Data, &parsed); jsonErr != nil {
+				return ErrDeserializationFailed{EntityType: entry.EntityType, ID: entry.EntityID, Err: jsonErr}
 			}
-			outputData, err = yaml.Marshal(parsed)
-			if err != nil {
-				return ErrSerializationFailed{EntityType: resp.EntityType, ID: resp.EntityId, Err: err}
+			yamlData, yamlErr := yaml.Marshal(parsed)
+			if yamlErr != nil {
+				return ErrSerializationFailed{EntityType: entry.EntityType, ID: entry.EntityID, Err: yamlErr}
 			}
+			outputData = yamlData
 		}
 
 		// Write file
-		filename := filepath.Join(entityDir, fmt.Sprintf("%d.%s", resp.EntityId, format))
-		if err := os.WriteFile(filename, outputData, 0644); err != nil {
-			return ErrFileWriteFailed{Path: filename, Err: err}
+		filename := filepath.Join(entityDir, fmt.Sprintf("%d.%s", entry.EntityID, format))
+		if writeErr := os.WriteFile(filename, outputData, 0644); writeErr != nil {
+			return ErrFileWriteFailed{Path: filename, Err: writeErr}
 		}
 
-		typeCounts[resp.EntityType]++
+		typeCounts[entry.EntityType]++
 		totalExported++
+		return nil
+	})
+	if dumpErr != nil {
+		return dumpErr
 	}
 
 	// Print summary

@@ -20,7 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	clustersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/cluster"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -39,16 +39,6 @@ func NewJoinCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 This command connects to one or more existing cluster members and requests
 to join the cluster. The cluster leader will add this node to the
 configuration and begin replicating state to it.
-
-The join operation:
-  1. Connects to the specified seed nodes
-  2. Discovers the current cluster leader
-  3. Sends a join request to the leader
-  4. Receives and applies the cluster state
-  5. Begins participating in consensus
-
-Multiple seed nodes can be specified for redundancy. The join will succeed
-as long as at least one seed node is reachable and the cluster has quorum.
 
 Examples:
   # Join using a single seed node
@@ -123,10 +113,12 @@ func runJoin(flags *cli.CommonFlags, nodeID, listenAddr, advertiseAddr, joinAddr
 	}
 	defer base.Close()
 
-	client := base.Client().Cluster()
-	if client == nil {
+	grpcClient := base.Client().Cluster()
+	if grpcClient == nil {
 		return ErrClusterClientNotInitialized{}
 	}
+
+	sdkClient := clustersvc.NewClientFromGRPC(grpcClient)
 
 	// Parse listen address into host and port
 	bindHost, bindPortStr, splitErr := net.SplitHostPort(listenAddr)
@@ -148,42 +140,29 @@ func runJoin(flags *cli.CommonFlags, nodeID, listenAddr, advertiseAddr, joinAddr
 		return ErrInvalidListenAddr{Addr: advertiseAddr, Reason: "invalid port number"}
 	}
 
-	req := &platformv1.JoinClusterRequest{
-		NodeName:         nodeID,
-		BindAddress:      bindHost,
-		BindPort:         uint32(bindPort),
-		AdvertiseAddress: advHost,
-		AdvertisePort:    uint32(advPort),
-		SeedAddresses:    addrs,
-	}
-
 	ctx := base.Context()
-	resp, err := client.Join(ctx, req)
+	resp, err := sdkClient.JoinDomain(ctx, nodeID,
+		bindHost, uint32(bindPort), advHost, uint32(advPort), addrs)
 	if err != nil {
 		return ErrClusterJoinFailed{Err: err}
 	}
 
 	// Build result from response
 	result := &JoinResult{
-		NodeID:     nodeID,
-		ClusterID:  "",
-		LeaderID:   "",
-		LeaderAddr: "",
+		NodeID:     resp.NodeID,
+		ClusterID:  resp.ClusterID,
+		LeaderID:   resp.LeaderID,
+		LeaderAddr: resp.LeaderAddr,
 		JoinedFrom: addrs,
 		Success:    true,
-		Message:    "Successfully joined cluster",
+		Message:    resp.Message,
 	}
 
-	if resp.GetCluster() != nil {
-		result.ClusterID = resp.GetCluster().GetId()
-		result.LeaderID = resp.GetCluster().GetLeaderId()
-		result.LeaderAddr = resp.GetCluster().GetLeaderAddress()
+	if result.NodeID == "" {
+		result.NodeID = nodeID
 	}
-	if resp.GetNode() != nil {
-		result.NodeID = resp.GetNode().GetId()
-	}
-	if resp.GetStatus() != nil && resp.GetStatus().GetMessage() != "" {
-		result.Message = resp.GetStatus().GetMessage()
+	if result.Message == "" {
+		result.Message = "Successfully joined cluster"
 	}
 
 	printer := base.Printer()

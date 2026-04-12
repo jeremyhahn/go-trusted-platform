@@ -18,10 +18,10 @@ import (
 	"errors"
 	"log/slog"
 	"testing"
+	"time"
 
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // =============================================================================
@@ -49,7 +49,7 @@ func TestMCPServiceProvider_IAMCreateGroup_NilService(t *testing.T) {
 
 func TestMCPServiceProvider_IAMCreateGroup_MissingTenantID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -74,7 +74,7 @@ func TestMCPServiceProvider_IAMCreateGroup_MissingTenantID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMCreateGroup_MissingIDAndName(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -100,14 +100,16 @@ func TestMCPServiceProvider_IAMCreateGroup_MissingIDAndName(t *testing.T) {
 
 func TestMCPServiceProvider_IAMCreateGroup_Success(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		createGroupResp: &iampb.Group{
-			Id:          "group1",
-			TenantId:    "tenant1",
-			Name:        "admins",
-			Description: "Administrators group",
-			Members:     []string{"user1", "user2"},
-			CreatedAt:   timestamppb.Now(),
+	now := time.Now()
+	mockClient := &mockIAMServiceClient{
+		createGroupFunc: func(ctx context.Context, tenantID string, req *sdkiam.CreateGroupRequest) (*sdkiam.Group, error) {
+			return &sdkiam.Group{
+				ID:          "group1",
+				TenantID:    "tenant1",
+				Name:        "admins",
+				Description: "Administrators group",
+				CreatedAt:   now,
+			}, nil
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -139,8 +141,10 @@ func TestMCPServiceProvider_IAMCreateGroup_Success(t *testing.T) {
 
 func TestMCPServiceProvider_IAMCreateGroup_Error(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		createGroupErr: errors.New("group already exists"),
+	mockClient := &mockIAMServiceClient{
+		createGroupFunc: func(ctx context.Context, tenantID string, req *sdkiam.CreateGroupRequest) (*sdkiam.Group, error) {
+			return nil, errors.New("group already exists")
+		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
@@ -182,7 +186,7 @@ func TestMCPServiceProvider_IAMDeleteGroup_NilService(t *testing.T) {
 
 func TestMCPServiceProvider_IAMDeleteGroup_MissingTenantID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -204,7 +208,7 @@ func TestMCPServiceProvider_IAMDeleteGroup_MissingTenantID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMDeleteGroup_MissingGroupID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -226,9 +230,9 @@ func TestMCPServiceProvider_IAMDeleteGroup_MissingGroupID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMDeleteGroup_Success(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		deleteGroupResp: &iampb.DeleteGroupResponse{
-			Success: true,
+	mockClient := &mockIAMServiceClient{
+		deleteGroupFunc: func(ctx context.Context, tenantID, groupID string) error {
+			return nil
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -244,9 +248,9 @@ func TestMCPServiceProvider_IAMDeleteGroup_Success(t *testing.T) {
 
 func TestMCPServiceProvider_IAMDeleteGroup_NotFound(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		deleteGroupResp: &iampb.DeleteGroupResponse{
-			Success: false,
+	mockClient := &mockIAMServiceClient{
+		deleteGroupFunc: func(ctx context.Context, tenantID, groupID string) error {
+			return errors.New("group not found")
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -259,19 +263,21 @@ func TestMCPServiceProvider_IAMDeleteGroup_NotFound(t *testing.T) {
 		t.Fatal("expected error for group not found")
 	}
 
-	notFoundErr, ok := err.(ErrIAMGroupNotFound)
+	opErr, ok := err.(ErrIAMOperationFailed)
 	if !ok {
-		t.Fatalf("expected ErrIAMGroupNotFound, got %T: %v", err, err)
+		t.Fatalf("expected ErrIAMOperationFailed, got %T: %v", err, err)
 	}
-	if notFoundErr.TenantID != "tenant1" {
-		t.Errorf("expected TenantID='tenant1', got %q", notFoundErr.TenantID)
+	if opErr.Operation != "DeleteGroup" {
+		t.Errorf("expected Operation='DeleteGroup', got %q", opErr.Operation)
 	}
 }
 
 func TestMCPServiceProvider_IAMDeleteGroup_Error(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		deleteGroupErr: errors.New("database error"),
+	mockClient := &mockIAMServiceClient{
+		deleteGroupFunc: func(ctx context.Context, tenantID, groupID string) error {
+			return errors.New("database error")
+		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
@@ -310,7 +316,7 @@ func TestMCPServiceProvider_IAMGetGroup_NilService(t *testing.T) {
 
 func TestMCPServiceProvider_IAMGetGroup_MissingTenantID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -332,7 +338,7 @@ func TestMCPServiceProvider_IAMGetGroup_MissingTenantID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMGetGroup_MissingGroupID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -354,13 +360,14 @@ func TestMCPServiceProvider_IAMGetGroup_MissingGroupID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMGetGroup_Success(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		getGroupResp: &iampb.Group{
-			Id:          "group1",
-			TenantId:    "tenant1",
-			Name:        "admins",
-			Description: "Administrators group",
-			Members:     []string{"user1", "user2"},
+	mockClient := &mockIAMServiceClient{
+		getGroupFunc: func(ctx context.Context, tenantID, groupID string) (*sdkiam.Group, error) {
+			return &sdkiam.Group{
+				ID:          "group1",
+				TenantID:    "tenant1",
+				Name:        "admins",
+				Description: "Administrators group",
+			}, nil
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -387,8 +394,10 @@ func TestMCPServiceProvider_IAMGetGroup_Success(t *testing.T) {
 
 func TestMCPServiceProvider_IAMGetGroup_NotFound(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		getGroupErr: errors.New("group not found"),
+	mockClient := &mockIAMServiceClient{
+		getGroupFunc: func(ctx context.Context, tenantID, groupID string) (*sdkiam.Group, error) {
+			return nil, errors.New("group not found")
+		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
@@ -427,7 +436,7 @@ func TestMCPServiceProvider_IAMListGroups_NilService(t *testing.T) {
 
 func TestMCPServiceProvider_IAMListGroups_MissingTenantID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -449,12 +458,14 @@ func TestMCPServiceProvider_IAMListGroups_MissingTenantID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMListGroups_DefaultValues(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		listGroupsResp: &iampb.ListGroupsResponse{
-			Groups: []*iampb.Group{
-				{Id: "group1", TenantId: "tenant1", Name: "admins"},
-			},
-			Total: 1,
+	mockClient := &mockIAMServiceClient{
+		listGroupsFunc: func(ctx context.Context, tenantID string, req *sdkiam.ListGroupsRequest) (*sdkiam.ListGroupsResponse, error) {
+			return &sdkiam.ListGroupsResponse{
+				Groups: []sdkiam.Group{
+					{ID: "group1", TenantID: "tenant1", Name: "admins"},
+				},
+				Pagination: sdkiam.PaginationInfo{TotalCount: 1},
+			}, nil
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -481,13 +492,15 @@ func TestMCPServiceProvider_IAMListGroups_DefaultValues(t *testing.T) {
 
 func TestMCPServiceProvider_IAMListGroups_Success(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		listGroupsResp: &iampb.ListGroupsResponse{
-			Groups: []*iampb.Group{
-				{Id: "group1", TenantId: "tenant1", Name: "admins"},
-				{Id: "group2", TenantId: "tenant1", Name: "users"},
-			},
-			Total: 2,
+	mockClient := &mockIAMServiceClient{
+		listGroupsFunc: func(ctx context.Context, tenantID string, req *sdkiam.ListGroupsRequest) (*sdkiam.ListGroupsResponse, error) {
+			return &sdkiam.ListGroupsResponse{
+				Groups: []sdkiam.Group{
+					{ID: "group1", TenantID: "tenant1", Name: "admins"},
+					{ID: "group2", TenantID: "tenant1", Name: "users"},
+				},
+				Pagination: sdkiam.PaginationInfo{TotalCount: 2},
+			}, nil
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -515,8 +528,10 @@ func TestMCPServiceProvider_IAMListGroups_Success(t *testing.T) {
 
 func TestMCPServiceProvider_IAMListGroups_Error(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		listGroupsErr: errors.New("database error"),
+	mockClient := &mockIAMServiceClient{
+		listGroupsFunc: func(ctx context.Context, tenantID string, req *sdkiam.ListGroupsRequest) (*sdkiam.ListGroupsResponse, error) {
+			return nil, errors.New("database error")
+		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
@@ -555,7 +570,7 @@ func TestMCPServiceProvider_IAMAddGroupMember_NilService(t *testing.T) {
 
 func TestMCPServiceProvider_IAMAddGroupMember_MissingTenantID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -577,7 +592,7 @@ func TestMCPServiceProvider_IAMAddGroupMember_MissingTenantID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMAddGroupMember_MissingGroupID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -599,7 +614,7 @@ func TestMCPServiceProvider_IAMAddGroupMember_MissingGroupID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMAddGroupMember_MissingUserID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -621,9 +636,9 @@ func TestMCPServiceProvider_IAMAddGroupMember_MissingUserID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMAddGroupMember_Success(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		addUserToGroupResp: &iampb.AddUserToGroupResponse{
-			Success: true,
+	mockClient := &mockIAMServiceClient{
+		addUserToGroupFunc: func(ctx context.Context, tenantID, groupID, userID string) error {
+			return nil
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -639,9 +654,9 @@ func TestMCPServiceProvider_IAMAddGroupMember_Success(t *testing.T) {
 
 func TestMCPServiceProvider_IAMAddGroupMember_Failed(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		addUserToGroupResp: &iampb.AddUserToGroupResponse{
-			Success: false,
+	mockClient := &mockIAMServiceClient{
+		addUserToGroupFunc: func(ctx context.Context, tenantID, groupID, userID string) error {
+			return errors.New("membership operation failed")
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -665,8 +680,10 @@ func TestMCPServiceProvider_IAMAddGroupMember_Failed(t *testing.T) {
 
 func TestMCPServiceProvider_IAMAddGroupMember_Error(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		addUserToGroupErr: errors.New("database error"),
+	mockClient := &mockIAMServiceClient{
+		addUserToGroupFunc: func(ctx context.Context, tenantID, groupID, userID string) error {
+			return errors.New("database error")
+		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
@@ -705,7 +722,7 @@ func TestMCPServiceProvider_IAMRemoveGroupMember_NilService(t *testing.T) {
 
 func TestMCPServiceProvider_IAMRemoveGroupMember_MissingTenantID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -727,7 +744,7 @@ func TestMCPServiceProvider_IAMRemoveGroupMember_MissingTenantID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMRemoveGroupMember_MissingGroupID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -749,7 +766,7 @@ func TestMCPServiceProvider_IAMRemoveGroupMember_MissingGroupID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMRemoveGroupMember_MissingUserID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -771,9 +788,9 @@ func TestMCPServiceProvider_IAMRemoveGroupMember_MissingUserID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMRemoveGroupMember_Success(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		removeUserFromGroupResp: &iampb.RemoveUserFromGroupResponse{
-			Success: true,
+	mockClient := &mockIAMServiceClient{
+		removeUserFromGroupFunc: func(ctx context.Context, tenantID, groupID, userID string) error {
+			return nil
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -789,9 +806,9 @@ func TestMCPServiceProvider_IAMRemoveGroupMember_Success(t *testing.T) {
 
 func TestMCPServiceProvider_IAMRemoveGroupMember_Failed(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		removeUserFromGroupResp: &iampb.RemoveUserFromGroupResponse{
-			Success: false,
+	mockClient := &mockIAMServiceClient{
+		removeUserFromGroupFunc: func(ctx context.Context, tenantID, groupID, userID string) error {
+			return errors.New("remove membership failed")
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -815,8 +832,10 @@ func TestMCPServiceProvider_IAMRemoveGroupMember_Failed(t *testing.T) {
 
 func TestMCPServiceProvider_IAMRemoveGroupMember_Error(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		removeUserFromGroupErr: errors.New("database error"),
+	mockClient := &mockIAMServiceClient{
+		removeUserFromGroupFunc: func(ctx context.Context, tenantID, groupID, userID string) error {
+			return errors.New("database error")
+		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
@@ -862,7 +881,7 @@ func TestMCPServiceProvider_IAMCreateTenant_NilService(t *testing.T) {
 
 func TestMCPServiceProvider_IAMCreateTenant_MissingID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -887,11 +906,14 @@ func TestMCPServiceProvider_IAMCreateTenant_MissingID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMCreateTenant_Success(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		createTenantResp: &iampb.Tenant{
-			Id:        "tenant1",
-			Name:      "Acme Corp",
-			CreatedAt: timestamppb.Now(),
+	now := time.Now()
+	mockClient := &mockIAMServiceClient{
+		createTenantFunc: func(ctx context.Context, req *sdkiam.CreateTenantRequest) (*sdkiam.Tenant, error) {
+			return &sdkiam.Tenant{
+				ID:        "tenant1",
+				Name:      "Acme Corp",
+				CreatedAt: now,
+			}, nil
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -921,15 +943,18 @@ func TestMCPServiceProvider_IAMCreateTenant_Success(t *testing.T) {
 
 func TestMCPServiceProvider_IAMCreateTenant_WithSettings(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		createTenantResp: &iampb.Tenant{
-			Id:   "tenant1",
-			Name: "Acme Corp",
-			Settings: &iampb.TenantSettings{
-				MaxUsers:    100,
-				MfaRequired: true,
-			},
-			CreatedAt: timestamppb.Now(),
+	now := time.Now()
+	mockClient := &mockIAMServiceClient{
+		createTenantFunc: func(ctx context.Context, req *sdkiam.CreateTenantRequest) (*sdkiam.Tenant, error) {
+			return &sdkiam.Tenant{
+				ID:   "tenant1",
+				Name: "Acme Corp",
+				Settings: map[string]string{
+					"mfa_required": "true",
+					"max_users":    "100",
+				},
+				CreatedAt: now,
+			}, nil
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -960,8 +985,10 @@ func TestMCPServiceProvider_IAMCreateTenant_WithSettings(t *testing.T) {
 
 func TestMCPServiceProvider_IAMCreateTenant_Error(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		createTenantErr: errors.New("tenant already exists"),
+	mockClient := &mockIAMServiceClient{
+		createTenantFunc: func(ctx context.Context, req *sdkiam.CreateTenantRequest) (*sdkiam.Tenant, error) {
+			return nil, errors.New("tenant already exists")
+		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
@@ -1003,7 +1030,7 @@ func TestMCPServiceProvider_IAMDeleteTenant_NilService(t *testing.T) {
 
 func TestMCPServiceProvider_IAMDeleteTenant_MissingTenantID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -1025,9 +1052,9 @@ func TestMCPServiceProvider_IAMDeleteTenant_MissingTenantID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMDeleteTenant_Success(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		deleteTenantResp: &iampb.DeleteTenantResponse{
-			Success: true,
+	mockClient := &mockIAMServiceClient{
+		deleteTenantFunc: func(ctx context.Context, tenantID string) error {
+			return nil
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -1043,9 +1070,9 @@ func TestMCPServiceProvider_IAMDeleteTenant_Success(t *testing.T) {
 
 func TestMCPServiceProvider_IAMDeleteTenant_NotFound(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		deleteTenantResp: &iampb.DeleteTenantResponse{
-			Success: false,
+	mockClient := &mockIAMServiceClient{
+		deleteTenantFunc: func(ctx context.Context, tenantID string) error {
+			return errors.New("tenant not found")
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -1058,19 +1085,21 @@ func TestMCPServiceProvider_IAMDeleteTenant_NotFound(t *testing.T) {
 		t.Fatal("expected error for tenant not found")
 	}
 
-	notFoundErr, ok := err.(ErrIAMTenantNotFound)
+	opErr, ok := err.(ErrIAMOperationFailed)
 	if !ok {
-		t.Fatalf("expected ErrIAMTenantNotFound, got %T: %v", err, err)
+		t.Fatalf("expected ErrIAMOperationFailed, got %T: %v", err, err)
 	}
-	if notFoundErr.TenantID != "nonexistent" {
-		t.Errorf("expected TenantID='nonexistent', got %q", notFoundErr.TenantID)
+	if opErr.Operation != "DeleteTenant" {
+		t.Errorf("expected Operation='DeleteTenant', got %q", opErr.Operation)
 	}
 }
 
 func TestMCPServiceProvider_IAMDeleteTenant_Error(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		deleteTenantErr: errors.New("database error"),
+	mockClient := &mockIAMServiceClient{
+		deleteTenantFunc: func(ctx context.Context, tenantID string) error {
+			return errors.New("database error")
+		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
@@ -1109,7 +1138,7 @@ func TestMCPServiceProvider_IAMGetTenant_NilService(t *testing.T) {
 
 func TestMCPServiceProvider_IAMGetTenant_MissingTenantID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -1131,10 +1160,12 @@ func TestMCPServiceProvider_IAMGetTenant_MissingTenantID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMGetTenant_Success(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		getTenantResp: &iampb.Tenant{
-			Id:   "tenant1",
-			Name: "Acme Corp",
+	mockClient := &mockIAMServiceClient{
+		getTenantFunc: func(ctx context.Context, tenantID string) (*sdkiam.Tenant, error) {
+			return &sdkiam.Tenant{
+				ID:   "tenant1",
+				Name: "Acme Corp",
+			}, nil
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -1161,8 +1192,10 @@ func TestMCPServiceProvider_IAMGetTenant_Success(t *testing.T) {
 
 func TestMCPServiceProvider_IAMGetTenant_NotFound(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		getTenantErr: errors.New("tenant not found"),
+	mockClient := &mockIAMServiceClient{
+		getTenantFunc: func(ctx context.Context, tenantID string) (*sdkiam.Tenant, error) {
+			return nil, errors.New("tenant not found")
+		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
@@ -1201,12 +1234,14 @@ func TestMCPServiceProvider_IAMListTenants_NilService(t *testing.T) {
 
 func TestMCPServiceProvider_IAMListTenants_DefaultValues(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		listTenantsResp: &iampb.ListTenantsResponse{
-			Tenants: []*iampb.Tenant{
-				{Id: "tenant1", Name: "Acme Corp"},
-			},
-			Total: 1,
+	mockClient := &mockIAMServiceClient{
+		listTenantsFunc: func(ctx context.Context, req *sdkiam.ListTenantsRequest) (*sdkiam.ListTenantsResponse, error) {
+			return &sdkiam.ListTenantsResponse{
+				Tenants: []sdkiam.Tenant{
+					{ID: "tenant1", Name: "Acme Corp"},
+				},
+				Pagination: sdkiam.PaginationInfo{TotalCount: 1},
+			}, nil
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -1233,13 +1268,15 @@ func TestMCPServiceProvider_IAMListTenants_DefaultValues(t *testing.T) {
 
 func TestMCPServiceProvider_IAMListTenants_Success(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		listTenantsResp: &iampb.ListTenantsResponse{
-			Tenants: []*iampb.Tenant{
-				{Id: "tenant1", Name: "Acme Corp"},
-				{Id: "tenant2", Name: "Beta Inc"},
-			},
-			Total: 2,
+	mockClient := &mockIAMServiceClient{
+		listTenantsFunc: func(ctx context.Context, req *sdkiam.ListTenantsRequest) (*sdkiam.ListTenantsResponse, error) {
+			return &sdkiam.ListTenantsResponse{
+				Tenants: []sdkiam.Tenant{
+					{ID: "tenant1", Name: "Acme Corp"},
+					{ID: "tenant2", Name: "Beta Inc"},
+				},
+				Pagination: sdkiam.PaginationInfo{TotalCount: 2},
+			}, nil
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -1267,8 +1304,10 @@ func TestMCPServiceProvider_IAMListTenants_Success(t *testing.T) {
 
 func TestMCPServiceProvider_IAMListTenants_Error(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		listTenantsErr: errors.New("database error"),
+	mockClient := &mockIAMServiceClient{
+		listTenantsFunc: func(ctx context.Context, req *sdkiam.ListTenantsRequest) (*sdkiam.ListTenantsResponse, error) {
+			return nil, errors.New("database error")
+		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
@@ -1314,7 +1353,7 @@ func TestMCPServiceProvider_IAMCreateToken_NilService(t *testing.T) {
 
 func TestMCPServiceProvider_IAMCreateToken_MissingTenantID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -1339,7 +1378,7 @@ func TestMCPServiceProvider_IAMCreateToken_MissingTenantID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMCreateToken_MissingUserID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -1364,8 +1403,10 @@ func TestMCPServiceProvider_IAMCreateToken_MissingUserID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMCreateToken_UserNotFound(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		getUserErr: errors.New("user not found"),
+	mockClient := &mockIAMServiceClient{
+		getUserFunc: func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
+			return nil, errors.New("user not found")
+		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
@@ -1391,11 +1432,13 @@ func TestMCPServiceProvider_IAMCreateToken_UserNotFound(t *testing.T) {
 
 func TestMCPServiceProvider_IAMCreateToken_Success(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		getUserResp: &iampb.User{
-			Id:       "user1",
-			TenantId: "tenant1",
-			Email:    "test@example.com",
+	mockClient := &mockIAMServiceClient{
+		getUserFunc: func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
+			return &sdkiam.User{
+				ID:       "user1",
+				TenantID: "tenant1",
+				Email:    "test@example.com",
+			}, nil
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -1437,11 +1480,13 @@ func TestMCPServiceProvider_IAMCreateToken_Success(t *testing.T) {
 
 func TestMCPServiceProvider_IAMCreateToken_DefaultExpiration(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{
-		getUserResp: &iampb.User{
-			Id:       "user1",
-			TenantId: "tenant1",
-			Email:    "test@example.com",
+	mockClient := &mockIAMServiceClient{
+		getUserFunc: func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
+			return &sdkiam.User{
+				ID:       "user1",
+				TenantID: "tenant1",
+				Email:    "test@example.com",
+			}, nil
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -1486,7 +1531,7 @@ func TestMCPServiceProvider_IAMRevokeToken_NilService(t *testing.T) {
 
 func TestMCPServiceProvider_IAMRevokeToken_MissingTokenID(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -1508,7 +1553,7 @@ func TestMCPServiceProvider_IAMRevokeToken_MissingTokenID(t *testing.T) {
 
 func TestMCPServiceProvider_IAMRevokeToken_Success(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -1538,7 +1583,7 @@ func TestMCPServiceProvider_IAMVerifyToken_NilService(t *testing.T) {
 
 func TestMCPServiceProvider_IAMVerifyToken_MissingToken(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),
@@ -1560,7 +1605,7 @@ func TestMCPServiceProvider_IAMVerifyToken_MissingToken(t *testing.T) {
 
 func TestMCPServiceProvider_IAMVerifyToken_Success(t *testing.T) {
 	ctx := context.Background()
-	mockClient := &mockIAMClientForTests{}
+	mockClient := &mockIAMServiceClient{}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
 		IAMClient: mockClient,
 		Logger:    slog.Default(),

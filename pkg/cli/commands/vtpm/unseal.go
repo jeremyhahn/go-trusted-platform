@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -85,19 +85,10 @@ func runUnseal(flags *cli.CommonFlags, bundleID, sealedData, authValue string) e
 	}
 	defer base.Close()
 
-	client := base.Client().VTPM()
-	if client == nil {
-		return ErrVTPMNotAvailable{}
-	}
-
-	req := &platformv1.UnsealVTPMRequest{
-		BundleId:   bundleID,
-		SealedData: sealedBytes,
-		AuthValue:  authValue,
-	}
+	sdkClient := vtpmsvc.NewClientFromGRPC(base.Client().VTPM())
 
 	ctx := base.Context()
-	resp, err := client.UnsealVTPM(ctx, req)
+	resp, err := sdkClient.UnsealDomain(ctx, bundleID, sealedBytes, authValue)
 	if err != nil {
 		return ErrUnsealVTPMFailed{Reason: err.Error()}
 	}
@@ -109,7 +100,7 @@ func runUnseal(flags *cli.CommonFlags, bundleID, sealedData, authValue string) e
 		return printer.Print(resp)
 
 	case cli.OutputFormatTable:
-		printer.PrintKeyValue("Bundle ID", resp.BundleId)
+		printer.PrintKeyValue("Bundle ID", resp.BundleID)
 		printer.PrintKeyValue("Data", base64.StdEncoding.EncodeToString(resp.Data))
 		return nil
 

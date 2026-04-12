@@ -24,9 +24,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
-
-	iampb "github.com/jeremyhahn/go-quicbaas/api/proto/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
@@ -548,10 +545,9 @@ func TestRoutes_HandlerExecution(t *testing.T) {
 
 	// Create a mock that returns data
 	iamClient := &mockIAMClient{
-		listTenantsFn: func(ctx context.Context, req *iampb.ListTenantsRequest, opts ...grpc.CallOption) (*iampb.ListTenantsResponse, error) {
-			return &iampb.ListTenantsResponse{
-				Tenants: []*iampb.Tenant{},
-				Total:   0,
+		listTenantsFn: func(ctx context.Context, limit, offset int32) (*ListTenantsResponse, error) {
+			return &ListTenantsResponse{
+				Tenants: []TenantResponse{},
 			}, nil
 		},
 	}

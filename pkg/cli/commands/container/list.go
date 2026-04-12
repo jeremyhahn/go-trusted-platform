@@ -19,8 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 // listOptions holds the options for the list command
@@ -85,41 +85,41 @@ func runList(flags *cli.CommonFlags, opts *listOptions) error {
 	}
 	defer base.Close()
 
-	client := base.Client().Compute()
-	if client == nil {
+	grpcClient := base.Client().Compute()
+	if grpcClient == nil {
 		return ErrContainerClientNotInitialized{}
 	}
 
-	// Build request
-	req := &platformv1.ListContainersRequest{
-		Pagination: &platformv1.PaginationRequest{
-			PageSize: uint32(opts.pageSize),
-		},
+	sdkClient := computesvc.NewClientFromGRPC(grpcClient)
+
+	// Build params
+	params := &computesvc.ListContainersParams{
+		PageSize: uint32(opts.pageSize),
 	}
 
 	// If not showing all, filter to running containers only
 	if !opts.all {
-		req.States = []platformv1.ContainerState{
-			platformv1.ContainerState_CONTAINER_STATE_RUNNING,
+		params.States = []computesvc.ContainerState{
+			computesvc.ContainerStateRunning,
 		}
 	}
 
 	// Parse and apply filters
 	if len(opts.filter) > 0 {
-		selector, states, err := parseFilters(opts.filter)
+		labels, states, err := parseFilters(opts.filter)
 		if err != nil {
 			return err
 		}
-		if selector != nil {
-			req.Selector = selector
+		if len(labels) > 0 {
+			params.Labels = labels
 		}
 		if len(states) > 0 {
-			req.States = states
+			params.States = states
 		}
 	}
 
 	ctx := base.Context()
-	resp, err := client.ListContainers(ctx, req)
+	result, err := sdkClient.ListContainersDomain(ctx, params)
 	if err != nil {
 		return ErrContainerOperationFailed{Operation: "list", ID: "", Err: err}
 	}
@@ -128,20 +128,19 @@ func runList(flags *cli.CommonFlags, opts *listOptions) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		return printContainerList(printer, resp)
+		return printContainerList(printer, result)
 
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
 	}
 }
 
-// parseFilters parses filter strings into selector and states
-func parseFilters(filters []string) (*platformv1.LabelSelector, []platformv1.ContainerState, error) {
-	var selector *platformv1.LabelSelector
-	var states []platformv1.ContainerState
+// parseFilters parses filter strings into labels and states
+func parseFilters(filters []string) (map[string]string, []computesvc.ContainerState, error) {
+	var states []computesvc.ContainerState
 
 	labels := make(map[string]string)
 
@@ -176,26 +175,20 @@ func parseFilters(filters []string) (*platformv1.LabelSelector, []platformv1.Con
 		}
 	}
 
-	if len(labels) > 0 {
-		selector = &platformv1.LabelSelector{
-			MatchLabels: labels,
-		}
-	}
-
-	return selector, states, nil
+	return labels, states, nil
 }
 
 // printContainerList prints the container list in table format
-func printContainerList(printer *cli.Printer, resp *platformv1.ListContainersResponse) error {
-	if len(resp.Containers) == 0 {
+func printContainerList(printer *cli.Printer, result *computesvc.ListContainersResult) error {
+	if len(result.Containers) == 0 {
 		printer.PrintInfo("No containers found")
 		return nil
 	}
 
 	table := cli.NewTableData("ID", "NAME", "IMAGE", "STATE", "CREATED", "PORTS")
 
-	for _, container := range resp.Containers {
-		id := truncateID(container.Id)
+	for _, container := range result.Containers {
+		id := truncateID(container.ID)
 		name := ""
 		image := ""
 		ports := ""
@@ -217,22 +210,22 @@ func printContainerList(printer *cli.Printer, resp *platformv1.ListContainersRes
 	}
 
 	fmt.Println()
-	printer.PrintKeyValue("Total", fmt.Sprintf("%d container(s)", len(resp.Containers)))
+	printer.PrintKeyValue("Total", fmt.Sprintf("%d container(s)", len(result.Containers)))
 
 	return nil
 }
 
 // formatPorts formats port mappings for display
-func formatPorts(ports []*platformv1.PortMapping) string {
+func formatPorts(ports []*computesvc.PortMapping) string {
 	if len(ports) == 0 {
 		return ""
 	}
 
 	var portStrs []string
 	for _, p := range ports {
-		if p.HostIp != "" {
+		if p.HostIP != "" {
 			portStrs = append(portStrs, fmt.Sprintf("%s:%d->%d/%s",
-				p.HostIp, p.HostPort, p.ContainerPort, p.Protocol))
+				p.HostIP, p.HostPort, p.ContainerPort, p.Protocol))
 		} else {
 			portStrs = append(portStrs, fmt.Sprintf("%d->%d/%s",
 				p.HostPort, p.ContainerPort, p.Protocol))

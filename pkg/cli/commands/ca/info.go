@@ -16,11 +16,11 @@ package ca
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	casvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -65,13 +65,15 @@ func runInfo(flags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
-	client := base.Client().CA()
-	if client == nil {
+	grpcClient := base.Client().CA()
+	if grpcClient == nil {
 		return ErrCANotInitialized{}
 	}
 
+	sdkClient := casvc.NewClientFromGRPC(grpcClient)
 	ctx := base.Context()
-	resp, err := client.GetCAInfo(ctx, &platformv1.GetCAInfoRequest{})
+
+	info, err := sdkClient.GetCAInfoDomain(ctx)
 	if err != nil {
 		return ErrGetCAInfoFailed{Reason: err.Error()}
 	}
@@ -80,10 +82,10 @@ func runInfo(flags *cli.CommonFlags) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(info)
 
 	case cli.OutputFormatTable:
-		printCAInfoTable(printer, resp)
+		printCAInfoTable(printer, info)
 		return nil
 
 	default:
@@ -92,13 +94,11 @@ func runInfo(flags *cli.CommonFlags) error {
 }
 
 // printCAInfoTable prints CA information in table format
-func printCAInfoTable(printer *cli.Printer, resp *platformv1.GetCAInfoResponse) {
-	if resp.CaInfo == nil {
+func printCAInfoTable(printer *cli.Printer, info *casvc.CAInfo) {
+	if info == nil {
 		printer.PrintInfo("No CA information available")
 		return
 	}
-
-	info := resp.CaInfo
 
 	printer.PrintKeyValue("Initialized", formatBool(info.IsInitialized))
 	printer.PrintKeyValue("Common Name", info.CommonName)
@@ -131,21 +131,21 @@ func printCAInfoTable(printer *cli.Printer, resp *platformv1.GetCAInfoResponse) 
 }
 
 // printCertSummary prints a certificate summary with given indent
-func printCertSummary(printer *cli.Printer, cert *platformv1.CertificateSummary, indent string) {
+func printCertSummary(printer *cli.Printer, cert *casvc.CertificateSummary, indent string) {
 	if cert == nil {
 		return
 	}
 	fmt.Printf("%sCommon Name: %s\n", indent, cert.CommonName)
 	fmt.Printf("%sSerial: %s\n", indent, cert.Serial)
 	fmt.Printf("%sIssuer: %s\n", indent, cert.Issuer)
-	fmt.Printf("%sNot Before: %s\n", indent, formatTimestamp(cert.NotBefore))
-	fmt.Printf("%sNot After: %s\n", indent, formatTimestamp(cert.NotAfter))
-	fmt.Printf("%sStatus: %s\n", indent, cert.Status.String())
-	fmt.Printf("%sKey Algorithm: %s\n", indent, cert.KeyAlgorithm.String())
+	fmt.Printf("%sNot Before: %s\n", indent, formatTime(cert.NotBefore))
+	fmt.Printf("%sNot After: %s\n", indent, formatTime(cert.NotAfter))
+	fmt.Printf("%sStatus: %s\n", indent, string(cert.Status))
+	fmt.Printf("%sKey Algorithm: %s\n", indent, string(cert.KeyAlgorithm))
 }
 
 // printKeyStoreInfo prints key store information
-func printKeyStoreInfo(printer *cli.Printer, store *platformv1.KeyStoreInfo) {
+func printKeyStoreInfo(printer *cli.Printer, store *casvc.KeyStoreInfo) {
 	if store == nil {
 		return
 	}
@@ -167,10 +167,10 @@ func formatBool(b bool) string {
 	return "No"
 }
 
-// formatTimestamp formats a protobuf timestamp for display
-func formatTimestamp(ts *timestamppb.Timestamp) string {
-	if ts == nil {
+// formatTime formats a time.Time for display
+func formatTime(t time.Time) string {
+	if t.IsZero() {
 		return "N/A"
 	}
-	return ts.AsTime().Format("2006-01-02 15:04:05 MST")
+	return t.Format("2006-01-02 15:04:05 MST")
 }

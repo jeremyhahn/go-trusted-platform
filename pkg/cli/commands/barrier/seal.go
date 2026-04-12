@@ -16,8 +16,8 @@ package barrier
 import (
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	barriersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/barrier"
 )
 
 // newSealCommand creates the barrier seal subcommand
@@ -44,8 +44,10 @@ func runSeal(flags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
+	sdkClient := barriersvc.NewClientFromGRPC(base.Client().Barrier())
+
 	ctx := base.Context()
-	resp, err := base.Client().Barrier().Seal(ctx, &platformv1.BarrierSealRequest{})
+	result, err := sdkClient.Seal(ctx)
 	if err != nil {
 		return ErrBarrierSealFailed{Err: err}
 	}
@@ -54,10 +56,10 @@ func runSeal(flags *cli.CommonFlags) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		if resp.Sealed {
+		if result.Sealed {
 			printer.PrintSuccess("Barrier sealed successfully")
 		}
 		return nil

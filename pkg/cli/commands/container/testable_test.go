@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -219,7 +220,7 @@ func printCreateResponse(printer *cli.Printer, format cli.OutputFormat, resp *pl
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
 		return printer.Print(resp)
 	case cli.OutputFormatTable:
-		printContainerDetails(printer, resp.Container)
+		printContainerDetails(printer, computesvc.ContainerFromProto(resp.Container))
 		return nil
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(format)}
@@ -338,7 +339,7 @@ func printGetResponse(printer *cli.Printer, format cli.OutputFormat, resp *platf
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
 		return printer.Print(resp.Container)
 	case cli.OutputFormatTable:
-		return printFullContainerDetails(printer, resp.Container)
+		return printFullContainerDetails(printer, computesvc.ContainerFromProto(resp.Container))
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(format)}
 	}
@@ -363,11 +364,15 @@ func executeList(exec *ContainerCommandExecutor, all bool, pageSize int32, filte
 		if err != nil {
 			return err
 		}
-		if selector != nil {
-			req.Selector = selector
+		if len(selector) > 0 {
+			req.Selector = &platformv1.LabelSelector{MatchLabels: selector}
 		}
 		if len(states) > 0 {
-			req.States = states
+			protoStates := make([]platformv1.ContainerState, len(states))
+			for i, s := range states {
+				protoStates[i] = computesvc.ContainerStateToProto(s)
+			}
+			req.States = protoStates
 		}
 	}
 
@@ -384,7 +389,12 @@ func printListResponse(printer *cli.Printer, format cli.OutputFormat, resp *plat
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
 		return printer.Print(resp)
 	case cli.OutputFormatTable:
-		return printContainerList(printer, resp)
+		sdkContainers := make([]*computesvc.Container, len(resp.Containers))
+		for i, c := range resp.Containers {
+			sdkContainers[i] = computesvc.ContainerFromProto(c)
+		}
+		sdkResult := &computesvc.ListContainersResult{Containers: sdkContainers}
+		return printContainerList(printer, sdkResult)
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(format)}
 	}
@@ -470,7 +480,7 @@ func executeAttest(exec *ContainerCommandExecutor, containerID string, nonce []b
 		ContainerName: "",
 		ImageID:       "",
 		ImageDigest:   "",
-		State:         formatContainerState(containerResp.Container.State),
+		State:         formatContainerState(computesvc.ContainerStateFromProto(containerResp.Container.State)),
 		Nonce:         string(nonce),
 		PCRIndices:    pcrIndices,
 	}
@@ -1905,11 +1915,9 @@ func TestStreamLogs_Success(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var buf bytes.Buffer
-			printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 			stream := NewMockLogsStream(tt.entries)
 
-			err := streamLogs(printer, stream, tt.showTimestamps)
+			err := streamLogs(stream, tt.showTimestamps)
 
 			if err != nil {
 				t.Errorf("streamLogs() error = %v, want nil", err)
@@ -1923,11 +1931,9 @@ func TestStreamLogs_StreamError(t *testing.T) {
 		{Message: "Log entry 1"},
 	}
 
-	var buf bytes.Buffer
-	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
 	stream := NewMockLogsStreamWithError(entries, 1) // Error after first entry
 
-	err := streamLogs(printer, stream, false)
+	err := streamLogs(stream, false)
 
 	if err == nil {
 		t.Error("expected error from stream, got nil")

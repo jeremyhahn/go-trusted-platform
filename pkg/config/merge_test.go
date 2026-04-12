@@ -473,3 +473,498 @@ level1:
 		t.Errorf("expected replace=new_value, got %v", l3["replace"])
 	}
 }
+
+func TestDeepMergeYAML_ArrayOfObjectsMergeByName(t *testing.T) {
+	base := []byte(`
+network:
+  interfaces:
+    - name: eth0
+      type: dhcp
+      mtu: 1500
+    - name: eth1
+      type: dhcp
+`)
+	overrides := []byte(`
+network:
+  interfaces:
+    - name: eth0
+      type: static
+      ipv4-address: 198.18.1.140/24
+`)
+
+	merged, err := DeepMergeYAML(base, overrides)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := yaml.Unmarshal(merged, &result); err != nil {
+		t.Fatalf("failed to unmarshal merged result: %v", err)
+	}
+
+	network, ok := toStringMap(result["network"])
+	if !ok {
+		t.Fatal("expected network to be a map")
+	}
+
+	ifaces, ok := network["interfaces"].([]interface{})
+	if !ok {
+		t.Fatal("expected interfaces to be a slice")
+	}
+
+	// Both interfaces should be present: eth0 (merged) and eth1 (preserved).
+	if len(ifaces) != 2 {
+		t.Fatalf("expected 2 interfaces, got %d: %v", len(ifaces), ifaces)
+	}
+
+	eth0, ok := toStringMap(ifaces[0])
+	if !ok {
+		t.Fatal("expected first interface to be a map")
+	}
+	if eth0["name"] != "eth0" {
+		t.Errorf("expected name=eth0, got %v", eth0["name"])
+	}
+	if eth0["type"] != "static" {
+		t.Errorf("expected type=static, got %v", eth0["type"])
+	}
+	if eth0["ipv4-address"] != "198.18.1.140/24" {
+		t.Errorf("expected ipv4-address=198.18.1.140/24, got %v", eth0["ipv4-address"])
+	}
+	// mtu should be preserved from base via deep merge.
+	if eth0["mtu"] != 1500 {
+		t.Errorf("expected mtu=1500 preserved from base, got %v", eth0["mtu"])
+	}
+
+	eth1, ok := toStringMap(ifaces[1])
+	if !ok {
+		t.Fatal("expected second interface to be a map")
+	}
+	if eth1["name"] != "eth1" {
+		t.Errorf("expected name=eth1, got %v", eth1["name"])
+	}
+	if eth1["type"] != "dhcp" {
+		t.Errorf("expected type=dhcp, got %v", eth1["type"])
+	}
+}
+
+func TestDeepMergeYAML_ArrayOfObjectsMergeByNameError(t *testing.T) {
+	// Verify that a completely invalid base still returns an error.
+	base := []byte(`{{{not valid`)
+	overrides := []byte(`
+network:
+  interfaces:
+    - name: eth0
+      type: static
+`)
+
+	_, err := DeepMergeYAML(base, overrides)
+	if err == nil {
+		t.Fatal("expected error for invalid base YAML")
+	}
+
+	var unmarshalErr *ErrMergeUnmarshal
+	if !errors.As(err, &unmarshalErr) {
+		t.Fatalf("expected ErrMergeUnmarshal, got %T: %v", err, err)
+	}
+}
+
+func TestDeepMergeYAML_ArrayOfObjectsAddNewElement(t *testing.T) {
+	base := []byte(`
+services:
+  - name: web
+    port: 80
+`)
+	overrides := []byte(`
+services:
+  - name: api
+    port: 8080
+`)
+
+	merged, err := DeepMergeYAML(base, overrides)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := yaml.Unmarshal(merged, &result); err != nil {
+		t.Fatalf("failed to unmarshal merged result: %v", err)
+	}
+
+	services, ok := result["services"].([]interface{})
+	if !ok {
+		t.Fatal("expected services to be a slice")
+	}
+
+	// Base (web) preserved, override (api) appended.
+	if len(services) != 2 {
+		t.Fatalf("expected 2 services, got %d: %v", len(services), services)
+	}
+
+	svc0, ok := toStringMap(services[0])
+	if !ok {
+		t.Fatal("expected first service to be a map")
+	}
+	if svc0["name"] != "web" {
+		t.Errorf("expected name=web, got %v", svc0["name"])
+	}
+
+	svc1, ok := toStringMap(services[1])
+	if !ok {
+		t.Fatal("expected second service to be a map")
+	}
+	if svc1["name"] != "api" {
+		t.Errorf("expected name=api, got %v", svc1["name"])
+	}
+	if svc1["port"] != 8080 {
+		t.Errorf("expected port=8080, got %v", svc1["port"])
+	}
+}
+
+func TestDeepMergeYAML_ArrayOfObjectsMergeByID(t *testing.T) {
+	base := []byte(`
+users:
+  - id: 1
+    username: admin
+    role: administrator
+  - id: 2
+    username: viewer
+    role: readonly
+`)
+	overrides := []byte(`
+users:
+  - id: 1
+    username: superadmin
+`)
+
+	merged, err := DeepMergeYAML(base, overrides)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := yaml.Unmarshal(merged, &result); err != nil {
+		t.Fatalf("failed to unmarshal merged result: %v", err)
+	}
+
+	users, ok := result["users"].([]interface{})
+	if !ok {
+		t.Fatal("expected users to be a slice")
+	}
+
+	if len(users) != 2 {
+		t.Fatalf("expected 2 users, got %d", len(users))
+	}
+
+	user0, ok := toStringMap(users[0])
+	if !ok {
+		t.Fatal("expected first user to be a map")
+	}
+	if user0["id"] != 1 {
+		t.Errorf("expected id=1, got %v", user0["id"])
+	}
+	if user0["username"] != "superadmin" {
+		t.Errorf("expected username=superadmin, got %v", user0["username"])
+	}
+	// role should be preserved from base.
+	if user0["role"] != "administrator" {
+		t.Errorf("expected role=administrator preserved from base, got %v", user0["role"])
+	}
+
+	user1, ok := toStringMap(users[1])
+	if !ok {
+		t.Fatal("expected second user to be a map")
+	}
+	if user1["username"] != "viewer" {
+		t.Errorf("expected username=viewer, got %v", user1["username"])
+	}
+}
+
+func TestDeepMergeYAML_ArrayOfObjectsMergeByRole(t *testing.T) {
+	base := []byte(`
+nodes:
+  - role: control-plane
+    count: 1
+    flavor: small
+  - role: worker
+    count: 3
+    flavor: medium
+`)
+	overrides := []byte(`
+nodes:
+  - role: worker
+    count: 5
+    flavor: large
+`)
+
+	merged, err := DeepMergeYAML(base, overrides)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := yaml.Unmarshal(merged, &result); err != nil {
+		t.Fatalf("failed to unmarshal merged result: %v", err)
+	}
+
+	nodes, ok := result["nodes"].([]interface{})
+	if !ok {
+		t.Fatal("expected nodes to be a slice")
+	}
+
+	if len(nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(nodes))
+	}
+
+	// control-plane preserved from base.
+	cp, ok := toStringMap(nodes[0])
+	if !ok {
+		t.Fatal("expected control-plane node to be a map")
+	}
+	if cp["role"] != "control-plane" {
+		t.Errorf("expected role=control-plane, got %v", cp["role"])
+	}
+	if cp["count"] != 1 {
+		t.Errorf("expected count=1, got %v", cp["count"])
+	}
+
+	// worker merged with override values.
+	worker, ok := toStringMap(nodes[1])
+	if !ok {
+		t.Fatal("expected worker node to be a map")
+	}
+	if worker["role"] != "worker" {
+		t.Errorf("expected role=worker, got %v", worker["role"])
+	}
+	if worker["count"] != 5 {
+		t.Errorf("expected count=5, got %v", worker["count"])
+	}
+	if worker["flavor"] != "large" {
+		t.Errorf("expected flavor=large, got %v", worker["flavor"])
+	}
+}
+
+func TestDeepMergeYAML_ArrayOfObjectsEmptyBase(t *testing.T) {
+	base := []byte(`
+network:
+  interfaces: []
+`)
+	overrides := []byte(`
+network:
+  interfaces:
+    - name: eth0
+      type: static
+`)
+
+	merged, err := DeepMergeYAML(base, overrides)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := yaml.Unmarshal(merged, &result); err != nil {
+		t.Fatalf("failed to unmarshal merged result: %v", err)
+	}
+
+	network, ok := toStringMap(result["network"])
+	if !ok {
+		t.Fatal("expected network to be a map")
+	}
+
+	ifaces, ok := network["interfaces"].([]interface{})
+	if !ok {
+		t.Fatal("expected interfaces to be a slice")
+	}
+
+	if len(ifaces) != 1 {
+		t.Fatalf("expected 1 interface, got %d", len(ifaces))
+	}
+
+	eth0, ok := toStringMap(ifaces[0])
+	if !ok {
+		t.Fatal("expected interface to be a map")
+	}
+	if eth0["name"] != "eth0" {
+		t.Errorf("expected name=eth0, got %v", eth0["name"])
+	}
+}
+
+func TestDeepMergeYAML_ArrayOfObjectsEmptyOverride(t *testing.T) {
+	base := []byte(`
+network:
+  interfaces:
+    - name: eth0
+      type: dhcp
+`)
+	overrides := []byte(`
+network:
+  interfaces: []
+`)
+
+	merged, err := DeepMergeYAML(base, overrides)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := yaml.Unmarshal(merged, &result); err != nil {
+		t.Fatalf("failed to unmarshal merged result: %v", err)
+	}
+
+	network, ok := toStringMap(result["network"])
+	if !ok {
+		t.Fatal("expected network to be a map")
+	}
+
+	ifaces, ok := network["interfaces"].([]interface{})
+	if !ok {
+		t.Fatal("expected interfaces to be a slice")
+	}
+
+	// Empty override slice: base preserved.
+	if len(ifaces) != 1 {
+		t.Fatalf("expected 1 interface preserved from base, got %d", len(ifaces))
+	}
+}
+
+func TestDeepMergeYAML_ArrayOfObjectsNoIdentityKey(t *testing.T) {
+	// Arrays of maps without name/id/role keys should fall back to
+	// full replacement semantics (same as scalar slices).
+	base := []byte(`
+routes:
+  - destination: 10.0.0.0/8
+    gateway: 192.168.1.1
+  - destination: 172.16.0.0/12
+    gateway: 192.168.1.1
+`)
+	overrides := []byte(`
+routes:
+  - destination: 0.0.0.0/0
+    gateway: 10.0.0.1
+`)
+
+	merged, err := DeepMergeYAML(base, overrides)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := yaml.Unmarshal(merged, &result); err != nil {
+		t.Fatalf("failed to unmarshal merged result: %v", err)
+	}
+
+	routes, ok := result["routes"].([]interface{})
+	if !ok {
+		t.Fatal("expected routes to be a slice")
+	}
+
+	// No identity key: override replaces entirely.
+	if len(routes) != 1 {
+		t.Fatalf("expected 1 route (full replacement), got %d", len(routes))
+	}
+
+	route, ok := toStringMap(routes[0])
+	if !ok {
+		t.Fatal("expected route to be a map")
+	}
+	if route["destination"] != "0.0.0.0/0" {
+		t.Errorf("expected destination=0.0.0.0/0, got %v", route["destination"])
+	}
+}
+
+func TestDetectIdentityKey(t *testing.T) {
+	tests := []struct {
+		desc     string
+		a        []interface{}
+		b        []interface{}
+		expected string
+	}{
+		{
+			desc:     "name key detected",
+			a:        []interface{}{map[string]interface{}{"name": "eth0"}},
+			b:        []interface{}{map[string]interface{}{"name": "eth1"}},
+			expected: "name",
+		},
+		{
+			desc:     "id key detected",
+			a:        []interface{}{map[string]interface{}{"id": 1}},
+			b:        []interface{}{map[string]interface{}{"id": 2}},
+			expected: "id",
+		},
+		{
+			desc:     "role key detected",
+			a:        []interface{}{map[string]interface{}{"role": "worker"}},
+			b:        []interface{}{map[string]interface{}{"role": "control-plane"}},
+			expected: "role",
+		},
+		{
+			desc:     "no identity key",
+			a:        []interface{}{map[string]interface{}{"foo": "bar"}},
+			b:        []interface{}{map[string]interface{}{"baz": "qux"}},
+			expected: "",
+		},
+		{
+			desc:     "scalar slices",
+			a:        []interface{}{"a", "b"},
+			b:        []interface{}{"c", "d"},
+			expected: "",
+		},
+		{
+			desc:     "name takes precedence over id",
+			a:        []interface{}{map[string]interface{}{"name": "x", "id": 1}},
+			b:        []interface{}{map[string]interface{}{"name": "y", "id": 2}},
+			expected: "name",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			result := detectIdentityKey(tc.a, tc.b)
+			if result != tc.expected {
+				t.Errorf("expected %q, got %q", tc.expected, result)
+			}
+		})
+	}
+}
+
+func TestSliceHasKey(t *testing.T) {
+	tests := []struct {
+		desc     string
+		s        []interface{}
+		key      string
+		expected bool
+	}{
+		{
+			desc:     "has key",
+			s:        []interface{}{map[string]interface{}{"name": "eth0"}},
+			key:      "name",
+			expected: true,
+		},
+		{
+			desc:     "missing key",
+			s:        []interface{}{map[string]interface{}{"type": "dhcp"}},
+			key:      "name",
+			expected: false,
+		},
+		{
+			desc:     "non-map elements",
+			s:        []interface{}{"a", "b"},
+			key:      "name",
+			expected: false,
+		},
+		{
+			desc:     "empty slice",
+			s:        []interface{}{},
+			key:      "name",
+			expected: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			result := sliceHasKey(tc.s, tc.key)
+			if result != tc.expected {
+				t.Errorf("expected %v, got %v", tc.expected, result)
+			}
+		})
+	}
+}

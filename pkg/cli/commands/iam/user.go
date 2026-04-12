@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -251,17 +251,11 @@ func runUserCreate(flags *cli.CommonFlags, tenantID, email, name, roles, groups,
 	}
 	defer base.Close()
 
-	req := &platformv1.CreateIAMUserRequest{
-		TenantId:   tenantID,
-		Email:      email,
-		Name:       name,
-		Roles:      parseStringSlice(roles),
-		Groups:     parseStringSlice(groups),
-		Attributes: parseAttributes(attributes),
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().CreateUser(ctx, req)
+
+	user, err := sdkClient.CreateUserDomain(ctx, tenantID, email, name,
+		parseStringSlice(roles), parseStringSlice(groups), parseAttributes(attributes))
 	if err != nil {
 		return fmt.Errorf("failed to create user: %w", err)
 	}
@@ -270,13 +264,13 @@ func runUserCreate(flags *cli.CommonFlags, tenantID, email, name, roles, groups,
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(user)
 
 	case cli.OutputFormatTable:
-		if resp.User != nil {
-			printer.PrintSuccess(fmt.Sprintf("User created successfully: %s", resp.User.Id))
+		if user != nil {
+			printer.PrintSuccess(fmt.Sprintf("User created successfully: %s", user.ID))
 			fmt.Println()
-			printUserDetails(printer, resp.User)
+			printUserDetails(printer, user)
 		}
 		return nil
 
@@ -292,13 +286,10 @@ func runUserGet(flags *cli.CommonFlags, tenantID, userID string) error {
 	}
 	defer base.Close()
 
-	req := &platformv1.GetIAMUserRequest{
-		TenantId: tenantID,
-		UserId:   userID,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().GetUser(ctx, req)
+
+	user, err := sdkClient.GetUserDomain(ctx, tenantID, userID)
 	if err != nil {
 		return fmt.Errorf("failed to get user: %w", err)
 	}
@@ -307,11 +298,11 @@ func runUserGet(flags *cli.CommonFlags, tenantID, userID string) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(user)
 
 	case cli.OutputFormatTable:
-		if resp.User != nil {
-			printUserDetails(printer, resp.User)
+		if user != nil {
+			printUserDetails(printer, user)
 		}
 		return nil
 
@@ -327,16 +318,10 @@ func runUserList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32)
 	}
 	defer base.Close()
 
-	req := &platformv1.ListIAMUsersRequest{
-		TenantId: tenantID,
-		Pagination: &platformv1.PaginationRequest{
-			Page:     page,
-			PageSize: pageSize,
-		},
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().ListUsers(ctx, req)
+
+	result, err := sdkClient.ListUsersDomain(ctx, tenantID, page, pageSize)
 	if err != nil {
 		return fmt.Errorf("failed to list users: %w", err)
 	}
@@ -345,18 +330,18 @@ func runUserList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32)
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		if len(resp.Users) == 0 {
+		if len(result.Users) == 0 {
 			printer.PrintInfo("No users found")
 			return nil
 		}
 
 		table := cli.NewTableData("ID", "Email", "Name", "Roles", "MFA", "Created At")
-		for _, user := range resp.Users {
+		for _, user := range result.Users {
 			table.AddRow(
-				user.Id,
+				user.ID,
 				user.Email,
 				truncateString(user.Name, 25),
 				truncateString(formatStringSlice(user.Roles), 30),
@@ -370,7 +355,7 @@ func runUserList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32)
 		}
 
 		fmt.Println()
-		printer.PrintKeyValue("Total Count", fmt.Sprintf("%d", resp.Total))
+		printer.PrintKeyValue("Total Count", fmt.Sprintf("%d", result.Total))
 		return nil
 
 	default:
@@ -385,18 +370,11 @@ func runUserUpdate(flags *cli.CommonFlags, tenantID, userID, email, name, roles,
 	}
 	defer base.Close()
 
-	req := &platformv1.UpdateIAMUserRequest{
-		TenantId:   tenantID,
-		UserId:     userID,
-		Email:      email,
-		Name:       name,
-		Roles:      parseStringSlice(roles),
-		Groups:     parseStringSlice(groups),
-		Attributes: parseAttributes(attributes),
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().UpdateUser(ctx, req)
+
+	user, err := sdkClient.UpdateUserDomain(ctx, tenantID, userID, email, name,
+		parseStringSlice(roles), parseStringSlice(groups), parseAttributes(attributes))
 	if err != nil {
 		return fmt.Errorf("failed to update user: %w", err)
 	}
@@ -405,13 +383,13 @@ func runUserUpdate(flags *cli.CommonFlags, tenantID, userID, email, name, roles,
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(user)
 
 	case cli.OutputFormatTable:
-		if resp.User != nil {
-			printer.PrintSuccess(fmt.Sprintf("User updated successfully: %s", resp.User.Id))
+		if user != nil {
+			printer.PrintSuccess(fmt.Sprintf("User updated successfully: %s", user.ID))
 			fmt.Println()
-			printUserDetails(printer, resp.User)
+			printUserDetails(printer, user)
 		}
 		return nil
 
@@ -427,13 +405,10 @@ func runUserDelete(flags *cli.CommonFlags, tenantID, userID string) error {
 	}
 	defer base.Close()
 
-	req := &platformv1.DeleteIAMUserRequest{
-		TenantId: tenantID,
-		UserId:   userID,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().DeleteUser(ctx, req)
+
+	status, err := sdkClient.DeleteUserDomain(ctx, tenantID, userID)
 	if err != nil {
 		return fmt.Errorf("failed to delete user: %w", err)
 	}
@@ -442,10 +417,10 @@ func runUserDelete(flags *cli.CommonFlags, tenantID, userID string) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(status)
 
 	case cli.OutputFormatTable:
-		if resp.Status != nil && resp.Status.Success {
+		if status != nil && status.Success {
 			printer.PrintSuccess(fmt.Sprintf("User %s deleted successfully", userID))
 		} else {
 			printer.PrintError(fmt.Sprintf("Failed to delete user %s", userID))
@@ -464,14 +439,10 @@ func runUserAssignRole(flags *cli.CommonFlags, tenantID, userID, role string) er
 	}
 	defer base.Close()
 
-	req := &platformv1.AssignIAMRoleRequest{
-		TenantId: tenantID,
-		UserId:   userID,
-		RoleId:   role,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().AssignRole(ctx, req)
+
+	status, err := sdkClient.AssignRoleDomain(ctx, tenantID, userID, role)
 	if err != nil {
 		return fmt.Errorf("failed to assign role: %w", err)
 	}
@@ -480,10 +451,10 @@ func runUserAssignRole(flags *cli.CommonFlags, tenantID, userID, role string) er
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(status)
 
 	case cli.OutputFormatTable:
-		if resp.Status != nil && resp.Status.Success {
+		if status != nil && status.Success {
 			printer.PrintSuccess(fmt.Sprintf("Role '%s' assigned to user %s", role, userID))
 		} else {
 			printer.PrintError(fmt.Sprintf("Failed to assign role '%s' to user %s", role, userID))
@@ -502,14 +473,10 @@ func runUserRevokeRole(flags *cli.CommonFlags, tenantID, userID, role string) er
 	}
 	defer base.Close()
 
-	req := &platformv1.RevokeIAMRoleRequest{
-		TenantId: tenantID,
-		UserId:   userID,
-		RoleId:   role,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().RevokeRole(ctx, req)
+
+	status, err := sdkClient.RevokeRoleDomain(ctx, tenantID, userID, role)
 	if err != nil {
 		return fmt.Errorf("failed to revoke role: %w", err)
 	}
@@ -518,10 +485,10 @@ func runUserRevokeRole(flags *cli.CommonFlags, tenantID, userID, role string) er
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(status)
 
 	case cli.OutputFormatTable:
-		if resp.Status != nil && resp.Status.Success {
+		if status != nil && status.Success {
 			printer.PrintSuccess(fmt.Sprintf("Role '%s' revoked from user %s", role, userID))
 		} else {
 			printer.PrintError(fmt.Sprintf("Failed to revoke role '%s' from user %s", role, userID))
@@ -533,9 +500,9 @@ func runUserRevokeRole(flags *cli.CommonFlags, tenantID, userID, role string) er
 	}
 }
 
-func printUserDetails(printer *cli.Printer, user *platformv1.IAMUser) {
-	printer.PrintKeyValue("User ID", user.Id)
-	printer.PrintKeyValue("Tenant ID", user.TenantId)
+func printUserDetails(printer *cli.Printer, user *iamsvc.User) {
+	printer.PrintKeyValue("User ID", user.ID)
+	printer.PrintKeyValue("Tenant ID", user.TenantID)
 	printer.PrintKeyValue("Email", user.Email)
 	if user.Name != "" {
 		printer.PrintKeyValue("Name", user.Name)
@@ -548,9 +515,9 @@ func printUserDetails(printer *cli.Printer, user *platformv1.IAMUser) {
 	printer.PrintKeyValue("MFA Verified", formatBool(user.MfaVerified))
 	printer.PrintKeyValue("Created At", formatTimestamp(user.CreatedAt))
 	if user.UpdatedAt != nil {
-		printer.PrintKeyValue("Updated At", formatTimestamp(user.UpdatedAt))
+		printer.PrintKeyValue("Updated At", formatTimestampPtr(user.UpdatedAt))
 	}
 	if user.LastAuth != nil {
-		printer.PrintKeyValue("Last Auth", formatTimestamp(user.LastAuth))
+		printer.PrintKeyValue("Last Auth", formatTimestampPtr(user.LastAuth))
 	}
 }

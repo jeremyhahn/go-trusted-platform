@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	sdnsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/overlay"
 )
 
@@ -261,7 +261,6 @@ func runOverlayStatus(flags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
-	// Create overlay service client from the platform client
 	overlayClient := overlay.NewClientFromGRPC(base.Client().Overlay())
 
 	ctx, cancel := newCLIContext()
@@ -281,7 +280,6 @@ func runVTEPList(flags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
-	// Create overlay service client from the platform client
 	overlayClient := overlay.NewClientFromGRPC(base.Client().Overlay())
 
 	ctx, cancel := newCLIContext()
@@ -301,7 +299,6 @@ func runVTEPGet(flags *cli.CommonFlags, nodeID string) error {
 	}
 	defer base.Close()
 
-	// Create overlay service client from the platform client
 	overlayClient := overlay.NewClientFromGRPC(base.Client().Overlay())
 
 	ctx, cancel := newCLIContext()
@@ -321,7 +318,6 @@ func runVNIList(flags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
-	// Create overlay service client from the platform client
 	overlayClient := overlay.NewClientFromGRPC(base.Client().Overlay())
 
 	ctx, cancel := newCLIContext()
@@ -341,17 +337,16 @@ func runVNICreate(flags *cli.CommonFlags, vni uint32, vlan uint16, name string) 
 	}
 	defer base.Close()
 
-	// Create overlay service client from the platform client
 	overlayClient := overlay.NewClientFromGRPC(base.Client().Overlay())
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	config := &platformv1.VNIConfig{
-		Vni:  vni,
-		Vlan: uint32(vlan),
+	config := &sdnsvc.VNIConfig{
+		VNI:  vni,
+		VLAN: uint32(vlan),
 		Name: name,
 	}
-	resp, err := overlayClient.CreateVNI(ctx, config)
+	resp, err := overlayClient.CreateVNI(ctx, sdnsvc.VNIConfigToProto(config))
 	if err != nil {
 		return fmt.Errorf("failed to create VNI: %w", err)
 	}
@@ -366,7 +361,6 @@ func runVNIDelete(flags *cli.CommonFlags, vni uint32) error {
 	}
 	defer base.Close()
 
-	// Create overlay service client from the platform client
 	overlayClient := overlay.NewClientFromGRPC(base.Client().Overlay())
 
 	ctx, cancel := newCLIContext()
@@ -386,7 +380,6 @@ func runTunnelList(flags *cli.CommonFlags, vni uint32) error {
 	}
 	defer base.Close()
 
-	// Create overlay service client from the platform client
 	overlayClient := overlay.NewClientFromGRPC(base.Client().Overlay())
 
 	ctx, cancel := newCLIContext()
@@ -406,7 +399,6 @@ func runMACList(flags *cli.CommonFlags, vni uint32) error {
 	}
 	defer base.Close()
 
-	// Create overlay service client from the platform client
 	overlayClient := overlay.NewClientFromGRPC(base.Client().Overlay())
 
 	ctx, cancel := newCLIContext()
@@ -426,7 +418,6 @@ func runMACForget(flags *cli.CommonFlags, mac string, vni uint32) error {
 	}
 	defer base.Close()
 
-	// Create overlay service client from the platform client
 	overlayClient := overlay.NewClientFromGRPC(base.Client().Overlay())
 
 	ctx, cancel := newCLIContext()

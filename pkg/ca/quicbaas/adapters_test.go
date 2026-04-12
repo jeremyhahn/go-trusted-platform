@@ -81,6 +81,54 @@ func (m *mockSDKKMSClient) DeleteKey(ctx context.Context, keyID string) error {
 	return errors.New("deleteKey not implemented")
 }
 
+func (m *mockSDKKMSClient) ImportKey(ctx context.Context, req *kms.ImportKeyRequest) (*kms.ImportKeyResponse, error) {
+	return nil, errors.New("importKey not implemented")
+}
+
+func (m *mockSDKKMSClient) ExportKey(ctx context.Context, req *kms.ExportKeyRequest) (*kms.ExportKeyResponse, error) {
+	return nil, errors.New("exportKey not implemented")
+}
+
+func (m *mockSDKKMSClient) RevokeKey(ctx context.Context, keyID string) error {
+	return errors.New("revokeKey not implemented")
+}
+
+func (m *mockSDKKMSClient) ListKeyVersions(ctx context.Context, keyID string) (*kms.ListKeyVersionsResponse, error) {
+	return nil, errors.New("listKeyVersions not implemented")
+}
+
+func (m *mockSDKKMSClient) UpdateKeyStatus(ctx context.Context, req *kms.UpdateKeyStatusRequest) (*kms.UpdateKeyStatusResponse, error) {
+	return nil, errors.New("updateKeyStatus not implemented")
+}
+
+func (m *mockSDKKMSClient) GetKeyMetadata(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error) {
+	return nil, errors.New("getKeyMetadata not implemented")
+}
+
+func (m *mockSDKKMSClient) UpdateKeyMetadata(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error) {
+	return nil, errors.New("updateKeyMetadata not implemented")
+}
+
+func (m *mockSDKKMSClient) SetKeyPolicy(ctx context.Context, req *kms.SetKeyPolicyRequest) error {
+	return errors.New("setKeyPolicy not implemented")
+}
+
+func (m *mockSDKKMSClient) GetKeyPolicy(ctx context.Context, keyID string) (*kms.KeyPolicy, error) {
+	return nil, errors.New("getKeyPolicy not implemented")
+}
+
+func (m *mockSDKKMSClient) GetSupportedAlgorithms(ctx context.Context) (*kms.SupportedAlgorithmsResponse, error) {
+	return nil, errors.New("getSupportedAlgorithms not implemented")
+}
+
+func (m *mockSDKKMSClient) BackendStatus(ctx context.Context) (*kms.BackendStatusResponse, error) {
+	return nil, errors.New("backendStatus not implemented")
+}
+
+func (m *mockSDKKMSClient) UnwrapKey(ctx context.Context, req *kms.UnwrapKeyRequest) (*kms.UnwrapKeyResponse, error) {
+	return nil, errors.New("unwrapKey not implemented")
+}
+
 // =============================================================================
 // KMSAdapter Tests
 // =============================================================================

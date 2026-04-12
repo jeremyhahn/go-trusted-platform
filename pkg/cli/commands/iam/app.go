@@ -18,9 +18,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -64,18 +63,6 @@ func newAppRegisterCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Short: "Register a new OAuth application",
 		Long: `Register a new OAuth application (client) in the specified tenant.
 
-Grant types specify the OAuth 2.0 flows the application can use:
-  - authorization_code: Standard web application flow
-  - client_credentials: Machine-to-machine authentication
-  - refresh_token: Allow token refresh
-  - implicit: Browser-based applications (not recommended)
-  - password: Resource owner password grant (not recommended)
-
-Response types specify what the authorization endpoint returns:
-  - code: Authorization code (for authorization_code grant)
-  - token: Access token (for implicit grant)
-  - id_token: OpenID Connect ID token
-
 Examples:
   # Register a web application
   platformctl iam app register --tenant my-tenant --name "My Web App" \
@@ -85,11 +72,7 @@ Examples:
   # Register a machine-to-machine application
   platformctl iam app register --tenant my-tenant --name "API Service" \
     --grant-types "client_credentials" \
-    --resource-prefix "api"
-
-  # Register with multiple redirect URIs
-  platformctl iam app register --tenant my-tenant --name "Multi-Env App" \
-    --redirect-uris "https://app.example.com/callback,https://staging.example.com/callback"`,
+    --resource-prefix "api"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if tenantID == "" {
 				return ErrMissingTenantID{}
@@ -117,11 +100,7 @@ func newAppGetCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get <tenant-id> <client-id>",
 		Short: "Get application information",
-		Long: `Retrieve detailed information about a specific OAuth application by tenant ID and client ID.
-
-Examples:
-  platformctl iam app get my-tenant abc123-client-id`,
-		Args: cobra.ExactArgs(2),
+		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
 			return runAppGet(flags, args[0], args[1])
@@ -140,14 +119,6 @@ func newAppListCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List applications",
-		Long: `List OAuth applications in a tenant with optional pagination.
-
-Examples:
-  # List all applications in a tenant
-  platformctl iam app list --tenant my-tenant
-
-  # List applications with pagination
-  platformctl iam app list --tenant my-tenant --page-size 20 --page 1`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if tenantID == "" {
 				return ErrMissingTenantID{}
@@ -177,19 +148,6 @@ func newAppUpdateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "update",
 		Short: "Update an application",
-		Long: `Update an existing OAuth application's properties.
-
-Examples:
-  # Update application name
-  platformctl iam app update --tenant my-tenant --client-id abc123 --name "New Name"
-
-  # Update redirect URIs
-  platformctl iam app update --tenant my-tenant --client-id abc123 \
-    --redirect-uris "https://new.example.com/callback"
-
-  # Update grant types
-  platformctl iam app update --tenant my-tenant --client-id abc123 \
-    --grant-types "authorization_code,client_credentials,refresh_token"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if tenantID == "" {
 				return ErrMissingTenantID{}
@@ -218,14 +176,7 @@ func newAppDeleteCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete <tenant-id> <client-id>",
 		Short: "Delete an application",
-		Long: `Delete an OAuth application from the specified tenant.
-
-WARNING: This operation cannot be undone. All tokens issued for this application
-will be invalidated.
-
-Examples:
-  platformctl iam app delete my-tenant abc123-client-id`,
-		Args: cobra.ExactArgs(2),
+		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
 			return runAppDelete(flags, args[0], args[1])
@@ -240,14 +191,7 @@ func newAppRotateSecretCommand(getFlags func() *cli.CommonFlags) *cobra.Command 
 	cmd := &cobra.Command{
 		Use:   "rotate-secret <tenant-id> <client-id>",
 		Short: "Rotate an application's client secret",
-		Long: `Rotate the client secret for an OAuth application.
-
-The new secret will be displayed once. Make sure to save it securely as it
-cannot be retrieved again.
-
-Examples:
-  platformctl iam app rotate-secret my-tenant abc123-client-id`,
-		Args: cobra.ExactArgs(2),
+		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
 			return runAppRotateSecret(flags, args[0], args[1])
@@ -265,17 +209,12 @@ func runAppRegister(flags *cli.CommonFlags, tenantID, name, redirectURIs, grantT
 	}
 	defer base.Close()
 
-	req := &platformv1.RegisterIAMAppRequest{
-		TenantId:       tenantID,
-		Name:           name,
-		RedirectUris:   parseStringSlice(redirectURIs),
-		GrantTypes:     parseStringSlice(grantTypes),
-		ResponseTypes:  parseStringSlice(responseTypes),
-		ResourcePrefix: resourcePrefix,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().RegisterApp(ctx, req)
+
+	app, err := sdkClient.RegisterAppDomain(ctx, tenantID, name,
+		parseStringSlice(redirectURIs), parseStringSlice(grantTypes),
+		parseStringSlice(responseTypes), resourcePrefix)
 	if err != nil {
 		return fmt.Errorf("failed to register application: %w", err)
 	}
@@ -284,18 +223,18 @@ func runAppRegister(flags *cli.CommonFlags, tenantID, name, redirectURIs, grantT
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(app)
 
 	case cli.OutputFormatTable:
-		if resp.App != nil {
-			printer.PrintSuccess(fmt.Sprintf("Application registered successfully: %s", resp.App.Name))
+		if app != nil {
+			printer.PrintSuccess(fmt.Sprintf("Application registered successfully: %s", app.Name))
 			fmt.Println()
-			printAppDetails(printer, resp.App)
+			printAppDetails(printer, app)
 			// Show client secret prominently since it's only shown once
-			if resp.App.ClientSecret != "" {
+			if app.ClientSecret != "" {
 				fmt.Println()
 				printer.PrintWarning("IMPORTANT: Save this client secret securely. It will not be shown again.")
-				printer.PrintKeyValue("Client Secret", resp.App.ClientSecret)
+				printer.PrintKeyValue("Client Secret", app.ClientSecret)
 			}
 		}
 		return nil
@@ -313,13 +252,10 @@ func runAppGet(flags *cli.CommonFlags, tenantID, clientID string) error {
 	}
 	defer base.Close()
 
-	req := &platformv1.GetIAMAppRequest{
-		TenantId: tenantID,
-		ClientId: clientID,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().GetApp(ctx, req)
+
+	app, err := sdkClient.GetAppDomain(ctx, tenantID, clientID)
 	if err != nil {
 		return fmt.Errorf("failed to get application: %w", err)
 	}
@@ -328,11 +264,11 @@ func runAppGet(flags *cli.CommonFlags, tenantID, clientID string) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(app)
 
 	case cli.OutputFormatTable:
-		if resp.App != nil {
-			printAppDetails(printer, resp.App)
+		if app != nil {
+			printAppDetails(printer, app)
 		}
 		return nil
 
@@ -349,16 +285,10 @@ func runAppList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32) 
 	}
 	defer base.Close()
 
-	req := &platformv1.ListIAMAppsRequest{
-		TenantId: tenantID,
-		Pagination: &platformv1.PaginationRequest{
-			Page:     page,
-			PageSize: pageSize,
-		},
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().ListApps(ctx, req)
+
+	result, err := sdkClient.ListAppsDomain(ctx, tenantID, page, pageSize)
 	if err != nil {
 		return fmt.Errorf("failed to list applications: %w", err)
 	}
@@ -367,21 +297,21 @@ func runAppList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32) 
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		if len(resp.Apps) == 0 {
+		if len(result.Apps) == 0 {
 			printer.PrintInfo("No applications found")
 			return nil
 		}
 
 		table := cli.NewTableData("Client ID", "Name", "Grant Types", "Redirect URIs", "Created At")
-		for _, app := range resp.Apps {
+		for _, app := range result.Apps {
 			table.AddRow(
-				truncateString(app.ClientId, 20),
+				truncateString(app.ClientID, 20),
 				truncateString(app.Name, 25),
 				truncateString(formatStringSlice(app.GrantTypes), 30),
-				truncateString(formatStringSlice(app.RedirectUris), 40),
+				truncateString(formatStringSlice(app.RedirectURIs), 40),
 				formatAppTimestamp(app.CreatedAt),
 			)
 		}
@@ -391,7 +321,7 @@ func runAppList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32) 
 		}
 
 		fmt.Println()
-		printer.PrintKeyValue("Total Count", fmt.Sprintf("%d", resp.Total))
+		printer.PrintKeyValue("Total Count", fmt.Sprintf("%d", result.Total))
 		return nil
 
 	default:
@@ -407,18 +337,12 @@ func runAppUpdate(flags *cli.CommonFlags, tenantID, clientID, name, redirectURIs
 	}
 	defer base.Close()
 
-	req := &platformv1.UpdateIAMAppRequest{
-		TenantId:       tenantID,
-		ClientId:       clientID,
-		Name:           name,
-		RedirectUris:   parseStringSlice(redirectURIs),
-		GrantTypes:     parseStringSlice(grantTypes),
-		ResponseTypes:  parseStringSlice(responseTypes),
-		ResourcePrefix: resourcePrefix,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().UpdateApp(ctx, req)
+
+	app, err := sdkClient.UpdateAppDomain(ctx, tenantID, clientID, name,
+		parseStringSlice(redirectURIs), parseStringSlice(grantTypes),
+		parseStringSlice(responseTypes), resourcePrefix)
 	if err != nil {
 		return fmt.Errorf("failed to update application: %w", err)
 	}
@@ -427,13 +351,13 @@ func runAppUpdate(flags *cli.CommonFlags, tenantID, clientID, name, redirectURIs
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(app)
 
 	case cli.OutputFormatTable:
-		if resp.App != nil {
-			printer.PrintSuccess(fmt.Sprintf("Application updated successfully: %s", resp.App.Name))
+		if app != nil {
+			printer.PrintSuccess(fmt.Sprintf("Application updated successfully: %s", app.Name))
 			fmt.Println()
-			printAppDetails(printer, resp.App)
+			printAppDetails(printer, app)
 		}
 		return nil
 
@@ -450,13 +374,10 @@ func runAppDelete(flags *cli.CommonFlags, tenantID, clientID string) error {
 	}
 	defer base.Close()
 
-	req := &platformv1.DeleteIAMAppRequest{
-		TenantId: tenantID,
-		ClientId: clientID,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().DeleteApp(ctx, req)
+
+	status, err := sdkClient.DeleteAppDomain(ctx, tenantID, clientID)
 	if err != nil {
 		return fmt.Errorf("failed to delete application: %w", err)
 	}
@@ -465,10 +386,10 @@ func runAppDelete(flags *cli.CommonFlags, tenantID, clientID string) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(status)
 
 	case cli.OutputFormatTable:
-		if resp.Status != nil && resp.Status.Success {
+		if status != nil && status.Success {
 			printer.PrintSuccess(fmt.Sprintf("Application deleted successfully: %s", clientID))
 		} else {
 			printer.PrintWarning(fmt.Sprintf("Application deletion may not have completed: %s", clientID))
@@ -488,13 +409,10 @@ func runAppRotateSecret(flags *cli.CommonFlags, tenantID, clientID string) error
 	}
 	defer base.Close()
 
-	req := &platformv1.RotateIAMAppSecretRequest{
-		TenantId: tenantID,
-		ClientId: clientID,
-	}
-
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
-	resp, err := base.Client().IAM().RotateAppSecret(ctx, req)
+
+	result, err := sdkClient.RotateAppSecretDomain(ctx, tenantID, clientID)
 	if err != nil {
 		return fmt.Errorf("failed to rotate application secret: %w", err)
 	}
@@ -503,17 +421,17 @@ func runAppRotateSecret(flags *cli.CommonFlags, tenantID, clientID string) error
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		printer.PrintSuccess(fmt.Sprintf("Client secret rotated successfully for: %s", resp.Name))
+		printer.PrintSuccess(fmt.Sprintf("Client secret rotated successfully for: %s", result.Name))
 		fmt.Println()
-		printer.PrintKeyValue("Client ID", resp.ClientId)
-		printer.PrintKeyValue("Name", resp.Name)
-		if resp.ClientSecret != "" {
+		printer.PrintKeyValue("Client ID", result.ClientID)
+		printer.PrintKeyValue("Name", result.Name)
+		if result.ClientSecret != "" {
 			fmt.Println()
 			printer.PrintWarning("IMPORTANT: Save this new client secret securely. It will not be shown again.")
-			printer.PrintKeyValue("New Client Secret", resp.ClientSecret)
+			printer.PrintKeyValue("New Client Secret", result.ClientSecret)
 		}
 		return nil
 
@@ -523,24 +441,26 @@ func runAppRotateSecret(flags *cli.CommonFlags, tenantID, clientID string) error
 }
 
 // printAppDetails prints detailed application information in table format
-func printAppDetails(printer *cli.Printer, app *platformv1.IAMApp) {
-	printer.PrintKeyValue("Client ID", app.ClientId)
+func printAppDetails(printer *cli.Printer, app *iamsvc.App) {
+	printer.PrintKeyValue("Client ID", app.ClientID)
 	printer.PrintKeyValue("Name", app.Name)
-	printer.PrintKeyValue("Tenant ID", app.TenantId)
-	printer.PrintKeyValue("Redirect URIs", formatStringSlice(app.RedirectUris))
+	printer.PrintKeyValue("Tenant ID", app.TenantID)
+	printer.PrintKeyValue("Redirect URIs", formatStringSlice(app.RedirectURIs))
 	printer.PrintKeyValue("Grant Types", formatStringSlice(app.GrantTypes))
 	printer.PrintKeyValue("Response Types", formatStringSlice(app.ResponseTypes))
 	if app.ResourcePrefix != "" {
 		printer.PrintKeyValue("Resource Prefix", app.ResourcePrefix)
 	}
 	printer.PrintKeyValue("Created At", formatAppTimestamp(app.CreatedAt))
-	printer.PrintKeyValue("Updated At", formatAppTimestamp(app.UpdatedAt))
+	if app.UpdatedAt != nil {
+		printer.PrintKeyValue("Updated At", formatTimestampPtr(app.UpdatedAt))
+	}
 }
 
-// formatAppTimestamp formats a timestamp for display
-func formatAppTimestamp(ts *timestamppb.Timestamp) string {
-	if ts == nil {
+// formatAppTimestamp formats a time.Time for display
+func formatAppTimestamp(t time.Time) string {
+	if t.IsZero() {
 		return "-"
 	}
-	return ts.AsTime().Format(time.RFC3339)
+	return t.Format(time.RFC3339)
 }

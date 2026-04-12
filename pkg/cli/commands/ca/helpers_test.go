@@ -20,9 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	casvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -34,21 +33,21 @@ func TestParseKeyAlgorithm(t *testing.T) {
 	tests := []struct {
 		name      string
 		input     string
-		expected  platformv1.KeyAlgorithm
+		expected  casvc.KeyAlgorithm
 		expectErr bool
 	}{
-		{"RSA-2048", "RSA-2048", platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048, false},
-		{"RSA-2048 lowercase", "rsa-2048", platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048, false},
-		{"RSA-3072", "RSA-3072", platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072, false},
-		{"RSA-4096", "RSA-4096", platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096, false},
-		{"ECDSA-P256", "ECDSA-P256", platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256, false},
-		{"EC-P256", "EC-P256", platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256, false},
-		{"ECDSA-P384", "ECDSA-P384", platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384, false},
-		{"EC-P384", "EC-P384", platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384, false},
-		{"ED25519", "ED25519", platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519, false},
-		{"ed25519 lowercase", "ed25519", platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519, false},
-		{"invalid algorithm", "DSA", platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED, true},
-		{"empty string", "", platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED, true},
+		{"RSA-2048", "RSA-2048", casvc.KeyAlgorithmRSA2048, false},
+		{"RSA-2048 lowercase", "rsa-2048", casvc.KeyAlgorithmRSA2048, false},
+		{"RSA-3072", "RSA-3072", casvc.KeyAlgorithmRSA3072, false},
+		{"RSA-4096", "RSA-4096", casvc.KeyAlgorithmRSA4096, false},
+		{"ECDSA-P256", "ECDSA-P256", casvc.KeyAlgorithmECDSAP256, false},
+		{"EC-P256", "EC-P256", casvc.KeyAlgorithmECDSAP256, false},
+		{"ECDSA-P384", "ECDSA-P384", casvc.KeyAlgorithmECDSAP384, false},
+		{"EC-P384", "EC-P384", casvc.KeyAlgorithmECDSAP384, false},
+		{"ED25519", "ED25519", casvc.KeyAlgorithmEd25519, false},
+		{"ed25519 lowercase", "ed25519", casvc.KeyAlgorithmEd25519, false},
+		{"invalid algorithm", "DSA", casvc.KeyAlgorithmUnspecified, true},
+		{"empty string", "", casvc.KeyAlgorithmUnspecified, true},
 	}
 
 	for _, tt := range tests {
@@ -99,18 +98,18 @@ func TestParseStatusFilter(t *testing.T) {
 	tests := []struct {
 		name      string
 		input     string
-		expected  platformv1.CertificateStatus
+		expected  casvc.CertificateStatus
 		expectErr bool
 	}{
-		{"all", "all", platformv1.CertificateStatus_CERTIFICATE_STATUS_UNSPECIFIED, false},
-		{"empty", "", platformv1.CertificateStatus_CERTIFICATE_STATUS_UNSPECIFIED, false},
-		{"valid", "valid", platformv1.CertificateStatus_CERTIFICATE_STATUS_VALID, false},
-		{"active", "active", platformv1.CertificateStatus_CERTIFICATE_STATUS_VALID, false},
-		{"revoked", "revoked", platformv1.CertificateStatus_CERTIFICATE_STATUS_REVOKED, false},
-		{"expired", "expired", platformv1.CertificateStatus_CERTIFICATE_STATUS_EXPIRED, false},
-		{"pending", "pending", platformv1.CertificateStatus_CERTIFICATE_STATUS_PENDING, false},
-		{"VALID uppercase", "VALID", platformv1.CertificateStatus_CERTIFICATE_STATUS_VALID, false},
-		{"invalid status", "suspended", platformv1.CertificateStatus_CERTIFICATE_STATUS_UNSPECIFIED, true},
+		{"all", "all", casvc.CertificateStatusUnspecified, false},
+		{"empty", "", casvc.CertificateStatusUnspecified, false},
+		{"valid", "valid", casvc.CertificateStatusValid, false},
+		{"active", "active", casvc.CertificateStatusValid, false},
+		{"revoked", "revoked", casvc.CertificateStatusRevoked, false},
+		{"expired", "expired", casvc.CertificateStatusExpired, false},
+		{"pending", "pending", casvc.CertificateStatusPending, false},
+		{"VALID uppercase", "VALID", casvc.CertificateStatusValid, false},
+		{"invalid status", "suspended", casvc.CertificateStatusUnspecified, true},
 	}
 
 	for _, tt := range tests {
@@ -135,25 +134,25 @@ func TestParseRevocationReason(t *testing.T) {
 	tests := []struct {
 		name      string
 		input     string
-		expected  platformv1.RevocationReason
+		expected  casvc.RevocationReason
 		expectErr bool
 	}{
-		{"unspecified", "unspecified", platformv1.RevocationReason_REVOCATION_REASON_UNSPECIFIED, false},
-		{"empty", "", platformv1.RevocationReason_REVOCATION_REASON_UNSPECIFIED, false},
-		{"key-compromise", "key-compromise", platformv1.RevocationReason_REVOCATION_REASON_KEY_COMPROMISE, false},
-		{"keycompromise", "keycompromise", platformv1.RevocationReason_REVOCATION_REASON_KEY_COMPROMISE, false},
-		{"ca-compromise", "ca-compromise", platformv1.RevocationReason_REVOCATION_REASON_CA_COMPROMISE, false},
-		{"cacompromise", "cacompromise", platformv1.RevocationReason_REVOCATION_REASON_CA_COMPROMISE, false},
-		{"affiliation-changed", "affiliation-changed", platformv1.RevocationReason_REVOCATION_REASON_AFFILIATION_CHANGED, false},
-		{"affiliationchanged", "affiliationchanged", platformv1.RevocationReason_REVOCATION_REASON_AFFILIATION_CHANGED, false},
-		{"superseded", "superseded", platformv1.RevocationReason_REVOCATION_REASON_SUPERSEDED, false},
-		{"cessation", "cessation", platformv1.RevocationReason_REVOCATION_REASON_CESSATION_OF_OPERATION, false},
-		{"cessation-of-operation", "cessation-of-operation", platformv1.RevocationReason_REVOCATION_REASON_CESSATION_OF_OPERATION, false},
-		{"hold", "hold", platformv1.RevocationReason_REVOCATION_REASON_CERTIFICATE_HOLD, false},
-		{"certificate-hold", "certificate-hold", platformv1.RevocationReason_REVOCATION_REASON_CERTIFICATE_HOLD, false},
-		{"privilege-withdrawn", "privilege-withdrawn", platformv1.RevocationReason_REVOCATION_REASON_PRIVILEGE_WITHDRAWN, false},
-		{"privilegewithdrawn", "privilegewithdrawn", platformv1.RevocationReason_REVOCATION_REASON_PRIVILEGE_WITHDRAWN, false},
-		{"invalid reason", "bad-reason", platformv1.RevocationReason_REVOCATION_REASON_UNSPECIFIED, true},
+		{"unspecified", "unspecified", casvc.RevocationReasonUnspecified, false},
+		{"empty", "", casvc.RevocationReasonUnspecified, false},
+		{"key-compromise", "key-compromise", casvc.RevocationReasonKeyCompromise, false},
+		{"keycompromise", "keycompromise", casvc.RevocationReasonKeyCompromise, false},
+		{"ca-compromise", "ca-compromise", casvc.RevocationReasonCACompromise, false},
+		{"cacompromise", "cacompromise", casvc.RevocationReasonCACompromise, false},
+		{"affiliation-changed", "affiliation-changed", casvc.RevocationReasonAffiliationChanged, false},
+		{"affiliationchanged", "affiliationchanged", casvc.RevocationReasonAffiliationChanged, false},
+		{"superseded", "superseded", casvc.RevocationReasonSuperseded, false},
+		{"cessation", "cessation", casvc.RevocationReasonCessationOfOperation, false},
+		{"cessation-of-operation", "cessation-of-operation", casvc.RevocationReasonCessationOfOperation, false},
+		{"hold", "hold", casvc.RevocationReasonCertificateHold, false},
+		{"certificate-hold", "certificate-hold", casvc.RevocationReasonCertificateHold, false},
+		{"privilege-withdrawn", "privilege-withdrawn", casvc.RevocationReasonPrivilegeWithdrawn, false},
+		{"privilegewithdrawn", "privilegewithdrawn", casvc.RevocationReasonPrivilegeWithdrawn, false},
+		{"invalid reason", "bad-reason", casvc.RevocationReasonUnspecified, true},
 	}
 
 	for _, tt := range tests {
@@ -213,7 +212,7 @@ func TestTruncateSerial(t *testing.T) {
 }
 
 // =============================================================================
-// formatBool / formatTimestamp Tests
+// formatBool / formatTime Tests
 // =============================================================================
 
 func TestFormatBool(t *testing.T) {
@@ -221,14 +220,14 @@ func TestFormatBool(t *testing.T) {
 	assert.Equal(t, "No", formatBool(false))
 }
 
-func TestFormatTimestamp(t *testing.T) {
-	t.Run("nil timestamp", func(t *testing.T) {
-		assert.Equal(t, "N/A", formatTimestamp(nil))
+func TestFormatTime(t *testing.T) {
+	t.Run("zero time", func(t *testing.T) {
+		assert.Equal(t, "N/A", formatTime(time.Time{}))
 	})
 
-	t.Run("valid timestamp", func(t *testing.T) {
-		ts := timestamppb.New(time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC))
-		result := formatTimestamp(ts)
+	t.Run("valid time", func(t *testing.T) {
+		ts := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+		result := formatTime(ts)
 		assert.Contains(t, result, "2025-06-15")
 		assert.Contains(t, result, "12:00:00")
 	})
@@ -249,17 +248,17 @@ func TestPrintCertificateDetails(t *testing.T) {
 	t.Run("full certificate", func(t *testing.T) {
 		output := &bytes.Buffer{}
 		printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
-		cert := &platformv1.Certificate{
+		cert := &casvc.Certificate{
 			Serial: "123456",
-			Subject: &platformv1.Subject{
+			Subject: &casvc.Subject{
 				CommonName:   "example.com",
 				Organization: "Test Org",
 			},
 			Issuer:             "CN=Root CA",
-			NotBefore:          timestamppb.Now(),
-			NotAfter:           timestamppb.Now(),
-			Status:             platformv1.CertificateStatus_CERTIFICATE_STATUS_VALID,
-			KeyAlgorithm:       platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
+			NotBefore:          time.Now(),
+			NotAfter:           time.Now(),
+			Status:             casvc.CertificateStatusValid,
+			KeyAlgorithm:       casvc.KeyAlgorithmRSA2048,
 			SignatureAlgorithm: "SHA256WithRSA",
 			IsCa:               false,
 			FingerprintSha256:  "aa:bb:cc:dd",
@@ -275,11 +274,11 @@ func TestPrintCertificateDetails(t *testing.T) {
 	t.Run("certificate without org and fingerprint", func(t *testing.T) {
 		output := &bytes.Buffer{}
 		printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
-		cert := &platformv1.Certificate{
+		cert := &casvc.Certificate{
 			Serial:  "999",
-			Subject: &platformv1.Subject{CommonName: "test.local"},
+			Subject: &casvc.Subject{CommonName: "test.local"},
 			Issuer:  "CN=CA",
-			Status:  platformv1.CertificateStatus_CERTIFICATE_STATUS_REVOKED,
+			Status:  casvc.CertificateStatusRevoked,
 		}
 		printCertificateDetails(printer, cert)
 		out := output.String()
@@ -297,24 +296,21 @@ func TestPrintCAInfoTable(t *testing.T) {
 	t.Run("nil ca info", func(t *testing.T) {
 		output := &bytes.Buffer{}
 		printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
-		resp := &platformv1.GetCAInfoResponse{CaInfo: nil}
-		printCAInfoTable(printer, resp)
+		printCAInfoTable(printer, nil)
 		assert.Contains(t, output.String(), "No CA information available")
 	})
 
 	t.Run("basic ca info", func(t *testing.T) {
 		output := &bytes.Buffer{}
 		printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
-		resp := &platformv1.GetCAInfoResponse{
-			CaInfo: &platformv1.CAInfo{
-				IsInitialized:       true,
-				CommonName:          "Root CA",
-				IsIntermediate:      false,
-				DefaultAlgorithm:    "RSA-2048",
-				DefaultValidityDays: 365,
-			},
+		info := &casvc.CAInfo{
+			IsInitialized:       true,
+			CommonName:          "Root CA",
+			IsIntermediate:      false,
+			DefaultAlgorithm:    "RSA-2048",
+			DefaultValidityDays: 365,
 		}
-		printCAInfoTable(printer, resp)
+		printCAInfoTable(printer, info)
 		out := output.String()
 		assert.Contains(t, out, "Root CA")
 		assert.Contains(t, out, "Yes")
@@ -323,22 +319,20 @@ func TestPrintCAInfoTable(t *testing.T) {
 	t.Run("ca info with root cert", func(t *testing.T) {
 		output := &bytes.Buffer{}
 		printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
-		resp := &platformv1.GetCAInfoResponse{
-			CaInfo: &platformv1.CAInfo{
-				IsInitialized:       true,
-				CommonName:          "Root CA",
-				DefaultAlgorithm:    "RSA-2048",
-				DefaultValidityDays: 365,
-				RootCert: &platformv1.CertificateSummary{
-					CommonName:   "Root CA",
-					Serial:       "001",
-					Issuer:       "CN=Root CA",
-					Status:       platformv1.CertificateStatus_CERTIFICATE_STATUS_VALID,
-					KeyAlgorithm: platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
-				},
+		info := &casvc.CAInfo{
+			IsInitialized:       true,
+			CommonName:          "Root CA",
+			DefaultAlgorithm:    "RSA-2048",
+			DefaultValidityDays: 365,
+			RootCert: &casvc.CertificateSummary{
+				CommonName:   "Root CA",
+				Serial:       "001",
+				Issuer:       "CN=Root CA",
+				Status:       casvc.CertificateStatusValid,
+				KeyAlgorithm: casvc.KeyAlgorithmRSA2048,
 			},
 		}
-		printCAInfoTable(printer, resp)
+		printCAInfoTable(printer, info)
 		out := output.String()
 		assert.Contains(t, out, "Root CA")
 	})
@@ -346,18 +340,16 @@ func TestPrintCAInfoTable(t *testing.T) {
 	t.Run("ca info with intermediates", func(t *testing.T) {
 		output := &bytes.Buffer{}
 		printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
-		resp := &platformv1.GetCAInfoResponse{
-			CaInfo: &platformv1.CAInfo{
-				IsInitialized:       true,
-				CommonName:          "Root CA",
-				DefaultAlgorithm:    "RSA-2048",
-				DefaultValidityDays: 365,
-				Intermediates: []*platformv1.CertificateSummary{
-					{CommonName: "Intermediate CA", Serial: "002"},
-				},
+		info := &casvc.CAInfo{
+			IsInitialized:       true,
+			CommonName:          "Root CA",
+			DefaultAlgorithm:    "RSA-2048",
+			DefaultValidityDays: 365,
+			Intermediates: []*casvc.CertificateSummary{
+				{CommonName: "Intermediate CA", Serial: "002"},
 			},
 		}
-		printCAInfoTable(printer, resp)
+		printCAInfoTable(printer, info)
 		out := output.String()
 		assert.Contains(t, out, "Root CA")
 	})
@@ -365,19 +357,17 @@ func TestPrintCAInfoTable(t *testing.T) {
 	t.Run("ca info with keystores", func(t *testing.T) {
 		output := &bytes.Buffer{}
 		printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
-		resp := &platformv1.GetCAInfoResponse{
-			CaInfo: &platformv1.CAInfo{
-				IsInitialized:       true,
-				CommonName:          "Root CA",
-				DefaultAlgorithm:    "RSA-2048",
-				DefaultValidityDays: 365,
-				KeyStores: []*platformv1.KeyStoreInfo{
-					{Type: "software", Available: true, Capabilities: []string{"sign", "verify"}},
-					{Type: "tpm", Available: false},
-				},
+		info := &casvc.CAInfo{
+			IsInitialized:       true,
+			CommonName:          "Root CA",
+			DefaultAlgorithm:    "RSA-2048",
+			DefaultValidityDays: 365,
+			KeyStores: []*casvc.KeyStoreInfo{
+				{Type: "software", Available: true, Capabilities: []string{"sign", "verify"}},
+				{Type: "tpm", Available: false},
 			},
 		}
-		printCAInfoTable(printer, resp)
+		printCAInfoTable(printer, info)
 		out := output.String()
 		assert.Contains(t, out, "Root CA")
 	})

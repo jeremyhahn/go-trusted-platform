@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	clustersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/cluster"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -36,21 +36,6 @@ func NewLeaveCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 This command initiates a graceful departure from the cluster. The node
 notifies the cluster leader of its intention to leave, allowing the
 cluster to remove it from the configuration and rebalance if necessary.
-
-Graceful leave (default):
-  1. Notifies the cluster leader
-  2. Waits for in-flight operations to complete
-  3. Transfers leadership if this node is the leader
-  4. Removes itself from the configuration
-  5. Shuts down cluster communication
-
-Force leave (--force):
-  Use when the node is unable to communicate with the cluster or when
-  a graceful leave has failed. This immediately stops cluster participation
-  without coordinating with other nodes.
-
-  WARNING: Force leave should be used with caution as it may cause the
-  cluster to see this node as failed until it times out.
 
 Examples:
   # Graceful leave
@@ -81,19 +66,15 @@ func runLeave(flags *cli.CommonFlags, nodeID string, force bool, timeoutSeconds 
 	}
 	defer base.Close()
 
-	client := base.Client().Cluster()
-	if client == nil {
+	grpcClient := base.Client().Cluster()
+	if grpcClient == nil {
 		return ErrClusterClientNotInitialized{}
 	}
 
-	req := &platformv1.LeaveClusterRequest{
-		NodeId:         nodeID,
-		Force:          force,
-		TimeoutSeconds: timeoutSeconds,
-	}
-
+	sdkClient := clustersvc.NewClientFromGRPC(grpcClient)
 	ctx := base.Context()
-	resp, err := client.Leave(ctx, req)
+
+	resp, err := sdkClient.LeaveDomain(ctx, nodeID, force, timeoutSeconds)
 	if err != nil {
 		return ErrClusterLeaveFailed{Err: err}
 	}
@@ -103,15 +84,15 @@ func runLeave(flags *cli.CommonFlags, nodeID string, force bool, timeoutSeconds 
 		NodeID:  nodeID,
 		Force:   force,
 		Success: true,
-		Message: "Successfully left cluster",
+		Message: resp.Message,
 	}
 
-	if force {
-		result.Message = "Force left cluster (immediate)"
-	}
-
-	if resp.GetStatus() != nil && resp.GetStatus().GetMessage() != "" {
-		result.Message = resp.GetStatus().GetMessage()
+	if result.Message == "" {
+		if force {
+			result.Message = "Force left cluster (immediate)"
+		} else {
+			result.Message = "Successfully left cluster"
+		}
 	}
 
 	printer := base.Printer()

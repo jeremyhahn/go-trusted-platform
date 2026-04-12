@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -71,12 +71,9 @@ Examples:
 
 // runClone executes the clone command
 func runClone(flags *cli.CommonFlags, templateID string, hostname string, labels []string) error {
-	// Validate template ID is provided
 	if templateID == "" {
 		return ErrMissingRequiredFlag{Flag: "template"}
 	}
-
-	// Validate hostname is provided
 	if hostname == "" {
 		return ErrMissingRequiredFlag{Flag: "hostname"}
 	}
@@ -87,27 +84,21 @@ func runClone(flags *cli.CommonFlags, templateID string, hostname string, labels
 	}
 	defer base.Close()
 
-	client := base.Client().VTPM()
-	if client == nil {
-		return ErrVTPMNotAvailable{}
-	}
+	sdkClient := vtpmsvc.NewClientFromGRPC(base.Client().VTPM())
 
-	// Parse labels
 	labelMap, err := parseLabels(labels)
 	if err != nil {
 		return err
 	}
 
-	req := &platformv1.CloneTemplateRequest{
-		Options: &platformv1.CloneOptions{
-			TemplateId: templateID,
-			Hostname:   hostname,
-			Labels:     labelMap,
-		},
+	opts := &vtpmsvc.CloneOptions{
+		TemplateID: templateID,
+		Hostname:   hostname,
+		Labels:     labelMap,
 	}
 
 	ctx := base.Context()
-	resp, err := client.CloneTemplate(ctx, req)
+	resp, err := sdkClient.CloneTemplateDomain(ctx, opts)
 	if err != nil {
 		return ErrCloneBundleFailed{Reason: err.Error()}
 	}
@@ -120,7 +111,7 @@ func runClone(flags *cli.CommonFlags, templateID string, hostname string, labels
 
 	case cli.OutputFormatTable:
 		if resp.Bundle != nil {
-			printer.PrintSuccess(fmt.Sprintf("Bundle cloned successfully: %s", resp.Bundle.Id))
+			printer.PrintSuccess(fmt.Sprintf("Bundle cloned successfully: %s", resp.Bundle.ID))
 			fmt.Println()
 			printBundleDetails(printer, resp.Bundle)
 		} else if resp.Status != nil && !resp.Status.Success {

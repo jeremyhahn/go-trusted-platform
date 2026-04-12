@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -71,17 +71,10 @@ func runInfo(flags *cli.CommonFlags, bundleID string) error {
 	}
 	defer base.Close()
 
-	client := base.Client().VTPM()
-	if client == nil {
-		return ErrVTPMNotAvailable{}
-	}
-
-	req := &platformv1.GetBundleRequest{
-		Id: bundleID,
-	}
+	sdkClient := vtpmsvc.NewClientFromGRPC(base.Client().VTPM())
 
 	ctx := base.Context()
-	resp, err := client.GetBundle(ctx, req)
+	resp, err := sdkClient.GetBundleDomain(ctx, bundleID)
 	if err != nil {
 		return ErrGetBundleInfoFailed{Reason: err.Error()}
 	}
@@ -106,12 +99,12 @@ func runInfo(flags *cli.CommonFlags, bundleID string) error {
 }
 
 // printBundleInfo prints detailed bundle information
-func printBundleInfo(printer *cli.Printer, bundle *platformv1.Bundle) {
-	printer.PrintKeyValue("ID", bundle.Id)
-	printer.PrintKeyValue("Mode", bundle.Mode.String())
+func printBundleInfo(printer *cli.Printer, bundle *vtpmsvc.Bundle) {
+	printer.PrintKeyValue("ID", bundle.ID)
+	printer.PrintKeyValue("Mode", string(bundle.Mode))
 
 	if bundle.CreatedAt != nil {
-		printer.PrintKeyValue("Created", bundle.CreatedAt.AsTime().Format("2006-01-02 15:04:05 MST"))
+		printer.PrintKeyValue("Created", (*bundle.CreatedAt).Format("2006-01-02 15:04:05 MST"))
 	}
 
 	if bundle.ClonedFrom != "" {
@@ -126,19 +119,19 @@ func printBundleInfo(printer *cli.Printer, bundle *platformv1.Bundle) {
 		if m.Hostname != "" {
 			printer.PrintKeyValue("  Hostname", m.Hostname)
 		}
-		printer.PrintKeyValue("  EK Algorithm", m.EkAlgorithm.String())
+		printer.PrintKeyValue("  EK Algorithm", string(m.EKAlgorithm))
 		printer.PrintKeyValue("  Secure Boot", formatBool(m.SecureBootEnabled))
 
 		if m.ClonedFrom != "" {
 			printer.PrintKeyValue("  Cloned From", m.ClonedFrom)
 		}
 
-		if m.EkCertificate != nil && m.EkCertificate.Fingerprint != "" {
-			printer.PrintKeyValue("  EK Fingerprint", m.EkCertificate.Fingerprint)
+		if m.EKCertificate != nil && m.EKCertificate.Fingerprint != "" {
+			printer.PrintKeyValue("  EK Fingerprint", m.EKCertificate.Fingerprint)
 		}
 
 		if m.CreatedAt != nil {
-			printer.PrintKeyValue("  Manifest Created", m.CreatedAt.AsTime().Format("2006-01-02 15:04:05 MST"))
+			printer.PrintKeyValue("  Manifest Created", (*m.CreatedAt).Format("2006-01-02 15:04:05 MST"))
 		}
 
 		if len(m.Labels) > 0 {
@@ -158,8 +151,8 @@ func printBundleInfo(printer *cli.Printer, bundle *platformv1.Bundle) {
 		}
 	}
 
-	if bundle.TpmState != nil {
-		t := bundle.TpmState
+	if bundle.TPMState != nil {
+		t := bundle.TPMState
 		fmt.Println()
 		printer.PrintInfo("TPM State:")
 		if t.StateDir != "" {
@@ -173,12 +166,12 @@ func printBundleInfo(printer *cli.Printer, bundle *platformv1.Bundle) {
 		}
 	}
 
-	if bundle.OvmfState != nil {
-		o := bundle.OvmfState
+	if bundle.OVMFState != nil {
+		o := bundle.OVMFState
 		fmt.Println()
 		printer.PrintInfo("OVMF State:")
-		if o.NvramFile != "" {
-			printer.PrintKeyValue("  NVRAM File", o.NvramFile)
+		if o.NVRAMFile != "" {
+			printer.PrintKeyValue("  NVRAM File", o.NVRAMFile)
 		}
 	}
 
@@ -189,23 +182,23 @@ func printBundleInfo(printer *cli.Printer, bundle *platformv1.Bundle) {
 		if s.Dir != "" {
 			printer.PrintKeyValue("  Directory", s.Dir)
 		}
-		if s.PkKey != "" {
-			printer.PrintKeyValue("  PK Key", s.PkKey)
+		if s.PKKey != "" {
+			printer.PrintKeyValue("  PK Key", s.PKKey)
 		}
-		if s.PkCrt != "" {
-			printer.PrintKeyValue("  PK Cert", s.PkCrt)
+		if s.PKCert != "" {
+			printer.PrintKeyValue("  PK Cert", s.PKCert)
 		}
-		if s.KekKey != "" {
-			printer.PrintKeyValue("  KEK Key", s.KekKey)
+		if s.KEKKey != "" {
+			printer.PrintKeyValue("  KEK Key", s.KEKKey)
 		}
-		if s.KekCrt != "" {
-			printer.PrintKeyValue("  KEK Cert", s.KekCrt)
+		if s.KEKCert != "" {
+			printer.PrintKeyValue("  KEK Cert", s.KEKCert)
 		}
-		if s.DbKey != "" {
-			printer.PrintKeyValue("  DB Key", s.DbKey)
+		if s.DBKey != "" {
+			printer.PrintKeyValue("  DB Key", s.DBKey)
 		}
-		if s.DbCrt != "" {
-			printer.PrintKeyValue("  DB Cert", s.DbCrt)
+		if s.DBCert != "" {
+			printer.PrintKeyValue("  DB Cert", s.DBCert)
 		}
 	}
 }

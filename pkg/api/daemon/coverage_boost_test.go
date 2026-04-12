@@ -68,6 +68,42 @@ func (m *boostMockCryptoClient) Verify(ctx context.Context, req *quicbaas.Verify
 	return &quicbaas.VerifyResponse{Valid: true}, nil
 }
 
+func (m *boostMockCryptoClient) Rewrap(ctx context.Context, req *quicbaas.RewrapRequest) (*quicbaas.RewrapResponse, error) {
+	return &quicbaas.RewrapResponse{}, nil
+}
+
+func (m *boostMockCryptoClient) EncryptBatch(ctx context.Context, req *quicbaas.EncryptBatchRequest) (*quicbaas.EncryptBatchResponse, error) {
+	return &quicbaas.EncryptBatchResponse{}, nil
+}
+
+func (m *boostMockCryptoClient) DecryptBatch(ctx context.Context, req *quicbaas.DecryptBatchRequest) (*quicbaas.DecryptBatchResponse, error) {
+	return &quicbaas.DecryptBatchResponse{}, nil
+}
+
+func (m *boostMockCryptoClient) GenerateDataKey(ctx context.Context, req *quicbaas.GenerateDataKeyRequest) (*quicbaas.GenerateDataKeyResponse, error) {
+	return &quicbaas.GenerateDataKeyResponse{}, nil
+}
+
+func (m *boostMockCryptoClient) GenerateWrappedDataKey(ctx context.Context, req *quicbaas.GenerateWrappedDataKeyRequest) (*quicbaas.GenerateWrappedDataKeyResponse, error) {
+	return &quicbaas.GenerateWrappedDataKeyResponse{}, nil
+}
+
+func (m *boostMockCryptoClient) GenerateHMAC(ctx context.Context, req *quicbaas.GenerateHMACRequest) (*quicbaas.GenerateHMACResponse, error) {
+	return &quicbaas.GenerateHMACResponse{}, nil
+}
+
+func (m *boostMockCryptoClient) VerifyHMAC(ctx context.Context, req *quicbaas.VerifyHMACRequest) (*quicbaas.VerifyHMACResponse, error) {
+	return &quicbaas.VerifyHMACResponse{}, nil
+}
+
+func (m *boostMockCryptoClient) GenerateRandom(ctx context.Context, req *quicbaas.GenerateRandomRequest) (*quicbaas.GenerateRandomResponse, error) {
+	return &quicbaas.GenerateRandomResponse{}, nil
+}
+
+func (m *boostMockCryptoClient) Hash(ctx context.Context, req *quicbaas.HashRequest) (*quicbaas.HashResponse, error) {
+	return &quicbaas.HashResponse{}, nil
+}
+
 // =============================================================================
 // Test Helpers
 // =============================================================================

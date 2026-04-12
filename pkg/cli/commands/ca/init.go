@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	casvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -66,15 +66,15 @@ func runInit(flags *cli.CommonFlags, force bool) error {
 	}
 	defer base.Close()
 
-	client := base.Client().CA()
-	if client == nil {
+	grpcClient := base.Client().CA()
+	if grpcClient == nil {
 		return ErrCANotInitialized{}
 	}
 
+	sdkClient := casvc.NewClientFromGRPC(grpcClient)
 	ctx := base.Context()
-	resp, err := client.InitCA(ctx, &platformv1.InitCARequest{
-		Force: force,
-	})
+
+	info, err := sdkClient.InitCADomain(ctx, force)
 	if err != nil {
 		return ErrInitCAFailed{Reason: err.Error()}
 	}
@@ -83,32 +83,32 @@ func runInit(flags *cli.CommonFlags, force bool) error {
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(info)
 
 	case cli.OutputFormatTable:
-		if resp.CaInfo == nil {
+		if info == nil {
 			printer.PrintInfo("CA initialized successfully (no info available)")
 			return nil
 		}
 
 		printer.PrintInfo("Certificate Authority initialized successfully")
 		fmt.Println()
-		printer.PrintKeyValue("Common Name", resp.CaInfo.CommonName)
-		printer.PrintKeyValue("Initialized", formatBool(resp.CaInfo.IsInitialized))
-		printer.PrintKeyValue("Is Intermediate", formatBool(resp.CaInfo.IsIntermediate))
-		printer.PrintKeyValue("Default Algorithm", resp.CaInfo.DefaultAlgorithm)
-		printer.PrintKeyValue("Default Validity", fmt.Sprintf("%d days", resp.CaInfo.DefaultValidityDays))
+		printer.PrintKeyValue("Common Name", info.CommonName)
+		printer.PrintKeyValue("Initialized", formatBool(info.IsInitialized))
+		printer.PrintKeyValue("Is Intermediate", formatBool(info.IsIntermediate))
+		printer.PrintKeyValue("Default Algorithm", info.DefaultAlgorithm)
+		printer.PrintKeyValue("Default Validity", fmt.Sprintf("%d days", info.DefaultValidityDays))
 
-		if resp.CaInfo.RootCert != nil {
+		if info.RootCert != nil {
 			fmt.Println()
 			printer.PrintInfo("Root Certificate:")
-			printCertSummary(printer, resp.CaInfo.RootCert, "  ")
+			printCertSummary(printer, info.RootCert, "  ")
 		}
 
-		if len(resp.CaInfo.Intermediates) > 0 {
+		if len(info.Intermediates) > 0 {
 			fmt.Println()
 			printer.PrintInfo("Intermediate Certificates:")
-			for i, cert := range resp.CaInfo.Intermediates {
+			for i, cert := range info.Intermediates {
 				fmt.Printf("  [%d]\n", i+1)
 				printCertSummary(printer, cert, "    ")
 			}

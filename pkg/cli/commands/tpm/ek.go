@@ -19,7 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	tpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tpm"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -197,20 +198,15 @@ func runEKCreate(flags *cli.CommonFlags, algorithm string, persistent bool) erro
 func runEKCreateWithClient(base TPMBaseCommandInterface, algorithm string, persistent bool) error {
 	defer base.Close()
 
-	keyAlg, err := parseKeyAlgorithm(algorithm)
-	if err != nil {
-		return err
+	domainAlg, ok := tpmsvc.ParseKeyAlgorithm(algorithm)
+	if !ok {
+		return ErrInvalidKeyAlgorithm{Algorithm: algorithm}
 	}
 
-	req := &platformv1.CreateEKRequest{
-		Attributes: &platformv1.KeyAttributes{
-			Algorithm: keyAlg,
-		},
-		Persistent: persistent,
-	}
+	sdkClient := tpmsvc.NewClientFromGRPC(base.TPMClient())
 
 	ctx := base.Context()
-	resp, err := base.TPMClient().CreateEK(ctx, req)
+	resp, err := sdkClient.CreateEKDomain(ctx, domainAlg, persistent)
 	if err != nil {
 		return ErrEKCreateFailed{Reason: err.Error()}
 	}
@@ -265,12 +261,10 @@ func runEKInfo(flags *cli.CommonFlags, handle uint32) error {
 func runEKInfoWithClient(base TPMBaseCommandInterface, handle uint32) error {
 	defer base.Close()
 
-	req := &platformv1.GetEKRequest{
-		Handle: handle,
-	}
+	sdkClient := tpmsvc.NewClientFromGRPC(base.TPMClient())
 
 	ctx := base.Context()
-	resp, err := base.TPMClient().GetEK(ctx, req)
+	resp, err := sdkClient.GetEKDomain(ctx, tpmsvc.KeyAlgorithmUnspecified, handle)
 	if err != nil {
 		return ErrEKNotFound{Reason: err.Error()}
 	}
@@ -280,7 +274,7 @@ func runEKInfoWithClient(base TPMBaseCommandInterface, handle uint32) error {
 
 	output := map[string]interface{}{
 		"handle":    fmt.Sprintf("0x%08X", resp.Handle),
-		"algorithm": formatKeyAlgorithm(resp.Algorithm),
+		"algorithm": string(resp.Algorithm),
 	}
 
 	if len(resp.PublicKey) > 0 {
@@ -293,7 +287,7 @@ func runEKInfoWithClient(base TPMBaseCommandInterface, handle uint32) error {
 
 	case cli.OutputFormatTable:
 		printer.PrintKeyValue("Handle", fmt.Sprintf("0x%08X", resp.Handle))
-		printer.PrintKeyValue("Algorithm", formatKeyAlgorithm(resp.Algorithm))
+		printer.PrintKeyValue("Algorithm", string(resp.Algorithm))
 		return nil
 
 	default:
@@ -314,10 +308,10 @@ func runEKCertificate(flags *cli.CommonFlags) error {
 func runEKCertificateWithClient(base TPMBaseCommandInterface) error {
 	defer base.Close()
 
-	req := &platformv1.GetEKCertificateRequest{}
+	sdkClient := tpmsvc.NewClientFromGRPC(base.TPMClient())
 
 	ctx := base.Context()
-	resp, err := base.TPMClient().GetEKCertificate(ctx, req)
+	resp, err := sdkClient.GetEKCertificateDomain(ctx, tpmsvc.KeyAlgorithmUnspecified, 0)
 	if err != nil {
 		return ErrEKCertificateNotFound{Reason: err.Error()}
 	}
@@ -363,13 +357,10 @@ func runEKDelete(flags *cli.CommonFlags, handle uint32, password string) error {
 func runEKDeleteWithClient(base TPMBaseCommandInterface, handle uint32, password string) error {
 	defer base.Close()
 
-	req := &platformv1.DeleteEKRequest{
-		Handle:   handle,
-		Password: password,
-	}
+	sdkClient := tpmsvc.NewClientFromGRPC(base.TPMClient())
 
 	ctx := base.Context()
-	resp, err := base.TPMClient().DeleteEK(ctx, req)
+	resp, err := sdkClient.DeleteEKDomain(ctx, handle, tpmsvc.KeyAlgorithmUnspecified, password)
 	if err != nil {
 		return ErrEKDeleteFailed{Reason: err.Error()}
 	}
@@ -400,46 +391,5 @@ func runEKDeleteWithClient(base TPMBaseCommandInterface, handle uint32, password
 
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
-	}
-}
-
-// parseKeyAlgorithm converts a string algorithm name to the proto enum value
-func parseKeyAlgorithm(algorithm string) (platformv1.KeyAlgorithm, error) {
-	switch algorithm {
-	case "RSA-2048", "RSA2048":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048, nil
-	case "RSA-3072", "RSA3072":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072, nil
-	case "RSA-4096", "RSA4096":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096, nil
-	case "ECDSA-P256", "ECDSAP256", "P256":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256, nil
-	case "ECDSA-P384", "ECDSAP384", "P384":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384, nil
-	case "ECDSA-P521", "ECDSAP521", "P521":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521, nil
-	default:
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED,
-			ErrInvalidKeyAlgorithm{Algorithm: algorithm}
-	}
-}
-
-// formatKeyAlgorithm converts a proto enum value to a human-readable string
-func formatKeyAlgorithm(alg platformv1.KeyAlgorithm) string {
-	switch alg {
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048:
-		return "RSA-2048"
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072:
-		return "RSA-3072"
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096:
-		return "RSA-4096"
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256:
-		return "ECDSA-P256"
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384:
-		return "ECDSA-P384"
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521:
-		return "ECDSA-P521"
-	default:
-		return "Unknown"
 	}
 }

@@ -653,3 +653,47 @@ type ErrNilSecretManager struct{}
 func (e ErrNilSecretManager) Error() string {
 	return "bootstrap: secret manager cannot be nil"
 }
+
+// ErrInstallLogNotFound is returned when the install log never appeared at
+// the bootstrap container's forensic sink before the context was cancelled.
+type ErrInstallLogNotFound struct {
+	Hostname string
+	URL      string
+	Cause    error
+}
+
+func (e ErrInstallLogNotFound) Error() string {
+	return fmt.Sprintf("bootstrap: node %s: install log never appeared at %s: %v",
+		e.Hostname, e.URL, e.Cause)
+}
+
+func (e ErrInstallLogNotFound) Unwrap() error { return e.Cause }
+
+// ErrInstallFailed is returned when the installer exited with a non-zero
+// exit code, indicating the installation did not complete successfully.
+type ErrInstallFailed struct {
+	Hostname string
+	ExitCode int
+	LogURL   string
+}
+
+func (e ErrInstallFailed) Error() string {
+	return fmt.Sprintf("bootstrap: node %s: installer exited with code %d; see install.log at %s",
+		e.Hostname, e.ExitCode, e.LogURL)
+}
+
+// ErrBMCReconnect is returned when the orchestrator fails to open a fresh
+// BMC client after a long-running operation (e.g., install wait) caused the
+// previous session to time out.
+type ErrBMCReconnect struct {
+	Hostname  string
+	Operation string
+	Cause     error
+}
+
+func (e ErrBMCReconnect) Error() string {
+	return fmt.Sprintf("bootstrap: node %s: failed to reopen BMC client for %s: %v",
+		e.Hostname, e.Operation, e.Cause)
+}
+
+func (e ErrBMCReconnect) Unwrap() error { return e.Cause }

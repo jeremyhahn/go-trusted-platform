@@ -15,11 +15,10 @@ package cluster
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	clustersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/cluster"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -72,60 +71,38 @@ func runStatus(flags *cli.CommonFlags, includeNodes bool) error {
 	}
 	defer base.Close()
 
-	client := base.Client().Cluster()
-	if client == nil {
+	grpcClient := base.Client().Cluster()
+	if grpcClient == nil {
 		return ErrClusterClientNotInitialized{}
 	}
 
-	req := &platformv1.GetClusterStatusRequest{
-		IncludeNodes: includeNodes,
-	}
-
+	sdkClient := clustersvc.NewClientFromGRPC(grpcClient)
 	ctx := base.Context()
-	resp, err := client.GetStatus(ctx, req)
+
+	resp, err := sdkClient.GetStatusDomain(ctx, includeNodes)
 	if err != nil {
 		return ErrClusterStatusFailed{Err: err}
 	}
 
 	// Build status summary from response
 	status := &ClusterStatusSummary{
-		ClusterID:    "",
-		NodeID:       "",
-		RaftState:    string(RaftStateUnknown),
-		LeaderID:     "",
-		LeaderAddr:   "",
-		Term:         0,
+		ClusterID:    resp.ClusterID,
+		NodeID:       resp.LocalNodeID,
+		RaftState:    nodeRoleToRaftState(resp.LocalRole),
+		LeaderID:     resp.LeaderID,
+		LeaderAddr:   resp.LeaderAddr,
+		Term:         resp.Term,
 		CommitIndex:  0,
 		AppliedIndex: 0,
 		LastContact:  "N/A",
-		NodeCount:    0,
-		VoterCount:   0,
-		Healthy:      false,
-		Timestamp:    formatTimestamp(time.Now()),
+		NodeCount:    int(resp.TotalNodes),
+		VoterCount:   int(resp.HealthyNodes),
+		Healthy:      resp.State == clustersvc.ClusterStateHealthy,
+		Timestamp:    formatTimestamp(resp.Timestamp),
 	}
 
-	if resp.GetCluster() != nil {
-		cluster := resp.GetCluster()
-		status.ClusterID = cluster.GetId()
-		status.LeaderID = cluster.GetLeaderId()
-		status.LeaderAddr = cluster.GetLeaderAddress()
-		status.Term = cluster.GetTerm()
-		status.NodeCount = int(cluster.GetTotalNodes())
-		status.VoterCount = int(cluster.GetHealthyNodes())
-		status.Healthy = cluster.GetState() == platformv1.ClusterState_CLUSTER_STATE_HEALTHY
-	}
-
-	if resp.GetLocalNode() != nil {
-		localNode := resp.GetLocalNode()
-		status.NodeID = localNode.GetId()
-		status.RaftState = nodeRoleToRaftState(localNode.GetRole())
-		if localNode.GetLastHeartbeat() != nil {
-			status.LastContact = formatTimestamp(localNode.GetLastHeartbeat().AsTime())
-		}
-	}
-
-	if resp.GetTimestamp() != nil {
-		status.Timestamp = formatTimestamp(resp.GetTimestamp().AsTime())
+	if resp.LastHeartbeat != nil {
+		status.LastContact = formatTimestamp(*resp.LastHeartbeat)
 	}
 
 	printer := base.Printer()
@@ -142,14 +119,14 @@ func runStatus(flags *cli.CommonFlags, includeNodes bool) error {
 	}
 }
 
-// nodeRoleToRaftState converts a protobuf NodeRole to a local RaftState string
-func nodeRoleToRaftState(role platformv1.NodeRole) string {
+// nodeRoleToRaftState converts an SDK NodeRole to a local RaftState string
+func nodeRoleToRaftState(role clustersvc.NodeRole) string {
 	switch role {
-	case platformv1.NodeRole_NODE_ROLE_LEADER:
+	case clustersvc.NodeRoleLeader:
 		return string(RaftStateLeader)
-	case platformv1.NodeRole_NODE_ROLE_FOLLOWER:
+	case clustersvc.NodeRoleFollower:
 		return string(RaftStateFollower)
-	case platformv1.NodeRole_NODE_ROLE_CANDIDATE:
+	case clustersvc.NodeRoleCandidate:
 		return string(RaftStateCandidate)
 	default:
 		return string(RaftStateUnknown)

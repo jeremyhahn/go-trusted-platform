@@ -19,7 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -91,10 +92,7 @@ func runCryptoEncrypt(flags *cli.CommonFlags, cmdFlags *encryptFlags) error {
 	}
 	defer base.Close()
 
-	client := base.Client().KMS()
-	if client == nil {
-		return ErrCryptoClientNotInitialized{}
-	}
+	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
 
 	// Read input data
 	plaintext, err := readInputData(cmdFlags.inputPath)
@@ -117,15 +115,8 @@ func runCryptoEncrypt(flags *cli.CommonFlags, cmdFlags *encryptFlags) error {
 		}
 	}
 
-	req := &platformv1.EncryptRequest{
-		KeyId:     cmdFlags.keyID,
-		Plaintext: plaintext,
-		Context:   contextBytes,
-		Nonce:     nonceBytes,
-	}
-
 	ctx := base.Context()
-	resp, err := client.Encrypt(ctx, req)
+	resp, err := sdkClient.EncryptDomain(ctx, cmdFlags.keyID, plaintext, contextBytes, nonceBytes)
 	if err != nil {
 		return ErrCryptoOperationFailed{Operation: "encrypt", Err: err}
 	}
@@ -141,7 +132,7 @@ func runCryptoEncrypt(flags *cli.CommonFlags, cmdFlags *encryptFlags) error {
 			Nonce      string `json:"nonce" yaml:"nonce"`
 			Timestamp  string `json:"timestamp" yaml:"timestamp"`
 		}{
-			KeyID:      resp.KeyId,
+			KeyID:      resp.KeyID,
 			KeyVersion: resp.KeyVersion,
 			Ciphertext: base64.StdEncoding.EncodeToString(resp.Ciphertext),
 			Nonce:      base64.StdEncoding.EncodeToString(resp.Nonce),
@@ -158,7 +149,7 @@ func runCryptoEncrypt(flags *cli.CommonFlags, cmdFlags *encryptFlags) error {
 		// Only show metadata if writing to file (not cluttering stdout)
 		if cmdFlags.outputPath != "" {
 			printer.PrintSuccess("Data encrypted successfully")
-			printer.PrintKeyValue("Key ID", resp.KeyId)
+			printer.PrintKeyValue("Key ID", resp.KeyID)
 			printer.PrintKeyValue("Key Version", fmt.Sprintf("%d", resp.KeyVersion))
 			printer.PrintKeyValue("Nonce", base64.StdEncoding.EncodeToString(resp.Nonce))
 			printer.PrintKeyValue("Output", cmdFlags.outputPath)
