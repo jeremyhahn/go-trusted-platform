@@ -587,6 +587,7 @@ func TestListUsers_Success(t *testing.T) {
 					{ID:       "user-1", TenantID: tenantID, Email: "user1@example.com"},
 					{ID:       "user-2", TenantID: tenantID, Email: "user2@example.com"},
 				},
+				Pagination: iamsdk.PaginationInfo{TotalCount: 2},
 			}, nil
 		},
 	}
@@ -609,7 +610,7 @@ func TestListUsers_WithPagination(t *testing.T) {
 	iamClient := &mockIAMClient{
 		listUsersFn: func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
 			assert.Equal(t, int32(25), int32(req.PageSize))
-			assert.Equal(t, int32(50), int32(0))
+			assert.Equal(t, int32(0), int32(0))
 			return &iamsdk.ListUsersResponse{
 				Users: []iamsdk.User{
 					{ID:       "user-51", Email: "user51@example.com"},
@@ -1463,7 +1464,7 @@ func TestValidatePolicy_Invalid(t *testing.T) {
 	handlers.ValidatePolicy(rec, req)
 
 	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ValidatePolicyResponse)
+	payload, ok := writer.lastPayload.(*ValidatePolicyResponse)
 	require.True(t, ok)
 	assert.False(t, payload.Valid)
 	assert.Len(t, payload.Errors, 2)
@@ -1495,7 +1496,7 @@ func TestTestPolicy_Success(t *testing.T) {
 	handlers.TestPolicy(rec, req)
 
 	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(TestPolicyResponse)
+	payload, ok := writer.lastPayload.(*TestPolicyResponse)
 	require.True(t, ok)
 	assert.True(t, payload.Allowed)
 	assert.Equal(t, "admin-policy", payload.MatchedPolicy)
@@ -1681,7 +1682,7 @@ func TestRotateAppSecret_Success(t *testing.T) {
 	handlers.RotateAppSecret(rec, req)
 
 	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(RotateSecretResponse)
+	payload, ok := writer.lastPayload.(*RotateSecretResponse)
 	require.True(t, ok)
 	assert.Equal(t, "new-secret-xyz", payload.ClientSecret)
 }

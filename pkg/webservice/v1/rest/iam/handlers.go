@@ -466,7 +466,7 @@ func (h *IAMHandlers) RevokeUserRole(w http.ResponseWriter, r *http.Request) {
 
 	err := h.iamClient.RevokeRole(ctx, tenantID, userID, roleName)
 	if err != nil {
-		h.handleError(w, r, err)
+		h.handleGRPCError(w, r, err)
 		return
 	}
 
@@ -521,6 +521,7 @@ func (h *IAMHandlers) CreateGroup(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	sdkReq := &iamsdk.CreateGroupRequest{
+		ID:          req.ID,
 		Name:        req.Name,
 		Description: req.Description,
 	}
