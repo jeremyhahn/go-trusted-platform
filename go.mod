@@ -401,35 +401,3 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 	software.sslmate.com/src/go-pkcs12 v0.7.0 // indirect
 )
-
-replace github.com/jeremyhahn/go-trusted-ca => /home/jhahn/sources/go-trusted-ca
-
-replace github.com/jeremyhahn/go-trusted-ca/sdk/go => /home/jhahn/sources/go-trusted-ca/sdk/go
-
-replace github.com/jeremyhahn/go-quicbaas => /home/jhahn/sources/go-quicbaas
-
-replace github.com/jeremyhahn/go-quicbaas/sdk/go => /home/jhahn/sources/go-quicbaas/sdk/go
-
-replace github.com/jeremyhahn/go-xkms => /home/jhahn/sources/go-xkms
-
-replace github.com/jeremyhahn/go-xkms/sdk/go => /home/jhahn/sources/go-xkms/sdk/go
-
-replace github.com/jeremyhahn/go-objstore => /home/jhahn/sources/go-objstore
-
-replace github.com/jeremyhahn/go-qrdb => /home/jhahn/sources/go-qrdb
-
-replace github.com/jeremyhahn/go-qrdb/sdk/go => /home/jhahn/sources/go-qrdb/sdk/go
-
-replace github.com/jeremyhahn/go-quicraft => /home/jhahn/sources/go-quicraft
-
-replace github.com/jeremyhahn/go-truststrap => /home/jhahn/sources/go-truststrap
-
-replace github.com/jeremyhahn/go-frost => /home/jhahn/sources/go-frost
-
-replace github.com/jeremyhahn/go-auth => /home/jhahn/sources/go-auth
-
-replace github.com/jeremyhahn/go-codec => /home/jhahn/sources/go-codec
-
-replace github.com/jeremyhahn/go-luks2 => /home/jhahn/sources/go-luks2
-
-replace github.com/jeremyhahn/go-signal => /home/jhahn/sources/go-signal
