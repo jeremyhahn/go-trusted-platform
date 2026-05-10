@@ -14,6 +14,7 @@
 package deployer
 
 import (
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"errors"
 	"os"
 	"path/filepath"
@@ -192,7 +193,7 @@ func TestCiscoDeployer_BuildParams(t *testing.T) {
 		Host:       "198.18.1.252",
 		User:       "admin",
 		SSHKeyPath: "/tmp/key",
-		ProvisioningNetwork: ProvisioningNetworkConfig{
+		ProvisioningSubnet: &installer.SubnetConfig{
 			Gateway: "172.16.201.1",
 		},
 	}

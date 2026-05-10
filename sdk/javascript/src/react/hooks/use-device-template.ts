@@ -130,8 +130,19 @@ export function useDeviceTemplates(
       service.createProfileFromTemplate(request)
   );
 
+  // The server returns `{templates: [...], pagination: {...}}` while
+  // the SDK type declares `DeviceTemplate[]`. Accept both shapes so
+  // the hook returns a plain array regardless of which contract the
+  // server-side handler emits.
+  const raw = listResult.data as unknown;
+  let templates: DeviceTemplate[] = [];
+  if (Array.isArray(raw)) {
+    templates = raw as DeviceTemplate[];
+  } else if (raw && typeof raw === 'object' && Array.isArray((raw as { templates?: unknown }).templates)) {
+    templates = (raw as { templates: DeviceTemplate[] }).templates;
+  }
   return {
-    templates: listResult.data ?? [],
+    templates,
     isLoading: listResult.isLoading,
     error: listResult.error ?? null,
     refetch: () => { void listResult.refetch(); },

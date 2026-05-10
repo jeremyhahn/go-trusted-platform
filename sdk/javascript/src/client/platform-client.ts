@@ -10,6 +10,7 @@
 
 import { ApiClient } from './api-client.js';
 import type { ApiClientConfig } from './config.js';
+import type { Transport } from '../transport/transport.js';
 
 // Core Platform Services
 import { AttestationService } from '../services/attestation-service.js';
@@ -79,9 +80,23 @@ import { QuicBaaSIAMService as DataIAMService } from '../services/quicbaas/index
 
 /**
  * Platform Client configuration
+ *
+ * In addition to the REST/fetch options inherited from
+ * `ApiClientConfig`, callers can pass a custom `transport` to
+ * route every service call through an alternative wire protocol
+ * (gRPC-Web, Wails IPC, an in-process mock, etc.). When omitted
+ * the client constructs a default REST `ApiClient` and uses that
+ * as both transport *and* `apiClient` so existing consumers see
+ * no behavioral change.
  */
 export interface PlatformClientConfig extends ApiClientConfig {
-  // Extends API client config - no additional fields needed for now
+  /**
+   * Optional custom transport. When provided, every service
+   * dispatches through it instead of the default REST/fetch
+   * path. Useful for desktop builds (Wails IPC), test harnesses
+   * (in-memory transport), and gRPC-Web deployments.
+   */
+  transport?: Transport;
 }
 
 /**
@@ -131,8 +146,22 @@ export interface PlatformClientConfig extends ApiClientConfig {
  * ```
  */
 export class PlatformClient {
-  /** The underlying API client */
+  /**
+   * REST/fetch client. Always present so `getApiClient()` and
+   * `baseUrl` remain useful even when the active transport is
+   * something else (gRPC-Web, Wails). When the caller supplies a
+   * custom `config.transport`, the apiClient is still constructed
+   * for completeness but services don't talk through it.
+   */
   private readonly apiClient: ApiClient;
+
+  /**
+   * Active transport — what the services actually dispatch
+   * through. Defaults to `apiClient` (REST/fetch); overridden by
+   * `config.transport` when the application wants gRPC-Web,
+   * Wails IPC, or another wire format.
+   */
+  private readonly transport: Transport;
 
   // =========================================================================
   // Service Instances
@@ -303,64 +332,69 @@ export class PlatformClient {
    */
   constructor(config?: PlatformClientConfig) {
     this.apiClient = new ApiClient(config);
+    // The transport is what every service dispatches through.
+    // Apps can plug in any `Transport` implementation (gRPC-Web,
+    // Wails IPC, mock); when omitted we use the REST apiClient.
+    this.transport = config?.transport ?? this.apiClient;
+    const t = this.transport;
 
     // Initialize all services
-    this.attestation = new AttestationService(this.apiClient);
-    this.ca = new CAService(this.apiClient);
-    this.compute = new ComputeService(this.apiClient);
-    this.device = new DeviceService(this.apiClient);
-    this.dns = new DNSService(this.apiClient);
-    this.gateway = new GatewayService(this.apiClient);
-    this.iam = new IAMService(this.apiClient);
-    this.idevid = new IDevIDService(this.apiClient);
-    this.kms = new KMSService(this.apiClient);
-    this.overlay = new OverlayService(this.apiClient);
-    this.platform = new PlatformService(this.apiClient);
-    this.pxe = new PXEService(this.apiClient);
-    this.sdn = new SDNService(this.apiClient);
-    this.tenant = new TenantService(this.apiClient);
-    this.tpm = new TPMService(this.apiClient);
-    this.vtpm = new VTPMService(this.apiClient);
-    this.invitation = new InvitationService(this.apiClient);
-    this.eab = new EABService(this.apiClient);
+    this.attestation = new AttestationService(t);
+    this.ca = new CAService(t);
+    this.compute = new ComputeService(t);
+    this.device = new DeviceService(t);
+    this.dns = new DNSService(t);
+    this.gateway = new GatewayService(t);
+    this.iam = new IAMService(t);
+    this.idevid = new IDevIDService(t);
+    this.kms = new KMSService(t);
+    this.overlay = new OverlayService(t);
+    this.platform = new PlatformService(t);
+    this.pxe = new PXEService(t);
+    this.sdn = new SDNService(t);
+    this.tenant = new TenantService(t);
+    this.tpm = new TPMService(t);
+    this.vtpm = new VTPMService(t);
+    this.invitation = new InvitationService(t);
+    this.eab = new EABService(t);
 
     // Initialize Data Platform Services (6)
-    this.kv = new KVService(this.apiClient);
-    this.batch = new BatchService(this.apiClient);
-    this.transaction = new TransactionService(this.apiClient);
-    this.query = new QueryService(this.apiClient);
-    this.quicBaaSTimeSeries = new TimeSeriesService(this.apiClient);
-    this.quicBaaSBackup = new BackupService(this.apiClient);
+    this.kv = new KVService(t);
+    this.batch = new BatchService(t);
+    this.transaction = new TransactionService(t);
+    this.query = new QueryService(t);
+    this.quicBaaSTimeSeries = new TimeSeriesService(t);
+    this.quicBaaSBackup = new BackupService(t);
 
     // Initialize AI/ML Platform Services (3)
-    this.vector = new VectorService(this.apiClient);
-    this.embedding = new EmbeddingService(this.apiClient);
-    this.ollama = new OllamaService(this.apiClient);
+    this.vector = new VectorService(t);
+    this.embedding = new EmbeddingService(t);
+    this.ollama = new OllamaService(t);
 
     // Initialize Security Platform Services (9)
-    this.auth = new AuthService(this.apiClient);
-    this.dataKms = new DataKMSService(this.apiClient);
-    this.secrets = new SecretsService(this.apiClient);
-    this.crypto = new CryptoService(this.apiClient);
-    this.dynamicSecrets = new DynamicSecretsService(this.apiClient);
-    this.certificate = new CertificateService(this.apiClient);
-    this.seal = new SealService(this.apiClient);
-    this.rbac = new RBACService(this.apiClient);
-    this.clusterDek = new ClusterDEKService(this.apiClient);
+    this.auth = new AuthService(t);
+    this.dataKms = new DataKMSService(t);
+    this.secrets = new SecretsService(t);
+    this.crypto = new CryptoService(t);
+    this.dynamicSecrets = new DynamicSecretsService(t);
+    this.certificate = new CertificateService(t);
+    this.seal = new SealService(t);
+    this.rbac = new RBACService(t);
+    this.clusterDek = new ClusterDEKService(t);
 
     // Initialize Infrastructure Platform Services (9)
-    this.cluster = new ClusterService(this.apiClient);
-    this.health = new HealthService(this.apiClient);
-    this.operations = new OperationsService(this.apiClient);
-    this.cache = new CacheService(this.apiClient);
-    this.parameterStore = new ParameterStoreService(this.apiClient);
-    this.scheduler = new SchedulerService(this.apiClient);
-    this.quicBaaSObjectStorage = new ObjectStorageService(this.apiClient);
-    this.quicBaaSObjectStorageAdmin = new ObjectStorageAdminService(this.apiClient);
-    this.objectTransfer = new ObjectTransferService(this.apiClient);
+    this.cluster = new ClusterService(t);
+    this.health = new HealthService(t);
+    this.operations = new OperationsService(t);
+    this.cache = new CacheService(t);
+    this.parameterStore = new ParameterStoreService(t);
+    this.scheduler = new SchedulerService(t);
+    this.quicBaaSObjectStorage = new ObjectStorageService(t);
+    this.quicBaaSObjectStorageAdmin = new ObjectStorageAdminService(t);
+    this.objectTransfer = new ObjectTransferService(t);
 
     // Initialize Data Identity Platform Service (1)
-    this.dataIam = new DataIAMService(this.apiClient);
+    this.dataIam = new DataIAMService(t);
   }
 
   /**

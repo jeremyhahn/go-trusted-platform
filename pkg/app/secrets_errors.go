@@ -155,36 +155,6 @@ func (e ErrContextCanceled) Unwrap() error {
 	return e.Cause
 }
 
-// ErrInvalidAutoGenURI is returned when an autogen URI is malformed.
-type ErrInvalidAutoGenURI struct {
-	URI    string
-	Reason string
-}
-
-func (e ErrInvalidAutoGenURI) Error() string {
-	if e.Reason != "" {
-		return fmt.Sprintf("invalid autogen URI %q: %s", e.URI, e.Reason)
-	}
-	return fmt.Sprintf("invalid autogen URI: %s", e.URI)
-}
-
-// ErrAutoGenFailed is returned when auto-generation of a secret fails.
-type ErrAutoGenFailed struct {
-	URI   string
-	Cause error
-}
-
-func (e ErrAutoGenFailed) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("failed to auto-generate secret for %s: %v", e.URI, e.Cause)
-	}
-	return fmt.Sprintf("failed to auto-generate secret for %s", e.URI)
-}
-
-func (e ErrAutoGenFailed) Unwrap() error {
-	return e.Cause
-}
-
 // ErrKMSNotAvailable is returned when KMS is required but not available.
 type ErrKMSNotAvailable struct{}
 
@@ -370,5 +340,58 @@ func (e ErrXKMSGetKeyFailed) Error() string {
 }
 
 func (e ErrXKMSGetKeyFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrConfigDecryptFailed is returned when decrypting a config value with the
+// platform config-encryption key fails.
+type ErrConfigDecryptFailed struct {
+	Cause error
+}
+
+func (e ErrConfigDecryptFailed) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("config decryption failed: %v", e.Cause)
+	}
+	return "config decryption failed"
+}
+
+func (e ErrConfigDecryptFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrInvalidCiphertextLength is returned when the ciphertext is too short
+// to contain a valid nonce and ciphertext.
+type ErrInvalidCiphertextLength struct {
+	Length   int
+	MinBytes int
+}
+
+func (e ErrInvalidCiphertextLength) Error() string {
+	return fmt.Sprintf("ciphertext too short: got %d bytes, need at least %d", e.Length, e.MinBytes)
+}
+
+// ErrEmptyDecryptResult is returned when the KMS decrypt operation returns
+// an empty plaintext.
+type ErrEmptyDecryptResult struct{}
+
+func (e ErrEmptyDecryptResult) Error() string {
+	return "decrypt returned empty plaintext"
+}
+
+// ErrConfigKeyGenerateFailed is returned when generating the platform
+// config-encryption key fails.
+type ErrConfigKeyGenerateFailed struct {
+	Cause error
+}
+
+func (e ErrConfigKeyGenerateFailed) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("failed to generate platform config-encryption key: %v", e.Cause)
+	}
+	return "failed to generate platform config-encryption key"
+}
+
+func (e ErrConfigKeyGenerateFailed) Unwrap() error {
 	return e.Cause
 }

@@ -69,6 +69,11 @@ type ISOBuildConfig struct {
 	// This is exported from the server's CA and installed to the client's OS trust store
 	CABundlePath string `yaml:"ca-bundle-path" json:"ca_bundle_path"`
 
+	// CA key algorithm filter - when set, only include certs for this key algorithm
+	// Maps to the CA bundle endpoint: /api/v1/acme/ca-bundle/{storeType}/{keyAlgo}
+	// Empty means include all algorithms (default bundle)
+	CAKeyAlgorithm string `yaml:"ca-key-algorithm" json:"ca_key_algorithm"`
+
 	// Installer configuration file (disk layout, LUKS, TPM settings)
 
 	// WebUI path (public_html directory or tarball)
@@ -396,12 +401,49 @@ func (c *ISOBuildConfig) ResolveWorkDir() (string, error) {
 	return workDir, nil
 }
 
+// ErrPlatformdBinaryName is returned when the resolved binary cannot be
+// recognized as platformd. The Name and Path fields preserve the rejected
+// input for diagnostics; the Reason explains which check failed.
+type ErrPlatformdBinaryName struct {
+	Name   string
+	Path   string
+	Reason string
+}
+
+// Error implements the error interface.
+func (e *ErrPlatformdBinaryName) Error() string {
+	return "iso: " + e.Reason + " (got " + e.Name + " at " + e.Path + ")"
+}
+
 // ValidatePlatformdBinaryName checks that the resolved binary is platformd.
+// It accepts any basename whose lowercase form contains the substring
+// "platformd" so that prefixed builds (e.g. "my-platformd",
+// "platformd-fips") still validate. The companion CLI binary "platformctl"
+// is explicitly rejected with a typed error mentioning "platformctl" to give
+// callers a clear remediation hint regardless of case.
 func ValidatePlatformdBinaryName(path string) error {
 	name := filepath.Base(path)
-	if name != "platformd" {
-		return fmt.Errorf("expected platformd binary, got %s at %s", name, path)
+	lower := strings.ToLower(name)
+
+	// Reject the companion CLI explicitly first so a binary named
+	// "PlatformCtl" or "platformctl-debug" doesn't slip through the
+	// "contains platformd" check (it doesn't, but be explicit).
+	if strings.Contains(lower, "platformctl") {
+		return &ErrPlatformdBinaryName{
+			Name:   name,
+			Path:   path,
+			Reason: "binary appears to be platformctl, not platformd",
+		}
 	}
+
+	if !strings.Contains(lower, "platformd") {
+		return &ErrPlatformdBinaryName{
+			Name:   name,
+			Path:   path,
+			Reason: "binary does not appear to be platformd",
+		}
+	}
+
 	return nil
 }
 

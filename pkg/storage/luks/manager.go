@@ -26,7 +26,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/drive"
 
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // Manager provides high-level LUKS operations with TPM integration

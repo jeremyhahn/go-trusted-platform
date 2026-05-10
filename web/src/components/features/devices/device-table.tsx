@@ -58,7 +58,7 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
     },
     {
       onSuccess: (data, deviceId) => {
-        const device = devices.find(d => Number(d.id) === deviceId);
+        const device = devices.find(d => String(d.id) === String(deviceId));
         toast({
           title: 'Attestation Started',
           description: `Running attestation for ${device?.name}...`,
@@ -124,7 +124,7 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
   const handleAttest = async (device: Device) => {
     setLoadingId(device.id);
     try {
-      await attestMutation.mutateAsync(Number(device.id));
+      await attestMutation.mutateAsync(device.id as any);
     } finally {
       setLoadingId(null);
     }
@@ -134,7 +134,7 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
     setLoadingId(device.id);
     try {
       const status: Device['status'] = device.status === 'disabled' ? 'online' : 'disabled';
-      await updateMutation.mutateAsync({ id: Number(device.id), status });
+      await updateMutation.mutateAsync({ id: device.id as any, status });
     } finally {
       setLoadingId(null);
     }
@@ -147,7 +147,7 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
 
     setLoadingId(device.id);
     try {
-      await deleteMutation.mutateAsync(Number(device.id));
+      await deleteMutation.mutateAsync(device.id as any);
     } finally {
       setLoadingId(null);
     }

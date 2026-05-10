@@ -102,3 +102,43 @@ type ErrMissingHostname struct{}
 func (e ErrMissingHostname) Error() string {
 	return "device: hostname is required"
 }
+
+// ErrMissingDeviceIdentifier indicates that at least one of mac or serial query
+// parameters is required.
+type ErrMissingDeviceIdentifier struct{}
+
+func (e ErrMissingDeviceIdentifier) Error() string {
+	return "device: at least one of mac or serial query parameter is required"
+}
+
+// ErrProfileNotFound indicates that no profile was found matching the device
+// identifier.
+type ErrProfileNotFound struct {
+	MAC    string
+	Serial string
+}
+
+func (e ErrProfileNotFound) Error() string {
+	return "device: no matching profile found for mac=" + e.MAC + " serial=" + e.Serial
+}
+
+// ErrProfileConfigEmpty indicates that the matched profile has no config.
+type ErrProfileConfigEmpty struct {
+	ProfileID uint64
+}
+
+func (e ErrProfileConfigEmpty) Error() string {
+	return "device: profile has no config"
+}
+
+// ErrConfigMarshalFailed indicates YAML marshaling of the profile config failed.
+type ErrConfigMarshalFailed struct {
+	Cause error
+}
+
+func (e ErrConfigMarshalFailed) Error() string {
+	if e.Cause != nil {
+		return "device: failed to marshal config: " + e.Cause.Error()
+	}
+	return "device: failed to marshal config"
+}

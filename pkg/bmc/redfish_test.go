@@ -23,6 +23,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/memguard"
 )
 
 // mockRedfishServer creates an httptest.Server that simulates a Redfish BMC API.
@@ -140,7 +142,7 @@ func mockRedfishServer(t *testing.T) (*httptest.Server, *mockRedfishState) {
 	})
 
 	// Thermal.
-	mux.HandleFunc("/redfish/v1/Chassis/1/Thermal", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/redfish/v1/Chassis/1/Thermal", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, redfishThermal{
 			Temperatures: []redfishTemperature{
 				{
@@ -172,7 +174,7 @@ func mockRedfishServer(t *testing.T) (*httptest.Server, *mockRedfishState) {
 	})
 
 	// Power.
-	mux.HandleFunc("/redfish/v1/Chassis/1/Power", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/redfish/v1/Chassis/1/Power", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, redfishPower{
 			PowerControl: []redfishPowerControl{
 				{
@@ -299,25 +301,16 @@ type mockRedfishState struct {
 func newTestRedfishClient(t *testing.T, server *httptest.Server) *redfishClient {
 	t.Helper()
 
-	// Parse the server URL to get host and port.
-	addr := server.Listener.Addr().String()
-	parts := strings.SplitN(addr, ":", 2)
-
-	config := &Config{
-		Address:       parts[0],
-		Port:          443, // Will be overridden by baseURL
-		Username:      "admin",
-		Password:      "password",
-		Protocol:      ProtocolRedfish,
-		SkipTLSVerify: true,
-	}
-
 	logger := slog.Default()
 	rc := &redfishClient{
-		config:     config,
-		logger:     logger,
-		baseURL:    server.URL,
-		httpClient: server.Client(),
+		logger: logger,
+		transport: &redfishTransport{
+			httpClient: server.Client(),
+			baseURL:    server.URL,
+			username:   "admin",
+			password:   memguard.NewFromString("password"),
+			logger:     logger,
+		},
 	}
 	return rc
 }
@@ -877,6 +870,62 @@ func TestRedfishClient_UnmountISO(t *testing.T) {
 			t.Fatal("expected error for closed client")
 		}
 	})
+
+	// X10 hardware quirk: after the IPMI eject path runs, the BMC
+	// clears the VirtualMedia collection. The follow-on Redfish
+	// best-effort unmount must treat this as success rather than
+	// flagging "redfish collection VirtualMedia has no members" as
+	// an error on every node post-deploy.
+	t.Run("empty VirtualMedia collection is success (already unmounted)", func(t *testing.T) {
+		emptyMux := http.NewServeMux()
+		emptyMux.HandleFunc("/redfish/v1/", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/redfish/v1/" {
+				http.NotFound(w, r)
+				return
+			}
+			writeJSON(w, redfishServiceRoot{
+				Systems:  redfishRef{ODataID: "/redfish/v1/Systems"},
+				Chassis:  redfishRef{ODataID: "/redfish/v1/Chassis"},
+				Managers: redfishRef{ODataID: "/redfish/v1/Managers"},
+			})
+		})
+		emptyMux.HandleFunc("/redfish/v1/Systems", func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, redfishCollection{Members: []redfishRef{{ODataID: "/redfish/v1/Systems/1"}}})
+		})
+		emptyMux.HandleFunc("/redfish/v1/Systems/1", func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, redfishSystem{Manufacturer: "TestVendor"})
+		})
+		emptyMux.HandleFunc("/redfish/v1/Chassis", func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, redfishCollection{Members: []redfishRef{{ODataID: "/redfish/v1/Chassis/1"}}})
+		})
+		emptyMux.HandleFunc("/redfish/v1/Chassis/1", func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, struct{}{})
+		})
+		emptyMux.HandleFunc("/redfish/v1/Managers", func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, redfishCollection{Members: []redfishRef{{ODataID: "/redfish/v1/Managers/1"}}})
+		})
+		emptyMux.HandleFunc("/redfish/v1/Managers/1", func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, struct {
+				VirtualMedia redfishRef `json:"VirtualMedia"`
+			}{
+				VirtualMedia: redfishRef{ODataID: "/redfish/v1/Managers/1/VirtualMedia"},
+			})
+		})
+		// The collection exists but contains zero members.
+		emptyMux.HandleFunc("/redfish/v1/Managers/1/VirtualMedia", func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, redfishCollection{Members: []redfishRef{}})
+		})
+
+		emptyServer := httptest.NewServer(emptyMux)
+		t.Cleanup(emptyServer.Close)
+
+		client := newTestRedfishClient(t, emptyServer)
+		t.Cleanup(func() { client.Close() })
+
+		if err := client.UnmountISO(context.Background()); err != nil {
+			t.Fatalf("UnmountISO with empty VirtualMedia collection should be no-op success, got: %v", err)
+		}
+	})
 }
 
 func TestRedfishClient_VirtualMediaStatus(t *testing.T) {
@@ -1011,8 +1060,9 @@ func TestRedfishClient_HTTPErrorHandling(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(redfishError{
 				Error: struct {
-					Code    string `json:"code"`
-					Message string `json:"message"`
+					Code         string                `json:"code"`
+					Message      string                `json:"message"`
+					ExtendedInfo []redfishExtendedInfo `json:"@Message.ExtendedInfo"`
 				}{
 					Code:    "Base.1.0.GeneralError",
 					Message: "internal server error occurred",

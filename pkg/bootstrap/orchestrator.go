@@ -16,16 +16,19 @@ package bootstrap
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container"
-	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/switch"
+	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
 )
 
 const (
@@ -170,7 +173,15 @@ func NewOrchestrator(params OrchestratorParams) (*Orchestrator, error) {
 	}
 	healthChk := params.HealthChecker
 	if healthChk == nil {
-		healthChk = newHTTPHealthChecker(logger)
+		hc := newHTTPHealthChecker(logger)
+		// Wire the pxeboot base URL so the checker can consult the
+		// node-uploaded registration.json as the authoritative signal
+		// that platformd is actually running, instead of guessing at
+		// webservice ports.
+		if url, err := installLogBaseURL(&params.Config.Deployer); err == nil {
+			hc.WithPxebootURL(url)
+		}
+		healthChk = hc
 	}
 	configDir := ""
 	if params.ConfigPath != "" {
@@ -509,12 +520,28 @@ func (o *Orchestrator) seedTemplates(ctx context.Context) error {
 	// Resolve the control-plane IP from registration.json (uploaded by
 	// platformd after first-boot). The hostname alone won't resolve
 	// because DNS isn't running yet during bootstrap.
+	// Resolution order: (1) platformd-uploaded registration.json (most
+	// authoritative — it's the IP platformd ACTUALLY listens on);
+	// (2) operator-declared static IP from overrides.network.interfaces
+	// (reliable when registration.json is missing because first-boot
+	// forensic uploader hasn't run yet); (3) hostname (last resort —
+	// may DNS-resolve to a stale/wrong address on shared homelab DNS).
 	controlHost := cpNodes[0].Hostname
+	controlMACs := allNodeMACs(&cpNodes[0])
+	resolved := false
 	if baseURL, urlErr := installLogBaseURL(&o.config.Deployer); urlErr == nil {
-		if regIP, fetchErr := fetchRegistrationIP(baseURL, controlHost); fetchErr == nil && regIP != "" {
+		if regIP, fetchErr := fetchRegistrationIP(baseURL, controlHost, controlMACs); fetchErr == nil && regIP != "" {
 			controlHost = regIP
+			resolved = true
 			o.logger.Info("bootstrap: resolved control-plane IP from registration",
 				slog.String("ip", regIP))
+		}
+	}
+	if !resolved {
+		if staticIPs := staticIPsFromOverrides(cpNodes[0].Overrides); len(staticIPs) > 0 {
+			controlHost = staticIPs[0]
+			o.logger.Info("bootstrap: resolved control-plane IP from overrides static IP",
+				slog.String("ip", controlHost))
 		}
 	}
 	controlAddr := controlHost + ":8443"
@@ -716,56 +743,120 @@ func buildSwitchConfig(sc *SwitchConfig) *switchmgmt.Config {
 	}
 }
 
-// httpHealthChecker implements HealthChecker using HTTP GET against the REST health endpoint.
+// httpHealthChecker implements HealthChecker by consulting the node's
+// registration.json that platformd POSTs to the pxeboot server on
+// successful startup, with an HTTPS /api/v1/status fallback.
+//
+// The registration.json path is authoritative: the node self-reports
+// `{"services":{"platformd":"running","sshd":"running"}}` after it has
+// fully booted and all services are listening. Polling that artifact
+// avoids having to guess the correct webservice port (CP uses 8443,
+// gateway uses 443/9443) and avoids the need for InsecureSkipVerify
+// against a not-yet-trusted CA.
 type httpHealthChecker struct {
-	client *http.Client
-	logger *slog.Logger
+	client     *http.Client
+	logger     *slog.Logger
+	pxebootURL string
+	httpsPorts []int
 }
 
-// newHTTPHealthChecker creates a health checker that uses HTTPS with TLS verification
-// disabled. During initial bootstrap the CA does not yet exist on the target nodes,
-// so the health check cannot validate certificates. A warning is logged on creation.
+// newHTTPHealthChecker creates a health checker that first probes the
+// pxeboot-hosted registration.json (plain HTTP, known-trusted) and
+// falls back to HTTPS /api/v1/status across the candidate platformd
+// ports. HTTPS fallback uses InsecureSkipVerify because the ACME-issued
+// cert is signed by the node's local CA, which the orchestrator hasn't
+// bootstrapped yet; this is a deliberate trade-off limited to initial
+// provisioning.
 func newHTTPHealthChecker(logger *slog.Logger) *httpHealthChecker {
-	logger.Warn("bootstrap: health checker using insecure TLS (CA not yet bootstrapped)")
 	// Force the pure-Go DNS resolver to avoid SIGFPE in CGO's getaddrinfo
-	// when running as a statically linked binary with glibc. The CGO resolver
-	// calls glibc's getaddrinfo which can crash with a floating-point
-	// exception in certain static-linking configurations.
+	// when running as a statically linked binary with glibc.
 	goResolver := &net.Resolver{PreferGo: true}
 	dialer := &net.Dialer{
-		Timeout:  10 * time.Second,
+		Timeout:  5 * time.Second,
 		Resolver: goResolver,
 	}
 	return &httpHealthChecker{
 		client: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout: 8 * time.Second,
 			Transport: &http.Transport{
 				DialContext: dialer.DialContext,
 				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true, //nolint:gosec // Required during initial bootstrap before CA exists.
+					InsecureSkipVerify: true, //nolint:gosec // initial bootstrap, CA not yet trusted
 				},
 			},
 		},
-		logger: logger,
+		logger:     logger,
+		httpsPorts: []int{8443, 9443, 443},
 	}
 }
 
-// Check performs an HTTPS GET to the node's health endpoint.
+// WithPxebootURL sets the base URL for the pxeboot server so the
+// registration-json probe can be constructed. Safe to call before Check.
+func (h *httpHealthChecker) WithPxebootURL(u string) {
+	h.pxebootURL = strings.TrimSuffix(u, "/")
+}
+
+// regStatus is the minimal shape of registration.json that the firstboot
+// forensic-upload script writes to pxeboot.
+type regStatus struct {
+	Hostname  string            `json:"hostname"`
+	IP        string            `json:"ip"`
+	Timestamp time.Time         `json:"timestamp"`
+	Services  map[string]string `json:"services"`
+}
+
+// Check reports the node healthy only when an HTTPS probe on the
+// platformd API returns 200. registration.json (pxeboot) supplies the
+// target IP when the hostname wouldn't resolve, but it is never
+// authoritative on its own — the file is written by the forensic
+// uploader early in firstboot, BEFORE platformd reaches listening
+// state, so trusting it would let health return true while :8443 is
+// still down and subsequent seed/gRPC calls fail with "connection
+// refused".
 func (h *httpHealthChecker) Check(ctx context.Context, address string) error {
-	url := "https://" + address + ":8443/api/v1/status"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := h.client.Do(req)
-	if err != nil {
-		return err
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return ErrHealthCheckFailed{
-			Address: address,
+	probeAddr := address
+	if h.pxebootURL != "" {
+		hostname := address
+		if i := strings.Index(hostname, "."); i >= 0 {
+			hostname = hostname[:i]
+		}
+		url := h.pxebootURL + "/installs/" + hostname + "/registration.json"
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err == nil {
+			resp, rerr := h.client.Do(req)
+			if rerr == nil {
+				defer resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					var reg regStatus
+					if derr := json.NewDecoder(resp.Body).Decode(&reg); derr == nil && reg.IP != "" {
+						probeAddr = reg.IP
+					}
+				}
+			}
 		}
 	}
-	return nil
+
+	var lastErr error
+	for _, port := range h.httpsPorts {
+		url := fmt.Sprintf("https://%s:%d/api/v1/status", probeAddr, port)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		resp, err := h.client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return nil
+		}
+		lastErr = fmt.Errorf("GET %s returned HTTP %d", url, resp.StatusCode)
+	}
+	if lastErr != nil {
+		return ErrHealthCheckFailed{Address: probeAddr, Cause: lastErr}
+	}
+	return ErrHealthCheckFailed{Address: probeAddr}
 }

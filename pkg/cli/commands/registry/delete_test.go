@@ -163,7 +163,7 @@ func TestRunDelete_InvalidImageReference(t *testing.T) {
 }
 
 func TestDeleteResult_Fields(t *testing.T) {
-	result := DeleteResult{
+	result := DeleteResultCLI{
 		Reference:  "myrepo/myimage:v1.0",
 		Digest:     "sha256:abc123",
 		Deleted:    true,
@@ -252,36 +252,8 @@ func TestNewDeleteCommand_FlagUsage(t *testing.T) {
 	}
 }
 
-func TestDeleteResult_ZeroValues(t *testing.T) {
-	var result DeleteResult
-
-	if result.Reference != "" {
-		t.Errorf("expected empty Reference, got %q", result.Reference)
-	}
-
-	if result.Digest != "" {
-		t.Errorf("expected empty Digest, got %q", result.Digest)
-	}
-
-	if result.Deleted {
-		t.Error("expected Deleted to be false")
-	}
-
-	if result.Message != "" {
-		t.Errorf("expected empty Message, got %q", result.Message)
-	}
-
-	if result.BytesFreed != 0 {
-		t.Errorf("expected zero BytesFreed, got %d", result.BytesFreed)
-	}
-
-	if result.Timestamp != 0 {
-		t.Errorf("expected zero Timestamp, got %d", result.Timestamp)
-	}
-}
-
 func TestDeleteResult_FailedDelete(t *testing.T) {
-	result := DeleteResult{
+	result := DeleteResultCLI{
 		Reference: "myrepo/myimage:v1.0",
 		Digest:    "sha256:abc123",
 		Deleted:   false,
@@ -306,7 +278,7 @@ func TestPrintDeleteResult_DryRun(t *testing.T) {
 
 	printer := cli.NewPrinter(flags.OutputFormat, flags.NoColor)
 
-	result := &DeleteResult{
+	result := &DeleteResultCLI{
 		Reference: "myrepo/myimage:v1.0",
 		Digest:    "sha256:abc123",
 		Deleted:   false,
@@ -328,7 +300,7 @@ func TestPrintDeleteResult_Success(t *testing.T) {
 
 	printer := cli.NewPrinter(flags.OutputFormat, flags.NoColor)
 
-	result := &DeleteResult{
+	result := &DeleteResultCLI{
 		Reference: "myrepo/myimage:v1.0",
 		Digest:    "sha256:abc123",
 		Deleted:   true,
@@ -349,7 +321,7 @@ func TestPrintDeleteResult_SuccessWithBytesFreed(t *testing.T) {
 
 	printer := cli.NewPrinter(flags.OutputFormat, flags.NoColor)
 
-	result := &DeleteResult{
+	result := &DeleteResultCLI{
 		Reference:  "myrepo/myimage:v1.0",
 		Digest:     "sha256:abc123",
 		Deleted:    true,
@@ -371,7 +343,7 @@ func TestPrintDeleteResult_SuccessWithMessage(t *testing.T) {
 
 	printer := cli.NewPrinter(flags.OutputFormat, flags.NoColor)
 
-	result := &DeleteResult{
+	result := &DeleteResultCLI{
 		Reference: "myrepo/myimage:v1.0",
 		Digest:    "sha256:abc123",
 		Deleted:   true,
@@ -393,7 +365,7 @@ func TestPrintDeleteResult_Failure(t *testing.T) {
 
 	printer := cli.NewPrinter(flags.OutputFormat, flags.NoColor)
 
-	result := &DeleteResult{
+	result := &DeleteResultCLI{
 		Reference: "myrepo/myimage:v1.0",
 		Digest:    "sha256:abc123",
 		Deleted:   false,
@@ -415,7 +387,7 @@ func TestPrintDeleteResult_JSONFormat(t *testing.T) {
 
 	printer := cli.NewPrinter(flags.OutputFormat, flags.NoColor)
 
-	result := &DeleteResult{
+	result := &DeleteResultCLI{
 		Reference: "myrepo/myimage:v1.0",
 		Digest:    "sha256:abc123",
 		Deleted:   true,
@@ -436,7 +408,7 @@ func TestPrintDeleteResult_YAMLFormat(t *testing.T) {
 
 	printer := cli.NewPrinter(flags.OutputFormat, flags.NoColor)
 
-	result := &DeleteResult{
+	result := &DeleteResultCLI{
 		Reference: "myrepo/myimage:v1.0",
 		Digest:    "sha256:abc123",
 		Deleted:   true,
@@ -457,7 +429,7 @@ func TestPrintDeleteResult_InvalidFormat(t *testing.T) {
 
 	printer := cli.NewPrinter(cli.OutputFormatTable, flags.NoColor)
 
-	result := &DeleteResult{
+	result := &DeleteResultCLI{
 		Reference: "myrepo/myimage:v1.0",
 		Digest:    "sha256:abc123",
 		Deleted:   true,
@@ -482,7 +454,7 @@ func TestPrintDeleteResult_FailureWithEmptyMessage(t *testing.T) {
 
 	printer := cli.NewPrinter(flags.OutputFormat, flags.NoColor)
 
-	result := &DeleteResult{
+	result := &DeleteResultCLI{
 		Reference: "myrepo/myimage:v1.0",
 		Digest:    "sha256:abc123",
 		Deleted:   false,

@@ -14,10 +14,20 @@
 package platform
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"log/slog"
+	"math/big"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,6 +39,30 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
+
+// writeTestCACert writes a self-signed CA certificate to a temp file and
+// returns its path. Used to satisfy the remote-transport TLS validators
+// without disabling certificate verification.
+func writeTestCACert(t *testing.T) string {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	require.NoError(t, err)
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	path := filepath.Join(t.TempDir(), "ca.pem")
+	require.NoError(t, os.WriteFile(path, pemBytes, 0o600))
+	return path
+}
 
 // =============================================================================
 // NewRegistry Tests
@@ -875,13 +909,16 @@ func TestErrServiceUnavailable_AllServices(t *testing.T) {
 
 func TestRegistry_QuicBaaSConfig_RemoteMode(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
+	caPath := writeTestCACert(t)
 
-	// Test with gRPC transport (remote mode)
+	// Test with gRPC transport (remote mode). Remote transports require
+	// a CA certificate path so TLS verification can be enforced.
 	cfg := &RegistryConfig{
 		Logger: logger,
 		QuicBaaSConfig: &quicbaas.Config{
 			Transport: quicbaas.TransportGRPC,
 			Address:   "localhost:10443",
+			TLS:       &quicbaas.TLSConfig{CACert: caPath},
 		},
 	}
 
@@ -898,12 +935,14 @@ func TestRegistry_QuicBaaSConfig_RemoteMode(t *testing.T) {
 
 func TestRegistry_CAConfig_RemoteMode(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
+	caPath := writeTestCACert(t)
 
 	cfg := &RegistryConfig{
 		Logger: logger,
 		CAConfig: &ca.Config{
 			Transport: ca.TransportGRPC,
 			Address:   "localhost:10444",
+			TLS:       &ca.TLSConfig{CACert: caPath},
 		},
 	}
 
@@ -919,12 +958,14 @@ func TestRegistry_CAConfig_RemoteMode(t *testing.T) {
 
 func TestRegistry_XKMSConfig_RemoteMode(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
+	caPath := writeTestCACert(t)
 
 	cfg := &RegistryConfig{
 		Logger: logger,
 		XKMSConfig: &xkms.Config{
 			Transport: xkms.TransportGRPC,
 			Address:   "localhost:10445",
+			TLS:       &xkms.TLSConfig{CACert: caPath},
 		},
 	}
 
@@ -957,13 +998,19 @@ func TestRegistry_QuicBaaSConfig_AllTransports(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			qbCfg := &quicbaas.Config{
+				Transport:  tc.transport,
+				Address:    tc.address,
+				UnixSocket: tc.socket,
+			}
+			// Remote transports enforce TLS verification; embedded mode
+			// does not require a CA certificate.
+			if !tc.embedded {
+				qbCfg.TLS = &quicbaas.TLSConfig{CACert: writeTestCACert(t)}
+			}
 			cfg := &RegistryConfig{
-				Logger: logger,
-				QuicBaaSConfig: &quicbaas.Config{
-					Transport:  tc.transport,
-					Address:    tc.address,
-					UnixSocket: tc.socket,
-				},
+				Logger:         logger,
+				QuicBaaSConfig: qbCfg,
 			}
 
 			registry, err := NewRegistry(cfg)

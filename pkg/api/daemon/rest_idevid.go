@@ -22,7 +22,7 @@ import (
 	"net/http"
 	"time"
 
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // =============================================================================

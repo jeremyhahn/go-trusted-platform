@@ -979,7 +979,11 @@ func TestCoverage_SignZoneIfEnabled_NoAdapterOrKeyStore(t *testing.T) {
 
 	zone := &entities.Zone{Name: "test.com."}
 	err := signZoneIfEnabled(zone)
-	assert.NoError(t, err) // gracefully skips
+	// HARD FAIL: DNSSEC enabled but no backend configured. The function
+	// must not silently skip — operators required this behavior in 2026-04
+	// after a regression where unsigned zones were persisted as "signed".
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no key store and no XKMS adapter are configured")
 }
 
 func TestCoverage_SetDNSSECKeyStore(t *testing.T) {

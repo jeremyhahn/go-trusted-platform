@@ -45,7 +45,7 @@ func TestRegisterRoutes(t *testing.T) {
 	sdnRouter := NewSDNRouter(logger, mock, respWriter)
 	router := mux.NewRouter()
 
-	sdnRouter.RegisterRoutes(router)
+	sdnRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	// Test that routes are registered by checking if they match
 
@@ -99,7 +99,7 @@ func TestRouterHandlerExecution(t *testing.T) {
 
 	sdnRouter := NewSDNRouter(logger, mock, respWriter)
 	router := mux.NewRouter()
-	sdnRouter.RegisterRoutes(router)
+	sdnRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	// Test that a route can actually be executed
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/policies", nil)

@@ -15,6 +15,7 @@ package ipxe
 
 import (
 	"context"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net/http"
@@ -367,6 +368,12 @@ func TestHTTPServer_handleProxy(t *testing.T) {
 	testServer.StartTLS()
 	defer testServer.Close()
 
+	// Trust the test server's self-signed cert via ProxyCACertPool — the
+	// production proxy enforces full TLS verification and we must never
+	// disable it (no InsecureSkipVerify, even in tests).
+	proxyTrust := x509.NewCertPool()
+	proxyTrust.AddCert(testServer.Certificate())
+
 	// Extract host and port from test server URL
 	testURL := strings.TrimPrefix(testServer.URL, "https://")
 
@@ -402,6 +409,7 @@ func TestHTTPServer_handleProxy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := DefaultServerConfig()
+			cfg.ProxyCACertPool = proxyTrust
 			server := newTestHTTPServer(t, cfg)
 
 			req := httptest.NewRequest("GET", tt.path, nil)

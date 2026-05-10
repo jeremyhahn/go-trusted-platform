@@ -322,3 +322,265 @@ type VMStatus struct {
 	// Message is the status message.
 	Message string `json:"message,omitempty" yaml:"message,omitempty"`
 }
+
+// Container Types
+
+// ContainerState represents the lifecycle state of a container.
+type ContainerState string
+
+const (
+	// ContainerStateUnspecified indicates the container state is unknown.
+	ContainerStateUnspecified ContainerState = "UNSPECIFIED"
+	// ContainerStateCreated indicates the container has been created.
+	ContainerStateCreated ContainerState = "CREATED"
+	// ContainerStateStarting indicates the container is starting.
+	ContainerStateStarting ContainerState = "STARTING"
+	// ContainerStateRunning indicates the container is running.
+	ContainerStateRunning ContainerState = "RUNNING"
+	// ContainerStatePaused indicates the container is paused.
+	ContainerStatePaused ContainerState = "PAUSED"
+	// ContainerStateStopping indicates the container is stopping.
+	ContainerStateStopping ContainerState = "STOPPING"
+	// ContainerStateStopped indicates the container is stopped.
+	ContainerStateStopped ContainerState = "STOPPED"
+	// ContainerStateExited indicates the container has exited.
+	ContainerStateExited ContainerState = "EXITED"
+	// ContainerStateError indicates the container is in an error state.
+	ContainerStateError ContainerState = "ERROR"
+)
+
+// RestartPolicy represents a container restart policy.
+type RestartPolicy string
+
+const (
+	// RestartPolicyUnspecified indicates no restart policy is set.
+	RestartPolicyUnspecified RestartPolicy = "UNSPECIFIED"
+	// RestartPolicyNo indicates the container should not be restarted.
+	RestartPolicyNo RestartPolicy = "no"
+	// RestartPolicyOnFailure indicates the container should restart on failure.
+	RestartPolicyOnFailure RestartPolicy = "on-failure"
+	// RestartPolicyAlways indicates the container should always restart.
+	RestartPolicyAlways RestartPolicy = "always"
+	// RestartPolicyUnlessStopped indicates the container should restart unless stopped.
+	RestartPolicyUnlessStopped RestartPolicy = "unless-stopped"
+)
+
+// Container represents a container with its full state.
+type Container struct {
+	// ID is the unique identifier for the container.
+	ID string `json:"id" yaml:"id"`
+	// Config is the container configuration.
+	Config *ContainerConfig `json:"config,omitempty" yaml:"config,omitempty"`
+	// State is the current lifecycle state.
+	State ContainerState `json:"state" yaml:"state"`
+	// CreatedAt is when the container was created.
+	CreatedAt time.Time `json:"created_at" yaml:"created_at"`
+	// StartedAt is when the container was last started.
+	StartedAt time.Time `json:"started_at,omitempty" yaml:"started_at,omitempty"`
+	// FinishedAt is when the container last finished.
+	FinishedAt time.Time `json:"finished_at,omitempty" yaml:"finished_at,omitempty"`
+	// ExitCode is the container exit code.
+	ExitCode int32 `json:"exit_code,omitempty" yaml:"exit_code,omitempty"`
+	// HostID is the host where the container is running.
+	HostID string `json:"host_id,omitempty" yaml:"host_id,omitempty"`
+	// Metrics contains runtime metrics for the container.
+	Metrics *ContainerMetrics `json:"metrics,omitempty" yaml:"metrics,omitempty"`
+}
+
+// ContainerConfig contains the configuration for a container.
+type ContainerConfig struct {
+	// Name is the container name.
+	Name string `json:"name" yaml:"name"`
+	// Image is the container image.
+	Image string `json:"image" yaml:"image"`
+	// ImageHash is the image content hash.
+	ImageHash string `json:"image_hash,omitempty" yaml:"image_hash,omitempty"`
+	// Env is the list of environment variables.
+	Env []*EnvVar `json:"env,omitempty" yaml:"env,omitempty"`
+	// Labels are key-value metadata labels.
+	Labels map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
+	// Ports is the list of port mappings.
+	Ports []*PortMapping `json:"ports,omitempty" yaml:"ports,omitempty"`
+	// Volumes is the list of volume mounts.
+	Volumes []*VolumeMount `json:"volumes,omitempty" yaml:"volumes,omitempty"`
+	// Command is the command to run.
+	Command []string `json:"command,omitempty" yaml:"command,omitempty"`
+	// Args is the command arguments.
+	Args []string `json:"args,omitempty" yaml:"args,omitempty"`
+	// WorkingDir is the working directory inside the container.
+	WorkingDir string `json:"working_dir,omitempty" yaml:"working_dir,omitempty"`
+	// Privileged indicates whether the container runs in privileged mode.
+	Privileged bool `json:"privileged" yaml:"privileged"`
+	// TpmAccess indicates whether the host TPM is mounted into the container.
+	TpmAccess bool `json:"tpm_access" yaml:"tpm_access"`
+	// Network is the network mode.
+	Network string `json:"network,omitempty" yaml:"network,omitempty"`
+	// RestartPolicy is the container restart policy.
+	RestartPolicy RestartPolicy `json:"restart_policy,omitempty" yaml:"restart_policy,omitempty"`
+	// Resources is the resource limits.
+	Resources *ResourceLimits `json:"resources,omitempty" yaml:"resources,omitempty"`
+	// Capabilities is the list of Linux capabilities to add.
+	Capabilities []string `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
+	// Metadata are key-value metadata entries.
+	Metadata map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty"`
+}
+
+// EnvVar represents an environment variable.
+type EnvVar struct {
+	// Name is the variable name.
+	Name string `json:"name" yaml:"name"`
+	// Value is the variable value.
+	Value string `json:"value" yaml:"value"`
+}
+
+// PortMapping represents a container port mapping.
+type PortMapping struct {
+	// HostPort is the port on the host.
+	HostPort uint32 `json:"host_port" yaml:"host_port"`
+	// ContainerPort is the port inside the container.
+	ContainerPort uint32 `json:"container_port" yaml:"container_port"`
+	// Protocol is the protocol (tcp, udp).
+	Protocol string `json:"protocol" yaml:"protocol"`
+	// HostIP is the host IP to bind.
+	HostIP string `json:"host_ip,omitempty" yaml:"host_ip,omitempty"`
+}
+
+// VolumeMount represents a container volume mount.
+type VolumeMount struct {
+	// Source is the host path or volume name.
+	Source string `json:"source" yaml:"source"`
+	// Destination is the mount path inside the container.
+	Destination string `json:"destination" yaml:"destination"`
+	// Readonly indicates whether the mount is read-only.
+	Readonly bool `json:"readonly" yaml:"readonly"`
+}
+
+// ResourceLimits contains resource limits for a container.
+type ResourceLimits struct {
+	// MaxMemoryMB is the maximum memory in megabytes.
+	MaxMemoryMB uint64 `json:"max_memory_mb,omitempty" yaml:"max_memory_mb,omitempty"`
+	// MaxCPUs is the maximum number of CPUs.
+	MaxCPUs uint32 `json:"max_cpus,omitempty" yaml:"max_cpus,omitempty"`
+}
+
+// ContainerMetrics contains runtime metrics for a container.
+type ContainerMetrics struct {
+	// CPUUsagePercent is the CPU usage percentage.
+	CPUUsagePercent float64 `json:"cpu_usage_percent" yaml:"cpu_usage_percent"`
+	// MemoryUsedMB is the used memory in megabytes.
+	MemoryUsedMB uint64 `json:"memory_used_mb" yaml:"memory_used_mb"`
+	// MemoryLimitMB is the memory limit in megabytes.
+	MemoryLimitMB uint64 `json:"memory_limit_mb,omitempty" yaml:"memory_limit_mb,omitempty"`
+	// DiskReadBytes is the total disk read bytes.
+	DiskReadBytes uint64 `json:"disk_read_bytes" yaml:"disk_read_bytes"`
+	// DiskWriteBytes is the total disk write bytes.
+	DiskWriteBytes uint64 `json:"disk_write_bytes" yaml:"disk_write_bytes"`
+	// NetworkRxBytes is the total network receive bytes.
+	NetworkRxBytes uint64 `json:"network_rx_bytes" yaml:"network_rx_bytes"`
+	// NetworkTxBytes is the total network transmit bytes.
+	NetworkTxBytes uint64 `json:"network_tx_bytes" yaml:"network_tx_bytes"`
+	// UptimeSeconds is the container uptime in seconds.
+	UptimeSeconds uint32 `json:"uptime_seconds" yaml:"uptime_seconds"`
+}
+
+// LogEntry represents a container log entry.
+type LogEntry struct {
+	// Timestamp is when the log entry was generated.
+	Timestamp time.Time `json:"timestamp" yaml:"timestamp"`
+	// Stream is the log stream (stdout, stderr).
+	Stream string `json:"stream,omitempty" yaml:"stream,omitempty"`
+	// Message is the log message.
+	Message string `json:"message" yaml:"message"`
+}
+
+// ContainerStatus represents the status response from a container operation.
+type ContainerStatus struct {
+	// Success indicates whether the operation succeeded.
+	Success bool `json:"success" yaml:"success"`
+	// Message is the status message.
+	Message string `json:"message,omitempty" yaml:"message,omitempty"`
+}
+
+// CreateContainerParams contains parameters for creating a new container.
+type CreateContainerParams struct {
+	// Name is the container name.
+	Name string
+	// Image is the container image.
+	Image string
+	// Env is the list of environment variables.
+	Env []*EnvVar
+	// Labels are key-value metadata labels.
+	Labels map[string]string
+	// Ports is the list of port mappings.
+	Ports []*PortMapping
+	// Volumes is the list of volume mounts.
+	Volumes []*VolumeMount
+	// Command is the command to run.
+	Command []string
+	// Args is the command arguments.
+	Args []string
+	// WorkingDir is the working directory inside the container.
+	WorkingDir string
+	// Privileged indicates whether the container runs in privileged mode.
+	Privileged bool
+	// TpmAccess indicates whether the host TPM is mounted into the container.
+	TpmAccess bool
+	// Network is the network mode.
+	Network string
+	// RestartPolicy is the container restart policy.
+	RestartPolicy RestartPolicy
+	// Resources is the resource limits.
+	Resources *ResourceLimits
+	// Capabilities is the list of Linux capabilities to add.
+	Capabilities []string
+	// Metadata are key-value metadata entries.
+	Metadata map[string]string
+	// Start indicates whether to start the container after creation.
+	Start bool
+}
+
+// StopContainerParams contains parameters for stopping a container.
+type StopContainerParams struct {
+	// ID is the container identifier.
+	ID string
+	// TimeoutSeconds is the timeout before force stop.
+	TimeoutSeconds uint32
+}
+
+// DeleteContainerParams contains parameters for deleting a container.
+type DeleteContainerParams struct {
+	// ID is the container identifier.
+	ID string
+	// Force indicates whether to force delete.
+	Force bool
+	// DeleteVolumes indicates whether to delete associated volumes.
+	DeleteVolumes bool
+}
+
+// ListContainersParams contains parameters for listing containers.
+type ListContainersParams struct {
+	// States filters by container states.
+	States []ContainerState
+	// Labels filters by label key-value pairs.
+	Labels map[string]string
+	// PageSize is the number of results per page.
+	PageSize uint32
+	// Page is the page number.
+	Page uint32
+}
+
+// ListContainersResult contains the result of listing containers.
+type ListContainersResult struct {
+	// Containers is the list of containers.
+	Containers []*Container `json:"containers" yaml:"containers"`
+	// TotalItems is the total number of items.
+	TotalItems uint32 `json:"total_items" yaml:"total_items"`
+	// TotalPages is the total number of pages.
+	TotalPages uint32 `json:"total_pages" yaml:"total_pages"`
+}
+
+// LabelSelector contains label selection criteria for filtering.
+type LabelSelector struct {
+	// MatchLabels filters by exact label matches.
+	MatchLabels map[string]string `json:"match_labels,omitempty" yaml:"match_labels,omitempty"`
+}

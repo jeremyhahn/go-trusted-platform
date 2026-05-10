@@ -108,7 +108,7 @@
 //	--socket <path>    Unix socket path for daemon communication
 //	--host <host>      Daemon host for remote connections
 //	--port <port>      Daemon port for remote connections
-//	--protocol <proto> Communication protocol (unix, grpc, rest, quic)
+//	--transport <proto> Communication protocol (unix, grpc, rest, quic)
 //	--tls              Enable TLS for secure connections
 //	--output <format>  Output format (json, yaml, table)
 //	--verbose          Enable verbose output

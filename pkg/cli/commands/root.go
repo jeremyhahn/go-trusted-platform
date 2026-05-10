@@ -27,20 +27,25 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/ceremony"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/db"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/device"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/encrypt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/fido2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/firstboot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/install"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/iso"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/kms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/luks"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/piv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/profile"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/provision"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/sdn"
+	switchcmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/switch"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/tpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/vtpm"
@@ -48,13 +53,14 @@ import (
 
 var (
 	// Global flags
-	configPath       string
-	contextName      string
-	outputFormat     string
-	protocolOverride string
-	serverOverride   string
-	verbose          bool
-	noColor          bool
+	configPath         string
+	contextName        string
+	outputFormat       string
+	protocolOverride   string
+	serverOverride     string
+	serverNameOverride string
+	verbose            bool
+	noColor            bool
 
 	// Config
 	config *cli.Config
@@ -99,10 +105,10 @@ or HTTPS with mTLS (remote).`,
 			return cli.ErrInvalidOutputFormat{Format: outputFormat}
 		}
 
-		// Validate protocol override early (empty = use context default)
+		// Validate transport override early (empty = use context default)
 		if protocolOverride != "" {
 			if _, ok := cli.ValidProtocols[protocolOverride]; !ok {
-				return fmt.Errorf("invalid --protocol %q: must be one of unix, grpc, rest, quic, mcp, embedded", protocolOverride)
+				return fmt.Errorf("invalid --transport %q: must be one of unix, grpc, rest, quic, mcp, embedded", protocolOverride)
 			}
 		}
 
@@ -124,12 +130,15 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&contextName, "context",
 		envDefault("", "PLATFORMCTL_CONTEXT"),
 		"context to use, overrides current-context (env PLATFORMCTL_CONTEXT)")
-	rootCmd.PersistentFlags().StringVar(&protocolOverride, "protocol",
-		envDefault("", "PLATFORMCTL_PROTOCOL"),
-		"transport protocol override: unix, grpc, rest, quic, mcp, embedded (env PLATFORMCTL_PROTOCOL)")
+	rootCmd.PersistentFlags().StringVar(&protocolOverride, "transport",
+		envDefault("", "PLATFORMCTL_TRANSPORT"),
+		"SDK transport override: unix, grpc, rest, quic, mcp, embedded (env PLATFORMCTL_TRANSPORT)")
 	rootCmd.PersistentFlags().StringVar(&serverOverride, "server",
 		envDefault("", "PLATFORMCTL_SERVER"),
 		"server address override, implies remote context (env PLATFORMCTL_SERVER)")
+	rootCmd.PersistentFlags().StringVar(&serverNameOverride, "server-name",
+		envDefault("", "PLATFORMCTL_SERVER_NAME"),
+		"TLS SNI / certificate verification hostname override (env PLATFORMCTL_SERVER_NAME)")
 	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o",
 		envDefault("table", "PLATFORMCTL_OUTPUT"),
 		"output format: table, json, yaml (env PLATFORMCTL_OUTPUT)")
@@ -148,6 +157,9 @@ func init() {
 	rootCmd.AddCommand(NewServiceCommand(getCommonFlags))
 	rootCmd.AddCommand(NewConfigCommand(getCommonFlags))
 	rootCmd.AddCommand(NewContextCommand(getConfig))
+	rootCmd.AddCommand(NewInitCommand(getCommonFlags))
+	rootCmd.AddCommand(NewAuthCommand(getCommonFlags))
+	rootCmd.AddCommand(NewCredentialCommand(getCommonFlags))
 	rootCmd.AddCommand(NewCompletionCommand())
 	rootCmd.AddCommand(NewWipeCommand(getCommonFlags))
 	rootCmd.AddCommand(acme.NewCommand(getCommonFlags))
@@ -156,20 +168,25 @@ func init() {
 	rootCmd.AddCommand(bmc.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(bootstrap.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(ca.NewCommand(getCommonFlags))
+	rootCmd.AddCommand(ceremony.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(compute.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(container.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(db.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(device.NewCommand(getCommonFlags))
+	rootCmd.AddCommand(encrypt.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(fido2.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(firstboot.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(iam.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(install.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(iso.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(kms.NewCommand(getCommonFlags))
+	rootCmd.AddCommand(luks.NewCommand(getCommonFlags))
+	rootCmd.AddCommand(piv.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(profile.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(provision.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(registry.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(sdn.NewCommand(getCommonFlags))
+	rootCmd.AddCommand(switchcmd.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(tenant.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(tpm.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(vtpm.NewCommand(getCommonFlags))
@@ -203,7 +220,7 @@ func getConfig() (*cli.Config, error) {
 	return config, nil
 }
 
-// getContext returns the active context, applying --protocol / --server
+// getContext returns the active context, applying --transport / --server
 // overrides from flags or env vars. A --server override without a named
 // context synthesizes an ad-hoc remote context (kubectl-style).
 func getContext() (*cli.Context, error) {
@@ -260,6 +277,13 @@ func getContext() (*cli.Context, error) {
 		if resolved.Type != cli.ContextTypeRemote {
 			resolved.Type = cli.ContextTypeRemote
 		}
+	}
+
+	if serverNameOverride != "" {
+		if resolved.Remote == nil {
+			resolved.Remote = &cli.RemoteContext{}
+		}
+		resolved.Remote.ServerName = serverNameOverride
 	}
 
 	if protocolOverride != "" {

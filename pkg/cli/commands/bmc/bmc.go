@@ -33,9 +33,12 @@ The bmc subsystem provides tools for:
   - Sensor readings
   - System information
   - Bare metal provisioning
+  - Certificate management (get, replace, status)
+  - User account management (list, create, delete, update)
 
 All commands communicate with platformd REST API and require
---server-url and --profile-id flags.
+--server-url and --profile-id flags, or use --bmc-host for
+standalone mode.
 
 Examples:
   # Check power status
@@ -57,7 +60,13 @@ Examples:
   # Get system information
   platformctl bmc system-info \
     --server-url https://platform:8443 \
-    --profile-id server-01`,
+    --profile-id server-01
+
+  # Get BMC web certificate details
+  platformctl bmc cert get --profile-id 1
+
+  # List BMC users
+  platformctl bmc user list --profile-id 1`,
 	}
 
 	cmd.AddCommand(newPowerOnCommand(getFlags))
@@ -74,6 +83,8 @@ Examples:
 	cmd.AddCommand(newSystemInfoCommand(getFlags))
 	cmd.AddCommand(newProvisionCommand(getFlags))
 	cmd.AddCommand(newConsoleCommand(getFlags))
+	cmd.AddCommand(newCertCommand(getFlags))
+	cmd.AddCommand(newUserCommand(getFlags))
 
 	return cmd
 }

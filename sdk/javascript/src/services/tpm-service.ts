@@ -5,6 +5,7 @@
  */
 
 import type { ApiClient } from '../client/api-client.js';
+import type { Transport } from '../transport/transport.js';
 import type { ApiResponse } from '../types/api.js';
 import { BaseService } from './base-service.js';
 import type {
@@ -83,7 +84,7 @@ export class TPMService extends BaseService {
    *
    * @param client - The API client to use for requests
    */
-  constructor(client: ApiClient) {
+  constructor(client: Transport | ApiClient) {
     super(client, '/v1/tpm');
   }
 
@@ -321,7 +322,21 @@ export class TPMService extends BaseService {
    * @returns PCR values
    */
   async getPCRs(request: GetPCRsRequest): Promise<ApiResponse<GetPCRsResponse>> {
-    return this.client.post<GetPCRsResponse>(this.buildUrl('/pcrs'), request);
+    // The server's GetPCRs handler decodes the JSON body via
+    // protojson, which requires the proto-canonical enum form for
+    // the `bank` field (e.g. "PCR_BANK_SHA256"). The SDK exposes a
+    // friendlier short form via the `PCRBank` type ("SHA256") so
+    // callers don't have to spell out the full enum name. Translate
+    // here so the request reaches the server in a form it accepts.
+    // Without this translation the server reads the bank as
+    // UNSPECIFIED and returns *every* bank's PCRs concatenated,
+    // which surfaced as SHA-1 values rendered under a "SHA-256"
+    // label on the PCR Banks dashboard.
+    const wireRequest: GetPCRsRequest & { bank?: string } = { ...request };
+    if (wireRequest.bank && !wireRequest.bank.startsWith('PCR_BANK_')) {
+      wireRequest.bank = `PCR_BANK_${wireRequest.bank}` as any;
+    }
+    return this.client.post<GetPCRsResponse>(this.buildUrl('/pcrs'), wireRequest);
   }
 
   // =========================================================================

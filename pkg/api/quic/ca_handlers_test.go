@@ -21,7 +21,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -35,10 +34,10 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-codec"
-	common "github.com/jeremyhahn/go-objstore/pkg/common"
-	goca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	pkgca "github.com/jeremyhahn/go-xkms/pkg/ca"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -102,15 +101,17 @@ func (m *mockCertStore) IsRevoked(cert *x509.Certificate) (bool, error) {
 }
 func (m *mockCertStore) Close() error { return nil }
 
-// mockCA implements CertificateAuthority for testing
+// mockCA implements ca.TCGCA for testing. Embeds baseMockCA and only
+// overrides the methods the QUIC CA handler exercises.
 type mockCA struct {
+	baseMockCA
 	initialized   bool
 	identity      string
 	rootCert      *x509.Certificate
 	intermCert    *x509.Certificate
 	defaultKeyAlg x509.PublicKeyAlgorithm
 	defaultSigAlg x509.SignatureAlgorithm
-	validity      time.Duration
+	validity      int
 	certStore     *mockCertStore
 	issuedCerts   []*x509.Certificate
 	revokedCerts  []*x509.Certificate
@@ -130,7 +131,7 @@ func newMockCA() *mockCA {
 		intermCert:    intermCert,
 		defaultKeyAlg: x509.ECDSA,
 		defaultSigAlg: x509.ECDSAWithSHA256,
-		validity:      365 * 24 * time.Hour,
+		validity:      365,
 		certStore:     newMockCertStore(),
 		issuedCerts:   make([]*x509.Certificate, 0),
 		revokedCerts:  make([]*x509.Certificate, 0),
@@ -139,68 +140,43 @@ func newMockCA() *mockCA {
 	}
 }
 
-// crypto.Signer interface
-func (m *mockCA) Public() crypto.PublicKey {
-	return &m.privateKey.PublicKey
+func (m *mockCA) Public() crypto.PublicKey { return &m.privateKey.PublicKey }
+func (m *mockCA) Sign(r io.Reader, digest []byte, _ crypto.SignerOpts) ([]byte, error) {
+	return ecdsa.SignASN1(r, m.privateKey, digest)
 }
-
-func (m *mockCA) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
-	return ecdsa.SignASN1(rand, m.privateKey, digest)
-}
-
-func (m *mockCA) IsInitialized() bool {
-	return m.initialized
-}
-
-func (m *mockCA) Identity() string {
-	return m.identity
-}
-
-func (m *mockCA) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm {
-	return m.defaultKeyAlg
-}
-
-func (m *mockCA) DefaultSignatureAlgorithm() x509.SignatureAlgorithm {
-	return m.defaultSigAlg
-}
-
-func (m *mockCA) DefaultValidityPeriod() time.Duration {
-	return m.validity
-}
-
-func (m *mockCA) TrustedRoot() (*x509.Certificate, error) {
-	return m.rootCert, nil
-}
-
-func (m *mockCA) TrustedIntermediate() (*x509.Certificate, error) {
-	return m.intermCert, nil
-}
-
-func (m *mockCA) CertificateStore() xkmssdk.CertStore {
+func (m *mockCA) IsInitialized() bool                                { return m.initialized }
+func (m *mockCA) Identity() string                                   { return m.identity }
+func (m *mockCA) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm       { return m.defaultKeyAlg }
+func (m *mockCA) DefaultSignatureAlgorithm() x509.SignatureAlgorithm { return m.defaultSigAlg }
+func (m *mockCA) DefaultValidityPeriod() int                         { return m.validity }
+func (m *mockCA) TrustedRoot() (*x509.Certificate, error)            { return m.rootCert, nil }
+func (m *mockCA) TrustedIntermediate() (*x509.Certificate, error)    { return m.intermCert, nil }
+func (m *mockCA) CertStore() xkmssdk.CertStore {
 	if m.certStore == nil {
 		return nil
 	}
 	return m.certStore
 }
-
-func (m *mockCA) IssueCertificate(req *goca.CACertificateRequest) (*x509.Certificate, error) {
+func (m *mockCA) Signer() (crypto.Signer, error) { return m, nil }
+func (m *mockCA) CASigner(_ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
+	return m, nil
+}
+func (m *mockCA) IssueCertificate(req *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
 	cert := generateTestCertificate(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
 	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
 		m.certStore.StoreCertificate(cert)
 	}
-	return cert, nil
+	return &pkgca.IssuedCertificate{Certificate: cert}, nil
 }
-
-func (m *mockCA) Revoke(cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+func (m *mockCA) RevokeCert(cert *x509.Certificate, _ pkgca.RevokeOptions) error {
 	m.revokedCerts = append(m.revokedCerts, cert)
 	return nil
 }
-
-func (m *mockCA) CABundle(storeType xkmssdk.StoreType, keyAlg x509.PublicKeyAlgorithm) ([]byte, error) {
+func (m *mockCA) CABundle() ([]byte, error) { return m.rootCert.Raw, nil }
+func (m *mockCA) CABundleFiltered(_ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) ([]byte, error) {
 	return m.rootCert.Raw, nil
 }
-
 func (m *mockCA) ParseBundle(bundle []byte) ([]*x509.Certificate, error) {
 	cert, err := x509.ParseCertificate(bundle)
 	if err != nil {
@@ -208,12 +184,13 @@ func (m *mockCA) ParseBundle(bundle []byte) ([]*x509.Certificate, error) {
 	}
 	return []*x509.Certificate{cert}, nil
 }
-
+func (m *mockCA) RootCertificate(_ *x509.Certificate) (*x509.Certificate, error) {
+	return m.rootCert, nil
+}
 func (m *mockCA) GenerateCRL() ([]byte, error) {
 	if !m.generateCRL {
 		return nil, ErrCACRLNotSupported
 	}
-
 	template := &x509.RevocationList{
 		SignatureAlgorithm: x509.ECDSAWithSHA256,
 		Number:             big.NewInt(1),
@@ -225,125 +202,6 @@ func (m *mockCA) GenerateCRL() ([]byte, error) {
 		return nil, err
 	}
 	return crlDER, nil
-}
-
-// Stub implementations for remaining interface methods
-func (m *mockCA) SignCSR(csrPEM []byte, request *goca.CACertificateRequest) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCA) SignTCGCSRIDevID(tcgCSRIDevID *xkmssdk.TCG_CSR_IDEVID, request *goca.CACertificateRequest) ([]byte, []byte, error) {
-	return nil, nil, nil
-}
-func (m *mockCA) ImportCertificate(certificate *x509.Certificate) error { return nil }
-func (m *mockCA) Certificate(attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCA) CertificatePEM(cn string) ([]byte, error) { return nil, nil }
-func (m *mockCA) Verify(certificate *x509.Certificate, xsigner crypto.Signer) ([][]*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCA) Signer() (crypto.Signer, error)                               { return m, nil }
-func (m *mockCA) CreateCSR(request *goca.CACertificateRequest) ([]byte, error) { return nil, nil }
-func (m *mockCA) TLSCertificate(attrs *xkmssdk.KeyAttributes) (tls.Certificate, error) {
-	return tls.Certificate{}, nil
-}
-func (m *mockCA) TLSBundle(attrs *xkmssdk.KeyAttributes) ([]byte, error)      { return nil, nil }
-func (m *mockCA) TLSConfig(attrs *xkmssdk.KeyAttributes) (*tls.Config, error) { return nil, nil }
-func (m *mockCA) TLSConfigWithXSigner(attrs *xkmssdk.KeyAttributes, xsigner interface{}) (*tls.Config, error) {
-	return nil, nil
-}
-func (m *mockCA) QuantumSafeTLSConfig(attrs *xkmssdk.KeyAttributes) (*tls.Config, error) {
-	return nil, nil
-}
-func (m *mockCA) TLSBundleWithCrossSigner(attrs *xkmssdk.KeyAttributes, issuerCN string) ([][]byte, *x509.Certificate, error) {
-	return nil, nil, nil
-}
-func (m *mockCA) Issued(cn string) (bool, error) { return false, nil }
-func (m *mockCA) Exists(cn string, algorithm x509.SignatureAlgorithm) (bool, error) {
-	return false, nil
-}
-func (m *mockCA) ImportDistributionCRLs(cert *x509.Certificate) error { return nil }
-func (m *mockCA) IssueEKCertificate(request *goca.CACertificateRequest, ekPubKey crypto.PublicKey) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCA) IssueAKCertificate(request *goca.CACertificateRequest, pubKey crypto.PublicKey) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCA) ImportEndorsementKeyCertificate(cert *x509.Certificate) error { return nil }
-func (m *mockCA) ImportXSignedCertificate(issuerCN string, cert *x509.Certificate) error {
-	return nil
-}
-func (m *mockCA) EndorsementKeyCertificate(cn string) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCA) SignedBlob(data interface{}) ([]byte, error) { return nil, nil }
-func (m *mockCA) TrustedRootCertPool(cert *x509.Certificate, xsigner crypto.Signer) (*x509.CertPool, error) {
-	return nil, nil
-}
-func (m *mockCA) TrustedIntermediateCertPool(cert *x509.Certificate, xsigner crypto.Signer) (*x509.CertPool, error) {
-	return nil, nil
-}
-func (m *mockCA) CABundleCertPool(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) (*x509.CertPool, error) {
-	return nil, nil
-}
-func (m *mockCA) ImportIssuingCAs(cert *x509.Certificate) error { return nil }
-func (m *mockCA) RootCertificate(childCert *x509.Certificate) (*x509.Certificate, error) {
-	return m.rootCert, nil
-}
-func (m *mockCA) ObjectStore() common.Storage                                   { return nil }
-func (m *mockCA) PEM(attrs *xkmssdk.KeyAttributes) ([]byte, error)              { return nil, nil }
-func (m *mockCA) ImportCertificatePEM(cn string, pemData []byte) error          { return nil }
-func (m *mockCA) Blob(key string) ([]byte, error)                               { return nil, nil }
-func (m *mockCA) ImportBlob(key string, data []byte) error                      { return nil }
-func (m *mockCA) KeyStore() interface{}                                         { return nil }
-func (m *mockCA) Key(attrs *xkmssdk.KeyAttributes) (interface{}, error)         { return nil, nil }
-func (m *mockCA) PubKey(attrs *xkmssdk.KeyAttributes) (crypto.PublicKey, error) { return nil, nil }
-func (m *mockCA) OSTrustStore() (*x509.CertPool, error)                         { return nil, nil }
-func (m *mockCA) IsAutoImportingIssuerCAs() bool                                { return false }
-func (m *mockCA) Hash() crypto.Hash                                             { return crypto.SHA256 }
-func (m *mockCA) CAKeyAttributes(storeType xkmssdk.StoreType) (*xkmssdk.KeyAttributes, error) {
-	return nil, nil
-}
-func (m *mockCA) CASigner(storeType xkmssdk.StoreType, algorithm x509.PublicKeyAlgorithm) (crypto.Signer, error) {
-	return m, nil
-}
-func (m *mockCA) Init() error             { return nil }
-func (m *mockCA) Load() error             { return nil }
-func (m *mockCA) CAConfig() goca.CAConfig { return goca.CAConfig{} }
-func (m *mockCA) ImportAttestation(akAttrs *xkmssdk.KeyAttributes, blobType string, data []byte) error {
-	return nil
-}
-func (m *mockCA) ImportAttestationKeyCertificate(attrs *xkmssdk.KeyAttributes, akDER []byte) error {
-	return nil
-}
-func (m *mockCA) ImportAttestationEventLog(akAttrs *xkmssdk.KeyAttributes, eventLog []byte) error {
-	return nil
-}
-func (m *mockCA) ImportAttestationPCRs(akAttrs *xkmssdk.KeyAttributes, pcrs []byte) error { return nil }
-func (m *mockCA) ImportAttestationQuote(akAttrs *xkmssdk.KeyAttributes, quote []byte) error {
-	return nil
-}
-func (m *mockCA) ImportLocalAttestation(akAttrs *xkmssdk.KeyAttributes, quote *xkmssdk.Quote) error {
-	return nil
-}
-func (m *mockCA) VerifyQuote(akAttrs *xkmssdk.KeyAttributes, quote *xkmssdk.Quote, nonce []byte) error {
-	return nil
-}
-func (m *mockCA) VerifyAttestationQuote(akAttrs *xkmssdk.KeyAttributes, quote []byte) error {
-	return nil
-}
-func (m *mockCA) VerifyAttestationEventLog(akAttrs *xkmssdk.KeyAttributes, eventLog []byte) error {
-	return nil
-}
-func (m *mockCA) VerifyAttestationPCRs(akAttrs *xkmssdk.KeyAttributes, pcrs []byte) error {
-	return nil
-}
-func (m *mockCA) VerifyTCG_CSR_IDevIDBytes(packedCSR []byte, sigAlg interface{}) ([]byte, []byte, []byte, error) {
-	return nil, nil, nil, nil
-}
-func (m *mockCA) SetTPM(tpm xkmssdk.TrustedPlatformModule) {}
-func (m *mockCA) IsRevoked(serial *big.Int) (bool, error) {
-	return false, nil
 }
 
 // generateTestCertificate creates a test certificate
@@ -2745,15 +2603,16 @@ func TestCAHandler_HandleVerify_ValidChain(t *testing.T) {
 	assert.NotEmpty(t, verifyResp.Chain)
 }
 
-// mockCANoCRL is a mock CA that doesn't implement GenerateCRL
+// mockCANoCRL is a mock CA that returns an error for CRL generation.
 type mockCANoCRL struct {
+	baseMockCA
 	initialized   bool
 	identity      string
 	rootCert      *x509.Certificate
 	intermCert    *x509.Certificate
 	defaultKeyAlg x509.PublicKeyAlgorithm
 	defaultSigAlg x509.SignatureAlgorithm
-	validity      time.Duration
+	validity      int
 	certStore     *mockCertStore
 	issuedCerts   []*x509.Certificate
 	revokedCerts  []*x509.Certificate
@@ -2772,7 +2631,7 @@ func newMockCANoCRL() *mockCANoCRL {
 		intermCert:    intermCert,
 		defaultKeyAlg: x509.ECDSA,
 		defaultSigAlg: x509.ECDSAWithSHA256,
-		validity:      365 * 24 * time.Hour,
+		validity:      365,
 		certStore:     newMockCertStore(),
 		issuedCerts:   make([]*x509.Certificate, 0),
 		revokedCerts:  make([]*x509.Certificate, 0),
@@ -2781,35 +2640,40 @@ func newMockCANoCRL() *mockCANoCRL {
 }
 
 func (m *mockCANoCRL) Public() crypto.PublicKey { return &m.privateKey.PublicKey }
-func (m *mockCANoCRL) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
-	return ecdsa.SignASN1(rand, m.privateKey, digest)
+func (m *mockCANoCRL) Sign(r io.Reader, digest []byte, _ crypto.SignerOpts) ([]byte, error) {
+	return ecdsa.SignASN1(r, m.privateKey, digest)
 }
 func (m *mockCANoCRL) IsInitialized() bool                                { return m.initialized }
 func (m *mockCANoCRL) Identity() string                                   { return m.identity }
 func (m *mockCANoCRL) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm       { return m.defaultKeyAlg }
 func (m *mockCANoCRL) DefaultSignatureAlgorithm() x509.SignatureAlgorithm { return m.defaultSigAlg }
-func (m *mockCANoCRL) DefaultValidityPeriod() time.Duration               { return m.validity }
+func (m *mockCANoCRL) DefaultValidityPeriod() int                         { return m.validity }
 func (m *mockCANoCRL) TrustedRoot() (*x509.Certificate, error)            { return m.rootCert, nil }
 func (m *mockCANoCRL) TrustedIntermediate() (*x509.Certificate, error)    { return m.intermCert, nil }
-func (m *mockCANoCRL) CertificateStore() xkmssdk.CertStore {
+func (m *mockCANoCRL) CertStore() xkmssdk.CertStore {
 	if m.certStore == nil {
 		return nil
 	}
 	return m.certStore
 }
-func (m *mockCANoCRL) IssueCertificate(req *goca.CACertificateRequest) (*x509.Certificate, error) {
+func (m *mockCANoCRL) Signer() (crypto.Signer, error) { return m, nil }
+func (m *mockCANoCRL) CASigner(_ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
+	return m, nil
+}
+func (m *mockCANoCRL) IssueCertificate(req *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
 	cert := generateTestCertificate(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
 	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
 		m.certStore.StoreCertificate(cert)
 	}
-	return cert, nil
+	return &pkgca.IssuedCertificate{Certificate: cert}, nil
 }
-func (m *mockCANoCRL) Revoke(cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+func (m *mockCANoCRL) RevokeCert(cert *x509.Certificate, _ pkgca.RevokeOptions) error {
 	m.revokedCerts = append(m.revokedCerts, cert)
 	return nil
 }
-func (m *mockCANoCRL) CABundle(storeType xkmssdk.StoreType, keyAlg x509.PublicKeyAlgorithm) ([]byte, error) {
+func (m *mockCANoCRL) CABundle() ([]byte, error) { return m.rootCert.Raw, nil }
+func (m *mockCANoCRL) CABundleFiltered(_ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) ([]byte, error) {
 	return m.rootCert.Raw, nil
 }
 func (m *mockCANoCRL) ParseBundle(bundle []byte) ([]*x509.Certificate, error) {
@@ -2819,132 +2683,12 @@ func (m *mockCANoCRL) ParseBundle(bundle []byte) ([]*x509.Certificate, error) {
 	}
 	return []*x509.Certificate{cert}, nil
 }
-
-// mockCANoCRL intentionally returns error for GenerateCRL to test not-implemented path
+func (m *mockCANoCRL) RootCertificate(_ *x509.Certificate) (*x509.Certificate, error) {
+	return m.rootCert, nil
+}
 func (m *mockCANoCRL) GenerateCRL() ([]byte, error) {
 	return nil, ErrCACRLNotSupported
 }
-func (m *mockCANoCRL) IsRevoked(serial *big.Int) (bool, error) {
-	return false, nil
-}
-
-// Stub implementations for remaining interface methods
-func (m *mockCANoCRL) SignCSR(csrPEM []byte, request *goca.CACertificateRequest) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCANoCRL) SignTCGCSRIDevID(tcgCSRIDevID *xkmssdk.TCG_CSR_IDEVID, request *goca.CACertificateRequest) ([]byte, []byte, error) {
-	return nil, nil, nil
-}
-func (m *mockCANoCRL) ImportCertificate(certificate *x509.Certificate) error { return nil }
-func (m *mockCANoCRL) Certificate(attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCANoCRL) CertificatePEM(cn string) ([]byte, error) { return nil, nil }
-func (m *mockCANoCRL) Verify(certificate *x509.Certificate, xsigner crypto.Signer) ([][]*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCANoCRL) Signer() (crypto.Signer, error)                               { return m, nil }
-func (m *mockCANoCRL) CreateCSR(request *goca.CACertificateRequest) ([]byte, error) { return nil, nil }
-func (m *mockCANoCRL) TLSCertificate(attrs *xkmssdk.KeyAttributes) (tls.Certificate, error) {
-	return tls.Certificate{}, nil
-}
-func (m *mockCANoCRL) TLSBundle(attrs *xkmssdk.KeyAttributes) ([]byte, error)      { return nil, nil }
-func (m *mockCANoCRL) TLSConfig(attrs *xkmssdk.KeyAttributes) (*tls.Config, error) { return nil, nil }
-func (m *mockCANoCRL) TLSConfigWithXSigner(attrs *xkmssdk.KeyAttributes, xsigner interface{}) (*tls.Config, error) {
-	return nil, nil
-}
-func (m *mockCANoCRL) QuantumSafeTLSConfig(attrs *xkmssdk.KeyAttributes) (*tls.Config, error) {
-	return nil, nil
-}
-func (m *mockCANoCRL) TLSBundleWithCrossSigner(attrs *xkmssdk.KeyAttributes, issuerCN string) ([][]byte, *x509.Certificate, error) {
-	return nil, nil, nil
-}
-func (m *mockCANoCRL) Issued(cn string) (bool, error) { return false, nil }
-func (m *mockCANoCRL) Exists(cn string, algorithm x509.SignatureAlgorithm) (bool, error) {
-	return false, nil
-}
-func (m *mockCANoCRL) ImportDistributionCRLs(cert *x509.Certificate) error { return nil }
-func (m *mockCANoCRL) IssueEKCertificate(request *goca.CACertificateRequest, ekPubKey crypto.PublicKey) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCANoCRL) IssueAKCertificate(request *goca.CACertificateRequest, pubKey crypto.PublicKey) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCANoCRL) ImportEndorsementKeyCertificate(cert *x509.Certificate) error { return nil }
-func (m *mockCANoCRL) ImportXSignedCertificate(issuerCN string, cert *x509.Certificate) error {
-	return nil
-}
-func (m *mockCANoCRL) EndorsementKeyCertificate(cn string) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCANoCRL) SignedBlob(data interface{}) ([]byte, error) { return nil, nil }
-func (m *mockCANoCRL) TrustedRootCertPool(cert *x509.Certificate, xsigner crypto.Signer) (*x509.CertPool, error) {
-	return nil, nil
-}
-func (m *mockCANoCRL) TrustedIntermediateCertPool(cert *x509.Certificate, xsigner crypto.Signer) (*x509.CertPool, error) {
-	return nil, nil
-}
-func (m *mockCANoCRL) CABundleCertPool(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) (*x509.CertPool, error) {
-	return nil, nil
-}
-func (m *mockCANoCRL) ImportIssuingCAs(cert *x509.Certificate) error { return nil }
-func (m *mockCANoCRL) RootCertificate(childCert *x509.Certificate) (*x509.Certificate, error) {
-	return m.rootCert, nil
-}
-func (m *mockCANoCRL) ObjectStore() common.Storage                                   { return nil }
-func (m *mockCANoCRL) PEM(attrs *xkmssdk.KeyAttributes) ([]byte, error)              { return nil, nil }
-func (m *mockCANoCRL) ImportCertificatePEM(cn string, pemData []byte) error          { return nil }
-func (m *mockCANoCRL) Blob(key string) ([]byte, error)                               { return nil, nil }
-func (m *mockCANoCRL) ImportBlob(key string, data []byte) error                      { return nil }
-func (m *mockCANoCRL) KeyStore() interface{}                                         { return nil }
-func (m *mockCANoCRL) Key(attrs *xkmssdk.KeyAttributes) (interface{}, error)         { return nil, nil }
-func (m *mockCANoCRL) PubKey(attrs *xkmssdk.KeyAttributes) (crypto.PublicKey, error) { return nil, nil }
-func (m *mockCANoCRL) OSTrustStore() (*x509.CertPool, error)                         { return nil, nil }
-func (m *mockCANoCRL) IsAutoImportingIssuerCAs() bool                                { return false }
-func (m *mockCANoCRL) Hash() crypto.Hash                                             { return crypto.SHA256 }
-func (m *mockCANoCRL) CAKeyAttributes(storeType xkmssdk.StoreType) (*xkmssdk.KeyAttributes, error) {
-	return nil, nil
-}
-func (m *mockCANoCRL) CASigner(storeType xkmssdk.StoreType, algorithm x509.PublicKeyAlgorithm) (crypto.Signer, error) {
-	return m, nil
-}
-func (m *mockCANoCRL) Init() error             { return nil }
-func (m *mockCANoCRL) Load() error             { return nil }
-func (m *mockCANoCRL) CAConfig() goca.CAConfig { return goca.CAConfig{} }
-func (m *mockCANoCRL) ImportAttestation(akAttrs *xkmssdk.KeyAttributes, blobType string, data []byte) error {
-	return nil
-}
-func (m *mockCANoCRL) ImportAttestationKeyCertificate(attrs *xkmssdk.KeyAttributes, akDER []byte) error {
-	return nil
-}
-func (m *mockCANoCRL) ImportAttestationEventLog(akAttrs *xkmssdk.KeyAttributes, eventLog []byte) error {
-	return nil
-}
-func (m *mockCANoCRL) ImportAttestationPCRs(akAttrs *xkmssdk.KeyAttributes, pcrs []byte) error {
-	return nil
-}
-func (m *mockCANoCRL) ImportAttestationQuote(akAttrs *xkmssdk.KeyAttributes, quote []byte) error {
-	return nil
-}
-func (m *mockCANoCRL) ImportLocalAttestation(akAttrs *xkmssdk.KeyAttributes, quote *xkmssdk.Quote) error {
-	return nil
-}
-func (m *mockCANoCRL) VerifyQuote(akAttrs *xkmssdk.KeyAttributes, quote *xkmssdk.Quote, nonce []byte) error {
-	return nil
-}
-func (m *mockCANoCRL) VerifyAttestationQuote(akAttrs *xkmssdk.KeyAttributes, quote []byte) error {
-	return nil
-}
-func (m *mockCANoCRL) VerifyAttestationEventLog(akAttrs *xkmssdk.KeyAttributes, eventLog []byte) error {
-	return nil
-}
-func (m *mockCANoCRL) VerifyAttestationPCRs(akAttrs *xkmssdk.KeyAttributes, pcrs []byte) error {
-	return nil
-}
-func (m *mockCANoCRL) VerifyTCG_CSR_IDevIDBytes(packedCSR []byte, sigAlg interface{}) ([]byte, []byte, []byte, error) {
-	return nil, nil, nil, nil
-}
-func (m *mockCANoCRL) SetTPM(tpm xkmssdk.TrustedPlatformModule) {}
 
 func TestCAHandler_HandleCRL_InterfaceNotImplemented(t *testing.T) {
 	logger := logging.DefaultLogger()
@@ -2967,7 +2711,7 @@ type mockCAIssueFails struct {
 	*mockCA
 }
 
-func (m *mockCAIssueFails) IssueCertificate(req *goca.CACertificateRequest) (*x509.Certificate, error) {
+func (m *mockCAIssueFails) IssueCertificate(req *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
 	return nil, errors.New("certificate issuance failed")
 }
 
@@ -3003,7 +2747,7 @@ type mockCARevokeFails struct {
 	*mockCA
 }
 
-func (m *mockCARevokeFails) Revoke(cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+func (m *mockCARevokeFails) RevokeCert(cert *x509.Certificate, _ pkgca.RevokeOptions) error {
 	return errors.New("revocation failed")
 }
 
@@ -3042,7 +2786,7 @@ type mockCARenewFails struct {
 	shouldFail bool
 }
 
-func (m *mockCARenewFails) IssueCertificate(req *goca.CACertificateRequest) (*x509.Certificate, error) {
+func (m *mockCARenewFails) IssueCertificate(req *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
 	if m.shouldFail {
 		return nil, errors.New("renewal failed")
 	}
@@ -3051,7 +2795,7 @@ func (m *mockCARenewFails) IssueCertificate(req *goca.CACertificateRequest) (*x5
 	if m.certStore != nil {
 		m.certStore.StoreCertificate(cert)
 	}
-	return cert, nil
+	return &pkgca.IssuedCertificate{Certificate: cert}, nil
 }
 
 func TestCAHandler_HandleRenew_RenewFails(t *testing.T) {
@@ -3091,7 +2835,10 @@ type mockCAEmptyBundle struct {
 	*mockCA
 }
 
-func (m *mockCAEmptyBundle) CABundle(storeType xkmssdk.StoreType, keyAlg x509.PublicKeyAlgorithm) ([]byte, error) {
+func (m *mockCAEmptyBundle) CABundle() ([]byte, error) {
+	return m.CABundleFiltered("", 0)
+}
+func (m *mockCAEmptyBundle) CABundleFiltered(storeType xkmssdk.StoreType, keyAlg x509.PublicKeyAlgorithm) ([]byte, error) {
 	return []byte{}, nil
 }
 
@@ -3122,7 +2869,10 @@ type mockCABundleFails struct {
 	*mockCA
 }
 
-func (m *mockCABundleFails) CABundle(storeType xkmssdk.StoreType, keyAlg x509.PublicKeyAlgorithm) ([]byte, error) {
+func (m *mockCABundleFails) CABundle() ([]byte, error) {
+	return m.CABundleFiltered("", 0)
+}
+func (m *mockCABundleFails) CABundleFiltered(storeType xkmssdk.StoreType, keyAlg x509.PublicKeyAlgorithm) ([]byte, error) {
 	return nil, errors.New("bundle retrieval failed")
 }
 

@@ -16,7 +16,9 @@ package cli
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"os"
 
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/auth"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
@@ -135,6 +137,12 @@ func contextToSDKOptions(ctx *Context) (*platform.Options, error) {
 		if tlsConfig != nil {
 			opts = append(opts, platform.WithTLSConfig(tlsConfig))
 		}
+		if ctx.Remote.ServerName != "" {
+			opts = append(opts, platform.WithTLSServerName(ctx.Remote.ServerName))
+		}
+		if ctx.Remote.Token != "" {
+			opts = append(opts, platform.WithBearerToken(ctx.Remote.Token))
+		}
 
 	case ContextTypeEmbedded:
 		// Embedded contexts are handled by the caller providing services
@@ -165,12 +173,25 @@ func protocolAddress(proto platform.Protocol, server string) []platform.Option {
 	}
 }
 
-// buildTLSConfig creates a TLS configuration from remote context settings
+// buildTLSConfig creates a TLS configuration from remote context settings.
+// Supports two modes:
+//   - CA-only: only CACert is set, provides server TLS verification without
+//     client certificate authentication (one-way TLS).
+//   - mTLS: CACert, ClientCert, and ClientKey are set, provides mutual TLS.
 func buildTLSConfig(remote *RemoteContext) (*tls.Config, error) {
 	if remote.ClientCert == "" && remote.ClientKey == "" && remote.CACert == "" {
 		return nil, nil
 	}
 
+	// CA-only mode: server TLS verification without client certificates.
+	// This is used by commands like 'device register' that connect to the
+	// control plane before the device has been issued a client certificate.
+	hasClientCert := remote.ClientCert != "" || remote.ClientKey != ""
+	if !hasClientCert && remote.CACert != "" {
+		return buildCACertOnlyTLSConfig(remote.CACert)
+	}
+
+	// mTLS mode: full mutual TLS with client certificate
 	var mtlsOpts []auth.MTLSOption
 
 	if remote.CACert != "" {
@@ -192,6 +213,26 @@ func buildTLSConfig(remote *RemoteContext) (*tls.Config, error) {
 	}
 
 	return provider.GetTLSConfig(), nil
+}
+
+// buildCACertOnlyTLSConfig creates a TLS config with only a CA certificate
+// for server verification. No client certificate is included, so this
+// provides one-way TLS (server authentication only).
+func buildCACertOnlyTLSConfig(caCertPath string) (*tls.Config, error) {
+	caPEM, err := os.ReadFile(caCertPath)
+	if err != nil {
+		return nil, ErrTLSCACertLoadFailed{Path: caCertPath, Err: err}
+	}
+
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, ErrTLSCACertInvalid{Path: caCertPath}
+	}
+
+	return &tls.Config{
+		RootCAs:    pool,
+		MinVersion: tls.VersionTLS13,
+	}, nil
 }
 
 // Close closes the client connection

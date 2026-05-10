@@ -189,7 +189,7 @@ func (e ErrBarrierOperationFailed) Unwrap() error {
 }
 
 // ErrBarrierNotSupported is returned when a barrier operation is not supported
-// by the current SDK version.
+// by the current SDK version or when no barrier client has been configured.
 type ErrBarrierNotSupported struct {
 	Operation string
 }
@@ -197,3 +197,16 @@ type ErrBarrierNotSupported struct {
 func (e ErrBarrierNotSupported) Error() string {
 	return fmt.Sprintf("barrier operation not supported: %s", e.Operation)
 }
+
+// ErrNilBarrierStatus is returned when the barrier status RPC returns nil
+// without an error. It is a sentinel for an inconsistent SDK state and
+// callers should treat it as a hard failure rather than retry.
+type ErrNilBarrierStatusType struct{}
+
+func (ErrNilBarrierStatusType) Error() string {
+	return "tenant: nil barrier status response from SDK"
+}
+
+// ErrNilBarrierStatus is the sentinel returned from TenantBarrierStatus when
+// the underlying SDK returns nil with no error.
+var ErrNilBarrierStatus = ErrNilBarrierStatusType{}

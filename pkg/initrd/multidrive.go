@@ -20,7 +20,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/drive"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // MultiDriveManager handles unlocking multiple encrypted drives

@@ -22,14 +22,20 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
@@ -81,6 +87,14 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 		}
 	}
 
+	// Honor caller-supplied SNI / certificate verification hostname.
+	// The Go HTTP transport defaults ServerName from the Host header,
+	// which is the dialed address — overriding here lets a CLI talk to
+	// the daemon by IP while still verifying the cert's CN/SAN.
+	if opts.TLSServerName != "" {
+		tlsConfig.ServerName = opts.TLSServerName
+	}
+
 	// Create HTTP transport with TLS
 	httpTransport := &http.Transport{
 		TLSClientConfig: tlsConfig,
@@ -97,6 +111,9 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 		tlsConfig:  tlsConfig,
 	}
 	a.connected.Store(true)
+	if opts.BearerToken != "" {
+		a.SetToken(opts.BearerToken)
+	}
 
 	// Optionally verify connectivity with a health check
 	healthCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -219,12 +236,66 @@ func (a *Adapter) DoRequest(ctx context.Context, method, path string, body inter
 	}
 
 	if result != nil && len(respBody) > 0 {
-		if err := json.Unmarshal(respBody, result); err != nil {
+		// All /api/v1/* responses from the platformd webserver are
+		// wrapped in the standard envelope:
+		//
+		//   {"code":200,"error":"","success":true,"payload":<actual>}
+		//
+		// (see pkg/webservice/v1/response.WebServiceResponse). The
+		// SDK gRPC clients want the inner `<actual>` decoded directly
+		// into their proto / domain types — so we attempt envelope
+		// unwrap first, then fall back to direct unmarshal for any
+		// endpoint that doesn't use the wrapper. A response that
+		// doesn't have a `payload` field will land as `null` in the
+		// envelope's Payload; we detect that and fall back.
+		var envelope struct {
+			Code    int             `json:"code"`
+			Error   string          `json:"error"`
+			Success bool            `json:"success"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if err := json.Unmarshal(respBody, &envelope); err == nil &&
+			(envelope.Code != 0 || envelope.Success || envelope.Error != "") &&
+			len(envelope.Payload) > 0 && string(envelope.Payload) != "null" {
+			// Server-level error: surface the envelope's error string
+			// so the caller sees a real diagnosis rather than an
+			// unmarshal-into-zero-value.
+			if !envelope.Success && envelope.Error != "" {
+				return ErrHTTPStatus{
+					StatusCode: envelope.Code,
+					Status:     envelope.Error,
+					Body:       string(respBody),
+				}
+			}
+			if err := decodeJSONResult(envelope.Payload, result); err != nil {
+				return ErrUnmarshalFailed{Err: err}
+			}
+			return nil
+		}
+		// Non-enveloped response (e.g. /endpoints, /healthz) — decode
+		// the body directly into the caller's result struct.
+		if err := decodeJSONResult(respBody, result); err != nil {
 			return ErrUnmarshalFailed{Err: err}
 		}
 	}
 
 	return nil
+}
+
+// decodeJSONResult unmarshals JSON into result. If result is a proto
+// message (e.g. *platformv1.TPMInfoResponse), it uses protojson so
+// that enum string forms ("TPM_VERSION_2_0"), camelCase field names
+// ("pcrBanks"), and other proto-json conventions match what the
+// server emits via protorest.WriteSuccess. For non-proto types
+// (domain DTOs, raw maps), regular encoding/json is used.
+func decodeJSONResult(data []byte, result interface{}) error {
+	if msg, ok := result.(proto.Message); ok {
+		opts := protojson.UnmarshalOptions{
+			DiscardUnknown: true,
+		}
+		return opts.Unmarshal(data, msg)
+	}
+	return json.Unmarshal(data, result)
 }
 
 // restClientConn implements grpc.ClientConnInterface for REST transport.
@@ -234,25 +305,235 @@ type restClientConn struct {
 }
 
 // Invoke performs a unary RPC call by translating to REST HTTP requests.
+//
+// Routes that include {placeholder} segments (BMC, per-tenant barrier)
+// have their path params substituted from the request message and
+// stripped from the request body so the server never sees the same
+// field in both URL and body. Flat routes are passed through untouched.
 func (c *restClientConn) Invoke(ctx context.Context, method string, args interface{}, reply interface{}, opts ...grpc.CallOption) error {
 	if c.adapter.closed.Load() {
 		return status.Error(codes.Unavailable, "connection closed")
 	}
 
-	// Map gRPC method to REST endpoint
-	path, httpMethod := mapGRPCMethodToREST(method)
-
-	err := c.adapter.DoRequest(ctx, httpMethod, path, args, reply)
-	if err != nil {
-		return translateErrorToGRPC(err)
+	// Templated routes: substitute path params and strip them from the
+	// body. The body is sent as a clone of args so the caller's message
+	// is not mutated.
+	if entry, ok := templatedRouteTable[method]; ok {
+		path, body, err := buildTemplatedRequest(entry.path, entry.pathParams, args)
+		if err != nil {
+			return err
+		}
+		if reqErr := c.adapter.DoRequest(ctx, entry.method, path, body, reply); reqErr != nil {
+			return translateErrorToGRPC(reqErr)
+		}
+		return nil
 	}
 
+	// Flat routes: today's behavior — derive path from the static map
+	// (or fall back to the gRPC method-name heuristic).
+	path, httpMethod := mapGRPCMethodToREST(method)
+	if err := c.adapter.DoRequest(ctx, httpMethod, path, args, reply); err != nil {
+		return translateErrorToGRPC(err)
+	}
 	return nil
+}
+
+// buildTemplatedRequest substitutes path params into a templated route
+// and returns the URL path plus the body to send. body is a clone of
+// args with the templated fields cleared (so the server doesn't see
+// them duplicated). args must be a proto.Message.
+func buildTemplatedRequest(template string, params []pathParam, args interface{}) (path string, body interface{}, err error) {
+	msg, ok := args.(proto.Message)
+	if !ok {
+		return "", nil, status.Errorf(codes.InvalidArgument,
+			"templated REST route requires a proto.Message request, got %T", args)
+	}
+
+	rm := msg.ProtoReflect()
+	resolved := template
+
+	for _, p := range params {
+		fd := rm.Descriptor().Fields().ByName(p.field)
+		if fd == nil {
+			return "", nil, status.Errorf(codes.Internal,
+				"REST adapter: proto field %q missing on %s", p.field, rm.Descriptor().FullName())
+		}
+		raw, encoded, ok := encodePathField(rm.Get(fd), fd)
+		if !ok {
+			return "", nil, status.Errorf(codes.InvalidArgument,
+				"%s requires non-zero %s for templated REST route", rm.Descriptor().FullName(), p.field)
+		}
+		_ = raw
+		resolved = strings.ReplaceAll(resolved, p.placeholder, encoded)
+	}
+
+	if strings.Contains(resolved, "{") {
+		return "", nil, status.Errorf(codes.Internal,
+			"REST adapter: unresolved placeholder in %q after substitution", resolved)
+	}
+
+	// Clone and clear the templated fields so the body matches what the
+	// server expects. proto.Clone is shallow-correct for the fields we
+	// touch (we only Clear scalar string/uint64 fields).
+	clone := proto.Clone(msg)
+	cloneRefl := clone.ProtoReflect()
+	for _, p := range params {
+		fd := cloneRefl.Descriptor().Fields().ByName(p.field)
+		if fd != nil {
+			cloneRefl.Clear(fd)
+		}
+	}
+
+	return resolved, clone, nil
+}
+
+// encodePathField extracts a path-parameter value from a proto field.
+// Returns (rawString, urlEscapedString, ok). ok is false when the field
+// is missing or has its zero value, so callers can reject zero IDs as
+// InvalidArgument.
+func encodePathField(v protoreflect.Value, fd protoreflect.FieldDescriptor) (string, string, bool) {
+	switch fd.Kind() {
+	case protoreflect.StringKind:
+		s := v.String()
+		if s == "" {
+			return "", "", false
+		}
+		return s, url.PathEscape(s), true
+	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		n := v.Uint()
+		if n == 0 {
+			return "", "", false
+		}
+		s := strconv.FormatUint(n, 10)
+		return s, s, true
+	case protoreflect.Int64Kind, protoreflect.Sfixed64Kind, protoreflect.Sint64Kind:
+		n := v.Int()
+		if n == 0 {
+			return "", "", false
+		}
+		s := strconv.FormatInt(n, 10)
+		return s, s, true
+	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+		n := v.Uint()
+		if n == 0 {
+			return "", "", false
+		}
+		s := strconv.FormatUint(n, 10)
+		return s, s, true
+	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
+		n := v.Int()
+		if n == 0 {
+			return "", "", false
+		}
+		s := strconv.FormatInt(n, 10)
+		return s, s, true
+	default:
+		// Fallback: render via the protoreflect String form. Empty is treated
+		// as zero-value rejection.
+		s := fmt.Sprintf("%v", v.Interface())
+		if s == "" {
+			return "", "", false
+		}
+		return s, url.PathEscape(s), true
+	}
 }
 
 // NewStream creates a new stream (not fully supported for REST).
 func (c *restClientConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 	return nil, status.Error(codes.Unimplemented, "streaming not supported over REST transport")
+}
+
+// pathParam describes a single placeholder substitution in a templated
+// REST route. The placeholder is a literal segment in the route's path
+// template (e.g. "{profileID}") and field is the proto field name in
+// the request message (snake_case, as protoreflect surfaces it).
+type pathParam struct {
+	placeholder string
+	field       protoreflect.Name
+}
+
+// templatedRouteTable maps gRPC methods to REST routes whose URLs
+// contain {placeholder} segments populated from request fields. Lookup
+// in this table happens before the flat grpcMethodToRESTMap, so an
+// entry here takes precedence.
+//
+// All entries here MUST satisfy the invariant: every {placeholder} in
+// path is satisfied by exactly one pathParam, and every pathParam
+// references a real proto field on the corresponding request message
+// type. The substitute helper returns codes.InvalidArgument if a path
+// param resolves to its zero value (e.g. profile_id == 0).
+//
+// BMC routes match the server registrations at
+// pkg/api/daemon/rest_service.go::SetBMCHandler; per-tenant barrier
+// routes match pkg/webservice/v1/rest/tenant/router.go.
+var templatedRouteTable = map[string]struct {
+	path       string
+	method     string
+	pathParams []pathParam
+}{
+	// BMC Service — proto: pkg/api/grpc/proto/bmc.proto
+	// Server registrations live in pkg/api/daemon/rest_service.go::SetBMCHandler.
+	// PowerOn/Off/Reset/Cycle all hit the same POST endpoint; the server's
+	// PowerAction handler reads the action from the request body.
+	"/platform.v1.BMCService/PowerOn":            bmcRoute("/api/v1/bmc/{profileID}/power", http.MethodPost),
+	"/platform.v1.BMCService/PowerOff":           bmcRoute("/api/v1/bmc/{profileID}/power", http.MethodPost),
+	"/platform.v1.BMCService/PowerReset":         bmcRoute("/api/v1/bmc/{profileID}/power", http.MethodPost),
+	"/platform.v1.BMCService/PowerCycle":         bmcRoute("/api/v1/bmc/{profileID}/power", http.MethodPost),
+	"/platform.v1.BMCService/PowerStatus":        bmcRoute("/api/v1/bmc/{profileID}/power", http.MethodGet),
+	"/platform.v1.BMCService/SetBootDevice":      bmcRoute("/api/v1/bmc/{profileID}/boot-device", http.MethodPost),
+	"/platform.v1.BMCService/GetBootDevice":      bmcRoute("/api/v1/bmc/{profileID}/boot-device", http.MethodGet),
+	"/platform.v1.BMCService/MountISO":           bmcRoute("/api/v1/bmc/{profileID}/virtual-media", http.MethodPost),
+	"/platform.v1.BMCService/UnmountISO":         bmcRoute("/api/v1/bmc/{profileID}/virtual-media", http.MethodDelete),
+	"/platform.v1.BMCService/VirtualMediaStatus": bmcRoute("/api/v1/bmc/{profileID}/virtual-media", http.MethodGet),
+	"/platform.v1.BMCService/GetSensors":         bmcRoute("/api/v1/bmc/{profileID}/sensors", http.MethodGet),
+	"/platform.v1.BMCService/GetSystemInfo":      bmcRoute("/api/v1/bmc/{profileID}/system-info", http.MethodGet),
+	"/platform.v1.BMCService/Provision":          bmcRoute("/api/v1/bmc/{profileID}/provision", http.MethodPost),
+	"/platform.v1.BMCService/ProvisionStatus":    bmcRoute("/api/v1/bmc/{profileID}/provision", http.MethodGet),
+
+	// Per-tenant barrier RPCs on PlatformTenantService — proto:
+	// pkg/api/grpc/proto/tenant.proto. Server registrations live in
+	// pkg/webservice/v1/rest/tenant/router.go.
+	"/platform.v1.TenantService/InitTenantBarrier":      tenantBarrierRoute("/api/v1/tenants/{id}/barrier/init", http.MethodPost),
+	"/platform.v1.TenantService/UnsealTenantBarrier":    tenantBarrierRoute("/api/v1/tenants/{id}/barrier/unseal", http.MethodPost),
+	"/platform.v1.TenantService/SealTenantBarrier":      tenantBarrierRoute("/api/v1/tenants/{id}/barrier/seal", http.MethodPost),
+	"/platform.v1.TenantService/GetTenantBarrierStatus": tenantBarrierRoute("/api/v1/tenants/{id}/barrier", http.MethodGet),
+}
+
+// bmcRoute constructs a templated route that pulls profile_id from a
+// BMC request message and substitutes {profileID} in the URL. Server
+// path regex is [0-9]+ so we always serialize uint64 as decimal.
+func bmcRoute(path, method string) struct {
+	path       string
+	method     string
+	pathParams []pathParam
+} {
+	return struct {
+		path       string
+		method     string
+		pathParams []pathParam
+	}{
+		path:       path,
+		method:     method,
+		pathParams: []pathParam{{placeholder: "{profileID}", field: "profile_id"}},
+	}
+}
+
+// tenantBarrierRoute constructs a templated route that pulls tenant_id
+// from a per-tenant barrier request message and substitutes {id}.
+func tenantBarrierRoute(path, method string) struct {
+	path       string
+	method     string
+	pathParams []pathParam
+} {
+	return struct {
+		path       string
+		method     string
+		pathParams []pathParam
+	}{
+		path:       path,
+		method:     method,
+		pathParams: []pathParam{{placeholder: "{id}", field: "tenant_id"}},
+	}
 }
 
 // grpcMethodToRESTMap provides O(1) lookup for gRPC to REST endpoint mapping.
@@ -261,183 +542,361 @@ var grpcMethodToRESTMap = map[string]struct {
 	method string
 }{
 	// Platform Daemon
-	"/platformv1.PlatformDaemon/GetVersion": {"/api/v1/version", http.MethodGet},
-	"/platformv1.PlatformDaemon/GetStatus":  {"/api/v1/status", http.MethodGet},
+	"/platform.v1.PlatformDaemon/GetVersion": {"/api/v1/version", http.MethodGet},
+	"/platform.v1.PlatformDaemon/GetStatus":  {"/api/v1/status", http.MethodGet},
 
 	// Health endpoints
-	"/platformv1.PlatformDaemon/Health":    {"/health", http.MethodGet},
-	"/platformv1.PlatformDaemon/Liveness":  {"/health/live", http.MethodGet},
-	"/platformv1.PlatformDaemon/Readiness": {"/health/ready", http.MethodGet},
+	"/platform.v1.PlatformDaemon/Health":    {"/health", http.MethodGet},
+	"/platform.v1.PlatformDaemon/Liveness":  {"/health/live", http.MethodGet},
+	"/platform.v1.PlatformDaemon/Readiness": {"/health/ready", http.MethodGet},
 
 	// CA Service
-	"/platformv1.CAService/GetInfo":      {"/api/v1/ca/info", http.MethodGet},
-	"/platformv1.CAService/Issue":        {"/api/v1/ca/certificates", http.MethodPost},
-	"/platformv1.CAService/Get":          {"/api/v1/ca/certificates", http.MethodGet},
-	"/platformv1.CAService/List":         {"/api/v1/ca/certificates", http.MethodGet},
-	"/platformv1.CAService/Revoke":       {"/api/v1/ca/certificates/revoke", http.MethodPost},
-	"/platformv1.CAService/Renew":        {"/api/v1/ca/certificates/renew", http.MethodPost},
-	"/platformv1.CAService/Verify":       {"/api/v1/ca/certificates/verify", http.MethodPost},
-	"/platformv1.CAService/GetCRL":       {"/api/v1/ca/crl", http.MethodGet},
-	"/platformv1.CAService/GetBundle":    {"/api/v1/ca/bundle", http.MethodGet},
-	"/platformv1.CAService/GetTrustRoot": {"/api/v1/ca/trust-root", http.MethodGet},
+	"/platform.v1.CAService/GetCAInfo":         {"/api/v1/ca/info", http.MethodGet},
+	"/platform.v1.CAService/IssueCertificate":  {"/api/v1/ca/certificates", http.MethodPost},
+	"/platform.v1.CAService/GetCertificate":    {"/api/v1/ca/certificates", http.MethodGet},
+	"/platform.v1.CAService/ListCertificates":  {"/api/v1/ca/certificates", http.MethodGet},
+	"/platform.v1.CAService/RevokeCertificate": {"/api/v1/ca/certificates/revoke", http.MethodPost},
+	"/platform.v1.CAService/RenewCertificate":  {"/api/v1/ca/certificates/renew", http.MethodPost},
+	"/platform.v1.CAService/VerifyCertificate": {"/api/v1/ca/certificates/verify", http.MethodPost},
+	"/platform.v1.CAService/GetCRL":            {"/api/v1/ca/crl", http.MethodGet},
+	"/platform.v1.CAService/GetCABundle":       {"/api/v1/ca/bundle", http.MethodGet},
 
 	// IAM Service
-	"/platformv1.PlatformIAMService/CreateUser": {"/api/v1/iam/users", http.MethodPost},
-	"/platformv1.PlatformIAMService/DeleteUser": {"/api/v1/iam/users", http.MethodDelete},
-	"/platformv1.PlatformIAMService/GetUser":    {"/api/v1/iam/users", http.MethodGet},
-	"/platformv1.PlatformIAMService/ListUsers":  {"/api/v1/iam/users", http.MethodGet},
+	"/platform.v1.PlatformIAMService/CreateUser": {"/api/v1/iam/users", http.MethodPost},
+	"/platform.v1.PlatformIAMService/DeleteUser": {"/api/v1/iam/users", http.MethodDelete},
+	"/platform.v1.PlatformIAMService/GetUser":    {"/api/v1/iam/users", http.MethodGet},
+	"/platform.v1.PlatformIAMService/ListUsers":  {"/api/v1/iam/users", http.MethodGet},
 
-	"/platformv1.PlatformIAMService/CreateRole": {"/api/v1/iam/roles", http.MethodPost},
-	"/platformv1.PlatformIAMService/DeleteRole": {"/api/v1/iam/roles", http.MethodDelete},
-	"/platformv1.PlatformIAMService/GetRole":    {"/api/v1/iam/roles", http.MethodGet},
-	"/platformv1.PlatformIAMService/ListRoles":  {"/api/v1/iam/roles", http.MethodGet},
-	"/platformv1.PlatformIAMService/AssignRole": {"/api/v1/iam/roles/assign", http.MethodPost},
-	"/platformv1.PlatformIAMService/RevokeRole": {"/api/v1/iam/roles/revoke", http.MethodPost},
+	"/platform.v1.PlatformIAMService/CreateRole": {"/api/v1/iam/roles", http.MethodPost},
+	"/platform.v1.PlatformIAMService/DeleteRole": {"/api/v1/iam/roles", http.MethodDelete},
+	"/platform.v1.PlatformIAMService/GetRole":    {"/api/v1/iam/roles", http.MethodGet},
+	"/platform.v1.PlatformIAMService/ListRoles":  {"/api/v1/iam/roles", http.MethodGet},
+	"/platform.v1.PlatformIAMService/AssignRole": {"/api/v1/iam/roles/assign", http.MethodPost},
+	"/platform.v1.PlatformIAMService/RevokeRole": {"/api/v1/iam/roles/revoke", http.MethodPost},
 
-	"/platformv1.PlatformIAMService/CreateGroup":       {"/api/v1/iam/groups", http.MethodPost},
-	"/platformv1.PlatformIAMService/DeleteGroup":       {"/api/v1/iam/groups", http.MethodDelete},
-	"/platformv1.PlatformIAMService/GetGroup":          {"/api/v1/iam/groups", http.MethodGet},
-	"/platformv1.PlatformIAMService/ListGroups":        {"/api/v1/iam/groups", http.MethodGet},
-	"/platformv1.PlatformIAMService/AddGroupMember":    {"/api/v1/iam/groups/members", http.MethodPost},
-	"/platformv1.PlatformIAMService/RemoveGroupMember": {"/api/v1/iam/groups/members", http.MethodDelete},
+	"/platform.v1.PlatformIAMService/CreateGroup":       {"/api/v1/iam/groups", http.MethodPost},
+	"/platform.v1.PlatformIAMService/DeleteGroup":       {"/api/v1/iam/groups", http.MethodDelete},
+	"/platform.v1.PlatformIAMService/GetGroup":          {"/api/v1/iam/groups", http.MethodGet},
+	"/platform.v1.PlatformIAMService/ListGroups":        {"/api/v1/iam/groups", http.MethodGet},
+	"/platform.v1.PlatformIAMService/AddGroupMember":    {"/api/v1/iam/groups/members", http.MethodPost},
+	"/platform.v1.PlatformIAMService/RemoveGroupMember": {"/api/v1/iam/groups/members", http.MethodDelete},
 
-	"/platformv1.PlatformIAMService/CreateTenant": {"/api/v1/iam/tenants", http.MethodPost},
-	"/platformv1.PlatformIAMService/DeleteTenant": {"/api/v1/iam/tenants", http.MethodDelete},
-	"/platformv1.PlatformIAMService/GetTenant":    {"/api/v1/iam/tenants", http.MethodGet},
-	"/platformv1.PlatformIAMService/ListTenants":  {"/api/v1/iam/tenants", http.MethodGet},
+	"/platform.v1.PlatformIAMService/CreateTenant": {"/api/v1/iam/tenants", http.MethodPost},
+	"/platform.v1.PlatformIAMService/DeleteTenant": {"/api/v1/iam/tenants", http.MethodDelete},
+	"/platform.v1.PlatformIAMService/GetTenant":    {"/api/v1/iam/tenants", http.MethodGet},
+	"/platform.v1.PlatformIAMService/ListTenants":  {"/api/v1/iam/tenants", http.MethodGet},
 
-	"/platformv1.PlatformIAMService/Authenticate":     {"/api/v1/iam/authenticate", http.MethodPost},
-	"/platformv1.PlatformIAMService/CheckPermission":  {"/api/v1/iam/permissions/check", http.MethodPost},
-	"/platformv1.PlatformIAMService/CreateToken":      {"/api/v1/iam/tokens", http.MethodPost},
-	"/platformv1.PlatformIAMService/RevokeToken":      {"/api/v1/iam/tokens/revoke", http.MethodPost},
-	"/platformv1.PlatformIAMService/VerifyToken":      {"/api/v1/iam/tokens/verify", http.MethodPost},
-	"/platformv1.PlatformIAMService/RefreshToken":     {"/api/v1/iam/tokens/refresh", http.MethodPost},
-	"/platformv1.PlatformIAMService/GetCurrentUser":   {"/api/v1/iam/users/current", http.MethodGet},
-	"/platformv1.PlatformIAMService/ChangePassword":   {"/api/v1/iam/users/password", http.MethodPost},
-	"/platformv1.PlatformIAMService/ResetPassword":    {"/api/v1/iam/users/password/reset", http.MethodPost},
-	"/platformv1.PlatformIAMService/SetupTOTP":        {"/api/v1/iam/mfa/totp/setup", http.MethodPost},
-	"/platformv1.PlatformIAMService/VerifyTOTP":       {"/api/v1/iam/mfa/totp/verify", http.MethodPost},
-	"/platformv1.PlatformIAMService/DisableTOTP":      {"/api/v1/iam/mfa/totp", http.MethodDelete},
-	"/platformv1.PlatformIAMService/GetTOTPStatus":    {"/api/v1/iam/mfa/totp/status", http.MethodGet},
-	"/platformv1.PlatformIAMService/ListActiveSesss":  {"/api/v1/iam/sessions", http.MethodGet},
-	"/platformv1.PlatformIAMService/RevokeSession":    {"/api/v1/iam/sessions/revoke", http.MethodPost},
-	"/platformv1.PlatformIAMService/RevokeAllSesss":   {"/api/v1/iam/sessions/revoke-all", http.MethodPost},
-	"/platformv1.PlatformIAMService/GetAPIKeys":       {"/api/v1/iam/api-keys", http.MethodGet},
-	"/platformv1.PlatformIAMService/CreateAPIKey":     {"/api/v1/iam/api-keys", http.MethodPost},
-	"/platformv1.PlatformIAMService/RevokeAPIKey":     {"/api/v1/iam/api-keys/revoke", http.MethodPost},
-	"/platformv1.PlatformIAMService/GetAuditLogs":     {"/api/v1/iam/audit-logs", http.MethodGet},
-	"/platformv1.PlatformIAMService/CreatePermission": {"/api/v1/iam/permissions", http.MethodPost},
-	"/platformv1.PlatformIAMService/DeletePermission": {"/api/v1/iam/permissions", http.MethodDelete},
-	"/platformv1.PlatformIAMService/GetPermission":    {"/api/v1/iam/permissions", http.MethodGet},
-	"/platformv1.PlatformIAMService/ListPermissions":  {"/api/v1/iam/permissions", http.MethodGet},
+	"/platform.v1.PlatformIAMService/Authenticate":     {"/api/v1/iam/authenticate", http.MethodPost},
+	"/platform.v1.PlatformIAMService/CheckPermission":  {"/api/v1/iam/permissions/check", http.MethodPost},
+	"/platform.v1.PlatformIAMService/CreateToken":      {"/api/v1/iam/tokens", http.MethodPost},
+	"/platform.v1.PlatformIAMService/RevokeToken":      {"/api/v1/iam/tokens/revoke", http.MethodPost},
+	"/platform.v1.PlatformIAMService/VerifyToken":      {"/api/v1/iam/tokens/verify", http.MethodPost},
+	"/platform.v1.PlatformIAMService/RefreshToken":     {"/api/v1/iam/tokens/refresh", http.MethodPost},
+	"/platform.v1.PlatformIAMService/GetCurrentUser":   {"/api/v1/iam/users/current", http.MethodGet},
+	"/platform.v1.PlatformIAMService/ChangePassword":   {"/api/v1/iam/users/password", http.MethodPost},
+	"/platform.v1.PlatformIAMService/ResetPassword":    {"/api/v1/iam/users/password/reset", http.MethodPost},
+	"/platform.v1.PlatformIAMService/SetupTOTP":        {"/api/v1/iam/mfa/totp/setup", http.MethodPost},
+	"/platform.v1.PlatformIAMService/VerifyTOTP":       {"/api/v1/iam/mfa/totp/verify", http.MethodPost},
+	"/platform.v1.PlatformIAMService/DisableTOTP":      {"/api/v1/iam/mfa/totp", http.MethodDelete},
+	"/platform.v1.PlatformIAMService/GetTOTPStatus":    {"/api/v1/iam/mfa/totp/status", http.MethodGet},
+	"/platform.v1.PlatformIAMService/ListActiveSesss":  {"/api/v1/iam/sessions", http.MethodGet},
+	"/platform.v1.PlatformIAMService/RevokeSession":    {"/api/v1/iam/sessions/revoke", http.MethodPost},
+	"/platform.v1.PlatformIAMService/RevokeAllSesss":   {"/api/v1/iam/sessions/revoke-all", http.MethodPost},
+	"/platform.v1.PlatformIAMService/GetAPIKeys":       {"/api/v1/iam/api-keys", http.MethodGet},
+	"/platform.v1.PlatformIAMService/CreateAPIKey":     {"/api/v1/iam/api-keys", http.MethodPost},
+	"/platform.v1.PlatformIAMService/RevokeAPIKey":     {"/api/v1/iam/api-keys/revoke", http.MethodPost},
+	"/platform.v1.PlatformIAMService/GetAuditLogs":     {"/api/v1/iam/audit-logs", http.MethodGet},
+	"/platform.v1.PlatformIAMService/CreatePermission": {"/api/v1/iam/permissions", http.MethodPost},
+	"/platform.v1.PlatformIAMService/DeletePermission": {"/api/v1/iam/permissions", http.MethodDelete},
+	"/platform.v1.PlatformIAMService/GetPermission":    {"/api/v1/iam/permissions", http.MethodGet},
+	"/platform.v1.PlatformIAMService/ListPermissions":  {"/api/v1/iam/permissions", http.MethodGet},
 
 	// KMS Service
-	"/platformv1.KeyManagementService/CreateKey":              {"/api/v1/kms/keys", http.MethodPost},
-	"/platformv1.KeyManagementService/DeleteKey":              {"/api/v1/kms/keys", http.MethodDelete},
-	"/platformv1.KeyManagementService/GetKey":                 {"/api/v1/kms/keys", http.MethodGet},
-	"/platformv1.KeyManagementService/ListKeys":               {"/api/v1/kms/keys", http.MethodGet},
-	"/platformv1.KeyManagementService/RotateKey":              {"/api/v1/kms/keys/rotate", http.MethodPost},
-	"/platformv1.KeyManagementService/Encrypt":                {"/api/v1/kms/encrypt", http.MethodPost},
-	"/platformv1.KeyManagementService/Decrypt":                {"/api/v1/kms/decrypt", http.MethodPost},
-	"/platformv1.KeyManagementService/Sign":                   {"/api/v1/kms/sign", http.MethodPost},
-	"/platformv1.KeyManagementService/Verify":                 {"/api/v1/kms/verify", http.MethodPost},
-	"/platformv1.KeyManagementService/GenerateRandom":         {"/api/v1/kms/random", http.MethodPost},
-	"/platformv1.KeyManagementService/GenerateDataKey":        {"/api/v1/kms/data-keys", http.MethodPost},
-	"/platformv1.KeyManagementService/GenerateWrappedDataKey": {"/api/v1/kms/data-keys/wrapped", http.MethodPost},
+	"/platform.v1.KeyManagementService/GenerateKey":            {"/api/v1/kms/keys", http.MethodPost},
+	"/platform.v1.KeyManagementService/DeleteKey":              {"/api/v1/kms/keys", http.MethodDelete},
+	"/platform.v1.KeyManagementService/GetKey":                 {"/api/v1/kms/keys", http.MethodGet},
+	"/platform.v1.KeyManagementService/ListKeys":               {"/api/v1/kms/keys", http.MethodGet},
+	"/platform.v1.KeyManagementService/RotateKey":              {"/api/v1/kms/keys/rotate", http.MethodPost},
+	"/platform.v1.KeyManagementService/Encrypt":                {"/api/v1/kms/encrypt", http.MethodPost},
+	"/platform.v1.KeyManagementService/Decrypt":                {"/api/v1/kms/decrypt", http.MethodPost},
+	"/platform.v1.KeyManagementService/Sign":                   {"/api/v1/kms/sign", http.MethodPost},
+	"/platform.v1.KeyManagementService/Verify":                 {"/api/v1/kms/verify", http.MethodPost},
+	"/platform.v1.KeyManagementService/GenerateRandom":         {"/api/v1/kms/random", http.MethodPost},
+	"/platform.v1.KeyManagementService/GenerateDataKey":        {"/api/v1/kms/data-keys", http.MethodPost},
+	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": {"/api/v1/kms/data-keys/wrapped", http.MethodPost},
 
-	// VTPM Service
-	"/platformv1.VTPMService/Create":    {"/api/v1/vtpm/instances", http.MethodPost},
-	"/platformv1.VTPMService/Delete":    {"/api/v1/vtpm/instances", http.MethodDelete},
-	"/platformv1.VTPMService/Start":     {"/api/v1/vtpm/instances/start", http.MethodPost},
-	"/platformv1.VTPMService/Stop":      {"/api/v1/vtpm/instances/stop", http.MethodPost},
-	"/platformv1.VTPMService/List":      {"/api/v1/vtpm/instances", http.MethodGet},
-	"/platformv1.VTPMService/GetState":  {"/api/v1/vtpm/instances/state", http.MethodGet},
-	"/platformv1.VTPMService/Quote":     {"/api/v1/vtpm/quote", http.MethodPost},
-	"/platformv1.VTPMService/Seal":      {"/api/v1/vtpm/seal", http.MethodPost},
-	"/platformv1.VTPMService/Unseal":    {"/api/v1/vtpm/unseal", http.MethodPost},
-	"/platformv1.VTPMService/ExtendPCR": {"/api/v1/vtpm/pcrs/extend", http.MethodPost},
-	"/platformv1.VTPMService/ReadPCR":   {"/api/v1/vtpm/pcrs", http.MethodGet},
+	// VTPM Service — proto: pkg/api/grpc/proto/vtpm.proto
+	// Instance lifecycle lives on VTPMInstanceService; the SDK test suite
+	// historically used /platform.v1.VTPMService/* paths so we keep both
+	// forms mapped to the same REST endpoint for backwards compatibility.
+	"/platform.v1.VTPMInstanceService/CreateInstance":    {"/api/v1/vtpm/instances", http.MethodPost},
+	"/platform.v1.VTPMInstanceService/DeleteInstance":    {"/api/v1/vtpm/instances", http.MethodDelete},
+	"/platform.v1.VTPMInstanceService/StartInstance":     {"/api/v1/vtpm/instances/start", http.MethodPost},
+	"/platform.v1.VTPMInstanceService/StopInstance":      {"/api/v1/vtpm/instances/stop", http.MethodPost},
+	"/platform.v1.VTPMInstanceService/ListInstances":     {"/api/v1/vtpm/instances", http.MethodGet},
+	"/platform.v1.VTPMInstanceService/GetInstanceStatus": {"/api/v1/vtpm/instances/state", http.MethodGet},
+	"/platform.v1.VTPMService/Create":                    {"/api/v1/vtpm/instances", http.MethodPost},
+	"/platform.v1.VTPMService/Delete":                    {"/api/v1/vtpm/instances", http.MethodDelete},
+	"/platform.v1.VTPMService/Start":                     {"/api/v1/vtpm/instances/start", http.MethodPost},
+	"/platform.v1.VTPMService/Stop":                      {"/api/v1/vtpm/instances/stop", http.MethodPost},
+	"/platform.v1.VTPMService/List":                      {"/api/v1/vtpm/instances", http.MethodGet},
+	"/platform.v1.VTPMService/GetState":                  {"/api/v1/vtpm/instances/state", http.MethodGet},
+	"/platform.v1.VTPMService/QuoteVTPM":                 {"/api/v1/vtpm/quote", http.MethodPost},
+	"/platform.v1.VTPMService/SealVTPM":                  {"/api/v1/vtpm/seal", http.MethodPost},
+	"/platform.v1.VTPMService/UnsealVTPM":                {"/api/v1/vtpm/unseal", http.MethodPost},
+	"/platform.v1.VTPMService/ExtendVTPMPCR":             {"/api/v1/vtpm/pcrs/extend", http.MethodPost},
+	"/platform.v1.VTPMService/ReadVTPMPCR":               {"/api/v1/vtpm/pcrs", http.MethodGet},
+
+	// Physical TPM Service — proto: pkg/api/grpc/proto/tpm.proto
+	// Server registrations live in pkg/webservice/v1/rest/tpm/router.go
+	// (RegisterRoutes). Keep this map in lockstep with that file or
+	// the CLI gets 404 on /tpm/info etc. (the bug was: SDK called
+	// POST /platform.v1.TPMService/Info because no map entry existed,
+	// while the server only handles GET /api/v1/tpm/info).
+	"/platform.v1.TPMService/Info":                {"/api/v1/tpm/info", http.MethodGet},
+	"/platform.v1.TPMService/Provision":           {"/api/v1/tpm/provision", http.MethodPost},
+	"/platform.v1.TPMService/Clear":               {"/api/v1/tpm/clear", http.MethodPost},
+	"/platform.v1.TPMService/CreateEK":            {"/api/v1/tpm/ek", http.MethodPost},
+	"/platform.v1.TPMService/GetEK":               {"/api/v1/tpm/ek", http.MethodGet},
+	"/platform.v1.TPMService/DeleteEK":            {"/api/v1/tpm/ek", http.MethodDelete},
+	"/platform.v1.TPMService/GetEKCertificate":    {"/api/v1/tpm/ek/certificate", http.MethodGet},
+	"/platform.v1.TPMService/ImportEKCertificate": {"/api/v1/tpm/ek/certificate", http.MethodPost},
+	"/platform.v1.TPMService/CreateSRK":           {"/api/v1/tpm/srk", http.MethodPost},
+	"/platform.v1.TPMService/GetSRK":              {"/api/v1/tpm/srk", http.MethodGet},
+	"/platform.v1.TPMService/DeleteSRK":           {"/api/v1/tpm/srk", http.MethodDelete},
+	"/platform.v1.TPMService/CreateAK":            {"/api/v1/tpm/ak", http.MethodPost},
+	"/platform.v1.TPMService/GetAK":               {"/api/v1/tpm/ak", http.MethodGet},
+	"/platform.v1.TPMService/DeleteAK":            {"/api/v1/tpm/ak", http.MethodDelete},
+	"/platform.v1.TPMService/Seal":                {"/api/v1/tpm/seal", http.MethodPost},
+	"/platform.v1.TPMService/Unseal":              {"/api/v1/tpm/unseal", http.MethodPost},
+	"/platform.v1.TPMService/Quote":               {"/api/v1/tpm/quote", http.MethodPost},
+	"/platform.v1.TPMService/VerifyQuote":         {"/api/v1/tpm/quote/verify", http.MethodPost},
+	"/platform.v1.TPMService/GetEventLog":         {"/api/v1/tpm/eventlog", http.MethodGet},
+	"/platform.v1.TPMService/GetPCRs":             {"/api/v1/tpm/pcrs", http.MethodGet},
+	"/platform.v1.TPMService/DefineNVRAM":         {"/api/v1/tpm/nvram", http.MethodPost},
+	"/platform.v1.TPMService/ReadNVRAM":           {"/api/v1/tpm/nvram", http.MethodGet},
+	"/platform.v1.TPMService/WriteNVRAM":          {"/api/v1/tpm/nvram", http.MethodPut},
+	"/platform.v1.TPMService/UndefineNVRAM":       {"/api/v1/tpm/nvram", http.MethodDelete},
+	"/platform.v1.TPMService/GetRandom":           {"/api/v1/tpm/random", http.MethodPost},
 
 	// Device Service
-	"/platformv1.DeviceService/Register": {"/api/v1/devices", http.MethodPost},
-	"/platformv1.DeviceService/Delete":   {"/api/v1/devices", http.MethodDelete},
-	"/platformv1.DeviceService/Get":      {"/api/v1/devices", http.MethodGet},
-	"/platformv1.DeviceService/List":     {"/api/v1/devices", http.MethodGet},
-	"/platformv1.DeviceService/Update":   {"/api/v1/devices", http.MethodPut},
-	"/platformv1.DeviceService/Attest":   {"/api/v1/devices/attest", http.MethodPost},
+	"/platform.v1.DeviceService/CreateDevice":            {"/api/v1/devices", http.MethodPost},
+	"/platform.v1.DeviceService/DeleteDevice":            {"/api/v1/devices", http.MethodDelete},
+	"/platform.v1.DeviceService/GetDevice":               {"/api/v1/devices", http.MethodGet},
+	"/platform.v1.DeviceService/ListDevices":             {"/api/v1/devices", http.MethodGet},
+	"/platform.v1.DeviceService/UpdateDevice":            {"/api/v1/devices", http.MethodPut},
+	"/platform.v1.DeviceService/CountDevices":            {"/api/v1/devices/count", http.MethodGet},
+	"/platform.v1.DeviceService/FindDeviceBySerial":      {"/api/v1/devices/by-serial", http.MethodGet},
+	"/platform.v1.DeviceService/ActivateDevice":          {"/api/v1/devices/activate", http.MethodPost},
+	"/platform.v1.DeviceService/CreateProfile":           {"/api/v1/device/profiles", http.MethodPost},
+	"/platform.v1.DeviceService/GetProfile":              {"/api/v1/device/profiles", http.MethodGet},
+	"/platform.v1.DeviceService/UpdateProfile":           {"/api/v1/device/profiles", http.MethodPut},
+	"/platform.v1.DeviceService/DeleteProfile":           {"/api/v1/device/profiles", http.MethodDelete},
+	"/platform.v1.DeviceService/ListProfiles":            {"/api/v1/device/profiles", http.MethodGet},
+	"/platform.v1.DeviceService/CountProfiles":           {"/api/v1/device/profiles/count", http.MethodGet},
+	"/platform.v1.DeviceService/FindProfileByMACAddress": {"/api/v1/device/profiles/by-mac", http.MethodGet},
+	"/platform.v1.DeviceService/FindProfileBySerial":     {"/api/v1/device/profiles/by-serial", http.MethodGet},
+	"/platform.v1.DeviceService/FindMatchingProfile":     {"/api/v1/device/profiles/match", http.MethodPost},
 
 	// SDN Service
-	"/platformv1.SDNService/CreateBridge":     {"/api/v1/sdn/bridges", http.MethodPost},
-	"/platformv1.SDNService/DeleteBridge":     {"/api/v1/sdn/bridges", http.MethodDelete},
-	"/platformv1.SDNService/ListBridges":      {"/api/v1/sdn/bridges", http.MethodGet},
-	"/platformv1.SDNService/GetPortState":     {"/api/v1/sdn/ports/state", http.MethodGet},
-	"/platformv1.SDNService/SetPortState":     {"/api/v1/sdn/ports/state", http.MethodPost},
-	"/platformv1.SDNService/AddPort":          {"/api/v1/sdn/ports", http.MethodPost},
-	"/platformv1.SDNService/DeletePort":       {"/api/v1/sdn/ports", http.MethodDelete},
-	"/platformv1.SDNService/AddFlow":          {"/api/v1/sdn/flows", http.MethodPost},
-	"/platformv1.SDNService/DeleteFlow":       {"/api/v1/sdn/flows", http.MethodDelete},
-	"/platformv1.SDNService/ListFlows":        {"/api/v1/sdn/flows", http.MethodGet},
-	"/platformv1.SDNService/ApplyPolicy":      {"/api/v1/sdn/policies/apply", http.MethodPost},
-	"/platformv1.SDNService/GetPolicy":        {"/api/v1/sdn/policies", http.MethodGet},
-	"/platformv1.SDNService/ListPolicies":     {"/api/v1/sdn/policies", http.MethodGet},
-	"/platformv1.SDNService/AuthenticatePort": {"/api/v1/sdn/ports/auth", http.MethodPost},
-	"/platformv1.SDNService/RevokePortAuth":   {"/api/v1/sdn/ports/auth", http.MethodDelete},
+	"/platform.v1.SDNService/CreateBridge":     {"/api/v1/sdn/bridges", http.MethodPost},
+	"/platform.v1.SDNService/DeleteBridge":     {"/api/v1/sdn/bridges", http.MethodDelete},
+	"/platform.v1.SDNService/ListBridges":      {"/api/v1/sdn/bridges", http.MethodGet},
+	"/platform.v1.SDNService/GetPortState":     {"/api/v1/sdn/ports/state", http.MethodGet},
+	"/platform.v1.SDNService/SetPortState":     {"/api/v1/sdn/ports/state", http.MethodPost},
+	"/platform.v1.SDNService/AddPort":          {"/api/v1/sdn/ports", http.MethodPost},
+	"/platform.v1.SDNService/DeletePort":       {"/api/v1/sdn/ports", http.MethodDelete},
+	"/platform.v1.SDNService/AddFlow":          {"/api/v1/sdn/flows", http.MethodPost},
+	"/platform.v1.SDNService/DeleteFlow":       {"/api/v1/sdn/flows", http.MethodDelete},
+	"/platform.v1.SDNService/ListFlows":        {"/api/v1/sdn/flows", http.MethodGet},
+	"/platform.v1.SDNService/ApplyPolicy":      {"/api/v1/sdn/policies/apply", http.MethodPost},
+	"/platform.v1.SDNService/GetPolicy":        {"/api/v1/sdn/policies", http.MethodGet},
+	"/platform.v1.SDNService/ListPolicies":     {"/api/v1/sdn/policies", http.MethodGet},
+	"/platform.v1.SDNService/AuthenticatePort": {"/api/v1/sdn/ports/auth", http.MethodPost},
+	"/platform.v1.SDNService/RevokePortAuth":   {"/api/v1/sdn/ports/auth", http.MethodDelete},
 
 	// DNS Service
-	"/platformv1.DNSService/AddRecord":    {"/api/v1/dns/records", http.MethodPost},
-	"/platformv1.DNSService/DeleteRecord": {"/api/v1/dns/records", http.MethodDelete},
-	"/platformv1.DNSService/GetRecord":    {"/api/v1/dns/records", http.MethodGet},
-	"/platformv1.DNSService/ListRecords":  {"/api/v1/dns/records", http.MethodGet},
-	"/platformv1.DNSService/Resolve":      {"/api/v1/dns/resolve", http.MethodGet},
-	"/platformv1.DNSService/CreateZone":   {"/api/v1/dns/zones", http.MethodPost},
-	"/platformv1.DNSService/DeleteZone":   {"/api/v1/dns/zones", http.MethodDelete},
-	"/platformv1.DNSService/ListZones":    {"/api/v1/dns/zones", http.MethodGet},
+	"/platform.v1.DNSService/AddRecord":    {"/api/v1/dns/records", http.MethodPost},
+	"/platform.v1.DNSService/DeleteRecord": {"/api/v1/dns/records", http.MethodDelete},
+	"/platform.v1.DNSService/GetRecord":    {"/api/v1/dns/records", http.MethodGet},
+	"/platform.v1.DNSService/ListRecords":  {"/api/v1/dns/records", http.MethodGet},
+	"/platform.v1.DNSService/Resolve":      {"/api/v1/dns/resolve", http.MethodGet},
+	"/platform.v1.DNSService/CreateZone":   {"/api/v1/dns/zones", http.MethodPost},
+	"/platform.v1.DNSService/DeleteZone":   {"/api/v1/dns/zones", http.MethodDelete},
+	"/platform.v1.DNSService/ListZones":    {"/api/v1/dns/zones", http.MethodGet},
 
 	// Attestation Service
-	"/platformv1.AttestationService/GetQuote":       {"/api/v1/attestation/quote", http.MethodPost},
-	"/platformv1.AttestationService/VerifyQuote":    {"/api/v1/attestation/verify", http.MethodPost},
-	"/platformv1.AttestationService/GetEK":          {"/api/v1/attestation/ek", http.MethodGet},
-	"/platformv1.AttestationService/GetAK":          {"/api/v1/attestation/ak", http.MethodGet},
-	"/platformv1.AttestationService/CreateAK":       {"/api/v1/attestation/ak", http.MethodPost},
-	"/platformv1.AttestationService/ChallengeAK":    {"/api/v1/attestation/challenge", http.MethodPost},
-	"/platformv1.AttestationService/VerifyChalleng": {"/api/v1/attestation/challenge/verify", http.MethodPost},
+	"/platform.v1.AttestationService/GetQuote":       {"/api/v1/attestation/quote", http.MethodPost},
+	"/platform.v1.AttestationService/VerifyQuote":    {"/api/v1/attestation/verify", http.MethodPost},
+	"/platform.v1.AttestationService/GetEK":          {"/api/v1/attestation/ek", http.MethodGet},
+	"/platform.v1.AttestationService/GetAK":          {"/api/v1/attestation/ak", http.MethodGet},
+	"/platform.v1.AttestationService/CreateAK":       {"/api/v1/attestation/ak", http.MethodPost},
+	"/platform.v1.AttestationService/ChallengeAK":    {"/api/v1/attestation/challenge", http.MethodPost},
+	"/platform.v1.AttestationService/VerifyChalleng": {"/api/v1/attestation/challenge/verify", http.MethodPost},
 
 	// IDevID Service
-	"/platformv1.IDevIDService/Generate":    {"/api/v1/idevid", http.MethodPost},
-	"/platformv1.IDevIDService/GetInfo":     {"/api/v1/idevid/info", http.MethodGet},
-	"/platformv1.IDevIDService/Delete":      {"/api/v1/idevid", http.MethodDelete},
-	"/platformv1.IDevIDService/GetCSR":      {"/api/v1/idevid/csr", http.MethodGet},
-	"/platformv1.IDevIDService/InstallCert": {"/api/v1/idevid/cert", http.MethodPost},
-	"/platformv1.IDevIDService/GetCert":     {"/api/v1/idevid/cert", http.MethodGet},
-	"/platformv1.IDevIDService/Exists":      {"/api/v1/idevid/exists", http.MethodGet},
+	"/platform.v1.IDevIDService/Generate":    {"/api/v1/idevid", http.MethodPost},
+	"/platform.v1.IDevIDService/GetInfo":     {"/api/v1/idevid/info", http.MethodGet},
+	"/platform.v1.IDevIDService/Delete":      {"/api/v1/idevid", http.MethodDelete},
+	"/platform.v1.IDevIDService/GetCSR":      {"/api/v1/idevid/csr", http.MethodGet},
+	"/platform.v1.IDevIDService/InstallCert": {"/api/v1/idevid/cert", http.MethodPost},
+	"/platform.v1.IDevIDService/GetCert":     {"/api/v1/idevid/cert", http.MethodGet},
+	"/platform.v1.IDevIDService/Exists":      {"/api/v1/idevid/exists", http.MethodGet},
 
 	// Tenant Service
-	"/platformv1.TenantService/Create":  {"/api/v1/tenants", http.MethodPost},
-	"/platformv1.TenantService/Delete":  {"/api/v1/tenants", http.MethodDelete},
-	"/platformv1.TenantService/Get":     {"/api/v1/tenants", http.MethodGet},
-	"/platformv1.TenantService/List":    {"/api/v1/tenants", http.MethodGet},
-	"/platformv1.TenantService/Update":  {"/api/v1/tenants", http.MethodPut},
-	"/platformv1.TenantService/Suspend": {"/api/v1/tenants/suspend", http.MethodPost},
-	"/platformv1.TenantService/Resume":  {"/api/v1/tenants/resume", http.MethodPost},
+	"/platform.v1.TenantService/CreateTenant":  {"/api/v1/tenants", http.MethodPost},
+	"/platform.v1.TenantService/DeleteTenant":  {"/api/v1/tenants", http.MethodDelete},
+	"/platform.v1.TenantService/GetTenant":     {"/api/v1/tenants", http.MethodGet},
+	"/platform.v1.TenantService/ListTenants":   {"/api/v1/tenants", http.MethodGet},
+	"/platform.v1.TenantService/UpdateTenant":  {"/api/v1/tenants", http.MethodPut},
+	"/platform.v1.TenantService/SuspendTenant": {"/api/v1/tenants/suspend", http.MethodPost},
+	"/platform.v1.TenantService/ResumeTenant":  {"/api/v1/tenants/resume", http.MethodPost},
 
 	// PXE Service
-	"/platformv1.PXEService/ListDevices":    {"/api/v1/pxe/devices", http.MethodGet},
-	"/platformv1.PXEService/GetDevice":      {"/api/v1/pxe/devices", http.MethodGet},
-	"/platformv1.PXEService/RegisterDevice": {"/api/v1/pxe/devices", http.MethodPost},
-	"/platformv1.PXEService/UpdateState":    {"/api/v1/pxe/devices/state", http.MethodPut},
-	"/platformv1.PXEService/Authorize":      {"/api/v1/pxe/devices/authorize", http.MethodPost},
-	"/platformv1.PXEService/Quarantine":     {"/api/v1/pxe/devices/quarantine", http.MethodPost},
-	"/platformv1.PXEService/GetStatus":      {"/api/v1/pxe/status", http.MethodGet},
+	"/platform.v1.PXEService/ListDevices":    {"/api/v1/pxe/devices", http.MethodGet},
+	"/platform.v1.PXEService/GetDevice":      {"/api/v1/pxe/devices", http.MethodGet},
+	"/platform.v1.PXEService/RegisterDevice": {"/api/v1/pxe/devices", http.MethodPost},
+	"/platform.v1.PXEService/UpdateState":    {"/api/v1/pxe/devices/state", http.MethodPut},
+	"/platform.v1.PXEService/Authorize":      {"/api/v1/pxe/devices/authorize", http.MethodPost},
+	"/platform.v1.PXEService/Quarantine":     {"/api/v1/pxe/devices/quarantine", http.MethodPost},
+	"/platform.v1.PXEService/GetStatus":      {"/api/v1/pxe/status", http.MethodGet},
+
+	// Switch Service
+	"/platform.v1.SwitchService/ListPorts":     {"/api/v1/switches/ports", http.MethodGet},
+	"/platform.v1.SwitchService/GetPortStatus": {"/api/v1/switches/ports/status", http.MethodGet},
+	"/platform.v1.SwitchService/SetPortVLAN":   {"/api/v1/switches/ports/vlan", http.MethodPost},
+	"/platform.v1.SwitchService/EnablePort":    {"/api/v1/switches/ports/enable", http.MethodPost},
+	"/platform.v1.SwitchService/DisablePort":   {"/api/v1/switches/ports/disable", http.MethodPost},
 
 	// Compute Service
-	"/platformv1.ComputeService/CreateContainer":  {"/api/v1/compute/containers", http.MethodPost},
-	"/platformv1.ComputeService/DeleteContainer":  {"/api/v1/compute/containers", http.MethodDelete},
-	"/platformv1.ComputeService/StartContainer":   {"/api/v1/compute/containers/start", http.MethodPost},
-	"/platformv1.ComputeService/StopContainer":    {"/api/v1/compute/containers/stop", http.MethodPost},
-	"/platformv1.ComputeService/ListContainers":   {"/api/v1/compute/containers", http.MethodGet},
-	"/platformv1.ComputeService/GetContainer":     {"/api/v1/compute/containers", http.MethodGet},
-	"/platformv1.ComputeService/AttestContainer":  {"/api/v1/compute/containers/attest", http.MethodPost},
-	"/platformv1.ComputeService/GetContainerLogs": {"/api/v1/compute/containers/logs", http.MethodGet},
+	"/platform.v1.ComputeService/CreateContainer":  {"/api/v1/compute/containers", http.MethodPost},
+	"/platform.v1.ComputeService/DeleteContainer":  {"/api/v1/compute/containers", http.MethodDelete},
+	"/platform.v1.ComputeService/StartContainer":   {"/api/v1/compute/containers/start", http.MethodPost},
+	"/platform.v1.ComputeService/StopContainer":    {"/api/v1/compute/containers/stop", http.MethodPost},
+	"/platform.v1.ComputeService/ListContainers":   {"/api/v1/compute/containers", http.MethodGet},
+	"/platform.v1.ComputeService/GetContainer":     {"/api/v1/compute/containers", http.MethodGet},
+	"/platform.v1.ComputeService/AttestContainer":  {"/api/v1/compute/containers/attest", http.MethodPost},
+	"/platform.v1.ComputeService/GetContainerLogs": {"/api/v1/compute/containers/logs", http.MethodGet},
+
+	// Ceremony Service — proto: pkg/api/grpc/proto/ceremony.proto
+	// Server registrations live in pkg/api/daemon/ceremony_rest.go.
+	"/platform.v1.CeremonyService/Init":              {"/api/v1/ceremony/init", http.MethodPost},
+	"/platform.v1.CeremonyService/Status":            {"/api/v1/ceremony/status", http.MethodGet},
+	"/platform.v1.CeremonyService/ClaimCertBegin":    {"/api/v1/ceremony/claim-cert/begin", http.MethodPost},
+	"/platform.v1.CeremonyService/ClaimCertComplete": {"/api/v1/ceremony/claim-cert/complete", http.MethodPost},
+	"/platform.v1.CeremonyService/ClaimShare":        {"/api/v1/ceremony/claim-share", http.MethodPost},
+	"/platform.v1.CeremonyService/SignCSR":           {"/api/v1/ceremony/sign-csr", http.MethodPost},
+
+	// EAB Service — proto: pkg/api/grpc/proto/eab.proto
+	// Server registrations live in pkg/webservice/v1/rest/eab/router.go.
+	// CRUD methods that operate on a specific credential ID/key
+	// resolve the ID from the request body — the SDK adapter posts
+	// the body and the server router extracts {id}/{key}.
+	"/platform.v1.EABService/CreateCredential":          {"/api/v1/eab/credentials", http.MethodPost},
+	"/platform.v1.EABService/GetCredential":             {"/api/v1/eab/credentials", http.MethodGet},
+	"/platform.v1.EABService/GetCredentialByKeyID":      {"/api/v1/eab/credentials/by-key", http.MethodGet},
+	"/platform.v1.EABService/ListCredentials":           {"/api/v1/eab/credentials", http.MethodGet},
+	"/platform.v1.EABService/RevokeCredential":          {"/api/v1/eab/credentials/revoke", http.MethodPost},
+	"/platform.v1.EABService/ValidateCredential":        {"/api/v1/eab/credentials/validate", http.MethodPost},
+	"/platform.v1.EABService/DeleteCredential":          {"/api/v1/eab/credentials", http.MethodDelete},
+	"/platform.v1.EABService/GetCredentialQRCode":       {"/api/v1/eab/credentials/qrcode", http.MethodGet},
+	"/platform.v1.EABService/GetEnrollmentURL":          {"/api/v1/eab/credentials/url", http.MethodGet},
+	"/platform.v1.EABService/MarkCredentialUsed":        {"/api/v1/eab/credentials/used", http.MethodPost},
+	"/platform.v1.EABService/CleanupExpiredCredentials": {"/api/v1/eab/credentials/cleanup", http.MethodPost},
+
+	// FIDO2 Service — proto: pkg/api/grpc/proto/fido2.proto
+	"/platform.v1.FIDO2Service/ListDevices":  {"/api/v1/fido2/devices", http.MethodGet},
+	"/platform.v1.FIDO2Service/WaitDevice":   {"/api/v1/fido2/devices/wait", http.MethodPost},
+	"/platform.v1.FIDO2Service/Info":         {"/api/v1/fido2/info", http.MethodGet},
+	"/platform.v1.FIDO2Service/Register":     {"/api/v1/fido2/register", http.MethodPost},
+	"/platform.v1.FIDO2Service/Authenticate": {"/api/v1/fido2/authenticate", http.MethodPost},
+
+	// Gateway Service — proto: pkg/api/grpc/proto/gateway.proto
+	// Server registrations live in pkg/webservice/v1/rest/gateway/.
+	"/platform.v1.GatewayService/GetGatewayStatus":      {"/api/v1/gateway/status", http.MethodGet},
+	"/platform.v1.GatewayService/SetGatewayMode":        {"/api/v1/gateway/mode", http.MethodPost},
+	"/platform.v1.GatewayService/GetBGPStatus":          {"/api/v1/gateway/bgp/status", http.MethodGet},
+	"/platform.v1.GatewayService/ListBGPPeers":          {"/api/v1/gateway/bgp/peers", http.MethodGet},
+	"/platform.v1.GatewayService/AnnouncePrefix":        {"/api/v1/gateway/bgp/prefixes", http.MethodPost},
+	"/platform.v1.GatewayService/WithdrawPrefix":        {"/api/v1/gateway/bgp/prefixes", http.MethodDelete},
+	"/platform.v1.GatewayService/ListAnnouncedPrefixes": {"/api/v1/gateway/bgp/prefixes", http.MethodGet},
+	"/platform.v1.GatewayService/ListIPAMPools":         {"/api/v1/gateway/ipam/pools", http.MethodGet},
+	"/platform.v1.GatewayService/AllocateIP":            {"/api/v1/gateway/ipam/allocations", http.MethodPost},
+	"/platform.v1.GatewayService/ReleaseIP":             {"/api/v1/gateway/ipam/allocations", http.MethodDelete},
+	"/platform.v1.GatewayService/ListAllocations":       {"/api/v1/gateway/ipam/allocations", http.MethodGet},
+
+	// Invitation Service — proto: pkg/api/grpc/proto/invitation.proto
+	// Server registrations live in pkg/webservice/v1/rest/invitation/.
+	// Detail/revoke routes carry {id}/{token} in the URL; the SDK
+	// adapter posts the body and the server extracts vars.
+	"/platform.v1.InvitationService/CreateInvitation":     {"/api/v1/invitations", http.MethodPost},
+	"/platform.v1.InvitationService/GetInvitation":        {"/api/v1/invitations", http.MethodGet},
+	"/platform.v1.InvitationService/GetInvitationByToken": {"/api/v1/invitations/by-token", http.MethodGet},
+	"/platform.v1.InvitationService/ListInvitations":      {"/api/v1/invitations", http.MethodGet},
+	"/platform.v1.InvitationService/RevokeInvitation":     {"/api/v1/invitations/revoke", http.MethodPost},
+	"/platform.v1.InvitationService/AcceptInvitation":     {"/api/v1/invitations/accept", http.MethodPost},
+	"/platform.v1.InvitationService/DeleteInvitation":     {"/api/v1/invitations", http.MethodDelete},
+
+	// LUKS Service — proto: pkg/api/grpc/proto/luks.proto
+	// Server registrations live in pkg/api/daemon/luks_rest_handlers.go.
+	"/platform.v1.LUKSService/Status":           {"/api/v1/luks/status", http.MethodGet},
+	"/platform.v1.LUKSService/ListSlots":        {"/api/v1/luks/slots", http.MethodGet},
+	"/platform.v1.LUKSService/Info":             {"/api/v1/luks/info", http.MethodGet},
+	"/platform.v1.LUKSService/EnrollPassphrase": {"/api/v1/luks/enroll/passphrase", http.MethodPost},
+	"/platform.v1.LUKSService/EnrollFIDO2":      {"/api/v1/luks/enroll/fido2", http.MethodPost},
+	"/platform.v1.LUKSService/EnrollTPM":        {"/api/v1/luks/enroll/tpm", http.MethodPost},
+	"/platform.v1.LUKSService/EnrollRecovery":   {"/api/v1/luks/enroll/recovery", http.MethodPost},
+	"/platform.v1.LUKSService/RemoveKey":        {"/api/v1/luks/slots", http.MethodDelete},
+	"/platform.v1.LUKSService/TestUnlock":       {"/api/v1/luks/test-unlock", http.MethodPost},
+	"/platform.v1.LUKSService/ChangePassphrase": {"/api/v1/luks/passphrase", http.MethodPut},
+
+	// Overlay Service — proto: pkg/api/grpc/proto/overlay.proto
+	// Server registrations live in pkg/webservice/v1/rest/overlay/.
+	"/platform.v1.OverlayService/ListVTEPs":        {"/api/v1/overlay/vteps", http.MethodGet},
+	"/platform.v1.OverlayService/GetVTEP":          {"/api/v1/overlay/vteps", http.MethodGet},
+	"/platform.v1.OverlayService/CreateVNI":        {"/api/v1/overlay/vnis", http.MethodPost},
+	"/platform.v1.OverlayService/DeleteVNI":        {"/api/v1/overlay/vnis", http.MethodDelete},
+	"/platform.v1.OverlayService/ListVNIs":         {"/api/v1/overlay/vnis", http.MethodGet},
+	"/platform.v1.OverlayService/ListTunnels":      {"/api/v1/overlay/tunnels", http.MethodGet},
+	"/platform.v1.OverlayService/GetTunnelStats":   {"/api/v1/overlay/tunnels/stats", http.MethodGet},
+	"/platform.v1.OverlayService/ListRemoteMACs":   {"/api/v1/overlay/macs", http.MethodGet},
+	"/platform.v1.OverlayService/ForgetMAC":        {"/api/v1/overlay/macs", http.MethodDelete},
+	"/platform.v1.OverlayService/GetOverlayStatus": {"/api/v1/overlay/status", http.MethodGet},
+
+	// PIV Service — proto: pkg/api/grpc/proto/piv.proto
+	"/platform.v1.PIVService/ListDevices": {"/api/v1/piv/devices", http.MethodGet},
+	"/platform.v1.PIVService/ListSlots":   {"/api/v1/piv/slots", http.MethodGet},
+	"/platform.v1.PIVService/SlotInfo":    {"/api/v1/piv/slots/info", http.MethodGet},
+	"/platform.v1.PIVService/Generate":    {"/api/v1/piv/generate", http.MethodPost},
+	"/platform.v1.PIVService/Import":      {"/api/v1/piv/import", http.MethodPost},
+	"/platform.v1.PIVService/Sign":        {"/api/v1/piv/sign", http.MethodPost},
+	"/platform.v1.PIVService/Attest":      {"/api/v1/piv/attest", http.MethodPost},
+	"/platform.v1.PIVService/Reset":       {"/api/v1/piv/reset", http.MethodPost},
+
+	// Provisioning Gateway — proto: pkg/api/grpc/proto/provisioning.proto
+	// Server registrations live in pkg/api/daemon/rest_service.go.
+	"/platform.v1.ProvisioningGateway/RegisterPXEDevice":     {"/api/v1/provisioning/pxe/register", http.MethodPost},
+	"/platform.v1.ProvisioningGateway/GetBootConfig":         {"/api/v1/provisioning/boot-config", http.MethodGet},
+	"/platform.v1.ProvisioningGateway/ReportDeviceState":     {"/api/v1/provisioning/devices/state", http.MethodPost},
+	"/platform.v1.ProvisioningGateway/NotifyInstallComplete": {"/api/v1/provisioning/devices/install-complete", http.MethodPost},
+
+	// Cluster Service — proto: pkg/api/grpc/proto/cluster.proto
+	// REST routes are best-effort; gRPC/Unix remain the canonical
+	// transports for cluster lifecycle (Bootstrap/Join/Leave produce
+	// streaming-style state transitions that don't fit plain REST).
+	"/platform.v1.ClusterService/Bootstrap":  {"/api/v1/cluster/bootstrap", http.MethodPost},
+	"/platform.v1.ClusterService/Join":       {"/api/v1/cluster/join", http.MethodPost},
+	"/platform.v1.ClusterService/Leave":      {"/api/v1/cluster/leave", http.MethodPost},
+	"/platform.v1.ClusterService/GetStatus":  {"/api/v1/cluster/status", http.MethodGet},
+	"/platform.v1.ClusterService/ListNodes":  {"/api/v1/cluster/nodes", http.MethodGet},
+
+	// BMC Service and per-tenant barrier RPCs live in
+	// templatedRouteTable above — their REST routes encode
+	// {profileID} and {id} in the URL path, populated from the
+	// request's profile_id / tenant_id field. See buildTemplatedRequest.
+
+	// Registry Service intentionally omitted: Push/Pull are
+	// bidirectional streams that don't translate to plain REST.
 }
 
 // mapGRPCMethodToREST maps a gRPC method to REST endpoint and HTTP method.

@@ -29,7 +29,7 @@ import (
 	"strings"
 
 	xkmsadapter "github.com/jeremyhahn/go-trusted-platform/internal/xkms"
-	"github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/miekg/dns"
 )
 
@@ -141,7 +141,7 @@ func (s *XKMSKeyStore) generateKey(ctx context.Context, tenantID, zoneName strin
 	}
 
 	// Create the key generation request
-	req := &xkms.GenerateKeyRequest{
+	req := &xkmssdk.GenerateKeyRequest{
 		Backend: s.backend,
 		KeyID:   keyID,
 		KeyType: keyAlg,
@@ -361,7 +361,7 @@ func (s *xkmsSigner) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts)
 		}
 	}
 
-	req := &xkms.SignRequest{
+	req := &xkmssdk.SignRequest{
 		Backend: s.backend,
 		KeyID:   s.keyID,
 		Data:    digest,

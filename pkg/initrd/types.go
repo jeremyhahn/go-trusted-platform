@@ -20,7 +20,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fido2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 var (

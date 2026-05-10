@@ -26,7 +26,7 @@ type RegistryClient interface {
 	Push(ctx context.Context, req *PushRequest) (*PushResult, error)
 	Pull(ctx context.Context, req *PullRequest) (*PullResult, error)
 	List(ctx context.Context, req *ListRequest) (*ListResult, error)
-	Delete(ctx context.Context, req *DeleteRequest) (*DeleteResult, error)
+	Delete(ctx context.Context, req *DeleteRequest) (*DeleteResultCLI, error)
 	Inspect(ctx context.Context, req *InspectRequest) (*InspectResult, error)
 	Status(ctx context.Context, req *StatusRequest) (*StatusResult, error)
 }
@@ -245,7 +245,7 @@ func executeDelete(exec *CommandExecutor, req *DeleteRequest) error {
 
 	// Handle dry run mode
 	if req.DryRun {
-		result := &DeleteResult{
+		result := &DeleteResultCLI{
 			Reference: req.Reference,
 			Digest:    "sha256:placeholder",
 			Deleted:   false,
@@ -264,7 +264,7 @@ func executeDelete(exec *CommandExecutor, req *DeleteRequest) error {
 }
 
 // printDeleteResponseTestable outputs the delete result in the appropriate format
-func printDeleteResponseTestable(printer Printer, format cli.OutputFormat, result *DeleteResult, dryRun bool) error {
+func printDeleteResponseTestable(printer Printer, format cli.OutputFormat, result *DeleteResultCLI, dryRun bool) error {
 	switch format {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
 		return printer.Print(result)

@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "common.proto";
+
+// SwitchService provides physical switch management operations.
+// It delegates port-level operations on physical network switches
+// via SSH CLI commands to Cisco NX-OS, IOS, Arista EOS, and similar platforms.
+service SwitchService {
+  // ListPorts returns the status of all physical ports on the named switch.
+  rpc ListPorts(ListSwitchPortsRequest) returns (ListSwitchPortsResponse);
+
+  // GetPortStatus returns the full observable state of a single port.
+  rpc GetPortStatus(GetSwitchPortStatusRequest) returns (GetSwitchPortStatusResponse);
+
+  // SetPortVLAN moves an access-mode port to the specified VLAN.
+  rpc SetPortVLAN(SetSwitchPortVLANRequest) returns (SetSwitchPortVLANResponse);
+
+  // EnablePort administratively enables a port.
+  rpc EnablePort(EnableSwitchPortRequest) returns (EnableSwitchPortResponse);
+
+  // DisablePort administratively shuts down a port.
+  rpc DisablePort(DisableSwitchPortRequest) returns (DisableSwitchPortResponse);
+}
+
+// SwitchPortStatus holds the observable state of a single switch port.
+message SwitchPortStatus {
+  string port = 1;
+  string mode = 2;         // "access" or "trunk"
+  uint32 access_vlan = 3;
+  repeated uint32 trunk_vlans = 4;
+  bool enabled = 5;
+  bool link_up = 6;
+  string description = 7;
+}
+
+// ListSwitchPortsRequest requests all ports on a named switch.
+message ListSwitchPortsRequest {
+  string switch_name = 1;
+}
+
+// ListSwitchPortsResponse returns the status of all ports.
+message ListSwitchPortsResponse {
+  repeated SwitchPortStatus ports = 1;
+}
+
+// GetSwitchPortStatusRequest requests the status of a single port.
+message GetSwitchPortStatusRequest {
+  string switch_name = 1;
+  string port_name = 2;
+}
+
+// GetSwitchPortStatusResponse returns the status of a single port.
+message GetSwitchPortStatusResponse {
+  SwitchPortStatus port = 1;
+}
+
+// SetSwitchPortVLANRequest moves a port to a specified VLAN.
+message SetSwitchPortVLANRequest {
+  string switch_name = 1;
+  string port_name = 2;
+  uint32 vlan_id = 3;
+}
+
+// SetSwitchPortVLANResponse confirms the VLAN change.
+message SetSwitchPortVLANResponse {
+  Status status = 1;
+}
+
+// EnableSwitchPortRequest enables a switch port.
+message EnableSwitchPortRequest {
+  string switch_name = 1;
+  string port_name = 2;
+}
+
+// EnableSwitchPortResponse confirms the port was enabled.
+message EnableSwitchPortResponse {
+  Status status = 1;
+}
+
+// DisableSwitchPortRequest disables a switch port.
+message DisableSwitchPortRequest {
+  string switch_name = 1;
+  string port_name = 2;
+}
+
+// DisableSwitchPortResponse confirms the port was disabled.
+message DisableSwitchPortResponse {
+  Status status = 1;
+}

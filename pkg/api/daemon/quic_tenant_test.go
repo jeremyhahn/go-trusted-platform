@@ -79,6 +79,16 @@ type mockTenantManager struct {
 	syncCalled         int
 	rotateDEKCalled    int
 	getDEKStatusCalled int
+
+	barrierStatus       *tenant.TenantBarrierState
+	initBarrierCalled   int
+	initBarrierErr      error
+	unsealBarrierCalled int
+	unsealBarrierErr    error
+	sealBarrierCalled   int
+	sealBarrierErr      error
+	barrierStatusCalled int
+	barrierStatusErr    error
 }
 
 func newMockTenantManager() *mockTenantManager {
@@ -289,6 +299,29 @@ func (m *mockTenantManager) GetDEKStatus(ctx context.Context, tenantID string) (
 		return nil, m.getDEKStatusErr
 	}
 	return m.dekStatus, nil
+}
+
+func (m *mockTenantManager) InitTenantBarrier(ctx context.Context, tenantID string) error {
+	m.initBarrierCalled++
+	return m.initBarrierErr
+}
+
+func (m *mockTenantManager) UnsealTenantBarrier(ctx context.Context, tenantID string, key []byte) error {
+	m.unsealBarrierCalled++
+	return m.unsealBarrierErr
+}
+
+func (m *mockTenantManager) SealTenantBarrier(ctx context.Context, tenantID string) error {
+	m.sealBarrierCalled++
+	return m.sealBarrierErr
+}
+
+func (m *mockTenantManager) TenantBarrierStatus(ctx context.Context, tenantID string) (*tenant.TenantBarrierState, error) {
+	m.barrierStatusCalled++
+	if m.barrierStatusErr != nil {
+		return nil, m.barrierStatusErr
+	}
+	return m.barrierStatus, nil
 }
 
 // Test helper to create handler with tenant manager

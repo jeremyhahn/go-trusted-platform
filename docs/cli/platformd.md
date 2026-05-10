@@ -166,12 +166,13 @@ Display certificate details.
 platformd ca certificate --serial 12345
 ```
 
-#### ca export-bundle
+#### ca bundle
 
-Export CA certificate bundle.
+Print or save the CA certificate bundle (PEM). Stdout by default;
+pass `--output <path>` to write to a file.
 
 ```bash
-platformd ca export-bundle --output ca-bundle.pem
+platformd ca bundle --output ca-bundle.pem
 ```
 
 #### ca install

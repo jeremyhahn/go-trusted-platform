@@ -32,7 +32,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/secureboot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/swtpm"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // CertificateAuthority interface for CA operations.

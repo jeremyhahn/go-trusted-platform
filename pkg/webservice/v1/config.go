@@ -14,7 +14,6 @@
 package v1
 
 import (
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 )
 
@@ -56,20 +55,14 @@ type CORSConfig struct {
 	AllowCredentials bool     `yaml:"allow-credentials" json:"allow_credentials" mapstructure:"allow-credentials"`
 }
 
-// ACMEIdentityConfig defines ACME-related configuration for an identity
-type ACMEIdentityConfig struct {
-	// Request contains the certificate request parameters
-	Request *trustedca.ACMECertificateRequest `yaml:"request" json:"request" mapstructure:"request"`
-	// CrossSigner contains cross-signing configuration
-	CrossSigner *trustedca.ACMECrossSignConfig `yaml:"cross-signer" json:"cross_signer" mapstructure:"cross-signer"`
-}
+// ACMEIdentityConfig defines ACME-related configuration for an identity.
+// Aliased from pkg/common so infrastructure packages (pkg/bmc) can use
+// the same shape without importing webservice.
+type ACMEIdentityConfig = common.ACMEIdentityConfig
 
-type Identity struct {
-	ACME    *ACMEIdentityConfig                  `yaml:"acme" json:"acme" mapstructure:"acme"`
-	SANS    *trustedca.CASubjectAlternativeNames `yaml:"sans" json:"sans" mapstructure:"sans"`
-	Subject trustedca.CASubject                  `yaml:"subject" json:"subject" mapstructure:"subject"`
-	Valid   int                                  `yaml:"valid" json:"valid" mapstructure:"valid"`
-}
+// Identity is the webservice alias for common.Identity — the canonical
+// ACME-managed TLS cert identity type shared across the platform.
+type Identity = common.Identity
 
 type JWT struct {
 	Expiration int64  `yaml:"expiration" json:"expiration" mapstructure:"expiration"`

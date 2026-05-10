@@ -247,13 +247,13 @@ func (e ErrVerifyCertificateFailed) Error() string {
 	return fmt.Sprintf("failed to verify certificate: %s", e.Reason)
 }
 
-// ErrExportBundleFailed is returned when CA bundle export fails.
-type ErrExportBundleFailed struct {
+// ErrCABundleFailed is returned when CA bundle retrieval or persistence fails.
+type ErrCABundleFailed struct {
 	Reason string
 }
 
-func (e ErrExportBundleFailed) Error() string {
-	return fmt.Sprintf("failed to export CA bundle: %s", e.Reason)
+func (e ErrCABundleFailed) Error() string {
+	return fmt.Sprintf("CA bundle operation failed: %s", e.Reason)
 }
 
 // ErrBundleEmpty is returned when the CA bundle is empty.

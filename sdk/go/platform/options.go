@@ -64,6 +64,22 @@ type Options struct {
 	// If nil, insecure connections may be attempted.
 	TLSConfig *tls.Config
 
+	// TLSServerName overrides the SNI / certificate verification hostname
+	// used when establishing TLS connections. When empty the host portion
+	// of the configured address is used. Useful when the certificate's CN /
+	// SAN does not match the dialed address (e.g. dialing by IP, or routing
+	// through a proxy).
+	TLSServerName string
+
+	// BearerToken is an optional bearer/JWT token attached as the
+	// `Authorization: Bearer <token>` header to every outbound RPC.
+	// All transports honor this when set: REST sends an HTTP header,
+	// gRPC injects metadata via PerRPCCredentials, QUIC and MCP attach
+	// the token to their respective headers/JSON-RPC envelopes. Leave
+	// empty for transports that authenticate by other means
+	// (Unix socket SO_PEERCRED, mTLS client cert).
+	BearerToken string
+
 	// Timeout is the connection timeout.
 	// Defaults to DefaultTimeout if not set.
 	Timeout time.Duration
@@ -143,6 +159,26 @@ func WithMCPAddr(addr string) Option {
 func WithTLSConfig(cfg *tls.Config) Option {
 	return func(o *Options) {
 		o.TLSConfig = cfg
+	}
+}
+
+// WithTLSServerName overrides the SNI / certificate verification hostname.
+// When set the value is propagated into the TLS configuration of every
+// transport adapter (REST, gRPC, QUIC) so the client honours the name
+// regardless of the dialed address.
+func WithTLSServerName(name string) Option {
+	return func(o *Options) {
+		o.TLSServerName = name
+	}
+}
+
+// WithBearerToken sets the bearer/JWT token attached to every outbound
+// RPC as `Authorization: Bearer <token>` (or the protocol equivalent).
+// All transports honor this option; transports that authenticate by
+// other means (Unix peer creds, mTLS) ignore it.
+func WithBearerToken(token string) Option {
+	return func(o *Options) {
+		o.BearerToken = token
 	}
 }
 

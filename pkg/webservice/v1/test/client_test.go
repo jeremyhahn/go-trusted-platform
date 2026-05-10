@@ -22,7 +22,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 
 	"github.com/stretchr/testify/assert"
 )

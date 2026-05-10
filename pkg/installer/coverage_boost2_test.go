@@ -304,15 +304,20 @@ func TestInstaller_InstallOS_SetRootPasswordFails(t *testing.T) {
 }
 
 func TestInstaller_InstallOS_NoRootPassword(t *testing.T) {
+	// When config.OS.RootPassword is empty the installer falls back to the
+	// default "password" credential rather than skipping SetRootPassword.
+	// This guarantees every install yields a working root login even when
+	// the device template forgets to set one. See pkg/installer/installer.go
+	// installOS() rootPassword default.
 	mockOS := new(MockOSInstaller)
 	ctx := context.Background()
 	config := createTestConfig()
-	config.OS.RootPassword = "" // No root password
+	config.OS.RootPassword = "" // triggers the "password" default
 
 	mockOS.On("InstallBase", ctx, "/mnt").Return(nil)
 	mockOS.On("ConfigureSystem", ctx, "/mnt", mock.AnythingOfType("*installer.DiskInfo")).Return(nil)
 	mockOS.On("InstallKernel", ctx, "/mnt").Return(nil)
-	// SetRootPassword should NOT be called
+	mockOS.On("SetRootPassword", ctx, "/mnt", "password").Return(nil)
 	mockOS.On("InstallPackages", ctx, "/mnt").Return(nil)
 	mockOS.On("ExecutePostInstall", ctx, "/mnt").Return(nil)
 
@@ -325,7 +330,7 @@ func TestInstaller_InstallOS_NoRootPassword(t *testing.T) {
 	diskInfo := &DiskInfo{Device: "/dev/sda"}
 	err := inst.installOS(ctx, diskInfo)
 	assert.NoError(t, err)
-	mockOS.AssertNotCalled(t, "SetRootPassword")
+	mockOS.AssertCalled(t, "SetRootPassword", ctx, "/mnt", "password")
 }
 
 func TestInstaller_InstallOS_PackageInstallFails_NoFatalError(t *testing.T) {
@@ -352,7 +357,13 @@ func TestInstaller_InstallOS_PackageInstallFails_NoFatalError(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestInstaller_InstallOS_PostInstallFails_NoFatalError(t *testing.T) {
+// TestInstaller_InstallOS_PostInstallFatal verifies that post-install script
+// failures abort the install. Per pkg/installer/installer.go installOS(),
+// post-install scripts configure SSH/operator access and a silent failure
+// would leave the operator with an unreachable OS — the installer fails
+// loudly instead. Scripts that genuinely want to tolerate non-critical
+// errors must trap and exit 0 themselves.
+func TestInstaller_InstallOS_PostInstallFatal(t *testing.T) {
 	mockOS := new(MockOSInstaller)
 	ctx := context.Background()
 	config := createTestConfig()
@@ -372,8 +383,9 @@ func TestInstaller_InstallOS_PostInstallFails_NoFatalError(t *testing.T) {
 
 	diskInfo := &DiskInfo{Device: "/dev/sda"}
 	err := inst.installOS(ctx, diskInfo)
-	// Post-install failure is NOT fatal
-	assert.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "post-install scripts failed")
+	assert.Contains(t, err.Error(), "script error")
 }
 
 func TestInstaller_InstallOS_WithNetwork(t *testing.T) {

@@ -55,6 +55,9 @@ var (
 
 	// ErrLoggerNil is returned when a nil logger is provided.
 	ErrLoggerNil = &errLoggerNil{}
+
+	// ErrNoServicesEnabled is returned when no services are enabled in the config.
+	ErrNoServicesEnabled = &errNoServicesEnabled{}
 )
 
 type errGatewayNotFound struct{}
@@ -105,47 +108,60 @@ type errLoggerNil struct{}
 
 func (e *errLoggerNil) Error() string { return "logger is nil" }
 
-// ErrModeNotSupported is returned when a gateway mode is not supported.
-type ErrModeNotSupported struct {
-	Mode GatewayMode
+type errNoServicesEnabled struct{}
+
+func (e *errNoServicesEnabled) Error() string { return "no services enabled in gateway configuration" }
+
+// ErrServiceStartFailed is returned when a service handler fails to start.
+type ErrServiceStartFailed struct {
+	Service string
+	Cause   error
 }
 
-func (e *ErrModeNotSupported) Error() string {
-	return fmt.Sprintf("gateway mode not supported: %s", e.Mode)
-}
-
-// ErrModeActivationFailed is returned when mode activation fails.
-type ErrModeActivationFailed struct {
-	Mode  GatewayMode
-	Cause error
-}
-
-func (e *ErrModeActivationFailed) Error() string {
+func (e *ErrServiceStartFailed) Error() string {
 	if e.Cause != nil {
-		return fmt.Sprintf("failed to activate gateway mode %s: %v", e.Mode, e.Cause)
+		return fmt.Sprintf("failed to start service %s: %v", e.Service, e.Cause)
 	}
-	return fmt.Sprintf("failed to activate gateway mode %s", e.Mode)
+	return fmt.Sprintf("failed to start service %s", e.Service)
 }
 
-func (e *ErrModeActivationFailed) Unwrap() error {
+func (e *ErrServiceStartFailed) Unwrap() error {
 	return e.Cause
 }
 
-// ErrModeDeactivationFailed is returned when mode deactivation fails.
-type ErrModeDeactivationFailed struct {
-	Mode  GatewayMode
-	Cause error
+// ErrServiceStopFailed is returned when a service handler fails to stop.
+type ErrServiceStopFailed struct {
+	Service string
+	Cause   error
 }
 
-func (e *ErrModeDeactivationFailed) Error() string {
+func (e *ErrServiceStopFailed) Error() string {
 	if e.Cause != nil {
-		return fmt.Sprintf("failed to deactivate gateway mode %s: %v", e.Mode, e.Cause)
+		return fmt.Sprintf("failed to stop service %s: %v", e.Service, e.Cause)
 	}
-	return fmt.Sprintf("failed to deactivate gateway mode %s", e.Mode)
+	return fmt.Sprintf("failed to stop service %s", e.Service)
 }
 
-func (e *ErrModeDeactivationFailed) Unwrap() error {
+func (e *ErrServiceStopFailed) Unwrap() error {
 	return e.Cause
+}
+
+// ErrServiceAlreadyActive is returned when trying to start an already active service.
+type ErrServiceAlreadyActive struct {
+	Service string
+}
+
+func (e *ErrServiceAlreadyActive) Error() string {
+	return fmt.Sprintf("service already active: %s", e.Service)
+}
+
+// ErrServiceNotActive is returned when an operation requires a service that is not active.
+type ErrServiceNotActive struct {
+	Service string
+}
+
+func (e *ErrServiceNotActive) Error() string {
+	return fmt.Sprintf("service not active: %s", e.Service)
 }
 
 // ErrReputationTooLow is returned when node reputation is below the minimum.
@@ -291,24 +307,6 @@ type RequirementCheck struct {
 	Passed   bool
 }
 
-// ErrModeNotActive is returned when an operation requires a mode that is not active.
-type ErrModeNotActive struct {
-	Mode GatewayMode
-}
-
-func (e *ErrModeNotActive) Error() string {
-	return fmt.Sprintf("gateway mode not active: %s", e.Mode)
-}
-
-// ErrModeAlreadyActive is returned when trying to activate an already active mode.
-type ErrModeAlreadyActive struct {
-	Mode GatewayMode
-}
-
-func (e *ErrModeAlreadyActive) Error() string {
-	return fmt.Sprintf("gateway mode already active: %s", e.Mode)
-}
-
 // ErrStartupFailed is returned when gateway startup fails.
 type ErrStartupFailed struct {
 	GatewayID string
@@ -436,4 +434,14 @@ type ErrCapacityExceeded struct {
 
 func (e *ErrCapacityExceeded) Error() string {
 	return fmt.Sprintf("capacity exceeded for %s: limit %d, current %d", e.Resource, e.Limit, e.Current)
+}
+
+// ErrTunnelConfigInvalid is returned when tunnel configuration is invalid.
+type ErrTunnelConfigInvalid struct {
+	TunnelName string
+	Reason     string
+}
+
+func (e *ErrTunnelConfigInvalid) Error() string {
+	return fmt.Sprintf("invalid tunnel config %q: %s", e.TunnelName, e.Reason)
 }

@@ -180,7 +180,7 @@ func TestQuicClientConn_Invoke_Closed(t *testing.T) {
 
 	conn := &quicClientConn{adapter: a}
 
-	err := conn.Invoke(context.Background(), "/platformv1.PlatformDaemon/Health", nil, nil)
+	err := conn.Invoke(context.Background(), "/platform.v1.PlatformDaemon/GetHealth", nil, nil)
 	if err == nil {
 		t.Fatal("Invoke() should return error when closed")
 	}
@@ -202,7 +202,7 @@ func TestQuicClientConn_Invoke_NilClient(t *testing.T) {
 
 	conn := &quicClientConn{adapter: a}
 
-	err := conn.Invoke(context.Background(), "/platformv1.PlatformDaemon/Health", nil, nil)
+	err := conn.Invoke(context.Background(), "/platform.v1.PlatformDaemon/GetHealth", nil, nil)
 	if err == nil {
 		t.Fatal("Invoke() should return error with nil client")
 	}
@@ -261,9 +261,9 @@ func TestGRPCMethodToOpcodeMap_Health(t *testing.T) {
 		method   string
 		expected byte
 	}{
-		{"/platformv1.PlatformDaemon/Health", quicapi.OpHealth},
-		{"/platformv1.PlatformDaemon/Liveness", quicapi.OpLiveness},
-		{"/platformv1.PlatformDaemon/Readiness", quicapi.OpReadiness},
+		{"/platform.v1.PlatformDaemon/GetHealth", quicapi.OpHealth},
+		{"/platform.v1.PlatformDaemon/GetStatus", quicapi.OpDaemonStatus},
+		{"/platform.v1.PlatformDaemon/GetVersion", quicapi.OpDaemonVersion},
 	}
 
 	for _, tt := range tests {
@@ -284,13 +284,13 @@ func TestGRPCMethodToOpcodeMap_CA(t *testing.T) {
 		method   string
 		expected byte
 	}{
-		{"/platformv1.CAService/GetInfo", quicapi.OpCAInfo},
-		{"/platformv1.CAService/Issue", quicapi.OpCAIssue},
-		{"/platformv1.CAService/Revoke", quicapi.OpCARevoke},
-		{"/platformv1.CAService/Renew", quicapi.OpCARenew},
-		{"/platformv1.CAService/Verify", quicapi.OpCAVerify},
-		{"/platformv1.CAService/GetCRL", quicapi.OpCACRL},
-		{"/platformv1.CAService/GetBundle", quicapi.OpCABundle},
+		{"/platform.v1.CAService/GetCAInfo", quicapi.OpCAInfo},
+		{"/platform.v1.CAService/IssueCertificate", quicapi.OpCAIssue},
+		{"/platform.v1.CAService/RevokeCertificate", quicapi.OpCARevoke},
+		{"/platform.v1.CAService/RenewCertificate", quicapi.OpCARenew},
+		{"/platform.v1.CAService/VerifyCertificate", quicapi.OpCAVerify},
+		{"/platform.v1.CAService/GetCRL", quicapi.OpCACRL},
+		{"/platform.v1.CAService/GetCABundle", quicapi.OpCABundle},
 	}
 
 	for _, tt := range tests {
@@ -311,11 +311,11 @@ func TestGRPCMethodToOpcodeMap_KMS(t *testing.T) {
 		method   string
 		expected byte
 	}{
-		{"/platformv1.KeyManagementService/CreateKey", quicapi.OpKMSGenerateKey},
-		{"/platformv1.KeyManagementService/Encrypt", quicapi.OpKMSEncrypt},
-		{"/platformv1.KeyManagementService/Decrypt", quicapi.OpKMSDecrypt},
-		{"/platformv1.KeyManagementService/Sign", quicapi.OpKMSSign},
-		{"/platformv1.KeyManagementService/Verify", quicapi.OpKMSVerify},
+		{"/platform.v1.KeyManagementService/GenerateKey", quicapi.OpKMSGenerateKey},
+		{"/platform.v1.KeyManagementService/Encrypt", quicapi.OpKMSEncrypt},
+		{"/platform.v1.KeyManagementService/Decrypt", quicapi.OpKMSDecrypt},
+		{"/platform.v1.KeyManagementService/Sign", quicapi.OpKMSSign},
+		{"/platform.v1.KeyManagementService/Verify", quicapi.OpKMSVerify},
 	}
 
 	for _, tt := range tests {
@@ -336,13 +336,13 @@ func TestGRPCMethodToOpcodeMap_VTPM(t *testing.T) {
 		method   string
 		expected byte
 	}{
-		{"/platformv1.VTPMService/Create", quicapi.OpVTPMCreate},
-		{"/platformv1.VTPMService/Delete", quicapi.OpVTPMDelete},
-		{"/platformv1.VTPMService/Start", quicapi.OpVTPMStart},
-		{"/platformv1.VTPMService/Stop", quicapi.OpVTPMStop},
-		{"/platformv1.VTPMService/Quote", quicapi.OpVTPMQuote},
-		{"/platformv1.VTPMService/Seal", quicapi.OpVTPMSeal},
-		{"/platformv1.VTPMService/Unseal", quicapi.OpVTPMUnseal},
+		{"/platform.v1.VTPMInstanceService/CreateInstance", quicapi.OpVTPMCreate},
+		{"/platform.v1.VTPMInstanceService/DeleteInstance", quicapi.OpVTPMDelete},
+		{"/platform.v1.VTPMInstanceService/StartInstance", quicapi.OpVTPMStart},
+		{"/platform.v1.VTPMInstanceService/StopInstance", quicapi.OpVTPMStop},
+		{"/platform.v1.VTPMService/QuoteVTPM", quicapi.OpVTPMQuote},
+		{"/platform.v1.VTPMService/SealVTPM", quicapi.OpVTPMSeal},
+		{"/platform.v1.VTPMService/UnsealVTPM", quicapi.OpVTPMUnseal},
 	}
 
 	for _, tt := range tests {

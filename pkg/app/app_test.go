@@ -17,13 +17,13 @@ import (
 	"context"
 	"testing"
 
-	acmeclient "github.com/jeremyhahn/go-trusted-ca/pkg/acme/client"
+	acmeclient "github.com/jeremyhahn/go-xkms/pkg/acme/client"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
 	"github.com/jeremyhahn/go-xkms/pkg/tpm2"
 	"github.com/jeremyhahn/go-xkms/pkg/types"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -357,7 +357,7 @@ func TestApp_SetupSecretResolvers(t *testing.T) {
 
 	t.Run("autogen_only", func(t *testing.T) {
 		registry, err := (&App{Logger: logger}).SetupSecretResolvers(context.Background(),
-			&SecretsConfig{AutoGenerate: true})
+			&SecretsConfig{})
 		require.NoError(t, err)
 		require.NotNil(t, registry)
 	})
@@ -378,7 +378,7 @@ func TestApp_SetupSecretResolvers(t *testing.T) {
 
 	t.Run("all_enabled", func(t *testing.T) {
 		registry, err := (&App{Logger: logger}).SetupSecretResolvers(context.Background(),
-			&SecretsConfig{AutoGenerate: true, LocalKMS: true, Encrypted: true})
+			&SecretsConfig{LocalKMS: true, Encrypted: true})
 		require.NoError(t, err)
 		require.NotNil(t, registry)
 	})
@@ -414,14 +414,14 @@ func TestApp_ProcessSecrets(t *testing.T) {
 
 	t.Run("enabled_with_autogen", func(t *testing.T) {
 		result, err := (&App{Logger: logger}).ProcessSecrets(context.Background(),
-			&SecretsConfig{Enabled: true, AutoGenerate: true}, "")
+			&SecretsConfig{Enabled: true}, "")
 		require.NoError(t, err)
 		require.NotNil(t, result)
 	})
 
 	t.Run("enabled_with_migrate_no_service", func(t *testing.T) {
 		result, err := (&App{Logger: logger}).ProcessSecrets(context.Background(),
-			&SecretsConfig{Enabled: true, AutoGenerate: true, MigrateToKMS: true}, "")
+			&SecretsConfig{Enabled: true, MigrateToKMS: true}, "")
 		require.NoError(t, err)
 		require.NotNil(t, result)
 	})
@@ -476,10 +476,11 @@ func TestDefaultCAConfig(t *testing.T) {
 	require.NotEmpty(t, cfg.Identity)
 
 	for i, identity := range cfg.Identity {
-		if identity.KeyAlgorithm != 0 {
-			assert.NotEmpty(t, identity.KeyAlgorithmStr,
-				"identity[%d] should have KeyAlgorithmStr set", i)
+		if len(identity.Keys) == 0 || identity.Keys[0] == nil {
+			continue
 		}
+		assert.NotEmpty(t, identity.Keys[0].KeyAlgorithm,
+			"identity[%d] should have a primary key algorithm configured", i)
 	}
 }
 
@@ -593,13 +594,23 @@ func TestApp_ParsePINs_Uniqueness(t *testing.T) {
 // TestApp_OpenTPM_NilEK verifies early return when EK is nil.
 func TestApp_OpenTPM_NilEK(t *testing.T) {
 	t.Run("no_initialize", func(t *testing.T) {
-		err := (&App{Logger: logging.DefaultLogger(), TPMConfig: tpm2.Config{EK: nil}}).OpenTPM(false)
+		err := (&App{
+			Logger:      logging.DefaultLogger(),
+			PlatformDir: t.TempDir(),
+			TPM:         &stubTPM{},
+			TPMConfig:   tpm2.Config{EK: nil},
+		}).OpenTPM(false)
 		require.Error(t, err)
 		assert.Equal(t, tpm2.ErrNotInitialized, err)
 	})
 
 	t.Run("with_initialize", func(t *testing.T) {
-		err := (&App{Logger: logging.DefaultLogger(), TPMConfig: tpm2.Config{EK: nil}}).OpenTPM(true)
+		err := (&App{
+			Logger:      logging.DefaultLogger(),
+			PlatformDir: t.TempDir(),
+			TPM:         &stubTPM{},
+			TPMConfig:   tpm2.Config{EK: nil},
+		}).OpenTPM(true)
 		require.Error(t, err)
 		assert.Equal(t, tpm2.ErrNotInitialized, err)
 	})

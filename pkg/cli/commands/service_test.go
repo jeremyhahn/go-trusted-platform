@@ -18,7 +18,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -179,53 +178,6 @@ func TestNewServiceStatusCommand(t *testing.T) {
 
 	if cmd.RunE == nil {
 		t.Error("RunE should not be nil")
-	}
-}
-
-func TestParseServiceType(t *testing.T) {
-	tests := []struct {
-		input       string
-		expected    platformv1.ServiceType
-		shouldError bool
-	}{
-		{"tpm", platformv1.ServiceType_SERVICE_TYPE_TPM, false},
-		{"TPM", platformv1.ServiceType_SERVICE_TYPE_TPM, false},
-		{"sdn", platformv1.ServiceType_SERVICE_TYPE_SDN, false},
-		{"SDN", platformv1.ServiceType_SERVICE_TYPE_SDN, false},
-		{"compute", platformv1.ServiceType_SERVICE_TYPE_COMPUTE, false},
-		{"Compute", platformv1.ServiceType_SERVICE_TYPE_COMPUTE, false},
-		{"dns", platformv1.ServiceType_SERVICE_TYPE_DNS, false},
-		{"DNS", platformv1.ServiceType_SERVICE_TYPE_DNS, false},
-		{"acme", platformv1.ServiceType_SERVICE_TYPE_ACME, false},
-		{"ACME", platformv1.ServiceType_SERVICE_TYPE_ACME, false},
-		{"webservice", platformv1.ServiceType_SERVICE_TYPE_WEBSERVICE, false},
-		{"web", platformv1.ServiceType_SERVICE_TYPE_WEBSERVICE, false},
-		{"WebService", platformv1.ServiceType_SERVICE_TYPE_WEBSERVICE, false},
-		{"attestation", platformv1.ServiceType_SERVICE_TYPE_ATTESTATION, false},
-		{"Attestation", platformv1.ServiceType_SERVICE_TYPE_ATTESTATION, false},
-		{"invalid", platformv1.ServiceType_SERVICE_TYPE_UNSPECIFIED, true},
-		{"", platformv1.ServiceType_SERVICE_TYPE_UNSPECIFIED, true},
-		{"unknown", platformv1.ServiceType_SERVICE_TYPE_UNSPECIFIED, true},
-	}
-
-	for _, tt := range tests {
-		result, err := parseServiceType(tt.input)
-		if tt.shouldError {
-			if err == nil {
-				t.Errorf("parseServiceType(%s): expected error but got none", tt.input)
-			}
-			if _, ok := err.(cli.ErrInvalidServiceType); !ok {
-				t.Errorf("parseServiceType(%s): expected ErrInvalidServiceType, got %T", tt.input, err)
-			}
-		} else {
-			if err != nil {
-				t.Errorf("parseServiceType(%s): unexpected error: %v", tt.input, err)
-			}
-			if result != tt.expected {
-				t.Errorf("parseServiceType(%s): expected %v, got %v",
-					tt.input, tt.expected, result)
-			}
-		}
 	}
 }
 

@@ -16,40 +16,113 @@ Overrides keep per-site secrets and addressing out of the shared templates.
 
 ## Shipped Templates
 
-Templates are located at `configs/platform/templates/` and follow the structure:
+Templates are located at `configs/platform/templates/` and organized first by
+deployment profile, then by vendor and hardware model:
 
 ```
 configs/platform/templates/
-  vendor/
-    model/
-      control-plane.yaml
-      gateway.yaml
-      compute.yaml
+  dedicated/          # 3-node: 1 CP + 1 GW + 1 compute (active)
+    README.md         ← profile architecture + operational contract
+    vendor/
+      model/
+        control-plane.yaml
+        gateway.yaml
+        compute.yaml
+  single-node/        # All-in-one (CP + GW + compute on one box)
+    README.md
+    default.yaml
+  high-availability/  # HA cluster (planned)
 ```
+
+Each profile directory has its own `README.md` describing the topology,
+role responsibilities, bond/bridge layout, DNS strategy, and the
+expected override precedence. When a template shape changes, the
+profile's README is updated in the same commit so it stays the
+single source of truth for the profile's contract. See
+[`configs/platform/templates/dedicated/README.md`](../configs/platform/templates/dedicated/README.md)
+for the current production reference.
+
+### Deployment Profiles
+
+| Profile | Layout | Status |
+|---------|--------|--------|
+| `dedicated` | 3 dedicated nodes: 1 CP, 1 GW, 1 compute | **Active** |
+| `single-node` | CP + GW + compute colocated on one node | Planned |
+| `high-availability` | 3 CP, 2 GW, 2 compute with Raft consensus | Planned |
 
 ### Available Templates
 
-| Vendor | Model | Roles | Status |
-|--------|-------|-------|--------|
-| Supermicro | X10SDV-TP8F | control-plane, gateway, compute | Production |
-| Dell | PowerEdge R640 | control-plane, gateway, compute | Placeholder |
+| Vendor | Model Family | Profile | Roles | Status |
+|--------|--------------|---------|-------|--------|
+| Supermicro | X10 (X10SDV-TP8F, etc.) | dedicated | control-plane, gateway, compute | Production |
+| Dell | PowerEdge R640 | dedicated | control-plane, gateway, compute | Phase 2 (UNTESTED) |
 
 ## Quick Start
 
-### Deploy with template defaults
+### Default ISO (no flags — single-node)
 
 ```bash
-platformctl iso create \
-  --platform-config configs/platform/templates/supermicro/x10sdv-tp8f/control-plane.yaml
+platformctl iso create
 ```
 
-### Deploy with overrides (production)
+With no flags, `iso create` uses the single-node template at
+`configs/platform/templates/single-node/default.yaml` and bakes the
+merged config into the ISO. This matches the reference-architecture
+single-node deployment (CP + GW on one box) documented in
+`docs/architecture/deployment-reference.md` §1.
+
+### Deploy with a specific role template (baked into ISO)
 
 ```bash
 platformctl iso create \
-  --platform-config configs/platform/templates/supermicro/x10sdv-tp8f/control-plane.yaml \
+  --platform-config configs/platform/templates/dedicated/supermicro/x10/control-plane.yaml
+```
+
+### Deploy with overrides (template + site-specific overrides, baked)
+
+```bash
+platformctl iso create \
+  --platform-config configs/platform/templates/dedicated/supermicro/x10/control-plane.yaml \
   --overrides /path/to/my-overrides.yaml
 ```
+
+### Shared ISO with dynamic per-node config (multi-node bootstrap)
+
+```bash
+platformctl iso create \
+  --config-server http://deployer.lan:8080/config/mac
+```
+
+In this mode the ISO carries only a kernel cmdline pointer to the
+pxeboot HTTP config server. Per-node merged configs are published
+by the bootstrap orchestrator keyed by MAC address. A single ISO
+installs CP, GW, and compute correctly. See
+`docs/bootstrap/config-delivery.md` for the full flow.
+
+### Hybrid (dynamic preferred, baked as fallback)
+
+```bash
+platformctl iso create \
+  --config-server http://deployer.lan:8080/config/mac \
+  --platform-config configs/platform/templates/single-node/default.yaml
+```
+
+Useful when the config server might be unreachable at install time —
+the baked config acts as a safety net.
+
+---
+
+## Delivery Modes
+
+| Mode | Flags | Config location | When to use |
+|------|-------|-----------------|-------------|
+| **Default baked** | (none) | ISO: `/media/cdrom/configs/installer.yaml` | Single-node deploys |
+| **Custom baked** | `--platform-config [--overrides]` | ISO | Per-role ISOs in multi-node |
+| **Dynamic** | `--config-server URL` | Orchestrator HTTP `/config/mac/<mac>/installer.yaml` | Fleet bootstrap, shared ISO |
+| **Hybrid** | `--config-server URL --platform-config X` | Dynamic with baked fallback | Multi-node with unreliable config-server reach |
+
+See `docs/architecture/bootstrap-flow.md` §3 for the install-time
+priority chain that picks between modes.
 
 ## Override Files
 
@@ -108,26 +181,29 @@ without exposing secrets.
 
 | Scheme | Example | Description |
 |--------|---------|-------------|
-| `autogen://` | `autogen://32/base64` | Generate random bytes at first boot |
-| `kms://` | `kms://platform/secrets/luks-passphrase` | Resolve from QuicBaaS KMS |
+| `kms://` | `kms://<path>?ensure=true&len=32&enc=base64` | Canonical scheme: ensure-persist-or-fetch from QuicBaaS KMS |
 | `encrypted://` | `encrypted://base64data` | Decrypt using the device IDevID certificate |
 
-### autogen://
+### kms:// (canonical)
 
-The `autogen://` scheme generates cryptographically random values during
-first-boot provisioning. The URI path specifies length and encoding:
+The `kms://` scheme is the canonical secret URI. It identifies a secret by
+path in the QuicBaaS KMS and, when the `?ensure=true` query parameter is
+present, applies the Vault-style generate-on-first-boot / return-on-subsequent-boot
+semantics via `SecretsService.EnsureSecret` and a distributed lock:
 
-- `autogen://32/base64` -- 32 random bytes, base64-encoded. Used for
-  passphrases, LUKS keys, and other high-entropy secrets.
-- `autogen://6/numeric` -- 6-digit numeric PIN. Used for TPM SO-PIN and
-  user-PIN fields.
-
-### kms://
-
-The `kms://` scheme resolves a secret by path from the QuicBaaS KMS. This
-is the steady-state scheme after bootstrap completes and secrets have been
-migrated into the KMS. Templates never ship with `kms://` URIs; they are
-written into the config automatically after migration.
+- `kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64`
+  -- ensures a 32-byte base64-encoded secret exists at the given path.
+  First call generates and persists; every subsequent call returns the same
+  stable bytes.
+- Query parameters:
+  - `ensure=true` -- opt in to the ensure semantics (generate-and-persist)
+  - `len=N` -- requested byte length
+  - `enc=base64` or `enc=numeric` -- encoding of the returned value
+- Paths are short-form. The tenant and node identifiers are
+  implicitly prepended at resolution time by
+  `LocalSecretsResolver.WithIdentity`, using `platform.tenant_id` and
+  the node hostname. Templates must not embed `tenants/…/nodes/…`
+  literals or `{{tenant}}` / `{{node}}` placeholders.
 
 ### encrypted://
 
@@ -136,27 +212,24 @@ decrypted using the device's IDevID certificate private key. This is used
 for secrets delivered to a specific device during provisioning, ensuring
 only the intended hardware can decrypt them.
 
-## Bootstrap Secrets Lifecycle
+## Secrets Lifecycle
 
-Secrets follow a defined lifecycle from template to KMS-managed storage:
+Secrets follow a single unified lifecycle:
 
-1. **First boot** -- The provisioning system resolves all `autogen://` URIs
-   in the merged config to random values. No secrets exist on disk or in the
-   KMS at this point.
-2. **TPM and KMS initialization** -- The generated values are used to
-   initialize the TPM (SO-PIN, user-PIN) and seed the local KMS keystore.
-3. **KMS migration** -- Secrets are stored into QuicBaaS KMS under
-   well-known paths derived from the device identity.
-4. **Config rewrite** -- The on-disk config file is updated, replacing
-   resolved literal values with `kms://` references pointing to the KMS
-   paths where each secret now lives.
-5. **Subsequent boots** -- The platform loads secrets from the KMS using
-   the `kms://` URIs. The original `autogen://` values are never stored
-   in plaintext on disk after migration completes.
+1. **Template load** -- The platform loads the merged template+overrides
+   config. All `kms://?ensure=true` URIs are placeholders at this point.
+2. **First boot** -- On first resolution, `SecretsService.EnsureSecret`
+   takes a distributed lock on the KMS path, generates a random value per
+   the URI spec (`len`, `enc`), persists it in the QuicBaaS KMS, and
+   returns the generated bytes.
+3. **Subsequent boots** -- Every future resolution returns the same stored
+   bytes -- the URI becomes fully deterministic after first use.
+4. **Rotation** -- Delete the KMS path (or use a rotation API) to force
+   regeneration on next boot.
 
-This lifecycle ensures that templates remain free of secrets, generated
-values have a minimal exposure window, and all secrets converge into the
-KMS as the single source of truth.
+This unified model replaces the older `autogen://` + migration pattern --
+secrets are born in the KMS and stay there, with no intermediate plaintext
+on-disk state.
 
 ## BMC Configuration
 
@@ -167,14 +240,16 @@ IPMI 2.0 RMCP+ and Redfish APIs.
 
 ```yaml
 bmc:
-  address: autogen://0/placeholder
-  username: ADMIN
-  password: autogen://32/base64
-  protocol: redfish
+  address: 198.18.0.1
+  username: admin
+  password: "kms://bmc/password?ensure=true&len=16&enc=base64"
+  protocol: ipmi
 ```
 
-Template BMC credentials are placeholders. Override them with real BMC
-credentials in your private override file:
+Template BMC passwords use the canonical `kms://?ensure=` scheme so the
+first provisioning run generates a random password and persists it in the
+KMS. Override the `address`, `username`, and (if needed) `password` with
+real values in your private override file:
 
 ```yaml
 bmc:
@@ -194,18 +269,18 @@ With BMC credentials in place, the platform can:
 ## Platform PINs
 
 Templates include `platform.so-pin` and `platform.user-pin` fields using
-the `autogen://6/numeric` scheme:
+the canonical `kms://?ensure=` scheme:
 
 ```yaml
 platform:
-  so-pin: "autogen://6/numeric"
-  user-pin: "autogen://6/numeric"
+  so-pin:   "kms://platform/so-pin?ensure=true&len=8&enc=numeric"
+  user-pin: "kms://platform/user-pin?ensure=true&len=6&enc=numeric"
 ```
 
 These PINs are generated automatically during first-boot provisioning.
 There is no need to pass PINs on the command line or store them in override
-files. After bootstrap, PINs are migrated to the KMS along with all other
-secrets and the config is rewritten with `kms://` references.
+files -- `SecretsService.EnsureSecret` generates and persists them on first
+resolve and returns the same stable bytes on every subsequent boot.
 
 ## Bootstrap Integration
 
@@ -216,7 +291,7 @@ overrides automatically during fleet provisioning:
 nodes:
   - hostname: cp-01
     role: control-plane
-    template: supermicro/x10sdv-tp8f/control-plane.yaml
+    template: dedicated/supermicro/x10/control-plane.yaml
     overrides:
       os:
         hostname: cp-01
@@ -227,7 +302,7 @@ nodes:
 
   - hostname: gw-01
     role: gateway
-    template: supermicro/x10sdv-tp8f/gateway.yaml
+    template: dedicated/supermicro/x10/gateway.yaml
     overrides:
       os:
         hostname: gw-01

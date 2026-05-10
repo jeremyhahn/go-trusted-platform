@@ -6,7 +6,8 @@
  */
 
 import { useState } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter, useParams, usePathname } from 'next/navigation';
+import { resolveDynamicId } from '@/utils/dynamic-route';
 import {
   ArrowLeft,
   AlertCircle,
@@ -49,7 +50,10 @@ function getRoleBadge(role: DeviceRole) {
 
 export default function CreateProfileClient() {
   const params = useParams<{ id: string }>();
-  const templateId = parseInt(params.id, 10);
+  const pathname = usePathname();
+  // Keep the template ID as a string; parseInt would truncate uint64
+  // values above 2^53 and break the URL round trip.
+  const templateId = resolveDynamicId(params, pathname, 'templates') as any;
   const router = useRouter();
   const { toast } = useToast();
   const deviceService = useDevice();

@@ -61,7 +61,7 @@ func TestNewKeyVersionsCommand_Flags(t *testing.T) {
 		defaultValue string
 	}{
 		{"limit", "l", "50"},
-		{"cursor", "c", ""},
+		{"cursor", "", ""},
 	}
 
 	for _, tt := range tests {

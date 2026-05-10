@@ -97,4 +97,7 @@ type RemoteContext struct {
 	ClientCert string `yaml:"client_cert" json:"client_cert"`
 	ClientKey  string `yaml:"client_key" json:"client_key"`
 	Token      string `yaml:"token,omitempty" json:"token,omitempty" secret:"true"` // Bearer token for REST/MCP/QUIC
+	// ServerName overrides the SNI / certificate verification hostname.
+	// When empty the host portion of Server is used.
+	ServerName string `yaml:"server_name,omitempty" json:"server_name,omitempty"`
 }

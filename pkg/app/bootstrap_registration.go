@@ -129,36 +129,83 @@ func (app *App) postBootstrapRegistration(sink string) {
 		return
 	}
 
-	endpoint := fmt.Sprintf("http://%s/installs/%s/registration.json", sink, hostname)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(body))
-	if err != nil {
-		app.Logger.Warn("bootstrap registration: failed to create request",
-			"endpoint", endpoint, "error", err)
-		return
+	// Publish to the MAC-keyed path (primary) and the hostname-keyed
+	// path (fallback). The orchestrator's fetchRegistrationIP tries the
+	// MAC path first because a shared ISO bakes a generic hostname like
+	// "server" that doesn't correlate with the per-node hostname in
+	// bootstrap.yaml. MAC is self-determined and matches the identity
+	// the orchestrator already knows for this node. Both uploads are
+	// best-effort; a failure on either doesn't block the other.
+	endpoints := []string{
+		fmt.Sprintf("http://%s/installs/%s/registration.json", sink, hostname),
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		app.Logger.Warn("bootstrap registration: request failed",
-			"endpoint", endpoint, "error", err)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		app.Logger.Warn("bootstrap registration: non-success response",
-			"endpoint", endpoint, "status", resp.StatusCode)
-		return
+	if macPath := sanitizeMACForRegistrationPath(mac); macPath != "" {
+		endpoints = append([]string{
+			fmt.Sprintf("http://%s/installs/mac/%s/registration.json", sink, macPath),
+		}, endpoints...)
 	}
 
-	app.Logger.Info("bootstrap registration: successfully registered with bootstrap server",
-		"endpoint", endpoint,
-		"hostname", hostname,
-		"ip", ip,
-		"mac", mac,
-	)
+	for _, endpoint := range endpoints {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(body))
+		if err != nil {
+			app.Logger.Warn("bootstrap registration: failed to create request",
+				"endpoint", endpoint, "error", err)
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			app.Logger.Warn("bootstrap registration: request failed",
+				"endpoint", endpoint, "error", err)
+			continue
+		}
+		_ = resp.Body.Close()
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			app.Logger.Warn("bootstrap registration: non-success response",
+				"endpoint", endpoint, "status", resp.StatusCode)
+			continue
+		}
+
+		app.Logger.Info("bootstrap registration: successfully registered with bootstrap server",
+			"endpoint", endpoint,
+			"hostname", hostname,
+			"ip", ip,
+			"mac", mac,
+		)
+	}
+}
+
+// sanitizeMACForRegistrationPath normalizes a MAC to the URL-safe
+// dash-separated form used by the pxeboot server. "aa:BB:cc:DD:ee:ff"
+// → "aa-bb-cc-dd-ee-ff". Returns empty string when the input doesn't
+// contain exactly 12 hex digits so the caller can skip the MAC path
+// and fall back to the hostname path.
+func sanitizeMACForRegistrationPath(mac string) string {
+	var hex []byte
+	for i := 0; i < len(mac); i++ {
+		c := mac[i]
+		switch {
+		case c >= '0' && c <= '9':
+			hex = append(hex, c)
+		case c >= 'a' && c <= 'f':
+			hex = append(hex, c)
+		case c >= 'A' && c <= 'F':
+			hex = append(hex, c+('a'-'A'))
+		}
+	}
+	if len(hex) != 12 {
+		return ""
+	}
+	out := make([]byte, 0, 17)
+	for i := 0; i < 12; i += 2 {
+		if i > 0 {
+			out = append(out, '-')
+		}
+		out = append(out, hex[i], hex[i+1])
+	}
+	return string(out)
 }
 
 // parseDebugSinkFromCmdline reads /proc/cmdline and extracts the value of the

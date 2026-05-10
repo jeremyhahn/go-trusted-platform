@@ -49,6 +49,16 @@ var recordParserFuncs = map[uint16]RecordParserFunc{
 		recs := make([]dns.RR, 0)
 		for _, r := range zone.RecordSet.ARecords {
 			if r.Name == hostname {
+				// net.ParseIP returns a 16-byte IPv6-mapped form for
+				// IPv4 inputs. miekg/dns serialises dns.A records with
+				// rdlen=len(A) — passing the 16-byte form produces a
+				// rdlen=0 wire response and strict resolvers (e.g.
+				// systemd-resolved) reject the answer as malformed.
+				// .To4() coerces the 4-byte form, dropping bad inputs.
+				ip := net.ParseIP(r.Value).To4()
+				if ip == nil {
+					continue
+				}
 				recs = append(recs, &dns.A{
 					Hdr: dns.RR_Header{
 						Name:   qname,
@@ -56,7 +66,7 @@ var recordParserFuncs = map[uint16]RecordParserFunc{
 						Class:  dns.ClassINET,
 						Ttl:    r.TTL,
 					},
-					A: net.ParseIP(r.Value),
+					A: ip,
 				})
 			}
 		}
@@ -71,14 +81,23 @@ var recordParserFuncs = map[uint16]RecordParserFunc{
 		recs := make([]dns.RR, 0)
 		for _, r := range zone.RecordSet.AAAARecords {
 			if r.Name == hostname {
+				// .To16() guarantees the 16-byte AAAA wire form. Also
+				// fix the Rrtype which was previously set to dns.TypeA
+				// (copy-paste from the IPv4 branch) — strict resolvers
+				// rejected AAAA answers because the header type didn't
+				// match the rdata format.
+				ip := net.ParseIP(r.Value).To16()
+				if ip == nil {
+					continue
+				}
 				recs = append(recs, &dns.AAAA{
 					Hdr: dns.RR_Header{
 						Name:   qname,
-						Rrtype: dns.TypeA,
+						Rrtype: dns.TypeAAAA,
 						Class:  dns.ClassINET,
 						Ttl:    r.TTL,
 					},
-					AAAA: net.ParseIP(r.Value),
+					AAAA: ip,
 				})
 			}
 		}

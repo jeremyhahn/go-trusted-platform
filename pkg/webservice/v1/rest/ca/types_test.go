@@ -456,8 +456,8 @@ func TestCertificateResponse_JSON(t *testing.T) {
 				Organization: "Test Org",
 			},
 			Issuer:             "Intermediate CA",
-			NotBefore:          1704067200, // 2024-01-01 00:00:00 UTC
-			NotAfter:           1735689600, // 2025-01-01 00:00:00 UTC
+			NotBefore:          "2024-01-01T00:00:00Z",
+			NotAfter:           "2025-01-01T00:00:00Z",
 			Status:             "VALID",
 			KeyAlgorithm:       "ECDSA",
 			SignatureAlgorithm: "ECDSA-SHA256",
@@ -475,8 +475,8 @@ func TestCertificateResponse_JSON(t *testing.T) {
 		assert.Equal(t, "abc123def456", result.Serial)
 		assert.Equal(t, "test.example.com", result.Subject.CommonName)
 		assert.Equal(t, "Intermediate CA", result.Issuer)
-		assert.Equal(t, int64(1704067200), result.NotBefore)
-		assert.Equal(t, int64(1735689600), result.NotAfter)
+		assert.Equal(t, "2024-01-01T00:00:00Z", result.NotBefore)
+		assert.Equal(t, "2025-01-01T00:00:00Z", result.NotAfter)
 		assert.Equal(t, "VALID", result.Status)
 		assert.Equal(t, "ECDSA", result.KeyAlgorithm)
 		assert.Contains(t, result.PEM, "BEGIN CERTIFICATE")
@@ -531,8 +531,8 @@ func TestCertificateSummary_JSON(t *testing.T) {
 			Serial:       "xyz789",
 			CommonName:   "server.example.com",
 			Issuer:       "Root CA",
-			NotBefore:    1704067200,
-			NotAfter:     1735689600,
+			NotBefore:    "2024-01-01T00:00:00Z",
+			NotAfter:     "2025-01-01T00:00:00Z",
 			Status:       "VALID",
 			KeyAlgorithm: "ECDSA",
 		}
@@ -555,8 +555,8 @@ func TestCertificateSummary_JSON(t *testing.T) {
 			"serial": "aabbcc",
 			"common_name": "api.example.com",
 			"issuer": "Intermediate CA",
-			"not_before": 1704067200,
-			"not_after": 1735689600,
+			"not_before": "2024-01-01T00:00:00Z",
+			"not_after": "2025-01-01T00:00:00Z",
 			"status": "EXPIRED",
 			"key_algorithm": "RSA"
 		}`
@@ -598,7 +598,7 @@ func TestCertificateListResponse_JSON(t *testing.T) {
 					KeyAlgorithm: "RSA",
 				},
 			},
-			Timestamp: 1704067200,
+			Timestamp: "2024-01-01T00:00:00Z",
 		}
 
 		data, err := json.Marshal(resp)
@@ -612,7 +612,7 @@ func TestCertificateListResponse_JSON(t *testing.T) {
 		assert.True(t, result.HasMore)
 		assert.Equal(t, int32(100), result.TotalCount)
 		assert.Len(t, result.Certificates, 2)
-		assert.Equal(t, int64(1704067200), result.Timestamp)
+		assert.Equal(t, "2024-01-01T00:00:00Z", result.Timestamp)
 	})
 
 	t.Run("empty certificate list", func(t *testing.T) {
@@ -622,7 +622,7 @@ func TestCertificateListResponse_JSON(t *testing.T) {
 				TotalCount: 0,
 			},
 			Certificates: []CertificateSummary{},
-			Timestamp:    1704067200,
+			Timestamp:    "2024-01-01T00:00:00Z",
 		}
 
 		data, err := json.Marshal(resp)
@@ -650,7 +650,7 @@ func TestGetCertificateResponse_JSON(t *testing.T) {
 				Status:       "VALID",
 				KeyAlgorithm: "ECDSA",
 			},
-			Timestamp: 1704067200,
+			Timestamp: "2024-01-01T00:00:00Z",
 		}
 
 		data, err := json.Marshal(resp)
@@ -662,13 +662,13 @@ func TestGetCertificateResponse_JSON(t *testing.T) {
 
 		require.NotNil(t, result.Certificate)
 		assert.Equal(t, "test123", result.Certificate.Serial)
-		assert.Equal(t, int64(1704067200), result.Timestamp)
+		assert.Equal(t, "2024-01-01T00:00:00Z", result.Timestamp)
 	})
 
 	t.Run("nil certificate", func(t *testing.T) {
 		resp := GetCertificateResponse{
 			Certificate: nil,
-			Timestamp:   1704067200,
+			Timestamp:   "2024-01-01T00:00:00Z",
 		}
 
 		data, err := json.Marshal(resp)
@@ -695,7 +695,7 @@ func TestIssueCertificateResponse_JSON(t *testing.T) {
 				KeyAlgorithm: "ECDSA",
 				PEM:          "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----",
 			},
-			Timestamp: 1704067200,
+			Timestamp: "2024-01-01T00:00:00Z",
 		}
 
 		data, err := json.Marshal(resp)
@@ -720,9 +720,9 @@ func TestRevokeCertificateResponse_JSON(t *testing.T) {
 		resp := RevokeCertificateResponse{
 			Serial:    "revoked123",
 			Status:    "REVOKED",
-			RevokedAt: 1704067200,
+			RevokedAt: "2024-01-01T00:00:00Z",
 			Reason:    1, // keyCompromise
-			Timestamp: 1704067300,
+			Timestamp: "2024-01-01T00:01:40Z",
 		}
 
 		data, err := json.Marshal(resp)
@@ -734,7 +734,7 @@ func TestRevokeCertificateResponse_JSON(t *testing.T) {
 
 		assert.Equal(t, "revoked123", result.Serial)
 		assert.Equal(t, "REVOKED", result.Status)
-		assert.Equal(t, int64(1704067200), result.RevokedAt)
+		assert.Equal(t, "2024-01-01T00:00:00Z", result.RevokedAt)
 		assert.Equal(t, 1, result.Reason)
 	})
 
@@ -742,9 +742,9 @@ func TestRevokeCertificateResponse_JSON(t *testing.T) {
 		jsonData := `{
 			"serial": "abc123",
 			"status": "REVOKED",
-			"revoked_at": 1704067200,
+			"revoked_at": "2024-01-01T00:00:00Z",
 			"reason": 3,
-			"timestamp": 1704067300
+			"timestamp": "2024-01-01T00:01:40Z"
 		}`
 
 		var resp RevokeCertificateResponse
@@ -768,7 +768,7 @@ func TestCAInfoResponse_JSON(t *testing.T) {
 			IsIntermediate:   false,
 			DefaultAlgorithm: "ECDSA",
 			DefaultValidity:  365,
-			Timestamp:        1704067200,
+			Timestamp:        "2024-01-01T00:00:00Z",
 			RootCert: &CertificateSummary{
 				Serial:       "root123",
 				CommonName:   "Test Root CA",
@@ -802,7 +802,7 @@ func TestCAInfoResponse_JSON(t *testing.T) {
 	t.Run("uninitialized CA", func(t *testing.T) {
 		resp := CAInfoResponse{
 			IsInitialized: false,
-			Timestamp:     1704067200,
+			Timestamp:     "2024-01-01T00:00:00Z",
 		}
 
 		data, err := json.Marshal(resp)
@@ -828,7 +828,7 @@ func TestCAInfoResponse_JSON(t *testing.T) {
 					Status:     "VALID",
 				},
 			},
-			Timestamp: 1704067200,
+			Timestamp: "2024-01-01T00:00:00Z",
 		}
 
 		data, err := json.Marshal(resp)
@@ -894,7 +894,7 @@ func TestRevokedCertEntry_JSON(t *testing.T) {
 	t.Run("marshaling revoked entry", func(t *testing.T) {
 		entry := RevokedCertEntry{
 			Serial:         "revoked456",
-			RevocationTime: 1704067200,
+			RevocationTime: "2024-01-01T00:00:00Z",
 			Reason:         1, // keyCompromise
 		}
 
@@ -906,7 +906,7 @@ func TestRevokedCertEntry_JSON(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, "revoked456", result.Serial)
-		assert.Equal(t, int64(1704067200), result.RevocationTime)
+		assert.Equal(t, "2024-01-01T00:00:00Z", result.RevocationTime)
 		assert.Equal(t, 1, result.Reason)
 	})
 
@@ -916,7 +916,7 @@ func TestRevokedCertEntry_JSON(t *testing.T) {
 		for _, reason := range reasons {
 			entry := RevokedCertEntry{
 				Serial:         "test",
-				RevocationTime: 1704067200,
+				RevocationTime: "2024-01-01T00:00:00Z",
 				Reason:         reason,
 			}
 
@@ -940,14 +940,14 @@ func TestCRLResponse_JSON(t *testing.T) {
 	t.Run("marshaling CRL response", func(t *testing.T) {
 		resp := CRLResponse{
 			CRL:          []byte{0x30, 0x82, 0x01, 0x00}, // Sample DER bytes
-			LastUpdate:   1704067200,
-			NextUpdate:   1704153600,
+			LastUpdate:   "2024-01-01T00:00:00Z",
+			NextUpdate:   "2024-01-02T00:00:00Z",
 			RevokedCount: 2,
 			RevokedCerts: []RevokedCertEntry{
-				{Serial: "rev1", RevocationTime: 1704000000, Reason: 1},
-				{Serial: "rev2", RevocationTime: 1704050000, Reason: 3},
+				{Serial: "rev1", RevocationTime: "2023-12-31T22:13:20Z", Reason: 1},
+				{Serial: "rev2", RevocationTime: "2023-12-31T19:13:20Z", Reason: 3},
 			},
-			Timestamp: 1704067300,
+			Timestamp: "2024-01-01T00:01:40Z",
 		}
 
 		data, err := json.Marshal(resp)
@@ -958,8 +958,8 @@ func TestCRLResponse_JSON(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.NotEmpty(t, result.CRL)
-		assert.Equal(t, int64(1704067200), result.LastUpdate)
-		assert.Equal(t, int64(1704153600), result.NextUpdate)
+		assert.Equal(t, "2024-01-01T00:00:00Z", result.LastUpdate)
+		assert.Equal(t, "2024-01-02T00:00:00Z", result.NextUpdate)
 		assert.Equal(t, 2, result.RevokedCount)
 		assert.Len(t, result.RevokedCerts, 2)
 	})
@@ -967,11 +967,11 @@ func TestCRLResponse_JSON(t *testing.T) {
 	t.Run("empty CRL", func(t *testing.T) {
 		resp := CRLResponse{
 			CRL:          []byte{},
-			LastUpdate:   1704067200,
-			NextUpdate:   1704153600,
+			LastUpdate:   "2024-01-01T00:00:00Z",
+			NextUpdate:   "2024-01-02T00:00:00Z",
 			RevokedCount: 0,
 			RevokedCerts: nil,
-			Timestamp:    1704067300,
+			Timestamp:    "2024-01-01T00:01:40Z",
 		}
 
 		data, err := json.Marshal(resp)
@@ -999,7 +999,7 @@ func TestBundleResponse_JSON(t *testing.T) {
 				{Serial: "int1", CommonName: "Intermediate CA", Status: "VALID"},
 			},
 			CertCount: 2,
-			Timestamp: 1704067200,
+			Timestamp: "2024-01-01T00:00:00Z",
 		}
 
 		data, err := json.Marshal(resp)
@@ -1019,7 +1019,7 @@ func TestBundleResponse_JSON(t *testing.T) {
 			Bundle:       []byte{},
 			Certificates: []CertificateSummary{},
 			CertCount:    0,
-			Timestamp:    1704067200,
+			Timestamp:    "2024-01-01T00:00:00Z",
 		}
 
 		data, err := json.Marshal(resp)
@@ -1043,7 +1043,7 @@ func TestSuccessResponse_JSON(t *testing.T) {
 		resp := SuccessResponse{
 			Success:   true,
 			Message:   "Operation completed successfully",
-			Timestamp: 1704067200,
+			Timestamp: "2024-01-01T00:00:00Z",
 		}
 
 		data, err := json.Marshal(resp)
@@ -1055,14 +1055,14 @@ func TestSuccessResponse_JSON(t *testing.T) {
 
 		assert.True(t, result.Success)
 		assert.Equal(t, "Operation completed successfully", result.Message)
-		assert.Equal(t, int64(1704067200), result.Timestamp)
+		assert.Equal(t, "2024-01-01T00:00:00Z", result.Timestamp)
 	})
 
 	t.Run("failure response", func(t *testing.T) {
 		resp := SuccessResponse{
 			Success:   false,
 			Message:   "Operation failed",
-			Timestamp: 1704067200,
+			Timestamp: "2024-01-01T00:00:00Z",
 		}
 
 		data, err := json.Marshal(resp)

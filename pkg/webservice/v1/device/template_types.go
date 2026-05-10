@@ -16,10 +16,26 @@ package device
 import "time"
 
 // TemplateRequest represents the request body for template creation/update.
+//
+// Two shapes are accepted: flat fields (legacy) or a `{template: {...}}`
+// envelope (matches the JS SDK's `createTemplate({template: {...}})`).
 type TemplateRequest struct {
-	ID          uint64             `json:"id"`
+	ID          uint64                 `json:"id,omitempty"`
+	TenantID    string                 `json:"tenant_id,omitempty"`
+	Name        string                 `json:"name,omitempty"`
+	Description string                 `json:"description,omitempty"`
+	Role        string                 `json:"role,omitempty"`
+	Config      []byte                 `json:"config,omitempty"`
+	MatchRules  *MatchRulesRequest     `json:"match_rules,omitempty"`
+	Template    *TemplateRequestNested `json:"template,omitempty"`
+}
+
+// TemplateRequestNested mirrors TemplateRequest's flat fields for the
+// `{template: {...}}` envelope shape produced by the JS SDK.
+type TemplateRequestNested struct {
+	ID          uint64             `json:"id,omitempty"`
 	TenantID    string             `json:"tenant_id,omitempty"`
-	Name        string             `json:"name"`
+	Name        string             `json:"name,omitempty"`
 	Description string             `json:"description,omitempty"`
 	Role        string             `json:"role,omitempty"`
 	Config      []byte             `json:"config,omitempty"`
@@ -27,8 +43,12 @@ type TemplateRequest struct {
 }
 
 // TemplateResponse represents a device template in API responses.
+//
+// IDs are emitted as JSON strings (`,string`) because the platform
+// mints them above 2^53; encoding as plain numbers would truncate in
+// JS clients and break detail navigation.
 type TemplateResponse struct {
-	ID          uint64              `json:"id"`
+	ID          uint64              `json:"id,string"`
 	TenantID    string              `json:"tenant_id,omitempty"`
 	Name        string              `json:"name"`
 	Description string              `json:"description,omitempty"`

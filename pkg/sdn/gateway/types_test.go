@@ -17,99 +17,9 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 )
-
-func TestGatewayMode_String(t *testing.T) {
-	tests := []struct {
-		name     string
-		mode     GatewayMode
-		expected string
-	}{
-		{"overlay", GatewayModeOverlay, "overlay"},
-		{"edge", GatewayModeEdge, "edge"},
-		{"transit", GatewayModeTransit, "transit"},
-		{"none", GatewayMode(0), "none"},
-		{"mixed", GatewayModeOverlay | GatewayModeEdge, "mixed"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.mode.String(); got != tt.expected {
-				t.Errorf("GatewayMode.String() = %v, want %v", got, tt.expected)
-			}
-		})
-	}
-}
-
-func TestGatewayMode_Valid(t *testing.T) {
-	tests := []struct {
-		name     string
-		mode     GatewayMode
-		expected bool
-	}{
-		{"overlay valid", GatewayModeOverlay, true},
-		{"edge valid", GatewayModeEdge, true},
-		{"transit valid", GatewayModeTransit, true},
-		{"combined valid", GatewayModeOverlay | GatewayModeEdge, true},
-		{"all modes valid", GatewayModeOverlay | GatewayModeEdge | GatewayModeTransit, true},
-		{"zero invalid", GatewayMode(0), false},
-		{"invalid bit set", GatewayMode(8), false},
-		{"partially invalid", GatewayModeOverlay | GatewayMode(16), false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.mode.Valid(); got != tt.expected {
-				t.Errorf("GatewayMode.Valid() = %v, want %v", got, tt.expected)
-			}
-		})
-	}
-}
-
-func TestGatewayMode_HasMode(t *testing.T) {
-	tests := []struct {
-		name     string
-		mode     GatewayMode
-		check    GatewayMode
-		expected bool
-	}{
-		{"overlay has overlay", GatewayModeOverlay, GatewayModeOverlay, true},
-		{"overlay does not have edge", GatewayModeOverlay, GatewayModeEdge, false},
-		{"combined has overlay", GatewayModeOverlay | GatewayModeEdge, GatewayModeOverlay, true},
-		{"combined has edge", GatewayModeOverlay | GatewayModeEdge, GatewayModeEdge, true},
-		{"combined does not have transit", GatewayModeOverlay | GatewayModeEdge, GatewayModeTransit, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.mode.HasMode(tt.check); got != tt.expected {
-				t.Errorf("GatewayMode.HasMode() = %v, want %v", got, tt.expected)
-			}
-		})
-	}
-}
-
-func TestGatewayMode_Modes(t *testing.T) {
-	tests := []struct {
-		name          string
-		mode          GatewayMode
-		expectedCount int
-	}{
-		{"single mode", GatewayModeOverlay, 1},
-		{"two modes", GatewayModeOverlay | GatewayModeEdge, 2},
-		{"all modes", GatewayModeOverlay | GatewayModeEdge | GatewayModeTransit, 3},
-		{"no modes", GatewayMode(0), 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			modes := tt.mode.Modes()
-			if len(modes) != tt.expectedCount {
-				t.Errorf("GatewayMode.Modes() returned %d modes, want %d", len(modes), tt.expectedCount)
-			}
-		})
-	}
-}
 
 func TestPortState_String(t *testing.T) {
 	tests := []struct {
@@ -429,17 +339,54 @@ func TestGatewayNode_MeetsAllRequirements(t *testing.T) {
 	}
 }
 
+func TestGatewayNode_HasService(t *testing.T) {
+	tests := []struct {
+		name     string
+		services map[string]bool
+		check    string
+		expected bool
+	}{
+		{
+			name:     "service present",
+			services: map[string]bool{ServiceOverlay: true},
+			check:    ServiceOverlay,
+			expected: true,
+		},
+		{
+			name:     "service not present",
+			services: map[string]bool{ServiceOverlay: true},
+			check:    ServiceEdge,
+			expected: false,
+		},
+		{
+			name:     "nil services map",
+			services: nil,
+			check:    ServiceOverlay,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &GatewayNode{ActiveServices: tt.services}
+			if got := node.HasService(tt.check); got != tt.expected {
+				t.Errorf("GatewayNode.HasService(%q) = %v, want %v", tt.check, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestGatewayCapabilities_DefaultCapabilities(t *testing.T) {
 	caps := DefaultCapabilities()
 
 	if !caps.OverlaySupported {
-		t.Error("DefaultCapabilities should support overlay mode")
+		t.Error("DefaultCapabilities should support overlay")
 	}
 	if !caps.EdgeSupported {
-		t.Error("DefaultCapabilities should support edge mode")
+		t.Error("DefaultCapabilities should support edge")
 	}
 	if caps.TransitSupported {
-		t.Error("DefaultCapabilities should not support transit mode by default")
+		t.Error("DefaultCapabilities should not support transit by default")
 	}
 	if caps.MaxVNIs != DefaultMaxVNIs {
 		t.Errorf("DefaultCapabilities MaxVNIs = %d, want %d", caps.MaxVNIs, DefaultMaxVNIs)
@@ -449,33 +396,6 @@ func TestGatewayCapabilities_DefaultCapabilities(t *testing.T) {
 	}
 	if caps.MaxServices != DefaultMaxServices {
 		t.Errorf("DefaultCapabilities MaxServices = %d, want %d", caps.MaxServices, DefaultMaxServices)
-	}
-}
-
-func TestGatewayCapabilities_SupportsMode(t *testing.T) {
-	caps := GatewayCapabilities{
-		OverlaySupported: true,
-		EdgeSupported:    true,
-		TransitSupported: false,
-	}
-
-	tests := []struct {
-		name     string
-		mode     GatewayMode
-		expected bool
-	}{
-		{"overlay supported", GatewayModeOverlay, true},
-		{"edge supported", GatewayModeEdge, true},
-		{"transit not supported", GatewayModeTransit, false},
-		{"invalid mode", GatewayMode(0), false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := caps.SupportsMode(tt.mode); got != tt.expected {
-				t.Errorf("GatewayCapabilities.SupportsMode(%v) = %v, want %v", tt.mode, got, tt.expected)
-			}
-		})
 	}
 }
 
@@ -556,6 +476,136 @@ func TestEdgeConfig_Validate(t *testing.T) {
 			}
 			if !tt.expectError && err != nil {
 				t.Errorf("EdgeConfig.Validate() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestFirewallConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      FirewallConfig
+		expectError bool
+	}{
+		{
+			name:        "valid deny policy",
+			config:      FirewallConfig{Enabled: true, DefaultPolicy: "deny"},
+			expectError: false,
+		},
+		{
+			name:        "valid allow policy",
+			config:      FirewallConfig{Enabled: true, DefaultPolicy: "allow"},
+			expectError: false,
+		},
+		{
+			name:        "disabled skips validation",
+			config:      FirewallConfig{Enabled: false},
+			expectError: false,
+		},
+		{
+			name:        "invalid policy",
+			config:      FirewallConfig{Enabled: true, DefaultPolicy: "invalid"},
+			expectError: true,
+		},
+		{
+			name:        "empty policy",
+			config:      FirewallConfig{Enabled: true, DefaultPolicy: ""},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.expectError && err == nil {
+				t.Error("FirewallConfig.Validate() expected error, got nil")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("FirewallConfig.Validate() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestTunnelConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      TunnelConfig
+		expectError bool
+	}{
+		{
+			name: "valid config",
+			config: TunnelConfig{
+				Name: "gre1", Type: "gre",
+				Local: "99.12.246.36", Remote: "45.63.110.165",
+				TunnelIP: "10.255.0.1",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid with ipv6",
+			config: TunnelConfig{
+				Name: "gre2", Type: "gre",
+				Local: "99.12.246.37", Remote: "45.63.110.165",
+				TunnelIP: "10.255.0.5", TunnelIPv6: "2602:f5bb::1",
+			},
+			expectError: false,
+		},
+		{
+			name: "empty name",
+			config: TunnelConfig{
+				Name: "", Type: "gre",
+				Local: "99.12.246.36", Remote: "45.63.110.165",
+				TunnelIP: "10.255.0.1",
+			},
+			expectError: true,
+		},
+		{
+			name: "empty type",
+			config: TunnelConfig{
+				Name: "gre1", Type: "",
+				Local: "99.12.246.36", Remote: "45.63.110.165",
+				TunnelIP: "10.255.0.1",
+			},
+			expectError: true,
+		},
+		{
+			name: "empty local",
+			config: TunnelConfig{
+				Name: "gre1", Type: "gre",
+				Local: "", Remote: "45.63.110.165",
+				TunnelIP: "10.255.0.1",
+			},
+			expectError: true,
+		},
+		{
+			name: "empty remote",
+			config: TunnelConfig{
+				Name: "gre1", Type: "gre",
+				Local: "99.12.246.36", Remote: "",
+				TunnelIP: "10.255.0.1",
+			},
+			expectError: true,
+		},
+		{
+			name: "empty tunnel ip",
+			config: TunnelConfig{
+				Name: "gre1", Type: "gre",
+				Local: "99.12.246.36", Remote: "45.63.110.165",
+				TunnelIP: "",
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.expectError && err == nil {
+				t.Error("TunnelConfig.Validate() expected error, got nil")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("TunnelConfig.Validate() unexpected error: %v", err)
 			}
 		})
 	}
@@ -713,58 +763,82 @@ func TestLoadBalancerConfig_Validate(t *testing.T) {
 }
 
 func TestGatewayConfig_Validate(t *testing.T) {
-	validConfig := func() *GatewayConfig {
-		return &GatewayConfig{
-			Enabled:       true,
-			ID:            "gw-1",
-			Modes:         []GatewayMode{GatewayModeOverlay},
-			MinReputation: MinReputation,
-			MinAgeDays:    MinAgeDays,
-			MinUptimePct:  MinUptimePct,
-		}
-	}
-
 	tests := []struct {
 		name        string
-		modify      func(*GatewayConfig)
+		config      *GatewayConfig
 		expectError bool
 	}{
 		{
-			name:        "valid config",
-			modify:      func(c *GatewayConfig) {},
+			name: "valid config with overlay",
+			config: &GatewayConfig{
+				Enabled:       true,
+				ID:            "gw-1",
+				MinReputation: MinReputation,
+				MinAgeDays:    MinAgeDays,
+				MinUptimePct:  MinUptimePct,
+				Overlay:       &OverlayServiceConfig{Enabled: true},
+			},
 			expectError: false,
 		},
 		{
-			name:        "disabled config skips validation",
-			modify:      func(c *GatewayConfig) { c.Enabled = false; c.ID = "" },
+			name: "disabled config skips validation",
+			config: &GatewayConfig{
+				Enabled: false, ID: "",
+			},
 			expectError: false,
 		},
 		{
-			name:        "empty ID",
-			modify:      func(c *GatewayConfig) { c.ID = "" },
+			name: "empty ID",
+			config: &GatewayConfig{
+				Enabled: true, ID: "",
+				Overlay: &OverlayServiceConfig{Enabled: true},
+			},
 			expectError: true,
 		},
 		{
-			name:        "no modes",
-			modify:      func(c *GatewayConfig) { c.Modes = nil },
-			expectError: true,
-		},
-		{
-			name:        "invalid mode",
-			modify:      func(c *GatewayConfig) { c.Modes = []GatewayMode{GatewayMode(0)} },
-			expectError: true,
+			name: "valid config no services",
+			config: &GatewayConfig{
+				Enabled:       true,
+				ID:            "gw-2",
+				MinReputation: MinReputation,
+				MinAgeDays:    MinAgeDays,
+				MinUptimePct:  MinUptimePct,
+			},
+			expectError: false,
 		},
 		{
 			name: "invalid uplink config",
-			modify: func(c *GatewayConfig) {
-				c.Uplinks = []UplinkConfig{{Name: "", MTU: 0}}
+			config: &GatewayConfig{
+				Enabled: true,
+				ID:      "gw-3",
+				Uplinks: []UplinkConfig{{Name: "", MTU: 0}},
 			},
 			expectError: true,
 		},
 		{
 			name: "invalid edge config",
-			modify: func(c *GatewayConfig) {
-				c.EdgeConfig = &EdgeConfig{Enabled: true, MaxDevices: 0}
+			config: &GatewayConfig{
+				Enabled: true,
+				ID:      "gw-4",
+				Edge:    &EdgeConfig{Enabled: true, MaxDevices: 0},
+			},
+			expectError: true,
+		},
+		{
+			name: "invalid firewall config",
+			config: &GatewayConfig{
+				Enabled:  true,
+				ID:       "gw-5",
+				Firewall: &FirewallConfig{Enabled: true, DefaultPolicy: "invalid"},
+			},
+			expectError: true,
+		},
+		{
+			name: "invalid tunnel config",
+			config: &GatewayConfig{
+				Enabled: true,
+				ID:      "gw-6",
+				Tunnels: []TunnelConfig{{Name: "", Type: ""}},
 			},
 			expectError: true,
 		},
@@ -772,9 +846,7 @@ func TestGatewayConfig_Validate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := validConfig()
-			tt.modify(cfg)
-			err := cfg.Validate()
+			err := tt.config.Validate()
 			if tt.expectError && err == nil {
 				t.Error("GatewayConfig.Validate() expected error, got nil")
 			}
@@ -785,39 +857,48 @@ func TestGatewayConfig_Validate(t *testing.T) {
 	}
 }
 
-func TestGatewayConfig_CombinedModes(t *testing.T) {
+func TestGatewayConfig_HasEnabledServices(t *testing.T) {
 	tests := []struct {
 		name     string
-		modes    []GatewayMode
-		expected GatewayMode
+		config   *GatewayConfig
+		expected bool
 	}{
 		{
-			name:     "single mode",
-			modes:    []GatewayMode{GatewayModeOverlay},
-			expected: GatewayModeOverlay,
+			name:     "overlay enabled",
+			config:   &GatewayConfig{Overlay: &OverlayServiceConfig{Enabled: true}},
+			expected: true,
 		},
 		{
-			name:     "two modes",
-			modes:    []GatewayMode{GatewayModeOverlay, GatewayModeEdge},
-			expected: GatewayModeOverlay | GatewayModeEdge,
+			name:     "edge enabled",
+			config:   &GatewayConfig{Edge: &EdgeConfig{Enabled: true}},
+			expected: true,
 		},
 		{
-			name:     "all modes",
-			modes:    []GatewayMode{GatewayModeOverlay, GatewayModeEdge, GatewayModeTransit},
-			expected: GatewayModeOverlay | GatewayModeEdge | GatewayModeTransit,
+			name:     "bgp present",
+			config:   &GatewayConfig{BGP: &bgp.BGPConfig{}},
+			expected: true,
 		},
 		{
-			name:     "no modes",
-			modes:    []GatewayMode{},
-			expected: 0,
+			name:     "tunnels present",
+			config:   &GatewayConfig{Tunnels: []TunnelConfig{{Name: "gre1"}}},
+			expected: true,
+		},
+		{
+			name:     "no services",
+			config:   &GatewayConfig{},
+			expected: false,
+		},
+		{
+			name:     "overlay disabled",
+			config:   &GatewayConfig{Overlay: &OverlayServiceConfig{Enabled: false}},
+			expected: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &GatewayConfig{Modes: tt.modes}
-			if got := cfg.CombinedModes(); got != tt.expected {
-				t.Errorf("GatewayConfig.CombinedModes() = %v, want %v", got, tt.expected)
+			if got := tt.config.HasEnabledServices(); got != tt.expected {
+				t.Errorf("HasEnabledServices() = %v, want %v", got, tt.expected)
 			}
 		})
 	}
@@ -936,5 +1017,72 @@ func TestUplinkPort_WithMACAddress(t *testing.T) {
 	}
 	if !port.Valid() {
 		t.Error("port should be valid")
+	}
+}
+
+func TestDHCPServiceConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      DHCPServiceConfig
+		expectError bool
+	}{
+		{
+			name:        "valid config",
+			config:      DHCPServiceConfig{Enabled: true, Interface: "eth0"},
+			expectError: false,
+		},
+		{
+			name:        "disabled skips validation",
+			config:      DHCPServiceConfig{Enabled: false},
+			expectError: false,
+		},
+		{
+			name:        "missing interface",
+			config:      DHCPServiceConfig{Enabled: true, Interface: ""},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.expectError && err == nil {
+				t.Error("DHCPServiceConfig.Validate() expected error, got nil")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("DHCPServiceConfig.Validate() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestOverlayServiceConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      OverlayServiceConfig
+		expectError bool
+	}{
+		{
+			name:        "valid enabled config",
+			config:      OverlayServiceConfig{Enabled: true},
+			expectError: false,
+		},
+		{
+			name:        "disabled skips validation",
+			config:      OverlayServiceConfig{Enabled: false},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.expectError && err == nil {
+				t.Error("OverlayServiceConfig.Validate() expected error, got nil")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("OverlayServiceConfig.Validate() unexpected error: %v", err)
+			}
+		})
 	}
 }

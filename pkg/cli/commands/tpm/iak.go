@@ -296,11 +296,15 @@ func runIAKInstall(flags *cli.CommonFlags, certFile string) error {
 // IAK Cert Command
 // =============================================================================
 
-// newIAKCertCommand creates the cert subcommand for retrieving certificates
+// newIAKCertCommand creates the certificate subcommand for retrieving certificates.
+// The canonical command name is "certificate" to match the EK subcommand;
+// "cert" is retained as a hidden alias for muscle memory / scripts from
+// prior releases. Same policy across EK, IAK, IDevID for consistency.
 func newIAKCertCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "cert",
-		Short: "Get the IAK certificate",
+		Use:     "certificate",
+		Aliases: []string{"cert"},
+		Short:   "Get the IAK certificate",
 		Long: `Retrieve the installed IAK certificate.
 
 Returns the certificate in PEM format along with metadata including
@@ -308,13 +312,13 @@ subject, issuer, validity period, and serial number.
 
 Examples:
   # Get certificate in table format
-  platformctl tpm iak cert
+  platformctl tpm iak certificate
 
   # Get certificate as JSON (for scripting)
-  platformctl tpm iak cert -o json
+  platformctl tpm iak certificate -o json
 
   # Save certificate to file
-  platformctl tpm iak cert -o json | jq -r '.certificate_pem' > cert.pem`,
+  platformctl tpm iak certificate -o json | jq -r '.certificate_pem' > cert.pem`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
 			return runIAKCert(flags)

@@ -105,6 +105,31 @@ func (r *ToolRegistry) registerTools() {
 
 	// Register physical TPM tools
 	r.registerTPMTools()
+
+	// Register physical switch management tools
+	r.registerSwitchTools()
+
+	// Register BMC (baseboard management controller) tools mirroring the
+	// gRPC BMCService surface.
+	r.registerBMCTools()
+
+	// Register Cluster lifecycle tools mirroring the gRPC ClusterService
+	// surface.
+	r.registerClusterTools()
+
+	// Register Registry (container/artifact registry) tools mirroring the
+	// non-streaming portion of the gRPC RegistryService surface.
+	r.registerRegistryTools()
+
+	// Register Invitation tools mirroring the gRPC InvitationService surface.
+	r.registerInvitationTools()
+
+	// Register EAB (External Account Binding) tools mirroring the gRPC
+	// EABService surface (RFC 8555 §7.3.4 device enrollment credentials).
+	r.registerEABTools()
+
+	// Register Phase 3.5 tools (ceremony, piv, luks, fido2).
+	r.registerPhase35Tools()
 }
 
 // registerVTPMTools registers vTPM-related tools.
@@ -1551,6 +1576,16 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 	case "tenant_get_dek_status":
 		return r.executeTenantGetDEKStatus(ctx, args)
 
+	// Per-Tenant Barrier Operations (cryptographic barrier lifecycle)
+	case "platform_tenant_barrier_init":
+		return r.executeTenantBarrierInit(ctx, args)
+	case "platform_tenant_barrier_unseal":
+		return r.executeTenantBarrierUnseal(ctx, args)
+	case "platform_tenant_barrier_seal":
+		return r.executeTenantBarrierSeal(ctx, args)
+	case "platform_tenant_barrier_status":
+		return r.executeTenantBarrierStatus(ctx, args)
+
 	// Physical TPM Operations
 	case "platform_tpm_info":
 		return r.executeTPMInfo(ctx, args)
@@ -1611,7 +1646,49 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 	case "platform_tpm_platform":
 		return r.executeTPMPlatform(ctx, args)
 
+	// Physical Switch Management Operations
+	case "switch_list_ports":
+		return r.executeSwitchListPorts(ctx, args)
+	case "switch_port_status":
+		return r.executeSwitchPortStatus(ctx, args)
+	case "switch_set_vlan":
+		return r.executeSwitchSetVLAN(ctx, args)
+	case "switch_enable_port":
+		return r.executeSwitchEnablePort(ctx, args)
+	case "switch_disable_port":
+		return r.executeSwitchDisablePort(ctx, args)
+
 	default:
+		// BMC tool dispatch (platform_bmc_*) uses a map-based dispatcher
+		// for O(1) routing per project conventions.
+		if result, handled, err := r.dispatchBMCTool(ctx, name, args); handled {
+			return result, err
+		}
+		// Cluster tool dispatch (platform_cluster_*) uses a map-based
+		// dispatcher for O(1) routing per project conventions.
+		if result, handled, err := r.dispatchClusterTool(ctx, name, args); handled {
+			return result, err
+		}
+		// Registry tool dispatch (platform_registry_*) uses a map-based
+		// dispatcher for O(1) routing per project conventions.
+		if result, handled, err := r.dispatchRegistryTool(ctx, name, args); handled {
+			return result, err
+		}
+		// Invitation tool dispatch (platform_invitation_*) uses a map-based
+		// dispatcher for O(1) routing per project conventions.
+		if result, handled, err := r.dispatchInvitationTool(ctx, name, args); handled {
+			return result, err
+		}
+		// EAB tool dispatch (platform_eab_*) uses a map-based dispatcher
+		// for O(1) routing per project conventions.
+		if result, handled, err := r.dispatchEABTool(ctx, name, args); handled {
+			return result, err
+		}
+		// Phase 3.5 tool dispatch (ceremony/piv/luks/fido2) uses a map-based
+		// dispatcher for O(1) routing per project conventions.
+		if result, handled, err := r.dispatchPhase35Tool(ctx, name, args); handled {
+			return result, err
+		}
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
 }

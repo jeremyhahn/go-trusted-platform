@@ -24,9 +24,9 @@ import (
 	"strings"
 	"time"
 
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 func PrintSystemInfo() error {
@@ -274,28 +274,38 @@ func CAInfo(certAuth trustedca.CACertificateAuthority) *entities.CAStatus {
 		return status
 	}
 
-	// Get CA configuration which contains key info
-	config := certAuth.CAConfig()
-
-	// Populate root CA info
-	rootIdentity := config.RootIdentity()
-	if rootIdentity != nil && rootIdentity.Subject.CommonName != "" {
-		status.RootCA = identityToKeyConfig(rootIdentity, &config)
+	// The native TrustedCA exposes the flat CAConfig() and a value-copy
+	// IssuingIdentity(). Both are sufficient to populate the CAStatus entity.
+	issuing := certAuth.IssuingIdentity()
+	if issuing.Subject.CommonName == "" {
+		return status
 	}
 
-	// Populate issuing (intermediate) CA info if configured
-	if config.HasIntermediate() {
-		status.IssuingCA = identityToKeyConfig(config.IntermediateIdentity(), &config)
-	} else {
-		// If no intermediate, the root is also the issuing CA
+	if issuing.IsRoot {
+		// Single-identity (root) CA — root is also the issuing CA.
+		status.RootCA = identityToKeyConfig(&issuing)
 		status.IssuingCA = status.RootCA
+		return status
+	}
+
+	// Issuing identity is intermediate; synthesize a minimal root entry
+	// from the CA's certificate chain so callers still see the root CN.
+	status.IssuingCA = identityToKeyConfig(&issuing)
+	if rootCert, err := certAuth.TrustedRoot(); err == nil && rootCert != nil {
+		status.RootCA = &entities.CAKeyConfig{
+			CN:           rootCert.Subject.CommonName,
+			Organization: firstOrEmpty(rootCert.Subject.Organization),
+			Country:      firstOrEmpty(rootCert.Subject.Country),
+		}
 	}
 
 	return status
 }
 
-// identityToKeyConfig converts a CA identity to a CAKeyConfig entity
-func identityToKeyConfig(identity *trustedca.CAIdentity, config *trustedca.CAConfig) *entities.CAKeyConfig {
+// identityToKeyConfig converts a native CA Identity to a CAKeyConfig entity.
+// Key algorithm/size/curve/hash are read from the identity's primary key
+// configuration (Keys[0]); see pkg/ca.Identity.
+func identityToKeyConfig(identity *trustedca.CAIdentity, _ ...*trustedca.CAConfig) *entities.CAKeyConfig {
 	keyConfig := &entities.CAKeyConfig{
 		// Identity information
 		CN:           identity.Subject.CommonName,
@@ -305,27 +315,30 @@ func identityToKeyConfig(identity *trustedca.CAIdentity, config *trustedca.CACon
 		// Validity
 		ValidYears: identity.Valid,
 
-		// Key configuration
-		KeyAlgorithm: identity.KeyAlgorithm.String(),
-
-		// Algorithm-specific parameters
-		KeySize:  identity.KeySize,
-		ECCCurve: identity.ECCCurve,
-
 		// Backend configuration
-		StoreType: identity.KeystoreType,
+		StoreType: string(identity.KeystoreType),
 
 		// Parent CA (for intermediate CAs)
 		ParentCA: identity.ParentCA,
 	}
 
-	// Set signature algorithm - derive from key algorithm if not set in config
-	if config.DefaultSignatureAlgorithm != 0 {
-		keyConfig.SignatureAlgorithm = config.DefaultSignatureAlgorithm.String()
-		keyConfig.Hash = signatureAlgorithmHash(config.DefaultSignatureAlgorithm).String()
-	} else {
-		// Derive signature algorithm from key algorithm
-		sigAlgo := deriveSignatureAlgorithm(identity)
+	// Key configuration is sourced from the identity's primary KeyConfig.
+	if len(identity.Keys) > 0 && identity.Keys[0] != nil {
+		primary := identity.Keys[0]
+		keyConfig.KeyAlgorithm = string(primary.KeyAlgorithm)
+		keyConfig.Hash = string(primary.Hash)
+		if primary.RSAConfig != nil {
+			keyConfig.KeySize = primary.RSAConfig.KeySize
+		}
+		if primary.ECCConfig != nil {
+			keyConfig.ECCCurve = string(primary.ECCConfig.Curve)
+		}
+	}
+
+	// Signature algorithm + hash: prefer Identity.GetSignatureAlgorithm() which
+	// consults the explicit config first, then falls back to a key-algorithm
+	// derivation compatible with the old deriveSignatureAlgorithm logic.
+	if sigAlgo, err := identity.GetSignatureAlgorithm(); err == nil && sigAlgo != x509.UnknownSignatureAlgorithm {
 		keyConfig.SignatureAlgorithm = sigAlgo.String()
 		keyConfig.Hash = signatureAlgorithmHash(sigAlgo).String()
 	}
@@ -339,30 +352,14 @@ func identityToKeyConfig(identity *trustedca.CAIdentity, config *trustedca.CACon
 	return keyConfig
 }
 
-// deriveSignatureAlgorithm returns an appropriate x509.SignatureAlgorithm based on the key algorithm
-func deriveSignatureAlgorithm(identity *trustedca.CAIdentity) x509.SignatureAlgorithm {
-	switch identity.KeyAlgorithm {
-	case x509.RSA:
-		if identity.KeySize >= 4096 {
-			return x509.SHA512WithRSA
-		} else if identity.KeySize >= 3072 {
-			return x509.SHA384WithRSA
-		}
-		return x509.SHA256WithRSA
-	case x509.ECDSA:
-		switch identity.ECCCurve {
-		case "P-521", "P521":
-			return x509.ECDSAWithSHA512
-		case "P-384", "P384":
-			return x509.ECDSAWithSHA384
-		default:
-			return x509.ECDSAWithSHA256
-		}
-	case x509.Ed25519:
-		return x509.PureEd25519
-	default:
-		return x509.SHA256WithRSA
+// firstOrEmpty returns the first element of the slice or "" when empty.
+// Used to project pkix.Name []string fields onto single-valued CAKeyConfig
+// fields without panicking on zero-length slices.
+func firstOrEmpty(vs []string) string {
+	if len(vs) == 0 {
+		return ""
 	}
+	return vs[0]
 }
 
 // signatureAlgorithmHash returns the crypto.Hash for a given signature algorithm
@@ -394,12 +391,12 @@ func CAInfoFromConfig(config *trustedca.CAConfig) *entities.CAStatus {
 
 	// Root CA is always index 0
 	rootIdentity := config.Identity[0]
-	status.RootCA = identityToKeyConfig(&rootIdentity, config)
+	status.RootCA = identityToKeyConfig(&rootIdentity)
 
 	// Issuing CA is at SelectedCA index (or root if not set)
 	if config.SelectedCA > 0 && config.SelectedCA < len(config.Identity) {
 		issuingIdentity := config.Identity[config.SelectedCA]
-		status.IssuingCA = identityToKeyConfig(&issuingIdentity, config)
+		status.IssuingCA = identityToKeyConfig(&issuingIdentity)
 	} else {
 		status.IssuingCA = status.RootCA
 	}

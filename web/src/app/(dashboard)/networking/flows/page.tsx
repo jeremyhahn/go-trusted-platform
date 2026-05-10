@@ -10,6 +10,16 @@ import { DataTable, createSelectColumn } from '@/components/ui/data-table';
 import { DataTableColumnHeader } from '@/components/ui/data-table-column-header';
 import { DataTableRowActions } from '@/components/ui/data-table-row-actions';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { useSDN, useApi } from '@/hooks';
 import type { Flow, FlowMatch, FlowAction } from 'trusted-platform-sdk';
@@ -101,6 +111,10 @@ export default function OpenFlowsPage() {
   const { toast } = useToast();
   const sdn = useSDN();
   const [selectedBridgeId, setSelectedBridgeId] = useState<string>('');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createPriority, setCreatePriority] = useState('100');
+  const [createInPort, setCreateInPort] = useState('');
+  const [createSubmitting, setCreateSubmitting] = useState(false);
 
   // Fetch bridges to get the first bridge ID
   const {
@@ -455,12 +469,80 @@ export default function OpenFlowsPage() {
           <Button variant="outline" size="icon" onClick={fetchFlows} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button>
+          <Button onClick={() => setCreateOpen(true)} disabled={!selectedBridgeId}>
             <Plus className="mr-2 h-4 w-4" />
             Add Flow Rule
           </Button>
         </div>
       </div>
+
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Flow Rule</DialogTitle>
+            <DialogDescription>
+              Add a basic flow that forwards traffic on bridge {selectedBridgeId || 'unknown'}.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="flow-priority">Priority</Label>
+              <Input
+                id="flow-priority"
+                type="number"
+                min={0}
+                value={createPriority}
+                onChange={(e) => setCreatePriority(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="flow-inport">Match: In-Port (optional)</Label>
+              <Input
+                id="flow-inport"
+                value={createInPort}
+                onChange={(e) => setCreateInPort(e.target.value)}
+                placeholder="1"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Button
+              disabled={createSubmitting || !selectedBridgeId}
+              onClick={async () => {
+                setCreateSubmitting(true);
+                try {
+                  const match: any = {};
+                  if (createInPort) match.inPort = Number.parseInt(createInPort, 10);
+                  await sdn.addFlow({
+                    config: {
+                      bridgeId: selectedBridgeId,
+                      priority: Number.parseInt(createPriority, 10) || 100,
+                      match,
+                      actions: [{ type: 'NORMAL' as any }],
+                    },
+                  });
+                  toast({ title: 'Flow rule added', variant: 'success' });
+                  setCreateOpen(false);
+                  setCreateInPort('');
+                  refetchFlows();
+                } catch (err) {
+                  toast({
+                    title: 'Failed to add flow',
+                    description: err instanceof Error ? err.message : 'Unknown error',
+                    variant: 'destructive',
+                  });
+                } finally {
+                  setCreateSubmitting(false);
+                }
+              }}
+            >
+              {createSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Add
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid gap-4 md:grid-cols-6">
         <div className="rounded-lg border border-border bg-card p-6">

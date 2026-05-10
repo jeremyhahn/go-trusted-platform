@@ -13,7 +13,11 @@
 
 package deployer
 
-import "context"
+import (
+	"context"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
+)
 
 // DeployTarget identifies the target platform type.
 type DeployTarget string
@@ -69,8 +73,68 @@ type DeployConfig struct {
 	// ConfigDir is the local config directory to copy.
 	ConfigDir string
 
-	// ProvisioningNetwork configures the provisioning network.
-	ProvisioningNetwork ProvisioningNetworkConfig
+	// DataDir is the host-side directory the deployer SSHes into and
+	// bind-mounts into the bootstrap container as /data. Empty means
+	// DefaultRemoteDataDir.
+	//
+	// The deployer extracts image-baked PXE assets (vmlinuz, initramfs,
+	// autoinstall.sh, and any /data/configs/ tree the image ships) into
+	// this directory BEFORE starting the container so the bind-mount
+	// doesn't shadow them with an empty host dir. Without this step the
+	// bind-mount's empty source overlays the baked assets and pxeboot
+	// fails to start with "manifest not found".
+	DataDir string
+
+	// ContainerName overrides DefaultContainerName for the bootstrap
+	// container. Empty means DefaultContainerName.
+	ContainerName string
+
+	// RedeployMode controls Verify-then-Deploy idempotency. See the
+	// pkg/bootstrap.RedeployMode constants for semantics; the Deployer
+	// treats unrecognised values as RedeployIfStale.
+	RedeployMode string
+
+	// BootstrapInterface is the host network interface name the
+	// bootstrap container's pxeboot daemon binds to (BOOTSTRAP_INTERFACE
+	// env var). The image's entrypoint defaults this to "eth0", which
+	// is correct for typical jumpbox configurations. Override only on
+	// hosts where the bootstrap-network NIC has a non-standard name —
+	// e.g. systemd predictable names like "enp1s0", "eno1", or USB
+	// dongles like "enxc8a362b837de". When empty the entrypoint's
+	// "eth0" default takes effect.
+	BootstrapInterface string
+
+	// BootstrapServerIP is the IP address the bootstrap container
+	// binds DHCP/TFTP/HTTP services to (BOOTSTRAP_SERVER_IP env var).
+	// The image's entrypoint defaults this to 172.16.201.1, which
+	// matches a typical post-bootstrap provisioning subnet. For the
+	// FIRST bootstrap on a fresh deploy (when no provisioning subnet
+	// exists yet) this must be set to an IP the deployer host already
+	// holds — typically the SMBHost from the orchestrator config.
+	// Empty falls through to the entrypoint default.
+	BootstrapServerIP string
+
+	// BootstrapDHCPStart and BootstrapDHCPEnd bound the DHCP lease
+	// pool the bootstrap container offers to PXE-booting clients
+	// (BOOTSTRAP_DHCP_START / BOOTSTRAP_DHCP_END env vars). Defaults
+	// in the image entrypoint are 172.16.201.100 / 172.16.201.200.
+	// When empty the entrypoint defaults take effect.
+	BootstrapDHCPStart string
+	BootstrapDHCPEnd   string
+
+	// BootstrapGateway is the default gateway advertised in the DHCP
+	// offer (BOOTSTRAP_GATEWAY env var). Empty falls through to the
+	// entrypoint default (172.16.201.1).
+	BootstrapGateway string
+
+	// BootstrapDNS is the DNS server advertised in the DHCP offer
+	// (BOOTSTRAP_DNS env var). Empty falls through to the entrypoint
+	// default (172.16.201.1).
+	BootstrapDNS string
+
+	// ProvisioningSubnet provides provisioning network parameters from the
+	// unified SubnetConfig model.
+	ProvisioningSubnet *installer.SubnetConfig
 
 	// TransferProtocol is the protocol for image transfer (tftp, scp, http).
 	// Used by the Cisco deployer.
@@ -91,15 +155,6 @@ type DeployConfig struct {
 	// CiscoImageFile is the container image filename on router flash.
 	// Defaults to DefaultCiscoImageFile if empty.
 	CiscoImageFile string
-}
-
-// ProvisioningNetworkConfig defines the provisioning network parameters.
-type ProvisioningNetworkConfig struct {
-	Subnet     string   `yaml:"subnet" json:"subnet"`
-	Gateway    string   `yaml:"gateway" json:"gateway"`
-	RangeStart string   `yaml:"range_start" json:"range_start"`
-	RangeEnd   string   `yaml:"range_end" json:"range_end"`
-	DNS        []string `yaml:"dns" json:"dns"`
 }
 
 // DeployResult holds the deployment result.
@@ -129,18 +184,18 @@ func (c *DeployConfig) ApplyDefaults() {
 	if c.ContainerRuntime == "" {
 		c.ContainerRuntime = DefaultContainerRuntime
 	}
+	if c.DataDir == "" {
+		c.DataDir = DefaultRemoteDataDir
+	}
+	if c.ContainerName == "" {
+		c.ContainerName = DefaultContainerName
+	}
 }
 
 // Validate checks the deploy configuration for required fields.
 func (c *DeployConfig) Validate() error {
-	if c.Host == "" {
-		return ErrInvalidDeployConfig{Field: "host", Reason: "must not be empty"}
-	}
-	if c.User == "" {
-		return ErrInvalidDeployConfig{Field: "user", Reason: "must not be empty"}
-	}
-	if c.SSHKeyPath == "" {
-		return ErrInvalidDeployConfig{Field: "ssh_key_path", Reason: "must not be empty"}
+	if err := c.ValidateTeardown(); err != nil {
+		return err
 	}
 
 	// For Cisco targets, container_image and manifest_path are not required
@@ -153,6 +208,25 @@ func (c *DeployConfig) Validate() error {
 		if c.ManifestPath == "" {
 			return ErrInvalidDeployConfig{Field: "manifest_path", Reason: "must not be empty"}
 		}
+	}
+	return nil
+}
+
+// ValidateTeardown checks the subset of fields required to tear down an
+// already-running bootstrap container. Teardown only needs the SSH
+// connection details and (implicitly) ContainerName/Runtime which both
+// fall back to defaults via ApplyDefaults — manifest_path and
+// container_image are deploy-time concerns and would (incorrectly)
+// reject a valid teardown when only ssh_key_path/host/user are set.
+func (c *DeployConfig) ValidateTeardown() error {
+	if c.Host == "" {
+		return ErrInvalidDeployConfig{Field: "host", Reason: "must not be empty"}
+	}
+	if c.User == "" {
+		return ErrInvalidDeployConfig{Field: "user", Reason: "must not be empty"}
+	}
+	if c.SSHKeyPath == "" {
+		return ErrInvalidDeployConfig{Field: "ssh_key_path", Reason: "must not be empty"}
 	}
 	return nil
 }

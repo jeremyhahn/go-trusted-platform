@@ -32,16 +32,18 @@ import (
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
+	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // MCPServiceProviderConfig holds configuration for MCPServiceProvider.
@@ -61,6 +63,12 @@ type MCPServiceProviderConfig struct {
 	TPM2Service          xkmssdk.TrustedPlatformModule
 	Logger               *slog.Logger
 	ComputeOrchestrator  compute.Orchestrator
+	BMCService           BMCServicer
+	ClusterService       ClusterServicer
+	RegistryService      grpcapi.RegistryService
+	InvitationService    platformservice.InvitationServicer
+	EABService           EABServicer
+	EABDelivery          EABDeliveryServicer
 }
 
 // MCPServiceProvider implements mcp.ServiceProvider by bridging to daemon services.
@@ -80,6 +88,13 @@ type MCPServiceProvider struct {
 	cryptoService        baasservice.CryptoService
 	tpm2Service          xkmssdk.TrustedPlatformModule
 	computeOrchestrator  compute.Orchestrator
+	bmcService           BMCServicer
+	clusterService       ClusterServicer
+	registryService      grpcapi.RegistryService
+	invitationService    platformservice.InvitationServicer
+	eabService           EABServicer
+	eabDelivery          EABDeliveryServicer
+	phase35              phase35State
 	logger               *slog.Logger
 }
 
@@ -105,6 +120,12 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		cryptoService:        config.CryptoService,
 		tpm2Service:          config.TPM2Service,
 		computeOrchestrator:  config.ComputeOrchestrator,
+		bmcService:           config.BMCService,
+		clusterService:       config.ClusterService,
+		registryService:      config.RegistryService,
+		invitationService:    config.InvitationService,
+		eabService:           config.EABService,
+		eabDelivery:          config.EABDelivery,
 		logger:               logger,
 	}
 }

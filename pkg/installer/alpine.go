@@ -16,6 +16,7 @@ package installer
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -23,12 +24,18 @@ import (
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 )
 
 // alpineInstaller implements OSInstaller for Alpine Linux
 type alpineInstaller struct {
 	config *OSConfig
 	logger *logging.Logger
+	// quirk holds the hardware-specific settings resolved from the target
+	// machine's Redfish manufacturer/model at construction time. All
+	// vendor-specific paths (serial console device, kernel cmdline, Samba
+	// protocol) read from this field — never from hardcoded strings.
+	quirk quirks.Quirk
 }
 
 // newAlpineInstaller creates a new Alpine Linux installer
@@ -36,6 +43,7 @@ func newAlpineInstaller(logger *logging.Logger, config *OSConfig) (OSInstaller, 
 	return &alpineInstaller{
 		config: config,
 		logger: logger,
+		quirk:  quirks.Resolve(config.HardwareManufacturer, config.HardwareModel),
 	}, nil
 }
 
@@ -56,7 +64,9 @@ func (ai *alpineInstaller) hasPreFetchedPackages() bool {
 	return false
 }
 
-// getPreFetchPath returns the path to pre-fetched packages, or empty string if not found
+// getPreFetchPath returns the path to pre-fetched packages, or empty string if not found.
+// Checks the prefetched (full installation) repo first, then falls back to the
+// live-system apks repo for backward compatibility.
 func (ai *alpineInstaller) getPreFetchPath() string {
 	arch := "x86_64"
 	if ai.config.Architecture != "" {
@@ -64,36 +74,69 @@ func (ai *alpineInstaller) getPreFetchPath() string {
 	}
 
 	for _, mountPoint := range []string{"/media/cdrom", "/media/usb", "/mnt/cdrom"} {
-		apksPath := filepath.Join(mountPoint, "apks", arch)
-		if _, err := os.Stat(apksPath); err == nil {
-			return apksPath
+		// Prefer apks-prefetch (built by --pre-fetch with full deps).
+		// Fall back to apks (live-media boot repo) only as a last resort.
+		for _, repoDir := range []string{"apks-prefetch", "apks"} {
+			apksPath := filepath.Join(mountPoint, repoDir, arch)
+			if _, err := os.Stat(apksPath); err == nil {
+				return apksPath
+			}
 		}
 	}
 	return ""
 }
 
-// configureLocalRepository sets up APK to use the pre-fetched local repository
+// configureLocalRepository sets up APK to use the pre-fetched local repository.
+// The repository path lives on the live ISO at /media/cdrom/apks-prefetch/{arch};
+// for apk to reach it from inside the chroot the path must resolve there too.
+// Rather than bind-mount /media/cdrom (which would have to be unmounted before
+// the chroot teardown and complicates cleanup ordering), the package directory
+// is copied into the chroot at /var/cache/apk-prefetch/{arch}. apk reads from
+// that absolute path inside the chroot.
 func (ai *alpineInstaller) configureLocalRepository(ctx context.Context, rootPath string) error {
 	preFetchPath := ai.getPreFetchPath()
 	if preFetchPath == "" {
 		return ErrOSInstall("pre-fetch path not found", nil)
 	}
 
+	arch := "x86_64"
+	if ai.config.Architecture != "" {
+		arch = ai.config.Architecture
+	}
+
 	ai.logger.Info("[ALPINE] Configuring local APK repository", "path", preFetchPath)
 
-	// Write repositories file to point to local packages
-	repoContent := fmt.Sprintf("%s\n", preFetchPath)
+	// Copy the prefetched repository into the chroot so the path resolves
+	// when apk runs under `chroot /mnt`.
+	chrootRepoBase := filepath.Join(rootPath, "var", "cache", "apk-prefetch")
+	chrootRepoArch := filepath.Join(chrootRepoBase, arch)
+	if err := os.MkdirAll(chrootRepoArch, 0755); err != nil {
+		return ErrOSInstall("failed to create chroot prefetch directory", err)
+	}
+
+	// Use cp -a for a fast recursive copy that preserves permissions and
+	// any tar.gz APKINDEX layout. This avoids re-implementing a Go-side
+	// recursive copy with all the symlink/sparse-file edge cases.
+	cpCmd := exec.CommandContext(ctx, "cp", "-a", preFetchPath+"/.", chrootRepoArch+"/")
+	if output, err := cpCmd.CombinedOutput(); err != nil {
+		return ErrOSInstall(fmt.Sprintf("failed to copy prefetch repo into chroot: %s", string(output)), err)
+	}
+	ai.logger.Info("[ALPINE] Prefetch repo copied into chroot", "dest", chrootRepoArch)
+
+	// Write repositories file pointing at the chroot-relative path.
+	chrootRepoPath := "/var/cache/apk-prefetch"
+	repoContent := fmt.Sprintf("%s\n", chrootRepoPath)
 	repoPath := filepath.Join(rootPath, "etc", "apk", "repositories")
+	if err := os.MkdirAll(filepath.Dir(repoPath), 0755); err != nil {
+		return ErrOSInstall("failed to create chroot apk config directory", err)
+	}
 	if err := os.WriteFile(repoPath, []byte(repoContent), 0644); err != nil {
 		return ErrOSInstall("failed to write local apk repositories", err)
 	}
 
-	// Allow untrusted packages since we generated our own APKINDEX
-	// This is safe because the packages were downloaded from official mirrors
-	// during ISO build time with checksum verification
+	// Ensure /etc/apk/world exists (apk requires it).
 	worldPath := filepath.Join(rootPath, "etc", "apk", "world")
 	if _, err := os.Stat(worldPath); os.IsNotExist(err) {
-		// Create empty world file if it doesn't exist
 		if err := os.WriteFile(worldPath, []byte(""), 0644); err != nil {
 			ai.logger.Warn("[ALPINE] Failed to create world file", "error", err)
 		}
@@ -140,31 +183,61 @@ func (ai *alpineInstaller) InstallBase(ctx context.Context, rootPath string) err
 		majorMinor = fmt.Sprintf("%s.%s", versionParts[0], versionParts[1])
 	}
 
-	tarballURL := fmt.Sprintf("%s/v%s/releases/%s/alpine-minirootfs-%s-%s.tar.gz",
-		mirror, majorMinor, arch, version, arch)
+	tarballName := fmt.Sprintf("alpine-minirootfs-%s-%s.tar.gz", version, arch)
+	tarballURL := fmt.Sprintf("%s/v%s/releases/%s/%s",
+		mirror, majorMinor, arch, tarballName)
 
-	ai.logger.Info("[ALPINE] Downloading base system", "url", tarballURL)
-
-	// Download tarball
-	resp, err := http.Get(tarballURL)
-	if err != nil {
-		return ErrOSInstall("failed to download Alpine base", err)
-	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			ai.logger.Warn("[ALPINE] Failed to close response body", "error", err)
+	// Prefer the locally-cached minirootfs (placed by the prefetch builder
+	// at the ISO root). This keeps the install offline-capable on networks
+	// that cannot reach an Alpine mirror — including bootstrap/provisioning
+	// VLANs that have no upstream egress.
+	var tarballReader io.Reader
+	var localTarball *os.File
+	for _, candidate := range []string{
+		filepath.Join("/media/cdrom", tarballName),
+		filepath.Join("/media/cdrom", "alpine-minirootfs.tar.gz"),
+	} {
+		if f, err := os.Open(candidate); err == nil {
+			ai.logger.Info("[ALPINE] Using locally-cached minirootfs", "path", candidate)
+			localTarball = f
+			tarballReader = f
+			defer func() {
+				if err := f.Close(); err != nil {
+					ai.logger.Warn("[ALPINE] Failed to close local minirootfs", "error", err)
+				}
+			}()
+			break
 		}
-	}()
+	}
 
-	if resp.StatusCode != 200 {
-		return ErrOSInstall(fmt.Sprintf("failed to download Alpine base: HTTP %d", resp.StatusCode), nil)
+	if localTarball == nil {
+		ai.logger.Info("[ALPINE] Downloading base system from mirror", "url", tarballURL)
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, tarballURL, nil)
+		if err != nil {
+			return ErrOSInstall("failed to build minirootfs request", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return ErrOSInstall("failed to download Alpine base", err)
+		}
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				ai.logger.Warn("[ALPINE] Failed to close response body", "error", err)
+			}
+		}()
+
+		if resp.StatusCode != 200 {
+			return ErrOSInstall(fmt.Sprintf("failed to download Alpine base: HTTP %d", resp.StatusCode), nil)
+		}
+		tarballReader = resp.Body
 	}
 
 	// Extract tarball to rootPath
 	ai.logger.Info("[ALPINE] Extracting base system", "path", rootPath)
 
 	cmd := exec.CommandContext(ctx, "tar", "-xzf", "-", "-C", rootPath)
-	cmd.Stdin = resp.Body
+	cmd.Stdin = tarballReader
 
 	if output, err := cmd.CombinedOutput(); err != nil {
 		ai.logger.Errorf("[ALPINE] Extraction failed: output=%s", string(output))
@@ -211,11 +284,24 @@ func (ai *alpineInstaller) InstallBase(ctx context.Context, rootPath string) err
 	}
 	defer ai.cleanupChrootMounts(rootPath)
 
-	// Install base packages using chroot
+	// Install base packages using chroot.
+	// When using the local prefetch repo, the minirootfs we just extracted
+	// (frozen at e.g. 3.22.2) may have older versions than the rolling v3.22
+	// main repo (e.g. 3.22.4 + busybox-r20). apk add lets us upgrade those
+	// in-place via `--upgrade` AND we explicitly include the busybox triplet
+	// (busybox / busybox-binsh / busybox-suid) so apk's resolver upgrades all
+	// three together — otherwise it fails with
+	// `breaks: busybox-binsh-1.37.0-r19[busybox=1.37.0-r19]`.
 	ai.logger.Info("[ALPINE] Installing base packages")
 
 	packages := []string{
 		"alpine-base",
+		// busybox triplet must be installed together so apk's resolver
+		// can upgrade all three from the older minirootfs versions to the
+		// rolling main repo versions atomically.
+		"busybox",
+		"busybox-binsh",
+		"busybox-suid",
 		// NOTE: No cryptsetup or lvm2 - platform-initrd handles LUKS unlock natively via go-luks2
 		"e2fsprogs",
 		"dosfstools",
@@ -279,21 +365,26 @@ func (ai *alpineInstaller) InstallBase(ctx context.Context, rootPath string) err
 		}
 	}
 
-	for _, pkg := range packages {
-		ai.logger.Debug("[ALPINE] Installing package", "package", pkg)
+	// Install all base packages in a single apk add invocation so the
+	// resolver can upgrade interrelated packages (e.g. the busybox triplet)
+	// atomically. Single-package installs serialise the resolver and break
+	// when a later package's deps require upgrading something installed by
+	// an earlier step.
+	ai.logger.Info("[ALPINE] Installing base package set",
+		"count", len(packages),
+		"packages", strings.Join(packages, ","))
 
-		args := []string{rootPath, "apk", "add", "--no-cache"}
-		if useLocalRepo {
-			// Allow untrusted for local repository (packages were verified during pre-fetch)
-			args = append(args, "--allow-untrusted")
-		}
-		args = append(args, pkg)
+	args := []string{rootPath, "apk", "add", "--no-cache", "--upgrade"}
+	if useLocalRepo {
+		// Allow untrusted for local repository (packages were verified during pre-fetch)
+		args = append(args, "--allow-untrusted")
+	}
+	args = append(args, packages...)
 
-		chrootCmd := exec.CommandContext(ctx, "chroot", args...)
-		if output, err := chrootCmd.CombinedOutput(); err != nil {
-			ai.logger.Errorf("[ALPINE] Package installation failed [%s]: output=%s", pkg, string(output))
-			return ErrOSInstall(fmt.Sprintf("failed to install package %s", pkg), err)
-		}
+	chrootCmd := exec.CommandContext(ctx, "chroot", args...)
+	if output, err := chrootCmd.CombinedOutput(); err != nil {
+		ai.logger.Errorf("[ALPINE] Base package installation failed: output=%s", string(output))
+		return ErrOSInstall("failed to install base packages", err)
 	}
 
 	// Ensure /lib64 symlink exists for glibc binary compatibility
@@ -684,10 +775,11 @@ add_drivers+=" nvme sd_mod ahci "
 #
 # NOTE: We deliberately do NOT add 8250_aspeed_vuart here. That module
 # does not exist in the Alpine LTS kernel package, and dracut prints a
-# fatal-looking error when it cannot find it. The Aspeed VUART on Supermicro
-# X10SDV-class boards is exposed by BIOS at the standard COM2 IO port
-# (0x2f8), so the in-tree 8250 driver claims it via the explicit
-# "earlycon=uart8250,io,0x2f8,115200n8" cmdline anchor we set in
+# fatal-looking error when it cannot find it. On Supermicro X10 boards
+# the BMC SOL serial concentrator is wired to COM1 at the standard IO
+# port 0x3f8, matching the BIOS "Serial Port Console Redirection = COM1"
+# setting. The in-tree 8250 driver claims it via the
+# "earlycon=uart8250,io,0x3f8,115200n8" cmdline anchor we set in
 # pkg/installer/installer.go. No vendor-specific module needed.
 force_drivers+=" 8250 8250_pci serial_base "
 `)
@@ -783,12 +875,46 @@ func (ai *alpineInstaller) EnableServices(ctx context.Context, rootPath string) 
 		ai.logger.Warn("[ALPINE] Failed to configure kernel modules", "error", err)
 	}
 
-	// List of essential services to enable in the default runlevel
+	// List of essential services to enable in the default runlevel.
+	// Each entry is skipped if its /etc/init.d file isn't present, so
+	// the list can safely contain services whose packages are only
+	// conditionally installed (ssh, OVS). The OVS trio must be
+	// enabled in boot runlevel (not default) so the datapath module
+	// and ovsdb-server are ready before platformd tries to speak
+	// OVSDB in initSDN.
 	defaultServices := []string{
 		"networking", // Network configuration
 		"chronyd",    // Time synchronization (if available)
 		"local",      // Local startup scripts
 		"sshd",       // SSH server (if installed)
+	}
+
+	// OVS services: ovs-modules loads the openvswitch kernel module,
+	// ovsdb-server serves the OVSDB socket platformd talks to, and
+	// ovs-vswitchd is the dataplane daemon. These go into the `boot`
+	// runlevel so they're up before `default` services (networking,
+	// platformd) that depend on the bridge being present.
+	bootServices := []string{
+		"ovs-modules",
+		"ovsdb-server",
+		"ovs-vswitchd",
+	}
+	for _, service := range bootServices {
+		servicePath := filepath.Join(rootPath, "etc/init.d", service)
+		if _, err := os.Stat(servicePath); os.IsNotExist(err) {
+			ai.logger.Debug("[ALPINE] OVS service not found, skipping",
+				"service", service)
+			continue
+		}
+		cmd := exec.CommandContext(ctx, "chroot", rootPath, "rc-update", "add", service, "boot")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			ai.logger.Warn("[ALPINE] Failed to enable OVS service",
+				"service", service,
+				"error", err,
+				"output", string(output))
+			continue
+		}
+		ai.logger.Info("[ALPINE] Enabled OVS service (boot runlevel)", "service", service)
 	}
 
 	// Enable each service in the default runlevel
@@ -818,9 +944,14 @@ func (ai *alpineInstaller) EnableServices(ctx context.Context, rootPath string) 
 	return nil
 }
 
-// configureConsole creates console configuration files for the installed system
+// configureConsole creates console configuration files for the installed system.
+// The serial-console device name (e.g. ttyS0, ttyS1) is taken from the
+// hardware quirk resolved at construction time so the inittab is correct for
+// boards whose BMC SOL concentrator is wired to a non-default UART
+// (e.g. Supermicro X10SDV-TP8F uses ttyS1/COM2).
 func (ai *alpineInstaller) configureConsole(rootPath string) error {
-	ai.logger.Info("[ALPINE] Configuring console output")
+	ai.logger.Info("[ALPINE] Configuring console output",
+		"sol_port", ai.quirk.SOLPort)
 
 	// Create /etc/rc.conf for verbose OpenRC output
 	rcConfPath := filepath.Join(rootPath, "etc", "rc.conf")
@@ -845,9 +976,12 @@ rc_interactive="NO"
 	}
 	ai.logger.Info("[ALPINE] Created /etc/rc.conf")
 
-	// Create /etc/inittab with getty configuration (busybox getty syntax)
+	// Create /etc/inittab with getty configuration (busybox getty syntax).
+	// The serial console device is driven by the hardware quirk (ai.quirk.SOLPort)
+	// so the getty binds to the correct UART for the target board.
 	inittabPath := filepath.Join(rootPath, "etc", "inittab")
-	inittabContent := `# /etc/inittab
+	solPort := ai.quirk.SOLPort
+	inittabContent := fmt.Sprintf(`# /etc/inittab
 
 ::sysinit:/sbin/openrc sysinit
 ::sysinit:/sbin/openrc boot
@@ -861,15 +995,15 @@ tty4::respawn:/sbin/getty 38400 tty4
 tty5::respawn:/sbin/getty 38400 tty5
 tty6::respawn:/sbin/getty 38400 tty6
 
-# Serial console - THIS IS KEY FOR SEEING OUTPUT (busybox getty syntax)
-ttyS0::respawn:/sbin/getty 115200 ttyS0 vt100
+# Serial console — bound to the SOL UART for this hardware platform.
+%s::respawn:/sbin/getty 115200 %s vt100
 
 # Stuff to do for the 3-finger salute
 ::ctrlaltdel:/sbin/reboot
 
 # Stuff to do before rebooting
 ::shutdown:/sbin/openrc shutdown
-`
+`, solPort, solPort)
 	if err := os.WriteFile(inittabPath, []byte(inittabContent), 0644); err != nil {
 		return fmt.Errorf("failed to create inittab: %w", err)
 	}
@@ -987,8 +1121,15 @@ func (ai *alpineInstaller) InstallPackages(ctx context.Context, rootPath string)
 		}
 	}
 
-	// Build apk add command with all packages
+	// Build apk add command with all packages.
+	// --allow-untrusted is required when installing from the embedded
+	// /var/cache/apk-prefetch repo because the regenerated APKINDEX is
+	// unsigned (the package files themselves are byte-identical to the
+	// official Alpine mirror, but apk has no key for our local index).
 	args := []string{rootPath, "apk", "add", "--no-cache"}
+	if ai.hasPreFetchedPackages() {
+		args = append(args, "--allow-untrusted")
+	}
 	args = append(args, packages...)
 
 	cmd := exec.CommandContext(ctx, "chroot", args...)
@@ -1018,8 +1159,23 @@ func (ai *alpineInstaller) InstallPackages(ctx context.Context, rootPath string)
 func (ai *alpineInstaller) InstallDebugSSH(ctx context.Context, rootPath string) error {
 	ai.logger.Info("[ALPINE] Installing SSH for debug mode")
 
-	// Install openssh package
-	cmd := exec.CommandContext(ctx, "chroot", rootPath, "apk", "add", "--no-cache", "openssh")
+	// Install openssh-server explicitly — the `openssh` meta-package
+	// pulls in openssh-client by default but NOT openssh-server, so
+	// /etc/init.d/sshd never gets installed and EnableServices logs
+	// `Service not found, skipping sshd`. Adding openssh-server brings
+	// the sshd binary AND its OpenRC init script. See InstallPackages
+	// for the --allow-untrusted rationale (offline prefetch repo).
+	apkArgs := []string{rootPath, "apk", "add", "--no-cache"}
+	if ai.hasPreFetchedPackages() {
+		apkArgs = append(apkArgs, "--allow-untrusted")
+	}
+	// Alpine 3.22+ splits openssh into many sub-packages. The OpenRC
+	// init script (/etc/init.d/sshd) lives in
+	// `openssh-server-common-openrc`, NOT in `openssh-server`. Without
+	// it, EnableServices' rc-update add sshd default skips with
+	// "Service not found", and sshd never starts on boot.
+	apkArgs = append(apkArgs, "openssh", "openssh-server", "openssh-server-common-openrc")
+	cmd := exec.CommandContext(ctx, "chroot", apkArgs...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		ai.logger.Errorf("[ALPINE] Failed to install openssh: %s", string(output))
 		return ErrOSInstall("failed to install openssh for debug mode", err)
@@ -1436,8 +1592,8 @@ func (ai *alpineInstaller) ConfigureNetwork(ctx context.Context, rootPath string
 		"vlans", len(netConfig.VLANs))
 
 	// Configure DNS
-	if netConfig.DNS != nil {
-		if err := ai.configureDNS(rootPath, netConfig.DNS); err != nil {
+	if netConfig.DNS != nil || netConfig.DNSMasq != nil {
+		if err := ai.configureDNS(ctx, rootPath, netConfig.DNS, netConfig.DNSMasq); err != nil {
 			return fmt.Errorf("failed to configure DNS: %w", err)
 		}
 	}
@@ -1452,10 +1608,32 @@ func (ai *alpineInstaller) ConfigureNetwork(ctx context.Context, rootPath string
 	interfaces.WriteString("auto lo\n")
 	interfaces.WriteString("iface lo inet loopback\n\n")
 
-	// Configure bonds first (slaves need to be configured before the bond)
+	// Configure bonds first (member interfaces need to be configured before the bond)
 	for _, bond := range netConfig.Bonds {
 		bondConfig := ai.generateBondConfig(&bond)
 		interfaces.WriteString(bondConfig)
+
+		// Skip Linux-style VLAN sub-interfaces for OVS bonds. For OVS
+		// bonds the VLANs (bond.VLANs) are OVS-internal tags handled by
+		// the bridge/port at the OVS layer; emitting `bond0.200` Linux
+		// stanzas points at a kernel device that does not exist and
+		// causes ifupdown failures.
+		bondType := bond.Type
+		if bondType == "" {
+			bondType = BondTypeOVS
+		}
+		if bondType == BondTypeOVS {
+			interfaces.WriteString(fmt.Sprintf(
+				"# Bond %s VLANs handled inside OVS by platformd; no Linux stanzas emitted.\n\n",
+				bond.Name))
+			continue
+		}
+
+		// Generate VLAN sub-interfaces for this bond
+		for _, bv := range bond.VLANs {
+			vlanConfig := ai.generateBondVLANConfig(netConfig, bond.Name, &bv)
+			interfaces.WriteString(vlanConfig)
+		}
 	}
 
 	// Configure VLANs
@@ -1488,6 +1666,12 @@ func (ai *alpineInstaller) ConfigureNetwork(ctx context.Context, rootPath string
 	interfacesPath := filepath.Join(rootPath, "etc", "network", "interfaces")
 	if err := os.MkdirAll(filepath.Dir(interfacesPath), 0755); err != nil {
 		return fmt.Errorf("failed to create network directory: %w", err)
+	}
+	// Diagnostic dump of the generated content so misconfigurations (e.g.
+	// missing iface fields → `ifup: don't have all variables for X/inet`)
+	// are visible in install.log without needing to mount the LUKS disk.
+	for i, line := range strings.Split(interfaces.String(), "\n") {
+		ai.logger.Debug("[ALPINE] interfaces line", "i", i, "line", line)
 	}
 	if err := os.WriteFile(interfacesPath, []byte(interfaces.String()), 0644); err != nil {
 		return fmt.Errorf("failed to write network interfaces: %w", err)
@@ -1527,11 +1711,31 @@ iface eth0 inet dhcp
 	return nil
 }
 
-// configureDNS configures /etc/resolv.conf and optionally dnsmasq for non-standard port forwarding
-func (ai *alpineInstaller) configureDNS(rootPath string, dns *DNSConfig) error {
-	// If UpstreamDNS is set, install and configure dnsmasq
-	if dns.UpstreamDNS != "" {
-		return ai.configureDNSWithDnsmasq(rootPath, dns)
+// configureDNS configures /etc/resolv.conf and optionally dnsmasq.
+//
+// Three paths:
+//  1. NetworkConfig.DNSMasq.Enabled — install dnsmasq, write a config that
+//     forwards to UpstreamServers, point resolv.conf at 127.0.0.1.
+//  2. dns.UpstreamDNS legacy single-server form — same dnsmasq path with one
+//     upstream entry.
+//  3. neither — write a plain resolv.conf with whatever Nameservers the
+//     config lists.
+//
+// Path (1) is the path operators actually use in YAML overrides
+// (`network.dnsmasq.enabled: true`). The previous code only wired path (2),
+// so overrides that listed nameservers=[127.0.0.1] under DNS quietly
+// resulted in NO dnsmasq install + a broken resolver loop on first boot.
+func (ai *alpineInstaller) configureDNS(ctx context.Context, rootPath string, dns *DNSConfig, dnsmasq *DNSMasqConfig) error {
+	if dnsmasq != nil && dnsmasq.Enabled {
+		return ai.configureDNSMasqFromConfig(ctx, rootPath, dns, dnsmasq)
+	}
+
+	if dns != nil && dns.UpstreamDNS != "" {
+		return ai.configureDNSWithDnsmasq(ctx, rootPath, dns)
+	}
+
+	if dns == nil {
+		return nil
 	}
 
 	// Standard resolv.conf configuration
@@ -1568,15 +1772,123 @@ func (ai *alpineInstaller) configureDNS(rootPath string, dns *DNSConfig) error {
 	return nil
 }
 
+// configureDNSMasqFromConfig installs and configures dnsmasq from the
+// dedicated NetworkConfig.DNSMasq block (the form operators actually write
+// in YAML overrides). It supports multiple upstream servers and a
+// LocalDomain for split-horizon resolution.
+func (ai *alpineInstaller) configureDNSMasqFromConfig(ctx context.Context, rootPath string, dns *DNSConfig, dnsmasq *DNSMasqConfig) error {
+	ai.logger.Info("[ALPINE] Configuring dnsmasq",
+		"upstream_servers", dnsmasq.UpstreamServers,
+		"local_domain", dnsmasq.LocalDomain)
+
+	// Install dnsmasq inside the chroot so the prefetch repo path
+	// (/var/cache/apk-prefetch) resolves. See configureDNSWithDnsmasq
+	// for the full rationale.
+	if err := ai.setupChrootMounts(ctx, rootPath); err != nil {
+		return fmt.Errorf("failed to setup chroot mounts for dnsmasq install: %w", err)
+	}
+	defer ai.cleanupChrootMounts(rootPath)
+
+	apkArgs := []string{rootPath, "apk", "add", "--no-cache"}
+	if ai.hasPreFetchedPackages() {
+		apkArgs = append(apkArgs, "--allow-untrusted")
+	}
+	apkArgs = append(apkArgs, "dnsmasq", "dnsmasq-openrc")
+	cmd := exec.CommandContext(ctx, "chroot", apkArgs...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		ai.logger.Errorf("[ALPINE] Failed to install dnsmasq: output=%s, error=%v", string(output), err)
+		return fmt.Errorf("failed to install dnsmasq: %w", err)
+	}
+
+	// Build /etc/dnsmasq.conf
+	var conf strings.Builder
+	conf.WriteString("# /etc/dnsmasq.conf\n")
+	conf.WriteString("# Generated by Trusted Platform installer\n\n")
+	conf.WriteString("no-resolv\n")
+	conf.WriteString("listen-address=127.0.0.1\n")
+	conf.WriteString("bind-interfaces\n")
+	conf.WriteString("cache-size=1000\n")
+
+	for _, srv := range dnsmasq.UpstreamServers {
+		fmt.Fprintf(&conf, "server=%s\n", srv)
+	}
+
+	if dnsmasq.LocalDomain != "" {
+		fmt.Fprintf(&conf, "domain=%s\n", dnsmasq.LocalDomain)
+		fmt.Fprintf(&conf, "local=/%s/\n", dnsmasq.LocalDomain)
+	}
+
+	confPath := filepath.Join(rootPath, "etc", "dnsmasq.conf")
+	if err := os.WriteFile(confPath, []byte(conf.String()), 0644); err != nil {
+		return fmt.Errorf("failed to write dnsmasq.conf: %w", err)
+	}
+	ai.logger.Info("[ALPINE] Wrote dnsmasq.conf", "path", confPath)
+
+	// Enable at boot so the resolver is up before platformd starts.
+	enableCmd := exec.CommandContext(ctx, "chroot", rootPath, "rc-update", "add", "dnsmasq", "default")
+	if output, err := enableCmd.CombinedOutput(); err != nil {
+		ai.logger.Warn("[ALPINE] Failed to enable dnsmasq service",
+			"output", string(output), "error", err)
+		// Non-fatal — operator can rc-update add manually.
+	} else {
+		ai.logger.Info("[ALPINE] Enabled dnsmasq service in default runlevel")
+	}
+
+	// Point resolv.conf at the local dnsmasq. If the operator listed
+	// other nameservers under dns.Nameservers we honor them too — but
+	// dnsmasq goes first so cached/local-domain answers are used.
+	var resolv strings.Builder
+	resolv.WriteString("# /etc/resolv.conf\n")
+	resolv.WriteString("# Generated by Trusted Platform installer (dnsmasq mode)\n\n")
+	if dns != nil && len(dns.SearchDomains) > 0 {
+		resolv.WriteString("search ")
+		resolv.WriteString(strings.Join(dns.SearchDomains, " "))
+		resolv.WriteString("\n")
+	}
+	resolv.WriteString("nameserver 127.0.0.1\n")
+	if dns != nil {
+		for _, ns := range dns.Nameservers {
+			if ns == "127.0.0.1" || ns == "::1" {
+				continue
+			}
+			fmt.Fprintf(&resolv, "nameserver %s\n", ns)
+		}
+		if len(dns.Options) > 0 {
+			resolv.WriteString("options ")
+			resolv.WriteString(strings.Join(dns.Options, " "))
+			resolv.WriteString("\n")
+		}
+	}
+	resolvPath := filepath.Join(rootPath, "etc", "resolv.conf")
+	if err := os.WriteFile(resolvPath, []byte(resolv.String()), 0644); err != nil {
+		return fmt.Errorf("failed to write resolv.conf: %w", err)
+	}
+	ai.logger.Info("[ALPINE] Created /etc/resolv.conf pointing at local dnsmasq")
+	return nil
+}
+
 // configureDNSWithDnsmasq sets up dnsmasq to forward DNS to a server on a non-standard port
-func (ai *alpineInstaller) configureDNSWithDnsmasq(rootPath string, dns *DNSConfig) error {
+func (ai *alpineInstaller) configureDNSWithDnsmasq(ctx context.Context, rootPath string, dns *DNSConfig) error {
 	ai.logger.Info("[ALPINE] Configuring dnsmasq for upstream DNS forwarding",
 		"upstream", dns.UpstreamDNS)
 
-	// Install dnsmasq package
+	// Install dnsmasq package via chroot so the embedded
+	// /var/cache/apk-prefetch repo path resolves correctly. Using
+	// `apk --root` from outside the chroot would try to read the path
+	// from the host filesystem and fail with "No such file or directory".
+	// The chroot lifecycle (proc/sys/dev mounts) is set up here for the
+	// install and torn down on the deferred cleanup.
 	ai.logger.Info("[ALPINE] Installing dnsmasq package")
-	cmd := exec.Command("apk", "--root", rootPath, "add", "dnsmasq")
-	cmd.Env = append(os.Environ(), "PATH=/usr/sbin:/usr/bin:/sbin:/bin")
+	if err := ai.setupChrootMounts(ctx, rootPath); err != nil {
+		return fmt.Errorf("failed to setup chroot mounts for dnsmasq install: %w", err)
+	}
+	defer ai.cleanupChrootMounts(rootPath)
+	dnsmasqArgs := []string{rootPath, "apk", "add", "--no-cache"}
+	if ai.hasPreFetchedPackages() {
+		dnsmasqArgs = append(dnsmasqArgs, "--allow-untrusted")
+	}
+	dnsmasqArgs = append(dnsmasqArgs, "dnsmasq")
+	cmd := exec.CommandContext(ctx, "chroot", dnsmasqArgs...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		ai.logger.Errorf("[ALPINE] Failed to install dnsmasq: output=%s, error=%v", string(output), err)
 		return fmt.Errorf("failed to install dnsmasq: %w", err)
@@ -1730,10 +2042,42 @@ func (ai *alpineInstaller) generateInterfaceConfig(iface *InterfaceConfig) strin
 	return config.String()
 }
 
-// generateBridgeConfig generates bridge interface configuration
+// generateBridgeConfig generates bridge interface configuration.
+//
+// For Type=ovs bridges, the Linux bridge device is NOT created here —
+// platformd creates the OVS bridge at runtime via a native OVSDB
+// transaction (see pkg/app/sdn.go::initOVSBridges + initBridgeIPs)
+// and assigns any VLAN-scoped IPs from bonds[].vlans[]. Writing Linux
+// bridge_ports stanzas on top of an OVS bridge causes ifenslave to
+// race ovs-vswitchd for the bridge name. Member interfaces still get
+// their "manual" stanzas so they come up cleanly for OVS to claim.
+//
+// For Type=linux (or unset, for legacy configs), we emit the
+// traditional bridge-utils /etc/network/interfaces stanza.
 func (ai *alpineInstaller) generateBridgeConfig(br *BridgeConfig) string {
 	var config strings.Builder
 
+	// Default empty Type to OVS so new deployments don't accidentally
+	// pin themselves to the Linux bridge driver. Explicit type=linux
+	// preserves existing behaviour.
+	bridgeType := br.Type
+	if bridgeType == "" {
+		bridgeType = BridgeTypeOVS
+	}
+
+	if bridgeType == BridgeTypeOVS {
+		// For OVS bridges, emit only a comment. The members listed under
+		// br.Interfaces are OVS construct names (bond0, port0, etc.) that
+		// do NOT exist as Linux devices, so ifupdown can't bring them up.
+		// Their physical underlay NICs are emitted by generateBondConfig.
+		// Writing `auto <ovs-port-name>` here causes
+		//   `ip: can't find device 'bond0'`
+		// during /etc/init.d/networking start.
+		fmt.Fprintf(&config, "# Bridge: %s (OVS — created at runtime by platformd; no Linux stanza)\n\n", br.Name)
+		return config.String()
+	}
+
+	// Linux bridge path (bridge-utils).
 	fmt.Fprintf(&config, "# Bridge: %s\n", br.Name)
 
 	// Configure member interfaces as manual (no IP)
@@ -1783,16 +2127,48 @@ func (ai *alpineInstaller) generateBridgeConfig(br *BridgeConfig) string {
 	return config.String()
 }
 
-// generateBondConfig generates bond interface configuration
+// generateBondConfig generates bond interface configuration.
+//
+// For Type=ovs bonds, the kernel bond device is NOT created here —
+// platformd creates the bond inside OVS at runtime via a native OVSDB
+// transaction (see pkg/app/sdn.go::initOVSBonds). All we do for OVS
+// bonds is mark the member NICs as manually configured + brought up
+// so ovs-vswitchd can claim them before platformd issues the AddBond.
+// Writing the Linux bond-slaves stanzas on top of an OVS bond causes
+// the kernel bonding driver to race OVS for the member NICs and
+// produces a broken hybrid state.
+//
+// For Type=linux (or unset, for legacy configs), we emit the
+// traditional ifenslave-style /etc/network/interfaces bond.
 func (ai *alpineInstaller) generateBondConfig(bond *BondConfig) string {
 	var config strings.Builder
 
-	fmt.Fprintf(&config, "# Bond: %s\n", bond.Name)
+	// Default empty Type to OVS so new deployments don't accidentally
+	// pin themselves to the kernel bonding driver. Explicit type=linux
+	// preserves existing behaviour.
+	bondType := bond.Type
+	if bondType == "" {
+		bondType = BondTypeOVS
+	}
 
-	// Configure slave interfaces
-	for _, slave := range bond.Slaves {
-		fmt.Fprintf(&config, "auto %s\n", slave)
-		fmt.Fprintf(&config, "iface %s inet manual\n", slave)
+	if bondType == BondTypeOVS {
+		fmt.Fprintf(&config, "# Bond: %s (OVS — bond created at runtime by platformd initOVSBonds)\n", bond.Name)
+		for _, iface := range bond.Interfaces {
+			fmt.Fprintf(&config, "auto %s\n", iface)
+			fmt.Fprintf(&config, "iface %s inet manual\n", iface)
+			fmt.Fprintf(&config, "    up ip link set $IFACE up\n")
+			fmt.Fprintf(&config, "    down ip link set $IFACE down\n")
+			config.WriteString("\n")
+		}
+		return config.String()
+	}
+
+	fmt.Fprintf(&config, "# Bond: %s (linux kernel bonding)\n", bond.Name)
+
+	// Configure member interfaces
+	for _, iface := range bond.Interfaces {
+		fmt.Fprintf(&config, "auto %s\n", iface)
+		fmt.Fprintf(&config, "iface %s inet manual\n", iface)
 		fmt.Fprintf(&config, "    bond-master %s\n", bond.Name)
 		config.WriteString("\n")
 	}
@@ -1821,7 +2197,7 @@ func (ai *alpineInstaller) generateBondConfig(bond *BondConfig) string {
 	}
 
 	// Bond-specific options
-	fmt.Fprintf(&config, "    bond-slaves %s\n", strings.Join(bond.Slaves, " "))
+	fmt.Fprintf(&config, "    bond-slaves %s\n", strings.Join(bond.Interfaces, " "))
 	fmt.Fprintf(&config, "    bond-mode %s\n", bond.Mode)
 
 	if bond.MIIMon > 0 {
@@ -1830,6 +2206,38 @@ func (ai *alpineInstaller) generateBondConfig(bond *BondConfig) string {
 
 	if bond.Primary != "" {
 		fmt.Fprintf(&config, "    bond-primary %s\n", bond.Primary)
+	}
+
+	config.WriteString("\n")
+	return config.String()
+}
+
+// generateBondVLANConfig generates an 802.1Q VLAN sub-interface on a bond.
+// The VLAN ID is resolved from the referenced SubnetConfig by name.
+func (ai *alpineInstaller) generateBondVLANConfig(netConfig *NetworkConfig, bondName string, bv *BondVLANConfig) string {
+	var config strings.Builder
+
+	subnet := netConfig.SubnetByName(bv.Subnet)
+	if subnet == nil || subnet.VLANID == 0 {
+		return ""
+	}
+
+	ifaceName := fmt.Sprintf("%s.%d", bondName, subnet.VLANID)
+
+	fmt.Fprintf(&config, "# Bond VLAN: %s (subnet %s, VLAN %d)\n", ifaceName, bv.Subnet, subnet.VLANID)
+
+	if bv.AutoStart {
+		fmt.Fprintf(&config, "auto %s\n", ifaceName)
+	}
+
+	if bv.IPv4Address != "" {
+		fmt.Fprintf(&config, "iface %s inet static\n", ifaceName)
+		fmt.Fprintf(&config, "    address %s\n", bv.IPv4Address)
+		if subnet.Gateway != "" {
+			fmt.Fprintf(&config, "    gateway %s\n", subnet.Gateway)
+		}
+	} else {
+		fmt.Fprintf(&config, "iface %s inet manual\n", ifaceName)
 	}
 
 	config.WriteString("\n")
@@ -1876,6 +2284,13 @@ func (ai *alpineInstaller) generateVLANConfig(vlan *VLANConfig) string {
 func (ai *alpineInstaller) installNetworkPackages(ctx context.Context, rootPath string, netConfig *NetworkConfig) error {
 	var packages []string
 
+	// Always install ifupdown-ng. busybox's built-in /sbin/ifup cannot
+	// parse CIDR notation (`address 198.18.1.139/24`) and fails with
+	// `ifup: don't have all variables for X/inet`. ifupdown-ng handles
+	// CIDR natively. /sbin/ifup is whichever package wins last during
+	// install; explicitly installing ifupdown-ng makes it the provider.
+	packages = append(packages, "ifupdown-ng")
+
 	// Check if we need bridge utilities
 	if len(netConfig.Bridges) > 0 {
 		for _, br := range netConfig.Bridges {
@@ -1887,10 +2302,12 @@ func (ai *alpineInstaller) installNetworkPackages(ctx context.Context, rootPath 
 		}
 	}
 
-	// Check if we need bonding
-	if len(netConfig.Bonds) > 0 {
-		packages = append(packages, "bonding")
-	}
+	// Bonding does NOT require a separate apk package on Alpine: the
+	// kernel module ships with linux-lts and is loaded via
+	// /etc/modules (wire that up in the template's os.kernel-modules
+	// list, not here). Historical behaviour tried `apk add bonding`,
+	// which doesn't exist in any Alpine repo and caused a WARN + the
+	// install to proceed without networking ever coming up.
 
 	// Check if we need VLAN support
 	if len(netConfig.VLANs) > 0 {
@@ -1914,6 +2331,9 @@ func (ai *alpineInstaller) installNetworkPackages(ctx context.Context, rootPath 
 	ai.logger.Info("[ALPINE] Installing network packages", "packages", unique)
 
 	args := []string{rootPath, "apk", "add", "--no-cache"}
+	if ai.hasPreFetchedPackages() {
+		args = append(args, "--allow-untrusted")
+	}
 	args = append(args, unique...)
 
 	cmd := exec.CommandContext(ctx, "chroot", args...)
@@ -2018,38 +2438,47 @@ fi
 			ai.logger.Info("[ALPINE] Created IMA local.d start script")
 		}
 
-		// Create platformd debug script for integration testing
-		// This outputs platformd logs to serial console for debugging
-		platformdDebugScript := `#!/bin/sh
-# Output platformd logs to serial console for debugging
-# Generated by Trusted Platform installer
+		// Create platformd debug script for integration testing.
+		// The serial device is driven by the hardware quirk so the output
+		// reaches the operator via the correct UART/SOL port.
+		serialDev := "/dev/" + ai.quirk.SOLPort
+		platformdDebugScript := fmt.Sprintf(`#!/bin/sh
+# Output platformd logs to serial console for debugging.
+# Generated by Trusted Platform installer — serial device: %s
 
 # Wait for platformd to start and generate some logs
 sleep 15
 
-echo "=== PLATFORMD DEBUG LOG START ===" > /dev/ttyS0
+echo "=== PLATFORMD DEBUG LOG START ===" > %s
 
 # Dump platformd.log (stdout/stderr from OpenRC)
-echo "--- platformd.log ---" > /dev/ttyS0
+echo "--- platformd.log ---" > %s
 if [ -f /var/log/trusted-platform/platformd.log ]; then
-    cat /var/log/trusted-platform/platformd.log > /dev/ttyS0 2>/dev/null
+    cat /var/log/trusted-platform/platformd.log > %s 2>/dev/null
 else
-    echo "platformd.log not found" > /dev/ttyS0
+    echo "platformd.log not found" > %s
 fi
 
 # Dump trusted-platform.log (App.Logger structured logging)
-echo "--- trusted-platform.log ---" > /dev/ttyS0
+echo "--- trusted-platform.log ---" > %s
 if [ -f /var/log/trusted-platform/trusted-platform.log ]; then
-    cat /var/log/trusted-platform/trusted-platform.log > /dev/ttyS0 2>/dev/null
+    cat /var/log/trusted-platform/trusted-platform.log > %s 2>/dev/null
 else
-    echo "trusted-platform.log not found" > /dev/ttyS0
+    echo "trusted-platform.log not found" > %s
 fi
 
-echo "=== PLATFORMD DEBUG LOG END ===" > /dev/ttyS0
+echo "=== PLATFORMD DEBUG LOG END ===" > %s
 
 # Keep tailing both logs to serial console
-tail -f /var/log/trusted-platform/platformd.log /var/log/trusted-platform/trusted-platform.log > /dev/ttyS0 2>/dev/null &
-`
+tail -f /var/log/trusted-platform/platformd.log /var/log/trusted-platform/trusted-platform.log > %s 2>/dev/null &
+`,
+			serialDev,
+			serialDev,
+			serialDev, serialDev, serialDev,
+			serialDev, serialDev, serialDev,
+			serialDev,
+			serialDev,
+		)
 		platformdDebugPath := filepath.Join(localDDir, "platformd-debug.start")
 		if err := os.WriteFile(platformdDebugPath, []byte(platformdDebugScript), 0755); err != nil {
 			ai.logger.Warn("[ALPINE] Failed to write platformd debug script", "error", err)
@@ -2151,20 +2580,44 @@ func (ai *alpineInstaller) generateIMAPolicy() string {
 	return policy.String()
 }
 
-// installCABundle installs the CA bundle from the ISO to the OS trust store
+// installCABundle installs the CA bundle from the ISO or the
+// dynamically-fetched orchestrator endpoint into the OS trust store.
+//
+// Precedence:
+//  1. /tmp/ca-bundle.pem — fetched by autoinstall.sh from the
+//     bootstrap orchestrator's pxeboot /config/mac/<mac>/ca-bundle.pem
+//     endpoint. Used for client nodes enrolling with a CP whose CA
+//     didn't exist at ISO build time.
+//  2. /media/cdrom/configs/ca-bundle.pem (or /media/usb, /mnt/cdrom) —
+//     baked into the ISO at build time. Used when the operator
+//     pre-bakes the CA (single-node, air-gapped, CP-is-only-node).
+//
+// If neither path exists the step is a no-op — the installed system
+// starts with stock root CAs and ACME enrollment on a private CA
+// will fail (the node owner is expected to provide the trust anchor
+// via one of the two paths above).
 func (ai *alpineInstaller) installCABundle(ctx context.Context, rootPath string) error {
-	// Look for CA bundle on ISO mount points
 	var caBundleSrc string
-	for _, mountPoint := range []string{"/media/cdrom", "/media/usb", "/mnt/cdrom"} {
-		testPath := filepath.Join(mountPoint, "configs", "ca-bundle.pem")
-		if _, err := os.Stat(testPath); err == nil {
-			caBundleSrc = testPath
-			break
+
+	// Priority 1: orchestrator-fetched bundle. autoinstall.sh writes
+	// it to /tmp/ca-bundle.pem after Priority 1 config fetch.
+	if _, err := os.Stat("/tmp/ca-bundle.pem"); err == nil {
+		caBundleSrc = "/tmp/ca-bundle.pem"
+	}
+
+	// Priority 2: ISO-baked bundle.
+	if caBundleSrc == "" {
+		for _, mountPoint := range []string{"/media/cdrom", "/media/usb", "/mnt/cdrom"} {
+			testPath := filepath.Join(mountPoint, "configs", "ca-bundle.pem")
+			if _, err := os.Stat(testPath); err == nil {
+				caBundleSrc = testPath
+				break
+			}
 		}
 	}
 
 	if caBundleSrc == "" {
-		ai.logger.Debug("[ALPINE] No CA bundle found on ISO, skipping CA installation")
+		ai.logger.Debug("[ALPINE] No CA bundle found (ISO or /tmp/), skipping CA installation")
 		return nil
 	}
 
@@ -2191,7 +2644,17 @@ func (ai *alpineInstaller) installCABundle(ctx context.Context, rootPath string)
 	}
 	ai.logger.Info("[ALPINE] CA bundle copied to trust store", "path", "/usr/local/share/ca-certificates/trusted-platform-ca.crt")
 
-	// Run update-ca-certificates to add the CA to the system trust store
+	// Run update-ca-certificates to add the CA to the system trust store.
+	// This requires chroot pseudo-filesystems (proc, sys, dev) which may not
+	// be mounted since InstallBase cleans them up before ConfigureSystem runs.
+	ai.logger.Info("[ALPINE] Setting up chroot for update-ca-certificates")
+	if err := ai.setupChrootMounts(ctx, rootPath); err != nil {
+		ai.logger.Warn("[ALPINE] Failed to setup chroot mounts for CA update", "error", err)
+		// Don't fail - the CA file is in place, manual update can be done later
+		return nil
+	}
+	defer ai.cleanupChrootMounts(rootPath)
+
 	ai.logger.Info("[ALPINE] Running update-ca-certificates")
 	cmd := exec.CommandContext(ctx, "chroot", rootPath, "update-ca-certificates")
 	if output, err := cmd.CombinedOutput(); err != nil {

@@ -22,12 +22,16 @@ import (
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config/secrets"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
+
+// PlatformConfigKeyID is the well-known KMS key identifier used for
+// encrypting and decrypting platform configuration values with AES-256-GCM.
+const PlatformConfigKeyID = "platform-config-key"
 
 // SecretsConfig controls secret resolution and migration during platform bootstrap.
 // When enabled, secrets referenced in configuration using special URI schemes
-// (kms://, encrypted://, autogen://, dynamic://, xkms://, etc.) are resolved to
+// (kms://, idevid://, encrypted://, dynamic://, xkms://, etc.) are resolved to
 // their plaintext values and optionally migrated to the local KMS for unified access.
 //
 // To add this to the App struct, add the following field:
@@ -38,22 +42,27 @@ type SecretsConfig struct {
 	// When false, secret URIs in configuration are left as-is.
 	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
 
-	// AutoGenerate enables the autogen:// resolver which generates random secrets
-	// for configuration values that specify auto-generation parameters.
-	// Example: autogen://32/base64 generates a 32-byte base64-encoded secret.
-	AutoGenerate bool `yaml:"auto-generate" json:"auto_generate" mapstructure:"auto-generate"`
-
 	// LocalKMS enables the kms:// resolver which retrieves secrets from the
-	// local QuicBaaS KMS. This is the target for migrated secrets.
+	// local QuicBaaS KMS. This is the canonical scheme for persistent
+	// auto-generation via EnsureSecret (?ensure=true&len=N&enc=base64).
 	LocalKMS bool `yaml:"local-kms" json:"local_kms" mapstructure:"local-kms"`
 
 	// RemoteKMS enables the remote-kms:// resolver which retrieves secrets from
 	// a remote KMS endpoint (e.g., another QuicBaaS instance or cloud KMS).
 	RemoteKMS bool `yaml:"remote-kms" json:"remote_kms" mapstructure:"remote-kms"`
 
-	// Encrypted enables the encrypted:// resolver which decrypts secrets that
+	// Encrypted enables the idevid:// resolver which decrypts secrets that
 	// have been encrypted to the node's IDevID certificate using RSA-OAEP.
 	Encrypted bool `yaml:"encrypted" json:"encrypted" mapstructure:"encrypted"`
+
+	// ConfigEncryption enables the encrypted:// resolver which decrypts
+	// AES-256-GCM encrypted configuration values using the platform
+	// config-encryption key held in the KMS. The key is automatically
+	// provisioned during platform initialization if it does not exist.
+	//
+	// Use the platformctl encrypt command to produce encrypted:// URIs:
+	//   platformctl encrypt --value "my-secret"
+	ConfigEncryption bool `yaml:"config-encryption" json:"config_encryption" mapstructure:"config-encryption"`
 
 	// DynamicSecrets enables the dynamic:// resolver which generates temporary
 	// credentials via the QuicBaaS DynamicSecrets service with role-based generation
@@ -83,10 +92,10 @@ type SecretsConfig struct {
 func DefaultSecretsConfig() *SecretsConfig {
 	return &SecretsConfig{
 		Enabled:          false,
-		AutoGenerate:     true,
 		LocalKMS:         true,
 		RemoteKMS:        false,
 		Encrypted:        true,
+		ConfigEncryption: true,
 		DynamicSecrets:   false,
 		XKMS:             false,
 		MigrateToKMS:     true,
@@ -110,6 +119,22 @@ func (app *App) Secrets() baasservice.SecretsService {
 	return secretsSvc
 }
 
+// CryptoService returns the QuicBaaS CryptoService for encrypt/decrypt operations.
+// Returns nil if the datastore backend is not QuicBaaS or if CryptoService is not available.
+func (app *App) CryptoService() baasservice.CryptoService {
+	dbSvc := app.QuicBaaSService()
+	if dbSvc == nil {
+		app.Logger.Debug("CryptoService: QuicBaaS service is nil")
+		return nil
+	}
+
+	cryptoSvc := dbSvc.Crypto()
+	if cryptoSvc == nil {
+		app.Logger.Debug("CryptoService: QuicBaaS Crypto service is nil")
+	}
+	return cryptoSvc
+}
+
 // SetupSecretResolvers creates and configures a ResolverRegistry based on the
 // SecretsConfig and available platform capabilities. Only resolvers for enabled
 // and available features are registered.
@@ -125,13 +150,6 @@ func (app *App) SetupSecretResolvers(ctx context.Context, cfg *SecretsConfig) (*
 
 	logger := app.Logger.Slog()
 	registry := bootstrap.NewResolverRegistry(logger)
-
-	// Register AutoGen resolver if enabled
-	if cfg.AutoGenerate {
-		resolver := NewAutoGenResolver(logger)
-		registry.Register(resolver)
-		logger.Debug("registered autogen resolver")
-	}
 
 	// Register LocalSecrets resolver if enabled and QuicBaaS SecretsService is available.
 	// The resolver is configured with the current node's identity so
@@ -151,19 +169,32 @@ func (app *App) SetupSecretResolvers(ctx context.Context, cfg *SecretsConfig) (*
 		}
 	}
 
-	// Register Encrypted resolver if enabled and IDevID decrypter is available
+	// Register IDevID resolver if enabled and IDevID decrypter is available
 	if cfg.Encrypted {
 		decrypter, err := app.getIDevIDDecrypter(ctx)
 		if err != nil {
-			logger.Warn("encrypted resolver enabled but IDevID decrypter not available",
+			logger.Warn("idevid resolver enabled but IDevID decrypter not available",
 				slog.String("error", err.Error()))
 		} else if decrypter != nil {
-			resolver := secrets.NewEncryptedResolver(decrypter, logger)
-			// Wrap the secrets.EncryptedResolver to adapt it to bootstrap.SecretResolver
-			registry.Register(NewEncryptedResolverAdapter(resolver, logger))
-			logger.Debug("registered encrypted resolver")
+			resolver := secrets.NewIDevIDResolver(decrypter, logger)
+			// Wrap the secrets.IDevIDResolver to adapt it to bootstrap.SecretResolver
+			registry.Register(NewIDevIDResolverAdapter(resolver, logger))
+			logger.Debug("registered idevid resolver")
 		} else {
-			logger.Warn("encrypted resolver enabled but IDevID is not configured")
+			logger.Warn("idevid resolver enabled but IDevID is not configured")
+		}
+	}
+
+	// Register encrypted:// (AES-256-GCM config encryption) resolver if enabled
+	if cfg.ConfigEncryption {
+		cryptoSvc := app.CryptoService()
+		if cryptoSvc != nil {
+			decryptFn := app.configDecryptFunc(cryptoSvc)
+			resolver := secrets.NewEncryptedResolver(decryptFn, logger)
+			registry.Register(NewEncryptedResolverAdapter(resolver, logger))
+			logger.Debug("registered encrypted config resolver")
+		} else {
+			logger.Warn("config-encryption resolver enabled but CryptoService is not available")
 		}
 	}
 
@@ -206,6 +237,99 @@ func (app *App) SetupSecretResolvers(ctx context.Context, cfg *SecretsConfig) (*
 	return registry, nil
 }
 
+// configDecryptFunc returns a DecryptFunc closure that decrypts AES-256-GCM
+// ciphertext using the platform config-encryption key via the QuicBaaS
+// CryptoService. The ciphertext format is nonce || ciphertext+tag as
+// produced by the platformctl encrypt command.
+func (app *App) configDecryptFunc(cryptoSvc baasservice.CryptoService) secrets.DecryptFunc {
+	return func(ctx context.Context, ciphertext []byte) ([]byte, error) {
+		// AES-256-GCM nonce is 12 bytes. The encrypted:// wire format
+		// concatenates nonce || ciphertext (where ciphertext includes
+		// the GCM authentication tag).
+		const nonceSize = 12
+		if len(ciphertext) <= nonceSize {
+			return nil, ErrConfigDecryptFailed{
+				Cause: ErrInvalidCiphertextLength{
+					Length:   len(ciphertext),
+					MinBytes: nonceSize + 1,
+				},
+			}
+		}
+
+		nonce := ciphertext[:nonceSize]
+		encData := ciphertext[nonceSize:]
+
+		resp, err := cryptoSvc.Decrypt(ctx, &baasservice.DecryptRequest{
+			KeyID:      PlatformConfigKeyID,
+			Ciphertext: encData,
+			Nonce:      nonce,
+		})
+		if err != nil {
+			return nil, ErrConfigDecryptFailed{Cause: err}
+		}
+
+		if resp == nil || len(resp.Plaintext) == 0 {
+			return nil, ErrConfigDecryptFailed{
+				Cause: ErrEmptyDecryptResult{},
+			}
+		}
+
+		return resp.Plaintext, nil
+	}
+}
+
+// EnsurePlatformConfigKey ensures the platform config-encryption key exists
+// in the KMS. If the key does not exist, a new AES-256-GCM key is generated.
+// This method should be called during platform initialization after the KMS
+// service is available.
+//
+// The key is used by the encrypted:// resolver to decrypt configuration
+// values and by the platformctl encrypt command to encrypt them.
+func (app *App) EnsurePlatformConfigKey(ctx context.Context) error {
+	kmsSvc := app.KMS()
+	if kmsSvc == nil {
+		return ErrKMSNotAvailable{}
+	}
+
+	// Check if the key already exists
+	_, err := kmsSvc.GetKey(ctx, &baasservice.GetKeyRequest{
+		KeyID: PlatformConfigKeyID,
+	})
+	if err == nil {
+		app.Logger.Slog().Debug("platform config-encryption key already exists",
+			slog.String("key_id", PlatformConfigKeyID))
+		return nil
+	}
+
+	// Key does not exist -- generate it.
+	app.Logger.Slog().Info("generating platform config-encryption key",
+		slog.String("key_id", PlatformConfigKeyID))
+
+	_, genErr := kmsSvc.GenerateKey(ctx, &baasservice.GenerateKeyRequest{
+		KeyAttributes: &xkmssdk.KeyAttributes{
+			CN:                 PlatformConfigKeyID,
+			SymmetricAlgorithm: xkmssdk.SymmetricAES256GCM,
+		},
+		Name:               PlatformConfigKeyID,
+		Description:        "Platform config-encryption key for encrypted:// secrets",
+		Usage:              []baasservice.KeyUsage{baasservice.KeyUsageEncrypt, baasservice.KeyUsageDecrypt},
+		DeletionProtection: true,
+		Owner:              "platform",
+		Tags: map[string]string{
+			"purpose": "config-encryption",
+			"managed": "platform",
+		},
+	})
+	if genErr != nil {
+		return ErrConfigKeyGenerateFailed{Cause: genErr}
+	}
+
+	app.Logger.Slog().Info("platform config-encryption key created",
+		slog.String("key_id", PlatformConfigKeyID))
+
+	return nil
+}
+
 // ProcessSecrets resolves secret URIs in the application configuration and
 // optionally migrates them to the local KMS. This method should be called
 // during platform bootstrap after the App is initialized but before services
@@ -235,6 +359,15 @@ func (app *App) ProcessSecrets(ctx context.Context, cfg *SecretsConfig, configFi
 
 	logger := app.Logger.Slog()
 	logger.Info("processing secrets in configuration")
+
+	// Ensure the platform config-encryption key exists before resolving
+	// encrypted:// URIs.
+	if cfg.ConfigEncryption {
+		if err := app.EnsurePlatformConfigKey(ctx); err != nil {
+			logger.Warn("failed to ensure platform config-encryption key, encrypted:// resolver may fail",
+				slog.String("error", err.Error()))
+		}
+	}
 
 	// Setup resolvers
 	registry, err := app.SetupSecretResolvers(ctx, cfg)

@@ -14,6 +14,7 @@
 package ca
 
 import (
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
@@ -24,11 +25,18 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
-	goca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	objstore "github.com/jeremyhahn/go-objstore/pkg/common"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	pkgca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
 )
 
 const (
@@ -91,7 +99,6 @@ func (h *CAHandlers) getPaginationParams(r *http.Request) (int32, string) {
 
 func (h *CAHandlers) decodeJSON(r *http.Request, v interface{}) error {
 	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
 	return decoder.Decode(v)
 }
 
@@ -183,7 +190,225 @@ func (h *CAHandlers) parseExtKeyUsage(usages []string) []x509.ExtKeyUsage {
 	return extKeyUsage
 }
 
-// Response conversion helpers
+// keyUsageToStrings serialises a KeyUsage bitmask to the canonical
+// SCREAMING_SNAKE_CASE form expected by the proto Certificate.key_usage
+// field. Mirrors CAGRPCService.keyUsageToStrings so REST and gRPC
+// surfaces emit identical wire shapes.
+func (h *CAHandlers) keyUsageToStrings(usage x509.KeyUsage) []string {
+	var usages []string
+	if usage&x509.KeyUsageDigitalSignature != 0 {
+		usages = append(usages, "DIGITAL_SIGNATURE")
+	}
+	if usage&x509.KeyUsageContentCommitment != 0 {
+		usages = append(usages, "CONTENT_COMMITMENT")
+	}
+	if usage&x509.KeyUsageKeyEncipherment != 0 {
+		usages = append(usages, "KEY_ENCIPHERMENT")
+	}
+	if usage&x509.KeyUsageDataEncipherment != 0 {
+		usages = append(usages, "DATA_ENCIPHERMENT")
+	}
+	if usage&x509.KeyUsageKeyAgreement != 0 {
+		usages = append(usages, "KEY_AGREEMENT")
+	}
+	if usage&x509.KeyUsageCertSign != 0 {
+		usages = append(usages, "CERT_SIGN")
+	}
+	if usage&x509.KeyUsageCRLSign != 0 {
+		usages = append(usages, "CRL_SIGN")
+	}
+	if usage&x509.KeyUsageEncipherOnly != 0 {
+		usages = append(usages, "ENCIPHER_ONLY")
+	}
+	if usage&x509.KeyUsageDecipherOnly != 0 {
+		usages = append(usages, "DECIPHER_ONLY")
+	}
+	return usages
+}
+
+// extKeyUsageToStrings serialises x509 extended key usages to the
+// SCREAMING_SNAKE_CASE form expected by the proto Certificate.ext_key_usage
+// field. Mirrors CAGRPCService.extKeyUsageToStrings.
+func (h *CAHandlers) extKeyUsageToStrings(usages []x509.ExtKeyUsage) []string {
+	var result []string
+	for _, u := range usages {
+		switch u {
+		case x509.ExtKeyUsageAny:
+			result = append(result, "ANY")
+		case x509.ExtKeyUsageServerAuth:
+			result = append(result, "SERVER_AUTH")
+		case x509.ExtKeyUsageClientAuth:
+			result = append(result, "CLIENT_AUTH")
+		case x509.ExtKeyUsageCodeSigning:
+			result = append(result, "CODE_SIGNING")
+		case x509.ExtKeyUsageEmailProtection:
+			result = append(result, "EMAIL_PROTECTION")
+		case x509.ExtKeyUsageTimeStamping:
+			result = append(result, "TIME_STAMPING")
+		case x509.ExtKeyUsageOCSPSigning:
+			result = append(result, "OCSP_SIGNING")
+		}
+	}
+	return result
+}
+
+// formatTime renders a time.Time as RFC3339Nano UTC, the wire format
+// expected by both protojson (google.protobuf.Timestamp) and the WebUI's
+// new Date(...) parser. Zero times render as the empty string so they
+// don't confuse downstream consumers that look for a populated value.
+func formatTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// certToSummaryProto mirrors certToSummary but returns the protobuf
+// CertificateSummary so handlers that emit protojson responses (GetInfo,
+// future GetRoot/GetIntermediate migrations) can reuse the conversion.
+func (h *CAHandlers) certToSummaryProto(cert *x509.Certificate) *platformv1.CertificateSummary {
+	if cert == nil {
+		return nil
+	}
+	status := platformv1.CertificateStatus_CERTIFICATE_STATUS_VALID
+	now := time.Now()
+	switch {
+	case now.Before(cert.NotBefore):
+		status = platformv1.CertificateStatus_CERTIFICATE_STATUS_PENDING
+	case now.After(cert.NotAfter):
+		status = platformv1.CertificateStatus_CERTIFICATE_STATUS_EXPIRED
+	}
+	return &platformv1.CertificateSummary{
+		Serial:       hex.EncodeToString(cert.SerialNumber.Bytes()),
+		CommonName:   cert.Subject.CommonName,
+		Issuer:       cert.Issuer.CommonName,
+		NotBefore:    timestamppb.New(cert.NotBefore),
+		NotAfter:     timestamppb.New(cert.NotAfter),
+		Status:       status,
+		KeyAlgorithm: h.keyAlgorithmToProto(cert.PublicKeyAlgorithm),
+	}
+}
+
+// keyAlgorithmToProto maps an x509 public-key algorithm to the proto
+// KeyAlgorithm enum. The proto enum is keyed by both algorithm and key
+// size, but the x509 type only carries the algorithm; we map RSA to its
+// most common 2048-bit form and ECDSA to P-256 to match the platform's
+// default issuance profile (see CertToSummaryProto callers).
+func (h *CAHandlers) keyAlgorithmToProto(alg x509.PublicKeyAlgorithm) platformv1.KeyAlgorithm {
+	switch alg {
+	case x509.RSA:
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048
+	case x509.ECDSA:
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256
+	case x509.Ed25519:
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519
+	}
+	return platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED
+}
+
+// certStatusToProto computes the proto CertificateStatus based on the
+// certificate's validity window. Mirrors CAGRPCService.certStatusToProto.
+func (h *CAHandlers) certStatusToProto(cert *x509.Certificate) platformv1.CertificateStatus {
+	now := time.Now()
+	switch {
+	case now.Before(cert.NotBefore):
+		return platformv1.CertificateStatus_CERTIFICATE_STATUS_PENDING
+	case now.After(cert.NotAfter):
+		return platformv1.CertificateStatus_CERTIFICATE_STATUS_EXPIRED
+	default:
+		return platformv1.CertificateStatus_CERTIFICATE_STATUS_VALID
+	}
+}
+
+// revocationReasonToProto maps an x509 RFC 5280 reason code to the
+// proto RevocationReason enum. Mirrors CAGRPCService.revocationReasonToProto.
+func (h *CAHandlers) revocationReasonToProto(reason int) platformv1.RevocationReason {
+	switch reason {
+	case 1:
+		return platformv1.RevocationReason_REVOCATION_REASON_KEY_COMPROMISE
+	case 2:
+		return platformv1.RevocationReason_REVOCATION_REASON_CA_COMPROMISE
+	case 3:
+		return platformv1.RevocationReason_REVOCATION_REASON_AFFILIATION_CHANGED
+	case 4:
+		return platformv1.RevocationReason_REVOCATION_REASON_SUPERSEDED
+	case 5:
+		return platformv1.RevocationReason_REVOCATION_REASON_CESSATION_OF_OPERATION
+	case 6:
+		return platformv1.RevocationReason_REVOCATION_REASON_CERTIFICATE_HOLD
+	case 8:
+		return platformv1.RevocationReason_REVOCATION_REASON_REMOVE_FROM_CRL
+	case 9:
+		return platformv1.RevocationReason_REVOCATION_REASON_PRIVILEGE_WITHDRAWN
+	case 10:
+		return platformv1.RevocationReason_REVOCATION_REASON_AA_COMPROMISE
+	default:
+		return platformv1.RevocationReason_REVOCATION_REASON_UNSPECIFIED
+	}
+}
+
+// certToProto returns the full proto Certificate representation. Mirrors
+// CAGRPCService.certToProto so the REST and gRPC surfaces emit identical
+// wire shapes for /api/v1/ca/certificates/* endpoints.
+func (h *CAHandlers) certToProto(cert *x509.Certificate, includePEM, includeDER bool) *platformv1.Certificate {
+	if cert == nil {
+		return nil
+	}
+
+	fingerprint := sha256.Sum256(cert.Raw)
+
+	out := &platformv1.Certificate{
+		Serial: hex.EncodeToString(cert.SerialNumber.Bytes()),
+		Subject: &platformv1.Subject{
+			CommonName:         cert.Subject.CommonName,
+			Organization:       firstOrEmpty(cert.Subject.Organization),
+			OrganizationalUnit: firstOrEmpty(cert.Subject.OrganizationalUnit),
+			Country:            firstOrEmpty(cert.Subject.Country),
+			Province:           firstOrEmpty(cert.Subject.Province),
+			Locality:           firstOrEmpty(cert.Subject.Locality),
+			Address:            firstOrEmpty(cert.Subject.StreetAddress),
+			PostalCode:         firstOrEmpty(cert.Subject.PostalCode),
+		},
+		Issuer:             cert.Issuer.CommonName,
+		NotBefore:          timestamppb.New(cert.NotBefore),
+		NotAfter:           timestamppb.New(cert.NotAfter),
+		Status:             h.certStatusToProto(cert),
+		KeyAlgorithm:       h.keyAlgorithmToProto(cert.PublicKeyAlgorithm),
+		SignatureAlgorithm: cert.SignatureAlgorithm.String(),
+		IsCa:               cert.IsCA,
+		MaxPathLen:         int32(cert.MaxPathLen),
+		KeyUsage:           h.keyUsageToStrings(cert.KeyUsage),
+		ExtKeyUsage:        h.extKeyUsageToStrings(cert.ExtKeyUsage),
+		FingerprintSha256:  hex.EncodeToString(fingerprint[:]),
+	}
+
+	if len(cert.DNSNames) > 0 || len(cert.IPAddresses) > 0 ||
+		len(cert.EmailAddresses) > 0 || len(cert.URIs) > 0 {
+		out.Sans = &platformv1.SubjectAlternativeNames{
+			DnsNames:       cert.DNSNames,
+			EmailAddresses: cert.EmailAddresses,
+		}
+		for _, ip := range cert.IPAddresses {
+			out.Sans.IpAddresses = append(out.Sans.IpAddresses, ip.String())
+		}
+		for _, uri := range cert.URIs {
+			out.Sans.Uris = append(out.Sans.Uris, uri.String())
+		}
+	}
+
+	if includePEM && len(cert.Raw) > 0 {
+		out.Pem = pem.EncodeToMemory(&pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: cert.Raw,
+		})
+	}
+	if includeDER {
+		out.Der = cert.Raw
+	}
+	return out
+}
+
+// Response conversion helpers (legacy flat REST DTOs)
 
 func (h *CAHandlers) certToResponse(cert *x509.Certificate) *CertificateResponse {
 	if cert == nil {
@@ -211,8 +436,8 @@ func (h *CAHandlers) certToResponse(cert *x509.Certificate) *CertificateResponse
 			PostalCode:         firstOrEmpty(cert.Subject.PostalCode),
 		},
 		Issuer:             cert.Issuer.CommonName,
-		NotBefore:          cert.NotBefore.Unix(),
-		NotAfter:           cert.NotAfter.Unix(),
+		NotBefore:          formatTime(cert.NotBefore),
+		NotAfter:           formatTime(cert.NotAfter),
 		Status:             status,
 		KeyAlgorithm:       h.keyAlgorithmToString(cert.PublicKeyAlgorithm),
 		SignatureAlgorithm: h.signatureAlgorithmToString(cert.SignatureAlgorithm),
@@ -237,8 +462,8 @@ func (h *CAHandlers) certToSummary(cert *x509.Certificate) CertificateSummary {
 		Serial:       hex.EncodeToString(cert.SerialNumber.Bytes()),
 		CommonName:   cert.Subject.CommonName,
 		Issuer:       cert.Issuer.CommonName,
-		NotBefore:    cert.NotBefore.Unix(),
-		NotAfter:     cert.NotAfter.Unix(),
+		NotBefore:    formatTime(cert.NotBefore),
+		NotAfter:     formatTime(cert.NotAfter),
 		Status:       status,
 		KeyAlgorithm: h.keyAlgorithmToString(cert.PublicKeyAlgorithm),
 	}
@@ -266,306 +491,415 @@ func firstOrEmpty(s []string) string {
 // CA Information Handlers
 // =============================================================================
 
-// GetInfo handles GET /api/v1/ca/info
+// GetInfo handles GET /api/v1/ca/info.
+//
+// The body is the protojson encoding of platformv1.GetCAInfoResponse so
+// the Go SDK (which decodes REST responses into proto types) and the JS
+// SDK (whose TS types match the proto jsonName form) agree on a single
+// wire shape: `{"caInfo": {...}, "timestamp": "RFC3339"}`. The earlier
+// flat snake_case Unix-int shape broke the protojson decoder with
+// "unexpected token 1778342023" on Timestamp fields and silently dropped
+// every other field as unknown.
 func (h *CAHandlers) GetInfo(w http.ResponseWriter, r *http.Request) {
 	if h.ca == nil {
-		h.respWriter.Error500(w, r, ErrCANotInitialized{})
+		protorest.WriteError(w, r, h.respWriter,
+			&protorest.ErrServiceUnavailable{Service: "ca"})
 		return
 	}
 
-	now := time.Now().Unix()
-
-	resp := CAInfoResponse{
+	caInfo := &platformv1.CAInfo{
 		IsInitialized: h.ca.IsInitialized(),
-		Timestamp:     now,
 	}
 
 	if h.ca.IsInitialized() {
-		resp.CommonName = h.ca.Identity()
-		resp.DefaultAlgorithm = h.keyAlgorithmToString(h.ca.DefaultKeyAlgorithm())
-		resp.DefaultValidity = int(h.ca.DefaultValidityPeriod() / (24 * time.Hour))
+		caInfo.CommonName = h.ca.Identity()
+		caInfo.DefaultAlgorithm = h.keyAlgorithmToString(h.ca.DefaultKeyAlgorithm())
+		caInfo.DefaultValidityDays = int32(h.ca.DefaultValidityPeriod())
 
-		// Get root certificate info
-		rootCert, err := h.ca.TrustedRoot()
-		if err == nil && rootCert != nil {
-			summary := h.certToSummary(rootCert)
-			resp.RootCert = &summary
+		if rootCert, err := h.ca.TrustedRoot(); err == nil && rootCert != nil {
+			caInfo.RootCert = h.certToSummaryProto(rootCert)
 		}
 
-		// Get intermediate certificate info
-		intermediateCert, err := h.ca.TrustedIntermediate()
-		if err == nil && intermediateCert != nil {
-			resp.IsIntermediate = true
-			resp.Intermediates = append(resp.Intermediates, h.certToSummary(intermediateCert))
+		if intermediateCert, err := h.ca.TrustedIntermediate(); err == nil && intermediateCert != nil {
+			caInfo.IsIntermediate = true
+			caInfo.Intermediates = append(caInfo.Intermediates, h.certToSummaryProto(intermediateCert))
 		}
 	}
 
-	h.respWriter.Success200(w, r, resp)
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.GetCAInfoResponse{
+		CaInfo:    caInfo,
+		Timestamp: timestamppb.Now(),
+	})
+}
+
+// GetRoot handles GET /api/v1/ca/root. Returns the root CA's certificate
+// summary as a *platformv1.CertificateSummary.
+//
+// Note: there is no dedicated GetRoot RPC in ca.proto, so this endpoint
+// emits a bare CertificateSummary protojson body. SDK callers that want
+// the wrapping envelope can use /api/v1/ca/info instead and read the
+// caInfo.rootCert field.
+func (h *CAHandlers) GetRoot(w http.ResponseWriter, r *http.Request) {
+	if h.ca == nil {
+		protorest.WriteError(w, r, h.respWriter,
+			&protorest.ErrServiceUnavailable{Service: "ca"})
+		return
+	}
+	rootCert, err := h.ca.TrustedRoot()
+	if err != nil || rootCert == nil {
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.NotFound, ErrCANotInitialized{}.Error()))
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, h.certToSummaryProto(rootCert))
+}
+
+// GetIntermediate handles GET /api/v1/ca/intermediate. Returns the
+// active intermediate CA's certificate summary as a
+// *platformv1.CertificateSummary.
+//
+// Note: there is no dedicated GetIntermediate RPC in ca.proto, so this
+// endpoint emits a bare CertificateSummary protojson body. SDK callers
+// that want the wrapping envelope can use /api/v1/ca/info instead.
+func (h *CAHandlers) GetIntermediate(w http.ResponseWriter, r *http.Request) {
+	if h.ca == nil {
+		protorest.WriteError(w, r, h.respWriter,
+			&protorest.ErrServiceUnavailable{Service: "ca"})
+		return
+	}
+	intermediateCert, err := h.ca.TrustedIntermediate()
+	if err != nil || intermediateCert == nil {
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.NotFound, ErrCANotInitialized{}.Error()))
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, h.certToSummaryProto(intermediateCert))
 }
 
 // =============================================================================
 // Certificate Management Handlers
 // =============================================================================
 
-// ListCertificates handles GET /api/v1/ca/certificates
+// ListCertificates handles GET /api/v1/ca/certificates.
+//
+// Emits platformv1.ListCertificatesResponse so the Go SDK can decode the
+// response into proto types without tripping on Timestamp string-vs-int
+// mismatches. The certificate slice always includes the trust anchors
+// (root + intermediate) at the top and then enumerates everything in the
+// CA's certificate store.
 func (h *CAHandlers) ListCertificates(w http.ResponseWriter, r *http.Request) {
 	if h.ca == nil {
-		h.respWriter.Error500(w, r, ErrCANotInitialized{})
+		protorest.WriteError(w, r, h.respWriter,
+			&protorest.ErrServiceUnavailable{Service: "ca"})
 		return
 	}
 
-	limit, cursor := h.getPaginationParams(r)
+	limit, _ := h.getPaginationParams(r)
 
-	// The CA interface uses CertificateStore() for certificate listing
-	certStore := h.ca.CertificateStore()
+	certStore := h.ca.CertStore()
 	if certStore == nil {
-		h.respWriter.Error500(w, r, ErrCANotInitialized{})
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.FailedPrecondition, "certificate store not available"))
 		return
 	}
 
-	// For now, we return the CA certificates (root and intermediate)
-	// In a full implementation, this would query the certificate store
-	var certificates []CertificateSummary
+	var certificates []*platformv1.CertificateSummary
+	seen := make(map[string]struct{})
 
-	rootCert, err := h.ca.TrustedRoot()
-	if err == nil && rootCert != nil {
-		certificates = append(certificates, h.certToSummary(rootCert))
+	addCert := func(c *x509.Certificate) {
+		if c == nil {
+			return
+		}
+		key := hex.EncodeToString(c.SerialNumber.Bytes())
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		certificates = append(certificates, h.certToSummaryProto(c))
 	}
 
-	intermediateCert, err := h.ca.TrustedIntermediate()
-	if err == nil && intermediateCert != nil {
-		certificates = append(certificates, h.certToSummary(intermediateCert))
+	if rootCert, err := h.ca.TrustedRoot(); err == nil {
+		addCert(rootCert)
+	}
+	if intermediateCert, err := h.ca.TrustedIntermediate(); err == nil {
+		addCert(intermediateCert)
 	}
 
-	// Apply pagination (simplified)
-	_ = cursor
-	total := int32(len(certificates))
+	// Fan out to the underlying certificate store for issued leaf certs.
+	type listAll interface {
+		ListCertificates() ([]*x509.Certificate, error)
+	}
+	if l, ok := certStore.(listAll); ok {
+		if all, err := l.ListCertificates(); err == nil {
+			for _, c := range all {
+				addCert(c)
+			}
+		}
+	}
+
+	totalItems := uint64(len(certificates))
 	if int32(len(certificates)) > limit {
 		certificates = certificates[:limit]
 	}
+	pageSize := uint32(limit)
+	totalPages := uint32(0)
+	if pageSize > 0 {
+		totalPages = uint32((totalItems + uint64(pageSize) - 1) / uint64(pageSize))
+	}
 
-	h.respWriter.Success200(w, r, CertificateListResponse{
-		PaginatedResponse: PaginatedResponse{
-			TotalCount: total,
-			HasMore:    total > limit,
-		},
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.ListCertificatesResponse{
 		Certificates: certificates,
-		Timestamp:    time.Now().Unix(),
+		Pagination: &platformv1.PaginationResponse{
+			Page:       1,
+			PageSize:   pageSize,
+			TotalPages: totalPages,
+			TotalItems: totalItems,
+		},
+		Timestamp: timestamppb.Now(),
 	})
 }
 
-// GetCertificate handles GET /api/v1/ca/certificates/{serial}
+// GetCertificate handles GET /api/v1/ca/certificates/{serial}.
+//
+// Emits platformv1.GetCertificateResponse with proto Timestamp fields.
+// The optional ?include_pem=true / ?include_der=true query parameters
+// hydrate the corresponding bytes fields on the embedded Certificate.
 func (h *CAHandlers) GetCertificate(w http.ResponseWriter, r *http.Request) {
 	if h.ca == nil {
-		h.respWriter.Error500(w, r, ErrCANotInitialized{})
+		protorest.WriteError(w, r, h.respWriter,
+			&protorest.ErrServiceUnavailable{Service: "ca"})
 		return
 	}
 
 	serial := h.getSerial(r)
 	if serial == "" {
-		h.respWriter.Error400(w, r, ErrInvalidSerialNumber{Serial: "", Reason: "serial number is required"})
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.InvalidArgument, ErrInvalidSerialNumber{Reason: "serial number is required"}.Error()))
 		return
 	}
 
-	// Get optional parameters
-	includePEM := r.URL.Query().Get("include_pem") == "true"
-
-	// Look up certificate by serial number
-	// First check if it matches root or intermediate CA
-	rootCert, err := h.ca.TrustedRoot()
-	if err == nil && rootCert != nil {
-		if hex.EncodeToString(rootCert.SerialNumber.Bytes()) == serial {
-			resp := h.certToResponse(rootCert)
-			if includePEM {
-				resp.PEM = h.certToPEM(rootCert)
-			}
-			h.respWriter.Success200(w, r, GetCertificateResponse{
-				Certificate: resp,
-				Timestamp:   time.Now().Unix(),
-			})
-			return
-		}
-	}
-
-	intermediateCert, err := h.ca.TrustedIntermediate()
-	if err == nil && intermediateCert != nil {
-		if hex.EncodeToString(intermediateCert.SerialNumber.Bytes()) == serial {
-			resp := h.certToResponse(intermediateCert)
-			if includePEM {
-				resp.PEM = h.certToPEM(intermediateCert)
-			}
-			h.respWriter.Success200(w, r, GetCertificateResponse{
-				Certificate: resp,
-				Timestamp:   time.Now().Unix(),
-			})
-			return
-		}
-	}
-
-	// Try to look up by common name in cert store
-	// The serial might be used as a lookup key
-	certStore := h.ca.CertificateStore()
-	if certStore != nil {
-		cert, err := certStore.GetCertificate(serial)
-		if err == nil && cert != nil {
-			resp := h.certToResponse(cert)
-			if includePEM {
-				resp.PEM = h.certToPEM(cert)
-			}
-			h.respWriter.Success200(w, r, GetCertificateResponse{
-				Certificate: resp,
-				Timestamp:   time.Now().Unix(),
-			})
-			return
-		}
-	}
-
-	h.respWriter.Error404(w, r, ErrCertificateNotFound{Serial: serial})
-}
-
-// IssueCertificate handles POST /api/v1/ca/certificates
-func (h *CAHandlers) IssueCertificate(w http.ResponseWriter, r *http.Request) {
-	if h.ca == nil {
-		h.respWriter.Error500(w, r, ErrCANotInitialized{})
+	includePEM, err := protorest.QueryBool(r, "include_pem")
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
 		return
 	}
-
-	var req CertificateIssueRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
-		return
-	}
-
-	if req.Subject.CommonName == "" {
-		h.respWriter.Error400(w, r, ErrMissingCommonName{})
-		return
-	}
-
-	// Parse key algorithm
-	keyAlg, err := h.parseKeyAlgorithm(req.KeyAlgorithm)
+	includeDER, err := protorest.QueryBool(r, "include_der")
 	if err != nil {
 		h.respWriter.Error400(w, r, err)
 		return
 	}
 
-	// Build certificate request
-	caReq := &goca.CACertificateRequest{
-		Subject: goca.CASubject{
-			CommonName:         req.Subject.CommonName,
-			Organization:       req.Subject.Organization,
-			OrganizationalUnit: req.Subject.OrganizationalUnit,
-			Country:            req.Subject.Country,
-			Province:           req.Subject.Province,
-			Locality:           req.Subject.Locality,
-			Address:            req.Subject.Address,
-			PostalCode:         req.Subject.PostalCode,
-		},
-		Valid:       req.ValidDays,
-		IsCA:        req.IsCA,
-		MaxPathLen:  req.MaxPathLen,
-		KeyUsage:    h.parseKeyUsage(req.KeyUsage),
-		ExtKeyUsage: h.parseExtKeyUsage(req.ExtKeyUsage),
+	respond := func(cert *x509.Certificate) {
+		protorest.WriteSuccess(w, r, h.respWriter, &platformv1.GetCertificateResponse{
+			Certificate: h.certToProto(cert, includePEM, includeDER),
+			Timestamp:   timestamppb.Now(),
+		})
 	}
 
-	// Add SANs if provided
-	if req.SANs != nil {
-		caReq.SANS = &goca.CASubjectAlternativeNames{
-			DNS:   req.SANs.DNS,
-			IPs:   req.SANs.IPs,
-			Email: req.SANs.Email,
-			URIs:  req.SANs.URIs,
+	if rootCert, rerr := h.ca.TrustedRoot(); rerr == nil && rootCert != nil {
+		if hex.EncodeToString(rootCert.SerialNumber.Bytes()) == serial {
+			respond(rootCert)
+			return
 		}
 	}
 
-	// Set key attributes
-	storeType := h.parseStoreType(req.StoreType)
+	if intermediateCert, ierr := h.ca.TrustedIntermediate(); ierr == nil && intermediateCert != nil {
+		if hex.EncodeToString(intermediateCert.SerialNumber.Bytes()) == serial {
+			respond(intermediateCert)
+			return
+		}
+	}
+
+	if certStore := h.ca.CertStore(); certStore != nil {
+		if cert, lookupErr := certStore.GetCertificate(serial); lookupErr == nil && cert != nil {
+			respond(cert)
+			return
+		}
+	}
+
+	protorest.WriteError(w, r, h.respWriter,
+		status.Error(codes.NotFound, ErrCertificateNotFound{Serial: serial}.Error()))
+}
+
+// IssueCertificate handles POST /api/v1/ca/certificates.
+//
+// Decodes platformv1.IssueCertificateRequest and emits
+// platformv1.IssueCertificateResponse. Status is 201 Created on success.
+//
+// TODO: the proto IssueCertificateRequest does not yet carry an explicit
+// `is_ca` -> CertificateType mapping for path-len constraints; the legacy
+// REST DTO accepted is_ca / max_path_len directly. Both representations
+// are still supported by the handler because the proto CertificateRequest
+// includes is_ca + max_path_len fields.
+func (h *CAHandlers) IssueCertificate(w http.ResponseWriter, r *http.Request) {
+	if h.ca == nil {
+		protorest.WriteError(w, r, h.respWriter,
+			&protorest.ErrServiceUnavailable{Service: "ca"})
+		return
+	}
+
+	req := &platformv1.IssueCertificateRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+
+	certReq := req.GetRequest()
+	if certReq == nil {
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.InvalidArgument, "certificate request is required"))
+		return
+	}
+
+	subject := certReq.GetSubject()
+	if subject == nil || subject.GetCommonName() == "" {
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.InvalidArgument, ErrMissingCommonName{}.Error()))
+		return
+	}
+
+	keyAlg, err := h.protoKeyAlgorithmToX509(certReq.GetKeyAlgorithm())
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.InvalidArgument, err.Error()))
+		return
+	}
+
+	caReq := &goca.CACertificateRequest{
+		Subject: goca.CASubject{
+			CommonName:         subject.GetCommonName(),
+			Organization:       subject.GetOrganization(),
+			OrganizationalUnit: subject.GetOrganizationalUnit(),
+			Country:            subject.GetCountry(),
+			Province:           subject.GetProvince(),
+			Locality:           subject.GetLocality(),
+			Address:            subject.GetAddress(),
+			PostalCode:         subject.GetPostalCode(),
+		},
+		Valid:       int(certReq.GetValidDays()),
+		IsCA:        certReq.GetIsCa(),
+		MaxPathLen:  int(certReq.GetMaxPathLen()),
+		KeyUsage:    h.parseKeyUsage(certReq.GetKeyUsage()),
+		ExtKeyUsage: h.parseExtKeyUsage(certReq.GetExtKeyUsage()),
+	}
+
+	if sans := certReq.GetSans(); sans != nil {
+		caReq.SANS = &goca.CASubjectAlternativeNames{
+			DNS:   sans.GetDnsNames(),
+			IPs:   sans.GetIpAddresses(),
+			Email: sans.GetEmailAddresses(),
+			URIs:  sans.GetUris(),
+		}
+	}
+
+	storeType := h.parseStoreType(certReq.GetStoreType())
 	if storeType == xkmssdk.StoreUnknown {
-		storeType = xkmssdk.StoreSoftware // Default to software store
+		storeType = xkmssdk.StoreSoftware
 	}
 
 	caReq.KeyAttributes = &xkmssdk.KeyAttributes{
-		CN:           req.Subject.CommonName,
+		CN:           subject.GetCommonName(),
 		KeyAlgorithm: keyAlg,
 		StoreType:    storeType,
 		KeyType:      xkmssdk.KeyTypeTLS,
 	}
 
-	// Issue the certificate
-	cert, err := h.ca.IssueCertificate(caReq)
+	issued, err := h.ca.IssueCertificate(caReq)
 	if err != nil {
-		h.respWriter.Error500(w, r, ErrInvalidCertificateRequest{Reason: err.Error()})
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.Internal, ErrInvalidCertificateRequest{Reason: err.Error()}.Error()))
 		return
 	}
 
-	// Build response
-	resp := h.certToResponse(cert)
-	resp.PEM = h.certToPEM(cert)
-
-	h.respWriter.Success201(w, r, IssueCertificateResponse{
-		Certificate: resp,
-		Timestamp:   time.Now().Unix(),
+	protorest.WriteSuccessStatus(w, r, h.respWriter, http.StatusCreated, &platformv1.IssueCertificateResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "certificate issued successfully",
+		},
+		Certificate: h.certToProto(issued.Certificate, true, false),
+		Timestamp:   timestamppb.Now(),
 	})
 }
 
-// RevokeCertificate handles DELETE /api/v1/ca/certificates/{serial}
+// protoKeyAlgorithmToX509 converts the proto KeyAlgorithm enum back to
+// an x509 PublicKeyAlgorithm. UNSPECIFIED defaults to ECDSA to match the
+// CA's default issuance profile.
+func (h *CAHandlers) protoKeyAlgorithmToX509(alg platformv1.KeyAlgorithm) (x509.PublicKeyAlgorithm, error) {
+	switch alg {
+	case platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED:
+		return x509.ECDSA, nil
+	case platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
+		platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072,
+		platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096:
+		return x509.RSA, nil
+	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
+		platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384,
+		platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521:
+		return x509.ECDSA, nil
+	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519:
+		return x509.Ed25519, nil
+	default:
+		return 0, ErrInvalidKeyAlgorithm{Algorithm: alg.String()}
+	}
+}
+
+// RevokeCertificate handles DELETE /api/v1/ca/certificates/{serial}.
+//
+// Decodes platformv1.RevokeCertificateRequest from the optional body
+// (the serial is taken from the URL path and overrides any value in the
+// body) and emits platformv1.RevokeCertificateResponse on success.
 func (h *CAHandlers) RevokeCertificate(w http.ResponseWriter, r *http.Request) {
 	if h.ca == nil {
-		h.respWriter.Error500(w, r, ErrCANotInitialized{})
+		protorest.WriteError(w, r, h.respWriter,
+			&protorest.ErrServiceUnavailable{Service: "ca"})
 		return
 	}
 
 	serial := h.getSerial(r)
 	if serial == "" {
-		h.respWriter.Error400(w, r, ErrInvalidSerialNumber{Serial: "", Reason: "serial number is required"})
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.InvalidArgument, ErrInvalidSerialNumber{Reason: "serial number is required"}.Error()))
 		return
 	}
 
-	// Parse optional request body
-	var req CertificateRevokeRequest
+	req := &platformv1.RevokeCertificateRequest{}
 	if r.Body != nil && r.ContentLength > 0 {
-		if err := h.decodeJSON(r, &req); err != nil {
-			h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+		if err := protorest.DecodeRequest(r, req); err != nil {
+			h.respWriter.Error400(w, r, err)
 			return
 		}
 	}
+	req.Serial = serial
 
-	// Find the certificate first
 	var cert *x509.Certificate
-	var keyAttrs *xkmssdk.KeyAttributes
-
-	// Check if serial matches any known certificate
-	certStore := h.ca.CertificateStore()
-	if certStore != nil {
-		foundCert, err := certStore.GetCertificate(serial)
-		if err == nil && foundCert != nil {
+	if certStore := h.ca.CertStore(); certStore != nil {
+		if foundCert, err := certStore.GetCertificate(serial); err == nil {
 			cert = foundCert
 		}
 	}
-
 	if cert == nil {
-		h.respWriter.Error404(w, r, ErrCertificateNotFound{Serial: serial})
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.NotFound, ErrCertificateNotFound{Serial: serial}.Error()))
 		return
 	}
 
-	// Set up key attributes for deletion if requested
-	if req.DeleteKeys {
-		keyAttrs = &xkmssdk.KeyAttributes{
-			CN: cert.Subject.CommonName,
-		}
-	}
-
-	// Revoke the certificate
-	if err := h.ca.Revoke(cert, keyAttrs); err != nil {
-		h.respWriter.Error500(w, r, err)
+	if err := h.ca.RevokeCert(cert, pkgca.RevokeOptions{DeleteKeys: req.GetDeleteKeys()}); err != nil {
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.Internal, err.Error()))
 		return
 	}
 
-	h.respWriter.Success200(w, r, RevokeCertificateResponse{
-		Serial:    serial,
-		Status:    "REVOKED",
-		RevokedAt: time.Now().Unix(),
-		Reason:    req.Reason,
-		Timestamp: time.Now().Unix(),
+	now := timestamppb.Now()
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.RevokeCertificateResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "certificate revoked successfully",
+		},
+		Serial:            serial,
+		CertificateStatus: platformv1.CertificateStatus_CERTIFICATE_STATUS_REVOKED,
+		RevokedAt:         now,
+		Reason:            req.GetReason(),
+		Timestamp:         now,
 	})
 }
 
@@ -573,14 +907,21 @@ func (h *CAHandlers) RevokeCertificate(w http.ResponseWriter, r *http.Request) {
 // CA Bundle Handlers
 // =============================================================================
 
-// GetBundle handles GET /api/v1/ca/bundle
+// GetBundle handles GET /api/v1/ca/bundle.
+//
+// Emits platformv1.GetCABundleResponse with the PEM bundle bytes plus a
+// list of CertificateSummary entries. The optional ?store_type / ?algorithm
+// query parameters delegate to CABundleFiltered() when either is set;
+// otherwise the unfiltered CABundle() is used to avoid an upstream issue
+// where CABundleFiltered() returns "no certificates match filter" when
+// both filters are zero-valued.
 func (h *CAHandlers) GetBundle(w http.ResponseWriter, r *http.Request) {
 	if h.ca == nil {
-		h.respWriter.Error500(w, r, ErrCANotInitialized{})
+		protorest.WriteError(w, r, h.respWriter,
+			&protorest.ErrServiceUnavailable{Service: "ca"})
 		return
 	}
 
-	// Get optional store type and algorithm parameters
 	storeTypeStr := r.URL.Query().Get("store_type")
 	algorithmStr := r.URL.Query().Get("algorithm")
 
@@ -594,37 +935,44 @@ func (h *CAHandlers) GetBundle(w http.ResponseWriter, r *http.Request) {
 		var err error
 		keyAlg, err = h.parseKeyAlgorithm(algorithmStr)
 		if err != nil {
-			h.respWriter.Error400(w, r, err)
+			protorest.WriteError(w, r, h.respWriter,
+				status.Error(codes.InvalidArgument, err.Error()))
 			return
 		}
 	}
 
-	// Get the CA bundle
-	bundle, err := h.ca.CABundle(storeType, keyAlg)
+	var bundle []byte
+	var err error
+	if (storeType == "" || storeType == xkmssdk.StoreUnknown) && keyAlg == x509.UnknownPublicKeyAlgorithm {
+		bundle, err = h.ca.CABundle()
+	} else {
+		bundle, err = h.ca.CABundleFiltered(storeType, keyAlg)
+	}
 	if err != nil {
-		h.respWriter.Error500(w, r, err)
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.Internal, err.Error()))
 		return
 	}
-
 	if len(bundle) == 0 {
-		h.respWriter.Error404(w, r, ErrBundleNotFound{})
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.NotFound, ErrBundleNotFound{}.Error()))
 		return
 	}
 
-	// Parse bundle to get certificate summaries
-	var certificates []CertificateSummary
-	certs, err := h.ca.ParseBundle(bundle)
-	if err == nil {
+	var certificates []*platformv1.CertificateSummary
+	if certs, perr := h.ca.ParseBundle(bundle); perr == nil {
 		for _, cert := range certs {
-			certificates = append(certificates, h.certToSummary(cert))
+			certificates = append(certificates, h.certToSummaryProto(cert))
 		}
 	}
 
-	h.respWriter.Success200(w, r, BundleResponse{
-		Bundle:       bundle,
-		Certificates: certificates,
-		CertCount:    len(certificates),
-		Timestamp:    time.Now().Unix(),
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.GetCABundleResponse{
+		Bundle: &platformv1.CABundle{
+			Pem:          bundle,
+			Certificates: certificates,
+			CertCount:    int32(len(certificates)),
+		},
+		Timestamp: timestamppb.Now(),
 	})
 }
 
@@ -635,13 +983,16 @@ func (h *CAHandlers) GetBundle(w http.ResponseWriter, r *http.Request) {
 // GetBootstrapBundle handles GET /api/v1/ca/bootstrap. It returns the CA
 // certificate bundle as raw PEM text for unauthenticated trust bootstrapping.
 // Optional query parameters store_type and algorithm filter the bundle.
+//
+// This endpoint intentionally bypasses the protorest envelope: the body is
+// raw PEM bytes (Content-Type: application/pem-certificate-chain) so the
+// installer can pipe it directly into a trust store without JSON parsing.
 func (h *CAHandlers) GetBootstrapBundle(w http.ResponseWriter, r *http.Request) {
 	if h.ca == nil {
 		http.Error(w, ErrCANotInitialized{}.Error(), http.StatusServiceUnavailable)
 		return
 	}
 
-	// Get optional store type and algorithm parameters
 	storeTypeStr := r.URL.Query().Get("store_type")
 	algorithmStr := r.URL.Query().Get("algorithm")
 
@@ -660,8 +1011,13 @@ func (h *CAHandlers) GetBootstrapBundle(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Get the CA bundle
-	bundle, err := h.ca.CABundle(storeType, keyAlg)
+	var bundle []byte
+	var err error
+	if (storeType == "" || storeType == xkmssdk.StoreUnknown) && keyAlg == x509.UnknownPublicKeyAlgorithm {
+		bundle, err = h.ca.CABundle()
+	} else {
+		bundle, err = h.ca.CABundleFiltered(storeType, keyAlg)
+	}
 	if err != nil {
 		http.Error(w, ErrBootstrapBundleFailed{Cause: err}.Error(), http.StatusInternalServerError)
 		return
@@ -681,63 +1037,77 @@ func (h *CAHandlers) GetBootstrapBundle(w http.ResponseWriter, r *http.Request) 
 // CRL Handlers
 // =============================================================================
 
-// GetCRL handles GET /api/v1/ca/crl
+// GetCRL handles GET /api/v1/ca/crl.
+//
+// Emits platformv1.GetCRLResponse on success. The handler probes the
+// concrete CA via an ad-hoc interface for GenerateCRL() because the
+// goca.CACertificateAuthority surface does not expose CRL generation;
+// when neither GenerateCRL() nor an object-store fallback is available
+// the response is a gRPC Unimplemented (HTTP 501) so callers can degrade
+// gracefully.
 func (h *CAHandlers) GetCRL(w http.ResponseWriter, r *http.Request) {
 	if h.ca == nil {
-		h.respWriter.Error500(w, r, ErrCANotInitialized{})
+		protorest.WriteError(w, r, h.respWriter,
+			&protorest.ErrServiceUnavailable{Service: "ca"})
 		return
 	}
 
-	// The CA interface does not directly expose GenerateCRL, but we can access
-	// the underlying CA if it implements the method
 	type crlGenerator interface {
 		GenerateCRL() ([]byte, error)
 	}
 
-	var crlDER []byte
-	var err error
-
-	if gen, ok := h.ca.(crlGenerator); ok {
-		crlDER, err = gen.GenerateCRL()
-		if err != nil {
-			h.respWriter.Error500(w, r, ErrCRLGenerationFailed{Reason: err.Error()})
-			return
+	gen, ok := h.ca.(crlGenerator)
+	if !ok {
+		// No GenerateCRL — try the object store as a fallback.
+		type objectStoreProvider interface {
+			ObjectStore() objstore.Storage
 		}
-	} else {
-		// If GenerateCRL is not available, try to access the object store
-		objStore := h.ca.ObjectStore()
+		var objStore objstore.Storage
+		if provider, hasProvider := h.ca.(objectStoreProvider); hasProvider {
+			objStore = provider.ObjectStore()
+		}
 		if objStore == nil {
-			h.respWriter.Error500(w, r, ErrCRLNotFound{})
+			protorest.WriteError(w, r, h.respWriter,
+				status.Error(codes.Internal, ErrCRLNotFound{}.Error()))
 			return
 		}
-		// In a full implementation, we would retrieve the CRL from storage
-		h.respWriter.Error500(w, r, ErrCRLNotFound{})
+		// Object-store-backed CRL retrieval is not implemented yet.
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.Internal, ErrCRLNotFound{}.Error()))
 		return
 	}
 
-	// Parse the CRL to get metadata
+	crlDER, err := gen.GenerateCRL()
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.Internal, ErrCRLGenerationFailed{Reason: err.Error()}.Error()))
+		return
+	}
+
 	crl, err := x509.ParseRevocationList(crlDER)
 	if err != nil {
-		h.respWriter.Error500(w, r, ErrCRLGenerationFailed{Reason: err.Error()})
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.Internal, ErrCRLGenerationFailed{Reason: err.Error()}.Error()))
 		return
 	}
 
-	// Build revoked certificates list
-	var revokedCerts []RevokedCertEntry
+	revokedCerts := make([]*platformv1.RevokedCertEntry, 0, len(crl.RevokedCertificateEntries))
 	for _, entry := range crl.RevokedCertificateEntries {
-		revokedCerts = append(revokedCerts, RevokedCertEntry{
+		revokedCerts = append(revokedCerts, &platformv1.RevokedCertEntry{
 			Serial:         hex.EncodeToString(entry.SerialNumber.Bytes()),
-			RevocationTime: entry.RevocationTime.Unix(),
-			Reason:         entry.ReasonCode,
+			RevocationTime: timestamppb.New(entry.RevocationTime),
+			Reason:         h.revocationReasonToProto(entry.ReasonCode),
 		})
 	}
 
-	h.respWriter.Success200(w, r, CRLResponse{
-		CRL:          crlDER,
-		LastUpdate:   crl.ThisUpdate.Unix(),
-		NextUpdate:   crl.NextUpdate.Unix(),
-		RevokedCount: len(crl.RevokedCertificateEntries),
-		RevokedCerts: revokedCerts,
-		Timestamp:    time.Now().Unix(),
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.GetCRLResponse{
+		Crl: &platformv1.CRL{
+			Data:         crlDER,
+			LastUpdate:   timestamppb.New(crl.ThisUpdate),
+			NextUpdate:   timestamppb.New(crl.NextUpdate),
+			RevokedCount: int32(len(crl.RevokedCertificateEntries)),
+			RevokedCerts: revokedCerts,
+		},
+		Timestamp: timestamppb.Now(),
 	})
 }

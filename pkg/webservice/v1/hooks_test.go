@@ -26,12 +26,12 @@ import (
 	"testing"
 	"time"
 
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // mockAttestationImporter is a mock implementation of AttestationImporter.

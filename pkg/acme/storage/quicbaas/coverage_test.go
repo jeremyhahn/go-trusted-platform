@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
-	"github.com/jeremyhahn/go-trusted-ca/pkg/acme/entities"
+	"github.com/jeremyhahn/go-xkms/pkg/acme/entities"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

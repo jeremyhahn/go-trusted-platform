@@ -498,6 +498,13 @@ type BGPConfig struct {
 
 	// ClusterID is the route reflector cluster ID.
 	ClusterID string
+
+	// Announce holds the prefixes to announce to BGP peers.
+	// This supports both iBGP (GRE tunnel topology) and eBGP (direct ISP) modes.
+	Announce *AnnounceConfig
+
+	// Neighbors is the list of BGP peers/neighbors to establish sessions with.
+	Neighbors []NeighborConfig
 }
 
 // Validate checks if the BGP configuration is valid.
@@ -530,6 +537,16 @@ func (c *BGPConfig) Validate() error {
 	}
 	if c.IsRouteReflector && c.ClusterID == "" {
 		return ErrConfigurationInvalid
+	}
+	if c.Announce != nil {
+		if err := c.Announce.Validate(); err != nil {
+			return err
+		}
+	}
+	for i := range c.Neighbors {
+		if err := c.Neighbors[i].Validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

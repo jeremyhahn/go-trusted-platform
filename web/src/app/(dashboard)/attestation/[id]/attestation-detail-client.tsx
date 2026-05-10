@@ -2,7 +2,8 @@
 
 import * as React from "react";
 import { use } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { resolveDynamicId } from "@/utils/dynamic-route";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,7 +25,9 @@ import { ArrowLeft, Loader2, AlertCircle, ShieldCheck, ShieldAlert } from "lucid
  * - Display verification result
  */
 export default function AttestationDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+  const resolved = use(params);
+  const pathname = usePathname();
+  const id = resolveDynamicId(resolved as any, pathname, "attestation");
   const router = useRouter();
   const attestation = useAttestation();
 

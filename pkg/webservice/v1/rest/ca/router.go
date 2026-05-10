@@ -16,7 +16,7 @@ package ca
 import (
 	"github.com/gorilla/mux"
 
-	goca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
@@ -56,8 +56,12 @@ func (r *CARouter) RegisterRoutes(router *mux.Router) {
 
 // registerInfoRoutes registers CA information endpoints
 // GET    /api/v1/ca/info                       - Get CA information
+// GET    /api/v1/ca/root                       - Get root CA cert summary (SDK alias)
+// GET    /api/v1/ca/intermediate               - Get intermediate CA cert summary (SDK alias)
 func (r *CARouter) registerInfoRoutes(router *mux.Router) {
 	router.HandleFunc("/info", r.handlers.GetInfo).Methods("GET")
+	router.HandleFunc("/root", r.handlers.GetRoot).Methods("GET")
+	router.HandleFunc("/intermediate", r.handlers.GetIntermediate).Methods("GET")
 }
 
 // registerCertificateRoutes registers certificate management endpoints

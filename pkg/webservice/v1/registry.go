@@ -23,9 +23,10 @@ import (
 	"log/slog"
 	"strings"
 
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
@@ -40,11 +41,15 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/system"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/webauthn"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
+	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
+	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
+	sdktransport "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 
-	proto "github.com/jeremyhahn/go-quicbaas/api/proto"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 )
 
@@ -185,35 +190,183 @@ func NewDNSRegistrationHook(dnsService DNSRegistrar, internalDomain string, logg
 			return nil
 		}
 
-		// Construct FQDN from device identity and internal domain
-		// Format: {model}-{serial}.{internal-domain}
-		fqdn := fmt.Sprintf("%s-%s.%s",
-			ctx.TCGData.ProductModel,
-			ctx.TCGData.ProductSerial,
-			internalDomain)
-
-		logger.Info("Attempting DNS registration",
-			slog.String("fqdn", fqdn),
-			slog.String("ip", ctx.ClientIP),
-			slog.String("internal_domain", internalDomain))
-
-		// Register the DNS record using go-trusted-platform's DNS service
-		_, err := dnsService.Register(context.Background(), fqdn, ctx.ClientIP)
-		if err != nil {
-			logger.Error("DNS registration failed",
-				slog.String("fqdn", fqdn),
-				slog.String("error", err.Error()))
-			return fmt.Errorf("failed to register DNS record for %s: %w", fqdn, err)
+		// Build the canonical set of FQDNs to register. Two sources:
+		//
+		//   1. Hardware identity (model-serial). The TCG CSR's
+		//      ProductModel + ProductSerial map deterministically to a
+		//      single FQDN under the internal zone — used for
+		//      attestation correlation and audit log lookup. Always
+		//      created when both fields are present.
+		//
+		//   2. Operator-friendly hostnames from the issued IDevID
+		//      certificate's SAN list. Any DNS SAN that falls inside
+		//      the internal-domain zone is registered as an A record
+		//      pointing at the client IP. This is what makes
+		//      `gw.example.internal` resolvable from the moment the GW
+		//      finishes enroll-01 — without it, operators have to
+		//      query opaque `Super-Server-lab-node-1-gw-01.example.internal`
+		//      records to find each node.
+		//
+		// Wildcards, cross-zone SANs, and CN duplicates are filtered
+		// in collectFQDNsForInternalZone so the final set is exactly
+		// the records we expect to publish.
+		fqdns := collectFQDNsForInternalZone(ctx, internalDomain)
+		if len(fqdns) == 0 {
+			logger.Warn("DNS registration hook: no FQDNs derived for internal zone",
+				slog.String("internal_domain", internalDomain),
+				slog.String("client_ip", ctx.ClientIP))
+			return nil
 		}
 
-		logger.Info("Registered DNS record for enrolled device",
-			slog.String("fqdn", fqdn),
-			slog.String("ip", ctx.ClientIP),
-			slog.String("model", ctx.TCGData.ProductModel),
-			slog.String("serial", ctx.TCGData.ProductSerial))
+		var firstErr error
+		registered := 0
+		for _, fqdn := range fqdns {
+			logger.Info("Attempting DNS registration",
+				slog.String("fqdn", fqdn),
+				slog.String("ip", ctx.ClientIP),
+				slog.String("internal_domain", internalDomain))
 
+			// Register the DNS record using go-trusted-platform's DNS service
+			if _, err := dnsService.Register(context.Background(), fqdn, ctx.ClientIP); err != nil {
+				logger.Error("DNS registration failed",
+					slog.String("fqdn", fqdn),
+					slog.String("error", err.Error()))
+				if firstErr == nil {
+					firstErr = fmt.Errorf("failed to register DNS record for %s: %w", fqdn, err)
+				}
+				continue
+			}
+			registered++
+			logger.Info("Registered DNS record for enrolled device",
+				slog.String("fqdn", fqdn),
+				slog.String("ip", ctx.ClientIP),
+				slog.String("model", ctx.TCGData.ProductModel),
+				slog.String("serial", ctx.TCGData.ProductSerial))
+		}
+
+		logger.Info("DNS registration hook completed",
+			slog.Int("fqdns_total", len(fqdns)),
+			slog.Int("fqdns_registered", registered),
+			slog.String("client_ip", ctx.ClientIP))
+
+		// Surface the first failure to the caller so the order
+		// finalization audit trail records the partial state. The
+		// remaining records still got registered (best-effort), so the
+		// operator gets resolvable names even if one entry collided.
+		return firstErr
+	}
+}
+
+// collectFQDNsForInternalZone derives the full set of DNS A-record
+// FQDNs to publish for a successful enroll-01 finalization. Returns a
+// deduplicated, lowercase slice — empty when no candidate fits the
+// internal-domain zone (which itself only happens when both the TCG
+// fields and the cert SANs land outside the zone).
+func collectFQDNsForInternalZone(ctx *trustedca.ACMEOrderFinalizeHookContext, internalDomain string) []string {
+	// Normalise the configured zone to a canonical comparator. DNS
+	// zone names are typically supplied with a trailing dot
+	// ("example.internal.") to make their root-anchored form
+	// explicit, but the FQDNs we assemble from cert SANs/TCG data
+	// are usually relative ("gw.example.internal"). Strip the
+	// trailing dot AND any leading dot before reconstructing the
+	// suffix so the HasSuffix check works regardless of which
+	// canonical form the caller passes in.
+	zoneSuffix := "." + strings.Trim(strings.ToLower(strings.TrimSpace(internalDomain)), ".")
+	if zoneSuffix == "." {
 		return nil
 	}
+
+	// Dedup is case-insensitive (DNS names are case-insensitive per
+	// RFC 1035 §2.3.3) but the registered value preserves the
+	// original case so callers — and tests — that check the
+	// canonical form stay stable across refactors.
+	seen := make(map[string]struct{})
+	var out []string
+	add := func(name string) {
+		name = strings.TrimSuffix(strings.TrimSpace(name), ".")
+		if name == "" || strings.HasPrefix(name, "*.") {
+			return
+		}
+		lower := strings.ToLower(name)
+		// Only register names that land inside the internal-domain
+		// zone; cross-zone records (e.g., gw.example.com) belong to
+		// the public zone managed elsewhere.
+		if !strings.HasSuffix(lower, zoneSuffix) && lower != strings.TrimPrefix(zoneSuffix, ".") {
+			return
+		}
+		if _, ok := seen[lower]; ok {
+			return
+		}
+		seen[lower] = struct{}{}
+		out = append(out, name)
+	}
+
+	// 1. Model-serial form (always tried; preserved for attestation
+	//    correlation). TCG ProductModel/ProductSerial come from the
+	//    device's TCG-CSR-IDevID and frequently contain whitespace,
+	//    underscores, or other characters that aren't valid in DNS
+	//    labels (per RFC 1035 §2.3.1, labels are LDH — letters,
+	//    digits, hyphens). Sanitize before assembling so we publish
+	//    a record name the resolver will actually accept.
+	if ctx.TCGData != nil &&
+		ctx.TCGData.ProductModel != "" &&
+		ctx.TCGData.ProductSerial != "" {
+		add(fmt.Sprintf("%s-%s.%s",
+			sanitizeDNSLabel(ctx.TCGData.ProductModel),
+			sanitizeDNSLabel(ctx.TCGData.ProductSerial),
+			strings.TrimPrefix(zoneSuffix, ".")))
+	}
+
+	// 2. Cert SANs and CN that fall inside the internal zone.
+	if ctx.Certificate != nil {
+		for _, dnsName := range ctx.Certificate.DNSNames {
+			add(dnsName)
+		}
+		add(ctx.Certificate.Subject.CommonName)
+	}
+
+	// 3. CSR SANs (covers the case where the cert was issued from a
+	//    raw CSR rather than the platform-rendered template).
+	if ctx.CSR != nil {
+		for _, dnsName := range ctx.CSR.DNSNames {
+			add(dnsName)
+		}
+		add(ctx.CSR.Subject.CommonName)
+	}
+
+	return out
+}
+
+// sanitizeDNSLabel collapses anything that isn't an RFC 1035 LDH
+// character into a single hyphen and trims leading/trailing hyphens
+// and dots so the result is a valid DNS label component. Empty input
+// returns empty. Runs of disallowed characters compact to a single
+// hyphen so "SuperMicro X10" → "SuperMicro-X10" rather than
+// "SuperMicro--X10".
+func sanitizeDNSLabel(s string) string {
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	prevHyphen := false
+	for _, r := range s {
+		switch {
+		case (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			prevHyphen = false
+		default:
+			// Collapse runs of disallowed chars into one hyphen.
+			if !prevHyphen && b.Len() > 0 {
+				b.WriteByte('-')
+				prevHyphen = true
+			}
+		}
+	}
+	out := b.String()
+	// Trim trailing hyphens and dots; leading hyphens were already
+	// suppressed by the b.Len() > 0 guard above.
+	out = strings.TrimRight(out, "-.")
+	return out
 }
 
 // NewSDNEnrollmentHookAdapter creates an order finalization hook that triggers
@@ -401,20 +554,34 @@ type XKMSSigner interface {
 
 type RestHandlerRegistry interface {
 	ACMERestService() trustedca.ACMERestServicer
+	AttestationServiceServer() platformv1.AttestationServiceServer
+	ComputeServiceServer() platformv1.ComputeServiceServer
 	DeviceRestHandler() device.RestHandler
 	ConfigDeliveryHandler() configdelivery.RestHandler
+	DeviceService() devicepkg.DeviceService
+	DNSService() dns.DNSService
+	EABServiceServer() platformv1.EABServiceServer
+	EmbeddedAdapter() sdktransport.Adapter
+	GatewayServiceServer() platformv1.GatewayServiceServer
 	IAMClients() (restiam.IAMClient, restiam.PEPClient)
+	IDevIDServiceServer() platformv1.IDevIDServiceServer
+	InvitationServiceServer() platformv1.InvitationServiceServer
 	JSONWebTokenHandler() jwt.TokenHandler
-	KMSClients() (proto.KeyManagementClient, proto.CryptoClient, proto.DEKManagementClient, proto.SecretsManagementClient)
+	KMSSDKClients() (kmsclient.Client, cryptoclient.Client, dekclient.Client, secretsclient.Client)
 	MTLSMiddleware() middleware.MTLSMiddleware
+	OverlayServiceServer() platformv1.OverlayServiceServer
 	PlatformRestRouter() *platform.PlatformRouter
+	PXEServiceServer() platformv1.PXEServiceServer
 	ResponseWriter() response.HttpWriter
 	SDNService() platformv1.SDNServiceServer
+	TenantServiceServer() platformv1.TenantServiceServer
 	TPM() xkmssdk.TrustedPlatformModule
+	TPMServiceServer() platformv1.TPMServiceServer
 	VTPMService() vtpm.VTPMService
 	WebAuthnRestService() webauthn.RestHandler
 	DeviceTemplateService() devicepkg.DeviceTemplateService
 	DeviceProfileService() devicepkg.DeviceProfileService
+	SwitchService() device.SwitchServiceProvider
 }
 
 // ACMEServerConfig contains the configuration for the ACME server
@@ -461,29 +628,51 @@ func (s *EnrollmentHookProfileService) GetBySerial(_ context.Context, serial str
 	return device.ProfileFromDeviceProfile(pending.Profile, serial), nil
 }
 
+// RegistryParams holds all dependencies required to construct the handler registry.
 type RegistryParams struct {
-	ACMEServerConfig        *ACMEServerConfig
-	ACMEStorageFactory      trustedca.ACMEStorageFactory
-	CA                      trustedca.CACertificateAuthority
-	CAConfig                *trustedca.CAConfig
-	CryptoClient            proto.CryptoClient
-	Debug                   bool
-	DEKManagementClient     proto.DEKManagementClient
-	DNSConfig               *dns.Config
-	HTTPWriter              response.HttpWriter
-	IAMClient               restiam.IAMClient
-	XKMS                    XKMSSigner
-	KeyManagementClient     proto.KeyManagementClient
-	JWTAudience             string
-	JWTClaimsIssuer         string
-	JWTExpiration           int
-	Logger                  *logging.Logger
-	PEPClient               restiam.PEPClient
-	SDNEnrollmentHook       *policy.SDNEnrollmentHook
-	SDNService              platformv1.SDNServiceServer
-	SecretsManagementClient proto.SecretsManagementClient
-	ServerKeyAttributes     *xkmssdk.KeyAttributes
-	ServiceRegistry         *service.Registry
+	ACMEServerConfig         *ACMEServerConfig
+	ACMEStorageFactory       trustedca.ACMEStorageFactory
+	CA                       trustedca.CACertificateAuthority
+	CAConfig                 *trustedca.CAConfig
+	Debug                    bool
+	DNSConfig                *dns.Config
+	HTTPWriter               response.HttpWriter
+	IAMClient                restiam.IAMClient
+	XKMS                     XKMSSigner
+	KMSClient                kmsclient.Client
+	CryptoClient             cryptoclient.Client
+	DEKClient                dekclient.Client
+	SecretsClient            secretsclient.Client
+	JWTAudience              string
+	JWTClaimsIssuer          string
+	JWTExpiration            int
+	Logger                   *logging.Logger
+	PEPClient                restiam.PEPClient
+	AttestationServiceServer platformv1.AttestationServiceServer
+	ComputeServiceServer     platformv1.ComputeServiceServer
+	EABServiceServer         platformv1.EABServiceServer
+	EmbeddedAdapter          sdktransport.Adapter
+	GatewayServiceServer     platformv1.GatewayServiceServer
+	IDevIDServiceServer      platformv1.IDevIDServiceServer
+	InvitationServiceServer  platformv1.InvitationServiceServer
+	OverlayServiceServer     platformv1.OverlayServiceServer
+	PXEServiceServer         platformv1.PXEServiceServer
+	SDNEnrollmentHook        *policy.SDNEnrollmentHook
+	SDNService               platformv1.SDNServiceServer
+	ServerKeyAttributes      *xkmssdk.KeyAttributes
+	ServiceRegistry          *service.Registry
+	ServicesManager          platform.ServicesManager
+	// ProtocolConfig is the bound protocol address/enabled snapshot used by
+	// GET /api/v1/platform/protocols. When nil the handler returns 500.
+	ProtocolConfig *platform.ProtocolConfig
+	// VersionInfo populates the platform version/status responses. When nil
+	// the handlers return empty version metadata.
+	VersionInfo *platform.VersionInfo
+	// HealthRegistry powers the platform health and metrics endpoints.
+	HealthRegistry health.Registry
+	SwitchService            device.SwitchServiceProvider
+	TenantServiceServer      platformv1.TenantServiceServer
+	TPMServiceServer         platformv1.TPMServiceServer
 	TPM                     xkmssdk.TrustedPlatformModule
 	VTPMService             vtpm.VTPMService
 	WebServiceConfig        *Config
@@ -494,6 +683,16 @@ type HandlerRegistry struct {
 	jwtService *jwt.Service
 	params     RegistryParams
 	RestHandlerRegistry
+}
+
+// JWTService returns the underlying JWT service so callers (notably the
+// daemon's gRPC/QUIC auth interceptors) can verify tokens minted by the
+// webserver's /api/v1/login endpoint.
+func (registry *HandlerRegistry) JWTService() *jwt.Service {
+	if registry == nil {
+		return nil
+	}
+	return registry.jwtService
 }
 
 func NewHandlerRegistry(params RegistryParams) RestHandlerRegistry {
@@ -526,8 +725,11 @@ func (registry *HandlerRegistry) JSONWebTokenHandler() jwt.TokenHandler {
 	return handler
 }
 
-func (registry *HandlerRegistry) KMSClients() (proto.KeyManagementClient, proto.CryptoClient, proto.DEKManagementClient, proto.SecretsManagementClient) {
-	return registry.params.KeyManagementClient, registry.params.CryptoClient, registry.params.DEKManagementClient, registry.params.SecretsManagementClient
+// KMSSDKClients returns the four QuicBaaS SDK clients used by the KMS
+// REST router. Per project convention these are go-quicbaas SDK
+// interfaces, never raw gRPC client interfaces.
+func (registry *HandlerRegistry) KMSSDKClients() (kmsclient.Client, cryptoclient.Client, dekclient.Client, secretsclient.Client) {
+	return registry.params.KMSClient, registry.params.CryptoClient, registry.params.DEKClient, registry.params.SecretsClient
 }
 
 func (registry *HandlerRegistry) IAMClients() (restiam.IAMClient, restiam.PEPClient) {
@@ -586,6 +788,9 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 	return handler
 }
 
+// DeviceRestHandler returns the PXE device activation REST handler.
+// When a SwitchService is configured, it is injected into the handler so
+// that Activate can move the device's physical port to the production VLAN.
 func (registry *HandlerRegistry) DeviceRestHandler() device.RestHandler {
 	// Check if SDN enrollment hook is available
 	if registry.params.SDNEnrollmentHook == nil {
@@ -599,19 +804,26 @@ func (registry *HandlerRegistry) DeviceRestHandler() device.RestHandler {
 	// Create an enrollment hook profile service that queries pending activations
 	profileService := NewEnrollmentHookProfileService(registry.params.SDNEnrollmentHook)
 
+	// Build handler options for optional dependencies.
+	var opts []device.HandlerOption
+	if registry.params.SwitchService != nil {
+		opts = append(opts, device.WithSwitchService(registry.params.SwitchService))
+	}
+
 	return device.NewHandler(
 		registry.params.Logger,
 		registry.params.HTTPWriter,
 		registry.params.SDNEnrollmentHook.PolicyEngine(),
 		profileService,
 		arpTable,
+		opts...,
 	)
 }
 
 // ConfigDeliveryHandler returns a REST handler for pre-enrollment config
 // delivery. This creates an in-memory service with a nonce store for devices
 // to fetch their platform configuration at boot time.
-// ProfileService and EABService are wired in when available — nonce and session
+// ProfileService and EABService are wired in when available -- nonce and session
 // endpoints work even without them for the interactive QR provisioning flow.
 func (registry *HandlerRegistry) ConfigDeliveryHandler() configdelivery.RestHandler {
 	svc, err := configdelivery.NewService(configdelivery.ServiceParams{
@@ -657,16 +869,17 @@ func (registry *HandlerRegistry) DeviceProfileService() devicepkg.DeviceProfileS
 	return profileService
 }
 func (registry *HandlerRegistry) MTLSMiddleware() middleware.MTLSMiddleware {
-	// Get the trusted root certificate from the CA
-	rootCert, err := registry.params.CA.TrustedRoot()
+	// Get the CA bundle PEM (root + intermediate certs) to build the
+	// trusted cert pool. CABundle with zero-value filters returns the
+	// full chain and handles nil trustedCA (per-CA keystore factories).
+	bundlePEM, err := registry.params.CA.CABundle()
 	if err != nil {
-		registry.params.Logger.FatalError(fmt.Errorf("failed to get trusted root certificate: %w", err))
+		registry.params.Logger.FatalError(fmt.Errorf("failed to get CA bundle: %w", err))
 	}
 
-	// Create a cert pool with the trusted root
-	trustedRoots, err := registry.params.CA.TrustedRootCertPool(rootCert, nil)
-	if err != nil {
-		registry.params.Logger.FatalError(fmt.Errorf("failed to create trusted root cert pool: %w", err))
+	trustedRoots := x509.NewCertPool()
+	if !trustedRoots.AppendCertsFromPEM(bundlePEM) {
+		registry.params.Logger.FatalError(fmt.Errorf("failed to parse CA bundle PEM"))
 	}
 
 	return middleware.NewMTLSMiddleware(
@@ -780,8 +993,114 @@ func (registry *HandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
 }
 
 func (registry *HandlerRegistry) PlatformRestRouter() *platform.PlatformRouter {
-	return platform.NewPlatformRouter(
+	router := platform.NewPlatformRouter(
 		registry.params.Logger,
 		registry.params.HTTPWriter,
 	)
+	if registry.params.ServicesManager != nil {
+		router.SetServicesManager(registry.params.ServicesManager)
+	}
+	if registry.params.ProtocolConfig != nil {
+		router.SetProtocolConfig(registry.params.ProtocolConfig)
+	}
+	if registry.params.VersionInfo != nil {
+		router.SetVersionInfo(registry.params.VersionInfo)
+	}
+	if registry.params.HealthRegistry != nil {
+		router.SetHealthRegistry(registry.params.HealthRegistry)
+	}
+	return router
+}
+
+// SwitchService returns the physical switch service provider from the registry params.
+func (registry *HandlerRegistry) SwitchService() device.SwitchServiceProvider {
+	return registry.params.SwitchService
+}
+
+// DNSService returns the DNS service from the platform service registry,
+// or nil when no DNS service is configured. The returned value satisfies the
+// dns.DNSService interface used by the REST router.
+func (registry *HandlerRegistry) DNSService() dns.DNSService {
+	if registry.params.ServiceRegistry == nil {
+		return nil
+	}
+	svc := registry.params.ServiceRegistry.DNSService()
+	if svc == nil {
+		return nil
+	}
+	return svc
+}
+
+// DeviceService returns the device service from the platform service registry,
+// or nil when no device service is configured. The returned value satisfies
+// the devicepkg.DeviceService interface used by the REST CRUD handler.
+func (registry *HandlerRegistry) DeviceService() devicepkg.DeviceService {
+	if registry.params.ServiceRegistry == nil {
+		return nil
+	}
+	svc := registry.params.ServiceRegistry.DeviceService()
+	if svc == nil {
+		return nil
+	}
+	return svc
+}
+
+// EmbeddedAdapter returns the in-process sdk/go transport adapter used by REST
+// routers to invoke daemon gRPC service implementations through their sdk/go
+// service clients. Returns nil when no adapter has been configured.
+func (registry *HandlerRegistry) EmbeddedAdapter() sdktransport.Adapter {
+	return registry.params.EmbeddedAdapter
+}
+
+// AttestationServiceServer returns the in-process AttestationService gRPC
+// implementation used by the REST attestation router, or nil when the
+// service is not configured on this daemon.
+func (registry *HandlerRegistry) AttestationServiceServer() platformv1.AttestationServiceServer {
+	return registry.params.AttestationServiceServer
+}
+
+// ComputeServiceServer returns the in-process ComputeService gRPC
+// implementation used by the REST compute router, or nil.
+func (registry *HandlerRegistry) ComputeServiceServer() platformv1.ComputeServiceServer {
+	return registry.params.ComputeServiceServer
+}
+
+// EABServiceServer returns the in-process EABService gRPC implementation, or nil.
+func (registry *HandlerRegistry) EABServiceServer() platformv1.EABServiceServer {
+	return registry.params.EABServiceServer
+}
+
+// GatewayServiceServer returns the in-process GatewayService gRPC implementation, or nil.
+func (registry *HandlerRegistry) GatewayServiceServer() platformv1.GatewayServiceServer {
+	return registry.params.GatewayServiceServer
+}
+
+// IDevIDServiceServer returns the in-process IDevIDService gRPC implementation, or nil.
+func (registry *HandlerRegistry) IDevIDServiceServer() platformv1.IDevIDServiceServer {
+	return registry.params.IDevIDServiceServer
+}
+
+// InvitationServiceServer returns the in-process InvitationService gRPC implementation, or nil.
+func (registry *HandlerRegistry) InvitationServiceServer() platformv1.InvitationServiceServer {
+	return registry.params.InvitationServiceServer
+}
+
+// OverlayServiceServer returns the in-process OverlayService gRPC implementation, or nil.
+func (registry *HandlerRegistry) OverlayServiceServer() platformv1.OverlayServiceServer {
+	return registry.params.OverlayServiceServer
+}
+
+// PXEServiceServer returns the in-process PXEService gRPC implementation, or nil.
+func (registry *HandlerRegistry) PXEServiceServer() platformv1.PXEServiceServer {
+	return registry.params.PXEServiceServer
+}
+
+// TenantServiceServer returns the in-process TenantService gRPC implementation, or nil.
+func (registry *HandlerRegistry) TenantServiceServer() platformv1.TenantServiceServer {
+	return registry.params.TenantServiceServer
+}
+
+// TPMServiceServer returns the in-process TPMService gRPC implementation, or nil.
+func (registry *HandlerRegistry) TPMServiceServer() platformv1.TPMServiceServer {
+	return registry.params.TPMServiceServer
 }

@@ -16,7 +16,7 @@ package v1
 import (
 	"testing"
 
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

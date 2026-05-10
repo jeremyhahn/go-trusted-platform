@@ -15,60 +15,65 @@ package secrets
 
 import (
 	"context"
-	"crypto"
-	"crypto/rand"
-	"crypto/rsa"
-	"encoding/base64"
 	"log/slog"
 	"strings"
 )
 
 const (
-	// SchemeEncrypted is the URI scheme for encrypted secrets.
+	// SchemeEncrypted is the URI scheme for AES-256-GCM encrypted config values.
+	// Format: encrypted://base64url(nonce || ciphertext || tag)
+	// The encryption key is the platform config-encryption key held in the KMS.
 	SchemeEncrypted = "encrypted"
 
-	// SchemePrefix is the simple prefix format "encrypted:"
-	SchemePrefix = "encrypted:"
+	// SchemeEncryptedPrefix is the simple prefix format "encrypted:"
+	SchemeEncryptedPrefix = "encrypted:"
 
-	// SchemeURIPrefix is the URI format "encrypted://"
-	SchemeURIPrefix = "encrypted://"
+	// SchemeEncryptedURIPrefix is the URI format "encrypted://"
+	SchemeEncryptedURIPrefix = "encrypted://"
 )
 
-// EncryptedResolver decrypts secrets that have been encrypted to a node's
-// IDevID certificate. It implements the SecretResolver interface.
+// DecryptFunc performs AES-256-GCM decryption of the given ciphertext bytes.
+// The ciphertext contains the nonce, encrypted data, and authentication tag
+// as produced by the corresponding encrypt function. The implementation is
+// provided by the KMS layer.
+type DecryptFunc func(ctx context.Context, ciphertext []byte) ([]byte, error)
+
+// EncryptedResolver decrypts encrypted:// config values using AES-256-GCM.
+// The actual decryption is delegated to a caller-provided closure, keeping
+// the resolver independent of the KMS implementation.
 //
 // The resolver supports secrets in two URI formats:
 //   - encrypted:base64-encoded-ciphertext
 //   - encrypted://base64-encoded-ciphertext
 //
-// The ciphertext is decrypted using RSA-OAEP with SHA-256 via the provided
-// crypto.Decrypter interface. The decrypter is typically backed by the node's
-// IDevID private key, which may be stored in a TPM or software XKMS.
+// The ciphertext is base64-decoded and passed to the decryptFn closure.
+// The closure is expected to perform AES-256-GCM decryption using the
+// platform config-encryption key.
 //
 // Thread-safety: This resolver is safe for concurrent use.
 type EncryptedResolver struct {
-	decrypter crypto.Decrypter
+	decryptFn DecryptFunc
 	logger    *slog.Logger
 }
 
-// NewEncryptedResolver creates a new EncryptedResolver with the given decrypter.
+// NewEncryptedResolver creates a new EncryptedResolver with the given
+// decryption function and logger.
 //
-// The decrypter should be obtained from the platform's XKMS using the
-// IDevID key attributes. For example:
+// The decryptFn should perform AES-256-GCM decryption using the platform
+// config-encryption key from the KMS. For example:
 //
-//	decrypter, err := xkms.Decrypter(idevidAttrs)
-//	if err != nil {
-//	    return err
+//	decryptFn := func(ctx context.Context, ciphertext []byte) ([]byte, error) {
+//	    return kms.DecryptAESGCM(ctx, configKeyID, ciphertext)
 //	}
-//	resolver := secrets.NewEncryptedResolver(decrypter)
+//	resolver := secrets.NewEncryptedResolver(decryptFn, logger)
 //
 // If logger is nil, a no-op logger is used.
-func NewEncryptedResolver(decrypter crypto.Decrypter, logger *slog.Logger) *EncryptedResolver {
+func NewEncryptedResolver(decryptFn DecryptFunc, logger *slog.Logger) *EncryptedResolver {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &EncryptedResolver{
-		decrypter: decrypter,
+		decryptFn: decryptFn,
 		logger:    logger,
 	}
 }
@@ -85,23 +90,26 @@ func (r *EncryptedResolver) CanResolve(raw string) bool {
 		return false
 	}
 	lower := strings.ToLower(raw)
-	return strings.HasPrefix(lower, SchemePrefix) || strings.HasPrefix(lower, SchemeURIPrefix)
+	return strings.HasPrefix(lower, SchemeEncryptedPrefix) ||
+		strings.HasPrefix(lower, SchemeEncryptedURIPrefix)
 }
 
-// Resolve decrypts the encrypted secret value.
+// Resolve decrypts the AES-256-GCM encrypted secret value.
 //
 // The raw value must be in the format:
 //   - encrypted:base64-encoded-ciphertext
 //   - encrypted://base64-encoded-ciphertext
 //
-// The ciphertext can be encoded using either standard base64 or URL-safe base64.
-// The resolver tries both encodings automatically.
+// The ciphertext can be encoded using either standard base64 or URL-safe base64,
+// with or without padding. The resolver tries all variants automatically.
 //
 // The context is checked for cancellation and deadline before and after decryption.
 func (r *EncryptedResolver) Resolve(ctx context.Context, raw string) (*SecretValue, error) {
-	// Check for nil decrypter
-	if r.decrypter == nil {
-		return nil, ErrDecrypterRequired{}
+	// Check for nil decrypt function
+	if r.decryptFn == nil {
+		return nil, ErrEncryptedDecryptFailed{
+			Cause: ErrDecrypterRequired{},
+		}
 	}
 
 	// Check context before starting
@@ -111,48 +119,47 @@ func (r *EncryptedResolver) Resolve(ctx context.Context, raw string) (*SecretVal
 
 	// Validate input
 	if !r.CanResolve(raw) {
-		return nil, ErrInvalidSecretFormat{
-			Raw:    raw,
+		return nil, ErrEncryptedInvalidPayload{
 			Reason: "does not match encrypted: or encrypted:// scheme",
 		}
 	}
 
 	// Extract the base64-encoded ciphertext
-	ciphertextB64 := extractCiphertext(raw)
-	if ciphertextB64 == "" {
-		return nil, ErrInvalidSecretFormat{
-			Raw:    raw,
-			Reason: "empty ciphertext after scheme prefix",
+	payloadB64 := extractEncryptedPayload(raw)
+	if payloadB64 == "" {
+		return nil, ErrEncryptedInvalidPayload{
+			Reason: "empty payload after scheme prefix",
 		}
 	}
 
-	// Decode base64 (try both standard and URL-safe)
-	ciphertext, err := decodeBase64(ciphertextB64)
+	// Decode base64 (try standard, URL-safe, raw, raw-URL)
+	ciphertext, err := decodeBase64(payloadB64)
 	if err != nil {
 		return nil, ErrBase64DecodeFailed{Reason: err.Error()}
 	}
 
 	if len(ciphertext) == 0 {
-		return nil, ErrEmptyCiphertext{}
+		return nil, ErrEncryptedInvalidPayload{
+			Reason: "empty ciphertext after base64 decode",
+		}
 	}
 
-	// Check context before decryption (which may be slow for TPM)
+	// Check context before decryption
 	if err := checkContext(ctx); err != nil {
 		return nil, err
 	}
 
-	r.logger.Debug("decrypting secret",
+	r.logger.Debug("decrypting config secret",
 		slog.Int("ciphertext_len", len(ciphertext)),
 	)
 
-	// Decrypt using RSA-OAEP with SHA-256
-	// The crypto.Decrypter interface handles the key-specific decryption
-	plaintext, err := r.decrypt(ciphertext)
+	// Decrypt using the caller-provided function
+	plaintext, err := r.decryptFn(ctx, ciphertext)
 	if err != nil {
-		r.logger.Error("decryption failed",
+		r.logger.Error("config secret decryption failed",
 			slog.String("error", err.Error()),
 		)
-		return nil, ErrDecryptionFailed{Reason: err.Error()}
+		return nil, ErrEncryptedDecryptFailed{Cause: err}
 	}
 
 	// Check context after decryption
@@ -164,7 +171,7 @@ func (r *EncryptedResolver) Resolve(ctx context.Context, raw string) (*SecretVal
 		return nil, err
 	}
 
-	r.logger.Debug("secret decrypted successfully",
+	r.logger.Debug("config secret decrypted successfully",
 		slog.Int("plaintext_len", len(plaintext)),
 	)
 
@@ -174,81 +181,19 @@ func (r *EncryptedResolver) Resolve(ctx context.Context, raw string) (*SecretVal
 	}, nil
 }
 
-// decrypt performs the actual decryption using the crypto.Decrypter interface.
-// For RSA keys, it uses RSA-OAEP with SHA-256.
-func (r *EncryptedResolver) decrypt(ciphertext []byte) ([]byte, error) {
-	// Use RSA-OAEP with SHA-256 as the default decryption options
-	// The crypto.Decrypter interface's Decrypt method signature is:
-	// Decrypt(rand io.Reader, msg []byte, opts crypto.DecrypterOpts) (plaintext []byte, err error)
-	opts := &rsa.OAEPOptions{
-		Hash: crypto.SHA256,
-	}
-
-	return r.decrypter.Decrypt(rand.Reader, ciphertext, opts)
-}
-
-// extractCiphertext removes the scheme prefix from the raw value.
-func extractCiphertext(raw string) string {
+// extractEncryptedPayload removes the scheme prefix from the raw value.
+func extractEncryptedPayload(raw string) string {
 	lower := strings.ToLower(raw)
 
 	// Check for URI format first (longer prefix)
-	if strings.HasPrefix(lower, SchemeURIPrefix) {
-		return raw[len(SchemeURIPrefix):]
+	if strings.HasPrefix(lower, SchemeEncryptedURIPrefix) {
+		return raw[len(SchemeEncryptedURIPrefix):]
 	}
 
 	// Check for simple prefix format
-	if strings.HasPrefix(lower, SchemePrefix) {
-		return raw[len(SchemePrefix):]
+	if strings.HasPrefix(lower, SchemeEncryptedPrefix) {
+		return raw[len(SchemeEncryptedPrefix):]
 	}
 
 	return ""
-}
-
-// decodeBase64 attempts to decode the input using both standard and URL-safe base64.
-// It tries standard base64 first, then URL-safe base64 on failure.
-func decodeBase64(encoded string) ([]byte, error) {
-	// Trim any whitespace
-	encoded = strings.TrimSpace(encoded)
-
-	// Try standard base64 first
-	decoded, err := base64.StdEncoding.DecodeString(encoded)
-	if err == nil {
-		return decoded, nil
-	}
-
-	// Try URL-safe base64
-	decoded, err = base64.URLEncoding.DecodeString(encoded)
-	if err == nil {
-		return decoded, nil
-	}
-
-	// Try raw standard base64 (no padding)
-	decoded, err = base64.RawStdEncoding.DecodeString(encoded)
-	if err == nil {
-		return decoded, nil
-	}
-
-	// Try raw URL-safe base64 (no padding)
-	decoded, err = base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil {
-		return nil, err
-	}
-
-	return decoded, nil
-}
-
-// checkContext checks if the context is canceled or deadline exceeded.
-func checkContext(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		if ctx.Err() == context.Canceled {
-			return ErrContextCanceled{Reason: ctx.Err().Error()}
-		}
-		if ctx.Err() == context.DeadlineExceeded {
-			return ErrContextDeadlineExceeded{Reason: ctx.Err().Error()}
-		}
-		return ErrContextCanceled{Reason: ctx.Err().Error()}
-	default:
-		return nil
-	}
 }

@@ -20,7 +20,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -37,10 +36,11 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-objstore/pkg/common"
-	goca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	pkgca "github.com/jeremyhahn/go-xkms/pkg/ca"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -50,15 +50,17 @@ import (
 // =============================================================================
 
 type mockCertificateAuthority struct {
+	baseMockCA
+
 	// Configuration
 	initialized       bool
 	identity          string
 	defaultKeyAlg     x509.PublicKeyAlgorithm
 	defaultSigAlg     x509.SignatureAlgorithm
-	defaultValidity   time.Duration
+	defaultValidity   int
 	hash              crypto.Hash
 	isAutoImportingCA bool
-	config            goca.CAConfig
+	config            pkgca.CAConfig
 
 	// Certificates
 	rootCert         *x509.Certificate
@@ -69,10 +71,10 @@ type mockCertificateAuthority struct {
 	objectStore common.Storage
 
 	// Method overrides for testing
-	signCSRFn             func(csrPEM []byte, request *goca.CACertificateRequest) (*x509.Certificate, error)
+	signCSRFn             func(csrPEM []byte, opts *pkgca.SignOptions) (*x509.Certificate, error)
 	caBundleFn            func(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error)
-	issueCertificateFn    func(request *goca.CACertificateRequest) (*x509.Certificate, error)
-	revokeFn              func(certificate *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error
+	issueCertificateFn    func(request *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error)
+	revokeFn              func(certificate *x509.Certificate, opts pkgca.RevokeOptions) error
 	parseBundleFn         func(bundle []byte) ([]*x509.Certificate, error)
 	trustedRootFn         func() (*x509.Certificate, error)
 	trustedIntermediateFn func() (*x509.Certificate, error)
@@ -84,347 +86,134 @@ type mockCertificateAuthority struct {
 	signFn                func(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error)
 }
 
-// Implement crypto.Signer interface
 func (m *mockCertificateAuthority) Public() crypto.PublicKey {
 	if m.publicKeyFn != nil {
 		return m.publicKeyFn()
 	}
-	// Return a dummy ECDSA public key
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	return &key.PublicKey
 }
-
-func (m *mockCertificateAuthority) Sign(randReader io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+func (m *mockCertificateAuthority) Sign(r io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
 	if m.signFn != nil {
-		return m.signFn(randReader, digest, opts)
+		return m.signFn(r, digest, opts)
 	}
 	return []byte("mock-signature"), nil
 }
-
-// Implement CertificateAuthority interface
-func (m *mockCertificateAuthority) SignCSR(csrPEM []byte, request *goca.CACertificateRequest) (*x509.Certificate, error) {
+func (m *mockCertificateAuthority) SignCSR(csrPEM []byte, opts *pkgca.SignOptions) (*x509.Certificate, error) {
 	if m.signCSRFn != nil {
-		return m.signCSRFn(csrPEM, request)
+		return m.signCSRFn(csrPEM, opts)
 	}
 	return nil, errors.New("not implemented")
 }
-
-func (m *mockCertificateAuthority) SignTCGCSRIDevID(tcgCSRIDevID *xkmssdk.TCG_CSR_IDEVID, request *goca.CACertificateRequest) ([]byte, []byte, error) {
-	return nil, nil, errors.New("not implemented")
+func (m *mockCertificateAuthority) CABundle() ([]byte, error) {
+	if m.caBundleFn != nil {
+		return m.caBundleFn("", 0)
+	}
+	return []byte("-----BEGIN CERTIFICATE-----\nMOCK\n-----END CERTIFICATE-----"), nil
 }
-
-func (m *mockCertificateAuthority) CABundle(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error) {
+func (m *mockCertificateAuthority) CABundleFiltered(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error) {
 	if m.caBundleFn != nil {
 		return m.caBundleFn(storeType, keyAlgorithm)
 	}
 	return []byte("-----BEGIN CERTIFICATE-----\nMOCK\n-----END CERTIFICATE-----"), nil
 }
-
-func (m *mockCertificateAuthority) ImportCertificate(certificate *x509.Certificate) error {
-	return nil
-}
-
 func (m *mockCertificateAuthority) Certificate(attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
 	if m.certificateFn != nil {
 		return m.certificateFn(attrs)
 	}
 	return nil, errors.New("not found")
 }
-
-func (m *mockCertificateAuthority) CertificatePEM(cn string) ([]byte, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) Verify(certificate *x509.Certificate, xsigner crypto.Signer) ([][]*x509.Certificate, error) {
-	return nil, nil
-}
-
 func (m *mockCertificateAuthority) Signer() (crypto.Signer, error) {
 	if m.signerFn != nil {
 		return m.signerFn()
 	}
 	return m, nil
 }
-
 func (m *mockCertificateAuthority) TrustedRoot() (*x509.Certificate, error) {
 	if m.trustedRootFn != nil {
 		return m.trustedRootFn()
 	}
 	return m.rootCert, nil
 }
-
 func (m *mockCertificateAuthority) TrustedIntermediate() (*x509.Certificate, error) {
 	if m.trustedIntermediateFn != nil {
 		return m.trustedIntermediateFn()
 	}
 	return m.intermediateCert, nil
 }
-
-func (m *mockCertificateAuthority) CreateCSR(request *goca.CACertificateRequest) ([]byte, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) TLSCertificate(attrs *xkmssdk.KeyAttributes) (tls.Certificate, error) {
-	return tls.Certificate{}, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) TLSBundle(attrs *xkmssdk.KeyAttributes) ([]byte, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) TLSConfig(attrs *xkmssdk.KeyAttributes) (*tls.Config, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) TLSConfigWithXSigner(attrs *xkmssdk.KeyAttributes, xsigner interface{}) (*tls.Config, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) QuantumSafeTLSConfig(attrs *xkmssdk.KeyAttributes) (*tls.Config, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) TLSBundleWithCrossSigner(attrs *xkmssdk.KeyAttributes, issuerCN string) ([][]byte, *x509.Certificate, error) {
-	return nil, nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) IssueCertificate(request *goca.CACertificateRequest) (*x509.Certificate, error) {
+func (m *mockCertificateAuthority) IssueCertificate(request *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
 	if m.issueCertificateFn != nil {
 		return m.issueCertificateFn(request)
 	}
-	return createTestCertificate(request.Subject.CommonName), nil
+	cert := createTestCertificate(request.Subject.CommonName)
+	return &pkgca.IssuedCertificate{Certificate: cert}, nil
 }
-
-func (m *mockCertificateAuthority) Issued(cn string) (bool, error) {
-	return false, nil
-}
-
-func (m *mockCertificateAuthority) Exists(cn string, algorithm x509.SignatureAlgorithm) (bool, error) {
-	return false, nil
-}
-
-func (m *mockCertificateAuthority) Revoke(certificate *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+func (m *mockCertificateAuthority) RevokeCert(cert *x509.Certificate, opts pkgca.RevokeOptions) error {
 	if m.revokeFn != nil {
-		return m.revokeFn(certificate, keyAttrs)
+		return m.revokeFn(cert, opts)
 	}
 	return nil
 }
-
-func (m *mockCertificateAuthority) ImportDistributionCRLs(cert *x509.Certificate) error {
-	return nil
-}
-
-func (m *mockCertificateAuthority) IssueEKCertificate(request *goca.CACertificateRequest, ekPubKey crypto.PublicKey) (*x509.Certificate, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) IssueAKCertificate(request *goca.CACertificateRequest, pubKey crypto.PublicKey) (*x509.Certificate, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) ImportEndorsementKeyCertificate(cert *x509.Certificate) error {
-	return nil
-}
-
-func (m *mockCertificateAuthority) ImportXSignedCertificate(issuerCN string, cert *x509.Certificate) error {
-	return nil
-}
-
-func (m *mockCertificateAuthority) EndorsementKeyCertificate(cn string) (*x509.Certificate, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) SignedBlob(data interface{}) ([]byte, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) TrustedRootCertPool(cert *x509.Certificate, xsigner crypto.Signer) (*x509.CertPool, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) TrustedIntermediateCertPool(cert *x509.Certificate, xsigner crypto.Signer) (*x509.CertPool, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) CABundleCertPool(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) (*x509.CertPool, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) ImportIssuingCAs(cert *x509.Certificate) error {
-	return nil
-}
-
 func (m *mockCertificateAuthority) ParseBundle(bundle []byte) ([]*x509.Certificate, error) {
 	if m.parseBundleFn != nil {
 		return m.parseBundleFn(bundle)
 	}
 	return []*x509.Certificate{m.rootCert}, nil
 }
-
-func (m *mockCertificateAuthority) RootCertificate(childCert *x509.Certificate) (*x509.Certificate, error) {
+func (m *mockCertificateAuthority) RootCertificate(_ *x509.Certificate) (*x509.Certificate, error) {
 	return m.rootCert, nil
 }
-
-func (m *mockCertificateAuthority) CertificateStore() xkmssdk.CertStore {
+func (m *mockCertificateAuthority) CertStore() xkmssdk.CertStore {
 	if m.certificateStoreFn != nil {
 		return m.certificateStoreFn()
 	}
 	return m.certStore
 }
-
 func (m *mockCertificateAuthority) ObjectStore() common.Storage {
 	if m.objectStoreFn != nil {
 		return m.objectStoreFn()
 	}
 	return m.objectStore
 }
-
-func (m *mockCertificateAuthority) PEM(attrs *xkmssdk.KeyAttributes) ([]byte, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) ImportCertificatePEM(cn string, pemData []byte) error {
-	return nil
-}
-
-func (m *mockCertificateAuthority) Blob(key string) ([]byte, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) ImportBlob(key string, data []byte) error {
-	return nil
-}
-
-func (m *mockCertificateAuthority) KeyStore() interface{} {
-	return nil
-}
-
-func (m *mockCertificateAuthority) Key(attrs *xkmssdk.KeyAttributes) (interface{}, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) PubKey(attrs *xkmssdk.KeyAttributes) (crypto.PublicKey, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) OSTrustStore() (*x509.CertPool, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) IsAutoImportingIssuerCAs() bool {
-	return m.isAutoImportingCA
-}
-
+func (m *mockCertificateAuthority) IsAutoImportingIssuerCAs() bool { return m.isAutoImportingCA }
 func (m *mockCertificateAuthority) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm {
 	if m.defaultKeyAlg != 0 {
 		return m.defaultKeyAlg
 	}
 	return x509.ECDSA
 }
-
 func (m *mockCertificateAuthority) DefaultSignatureAlgorithm() x509.SignatureAlgorithm {
 	if m.defaultSigAlg != 0 {
 		return m.defaultSigAlg
 	}
 	return x509.ECDSAWithSHA256
 }
-
-func (m *mockCertificateAuthority) DefaultValidityPeriod() time.Duration {
+func (m *mockCertificateAuthority) DefaultValidityPeriod() int {
 	if m.defaultValidity != 0 {
 		return m.defaultValidity
 	}
-	return 365 * 24 * time.Hour
+	return 365
 }
-
 func (m *mockCertificateAuthority) Hash() crypto.Hash {
 	if m.hash != 0 {
 		return m.hash
 	}
 	return crypto.SHA256
 }
-
 func (m *mockCertificateAuthority) Identity() string {
 	if m.identity != "" {
 		return m.identity
 	}
 	return "Test CA"
 }
-
-func (m *mockCertificateAuthority) CAKeyAttributes(storeType xkmssdk.StoreType) (*xkmssdk.KeyAttributes, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) CASigner(storeType xkmssdk.StoreType, algorithm x509.PublicKeyAlgorithm) (crypto.Signer, error) {
-	return nil, errors.New("not implemented")
-}
-
 func (m *mockCertificateAuthority) Init() error {
 	m.initialized = true
 	return nil
 }
-
-func (m *mockCertificateAuthority) Load() error {
-	return nil
-}
-
-func (m *mockCertificateAuthority) IsInitialized() bool {
-	return m.initialized
-}
-
-func (m *mockCertificateAuthority) CAConfig() goca.CAConfig {
-	return m.config
-}
-
-func (m *mockCertificateAuthority) ImportAttestation(akAttrs *xkmssdk.KeyAttributes, blobType string, data []byte) error {
-	return nil
-}
-
-func (m *mockCertificateAuthority) ImportAttestationKeyCertificate(attrs *xkmssdk.KeyAttributes, akDER []byte) error {
-	return nil
-}
-
-func (m *mockCertificateAuthority) ImportAttestationEventLog(akAttrs *xkmssdk.KeyAttributes, eventLog []byte) error {
-	return nil
-}
-
-func (m *mockCertificateAuthority) ImportAttestationPCRs(akAttrs *xkmssdk.KeyAttributes, pcrs []byte) error {
-	return nil
-}
-
-func (m *mockCertificateAuthority) ImportAttestationQuote(akAttrs *xkmssdk.KeyAttributes, quote []byte) error {
-	return nil
-}
-
-func (m *mockCertificateAuthority) ImportLocalAttestation(akAttrs *xkmssdk.KeyAttributes, quote *xkmssdk.Quote) error {
-	return nil
-}
-
-func (m *mockCertificateAuthority) VerifyQuote(akAttrs *xkmssdk.KeyAttributes, quote *xkmssdk.Quote, nonce []byte) error {
-	return nil
-}
-
-func (m *mockCertificateAuthority) VerifyAttestationQuote(akAttrs *xkmssdk.KeyAttributes, quote []byte) error {
-	return nil
-}
-
-func (m *mockCertificateAuthority) VerifyAttestationEventLog(akAttrs *xkmssdk.KeyAttributes, eventLog []byte) error {
-	return nil
-}
-
-func (m *mockCertificateAuthority) VerifyAttestationPCRs(akAttrs *xkmssdk.KeyAttributes, pcrs []byte) error {
-	return nil
-}
-
-func (m *mockCertificateAuthority) VerifyTCG_CSR_IDevIDBytes(packedCSR []byte, sigAlg interface{}) ([]byte, []byte, []byte, error) {
-	return nil, nil, nil, errors.New("not implemented")
-}
-
-func (m *mockCertificateAuthority) SetTPM(tpm xkmssdk.TrustedPlatformModule) {}
+func (m *mockCertificateAuthority) IsInitialized() bool      { return m.initialized }
+func (m *mockCertificateAuthority) CAConfig() pkgca.CAConfig { return m.config }
 func (m *mockCertificateAuthority) GenerateCRL() ([]byte, error) {
 	return nil, errors.New("CRL generation not supported")
-}
-func (m *mockCertificateAuthority) IsRevoked(serial *big.Int) (bool, error) {
-	return false, nil
 }
 
 // =============================================================================
@@ -753,13 +542,36 @@ func TestNewCAHandlers(t *testing.T) {
 // GetInfo Handler Tests
 // =============================================================================
 
+// decodeProtoBody parses the response body emitted by handlers that go
+// through protorest.WriteSuccess and arrives as
+// `{"code":200,"success":true,"payload":<protojson(...)>}`. The payload
+// itself uses protojson camelCase / RFC3339 conventions.
+func decodeProtoBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]interface{} {
+	t.Helper()
+	var envelope struct {
+		Code    int                    `json:"code"`
+		Success bool                   `json:"success"`
+		Payload map[string]interface{} `json:"payload"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode envelope: %v (body=%s)", err, rec.Body.String())
+	}
+	return envelope.Payload
+}
+
+// decodeGetCAInfoBody is preserved as a thin alias for the GetInfo tests.
+func decodeGetCAInfoBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]interface{} {
+	t.Helper()
+	return decodeProtoBody(t, rec)
+}
+
 func TestGetInfo_Success(t *testing.T) {
 	t.Run("returns CA info when initialized", func(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized:     true,
 			identity:        "Test Root CA",
 			defaultKeyAlg:   x509.ECDSA,
-			defaultValidity: 365 * 24 * time.Hour,
+			defaultValidity: 365,
 			rootCert:        createTestRootCertificate(),
 		}
 		handlers, writer := newTestHandlers(mockCA)
@@ -770,11 +582,14 @@ func TestGetInfo_Success(t *testing.T) {
 		handlers.GetInfo(rec, req)
 
 		assert.Equal(t, http.StatusOK, writer.lastStatus)
-		payload, ok := writer.lastPayload.(CAInfoResponse)
-		require.True(t, ok)
-		assert.True(t, payload.IsInitialized)
-		assert.Equal(t, "Test Root CA", payload.CommonName)
-		assert.NotNil(t, payload.RootCert)
+		payload := decodeGetCAInfoBody(t, rec)
+		caInfo, ok := payload["caInfo"].(map[string]interface{})
+		require.True(t, ok, "payload.caInfo should be an object")
+		assert.True(t, caInfo["isInitialized"].(bool))
+		assert.Equal(t, "Test Root CA", caInfo["commonName"])
+		require.NotNil(t, caInfo["rootCert"])
+		_, hasTimestamp := payload["timestamp"].(string)
+		assert.True(t, hasTimestamp, "payload.timestamp should be RFC3339 string")
 	})
 
 	t.Run("returns info when CA is not initialized", func(t *testing.T) {
@@ -789,9 +604,10 @@ func TestGetInfo_Success(t *testing.T) {
 		handlers.GetInfo(rec, req)
 
 		assert.Equal(t, http.StatusOK, writer.lastStatus)
-		payload, ok := writer.lastPayload.(CAInfoResponse)
+		payload := decodeGetCAInfoBody(t, rec)
+		caInfo, ok := payload["caInfo"].(map[string]interface{})
 		require.True(t, ok)
-		assert.False(t, payload.IsInitialized)
+		assert.False(t, caInfo["isInitialized"].(bool))
 	})
 
 	t.Run("includes intermediate CA info", func(t *testing.T) {
@@ -809,15 +625,18 @@ func TestGetInfo_Success(t *testing.T) {
 		handlers.GetInfo(rec, req)
 
 		assert.Equal(t, http.StatusOK, writer.lastStatus)
-		payload, ok := writer.lastPayload.(CAInfoResponse)
+		payload := decodeGetCAInfoBody(t, rec)
+		caInfo, ok := payload["caInfo"].(map[string]interface{})
 		require.True(t, ok)
-		assert.True(t, payload.IsIntermediate)
-		assert.NotEmpty(t, payload.Intermediates)
+		assert.True(t, caInfo["isIntermediate"].(bool))
+		intermediates, ok := caInfo["intermediates"].([]interface{})
+		require.True(t, ok)
+		assert.NotEmpty(t, intermediates)
 	})
 }
 
 func TestGetInfo_Error(t *testing.T) {
-	t.Run("returns error when CA is nil", func(t *testing.T) {
+	t.Run("returns 503 when CA is nil", func(t *testing.T) {
 		handlers, writer := newTestHandlers(nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/info", nil)
@@ -825,8 +644,8 @@ func TestGetInfo_Error(t *testing.T) {
 
 		handlers.GetInfo(rec, req)
 
-		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
-		assert.IsType(t, ErrCANotInitialized{}, writer.lastError)
+		// protorest.WriteError maps Unavailable -> 503 for missing service.
+		assert.Equal(t, http.StatusServiceUnavailable, writer.lastStatus)
 	})
 }
 
@@ -849,9 +668,10 @@ func TestListCertificates_Success(t *testing.T) {
 		handlers.ListCertificates(rec, req)
 
 		assert.Equal(t, http.StatusOK, writer.lastStatus)
-		payload, ok := writer.lastPayload.(CertificateListResponse)
-		require.True(t, ok)
-		assert.NotEmpty(t, payload.Certificates)
+		payload := decodeProtoBody(t, rec)
+		certs, ok := payload["certificates"].([]interface{})
+		require.True(t, ok, "payload.certificates should be an array")
+		assert.NotEmpty(t, certs)
 	})
 
 	t.Run("respects pagination limit", func(t *testing.T) {
@@ -868,9 +688,9 @@ func TestListCertificates_Success(t *testing.T) {
 		handlers.ListCertificates(rec, req)
 
 		assert.Equal(t, http.StatusOK, writer.lastStatus)
-		payload, ok := writer.lastPayload.(CertificateListResponse)
-		require.True(t, ok)
-		assert.LessOrEqual(t, len(payload.Certificates), 1)
+		payload := decodeProtoBody(t, rec)
+		certs, _ := payload["certificates"].([]interface{})
+		assert.LessOrEqual(t, len(certs), 1)
 	})
 
 	t.Run("handles pagination cursor", func(t *testing.T) {
@@ -914,7 +734,8 @@ func TestListCertificates_Error(t *testing.T) {
 
 		handlers.ListCertificates(rec, req)
 
-		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+		// protorest.WriteError maps Unavailable -> 503 for missing service.
+		assert.Equal(t, http.StatusServiceUnavailable, writer.lastStatus)
 	})
 
 	t.Run("returns error when cert store is nil", func(t *testing.T) {
@@ -929,7 +750,8 @@ func TestListCertificates_Error(t *testing.T) {
 
 		handlers.ListCertificates(rec, req)
 
-		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+		// FailedPrecondition (gRPC) maps to 400 via protorest.WriteError.
+		assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
 	})
 }
 
@@ -955,10 +777,10 @@ func TestGetCertificate_Success(t *testing.T) {
 		handlers.GetCertificate(rec, req)
 
 		assert.Equal(t, http.StatusOK, writer.lastStatus)
-		payload, ok := writer.lastPayload.(GetCertificateResponse)
-		require.True(t, ok)
-		require.NotNil(t, payload.Certificate)
-		assert.Equal(t, serial, payload.Certificate.Serial)
+		payload := decodeProtoBody(t, rec)
+		cert, ok := payload["certificate"].(map[string]interface{})
+		require.True(t, ok, "payload.certificate should be an object")
+		assert.Equal(t, serial, cert["serial"])
 	})
 
 	t.Run("returns intermediate certificate by serial", func(t *testing.T) {
@@ -998,7 +820,8 @@ func TestGetCertificate_Success(t *testing.T) {
 		handlers.GetCertificate(rec, req)
 
 		assert.Equal(t, http.StatusOK, writer.lastStatus)
-		_, ok := writer.lastPayload.(GetCertificateResponse)
+		payload := decodeProtoBody(t, rec)
+		_, ok := payload["certificate"].(map[string]interface{})
 		require.True(t, ok)
 		// Note: PEM will be empty because rootCert.Raw is nil in test
 	})
@@ -1041,7 +864,7 @@ func TestGetCertificate_Error(t *testing.T) {
 
 		handlers.GetCertificate(rec, req)
 
-		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+		assert.Equal(t, http.StatusServiceUnavailable, writer.lastStatus)
 	})
 
 	t.Run("returns error when serial is empty", func(t *testing.T) {
@@ -1054,8 +877,12 @@ func TestGetCertificate_Error(t *testing.T) {
 
 		handlers.GetCertificate(rec, req)
 
+		// gRPC InvalidArgument -> 400 via protorest.WriteError; the error
+		// itself is now a *status.Error wrapping ErrInvalidSerialNumber's
+		// Error() string, so we check the message rather than the type.
 		assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-		assert.IsType(t, ErrInvalidSerialNumber{}, writer.lastError)
+		require.NotNil(t, writer.lastError)
+		assert.Contains(t, writer.lastError.Error(), "serial")
 	})
 
 	t.Run("returns 404 when certificate not found", func(t *testing.T) {
@@ -1073,7 +900,8 @@ func TestGetCertificate_Error(t *testing.T) {
 		handlers.GetCertificate(rec, req)
 
 		assert.Equal(t, http.StatusNotFound, writer.lastStatus)
-		assert.IsType(t, ErrCertificateNotFound{}, writer.lastError)
+		require.NotNil(t, writer.lastError)
+		assert.Contains(t, writer.lastError.Error(), "nonexistent")
 	})
 }
 
@@ -1085,18 +913,14 @@ func TestIssueCertificate_Success(t *testing.T) {
 	t.Run("issues certificate with minimal request", func(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
-			issueCertificateFn: func(request *goca.CACertificateRequest) (*x509.Certificate, error) {
-				return createTestCertificate(request.Subject.CommonName), nil
+			issueCertificateFn: func(request *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
+				return &pkgca.IssuedCertificate{Certificate: createTestCertificate(request.Subject.CommonName)}, nil
 			},
 		}
 		handlers, writer := newTestHandlers(mockCA)
 
-		reqBody := CertificateIssueRequest{
-			Subject: SubjectRequest{
-				CommonName: "test.example.com",
-			},
-		}
-		body, _ := json.Marshal(reqBody)
+		// Proto IssueCertificateRequest: {request: {subject: {commonName: ...}}}
+		body := []byte(`{"request":{"subject":{"commonName":"test.example.com"}}}`)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -1105,38 +929,33 @@ func TestIssueCertificate_Success(t *testing.T) {
 		handlers.IssueCertificate(rec, req)
 
 		assert.Equal(t, http.StatusCreated, writer.lastStatus)
-		payload, ok := writer.lastPayload.(IssueCertificateResponse)
+		payload := decodeProtoBody(t, rec)
+		cert, ok := payload["certificate"].(map[string]interface{})
+		require.True(t, ok, "payload.certificate should be an object")
+		subject, ok := cert["subject"].(map[string]interface{})
 		require.True(t, ok)
-		require.NotNil(t, payload.Certificate)
-		assert.Equal(t, "test.example.com", payload.Certificate.Subject.CommonName)
+		assert.Equal(t, "test.example.com", subject["commonName"])
 	})
 
 	t.Run("issues certificate with full request", func(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
-			issueCertificateFn: func(request *goca.CACertificateRequest) (*x509.Certificate, error) {
-				return createTestCertificate(request.Subject.CommonName), nil
+			issueCertificateFn: func(request *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
+				return &pkgca.IssuedCertificate{Certificate: createTestCertificate(request.Subject.CommonName)}, nil
 			},
 		}
 		handlers, writer := newTestHandlers(mockCA)
 
-		reqBody := CertificateIssueRequest{
-			Subject: SubjectRequest{
-				CommonName:   "server.example.com",
-				Organization: "Example Corp",
-				Country:      "US",
-			},
-			SANs: &SANsRequest{
-				DNS: []string{"server.example.com", "api.example.com"},
-				IPs: []string{"192.168.1.1"},
-			},
-			ValidDays:    365,
-			KeyAlgorithm: "ECDSA",
-			StoreType:    "software",
-			KeyUsage:     []string{"digitalSignature", "keyEncipherment"},
-			ExtKeyUsage:  []string{"serverAuth", "clientAuth"},
-		}
-		body, _ := json.Marshal(reqBody)
+		// Proto-shaped request body. KeyAlgorithm uses the enum name.
+		body := []byte(`{"request":{
+			"subject":{"commonName":"server.example.com","organization":"Example Corp","country":"US"},
+			"sans":{"dnsNames":["server.example.com","api.example.com"],"ipAddresses":["192.168.1.1"]},
+			"validDays":365,
+			"keyAlgorithm":"KEY_ALGORITHM_ECDSA_P256",
+			"storeType":"software",
+			"keyUsage":["digitalSignature","keyEncipherment"],
+			"extKeyUsage":["serverAuth","clientAuth"]
+		}}`)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -1150,23 +969,21 @@ func TestIssueCertificate_Success(t *testing.T) {
 	t.Run("issues CA certificate", func(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
-			issueCertificateFn: func(request *goca.CACertificateRequest) (*x509.Certificate, error) {
+			issueCertificateFn: func(request *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
 				cert := createTestCertificate(request.Subject.CommonName)
 				cert.IsCA = request.IsCA
-				return cert, nil
+				return &pkgca.IssuedCertificate{Certificate: cert}, nil
 			},
 		}
 		handlers, writer := newTestHandlers(mockCA)
 
-		reqBody := CertificateIssueRequest{
-			Subject: SubjectRequest{
-				CommonName: "Intermediate CA",
-			},
-			IsCA:       true,
-			MaxPathLen: 1,
-			KeyUsage:   []string{"certSign", "crlSign"},
-		}
-		body, _ := json.Marshal(reqBody)
+		// Proto field name is `is_ca` (jsonName: isCa).
+		body := []byte(`{"request":{
+			"subject":{"commonName":"Intermediate CA"},
+			"isCa":true,
+			"maxPathLen":1,
+			"keyUsage":["certSign","crlSign"]
+		}}`)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -1182,10 +999,7 @@ func TestIssueCertificate_Error(t *testing.T) {
 	t.Run("returns error when CA is nil", func(t *testing.T) {
 		handlers, writer := newTestHandlers(nil)
 
-		reqBody := CertificateIssueRequest{
-			Subject: SubjectRequest{CommonName: "test.com"},
-		}
-		body, _ := json.Marshal(reqBody)
+		body := []byte(`{"request":{"subject":{"commonName":"test.com"}}}`)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -1193,7 +1007,7 @@ func TestIssueCertificate_Error(t *testing.T) {
 
 		handlers.IssueCertificate(rec, req)
 
-		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+		assert.Equal(t, http.StatusServiceUnavailable, writer.lastStatus)
 	})
 
 	t.Run("returns error for invalid JSON", func(t *testing.T) {
@@ -1207,19 +1021,16 @@ func TestIssueCertificate_Error(t *testing.T) {
 		handlers.IssueCertificate(rec, req)
 
 		assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-		assert.IsType(t, ErrInvalidRequestBody{}, writer.lastError)
+		// Body parsing now goes through protorest.DecodeRequest which wraps
+		// the protojson error in *protorest.ErrInvalidJSON.
+		require.NotNil(t, writer.lastError)
 	})
 
 	t.Run("returns error when common name is missing", func(t *testing.T) {
 		mockCA := &mockCertificateAuthority{initialized: true}
 		handlers, writer := newTestHandlers(mockCA)
 
-		reqBody := CertificateIssueRequest{
-			Subject: SubjectRequest{
-				CommonName: "",
-			},
-		}
-		body, _ := json.Marshal(reqBody)
+		body := []byte(`{"request":{"subject":{"commonName":""}}}`)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -1228,20 +1039,22 @@ func TestIssueCertificate_Error(t *testing.T) {
 		handlers.IssueCertificate(rec, req)
 
 		assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-		assert.IsType(t, ErrMissingCommonName{}, writer.lastError)
+		require.NotNil(t, writer.lastError)
+		assert.Contains(t, writer.lastError.Error(), "common name")
 	})
 
 	t.Run("returns error for invalid key algorithm", func(t *testing.T) {
 		mockCA := &mockCertificateAuthority{initialized: true}
 		handlers, writer := newTestHandlers(mockCA)
 
-		reqBody := CertificateIssueRequest{
-			Subject: SubjectRequest{
-				CommonName: "test.com",
-			},
-			KeyAlgorithm: "INVALID-ALG",
-		}
-		body, _ := json.Marshal(reqBody)
+		// Numeric enum values out of the declared range pass through
+		// protojson decoding as the raw int but fail the
+		// protoKeyAlgorithmToX509 switch, surfacing
+		// ErrInvalidKeyAlgorithm via gRPC InvalidArgument -> HTTP 400.
+		body := []byte(`{"request":{
+			"subject":{"commonName":"test.com"},
+			"keyAlgorithm":99
+		}}`)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -1250,22 +1063,19 @@ func TestIssueCertificate_Error(t *testing.T) {
 		handlers.IssueCertificate(rec, req)
 
 		assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-		assert.IsType(t, ErrInvalidKeyAlgorithm{}, writer.lastError)
+		require.NotNil(t, writer.lastError)
 	})
 
 	t.Run("returns error when CA fails to issue", func(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
-			issueCertificateFn: func(request *goca.CACertificateRequest) (*x509.Certificate, error) {
+			issueCertificateFn: func(request *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
 				return nil, errors.New("issuance failed")
 			},
 		}
 		handlers, writer := newTestHandlers(mockCA)
 
-		reqBody := CertificateIssueRequest{
-			Subject: SubjectRequest{CommonName: "test.com"},
-		}
-		body, _ := json.Marshal(reqBody)
+		body := []byte(`{"request":{"subject":{"commonName":"test.com"}}}`)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -1293,7 +1103,7 @@ func TestRevokeCertificate_Success(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
 			certStore:   mockCertStore,
-			revokeFn: func(certificate *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+			revokeFn: func(certificate *x509.Certificate, _ pkgca.RevokeOptions) error {
 				return nil
 			},
 		}
@@ -1306,10 +1116,10 @@ func TestRevokeCertificate_Success(t *testing.T) {
 		handlers.RevokeCertificate(rec, req)
 
 		assert.Equal(t, http.StatusOK, writer.lastStatus)
-		payload, ok := writer.lastPayload.(RevokeCertificateResponse)
-		require.True(t, ok)
-		assert.Equal(t, "abc123", payload.Serial)
-		assert.Equal(t, "REVOKED", payload.Status)
+		payload := decodeProtoBody(t, rec)
+		assert.Equal(t, "abc123", payload["serial"])
+		// Proto certificateStatus is the enum CERTIFICATE_STATUS_REVOKED (jsonName camelCase).
+		assert.Equal(t, "CERTIFICATE_STATUS_REVOKED", payload["certificateStatus"])
 	})
 
 	t.Run("revokes certificate with reason", func(t *testing.T) {
@@ -1326,11 +1136,8 @@ func TestRevokeCertificate_Success(t *testing.T) {
 		}
 		handlers, writer := newTestHandlers(mockCA)
 
-		reqBody := CertificateRevokeRequest{
-			Reason:     1, // keyCompromise
-			DeleteKeys: false,
-		}
-		body, _ := json.Marshal(reqBody)
+		// Proto RevokeCertificateRequest uses RevocationReason enum.
+		body := []byte(`{"reason":"REVOCATION_REASON_KEY_COMPROMISE","deleteKeys":false}`)
 
 		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/abc123", bytes.NewReader(body))
 		req = mux.SetURLVars(req, map[string]string{"serial": "abc123"})
@@ -1340,9 +1147,8 @@ func TestRevokeCertificate_Success(t *testing.T) {
 		handlers.RevokeCertificate(rec, req)
 
 		assert.Equal(t, http.StatusOK, writer.lastStatus)
-		payload, ok := writer.lastPayload.(RevokeCertificateResponse)
-		require.True(t, ok)
-		assert.Equal(t, 1, payload.Reason)
+		payload := decodeProtoBody(t, rec)
+		assert.Equal(t, "REVOCATION_REASON_KEY_COMPROMISE", payload["reason"])
 	})
 
 	t.Run("revokes certificate and deletes keys", func(t *testing.T) {
@@ -1353,22 +1159,18 @@ func TestRevokeCertificate_Success(t *testing.T) {
 			},
 		}
 
-		var capturedKeyAttrs *xkmssdk.KeyAttributes
+		var capturedDeleteKeys bool
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
 			certStore:   mockCertStore,
-			revokeFn: func(certificate *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
-				capturedKeyAttrs = keyAttrs
+			revokeFn: func(_ *x509.Certificate, opts pkgca.RevokeOptions) error {
+				capturedDeleteKeys = opts.DeleteKeys
 				return nil
 			},
 		}
 		handlers, writer := newTestHandlers(mockCA)
 
-		reqBody := CertificateRevokeRequest{
-			Reason:     3, // affiliationChanged
-			DeleteKeys: true,
-		}
-		body, _ := json.Marshal(reqBody)
+		body := []byte(`{"reason":"REVOCATION_REASON_AFFILIATION_CHANGED","deleteKeys":true}`)
 
 		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/abc123", bytes.NewReader(body))
 		req = mux.SetURLVars(req, map[string]string{"serial": "abc123"})
@@ -1378,7 +1180,7 @@ func TestRevokeCertificate_Success(t *testing.T) {
 		handlers.RevokeCertificate(rec, req)
 
 		assert.Equal(t, http.StatusOK, writer.lastStatus)
-		assert.NotNil(t, capturedKeyAttrs)
+		assert.True(t, capturedDeleteKeys)
 	})
 }
 
@@ -1392,7 +1194,7 @@ func TestRevokeCertificate_Error(t *testing.T) {
 
 		handlers.RevokeCertificate(rec, req)
 
-		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+		assert.Equal(t, http.StatusServiceUnavailable, writer.lastStatus)
 	})
 
 	t.Run("returns error when serial is empty", func(t *testing.T) {
@@ -1466,7 +1268,7 @@ func TestRevokeCertificate_Error(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
 			certStore:   mockCertStore,
-			revokeFn: func(certificate *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+			revokeFn: func(certificate *x509.Certificate, _ pkgca.RevokeOptions) error {
 				return errors.New("revocation failed")
 			},
 		}
@@ -1507,10 +1309,12 @@ func TestGetBundle_Success(t *testing.T) {
 		handlers.GetBundle(rec, req)
 
 		assert.Equal(t, http.StatusOK, writer.lastStatus)
-		payload, ok := writer.lastPayload.(BundleResponse)
-		require.True(t, ok)
-		assert.NotEmpty(t, payload.Bundle)
-		assert.GreaterOrEqual(t, payload.CertCount, 1)
+		payload := decodeProtoBody(t, rec)
+		bundle, ok := payload["bundle"].(map[string]interface{})
+		require.True(t, ok, "payload.bundle should be an object")
+		// Proto bundle.pem is `bytes` so protojson encodes it as base64.
+		assert.NotEmpty(t, bundle["pem"])
+		assert.GreaterOrEqual(t, int(bundle["certCount"].(float64)), 1)
 	})
 
 	t.Run("respects store_type parameter", func(t *testing.T) {
@@ -1569,7 +1373,7 @@ func TestGetBundle_Error(t *testing.T) {
 
 		handlers.GetBundle(rec, req)
 
-		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+		assert.Equal(t, http.StatusServiceUnavailable, writer.lastStatus)
 	})
 
 	t.Run("returns error for invalid algorithm", func(t *testing.T) {
@@ -1648,11 +1452,14 @@ func TestGetCRL_Success(t *testing.T) {
 		handlers.GetCRL(rec, req)
 
 		assert.Equal(t, http.StatusOK, writer.lastStatus)
-		payload, ok := writer.lastPayload.(CRLResponse)
-		require.True(t, ok)
-		assert.NotEmpty(t, payload.CRL)
-		assert.Equal(t, 1, payload.RevokedCount)
-		assert.NotEmpty(t, payload.RevokedCerts)
+		payload := decodeProtoBody(t, rec)
+		crl, ok := payload["crl"].(map[string]interface{})
+		require.True(t, ok, "payload.crl should be an object")
+		assert.NotEmpty(t, crl["data"])
+		assert.Equal(t, float64(1), crl["revokedCount"])
+		revoked, ok := crl["revokedCerts"].([]interface{})
+		require.True(t, ok, "payload.crl.revokedCerts should be an array")
+		assert.NotEmpty(t, revoked)
 	})
 }
 
@@ -1665,7 +1472,7 @@ func TestGetCRL_Error(t *testing.T) {
 
 		handlers.GetCRL(rec, req)
 
-		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+		assert.Equal(t, http.StatusServiceUnavailable, writer.lastStatus)
 	})
 
 	t.Run("returns error when CRL generation not supported", func(t *testing.T) {

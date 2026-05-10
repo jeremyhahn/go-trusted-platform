@@ -65,13 +65,18 @@ type CertificateRevokeRequest struct {
 	DeleteKeys bool `json:"delete_keys,omitempty"`
 }
 
-// CertificateResponse represents a certificate in responses
+// CertificateResponse represents a certificate in responses.
+//
+// Timestamps are RFC3339Nano strings rather than Unix-seconds integers so
+// that the protojson-based Go SDK (which decodes responses into proto
+// types whose timestamp fields are google.protobuf.Timestamp) and the
+// WebUI's `new Date(...)` parser both accept them as-is.
 type CertificateResponse struct {
 	Serial             string         `json:"serial"`
 	Subject            SubjectRequest `json:"subject"`
 	Issuer             string         `json:"issuer"`
-	NotBefore          int64          `json:"not_before"`
-	NotAfter           int64          `json:"not_after"`
+	NotBefore          string         `json:"not_before"`
+	NotAfter           string         `json:"not_after"`
 	Status             string         `json:"status"`
 	KeyAlgorithm       string         `json:"key_algorithm"`
 	SignatureAlgorithm string         `json:"signature_algorithm"`
@@ -79,13 +84,14 @@ type CertificateResponse struct {
 	PEM                string         `json:"pem,omitempty"`
 }
 
-// CertificateSummary contains a summary of a certificate for list responses
+// CertificateSummary contains a summary of a certificate for list responses.
+// Timestamps are RFC3339Nano strings — see CertificateResponse for rationale.
 type CertificateSummary struct {
 	Serial       string `json:"serial"`
 	CommonName   string `json:"common_name"`
 	Issuer       string `json:"issuer"`
-	NotBefore    int64  `json:"not_before"`
-	NotAfter     int64  `json:"not_after"`
+	NotBefore    string `json:"not_before"`
+	NotAfter     string `json:"not_after"`
 	Status       string `json:"status"`
 	KeyAlgorithm string `json:"key_algorithm"`
 }
@@ -94,28 +100,28 @@ type CertificateSummary struct {
 type CertificateListResponse struct {
 	PaginatedResponse
 	Certificates []CertificateSummary `json:"certificates"`
-	Timestamp    int64                `json:"timestamp"`
+	Timestamp    string               `json:"timestamp"`
 }
 
 // GetCertificateResponse is the response for getting a certificate
 type GetCertificateResponse struct {
 	Certificate *CertificateResponse `json:"certificate"`
-	Timestamp   int64                `json:"timestamp"`
+	Timestamp   string               `json:"timestamp"`
 }
 
 // IssueCertificateResponse is the response for issuing a certificate
 type IssueCertificateResponse struct {
 	Certificate *CertificateResponse `json:"certificate"`
-	Timestamp   int64                `json:"timestamp"`
+	Timestamp   string               `json:"timestamp"`
 }
 
 // RevokeCertificateResponse is the response for revoking a certificate
 type RevokeCertificateResponse struct {
 	Serial    string `json:"serial"`
 	Status    string `json:"status"`
-	RevokedAt int64  `json:"revoked_at"`
+	RevokedAt string `json:"revoked_at"`
 	Reason    int    `json:"reason"`
-	Timestamp int64  `json:"timestamp"`
+	Timestamp string `json:"timestamp"`
 }
 
 // KeyStoreInfo contains information about a key store
@@ -135,24 +141,24 @@ type CAInfoResponse struct {
 	KeyStores        []KeyStoreInfo       `json:"key_stores,omitempty"`
 	DefaultAlgorithm string               `json:"default_algorithm,omitempty"`
 	DefaultValidity  int                  `json:"default_validity_days,omitempty"`
-	Timestamp        int64                `json:"timestamp"`
+	Timestamp        string               `json:"timestamp"`
 }
 
 // RevokedCertEntry represents a revoked certificate entry
 type RevokedCertEntry struct {
 	Serial         string `json:"serial"`
-	RevocationTime int64  `json:"revocation_time"`
+	RevocationTime string `json:"revocation_time"`
 	Reason         int    `json:"reason"`
 }
 
 // CRLResponse contains CRL information
 type CRLResponse struct {
 	CRL          []byte             `json:"crl"`
-	LastUpdate   int64              `json:"last_update"`
-	NextUpdate   int64              `json:"next_update"`
+	LastUpdate   string             `json:"last_update"`
+	NextUpdate   string             `json:"next_update"`
 	RevokedCount int                `json:"revoked_count"`
 	RevokedCerts []RevokedCertEntry `json:"revoked_certs,omitempty"`
-	Timestamp    int64              `json:"timestamp"`
+	Timestamp    string             `json:"timestamp"`
 }
 
 // BundleResponse contains CA bundle information
@@ -160,12 +166,12 @@ type BundleResponse struct {
 	Bundle       []byte               `json:"bundle"`
 	Certificates []CertificateSummary `json:"certificates,omitempty"`
 	CertCount    int                  `json:"cert_count"`
-	Timestamp    int64                `json:"timestamp"`
+	Timestamp    string               `json:"timestamp"`
 }
 
 // SuccessResponse is a generic success response
 type SuccessResponse struct {
 	Success   bool   `json:"success"`
 	Message   string `json:"message,omitempty"`
-	Timestamp int64  `json:"timestamp,omitempty"`
+	Timestamp string `json:"timestamp,omitempty"`
 }

@@ -2,22 +2,59 @@
 # Integration test runner for go-trusted-platform devcontainer.
 #
 # This script sets up the complete test environment (OVS, swtpm, platformd)
-# and runs all integration test packages sequentially.
+# and runs integration test packages.
 #
 # Usage:
-#   run-integration-tests.sh [BUILD_TAGS]
+#   run-integration-tests.sh [TARGET] [BUILD_TAGS]
 #
 # Arguments:
+#   TARGET     - Optional target keyword selecting which package(s) to run.
+#                Known targets: all, bmc, ceremony, piv, luks, fido2, device.
+#                If the first argument is not a known target, it is treated
+#                as BUILD_TAGS (backward-compatible with the prior 1-arg form).
+#                Default: all
 #   BUILD_TAGS - Space-separated list of build tags
 #                (default: "integration codec_msgpack codec_json codec_cbor")
 #
-# Example:
-#   run-integration-tests.sh "integration codec_msgpack codec_json codec_cbor"
+# Examples:
+#   run-integration-tests.sh
+#   run-integration-tests.sh all
+#   run-integration-tests.sh ceremony
+#   run-integration-tests.sh luks "integration codec_msgpack codec_json codec_cbor"
+#   run-integration-tests.sh "integration codec_msgpack"      # legacy form
 
 set -uo pipefail
 
-# Build tags passed from Makefile (space-separated list, not the -tags flag)
-BUILD_TAGS="${1:-integration codec_msgpack codec_json codec_cbor}"
+# Known target keywords mapped to their Go test package paths. A single-word
+# first argument matching a key here selects that target; anything else is
+# treated as the legacy BUILD_TAGS argument.
+declare -A TARGET_PACKAGES=(
+    [all]=""
+    [bmc]="./test/integration/bmc/..."
+    [bootstrap]="./test/integration/bootstrap/..."
+    [ca]="./test/integration/ca/..."
+    [ceremony]="./test/integration/ceremony/..."
+    [piv]="./test/integration/piv/..."
+    [luks]="./test/integration/luks/..."
+    [fido2]="./test/integration/fido2/..."
+    [device]="./test/integration/device/..."
+    [tpm]="./test/integration/tpm/..."
+    [cold-start]="./test/integration/cold_start/..."
+    [restroutes]="./test/integration/restroutes/..."
+)
+
+RUN_TARGET="all"
+ARG1="${1:-}"
+ARG2="${2:-}"
+
+if [ -n "$ARG1" ] && [ -n "${TARGET_PACKAGES[$ARG1]+set}" ]; then
+    RUN_TARGET="$ARG1"
+    BUILD_TAGS="${ARG2:-integration codec_msgpack codec_json codec_cbor}"
+else
+    # Legacy single-arg form: treat ARG1 as BUILD_TAGS.
+    BUILD_TAGS="${ARG1:-integration codec_msgpack codec_json codec_cbor}"
+fi
+
 BUILD_TAGS_ARG="-tags ${BUILD_TAGS}"
 
 PLATFORMD_PID=""
@@ -203,9 +240,11 @@ build_binaries() {
     # ldflags to inject version and name into binaries
     LDFLAGS="-X github.com/jeremyhahn/go-trusted-platform/pkg/app.Version=0.0.0-test -X github.com/jeremyhahn/go-trusted-platform/pkg/app.Name=trusted-platform"
 
-    # Build platformd
+    # Build platformd. -buildvcs=false because the bind-mounted /workspace
+    # has a .git directory the container's git can read but with permission
+    # quirks that fail VCS stamping; the test build doesn't need VCS info.
     echo "Building platformd..."
-    if ! go build -tags "${BUILD_TAGS}" \
+    if ! go build -buildvcs=false -tags "${BUILD_TAGS}" \
         -ldflags "${LDFLAGS}" \
         -o /tmp/platformd ./cmd/platformd/; then
         echo "FATAL: platformd build failed"
@@ -215,7 +254,7 @@ build_binaries() {
 
     # Build platformctl
     echo "Building platformctl..."
-    if ! go build -tags "${BUILD_TAGS}" \
+    if ! go build -buildvcs=false -tags "${BUILD_TAGS}" \
         -ldflags "${LDFLAGS}" \
         -o /tmp/platformctl ./cmd/platformctl/; then
         echo "FATAL: platformctl build failed"
@@ -298,9 +337,11 @@ setup_env_vars() {
     # Enable Raft cluster simulation tests
     export RAFT_CLUSTER_TEST="1"
 
-    # Socket path for Unix adapters (daemon, sdn, vtpm, overlay)
+    # Socket path for Unix adapters (daemon, sdn, vtpm, overlay, and the new
+    # ceremony/piv/luks/fido2 suites that share the adapter pattern).
     export PLATFORMD_SOCKET="/run/platformd.sock"
     export PLATFORM_SOCKET_PATH="/run/platformd.sock"
+    export PLATFORM_UNIX_SOCKET="/run/platformd.sock"
     export VTPM_SOCKET_PATH="/run/platformd.sock"
 
     # mTLS client certificate paths for test adapters
@@ -327,8 +368,10 @@ setup_env_vars() {
     export QUIC_SERVER_ADDR="localhost:9444"
     export VTPM_QUIC_ENDPOINT="localhost:9444"
 
-    # MCP endpoint (daemon adapter uses HTTP, vtpm/sdn adapters use stdio)
-    export PLATFORM_MCP_ENDPOINT="localhost:9445"
+    # MCP endpoint. The daemon adapter uses plain HTTP (see MCP adapter docs in
+    # CLAUDE.md); vtpm/sdn-style adapters may use stdio. Ceremony/PIV/LUKS/FIDO2
+    # adapters consume the HTTP form, so expose both.
+    export PLATFORM_MCP_ENDPOINT="http://localhost:9445"
     export VTPM_MCP_ENDPOINT="http://localhost:9445"
     export PLATFORM_MCP_PATH="/tmp/platformd"
 
@@ -345,6 +388,7 @@ setup_env_vars() {
     fi
 
     echo "  PLATFORMD_SOCKET=$PLATFORMD_SOCKET"
+    echo "  PLATFORM_UNIX_SOCKET=$PLATFORM_UNIX_SOCKET"
     echo "  PLATFORM_CLIENT_CERT=$PLATFORM_CLIENT_CERT (bundle)"
     echo "  PLATFORM_CLIENT_KEY=$PLATFORM_CLIENT_KEY (bundle)"
     echo "  PLATFORM_CA_CERT=$PLATFORM_CA_CERT"
@@ -364,6 +408,7 @@ setup_env_vars() {
 echo "============================================="
 echo "  go-trusted-platform Integration Tests"
 echo "============================================="
+echo "Target:     ${RUN_TARGET}"
 echo "Build tags: ${BUILD_TAGS}"
 echo ""
 
@@ -379,8 +424,20 @@ start_ovs || echo "WARNING: OVS setup failed, SDN/network tests may skip"
 # swtpm is required for vTPM tests (non-fatal if unavailable)
 start_swtpm || echo "WARNING: swtpm setup failed, vTPM tests may skip"
 
-# platformd is required for standalone protocol tests (non-fatal if unavailable)
-start_platformd || echo "WARNING: platformd setup failed, some protocol tests may skip"
+# Cold-start scenario manages its own platformd lifecycle; the shared
+# auto-unsealed daemon must NOT be running when the harness boots a
+# fresh init-only daemon. Skip the shared start and seed the cold-start
+# env vars instead.
+if [ "$RUN_TARGET" = "cold-start" ]; then
+    echo "=== cold-start target: skipping shared platformd ==="
+    rm -rf /tmp/platformd-cold-start
+    mkdir -p /tmp/platformd-cold-start
+    export PLATFORM_COLD_START_DIR="/tmp/platformd-cold-start"
+    export PLATFORM_COLD_START_BIN="/tmp/platformd"
+else
+    # platformd is required for standalone protocol tests (non-fatal if unavailable)
+    start_platformd || echo "WARNING: platformd setup failed, some protocol tests may skip"
+fi
 
 # Phase 3: Configure environment for test adapters
 setup_env_vars
@@ -408,20 +465,30 @@ run_test() {
     fi
 }
 
-# Standalone packages (no daemon needed)
-run_test ./test/integration/datastore/...
-run_test ./test/integration/cluster/...
+if [ "$RUN_TARGET" = "all" ]; then
+    # Standalone packages (no daemon needed)
+    run_test ./test/integration/datastore/...
+    run_test ./test/integration/cluster/...
 
-# All daemon-dependent packages (use the single shared platformd instance)
-run_test ./test/integration/daemon/...
-run_test ./test/integration/ca/...
-run_test ./test/integration/vtpm/...
-run_test ./test/integration/provisioning/...
-# TODO: device integration tests need CRUD routes wired into platformd
-# run_test ./test/integration/device/...
-run_test ./test/integration/sdn/...
-run_test ./test/integration/network/...
-run_test ./test/integration/quic/...
+    # All daemon-dependent packages (use the single shared platformd instance)
+    run_test ./test/integration/daemon/...
+    run_test ./test/integration/ca/...
+    run_test ./test/integration/vtpm/...
+    run_test ./test/integration/provisioning/...
+    # TODO: device integration tests need CRUD routes wired into platformd
+    # run_test ./test/integration/device/...
+    run_test ./test/integration/sdn/...
+    run_test ./test/integration/network/...
+    run_test ./test/integration/quic/...
+else
+    # Single-target run: dispatch via the TARGET_PACKAGES map.
+    pkg="${TARGET_PACKAGES[$RUN_TARGET]}"
+    if [ -z "$pkg" ]; then
+        echo "FATAL: unknown target '$RUN_TARGET'"
+        exit 2
+    fi
+    run_test "$pkg"
+fi
 
 echo ""
 echo "=== platformd stderr log (post-test) ==="

@@ -20,17 +20,22 @@ import (
 )
 
 func TestHealthResponse_JSON(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
 	resp := HealthResponse{
-		Status: "healthy",
-		Components: []ComponentHealthResponse{
-			{
-				Name:      "test-component",
-				Status:    "healthy",
-				Message:   "all good",
-				LastCheck: time.Now().Unix(),
+		Health: PlatformHealth{
+			Healthy:   true,
+			Status:    "healthy",
+			Timestamp: now,
+			Services: []ServiceHealth{
+				{
+					Name:      "test-component",
+					Healthy:   true,
+					Status:    "healthy",
+					Message:   "all good",
+					LastCheck: now,
+				},
 			},
 		},
-		Timestamp: time.Now().Unix(),
 	}
 
 	data, err := json.Marshal(resp)
@@ -43,12 +48,44 @@ func TestHealthResponse_JSON(t *testing.T) {
 		t.Fatalf("failed to unmarshal HealthResponse: %v", err)
 	}
 
-	if unmarshaled.Status != resp.Status {
-		t.Errorf("expected status %s, got %s", resp.Status, unmarshaled.Status)
+	if unmarshaled.Health.Status != resp.Health.Status {
+		t.Errorf("expected status %s, got %s", resp.Health.Status, unmarshaled.Health.Status)
+	}
+	if len(unmarshaled.Health.Services) != len(resp.Health.Services) {
+		t.Errorf("expected %d services, got %d", len(resp.Health.Services), len(unmarshaled.Health.Services))
+	}
+}
+
+func TestMetricsResponse_JSON(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	resp := MetricsResponse{
+		Metrics: PlatformMetrics{
+			CPUUsagePercent:    12.5,
+			MemoryUsagePercent: 47.0,
+			DiskUsagePercent:   31.2,
+			OverallStatus:      "healthy",
+			Services:           []ServiceMetricResponse{},
+			Timestamp:          now,
+		},
 	}
 
-	if len(unmarshaled.Components) != len(resp.Components) {
-		t.Errorf("expected %d components, got %d", len(resp.Components), len(unmarshaled.Components))
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("failed to marshal MetricsResponse: %v", err)
+	}
+
+	var unmarshaled MetricsResponse
+	if err := json.Unmarshal(data, &unmarshaled); err != nil {
+		t.Fatalf("failed to unmarshal MetricsResponse: %v", err)
+	}
+	if unmarshaled.Metrics.CPUUsagePercent != resp.Metrics.CPUUsagePercent {
+		t.Errorf("CPU mismatch")
+	}
+	if unmarshaled.Metrics.MemoryUsagePercent != resp.Metrics.MemoryUsagePercent {
+		t.Errorf("memory mismatch")
+	}
+	if unmarshaled.Metrics.DiskUsagePercent != resp.Metrics.DiskUsagePercent {
+		t.Errorf("disk mismatch")
 	}
 }
 

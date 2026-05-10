@@ -181,7 +181,7 @@ func newKeyListCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	}
 
 	cmd.Flags().Int32VarP(&limit, "limit", "l", 50, "maximum number of keys to return")
-	cmd.Flags().StringVarP(&cursor, "cursor", "c", "", "pagination cursor for next page")
+	cmd.Flags().StringVar(&cursor, "cursor", "", "pagination cursor for next page")
 
 	return cmd
 }

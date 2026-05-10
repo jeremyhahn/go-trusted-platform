@@ -33,7 +33,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // mockTPM2IDevIDService implements xkmssdk.TrustedPlatformModule for IDevID/IAK testing

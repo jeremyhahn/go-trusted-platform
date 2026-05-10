@@ -22,7 +22,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // Install performs the installation workflow

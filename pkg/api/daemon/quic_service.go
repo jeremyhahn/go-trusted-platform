@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	goca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
@@ -31,7 +31,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // QUICServiceHandler implements quic.Handler interface and delegates to daemon services.
@@ -60,6 +60,12 @@ type QUICServiceHandler struct {
 	daemonService      *Service
 	overlayHandler     *quic.OverlayHandler
 	gatewayHandler     *quic.GatewayHandler
+	switchService      switchServiceProvider
+	// Phase 3.5 handlers - wired via Set*Service on the daemon.
+	ceremonyQUIC       *ceremonyQUICHandlers
+	pivQUIC            *pivQUICHandlers
+	luksQUIC           *luksQUICHandlers
+	fido2QUIC          *fido2QUICHandlers
 }
 
 // QUICServiceHandlerOption is a functional option for configuring QUICServiceHandler
@@ -230,6 +236,12 @@ func (h *QUICServiceHandler) SetVTPMService(svc vtpm.VTPMService) {
 // SetDeviceService sets the Device service after construction
 func (h *QUICServiceHandler) SetDeviceService(svc device.DeviceService) {
 	h.deviceService = svc
+}
+
+// SetDeviceProfileService sets the Device Profile service after construction.
+// Required for the QUIC profile sub-opcodes (OpDeviceGetProfile, OpDeviceListProfiles, etc.).
+func (h *QUICServiceHandler) SetDeviceProfileService(svc device.DeviceProfileService) {
+	h.profileService = svc
 }
 
 // SetDNSService sets the DNS service after construction
@@ -450,6 +462,25 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Reques
 	// VM Extended Operations (0xB6-0xBE)
 	case req.Opcode >= quic.OpVMRestart && req.Opcode <= quic.OpVMSnapshotList:
 		return h.handleVMServiceOperation(ctx, req)
+
+	// Switch Management Category Opcode (0xCC)
+	case req.Opcode == quic.OpSwitchCategory:
+		return h.handleSwitchCategory(ctx, req)
+
+	// Phase 3.5 category opcodes (0x9A-0x9D): ceremony, piv, luks, fido2.
+	case req.Opcode == quic.OpCeremonyCategory:
+		return h.handleCeremonyCategory(ctx, req)
+	case req.Opcode == quic.OpPIVCategory:
+		return h.handlePIVCategory(ctx, req)
+	case req.Opcode == quic.OpLUKSCategory:
+		return h.handleLUKSCategory(ctx, req)
+	case req.Opcode == quic.OpFIDO2Category:
+		return h.handleFIDO2Category(ctx, req)
+
+	// Tenant barrier category opcode (0x9E) - multiplexes per-tenant
+	// barrier Init/Unseal/Seal/Status sub-operations.
+	case req.Opcode == quic.OpTenantBarrierCategory:
+		return h.handleTenantBarrierCategory(ctx, req)
 
 	// KMS Key Management Operations (0xC0-0xCF)
 	case req.Opcode >= quic.OpKMSGenerateKey && req.Opcode <= quic.OpKMSBackendStatus:
@@ -1260,4 +1291,70 @@ func protocolStatus(enabled bool) string {
 		return "enabled"
 	}
 	return "disabled"
+}
+
+// handleCeremonyCategory handles the Phase 3.5 ceremony category opcode.
+// The first byte of the payload is the sub-opcode.
+func (h *QUICServiceHandler) handleCeremonyCategory(ctx context.Context, req *quic.Request) *quic.Response {
+	if h.ceremonyQUIC == nil {
+		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "ceremony"})
+	}
+	return h.ceremonyQUIC.Handle(ctx, req)
+}
+
+// handlePIVCategory handles the Phase 3.5 PIV category opcode.
+func (h *QUICServiceHandler) handlePIVCategory(ctx context.Context, req *quic.Request) *quic.Response {
+	if h.pivQUIC == nil {
+		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "piv"})
+	}
+	return h.pivQUIC.Handle(ctx, req)
+}
+
+// handleLUKSCategory handles the Phase 3.5 LUKS category opcode.
+func (h *QUICServiceHandler) handleLUKSCategory(ctx context.Context, req *quic.Request) *quic.Response {
+	if h.luksQUIC == nil {
+		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "luks"})
+	}
+	return h.luksQUIC.Handle(ctx, req)
+}
+
+// handleFIDO2Category handles the Phase 3.5 FIDO2 category opcode.
+func (h *QUICServiceHandler) handleFIDO2Category(ctx context.Context, req *quic.Request) *quic.Response {
+	if h.fido2QUIC == nil {
+		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "fido2"})
+	}
+	return h.fido2QUIC.Handle(ctx, req)
+}
+
+// SetCeremonyService wires the ceremony service into the QUIC handler.
+// Passing nil is a no-op.
+func (h *QUICServiceHandler) SetCeremonyService(svc *CeremonyService) {
+	if svc == nil {
+		return
+	}
+	h.ceremonyQUIC = &ceremonyQUICHandlers{service: svc}
+}
+
+// SetPIVService wires the PIV service into the QUIC handler.
+func (h *QUICServiceHandler) SetPIVService(svc *PIVService) {
+	if svc == nil {
+		return
+	}
+	h.pivQUIC = &pivQUICHandlers{service: svc}
+}
+
+// SetLUKSService wires the LUKS service into the QUIC handler.
+func (h *QUICServiceHandler) SetLUKSService(svc *LUKSService) {
+	if svc == nil {
+		return
+	}
+	h.luksQUIC = &luksQUICHandlers{service: svc}
+}
+
+// SetFIDO2Service wires the FIDO2 service into the QUIC handler.
+func (h *QUICServiceHandler) SetFIDO2Service(svc *FIDO2Service) {
+	if svc == nil {
+		return
+	}
+	h.fido2QUIC = &fido2QUICHandlers{service: svc}
 }

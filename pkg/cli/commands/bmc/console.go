@@ -104,6 +104,11 @@ Examples:
 		"Delay between consecutive --send strings (default 500ms). Some BMCs and "+
 			"firmware command interpreters drop bytes that arrive faster than they "+
 			"can echo, so a small delay between commands is the safe default.")
+	cmd.Flags().Uint8Var(&standalone.solInstance, "sol-instance", 0,
+		"IPMI 2.0 SOL payload instance to activate against (Table 24-2). "+
+			"Zero (default) consults the platform quirk registry (e.g. X10SDV → 0x02 "+
+			"because SOL is wired to COM2/ttyS1) and falls back to 0x01. Set "+
+			"explicitly to diagnose new hardware before adding a quirk.")
 
 	return cmd
 }
@@ -301,15 +306,24 @@ func runConsoleInteractive(ctx context.Context, sol *bmc.SOLSession, host string
 // runConsoleLogMode is the non-interactive capture path. It writes received
 // SOL bytes to logFile (or stdout when empty) until the BMC closes the
 // session, the user sends SIGINT, or the context is cancelled.
+//
+// The SOL reader is wrapped in a flushing writer so every packet is synced
+// to disk immediately — silent SOL sessions (BIOS redirection off, wrong
+// COM port) must produce a zero-byte file we can rely on rather than a
+// file that could still hold buffered bytes at termination.
 func runConsoleLogMode(ctx context.Context, sol *bmc.SOLSession, logFile string) error {
 	var dst io.Writer = os.Stdout
+	var syncer interface{ Sync() error }
 	if logFile != "" {
-		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		// O_TRUNC so repeated captures don't confuse the operator with
+		// old bytes from a prior run.
+		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 		if err != nil {
 			return ErrBMCConsoleActivate{Cause: err}
 		}
 		defer f.Close()
 		dst = f
+		syncer = f
 		fmt.Fprintf(os.Stderr, "Capturing SOL session to %s. Press Ctrl+C to stop.\n", logFile)
 	}
 
@@ -320,8 +334,25 @@ func runConsoleLogMode(ctx context.Context, sol *bmc.SOLSession, logFile string)
 	errCh := make(chan error, 2)
 
 	go func() {
-		_, copyErr := io.Copy(dst, sol)
-		errCh <- copyErr
+		// Custom copy loop flushing to disk after every SOL packet so
+		// termination never loses in-flight bytes.
+		buf := make([]byte, 32*1024)
+		for {
+			n, rerr := sol.Read(buf)
+			if n > 0 {
+				if _, werr := dst.Write(buf[:n]); werr != nil {
+					errCh <- werr
+					return
+				}
+				if syncer != nil {
+					_ = syncer.Sync()
+				}
+			}
+			if rerr != nil {
+				errCh <- rerr
+				return
+			}
+		}
 	}()
 
 	go func() {
@@ -334,6 +365,23 @@ func runConsoleLogMode(ctx context.Context, sol *bmc.SOLSession, logFile string)
 	}()
 
 	err := <-errCh
+
+	// A successful Activate Payload followed by zero data bytes for the
+	// lifetime of the session is the canonical signature of a wrong SOL
+	// payload instance — the BMC routes serial bytes to a different
+	// instance (e.g. X10SDV-TP8F → 0x02 because SOL is wired to COM2)
+	// and our receiver on 0x01 sees nothing. Surface this loudly so
+	// operators don't conclude "SOL is broken" and waste hours debugging
+	// before they consider channel selection.
+	if sol.BytesReceived() == 0 {
+		fmt.Fprintf(os.Stderr,
+			"WARNING: SOL session activated on payload instance 0x%02X but "+
+				"received zero data bytes. This usually means the BMC routes "+
+				"serial-console output to a different instance (common on "+
+				"Supermicro X10SDV: instance 0x02 / COM2). Try --sol-instance 2.\n",
+			sol.PayloadInstance())
+	}
+
 	if errors.Is(err, errCtrlX) || errors.Is(err, io.EOF) {
 		return nil
 	}

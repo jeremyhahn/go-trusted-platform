@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"strings"
 
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // KeyConfig is a YAML/JSON-serializable configuration for cryptographic keys.

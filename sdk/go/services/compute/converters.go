@@ -22,7 +22,7 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 )
 
-// Proto-to-domain enum maps
+// VM Proto-to-domain enum maps
 
 // protoVMStateToState maps proto VMState to domain VMState.
 var protoVMStateToState = map[platformv1.VMState]VMState{
@@ -80,7 +80,7 @@ var protoNetworkModelToModel = map[platformv1.NetworkModel]NetworkModel{
 	platformv1.NetworkModel_NETWORK_MODEL_RTL8139:     NetworkModelRTL8139,
 }
 
-// Domain-to-proto enum maps
+// VM Domain-to-proto enum maps
 
 // firmwareToProto maps domain FirmwareType to proto FirmwareType.
 var firmwareToProto = map[FirmwareType]platformv1.FirmwareType{
@@ -111,7 +111,7 @@ var vmStateToProto = map[VMState]platformv1.VMState{
 	StateError:       platformv1.VMState_VM_STATE_ERROR,
 }
 
-// String-to-domain enum maps (for CLI input parsing)
+// VM String-to-domain enum maps (for CLI input parsing)
 
 // StringToFirmwareType maps user-facing firmware strings to domain FirmwareType.
 var StringToFirmwareType = map[string]FirmwareType{
@@ -173,7 +173,7 @@ func FirmwareTypeFromProto(f platformv1.FirmwareType) FirmwareType {
 	return FirmwareUnspecified
 }
 
-// Proto-to-domain converters
+// VM Proto-to-domain converters
 
 // VMFromProto converts a platformv1.VM to a domain VM.
 func VMFromProto(p *platformv1.VM) *VM {
@@ -373,7 +373,7 @@ func statusFromProto(p *platformv1.Status) *VMStatus {
 	}
 }
 
-// Domain-to-proto converters
+// VM Domain-to-proto converters
 
 // createParamsToProto converts CreateVMParams to a platformv1.CreateVMRequest.
 func createParamsToProto(params *CreateVMParams) *platformv1.CreateVMRequest {
@@ -428,6 +428,397 @@ func listParamsToProto(params *ListVMsParams) *platformv1.ListVMsRequest {
 			ps, ok := vmStateToProto[s]
 			if !ok {
 				ps = platformv1.VMState_VM_STATE_UNSPECIFIED
+			}
+			protoStates[i] = ps
+		}
+		req.States = protoStates
+	}
+
+	if len(params.Labels) > 0 {
+		req.Selector = &platformv1.LabelSelector{
+			MatchLabels: params.Labels,
+		}
+	}
+
+	return req
+}
+
+// Container Proto-to-domain enum maps
+
+// protoContainerStateToState maps proto ContainerState to domain ContainerState.
+var protoContainerStateToState = map[platformv1.ContainerState]ContainerState{
+	platformv1.ContainerState_CONTAINER_STATE_UNSPECIFIED: ContainerStateUnspecified,
+	platformv1.ContainerState_CONTAINER_STATE_CREATED:     ContainerStateCreated,
+	platformv1.ContainerState_CONTAINER_STATE_STARTING:    ContainerStateStarting,
+	platformv1.ContainerState_CONTAINER_STATE_RUNNING:     ContainerStateRunning,
+	platformv1.ContainerState_CONTAINER_STATE_PAUSED:      ContainerStatePaused,
+	platformv1.ContainerState_CONTAINER_STATE_STOPPING:    ContainerStateStopping,
+	platformv1.ContainerState_CONTAINER_STATE_STOPPED:     ContainerStateStopped,
+	platformv1.ContainerState_CONTAINER_STATE_EXITED:      ContainerStateExited,
+	platformv1.ContainerState_CONTAINER_STATE_ERROR:       ContainerStateError,
+}
+
+// protoRestartPolicyToPolicy maps proto RestartPolicy to domain RestartPolicy.
+var protoRestartPolicyToPolicy = map[platformv1.RestartPolicy]RestartPolicy{
+	platformv1.RestartPolicy_RESTART_POLICY_UNSPECIFIED:    RestartPolicyUnspecified,
+	platformv1.RestartPolicy_RESTART_POLICY_NO:             RestartPolicyNo,
+	platformv1.RestartPolicy_RESTART_POLICY_ON_FAILURE:     RestartPolicyOnFailure,
+	platformv1.RestartPolicy_RESTART_POLICY_ALWAYS:         RestartPolicyAlways,
+	platformv1.RestartPolicy_RESTART_POLICY_UNLESS_STOPPED: RestartPolicyUnlessStopped,
+}
+
+// Container Domain-to-proto enum maps
+
+// containerStateToProto maps domain ContainerState to proto ContainerState.
+var containerStateToProto = map[ContainerState]platformv1.ContainerState{
+	ContainerStateUnspecified: platformv1.ContainerState_CONTAINER_STATE_UNSPECIFIED,
+	ContainerStateCreated:     platformv1.ContainerState_CONTAINER_STATE_CREATED,
+	ContainerStateStarting:    platformv1.ContainerState_CONTAINER_STATE_STARTING,
+	ContainerStateRunning:     platformv1.ContainerState_CONTAINER_STATE_RUNNING,
+	ContainerStatePaused:      platformv1.ContainerState_CONTAINER_STATE_PAUSED,
+	ContainerStateStopping:    platformv1.ContainerState_CONTAINER_STATE_STOPPING,
+	ContainerStateStopped:     platformv1.ContainerState_CONTAINER_STATE_STOPPED,
+	ContainerStateExited:      platformv1.ContainerState_CONTAINER_STATE_EXITED,
+	ContainerStateError:       platformv1.ContainerState_CONTAINER_STATE_ERROR,
+}
+
+// restartPolicyToProto maps domain RestartPolicy to proto RestartPolicy.
+var restartPolicyToProto = map[RestartPolicy]platformv1.RestartPolicy{
+	RestartPolicyUnspecified:  platformv1.RestartPolicy_RESTART_POLICY_UNSPECIFIED,
+	RestartPolicyNo:           platformv1.RestartPolicy_RESTART_POLICY_NO,
+	RestartPolicyOnFailure:    platformv1.RestartPolicy_RESTART_POLICY_ON_FAILURE,
+	RestartPolicyAlways:       platformv1.RestartPolicy_RESTART_POLICY_ALWAYS,
+	RestartPolicyUnlessStopped: platformv1.RestartPolicy_RESTART_POLICY_UNLESS_STOPPED,
+}
+
+// Container String-to-domain enum maps (for CLI input parsing)
+
+// StringToContainerState maps user-facing state strings to domain ContainerState.
+var StringToContainerState = map[string]ContainerState{
+	"CREATED":  ContainerStateCreated,
+	"STARTING": ContainerStateStarting,
+	"RUNNING":  ContainerStateRunning,
+	"PAUSED":   ContainerStatePaused,
+	"STOPPING": ContainerStateStopping,
+	"STOPPED":  ContainerStateStopped,
+	"EXITED":   ContainerStateExited,
+	"ERROR":    ContainerStateError,
+}
+
+// StringToRestartPolicy maps user-facing restart policy strings to domain RestartPolicy.
+var StringToRestartPolicy = map[string]RestartPolicy{
+	"no":             RestartPolicyNo,
+	"on-failure":     RestartPolicyOnFailure,
+	"always":         RestartPolicyAlways,
+	"unless-stopped": RestartPolicyUnlessStopped,
+}
+
+// ParseContainerState parses a user-facing state string to a domain ContainerState.
+// Returns the ContainerState and true if found, or ContainerStateUnspecified and false otherwise.
+func ParseContainerState(state string) (ContainerState, bool) {
+	s, ok := StringToContainerState[strings.ToUpper(strings.TrimSpace(state))]
+	return s, ok
+}
+
+// ParseRestartPolicy parses a user-facing restart policy string to a domain RestartPolicy.
+// Returns the RestartPolicy and true if found, or RestartPolicyUnspecified and false otherwise.
+func ParseRestartPolicy(policy string) (RestartPolicy, bool) {
+	p, ok := StringToRestartPolicy[strings.ToLower(strings.TrimSpace(policy))]
+	return p, ok
+}
+
+// Container Proto-to-domain converters
+
+// ContainerStateFromProto converts a proto ContainerState enum to a domain ContainerState.
+// Returns ContainerStateUnspecified for unknown values.
+func ContainerStateFromProto(s platformv1.ContainerState) ContainerState {
+	if state, ok := protoContainerStateToState[s]; ok {
+		return state
+	}
+	return ContainerStateUnspecified
+}
+
+// ContainerStateToProto converts a domain ContainerState to a proto ContainerState enum.
+// Returns CONTAINER_STATE_UNSPECIFIED for unknown values.
+func ContainerStateToProto(s ContainerState) platformv1.ContainerState {
+	if proto, ok := containerStateToProto[s]; ok {
+		return proto
+	}
+	return platformv1.ContainerState_CONTAINER_STATE_UNSPECIFIED
+}
+
+// RestartPolicyFromProto converts a proto RestartPolicy enum to a domain RestartPolicy.
+// Returns RestartPolicyUnspecified for unknown values.
+func RestartPolicyFromProto(p platformv1.RestartPolicy) RestartPolicy {
+	if policy, ok := protoRestartPolicyToPolicy[p]; ok {
+		return policy
+	}
+	return RestartPolicyUnspecified
+}
+
+// RestartPolicyToProto converts a domain RestartPolicy to a proto RestartPolicy enum.
+// Returns RESTART_POLICY_UNSPECIFIED for unknown values.
+func RestartPolicyToProto(p RestartPolicy) platformv1.RestartPolicy {
+	if proto, ok := restartPolicyToProto[p]; ok {
+		return proto
+	}
+	return platformv1.RestartPolicy_RESTART_POLICY_UNSPECIFIED
+}
+
+// ContainerFromProto converts a platformv1.Container to a domain Container.
+func ContainerFromProto(p *platformv1.Container) *Container {
+	if p == nil {
+		return nil
+	}
+
+	state, ok := protoContainerStateToState[p.State]
+	if !ok {
+		state = ContainerStateUnspecified
+	}
+
+	c := &Container{
+		ID:         p.Id,
+		State:      state,
+		CreatedAt:  timestampToTime(p.CreatedAt),
+		StartedAt:  timestampToTime(p.StartedAt),
+		FinishedAt: timestampToTime(p.FinishedAt),
+		ExitCode:   p.ExitCode,
+		HostID:     p.HostId,
+	}
+
+	if p.Config != nil {
+		c.Config = ContainerConfigFromProto(p.Config)
+	}
+
+	if p.Metrics != nil {
+		c.Metrics = containerMetricsFromProto(p.Metrics)
+	}
+
+	return c
+}
+
+// ContainerConfigFromProto converts a platformv1.ContainerConfig to a domain ContainerConfig.
+func ContainerConfigFromProto(p *platformv1.ContainerConfig) *ContainerConfig {
+	if p == nil {
+		return nil
+	}
+
+	cfg := &ContainerConfig{
+		Name:          p.Name,
+		Image:         p.Image,
+		ImageHash:     p.ImageHash,
+		Command:       p.Command,
+		Args:          p.Args,
+		WorkingDir:    p.WorkingDir,
+		Privileged:    p.Privileged,
+		TpmAccess:     p.TpmAccess,
+		Network:       p.Network,
+		RestartPolicy: RestartPolicyFromProto(p.RestartPolicy),
+		Capabilities:  p.Capabilities,
+		Labels:        p.Labels,
+		Metadata:      p.Metadata,
+	}
+
+	if len(p.Env) > 0 {
+		cfg.Env = make([]*EnvVar, len(p.Env))
+		for i, e := range p.Env {
+			cfg.Env[i] = envVarFromProto(e)
+		}
+	}
+
+	if len(p.Ports) > 0 {
+		cfg.Ports = make([]*PortMapping, len(p.Ports))
+		for i, pm := range p.Ports {
+			cfg.Ports[i] = portMappingFromProto(pm)
+		}
+	}
+
+	if len(p.Volumes) > 0 {
+		cfg.Volumes = make([]*VolumeMount, len(p.Volumes))
+		for i, v := range p.Volumes {
+			cfg.Volumes[i] = volumeMountFromProto(v)
+		}
+	}
+
+	if p.Resources != nil {
+		cfg.Resources = resourceLimitsFromProto(p.Resources)
+	}
+
+	return cfg
+}
+
+// envVarFromProto converts a platformv1.EnvVar to a domain EnvVar.
+func envVarFromProto(p *platformv1.EnvVar) *EnvVar {
+	if p == nil {
+		return nil
+	}
+	return &EnvVar{
+		Name:  p.Name,
+		Value: p.Value,
+	}
+}
+
+// portMappingFromProto converts a platformv1.PortMapping to a domain PortMapping.
+func portMappingFromProto(p *platformv1.PortMapping) *PortMapping {
+	if p == nil {
+		return nil
+	}
+	return &PortMapping{
+		HostPort:      p.HostPort,
+		ContainerPort: p.ContainerPort,
+		Protocol:      p.Protocol,
+		HostIP:        p.HostIp,
+	}
+}
+
+// volumeMountFromProto converts a platformv1.VolumeMount to a domain VolumeMount.
+func volumeMountFromProto(p *platformv1.VolumeMount) *VolumeMount {
+	if p == nil {
+		return nil
+	}
+	return &VolumeMount{
+		Source:      p.Source,
+		Destination: p.Destination,
+		Readonly:    p.Readonly,
+	}
+}
+
+// resourceLimitsFromProto converts a platformv1.ResourceLimits to a domain ResourceLimits.
+func resourceLimitsFromProto(p *platformv1.ResourceLimits) *ResourceLimits {
+	if p == nil {
+		return nil
+	}
+	return &ResourceLimits{
+		MaxMemoryMB: p.MaxMemoryMb,
+		MaxCPUs:     p.MaxCpus,
+	}
+}
+
+// containerMetricsFromProto converts a platformv1.ContainerMetrics to a domain ContainerMetrics.
+func containerMetricsFromProto(p *platformv1.ContainerMetrics) *ContainerMetrics {
+	if p == nil {
+		return nil
+	}
+	return &ContainerMetrics{
+		CPUUsagePercent: p.CpuUsagePercent,
+		MemoryUsedMB:   p.MemoryUsedMb,
+		MemoryLimitMB:  p.MemoryLimitMb,
+		DiskReadBytes:  p.DiskReadBytes,
+		DiskWriteBytes: p.DiskWriteBytes,
+		NetworkRxBytes: p.NetworkRxBytes,
+		NetworkTxBytes: p.NetworkTxBytes,
+		UptimeSeconds:  p.UptimeSeconds,
+	}
+}
+
+// containerStatusFromProto converts a platformv1.Status to a domain ContainerStatus.
+func containerStatusFromProto(p *platformv1.Status) *ContainerStatus {
+	if p == nil {
+		return nil
+	}
+	return &ContainerStatus{
+		Success: p.Success,
+		Message: p.Message,
+	}
+}
+
+// logEntryFromProto converts a platformv1.LogEntry to a domain LogEntry.
+func logEntryFromProto(p *platformv1.LogEntry) *LogEntry {
+	if p == nil {
+		return nil
+	}
+	return &LogEntry{
+		Timestamp: timestampToTime(p.Timestamp),
+		Stream:    p.Source,
+		Message:   p.Message,
+	}
+}
+
+// Container Domain-to-proto converters
+
+// createContainerParamsToProto converts CreateContainerParams to a platformv1.CreateContainerRequest.
+func createContainerParamsToProto(params *CreateContainerParams) *platformv1.CreateContainerRequest {
+	config := &platformv1.ContainerConfig{
+		Name:         params.Name,
+		Image:        params.Image,
+		Command:      params.Command,
+		Args:         params.Args,
+		WorkingDir:   params.WorkingDir,
+		Privileged:   params.Privileged,
+		TpmAccess:    params.TpmAccess,
+		Network:      params.Network,
+		Capabilities: params.Capabilities,
+		Labels:       params.Labels,
+		Metadata:     params.Metadata,
+	}
+
+	rp, ok := restartPolicyToProto[params.RestartPolicy]
+	if !ok {
+		rp = platformv1.RestartPolicy_RESTART_POLICY_UNSPECIFIED
+	}
+	config.RestartPolicy = rp
+
+	if len(params.Env) > 0 {
+		config.Env = make([]*platformv1.EnvVar, len(params.Env))
+		for i, e := range params.Env {
+			config.Env[i] = &platformv1.EnvVar{
+				Name:  e.Name,
+				Value: e.Value,
+			}
+		}
+	}
+
+	if len(params.Ports) > 0 {
+		config.Ports = make([]*platformv1.PortMapping, len(params.Ports))
+		for i, p := range params.Ports {
+			config.Ports[i] = &platformv1.PortMapping{
+				HostPort:      p.HostPort,
+				ContainerPort: p.ContainerPort,
+				Protocol:      p.Protocol,
+				HostIp:        p.HostIP,
+			}
+		}
+	}
+
+	if len(params.Volumes) > 0 {
+		config.Volumes = make([]*platformv1.VolumeMount, len(params.Volumes))
+		for i, v := range params.Volumes {
+			config.Volumes[i] = &platformv1.VolumeMount{
+				Source:      v.Source,
+				Destination: v.Destination,
+				Readonly:    v.Readonly,
+			}
+		}
+	}
+
+	if params.Resources != nil {
+		config.Resources = &platformv1.ResourceLimits{
+			MaxMemoryMb: params.Resources.MaxMemoryMB,
+			MaxCpus:     params.Resources.MaxCPUs,
+		}
+	}
+
+	return &platformv1.CreateContainerRequest{
+		Config: config,
+		Start:  params.Start,
+	}
+}
+
+// listContainersParamsToProto converts ListContainersParams to a platformv1.ListContainersRequest.
+func listContainersParamsToProto(params *ListContainersParams) *platformv1.ListContainersRequest {
+	req := &platformv1.ListContainersRequest{
+		Pagination: &platformv1.PaginationRequest{
+			PageSize: params.PageSize,
+			Page:     params.Page,
+		},
+	}
+
+	if len(params.States) > 0 {
+		protoStates := make([]platformv1.ContainerState, len(params.States))
+		for i, s := range params.States {
+			ps, ok := containerStateToProto[s]
+			if !ok {
+				ps = platformv1.ContainerState_CONTAINER_STATE_UNSPECIFIED
 			}
 			protoStates[i] = ps
 		}

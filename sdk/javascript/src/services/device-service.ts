@@ -5,6 +5,7 @@
  */
 
 import type { ApiClient } from '../client/api-client.js';
+import type { Transport } from '../transport/transport.js';
 import type { ApiResponse } from '../types/api.js';
 import { BaseService } from './base-service.js';
 import type {
@@ -70,7 +71,7 @@ export class DeviceService extends BaseService {
    *
    * @param client - The API client to use for requests
    */
-  constructor(client: ApiClient) {
+  constructor(client: Transport | ApiClient) {
     super(client, '/v1/devices');
   }
 
@@ -390,7 +391,10 @@ export class DeviceService extends BaseService {
    * @returns List of provisioning sessions
    */
   async listProvisioningSessions(): Promise<ApiResponse<ProvisioningSession[]>> {
-    return this.client.get<ProvisioningSession[]>(this.buildUrl('/sessions'));
+    // Provisioning sessions live under /api/v1/provisioning/sessions on
+    // the server (not /api/v1/devices/sessions). Use an absolute path so
+    // the device service's /v1/devices base doesn't get prepended.
+    return this.client.get<ProvisioningSession[]>('/v1/provisioning/sessions');
   }
 
   /**
@@ -400,8 +404,10 @@ export class DeviceService extends BaseService {
    * @returns Provisioning session
    */
   async getProvisioningSession(sessionId: string): Promise<ApiResponse<ProvisioningSession>> {
+    // Absolute path because provisioning sessions are at /api/v1/provisioning,
+    // not /api/v1/devices/.
     return this.client.get<ProvisioningSession>(
-      this.buildUrl(`/sessions/${this.encodePathSegment(sessionId)}`)
+      `/v1/provisioning/sessions/${this.encodePathSegment(sessionId)}`
     );
   }
 
@@ -413,7 +419,7 @@ export class DeviceService extends BaseService {
    */
   async fulfillProvisioningSession(request: FulfillSessionRequest): Promise<ApiResponse<void>> {
     return this.client.post<void>(
-      this.buildUrl(`/sessions/${this.encodePathSegment(request.sessionId)}/fulfill`),
+      `/v1/provisioning/sessions/${this.encodePathSegment(request.sessionId)}/fulfill`,
       request
     );
   }

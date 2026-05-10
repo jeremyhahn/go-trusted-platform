@@ -127,6 +127,41 @@ certificate-authority:
           - test@localhost
 
 # =============================================================================
+# TPM 2.0 CONFIGURATION
+# =============================================================================
+# Required for CA identities that set platform-policy: true. The platform
+# PCR + bank are needed when the CA is configured to use TPM-bound platform
+# policy. Integration tests run against swtpm started by the test harness.
+
+tpm:
+  device: /dev/tpmrm0
+  simulator: false
+  encrypt-sessions: false
+  entropy: false
+  hash: SHA-256
+  ek:
+    debug: true
+    handle: 0x81010001
+    hash: SHA-256
+    rsa:
+      size: 2048
+  ssrk:
+    debug: true
+    handle: 0x81000001
+    platform-policy: false
+    rsa:
+      size: 2048
+  platform-pcr: 23
+  platform-pcr-bank: sha256
+  # Empty golden-pcrs list keeps the policy permissive — fine for tests
+  # where every reboot of swtpm yields different boot-time PCR values.
+  golden-pcrs: []
+  platform-srk:
+    srk-handle: 0x81000002
+    srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=base64"
+    platform-policy: true
+
+# =============================================================================
 # vTPM CONFIGURATION
 # =============================================================================
 

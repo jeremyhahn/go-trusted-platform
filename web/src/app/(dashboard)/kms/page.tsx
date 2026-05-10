@@ -87,18 +87,31 @@ export default function KMSKeysPage() {
     return symmetricAlgorithms.includes(algorithm) ? "symmetric" : "asymmetric";
   };
 
-  // Transform SDK keys to local Key type for UI compatibility
+  // Transform server key list to local Key type. The platform KMS REST
+  // handler emits snake_case (`key_id`, `created_at`) and ISO-string
+  // timestamps; the SDK type uses camelCase. Tolerate both.
   const keys: Key[] = React.useMemo(() => {
-    if (!keysData?.keys) return [];
-    return keysData.keys.map((key) => ({
-      id: key.keyId,
-      name: key.keyId, // Name is in metadata, not handle
-      algorithm: mapAlgorithm(key.algorithm),
-      type: getKeyType(key.algorithm),
-      status: key.status?.toLowerCase() === "enabled" ? "active" : "disabled",
-      createdAt: key.createdAt ? new Date(key.createdAt * 1000).toISOString() : new Date().toISOString(),
-      rotationCount: (key.version || 1) - 1, // Version starts at 1, rotations are version - 1
-    }));
+    const list = (keysData?.keys ?? []) as any[];
+    const toIso = (v: any): string => {
+      if (!v) return new Date().toISOString();
+      if (typeof v === "number") return new Date(v * 1000).toISOString();
+      const s = String(v);
+      // Treat the Go zero time as "unset".
+      if (s.startsWith("0001-")) return new Date().toISOString();
+      return s;
+    };
+    return list.map((key: any) => {
+      const id = key.keyId ?? key.key_id ?? "";
+      return {
+        id,
+        name: key.name || id,
+        algorithm: mapAlgorithm(key.algorithm),
+        type: getKeyType(key.algorithm),
+        status: (key.status ?? "").toString().toLowerCase() === "enabled" ? "active" : "disabled",
+        createdAt: toIso(key.createdAt ?? key.created_at),
+        rotationCount: ((key.version ?? 1) - 1),
+      };
+    });
   }, [keysData]);
 
   // Generate key mutation

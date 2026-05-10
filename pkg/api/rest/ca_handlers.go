@@ -30,8 +30,8 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	goca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 )
 
 const (
@@ -1144,6 +1144,19 @@ func (h *CAHandlers) handleGetCABundle(w http.ResponseWriter, r *http.Request) {
 			}
 			certificates = append(certificates, h.certToSummary(cert))
 		}
+	}
+
+	// Support raw PEM downloads via Accept header for tooling that needs to
+	// import the bundle into a trust store without unwrapping JSON. Default
+	// remains JSON for backwards compatibility with existing SDK clients.
+	if accept := r.Header.Get("Accept"); accept == "application/x-pem-file" || accept == "application/pem-certificate-chain" {
+		w.Header().Set("Content-Type", "application/x-pem-file")
+		w.Header().Set("Content-Disposition", "attachment; filename=\"ca-bundle.pem\"")
+		w.WriteHeader(http.StatusOK)
+		if _, writeErr := w.Write(bundle); writeErr != nil {
+			h.logger.Error("Failed to write CA bundle PEM", "error", writeErr)
+		}
+		return
 	}
 
 	resp := CABundleResponse{

@@ -4,22 +4,23 @@ Build tags: integration codec_msgpack codec_json codec_cbor raft iam timeseries 
 =============================================
   go-trusted-platform Integration Tests
 =============================================
+Target:     all
 Build tags: integration codec_msgpack codec_json codec_cbor raft iam timeseries rest quic mcp pkcs8 frost local objstore codec_json codec_msgpack codec_cbor
 
 === Building platformd and platformctl ===
 Downloading module dependencies...
-# get https://proxy.golang.org/github.com/minio/blake2b-simd/@v/v0.0.0-20160723061019-3f5f724cb5b1.mod: 200 OK (0.049s)
-# get https://proxy.golang.org/google.golang.org/protobuf/@v/v0.0.0-20200109180630-ec00e32a8dfd.mod: 200 OK (0.008s)
-# get https://proxy.golang.org/github.com/google/go-cmp/@v/v0.3.0.mod
-# get https://proxy.golang.org/github.com/google/go-cmp/@v/v0.3.0.mod: 200 OK (0.007s)
+# get https://proxy.golang.org/github.com/minio/sha256-simd/@v/v0.1.1-0.20190913151208-6de447530771.mod: 200 OK (0.053s)
+# get https://proxy.golang.org/github.com/minio/blake2b-simd/@v/v0.0.0-20160723061019-3f5f724cb5b1.mod: 200 OK (0.054s)
+# get https://proxy.golang.org/github.com/google/go-cmp/@v/v0.3.0.mod: 200 OK (0.009s)
+# get https://proxy.golang.org/github.com/mr-tron/base58/@v/v1.1.2.mod: 200 OK (0.055s)
 go: github.com/jeremyhahn/go-auth@v0.0.0-20251115074454-fdb02f328d92 (replaced by /home/jhahn/sources/go-auth): reading /home/jhahn/sources/go-auth/go.mod: open /home/jhahn/sources/go-auth/go.mod: no such file or directory
 WARNING: go mod download had errors (continuing anyway)
 Module dependencies downloaded
 Pre-compiling test packages...
-ok  	github.com/jeremyhahn/go-trusted-platform/test/integration/registry	0.013s [no tests to run]
+ok  	github.com/jeremyhahn/go-trusted-platform/test/integration/registry	0.012s [no tests to run]
 ok  	github.com/jeremyhahn/go-trusted-platform/test/integration/sdn/mock_bgp	0.015s [no tests to run]
-ok  	github.com/jeremyhahn/go-trusted-platform/test/integration/sdn/topology	0.009s [no tests to run]
-ok  	github.com/jeremyhahn/go-trusted-platform/test/integration/user_registration	0.014s [no tests to run]
+ok  	github.com/jeremyhahn/go-trusted-platform/test/integration/sdn/topology	0.008s [no tests to run]
+ok  	github.com/jeremyhahn/go-trusted-platform/test/integration/user_registration	0.017s [no tests to run]
 FAIL
 WARNING: some test packages failed to pre-compile (continuing anyway)
 Test packages pre-compiled

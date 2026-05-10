@@ -97,3 +97,30 @@ func TestErrMissingHostname(t *testing.T) {
 	err := ErrMissingHostname{}
 	assert.Equal(t, "device: hostname is required", err.Error())
 }
+
+func TestErrMissingDeviceIdentifier(t *testing.T) {
+	err := ErrMissingDeviceIdentifier{}
+	assert.Equal(t, "device: at least one of mac or serial query parameter is required", err.Error())
+}
+
+func TestErrProfileNotFound(t *testing.T) {
+	err := ErrProfileNotFound{MAC: "aa:bb:cc:dd:ee:ff", Serial: "SN123"}
+	assert.Equal(t, "device: no matching profile found for mac=aa:bb:cc:dd:ee:ff serial=SN123", err.Error())
+}
+
+func TestErrProfileConfigEmpty(t *testing.T) {
+	err := ErrProfileConfigEmpty{ProfileID: 42}
+	assert.Equal(t, "device: profile has no config", err.Error())
+}
+
+func TestErrConfigMarshalFailed(t *testing.T) {
+	t.Run("with cause", func(t *testing.T) {
+		cause := errors.New("unsupported type")
+		err := ErrConfigMarshalFailed{Cause: cause}
+		assert.Equal(t, "device: failed to marshal config: unsupported type", err.Error())
+	})
+	t.Run("without cause", func(t *testing.T) {
+		err := ErrConfigMarshalFailed{}
+		assert.Equal(t, "device: failed to marshal config", err.Error())
+	})
+}

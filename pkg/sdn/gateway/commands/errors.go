@@ -16,15 +16,15 @@ package commands
 import "errors"
 
 var (
-	// ErrInvalidGatewayMode is returned when an invalid gateway mode is specified.
-	ErrInvalidGatewayMode = errors.New("gatewayd: invalid gateway mode")
-
 	// ErrMissingBGPConfig is returned when BGP configuration is required but not provided.
-	ErrMissingBGPConfig = errors.New("gatewayd: missing BGP configuration for transit mode")
+	ErrMissingBGPConfig = errors.New("gatewayd: missing BGP configuration")
 
 	// ErrGatewayStartFailed is returned when the gateway fails to start.
 	ErrGatewayStartFailed = errors.New("gatewayd: failed to start gateway")
 
 	// ErrGatewayShutdownFailed is returned when the gateway fails to shutdown gracefully.
 	ErrGatewayShutdownFailed = errors.New("gatewayd: failed to shutdown gateway gracefully")
+
+	// ErrConfigLoadFailed is returned when the gateway configuration cannot be loaded.
+	ErrConfigLoadFailed = errors.New("gatewayd: failed to load configuration")
 )

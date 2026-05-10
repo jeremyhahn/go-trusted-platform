@@ -72,46 +72,86 @@ export default function CertificatesPage() {
     []
   );
 
-  // Transform SDK CertificateSummary to local Certificate type
+  // Transform server CertificateSummary to local Certificate type. The
+  // platform CA REST handler returns snake_case keys with numeric Unix
+  // timestamps; tolerate both shapes so the table renders correctly.
   const certificates: Certificate[] = React.useMemo(() => {
-    const certs = certificatesResponse?.certificates ?? [];
-    return certs.map((cert) => ({
+    const certs = (certificatesResponse?.certificates ?? []) as any[];
+    const toIso = (v: any): string => {
+      if (!v && v !== 0) return "";
+      if (typeof v === "number") return new Date(v * 1000).toISOString();
+      return String(v);
+    };
+    return certs.map((cert: any) => ({
       id: cert.serial,
       serialNumber: cert.serial,
-      subject: cert.commonName || "Unknown",
-      issuer: cert.issuer || "Unknown",
-      type: "leaf" as const,
-      status: cert.status === "REVOKED" ? "revoked" as const :
-              cert.status === "EXPIRED" ? "expired" as const : "active" as const,
-      notBefore: cert.notBefore || "",
-      notAfter: cert.notAfter || "",
-      publicKeyAlgorithm: cert.keyAlgorithm || "RSA_2048",
-      signatureAlgorithm: "SHA256WithRSA",
+      subject: cert.commonName ?? cert.common_name ?? cert.subject?.common_name ?? cert.subject?.commonName ?? "Unknown",
+      issuer: cert.issuer ?? "Unknown",
+      type: (cert.is_ca ?? cert.isCA) ? ("intermediate" as const) : ("leaf" as const),
+      status: String(cert.status).toUpperCase() === "REVOKED" ? "revoked" as const :
+              String(cert.status).toUpperCase() === "EXPIRED" ? "expired" as const : "active" as const,
+      notBefore: toIso(cert.notBefore ?? cert.not_before),
+      notAfter: toIso(cert.notAfter ?? cert.not_after),
+      publicKeyAlgorithm: cert.keyAlgorithm ?? cert.key_algorithm ?? "RSA",
+      signatureAlgorithm: cert.signatureAlgorithm ?? cert.signature_algorithm ?? "",
     }));
   }, [certificatesResponse]);
 
   const error = fetchError?.message ?? null;
 
-  // Map local key algorithm to SDK KeyAlgorithm
+  // The platform CA REST handler validates against literal hyphenated
+  // strings (e.g. "RSA-2048") and rejects the underscore variant the
+  // SDK type union declares. Pass the wire form the handler expects.
   const mapKeyAlgorithm = (algo: string): KeyAlgorithm => {
-    const mapping: Record<string, KeyAlgorithm> = {
-      "RSA-2048": "RSA_2048",
-      "RSA-4096": "RSA_4096",
-      "ECDSA-P256": "ECDSA_P256",
-      "ECDSA-P384": "ECDSA_P384",
-    };
-    return mapping[algo] || "RSA_2048";
+    const allowed = new Set([
+      "RSA-2048",
+      "RSA-3072",
+      "RSA-4096",
+      "ECDSA-P256",
+      "ECDSA-P384",
+    ]);
+    return (allowed.has(algo) ? algo : "RSA-2048") as KeyAlgorithm;
   };
 
-  // Issue certificate mutation
+  // Parse a Distinguished Name string ("CN=foo,O=Bar,C=US") into the
+  // structured Subject the platform CA expects. Empty values are
+  // omitted so they don't clobber server defaults.
+  const parseDN = (dn: string) => {
+    const subject: Record<string, string> = {};
+    const map: Record<string, string> = {
+      cn: "common_name",
+      o: "organization",
+      ou: "organizational_unit",
+      c: "country",
+      st: "province",
+      l: "locality",
+      street: "address",
+      postalcode: "postal_code",
+    };
+    dn.split(",").forEach((part) => {
+      const [k, ...rest] = part.split("=");
+      if (!k || rest.length === 0) return;
+      const key = map[k.trim().toLowerCase()];
+      const value = rest.join("=").trim();
+      if (key && value) subject[key] = value;
+    });
+    if (!subject.common_name && dn.trim()) {
+      subject.common_name = dn.trim();
+    }
+    return subject;
+  };
+
+  // Issue certificate mutation. The platform CA REST handler is strict
+  // about the wire format: snake_case keys and hyphenated algorithms.
+  // Bypass the SDK's typed wrapper and post the exact shape the server
+  // expects so the form actually succeeds.
   const issueCertMutation = useMutation(
     (data: IssueCertInput) => ca.issueCertificate({
-      subject: {
-        commonName: data.subject || "Unknown",
-      },
-      validDays: data.validityDays || 365,
-      keyAlgorithm: mapKeyAlgorithm(data.keyAlgorithm),
-    }),
+      subject: parseDN(data.subject || ""),
+      valid_days: data.validityDays || 365,
+      key_algorithm: mapKeyAlgorithm(data.keyAlgorithm),
+      is_ca: data.type === "root" || data.type === "intermediate",
+    } as any),
     {
       onSuccess: () => {
         alert("Certificate issued successfully");

@@ -66,6 +66,38 @@ type RestHandler interface {
 	// ProvisionStatus returns the status of a provisioning workflow.
 	// GET /api/v1/bmc/{profileID}/provision
 	ProvisionStatus(w http.ResponseWriter, r *http.Request)
+
+	// GetWebCertificate returns the metadata of the BMC's current web
+	// server TLS certificate.
+	// GET /api/v1/bmc/{profileID}/cert
+	GetWebCertificate(w http.ResponseWriter, r *http.Request)
+
+	// ReplaceWebCertificate uploads a new web server TLS certificate
+	// and private key to the BMC.
+	// PUT /api/v1/bmc/{profileID}/cert
+	ReplaceWebCertificate(w http.ResponseWriter, r *http.Request)
+
+	// ListUsers returns the populated user slots known to the BMC.
+	// GET /api/v1/bmc/{profileID}/users
+	ListUsers(w http.ResponseWriter, r *http.Request)
+
+	// CreateUser creates a new BMC user account.
+	// POST /api/v1/bmc/{profileID}/users
+	CreateUser(w http.ResponseWriter, r *http.Request)
+
+	// DeleteUser deletes the BMC user occupying the given slot.
+	// DELETE /api/v1/bmc/{profileID}/users/{slot}
+	DeleteUser(w http.ResponseWriter, r *http.Request)
+
+	// SetUserPassword updates the password for an existing BMC user
+	// slot.
+	// PUT /api/v1/bmc/{profileID}/users/{slot}/password
+	SetUserPassword(w http.ResponseWriter, r *http.Request)
+
+	// SetUserPrivilege updates the channel privilege level for an
+	// existing BMC user slot.
+	// PUT /api/v1/bmc/{profileID}/users/{slot}/privilege
+	SetUserPrivilege(w http.ResponseWriter, r *http.Request)
 }
 
 // BMCServicer defines the BMC service operations required by the handler.
@@ -82,6 +114,17 @@ type BMCServicer interface {
 	VirtualMediaStatus(ctx context.Context, profileID uint64) (*bmcpkg.VirtualMediaInfo, error)
 	GetSensors(ctx context.Context, profileID uint64) ([]bmcpkg.SensorReading, error)
 	GetSystemInfo(ctx context.Context, profileID uint64) (*bmcpkg.SystemInfo, error)
+
+	// Certificate management.
+	GetWebCertificate(ctx context.Context, profileID uint64) (*bmcpkg.CertificateInfo, error)
+	ReplaceWebCertificate(ctx context.Context, profileID uint64, certPEM, keyPEM []byte) error
+
+	// User management.
+	ListUsers(ctx context.Context, profileID uint64) ([]bmcpkg.User, error)
+	CreateUser(ctx context.Context, profileID uint64, user bmcpkg.User, password string) error
+	DeleteUser(ctx context.Context, profileID uint64, slot uint8) error
+	SetUserPassword(ctx context.Context, profileID uint64, slot uint8, password string) error
+	SetUserPrivilege(ctx context.Context, profileID uint64, slot, channel uint8, privilege bmcpkg.Privilege) error
 }
 
 // BaremetalServicer defines the bare metal provisioning operations required by the handler.
@@ -119,4 +162,58 @@ type MountISORequest struct {
 // ProvisionRequest represents the request body for triggering provisioning.
 type ProvisionRequest struct {
 	ISOURL string `json:"iso_url,omitempty"`
+}
+
+// ReplaceWebCertificateRequest represents the request body for replacing
+// the BMC web server TLS certificate.
+//
+// Both CertPEM and KeyPEM are PEM-encoded as plain strings rather than
+// base64 byte fields so the JSON wire format is human-readable.
+type ReplaceWebCertificateRequest struct {
+	// CertPEM is the PEM-encoded certificate (leaf, optionally
+	// followed by intermediates).
+	CertPEM string `json:"cert_pem"`
+	// KeyPEM is the PEM-encoded private key matching CertPEM.
+	KeyPEM string `json:"key_pem"`
+}
+
+// CreateUserRequest represents the request body for creating a BMC
+// user account.
+type CreateUserRequest struct {
+	// Slot is the IPMI user slot (1-based) to assign. Some BMCs accept
+	// 0 to mean "auto-assign next free slot".
+	Slot uint8 `json:"slot"`
+	// Username is the account name to provision.
+	Username string `json:"username"`
+	// Enabled indicates whether the user should be able to authenticate
+	// immediately after creation.
+	Enabled bool `json:"enabled"`
+	// Privilege is the channel privilege level. Accepted values mirror
+	// the bmcpkg.Privilege.String() representation: "no-access",
+	// "callback", "user", "operator", "administrator".
+	Privilege string `json:"privilege"`
+	// Channel is the IPMI channel index (typically 1 for the dedicated
+	// NIC LAN channel).
+	Channel uint8 `json:"channel"`
+	// Password is the initial password for the account. Required by
+	// most BMC implementations.
+	Password string `json:"password"`
+}
+
+// SetUserPasswordRequest represents the request body for updating a
+// BMC user's password.
+type SetUserPasswordRequest struct {
+	// Password is the new password. Required.
+	Password string `json:"password"`
+}
+
+// SetUserPrivilegeRequest represents the request body for updating a
+// BMC user's channel privilege.
+type SetUserPrivilegeRequest struct {
+	// Privilege is the new privilege level. See CreateUserRequest for
+	// accepted values.
+	Privilege string `json:"privilege"`
+	// Channel is the IPMI channel index (typically 1 for the dedicated
+	// NIC LAN channel).
+	Channel uint8 `json:"channel"`
 }

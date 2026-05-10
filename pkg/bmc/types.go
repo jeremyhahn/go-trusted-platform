@@ -177,6 +177,22 @@ type Client interface {
 	// character streaming with the BMC serial console.
 	Console(ctx context.Context) (*SOLSession, error)
 
+	// ClearUEFIBootEntries asks the BMC to clear the host's UEFI NVRAM
+	// boot entries, resetting the BIOS to its factory boot order. The
+	// orchestrator calls this before re-imaging a node whose existing
+	// UEFI "Linux Boot Manager" entry would otherwise win over a one-shot
+	// boot override (notably on Supermicro X10 hardware).
+	//
+	// Implementations SHOULD prefer the Redfish ComputerSystem.Reset
+	// action with ResetType "BiosReset" when the BMC advertises it.
+	// When the BMC does not expose any clear path, return
+	// ErrUEFIBootClearUnsupported so the caller can route to a vendor
+	// CGI fallback or surface the limitation to the operator.
+	//
+	// This call typically requires the host to be reset to take effect;
+	// callers are expected to PowerReset (or PowerOff/PowerOn) afterwards.
+	ClearUEFIBootEntries(ctx context.Context) error
+
 	// Close releases resources held by the client.
 	Close() error
 }

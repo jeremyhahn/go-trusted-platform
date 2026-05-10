@@ -16,7 +16,9 @@ package rest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -154,6 +156,21 @@ type ValidateVLANRequest struct {
 // RotateDEKRequest represents a request to rotate a tenant's DEK.
 type RotateDEKRequest struct {
 	Background bool `json:"background"`
+}
+
+// InitTenantBarrierRequest represents a request to initialize a per-tenant
+// barrier with optional Shamir threshold/shares parameters.
+type InitTenantBarrierRequest struct {
+	Threshold int `json:"threshold,omitempty"`
+	Shares    int `json:"shares,omitempty"`
+}
+
+// UnsealTenantBarrierRequest represents a request to unseal a per-tenant
+// barrier with the supplied key material. The key is base64-encoded by the
+// JSON layer because it is bytes; an empty key falls back to the deterministic
+// init credential.
+type UnsealTenantBarrierRequest struct {
+	Key []byte `json:"key,omitempty"`
 }
 
 // =============================================================================
@@ -319,6 +336,27 @@ type DEKStatusResponse struct {
 	Timestamp            time.Time                     `json:"timestamp"`
 }
 
+// TenantBarrierActionResponse represents the result of a barrier lifecycle
+// operation (init, unseal, seal). It mirrors TenantActionResponse but is named
+// distinctly so callers can switch on the response type if they wish.
+type TenantBarrierActionResponse struct {
+	TenantID  string    `json:"tenant_id,omitempty"`
+	Success   bool      `json:"success"`
+	Message   string    `json:"message,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// TenantBarrierStatusResponse represents the current sealed/initialized state
+// and active strategy metadata of a per-tenant barrier.
+type TenantBarrierStatusResponse struct {
+	TenantID       string    `json:"tenant_id"`
+	Sealed         bool      `json:"sealed"`
+	Initialized    bool      `json:"initialized"`
+	Strategy       string    `json:"strategy"`
+	HardwareBacked bool      `json:"hardware_backed"`
+	Timestamp      time.Time `json:"timestamp"`
+}
+
 // =============================================================================
 // Tenant Manager Interface
 // =============================================================================
@@ -356,10 +394,20 @@ type TenantManagerInterface interface {
 	GetBridgeName(ctx context.Context, tenantID string) (string, error)
 	// Sync synchronizes manager state with external systems.
 	Sync(ctx context.Context) error
-	// RotateTenantDEK rotates the DEK for a tenant.
-	RotateTenantDEK(ctx context.Context, tenantID string, background bool) (*tenant.DEKRotationResult, error)
+	// RotateTenantDEKWithOptions rotates the DEK for a tenant. The
+	// background flag controls whether the re-encryption proceeds inline
+	// (false) or as a background job (true).
+	RotateTenantDEKWithOptions(ctx context.Context, tenantID string, background bool) (*tenant.DEKRotationResult, error)
 	// GetTenantDEKStatus returns the status of a tenant's DEK.
 	GetTenantDEKStatus(ctx context.Context, tenantID string) (*tenant.DEKStatus, error)
+	// InitTenantBarrier explicitly initializes a per-tenant barrier.
+	InitTenantBarrier(ctx context.Context, tenantID string) error
+	// UnsealTenantBarrier unseals a per-tenant barrier with the supplied key.
+	UnsealTenantBarrier(ctx context.Context, tenantID string, key []byte) error
+	// SealTenantBarrier seals a per-tenant barrier.
+	SealTenantBarrier(ctx context.Context, tenantID string) error
+	// TenantBarrierStatus reports the current barrier state for a tenant.
+	TenantBarrierStatus(ctx context.Context, tenantID string) (*tenant.TenantBarrierState, error)
 }
 
 // =============================================================================
@@ -436,6 +484,12 @@ func (h *TenantHandlers) RegisterRoutes(router *mux.Router) {
 	// DEK operations
 	router.HandleFunc("/api/v1/tenants/{id}/dek/rotate", h.handleRotateTenantDEK).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/tenants/{id}/dek/status", h.handleGetTenantDEKStatus).Methods(http.MethodGet)
+
+	// Per-tenant barrier operations
+	router.HandleFunc("/api/v1/tenants/{id}/barrier/init", h.handleInitTenantBarrier).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/tenants/{id}/barrier/unseal", h.handleUnsealTenantBarrier).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/tenants/{id}/barrier/seal", h.handleSealTenantBarrier).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/tenants/{id}/barrier/status", h.handleTenantBarrierStatus).Methods(http.MethodGet)
 
 	h.logger.Info("Tenant REST routes registered")
 }
@@ -1082,7 +1136,7 @@ func (h *TenantHandlers) handleRotateTenantDEK(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	result, err := h.manager.RotateTenantDEK(ctx, tenantID, req.Background)
+	result, err := h.manager.RotateTenantDEKWithOptions(ctx, tenantID, req.Background)
 	if err != nil {
 		h.logger.Error("Failed to rotate tenant DEK", "error", err, "tenant_id", tenantID)
 		h.writeTenantError(w, "rotate_dek", err)
@@ -1151,6 +1205,174 @@ func (h *TenantHandlers) handleGetTenantDEKStatus(w http.ResponseWriter, r *http
 			StartedAt:           status.ReencryptProgress.StartedAt,
 			EstimatedCompletion: status.ReencryptProgress.EstimatedCompletion,
 		}
+	}
+
+	h.writeJSON(w, http.StatusOK, resp)
+}
+
+// =============================================================================
+// Per-Tenant Barrier Handlers
+// =============================================================================
+
+// handleInitTenantBarrier handles POST /api/v1/tenants/{id}/barrier/init.
+// The body may contain optional Shamir threshold/shares parameters; if absent
+// or empty, deterministic non-Shamir initialization is performed. The tenant
+// must exist.
+func (h *TenantHandlers) handleInitTenantBarrier(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if h.manager == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrTenantManagerNotAvailable{})
+		return
+	}
+
+	vars := mux.Vars(r)
+	tenantID := vars["id"]
+	if tenantID == "" {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidTenantID{})
+		return
+	}
+
+	// Body is optional — accept and ignore decode errors when the body is empty.
+	if r.Body != nil && r.ContentLength != 0 {
+		var req InitTenantBarrierRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
+			return
+		}
+		// Threshold/shares are accepted for forward compatibility with the
+		// SDK's TenantBarrierInitRequest; the platform Manager currently
+		// performs deterministic init regardless of the values supplied. The
+		// gRPC server exhibits the same behaviour.
+		_ = req
+	}
+
+	if err := h.manager.InitTenantBarrier(ctx, tenantID); err != nil {
+		h.logger.Error("Failed to init tenant barrier", "error", err, "tenant_id", tenantID)
+		h.writeTenantError(w, "init_tenant_barrier", err)
+		return
+	}
+
+	resp := TenantBarrierActionResponse{
+		TenantID:  tenantID,
+		Success:   true,
+		Message:   "tenant barrier initialized",
+		Timestamp: time.Now().UTC(),
+	}
+
+	h.logger.Info("Tenant barrier initialized", "tenant_id", tenantID)
+	h.writeJSON(w, http.StatusOK, resp)
+}
+
+// handleUnsealTenantBarrier handles POST /api/v1/tenants/{id}/barrier/unseal.
+// The body must contain a "key" field (base64-encoded bytes) carrying the
+// unseal key material.
+func (h *TenantHandlers) handleUnsealTenantBarrier(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if h.manager == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrTenantManagerNotAvailable{})
+		return
+	}
+
+	vars := mux.Vars(r)
+	tenantID := vars["id"]
+	if tenantID == "" {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidTenantID{})
+		return
+	}
+
+	var req UnsealTenantBarrierRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
+			return
+		}
+	}
+
+	if err := h.manager.UnsealTenantBarrier(ctx, tenantID, req.Key); err != nil {
+		h.logger.Error("Failed to unseal tenant barrier", "error", err, "tenant_id", tenantID)
+		h.writeTenantError(w, "unseal_tenant_barrier", err)
+		return
+	}
+
+	resp := TenantBarrierActionResponse{
+		TenantID:  tenantID,
+		Success:   true,
+		Message:   "tenant barrier unsealed",
+		Timestamp: time.Now().UTC(),
+	}
+
+	h.logger.Info("Tenant barrier unsealed", "tenant_id", tenantID)
+	h.writeJSON(w, http.StatusOK, resp)
+}
+
+// handleSealTenantBarrier handles POST /api/v1/tenants/{id}/barrier/seal.
+// No request body is required; the tenant ID is taken from the URL path.
+func (h *TenantHandlers) handleSealTenantBarrier(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if h.manager == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrTenantManagerNotAvailable{})
+		return
+	}
+
+	vars := mux.Vars(r)
+	tenantID := vars["id"]
+	if tenantID == "" {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidTenantID{})
+		return
+	}
+
+	if err := h.manager.SealTenantBarrier(ctx, tenantID); err != nil {
+		h.logger.Error("Failed to seal tenant barrier", "error", err, "tenant_id", tenantID)
+		h.writeTenantError(w, "seal_tenant_barrier", err)
+		return
+	}
+
+	resp := TenantBarrierActionResponse{
+		TenantID:  tenantID,
+		Success:   true,
+		Message:   "tenant barrier sealed",
+		Timestamp: time.Now().UTC(),
+	}
+
+	h.logger.Info("Tenant barrier sealed", "tenant_id", tenantID)
+	h.writeJSON(w, http.StatusOK, resp)
+}
+
+// handleTenantBarrierStatus handles GET /api/v1/tenants/{id}/barrier/status.
+// Uninitialized barriers return Sealed=true, Initialized=false rather than
+// erroring.
+func (h *TenantHandlers) handleTenantBarrierStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if h.manager == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrTenantManagerNotAvailable{})
+		return
+	}
+
+	vars := mux.Vars(r)
+	tenantID := vars["id"]
+	if tenantID == "" {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidTenantID{})
+		return
+	}
+
+	st, err := h.manager.TenantBarrierStatus(ctx, tenantID)
+	if err != nil {
+		h.logger.Error("Failed to get tenant barrier status", "error", err, "tenant_id", tenantID)
+		h.writeTenantError(w, "tenant_barrier_status", err)
+		return
+	}
+
+	resp := TenantBarrierStatusResponse{
+		TenantID:       st.TenantID,
+		Sealed:         st.Sealed,
+		Initialized:    st.Initialized,
+		Strategy:       st.Strategy,
+		HardwareBacked: st.HardwareBacked,
+		Timestamp:      time.Now().UTC(),
 	}
 
 	h.writeJSON(w, http.StatusOK, resp)
@@ -1279,6 +1501,10 @@ func (h *TenantHandlers) writeTenantError(w http.ResponseWriter, operation strin
 		status = http.StatusInternalServerError
 	case tenant.ErrStorageFailed:
 		status = http.StatusInternalServerError
+	case tenant.ErrBarrierOperationFailed:
+		status = http.StatusInternalServerError
+	case tenant.ErrBarrierNotSupported:
+		status = http.StatusNotImplemented
 	default:
 		status = http.StatusInternalServerError
 	}

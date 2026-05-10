@@ -23,13 +23,17 @@ import (
 )
 
 // testBarrierClient implements TenantBarrierClient for testing with real
-// in-memory state tracking.
+// in-memory state tracking. The barriers map keys tenantID to the unsealed
+// flag (true = unsealed, false = sealed). Presence of an entry means the
+// barrier has been initialized.
 type testBarrierClient struct {
 	mu       sync.Mutex
-	barriers map[string]bool // tenantID -> unsealed
+	barriers map[string]bool // tenantID -> unsealed (true = unsealed)
 
 	initErr   error
 	unsealErr error
+	sealErr   error
+	statusErr error
 }
 
 func newTestBarrierClient() *testBarrierClient {
@@ -56,6 +60,35 @@ func (c *testBarrierClient) TenantBarrierUnseal(ctx context.Context, req *quicba
 	defer c.mu.Unlock()
 	c.barriers[req.TenantID] = true // unsealed
 	return nil
+}
+
+func (c *testBarrierClient) TenantBarrierSeal(ctx context.Context, req *quicbaassdk.QRDBTenantBarrierSealRequest) error {
+	if c.sealErr != nil {
+		return c.sealErr
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.barriers[req.TenantID]; !ok {
+		return ErrBarrierOperationFailed{Operation: "Seal", Err: ErrInvalidRequest{Reason: "tenant barrier not initialized"}}
+	}
+	c.barriers[req.TenantID] = false
+	return nil
+}
+
+func (c *testBarrierClient) TenantBarrierStatus(ctx context.Context, req *quicbaassdk.QRDBTenantBarrierStatusRequest) (*quicbaassdk.QRDBTenantBarrierStatusResponse, error) {
+	if c.statusErr != nil {
+		return nil, c.statusErr
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	unsealed, ok := c.barriers[req.TenantID]
+	return &quicbaassdk.QRDBTenantBarrierStatusResponse{
+		TenantID:       req.TenantID,
+		Sealed:         !unsealed, // uninitialized -> ok=false -> unsealed=false -> Sealed=true
+		Initialized:    ok,
+		Strategy:       "software",
+		HardwareBacked: false,
+	}, nil
 }
 
 func (c *testBarrierClient) isInitialized(tenantID string) bool {
@@ -477,25 +510,38 @@ func TestUnsealTenantBarrier_SDKError(t *testing.T) {
 // SealTenantBarrier
 // ---------------------------------------------------------------------------
 
-// TestSealTenantBarrier_NotSupported verifies that seal returns the
-// not-supported error.
-func TestSealTenantBarrier_NotSupported(t *testing.T) {
-	m, _, _ := newTestManagerWithBarrier(t)
+// TestSealTenantBarrier_Success verifies that seal succeeds against the SDK
+// after the tenant barrier has been initialized, leaving the barrier in the
+// sealed state.
+func TestSealTenantBarrier_Success(t *testing.T) {
+	m, _, barrierClient := newTestManagerWithBarrier(t)
 	ctx := context.Background()
 
-	err := m.SealTenantBarrier(ctx, "some-tenant")
-	if err == nil {
-		t.Fatal("expected not-supported error")
+	if err := barrierClient.TenantBarrierInit(ctx, &quicbaassdk.QRDBTenantBarrierInitRequest{TenantID: "tenant-x"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if err := barrierClient.TenantBarrierUnseal(ctx, &quicbaassdk.QRDBTenantBarrierUnsealRequest{TenantID: "tenant-x"}); err != nil {
+		t.Fatalf("unseal: %v", err)
 	}
 
-	var notSupported ErrBarrierNotSupported
-	if !errors.As(err, &notSupported) {
-		t.Errorf("expected ErrBarrierNotSupported, got: %T", err)
+	if err := m.SealTenantBarrier(ctx, "tenant-x"); err != nil {
+		t.Fatalf("SealTenantBarrier: %v", err)
+	}
+
+	st, err := m.TenantBarrierStatus(ctx, "tenant-x")
+	if err != nil {
+		t.Fatalf("status after seal: %v", err)
+	}
+	if !st.Sealed {
+		t.Errorf("expected sealed=true after Seal, got %+v", st)
+	}
+	if !st.Initialized {
+		t.Errorf("expected initialized=true after Seal, got %+v", st)
 	}
 }
 
 // TestSealTenantBarrier_EmptyTenantID verifies empty ID validation runs
-// before the not-supported check.
+// before the SDK call and returns ErrInvalidRequest.
 func TestSealTenantBarrier_EmptyTenantID(t *testing.T) {
 	m, _, _ := newTestManagerWithBarrier(t)
 	ctx := context.Background()
@@ -511,29 +557,93 @@ func TestSealTenantBarrier_EmptyTenantID(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TenantBarrierStatus
-// ---------------------------------------------------------------------------
-
-// TestTenantBarrierStatus_NotSupported verifies that status returns the
-// not-supported error.
-func TestTenantBarrierStatus_NotSupported(t *testing.T) {
+// TestSealTenantBarrier_NoClient verifies the not-supported guard fires when
+// no barrier client has been wired into the manager.
+func TestSealTenantBarrier_NoClient(t *testing.T) {
 	m, _, _ := newTestManagerWithBarrier(t)
-	ctx := context.Background()
+	m.tenantBarrierClient = nil
 
-	_, err := m.TenantBarrierStatus(ctx, "some-tenant")
+	err := m.SealTenantBarrier(context.Background(), "tenant-x")
 	if err == nil {
 		t.Fatal("expected not-supported error")
 	}
-
 	var notSupported ErrBarrierNotSupported
 	if !errors.As(err, &notSupported) {
 		t.Errorf("expected ErrBarrierNotSupported, got: %T", err)
 	}
 }
 
-// TestTenantBarrierStatus_EmptyTenantID verifies empty ID validation
-// runs before the not-supported check.
+// TestSealTenantBarrier_SDKError wraps a transport error in ErrStorageFailed.
+func TestSealTenantBarrier_SDKError(t *testing.T) {
+	m, _, barrierClient := newTestManagerWithBarrier(t)
+	barrierClient.sealErr = errors.New("transport down")
+
+	err := m.SealTenantBarrier(context.Background(), "tenant-x")
+	if err == nil {
+		t.Fatal("expected error from SDK")
+	}
+	var storageErr ErrStorageFailed
+	if !errors.As(err, &storageErr) {
+		t.Errorf("expected ErrStorageFailed, got: %T", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TenantBarrierStatus
+// ---------------------------------------------------------------------------
+
+// TestTenantBarrierStatus_Uninitialized confirms that querying a tenant whose
+// barrier was never initialized returns Sealed=true, Initialized=false rather
+// than an error.
+func TestTenantBarrierStatus_Uninitialized(t *testing.T) {
+	m, _, _ := newTestManagerWithBarrier(t)
+	ctx := context.Background()
+
+	st, err := m.TenantBarrierStatus(ctx, "never-init")
+	if err != nil {
+		t.Fatalf("TenantBarrierStatus: %v", err)
+	}
+	if st == nil {
+		t.Fatal("expected non-nil state")
+	}
+	if !st.Sealed {
+		t.Errorf("expected sealed=true for uninitialized barrier, got %+v", st)
+	}
+	if st.Initialized {
+		t.Errorf("expected initialized=false for uninitialized barrier, got %+v", st)
+	}
+}
+
+// TestTenantBarrierStatus_AfterUnseal verifies that an unsealed tenant
+// barrier reports Sealed=false, Initialized=true with strategy metadata.
+func TestTenantBarrierStatus_AfterUnseal(t *testing.T) {
+	m, _, barrierClient := newTestManagerWithBarrier(t)
+	ctx := context.Background()
+
+	if err := barrierClient.TenantBarrierInit(ctx, &quicbaassdk.QRDBTenantBarrierInitRequest{TenantID: "tenant-y"}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if err := barrierClient.TenantBarrierUnseal(ctx, &quicbaassdk.QRDBTenantBarrierUnsealRequest{TenantID: "tenant-y"}); err != nil {
+		t.Fatalf("unseal: %v", err)
+	}
+
+	st, err := m.TenantBarrierStatus(ctx, "tenant-y")
+	if err != nil {
+		t.Fatalf("TenantBarrierStatus: %v", err)
+	}
+	if st.Sealed {
+		t.Errorf("expected sealed=false after unseal, got %+v", st)
+	}
+	if !st.Initialized {
+		t.Errorf("expected initialized=true after init, got %+v", st)
+	}
+	if st.Strategy != "software" {
+		t.Errorf("expected strategy=software, got %q", st.Strategy)
+	}
+}
+
+// TestTenantBarrierStatus_EmptyTenantID verifies empty ID validation runs
+// before the SDK call.
 func TestTenantBarrierStatus_EmptyTenantID(t *testing.T) {
 	m, _, _ := newTestManagerWithBarrier(t)
 	ctx := context.Background()
@@ -546,6 +656,37 @@ func TestTenantBarrierStatus_EmptyTenantID(t *testing.T) {
 	var invalidReq ErrInvalidRequest
 	if !errors.As(err, &invalidReq) {
 		t.Errorf("expected ErrInvalidRequest, got: %T", err)
+	}
+}
+
+// TestTenantBarrierStatus_NoClient verifies the not-supported guard fires
+// when no barrier client has been wired.
+func TestTenantBarrierStatus_NoClient(t *testing.T) {
+	m, _, _ := newTestManagerWithBarrier(t)
+	m.tenantBarrierClient = nil
+
+	_, err := m.TenantBarrierStatus(context.Background(), "tenant-x")
+	if err == nil {
+		t.Fatal("expected not-supported error")
+	}
+	var notSupported ErrBarrierNotSupported
+	if !errors.As(err, &notSupported) {
+		t.Errorf("expected ErrBarrierNotSupported, got: %T", err)
+	}
+}
+
+// TestTenantBarrierStatus_SDKError wraps a transport error in ErrStorageFailed.
+func TestTenantBarrierStatus_SDKError(t *testing.T) {
+	m, _, barrierClient := newTestManagerWithBarrier(t)
+	barrierClient.statusErr = errors.New("transport down")
+
+	_, err := m.TenantBarrierStatus(context.Background(), "tenant-x")
+	if err == nil {
+		t.Fatal("expected error from SDK")
+	}
+	var storageErr ErrStorageFailed
+	if !errors.As(err, &storageErr) {
+		t.Errorf("expected ErrStorageFailed, got: %T", err)
 	}
 }
 

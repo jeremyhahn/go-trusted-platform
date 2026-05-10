@@ -10,6 +10,23 @@ import { DataTable, createSelectColumn } from '@/components/ui/data-table';
 import { DataTableColumnHeader } from '@/components/ui/data-table-column-header';
 import { DataTableRowActions } from '@/components/ui/data-table-row-actions';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { useSDN, useApi } from '@/hooks';
 import type { Port, PortStatus } from 'trusted-platform-sdk';
@@ -52,6 +69,10 @@ export default function SDNPortsPage() {
   const { toast } = useToast();
   const sdn = useSDN();
   const [selectedBridgeId, setSelectedBridgeId] = useState<string>('');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createName, setCreateName] = useState('');
+  const [createType, setCreateType] = useState('internal');
+  const [createSubmitting, setCreateSubmitting] = useState(false);
 
   // Fetch bridges to get the first bridge ID
   const {
@@ -378,12 +399,78 @@ export default function SDNPortsPage() {
           <Button variant="outline" size="icon" onClick={fetchPorts} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button>
+          <Button onClick={() => setCreateOpen(true)} disabled={!selectedBridgeId}>
             <Plus className="mr-2 h-4 w-4" />
             Add Port
           </Button>
         </div>
       </div>
+
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Port</DialogTitle>
+            <DialogDescription>
+              Add a port to bridge {selectedBridgeId || 'unknown'}.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="port-name">Name *</Label>
+              <Input
+                id="port-name"
+                value={createName}
+                onChange={(e) => setCreateName(e.target.value)}
+                placeholder="eth0"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="port-type">Type</Label>
+              <Select value={createType} onValueChange={setCreateType}>
+                <SelectTrigger id="port-type"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="internal">internal</SelectItem>
+                  <SelectItem value="physical">physical</SelectItem>
+                  <SelectItem value="tap">tap</SelectItem>
+                  <SelectItem value="veth">veth</SelectItem>
+                  <SelectItem value="vxlan">vxlan</SelectItem>
+                  <SelectItem value="gre">gre</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!createName || createSubmitting || !selectedBridgeId}
+              onClick={async () => {
+                setCreateSubmitting(true);
+                try {
+                  await sdn.addPort({
+                    bridgeId: selectedBridgeId,
+                    config: { name: createName, type: createType as any },
+                  });
+                  toast({ title: 'Port added', variant: 'success' });
+                  setCreateOpen(false);
+                  setCreateName('');
+                  refetchPorts();
+                } catch (err) {
+                  toast({
+                    title: 'Failed to add port',
+                    description: err instanceof Error ? err.message : 'Unknown error',
+                    variant: 'destructive',
+                  });
+                } finally {
+                  setCreateSubmitting(false);
+                }
+              }}
+            >
+              {createSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Add
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid gap-4 md:grid-cols-4">
         <div className="rounded-lg border border-border bg-card p-6">

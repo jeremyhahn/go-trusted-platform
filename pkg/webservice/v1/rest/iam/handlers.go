@@ -15,6 +15,7 @@ package iam
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -123,8 +124,70 @@ func NewIAMHandlers(
 
 // Helper methods
 
+// getTenantID resolves the active tenant in priority order:
+//  1. URL path variable {tenant} — used by tenant-scoped routes
+//     like /iam/tenants/{tenant}/users
+//  2. JWT `tenant_id` claim — used by flat routes like /iam/users
+//     where the WebUI doesn't carry the tenant in the URL
+//
+// This dual-mode resolution lets the same handler back both
+// /api/v1/iam/users (flat, browser-friendly) and
+// /api/v1/iam/tenants/{tenant}/users (explicit, machine-friendly)
+// without duplicating the handler body.
 func (h *IAMHandlers) getTenantID(r *http.Request) string {
-	return mux.Vars(r)["tenant"]
+	if t := mux.Vars(r)["tenant"]; t != "" {
+		return t
+	}
+	return tenantIDFromJWT(r)
+}
+
+// tenantIDFromJWT decodes (without verifying — verification
+// happens in the auth middleware when mounted) the JWT token
+// attached to r and returns its `tenant_id` claim. Mirrors the
+// helper in pkg/webservice/v1/rest/invitation/handlers.go to keep
+// flat-route tenant resolution consistent across IAM surfaces.
+func tenantIDFromJWT(r *http.Request) string {
+	token := bearerToken(r)
+	if token == "" {
+		if c, err := r.Cookie("jwt"); err == nil {
+			token = c.Value
+		}
+	}
+	if token == "" {
+		if c, err := r.Cookie("token"); err == nil {
+			token = c.Value
+		}
+	}
+	if token == "" {
+		return ""
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		payload, err = base64.URLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return ""
+		}
+	}
+	var claims struct {
+		TenantID string `json:"tenant_id"`
+	}
+	if json.Unmarshal(payload, &claims) != nil {
+		return ""
+	}
+	return claims.TenantID
+}
+
+func bearerToken(r *http.Request) string {
+	auth := r.Header.Get("Authorization")
+	const prefix = "Bearer "
+	if strings.HasPrefix(auth, prefix) {
+		return strings.TrimPrefix(auth, prefix)
+	}
+	return ""
 }
 
 func (h *IAMHandlers) getUserID(r *http.Request) string {
@@ -188,9 +251,13 @@ func (h *IAMHandlers) createContext() (context.Context, context.CancelFunc) {
 }
 
 func (h *IAMHandlers) decodeJSON(r *http.Request, v interface{}) error {
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	return decoder.Decode(v)
+	// IAM REST request structs intentionally accept extra unknown fields
+	// because the JS SDK includes redundant context such as `tenantId`
+	// in the request body even though the server already parses tenant
+	// from the URL path. Rejecting unknowns would force every page to
+	// strip those fields client-side. Validation of required fields
+	// happens after decode in each handler.
+	return json.NewDecoder(r.Body).Decode(v)
 }
 
 func (h *IAMHandlers) handleError(w http.ResponseWriter, r *http.Request, err error) {
@@ -257,7 +324,18 @@ func (h *IAMHandlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := h.createContext()
 	defer cancel()
 
+	// Username defaults to the email local-part when the WebUI form
+	// only supplies an email. The IAM SDK rejects empty usernames.
+	username := req.Username
+	if username == "" {
+		if at := strings.IndexByte(req.Email, '@'); at > 0 {
+			username = req.Email[:at]
+		} else {
+			username = req.Email
+		}
+	}
 	sdkReq := &iamsdk.CreateUserRequest{
+		Username:    username,
 		Email:       req.Email,
 		DisplayName: req.Name,
 		Roles:       req.Roles,
@@ -1288,6 +1366,7 @@ func (h *IAMHandlers) RegisterApp(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := h.createContext()
 	defer cancel()
 
+	req.Resolve()
 	sdkReq := &iamsdk.RegisterAppRequest{
 		Name:         req.Name,
 		RedirectURIs: req.RedirectURIs,

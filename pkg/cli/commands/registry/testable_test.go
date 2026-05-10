@@ -81,7 +81,7 @@ type MockRegistryClient struct {
 	PushFunc    func(ctx context.Context, req *PushRequest) (*PushResult, error)
 	PullFunc    func(ctx context.Context, req *PullRequest) (*PullResult, error)
 	ListFunc    func(ctx context.Context, req *ListRequest) (*ListResult, error)
-	DeleteFunc  func(ctx context.Context, req *DeleteRequest) (*DeleteResult, error)
+	DeleteFunc  func(ctx context.Context, req *DeleteRequest) (*DeleteResultCLI, error)
 	InspectFunc func(ctx context.Context, req *InspectRequest) (*InspectResult, error)
 	StatusFunc  func(ctx context.Context, req *StatusRequest) (*StatusResult, error)
 }
@@ -107,7 +107,7 @@ func (m *MockRegistryClient) List(ctx context.Context, req *ListRequest) (*ListR
 	return nil, errors.New("not implemented")
 }
 
-func (m *MockRegistryClient) Delete(ctx context.Context, req *DeleteRequest) (*DeleteResult, error) {
+func (m *MockRegistryClient) Delete(ctx context.Context, req *DeleteRequest) (*DeleteResultCLI, error) {
 	if m.DeleteFunc != nil {
 		return m.DeleteFunc(ctx, req)
 	}
@@ -802,7 +802,7 @@ func TestExecuteDelete_Success(t *testing.T) {
 		name    string
 		format  cli.OutputFormat
 		req     *DeleteRequest
-		resp    *DeleteResult
+		resp    *DeleteResultCLI
 		wantErr bool
 	}{
 		{
@@ -812,7 +812,7 @@ func TestExecuteDelete_Success(t *testing.T) {
 				Reference: "myrepo/myimage:v1.0",
 				Force:     true,
 			},
-			resp: &DeleteResult{
+			resp: &DeleteResultCLI{
 				Reference: "myrepo/myimage:v1.0",
 				Digest:    "sha256:abc123",
 				Deleted:   true,
@@ -827,7 +827,7 @@ func TestExecuteDelete_Success(t *testing.T) {
 				Reference: "myrepo/protected:v1.0",
 				Force:     false,
 			},
-			resp: &DeleteResult{
+			resp: &DeleteResultCLI{
 				Reference: "myrepo/protected:v1.0",
 				Digest:    "sha256:protected123",
 				Deleted:   false,
@@ -842,7 +842,7 @@ func TestExecuteDelete_Success(t *testing.T) {
 			req: &DeleteRequest{
 				Reference: "myrepo/myimage:v2.0",
 			},
-			resp: &DeleteResult{
+			resp: &DeleteResultCLI{
 				Reference: "myrepo/myimage:v2.0",
 				Digest:    "sha256:def456",
 				Deleted:   true,
@@ -856,7 +856,7 @@ func TestExecuteDelete_Success(t *testing.T) {
 			req: &DeleteRequest{
 				Reference: "myrepo/myimage:v3.0",
 			},
-			resp: &DeleteResult{
+			resp: &DeleteResultCLI{
 				Reference: "myrepo/myimage:v3.0",
 				Digest:    "sha256:ghi789",
 				Deleted:   true,
@@ -869,7 +869,7 @@ func TestExecuteDelete_Success(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockClient := &MockRegistryClient{
-				DeleteFunc: func(ctx context.Context, req *DeleteRequest) (*DeleteResult, error) {
+				DeleteFunc: func(ctx context.Context, req *DeleteRequest) (*DeleteResultCLI, error) {
 					return tt.resp, nil
 				},
 			}
@@ -986,7 +986,7 @@ func TestExecuteDelete_InvalidImageReference(t *testing.T) {
 func TestExecuteDelete_ClientError(t *testing.T) {
 	expectedErr := errors.New("permission denied")
 	mockClient := &MockRegistryClient{
-		DeleteFunc: func(ctx context.Context, req *DeleteRequest) (*DeleteResult, error) {
+		DeleteFunc: func(ctx context.Context, req *DeleteRequest) (*DeleteResultCLI, error) {
 			return nil, expectedErr
 		},
 	}
@@ -1013,7 +1013,7 @@ func TestExecuteDelete_ClientError(t *testing.T) {
 
 func TestPrintDeleteResponseTestable_InvalidFormat(t *testing.T) {
 	printer := newMockPrinter()
-	resp := &DeleteResult{
+	resp := &DeleteResultCLI{
 		Reference: "myrepo/myimage:v1.0",
 	}
 
@@ -1034,7 +1034,7 @@ func TestPrintDeleteResponseTestable_PrinterError(t *testing.T) {
 			return expectedErr
 		},
 	}
-	resp := &DeleteResult{
+	resp := &DeleteResultCLI{
 		Reference: "myrepo/myimage:v1.0",
 	}
 

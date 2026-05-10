@@ -20,6 +20,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/dao"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
@@ -165,10 +166,29 @@ func (s *TemplateService) FindByName(ctx context.Context, tenantID, name string)
 // ToProfile deep-copies the template config into a new DeviceProfile with optional overrides.
 // It does NOT save the profile -- the caller is responsible for saving.
 //
-// The template's Config (raw YAML bytes) is stored in the profile's PlatformdConfig
-// as an inline configuration. The raw bytes are unmarshaled into a generic map
-// to produce a clean deep copy without importing the app package.
-func (s *TemplateService) ToProfile(ctx context.Context, templateID uint64, overrides *entities.DeviceProfile) (*entities.DeviceProfile, error) {
+// The template's Config (raw YAML bytes) is the full base platform configuration.
+// When configOverrides are provided, they are deep-merged onto the template config.
+// The merged result is stored in both profile.Config (for HandleGetConfig delivery)
+// and profile.PlatformdConfig.Inline (for backward compatibility).
+func (s *TemplateService) ToProfile(
+	ctx context.Context,
+	templateID uint64,
+	overrides *entities.DeviceProfile,
+) (*entities.DeviceProfile, error) {
+
+	return s.ToProfileWithConfigOverrides(ctx, templateID, overrides, nil)
+}
+
+// ToProfileWithConfigOverrides creates a profile from a template, applying both
+// structural overrides (name, role, networks, etc.) and config-level overrides
+// (deep-merged into the template's platform YAML config).
+func (s *TemplateService) ToProfileWithConfigOverrides(
+	ctx context.Context,
+	templateID uint64,
+	overrides *entities.DeviceProfile,
+	configOverrides map[string]interface{},
+) (*entities.DeviceProfile, error) {
+
 	if templateID == 0 {
 		return nil, ErrInvalidTemplateID{}
 	}
@@ -183,7 +203,7 @@ func (s *TemplateService) ToProfile(ctx context.Context, templateID uint64, over
 		Role:     template.Role,
 	}
 
-	// Deep-copy the template config into a PlatformdConfigRef.
+	// Deep-copy the template config into a PlatformdConfigRef and profile.Config.
 	// The template stores raw YAML bytes; unmarshal into a generic map
 	// for the inline config to avoid import cycles with the app package.
 	if len(template.Config) > 0 {
@@ -191,10 +211,20 @@ func (s *TemplateService) ToProfile(ctx context.Context, templateID uint64, over
 		if err := yaml.Unmarshal(template.Config, &configMap); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal template config: %w", err)
 		}
+
+		// Apply config-level overrides (e.g. hostname, IP) via deep merge.
+		if len(configOverrides) > 0 {
+			config.DeepMergeMaps(configMap, configOverrides)
+		}
+
 		profile.PlatformdConfig = &entities.PlatformdConfigRef{
 			ConfigType: "inline",
 			Inline:     configMap,
 		}
+
+		// Store the full merged config in profile.Config so HandleGetConfig
+		// can return it directly without needing to re-merge.
+		profile.Config = configMap
 	}
 
 	// Deep-copy match rules via YAML round-trip

@@ -20,8 +20,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
 // PullResult represents the result of a pull operation
@@ -50,26 +50,15 @@ func NewPullCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 The image reference should be in the format:
   [registry/]repository[:tag|@digest]
 
-Examples:
-  repository/image:tag
-  myrepo/myimage:v1.0
-  myrepo/myimage@sha256:abc123...
-
-When pulling, TPM attestation is automatically generated to prove the
-integrity of the host. If the registry requires attestation, the pull
-will fail if the host cannot be verified.
-
 Output:
   Use --output to specify a file to write to. If not specified, writes to stdout.
 
 Decryption:
   If the image is encrypted, use --decrypt to automatically decrypt
-  the image layers during pull. The decryption key must be accessible
-  via the KMS.
+  the image layers during pull.
 
 Verification:
-  Use --verify to verify the image signature. The pull will fail if
-  the signature is invalid or missing.`,
+  Use --verify to verify the image signature.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
@@ -87,7 +76,6 @@ Verification:
 
 // runPull executes the pull command
 func runPull(flags *cli.CommonFlags, ref string, decrypt, verify bool, platform, outputFile string) error {
-	// Validate image reference
 	if err := validateImageRef(ref); err != nil {
 		return err
 	}
@@ -98,29 +86,19 @@ func runPull(flags *cli.CommonFlags, ref string, decrypt, verify bool, platform,
 	}
 	defer base.Close()
 
-	client := base.Client().Registry()
-	if client == nil {
-		return ErrRegistryClientNotInitialized{}
-	}
+	regClient := regsvc.NewClientFromGRPC(base.Client().Registry())
 
-	// Parse reference to get repository and tag/digest
 	repository, reference := parseImageRef(ref)
 
-	// Build the request
-	req := &platformv1.PullRequest{
-		Repository: repository,
-		Reference:  reference,
-	}
-
-	// If reference looks like a digest, set it in the digest field instead
+	// Build the pull request using SDK helper
+	pullReq := regsvc.NewPullRequest(repository, reference, "")
 	if len(reference) > 7 && reference[:7] == "sha256:" {
-		req.Digest = reference
-		req.Reference = ""
+		pullReq = regsvc.NewPullRequest(repository, "", reference)
 	}
 
 	// Create the streaming pull client
 	ctx := base.Context()
-	stream, err := client.Pull(ctx, req)
+	stream, err := regClient.Pull(ctx, pullReq)
 	if err != nil {
 		return ErrPullFailed{Reference: ref, Err: err}
 	}
@@ -141,7 +119,12 @@ func runPull(flags *cli.CommonFlags, ref string, decrypt, verify bool, platform,
 	}
 
 	// Track metadata and size
-	var pullMetadata *platformv1.PullMetadata
+	result := &PullResult{
+		Reference: ref,
+		Decrypted: decrypt,
+		Verified:  verify,
+		Platform:  platform,
+	}
 	var totalReceived int64
 
 	// Receive the stream
@@ -156,7 +139,14 @@ func runPull(flags *cli.CommonFlags, ref string, decrypt, verify bool, platform,
 
 		// Handle metadata
 		if metadata := resp.GetMetadata(); metadata != nil {
-			pullMetadata = metadata
+			if metadata.GetArtifact() != nil {
+				result.Digest = metadata.GetArtifact().GetDigest()
+				if metadata.GetArtifact().GetOs() != "" || metadata.GetArtifact().GetArchitecture() != "" {
+					result.Platform = fmt.Sprintf("%s/%s",
+						metadata.GetArtifact().GetOs(),
+						metadata.GetArtifact().GetArchitecture())
+				}
+			}
 			continue
 		}
 
@@ -170,40 +160,19 @@ func runPull(flags *cli.CommonFlags, ref string, decrypt, verify bool, platform,
 		}
 	}
 
-	// Build result from metadata
-	result := &PullResult{
-		Reference: ref,
-		Size:      totalReceived,
-		Decrypted: decrypt,
-		Verified:  verify,
-		Platform:  platform,
-	}
-
-	if pullMetadata != nil {
-		if pullMetadata.GetArtifact() != nil {
-			result.Digest = pullMetadata.GetArtifact().GetDigest()
-			if pullMetadata.GetArtifact().GetOs() != "" || pullMetadata.GetArtifact().GetArchitecture() != "" {
-				result.Platform = fmt.Sprintf("%s/%s",
-					pullMetadata.GetArtifact().GetOs(),
-					pullMetadata.GetArtifact().GetArchitecture())
-			}
-		}
-	}
+	result.Size = totalReceived
 
 	printer := base.Printer()
 
 	// For table output, only print status info if writing to a file
-	// (otherwise we would mix data and status on stdout)
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		// Only print JSON/YAML if output went to a file, not stdout
 		if outputFile != "" {
 			return printer.Print(result)
 		}
 		return nil
 
 	case cli.OutputFormatTable:
-		// Only print table if output went to a file, not stdout
 		if outputFile != "" {
 			printer.PrintSuccess(fmt.Sprintf("Image pulled successfully: %s", ref))
 			fmt.Println()

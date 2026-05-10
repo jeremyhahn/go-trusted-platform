@@ -32,6 +32,10 @@ type PaginatedResponse struct {
 
 // CreateUserRequest is the request body for creating a user
 type CreateUserRequest struct {
+	// Username is the IAM identifier (required by QuicBaaS). The handler
+	// derives a sensible default from Email when callers only supply an
+	// email so the WebUI's name+email form keeps working.
+	Username   string            `json:"username,omitempty"`
 	Email      string            `json:"email"`
 	Name       string            `json:"name,omitempty"`
 	Roles      []string          `json:"roles,omitempty"`
@@ -230,13 +234,38 @@ type TestPolicyResponse struct {
 	EvaluationTimeNs int64  `json:"evaluation_time_ns"`
 }
 
-// RegisterAppRequest is the request body for registering an application
+// RegisterAppRequest is the request body for registering an application.
+// Accepts both snake_case (canonical REST) and camelCase (JS SDK) field
+// names so the WebUI's `{grantTypes: [...]}` payload reaches the
+// downstream SDK.
 type RegisterAppRequest struct {
-	Name           string   `json:"name"`
-	RedirectURIs   []string `json:"redirect_uris,omitempty"`
-	GrantTypes     []string `json:"grant_types,omitempty"`
-	ResponseTypes  []string `json:"response_types,omitempty"`
-	ResourcePrefix string   `json:"resource_prefix,omitempty"`
+	Name              string   `json:"name"`
+	RedirectURIs      []string `json:"redirect_uris,omitempty"`
+	RedirectURIsCamel []string `json:"redirectUris,omitempty"`
+	GrantTypes        []string `json:"grant_types,omitempty"`
+	GrantTypesCamel   []string `json:"grantTypes,omitempty"`
+	ResponseTypes     []string `json:"response_types,omitempty"`
+	ResponseTypesCamel []string `json:"responseTypes,omitempty"`
+	ResourcePrefix    string   `json:"resource_prefix,omitempty"`
+	ResourcePrefixCamel string `json:"resourcePrefix,omitempty"`
+	TenantID          string   `json:"tenantId,omitempty"`
+}
+
+// Resolve normalises camelCase aliases into the canonical snake_case
+// fields so handler code only needs to read one set.
+func (r *RegisterAppRequest) Resolve() {
+	if len(r.RedirectURIs) == 0 && len(r.RedirectURIsCamel) > 0 {
+		r.RedirectURIs = r.RedirectURIsCamel
+	}
+	if len(r.GrantTypes) == 0 && len(r.GrantTypesCamel) > 0 {
+		r.GrantTypes = r.GrantTypesCamel
+	}
+	if len(r.ResponseTypes) == 0 && len(r.ResponseTypesCamel) > 0 {
+		r.ResponseTypes = r.ResponseTypesCamel
+	}
+	if r.ResourcePrefix == "" && r.ResourcePrefixCamel != "" {
+		r.ResourcePrefix = r.ResourcePrefixCamel
+	}
 }
 
 // UpdateAppRequest is the request body for updating an application

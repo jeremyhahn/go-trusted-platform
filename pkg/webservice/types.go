@@ -18,10 +18,10 @@ import (
 	"crypto/elliptic"
 	"crypto/x509"
 
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 var (

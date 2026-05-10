@@ -580,3 +580,34 @@ type IAMManager interface {
     DeletePolicy(ctx context.Context, id string) error
 }
 ```
+
+## Scheduler Clustering
+
+Platformd embeds go-quicbaas's scheduler engine on PlatformShardID=1.
+In a Raft cluster the storage is replicated across every node, so
+every node's engine observes every due job.
+
+Dispatch gating (from go-quicbaas `NewWithClustering`):
+
+| Scenario | Rule |
+|---|---|
+| `Job.NodeAffinity == ""` (cluster-wide) | Execute only on the Raft leader |
+| `Job.NodeAffinity == <nodeID>` (node-affine) | Execute only on the matching node, regardless of leadership |
+
+Platformd uses node-affine jobs for cert renewal (one job per node,
+named `platform.cert-renewal.<nodeID>`), so each node renews only
+its own certs and leader churn doesn't cause duplicate firings.
+
+Leadership for the gate is supplied via a `LeaderChecker` — a small
+interface the platform implements against the existing raft accessor
+(`server.IsLeader(PlatformShardID)`).
+
+Wire-up: the quicbaas `SchedulerEngine()` accessor exposes the raw
+engine to platformd; `App.CertManagementScheduler()` returns it as
+the narrow `SchedulerService` interface the cert-renewal handler
+consumes.
+
+See `../bmc-tls.md` for the cert lifecycle that rides on top of this
+pattern, and `../../docs/bmc/testing.md` + `../operations/cert-lifecycle.md`
+for integration test + operator guides. Upstream detail lives in
+`/home/jhahn/sources/go-quicbaas/docs/scheduler-clustering.md`.

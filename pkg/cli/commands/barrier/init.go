@@ -14,123 +14,44 @@
 package barrier
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	barriersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/barrier"
 )
 
-// newInitCommand creates the barrier init subcommand
+// CanonicalRedirectError is emitted when an operator runs a legacy
+// renamed command path. Per docs/08-bootstrap-auth-architecture.md §6
+// "platformctl barrier init" is collapsed into the root "init" command.
+type CanonicalRedirectError struct {
+	Old string
+	New string
+}
+
+// Error returns a human-readable description.
+func (e *CanonicalRedirectError) Error() string {
+	return "subcommand '" + e.Old +
+		"' has been replaced by '" + e.New +
+		"' (per docs/08-bootstrap-auth-architecture.md §6). Run: " + e.New
+}
+
+// newInitCommand returns a redirect stub. Per
+// docs/08-bootstrap-auth-architecture.md §6 the legacy "barrier init"
+// subcommand is collapsed into the root "platformctl init" command.
+//
+// Operators running the legacy path receive a CanonicalRedirectError
+// pointing at the new canonical command.
 func newInitCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
-	var (
-		secret    string
-		threshold int32
-		shares    int32
-	)
-
-	cmd := &cobra.Command{
-		Use:   "init",
-		Short: "Initialize the barrier",
-		Long: `Initialize the barrier storage with encryption keys.
-
-If threshold >= 2 and shares >= threshold, Shamir secret sharing mode is used.
-Otherwise, single-key mode is used with the provided secret.
-
-The unseal keys returned during initialization are only shown once and must
-be stored securely. Loss of these keys means the barrier cannot be unsealed.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			flags := getFlags()
-			return runInit(flags, secret, threshold, shares)
+	return &cobra.Command{
+		Use:                "init",
+		Short:              "REMOVED: use the root 'platformctl init' command instead",
+		Long:               "The legacy \"platformctl barrier init\" command has been collapsed into the root \"platformctl init\" command per docs/08-bootstrap-auth-architecture.md §6.",
+		DisableFlagParsing: true,
+		Args:               cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return &CanonicalRedirectError{
+				Old: "platformctl barrier init",
+				New: "platformctl init --barrier-strategy <name> --so-pin ... --user-pin ... [...]",
+			}
 		},
 	}
-
-	cmd.Flags().StringVar(&secret, "secret", "", "root secret for single-key mode")
-	cmd.Flags().Int32Var(&threshold, "threshold", 1, "minimum shares required to unseal (>= 2 for Shamir mode)")
-	cmd.Flags().Int32Var(&shares, "shares", 1, "total number of Shamir shares to generate")
-
-	return cmd
-}
-
-func runInit(flags *cli.CommonFlags, secret string, threshold, shares int32) error {
-	if err := validateInitParams(secret, threshold, shares); err != nil {
-		return err
-	}
-
-	base, err := cli.NewBaseCommand(flags)
-	if err != nil {
-		return err
-	}
-	defer base.Close()
-
-	sdkClient := barriersvc.NewClientFromGRPC(base.Client().Barrier())
-
-	ctx := base.Context()
-	result, err := sdkClient.Init(ctx, &barriersvc.InitParams{
-		Secret:    secret,
-		Threshold: threshold,
-		Shares:    shares,
-	})
-	if err != nil {
-		return ErrBarrierInitFailed{Err: err}
-	}
-
-	printer := base.Printer()
-
-	switch flags.OutputFormat {
-	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(result)
-
-	case cli.OutputFormatTable:
-		return printInitTable(printer, result)
-
-	default:
-		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
-	}
-}
-
-func validateInitParams(secret string, threshold, shares int32) error {
-	// Shamir mode: threshold >= 2, shares >= threshold
-	if threshold >= 2 {
-		if shares < threshold {
-			return ErrInvalidThreshold{Threshold: threshold, Shares: shares}
-		}
-		return nil
-	}
-
-	// Single-key mode: secret is required
-	if secret == "" {
-		return ErrMissingSecret{}
-	}
-
-	return nil
-}
-
-func printInitTable(printer *cli.Printer, result *barriersvc.InitResult) error {
-	printer.PrintSuccess("Barrier initialized successfully")
-	fmt.Println()
-
-	printer.PrintKeyValue("Strategy", formatStrategy(result.Strategy))
-
-	if result.InitializedAt != nil {
-		printer.PrintKeyValue("Initialized At", result.InitializedAt.String())
-	}
-
-	if result.RootToken != "" {
-		printer.PrintKeyValue("Root Token", result.RootToken)
-	}
-
-	fmt.Println()
-
-	if len(result.UnsealKeys) > 0 {
-		printer.PrintWarning("Store the following unseal keys securely. They are only shown once.")
-		fmt.Println()
-
-		for i, key := range result.UnsealKeys {
-			printer.PrintKeyValue(fmt.Sprintf("Unseal Key %d", i+1), key)
-		}
-	}
-
-	return nil
 }

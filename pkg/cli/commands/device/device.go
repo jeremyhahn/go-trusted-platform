@@ -12,7 +12,7 @@
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
 // Package device provides CLI commands for device management operations
-// including listing, retrieving, finding, and deleting devices.
+// including listing, retrieving, finding, registering, and deleting devices.
 package device
 
 import (
@@ -32,6 +32,7 @@ The device subsystem provides device management capabilities:
   - List all registered devices with pagination
   - Get device details by ID
   - Find devices by serial number
+  - Register new devices with the control plane
   - Delete devices
 
 Examples:
@@ -50,6 +51,14 @@ Examples:
   # Find device by serial number
   platformctl device find-serial ABC123
 
+  # Register a device with the control plane
+  platformctl device register \
+    --hostname gw-01 \
+    --mac 00:25:90:FF:AA:01 \
+    --role gateway \
+    --template gateway-default \
+    --server https://198.18.1.140:8443
+
   # Delete a device
   platformctl device delete 123`,
 	}
@@ -58,6 +67,7 @@ Examples:
 	cmd.AddCommand(newListCommand(getFlags))
 	cmd.AddCommand(newGetCommand(getFlags))
 	cmd.AddCommand(newFindSerialCommand(getFlags))
+	cmd.AddCommand(newRegisterCommand(getFlags))
 	cmd.AddCommand(newDeleteCommand(getFlags))
 
 	return cmd

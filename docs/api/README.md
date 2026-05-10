@@ -257,4 +257,5 @@ rest_api:
 - [gRPC Design](grpc-design.md) - Comprehensive gRPC API architecture and design
 - [gRPC Reference](grpc-reference.md) - gRPC service endpoints reference
 - [REST Reference](rest-reference.md) - REST API endpoints reference
+- [REST Routers](rest-routers.md) - Internal layout of `pkg/webservice/v1/rest/*` and how to add a new router
 - [Architecture](../architecture/README.md)

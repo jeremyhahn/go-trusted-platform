@@ -10,7 +10,8 @@
  */
 
 import { useState } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter, useParams, usePathname } from 'next/navigation';
+import { resolveDynamicId } from '@/utils/dynamic-route';
 import {
   ArrowLeft,
   AlertCircle,
@@ -99,7 +100,8 @@ function formatDate(dateString: string) {
 
 export default function SessionDetailClient() {
   const params = useParams<{ sessionId: string }>();
-  const sessionId = params.sessionId;
+  const pathname = usePathname();
+  const sessionId = resolveDynamicId(params, pathname, 'sessions', 'sessionId');
   const router = useRouter();
   const { toast } = useToast();
   const deviceService = useDevice();
@@ -461,11 +463,13 @@ export default function SessionDetailClient() {
                             <SelectValue placeholder="Choose a device template..." />
                           </SelectTrigger>
                           <SelectContent>
-                            {templates.map((t) => (
-                              <SelectItem key={t.id} value={String(t.id)}>
-                                {t.name} — {t.role}
-                              </SelectItem>
-                            ))}
+                            {templates
+                              .filter((t) => t.id != null && String(t.id) !== '')
+                              .map((t) => (
+                                <SelectItem key={t.id} value={String(t.id)}>
+                                  {t.name} — {t.role}
+                                </SelectItem>
+                              ))}
                           </SelectContent>
                         </Select>
                       )}

@@ -23,7 +23,7 @@ import (
 	"crypto/x509"
 	"fmt"
 
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/miekg/dns"
 )
 

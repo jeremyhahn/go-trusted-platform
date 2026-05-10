@@ -313,7 +313,11 @@ const (
 	OpKMSBackendStatus   byte = 0xC9
 	OpKMSBatchEncrypt    byte = 0xCA // Batch encrypt multiple items
 	OpKMSBatchDecrypt    byte = 0xCB // Batch decrypt multiple items
-	// 0xCC-0xCF reserved for future KMS key management operations
+	// Switch Management Category Opcode (0xCC)
+	// Uses category pattern: first payload byte is sub-opcode.
+	OpSwitchCategory byte = 0xCC
+
+	// 0xCD-0xCF reserved for future operations
 
 	// KMS Crypto Operations (0xD0-0xDA)
 	OpKMSEncrypt                byte = 0xD0
@@ -1187,6 +1191,8 @@ func OpcodeToString(opcode byte) string {
 		return "KMSBatchEncrypt"
 	case OpKMSBatchDecrypt:
 		return "KMSBatchDecrypt"
+	case OpSwitchCategory:
+		return "SwitchCategory"
 
 	// KMS Crypto Operations
 	case OpKMSEncrypt:

@@ -79,6 +79,80 @@ func (c *Client) AddPort(ctx context.Context, bridgeName, portName string) (*Por
 	return c.GetPort(ctx, portName)
 }
 
+// AddBond creates a bonded port on a bridge: one Port row with N
+// Interface rows, bond_mode set (and optionally lacp=active|passive).
+// Members is the list of physical NIC names (e.g. {"eth6","eth7"}).
+//
+// The transaction inserts N interfaces, one port that references all
+// of them, and mutates the bridge to include the new port — all in a
+// single OVSDB Transact so the write is atomic. This is the same
+// pattern `ovs-vsctl add-bond` uses internally, just without the fork
+// overhead or the vsctl dependency on the target system.
+//
+// Modes: "active-backup", "balance-slb", "balance-tcp" (OVS port
+// bond_mode values). LACP: "active", "passive", "off" — pass empty to
+// leave the column unset (no LACP). Returns ErrPortExists when a port
+// with this name already exists; callers who want idempotent semantics
+// should GetPort first and treat ErrPortNotFound as "safe to create".
+func (c *Client) AddBond(ctx context.Context, bridgeName, bondName string, members []string, mode string, lacp string) (*Port, error) {
+	if bridgeName == "" {
+		return nil, ErrInvalidBridgeName
+	}
+	if bondName == "" {
+		return nil, ErrInvalidPortName
+	}
+	if len(members) < 2 {
+		return nil, fmt.Errorf("OVS bond needs at least 2 members (got %d)", len(members))
+	}
+
+	bridge, err := c.GetBridge(ctx, bridgeName)
+	if err != nil {
+		return nil, err
+	}
+	if existing, _ := c.GetPort(ctx, bondName); existing != nil {
+		return nil, ErrPortExists
+	}
+
+	// Build one Insert per member interface. Each gets a distinct
+	// named-uuid so the Port insert can reference all of them.
+	ops := make([]Operation, 0, len(members)+2)
+	ifaceNamedUUIDs := make([]interface{}, 0, len(members))
+	for i, member := range members {
+		named := fmt.Sprintf("bond_iface_%d", i)
+		ifaceRow := map[string]interface{}{
+			"name": member,
+			"type": "",
+		}
+		ops = append(ops, NewInsertOperation(interfaceTable, ifaceRow, named))
+		ifaceNamedUUIDs = append(ifaceNamedUUIDs, NamedUUID{NamedUUID: named})
+	}
+
+	portRow := map[string]interface{}{
+		"name":       bondName,
+		"interfaces": MarshalSet(ifaceNamedUUIDs),
+	}
+	if mode != "" {
+		portRow["bond_mode"] = mode
+	}
+	if lacp != "" {
+		portRow["lacp"] = lacp
+	}
+	const portNamedUUID = "new_bond_port"
+	ops = append(ops, NewInsertOperation(portTable, portRow, portNamedUUID))
+
+	ops = append(ops, NewMutateOperation(
+		bridgeTable,
+		[]Condition{NewCondition("_uuid", "==", []interface{}{"uuid", bridge.UUID})},
+		[]Mutation{NewMutation("ports", "insert", NamedUUID{NamedUUID: portNamedUUID})},
+	))
+
+	if _, err := c.Transact(ctx, ops...); err != nil {
+		return nil, fmt.Errorf("failed to add OVS bond %q: %w", bondName, err)
+	}
+
+	return c.GetPort(ctx, bondName)
+}
+
 // DeletePort removes a port from a bridge
 func (c *Client) DeletePort(ctx context.Context, bridgeName, portName string) error {
 	if bridgeName == "" {

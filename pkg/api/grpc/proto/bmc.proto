@@ -32,6 +32,17 @@ service BMCService {
   // Orchestrated provisioning
   rpc Provision(BMCProvisionRequest) returns (BMCProvisionResponse);
   rpc ProvisionStatus(BMCProvisionStatusRequest) returns (BMCProvisionStatusResponse);
+
+  // Certificate management
+  rpc GetWebCertificate(BMCGetWebCertificateRequest) returns (BMCGetWebCertificateResponse);
+  rpc ReplaceWebCertificate(BMCReplaceWebCertificateRequest) returns (BMCReplaceWebCertificateResponse);
+
+  // User management
+  rpc ListUsers(BMCListUsersRequest) returns (BMCListUsersResponse);
+  rpc CreateUser(BMCCreateUserRequest) returns (BMCCreateUserResponse);
+  rpc DeleteUser(BMCDeleteUserRequest) returns (BMCDeleteUserResponse);
+  rpc SetUserPassword(BMCSetUserPasswordRequest) returns (BMCSetUserPasswordResponse);
+  rpc SetUserPrivilege(BMCSetUserPrivilegeRequest) returns (BMCSetUserPrivilegeResponse);
 }
 
 // BMCPowerState represents the power state of a BMC-managed system.
@@ -64,6 +75,16 @@ enum BMCProvisioningStatus {
   BMC_PROVISIONING_STATUS_FINALIZING = 7;
   BMC_PROVISIONING_STATUS_COMPLETE = 8;
   BMC_PROVISIONING_STATUS_FAILED = 9;
+}
+
+// BMCUserPrivilege represents the IPMI 2.0 user privilege level.
+enum BMCUserPrivilege {
+  BMC_USER_PRIVILEGE_UNSPECIFIED = 0;
+  BMC_USER_PRIVILEGE_CALLBACK = 1;
+  BMC_USER_PRIVILEGE_USER = 2;
+  BMC_USER_PRIVILEGE_OPERATOR = 3;
+  BMC_USER_PRIVILEGE_ADMINISTRATOR = 4;
+  BMC_USER_PRIVILEGE_NO_ACCESS = 15;
 }
 
 // Power messages
@@ -209,3 +230,122 @@ message BMCProvisionStatusResponse {
   google.protobuf.Timestamp started_at = 3;
   google.protobuf.Timestamp updated_at = 4;
 }
+
+// Certificate management messages
+
+// BMCGetWebCertificateRequest queries the BMC web certificate for a device profile.
+message BMCGetWebCertificateRequest {
+  uint64 profile_id = 1;
+}
+
+// BMCGetWebCertificateResponse reports the current BMC web certificate details.
+message BMCGetWebCertificateResponse {
+  // Subject is the certificate subject distinguished name.
+  string subject = 1;
+  // Issuer is the certificate issuer distinguished name.
+  string issuer = 2;
+  // SerialNumber is the certificate serial number in hex.
+  string serial_number = 3;
+  // NotBefore is the certificate validity start time.
+  google.protobuf.Timestamp not_before = 4;
+  // NotAfter is the certificate validity end time.
+  google.protobuf.Timestamp not_after = 5;
+  // DaysRemaining is the number of days until the certificate expires.
+  int32 days_remaining = 6;
+  // SubjectAlternativeNames contains the DNS and IP SANs.
+  repeated string subject_alternative_names = 7;
+  // Fingerprint is the SHA-256 fingerprint of the certificate.
+  string fingerprint = 8;
+}
+
+// BMCReplaceWebCertificateRequest replaces the BMC web certificate.
+message BMCReplaceWebCertificateRequest {
+  uint64 profile_id = 1;
+  // CertPem is the PEM-encoded certificate (leaf, optionally with chain).
+  bytes cert_pem = 2;
+  // KeyPem is the PEM-encoded private key.
+  bytes key_pem = 3;
+}
+
+// BMCReplaceWebCertificateResponse confirms the certificate was replaced.
+message BMCReplaceWebCertificateResponse {
+  // Message is a human-readable status message.
+  string message = 1;
+}
+
+// User management messages
+
+// BMCUser represents a BMC user account.
+message BMCUser {
+  // Slot is the IPMI user slot (1-based).
+  uint32 slot = 1;
+  // Username is the account name.
+  string username = 2;
+  // Enabled indicates whether the user can authenticate.
+  bool enabled = 3;
+  // Privilege is the user's access privilege level.
+  BMCUserPrivilege privilege = 4;
+  // Channel is the IPMI channel index.
+  uint32 channel = 5;
+}
+
+// BMCListUsersRequest queries the BMC user list for a device profile.
+message BMCListUsersRequest {
+  uint64 profile_id = 1;
+}
+
+// BMCListUsersResponse reports all BMC users.
+message BMCListUsersResponse {
+  repeated BMCUser users = 1;
+}
+
+// BMCCreateUserRequest creates a new BMC user.
+message BMCCreateUserRequest {
+  uint64 profile_id = 1;
+  // User is the user account to create.
+  BMCUser user = 2;
+  // Password is the initial password for the user.
+  string password = 3;
+}
+
+// BMCCreateUserResponse confirms the user was created.
+message BMCCreateUserResponse {
+  // Slot is the IPMI user slot assigned to the new user.
+  uint32 slot = 1;
+}
+
+// BMCDeleteUserRequest deletes a BMC user.
+message BMCDeleteUserRequest {
+  uint64 profile_id = 1;
+  // Slot is the IPMI user slot to delete.
+  uint32 slot = 2;
+}
+
+// BMCDeleteUserResponse confirms the user was deleted.
+message BMCDeleteUserResponse {}
+
+// BMCSetUserPasswordRequest updates a BMC user password.
+message BMCSetUserPasswordRequest {
+  uint64 profile_id = 1;
+  // Slot is the IPMI user slot.
+  uint32 slot = 2;
+  // Password is the new password.
+  string password = 3;
+}
+
+// BMCSetUserPasswordResponse confirms the password was updated.
+message BMCSetUserPasswordResponse {}
+
+// BMCSetUserPrivilegeRequest updates a BMC user privilege level.
+message BMCSetUserPrivilegeRequest {
+  uint64 profile_id = 1;
+  // Slot is the IPMI user slot.
+  uint32 slot = 2;
+  // Channel is the IPMI channel index.
+  uint32 channel = 3;
+  // Privilege is the new privilege level.
+  BMCUserPrivilege privilege = 4;
+}
+
+// BMCSetUserPrivilegeResponse confirms the privilege was updated.
+message BMCSetUserPrivilegeResponse {}

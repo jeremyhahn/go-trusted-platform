@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

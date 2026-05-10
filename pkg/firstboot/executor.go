@@ -27,7 +27,7 @@ import (
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"gopkg.in/yaml.v3"
 )
 
@@ -504,15 +504,28 @@ func (e *Executor) Run(ctx context.Context) error {
 		e.logger.Info("TPM sealing complete - PCR-sealed objects created")
 		e.logger.Info("PCR protection enabled - boot integrity will be verified on unlock")
 
-		// CRITICAL: System MUST reboot to verify PCR seals work
+		// We do NOT auto-reboot here. The seal blobs are now on the EFI
+		// partition; the LUKS root is already unlocked on this boot via
+		// the keyfile fallback path; platformd is running. The next
+		// *natural* reboot will exercise TPM-PCR unseal — on success the
+		// keyfile is no longer needed and the upgrade seals get cleaned
+		// up by the initrd; on failure the keyfile fallback continues
+		// to cover us with zero operational impact.
+		//
+		// Auto-rebooting "to verify" was a self-defeating loop on
+		// hardware where PCR 9 differs between the installer initramfs
+		// and the production initramfs (X10/SLB9665 in particular):
+		// every verify-reboot would TPM-PCR-fail, fall through to
+		// keyfile, fire another verify-reboot, repeat indefinitely. The
+		// keyfile-fallback path that just unlocked us this boot IS the
+		// proof the system is operational. Verification is deferred to
+		// the next operator-initiated reboot.
 		if !resealNeeded {
-			e.logger.Info("SECURITY: Rebooting to verify PCR-sealed LUKS key works...")
-			e.logger.Info("On next boot, TPM-PCR unlock will be attempted")
-			e.logger.Info("If successful, insecure upgrade seals will be automatically deleted")
-			e.triggerReboot()
+			e.logger.Info("Seal staged. TPM-PCR unlock will be attempted on next natural reboot.")
+			e.logger.Info("If TPM-PCR succeeds, upgrade seals will be auto-deleted by initrd.")
+			e.logger.Info("If TPM-PCR fails, keyfile fallback continues to cover the unlock path.")
 		} else {
-			e.logger.Info("SECURITY: Re-sealing complete - rebooting to verify new PCR seals...")
-			e.triggerReboot()
+			e.logger.Info("Re-seal staged. Next natural reboot will exercise the new PCR seal.")
 		}
 	} else {
 		e.logger.Info("TPM sealing complete - sealed objects created (no PCR policy)")

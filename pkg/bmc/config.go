@@ -13,7 +13,11 @@
 
 package bmc
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
+)
 
 // Config holds baseboard management controller connection configuration.
 type Config struct {
@@ -25,6 +29,46 @@ type Config struct {
 	EncryptionKey string   `yaml:"encryption-key,omitempty" json:"encryption_key,omitempty" secret:"true"` // Hex-encoded KG key for IPMI 2.0 RAKP
 	SkipTLSVerify bool     `yaml:"skip-tls-verify,omitempty" json:"skip_tls_verify,omitempty"`
 	CACertPath    string   `yaml:"ca-cert-path,omitempty" json:"ca_cert_path,omitempty"` // Path to custom CA certificate PEM file
+
+	// SOLPayloadInstance overrides the IPMI 2.0 SOL payload instance the
+	// Console session activates against. Most BMCs route serial-console
+	// bytes to instance 0x01 (the IPMI default); a few — notably
+	// Supermicro X10SDV-TP8F — route to 0x02. The platform's quirk
+	// registry supplies the correct instance for known boards
+	// automatically; this field is the explicit operator override for
+	// new hardware before a quirk is added.
+	//
+	// Zero (the YAML default) means "consult the quirk registry, fall
+	// back to 0x01". Permitted values: 0x01 - 0x0F per IPMI 2.0
+	// Table 24-2.
+	SOLPayloadInstance byte `yaml:"sol-payload-instance,omitempty" json:"sol_payload_instance,omitempty"`
+
+	// Certificate is the BMC web-server TLS identity when ACME-based
+	// issuance is configured for this BMC. Uses the common.Identity
+	// type so operators get the identical YAML surface across every
+	// ACME-managed identity (webservice TLS, BMC TLS, etc.).
+	//
+	// When nil, BMC TLS management is disabled. When non-nil, Key
+	// must also be set, and Certificate.ACME.Challenge
+	// MUST equal "dns-01" — BMCs sit on isolated management VLANs
+	// unreachable from ACME servers, so http-01 validation cannot
+	// succeed.
+	Certificate *common.Identity `yaml:"certificate,omitempty" json:"certificate,omitempty" mapstructure:"certificate"`
+
+	// Key describes the key algorithm and storage for the BMC TLS
+	// cert. Same shape as webservice's Key (common.KeyConfig).
+	Key *common.KeyConfig `yaml:"key,omitempty" json:"key,omitempty" mapstructure:"key"`
+
+	// Backend pins the CertificateManager backend for this BMC's TLS
+	// cert deployment. Empty or "auto" lets AutoCertManager probe the
+	// vendor and pick the recommended backend. Explicit values
+	// "redfish" or "smc-cgi" bypass the probe.
+	Backend CertBackend `yaml:"backend,omitempty" json:"backend,omitempty" mapstructure:"backend"`
+
+	// AllowCGIFallback enables the AutoCertManager to select the
+	// Supermicro ATEN CGI cert upload backend in auto mode. Default
+	// false — gated until hardware validation clears (task #9).
+	AllowCGIFallback bool `yaml:"allow_cgi_fallback,omitempty" json:"allow_cgi_fallback,omitempty"`
 }
 
 // DefaultConfig returns a Config with sensible defaults for IPMI.
@@ -53,6 +97,54 @@ func (c *Config) Validate() error {
 	}
 	if !c.Protocol.IsValid() {
 		return ErrInvalidConfig{Field: "protocol", Reason: "unsupported protocol"}
+	}
+	if err := c.validateCertBlock(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateCertBlock enforces the Certificate+Key+Backend invariants
+// described in the Config.Certificate godoc.
+func (c *Config) validateCertBlock() error {
+	hasCert := c.Certificate != nil
+	hasKey := c.Key != nil
+	if hasCert != hasKey {
+		return ErrInvalidConfig{
+			Field:  "certificate/key",
+			Reason: "certificate and key must both be set or both be absent",
+		}
+	}
+	if !hasCert {
+		// No cert management configured — Backend must also be empty
+		// so the config accurately reflects "TLS management disabled".
+		if c.Backend != "" {
+			return ErrInvalidConfig{
+				Field:  "backend",
+				Reason: "backend is only valid when certificate and key are configured",
+			}
+		}
+		return nil
+	}
+	if c.Backend != "" && !c.Backend.IsValid() {
+		return ErrInvalidConfig{
+			Field:  "backend",
+			Reason: "unrecognized cert backend: " + string(c.Backend),
+		}
+	}
+	if c.Certificate.ACME == nil || c.Certificate.ACME.Challenge == "" {
+		return ErrInvalidConfig{
+			Field:  "certificate.acme.challenge",
+			Reason: "ACME challenge is required when certificate is configured",
+		}
+	}
+	if c.Certificate.ACME.Challenge != "dns-01" {
+		return ErrInvalidConfig{
+			Field: "certificate.acme.challenge",
+			Reason: fmt.Sprintf(
+				"BMC cert issuance requires challenge=dns-01 (got %q); BMCs sit on isolated management VLANs unreachable from ACME servers, so http-01 cannot succeed",
+				c.Certificate.ACME.Challenge),
+		}
 	}
 	return nil
 }

@@ -28,18 +28,25 @@ import (
 
 // mockBMCService is a test double for BMCServicer.
 type mockBMCService struct {
-	powerOnFn          func(ctx context.Context, profileID uint64) error
-	powerOffFn         func(ctx context.Context, profileID uint64) error
-	powerResetFn       func(ctx context.Context, profileID uint64) error
-	powerCycleFn       func(ctx context.Context, profileID uint64) error
-	powerStatusFn      func(ctx context.Context, profileID uint64) (bmcpkg.PowerState, error)
-	setBootDeviceFn    func(ctx context.Context, profileID uint64, device bmcpkg.BootDevice, persistent bool) error
-	getBootDeviceFn    func(ctx context.Context, profileID uint64) (bmcpkg.BootDevice, error)
-	mountISOFn         func(ctx context.Context, profileID uint64, isoURL string) error
-	unmountISOFn       func(ctx context.Context, profileID uint64) error
-	virtualMediaStatFn func(ctx context.Context, profileID uint64) (*bmcpkg.VirtualMediaInfo, error)
-	getSensorsFn       func(ctx context.Context, profileID uint64) ([]bmcpkg.SensorReading, error)
-	getSystemInfoFn    func(ctx context.Context, profileID uint64) (*bmcpkg.SystemInfo, error)
+	powerOnFn           func(ctx context.Context, profileID uint64) error
+	powerOffFn          func(ctx context.Context, profileID uint64) error
+	powerResetFn        func(ctx context.Context, profileID uint64) error
+	powerCycleFn        func(ctx context.Context, profileID uint64) error
+	powerStatusFn       func(ctx context.Context, profileID uint64) (bmcpkg.PowerState, error)
+	setBootDeviceFn     func(ctx context.Context, profileID uint64, device bmcpkg.BootDevice, persistent bool) error
+	getBootDeviceFn     func(ctx context.Context, profileID uint64) (bmcpkg.BootDevice, error)
+	mountISOFn          func(ctx context.Context, profileID uint64, isoURL string) error
+	unmountISOFn        func(ctx context.Context, profileID uint64) error
+	virtualMediaStatFn  func(ctx context.Context, profileID uint64) (*bmcpkg.VirtualMediaInfo, error)
+	getSensorsFn        func(ctx context.Context, profileID uint64) ([]bmcpkg.SensorReading, error)
+	getSystemInfoFn     func(ctx context.Context, profileID uint64) (*bmcpkg.SystemInfo, error)
+	getWebCertificateFn func(ctx context.Context, profileID uint64) (*bmcpkg.CertificateInfo, error)
+	replaceWebCertFn    func(ctx context.Context, profileID uint64, certPEM, keyPEM []byte) error
+	listUsersFn         func(ctx context.Context, profileID uint64) ([]bmcpkg.User, error)
+	createUserFn        func(ctx context.Context, profileID uint64, user bmcpkg.User, password string) error
+	deleteUserFn        func(ctx context.Context, profileID uint64, slot uint8) error
+	setUserPasswordFn   func(ctx context.Context, profileID uint64, slot uint8, password string) error
+	setUserPrivilegeFn  func(ctx context.Context, profileID uint64, slot, channel uint8, privilege bmcpkg.Privilege) error
 }
 
 func (m *mockBMCService) PowerOn(ctx context.Context, profileID uint64) error {
@@ -124,6 +131,55 @@ func (m *mockBMCService) GetSystemInfo(ctx context.Context, profileID uint64) (*
 		return m.getSystemInfoFn(ctx, profileID)
 	}
 	return &bmcpkg.SystemInfo{Manufacturer: "TestVendor"}, nil
+}
+
+func (m *mockBMCService) GetWebCertificate(ctx context.Context, profileID uint64) (*bmcpkg.CertificateInfo, error) {
+	if m.getWebCertificateFn != nil {
+		return m.getWebCertificateFn(ctx, profileID)
+	}
+	return &bmcpkg.CertificateInfo{Subject: "CN=mock-bmc"}, nil
+}
+
+func (m *mockBMCService) ReplaceWebCertificate(ctx context.Context, profileID uint64, certPEM, keyPEM []byte) error {
+	if m.replaceWebCertFn != nil {
+		return m.replaceWebCertFn(ctx, profileID, certPEM, keyPEM)
+	}
+	return nil
+}
+
+func (m *mockBMCService) ListUsers(ctx context.Context, profileID uint64) ([]bmcpkg.User, error) {
+	if m.listUsersFn != nil {
+		return m.listUsersFn(ctx, profileID)
+	}
+	return []bmcpkg.User{}, nil
+}
+
+func (m *mockBMCService) CreateUser(ctx context.Context, profileID uint64, user bmcpkg.User, password string) error {
+	if m.createUserFn != nil {
+		return m.createUserFn(ctx, profileID, user, password)
+	}
+	return nil
+}
+
+func (m *mockBMCService) DeleteUser(ctx context.Context, profileID uint64, slot uint8) error {
+	if m.deleteUserFn != nil {
+		return m.deleteUserFn(ctx, profileID, slot)
+	}
+	return nil
+}
+
+func (m *mockBMCService) SetUserPassword(ctx context.Context, profileID uint64, slot uint8, password string) error {
+	if m.setUserPasswordFn != nil {
+		return m.setUserPasswordFn(ctx, profileID, slot, password)
+	}
+	return nil
+}
+
+func (m *mockBMCService) SetUserPrivilege(ctx context.Context, profileID uint64, slot, channel uint8, privilege bmcpkg.Privilege) error {
+	if m.setUserPrivilegeFn != nil {
+		return m.setUserPrivilegeFn(ctx, profileID, slot, channel, privilege)
+	}
+	return nil
 }
 
 // mockBaremetalService is a test double for BaremetalServicer.

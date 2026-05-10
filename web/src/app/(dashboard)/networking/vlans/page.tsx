@@ -10,6 +10,16 @@ import { DataTable, createSelectColumn } from '@/components/ui/data-table';
 import { DataTableColumnHeader } from '@/components/ui/data-table-column-header';
 import { DataTableRowActions } from '@/components/ui/data-table-row-actions';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { useSDN, useApi } from '@/hooks';
 import type { VLAN } from 'trusted-platform-sdk';
@@ -36,6 +46,10 @@ export default function VLANsPage() {
   const { toast } = useToast();
   const sdn = useSDN();
   const [selectedBridgeId, setSelectedBridgeId] = useState<string>('');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createVlanId, setCreateVlanId] = useState('');
+  const [createName, setCreateName] = useState('');
+  const [createSubmitting, setCreateSubmitting] = useState(false);
 
   // Fetch bridges to get the first bridge ID
   const {
@@ -87,8 +101,11 @@ export default function VLANsPage() {
     if (!vlansData?.vlans) return [];
     return vlansData.vlans.map((vlan: VLAN) => ({
       id: vlan.id,
-      vlanId: vlan.config?.vlanId ?? 0,
-      name: vlan.config?.name || `VLAN ${vlan.config?.vlanId ?? vlan.id}`,
+      // Server emits the response in snake_case (`vlan_id`, no
+      // nested `config`); SDK type declares camelCase nested
+      // `config.vlanId`. Tolerate both shapes.
+      vlanId: (vlan as any).vlan_id ?? vlan.config?.vlanId ?? 0,
+      name: vlan.config?.name || (vlan as any).name || `VLAN ${(vlan as any).vlan_id ?? vlan.config?.vlanId ?? vlan.id}`,
       description: undefined,
       status: 'active' as const,
       ipRange: undefined,
@@ -440,12 +457,81 @@ export default function VLANsPage() {
           <Button variant="outline" size="icon" onClick={fetchVlans} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button>
+          <Button onClick={() => setCreateOpen(true)} disabled={!selectedBridgeId}>
             <Plus className="mr-2 h-4 w-4" />
             Create VLAN
           </Button>
         </div>
       </div>
+
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create VLAN</DialogTitle>
+            <DialogDescription>
+              Add a VLAN to bridge {selectedBridgeId || 'unknown'}.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="vlan-id">VLAN ID *</Label>
+              <Input
+                id="vlan-id"
+                type="number"
+                min={1}
+                max={4095}
+                value={createVlanId}
+                onChange={(e) => setCreateVlanId(e.target.value)}
+                placeholder="100"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="vlan-name">Name (optional)</Label>
+              <Input
+                id="vlan-name"
+                value={createName}
+                onChange={(e) => setCreateName(e.target.value)}
+                placeholder="prod-data"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!createVlanId || createSubmitting || !selectedBridgeId}
+              onClick={async () => {
+                const vid = Number.parseInt(createVlanId, 10);
+                if (!Number.isFinite(vid) || vid < 1 || vid > 4095) {
+                  toast({ title: 'Invalid VLAN ID', description: 'Must be 1-4095', variant: 'destructive' });
+                  return;
+                }
+                setCreateSubmitting(true);
+                try {
+                  await sdn.createVLAN({
+                    config: { vlanId: vid, name: createName || undefined, bridgeId: selectedBridgeId },
+                  });
+                  toast({ title: 'VLAN created', variant: 'success' });
+                  setCreateOpen(false);
+                  setCreateVlanId('');
+                  setCreateName('');
+                  refetchVlans();
+                } catch (err) {
+                  toast({
+                    title: 'Failed to create VLAN',
+                    description: err instanceof Error ? err.message : 'Unknown error',
+                    variant: 'destructive',
+                  });
+                } finally {
+                  setCreateSubmitting(false);
+                }
+              }}
+            >
+              {createSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid gap-4 md:grid-cols-7">
         <div className="rounded-lg border border-border bg-card p-6">

@@ -68,3 +68,18 @@ type ErrRedfishEmptyCollection struct {
 func (e ErrRedfishEmptyCollection) Error() string {
 	return fmt.Sprintf("bmc: redfish collection %s has no members", e.Resource)
 }
+
+// ErrRedfishTransportInit indicates the shared Redfish HTTP transport
+// could not be constructed. The Cause carries the underlying error from
+// newRedfishTransport (typically a TLS or config validation failure).
+type ErrRedfishTransportInit struct {
+	Cause error
+}
+
+func (e ErrRedfishTransportInit) Error() string {
+	return fmt.Sprintf("bmc: redfish transport init failed: %v", e.Cause)
+}
+
+func (e ErrRedfishTransportInit) Unwrap() error {
+	return e.Cause
+}

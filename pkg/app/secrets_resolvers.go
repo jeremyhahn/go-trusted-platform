@@ -15,9 +15,6 @@ package app
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -30,7 +27,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config/secrets"
 
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // XKMSClient defines the minimal XKMS operations required for secret resolution.
@@ -46,140 +43,18 @@ type XKMSClient interface {
 	GetKey(ctx context.Context, backend, keyID string) (*xkmssdk.GetKeyResponse, error)
 }
 
-// AutoGenResolver generates random secrets based on URI parameters.
-// It supports the autogen:// scheme with format: autogen://length/encoding
-//
-// Supported encodings:
-//   - base64: Standard base64 encoding
-//   - hex: Hexadecimal encoding
-//   - numeric: Digit-only string (0-9), each digit uniformly selected via crypto/rand
-//   - raw: Raw bytes (default)
-//
-// Examples:
-//   - autogen://32/base64 - 32 random bytes, base64 encoded
-//   - autogen://16/hex - 16 random bytes, hex encoded
-//   - autogen://6/numeric - 6-digit random PIN like "847293"
-//   - autogen://64 - 64 raw bytes
-type AutoGenResolver struct {
-	logger *slog.Logger
-}
-
-// NewAutoGenResolver creates a new AutoGenResolver.
-func NewAutoGenResolver(logger *slog.Logger) *AutoGenResolver {
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
-	return &AutoGenResolver{logger: logger}
-}
-
-// Scheme returns the URI scheme this resolver handles.
-func (r *AutoGenResolver) Scheme() string {
-	return bootstrap.SchemeAutoGen
-}
-
-// CanResolve returns true if this resolver can handle the given URI.
-func (r *AutoGenResolver) CanResolve(uri string) bool {
-	return strings.HasPrefix(strings.ToLower(uri), bootstrap.SchemeAutoGen)
-}
-
-// Resolve generates a random secret based on the URI parameters.
-func (r *AutoGenResolver) Resolve(ctx context.Context, uri string) ([]byte, error) {
-	// Check context
-	select {
-	case <-ctx.Done():
-		return nil, ErrContextCanceled{Cause: ctx.Err()}
-	default:
-	}
-
-	// Parse URI: autogen://length/encoding
-	if !r.CanResolve(uri) {
-		return nil, ErrInvalidAutoGenURI{URI: uri, Reason: "invalid scheme"}
-	}
-
-	// Remove scheme prefix
-	params := strings.TrimPrefix(strings.ToLower(uri), bootstrap.SchemeAutoGen)
-	parts := strings.Split(params, "/")
-
-	// Default values
-	length := 32
-	encoding := "raw"
-
-	// Parse length
-	if len(parts) > 0 && parts[0] != "" {
-		var err error
-		length, err = strconv.Atoi(parts[0])
-		if err != nil || length <= 0 {
-			return nil, ErrInvalidAutoGenURI{URI: uri, Reason: "invalid length: " + parts[0]}
-		}
-	}
-
-	// Parse encoding
-	if len(parts) > 1 && parts[1] != "" {
-		encoding = parts[1]
-	}
-
-	// Numeric encoding uses bootstrap.GenerateNumericPIN for uniform digit selection
-	if encoding == "numeric" {
-		result, err := bootstrap.GenerateNumericPIN(length)
-		if err != nil {
-			return nil, ErrAutoGenFailed{URI: uri, Cause: err}
-		}
-		r.logger.Debug("auto-generated secret",
-			slog.Int("length", length),
-			slog.String("encoding", encoding),
-			slog.Int("result_length", len(result)))
-		return result, nil
-	}
-
-	// Generate random bytes
-	randomBytes := make([]byte, length)
-	if _, err := rand.Read(randomBytes); err != nil {
-		return nil, ErrAutoGenFailed{URI: uri, Cause: err}
-	}
-
-	// Encode based on requested format
-	var result []byte
-	switch encoding {
-	case "base64":
-		result = []byte(base64.StdEncoding.EncodeToString(randomBytes))
-	case "hex":
-		result = []byte(hex.EncodeToString(randomBytes))
-	case "raw", "":
-		result = randomBytes
-	default:
-		return nil, ErrInvalidAutoGenURI{URI: uri, Reason: "unsupported encoding: " + encoding}
-	}
-
-	r.logger.Debug("auto-generated secret",
-		slog.Int("length", length),
-		slog.String("encoding", encoding),
-		slog.Int("result_length", len(result)))
-
-	return result, nil
-}
-
 // LocalSecretsResolver retrieves secrets from the local QuicBaaS SecretsService.
 // It supports the kms:// scheme with format: kms://path/to/secret
 //
-// Placeholder substitution: the resolver rewrites two well-known
-// placeholders in the URI path BEFORE dispatching the call to the
-// secrets service, so templates can use stable identifiers that
-// expand to the current node's tenant and hostname at resolution
-// time:
+// Tenant and node are implicit. Templates use short-form paths like
+// `kms://bmc/password`; the resolver prepends
+// `tenants/{tenantID}/nodes/{nodeID}/secrets/` at resolution time
+// from the configured identity (platform.tenant_id and node
+// hostname). `tenants/…` literals and `{{tenant}}` / `{{node}}`
+// placeholders are explicitly rejected so stale templates fail loud.
 //
-//	{{tenant}} -> LocalSecretsResolver.TenantID
-//	{{node}}   -> LocalSecretsResolver.NodeID
-//
-// Short path expansion: if the resolved path does NOT start with
-// "tenants/", the resolver automatically prepends
-// tenants/{tenantID}/nodes/{nodeID}/secrets/ using the configured
-// identity. This allows compact URIs like kms://bmc/password to
-// resolve to the full keyspace path without requiring every config
-// field to spell out the tenant/node prefix.
-//
-// This lets a single control-plane template be shared across all
-// nodes of a tenant -- each node gets its own persistent secret
-// keyspace without needing per-node YAML copies.
+// A single template is shared across every node of a tenant — each
+// node gets its own persistent secret keyspace without per-node YAML.
 type LocalSecretsResolver struct {
 	secrets  baasservice.SecretsService
 	logger   *slog.Logger
@@ -188,9 +63,8 @@ type LocalSecretsResolver struct {
 }
 
 // NewLocalSecretsResolver creates a new LocalSecretsResolver. The
-// tenantID and nodeID parameters are substituted into kms:// URIs at
-// resolution time wherever the {{tenant}} and {{node}} placeholders
-// appear. Pass empty strings to disable substitution.
+// tenantID and nodeID are bound by WithIdentity and automatically
+// prepended to short-form kms:// URIs at resolution time.
 func NewLocalSecretsResolver(secrets baasservice.SecretsService, logger *slog.Logger) *LocalSecretsResolver {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
@@ -292,18 +166,21 @@ func (r *LocalSecretsResolver) Resolve(ctx context.Context, uri string) ([]byte,
 		return nil, ErrInvalidKMSURI{URI: uri, Reason: "empty path"}
 	}
 
-	// Expand {{tenant}} and {{node}} placeholders against the
-	// resolver's identity. An unexpanded placeholder that remains
-	// after substitution (because identity is empty) is a hard
-	// error -- config templates must be rendered against a node
-	// that has an identity.
-	rawPath = r.expandIdentityPlaceholders(rawPath)
+	// Tenant and node are implicit — templates must use short-form
+	// paths like `kms://bmc/password`. `tenants/` prefixes and
+	// `{{tenant}}` / `{{node}}` placeholders are no longer accepted:
+	// identity is owned by the resolver (from platform.tenant_id and
+	// node hostname), not the template. Reject the old shape explicitly
+	// so stale configs produce a loud error instead of silently
+	// resolving to the wrong path.
 	if strings.Contains(rawPath, "{{tenant}}") || strings.Contains(rawPath, "{{node}}") {
-		return nil, ErrInvalidKMSURI{URI: uri, Reason: "unresolved {{tenant}} or {{node}} placeholder -- resolver was constructed without identity"}
+		return nil, ErrInvalidKMSURI{URI: uri, Reason: "legacy placeholder rejected -- use short-form kms://<path>; tenant/node are implicit"}
+	}
+	if strings.HasPrefix(rawPath, "tenants/") {
+		return nil, ErrInvalidKMSURI{URI: uri, Reason: "legacy tenants/... prefix rejected -- use short-form kms://<path>; tenant/node are implicit"}
 	}
 
-	// Short path expansion: if the path does not start with "tenants/",
-	// automatically prepend tenants/{tenantID}/nodes/{nodeID}/secrets/
+	// Short path expansion: prepend tenants/{tenantID}/nodes/{nodeID}/secrets/
 	// so that compact URIs like kms://bmc/password resolve to the full
 	// multi-tenant keyspace path.
 	rawPath = bootstrap.ExpandShortKMSPath(rawPath, r.tenantID, r.nodeID)
@@ -369,21 +246,6 @@ func (r *LocalSecretsResolver) Resolve(ctx context.Context, uri string) ([]byte,
 		slog.Int("length", len(resp.Data)))
 
 	return resp.Data, nil
-}
-
-// expandIdentityPlaceholders rewrites {{tenant}} and {{node}}
-// placeholders in a kms:// URI path to the resolver's configured
-// identity values. If a value is empty the placeholder is left in
-// place so the caller's Resolve can surface a clear error rather
-// than silently producing a nonsense path.
-func (r *LocalSecretsResolver) expandIdentityPlaceholders(path string) string {
-	if r.tenantID != "" {
-		path = strings.ReplaceAll(path, "{{tenant}}", r.tenantID)
-	}
-	if r.nodeID != "" {
-		path = strings.ReplaceAll(path, "{{node}}", r.nodeID)
-	}
-	return path
 }
 
 // kmsQuery is the parsed form of the kms:// query string. Only the
@@ -508,8 +370,59 @@ func (c *SecretsServiceClient) GetSecret(ctx context.Context, path string) ([]by
 	return resp.Data, nil
 }
 
-// EncryptedResolverAdapter adapts the config/secrets.EncryptedResolver to
+// IDevIDResolverAdapter adapts the config/secrets.IDevIDResolver to
 // the bootstrap.SecretResolver interface.
+type IDevIDResolverAdapter struct {
+	resolver *secrets.IDevIDResolver
+	logger   *slog.Logger
+}
+
+// NewIDevIDResolverAdapter creates a new IDevIDResolverAdapter.
+func NewIDevIDResolverAdapter(resolver *secrets.IDevIDResolver, logger *slog.Logger) *IDevIDResolverAdapter {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	return &IDevIDResolverAdapter{
+		resolver: resolver,
+		logger:   logger,
+	}
+}
+
+// Scheme returns the URI scheme this resolver handles.
+func (a *IDevIDResolverAdapter) Scheme() string {
+	return bootstrap.SchemeIDevID
+}
+
+// CanResolve returns true if this resolver can handle the given URI.
+func (a *IDevIDResolverAdapter) CanResolve(uri string) bool {
+	return a.resolver.CanResolve(uri)
+}
+
+// Resolve decrypts the IDevID-encrypted secret and returns the plaintext.
+func (a *IDevIDResolverAdapter) Resolve(ctx context.Context, uri string) ([]byte, error) {
+	secretValue, err := a.resolver.Resolve(ctx, uri)
+	if err != nil {
+		return nil, err
+	}
+
+	if secretValue == nil {
+		return nil, bootstrap.ErrSecretNotFound{Path: uri}
+	}
+
+	// Return the decrypted value
+	// Note: The caller is responsible for clearing the secret from memory
+	return secretValue.Value, nil
+}
+
+// EncryptedResolverAdapter adapts the config/secrets.EncryptedResolver to
+// the bootstrap.SecretResolver interface. This allows encrypted:// URIs
+// containing AES-256-GCM encrypted configuration values to be resolved
+// during bootstrap secret processing.
+//
+// The adapter bridges the config/secrets.EncryptedResolver (which returns
+// *SecretValue) to the bootstrap.SecretResolver interface (which returns
+// raw []byte). The actual decryption is performed by the underlying
+// EncryptedResolver using a DecryptFunc closure that calls the KMS.
 type EncryptedResolverAdapter struct {
 	resolver *secrets.EncryptedResolver
 	logger   *slog.Logger
@@ -536,7 +449,7 @@ func (a *EncryptedResolverAdapter) CanResolve(uri string) bool {
 	return a.resolver.CanResolve(uri)
 }
 
-// Resolve decrypts the encrypted secret and returns the plaintext.
+// Resolve decrypts the AES-256-GCM encrypted config value and returns the plaintext.
 func (a *EncryptedResolverAdapter) Resolve(ctx context.Context, uri string) ([]byte, error) {
 	secretValue, err := a.resolver.Resolve(ctx, uri)
 	if err != nil {
@@ -547,8 +460,9 @@ func (a *EncryptedResolverAdapter) Resolve(ctx context.Context, uri string) ([]b
 		return nil, bootstrap.ErrSecretNotFound{Path: uri}
 	}
 
-	// Return the decrypted value
-	// Note: The caller is responsible for clearing the secret from memory
+	a.logger.Debug("resolved encrypted config secret",
+		slog.Int("plaintext_len", len(secretValue.Value)))
+
 	return secretValue.Value, nil
 }
 

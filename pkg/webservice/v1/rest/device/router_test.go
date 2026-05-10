@@ -31,7 +31,7 @@ import (
 )
 
 // TestRouterRegistration verifies that RegisterRoutes registers the expected
-// POST endpoints under /devices/templates.
+// endpoints under /devices.
 func TestRouterRegistration(t *testing.T) {
 	tmplSvc := &mockTemplateService{}
 	profSvc := &mockProfileService{}
@@ -49,9 +49,17 @@ func TestRouterRegistration(t *testing.T) {
 	req = httptest.NewRequest(http.MethodPost, "/devices/templates/12345/create-profile", nil)
 	assert.True(t, r.Match(req, &match), "POST /devices/templates/{id}/create-profile should match a route")
 
+	// Verify GET /devices/config is routed.
+	req = httptest.NewRequest(http.MethodGet, "/devices/config?mac=aa:bb:cc:dd:ee:ff", nil)
+	assert.True(t, r.Match(req, &match), "GET /devices/config should match a route")
+
 	// Verify GET /devices/templates is NOT routed (only POST is registered).
 	req = httptest.NewRequest(http.MethodGet, "/devices/templates", nil)
 	assert.False(t, r.Match(req, &match), "GET /devices/templates should not match")
+
+	// Verify POST /devices/config is NOT routed (only GET is registered).
+	req = httptest.NewRequest(http.MethodPost, "/devices/config", nil)
+	assert.False(t, r.Match(req, &match), "POST /devices/config should not match")
 }
 
 // TestRouterEndToEnd_UploadTemplate verifies the full request flow through the
@@ -118,4 +126,28 @@ func TestRouterEndToEnd_CreateProfile(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, rr.Code)
 	require.NotNil(t, profSvc.saved)
 	assert.Equal(t, "web-01", profSvc.saved.Name)
+}
+
+// TestRouterEndToEnd_GetConfig verifies the full request flow through the
+// router for config retrieval by MAC address.
+func TestRouterEndToEnd_GetConfig(t *testing.T) {
+	profile := &entities.DeviceProfile{
+		ID:     99,
+		Name:   "gw-01",
+		Config: map[string]interface{}{"hostname": "gw-01"},
+	}
+	profSvc := &mockProfileService{findByMAC: profile}
+	deviceRouter := NewDeviceRouter(testLogger(), testResponseWriter(), nil, profSvc)
+
+	r := mux.NewRouter()
+	deviceRouter.RegisterRoutes(r)
+
+	req := httptest.NewRequest(http.MethodGet, "/devices/config?mac=aa:bb:cc:dd:ee:ff", nil)
+	rr := httptest.NewRecorder()
+
+	r.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "application/x-yaml", rr.Header().Get("Content-Type"))
+	assert.Contains(t, rr.Body.String(), "hostname: gw-01")
 }

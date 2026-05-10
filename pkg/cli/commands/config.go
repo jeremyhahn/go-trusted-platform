@@ -19,8 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	daemonsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/daemon"
 )
 
 // NewConfigCommand creates the config management command
@@ -101,22 +101,22 @@ func runConfigGet(flags *cli.CommonFlags, section string) error {
 	}
 	defer base.Close()
 
+	daemonClient := daemonsvc.NewClientFromGRPC(base.Client().Daemon())
+
 	ctx := base.Context()
-	resp, err := base.Client().Daemon().GetConfig(ctx, &platformv1.GetConfigRequest{
-		Section: section,
-	})
+	sections, err := daemonClient.GetConfigDomain(ctx, section)
 	if err != nil {
-		return fmt.Errorf("failed to get config: %w", err)
+		return err
 	}
 
 	printer := base.Printer()
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(sections)
 
 	case cli.OutputFormatTable:
-		for _, sec := range resp.Sections {
+		for _, sec := range sections {
 			printer.PrintInfo(fmt.Sprintf("Section: %s", sec.Section))
 			fmt.Println()
 			for key, value := range sec.Values {
@@ -148,35 +148,22 @@ func runConfigSet(flags *cli.CommonFlags, section string, values []string, persi
 		configValues[parts[0]] = parts[1]
 	}
 
+	daemonClient := daemonsvc.NewClientFromGRPC(base.Client().Daemon())
+
 	ctx := base.Context()
-	resp, err := base.Client().Daemon().UpdateConfig(ctx, &platformv1.UpdateConfigRequest{
-		Section: &platformv1.ConfigSection{
-			Section: section,
-			Values:  configValues,
-		},
-		Persist: persist,
-	})
+	_, err = daemonClient.UpdateConfigDomain(ctx, section, configValues, persist)
 	if err != nil {
-		return fmt.Errorf("failed to set config: %w", err)
+		return err
 	}
 
 	printer := base.Printer()
-
-	if resp.Status != nil && resp.Status.Success {
-		printer.PrintSuccess("Configuration updated successfully")
-		if persist {
-			printer.PrintInfo("Changes persisted to disk")
-		} else {
-			printer.PrintWarning("Changes not persisted (use --persist to save)")
-		}
-		return nil
+	printer.PrintSuccess("Configuration updated successfully")
+	if persist {
+		printer.PrintInfo("Changes persisted to disk")
+	} else {
+		printer.PrintWarning("Changes not persisted (use --persist to save)")
 	}
-
-	if resp.Status != nil && resp.Status.Error != nil {
-		return fmt.Errorf("failed to update config: %s", resp.Status.Error.Message)
-	}
-
-	return fmt.Errorf("failed to update config: unknown error")
+	return nil
 }
 
 func runConfigReload(flags *cli.CommonFlags) error {
@@ -186,26 +173,19 @@ func runConfigReload(flags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
+	daemonClient := daemonsvc.NewClientFromGRPC(base.Client().Daemon())
+
 	ctx := base.Context()
-	resp, err := base.Client().Daemon().ReloadConfig(ctx, &platformv1.ReloadConfigRequest{})
+	reloadedSections, err := daemonClient.ReloadConfigDomain(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to reload config: %w", err)
+		return err
 	}
 
 	printer := base.Printer()
-
-	if resp.Status != nil && resp.Status.Success {
-		printer.PrintSuccess("Configuration reloaded successfully")
-		if len(resp.ReloadedSections) > 0 {
-			printer.PrintInfo(fmt.Sprintf("Reloaded sections: %s",
-				strings.Join(resp.ReloadedSections, ", ")))
-		}
-		return nil
+	printer.PrintSuccess("Configuration reloaded successfully")
+	if len(reloadedSections) > 0 {
+		printer.PrintInfo(fmt.Sprintf("Reloaded sections: %s",
+			strings.Join(reloadedSections, ", ")))
 	}
-
-	if resp.Status != nil && resp.Status.Error != nil {
-		return fmt.Errorf("failed to reload config: %s", resp.Status.Error.Message)
-	}
-
-	return fmt.Errorf("failed to reload config: unknown error")
+	return nil
 }

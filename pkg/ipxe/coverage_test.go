@@ -15,6 +15,7 @@ package ipxe
 
 import (
 	"context"
+	"crypto/x509"
 	"io"
 	"net"
 	"net/http"
@@ -613,15 +614,22 @@ func (m *errorMockReaderFrom) SetSize(size int64) {}
 // TestHTTPServer_handleProxy_ServerReturnsError tests error handling when copying
 // the proxy response fails.
 func TestHTTPServer_handleProxy_ServerReturnsError(t *testing.T) {
-	cfg := DefaultServerConfig()
-	server := NewHTTPServer(cfg, logging.DefaultLogger())
-
 	// Create a test server that returns 500
 	testServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte("server error"))
 	}))
 	defer testServer.Close()
+
+	// Trust the test server's self-signed cert via ProxyCACertPool. The
+	// proxy enforces full TLS verification (no InsecureSkipVerify allowed),
+	// so the test trust store mirrors how a production deployment would
+	// inject its upstream CAs.
+	cfg := DefaultServerConfig()
+	pool := x509.NewCertPool()
+	pool.AddCert(testServer.Certificate())
+	cfg.ProxyCACertPool = pool
+	server := NewHTTPServer(cfg, logging.DefaultLogger())
 
 	// Extract host from test server URL
 	testURL := testServer.URL[len("https://"):]

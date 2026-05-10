@@ -1,6 +1,87 @@
 # BMC Operations
 
-Power control, boot device management, virtual media, and sensor monitoring.
+Power control, boot device management, virtual media, sensor
+monitoring, user management, serial-over-LAN console, and TLS
+certificate management.
+
+## TLS Certificate Management
+
+See `../operations/cert-lifecycle.md` for the canonical runbook.
+Key operations:
+
+### Show the current BMC cert
+
+```bash
+openssl s_client -connect <bmc-ip>:443 -showcerts </dev/null 2>/dev/null \
+    | openssl x509 -subject -issuer -dates -noout
+```
+
+### Get certificate details (via platformd)
+
+```bash
+platformctl bmc cert get --profile-id 42
+```
+
+Returns subject, issuer, serial, validity period, SANs and
+SHA-256 fingerprint. JSON via `--output-format json`.
+
+### Show certificate expiry status
+
+```bash
+platformctl bmc cert status --profile-id 42
+```
+
+Same data as `cert get`, intended for renewal monitoring.
+
+### Force a cert replacement (bypass scheduler)
+
+```bash
+platformctl bmc cert replace \
+    --profile-id <id> \
+    --cert <path-to-cert.pem> \
+    --key  <path-to-key.pem>
+```
+
+The backend (`auto`, `redfish`, or `smc-cgi`) is determined by the
+device profile's `bmc.backend` config field. Standalone mode is also
+available for direct BMC access without a profile:
+
+```bash
+platformctl bmc cert replace \
+    --bmc-host <bmc-ip> --bmc-user admin --bmc-pass-file /etc/bmc-pass \
+    --cert <path-to-cert.pem> --key <path-to-key.pem>
+```
+
+### Inspect automatic renewal job
+
+The scheduler CLI commands (`platformctl schedule list`,
+`platformctl schedule history`, etc.) are planned but not yet
+implemented. Use the platformd logs to monitor cert renewal job
+outcomes until the scheduler CLI is available.
+
+### AutoCertManager selection logs
+
+AutoCertManager logs a single structured entry on first probe per
+BMC:
+
+```
+bmc: autocert: resolved backend  vendor=supermicro  requested=auto
+                                 resolved=smc-cgi  has_fallback=false
+```
+
+If the probe hits a 501 on the primary backend, a second line
+records the fallback attempt:
+
+```
+bmc: autocert: primary backend unsupported, trying fallback
+              primary=redfish  fallback=smc-cgi  error="HTTP 501"
+```
+
+Absence of either line means AutoCertManager was not constructed
+for the target BMC — check the config has `certificate:` and
+`key:` blocks populated.
+
+
 
 ## Power Control
 
@@ -10,7 +91,7 @@ Start a powered-off server.
 
 **CLI:**
 ```bash
-platformctl bmc power --profile-id 42 --action on
+platformctl bmc power-on --profile-id 42
 ```
 
 **REST:**
@@ -26,7 +107,7 @@ Immediately power off a server (hard shutdown).
 
 **CLI:**
 ```bash
-platformctl bmc power --profile-id 42 --action off
+platformctl bmc power-off --profile-id 42
 ```
 
 **REST:**
@@ -42,7 +123,7 @@ Hard reset (equivalent to pressing the reset button).
 
 **CLI:**
 ```bash
-platformctl bmc power --profile-id 42 --action reset
+platformctl bmc power-reset --profile-id 42
 ```
 
 **REST:**
@@ -58,7 +139,7 @@ Power off then power on (with brief delay).
 
 **CLI:**
 ```bash
-platformctl bmc power --profile-id 42 --action cycle
+platformctl bmc power-cycle --profile-id 42
 ```
 
 **REST:**
@@ -178,7 +259,7 @@ Check what is currently mounted.
 
 **CLI:**
 ```bash
-platformctl bmc virtual-media-status --profile-id 42
+platformctl bmc media-status --profile-id 42
 ```
 
 **REST:**
@@ -245,6 +326,123 @@ curl https://platform:8443/api/v1/bmc/42/system-info
   "power_state": "on"
 }
 ```
+
+## User Management
+
+BMC user management is exposed under `platformctl bmc user`. All
+subcommands accept either `--profile-id <id>` (talks to platformd
+over gRPC) or the standalone `--bmc-host`/`--bmc-user`/
+`--bmc-pass-file` flag set for direct BMC access.
+
+Valid roles: `administrator`, `operator`, `user`, `callback`,
+`no-access`.
+
+### List users
+
+```bash
+platformctl bmc user list --profile-id 42
+```
+
+Prints `SLOT`, `USERNAME`, `ENABLED`, `PRIVILEGE`, `CHANNEL`.
+Add `--output-format json` for machine output.
+
+### Create user
+
+```bash
+platformctl bmc user create --profile-id 42 \
+    --username operator1 --role operator
+```
+
+The new password is prompted securely on stderr. `--slot` (default
+0 = auto-assign) and `--channel` (default 1) are available for
+hardware that requires explicit slot/channel selection.
+
+### Delete user
+
+```bash
+platformctl bmc user delete --profile-id 42 --username operator1
+```
+
+The slot is resolved automatically by listing accounts first.
+
+### Update password
+
+```bash
+platformctl bmc user update-password --profile-id 42 \
+    --username operator1
+```
+
+The new password is prompted securely.
+
+### Update access level
+
+```bash
+platformctl bmc user update-access --profile-id 42 \
+    --username operator1 --role administrator
+```
+
+`--channel` (default 1) targets a specific IPMI channel index.
+
+## Serial-over-LAN Console
+
+`platformctl bmc console` opens an interactive Serial-over-LAN
+session to a BMC over IPMI 2.0 RMCP+. SOL is **standalone-only**;
+there is no platformd proxy because the protocol is a long-lived
+bidirectional stream.
+
+### Interactive session
+
+```bash
+platformctl bmc console \
+    --bmc-host 198.18.1.103 \
+    --bmc-user admin \
+    --bmc-pass-file /etc/platform/bmc.pass \
+    --bmc-protocol ipmi
+```
+
+Press `Ctrl+]` to disconnect. Stdin is placed in raw mode for the
+duration of the session.
+
+### Capture to log file
+
+```bash
+platformctl bmc console \
+    --bmc-host 198.18.1.103 \
+    --bmc-user admin \
+    --bmc-pass-file /etc/platform/bmc.pass \
+    --bmc-protocol ipmi \
+    --log-file /var/log/sol-r640-01.log
+```
+
+Useful when stdin is not a TTY (cron, CI, automation). Press
+`Ctrl+C` to stop capture.
+
+### Send a serial-break
+
+```bash
+platformctl bmc console --bmc-host ... --send-break
+```
+
+Sends a single break to the console and exits. Useful for kicking
+a stuck firmware menu.
+
+### Drive recoveries with --send
+
+`--send` writes literal strings to the console before any
+interactive or capture loop runs. Repeatable; the delay between
+sends is `--send-delay` (default 500ms).
+
+```bash
+platformctl bmc console --bmc-host ... \
+    --bmc-protocol ipmi \
+    --log-file recovery.log \
+    --send 'reset\r' \
+    --send 'boot\r'
+```
+
+Recognized escapes: `\r`, `\n`, `\t`, `\\`, `\e` (ESC, 0x1b),
+`\xNN` (arbitrary byte). Unknown escapes are rejected so typos
+don't silently turn into literal sequences.
 
 ## REST API Reference
 

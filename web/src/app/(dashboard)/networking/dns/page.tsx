@@ -7,9 +7,19 @@
  * Uses the trusted-platform-sdk for API interactions.
  */
 
-import { useMemo } from 'react';
-import { Plus, RefreshCw } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Loader2, Plus, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { DNSZoneTable } from '@/components/features/networking/dns-zone-table';
 import { useDNS, useApi, useToast } from '@/hooks';
 import type { DNSZone } from '@/types/infrastructure';
@@ -17,6 +27,11 @@ import type { DNSZone } from '@/types/infrastructure';
 export default function DNSZonesPage() {
   const { toast } = useToast();
   const dns = useDNS();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createName, setCreateName] = useState('');
+  const [createTTL, setCreateTTL] = useState('3600');
+  const [createInternal, setCreateInternal] = useState(true);
+  const [createSubmitting, setCreateSubmitting] = useState(false);
 
   // Fetch DNS zones using SDK
   const {
@@ -79,12 +94,84 @@ export default function DNSZonesPage() {
           <Button variant="outline" size="icon" onClick={() => fetchZones()} disabled={loading}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button>
+          <Button onClick={() => setCreateOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
             Add Zone
           </Button>
         </div>
       </div>
+
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add DNS Zone</DialogTitle>
+            <DialogDescription>
+              Create a new authoritative DNS zone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="zone-name">Zone Name *</Label>
+              <Input
+                id="zone-name"
+                value={createName}
+                onChange={(e) => setCreateName(e.target.value)}
+                placeholder="example.com"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="zone-ttl">Default TTL (seconds)</Label>
+              <Input
+                id="zone-ttl"
+                type="number"
+                min={60}
+                value={createTTL}
+                onChange={(e) => setCreateTTL(e.target.value)}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                id="zone-internal"
+                type="checkbox"
+                checked={createInternal}
+                onChange={(e) => setCreateInternal(e.target.checked)}
+              />
+              <Label htmlFor="zone-internal">Internal (split-horizon)</Label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!createName || createSubmitting}
+              onClick={async () => {
+                setCreateSubmitting(true);
+                try {
+                  await dns.createZone({
+                    name: createName.endsWith('.') ? createName : `${createName}.`,
+                    ttl: Number.parseInt(createTTL, 10) || 3600,
+                    internal: createInternal,
+                  });
+                  toast({ title: 'Zone created', variant: 'success' });
+                  setCreateOpen(false);
+                  setCreateName('');
+                  fetchZones();
+                } catch (err) {
+                  toast({
+                    title: 'Failed to create zone',
+                    description: err instanceof Error ? err.message : 'Unknown error',
+                    variant: 'destructive',
+                  });
+                } finally {
+                  setCreateSubmitting(false);
+                }
+              }}
+            >
+              {createSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid gap-4 md:grid-cols-4">
         <div className="rounded-lg border border-border bg-card p-6">

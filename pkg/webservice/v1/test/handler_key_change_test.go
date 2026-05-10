@@ -23,7 +23,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
 	"github.com/stretchr/testify/assert"
 )

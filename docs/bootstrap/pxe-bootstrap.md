@@ -57,14 +57,48 @@ platformctl bootstrap run --config bootstrap.yaml
 | 1 | Switch | Configure VLANs and port assignments (optional) |
 | 2 | Deploy | Deploy PXE bootstrap container to target host |
 | 3 | Control Plane | PXE boot and wait for control-plane nodes |
-| 4 | Seed | Upload templates and create device profiles |
-| 5 | Remaining | PXE boot gateway and worker nodes |
-| 6 | Teardown | Remove bootstrap container (non-fatal if fails) |
+| 4 | Seed | Merge per-node configs and publish to config server |
+| 5 | Remaining | PXE/virtual-media boot gateway and worker nodes |
+| 6 | Watch | Stream install-log uploads; verify successful install |
+| 7 | Teardown | Remove bootstrap container (non-fatal if fails) |
+
+### Phase 4 — Seed (Detail)
+
+This is the phase that matches each node to its role-specific device
+config and publishes per-MAC values consumed by `autoinstall.sh`.
+
+For each node in `bootstrap.yaml`:
+
+1. **Load role template** from
+   `configs/platform/templates/<profile>/<vendor>/<model>/<role>.yaml`.
+2. **Apply overrides_file** (deep merge — override wins on conflict).
+3. **Apply inline overrides** from the `overrides:` block in
+   bootstrap.yaml (deep merge).
+4. **Serialize** the merged YAML.
+
+For each MAC in the union of (YAML-declared MACs, BMC-discovered MACs):
+
+5. **PUT** `http://<deployer>:8080/config/mac/<mac-dashed>/installer.yaml`
+   with the merged YAML body.
+6. **PUT** `http://<deployer>:8080/config/mac/<mac-dashed>/hostname`
+   with the target hostname.
+
+Publishing under every MAC ensures the installer finds its config on
+whichever NIC the Alpine live environment enumerates as `eth0`.
+
+This phase only runs for nodes being provisioned via dynamic config
+delivery (shared ISO built with `--config-server`). For operators who
+bake per-role ISOs, this phase is a no-op.
+
+See [`config-delivery.md`](./config-delivery.md) for the full config
+delivery architecture.
 
 ## Related Documentation
 
+- [Config Delivery](./config-delivery.md) -- Bootstrap-time dynamic + baked config delivery
 - [Day Zero Guide](./day-zero.md) -- Step-by-step first deployment
 - [Config Reference](./config-reference.md) -- Complete bootstrap.yaml reference
 - [Deployer](./deployer.md) -- Bootstrap container deployment targets
 - [Switch Management](./switch-management.md) -- Physical switch auto-configuration
 - [Manual Nodes](./manual-nodes.md) -- Provisioning without BMC
+- [Architecture: Bootstrap Flow](../architecture/bootstrap-flow.md) -- End-to-end architecture

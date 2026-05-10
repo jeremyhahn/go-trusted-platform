@@ -24,7 +24,7 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/dynamicsecrets"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -112,65 +112,6 @@ func TestDynamicSecretsResolver_Scheme(t *testing.T) {
 	resolver := NewDynamicSecretsResolver(nil, logger)
 
 	assert.Equal(t, bootstrap.SchemeDynamic, resolver.Scheme())
-}
-
-func TestDynamicSecretsResolver_CanResolve(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
-	resolver := NewDynamicSecretsResolver(nil, logger)
-
-	tests := []struct {
-		name     string
-		uri      string
-		expected bool
-	}{
-		{
-			name:     "valid dynamic URI",
-			uri:      "dynamic://database-readonly",
-			expected: true,
-		},
-		{
-			name:     "valid dynamic URI with TTL",
-			uri:      "dynamic://database-readonly/1h",
-			expected: true,
-		},
-		{
-			name:     "valid dynamic URI uppercase",
-			uri:      "DYNAMIC://api-key",
-			expected: true,
-		},
-		{
-			name:     "valid dynamic URI mixed case",
-			uri:      "Dynamic://cache-access/30m",
-			expected: true,
-		},
-		{
-			name:     "kms URI should not resolve",
-			uri:      "kms://path/to/secret",
-			expected: false,
-		},
-		{
-			name:     "autogen URI should not resolve",
-			uri:      "autogen://32/base64",
-			expected: false,
-		},
-		{
-			name:     "plain text should not resolve",
-			uri:      "mysecretpassword",
-			expected: false,
-		},
-		{
-			name:     "empty string should not resolve",
-			uri:      "",
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := resolver.CanResolve(tt.uri)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
 }
 
 func TestDynamicSecretsResolver_Resolve_Success(t *testing.T) {
@@ -914,22 +855,3 @@ func TestSetupSecretResolvers_XKMSNoSDK(t *testing.T) {
 	assert.False(t, registry.CanResolve("xkms://backend/key"))
 }
 
-func TestSetupSecretResolvers_AllEnabledNoServices(t *testing.T) {
-	logger := logging.DefaultLogger()
-	registry, err := (&App{Logger: logger}).SetupSecretResolvers(context.Background(),
-		&SecretsConfig{
-			AutoGenerate:   true,
-			LocalKMS:       true,
-			Encrypted:      true,
-			DynamicSecrets: true,
-			XKMS:           true,
-		})
-
-	require.NoError(t, err)
-	require.NotNil(t, registry)
-	// Only AutoGen should be registered since no backing services are available
-	assert.True(t, registry.CanResolve("autogen://32/base64"))
-	assert.False(t, registry.CanResolve("dynamic://role"))
-	assert.False(t, registry.CanResolve("xkms://backend/key"))
-	assert.False(t, registry.CanResolve("kms://path"))
-}

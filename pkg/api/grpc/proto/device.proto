@@ -86,6 +86,10 @@ message Device {
   string signing_pub = 8;
   google.protobuf.Timestamp created_at = 9;
   google.protobuf.Timestamp updated_at = 10;
+  // Physical switch managing this device's port.
+  string switch_name = 11;
+  // Physical port identifier on the switch (e.g., "Eth1/3").
+  string switch_port = 12;
 }
 
 // DHCPPoolConfig defines DHCP pool configuration

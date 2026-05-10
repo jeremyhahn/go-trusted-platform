@@ -157,3 +157,32 @@ func (e ErrInvalidPaginationParams) Error() string {
 	}
 	return "invalid pagination parameters"
 }
+
+// ErrSwitchNotConfigured indicates the switch referenced by a device is not configured.
+type ErrSwitchNotConfigured struct {
+	SwitchName string
+}
+
+func (e ErrSwitchNotConfigured) Error() string {
+	return "switch not configured: " + e.SwitchName
+}
+
+// ErrSwitchVLANTransitionFailed indicates the physical switch port VLAN change failed.
+type ErrSwitchVLANTransitionFailed struct {
+	SwitchName string
+	Port       string
+	VLAN       uint16
+	Cause      error
+}
+
+func (e ErrSwitchVLANTransitionFailed) Error() string {
+	msg := "switch vlan transition failed: switch=" + e.SwitchName + " port=" + e.Port
+	if e.Cause != nil {
+		msg += " cause=" + e.Cause.Error()
+	}
+	return msg
+}
+
+func (e ErrSwitchVLANTransitionFailed) Unwrap() error {
+	return e.Cause
+}

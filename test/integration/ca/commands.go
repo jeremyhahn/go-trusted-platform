@@ -62,7 +62,7 @@ type CACommands interface {
 	// CRL Export Commands (platformctl ca crl export)
 	ExportCRL(ctx context.Context, output string) (*ExportCRLResult, error)
 
-	// Export Bundle Commands (platformctl ca export-bundle)
+	// Export Bundle Commands (platformctl ca bundle)
 	ExportBundle(ctx context.Context, output string) (*ExportBundleResult, error)
 
 	// Install CA Certificates Commands (platformctl ca install-ca-certificates)

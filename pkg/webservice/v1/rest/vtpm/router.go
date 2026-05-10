@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	basePath = "/api/v1/vtpm"
+	basePath = "/vtpm"
 )
 
 // VTPMRouter provides REST routing for vTPM operations.

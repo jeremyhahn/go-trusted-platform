@@ -16,12 +16,12 @@ package bmc
 import "log/slog"
 
 // protocolFactory is a function that creates a BMC client from configuration.
-type protocolFactory func(config *Config, logger *slog.Logger) Client
+type protocolFactory func(config *Config, logger *slog.Logger) (Client, error)
 
 // protocolFactories maps protocol values to their client constructors for O(1) dispatch.
 var protocolFactories = map[Protocol]protocolFactory{
-	ProtocolIPMI:    func(config *Config, logger *slog.Logger) Client { return newIPMIClient(config, logger) },
-	ProtocolRedfish: func(config *Config, logger *slog.Logger) Client { return newRedfishClient(config, logger) },
+	ProtocolIPMI:    func(config *Config, logger *slog.Logger) (Client, error) { return newIPMIClient(config, logger), nil },
+	ProtocolRedfish: func(config *Config, logger *slog.Logger) (Client, error) { return newRedfishClient(config, logger) },
 }
 
 // DefaultClientFactory creates BMC clients by dispatching on the configured protocol.
@@ -50,7 +50,7 @@ func (f *DefaultClientFactory) NewClient(config *Config) (Client, error) {
 	if !ok {
 		return nil, ErrInvalidConfig{Field: "protocol", Reason: "unsupported protocol: " + string(config.Protocol)}
 	}
-	return factory(config, f.logger), nil
+	return factory(config, f.logger)
 }
 
 // RedfishClientFactory creates redfishClient instances.
@@ -74,5 +74,5 @@ func (f *RedfishClientFactory) NewClient(config *Config) (Client, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	return newRedfishClient(config, f.logger), nil
+	return newRedfishClient(config, f.logger)
 }

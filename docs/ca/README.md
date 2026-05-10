@@ -89,7 +89,7 @@ platformctl ca issue server.example.com software rsa2048 \
 platformctl ca install
 
 # Export CA bundle
-platformctl ca export-bundle > ca-bundle.crt
+platformctl ca bundle > ca-bundle.crt
 ```
 
 ## CA Hierarchy

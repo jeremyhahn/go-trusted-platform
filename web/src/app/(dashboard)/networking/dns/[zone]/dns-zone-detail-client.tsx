@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, usePathname, useRouter } from 'next/navigation';
+import { resolveDynamicId } from '@/utils/dynamic-route';
 import { ArrowLeft, Plus, RefreshCw, Download, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -12,12 +13,15 @@ import { useDNS, useApi, useToast } from '@/hooks';
 import type { DNSZoneDetail, DNSRecord } from '@/types/infrastructure';
 import type { GetZoneResponse, Zone, RecordSet, DNSRecord as SDKDNSRecord } from 'trusted-platform-sdk';
 
-// Transform SDK Zone to UI DNSZoneDetail format
-function transformZoneToDetail(zone: Zone): DNSZoneDetail {
+// Transform SDK Zone to UI DNSZoneDetail format. The platform DNS REST
+// handler returns record sets keyed by lowercase RR type ("a", "aaaa",
+// "cname", "mx", "txt", "ns", "soa"); the SDK type union declares
+// camelCase property names ("aRecords"…). Read both so the page works
+// regardless of which shape we get on the wire.
+function transformZoneToDetail(zone: any): DNSZoneDetail {
   const records: DNSRecord[] = [];
-  const recordSet = zone.records;
+  const recordSet: any = zone?.records || {};
 
-  // Helper to create UI record format
   const createRecord = (name: string, type: DNSRecord['type'], value: string, ttl: number, extra?: Partial<DNSRecord>): DNSRecord => ({
     id: `${type}-${name}-${value}`,
     name,
@@ -27,62 +31,48 @@ function transformZoneToDetail(zone: Zone): DNSZoneDetail {
     ...extra,
   });
 
-  // Transform record set to flat array
-  if (recordSet) {
-    // A records
-    recordSet.aRecords?.forEach((r) => {
-      records.push(createRecord(r.name, 'A', r.value, r.ttl));
-    });
+  const pick = (camel: string, snake: string): any[] =>
+    (recordSet[camel] ?? recordSet[snake] ?? []) as any[];
 
-    // AAAA records
-    recordSet.aaaaRecords?.forEach((r) => {
-      records.push(createRecord(r.name, 'AAAA', r.value, r.ttl));
-    });
+  pick('aRecords', 'a').forEach((r: any) => {
+    records.push(createRecord(r.name, 'A', r.value, r.ttl ?? 0));
+  });
+  pick('aaaaRecords', 'aaaa').forEach((r: any) => {
+    records.push(createRecord(r.name, 'AAAA', r.value, r.ttl ?? 0));
+  });
+  pick('cnameRecords', 'cname').forEach((r: any) => {
+    records.push(createRecord(r.name, 'CNAME', r.value, r.ttl ?? 0));
+  });
+  pick('mxRecords', 'mx').forEach((r: any) => {
+    records.push(createRecord(r.name, 'MX', r.value, r.ttl ?? 0, { priority: r.priority }));
+  });
+  pick('txtRecords', 'txt').forEach((r: any) => {
+    records.push(createRecord(r.name, 'TXT', r.value, r.ttl ?? 0));
+  });
+  pick('nsRecords', 'ns').forEach((r: any) => {
+    records.push(createRecord(r.name, 'NS', r.value, r.ttl ?? 0));
+  });
 
-    // CNAME records
-    recordSet.cnameRecords?.forEach((r) => {
-      records.push(createRecord(r.name, 'CNAME', r.value, r.ttl));
-    });
-
-    // MX records
-    recordSet.mxRecords?.forEach((r) => {
-      records.push(createRecord(r.name, 'MX', r.value, r.ttl, { priority: r.priority }));
-    });
-
-    // TXT records
-    recordSet.txtRecords?.forEach((r) => {
-      records.push(createRecord(r.name, 'TXT', r.value, r.ttl));
-    });
-
-    // NS records
-    recordSet.nsRecords?.forEach((r) => {
-      records.push(createRecord(r.name, 'NS', r.value, r.ttl));
-    });
-
-    // SOA record
-    if (recordSet.soa) {
-      const soa = recordSet.soa;
-      records.push(createRecord(soa.name, 'SOA', `${soa.mname} ${soa.rname} ${soa.serial}`, soa.ttl));
-    }
+  const soa: any = recordSet.soa;
+  if (soa) {
+    records.push(createRecord(soa.name, 'SOA', `${soa.mname} ${soa.rname} ${soa.serial}`, soa.ttl ?? 0));
   }
 
-  // Extract SOA data for zone details
-  const soa = recordSet?.soa;
-  const nsRecords = recordSet?.nsRecords || [];
+  const nsRecords = pick('nsRecords', 'ns');
 
   return {
-    id: String(zone.id),
+    id: String(zone.id ?? zone.name),
     name: zone.name,
-    type: 'primary' as const, // Default to primary
+    type: 'primary' as const,
     recordCount: records.length,
     serial: soa?.serial || 0,
     refresh: soa?.refresh || 3600,
     retry: soa?.retry || 600,
     expire: soa?.expire || 604800,
     ttl: zone.ttl,
-    createdAt: new Date().toISOString(), // SDK doesn't provide timestamps
-    updatedAt: new Date().toISOString(),
-    nameservers: nsRecords.map((ns) => ns.value),
+    createdAt: zone.createdAt ?? zone.created_at ?? new Date().toISOString(),
+    updatedAt: zone.updatedAt ?? zone.updated_at ?? new Date().toISOString(),
+    nameservers: nsRecords.map((ns: any) => ns.value),
     adminEmail: soa?.rname || 'admin@' + zone.name,
     records,
   };
@@ -90,13 +80,14 @@ function transformZoneToDetail(zone: Zone): DNSZoneDetail {
 
 export default function DNSZoneDetailPage() {
   const params = useParams();
+  const pathname = usePathname();
   const router = useRouter();
   const [formOpen, setFormOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<DNSRecord | undefined>();
   const { toast } = useToast();
   const dns = useDNS();
 
-  const zoneName = decodeURIComponent(params.zone as string);
+  const zoneName = resolveDynamicId(params, pathname, 'dns', 'zone');
 
   // Fetch zone data and transform to UI format
   const {
@@ -105,10 +96,11 @@ export default function DNSZoneDetailPage() {
     refetch: fetchZone,
   } = useApi<GetZoneResponse>(() => dns.getZone(zoneName), [zoneName]);
 
-  // Transform SDK Zone to UI DNSZoneDetail format
-  const zone: DNSZoneDetail | null = zoneResponse?.zone
-    ? transformZoneToDetail(zoneResponse.zone)
-    : null;
+  // Transform SDK Zone to UI DNSZoneDetail format. The api-client
+  // unwraps the {payload} envelope so `zoneResponse` IS the zone, but
+  // older code expected a nested {zone: …} shape. Tolerate both.
+  const zoneRecord: any = (zoneResponse as any)?.zone ?? zoneResponse ?? null;
+  const zone: DNSZoneDetail | null = zoneRecord ? transformZoneToDetail(zoneRecord) : null;
 
   const handleEdit = (record: DNSRecord) => {
     setEditingRecord(record);

@@ -18,7 +18,7 @@ import (
 	"errors"
 	"testing"
 
-	casdk "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	casdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -84,6 +84,7 @@ Examples:
 	cmd.AddCommand(NewUsageCommand(getFlags))
 	cmd.AddCommand(NewVLANCommand(getFlags))
 	cmd.AddCommand(NewBridgeCommand(getFlags))
+	cmd.AddCommand(NewBarrierCommand(getFlags))
 
 	return cmd
 }

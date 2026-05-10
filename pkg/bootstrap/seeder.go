@@ -40,11 +40,14 @@ type templateResponse struct {
 }
 
 // profileRequest is the JSON body for creating a device profile.
+// The Config field carries the MERGED template + overrides so the
+// control plane can deliver the complete configuration to the node
+// on first boot via config fetch.
 type profileRequest struct {
-	MAC       string                 `json:"mac"`
-	Hostname  string                 `json:"hostname"`
-	Role      string                 `json:"role"`
-	Overrides map[string]interface{} `json:"overrides,omitempty"`
+	MAC      string          `json:"mac"`
+	Hostname string          `json:"hostname"`
+	Role     string          `json:"role"`
+	Config   json.RawMessage `json:"config,omitempty"`
 }
 
 // SeederParams holds the dependencies for creating a Seeder.
@@ -109,7 +112,8 @@ func (s *Seeder) Seed(ctx context.Context) error {
 		return ErrSeedFailed{Cause: err}
 	}
 
-	// Step 2: Create a profile for each discovered node.
+	// Step 2: Create a profile for each discovered node with the merged
+	// template + override config.
 	if err := s.createProfiles(ctx, templateIDs); err != nil {
 		return ErrSeedFailed{Cause: err}
 	}
@@ -221,6 +225,9 @@ func yamlToJSON(data []byte, role, path string) (json.RawMessage, error) {
 }
 
 // createProfiles POSTs a profile creation request for each discovered node.
+// For each node, the profile carries the MERGED template + override config
+// so the control plane delivers the complete, per-node configuration on
+// first-boot config fetch.
 func (s *Seeder) createProfiles(ctx context.Context, templateIDs map[string]string) error {
 	for i := range s.discovered {
 		node := &s.discovered[i]
@@ -237,11 +244,18 @@ func (s *Seeder) createProfiles(ctx context.Context, templateIDs map[string]stri
 			slog.String("hostname", node.Hostname),
 			slog.String("template_id", templateID))
 
+		// Build the merged config: load the base template YAML, deep-merge
+		// the node's overrides, and serialize to JSON for the profile.
+		mergedConfig, mergeErr := s.buildMergedConfig(node)
+		if mergeErr != nil {
+			return ErrProfileCreateFailed{Hostname: node.Hostname, Cause: mergeErr}
+		}
+
 		body := profileRequest{
-			MAC:       primaryDiscoveredMAC(node),
-			Hostname:  node.Hostname,
-			Role:      node.Role,
-			Overrides: node.Overrides,
+			MAC:      primaryDiscoveredMAC(node),
+			Hostname: node.Hostname,
+			Role:     node.Role,
+			Config:   mergedConfig,
 		}
 
 		encoded, err := json.Marshal(body)
@@ -275,6 +289,94 @@ func (s *Seeder) createProfiles(ctx context.Context, templateIDs map[string]stri
 	}
 
 	return nil
+}
+
+// buildMergedConfig loads the base template YAML for a node's role,
+// deep-merges the node's per-host overrides, applies global platform
+// identity fields, and returns the result as JSON. Returns nil when
+// no template is configured for the role (the profile will be created
+// without an explicit config, falling back to the template default).
+func (s *Seeder) buildMergedConfig(node *DiscoveredNode) (json.RawMessage, error) {
+	templatePath, ok := s.config.Templates[node.Role]
+	if !ok {
+		return nil, nil
+	}
+
+	data, err := os.ReadFile(templatePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrTemplateFileNotFound{Role: node.Role, Path: templatePath}
+		}
+		return nil, ErrTemplateMergeFailed{Hostname: node.Hostname, Role: node.Role, Cause: err}
+	}
+
+	var templateMap map[string]interface{}
+	if err := yaml.Unmarshal(data, &templateMap); err != nil {
+		return nil, ErrTemplateMergeFailed{Hostname: node.Hostname, Role: node.Role, Cause: err}
+	}
+
+	// Apply per-node overrides via deep merge.
+	if len(node.Overrides) > 0 {
+		templateMap = deepMergeSeeder(templateMap, node.Overrides)
+	}
+
+	// Apply global identity from platform config.
+	applyGlobalIdentitySeeder(templateMap, &s.config.Platform)
+
+	jsonBytes, err := json.Marshal(templateMap)
+	if err != nil {
+		return nil, ErrTemplateMergeFailed{Hostname: node.Hostname, Role: node.Role, Cause: err}
+	}
+
+	return json.RawMessage(jsonBytes), nil
+}
+
+// deepMergeSeeder recursively merges src into dst. Values in src take
+// precedence. Maps are merged recursively; all other types are overwritten.
+func deepMergeSeeder(dst, src map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{}, len(dst))
+	for k, v := range dst {
+		result[k] = v
+	}
+	for k, v := range src {
+		existing, exists := result[k]
+		if !exists {
+			result[k] = v
+			continue
+		}
+		existingMap, existingIsMap := existing.(map[string]interface{})
+		srcMap, srcIsMap := v.(map[string]interface{})
+		if existingIsMap && srcIsMap {
+			result[k] = deepMergeSeeder(existingMap, srcMap)
+		} else {
+			result[k] = v
+		}
+	}
+	return result
+}
+
+// applyGlobalIdentitySeeder fills empty top-level identity fields from the
+// platform global configuration. Mirrors the logic in
+// orchestrator_dryrun.go::applyGlobalIdentity but operates on the seeder's
+// platform config.
+func applyGlobalIdentitySeeder(m map[string]interface{}, platform *PlatformGlobalConfig) {
+	if platform == nil {
+		return
+	}
+	setIfEmpty := func(key, value string) {
+		if value == "" {
+			return
+		}
+		if val, ok := m[key]; ok {
+			if s, isStr := val.(string); isStr && s == "" {
+				m[key] = value
+			}
+		}
+	}
+	setIfEmpty("domain", platform.Domain)
+	setIfEmpty("hostmaster", platform.Hostmaster)
+	setIfEmpty("tenant_id", platform.TenantID)
+	setIfEmpty("environment", platform.Environment)
 }
 
 // primaryDiscoveredMAC returns the first discovered MAC for a node, or an

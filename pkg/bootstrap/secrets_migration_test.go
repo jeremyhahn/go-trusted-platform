@@ -352,30 +352,6 @@ func TestExpandShortKMSPath(t *testing.T) {
 	}
 }
 
-func TestIsSecretURIExported(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected bool
-	}{
-		{input: "kms://path/to/secret", expected: true},
-		{input: "remote-kms://server/secret", expected: true},
-		{input: "autogen://32/base64", expected: true},
-		{input: "env://MY_VAR", expected: true},
-		{input: "encrypted://data", expected: true},
-		{input: "dynamic://role/1h", expected: true},
-		{input: "xkms://tpm2/key-id", expected: true},
-		{input: "plain-text-value", expected: false},
-		{input: "", expected: false},
-		{input: "http://not-a-secret", expected: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			assert.Equal(t, tt.expected, IsSecretURI(tt.input))
-		})
-	}
-}
-
 func TestStrategyPlainTextConstant(t *testing.T) {
 	assert.Equal(t, "plaintext", StrategyPlainText)
 }

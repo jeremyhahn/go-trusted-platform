@@ -129,6 +129,25 @@ func (r *DeviceRouter) registerProfileCRUD(router *mux.Router) {
 	// GET /api/v1/device/profiles - List profiles
 	router.HandleFunc("/device/profiles", r.crudHandler.ListProfiles).Methods("GET")
 
+	// /devices/profiles aliases match the WebUI's plural-noun convention
+	// — the dashboard hits `/api/v1/devices/profiles` while the platform
+	// originally exposed singular `/api/v1/device/profiles`. Both forms
+	// must dispatch to the same handler so REST and SDK callers agree.
+	router.HandleFunc("/devices/profiles", r.crudHandler.CreateProfile).Methods("POST")
+	router.HandleFunc("/devices/profiles", r.crudHandler.ListProfiles).Methods("GET")
+	router.HandleFunc("/devices/profiles/{id:[0-9]+}", r.crudHandler.GetProfileByID).Methods("GET")
+	router.HandleFunc("/devices/profiles/{id:[0-9]+}", r.crudHandler.UpdateProfile).Methods("PUT")
+	router.HandleFunc("/devices/profiles/{id:[0-9]+}", r.crudHandler.DeleteProfile).Methods("DELETE")
+	// /devices/templates plural alias for the same reason. The SDK
+	// (sdk/javascript/src/services/device-service.ts) calls
+	// `/v1/devices/templates` while the legacy REST surface used
+	// `/v1/device/templates`. Both must work.
+	router.HandleFunc("/devices/templates", r.templateHandler.CreateTemplate).Methods("POST")
+	router.HandleFunc("/devices/templates", r.templateHandler.ListTemplates).Methods("GET")
+	router.HandleFunc("/devices/templates/{id:[0-9]+}", r.templateHandler.GetTemplate).Methods("GET")
+	router.HandleFunc("/devices/templates/{id:[0-9]+}", r.templateHandler.UpdateTemplate).Methods("PUT")
+	router.HandleFunc("/devices/templates/{id:[0-9]+}", r.templateHandler.DeleteTemplate).Methods("DELETE")
+
 	// GET /api/v1/device/profiles/count - Count profiles
 	router.HandleFunc("/device/profiles/count", r.crudHandler.CountProfiles).Methods("GET")
 

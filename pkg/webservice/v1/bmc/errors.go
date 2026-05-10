@@ -130,3 +130,60 @@ type ErrInvalidBootDevice struct {
 func (e ErrInvalidBootDevice) Error() string {
 	return fmt.Sprintf("bmc: invalid boot device: %s", e.Device)
 }
+
+// ErrInvalidUserSlot indicates the user slot URL parameter is not a
+// valid uint8.
+type ErrInvalidUserSlot struct {
+	Slot string
+}
+
+func (e ErrInvalidUserSlot) Error() string {
+	if e.Slot != "" {
+		return fmt.Sprintf("bmc: invalid user slot: %s", e.Slot)
+	}
+	return "bmc: invalid user slot"
+}
+
+// ErrMissingCertPEM indicates the cert_pem field is required but not provided.
+type ErrMissingCertPEM struct{}
+
+func (e ErrMissingCertPEM) Error() string {
+	return "bmc: cert_pem is required"
+}
+
+// ErrMissingKeyPEM indicates the key_pem field is required but not provided.
+type ErrMissingKeyPEM struct{}
+
+func (e ErrMissingKeyPEM) Error() string {
+	return "bmc: key_pem is required"
+}
+
+// ErrMissingUsername indicates the username field is required but not provided.
+type ErrMissingUsername struct{}
+
+func (e ErrMissingUsername) Error() string {
+	return "bmc: username is required"
+}
+
+// ErrMissingPassword indicates the password field is required but not provided.
+type ErrMissingPassword struct{}
+
+func (e ErrMissingPassword) Error() string {
+	return "bmc: password is required"
+}
+
+// ErrMissingPrivilege indicates the privilege field is required but not provided.
+type ErrMissingPrivilege struct{}
+
+func (e ErrMissingPrivilege) Error() string {
+	return "bmc: privilege is required"
+}
+
+// ErrInvalidPrivilege indicates an unrecognized privilege value.
+type ErrInvalidPrivilege struct {
+	Privilege string
+}
+
+func (e ErrInvalidPrivilege) Error() string {
+	return fmt.Sprintf("bmc: invalid privilege: %s", e.Privilege)
+}

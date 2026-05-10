@@ -33,7 +33,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uefi/firmware"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 const (
@@ -311,16 +311,24 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 	// firstboot flow — the failure mode observed on lab-node-2 second boot
 	// 2026-04-08 (rc=1, manual entry fallback).
 	//
-	// The fix: skip TPM provisioning AND sealing entirely if any of these
-	// artifacts exist on disk. We trust that a prior boot already did
-	// them, and we just unlock LUKS with the plain key from the installer
-	// container so the system boots. The transitional plain-key boot
-	// stays in effect until we implement a proper seal-validation
-	// handshake; the security implication is documented in
-	// docs/installer/factory-reset.md.
+	// The fix: skip TPM provisioning AND sealing entirely if a sealed
+	// platform key has already been written to the EFI partition. The
+	// matching executor.go path (line 185) uses the same artifact
+	// (`seal-platform.pub`) as its sealed-state probe, so the two code
+	// paths agree on what "previously provisioned" means.
+	//
+	// IMPORTANT: do NOT use pcr-banks as a marker. pcr-banks is written
+	// pre-pivot by the installer to tell platform-initrd which PCR
+	// algorithms to extend; it exists on EVERY successful install boot,
+	// regardless of whether sealing has actually completed. Treating it
+	// as a "prior provisioning" signal silently skips TPM provisioning
+	// (and therefore the IAK/IDevID enrollment ceremony that gates ACME
+	// enroll-01) on every fresh first boot — leaving each freshly-
+	// installed node enrolled against its own local CA forever. That
+	// false-positive bit a 2026-05-02 GW reflash where enroll-01 against
+	// the CP never fired and no DNS records got registered.
 	priorProvisioning := false
 	for _, marker := range []string{
-		filepath.Join(efiPath, "tpm2", "pcr-banks"),
 		filepath.Join(efiPath, "tpm2", "seal-platform.pub"),
 		filepath.Join(efiPath, strategySealPub),
 	} {

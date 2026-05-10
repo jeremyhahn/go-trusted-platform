@@ -85,6 +85,7 @@ func (r *PlatformRouter) RegisterRoutes(router *mux.Router) {
 	r.registerStatusRoutes(platformRouter)
 	r.registerServiceRoutes(platformRouter)
 	r.registerProtocolRoutes(platformRouter)
+	r.registerMetricsRoutes(platformRouter)
 }
 
 // registerHealthRoutes registers health check endpoints
@@ -96,9 +97,14 @@ func (r *PlatformRouter) registerHealthRoutes(router *mux.Router) {
 // registerStatusRoutes registers status and version endpoints
 // GET    /api/v1/platform/status                - Get platform status
 // GET    /api/v1/platform/version               - Get platform version
+// GET    /api/v1/platform/system                - Get system info (SDK alias)
 func (r *PlatformRouter) registerStatusRoutes(router *mux.Router) {
 	router.HandleFunc("/status", r.handlers.GetStatus).Methods("GET")
 	router.HandleFunc("/version", r.handlers.GetVersion).Methods("GET")
+	// /system mirrors what the JS SDK calls (`platform.getSystemInfo()`),
+	// which expects `{system: {...}}`. We re-use the status response's
+	// system block so the same handler covers both shapes.
+	router.HandleFunc("/system", r.handlers.GetSystem).Methods("GET")
 }
 
 // registerServiceRoutes registers service management endpoints
@@ -122,4 +128,12 @@ func (r *PlatformRouter) registerServiceRoutes(router *mux.Router) {
 // GET    /api/v1/platform/protocols             - Get protocol status
 func (r *PlatformRouter) registerProtocolRoutes(router *mux.Router) {
 	router.HandleFunc("/protocols", r.handlers.GetProtocols).Methods("GET")
+}
+
+// registerMetricsRoutes registers the platform metrics aggregator used
+// by the dashboard. Returns aggregated service health + system snapshot.
+//
+// GET    /api/v1/platform/metrics              - Get platform metrics
+func (r *PlatformRouter) registerMetricsRoutes(router *mux.Router) {
+	router.HandleFunc("/metrics", r.handlers.GetMetrics).Methods("GET")
 }

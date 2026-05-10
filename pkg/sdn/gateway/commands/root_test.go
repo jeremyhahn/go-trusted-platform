@@ -81,9 +81,16 @@ func TestServeCommandProperties(t *testing.T) {
 }
 
 func TestServeCommandFlags(t *testing.T) {
+	// --modes flag should NOT exist (removed in config-driven refactor)
+	modesFlag := serveCmd.Flags().Lookup("modes")
+	if modesFlag != nil {
+		t.Error("modes flag should not exist (config-driven service loading)")
+	}
+
+	// These flags should still exist
 	expectedFlags := []string{
-		"modes", "listen", "bgp-asn",
-		"bgp-router-id", "vxlan-vni",
+		"listen", "bgp-asn",
+		"bgp-router-id",
 		"api-port", "grpc-port",
 	}
 
@@ -95,15 +102,23 @@ func TestServeCommandFlags(t *testing.T) {
 	}
 }
 
+func TestServeCommandNoModesFlag(t *testing.T) {
+	// Explicitly test that --modes is gone
+	flag := serveCmd.Flags().Lookup("modes")
+	if flag != nil {
+		t.Error("--modes flag should have been removed; services are config-driven")
+	}
+}
+
 func TestSentinelErrors(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
 	}{
-		{"ErrInvalidGatewayMode", ErrInvalidGatewayMode},
 		{"ErrMissingBGPConfig", ErrMissingBGPConfig},
 		{"ErrGatewayStartFailed", ErrGatewayStartFailed},
 		{"ErrGatewayShutdownFailed", ErrGatewayShutdownFailed},
+		{"ErrConfigLoadFailed", ErrConfigLoadFailed},
 	}
 
 	for _, tt := range tests {
@@ -120,10 +135,10 @@ func TestSentinelErrors(t *testing.T) {
 
 func TestSentinelErrorsAreDistinct(t *testing.T) {
 	allErrors := []error{
-		ErrInvalidGatewayMode,
 		ErrMissingBGPConfig,
 		ErrGatewayStartFailed,
 		ErrGatewayShutdownFailed,
+		ErrConfigLoadFailed,
 	}
 
 	for i := 0; i < len(allErrors); i++ {
@@ -136,7 +151,6 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 }
 
 func TestInitConfig_NoConfigFile(t *testing.T) {
-	// initConfig should not panic when no config file is found
 	origCfgFile := cfgFile
 	cfgFile = ""
 	defer func() { cfgFile = origCfgFile }()

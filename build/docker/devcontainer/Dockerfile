@@ -253,6 +253,15 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # =============================================================================
+# LUKS2 / disk encryption tooling (required by LUKS integration tests that
+# create loopback-backed LUKS2 containers).
+# =============================================================================
+RUN apt-get update && apt-get install -y \
+    cryptsetup \
+    cryptsetup-bin \
+    && rm -rf /var/lib/apt/lists/*
+
+# =============================================================================
 # Install Go development tools
 # =============================================================================
 RUN go install github.com/swaggo/swag/cmd/swag@latest && \

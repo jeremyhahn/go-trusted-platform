@@ -18,7 +18,7 @@ import (
 	"sync"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
 	devicedao "github.com/jeremyhahn/go-trusted-platform/pkg/device/dao"
 	dnsdao "github.com/jeremyhahn/go-trusted-platform/pkg/dns/dao"
@@ -79,7 +79,7 @@ type Factory struct {
 // bootstrap and uses the given CA for TLS certificate operations. The CA must
 // have already been initialized (Load or Init called) before being passed here.
 // Pass nil when no external CA is needed or in remote transport modes.
-func NewFactory(config *Config, logger *logging.Logger, ca xkmssdk.XKMSCA) (*Factory, error) {
+func NewFactory(config *Config, logger *logging.Logger, ca xkmssdk.TrustedCA) (*Factory, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -504,4 +504,38 @@ func (f *Factory) IsClosed() bool {
 // Config returns the configuration used to create this factory.
 func (f *Factory) Config() *Config {
 	return f.config
+}
+
+// SetCA replaces the Certificate Authority used by the running embedded
+// QuicBaaS server. The new CA is propagated atomically into the live
+// CertificateService adapter so subsequent SDK certificate operations
+// (e.g. Security().Certificate().IssueCertificate()) are issued against it.
+//
+// This is used by platformd's serve command to inject the platform CA after
+// App.Init() completes: QuicBaaS starts without a CA to serve early KMS /
+// Secrets requests, then the platform CA is loaded and injected here before
+// provisionDaemonIdentity runs.
+//
+// Returns ErrFactoryClosed when the factory has been stopped, an error from
+// EmbeddedServer.SetCA in embedded mode (e.g. server not started, TLS
+// disabled), or nil when operating in remote transport mode (the remote
+// server manages its own CA). Passing nil is a no-op.
+func (f *Factory) SetCA(ca xkmssdk.TrustedCA) error {
+	if ca == nil {
+		return nil
+	}
+
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	if f.closed {
+		return ErrFactoryClosed{}
+	}
+
+	// Only embedded mode has a server-side CA adapter to update.
+	if !f.config.IsEmbedded() || f.embeddedServer == nil {
+		return nil
+	}
+
+	return f.embeddedServer.SetCA(ca)
 }

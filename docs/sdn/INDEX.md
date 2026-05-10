@@ -1,0 +1,397 @@
+# SDN Documentation Index
+
+Complete documentation for the Software-Defined Networking (SDN) components in go-trusted-platform.
+
+## Quick Navigation
+
+### By Component
+
+| Component | Purpose | Documentation |
+|-----------|---------|-----------------|
+| **Physical Fabric** | Unified switch management (VLAN/EVPN) | [fabric/README.md](./fabric/README.md) |
+| **Stateful Firewall** | Zone-based packet filtering + NAT | [firewall/README.md](./firewall/README.md) |
+| **Gateway Node** | Multi-service overlay, edge, transit node | [gateway/README.md](./gateway/README.md) |
+| **BGP** | Border Gateway Protocol for route announcement | [bgp/README.md](./bgp/README.md) |
+| **DHCP** | Dynamic IP allocation | [dhcp/README.md](./dhcp/README.md) |
+| **IPAM** | IP address pool management | [ipam/README.md](./ipam/README.md) |
+| **Tunnels** | GRE/IPIP tunnel lifecycle | [tunnel/README.md](./tunnel/README.md) |
+| **Overlay** | VXLAN-based overlay networking | [overlay/README.md](./overlay/README.md) |
+
+### By Use Case
+
+#### Network Provisioning
+1. Read [fabric/README.md](./fabric/README.md) — Understand fabric architecture
+2. Configure switches in [fabric/configuration.md](./fabric/configuration.md)
+3. Review port lifecycle in [fabric/api-reference.md](./fabric/api-reference.md)
+
+#### Device PXE Provisioning
+1. Review provisioning flow in [provisioning.md](./provisioning.md)
+2. Understand VLAN transitions in [fabric/README.md](./fabric/README.md) (PXE Provisioning Workflow)
+3. Check provisioning segment config in [fabric/configuration.md](./fabric/configuration.md)
+
+#### Firewall and Security
+1. Start with [firewall/README.md](./firewall/README.md) for concepts
+2. Configure zones and rules in [firewall/configuration.md](./firewall/configuration.md)
+3. Understand packet pipeline in [firewall/architecture.md](./firewall/architecture.md)
+4. Tune for performance in [firewall/performance.md](./firewall/performance.md)
+
+#### Multi-Tenant Overlay Networking
+1. Review [overlay/README.md](./overlay/README.md) for VXLAN concepts
+2. Configure segments in [overlay/configuration.md](./overlay/configuration.md)
+3. Check API integration in [overlay/api-reference.md](./overlay/api-reference.md)
+
+#### BGP Route Announcement
+1. Start with [bgp/README.md](./bgp/README.md)
+2. Configure BGP in [bgp/configuration.md](./bgp/configuration.md)
+3. Understand EVPN in [bgp/evpn.md](./bgp/evpn.md)
+
+#### Gateway Node Operations
+1. Review [gateway/README.md](./gateway/README.md) for overview
+2. Configure services in [gateway/configuration.md](./gateway/configuration.md)
+3. Check deployment modes:
+   - Overlay mode: [gateway/overlay-mode.md](./gateway/overlay-mode.md)
+   - Edge/P2P mode: [gateway/edge-mode.md](./gateway/edge-mode.md)
+   - Transit/BGP mode: [gateway/transit-mode.md](./gateway/transit-mode.md)
+
+## Complete Documentation Map
+
+### Fabric Management
+
+```
+fabric/
+├── README.md              # Overview, VLAN vs EVPN, quick start
+├── configuration.md       # FabricConfig schema, 3 complete examples
+├── api-reference.md       # Driver/Manager interfaces, types, usage patterns
+└── adding-drivers.md      # Guide for implementing vendor drivers
+```
+
+**When to use:**
+- Configuring physical switches
+- Managing VLAN or EVPN segments
+- Implementing port lifecycle (provision/activate/quarantine)
+- Adding support for new switch vendors
+
+### Firewall Engine
+
+```
+firewall/
+├── README.md              # Features, zones, rules, connection states
+├── configuration.md       # Zone/rule/NAT config schema
+├── architecture.md        # Packet pipeline, conntrack, design
+└── performance.md         # Benchmarks, tuning guide
+```
+
+**When to use:**
+- Configuring firewall zones and policies
+- Creating packet filtering rules
+- Setting up SNAT/DNAT rules
+- Tuning for high throughput
+- Understanding connection tracking
+
+### Gateway Node
+
+```
+gateway/
+├── README.md              # Multi-service gateway overview
+├── configuration.md       # Config-driven service activation
+├── architecture.md        # Service handlers, integration
+├── overlay-mode.md        # VTEP, VXLAN, EVPN configuration
+├── edge-mode.md           # P2P networking, ACME, edge services
+├── transit-mode.md        # BGP route announcement
+├── operations.md          # Runtime management
+└── loadbalancer.md        # Load balancer configuration
+```
+
+**When to use:**
+- Deploying a unified gateway node
+- Configuring overlay networking
+- Setting up edge/P2P services
+- Announcing routes via BGP
+- Managing load balancer
+
+### BGP Routing
+
+```
+bgp/
+├── README.md              # BGP overview, concepts
+├── configuration.md       # BGP config schema
+├── architecture.md        # Implementation design
+├── evpn.md               # EVPN overlay mode
+├── transit.md            # BGP transit design
+├── troubleshooting.md     # Common issues
+├── cli-usage.md          # CLI commands
+└── api-reference*.md     # REST, gRPC, QUIC, MCP API
+```
+
+**When to use:**
+- Configuring BGP neighbors
+- Setting up EVPN overlay
+- Announcing prefixes
+- Troubleshooting BGP issues
+
+### DHCP Service
+
+```
+dhcp/
+├── README.md              # DHCP overview
+├── configuration.md       # DHCP pools, options
+├── architecture.md        # Packet handling
+├── plugins.md            # Plugin extensions
+├── cli-usage.md          # CLI commands
+└── api-reference*.md     # REST, gRPC, QUIC, MCP API
+```
+
+**When to use:**
+- Configuring DHCP pools per segment
+- Setting DHCP options (DNS, gateway, etc)
+- Extending DHCP with plugins
+- Querying lease information
+
+### IPAM Service
+
+```
+ipam/
+├── README.md              # IPAM overview
+├── configuration.md       # IP pool configuration
+├── architecture.md        # Allocation algorithms
+└── api-reference*.md     # REST, gRPC, QUIC, MCP API
+```
+
+**When to use:**
+- Managing IP address pools
+- Reserving/allocating addresses
+- Tracking address usage
+
+### Tunnel Management
+
+```
+tunnel/
+├── README.md              # GRE/IPIP tunnel overview
+└── configuration.md       # TunnelConfig schema
+```
+
+**When to use:**
+- Creating GRE tunnels to VPS nodes
+- Configuring IPv6 tunnels
+- Setting up BGP peer transport
+
+### Overlay Networking
+
+```
+overlay/
+├── README.md              # VXLAN overlay overview
+├── configuration.md       # Segment/VTEP configuration
+├── architecture.md        # VNI mapping, EVPN integration
+├── operations.md          # Runtime operations
+└── api-reference*.md     # REST, gRPC, QUIC, MCP API
+```
+
+**When to use:**
+- Configuring overlay segments
+- Setting VNI mappings
+- EVPN with VXLAN underlays
+- Multi-tenant isolation
+
+## Configuration Examples
+
+### Minimal Firewall
+
+```yaml
+sdn:
+  firewall:
+    enabled: true
+    default-policy: deny
+    zones:
+      - name: trusted
+        interfaces: [eth0]
+        policy: allow
+    rules:
+      - name: allow-ssh
+        priority: 10
+        match:
+          dst-port: 22
+          protocol: 6
+        action: allow
+```
+
+See: [firewall/configuration.md](./firewall/configuration.md)
+
+### Minimal Fabric
+
+```yaml
+sdn:
+  fabric:
+    mode: vlan
+    switches:
+      - id: core-01
+        vendor: cisco-nexus
+        mgmt-ip: 10.0.1.50
+    segments:
+      - name: prod
+        vlan: 200
+        cidr: 10.201.0.0/24
+```
+
+See: [fabric/configuration.md](./fabric/configuration.md)
+
+### Minimal Gateway
+
+```yaml
+sdn:
+  gateway:
+    enabled: true
+    node-id: gw-01
+    
+    overlay:
+      enabled: true
+      vtep-ip: 10.0.0.1
+    
+    firewall:
+      enabled: true
+      # ... firewall config
+```
+
+See: [gateway/configuration.md](./gateway/configuration.md)
+
+## API References
+
+Each service exposes APIs via multiple protocols:
+
+| Service | REST | gRPC | QUIC | MCP | Unix |
+|---------|------|------|------|-----|------|
+| Fabric | [ref](./fabric/api-reference.md) | N/A | N/A | N/A | N/A |
+| Firewall | No | No | No | No | No |
+| Gateway | [ref](./gateway/api-reference-rest.md) | [ref](./gateway/api-reference-grpc.md) | [ref](./gateway/api-reference-quic.md) | [ref](./gateway/api-reference-mcp.md) | [ref](./gateway/api-reference-unix.md) |
+| BGP | [ref](./bgp/api-reference-rest.md) | [ref](./bgp/api-reference-grpc.md) | [ref](./bgp/api-reference-quic.md) | [ref](./bgp/api-reference-mcp.md) | [ref](./bgp/api-reference-unix.md) |
+| DHCP | [ref](./dhcp/api-reference-rest.md) | [ref](./dhcp/api-reference-grpc.md) | [ref](./dhcp/api-reference-quic.md) | [ref](./dhcp/api-reference-mcp.md) | [ref](./dhcp/api-reference-unix.md) |
+| IPAM | [ref](./ipam/api-reference-rest.md) | [ref](./ipam/api-reference-grpc.md) | [ref](./ipam/api-reference-quic.md) | [ref](./ipam/api-reference-mcp.md) | [ref](./ipam/api-reference-unix.md) |
+
+## CLI Tools
+
+Platform SDN is controlled via CLI:
+
+```bash
+# Manage gateway node
+platformctl gateway start --config config.yaml
+
+# Query BGP status
+platformctl bgp neighbors list
+
+# View DHCP leases
+platformctl dhcp leases list
+
+# Check IPAM pools
+platformctl ipam pools show
+
+# Configure firewall
+platformctl firewall rules list
+platformctl firewall rules add [options]
+```
+
+See: [cli-usage.md](./cli-usage.md) for full command reference
+
+## Architecture Overviews
+
+### System Architecture
+
+See: [ARCHITECTURE.md](./ARCHITECTURE.md)
+
+```
+Platform Daemon
+├── Gateway (overlay, edge, transit)
+├── Firewall (zone-based, stateful)
+├── BGP (route announcement)
+├── DHCP (address allocation)
+├── Tunnel (GRE/IPIP)
+├── Fabric (physical switches)
+└── Overlay (VXLAN multi-tenant)
+```
+
+### Packet Flow
+
+See: [firewall/architecture.md](./firewall/architecture.md)
+
+```
+Packet → ConnTrack → Zone Resolver → NAT → Rules → Verdict
+```
+
+## Troubleshooting
+
+| Issue | Component | Solution |
+|-------|-----------|----------|
+| VLAN not created on switch | [Fabric](./fabric/README.md) | Check driver, vendor config, credentials |
+| Packets dropped unexpectedly | [Firewall](./firewall/README.md) | Review rules, check zones, verify rules order |
+| BGP neighbors not coming up | [BGP](./bgp/troubleshooting.md) | Check tunnel configs, verify ASN, test reachability |
+| Devices not getting DHCP | [DHCP](./dhcp/architecture.md) | Verify pool config, check zone reachability |
+| Overlay segments isolated | [Overlay](./overlay/architecture.md) | Check VNI mapping, EVPN state |
+
+See: [troubleshooting.md](./troubleshooting.md) (if exists)
+
+## Testing
+
+### Unit Tests
+
+```bash
+make test                          # All tests
+make test-sdn-fabric              # Fabric tests
+make test-sdn-firewall            # Firewall tests
+make test-sdn-gateway             # Gateway tests
+```
+
+### Integration Tests
+
+```bash
+make integration-test              # All integration tests
+make integration-test-sdn-gateway  # Gateway integration
+```
+
+See: [testing.md](./testing.md) for comprehensive testing guide
+
+## Performance
+
+- **Firewall**: <1 µs established, >2 million pps — See [firewall/performance.md](./firewall/performance.md)
+- **BGP**: <100ms route propagation — See [bgp/architecture.md](./bgp/architecture.md)
+- **DHCP**: <50ms lease allocation — See [dhcp/architecture.md](./dhcp/architecture.md)
+
+## Security
+
+### Encryption for Secrets
+
+See: [secrets/encrypted-schemes.md](../secrets/encrypted-schemes.md)
+
+- `encrypted://` — Platform key (AES-256-GCM) for shared secrets
+- `idevid://` — Node IDevID key (RSA-OAEP) for per-node secrets
+
+### mTLS
+
+All services support mutual TLS for inter-node communication.
+
+## Related Documentation
+
+- [Configuration Guide](../configuration.md) — Top-level config structure
+- [Security Architecture](../security/architecture.md) — Overall security design
+- [Secrets Framework](../secrets/README.md) — Secret management
+- [Bootstrap Process](../bootstrap/README.md) — Node initialization
+- [TPM/Device Identity](../tpm/device-identity-design.md) — IDevID design
+
+## Contributing
+
+To update SDN documentation:
+
+1. Edit relevant `.md` file in `docs/sdn/{component}/`
+2. Keep examples current with code
+3. Update cross-references in this INDEX.md
+4. Test configuration examples
+5. Run spell-check: `make check-docs`
+
+## Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | 2026-04-13 | Initial comprehensive SDN documentation (Phase 7) |
+
+---
+
+**Last Updated**: 2026-04-13
+**Documentation Version**: 1.0
+**Status**: Production-ready

@@ -48,6 +48,12 @@ var (
 
 	// ErrACMENotInitialized is returned when the ACME service has not been initialized.
 	ErrACMENotInitialized = &AdapterError{Op: "ACME", Msg: "ACME service not initialized"}
+
+	// ErrNilRequest is returned when a required request argument is nil.
+	ErrNilRequest = &AdapterError{Op: "operation", Msg: "request cannot be nil"}
+
+	// ErrNilCertificate is returned when a required certificate argument is nil.
+	ErrNilCertificate = &AdapterError{Op: "operation", Msg: "certificate cannot be nil"}
 )
 
 // AdapterError represents an error in the CA adapter.

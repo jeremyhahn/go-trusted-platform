@@ -192,3 +192,26 @@ type ErrCompletionGenerationFailed struct {
 func (e ErrCompletionGenerationFailed) Error() string {
 	return fmt.Sprintf("failed to generate %s completion script: %v", e.Shell, e.Err)
 }
+
+// ErrTLSCACertLoadFailed is returned when a CA certificate file cannot be read.
+type ErrTLSCACertLoadFailed struct {
+	Path string
+	Err  error
+}
+
+func (e ErrTLSCACertLoadFailed) Error() string {
+	return fmt.Sprintf("failed to load CA certificate %s: %v", e.Path, e.Err)
+}
+
+func (e ErrTLSCACertLoadFailed) Unwrap() error {
+	return e.Err
+}
+
+// ErrTLSCACertInvalid is returned when a CA certificate file contains no valid PEM data.
+type ErrTLSCACertInvalid struct {
+	Path string
+}
+
+func (e ErrTLSCACertInvalid) Error() string {
+	return fmt.Sprintf("CA certificate file contains no valid PEM data: %s", e.Path)
+}

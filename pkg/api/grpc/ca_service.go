@@ -23,10 +23,12 @@ import (
 	"strings"
 	"time"
 
-	goca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	objstore "github.com/jeremyhahn/go-objstore/pkg/common"
+	pkgca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -143,7 +145,7 @@ func (s *CAGRPCService) GetCAInfo(
 	if s.ca.IsInitialized() {
 		caInfo.CommonName = s.ca.Identity()
 		caInfo.DefaultAlgorithm = s.keyAlgorithmToString(s.ca.DefaultKeyAlgorithm())
-		caInfo.DefaultValidityDays = int32(s.ca.DefaultValidityPeriod() / (24 * time.Hour))
+		caInfo.DefaultValidityDays = int32(s.ca.DefaultValidityPeriod())
 
 		// Get root certificate info
 		rootCert, err := s.ca.TrustedRoot()
@@ -236,12 +238,13 @@ func (s *CAGRPCService) IssueCertificate(
 	}
 
 	// Issue the certificate
-	cert, err := s.ca.IssueCertificate(caReq)
+	issued, err := s.ca.IssueCertificate(caReq)
 	if err != nil {
 		s.logger.Error(err, "failed to issue certificate")
 		return nil, status.Errorf(codes.Internal, "failed to issue certificate: %v", err)
 	}
 
+	cert := issued.Certificate
 	return &platformv1.IssueCertificateResponse{
 		Status:      caSuccessStatusGRPC("certificate issued successfully"),
 		Certificate: s.certToProto(cert, true, false),
@@ -344,7 +347,7 @@ func (s *CAGRPCService) ListCertificates(
 	}
 
 	// Get certificates from cert store if available
-	certStore := s.ca.CertificateStore()
+	certStore := s.ca.CertStore()
 	if certStore != nil {
 		certs, listErr := certStore.ListCertificates()
 		if listErr == nil {
@@ -414,7 +417,7 @@ func (s *CAGRPCService) RevokeCertificate(
 	}
 
 	// Revoke the certificate
-	if err := s.ca.Revoke(cert, keyAttrs); err != nil {
+	if err := s.ca.RevokeCert(cert, pkgca.RevokeOptions{DeleteKeys: keyAttrs != nil}); err != nil {
 		s.logger.Error(err, "failed to revoke certificate")
 		return nil, status.Errorf(codes.Internal, "failed to revoke certificate: %v", err)
 	}
@@ -512,12 +515,13 @@ func (s *CAGRPCService) RenewCertificate(
 	}
 
 	// Issue the renewed certificate
-	newCert, err := s.ca.IssueCertificate(caReq)
+	issuedRenew, err := s.ca.IssueCertificate(caReq)
 	if err != nil {
 		s.logger.Error(err, "failed to renew certificate")
 		return nil, status.Errorf(codes.Internal, "failed to renew certificate: %v", err)
 	}
 
+	newCert := issuedRenew.Certificate
 	return &platformv1.RenewCertificateResponse{
 		Status:         caSuccessStatusGRPC("certificate renewed successfully"),
 		OldCertificate: s.certToProto(existingCert, false, false),
@@ -756,7 +760,7 @@ func (s *CAGRPCService) GetCABundle(
 	}
 
 	// Get the CA bundle (use default store type and key algorithm)
-	bundle, err := s.ca.CABundle(xkmssdk.StoreUnknown, 0)
+	bundle, err := s.ca.CABundleFiltered(xkmssdk.StoreUnknown, 0)
 	if err != nil {
 		s.logger.Error(err, "failed to get CA bundle")
 		return nil, status.Errorf(codes.Internal, "failed to get CA bundle: %v", err)
@@ -812,7 +816,7 @@ func (s *CAGRPCService) certMatchesIdentifier(cert *x509.Certificate, identifier
 // native key), then falls back to iterating all certificates and matching by
 // hex-encoded serial number.
 func (s *CAGRPCService) findCertByIdentifier(identifier string) *x509.Certificate {
-	certStore := s.ca.CertificateStore()
+	certStore := s.ca.CertStore()
 	if certStore == nil {
 		return nil
 	}
@@ -846,8 +850,19 @@ func (s *CAGRPCService) findCertByIdentifier(identifier string) *x509.Certificat
 // querying the CA's object store directly. This works around a bug in
 // go-trusted-ca where Revoke() stores revocation info in the object store
 // but IsRevoked() only checks go-xkms's in-memory map.
+//
+// The native TrustedCA interface does not expose the object store directly;
+// the concrete *pkg/ca.CA struct does. Probe via an ad-hoc interface so this
+// degrades gracefully when the underlying implementation changes.
 func (s *CAGRPCService) checkRevocationViaObjectStore(cert *x509.Certificate) bool {
-	objStore := s.ca.ObjectStore()
+	type objectStoreProvider interface {
+		ObjectStore() objstore.Storage
+	}
+	provider, ok := s.ca.(objectStoreProvider)
+	if !ok {
+		return false
+	}
+	objStore := provider.ObjectStore()
 	if objStore == nil {
 		return false
 	}

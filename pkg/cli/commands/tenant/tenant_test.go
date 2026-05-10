@@ -262,10 +262,11 @@ func TestCommandHierarchy(t *testing.T) {
 			t.Errorf("subcommand %s has empty Short description", sub.Use)
 		}
 
-		// Quotas is a subcommand container
-		if sub.Use == "quotas" {
+		// Subcommand containers (quotas + barrier) bundle further subcommands
+		// instead of running their own RunE.
+		if sub.Use == "quotas" || sub.Use == "barrier" {
 			if len(sub.Commands()) == 0 {
-				t.Error("quotas command should have subcommands")
+				t.Errorf("%s command should have subcommands", sub.Use)
 			}
 		} else {
 			// Other subcommands should have RunE

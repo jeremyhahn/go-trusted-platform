@@ -165,7 +165,7 @@ func TestSOLSession_ActivatePayload(t *testing.T) {
 		session := newTestSOLSession(t)
 		session.closed.Store(true)
 
-		_, err := session.ActivateSOL(context.Background())
+		_, err := session.ActivateSOL(context.Background(), 0x01)
 		var sessionErr ErrSessionClosed
 		if !errors.As(err, &sessionErr) {
 			t.Fatalf("expected ErrSessionClosed, got %T: %v", err, err)
@@ -176,7 +176,7 @@ func TestSOLSession_ActivatePayload(t *testing.T) {
 		session := newTestSOLSession(t)
 		// Session is open but has no connection, so ActivateSOL should
 		// detect nil conn and return ErrSessionClosed.
-		_, err := session.ActivateSOL(context.Background())
+		_, err := session.ActivateSOL(context.Background(), 0x01)
 		if err == nil {
 			t.Fatal("expected error activating SOL with no connection")
 		}
@@ -246,6 +246,22 @@ func TestSOLPacket_Format(t *testing.T) {
 		}
 		if solStatusTransmitOverrun != 0x08 {
 			t.Fatalf("expected solStatusTransmitOverrun=0x08, got 0x%02x", solStatusTransmitOverrun)
+		}
+	})
+
+	t.Run("sol_aux_handshake_and_alert_constants", func(t *testing.T) {
+		// Verify the Activate Payload auxiliary data bit definitions per
+		// IPMI 2.0 spec Table 24-2 are correct.
+		if solAuxHandshakeAssert != 0x08 {
+			t.Fatalf("expected solAuxHandshakeAssert=0x08, got 0x%02x", solAuxHandshakeAssert)
+		}
+		if solAuxAlertDefer != 0x04 {
+			t.Fatalf("expected solAuxAlertDefer=0x04, got 0x%02x", solAuxAlertDefer)
+		}
+		// Combined value used in ActivateSOL must be 0x0C (bits 3 + 2).
+		combined := solAuxHandshakeAssert | solAuxAlertDefer
+		if combined != 0x0C {
+			t.Fatalf("expected combined aux byte=0x0C, got 0x%02x", combined)
 		}
 	})
 }

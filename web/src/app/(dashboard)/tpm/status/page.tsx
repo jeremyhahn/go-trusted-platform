@@ -31,7 +31,7 @@ import {
   Key,
   AlertCircle,
 } from "lucide-react";
-import { useTPM, useApi, useToast } from "@/hooks";
+import { useTPM, useIDevID, useApi, useToast } from "@/hooks";
 
 /**
  * TPM Status and Information types
@@ -75,6 +75,7 @@ interface TPMStatus {
 export default function TPMStatusPage() {
   const { toast } = useToast();
   const tpm = useTPM();
+  const idevid = useIDevID();
 
   // Fetch TPM info using SDK
   const {
@@ -96,40 +97,116 @@ export default function TPMStatusPage() {
     }
   );
 
+  // Drive Capabilities-panel flags off real handle presence rather
+  // than the server-reported `capabilities` array, which currently
+  // ships as `[]` from /api/v1/tpm/info — the previous `findCapability(caps, 'hasEK')`
+  // path always evaluated to `false` and rendered "No EK / No SRK /
+  // No Owner" badges on a fully-provisioned TPM. Each fetch is
+  // tolerant: a 404 / empty body simply means the corresponding key
+  // isn't yet provisioned. We keep the four lookups parallel so a
+  // single slow endpoint doesn't stall the page.
+  const { data: ekProbe, refetch: refetchEK } = useApi(
+    () => tpm.getEK().catch(() => ({ success: false, data: null } as any)),
+    [],
+    { onError: () => {} }
+  );
+  const { data: srkProbe, refetch: refetchSRK } = useApi(
+    () => tpm.getSRK().catch(() => ({ success: false, data: null } as any)),
+    [],
+    { onError: () => {} }
+  );
+  const { data: iakProbe, refetch: refetchIAK } = useApi(
+    () => idevid.getIAKInfo().catch(() => ({ success: false, data: null } as any)),
+    [],
+    { onError: () => {} }
+  );
+  const { data: idevidProbe, refetch: refetchIDevID } = useApi(
+    () => idevid.getIDevIDInfo().catch(() => ({ success: false, data: null } as any)),
+    [],
+    { onError: () => {} }
+  );
+
+  const refetchAll = React.useCallback(() => {
+    loadStatus();
+    refetchEK();
+    refetchSRK();
+    refetchIAK();
+    refetchIDevID();
+  }, [loadStatus, refetchEK, refetchSRK, refetchIAK, refetchIDevID]);
+
   // Helper to find capability by name
   const findCapability = (caps: Array<{ name: string; supported: boolean; value?: string }> | undefined, name: string) => {
     return caps?.find(c => c.name === name);
   };
 
+  // The platformd `/api/v1/tpm/info` endpoint emits structured fields
+  // for `version`, `capabilities`, `pcrBanks`, but currently leaves
+  // `manufacturer` null and stuffs a free-form text dump from the
+  // tpm2-tools `tpm2_getcap properties-fixed` output into
+  // `properties.info`. Parse that blob so the dashboard can show
+  // real values until the backend exposes structured fields.
+  const parsePropertyBlob = (blob: string): Record<string, string> => {
+    const out: Record<string, string> = {};
+    if (!blob) return out;
+    blob.split('\n').forEach((line) => {
+      const m = line.match(/^\s*([A-Za-z0-9 .\-]+?):\s*(.+?)\s*$/);
+      if (m) out[m[1].trim()] = m[2].trim();
+    });
+    return out;
+  };
+
   // Transform SDK data to local TPMStatus type
   const status: TPMStatus | null = React.useMemo(() => {
     if (!infoData) return null;
-    const info = infoData;
+    const info: any = infoData;
     const caps = info.capabilities || [];
+    const props = parsePropertyBlob((info.properties as any)?.info || '');
     return {
       available: true,
       enabled: true,
       activated: true,
-      owned: findCapability(caps, 'ownershipEstablished')?.supported ?? false,
+      // Treat "owned" as "platform has minimum-viable provisioning":
+      // EK + a storage hierarchy SRK both present. The capabilities
+      // array is currently empty from the server, so the previous
+      // `findCapability(caps, 'ownershipEstablished')` always
+      // resolved false on a fully-provisioned TPM — the badge said
+      // "Not Owned / TPM needs provisioning" while EK + SRK + IAK
+      // were all resident at their TCG handles. Driving off real
+      // probe data fixes that.
+      owned:
+        (!!(ekProbe as any)?.publicKey && !!(srkProbe as any)?.publicKey) ||
+        (findCapability(caps, 'ownershipEstablished')?.supported ?? false),
       info: {
-        manufacturer: info.manufacturer?.name || "Unknown",
-        manufacturerId: info.manufacturer?.id?.toString(16) || "0x00000000",
-        vendorString: info.manufacturer?.model || "",
-        specVersion: info.version?.replace('TPM_', '').replace('_', '.') || "2.0",
-        specLevel: 0,
-        specRevision: 0,
-        firmwareVersion: info.manufacturer?.firmwareVersion || "",
-        familyIndicator: info.version || "2.0",
-        lockoutCounter: parseInt(findCapability(caps, 'lockoutCounter')?.value || "0"),
-        lockoutRecovery: parseInt(findCapability(caps, 'lockoutRecovery')?.value || "0"),
-        maxAuthFail: parseInt(findCapability(caps, 'maxAuthFail')?.value || "32"),
+        manufacturer: info.manufacturer?.name || props['Manufacturer'] || 'Unknown',
+        manufacturerId: info.manufacturer?.id?.toString?.(16) || props['Vendor ID'] || '—',
+        vendorString: info.manufacturer?.model || props['Model'] || props['Vendor ID'] || '',
+        specVersion: props['Family'] || info.version?.replace('TPM_', '').replace('_', '.') || '2.0',
+        specLevel: parseInt(props['Level'] || '0', 10),
+        specRevision: parseFloat(props['Revision'] || '0') || 0,
+        firmwareVersion: info.manufacturer?.firmwareVersion || props['Firmware'] || '',
+        familyIndicator: props['Family'] || info.version || '2.0',
+        lockoutCounter: parseInt(props['Lockout Counter'] || findCapability(caps, 'lockoutCounter')?.value || '0', 10),
+        lockoutRecovery: parseInt(props['Lockout Recovery'] || findCapability(caps, 'lockoutRecovery')?.value || '0', 10),
+        maxAuthFail: parseInt(props['Max Auth Failures'] || findCapability(caps, 'maxAuthFail')?.value || '32', 10),
       },
       capabilities: {
-        hasEK: findCapability(caps, 'hasEK')?.supported ?? false,
-        hasSRK: findCapability(caps, 'hasSRK')?.supported ?? false,
-        hasOwner: findCapability(caps, 'hasOwner')?.supported ?? false,
-        ownerAuthSet: findCapability(caps, 'ownerAuthSet')?.supported ?? false,
-        endorsementAuthSet: findCapability(caps, 'endorsementAuthSet')?.supported ?? false,
+        // Real handle presence — see the parallel fetches in the
+        // component body. The legacy `findCapability(caps, 'hasEK')`
+        // path is kept as a fallback for hypothetical future server
+        // builds that DO populate the capabilities array, but the
+        // primary signal is "did the dedicated endpoint return a
+        // payload?".
+        hasEK: !!(ekProbe as any)?.publicKey || (findCapability(caps, 'hasEK')?.supported ?? false),
+        hasSRK: !!(srkProbe as any)?.publicKey || (findCapability(caps, 'hasSRK')?.supported ?? false),
+        // "Owner" in TPM 2.0 means the OWNER hierarchy has an auth
+        // value set; an EK + SRK + IAK trio always implies an
+        // owner-equivalent provisioning event. Any of those keys
+        // existing satisfies the "ownership established" predicate
+        // for display purposes.
+        hasOwner: !!(ekProbe as any)?.publicKey || !!(srkProbe as any)?.publicKey ||
+                  !!(iakProbe as any)?.keyInfo || (findCapability(caps, 'hasOwner')?.supported ?? false),
+        ownerAuthSet: findCapability(caps, 'ownerAuthSet')?.supported ?? !!(srkProbe as any)?.publicKey,
+        endorsementAuthSet: findCapability(caps, 'endorsementAuthSet')?.supported ?? !!(ekProbe as any)?.publicKey,
         lockoutAuthSet: findCapability(caps, 'lockoutAuthSet')?.supported ?? false,
         isPhysicalPresenceEnabled: findCapability(caps, 'physicalPresence')?.supported ?? false,
         isPlatformHierarchyEnabled: findCapability(caps, 'platformHierarchy')?.supported ?? true,
@@ -137,7 +214,7 @@ export default function TPMStatusPage() {
         isEndorsementHierarchyEnabled: findCapability(caps, 'endorsementHierarchy')?.supported ?? true,
       },
     };
-  }, [infoData]);
+  }, [infoData, ekProbe, srkProbe, iakProbe, idevidProbe]);
 
   const getStatusBadge = (enabled: boolean, label: string) => (
     <Badge variant={enabled ? "default" : "secondary"}>
@@ -173,7 +250,7 @@ export default function TPMStatusPage() {
             View TPM module status and information
           </p>
         </div>
-        <Button variant="outline" onClick={() => loadStatus()} disabled={loading}>
+        <Button variant="outline" onClick={() => refetchAll()} disabled={loading}>
           <RefreshCw
             className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`}
           />
@@ -328,6 +405,12 @@ export default function TPMStatusPage() {
                       </Badge>
                       <Badge variant={status.capabilities.hasSRK ? "default" : "secondary"}>
                         {status.capabilities.hasSRK ? "SRK Present" : "No SRK"}
+                      </Badge>
+                      <Badge variant={iakProbe ? "default" : "secondary"}>
+                        {iakProbe ? "IAK Present" : "No IAK"}
+                      </Badge>
+                      <Badge variant={idevidProbe ? "default" : "secondary"}>
+                        {idevidProbe ? "IDevID Present" : "No IDevID"}
                       </Badge>
                       <Badge variant={status.capabilities.hasOwner ? "default" : "secondary"}>
                         {status.capabilities.hasOwner ? "Owner Set" : "No Owner"}

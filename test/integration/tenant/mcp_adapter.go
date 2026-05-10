@@ -20,14 +20,15 @@ package tenant
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
-	"sync/atomic"
 )
 
 // =============================================================================
@@ -476,6 +477,95 @@ func (a *MCPAdapter) SyncTenants(ctx context.Context) (*SyncTenantsResult, error
 	}
 
 	return &SyncTenantsResult{Success: true, Message: "tenant manager synchronized successfully"}, nil
+}
+
+// =============================================================================
+// Per-Tenant Barrier Operations
+// =============================================================================
+
+// InitTenantBarrier explicitly initializes a per-tenant barrier.
+func (a *MCPAdapter) InitTenantBarrier(ctx context.Context, opts InitTenantBarrierOptions) (*InitTenantBarrierResult, error) {
+	args := map[string]interface{}{
+		"tenant_id": opts.TenantID,
+	}
+	if opts.Threshold > 0 {
+		args["threshold"] = opts.Threshold
+	}
+	if opts.Shares > 0 {
+		args["shares"] = opts.Shares
+	}
+
+	if _, err := a.callTool(ctx, "platform_tenant_barrier_init", args); err != nil {
+		return nil, err
+	}
+
+	return &InitTenantBarrierResult{
+		Success: true,
+		Message: "tenant barrier initialized successfully",
+	}, nil
+}
+
+// UnsealTenantBarrier unseals a per-tenant barrier with the provided key.
+// The key bytes are base64-encoded for transport across the JSON-RPC channel.
+func (a *MCPAdapter) UnsealTenantBarrier(ctx context.Context, opts UnsealTenantBarrierOptions) (*UnsealTenantBarrierResult, error) {
+	args := map[string]interface{}{
+		"tenant_id": opts.TenantID,
+	}
+	if len(opts.Key) > 0 {
+		args["key"] = base64.StdEncoding.EncodeToString(opts.Key)
+	}
+
+	if _, err := a.callTool(ctx, "platform_tenant_barrier_unseal", args); err != nil {
+		return nil, err
+	}
+
+	return &UnsealTenantBarrierResult{
+		Success: true,
+		Message: "tenant barrier unsealed successfully",
+	}, nil
+}
+
+// SealTenantBarrier seals a per-tenant barrier.
+func (a *MCPAdapter) SealTenantBarrier(ctx context.Context, opts SealTenantBarrierOptions) (*SealTenantBarrierResult, error) {
+	args := map[string]interface{}{
+		"tenant_id": opts.TenantID,
+	}
+
+	if _, err := a.callTool(ctx, "platform_tenant_barrier_seal", args); err != nil {
+		return nil, err
+	}
+
+	return &SealTenantBarrierResult{
+		Success: true,
+		Message: "tenant barrier sealed successfully",
+	}, nil
+}
+
+// TenantBarrierStatus reports the current sealed/initialized state of a
+// per-tenant barrier.
+func (a *MCPAdapter) TenantBarrierStatus(ctx context.Context, opts TenantBarrierStatusOptions) (*TenantBarrierStatusResult, error) {
+	args := map[string]interface{}{
+		"tenant_id": opts.TenantID,
+	}
+
+	result, err := a.callTool(ctx, "platform_tenant_barrier_status", args)
+	if err != nil {
+		return nil, err
+	}
+
+	var statusResult TenantBarrierStatusResult
+	if err := json.Unmarshal(result, &statusResult); err != nil {
+		return nil, ErrMCPRequestFailed{
+			Operation: "TenantBarrierStatus",
+			Message:   "failed to parse response: " + err.Error(),
+		}
+	}
+
+	if statusResult.TenantID == "" {
+		statusResult.TenantID = opts.TenantID
+	}
+
+	return &statusResult, nil
 }
 
 // =============================================================================

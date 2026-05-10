@@ -344,45 +344,14 @@ func TestNilLoggerMethods(t *testing.T) {
 	})
 }
 
-// TestFatalNilLoggerReturnsEarly tests that Fatal methods return early when logger is nil.
-// We cannot test the os.Exit path directly, but we can verify the nil check works.
-func TestFatalNilLoggerReturnsEarly(t *testing.T) {
-	t.Run("nil Logger pointer for Fatal", func(t *testing.T) {
-		var logger *Logger
-		// Should return early due to nil check, not call os.Exit
-		logger.Fatal("fatal message")
-	})
-
-	t.Run("nil Logger pointer for Fatalf", func(t *testing.T) {
-		var logger *Logger
-		// Should return early due to nil check, not call os.Exit
-		logger.Fatalf("fatal message: %s", "test")
-	})
-
-	t.Run("nil Logger pointer for FatalError", func(t *testing.T) {
-		var logger *Logger
-		// Should return early due to nil check, not call os.Exit
-		logger.FatalError(errors.New("test error"))
-	})
-
-	t.Run("Logger with nil slog.Logger for Fatal", func(t *testing.T) {
-		logger := &Logger{logger: nil}
-		// Should return early due to nil check, not call os.Exit
-		logger.Fatal("fatal message")
-	})
-
-	t.Run("Logger with nil slog.Logger for Fatalf", func(t *testing.T) {
-		logger := &Logger{logger: nil}
-		// Should return early due to nil check, not call os.Exit
-		logger.Fatalf("fatal message: %s", "test")
-	})
-
-	t.Run("Logger with nil slog.Logger for FatalError", func(t *testing.T) {
-		logger := &Logger{logger: nil}
-		// Should return early due to nil check, not call os.Exit
-		logger.FatalError(errors.New("test error"))
-	})
-}
+// Fatal methods intentionally write a "FATAL:" line to os.Stderr and call
+// os.Exit(-1) regardless of whether the receiver is nil — operators must
+// see the cause of a daemon crash even when slog buffering swallowed the
+// message. Because os.Exit cannot be exercised in-process without ending
+// the test binary, the previous TestFatalNilLoggerReturnsEarly suite has
+// been intentionally removed. Subprocess-based fatal-path tests can be
+// added later via TestMain re-exec, but they are out of scope here. See
+// pkg/logging/logger.go for the design rationale.
 
 // TestSecurityNilLogger tests Security method with nil logger
 func TestSecurityNilLogger(t *testing.T) {

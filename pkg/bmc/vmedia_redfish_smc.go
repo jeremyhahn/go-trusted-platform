@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -157,25 +158,52 @@ func (b *vmediaRedfishSmc) Unmount(ctx context.Context) error {
 	return b.do(ctx, http.MethodPatch, smcVirtualMediaPath, body)
 }
 
-// Status reads the current SMC CfgCD slot state.
+// Status reads the current Supermicro virtual CD state.
+//
+// The actual device state lives on the VM1/CD1 DMTF VirtualMedia resource;
+// CfgCD is only the OEM config shell that stores Host/Path between Mount
+// calls. We query CD1 first so callers see whether a CD is presently
+// presented to the host BIOS. If CD1 is absent (older firmware that exposes
+// only the OEM path) we fall back to CfgCD so Status remains best-effort
+// across the X10/X11/X12 spread.
 func (b *vmediaRedfishSmc) Status(ctx context.Context) (*VirtualMediaInfo, error) {
-	c := b.c
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+smcVirtualMediaPath, nil)
-	if err != nil {
-		return nil, ErrRedfishRequest{Method: http.MethodGet, Path: smcVirtualMediaPath, Cause: err}
+	info, err := b.statusFromPath(ctx, smcCD1Path)
+	if err == nil {
+		return info, nil
 	}
-	req.SetBasicAuth(c.config.Username, c.config.Password)
-	req.Header.Set("Accept", "application/json")
-	resp, err := c.httpClient.Do(req)
+	if !isVirtualMediaUnsupported(err) {
+		return nil, err
+	}
+	// CD1 not present on this firmware; fall back to the OEM CfgCD config
+	// shell. The Image field still reflects the most recent mount intent
+	// even though it doesn't always track instantaneous device state.
+	return b.statusFromPath(ctx, smcVirtualMediaPath)
+}
+
+// statusFromPath issues a Redfish GET against the supplied virtual-media
+// path and decodes the standard Image/Inserted fields. 404 is normalised
+// to ErrVirtualMediaUnsupported so the caller can fall through to a
+// secondary path.
+func (b *vmediaRedfishSmc) statusFromPath(ctx context.Context, path string) (*VirtualMediaInfo, error) {
+	t := b.c.transport
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, t.BaseURL()+path, nil)
 	if err != nil {
-		return nil, ErrRedfishRequest{Method: http.MethodGet, Path: smcVirtualMediaPath, Cause: err}
+		return nil, ErrRedfishRequest{Method: http.MethodGet, Path: path, Cause: err}
+	}
+	if err := t.applyAuth(req); err != nil {
+		return nil, ErrRedfishRequest{Method: http.MethodGet, Path: path, Cause: err}
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := t.HTTPClient().Do(req)
+	if err != nil {
+		return nil, ErrRedfishRequest{Method: http.MethodGet, Path: path, Cause: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, ErrVirtualMediaUnsupported{
 			Backend: b.Name(),
 			Vendor:  "Supermicro",
-			Reason:  "BMC does not expose the OEM CfgCD endpoint",
+			Reason:  "BMC does not expose " + path,
 		}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -185,7 +213,7 @@ func (b *vmediaRedfishSmc) Status(ctx context.Context) (*VirtualMediaInfo, error
 		}
 		return nil, ErrRedfishRequest{
 			Method:     http.MethodGet,
-			Path:       smcVirtualMediaPath,
+			Path:       path,
 			StatusCode: resp.StatusCode,
 			Message:    string(bodyBytes),
 		}
@@ -195,7 +223,7 @@ func (b *vmediaRedfishSmc) Status(ctx context.Context) (*VirtualMediaInfo, error
 		Inserted bool   `json:"Inserted"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
-		return nil, ErrRedfishRequest{Method: http.MethodGet, Path: smcVirtualMediaPath, Cause: err}
+		return nil, ErrRedfishRequest{Method: http.MethodGet, Path: path, Cause: err}
 	}
 	return &VirtualMediaInfo{
 		Mounted:   state.Inserted || state.Image != "",
@@ -204,23 +232,33 @@ func (b *vmediaRedfishSmc) Status(ctx context.Context) (*VirtualMediaInfo, error
 	}, nil
 }
 
+// isVirtualMediaUnsupported is true for ErrVirtualMediaUnsupported (any
+// reason). Used by Status to decide whether to fall back to a secondary
+// virtual-media path.
+func isVirtualMediaUnsupported(err error) bool {
+	var unsupported ErrVirtualMediaUnsupported
+	return errors.As(err, &unsupported)
+}
+
 // do is the SMC-aware request helper. It mirrors redfishClient.doPATCH but
 // inspects the response body for the OemLicenseNotPassed sentinel and the
 // 404 marker, surfacing them as fall-through errors for the dispatcher.
 func (b *vmediaRedfishSmc) do(ctx context.Context, method string, path string, body any) error {
-	c := b.c
+	t := b.c.transport
 	jsonBytes, err := json.Marshal(body)
 	if err != nil {
 		return ErrRedfishRequest{Method: method, Path: path, Cause: err}
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bytes.NewReader(jsonBytes))
+	req, err := http.NewRequestWithContext(ctx, method, t.BaseURL()+path, bytes.NewReader(jsonBytes))
 	if err != nil {
 		return ErrRedfishRequest{Method: method, Path: path, Cause: err}
 	}
-	req.SetBasicAuth(c.config.Username, c.config.Password)
+	if err := t.applyAuth(req); err != nil {
+		return ErrRedfishRequest{Method: method, Path: path, Cause: err}
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	resp, err := c.httpClient.Do(req)
+	resp, err := t.HTTPClient().Do(req)
 	if err != nil {
 		return ErrRedfishRequest{Method: method, Path: path, Cause: err}
 	}

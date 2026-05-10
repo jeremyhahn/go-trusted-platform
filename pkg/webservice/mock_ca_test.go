@@ -18,8 +18,8 @@ import (
 	"crypto/x509"
 	"io"
 
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // mockCAForSigner is a minimal mock that only implements the Signer() method.

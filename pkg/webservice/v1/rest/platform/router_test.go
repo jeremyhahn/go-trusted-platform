@@ -166,13 +166,18 @@ func TestPlatformRouter_SetHealthRegistry(t *testing.T) {
 		t.Fatal("expected payload to be a map")
 	}
 
-	components, ok := payload["components"].([]interface{})
+	healthBlock, ok := payload["health"].(map[string]interface{})
 	if !ok {
-		t.Fatal("expected components to be an array")
+		t.Fatal("expected payload.health to be a map")
 	}
 
-	if len(components) != 1 {
-		t.Errorf("expected 1 component, got %d", len(components))
+	services, ok := healthBlock["services"].([]interface{})
+	if !ok {
+		t.Fatal("expected health.services to be an array")
+	}
+
+	if len(services) != 1 {
+		t.Errorf("expected 1 service, got %d", len(services))
 	}
 }
 

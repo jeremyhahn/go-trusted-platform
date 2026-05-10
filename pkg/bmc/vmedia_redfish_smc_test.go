@@ -20,6 +20,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/memguard"
 )
 
 const smcLicenseErrorBody = `{
@@ -38,14 +40,16 @@ const smcLicenseErrorBody = `{
 // newSmcTestClient builds a redfishClient pointed at the given test server.
 func newSmcTestClient(t *testing.T, server *httptest.Server) *redfishClient {
 	t.Helper()
+	logger := slog.Default()
 	return &redfishClient{
-		config: &Config{
-			Username: "admin",
-			Password: "admin",
+		logger: logger,
+		transport: &redfishTransport{
+			httpClient: server.Client(),
+			baseURL:    server.URL,
+			username:   "admin",
+			password:   memguard.NewFromString("admin"),
+			logger:     logger,
 		},
-		logger:     slog.Default(),
-		baseURL:    server.URL,
-		httpClient: server.Client(),
 	}
 }
 
@@ -108,10 +112,10 @@ func TestVmediaRedfishSmc_HappyPath(t *testing.T) {
 	// vmedia_redfish_smc.go for why each step is required on
 	// Supermicro X10/X11/X12 OEM firmware.
 	var (
-		gotPatch           bool
-		gotMountAction     bool
-		gotUnmountAct      bool
-		unmountCallCount   int
+		gotPatch         bool
+		gotMountAction   bool
+		gotUnmountAct    bool
+		unmountCallCount int
 	)
 	mux := http.NewServeMux()
 	mux.HandleFunc(smcVirtualMediaPath, func(w http.ResponseWriter, r *http.Request) {
@@ -126,6 +130,16 @@ func TestVmediaRedfishSmc_HappyPath(t *testing.T) {
 			return
 		}
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	})
+	mux.HandleFunc(smcCD1Path, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// CD1 is the actual device-state endpoint and reports the same
+		// Image/Inserted values once IsoConfig.Mount has fired.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Image":"cifs://server/share/boot.iso","Inserted":true}`))
 	})
 	mux.HandleFunc(smcIsoConfigMountPath, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -186,6 +200,98 @@ func TestVmediaRedfishSmc_HappyPath(t *testing.T) {
 	// total calls == 2.
 	if unmountCallCount != 2 {
 		t.Errorf("UnMount total call count = %d, want 2 (one from Mount pre-clean, one from Unmount)", unmountCallCount)
+	}
+}
+
+// TestVmediaRedfishSmc_StatusPrefersCD1 confirms Status() reads the
+// VM1/CD1 device-state endpoint first (where Inserted reflects the actual
+// virtual drive) instead of the CfgCD config shell.
+func TestVmediaRedfishSmc_StatusPrefersCD1(t *testing.T) {
+	mux := http.NewServeMux()
+	// CfgCD reports the stale config — Inserted=true reflects past intent
+	// but no current attachment. If Status reads here, the test fails.
+	mux.HandleFunc(smcVirtualMediaPath, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Image":"cifs://stale","Inserted":true}`))
+	})
+	// CD1 reports the actual device state: drive is empty.
+	mux.HandleFunc(smcCD1Path, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Image":"","Inserted":false}`))
+	})
+	server := httptest.NewTLSServer(mux)
+	t.Cleanup(server.Close)
+
+	rc := newSmcTestClient(t, server)
+	backend := newVmediaRedfishSmc(rc)
+	info, err := backend.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+	if info.Mounted {
+		t.Errorf("Status().Mounted = true, want false (CD1 empty)")
+	}
+	if info.ImageURL != "" {
+		t.Errorf("Status().ImageURL = %q, want empty (CD1 reports empty)", info.ImageURL)
+	}
+}
+
+// TestVmediaRedfishSmc_StatusFallbackToCfgCD covers older firmware that
+// exposes only the OEM CfgCD shell and 404s on VM1/CD1.
+func TestVmediaRedfishSmc_StatusFallbackToCfgCD(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc(smcCD1Path, func(w http.ResponseWriter, _ *http.Request) {
+		http.NotFound(w, nil)
+	})
+	mux.HandleFunc(smcVirtualMediaPath, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Image":"https://server/boot.iso","Inserted":true}`))
+	})
+	server := httptest.NewTLSServer(mux)
+	t.Cleanup(server.Close)
+
+	rc := newSmcTestClient(t, server)
+	backend := newVmediaRedfishSmc(rc)
+	info, err := backend.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+	if !info.Mounted || info.ImageURL != "https://server/boot.iso" {
+		t.Errorf("Status() = %+v, want mounted with HTTPS URL via CfgCD fallback", info)
+	}
+}
+
+// TestVmediaRedfishSmc_StatusBothMissing confirms ErrVirtualMediaUnsupported
+// when neither CD1 nor CfgCD is exposed.
+func TestVmediaRedfishSmc_StatusBothMissing(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc(smcCD1Path, func(w http.ResponseWriter, _ *http.Request) {
+		http.NotFound(w, nil)
+	})
+	mux.HandleFunc(smcVirtualMediaPath, func(w http.ResponseWriter, _ *http.Request) {
+		http.NotFound(w, nil)
+	})
+	server := httptest.NewTLSServer(mux)
+	t.Cleanup(server.Close)
+
+	rc := newSmcTestClient(t, server)
+	backend := newVmediaRedfishSmc(rc)
+	_, err := backend.Status(context.Background())
+	var unsupErr ErrVirtualMediaUnsupported
+	if !errors.As(err, &unsupErr) {
+		t.Fatalf("Status() returned %T, want ErrVirtualMediaUnsupported", err)
 	}
 }
 

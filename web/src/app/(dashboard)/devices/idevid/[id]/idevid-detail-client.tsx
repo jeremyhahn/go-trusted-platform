@@ -6,7 +6,8 @@
  */
 
 import { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, usePathname, useRouter } from 'next/navigation';
+import { resolveDynamicId } from '@/utils/dynamic-route';
 import {
   ArrowLeft,
   FileText,
@@ -38,10 +39,11 @@ import type { IDevIDDetail } from '@/types/device';
 
 export default function IDevIDDetailPage() {
   const params = useParams();
+  const pathname = usePathname();
   const router = useRouter();
   const { toast } = useToast();
   const idevidService = useIDevID();
-  const idevIdId = params?.id as string;
+  const idevIdId = resolveDynamicId(params, pathname, 'idevid');
 
   const [idevid, setIDevID] = useState<IDevIDDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);

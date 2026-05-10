@@ -156,11 +156,13 @@ export function IDevIDForm({ onSuccess, onCancel }: IDevIDFormProps) {
                   </SelectTrigger>
                 </FormControl>
                 <SelectContent>
-                  {devices.map((device) => (
-                    <SelectItem key={device.id} value={device.id}>
-                      {device.name}
-                    </SelectItem>
-                  ))}
+                  {devices
+                    .filter((device) => device.id != null && String(device.id) !== '')
+                    .map((device) => (
+                      <SelectItem key={device.id} value={String(device.id)}>
+                        {device.name}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
               <FormDescription>

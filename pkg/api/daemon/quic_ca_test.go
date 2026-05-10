@@ -21,7 +21,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -31,11 +30,11 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-codec"
-	common "github.com/jeremyhahn/go-objstore/pkg/common"
-	goca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	pkgca "github.com/jeremyhahn/go-xkms/pkg/ca"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -102,15 +101,17 @@ func (m *mockCertStoreForDaemon) IsRevoked(cert *x509.Certificate) (bool, error)
 }
 func (m *mockCertStoreForDaemon) Close() error { return nil }
 
-// mockCAForDaemon implements CertificateAuthority for testing
+// mockCAForDaemon implements ca.TCGCA for testing. Embeds baseMockCA and
+// overrides only the methods the daemon QUIC/gRPC handlers exercise.
 type mockCAForDaemon struct {
+	baseMockCA
 	initialized   bool
 	identity      string
 	rootCert      *x509.Certificate
 	intermCert    *x509.Certificate
 	defaultKeyAlg x509.PublicKeyAlgorithm
 	defaultSigAlg x509.SignatureAlgorithm
-	validity      time.Duration
+	validity      int
 	certStore     *mockCertStoreForDaemon
 	issuedCerts   []*x509.Certificate
 	revokedCerts  []*x509.Certificate
@@ -130,7 +131,7 @@ func newMockCAForDaemon() *mockCAForDaemon {
 		intermCert:    intermCert,
 		defaultKeyAlg: x509.ECDSA,
 		defaultSigAlg: x509.ECDSAWithSHA256,
-		validity:      365 * 24 * time.Hour,
+		validity:      365,
 		certStore:     newMockCertStoreForDaemon(),
 		issuedCerts:   make([]*x509.Certificate, 0),
 		revokedCerts:  make([]*x509.Certificate, 0),
@@ -139,65 +140,38 @@ func newMockCAForDaemon() *mockCAForDaemon {
 	}
 }
 
-// crypto.Signer interface
-func (m *mockCAForDaemon) Public() crypto.PublicKey {
-	return &m.privateKey.PublicKey
+func (m *mockCAForDaemon) Public() crypto.PublicKey { return &m.privateKey.PublicKey }
+func (m *mockCAForDaemon) Sign(r io.Reader, digest []byte, _ crypto.SignerOpts) ([]byte, error) {
+	return ecdsa.SignASN1(r, m.privateKey, digest)
 }
-
-func (m *mockCAForDaemon) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
-	return ecdsa.SignASN1(rand, m.privateKey, digest)
+func (m *mockCAForDaemon) IsInitialized() bool                                { return m.initialized }
+func (m *mockCAForDaemon) Identity() string                                   { return m.identity }
+func (m *mockCAForDaemon) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm       { return m.defaultKeyAlg }
+func (m *mockCAForDaemon) DefaultSignatureAlgorithm() x509.SignatureAlgorithm { return m.defaultSigAlg }
+func (m *mockCAForDaemon) DefaultValidityPeriod() int                         { return m.validity }
+func (m *mockCAForDaemon) TrustedRoot() (*x509.Certificate, error)            { return m.rootCert, nil }
+func (m *mockCAForDaemon) TrustedIntermediate() (*x509.Certificate, error)    { return m.intermCert, nil }
+func (m *mockCAForDaemon) CertStore() xkmssdk.CertStore                       { return m.certStore }
+func (m *mockCAForDaemon) Signer() (crypto.Signer, error)                     { return m, nil }
+func (m *mockCAForDaemon) CASigner(_ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
+	return m, nil
 }
-
-func (m *mockCAForDaemon) IsInitialized() bool {
-	return m.initialized
-}
-
-func (m *mockCAForDaemon) Identity() string {
-	return m.identity
-}
-
-func (m *mockCAForDaemon) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm {
-	return m.defaultKeyAlg
-}
-
-func (m *mockCAForDaemon) DefaultSignatureAlgorithm() x509.SignatureAlgorithm {
-	return m.defaultSigAlg
-}
-
-func (m *mockCAForDaemon) DefaultValidityPeriod() time.Duration {
-	return m.validity
-}
-
-func (m *mockCAForDaemon) TrustedRoot() (*x509.Certificate, error) {
-	return m.rootCert, nil
-}
-
-func (m *mockCAForDaemon) TrustedIntermediate() (*x509.Certificate, error) {
-	return m.intermCert, nil
-}
-
-func (m *mockCAForDaemon) CertificateStore() xkmssdk.CertStore {
-	return m.certStore
-}
-
-func (m *mockCAForDaemon) IssueCertificate(req *goca.CACertificateRequest) (*x509.Certificate, error) {
+func (m *mockCAForDaemon) IssueCertificate(req *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
 	cert := generateTestCertificateForDaemon(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
 	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
 		m.certStore.StoreCertificate(cert)
 	}
-	return cert, nil
+	return &pkgca.IssuedCertificate{Certificate: cert}, nil
 }
-
-func (m *mockCAForDaemon) Revoke(cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+func (m *mockCAForDaemon) RevokeCert(cert *x509.Certificate, _ pkgca.RevokeOptions) error {
 	m.revokedCerts = append(m.revokedCerts, cert)
 	return nil
 }
-
-func (m *mockCAForDaemon) CABundle(storeType xkmssdk.StoreType, keyAlg x509.PublicKeyAlgorithm) ([]byte, error) {
+func (m *mockCAForDaemon) CABundle() ([]byte, error) { return m.rootCert.Raw, nil }
+func (m *mockCAForDaemon) CABundleFiltered(_ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) ([]byte, error) {
 	return m.rootCert.Raw, nil
 }
-
 func (m *mockCAForDaemon) ParseBundle(bundle []byte) ([]*x509.Certificate, error) {
 	cert, err := x509.ParseCertificate(bundle)
 	if err != nil {
@@ -205,12 +179,13 @@ func (m *mockCAForDaemon) ParseBundle(bundle []byte) ([]*x509.Certificate, error
 	}
 	return []*x509.Certificate{cert}, nil
 }
-
+func (m *mockCAForDaemon) RootCertificate(_ *x509.Certificate) (*x509.Certificate, error) {
+	return m.rootCert, nil
+}
 func (m *mockCAForDaemon) GenerateCRL() ([]byte, error) {
 	if !m.generateCRL {
 		return nil, quic.ErrCACRLNotSupported
 	}
-
 	template := &x509.RevocationList{
 		SignatureAlgorithm: x509.ECDSAWithSHA256,
 		Number:             big.NewInt(1),
@@ -219,133 +194,6 @@ func (m *mockCAForDaemon) GenerateCRL() ([]byte, error) {
 	}
 	crlDER, _ := x509.CreateRevocationList(rand.Reader, template, m.rootCert, m.privateKey)
 	return crlDER, nil
-}
-
-// Stub implementations for remaining interface methods
-func (m *mockCAForDaemon) SignCSR(csrPEM []byte, request *goca.CACertificateRequest) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCAForDaemon) SignTCGCSRIDevID(tcgCSRIDevID *xkmssdk.TCG_CSR_IDEVID, request *goca.CACertificateRequest) ([]byte, []byte, error) {
-	return nil, nil, nil
-}
-func (m *mockCAForDaemon) ImportCertificate(certificate *x509.Certificate) error { return nil }
-func (m *mockCAForDaemon) Certificate(attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCAForDaemon) CertificatePEM(cn string) ([]byte, error) { return nil, nil }
-func (m *mockCAForDaemon) Verify(certificate *x509.Certificate, xsigner crypto.Signer) ([][]*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCAForDaemon) Signer() (crypto.Signer, error) { return m, nil }
-func (m *mockCAForDaemon) CreateCSR(request *goca.CACertificateRequest) ([]byte, error) {
-	return nil, nil
-}
-func (m *mockCAForDaemon) TLSCertificate(attrs *xkmssdk.KeyAttributes) (tls.Certificate, error) {
-	return tls.Certificate{}, nil
-}
-func (m *mockCAForDaemon) TLSBundle(attrs *xkmssdk.KeyAttributes) ([]byte, error) { return nil, nil }
-func (m *mockCAForDaemon) TLSConfig(attrs *xkmssdk.KeyAttributes) (*tls.Config, error) {
-	return nil, nil
-}
-func (m *mockCAForDaemon) TLSConfigWithXSigner(attrs *xkmssdk.KeyAttributes, xsigner interface{}) (*tls.Config, error) {
-	return nil, nil
-}
-func (m *mockCAForDaemon) QuantumSafeTLSConfig(attrs *xkmssdk.KeyAttributes) (*tls.Config, error) {
-	return nil, nil
-}
-func (m *mockCAForDaemon) TLSBundleWithCrossSigner(attrs *xkmssdk.KeyAttributes, issuerCN string) ([][]byte, *x509.Certificate, error) {
-	return nil, nil, nil
-}
-func (m *mockCAForDaemon) Issued(cn string) (bool, error) { return false, nil }
-func (m *mockCAForDaemon) Exists(cn string, algorithm x509.SignatureAlgorithm) (bool, error) {
-	return false, nil
-}
-func (m *mockCAForDaemon) ImportDistributionCRLs(cert *x509.Certificate) error { return nil }
-func (m *mockCAForDaemon) IssueEKCertificate(request *goca.CACertificateRequest, ekPubKey crypto.PublicKey) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCAForDaemon) IssueAKCertificate(request *goca.CACertificateRequest, pubKey crypto.PublicKey) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCAForDaemon) ImportEndorsementKeyCertificate(cert *x509.Certificate) error { return nil }
-func (m *mockCAForDaemon) ImportXSignedCertificate(issuerCN string, cert *x509.Certificate) error {
-	return nil
-}
-func (m *mockCAForDaemon) EndorsementKeyCertificate(cn string) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *mockCAForDaemon) SignedBlob(data interface{}) ([]byte, error) { return nil, nil }
-func (m *mockCAForDaemon) TrustedRootCertPool(cert *x509.Certificate, xsigner crypto.Signer) (*x509.CertPool, error) {
-	return nil, nil
-}
-func (m *mockCAForDaemon) TrustedIntermediateCertPool(cert *x509.Certificate, xsigner crypto.Signer) (*x509.CertPool, error) {
-	return nil, nil
-}
-func (m *mockCAForDaemon) CABundleCertPool(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) (*x509.CertPool, error) {
-	return nil, nil
-}
-func (m *mockCAForDaemon) ImportIssuingCAs(cert *x509.Certificate) error { return nil }
-func (m *mockCAForDaemon) RootCertificate(childCert *x509.Certificate) (*x509.Certificate, error) {
-	return m.rootCert, nil
-}
-func (m *mockCAForDaemon) ObjectStore() common.Storage                           { return nil }
-func (m *mockCAForDaemon) PEM(attrs *xkmssdk.KeyAttributes) ([]byte, error)      { return nil, nil }
-func (m *mockCAForDaemon) ImportCertificatePEM(cn string, pemData []byte) error  { return nil }
-func (m *mockCAForDaemon) Blob(key string) ([]byte, error)                       { return nil, nil }
-func (m *mockCAForDaemon) ImportBlob(key string, data []byte) error              { return nil }
-func (m *mockCAForDaemon) KeyStore() interface{}                                 { return nil }
-func (m *mockCAForDaemon) Key(attrs *xkmssdk.KeyAttributes) (interface{}, error) { return nil, nil }
-func (m *mockCAForDaemon) PubKey(attrs *xkmssdk.KeyAttributes) (crypto.PublicKey, error) {
-	return nil, nil
-}
-func (m *mockCAForDaemon) OSTrustStore() (*x509.CertPool, error) { return nil, nil }
-func (m *mockCAForDaemon) IsAutoImportingIssuerCAs() bool        { return false }
-func (m *mockCAForDaemon) Hash() crypto.Hash                     { return crypto.SHA256 }
-func (m *mockCAForDaemon) CAKeyAttributes(storeType xkmssdk.StoreType) (*xkmssdk.KeyAttributes, error) {
-	return nil, nil
-}
-func (m *mockCAForDaemon) CASigner(storeType xkmssdk.StoreType, algorithm x509.PublicKeyAlgorithm) (crypto.Signer, error) {
-	return m, nil
-}
-func (m *mockCAForDaemon) Init() error             { return nil }
-func (m *mockCAForDaemon) Load() error             { return nil }
-func (m *mockCAForDaemon) CAConfig() goca.CAConfig { return goca.CAConfig{} }
-func (m *mockCAForDaemon) ImportAttestation(akAttrs *xkmssdk.KeyAttributes, blobType string, data []byte) error {
-	return nil
-}
-func (m *mockCAForDaemon) ImportAttestationKeyCertificate(attrs *xkmssdk.KeyAttributes, akDER []byte) error {
-	return nil
-}
-func (m *mockCAForDaemon) ImportAttestationEventLog(akAttrs *xkmssdk.KeyAttributes, eventLog []byte) error {
-	return nil
-}
-func (m *mockCAForDaemon) ImportAttestationPCRs(akAttrs *xkmssdk.KeyAttributes, pcrs []byte) error {
-	return nil
-}
-func (m *mockCAForDaemon) ImportAttestationQuote(akAttrs *xkmssdk.KeyAttributes, quote []byte) error {
-	return nil
-}
-func (m *mockCAForDaemon) ImportLocalAttestation(akAttrs *xkmssdk.KeyAttributes, quote *xkmssdk.Quote) error {
-	return nil
-}
-func (m *mockCAForDaemon) VerifyQuote(akAttrs *xkmssdk.KeyAttributes, quote *xkmssdk.Quote, nonce []byte) error {
-	return nil
-}
-func (m *mockCAForDaemon) VerifyAttestationQuote(akAttrs *xkmssdk.KeyAttributes, quote []byte) error {
-	return nil
-}
-func (m *mockCAForDaemon) VerifyAttestationEventLog(akAttrs *xkmssdk.KeyAttributes, eventLog []byte) error {
-	return nil
-}
-func (m *mockCAForDaemon) VerifyAttestationPCRs(akAttrs *xkmssdk.KeyAttributes, pcrs []byte) error {
-	return nil
-}
-func (m *mockCAForDaemon) VerifyTCG_CSR_IDevIDBytes(packedCSR []byte, sigAlg interface{}) ([]byte, []byte, []byte, error) {
-	return nil, nil, nil, nil
-}
-func (m *mockCAForDaemon) SetTPM(tpm xkmssdk.TrustedPlatformModule) {}
-func (m *mockCAForDaemon) IsRevoked(serial *big.Int) (bool, error) {
-	return false, nil
 }
 
 // generateTestCertificateForDaemon creates a test certificate

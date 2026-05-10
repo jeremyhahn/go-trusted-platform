@@ -15,7 +15,11 @@ package bmc
 
 import (
 	"errors"
+	"strings"
 	"testing"
+
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -117,6 +121,185 @@ func TestConfig_Validate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// --- P2: Certificate / Key / Backend validation ---
+
+// baseValidCfg returns a Config that passes existing Validate for
+// Address/Port/Protocol so tests can focus on the cert-block branches.
+func baseValidCfg() *Config {
+	return &Config{
+		Address:  "192.168.1.100",
+		Port:     623,
+		Username: "admin",
+		Password: "pass",
+		Protocol: ProtocolIPMI,
+	}
+}
+
+// certBlockWithChallenge returns a minimal Identity + KeyConfig pair
+// using the given challenge type.
+func certBlockWithChallenge(challenge string) (*common.Identity, *common.KeyConfig) {
+	id := &common.Identity{
+		ACME: &common.ACMEIdentityConfig{
+			Challenge:  challenge,
+			AuthzType:  "dns",
+			AuthzValue: "bmc01.internal",
+		},
+		Subject: trustedca.CASubject{CommonName: "bmc01.internal"},
+	}
+	key := &common.KeyConfig{
+		CN:           "bmc01.internal",
+		KeyAlgorithm: "ECDSA",
+	}
+	return id, key
+}
+
+func TestConfig_Validate_NoCertConfig_IsValid(t *testing.T) {
+	cfg := baseValidCfg()
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("baseline config rejected: %v", err)
+	}
+}
+
+func TestConfig_Validate_CertRequiresKey(t *testing.T) {
+	cfg := baseValidCfg()
+	id, _ := certBlockWithChallenge("dns-01")
+	cfg.Certificate = id
+	// Key deliberately nil.
+	err := cfg.Validate()
+	var want ErrInvalidConfig
+	if !errors.As(err, &want) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
+	}
+	if !strings.Contains(want.Reason, "certificate and key") {
+		t.Errorf("unexpected reason: %q", want.Reason)
+	}
+}
+
+func TestConfig_Validate_KeyRequiresCert(t *testing.T) {
+	cfg := baseValidCfg()
+	_, key := certBlockWithChallenge("dns-01")
+	cfg.Key = key
+	err := cfg.Validate()
+	var want ErrInvalidConfig
+	if !errors.As(err, &want) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
+	}
+}
+
+func TestConfig_Validate_BackendWithoutCertRejected(t *testing.T) {
+	cfg := baseValidCfg()
+	cfg.Backend = CertBackendRedfish
+	// Certificate + Key nil.
+	err := cfg.Validate()
+	var want ErrInvalidConfig
+	if !errors.As(err, &want) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
+	}
+	if want.Field != "backend" {
+		t.Errorf("field = %q, want backend", want.Field)
+	}
+}
+
+func TestConfig_Validate_InvalidBackendName(t *testing.T) {
+	cfg := baseValidCfg()
+	id, key := certBlockWithChallenge("dns-01")
+	cfg.Certificate = id
+	cfg.Key = key
+	cfg.Backend = CertBackend("vendor-foo")
+	err := cfg.Validate()
+	var want ErrInvalidConfig
+	if !errors.As(err, &want) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
+	}
+	if !strings.Contains(want.Reason, "unrecognized cert backend") {
+		t.Errorf("unexpected reason: %q", want.Reason)
+	}
+}
+
+func TestConfig_Validate_MissingACMEChallenge(t *testing.T) {
+	cfg := baseValidCfg()
+	cfg.Key = &common.KeyConfig{CN: "x"}
+	cfg.Certificate = &common.Identity{
+		// ACME nil → missing Challenge branch.
+	}
+	err := cfg.Validate()
+	var want ErrInvalidConfig
+	if !errors.As(err, &want) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
+	}
+	if !strings.Contains(want.Field, "acme.challenge") {
+		t.Errorf("field = %q, want contains acme.challenge", want.Field)
+	}
+}
+
+func TestConfig_Validate_MissingACMEChallengeInner(t *testing.T) {
+	cfg := baseValidCfg()
+	cfg.Key = &common.KeyConfig{CN: "x"}
+	cfg.Certificate = &common.Identity{
+		ACME: &common.ACMEIdentityConfig{
+			// Challenge empty.
+		},
+	}
+	err := cfg.Validate()
+	var want ErrInvalidConfig
+	if !errors.As(err, &want) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
+	}
+}
+
+func TestConfig_Validate_RejectsHTTP01(t *testing.T) {
+	cfg := baseValidCfg()
+	id, key := certBlockWithChallenge("http-01")
+	cfg.Certificate = id
+	cfg.Key = key
+	err := cfg.Validate()
+	var want ErrInvalidConfig
+	if !errors.As(err, &want) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
+	}
+	if !strings.Contains(want.Field, "challenge") {
+		t.Errorf("field = %q, want contains challenge", want.Field)
+	}
+	if !strings.Contains(want.Reason, "dns-01") {
+		t.Errorf("reason does not mention dns-01: %q", want.Reason)
+	}
+}
+
+func TestConfig_Validate_RejectsEmptyChallenge(t *testing.T) {
+	cfg := baseValidCfg()
+	id, key := certBlockWithChallenge("")
+	cfg.Certificate = id
+	cfg.Key = key
+	err := cfg.Validate()
+	var want ErrInvalidConfig
+	if !errors.As(err, &want) {
+		t.Fatalf("err = %v, want ErrInvalidConfig for empty challenge", err)
+	}
+}
+
+func TestConfig_Validate_AcceptsDNS01(t *testing.T) {
+	cfg := baseValidCfg()
+	id, key := certBlockWithChallenge("dns-01")
+	cfg.Certificate = id
+	cfg.Key = key
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("valid dns-01 config rejected: %v", err)
+	}
+}
+
+func TestConfig_Validate_AcceptsDNS01WithBackend(t *testing.T) {
+	cfg := baseValidCfg()
+	id, key := certBlockWithChallenge("dns-01")
+	cfg.Certificate = id
+	cfg.Key = key
+	for _, b := range []CertBackend{CertBackendAuto, CertBackendRedfish, CertBackendSMCCGI, ""} {
+		cfg.Backend = b
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("backend=%q rejected: %v", b, err)
+		}
 	}
 }
 

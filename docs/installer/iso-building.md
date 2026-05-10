@@ -43,7 +43,9 @@ platformctl iso create --secure-boot=false
 | `--mirror` | http://mirror.cs.odu.edu/alpine | Alpine Linux mirror URL |
 | `--arch` | x86_64 | Architecture (x86_64 or aarch64) |
 | `--platform-type` | server | Platform type: 'server' or 'client' |
-| `--platform-config` | auto-detected | Path to platformd.yaml config file |
+| `--platform-config` | single-node/default | Path to platformd.yaml template (baked into ISO). Default: `configs/platform/templates/single-node/default.yaml` |
+| `--overrides` | (none) | Path to override YAML (deep-merged onto `--platform-config` template before baking) |
+| `--config-server` | (none) | Base URL for dynamic config fetch at install time. Bakes `platform_config=<URL>` into kernel cmdline. See §Config Delivery Modes below |
 | `--installer-config` | configs/installer/default.yaml | Path to installer config file |
 | `--secure-boot` | true | Enable Secure Boot support |
 | `--tpm-unseal` | true | Enable TPM auto-unseal |
@@ -202,6 +204,78 @@ If your UEFI system does not automatically load the default bootx64.efi path, yo
 
 QEMU supports [Direct Kernel Boot](https://qemu-project.gitlab.io/qemu/system/linuxboot.html) which is very useful for fast Linux kernel testing.
 
+
+## Config Delivery Modes
+
+`platformctl iso create` supports four config-delivery modes. Pick based
+on your deployment topology. See `docs/bootstrap/config-delivery.md`
+for the full architecture.
+
+### 1. Default baked (no flags)
+
+```
+platformctl iso create
+```
+
+Template: `configs/platform/templates/single-node/default.yaml`
+(CP + GW collocated, reference-architecture defaults).
+Merged config is written to `/media/cdrom/configs/installer.yaml`
+inside the ISO. Installer reads it at PRIO 2 of the autoinstall
+priority chain. Good for single-node deploys.
+
+### 2. Custom baked
+
+```
+platformctl iso create \
+  --platform-config <template> \
+  [--overrides <site.yaml>]
+```
+
+Same as default but uses the specified template, optionally
+deep-merged with an override file. Produces a role-specific ISO
+for multi-node deployments that pre-build one ISO per role.
+
+### 3. Dynamic fetch
+
+```
+platformctl iso create \
+  --config-server http://deployer.lan:8080/config/mac
+```
+
+Bakes `platform_config=<URL>` into the kernel cmdline. No config
+baked into ISO. At install time, `autoinstall.sh` discovers the
+local MAC and fetches `<URL>/<mac-dashed>/installer.yaml` from the
+bootstrap orchestrator's pxeboot HTTP server. A single ISO installs
+CP, GW, and compute correctly — role selection is MAC-keyed.
+
+### 4. Hybrid (dynamic + baked fallback)
+
+```
+platformctl iso create \
+  --config-server http://deployer.lan:8080/config/mac \
+  --platform-config <template> \
+  [--overrides <site.yaml>]
+```
+
+Both mechanisms enabled. Install-time PRIO 1 tries dynamic fetch
+first; any failure falls through to PRIO 2 and uses the baked config.
+
+### Install-time priority chain
+
+```
+Kernel cmdline has platform_config=<URL>?
+  yes → PRIO 1: GET <URL>/<mac>/installer.yaml
+         200 → use fetched config
+         fail → fall through to PRIO 2
+  no  → skip PRIO 1
+
+PRIO 2: /media/cdrom/configs/installer.yaml exists? → use it
+PRIO 3: Fatal, drop to /bin/sh
+```
+
+See `docs/installer/autoinstall.md` for implementation detail.
+
+---
 
 ## Makefile Integration
 

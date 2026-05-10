@@ -17,7 +17,7 @@ import (
 	"fmt"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
-	casdk "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	casdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 )
 
 // Compile-time interface check.

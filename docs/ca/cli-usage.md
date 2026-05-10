@@ -16,7 +16,7 @@ Commands:
   certificate     Manage certificates
   install         Install CA certificates to system
   uninstall       Remove CA certificates from system
-  export-bundle   Export CA certificate bundle
+  bundle          Print or save the CA trust bundle (PEM)
 ```
 
 ## Initialize CA
@@ -235,24 +235,28 @@ platformctl ca uninstall --ca "Trusted Platform Root CA"
 
 ```bash
 # Export PEM bundle
-platformctl ca export-bundle > ca-bundle.crt
+platformctl ca bundle > ca-bundle.crt
 
 # Export specific format
-platformctl ca export-bundle --format pem > ca-bundle.pem
-platformctl ca export-bundle --format der > ca-bundle.der
+platformctl ca bundle > ca-bundle.pem  # PEM is the only supported format
+# DER export is not supported by ca bundle; use openssl to convert PEM
+platformctl ca bundle | openssl x509 -outform der > ca-bundle.der
 
 # Export specific CAs
-platformctl ca export-bundle --include "Trusted Platform Root CA,Trusted Platform TLS CA"
+# Per-CA selection is not supported by ca bundle; emit the full chain
+platformctl ca bundle
 ```
 
 ### Export Individual Certificates
 
 ```bash
 # Export Root CA
-platformctl ca export-bundle --ca "Trusted Platform Root CA" > root-ca.crt
+# Per-CA selection is not supported; root-only output uses --intermediates=false
+platformctl ca bundle --intermediates=false > root-ca.crt
 
 # Export Intermediate CA
-platformctl ca export-bundle --ca "Trusted Platform TLS CA" > tls-ca.crt
+# Per-CA selection is not supported by ca bundle; full chain shown
+platformctl ca bundle > tls-ca.crt
 ```
 
 ## Global Options
@@ -287,7 +291,7 @@ platformctl ca issue server.example.com tpm ecdsa-p256 \
   --sans-dns "server.example.com"
 
 # 5. Export for distribution
-platformctl ca export-bundle > ca-bundle.crt
+platformctl ca bundle > ca-bundle.crt
 ```
 
 ### Example: Certificate Lifecycle
@@ -331,7 +335,7 @@ for service in api web worker; do
 done
 
 # Export CA bundle
-platformctl ca export-bundle > /etc/ssl/certs/platform-ca.crt
+platformctl ca bundle > /etc/ssl/certs/platform-ca.crt
 
 echo "CA setup complete"
 ```
@@ -340,8 +344,10 @@ echo "CA setup complete"
 
 ```bash
 # Export certificates
-platformctl ca export-bundle --ca "Trusted Platform Root CA" > root-ca.crt
-platformctl ca export-bundle --ca "Trusted Platform TLS CA" > intermediate-ca.crt
+# Per-CA selection is not supported; root-only output uses --intermediates=false
+platformctl ca bundle --intermediates=false > root-ca.crt
+# Per-CA selection is not supported; full chain shown
+platformctl ca bundle > intermediate-ca.crt
 platformctl ca certificate show server.example.com --format pem > server.crt
 
 # Verify chain

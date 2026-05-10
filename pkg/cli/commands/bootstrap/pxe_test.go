@@ -34,13 +34,17 @@ const validBootstrapYAML = `deployer:
   user: admin
   ssh_key: /tmp/test-key
   container_runtime: docker
-provisioning_network:
-  subnet: 10.0.0.0/24
-  gateway: 10.0.0.1
-  dhcp_range_start: 10.0.0.100
-  dhcp_range_end: 10.0.0.200
-  dns:
-    - 10.0.0.1
+subnets:
+  - name: provisioning
+    role: provisioning
+    cidr: 10.0.0.0/24
+    gateway: 10.0.0.1
+    dns:
+      - 10.0.0.1
+    dhcp:
+      enabled: true
+      range-start: 10.0.0.100
+      range-end: 10.0.0.200
 platform:
   domain: example.com
   internal_domain: internal.example.com
@@ -299,8 +303,10 @@ func TestLoadAndValidateConfig_ValidationFailure(t *testing.T) {
 	path := writeTestConfig(t, `deployer:
   target: linux
   host: ""
-provisioning_network:
-  subnet: 10.0.0.0/24
+subnets:
+  - name: provisioning
+    role: provisioning
+    cidr: 10.0.0.0/24
 platform:
   domain: example.com
 nodes:
@@ -417,10 +423,9 @@ func TestBuildDeployConfig(t *testing.T) {
 	assert.Equal(t, "admin", dc.User)
 	assert.Equal(t, "/tmp/test-key", dc.SSHKeyPath)
 	assert.Equal(t, "docker", dc.ContainerRuntime)
-	assert.Equal(t, "10.0.0.0/24", dc.ProvisioningNetwork.Subnet)
-	assert.Equal(t, "10.0.0.1", dc.ProvisioningNetwork.Gateway)
-	assert.Equal(t, "10.0.0.100", dc.ProvisioningNetwork.RangeStart)
-	assert.Equal(t, "10.0.0.200", dc.ProvisioningNetwork.RangeEnd)
+	require.NotNil(t, dc.ProvisioningSubnet)
+	assert.Equal(t, "10.0.0.0/24", dc.ProvisioningSubnet.CIDR)
+	assert.Equal(t, "10.0.0.1", dc.ProvisioningSubnet.Gateway)
 	assert.Equal(t, 22, dc.Port) // default applied
 }
 

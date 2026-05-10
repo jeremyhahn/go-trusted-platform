@@ -63,6 +63,12 @@ type mockTenantManager struct {
 	dekRotationResult *tenant.DEKRotationResult
 	dekStatus         *tenant.DEKStatus
 	lastRotateBack    bool
+	initBarrierErr    error
+	unsealBarrierErr  error
+	sealBarrierErr    error
+	barrierStatusErr  error
+	barrierStates     map[string]*tenant.TenantBarrierState
+	lastUnsealKey     []byte
 }
 
 func newMockTenantManager() *mockTenantManager {
@@ -293,7 +299,7 @@ func (m *mockTenantManager) Sync(ctx context.Context) error {
 	return nil
 }
 
-func (m *mockTenantManager) RotateTenantDEK(ctx context.Context, tenantID string, background bool) (*tenant.DEKRotationResult, error) {
+func (m *mockTenantManager) RotateTenantDEKWithOptions(ctx context.Context, tenantID string, background bool) (*tenant.DEKRotationResult, error) {
 	m.lastRotateBack = background
 	if m.rotateDEKErr != nil {
 		return nil, m.rotateDEKErr
@@ -335,6 +341,76 @@ func (m *mockTenantManager) GetTenantDEKStatus(ctx context.Context, tenantID str
 		WarningPercent: 80,
 		UsagePercent:   1.0,
 		NeedsRotation:  false,
+	}, nil
+}
+
+// Per-tenant barrier mock methods
+func (m *mockTenantManager) InitTenantBarrier(ctx context.Context, tenantID string) error {
+	if m.initBarrierErr != nil {
+		return m.initBarrierErr
+	}
+	if _, ok := m.tenants[tenantID]; !ok {
+		return tenant.ErrTenantNotFound{ID: tenantID}
+	}
+	if m.barrierStates == nil {
+		m.barrierStates = make(map[string]*tenant.TenantBarrierState)
+	}
+	m.barrierStates[tenantID] = &tenant.TenantBarrierState{
+		TenantID:    tenantID,
+		Sealed:      false,
+		Initialized: true,
+		Strategy:    "software",
+	}
+	return nil
+}
+
+func (m *mockTenantManager) UnsealTenantBarrier(ctx context.Context, tenantID string, key []byte) error {
+	if m.unsealBarrierErr != nil {
+		return m.unsealBarrierErr
+	}
+	if _, ok := m.tenants[tenantID]; !ok {
+		return tenant.ErrTenantNotFound{ID: tenantID}
+	}
+	if m.barrierStates == nil {
+		m.barrierStates = make(map[string]*tenant.TenantBarrierState)
+	}
+	m.lastUnsealKey = append([]byte(nil), key...)
+	st, ok := m.barrierStates[tenantID]
+	if !ok {
+		st = &tenant.TenantBarrierState{TenantID: tenantID, Initialized: true, Strategy: "software"}
+		m.barrierStates[tenantID] = st
+	}
+	st.Sealed = false
+	return nil
+}
+
+func (m *mockTenantManager) SealTenantBarrier(ctx context.Context, tenantID string) error {
+	if m.sealBarrierErr != nil {
+		return m.sealBarrierErr
+	}
+	if m.barrierStates == nil {
+		m.barrierStates = make(map[string]*tenant.TenantBarrierState)
+	}
+	st, ok := m.barrierStates[tenantID]
+	if !ok {
+		st = &tenant.TenantBarrierState{TenantID: tenantID, Initialized: true, Strategy: "software"}
+		m.barrierStates[tenantID] = st
+	}
+	st.Sealed = true
+	return nil
+}
+
+func (m *mockTenantManager) TenantBarrierStatus(ctx context.Context, tenantID string) (*tenant.TenantBarrierState, error) {
+	if m.barrierStatusErr != nil {
+		return nil, m.barrierStatusErr
+	}
+	if st, ok := m.barrierStates[tenantID]; ok {
+		return st, nil
+	}
+	return &tenant.TenantBarrierState{
+		TenantID:    tenantID,
+		Sealed:      true,
+		Initialized: false,
 	}, nil
 }
 

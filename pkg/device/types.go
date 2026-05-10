@@ -105,4 +105,9 @@ type DeviceTemplateService interface {
 
 	// ToProfile deep-copies the template config into a new DeviceProfile with optional overrides.
 	ToProfile(ctx context.Context, templateID uint64, overrides *entities.DeviceProfile) (*entities.DeviceProfile, error)
+
+	// ToProfileWithConfigOverrides creates a profile from a template, applying both
+	// structural overrides and config-level overrides that are deep-merged into
+	// the template's platform YAML config.
+	ToProfileWithConfigOverrides(ctx context.Context, templateID uint64, overrides *entities.DeviceProfile, configOverrides map[string]interface{}) (*entities.DeviceProfile, error)
 }

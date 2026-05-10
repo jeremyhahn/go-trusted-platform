@@ -15,7 +15,10 @@ package bootstrap
 
 import (
 	"os"
+	"path/filepath"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/deployer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"gopkg.in/yaml.v3"
 )
 
@@ -35,12 +38,13 @@ var validRoles = map[string]struct{}{
 
 // BootstrapConfig is the top-level configuration for PXE network bootstrap.
 type BootstrapConfig struct {
-	Deployer            DeployerConfig       `yaml:"deployer"`
-	Switch              *SwitchConfig        `yaml:"switch,omitempty"`
-	ProvisioningNetwork ProvisioningNetwork  `yaml:"provisioning_network"`
-	Platform            PlatformGlobalConfig `yaml:"platform"`
-	Templates           map[string]string    `yaml:"templates"`
-	Nodes               []NodeConfig         `yaml:"nodes"`
+	Deployer  DeployerConfig           `yaml:"deployer"`
+	Switch    *SwitchConfig            `yaml:"switch,omitempty"`
+	Fabric    *FabricConfig            `yaml:"fabric,omitempty"`
+	Subnets   []installer.SubnetConfig `yaml:"subnets,omitempty"`
+	Platform  PlatformGlobalConfig     `yaml:"platform"`
+	Templates map[string]string        `yaml:"templates"`
+	Nodes     []NodeConfig             `yaml:"nodes"`
 
 	// ISOPath is the local filesystem path to the platform ISO that will be
 	// staged on the bootstrap container host for virtual-media boot. Required
@@ -48,6 +52,51 @@ type BootstrapConfig struct {
 	// the container's /data host directory and exposed via the container's
 	// SMB share at smb://<deployer.host>/boot/<filename>.
 	ISOPath string `yaml:"iso_path,omitempty"`
+}
+
+// FabricConfig describes the network fabric topology for the bootstrap
+// deployment. This is an informational record that the orchestrator uses
+// to configure switch ports post-enrollment or to validate node placement.
+type FabricConfig struct {
+	Mode     string          `yaml:"mode"`
+	Switches []FabricSwitch  `yaml:"switches,omitempty"`
+	Peers    []FabricPeer    `yaml:"peers,omitempty"`
+	Segments []FabricSegment `yaml:"segments,omitempty"`
+}
+
+// FabricSwitch identifies a physical switch in the fabric.
+type FabricSwitch struct {
+	ID             string `yaml:"id"`
+	Vendor         string `yaml:"vendor"`
+	Model          string `yaml:"model,omitempty"`
+	MgmtIP         string `yaml:"mgmt-ip"`
+	CredentialsRef string `yaml:"credentials-ref,omitempty" secret:"true"`
+}
+
+// FabricPeer describes a vPC/MLAG peer-link between two fabric switches.
+type FabricPeer struct {
+	SwitchA            string   `yaml:"switch-a"`
+	SwitchB            string   `yaml:"switch-b"`
+	PeerLinkInterfaces []string `yaml:"peer-link-interfaces,omitempty"`
+}
+
+// FabricSegment defines a named VLAN segment within the fabric.
+type FabricSegment struct {
+	Name string `yaml:"name"`
+	VLAN int    `yaml:"vlan"`
+	Role string `yaml:"role,omitempty"`
+}
+
+// PostEnrollmentConfig defines actions the orchestrator takes after a
+// node successfully installs and passes its initial health check.
+type PostEnrollmentConfig struct {
+	// SwitchVLAN is the production VLAN the node's switch port should be
+	// moved to after enrollment completes (e.g., "production").
+	SwitchVLAN string `yaml:"switch_vlan,omitempty" json:"switch_vlan,omitempty"`
+
+	// RunHealthCheck controls whether the orchestrator polls the node's
+	// health endpoint after enrollment. Defaults to true when nil.
+	RunHealthCheck *bool `yaml:"run_health_check,omitempty" json:"run_health_check,omitempty"`
 }
 
 // Boot method values for NodeConfig.BootMethod.
@@ -89,6 +138,7 @@ type DeployerConfig struct {
 	User               string `yaml:"user"`
 	SSHKey             string `yaml:"ssh_key"`
 	ContainerRuntime   string `yaml:"container_runtime"`
+	ContainerImage     string `yaml:"container_image"`
 	TransferProtocol   string `yaml:"transfer_protocol,omitempty"`
 	TransferServer     string `yaml:"transfer_server,omitempty"`
 	ContainerImagePath string `yaml:"container_image_path,omitempty"`
@@ -104,7 +154,125 @@ type DeployerConfig struct {
 	// interface (198.18.1.91). The SMB URL becomes
 	// smb://<smb_host>/boot/<iso>.
 	SMBHost string `yaml:"smb_host,omitempty"`
+
+	// DataDir is the host-side directory the deployer SSHes into and
+	// bind-mounts into the bootstrap container as /data. The orchestrator
+	// stages manifest.yaml + image-extracted PXE assets (vmlinuz,
+	// initramfs, autoinstall.sh) here, and the iso-stager uploads each
+	// node's ISO into the same path so the smbd inside the container
+	// serves it. Defaults to deployer.DefaultRemoteDataDir
+	// ("/tmp/bootstrap"). Override when /tmp is too small or when an
+	// operator wants persistent staging across reboots.
+	DataDir string `yaml:"data_dir,omitempty"`
+
+	// RedeployMode controls how Phase 2 (deploy bootstrap container)
+	// behaves when a container of the same name is already present on
+	// the deployer host:
+	//
+	//   "always"    — always tear down and re-deploy. Destructive.
+	//                 Use this when the operator iterated on container
+	//                 image versions or when /data was wiped externally.
+	//   "if-stale"  — verify image + bind mount + /data assets match
+	//                 expectations; redeploy only on mismatch. (Default)
+	//   "never"     — fail Phase 2 with ErrContainerStateMismatch when
+	//                 an unexpected container is present. Safe default
+	//                 for production runbooks where Phase 2 should never
+	//                 surprise an operator with a destructive teardown.
+	//
+	// Empty defaults to "if-stale".
+	RedeployMode string `yaml:"redeploy_mode,omitempty"`
+
+	// BootstrapInterface is the host network interface the bootstrap
+	// container's pxeboot daemon binds to. Defaults to "eth0" inside
+	// the container. Override on jumpboxes where the
+	// bootstrap-network NIC has a non-standard name (systemd
+	// predictable names like enp1s0/eno1, USB dongles like
+	// enxc8a362b837de). Sets the BOOTSTRAP_INTERFACE env var on the
+	// docker run command so the supervisord-managed pxeboot picks
+	// up the right NIC for DHCP/TFTP listening.
+	BootstrapInterface string `yaml:"bootstrap_interface,omitempty"`
+
+	// BootstrapServerIP is the IP the bootstrap container's
+	// DHCP/TFTP/HTTP services bind to. Default in the entrypoint is
+	// 172.16.201.1, suitable for a deployment that already has the
+	// provisioning subnet configured. For first bootstrap on a
+	// fresh deploy (no provisioning subnet yet) this MUST point at
+	// an IP the deployer host already holds, typically the same
+	// value as smb_host.
+	BootstrapServerIP string `yaml:"bootstrap_server_ip,omitempty"`
+
+	// BootstrapDHCPStart and BootstrapDHCPEnd bound the lease pool
+	// the bootstrap container offers. Empty falls through to the
+	// entrypoint defaults (172.16.201.100 / .200).
+	BootstrapDHCPStart string `yaml:"bootstrap_dhcp_start,omitempty"`
+	BootstrapDHCPEnd   string `yaml:"bootstrap_dhcp_end,omitempty"`
+
+	// BootstrapGateway is the default gateway advertised in DHCP
+	// offers. Empty falls through to entrypoint default (172.16.201.1).
+	BootstrapGateway string `yaml:"bootstrap_gateway,omitempty"`
+
+	// BootstrapDNS is the DNS server advertised in DHCP offers.
+	// Empty falls through to entrypoint default (172.16.201.1).
+	BootstrapDNS string `yaml:"bootstrap_dns,omitempty"`
+
+	// PXEServiceHost names the platform node that should host the
+	// persistent PXE/DHCP service after Phase 5 hand-off. Empty means
+	// "the gateway role" (current default behaviour). Set to a hostname
+	// (e.g. "lab-node-2") to run PXE on the control-plane, or to a custom
+	// node hostname for dedicated PXE deployments. The orchestrator
+	// passes this value to platformd's pxe-service init at hand-off
+	// time. Phase 2 (transient bootstrap container) still runs on the
+	// deployer.host jumpbox regardless — it provisions the very first
+	// node, then tears down once the destination platform node takes
+	// over.
+	PXEServiceHost string `yaml:"pxe_service_host,omitempty"`
 }
+
+// EffectiveDataDir returns the configured DataDir or the package default.
+// Centralises the "" fallback so callers don't sprinkle defaults.
+func (d *DeployerConfig) EffectiveDataDir() string {
+	if d.DataDir != "" {
+		return d.DataDir
+	}
+	return DefaultDeployerDataDir
+}
+
+// EffectiveRedeployMode normalises the YAML field, defaulting to
+// RedeployIfStale.
+func (d *DeployerConfig) EffectiveRedeployMode() RedeployMode {
+	switch d.RedeployMode {
+	case string(RedeployAlways):
+		return RedeployAlways
+	case string(RedeployNever):
+		return RedeployNever
+	case "", string(RedeployIfStale):
+		return RedeployIfStale
+	default:
+		return RedeployIfStale
+	}
+}
+
+// DefaultDeployerDataDir is the host-side staging directory used when
+// DeployerConfig.DataDir is unset. Re-exported from
+// pkg/bootstrap/deployer so callers in this package don't have to import
+// the deployer subpackage just to spell the default.
+const DefaultDeployerDataDir = deployer.DefaultRemoteDataDir
+
+// RedeployMode is the parsed form of DeployerConfig.RedeployMode. See
+// the YAML field doc on DeployerConfig for semantics.
+type RedeployMode string
+
+const (
+	// RedeployAlways tears down and re-deploys on every Phase 2 run.
+	RedeployAlways RedeployMode = "always"
+	// RedeployIfStale (default) inspects the running container and
+	// re-deploys only when image/bind-mount/data state does not match
+	// expectations.
+	RedeployIfStale RedeployMode = "if-stale"
+	// RedeployNever fails Phase 2 with ErrContainerStateMismatch when an
+	// unexpected container is present. Conservative production default.
+	RedeployNever RedeployMode = "never"
+)
 
 // EffectiveSMBHost returns SMBHost when set, otherwise Host. Centralises the
 // default so callers don't sprinkle "" checks.
@@ -133,15 +301,6 @@ type PortAssignment struct {
 	Description string `yaml:"description"`
 }
 
-// ProvisioningNetwork defines the PXE provisioning network.
-type ProvisioningNetwork struct {
-	Subnet         string   `yaml:"subnet"`
-	Gateway        string   `yaml:"gateway"`
-	DHCPRangeStart string   `yaml:"dhcp_range_start"`
-	DHCPRangeEnd   string   `yaml:"dhcp_range_end"`
-	DNS            []string `yaml:"dns"`
-}
-
 // NodeConfig defines a node to be provisioned via PXE bootstrap.
 // A node must have either BMCAddress (for automatic MAC discovery) or MAC
 // (for manual specification). Both cannot be empty unless SkipInstall is true.
@@ -160,7 +319,19 @@ type NodeConfig struct {
 	MACs             []string               `yaml:"macs,omitempty"`
 	Role             string                 `yaml:"role"`
 	Hostname         string                 `yaml:"hostname"`
+	// Overrides is an inline per-node YAML override map that is deep-merged
+	// on top of the role template at install time. Intended for small,
+	// deployment-specific tweaks (hostname, static IPs, BMC credentials).
 	Overrides        map[string]interface{} `yaml:"overrides,omitempty"`
+	// OverridesFile points at an external per-node override YAML file,
+	// relative to the bootstrap.yaml's directory. Loaded and deep-merged
+	// on top of the role template BEFORE the inline Overrides map is
+	// applied, so inline entries win on conflict. Keeping per-node
+	// overrides in separate files (under e.g.
+	// `deployments/dedicated/overrides/<hostname>.<role>.yaml`) keeps
+	// bootstrap.yaml small and lets each deployment profile maintain
+	// its own override set without duplicating them inline.
+	OverridesFile    string                 `yaml:"overrides_file,omitempty"`
 
 	// BootMethod selects how this node boots the platform ISO during
 	// provisioning. Valid values:
@@ -181,6 +352,15 @@ type NodeConfig struct {
 	// health checks, and the seed phase. Use this when referencing an
 	// existing control-plane node in a config that provisions new workers.
 	SkipInstall bool `yaml:"skip_install,omitempty" json:"skip_install,omitempty"`
+
+	// SwitchPort is the physical switch port this node is connected to
+	// (e.g., "Ethernet1/36"). Used by the orchestrator for post-enrollment
+	// VLAN assignment and by the dry-run report for operator verification.
+	SwitchPort string `yaml:"switch_port,omitempty" json:"switch_port,omitempty"`
+
+	// PostEnrollment defines actions the orchestrator takes after the node
+	// successfully installs and passes its initial health check.
+	PostEnrollment *PostEnrollmentConfig `yaml:"post_enrollment,omitempty" json:"post_enrollment,omitempty"`
 }
 
 // EffectiveBootMethod returns the BootMethod with empty normalised to "pxe".
@@ -226,8 +406,11 @@ type nodeConfigYAML struct {
 	Role             string                 `yaml:"role"`
 	Hostname         string                 `yaml:"hostname"`
 	Overrides        map[string]interface{} `yaml:"overrides,omitempty"`
+	OverridesFile    string                 `yaml:"overrides_file,omitempty"`
 	BootMethod       string                 `yaml:"boot_method,omitempty"`
 	SkipInstall      bool                   `yaml:"skip_install,omitempty"`
+	SwitchPort       string                 `yaml:"switch_port,omitempty"`
+	PostEnrollment   *PostEnrollmentConfig  `yaml:"post_enrollment,omitempty"`
 }
 
 // UnmarshalYAML accepts both the new `macs:` slice and the legacy `mac:`
@@ -247,8 +430,11 @@ func (n *NodeConfig) UnmarshalYAML(value *yaml.Node) error {
 	n.Role = shadow.Role
 	n.Hostname = shadow.Hostname
 	n.Overrides = shadow.Overrides
+	n.OverridesFile = shadow.OverridesFile
 	n.BootMethod = shadow.BootMethod
 	n.SkipInstall = shadow.SkipInstall
+	n.SwitchPort = shadow.SwitchPort
+	n.PostEnrollment = shadow.PostEnrollment
 	n.MACs = append([]string(nil), shadow.MACs...)
 	if shadow.MAC != "" {
 		found := false
@@ -260,6 +446,16 @@ func (n *NodeConfig) UnmarshalYAML(value *yaml.Node) error {
 		}
 		if !found {
 			n.MACs = append(n.MACs, shadow.MAC)
+		}
+	}
+	return nil
+}
+
+// ProvisioningSubnet returns the first subnet with role "provisioning", or nil.
+func (c *BootstrapConfig) ProvisioningSubnet() *installer.SubnetConfig {
+	for i := range c.Subnets {
+		if c.Subnets[i].Role == installer.SubnetRoleProvisioning {
+			return &c.Subnets[i]
 		}
 	}
 	return nil
@@ -284,7 +480,67 @@ func LoadBootstrapConfig(path string) (*BootstrapConfig, error) {
 		return nil, ErrParseYAML{Path: path, Err: err}
 	}
 
+	// Resolve per-node OverridesFile references. Each NodeConfig may
+	// carry `overrides_file: <relative-path>` pointing at an external
+	// YAML file whose contents are deep-merged onto the role template
+	// BEFORE the inline `overrides:` map is applied. File paths are
+	// resolved relative to bootstrap.yaml's directory so every
+	// deployment bundle stays self-contained.
+	bootstrapDir := filepath.Dir(path)
+	for i := range config.Nodes {
+		node := &config.Nodes[i]
+		if node.OverridesFile == "" {
+			continue
+		}
+		overrideFile := node.OverridesFile
+		if !filepath.IsAbs(overrideFile) {
+			overrideFile = filepath.Join(bootstrapDir, overrideFile)
+		}
+		raw, err := os.ReadFile(overrideFile)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, ErrConfigFileNotFound{Path: overrideFile}
+			}
+			return nil, ErrParseYAML{Path: overrideFile, Err: err}
+		}
+		var fileMap map[string]interface{}
+		if err := yaml.Unmarshal(raw, &fileMap); err != nil {
+			return nil, ErrParseYAML{Path: overrideFile, Err: err}
+		}
+		// Deep-merge: start with the file map as the base, then overlay
+		// any inline Overrides on top so inline entries win on conflict.
+		merged := fileMap
+		if len(node.Overrides) > 0 {
+			merged = deepMergeOverrides(merged, node.Overrides)
+		}
+		node.Overrides = merged
+	}
+
 	return &config, nil
+}
+
+// deepMergeOverrides recursively merges src into dst, with src taking
+// precedence. Maps are merged; all other types overwrite.
+func deepMergeOverrides(dst, src map[string]interface{}) map[string]interface{} {
+	if dst == nil {
+		dst = make(map[string]interface{})
+	}
+	out := make(map[string]interface{}, len(dst))
+	for k, v := range dst {
+		out[k] = v
+	}
+	for k, v := range src {
+		if existing, ok := out[k]; ok {
+			if em, emOK := existing.(map[string]interface{}); emOK {
+				if sm, smOK := v.(map[string]interface{}); smOK {
+					out[k] = deepMergeOverrides(em, sm)
+					continue
+				}
+			}
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // Validate checks the BootstrapConfig for correctness and returns the first
@@ -294,8 +550,8 @@ func (c *BootstrapConfig) Validate() error {
 	if c.Deployer.Host == "" {
 		return ErrMissingRequiredField{Field: "deployer.host"}
 	}
-	if c.ProvisioningNetwork.Subnet == "" {
-		return ErrMissingRequiredField{Field: "provisioning_network.subnet"}
+	if provSubnet := c.ProvisioningSubnet(); provSubnet == nil {
+		return ErrMissingRequiredField{Field: "subnets (no subnet with role: provisioning)"}
 	}
 	if c.Platform.Domain == "" {
 		return ErrMissingRequiredField{Field: "platform.domain"}

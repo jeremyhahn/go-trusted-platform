@@ -83,3 +83,41 @@ type ErrUnsupportedKeyType struct {
 func (e ErrUnsupportedKeyType) Error() string {
 	return fmt.Sprintf("encrypted resolver: unsupported key type: %s", e.KeyType)
 }
+
+// ErrEncryptedDecryptFailed is returned when the encrypted:// resolver's
+// decrypt function fails.
+type ErrEncryptedDecryptFailed struct {
+	Cause error
+}
+
+func (e ErrEncryptedDecryptFailed) Error() string {
+	return fmt.Sprintf("encrypted resolver: decrypt failed: %s", e.Cause.Error())
+}
+
+func (e ErrEncryptedDecryptFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrEncryptedInvalidPayload is returned when the encrypted:// URI payload
+// is malformed or empty.
+type ErrEncryptedInvalidPayload struct {
+	Reason string
+}
+
+func (e ErrEncryptedInvalidPayload) Error() string {
+	return fmt.Sprintf("encrypted resolver: invalid payload: %s", e.Reason)
+}
+
+// ErrEncryptFailed is returned when the Encrypt function fails to encrypt
+// plaintext into an encrypted:// URI.
+type ErrEncryptFailed struct {
+	Cause error
+}
+
+func (e ErrEncryptFailed) Error() string {
+	return fmt.Sprintf("encrypted resolver: encrypt failed: %s", e.Cause.Error())
+}
+
+func (e ErrEncryptFailed) Unwrap() error {
+	return e.Cause
+}

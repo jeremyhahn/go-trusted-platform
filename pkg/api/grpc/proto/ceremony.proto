@@ -1,0 +1,147 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+import "google/protobuf/timestamp.proto";
+
+// CeremonyService exposes the platform ceremony lifecycle: initial bootstrap,
+// officer enrollment (PIV/FIDO2/software), Shamir share claims, and CSR
+// signing under the quorum model.
+service CeremonyService {
+  // Init performs the initial ceremony bootstrap.
+  rpc Init(CeremonyInitRequest) returns (CeremonyInitResponse);
+
+  // Status reports the current ceremony state.
+  rpc Status(CeremonyStatusRequest) returns (CeremonyStatusResponse);
+
+  // ClaimCertBegin requests a cert-claim challenge for an officer.
+  rpc ClaimCertBegin(CeremonyClaimCertBeginRequest) returns (CeremonyClaimCertBeginResponse);
+
+  // ClaimCertComplete completes a cert-claim challenge with a signature.
+  rpc ClaimCertComplete(CeremonyClaimCertCompleteRequest) returns (CeremonyClaimCertCompleteResponse);
+
+  // ClaimShare returns the caller's Shamir share.
+  rpc ClaimShare(CeremonyClaimShareRequest) returns (CeremonyClaimShareResponse);
+
+  // SignCSR signs a CSR using the ceremony CA.
+  rpc SignCSR(CeremonySignCSRRequest) returns (CeremonySignCSRResponse);
+}
+
+// CeremonyAuthenticatorType enumerates officer authenticator backends.
+enum CeremonyAuthenticatorType {
+  CEREMONY_AUTHENTICATOR_TYPE_UNSPECIFIED = 0;
+  CEREMONY_AUTHENTICATOR_TYPE_PIV = 1;
+  CEREMONY_AUTHENTICATOR_TYPE_FIDO2 = 2;
+  CEREMONY_AUTHENTICATOR_TYPE_SOFTWARE = 3;
+}
+
+// CeremonyOfficerRole enumerates officer roles.
+enum CeremonyOfficerRole {
+  CEREMONY_OFFICER_ROLE_UNSPECIFIED = 0;
+  CEREMONY_OFFICER_ROLE_SO = 1;
+  CEREMONY_OFFICER_ROLE_ADMIN = 2;
+  CEREMONY_OFFICER_ROLE_USER = 3;
+}
+
+// CeremonyState enumerates the life-cycle states of the ceremony.
+enum CeremonyState {
+  CEREMONY_STATE_UNSPECIFIED = 0;
+  CEREMONY_STATE_UNINITIALIZED = 1;
+  CEREMONY_STATE_IN_PROGRESS = 2;
+  CEREMONY_STATE_COMPLETE = 3;
+}
+
+// CeremonyInitRequest seeds a fresh ceremony.
+message CeremonyInitRequest {
+  string so_pin = 1;
+  string user_pin = 2;
+  // threshold descriptor, e.g. "3-of-5".
+  string threshold = 3;
+  string hostname = 4;
+  repeated string sans = 5;
+  string credential_seal_strategy = 6;
+}
+
+// CeremonyInitResponse is returned by Init.
+message CeremonyInitResponse {
+  string ceremony_id = 1;
+  CeremonyState state = 2;
+  google.protobuf.Timestamp initialized_at = 3;
+  // admin_cert_pem carries the freshly minted admin client certificate. The
+  // operator MUST persist this together with admin_key_pem to access the
+  // platform after init; the platform does not retain a copy.
+  string admin_cert_pem = 4;
+  // admin_key_pem carries the matching private key in PEM form.
+  string admin_key_pem = 5;
+  // spki_pin is the SHA-256 SubjectPublicKeyInfo pin of the issuing CA, useful
+  // for SPKI-pinning bootstrap clients before they trust the chain.
+  string spki_pin = 6;
+}
+
+// CeremonyStatusRequest is an empty request for ceremony status.
+message CeremonyStatusRequest {}
+
+// CeremonyStatusResponse reports the current ceremony state.
+message CeremonyStatusResponse {
+  string ceremony_id = 1;
+  CeremonyState state = 2;
+  string threshold = 3;
+  int32 officers_enrolled = 4;
+  int32 officers_required = 5;
+  google.protobuf.Timestamp initialized_at = 6;
+}
+
+// CeremonyClaimCertBeginRequest requests a claim-cert challenge.
+message CeremonyClaimCertBeginRequest {
+  string username = 1;
+  CeremonyAuthenticatorType authenticator_type = 2;
+  string slot = 3;
+  string credential_id = 4;
+}
+
+// CeremonyClaimCertBeginResponse returns the issued challenge.
+message CeremonyClaimCertBeginResponse {
+  string nonce = 1;
+  string challenge_id = 2;
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+// CeremonyClaimCertCompleteRequest completes a cert-claim challenge.
+message CeremonyClaimCertCompleteRequest {
+  string username = 1;
+  string nonce = 2;
+  string signature = 3;
+}
+
+// CeremonyClaimCertCompleteResponse returns the issued officer certificate.
+message CeremonyClaimCertCompleteResponse {
+  string certificate_pem = 1;
+  string chain_pem = 2;
+}
+
+// CeremonyClaimShareRequest requests the caller's Shamir share.
+message CeremonyClaimShareRequest {
+  string username = 1;
+}
+
+// CeremonyClaimShareResponse returns the officer's share.
+message CeremonyClaimShareResponse {
+  string share = 1;
+  int32 index = 2;
+}
+
+// CeremonySignCSRRequest signs a CSR with the ceremony CA.
+message CeremonySignCSRRequest {
+  string username = 1;
+  string so_pin = 2;
+  string csr_pem = 3;
+  CeremonyOfficerRole role = 4;
+}
+
+// CeremonySignCSRResponse returns the signed certificate.
+message CeremonySignCSRResponse {
+  string certificate_pem = 1;
+  string chain_pem = 2;
+}

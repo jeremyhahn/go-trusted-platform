@@ -17,165 +17,46 @@ package fido2
 
 import (
 	"context"
+	"fmt"
+
+	fido2sdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/fido2"
 )
 
-// FIDO2Commands defines the central command set for FIDO2 integration testing.
-// Each protocol adapter (CLI, REST, gRPC, QUIC, MCP, Unix) implements this interface.
-// Tests are written once against this interface and run against all protocols.
+// FIDO2Commands is the transport-agnostic contract every adapter implements.
 type FIDO2Commands interface {
-	// Protocol identification and lifecycle
 	Name() string
 	Setup(ctx context.Context) error
 	Teardown() error
 
-	// List Commands (platformctl fido2 list)
-	List(ctx context.Context, opts ListOptions) (*ListResult, error)
-
-	// Info Commands (platformctl fido2 info)
-	Info(ctx context.Context, opts InfoOptions) (*InfoResult, error)
-
-	// Enroll Commands (platformctl fido2 enroll)
-	Enroll(ctx context.Context, opts EnrollOptions) (*EnrollResult, error)
-
-	// Remove Commands (platformctl fido2 remove)
-	Remove(ctx context.Context, opts RemoveOptions) (*RemoveResult, error)
-
-	// Test Commands (platformctl fido2 test)
-	Test(ctx context.Context, opts TestOptions) (*TestResult, error)
+	ListDevices(ctx context.Context, req *fido2sdk.ListDevicesRequest) (*fido2sdk.ListDevicesResponse, error)
+	WaitDevice(ctx context.Context, req *fido2sdk.WaitDeviceRequest) (*fido2sdk.WaitDeviceResponse, error)
+	Info(ctx context.Context, req *fido2sdk.InfoRequest) (*fido2sdk.InfoResponse, error)
+	Register(ctx context.Context, req *fido2sdk.RegisterRequest) (*fido2sdk.RegisterResponse, error)
+	Authenticate(ctx context.Context, req *fido2sdk.AuthenticateRequest) (*fido2sdk.AuthenticateResponse, error)
 }
 
-// =============================================================================
-// List Types
-// =============================================================================
-
-// ListOptions contains options for listing FIDO2 tokens.
-type ListOptions struct {
-	Device string
-	Debug  bool
+// ErrConnectionFailed indicates the adapter could not connect to platformd.
+type ErrConnectionFailed struct {
+	Protocol string
+	Endpoint string
+	Err      error
 }
 
-// ListResult contains the result of a FIDO2 list operation.
-type ListResult struct {
-	Tokens []FIDO2TokenInfo
-	Device string
+func (e ErrConnectionFailed) Error() string {
+	return fmt.Sprintf("%s connection to %s failed: %v", e.Protocol, e.Endpoint, e.Err)
 }
 
-// FIDO2TokenInfo contains parsed FIDO2 token information.
-type FIDO2TokenInfo struct {
-	TokenID         string
-	Type            string
-	Keyslots        []string
-	FIDO2Credential string
-	FIDO2Salt       string
-	FIDO2RP         string
-	FIDO2UPRequired bool
+func (e ErrConnectionFailed) Unwrap() error { return e.Err }
+
+// ErrCallFailed indicates a protocol call failed.
+type ErrCallFailed struct {
+	Protocol string
+	Method   string
+	Err      error
 }
 
-// =============================================================================
-// Info Types
-// =============================================================================
-
-// InfoOptions contains options for getting device information.
-type InfoOptions struct {
-	Device string
-	Debug  bool
+func (e ErrCallFailed) Error() string {
+	return fmt.Sprintf("%s call %s failed: %v", e.Protocol, e.Method, e.Err)
 }
 
-// InfoResult contains the result of a FIDO2 info operation.
-type InfoResult struct {
-	Device         string
-	UUID           string
-	Label          string
-	Version        int
-	Cipher         string
-	KeySize        int
-	SectorSize     int
-	ActiveKeyslots []KeyslotInfo
-	FIDO2Tokens    []FIDO2TokenInfo
-	Segments       []SegmentInfo
-}
-
-// KeyslotInfo contains keyslot information.
-type KeyslotInfo struct {
-	SlotNumber int
-	Type       string
-	KeySize    int
-	Priority   *int
-	KDFType    string
-	KDFHash    string
-	Encryption string
-}
-
-// SegmentInfo contains data segment information.
-type SegmentInfo struct {
-	SegmentID  string
-	Type       string
-	Offset     string
-	Size       string
-	Encryption string
-	SectorSize int
-}
-
-// =============================================================================
-// Enroll Types
-// =============================================================================
-
-// EnrollOptions contains options for enrolling a FIDO2 credential.
-type EnrollOptions struct {
-	Device     string
-	Passphrase string
-	Slot       int
-	RP         string
-	User       string
-	FIPS       bool
-	Debug      bool
-}
-
-// EnrollResult contains the result of a FIDO2 enroll operation.
-type EnrollResult struct {
-	Success      bool
-	Message      string
-	Device       string
-	Slot         int
-	RelyingParty string
-}
-
-// =============================================================================
-// Remove Types
-// =============================================================================
-
-// RemoveOptions contains options for removing a FIDO2 token.
-type RemoveOptions struct {
-	Device  string
-	TokenID string
-	Slot    int
-	Force   bool
-	Debug   bool
-}
-
-// RemoveResult contains the result of a FIDO2 remove operation.
-type RemoveResult struct {
-	Success        bool
-	Message        string
-	TokenIDRemoved string
-	SlotRemoved    int
-}
-
-// =============================================================================
-// Test Types
-// =============================================================================
-
-// TestOptions contains options for testing FIDO2 unlock.
-type TestOptions struct {
-	Device string
-	Debug  bool
-}
-
-// TestResult contains the result of a FIDO2 test operation.
-type TestResult struct {
-	Success      bool
-	Message      string
-	TokenInfo    *FIDO2TokenInfo
-	RelyingParty string
-	Keyslots     []string
-}
+func (e ErrCallFailed) Unwrap() error { return e.Err }

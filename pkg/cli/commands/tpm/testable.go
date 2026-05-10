@@ -18,9 +18,8 @@ import (
 	"fmt"
 	"os"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+	idevidsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/idevid"
 )
 
 // BaseCommandInterface defines the interface for BaseCommand to enable testing
@@ -32,9 +31,9 @@ type BaseCommandInterface interface {
 	Flags() *cli.CommonFlags
 }
 
-// IDevIDClientProvider provides access to the IDevID client
+// IDevIDClientProvider provides access to the IDevID SDK client
 type IDevIDClientProvider interface {
-	IDevID() platformv1.IDevIDServiceClient
+	IDevID() *idevidsvc.Client
 }
 
 // baseCommandAdapter wraps cli.BaseCommand to implement BaseCommandInterface
@@ -43,7 +42,7 @@ type baseCommandAdapter struct {
 }
 
 func (b *baseCommandAdapter) Client() IDevIDClientProvider {
-	return &clientAdapter{client: b.base.Client()}
+	return &clientAdapter{base: b.base}
 }
 
 func (b *baseCommandAdapter) Printer() *cli.Printer {
@@ -62,52 +61,15 @@ func (b *baseCommandAdapter) Flags() *cli.CommonFlags {
 	return b.base.Flags()
 }
 
-// clientAdapter wraps platform.Client to implement IDevIDClientProvider
+// clientAdapter wraps the platform client to provide an IDevID SDK client
 type clientAdapter struct {
-	client platform.Client
-}
-
-func (c *clientAdapter) IDevID() platformv1.IDevIDServiceClient {
-	return c.client.IDevID()
-}
-
-// =============================================================================
-// TPM Service Interface (for TPMService commands)
-// =============================================================================
-
-// TPMBaseCommandInterface defines the interface for TPM service commands
-type TPMBaseCommandInterface interface {
-	TPMClient() platformv1.TPMServiceClient
-	Printer() *cli.Printer
-	Context() context.Context
-	Close() error
-	Flags() *cli.CommonFlags
-}
-
-// tpmBaseCommandAdapter wraps cli.BaseCommand to implement TPMBaseCommandInterface
-type tpmBaseCommandAdapter struct {
 	base *cli.BaseCommand
 }
 
-func (b *tpmBaseCommandAdapter) TPMClient() platformv1.TPMServiceClient {
-	return b.base.Client().TPM()
+func (c *clientAdapter) IDevID() *idevidsvc.Client {
+	return idevidsvc.NewClientFromGRPC(c.base.Client().IDevID())
 }
 
-func (b *tpmBaseCommandAdapter) Printer() *cli.Printer {
-	return b.base.Printer()
-}
-
-func (b *tpmBaseCommandAdapter) Context() context.Context {
-	return b.base.Context()
-}
-
-func (b *tpmBaseCommandAdapter) Close() error {
-	return b.base.Close()
-}
-
-func (b *tpmBaseCommandAdapter) Flags() *cli.CommonFlags {
-	return b.base.Flags()
-}
 
 // =============================================================================
 // Testable IDevID Functions
@@ -122,31 +84,10 @@ func runIDevIDGenerateWithClient(base BaseCommandInterface, algorithm string, ov
 		return err
 	}
 
-	req := &platformv1.GenerateIDevIDRequest{
-		Config: &platformv1.IDevIDConfig{
-			Algorithm: alg,
-			Overwrite: overwrite,
-		},
-	}
-
 	ctx := base.Context()
-	resp, err := base.Client().IDevID().GenerateIDevID(ctx, req)
+	info, err := base.Client().IDevID().GenerateIDevIDDomain(ctx, alg, overwrite)
 	if err != nil {
 		return ErrGenerateIDevIDFailed{Reason: err.Error()}
-	}
-
-	if resp.Status == nil || !resp.Status.Success {
-		msg := "unknown error"
-		if resp.Status != nil && resp.Status.Message != "" {
-			msg = resp.Status.Message
-		}
-		return ErrGenerateIDevIDFailed{Reason: msg}
-	}
-
-	// Fetch key info after successful generation
-	infoResp, err := base.Client().IDevID().GetIDevIDInfo(ctx, &platformv1.GetIDevIDInfoRequest{})
-	if err != nil {
-		return ErrGetIDevIDInfoFailed{Reason: err.Error()}
 	}
 
 	printer := base.Printer()
@@ -154,13 +95,13 @@ func runIDevIDGenerateWithClient(base BaseCommandInterface, algorithm string, ov
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		output := buildGenerateKeyOutput(infoResp.KeyInfo, algorithm)
+		output := buildGenerateKeyOutput(info, algorithm)
 		return printer.Print(output)
 
 	case cli.OutputFormatTable:
 		printer.PrintSuccess("IDevID key generated successfully")
 		fmt.Println()
-		printStatusDetails(printer, resp.Status, algorithm)
+		printer.PrintKeyValue("Algorithm", algorithm)
 		return nil
 
 	default:
@@ -173,26 +114,22 @@ func runIDevIDInfoWithClient(base BaseCommandInterface) error {
 	defer base.Close()
 
 	ctx := base.Context()
-	resp, err := base.Client().IDevID().GetIDevIDInfo(ctx, &platformv1.GetIDevIDInfoRequest{})
+	info, err := base.Client().IDevID().GetIDevIDInfoDomain(ctx)
 	if err != nil {
 		return ErrGetIDevIDInfoFailed{Reason: err.Error()}
-	}
-
-	if resp.KeyInfo == nil {
-		return ErrIDevIDNotFound{}
 	}
 
 	printer := base.Printer()
 	flags := base.Flags()
 
-	output := buildKeyInfoOutput(resp.KeyInfo)
+	output := buildKeyInfoOutput(info)
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
 		return printer.Print(output)
 
 	case cli.OutputFormatTable:
-		printKeyInfoDetails(printer, resp.KeyInfo, "IDevID")
+		printKeyInfoDetails(printer, info, "IDevID")
 		return nil
 
 	default:
@@ -205,7 +142,7 @@ func runIDevIDDeleteWithClient(base BaseCommandInterface) error {
 	defer base.Close()
 
 	ctx := base.Context()
-	resp, err := base.Client().IDevID().DeleteIDevID(ctx, &platformv1.DeleteIDevIDRequest{})
+	deleted, message, err := base.Client().IDevID().DeleteIDevIDDomain(ctx)
 	if err != nil {
 		return ErrDeleteIDevIDFailed{Reason: err.Error()}
 	}
@@ -213,11 +150,6 @@ func runIDevIDDeleteWithClient(base BaseCommandInterface) error {
 	printer := base.Printer()
 	flags := base.Flags()
 
-	deleted := resp.Status != nil && resp.Status.Success
-	message := ""
-	if resp.Status != nil {
-		message = resp.Status.Message
-	}
 	output := map[string]interface{}{
 		"deleted": deleted,
 		"message": message,
@@ -248,7 +180,7 @@ func runIDevIDDeleteWithClient(base BaseCommandInterface) error {
 func runIDevIDCSRWithClient(base BaseCommandInterface, cn, org, country, state, locality, orgUnit string) error {
 	defer base.Close()
 
-	template := &platformv1.CSRTemplate{
+	template := &idevidsvc.CSRTemplate{
 		CommonName:         cn,
 		Organization:       org,
 		Country:            country,
@@ -257,12 +189,8 @@ func runIDevIDCSRWithClient(base BaseCommandInterface, cn, org, country, state, 
 		OrganizationalUnit: orgUnit,
 	}
 
-	req := &platformv1.CreateIDevIDCSRRequest{
-		Template: template,
-	}
-
 	ctx := base.Context()
-	resp, err := base.Client().IDevID().CreateIDevIDCSR(ctx, req)
+	csrPEM, err := base.Client().IDevID().CreateIDevIDCSRDomain(ctx, template)
 	if err != nil {
 		return ErrCreateIDevIDCSRFailed{Reason: err.Error()}
 	}
@@ -271,7 +199,7 @@ func runIDevIDCSRWithClient(base BaseCommandInterface, cn, org, country, state, 
 	flags := base.Flags()
 
 	output := map[string]interface{}{
-		"csr_pem": resp.CsrPem,
+		"csr_pem": csrPEM,
 	}
 
 	switch flags.OutputFormat {
@@ -281,7 +209,7 @@ func runIDevIDCSRWithClient(base BaseCommandInterface, cn, org, country, state, 
 	case cli.OutputFormatTable:
 		printer.PrintSuccess("IDevID CSR created successfully")
 		fmt.Println()
-		fmt.Print(string(resp.CsrPem))
+		fmt.Print(string(csrPEM))
 		return nil
 
 	default:
@@ -298,12 +226,8 @@ func runIDevIDInstallWithClient(base BaseCommandInterface, certFile string) erro
 		return ErrInstallIDevIDCertificateFailed{Reason: fmt.Sprintf("failed to read certificate file: %v", err)}
 	}
 
-	req := &platformv1.InstallIDevIDCertificateRequest{
-		CertificatePem: certPEM,
-	}
-
 	ctx := base.Context()
-	resp, err := base.Client().IDevID().InstallIDevIDCertificate(ctx, req)
+	installed, message, err := base.Client().IDevID().InstallIDevIDCertificateDomain(ctx, certPEM)
 	if err != nil {
 		return ErrInstallIDevIDCertificateFailed{Reason: err.Error()}
 	}
@@ -311,11 +235,6 @@ func runIDevIDInstallWithClient(base BaseCommandInterface, certFile string) erro
 	printer := base.Printer()
 	flags := base.Flags()
 
-	installed := resp.Status != nil && resp.Status.Success
-	message := ""
-	if resp.Status != nil {
-		message = resp.Status.Message
-	}
 	output := map[string]interface{}{
 		"installed": installed,
 		"message":   message,
@@ -347,26 +266,22 @@ func runIDevIDCertWithClient(base BaseCommandInterface) error {
 	defer base.Close()
 
 	ctx := base.Context()
-	resp, err := base.Client().IDevID().GetIDevIDCertificate(ctx, &platformv1.GetIDevIDCertificateRequest{})
+	cert, err := base.Client().IDevID().GetIDevIDCertificateDomain(ctx)
 	if err != nil {
 		return ErrGetIDevIDCertificateFailed{Reason: err.Error()}
-	}
-
-	if resp.Certificate == nil {
-		return ErrIDevIDCertificateNotFound{}
 	}
 
 	printer := base.Printer()
 	flags := base.Flags()
 
-	output := buildCertificateOutput(resp.Certificate)
+	output := buildCertificateOutput(cert)
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
 		return printer.Print(output)
 
 	case cli.OutputFormatTable:
-		printCertificateDetails(printer, resp.Certificate, "IDevID")
+		printCertificateDetails(printer, cert, "IDevID")
 		return nil
 
 	default:
@@ -387,31 +302,10 @@ func runIAKGenerateWithClient(base BaseCommandInterface, algorithm string, overw
 		return err
 	}
 
-	req := &platformv1.GenerateIAKRequest{
-		Config: &platformv1.IAKConfig{
-			Algorithm: alg,
-			Overwrite: overwrite,
-		},
-	}
-
 	ctx := base.Context()
-	resp, err := base.Client().IDevID().GenerateIAK(ctx, req)
+	info, err := base.Client().IDevID().GenerateIAKDomain(ctx, alg, overwrite)
 	if err != nil {
 		return ErrGenerateIAKFailed{Reason: err.Error()}
-	}
-
-	if resp.Status == nil || !resp.Status.Success {
-		msg := "unknown error"
-		if resp.Status != nil && resp.Status.Message != "" {
-			msg = resp.Status.Message
-		}
-		return ErrGenerateIAKFailed{Reason: msg}
-	}
-
-	// Fetch key info after successful generation
-	infoResp, err := base.Client().IDevID().GetIAKInfo(ctx, &platformv1.GetIAKInfoRequest{})
-	if err != nil {
-		return ErrGetIAKInfoFailed{Reason: err.Error()}
 	}
 
 	printer := base.Printer()
@@ -419,13 +313,13 @@ func runIAKGenerateWithClient(base BaseCommandInterface, algorithm string, overw
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		output := buildGenerateKeyOutput(infoResp.KeyInfo, algorithm)
+		output := buildGenerateKeyOutput(info, algorithm)
 		return printer.Print(output)
 
 	case cli.OutputFormatTable:
 		printer.PrintSuccess("IAK key generated successfully")
 		fmt.Println()
-		printStatusDetails(printer, resp.Status, algorithm)
+		printer.PrintKeyValue("Algorithm", algorithm)
 		return nil
 
 	default:
@@ -438,26 +332,22 @@ func runIAKInfoWithClient(base BaseCommandInterface) error {
 	defer base.Close()
 
 	ctx := base.Context()
-	resp, err := base.Client().IDevID().GetIAKInfo(ctx, &platformv1.GetIAKInfoRequest{})
+	info, err := base.Client().IDevID().GetIAKInfoDomain(ctx)
 	if err != nil {
 		return ErrGetIAKInfoFailed{Reason: err.Error()}
-	}
-
-	if resp.KeyInfo == nil {
-		return ErrIAKNotFound{}
 	}
 
 	printer := base.Printer()
 	flags := base.Flags()
 
-	output := buildKeyInfoOutput(resp.KeyInfo)
+	output := buildKeyInfoOutput(info)
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
 		return printer.Print(output)
 
 	case cli.OutputFormatTable:
-		printKeyInfoDetails(printer, resp.KeyInfo, "IAK")
+		printKeyInfoDetails(printer, info, "IAK")
 		return nil
 
 	default:
@@ -470,7 +360,7 @@ func runIAKDeleteWithClient(base BaseCommandInterface) error {
 	defer base.Close()
 
 	ctx := base.Context()
-	resp, err := base.Client().IDevID().DeleteIAK(ctx, &platformv1.DeleteIAKRequest{})
+	deleted, message, err := base.Client().IDevID().DeleteIAKDomain(ctx)
 	if err != nil {
 		return ErrDeleteIAKFailed{Reason: err.Error()}
 	}
@@ -478,11 +368,6 @@ func runIAKDeleteWithClient(base BaseCommandInterface) error {
 	printer := base.Printer()
 	flags := base.Flags()
 
-	deleted := resp.Status != nil && resp.Status.Success
-	message := ""
-	if resp.Status != nil {
-		message = resp.Status.Message
-	}
 	output := map[string]interface{}{
 		"deleted": deleted,
 		"message": message,
@@ -513,7 +398,7 @@ func runIAKDeleteWithClient(base BaseCommandInterface) error {
 func runIAKCSRWithClient(base BaseCommandInterface, cn, org, country, state, locality, orgUnit string) error {
 	defer base.Close()
 
-	template := &platformv1.CSRTemplate{
+	template := &idevidsvc.CSRTemplate{
 		CommonName:         cn,
 		Organization:       org,
 		Country:            country,
@@ -522,12 +407,8 @@ func runIAKCSRWithClient(base BaseCommandInterface, cn, org, country, state, loc
 		OrganizationalUnit: orgUnit,
 	}
 
-	req := &platformv1.CreateIAKCSRRequest{
-		Template: template,
-	}
-
 	ctx := base.Context()
-	resp, err := base.Client().IDevID().CreateIAKCSR(ctx, req)
+	csrPEM, err := base.Client().IDevID().CreateIAKCSRDomain(ctx, template)
 	if err != nil {
 		return ErrCreateIAKCSRFailed{Reason: err.Error()}
 	}
@@ -536,7 +417,7 @@ func runIAKCSRWithClient(base BaseCommandInterface, cn, org, country, state, loc
 	flags := base.Flags()
 
 	output := map[string]interface{}{
-		"csr_pem": resp.CsrPem,
+		"csr_pem": csrPEM,
 	}
 
 	switch flags.OutputFormat {
@@ -546,7 +427,7 @@ func runIAKCSRWithClient(base BaseCommandInterface, cn, org, country, state, loc
 	case cli.OutputFormatTable:
 		printer.PrintSuccess("IAK CSR created successfully")
 		fmt.Println()
-		fmt.Print(string(resp.CsrPem))
+		fmt.Print(string(csrPEM))
 		return nil
 
 	default:
@@ -563,12 +444,8 @@ func runIAKInstallWithClient(base BaseCommandInterface, certFile string) error {
 		return ErrInstallIAKCertificateFailed{Reason: fmt.Sprintf("failed to read certificate file: %v", err)}
 	}
 
-	req := &platformv1.InstallIAKCertificateRequest{
-		CertificatePem: certPEM,
-	}
-
 	ctx := base.Context()
-	resp, err := base.Client().IDevID().InstallIAKCertificate(ctx, req)
+	installed, message, err := base.Client().IDevID().InstallIAKCertificateDomain(ctx, certPEM)
 	if err != nil {
 		return ErrInstallIAKCertificateFailed{Reason: err.Error()}
 	}
@@ -576,11 +453,6 @@ func runIAKInstallWithClient(base BaseCommandInterface, certFile string) error {
 	printer := base.Printer()
 	flags := base.Flags()
 
-	installed := resp.Status != nil && resp.Status.Success
-	message := ""
-	if resp.Status != nil {
-		message = resp.Status.Message
-	}
 	output := map[string]interface{}{
 		"installed": installed,
 		"message":   message,
@@ -612,26 +484,22 @@ func runIAKCertWithClient(base BaseCommandInterface) error {
 	defer base.Close()
 
 	ctx := base.Context()
-	resp, err := base.Client().IDevID().GetIAKCertificate(ctx, &platformv1.GetIAKCertificateRequest{})
+	cert, err := base.Client().IDevID().GetIAKCertificateDomain(ctx)
 	if err != nil {
 		return ErrGetIAKCertificateFailed{Reason: err.Error()}
-	}
-
-	if resp.Certificate == nil {
-		return ErrIAKCertificateNotFound{}
 	}
 
 	printer := base.Printer()
 	flags := base.Flags()
 
-	output := buildCertificateOutput(resp.Certificate)
+	output := buildCertificateOutput(cert)
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
 		return printer.Print(output)
 
 	case cli.OutputFormatTable:
-		printCertificateDetails(printer, resp.Certificate, "IAK")
+		printCertificateDetails(printer, cert, "IAK")
 		return nil
 
 	default:
@@ -648,7 +516,7 @@ func runFlushWithClient(base BaseCommandInterface) error {
 	defer base.Close()
 
 	ctx := base.Context()
-	resp, err := base.Client().IDevID().FlushTransientContexts(ctx, &platformv1.FlushTransientContextsRequest{})
+	flushedCount, message, err := base.Client().IDevID().FlushTransientContextsDomain(ctx)
 	if err != nil {
 		return ErrFlushFailed{Reason: err.Error()}
 	}
@@ -657,8 +525,8 @@ func runFlushWithClient(base BaseCommandInterface) error {
 	flags := base.Flags()
 
 	output := map[string]interface{}{
-		"flushed_count": resp.FlushedCount,
-		"message":       resp.Status.GetMessage(),
+		"flushed_count": flushedCount,
+		"message":       message,
 	}
 
 	switch flags.OutputFormat {
@@ -666,7 +534,7 @@ func runFlushWithClient(base BaseCommandInterface) error {
 		return printer.Print(output)
 
 	case cli.OutputFormatTable:
-		printer.PrintSuccess(fmt.Sprintf("Flushed %d transient TPM contexts", resp.FlushedCount))
+		printer.PrintSuccess(fmt.Sprintf("Flushed %d transient TPM contexts", flushedCount))
 		return nil
 
 	default:
@@ -679,7 +547,7 @@ func runDeviceAttributesWithClient(base BaseCommandInterface) error {
 	defer base.Close()
 
 	ctx := base.Context()
-	resp, err := base.Client().IDevID().GetDeviceAttributes(ctx, &platformv1.GetDeviceAttributesRequest{})
+	attrs, err := base.Client().IDevID().GetDeviceAttributesDomain(ctx)
 	if err != nil {
 		return ErrGetDeviceAttributesFailed{Reason: err.Error()}
 	}
@@ -687,15 +555,10 @@ func runDeviceAttributesWithClient(base BaseCommandInterface) error {
 	printer := base.Printer()
 	flags := base.Flags()
 
-	attrs := resp.GetAttributes()
-	if attrs == nil {
-		return ErrGetDeviceAttributesFailed{Reason: "no attributes returned"}
-	}
-
 	output := map[string]interface{}{
-		"manufacturer": attrs.GetTpmManufacturer(),
-		"model":        attrs.GetTpmModel(),
-		"version":      attrs.GetTpmVersion(),
+		"manufacturer": attrs.TPMManufacturer,
+		"model":        attrs.TPMModel,
+		"version":      attrs.TPMVersion,
 	}
 
 	switch flags.OutputFormat {
@@ -703,13 +566,13 @@ func runDeviceAttributesWithClient(base BaseCommandInterface) error {
 		return printer.Print(output)
 
 	case cli.OutputFormatTable:
-		printer.PrintKeyValue("TPM Manufacturer", attrs.GetTpmManufacturer())
-		printer.PrintKeyValue("TPM Model", attrs.GetTpmModel())
-		printer.PrintKeyValue("TPM Version", attrs.GetTpmVersion())
-		printer.PrintKeyValue("Platform Manufacturer", attrs.GetPlatformManufacturer())
-		printer.PrintKeyValue("Platform Model", attrs.GetPlatformModel())
-		printer.PrintKeyValue("Platform Version", attrs.GetPlatformVersion())
-		printer.PrintKeyValue("Platform Serial", attrs.GetPlatformSerial())
+		printer.PrintKeyValue("TPM Manufacturer", attrs.TPMManufacturer)
+		printer.PrintKeyValue("TPM Model", attrs.TPMModel)
+		printer.PrintKeyValue("TPM Version", attrs.TPMVersion)
+		printer.PrintKeyValue("Platform Manufacturer", attrs.PlatformManufacturer)
+		printer.PrintKeyValue("Platform Model", attrs.PlatformModel)
+		printer.PrintKeyValue("Platform Version", attrs.PlatformVersion)
+		printer.PrintKeyValue("Platform Serial", attrs.PlatformSerial)
 		return nil
 
 	default:

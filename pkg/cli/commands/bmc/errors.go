@@ -328,3 +328,98 @@ func (e ErrBMCConsoleSendWrite) Error() string {
 }
 
 func (e ErrBMCConsoleSendWrite) Unwrap() error { return e.Cause }
+
+// =============================================================================
+// Certificate management errors
+// =============================================================================
+
+// ErrCertFileRequired is returned when the --cert flag is not provided.
+type ErrCertFileRequired struct{}
+
+func (e ErrCertFileRequired) Error() string {
+	return "bmc: --cert is required"
+}
+
+// ErrKeyFileRequired is returned when the --key flag is not provided.
+type ErrKeyFileRequired struct{}
+
+func (e ErrKeyFileRequired) Error() string {
+	return "bmc: --key is required"
+}
+
+// ErrCertFileReadFailed is returned when the certificate file cannot be read.
+type ErrCertFileReadFailed struct {
+	Path  string
+	Cause error
+}
+
+func (e ErrCertFileReadFailed) Error() string {
+	return "bmc: failed to read certificate file " + e.Path + ": " + e.Cause.Error()
+}
+
+func (e ErrCertFileReadFailed) Unwrap() error { return e.Cause }
+
+// ErrKeyFileReadFailed is returned when the key file cannot be read.
+type ErrKeyFileReadFailed struct {
+	Path  string
+	Cause error
+}
+
+func (e ErrKeyFileReadFailed) Error() string {
+	return "bmc: failed to read key file " + e.Path + ": " + e.Cause.Error()
+}
+
+func (e ErrKeyFileReadFailed) Unwrap() error { return e.Cause }
+
+// ErrBMCClientNotInitialized is returned when the BMC gRPC client is nil.
+type ErrBMCClientNotInitialized struct{}
+
+func (e ErrBMCClientNotInitialized) Error() string {
+	return "bmc: BMC service client not initialized"
+}
+
+// =============================================================================
+// User management errors
+// =============================================================================
+
+// ErrUsernameRequired is returned when the --username flag is not provided.
+type ErrUsernameRequired struct{}
+
+func (e ErrUsernameRequired) Error() string {
+	return "bmc: --username is required"
+}
+
+// ErrRoleRequired is returned when the --role flag is not provided.
+type ErrRoleRequired struct{}
+
+func (e ErrRoleRequired) Error() string {
+	return "bmc: --role is required"
+}
+
+// ErrInvalidRole is returned when an invalid role/privilege is specified.
+type ErrInvalidRole struct {
+	Role string
+}
+
+func (e ErrInvalidRole) Error() string {
+	return fmt.Sprintf("bmc: invalid role %q (valid: administrator, operator, user, callback, no-access)", e.Role)
+}
+
+// ErrSlotRequired is returned when the --slot flag is not provided.
+type ErrSlotRequired struct{}
+
+func (e ErrSlotRequired) Error() string {
+	return "bmc: --slot is required"
+}
+
+// ErrProfileIDParseFailed is returned when the profile ID cannot be parsed as uint64.
+type ErrProfileIDParseFailed struct {
+	Value string
+	Cause error
+}
+
+func (e ErrProfileIDParseFailed) Error() string {
+	return "bmc: invalid profile-id " + strconv.Quote(e.Value) + ": " + e.Cause.Error()
+}
+
+func (e ErrProfileIDParseFailed) Unwrap() error { return e.Cause }

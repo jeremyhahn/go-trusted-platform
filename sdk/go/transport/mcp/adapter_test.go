@@ -246,7 +246,7 @@ func TestMCPClientConn_Invoke_Closed(t *testing.T) {
 
 	conn := &mcpClientConn{adapter: a}
 
-	err := conn.Invoke(context.Background(), "/platformv1.PlatformDaemon/Health", nil, nil)
+	err := conn.Invoke(context.Background(), "/platform.v1.PlatformDaemon/GetHealth", nil, nil)
 	if err == nil {
 		t.Fatal("Invoke() should return error when closed")
 	}
@@ -268,7 +268,7 @@ func TestMCPClientConn_Invoke_NilClient(t *testing.T) {
 
 	conn := &mcpClientConn{adapter: a}
 
-	err := conn.Invoke(context.Background(), "/platformv1.PlatformDaemon/Health", nil, nil)
+	err := conn.Invoke(context.Background(), "/platform.v1.PlatformDaemon/GetHealth", nil, nil)
 	if err == nil {
 		t.Fatal("Invoke() should return error with nil client")
 	}
@@ -341,9 +341,9 @@ func TestGRPCMethodToMCPToolMap_Health(t *testing.T) {
 		method   string
 		expected string
 	}{
-		{"/platformv1.PlatformDaemon/Health", "platform.health"},
-		{"/platformv1.PlatformDaemon/Liveness", "platform.liveness"},
-		{"/platformv1.PlatformDaemon/Readiness", "platform.readiness"},
+		{"/platform.v1.PlatformDaemon/GetHealth", "platform_health"},
+		{"/platform.v1.PlatformDaemon/GetStatus", "platform_daemon_status"},
+		{"/platform.v1.PlatformDaemon/GetVersion", "platform_daemon_version"},
 	}
 
 	for _, tt := range tests {
@@ -364,13 +364,13 @@ func TestGRPCMethodToMCPToolMap_CA(t *testing.T) {
 		method   string
 		expected string
 	}{
-		{"/platformv1.CAService/GetInfo", "ca.info"},
-		{"/platformv1.CAService/Issue", "ca.issue"},
-		{"/platformv1.CAService/Revoke", "ca.revoke"},
-		{"/platformv1.CAService/Renew", "ca.renew"},
-		{"/platformv1.CAService/Verify", "ca.verify"},
-		{"/platformv1.CAService/GetCRL", "ca.crl"},
-		{"/platformv1.CAService/GetBundle", "ca.bundle"},
+		{"/platform.v1.CAService/GetCAInfo", "ca_info"},
+		{"/platform.v1.CAService/IssueCertificate", "ca_issue"},
+		{"/platform.v1.CAService/RevokeCertificate", "ca_revoke"},
+		{"/platform.v1.CAService/RenewCertificate", "ca_renew"},
+		{"/platform.v1.CAService/VerifyCertificate", "ca_verify"},
+		{"/platform.v1.CAService/GetCRL", "ca_crl"},
+		{"/platform.v1.CAService/GetCABundle", "ca_bundle"},
 	}
 
 	for _, tt := range tests {
@@ -391,11 +391,11 @@ func TestGRPCMethodToMCPToolMap_KMS(t *testing.T) {
 		method   string
 		expected string
 	}{
-		{"/platformv1.KeyManagementService/CreateKey", "kms.key.create"},
-		{"/platformv1.KeyManagementService/Encrypt", "kms.encrypt"},
-		{"/platformv1.KeyManagementService/Decrypt", "kms.decrypt"},
-		{"/platformv1.KeyManagementService/Sign", "kms.sign"},
-		{"/platformv1.KeyManagementService/Verify", "kms.verify"},
+		{"/platform.v1.KeyManagementService/GenerateKey", "kms_create_key"},
+		{"/platform.v1.KeyManagementService/Encrypt", "kms_encrypt"},
+		{"/platform.v1.KeyManagementService/Decrypt", "kms_decrypt"},
+		{"/platform.v1.KeyManagementService/Sign", "kms_sign"},
+		{"/platform.v1.KeyManagementService/Verify", "kms_verify"},
 	}
 
 	for _, tt := range tests {
@@ -416,13 +416,13 @@ func TestGRPCMethodToMCPToolMap_VTPM(t *testing.T) {
 		method   string
 		expected string
 	}{
-		{"/platformv1.VTPMService/Create", "vtpm.create"},
-		{"/platformv1.VTPMService/Delete", "vtpm.delete"},
-		{"/platformv1.VTPMService/Start", "vtpm.start"},
-		{"/platformv1.VTPMService/Stop", "vtpm.stop"},
-		{"/platformv1.VTPMService/Quote", "vtpm.quote"},
-		{"/platformv1.VTPMService/Seal", "vtpm.seal"},
-		{"/platformv1.VTPMService/Unseal", "vtpm.unseal"},
+		{"/platform.v1.VTPMInstanceService/CreateInstance", "vtpm_create"},
+		{"/platform.v1.VTPMInstanceService/DeleteInstance", "vtpm_delete"},
+		{"/platform.v1.VTPMInstanceService/StartInstance", "vtpm_start"},
+		{"/platform.v1.VTPMInstanceService/StopInstance", "vtpm_stop"},
+		{"/platform.v1.VTPMService/QuoteVTPM", "vtpm_quote"},
+		{"/platform.v1.VTPMService/SealVTPM", "vtpm_seal"},
+		{"/platform.v1.VTPMService/UnsealVTPM", "vtpm_unseal"},
 	}
 
 	for _, tt := range tests {

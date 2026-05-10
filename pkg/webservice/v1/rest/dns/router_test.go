@@ -45,7 +45,7 @@ func TestDNSRouter_RegisterRoutes(t *testing.T) {
 	dnsRouter := NewDNSRouter(logger, service, writer)
 
 	router := mux.NewRouter()
-	dnsRouter.RegisterRoutes(router)
+	dnsRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	// Test that routes are registered by walking the router
 	routeCount := 0
@@ -66,7 +66,7 @@ func TestDNSRouter_ZoneRoutes(t *testing.T) {
 	dnsRouter := NewDNSRouter(logger, service, writer)
 
 	router := mux.NewRouter()
-	dnsRouter.RegisterRoutes(router)
+	dnsRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	tests := []struct {
 		name   string
@@ -98,7 +98,7 @@ func TestDNSRouter_RecordRoutes(t *testing.T) {
 	dnsRouter := NewDNSRouter(logger, service, writer)
 
 	router := mux.NewRouter()
-	dnsRouter.RegisterRoutes(router)
+	dnsRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	tests := []struct {
 		name   string
@@ -128,7 +128,7 @@ func TestDNSRouter_DNSSECRoutes(t *testing.T) {
 	dnsRouter := NewDNSRouter(logger, service, writer)
 
 	router := mux.NewRouter()
-	dnsRouter.RegisterRoutes(router)
+	dnsRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	tests := []struct {
 		name   string
@@ -157,7 +157,7 @@ func TestDNSRouter_RegistrationRoutes(t *testing.T) {
 	dnsRouter := NewDNSRouter(logger, service, writer)
 
 	router := mux.NewRouter()
-	dnsRouter.RegisterRoutes(router)
+	dnsRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/dns/register", nil)
 
@@ -173,7 +173,7 @@ func TestDNSRouter_MethodNotAllowed(t *testing.T) {
 	dnsRouter := NewDNSRouter(logger, service, writer)
 
 	router := mux.NewRouter()
-	dnsRouter.RegisterRoutes(router)
+	dnsRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	// Test that incorrect methods don't match
 	tests := []struct {

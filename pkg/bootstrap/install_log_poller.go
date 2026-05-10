@@ -49,18 +49,32 @@ func (r *InstallLogResult) Success() bool {
 	return r.Found && r.ExitCode == 0
 }
 
-// InstallLogPoller watches the pxeboot HTTP server's /installs/{hostname}/
+// InstallLogPoller watches the pxeboot HTTP server's /installs/{key}/
 // forensic sink for a specific node's install.log. A log upload is
 // accepted only when its server-reported Last-Modified timestamp is at
 // or after the poller's Since value; this rejects stale logs from prior
 // runs of the same host without requiring a DELETE-before-install cycle.
+//
+// Probe keys are tried in this order on every tick:
+//  1. /installs/mac/<mac>/install.log for each MAC in MACs. MAC is the
+//     most reliable match because the live-ISO environment knows its own
+//     MAC from /sys/class/net and the orchestrator knows each node's MAC
+//     from bootstrap.yaml — no ISO-level customization needed.
+//  2. /installs/<hostname>/install.log — fallback for installers/ISOs
+//     that pre-date the MAC-based upload path.
 type InstallLogPoller struct {
 	// BaseURL is the HTTP base of the pxeboot container, e.g.
 	// "http://198.18.1.91:8080". No trailing slash.
 	BaseURL string
 	// Hostname is the sanitized hostname key used in the upload path.
-	// Must match the hostname the installer will use when PUTing.
+	// Kept for fallback / human-readable URLs; prefer MACs when set.
 	Hostname string
+	// MACs lists the node's known NIC MAC addresses. When non-empty,
+	// the poller probes /installs/mac/<normalized-mac>/install.log for
+	// each MAC before falling back to the hostname path. The installer
+	// uploads under its primary interface MAC to survive the generic
+	// "server" hostname baked into shared ISOs.
+	MACs []string
 	// Since filters out stale log uploads from prior runs. When set,
 	// the poller only accepts logs whose Last-Modified header is at
 	// or after this timestamp. When zero, any existing log is accepted
@@ -93,19 +107,20 @@ func (p *InstallLogPoller) Wait(ctx context.Context) (*InstallLogResult, error) 
 		logger = slog.Default()
 	}
 
-	url := strings.TrimRight(p.BaseURL, "/") + "/installs/" + p.Hostname + "/install.log"
+	base := strings.TrimRight(p.BaseURL, "/")
+	urls := p.candidateURLs(base)
 
 	logger.Info("bootstrap: install-log-poller: waiting for install log upload",
 		slog.String("hostname", p.Hostname),
-		slog.String("url", url),
+		slog.Any("urls", urls),
 		slog.Duration("interval", interval))
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	// Try once immediately so a fast installer doesn't have to wait a
-	// whole interval for the first probe.
-	if res, done := p.probe(ctx, client, url, logger); done {
+	// Try all candidate URLs once immediately so a fast installer doesn't
+	// have to wait a whole interval for the first probe.
+	if res, done := p.probeAll(ctx, client, urls, logger); done {
 		return res, nil
 	}
 
@@ -114,11 +129,67 @@ func (p *InstallLogPoller) Wait(ctx context.Context) (*InstallLogResult, error) 
 		case <-ctx.Done():
 			return &InstallLogResult{Hostname: p.Hostname, Found: false}, ctx.Err()
 		case <-ticker.C:
-			if res, done := p.probe(ctx, client, url, logger); done {
+			if res, done := p.probeAll(ctx, client, urls, logger); done {
 				return res, nil
 			}
 		}
 	}
+}
+
+// candidateURLs returns the ordered list of install-log URLs the poller
+// should try on each tick. MAC-based paths come first (most reliable),
+// then the hostname path (human-readable fallback / pre-MAC ISOs).
+func (p *InstallLogPoller) candidateURLs(base string) []string {
+	urls := make([]string, 0, len(p.MACs)+1)
+	for _, m := range p.MACs {
+		if sanitized := sanitizeMACForPath(m); sanitized != "" {
+			urls = append(urls, base+"/installs/mac/"+sanitized+"/install.log")
+		}
+	}
+	if p.Hostname != "" {
+		urls = append(urls, base+"/installs/"+p.Hostname+"/install.log")
+	}
+	return urls
+}
+
+// probeAll tries each candidate URL in order. Returns the first
+// terminal result, or (nil, false) when none of the URLs have a log
+// yet.
+func (p *InstallLogPoller) probeAll(ctx context.Context, client *http.Client, urls []string, logger *slog.Logger) (*InstallLogResult, bool) {
+	for _, url := range urls {
+		if res, done := p.probe(ctx, client, url, logger); done {
+			return res, true
+		}
+	}
+	return nil, false
+}
+
+// sanitizeMACForPath normalizes a MAC address to the URL-safe form
+// used in /installs/mac/<mac>/install.log. Lowercase, dash-separated,
+// non-hex characters stripped. "aa:BB:cc:DD:ee:ff" → "aa-bb-cc-dd-ee-ff".
+// Returns empty string when the input has no hex digits.
+func sanitizeMACForPath(mac string) string {
+	var hex strings.Builder
+	hex.Grow(12)
+	for _, r := range strings.ToLower(mac) {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f':
+			hex.WriteRune(r)
+		}
+	}
+	h := hex.String()
+	if len(h) != 12 {
+		return ""
+	}
+	var out strings.Builder
+	out.Grow(17)
+	for i := 0; i < 12; i += 2 {
+		if i > 0 {
+			out.WriteByte('-')
+		}
+		out.WriteString(h[i : i+2])
+	}
+	return out.String()
 }
 
 // probe makes a single HTTP GET against the install log URL. Returns

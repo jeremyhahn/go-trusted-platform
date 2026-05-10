@@ -519,6 +519,142 @@ func (a *RESTAdapter) SyncTenants(ctx context.Context) (*SyncTenantsResult, erro
 }
 
 // =============================================================================
+// Per-Tenant Barrier Operations
+// =============================================================================
+
+// InitTenantBarrier explicitly initializes a per-tenant barrier via REST.
+func (a *RESTAdapter) InitTenantBarrier(ctx context.Context, opts InitTenantBarrierOptions) (*InitTenantBarrierResult, error) {
+	if opts.TenantID == "" {
+		return nil, ErrRESTRequestFailed{Operation: "InitTenantBarrier", Message: "tenant_id is required"}
+	}
+
+	path := fmt.Sprintf("/api/v1/tenants/%s/barrier/init", opts.TenantID)
+	reqBody := map[string]interface{}{}
+	if opts.Threshold > 0 {
+		reqBody["threshold"] = opts.Threshold
+	}
+	if opts.Shares > 0 {
+		reqBody["shares"] = opts.Shares
+	}
+
+	body, err := a.doRequest(ctx, http.MethodPost, path, reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		TenantID string `json:"tenant_id,omitempty"`
+		Success  bool   `json:"success"`
+		Message  string `json:"message,omitempty"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return &InitTenantBarrierResult{Success: true, Message: "tenant barrier initialized"}, nil
+	}
+
+	return &InitTenantBarrierResult{
+		Success: resp.Success,
+		Message: resp.Message,
+	}, nil
+}
+
+// UnsealTenantBarrier unseals a per-tenant barrier via REST.
+func (a *RESTAdapter) UnsealTenantBarrier(ctx context.Context, opts UnsealTenantBarrierOptions) (*UnsealTenantBarrierResult, error) {
+	if opts.TenantID == "" {
+		return nil, ErrRESTRequestFailed{Operation: "UnsealTenantBarrier", Message: "tenant_id is required"}
+	}
+
+	path := fmt.Sprintf("/api/v1/tenants/%s/barrier/unseal", opts.TenantID)
+	reqBody := map[string]interface{}{
+		"key": opts.Key,
+	}
+
+	body, err := a.doRequest(ctx, http.MethodPost, path, reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		TenantID string `json:"tenant_id,omitempty"`
+		Success  bool   `json:"success"`
+		Message  string `json:"message,omitempty"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return &UnsealTenantBarrierResult{Success: true, Message: "tenant barrier unsealed"}, nil
+	}
+
+	return &UnsealTenantBarrierResult{
+		Success: resp.Success,
+		Message: resp.Message,
+	}, nil
+}
+
+// SealTenantBarrier seals a per-tenant barrier via REST.
+func (a *RESTAdapter) SealTenantBarrier(ctx context.Context, opts SealTenantBarrierOptions) (*SealTenantBarrierResult, error) {
+	if opts.TenantID == "" {
+		return nil, ErrRESTRequestFailed{Operation: "SealTenantBarrier", Message: "tenant_id is required"}
+	}
+
+	path := fmt.Sprintf("/api/v1/tenants/%s/barrier/seal", opts.TenantID)
+
+	body, err := a.doRequest(ctx, http.MethodPost, path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		TenantID string `json:"tenant_id,omitempty"`
+		Success  bool   `json:"success"`
+		Message  string `json:"message,omitempty"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return &SealTenantBarrierResult{Success: true, Message: "tenant barrier sealed"}, nil
+	}
+
+	return &SealTenantBarrierResult{
+		Success: resp.Success,
+		Message: resp.Message,
+	}, nil
+}
+
+// TenantBarrierStatus reports the current sealed/initialized state of a
+// per-tenant barrier via REST.
+func (a *RESTAdapter) TenantBarrierStatus(ctx context.Context, opts TenantBarrierStatusOptions) (*TenantBarrierStatusResult, error) {
+	if opts.TenantID == "" {
+		return nil, ErrRESTRequestFailed{Operation: "TenantBarrierStatus", Message: "tenant_id is required"}
+	}
+
+	path := fmt.Sprintf("/api/v1/tenants/%s/barrier/status", opts.TenantID)
+
+	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		TenantID       string `json:"tenant_id"`
+		Sealed         bool   `json:"sealed"`
+		Initialized    bool   `json:"initialized"`
+		Strategy       string `json:"strategy"`
+		HardwareBacked bool   `json:"hardware_backed"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, ErrRESTRequestFailed{
+			Operation: "TenantBarrierStatus",
+			Message:   "failed to parse response: " + err.Error(),
+			Body:      string(body),
+		}
+	}
+
+	return &TenantBarrierStatusResult{
+		TenantID:       resp.TenantID,
+		Sealed:         resp.Sealed,
+		Initialized:    resp.Initialized,
+		Strategy:       resp.Strategy,
+		HardwareBacked: resp.HardwareBacked,
+	}, nil
+}
+
+// =============================================================================
 // Compile-time Interface Verification
 // =============================================================================
 

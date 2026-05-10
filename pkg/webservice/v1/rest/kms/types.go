@@ -13,838 +13,448 @@
 
 package kms
 
-import "time"
+import (
+	"encoding/base64"
+	"encoding/json"
+	"time"
+)
 
-// PaginationParams contains common pagination parameters
-type PaginationParams struct {
-	Limit  int32  `json:"limit"`
-	Cursor string `json:"cursor,omitempty"`
-}
+// =============================================================================
+// Key requests / responses (SDK kms.Client)
+// =============================================================================
 
-// PaginatedResponse contains common pagination response fields
-type PaginatedResponse struct {
-	NextCursor string `json:"next_cursor,omitempty"`
-	HasMore    bool   `json:"has_more"`
-	TotalCount int32  `json:"total_count,omitempty"`
-}
-
-// SuccessResponse is a generic success response
-type SuccessResponse struct {
-	Success   bool   `json:"success"`
-	Message   string `json:"message,omitempty"`
-	Timestamp int64  `json:"timestamp,omitempty"`
-}
-
-// KeySpecRequest is the request format for key specification
-type KeySpecRequest struct {
-	Algorithm          string   `json:"algorithm"`
-	KeySize            int32    `json:"key_size,omitempty"`
-	Usage              []string `json:"usage,omitempty"`
-	Exportable         bool     `json:"exportable,omitempty"`
-	DeletionProtection bool     `json:"deletion_protection,omitempty"`
-}
-
-// GenerateKeyRequest is the request body for generating a key
+// GenerateKeyRequest is the JSON body for POST /api/v1/kms/keys.
+//
+// Two shapes are accepted:
+//
+//  1. Flat: {"name": "k", "algorithm": "aes-256-gcm", "usage": [...]}
+//  2. SDK: {"name": "k", "keySpec": {"algorithm": "AES_256", "usage": [...]}}
+//
+// The handler unifies them via Resolve() before dispatching to the
+// downstream KMS service. The flat form is the original REST contract
+// preserved by integration tests; the nested form matches the JS SDK's
+// `kms.generateKey({keySpec: {...}, name})` call.
 type GenerateKeyRequest struct {
-	KeySpec     KeySpecRequest    `json:"key_spec"`
 	Name        string            `json:"name"`
+	Algorithm   string            `json:"algorithm,omitempty"`
+	Usage       []string          `json:"usage,omitempty"`
 	Description string            `json:"description,omitempty"`
 	Tags        map[string]string `json:"tags,omitempty"`
 	Owner       string            `json:"owner,omitempty"`
+	KeySpec     *KMSKeySpec       `json:"keySpec,omitempty"`
 }
 
-// ImportKeyRequest is the request body for importing a key
+// KMSKeySpec mirrors the JS SDK KMSKeySpec used in nested GenerateKey
+// requests. Only Algorithm and Usage are honored; the remainder is kept
+// for forwards compatibility with future SDK revisions.
+type KMSKeySpec struct {
+	Algorithm string   `json:"algorithm,omitempty"`
+	Usage     []string `json:"usage,omitempty"`
+	KeySize   int      `json:"keySize,omitempty"`
+	Curve     string   `json:"curve,omitempty"`
+}
+
+// Resolve flattens the optional KeySpec nested envelope into top-level
+// Algorithm/Usage so handlers can stay agnostic of the wire shape.
+func (r *GenerateKeyRequest) Resolve() {
+	if r.KeySpec == nil {
+		return
+	}
+	if r.Algorithm == "" {
+		r.Algorithm = r.KeySpec.Algorithm
+	}
+	if len(r.Usage) == 0 {
+		r.Usage = r.KeySpec.Usage
+	}
+}
+
+// GenerateKeyResponse is the response for key generation.
+type GenerateKeyResponse struct {
+	KeyID     string `json:"key_id"`
+	Version   int    `json:"version"`
+	Algorithm string `json:"algorithm"`
+}
+
+// ImportKeyRequest is the JSON body for POST /api/v1/kms/keys/import.
 type ImportKeyRequest struct {
 	KeyMaterial   []byte            `json:"key_material"`
 	WrappingKeyID string            `json:"wrapping_key_id,omitempty"`
-	KeySpec       KeySpecRequest    `json:"key_spec"`
 	Name          string            `json:"name"`
 	Description   string            `json:"description,omitempty"`
+	Algorithm     string            `json:"algorithm"`
+	Usage         []string          `json:"usage,omitempty"`
 	Tags          map[string]string `json:"tags,omitempty"`
 }
 
-// KeyHandleResponse represents a key handle in responses
-type KeyHandleResponse struct {
-	KeyID     string `json:"key_id"`
-	Version   uint64 `json:"version"`
-	Algorithm string `json:"algorithm"`
-	Status    string `json:"status"`
-	CreatedAt int64  `json:"created_at"`
-}
-
-// RotationPolicyResponse represents rotation policy in responses
-type RotationPolicyResponse struct {
-	Enabled         bool  `json:"enabled"`
-	IntervalSeconds int64 `json:"interval_seconds,omitempty"`
-	NextRotation    int64 `json:"next_rotation,omitempty"`
-	RetainVersions  int32 `json:"retain_versions,omitempty"`
-	AutoRotate      bool  `json:"auto_rotate,omitempty"`
-}
-
-// KeyMetadataResponse represents key metadata in responses
-type KeyMetadataResponse struct {
-	KeyID              string                  `json:"key_id"`
-	Name               string                  `json:"name"`
-	Description        string                  `json:"description,omitempty"`
-	Algorithm          string                  `json:"algorithm"`
-	Status             string                  `json:"status"`
-	Usage              []string                `json:"usage,omitempty"`
-	Version            uint64                  `json:"version"`
-	Exportable         bool                    `json:"exportable"`
-	DeletionProtection bool                    `json:"deletion_protection"`
-	CreatedAt          int64                   `json:"created_at"`
-	UpdatedAt          int64                   `json:"updated_at,omitempty"`
-	LastUsedAt         int64                   `json:"last_used_at,omitempty"`
-	RotationPolicy     *RotationPolicyResponse `json:"rotation_policy,omitempty"`
-	Tags               map[string]string       `json:"tags,omitempty"`
-	Owner              string                  `json:"owner,omitempty"`
-}
-
-// GenerateKeyResponse is the response for key generation
-type GenerateKeyResponse struct {
-	Key       *KeyHandleResponse   `json:"key"`
-	Metadata  *KeyMetadataResponse `json:"metadata"`
-	Timestamp int64                `json:"timestamp"`
-}
-
-// ImportKeyResponse is the response for key import
+// ImportKeyResponse is the response from importing a key.
 type ImportKeyResponse struct {
-	Key       *KeyHandleResponse   `json:"key"`
-	Metadata  *KeyMetadataResponse `json:"metadata"`
-	Timestamp int64                `json:"timestamp"`
+	KeyID     string `json:"key_id"`
+	Version   int    `json:"version"`
+	Algorithm string `json:"algorithm"`
 }
 
-// GetKeyResponse is the response for getting a key
-type GetKeyResponse struct {
-	Key       *KeyHandleResponse   `json:"key"`
-	Metadata  *KeyMetadataResponse `json:"metadata"`
-	Timestamp int64                `json:"timestamp"`
+// KeyInfoResponse describes a single key.
+type KeyInfoResponse struct {
+	KeyID     string    `json:"key_id"`
+	Name      string    `json:"name"`
+	Algorithm string    `json:"algorithm"`
+	Version   int       `json:"version"`
+	Usage     []string  `json:"usage,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	RotatedAt time.Time `json:"rotated_at,omitempty"`
 }
 
-// ListKeysResponse is the response for listing keys
+// ListKeysResponse is the response from listing keys.
 type ListKeysResponse struct {
-	PaginatedResponse
-	Keys      []KeyHandleResponse `json:"keys"`
-	Timestamp int64               `json:"timestamp"`
+	Keys []KeyInfoResponse `json:"keys"`
 }
 
-// RotateKeyRequest is the request body for rotating a key
-type RotateKeyRequest struct {
-	RetainOldVersion bool `json:"retain_old_version,omitempty"`
-}
-
-// RotateKeyResponse is the response for key rotation
+// RotateKeyResponse is the response from key rotation.
 type RotateKeyResponse struct {
 	KeyID      string `json:"key_id"`
-	OldVersion uint64 `json:"old_version"`
-	NewVersion uint64 `json:"new_version"`
-	Timestamp  int64  `json:"timestamp"`
+	NewVersion int    `json:"new_version"`
 }
 
-// DeleteKeyRequest is the request body for deleting a key
-type DeleteKeyRequest struct {
-	PendingWindowDays int32 `json:"pending_window_days,omitempty"`
-	Force             bool  `json:"force,omitempty"`
-}
-
-// DeleteKeyResponse is the response for key deletion
-type DeleteKeyResponse struct {
-	KeyID        string `json:"key_id"`
-	Status       string `json:"status"`
-	DeletionDate int64  `json:"deletion_date,omitempty"`
-	Timestamp    int64  `json:"timestamp"`
-}
-
-// UpdateKeyStatusRequest is the request body for updating key status
+// UpdateKeyStatusRequest is the JSON body for PUT /api/v1/kms/keys/{name}/status.
 type UpdateKeyStatusRequest struct {
-	Version uint64 `json:"version,omitempty"`
+	Status  string `json:"status"`
+	Version int    `json:"version,omitempty"`
+}
+
+// UpdateKeyStatusResponse confirms a status change.
+type UpdateKeyStatusResponse struct {
+	KeyID   string `json:"key_id"`
+	Version int    `json:"version"`
 	Status  string `json:"status"`
 }
 
-// UpdateKeyStatusResponse is the response for key status update
-type UpdateKeyStatusResponse struct {
-	KeyID     string `json:"key_id"`
-	Version   uint64 `json:"version"`
-	Status    string `json:"status"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-// KeyVersionInfoResponse represents version info in responses
+// KeyVersionInfoResponse describes a single key version.
 type KeyVersionInfoResponse struct {
-	Version    uint64 `json:"version"`
-	Status     string `json:"status"`
-	Algorithm  string `json:"algorithm"`
-	CreatedAt  int64  `json:"created_at"`
-	DisabledAt int64  `json:"disabled_at,omitempty"`
+	Version    int       `json:"version"`
+	Status     string    `json:"status"`
+	Algorithm  string    `json:"algorithm"`
+	CreatedAt  time.Time `json:"created_at,omitempty"`
+	DisabledAt time.Time `json:"disabled_at,omitempty"`
 }
 
-// ListKeyVersionsResponse is the response for listing key versions
+// ListKeyVersionsResponse is the response from listing versions.
 type ListKeyVersionsResponse struct {
-	PaginatedResponse
-	KeyID     string                   `json:"key_id"`
-	Versions  []KeyVersionInfoResponse `json:"versions"`
-	Timestamp int64                    `json:"timestamp"`
-}
-
-// ExportKeyRequest is the request body for exporting a key
-type ExportKeyRequest struct {
-	WrappingKeyID     string `json:"wrapping_key_id,omitempty"`
-	WrappingAlgorithm string `json:"wrapping_algorithm,omitempty"`
-	Format            string `json:"format,omitempty"`
-	Version           uint64 `json:"version,omitempty"`
-}
-
-// ExportKeyResponse is the response for key export
-type ExportKeyResponse struct {
-	KeyID             string `json:"key_id"`
-	Format            string `json:"format"`
-	WrappingKeyID     string `json:"wrapping_key_id,omitempty"`
-	WrappingAlgorithm string `json:"wrapping_algorithm,omitempty"`
-	WrappedMaterial   []byte `json:"wrapped_material"`
-	Version           uint64 `json:"version"`
-	Timestamp         int64  `json:"timestamp"`
-}
-
-// RevokeKeyRequest is the request body for revoking a key
-type RevokeKeyRequest struct {
-	Reason string `json:"reason,omitempty"`
-}
-
-// RevokeKeyResponse is the response for key revocation
-type RevokeKeyResponse struct {
-	KeyID     string `json:"key_id"`
-	Status    string `json:"status"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-// GetKeyMetadataResponse is the response for getting key metadata
-type GetKeyMetadataResponse struct {
-	Metadata  *KeyMetadataResponse `json:"metadata"`
-	Timestamp int64                `json:"timestamp"`
-}
-
-// UpdateKeyMetadataRequest is the request body for updating key metadata
-type UpdateKeyMetadataRequest struct {
-	Name        string            `json:"name,omitempty"`
-	Description string            `json:"description,omitempty"`
-	Tags        map[string]string `json:"tags,omitempty"`
-	RemoveTags  []string          `json:"remove_tags,omitempty"`
-}
-
-// UpdateKeyMetadataResponse is the response for key metadata update
-type UpdateKeyMetadataResponse struct {
-	Metadata  *KeyMetadataResponse `json:"metadata"`
-	Timestamp int64                `json:"timestamp"`
-}
-
-// KeyPolicyRequest is the request format for key policy
-type KeyPolicyRequest struct {
-	AllowedOperations []string `json:"allowed_operations,omitempty"`
-	AllowedPrincipals []string `json:"allowed_principals,omitempty"`
-	DeniedPrincipals  []string `json:"denied_principals,omitempty"`
-	ExpiresAt         int64    `json:"expires_at,omitempty"`
-	RotationRequired  bool     `json:"rotation_required,omitempty"`
-	MaxUsageCount     uint64   `json:"max_usage_count,omitempty"`
-	RequireMFA        bool     `json:"require_mfa,omitempty"`
-}
-
-// SetKeyPolicyRequest is the request body for setting key policy
-type SetKeyPolicyRequest struct {
-	Policy KeyPolicyRequest `json:"policy"`
-}
-
-// SetKeyPolicyResponse is the response for setting key policy
-type SetKeyPolicyResponse struct {
-	KeyID         string `json:"key_id"`
-	PolicyVersion uint64 `json:"policy_version"`
-	Timestamp     int64  `json:"timestamp"`
-}
-
-// KeyPolicyResponse represents key policy in responses
-type KeyPolicyResponse struct {
-	KeyID             string   `json:"key_id"`
-	Version           uint64   `json:"version"`
-	AllowedOperations []string `json:"allowed_operations,omitempty"`
-	AllowedPrincipals []string `json:"allowed_principals,omitempty"`
-	DeniedPrincipals  []string `json:"denied_principals,omitempty"`
-	ExpiresAt         int64    `json:"expires_at,omitempty"`
-	RotationRequired  bool     `json:"rotation_required,omitempty"`
-	MaxUsageCount     uint64   `json:"max_usage_count,omitempty"`
-	RequireMFA        bool     `json:"require_mfa"`
-	UpdatedAt         int64    `json:"updated_at,omitempty"`
-}
-
-// GetKeyPolicyResponse is the response for getting key policy
-type GetKeyPolicyResponse struct {
-	Policy    *KeyPolicyResponse `json:"policy"`
-	Timestamp int64              `json:"timestamp"`
-}
-
-// ListAlgorithmsResponse is the response for listing supported algorithms
-type ListAlgorithmsResponse struct {
-	Algorithms []string `json:"algorithms"`
-	Timestamp  int64    `json:"timestamp"`
-}
-
-// SetKeySafetyRequest is the request body for setting key safety limits
-type SetKeySafetyRequest struct {
-	MaxOperations  uint64 `json:"max_operations,omitempty"`
-	MaxBytes       uint64 `json:"max_bytes,omitempty"`
-	WarningPercent int32  `json:"warning_percent,omitempty"`
-}
-
-// SetKeySafetyResponse is the response for setting key safety
-type SetKeySafetyResponse struct {
-	KeyID     string `json:"key_id"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-// ClearKeySafetyResponse is the response for clearing key safety limits
-type ClearKeySafetyResponse struct {
-	KeyID     string `json:"key_id"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-// BackendStatusResponse is the response for backend status
-type BackendStatusResponse struct {
-	BackendType  string          `json:"backend_type"`
-	Status       string          `json:"status"`
-	Device       string          `json:"device,omitempty"`
-	Region       string          `json:"region,omitempty"`
-	KeyID        string          `json:"key_id,omitempty"`
-	PCRBanks     []string        `json:"pcr_banks,omitempty"`
-	PCRRegisters []int32         `json:"pcr_registers,omitempty"`
-	Capabilities map[string]bool `json:"capabilities,omitempty"`
-	Timestamp    int64           `json:"timestamp"`
-}
-
-// BackendTestResponse is the response for backend test
-type BackendTestResponse struct {
-	Success    bool   `json:"success"`
-	DurationMs int64  `json:"duration_ms"`
-	Message    string `json:"message,omitempty"`
-	Timestamp  int64  `json:"timestamp"`
+	Versions []KeyVersionInfoResponse `json:"versions"`
 }
 
 // =============================================================================
-// Crypto Types
+// Crypto requests / responses (SDK crypto.Client)
 // =============================================================================
 
-// EncryptRequest is the request body for encryption
+// EncryptRequest is the JSON body for POST /api/v1/kms/encrypt/{name}.
 type EncryptRequest struct {
 	Plaintext []byte `json:"plaintext"`
 	Context   []byte `json:"context,omitempty"`
-	Nonce     []byte `json:"nonce,omitempty"`
 }
 
-// EncryptResponse is the response for encryption
+// EncryptResponse contains the ciphertext.
 type EncryptResponse struct {
 	KeyID      string `json:"key_id"`
-	KeyVersion uint64 `json:"key_version"`
+	Version    int    `json:"version"`
 	Ciphertext []byte `json:"ciphertext"`
-	Nonce      []byte `json:"nonce,omitempty"`
-	Timestamp  int64  `json:"timestamp"`
 }
 
-// DecryptRequest is the request body for decryption
+// DecryptRequest is the JSON body for POST /api/v1/kms/decrypt/{name}.
 type DecryptRequest struct {
 	Ciphertext []byte `json:"ciphertext"`
 	Context    []byte `json:"context,omitempty"`
-	Nonce      []byte `json:"nonce,omitempty"`
-	KeyVersion uint64 `json:"key_version,omitempty"`
+	Version    int    `json:"version,omitempty"`
 }
 
-// DecryptResponse is the response for decryption
+// DecryptResponse contains the plaintext.
 type DecryptResponse struct {
-	KeyID      string `json:"key_id"`
-	KeyVersion uint64 `json:"key_version"`
-	Plaintext  []byte `json:"plaintext"`
-	Timestamp  int64  `json:"timestamp"`
-}
-
-// SignRequest is the request body for signing
-type SignRequest struct {
-	Message       []byte `json:"message"`
-	HashAlgorithm string `json:"hash_algorithm,omitempty"`
-}
-
-// SignResponse is the response for signing
-type SignResponse struct {
-	KeyID         string `json:"key_id"`
-	KeyVersion    uint64 `json:"key_version"`
-	Signature     []byte `json:"signature"`
-	HashAlgorithm string `json:"hash_algorithm"`
-	Timestamp     int64  `json:"timestamp"`
-}
-
-// VerifyRequest is the request body for signature verification
-type VerifyRequest struct {
-	Message       []byte `json:"message"`
-	Signature     []byte `json:"signature"`
-	HashAlgorithm string `json:"hash_algorithm,omitempty"`
-	KeyVersion    uint64 `json:"key_version,omitempty"`
-}
-
-// VerifyResponse is the response for signature verification
-type VerifyResponse struct {
-	KeyID      string `json:"key_id"`
-	KeyVersion uint64 `json:"key_version"`
-	Valid      bool   `json:"valid"`
-	Timestamp  int64  `json:"timestamp"`
-}
-
-// HashRequest is the request body for hashing
-type HashRequest struct {
-	Data      []byte `json:"data"`
-	Algorithm string `json:"algorithm,omitempty"`
-}
-
-// HashResponse is the response for hashing
-type HashResponse struct {
-	Algorithm string `json:"algorithm"`
-	Hash      []byte `json:"hash"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-// HMACRequest is the request body for HMAC generation
-type HMACRequest struct {
-	Message       []byte `json:"message"`
-	HashAlgorithm string `json:"hash_algorithm,omitempty"`
-}
-
-// HMACResponse is the response for HMAC generation
-type HMACResponse struct {
-	KeyID         string `json:"key_id"`
-	KeyVersion    uint64 `json:"key_version"`
-	HMAC          []byte `json:"hmac"`
-	HashAlgorithm string `json:"hash_algorithm"`
-	Timestamp     int64  `json:"timestamp"`
-}
-
-// VerifyHMACRequest is the request body for HMAC verification
-type VerifyHMACRequest struct {
-	Message       []byte `json:"message"`
-	HMAC          []byte `json:"hmac"`
-	HashAlgorithm string `json:"hash_algorithm,omitempty"`
-	KeyVersion    uint64 `json:"key_version,omitempty"`
-}
-
-// VerifyHMACResponse is the response for HMAC verification
-type VerifyHMACResponse struct {
-	KeyID      string `json:"key_id"`
-	KeyVersion uint64 `json:"key_version"`
-	Valid      bool   `json:"valid"`
-	Timestamp  int64  `json:"timestamp"`
-}
-
-// GenerateRandomRequest is the request body for random bytes generation
-type GenerateRandomRequest struct {
-	NumBytes int32 `json:"num_bytes"`
-}
-
-// GenerateRandomResponse is the response for random bytes generation
-type GenerateRandomResponse struct {
-	RandomBytes []byte `json:"random_bytes"`
-	Timestamp   int64  `json:"timestamp"`
-}
-
-// RewrapRequest is the request body for rewrapping ciphertext
-type RewrapRequest struct {
-	Ciphertext []byte `json:"ciphertext"`
-	Context    []byte `json:"context,omitempty"`
-	Nonce      []byte `json:"nonce,omitempty"`
-}
-
-// RewrapResponse is the response for rewrapping ciphertext
-type RewrapResponse struct {
-	KeyID         string `json:"key_id"`
-	OldKeyVersion uint64 `json:"old_key_version"`
-	NewKeyVersion uint64 `json:"new_key_version"`
-	Ciphertext    []byte `json:"ciphertext"`
-	Nonce         []byte `json:"nonce,omitempty"`
-	Timestamp     int64  `json:"timestamp"`
-}
-
-// BatchEncryptItem represents a single item in a batch encrypt request
-type BatchEncryptItem struct {
 	Plaintext []byte `json:"plaintext"`
-	Context   []byte `json:"context,omitempty"`
 }
 
-// BatchEncryptResult represents a single result in a batch encrypt response
-type BatchEncryptResult struct {
-	Ciphertext []byte `json:"ciphertext,omitempty"`
-	Nonce      []byte `json:"nonce,omitempty"`
-	Error      string `json:"error,omitempty"`
+// SignRequest is the JSON body for POST /api/v1/kms/sign/{name}.
+type SignRequest struct {
+	Data    []byte `json:"data"`
+	Hash    string `json:"hash,omitempty"`
+	Version int    `json:"version,omitempty"`
 }
 
-// BatchDecryptItem represents a single item in a batch decrypt request
-type BatchDecryptItem struct {
-	Ciphertext []byte `json:"ciphertext"`
-	Context    []byte `json:"context,omitempty"`
-	Nonce      []byte `json:"nonce,omitempty"`
+// SignResponse contains the signature.
+type SignResponse struct {
+	KeyID     string `json:"key_id"`
+	Version   int    `json:"version"`
+	Signature []byte `json:"signature"`
 }
 
-// BatchDecryptResult represents a single result in a batch decrypt response
-type BatchDecryptResult struct {
-	Plaintext []byte `json:"plaintext,omitempty"`
-	Error     string `json:"error,omitempty"`
+// VerifyRequest is the JSON body for POST /api/v1/kms/verify/{name}.
+type VerifyRequest struct {
+	Data      []byte `json:"data"`
+	Signature []byte `json:"signature"`
+	Hash      string `json:"hash,omitempty"`
+	Version   int    `json:"version,omitempty"`
 }
 
-// BatchEncryptRequest is the request body for batch encryption
-type BatchEncryptRequest struct {
-	Items []BatchEncryptItem `json:"items"`
+// VerifyResponse reports whether the signature is valid.
+type VerifyResponse struct {
+	Valid bool `json:"valid"`
 }
 
-// BatchEncryptResponse is the response for batch encryption
-type BatchEncryptResponse struct {
-	KeyID      string               `json:"key_id"`
-	KeyVersion uint64               `json:"key_version"`
-	Results    []BatchEncryptResult `json:"results"`
-	Timestamp  int64                `json:"timestamp"`
+// HMACRequest is the JSON body for POST /api/v1/kms/hmac/{name}.
+type HMACRequest struct {
+	Data []byte `json:"data"`
+	Hash string `json:"hash,omitempty"`
 }
 
-// BatchDecryptRequest is the request body for batch decryption
-type BatchDecryptRequest struct {
-	Items []BatchDecryptItem `json:"items"`
+// HMACResponse contains an HMAC tag.
+type HMACResponse struct {
+	KeyID string `json:"key_id"`
+	HMAC  []byte `json:"hmac"`
 }
 
-// BatchDecryptResponse is the response for batch decryption
-type BatchDecryptResponse struct {
-	KeyID     string               `json:"key_id"`
-	Results   []BatchDecryptResult `json:"results"`
-	Timestamp int64                `json:"timestamp"`
+// VerifyHMACRequest is the JSON body for POST /api/v1/kms/hmac/{name}/verify.
+type VerifyHMACRequest struct {
+	Data []byte `json:"data"`
+	HMAC []byte `json:"hmac"`
+	Hash string `json:"hash,omitempty"`
 }
 
-// BatchRequest is a unified batch request supporting both encrypt and decrypt operations
-type BatchRequest struct {
-	Operation    string             `json:"operation"`
-	EncryptItems []BatchEncryptItem `json:"encrypt_items,omitempty"`
-	DecryptItems []BatchDecryptItem `json:"decrypt_items,omitempty"`
+// VerifyHMACResponse reports whether an HMAC matches.
+type VerifyHMACResponse struct {
+	Valid bool `json:"valid"`
 }
 
-// BatchResponse is a unified batch response
-type BatchResponse struct {
-	KeyID          string               `json:"key_id"`
-	KeyVersion     uint64               `json:"key_version,omitempty"`
-	EncryptResults []BatchEncryptResult `json:"encrypt_results,omitempty"`
-	DecryptResults []BatchDecryptResult `json:"decrypt_results,omitempty"`
-	Timestamp      int64                `json:"timestamp"`
+// HashRequest is the JSON body for POST /api/v1/kms/hash.
+type HashRequest struct {
+	Data []byte `json:"data"`
+	Hash string `json:"hash"`
+}
+
+// HashResponse contains the digest.
+type HashResponse struct {
+	Hash   string `json:"hash"`
+	Digest []byte `json:"digest"`
+}
+
+// GenerateRandomRequest is the JSON body for POST /api/v1/kms/random.
+type GenerateRandomRequest struct {
+	NumBytes int `json:"num_bytes"`
+}
+
+// GenerateRandomResponse contains random bytes.
+type GenerateRandomResponse struct {
+	Bytes []byte `json:"bytes"`
 }
 
 // =============================================================================
-// DEK Management Types
+// DEK requests / responses (SDK dek.Client)
 // =============================================================================
 
-// DEKMetadataResponse represents DEK metadata in responses
-type DEKMetadataResponse struct {
-	Path           string `json:"path"`
-	Algorithm      string `json:"algorithm"`
-	Version        uint64 `json:"version"`
-	Status         string `json:"status"`
-	IsDefault      bool   `json:"is_default"`
-	CreatedAt      int64  `json:"created_at"`
-	RotatedAt      int64  `json:"rotated_at,omitempty"`
-	UsageCount     uint64 `json:"usage_count"`
-	BytesUsed      uint64 `json:"bytes_used"`
-	MaxUsageCount  uint64 `json:"max_usage_count,omitempty"`
-	MaxBytesUsed   uint64 `json:"max_bytes_used,omitempty"`
-	WarningPercent int32  `json:"warning_percent,omitempty"`
-	Description    string `json:"description,omitempty"`
-	BackendType    string `json:"backend_type,omitempty"`
-}
-
-// CreateDEKRequest is the request body for creating a DEK
+// CreateDEKRequest is the JSON body for POST /api/v1/kms/deks.
 type CreateDEKRequest struct {
-	Path           string `json:"path"`
-	Algorithm      string `json:"algorithm,omitempty"`
-	Description    string `json:"description,omitempty"`
-	MaxOperations  uint64 `json:"max_operations,omitempty"`
-	MaxBytes       uint64 `json:"max_bytes,omitempty"`
-	WarningPercent int32  `json:"warning_percent,omitempty"`
+	Path        string `json:"path"`
+	Algorithm   string `json:"algorithm"`
+	Description string `json:"description,omitempty"`
 }
 
-// CreateDEKResponse is the response for DEK creation
+// CreateDEKResponse confirms creation.
 type CreateDEKResponse struct {
-	DEK       *DEKMetadataResponse `json:"dek"`
-	Timestamp int64                `json:"timestamp"`
+	Path      string `json:"path"`
+	Version   int    `json:"version"`
+	Algorithm string `json:"algorithm"`
 }
 
-// GetDEKResponse is the response for getting a DEK
-type GetDEKResponse struct {
-	DEK       *DEKMetadataResponse `json:"dek"`
-	Timestamp int64                `json:"timestamp"`
+// DEKInfoResponse describes a single DEK.
+type DEKInfoResponse struct {
+	Path        string    `json:"path"`
+	Algorithm   string    `json:"algorithm"`
+	Version     int       `json:"version"`
+	Status      string    `json:"status,omitempty"`
+	IsDefault   bool      `json:"is_default"`
+	CreatedAt   time.Time `json:"created_at,omitempty"`
+	RotatedAt   time.Time `json:"rotated_at,omitempty"`
+	UsageCount  uint64    `json:"usage_count,omitempty"`
+	BytesUsed   uint64    `json:"bytes_used,omitempty"`
+	Description string    `json:"description,omitempty"`
+	BackendType string    `json:"backend_type,omitempty"`
 }
 
-// ListDEKsResponse is the response for listing DEKs
+// ListDEKsResponse lists the available DEKs.
 type ListDEKsResponse struct {
-	PaginatedResponse
-	DEKs      []DEKMetadataResponse `json:"deks"`
-	Timestamp int64                 `json:"timestamp"`
+	DEKs []DEKInfoResponse `json:"deks"`
 }
 
-// RotateDEKRequest is the request body for rotating a DEK
-type RotateDEKRequest struct {
-	Background bool `json:"background,omitempty"`
-}
-
-// RotateDEKResponse is the response for DEK rotation
+// RotateDEKResponse confirms a DEK rotation.
 type RotateDEKResponse struct {
 	Path       string `json:"path"`
-	OldVersion uint64 `json:"old_version"`
-	NewVersion uint64 `json:"new_version"`
-	Timestamp  int64  `json:"timestamp"`
+	NewVersion int    `json:"new_version"`
 }
 
-// DeleteDEKRequest is the request body for deleting a DEK
-type DeleteDEKRequest struct {
-	Force     bool   `json:"force,omitempty"`
-	MigrateTo string `json:"migrate_to,omitempty"`
-}
-
-// DeleteDEKResponse is the response for DEK deletion
-type DeleteDEKResponse struct {
-	Path      string `json:"path"`
-	Deleted   bool   `json:"deleted"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-// ReencryptionProgressResponse represents reencryption progress in responses
-type ReencryptionProgressResponse struct {
-	InProgress          bool  `json:"in_progress"`
-	TotalKeys           int32 `json:"total_keys"`
-	ProcessedKeys       int32 `json:"processed_keys"`
-	FailedKeys          int32 `json:"failed_keys"`
-	StartedAt           int64 `json:"started_at,omitempty"`
-	EstimatedCompletion int64 `json:"estimated_completion,omitempty"`
-}
-
-// GetDEKStatusResponse is the response for getting DEK status
-type GetDEKStatusResponse struct {
-	DEK                  *DEKMetadataResponse          `json:"dek"`
-	ReencryptionProgress *ReencryptionProgressResponse `json:"reencryption_progress,omitempty"`
-	Timestamp            int64                         `json:"timestamp"`
-}
-
-// SetDefaultDEKResponse is the response for setting the default DEK
-type SetDefaultDEKResponse struct {
-	Path      string `json:"path"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-// SetDEKSafetyRequest is the request body for setting DEK safety limits
-type SetDEKSafetyRequest struct {
-	MaxOperations  uint64 `json:"max_operations,omitempty"`
-	MaxBytes       uint64 `json:"max_bytes,omitempty"`
-	WarningPercent int32  `json:"warning_percent,omitempty"`
-}
-
-// SetDEKSafetyResponse is the response for setting DEK safety
-type SetDEKSafetyResponse struct {
-	Path      string `json:"path"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-// ClearDEKSafetyResponse is the response for clearing DEK safety limits
-type ClearDEKSafetyResponse struct {
-	Path      string `json:"path"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-// timeToUnix converts a time.Time pointer to Unix timestamp
-func timeToUnix(t *time.Time) int64 {
-	if t == nil {
-		return 0
-	}
-	return t.Unix()
+// DEKStatusResponse summarises detailed DEK status.
+type DEKStatusResponse struct {
+	Path           string    `json:"path"`
+	Algorithm      string    `json:"algorithm"`
+	Version        int       `json:"version"`
+	Status         string    `json:"status,omitempty"`
+	IsDefault      bool      `json:"is_default"`
+	UsageCount     uint64    `json:"usage_count"`
+	BytesUsed      uint64    `json:"bytes_used"`
+	MaxUsageCount  uint64    `json:"max_usage_count,omitempty"`
+	MaxBytesUsed   uint64    `json:"max_bytes_used,omitempty"`
+	WarningPercent int       `json:"warning_percent,omitempty"`
+	CreatedAt      time.Time `json:"created_at,omitempty"`
+	RotatedAt      time.Time `json:"rotated_at,omitempty"`
 }
 
 // =============================================================================
-// Secrets Management Types
+// Secrets requests / responses (SDK secrets.Client)
 // =============================================================================
 
-// SecretRotationPolicyRequest is the request format for secret rotation policy
-type SecretRotationPolicyRequest struct {
-	Enabled         bool   `json:"enabled"`
-	IntervalSeconds int64  `json:"interval_seconds,omitempty"`
-	RetainVersions  int32  `json:"retain_versions,omitempty"`
-	RotationLambda  string `json:"rotation_lambda,omitempty"`
-}
-
-// SecretRotationPolicyResponse represents secret rotation policy in responses
-type SecretRotationPolicyResponse struct {
-	Enabled         bool   `json:"enabled"`
-	IntervalSeconds int64  `json:"interval_seconds,omitempty"`
-	NextRotation    int64  `json:"next_rotation,omitempty"`
-	RetainVersions  int32  `json:"retain_versions,omitempty"`
-	RotationLambda  string `json:"rotation_lambda,omitempty"`
-}
-
-// SecretResponse represents a secret in responses
-type SecretResponse struct {
-	SecretID       string                        `json:"secret_id"`
-	Name           string                        `json:"name"`
-	Description    string                        `json:"description,omitempty"`
-	CurrentVersion uint64                        `json:"current_version"`
-	CreatedAt      int64                         `json:"created_at"`
-	UpdatedAt      int64                         `json:"updated_at,omitempty"`
-	RotationPolicy *SecretRotationPolicyResponse `json:"rotation_policy,omitempty"`
-	Tags           map[string]string             `json:"tags,omitempty"`
-	Owner          string                        `json:"owner,omitempty"`
-}
-
-// SecretVersionResponse represents a secret version in responses
-type SecretVersionResponse struct {
-	SecretID  string            `json:"secret_id"`
-	Version   uint64            `json:"version"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
-	CreatedAt int64             `json:"created_at"`
-	CreatedBy string            `json:"created_by,omitempty"`
-	DeletedAt int64             `json:"deleted_at,omitempty"`
-	ExpiresAt int64             `json:"expires_at,omitempty"`
-}
-
-// StoreSecretRequest is the request body for storing a secret
+// StoreSecretRequest is the JSON body for POST /api/v1/kms/secrets.
+//
+// Both REST integration tests and the WebUI form drive this endpoint.
+// The legacy contract used `path` + base64-encoded `value`; the WebUI
+// sends `name` + plain string `value`. Both are accepted: the handler
+// promotes Name → Path when Path is empty, and Value is decoded as
+// either base64 or a plain UTF-8 string via SecretValue.
 type StoreSecretRequest struct {
-	SecretID    string            `json:"secret_id,omitempty"`
-	Name        string            `json:"name"`
+	Path        string            `json:"path,omitempty"`
+	Name        string            `json:"name,omitempty"`
+	Value       SecretValue       `json:"value"`
+	ContentType string            `json:"content_type,omitempty"`
 	Description string            `json:"description,omitempty"`
-	Data        []byte            `json:"data"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
 	Tags        map[string]string `json:"tags,omitempty"`
-	ExpiresAt   int64             `json:"expires_at,omitempty"`
-	TenantID    string            `json:"tenant_id,omitempty"`
-	KeyID       string            `json:"key_id,omitempty"`
-	Algorithm   string            `json:"algorithm,omitempty"`
 }
 
-// StoreSecretResponse is the response for storing a secret
+// SecretValue accepts either a base64-encoded JSON string (legacy
+// contract decoded by the standard library to []byte), or a plain UTF-8
+// string posted by browser forms. Output marshals to a base64 string to
+// preserve the original wire format on responses.
+type SecretValue []byte
+
+// UnmarshalJSON implements json.Unmarshaler. The standard library's
+// []byte decoder requires base64; this override falls back to
+// interpreting any decode failure as a plain string so the WebUI's
+// `{"value": "sekret"}` payload works without forcing the form to
+// base64-encode user input client-side.
+func (v *SecretValue) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || string(data) == "null" {
+		*v = nil
+		return nil
+	}
+	// JSON strings start with a quote. If it's not a string, fall back
+	// to the default []byte handling (base64 + array).
+	if data[0] != '"' {
+		var raw []byte
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return err
+		}
+		*v = raw
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(s); err == nil {
+		*v = decoded
+		return nil
+	}
+	*v = []byte(s)
+	return nil
+}
+
+// MarshalJSON implements json.Marshaler so the type round-trips
+// identically to the legacy []byte field on responses.
+func (v SecretValue) MarshalJSON() ([]byte, error) {
+	if v == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal([]byte(v))
+}
+
+// StoreSecretResponse confirms storage.
 type StoreSecretResponse struct {
-	SecretID  string `json:"secret_id"`
-	Version   uint64 `json:"version"`
-	Timestamp int64  `json:"timestamp"`
+	Path    string `json:"path"`
+	Version int    `json:"version"`
 }
 
-// GetSecretRequest is the request params for getting a secret
-type GetSecretRequest struct {
-	Version uint64 `json:"version,omitempty"`
+// SecretResponse describes a stored secret.
+type SecretResponse struct {
+	Path        string            `json:"path"`
+	Version     int               `json:"version"`
+	Value       []byte            `json:"value,omitempty"`
+	ContentType string            `json:"content_type,omitempty"`
+	Description string            `json:"description,omitempty"`
+	Tags        map[string]string `json:"tags,omitempty"`
+	CreatedAt   time.Time         `json:"created_at,omitempty"`
+	UpdatedAt   time.Time         `json:"updated_at,omitempty"`
 }
 
-// GetSecretResponse is the response for getting a secret
-type GetSecretResponse struct {
-	SecretID      string            `json:"secret_id"`
-	Version       uint64            `json:"version"`
-	Data          []byte            `json:"data"`
-	Metadata      map[string]string `json:"metadata,omitempty"`
-	CreatedAt     int64             `json:"created_at"`
-	Timestamp     int64             `json:"timestamp"`
-	Algorithm     string            `json:"algorithm,omitempty"`
-	KeyIdentifier string            `json:"key_identifier,omitempty"`
+// SecretSummary is a list-view summary.
+type SecretSummary struct {
+	Path      string    `json:"path"`
+	Version   int       `json:"version"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }
 
-// ListSecretsResponse is the response for listing secrets
+// ListSecretsResponse is the response from listing secrets.
 type ListSecretsResponse struct {
-	PaginatedResponse
-	Secrets   []SecretResponse `json:"secrets"`
-	Timestamp int64            `json:"timestamp"`
+	Secrets []SecretSummary `json:"secrets"`
 }
 
-// DeleteSecretRequest is the request body for deleting a secret
-type DeleteSecretRequest struct {
-	PermanentlyDelete bool `json:"permanently_delete,omitempty"`
+// SecretVersionResponse describes a specific secret version.
+type SecretVersionResponse struct {
+	Path      string    `json:"path"`
+	Version   int       `json:"version"`
+	Value     []byte    `json:"value,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	Status    string    `json:"status,omitempty"`
 }
 
-// DeleteSecretResponse is the response for deleting a secret
-type DeleteSecretResponse struct {
-	SecretID  string `json:"secret_id"`
-	Deleted   bool   `json:"deleted"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-// GetSecretVersionResponse is the response for getting a specific secret version
-type GetSecretVersionResponse struct {
-	Version   *SecretVersionResponse `json:"version"`
-	Data      []byte                 `json:"data"`
-	Timestamp int64                  `json:"timestamp"`
-}
-
-// ListSecretVersionsResponse is the response for listing secret versions
+// ListSecretVersionsResponse is the response from listing versions.
 type ListSecretVersionsResponse struct {
-	PaginatedResponse
-	Versions  []SecretVersionResponse `json:"versions"`
-	Timestamp int64                   `json:"timestamp"`
+	Versions []SecretVersionResponse `json:"versions"`
 }
 
-// RollbackSecretRequest is the request body for rolling back a secret
-type RollbackSecretRequest struct {
-	TargetVersion uint64 `json:"target_version"`
-}
-
-// RollbackSecretResponse is the response for rolling back a secret
-type RollbackSecretResponse struct {
-	SecretID   string `json:"secret_id"`
-	NewVersion uint64 `json:"new_version"`
-	Timestamp  int64  `json:"timestamp"`
-}
-
-// RotateSecretRequest is the request body for rotating a secret
+// RotateSecretRequest is the JSON body for POST /api/v1/kms/secrets/{name}/rotate.
 type RotateSecretRequest struct {
-	NewData   []byte            `json:"new_data"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
-	TenantID  string            `json:"tenant_id,omitempty"`
-	KeyID     string            `json:"key_id,omitempty"`
-	Algorithm string            `json:"algorithm,omitempty"`
+	Value []byte `json:"value,omitempty"`
 }
 
-// RotateSecretResponse is the response for rotating a secret
+// RotateSecretResponse confirms rotation.
 type RotateSecretResponse struct {
-	SecretID   string `json:"secret_id"`
-	OldVersion uint64 `json:"old_version"`
-	NewVersion uint64 `json:"new_version"`
-	Timestamp  int64  `json:"timestamp"`
+	Path    string `json:"path"`
+	Version int    `json:"version"`
 }
 
-// UpdateSecretStatusRequest is the request body for updating secret status
+// RollbackSecretRequest is the JSON body for POST /api/v1/kms/secrets/{name}/rollback.
+type RollbackSecretRequest struct {
+	Version int `json:"version"`
+}
+
+// RollbackSecretResponse confirms rollback.
+type RollbackSecretResponse struct {
+	Path    string `json:"path"`
+	Version int    `json:"version"`
+}
+
+// UpdateSecretStatusRequest is the JSON body for PUT /api/v1/kms/secrets/{name}/status.
 type UpdateSecretStatusRequest struct {
-	Status string `json:"status"`
+	Enabled bool `json:"enabled"`
 }
 
-// UpdateSecretStatusResponse is the response for updating secret status
-type UpdateSecretStatusResponse struct {
-	SecretID  string `json:"secret_id"`
-	Status    string `json:"status"`
-	Timestamp int64  `json:"timestamp"`
+// RotationPolicyRequest is the JSON body for PUT /api/v1/kms/secrets/{name}/policy.
+type RotationPolicyRequest struct {
+	Enabled              bool   `json:"enabled"`
+	IntervalSeconds      int64  `json:"interval_seconds,omitempty"`
+	NextRotationUnixTime int64  `json:"next_rotation,omitempty"`
+	Method               string `json:"method,omitempty"`
 }
 
-// SetSecretRotationPolicyRequest is the request body for setting rotation policy
-type SetSecretRotationPolicyRequest struct {
-	Policy SecretRotationPolicyRequest `json:"policy"`
-}
-
-// SetSecretRotationPolicyResponse is the response for setting rotation policy
-type SetSecretRotationPolicyResponse struct {
-	SecretID  string                        `json:"secret_id"`
-	Policy    *SecretRotationPolicyResponse `json:"policy"`
-	Timestamp int64                         `json:"timestamp"`
-}
-
-// GetSecretRotationPolicyResponse is the response for getting rotation policy
-type GetSecretRotationPolicyResponse struct {
-	SecretID  string                        `json:"secret_id"`
-	Policy    *SecretRotationPolicyResponse `json:"policy"`
-	Timestamp int64                         `json:"timestamp"`
-}
-
-// SecretDataResponse represents secret data in prefix operations
-type SecretDataResponse struct {
-	Data     map[string][]byte `json:"data,omitempty"`
-	Metadata map[string]string `json:"metadata,omitempty"`
-	Version  int64             `json:"version"`
-}
-
-// GetSecretsByPrefixResponse is the response for getting secrets by prefix
-type GetSecretsByPrefixResponse struct {
-	PaginatedResponse
-	Secrets   map[string]SecretDataResponse `json:"secrets"`
-	Timestamp int64                         `json:"timestamp"`
+// RotationPolicyResponse describes a rotation policy.
+type RotationPolicyResponse struct {
+	Enabled              bool      `json:"enabled"`
+	IntervalSeconds      int64     `json:"interval_seconds,omitempty"`
+	NextRotationUnixTime int64     `json:"next_rotation,omitempty"`
+	Method               string    `json:"method,omitempty"`
+	UpdatedAt            time.Time `json:"updated_at,omitempty"`
 }

@@ -35,7 +35,7 @@ The CA subsystem provides certificate lifecycle management:
   - Renew expiring certificates
   - List and verify certificates
   - Manage Certificate Revocation Lists (CRL)
-  - Export CA bundles for distribution
+  - Export the CA trust bundle (PEM)
 
 Examples:
   # Initialize the Certificate Authority
@@ -59,8 +59,11 @@ Examples:
   # Display CRL information
   platformctl ca crl
 
-  # Export CA bundle
-  platformctl ca export-bundle -o /path/to/ca-bundle.pem`,
+  # Print the CA trust bundle to stdout
+  platformctl ca bundle
+
+  # Save the CA trust bundle to a file
+  platformctl ca bundle --output /path/to/ca-bundle.pem`,
 	}
 
 	// Add subcommands
@@ -73,7 +76,13 @@ Examples:
 	cmd.AddCommand(newRevokeCommand(getFlags))
 	cmd.AddCommand(newRenewCommand(getFlags))
 	cmd.AddCommand(newCRLCommand(getFlags))
-	cmd.AddCommand(newExportBundleCommand(getFlags))
+	cmd.AddCommand(newBundleCommand(getFlags))
+	// Canonical "export-bundle" alias per
+	// docs/08-bootstrap-auth-architecture.md §6.
+	exportBundle := newBundleCommand(getFlags)
+	exportBundle.Use = "export-bundle"
+	exportBundle.Short = "Export the CA trust bundle (canonical alias for 'bundle')"
+	cmd.AddCommand(exportBundle)
 	cmd.AddCommand(newInstallCommand(getFlags))
 	cmd.AddCommand(newUninstallCommand(getFlags))
 

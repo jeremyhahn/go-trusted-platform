@@ -31,6 +31,17 @@ import (
 // powerActionHandler is the function signature for power action dispatch.
 type powerActionHandler func(ctx context.Context, profileID uint64) error
 
+// privilegeByName maps the canonical lowercase string form of a BMC
+// privilege (matching bmcpkg.Privilege.String()) to its enum value.
+// Used for O(1) parsing of the REST request body's privilege field.
+var privilegeByName = map[string]bmcpkg.Privilege{
+	"no-access":     bmcpkg.PrivilegeNoAccess,
+	"callback":      bmcpkg.PrivilegeCallback,
+	"user":          bmcpkg.PrivilegeUser,
+	"operator":      bmcpkg.PrivilegeOperator,
+	"administrator": bmcpkg.PrivilegeAdministrator,
+}
+
 // HandlerParams contains the dependencies for creating a BMC handler.
 type HandlerParams struct {
 	Logger           *logging.Logger
@@ -90,6 +101,31 @@ func (h *handler) parseProfileID(r *http.Request) (uint64, error) {
 		return 0, ErrInvalidProfileID{ID: idStr}
 	}
 	return profileID, nil
+}
+
+// parseSlot extracts and validates the slot path parameter as a uint8.
+func (h *handler) parseSlot(r *http.Request) (uint8, error) {
+	vars := mux.Vars(r)
+	slotStr := vars["slot"]
+	if slotStr == "" {
+		return 0, ErrInvalidUserSlot{}
+	}
+	slot, err := strconv.ParseUint(slotStr, 10, 8)
+	if err != nil {
+		return 0, ErrInvalidUserSlot{Slot: slotStr}
+	}
+	return uint8(slot), nil
+}
+
+// parsePrivilege resolves a privilege name from the REST wire format
+// to a bmcpkg.Privilege value. Returns ErrInvalidPrivilege when the
+// name is not recognized.
+func parsePrivilege(name string) (bmcpkg.Privilege, error) {
+	priv, ok := privilegeByName[name]
+	if !ok {
+		return 0, ErrInvalidPrivilege{Privilege: name}
+	}
+	return priv, nil
 }
 
 // PowerAction executes a power action (on, off, reset, cycle) on the BMC.
@@ -434,6 +470,276 @@ func (h *handler) ProvisionStatus(w http.ResponseWriter, r *http.Request) {
 		slog.String("status", string(result.Status)))
 
 	h.responseWriter.Success200(w, r, result)
+}
+
+// GetWebCertificate returns the metadata of the BMC's current web
+// server TLS certificate.
+// GET /api/v1/bmc/{profileID}/cert
+func (h *handler) GetWebCertificate(w http.ResponseWriter, r *http.Request) {
+	h.logger.Debug("bmc: get web certificate request received")
+
+	profileID, err := h.parseProfileID(r)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
+
+	info, err := h.bmcService.GetWebCertificate(r.Context(), profileID)
+	if err != nil {
+		h.writeBMCError(w, r, profileID, "get web certificate", err)
+		return
+	}
+
+	h.logger.Debug("bmc: web certificate retrieved",
+		slog.Uint64("profile_id", profileID))
+
+	h.responseWriter.Success200(w, r, info)
+}
+
+// ReplaceWebCertificate uploads a new web server TLS certificate and
+// private key to the BMC.
+// PUT /api/v1/bmc/{profileID}/cert
+func (h *handler) ReplaceWebCertificate(w http.ResponseWriter, r *http.Request) {
+	h.logger.Debug("bmc: replace web certificate request received")
+
+	profileID, err := h.parseProfileID(r)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
+
+	var req ReplaceWebCertificateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.Debug("bmc: failed to decode request body", slog.String("error", err.Error()))
+		h.responseWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+		return
+	}
+
+	if req.CertPEM == "" {
+		h.responseWriter.Error400(w, r, ErrMissingCertPEM{})
+		return
+	}
+	if req.KeyPEM == "" {
+		h.responseWriter.Error400(w, r, ErrMissingKeyPEM{})
+		return
+	}
+
+	if err := h.bmcService.ReplaceWebCertificate(r.Context(), profileID, []byte(req.CertPEM), []byte(req.KeyPEM)); err != nil {
+		h.writeBMCError(w, r, profileID, "replace web certificate", err)
+		return
+	}
+
+	h.logger.Info("bmc: web certificate replaced",
+		slog.Uint64("profile_id", profileID))
+
+	h.responseWriter.Success200(w, r, map[string]string{
+		"status": "ok",
+	})
+}
+
+// ListUsers returns the populated user slots known to the BMC.
+// GET /api/v1/bmc/{profileID}/users
+func (h *handler) ListUsers(w http.ResponseWriter, r *http.Request) {
+	h.logger.Debug("bmc: list users request received")
+
+	profileID, err := h.parseProfileID(r)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
+
+	users, err := h.bmcService.ListUsers(r.Context(), profileID)
+	if err != nil {
+		h.writeBMCError(w, r, profileID, "list users", err)
+		return
+	}
+
+	h.logger.Debug("bmc: users listed",
+		slog.Uint64("profile_id", profileID),
+		slog.Int("count", len(users)))
+
+	h.responseWriter.Success200(w, r, users)
+}
+
+// CreateUser creates a new BMC user account.
+// POST /api/v1/bmc/{profileID}/users
+func (h *handler) CreateUser(w http.ResponseWriter, r *http.Request) {
+	h.logger.Debug("bmc: create user request received")
+
+	profileID, err := h.parseProfileID(r)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
+
+	var req CreateUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.Debug("bmc: failed to decode request body", slog.String("error", err.Error()))
+		h.responseWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+		return
+	}
+
+	if req.Username == "" {
+		h.responseWriter.Error400(w, r, ErrMissingUsername{})
+		return
+	}
+	if req.Password == "" {
+		h.responseWriter.Error400(w, r, ErrMissingPassword{})
+		return
+	}
+	if req.Privilege == "" {
+		h.responseWriter.Error400(w, r, ErrMissingPrivilege{})
+		return
+	}
+	priv, err := parsePrivilege(req.Privilege)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
+
+	user := bmcpkg.User{
+		Slot:      req.Slot,
+		Username:  req.Username,
+		Enabled:   req.Enabled,
+		Privilege: priv,
+		Channel:   req.Channel,
+	}
+
+	if err := h.bmcService.CreateUser(r.Context(), profileID, user, req.Password); err != nil {
+		h.writeBMCError(w, r, profileID, "create user", err)
+		return
+	}
+
+	h.logger.Info("bmc: user created",
+		slog.Uint64("profile_id", profileID),
+		slog.String("username", req.Username),
+		slog.Uint64("slot", uint64(req.Slot)))
+
+	h.responseWriter.Success201(w, r, user)
+}
+
+// DeleteUser deletes the BMC user occupying the given slot.
+// DELETE /api/v1/bmc/{profileID}/users/{slot}
+func (h *handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
+	h.logger.Debug("bmc: delete user request received")
+
+	profileID, err := h.parseProfileID(r)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
+
+	slot, err := h.parseSlot(r)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
+
+	if err := h.bmcService.DeleteUser(r.Context(), profileID, slot); err != nil {
+		h.writeBMCError(w, r, profileID, "delete user", err)
+		return
+	}
+
+	h.logger.Info("bmc: user deleted",
+		slog.Uint64("profile_id", profileID),
+		slog.Uint64("slot", uint64(slot)))
+
+	h.responseWriter.Success200(w, r, map[string]string{
+		"status": "ok",
+	})
+}
+
+// SetUserPassword updates the password for an existing BMC user slot.
+// PUT /api/v1/bmc/{profileID}/users/{slot}/password
+func (h *handler) SetUserPassword(w http.ResponseWriter, r *http.Request) {
+	h.logger.Debug("bmc: set user password request received")
+
+	profileID, err := h.parseProfileID(r)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
+
+	slot, err := h.parseSlot(r)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
+
+	var req SetUserPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.Debug("bmc: failed to decode request body", slog.String("error", err.Error()))
+		h.responseWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+		return
+	}
+
+	if req.Password == "" {
+		h.responseWriter.Error400(w, r, ErrMissingPassword{})
+		return
+	}
+
+	if err := h.bmcService.SetUserPassword(r.Context(), profileID, slot, req.Password); err != nil {
+		h.writeBMCError(w, r, profileID, "set user password", err)
+		return
+	}
+
+	h.logger.Info("bmc: user password updated",
+		slog.Uint64("profile_id", profileID),
+		slog.Uint64("slot", uint64(slot)))
+
+	h.responseWriter.Success200(w, r, map[string]string{
+		"status": "ok",
+	})
+}
+
+// SetUserPrivilege updates the channel privilege level for an existing
+// BMC user slot.
+// PUT /api/v1/bmc/{profileID}/users/{slot}/privilege
+func (h *handler) SetUserPrivilege(w http.ResponseWriter, r *http.Request) {
+	h.logger.Debug("bmc: set user privilege request received")
+
+	profileID, err := h.parseProfileID(r)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
+
+	slot, err := h.parseSlot(r)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
+
+	var req SetUserPrivilegeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.Debug("bmc: failed to decode request body", slog.String("error", err.Error()))
+		h.responseWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+		return
+	}
+
+	if req.Privilege == "" {
+		h.responseWriter.Error400(w, r, ErrMissingPrivilege{})
+		return
+	}
+	priv, err := parsePrivilege(req.Privilege)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
+
+	if err := h.bmcService.SetUserPrivilege(r.Context(), profileID, slot, req.Channel, priv); err != nil {
+		h.writeBMCError(w, r, profileID, "set user privilege", err)
+		return
+	}
+
+	h.logger.Info("bmc: user privilege updated",
+		slog.Uint64("profile_id", profileID),
+		slog.Uint64("slot", uint64(slot)),
+		slog.String("privilege", req.Privilege))
+
+	h.responseWriter.Success200(w, r, map[string]string{
+		"status": "ok",
+	})
 }
 
 // writeBMCError writes an appropriate error response for BMC operation errors.

@@ -51,19 +51,75 @@ type VersionInfo struct {
 	GitHash   string
 }
 
-// HealthResponse represents the health check response
+// HealthResponse mirrors the JS SDK's GetHealthResponse, wrapping a
+// PlatformHealth payload so dashboard code can read
+// `response.data.health.healthy` directly.
 type HealthResponse struct {
-	Status     string                    `json:"status"`
-	Components []ComponentHealthResponse `json:"components,omitempty"`
-	Timestamp  int64                     `json:"timestamp"`
+	Health PlatformHealth `json:"health"`
 }
 
-// ComponentHealthResponse represents individual component health
+// PlatformHealth is the dashboard-shaped platform health summary.
+// camelCase tags match sdk/javascript/src/types/platform.ts
+// PlatformHealth.
+type PlatformHealth struct {
+	Healthy   bool            `json:"healthy"`
+	Message   string          `json:"message,omitempty"`
+	Status    string          `json:"status"`
+	Services  []ServiceHealth `json:"services"`
+	Timestamp string          `json:"timestamp"`
+}
+
+// ServiceHealth is one service's contribution to PlatformHealth.
+type ServiceHealth struct {
+	Name      string  `json:"name"`
+	Healthy   bool    `json:"healthy"`
+	Status    string  `json:"status,omitempty"`
+	Message   string  `json:"message,omitempty"`
+	LastCheck string  `json:"lastCheck,omitempty"`
+	LatencyMs float64 `json:"latencyMs,omitempty"`
+}
+
+// ComponentHealthResponse is retained for callers that still consume
+// the legacy flat shape (status/message/last_check). New callers should
+// use PlatformHealth.
 type ComponentHealthResponse struct {
 	Name      string `json:"name"`
 	Status    string `json:"status"`
 	Message   string `json:"message,omitempty"`
 	LastCheck int64  `json:"last_check"`
+}
+
+// MetricsResponse mirrors the JS SDK's GetMetricsResponse and is served
+// at GET /api/v1/platform/metrics. The dashboard's CPU/Memory/Storage
+// tiles read these fields directly (`response.data.metrics.cpuUsagePercent`).
+type MetricsResponse struct {
+	Metrics PlatformMetrics `json:"metrics"`
+	History []PlatformMetrics `json:"history,omitempty"`
+}
+
+// PlatformMetrics is a single instantaneous OS+platform health snapshot.
+type PlatformMetrics struct {
+	CPUUsagePercent    float64                 `json:"cpuUsagePercent"`
+	MemoryUsagePercent float64                 `json:"memoryUsagePercent"`
+	DiskUsagePercent   float64                 `json:"diskUsagePercent"`
+	ActiveConnections  uint64                  `json:"activeConnections,omitempty"`
+	RequestsPerSecond  float64                 `json:"requestsPerSecond,omitempty"`
+	ErrorRate          float64                 `json:"errorRate,omitempty"`
+	OverallStatus      string                  `json:"overallStatus"`
+	System             SystemInfoResponse      `json:"system"`
+	Services           []ServiceMetricResponse `json:"services"`
+	Timestamp          string                  `json:"timestamp"`
+}
+
+// ServiceMetricResponse is a single service's metric snapshot.
+type ServiceMetricResponse struct {
+	Name        string  `json:"name"`
+	DisplayName string  `json:"displayName"`
+	Status      string  `json:"status"`
+	Healthy     bool    `json:"healthy"`
+	LatencyMs   float64 `json:"latencyMs,omitempty"`
+	LastCheck   string  `json:"lastCheck"`
+	Message     string  `json:"message,omitempty"`
 }
 
 // StatusResponse represents the daemon status response

@@ -14,6 +14,7 @@
 package bootstrap
 
 import (
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,13 +29,17 @@ func validBootstrapYAML(cpCount, gwCount, workerCount int) string {
   user: deployer
   ssh_key: /home/deployer/.ssh/id_ed25519
   container_runtime: podman
-provisioning_network:
-  subnet: 10.100.0.0/24
-  gateway: 10.100.0.1
-  dhcp_range_start: 10.100.0.100
-  dhcp_range_end: 10.100.0.200
-  dns:
-    - 10.100.0.1
+subnets:
+  - name: provisioning
+    role: provisioning
+    cidr: 10.100.0.0/24
+    gateway: 10.100.0.1
+    dns:
+      - 10.100.0.1
+    dhcp:
+      enabled: true
+      range-start: 10.100.0.100
+      range-end: 10.100.0.200
 platform:
   domain: example.com
   internal_domain: internal.example.com
@@ -92,13 +97,17 @@ func TestLoadBootstrapConfig_Valid(t *testing.T) {
   user: deployer
   ssh_key: /home/deployer/.ssh/id_ed25519
   container_runtime: podman
-provisioning_network:
-  subnet: 10.100.0.0/24
-  gateway: 10.100.0.1
-  dhcp_range_start: 10.100.0.100
-  dhcp_range_end: 10.100.0.200
-  dns:
-    - 10.100.0.1
+subnets:
+  - name: provisioning
+    role: provisioning
+    cidr: 10.100.0.0/24
+    gateway: 10.100.0.1
+    dns:
+      - 10.100.0.1
+    dhcp:
+      enabled: true
+      range-start: 10.100.0.100
+      range-end: 10.100.0.200
 platform:
   domain: example.com
   internal_domain: internal.example.com
@@ -182,9 +191,7 @@ func TestLoadBootstrapConfig_InvalidYAML(t *testing.T) {
 func TestValidate_Valid_3CP_2GW_2Worker(t *testing.T) {
 	config := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{
-			Subnet: "10.100.0.0/24",
-		},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, BMCAddress: "10.200.0.10", BMCUser: "admin", BMCPassword: "secret"},
@@ -205,7 +212,7 @@ func TestValidate_Valid_3CP_2GW_2Worker(t *testing.T) {
 func TestValidate_EvenControlPlane(t *testing.T) {
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform:            PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, BMCAddress: "10.200.0.10"},
@@ -226,7 +233,7 @@ func TestValidate_EvenControlPlane(t *testing.T) {
 func TestValidate_NoControlPlane(t *testing.T) {
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform:            PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "w-0", Role: RoleWorker, MACs: []string{"AA:BB:CC:DD:01:01"}},
@@ -248,7 +255,7 @@ func TestValidate_NoControlPlane(t *testing.T) {
 func TestValidate_SingleControlPlane(t *testing.T) {
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform:            PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, BMCAddress: "10.200.0.10"},
@@ -263,7 +270,7 @@ func TestValidate_SingleControlPlane(t *testing.T) {
 func TestValidate_DuplicateMAC(t *testing.T) {
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform:            PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, MACs: []string{"AA:BB:CC:DD:00:01"}},
@@ -284,7 +291,7 @@ func TestValidate_DuplicateMAC(t *testing.T) {
 func TestValidate_DuplicateBMCAddress(t *testing.T) {
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform:            PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, BMCAddress: "10.200.0.10"},
@@ -305,7 +312,7 @@ func TestValidate_DuplicateBMCAddress(t *testing.T) {
 func TestValidate_NoMACOrBMC(t *testing.T) {
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform:            PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "orphan", Role: RoleControlPlane},
@@ -325,7 +332,7 @@ func TestValidate_NoMACOrBMC(t *testing.T) {
 func TestValidate_InvalidRole(t *testing.T) {
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform:            PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "bad-role", Role: "database", MACs: []string{"AA:BB:CC:DD:00:01"}},
@@ -345,7 +352,7 @@ func TestValidate_InvalidRole(t *testing.T) {
 func TestValidate_MissingDeployerHost(t *testing.T) {
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{},
-		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform:            PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, MACs: []string{"AA:BB:CC:DD:00:01"}},
@@ -367,7 +374,7 @@ func TestValidate_MissingDeployerHost(t *testing.T) {
 func TestValidate_MissingSubnet(t *testing.T) {
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{},
+		Subnets: nil,
 		Platform:            PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, MACs: []string{"AA:BB:CC:DD:00:01"}},
@@ -379,15 +386,15 @@ func TestValidate_MissingSubnet(t *testing.T) {
 		t.Fatal("expected error for missing subnet, got nil")
 	}
 
-	if e, ok := err.(ErrMissingRequiredField); !ok || e.Field != "provisioning_network.subnet" {
-		t.Errorf("expected ErrMissingRequiredField for provisioning_network.subnet, got %T: %v", err, err)
+	if e, ok := err.(ErrMissingRequiredField); !ok || e.Field != "subnets (no subnet with role: provisioning)" {
+		t.Errorf("expected ErrMissingRequiredField for subnets, got %T: %v", err, err)
 	}
 }
 
 func TestValidate_MissingDomain(t *testing.T) {
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform:            PlatformGlobalConfig{},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, MACs: []string{"AA:BB:CC:DD:00:01"}},
@@ -407,7 +414,7 @@ func TestValidate_MissingDomain(t *testing.T) {
 func TestValidate_MissingHostname(t *testing.T) {
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform:            PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Role: RoleControlPlane, MACs: []string{"AA:BB:CC:DD:00:01"}},
@@ -427,7 +434,7 @@ func TestValidate_MissingHostname(t *testing.T) {
 func TestValidate_NoNodes(t *testing.T) {
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform:            PlatformGlobalConfig{Domain: "example.com"},
 		Nodes:               []NodeConfig{},
 	}
@@ -445,7 +452,7 @@ func TestValidate_NoNodes(t *testing.T) {
 func TestValidate_FiveControlPlane(t *testing.T) {
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform:            PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, BMCAddress: "10.200.0.10"},
@@ -464,7 +471,7 @@ func TestValidate_FiveControlPlane(t *testing.T) {
 func TestValidate_FourControlPlane(t *testing.T) {
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform:            PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, BMCAddress: "10.200.0.10"},
@@ -546,7 +553,7 @@ func TestValidate_SkipInstallNodeWithoutMACOrBMC(t *testing.T) {
 	// A skip_install node should pass validation without BMC or MAC.
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform:            PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, SkipInstall: true},
@@ -563,7 +570,7 @@ func TestValidate_SkipInstallDoesNotRequireISO(t *testing.T) {
 	// trigger the iso_path requirement.
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform:            PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{
@@ -586,7 +593,7 @@ func TestValidate_SkipInstallCountsAsControlPlane(t *testing.T) {
 	// control-plane quorum.
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform:            PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, SkipInstall: true},
@@ -603,7 +610,7 @@ func TestValidate_NonSkipInstallStillRequiresIdentity(t *testing.T) {
 	// A non-skip_install node still requires BMC or MAC.
 	config := &BootstrapConfig{
 		Deployer:            DeployerConfig{Host: "deploy.example.com"},
-		ProvisioningNetwork: ProvisioningNetwork{Subnet: "10.100.0.0/24"},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform:            PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, SkipInstall: true},
@@ -624,8 +631,10 @@ func TestValidate_NonSkipInstallStillRequiresIdentity(t *testing.T) {
 func TestLoadBootstrapConfig_SkipInstallYAML(t *testing.T) {
 	yamlContent := `deployer:
   host: deploy.example.com
-provisioning_network:
-  subnet: 10.100.0.0/24
+subnets:
+  - name: provisioning
+    role: provisioning
+    cidr: 10.100.0.0/24
 platform:
   domain: example.com
 nodes:

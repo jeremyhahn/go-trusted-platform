@@ -27,7 +27,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/object"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 var (
@@ -136,19 +136,28 @@ type ObjectStorageAdapter struct {
 
 // SaveCert saves a certificate to object storage.
 // Uses .pem extension: certs/{id}.pem
+//
+// The id frequently comes from a cert's CommonName (e.g. ACME
+// enrollment passes ctx.Certificate.Subject.CommonName here). TCG
+// CSR-IDevID certs commonly carry CNs like "SuperMicro X10-lab-node-1-gw-01"
+// containing whitespace, which the underlying object-storage path
+// validator rejects (PATH_INVALID, no control chars / no spaces).
+// We sanitize the id to a filesystem-safe form on write and apply
+// the same transformation on every read so the round-trip is
+// transparent to callers.
 func (a *ObjectStorageAdapter) SaveCert(ctx context.Context, id string, cert *x509.Certificate) error {
 	pemBlock := &pem.Block{
 		Type:  "CERTIFICATE",
 		Bytes: cert.Raw,
 	}
 	data := pem.EncodeToMemory(pemBlock)
-	return a.objStore.Save([]byte(id+".pem"), data)
+	return a.objStore.Save([]byte(sanitizeCertID(id)+".pem"), data)
 }
 
 // GetCert retrieves a certificate from object storage.
 // Looks for certificate at: certs/{id}.pem
 func (a *ObjectStorageAdapter) GetCert(ctx context.Context, id string) (*x509.Certificate, error) {
-	data, err := a.objStore.Get([]byte(id + ".pem"))
+	data, err := a.objStore.Get([]byte(sanitizeCertID(id) + ".pem"))
 	if err != nil {
 		return nil, ErrCertNotFound
 	}
@@ -163,7 +172,7 @@ func (a *ObjectStorageAdapter) GetCert(ctx context.Context, id string) (*x509.Ce
 
 // DeleteCert removes a certificate from object storage.
 func (a *ObjectStorageAdapter) DeleteCert(ctx context.Context, id string) error {
-	return a.objStore.Delete([]byte(id + ".pem"))
+	return a.objStore.Delete([]byte(sanitizeCertID(id) + ".pem"))
 }
 
 // SaveCertChain saves a certificate chain to object storage.
@@ -176,12 +185,12 @@ func (a *ObjectStorageAdapter) SaveCertChain(ctx context.Context, id string, cha
 		}
 		pemData = append(pemData, pem.EncodeToMemory(pemBlock)...)
 	}
-	return a.objStore.Save([]byte(id+".chain.pem"), pemData)
+	return a.objStore.Save([]byte(sanitizeCertID(id)+".chain.pem"), pemData)
 }
 
 // GetCertChain retrieves a certificate chain from object storage.
 func (a *ObjectStorageAdapter) GetCertChain(ctx context.Context, id string) ([]*x509.Certificate, error) {
-	data, err := a.objStore.Get([]byte(id + ".chain.pem"))
+	data, err := a.objStore.Get([]byte(sanitizeCertID(id) + ".chain.pem"))
 	if err != nil {
 		return nil, ErrChainNotFound
 	}
@@ -247,8 +256,49 @@ func (a *ObjectStorageAdapter) ListCerts(ctx context.Context) ([]string, error) 
 
 // CertExists checks if a certificate exists in object storage.
 func (a *ObjectStorageAdapter) CertExists(ctx context.Context, id string) (bool, error) {
-	exists := a.objStore.Exists([]byte(id + ".pem"))
+	exists := a.objStore.Exists([]byte(sanitizeCertID(id) + ".pem"))
 	return exists, nil
+}
+
+// sanitizeCertID rewrites a cert identifier (typically the cert's CN)
+// into a form that's safe to use as a path component in the underlying
+// object store. The store rejects paths containing whitespace, control
+// characters, or consecutive slashes, but real-world certs frequently
+// arrive with CNs like "SuperMicro X10-lab-node-1-gw-01" — TCG IDevID
+// certs in particular often carry vendor/model/serial separated by
+// spaces.
+//
+// Mapping rules:
+//   - ASCII alphanumerics, hyphens, dots, underscores, and forward
+//     slashes pass through. Slashes are preserved because callers
+//     legitimately use nested paths like "org/dept/team/cert".
+//   - Everything else (whitespace, control chars, other punctuation,
+//     non-ASCII) is replaced with a single hyphen, with runs
+//     collapsed so "Super  Micro" doesn't become "Super--Micro".
+//   - Leading/trailing hyphens and dots are trimmed.
+//
+// The transformation is deterministic and applied symmetrically on
+// both writes and reads, so callers see the original id unchanged.
+func sanitizeCertID(id string) string {
+	if id == "" {
+		return ""
+	}
+	var b strings.Builder
+	prevHyphen := false
+	for _, r := range id {
+		switch {
+		case (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') ||
+			(r >= '0' && r <= '9') || r == '-' || r == '.' || r == '_' || r == '/':
+			b.WriteRune(r)
+			prevHyphen = false
+		default:
+			if !prevHyphen && b.Len() > 0 {
+				b.WriteByte('-')
+				prevHyphen = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-.")
 }
 
 // Close closes the adapter (no-op for object storage).

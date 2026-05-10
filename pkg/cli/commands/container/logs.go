@@ -14,13 +14,12 @@
 package container
 
 import (
+	"context"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
@@ -93,14 +92,10 @@ func runLogs(flags *cli.CommonFlags, containerID string, opts *logsOptions) erro
 	}
 	defer base.Close()
 
-	grpcClient := base.Client().Compute()
-	if grpcClient == nil {
-		return ErrContainerClientNotInitialized{}
-	}
+	computeClient := computesvc.NewClientFromGRPC(base.Client().Compute())
 
-	// Logs streaming requires direct gRPC client access
-	req := &platformv1.GetContainerLogsRequest{
-		Id:        containerID,
+	params := &computesvc.GetContainerLogsParams{
+		ID:        containerID,
 		Follow:    opts.follow,
 		TailLines: opts.tail,
 		Stdout:    opts.stdout,
@@ -108,45 +103,22 @@ func runLogs(flags *cli.CommonFlags, containerID string, opts *logsOptions) erro
 	}
 
 	ctx := base.Context()
-	stream, err := grpcClient.GetContainerLogs(ctx, req)
-	if err != nil {
-		return ErrContainerOperationFailed{Operation: "logs", ID: containerID, Err: err}
-	}
-
 	printer := base.Printer()
 
 	// For JSON/YAML output, collect all logs and print at once
 	if flags.OutputFormat == cli.OutputFormatJSON || flags.OutputFormat == cli.OutputFormatYAML {
-		return collectAndPrintLogs(printer, stream, flags.OutputFormat)
+		return collectAndPrintLogs(ctx, printer, computeClient, params)
 	}
 
 	// For table format, stream logs directly
-	return streamLogs(stream, opts.timestamps)
+	return streamLogs(ctx, computeClient, params, opts.timestamps)
 }
 
 // collectAndPrintLogs collects all log entries and prints them in the specified format
-func collectAndPrintLogs(printer *cli.Printer, stream platformv1.ComputeService_GetContainerLogsClient, format cli.OutputFormat) error {
-	var entries []*computesvc.LogEntry
-
-	for {
-		entry, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return ErrContainerOperationFailed{Operation: "logs", ID: "", Err: err}
-		}
-
-		var ts time.Time
-		if entry.Timestamp != nil {
-			ts = entry.Timestamp.AsTime()
-		}
-
-		entries = append(entries, &computesvc.LogEntry{
-			Timestamp: ts,
-			Stream:    entry.Source,
-			Message:   entry.Message,
-		})
+func collectAndPrintLogs(ctx context.Context, printer *cli.Printer, client *computesvc.Client, params *computesvc.GetContainerLogsParams) error {
+	entries, err := client.GetContainerLogsBatch(ctx, params)
+	if err != nil {
+		return ErrContainerOperationFailed{Operation: "logs", ID: params.ID, Err: err}
 	}
 
 	result := struct {
@@ -161,26 +133,17 @@ func collectAndPrintLogs(printer *cli.Printer, stream platformv1.ComputeService_
 }
 
 // streamLogs streams log entries to the console
-func streamLogs(stream platformv1.ComputeService_GetContainerLogsClient, showTimestamps bool) error {
-	for {
-		entry, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return ErrContainerOperationFailed{Operation: "logs", ID: "", Err: err}
-		}
-
+func streamLogs(ctx context.Context, client *computesvc.Client, params *computesvc.GetContainerLogsParams, showTimestamps bool) error {
+	return client.GetContainerLogsDomain(ctx, params, func(entry *computesvc.LogEntry) error {
 		printLogEntry(entry, showTimestamps)
-	}
-
-	return nil
+		return nil
+	})
 }
 
 // printLogEntry prints a single log entry
-func printLogEntry(entry *platformv1.LogEntry, showTimestamp bool) {
-	if showTimestamp && entry.Timestamp != nil {
-		ts := entry.Timestamp.AsTime().UTC().Format(time.RFC3339)
+func printLogEntry(entry *computesvc.LogEntry, showTimestamp bool) {
+	if showTimestamp && !entry.Timestamp.IsZero() {
+		ts := entry.Timestamp.UTC().Format(time.RFC3339)
 		fmt.Printf("%s %s\n", ts, entry.Message)
 	} else {
 		fmt.Println(entry.Message)

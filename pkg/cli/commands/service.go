@@ -15,12 +15,11 @@ package commands
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	daemonsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/daemon"
 )
 
 // serviceActionResponse is the structured response for service action commands
@@ -139,26 +138,28 @@ func runServiceList(flags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
+	daemonClient := daemonsvc.NewClientFromGRPC(base.Client().Daemon())
+
 	ctx := base.Context()
-	resp, err := base.Client().Daemon().ListServices(ctx, &platformv1.ListServicesRequest{})
+	services, err := daemonClient.ListServicesDomain(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list services: %w", err)
+		return err
 	}
 
 	printer := base.Printer()
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(services)
 
 	case cli.OutputFormatTable:
 		table := cli.NewTableData("Name", "Type", "Status", "Health", "Uptime", "Version")
-		for _, svc := range resp.Services {
+		for _, svc := range services {
 			table.AddRow(
 				svc.Name,
-				formatServiceType(svc.Type),
-				formatServiceStatus(svc.Status),
-				formatHealthStatus(svc.Health),
+				string(svc.Type),
+				string(svc.Status),
+				string(svc.Health),
 				fmt.Sprintf("%ds", svc.UptimeSeconds),
 				svc.Version,
 			)
@@ -177,31 +178,17 @@ func runServiceStart(flags *cli.CommonFlags, serviceType string) error {
 	}
 	defer base.Close()
 
-	svcType, err := parseServiceType(serviceType)
+	daemonClient := daemonsvc.NewClientFromGRPC(base.Client().Daemon())
+
+	ctx := base.Context()
+	_, err = daemonClient.StartServiceDomain(ctx, serviceType)
 	if err != nil {
 		return err
 	}
 
-	ctx := base.Context()
-	resp, err := base.Client().Daemon().StartService(ctx, &platformv1.StartServiceRequest{
-		Service: svcType,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to start service: %w", err)
-	}
-
 	printer := base.Printer()
-
-	if resp.Status != nil && resp.Status.Success {
-		return printServiceAction(printer, flags.OutputFormat, serviceType, "start",
-			fmt.Sprintf("Service %s started successfully", serviceType))
-	}
-
-	if resp.Status != nil && resp.Status.Error != nil {
-		return fmt.Errorf("failed to start service: %s", resp.Status.Error.Message)
-	}
-
-	return fmt.Errorf("failed to start service: unknown error")
+	message := fmt.Sprintf("Service %s started successfully", serviceType)
+	return printServiceAction(printer, flags.OutputFormat, serviceType, "start", message)
 }
 
 func runServiceStop(flags *cli.CommonFlags, serviceType string, force bool, timeout uint32) error {
@@ -211,33 +198,17 @@ func runServiceStop(flags *cli.CommonFlags, serviceType string, force bool, time
 	}
 	defer base.Close()
 
-	svcType, err := parseServiceType(serviceType)
+	daemonClient := daemonsvc.NewClientFromGRPC(base.Client().Daemon())
+
+	ctx := base.Context()
+	err = daemonClient.StopServiceDomain(ctx, serviceType, force, timeout)
 	if err != nil {
 		return err
 	}
 
-	ctx := base.Context()
-	resp, err := base.Client().Daemon().StopService(ctx, &platformv1.StopServiceRequest{
-		Service:        svcType,
-		Force:          force,
-		TimeoutSeconds: timeout,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to stop service: %w", err)
-	}
-
 	printer := base.Printer()
-
-	if resp.Status != nil && resp.Status.Success {
-		return printServiceAction(printer, flags.OutputFormat, serviceType, "stop",
-			fmt.Sprintf("Service %s stopped successfully", serviceType))
-	}
-
-	if resp.Status != nil && resp.Status.Error != nil {
-		return fmt.Errorf("failed to stop service: %s", resp.Status.Error.Message)
-	}
-
-	return fmt.Errorf("failed to stop service: unknown error")
+	message := fmt.Sprintf("Service %s stopped successfully", serviceType)
+	return printServiceAction(printer, flags.OutputFormat, serviceType, "stop", message)
 }
 
 func runServiceRestart(flags *cli.CommonFlags, serviceType string, timeout uint32) error {
@@ -247,32 +218,17 @@ func runServiceRestart(flags *cli.CommonFlags, serviceType string, timeout uint3
 	}
 	defer base.Close()
 
-	svcType, err := parseServiceType(serviceType)
+	daemonClient := daemonsvc.NewClientFromGRPC(base.Client().Daemon())
+
+	ctx := base.Context()
+	_, err = daemonClient.RestartServiceDomain(ctx, serviceType, timeout)
 	if err != nil {
 		return err
 	}
 
-	ctx := base.Context()
-	resp, err := base.Client().Daemon().RestartService(ctx, &platformv1.RestartServiceRequest{
-		Service:        svcType,
-		TimeoutSeconds: timeout,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to restart service: %w", err)
-	}
-
 	printer := base.Printer()
-
-	if resp.Status != nil && resp.Status.Success {
-		return printServiceAction(printer, flags.OutputFormat, serviceType, "restart",
-			fmt.Sprintf("Service %s restarted successfully", serviceType))
-	}
-
-	if resp.Status != nil && resp.Status.Error != nil {
-		return fmt.Errorf("failed to restart service: %s", resp.Status.Error.Message)
-	}
-
-	return fmt.Errorf("failed to restart service: unknown error")
+	message := fmt.Sprintf("Service %s restarted successfully", serviceType)
+	return printServiceAction(printer, flags.OutputFormat, serviceType, "restart", message)
 }
 
 // printServiceAction outputs a service action result in the requested format.
@@ -304,58 +260,32 @@ func runServiceStatus(flags *cli.CommonFlags, serviceType string) error {
 	}
 	defer base.Close()
 
-	svcType, err := parseServiceType(serviceType)
-	if err != nil {
-		return err
-	}
+	daemonClient := daemonsvc.NewClientFromGRPC(base.Client().Daemon())
 
 	ctx := base.Context()
-	resp, err := base.Client().Daemon().GetServiceStatus(ctx, &platformv1.GetServiceStatusRequest{
-		Service: svcType,
-	})
+	svc, err := daemonClient.GetServiceStatusDomain(ctx, serviceType)
 	if err != nil {
-		return fmt.Errorf("failed to get service status: %w", err)
+		return err
 	}
 
 	printer := base.Printer()
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(svc)
 
 	case cli.OutputFormatTable:
-		if resp.Service != nil {
-			printer.PrintKeyValue("Name", resp.Service.Name)
-			printer.PrintKeyValue("Type", formatServiceType(resp.Service.Type))
-			printer.PrintKeyValue("Status", formatServiceStatus(resp.Service.Status))
-			printer.PrintKeyValue("Health", formatHealthStatus(resp.Service.Health))
-			printer.PrintKeyValue("Version", resp.Service.Version)
-			printer.PrintKeyValue("Uptime", fmt.Sprintf("%d seconds", resp.Service.UptimeSeconds))
+		if svc != nil {
+			printer.PrintKeyValue("Name", svc.Name)
+			printer.PrintKeyValue("Type", string(svc.Type))
+			printer.PrintKeyValue("Status", string(svc.Status))
+			printer.PrintKeyValue("Health", string(svc.Health))
+			printer.PrintKeyValue("Version", svc.Version)
+			printer.PrintKeyValue("Uptime", fmt.Sprintf("%d seconds", svc.UptimeSeconds))
 		}
 		return nil
 
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
-	}
-}
-
-func parseServiceType(s string) (platformv1.ServiceType, error) {
-	switch strings.ToLower(s) {
-	case "tpm":
-		return platformv1.ServiceType_SERVICE_TYPE_TPM, nil
-	case "sdn":
-		return platformv1.ServiceType_SERVICE_TYPE_SDN, nil
-	case "compute":
-		return platformv1.ServiceType_SERVICE_TYPE_COMPUTE, nil
-	case "dns":
-		return platformv1.ServiceType_SERVICE_TYPE_DNS, nil
-	case "acme":
-		return platformv1.ServiceType_SERVICE_TYPE_ACME, nil
-	case "webservice", "web":
-		return platformv1.ServiceType_SERVICE_TYPE_WEBSERVICE, nil
-	case "attestation":
-		return platformv1.ServiceType_SERVICE_TYPE_ATTESTATION, nil
-	default:
-		return platformv1.ServiceType_SERVICE_TYPE_UNSPECIFIED, cli.ErrInvalidServiceType{Type: s}
 	}
 }

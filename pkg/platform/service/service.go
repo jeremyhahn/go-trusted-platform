@@ -13,7 +13,7 @@
 
 package service
 
-import xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+import xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
 type Service struct {
 	ID            uint64

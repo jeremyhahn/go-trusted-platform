@@ -323,11 +323,11 @@ func TestErrRenewCertificateFailed(t *testing.T) {
 	assert.Equal(t, "failed to renew certificate: original certificate not found", err.Error())
 }
 
-// TestErrExportBundleFailed verifies the error message format.
-func TestErrExportBundleFailed(t *testing.T) {
-	err := ErrExportBundleFailed{Reason: "CA not initialized"}
+// TestErrCABundleFailed verifies the error message format.
+func TestErrCABundleFailed(t *testing.T) {
+	err := ErrCABundleFailed{Reason: "CA not initialized"}
 
-	assert.Equal(t, "failed to export CA bundle: CA not initialized", err.Error())
+	assert.Equal(t, "CA bundle operation failed: CA not initialized", err.Error())
 }
 
 // TestErrInitCAFailed verifies the error message format.
@@ -436,7 +436,7 @@ func TestErrorsAreErrors(t *testing.T) {
 		ErrRevokeCertificateFailed{Reason: "reason"},
 		ErrRenewCertificateFailed{Reason: "reason"},
 		ErrVerifyCertificateFailed{Reason: "reason"},
-		ErrExportBundleFailed{Reason: "reason"},
+		ErrCABundleFailed{Reason: "reason"},
 		ErrBundleEmpty{},
 		ErrInitCAFailed{Reason: "reason"},
 		ErrGetCAInfoFailed{Reason: "reason"},
@@ -645,9 +645,9 @@ func TestErrorsWithErrorsAs(t *testing.T) {
 		assert.Equal(t, "failed", target.Reason)
 	})
 
-	t.Run("ErrExportBundleFailed", func(t *testing.T) {
-		var err error = ErrExportBundleFailed{Reason: "failed"}
-		var target ErrExportBundleFailed
+	t.Run("ErrCABundleFailed", func(t *testing.T) {
+		var err error = ErrCABundleFailed{Reason: "failed"}
+		var target ErrCABundleFailed
 		assert.True(t, errors.As(err, &target))
 		assert.Equal(t, "failed", target.Reason)
 	})

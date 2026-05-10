@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	basePath = "/api/v1/iam"
+	basePath = "/iam"
 )
 
 // IAMRouter provides REST routing for IAM operations
@@ -55,6 +55,61 @@ func (r *IAMRouter) RegisterRoutes(router *mux.Router) {
 	r.registerRoleRoutes(iamRouter)
 	r.registerPolicyRoutes(iamRouter)
 	r.registerAppRoutes(iamRouter)
+
+	// Flat (tenant-implicit) routes — convenience aliases that the
+	// WebUI hits without carrying the tenant in the URL. The
+	// handlers' `getTenantID` falls back to the JWT `tenant_id`
+	// claim when the URL doesn't contain {tenant}, so the same
+	// handler body backs both forms.
+	r.registerFlatRoutes(iamRouter)
+}
+
+// registerFlatRoutes registers tenant-implicit aliases for the IAM
+// collections. Used by the WebUI which sources the active tenant
+// from the JWT rather than encoding it in every URL.
+func (r *IAMRouter) registerFlatRoutes(router *mux.Router) {
+	// Users
+	router.HandleFunc("/users", r.handlers.CreateUser).Methods("POST")
+	router.HandleFunc("/users", r.handlers.ListUsers).Methods("GET")
+	router.HandleFunc("/users/{id}", r.handlers.GetUser).Methods("GET")
+	router.HandleFunc("/users/{id}", r.handlers.UpdateUser).Methods("PUT")
+	router.HandleFunc("/users/{id}", r.handlers.DeleteUser).Methods("DELETE")
+	router.HandleFunc("/users/{id}/roles/{role}", r.handlers.AssignUserRole).Methods("POST")
+	router.HandleFunc("/users/{id}/roles/{role}", r.handlers.RevokeUserRole).Methods("DELETE")
+
+	// Groups
+	router.HandleFunc("/groups", r.handlers.CreateGroup).Methods("POST")
+	router.HandleFunc("/groups", r.handlers.ListGroups).Methods("GET")
+	router.HandleFunc("/groups/{id}", r.handlers.GetGroup).Methods("GET")
+	router.HandleFunc("/groups/{id}", r.handlers.UpdateGroup).Methods("PUT")
+	router.HandleFunc("/groups/{id}", r.handlers.DeleteGroup).Methods("DELETE")
+	router.HandleFunc("/groups/{id}/members/{user}", r.handlers.AddGroupMember).Methods("POST")
+	router.HandleFunc("/groups/{id}/members/{user}", r.handlers.RemoveGroupMember).Methods("DELETE")
+
+	// Roles
+	router.HandleFunc("/roles", r.handlers.CreateRole).Methods("POST")
+	router.HandleFunc("/roles", r.handlers.ListRoles).Methods("GET")
+	router.HandleFunc("/roles/{id}", r.handlers.GetRole).Methods("GET")
+	router.HandleFunc("/roles/{id}", r.handlers.UpdateRole).Methods("PUT")
+	router.HandleFunc("/roles/{id}", r.handlers.DeleteRole).Methods("DELETE")
+
+	// Policies (special action routes registered before {id} to
+	// avoid conflicts).
+	router.HandleFunc("/policies/validate", r.handlers.ValidatePolicy).Methods("POST")
+	router.HandleFunc("/policies/test", r.handlers.TestPolicy).Methods("POST")
+	router.HandleFunc("/policies", r.handlers.CreatePolicy).Methods("POST")
+	router.HandleFunc("/policies", r.handlers.ListPolicies).Methods("GET")
+	router.HandleFunc("/policies/{id}", r.handlers.GetPolicy).Methods("GET")
+	router.HandleFunc("/policies/{id}", r.handlers.UpdatePolicy).Methods("PUT")
+	router.HandleFunc("/policies/{id}", r.handlers.DeletePolicy).Methods("DELETE")
+
+	// Applications
+	router.HandleFunc("/apps", r.handlers.RegisterApp).Methods("POST")
+	router.HandleFunc("/apps", r.handlers.ListApps).Methods("GET")
+	router.HandleFunc("/apps/{id}", r.handlers.GetApp).Methods("GET")
+	router.HandleFunc("/apps/{id}", r.handlers.UpdateApp).Methods("PUT")
+	router.HandleFunc("/apps/{id}", r.handlers.DeleteApp).Methods("DELETE")
+	router.HandleFunc("/apps/{id}/rotate", r.handlers.RotateAppSecret).Methods("POST")
 }
 
 // registerTenantRoutes registers tenant management endpoints

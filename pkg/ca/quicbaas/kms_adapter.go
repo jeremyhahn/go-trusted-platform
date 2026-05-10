@@ -21,7 +21,7 @@ import (
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 )
 
 // QuicBaaSKMSAdapter adapts go-quicbaas SDK's KMS client to go-trusted-ca's

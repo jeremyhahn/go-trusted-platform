@@ -495,11 +495,13 @@ export default function VectorDatabasePage() {
                       <SelectValue placeholder="Select collection" />
                     </SelectTrigger>
                     <SelectContent>
-                      {collections.map((c) => (
-                        <SelectItem key={c.name} value={c.name}>
-                          {c.name} ({c.dimension}d)
-                        </SelectItem>
-                      ))}
+                      {collections
+                        .filter((c) => c.name && c.name.length > 0)
+                        .map((c) => (
+                          <SelectItem key={c.name} value={c.name}>
+                            {c.name} ({c.dimension}d)
+                          </SelectItem>
+                        ))}
                     </SelectContent>
                   </Select>
                 </div>

@@ -2,7 +2,8 @@
 
 import * as React from "react";
 import { use } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { resolveDynamicId } from "@/utils/dynamic-route";
 import { Button } from "@/components/ui/button";
 import { CertDetail } from "@/components/features/ca/cert-detail";
 import { CertChain } from "@/components/features/ca/cert-chain";
@@ -20,7 +21,9 @@ import { ArrowLeft, Loader2, AlertCircle } from "lucide-react";
  * - Revoke certificate
  */
 export default function CertificateDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+  const resolved = use(params);
+  const pathname = usePathname();
+  const id = resolveDynamicId(resolved as any, pathname, "certificates");
   const router = useRouter();
   const ca = useCA();
   const { toast } = useToast();
@@ -31,40 +34,56 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
     [id]
   );
 
-  // Transform SDK Certificate to UI CertificateDetail type
+  // Transform SDK Certificate to UI CertificateDetail type. The platform
+  // CA REST handler returns the certificate either at `.certificate`
+  // (envelope) or directly on the payload, with snake_case keys and
+  // numeric Unix-second timestamps. Tolerate both shapes and convert.
   const certificate = React.useMemo(() => {
-    if (!response?.certificate) return null;
+    const cert: any = (response as any)?.certificate ?? response ?? null;
+    if (!cert) return null;
 
-    const cert = response.certificate;
-
-    // Map SDK CertificateStatus to UI status
-    const mapStatus = (status: string): 'active' | 'revoked' | 'expired' => {
-      if (status === 'REVOKED') return 'revoked';
-      if (status === 'EXPIRED') return 'expired';
+    const status: string = cert.status ?? cert.Status ?? 'VALID';
+    const mapStatus = (s: string): 'active' | 'revoked' | 'expired' => {
+      const u = String(s).toUpperCase();
+      if (u === 'REVOKED') return 'revoked';
+      if (u === 'EXPIRED') return 'expired';
       return 'active';
     };
 
-    // Map certificate type (SDK doesn't have type, infer from isCA)
-    const mapType = (isCA: boolean): 'root' | 'intermediate' | 'leaf' => {
-      if (!isCA) return 'leaf';
-      // TODO: Distinguish between root and intermediate CAs
-      return 'intermediate';
+    const isCA: boolean = cert.isCA ?? cert.is_ca ?? false;
+    const mapType = (b: boolean): 'root' | 'intermediate' | 'leaf' => (b ? 'intermediate' : 'leaf');
+
+    const subj = cert.subject || {};
+    const subjectCN: string = subj.commonName ?? subj.common_name ?? '';
+    const subjectParts = [
+      subjectCN ? `CN=${subjectCN}` : '',
+      (subj.organization ?? subj.O) ? `O=${subj.organization ?? subj.O}` : '',
+      (subj.country ?? subj.C) ? `C=${subj.country ?? subj.C}` : '',
+    ].filter(Boolean).join(', ');
+
+    const toIso = (v: any): string => {
+      if (!v && v !== 0) return '';
+      if (typeof v === 'number') {
+        // Server sends Unix seconds; JS Date wants ms.
+        return new Date(v * 1000).toISOString();
+      }
+      return String(v);
     };
 
     return {
       id: cert.serial,
-      subject: cert.subject.commonName,
+      subject: subjectParts || subjectCN,
       issuer: cert.issuer,
       serialNumber: cert.serial,
-      type: mapType(cert.isCA),
-      status: mapStatus(cert.status),
-      notBefore: cert.notBefore,
-      notAfter: cert.notAfter,
-      publicKeyAlgorithm: cert.keyAlgorithm,
-      signatureAlgorithm: cert.signatureAlgorithm,
-      publicKey: '', // TODO: Extract from PEM if needed
-      extensions: [], // TODO: Map from keyUsage and extKeyUsage
-      chain: [], // TODO: Fetch certificate chain
+      type: mapType(isCA),
+      status: mapStatus(status),
+      notBefore: toIso(cert.notBefore ?? cert.not_before),
+      notAfter: toIso(cert.notAfter ?? cert.not_after),
+      publicKeyAlgorithm: cert.keyAlgorithm ?? cert.key_algorithm ?? '',
+      signatureAlgorithm: cert.signatureAlgorithm ?? cert.signature_algorithm ?? '',
+      publicKey: '',
+      extensions: [],
+      chain: [],
       pemEncoded: cert.pem || '',
       derEncoded: cert.der || '',
     } as CertificateDetail;

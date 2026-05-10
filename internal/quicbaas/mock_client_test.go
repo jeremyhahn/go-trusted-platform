@@ -618,3 +618,8 @@ func (m *MockClient) Orchestrator() quicbaas.OrchestratorClient { return nil }
 
 // Verify MockClient implements quicbaas.Client.
 var _ quicbaas.Client = (*MockClient)(nil)
+
+// SSHKeys, DEK, ClusterDEK stubs satisfying the updated quicbaassdk.Client
+// interface. Tests don't exercise these sub-clients.
+func (m *MockClient) SSHKeys() quicbaas.SSHKeyClient { return nil }
+func (m *MockClient) DEK() quicbaas.DEKClient { return nil }

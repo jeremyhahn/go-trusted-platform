@@ -232,3 +232,36 @@ func (e *ErrBackendStatusFailed) Error() string {
 }
 
 func (e *ErrBackendStatusFailed) Unwrap() error { return e.Cause }
+
+// ErrRewrapFailed is returned when a rewrap operation fails.
+type ErrRewrapFailed struct {
+	Cause error
+}
+
+func (e *ErrRewrapFailed) Error() string {
+	return fmt.Sprintf("failed to rewrap: %v", e.Cause)
+}
+
+func (e *ErrRewrapFailed) Unwrap() error { return e.Cause }
+
+// ErrBatchEncryptFailed is returned when a batch encrypt operation fails.
+type ErrBatchEncryptFailed struct {
+	Cause error
+}
+
+func (e *ErrBatchEncryptFailed) Error() string {
+	return fmt.Sprintf("failed to batch encrypt: %v", e.Cause)
+}
+
+func (e *ErrBatchEncryptFailed) Unwrap() error { return e.Cause }
+
+// ErrBatchDecryptFailed is returned when a batch decrypt operation fails.
+type ErrBatchDecryptFailed struct {
+	Cause error
+}
+
+func (e *ErrBatchDecryptFailed) Error() string {
+	return fmt.Sprintf("failed to batch decrypt: %v", e.Cause)
+}
+
+func (e *ErrBatchDecryptFailed) Unwrap() error { return e.Cause }

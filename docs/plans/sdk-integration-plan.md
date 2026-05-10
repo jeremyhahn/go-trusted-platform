@@ -30,7 +30,7 @@ hack races the initialization and is fragile.
 
 **Problem 3: Two separate CA instances**
 
-go-quicbaas always creates its own internal BasicCA for TLS bootstrap via `initializeCA()` in
+go-quicbaas always creates its own internal TrustedCA for TLS bootstrap via `initializeCA()` in
 `pkg/server/lifecycle.go`. go-trusted-platform independently creates a go-trusted-ca CA.
 These are distinct instances with no relationship. go-quicbaas cannot use the platform CA for
 its TLS needs, and the platform CA cannot benefit from go-quicbaas's lifecycle management.
@@ -69,7 +69,7 @@ go-trusted-platform
 go-trusted-platform
 ├── xkms: native NewFileStorageBackend(path) for CA key/cert storage
 ├── go-trusted-ca: CA init with xkms native backends
-├── go-quicbaas: WithCA(trustedCA) — single CA, no internal BasicCA
+├── go-quicbaas: WithCA(trustedCA) — single CA, no internal TrustedCA
 │   └── QuicBaaS ObjectStorage, KMS, KV, IAM available
 └── All platform storage through QuicBaaS SDK
     ├── ObjectStorage (TenantID + TenantDEK) → certs, ACME state, objects
@@ -112,9 +112,9 @@ fully standalone-capable when no external CA is provided.
 
 **Type Compatibility**
 
-`go-xkms/pkg/ca/interface.go` defines `type BasicCA = XKMSCA` (a type alias, not a new type).
-`go-trusted-ca`'s `CertificateAuthority` embeds `xkmsca.XKMSCA`. Both sides use the same
-interface. The `WithCA` option field type is `xkmsca.XKMSCA` (or equivalently `xkmsca.BasicCA`).
+`go-xkms/pkg/ca/interface.go` defines `type TrustedCA = TrustedCA` (a type alias, not a new type).
+`go-trusted-ca`'s `CertificateAuthority` embeds `xkmsca.TrustedCA`. Both sides use the same
+interface. The `WithCA` option field type is `xkmsca.TrustedCA` (or equivalently `xkmsca.TrustedCA`).
 
 #### 1.1 Files to Modify
 
@@ -124,7 +124,7 @@ Add an `options` field to the `Server` struct to hold server options supplied at
 
 ```go
 type serverOptions struct {
-    externalCA      xkmsca.XKMSCA
+    externalCA      xkmsca.TrustedCA
     tlsCertificate  *tls.Certificate
 }
 ```
@@ -136,7 +136,7 @@ Update `NewServer` signature and body to accept variadic options and apply them:
 ```go
 type ServerOption func(*serverOptions)
 
-func WithCA(ca xkmsca.XKMSCA) ServerOption {
+func WithCA(ca xkmsca.TrustedCA) ServerOption {
     return func(o *serverOptions) { o.externalCA = ca }
 }
 
@@ -158,7 +158,7 @@ func NewServer(cfg *config.Config, opts ...ServerOption) (*Server, error) {
 Also export the existing `CA()` accessor so callers can retrieve it:
 
 ```go
-func (s *Server) CA() xkmsca.XKMSCA { return s.xkmsCA }
+func (s *Server) CA() xkmsca.TrustedCA { return s.xkmsCA }
 ```
 
 **`pkg/server/lifecycle.go`**
@@ -338,11 +338,11 @@ type EmbeddedServer struct {
     config     *Config
     logger     *logging.Logger
     server     *quicbaassdk.Server
-    externalCA xkmssdk.XKMSCA  // optional; forwarded to server as WithCA option
+    externalCA xkmssdk.TrustedCA  // optional; forwarded to server as WithCA option
     ...
 }
 
-func NewEmbeddedServerWithCA(config *Config, logger *logging.Logger, ca xkmssdk.XKMSCA) (*EmbeddedServer, error) {
+func NewEmbeddedServerWithCA(config *Config, logger *logging.Logger, ca xkmssdk.TrustedCA) (*EmbeddedServer, error) {
     srv, err := NewEmbeddedServer(config, logger)
     if err != nil {
         return nil, err
@@ -367,7 +367,7 @@ s.server, err = quicbaassdk.NewServer(cfg, serverOpts...)
 Update `NewFactory` to accept an optional CA parameter and forward it to `EmbeddedServer`:
 
 ```go
-func NewFactory(logger *logging.Logger, config *Config, ca xkmssdk.XKMSCA) (*Factory, error) {
+func NewFactory(logger *logging.Logger, config *Config, ca xkmssdk.TrustedCA) (*Factory, error) {
     ...
     if config.Transport == TransportEmbedded {
         srv, err := NewEmbeddedServerWithCA(config, logger, ca)
@@ -947,7 +947,7 @@ zero options by default. The `initializeCA()` function runs its full existing lo
 
 ```
 go-trusted-platform
-├── go-xkms/sdk/go           — XKMSCA, file storage backends (direct)
+├── go-xkms/sdk/go           — TrustedCA, file storage backends (direct)
 ├── go-trusted-ca/sdk/go     — CertificateAuthority, ACME server (direct)
 ├── go-quicbaas/sdk/go       — ObjectStorage, KMS, IAM (direct)
 │   └── [WithCA injects platform CA into QuicBaaS]

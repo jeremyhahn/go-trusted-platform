@@ -131,6 +131,7 @@ type PlatformConfig struct {
 	ObjcopyBinary      string       `yaml:"objcopy_binary" json:"objcopy_binary"`
 	ConfigFile         string       `yaml:"config_file" json:"config_file"`       // platformd.yaml config file path
 	CABundlePath       string       `yaml:"ca_bundle_path" json:"ca_bundle_path"` // CA bundle to embed in ISO for client trust store
+	CAKeyAlgorithm     string       `yaml:"ca_key_algorithm" json:"ca_key_algorithm"`     // Filter CA bundle by key algorithm (e.g., rsa, ecdsa, ed25519)
 	AfterInstallAction string       `yaml:"after_install_action" json:"after_install_action"`
 	WebUIPath          string       `yaml:"webui_path" json:"webui_path"`       // Path to public_html directory or tarball
 	PlatformType       PlatformType `yaml:"platform_type" json:"platform_type"` // Platform type: client or server

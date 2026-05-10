@@ -639,11 +639,13 @@ export default function KVStorePage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All namespaces</SelectItem>
-                  {namespaces.map((ns) => (
-                    <SelectItem key={ns} value={`${ns}/`}>
-                      {ns}
-                    </SelectItem>
-                  ))}
+                  {namespaces
+                    .filter((ns) => ns && ns.length > 0)
+                    .map((ns) => (
+                      <SelectItem key={ns} value={`${ns}/`}>
+                        {ns}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>

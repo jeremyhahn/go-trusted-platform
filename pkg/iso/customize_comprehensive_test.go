@@ -46,30 +46,3 @@ func TestCreateDracutModule(t *testing.T) {
 		assert.DirExists(t, moduleDir)
 	}
 }
-
-func TestCreateAutoinstallOverlay(t *testing.T) {
-	tmpDir := t.TempDir()
-	extractDir := filepath.Join(tmpDir, "extract")
-	require.NoError(t, os.MkdirAll(extractDir, 0755))
-
-	config := &PlatformISOConfig{
-		Alpine: AlpineConfig{
-			Version: "3.22.2",
-		},
-		Platform: PlatformConfig{
-			Version: "1.4.0",
-		},
-	}
-
-	customizer := NewCustomizer(config, logging.DefaultLogger())
-	err := customizer.createAutoinstallOverlay(extractDir)
-
-	// Should create autoinstall overlay structure
-	assert.NoError(t, err)
-
-	// Verify some expected directories
-	etcDir := filepath.Join(extractDir, "etc")
-	if _, statErr := os.Stat(etcDir); statErr == nil {
-		assert.DirExists(t, etcDir)
-	}
-}

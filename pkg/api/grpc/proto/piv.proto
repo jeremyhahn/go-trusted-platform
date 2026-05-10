@@ -1,0 +1,148 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+// PIVService exposes PIV (Personal Identity Verification, NIST SP 800-73-4)
+// smartcard operations.
+service PIVService {
+  // ListDevices enumerates PIV devices attached to the host.
+  rpc ListDevices(PIVListDevicesRequest) returns (PIVListDevicesResponse);
+
+  // ListSlots lists the slots available on a device.
+  rpc ListSlots(PIVListSlotsRequest) returns (PIVListSlotsResponse);
+
+  // SlotInfo returns detailed information about a single slot.
+  rpc SlotInfo(PIVSlotInfoRequest) returns (PIVSlotInfoResponse);
+
+  // Generate asks the device to generate a fresh key in a slot.
+  rpc Generate(PIVGenerateRequest) returns (PIVGenerateResponse);
+
+  // Import imports an existing private key into a slot.
+  rpc Import(PIVImportRequest) returns (PIVImportResponse);
+
+  // Sign signs a payload with the key in the specified slot.
+  rpc Sign(PIVSignRequest) returns (PIVSignResponse);
+
+  // Attest returns the attestation certificate(s) for a slot.
+  rpc Attest(PIVAttestRequest) returns (PIVAttestResponse);
+
+  // Reset factory-resets a PIV device.
+  rpc Reset(PIVResetRequest) returns (PIVResetResponse);
+}
+
+// PIVAlgorithm enumerates the PIV key algorithms.
+enum PIVAlgorithm {
+  PIV_ALGORITHM_UNSPECIFIED = 0;
+  PIV_ALGORITHM_RSA = 1;
+  PIV_ALGORITHM_ECDSA = 2;
+  PIV_ALGORITHM_ED25519 = 3;
+}
+
+// PIVDevice describes a PIV-capable device.
+message PIVDevice {
+  string id = 1;
+  string name = 2;
+  string manufacturer = 3;
+  string model = 4;
+  string serial = 5;
+  string firmware_version = 6;
+}
+
+// PIVSlot describes a single PIV slot.
+message PIVSlot {
+  string id = 1;
+  string name = 2;
+  PIVAlgorithm algorithm = 3;
+  bool has_key = 4;
+  bool has_certificate = 5;
+}
+
+// PIVListDevicesRequest is the empty list request.
+message PIVListDevicesRequest {}
+
+// PIVListDevicesResponse returns the list of attached devices.
+message PIVListDevicesResponse {
+  repeated PIVDevice devices = 1;
+}
+
+// PIVListSlotsRequest requests the slot listing for one device.
+message PIVListSlotsRequest {
+  string device = 1;
+}
+
+// PIVListSlotsResponse returns the slots on a device.
+message PIVListSlotsResponse {
+  repeated PIVSlot slots = 1;
+}
+
+// PIVSlotInfoRequest requests detail on a specific slot.
+message PIVSlotInfoRequest {
+  string slot = 1;
+  string device = 2;
+}
+
+// PIVSlotInfoResponse returns slot contents.
+message PIVSlotInfoResponse {
+  PIVSlot slot = 1;
+  string public_key_pem = 2;
+  string certificate_pem = 3;
+}
+
+// PIVGenerateRequest asks the device to generate a key.
+message PIVGenerateRequest {
+  string slot = 1;
+  PIVAlgorithm algorithm = 2;
+  string pin = 3;
+}
+
+// PIVGenerateResponse returns the generated public key.
+message PIVGenerateResponse {
+  string public_key_pem = 1;
+}
+
+// PIVImportRequest imports an externally generated key.
+message PIVImportRequest {
+  string slot = 1;
+  string private_key_pem = 2;
+  string pin = 3;
+}
+
+// PIVImportResponse reports whether the import succeeded.
+message PIVImportResponse {
+  bool imported = 1;
+}
+
+// PIVSignRequest signs a payload with a slot's key.
+message PIVSignRequest {
+  string slot = 1;
+  bytes payload = 2;
+  string pin = 3;
+}
+
+// PIVSignResponse returns the raw signature.
+message PIVSignResponse {
+  bytes signature = 1;
+}
+
+// PIVAttestRequest asks the PIV service to attest a slot's key.
+message PIVAttestRequest {
+  string slot = 1;
+}
+
+// PIVAttestResponse returns the attestation certificate(s).
+message PIVAttestResponse {
+  string attestation_cert_pem = 1;
+  string attestation_chain_pem = 2;
+}
+
+// PIVResetRequest factory-resets the target device.
+message PIVResetRequest {
+  string device = 1;
+}
+
+// PIVResetResponse reports the reset outcome.
+message PIVResetResponse {
+  bool reset = 1;
+}

@@ -728,11 +728,13 @@ export default function ObjectStoragePage() {
                       <SelectValue placeholder="Select bucket" />
                     </SelectTrigger>
                     <SelectContent>
-                      {buckets.map((bucket) => (
-                        <SelectItem key={bucket.id} value={bucket.name}>
-                          {bucket.name}
-                        </SelectItem>
-                      ))}
+                      {buckets
+                        .filter((bucket) => bucket.name && bucket.name.length > 0)
+                        .map((bucket) => (
+                          <SelectItem key={bucket.id} value={bucket.name}>
+                            {bucket.name}
+                          </SelectItem>
+                        ))}
                     </SelectContent>
                   </Select>
                 </div>

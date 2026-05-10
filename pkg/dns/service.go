@@ -194,6 +194,18 @@ func (s *Service) Save(ctx context.Context, zone *entities.Zone) error {
 		return err
 	}
 
+	// Stamp a deterministic, name-derived ID so subsequent
+	// `Zone(ctx, name)` lookups can find the zone by hash. Without this
+	// the DAO assigned an auto-incrementing/timestamp ID at save time
+	// and `util.NewID(name)`-based reads always 404'd.
+	if zone.ID == 0 {
+		name := zone.Name
+		if !strings.HasSuffix(name, ".") {
+			name += "."
+		}
+		zone.ID = util.NewID([]byte(name))
+	}
+
 	// Sign the zone if DNSSEC is enabled
 	if s.dnssecSvc != nil && s.dnssecSvc.IsEnabled() {
 		if err := s.dnssecSvc.SignZone(zone); err != nil {

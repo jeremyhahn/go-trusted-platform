@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -247,12 +248,171 @@ func (o *Orchestrator) resolveNodeConfig(hostname, role string) (string, error) 
 	// Apply global identity: fill empty domain, hostmaster, tenant-id from platform config.
 	applyGlobalIdentity(templateMap, &o.config.Platform)
 
+	// Point non-CP nodes at the control plane's IP for DNS. The CP
+	// runs the authoritative DNS service for the internal + public
+	// zones; FQDNs (ACME directory URL, webservice SANs) resolve via
+	// that resolver. Hard-coding /etc/hosts entries was considered and
+	// rejected — DNS is the operator-correct path because it also
+	// covers newly-issued services (dynamic zone updates) and keeps
+	// TLS SAN validation aligned with whatever platformd's DNS
+	// service publishes.
+	if role != RoleControlPlane {
+		o.injectControlPlaneDNS(templateMap)
+	} else {
+		// CP needs a dnsmasq forwarder too so platformd's own libc
+		// lookups (e.g. ACME http-01 challenge validation — CP dials
+		// the client at http://<gw-fqdn>:80/) resolve through the
+		// authoritative zone that CP itself serves on 127.0.0.1:9053.
+		// Without this, resolv.conf → 127.0.0.1:53 (no listener) →
+		// "connection refused" and the ACME server can't validate
+		// any http-01/tls-alpn challenge.
+		o.injectControlPlaneSelfDNS(templateMap)
+	}
+
 	resolved, err := yaml.Marshal(templateMap)
 	if err != nil {
 		return "", ErrTemplateReadFailed{Role: role, Path: templatePath, Cause: err}
 	}
 
 	return string(resolved), nil
+}
+
+// injectControlPlaneDNS wires non-CP nodes to the control plane's
+// authoritative DNS via a LOCAL dnsmasq forwarder. Why not point
+// /etc/resolv.conf straight at the CP's IP?
+//
+//	Because platformd does not run as root — its DNS service binds
+//	to port 9053 (internal zone) and 8053 (public zone), not the
+//	privileged 53. libc resolvers always query :53, so every client
+//	gets its own local dnsmasq (listening on 127.0.0.1:53) that
+//	forwards upstream to <cp_ip>#9053. Result: resolv.conf stays at
+//	localhost, dnsmasq handles the port mapping, and platformd
+//	never needs CAP_NET_BIND_SERVICE.
+//
+// Sets `network.dns.upstream-dns: "<cp_ip>#9053"`. The Alpine
+// installer's configureDNSWithDnsmasq (alpine.go) picks this up:
+// installs dnsmasq, writes /etc/dnsmasq.conf with server=<cp_ip>#9053,
+// enables the service at boot, and writes resolv.conf with
+// nameserver 127.0.0.1. Search-domains are populated from the public
+// + internal zones.
+func (o *Orchestrator) injectControlPlaneDNS(templateMap map[string]interface{}) {
+	var cpNode *NodeConfig
+	for i := range o.config.Nodes {
+		if o.config.Nodes[i].Role == RoleControlPlane {
+			cpNode = &o.config.Nodes[i]
+			break
+		}
+	}
+	if cpNode == nil {
+		return
+	}
+
+	cpIPs := staticIPsFromOverrides(cpNode.Overrides)
+	if len(cpIPs) == 0 {
+		return
+	}
+	cpIP := cpIPs[0]
+	// CP internal DNS port — matches dns.internal.port in the CP
+	// template. Kept in sync via the defaultInternalDNSPort constant
+	// so a template change doesn't silently break client resolution.
+	upstream := cpIP + "#" + defaultInternalDNSPort
+
+	network, ok := templateMap["network"].(map[string]interface{})
+	if !ok {
+		network = map[string]interface{}{}
+		templateMap["network"] = network
+	}
+	dns, ok := network["dns"].(map[string]interface{})
+	if !ok {
+		dns = map[string]interface{}{}
+		network["dns"] = dns
+	}
+	dns["upstream-dns"] = upstream
+
+	// Search-domain list so bare hostnames resolve against the
+	// deployment's zones. dnsmasq doesn't own this — /etc/resolv.conf
+	// does — so the installer writes it from DNS.SearchDomains.
+	searchDomains := make(map[string]struct{})
+	addSearchDomain := func(d string) {
+		d = strings.TrimSpace(d)
+		if d != "" {
+			searchDomains[d] = struct{}{}
+		}
+	}
+	if s, _ := templateMap["domain"].(string); s != "" {
+		addSearchDomain(s)
+	}
+	if s, _ := templateMap["internal-domain"].(string); s != "" {
+		addSearchDomain(s)
+	}
+	if s, _ := templateMap["internal_domain"].(string); s != "" {
+		addSearchDomain(s)
+	}
+	addSearchDomain(o.config.Platform.Domain)
+	addSearchDomain(o.config.Platform.InternalDomain)
+
+	if len(searchDomains) > 0 {
+		sd := make([]interface{}, 0, len(searchDomains))
+		for s := range searchDomains {
+			sd = append(sd, s)
+		}
+		dns["search-domains"] = sd
+	}
+}
+
+// defaultInternalDNSPort is the port platformd's internal DNS zone
+// listens on (non-privileged; see CP template dns.internal.port).
+// Clients forward to it via local dnsmasq.
+const defaultInternalDNSPort = "9053"
+
+// injectControlPlaneSelfDNS wires the CP to forward libc resolver
+// traffic (resolv.conf → 127.0.0.1:53) to its OWN platformd DNS
+// authoritative zone on 127.0.0.1:9053. Same dnsmasq pattern as
+// client nodes, just with the upstream pointing at loopback
+// instead of CP's public IP.
+//
+// This is needed for any CP-side lookup platformd itself triggers —
+// chief among them ACME http-01 challenge validation, where the
+// ACME server dials http://<gw-fqdn>:80/.well-known/acme-challenge/…
+// to verify the client published the expected token.
+func (o *Orchestrator) injectControlPlaneSelfDNS(templateMap map[string]interface{}) {
+	network, ok := templateMap["network"].(map[string]interface{})
+	if !ok {
+		network = map[string]interface{}{}
+		templateMap["network"] = network
+	}
+	dns, ok := network["dns"].(map[string]interface{})
+	if !ok {
+		dns = map[string]interface{}{}
+		network["dns"] = dns
+	}
+	dns["upstream-dns"] = "127.0.0.1#" + defaultInternalDNSPort
+
+	searchDomains := make(map[string]struct{})
+	addSearchDomain := func(d string) {
+		d = strings.TrimSpace(d)
+		if d != "" {
+			searchDomains[d] = struct{}{}
+		}
+	}
+	if s, _ := templateMap["domain"].(string); s != "" {
+		addSearchDomain(s)
+	}
+	if s, _ := templateMap["internal-domain"].(string); s != "" {
+		addSearchDomain(s)
+	}
+	if s, _ := templateMap["internal_domain"].(string); s != "" {
+		addSearchDomain(s)
+	}
+	addSearchDomain(o.config.Platform.Domain)
+	addSearchDomain(o.config.Platform.InternalDomain)
+	if len(searchDomains) > 0 {
+		sd := make([]interface{}, 0, len(searchDomains))
+		for s := range searchDomains {
+			sd = append(sd, s)
+		}
+		dns["search-domains"] = sd
+	}
 }
 
 // applyGlobalIdentity fills empty top-level identity fields from the platform

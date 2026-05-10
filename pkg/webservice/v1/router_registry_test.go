@@ -19,10 +19,14 @@ import (
 
 	"github.com/gorilla/mux"
 
-	proto "github.com/jeremyhahn/go-quicbaas/api/proto"
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
+	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
+	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
@@ -33,7 +37,8 @@ import (
 	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/webauthn"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	sdktransport "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -102,7 +107,7 @@ func (r *testHandlerRegistry) JSONWebTokenHandler() jwt.TokenHandler {
 	return r.tokenHandler
 }
 
-func (r *testHandlerRegistry) KMSClients() (proto.KeyManagementClient, proto.CryptoClient, proto.DEKManagementClient, proto.SecretsManagementClient) {
+func (r *testHandlerRegistry) KMSSDKClients() (kmsclient.Client, cryptoclient.Client, dekclient.Client, secretsclient.Client) {
 	return nil, nil, nil, nil
 }
 
@@ -143,6 +148,62 @@ func (r *testHandlerRegistry) DeviceProfileService() devicepkg.DeviceProfileServ
 }
 
 func (r *testHandlerRegistry) ConfigDeliveryHandler() configdelivery.RestHandler {
+	return nil
+}
+
+func (r *testHandlerRegistry) SwitchService() device.SwitchServiceProvider {
+	return nil
+}
+
+func (r *testHandlerRegistry) DNSService() dns.DNSService {
+	return nil
+}
+
+func (r *testHandlerRegistry) DeviceService() devicepkg.DeviceService {
+	return nil
+}
+
+func (r *testHandlerRegistry) EmbeddedAdapter() sdktransport.Adapter {
+	return nil
+}
+
+func (r *testHandlerRegistry) AttestationServiceServer() platformv1.AttestationServiceServer {
+	return nil
+}
+
+func (r *testHandlerRegistry) ComputeServiceServer() platformv1.ComputeServiceServer {
+	return nil
+}
+
+func (r *testHandlerRegistry) EABServiceServer() platformv1.EABServiceServer {
+	return nil
+}
+
+func (r *testHandlerRegistry) GatewayServiceServer() platformv1.GatewayServiceServer {
+	return nil
+}
+
+func (r *testHandlerRegistry) IDevIDServiceServer() platformv1.IDevIDServiceServer {
+	return nil
+}
+
+func (r *testHandlerRegistry) InvitationServiceServer() platformv1.InvitationServiceServer {
+	return nil
+}
+
+func (r *testHandlerRegistry) OverlayServiceServer() platformv1.OverlayServiceServer {
+	return nil
+}
+
+func (r *testHandlerRegistry) PXEServiceServer() platformv1.PXEServiceServer {
+	return nil
+}
+
+func (r *testHandlerRegistry) TenantServiceServer() platformv1.TenantServiceServer {
+	return nil
+}
+
+func (r *testHandlerRegistry) TPMServiceServer() platformv1.TPMServiceServer {
 	return nil
 }
 
@@ -454,8 +515,8 @@ func TestHandlerRegistry_AccessorMethods(t *testing.T) {
 		assert.Nil(t, pep)
 	})
 
-	t.Run("KMSClients returns nil when not set", func(t *testing.T) {
-		key, crypto, dek, secrets := registry.KMSClients()
+	t.Run("KMSSDKClients returns nil when not set", func(t *testing.T) {
+		key, crypto, dek, secrets := registry.KMSSDKClients()
 		assert.Nil(t, key)
 		assert.Nil(t, crypto)
 		assert.Nil(t, dek)

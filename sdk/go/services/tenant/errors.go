@@ -210,3 +210,54 @@ func (e *ErrGetDEKStatusFailed) Error() string {
 }
 
 func (e *ErrGetDEKStatusFailed) Unwrap() error { return e.Cause }
+
+// Per-Tenant Barrier errors (added 2026-04-28)
+
+// ErrInitTenantBarrierFailed wraps a failure of the InitTenantBarrier RPC.
+type ErrInitTenantBarrierFailed struct {
+	ID    string
+	Cause error
+}
+
+func (e *ErrInitTenantBarrierFailed) Error() string {
+	return fmt.Sprintf("failed to init tenant barrier %s: %v", e.ID, e.Cause)
+}
+
+func (e *ErrInitTenantBarrierFailed) Unwrap() error { return e.Cause }
+
+// ErrUnsealTenantBarrierFailed wraps a failure of the UnsealTenantBarrier RPC.
+type ErrUnsealTenantBarrierFailed struct {
+	ID    string
+	Cause error
+}
+
+func (e *ErrUnsealTenantBarrierFailed) Error() string {
+	return fmt.Sprintf("failed to unseal tenant barrier %s: %v", e.ID, e.Cause)
+}
+
+func (e *ErrUnsealTenantBarrierFailed) Unwrap() error { return e.Cause }
+
+// ErrSealTenantBarrierFailed wraps a failure of the SealTenantBarrier RPC.
+type ErrSealTenantBarrierFailed struct {
+	ID    string
+	Cause error
+}
+
+func (e *ErrSealTenantBarrierFailed) Error() string {
+	return fmt.Sprintf("failed to seal tenant barrier %s: %v", e.ID, e.Cause)
+}
+
+func (e *ErrSealTenantBarrierFailed) Unwrap() error { return e.Cause }
+
+// ErrGetTenantBarrierStatusFailed wraps a failure of the
+// GetTenantBarrierStatus RPC.
+type ErrGetTenantBarrierStatusFailed struct {
+	ID    string
+	Cause error
+}
+
+func (e *ErrGetTenantBarrierStatusFailed) Error() string {
+	return fmt.Sprintf("failed to get tenant barrier status for %s: %v", e.ID, e.Cause)
+}
+
+func (e *ErrGetTenantBarrierStatusFailed) Unwrap() error { return e.Cause }

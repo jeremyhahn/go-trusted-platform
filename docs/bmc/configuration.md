@@ -43,6 +43,72 @@ device_profile:
 | `username` | string | yes | - | BMC authentication username |
 | `password` | string | yes | - | BMC authentication password or vault reference |
 | `protocol` | string | no | `ipmi` | Protocol: `ipmi` or `redfish` |
+| `encryption-key` | string | no | - | Hex-encoded KG key for IPMI 2.0 RAKP (optional) |
+| `skip-tls-verify` | bool | no | false | Skip TLS verify on Redfish (self-signed initial BMC certs) |
+| `ca-cert-path` | string | no | - | Custom CA bundle for Redfish TLS verification |
+| `certificate` | object | no | - | BMC web-server TLS identity (see below) |
+| `key` | object | no | - | Private-key config for the cert (see below) |
+| `backend` | string | no | `auto` | Cert-deployment backend: `auto`, `redfish`, or `smc-cgi` |
+| `allow_cgi_fallback` | bool | no | `false` | Enable auto-mode selection of the Supermicro ATEN CGI cert backend. Gated until hardware validation clears (see `../operations/x10-smc-cgi-validation.md`). Explicit `backend: smc-cgi` bypasses this gate. |
+
+## BMC TLS Identity
+
+When `certificate:` and `key:` are both set, platformd manages the
+BMC's web-server TLS certificate automatically: issues at boot,
+deploys via the configured backend, and re-issues before expiry via
+the platform's scheduler.
+
+```yaml
+bmc:
+  address: bmc-node-17.internal
+  port: 443
+  username: admin
+  password: "vault://bmc/node-17"
+  protocol: redfish
+  skip-tls-verify: true         # allow the initial self-signed cert
+
+  # Cert identity -- same shape as webservice.certificate
+  certificate:
+    subject:
+      cn: bmc-node-17.internal
+    sans:
+      dns: [bmc-node-17.internal]
+    acme:
+      request:
+        authz_type: dns
+        challenge_type: dns-01  # ENFORCED -- http-01 is rejected
+    valid: 90                   # days
+
+  key:
+    algorithm: ECDSA
+    cn: bmc-node-17.internal
+
+  backend: auto                 # auto | redfish | smc-cgi
+  allow_cgi_fallback: false     # enable auto-mode CGI selection for Supermicro X10
+```
+
+### dns-01 is mandatory for BMC
+
+Platform config validation rejects `challenge_type != "dns-01"` for
+BMC identities. BMCs live on isolated management VLANs unreachable
+from ACME servers, so http-01 validation cannot succeed. Enforcement
+is at config-load time -- misconfigured YAML surfaces an operator
+error immediately, not at first renewal.
+
+The platform's authoritative DNS service is the challenge provider.
+
+### Backend selection
+
+| `backend` | Resolved path |
+|---|---|
+| `auto` (default, or empty) | Vendor probe -> `bmc.RecommendCertBackend`. Supermicro -> `smc-cgi` (gated by `allow_cgi_fallback`); others -> `redfish` |
+| `redfish` | Redfish `CertificateService.ReplaceCertificate` -- X11+, iDRAC9+, iLO5+ |
+| `smc-cgi` | Supermicro ATEN CGI `upload_ssl.cgi` -- X10 hardware, pre-Redfish CertificateService firmware. Bypasses the `allow_cgi_fallback` gate. |
+
+The `smc-cgi` backend in `auto` mode is **gated** behind hardware
+validation until an operator runs the procedure at
+`../operations/x10-smc-cgi-validation.md` and flips the
+`allow_cgi_fallback` flag. Explicit pinning bypasses the gate.
 
 ## Credential Management
 

@@ -16,6 +16,7 @@ package bootstrap
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -135,24 +136,56 @@ func discoverBMCNode(ctx context.Context, node *NodeConfig, logger *slog.Logger)
 	}
 
 	// Discover all MAC addresses (the BIOS may PXE-boot from any onboard NIC).
-	// If the operator pre-populated MACs in the bootstrap config, those manual
-	// values win and BMC auto-discovery is skipped entirely.
+	//
+	// Prior behavior: when the operator pre-populated MACs in bootstrap.yaml,
+	// BMC discovery was skipped entirely. That produced a fatal gap on multi-NIC
+	// hosts where the operator only listed the PXE-boot MAC but the installed
+	// OS's primary NIC (picked by eth0 enumeration) carries a different MAC.
+	// Per-MAC downstream lookups (install-log upload path, hostname config fetch,
+	// health registration) would miss because the NIC eth0 maps to wasn't in
+	// the known-MAC set.
+	//
+	// New behavior: treat YAML MACs as a seed, then union with BMC-discovered
+	// MACs so every onboard+addin NIC is represented. Operator-provided MACs
+	// still appear first so pxe_config.go and other MAC-order-sensitive code
+	// paths keep seeing their authoritative value up front.
 	var macs []string
-	if len(node.MACs) > 0 {
-		macs = append([]string(nil), node.MACs...)
-		logger.Debug("bootstrap: using operator-provided MACs, skipping BMC discovery",
-			slog.String("hostname", node.Hostname),
-			slog.Int("count", len(macs)))
-	} else {
-		discovered, err := bmc.DiscoverMACs(ctx, bmcConfig, logger)
-		if err != nil {
+	seen := map[string]struct{}{}
+	add := func(m string) {
+		lm := strings.ToLower(strings.TrimSpace(m))
+		if lm == "" {
+			return
+		}
+		if _, ok := seen[lm]; ok {
+			return
+		}
+		seen[lm] = struct{}{}
+		macs = append(macs, m)
+	}
+	for _, m := range node.MACs {
+		add(m)
+	}
+	discovered, discoverErr := bmc.DiscoverMACs(ctx, bmcConfig, logger)
+	if discoverErr != nil {
+		if len(macs) == 0 {
 			return DiscoveredNode{}, ErrMACDiscoveryFailed{
 				BMCAddress: node.BMCAddress,
-				Cause:      err,
+				Cause:      discoverErr,
 			}
 		}
-		macs = discovered
+		logger.Warn("bootstrap: BMC MAC discovery failed, using operator-provided MACs only",
+			slog.String("hostname", node.Hostname),
+			slog.Int("yaml_macs", len(macs)),
+			slog.String("error", discoverErr.Error()))
+	} else {
+		for _, m := range discovered {
+			add(m)
+		}
 	}
+	logger.Debug("bootstrap: resolved node MACs",
+		slog.String("hostname", node.Hostname),
+		slog.Int("yaml_count", len(node.MACs)),
+		slog.Int("total_count", len(macs)))
 
 	// Attempt to retrieve system info (best effort).
 	var sysInfo *bmc.SystemInfo

@@ -268,8 +268,7 @@ func detectScheme(uri string) string {
 		bootstrap.SchemeKMS,
 		bootstrap.SchemeRemoteKMS,
 		bootstrap.SchemeEnv,
-		bootstrap.SchemeAutoGen,
-		bootstrap.SchemeEncrypted,
+		bootstrap.SchemeIDevID,
 	} {
 		if len(uri) >= len(prefix) && uri[:len(prefix)] == prefix {
 			// Return scheme without ://

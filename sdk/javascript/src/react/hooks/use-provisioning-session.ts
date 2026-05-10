@@ -89,8 +89,16 @@ export function useProvisioningSessions(): UseProvisioningSessionResult {
       service.fulfillProvisioningSession(request)
   );
 
+  // Server may return either a bare array or `{sessions: [...]}`.
+  const raw = listResult.data as unknown;
+  let sessions: ProvisioningSession[] = [];
+  if (Array.isArray(raw)) {
+    sessions = raw as ProvisioningSession[];
+  } else if (raw && typeof raw === 'object' && Array.isArray((raw as { sessions?: unknown }).sessions)) {
+    sessions = (raw as { sessions: ProvisioningSession[] }).sessions;
+  }
   return {
-    sessions: listResult.data ?? [],
+    sessions,
     isLoading: listResult.isLoading,
     error: listResult.error ?? null,
     refetch: () => { void listResult.refetch(); },

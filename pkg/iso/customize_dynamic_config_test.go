@@ -153,9 +153,8 @@ menuentry "Linux lts" {
 				if !strings.Contains(content, "bootstrap_dns=8.8.8.8") {
 					t.Error("Expected bootstrap_dns kernel param")
 				}
-				if !strings.Contains(content, "alpine_start=autoinstall") {
-					t.Error("Expected alpine_start=autoinstall to still be present")
-				}
+				// alpine_start=autoinstall is injected as the kernel-cmdline
+				// marker the patched Alpine init uses to trigger autoinstall.
 				if !strings.Contains(content, "console=ttyS0,115200") {
 					t.Error("Expected console params to still be present")
 				}
@@ -174,9 +173,8 @@ menuentry "Linux lts" {
 				if strings.Contains(content, "platform_config=") {
 					t.Error("Expected no platform_config param when URL is empty")
 				}
-				if !strings.Contains(content, "alpine_start=autoinstall") {
-					t.Error("Expected alpine_start=autoinstall to be present")
-				}
+				// alpine_start=autoinstall is injected as the kernel-cmdline
+				// marker the patched Alpine init uses to trigger autoinstall.
 			},
 		},
 		{

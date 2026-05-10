@@ -413,3 +413,83 @@ func (c *Client) ListVMsDomain(ctx context.Context, params *ListVMsParams) (*Lis
 
 	return result, nil
 }
+
+// Container Domain-typed convenience methods
+
+// CreateContainerDomain creates a new container using domain parameters.
+func (c *Client) CreateContainerDomain(ctx context.Context, params *CreateContainerParams) (*Container, error) {
+	req := createContainerParamsToProto(params)
+	resp, err := c.grpc.CreateContainer(ctx, req)
+	if err != nil {
+		return nil, &ErrCreateContainerFailed{Cause: err}
+	}
+	return ContainerFromProto(resp.Container), nil
+}
+
+// GetContainerDomain retrieves a container by ID and returns a domain Container.
+func (c *Client) GetContainerDomain(ctx context.Context, id string) (*Container, error) {
+	resp, err := c.grpc.GetContainer(ctx, &platformv1.GetContainerRequest{Id: id})
+	if err != nil {
+		return nil, &ErrGetContainerFailed{ID: id, Cause: err}
+	}
+	return ContainerFromProto(resp.Container), nil
+}
+
+// StartContainerDomain starts a container and returns a domain ContainerStatus.
+func (c *Client) StartContainerDomain(ctx context.Context, id string) (*ContainerStatus, error) {
+	resp, err := c.grpc.StartContainer(ctx, &platformv1.StartContainerRequest{Id: id})
+	if err != nil {
+		return nil, &ErrStartContainerFailed{ID: id, Cause: err}
+	}
+	return containerStatusFromProto(resp.Status), nil
+}
+
+// StopContainerDomain stops a container using domain parameters.
+func (c *Client) StopContainerDomain(ctx context.Context, params *StopContainerParams) (*ContainerStatus, error) {
+	resp, err := c.grpc.StopContainer(ctx, &platformv1.StopContainerRequest{
+		Id:             params.ID,
+		TimeoutSeconds: params.TimeoutSeconds,
+	})
+	if err != nil {
+		return nil, &ErrStopContainerFailed{ID: params.ID, Cause: err}
+	}
+	return containerStatusFromProto(resp.Status), nil
+}
+
+// DeleteContainerDomain deletes a container using domain parameters.
+func (c *Client) DeleteContainerDomain(ctx context.Context, params *DeleteContainerParams) (*ContainerStatus, error) {
+	resp, err := c.grpc.DeleteContainer(ctx, &platformv1.DeleteContainerRequest{
+		Id:            params.ID,
+		Force:         params.Force,
+		DeleteVolumes: params.DeleteVolumes,
+	})
+	if err != nil {
+		return nil, &ErrDeleteContainerFailed{ID: params.ID, Cause: err}
+	}
+	return containerStatusFromProto(resp.Status), nil
+}
+
+// ListContainersDomain lists containers using domain parameters.
+func (c *Client) ListContainersDomain(ctx context.Context, params *ListContainersParams) (*ListContainersResult, error) {
+	req := listContainersParamsToProto(params)
+	resp, err := c.grpc.ListContainers(ctx, req)
+	if err != nil {
+		return nil, &ErrListContainersFailed{Cause: err}
+	}
+
+	containers := make([]*Container, len(resp.Containers))
+	for i, p := range resp.Containers {
+		containers[i] = ContainerFromProto(p)
+	}
+
+	result := &ListContainersResult{
+		Containers: containers,
+	}
+
+	if resp.Pagination != nil {
+		result.TotalItems = uint32(resp.Pagination.TotalItems)
+		result.TotalPages = uint32(resp.Pagination.TotalPages)
+	}
+
+	return result, nil
+}

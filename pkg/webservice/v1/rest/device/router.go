@@ -60,11 +60,13 @@ func NewDeviceRouter(
 //
 // Routes:
 //
-//	POST /api/v1/devices/templates               - Upload a device template
+//	GET  /api/v1/devices/config                        - Get device config by MAC or serial
+//	POST /api/v1/devices/templates                     - Upload a device template
 //	POST /api/v1/devices/templates/{id}/create-profile - Create a profile from a template
 func (r *DeviceRouter) RegisterRoutes(router *mux.Router) {
 	deviceRouter := router.PathPrefix(basePath).Subrouter()
 
+	deviceRouter.HandleFunc("/config", r.handlers.HandleGetConfig).Methods("GET")
 	deviceRouter.HandleFunc("/templates", r.handlers.HandleUploadTemplate).Methods("POST")
 	deviceRouter.HandleFunc("/templates/{id:[0-9]+}/create-profile", r.handlers.HandleCreateProfile).Methods("POST")
 }

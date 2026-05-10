@@ -40,11 +40,10 @@ This command is useful for testing secret resolution and debugging configuration
 By default, the resolved value is masked for security.
 
 Supported URI schemes:
-  - kms://       - Local KMS-managed secrets
+  - kms://       - Local KMS-managed secrets (ensure=true for persistent auto-generation)
   - remote-kms:// - Remote KMS-managed secrets
   - env://       - Environment variable references
-  - autogen://   - Auto-generated secrets
-  - encrypted:// - Encrypted secrets
+  - idevid://    - IDevID-encrypted secrets
 
 Examples:
   # Resolve a KMS secret (masked)
@@ -56,8 +55,8 @@ Examples:
   # Resolve environment variable
   platformctl bootstrap secrets resolve "env://DATABASE_PASSWORD"
 
-  # Test auto-generation spec
-  platformctl bootstrap secrets resolve "autogen://password?length=32"`,
+  # Trigger persistent auto-generation on first access
+  platformctl bootstrap secrets resolve "kms://api/token?ensure=true&len=32&enc=base64"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
@@ -82,7 +81,7 @@ func runSecretsResolve(flags *cli.CommonFlags, uri string, cmdFlags *secretsReso
 	if scheme == "unknown" {
 		return ErrInvalidSecretURI{
 			URI:    uri,
-			Reason: "unknown or missing scheme (expected kms://, env://, autogen://, remote-kms://, or encrypted://)",
+			Reason: "unknown or missing scheme (expected kms://, env://, remote-kms://, or idevid://)",
 		}
 	}
 

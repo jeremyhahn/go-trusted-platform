@@ -2,7 +2,8 @@
 
 import * as React from "react";
 import { use } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { resolveDynamicId } from "@/utils/dynamic-route";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,7 +32,9 @@ import { ArrowLeft, Loader2, AlertCircle, RefreshCw, Ban, Trash2 } from "lucide-
  * - Rotate, disable, or schedule deletion
  */
 export default function KeyDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+  const resolved = use(params);
+  const pathname = usePathname();
+  const id = resolveDynamicId(resolved as any, pathname, "kms");
   const router = useRouter();
   const kms = useKMS();
   const { toast } = useToast();
@@ -41,27 +44,43 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
     [id]
   );
 
-  // Transform SDK response to UI KeyDetail type
+  // Transform server response to UI KeyDetail. The platform KMS REST
+  // handler returns the key record directly (snake_case) so the older
+  // {key, metadata} envelope expected here was always missing. Read
+  // both shapes and tolerate ISO-string timestamps.
   const keyDetail = React.useMemo(() => {
     if (!response) return null;
 
-    const { key, metadata } = response;
+    const r: any = response;
+    const key: any = r.key ?? r;
+    const metadata: any = r.metadata ?? key ?? {};
+    const keyId: string = key.keyId ?? key.key_id ?? '';
+    const algorithm: string = key.algorithm ?? '';
+    const toIso = (v: any): string => {
+      if (!v) return new Date().toISOString();
+      if (typeof v === 'number') return new Date(v * 1000).toISOString();
+      const s = String(v);
+      if (s.startsWith('0001-')) return new Date().toISOString();
+      return s;
+    };
+    const createdRaw = metadata.createdAt ?? metadata.created_at ?? key.createdAt ?? key.created_at;
+    const status: string = String(key.status ?? metadata.status ?? '').toUpperCase();
     return {
-      id: key.keyId,
-      name: metadata.name || key.keyId,
-      algorithm: key.algorithm as any,
-      type: key.algorithm.includes('AES') || key.algorithm.includes('HMAC') ? 'symmetric' as const : 'asymmetric' as const,
-      status: key.status === 'ENABLED' ? 'active' as const : key.status === 'DISABLED' ? 'disabled' as const : 'pending_deletion' as const,
-      createdAt: new Date(metadata.createdAt * 1000).toISOString(),
-      rotationCount: 0, // Not available in SDK metadata
+      id: keyId,
+      name: metadata.name || key.name || keyId,
+      algorithm: algorithm as any,
+      type: algorithm.includes('AES') || algorithm.includes('HMAC') ? 'symmetric' as const : 'asymmetric' as const,
+      status: (status === 'ENABLED' ? 'active' : status === 'DISABLED' ? 'disabled' : 'active') as 'active' | 'disabled' | 'pending_deletion',
+      createdAt: toIso(createdRaw),
+      rotationCount: 0,
       versions: [
         {
-          version: metadata.version,
-          createdAt: new Date(metadata.createdAt * 1000).toISOString(),
-          status: metadata.status === 'ENABLED' ? 'active' as const : 'inactive' as const,
+          version: metadata.version ?? key.version ?? 1,
+          createdAt: toIso(createdRaw),
+          status: status === 'ENABLED' ? 'active' as const : 'inactive' as const,
         }
       ],
-      usageHistory: [], // Not available in SDK metadata
+      usageHistory: [],
       metadata: metadata.tags || {},
     };
   }, [response]);

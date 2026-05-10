@@ -19,13 +19,14 @@ import (
 	"os"
 	"time"
 
-	goca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
 
@@ -101,6 +102,21 @@ type Config struct {
 	// DeviceProfileService is the device profile service implementation.
 	// Used for device provisioning and profile management.
 	DeviceProfileService device.DeviceProfileService
+
+	// PlatformJWTVerifier verifies platform-issued JWT bearer tokens for
+	// gRPC TCP / QUIC / MCP transports. When set, the daemon's auth
+	// interceptor accepts the same JWTs minted by the webserver's
+	// /api/v1/login endpoint, giving non-Unix transports parity with
+	// REST. Leave nil to require QuicBaaS-issued OIDC tokens only.
+	PlatformJWTVerifier PlatformJWTVerifier
+
+	// PlatformTenantManager is the platform's per-tenant lifecycle manager
+	// (CRUD, quotas, VLAN, OVS bridge, DEK, per-tenant cryptographic
+	// barrier). When set, the daemon wires it into both the gRPC
+	// TenantService server (via SetManager) and the REST tenant handlers
+	// (via SetTenantHandlers) so every transport — REST, gRPC, QUIC, MCP,
+	// Unix — shares the same tenant manager instance.
+	PlatformTenantManager *tenant.Manager
 
 	// DNSService is the DNS service implementation.
 	// When set, the daemon will register DNS operations on QUIC and MCP.

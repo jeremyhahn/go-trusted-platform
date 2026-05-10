@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	daemonsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/daemon"
 )
 
 // NewStatusCommand creates the status command
@@ -44,10 +44,12 @@ func runStatus(flags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
+	daemonClient := daemonsvc.NewClientFromGRPC(base.Client().Daemon())
+
 	ctx := base.Context()
-	resp, err := base.Client().Daemon().GetStatus(ctx, &platformv1.GetStatusRequest{})
+	status, err := daemonClient.GetStatusDomain(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get status: %w", err)
+		return err
 	}
 
 	printer := base.Printer()
@@ -55,70 +57,72 @@ func runStatus(flags *cli.CommonFlags) error {
 	// Format output based on output format
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(status)
 
 	case cli.OutputFormatTable:
-		return printStatusTable(printer, resp)
+		return printStatusTable(printer, status)
 
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
 	}
 }
 
-func printStatusTable(printer *cli.Printer, resp *platformv1.GetStatusResponse) error {
+func printStatusTable(printer *cli.Printer, status *daemonsvc.StatusInfo) error {
 	// Print system status
-	printer.PrintInfo(fmt.Sprintf("System Status: %s", formatSystemStatus(resp.Status)))
+	printer.PrintInfo(fmt.Sprintf("System Status: %s", string(status.Status)))
 	fmt.Println()
 
 	// Print platform info
-	if resp.Info != nil {
-		printer.PrintKeyValue("Hostname", resp.Info.Hostname)
-		printer.PrintKeyValue("Platform ID", resp.Info.PlatformId)
-		printer.PrintKeyValue("Version", resp.Info.Version)
-		printer.PrintKeyValue("Build Time", resp.Info.BuildTime)
-		printer.PrintKeyValue("Git Commit", resp.Info.GitCommit)
-		printer.PrintKeyValue("FIPS Mode", fmt.Sprintf("%v", resp.Info.FipsMode))
+	if status.Info != nil {
+		printer.PrintKeyValue("Hostname", status.Info.Hostname)
+		printer.PrintKeyValue("Platform ID", status.Info.PlatformID)
+		printer.PrintKeyValue("Version", status.Info.Version)
+		printer.PrintKeyValue("Build Time", status.Info.BuildTime)
+		printer.PrintKeyValue("Git Commit", status.Info.GitCommit)
+		printer.PrintKeyValue("FIPS Mode", fmt.Sprintf("%v", status.Info.FIPSMode))
 		fmt.Println()
 
 		// Print system info
-		if resp.Info.SystemInfo != nil {
+		if status.Info.SystemInfo != nil {
+			si := status.Info.SystemInfo
 			printer.PrintInfo("System Information:")
 			fmt.Println()
-			printer.PrintKeyValue("  OS", resp.Info.SystemInfo.Os)
-			printer.PrintKeyValue("  Architecture", resp.Info.SystemInfo.Arch)
-			printer.PrintKeyValue("  Kernel", resp.Info.SystemInfo.KernelVersion)
-			printer.PrintKeyValue("  CPUs", fmt.Sprintf("%d", resp.Info.SystemInfo.NumCpus))
+			printer.PrintKeyValue("  OS", si.OS)
+			printer.PrintKeyValue("  Architecture", si.Arch)
+			printer.PrintKeyValue("  Kernel", si.KernelVersion)
+			printer.PrintKeyValue("  CPUs", fmt.Sprintf("%d", si.NumCPUs))
 			printer.PrintKeyValue("  Memory", fmt.Sprintf("%d MB total, %d MB available",
-				resp.Info.SystemInfo.TotalMemoryMb, resp.Info.SystemInfo.AvailableMemoryMb))
-			printer.PrintKeyValue("  Uptime", fmt.Sprintf("%d seconds", resp.Info.SystemInfo.UptimeSeconds))
+				si.TotalMemoryMB, si.AvailableMemoryMB))
+			printer.PrintKeyValue("  Uptime", fmt.Sprintf("%d seconds", si.UptimeSeconds))
 			fmt.Println()
 		}
 
 		// Print TPM info
-		if resp.Info.TpmInfo != nil {
+		if status.Info.TPMInfo != nil {
+			ti := status.Info.TPMInfo
 			printer.PrintInfo("TPM Information:")
 			fmt.Println()
-			printer.PrintKeyValue("  Version", formatTPMVersion(resp.Info.TpmInfo.Version))
-			printer.PrintKeyValue("  Manufacturer", resp.Info.TpmInfo.Manufacturer)
-			printer.PrintKeyValue("  Firmware", resp.Info.TpmInfo.FirmwareVersion)
-			printer.PrintKeyValue("  Simulator", fmt.Sprintf("%v", resp.Info.TpmInfo.IsSimulator))
-			printer.PrintKeyValue("  FIPS Mode", fmt.Sprintf("%v", resp.Info.TpmInfo.FipsMode))
+			printer.PrintKeyValue("  Version", string(ti.Version))
+			printer.PrintKeyValue("  Manufacturer", ti.Manufacturer)
+			printer.PrintKeyValue("  Firmware", ti.FirmwareVersion)
+			printer.PrintKeyValue("  Simulator", fmt.Sprintf("%v", ti.IsSimulator))
+			printer.PrintKeyValue("  FIPS Mode", fmt.Sprintf("%v", ti.FIPSMode))
 			fmt.Println()
 		}
 	}
 
 	// Print services
-	if len(resp.Services) > 0 {
+	if len(status.Services) > 0 {
 		printer.PrintInfo("Services:")
 		fmt.Println()
 
 		table := cli.NewTableData("Name", "Type", "Status", "Health", "Uptime")
-		for _, svc := range resp.Services {
+		for _, svc := range status.Services {
 			table.AddRow(
 				svc.Name,
-				formatServiceType(svc.Type),
-				formatServiceStatus(svc.Status),
-				formatHealthStatus(svc.Health),
+				string(svc.Type),
+				string(svc.Status),
+				string(svc.Health),
 				fmt.Sprintf("%ds", svc.UptimeSeconds),
 			)
 		}
@@ -126,83 +130,4 @@ func printStatusTable(printer *cli.Printer, resp *platformv1.GetStatusResponse) 
 	}
 
 	return nil
-}
-
-func formatSystemStatus(status platformv1.SystemStatus) string {
-	switch status {
-	case platformv1.SystemStatus_SYSTEM_STATUS_READY:
-		return "READY"
-	case platformv1.SystemStatus_SYSTEM_STATUS_INITIALIZING:
-		return "INITIALIZING"
-	case platformv1.SystemStatus_SYSTEM_STATUS_DEGRADED:
-		return "DEGRADED"
-	case platformv1.SystemStatus_SYSTEM_STATUS_UNAVAILABLE:
-		return "UNAVAILABLE"
-	case platformv1.SystemStatus_SYSTEM_STATUS_SHUTTING_DOWN:
-		return "SHUTTING_DOWN"
-	default:
-		return "UNKNOWN"
-	}
-}
-
-func formatServiceType(t platformv1.ServiceType) string {
-	switch t {
-	case platformv1.ServiceType_SERVICE_TYPE_TPM:
-		return "TPM"
-	case platformv1.ServiceType_SERVICE_TYPE_SDN:
-		return "SDN"
-	case platformv1.ServiceType_SERVICE_TYPE_COMPUTE:
-		return "Compute"
-	case platformv1.ServiceType_SERVICE_TYPE_DNS:
-		return "DNS"
-	case platformv1.ServiceType_SERVICE_TYPE_ACME:
-		return "ACME"
-	case platformv1.ServiceType_SERVICE_TYPE_WEBSERVICE:
-		return "WebService"
-	case platformv1.ServiceType_SERVICE_TYPE_ATTESTATION:
-		return "Attestation"
-	default:
-		return "Unknown"
-	}
-}
-
-func formatServiceStatus(status platformv1.ServiceStatus) string {
-	switch status {
-	case platformv1.ServiceStatus_SERVICE_STATUS_RUNNING:
-		return "RUNNING"
-	case platformv1.ServiceStatus_SERVICE_STATUS_STOPPED:
-		return "STOPPED"
-	case platformv1.ServiceStatus_SERVICE_STATUS_STARTING:
-		return "STARTING"
-	case platformv1.ServiceStatus_SERVICE_STATUS_STOPPING:
-		return "STOPPING"
-	case platformv1.ServiceStatus_SERVICE_STATUS_ERROR:
-		return "ERROR"
-	default:
-		return "UNKNOWN"
-	}
-}
-
-func formatHealthStatus(status platformv1.HealthStatus) string {
-	switch status {
-	case platformv1.HealthStatus_HEALTH_STATUS_HEALTHY:
-		return "HEALTHY"
-	case platformv1.HealthStatus_HEALTH_STATUS_DEGRADED:
-		return "DEGRADED"
-	case platformv1.HealthStatus_HEALTH_STATUS_UNHEALTHY:
-		return "UNHEALTHY"
-	default:
-		return "UNKNOWN"
-	}
-}
-
-func formatTPMVersion(version platformv1.TPMVersion) string {
-	switch version {
-	case platformv1.TPMVersion_TPM_VERSION_2_0:
-		return "2.0"
-	case platformv1.TPMVersion_TPM_VERSION_1_2:
-		return "1.2"
-	default:
-		return "Unknown"
-	}
 }

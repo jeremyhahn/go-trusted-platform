@@ -20,7 +20,7 @@ import (
 	"github.com/jeremyhahn/go-objstore/pkg/local"
 	objmemory "github.com/jeremyhahn/go-objstore/pkg/memory"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
 	caquicbaas "github.com/jeremyhahn/go-trusted-platform/pkg/ca/quicbaas"
 	localcertstore "github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"

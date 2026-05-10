@@ -5,6 +5,7 @@
  */
 
 import type { ApiClient } from '../client/api-client.js';
+import type { Transport } from '../transport/transport.js';
 import type { ApiResponse } from '../types/api.js';
 import { BaseService } from './base-service.js';
 import type {
@@ -66,7 +67,7 @@ export class IDevIDService extends BaseService {
    *
    * @param client - The API client to use for requests
    */
-  constructor(client: ApiClient) {
+  constructor(client: Transport | ApiClient) {
     super(client, '/v1/idevid');
   }
 
@@ -169,7 +170,14 @@ export class IDevIDService extends BaseService {
    * @returns IAK key information
    */
   async getIAKInfo(): Promise<ApiResponse<GetIAKInfoResponse>> {
-    return this.client.get<GetIAKInfoResponse>(this.buildUrl('/iak/info'));
+    // The platformd REST router exposes IAK info at the bare /iak
+    // endpoint (see pkg/webservice/v1/rest/idevid/router.go) — there
+    // is no `/iak/info` route. The earlier `/iak/info` URL produced
+    // a 404 on every TPM Keys page render, surfacing as "the
+    // requested API endpoint does not exist" in the dashboard.
+    // Track changes to the server router and update this path in
+    // lockstep.
+    return this.client.get<GetIAKInfoResponse>(this.buildUrl('/iak'));
   }
 
   /**

@@ -168,8 +168,10 @@ export default function EventsPage() {
   const { toast } = useToast();
   const platform = usePlatform();
   const [isStreaming, setIsStreaming] = React.useState(false);
-  const [selectedSeverity, setSelectedSeverity] = React.useState<string>("");
-  const [selectedCategory, setSelectedCategory] = React.useState<string>("");
+  // Radix's <Select.Item /> rejects empty-string values, so use an
+  // explicit "all" sentinel for the catch-all option.
+  const [selectedSeverity, setSelectedSeverity] = React.useState<string>("all");
+  const [selectedCategory, setSelectedCategory] = React.useState<string>("all");
 
   // Fetch platform health data to generate events
   const {
@@ -231,8 +233,8 @@ export default function EventsPage() {
   // Filter events
   const filteredEvents = React.useMemo(() => {
     return events.filter((event) => {
-      if (selectedSeverity && event.severity !== selectedSeverity) return false;
-      if (selectedCategory && event.category !== selectedCategory) return false;
+      if (selectedSeverity !== "all" && event.severity !== selectedSeverity) return false;
+      if (selectedCategory !== "all" && event.category !== selectedCategory) return false;
       return true;
     });
   }, [events, selectedSeverity, selectedCategory]);
@@ -423,7 +425,7 @@ export default function EventsPage() {
                   <SelectValue placeholder="All" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All</SelectItem>
+                  <SelectItem value="all">All</SelectItem>
                   <SelectItem value="info">Info</SelectItem>
                   <SelectItem value="warning">Warning</SelectItem>
                   <SelectItem value="error">Error</SelectItem>
@@ -438,7 +440,7 @@ export default function EventsPage() {
                   <SelectValue placeholder="All" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All</SelectItem>
+                  <SelectItem value="all">All</SelectItem>
                   <SelectItem value="system">System</SelectItem>
                   <SelectItem value="security">Security</SelectItem>
                   <SelectItem value="service">Service</SelectItem>

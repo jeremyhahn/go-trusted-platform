@@ -18,9 +18,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	daemonsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/daemon"
 )
 
 // NewVersionCommand creates the version command
@@ -64,10 +64,12 @@ func runVersion(flags *cli.CommonFlags, clientOnly bool) error {
 	}
 	defer base.Close()
 
+	daemonClient := daemonsvc.NewClientFromGRPC(base.Client().Daemon())
+
 	ctx := base.Context()
-	resp, err := base.Client().Daemon().GetVersion(ctx, &platformv1.GetVersionRequest{})
+	version, err := daemonClient.GetVersionDomain(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get server version: %w", err)
+		return err
 	}
 
 	// Format output based on output format
@@ -77,19 +79,19 @@ func runVersion(flags *cli.CommonFlags, clientOnly bool) error {
 			"client": map[string]string{
 				"version": getClientVersion(),
 			},
-			"server": resp,
+			"server": version,
 		}
 		return printer.Print(versionData)
 
 	case cli.OutputFormatTable:
-		return printVersionTable(printer, resp)
+		return printVersionTable(printer, version)
 
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
 	}
 }
 
-func printVersionTable(printer *cli.Printer, resp *platformv1.GetVersionResponse) error {
+func printVersionTable(printer *cli.Printer, version *daemonsvc.VersionInfo) error {
 	printer.PrintInfo("Client Version:")
 	fmt.Println()
 	printer.PrintKeyValue("  Version", getClientVersion())
@@ -97,17 +99,17 @@ func printVersionTable(printer *cli.Printer, resp *platformv1.GetVersionResponse
 
 	printer.PrintInfo("Server Version:")
 	fmt.Println()
-	printer.PrintKeyValue("  Version", resp.Version)
-	printer.PrintKeyValue("  Build Time", resp.BuildTime)
-	printer.PrintKeyValue("  Git Commit", resp.GitCommit)
-	printer.PrintKeyValue("  Go Version", resp.GoVersion)
+	printer.PrintKeyValue("  Version", version.Version)
+	printer.PrintKeyValue("  Build Time", version.BuildTime)
+	printer.PrintKeyValue("  Git Commit", version.GitCommit)
+	printer.PrintKeyValue("  Go Version", version.GoVersion)
 
-	if len(resp.Components) > 0 {
+	if len(version.Components) > 0 {
 		fmt.Println()
 		printer.PrintInfo("Component Versions:")
 		fmt.Println()
-		for name, version := range resp.Components {
-			printer.PrintKeyValue(fmt.Sprintf("  %s", name), version)
+		for name, ver := range version.Components {
+			printer.PrintKeyValue(fmt.Sprintf("  %s", name), ver)
 		}
 	}
 

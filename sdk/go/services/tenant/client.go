@@ -228,6 +228,63 @@ func (c *Client) GetDEKStatus(ctx context.Context, tenantID string) (*platformv1
 	return resp.DekStatus, nil
 }
 
+// Per-Tenant Barrier Lifecycle (added 2026-04-28)
+//
+// These methods expose the platform's per-tenant barrier ops over the
+// platform's own gRPC TenantService. Each tenant has an independent
+// cryptographic barrier auto-initialized on Create and auto-sealed on Delete;
+// these methods give explicit lifecycle control.
+
+// InitTenantBarrier explicitly initializes a per-tenant barrier with optional
+// Shamir threshold/shares configuration. Both zero means deterministic
+// non-Shamir init.
+func (c *Client) InitTenantBarrier(ctx context.Context, tenantID string, threshold, shares int32) error {
+	if _, err := c.grpc.InitTenantBarrier(ctx, &platformv1.InitTenantBarrierRequest{
+		TenantId:  tenantID,
+		Threshold: threshold,
+		Shares:    shares,
+	}); err != nil {
+		return &ErrInitTenantBarrierFailed{ID: tenantID, Cause: err}
+	}
+	return nil
+}
+
+// UnsealTenantBarrier unseals a per-tenant barrier with the provided key
+// material. An empty key falls back to the deterministic init credential.
+func (c *Client) UnsealTenantBarrier(ctx context.Context, tenantID string, key []byte) error {
+	if _, err := c.grpc.UnsealTenantBarrier(ctx, &platformv1.UnsealTenantBarrierRequest{
+		TenantId: tenantID,
+		Key:      key,
+	}); err != nil {
+		return &ErrUnsealTenantBarrierFailed{ID: tenantID, Cause: err}
+	}
+	return nil
+}
+
+// SealTenantBarrier seals a per-tenant barrier. Subsequent reads/writes
+// against the tenant namespace fail until unsealed again.
+func (c *Client) SealTenantBarrier(ctx context.Context, tenantID string) error {
+	if _, err := c.grpc.SealTenantBarrier(ctx, &platformv1.SealTenantBarrierRequest{
+		TenantId: tenantID,
+	}); err != nil {
+		return &ErrSealTenantBarrierFailed{ID: tenantID, Cause: err}
+	}
+	return nil
+}
+
+// GetTenantBarrierStatus reports the current sealed/initialized state and
+// active strategy metadata of a per-tenant barrier. Uninitialized barriers
+// return Sealed=true, Initialized=false rather than erroring.
+func (c *Client) GetTenantBarrierStatus(ctx context.Context, tenantID string) (*platformv1.TenantBarrierStatus, error) {
+	resp, err := c.grpc.GetTenantBarrierStatus(ctx, &platformv1.GetTenantBarrierStatusRequest{
+		TenantId: tenantID,
+	})
+	if err != nil {
+		return nil, &ErrGetTenantBarrierStatusFailed{ID: tenantID, Cause: err}
+	}
+	return resp.GetBarrierStatus(), nil
+}
+
 // Domain-typed convenience methods
 //
 // These methods return domain types instead of proto types, enabling callers

@@ -7,10 +7,27 @@
  * Uses the trusted-platform-sdk for API interactions.
  */
 
-import { useMemo } from 'react';
-import { Plus, RefreshCw, Network as NetworkIcon } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Loader2, Plus, RefreshCw, Network as NetworkIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   Table,
   TableBody,
@@ -27,6 +44,10 @@ import type { Network, FlowRule, FlowAction } from '@/types/infrastructure';
 export default function SDNPage() {
   const { toast } = useToast();
   const sdn = useSDN();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createName, setCreateName] = useState('');
+  const [createType, setCreateType] = useState<'ovs' | 'linux'>('ovs');
+  const [createSubmitting, setCreateSubmitting] = useState(false);
 
   // Fetch bridges using SDK
   const {
@@ -70,19 +91,29 @@ export default function SDNPage() {
     refetchBridges();
   };
 
-  // Transform SDK bridges to local Network type for UI compatibility
+  // Transform SDK bridges to local Network type for UI compatibility.
+  // The server returns flat bridge records (id/name/type/status/created_at)
+  // rather than the SDK's nested {config: BridgeConfig} shape. Read both
+  // shapes so the page works regardless of which contract is on the wire.
   const networks: Network[] = useMemo(() => {
     if (!bridgesData?.bridges) return [];
-    return bridgesData.bridges.map((bridge) => ({
-      id: bridge.id,
-      name: bridge.config?.name || bridge.id,
-      type: (bridge.config?.type?.toLowerCase() === 'ovs' ? 'overlay' : 'vlan') as Network['type'],
-      cidr: '',
-      gateway: undefined,
-      status: 'active' as Network['status'],
-      vlanId: undefined,
-      createdAt: bridge.createdAt || new Date().toISOString(),
-    }));
+    return bridgesData.bridges.map((bridge: any) => {
+      const name = bridge.config?.name || bridge.name || bridge.id;
+      const rawType = bridge.config?.type || bridge.type || '';
+      return {
+        id: bridge.id,
+        name,
+        type: (String(rawType).toLowerCase() === 'ovs' ? 'overlay' : 'vlan') as Network['type'],
+        cidr: '',
+        gateway: undefined,
+        status: 'active' as Network['status'],
+        vlanId: undefined,
+        createdAt:
+          bridge.createdAt ||
+          bridge.created_at ||
+          new Date().toISOString(),
+      };
+    });
   }, [bridgesData]);
 
   // Build topology from bridges (simplified view - bridges as nodes)
@@ -155,12 +186,77 @@ export default function SDNPage() {
           <Button variant="outline" size="icon" onClick={fetchData} disabled={loading}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button>
+          <Button onClick={() => setCreateOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
             Create Network
           </Button>
         </div>
       </div>
+
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create Network (Bridge)</DialogTitle>
+            <DialogDescription>
+              Create an SDN bridge that flows, ports, and VLANs can attach to.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="bridge-name">Name *</Label>
+              <Input
+                id="bridge-name"
+                value={createName}
+                onChange={(e) => setCreateName(e.target.value)}
+                placeholder="br-prod"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="bridge-type">Type</Label>
+              <Select value={createType} onValueChange={(v) => setCreateType(v as 'ovs' | 'linux')}>
+                <SelectTrigger id="bridge-type"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ovs">OVS (Open vSwitch)</SelectItem>
+                  <SelectItem value="linux">Linux Bridge</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!createName || createSubmitting}
+              onClick={async () => {
+                setCreateSubmitting(true);
+                try {
+                  // The platform SDN REST handler expects a flat
+                  // {name, type} body, not the SDK's nested
+                  // {config: {...}} shape; bypass the SDK typing.
+                  await sdn.createBridge({
+                    name: createName,
+                    type: createType === 'ovs' ? 'BRIDGE_TYPE_OVS' : 'BRIDGE_TYPE_LINUX',
+                  } as any);
+                  toast({ title: 'Network created', variant: 'success' });
+                  setCreateOpen(false);
+                  setCreateName('');
+                  refetchBridges();
+                } catch (err) {
+                  toast({
+                    title: 'Failed to create network',
+                    description: err instanceof Error ? err.message : 'Unknown error',
+                    variant: 'destructive',
+                  });
+                } finally {
+                  setCreateSubmitting(false);
+                }
+              }}
+            >
+              {createSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid gap-4 md:grid-cols-4">
         <div className="rounded-lg border border-border bg-card p-6">

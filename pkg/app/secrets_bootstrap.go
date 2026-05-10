@@ -41,6 +41,23 @@ func (e ErrBootstrapSecretResolution) Unwrap() error {
 	return e.Cause
 }
 
+// ErrSecretsServiceNotAvailableButKMSRequired is returned when the
+// config contains kms:// URIs but the QuicBaaS SecretsService isn't
+// reachable at bootstrap time. Leaving the URIs unresolved is never
+// safe — downstream code (TPM hierarchy auth, CA init, etc) would pass
+// the raw URI string through as a password and fail with cryptic
+// errors like TPM_RC_SIZE. This is fatal; callers must not continue.
+type ErrSecretsServiceNotAvailableButKMSRequired struct {
+	URICount int
+}
+
+func (e ErrSecretsServiceNotAvailableButKMSRequired) Error() string {
+	return fmt.Sprintf("bootstrap: QuicBaaS SecretsService not available — "+
+		"%d kms:// URI(s) in config cannot be resolved and leaving them as "+
+		"raw strings would corrupt downstream services (TPM auth, KMS keys, CA PINs)",
+		e.URICount)
+}
+
 // BootstrapSecretsResult contains the results of bootstrap secret resolution.
 type BootstrapSecretsResult struct {
 	// Resolved contains the config paths that had URIs resolved.
@@ -60,38 +77,133 @@ func (r *BootstrapSecretsResult) ErrorCount() int {
 	return len(r.Errors)
 }
 
-// resolveAutoGenSecrets resolves autogen:// URIs in the App struct fields before
-// platform services are initialized. This enables non-interactive bootstrap by
-// generating random PINs, passwords, and keys specified in the config file.
+// resolveKMSSecrets resolves kms:// URIs in the App struct before platform
+// services consume configuration values. Persistence is provided by the
+// QuicBaaS SecretsService (EnsureSecret): the first call at a given path
+// generates the secret per spec (length + encoding) and stores it; every
+// subsequent call returns the same stable bytes under a distributed lock.
 //
-// Unlike ProcessSecrets which requires the full QuicBaaS stack for KMS migration,
-// this method only needs the AutoGenResolver and operates purely on the in-memory
-// config struct. It walks the App struct recursively, finds string fields containing
-// autogen:// URIs, resolves them to random values, and sets the resolved values
-// back into the struct fields.
+// Must be called after initStores() so the SecretsService is available,
+// and before ParsePINs() and InitTPM() so the PINs used for TPM hierarchy
+// auth are the stable, persisted values.
 //
-// This method is called during Init() after config loading but before ParsePINs()
-// and InitTPM(), ensuring that autogen:// URIs in fields like platform.so-pin and
-// platform.user-pin are resolved to actual values before they are consumed.
-func (app *App) resolveAutoGenSecrets(ctx context.Context) (*BootstrapSecretsResult, error) {
+// autogen:// is no longer supported — use kms://path?ensure=true&len=N&enc=E
+// for persistent auto-generation.
+func (app *App) resolveKMSSecrets(ctx context.Context) (*BootstrapSecretsResult, error) {
 	logger := app.Logger.Slog()
-	resolver := NewAutoGenResolver(logger)
 
 	result := &BootstrapSecretsResult{
 		Resolved: make([]string, 0),
 		Errors:   make([]error, 0),
 	}
 
+	// Pre-scan: count kms:// URIs in the config so we can distinguish
+	// "no URIs — nothing to resolve" from "URIs present but service not
+	// reachable". Only the latter is fatal; the former lets us skip
+	// cleanly on minimal deployments that don't use KMS.
 	val := reflect.ValueOf(app).Elem()
-	resolveStructAutoGen(ctx, resolver, val, "", result, logger)
+	uriCount := countKMSURIs(val)
 
-	if len(result.Resolved) > 0 {
-		logger.Info("bootstrap secret resolution complete",
-			slog.Int("resolved", result.ResolvedCount()),
-			slog.Int("errors", result.ErrorCount()))
+	secretsSvc := app.Secrets()
+	if secretsSvc == nil {
+		if uriCount == 0 {
+			logger.Debug("bootstrap: no kms:// URIs in config, SecretsService not required")
+			return result, nil
+		}
+		return result, ErrSecretsServiceNotAvailableButKMSRequired{URICount: uriCount}
 	}
 
+	if uriCount == 0 {
+		return result, nil
+	}
+
+	resolver := NewLocalSecretsResolver(secretsSvc, logger).
+		WithIdentity(app.TenantID, app.Hostname)
+
+	resolveStructKMS(ctx, resolver, val, "", result, logger)
+
+	logger.Info("bootstrap secret resolution complete",
+		slog.Int("total_uris", uriCount),
+		slog.Int("resolved", result.ResolvedCount()),
+		slog.Int("errors", result.ErrorCount()))
+
 	return result, nil
+}
+
+// countKMSURIs walks the struct and returns the number of string fields
+// holding a kms:// URI. Used by resolveKMSSecrets to decide whether
+// unavailable-service is a fatal error (has URIs) or a no-op (none).
+func countKMSURIs(val reflect.Value) int {
+	if !val.IsValid() {
+		return 0
+	}
+	total := 0
+	typ := val.Type()
+	for i := 0; i < val.NumField(); i++ {
+		field := val.Field(i)
+		fieldType := typ.Field(i)
+		if !field.CanInterface() {
+			continue
+		}
+		if bootstrapFieldPath("", fieldType) == "" {
+			continue
+		}
+		switch field.Kind() {
+		case reflect.String:
+			if strings.HasPrefix(strings.ToLower(field.String()), bootstrap.SchemeKMS) {
+				total++
+			}
+		case reflect.Ptr:
+			if !field.IsNil() && field.Elem().Kind() == reflect.Struct {
+				total += countKMSURIs(field.Elem())
+			}
+		case reflect.Struct:
+			total += countKMSURIs(field)
+		case reflect.Slice:
+			for j := 0; j < field.Len(); j++ {
+				elem := field.Index(j)
+				switch elem.Kind() {
+				case reflect.Struct:
+					total += countKMSURIs(elem)
+				case reflect.Ptr:
+					if !elem.IsNil() && elem.Elem().Kind() == reflect.Struct {
+						total += countKMSURIs(elem.Elem())
+					}
+				case reflect.String:
+					if strings.HasPrefix(strings.ToLower(elem.String()), bootstrap.SchemeKMS) {
+						total++
+					}
+				}
+			}
+		case reflect.Map:
+			iter := field.MapRange()
+			for iter.Next() {
+				v := iter.Value()
+				if v.Kind() == reflect.Ptr && !v.IsNil() && v.Elem().Kind() == reflect.Struct {
+					total += countKMSURIs(v.Elem())
+				}
+			}
+		}
+	}
+	return total
+}
+
+// assertNoUnresolvedKMSURI returns a non-nil error if v still contains a
+// raw kms:// URI. Used as a defensive check at security-sensitive
+// boundaries (TPM hierarchy auth, CA init, BMC creds) so a stale or
+// unresolved URI fails the service start with a clear message instead
+// of reaching TPM2_HierarchyChangeAuth as a 48-byte literal password.
+func assertNoUnresolvedKMSURI(fieldName, v string) error {
+	if v == "" {
+		return nil
+	}
+	if strings.HasPrefix(strings.ToLower(v), bootstrap.SchemeKMS) {
+		return fmt.Errorf(
+			"refusing to start: %s still holds an unresolved kms:// URI "+
+				"(%q) — bootstrap resolver must run to completion before any "+
+				"security field is consumed", fieldName, v)
+	}
+	return nil
 }
 
 // bootstrapFieldPath constructs the dot-notation path for a struct field
@@ -125,9 +237,9 @@ func bootstrapFieldPath(parentPath string, field reflect.StructField) string {
 	return parentPath + "." + name
 }
 
-// resolveStructAutoGen recursively walks a struct value and resolves autogen:// URIs
+// resolveStructKMS recursively walks a struct value and resolves kms:// URIs
 // in string fields, setting the resolved values back into the struct.
-func resolveStructAutoGen(ctx context.Context, resolver *AutoGenResolver, val reflect.Value, path string, result *BootstrapSecretsResult, logger *slog.Logger) {
+func resolveStructKMS(ctx context.Context, resolver *LocalSecretsResolver, val reflect.Value, path string, result *BootstrapSecretsResult, logger *slog.Logger) {
 	if !val.IsValid() {
 		return
 	}
@@ -137,7 +249,6 @@ func resolveStructAutoGen(ctx context.Context, resolver *AutoGenResolver, val re
 		field := val.Field(i)
 		fieldType := typ.Field(i)
 
-		// Skip unexported fields
 		if !field.CanSet() {
 			continue
 		}
@@ -149,33 +260,33 @@ func resolveStructAutoGen(ctx context.Context, resolver *AutoGenResolver, val re
 
 		switch field.Kind() {
 		case reflect.String:
-			resolveStringFieldAutoGen(ctx, resolver, field, fieldPath, result, logger)
+			resolveStringFieldKMS(ctx, resolver, field, fieldPath, result, logger)
 
 		case reflect.Ptr:
 			if !field.IsNil() && field.Elem().Kind() == reflect.Struct {
-				resolveStructAutoGen(ctx, resolver, field.Elem(), fieldPath, result, logger)
+				resolveStructKMS(ctx, resolver, field.Elem(), fieldPath, result, logger)
 			}
 
 		case reflect.Struct:
-			resolveStructAutoGen(ctx, resolver, field, fieldPath, result, logger)
+			resolveStructKMS(ctx, resolver, field, fieldPath, result, logger)
 
 		case reflect.Slice:
-			resolveSliceAutoGen(ctx, resolver, field, fieldPath, result, logger)
+			resolveSliceKMS(ctx, resolver, field, fieldPath, result, logger)
 
 		case reflect.Map:
-			resolveMapAutoGen(ctx, resolver, field, fieldPath, result, logger)
+			resolveMapKMS(ctx, resolver, field, fieldPath, result, logger)
 		}
 	}
 }
 
-// resolveStringFieldAutoGen resolves a single string field if it contains an autogen:// URI.
-func resolveStringFieldAutoGen(ctx context.Context, resolver *AutoGenResolver, field reflect.Value, path string, result *BootstrapSecretsResult, logger *slog.Logger) {
+// resolveStringFieldKMS resolves a single string field if it contains a kms:// URI.
+func resolveStringFieldKMS(ctx context.Context, resolver *LocalSecretsResolver, field reflect.Value, path string, result *BootstrapSecretsResult, logger *slog.Logger) {
 	uri := field.String()
 	if uri == "" {
 		return
 	}
 
-	if !strings.HasPrefix(strings.ToLower(uri), bootstrap.SchemeAutoGen) {
+	if !strings.HasPrefix(strings.ToLower(uri), bootstrap.SchemeKMS) {
 		return
 	}
 
@@ -186,7 +297,13 @@ func resolveStringFieldAutoGen(ctx context.Context, resolver *AutoGenResolver, f
 			URI:   uri,
 			Cause: err,
 		})
-		logger.Warn("failed to resolve autogen secret",
+		// Clear the field so downstream code cannot accidentally use the
+		// raw kms:// URI as a literal password/key/etc. Leaving the URI
+		// here is how we previously ended up passing 48-byte strings to
+		// TPM2_HierarchyChangeAuth and getting cryptic TPM_RC_SIZE.
+		// Callers treat a populated result.Errors as fatal.
+		field.SetString("")
+		logger.Warn("failed to resolve kms secret",
 			slog.String("path", path),
 			slog.String("error", err.Error()))
 		return
@@ -195,34 +312,34 @@ func resolveStringFieldAutoGen(ctx context.Context, resolver *AutoGenResolver, f
 	field.SetString(string(secretValue))
 	result.Resolved = append(result.Resolved, path)
 
-	logger.Debug("resolved autogen secret",
+	logger.Debug("resolved kms secret",
 		slog.String("path", path),
 		slog.Int("length", len(secretValue)))
 }
 
-// resolveSliceAutoGen walks slice elements for autogen:// URIs.
-func resolveSliceAutoGen(ctx context.Context, resolver *AutoGenResolver, field reflect.Value, path string, result *BootstrapSecretsResult, logger *slog.Logger) {
+// resolveSliceKMS walks slice elements for kms:// URIs.
+func resolveSliceKMS(ctx context.Context, resolver *LocalSecretsResolver, field reflect.Value, path string, result *BootstrapSecretsResult, logger *slog.Logger) {
 	for i := 0; i < field.Len(); i++ {
 		elem := field.Index(i)
 		elemPath := fmt.Sprintf("%s[%d]", path, i)
 
 		switch elem.Kind() {
 		case reflect.Struct:
-			resolveStructAutoGen(ctx, resolver, elem, elemPath, result, logger)
+			resolveStructKMS(ctx, resolver, elem, elemPath, result, logger)
 		case reflect.Ptr:
 			if !elem.IsNil() && elem.Elem().Kind() == reflect.Struct {
-				resolveStructAutoGen(ctx, resolver, elem.Elem(), elemPath, result, logger)
+				resolveStructKMS(ctx, resolver, elem.Elem(), elemPath, result, logger)
 			}
 		case reflect.String:
-			resolveStringFieldAutoGen(ctx, resolver, elem, elemPath, result, logger)
+			resolveStringFieldKMS(ctx, resolver, elem, elemPath, result, logger)
 		}
 	}
 }
 
-// resolveMapAutoGen walks map values for autogen:// URIs in struct values.
-// Note: map string values cannot be set directly via reflection, so only struct
-// values within maps are processed.
-func resolveMapAutoGen(ctx context.Context, resolver *AutoGenResolver, field reflect.Value, path string, result *BootstrapSecretsResult, logger *slog.Logger) {
+// resolveMapKMS walks map values for kms:// URIs in struct values.
+// Note: map string values cannot be set directly via reflection, so only
+// struct values within maps are processed.
+func resolveMapKMS(ctx context.Context, resolver *LocalSecretsResolver, field reflect.Value, path string, result *BootstrapSecretsResult, logger *slog.Logger) {
 	iter := field.MapRange()
 	for iter.Next() {
 		key := iter.Key()
@@ -239,7 +356,7 @@ func resolveMapAutoGen(ctx context.Context, resolver *AutoGenResolver, field ref
 		switch val.Kind() {
 		case reflect.Ptr:
 			if !val.IsNil() && val.Elem().Kind() == reflect.Struct {
-				resolveStructAutoGen(ctx, resolver, val.Elem(), elemPath, result, logger)
+				resolveStructKMS(ctx, resolver, val.Elem(), elemPath, result, logger)
 			}
 		}
 	}

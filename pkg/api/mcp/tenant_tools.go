@@ -15,6 +15,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"time"
 
@@ -67,6 +68,11 @@ var (
 	ErrTenantInvalidResourceType = &TenantError{
 		Code:    "TENANT_INVALID_RESOURCE_TYPE",
 		Message: "invalid resource type",
+	}
+
+	ErrTenantBarrierUnsealKeyDecode = &TenantError{
+		Code:    "TENANT_BARRIER_UNSEAL_KEY_DECODE",
+		Message: "failed to base64-decode barrier unseal key",
 	}
 )
 
@@ -473,6 +479,82 @@ func (r *ToolRegistry) registerTenantTools() {
 	r.addTool(ToolDefinition{
 		Name:        "tenant_get_dek_status",
 		Description: "Get DEK status including usage and rotation progress",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID (required)",
+				},
+			},
+			"required": []string{"tenant_id"},
+		},
+	})
+
+	// platform_tenant_barrier_init - Explicitly initialize a per-tenant barrier
+	r.addTool(ToolDefinition{
+		Name:        "platform_tenant_barrier_init",
+		Description: "Explicitly initialize the per-tenant cryptographic barrier for a tenant. Useful when automatic initialization during tenant creation was skipped or failed.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID (required)",
+				},
+				"threshold": map[string]interface{}{
+					"type":        "integer",
+					"description": "Optional Shamir share threshold required to unseal the barrier",
+				},
+				"shares": map[string]interface{}{
+					"type":        "integer",
+					"description": "Optional total number of Shamir shares to generate",
+				},
+			},
+			"required": []string{"tenant_id"},
+		},
+	})
+
+	// platform_tenant_barrier_unseal - Unseal a per-tenant barrier
+	r.addTool(ToolDefinition{
+		Name:        "platform_tenant_barrier_unseal",
+		Description: "Unseal a per-tenant cryptographic barrier using the supplied key material. The key argument is base64-encoded; an empty key falls back to the deterministic init credential.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID (required)",
+				},
+				"key": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional base64-encoded unseal key bytes",
+				},
+			},
+			"required": []string{"tenant_id"},
+		},
+	})
+
+	// platform_tenant_barrier_seal - Seal a per-tenant barrier
+	r.addTool(ToolDefinition{
+		Name:        "platform_tenant_barrier_seal",
+		Description: "Seal a per-tenant cryptographic barrier, returning it to the sealed state. Subsequent reads/writes against the tenant namespace will fail until the barrier is unsealed.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID (required)",
+				},
+			},
+			"required": []string{"tenant_id"},
+		},
+	})
+
+	// platform_tenant_barrier_status - Report per-tenant barrier status
+	r.addTool(ToolDefinition{
+		Name:        "platform_tenant_barrier_status",
+		Description: "Return the current sealed/initialized state and active strategy metadata of a per-tenant barrier.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -1114,6 +1196,119 @@ func (r *ToolRegistry) executeTenantGetDEKStatus(ctx context.Context, args map[s
 	}
 
 	return result, nil
+}
+
+// executeTenantBarrierInit handles the platform_tenant_barrier_init tool
+// execution. The threshold and shares arguments are accepted for API parity
+// with REST/gRPC/QUIC but are currently informational; the underlying
+// Manager.InitTenantBarrier uses the platform default Shamir parameters.
+func (r *ToolRegistry) executeTenantBarrierInit(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	tenantID := getString(args, "tenant_id")
+	if tenantID == "" {
+		return nil, ErrTenantIDRequired
+	}
+
+	if err := mgr.InitTenantBarrier(ctx, tenantID); err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success":   true,
+		"tenant_id": tenantID,
+		"threshold": getInt(args, "threshold"),
+		"shares":    getInt(args, "shares"),
+		"message":   "tenant barrier initialized successfully",
+	}, nil
+}
+
+// executeTenantBarrierUnseal handles the platform_tenant_barrier_unseal tool
+// execution. The "key" argument is base64-encoded; an empty key is rejected by
+// the underlying Manager.UnsealTenantBarrier.
+func (r *ToolRegistry) executeTenantBarrierUnseal(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	tenantID := getString(args, "tenant_id")
+	if tenantID == "" {
+		return nil, ErrTenantIDRequired
+	}
+
+	var key []byte
+	if encoded := getString(args, "key"); encoded != "" {
+		decoded, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return nil, ErrTenantBarrierUnsealKeyDecode
+		}
+		key = decoded
+	}
+
+	if err := mgr.UnsealTenantBarrier(ctx, tenantID, key); err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success":   true,
+		"tenant_id": tenantID,
+		"message":   "tenant barrier unsealed successfully",
+	}, nil
+}
+
+// executeTenantBarrierSeal handles the platform_tenant_barrier_seal tool
+// execution.
+func (r *ToolRegistry) executeTenantBarrierSeal(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	tenantID := getString(args, "tenant_id")
+	if tenantID == "" {
+		return nil, ErrTenantIDRequired
+	}
+
+	if err := mgr.SealTenantBarrier(ctx, tenantID); err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success":   true,
+		"tenant_id": tenantID,
+		"message":   "tenant barrier sealed successfully",
+	}, nil
+}
+
+// executeTenantBarrierStatus handles the platform_tenant_barrier_status tool
+// execution.
+func (r *ToolRegistry) executeTenantBarrierStatus(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	mgr := r.getTenantManager()
+	if mgr == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+
+	tenantID := getString(args, "tenant_id")
+	if tenantID == "" {
+		return nil, ErrTenantIDRequired
+	}
+
+	state, err := mgr.TenantBarrierStatus(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"tenant_id":       state.TenantID,
+		"sealed":          state.Sealed,
+		"initialized":     state.Initialized,
+		"strategy":        state.Strategy,
+		"hardware_backed": state.HardwareBacked,
+	}, nil
 }
 
 // formatTenantEntity formats a TenantEntity for MCP response.

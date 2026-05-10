@@ -19,6 +19,8 @@ import (
 	"errors"
 	"net/netip"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fabric"
 )
 
 var (
@@ -72,6 +74,9 @@ type Config struct {
 
 	// Gateway configures the SDN gateway node.
 	Gateway *GatewayConfig `yaml:"gateway,omitempty" json:"gateway,omitempty" mapstructure:"gateway"`
+
+	// Fabric configures the physical switch fabric for VLAN/VNI provisioning.
+	Fabric *fabric.FabricConfig `yaml:"fabric,omitempty" json:"fabric,omitempty" mapstructure:"fabric"`
 }
 
 // Validate checks the SDN configuration for internal consistency.
@@ -94,6 +99,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Networks != nil {
 		if err := c.validateNetworks(); err != nil {
+			return err
+		}
+	}
+	if c.Fabric != nil {
+		if err := c.Fabric.Validate(); err != nil {
 			return err
 		}
 	}
@@ -160,6 +170,10 @@ func (c *OVSConfig) Validate() error {
 type IPAMConfig struct {
 	// Backend is the IPAM storage backend ("memory", "quicbaas").
 	Backend string `yaml:"backend" json:"backend" mapstructure:"backend"`
+
+	// ASN is the Autonomous System Number for this platform (e.g., 401870).
+	// Used by BGP and public subnet announcements.
+	ASN uint32 `yaml:"asn,omitempty" json:"asn,omitempty" mapstructure:"asn"`
 
 	// Pools is the list of IP address pools.
 	Pools []PoolConfig `yaml:"pools,omitempty" json:"pools,omitempty" mapstructure:"pools"`

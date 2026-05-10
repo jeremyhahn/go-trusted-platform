@@ -133,8 +133,12 @@ func runBootstrapDryRun(configPath string, commonFlags *cli.CommonFlags) error {
 	// If the deployer target is Cisco, render the CLI commands for inspection.
 	if result != nil && result.DeployerTarget == string(deployer.TargetCisco) {
 		provisioningVLAN := deployer.DefaultCiscoProvisioningVLAN
+		provSubnetGateway := ""
+		if ps := config.ProvisioningSubnet(); ps != nil {
+			provSubnetGateway = ps.Gateway
+		}
 		cmds, renderErr := deployer.RenderCiscoDeployPlan(
-			config.ProvisioningNetwork.Gateway, provisioningVLAN)
+			provSubnetGateway, provisioningVLAN)
 		if renderErr != nil {
 			result.Warnings = append(result.Warnings,
 				"could not render cisco commands: "+renderErr.Error())

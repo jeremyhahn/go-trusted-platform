@@ -71,6 +71,7 @@ Examples:
 
 	// Add new subcommands - platform commands
 	cmd.AddCommand(newInfoCommand(getFlags))
+	cmd.AddCommand(newStatusCommand(getFlags))
 	cmd.AddCommand(newProvisionCommand(getFlags))
 	cmd.AddCommand(newClearCommand(getFlags))
 	cmd.AddCommand(newInstallCommand(getFlags))

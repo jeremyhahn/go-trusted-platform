@@ -126,3 +126,20 @@ type provisionResponse struct {
 	Status    string `json:"status"`
 	Message   string `json:"message,omitempty"`
 }
+
+// certReplaceResponse is the response from the cert replace command.
+type certReplaceResponse struct {
+	ProfileID string `json:"profile_id"`
+	Status    string `json:"status"`
+	Message   string `json:"message,omitempty"`
+}
+
+// userActionResponse is the response from user management commands.
+type userActionResponse struct {
+	ProfileID string `json:"profile_id"`
+	Action    string `json:"action"`
+	Username  string `json:"username,omitempty"`
+	Slot      uint32 `json:"slot,omitempty"`
+	Status    string `json:"status"`
+	Message   string `json:"message,omitempty"`
+}

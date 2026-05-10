@@ -15,17 +15,15 @@ package bootstrap
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 )
 
 // SchemeFile is the URI scheme prefix for file-based secrets.
@@ -75,7 +73,6 @@ The migration process:
 Supported source schemes for migration:
   - env://       - Environment variable references
   - file://      - File-based secrets (reads content from file path)
-  - autogen://   - Auto-generated secrets (random passwords, keys)
 
 Schemes that are already KMS-managed (skipped):
   - kms://       - Already in local KMS
@@ -127,6 +124,9 @@ func runSecretsMigrate(flags *cli.CommonFlags, cmdFlags *secretsMigrateFlags) er
 	printer := base.Printer()
 	ctx := base.Context()
 
+	// Create KMS SDK client
+	kmsClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
+
 	// Read configuration file
 	configData, err := os.ReadFile(cmdFlags.configPath)
 	if err != nil {
@@ -160,7 +160,7 @@ func runSecretsMigrate(flags *cli.CommonFlags, cmdFlags *secretsMigrateFlags) er
 
 	// Phase 1: Resolve all secrets
 	printer.PrintInfo("Phase 1: Resolving secrets...")
-	resolvedCount, failedCount := resolveSecrets(ctx, base.Client(), entries, cmdFlags.force, printer)
+	resolvedCount, failedCount := resolveSecrets(ctx, entries, cmdFlags.force, printer)
 
 	if failedCount > 0 && !cmdFlags.force {
 		return ErrMigrationFailed{
@@ -190,7 +190,7 @@ func runSecretsMigrate(flags *cli.CommonFlags, cmdFlags *secretsMigrateFlags) er
 	}
 
 	// Phase 2: Store secrets in KMS
-	storedCount, storeFailedCount := storeSecretsInKMS(ctx, base.Client(), entries, cmdFlags.keyID, printer)
+	storedCount, storeFailedCount := storeSecretsInKMS(ctx, kmsClient, entries, cmdFlags.keyID, printer)
 
 	if storeFailedCount > 0 && !cmdFlags.force {
 		return ErrMigrationFailed{
@@ -252,7 +252,7 @@ func runSecretsMigrate(flags *cli.CommonFlags, cmdFlags *secretsMigrateFlags) er
 	fmt.Println()
 	printer.PrintInfo("Phase 5: Verifying migration...")
 
-	verifyCount, verifyFailedCount := verifyMigratedSecrets(ctx, base.Client(), entries, cmdFlags.keyID, printer)
+	verifyCount, verifyFailedCount := verifyMigratedSecrets(ctx, kmsClient, entries, cmdFlags.keyID, printer)
 
 	// Print summary
 	fmt.Println()
@@ -326,7 +326,7 @@ func detectSchemeWithFile(uri string) string {
 }
 
 // resolveSecrets resolves all secrets in the migration entries
-func resolveSecrets(ctx context.Context, client platform.Client, entries []migrationEntry, force bool, printer *cli.Printer) (resolved, failed int) {
+func resolveSecrets(ctx context.Context, entries []migrationEntry, force bool, printer *cli.Printer) (resolved, failed int) {
 	for i := range entries {
 		entry := &entries[i]
 
@@ -336,7 +336,7 @@ func resolveSecrets(ctx context.Context, client platform.Client, entries []migra
 			continue
 		}
 
-		value, err := resolveSecretByScheme(ctx, client, entry.uri, entry.scheme)
+		value, err := resolveSecretByScheme(ctx, entry.uri, entry.scheme)
 		if err != nil {
 			entry.errorMsg = err.Error()
 			failed++
@@ -357,7 +357,7 @@ func resolveSecrets(ctx context.Context, client platform.Client, entries []migra
 }
 
 // resolveSecretByScheme resolves a secret URI based on its scheme
-func resolveSecretByScheme(_ context.Context, _ platform.Client, uri, scheme string) ([]byte, error) {
+func resolveSecretByScheme(_ context.Context, uri, scheme string) ([]byte, error) {
 	switch scheme {
 	case "env":
 		varName := strings.TrimPrefix(uri, bootstrap.SchemeEnv)
@@ -375,16 +375,11 @@ func resolveSecretByScheme(_ context.Context, _ platform.Client, uri, scheme str
 		}
 		return data, nil
 
-	case "autogen":
-		// Parse autogen spec: autogen://type?param=value
-		spec := strings.TrimPrefix(uri, bootstrap.SchemeAutoGen)
-		return generateSecret(spec)
-
 	case "kms":
 		// Already KMS-managed, this shouldn't be called
 		return nil, ErrAlreadyKMSManaged{Path: uri}
 
-	case "remote-kms", "encrypted":
+	case "remote-kms", "idevid":
 		// These require additional infrastructure not available in CLI
 		return nil, ErrResolverNotAvailable{Scheme: scheme}
 
@@ -393,50 +388,8 @@ func resolveSecretByScheme(_ context.Context, _ platform.Client, uri, scheme str
 	}
 }
 
-// generateSecret generates a random secret based on the autogen spec
-func generateSecret(spec string) ([]byte, error) {
-	// Parse spec: password?length=32 or key?length=32&encoding=base64
-	parts := strings.SplitN(spec, "?", 2)
-	secretType := parts[0]
-
-	// Default length
-	length := 32
-	if len(parts) > 1 {
-		params := strings.Split(parts[1], "&")
-		for _, p := range params {
-			kv := strings.SplitN(p, "=", 2)
-			if len(kv) == 2 && kv[0] == "length" {
-				fmt.Sscanf(kv[1], "%d", &length)
-			}
-		}
-	}
-
-	switch secretType {
-	case "password", "key", "token":
-		bytes := make([]byte, length)
-		if _, err := rand.Read(bytes); err != nil {
-			return nil, ErrAutoGenFailed{Spec: spec, Err: err}
-		}
-		// Convert to alphanumeric for passwords
-		const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-		for i := range bytes {
-			bytes[i] = charset[int(bytes[i])%len(charset)]
-		}
-		return bytes, nil
-
-	default:
-		// Default to random bytes
-		bytes := make([]byte, length)
-		if _, err := rand.Read(bytes); err != nil {
-			return nil, ErrAutoGenFailed{Spec: spec, Err: err}
-		}
-		return bytes, nil
-	}
-}
-
 // storeSecretsInKMS stores resolved secrets in KMS using encryption
-func storeSecretsInKMS(ctx context.Context, client platform.Client, entries []migrationEntry, keyID string, printer *cli.Printer) (stored, failed int) {
-	kmsClient := client.KMS()
+func storeSecretsInKMS(ctx context.Context, kmsClient *kmssvc.Client, entries []migrationEntry, keyID string, printer *cli.Printer) (stored, failed int) {
 	if kmsClient == nil {
 		printer.PrintError("KMS client not available")
 		return 0, len(entries)
@@ -453,12 +406,8 @@ func storeSecretsInKMS(ctx context.Context, client platform.Client, entries []mi
 		// Build KMS path from config path
 		kmsPath := buildKMSPath(entry.path)
 
-		// Encrypt the secret value using KMS
-		encResp, err := kmsClient.Encrypt(ctx, &platformv1.EncryptRequest{
-			KeyId:     keyID,
-			Plaintext: entry.value,
-			Context:   []byte(kmsPath), // Use path as AAD for binding
-		})
+		// Encrypt the secret value using KMS domain client
+		result, err := kmsClient.EncryptDomain(ctx, keyID, entry.value, []byte(kmsPath), nil)
 		if err != nil {
 			entry.errorMsg = err.Error()
 			failed++
@@ -466,15 +415,10 @@ func storeSecretsInKMS(ctx context.Context, client platform.Client, entries []mi
 			continue
 		}
 
-		// Check status - Status uses Success (bool) field
-		if encResp.Status != nil && !encResp.Status.Success {
-			errMsg := "encryption failed"
-			if encResp.Status.Message != "" {
-				errMsg = encResp.Status.Message
-			}
-			entry.errorMsg = errMsg
+		if result == nil {
+			entry.errorMsg = "encryption returned nil result"
 			failed++
-			printer.PrintError(fmt.Sprintf("  FAIL: %s - %s", entry.path, errMsg))
+			printer.PrintError(fmt.Sprintf("  FAIL: %s - encryption returned nil result", entry.path))
 			continue
 		}
 
@@ -505,8 +449,7 @@ func buildConfigUpdates(entries []migrationEntry) []bootstrap.SecretUpdate {
 }
 
 // verifyMigratedSecrets verifies that migrated secrets can be decrypted
-func verifyMigratedSecrets(ctx context.Context, client platform.Client, entries []migrationEntry, keyID string, printer *cli.Printer) (verified, failed int) {
-	kmsClient := client.KMS()
+func verifyMigratedSecrets(ctx context.Context, kmsClient *kmssvc.Client, entries []migrationEntry, keyID string, printer *cli.Printer) (verified, failed int) {
 	if kmsClient == nil {
 		printer.PrintError("KMS client not available")
 		return 0, len(entries)
@@ -523,26 +466,16 @@ func verifyMigratedSecrets(ctx context.Context, client platform.Client, entries 
 		kmsPath := strings.TrimPrefix(entry.kmsPath, bootstrap.SchemeKMS)
 
 		// Re-encrypt to verify the key is accessible
-		// In a full implementation, we would retrieve and decrypt the stored secret
-		encResp, err := kmsClient.Encrypt(ctx, &platformv1.EncryptRequest{
-			KeyId:     keyID,
-			Plaintext: []byte("verification-test"),
-			Context:   []byte(kmsPath),
-		})
+		result, err := kmsClient.EncryptDomain(ctx, keyID, []byte("verification-test"), []byte(kmsPath), nil)
 		if err != nil {
 			failed++
 			printer.PrintError(fmt.Sprintf("  FAIL: %s - %s", entry.path, err.Error()))
 			continue
 		}
 
-		// Check status - Status uses Success (bool) field
-		if encResp.Status != nil && !encResp.Status.Success {
+		if result == nil {
 			failed++
-			errMsg := "verification failed"
-			if encResp.Status.Message != "" {
-				errMsg = encResp.Status.Message
-			}
-			printer.PrintError(fmt.Sprintf("  FAIL: %s - %s", entry.path, errMsg))
+			printer.PrintError(fmt.Sprintf("  FAIL: %s - verification returned nil result", entry.path))
 			continue
 		}
 

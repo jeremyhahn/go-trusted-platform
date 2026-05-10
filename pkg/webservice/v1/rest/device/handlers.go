@@ -19,6 +19,7 @@ import (
 	"strconv"
 
 	"github.com/gorilla/mux"
+	"gopkg.in/yaml.v3"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
@@ -124,6 +125,10 @@ func (h *DeviceTemplateHandlers) HandleUploadTemplate(w http.ResponseWriter, r *
 // HandleCreateProfile handles POST /api/v1/devices/templates/{id}/create-profile.
 // It accepts the seeder's profileRequest format, converts the template to a
 // profile with optional overrides, saves the profile, and returns 201 Created.
+//
+// When the request contains an Overrides map, those key-value pairs are
+// deep-merged onto the template's base platform config. This produces a full
+// merged config stored in profile.Config for delivery via HandleGetConfig.
 func (h *DeviceTemplateHandlers) HandleCreateProfile(w http.ResponseWriter, r *http.Request) {
 	if h.templateService == nil {
 		h.responseWriter.Error500(w, r, ErrTemplateServiceNil{})
@@ -159,12 +164,20 @@ func (h *DeviceTemplateHandlers) HandleCreateProfile(w http.ResponseWriter, r *h
 	if req.Role != "" {
 		overrides.Role = entities.DeviceRole(req.Role)
 	}
+	if req.MAC != "" {
+		overrides.MatchRules = &entities.ProfileMatchRules{
+			MACPrefix: req.MAC,
+		}
+	}
 
 	// Generate a deterministic profile ID from the hostname so repeated
 	// seeding for the same host is idempotent.
 	overrides.ID = util.NewID([]byte(req.Hostname))
 
-	profile, err := h.templateService.ToProfile(r.Context(), templateID, overrides)
+	// Apply config-level overrides (hostname, IP, etc.) via deep merge
+	// onto the template's base platform config.
+	profile, err := h.templateService.ToProfileWithConfigOverrides(
+		r.Context(), templateID, overrides, req.Overrides)
 	if err != nil {
 		h.logger.Errorf("device: failed to create profile from template: template_id=%d hostname=%s error=%v",
 			templateID, req.Hostname, err)
@@ -181,4 +194,96 @@ func (h *DeviceTemplateHandlers) HandleCreateProfile(w http.ResponseWriter, r *h
 	h.logger.Infof("device: profile created from template: template_id=%d profile_id=%d hostname=%s",
 		templateID, profile.ID, req.Hostname)
 	w.WriteHeader(http.StatusCreated)
+}
+
+// HandleGetConfig handles GET /api/v1/devices/config.
+// It looks up a device profile by MAC address or serial number and returns
+// the profile's Config field as raw YAML. The response is NOT wrapped in the
+// standard JSON envelope because the installer reads it as a plain YAML file.
+//
+// Query parameters:
+//
+//	mac    - MAC address of the device (e.g., "aa:bb:cc:dd:ee:ff")
+//	serial - serial number of the device
+//
+// At least one of mac or serial is required. When both are provided, the
+// handler attempts an exact MAC lookup first, then serial, then falls back
+// to profile match rules using both values.
+func (h *DeviceTemplateHandlers) HandleGetConfig(w http.ResponseWriter, r *http.Request) {
+	if h.profileService == nil {
+		h.responseWriter.Error500(w, r, ErrProfileServiceNil{})
+		return
+	}
+
+	mac := r.URL.Query().Get("mac")
+	serial := r.URL.Query().Get("serial")
+
+	if mac == "" && serial == "" {
+		h.responseWriter.Error400(w, r, ErrMissingDeviceIdentifier{})
+		return
+	}
+
+	profile, err := h.resolveProfile(r, mac, serial)
+	if err != nil {
+		h.logger.Errorf("device: config lookup failed: mac=%s serial=%s error=%v", mac, serial, err)
+		http.Error(w, ErrProfileNotFound{MAC: mac, Serial: serial}.Error(), http.StatusNotFound)
+		return
+	}
+
+	// Resolve config from either the Config field (direct, contains merged
+	// template+overrides) or PlatformdConfig.Inline (backward compatibility).
+	configData := profile.Config
+	if configData == nil && profile.PlatformdConfig != nil && profile.PlatformdConfig.Inline != nil {
+		configData = profile.PlatformdConfig.Inline
+	}
+
+	if configData == nil {
+		h.logger.Errorf("device: profile %d has no config: mac=%s serial=%s", profile.ID, mac, serial)
+		http.Error(w, ErrProfileConfigEmpty{ProfileID: profile.ID}.Error(), http.StatusNotFound)
+		return
+	}
+
+	yamlBytes, err := yaml.Marshal(configData)
+	if err != nil {
+		h.logger.Errorf("device: failed to marshal config to YAML: profile_id=%d error=%v", profile.ID, err)
+		h.responseWriter.Error500(w, r, ErrConfigMarshalFailed{Cause: err})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-yaml")
+	w.WriteHeader(http.StatusOK)
+	w.Write(yamlBytes)
+}
+
+// resolveProfile attempts to find a device profile using the following
+// resolution order:
+//  1. Exact MAC address lookup via FindByMACAddress
+//  2. Exact serial number lookup via FindBySerial
+//  3. Fuzzy match via FindMatchingProfile using match rules
+func (h *DeviceTemplateHandlers) resolveProfile(r *http.Request, mac, serial string) (*entities.DeviceProfile, error) {
+	ctx := r.Context()
+
+	// Try exact MAC lookup first.
+	if mac != "" {
+		profile, err := h.profileService.FindByMACAddress(ctx, mac)
+		if err == nil && profile != nil {
+			return profile, nil
+		}
+	}
+
+	// Try exact serial lookup.
+	if serial != "" {
+		profile, err := h.profileService.FindBySerial(ctx, serial)
+		if err == nil && profile != nil {
+			return profile, nil
+		}
+	}
+
+	// Fall back to match rules (prefix matching, model matching).
+	profile, err := h.profileService.FindMatchingProfile(ctx, mac, serial, "")
+	if err == nil && profile != nil {
+		return profile, nil
+	}
+
+	return nil, ErrProfileNotFound{MAC: mac, Serial: serial}
 }

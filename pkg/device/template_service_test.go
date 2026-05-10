@@ -47,6 +47,27 @@ func testConfigYAML(domain, hostname string) []byte {
 	return []byte("domain: " + domain + "\nhostname: " + hostname + "\n")
 }
 
+// testFullConfigYAML returns a richer platform config with nested structures
+// for verifying deep merge behavior.
+func testFullConfigYAML() []byte {
+	return []byte(`domain: compute.example.com
+hostname: compute
+os:
+  hostname: compute
+  packages:
+    - bash
+    - vim
+network:
+  dns:
+    nameservers:
+      - 127.0.0.1
+  interfaces:
+    - name: eth0
+      type: static
+      ipv4-address: 198.18.0.3/24
+`)
+}
+
 func TestNewTemplateService(t *testing.T) {
 	ds := testTemplateServiceDatastore(t)
 
@@ -567,6 +588,13 @@ func TestTemplateService_ToProfile(t *testing.T) {
 	assert.Equal(t, "example.com", inlineConfig["domain"])
 	assert.Equal(t, "edge-01", inlineConfig["hostname"])
 
+	// Config also stored in profile.Config for direct delivery
+	assert.NotNil(t, profile.Config)
+	configMap, ok := profile.Config.(map[string]interface{})
+	assert.True(t, ok)
+	assert.Equal(t, "example.com", configMap["domain"])
+	assert.Equal(t, "edge-01", configMap["hostname"])
+
 	// Match rules deep-copied
 	assert.NotNil(t, profile.MatchRules)
 	assert.Equal(t, "52:54:00", profile.MatchRules.MACPrefix)
@@ -622,6 +650,7 @@ func TestTemplateService_ToProfile_NilOverrides(t *testing.T) {
 	assert.Equal(t, "tenant-1", profile.TenantID)
 	assert.Equal(t, entities.DeviceRoleServer, profile.Role)
 	assert.NotNil(t, profile.PlatformdConfig)
+	assert.NotNil(t, profile.Config)
 }
 
 func TestTemplateService_ToProfile_NoConfig(t *testing.T) {
@@ -648,6 +677,7 @@ func TestTemplateService_ToProfile_NoConfig(t *testing.T) {
 	assert.Equal(t, "tenant-1", profile.TenantID)
 	assert.Equal(t, entities.DeviceRoleClient, profile.Role)
 	assert.Nil(t, profile.PlatformdConfig)
+	assert.Nil(t, profile.Config)
 }
 
 func TestTemplateService_ToProfile_OverrideTenantID(t *testing.T) {
@@ -767,6 +797,11 @@ func TestTemplateService_ToProfile_DeepCopyConfig(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "original.com", inlineConfig["domain"])
 
+	// profile.Config should also have original values
+	configMap, ok := profile.Config.(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "original.com", configMap["domain"])
+
 	// Modify the profile's match rules
 	profile.MatchRules.MACPrefix = "dd:ee:ff"
 
@@ -820,4 +855,117 @@ func TestTemplateService_ToProfile_OverrideNetworkConfig(t *testing.T) {
 	assert.NotNil(t, profile.GetFailureNetworkConfig())
 	assert.Equal(t, uint16(999), profile.GetFailureNetworkConfig().VLAN)
 	assert.Equal(t, 15, profile.WorkloadPCR)
+}
+
+func TestTemplateService_ToProfileWithConfigOverrides(t *testing.T) {
+	ds := testTemplateServiceDatastore(t)
+	ctx := context.Background()
+
+	service, err := NewTemplateService(ds)
+	require.NoError(t, err)
+
+	template := &entities.DeviceTemplate{
+		ID:       1,
+		TenantID: "tenant-1",
+		Name:     "compute-template",
+		Role:     entities.DeviceRoleServer,
+		Config:   testFullConfigYAML(),
+	}
+
+	err = service.Save(ctx, template)
+	require.NoError(t, err)
+
+	// Config overrides change the hostname and IP while preserving other fields
+	configOverrides := map[string]interface{}{
+		"hostname": "lab-node-3",
+		"os": map[string]interface{}{
+			"hostname": "lab-node-3",
+		},
+		"network": map[string]interface{}{
+			"interfaces": []interface{}{
+				map[string]interface{}{
+					"name":         "eth0",
+					"type":         "static",
+					"ipv4-address": "198.18.0.104/24",
+				},
+			},
+		},
+	}
+
+	overrides := &entities.DeviceProfile{
+		Name: "lab-node-3",
+	}
+
+	profile, err := service.ToProfileWithConfigOverrides(ctx, template.ID, overrides, configOverrides)
+	require.NoError(t, err)
+
+	// Verify the profile name was overridden
+	assert.Equal(t, "lab-node-3", profile.Name)
+
+	// Verify the config was deep-merged
+	configMap, ok := profile.Config.(map[string]interface{})
+	require.True(t, ok)
+
+	// hostname should be overridden
+	assert.Equal(t, "lab-node-3", configMap["hostname"])
+
+	// domain should be preserved from the template
+	assert.Equal(t, "compute.example.com", configMap["domain"])
+
+	// os.hostname should be overridden
+	osMap, ok := configMap["os"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "lab-node-3", osMap["hostname"])
+
+	// os.packages should be preserved from template
+	packages, ok := osMap["packages"].([]interface{})
+	require.True(t, ok)
+	assert.Contains(t, packages, "bash")
+	assert.Contains(t, packages, "vim")
+
+	// PlatformdConfig.Inline should also have the merged config
+	inlineConfig, ok := profile.PlatformdConfig.Inline.(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "lab-node-3", inlineConfig["hostname"])
+	assert.Equal(t, "compute.example.com", inlineConfig["domain"])
+}
+
+func TestTemplateService_ToProfileWithConfigOverrides_NilOverrides(t *testing.T) {
+	ds := testTemplateServiceDatastore(t)
+	ctx := context.Background()
+
+	service, err := NewTemplateService(ds)
+	require.NoError(t, err)
+
+	template := &entities.DeviceTemplate{
+		ID:       1,
+		TenantID: "tenant-1",
+		Name:     "compute-template",
+		Role:     entities.DeviceRoleServer,
+		Config:   testConfigYAML("example.com", "srv-01"),
+	}
+
+	err = service.Save(ctx, template)
+	require.NoError(t, err)
+
+	// No config overrides -- should return template config as-is
+	profile, err := service.ToProfileWithConfigOverrides(ctx, template.ID, nil, nil)
+	require.NoError(t, err)
+
+	configMap, ok := profile.Config.(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "example.com", configMap["domain"])
+	assert.Equal(t, "srv-01", configMap["hostname"])
+}
+
+func TestTemplateService_ToProfileWithConfigOverrides_InvalidID(t *testing.T) {
+	ds := testTemplateServiceDatastore(t)
+	ctx := context.Background()
+
+	service, err := NewTemplateService(ds)
+	require.NoError(t, err)
+
+	_, err = service.ToProfileWithConfigOverrides(ctx, 0, nil, nil)
+	assert.Error(t, err)
+	assert.IsType(t, ErrInvalidTemplateID{}, err)
 }

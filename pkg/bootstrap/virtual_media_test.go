@@ -14,6 +14,7 @@
 package bootstrap
 
 import (
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"errors"
 	"testing"
 
@@ -71,9 +72,7 @@ func TestValidate_BootMethod(t *testing.T) {
 	baseConfig := func() *BootstrapConfig {
 		return &BootstrapConfig{
 			Deployer: DeployerConfig{Host: "deploy.example.com"},
-			ProvisioningNetwork: ProvisioningNetwork{
-				Subnet: "10.100.0.0/24",
-			},
+			Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
 			Platform: PlatformGlobalConfig{Domain: "example.com"},
 			Nodes: []NodeConfig{
 				{

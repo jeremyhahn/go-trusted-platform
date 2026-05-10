@@ -309,3 +309,64 @@ func (e ErrTemplateJSONConvertFailed) Error() string {
 func (e ErrTemplateJSONConvertFailed) Unwrap() error {
 	return e.Cause
 }
+
+// ErrBootRetryExhausted is returned when the orchestrator retried the
+// virtual-media boot cycle the maximum number of times and the install log
+// never appeared. This typically means the BIOS boot order does not have
+// the virtual CD before the hard disk, so the server keeps booting from
+// disk instead of the ISO.
+type ErrBootRetryExhausted struct {
+	Hostname   string
+	MaxRetries int
+	Cause      error
+}
+
+func (e ErrBootRetryExhausted) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf(
+			"bootstrap: node %s: boot retry exhausted after %d attempts (check BIOS boot order: ATEN CDROM must be before Hard Disk): %v",
+			e.Hostname, e.MaxRetries, e.Cause)
+	}
+	return fmt.Sprintf(
+		"bootstrap: node %s: boot retry exhausted after %d attempts (check BIOS boot order: ATEN CDROM must be before Hard Disk)",
+		e.Hostname, e.MaxRetries)
+}
+
+func (e ErrBootRetryExhausted) Unwrap() error {
+	return e.Cause
+}
+
+// ErrBootFromDiskDetected is returned when the orchestrator determines
+// that a node booted from disk instead of the ISO after a virtual-media
+// boot attempt. This is a transient condition that triggers a retry.
+type ErrBootFromDiskDetected struct {
+	Hostname string
+	Attempt  int
+}
+
+func (e ErrBootFromDiskDetected) Error() string {
+	return fmt.Sprintf(
+		"bootstrap: node %s: booted from disk instead of ISO on attempt %d",
+		e.Hostname, e.Attempt)
+}
+
+// ErrTemplateMergeFailed is returned when the orchestrator fails to merge
+// a node's overrides into the base template for profile creation.
+type ErrTemplateMergeFailed struct {
+	Hostname string
+	Role     string
+	Cause    error
+}
+
+func (e ErrTemplateMergeFailed) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bootstrap: failed to merge template for node %s (role=%s): %v",
+			e.Hostname, e.Role, e.Cause)
+	}
+	return fmt.Sprintf("bootstrap: failed to merge template for node %s (role=%s)",
+		e.Hostname, e.Role)
+}
+
+func (e ErrTemplateMergeFailed) Unwrap() error {
+	return e.Cause
+}

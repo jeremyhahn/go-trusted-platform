@@ -103,9 +103,9 @@ Serves iPXE firmware to boot clients.
 
 ### HTTP Server (`http_server.go`)
 
-Serves boot scripts and files.
+Serves boot scripts, files, and bootstrap-time config delivery.
 
-**Endpoints:**
+**iPXE/Boot Endpoints:**
 
 | Path | Purpose |
 |------|---------|
@@ -116,6 +116,36 @@ Serves boot scripts and files.
 | `/proxy/https/*` | HTTPS proxy for iPXE |
 | `/health` | Health check |
 | `/static/*` | Static files |
+
+**Bootstrap Config-Server Endpoints:**
+
+During `platformctl bootstrap run`, the HTTP server doubles as the
+per-MAC config + install-log sink. See
+`docs/bootstrap/config-delivery.md` for the full flow.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| PUT | `/config/mac/<mac>/<key>` | Orchestrator publishes per-MAC value (hostname, installer.yaml) |
+| GET | `/config/mac/<mac>/<key>` | Target node (or autoinstall.sh) fetches the published value |
+| POST | `/install-log/<mac>/<status>` | Target node uploads install.log on success or failure |
+
+**`<mac>` format:** lowercase, dash-separated — `aa-bb-cc-dd-ee-ff`.
+Uppercase or colon-separated MACs are rejected with HTTP 400.
+
+**`<key>` values currently defined:**
+
+| Key | Content-Type | Max size | Publisher |
+|-----|--------------|----------|-----------|
+| `hostname` | `text/plain; charset=utf-8` | 256 bytes | Orchestrator (Phase 4) |
+| `installer.yaml` | `application/yaml` | 256 KiB (`maxConfigValueBytes`) | Orchestrator (Phase 4) |
+
+**`<status>` values:** `success`, `failed`. Any other value rejected
+with HTTP 400.
+
+**Security model:** Config-server endpoints carry no authentication —
+they run on the private deployer network during bootstrap. Post-bootstrap
+config delivery uses a different, authenticated flow documented in
+`docs/provisioning/config-delivery.md`.
 
 **HTTPS Proxy:**
 iPXE doesn't support HTTPS. The proxy converts:

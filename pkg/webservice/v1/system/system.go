@@ -20,11 +20,11 @@ import (
 	"strconv"
 
 	"github.com/gorilla/mux"
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/system"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 type RestHandler interface {
@@ -99,10 +99,17 @@ func (restService *Handler) Certificate(w http.ResponseWriter, r *http.Request) 
 	restService.httpWriter.Write(w, r, http.StatusOK, string(cert))
 }
 
-// Writes the CA certificate bundle in PEM form
+// Writes the CA certificate bundle in PEM form. Passes empty strings
+// for storeType and algorithm so the bundler emits ALL active CA
+// certificates (root + intermediate(s), every key algorithm). Filtering
+// is available via explicit path parameters on the /acme/ca-bundle/...
+// variants — this unfiltered endpoint is the default and intended
+// surface for client trust-bundle fetches.
 func (restService *Handler) CABundleHandler(w http.ResponseWriter, r *http.Request) {
-	// Use default store type and no specific algorithm filter
-	defaultBundle, err := restService.ca.CABundle(xkmssdk.StoreUnknown, 0)
+	// Unfiltered: returns full CA chain (root + active intermediates),
+	// all key algorithms. The /acme/ca-bundle/{storeType}/{keyAlgo}
+	// variants handle filtered views.
+	defaultBundle, err := restService.ca.CABundle()
 	if err != nil {
 		restService.httpWriter.Write(w, r, http.StatusInternalServerError, err.Error())
 		return

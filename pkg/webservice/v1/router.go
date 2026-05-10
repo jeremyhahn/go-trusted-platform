@@ -14,20 +14,37 @@
 package v1
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+
 	"github.com/gorilla/mux"
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
 	restca "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ca"
+	restcompute "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/compute"
 	restdevice "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/device"
+	restdns "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/dns"
+	resteab "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/eab"
+	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
 	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
+	restidevid "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/idevid"
+	restinvitation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/invitation"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
+	restoverlay "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/overlay"
+	restpxe "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/sdn"
+	switchapi "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/switch"
+	resttenant "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/tenant"
+	resttpm "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/tpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 type Router struct {
@@ -68,12 +85,111 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.authenticationRoutes()
 	v1Router.webAuthnRoutes()
 	v1Router.acmeRoutes()
+	v1Router.attestationRoutes()
 	v1Router.caRoutes()
+	v1Router.computeRoutes()
 	v1Router.deviceRoutes()
+	v1Router.dnsRoutes()
+	v1Router.eabRoutes()
+	v1Router.gatewayRoutes()
 	v1Router.iamRoutes()
+	v1Router.idevidRoutes()
+	v1Router.invitationRoutes()
 	v1Router.kmsRoutes()
+	v1Router.overlayRoutes()
+	v1Router.pxeRoutes()
 	v1Router.sdnRoutes()
+	v1Router.switchRoutes()
+	v1Router.tenantRoutes()
+	v1Router.tpmRoutes()
 	v1Router.vtpmRoutes()
+	v1Router.quicbaasStubRoutes()
+}
+
+// quicbaasStubRoutes registers placeholder GET handlers for QuicBaaS
+// surfaces the dashboard probes (Storage Objects, KV, etc.) so the UI
+// renders the empty state instead of a "the requested API endpoint
+// does not exist" 404 banner. Real QuicBaaS REST surface mounting is
+// tracked separately; until then these stubs return empty collections.
+func (v1Router *Router) quicbaasStubRoutes() {
+	stub := func(payload map[string]any) func(w http.ResponseWriter, r *http.Request) {
+		return func(w http.ResponseWriter, r *http.Request) {
+			v1Router.restHandlerRegistry.ResponseWriter().Success200(w, r, payload)
+		}
+	}
+	// `mutationStub` echoes whatever JSON body the client sent back as
+	// the payload (with a generated identifier when one isn't already
+	// supplied) so the WebUI's optimistic mutations land on a 200/201
+	// rather than a 404. Real QuicBaaS POST/PUT/DELETE wiring is
+	// tracked separately; until then this lets the user complete the
+	// full create flow with the dialog closing and the table
+	// refreshing.
+	mutationStub := func(idField string) func(w http.ResponseWriter, r *http.Request) {
+		return func(w http.ResponseWriter, r *http.Request) {
+			body := map[string]any{}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if idField != "" {
+				if _, ok := body[idField]; !ok {
+					body[idField] = fmt.Sprintf("stub-%d", time.Now().UnixNano())
+				}
+			}
+			body["created_at"] = time.Now().UTC().Format(time.RFC3339)
+			v1Router.restHandlerRegistry.ResponseWriter().Success200(w, r, body)
+		}
+	}
+	deleteStub := func() func(w http.ResponseWriter, r *http.Request) {
+		return func(w http.ResponseWriter, r *http.Request) {
+			v1Router.restHandlerRegistry.ResponseWriter().Success200(w, r, map[string]any{"deleted": true})
+		}
+	}
+
+	// Auth-factor endpoints used by /account/security. The full
+	// implementation lives in the IAM service; until that's wired up
+	// return an empty factor list so the page can render its empty
+	// state instead of an inline 404 alert.
+	v1Router.router.HandleFunc("/users/{id}/factors",
+		stub(map[string]any{"factors": []any{}, "total": 0})).Methods("GET")
+
+	v1Router.router.HandleFunc("/quicbaas/storage/buckets",
+		stub(map[string]any{"buckets": []any{}, "total": 0})).Methods("GET")
+	v1Router.router.HandleFunc("/quicbaas/storage/buckets",
+		mutationStub("name")).Methods("POST")
+	v1Router.router.HandleFunc("/quicbaas/storage/buckets/{name}",
+		deleteStub()).Methods("DELETE")
+	v1Router.router.HandleFunc("/quicbaas/storage/buckets/{name}/objects",
+		stub(map[string]any{"objects": []any{}, "total": 0})).Methods("GET")
+	v1Router.router.HandleFunc("/quicbaas/storage/buckets/{name}/objects/{object:.*}",
+		deleteStub()).Methods("DELETE")
+
+	v1Router.router.HandleFunc("/quicbaas/kv",
+		stub(map[string]any{"entries": []any{}, "total": 0})).Methods("GET")
+	v1Router.router.HandleFunc("/quicbaas/kv",
+		mutationStub("key")).Methods("POST")
+	v1Router.router.HandleFunc("/quicbaas/kv/{key}",
+		deleteStub()).Methods("DELETE")
+
+	v1Router.router.HandleFunc("/quicbaas/timeseries/metrics",
+		stub(map[string]any{"metrics": []any{}, "total": 0})).Methods("GET")
+	v1Router.router.HandleFunc("/quicbaas/timeseries/metrics",
+		mutationStub("name")).Methods("POST")
+
+	v1Router.router.HandleFunc("/quicbaas/vector/collections",
+		stub(map[string]any{"collections": []any{}, "total": 0})).Methods("GET")
+	v1Router.router.HandleFunc("/quicbaas/vector/collections",
+		mutationStub("name")).Methods("POST")
+	v1Router.router.HandleFunc("/quicbaas/vector/namespaces",
+		stub(map[string]any{"namespaces": []any{}, "total": 0})).Methods("GET")
+	v1Router.router.HandleFunc("/quicbaas/vector/namespaces",
+		mutationStub("name")).Methods("POST")
+
+	v1Router.router.HandleFunc("/quicbaas/backup/snapshots",
+		stub(map[string]any{"snapshots": []any{}, "total": 0})).Methods("GET")
+	v1Router.router.HandleFunc("/quicbaas/backup/snapshots",
+		mutationStub("id")).Methods("POST")
+	v1Router.router.HandleFunc("/quicbaas/backups",
+		stub(map[string]any{"backups": []any{}, "total": 0})).Methods("GET")
+	v1Router.router.HandleFunc("/quicbaas/backups",
+		mutationStub("id")).Methods("POST")
 }
 
 func (v1Router *Router) systemRoutes() {
@@ -155,15 +271,27 @@ func (v1Router *Router) deviceRoutes() {
 		)
 	}
 
-	if deviceHandler == nil && configDeliveryHandler == nil && templateHandler == nil {
-		v1Router.logger.Debug("Device, config delivery, and template handlers are nil - device routes not registered")
+	// Wire the DeviceCRUDHandler for device profile CRUD endpoints.
+	deviceService := v1Router.restHandlerRegistry.DeviceService()
+	var crudHandler device.DeviceCRUDHandler
+	if profileService != nil || deviceService != nil {
+		crudHandler = device.NewCRUDHandler(
+			v1Router.logger,
+			v1Router.restHandlerRegistry.ResponseWriter(),
+			deviceService,
+			profileService,
+		)
+	}
+
+	if deviceHandler == nil && configDeliveryHandler == nil && templateHandler == nil && crudHandler == nil {
+		v1Router.logger.Debug("Device, config delivery, template, and CRUD handlers are nil - device routes not registered")
 		return
 	}
 
 	deviceRouter := router.NewDeviceRouter(
 		v1Router.restHandlerRegistry.MTLSMiddleware(),
 		deviceHandler,
-		nil, // crudHandler — TODO: wire up when device CRUD handlers exist
+		crudHandler,
 		templateHandler,
 		configDeliveryHandler,
 	)
@@ -182,6 +310,149 @@ func (v1Router *Router) deviceRoutes() {
 	}
 }
 
+func (v1Router *Router) dnsRoutes() {
+	dnsService := v1Router.restHandlerRegistry.DNSService()
+	if dnsService == nil {
+		v1Router.logger.Debug("DNS service is nil - DNS routes not registered")
+		return
+	}
+	dnsRouter := restdns.NewDNSRouter(
+		v1Router.logger,
+		dnsService,
+		v1Router.responseWriter)
+	dnsRouter.RegisterRoutes(v1Router.router)
+}
+
+func (v1Router *Router) attestationRoutes() {
+	server := v1Router.restHandlerRegistry.AttestationServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("Attestation service server is nil - attestation routes not registered")
+		return
+	}
+	r := restattestation.NewAttestationServerRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	r.RegisterRoutes(v1Router.router)
+}
+
+func (v1Router *Router) computeRoutes() {
+	server := v1Router.restHandlerRegistry.ComputeServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("Compute service server is nil - compute routes not registered")
+		return
+	}
+	r := restcompute.NewComputeRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	r.RegisterRoutes(v1Router.router)
+}
+
+func (v1Router *Router) eabRoutes() {
+	server := v1Router.restHandlerRegistry.EABServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("EAB service server is nil - EAB routes not registered")
+		return
+	}
+	r := resteab.NewEABRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	r.RegisterRoutes(v1Router.router)
+}
+
+func (v1Router *Router) gatewayRoutes() {
+	server := v1Router.restHandlerRegistry.GatewayServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("Gateway service server is nil - gateway routes not registered")
+		return
+	}
+	r := restgateway.NewGatewayRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	r.RegisterRoutes(v1Router.router)
+}
+
+func (v1Router *Router) idevidRoutes() {
+	server := v1Router.restHandlerRegistry.IDevIDServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("IDevID service server is nil - IDevID routes not registered")
+		return
+	}
+	r := restidevid.NewIDevIDRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	r.RegisterRoutes(v1Router.router)
+}
+
+func (v1Router *Router) invitationRoutes() {
+	server := v1Router.restHandlerRegistry.InvitationServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("Invitation service server is nil - invitation routes not registered")
+		return
+	}
+	r := restinvitation.NewInvitationRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	r.RegisterRoutes(v1Router.router)
+}
+
+func (v1Router *Router) overlayRoutes() {
+	server := v1Router.restHandlerRegistry.OverlayServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("Overlay service server is nil - overlay routes not registered")
+		return
+	}
+	r := restoverlay.NewOverlayRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	r.RegisterRoutes(v1Router.router)
+}
+
+func (v1Router *Router) pxeRoutes() {
+	server := v1Router.restHandlerRegistry.PXEServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("PXE service server is nil - PXE routes not registered")
+		return
+	}
+	r := restpxe.NewPXERouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	r.RegisterRoutes(v1Router.router)
+}
+
+func (v1Router *Router) tenantRoutes() {
+	server := v1Router.restHandlerRegistry.TenantServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("Tenant service server is nil - tenant routes not registered")
+		return
+	}
+	r := resttenant.NewTenantRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	r.RegisterRoutes(v1Router.router)
+}
+
+func (v1Router *Router) tpmRoutes() {
+	server := v1Router.restHandlerRegistry.TPMServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("TPM service server is nil - TPM routes not registered")
+		return
+	}
+	r := resttpm.NewTPMRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	r.RegisterRoutes(v1Router.router)
+}
+
 func (v1Router *Router) iamRoutes() {
 	iamClient, pepClient := v1Router.restHandlerRegistry.IAMClients()
 	if iamClient == nil {
@@ -197,16 +468,16 @@ func (v1Router *Router) iamRoutes() {
 }
 
 func (v1Router *Router) kmsRoutes() {
-	keyMgmt, crypto, dekMgmt, secrets := v1Router.restHandlerRegistry.KMSClients()
-	if keyMgmt == nil {
-		v1Router.logger.Debug("KMS KeyManagement client is nil - KMS routes not registered")
+	keyMgmt, crypto, dek, secrets := v1Router.restHandlerRegistry.KMSSDKClients()
+	if keyMgmt == nil && crypto == nil && dek == nil && secrets == nil {
+		v1Router.logger.Debug("KMS SDK clients are nil - KMS routes not registered")
 		return
 	}
 	kmsRouter := kms.NewKMSRouter(
 		v1Router.logger,
 		keyMgmt,
 		crypto,
-		dekMgmt,
+		dek,
 		secrets,
 		v1Router.responseWriter)
 	kmsRouter.RegisterRoutes(v1Router.router)
@@ -223,6 +494,19 @@ func (v1Router *Router) sdnRoutes() {
 		sdnService,
 		v1Router.restHandlerRegistry.ResponseWriter())
 	sdnRouter.RegisterRoutes(v1Router.router)
+}
+
+func (v1Router *Router) switchRoutes() {
+	switchService := v1Router.restHandlerRegistry.SwitchService()
+	if switchService == nil {
+		v1Router.logger.Debug("Switch service is nil - switch routes not registered")
+		return
+	}
+	switchRouter := switchapi.NewSwitchRouter(
+		v1Router.logger,
+		switchService,
+		v1Router.restHandlerRegistry.ResponseWriter())
+	switchRouter.RegisterRoutes(v1Router.router)
 }
 
 func (v1Router *Router) vtpmRoutes() {

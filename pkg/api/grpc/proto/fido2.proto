@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+// FIDO2Service exposes FIDO2 / WebAuthn device operations. Scope is device
+// enumeration and WebAuthn register / authenticate. LUKS FIDO2 enrollment
+// lives in LUKSService.
+service FIDO2Service {
+  // ListDevices enumerates FIDO2 authenticators attached to the host.
+  rpc ListDevices(FIDO2ListDevicesRequest) returns (FIDO2ListDevicesResponse);
+
+  // WaitDevice blocks until a FIDO2 authenticator is detected.
+  rpc WaitDevice(FIDO2WaitDeviceRequest) returns (FIDO2WaitDeviceResponse);
+
+  // Info returns detailed info about an authenticator.
+  rpc Info(FIDO2InfoRequest) returns (FIDO2InfoResponse);
+
+  // Register performs a WebAuthn credential registration.
+  rpc Register(FIDO2RegisterRequest) returns (FIDO2RegisterResponse);
+
+  // Authenticate tests a WebAuthn authentication ceremony.
+  rpc Authenticate(FIDO2AuthenticateRequest) returns (FIDO2AuthenticateResponse);
+}
+
+// FIDO2Role enumerates ceremony roles a WebAuthn credential can bind to.
+enum FIDO2Role {
+  FIDO2_ROLE_UNSPECIFIED = 0;
+  FIDO2_ROLE_SO = 1;
+  FIDO2_ROLE_ADMIN = 2;
+  FIDO2_ROLE_USER = 3;
+}
+
+// FIDO2Device describes a FIDO2 authenticator.
+message FIDO2Device {
+  string id = 1;
+  string path = 2;
+  string manufacturer = 3;
+  string product = 4;
+  uint32 product_id = 5;
+  uint32 vendor_id = 6;
+}
+
+// FIDO2DeviceInfo describes the authenticator capabilities.
+message FIDO2DeviceInfo {
+  FIDO2Device device = 1;
+  string aaguid = 2;
+  string firmware_version = 3;
+  repeated string extensions = 4;
+  map<string, bool> options = 5;
+  uint32 max_msg_size = 6;
+}
+
+// FIDO2ListDevicesRequest is the empty list request.
+message FIDO2ListDevicesRequest {}
+
+// FIDO2ListDevicesResponse enumerates attached authenticators.
+message FIDO2ListDevicesResponse {
+  repeated FIDO2Device devices = 1;
+}
+
+// FIDO2WaitDeviceRequest asks the service to block until a device arrives.
+message FIDO2WaitDeviceRequest {
+  int32 timeout_seconds = 1;
+}
+
+// FIDO2WaitDeviceResponse returns the first device that arrived.
+message FIDO2WaitDeviceResponse {
+  FIDO2Device device = 1;
+}
+
+// FIDO2InfoRequest asks for detailed device info.
+message FIDO2InfoRequest {
+  string device = 1;
+}
+
+// FIDO2InfoResponse returns the device capabilities.
+message FIDO2InfoResponse {
+  FIDO2DeviceInfo info = 1;
+}
+
+// FIDO2RegisterRequest registers a WebAuthn credential.
+message FIDO2RegisterRequest {
+  string username = 1;
+  FIDO2Role role = 2;
+  bool require_pin = 3;
+  bool require_uv = 4;
+  string rp_id = 5;
+}
+
+// FIDO2RegisterResponse returns the registered credential id.
+message FIDO2RegisterResponse {
+  string credential_id = 1;
+  string aaguid = 2;
+  string public_key_pem = 3;
+}
+
+// FIDO2AuthenticateRequest tests an authentication ceremony.
+message FIDO2AuthenticateRequest {
+  string credential_id = 1;
+}
+
+// FIDO2AuthenticateResponse reports the ceremony outcome.
+message FIDO2AuthenticateResponse {
+  bool authenticated = 1;
+  uint32 counter = 2;
+}

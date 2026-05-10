@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // TestUnmarshalTPMConfig_PlatformSRKDirectly verifies that when platform-srk

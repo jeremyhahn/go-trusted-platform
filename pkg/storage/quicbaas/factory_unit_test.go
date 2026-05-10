@@ -17,10 +17,17 @@ import (
 	"testing"
 	"time"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// stubTrustedCA is a minimal xkmssdk.TrustedCA that satisfies the interface
+// for injection tests. It is not a production CA implementation.
+type stubTrustedCA struct {
+	xkmssdk.TrustedCA // embed nil interface; only SetCA path is exercised
+}
 
 func TestNewFactory_EmbeddedMode(t *testing.T) {
 	cfg := TestConfig(t)
@@ -318,4 +325,64 @@ func TestFactory_IsEmbedded_Values(t *testing.T) {
 			assert.Equal(t, tt.isEmbedded, factory.IsEmbedded())
 		})
 	}
+}
+
+// TestFactory_SetCA_NilIsNoop verifies that SetCA(nil) is a no-op and does
+// not return an error regardless of factory state.
+func TestFactory_SetCA_NilIsNoop(t *testing.T) {
+	cfg := TestConfig(t)
+	logger := logging.DefaultLogger()
+
+	factory, err := NewFactory(cfg, logger, nil)
+	require.NoError(t, err)
+
+	assert.NoError(t, factory.SetCA(nil))
+}
+
+// TestFactory_SetCA_ClosedReturnsError verifies that SetCA returns
+// ErrFactoryClosed when the factory has been stopped.
+func TestFactory_SetCA_ClosedReturnsError(t *testing.T) {
+	cfg := TestConfig(t)
+	logger := logging.DefaultLogger()
+
+	factory, err := NewFactory(cfg, logger, nil)
+	require.NoError(t, err)
+
+	// Manually close the factory without starting it.
+	factory.mu.Lock()
+	factory.closed = true
+	factory.mu.Unlock()
+
+	var target ErrFactoryClosed
+	setCAErr := factory.SetCA(&stubTrustedCA{})
+	assert.ErrorAs(t, setCAErr, &target)
+}
+
+// TestFactory_SetCA_RemoteModeNoOp verifies that SetCA is a no-op (returns
+// nil) when the factory is in remote transport mode because the remote server
+// manages its own CA.
+func TestFactory_SetCA_RemoteModeNoOp(t *testing.T) {
+	cfg := RemoteConfig(TransportGRPC, "localhost:10443")
+	logger := logging.DefaultLogger()
+
+	factory, err := NewFactory(cfg, logger, nil)
+	require.NoError(t, err)
+
+	// Remote mode: SetCA must silently succeed (returns nil).
+	assert.NoError(t, factory.SetCA(&stubTrustedCA{}))
+}
+
+// TestFactory_SetCA_EmbeddedNotStartedReturnsError verifies that SetCA
+// returns ErrServerNotStarted when the embedded server has not been started.
+func TestFactory_SetCA_EmbeddedNotStartedReturnsError(t *testing.T) {
+	cfg := TestConfig(t)
+	logger := logging.DefaultLogger()
+
+	factory, err := NewFactory(cfg, logger, nil)
+	require.NoError(t, err)
+
+	// Embedded factory created but not started: must return ErrServerNotStarted.
+	var target ErrServerNotStarted
+	setCAErr := factory.SetCA(&stubTrustedCA{})
+	assert.ErrorAs(t, setCAErr, &target)
 }

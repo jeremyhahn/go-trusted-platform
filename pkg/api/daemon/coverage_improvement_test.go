@@ -11,7 +11,7 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
-//go:build iam && codec_msgpack && codec_cbor && codec_json
+//go:build iam && codec_msgpack && codec_cbor && codec_json && !attestation_grpc
 
 package daemon
 

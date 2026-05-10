@@ -130,15 +130,19 @@ endif
 # BUILD_TAGS Construction
 # Dynamically assembled based on WITH_* variables
 # Note: Using $(strip) to handle trailing whitespace from inline comments
+#
+# Core feature tags that the platform binary REQUIRES at runtime are
+# included unconditionally. Setting them to opt-in caused platformd to
+# ship without IAM, which then hard-failed at startup with "IAM service
+# not enabled". If a deployment wants to drop one of these, override by
+# building with -tags directly; the WITH_* env vars remain for legacy
+# control over truly optional features.
 # =============================================================================
-BUILD_TAGS :=
+BUILD_TAGS := iam rest quic mcp attestation_grpc
 
 # go-quicbaas tags
 ifeq ($(strip $(WITH_RAFT)),1)
     BUILD_TAGS += raft
-endif
-ifeq ($(strip $(WITH_IAM)),1)
-    BUILD_TAGS += iam
 endif
 ifeq ($(strip $(WITH_TIMESERIES)),1)
     BUILD_TAGS += timeseries
@@ -148,15 +152,6 @@ ifeq ($(strip $(WITH_VECTOR)),1)
 endif
 ifeq ($(strip $(WITH_RAG)),1)
     BUILD_TAGS += rag
-endif
-ifeq ($(strip $(WITH_REST)),1)
-    BUILD_TAGS += rest
-endif
-ifeq ($(strip $(WITH_QUIC)),1)
-    BUILD_TAGS += quic
-endif
-ifeq ($(strip $(WITH_MCP)),1)
-    BUILD_TAGS += mcp
 endif
 ifeq ($(strip $(WITH_MQTT)),1)
     BUILD_TAGS += quicbaas_mqtt
@@ -356,17 +351,16 @@ DOCKER_BUILDER_DOCKERFILE   ?= Dockerfile-$(DOCKER_BUILDER_BASE)
 DOCKER_PLATFORM_BUILDER     ?= trusted-platform-builder
 DOCKER_PLATFORM_BUILDER_TAG ?= latest
 DOCKER_BUILDER_IMAGE        ?= $(DOCKER_REPO)/$(DOCKER_USER)/$(DOCKER_PLATFORM_BUILDER):$(DOCKER_PLATFORM_BUILDER_TAG)
-DOCKER_ISO_BUILDER          ?= trusted-platform-iso-builder
-DOCKER_ISO_BUILDER_SWTPM    ?= trusted-platform-iso-builder-swtpm
-DOCKER_ISO_TAG              ?= latest
 DOCKER_ANSIBLE_BUILDER      ?= ansible-ee
 DOCKER_AARCH64_CONTEXT      ?= arm64
 DOCKER_AARCH64_HOST         ?= $(SYNC_HOST)
 DOCKER_AARCH64_SSHKEY       ?= ~/.ssh/id_rsa
 
-ISO_DIR                     ?= build/docker/$(DOCKER_ISO_BUILDER)
+# ISO_NAME is the artifact name produced by `platformctl iso create`. The
+# legacy Docker-based iso-hwtpm / iso-swtpm targets and their
+# trusted-platform-iso-builder image were removed in favor of the
+# in-CLI builder; see `bin/platformctl iso create --help`.
 ISO_NAME                    ?= trusted-platform.iso
-ISO_NAME_SWTPM		        ?= trusted-platform-swtpm.iso
 
 RPI_OS                      ?= raspios
 RPI_IMAGE_NAME		        ?= $(APPNAME)-$(APP_VERSION)-$(ENV)
@@ -518,11 +512,14 @@ build-no-web:
 # Set WITH_WEB=0 to skip web frontend embedding (default is enabled)
 # Set WITH_P2P=1 to include P2P/libp2p support in gatewayd
 .PHONY: build
+# Alpine/musl targets require CGO=0 (glibc-linked static still imports
+# __vfprintf_chk and other symbols that fail on musl). osusergo+netgo
+# replace the CGO-based user/net lookups with pure-Go fallbacks.
 build: _web-embed-prepare
 	@mkdir -p bin
-	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(PLATFORMD) --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}' ./cmd/platformd
-	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(PLATFORMCTL) --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}' ./cmd/platformctl
-	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(GATEWAYD) --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}' ./cmd/gatewayd
+	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(PLATFORMD) --ldflags '-w -s ${LDFLAGS}' ./cmd/platformd
+	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(PLATFORMCTL) --ldflags '-w -s ${LDFLAGS}' ./cmd/platformctl
+	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(GATEWAYD) --ldflags '-w -s ${LDFLAGS}' ./cmd/gatewayd
 
 .PHONY: build-debug
 build-debug: _web-embed-prepare
@@ -886,10 +883,6 @@ clean:
 		build/docker/trusted-platform/platformd \
 		build/docker/trusted-platform/platformd-debug \
 		build/docker/trusted-platform/trusted-data \
-		build/docker/trusted-platform-iso-builder/ansible/ \
-		build/docker/trusted-platform-iso-builder/secure-boot-keys \
-		build/docker/trusted-platform-iso-builder/*.iso \
-		build/docker/trusted-platform-iso-builder/*.qcow2 \
 		build/docker/pxe-server/*.qcow2 \
 		build/docker/pxe-server/volume \
 		examples/tss/attestor/$(PLATFORM_DIR) \
@@ -1063,13 +1056,13 @@ integration-test-quicbaas: build-devcontainer
 ## integration-test-datastore: Alias for integration-test-quicbaas
 integration-test-datastore: integration-test-quicbaas
 
-.PHONY: integration-test-ca
-## integration-test-ca: Run CA QuicBaaS adapter integration tests in development container
-integration-test-ca: build-devcontainer
+.PHONY: integration-test-ca-quicbaas-adapter
+## integration-test-ca-quicbaas-adapter: Run CA QuicBaaS adapter integration tests in development container
+integration-test-ca-quicbaas-adapter: build-devcontainer
 	@echo "Running CA QuicBaaS adapter integration tests in development container..."
 	@echo "Build tags: $(TEST_BUILD_TAGS)"
 	@docker run --rm --privileged \
-		--name go-trusted-platform-ca-test \
+		--name go-trusted-platform-ca-quicbaas-adapter-test \
 		--tmpfs /tmp:exec,mode=1777 \
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
@@ -1077,7 +1070,7 @@ integration-test-ca: build-devcontainer
 		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/ca/...
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./pkg/store/datastore/...
 
 # CA Command Integration Tests (requires TPM simulator)
 .PHONY: integration-test-cmd-ca
@@ -1158,6 +1151,94 @@ coverage-compute: test-compute-coverage
 	@go tool cover -html=/tmp/compute.cover -o build/coverage/compute.html
 	@echo "Coverage report: build/coverage/compute.html"
 
+# BMC Tests
+## test-bmc: Run BMC package unit tests
+.PHONY: test-bmc
+test-bmc:
+	go test -count=1 -timeout 120s \
+		./pkg/bmc/... \
+		./pkg/app/bmc_cert_test.go \
+		./pkg/cli/commands/bmc/...
+
+## coverage-bmc: BMC package coverage report
+.PHONY: coverage-bmc
+coverage-bmc:
+	go test -count=1 -timeout 120s -coverprofile=coverage-bmc.out \
+		./pkg/bmc/... \
+		./pkg/cli/commands/bmc/...
+	go tool cover -func=coverage-bmc.out | tail -5
+
+## integration-test-bmc: Run BMC multi-protocol integration tests in devcontainer
+.PHONY: integration-test-bmc
+integration-test-bmc:
+	@echo "Running BMC multi-protocol integration tests..."
+	./build/docker/devcontainer/run-integration-tests.sh bmc
+
+## integration-test-ca: Run CA multi-protocol integration tests in devcontainer
+.PHONY: integration-test-ca
+integration-test-ca:
+	@echo "Running CA multi-protocol integration tests..."
+	./build/docker/devcontainer/run-integration-tests.sh ca
+
+## integration-test-ceremony: Run ceremony multi-protocol integration tests in devcontainer
+.PHONY: integration-test-ceremony
+integration-test-ceremony:
+	@echo "Running ceremony multi-protocol integration tests..."
+	./build/docker/devcontainer/run-integration-tests.sh ceremony
+
+## integration-test-piv: Run PIV multi-protocol integration tests in devcontainer
+.PHONY: integration-test-piv
+integration-test-piv:
+	@echo "Running PIV multi-protocol integration tests..."
+	./build/docker/devcontainer/run-integration-tests.sh piv
+
+## integration-test-luks: Run LUKS multi-protocol integration tests in devcontainer
+.PHONY: integration-test-luks
+integration-test-luks:
+	@echo "Running LUKS multi-protocol integration tests..."
+	./build/docker/devcontainer/run-integration-tests.sh luks
+
+## integration-test-fido2: Run FIDO2 multi-protocol integration tests in devcontainer
+.PHONY: integration-test-fido2
+integration-test-fido2:
+	@echo "Running FIDO2 multi-protocol integration tests..."
+	./build/docker/devcontainer/run-integration-tests.sh fido2
+
+## integration-test-device: Run Device multi-protocol integration tests in devcontainer
+.PHONY: integration-test-device
+integration-test-device:
+	@echo "Running Device multi-protocol integration tests..."
+	./build/docker/devcontainer/run-integration-tests.sh device
+
+## integration-test-cold-start: Run cold-start lifecycle integration tests in devcontainer
+.PHONY: integration-test-cold-start
+integration-test-cold-start:
+	@echo "Running cold-start lifecycle integration tests..."
+	./build/docker/devcontainer/run-integration-tests.sh cold-start
+
+## integration-test-tpm: Run TPM multi-protocol integration tests in devcontainer
+.PHONY: integration-test-tpm
+integration-test-tpm:
+	@echo "Running TPM multi-protocol integration tests..."
+	./build/docker/devcontainer/run-integration-tests.sh tpm
+
+## integration-test-bootstrap: Run bootstrap orchestrator integration tests in devcontainer
+.PHONY: integration-test-bootstrap
+integration-test-bootstrap:
+	@echo "Running bootstrap integration tests..."
+	./build/docker/devcontainer/run-integration-tests.sh bootstrap
+
+## integration-test-restroutes: Verify every WebUI REST endpoint is registered on platformd
+.PHONY: integration-test-restroutes
+integration-test-restroutes:
+	@echo "Running REST routes smoke integration tests..."
+	./build/docker/devcontainer/run-integration-tests.sh restroutes
+
+## bench-bmc: Run BMC benchmarks
+.PHONY: bench-bmc
+bench-bmc:
+	go test -bench=. -benchmem -run=^$$ ./pkg/bmc/...
+
 # IDevID/IAK Unit Tests (uses MockTPM - no real TPM or swtpm needed)
 .PHONY: test-idevid
 test-idevid:
@@ -1203,7 +1284,13 @@ DOCKER_MODULE_MOUNTS := \
 	-v $(SOURCES_BASE)/go-qrdb:$(SOURCES_BASE)/go-qrdb \
 	-v $(SOURCES_BASE)/go-objstore:$(SOURCES_BASE)/go-objstore \
 	-v $(SOURCES_BASE)/go-quicraft:$(SOURCES_BASE)/go-quicraft \
-	-v $(SOURCES_BASE)/go-truststrap:$(SOURCES_BASE)/go-truststrap
+	-v $(SOURCES_BASE)/go-truststrap:$(SOURCES_BASE)/go-truststrap \
+	-v $(SOURCES_BASE)/go-codec:$(SOURCES_BASE)/go-codec \
+	-v $(SOURCES_BASE)/go-frost:$(SOURCES_BASE)/go-frost \
+	-v $(SOURCES_BASE)/go-auth:$(SOURCES_BASE)/go-auth \
+	-v $(SOURCES_BASE)/go-luks2:$(SOURCES_BASE)/go-luks2 \
+	-v $(SOURCES_BASE)/go-signal:$(SOURCES_BASE)/go-signal \
+	-v $(SOURCES_BASE)/go-libsignal:$(SOURCES_BASE)/go-libsignal
 
 .PHONY: integration-test
 ## integration-test: Run all integration tests in development container
@@ -2692,7 +2779,6 @@ release: clean \
 	release-commit \
 	docker-builder-push \
 	docker-platform-push \
-	docker-iso-builder-push \
 	docker-pxe-server-push \
 	docker-nfs-server-push \
 	release-public-html \
@@ -2705,7 +2791,6 @@ release: clean \
 release-local: clean \
 	docker-builder-load \
 	docker-platform-load \
-	docker-iso-builder-load \
 	docker-pxe-server-load \
 	docker-nfs-server-load \
 	release-public-html \
@@ -2798,7 +2883,6 @@ release-github:
 		$(PLATFORMD)-static-musl-aarch64 \
 		$(PLATFORMD)-static-musl-x86_64 \
 		trusted-platform.iso \
-		trusted-platform-swtpm.iso \
 		trusted-platform-raspbian.img \
 		$(WEB_PUBLIC_HTML).tar.gz
 
@@ -2836,14 +2920,16 @@ docker-pxe-server-push:
 
 # Docker :: PXE Boot Container (bootstrap)
 # Builds the self-contained PXE boot container from the platform ISO.
-# The ISO must be built first (make iso-hwtpm or make iso-swtpm).
+# Build the ISO first with: bin/platformctl iso create
+# (the legacy Docker-based iso-hwtpm/iso-swtpm targets and
+# trusted-platform-iso-builder image have been removed).
 # This target:
 #   1. Builds the pxeboot binary (static, CGO_ENABLED=0)
 #   2. Extracts vmlinuz + initramfs from the ISO
 #   3. Copies the autoinstall script
 #   4. Builds the Docker image with everything baked in
 #
-# Usage: make pxeboot-container ISO_FILE=trusted-platform.iso
+# Usage: make pxeboot-container ISO_FILE=bin/trusted-platform.iso
 ISO_FILE                    ?= trusted-platform.iso
 PXEBOOT_IMAGE               ?= platform-pxeboot
 PXEBOOT_CONTEXT             := build/docker/bootstrap
@@ -2873,7 +2959,7 @@ pxeboot-extract:
 	@echo "$(CYAN)→ Extracting kernel and initramfs from ISO...$(RESET)"
 	@if [ ! -f "$(ISO_FILE)" ]; then \
 		echo "$(RED)Error: ISO file not found: $(ISO_FILE)$(RESET)"; \
-		echo "Build it first with: make iso-hwtpm"; \
+		echo "Build it first with: bin/platformctl iso create --output $(ISO_FILE)"; \
 		exit 1; \
 	fi
 	@mkdir -p /tmp/pxeboot-iso-extract
@@ -2998,36 +3084,6 @@ docker-builder-push:
 	seconds=$$((elapsed_time % 60)); \
 	printf "${GREEN}Docker trusted-platform-builder execution time: %02d:%02d:%02d${NO_COLOR}\n" $$hours $$minutes $$seconds
 
-# Docker :: Trusted Platform ISO Builder :: Local (x86_64 only)
-.PHONY: docker-iso-builder-load
-docker-iso-builder-load: 
-	@start_time=$$(date +%s); \
-		cd build/docker/$(APPNAME)-iso-builder && \
-			make clean secure-boot-keys ansible build-all; \
-	end_time=$$(date +%s); \
-	elapsed_time=$$((end_time - start_time)); \
-	hours=$$((elapsed_time/3600)); \
-	minutes=$$(( (elapsed_time % 3600)/60 )); \
-	seconds=$$((elapsed_time % 60)); \
-	printf "Build execution time: %02d:%02d:%02d\n" $$hours $$minutes $$seconds
-
-# Docker :: Trusted Platform ISO Builder :: Remote (x86_64 only)
-.PHONY: docker-iso-builder-push
-docker-iso-builder-push:
-	@start_time=$$(date +%s); \
-		cd build/docker/$(APPNAME)-iso-builder && \
-		make clean secure-boot-keys ansible; \
-		docker buildx build --push \
-			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(DOCKER_ISO_BUILDER):latest \
-			-t $(DOCKER_REPO)/$(DOCKER_USER)/$(DOCKER_ISO_BUILDER):$(APP_VERSION) \
-			-f Dockerfile .; \
-	end_time=$$(date +%s); \
-	elapsed_time=$$((end_time - start_time)); \
-	hours=$$((elapsed_time/3600)); \
-	minutes=$$(( (elapsed_time % 3600)/60 )); \
-	seconds=$$((elapsed_time % 60)); \
-	printf "Build execution time: %02d:%02d:%02d\n" $$hours $$minutes $$seconds
-
 # Docker :: Trusted Platform :: Local
 .PHONY: docker-platform-load
 docker-platform-load: 
@@ -3098,27 +3154,22 @@ docker-run-yubico-piv-tool:
 		/usr/local/bin/yubico-piv-tool -astatus
 
 
-# ISO 
+# ISO
+# Build ISOs via the in-CLI builder. The previous Docker-based
+# iso-hwtpm / iso-swtpm targets and the trusted-platform-iso-builder
+# image were removed; `bin/platformctl iso create` is the supported
+# and intended workflow now (downloads Alpine, customizes, generates
+# Secure Boot keys, and emits the bootable ISO).
 .PHONY: isos
 isos:
 	@start_time=$$(date +%s); \
-		$(MAKE) -j$(shell nproc) iso-hwtpm iso-swtpm; \
+		bin/platformctl iso create --output bin/$(ISO_NAME); \
 	end_time=$$(date +%s); \
 	elapsed_time=$$((end_time - start_time)); \
 	hours=$$((elapsed_time/3600)); \
 	minutes=$$(( (elapsed_time % 3600)/60 )); \
 	seconds=$$((elapsed_time % 60)); \
 	printf "Build execution time: %02d:%02d:%02d\n" $$hours $$minutes $$seconds
-
-.PHONY: iso-hwtpm
-iso-hwtpm:
-	@echo "Building $(APPNAME).iso ..."
-	@docker run --rm -v $(PWD):/iso $(DOCKER_ISO_BUILDER)
-
-.PHONY: iso-swtpm
-iso-swtpm:
-	@echo "Building $(APPNAME)-swtpm.iso ..."
-	@docker run --rm -v $(PWD):/iso $(DOCKER_ISO_BUILDER_SWTPM)
 
 
 # Packer

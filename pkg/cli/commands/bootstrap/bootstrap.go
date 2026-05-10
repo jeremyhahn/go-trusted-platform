@@ -78,5 +78,9 @@ Examples:
 	cmd.AddCommand(newStatusCommand(getFlags))
 	cmd.AddCommand(newTeardownCommand(getFlags))
 
+	// Canonical TOFU bootstrap modes per
+	// docs/08-bootstrap-auth-architecture.md §6.
+	AddCanonicalModes(cmd, getFlags)
+
 	return cmd
 }

@@ -17,7 +17,7 @@ import (
 	"fmt"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
-	casdk "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	casdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 )
 
 // Compile-time interface check.
@@ -56,7 +56,7 @@ func NewTenantFactory(storage objectstorage.Client, tenantID string) (*Factory, 
 // AccountDAO returns a GenericDAO for ACME accounts.
 func (f *Factory) AccountDAO() (casdk.GenericDAO[*casdk.ACMEAccountEntity], error) {
 	return newGenericDAO[*casdk.ACMEAccountEntity](
-		f.storage, "acme/accounts", f.tenantID,
+		f.storage, "acme:accounts", f.tenantID,
 		func() *casdk.ACMEAccountEntity { return &casdk.ACMEAccountEntity{} },
 		"account",
 	), nil
@@ -71,7 +71,7 @@ func (f *Factory) OrderDAO(accountID uint64) (casdk.GenericDAO[*casdk.ACMEOrderE
 		}
 	}
 	return newGenericDAO[*casdk.ACMEOrderEntity](
-		f.storage, fmt.Sprintf("acme/orders/%d", accountID), f.tenantID,
+		f.storage, fmt.Sprintf("acme:orders-%d", accountID), f.tenantID,
 		func() *casdk.ACMEOrderEntity { return &casdk.ACMEOrderEntity{} },
 		"order",
 	), nil
@@ -86,7 +86,7 @@ func (f *Factory) AuthorizationDAO(accountID uint64) (casdk.GenericDAO[*casdk.AC
 		}
 	}
 	return newGenericDAO[*casdk.ACMEAuthorizationEntity](
-		f.storage, fmt.Sprintf("acme/authorizations/%d", accountID), f.tenantID,
+		f.storage, fmt.Sprintf("acme:authorizations-%d", accountID), f.tenantID,
 		func() *casdk.ACMEAuthorizationEntity { return &casdk.ACMEAuthorizationEntity{} },
 		"authorization",
 	), nil
@@ -101,7 +101,7 @@ func (f *Factory) ChallengeDAO(accountID uint64) (casdk.GenericDAO[*casdk.ACMECh
 		}
 	}
 	return newGenericDAO[*casdk.ACMEChallengeEntity](
-		f.storage, fmt.Sprintf("acme/challenges/%d", accountID), f.tenantID,
+		f.storage, fmt.Sprintf("acme:challenges-%d", accountID), f.tenantID,
 		func() *casdk.ACMEChallengeEntity { return &casdk.ACMEChallengeEntity{} },
 		"challenge",
 	), nil
@@ -110,7 +110,7 @@ func (f *Factory) ChallengeDAO(accountID uint64) (casdk.GenericDAO[*casdk.ACMECh
 // CertificateDAO returns a GenericDAO for ACME certificates.
 func (f *Factory) CertificateDAO() (casdk.GenericDAO[*casdk.ACMECertificateEntity], error) {
 	return newGenericDAO[*casdk.ACMECertificateEntity](
-		f.storage, "acme/certificates", f.tenantID,
+		f.storage, "acme:certificates", f.tenantID,
 		func() *casdk.ACMECertificateEntity { return &casdk.ACMECertificateEntity{} },
 		"certificate",
 	), nil
@@ -119,7 +119,7 @@ func (f *Factory) CertificateDAO() (casdk.GenericDAO[*casdk.ACMECertificateEntit
 // NonceDAO returns a GenericDAO for ACME nonces.
 func (f *Factory) NonceDAO() (casdk.GenericDAO[*casdk.ACMENonceEntity], error) {
 	return newGenericDAO[*casdk.ACMENonceEntity](
-		f.storage, "acme/nonces", f.tenantID,
+		f.storage, "acme:nonces", f.tenantID,
 		func() *casdk.ACMENonceEntity { return &casdk.ACMENonceEntity{} },
 		"nonce",
 	), nil
@@ -128,7 +128,7 @@ func (f *Factory) NonceDAO() (casdk.GenericDAO[*casdk.ACMENonceEntity], error) {
 // ExternalAccountBindingDAO returns a GenericDAO for external account bindings.
 func (f *Factory) ExternalAccountBindingDAO() (casdk.GenericDAO[*casdk.ACMEExternalAccountBinding], error) {
 	return newGenericDAO[*casdk.ACMEExternalAccountBinding](
-		f.storage, "acme/eab", f.tenantID,
+		f.storage, "acme:eab", f.tenantID,
 		func() *casdk.ACMEExternalAccountBinding { return &casdk.ACMEExternalAccountBinding{} },
 		"external_account_binding",
 	), nil

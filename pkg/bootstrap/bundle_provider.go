@@ -17,16 +17,18 @@ import (
 	"crypto/x509"
 
 	"github.com/jeremyhahn/go-truststrap/pkg/truststrap"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // Compile-time interface check.
 var _ truststrap.BundleProvider = (*CABundleAdapter)(nil)
 
 // CABundler provides access to a CA certificate bundle filtered by store type
-// and key algorithm.
+// and key algorithm. The native pkg/ca.TrustedCA exposes this as
+// CABundleFiltered; the adapter matches that signature so *ca.CA satisfies
+// the interface directly.
 type CABundler interface {
-	CABundle(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error)
+	CABundleFiltered(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error)
 }
 
 // CABundleAdapter adapts a CertificateAuthority to the truststrap BundleProvider
@@ -45,5 +47,5 @@ func (a *CABundleAdapter) CABundle() ([]byte, error) {
 	if a.ca == nil {
 		return nil, ErrCABundleEmpty{}
 	}
-	return a.ca.CABundle(xkmssdk.StoreUnknown, 0)
+	return a.ca.CABundleFiltered(xkmssdk.StoreUnknown, 0)
 }

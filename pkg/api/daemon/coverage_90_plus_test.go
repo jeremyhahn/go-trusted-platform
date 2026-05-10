@@ -1142,6 +1142,25 @@ func (m *mockTenantManager90) GetDEKStatus(ctx context.Context, id string) (*ten
 	return &tenant.DEKStatus{}, nil
 }
 
+func (m *mockTenantManager90) InitTenantBarrier(ctx context.Context, id string) error {
+	return m.err
+}
+
+func (m *mockTenantManager90) UnsealTenantBarrier(ctx context.Context, id string, key []byte) error {
+	return m.err
+}
+
+func (m *mockTenantManager90) SealTenantBarrier(ctx context.Context, id string) error {
+	return m.err
+}
+
+func (m *mockTenantManager90) TenantBarrierStatus(ctx context.Context, id string) (*tenant.TenantBarrierState, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &tenant.TenantBarrierState{TenantID: id}, nil
+}
+
 // =============================================================================
 // MCPServiceProvider IDevID/IAK Interface Wrapper Tests - mcp_idevid.go
 // =============================================================================

@@ -15,23 +15,16 @@ package daemon
 
 import (
 	"context"
-	"crypto"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
-	"io"
-	"math/big"
 	"testing"
 	"time"
 
-	common "github.com/jeremyhahn/go-objstore/pkg/common"
-	goca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
 )
 
 // healthTestMockService implements ManagedService for testing
@@ -76,8 +69,9 @@ func (m *healthTestMockCheckableService) HealthCheck(ctx context.Context) error 
 	return m.healthErr
 }
 
-// healthCheckerMockCA implements goca.CACertificateAuthority for health checker testing
+// healthCheckerMockCA implements ca.TCGCA for health checker testing.
 type healthCheckerMockCA struct {
+	baseMockCA
 	initialized      bool
 	identity         string
 	rootCert         *x509.Certificate
@@ -86,171 +80,19 @@ type healthCheckerMockCA struct {
 	intermediateErr  error
 }
 
-// crypto.Signer interface
-func (m *healthCheckerMockCA) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) Public() crypto.PublicKey { return nil }
-
-// Core CA methods
-func (m *healthCheckerMockCA) SignCSR(csrPEM []byte, request *goca.CACertificateRequest) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) SignTCGCSRIDevID(tcgCSR *xkmssdk.TCG_CSR_IDEVID, request *goca.CACertificateRequest) ([]byte, []byte, error) {
-	return nil, nil, nil
-}
-func (m *healthCheckerMockCA) CABundle(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) ImportCertificate(certificate *x509.Certificate) error { return nil }
-func (m *healthCheckerMockCA) Certificate(attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) CertificatePEM(cn string) ([]byte, error) { return nil, nil }
-func (m *healthCheckerMockCA) Verify(certificate *x509.Certificate, xsigner crypto.Signer) ([][]*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) Signer() (crypto.Signer, error) { return nil, nil }
+func (m *healthCheckerMockCA) IsInitialized() bool { return m.initialized }
+func (m *healthCheckerMockCA) Identity() string    { return m.identity }
 func (m *healthCheckerMockCA) TrustedRoot() (*x509.Certificate, error) {
 	return m.rootCert, m.rootCertErr
 }
 func (m *healthCheckerMockCA) TrustedIntermediate() (*x509.Certificate, error) {
 	return m.intermediateCert, m.intermediateErr
 }
-func (m *healthCheckerMockCA) CreateCSR(request *goca.CACertificateRequest) ([]byte, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) TLSCertificate(attrs *xkmssdk.KeyAttributes) (tls.Certificate, error) {
-	return tls.Certificate{}, nil
-}
-func (m *healthCheckerMockCA) TLSBundle(attrs *xkmssdk.KeyAttributes) ([]byte, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) TLSConfig(attrs *xkmssdk.KeyAttributes) (*tls.Config, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) TLSConfigWithXSigner(attrs *xkmssdk.KeyAttributes, xsigner interface{}) (*tls.Config, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) QuantumSafeTLSConfig(attrs *xkmssdk.KeyAttributes) (*tls.Config, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) TLSBundleWithCrossSigner(attrs *xkmssdk.KeyAttributes, issuerCN string) ([][]byte, *x509.Certificate, error) {
-	return nil, nil, nil
-}
-func (m *healthCheckerMockCA) IssueCertificate(request *goca.CACertificateRequest) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) Issued(cn string) (bool, error) { return false, nil }
-func (m *healthCheckerMockCA) Exists(cn string, algorithm x509.SignatureAlgorithm) (bool, error) {
-	return false, nil
-}
-func (m *healthCheckerMockCA) Revoke(certificate *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
-	return nil
-}
-func (m *healthCheckerMockCA) ImportDistributionCRLs(cert *x509.Certificate) error { return nil }
-func (m *healthCheckerMockCA) IssueEKCertificate(request *goca.CACertificateRequest, ekPubKey crypto.PublicKey) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) IssueAKCertificate(request *goca.CACertificateRequest, pubKey crypto.PublicKey) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) ImportEndorsementKeyCertificate(cert *x509.Certificate) error {
-	return nil
-}
-func (m *healthCheckerMockCA) ImportXSignedCertificate(issuerCN string, cert *x509.Certificate) error {
-	return nil
-}
-func (m *healthCheckerMockCA) EndorsementKeyCertificate(cn string) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) SignedBlob(data interface{}) ([]byte, error) { return nil, nil }
-func (m *healthCheckerMockCA) TrustedRootCertPool(cert *x509.Certificate, xsigner crypto.Signer) (*x509.CertPool, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) TrustedIntermediateCertPool(cert *x509.Certificate, xsigner crypto.Signer) (*x509.CertPool, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) CABundleCertPool(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) (*x509.CertPool, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) ImportIssuingCAs(cert *x509.Certificate) error { return nil }
-func (m *healthCheckerMockCA) ParseBundle(bundle []byte) ([]*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) RootCertificate(childCert *x509.Certificate) (*x509.Certificate, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) CertificateStore() xkmssdk.CertStore { return nil }
-func (m *healthCheckerMockCA) ObjectStore() common.Storage         { return nil }
-func (m *healthCheckerMockCA) PEM(attrs *xkmssdk.KeyAttributes) ([]byte, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) ImportCertificatePEM(cn string, pemData []byte) error  { return nil }
-func (m *healthCheckerMockCA) Blob(key string) ([]byte, error)                       { return nil, nil }
-func (m *healthCheckerMockCA) ImportBlob(key string, data []byte) error              { return nil }
-func (m *healthCheckerMockCA) KeyStore() interface{}                                 { return nil }
-func (m *healthCheckerMockCA) Key(attrs *xkmssdk.KeyAttributes) (interface{}, error) { return nil, nil }
-func (m *healthCheckerMockCA) PubKey(attrs *xkmssdk.KeyAttributes) (crypto.PublicKey, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) OSTrustStore() (*x509.CertPool, error)        { return nil, nil }
-func (m *healthCheckerMockCA) IsAutoImportingIssuerCAs() bool               { return false }
 func (m *healthCheckerMockCA) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm { return x509.RSA }
 func (m *healthCheckerMockCA) DefaultSignatureAlgorithm() x509.SignatureAlgorithm {
 	return x509.SHA256WithRSA
 }
-func (m *healthCheckerMockCA) DefaultValidityPeriod() time.Duration { return 365 * 24 * time.Hour }
-func (m *healthCheckerMockCA) Hash() crypto.Hash                    { return crypto.SHA256 }
-func (m *healthCheckerMockCA) Identity() string                     { return m.identity }
-func (m *healthCheckerMockCA) CAKeyAttributes(storeType xkmssdk.StoreType) (*xkmssdk.KeyAttributes, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) CASigner(storeType xkmssdk.StoreType, algorithm x509.PublicKeyAlgorithm) (crypto.Signer, error) {
-	return nil, nil
-}
-func (m *healthCheckerMockCA) Init() error             { return nil }
-func (m *healthCheckerMockCA) Load() error             { return nil }
-func (m *healthCheckerMockCA) IsInitialized() bool     { return m.initialized }
-func (m *healthCheckerMockCA) CAConfig() goca.CAConfig { return goca.CAConfig{} }
-func (m *healthCheckerMockCA) ImportAttestation(akAttrs *xkmssdk.KeyAttributes, blobType string, data []byte) error {
-	return nil
-}
-func (m *healthCheckerMockCA) ImportAttestationKeyCertificate(attrs *xkmssdk.KeyAttributes, akDER []byte) error {
-	return nil
-}
-func (m *healthCheckerMockCA) ImportAttestationEventLog(akAttrs *xkmssdk.KeyAttributes, eventLog []byte) error {
-	return nil
-}
-func (m *healthCheckerMockCA) ImportAttestationPCRs(akAttrs *xkmssdk.KeyAttributes, pcrs []byte) error {
-	return nil
-}
-func (m *healthCheckerMockCA) ImportAttestationQuote(akAttrs *xkmssdk.KeyAttributes, quote []byte) error {
-	return nil
-}
-func (m *healthCheckerMockCA) ImportLocalAttestation(akAttrs *xkmssdk.KeyAttributes, quote *xkmssdk.Quote) error {
-	return nil
-}
-func (m *healthCheckerMockCA) VerifyQuote(akAttrs *xkmssdk.KeyAttributes, quote *xkmssdk.Quote, nonce []byte) error {
-	return nil
-}
-func (m *healthCheckerMockCA) VerifyAttestationQuote(akAttrs *xkmssdk.KeyAttributes, quote []byte) error {
-	return nil
-}
-func (m *healthCheckerMockCA) VerifyAttestationEventLog(akAttrs *xkmssdk.KeyAttributes, eventLog []byte) error {
-	return nil
-}
-func (m *healthCheckerMockCA) VerifyAttestationPCRs(akAttrs *xkmssdk.KeyAttributes, pcrs []byte) error {
-	return nil
-}
-func (m *healthCheckerMockCA) VerifyTCG_CSR_IDevIDBytes(packedCSR []byte, sigAlg interface{}) ([]byte, []byte, []byte, error) {
-	return nil, nil, nil, nil
-}
-func (m *healthCheckerMockCA) SetTPM(tpm xkmssdk.TrustedPlatformModule) {}
-func (m *healthCheckerMockCA) GenerateCRL() ([]byte, error)             { return nil, nil }
-func (m *healthCheckerMockCA) IsRevoked(serial *big.Int) (bool, error) {
-	return false, nil
-}
+func (m *healthCheckerMockCA) DefaultValidityPeriod() int { return 365 }
 
 func TestServiceHealthChecker_Name(t *testing.T) {
 	t.Run("returns service name", func(t *testing.T) {

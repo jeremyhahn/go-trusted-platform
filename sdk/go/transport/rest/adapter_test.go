@@ -138,8 +138,11 @@ func TestConnect_AddsHTTPPrefix(t *testing.T) {
 		}
 	}()
 
-	// Should have added http:// prefix
-	expected := "http://" + addrWithoutScheme
+	// REST transport always speaks HTTPS. When the supplied address has no
+	// scheme the adapter prepends https:// so callers don't accidentally
+	// downgrade to plaintext. The test server runs HTTP, so the connection
+	// itself fails; we only assert the resolved target URL here.
+	expected := "https://" + addrWithoutScheme
 	if adapter.Target() != expected {
 		t.Errorf("Target() = %q, want %q", adapter.Target(), expected)
 	}
@@ -489,7 +492,7 @@ func TestRestClientConn_Invoke(t *testing.T) {
 	conn := adapter.Connection()
 
 	var reply map[string]string
-	err = conn.Invoke(ctx, "/platformv1.PlatformDaemon/GetVersion", nil, &reply)
+	err = conn.Invoke(ctx, "/platform.v1.PlatformDaemon/GetVersion", nil, &reply)
 	if err != nil {
 		t.Fatalf("Invoke() returned error: %v", err)
 	}
@@ -557,10 +560,10 @@ func TestMapGRPCMethodToREST_KnownMethods(t *testing.T) {
 		expectedPath   string
 		expectedMethod string
 	}{
-		{"/platformv1.PlatformDaemon/GetVersion", "/api/v1/version", http.MethodGet},
-		{"/platformv1.CAService/Issue", "/api/v1/ca/certificates", http.MethodPost},
-		{"/platformv1.KeyManagementService/Encrypt", "/api/v1/kms/encrypt", http.MethodPost},
-		{"/platformv1.VTPMService/Create", "/api/v1/vtpm/instances", http.MethodPost},
+		{"/platform.v1.PlatformDaemon/GetVersion", "/api/v1/version", http.MethodGet},
+		{"/platform.v1.CAService/IssueCertificate", "/api/v1/ca/certificates", http.MethodPost},
+		{"/platform.v1.KeyManagementService/Encrypt", "/api/v1/kms/encrypt", http.MethodPost},
+		{"/platform.v1.VTPMInstanceService/CreateInstance", "/api/v1/vtpm/instances", http.MethodPost},
 	}
 
 	for _, tt := range tests {
@@ -578,7 +581,7 @@ func TestMapGRPCMethodToREST_KnownMethods(t *testing.T) {
 
 func TestMapGRPCMethodToREST_UnknownMethod(t *testing.T) {
 	// Test fallback path derivation for unknown methods
-	path, method := mapGRPCMethodToREST("/platformv1.UnknownService/UnknownMethod")
+	path, method := mapGRPCMethodToREST("/platform.v1.UnknownService/UnknownMethod")
 
 	// Should derive from method name - service name without "Service" suffix
 	expectedPath := "/api/v1/unknown/unknownmethod"

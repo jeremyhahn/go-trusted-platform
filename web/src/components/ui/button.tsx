@@ -41,12 +41,19 @@ export interface ButtonProps
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, ...props }, ref) => {
+  ({ className, variant, size, asChild = false, type, ...props }, ref) => {
     const Comp = asChild ? Slot : "button"
+    // Default to type="button" so a Button rendered inside a <form> does
+    // not silently submit the surrounding form (which would navigate the
+    // page). Callers that want a real submit button must set type="submit"
+    // explicitly. This only applies to the native <button> path; when
+    // asChild is true the consumer controls the element/type.
+    const resolvedType = asChild ? type : (type ?? "button")
     return (
       <Comp
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
+        type={resolvedType}
         {...props}
       />
     )

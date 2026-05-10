@@ -1,7 +1,18 @@
 'use client';
 
-import { Plus, RefreshCw } from 'lucide-react';
+import { useState } from 'react';
+import { Loader2, Plus, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Table,
   TableBody,
@@ -18,6 +29,10 @@ import type { ListVNIsResponse, VNI } from 'trusted-platform-sdk';
 export default function NetworkOverlaysPage() {
   const { toast } = useToast();
   const overlay = useOverlay();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createVni, setCreateVni] = useState('');
+  const [createName, setCreateName] = useState('');
+  const [createSubmitting, setCreateSubmitting] = useState(false);
 
   // SDK returns VNI objects, transform to NetworkOverlay format
   const {
@@ -62,12 +77,79 @@ export default function NetworkOverlaysPage() {
           >
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button>
+          <Button onClick={() => setCreateOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
             Create Overlay
           </Button>
         </div>
       </div>
+
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create Overlay (VXLAN VNI)</DialogTitle>
+            <DialogDescription>
+              Create a new VXLAN Network Identifier for tenant overlay traffic.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="vni-id">VNI *</Label>
+              <Input
+                id="vni-id"
+                type="number"
+                min={1}
+                max={16777215}
+                value={createVni}
+                onChange={(e) => setCreateVni(e.target.value)}
+                placeholder="10000"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="vni-name">Name (optional)</Label>
+              <Input
+                id="vni-name"
+                value={createName}
+                onChange={(e) => setCreateName(e.target.value)}
+                placeholder="tenant-default"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!createVni || createSubmitting}
+              onClick={async () => {
+                const v = Number.parseInt(createVni, 10);
+                if (!Number.isFinite(v) || v < 1) {
+                  toast({ title: 'Invalid VNI', variant: 'destructive' });
+                  return;
+                }
+                setCreateSubmitting(true);
+                try {
+                  await overlay.createVNI({ config: { vni: v, name: createName || undefined } });
+                  toast({ title: 'Overlay created', variant: 'success' });
+                  setCreateOpen(false);
+                  setCreateVni('');
+                  setCreateName('');
+                  fetchOverlays();
+                } catch (err) {
+                  toast({
+                    title: 'Failed to create overlay',
+                    description: err instanceof Error ? err.message : 'Unknown error',
+                    variant: 'destructive',
+                  });
+                } finally {
+                  setCreateSubmitting(false);
+                }
+              }}
+            >
+              {createSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid gap-4 md:grid-cols-4">
         <div className="rounded-lg border border-border bg-card p-6">

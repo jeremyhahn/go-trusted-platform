@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	basePath = "/api/v1/dns"
+	basePath = "/dns"
 )
 
 // DNSRouter provides REST routing for DNS operations.

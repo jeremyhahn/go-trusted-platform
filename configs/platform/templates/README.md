@@ -1,18 +1,39 @@
 # Platform Hardware Templates
 
-Reusable configuration templates for production deployments on specific hardware.
+Reusable configuration templates for production deployments, organized by
+deployment profile and hardware platform.
 
 For full documentation, see [docs/device-templates.md](../../../docs/device-templates.md).
+
+## Deployment Profiles
+
+| Profile | Layout | Status |
+|---------|--------|--------|
+| [dedicated/](./dedicated/) | 3 dedicated nodes: 1 control-plane, 1 gateway, 1 compute | **Active** |
+| [single-node/](./single-node/) | Control-plane + gateway + compute colocated on a single node | Planned |
+| [high-availability/](./high-availability/) | 3 control-plane, 2 gateway, 2 compute (HA Raft cluster) | Planned |
+
+The `dedicated/` profile is the current reference architecture being
+developed. The other profiles will be added once `dedicated/` is proven
+end-to-end.
 
 ## Directory Structure
 
 ```
 configs/platform/templates/
-  vendor/
-    model/
-      control-plane.yaml   # Control plane / server node
-      gateway.yaml         # Edge gateway / reverse proxy node
-      compute.yaml         # Compute / worker node
+  dedicated/            # 3-node reference architecture (active)
+    supermicro/
+      x10/              # Supermicro X10-family boards (X10SDV-TP8F, etc.)
+        control-plane.yaml
+        gateway.yaml
+        compute.yaml
+    dell/
+      r640/             # Dell PowerEdge R640 (UNTESTED, Phase 2)
+        control-plane.yaml
+        gateway.yaml
+        compute.yaml
+  single-node/          # Colocated all-in-one (planned)
+  high-availability/    # HA cluster (planned)
 ```
 
 ## Quick Start
@@ -21,14 +42,14 @@ configs/platform/templates/
 
 ```bash
 platformctl iso create \
-  --platform-config configs/platform/templates/supermicro/x10sdv-tp8f/control-plane.yaml
+  --platform-config configs/platform/templates/dedicated/supermicro/x10/control-plane.yaml
 ```
 
 ### Deploy with site-specific overrides
 
 ```bash
 platformctl iso create \
-  --platform-config configs/platform/templates/supermicro/x10sdv-tp8f/control-plane.yaml \
+  --platform-config configs/platform/templates/dedicated/supermicro/x10/control-plane.yaml \
   --overrides /path/to/my-overrides.yaml
 ```
 
@@ -36,7 +57,27 @@ Override files use the same YAML structure but only include fields to change.
 
 ## Supported Platforms
 
-| Vendor | Model | Status |
-|--------|-------|--------|
-| Supermicro | X10SDV-TP8F | Production |
-| Dell | PowerEdge R640 | Phase 2 (placeholder) |
+| Vendor | Model Family | Profile | Status |
+|--------|--------------|---------|--------|
+| Supermicro | X10 (X10SDV-TP8F, etc.) | dedicated | Production |
+| Dell | PowerEdge R640 | dedicated | Phase 2 (UNTESTED) |
+
+## Architecture Notes
+
+All `dedicated/` templates assume:
+
+- **CA trust**: the platform CA bundle is baked into the install ISO and
+  installed to the system trust store during installation. Runtime trust
+  bootstrap via DANE/Noise/SPKI is NOT required and is intentionally absent
+  from these templates. For zero-trust greenfield deployments (no pre-shared
+  CA), use the separate greenfield template set.
+
+- **Datastore**: QuicBaaS runs in **standalone embedded mode** (non-HA).
+  `storage-backend: file` with `node-id: 1` and no join-addresses means
+  Raft consensus is not engaged. For HA, use the `high-availability/`
+  profile (when available).
+
+- **Secrets**: all secret URIs use the canonical `kms://?ensure=true&len=N&enc=ENC`
+  scheme backed by the platform `SecretsService.EnsureSecret` distributed lock
+  pattern. First boot generates and persists; every subsequent boot returns
+  the same stable bytes.

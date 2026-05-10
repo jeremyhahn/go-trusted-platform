@@ -6,7 +6,8 @@
  */
 
 import { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, usePathname, useRouter } from 'next/navigation';
+import { resolveDynamicId } from '@/utils/dynamic-route';
 import { ArrowLeft, Shield, FileText, Key, Trash2, Power, BanIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -28,11 +29,12 @@ import type { DeviceDetail, AttestationRecord, DeviceCertificate } from '@/types
 
 export default function DeviceDetailPage() {
   const params = useParams();
+  const pathname = usePathname();
   const router = useRouter();
   const { toast } = useToast();
   const deviceService = useDevice();
   const attestationService = useAttestation();
-  const deviceId = params?.id as string;
+  const deviceId = resolveDynamicId(params, pathname, 'devices');
 
   const [device, setDevice] = useState<DeviceDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -41,7 +43,7 @@ export default function DeviceDetailPage() {
   const fetchDevice = async () => {
     setIsLoading(true);
     try {
-      const response = await deviceService.getDevice(Number(deviceId));
+      const response = await deviceService.getDevice(deviceId as any);
 
       if (response.data) {
         setDevice(response.data as any);
@@ -98,7 +100,7 @@ export default function DeviceDetailPage() {
       }
       // Map DeviceDetail to SDK Device type
       const sdkDevice = {
-        id: Number(device.id),
+        id: device.id as any,
         serial: device.serial || '',
         hashAlgoId: 0, // Default value
         createdAt: device.registeredAt || new Date().toISOString(),
@@ -129,7 +131,7 @@ export default function DeviceDetailPage() {
 
   const deleteMutation = useMutation(
     async (_: void) => {
-      return await deviceService.deleteDevice(Number(deviceId));
+      return await deviceService.deleteDevice(deviceId as any);
     },
     {
       onSuccess: () => {
@@ -350,14 +352,14 @@ export default function DeviceDetailPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {device.attestationHistory.length === 0 ? (
+                    {(device.attestationHistory || []).length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={4} className="text-center text-muted-foreground">
                           No attestation records found
                         </TableCell>
                       </TableRow>
                     ) : (
-                      device.attestationHistory.map((record) => (
+                      (device.attestationHistory || []).map((record) => (
                         <TableRow key={record.id}>
                           <TableCell className="text-sm">
                             {formatDate(record.timestamp)}
@@ -404,14 +406,14 @@ export default function DeviceDetailPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {device.certificates.length === 0 ? (
+                    {(device.certificates || []).length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={5} className="text-center text-muted-foreground">
                           No certificates found
                         </TableCell>
                       </TableRow>
                     ) : (
-                      device.certificates.map((cert) => (
+                      (device.certificates || []).map((cert) => (
                         <TableRow key={cert.id}>
                           <TableCell>
                             <Badge variant="outline">{cert.type}</Badge>

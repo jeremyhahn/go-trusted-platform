@@ -31,7 +31,13 @@ const (
 
 // SOL payload constants.
 const (
-	solPayloadInstance = 0x01
+	// solPayloadInstanceDefault is the IPMI 2.0 default SOL payload instance
+	// (Table 24-2). Most BMCs route serial-console bytes to this instance.
+	// A few boards (notably Supermicro X10SDV-TP8F where SOL is wired to
+	// COM2 / ttyS1) route to instance 0x02 instead. The activation site
+	// accepts a per-call override so vendor quirks can supply the correct
+	// instance from pkg/quirks.
+	solPayloadInstanceDefault = 0x01
 )
 
 // SOL operation/status bits per IPMI 2.0 spec Table 15-3.
@@ -42,6 +48,19 @@ const (
 	solStatusTransmitOverrun = 0x08
 )
 
+// SOL Activate Payload auxiliary data byte 2 bit definitions
+// per IPMI 2.0 spec Table 24-2.
+const (
+	// solAuxHandshakeAssert sets bit 3 to assert CTS, DCD, and DSR on the
+	// baseboard UART at SOL activation. Without this bit the serial device
+	// (BIOS/OS) sees the modem-control signals low and will not transmit.
+	solAuxHandshakeAssert = 0x08
+
+	// solAuxAlertDefer sets bit 2 to defer shared serial alerts instead of
+	// failing the activation when an alert is in progress.
+	solAuxAlertDefer = 0x04
+)
+
 // solHeaderSize is the number of bytes in the SOL packet header
 // (sequence, ack sequence, accepted char count, operation/status).
 const solHeaderSize = 4
@@ -50,14 +69,36 @@ const solHeaderSize = 4
 // session. It implements io.ReadWriteCloser for bidirectional character
 // streaming with the BMC serial console.
 type SOLSession struct {
-	session           *rmcpSession
-	logger            *slog.Logger
-	seqNum            atomic.Uint32
-	lastBMCSeqNum     atomic.Uint32
-	lastBMCCharCount  atomic.Uint32
-	output            chan []byte
-	done              chan struct{}
-	active            atomic.Bool
+	session          *rmcpSession
+	logger           *slog.Logger
+	seqNum           atomic.Uint32
+	lastBMCSeqNum    atomic.Uint32
+	lastBMCCharCount atomic.Uint32
+	output           chan []byte
+	done             chan struct{}
+	active           atomic.Bool
+	// payloadInstance is the IPMI 2.0 SOL payload instance this session
+	// activated against. Stored so Deactivate sends the matching instance.
+	payloadInstance byte
+	// bytesReceived counts SOL data bytes the receive loop has emitted to
+	// the output channel. Inspected by callers (e.g. the bmc console
+	// CLI command) to detect a "session activated, no data ever arrived"
+	// outcome — almost always a wrong-payload-instance symptom.
+	bytesReceived atomic.Uint64
+}
+
+// PayloadInstance returns the IPMI 2.0 SOL payload instance this session
+// activated against (e.g. 0x01 for COM1, 0x02 for COM2 on X10SDV).
+func (sol *SOLSession) PayloadInstance() byte {
+	return sol.payloadInstance
+}
+
+// BytesReceived returns the number of SOL data bytes the BMC has streamed
+// during the lifetime of this session. Zero after a successful Activate
+// almost always indicates the payload instance does not match the UART
+// the BMC routes serial-console output to.
+func (sol *SOLSession) BytesReceived() uint64 {
+	return sol.bytesReceived.Load()
 }
 
 // Compile-time interface checks.
@@ -69,9 +110,23 @@ var (
 
 // ActivateSOL activates a SOL payload on the RMCP+ session and starts the
 // background receive loop. The returned SOLSession implements io.ReadWriteCloser.
-func (s *rmcpSession) ActivateSOL(ctx context.Context) (*SOLSession, error) {
+//
+// Most BMCs route serial-console bytes to payload instance 0x01. Pass 0 to
+// accept that default. A few boards (notably Supermicro X10SDV-TP8F) wire
+// SOL to instance 0x02 — pkg/quirks supplies the correct instance via the
+// SOLPayloadInstance field; callers should resolve the quirk and pass the
+// resulting value here. Any value 0x01-0x0F is permitted per IPMI 2.0
+// Table 24-2.
+func (s *rmcpSession) ActivateSOL(ctx context.Context, payloadInstance byte) (*SOLSession, error) {
 	if s.conn == nil || s.closed.Load() {
 		return nil, ErrSessionClosed{}
+	}
+
+	// Default to instance 0x01 when the caller passes 0 (no preference).
+	// This preserves prior behaviour for callers that don't yet consult
+	// the quirk registry.
+	if payloadInstance == 0 {
+		payloadInstance = solPayloadInstanceDefault
 	}
 
 	// Build Activate Payload request data per IPMI 2.0 spec Table 24-2.
@@ -80,15 +135,23 @@ func (s *rmcpSession) ActivateSOL(ctx context.Context) (*SOLSession, error) {
 	// byte 2-5: auxiliary data (encryption forced, authentication forced, etc.)
 	activateData := make([]byte, 6)
 	activateData[0] = payloadTypeSOL
-	activateData[1] = solPayloadInstance
+	activateData[1] = payloadInstance
 
-	// Auxiliary data byte 2:
-	// bit 3: SOL startup handshake (0 = CTS/DCD/DSR deasserted, 1 = asserted)
-	// bit 2: shared serial alert behavior (0 = fail, 1 = defer)
-	// bit 1: test mode (0 = disabled)
-	// bit 0: authentication (0 = as negotiated in session)
-	// We use encryption and authentication as negotiated.
-	activateData[2] = 0x00
+	// Auxiliary data byte 2 per IPMI 2.0 spec Table 24-2:
+	//   bit 3: SOL startup handshake (0 = CTS/DCD/DSR deasserted, 1 = asserted)
+	//   bit 2: shared serial alert behavior (0 = fail, 1 = defer to BMC)
+	//   bit 1: test mode (0 = disabled)
+	//   bit 0: authentication (0 = as negotiated in session)
+	//
+	// Bit 3 MUST be set to 1 so the BMC asserts CTS, DCD, and DSR on the
+	// baseboard UART at activation time. Without these modem-control signals
+	// the BIOS/OS serial console sees the link as "not ready" and will not
+	// transmit -- the SOL receive loop sees only NUL bytes or nothing at all.
+	//
+	// Bit 2 is set to 1 (defer) so the BMC does not immediately fail the
+	// activation if a shared serial alert is in progress; it queues the
+	// alert for later delivery instead. This matches ipmitool behavior.
+	activateData[2] = solAuxHandshakeAssert | solAuxAlertDefer
 	activateData[3] = 0x00
 	activateData[4] = 0x00
 	activateData[5] = 0x00
@@ -109,7 +172,7 @@ func (s *rmcpSession) ActivateSOL(ctx context.Context) (*SOLSession, error) {
 	// packets. On many BMCs (Supermicro X10/X11, some Dell, some HPE) this
 	// is a DIFFERENT port from the RMCP+ session port (623). If we keep
 	// listening on 623, every SOL data packet sent by the BMC arrives at
-	// the wrong port and is dropped silently — receiveLoop sees nothing.
+	// the wrong port and is dropped silently -- receiveLoop sees nothing.
 	// ipmitool re-binds its socket to the new port; we must do the same.
 	if len(resp) < 12 {
 		return nil, ErrSOLActivateFailed{Cause: ErrPacketTooShort{Expected: 12, Actual: len(resp)}}
@@ -120,6 +183,7 @@ func (s *rmcpSession) ActivateSOL(ctx context.Context) (*SOLSession, error) {
 	solUDPPort := binary.LittleEndian.Uint16(resp[8:10])
 
 	s.logger.Info("bmc: SOL payload activated",
+		"payload_instance", payloadInstance,
 		"inbound_payload_size", inboundSize,
 		"outbound_payload_size", outboundSize,
 		"sol_udp_port", solUDPPort)
@@ -136,10 +200,11 @@ func (s *rmcpSession) ActivateSOL(ctx context.Context) (*SOLSession, error) {
 	}
 
 	sol := &SOLSession{
-		session: s,
-		logger:  s.logger,
-		output:  make(chan []byte, 64),
-		done:    make(chan struct{}),
+		session:         s,
+		logger:          s.logger,
+		output:          make(chan []byte, 64),
+		done:            make(chan struct{}),
+		payloadInstance: payloadInstance,
 	}
 	sol.active.Store(true)
 
@@ -205,6 +270,7 @@ func (sol *SOLSession) receiveLoop() {
 
 		select {
 		case sol.output <- buf:
+			sol.bytesReceived.Add(uint64(len(buf)))
 		case <-sol.done:
 			return
 		}
@@ -219,10 +285,10 @@ func (sol *SOLSession) sendACK() error {
 	ackCharCount := sol.lastBMCCharCount.Load()
 
 	solPacket := make([]byte, solHeaderSize)
-	solPacket[0] = 0x00                    // Sequence number 0 = ACK-only, no data
-	solPacket[1] = byte(ackSeq & 0xFF)     // ACK the BMC's sequence number
-	solPacket[2] = byte(ackCharCount)      // Accepted character count
-	solPacket[3] = 0x00                    // Normal operation
+	solPacket[0] = 0x00                // Sequence number 0 = ACK-only, no data
+	solPacket[1] = byte(ackSeq & 0xFF) // ACK the BMC's sequence number
+	solPacket[2] = byte(ackCharCount)  // Accepted character count
+	solPacket[3] = 0x00                // Normal operation
 
 	return sol.session.sendSOLMessage(solPacket)
 }
@@ -262,10 +328,10 @@ func (sol *SOLSession) Write(p []byte) (int, error) {
 	ackCharCount := sol.lastBMCCharCount.Load()
 
 	solPacket := make([]byte, solHeaderSize+len(p))
-	solPacket[0] = byte(seq & 0xFF)        // Sequence number wraps at 255
-	solPacket[1] = byte(ackSeq & 0xFF)     // ACK the BMC's last sequence number
-	solPacket[2] = byte(ackCharCount)      // Accepted character count from last BMC packet
-	solPacket[3] = 0x00                    // Normal operation
+	solPacket[0] = byte(seq & 0xFF)    // Sequence number wraps at 255
+	solPacket[1] = byte(ackSeq & 0xFF) // ACK the BMC's last sequence number
+	solPacket[2] = byte(ackCharCount)  // Accepted character count from last BMC packet
+	solPacket[3] = 0x00                // Normal operation
 	copy(solPacket[solHeaderSize:], p)
 
 	if err := sol.session.sendSOLMessage(solPacket); err != nil {
@@ -313,9 +379,12 @@ func (sol *SOLSession) Deactivate(ctx context.Context) error {
 	// Best-effort deactivate: skip if the underlying connection is gone.
 	if sol.session.conn != nil && !sol.session.closed.Load() {
 		// Build Deactivate Payload request data per IPMI 2.0 spec Table 24-4.
+		// Deactivate must reference the same payload instance Activate used,
+		// otherwise the BMC ignores the request and leaves the session
+		// hanging until an idle timeout fires.
 		deactivateData := make([]byte, 6)
 		deactivateData[0] = payloadTypeSOL
-		deactivateData[1] = solPayloadInstance
+		deactivateData[1] = sol.payloadInstance
 		// bytes 2-5: reserved
 
 		_, err := sol.session.Send(netFnApp, cmdDeactivatePayload, deactivateData)
@@ -414,11 +483,11 @@ func (s *rmcpSession) wrapSOLPayload(solData []byte) ([]byte, error) {
 // payloads in the Activate Payload response (Table 24-3 bytes 8-9). On
 // hardware where that port differs from the RMCP+ session port (623), keeping
 // the original socket means SOL packets sent to the new port are silently
-// dropped — receiveLoop sees nothing and the operator concludes "SOL is
+// dropped -- receiveLoop sees nothing and the operator concludes "SOL is
 // broken" while ipmitool (which DOES rebind) works fine on the same BMC.
 //
 // The session ID, sequence numbers, and crypto state are independent of the
-// UDP 5-tuple — they're encoded in the RMCP+ header — so re-dialing to the
+// UDP 5-tuple -- they're encoded in the RMCP+ header -- so re-dialing to the
 // new port preserves the active session without re-handshaking.
 func (s *rmcpSession) rebindForSOL(newPort uint16) error {
 	if s.conn == nil {
@@ -448,7 +517,7 @@ func (s *rmcpSession) rebindForSOL(newPort uint16) error {
 	// receiveLoop and Send/Read all use s.conn directly so we have a brief
 	// window where in-flight reads on the old socket return errors. The
 	// receive loop tolerates errors (logs at debug, continues), and we
-	// only call rebindForSOL during ActivateSOL — before any concurrent
+	// only call rebindForSOL during ActivateSOL -- before any concurrent
 	// reads exist on the SOL session. So this is race-free in practice.
 	old := s.conn
 	s.conn = newConn

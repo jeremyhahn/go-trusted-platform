@@ -324,7 +324,9 @@ func runEKCertificateWithClient(base TPMBaseCommandInterface) error {
 	}
 
 	if len(resp.Certificate) > 0 {
-		output["certificate"] = string(resp.Certificate)
+		// Always hand JSON/YAML callers a PEM-safe string — raw DER
+		// bytes are not valid UTF-8 and would corrupt JSON encoding.
+		output["certificate"] = safeCertificateText(resp.Certificate)
 	}
 
 	switch flags.OutputFormat {
@@ -335,7 +337,12 @@ func runEKCertificateWithClient(base TPMBaseCommandInterface) error {
 		printer.PrintKeyValue("Format", resp.Format)
 		if len(resp.Certificate) > 0 {
 			fmt.Println()
-			fmt.Print(string(resp.Certificate))
+			// Convert DER to PEM before printing. The raw DER form
+			// contains bytes that corrupt the user's terminal
+			// (0x1B ESC, 0x0F Shift-Out, etc), which we saw in the
+			// wild when `platformctl tpm ek certificate` poisoned
+			// a live SOL session.
+			fmt.Print(safeCertificateText(resp.Certificate))
 		}
 		return nil
 

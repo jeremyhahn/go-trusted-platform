@@ -26,7 +26,7 @@ func DefaultTenantID() string {
 
 // GetRESTEndpoint returns the REST API endpoint
 func GetRESTEndpoint() string {
-	if endpoint := os.Getenv("DEVICE_REST_ENDPOINT"); endpoint != "" {
+	if endpoint := os.Getenv("PLATFORM_REST_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
 	return "https://localhost:8443"
@@ -34,7 +34,7 @@ func GetRESTEndpoint() string {
 
 // GetGRPCEndpoint returns the gRPC API endpoint
 func GetGRPCEndpoint() string {
-	if endpoint := os.Getenv("DEVICE_GRPC_ENDPOINT"); endpoint != "" {
+	if endpoint := os.Getenv("PLATFORM_GRPC_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
 	return "localhost:10443"
@@ -42,7 +42,7 @@ func GetGRPCEndpoint() string {
 
 // GetQUICEndpoint returns the QUIC API endpoint
 func GetQUICEndpoint() string {
-	if endpoint := os.Getenv("DEVICE_QUIC_ENDPOINT"); endpoint != "" {
+	if endpoint := os.Getenv("PLATFORM_QUIC_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
 	return "localhost:9444"
@@ -50,7 +50,7 @@ func GetQUICEndpoint() string {
 
 // GetMCPEndpoint returns the MCP API endpoint
 func GetMCPEndpoint() string {
-	if endpoint := os.Getenv("DEVICE_MCP_ENDPOINT"); endpoint != "" {
+	if endpoint := os.Getenv("PLATFORM_MCP_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
 	return "http://localhost:9445"
@@ -58,7 +58,7 @@ func GetMCPEndpoint() string {
 
 // GetSocketPath returns the Unix socket path
 func GetSocketPath() string {
-	if path := os.Getenv("DEVICE_SOCKET_PATH"); path != "" {
+	if path := os.Getenv("PLATFORM_UNIX_SOCKET"); path != "" {
 		return path
 	}
 	return "/run/platformd.sock"

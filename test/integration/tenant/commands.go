@@ -89,6 +89,30 @@ type TenantCommands interface {
 
 	// SyncTenants synchronizes tenant manager state
 	SyncTenants(ctx context.Context) (*SyncTenantsResult, error)
+
+	// Per-Tenant Barrier Operations (added 2026-04-28)
+	//
+	// These operations exercise the per-tenant cryptographic barrier shipped
+	// across the platform's REST/gRPC/QUIC/MCP/Unix transports. Each tenant
+	// has an independent barrier auto-initialized on CreateTenant and
+	// auto-sealed on DeleteTenant; explicit lifecycle control is exposed via
+	// these methods.
+
+	// InitTenantBarrier explicitly initializes a per-tenant barrier with
+	// optional Shamir threshold/shares configuration.
+	InitTenantBarrier(ctx context.Context, opts InitTenantBarrierOptions) (*InitTenantBarrierResult, error)
+
+	// UnsealTenantBarrier unseals a per-tenant barrier using the provided
+	// key bytes. An empty key falls back to the deterministic init credential.
+	UnsealTenantBarrier(ctx context.Context, opts UnsealTenantBarrierOptions) (*UnsealTenantBarrierResult, error)
+
+	// SealTenantBarrier seals a per-tenant barrier, returning it to the
+	// sealed state.
+	SealTenantBarrier(ctx context.Context, opts SealTenantBarrierOptions) (*SealTenantBarrierResult, error)
+
+	// TenantBarrierStatus reports the current sealed/initialized state and
+	// active strategy metadata of a per-tenant barrier.
+	TenantBarrierStatus(ctx context.Context, opts TenantBarrierStatusOptions) (*TenantBarrierStatusResult, error)
 }
 
 // ============================================================================
@@ -370,4 +394,61 @@ type GetBridgeNameResult struct {
 type SyncTenantsResult struct {
 	Success bool   `json:"success"`
 	Message string `json:"message,omitempty"`
+}
+
+// ============================================================================
+// Per-Tenant Barrier Options and Results (added 2026-04-28)
+// ============================================================================
+
+// InitTenantBarrierOptions configures explicit barrier initialization.
+type InitTenantBarrierOptions struct {
+	TenantID  string `json:"tenant_id"`
+	Threshold int32  `json:"threshold,omitempty"`
+	Shares    int32  `json:"shares,omitempty"`
+}
+
+// InitTenantBarrierResult is the result of an explicit barrier init.
+type InitTenantBarrierResult struct {
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
+}
+
+// UnsealTenantBarrierOptions configures barrier unseal. An empty Key falls
+// back to the deterministic init credential.
+type UnsealTenantBarrierOptions struct {
+	TenantID string `json:"tenant_id"`
+	Key      []byte `json:"key,omitempty"`
+}
+
+// UnsealTenantBarrierResult is the result of barrier unseal.
+type UnsealTenantBarrierResult struct {
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
+}
+
+// SealTenantBarrierOptions configures barrier seal.
+type SealTenantBarrierOptions struct {
+	TenantID string `json:"tenant_id"`
+}
+
+// SealTenantBarrierResult is the result of barrier seal.
+type SealTenantBarrierResult struct {
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
+}
+
+// TenantBarrierStatusOptions configures the barrier status query.
+type TenantBarrierStatusOptions struct {
+	TenantID string `json:"tenant_id"`
+}
+
+// TenantBarrierStatusResult mirrors the platform proto TenantBarrierStatus
+// for adapter parity. Uninitialized barriers report Sealed=true,
+// Initialized=false rather than erroring.
+type TenantBarrierStatusResult struct {
+	TenantID       string `json:"tenant_id"`
+	Sealed         bool   `json:"sealed"`
+	Initialized    bool   `json:"initialized"`
+	Strategy       string `json:"strategy"`
+	HardwareBacked bool   `json:"hardware_backed"`
 }

@@ -21,9 +21,23 @@ type ContextKey string
 // ContextKeyDeviceSerial is the context key for the device serial number.
 const ContextKeyDeviceSerial ContextKey = "device_serial"
 
-// DeviceRequest represents the request body for device creation/update
+// DeviceRequest represents the request body for device creation/update.
+//
+// Two shapes are accepted to bridge the legacy REST contract and the SDK
+// contract:
+//
+//   1. Flat: {"id", "serial", "model", ...} — original REST shape used
+//      by the v1 integration tests.
+//   2. Nested: {"device": {"name", "serial", ...}} — shape produced by
+//      the JS SDK's `createDevice({device: {...}})` and the React form.
+//
+// All fields below are optional: the handler infers the canonical
+// representation from whichever subtree carries data. Unknown extra
+// fields produced by the WebUI (name, description, tpmVersion, etc.)
+// are tolerated rather than rejected.
 type DeviceRequest struct {
-	ID         uint64 `json:"id"`
+	// Flat fields (legacy REST contract).
+	ID         uint64 `json:"id,omitempty"`
 	AttestPub  string `json:"attest_pub,omitempty"`
 	EKCert     string `json:"ek_cert,omitempty"`
 	EventLog   []byte `json:"event_log,omitempty"`
@@ -31,11 +45,52 @@ type DeviceRequest struct {
 	Model      string `json:"model,omitempty"`
 	Serial     string `json:"serial,omitempty"`
 	SigningPub string `json:"signing_pub,omitempty"`
+	SwitchName string `json:"switch_name,omitempty"`
+	SwitchPort string `json:"switch_port,omitempty"`
+
+	// Nested SDK envelope. When present, fields here override the flat
+	// fields above so the REST contract aligns with the JS SDK.
+	Device *DeviceRequestPayload `json:"device,omitempty"`
+
+	// UI-only fields tolerated for forwards-compatibility with WebUI
+	// forms. The server captures Name into the Device record's serial
+	// when no other identifier is supplied; the rest are informational.
+	Name              string `json:"name,omitempty"`
+	Type              string `json:"type,omitempty"`
+	DeviceType        string `json:"device_type,omitempty"`
+	Description       string `json:"description,omitempty"`
+	Manufacturer      string `json:"manufacturer,omitempty"`
+	Version           string `json:"version,omitempty"`
+	TPMManufacturer   string `json:"tpm_manufacturer,omitempty"`
+	TPMVersion        string `json:"tpm_version,omitempty"`
+	TPMFirmwareVersion string `json:"tpm_firmware_version,omitempty"`
 }
 
-// DeviceResponse represents a device in API responses
+// DeviceRequestPayload mirrors DeviceRequest's flat fields plus a Name
+// alias. The nested {device: {...}} envelope produced by the JS SDK is
+// decoded into this struct.
+type DeviceRequestPayload struct {
+	ID         uint64 `json:"id,omitempty"`
+	AttestPub  string `json:"attest_pub,omitempty"`
+	EKCert     string `json:"ek_cert,omitempty"`
+	EventLog   []byte `json:"event_log,omitempty"`
+	HashAlgoID uint32 `json:"hash_algo_id,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Serial     string `json:"serial,omitempty"`
+	Name       string `json:"name,omitempty"`
+	SigningPub string `json:"signing_pub,omitempty"`
+	SwitchName string `json:"switch_name,omitempty"`
+	SwitchPort string `json:"switch_port,omitempty"`
+}
+
+// DeviceResponse represents a device in API responses.
+//
+// IDs are emitted as JSON strings (`json:"...,string"`) because the
+// platform mints them above 2^53; encoding them as plain JSON numbers
+// would silently lose precision in JavaScript clients (the WebUI
+// truncates the value and then can't navigate to the detail page).
 type DeviceResponse struct {
-	ID         uint64 `json:"id"`
+	ID         uint64 `json:"id,string"`
 	AttestPub  string `json:"attest_pub,omitempty"`
 	EKCert     string `json:"ek_cert,omitempty"`
 	EventLog   []byte `json:"event_log,omitempty"`
@@ -43,6 +98,8 @@ type DeviceResponse struct {
 	Model      string `json:"model,omitempty"`
 	Serial     string `json:"serial,omitempty"`
 	SigningPub string `json:"signing_pub,omitempty"`
+	SwitchName string `json:"switch_name,omitempty"`
+	SwitchPort string `json:"switch_port,omitempty"`
 }
 
 // DeviceListResponse represents a paginated list of devices
@@ -126,9 +183,10 @@ type ProfileListResponse struct {
 	Pagination PaginationResponse    `json:"pagination"`
 }
 
-// ProfileFullResponse represents a complete device profile
+// ProfileFullResponse represents a complete device profile.
+// See DeviceResponse for why ID is encoded as a JSON string.
 type ProfileFullResponse struct {
-	ID                  uint64                   `json:"id"`
+	ID                  uint64                   `json:"id,string"`
 	Name                string                   `json:"name"`
 	Model               string                   `json:"model,omitempty"`
 	Role                string                   `json:"role,omitempty"`

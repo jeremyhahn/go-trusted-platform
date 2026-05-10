@@ -38,6 +38,15 @@ service TenantService {
   // DEK management
   rpc RotateTenantDEK(RotateTenantDEKRequest) returns (RotateTenantDEKResponse);
   rpc GetTenantDEKStatus(GetTenantDEKStatusRequest) returns (GetTenantDEKStatusResponse);
+
+  // Per-tenant barrier lifecycle (added 2026-04-28).
+  // Each tenant has an independent cryptographic barrier auto-initialized on
+  // CreateTenant and auto-sealed on DeleteTenant. These RPCs expose explicit
+  // lifecycle control and observability.
+  rpc InitTenantBarrier(InitTenantBarrierRequest) returns (InitTenantBarrierResponse);
+  rpc UnsealTenantBarrier(UnsealTenantBarrierRequest) returns (UnsealTenantBarrierResponse);
+  rpc SealTenantBarrier(SealTenantBarrierRequest) returns (SealTenantBarrierResponse);
+  rpc GetTenantBarrierStatus(GetTenantBarrierStatusRequest) returns (GetTenantBarrierStatusResponse);
 }
 
 // TenantState represents the state of a tenant.
@@ -328,4 +337,61 @@ message GetTenantDEKStatusRequest {
 
 message GetTenantDEKStatusResponse {
   TenantDEKStatus dek_status = 1;
+}
+
+// =============================================================================
+// Per-Tenant Barrier Messages (added 2026-04-28)
+// =============================================================================
+
+// InitTenantBarrier explicitly initializes a per-tenant barrier with optional
+// Shamir threshold/shares configuration. Threshold and shares default to zero
+// (deterministic non-Shamir init); set both to non-zero to enable Shamir.
+message InitTenantBarrierRequest {
+  string tenant_id = 1;
+  int32 threshold = 2;
+  int32 shares = 3;
+}
+
+message InitTenantBarrierResponse {
+  Status status = 1;
+}
+
+// UnsealTenantBarrier unseals a per-tenant barrier. An empty key falls back
+// to the deterministic init credential.
+message UnsealTenantBarrierRequest {
+  string tenant_id = 1;
+  bytes key = 2;
+}
+
+message UnsealTenantBarrierResponse {
+  Status status = 1;
+}
+
+// SealTenantBarrier seals a per-tenant barrier. Subsequent reads/writes
+// against the tenant namespace fail until unsealed again.
+message SealTenantBarrierRequest {
+  string tenant_id = 1;
+}
+
+message SealTenantBarrierResponse {
+  Status status = 1;
+}
+
+// GetTenantBarrierStatus reports the current state of a per-tenant barrier.
+// Uninitialized barriers return Sealed=true, Initialized=false rather than
+// erroring.
+message GetTenantBarrierStatusRequest {
+  string tenant_id = 1;
+}
+
+message TenantBarrierStatus {
+  string tenant_id = 1;
+  bool sealed = 2;
+  bool initialized = 3;
+  string strategy = 4;
+  bool hardware_backed = 5;
+}
+
+message GetTenantBarrierStatusResponse {
+  TenantBarrierStatus barrier_status = 1;
 }

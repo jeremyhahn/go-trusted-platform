@@ -21,74 +21,6 @@ import (
 	"time"
 )
 
-// GatewayMode Benchmarks
-
-func BenchmarkGatewayMode_String(b *testing.B) {
-	modes := []GatewayMode{
-		GatewayModeOverlay,
-		GatewayModeEdge,
-		GatewayModeTransit,
-		GatewayModeOverlay | GatewayModeEdge,
-		0,
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		mode := modes[i%len(modes)]
-		_ = mode.String()
-	}
-}
-
-func BenchmarkGatewayMode_Valid(b *testing.B) {
-	modes := []GatewayMode{
-		GatewayModeOverlay,
-		GatewayModeEdge,
-		GatewayModeTransit,
-		GatewayModeOverlay | GatewayModeEdge | GatewayModeTransit,
-		0,
-		GatewayMode(128), // Invalid
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		mode := modes[i%len(modes)]
-		_ = mode.Valid()
-	}
-}
-
-func BenchmarkGatewayMode_HasMode(b *testing.B) {
-	mode := GatewayModeOverlay | GatewayModeEdge
-	checkModes := []GatewayMode{
-		GatewayModeOverlay,
-		GatewayModeEdge,
-		GatewayModeTransit,
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		check := checkModes[i%len(checkModes)]
-		_ = mode.HasMode(check)
-	}
-}
-
-func BenchmarkGatewayMode_Modes(b *testing.B) {
-	modes := []GatewayMode{
-		GatewayModeOverlay,
-		GatewayModeOverlay | GatewayModeEdge,
-		GatewayModeOverlay | GatewayModeEdge | GatewayModeTransit,
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		mode := modes[i%len(modes)]
-		_ = mode.Modes()
-	}
-}
-
 // PortState Benchmarks
 
 func BenchmarkPortState_String(b *testing.B) {
@@ -299,22 +231,6 @@ func BenchmarkDefaultCapabilities(b *testing.B) {
 	}
 }
 
-func BenchmarkGatewayCapabilities_SupportsMode(b *testing.B) {
-	caps := DefaultCapabilities()
-	modes := []GatewayMode{
-		GatewayModeOverlay,
-		GatewayModeEdge,
-		GatewayModeTransit,
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		mode := modes[i%len(modes)]
-		_ = caps.SupportsMode(mode)
-	}
-}
-
 // UplinkConfig Benchmarks
 
 func BenchmarkUplinkConfig_Validate(b *testing.B) {
@@ -358,13 +274,13 @@ func BenchmarkGatewayConfig_Validate(b *testing.B) {
 			Enabled:       true,
 			ID:            "gw-1",
 			NodeID:        1,
-			Modes:         []GatewayMode{GatewayModeOverlay},
 			MinReputation: MinReputation,
 			MinAgeDays:    MinAgeDays,
 			MinUptimePct:  MinUptimePct,
+			Overlay:       &OverlayServiceConfig{Enabled: true},
 		},
 		{Enabled: false},
-		{Enabled: true, ID: "", Modes: []GatewayMode{GatewayModeOverlay}}, // Invalid
+		{Enabled: true, ID: ""}, // Invalid
 	}
 
 	b.ReportAllocs()
@@ -456,26 +372,6 @@ func BenchmarkUplinkPort_Create(b *testing.B) {
 
 // Parallel Benchmarks
 
-func BenchmarkGatewayMode_HasMode_Parallel(b *testing.B) {
-	mode := GatewayModeOverlay | GatewayModeEdge
-	checkModes := []GatewayMode{
-		GatewayModeOverlay,
-		GatewayModeEdge,
-		GatewayModeTransit,
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		for pb.Next() {
-			check := checkModes[i%len(checkModes)]
-			_ = mode.HasMode(check)
-			i++
-		}
-	})
-}
-
 func BenchmarkGatewayNode_MeetsAllRequirements_Parallel(b *testing.B) {
 	nodes := []*GatewayNode{
 		{Reputation: 0.90, Age: 180 * 24 * time.Hour, Uptime: 98.0},
@@ -490,26 +386,6 @@ func BenchmarkGatewayNode_MeetsAllRequirements_Parallel(b *testing.B) {
 		for pb.Next() {
 			node := nodes[i%len(nodes)]
 			_ = node.MeetsAllRequirements()
-			i++
-		}
-	})
-}
-
-func BenchmarkGatewayCapabilities_SupportsMode_Parallel(b *testing.B) {
-	caps := DefaultCapabilities()
-	modes := []GatewayMode{
-		GatewayModeOverlay,
-		GatewayModeEdge,
-		GatewayModeTransit,
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		for pb.Next() {
-			mode := modes[i%len(modes)]
-			_ = caps.SupportsMode(mode)
 			i++
 		}
 	})

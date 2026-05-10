@@ -71,6 +71,12 @@ type Device struct {
 	Serial     string `yaml:"serial" json:"serial"`
 	SigningPub string `yaml:"signing-pub" json:"signing_pub"`
 
+	// SwitchName identifies the physical switch managing this device's port.
+	SwitchName string `yaml:"switch-name,omitempty" json:"switch_name,omitempty"`
+
+	// SwitchPort is the physical port identifier on the switch (e.g., "Eth1/3").
+	SwitchPort string `yaml:"switch-port,omitempty" json:"switch_port,omitempty"`
+
 	// State tracking fields
 	State           DeviceState `yaml:"state" json:"state"`
 	StateReason     string      `yaml:"state_reason" json:"state_reason,omitempty"`

@@ -98,6 +98,16 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// post-mortem data after the install env reboots.
 	mux.HandleFunc("/installs/", s.handleInstalls)
 
+	// Per-MAC config delivery. PUT /config/mac/{mac}/{key} stores a small
+	// plain-text value indexed by MAC; GET returns the value. Used by
+	// autoinstall.sh to fetch per-node overrides (hostname first and
+	// foremost) that the orchestrator stages before booting the ISO.
+	// Without this, the shared ISO bakes a generic hostname ("server")
+	// into every node. Each node's autoinstall queries
+	// /config/mac/<its-primary-mac>/hostname and replaces the baked value
+	// when a match is found.
+	mux.HandleFunc("/config/", s.handleConfig)
+
 	addr := fmt.Sprintf(":%d", s.config.HTTPPort)
 
 	s.server = &http.Server{
@@ -568,20 +578,34 @@ func (s *HTTPServer) proxyURL(originalURL string) string {
 // firmly limits memory consumed by a misbehaving uploader.
 const maxInstallLogUploadBytes int64 = 16 * 1024 * 1024
 
-// installPathRegexp validates the {hostname}/{filename} portion of the upload
-// path. Both segments are restricted to a conservative character set so a
-// malicious uploader can't path-traverse out of InstallsDir. We deliberately
-// allow leading hyphens because some live envs (Alpine busybox) report
-// hostname as "(none)" which gets normalised to "-none-" by the upload
-// script's sed pass — and rejecting that would silently lose the very
-// uploads we need most for unconfigured first-boot postmortems.
+// installPathRegexp validates the upload path after /installs/. Two shapes
+// are accepted:
+//
+//	{hostname}/{filename}         — legacy hostname-keyed uploads.
+//	mac/{mac}/{filename}          — MAC-keyed uploads (preferred).
+//
+// The MAC form exists because a shared ISO has no way to know the
+// per-node hostname at boot, but every node knows its own MAC. The
+// orchestrator polls both keys; the installer uploads to whichever it
+// can determine. The literal "mac/" prefix makes the two shapes
+// unambiguous so a hostname that happens to equal "mac" doesn't
+// collide with the MAC-keyed namespace.
+//
+// Segment character set is restricted so a malicious uploader can't
+// path-traverse out of InstallsDir. Leading hyphens are allowed on
+// hostnames because some live envs (Alpine busybox) report hostname as
+// "(none)" which gets normalised to "-none-" by the upload script's sed
+// pass — rejecting that would silently lose the very uploads we need
+// most for unconfigured first-boot postmortems.
 //
 // hostname: lowercase letters, digits, hyphens, dots — extended DNS label set
+// mac:      lowercase hex digits and hyphens only (sanitizeMACForPath output)
 // filename: lowercase letters, digits, dots, hyphens, underscores
 //
 // Path traversal is blocked separately by the explicit ".." check in
 // handleInstallUpload, so the regex doesn't need to defend against that.
 var installPathRegexp = regexp.MustCompile(`^([a-z0-9.\-]{1,254})/([a-z0-9][a-z0-9._\-]{0,254})$`)
+var installMACPathRegexp = regexp.MustCompile(`^mac/([0-9a-f\-]{12,17})/([a-z0-9][a-z0-9._\-]{0,254})$`)
 
 // handleInstalls dispatches /installs/ requests:
 //
@@ -617,12 +641,21 @@ func (s *HTTPServer) handleInstallUpload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	matches := installPathRegexp.FindStringSubmatch(relative)
-	if matches == nil {
-		http.Error(w, "path must be {hostname}/{filename}", http.StatusBadRequest)
+	// Try MAC-keyed shape (mac/<mac>/<file>) first, then fall back to the
+	// legacy hostname-keyed shape (<host>/<file>). Both land in the same
+	// on-disk layout — InstallsDir/<key>/<filename> — so the GET handler
+	// and index code need no changes.
+	var hostname, filename string
+	if m := installMACPathRegexp.FindStringSubmatch(relative); m != nil {
+		hostname = "mac/" + m[1]
+		filename = m[2]
+	} else if m := installPathRegexp.FindStringSubmatch(relative); m != nil {
+		hostname = m[1]
+		filename = m[2]
+	} else {
+		http.Error(w, "path must be {hostname}/{filename} or mac/{mac}/{filename}", http.StatusBadRequest)
 		return
 	}
-	hostname, filename := matches[1], matches[2]
 
 	if s.config.InstallsDir == "" {
 		http.Error(w, "installs directory not configured", http.StatusServiceUnavailable)
@@ -755,4 +788,90 @@ func (s *HTTPServer) proxyArgsURLs(args string) string {
 		}
 	}
 	return result
+}
+
+// configMACPathRegexp validates /config/mac/{mac}/{key} URLs. MAC is
+// normalized lowercase hex with dashes; key is a short lowercase
+// identifier. Path traversal is blocked by the explicit ".." guard
+// below so the regex doesn't have to defend against it.
+var configMACPathRegexp = regexp.MustCompile(`^mac/([0-9a-f\-]{12,17})/([a-z0-9][a-z0-9._\-]{0,64})$`)
+
+// maxConfigValueBytes caps config value writes. Bumped from 4 KiB to
+// 256 KiB so the full merged per-node installer.yaml (sdn + network +
+// webservices blocks typically runs 10–40 KiB) fits. Plain hostname /
+// IP values use a tiny fraction of the budget.
+const maxConfigValueBytes int64 = 256 * 1024
+
+// handleConfig serves per-MAC key-value configuration. Shape:
+//
+//	PUT /config/mac/{mac}/{key}   — orchestrator stages pre-install overrides
+//	GET /config/mac/{mac}/{key}   — autoinstall.sh fetches at install time
+//
+// Values are stored under <InstallsDir>/config/mac/{mac}/{key} so they
+// live alongside the install logs and share the same disk bootstrap
+// semantics (container bind mount → tmpfs on deployer host). Values are
+// plain bytes — no interpretation by the server; the consumer decides
+// the format.
+func (s *HTTPServer) handleConfig(w http.ResponseWriter, r *http.Request) {
+	if s.config.InstallsDir == "" {
+		http.Error(w, "installs directory not configured", http.StatusServiceUnavailable)
+		return
+	}
+	relative := strings.TrimPrefix(r.URL.Path, "/config/")
+	if relative == "" || strings.Contains(relative, "..") {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	match := configMACPathRegexp.FindStringSubmatch(relative)
+	if match == nil {
+		http.Error(w, "path must be mac/{mac}/{key}", http.StatusBadRequest)
+		return
+	}
+	mac, key := match[1], match[2]
+	dir := filepath.Join(s.config.InstallsDir, "config", "mac", mac)
+	target := filepath.Join(dir, key)
+
+	switch r.Method {
+	case http.MethodPut:
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			http.Error(w, "mkdir failed", http.StatusInternalServerError)
+			return
+		}
+		data, err := io.ReadAll(io.LimitReader(r.Body, maxConfigValueBytes+1))
+		if err != nil {
+			http.Error(w, "read body failed", http.StatusBadRequest)
+			return
+		}
+		if int64(len(data)) > maxConfigValueBytes {
+			http.Error(w, "value too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		tmp := target + ".partial"
+		if err := os.WriteFile(tmp, data, 0o644); err != nil {
+			http.Error(w, "write failed", http.StatusInternalServerError)
+			return
+		}
+		if err := os.Rename(tmp, target); err != nil {
+			os.Remove(tmp)
+			http.Error(w, "rename failed", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte("stored\n"))
+	case http.MethodGet:
+		data, err := os.ReadFile(target)
+		if err != nil {
+			if os.IsNotExist(err) {
+				http.NotFound(w, r)
+				return
+			}
+			http.Error(w, "read failed", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write(data)
+	default:
+		w.Header().Set("Allow", "GET, PUT")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }

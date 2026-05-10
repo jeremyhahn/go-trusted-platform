@@ -15,10 +15,13 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -26,7 +29,7 @@ import (
 
 func TestNewInvitationGRPCService(t *testing.T) {
 	logger := logging.DefaultLogger()
-	service := NewInvitationGRPCService(logger)
+	service := NewInvitationGRPCService(logger, nil)
 	if service == nil {
 		t.Fatal("NewInvitationGRPCService returned nil")
 	}
@@ -37,7 +40,7 @@ func TestNewInvitationGRPCService(t *testing.T) {
 
 func TestInvitationGRPCService_AllMethodsReturnUnimplemented(t *testing.T) {
 	logger := logging.DefaultLogger()
-	service := NewInvitationGRPCService(logger)
+	service := NewInvitationGRPCService(logger, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -114,7 +117,7 @@ func TestInvitationGRPCService_AllMethodsReturnUnimplemented(t *testing.T) {
 
 func TestInvitationGRPCService_NilReturns(t *testing.T) {
 	logger := logging.DefaultLogger()
-	service := NewInvitationGRPCService(logger)
+	service := NewInvitationGRPCService(logger, nil)
 	ctx := context.Background()
 
 	t.Run("CreateInvitation_returns_nil_response", func(t *testing.T) {
@@ -136,4 +139,341 @@ func TestInvitationGRPCService_NilReturns(t *testing.T) {
 			t.Error("expected error")
 		}
 	})
+}
+
+// =============================================================================
+// Wired-in servicer tests
+//
+// These tests exercise the gRPC service when an InvitationServicer has
+// been injected, mirroring the same test surface the daemon's
+// MCPServiceProvider exercises. The fakeInvitationServicer fixture is
+// shared with mcp_invitation_test.go.
+// =============================================================================
+
+func TestInvitationGRPCService_WithService_Create(t *testing.T) {
+	logger := logging.DefaultLogger()
+	inv := newTestInvitation()
+	fake := &fakeInvitationServicer{createResult: inv}
+	svc := NewInvitationGRPCService(logger, fake)
+
+	resp, err := svc.CreateInvitation(context.Background(), &platformv1.CreateInvitationRequest{
+		TenantId:         "tenant-1",
+		Email:            "alice@example.com",
+		Role:             "member",
+		InvitedById:      99,
+		ExpiresInSeconds: 3600,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp == nil || resp.Invitation == nil {
+		t.Fatalf("expected invitation in response")
+	}
+	if resp.Invitation.Id != 42 {
+		t.Errorf("id = %d", resp.Invitation.Id)
+	}
+	if fake.createReq.ExpiresIn.Seconds() != 3600 {
+		t.Errorf("ExpiresIn = %v", fake.createReq.ExpiresIn)
+	}
+	if svc.Service() != fake {
+		t.Errorf("Service() did not return injected fake")
+	}
+}
+
+func TestInvitationGRPCService_WithService_NilRequestRejected(t *testing.T) {
+	logger := logging.DefaultLogger()
+	fake := &fakeInvitationServicer{}
+	svc := NewInvitationGRPCService(logger, fake)
+	ctx := context.Background()
+
+	calls := []func() error{
+		func() error { _, err := svc.CreateInvitation(ctx, nil); return err },
+		func() error { _, err := svc.GetInvitation(ctx, nil); return err },
+		func() error { _, err := svc.GetInvitationByToken(ctx, nil); return err },
+		func() error { _, err := svc.ListInvitations(ctx, nil); return err },
+		func() error { _, err := svc.RevokeInvitation(ctx, nil); return err },
+		func() error { _, err := svc.AcceptInvitation(ctx, nil); return err },
+		func() error { _, err := svc.DeleteInvitation(ctx, nil); return err },
+	}
+	for i, c := range calls {
+		err := c()
+		if err == nil {
+			t.Errorf("case %d: expected error", i)
+			continue
+		}
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Errorf("case %d: expected InvalidArgument, got %v", i, err)
+		}
+	}
+}
+
+func TestInvitationGRPCService_WithService_GetByID(t *testing.T) {
+	fake := &fakeInvitationServicer{getByIDResult: newTestInvitation()}
+	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
+
+	resp, err := svc.GetInvitation(context.Background(), &platformv1.GetInvitationRequest{InvitationId: 42})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Invitation.Id != 42 {
+		t.Errorf("id = %d", resp.Invitation.Id)
+	}
+}
+
+func TestInvitationGRPCService_WithService_GetByID_Error(t *testing.T) {
+	sentinel := errors.New("nope")
+	fake := &fakeInvitationServicer{getByIDErr: sentinel}
+	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
+
+	_, err := svc.GetInvitation(context.Background(), &platformv1.GetInvitationRequest{InvitationId: 1})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel, got %v", err)
+	}
+}
+
+func TestInvitationGRPCService_WithService_GetByToken(t *testing.T) {
+	fake := &fakeInvitationServicer{getByTokenResult: newTestInvitation()}
+	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
+
+	resp, err := svc.GetInvitationByToken(context.Background(), &platformv1.GetInvitationByTokenRequest{Token: "tok-1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Invitation.Token != "tok-1" {
+		t.Errorf("token = %q", resp.Invitation.Token)
+	}
+}
+
+func TestInvitationGRPCService_WithService_GetByToken_Error(t *testing.T) {
+	sentinel := errors.New("nope")
+	fake := &fakeInvitationServicer{getByTokenErr: sentinel}
+	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
+
+	_, err := svc.GetInvitationByToken(context.Background(), &platformv1.GetInvitationByTokenRequest{Token: "x"})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel, got %v", err)
+	}
+}
+
+func TestInvitationGRPCService_WithService_List(t *testing.T) {
+	pending := newTestInvitation()
+	accepted := newTestInvitation()
+	accepted.ID = 43
+	accepted.Email = "bob@example.com"
+	accepted.Status = entities.InvitationStatusAccepted
+	fake := &fakeInvitationServicer{listResult: []*entities.Invitation{pending, accepted}}
+	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
+	ctx := context.Background()
+
+	// All
+	resp, err := svc.ListInvitations(ctx, &platformv1.ListInvitationsRequest{TenantId: "tenant-1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Invitations) != 2 {
+		t.Errorf("expected 2, got %d", len(resp.Invitations))
+	}
+	if fake.listPending {
+		t.Errorf("expected listAll, got listPending")
+	}
+
+	// Pending only flag delegates to ListPendingByTenant.
+	_, err = svc.ListInvitations(ctx, &platformv1.ListInvitationsRequest{TenantId: "tenant-1", PendingOnly: true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !fake.listPending {
+		t.Errorf("expected ListPendingByTenant call")
+	}
+
+	// Status filter retains only ACCEPTED.
+	resp, err = svc.ListInvitations(ctx, &platformv1.ListInvitationsRequest{
+		TenantId:     "tenant-1",
+		StatusFilter: platformv1.InvitationStatus_INVITATION_STATUS_ACCEPTED,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Invitations) != 1 || resp.Invitations[0].Status != platformv1.InvitationStatus_INVITATION_STATUS_ACCEPTED {
+		t.Errorf("unexpected list result with status filter: %+v", resp.Invitations)
+	}
+
+	// Email filter is case-insensitive substring match.
+	resp, err = svc.ListInvitations(ctx, &platformv1.ListInvitationsRequest{
+		TenantId:    "tenant-1",
+		EmailFilter: "BOB",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Invitations) != 1 || resp.Invitations[0].Email != "bob@example.com" {
+		t.Errorf("unexpected list result with email filter: %+v", resp.Invitations)
+	}
+}
+
+func TestInvitationGRPCService_WithService_List_Error(t *testing.T) {
+	sentinel := errors.New("db gone")
+	fake := &fakeInvitationServicer{listErr: sentinel}
+	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
+
+	_, err := svc.ListInvitations(context.Background(), &platformv1.ListInvitationsRequest{TenantId: "t"})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel, got %v", err)
+	}
+}
+
+func TestInvitationGRPCService_WithService_Revoke(t *testing.T) {
+	fake := &fakeInvitationServicer{}
+	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
+
+	resp, err := svc.RevokeInvitation(context.Background(), &platformv1.RevokeInvitationRequest{InvitationId: 42, RevokerId: 99})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.Status.Success {
+		t.Errorf("expected Success=true")
+	}
+	if fake.revokeID != 42 || fake.revokeRevoker != 99 {
+		t.Errorf("delegation mismatch")
+	}
+}
+
+func TestInvitationGRPCService_WithService_Revoke_Error(t *testing.T) {
+	sentinel := errors.New("nope")
+	fake := &fakeInvitationServicer{revokeReturned: sentinel}
+	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
+
+	_, err := svc.RevokeInvitation(context.Background(), &platformv1.RevokeInvitationRequest{InvitationId: 1, RevokerId: 2})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel, got %v", err)
+	}
+}
+
+func TestInvitationGRPCService_WithService_Accept(t *testing.T) {
+	inv := newTestInvitation()
+	now := time.Now().UTC()
+	inv.Status = entities.InvitationStatusAccepted
+	inv.AcceptedAt = &now
+	fake := &fakeInvitationServicer{getByTokenResult: inv}
+	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
+
+	resp, err := svc.AcceptInvitation(context.Background(), &platformv1.AcceptInvitationRequest{Token: "tok-1", UserId: 7})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.Status.Success {
+		t.Errorf("expected Success=true")
+	}
+	if resp.Invitation == nil || resp.Invitation.Status != platformv1.InvitationStatus_INVITATION_STATUS_ACCEPTED {
+		t.Errorf("expected accepted invitation in response")
+	}
+}
+
+func TestInvitationGRPCService_WithService_Accept_Error(t *testing.T) {
+	sentinel := errors.New("expired")
+	fake := &fakeInvitationServicer{acceptReturned: sentinel}
+	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
+
+	_, err := svc.AcceptInvitation(context.Background(), &platformv1.AcceptInvitationRequest{Token: "t", UserId: 1})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel, got %v", err)
+	}
+}
+
+func TestInvitationGRPCService_WithService_Accept_ReadbackFailure(t *testing.T) {
+	fake := &fakeInvitationServicer{getByTokenErr: errors.New("disk")}
+	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
+
+	resp, err := svc.AcceptInvitation(context.Background(), &platformv1.AcceptInvitationRequest{Token: "tok-1", UserId: 7})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.Status.Success {
+		t.Errorf("expected Success=true")
+	}
+	if resp.Invitation != nil {
+		t.Errorf("expected nil invitation when read-back fails")
+	}
+}
+
+func TestInvitationGRPCService_WithService_Delete(t *testing.T) {
+	fake := &fakeInvitationServicer{}
+	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
+
+	resp, err := svc.DeleteInvitation(context.Background(), &platformv1.DeleteInvitationRequest{InvitationId: 42})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.Status.Success {
+		t.Errorf("expected Success=true")
+	}
+	if fake.deleteID != 42 {
+		t.Errorf("id = %d", fake.deleteID)
+	}
+}
+
+func TestInvitationGRPCService_WithService_Delete_Error(t *testing.T) {
+	sentinel := errors.New("nope")
+	fake := &fakeInvitationServicer{deleteReturned: sentinel}
+	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
+
+	_, err := svc.DeleteInvitation(context.Background(), &platformv1.DeleteInvitationRequest{InvitationId: 1})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel, got %v", err)
+	}
+}
+
+func TestInvitationGRPCService_SetService(t *testing.T) {
+	fake := &fakeInvitationServicer{}
+	svc := NewInvitationGRPCService(logging.DefaultLogger(), nil)
+	if svc.Service() != nil {
+		t.Errorf("expected nil service initially")
+	}
+	svc.SetService(fake)
+	if svc.Service() != fake {
+		t.Errorf("SetService did not take")
+	}
+}
+
+func TestInvitationStatusToProto_Mapping(t *testing.T) {
+	cases := []struct {
+		in   entities.InvitationStatus
+		want platformv1.InvitationStatus
+	}{
+		{entities.InvitationStatusPending, platformv1.InvitationStatus_INVITATION_STATUS_PENDING},
+		{entities.InvitationStatusAccepted, platformv1.InvitationStatus_INVITATION_STATUS_ACCEPTED},
+		{entities.InvitationStatusExpired, platformv1.InvitationStatus_INVITATION_STATUS_EXPIRED},
+		{entities.InvitationStatusRevoked, platformv1.InvitationStatus_INVITATION_STATUS_REVOKED},
+		{entities.InvitationStatus("garbage"), platformv1.InvitationStatus_INVITATION_STATUS_UNSPECIFIED},
+	}
+	for _, c := range cases {
+		got := invitationStatusToProto(c.in)
+		if got != c.want {
+			t.Errorf("%q: got %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestInvitationToProto_Nil(t *testing.T) {
+	if invitationToProto(nil) != nil {
+		t.Errorf("expected nil for nil input")
+	}
+}
+
+func TestContainsFold(t *testing.T) {
+	cases := []struct {
+		hay, needle string
+		want        bool
+	}{
+		{"alice@example.com", "ALICE", true},
+		{"alice@example.com", "bob", false},
+		{"AbCdEf", "cdef", true},
+		{"abc", "", true},
+	}
+	for _, c := range cases {
+		if got := containsFold(c.hay, c.needle); got != c.want {
+			t.Errorf("containsFold(%q,%q) = %v, want %v", c.hay, c.needle, got, c.want)
+		}
+	}
 }

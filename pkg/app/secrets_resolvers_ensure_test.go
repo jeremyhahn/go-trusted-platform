@@ -53,7 +53,8 @@ func (f *fakeSecretsService) GetSecret(ctx context.Context, req *baasservice.Get
 }
 
 func newResolverWithFake(fake *fakeSecretsService) *LocalSecretsResolver {
-	return NewLocalSecretsResolver(fake, slog.New(slog.DiscardHandler))
+	return NewLocalSecretsResolver(fake, slog.New(slog.DiscardHandler)).
+		WithIdentity("default", "lab-node-2")
 }
 
 // TestLocalSecretsResolver_EnsureMode_GenerateThenRead verifies that
@@ -74,7 +75,9 @@ func TestLocalSecretsResolver_EnsureMode_GenerateThenRead(t *testing.T) {
 	}
 	r := newResolverWithFake(fake)
 
-	uri := "kms://tenants/default/nodes/lab-node-2/secrets/platform/so-pin?ensure=true&len=8&enc=numeric"
+	// Short-form path — resolver auto-prepends tenants/{tenant}/nodes/{node}/secrets/
+	// from its bound identity (default, lab-node-2).
+	uri := "kms://platform/so-pin?ensure=true&len=8&enc=numeric"
 	got, err := r.Resolve(context.Background(), uri)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)

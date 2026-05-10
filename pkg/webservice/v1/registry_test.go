@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"

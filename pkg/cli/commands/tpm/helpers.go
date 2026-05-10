@@ -15,16 +15,14 @@ package tpm
 
 import (
 	"time"
-
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// formatTimestamp formats a protobuf timestamp for display
-func formatTimestamp(ts *timestamppb.Timestamp) string {
-	if ts == nil {
+// formatTimestampSeconds formats a Unix timestamp (seconds) for display
+func formatTimestampSeconds(seconds int64) string {
+	if seconds == 0 {
 		return "N/A"
 	}
-	return ts.AsTime().UTC().Format(time.RFC3339)
+	return time.Unix(seconds, 0).UTC().Format(time.RFC3339)
 }
 
 // formatBool formats a boolean for display

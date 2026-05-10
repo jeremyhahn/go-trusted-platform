@@ -6,6 +6,7 @@
 
 import type { ApiClient } from '../client/api-client.js';
 import type { RequestOptions } from '../client/api-client.js';
+import type { Transport } from '../transport/transport.js';
 import type { QueryParams } from '../types/api.js';
 
 /**
@@ -67,7 +68,7 @@ export function listOptionsToParams(options?: ListOptions): QueryParams | undefi
  * @example
  * ```typescript
  * class MyService extends BaseService {
- *   constructor(client: ApiClient) {
+ *   constructor(client: Transport | ApiClient) {
  *     super(client, '/v1/my-resource');
  *   }
  *
@@ -78,8 +79,14 @@ export function listOptionsToParams(options?: ListOptions): QueryParams | undefi
  * ```
  */
 export abstract class BaseService {
-  /** The API client instance */
-  protected readonly client: ApiClient;
+  /**
+   * Underlying transport. Typed as `Transport` so any
+   * implementation (REST/fetch, gRPC-Web, Wails IPC) can power
+   * services without code changes. Existing call sites that
+   * pass an `ApiClient` continue to work because `ApiClient`
+   * now formally implements `Transport`.
+   */
+  protected readonly client: Transport;
 
   /** The base path for this service */
   protected readonly basePath: string;
@@ -87,10 +94,12 @@ export abstract class BaseService {
   /**
    * Creates a new service instance
    *
-   * @param client - The API client to use for requests
+   * @param client - The transport to use for requests (defaults
+   *   to a REST-over-fetch ApiClient when callers don't supply
+   *   one explicitly).
    * @param basePath - The base path for all requests in this service
    */
-  constructor(client: ApiClient, basePath: string) {
+  constructor(client: Transport | ApiClient, basePath: string) {
     this.client = client;
     this.basePath = basePath;
   }

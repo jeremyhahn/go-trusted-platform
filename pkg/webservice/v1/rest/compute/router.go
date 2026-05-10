@@ -1,0 +1,142 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+// Package compute implements the REST surface for /api/v1/compute.
+//
+// All handlers delegate to a platformv1.ComputeServiceServer (the in-process
+// gRPC service implementation that backs sdk/go/services/compute via the
+// embedded transport). The REST layer never reaches into pkg/compute
+// directly — it speaks proto request/response messages, decoded from JSON
+// using protojson, so the WebUI receives the same shapes that sdk/go and
+// sdk/javascript expose.
+package compute
+
+import (
+	"github.com/gorilla/mux"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
+
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+)
+
+const (
+	// basePath is mounted under the parent /api/v1 subrouter.
+	basePath = "/compute"
+)
+
+// ComputeRouter wires REST endpoints onto a ComputeServiceServer.
+type ComputeRouter struct {
+	handlers *Handlers
+	router.WebServiceRouter
+}
+
+// NewComputeRouter constructs a router that delegates to the supplied
+// gRPC server implementation.
+func NewComputeRouter(
+	logger *logging.Logger,
+	server platformv1.ComputeServiceServer,
+	respWriter response.HttpWriter,
+) *ComputeRouter {
+	return &ComputeRouter{
+		handlers: NewHandlers(logger, server, respWriter),
+	}
+}
+
+// RegisterRoutes attaches all compute REST routes on the parent router.
+func (r *ComputeRouter) RegisterRoutes(parent *mux.Router) {
+	sr := parent.PathPrefix(basePath).Subrouter()
+	r.registerVMRoutes(sr)
+	r.registerSnapshotRoutes(sr)
+	r.registerDiskRoutes(sr)
+	r.registerContainerRoutes(sr)
+	r.registerAttestationRoutes(sr)
+}
+
+// registerVMRoutes registers virtual machine lifecycle endpoints.
+//
+//	POST   /api/v1/compute/vms                       - CreateVM
+//	GET    /api/v1/compute/vms                       - ListVMs
+//	GET    /api/v1/compute/vms/{id}                  - GetVM
+//	DELETE /api/v1/compute/vms/{id}                  - DeleteVM
+//	POST   /api/v1/compute/vms/{id}/start            - StartVM
+//	POST   /api/v1/compute/vms/{id}/stop             - StopVM
+//	POST   /api/v1/compute/vms/{id}/reboot           - RebootVM
+//	GET    /api/v1/compute/vms/{id}/metrics          - GetVMMetrics
+//	POST   /api/v1/compute/vms/{id}/migrate          - MigrateVM
+func (r *ComputeRouter) registerVMRoutes(sr *mux.Router) {
+	sr.HandleFunc("/vms", r.handlers.CreateVM).Methods("POST")
+	sr.HandleFunc("/vms", r.handlers.ListVMs).Methods("GET")
+	sr.HandleFunc("/vms/{id}", r.handlers.GetVM).Methods("GET")
+	sr.HandleFunc("/vms/{id}", r.handlers.DeleteVM).Methods("DELETE")
+	sr.HandleFunc("/vms/{id}/start", r.handlers.StartVM).Methods("POST")
+	sr.HandleFunc("/vms/{id}/stop", r.handlers.StopVM).Methods("POST")
+	sr.HandleFunc("/vms/{id}/reboot", r.handlers.RebootVM).Methods("POST")
+	sr.HandleFunc("/vms/{id}/metrics", r.handlers.GetVMMetrics).Methods("GET")
+	sr.HandleFunc("/vms/{id}/migrate", r.handlers.MigrateVM).Methods("POST")
+}
+
+// registerDiskRoutes registers VM disk attachment endpoints.
+//
+//	POST   /api/v1/compute/vms/{id}/disks            - AttachDisk
+//	DELETE /api/v1/compute/vms/{id}/disks/{diskId}   - DetachDisk
+//	PATCH  /api/v1/compute/vms/{id}/disks/{diskId}   - ResizeDisk
+func (r *ComputeRouter) registerDiskRoutes(sr *mux.Router) {
+	sr.HandleFunc("/vms/{id}/disks", r.handlers.AttachDisk).Methods("POST")
+	sr.HandleFunc("/vms/{id}/disks/{diskId}", r.handlers.DetachDisk).Methods("DELETE")
+	sr.HandleFunc("/vms/{id}/disks/{diskId}", r.handlers.ResizeDisk).Methods("PATCH")
+}
+
+// registerSnapshotRoutes registers VM snapshot endpoints.
+//
+//	POST   /api/v1/compute/vms/{id}/snapshots                       - CreateSnapshot
+//	GET    /api/v1/compute/vms/{id}/snapshots                       - ListSnapshots
+//	DELETE /api/v1/compute/vms/{id}/snapshots/{snapshotId}          - DeleteSnapshot
+//	POST   /api/v1/compute/vms/{id}/snapshots/{snapshotId}/restore  - RestoreSnapshot
+func (r *ComputeRouter) registerSnapshotRoutes(sr *mux.Router) {
+	sr.HandleFunc("/vms/{id}/snapshots", r.handlers.CreateSnapshot).Methods("POST")
+	sr.HandleFunc("/vms/{id}/snapshots", r.handlers.ListSnapshots).Methods("GET")
+	sr.HandleFunc("/vms/{id}/snapshots/{snapshotId}", r.handlers.DeleteSnapshot).Methods("DELETE")
+	sr.HandleFunc("/vms/{id}/snapshots/{snapshotId}/restore", r.handlers.RestoreSnapshot).Methods("POST")
+}
+
+// registerContainerRoutes registers container lifecycle endpoints.
+//
+//	POST   /api/v1/compute/containers                       - CreateContainer
+//	GET    /api/v1/compute/containers                       - ListContainers
+//	GET    /api/v1/compute/containers/{id}                  - GetContainer
+//	DELETE /api/v1/compute/containers/{id}                  - DeleteContainer
+//	POST   /api/v1/compute/containers/{id}/start            - StartContainer
+//	POST   /api/v1/compute/containers/{id}/stop             - StopContainer
+//	POST   /api/v1/compute/containers/{id}/exec             - ExecContainer
+//	GET    /api/v1/compute/containers/{id}/metrics          - GetContainerMetrics
+func (r *ComputeRouter) registerContainerRoutes(sr *mux.Router) {
+	sr.HandleFunc("/containers", r.handlers.CreateContainer).Methods("POST")
+	sr.HandleFunc("/containers", r.handlers.ListContainers).Methods("GET")
+	sr.HandleFunc("/containers/{id}", r.handlers.GetContainer).Methods("GET")
+	sr.HandleFunc("/containers/{id}", r.handlers.DeleteContainer).Methods("DELETE")
+	sr.HandleFunc("/containers/{id}/start", r.handlers.StartContainer).Methods("POST")
+	sr.HandleFunc("/containers/{id}/stop", r.handlers.StopContainer).Methods("POST")
+	sr.HandleFunc("/containers/{id}/exec", r.handlers.ExecContainer).Methods("POST")
+	sr.HandleFunc("/containers/{id}/metrics", r.handlers.GetContainerMetrics).Methods("GET")
+}
+
+// registerAttestationRoutes registers VM attestation endpoints.
+//
+//	POST   /api/v1/compute/vms/{id}/attest          - AttestVM
+//	POST   /api/v1/compute/vms/{id}/attest/verify   - VerifyVMAttestation
+func (r *ComputeRouter) registerAttestationRoutes(sr *mux.Router) {
+	sr.HandleFunc("/vms/{id}/attest", r.handlers.AttestVM).Methods("POST")
+	sr.HandleFunc("/vms/{id}/attest/verify", r.handlers.VerifyVMAttestation).Methods("POST")
+}

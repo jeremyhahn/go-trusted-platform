@@ -116,6 +116,12 @@ type TenantManagerInterface interface {
 	// DEK operations
 	RotateDEK(ctx context.Context, tenantID string, background bool) (*tenant.DEKRotationResult, error)
 	GetDEKStatus(ctx context.Context, tenantID string) (*tenant.DEKStatus, error)
+
+	// Per-tenant barrier operations
+	InitTenantBarrier(ctx context.Context, tenantID string) error
+	UnsealTenantBarrier(ctx context.Context, tenantID string, key []byte) error
+	SealTenantBarrier(ctx context.Context, tenantID string) error
+	TenantBarrierStatus(ctx context.Context, tenantID string) (*tenant.TenantBarrierState, error)
 }
 
 // =============================================================================
@@ -415,6 +421,73 @@ type QUICTenantDEKStatusResponse struct {
 	UsagePercent   float64 `codec:"usage_percent"`
 	NeedsRotation  bool    `codec:"needs_rotation"`
 	Timestamp      int64   `codec:"timestamp"`
+}
+
+// =============================================================================
+// Per-Tenant Barrier Wire Types
+// =============================================================================
+
+// TenantBarrierInitRequest represents a request to initialize a per-tenant barrier.
+// Threshold and Shares are optional Shamir parameters; zero values request the
+// platform default strategy configured for the tenant.
+type TenantBarrierInitRequest struct {
+	TenantID  string `codec:"tenant_id"`
+	Threshold int32  `codec:"threshold,omitempty"`
+	Shares    int32  `codec:"shares,omitempty"`
+}
+
+// TenantBarrierInitResponse represents the response of a barrier init.
+type TenantBarrierInitResponse struct {
+	TenantID  string `codec:"tenant_id"`
+	Success   bool   `codec:"success"`
+	Message   string `codec:"message,omitempty"`
+	Timestamp int64  `codec:"timestamp"`
+}
+
+// TenantBarrierUnsealRequest represents a request to unseal a per-tenant
+// barrier. An empty Key falls back to the deterministic init credential.
+type TenantBarrierUnsealRequest struct {
+	TenantID string `codec:"tenant_id"`
+	Key      []byte `codec:"key,omitempty"`
+}
+
+// TenantBarrierUnsealResponse represents the response of a barrier unseal.
+type TenantBarrierUnsealResponse struct {
+	TenantID  string `codec:"tenant_id"`
+	Success   bool   `codec:"success"`
+	Message   string `codec:"message,omitempty"`
+	Timestamp int64  `codec:"timestamp"`
+}
+
+// TenantBarrierSealRequest represents a request to seal a per-tenant barrier.
+type TenantBarrierSealRequest struct {
+	TenantID string `codec:"tenant_id"`
+}
+
+// TenantBarrierSealResponse represents the response of a barrier seal.
+type TenantBarrierSealResponse struct {
+	TenantID  string `codec:"tenant_id"`
+	Success   bool   `codec:"success"`
+	Message   string `codec:"message,omitempty"`
+	Timestamp int64  `codec:"timestamp"`
+}
+
+// TenantBarrierStatusRequest represents a request to query a per-tenant
+// barrier's current state.
+type TenantBarrierStatusRequest struct {
+	TenantID string `codec:"tenant_id"`
+}
+
+// TenantBarrierStatusResponse mirrors tenant.TenantBarrierState for the QUIC
+// transport. Uninitialized barriers report Sealed=true, Initialized=false
+// rather than erroring.
+type TenantBarrierStatusResponse struct {
+	TenantID       string `codec:"tenant_id"`
+	Sealed         bool   `codec:"sealed"`
+	Initialized    bool   `codec:"initialized"`
+	Strategy       string `codec:"strategy"`
+	HardwareBacked bool   `codec:"hardware_backed"`
+	Timestamp      int64  `codec:"timestamp"`
 }
 
 // =============================================================================
@@ -1218,6 +1291,194 @@ func (h *QUICServiceHandler) handleTenantGetDEKStatus(ctx context.Context, req *
 }
 
 // =============================================================================
+// Per-Tenant Barrier Handlers
+// =============================================================================
+
+// handleTenantBarrierCategory handles the tenant barrier category opcode
+// (OpTenantBarrierCategory, 0x9E). The first byte of the payload is the
+// sub-opcode that selects the barrier operation; the remaining bytes carry
+// the MessagePack-encoded sub-request.
+func (h *QUICServiceHandler) handleTenantBarrierCategory(ctx context.Context, req *quic.Request) *quic.Response {
+	if h.tenantManager == nil {
+		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "tenant"})
+	}
+
+	if len(req.Payload) == 0 {
+		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICMissingField{Field: "sub_opcode"})
+	}
+
+	subOpcode := req.Payload[0]
+	subPayload := req.Payload[1:]
+
+	subReq := &quic.Request{
+		Opcode:  subOpcode,
+		Token:   req.Token,
+		Payload: subPayload,
+	}
+
+	switch subOpcode {
+	case quic.TenantBarrierSubInit:
+		return h.handleTenantBarrierInit(ctx, subReq)
+	case quic.TenantBarrierSubUnseal:
+		return h.handleTenantBarrierUnseal(ctx, subReq)
+	case quic.TenantBarrierSubSeal:
+		return h.handleTenantBarrierSeal(ctx, subReq)
+	case quic.TenantBarrierSubStatus:
+		return h.handleTenantBarrierStatus(ctx, subReq)
+	default:
+		return h.errorResponse(quic.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: subOpcode})
+	}
+}
+
+// handleTenantBarrierInit handles the explicit barrier init sub-operation.
+func (h *QUICServiceHandler) handleTenantBarrierInit(ctx context.Context, req *quic.Request) *quic.Response {
+	var initReq TenantBarrierInitRequest
+	if err := quic.DecodePayload(req.Payload, &initReq); err != nil {
+		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	if initReq.TenantID == "" {
+		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "tenant_id"})
+	}
+
+	if err := h.tenantManager.InitTenantBarrier(ctx, initReq.TenantID); err != nil {
+		h.logger.Error(err, "failed to init tenant barrier", "tenant_id", initReq.TenantID)
+		return h.errorResponse(quic.StatusInternalError, ErrTenantBarrierInitFailed{TenantID: initReq.TenantID, Cause: err})
+	}
+
+	resp := &TenantBarrierInitResponse{
+		TenantID:  initReq.TenantID,
+		Success:   true,
+		Message:   "tenant barrier initialized",
+		Timestamp: time.Now().Unix(),
+	}
+
+	payload, err := quic.EncodePayload(resp)
+	if err != nil {
+		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+	}
+
+	h.logger.Info("initialized tenant barrier", "tenant_id", initReq.TenantID)
+
+	return &quic.Response{
+		Status:  quic.StatusOK,
+		Payload: payload,
+	}
+}
+
+// handleTenantBarrierUnseal handles the barrier unseal sub-operation.
+func (h *QUICServiceHandler) handleTenantBarrierUnseal(ctx context.Context, req *quic.Request) *quic.Response {
+	var unsealReq TenantBarrierUnsealRequest
+	if err := quic.DecodePayload(req.Payload, &unsealReq); err != nil {
+		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	if unsealReq.TenantID == "" {
+		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "tenant_id"})
+	}
+
+	if err := h.tenantManager.UnsealTenantBarrier(ctx, unsealReq.TenantID, unsealReq.Key); err != nil {
+		h.logger.Error(err, "failed to unseal tenant barrier", "tenant_id", unsealReq.TenantID)
+		return h.errorResponse(quic.StatusInternalError, ErrTenantBarrierUnsealFailed{TenantID: unsealReq.TenantID, Cause: err})
+	}
+
+	resp := &TenantBarrierUnsealResponse{
+		TenantID:  unsealReq.TenantID,
+		Success:   true,
+		Message:   "tenant barrier unsealed",
+		Timestamp: time.Now().Unix(),
+	}
+
+	payload, err := quic.EncodePayload(resp)
+	if err != nil {
+		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+	}
+
+	h.logger.Info("unsealed tenant barrier", "tenant_id", unsealReq.TenantID)
+
+	return &quic.Response{
+		Status:  quic.StatusOK,
+		Payload: payload,
+	}
+}
+
+// handleTenantBarrierSeal handles the barrier seal sub-operation.
+func (h *QUICServiceHandler) handleTenantBarrierSeal(ctx context.Context, req *quic.Request) *quic.Response {
+	var sealReq TenantBarrierSealRequest
+	if err := quic.DecodePayload(req.Payload, &sealReq); err != nil {
+		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	if sealReq.TenantID == "" {
+		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "tenant_id"})
+	}
+
+	if err := h.tenantManager.SealTenantBarrier(ctx, sealReq.TenantID); err != nil {
+		h.logger.Error(err, "failed to seal tenant barrier", "tenant_id", sealReq.TenantID)
+		return h.errorResponse(quic.StatusInternalError, ErrTenantBarrierSealFailed{TenantID: sealReq.TenantID, Cause: err})
+	}
+
+	resp := &TenantBarrierSealResponse{
+		TenantID:  sealReq.TenantID,
+		Success:   true,
+		Message:   "tenant barrier sealed",
+		Timestamp: time.Now().Unix(),
+	}
+
+	payload, err := quic.EncodePayload(resp)
+	if err != nil {
+		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+	}
+
+	h.logger.Warn("sealed tenant barrier", "tenant_id", sealReq.TenantID)
+
+	return &quic.Response{
+		Status:  quic.StatusOK,
+		Payload: payload,
+	}
+}
+
+// handleTenantBarrierStatus handles the barrier status sub-operation.
+func (h *QUICServiceHandler) handleTenantBarrierStatus(ctx context.Context, req *quic.Request) *quic.Response {
+	var statusReq TenantBarrierStatusRequest
+	if err := quic.DecodePayload(req.Payload, &statusReq); err != nil {
+		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	if statusReq.TenantID == "" {
+		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "tenant_id"})
+	}
+
+	state, err := h.tenantManager.TenantBarrierStatus(ctx, statusReq.TenantID)
+	if err != nil {
+		h.logger.Error(err, "failed to get tenant barrier status", "tenant_id", statusReq.TenantID)
+		return h.errorResponse(quic.StatusInternalError, ErrTenantBarrierStatusFailed{TenantID: statusReq.TenantID, Cause: err})
+	}
+	if state == nil {
+		return h.errorResponse(quic.StatusInternalError, ErrTenantBarrierStatusFailed{TenantID: statusReq.TenantID, Cause: ErrTenantBarrierNilStatus})
+	}
+
+	resp := &TenantBarrierStatusResponse{
+		TenantID:       state.TenantID,
+		Sealed:         state.Sealed,
+		Initialized:    state.Initialized,
+		Strategy:       state.Strategy,
+		HardwareBacked: state.HardwareBacked,
+		Timestamp:      time.Now().Unix(),
+	}
+
+	payload, err := quic.EncodePayload(resp)
+	if err != nil {
+		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+	}
+
+	return &quic.Response{
+		Status:  quic.StatusOK,
+		Payload: payload,
+	}
+}
+
+// =============================================================================
 // Conversion Helpers
 // =============================================================================
 
@@ -1426,3 +1687,71 @@ type ErrTenantDEKNotFound struct {
 func (e ErrTenantDEKNotFound) Error() string {
 	return "tenant DEK not found for: " + e.TenantID
 }
+
+// ErrTenantBarrierInitFailed is returned when explicit barrier init fails.
+type ErrTenantBarrierInitFailed struct {
+	TenantID string
+	Cause    error
+}
+
+func (e ErrTenantBarrierInitFailed) Error() string {
+	return "tenant barrier init failed for " + e.TenantID + ": " + e.Cause.Error()
+}
+
+func (e ErrTenantBarrierInitFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrTenantBarrierUnsealFailed is returned when barrier unseal fails.
+type ErrTenantBarrierUnsealFailed struct {
+	TenantID string
+	Cause    error
+}
+
+func (e ErrTenantBarrierUnsealFailed) Error() string {
+	return "tenant barrier unseal failed for " + e.TenantID + ": " + e.Cause.Error()
+}
+
+func (e ErrTenantBarrierUnsealFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrTenantBarrierSealFailed is returned when barrier seal fails.
+type ErrTenantBarrierSealFailed struct {
+	TenantID string
+	Cause    error
+}
+
+func (e ErrTenantBarrierSealFailed) Error() string {
+	return "tenant barrier seal failed for " + e.TenantID + ": " + e.Cause.Error()
+}
+
+func (e ErrTenantBarrierSealFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrTenantBarrierStatusFailed is returned when barrier status query fails.
+type ErrTenantBarrierStatusFailed struct {
+	TenantID string
+	Cause    error
+}
+
+func (e ErrTenantBarrierStatusFailed) Error() string {
+	return "tenant barrier status failed for " + e.TenantID + ": " + e.Cause.Error()
+}
+
+func (e ErrTenantBarrierStatusFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrTenantBarrierNilStatusType is the sentinel returned when the tenant
+// manager produces a nil barrier state without an accompanying error.
+type ErrTenantBarrierNilStatusType struct{}
+
+func (ErrTenantBarrierNilStatusType) Error() string {
+	return "tenant barrier status is nil"
+}
+
+// ErrTenantBarrierNilStatus is the singleton sentinel value used when the
+// tenant manager returns a nil status response without an error.
+var ErrTenantBarrierNilStatus = ErrTenantBarrierNilStatusType{}

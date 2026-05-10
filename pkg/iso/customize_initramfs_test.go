@@ -14,6 +14,8 @@
 package iso
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"os"
 	"path/filepath"
@@ -176,83 +178,57 @@ func TestCreateDracutModuleExtended(t *testing.T) {
 	}
 }
 
-func TestCreateAutoinstallOverlayExtended(t *testing.T) {
-	tmpDir := t.TempDir()
+// apkovlEntry holds metadata about a tar entry for test verification.
+type apkovlEntry struct {
+	mode       int64
+	content    string
+	linkTarget string
+	isDir      bool
+}
 
-	tests := []struct {
-		name    string
-		config  *PlatformISOConfig
-		wantErr bool
-	}{
-		{
-			name: "create autoinstall overlay with full verification",
-			config: &PlatformISOConfig{
-				Build: BuildOptions{
-					Debug: false,
-				},
-			},
-			wantErr: false,
-		},
+// extractApkovlEntries reads an apkovl tar.gz and returns a map of entries.
+func extractApkovlEntries(t *testing.T, path string) map[string]apkovlEntry {
+	t.Helper()
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("failed to open apkovl: %v", err)
+	}
+	defer f.Close()
+
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatalf("failed to create gzip reader: %v", err)
+	}
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+	entries := make(map[string]apkovlEntry)
+
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			break
+		}
+
+		entry := apkovlEntry{
+			mode:       hdr.Mode,
+			linkTarget: hdr.Linkname,
+			isDir:      hdr.Typeflag == tar.TypeDir,
+		}
+
+		if hdr.Typeflag == tar.TypeReg && hdr.Size > 0 {
+			buf := make([]byte, hdr.Size)
+			if _, readErr := tr.Read(buf); readErr != nil && readErr.Error() != "EOF" {
+				t.Logf("warning: partial read for %s: %v", hdr.Name, readErr)
+			}
+			entry.content = string(buf)
+		}
+
+		entries[hdr.Name] = entry
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			initramfsDir := filepath.Join(tmpDir, tt.name)
-			os.MkdirAll(initramfsDir, 0755)
-
-			customizer := NewCustomizer(tt.config, logging.DefaultLogger())
-			err := customizer.createAutoinstallOverlay(initramfsDir)
-
-			if (err != nil) != tt.wantErr {
-				t.Errorf("createAutoinstallOverlay() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-
-			if !tt.wantErr {
-				// Verify overlay directory structure
-				overlayDir := filepath.Join(initramfsDir, "overlay")
-				if _, err := os.Stat(overlayDir); os.IsNotExist(err) {
-					t.Error("overlay directory was not created")
-				}
-
-				// Verify etc/inittab was created
-				inittab := filepath.Join(overlayDir, "etc", "inittab")
-				if _, err := os.Stat(inittab); os.IsNotExist(err) {
-					t.Error("inittab was not created")
-				}
-
-				// Verify root/autoinstall.sh was created
-				autoinstall := filepath.Join(overlayDir, "root", "autoinstall.sh")
-				if _, err := os.Stat(autoinstall); os.IsNotExist(err) {
-					t.Error("autoinstall.sh was not created")
-				}
-
-				// Verify autoinstall.sh is executable
-				info, _ := os.Stat(autoinstall)
-				if info.Mode()&0100 == 0 {
-					t.Error("autoinstall.sh should be executable")
-				}
-
-				// Verify run-autoinstall.sh wrapper was created
-				wrapper := filepath.Join(overlayDir, "root", "run-autoinstall.sh")
-				if _, err := os.Stat(wrapper); os.IsNotExist(err) {
-					t.Error("run-autoinstall.sh was not created")
-				}
-
-				// Verify wrapper is executable
-				info, _ = os.Stat(wrapper)
-				if info.Mode()&0100 == 0 {
-					t.Error("run-autoinstall.sh should be executable")
-				}
-
-				// Verify inittab content
-				content, _ := os.ReadFile(inittab)
-				if !strings.Contains(string(content), "run-autoinstall.sh") {
-					t.Error("inittab should reference run-autoinstall.sh")
-				}
-			}
-		})
-	}
+	return entries
 }
 
 func TestCopyDracutModule(t *testing.T) {
@@ -306,8 +282,11 @@ func TestCopyDracutModule(t *testing.T) {
 				if !strings.Contains(string(content), "check()") {
 					t.Error("module-setup.sh should contain check() function")
 				}
-				if !strings.Contains(string(content), "inst_binary /usr/bin/platform-initrd") {
-					t.Error("module-setup.sh should install platform-initrd binary")
+				// platform-initrd is a static Go binary; the module-setup
+				// uses inst_simple instead of inst_binary because dracut's
+				// inst_binary runs ldd and fails on static binaries.
+				if !strings.Contains(string(content), "inst_simple /usr/bin/platform-initrd /usr/bin/platform-initrd") {
+					t.Error("module-setup.sh should install platform-initrd binary via inst_simple")
 				}
 
 				// Verify platformd-unlock.sh was created

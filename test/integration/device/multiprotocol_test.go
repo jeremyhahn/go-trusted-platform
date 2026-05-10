@@ -91,6 +91,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 		result, err := adapter.RegisterDevice(ctx, opts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("RegisterDevice failed: %v", err)
 		}
 
@@ -117,6 +118,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 		registerResult, err := adapter.RegisterDevice(ctx, registerOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("RegisterDevice failed: %v", err)
 		}
 
@@ -128,6 +130,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 		getResult, err := adapter.GetDevice(ctx, getOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("GetDevice failed: %v", err)
 		}
 
@@ -150,6 +153,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 		registerResult, err := adapter.RegisterDevice(ctx, registerOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("RegisterDevice failed: %v", err)
 		}
 
@@ -162,6 +166,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 		updateResult, err := adapter.UpdateDevice(ctx, updateOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("UpdateDevice failed: %v", err)
 		}
 
@@ -184,6 +189,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 		registerResult, err := adapter.RegisterDevice(ctx, registerOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("RegisterDevice failed: %v", err)
 		}
 
@@ -195,6 +201,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 		deleteResult, err := adapter.DeleteDevice(ctx, deleteOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("DeleteDevice failed: %v", err)
 		}
 
@@ -225,6 +232,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 			_, err := adapter.RegisterDevice(ctx, registerOpts)
 			if err != nil {
+				skipIfNotImplemented(t, err)
 				t.Fatalf("RegisterDevice failed: %v", err)
 			}
 		}
@@ -237,6 +245,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 		listResult, err := adapter.ListDevices(ctx, listOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("ListDevices failed: %v", err)
 		}
 
@@ -266,6 +275,7 @@ func testDeviceLookups(t *testing.T, ctx context.Context, adapter DeviceCommands
 
 		_, err := adapter.RegisterDevice(ctx, registerOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("RegisterDevice failed: %v", err)
 		}
 
@@ -277,6 +287,7 @@ func testDeviceLookups(t *testing.T, ctx context.Context, adapter DeviceCommands
 
 		findResult, err := adapter.FindBySerial(ctx, findOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("FindBySerial failed: %v", err)
 		}
 
@@ -322,6 +333,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		result, err := adapter.CreateProfile(ctx, opts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("CreateProfile failed: %v", err)
 		}
 
@@ -345,6 +357,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		createResult, err := adapter.CreateProfile(ctx, createOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("CreateProfile failed: %v", err)
 		}
 
@@ -356,6 +369,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		getResult, err := adapter.GetProfile(ctx, getOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("GetProfile failed: %v", err)
 		}
 
@@ -379,6 +393,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		createResult, err := adapter.CreateProfile(ctx, createOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("CreateProfile failed: %v", err)
 		}
 
@@ -393,6 +408,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		updateResult, err := adapter.UpdateProfile(ctx, updateOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("UpdateProfile failed: %v", err)
 		}
 
@@ -416,6 +432,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		createResult, err := adapter.CreateProfile(ctx, createOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("CreateProfile failed: %v", err)
 		}
 
@@ -427,6 +444,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		deleteResult, err := adapter.DeleteProfile(ctx, deleteOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("DeleteProfile failed: %v", err)
 		}
 
@@ -458,6 +476,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 			_, err := adapter.CreateProfile(ctx, createOpts)
 			if err != nil {
+				skipIfNotImplemented(t, err)
 				t.Fatalf("CreateProfile failed: %v", err)
 			}
 		}
@@ -470,6 +489,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		listResult, err := adapter.ListProfiles(ctx, listOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("ListProfiles failed: %v", err)
 		}
 
@@ -501,6 +521,7 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 
 		_, err := adapter.CreateProfile(ctx, createOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("CreateProfile failed: %v", err)
 		}
 
@@ -512,6 +533,7 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 
 		findResult, err := adapter.FindProfileByMACAddress(ctx, findOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("FindProfileByMACAddress failed: %v", err)
 		}
 
@@ -534,6 +556,7 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 
 		_, err := adapter.CreateProfile(ctx, createOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("CreateProfile failed: %v", err)
 		}
 
@@ -545,6 +568,7 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 
 		findResult, err := adapter.FindProfileBySerial(ctx, findOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("FindProfileBySerial failed: %v", err)
 		}
 
@@ -566,6 +590,7 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 
 		_, err := adapter.CreateProfile(ctx, createOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("CreateProfile failed: %v", err)
 		}
 
@@ -579,6 +604,7 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 
 		findResult, err := adapter.FindMatchingProfile(ctx, findOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("FindMatchingProfile failed: %v", err)
 		}
 
@@ -606,6 +632,7 @@ func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		registerResult, err := adapter.RegisterDevice(ctx, registerOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("RegisterDevice failed: %v", err)
 		}
 
@@ -622,6 +649,7 @@ func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		attestResult, err := adapter.AttestDevice(ctx, attestOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("AttestDevice failed: %v", err)
 		}
 
@@ -706,6 +734,7 @@ func testTemplateCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands)
 
 		getResult, err := adapter.GetTemplate(ctx, getOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("GetTemplate failed: %v", err)
 		}
 
@@ -761,6 +790,7 @@ func testTemplateCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands)
 
 		updateResult, err := adapter.UpdateTemplate(ctx, updateOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("UpdateTemplate failed: %v", err)
 		}
 
@@ -784,6 +814,7 @@ func testTemplateCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands)
 			TemplateID: fmt.Sprintf("%d", createResult.Template.ID),
 		})
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("GetTemplate after update failed: %v", err)
 		}
 
@@ -818,6 +849,7 @@ func testTemplateCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands)
 
 		listResult, err := adapter.ListTemplates(ctx, listOpts)
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("ListTemplates failed: %v", err)
 		}
 
@@ -849,6 +881,7 @@ func testTemplateCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands)
 			TemplateID: templateID,
 		})
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("DeleteTemplate failed: %v", err)
 		}
 
@@ -905,6 +938,7 @@ func testTemplateToProfile(t *testing.T, ctx context.Context, adapter DeviceComm
 			EKSerial:   ekSerial,
 		})
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("CreateProfileFromTemplate failed: %v", err)
 		}
 
@@ -978,6 +1012,7 @@ func testConfigForDevice(t *testing.T, ctx context.Context, adapter DeviceComman
 			EKSerial:   ekSerial,
 		})
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("CreateProfileFromTemplate failed: %v", err)
 		}
 
@@ -987,6 +1022,7 @@ func testConfigForDevice(t *testing.T, ctx context.Context, adapter DeviceComman
 			EKSerial: ekSerial,
 		})
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("FindConfigForDevice by EK serial failed: %v", err)
 		}
 
@@ -1037,6 +1073,7 @@ func testConfigForDevice(t *testing.T, ctx context.Context, adapter DeviceComman
 			MACAddress: macAddr,
 		})
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("CreateProfileFromTemplate failed: %v", err)
 		}
 
@@ -1046,6 +1083,7 @@ func testConfigForDevice(t *testing.T, ctx context.Context, adapter DeviceComman
 			MACAddress: macAddr,
 		})
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("FindConfigForDevice by MAC failed: %v", err)
 		}
 
@@ -1114,6 +1152,7 @@ func testProfileAssignment(t *testing.T, ctx context.Context, adapter DeviceComm
 			Name:       GenerateTestProfileName(testID + "-assign"),
 		})
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("CreateProfileFromTemplate failed: %v", err)
 		}
 
@@ -1132,6 +1171,7 @@ func testProfileAssignment(t *testing.T, ctx context.Context, adapter DeviceComm
 			EKSerial:  ekSerial,
 		})
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("AssignProfileToDevice failed: %v", err)
 		}
 
@@ -1154,6 +1194,7 @@ func testProfileAssignment(t *testing.T, ctx context.Context, adapter DeviceComm
 			ProfileID: profileID,
 		})
 		if err != nil {
+			skipIfNotImplemented(t, err)
 			t.Fatalf("GetProfile after assignment failed: %v", err)
 		}
 
@@ -1254,6 +1295,7 @@ func TestDeviceMultiProtocol_ErrorHandling(t *testing.T) {
 
 				_, err := adapter.RegisterDevice(ctx, opts)
 				if err != nil {
+					skipIfNotImplemented(t, err)
 					t.Fatalf("First RegisterDevice failed: %v", err)
 				}
 

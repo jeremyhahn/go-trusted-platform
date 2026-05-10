@@ -195,176 +195,134 @@ func (c *mcpClientConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, me
 }
 
 // grpcMethodToMCPToolMap provides O(1) lookup for gRPC method to MCP tool mapping.
+// Method paths use the proto package "platform.v1" (with dot) and full RPC names
+// matching the generated gRPC stubs. Tool names mirror those registered server-side
+// by pkg/api/mcp/tools.go so adapter and server stay in lockstep.
 var grpcMethodToMCPToolMap = map[string]string{
-	// Health Operations
-	"/platformv1.PlatformDaemon/Health":    "platform.health",
-	"/platformv1.PlatformDaemon/Liveness":  "platform.liveness",
-	"/platformv1.PlatformDaemon/Readiness": "platform.readiness",
-	"/platformv1.PlatformDaemon/GetStatus": "platform.status",
+	// Daemon / Health — proto: pkg/api/grpc/proto/daemon.proto
+	"/platform.v1.PlatformDaemon/GetHealth":        "platform_health",
+	"/platform.v1.PlatformDaemon/GetStatus":        "platform_daemon_status",
+	"/platform.v1.PlatformDaemon/GetVersion":       "platform_daemon_version",
+	"/platform.v1.PlatformDaemon/ListServices":     "platform_daemon_list_services",
+	"/platform.v1.PlatformDaemon/GetServiceStatus": "platform_daemon_get_service",
+	"/platform.v1.PlatformDaemon/StartService":     "platform_daemon_start_service",
+	"/platform.v1.PlatformDaemon/StopService":      "platform_daemon_stop_service",
+	"/platform.v1.PlatformDaemon/RestartService":   "platform_daemon_restart_service",
 
-	// CA Service
-	"/platformv1.CAService/GetInfo":   "ca.info",
-	"/platformv1.CAService/Issue":     "ca.issue",
-	"/platformv1.CAService/Get":       "ca.get",
-	"/platformv1.CAService/List":      "ca.list",
-	"/platformv1.CAService/Revoke":    "ca.revoke",
-	"/platformv1.CAService/Renew":     "ca.renew",
-	"/platformv1.CAService/Verify":    "ca.verify",
-	"/platformv1.CAService/GetCRL":    "ca.crl",
-	"/platformv1.CAService/GetBundle": "ca.bundle",
+	// CA Service — proto: pkg/api/grpc/proto/ca.proto
+	"/platform.v1.CAService/GetCAInfo":         "ca_info",
+	"/platform.v1.CAService/IssueCertificate":  "ca_issue",
+	"/platform.v1.CAService/GetCertificate":    "ca_get",
+	"/platform.v1.CAService/ListCertificates":  "ca_list",
+	"/platform.v1.CAService/RevokeCertificate": "ca_revoke",
+	"/platform.v1.CAService/RenewCertificate":  "ca_renew",
+	"/platform.v1.CAService/VerifyCertificate": "ca_verify",
+	"/platform.v1.CAService/GetCRL":            "ca_crl",
+	"/platform.v1.CAService/GetCABundle":       "ca_bundle",
 
-	// IAM User Operations
-	"/platformv1.PlatformIAMService/CreateUser": "iam.user.create",
-	"/platformv1.PlatformIAMService/DeleteUser": "iam.user.delete",
-	"/platformv1.PlatformIAMService/GetUser":    "iam.user.get",
-	"/platformv1.PlatformIAMService/ListUsers":  "iam.user.list",
+	// IAM User Operations — proto: pkg/api/grpc/proto/iam.proto
+	"/platform.v1.PlatformIAMService/CreateUser": "iam_create_user",
+	"/platform.v1.PlatformIAMService/DeleteUser": "iam_delete_user",
+	"/platform.v1.PlatformIAMService/GetUser":    "iam_get_user",
+	"/platform.v1.PlatformIAMService/ListUsers":  "iam_list_users",
 
 	// IAM Role Operations
-	"/platformv1.PlatformIAMService/CreateRole": "iam.role.create",
-	"/platformv1.PlatformIAMService/DeleteRole": "iam.role.delete",
-	"/platformv1.PlatformIAMService/GetRole":    "iam.role.get",
-	"/platformv1.PlatformIAMService/ListRoles":  "iam.role.list",
-	"/platformv1.PlatformIAMService/AssignRole": "iam.role.assign",
-	"/platformv1.PlatformIAMService/RevokeRole": "iam.role.revoke",
+	"/platform.v1.PlatformIAMService/CreateRole": "iam_create_role",
+	"/platform.v1.PlatformIAMService/DeleteRole": "iam_delete_role",
+	"/platform.v1.PlatformIAMService/GetRole":    "iam_get_role",
+	"/platform.v1.PlatformIAMService/ListRoles":  "iam_list_roles",
+	"/platform.v1.PlatformIAMService/AssignRole": "iam_assign_role",
+	"/platform.v1.PlatformIAMService/RevokeRole": "iam_revoke_role",
 
 	// IAM Group Operations
-	"/platformv1.PlatformIAMService/CreateGroup":       "iam.group.create",
-	"/platformv1.PlatformIAMService/DeleteGroup":       "iam.group.delete",
-	"/platformv1.PlatformIAMService/GetGroup":          "iam.group.get",
-	"/platformv1.PlatformIAMService/ListGroups":        "iam.group.list",
-	"/platformv1.PlatformIAMService/AddGroupMember":    "iam.group.add_member",
-	"/platformv1.PlatformIAMService/RemoveGroupMember": "iam.group.remove_member",
+	"/platform.v1.PlatformIAMService/CreateGroup":       "iam_create_group",
+	"/platform.v1.PlatformIAMService/DeleteGroup":       "iam_delete_group",
+	"/platform.v1.PlatformIAMService/GetGroup":          "iam_get_group",
+	"/platform.v1.PlatformIAMService/ListGroups":        "iam_list_groups",
+	"/platform.v1.PlatformIAMService/AddGroupMember":    "iam_add_group_member",
+	"/platform.v1.PlatformIAMService/RemoveGroupMember": "iam_remove_group_member",
 
 	// IAM Tenant Operations
-	"/platformv1.PlatformIAMService/CreateTenant": "iam.tenant.create",
-	"/platformv1.PlatformIAMService/DeleteTenant": "iam.tenant.delete",
-	"/platformv1.PlatformIAMService/GetTenant":    "iam.tenant.get",
-	"/platformv1.PlatformIAMService/ListTenants":  "iam.tenant.list",
+	"/platform.v1.PlatformIAMService/CreateTenant": "iam_create_tenant",
+	"/platform.v1.PlatformIAMService/DeleteTenant": "iam_delete_tenant",
+	"/platform.v1.PlatformIAMService/GetTenant":    "iam_get_tenant",
+	"/platform.v1.PlatformIAMService/ListTenants":  "iam_list_tenants",
 
-	// IAM Auth Operations
-	"/platformv1.PlatformIAMService/Authenticate":    "iam.authenticate",
-	"/platformv1.PlatformIAMService/CheckPermission": "iam.check_permission",
-	"/platformv1.PlatformIAMService/CreateToken":     "iam.token.create",
-	"/platformv1.PlatformIAMService/RevokeToken":     "iam.token.revoke",
-	"/platformv1.PlatformIAMService/VerifyToken":     "iam.token.verify",
+	// IAM Token / Auth Operations
+	"/platform.v1.PlatformIAMService/Authenticate":    "iam_authenticate",
+	"/platform.v1.PlatformIAMService/CheckPermission": "iam_check_permission",
+	"/platform.v1.PlatformIAMService/CreateToken":     "iam_create_token",
+	"/platform.v1.PlatformIAMService/RevokeToken":     "iam_revoke_token",
+	"/platform.v1.PlatformIAMService/VerifyToken":     "iam_verify_token",
 
-	// KMS Key Management
-	"/platformv1.KeyManagementService/CreateKey":              "kms.key.create",
-	"/platformv1.KeyManagementService/DeleteKey":              "kms.key.delete",
-	"/platformv1.KeyManagementService/GetKey":                 "kms.key.get",
-	"/platformv1.KeyManagementService/ListKeys":               "kms.key.list",
-	"/platformv1.KeyManagementService/RotateKey":              "kms.key.rotate",
-	"/platformv1.KeyManagementService/Encrypt":                "kms.encrypt",
-	"/platformv1.KeyManagementService/Decrypt":                "kms.decrypt",
-	"/platformv1.KeyManagementService/Sign":                   "kms.sign",
-	"/platformv1.KeyManagementService/Verify":                 "kms.verify",
-	"/platformv1.KeyManagementService/GenerateRandom":         "kms.random",
-	"/platformv1.KeyManagementService/GenerateDataKey":        "kms.datakey.generate",
-	"/platformv1.KeyManagementService/GenerateWrappedDataKey": "kms.datakey.generate_wrapped",
+	// KMS — proto: pkg/api/grpc/proto/kms.proto
+	"/platform.v1.KeyManagementService/GenerateKey":            "kms_create_key",
+	"/platform.v1.KeyManagementService/DeleteKey":              "kms_delete_key",
+	"/platform.v1.KeyManagementService/GetKey":                 "kms_get_key",
+	"/platform.v1.KeyManagementService/ListKeys":               "kms_list_keys",
+	"/platform.v1.KeyManagementService/RotateKey":              "kms_rotate_key",
+	"/platform.v1.KeyManagementService/Encrypt":                "kms_encrypt",
+	"/platform.v1.KeyManagementService/Decrypt":                "kms_decrypt",
+	"/platform.v1.KeyManagementService/Sign":                   "kms_sign",
+	"/platform.v1.KeyManagementService/Verify":                 "kms_verify",
+	"/platform.v1.KeyManagementService/GenerateRandom":         "kms_random",
+	"/platform.v1.KeyManagementService/GenerateDataKey":        "kms_generate_data_key",
+	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": "kms_generate_wrapped_data_key",
 
-	// VTPM Operations
-	"/platformv1.VTPMService/Create":    "vtpm.create",
-	"/platformv1.VTPMService/Delete":    "vtpm.delete",
-	"/platformv1.VTPMService/Start":     "vtpm.start",
-	"/platformv1.VTPMService/Stop":      "vtpm.stop",
-	"/platformv1.VTPMService/List":      "vtpm.list",
-	"/platformv1.VTPMService/GetState":  "vtpm.state",
-	"/platformv1.VTPMService/Quote":     "vtpm.quote",
-	"/platformv1.VTPMService/Seal":      "vtpm.seal",
-	"/platformv1.VTPMService/Unseal":    "vtpm.unseal",
-	"/platformv1.VTPMService/ExtendPCR": "vtpm.pcr.extend",
-	"/platformv1.VTPMService/ReadPCR":   "vtpm.pcr.read",
+	// vTPM — proto: pkg/api/grpc/proto/vtpm.proto
+	"/platform.v1.VTPMInstanceService/CreateInstance":    "vtpm_create",
+	"/platform.v1.VTPMInstanceService/DeleteInstance":    "vtpm_delete",
+	"/platform.v1.VTPMInstanceService/StartInstance":     "vtpm_start",
+	"/platform.v1.VTPMInstanceService/StopInstance":      "vtpm_stop",
+	"/platform.v1.VTPMInstanceService/ListInstances":     "vtpm_list",
+	"/platform.v1.VTPMInstanceService/GetInstanceStatus": "vtpm_state",
+	"/platform.v1.VTPMService/QuoteVTPM":                 "vtpm_quote",
+	"/platform.v1.VTPMService/SealVTPM":                  "vtpm_seal",
+	"/platform.v1.VTPMService/UnsealVTPM":                "vtpm_unseal",
+	"/platform.v1.VTPMService/ExtendVTPMPCR":             "vtpm_extend_pcr",
+	"/platform.v1.VTPMService/ReadVTPMPCR":               "vtpm_read_pcr",
 
-	// Device Operations
-	"/platformv1.DeviceService/Register": "device.register",
-	"/platformv1.DeviceService/Delete":   "device.delete",
-	"/platformv1.DeviceService/Get":      "device.get",
-	"/platformv1.DeviceService/List":     "device.list",
-	"/platformv1.DeviceService/Update":   "device.update",
-	"/platformv1.DeviceService/Attest":   "device.attest",
+	// Device — proto: pkg/api/grpc/proto/device.proto
+	"/platform.v1.DeviceService/CreateDevice": "device_register",
+	"/platform.v1.DeviceService/DeleteDevice": "device_unregister",
+	"/platform.v1.DeviceService/GetDevice":    "device_get",
+	"/platform.v1.DeviceService/ListDevices":  "device_list",
+	"/platform.v1.DeviceService/UpdateDevice": "device_update",
 
-	// SDN Operations
-	"/platformv1.SDNService/CreateBridge":     "sdn.bridge.create",
-	"/platformv1.SDNService/DeleteBridge":     "sdn.bridge.delete",
-	"/platformv1.SDNService/ListBridges":      "sdn.bridge.list",
-	"/platformv1.SDNService/GetPortState":     "sdn.port.get_state",
-	"/platformv1.SDNService/SetPortState":     "sdn.port.set_state",
-	"/platformv1.SDNService/AddPort":          "sdn.port.add",
-	"/platformv1.SDNService/DeletePort":       "sdn.port.delete",
-	"/platformv1.SDNService/AddFlow":          "sdn.flow.add",
-	"/platformv1.SDNService/DeleteFlow":       "sdn.flow.delete",
-	"/platformv1.SDNService/ListFlows":        "sdn.flow.list",
-	"/platformv1.SDNService/ApplyPolicy":      "sdn.policy.apply",
-	"/platformv1.SDNService/GetPolicy":        "sdn.policy.get",
-	"/platformv1.SDNService/ListPolicies":     "sdn.policy.list",
-	"/platformv1.SDNService/AuthenticatePort": "sdn.port.authenticate",
+	// SDN — proto: pkg/api/grpc/proto/sdn.proto
+	"/platform.v1.SDNService/CreateBridge": "sdn_create_bridge",
+	"/platform.v1.SDNService/DeleteBridge": "sdn_delete_bridge",
+	"/platform.v1.SDNService/ListBridges":  "sdn_list_bridges",
+	"/platform.v1.SDNService/AddFlow":      "sdn_add_flow",
+	"/platform.v1.SDNService/DeleteFlow":   "sdn_delete_flow",
+	"/platform.v1.SDNService/ListFlows":    "sdn_list_flows",
 
-	// DNS Operations
-	"/platformv1.DNSService/AddRecord":    "dns.record.add",
-	"/platformv1.DNSService/DeleteRecord": "dns.record.delete",
-	"/platformv1.DNSService/GetRecord":    "dns.record.get",
-	"/platformv1.DNSService/ListRecords":  "dns.record.list",
-	"/platformv1.DNSService/Resolve":      "dns.resolve",
-	"/platformv1.DNSService/CreateZone":   "dns.zone.create",
-	"/platformv1.DNSService/DeleteZone":   "dns.zone.delete",
-	"/platformv1.DNSService/ListZones":    "dns.zone.list",
+	// DNS — proto: pkg/api/grpc/proto/platform_dns.proto
+	"/platform.v1.DNSService/AddRecord":    "dns_add_record",
+	"/platform.v1.DNSService/DeleteRecord": "dns_delete_record",
+	"/platform.v1.DNSService/ListRecords":  "dns_list_records",
+	"/platform.v1.DNSService/Resolve":      "dns_resolve",
+	"/platform.v1.DNSService/CreateZone":   "dns_create_zone",
+	"/platform.v1.DNSService/DeleteZone":   "dns_delete_zone",
+	"/platform.v1.DNSService/ListZones":    "dns_list_zones",
 
-	// Attestation Operations
-	"/platformv1.AttestationService/GetQuote":       "attestation.quote",
-	"/platformv1.AttestationService/VerifyQuote":    "attestation.verify",
-	"/platformv1.AttestationService/GetEK":          "attestation.ek",
-	"/platformv1.AttestationService/GetAK":          "attestation.ak",
-	"/platformv1.AttestationService/CreateAK":       "attestation.ak.create",
-	"/platformv1.AttestationService/ChallengeAK":    "attestation.challenge",
-	"/platformv1.AttestationService/VerifyChalleng": "attestation.challenge.verify",
+	// Tenant — proto: pkg/api/grpc/proto/tenant.proto
+	"/platform.v1.TenantService/CreateTenant":  "tenant_create",
+	"/platform.v1.TenantService/DeleteTenant":  "tenant_delete",
+	"/platform.v1.TenantService/GetTenant":     "tenant_get",
+	"/platform.v1.TenantService/ListTenants":   "tenant_list",
+	"/platform.v1.TenantService/UpdateTenant":  "tenant_update",
+	"/platform.v1.TenantService/SuspendTenant": "tenant_suspend",
+	"/platform.v1.TenantService/ResumeTenant":  "tenant_resume",
 
-	// IDevID Operations
-	"/platformv1.IDevIDService/Generate":    "idevid.generate",
-	"/platformv1.IDevIDService/GetInfo":     "idevid.info",
-	"/platformv1.IDevIDService/Delete":      "idevid.delete",
-	"/platformv1.IDevIDService/GetCSR":      "idevid.csr",
-	"/platformv1.IDevIDService/InstallCert": "idevid.cert.install",
-	"/platformv1.IDevIDService/GetCert":     "idevid.cert.get",
-	"/platformv1.IDevIDService/Exists":      "idevid.exists",
-
-	// IAK Operations
-	"/platformv1.IAKService/Generate":    "iak.generate",
-	"/platformv1.IAKService/GetInfo":     "iak.info",
-	"/platformv1.IAKService/Delete":      "iak.delete",
-	"/platformv1.IAKService/GetCSR":      "iak.csr",
-	"/platformv1.IAKService/InstallCert": "iak.cert.install",
-	"/platformv1.IAKService/GetCert":     "iak.cert.get",
-	"/platformv1.IAKService/Exists":      "iak.exists",
-
-	// Tenant Operations
-	"/platformv1.TenantService/Create":       "tenant.create",
-	"/platformv1.TenantService/Delete":       "tenant.delete",
-	"/platformv1.TenantService/Get":          "tenant.get",
-	"/platformv1.TenantService/List":         "tenant.list",
-	"/platformv1.TenantService/Update":       "tenant.update",
-	"/platformv1.TenantService/Suspend":      "tenant.suspend",
-	"/platformv1.TenantService/Resume":       "tenant.resume",
-	"/platformv1.TenantService/GetQuotas":    "tenant.quotas.get",
-	"/platformv1.TenantService/UpdateQuotas": "tenant.quotas.update",
-
-	// PXE Operations
-	"/platformv1.PXEService/ListDevices":    "pxe.device.list",
-	"/platformv1.PXEService/GetDevice":      "pxe.device.get",
-	"/platformv1.PXEService/RegisterDevice": "pxe.device.register",
-	"/platformv1.PXEService/UpdateState":    "pxe.device.update_state",
-	"/platformv1.PXEService/Authorize":      "pxe.device.authorize",
-	"/platformv1.PXEService/Quarantine":     "pxe.device.quarantine",
-	"/platformv1.PXEService/GetStatus":      "pxe.status",
-
-	// Compute/Container Operations
-	"/platformv1.ComputeService/CreateContainer":  "container.create",
-	"/platformv1.ComputeService/DeleteContainer":  "container.delete",
-	"/platformv1.ComputeService/StartContainer":   "container.start",
-	"/platformv1.ComputeService/StopContainer":    "container.stop",
-	"/platformv1.ComputeService/ListContainers":   "container.list",
-	"/platformv1.ComputeService/GetContainer":     "container.get",
-	"/platformv1.ComputeService/AttestContainer":  "container.attest",
-	"/platformv1.ComputeService/GetContainerLogs": "container.logs",
+	// Compute / Container — proto: pkg/api/grpc/proto/compute.proto
+	"/platform.v1.ComputeService/CreateContainer":  "container_create",
+	"/platform.v1.ComputeService/DeleteContainer":  "container_delete",
+	"/platform.v1.ComputeService/StartContainer":   "container_start",
+	"/platform.v1.ComputeService/StopContainer":    "container_stop",
+	"/platform.v1.ComputeService/ListContainers":   "container_list",
+	"/platform.v1.ComputeService/GetContainer":     "container_get",
+	"/platform.v1.ComputeService/GetContainerLogs": "container_logs",
 }
 
 // mcpErrorCodeToGRPCMap provides O(1) lookup for MCP error codes to gRPC codes.

@@ -36,13 +36,32 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useApi, useTPM, useToast } from "@/hooks";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { useApi, useIDevID, useTPM, useToast } from "@/hooks";
 import type { KeyAlgorithm } from "trusted-platform-sdk";
 
 /**
- * TPM Key types
+ * TPM Key types — covers the full TCG-prescribed key inventory of a
+ * provisioned trusted-platform node.
+ *
+ *   EK         — Endorsement Key (manufacturer identity)              0x81010001
+ *   SSRK       — Storage hierarchy Storage Root Key                   0x81000001
+ *   PSRK       — Platform hierarchy Storage Root Key                  0x81000002
+ *   IAK        — Initial Attestation Key (TCG IAK)                    0x81010002
+ *   IDevID     — Initial Device Identifier (TCG IDevID)               0x81020000
+ *
+ * "AK" was the legacy lump-sum label used before the dedicated
+ * IAK/IDevID services landed. We keep it as an alias for IAK so
+ * existing dropdown/badge components continue to compile, but the
+ * row-rendering code drives off the explicit type names.
  */
-type TPMKeyType = "EK" | "SRK" | "AK";
+type TPMKeyType = "EK" | "SRK" | "PSRK" | "AK" | "IAK" | "IDevID";
 type TPMKeyStatus = "active" | "disabled" | "pending";
 
 interface TPMKey {
@@ -55,6 +74,7 @@ interface TPMKey {
   publicKey: string;
   createdAt: string;
   parentHandle?: string;
+  certificatePresent?: boolean;
 }
 
 /**
@@ -65,9 +85,62 @@ interface TPMKey {
  * - Display key details and attributes
  * - Public key hash viewing
  */
+// detailedKey carries everything the View Details dialog needs to
+// display: the full public key (PEM, never just a hash), the X.509
+// certificate chain when one exists, and the attestation flags
+// reported by the server. Populated lazily when the operator
+// clicks the View Details menu item — fetching certs eagerly for
+// every refresh would force a TPM round-trip per key on every
+// page mount.
+interface DetailedKey {
+  key: TPMKey;
+  certificatePem: string | null;
+  certificateLoading: boolean;
+  certificateError: string | null;
+}
+
 export default function TPMKeysPage() {
   const { toast } = useToast();
   const tpm = useTPM();
+  const idevid = useIDevID();
+  const [detail, setDetail] = React.useState<DetailedKey | null>(null);
+
+  // openDetail fetches the certificate (when this key type carries
+  // one) and opens the modal. EK pulls from /tpm/ek/certificate; IAK
+  // and IDevID pull from /idevid/iak/certificate and
+  // /idevid/certificate respectively. SRK/PSRK do not carry x509
+  // certificates by design (they're storage hierarchy primaries),
+  // so we render their public key only.
+  const openDetail = React.useCallback(
+    async (key: TPMKey) => {
+      setDetail({ key, certificatePem: null, certificateLoading: true, certificateError: null });
+      try {
+        let pem: string | null = null;
+        if (key.type === "EK") {
+          const resp: any = await tpm.getEKCertificate();
+          const cert = resp?.data ?? resp;
+          pem = cert?.certificatePem || cert?.certificate || null;
+        } else if (key.type === "IAK") {
+          const resp: any = await idevid.getIAKCertificate();
+          const cert = resp?.data ?? resp;
+          pem = cert?.certificatePem || cert?.certificate || null;
+        } else if (key.type === "IDevID") {
+          const resp: any = await idevid.getIDevIDCertificate();
+          const cert = resp?.data ?? resp;
+          pem = cert?.certificatePem || cert?.certificate?.pem || cert?.certificate || null;
+        }
+        setDetail({ key, certificatePem: pem, certificateLoading: false, certificateError: null });
+      } catch (err: any) {
+        setDetail({
+          key,
+          certificatePem: null,
+          certificateLoading: false,
+          certificateError: err?.message || "Failed to load certificate",
+        });
+      }
+    },
+    [tpm, idevid],
+  );
 
   const {
     data: ekData,
@@ -91,19 +164,59 @@ export default function TPMKeysPage() {
     { onError: () => {} }
   );
 
+  // Fetch the PlatformSRK at handle 0x81000002 as a separate query.
+  // The server's GetSRK handler now respects req.Handle (see
+  // pkg/api/daemon/tpm_grpc_service.go::GetSRK), defaulting to the
+  // SSRK (0x81000001) when unset for back-compat. Without this
+  // second fetch the Keys page only shows 4 of 5 TCG-prescribed
+  // handles.
   const {
-    data: akData,
-    isLoading: akLoading,
-    error: akError,
-    refetch: refetchAK,
+    data: platformSRKData,
+    isLoading: psrkLoading,
+    error: psrkError,
+    refetch: refetchPSRK,
   } = useApi(
-    () => tpm.getAK().catch(() => ({ success: false, data: null })),
+    () =>
+      tpm
+        .getSRK({ handle: 0x81000002 } as any)
+        .catch(() => ({ success: false, data: null })),
     [],
     { onError: () => {} }
   );
 
-  const loading = ekLoading || srkLoading || akLoading;
-  const error = ekError || srkError || akError;
+  // Dedicated IAK fetch via the IDevIDService endpoint. This is the
+  // canonical IAK info path — it returns the actual algorithm
+  // (DEVICE_KEY_ALGORITHM_ECDSA_P256) and the certificate-present
+  // flag. The legacy /tpm/ak endpoint reports the same persistent
+  // handle (0x81010002) but with a stale algorithm label, so we
+  // prefer this one.
+  const {
+    data: iakInfo,
+    isLoading: iakLoading,
+    error: iakError,
+    refetch: refetchIAK,
+  } = useApi(
+    () => idevid.getIAKInfo().catch(() => ({ success: false, data: null })),
+    [],
+    { onError: () => {} }
+  );
+
+  // IDevID via the IDevIDService. Without this the Keys page only
+  // renders 3 of the 5 TCG-prescribed handles; production audits
+  // expect to see the IDevID row.
+  const {
+    data: idevidInfo,
+    isLoading: idevidLoading,
+    error: idevidError,
+    refetch: refetchIDevID,
+  } = useApi(
+    () => idevid.getIDevIDInfo().catch(() => ({ success: false, data: null })),
+    [],
+    { onError: () => {} }
+  );
+
+  const loading = ekLoading || srkLoading || psrkLoading || iakLoading || idevidLoading;
+  const error = ekError || srkError || psrkError || iakError || idevidError;
 
   const keys: TPMKey[] = React.useMemo(() => {
     const result: TPMKey[] = [];
@@ -124,7 +237,7 @@ export default function TPMKeysPage() {
     if (srkData?.publicKey) {
       result.push({
         id: "srk",
-        name: "Storage Root Key",
+        name: "Storage Root Key (SSRK)",
         type: "SRK",
         algorithm: srkData.algorithm,
         status: "active",
@@ -134,26 +247,61 @@ export default function TPMKeysPage() {
       });
     }
 
-    if (akData?.publicKey) {
+    if (platformSRKData?.publicKey) {
       result.push({
-        id: "ak",
-        name: "Attestation Key",
-        type: "AK",
-        algorithm: akData.algorithm,
+        id: "psrk",
+        name: "Platform Storage Root Key (PSRK)",
+        type: "PSRK",
+        algorithm: platformSRKData.algorithm,
         status: "active",
-        handle: akData.handle,
-        publicKey: akData.publicKey,
+        handle: platformSRKData.handle,
+        publicKey: platformSRKData.publicKey,
         createdAt: new Date().toISOString(),
       });
     }
 
+    // IAK row — surface algorithm + certificate-present flag from
+    // the dedicated info struct rather than the legacy /tpm/ak path.
+    const iak: any = (iakInfo as any)?.keyInfo;
+    if (iak?.handle) {
+      result.push({
+        id: "iak",
+        name: "Initial Attestation Key (IAK)",
+        type: "IAK",
+        algorithm: iak.algorithm,
+        status: "active",
+        handle: iak.handle,
+        publicKey: iak.publicKeyPem || "",
+        createdAt: iak.createdAt || new Date().toISOString(),
+        certificatePresent: iak.hasCertificate === true,
+      });
+    }
+
+    // IDevID row — same shape; reads from the IDevIDService.
+    const idv: any = (idevidInfo as any)?.keyInfo;
+    if (idv?.handle) {
+      result.push({
+        id: "idevid",
+        name: "Initial Device Identifier (IDevID)",
+        type: "IDevID",
+        algorithm: idv.algorithm,
+        status: "active",
+        handle: idv.handle,
+        publicKey: idv.publicKeyPem || "",
+        createdAt: idv.createdAt || new Date().toISOString(),
+        certificatePresent: idv.hasCertificate === true,
+      });
+    }
+
     return result;
-  }, [ekData, srkData, akData]);
+  }, [ekData, srkData, platformSRKData, iakInfo, idevidInfo]);
 
   const handleRefresh = () => {
     refetchEK();
     refetchSRK();
-    refetchAK();
+    refetchPSRK();
+    refetchIAK();
+    refetchIDevID();
   };
 
   const getKeyTypeIcon = (type: TPMKeyType) => {
@@ -161,8 +309,11 @@ export default function TPMKeysPage() {
       case "EK":
         return <Fingerprint className="h-4 w-4" />;
       case "SRK":
+      case "PSRK":
         return <Lock className="h-4 w-4" />;
       case "AK":
+      case "IAK":
+      case "IDevID":
         return <Shield className="h-4 w-4" />;
     }
   };
@@ -195,8 +346,9 @@ export default function TPMKeysPage() {
     return {
       total: keys.length,
       ek: keys.filter((k) => k.type === "EK").length,
-      srk: keys.filter((k) => k.type === "SRK").length,
-      ak: keys.filter((k) => k.type === "AK").length,
+      srk: keys.filter((k) => k.type === "SRK" || k.type === "PSRK").length,
+      ak: keys.filter((k) => k.type === "AK" || k.type === "IAK").length,
+      idevid: keys.filter((k) => k.type === "IDevID").length,
     };
   }, [keys]);
 
@@ -230,7 +382,7 @@ export default function TPMKeysPage() {
       )}
 
       {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Keys</CardTitle>
@@ -238,6 +390,7 @@ export default function TPMKeysPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{keyStats.total}</div>
+            <p className="text-xs text-muted-foreground">of 5 expected</p>
           </CardContent>
         </Card>
 
@@ -270,7 +423,18 @@ export default function TPMKeysPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{keyStats.ak}</div>
-            <p className="text-xs text-muted-foreground">TPM quotes</p>
+            <p className="text-xs text-muted-foreground">TPM quotes (IAK)</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Device Identifier</CardTitle>
+            <Shield className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{keyStats.idevid}</div>
+            <p className="text-xs text-muted-foreground">IDevID (TCG)</p>
           </CardContent>
         </Card>
 
@@ -353,7 +517,7 @@ export default function TPMKeysPage() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => openDetail(key)}>
                               <Eye className="mr-2 h-4 w-4" />
                               View Details
                             </DropdownMenuItem>
@@ -412,6 +576,125 @@ export default function TPMKeysPage() {
           </div>
         </CardContent>
       </Card>
+
+      <Dialog open={detail !== null} onOpenChange={(o) => { if (!o) setDetail(null); }}>
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+          {detail && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  {getKeyTypeIcon(detail.key.type)}
+                  {detail.key.name}
+                </DialogTitle>
+                <DialogDescription>
+                  Persistent handle <code className="font-mono">0x{detail.key.handle.toString(16).toUpperCase().padStart(8, "0")}</code> &middot; {detail.key.algorithm}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-5">
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <div className="text-muted-foreground">Type</div>
+                    <Badge variant="outline">{detail.key.type}</Badge>
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground">Status</div>
+                    <Badge variant={getStatusBadgeVariant(detail.key.status)}>{detail.key.status}</Badge>
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground">Parent Handle</div>
+                    <code className="font-mono text-xs">{detail.key.parentHandle || "—"}</code>
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground">Certificate</div>
+                    <span className="text-xs">
+                      {detail.key.certificatePresent === false
+                        ? "not provisioned"
+                        : detail.key.certificatePresent === true
+                          ? "present"
+                          : detail.key.type === "EK"
+                            ? "manufacturer-issued"
+                            : "—"}
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-medium">Public Key (PEM)</span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => copyToClipboard(detail.key.publicKey)}
+                      disabled={!detail.key.publicKey}
+                    >
+                      <Copy className="h-3 w-3 mr-1" /> Copy
+                    </Button>
+                  </div>
+                  <pre className="bg-muted p-3 rounded text-xs font-mono whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
+                    {detail.key.publicKey || "(no public key surfaced)"}
+                  </pre>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-medium">X.509 Certificate</span>
+                    {detail.certificatePem && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => copyToClipboard(detail.certificatePem || "")}
+                      >
+                        <Copy className="h-3 w-3 mr-1" /> Copy PEM
+                      </Button>
+                    )}
+                  </div>
+                  {detail.certificateLoading ? (
+                    <div className="flex items-center gap-2 text-muted-foreground text-sm py-3">
+                      <Loader2 className="h-4 w-4 animate-spin" /> Fetching certificate from TPM…
+                    </div>
+                  ) : detail.certificateError ? (
+                    <div className="flex items-center gap-2 p-3 bg-destructive/10 border border-destructive rounded">
+                      <AlertCircle className="h-4 w-4 text-destructive" />
+                      <span className="text-xs text-destructive">{detail.certificateError}</span>
+                    </div>
+                  ) : detail.certificatePem ? (
+                    <pre className="bg-muted p-3 rounded text-xs font-mono whitespace-pre-wrap break-all max-h-72 overflow-y-auto">
+                      {decodeCertificatePem(detail.certificatePem)}
+                    </pre>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      No certificate is provisioned for this key.{" "}
+                      {detail.key.type === "SRK" || detail.key.type === "PSRK"
+                        ? "Storage hierarchy primaries do not carry x509 certificates."
+                        : detail.key.type === "EK"
+                          ? "Some TPMs ship with the EK cert in NV index 0x1c00002 — try Provision → Read NV."
+                          : "Use the Issue Certificate flow to provision one."}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
+}
+
+// decodeCertificatePem normalizes the certificate payload returned
+// by the server. /tpm/ek/certificate returns raw DER (base64-
+// encoded by protojson); /idevid/certificate returns either DER or
+// already-PEM-wrapped depending on which endpoint variant the
+// platform exposed. This helper detects and re-wraps DER into a
+// proper PEM block so the dialog never displays unprintable bytes.
+function decodeCertificatePem(payload: string): string {
+  if (!payload) return "";
+  if (payload.startsWith("-----BEGIN")) return payload;
+  // Treat as base64-encoded DER and rewrap.
+  const lines: string[] = [];
+  for (let i = 0; i < payload.length; i += 64) {
+    lines.push(payload.slice(i, i + 64));
+  }
+  return ["-----BEGIN CERTIFICATE-----", ...lines, "-----END CERTIFICATE-----"].join("\n");
 }

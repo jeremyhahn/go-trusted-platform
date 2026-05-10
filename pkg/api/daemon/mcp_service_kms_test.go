@@ -22,7 +22,7 @@ import (
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // =============================================================================
@@ -187,6 +187,9 @@ func (m *mockKMSServiceForMCPTests) SafetyCheck(ctx context.Context, req *servic
 	return nil, errors.New("not implemented")
 }
 func (m *mockKMSServiceForMCPTests) SafetyReport(ctx context.Context, req *service.SafetyReportRequest) (*service.SafetyReportResponse, error) {
+	return nil, errors.New("not implemented")
+}
+func (m *mockKMSServiceForMCPTests) SetDefaultKey(ctx context.Context, req *service.SetDefaultKeyRequest) (*service.SetDefaultKeyResponse, error) {
 	return nil, errors.New("not implemented")
 }
 

@@ -42,7 +42,7 @@ func TestNewCommand(t *testing.T) {
 
 	// Verify all subcommands are registered
 	subcommands := cmd.Commands()
-	assert.Len(t, subcommands, 14)
+	assert.Len(t, subcommands, 16)
 
 	expectedCommands := map[string]bool{
 		"power-on":        false,
@@ -59,6 +59,8 @@ func TestNewCommand(t *testing.T) {
 		"system-info":     false,
 		"provision":       false,
 		"console":         false,
+		"cert":            false,
+		"user":            false,
 	}
 	for _, sub := range subcommands {
 		if _, ok := expectedCommands[sub.Use]; ok {

@@ -28,11 +28,12 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	pkgca "github.com/jeremyhahn/go-xkms/pkg/ca"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -59,7 +60,10 @@ func (m *mockCertificateAuthority) PEM(keyAttrs *xkmssdk.KeyAttributes) ([]byte,
 	return args.Get(0).([]byte), args.Error(1)
 }
 
-func (m *mockCertificateAuthority) CABundle(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error) {
+func (m *mockCertificateAuthority) CABundle() ([]byte, error) {
+	return m.CABundleFiltered(xkmssdk.StoreUnknown, 0)
+}
+func (m *mockCertificateAuthority) CABundleFiltered(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error) {
 	args := m.Called(storeType, keyAlgorithm)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -67,9 +71,9 @@ func (m *mockCertificateAuthority) CABundle(storeType xkmssdk.StoreType, keyAlgo
 	return args.Get(0).([]byte), args.Error(1)
 }
 
-func (m *mockCertificateAuthority) CAConfig() trustedca.CAConfig {
+func (m *mockCertificateAuthority) CAConfig() pkgca.CAConfig {
 	args := m.Called()
-	return args.Get(0).(trustedca.CAConfig)
+	return args.Get(0).(pkgca.CAConfig)
 }
 
 // mockTrustedPlatformModule is a simple mock that only implements methods used by system.TPMInfo
@@ -207,14 +211,17 @@ func createTestCAConfig() *trustedca.CAConfig {
 					Organization: "Test Org",
 					Country:      "US",
 				},
-				Valid:        10,
-				KeyAlgorithm: x509.RSA,
-				KeySize:      2048,
-				KeystoreType: string(xkmssdk.StoreSoftware),
+				Valid: 10,
+				Keys: []*xkmssdk.KeyConfig{
+					{
+						KeyAlgorithm: "RSA",
+						RSAConfig:    &xkmssdk.KeyRSAConfig{KeySize: 2048},
+					},
+				},
+				KeystoreType: xkmssdk.StoreSoftware,
 			},
 		},
-		SelectedCA:                0,
-		DefaultSignatureAlgorithm: x509.SHA256WithRSA,
+		SelectedCA: 0,
 	}
 }
 
@@ -403,7 +410,7 @@ func TestCABundleHandler_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	bundlePEM := []byte("-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----")
-	mockCA.On("CABundle", xkmssdk.StoreUnknown, x509.PublicKeyAlgorithm(0)).Return(bundlePEM, nil)
+	mockCA.On("CABundleFiltered", xkmssdk.StoreUnknown, x509.PublicKeyAlgorithm(0)).Return(bundlePEM, nil)
 
 	handler := NewHandler(mockCA, nil, nil, nil, logger, nil)
 
@@ -426,7 +433,7 @@ func TestCABundleHandler_CAError(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	expectedErr := errors.New("CA error")
-	mockCA.On("CABundle", xkmssdk.StoreUnknown, x509.PublicKeyAlgorithm(0)).Return(nil, expectedErr)
+	mockCA.On("CABundleFiltered", xkmssdk.StoreUnknown, x509.PublicKeyAlgorithm(0)).Return(nil, expectedErr)
 	mockWriter.On("Write", mock.Anything, mock.Anything, http.StatusInternalServerError, "CA error").Return()
 
 	handler := NewHandler(mockCA, nil, nil, mockWriter, logger, nil)
@@ -706,19 +713,23 @@ func TestStatus_CAInfo(t *testing.T) {
 					Organization: "Test Org",
 					Country:      "US",
 				},
-				Valid:        10,
-				KeyAlgorithm: x509.RSA,
-				KeySize:      4096,
-				ECCCurve:     "",
-				KeystoreType: string(xkmssdk.StoreSoftware),
+				Valid: 10,
+				Keys: []*xkmssdk.KeyConfig{
+					{
+						KeyAlgorithm:       "RSA",
+						Hash:               "SHA-512",
+						SignatureAlgorithm: "SHA512-RSA",
+						RSAConfig:          &xkmssdk.KeyRSAConfig{KeySize: 4096},
+					},
+				},
+				KeystoreType: xkmssdk.StoreSoftware,
 				SANS: &trustedca.CASubjectAlternativeNames{
 					DNS: []string{"ca.test.local"},
 					IPs: []string{"192.168.1.1"},
 				},
 			},
 		},
-		SelectedCA:                0,
-		DefaultSignatureAlgorithm: x509.SHA512WithRSA,
+		SelectedCA: 0,
 	}
 
 	mockWriter.On("Success200", mock.Anything, mock.Anything, mock.MatchedBy(func(status entities.System) bool {

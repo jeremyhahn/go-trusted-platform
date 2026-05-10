@@ -19,7 +19,7 @@ import (
 	"errors"
 	"sync"
 
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 )
 
 const (

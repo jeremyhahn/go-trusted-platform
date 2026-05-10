@@ -63,18 +63,27 @@ export default function AppsPage() {
     }
   );
 
-  // Transform SDK apps to DisplayApplication for UI compatibility
+  // Transform SDK apps to DisplayApplication for UI compatibility.
+  // The server uses snake_case (`client_id`, `grant_types`,
+  // `redirect_uris`); accept both shapes so neither end has to
+  // re-encode the response.
   const apps: DisplayApplication[] = useMemo(() => {
-    if (!appsData?.apps) return [];
-    return appsData.apps.map((app) => ({
-      clientId: app.clientId,
-      name: app.name || app.clientId,
-      redirectUriCount: app.redirectUris?.length || 0,
-      grantTypes: app.grantTypes || [],
-      resourcePrefix: app.resourcePrefix,
-      createdAt: app.createdAt,
-      updatedAt: app.updatedAt,
-    }));
+    const list = (appsData as any)?.apps ?? (appsData as any)?.applications ?? [];
+    if (!Array.isArray(list)) return [];
+    return list.map((app: any) => {
+      const clientId = app.clientId ?? app.client_id ?? '';
+      const redirectUris = app.redirectUris ?? app.redirect_uris ?? [];
+      const grantTypes = app.grantTypes ?? app.grant_types ?? [];
+      return {
+        clientId,
+        name: app.name || clientId || 'unnamed',
+        redirectUriCount: Array.isArray(redirectUris) ? redirectUris.length : 0,
+        grantTypes: Array.isArray(grantTypes) ? grantTypes : [],
+        resourcePrefix: app.resourcePrefix ?? app.resource_prefix,
+        createdAt: app.createdAt ?? app.created_at,
+        updatedAt: app.updatedAt ?? app.updated_at,
+      };
+    });
   }, [appsData]);
 
   // Delete app mutation
@@ -170,31 +179,38 @@ export default function AppsPage() {
     {
       accessorKey: 'clientId',
       header: 'Client ID',
-      cell: ({ row }) => (
-        <code className="text-xs bg-muted px-2 py-1 rounded">
-          {row.original.clientId.slice(0, 16)}...
-        </code>
-      ),
+      cell: ({ row }) => {
+        const id = row.original.clientId || '';
+        return (
+          <code className="text-xs bg-muted px-2 py-1 rounded">
+            {id.length > 16 ? id.slice(0, 16) + '...' : id || '—'}
+          </code>
+        );
+      },
     },
     {
       accessorKey: 'grantTypes',
       header: ({ column }) => (
         <DataTableColumnHeader column={column} title="Grant Types" />
       ),
-      cell: ({ row }) => (
-        <div className="flex flex-wrap gap-1">
-          {row.original.grantTypes.slice(0, 2).map((grant) => (
-            <Badge key={grant} variant="outline" className="text-xs">
-              {grant.replace('_', ' ')}
-            </Badge>
-          ))}
-          {row.original.grantTypes.length > 2 && (
-            <Badge variant="secondary" className="text-xs">
-              +{row.original.grantTypes.length - 2}
-            </Badge>
-          )}
-        </div>
-      ),
+      cell: ({ row }) => {
+        const grants = row.original.grantTypes || [];
+        return (
+          <div className="flex flex-wrap gap-1">
+            {grants.slice(0, 2).map((grant) => (
+              <Badge key={grant} variant="outline" className="text-xs">
+                {grant.replace('_', ' ')}
+              </Badge>
+            ))}
+            {grants.length > 2 && (
+              <Badge variant="secondary" className="text-xs">
+                +{grants.length - 2}
+              </Badge>
+            )}
+            {grants.length === 0 && <span className="text-xs text-muted-foreground">—</span>}
+          </div>
+        );
+      },
     },
     {
       accessorKey: 'redirectUriCount',

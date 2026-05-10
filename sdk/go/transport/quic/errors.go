@@ -90,3 +90,17 @@ type ErrMethodNotMapped struct {
 func (e ErrMethodNotMapped) Error() string {
 	return fmt.Sprintf("gRPC method not mapped to QUIC opcode: %s", e.Method)
 }
+
+// ErrCategorySubOpcodeMissing indicates a gRPC method routes to a
+// category opcode but has no entry in categorySubOpcodeMap. The QUIC
+// adapter cannot prepend the required sub-opcode prefix without one,
+// so the request would be rejected by the server's sub_opcode check.
+type ErrCategorySubOpcodeMissing struct {
+	Method string
+	Opcode byte
+}
+
+// Error implements the error interface.
+func (e ErrCategorySubOpcodeMissing) Error() string {
+	return fmt.Sprintf("QUIC category opcode 0x%02X has no sub-opcode mapping for gRPC method %s", e.Opcode, e.Method)
+}

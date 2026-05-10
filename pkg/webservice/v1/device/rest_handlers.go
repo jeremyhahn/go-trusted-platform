@@ -15,9 +15,11 @@ package device
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -28,6 +30,39 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
+
+// deviceIDCounter is a process-local monotonic counter combined with the
+// boot-time epoch to produce unique uint64 device IDs when the WebUI
+// (or any client) does not supply one. Using time + counter avoids
+// collisions across daemon restarts because Save() is also id-keyed.
+var deviceIDCounter atomic.Uint64
+
+func nextDeviceID() uint64 {
+	// JS Number can only safely represent integers up to 2^53-1
+	// (9007199254740991). uint64 IDs above that lose precision when
+	// the WebUI rounds them in a JSON.parse, breaking subsequent
+	// GET/PUT/DELETE calls that round-trip the id through the URL.
+	// Compose the id as: top 21 bits = seconds since 2024-01-01 (~30
+	// years of headroom before bit 53 overflows), low 32 bits = a
+	// process-local counter. This stays within 2^53-1 while remaining
+	// monotonic and globally unique across daemon restarts.
+	const epoch2024 = uint64(1704067200) // 2024-01-01T00:00:00Z
+	const lowMask = uint64(1)<<32 - 1
+	const hiMask = uint64(1)<<21 - 1
+	now := uint64(time.Now().Unix())
+	if now < epoch2024 {
+		now = epoch2024
+	}
+	hi := (now - epoch2024) & hiMask
+	lo := deviceIDCounter.Add(1) & lowMask
+	id := (hi << 32) | lo
+	if id == 0 {
+		// Extremely unlikely (would need epoch=0 + counter wrap), but
+		// guard so we never hand back the sentinel.
+		id = 1
+	}
+	return id
+}
 
 const (
 	defaultPage     = 1
@@ -98,12 +133,21 @@ func (h *CRUDHandler) CreateDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.ID == 0 {
-		h.responseWriter.Error400(w, r, ErrMissingDeviceID{})
-		return
-	}
-
 	deviceEntity := h.requestToDevice(&req)
+	// The device service rejects a zero ID. The WebUI's Register Device
+	// form doesn't supply one, so synthesise a non-zero unique ID from
+	// the request time + a counter so the platform owns identity
+	// assignment. Callers that supply an explicit ID still win.
+	if deviceEntity.ID == 0 {
+		deviceEntity.ID = nextDeviceID()
+	}
+	if deviceEntity.Serial == "" {
+		// The device service does not require a serial, but the dashboard
+		// list page can't render rows without one. Default to the
+		// generated ID so the row is identifiable until the user updates
+		// it.
+		deviceEntity.Serial = fmt.Sprintf("dev-%d", deviceEntity.ID)
+	}
 
 	if err := h.deviceService.Save(r.Context(), deviceEntity); err != nil {
 		h.logger.Errorf("failed to create device: %v", err)
@@ -285,9 +329,12 @@ func (h *CRUDHandler) CreateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Auto-generate the profile ID when the client doesn't supply
+	// one. The WebUI Create Profile dialog has no way to know a valid
+	// ID up-front; rejecting on missing ID makes profile creation
+	// impossible from the dashboard.
 	if req.ID == 0 {
-		h.responseWriter.Error400(w, r, ErrMissingProfileID{})
-		return
+		req.ID = nextDeviceID()
 	}
 
 	profileEntity := h.requestToProfile(&req)
@@ -570,7 +617,6 @@ func (h *CRUDHandler) ActivateDevice(w http.ResponseWriter, r *http.Request) {
 
 func (h *CRUDHandler) decodeJSON(r *http.Request, v interface{}) error {
 	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
 	return decoder.Decode(v)
 }
 
@@ -638,7 +684,10 @@ func (h *CRUDHandler) handleServiceError(w http.ResponseWriter, r *http.Request,
 }
 
 func (h *CRUDHandler) requestToDevice(req *DeviceRequest) *entities.Device {
-	return &entities.Device{
+	// Start with the flat fields and overlay anything carried in the
+	// nested {device: {...}} envelope so callers using either contract
+	// reach the same entity.
+	d := &entities.Device{
 		ID:         req.ID,
 		AttestPub:  req.AttestPub,
 		EKCert:     req.EKCert,
@@ -647,7 +696,53 @@ func (h *CRUDHandler) requestToDevice(req *DeviceRequest) *entities.Device {
 		Model:      req.Model,
 		Serial:     req.Serial,
 		SigningPub: req.SigningPub,
+		SwitchName: req.SwitchName,
+		SwitchPort: req.SwitchPort,
 	}
+	if req.Device != nil {
+		if req.Device.ID != 0 {
+			d.ID = req.Device.ID
+		}
+		if req.Device.AttestPub != "" {
+			d.AttestPub = req.Device.AttestPub
+		}
+		if req.Device.EKCert != "" {
+			d.EKCert = req.Device.EKCert
+		}
+		if len(req.Device.EventLog) > 0 {
+			d.EventLog = req.Device.EventLog
+		}
+		if req.Device.HashAlgoID != 0 {
+			d.HashAlgoId = req.Device.HashAlgoID
+		}
+		if req.Device.Model != "" {
+			d.Model = req.Device.Model
+		}
+		if req.Device.Serial != "" {
+			d.Serial = req.Device.Serial
+		}
+		if req.Device.SigningPub != "" {
+			d.SigningPub = req.Device.SigningPub
+		}
+		if req.Device.SwitchName != "" {
+			d.SwitchName = req.Device.SwitchName
+		}
+		if req.Device.SwitchPort != "" {
+			d.SwitchPort = req.Device.SwitchPort
+		}
+		// When the WebUI form posts a name but no serial, reuse name as
+		// the serial so the entity has a non-empty identifier.
+		if d.Serial == "" && req.Device.Name != "" {
+			d.Serial = req.Device.Name
+		}
+	}
+	if d.Model == "" && req.Manufacturer != "" {
+		d.Model = req.Manufacturer
+	}
+	if d.Serial == "" && req.Name != "" {
+		d.Serial = req.Name
+	}
+	return d
 }
 
 func (h *CRUDHandler) deviceToResponse(d *entities.Device) *DeviceResponse {
@@ -663,6 +758,8 @@ func (h *CRUDHandler) deviceToResponse(d *entities.Device) *DeviceResponse {
 		Model:      d.Model,
 		Serial:     d.Serial,
 		SigningPub: d.SigningPub,
+		SwitchName: d.SwitchName,
+		SwitchPort: d.SwitchPort,
 	}
 }
 

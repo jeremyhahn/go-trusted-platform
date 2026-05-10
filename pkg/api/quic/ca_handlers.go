@@ -23,9 +23,11 @@ import (
 	"strings"
 	"time"
 
-	goca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	objstore "github.com/jeremyhahn/go-objstore/pkg/common"
+	pkgca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // CA pagination defaults
@@ -289,7 +291,7 @@ func (h *CAHandler) handleInfo(ctx context.Context, req *Request) *Response {
 	if h.ca.IsInitialized() {
 		resp.CommonName = h.ca.Identity()
 		resp.DefaultAlgorithm = h.keyAlgorithmToString(h.ca.DefaultKeyAlgorithm())
-		resp.DefaultValidity = int32(h.ca.DefaultValidityPeriod() / (24 * time.Hour))
+		resp.DefaultValidity = int32(h.ca.DefaultValidityPeriod())
 
 		rootCert, err := h.ca.TrustedRoot()
 		if err == nil && rootCert != nil {
@@ -373,12 +375,13 @@ func (h *CAHandler) handleIssue(ctx context.Context, req *Request) *Response {
 		KeyType:      xkmssdk.KeyTypeTLS,
 	}
 
-	cert, err := h.ca.IssueCertificate(caReq)
+	issued, err := h.ca.IssueCertificate(caReq)
 	if err != nil {
 		h.logger.Error(err, "failed to issue certificate")
 		return h.errorResponse(StatusInternalError, ErrCAIssueFailed{Cause: err})
 	}
 
+	cert := issued.Certificate
 	resp := &CAIssueResponse{
 		Certificate: h.certToFull(cert, true),
 		Timestamp:   time.Now().Unix(),
@@ -448,7 +451,7 @@ func (h *CAHandler) handleList(ctx context.Context, req *Request) *Response {
 		limit = caMaxLimit
 	}
 
-	certStore := h.ca.CertificateStore()
+	certStore := h.ca.CertStore()
 	if certStore == nil {
 		return h.errorResponse(StatusUnavailable, ErrCACertStoreUnavailable)
 	}
@@ -515,7 +518,7 @@ func (h *CAHandler) handleRevoke(ctx context.Context, req *Request) *Response {
 		}
 	}
 
-	if err := h.ca.Revoke(cert, keyAttrs); err != nil {
+	if err := h.ca.RevokeCert(cert, pkgca.RevokeOptions{DeleteKeys: keyAttrs != nil}); err != nil {
 		h.logger.Error(err, "failed to revoke certificate")
 		return h.errorResponse(StatusInternalError, ErrCARevokeFailed{Cause: err})
 	}
@@ -602,12 +605,13 @@ func (h *CAHandler) handleRenew(ctx context.Context, req *Request) *Response {
 		KeyType:      xkmssdk.KeyTypeTLS,
 	}
 
-	newCert, err := h.ca.IssueCertificate(caReq)
+	issuedRenew, err := h.ca.IssueCertificate(caReq)
 	if err != nil {
 		h.logger.Error(err, "failed to renew certificate")
 		return h.errorResponse(StatusInternalError, ErrCARenewFailed{Cause: err})
 	}
 
+	newCert := issuedRenew.Certificate
 	resp := &CARenewResponse{
 		OldSerial:   renewReq.Serial,
 		Certificate: h.certToFull(newCert, true),
@@ -832,7 +836,7 @@ func (h *CAHandler) handleBundle(ctx context.Context, req *Request) *Response {
 		}
 	}
 
-	bundle, err := h.ca.CABundle(storeType, keyAlg)
+	bundle, err := h.ca.CABundleFiltered(storeType, keyAlg)
 	if err != nil {
 		h.logger.Error(err, "failed to get CA bundle")
 		return h.errorResponse(StatusInternalError, ErrCABundleFailed{Cause: err})
@@ -907,7 +911,7 @@ func (h *CAHandler) findCertByIdentifier(identifier string) *x509.Certificate {
 	}
 
 	// Try cert store lookup
-	certStore := h.ca.CertificateStore()
+	certStore := h.ca.CertStore()
 	if certStore == nil {
 		return nil
 	}
@@ -941,8 +945,19 @@ func (h *CAHandler) findCertByIdentifier(identifier string) *x509.Certificate {
 // querying the CA's object store directly. This works around a bug in
 // go-trusted-ca where Revoke() stores revocation info in the object store
 // but IsRevoked() only checks go-xkms's in-memory map.
+//
+// The native TrustedCA interface does not expose the object store directly;
+// the concrete *pkg/ca.CA struct does. Probe via an ad-hoc interface so this
+// degrades gracefully when the underlying implementation changes.
 func (h *CAHandler) checkRevocationViaObjectStore(cert *x509.Certificate) bool {
-	objStore := h.ca.ObjectStore()
+	type objectStoreProvider interface {
+		ObjectStore() objstore.Storage
+	}
+	provider, ok := h.ca.(objectStoreProvider)
+	if !ok {
+		return false
+	}
+	objStore := provider.ObjectStore()
 	if objStore == nil {
 		return false
 	}

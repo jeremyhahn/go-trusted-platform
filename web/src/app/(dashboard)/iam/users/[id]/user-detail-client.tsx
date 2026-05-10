@@ -7,7 +7,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, usePathname, useRouter } from 'next/navigation';
+import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
 import { LegacyUser, UpdateUserInput, LegacyRole, ActivityLogEntry } from '@/types/iam';
@@ -38,11 +39,12 @@ import { formatDistanceToNow } from 'date-fns';
  */
 export default function UserDetailPage() {
   const params = useParams();
+  const pathname = usePathname();
   const router = useRouter();
   const { toast } = useToast();
   const { tenantId } = useAuth();
   const iam = useIAM();
-  const userId = params.id as string;
+  const userId = resolveDynamicId(params, pathname, 'users');
 
   const [isEditFormOpen, setIsEditFormOpen] = useState(false);
 
@@ -83,12 +85,16 @@ export default function UserDetailPage() {
     updatedAt: r.updatedAt
   }));
 
-  // Convert SDK user response to legacy format
-  const legacyUser: LegacyUser | null = user?.user ? {
-    id: user.user.id,
-    email: user.user.email,
-    name: user.user.name,
-    roles: (user.user.roles || []).map((roleId: string) => {
+  // The server returns the user record directly as the response payload
+  // (snake_case), but earlier client code expected a nested {user: …}
+  // envelope with camelCase. Tolerate both shapes so the page works
+  // regardless of which envelope the SDK returns.
+  const userRecord: any = (user as any)?.user ?? user ?? null;
+  const legacyUser: LegacyUser | null = userRecord ? {
+    id: userRecord.id,
+    email: userRecord.email,
+    name: userRecord.name,
+    roles: ((userRecord.roles || userRecord.role_ids || []) as string[]).map((roleId: string) => {
       const roleData = allRoles.find((r: LegacyRole) => r.id === roleId);
       return roleData || {
         id: roleId,
@@ -100,11 +106,11 @@ export default function UserDetailPage() {
         updatedAt: ''
       };
     }),
-    permissions: [], // Direct permissions not supported in SDK yet
-    status: 'active', // Default status
-    createdAt: user.user.createdAt,
-    updatedAt: user.user.updatedAt,
-    lastLoginAt: user.user.lastAuth,
+    permissions: [],
+    status: 'active',
+    createdAt: userRecord.createdAt ?? userRecord.created_at,
+    updatedAt: userRecord.updatedAt ?? userRecord.updated_at,
+    lastLoginAt: userRecord.lastAuth ?? userRecord.last_auth,
     avatarUrl: undefined
   } : null;
 

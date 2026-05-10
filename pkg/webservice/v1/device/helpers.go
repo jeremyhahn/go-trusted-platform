@@ -27,7 +27,6 @@ import (
 // decodeJSONBody decodes the JSON request body into the provided value.
 func decodeJSONBody(r *http.Request, v interface{}) error {
 	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
 	return decoder.Decode(v)
 }
 

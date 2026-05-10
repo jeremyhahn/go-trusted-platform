@@ -6,7 +6,8 @@
  */
 
 import { useState } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter, useParams, usePathname } from 'next/navigation';
+import { resolveDynamicId } from '@/utils/dynamic-route';
 import {
   ArrowLeft,
   Pencil,
@@ -70,7 +71,11 @@ function formatDate(dateString: string) {
 
 export default function TemplateDetailClient() {
   const params = useParams<{ id: string }>();
-  const templateId = parseInt(params.id, 10);
+  const pathname = usePathname();
+  // Keep the template ID as a string so 19-digit uint64 values
+  // round-trip through the URL without losing precision; parseInt
+  // would truncate them past JavaScript's safe-integer range.
+  const templateId = resolveDynamicId(params, pathname, 'templates') as any;
   const router = useRouter();
   const { toast } = useToast();
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);

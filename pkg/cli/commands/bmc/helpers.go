@@ -141,3 +141,22 @@ var validBootDevices = map[string]bool{
 	"cdrom": true,
 	"bios":  true,
 }
+
+// validRoles maps CLI role names to SDK privilege values.
+var validRoles = map[string]string{
+	"administrator": "ADMINISTRATOR",
+	"operator":      "OPERATOR",
+	"user":          "USER",
+	"callback":      "CALLBACK",
+	"no-access":     "NO_ACCESS",
+}
+
+// encodeJSON encodes a value as JSON to the given writer.
+func encodeJSON(w io.Writer, v interface{}) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return ErrResponseDecodeFailed{Cause: err}
+	}
+	return nil
+}

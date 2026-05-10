@@ -36,8 +36,7 @@ Supported secret URI schemes:
   - kms://       - Local KMS-managed secrets
   - remote-kms:// - Remote KMS-managed secrets
   - env://       - Environment variable references
-  - autogen://   - Auto-generated secrets
-  - encrypted:// - Encrypted secrets (decrypted at runtime)
+  - idevid:// - IDevID-encrypted secrets (decrypted at runtime)
 
 Examples:
   # Migrate secrets to KMS

@@ -106,6 +106,24 @@ message TPMInfoResponse {
   bool is_simulator = 6;
   bool fips_mode = 7;
   map<string, string> properties = 8;
+  // Defined NV indices enumerated from TPM2_GetCapability
+  // (TPM_CAP_HANDLES @ 0x01000000). Each entry carries the
+  // persistent NV handle, the NT type ("ordinary" / "counter" /
+  // "extend"), the data size, and the auth-read/auth-write flags
+  // so the WebUI can render an actionable inventory without a
+  // second round-trip per index.
+  repeated NVIndex nv_indexes = 9;
+}
+
+// NVIndex describes a single NV index defined on the TPM, mirroring
+// xkms's NVIndexInfo. NV handles live in the 0x01000000–0x01FFFFFF
+// range; the WebUI typically renders them as `0x1c00002` etc.
+message NVIndex {
+  uint32 handle = 1;
+  string type = 2;        // ordinary | counter | extend | bits | pin_pass | pin_fail
+  uint32 size = 3;        // bytes of payload
+  bool auth_read = 4;
+  bool auth_write = 5;
 }
 
 // Provision request/response
@@ -335,6 +353,32 @@ message GetEventLogResponse {
   bytes event_log = 1;
   string format = 2;
   uint64 event_count = 3;
+  // Structured per-event view of the TCG2 measurement log.
+  // Populated server-side by go-xkms's ParsedEventLog() so clients
+  // (WebUI, tpm2_eventlog-style tools) can render rows without
+  // re-parsing the binary blob themselves.
+  repeated EventLogEntry entries = 4;
+}
+
+// EventLogEntry mirrors go-xkms tpm2.Event: a single PCR extend
+// recorded by firmware/bootloader/kernel during boot.
+message EventLogEntry {
+  uint32 event_num = 1;
+  uint32 pcr_index = 2;
+  string event_type = 3;
+  uint32 digest_count = 4;
+  repeated EventDigest digests = 5;
+  uint32 event_size = 6;
+  // Human-readable rendering of the event payload (ASCII for
+  // string events, hex for opaque blobs). Mirrors xkms's
+  // EventString field.
+  string event_string = 7;
+}
+
+// EventDigest is one hash digest in a TCG2 event (multi-bank).
+message EventDigest {
+  string algorithm_id = 1;
+  string digest = 2;
 }
 
 message GetPCRsRequest {
@@ -352,6 +396,12 @@ message DefineNVRAMRequest {
   uint32 size = 2;
   string password = 3;
   repeated string attributes = 4; // AUTHWRITE, AUTHREAD, etc.
+  // Owner-hierarchy authorization. NV define/undefine route
+  // through the OWNER hierarchy (TPM_RH_OWNER); when the
+  // platform's TPM has been provisioned with an owner password
+  // the operator must supply it here. Leave empty for TPMs
+  // with default (unset) owner auth.
+  string parent_password = 5;
 }
 
 message DefineNVRAMResponse {
@@ -382,6 +432,10 @@ message ReadNVRAMResponse {
 
 message UndefineNVRAMRequest {
   uint32 index = 1;
+  // Owner-hierarchy authorization (same semantics as
+  // DefineNVRAMRequest.parent_password). Required only when the
+  // owner hierarchy has a non-empty auth value set.
+  string parent_password = 10;
   string password = 2;
 }
 

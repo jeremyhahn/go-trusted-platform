@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -27,8 +28,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
-	"log/slog"
-
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
@@ -37,12 +36,13 @@ import (
 
 // mockTemplateService implements device.DeviceTemplateService for testing.
 type mockTemplateService struct {
-	saved     *entities.DeviceTemplate
-	saveErr   error
-	getResult *entities.DeviceTemplate
-	getErr    error
-	profile   *entities.DeviceProfile
-	toErr     error
+	saved          *entities.DeviceTemplate
+	saveErr        error
+	getResult      *entities.DeviceTemplate
+	getErr         error
+	profile        *entities.DeviceProfile
+	toErr          error
+	configOverrides map[string]interface{}
 }
 
 func (m *mockTemplateService) Save(_ context.Context, t *entities.DeviceTemplate) error {
@@ -78,10 +78,21 @@ func (m *mockTemplateService) ToProfile(_ context.Context, _ uint64, _ *entities
 	return m.profile, m.toErr
 }
 
+func (m *mockTemplateService) ToProfileWithConfigOverrides(_ context.Context, _ uint64, _ *entities.DeviceProfile, configOverrides map[string]interface{}) (*entities.DeviceProfile, error) {
+	m.configOverrides = configOverrides
+	return m.profile, m.toErr
+}
+
 // mockProfileService implements device.DeviceProfileService for testing.
 type mockProfileService struct {
-	saved   *entities.DeviceProfile
-	saveErr error
+	saved             *entities.DeviceProfile
+	saveErr           error
+	findByMAC         *entities.DeviceProfile
+	findByMACErr      error
+	findBySerial      *entities.DeviceProfile
+	findBySerialErr   error
+	findMatching      *entities.DeviceProfile
+	findMatchingErr   error
 }
 
 func (m *mockProfileService) Save(_ context.Context, p *entities.DeviceProfile) error {
@@ -110,15 +121,15 @@ func (m *mockProfileService) Page(_ context.Context, _ datastore.PageQuery) (dat
 }
 
 func (m *mockProfileService) FindByMACAddress(_ context.Context, _ string) (*entities.DeviceProfile, error) {
-	return nil, nil
+	return m.findByMAC, m.findByMACErr
 }
 
 func (m *mockProfileService) FindBySerial(_ context.Context, _ string) (*entities.DeviceProfile, error) {
-	return nil, nil
+	return m.findBySerial, m.findBySerialErr
 }
 
 func (m *mockProfileService) FindMatchingProfile(_ context.Context, _, _, _ string) (*entities.DeviceProfile, error) {
-	return nil, nil
+	return m.findMatching, m.findMatchingErr
 }
 
 func testLogger() *logging.Logger {
@@ -287,6 +298,54 @@ func TestHandleCreateProfile_Success(t *testing.T) {
 	assert.Equal(t, "node-01", profSvc.saved.Name)
 }
 
+// TestHandleCreateProfile_WithConfigOverrides verifies that config overrides
+// from the request are passed through to ToProfileWithConfigOverrides.
+func TestHandleCreateProfile_WithConfigOverrides(t *testing.T) {
+	templateID := util.NewID([]byte("compute"))
+	profile := &entities.DeviceProfile{
+		ID:   util.NewID([]byte("lab-node-3")),
+		Name: "lab-node-3",
+		Role: entities.DeviceRoleServer,
+		Config: map[string]interface{}{
+			"hostname": "lab-node-3",
+			"domain":   "compute.example.com",
+		},
+	}
+	tmplSvc := &mockTemplateService{profile: profile}
+	profSvc := &mockProfileService{}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
+
+	body := profileRequest{
+		MAC:      "aa:bb:cc:dd:ee:ff",
+		Hostname: "lab-node-3",
+		Role:     "compute",
+		Overrides: map[string]interface{}{
+			"hostname": "lab-node-3",
+			"os": map[string]interface{}{
+				"hostname": "lab-node-3",
+			},
+		},
+	}
+	payload, err := json.Marshal(body)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/devices/templates/"+strconv.FormatUint(templateID, 10)+"/create-profile", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req = mux.SetURLVars(req, map[string]string{"id": strconv.FormatUint(templateID, 10)})
+	rr := httptest.NewRecorder()
+
+	handler.HandleCreateProfile(rr, req)
+
+	assert.Equal(t, http.StatusCreated, rr.Code)
+
+	// Verify config overrides were passed to the service
+	require.NotNil(t, tmplSvc.configOverrides)
+	assert.Equal(t, "lab-node-3", tmplSvc.configOverrides["hostname"])
+	osOverrides, ok := tmplSvc.configOverrides["os"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "lab-node-3", osOverrides["hostname"])
+}
+
 // TestHandleCreateProfile_MissingHostname verifies a 400 response when hostname is empty.
 func TestHandleCreateProfile_MissingHostname(t *testing.T) {
 	templateID := util.NewID([]byte("gateway"))
@@ -416,4 +475,199 @@ func TestHandleCreateProfile_InvalidJSON(t *testing.T) {
 	handler.HandleCreateProfile(rr, req)
 
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+// TestHandleGetConfig_ByMAC verifies that a config is returned as raw YAML
+// when looking up a profile by exact MAC address.
+func TestHandleGetConfig_ByMAC(t *testing.T) {
+	expectedConfig := map[string]interface{}{
+		"hostname": "node-01",
+		"network": map[string]interface{}{
+			"interface": "eth0",
+		},
+	}
+	profile := &entities.DeviceProfile{
+		ID:     42,
+		Name:   "node-01",
+		Config: expectedConfig,
+	}
+	profSvc := &mockProfileService{findByMAC: profile}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, profSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/devices/config?mac=aa:bb:cc:dd:ee:ff", nil)
+	rr := httptest.NewRecorder()
+
+	handler.HandleGetConfig(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "application/x-yaml", rr.Header().Get("Content-Type"))
+	assert.Contains(t, rr.Body.String(), "hostname: node-01")
+	assert.Contains(t, rr.Body.String(), "interface: eth0")
+}
+
+// TestHandleGetConfig_BySerial verifies that a config is returned when
+// looking up a profile by serial number (MAC not found).
+func TestHandleGetConfig_BySerial(t *testing.T) {
+	expectedConfig := map[string]interface{}{
+		"hostname": "node-02",
+	}
+	profile := &entities.DeviceProfile{
+		ID:     43,
+		Name:   "node-02",
+		Config: expectedConfig,
+	}
+	profSvc := &mockProfileService{
+		findBySerial: profile,
+	}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, profSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/devices/config?serial=SN12345", nil)
+	rr := httptest.NewRecorder()
+
+	handler.HandleGetConfig(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "application/x-yaml", rr.Header().Get("Content-Type"))
+	assert.Contains(t, rr.Body.String(), "hostname: node-02")
+}
+
+// TestHandleGetConfig_ByMatchRules verifies fallback to match rules when
+// exact MAC and serial lookups both fail.
+func TestHandleGetConfig_ByMatchRules(t *testing.T) {
+	expectedConfig := map[string]interface{}{
+		"hostname": "node-03",
+	}
+	profile := &entities.DeviceProfile{
+		ID:     44,
+		Name:   "node-03",
+		Config: expectedConfig,
+	}
+	profSvc := &mockProfileService{
+		findMatching: profile,
+	}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, profSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/devices/config?mac=52:54:00:aa:bb:cc&serial=SN999", nil)
+	rr := httptest.NewRecorder()
+
+	handler.HandleGetConfig(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "application/x-yaml", rr.Header().Get("Content-Type"))
+	assert.Contains(t, rr.Body.String(), "hostname: node-03")
+}
+
+// TestHandleGetConfig_MissingQueryParams verifies a 400 response when neither
+// mac nor serial query parameters are provided.
+func TestHandleGetConfig_MissingQueryParams(t *testing.T) {
+	profSvc := &mockProfileService{}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, profSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/devices/config", nil)
+	rr := httptest.NewRecorder()
+
+	handler.HandleGetConfig(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+// TestHandleGetConfig_ProfileNotFound verifies a 404 response when no profile
+// matches the provided identifiers.
+func TestHandleGetConfig_ProfileNotFound(t *testing.T) {
+	profSvc := &mockProfileService{
+		findByMACErr:    ErrProfileNotFound{MAC: "aa:bb:cc:dd:ee:ff"},
+		findMatchingErr: ErrProfileNotFound{MAC: "aa:bb:cc:dd:ee:ff"},
+	}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, profSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/devices/config?mac=aa:bb:cc:dd:ee:ff", nil)
+	rr := httptest.NewRecorder()
+
+	handler.HandleGetConfig(rr, req)
+
+	assert.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+// TestHandleGetConfig_ProfileConfigEmpty verifies a 404 response when the
+// matched profile has a nil Config field.
+func TestHandleGetConfig_ProfileConfigEmpty(t *testing.T) {
+	profile := &entities.DeviceProfile{
+		ID:     45,
+		Name:   "node-empty",
+		Config: nil,
+	}
+	profSvc := &mockProfileService{findByMAC: profile}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, profSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/devices/config?mac=aa:bb:cc:dd:ee:ff", nil)
+	rr := httptest.NewRecorder()
+
+	handler.HandleGetConfig(rr, req)
+
+	assert.Equal(t, http.StatusNotFound, rr.Code)
+	assert.Contains(t, rr.Body.String(), "no config")
+}
+
+// TestHandleGetConfig_NilProfileService verifies a 500 response when the
+// profile service is not initialized.
+func TestHandleGetConfig_NilProfileService(t *testing.T) {
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/devices/config?mac=aa:bb:cc:dd:ee:ff", nil)
+	rr := httptest.NewRecorder()
+
+	handler.HandleGetConfig(rr, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+}
+
+// TestHandleGetConfig_MACTakesPriorityOverSerial verifies that when both mac
+// and serial are provided, and MAC lookup succeeds, the serial lookup is skipped.
+func TestHandleGetConfig_MACTakesPriorityOverSerial(t *testing.T) {
+	macProfile := &entities.DeviceProfile{
+		ID:     50,
+		Name:   "mac-node",
+		Config: map[string]interface{}{"source": "mac"},
+	}
+	serialProfile := &entities.DeviceProfile{
+		ID:     51,
+		Name:   "serial-node",
+		Config: map[string]interface{}{"source": "serial"},
+	}
+	profSvc := &mockProfileService{
+		findByMAC:    macProfile,
+		findBySerial: serialProfile,
+	}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, profSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/devices/config?mac=aa:bb:cc:dd:ee:ff&serial=SN123", nil)
+	rr := httptest.NewRecorder()
+
+	handler.HandleGetConfig(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), "source: mac")
+}
+
+// TestHandleGetConfig_SerialFallbackWhenMACFails verifies that serial lookup
+// is used when MAC lookup returns an error.
+func TestHandleGetConfig_SerialFallbackWhenMACFails(t *testing.T) {
+	serialProfile := &entities.DeviceProfile{
+		ID:     52,
+		Name:   "serial-node",
+		Config: map[string]interface{}{"source": "serial"},
+	}
+	profSvc := &mockProfileService{
+		findByMACErr: ErrProfileNotFound{MAC: "aa:bb:cc:dd:ee:ff"},
+		findBySerial: serialProfile,
+	}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, profSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/devices/config?mac=aa:bb:cc:dd:ee:ff&serial=SN123", nil)
+	rr := httptest.NewRecorder()
+
+	handler.HandleGetConfig(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), "source: serial")
 }

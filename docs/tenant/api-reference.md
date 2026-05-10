@@ -1172,6 +1172,90 @@ platformctl tenant sync
 | ErrBridgeOperationFailed | 500 | INTERNAL | OVS bridge error |
 | ErrDEKOperationFailed | 500 | INTERNAL | TPM DEK error |
 | ErrStorageFailed | 500 | INTERNAL | Storage error |
+| ErrBarrierNotSupported | 501 | UNIMPLEMENTED | Barrier client not configured (no SDK wired) |
+| ErrNilBarrierStatus | 500 | INTERNAL | SDK returned nil status without error |
+
+---
+
+## Per-Tenant Barrier Lifecycle (2026-04-28)
+
+Each tenant has an independent cryptographic barrier whose lifecycle is
+exposed through `Manager` and routes to all five QRDB transports
+(REST/gRPC/QUIC/MCP/Unix). Barriers auto-initialize on `CreateTenant` and
+auto-seal on `DeleteTenant`.
+
+### `Manager` API
+
+| Method | Behavior |
+|--------|----------|
+| `Manager.InitTenantBarrier(ctx, tenantID)` | Initialize the per-tenant barrier (called automatically by `CreateTenant`; available for explicit re-init). |
+| `Manager.UnsealTenantBarrier(ctx, tenantID, key)` | Unseal with the supplied key bytes. Empty key falls back to the deterministic init credential. |
+| `Manager.SealTenantBarrier(ctx, tenantID)` | Seal the barrier. Subsequent reads/writes against the tenant namespace fail until unsealed. |
+| `Manager.TenantBarrierStatus(ctx, tenantID)` | Returns `*TenantBarrierState{TenantID, Sealed, Initialized, Strategy, HardwareBacked}`. Uninitialized barriers report `Sealed=true, Initialized=false` rather than erroring. |
+
+The wire path is `Manager → quicbaassdk.QRDBTenantClient → qrdb transport
+(REST/gRPC/QUIC/MCP/Unix) → qrdb pkg/tenant.TenantService → BarrierRegistry`.
+Empty `tenantID` returns `ErrInvalidRequest`; nil SDK client returns
+`ErrBarrierNotSupported`; transport failures wrap into `ErrStorageFailed`.
+
+### Platform multi-protocol surface
+
+The platform exposes the same lifecycle through every protocol it ships:
+
+| Protocol | Surface |
+|----------|---------|
+| **gRPC** | `platform.v1.TenantService/{InitTenantBarrier,UnsealTenantBarrier,SealTenantBarrier,GetTenantBarrierStatus}` |
+| **REST** | `POST /api/v1/tenants/{id}/barrier/{init,unseal,seal}`, `GET /api/v1/tenants/{id}/barrier/status` |
+| **QUIC** | Category opcode `OpTenantBarrierCategory` (`0x9E`) with sub-opcodes `Init=0x01`, `Unseal=0x02`, `Seal=0x03`, `Status=0x04` |
+| **MCP** | Tools `platform_tenant_barrier_{init,unseal,seal,status}` |
+| **Unix** | gRPC-over-UDS reuses `platform.v1.TenantService` |
+
+### Platform SDK
+
+`sdk/go/services/tenant/Client` exposes:
+
+```go
+InitTenantBarrier(ctx, tenantID, threshold, shares int32) error
+UnsealTenantBarrier(ctx, tenantID string, key []byte) error
+SealTenantBarrier(ctx, tenantID string) error
+GetTenantBarrierStatus(ctx, tenantID string) (*platformv1.TenantBarrierStatus, error)
+```
+
+Errors returned: `ErrInitTenantBarrierFailed`, `ErrUnsealTenantBarrierFailed`, `ErrSealTenantBarrierFailed`, `ErrGetTenantBarrierStatusFailed` (all `Unwrap()`-able).
+
+### CLI
+
+```bash
+# Explicit init (auto-init runs on CreateTenant; this is for re-init/Shamir)
+platformctl tenant barrier init <tenant-name> [--threshold N --shares N]
+
+# Unseal with a hex or base64 key (or empty for deterministic credential)
+platformctl tenant barrier unseal <tenant-name> [--key-hex HEX | --key-base64 B64]
+
+# Seal a previously initialized barrier
+platformctl tenant barrier seal <tenant-name>
+
+# Inspect status (also accepts -o json)
+platformctl tenant barrier status <tenant-name>
+```
+
+All four subcommands route through the configured `--context` protocol — the same CLI binary works against REST/gRPC/QUIC/MCP/Unix/embedded modes.
+
+### Daemon wiring
+
+To make the REST + gRPC tenant surfaces reachable in production, set
+`daemon.Config.PlatformTenantManager` to a `*tenant.Manager` when constructing
+the daemon. `daemon.New()` automatically wires that instance into:
+
+- `RESTServer.SetTenantHandlers(...)` — registers `/api/v1/tenants/*` routes
+- `TenantGRPCServer.SetManager(...)` — fulfills the gRPC `TenantService`
+  methods that require the platform manager (otherwise return
+  `FailedPrecondition`)
+
+A single `*tenant.Manager` instance is shared across REST, gRPC, QUIC, MCP,
+and Unix-socket transports so per-tenant state (CRUD, quotas, VLAN, OVS
+bridge, DEK, barrier lifecycle) is identical regardless of which transport
+the caller chose.
 
 ---
 

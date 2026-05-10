@@ -277,6 +277,9 @@ var _ policy.PolicyEngine = (*MockSDNPolicyEngine)(nil)
 type stubOVSClient struct{}
 
 func (s *stubOVSClient) Connect(_ context.Context) error { return nil }
+func (s *stubOVSClient) AddBond(_ context.Context, _, _ string, _ []string, _, _ string) (*ovs.Port, error) {
+	return nil, nil
+}
 func (s *stubOVSClient) Disconnect() error               { return nil }
 func (s *stubOVSClient) CreateBridge(_ context.Context, name string) (*ovs.Bridge, error) {
 	return &ovs.Bridge{UUID: "stub-" + name, Name: name}, nil

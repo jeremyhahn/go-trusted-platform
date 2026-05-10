@@ -194,27 +194,43 @@ func (l *Logger) Errorf(message string, args ...any) {
 	l.logger.Error(fmt.Sprintf(message, args...))
 }
 
-// Fatal
+// Fatal logs at Error level and then terminates the process.
+//
+// The fatal message is mirrored to os.Stderr synchronously before calling
+// os.Exit so that operators see WHY the daemon died even when the slog
+// handler buffers to a file that never gets flushed. Prior behavior sent
+// the message only through slog, which meant calls from background
+// goroutines (e.g. webserver.startHTTP's bind failure) produced silent
+// exit-255 crashes with zero diagnostic output. The os.Stderr write uses
+// a "FATAL:" prefix + newline so it's unmistakable next to slog output.
 func (l *Logger) Fatal(message string, args ...any) {
 	if l == nil || l.logger == nil {
-		return
+		fmt.Fprintf(os.Stderr, "FATAL: %s %v\n", message, args)
+		os.Exit(-1)
 	}
 	l.logger.Error(message, args...)
+	fmt.Fprintf(os.Stderr, "FATAL: %s %v\n", message, args)
 	os.Exit(-1)
 }
 
 func (l *Logger) Fatalf(message string, args ...any) {
+	formatted := fmt.Sprintf(message, args...)
 	if l == nil || l.logger == nil {
-		return
+		fmt.Fprintf(os.Stderr, "FATAL: %s\n", formatted)
+		os.Exit(-1)
 	}
-	l.Fatal(fmt.Sprintf(message, args...))
+	l.logger.Error(formatted)
+	fmt.Fprintf(os.Stderr, "FATAL: %s\n", formatted)
+	os.Exit(-1)
 }
 
 func (l *Logger) FatalError(err error) {
 	if l == nil || l.logger == nil {
-		return
+		fmt.Fprintf(os.Stderr, "FATAL: %v\n", err)
+		os.Exit(-1)
 	}
 	l.Error(err)
+	fmt.Fprintf(os.Stderr, "FATAL: %v\n", err)
 	os.Exit(-1)
 }
 

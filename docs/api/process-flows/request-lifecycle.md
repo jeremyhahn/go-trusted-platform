@@ -95,13 +95,26 @@ func (c *restClientConn) Invoke(ctx context.Context, method string, args, reply 
 #### QUIC Adapter
 
 ```go
-// Translate to opcode-based protocol
+// Translate to opcode-based protocol. Category opcodes (0x2E overlay,
+// 0x2F gateway, 0x3F IPAM, 0x99 TPM2, 0x9A-0x9D ceremony/PIV/LUKS/FIDO2,
+// 0x9E tenant barrier, 0xCC switch) multiplex multiple sub-operations
+// behind a single wire opcode by stuffing the sub-opcode into payload[0]
+// and the marshalled request into payload[1:].
 func (c *quicClientConn) Invoke(ctx context.Context, method string, args, reply interface{}, opts ...grpc.CallOption) error {
     opcode := grpcMethodToOpcodeMap[method]
+    if isCategoryOpcode(opcode) {
+        subOpcode := categorySubOpcodeMap[method]
+        payload, _ := buildCategoryPayload(subOpcode, args)
+        resp, err := c.adapter.client.SendRequest(ctx, opcode, payload)
+        // ... decode resp.Payload into reply
+        return err
+    }
     return c.adapter.client.Send(ctx, opcode, args, reply)
 }
 
-// /platformv1.CAService/Issue -> opcode 0x11 (OpCAIssue)
+// /platform.v1.CAService/IssueCertificate -> opcode 0xA1 (OpCAIssue)
+// /platform.v1.SwitchService/EnablePort   -> opcode 0xCC (OpSwitchCategory),
+//                                            payload[0] = 0x04 (SwitchSubEnablePort)
 ```
 
 #### MCP Adapter

@@ -163,6 +163,45 @@ func (e ErrContainerNotRunning) Error() string {
 	return fmt.Sprintf("deployer: container %s on %s is not running", e.ContainerID, e.Host)
 }
 
+// ErrContainerStateMismatch is returned when a container with the
+// configured name is running on the deployer host but with a different
+// image or bind-mount than the current DeployConfig expects. The
+// orchestrator's RedeployMode determines whether this is a hard error or
+// a redeploy trigger.
+type ErrContainerStateMismatch struct {
+	ContainerID string
+	Host        string
+	Field       string // "image" | "bind-mount"
+	Want        string
+	Got         string
+}
+
+func (e ErrContainerStateMismatch) Error() string {
+	return fmt.Sprintf("deployer: container %s on %s state mismatch: %s want=%q got=%q",
+		e.ContainerID, e.Host, e.Field, e.Want, e.Got)
+}
+
+// ErrAssetStageFailed indicates the deployer could not extract image-
+// baked PXE assets (vmlinuz, initramfs, autoinstall.sh) from the
+// container image into the host bind-mount source. The bootstrap
+// container will not start without these because the bind-mount
+// overlays the image's /data with the (otherwise empty) host directory.
+type ErrAssetStageFailed struct {
+	Phase string // "create" | "cp:<asset>"
+	Cause error
+}
+
+func (e ErrAssetStageFailed) Error() string {
+	if e.Cause == nil {
+		return fmt.Sprintf("deployer: asset stage failed at phase %s", e.Phase)
+	}
+	return fmt.Sprintf("deployer: asset stage failed at phase %s: %v", e.Phase, e.Cause)
+}
+
+func (e ErrAssetStageFailed) Unwrap() error {
+	return e.Cause
+}
+
 // ErrInvalidDeployConfig is returned when the deploy configuration is invalid.
 type ErrInvalidDeployConfig struct {
 	Field  string

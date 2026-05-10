@@ -25,11 +25,9 @@ import (
 )
 
 var (
-	serveModes       []string
 	serveListenAddr  string
 	serveBGPASN      uint32
 	serveBGPRouterID string
-	serveVXLANVNI    uint32
 	serveAPIPort     int
 	serveGRPCPort    int
 )
@@ -37,39 +35,40 @@ var (
 var serveCmd = &cobra.Command{
 	Use:   "serve",
 	Short: "Start the gateway daemon",
-	Long: `Starts the gateway daemon with the configured operational modes.
+	Long: `Starts the gateway daemon with config-driven service loading.
 
-Modes:
-  overlay  - VXLAN tunneling for east-west VM/container traffic (EVPN Type-2/3/5)
-  edge     - IoT device onboarding, DHT bootstrap, NAT traversal
-  transit  - Announce platform IPv4/IPv6 blocks to ISPs/fabric
+Services are activated based on the gateway configuration file. If a service
+section exists and is enabled, the corresponding service loads automatically.
+
+Supported services:
+  overlay       - VXLAN tunneling for east-west VM/container traffic (EVPN Type-2/3/5)
+  edge          - IoT device onboarding, DHT bootstrap, NAT traversal
+  bgp           - BGP speaker for route announcement
+  firewall      - Stateful packet filtering
+  dhcp          - DHCP server for provisioning
+  nat           - Network address translation
+  load-balancer - L4/L7 load balancing
+  tunnels       - GRE/VXLAN tunnel management
 
 Examples:
-  # Start in overlay mode (default)
-  gatewayd serve
+  # Start with config file (services determined by config)
+  gatewayd serve --config /etc/gatewayd/config.yaml
 
-  # Start with multiple modes
-  gatewayd serve --modes overlay,edge
-
-  # Start in transit mode with BGP configuration
-  gatewayd serve --modes transit --bgp-asn 65001 --bgp-router-id 10.0.0.1`,
+  # Start with custom data directory
+  gatewayd serve --config config.yaml --data-dir /var/lib/gatewayd`,
 	RunE: runServe,
 }
 
 func init() {
-	serveCmd.Flags().StringSliceVar(&serveModes, "modes", []string{"overlay"}, "Gateway modes to enable (overlay, edge, transit)")
 	serveCmd.Flags().StringVar(&serveListenAddr, "listen", ":8080", "API listen address")
 	serveCmd.Flags().Uint32Var(&serveBGPASN, "bgp-asn", 0, "BGP AS number")
 	serveCmd.Flags().StringVar(&serveBGPRouterID, "bgp-router-id", "", "BGP router ID")
-	serveCmd.Flags().Uint32Var(&serveVXLANVNI, "vxlan-vni", 100, "Default VXLAN VNI")
 	serveCmd.Flags().IntVar(&serveAPIPort, "api-port", 8080, "REST API port")
 	serveCmd.Flags().IntVar(&serveGRPCPort, "grpc-port", 10444, "gRPC port")
 
-	viper.BindPFlag("modes", serveCmd.Flags().Lookup("modes"))
 	viper.BindPFlag("listen", serveCmd.Flags().Lookup("listen"))
 	viper.BindPFlag("bgp.asn", serveCmd.Flags().Lookup("bgp-asn"))
 	viper.BindPFlag("bgp.router_id", serveCmd.Flags().Lookup("bgp-router-id"))
-	viper.BindPFlag("vxlan.vni", serveCmd.Flags().Lookup("vxlan-vni"))
 	viper.BindPFlag("api.port", serveCmd.Flags().Lookup("api-port"))
 	viper.BindPFlag("grpc.port", serveCmd.Flags().Lookup("grpc-port"))
 }
@@ -96,49 +95,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 
-	modes := viper.GetStringSlice("modes")
-	if len(modes) == 0 {
-		modes = serveModes
-	}
-
 	logger.Info("Starting gateway daemon",
-		slog.Any("modes", modes),
 		slog.String("listen", viper.GetString("listen")),
 		slog.String("data_dir", viper.GetString("data-dir")),
+		slog.String("config", viper.ConfigFileUsed()),
 	)
-
-	// Validate modes
-	validModes := map[string]bool{
-		"overlay": true,
-		"edge":    true,
-		"transit": true,
-	}
-	for _, mode := range modes {
-		if !validModes[mode] {
-			logger.Error("Invalid gateway mode", slog.String("mode", mode))
-			return ErrInvalidGatewayMode
-		}
-	}
-
-	// Log mode-specific configuration
-	for _, mode := range modes {
-		switch mode {
-		case "overlay":
-			logger.Info("Overlay mode enabled",
-				slog.Uint64("vxlan_vni", uint64(viper.GetUint32("vxlan.vni"))))
-		case "edge":
-			logger.Info("Edge mode enabled")
-		case "transit":
-			asn := viper.GetUint32("bgp.asn")
-			routerID := viper.GetString("bgp.router_id")
-			if asn == 0 {
-				logger.Warn("Transit mode requires BGP ASN configuration")
-			}
-			logger.Info("Transit mode enabled",
-				slog.Uint64("bgp_asn", uint64(asn)),
-				slog.String("bgp_router_id", routerID))
-		}
-	}
 
 	// DEFERRED: Create gateway node integrating with:
 	// - pkg/sdn/gateway for gateway node management
@@ -146,6 +107,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// - pkg/sdn/vxlan for VXLAN tunneling
 	// - pkg/ipam for IP address management
 	// Blocked by: SDN gateway architecture design.
+	// The gateway config file is the sole source of truth for which services to load.
 
 	// Handle signals for graceful shutdown
 	sigCh := make(chan os.Signal, 1)

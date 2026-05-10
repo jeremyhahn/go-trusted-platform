@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"time"
 
+	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -72,6 +73,14 @@ type ARPTable interface {
 	LookupMAC(ipAddr string) (net.HardwareAddr, error)
 }
 
+// SwitchServiceProvider abstracts the switch management service for
+// dependency injection. It allows the handler to resolve a Manager
+// by switch name without depending on the concrete Service type.
+type SwitchServiceProvider interface {
+	// Manager returns the Manager for the named switch.
+	Manager(name string) (switchmgmt.Manager, error)
+}
+
 // Handler implements RestHandler
 type Handler struct {
 	logger         *logging.Logger
@@ -79,6 +88,7 @@ type Handler struct {
 	policyEngine   policy.PolicyEngine
 	profileService ProfileService
 	arpTable       ARPTable
+	switchService  SwitchServiceProvider
 }
 
 // ProfileService provides device profile lookup
@@ -92,13 +102,30 @@ func NewHandler(
 	policyEngine policy.PolicyEngine,
 	profileService ProfileService,
 	arpTable ARPTable,
+	opts ...HandlerOption,
 ) RestHandler {
-	return &Handler{
+	h := &Handler{
 		logger:         logger,
 		responseWriter: responseWriter,
 		policyEngine:   policyEngine,
 		profileService: profileService,
 		arpTable:       arpTable,
+	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
+}
+
+// HandlerOption configures optional Handler dependencies.
+type HandlerOption func(*Handler)
+
+// WithSwitchService injects a physical switch service into the handler.
+// When set, Activate will move the device's physical port from the
+// provisioning VLAN to the production VLAN on the configured switch.
+func WithSwitchService(svc SwitchServiceProvider) HandlerOption {
+	return func(h *Handler) {
+		h.switchService = svc
 	}
 }
 
@@ -149,6 +176,15 @@ func (h *Handler) Activate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Move the physical switch port to the production VLAN if switch info
+	// is available in the profile. This is a no-op when no switch service
+	// is configured or when the profile lacks switch fields.
+	if switchErr := h.transitionSwitchPort(r.Context(), serial, profile.ProductionNetwork.VLAN); switchErr != nil {
+		h.logger.Errorf("Switch VLAN transition failed for device %s: %v", serial, switchErr)
+		h.responseWriter.Error500(w, r, switchErr)
+		return
+	}
+
 	// Transition port to authorized state
 	if err := h.policyEngine.SetPortState(portID, policy.PortStateAuthorized); err != nil {
 		h.logger.Errorf("Failed to transition port %s to authorized: %v", portID, err)
@@ -178,6 +214,52 @@ func (h *Handler) Activate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
+
+// transitionSwitchPort moves the device's physical switch port to the
+// production VLAN. Returns nil when no switch service is configured or
+// the device has no switch/port mapping (making VLAN move a no-op).
+func (h *Handler) transitionSwitchPort(ctx context.Context, serial string, productionVLAN uint16) error {
+	if h.switchService == nil {
+		return nil
+	}
+
+	// Look up device switch info from the profile service context.
+	// The switch name and port are stored per-device; the profile service
+	// provides them via the serial lookup. For now, we extract them from
+	// the context set by the mTLS middleware or registration data.
+	switchName, _ := ctx.Value(contextKeySwitchName).(string)
+	switchPort, _ := ctx.Value(contextKeySwitchPort).(string)
+
+	if switchName == "" || switchPort == "" {
+		// No physical switch mapping for this device - skip VLAN move.
+		return nil
+	}
+
+	mgr, err := h.switchService.Manager(switchName)
+	if err != nil {
+		return ErrSwitchNotConfigured{SwitchName: switchName}
+	}
+
+	if err := mgr.SetPortVLAN(ctx, switchPort, productionVLAN); err != nil {
+		return ErrSwitchVLANTransitionFailed{
+			SwitchName: switchName,
+			Port:       switchPort,
+			VLAN:       productionVLAN,
+			Cause:      err,
+		}
+	}
+
+	h.logger.Infof("Switch port %s/%s moved to VLAN %d for device %s",
+		switchName, switchPort, productionVLAN, serial)
+
+	return nil
+}
+
+// Context keys for switch information passed through request context.
+const (
+	contextKeySwitchName ContextKey = "switch_name"
+	contextKeySwitchPort ContextKey = "switch_port"
+)
 
 func extractClientIP(r *http.Request) string {
 	// Check X-Forwarded-For header first

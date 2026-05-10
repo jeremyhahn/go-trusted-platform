@@ -18,11 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
-
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
-	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 // Tests for printContainerList edge cases
@@ -193,13 +190,13 @@ func TestPrintFullContainerDetails_ContainerWithMetricsAndNoLimit(t *testing.T) 
 		},
 		Metrics: &computesvc.ContainerMetrics{
 			CPUUsagePercent: 10.5,
-			MemoryUsedMB:   256,
-			MemoryLimitMB:  0, // No limit
-			DiskReadBytes:  1024,
-			DiskWriteBytes: 2048,
-			NetworkRxBytes: 4096,
-			NetworkTxBytes: 8192,
-			UptimeSeconds:  0, // No uptime
+			MemoryUsedMB:    256,
+			MemoryLimitMB:   0, // No limit
+			DiskReadBytes:   1024,
+			DiskWriteBytes:  2048,
+			NetworkRxBytes:  4096,
+			NetworkTxBytes:  8192,
+			UptimeSeconds:   0, // No uptime
 		},
 	}
 
@@ -436,25 +433,4 @@ func TestPrintAttestResponse_WithoutImageDigest(t *testing.T) {
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
-}
-
-// Test for printLogEntry with nil timestamp flag set but actual timestamp present
-func TestPrintLogEntry_WithTimestamp(t *testing.T) {
-	entry := &platformv1.LogEntry{
-		Message:   "Test log message with timestamp",
-		Timestamp: timestamppb.Now(),
-	}
-
-	// Should not panic and print with timestamp
-	printLogEntry(entry, true)
-}
-
-func TestPrintLogEntry_WithTimestampFlagFalse(t *testing.T) {
-	entry := &platformv1.LogEntry{
-		Message:   "Test log message without timestamp display",
-		Timestamp: timestamppb.Now(),
-	}
-
-	// Should not panic and print without timestamp
-	printLogEntry(entry, false)
 }

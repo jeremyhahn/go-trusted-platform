@@ -757,21 +757,13 @@ func (s *SDNService) ListVLANs(ctx context.Context, req *platformv1.ListVLANsReq
 		return nil, status.Error(codes.InvalidArgument, "bridge_id is required")
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	// Find bridge name from ID
-	var bridgeName string
-	for name, res := range s.bridges {
-		if res.id == req.GetBridgeId() || name == req.GetBridgeId() {
-			bridgeName = name
-			break
-		}
-	}
-
-	if bridgeName == "" {
+	bridgeName, found := s.findBridgeName(req.GetBridgeId())
+	if !found {
 		return nil, status.Error(codes.NotFound, "bridge not found")
 	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	// Collect all VLANs for this bridge
 	vlans := make([]*platformv1.VLAN, 0)
@@ -1483,10 +1475,28 @@ func (s *SDNService) policyResourceToPb(id string, p *policyResource) *platformv
 // Returns the bridge name and true if found, or empty string and false if not found.
 func (s *SDNService) findBridgeName(id string) (string, bool) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	for name, res := range s.bridges {
 		if res.id == id || name == id {
+			s.mu.RUnlock()
 			return name, true
+		}
+	}
+	s.mu.RUnlock()
+
+	// Fall back to OVS so bridges created out-of-band (e.g. by an
+	// upstream provisioner before the service started) are still
+	// addressable for VLAN/Port operations.
+	client := s.getOVSClient()
+	if client == nil {
+		return "", false
+	}
+	ovsBridges, err := client.ListBridges(context.Background())
+	if err != nil {
+		return "", false
+	}
+	for _, b := range ovsBridges {
+		if b.UUID == id || b.Name == id {
+			return b.Name, true
 		}
 	}
 	return "", false

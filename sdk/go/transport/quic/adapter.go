@@ -56,9 +56,17 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 
 	// Ensure TLS 1.3 minimum on any provided TLS config
 	tlsConfig := opts.TLSConfig
-	if tlsConfig != nil && tlsConfig.MinVersion < tls.VersionTLS13 {
+	if tlsConfig != nil {
 		tlsConfig = tlsConfig.Clone()
-		tlsConfig.MinVersion = tls.VersionTLS13
+		if tlsConfig.MinVersion < tls.VersionTLS13 {
+			tlsConfig.MinVersion = tls.VersionTLS13
+		}
+	}
+	if opts.TLSServerName != "" {
+		if tlsConfig == nil {
+			tlsConfig = &tls.Config{MinVersion: tls.VersionTLS13}
+		}
+		tlsConfig.ServerName = opts.TLSServerName
 	}
 
 	// Build QUIC client configuration
@@ -92,7 +100,7 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 // Connection returns a gRPC-compatible client connection interface.
 // This wraps the QUIC adapter to provide a unified interface for service clients.
 func (a *Adapter) Connection() grpc.ClientConnInterface {
-	return &quicClientConn{adapter: a}
+	return &quicClientConn{adapter: a, sender: &realQUICSender{client: a.client}}
 }
 
 // Close closes the QUIC client connection.
@@ -141,13 +149,43 @@ func (a *Adapter) SetToken(token string) {
 	}
 }
 
+// quicSender abstracts the QUIC client transport so tests can inject a
+// recorder and assert on the exact bytes that hit the wire. The two
+// methods mirror the two send modes used by Invoke: RPC-style for
+// regular opcodes (encode args / decode reply) and raw-byte mode for
+// category opcodes where the SDK must prepend a sub-opcode prefix.
+type quicSender interface {
+	Send(ctx context.Context, opcode byte, reqData, respData interface{}) error
+	SendRequest(ctx context.Context, opcode byte, payload []byte) (*quicapi.Response, error)
+}
+
+// realQUICSender wraps the concrete *quicapi.Client to satisfy quicSender.
+type realQUICSender struct {
+	client *quicapi.Client
+}
+
+func (s *realQUICSender) Send(ctx context.Context, opcode byte, reqData, respData interface{}) error {
+	return s.client.Send(ctx, opcode, reqData, respData)
+}
+
+func (s *realQUICSender) SendRequest(ctx context.Context, opcode byte, payload []byte) (*quicapi.Response, error) {
+	return s.client.SendRequest(ctx, opcode, payload)
+}
+
 // quicClientConn implements grpc.ClientConnInterface for QUIC transport.
 // This allows using QUIC as a drop-in replacement for gRPC connections.
 type quicClientConn struct {
 	adapter *Adapter
+	sender  quicSender
 }
 
 // Invoke performs a unary RPC call by translating to QUIC opcode requests.
+// Category opcodes (overlay, gateway, IPAM, switch, tenant barrier, etc.)
+// multiplex multiple operations under one wire opcode by stuffing the
+// sub-opcode into payload[0] and the marshalled request into payload[1:].
+// The server-side dispatchers (e.g. handleSwitchCategory,
+// handleTenantBarrierCategory) require this exact framing or they reject
+// the request with ErrQUICMissingField{Field: "sub_opcode"}.
 func (c *quicClientConn) Invoke(ctx context.Context, method string, args interface{}, reply interface{}, opts ...grpc.CallOption) error {
 	// Validate method mapping first (request validation before infrastructure check)
 	opcode, ok := grpcMethodToOpcodeMap[method]
@@ -164,8 +202,40 @@ func (c *quicClientConn) Invoke(ctx context.Context, method string, args interfa
 		return status.Error(codes.Unavailable, "client not initialized")
 	}
 
-	// Send request via QUIC client
-	err := c.adapter.client.Send(ctx, opcode, args, reply)
+	if c.sender == nil {
+		c.sender = &realQUICSender{client: c.adapter.client}
+	}
+
+	// Category-opcode services require an explicit sub-opcode prefix on
+	// the wire. For these methods we marshal the request ourselves,
+	// prepend the sub-opcode byte, and use the raw-payload SendRequest
+	// path so the prefix is preserved end-to-end.
+	if isCategoryOpcode(opcode) {
+		subOpcode, hasSubOpcode := categorySubOpcodeMap[method]
+		if !hasSubOpcode {
+			return status.Error(codes.Internal, ErrCategorySubOpcodeMissing{Method: method, Opcode: opcode}.Error())
+		}
+
+		payload, err := buildCategoryPayload(subOpcode, args)
+		if err != nil {
+			return status.Error(codes.Internal, err.Error())
+		}
+
+		resp, err := c.sender.SendRequest(ctx, opcode, payload)
+		if err != nil {
+			return translateQUICErrorToGRPC(err)
+		}
+
+		if reply != nil && len(resp.Payload) > 0 {
+			if decErr := quicapi.DecodePayload(resp.Payload, reply); decErr != nil {
+				return status.Error(codes.Internal, ErrDecodingFailed{Err: decErr}.Error())
+			}
+		}
+		return nil
+	}
+
+	// Standard non-category path: client encodes args, decodes reply.
+	err := c.sender.Send(ctx, opcode, args, reply)
 	if err != nil {
 		return translateQUICErrorToGRPC(err)
 	}
@@ -173,213 +243,285 @@ func (c *quicClientConn) Invoke(ctx context.Context, method string, args interfa
 	return nil
 }
 
-// NewStream creates a new stream (not fully supported for QUIC in this adapter).
-func (c *quicClientConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	return nil, status.Error(codes.Unimplemented, "streaming not supported over QUIC transport adapter")
+// buildCategoryPayload marshals args via the protocol codec and prepends
+// the sub-opcode byte expected by category-opcode dispatchers. Nil args
+// are encoded as a one-byte payload containing only the sub-opcode,
+// which mirrors the server-side decode path that treats payload[1:] as
+// the optional sub-request body.
+func buildCategoryPayload(subOpcode byte, args interface{}) ([]byte, error) {
+	if args == nil {
+		return []byte{subOpcode}, nil
+	}
+
+	encoded, err := quicapi.EncodePayload(args)
+	if err != nil {
+		return nil, ErrEncodingFailed{Err: err}
+	}
+
+	out := make([]byte, 0, 1+len(encoded))
+	out = append(out, subOpcode)
+	out = append(out, encoded...)
+	return out, nil
+}
+
+// isCategoryOpcode reports whether opcode is one of the well-known
+// category opcodes that multiplex sub-operations via payload[0].
+func isCategoryOpcode(opcode byte) bool {
+	_, ok := categoryOpcodes[opcode]
+	return ok
+}
+
+// categoryOpcodes is the canonical set of QUIC category opcodes whose
+// server-side handlers expect payload[0] to be the sub-opcode and
+// payload[1:] to be the sub-request body. Any opcode added here MUST
+// have a matching server-side dispatcher in pkg/api/daemon and every
+// gRPC method routed to it MUST appear in categorySubOpcodeMap.
+var categoryOpcodes = map[byte]struct{}{
+	quicapi.OpOverlayCategory:       {},
+	quicapi.OpGatewayCategory:       {},
+	quicapi.OpIPAMCategory:          {},
+	quicapi.OpTPM2Category:          {},
+	quicapi.OpCeremonyCategory:      {},
+	quicapi.OpPIVCategory:           {},
+	quicapi.OpLUKSCategory:          {},
+	quicapi.OpFIDO2Category:         {},
+	quicapi.OpTenantBarrierCategory: {},
+	quicapi.OpSwitchCategory:        {},
+}
+
+// categorySubOpcodeMap routes gRPC method paths to the sub-opcode byte
+// that the server-side category dispatcher expects in payload[0].
+//
+// Every entry in grpcMethodToOpcodeMap whose value appears in
+// categoryOpcodes MUST have a corresponding entry here. The package
+// init function asserts this invariant at startup so a missing mapping
+// is caught at process start, not at first request.
+var categorySubOpcodeMap = map[string]byte{
+	// Switch Service — OpSwitchCategory (0xCC)
+	// Server dispatcher: pkg/api/daemon/quic_switch.go::handleSwitchCategory
+	"/platform.v1.SwitchService/ListPorts":     quicapi.SwitchSubListPorts,
+	"/platform.v1.SwitchService/GetPortStatus": quicapi.SwitchSubGetPortStatus,
+	"/platform.v1.SwitchService/SetPortVLAN":   quicapi.SwitchSubSetPortVLAN,
+	"/platform.v1.SwitchService/EnablePort":    quicapi.SwitchSubEnablePort,
+	"/platform.v1.SwitchService/DisablePort":   quicapi.SwitchSubDisablePort,
+
+	// Tenant Service — OpTenantBarrierCategory (0x9E)
+	// Server dispatcher: pkg/api/daemon/quic_tenant.go::handleTenantBarrierCategory
+	"/platform.v1.TenantService/InitTenantBarrier":      quicapi.TenantBarrierSubInit,
+	"/platform.v1.TenantService/UnsealTenantBarrier":    quicapi.TenantBarrierSubUnseal,
+	"/platform.v1.TenantService/SealTenantBarrier":      quicapi.TenantBarrierSubSeal,
+	"/platform.v1.TenantService/GetTenantBarrierStatus": quicapi.TenantBarrierSubStatus,
+}
+
+// init asserts the cross-table invariant: every gRPC method whose
+// resolved opcode is a category opcode must have a sub-opcode mapping.
+// A missing entry would silently send a zero-byte sub-opcode and trip
+// the server's StatusNotImplemented branch on the first call.
+func init() {
+	for method, opcode := range grpcMethodToOpcodeMap {
+		if _, isCat := categoryOpcodes[opcode]; !isCat {
+			continue
+		}
+		if _, hasSub := categorySubOpcodeMap[method]; !hasSub {
+			panic(ErrCategorySubOpcodeMissing{Method: method, Opcode: opcode}.Error())
+		}
+	}
 }
 
 // grpcMethodToOpcodeMap provides O(1) lookup for gRPC method to QUIC opcode mapping.
+// Method paths use the proto package "platform.v1" (with dot) and full RPC
+// names that exactly match the generated gRPC stubs in pkg/api/grpc/gen.
+// The QUIC server side dispatches requests by opcode in pkg/api/daemon/quic_service.go.
 var grpcMethodToOpcodeMap = map[string]byte{
-	// Health Operations
-	"/platformv1.PlatformDaemon/Health":    quicapi.OpHealth,
-	"/platformv1.PlatformDaemon/Liveness":  quicapi.OpLiveness,
-	"/platformv1.PlatformDaemon/Readiness": quicapi.OpReadiness,
+	// CA Service — proto: pkg/api/grpc/proto/ca.proto
+	"/platform.v1.CAService/GetCAInfo":         quicapi.OpCAInfo,
+	"/platform.v1.CAService/IssueCertificate":  quicapi.OpCAIssue,
+	"/platform.v1.CAService/GetCertificate":    quicapi.OpCAGet,
+	"/platform.v1.CAService/ListCertificates":  quicapi.OpCAList,
+	"/platform.v1.CAService/RevokeCertificate": quicapi.OpCARevoke,
+	"/platform.v1.CAService/RenewCertificate":  quicapi.OpCARenew,
+	"/platform.v1.CAService/VerifyCertificate": quicapi.OpCAVerify,
+	"/platform.v1.CAService/GetCRL":            quicapi.OpCACRL,
+	"/platform.v1.CAService/GetCABundle":       quicapi.OpCABundle,
 
-	// CA Service
-	"/platformv1.CAService/GetInfo":   quicapi.OpCAInfo,
-	"/platformv1.CAService/Issue":     quicapi.OpCAIssue,
-	"/platformv1.CAService/Get":       quicapi.OpCAGet,
-	"/platformv1.CAService/List":      quicapi.OpCAList,
-	"/platformv1.CAService/Revoke":    quicapi.OpCARevoke,
-	"/platformv1.CAService/Renew":     quicapi.OpCARenew,
-	"/platformv1.CAService/Verify":    quicapi.OpCAVerify,
-	"/platformv1.CAService/GetCRL":    quicapi.OpCACRL,
-	"/platformv1.CAService/GetBundle": quicapi.OpCABundle,
-
-	// IAM User Operations
-	"/platformv1.PlatformIAMService/CreateUser": quicapi.OpIAMUserCreate,
-	"/platformv1.PlatformIAMService/DeleteUser": quicapi.OpIAMUserDelete,
-	"/platformv1.PlatformIAMService/GetUser":    quicapi.OpIAMUserGet,
-	"/platformv1.PlatformIAMService/ListUsers":  quicapi.OpIAMUserList,
+	// IAM User Operations — proto: pkg/api/grpc/proto/iam.proto
+	"/platform.v1.PlatformIAMService/CreateUser": quicapi.OpIAMUserCreate,
+	"/platform.v1.PlatformIAMService/DeleteUser": quicapi.OpIAMUserDelete,
+	"/platform.v1.PlatformIAMService/GetUser":    quicapi.OpIAMUserGet,
+	"/platform.v1.PlatformIAMService/ListUsers":  quicapi.OpIAMUserList,
+	"/platform.v1.PlatformIAMService/UpdateUser": quicapi.OpIAMUserUpdate,
 
 	// IAM Role Operations
-	"/platformv1.PlatformIAMService/CreateRole": quicapi.OpIAMRoleCreate,
-	"/platformv1.PlatformIAMService/DeleteRole": quicapi.OpIAMRoleDelete,
-	"/platformv1.PlatformIAMService/GetRole":    quicapi.OpIAMRoleGet,
-	"/platformv1.PlatformIAMService/ListRoles":  quicapi.OpIAMRoleList,
-	"/platformv1.PlatformIAMService/AssignRole": quicapi.OpIAMRoleAssign,
-	"/platformv1.PlatformIAMService/RevokeRole": quicapi.OpIAMRoleRevoke,
+	"/platform.v1.PlatformIAMService/CreateRole": quicapi.OpIAMRoleCreate,
+	"/platform.v1.PlatformIAMService/DeleteRole": quicapi.OpIAMRoleDelete,
+	"/platform.v1.PlatformIAMService/GetRole":    quicapi.OpIAMRoleGet,
+	"/platform.v1.PlatformIAMService/ListRoles":  quicapi.OpIAMRoleList,
+	"/platform.v1.PlatformIAMService/AssignRole": quicapi.OpIAMRoleAssign,
+	"/platform.v1.PlatformIAMService/RevokeRole": quicapi.OpIAMRoleRevoke,
 
 	// IAM Group Operations
-	"/platformv1.PlatformIAMService/CreateGroup":       quicapi.OpIAMGroupCreate,
-	"/platformv1.PlatformIAMService/DeleteGroup":       quicapi.OpIAMGroupDelete,
-	"/platformv1.PlatformIAMService/GetGroup":          quicapi.OpIAMGroupGet,
-	"/platformv1.PlatformIAMService/ListGroups":        quicapi.OpIAMGroupList,
-	"/platformv1.PlatformIAMService/AddGroupMember":    quicapi.OpIAMGroupAddMember,
-	"/platformv1.PlatformIAMService/RemoveGroupMember": quicapi.OpIAMGroupRemoveMember,
+	"/platform.v1.PlatformIAMService/CreateGroup":       quicapi.OpIAMGroupCreate,
+	"/platform.v1.PlatformIAMService/DeleteGroup":       quicapi.OpIAMGroupDelete,
+	"/platform.v1.PlatformIAMService/GetGroup":          quicapi.OpIAMGroupGet,
+	"/platform.v1.PlatformIAMService/ListGroups":        quicapi.OpIAMGroupList,
+	"/platform.v1.PlatformIAMService/AddGroupMember":    quicapi.OpIAMGroupAddMember,
+	"/platform.v1.PlatformIAMService/RemoveGroupMember": quicapi.OpIAMGroupRemoveMember,
 
-	// IAM Tenant Operations
-	"/platformv1.PlatformIAMService/CreateTenant": quicapi.OpTenantCreate,
-	"/platformv1.PlatformIAMService/DeleteTenant": quicapi.OpTenantDelete,
-	"/platformv1.PlatformIAMService/GetTenant":    quicapi.OpTenantGet,
-	"/platformv1.PlatformIAMService/ListTenants":  quicapi.OpTenantList,
+	// IAM Tenant Operations (delegated through PlatformIAMService)
+	"/platform.v1.PlatformIAMService/CreateTenant": quicapi.OpTenantCreate,
+	"/platform.v1.PlatformIAMService/DeleteTenant": quicapi.OpTenantDelete,
+	"/platform.v1.PlatformIAMService/GetTenant":    quicapi.OpTenantGet,
+	"/platform.v1.PlatformIAMService/ListTenants":  quicapi.OpTenantList,
 
-	// IAM Auth Operations
-	"/platformv1.PlatformIAMService/Authenticate":    quicapi.OpIAMAuthenticate,
-	"/platformv1.PlatformIAMService/CheckPermission": quicapi.OpIAMCheckPermission,
-	"/platformv1.PlatformIAMService/CreateToken":     quicapi.OpIAMTokenCreate,
-	"/platformv1.PlatformIAMService/RevokeToken":     quicapi.OpIAMTokenRevoke,
-	"/platformv1.PlatformIAMService/VerifyToken":     quicapi.OpIAMTokenVerify,
+	// IAM Token / Auth Operations
+	"/platform.v1.PlatformIAMService/CheckPermission": quicapi.OpIAMCheckPermission,
+	"/platform.v1.PlatformIAMService/CreateToken":     quicapi.OpIAMTokenCreate,
+	"/platform.v1.PlatformIAMService/RevokeToken":     quicapi.OpIAMTokenRevoke,
+	"/platform.v1.PlatformIAMService/VerifyToken":     quicapi.OpIAMTokenVerify,
 
-	// KMS Key Management
-	"/platformv1.KeyManagementService/CreateKey":  quicapi.OpKMSGenerateKey,
-	"/platformv1.KeyManagementService/ImportKey":  quicapi.OpKMSImportKey,
-	"/platformv1.KeyManagementService/GetKey":     quicapi.OpKMSGetKey,
-	"/platformv1.KeyManagementService/ListKeys":   quicapi.OpKMSListKeys,
-	"/platformv1.KeyManagementService/DeleteKey":  quicapi.OpKMSDeleteKey,
-	"/platformv1.KeyManagementService/RotateKey":  quicapi.OpKMSRotateKey,
-	"/platformv1.KeyManagementService/ExportKey":  quicapi.OpKMSExportKey,
-	"/platformv1.KeyManagementService/GetVersion": quicapi.OpKMSGetKeyVersions,
+	// KMS Key Management — proto: pkg/api/grpc/proto/kms.proto
+	"/platform.v1.KeyManagementService/GenerateKey":            quicapi.OpKMSGenerateKey,
+	"/platform.v1.KeyManagementService/ImportKey":              quicapi.OpKMSImportKey,
+	"/platform.v1.KeyManagementService/GetKey":                 quicapi.OpKMSGetKey,
+	"/platform.v1.KeyManagementService/ListKeys":               quicapi.OpKMSListKeys,
+	"/platform.v1.KeyManagementService/DeleteKey":              quicapi.OpKMSDeleteKey,
+	"/platform.v1.KeyManagementService/RotateKey":              quicapi.OpKMSRotateKey,
+	"/platform.v1.KeyManagementService/ExportKey":              quicapi.OpKMSExportKey,
+	"/platform.v1.KeyManagementService/GetKeyVersions":         quicapi.OpKMSGetKeyVersions,
+	"/platform.v1.KeyManagementService/Encrypt":                quicapi.OpKMSEncrypt,
+	"/platform.v1.KeyManagementService/Decrypt":                quicapi.OpKMSDecrypt,
+	"/platform.v1.KeyManagementService/Sign":                   quicapi.OpKMSSign,
+	"/platform.v1.KeyManagementService/Verify":                 quicapi.OpKMSVerify,
+	"/platform.v1.KeyManagementService/GenerateRandom":         quicapi.OpKMSGenerateRandom,
+	"/platform.v1.KeyManagementService/Hash":                   quicapi.OpKMSHash,
+	"/platform.v1.KeyManagementService/HMAC":                   quicapi.OpKMSHMAC,
+	"/platform.v1.KeyManagementService/GenerateDataKey":        quicapi.OpKMSGenerateDataKey,
+	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": quicapi.OpKMSGenerateWrappedDataKey,
 
-	// KMS Crypto Operations
-	"/platformv1.KeyManagementService/Encrypt":                quicapi.OpKMSEncrypt,
-	"/platformv1.KeyManagementService/Decrypt":                quicapi.OpKMSDecrypt,
-	"/platformv1.KeyManagementService/Sign":                   quicapi.OpKMSSign,
-	"/platformv1.KeyManagementService/Verify":                 quicapi.OpKMSVerify,
-	"/platformv1.KeyManagementService/GenerateRandom":         quicapi.OpKMSGenerateRandom,
-	"/platformv1.KeyManagementService/Hash":                   quicapi.OpKMSHash,
-	"/platformv1.KeyManagementService/HMAC":                   quicapi.OpKMSHMAC,
-	"/platformv1.KeyManagementService/GenerateDataKey":        quicapi.OpKMSGenerateDataKey,
-	"/platformv1.KeyManagementService/GenerateWrappedDataKey": quicapi.OpKMSGenerateWrappedDataKey,
+	// vTPM Service — proto: pkg/api/grpc/proto/vtpm.proto
+	"/platform.v1.VTPMInstanceService/CreateInstance":    quicapi.OpVTPMCreate,
+	"/platform.v1.VTPMInstanceService/DeleteInstance":    quicapi.OpVTPMDelete,
+	"/platform.v1.VTPMInstanceService/StartInstance":     quicapi.OpVTPMStart,
+	"/platform.v1.VTPMInstanceService/StopInstance":      quicapi.OpVTPMStop,
+	"/platform.v1.VTPMInstanceService/ListInstances":     quicapi.OpVTPMList,
+	"/platform.v1.VTPMInstanceService/GetInstance":       quicapi.OpVTPMGetState,
+	"/platform.v1.VTPMInstanceService/GetInstanceStatus": quicapi.OpVTPMGetState,
+	"/platform.v1.VTPMService/QuoteVTPM":                 quicapi.OpVTPMQuote,
+	"/platform.v1.VTPMService/SealVTPM":                  quicapi.OpVTPMSeal,
+	"/platform.v1.VTPMService/UnsealVTPM":                quicapi.OpVTPMUnseal,
+	"/platform.v1.VTPMService/ExtendVTPMPCR":             quicapi.OpVTPMExtendPCR,
+	"/platform.v1.VTPMService/ReadVTPMPCR":               quicapi.OpVTPMReadPCR,
 
-	// VTPM Operations
-	"/platformv1.VTPMService/Create":    quicapi.OpVTPMCreate,
-	"/platformv1.VTPMService/Delete":    quicapi.OpVTPMDelete,
-	"/platformv1.VTPMService/Start":     quicapi.OpVTPMStart,
-	"/platformv1.VTPMService/Stop":      quicapi.OpVTPMStop,
-	"/platformv1.VTPMService/List":      quicapi.OpVTPMList,
-	"/platformv1.VTPMService/GetState":  quicapi.OpVTPMGetState,
-	"/platformv1.VTPMService/GetEK":     quicapi.OpVTPMGetEK,
-	"/platformv1.VTPMService/GetAK":     quicapi.OpVTPMGetAK,
-	"/platformv1.VTPMService/CreateAK":  quicapi.OpVTPMCreateAK,
-	"/platformv1.VTPMService/Quote":     quicapi.OpVTPMQuote,
-	"/platformv1.VTPMService/Seal":      quicapi.OpVTPMSeal,
-	"/platformv1.VTPMService/Unseal":    quicapi.OpVTPMUnseal,
-	"/platformv1.VTPMService/ExtendPCR": quicapi.OpVTPMExtendPCR,
-	"/platformv1.VTPMService/ReadPCR":   quicapi.OpVTPMReadPCR,
-	"/platformv1.VTPMService/GetRandom": quicapi.OpVTPMGetRandom,
+	// Device Service — proto: pkg/api/grpc/proto/device.proto
+	"/platform.v1.DeviceService/CreateDevice":       quicapi.OpDeviceRegister,
+	"/platform.v1.DeviceService/DeleteDevice":       quicapi.OpDeviceUnregister,
+	"/platform.v1.DeviceService/GetDevice":          quicapi.OpDeviceGet,
+	"/platform.v1.DeviceService/ListDevices":        quicapi.OpDeviceList,
+	"/platform.v1.DeviceService/UpdateDevice":       quicapi.OpDeviceUpdate,
+	"/platform.v1.DeviceService/ActivateDevice":     quicapi.OpDeviceActivate,
+	"/platform.v1.DeviceService/CountDevices":       quicapi.OpDeviceList,
+	"/platform.v1.DeviceService/FindDeviceBySerial": quicapi.OpDeviceGet,
+	"/platform.v1.DeviceService/CreateProfile":      quicapi.OpDeviceCreateProfile,
+	"/platform.v1.DeviceService/GetProfile":         quicapi.OpDeviceGetProfile,
+	"/platform.v1.DeviceService/ListProfiles":       quicapi.OpDeviceListProfiles,
+	"/platform.v1.DeviceService/DeleteProfile":      quicapi.OpDeviceDeleteProfile,
 
-	// Device Operations
-	"/platformv1.DeviceService/Register": quicapi.OpDeviceRegister,
-	"/platformv1.DeviceService/Delete":   quicapi.OpDeviceUnregister,
-	"/platformv1.DeviceService/Get":      quicapi.OpDeviceGet,
-	"/platformv1.DeviceService/List":     quicapi.OpDeviceList,
-	"/platformv1.DeviceService/Update":   quicapi.OpDeviceUpdate,
-	"/platformv1.DeviceService/Attest":   quicapi.OpDeviceAttest,
-	"/platformv1.DeviceService/Activate": quicapi.OpDeviceActivate,
+	// SDN Service — proto: pkg/api/grpc/proto/sdn.proto
+	"/platform.v1.SDNService/CreateBridge": quicapi.OpSDNCreateBridge,
+	"/platform.v1.SDNService/DeleteBridge": quicapi.OpSDNDeleteBridge,
+	"/platform.v1.SDNService/ListBridges":  quicapi.OpSDNListBridges,
+	"/platform.v1.SDNService/GetBridge":    quicapi.OpSDNGetBridge,
+	"/platform.v1.SDNService/GetPort":      quicapi.OpSDNGetPort,
+	"/platform.v1.SDNService/SetPortState": quicapi.OpSDNSetPortState,
+	"/platform.v1.SDNService/CreatePort":   quicapi.OpSDNCreatePort,
+	"/platform.v1.SDNService/DeletePort":   quicapi.OpSDNDeletePort,
+	"/platform.v1.SDNService/ListPorts":    quicapi.OpSDNListPorts,
+	"/platform.v1.SDNService/AddFlow":      quicapi.OpSDNAddFlow,
+	"/platform.v1.SDNService/DeleteFlow":   quicapi.OpSDNDeleteFlow,
+	"/platform.v1.SDNService/ListFlows":    quicapi.OpSDNListFlows,
 
-	// SDN Operations
-	"/platformv1.SDNService/CreateBridge":     quicapi.OpSDNCreateBridge,
-	"/platformv1.SDNService/DeleteBridge":     quicapi.OpSDNDeleteBridge,
-	"/platformv1.SDNService/ListBridges":      quicapi.OpSDNListBridges,
-	"/platformv1.SDNService/GetPortState":     quicapi.OpSDNGetPortState,
-	"/platformv1.SDNService/SetPortState":     quicapi.OpSDNSetPortState,
-	"/platformv1.SDNService/AddPort":          quicapi.OpSDNCreatePort,
-	"/platformv1.SDNService/DeletePort":       quicapi.OpSDNDeletePort,
-	"/platformv1.SDNService/AddFlow":          quicapi.OpSDNAddFlow,
-	"/platformv1.SDNService/DeleteFlow":       quicapi.OpSDNDeleteFlow,
-	"/platformv1.SDNService/ListFlows":        quicapi.OpSDNListFlows,
-	"/platformv1.SDNService/ApplyPolicy":      quicapi.OpSDNApplyPolicy,
-	"/platformv1.SDNService/GetPolicy":        quicapi.OpSDNGetPolicy,
-	"/platformv1.SDNService/ListPolicies":     quicapi.OpSDNListPolicies,
-	"/platformv1.SDNService/AuthenticatePort": quicapi.OpSDNSetPortState,
-	"/platformv1.SDNService/GetVLAN":          quicapi.OpSDNGetVLAN,
+	// DNS Service — proto: pkg/api/grpc/proto/platform_dns.proto
+	"/platform.v1.DNSService/AddRecord":    quicapi.OpDNSAddRecord,
+	"/platform.v1.DNSService/DeleteRecord": quicapi.OpDNSDeleteRecord,
+	"/platform.v1.DNSService/ListRecords":  quicapi.OpDNSListRecords,
+	"/platform.v1.DNSService/Resolve":      quicapi.OpDNSResolve,
+	"/platform.v1.DNSService/CreateZone":   quicapi.OpDNSAddZone,
+	"/platform.v1.DNSService/DeleteZone":   quicapi.OpDNSDeleteZone,
+	"/platform.v1.DNSService/ListZones":    quicapi.OpDNSListZones,
 
-	// DNS Operations
-	"/platformv1.DNSService/AddRecord":    quicapi.OpDNSAddRecord,
-	"/platformv1.DNSService/DeleteRecord": quicapi.OpDNSDeleteRecord,
-	"/platformv1.DNSService/GetRecord":    quicapi.OpDNSGetRecord,
-	"/platformv1.DNSService/ListRecords":  quicapi.OpDNSListRecords,
-	"/platformv1.DNSService/Resolve":      quicapi.OpDNSResolve,
-	"/platformv1.DNSService/CreateZone":   quicapi.OpDNSAddZone,
-	"/platformv1.DNSService/DeleteZone":   quicapi.OpDNSDeleteZone,
-	"/platformv1.DNSService/ListZones":    quicapi.OpDNSListZones,
+	// Attestation Service — proto: pkg/api/grpc/proto/attestation.proto
+	"/platform.v1.AttestationService/GetAttestationQuote":    quicapi.OpAttestQuote,
+	"/platform.v1.AttestationService/VerifyAttestationQuote": quicapi.OpAttestVerify,
+	"/platform.v1.AttestationService/CollectHostAttestation": quicapi.OpAttestQuote,
 
-	// Attestation Operations
-	"/platformv1.AttestationService/GetQuote":       quicapi.OpAttestQuote,
-	"/platformv1.AttestationService/VerifyQuote":    quicapi.OpAttestVerify,
-	"/platformv1.AttestationService/GetEK":          quicapi.OpAttestGetEK,
-	"/platformv1.AttestationService/GetAK":          quicapi.OpAttestGetAK,
-	"/platformv1.AttestationService/ChallengeAK":    quicapi.OpAttestChallenge,
-	"/platformv1.AttestationService/VerifyChalleng": quicapi.OpAttestResponse,
-	"/platformv1.AttestationService/GetPCRs":        quicapi.OpAttestGetPCRs,
+	// IDevID Service — proto: pkg/api/grpc/proto/idevid.proto
+	"/platform.v1.IDevIDService/GetIDevID":                quicapi.OpIDevIDInfo,
+	"/platform.v1.IDevIDService/DeleteIDevID":             quicapi.OpIDevIDDelete,
+	"/platform.v1.IDevIDService/CreateIDevIDCSR":          quicapi.OpIDevIDCSR,
+	"/platform.v1.IDevIDService/InstallIDevIDCertificate": quicapi.OpIDevIDInstallCert,
+	"/platform.v1.IDevIDService/GetIDevIDCertificate":     quicapi.OpIDevIDGetCert,
 
-	// IDevID Operations
-	"/platformv1.IDevIDService/Generate":    quicapi.OpIDevIDGenerate,
-	"/platformv1.IDevIDService/GetInfo":     quicapi.OpIDevIDInfo,
-	"/platformv1.IDevIDService/Delete":      quicapi.OpIDevIDDelete,
-	"/platformv1.IDevIDService/GetCSR":      quicapi.OpIDevIDCSR,
-	"/platformv1.IDevIDService/InstallCert": quicapi.OpIDevIDInstallCert,
-	"/platformv1.IDevIDService/GetCert":     quicapi.OpIDevIDGetCert,
-	"/platformv1.IDevIDService/Exists":      quicapi.OpHasIDevID,
+	// IAK (under IDevIDService)
+	"/platform.v1.IDevIDService/GetIAK":                quicapi.OpIAKInfo,
+	"/platform.v1.IDevIDService/DeleteIAK":             quicapi.OpIAKDelete,
+	"/platform.v1.IDevIDService/CreateIAKCSR":          quicapi.OpIAKCSR,
+	"/platform.v1.IDevIDService/InstallIAKCertificate": quicapi.OpIAKInstallCert,
+	"/platform.v1.IDevIDService/GetIAKCertificate":     quicapi.OpIAKGetCert,
 
-	// IAK Operations
-	"/platformv1.IAKService/Generate":    quicapi.OpIAKGenerate,
-	"/platformv1.IAKService/GetInfo":     quicapi.OpIAKInfo,
-	"/platformv1.IAKService/Delete":      quicapi.OpIAKDelete,
-	"/platformv1.IAKService/GetCSR":      quicapi.OpIAKCSR,
-	"/platformv1.IAKService/InstallCert": quicapi.OpIAKInstallCert,
-	"/platformv1.IAKService/GetCert":     quicapi.OpIAKGetCert,
-	"/platformv1.IAKService/Exists":      quicapi.OpHasIAK,
+	// Tenant Service — proto: pkg/api/grpc/proto/tenant.proto
+	"/platform.v1.TenantService/CreateTenant":    quicapi.OpTenantCreate,
+	"/platform.v1.TenantService/DeleteTenant":    quicapi.OpTenantDelete,
+	"/platform.v1.TenantService/GetTenant":       quicapi.OpTenantGet,
+	"/platform.v1.TenantService/GetTenantByName": quicapi.OpTenantGetByName,
+	"/platform.v1.TenantService/ListTenants":     quicapi.OpTenantList,
+	"/platform.v1.TenantService/UpdateTenant":    quicapi.OpTenantUpdate,
+	"/platform.v1.TenantService/SuspendTenant":   quicapi.OpTenantSuspend,
+	"/platform.v1.TenantService/ResumeTenant":    quicapi.OpTenantResume,
+	"/platform.v1.TenantService/GetQuotas":       quicapi.OpTenantGetQuotas,
+	"/platform.v1.TenantService/UpdateQuotas":    quicapi.OpTenantUpdateQuotas,
+	"/platform.v1.TenantService/GetUsage":        quicapi.OpTenantGetUsage,
+	// Per-tenant barrier ops share OpTenantBarrierCategory and dispatch via
+	// payload[0] on the server (pkg/api/daemon/quic_tenant.go::handleTenantBarrierCategory).
+	// The SDK adapter prepends the sub-opcode automatically; see
+	// categorySubOpcodeMap above.
+	"/platform.v1.TenantService/InitTenantBarrier":      quicapi.OpTenantBarrierCategory,
+	"/platform.v1.TenantService/UnsealTenantBarrier":    quicapi.OpTenantBarrierCategory,
+	"/platform.v1.TenantService/SealTenantBarrier":      quicapi.OpTenantBarrierCategory,
+	"/platform.v1.TenantService/GetTenantBarrierStatus": quicapi.OpTenantBarrierCategory,
 
-	// Tenant Operations
-	"/platformv1.TenantService/Create":       quicapi.OpTenantCreate,
-	"/platformv1.TenantService/Delete":       quicapi.OpTenantDelete,
-	"/platformv1.TenantService/Get":          quicapi.OpTenantGet,
-	"/platformv1.TenantService/GetByName":    quicapi.OpTenantGetByName,
-	"/platformv1.TenantService/List":         quicapi.OpTenantList,
-	"/platformv1.TenantService/Update":       quicapi.OpTenantUpdate,
-	"/platformv1.TenantService/Suspend":      quicapi.OpTenantSuspend,
-	"/platformv1.TenantService/Resume":       quicapi.OpTenantResume,
-	"/platformv1.TenantService/GetQuotas":    quicapi.OpTenantGetQuotas,
-	"/platformv1.TenantService/UpdateQuotas": quicapi.OpTenantUpdateQuotas,
-	"/platformv1.TenantService/GetUsage":     quicapi.OpTenantGetUsage,
+	// Compute Service — proto: pkg/api/grpc/proto/compute.proto
+	"/platform.v1.ComputeService/CreateContainer":  quicapi.OpContainerCreate,
+	"/platform.v1.ComputeService/DeleteContainer":  quicapi.OpContainerRemove,
+	"/platform.v1.ComputeService/StartContainer":   quicapi.OpContainerStart,
+	"/platform.v1.ComputeService/StopContainer":    quicapi.OpContainerStop,
+	"/platform.v1.ComputeService/ListContainers":   quicapi.OpContainerList,
+	"/platform.v1.ComputeService/GetContainer":     quicapi.OpContainerGet,
+	"/platform.v1.ComputeService/GetContainerLogs": quicapi.OpContainerLogs,
 
-	// PXE Operations
-	"/platformv1.PXEService/ListDevices":    quicapi.OpPXEListDevices,
-	"/platformv1.PXEService/GetDevice":      quicapi.OpPXEGetDevice,
-	"/platformv1.PXEService/RegisterDevice": quicapi.OpPXERegisterDevice,
-	"/platformv1.PXEService/UpdateState":    quicapi.OpPXEUpdateState,
-	"/platformv1.PXEService/Authorize":      quicapi.OpPXEAuthorize,
-	"/platformv1.PXEService/Quarantine":     quicapi.OpPXEQuarantine,
+	// Switch Service — proto: pkg/api/grpc/proto/switch.proto
+	// All SwitchService methods route to OpSwitchCategory (0xCC); the
+	// SDK adapter prepends the sub-opcode automatically. See
+	// categorySubOpcodeMap and pkg/api/daemon/quic_switch.go.
+	"/platform.v1.SwitchService/ListPorts":     quicapi.OpSwitchCategory,
+	"/platform.v1.SwitchService/GetPortStatus": quicapi.OpSwitchCategory,
+	"/platform.v1.SwitchService/SetPortVLAN":   quicapi.OpSwitchCategory,
+	"/platform.v1.SwitchService/EnablePort":    quicapi.OpSwitchCategory,
+	"/platform.v1.SwitchService/DisablePort":   quicapi.OpSwitchCategory,
 
-	// Certificate Operations
-	"/platformv1.CertificateService/Issue":    quicapi.OpCertIssue,
-	"/platformv1.CertificateService/Revoke":   quicapi.OpCertRevoke,
-	"/platformv1.CertificateService/Renew":    quicapi.OpCertRenew,
-	"/platformv1.CertificateService/Get":      quicapi.OpCertGet,
-	"/platformv1.CertificateService/List":     quicapi.OpCertList,
-	"/platformv1.CertificateService/Verify":   quicapi.OpCertVerify,
-	"/platformv1.CertificateService/GetChain": quicapi.OpCertGetChain,
-	"/platformv1.CertificateService/GetCRL":   quicapi.OpCertGetCRL,
+	// Daemon Service — proto: pkg/api/grpc/proto/daemon.proto
+	"/platform.v1.PlatformDaemon/GetVersion":       quicapi.OpDaemonVersion,
+	"/platform.v1.PlatformDaemon/GetStatus":        quicapi.OpDaemonStatus,
+	"/platform.v1.PlatformDaemon/GetHealth":        quicapi.OpHealth,
+	"/platform.v1.PlatformDaemon/ListServices":     quicapi.OpDaemonListServices,
+	"/platform.v1.PlatformDaemon/GetServiceStatus": quicapi.OpDaemonGetService,
+	"/platform.v1.PlatformDaemon/StartService":     quicapi.OpDaemonStartService,
+	"/platform.v1.PlatformDaemon/StopService":      quicapi.OpDaemonStopService,
+	"/platform.v1.PlatformDaemon/RestartService":   quicapi.OpDaemonRestartService,
+}
 
-	// Provisioning Operations
-	"/platformv1.ProvisioningService/FetchProfile": quicapi.OpProvFetchProfile,
-	"/platformv1.ProvisioningService/Activate":     quicapi.OpProvActivate,
-	"/platformv1.ProvisioningService/Deactivate":   quicapi.OpProvDeactivate,
-	"/platformv1.ProvisioningService/GetState":     quicapi.OpProvGetState,
-	"/platformv1.ProvisioningService/Enroll":       quicapi.OpProvEnroll,
-	"/platformv1.ProvisioningService/Renew":        quicapi.OpProvRenew,
-
-	// JWT/Auth Operations
-	"/platformv1.AuthService/CreateJWT":  quicapi.OpJWTCreate,
-	"/platformv1.AuthService/VerifyJWT":  quicapi.OpJWTVerify,
-	"/platformv1.AuthService/RefreshJWT": quicapi.OpJWTRefresh,
-	"/platformv1.AuthService/RevokeJWT":  quicapi.OpJWTRevoke,
-	"/platformv1.AuthService/GetJWTKeys": quicapi.OpJWTGetKeys,
-	"/platformv1.AuthService/Login":      quicapi.OpAuthLogin,
-	"/platformv1.AuthService/Logout":     quicapi.OpAuthLogout,
-	"/platformv1.AuthService/Check":      quicapi.OpAuthCheck,
+// NewStream creates a new stream (not fully supported for QUIC in this adapter).
+func (c *quicClientConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	return nil, status.Error(codes.Unimplemented, "streaming not supported over QUIC transport adapter")
 }
 
 // quicStatusToGRPCMap provides O(1) lookup for QUIC status to gRPC code mapping.

@@ -1,0 +1,1 @@
+{"time":"2026-04-20T12:05:25.293073119-04:00","level":"ERROR","msg":"failed to open simulator","error":"TPM simulator not available: build with -tags tpm_simulator"}

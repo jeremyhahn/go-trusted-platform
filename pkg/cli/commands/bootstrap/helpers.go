@@ -41,8 +41,7 @@ func scanConfigForSecrets(data []byte) []secretInfo {
 		bootstrap.SchemeKMS,
 		bootstrap.SchemeRemoteKMS,
 		bootstrap.SchemeEnv,
-		bootstrap.SchemeAutoGen,
-		bootstrap.SchemeEncrypted,
+		bootstrap.SchemeIDevID,
 	}
 
 	// Build regex to match URIs in YAML values
@@ -152,8 +151,7 @@ func isSecretURI(s string) bool {
 	return strings.HasPrefix(s, bootstrap.SchemeKMS) ||
 		strings.HasPrefix(s, bootstrap.SchemeRemoteKMS) ||
 		strings.HasPrefix(s, bootstrap.SchemeEnv) ||
-		strings.HasPrefix(s, bootstrap.SchemeAutoGen) ||
-		strings.HasPrefix(s, bootstrap.SchemeEncrypted)
+		strings.HasPrefix(s, bootstrap.SchemeIDevID)
 }
 
 // maskSecretURI masks sensitive parts of a secret URI for display
@@ -162,8 +160,7 @@ func maskSecretURI(uri string) string {
 		bootstrap.SchemeKMS,
 		bootstrap.SchemeRemoteKMS,
 		bootstrap.SchemeEnv,
-		bootstrap.SchemeAutoGen,
-		bootstrap.SchemeEncrypted,
+		bootstrap.SchemeIDevID,
 	}
 
 	for _, scheme := range schemes {
@@ -215,19 +212,13 @@ func resolveSecretValue(ctx context.Context, client platform.Client, uri string)
 		}
 		return []byte(value), nil
 
-	case "autogen":
-		// Auto-generate secret based on spec
-		// For CLI verification, we return a placeholder since actual generation
-		// should only happen during bootstrap
-		return []byte("(auto-generated)"), nil
-
 	case "remote-kms":
 		// Remote KMS resolution requires additional configuration
 		// This would typically use a remote KMS client
 		return nil, ErrResolverNotAvailable{Scheme: scheme}
 
-	case "encrypted":
-		// Encrypted secrets require decryption key
+	case "idevid":
+		// IDevID-encrypted secrets require decryption key
 		return nil, ErrResolverNotAvailable{Scheme: scheme}
 
 	default:

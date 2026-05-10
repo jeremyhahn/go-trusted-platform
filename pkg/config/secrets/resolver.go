@@ -31,7 +31,7 @@ type SecretValue struct {
 	// Zero time means no expiration.
 	ExpiresAt time.Time
 
-	// Source indicates where the secret was resolved from (e.g., "encrypted", "env", "vault").
+	// Source indicates where the secret was resolved from (e.g., "idevid", "env", "vault").
 	Source string
 
 	// Version is an optional version identifier for the secret.
@@ -39,9 +39,9 @@ type SecretValue struct {
 }
 
 // SecretResolver resolves configuration values that reference secrets.
-// Implementations handle specific URI schemes (e.g., "encrypted:", "env:", "vault:").
+// Implementations handle specific URI schemes (e.g., "idevid:", "env:", "vault:").
 type SecretResolver interface {
-	// Scheme returns the URI scheme this resolver handles (e.g., "encrypted").
+	// Scheme returns the URI scheme this resolver handles (e.g., "idevid").
 	Scheme() string
 
 	// CanResolve returns true if this resolver can handle the given raw value.

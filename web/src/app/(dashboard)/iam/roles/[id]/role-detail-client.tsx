@@ -7,7 +7,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, usePathname, useRouter } from 'next/navigation';
+import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
 import { LegacyRole, UpdateRoleInput, LegacyUser, Permission } from '@/types/iam';
@@ -32,11 +33,12 @@ import { Avatar } from '@/components/ui/avatar';
  */
 export default function RoleDetailPage() {
   const params = useParams();
+  const pathname = usePathname();
   const router = useRouter();
   const { toast } = useToast();
   const { tenantId } = useAuth();
   const iam = useIAM();
-  const roleId = params.id as string;
+  const roleId = resolveDynamicId(params, pathname, 'roles');
 
   const [isEditing, setIsEditing] = useState(false);
   const [editedName, setEditedName] = useState('');
@@ -60,12 +62,14 @@ export default function RoleDetailPage() {
   // Fetch permissions (placeholder - needs actual implementation in SDK if not available)
   const [allPermissions, setAllPermissions] = useState<Permission[]>([]);
 
-  // Convert SDK role response to legacy format
-  const legacyRole: LegacyRole | null = role?.role ? {
-    id: role.role.id,
-    name: role.role.name,
-    description: role.role.description || '',
-    permissions: (role.role.permissions || []).map(p => ({
+  // Tolerate both the legacy {role: …} envelope and the current direct
+  // payload shape; also accept snake_case timestamps from the server.
+  const roleRecord: any = (role as any)?.role ?? role ?? null;
+  const legacyRole: LegacyRole | null = roleRecord ? {
+    id: roleRecord.id,
+    name: roleRecord.name,
+    description: roleRecord.description || '',
+    permissions: ((roleRecord.permissions || []) as string[]).map((p: string) => ({
       id: p,
       name: p,
       resource: p.split(':')[0] || p,
@@ -73,8 +77,8 @@ export default function RoleDetailPage() {
       description: `Permission: ${p}`
     })),
     userCount: users.length,
-    createdAt: role.role.createdAt,
-    updatedAt: role.role.updatedAt
+    createdAt: roleRecord.createdAt ?? roleRecord.created_at,
+    updatedAt: roleRecord.updatedAt ?? roleRecord.updated_at
   } : null;
 
   // Update state when role data changes

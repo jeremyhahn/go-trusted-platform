@@ -64,7 +64,7 @@ Examples:
 	}
 
 	cmd.Flags().Int32VarP(&limit, "limit", "l", 50, "maximum number of versions to return")
-	cmd.Flags().StringVarP(&cursor, "cursor", "c", "", "pagination cursor for next page")
+	cmd.Flags().StringVar(&cursor, "cursor", "", "pagination cursor for next page")
 
 	return cmd
 }

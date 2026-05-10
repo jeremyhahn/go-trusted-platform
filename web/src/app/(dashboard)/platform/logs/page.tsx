@@ -39,7 +39,9 @@ export default function LogsPage() {
   const [isLoading, setIsLoading] = React.useState(false);
   const [isStreaming, setIsStreaming] = React.useState(false);
   const [selectedLevels, setSelectedLevels] = React.useState<LogLevel[]>([]);
-  const [selectedService, setSelectedService] = React.useState<string>("");
+  // Radix's <Select.Item /> rejects empty-string values; "all" is the
+  // sentinel for the catch-all option.
+  const [selectedService, setSelectedService] = React.useState<string>("all");
   const [searchQuery, setSearchQuery] = React.useState("");
   const [timeRange, setTimeRange] = React.useState<string>("1h");
   const eventSourceRef = React.useRef<EventSource | null>(null);
@@ -53,7 +55,7 @@ export default function LogsPage() {
       filters.level = selectedLevels;
     }
 
-    if (selectedService) {
+    if (selectedService && selectedService !== "all") {
       filters.service = selectedService;
     }
 
@@ -232,7 +234,7 @@ export default function LogsPage() {
               <SelectValue placeholder="All services" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All services</SelectItem>
+              <SelectItem value="all">All services</SelectItem>
               <SelectItem value="api-server">API Server</SelectItem>
               <SelectItem value="database">Database</SelectItem>
               <SelectItem value="tpm-service">TPM Service</SelectItem>

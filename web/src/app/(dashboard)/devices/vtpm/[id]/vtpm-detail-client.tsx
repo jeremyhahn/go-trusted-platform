@@ -6,7 +6,8 @@
  */
 
 import { useState, useEffect } from 'react';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { resolveDynamicId } from '@/utils/dynamic-route';
 import {
   ArrowLeft,
   Lock,
@@ -45,11 +46,12 @@ import type { VTPMDetail, SealDataInput } from '@/types/device';
 
 export default function VTPMDetailPage() {
   const params = useParams();
+  const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
   const vtpmService = useVTPM();
-  const vtpmId = params?.id as string;
+  const vtpmId = resolveDynamicId(params, pathname, 'vtpm');
   const action = searchParams?.get('action');
 
   const [vtpm, setVTPM] = useState<VTPMDetail | null>(null);

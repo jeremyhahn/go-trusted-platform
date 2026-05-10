@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	basePath = "/api/v1/sdn"
+	basePath = "/sdn"
 )
 
 // SDNRouter provides REST routing for SDN operations
@@ -80,6 +80,7 @@ func (r *SDNRouter) registerBridgeRoutes(router *mux.Router) {
 func (r *SDNRouter) registerPortRoutes(router *mux.Router) {
 	// Port management routes
 	router.HandleFunc("/bridges/{name}/ports", r.handlers.AddPort).Methods("POST")
+	router.HandleFunc("/bridges/{name}/ports", r.handlers.ListPorts).Methods("GET")
 	router.HandleFunc("/bridges/{name}/ports/{port}", r.handlers.DeletePort).Methods("DELETE")
 
 	// Port state routes
@@ -98,6 +99,9 @@ func (r *SDNRouter) registerFlowRoutes(router *mux.Router) {
 	router.HandleFunc("/flows", r.handlers.AddFlow).Methods("POST")
 	router.HandleFunc("/flows", r.handlers.DeleteFlow).Methods("DELETE")
 	router.HandleFunc("/flows", r.handlers.ListFlows).Methods("GET")
+	// Nested aliases so the SDK can use a bridge-scoped URL.
+	router.HandleFunc("/bridges/{name}/flows", r.handlers.AddFlow).Methods("POST")
+	router.HandleFunc("/bridges/{name}/flows", r.handlers.ListFlows).Methods("GET")
 }
 
 // registerPolicyRoutes registers policy management endpoints
@@ -110,10 +114,20 @@ func (r *SDNRouter) registerPolicyRoutes(router *mux.Router) {
 	router.HandleFunc("/policies/{id}", r.handlers.GetPolicy).Methods("GET")
 }
 
-// registerVLANRoutes registers VLAN management endpoints
-// POST   /api/v1/sdn/vlans             - Create VLAN
-// GET    /api/v1/sdn/vlans             - List VLANs (query param: bridge_id)
+// registerVLANRoutes registers VLAN management endpoints.
+//
+// Both flat (?bridge_id=…) and nested (/bridges/{bridge_id}/vlans)
+// shapes are supported so the SDK and direct callers can use whichever
+// is more ergonomic.
+//
+//	POST   /api/v1/sdn/vlans                              - Create VLAN
+//	GET    /api/v1/sdn/vlans?bridge_id=…                  - List VLANs
+//	POST   /api/v1/sdn/bridges/{bridge_id}/vlans          - Create VLAN
+//	GET    /api/v1/sdn/bridges/{bridge_id}/vlans          - List VLANs
+//	GET    /api/v1/sdn/bridges/{bridge_id}/vlans/{vlan_id} - Get VLAN
 func (r *SDNRouter) registerVLANRoutes(router *mux.Router) {
 	router.HandleFunc("/vlans", r.handlers.CreateVLAN).Methods("POST")
 	router.HandleFunc("/vlans", r.handlers.ListVLANs).Methods("GET")
+	router.HandleFunc("/bridges/{bridge_id}/vlans", r.handlers.CreateVLAN).Methods("POST")
+	router.HandleFunc("/bridges/{bridge_id}/vlans", r.handlers.ListVLANs).Methods("GET")
 }

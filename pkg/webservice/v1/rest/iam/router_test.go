@@ -48,7 +48,7 @@ func TestRegisterRoutes(t *testing.T) {
 	iamRouter := NewIAMRouter(logger, iamClient, pepClient, writer)
 	router := mux.NewRouter()
 
-	iamRouter.RegisterRoutes(router)
+	iamRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	// Test that routes are registered by checking if router can match them
 	tests := []struct {
@@ -125,7 +125,7 @@ func TestTenantRoutes_Registration(t *testing.T) {
 	iamRouter := NewIAMRouter(logger, iamClient, pepClient, writer)
 	router := mux.NewRouter()
 
-	iamRouter.RegisterRoutes(router)
+	iamRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	tests := []struct {
 		method       string
@@ -169,7 +169,7 @@ func TestUserRoutes_Registration(t *testing.T) {
 	iamRouter := NewIAMRouter(logger, iamClient, pepClient, writer)
 	router := mux.NewRouter()
 
-	iamRouter.RegisterRoutes(router)
+	iamRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	tests := []struct {
 		method       string
@@ -213,7 +213,7 @@ func TestGroupRoutes_Registration(t *testing.T) {
 	iamRouter := NewIAMRouter(logger, iamClient, pepClient, writer)
 	router := mux.NewRouter()
 
-	iamRouter.RegisterRoutes(router)
+	iamRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	tests := []struct {
 		method       string
@@ -257,7 +257,7 @@ func TestRoleRoutes_Registration(t *testing.T) {
 	iamRouter := NewIAMRouter(logger, iamClient, pepClient, writer)
 	router := mux.NewRouter()
 
-	iamRouter.RegisterRoutes(router)
+	iamRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	tests := []struct {
 		method       string
@@ -301,7 +301,7 @@ func TestPolicyRoutes_Registration(t *testing.T) {
 	iamRouter := NewIAMRouter(logger, iamClient, pepClient, writer)
 	router := mux.NewRouter()
 
-	iamRouter.RegisterRoutes(router)
+	iamRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	tests := []struct {
 		method       string
@@ -350,7 +350,7 @@ func TestAppRoutes_Registration(t *testing.T) {
 	iamRouter := NewIAMRouter(logger, iamClient, pepClient, writer)
 	router := mux.NewRouter()
 
-	iamRouter.RegisterRoutes(router)
+	iamRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	tests := []struct {
 		method       string
@@ -394,7 +394,7 @@ func TestRoutes_MethodNotAllowed(t *testing.T) {
 	iamRouter := NewIAMRouter(logger, iamClient, pepClient, writer)
 	router := mux.NewRouter()
 
-	iamRouter.RegisterRoutes(router)
+	iamRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	// Test that wrong methods don't match
 	tests := []struct {
@@ -426,7 +426,7 @@ func TestRoutes_NotFound(t *testing.T) {
 	iamRouter := NewIAMRouter(logger, iamClient, pepClient, writer)
 	router := mux.NewRouter()
 
-	iamRouter.RegisterRoutes(router)
+	iamRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	// Test paths that should not match
 	tests := []struct {
@@ -451,7 +451,7 @@ func TestRoutes_NotFound(t *testing.T) {
 }
 
 func TestBasePath_Constant(t *testing.T) {
-	assert.Equal(t, "/api/v1/iam", basePath)
+	assert.Equal(t, "/iam", basePath)
 }
 
 func TestRoutes_WithSpecialCharactersInIDs(t *testing.T) {
@@ -463,7 +463,7 @@ func TestRoutes_WithSpecialCharactersInIDs(t *testing.T) {
 	iamRouter := NewIAMRouter(logger, iamClient, pepClient, writer)
 	router := mux.NewRouter()
 
-	iamRouter.RegisterRoutes(router)
+	iamRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	tests := []struct {
 		name         string
@@ -523,7 +523,7 @@ func TestRoutes_SubrouterIsolation(t *testing.T) {
 	router := mux.NewRouter()
 
 	// Register IAM routes
-	iamRouter.RegisterRoutes(router)
+	iamRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	// Add a different route to ensure IAM routes don't interfere
 	router.HandleFunc("/api/v1/other", func(w http.ResponseWriter, r *http.Request) {
@@ -557,7 +557,7 @@ func TestRoutes_HandlerExecution(t *testing.T) {
 	iamRouter := NewIAMRouter(logger, iamClient, pepClient, writer)
 	router := mux.NewRouter()
 
-	iamRouter.RegisterRoutes(router)
+	iamRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 	// Create a test server
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/iam/tenants", nil)

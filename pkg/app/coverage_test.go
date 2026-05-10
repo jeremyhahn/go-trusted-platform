@@ -36,16 +36,16 @@ func TestErrNilObjectStore_ImplementsError(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
-// TestEncryptedResolverAdapter_Constructor verifies adapter construction.
-func TestEncryptedResolverAdapter_Constructor(t *testing.T) {
-	adapter := NewEncryptedResolverAdapter(nil, slog.New(slog.DiscardHandler))
+// TestIDevIDResolverAdapter_Constructor verifies adapter construction.
+func TestIDevIDResolverAdapter_Constructor(t *testing.T) {
+	adapter := NewIDevIDResolverAdapter(nil, slog.New(slog.DiscardHandler))
 	assert.NotNil(t, adapter)
-	assert.Equal(t, "encrypted://", adapter.Scheme())
+	assert.Equal(t, "idevid://", adapter.Scheme())
 }
 
-// TestEncryptedResolverAdapter_Constructor_NilLoggerDefault verifies adapter with nil logger.
-func TestEncryptedResolverAdapter_Constructor_NilLoggerDefault(t *testing.T) {
-	adapter := NewEncryptedResolverAdapter(nil, nil)
+// TestIDevIDResolverAdapter_Constructor_NilLoggerDefault verifies adapter with nil logger.
+func TestIDevIDResolverAdapter_Constructor_NilLoggerDefault(t *testing.T) {
+	adapter := NewIDevIDResolverAdapter(nil, nil)
 	assert.NotNil(t, adapter)
 }
 
@@ -83,10 +83,11 @@ func TestDefaultCAConfig_HasIdentities(t *testing.T) {
 func TestDefaultCAConfig_KeyAlgorithmStrSet(t *testing.T) {
 	cfg := defaultCAConfig()
 	for i, identity := range cfg.Identity {
-		if identity.KeyAlgorithm != 0 {
-			assert.NotEmpty(t, identity.KeyAlgorithmStr,
-				"identity[%d] should have KeyAlgorithmStr set", i)
+		if len(identity.Keys) == 0 || identity.Keys[0] == nil {
+			continue
 		}
+		assert.NotEmpty(t, identity.Keys[0].KeyAlgorithm,
+			"identity[%d] should have a primary key algorithm configured", i)
 	}
 }
 
@@ -141,28 +142,6 @@ func TestAllErrors_NonEmpty(t *testing.T) {
 	}
 }
 
-// TestAutoGenResolver_Resolve_DefaultLength verifies autogen:// uses default 32 bytes.
-func TestAutoGenResolver_Resolve_DefaultLength(t *testing.T) {
-	resolver := NewAutoGenResolver(slog.New(slog.DiscardHandler))
-	result, err := resolver.Resolve(context.Background(), "autogen://")
-	require.NoError(t, err)
-	assert.Len(t, result, 32)
-}
-
-// TestAutoGenResolver_Resolve_NonNumericLength verifies error for non-numeric length.
-func TestAutoGenResolver_Resolve_NonNumericLength(t *testing.T) {
-	resolver := NewAutoGenResolver(slog.New(slog.DiscardHandler))
-	_, err := resolver.Resolve(context.Background(), "autogen://abc")
-	require.Error(t, err)
-}
-
-// TestAutoGenResolver_Resolve_InvalidScheme verifies error for wrong scheme.
-func TestAutoGenResolver_Resolve_WrongScheme(t *testing.T) {
-	resolver := NewAutoGenResolver(slog.New(slog.DiscardHandler))
-	_, err := resolver.Resolve(context.Background(), "kms://test")
-	require.Error(t, err)
-}
-
 // TestSecretsServiceClient_StoreSecret_NilService verifies error.
 func TestSecretsServiceClient_StoreSecret_NilService(t *testing.T) {
 	client := NewSecretsServiceClient(nil, nil)
@@ -193,4 +172,21 @@ func TestApp_Close_CanceledContext(t *testing.T) {
 func TestApp_FQDN_MultiSubdomain(t *testing.T) {
 	assert.Equal(t, "node01.us.east.example.com",
 		(&App{Hostname: "node01", Domain: "us.east.example.com"}).FQDN())
+}
+
+// TestApp_SetQuicBaaSCA_NilCAIsNoop verifies that SetQuicBaaSCA(nil) returns
+// nil without touching any factory state.
+func TestApp_SetQuicBaaSCA_NilCAIsNoop(t *testing.T) {
+	app := NewApp()
+	assert.NoError(t, app.SetQuicBaaSCA(nil))
+}
+
+// TestApp_SetQuicBaaSCA_NilFactoryIsNoop verifies that SetQuicBaaSCA returns
+// nil when no DAO factory has been initialized (quiet no-op path for early
+// callers that run before QuicBaaS is started).
+func TestApp_SetQuicBaaSCA_NilFactoryIsNoop(t *testing.T) {
+	app := NewApp()
+	assert.Nil(t, app.daoFactory)
+	// nil CA — both the nil-CA guard and the nil-factory guard fire as no-ops.
+	assert.NoError(t, app.SetQuicBaaSCA(nil))
 }

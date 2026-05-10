@@ -70,8 +70,24 @@ export default function InvitationsPage() {
   });
 
   // Extract invitations from response
+  // Normalize the server's protobuf status enum
+  // (`INVITATION_STATUS_PENDING`) to the lower-case strings the UI uses
+  // for filtering, badge colors, and per-row actions.
   const invitations: Invitation[] = React.useMemo(() => {
-    return invitationsResponse?.invitations || [];
+    const raw = (invitationsResponse?.invitations || []) as any[];
+    return raw.map((inv) => {
+      const s = String(inv.status || '').toUpperCase();
+      const status: Invitation["status"] = s.endsWith("PENDING")
+        ? ("pending" as any)
+        : s.endsWith("ACCEPTED")
+          ? ("accepted" as any)
+          : s.endsWith("REVOKED") || s.endsWith("CANCELLED")
+            ? ("cancelled" as any)
+            : s.endsWith("EXPIRED")
+              ? ("expired" as any)
+              : (inv.status as any);
+      return { ...inv, status } as Invitation;
+    });
   }, [invitationsResponse]);
 
   const error = apiError ? apiError.message : null;

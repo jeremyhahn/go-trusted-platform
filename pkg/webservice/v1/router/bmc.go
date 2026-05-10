@@ -19,7 +19,8 @@ import (
 )
 
 // BMCRouter handles BMC-related routes including power control, boot device
-// management, virtual media, sensors, system info, and bare metal provisioning.
+// management, virtual media, sensors, system info, certificate management,
+// user management, and bare metal provisioning.
 type BMCRouter struct {
 	handler bmc.RestHandler
 	WebServiceRouter
@@ -71,4 +72,27 @@ func (r *BMCRouter) RegisterRoutes(router *mux.Router) {
 
 	// GET /api/v1/bmc/{profileID}/provision - Get provisioning status
 	router.HandleFunc("/bmc/{profileID:[0-9]+}/provision", r.handler.ProvisionStatus).Methods("GET")
+
+	// Certificate management
+	// GET /api/v1/bmc/{profileID}/cert - Get web TLS certificate metadata
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/cert", r.handler.GetWebCertificate).Methods("GET")
+
+	// PUT /api/v1/bmc/{profileID}/cert - Replace web TLS certificate and key
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/cert", r.handler.ReplaceWebCertificate).Methods("PUT")
+
+	// User management
+	// GET /api/v1/bmc/{profileID}/users - List BMC user accounts
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/users", r.handler.ListUsers).Methods("GET")
+
+	// POST /api/v1/bmc/{profileID}/users - Create a new BMC user account
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/users", r.handler.CreateUser).Methods("POST")
+
+	// DELETE /api/v1/bmc/{profileID}/users/{slot} - Delete the user occupying a slot
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}", r.handler.DeleteUser).Methods("DELETE")
+
+	// PUT /api/v1/bmc/{profileID}/users/{slot}/password - Update user password
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password", r.handler.SetUserPassword).Methods("PUT")
+
+	// PUT /api/v1/bmc/{profileID}/users/{slot}/privilege - Update user privilege
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege", r.handler.SetUserPrivilege).Methods("PUT")
 }

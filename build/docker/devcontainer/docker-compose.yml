@@ -242,6 +242,56 @@ services:
     tty: true
     command: bash
 
+  # Virtual BMC responders used by BMC cert-management integration
+  # tests. Built from test/integration/bmc/vbmc -- see that directory's
+  # README.md for endpoints and env vars. Two flavors run in parallel
+  # so tests can cover both the Supermicro vendor branch (primary
+  # ATEN CGI path) and a generic non-Supermicro branch.
+  vbmc-supermicro:
+    image: trusted-platform-vbmc:latest
+    build:
+      context: ../../..
+      dockerfile: test/integration/bmc/vbmc/Dockerfile
+    container_name: trusted-platform-vbmc-supermicro
+    hostname: vbmc-supermicro
+    environment:
+      VBMC_HTTPS_ADDR: ":8443"
+      VBMC_VENDOR: "Supermicro"
+      VBMC_CN: "vbmc-supermicro.trusted-platform.internal"
+      VBMC_LOG_LEVEL: "info"
+      # IPMI 2.0 RMCP+ simulator -- real BMCs use UDP/623 but
+      # containers can't always bind privileged ports, so we use
+      # 6230. Integration tests address this via harness.Endpoint().
+      VBMC_IPMI_ADDR: ":6230"
+      VBMC_IPMI_USER: "ADMIN"
+      VBMC_IPMI_PASSWORD: "ADMIN"
+    expose:
+      - "6230/udp"
+    networks:
+      - trusted-platform-net
+    restart: unless-stopped
+
+  vbmc-dell:
+    image: trusted-platform-vbmc:latest
+    build:
+      context: ../../..
+      dockerfile: test/integration/bmc/vbmc/Dockerfile
+    container_name: trusted-platform-vbmc-dell
+    hostname: vbmc-dell
+    environment:
+      VBMC_HTTPS_ADDR: ":8443"
+      VBMC_VENDOR: "Dell"
+      VBMC_CN: "vbmc-dell.trusted-platform.internal"
+      VBMC_LOG_LEVEL: "info"
+      VBMC_IPMI_ADDR: ":6230"
+      VBMC_IPMI_USER: "ADMIN"
+      VBMC_IPMI_PASSWORD: "ADMIN"
+    expose:
+      - "6230/udp"
+    networks:
+      - trusted-platform-net
+    restart: unless-stopped
+
 # Named volumes for persistent data (all prefixed with trusted-platform-)
 volumes:
   # Go caches (shared across services)

@@ -70,6 +70,16 @@ func (e ErrOperationFailed) Unwrap() error {
 	return e.Err
 }
 
+// ErrInvalidArguments is returned when CLI arguments fail validation before
+// any RPC is made (e.g. mutually exclusive flags, malformed encodings).
+type ErrInvalidArguments struct {
+	Reason string
+}
+
+func (e ErrInvalidArguments) Error() string {
+	return fmt.Sprintf("invalid arguments: %s", e.Reason)
+}
+
 // ErrQuotaUpdateFailed is returned when updating quotas fails
 type ErrQuotaUpdateFailed struct {
 	TenantID string

@@ -14,15 +14,11 @@
 package bootstrap
 
 import (
-	"context"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -46,7 +42,8 @@ func TestNewCommand(t *testing.T) {
 
 	// Verify subcommands are registered
 	subcommands := cmd.Commands()
-	assert.Len(t, subcommands, 7)
+	// 7 PXE/legacy + 5 canonical TOFU modes (auto, dane, noise, spki, direct)
+	assert.Len(t, subcommands, 12)
 
 	// Verify secrets subcommand exists
 	var hasSecrets bool
@@ -345,83 +342,6 @@ func TestRunSecretsResolve_InvalidScheme(t *testing.T) {
 // Helper Function Tests
 // -----------------------------------------------------------------------------
 
-func TestScanConfigForSecrets(t *testing.T) {
-	tests := []struct {
-		name        string
-		config      string
-		minExpected int
-	}{
-		{
-			name:        "no secrets",
-			config:      "key: value\nother: data",
-			minExpected: 0,
-		},
-		{
-			name:        "kms secret",
-			config:      "password: kms://config/db/password",
-			minExpected: 1,
-		},
-		{
-			name:        "env secret",
-			config:      "api_key: env://API_KEY",
-			minExpected: 1,
-		},
-		{
-			name:        "autogen secret",
-			config:      "token: autogen://password?length=32",
-			minExpected: 1,
-		},
-		{
-			name:        "remote-kms secret",
-			config:      "secret: remote-kms://vault/data/secret",
-			minExpected: 1,
-		},
-		{
-			name:        "encrypted secret",
-			config:      "encrypted_data: encrypted://base64data==",
-			minExpected: 1,
-		},
-		{
-			name: "multiple secrets",
-			config: `database:
-  password: kms://config/db/password
-  api_key: env://DB_API_KEY
-other: plain_value`,
-			minExpected: 2,
-		},
-		{
-			name:        "quoted secret",
-			config:      `password: "kms://config/db/password"`,
-			minExpected: 1,
-		},
-		{
-			name:        "single quoted secret",
-			config:      `password: 'env://MY_SECRET'`,
-			minExpected: 1,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			secrets := scanConfigForSecrets([]byte(tt.config))
-			assert.GreaterOrEqual(t, len(secrets), tt.minExpected)
-		})
-	}
-}
-
-func TestScanNestedSecrets(t *testing.T) {
-	config := `database:
-  credentials:
-    password: kms://config/db/password
-    api_key: env://DB_API_KEY
-services:
-  - name: service1
-    secret: autogen://password?length=16`
-
-	secrets := scanNestedSecrets([]byte(config))
-	assert.GreaterOrEqual(t, len(secrets), 2)
-}
-
 func TestBuildPath(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -452,76 +372,6 @@ func TestBuildPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := buildPath(tt.stack, tt.key)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestIsSecretURI(t *testing.T) {
-	tests := []struct {
-		uri      string
-		expected bool
-	}{
-		{uri: "kms://secret/path", expected: true},
-		{uri: "remote-kms://vault/secret", expected: true},
-		{uri: "env://MY_VAR", expected: true},
-		{uri: "autogen://password?length=32", expected: true},
-		{uri: "encrypted://base64data", expected: true},
-		{uri: "plaintext", expected: false},
-		{uri: "http://example.com", expected: false},
-		{uri: "file://local/path", expected: false},
-		{uri: "", expected: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.uri, func(t *testing.T) {
-			result := isSecretURI(tt.uri)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestMaskSecretURI(t *testing.T) {
-	tests := []struct {
-		name     string
-		uri      string
-		expected string
-	}{
-		{
-			name:     "kms with path",
-			uri:      "kms://config/db/password",
-			expected: "kms://config/db/***",
-		},
-		{
-			name:     "env var",
-			uri:      "env://MY_SECRET_VAR",
-			expected: "env://***",
-		},
-		{
-			name:     "autogen",
-			uri:      "autogen://password?length=32&charset=alphanumeric",
-			expected: "autogen://***",
-		},
-		{
-			name:     "remote-kms",
-			uri:      "remote-kms://vault/data/secret",
-			expected: "remote-kms://vault/data/***",
-		},
-		{
-			name:     "encrypted",
-			uri:      "encrypted://base64encodeddata==",
-			expected: "encrypted://***",
-		},
-		{
-			name:     "unknown scheme",
-			uri:      "unknown://data",
-			expected: "***",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := maskSecretURI(tt.uri)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -579,51 +429,6 @@ func TestBuildKMSPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := buildKMSPath(tt.configPath)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestDetectScheme(t *testing.T) {
-	tests := []struct {
-		uri      string
-		expected string
-	}{
-		{uri: "kms://secret/path", expected: "kms"},
-		{uri: "remote-kms://vault/secret", expected: "remote-kms"},
-		{uri: "env://MY_VAR", expected: "env"},
-		{uri: "autogen://password?length=32", expected: "autogen"},
-		{uri: "encrypted://base64data", expected: "encrypted"},
-		{uri: "unknown://data", expected: "unknown"},
-		{uri: "plaintext", expected: "unknown"},
-		{uri: "", expected: "unknown"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.uri, func(t *testing.T) {
-			result := detectScheme(tt.uri)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestIsResolverAvailable(t *testing.T) {
-	tests := []struct {
-		scheme   string
-		expected bool
-	}{
-		{scheme: "kms", expected: true},
-		{scheme: "env", expected: true},
-		{scheme: "autogen", expected: true},
-		{scheme: "remote-kms", expected: true},
-		{scheme: "encrypted", expected: true},
-		{scheme: "unknown", expected: false},
-		{scheme: "", expected: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.scheme, func(t *testing.T) {
-			result := isResolverAvailable(tt.scheme)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -818,19 +623,6 @@ func TestErrAlreadyKMSManaged(t *testing.T) {
 	assert.Contains(t, err.Error(), "kms://secret")
 }
 
-func TestErrAutoGenFailed(t *testing.T) {
-	t.Run("with error", func(t *testing.T) {
-		err := ErrAutoGenFailed{Spec: "password", Err: assert.AnError}
-		assert.Contains(t, err.Error(), "password")
-		assert.Equal(t, assert.AnError, err.Unwrap())
-	})
-
-	t.Run("without error", func(t *testing.T) {
-		err := ErrAutoGenFailed{Spec: "password"}
-		assert.Contains(t, err.Error(), "password")
-	})
-}
-
 func TestErrKMSStoreFailed(t *testing.T) {
 	err := ErrKMSStoreFailed{
 		Path: "config/db/password",
@@ -854,23 +646,6 @@ func TestErrKMSEncryptFailed(t *testing.T) {
 // -----------------------------------------------------------------------------
 // Integration with bootstrap package constants
 // -----------------------------------------------------------------------------
-
-func TestSchemeConstants(t *testing.T) {
-	// Verify our helper functions use the correct bootstrap package constants
-	assert.True(t, isSecretURI(bootstrap.SchemeKMS+"secret"))
-	assert.True(t, isSecretURI(bootstrap.SchemeRemoteKMS+"secret"))
-	assert.True(t, isSecretURI(bootstrap.SchemeEnv+"VAR"))
-	assert.True(t, isSecretURI(bootstrap.SchemeAutoGen+"spec"))
-	assert.True(t, isSecretURI(bootstrap.SchemeEncrypted+"data"))
-}
-
-func TestDetectSchemeWithBootstrapConstants(t *testing.T) {
-	assert.Equal(t, "kms", detectScheme(bootstrap.SchemeKMS+"path"))
-	assert.Equal(t, "remote-kms", detectScheme(bootstrap.SchemeRemoteKMS+"path"))
-	assert.Equal(t, "env", detectScheme(bootstrap.SchemeEnv+"VAR"))
-	assert.Equal(t, "autogen", detectScheme(bootstrap.SchemeAutoGen+"spec"))
-	assert.Equal(t, "encrypted", detectScheme(bootstrap.SchemeEncrypted+"data"))
-}
 
 // -----------------------------------------------------------------------------
 // secretSchemeStats Tests
@@ -1131,48 +906,6 @@ func TestResolveCommand_ArgsValidation(t *testing.T) {
 // -----------------------------------------------------------------------------
 // Additional Helper Function Tests for Coverage
 // -----------------------------------------------------------------------------
-
-func TestScanConfigForSecrets_AllSchemes(t *testing.T) {
-	tests := []struct {
-		name   string
-		config string
-		scheme string
-	}{
-		{
-			name:   "kms scheme",
-			config: "secret: kms://path/to/secret",
-			scheme: "kms",
-		},
-		{
-			name:   "env scheme",
-			config: "secret: env://MY_ENV_VAR",
-			scheme: "env",
-		},
-		{
-			name:   "autogen scheme",
-			config: "secret: autogen://password?length=32",
-			scheme: "autogen",
-		},
-		{
-			name:   "remote-kms scheme",
-			config: "secret: remote-kms://vault/secret",
-			scheme: "remote-kms",
-		},
-		{
-			name:   "encrypted scheme",
-			config: "secret: encrypted://base64data",
-			scheme: "encrypted",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			secrets := scanConfigForSecrets([]byte(tt.config))
-			require.NotEmpty(t, secrets)
-			assert.Equal(t, tt.scheme, detectScheme(secrets[0].uri))
-		})
-	}
-}
 
 func TestMaskSecretURI_EdgeCases(t *testing.T) {
 	tests := []struct {
@@ -1505,121 +1238,9 @@ func TestDetectSchemeWithFile(t *testing.T) {
 // Generate Secret Tests
 // -----------------------------------------------------------------------------
 
-func TestGenerateSecret(t *testing.T) {
-	t.Run("password type", func(t *testing.T) {
-		result, err := generateSecret("password?length=16")
-		require.NoError(t, err)
-		assert.Len(t, result, 16)
-		// Should be alphanumeric
-		for _, b := range result {
-			assert.True(t, (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9'))
-		}
-	})
-
-	t.Run("key type", func(t *testing.T) {
-		result, err := generateSecret("key?length=32")
-		require.NoError(t, err)
-		assert.Len(t, result, 32)
-	})
-
-	t.Run("token type", func(t *testing.T) {
-		result, err := generateSecret("token?length=24")
-		require.NoError(t, err)
-		assert.Len(t, result, 24)
-	})
-
-	t.Run("default type", func(t *testing.T) {
-		result, err := generateSecret("random?length=24")
-		require.NoError(t, err)
-		assert.Len(t, result, 24)
-	})
-
-	t.Run("default length", func(t *testing.T) {
-		result, err := generateSecret("password")
-		require.NoError(t, err)
-		assert.Len(t, result, 32)
-	})
-
-	t.Run("multiple params", func(t *testing.T) {
-		result, err := generateSecret("password?length=20&encoding=base64")
-		require.NoError(t, err)
-		assert.Len(t, result, 20)
-	})
-}
-
 // -----------------------------------------------------------------------------
 // Resolve Secret By Scheme Tests
 // -----------------------------------------------------------------------------
-
-func TestResolveSecretByScheme(t *testing.T) {
-	t.Run("env scheme with set variable", func(t *testing.T) {
-		os.Setenv("TEST_SECRET_VAR", "secret_value")
-		defer os.Unsetenv("TEST_SECRET_VAR")
-
-		result, err := resolveSecretByScheme(context.TODO(), nil, "env://TEST_SECRET_VAR", "env")
-		require.NoError(t, err)
-		assert.Equal(t, []byte("secret_value"), result)
-	})
-
-	t.Run("env scheme with unset variable", func(t *testing.T) {
-		_, err := resolveSecretByScheme(context.TODO(), nil, "env://NONEXISTENT_VAR", "env")
-		require.Error(t, err)
-		var envErr ErrEnvVarNotSet
-		assert.ErrorAs(t, err, &envErr)
-	})
-
-	t.Run("file scheme with existing file", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		secretFile := filepath.Join(tmpDir, "secret.txt")
-		err := os.WriteFile(secretFile, []byte("file_secret"), 0600)
-		require.NoError(t, err)
-
-		result, err := resolveSecretByScheme(context.TODO(), nil, "file://"+secretFile, "file")
-		require.NoError(t, err)
-		assert.Equal(t, []byte("file_secret"), result)
-	})
-
-	t.Run("file scheme with nonexistent file", func(t *testing.T) {
-		_, err := resolveSecretByScheme(context.TODO(), nil, "file:///nonexistent/path", "file")
-		require.Error(t, err)
-		var fileErr ErrFileReadFailed
-		assert.ErrorAs(t, err, &fileErr)
-	})
-
-	t.Run("autogen scheme", func(t *testing.T) {
-		result, err := resolveSecretByScheme(context.TODO(), nil, "autogen://password?length=16", "autogen")
-		require.NoError(t, err)
-		assert.Len(t, result, 16)
-	})
-
-	t.Run("kms scheme", func(t *testing.T) {
-		_, err := resolveSecretByScheme(context.TODO(), nil, "kms://secret", "kms")
-		require.Error(t, err)
-		var kmsErr ErrAlreadyKMSManaged
-		assert.ErrorAs(t, err, &kmsErr)
-	})
-
-	t.Run("remote-kms scheme", func(t *testing.T) {
-		_, err := resolveSecretByScheme(context.TODO(), nil, "remote-kms://secret", "remote-kms")
-		require.Error(t, err)
-		var resolverErr ErrResolverNotAvailable
-		assert.ErrorAs(t, err, &resolverErr)
-	})
-
-	t.Run("encrypted scheme", func(t *testing.T) {
-		_, err := resolveSecretByScheme(context.TODO(), nil, "encrypted://data", "encrypted")
-		require.Error(t, err)
-		var resolverErr ErrResolverNotAvailable
-		assert.ErrorAs(t, err, &resolverErr)
-	})
-
-	t.Run("unknown scheme", func(t *testing.T) {
-		_, err := resolveSecretByScheme(context.TODO(), nil, "unknown://secret", "unknown")
-		require.Error(t, err)
-		var invalidErr ErrInvalidSecretURI
-		assert.ErrorAs(t, err, &invalidErr)
-	})
-}
 
 // -----------------------------------------------------------------------------
 // Build Config Updates Tests

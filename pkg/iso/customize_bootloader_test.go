@@ -25,7 +25,7 @@ import (
 
 // TestConfigureBootloader verifies GRUB cmdline mutation: quiet stripped,
 // "Linux lts" renamed to "Trusted Alpine LTS", console= and
-// alpine_start=autoinstall injected. UpdateEFIBootloader (called at the
+// console params injected. UpdateEFIBootloader (called at the
 // end of ConfigureBootloader) requires grub-mkstandalone which isn't
 // available in unit tests, but it only logs a warning on failure and
 // returns nil — so these tests still validate the grub.cfg mutation
@@ -70,8 +70,13 @@ menuentry "Linux lts" {
 				if !strings.Contains(content, "console=tty1") {
 					t.Error("Expected console=tty1 to be added")
 				}
+				// alpine_start=autoinstall is the kernel-cmdline marker the
+				// patched Alpine init uses to trigger the autoinstall flow.
+				// apkovl is the secondary mechanism that runs the install
+				// script; the cmdline marker is still required so the init
+				// hook fires before switch_root.
 				if !strings.Contains(content, "alpine_start=autoinstall") {
-					t.Error("Expected alpine_start=autoinstall to be added")
+					t.Error("Expected alpine_start=autoinstall to be injected")
 				}
 			},
 		},
@@ -127,7 +132,7 @@ menuentry "Linux lts" {
 			},
 		},
 		{
-			name: "existing autoinstall in grub not duplicated",
+			name: "pre-existing alpine_start is not duplicated",
 			grubConfig: `set timeout=10
 menuentry "Linux lts" {
 	linux	/boot/vmlinuz-lts root=/dev/sda1 alpine_start=autoinstall
@@ -136,6 +141,9 @@ menuentry "Linux lts" {
 `,
 			wantErr: false,
 			validateModified: func(t *testing.T, content string) {
+				// The injection logic guards against duplicates: when the
+				// pre-existing cmdline already carries alpine_start=autoinstall
+				// the injector must NOT add a second one.
 				count := strings.Count(content, "alpine_start=autoinstall")
 				if count != 1 {
 					t.Errorf("Expected exactly 1 alpine_start=autoinstall, found %d", count)

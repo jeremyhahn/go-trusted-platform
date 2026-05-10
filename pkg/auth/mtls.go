@@ -22,9 +22,8 @@ import (
 	"strings"
 	"time"
 
-	goca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
 )
 
 // MTLSAdapter implements the Authenticator interface using mTLS certificates.
@@ -55,7 +54,7 @@ func NewMTLSAdapter(
 
 	// If no trusted roots provided, try to get them from the CA
 	if config.TrustedRoots == nil {
-		pool, err := ca.CABundleCertPool(xkmssdk.StoreType(""), 0)
+		pool, err := ca.CABundleCertPool()
 		if err != nil {
 			logger.Warnf("auth: failed to get CA bundle cert pool: %v", err)
 		} else {

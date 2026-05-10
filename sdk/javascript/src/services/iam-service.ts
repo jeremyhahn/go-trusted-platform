@@ -5,6 +5,7 @@
  */
 
 import type { ApiClient } from '../client/api-client.js';
+import type { Transport } from '../transport/transport.js';
 import type { ApiResponse } from '../types/api.js';
 import { BaseService } from './base-service.js';
 import type {
@@ -106,7 +107,7 @@ export class IAMService extends BaseService {
    *
    * @param client - The API client to use for requests
    */
-  constructor(client: ApiClient) {
+  constructor(client: Transport | ApiClient) {
     super(client, '/v1/iam');
   }
 
@@ -116,9 +117,17 @@ export class IAMService extends BaseService {
 
   /**
    * Create a user
+   *
+   * Posts to the tenant-scoped endpoint `/iam/tenants/{tenantId}/users`
+   * to match the platform's tenant-routed REST contract. The tenantId
+   * field on the request body is preserved for backwards compatibility
+   * with consumers that inspect the wire payload directly.
    */
   async createUser(request: CreateIAMUserRequest): Promise<ApiResponse<IAMUserResponse>> {
-    return this.client.post<IAMUserResponse>(this.buildUrl('/users'), request);
+    return this.client.post<IAMUserResponse>(
+      this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/users`),
+      request
+    );
   }
 
   /**

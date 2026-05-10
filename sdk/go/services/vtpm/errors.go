@@ -369,3 +369,101 @@ func (e *ErrGetEKFingerprintFailed) Error() string {
 func (e *ErrGetEKFingerprintFailed) Unwrap() error {
 	return e.Cause
 }
+
+// Lifecycle Errors
+
+// ErrStartFailed is returned when starting a vTPM fails.
+type ErrStartFailed struct {
+	BundleID string
+	Cause    error
+}
+
+func (e *ErrStartFailed) Error() string {
+	return fmt.Sprintf("failed to start vTPM %s: %v", e.BundleID, e.Cause)
+}
+
+func (e *ErrStartFailed) Unwrap() error { return e.Cause }
+
+// ErrStopFailed is returned when stopping a vTPM fails.
+type ErrStopFailed struct {
+	BundleID string
+	Cause    error
+}
+
+func (e *ErrStopFailed) Error() string {
+	return fmt.Sprintf("failed to stop vTPM %s: %v", e.BundleID, e.Cause)
+}
+
+func (e *ErrStopFailed) Unwrap() error { return e.Cause }
+
+// ErrIsRunningFailed is returned when checking if a vTPM is running fails.
+type ErrIsRunningFailed struct {
+	BundleID string
+	Cause    error
+}
+
+func (e *ErrIsRunningFailed) Error() string {
+	return fmt.Sprintf("failed to check vTPM running status %s: %v", e.BundleID, e.Cause)
+}
+
+func (e *ErrIsRunningFailed) Unwrap() error { return e.Cause }
+
+// ErrQuoteFailed is returned when generating a vTPM quote fails.
+type ErrQuoteFailed struct {
+	BundleID string
+	Cause    error
+}
+
+func (e *ErrQuoteFailed) Error() string {
+	return fmt.Sprintf("failed to generate vTPM quote %s: %v", e.BundleID, e.Cause)
+}
+
+func (e *ErrQuoteFailed) Unwrap() error { return e.Cause }
+
+// ErrSealFailed is returned when sealing data to a vTPM fails.
+type ErrSealFailed struct {
+	BundleID string
+	Cause    error
+}
+
+func (e *ErrSealFailed) Error() string {
+	return fmt.Sprintf("failed to seal data to vTPM %s: %v", e.BundleID, e.Cause)
+}
+
+func (e *ErrSealFailed) Unwrap() error { return e.Cause }
+
+// ErrUnsealFailed is returned when unsealing data from a vTPM fails.
+type ErrUnsealFailed struct {
+	BundleID string
+	Cause    error
+}
+
+func (e *ErrUnsealFailed) Error() string {
+	return fmt.Sprintf("failed to unseal data from vTPM %s: %v", e.BundleID, e.Cause)
+}
+
+func (e *ErrUnsealFailed) Unwrap() error { return e.Cause }
+
+// ErrExtendPCRFailed is returned when extending a PCR fails.
+type ErrExtendPCRFailed struct {
+	BundleID string
+	Cause    error
+}
+
+func (e *ErrExtendPCRFailed) Error() string {
+	return fmt.Sprintf("failed to extend PCR for vTPM %s: %v", e.BundleID, e.Cause)
+}
+
+func (e *ErrExtendPCRFailed) Unwrap() error { return e.Cause }
+
+// ErrReadPCRFailed is returned when reading a PCR fails.
+type ErrReadPCRFailed struct {
+	BundleID string
+	Cause    error
+}
+
+func (e *ErrReadPCRFailed) Error() string {
+	return fmt.Sprintf("failed to read PCR for vTPM %s: %v", e.BundleID, e.Cause)
+}
+
+func (e *ErrReadPCRFailed) Unwrap() error { return e.Cause }

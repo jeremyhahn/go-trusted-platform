@@ -31,11 +31,13 @@ import (
 
 	"github.com/gorilla/mux"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 const (
@@ -298,6 +300,65 @@ func (s *RESTServer) SetBMCHandler(handler bmcwebsvc.RestHandler) {
 	api.HandleFunc("/bmc/{profileID:[0-9]+}/provision", handler.ProvisionStatus).Methods(http.MethodGet)
 
 	s.logger.Info("BMC management routes registered")
+}
+
+// SetDeviceHandlers wires the device REST handlers (CRUD + profiles) onto
+// the daemon's REST router. The handlers reuse the device service +
+// profile service that the gRPC and QUIC adapters share, so REST clients
+// see the same data as every other transport.
+func (s *RESTServer) SetDeviceHandlers(deviceSvc restapi.DeviceServiceInterface, profileSvc restapi.ProfileServiceInterface) {
+	if deviceSvc == nil && profileSvc == nil {
+		return
+	}
+	handlers := restapi.NewDeviceHandlers(deviceSvc, profileSvc, s.logger)
+	handlers.RegisterRoutes(s.router)
+	s.logger.Info("Device REST routes registered")
+}
+
+// SetTenantHandlers wires the tenant REST handlers onto the daemon's REST
+// router so /api/v1/tenants/* endpoints are served. The handlers delegate to
+// the platform's tenant.Manager — the same instance used by the gRPC, QUIC,
+// MCP, and Unix-socket adapters — so per-tenant state (CRUD, quotas, VLAN,
+// barrier lifecycle) is identical across every transport.
+//
+// Without this wiring /api/v1/tenants/* would 404 even though the gRPC
+// TenantService is registered. Mirrors SetDeviceHandlers / SetCAHandlers.
+func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface) {
+	if manager == nil {
+		return
+	}
+	handlers := restapi.NewTenantHandlers(
+		restapi.WithTenantManager(manager),
+		restapi.WithTenantLogger(s.logger),
+	)
+	handlers.RegisterRoutes(s.router)
+	s.logger.Info("Tenant REST routes registered")
+}
+
+// SetCAHandlers wires the CA REST handlers onto the daemon's REST router so
+// /api/v1/ca/* endpoints are served. The handlers wrap the production CA
+// (goca.CACertificateAuthority) via CAAuthorityAdapter, which delegates to
+// the same CA instance used by the gRPC, QUIC, MCP and Unix-socket adapters.
+// All transports therefore share state — certificates issued via gRPC are
+// visible via REST and vice-versa.
+func (s *RESTServer) SetCAHandlers(ca goca.CACertificateAuthority) {
+	if ca == nil {
+		return
+	}
+	adapter := restapi.NewCAAuthorityAdapter(ca)
+	if adapter == nil {
+		return
+	}
+	handlers := restapi.NewCAHandlers(adapter, s.logger)
+	handlers.RegisterRoutes(s.router)
+	s.logger.Info("CA REST routes registered")
+
+	// Wire auth factor endpoints (AAGUID lookup, mTLS probe, cert issuance,
+	// MFA policy). These share the same CA instance as the CA handlers so
+	// certificate issuance goes through the live platform CA.
+	authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger)
+	authFactorHandlers.RegisterRoutes(s.router)
+	s.logger.Info("Auth factor REST routes registered")
 }
 
 // applyMiddleware wraps the router with middleware handlers
@@ -900,4 +961,64 @@ func getMCPAddress(config *Config) string {
 		return config.MCPConfig.HTTPAddr
 	}
 	return ""
+}
+
+// SetCeremonyService wires the ceremony service into the REST server and
+// registers its routes.
+func (s *RESTServer) SetCeremonyService(svc *CeremonyService) {
+	if svc == nil {
+		return
+	}
+	h := newCeremonyRESTHandlers(svc)
+	api := s.router.PathPrefix(restBasePath).Subrouter()
+	h.registerCeremonyRoutes(api)
+	s.logger.Info("Ceremony REST routes registered")
+}
+
+// SetPIVService wires the PIV service into the REST server and registers its routes.
+func (s *RESTServer) SetPIVService(svc *PIVService) {
+	if svc == nil {
+		return
+	}
+	h := newPIVRESTHandlers(svc)
+	api := s.router.PathPrefix(restBasePath).Subrouter()
+	h.registerPIVRoutes(api)
+	s.logger.Info("PIV REST routes registered")
+}
+
+// SetLUKSService wires the LUKS service into the REST server and registers its routes.
+func (s *RESTServer) SetLUKSService(svc *LUKSService) {
+	if svc == nil {
+		return
+	}
+	h := newLUKSRESTHandlers(svc)
+	api := s.router.PathPrefix(restBasePath).Subrouter()
+	h.registerLUKSRoutes(api)
+	s.logger.Info("LUKS REST routes registered")
+}
+
+// SetFIDO2Service wires the FIDO2 service into the REST server and registers its routes.
+func (s *RESTServer) SetFIDO2Service(svc *FIDO2Service) {
+	if svc == nil {
+		return
+	}
+	h := newFIDO2RESTHandlers(svc)
+	api := s.router.PathPrefix(restBasePath).Subrouter()
+	h.registerFIDO2Routes(api)
+	s.logger.Info("FIDO2 REST routes registered")
+}
+
+// SetClusterService wires the Cluster gRPC service into the REST server
+// and mounts /api/v1/cluster routes. The handlers fall through to the
+// gRPC implementation, so REST and gRPC report identical state when the
+// underlying coordinator is missing (HTTP 503 + Unavailable code).
+func (s *RESTServer) SetClusterService(svc *ClusterGRPCService) {
+	h := newClusterRESTHandlers(svc)
+	api := s.router.PathPrefix(restBasePath).Subrouter()
+	h.registerClusterRoutes(api)
+	if svc == nil {
+		s.logger.Info("Cluster REST routes registered (no backend; will return 503)")
+		return
+	}
+	s.logger.Info("Cluster REST routes registered")
 }

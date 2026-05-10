@@ -453,8 +453,8 @@ func (d *CiscoDeployer) buildParams(config *DeployConfig) *CiscoAppHostingParams
 		RunOpts:        []string{"-v $(APP_DATA):/data"},
 	}
 
-	if config.ProvisioningNetwork.Gateway != "" {
-		params.GuestIP = config.ProvisioningNetwork.Gateway
+	if config.ProvisioningSubnet != nil && config.ProvisioningSubnet.Gateway != "" {
+		params.GuestIP = config.ProvisioningSubnet.Gateway
 		params.GuestNetmask = DefaultCiscoGuestNetmask
 	}
 

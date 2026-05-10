@@ -28,6 +28,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/initrd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/secureboot"
 	storageluks "github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 )
@@ -184,13 +185,21 @@ func (c *Customizer) CustomizeAll(ctx context.Context) error {
 		return fmt.Errorf("failed to copy network setup files: %w", err)
 	}
 
-	// Modify initramfs
+	// Modify initramfs:
+	//   - Inject the platformd dracut module (existing behavior)
+	//   - Create the autoinstall overlay (inittab + autoinstall.sh +
+	//     run-autoinstall.sh) under /overlay in the initramfs root
+	//   - Patch Alpine's /init script so that, when the kernel cmdline
+	//     carries alpine_start=autoinstall, the overlay files are copied
+	//     to the switched-root filesystem before /sbin/init starts. The
+	//     custom inittab then takes over with BusyBox init running
+	//     run-autoinstall.sh as a sysinit entry — no OpenRC, no apkovl.
 	c.logger.Info("Modifying initramfs")
 	if err := c.ModifyInitramfs(ctx); err != nil {
 		return fmt.Errorf("failed to modify initramfs: %w", err)
 	}
 
-	// Generate autoinstall script
+	// Generate autoinstall script (standalone copy for debugging)
 	c.logger.Info("Generating autoinstall script")
 	if err := c.GenerateAutoinstallScript(ctx); err != nil {
 		return fmt.Errorf("failed to generate autoinstall script: %w", err)
@@ -244,14 +253,30 @@ func (c *Customizer) ModifyInitramfs(ctx context.Context) error {
 		return fmt.Errorf("failed to create dracut module: %w", err)
 	}
 
-	// Create autoinstall overlay
+	// Create the /overlay directory in the initramfs. This holds the
+	// files that Alpine's patched /init script will copy into the
+	// switched-root filesystem before exec'ing /sbin/init. Contents:
+	//   overlay/etc/inittab             — custom BusyBox inittab that
+	//                                     runs run-autoinstall.sh as
+	//                                     sysinit, then /sbin/poweroff -f
+	//   overlay/root/autoinstall.sh     — the installer shell script
+	//                                     (buildAutoinstallScript output)
+	//   overlay/root/run-autoinstall.sh — wrapper that manually mounts
+	//                                     /proc /sys /dev + modloop +
+	//                                     loads kernel modules + brings
+	//                                     up networking (we bypass OpenRC)
+	//                                     before chaining to autoinstall.sh
 	c.logger.Info("Creating autoinstall overlay")
 	if err := c.createAutoinstallOverlay(tmpDir); err != nil {
 		return fmt.Errorf("failed to create autoinstall overlay: %w", err)
 	}
 
-	// Patch init script
-	c.logger.Info("Patching init script")
+	// Patch Alpine's /init script so it copies /overlay → $sysroot before
+	// switch_root when the kernel cmdline contains alpine_start=autoinstall.
+	// The patch is injected via awk after the setup_inittab_console
+	// function in Alpine's stock init. Without the cmdline marker the
+	// normal Alpine live flow runs untouched.
+	c.logger.Info("Patching Alpine init script")
 	if err := c.patchInitScript(tmpDir); err != nil {
 		return fmt.Errorf("failed to patch init script: %w", err)
 	}
@@ -724,6 +749,7 @@ func (c *Customizer) BuildPreFetchRepository(ctx context.Context) error {
 	prefetchConfig := &PreFetchConfig{
 		Mirror:        c.config.Alpine.Mirror,
 		Version:       majorMinor, // Use major.minor for APK repos
+		FullVersion:   version,    // Full version (e.g., 3.22.2) for release tarballs
 		Architecture:  arch,
 		WorkDir:       c.config.Directories.Work,
 		ISODir:        c.config.Directories.ISO,
@@ -1166,7 +1192,8 @@ func (c *Customizer) CopyFIPSArtifacts(ctx context.Context) error {
 func (c *Customizer) GenerateAutoinstallScript(ctx context.Context) error {
 	c.logger.Info("Generating autoinstall script")
 
-	// This is handled by createAutoinstallOverlay in ModifyInitramfs
+	// This generates a standalone copy of the autoinstall script for debugging.
+	// The actual boot hook is created by CreateApkovl
 	// But we provide this method for API completeness and flexibility
 	scriptPath := filepath.Join(c.config.Directories.Work, "autoinstall.sh")
 
@@ -1199,13 +1226,19 @@ func (c *Customizer) ConfigureBootloader(ctx context.Context) error {
 	// Modify config for autoinstall
 	modified := string(content)
 
-	// Force serial + text console for BMC SOL visibility.
-	// Aggressively strip ALL video/graphics-related lines from the stock
-	// Alpine grub.cfg. On headless servers (e.g. Supermicro X10SDV-TP8F)
-	// these cause "error: no suitable video mode found. Booting in blind
-	// mode" because GRUB tries to initialize a graphical framebuffer that
-	// does not exist. Our embedded EFI config already sets gfxpayload=text
-	// and gfxmode=text, so none of these are needed.
+	// Strip ONLY gfxterm/framebuffer video setup (gfxmode, gfxterm, all_video,
+	// loadfont, gfxpayload). These initialize a graphical framebuffer that
+	// doesn't exist on X10-class headless servers and produces the classic
+	// "error: no suitable video mode found. Booting in blind mode" failure.
+	//
+	// We DELIBERATELY do NOT strip the plain `console` terminal — that is
+	// GRUB's firmware-provided console (EFI ConOut on UEFI, VGA text mode
+	// on legacy BIOS). On Supermicro X10 the BMC snoops that firmware
+	// console and mirrors it to the iKVM viewer, so keeping it means the
+	// GRUB menu, the "Booting ..." message, and the kernel's early output
+	// are all visible to a human operator watching iKVM. The serial
+	// terminal runs alongside it for the bootstrap orchestrator's SOL
+	// capture channel.
 	videoStripKeywords := []string{
 		"gfxmode",
 		"gfxterm",
@@ -1231,8 +1264,17 @@ func (c *Customizer) ConfigureBootloader(ctx context.Context) error {
 		}
 		modified = strings.Join(filtered, "\n")
 	}
-	// Inject serial console config before the first menuentry if not
-	// already present.
+	// Inject serial-ONLY terminal config before the first menuentry.
+	// Do NOT add `console` to the ISO grub.cfg terminal_output — the
+	// `console` terminal forces GRUB to initialize the gfxterm video
+	// subsystem, which on headless Supermicro X10 boards fails with
+	// "error: no suitable video mode found. Booting in blind mode"
+	// and leaves iKVM frozen on the error frame. Serial-only in this
+	// file means GRUB never tries the video path at the menuentry
+	// stage. The embedded EFI grub.cfg we build via grub-mkstandalone
+	// already had `terminal_output serial console` to reach iKVM at
+	// GRUB startup; by the time this ISO grub.cfg runs we are past
+	// that point and can narrow to serial without losing visibility.
 	if !strings.Contains(modified, "terminal_output") {
 		lines := strings.Split(modified, "\n")
 		for i, line := range lines {
@@ -1240,8 +1282,8 @@ func (c *Customizer) ConfigureBootloader(ctx context.Context) error {
 				serialCfg := []string{
 					"serial --unit=0 --speed=115200",
 					"serial --unit=1 --speed=115200",
-					"terminal_input serial console",
-					"terminal_output serial console",
+					"terminal_input serial",
+					"terminal_output serial",
 				}
 				lines = append(lines[:i], append(serialCfg, lines[i:]...)...)
 				break
@@ -1258,43 +1300,48 @@ func (c *Customizer) ConfigureBootloader(ctx context.Context) error {
 	modified = strings.ReplaceAll(modified, `menuentry "Linux lts"`, `menuentry "Trusted Alpine LTS"`)
 	modified = strings.ReplaceAll(modified, `menuentry 'Linux lts'`, `menuentry 'Trusted Alpine LTS'`)
 
+	// Deliberately do NOT prepend `set gfxmode=...` or `set gfxpayload=...`
+	// to the ISO grub.cfg. Those variables are already set in the embedded
+	// EFI grub.cfg we build into bootx64.efi via grub-mkstandalone, and
+	// they persist through the sourcing of this ISO grub.cfg. Re-setting
+	// them here was the regression that produced "error: no suitable
+	// video mode found. Booting in blind mode" on Supermicro X10. The
+	// video-strip pass above already removes any stock Alpine gfxmode /
+	// gfxpayload / gfxterm / loadfont / all_video lines so nothing in
+	// this config file can retrigger GRUB's mode-set path. This matches
+	// the 1fbd40f baseline exactly.
+
 	// Add console and autoinstall parameters
 	// Look for kernel command lines and add our parameters
 	lines := strings.Split(modified, "\n")
 	for i, line := range lines {
 		// Match "linux" followed by whitespace (space or tab) and contains vmlinuz
 		if (strings.Contains(line, "linux\t") || strings.Contains(line, "linux ")) && strings.Contains(line, "/boot/vmlinuz") {
-			// Add our parameters after the kernel line
-			// Kernel console — kitchen sink for cross-vendor BMC SOL coverage.
-			//
-			//   earlycon                 — auto-discover the serial console from
-			//                              the ACPI SPCR table the firmware
-			//                              published. This is the canonical
-			//                              Linux mechanism for "find the BMC
-			//                              SOL UART from firmware metadata"
-			//                              and works on all SPCR-publishing
-			//                              BMCs (Supermicro X10+, Dell, HPE,
-			//                              Lenovo, Cisco). DO NOT remove.
-			//   console=ttyS0,115200n8   — COM1 (Linux ttyS0)
-			//   console=ttyS1,115200n8   — COM2 (Linux ttyS1). Many Supermicro
-			//                              boards route SOL to COM2.
-			//   console=tty1             — VGA text mode for SMM snooping
-			//                              ("Console Redirection After POST"
-			//                              BIOS setting).
-			//
-			// Last `console=` wins as the kmsg primary; we put ttyS1 last
-			// because Supermicro X10SDV-TP8F is the deployment target.
+			// The ISO is built generically — it must boot on any supported
+			// hardware.  Vendor-specific console wiring (e.g. which ttyS
+			// port the BMC SOL concentrator is wired to) is resolved at
+			// install time via pkg/quirks.  For the ISO bootloader we use
+			// the cross-vendor defaults from quirks.Default(), which provide
+			// dual UART coverage (COM1 + COM2), EFI early console, and VGA
+			// mirroring — safe on all known server platforms.
 			if !strings.Contains(line, "console=ttyS0") {
-				// earlyprintk=efi,keep — use UEFI ConOut (already routed to
-				// SOL by BIOS Console Redirection) for output BEFORE the
-				// regular kernel serial driver loads. The "keep" suffix
-				// preserves the binding past ExitBootServices so the same
-				// channel keeps working until the regular console takes over.
-				// This eliminates the gap between "EFI stub: measured initrd"
-				// and the first kernel-driven serial output, which is what we
-				// were seeing on the Supermicro X10SDV-TP8F.
-				line += " earlyprintk=efi,keep earlycon console=tty1 console=ttyS0,115200n8 console=ttyS1,115200n8"
+				defaultQuirk := quirks.Default()
+				line += " " + strings.Join(defaultQuirk.KernelCmdline, " ")
+				// Also include tty1 for BMC framebuffer mirroring; not in
+				// the Default() list to keep it minimal, but necessary in
+				// the ISO boot path where we do not know the target platform.
+				if !strings.Contains(line, "console=tty1") {
+					line += " console=tty1"
+				}
 			}
+			// alpine_start=autoinstall is the marker our patched Alpine
+			// init script looks for. When present, the patched init copies
+			// /overlay/etc/inittab, /overlay/root/autoinstall.sh, and
+			// /overlay/root/run-autoinstall.sh out of the initramfs and
+			// into $sysroot before switch_root. BusyBox init then runs
+			// with our custom inittab, which launches run-autoinstall.sh
+			// as a sysinit entry and calls /sbin/poweroff -f when it
+			// returns. No apkovl extraction, no OpenRC runlevels.
 			if !strings.Contains(line, "alpine_start=autoinstall") {
 				line += " alpine_start=autoinstall"
 			}
@@ -1319,6 +1366,19 @@ func (c *Customizer) ConfigureBootloader(ctx context.Context) error {
 					sink = "198.18.1.91:8080"
 				}
 				line += " platform_debug_sink=" + sink
+			}
+			// platform_hostname=<name> — baked into the kernel cmdline so
+			// autoinstall.sh's resolve_platform_hostname can read it from
+			// /proc/cmdline without needing to locate and awk-scan the
+			// installer YAML at runtime. The shell-native YAML fallback
+			// is still in place, but it fails silently on live Alpine
+			// when /media/cdrom is not (yet) mounted at hook-run time,
+			// causing the install.log forensic upload to hit
+			// /installs/unknown/ instead of /installs/<hostname>/. Baking
+			// the value into the kernel cmdline at ISO-build time removes
+			// that dependency entirely: /proc/cmdline is always readable.
+			if hostname := c.resolveHostnameForCmdline(); hostname != "" && !strings.Contains(line, "platform_hostname=") {
+				line += " platform_hostname=" + hostname
 			}
 			lines[i] = line
 		}
@@ -1388,19 +1448,39 @@ func (c *Customizer) UpdateEFIBootloader(ctx context.Context) error {
 	// Create embedded GRUB config that searches for the ISO volume by label,
 	// then includes the full boot menu inline as a fallback. The iso9660 and
 	// search_label modules are included explicitly via --install-modules.
-	grubCfgContent := fmt.Sprintf(`insmod iso9660
+	grubCfgContent := fmt.Sprintf(`# Force text-mode video configuration for headless Supermicro X10 boards.
+# gfxmode=text + gfxpayload=text keeps GRUB and the kernel payload
+# transition in firmware text mode, which the X10 BMC mirrors cleanly
+# to iKVM. Any graphical-framebuffer path (gfxpayload=keep, gfxpayload=
+# 1024x768, etc.) triggers "error: no suitable video mode found.
+# Booting in blind mode" on these boards and leaves iKVM frozen on
+# the last GRUB frame. This matches the 1fbd40f baseline.
+set gfxmode=text
+set gfxpayload=text
+
+# Initialize serial UARTs and route GRUB output to serial ONLY. The
+# "console" GRUB terminal forces gfxterm initialization which probes
+# for a framebuffer mode and fails on headless Supermicro X10 boards
+# with "error: no suitable video mode found. Booting in blind mode".
+# We deliberately lose iKVM visibility of the GRUB startup/menu
+# phase — iKVM still sees BIOS/POST and the initial EFI firmware
+# output, then text from the Linux kernel's efifb/vgacon takes over
+# after GRUB hands off. SOL captures everything via serial.
+insmod serial
+serial --unit=0 --speed=115200
+serial --unit=1 --speed=115200
+terminal_input serial
+terminal_output serial
+
+# Zero timeout -- boot immediately without waiting for user input.
+# This ensures headless servers don't hang at an invisible GRUB menu.
+set timeout=0
+set default=0
+
+insmod iso9660
 insmod search_label
 insmod part_gpt
 insmod part_msdos
-insmod serial
-# Serial console for BMC SOL — COM1 (unit=0) and COM2 (unit=1)
-# for cross-vendor coverage. Output to both serial and text console.
-serial --unit=0 --speed=115200
-serial --unit=1 --speed=115200
-set gfxmode=text
-set gfxpayload=text
-terminal_input serial console
-terminal_output serial console
 search --no-floppy --set=root --label "%s"
 
 %s`, volumeLabel, string(grubCfgBytes))
@@ -1413,14 +1493,19 @@ search --no-floppy --set=root --label "%s"
 	// Create new bootx64.efi with grub-mkstandalone, including modules needed
 	// to read ISO9660 filesystems and search by volume label.
 	newEFIPath := filepath.Join(tmpDir, "bootx64.efi")
+	// Set GRUB_TERMINAL=serial to prevent video initialization at build time.
 	mkstandaloneCmd := exec.CommandContext(ctx, grubMkstandalone,
 		"--format=x86_64-efi",
 		"--output="+newEFIPath,
 		"--locales=",
 		"--fonts=",
-		"--install-modules=iso9660 search search_label part_gpt part_msdos fat linux normal configfile echo test serial",
+		// Explicitly list only the modules we need. NO video, gfxterm, gfxmenu,
+		// all_video, efi_gop, efi_uga, or vbe — these cause "no suitable video
+		// mode found" on headless servers and halt at the GRUB screen.
+		"--install-modules=iso9660 search search_label part_gpt part_msdos fat linux normal configfile echo test serial loopback",
 		"boot/grub/grub.cfg="+grubCfgPath,
 	)
+	mkstandaloneCmd.Env = append(os.Environ(), "GRUB_TERMINAL=serial")
 
 	if output, err := mkstandaloneCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("grub-mkstandalone failed: %w, output: %s", err, string(output))
@@ -1721,8 +1806,28 @@ modprobe virtio_pci 2>/dev/null || true
 modprobe e1000 2>/dev/null || true
 modprobe e1000e 2>/dev/null || true
 modprobe igb 2>/dev/null || true
+modprobe ixgbe 2>/dev/null || true
 modprobe dm_mod 2>/dev/null || true
 modprobe dm_crypt 2>/dev/null || true
+# Filesystem modules — must be loaded BEFORE the installer's mount(2)
+# syscall on the freshly-formatted /mnt. The installer runs mkfs.ext4
+# (userspace tool, works without kernel support) successfully but then
+# silently dies on mount() when the ext4 kernel driver is not present.
+# Alpine's modloop has them, so modprobe loads them without network.
+modprobe ext4 2>/dev/null || true
+modprobe ext2 2>/dev/null || true
+modprobe jbd2 2>/dev/null || true
+modprobe crc16 2>/dev/null || true
+# LVM and device-mapper targets used by the LUKS + LVM + ext4 stack.
+modprobe dm_mirror 2>/dev/null || true
+modprobe dm_thin_pool 2>/dev/null || true
+# TPM modules — required for installer's TPM2_Clear step. Without these,
+# /dev/tpm0 is absent during install and stale TPM state from prior
+# installations causes PCR_POLICY_FAIL at first boot.
+modprobe tpm 2>/dev/null || true
+modprobe tpm_tis 2>/dev/null || true
+modprobe tpm_tis_core 2>/dev/null || true
+modprobe tpm_crb 2>/dev/null || true
 sleep 1
 
 # Re-scan devices after module loading
@@ -1752,17 +1857,33 @@ if [ -n "$ETH_IF" ]; then
         mount -t iso9660 /dev/sr0 /media/cdrom 2>/dev/null || \
         mount -t iso9660 /dev/cdrom /media/cdrom 2>/dev/null || true
 
-    # Check for static IP configuration in installer.yaml on the ISO
+    # Check for static IP configuration in installer.yaml on the ISO.
+    # The YAML may contain multiple "interfaces:" keys (bonds, bridges, network).
+    # Use awk to scan specifically for the network.interfaces block (top-level
+    # "interfaces:" at exactly 2-space indent under "network:") and extract the
+    # first entry with type=static. This is robust against bond/bridge sections
+    # that also contain "interfaces:" keys at deeper indent levels.
     STATIC_CONFIGURED=false
     INSTALLER_YAML="/media/cdrom/configs/installer.yaml"
     if [ -f "$INSTALLER_YAML" ]; then
-        IFACE_TYPE=$(grep -A10 "interfaces:" "$INSTALLER_YAML" 2>/dev/null | grep "type:" | head -1 | sed 's/.*type:\s*//' | tr -d ' "')
+        # Extract the network.interfaces block: look for top-level "interfaces:"
+        # (2-space indent, preceded by "network:" at column 0) and collect
+        # entries until the next top-level key. Then grep within that block.
+        NET_IFACES_BLOCK=$(awk '
+            /^network:/ { innet=1; next }
+            innet && /^[a-zA-Z]/ { innet=0 }
+            innet && /^  interfaces:/ { inifaces=1; next }
+            inifaces && /^  [a-zA-Z]/ { inifaces=0 }
+            inifaces && /^[a-zA-Z]/ { inifaces=0 }
+            inifaces { print }
+        ' "$INSTALLER_YAML" 2>/dev/null)
+        IFACE_TYPE=$(echo "$NET_IFACES_BLOCK" | grep "type:" | head -1 | sed 's/.*type:\s*//' | tr -d ' "')
         if [ "$IFACE_TYPE" = "static" ]; then
             echo "[autoinstall] Static IP configuration detected in installer.yaml" > /dev/kmsg 2>/dev/null
 
-            IPV4_ADDR=$(grep -A10 "interfaces:" "$INSTALLER_YAML" | grep "ipv4-address:" | head -1 | sed 's/.*ipv4-address:\s*//' | tr -d ' "')
-            IPV4_MASK=$(grep -A10 "interfaces:" "$INSTALLER_YAML" | grep "ipv4-netmask:" | head -1 | sed 's/.*ipv4-netmask:\s*//' | tr -d ' "')
-            IPV4_GW=$(grep -A10 "interfaces:" "$INSTALLER_YAML" | grep "ipv4-gateway:" | head -1 | sed 's/.*ipv4-gateway:\s*//' | tr -d ' "')
+            IPV4_ADDR=$(echo "$NET_IFACES_BLOCK" | grep "ipv4-address:" | head -1 | sed 's/.*ipv4-address:\s*//' | tr -d ' "')
+            IPV4_MASK=$(echo "$NET_IFACES_BLOCK" | grep "ipv4-netmask:" | head -1 | sed 's/.*ipv4-netmask:\s*//' | tr -d ' "')
+            IPV4_GW=$(echo "$NET_IFACES_BLOCK" | grep "ipv4-gateway:" | head -1 | sed 's/.*ipv4-gateway:\s*//' | tr -d ' "')
             DNS_SERVERS=$(grep -A5 "dns:" "$INSTALLER_YAML" 2>/dev/null | grep -A3 "nameservers:" | grep "^\s*-" | sed 's/.*-\s*//' | tr -d ' "' | tr '\n' ' ')
 
             if [ -n "$IPV4_ADDR" ] && [ -n "$IPV4_GW" ]; then
@@ -1784,12 +1905,29 @@ if [ -n "$ETH_IF" ]; then
                 ip addr add "${IPV4_ADDR}/${CIDR}" dev "$ETH_IF" 2>/dev/null || true
                 ip route add default via "$IPV4_GW" 2>/dev/null || true
 
-                if [ -n "$DNS_SERVERS" ]; then
+                # Install-time DNS: skip loopback (no resolver in live env)
+                # and append IPv4 gateway as fallback so apk can resolve
+                # external mirrors. Post-install OS DNS is rewritten later
+                # from the original installer.yaml.
+                if [ -n "$DNS_SERVERS" ] || [ -n "$IPV4_GW" ]; then
                     : > /etc/resolv.conf
                     for dns in $DNS_SERVERS; do
-                        echo "nameserver $dns" >> /etc/resolv.conf
+                        case "$dns" in
+                            127.*|::1)
+                                echo "[autoinstall] skipping loopback DNS $dns" > /dev/kmsg 2>/dev/null
+                                ;;
+                            *)
+                                echo "nameserver $dns" >> /etc/resolv.conf
+                                ;;
+                        esac
                     done
-                    echo "[autoinstall] DNS configured: $DNS_SERVERS" > /dev/kmsg 2>/dev/null
+                    if [ -n "$IPV4_GW" ]; then
+                        echo "nameserver $IPV4_GW" >> /etc/resolv.conf
+                    fi
+                    if [ ! -s /etc/resolv.conf ]; then
+                        echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+                    fi
+                    echo "[autoinstall] DNS configured (install-time)" > /dev/kmsg 2>/dev/null
                 fi
 
                 STATIC_CONFIGURED=true
@@ -1969,11 +2107,21 @@ func (c *Customizer) buildAutoinstallScript() string {
 # Automated installation script with platformd integration
 set -e
 
+INSTALL_LOG="/tmp/autoinstall-debug.log"
 log() {
     echo "[autoinstall] $1"
+    echo "[autoinstall] $1" >> "$INSTALL_LOG" 2>/dev/null || true
     echo "[autoinstall] $1" > /dev/kmsg 2>/dev/null || true
     sync
 }
+
+# Log kernel cmdline immediately for debugging
+echo "=== KERNEL CMDLINE ===" >> "$INSTALL_LOG"
+cat /proc/cmdline >> "$INSTALL_LOG" 2>/dev/null
+echo "=== NETWORK STATE ===" >> "$INSTALL_LOG"
+ip addr >> "$INSTALL_LOG" 2>/dev/null
+echo "=== ISO BUILD TIMESTAMP ===" >> "$INSTALL_LOG"
+date >> "$INSTALL_LOG" 2>/dev/null
 
 error() {
     echo "[autoinstall] ERROR: $1" >&2
@@ -1999,7 +2147,71 @@ error() {
 # Avoids python/yq dependencies because the live installer environment
 # has neither.
 resolve_platform_hostname() {
-    # Candidate paths, in preference order:
+    # Priority -1: per-MAC hostname published by the orchestrator to the
+    # pxeboot HTTP server at /config/mac/<mac>/hostname. Overrides the
+    # shared-ISO baked-in value because a single ISO is used for all
+    # nodes in a deployment. The orchestrator knows each node's target
+    # hostname from bootstrap.yaml and publishes it under every MAC the
+    # BMC enumerated, so this hit succeeds regardless of which NIC eth0
+    # maps to in the live ISO. Best-effort with short timeouts: if the
+    # sink is unreachable we fall through to the cmdline/YAML paths
+    # and the node gets the generic baked hostname.
+    SINK=$(cat /proc/cmdline 2>/dev/null | tr ' ' '\n' | grep '^platform_debug_sink=' | cut -d= -f2- | tail -1)
+    if [ -z "$SINK" ]; then
+        DHCP_SERVER=$(grep -h '^server-identifier\|^dhcp-server-identifier' /var/lib/dhcp/*.leases /var/lib/dhcpcd/*.lease* 2>/dev/null | tail -1 | sed 's/.*identifier //; s/[ ;].*//')
+        if [ -z "$DHCP_SERVER" ]; then
+            DHCP_SERVER=$(ip route show default 2>/dev/null | head -1 | awk '{print $3}')
+        fi
+        [ -n "$DHCP_SERVER" ] && SINK="${DHCP_SERVER}:8080"
+    fi
+    if [ -n "$SINK" ]; then
+        # Iterate EVERY local eth*/en* interface and try each MAC against
+        # the orchestrator's per-MAC hostname endpoint. Multi-NIC hosts
+        # (common: Supermicro X10 has up to 4 onboard + add-in cards)
+        # may have a primary NIC whose MAC differs from whatever was
+        # hand-entered in bootstrap.yaml. The orchestrator stages the
+        # hostname under every MAC it knows, so the first MAC that
+        # matches wins. Without this loop a node with a different
+        # primary-NIC MAC than the YAML-configured MAC never finds its
+        # per-node hostname and falls back to the generic baked value.
+        for iface in /sys/class/net/eth* /sys/class/net/en*; do
+            [ -e "$iface" ] || continue
+            MAC_RAW=$(cat "$iface/address" 2>/dev/null)
+            [ -n "$MAC_RAW" ] || continue
+            MAC_LC=$(echo "$MAC_RAW" | tr '[:upper:]' '[:lower:]' | sed 's/[^0-9a-f]//g')
+            [ ${#MAC_LC} -eq 12 ] || continue
+            MAC_PATH=$(echo "$MAC_LC" | sed 's/\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)/\1-\2-\3-\4-\5-\6/')
+            if command -v curl >/dev/null 2>&1; then
+                HN_MAC=$(curl --silent --max-time 5 "http://${SINK}/config/mac/${MAC_PATH}/hostname" 2>/dev/null)
+            else
+                HN_MAC=$(wget -qO- -T 5 "http://${SINK}/config/mac/${MAC_PATH}/hostname" 2>/dev/null)
+            fi
+            HN_MAC=$(echo "$HN_MAC" | tr -d '[:space:]')
+            if [ -n "$HN_MAC" ] && [ "${HN_MAC:0:1}" != "<" ]; then
+                echo "[autoinstall] resolved hostname from orchestrator config: ${HN_MAC} (mac=${MAC_PATH})" > /dev/kmsg 2>/dev/null || true
+                echo "$HN_MAC"
+                return 0
+            fi
+        done
+    fi
+
+    # Priority 0: kernel cmdline platform_hostname=<value>. Baked into
+    # the GRUB cmdline at ISO-build time from the merged platformd
+    # config's os.hostname field. /proc/cmdline is always readable, no
+    # filesystem mounts or YAML parsing needed — the most robust path.
+    for param in $(cat /proc/cmdline 2>/dev/null); do
+        case "$param" in
+            platform_hostname=*)
+                HN_CMDLINE="${param#platform_hostname=}"
+                if [ -n "$HN_CMDLINE" ]; then
+                    echo "$HN_CMDLINE"
+                    return 0
+                fi
+                ;;
+        esac
+    done
+
+    # Fallback candidate YAML paths, in preference order:
     # 1. The installer.Config yaml in the overlay — populated by
     #    buildInstallerConfig with hostname sourced from the merged
     #    platformd config. This is the canonical runtime path under
@@ -2032,6 +2244,126 @@ resolve_platform_hostname() {
     # Final fallback: Alpine live env hostname command. Usually returns
     # (none) or localhost; the caller normalizes those to "unknown".
     hostname 2>/dev/null
+}
+
+# fetch_orchestrator_ca_bundle pulls the control-plane CA bundle from the
+# orchestrator's per-MAC config endpoint and saves it to
+# /tmp/cp-ca-bundle.pem. Called BEFORE the installer runs so the
+# post-install chroot can install it into the system trust store.
+#
+# The orchestrator stages the bundle at /config/mac/<MAC>/ca-bundle.pem
+# for every non-CP node it provisions. Without this delivery, GW and
+# compute nodes boot with no trust anchor for the CP's local CA, which
+# makes their first ACME enrollment attempt fail with
+# "x509: certificate signed by unknown authority" — they then fall
+# back to issuing their own local CA and never enroll with the cluster.
+#
+# Mirrors resolve_platform_hostname's MAC iteration loop so multi-NIC
+# hosts (Supermicro X10 onboard quad NIC + add-in cards) find their
+# orchestrator-staged value regardless of which interface enumerates
+# as eth0. Best-effort: failure here logs a warning and the install
+# continues — the runtime BootstrapTrust path can still recover via
+# DANE/Noise/SPKI when configured.
+fetch_orchestrator_ca_bundle() {
+    SINK=$(cat /proc/cmdline 2>/dev/null | tr ' ' '\n' | grep '^platform_debug_sink=' | cut -d= -f2- | tail -1)
+    if [ -z "$SINK" ]; then
+        DHCP_SERVER=$(grep -h '^server-identifier\|^dhcp-server-identifier' /var/lib/dhcp/*.leases /var/lib/dhcpcd/*.lease* 2>/dev/null | tail -1 | sed 's/.*identifier //; s/[ ;].*//')
+        if [ -z "$DHCP_SERVER" ]; then
+            DHCP_SERVER=$(ip route show default 2>/dev/null | head -1 | awk '{print $3}')
+        fi
+        [ -n "$DHCP_SERVER" ] && SINK="${DHCP_SERVER}:8080"
+    fi
+    if [ -z "$SINK" ]; then
+        echo "[autoinstall] no orchestrator sink resolved - CA bundle delivery skipped" > /dev/kmsg 2>/dev/null || true
+        return 1
+    fi
+
+    # Iterate every local NIC's MAC and try the orchestrator-staged
+    # bundle path. First successful fetch wins.
+    for iface in /sys/class/net/eth* /sys/class/net/en*; do
+        [ -e "$iface" ] || continue
+        MAC_RAW=$(cat "$iface/address" 2>/dev/null)
+        [ -n "$MAC_RAW" ] || continue
+        MAC_LC=$(echo "$MAC_RAW" | tr '[:upper:]' '[:lower:]' | sed 's/[^0-9a-f]//g')
+        [ ${#MAC_LC} -eq 12 ] || continue
+        MAC_PATH=$(echo "$MAC_LC" | sed 's/\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)/\1-\2-\3-\4-\5-\6/')
+        URL="http://${SINK}/config/mac/${MAC_PATH}/ca-bundle.pem"
+        if command -v curl >/dev/null 2>&1; then
+            curl --silent --show-error --max-time 10 --fail -o /tmp/cp-ca-bundle.pem.tmp "$URL" 2>/dev/null
+            RC=$?
+        elif command -v wget >/dev/null 2>&1; then
+            wget --quiet --timeout=10 -O /tmp/cp-ca-bundle.pem.tmp "$URL" 2>/dev/null
+            RC=$?
+        else
+            return 1
+        fi
+        if [ "$RC" -eq 0 ] && [ -s /tmp/cp-ca-bundle.pem.tmp ]; then
+            # Sanity check — must contain a PEM CERTIFICATE block, not
+            # an HTML 404 page from a misconfigured pxeboot endpoint.
+            if grep -q "BEGIN CERTIFICATE" /tmp/cp-ca-bundle.pem.tmp; then
+                mv /tmp/cp-ca-bundle.pem.tmp /tmp/cp-ca-bundle.pem
+                echo "[autoinstall] fetched orchestrator CA bundle from ${URL} ($(wc -c < /tmp/cp-ca-bundle.pem) bytes)" > /dev/kmsg 2>/dev/null || true
+                return 0
+            fi
+        fi
+        rm -f /tmp/cp-ca-bundle.pem.tmp
+    done
+    echo "[autoinstall] no orchestrator CA bundle staged for any local MAC - skipped" > /dev/kmsg 2>/dev/null || true
+    return 1
+}
+
+# fetch_orchestrator_spki_pin pulls the orchestrator-staged SPKI pin
+# (base64-std SHA-256 of the CP CA's SPKI) from the per-MAC config
+# endpoint and saves it to /tmp/cp-spki-pin. The post-install mount
+# block writes it into /etc/trusted-platform/bootstrap-spki-pin so the
+# platform's BootstrapTrust SPKI strategy has a value to pin against.
+#
+# This is the parallel "trust anchor" delivery path to ca-bundle.pem.
+# The bundle path is preferred when it succeeds (no per-request DNS
+# round-trip on every TLS handshake), but the pin path survives in
+# scenarios where the orchestrator HTTP endpoint can serve TXT-style
+# values but not large binary bundles (rare but historically real on
+# embedded CGI stacks). They are independent and either is sufficient.
+fetch_orchestrator_spki_pin() {
+    SINK=$(cat /proc/cmdline 2>/dev/null | tr ' ' '\n' | grep '^platform_debug_sink=' | cut -d= -f2- | tail -1)
+    if [ -z "$SINK" ]; then
+        DHCP_SERVER=$(grep -h '^server-identifier\|^dhcp-server-identifier' /var/lib/dhcp/*.leases /var/lib/dhcpcd/*.lease* 2>/dev/null | tail -1 | sed 's/.*identifier //; s/[ ;].*//')
+        if [ -z "$DHCP_SERVER" ]; then
+            DHCP_SERVER=$(ip route show default 2>/dev/null | head -1 | awk '{print $3}')
+        fi
+        [ -n "$DHCP_SERVER" ] && SINK="${DHCP_SERVER}:8080"
+    fi
+    [ -z "$SINK" ] && return 1
+
+    for iface in /sys/class/net/eth* /sys/class/net/en*; do
+        [ -e "$iface" ] || continue
+        MAC_RAW=$(cat "$iface/address" 2>/dev/null)
+        [ -n "$MAC_RAW" ] || continue
+        MAC_LC=$(echo "$MAC_RAW" | tr '[:upper:]' '[:lower:]' | sed 's/[^0-9a-f]//g')
+        [ ${#MAC_LC} -eq 12 ] || continue
+        MAC_PATH=$(echo "$MAC_LC" | sed 's/\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)/\1-\2-\3-\4-\5-\6/')
+        URL="http://${SINK}/config/mac/${MAC_PATH}/bootstrap-spki-pin"
+        if command -v curl >/dev/null 2>&1; then
+            PIN=$(curl --silent --show-error --max-time 5 --fail "$URL" 2>/dev/null)
+        elif command -v wget >/dev/null 2>&1; then
+            PIN=$(wget --quiet --timeout=5 -O- "$URL" 2>/dev/null)
+        else
+            return 1
+        fi
+        PIN=$(echo "$PIN" | tr -d '[:space:]')
+        # Sanity check: base64-encoded SHA-256 is exactly 44 chars and
+        # matches [A-Za-z0-9+/]{43}=. Reject anything else (HTML 404,
+        # garbage, empty body) so we never persist a malformed pin.
+        case "$PIN" in
+            ?????????????????????????????????????????????) ;;
+            *) continue ;;
+        esac
+        echo "$PIN" > /tmp/cp-spki-pin
+        echo "[autoinstall] fetched orchestrator SPKI pin from ${URL} (${#PIN} chars)" > /dev/kmsg 2>/dev/null || true
+        return 0
+    done
+    echo "[autoinstall] no orchestrator SPKI pin staged for any local MAC - skipped" > /dev/kmsg 2>/dev/null || true
+    return 1
 }
 
 # upload_install_log uploads /tmp/install.log to the bootstrap container's
@@ -2071,20 +2403,41 @@ upload_install_log_with_code() {
         return $INSTALL_EXIT_CODE
     fi
 
-    # Hostname for the upload path. Single source of truth is the
-    # embedded platformd config at /etc/platformd/config.yaml (copied
-    # into the ISO by CopyPlatformConfig) or, in dynamic config mode,
-    # the config fetched at boot and written to the same path. We do a
-    # minimal shell-native YAML scan for the os.hostname field rather
-    # than pulling in a YAML parser. Fall back to the Alpine live env
-    # hostname command and then to "unknown" if both sources are empty.
+    # Identifier for the upload path. Primary: MAC of the first usable
+    # ethernet interface (stable, always-known, survives the generic
+    # "server" hostname baked into shared ISOs). Fallback: resolved
+    # platform hostname. MAC beats hostname because the orchestrator
+    # side knows each node's MAC from bootstrap.yaml but has no way to
+    # know which generic hostname a shared ISO baked in.
+    MAC_RAW=""
+    for iface in /sys/class/net/eth* /sys/class/net/en*; do
+        [ -e "$iface" ] || continue
+        MAC_RAW=$(cat "$iface/address" 2>/dev/null)
+        [ -n "$MAC_RAW" ] && break
+    done
+    MAC_LC=$(echo "$MAC_RAW" | tr '[:upper:]' '[:lower:]' | sed 's/[^0-9a-f]//g')
+    # Format as aa-bb-cc-dd-ee-ff when we have exactly 12 hex chars.
+    MAC_PATH=""
+    if [ ${#MAC_LC} -eq 12 ]; then
+        MAC_PATH=$(echo "$MAC_LC" | sed 's/\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)/\1-\2-\3-\4-\5-\6/')
+    fi
+
     HOSTNAME_LC=$(resolve_platform_hostname)
     HOSTNAME_LC=$(echo "$HOSTNAME_LC" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9.\-]/-/g')
     case "$HOSTNAME_LC" in
         ""|"-none-"|"none"|"localhost"|"alpine"|"alpinelinux") HOSTNAME_LC="unknown" ;;
     esac
 
-    URL="http://${SINK}/installs/${HOSTNAME_LC}/install.log"
+    # Primary upload URL (MAC-keyed when we have one) and fallback
+    # (hostname-keyed). Both are attempted — the MAC path is what the
+    # orchestrator polls; the hostname path is kept for human
+    # debugging and backward compat.
+    if [ -n "$MAC_PATH" ]; then
+        URL="http://${SINK}/installs/mac/${MAC_PATH}/install.log"
+    else
+        URL="http://${SINK}/installs/${HOSTNAME_LC}/install.log"
+    fi
+    URL_FALLBACK="http://${SINK}/installs/${HOSTNAME_LC}/install.log"
     echo "[autoinstall] uploading install.log to ${URL} (exit=${INSTALL_EXIT_CODE})" > /dev/kmsg 2>/dev/null || true
 
     # Append a postmortem manifest with hardware/system context. Invaluable
@@ -2112,25 +2465,39 @@ upload_install_log_with_code() {
         echo "=== END POSTMORTEM ==="
     } >> /tmp/install.log 2>/dev/null || true
 
-    if command -v curl >/dev/null 2>&1; then
-        curl --silent --show-error --max-time 30 \
-             --request PUT --upload-file /tmp/install.log "${URL}" \
-             > /dev/kmsg 2>&1 || \
-            echo "[autoinstall] curl PUT failed (continuing)" > /dev/kmsg 2>/dev/null || true
-    else
-        BODY_LEN=$(wc -c < /tmp/install.log 2>/dev/null || echo 0)
-        HOST_PART="${SINK%:*}"
-        PORT_PART="${SINK##*:}"
-        {
-            printf 'PUT /installs/%s/install.log HTTP/1.1\r\n' "${HOSTNAME_LC}"
-            printf 'Host: %s\r\n' "${SINK}"
-            printf 'Content-Length: %s\r\n' "${BODY_LEN}"
-            printf 'Connection: close\r\n'
-            printf 'Content-Type: text/plain\r\n'
-            printf '\r\n'
-            cat /tmp/install.log 2>/dev/null
-        } | nc -w 30 "${HOST_PART}" "${PORT_PART}" > /dev/kmsg 2>&1 || \
-            echo "[autoinstall] nc PUT failed (continuing)" > /dev/kmsg 2>/dev/null || true
+    # Upload to primary URL (MAC-keyed) and, when that differs from the
+    # hostname-keyed URL, ALSO upload to the fallback path. The pxeboot
+    # HTTP sink accepts both; the orchestrator will find whichever
+    # matches its poll path first.
+    _upload_one_url() {
+        _U="$1"
+        if command -v curl >/dev/null 2>&1; then
+            curl --silent --show-error --max-time 30 \
+                 --request PUT --upload-file /tmp/install.log "${_U}" \
+                 > /dev/kmsg 2>&1 || \
+                echo "[autoinstall] curl PUT to ${_U} failed (continuing)" > /dev/kmsg 2>/dev/null || true
+        else
+            BODY_LEN=$(wc -c < /tmp/install.log 2>/dev/null || echo 0)
+            HOST_PART="${SINK%:*}"
+            PORT_PART="${SINK##*:}"
+            # Extract path from URL: strip scheme://host:port prefix.
+            _PATH=$(echo "$_U" | sed 's|^[^/]*//[^/]*||')
+            {
+                printf 'PUT %s HTTP/1.1\r\n' "${_PATH}"
+                printf 'Host: %s\r\n' "${SINK}"
+                printf 'Content-Length: %s\r\n' "${BODY_LEN}"
+                printf 'Connection: close\r\n'
+                printf 'Content-Type: text/plain\r\n'
+                printf '\r\n'
+                cat /tmp/install.log 2>/dev/null
+            } | nc -w 30 "${HOST_PART}" "${PORT_PART}" > /dev/kmsg 2>&1 || \
+                echo "[autoinstall] nc PUT to ${_U} failed (continuing)" > /dev/kmsg 2>/dev/null || true
+        fi
+    }
+
+    _upload_one_url "${URL}"
+    if [ -n "${URL_FALLBACK}" ] && [ "${URL_FALLBACK}" != "${URL}" ]; then
+        _upload_one_url "${URL_FALLBACK}"
     fi
 
     echo "[autoinstall] upload attempt complete" > /dev/kmsg 2>/dev/null || true
@@ -2268,13 +2635,36 @@ if [ -f "$INSTALLER_YAML" ]; then
             # Add default route
             ip route add default via "$IPV4_GW" 2>/dev/null || true
 
-            # Configure DNS
-            if [ -n "$DNS_SERVERS" ]; then
-                log "Configuring DNS: $DNS_SERVERS"
+            # Configure DNS for install-time. The post-install platformd
+            # commonly points at 127.0.0.1 (local dnsmasq), but the live
+            # install environment has no resolver — apk update would fail
+            # against external mirrors. Drop loopback during install AND
+            # always append the IPv4 gateway as a working fallback so apk
+            # can resolve the mirror. The post-install OS gets the original
+            # /etc/resolv.conf written from the YAML in a later step.
+            if [ -n "$DNS_SERVERS" ] || [ -n "$IPV4_GW" ]; then
+                log "Configuring install-time DNS"
                 : > /etc/resolv.conf
                 for dns in $DNS_SERVERS; do
-                    echo "nameserver $dns" >> /etc/resolv.conf
+                    case "$dns" in
+                        127.*|::1)
+                            log "  skipping loopback DNS $dns (no resolver in live env)"
+                            ;;
+                        *)
+                            echo "nameserver $dns" >> /etc/resolv.conf
+                            log "  nameserver $dns"
+                            ;;
+                    esac
                 done
+                if [ -n "$IPV4_GW" ]; then
+                    echo "nameserver $IPV4_GW" >> /etc/resolv.conf
+                    log "  nameserver $IPV4_GW (gateway fallback)"
+                fi
+                # If still empty (no DNS, no gateway), fall back to public.
+                if [ ! -s /etc/resolv.conf ]; then
+                    echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+                    log "  nameserver 8.8.8.8 (last-resort fallback)"
+                fi
             fi
 
             log "Static network configuration complete"
@@ -2306,50 +2696,65 @@ if ! mountpoint -q /media/cdrom 2>/dev/null; then
     log "Warning: Could not mount CD-ROM, packages may not be available offline"
 fi
 
-# Setup repositories - use local ISO packages first, network as fallback
-log "Setting up repositories..."
+# Setup repositories — local ISO packages only. The ISO ships with a
+# complete pre-fetched repository at /apks-prefetch including every
+# package the installer needs (parted, lvm2, util-linux, eudev, kmod,
+# device-mapper, dosfstools). Network mirrors are intentionally NOT
+# configured here because:
+#   1. Many install-time networks (bootstrap VLAN, isolated provisioning)
+#      cannot reach external mirrors.
+#   2. apk update fails fast when ANY configured repo is unreachable, so
+#      a network mirror present-but-unreachable poisons the entire flow.
+# The original /etc/apk/repositories from the Alpine live env may be
+# preserved in /etc/apk/repositories.original for diagnostic reference.
+log "Setting up repositories (local-only, offline install)..."
+[ -f /etc/apk/repositories ] && cp /etc/apk/repositories /etc/apk/repositories.original 2>/dev/null || true
 cat > /etc/apk/repositories << 'REPOEOF'
 /media/cdrom/apks
-`)
+/media/cdrom/apks-prefetch
+REPOEOF
+log "Updating local package index..."
+apk update --allow-untrusted 2>&1 | tail -5 | while IFS= read -r line; do log "  $line"; done || \
+    log "Warning: apk update returned non-zero (continuing with cached index)"
 
-	// Add network repository URLs as fallback
-	majorVersion := getMajorVersion(c.config.Alpine.Version)
-	fmt.Fprintf(&sb, "%s/v%s/main\n", c.config.Alpine.Mirror, majorVersion)
-	fmt.Fprintf(&sb, "%s/v%s/community\n", c.config.Alpine.Mirror, majorVersion)
-
-	sb.WriteString(`REPOEOF
-
-# Wait for network to come up (DHCP may take a few seconds)
-log "Waiting for network connectivity..."
-NETWORK_READY=false
-for i in $(seq 1 10); do
-    if apk update --allow-untrusted 2>/dev/null; then
-        NETWORK_READY=true
-        log "Package index updated successfully"
-        break
-    fi
-    log "Waiting for network... attempt $i/10"
-    sleep 2
-done
-if [ "$NETWORK_READY" = "false" ]; then
-    log "Warning: Network not available, using local packages from ISO only"
-    # Use pre-fetched packages repo for offline installation
-    # --allow-untrusted is needed because the pre-fetch APKINDEX is unsigned
-    printf "/media/cdrom/apks\n/media/cdrom/apks-prefetch\n" > /etc/apk/repositories
-fi
-
-# Install required packages (--no-network forces local repo only if network unavailable)
+# Install required packages from the local pre-fetched repository.
+# Capture full apk stderr so failures are debuggable from SOL output.
+# Disable set -e around the capture so we can record the exit code and
+# stderr instead of letting the script abort silently.
 log "Installing disk management tools..."
-apk add --no-cache --allow-untrusted \
+set +e
+APK_OUT=$(apk add --no-cache --allow-untrusted \
     parted \
     e2fsprogs \
     e2fsprogs-extra \
     lvm2 \
+    lvm2-libs \
     dosfstools \
     util-linux \
     kmod \
+    kmod-libs \
     device-mapper \
-    eudev || error "Failed to install required packages"
+    device-mapper-libs \
+    device-mapper-event-libs \
+    eudev \
+    libaio \
+    xz-libs \
+    zstd-libs \
+    readline \
+    ncurses-libs 2>&1)
+APK_RC=$?
+set -e
+if [ $APK_RC -ne 0 ]; then
+    log "apk add failed with exit code $APK_RC. Output:"
+    printf '%s\n' "$APK_OUT" | while IFS= read -r line; do log "  apk> $line"; done
+    log "Repositories configured:"
+    cat /etc/apk/repositories | while IFS= read -r line; do log "  repo> $line"; done
+    log "Available repos on /media/cdrom:"
+    ls -la /media/cdrom/apks/x86_64/ 2>&1 | head -3 | while IFS= read -r line; do log "  apks> $line"; done
+    ls -la /media/cdrom/apks-prefetch/x86_64/ 2>&1 | head -3 | while IFS= read -r line; do log "  prefetch> $line"; done
+    error "Failed to install required packages (apk exit=$APK_RC)"
+fi
+log "$(printf '%s' "$APK_OUT" | tail -3)"
 
 # Decompression/compression tooling for the initramfs rebuild step. dracut
 # can produce gzip, xz, or zstd initramfs depending on kernel CONFIG_RD_*
@@ -2447,12 +2852,214 @@ else
     error "platformctl binary not found"
 fi
 
+# Copy the installer binary (platformctl) AND the bundled platformd (which
+# the installer re-exec's into the target rootfs) off the virtual CD into
+# tmpfs BEFORE invoking the install. The ATEN virtual CD on Supermicro
+# X10 regularly glitches partway through a multi-minute install — we see
+# kernel messages like:
+#   sr0: rw=0, sector=80, nr_sectors = 4 limit=0
+#   bio_check_eod: attempt to access beyond end of device
+# When the glitch happens while the Go runtime is paging in code from
+# mmap'd text sections that live on the CD, the file-backed pages become
+# invalid and the next instruction fetch hits a nonexistent physical
+# address, raising SIGBUS (bus error code=0x2). Copying to tmpfs
+# eliminates all mmap backing from removable media so the process has
+# nothing to lose when the CD hiccups.
+TMPFS_BIN_DIR=/run/platformd-bin
+mkdir -p "$TMPFS_BIN_DIR"
+# Re-mount /run as tmpfs only if it isn't already one. On the Alpine
+# live ISO /run is typically already tmpfs; on some minimal setups it
+# isn't mounted at all.
+if ! mountpoint -q /run 2>/dev/null; then
+    mount -t tmpfs -o size=128m tmpfs /run 2>/dev/null || true
+fi
+log "Copying installer binary to tmpfs to isolate from virtual CD glitches"
+if cp -f "$PLATFORM_BIN" "$TMPFS_BIN_DIR/platformctl" 2>&1; then
+    chmod +x "$TMPFS_BIN_DIR/platformctl"
+    PLATFORM_BIN="$TMPFS_BIN_DIR/platformctl"
+    log "Installer binary copied: $PLATFORM_BIN"
+else
+    log "WARNING: tmpfs copy failed, falling back to CD-ROM binary path"
+fi
+# Same treatment for the platformd binary that the installer embeds
+# into the target UKI. The installer reads this at install time so a
+# mid-install CD glitch here also crashes the process.
+if [ -f /media/cdrom/platformd-bin/platformd ]; then
+    if cp -f /media/cdrom/platformd-bin/platformd "$TMPFS_BIN_DIR/platformd" 2>&1; then
+        chmod +x "$TMPFS_BIN_DIR/platformd"
+        log "platformd binary copied to tmpfs: $TMPFS_BIN_DIR/platformd"
+    fi
+fi
+
 # Find installer configuration file
+# Priority 1: Fetch from control plane via platform_config= kernel param
+# Priority 2: Embedded in ISO at /media/cdrom/configs/installer.yaml
 INSTALLER_CONFIG=""
-if [ -f /media/cdrom/configs/installer.yaml ]; then
+
+# Read platform_config URL from kernel cmdline
+PLATFORM_CONFIG_URL=""
+for param in $(cat /proc/cmdline); do
+    case "$param" in
+        platform_config=*) PLATFORM_CONFIG_URL="${param#platform_config=}" ;;
+    esac
+done
+
+if [ -n "$PLATFORM_CONFIG_URL" ]; then
+    log "Config source: kernel param platform_config=$PLATFORM_CONFIG_URL"
+
+    # Bring up network with DHCP if not already up. Do this BEFORE MAC
+    # enumeration so interfaces that are plumbed but not yet up still
+    # get their MAC returned by ip link.
+    if ! ip addr show eth0 2>/dev/null | grep -q "inet "; then
+        log "Bringing up eth0 with DHCP for config fetch..."
+        ip link set eth0 up 2>/dev/null
+        udhcpc -i eth0 -t 10 -T 3 -n 2>/dev/null || true
+    fi
+
+    # Build the list of candidate MACs from all local NICs. The
+    # bootstrap orchestrator publishes each node's merged config under
+    # EVERY MAC it knows about (YAML + BMC-discovered), so we try each
+    # local MAC against the config server and the first 2xx wins.
+    #
+    # See docs/bootstrap/config-delivery.md §3 for the URL shape and
+    # docs/architecture/bootstrap-flow.md §6 for the per-MAC keying
+    # rationale.
+    CA_BUNDLE="/media/cdrom/configs/ca-bundle.pem"
+    WGET_OPTS="--no-check-certificate"
+    if [ -f "$CA_BUNDLE" ]; then
+        WGET_OPTS="--ca-certificate=$CA_BUNDLE"
+        log "Using CA bundle: $CA_BUNDLE"
+    fi
+
+    # Normalize the base URL — strip any trailing slash.
+    PLATFORM_CONFIG_BASE="${PLATFORM_CONFIG_URL%/}"
+
+    # Detect URL shape. Path-style (e.g. .../config/mac) expects
+    #   <base>/<mac-dashed>/installer.yaml
+    # Legacy query-style expects
+    #   <base>?mac=<mac-colons>
+    # Default to path-style since that is the orchestrator's served
+    # endpoint (pkg/ipxe/http_server.go).
+    for _iface_path in /sys/class/net/eth* /sys/class/net/en*; do
+        [ -e "$_iface_path" ] || continue
+        _MAC_RAW=$(cat "$_iface_path/address" 2>/dev/null)
+        [ -n "$_MAC_RAW" ] || continue
+        _MAC_LC=$(echo "$_MAC_RAW" | tr '[:upper:]' '[:lower:]' | sed 's/[^0-9a-f]//g')
+        [ ${#_MAC_LC} -eq 12 ] || continue
+        _MAC_DASHED=$(echo "$_MAC_LC" | sed 's/\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)/\1-\2-\3-\4-\5-\6/')
+        _MAC_COLONS=$(echo "$_MAC_LC" | sed 's/\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)/\1:\2:\3:\4:\5:\6/')
+
+        # Try path-style (orchestrator convention) first.
+        _URL_PATH="${PLATFORM_CONFIG_BASE}/${_MAC_DASHED}/installer.yaml"
+        log "Trying config fetch: ${_URL_PATH}"
+        if wget -q $WGET_OPTS -O /tmp/platform-config.yaml "$_URL_PATH" 2>&1; then
+            if [ -s /tmp/platform-config.yaml ] && ! head -1 /tmp/platform-config.yaml | grep -qE '^<'; then
+                INSTALLER_CONFIG="/tmp/platform-config.yaml"
+                log "Config fetched from ${_URL_PATH} ($(wc -c < /tmp/platform-config.yaml) bytes)"
+
+                # Also fetch the CP's CA bundle from the same path.
+                # Orchestrator publishes it alongside installer.yaml for
+                # non-CP nodes so the installer can add the private CA
+                # to the OS trust store before first-boot ACME enrollment.
+                # 404 is not an error — CP-role nodes don't need it.
+                _URL_CA="${PLATFORM_CONFIG_BASE}/${_MAC_DASHED}/ca-bundle.pem"
+                if wget -q $WGET_OPTS -O /tmp/ca-bundle.pem "$_URL_CA" 2>&1; then
+                    if [ -s /tmp/ca-bundle.pem ] && head -1 /tmp/ca-bundle.pem | grep -q 'BEGIN CERTIFICATE'; then
+                        log "CA bundle fetched from ${_URL_CA} ($(wc -c < /tmp/ca-bundle.pem) bytes)"
+                    else
+                        rm -f /tmp/ca-bundle.pem
+                    fi
+                fi
+                break
+            fi
+        fi
+
+        # Fall back to legacy query-style for production config-delivery
+        # servers that expect ?mac=<colon-mac> (see
+        # docs/provisioning/config-delivery.md).
+        _URL_QUERY="${PLATFORM_CONFIG_BASE}?mac=${_MAC_COLONS}"
+        log "Trying config fetch (legacy): ${_URL_QUERY}"
+        if wget -q $WGET_OPTS -O /tmp/platform-config.yaml "$_URL_QUERY" 2>&1; then
+            if [ -s /tmp/platform-config.yaml ] && ! head -1 /tmp/platform-config.yaml | grep -qE '^<'; then
+                INSTALLER_CONFIG="/tmp/platform-config.yaml"
+                log "Config fetched from ${_URL_QUERY} ($(wc -c < /tmp/platform-config.yaml) bytes)"
+                break
+            fi
+        fi
+    done
+
+    if [ -z "$INSTALLER_CONFIG" ]; then
+        log "WARNING: Dynamic config fetch failed for all local MACs, falling back to embedded config"
+    fi
+fi
+
+# Priority 1b: Implicit per-MAC config via platform_debug_sink.
+# Virtual-media boot has no way to set kernel cmdline params, so the
+# orchestrator's per-MAC installer.yaml at the pxeboot HTTP sink
+# cannot be reached via platform_config=. When platform_debug_sink is
+# set (always true for debug installs) derive the config URL from it
+# and retry the per-MAC fetch before falling back to the ISO-baked stub.
+if [ -z "$INSTALLER_CONFIG" ]; then
+    PLATFORM_DEBUG_SINK=""
+    for param in $(cat /proc/cmdline); do
+        case "$param" in
+            platform_debug_sink=*) PLATFORM_DEBUG_SINK="${param#platform_debug_sink=}" ;;
+        esac
+    done
+
+    if [ -n "$PLATFORM_DEBUG_SINK" ]; then
+        log "Trying per-MAC config via debug sink: http://${PLATFORM_DEBUG_SINK}/config/mac"
+
+        # Reuse the same DHCP bootstrap as Priority 1.
+        if ! ip addr show eth0 2>/dev/null | grep -q "inet "; then
+            log "Bringing up eth0 with DHCP to reach debug sink..."
+            ip link set eth0 up 2>/dev/null
+            udhcpc -i eth0 -t 10 -T 3 -n 2>/dev/null || true
+        fi
+
+        SINK_BASE="http://${PLATFORM_DEBUG_SINK}/config/mac"
+        for _iface_path in /sys/class/net/eth* /sys/class/net/en*; do
+            [ -e "$_iface_path" ] || continue
+            _MAC_RAW=$(cat "$_iface_path/address" 2>/dev/null)
+            [ -n "$_MAC_RAW" ] || continue
+            _MAC_LC=$(echo "$_MAC_RAW" | tr '[:upper:]' '[:lower:]' | sed 's/[^0-9a-f]//g')
+            [ ${#_MAC_LC} -eq 12 ] || continue
+            _MAC_DASHED=$(echo "$_MAC_LC" | sed 's/\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)/\1-\2-\3-\4-\5-\6/')
+
+            _URL_PATH="${SINK_BASE}/${_MAC_DASHED}/installer.yaml"
+            log "Trying config fetch (debug sink): ${_URL_PATH}"
+            if wget -q -O /tmp/platform-config.yaml "$_URL_PATH" 2>&1; then
+                if [ -s /tmp/platform-config.yaml ] && ! head -1 /tmp/platform-config.yaml | grep -qE '^<'; then
+                    INSTALLER_CONFIG="/tmp/platform-config.yaml"
+                    log "Config fetched from ${_URL_PATH} ($(wc -c < /tmp/platform-config.yaml) bytes)"
+
+                    # Also fetch matching CA bundle (best-effort).
+                    _URL_CA="${SINK_BASE}/${_MAC_DASHED}/ca-bundle.pem"
+                    if wget -q -O /tmp/ca-bundle.pem "$_URL_CA" 2>&1; then
+                        if [ -s /tmp/ca-bundle.pem ] && head -1 /tmp/ca-bundle.pem | grep -q 'BEGIN CERTIFICATE'; then
+                            log "CA bundle fetched from ${_URL_CA} ($(wc -c < /tmp/ca-bundle.pem) bytes)"
+                        else
+                            rm -f /tmp/ca-bundle.pem
+                        fi
+                    fi
+                    break
+                fi
+            fi
+        done
+
+        if [ -z "$INSTALLER_CONFIG" ]; then
+            log "WARNING: Debug sink per-MAC fetch failed for all local MACs, falling back to embedded config"
+        fi
+    fi
+fi
+
+# Priority 2: Embedded config in ISO
+if [ -z "$INSTALLER_CONFIG" ] && [ -f /media/cdrom/configs/installer.yaml ]; then
     INSTALLER_CONFIG="/media/cdrom/configs/installer.yaml"
     log "Found installer configuration: $INSTALLER_CONFIG"
-else
+fi
+
+if [ -z "$INSTALLER_CONFIG" ]; then
     log "No installer configuration found, using defaults"
 fi
 
@@ -2502,6 +3109,17 @@ case "$PLATFORM_HOSTNAME" in
 esac
 log "Resolved platform hostname: $PLATFORM_HOSTNAME"
 
+# Fetch the control-plane CA bundle from the orchestrator (best-effort).
+# Saved to /tmp/cp-ca-bundle.pem; the post-install mount block installs
+# it into the chroot's system trust store. Without this, GW and compute
+# nodes can't validate the CP's TLS cert on first-boot ACME enrollment.
+fetch_orchestrator_ca_bundle || true
+# Capture the SPKI pin too (parallel trust-anchor path). Saved to
+# /tmp/cp-spki-pin; post-install writes to
+# /etc/trusted-platform/bootstrap-spki-pin so platformd's SPKI
+# bootstrap strategy can pin against it when bundle delivery fails.
+fetch_orchestrator_spki_pin || true
+
 # Build installation command (using platformctl CLI binary)
 # If installer config exists, use it; otherwise use command-line flags.
 # When --config is provided, the config file is the single source of
@@ -2524,12 +3142,21 @@ if [ -n "$INSTALLER_CONFIG" ]; then
         --automated \
         --verbose \
         --debug"
+    # Per-node hostname override. The config file baked into the shared
+    # ISO carries a generic hostname ("server"); PLATFORM_HOSTNAME
+    # resolution above picked up the per-MAC value published by the
+    # orchestrator. Always pass --hostname so the installed system
+    # takes the orchestrator-assigned name rather than the shared
+    # default. Cobra's Changed-check means the installer only applies
+    # this flag when explicitly provided, which is exactly what we
+    # want.
+    INSTALL_CMD="$INSTALL_CMD --hostname \"$PLATFORM_HOSTNAME\""
     # In debug mode, force a known LUKS passphrase for dev convenience
     if grep -q 'platform_debug=1' /proc/cmdline 2>/dev/null; then
         INSTALL_CMD="$INSTALL_CMD --password \"password\""
         log "Debug mode: using known LUKS passphrase"
     fi
-    log "Installation command built successfully"
+    log "Installation command built successfully (hostname=$PLATFORM_HOSTNAME)"
 else
     # No config file — fallback to CLI flags with defaults.
     # This is the degraded/test path.
@@ -2584,7 +3211,13 @@ if [ -z "$INSTALLER_CONFIG" ]; then
 	if c.config.Platform.PlatformdBinary != "" {
 		sb.WriteString(`
 # Add platformd binary if it exists on the ISO
-PLATFORMD_PATH="/media/cdrom/platformd-bin/platformd"
+# Prefer the tmpfs copy (isolates from virtual-CD glitches — see the
+# platformctl binary copy block above for rationale). Falls back to the
+# CD-ROM path if the copy did not succeed.
+PLATFORMD_PATH="/run/platformd-bin/platformd"
+if [ ! -f "$PLATFORMD_PATH" ]; then
+    PLATFORMD_PATH="/media/cdrom/platformd-bin/platformd"
+fi
 if [ -f "$PLATFORMD_PATH" ]; then
     INSTALL_CMD="$INSTALL_CMD --platformd-binary \"$PLATFORMD_PATH\""
     log "Platformd binary: $PLATFORMD_PATH"
@@ -2658,6 +3291,64 @@ if [ $INSTALL_RESULT -eq 0 ]; then
                         log "  Modules persisted to /mnt/etc/modules"
                     else
                         log "  No additional modules needed"
+                    fi
+
+                    # Install the orchestrator-staged CA bundle into the
+                    # system trust store so the FIRST platformd boot can
+                    # validate the control plane's TLS cert during ACME
+                    # enrollment. Without this step the new node's
+                    # ACME client hits "x509: certificate signed by
+                    # unknown authority" and falls back to issuing its
+                    # own local CA — exactly the failure mode that left
+                    # GW/compute unenrolled in the 2026-04-29 deploy.
+                    #
+                    # Best-effort: missing bundle / missing host tooling
+                    # logs and continues. The runtime BootstrapTrust
+                    # path can still recover via SPKI/Noise when wired.
+                    if [ -s /tmp/cp-ca-bundle.pem ] && [ -d /mnt/usr ]; then
+                        log "  Installing orchestrator CA bundle to system trust store..."
+                        mkdir -p /mnt/usr/local/share/ca-certificates
+                        cp /tmp/cp-ca-bundle.pem /mnt/usr/local/share/ca-certificates/cp-ca-bundle.crt
+                        chmod 0644 /mnt/usr/local/share/ca-certificates/cp-ca-bundle.crt
+                        # Also stage at /etc/ssl/certs/ for tools that read
+                        # there directly without consulting ca-certificates.
+                        mkdir -p /mnt/etc/ssl/certs
+                        cp /tmp/cp-ca-bundle.pem /mnt/etc/ssl/certs/cp-ca-bundle.pem
+                        chmod 0644 /mnt/etc/ssl/certs/cp-ca-bundle.pem
+                        # Run update-ca-certificates inside the chroot so
+                        # the OpenSSL bundle (/etc/ssl/certs/ca-certificates.crt)
+                        # picks up the new anchor. Bind-mount /proc /sys /dev
+                        # so the chroot tool can resolve its prerequisites.
+                        for sub in proc sys dev; do
+                            if [ ! -d /mnt/$sub ]; then mkdir -p /mnt/$sub; fi
+                            mount --bind /$sub /mnt/$sub 2>/dev/null || true
+                        done
+                        if chroot /mnt /usr/sbin/update-ca-certificates >/dev/null 2>&1; then
+                            log "  CA bundle installed and trust store refreshed"
+                        else
+                            log "  WARNING: update-ca-certificates failed inside chroot - bundle is staged but not yet hashed"
+                        fi
+                        for sub in dev sys proc; do
+                            umount /mnt/$sub 2>/dev/null || true
+                        done
+                    else
+                        if [ -s /tmp/cp-ca-bundle.pem ]; then
+                            log "  /mnt/usr not present - cannot install CA bundle"
+                        else
+                            log "  No orchestrator CA bundle staged - relying on runtime trust bootstrap"
+                        fi
+                    fi
+
+                    # Persist the orchestrator-staged SPKI pin so the
+                    # platform's BootstrapTrust SPKI strategy has a
+                    # value to pin against. The platform reads from
+                    # /etc/trusted-platform/bootstrap-spki-pin via the
+                    # bootstrap-client.spki.pin-file config key.
+                    if [ -s /tmp/cp-spki-pin ] && [ -d /mnt/etc ]; then
+                        mkdir -p /mnt/etc/trusted-platform
+                        cp /tmp/cp-spki-pin /mnt/etc/trusted-platform/bootstrap-spki-pin
+                        chmod 0644 /mnt/etc/trusted-platform/bootstrap-spki-pin
+                        log "  SPKI pin persisted to /etc/trusted-platform/bootstrap-spki-pin"
                     fi
 
                     sync
@@ -2747,6 +3438,11 @@ if [ $INSTALL_RESULT -eq 0 ]; then
 	} else {
 		sb.WriteString(`    log "System will reboot..."
     # CRITICAL: Properly unmount filesystems and sync before reboot
+    # Copy install debug log to the installed system for post-boot analysis
+    log "Copying install debug log to installed system..."
+    cp "$INSTALL_LOG" /mnt/var/log/autoinstall-debug.log 2>/dev/null || true
+    cp /tmp/install.log /mnt/var/log/install.log 2>/dev/null || true
+
     log "Syncing and unmounting filesystems..."
     sync
     umount /mnt/boot/efi 2>/dev/null || true
@@ -3080,30 +3776,52 @@ fi
 
 info "PLATFORMD: Target device: $LUKS_DEV -> $LUKS_NAME"
 
-# Find EFI partition by scanning for FAT32/EFI partitions
-# Can't rely on a specific device path since BMC virtual media may shift disk numbering
+# Find EFI partition by scanning for FAT32/EFI partitions.
+# Can't rely on a specific device path since BMC virtual media may shift
+# disk numbering. LUKS_DEV is often a /dev/disk/by-uuid/... symlink, so
+# resolve it first — the earlier sed-only approach stripped trailing digits
+# from the UUID itself and produced a bogus "${LUKS_DISK}1" that pointed
+# at the LUKS partition (causing the vfat mount below to fail silently
+# while skipping the scan fallback).
 EFI_PART=""
-# First try by LUKS device: if LUKS is on sdX2, EFI is on sdX1
-LUKS_DISK=$(echo "$LUKS_DEV" | sed 's/[0-9]*$//' | sed 's/p$//')
-if [ -n "$LUKS_DISK" ] && [ -b "${LUKS_DISK}1" ]; then
-    EFI_PART="${LUKS_DISK}1"
-elif [ -n "$LUKS_DISK" ] && [ -b "${LUKS_DISK}p1" ]; then
-    EFI_PART="${LUKS_DISK}p1"
-fi
-# Fallback: scan all partitions for EFI system partition
+LUKS_DEV_REAL=$(readlink -f "$LUKS_DEV" 2>/dev/null || echo "$LUKS_DEV")
+
+# Probe a candidate: block device AND mountable vfat filesystem
+# containing EFI/ or tpm2/{installer.luks,pcr-banks} (our markers).
+probe_efi() {
+    candidate="$1"
+    if [ ! -b "$candidate" ]; then
+        return 1
+    fi
+    mkdir -p /tmp/efi-probe
+    if mount -t vfat "$candidate" /tmp/efi-probe 2>/dev/null; then
+        if [ -d /tmp/efi-probe/EFI ] || [ -f /tmp/efi-probe/tpm2/installer.luks ] || [ -f /tmp/efi-probe/tpm2/pcr-banks ]; then
+            umount /tmp/efi-probe 2>/dev/null
+            EFI_PART="$candidate"
+            return 0
+        fi
+        umount /tmp/efi-probe 2>/dev/null
+    fi
+    return 1
+}
+
+# First try by LUKS device: derive the disk node and look for partition 1.
+case "$LUKS_DEV_REAL" in
+    /dev/sd?[0-9]*|/dev/hd?[0-9]*|/dev/vd?[0-9]*)
+        LUKS_DISK=$(echo "$LUKS_DEV_REAL" | sed 's/[0-9]*$//')
+        probe_efi "${LUKS_DISK}1" || true
+        ;;
+    /dev/nvme[0-9]*n[0-9]*p[0-9]*|/dev/mmcblk[0-9]*p[0-9]*|/dev/loop[0-9]*p[0-9]*)
+        LUKS_DISK=$(echo "$LUKS_DEV_REAL" | sed 's/p[0-9]*$//')
+        probe_efi "${LUKS_DISK}p1" || true
+        ;;
+esac
+
+# Fallback: scan all candidate first partitions.
 if [ -z "$EFI_PART" ]; then
-    for part in /dev/sda1 /dev/sdb1 /dev/sdc1 /dev/nvme0n1p1 /dev/vda1; do
-        if [ -b "$part" ]; then
-            # Check if it's a FAT/EFI partition by trying to mount it
-            mkdir -p /tmp/efi-probe
-            if mount -t vfat "$part" /tmp/efi-probe 2>/dev/null; then
-                if [ -d /tmp/efi-probe/EFI ] || [ -f /tmp/efi-probe/tpm2/installer.luks ]; then
-                    EFI_PART="$part"
-                    umount /tmp/efi-probe 2>/dev/null
-                    break
-                fi
-                umount /tmp/efi-probe 2>/dev/null
-            fi
+    for part in /dev/sda1 /dev/sdb1 /dev/sdc1 /dev/nvme0n1p1 /dev/nvme1n1p1 /dev/vda1 /dev/mmcblk0p1; do
+        if probe_efi "$part"; then
+            break
         fi
     done
 fi
@@ -3283,15 +4001,31 @@ warn "PLATFORMD: DIAGNOSTIC - stat /usr/bin/platform-initrd:"
 stat /usr/bin/platform-initrd 2>&1 | while read line; do warn "PLATFORMD: $line"; done
 
 if [ -x /usr/bin/platform-initrd ]; then
+    # Read seal-pcrs from the pcr-banks file on EFI (written by installer
+    # at install time with just seal-pcrs=..., then rewritten by firstboot
+    # with the full authoritative set). Passing --pcrs explicitly avoids
+    # the chicken-and-egg where platform-initrd's fallback to
+    # config.yaml-inside-installer.luks only works if /boot/efi mounted
+    # successfully — and it's a defense-in-depth for the mount succeeding.
+    PCR_FLAG=""
+    PCR_BANKS_PATH="/boot/efi/tpm2/pcr-banks"
+    if [ -f "$PCR_BANKS_PATH" ]; then
+        SEAL_PCRS=$(awk -F= '$1=="seal-pcrs"{print $2}' "$PCR_BANKS_PATH" 2>/dev/null | head -1)
+        if [ -n "$SEAL_PCRS" ]; then
+            PCR_FLAG="--pcrs $SEAL_PCRS"
+            info "PLATFORMD: Read seal-pcrs=$SEAL_PCRS from $PCR_BANKS_PATH"
+        fi
+    fi
+
     info "PLATFORMD: Running platform-initrd boot (mode: $BOOT_MODE)..."
-    info "PLATFORMD: invoking platform-initrd boot --device=$LUKS_DEV --name=$LUKS_NAME"
+    info "PLATFORMD: invoking platform-initrd boot --device=$LUKS_DEV --name=$LUKS_NAME $PCR_FLAG"
     # Capture all output to a tmpfs file so we can replay it through dracut's
     # info/warn helpers regardless of where /dev/console actually points. This
     # gives us reliable visibility on every BMC SOL channel, every kernel
     # console redirect setting, and every dracut version. The cost is one
     # tmpfs file (cleaned up on switch_root).
     : > /run/platformd-initrd.log
-    /usr/bin/platform-initrd boot --device "$LUKS_DEV" --name "$LUKS_NAME" --verbose < /dev/null > /run/platformd-initrd.log 2>&1
+    /usr/bin/platform-initrd boot --device "$LUKS_DEV" --name "$LUKS_NAME" $PCR_FLAG --verbose < /dev/null > /run/platformd-initrd.log 2>&1
     rc=$?
     info "PLATFORMD: platform-initrd boot exited rc=$rc — log follows:"
     if [ -s /run/platformd-initrd.log ]; then
@@ -3951,14 +4685,11 @@ func (c *Customizer) buildKernelCmdline() string {
 		parts = append(parts, "rd.lvm=1")
 	}
 
-	// Basic boot parameters
-	parts = append(parts,
-		"rootfstype=ext4",
-		"ro",
-		"console=tty0",
-		"console=ttyS0,115200n8",
-		"loglevel=7",
-	)
+	// Basic boot parameters — console/earlycon from the generic cross-vendor
+	// default quirk.  The installed system resolves vendor-specific params
+	// at install time via pkg/quirks.Resolve using Redfish hardware identifiers.
+	parts = append(parts, "rootfstype=ext4", "ro")
+	parts = append(parts, quirks.Default().KernelCmdline...)
 
 	// Security parameters
 	if c.config.Security.Lockdown {
@@ -4034,6 +4765,51 @@ func parsePCRSelection(selection string) ([]uint, error) {
 	}
 
 	return pcrs, nil
+}
+
+// resolveHostnameForCmdline returns the installed-system hostname taken
+// from the merged platformd config, or empty if no valid hostname is
+// available. The result is baked into the GRUB kernel cmdline as
+// platform_hostname=<value>; the autoinstall.sh boot hook reads that
+// value from /proc/cmdline to route its install.log forensic upload to
+// the right /installs/<hostname>/ bucket on the bootstrap container.
+//
+// Sanitization mirrors sanitizeHostnameForPath: only lowercase letters,
+// digits, dots, and dashes survive. Anything else becomes a dash. This
+// keeps the resulting URL component safe to slot into an HTTP path.
+func (c *Customizer) resolveHostnameForCmdline() string {
+	// Candidate config files, in priority order. buildInstallerConfig
+	// writes the merged install.yaml into the overlay at this path,
+	// which is also where the autoinstall.sh YAML fallback looks first.
+	candidates := []string{
+		filepath.Join(c.config.Directories.Work, "overlay", "etc", "platformd", "install.yaml"),
+		filepath.Join(c.config.Directories.ISO, "configs", "installer.yaml"),
+	}
+	var raw string
+	for _, p := range candidates {
+		if v := readOSHostnameFromConfig(p); v != "" {
+			raw = v
+			break
+		}
+	}
+	if raw == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(raw))
+	for _, r := range strings.ToLower(raw) {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '.' || r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	return b.String()
 }
 
 // buildDynamicConfigParams builds kernel cmdline parameters for dynamic

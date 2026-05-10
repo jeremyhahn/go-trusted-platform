@@ -53,11 +53,11 @@ func TestHandlerRegistry_SDNService_ReturnsNil(t *testing.T) {
 	assert.Nil(t, registry.SDNService())
 }
 
-func TestHandlerRegistry_KMSClients_ReturnsNil(t *testing.T) {
+func TestHandlerRegistry_KMSSDKClients_ReturnsNil(t *testing.T) {
 	registry := &HandlerRegistry{
 		params: RegistryParams{},
 	}
-	key, crypto, dek, secrets := registry.KMSClients()
+	key, crypto, dek, secrets := registry.KMSSDKClients()
 	assert.Nil(t, key)
 	assert.Nil(t, crypto)
 	assert.Nil(t, dek)

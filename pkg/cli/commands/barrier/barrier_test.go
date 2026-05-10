@@ -14,13 +14,14 @@
 package barrier
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/spf13/pflag"
 
-	barriersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	barriersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/barrier"
 )
 
 func TestNewCommand_Structure(t *testing.T) {
@@ -87,7 +88,7 @@ func TestNewCommand_SubcommandDescriptions(t *testing.T) {
 		name          string
 		expectedShort string
 	}{
-		{name: "init", expectedShort: "Initialize the barrier"},
+		{name: "init", expectedShort: "REMOVED: use the root 'platformctl init' command instead"},
 		{name: "status", expectedShort: "Show barrier status"},
 		{name: "unseal", expectedShort: "Unseal the barrier"},
 		{name: "seal", expectedShort: "Seal the barrier"},
@@ -107,7 +108,11 @@ func TestNewCommand_SubcommandDescriptions(t *testing.T) {
 	}
 }
 
-func TestInitCommand_Flags(t *testing.T) {
+// TestInitCommand_RedirectsToRootInit verifies that the legacy
+// "platformctl barrier init" subcommand emits CanonicalRedirectError
+// pointing at the root "platformctl init" command per
+// docs/08-bootstrap-auth-architecture.md §6.
+func TestInitCommand_RedirectsToRootInit(t *testing.T) {
 	getFlags := func() *cli.CommonFlags {
 		return &cli.CommonFlags{}
 	}
@@ -117,30 +122,27 @@ func TestInitCommand_Flags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to find init subcommand: %v", err)
 	}
-
-	tests := []struct {
-		flagName     string
-		defaultValue string
-	}{
-		{flagName: "secret", defaultValue: ""},
-		{flagName: "threshold", defaultValue: "1"},
-		{flagName: "shares", defaultValue: "1"},
+	if initCmd.RunE == nil {
+		t.Fatal("legacy barrier init must have a RunE that emits CanonicalRedirectError")
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.flagName, func(t *testing.T) {
-			flag := initCmd.Flags().Lookup(tt.flagName)
-			if flag == nil {
-				t.Fatalf("expected flag %q not found", tt.flagName)
-			}
-			if flag.DefValue != tt.defaultValue {
-				t.Errorf("expected default %q, got %q", tt.defaultValue, flag.DefValue)
-			}
-		})
+	runErr := initCmd.RunE(initCmd, nil)
+	if runErr == nil {
+		t.Fatal("expected CanonicalRedirectError from legacy barrier init")
+	}
+	var redirect *CanonicalRedirectError
+	if !errors.As(runErr, &redirect) {
+		t.Fatalf("expected *CanonicalRedirectError, got %T: %v", runErr, runErr)
+	}
+	if redirect.Old != "platformctl barrier init" {
+		t.Errorf("expected Old=\"platformctl barrier init\", got %q", redirect.Old)
 	}
 }
 
-func TestInitCommand_FlagsMissing(t *testing.T) {
+// TestInitCommand_RedirectIgnoresLegacyFlags verifies the redirect
+// stub disables flag parsing entirely so legacy --secret / --threshold
+// / --shares arguments are passed through to the redirect handler.
+func TestInitCommand_RedirectIgnoresLegacyFlags(t *testing.T) {
 	getFlags := func() *cli.CommonFlags {
 		return &cli.CommonFlags{}
 	}
@@ -151,10 +153,16 @@ func TestInitCommand_FlagsMissing(t *testing.T) {
 		t.Fatalf("failed to find init subcommand: %v", err)
 	}
 
-	// Verify non-existent flags return nil
-	flag := initCmd.Flags().Lookup("nonexistent")
-	if flag != nil {
-		t.Error("expected nil for nonexistent flag")
+	// The redirect command MUST NOT register the legacy flags; the
+	// canonical flag set lives on the root "platformctl init" command.
+	if flag := initCmd.Flags().Lookup("secret"); flag != nil {
+		t.Error("legacy --secret flag must not be exposed on the redirect stub")
+	}
+	if flag := initCmd.Flags().Lookup("threshold"); flag != nil {
+		t.Error("legacy --threshold flag must not be exposed on the redirect stub")
+	}
+	if flag := initCmd.Flags().Lookup("shares"); flag != nil {
+		t.Error("legacy --shares flag must not be exposed on the redirect stub")
 	}
 }
 

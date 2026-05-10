@@ -38,6 +38,7 @@ func TestSentinelErrors(t *testing.T) {
 		{"ErrShutdownTimeout", ErrShutdownTimeout, "shutdown timeout exceeded"},
 		{"ErrBGPSpeakerNil", ErrBGPSpeakerNil, "BGP speaker is nil"},
 		{"ErrLoggerNil", ErrLoggerNil, "logger is nil"},
+		{"ErrNoServicesEnabled", ErrNoServicesEnabled, "no services enabled"},
 	}
 
 	for _, tt := range tests {
@@ -52,49 +53,25 @@ func TestSentinelErrors(t *testing.T) {
 	}
 }
 
-func TestErrModeNotSupported(t *testing.T) {
-	tests := []struct {
-		name     string
-		mode     GatewayMode
-		contains string
-	}{
-		{"overlay", GatewayModeOverlay, "overlay"},
-		{"edge", GatewayModeEdge, "edge"},
-		{"transit", GatewayModeTransit, "transit"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := &ErrModeNotSupported{Mode: tt.mode}
-			if !strings.Contains(err.Error(), tt.contains) {
-				t.Errorf("error %q does not contain %q", err.Error(), tt.contains)
-			}
-			if !strings.Contains(err.Error(), "not supported") {
-				t.Errorf("error %q does not contain 'not supported'", err.Error())
-			}
-		})
-	}
-}
-
-func TestErrModeActivationFailed(t *testing.T) {
-	cause := errors.New("activation cause")
+func TestErrServiceStartFailed(t *testing.T) {
+	cause := errors.New("start cause")
 
 	tests := []struct {
 		name     string
-		err      *ErrModeActivationFailed
+		err      *ErrServiceStartFailed
 		contains []string
 		hasCause bool
 	}{
 		{
 			name:     "with cause",
-			err:      &ErrModeActivationFailed{Mode: GatewayModeOverlay, Cause: cause},
-			contains: []string{"overlay", "activation cause", "activate"},
+			err:      &ErrServiceStartFailed{Service: ServiceOverlay, Cause: cause},
+			contains: []string{"overlay", "start cause", "start service"},
 			hasCause: true,
 		},
 		{
 			name:     "without cause",
-			err:      &ErrModeActivationFailed{Mode: GatewayModeEdge, Cause: nil},
-			contains: []string{"edge", "activate"},
+			err:      &ErrServiceStartFailed{Service: ServiceEdge, Cause: nil},
+			contains: []string{"edge", "start service"},
 			hasCause: false,
 		},
 	}
@@ -118,25 +95,25 @@ func TestErrModeActivationFailed(t *testing.T) {
 	}
 }
 
-func TestErrModeDeactivationFailed(t *testing.T) {
-	cause := errors.New("deactivation cause")
+func TestErrServiceStopFailed(t *testing.T) {
+	cause := errors.New("stop cause")
 
 	tests := []struct {
 		name     string
-		err      *ErrModeDeactivationFailed
+		err      *ErrServiceStopFailed
 		contains []string
 		hasCause bool
 	}{
 		{
 			name:     "with cause",
-			err:      &ErrModeDeactivationFailed{Mode: GatewayModeOverlay, Cause: cause},
-			contains: []string{"overlay", "deactivation cause", "deactivate"},
+			err:      &ErrServiceStopFailed{Service: ServiceOverlay, Cause: cause},
+			contains: []string{"overlay", "stop cause", "stop service"},
 			hasCause: true,
 		},
 		{
 			name:     "without cause",
-			err:      &ErrModeDeactivationFailed{Mode: GatewayModeEdge, Cause: nil},
-			contains: []string{"edge", "deactivate"},
+			err:      &ErrServiceStopFailed{Service: ServiceEdge, Cause: nil},
+			contains: []string{"edge", "stop service"},
 			hasCause: false,
 		},
 	}
@@ -157,6 +134,30 @@ func TestErrModeDeactivationFailed(t *testing.T) {
 				t.Errorf("expected nil unwrap, got %v", unwrapped)
 			}
 		})
+	}
+}
+
+func TestErrServiceAlreadyActive(t *testing.T) {
+	err := &ErrServiceAlreadyActive{Service: ServiceOverlay}
+	errStr := err.Error()
+
+	if !strings.Contains(errStr, "already active") {
+		t.Errorf("error %q does not contain 'already active'", errStr)
+	}
+	if !strings.Contains(errStr, "overlay") {
+		t.Errorf("error %q does not contain service name", errStr)
+	}
+}
+
+func TestErrServiceNotActive(t *testing.T) {
+	err := &ErrServiceNotActive{Service: ServiceEdge}
+	errStr := err.Error()
+
+	if !strings.Contains(errStr, "not active") {
+		t.Errorf("error %q does not contain 'not active'", errStr)
+	}
+	if !strings.Contains(errStr, "edge") {
+		t.Errorf("error %q does not contain service name", errStr)
 	}
 }
 
@@ -426,30 +427,6 @@ func TestErrRequirementsNotMet(t *testing.T) {
 	}
 }
 
-func TestErrModeNotActive(t *testing.T) {
-	err := &ErrModeNotActive{Mode: GatewayModeOverlay}
-	errStr := err.Error()
-
-	if !strings.Contains(errStr, "not active") {
-		t.Errorf("error %q does not contain 'not active'", errStr)
-	}
-	if !strings.Contains(errStr, "overlay") {
-		t.Errorf("error %q does not contain mode name", errStr)
-	}
-}
-
-func TestErrModeAlreadyActive(t *testing.T) {
-	err := &ErrModeAlreadyActive{Mode: GatewayModeEdge}
-	errStr := err.Error()
-
-	if !strings.Contains(errStr, "already active") {
-		t.Errorf("error %q does not contain 'already active'", errStr)
-	}
-	if !strings.Contains(errStr, "edge") {
-		t.Errorf("error %q does not contain mode name", errStr)
-	}
-}
-
 func TestErrStartupFailed(t *testing.T) {
 	cause := errors.New("startup cause")
 
@@ -650,8 +627,19 @@ func TestErrCapacityExceeded(t *testing.T) {
 	}
 }
 
+func TestErrTunnelConfigInvalid(t *testing.T) {
+	err := &ErrTunnelConfigInvalid{TunnelName: "gre1", Reason: "missing remote endpoint"}
+	errStr := err.Error()
+
+	if !strings.Contains(errStr, "gre1") {
+		t.Errorf("error %q does not contain tunnel name", errStr)
+	}
+	if !strings.Contains(errStr, "missing remote endpoint") {
+		t.Errorf("error %q does not contain reason", errStr)
+	}
+}
+
 func TestErrorsIs(t *testing.T) {
-	// Test that sentinel errors work with errors.Is
 	tests := []struct {
 		name string
 		err  error
@@ -660,6 +648,7 @@ func TestErrorsIs(t *testing.T) {
 		{"ErrGatewayAlreadyExists", ErrGatewayAlreadyExists},
 		{"ErrConfigNil", ErrConfigNil},
 		{"ErrUplinkNotFound", ErrUplinkNotFound},
+		{"ErrNoServicesEnabled", ErrNoServicesEnabled},
 	}
 
 	for _, tt := range tests {

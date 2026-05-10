@@ -1,0 +1,188 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+
+// LUKSService exposes LUKS2 volume and keyslot management.
+service LUKSService {
+  // Status returns the high-level state of a LUKS device.
+  rpc Status(LUKSStatusRequest) returns (LUKSStatusResponse);
+
+  // ListSlots lists the active keyslots on a device.
+  rpc ListSlots(LUKSListSlotsRequest) returns (LUKSListSlotsResponse);
+
+  // Info returns a detailed header dump for a device.
+  rpc Info(LUKSInfoRequest) returns (LUKSInfoResponse);
+
+  // EnrollPassphrase adds a passphrase keyslot to a device.
+  rpc EnrollPassphrase(LUKSEnrollPassphraseRequest) returns (LUKSEnrollPassphraseResponse);
+
+  // EnrollFIDO2 adds a FIDO2 keyslot to a device.
+  rpc EnrollFIDO2(LUKSEnrollFIDO2Request) returns (LUKSEnrollFIDO2Response);
+
+  // EnrollTPM adds a TPM2-sealed keyslot to a device.
+  rpc EnrollTPM(LUKSEnrollTPMRequest) returns (LUKSEnrollTPMResponse);
+
+  // EnrollRecovery adds a recovery-key keyslot to a device.
+  rpc EnrollRecovery(LUKSEnrollRecoveryRequest) returns (LUKSEnrollRecoveryResponse);
+
+  // RemoveKey removes an existing keyslot.
+  rpc RemoveKey(LUKSRemoveKeyRequest) returns (LUKSRemoveKeyResponse);
+
+  // TestUnlock verifies a keyslot can unlock a device.
+  rpc TestUnlock(LUKSTestUnlockRequest) returns (LUKSTestUnlockResponse);
+
+  // ChangePassphrase replaces an existing passphrase slot value.
+  rpc ChangePassphrase(LUKSChangePassphraseRequest) returns (LUKSChangePassphraseResponse);
+}
+
+// LUKSKeyType enumerates the keyslot backends.
+enum LUKSKeyType {
+  LUKS_KEY_TYPE_UNSPECIFIED = 0;
+  LUKS_KEY_TYPE_PASSPHRASE = 1;
+  LUKS_KEY_TYPE_FIDO2 = 2;
+  LUKS_KEY_TYPE_TPM = 3;
+  LUKS_KEY_TYPE_RECOVERY = 4;
+}
+
+// LUKSKeyslot describes a single LUKS2 keyslot.
+message LUKSKeyslot {
+  int32 slot = 1;
+  LUKSKeyType type = 2;
+  int32 key_size = 3;
+  int32 priority = 4;
+}
+
+// LUKSStatusRequest requests the status of a LUKS device.
+message LUKSStatusRequest {
+  string device = 1;
+}
+
+// LUKSStatusResponse reports device header status.
+message LUKSStatusResponse {
+  string device = 1;
+  bool is_luks = 2;
+  int32 version = 3;
+  string uuid = 4;
+  string label = 5;
+  string cipher = 6;
+  repeated int32 active_slots = 7;
+}
+
+// LUKSListSlotsRequest requests the keyslot listing for a device.
+message LUKSListSlotsRequest {
+  string device = 1;
+}
+
+// LUKSListSlotsResponse lists the active keyslots.
+message LUKSListSlotsResponse {
+  string device = 1;
+  repeated LUKSKeyslot slots = 2;
+}
+
+// LUKSInfoRequest requests a detailed info dump for a device.
+message LUKSInfoRequest {
+  string device = 1;
+}
+
+// LUKSInfoResponse returns the full LUKS2 header / metadata.
+message LUKSInfoResponse {
+  string device = 1;
+  string uuid = 2;
+  string label = 3;
+  int32 version = 4;
+  string cipher = 5;
+  int32 key_size = 6;
+  int32 sector_size = 7;
+  repeated LUKSKeyslot slots = 8;
+  string metadata_json = 9;
+}
+
+// LUKSEnrollPassphraseRequest adds a passphrase keyslot.
+message LUKSEnrollPassphraseRequest {
+  string device = 1;
+  string existing_passphrase = 2;
+  string new_passphrase = 3;
+}
+
+// LUKSEnrollPassphraseResponse returns the enrolled slot index.
+message LUKSEnrollPassphraseResponse {
+  int32 slot = 1;
+}
+
+// LUKSEnrollFIDO2Request adds a FIDO2 keyslot.
+message LUKSEnrollFIDO2Request {
+  string device = 1;
+  string existing_passphrase = 2;
+  string credential_id = 3;
+  bool require_pin = 4;
+  bool require_uv = 5;
+}
+
+// LUKSEnrollFIDO2Response returns the enrolled slot index.
+message LUKSEnrollFIDO2Response {
+  int32 slot = 1;
+  string token_id = 2;
+}
+
+// LUKSEnrollTPMRequest adds a TPM2-sealed keyslot.
+message LUKSEnrollTPMRequest {
+  string device = 1;
+  string existing_passphrase = 2;
+  repeated int32 pcrs = 3;
+  string handle = 4;
+}
+
+// LUKSEnrollTPMResponse returns the enrolled slot index.
+message LUKSEnrollTPMResponse {
+  int32 slot = 1;
+  string token_id = 2;
+}
+
+// LUKSEnrollRecoveryRequest adds a recovery-key keyslot.
+message LUKSEnrollRecoveryRequest {
+  string device = 1;
+  string existing_passphrase = 2;
+}
+
+// LUKSEnrollRecoveryResponse returns the enrolled slot index and recovery key.
+message LUKSEnrollRecoveryResponse {
+  int32 slot = 1;
+  string recovery_key = 2;
+}
+
+// LUKSRemoveKeyRequest removes a keyslot.
+message LUKSRemoveKeyRequest {
+  string device = 1;
+  int32 slot = 2;
+}
+
+// LUKSRemoveKeyResponse returns the outcome of removal.
+message LUKSRemoveKeyResponse {
+  bool removed = 1;
+}
+
+// LUKSTestUnlockRequest verifies a keyslot can unlock a device.
+message LUKSTestUnlockRequest {
+  string device = 1;
+  int32 slot = 2;
+}
+
+// LUKSTestUnlockResponse reports the unlock-test outcome.
+message LUKSTestUnlockResponse {
+  bool unlocked = 1;
+}
+
+// LUKSChangePassphraseRequest changes a passphrase slot.
+message LUKSChangePassphraseRequest {
+  string device = 1;
+  int32 slot = 2;
+  string old_passphrase = 3;
+  string new_passphrase = 4;
+}
+
+// LUKSChangePassphraseResponse returns the outcome.
+message LUKSChangePassphraseResponse {
+  bool changed = 1;
+}

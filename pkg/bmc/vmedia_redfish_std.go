@@ -75,12 +75,19 @@ func (b *vmediaRedfishStd) Mount(ctx context.Context, spec *MediaSpec) error {
 	}
 	body := redfishInsertMediaBody{Image: spec.URL}
 	if err := c.doPOST(ctx, insertPath, body, nil); err != nil {
-		return err
+		return b.maybeTranslateOEMFallback(err, "InsertMedia",
+			"firmware does not support standard Redfish virtual media insert")
 	}
 	return nil
 }
 
 // Unmount ejects the currently inserted media via VirtualMedia.EjectMedia.
+//
+// An empty VirtualMedia collection is treated as success: on X10 hardware
+// the IPMI eject path runs first and clears the collection out from
+// under us, so the subsequent Redfish probe finds zero members. The
+// post-state is the desired one (no media mounted), so reporting an
+// error here would falsely flag every successful unmount as a failure.
 func (b *vmediaRedfishStd) Unmount(ctx context.Context) error {
 	c := b.c
 	if err := c.ensureDiscovered(ctx); err != nil {
@@ -96,6 +103,10 @@ func (b *vmediaRedfishStd) Unmount(ctx context.Context) error {
 	}
 	cdPath, err := c.discoverVirtualMediaCD(ctx, vmPath)
 	if err != nil {
+		var emptyErr ErrRedfishEmptyCollection
+		if errors.As(err, &emptyErr) && emptyErr.Resource == "VirtualMedia" {
+			return nil
+		}
 		return err
 	}
 	var vm redfishVirtualMedia
@@ -107,20 +118,41 @@ func (b *vmediaRedfishStd) Unmount(ctx context.Context) error {
 		ejectPath = cdPath + "/Actions/VirtualMedia.EjectMedia"
 	}
 	if err := c.doPOST(ctx, ejectPath, struct{}{}, nil); err != nil {
-		// Supermicro X10 ATEN BMC returns 404 for the standard
-		// EjectMedia action — signal fall-through so the SMC OEM
-		// backend can handle the unmount instead.
-		var reqErr ErrRedfishRequest
-		if errors.As(err, &reqErr) && reqErr.StatusCode == http.StatusNotFound {
-			return ErrVirtualMediaUnsupported{
-				Backend: b.Name(),
-				Vendor:  "DMTF",
-				Reason:  fmt.Sprintf("EjectMedia returned HTTP %d, firmware does not support standard Redfish virtual media eject", reqErr.StatusCode),
-			}
-		}
-		return err
+		return b.maybeTranslateOEMFallback(err, "EjectMedia",
+			"firmware does not support standard Redfish virtual media eject")
 	}
 	return nil
+}
+
+// maybeTranslateOEMFallback translates a 404 from the standard DMTF Redfish
+// vmedia action into ErrVirtualMediaUnsupported when the resolved hardware
+// Quirk advertises VmediaRedfishOEMFallback. The dispatch layer treats the
+// "unsupported" signal as a cue to fall through to a vendor OEM backend.
+//
+// On vendors that do not advertise the OEM-fallback signal (DMTF-compliant
+// BMCs such as Dell iDRAC and HPE iLO), the original error propagates
+// unchanged — a 404 there is a real failure, not a known firmware quirk.
+//
+// action and reason describe the failed operation for diagnostic logs.
+// Non-404 errors always propagate unchanged.
+func (b *vmediaRedfishStd) maybeTranslateOEMFallback(err error, action, reason string) error {
+	if err == nil {
+		return nil
+	}
+	var reqErr ErrRedfishRequest
+	if !errors.As(err, &reqErr) || reqErr.StatusCode != http.StatusNotFound {
+		return err
+	}
+	if !b.c.resolveQuirk().VmediaRedfishOEMFallback {
+		// Vendor does not request OEM fallback — propagate the 404
+		// as a real error rather than silently translating it.
+		return err
+	}
+	return ErrVirtualMediaUnsupported{
+		Backend: b.Name(),
+		Vendor:  "DMTF",
+		Reason:  fmt.Sprintf("%s returned HTTP %d, %s", action, reqErr.StatusCode, reason),
+	}
 }
 
 // Status returns the current insertion state from the VirtualMedia member.

@@ -22,7 +22,7 @@ import (
 	"log/slog"
 	"sync/atomic"
 
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // Compile-time interface check.

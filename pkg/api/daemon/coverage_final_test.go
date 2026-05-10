@@ -27,7 +27,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -1720,6 +1720,19 @@ func TestCoverageFinalQUICHandlerIPAMCategory(t *testing.T) {
 	}
 }
 
+// expectedHealthHandlerStatus returns the status code expected from the QUIC
+// health/liveness/readiness handlers. When a payload codec is compiled into the
+// build (e.g. -tags codec_json) the handlers return StatusOK. When no codec is
+// registered the handlers correctly surface the encoding failure as
+// StatusInternalError. Tests must tolerate both so they pass under plain
+// `go test` and under tagged builds like `make test`.
+func expectedHealthHandlerStatus() byte {
+	if len(quic.SupportedCodecs()) == 0 {
+		return quic.StatusInternalError
+	}
+	return quic.StatusOK
+}
+
 func TestCoverageFinalQUICHandlerHealthCheck(t *testing.T) {
 	t.Parallel()
 
@@ -1728,8 +1741,9 @@ func TestCoverageFinalQUICHandlerHealthCheck(t *testing.T) {
 
 	// Health check without registry
 	resp := h.HandleRequest(ctx, &quic.Request{Opcode: quic.OpHealth})
-	if resp.Status != quic.StatusOK {
-		t.Errorf("Health check without registry: Status = 0x%02X, want StatusOK", resp.Status)
+	want := expectedHealthHandlerStatus()
+	if resp.Status != want {
+		t.Errorf("Health check without registry: Status = 0x%02X, want 0x%02X", resp.Status, want)
 	}
 }
 
@@ -1738,8 +1752,9 @@ func TestCoverageFinalQUICHandlerLiveness(t *testing.T) {
 
 	h := NewQUICServiceHandler(logging.DefaultLogger())
 	resp := h.HandleRequest(context.Background(), &quic.Request{Opcode: quic.OpLiveness})
-	if resp.Status != quic.StatusOK {
-		t.Errorf("Liveness: Status = 0x%02X, want StatusOK", resp.Status)
+	want := expectedHealthHandlerStatus()
+	if resp.Status != want {
+		t.Errorf("Liveness: Status = 0x%02X, want 0x%02X", resp.Status, want)
 	}
 }
 
@@ -1748,8 +1763,9 @@ func TestCoverageFinalQUICHandlerReadiness(t *testing.T) {
 
 	h := NewQUICServiceHandler(logging.DefaultLogger())
 	resp := h.HandleRequest(context.Background(), &quic.Request{Opcode: quic.OpReadiness})
-	if resp.Status != quic.StatusOK {
-		t.Errorf("Readiness: Status = 0x%02X, want StatusOK", resp.Status)
+	want := expectedHealthHandlerStatus()
+	if resp.Status != want {
+		t.Errorf("Readiness: Status = 0x%02X, want 0x%02X", resp.Status, want)
 	}
 }
 

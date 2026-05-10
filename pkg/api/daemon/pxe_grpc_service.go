@@ -127,10 +127,15 @@ func (s *PXEGRPCService) GetDeviceByMAC(ctx context.Context, req *platformv1.Get
 	}, nil
 }
 
-// ListDevices returns all devices matching the provided filter.
+// ListDevices returns all devices matching the provided filter. When
+// the underlying PXE service is not configured, return an empty list
+// instead of an error so dashboards can render a "no devices" state
+// without surfacing a 400/precondition error to the user.
 func (s *PXEGRPCService) ListDevices(ctx context.Context, req *platformv1.ListPXEDevicesRequest) (*platformv1.ListPXEDevicesResponse, error) {
 	if s.pxeService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
+		return &platformv1.ListPXEDevicesResponse{
+			Devices: []*platformv1.PXEDeviceInfo{},
+		}, nil
 	}
 
 	filter := s.filterFromProto(req.GetFilter())
@@ -395,9 +400,15 @@ func (s *PXEGRPCService) GetEvents(ctx context.Context, req *platformv1.GetPXEEv
 // =============================================================================
 
 // GetStatus returns the current status of the PXE provisioning service.
+// When the service is not configured we return a synthetic "stopped"
+// status so the dashboard can render the page without a 400 error.
 func (s *PXEGRPCService) GetStatus(ctx context.Context, req *platformv1.GetPXEStatusRequest) (*platformv1.GetPXEStatusResponse, error) {
 	if s.pxeService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
+		return &platformv1.GetPXEStatusResponse{
+			Status: &platformv1.PXEServiceStatus{
+				Running: false,
+			},
+		}, nil
 	}
 
 	svcStatus := s.pxeService.Status()

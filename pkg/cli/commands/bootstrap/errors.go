@@ -164,7 +164,7 @@ func (e ErrKMSClientRequired) Error() string {
 type ErrSecretsNotImplemented struct{}
 
 func (e ErrSecretsNotImplemented) Error() string {
-	return "secrets service is not yet implemented in the platform KMS; use env:// scheme for environment variables or autogen:// for auto-generated secrets"
+	return "secrets service is not yet implemented in the platform KMS; use env:// for environment variables or kms://...?ensure=true for persistent auto-generation"
 }
 
 // ErrEnvVarNotSet is returned when an environment variable is not set
@@ -197,23 +197,6 @@ type ErrAlreadyKMSManaged struct {
 
 func (e ErrAlreadyKMSManaged) Error() string {
 	return fmt.Sprintf("secret is already KMS-managed: %s", e.Path)
-}
-
-// ErrAutoGenFailed is returned when auto-generation of a secret fails
-type ErrAutoGenFailed struct {
-	Spec string
-	Err  error
-}
-
-func (e ErrAutoGenFailed) Error() string {
-	if e.Err != nil {
-		return fmt.Sprintf("failed to auto-generate secret with spec %q: %v", e.Spec, e.Err)
-	}
-	return fmt.Sprintf("failed to auto-generate secret with spec %q", e.Spec)
-}
-
-func (e ErrAutoGenFailed) Unwrap() error {
-	return e.Err
 }
 
 // ErrKMSStoreFailed is returned when storing a secret in KMS fails

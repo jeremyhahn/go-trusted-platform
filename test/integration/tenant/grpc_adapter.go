@@ -565,6 +565,73 @@ func (a *GRPCAdapter) pbToStorageQuotaData(pb *platformv1.StorageQuota) *Storage
 }
 
 // =============================================================================
+// Per-Tenant Barrier Operations (added 2026-04-28)
+// =============================================================================
+
+// InitTenantBarrier explicitly initializes a per-tenant barrier.
+func (a *GRPCAdapter) InitTenantBarrier(ctx context.Context, opts InitTenantBarrierOptions) (*InitTenantBarrierResult, error) {
+	resp, err := a.client.InitTenantBarrier(ctx, &platformv1.InitTenantBarrierRequest{
+		TenantId:  opts.TenantID,
+		Threshold: opts.Threshold,
+		Shares:    opts.Shares,
+	})
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "InitTenantBarrier", Err: err}
+	}
+	return &InitTenantBarrierResult{
+		Success: resp.GetStatus().GetSuccess(),
+		Message: resp.GetStatus().GetMessage(),
+	}, nil
+}
+
+// UnsealTenantBarrier unseals a per-tenant barrier.
+func (a *GRPCAdapter) UnsealTenantBarrier(ctx context.Context, opts UnsealTenantBarrierOptions) (*UnsealTenantBarrierResult, error) {
+	resp, err := a.client.UnsealTenantBarrier(ctx, &platformv1.UnsealTenantBarrierRequest{
+		TenantId: opts.TenantID,
+		Key:      opts.Key,
+	})
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "UnsealTenantBarrier", Err: err}
+	}
+	return &UnsealTenantBarrierResult{
+		Success: resp.GetStatus().GetSuccess(),
+		Message: resp.GetStatus().GetMessage(),
+	}, nil
+}
+
+// SealTenantBarrier seals a per-tenant barrier.
+func (a *GRPCAdapter) SealTenantBarrier(ctx context.Context, opts SealTenantBarrierOptions) (*SealTenantBarrierResult, error) {
+	resp, err := a.client.SealTenantBarrier(ctx, &platformv1.SealTenantBarrierRequest{
+		TenantId: opts.TenantID,
+	})
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "SealTenantBarrier", Err: err}
+	}
+	return &SealTenantBarrierResult{
+		Success: resp.GetStatus().GetSuccess(),
+		Message: resp.GetStatus().GetMessage(),
+	}, nil
+}
+
+// TenantBarrierStatus reports per-tenant barrier state.
+func (a *GRPCAdapter) TenantBarrierStatus(ctx context.Context, opts TenantBarrierStatusOptions) (*TenantBarrierStatusResult, error) {
+	resp, err := a.client.GetTenantBarrierStatus(ctx, &platformv1.GetTenantBarrierStatusRequest{
+		TenantId: opts.TenantID,
+	})
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "GetTenantBarrierStatus", Err: err}
+	}
+	st := resp.GetBarrierStatus()
+	return &TenantBarrierStatusResult{
+		TenantID:       st.GetTenantId(),
+		Sealed:         st.GetSealed(),
+		Initialized:    st.GetInitialized(),
+		Strategy:       st.GetStrategy(),
+		HardwareBacked: st.GetHardwareBacked(),
+	}, nil
+}
+
+// =============================================================================
 // Compile-time Interface Verification
 // =============================================================================
 

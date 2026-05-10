@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	daemonsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/daemon"
 )
 
 // NewHealthCommand creates the health command
@@ -48,12 +48,12 @@ func runHealth(flags *cli.CommonFlags, detailed bool) error {
 	}
 	defer base.Close()
 
+	daemonClient := daemonsvc.NewClientFromGRPC(base.Client().Daemon())
+
 	ctx := base.Context()
-	resp, err := base.Client().Daemon().GetHealth(ctx, &platformv1.GetHealthRequest{
-		Detailed: detailed,
-	})
+	health, err := daemonClient.GetHealthDomain(ctx, detailed)
 	if err != nil {
-		return fmt.Errorf("failed to get health: %w", err)
+		return err
 	}
 
 	printer := base.Printer()
@@ -61,25 +61,25 @@ func runHealth(flags *cli.CommonFlags, detailed bool) error {
 	// Format output based on output format
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(health)
 
 	case cli.OutputFormatTable:
-		return printHealthTable(printer, resp, detailed)
+		return printHealthTable(printer, health, detailed)
 
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
 	}
 }
 
-func printHealthTable(printer *cli.Printer, resp *platformv1.GetHealthResponse, detailed bool) error {
+func printHealthTable(printer *cli.Printer, health *daemonsvc.HealthInfo, detailed bool) error {
 	// Print overall status
-	statusMsg := fmt.Sprintf("Overall Health: %s", formatHealthStatus(resp.Status))
-	switch resp.Status {
-	case platformv1.HealthStatus_HEALTH_STATUS_HEALTHY:
+	statusMsg := fmt.Sprintf("Overall Health: %s", string(health.Status))
+	switch health.Status {
+	case daemonsvc.HealthStatusHealthy:
 		printer.PrintSuccess(statusMsg)
-	case platformv1.HealthStatus_HEALTH_STATUS_DEGRADED:
+	case daemonsvc.HealthStatusDegraded:
 		printer.PrintWarning(statusMsg)
-	case platformv1.HealthStatus_HEALTH_STATUS_UNHEALTHY:
+	case daemonsvc.HealthStatusUnhealthy:
 		printer.PrintError(statusMsg)
 	default:
 		printer.PrintInfo(statusMsg)
@@ -87,15 +87,15 @@ func printHealthTable(printer *cli.Printer, resp *platformv1.GetHealthResponse, 
 	fmt.Println()
 
 	// Print component health if detailed
-	if detailed && len(resp.Components) > 0 {
+	if detailed && len(health.Components) > 0 {
 		printer.PrintInfo("Component Health:")
 		fmt.Println()
 
 		table := cli.NewTableData("Component", "Status", "Message")
-		for _, component := range resp.Components {
+		for _, component := range health.Components {
 			table.AddRow(
 				component.Name,
-				formatHealthStatus(component.Status),
+				string(component.Status),
 				component.Message,
 			)
 		}

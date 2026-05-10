@@ -14,6 +14,7 @@
 package bootstrap
 
 import (
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"context"
 	"errors"
 	"log/slog"
@@ -76,9 +77,7 @@ func orchTestLogger() *slog.Logger {
 func minimalConfig() *BootstrapConfig {
 	return &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host"},
-		ProvisioningNetwork: ProvisioningNetwork{
-			Subnet: "172.16.0.0/24",
-		},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -503,9 +502,7 @@ func TestOrchestrator_Run_SkipInstallControlPlane(t *testing.T) {
 	// Scenario: existing control-plane with skip_install, new worker being provisioned.
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host"},
-		ProvisioningNetwork: ProvisioningNetwork{
-			Subnet: "172.16.0.0/24",
-		},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -573,9 +570,7 @@ func TestOrchestrator_Run_SkipInstallWorker(t *testing.T) {
 	// Scenario: control-plane being provisioned, existing worker with skip_install.
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host"},
-		ProvisioningNetwork: ProvisioningNetwork{
-			Subnet: "172.16.0.0/24",
-		},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -636,9 +631,7 @@ func TestOrchestrator_Discover_SkipInstallNode(t *testing.T) {
 	// SkipInstall nodes should be discovered without BMC or MAC.
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host"},
-		ProvisioningNetwork: ProvisioningNetwork{
-			Subnet: "172.16.0.0/24",
-		},
+		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},

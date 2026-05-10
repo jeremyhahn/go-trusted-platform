@@ -2,9 +2,11 @@
 
 ## Overview
 
-This document provides a complete configuration reference for unified gateway nodes, covering all three operational modes (overlay, edge, transit), cluster settings, load balancer configuration, and security options.
+This document provides a complete configuration reference for unified gateway nodes, supporting config-driven service activation (overlay, edge, transit, firewall, NAT, DHCP, load balancer, BGP, and tunnels).
 
 ## Configuration Structure
+
+Services are loaded via config section presence and enabled flag. Each service has its own section:
 
 ```yaml
 sdn:
@@ -13,32 +15,43 @@ sdn:
     enabled: true
     node_id: "gw-na-east-01"
 
-    # Mode enablement
-    modes:
-      overlay: true
-      edge: true
-      transit: false
+    # Service configuration (config presence = activation)
+    overlay:
+      enabled: true
+      # ...
 
-    # Cluster coordination
+    edge:
+      enabled: true
+      # ...
+
+    bgp:
+      router-id: "10.255.0.1"
+      # ...
+
+    firewall:
+      enabled: true
+      # ...
+
+    nat:
+      enabled: true
+      # ...
+
+    dhcp:
+      enabled: true
+      # ...
+
+    load-balancer:
+      enabled: true
+      # ...
+
+    tunnels:
+      - name: gre1
+        # ...
+
     cluster:
       enabled: true
       # ...
 
-    # Mode-specific configuration
-    overlay:
-      # ...
-
-    edge:
-      # ...
-
-    transit:
-      # ...
-
-    # Load balancer configuration
-    loadbalancer:
-      # ...
-
-    # Security settings
     security:
       # ...
 ```

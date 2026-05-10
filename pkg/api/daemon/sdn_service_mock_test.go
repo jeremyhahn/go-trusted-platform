@@ -123,6 +123,12 @@ func (m *ConfigurableMockOVSClient) Reset() {
 
 // Connection management
 
+// AddBond is a no-op stub satisfying the ovs.ClientInterface for tests that
+// don't exercise bond creation.
+func (m *ConfigurableMockOVSClient) AddBond(_ context.Context, _, _ string, _ []string, _, _ string) (*ovs.Port, error) {
+	return nil, nil
+}
+
 func (m *ConfigurableMockOVSClient) Connect(ctx context.Context) error {
 	m.recordCall("Connect")
 	if m.connectFunc != nil {

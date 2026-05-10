@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
 // RegistryStatus represents the status of the registry
@@ -133,23 +133,16 @@ func runStatus(flags *cli.CommonFlags, showMetrics, showStorage, showAttestation
 	}
 	defer base.Close()
 
-	client := base.Client().Registry()
-	if client == nil {
-		return ErrRegistryClientNotInitialized{}
-	}
+	regClient := regsvc.NewClientFromGRPC(base.Client().Registry())
 
-	// Build the request
-	req := &platformv1.RegistryStatusRequest{}
-
-	// Call the registry service
 	ctx := base.Context()
-	resp, err := client.Status(ctx, req)
+	resp, err := regClient.StatusDomain(ctx)
 	if err != nil {
 		return ErrStatusFailed{Err: err}
 	}
 
 	// Convert response to our result type
-	result := convertStatusResponse(resp)
+	result := convertStatusDomainResponse(resp)
 
 	printer := base.Printer()
 
@@ -165,42 +158,41 @@ func runStatus(flags *cli.CommonFlags, showMetrics, showStorage, showAttestation
 	}
 }
 
-// convertStatusResponse converts a gRPC response to our internal result type
-func convertStatusResponse(resp *platformv1.RegistryStatusResponse) *StatusResult {
+// convertStatusDomainResponse converts a domain status response to the CLI result type
+func convertStatusDomainResponse(resp *regsvc.RegistryStatusResult) *StatusResult {
 	result := &StatusResult{
 		Status: &RegistryStatus{
-			Healthy: resp.GetHealth() == platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-			Version: resp.GetVersion(),
+			Healthy: resp.Health == regsvc.HealthStatusHealthy,
+			Version: resp.Version,
 		},
 	}
 
-	// Calculate uptime if started_at is available
-	if resp.GetStartedAt() != nil && resp.GetTimestamp() != nil {
-		result.Status.Uptime = resp.GetTimestamp().GetSeconds() - resp.GetStartedAt().GetSeconds()
+	// Calculate uptime
+	if resp.StartedAt > 0 && resp.Timestamp > 0 {
+		result.Status.Uptime = resp.Timestamp - resp.StartedAt
 	}
 
 	// Convert storage stats
-	storage := resp.GetStorage()
-	if storage != nil {
+	if resp.Storage != nil {
 		result.Status.Storage = &StorageStatus{
 			Healthy:    true,
-			UsedBytes:  storage.GetUsedBytes(),
-			TotalBytes: storage.GetTotalBytes(),
-			ImageCount: storage.GetArtifactCount(),
-			LayerCount: storage.GetLayerCount(),
-			BlobCount:  storage.GetRepositoryCount(),
+			UsedBytes:  resp.Storage.UsedBytes,
+			TotalBytes: resp.Storage.TotalBytes,
+			ImageCount: resp.Storage.ArtifactCount,
+			LayerCount: resp.Storage.LayerCount,
+			BlobCount:  resp.Storage.RepositoryCount,
 		}
 	}
 
-	// Check component health for attestation and encryption status
-	for _, component := range resp.GetComponents() {
-		switch component.GetName() {
+	// Check component health
+	for _, component := range resp.Components {
+		switch component.Name {
 		case "attestation":
 			if result.Status.Attestation == nil {
 				result.Status.Attestation = &AttestationStatus{}
 			}
 			result.Status.Attestation.Enabled = true
-			result.Status.Attestation.PolicyHealthy = component.GetStatus() == platformv1.HealthStatus_HEALTH_STATUS_HEALTHY
+			result.Status.Attestation.PolicyHealthy = component.Status == regsvc.HealthStatusHealthy
 		case "encryption":
 			if result.Status.Encryption == nil {
 				result.Status.Encryption = &EncryptionStatus{}

@@ -1,10 +1,20 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Plus, RefreshCw, HardDrive, Settings, AlertCircle, Loader2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Table,
   TableBody,
@@ -21,6 +31,9 @@ import type { PXEDeviceInfo, ProvisioningEvent } from 'trusted-platform-sdk';
 export default function PXEBootPage() {
   const { toast } = useToast();
   const pxe = usePXE();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createMac, setCreateMac] = useState('');
+  const [createSubmitting, setCreateSubmitting] = useState(false);
 
   // Fetch PXE devices
   const {
@@ -159,12 +172,61 @@ export default function PXEBootPage() {
           <Button variant="outline" size="icon" onClick={fetchData} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button>
+          <Button onClick={() => setCreateOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
             Register Device
           </Button>
         </div>
       </div>
+
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Register PXE Device</DialogTitle>
+            <DialogDescription>
+              Pre-authorize a device by MAC address for PXE boot.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="pxe-mac">MAC Address *</Label>
+              <Input
+                id="pxe-mac"
+                value={createMac}
+                onChange={(e) => setCreateMac(e.target.value)}
+                placeholder="aa:bb:cc:11:22:33"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!createMac || createSubmitting}
+              onClick={async () => {
+                setCreateSubmitting(true);
+                try {
+                  await pxe.registerDevice({ macAddress: createMac });
+                  toast({ title: 'Device registered', variant: 'success' });
+                  setCreateOpen(false);
+                  setCreateMac('');
+                  refetchDevices();
+                } catch (err) {
+                  toast({
+                    title: 'Failed to register device',
+                    description: err instanceof Error ? err.message : 'Unknown error',
+                    variant: 'destructive',
+                  });
+                } finally {
+                  setCreateSubmitting(false);
+                }
+              }}
+            >
+              {createSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Register
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid gap-4 md:grid-cols-5">
         <div className="rounded-lg border border-border bg-card p-6">

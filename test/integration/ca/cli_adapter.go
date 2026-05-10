@@ -1032,20 +1032,19 @@ func (c *CLIAdapter) ExportCRL(ctx context.Context, output string) (*ExportCRLRe
 // Export Bundle Operations
 // =============================================================================
 
-// ExportBundle exports the CA bundle via CLI.
-// Note: The "ca export-bundle" command has a local --output/-o flag for the file path
-// which shadows the root command's --output/-o flag for output format. As a result,
-// we cannot request JSON output from this command. Instead, we always export to a
-// temp file and parse the PEM to determine cert count.
+// ExportBundle exports the CA bundle via the consolidated `ca bundle` CLI command.
+// The unified `bundle` command writes PEM data to stdout by default and to a file
+// when --output is provided. This adapter always uses --output so it can read the
+// resulting PEM and count the certificates inside the bundle.
 func (c *CLIAdapter) ExportBundle(ctx context.Context, output string) (*ExportBundleResult, error) {
-	// Always need a file path since the export-bundle command writes to file
+	// Always need a file path because the `ca bundle` CLI writes PEM to a file when --output is set
 	targetPath := output
 	var tempFile string
 
 	if targetPath == "" {
 		tmpFile, err := os.CreateTemp("", "ca-bundle-*.pem")
 		if err != nil {
-			return nil, ErrCallFailed{Protocol: "CLI", Method: "ca export-bundle", Err: err}
+			return nil, ErrCallFailed{Protocol: "CLI", Method: "ca bundle", Err: err}
 		}
 		tempFile = tmpFile.Name()
 		tmpFile.Close()
@@ -1057,18 +1056,19 @@ func (c *CLIAdapter) ExportBundle(ctx context.Context, output string) (*ExportBu
 		defer os.Remove(tempFile)
 	}
 
-	// The export-bundle command's -o/--output flag is the file path,
-	// NOT the output format. We must use --output for the file path.
-	args := []string{"ca", "export-bundle", "--output", targetPath}
+	// `ca bundle --output <path>` writes PEM bytes to the file. The local
+	// --output flag on `bundle` overrides the persistent --output format flag
+	// for this subcommand, so we cannot request JSON here.
+	args := []string{"ca", "bundle", "--output", targetPath}
 	_, err := c.runCommand(ctx, args...)
 	if err != nil {
-		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca export-bundle", Err: err}
+		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca bundle", Err: err}
 	}
 
-	// Read the exported file to determine cert count and size
+	// Read the file produced by the CLI to determine cert count and size.
 	bundleData, err := os.ReadFile(targetPath)
 	if err != nil {
-		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca export-bundle", Err: err}
+		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca bundle", Err: err}
 	}
 
 	// Count certificates in the PEM bundle

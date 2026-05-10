@@ -83,9 +83,21 @@ make binaries
 
 ## Install
 
-The [build/docker/trusted-platform-iso-builder](/build/docker/trusted-platform-iso-builder) directory contains a Makefile that makes it easy to build a UEFI bootable `trusted-platform.iso` and `trusted-platform-swtpm.iso`. 
+Build a UEFI-bootable `trusted-platform.iso` with the in-CLI builder:
 
-The `swtpm` ISO installs a software TPM and configures the system accordingly.
+```bash
+make build
+bin/platformctl iso create --output bin/trusted-platform.iso
+```
 
-The standard ISO is intended for hardware based TPM platforms.
+`platformctl iso create` downloads Alpine, generates Secure Boot keys (or
+reuses existing ones), customizes the image with `platformd` and the
+selected TPM/LUKS/FIDO2/FIPS options, and emits a hybrid BIOS/UEFI
+bootable ISO. Pass `--platform-type client` for a workstation image or
+`--platform-type server` (default) for a server image. See
+`bin/platformctl iso create --help` for all flags.
+
+The legacy Docker-based `make iso-hwtpm` / `make iso-swtpm` targets and
+the `trusted-platform-iso-builder` image have been removed; the in-CLI
+builder above is the supported and intended workflow.
 

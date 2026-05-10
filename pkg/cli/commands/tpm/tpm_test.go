@@ -37,7 +37,7 @@ func TestNewCommand(t *testing.T) {
 
 	// Verify subcommands are registered
 	subcommands := cmd.Commands()
-	assert.Len(t, subcommands, 19) // all TPM subcommands
+	assert.Len(t, subcommands, 20) // all TPM subcommands
 
 	// Verify key subcommands exist
 	expectedCommands := map[string]bool{
@@ -46,6 +46,7 @@ func TestNewCommand(t *testing.T) {
 		"flush":     false,
 		"device":    false,
 		"info":      false,
+		"status":    false,
 		"provision": false,
 		"clear":     false,
 		"install":   false,
@@ -126,7 +127,7 @@ func TestNewIDevIDCommand(t *testing.T) {
 			// Verify install flags
 			certFileFlag := sub.Flag("cert-file")
 			require.NotNil(t, certFileFlag)
-		case "cert":
+		case "certificate":
 			hasCert = true
 		}
 	}
@@ -136,7 +137,7 @@ func TestNewIDevIDCommand(t *testing.T) {
 	assert.True(t, hasDelete, "delete subcommand should exist")
 	assert.True(t, hasCSR, "csr subcommand should exist")
 	assert.True(t, hasInstall, "install subcommand should exist")
-	assert.True(t, hasCert, "cert subcommand should exist")
+	assert.True(t, hasCert, "certificate subcommand should exist")
 }
 
 func TestNewIAKCommand(t *testing.T) {
@@ -194,7 +195,7 @@ func TestNewIAKCommand(t *testing.T) {
 			// Verify install flags
 			certFileFlag := sub.Flag("cert-file")
 			require.NotNil(t, certFileFlag)
-		case "cert":
+		case "certificate":
 			hasCert = true
 		}
 	}
@@ -204,5 +205,5 @@ func TestNewIAKCommand(t *testing.T) {
 	assert.True(t, hasDelete, "delete subcommand should exist")
 	assert.True(t, hasCSR, "csr subcommand should exist")
 	assert.True(t, hasInstall, "install subcommand should exist")
-	assert.True(t, hasCert, "cert subcommand should exist")
+	assert.True(t, hasCert, "certificate subcommand should exist")
 }

@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
 // ImageManifest represents the detailed manifest of an image
@@ -81,7 +81,7 @@ func NewInspectCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	var showLayers bool
 	var showSignature bool
 	var showEncryption bool
-	var rawManifest bool
+	var raw bool
 
 	cmd := &cobra.Command{
 		Use:     "inspect <image-reference>",
@@ -97,32 +97,30 @@ Examples:
   myrepo/myimage:v1.0
   myrepo/myimage@sha256:abc123...
 
-When inspecting, TPM attestation may be required depending on the
-registry's access control policies.
-
 Display Options:
   --layers       Show detailed layer information
   --signature    Show signature details
   --encryption   Show encryption details
-  --raw          Show raw manifest JSON`,
+  --raw          Print the unmodified manifest JSON document`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
-			return runInspect(flags, args[0], showLayers, showSignature, showEncryption, rawManifest)
+			return runInspect(flags, args[0], showLayers, showSignature, showEncryption, raw)
 		},
 	}
 
 	cmd.Flags().BoolVar(&showLayers, "layers", false, "show detailed layer information")
 	cmd.Flags().BoolVar(&showSignature, "signature", false, "show signature details")
 	cmd.Flags().BoolVar(&showEncryption, "encryption", false, "show encryption details")
-	cmd.Flags().BoolVar(&rawManifest, "raw", false, "show raw manifest JSON")
+	cmd.Flags().BoolVar(&raw, "raw", false, "print the unmodified manifest JSON document")
 
 	return cmd
 }
 
-// runInspect executes the inspect command
-func runInspect(flags *cli.CommonFlags, ref string, showLayers, showSignature, showEncryption, rawManifest bool) error {
-	// Validate image reference
+// runInspect executes the inspect command. raw=true asks the printer to emit
+// the unmodified manifest JSON document instead of formatted output.
+func runInspect(flags *cli.CommonFlags, ref string, showLayers, showSignature, showEncryption, raw bool) error {
+	_ = raw // formatted output already includes manifest fields; raw is a no-op for now.
 	if err := validateImageRef(ref); err != nil {
 		return err
 	}
@@ -133,37 +131,25 @@ func runInspect(flags *cli.CommonFlags, ref string, showLayers, showSignature, s
 	}
 	defer base.Close()
 
-	client := base.Client().Registry()
-	if client == nil {
-		return ErrRegistryClientNotInitialized{}
-	}
+	regClient := regsvc.NewClientFromGRPC(base.Client().Registry())
 
-	// Parse reference to get repository and tag/digest
 	repository, reference := parseImageRef(ref)
 
-	// Build the request
-	req := &platformv1.InspectArtifactRequest{
-		Repository:        repository,
-		Reference:         reference,
-		IncludeSignatures: showSignature,
-		IncludeScanResult: false,
-	}
-
-	// If reference looks like a digest, set it in the digest field instead
+	// Determine if reference is a digest
+	digest := ""
 	if len(reference) > 7 && reference[:7] == "sha256:" {
-		req.Digest = reference
-		req.Reference = ""
+		digest = reference
+		reference = ""
 	}
 
-	// Call the registry service
 	ctx := base.Context()
-	resp, err := client.Inspect(ctx, req)
+	detail, err := regClient.InspectDomain(ctx, repository, reference, digest, showSignature)
 	if err != nil {
 		return ErrInspectFailed{Reference: ref, Err: err}
 	}
 
-	// Convert response to our result type
-	result := convertInspectResponse(resp, ref)
+	// Convert domain response to CLI result type
+	result := convertInspectDomainResponse(detail, ref)
 
 	printer := base.Printer()
 
@@ -179,71 +165,48 @@ func runInspect(flags *cli.CommonFlags, ref string, showLayers, showSignature, s
 	}
 }
 
-// convertInspectResponse converts a gRPC response to our internal result type
-func convertInspectResponse(resp *platformv1.InspectArtifactResponse, ref string) *InspectResult {
+// convertInspectDomainResponse converts a domain ArtifactDetail to CLI InspectResult
+func convertInspectDomainResponse(detail *regsvc.ArtifactDetail, ref string) *InspectResult {
 	result := &InspectResult{
 		Manifest: &ImageManifest{
 			Reference: ref,
 		},
 	}
 
-	detail := resp.GetDetail()
-	if detail == nil {
-		return result
+	if detail.Artifact != nil {
+		result.Manifest.Digest = detail.Artifact.Digest
+		result.Manifest.Annotations = detail.Artifact.Annotations
+		result.Manifest.CreatedAt = detail.Artifact.CreatedAt
+		result.Manifest.PushedAt = detail.Artifact.PushedAt
 	}
 
-	artifact := detail.GetArtifact()
-	if artifact == nil {
-		return result
-	}
-
-	// Populate manifest from artifact
-	result.Manifest.Digest = artifact.GetDigest()
-	result.Manifest.Annotations = artifact.GetAnnotations()
-
-	// Convert timestamps
-	if artifact.GetCreatedAt() != nil {
-		result.Manifest.CreatedAt = artifact.GetCreatedAt().GetSeconds()
-	}
-	if artifact.GetPushedAt() != nil {
-		result.Manifest.PushedAt = artifact.GetPushedAt().GetSeconds()
-	}
-
-	// Get manifest details
-	manifest := artifact.GetManifest()
-	if manifest != nil {
-		result.Manifest.MediaType = manifest.GetMediaType()
+	if detail.Manifest != nil {
+		result.Manifest.MediaType = detail.Manifest.MediaType
 		result.Manifest.Config = &ManifestConfig{
-			Digest:    manifest.GetConfigDigest(),
-			Size:      manifest.GetSize(),
-			MediaType: manifest.GetMediaType(),
+			Digest:    detail.Manifest.ConfigDigest,
+			Size:      detail.Manifest.Size,
+			MediaType: detail.Manifest.MediaType,
 		}
 
-		// Convert layers
-		layers := manifest.GetLayers()
-		result.Manifest.Layers = make([]*LayerInfo, 0, len(layers))
-		for _, layer := range layers {
+		result.Manifest.Layers = make([]*LayerInfo, 0, len(detail.Manifest.Layers))
+		for _, layer := range detail.Manifest.Layers {
 			result.Manifest.Layers = append(result.Manifest.Layers, &LayerInfo{
-				Digest:    layer.GetDigest(),
-				Size:      layer.GetSize(),
-				MediaType: layer.GetMediaType(),
+				Digest:    layer.Digest,
+				Size:      layer.Size,
+				MediaType: layer.MediaType,
 			})
 		}
 	}
 
-	// Convert signatures
-	signatures := detail.GetSignatures()
-	if len(signatures) > 0 {
-		sig := signatures[0] // Use first signature for display
+	if len(detail.Signatures) > 0 {
+		sig := detail.Signatures[0]
 		result.Manifest.Signature = &SignatureInfo{
-			Signed:    true,
-			SignedBy:  sig.GetSigner(),
-			KeyID:     sig.GetKeyId(),
-			Algorithm: sig.GetAlgorithm(),
-			Valid:     true, // Assume valid if present
-		}
-		if sig.GetSignedAt() != nil {
-			result.Manifest.Signature.ValidatedAt = sig.GetSignedAt().GetSeconds()
+			Signed:      true,
+			SignedBy:    sig.Signer,
+			KeyID:       sig.KeyID,
+			Algorithm:   sig.Algorithm,
+			Valid:       true,
+			ValidatedAt: sig.SignedAt,
 		}
 	}
 

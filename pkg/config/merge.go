@@ -115,6 +115,18 @@ func DeepMergeYAMLFiles(basePath, overridesPath string) ([]byte, error) {
 	return DeepMergeYAML(baseData, overrideData)
 }
 
+// DeepMergeMaps recursively merges src into dst in place. For each key in src:
+//   - If both dst and src have a map at the key, recurse.
+//   - If both dst and src have slices, merge using identity-key matching.
+//   - If src has a non-nil value, replace dst value.
+//   - If src has nil or key is missing, keep dst value.
+//
+// This is the exported entry point for callers that already have parsed maps
+// (e.g. profile creation from templates with override maps).
+func DeepMergeMaps(dst, src map[string]interface{}) {
+	deepMergeMaps(dst, src)
+}
+
 // deepMergeMaps recursively merges src into dst. For each key in src:
 //   - If both dst and src have a map at the key, recurse.
 //   - If both dst and src have slices, merge using mergeSlices.

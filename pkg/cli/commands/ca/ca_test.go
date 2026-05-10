@@ -557,50 +557,6 @@ func TestRunCRLExport(t *testing.T) {
 	assert.True(t, errors.As(err, &daemonErr))
 }
 
-// TestNewExportBundleCommand verifies the export-bundle command is created correctly.
-func TestNewExportBundleCommand(t *testing.T) {
-	getFlags := testGetFlags()
-
-	cmd := newExportBundleCommand(getFlags)
-
-	require.NotNil(t, cmd)
-	assert.Equal(t, "export-bundle", cmd.Use)
-	assert.Equal(t, "Export CA certificate bundle", cmd.Short)
-	assert.NotNil(t, cmd.RunE)
-
-	// Verify output flag
-	outputFlag := cmd.Flag("output")
-	require.NotNil(t, outputFlag)
-}
-
-// TestRunExportBundle verifies the export-bundle command returns ErrDaemonConnectionRequired.
-func TestRunExportBundle(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatJSON,
-	}
-
-	// Match actual function signature: runExportBundle(flags, output, includeIntermediates)
-	err := runExportBundle(flags, "/path/to/ca-bundle.pem", false)
-
-	require.Error(t, err)
-	var daemonErr ErrDaemonConnectionRequired
-	assert.True(t, errors.As(err, &daemonErr))
-}
-
-// TestRunExportBundleDefaultPath verifies export-bundle handles empty output path.
-func TestRunExportBundleDefaultPath(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatJSON,
-	}
-
-	// Match actual function signature: runExportBundle(flags, output, includeIntermediates)
-	err := runExportBundle(flags, "", true)
-
-	require.Error(t, err)
-	var daemonErr ErrDaemonConnectionRequired
-	assert.True(t, errors.As(err, &daemonErr))
-}
-
 // TestNewInstallCommand verifies the install-ca-certificates command is created correctly.
 func TestNewInstallCommand(t *testing.T) {
 	getFlags := testGetFlags()
@@ -732,11 +688,6 @@ func TestCommandLongDescriptions(t *testing.T) {
 			minLength: 50,
 		},
 		{
-			name:      "export-bundle",
-			cmd:       newExportBundleCommand,
-			minLength: 50,
-		},
-		{
 			name:      "install",
 			cmd:       newInstallCommand,
 			minLength: 50,
@@ -771,7 +722,6 @@ func TestCommandExamples(t *testing.T) {
 		newRevokeCommand,
 		newRenewCommand,
 		newCRLCommand,
-		newExportBundleCommand,
 		newInstallCommand,
 		newUninstallCommand,
 	}
@@ -962,7 +912,6 @@ func TestCommandRunEFunctions(t *testing.T) {
 		{"revoke", newRevokeCommand},
 		{"renew", newRenewCommand},
 		{"crl", newCRLCommand},
-		{"export-bundle", newExportBundleCommand},
 		{"install", newInstallCommand},
 		{"uninstall", newUninstallCommand},
 		{"crl-export", newCRLExportCommand},
@@ -1012,7 +961,6 @@ func TestAllCommandsCallGetFlags(t *testing.T) {
 		{"revoke", newRevokeCommand, []string{"serial"}},
 		{"renew", newRenewCommand, []string{"serial"}},
 		{"crl", newCRLCommand, []string{}},
-		{"export-bundle", newExportBundleCommand, []string{"--output", "/path/to/bundle.pem"}},
 		{"install", newInstallCommand, []string{}},
 		{"uninstall", newUninstallCommand, []string{}},
 		{"crl-export", newCRLExportCommand, []string{"--output", "/path"}},
@@ -1139,7 +1087,6 @@ func TestCommandShortDescriptions(t *testing.T) {
 		{"revoke", newRevokeCommand},
 		{"renew", newRenewCommand},
 		{"crl", newCRLCommand},
-		{"export-bundle", newExportBundleCommand},
 		{"install", newInstallCommand},
 		{"uninstall", newUninstallCommand},
 		{"crl-export", newCRLExportCommand},

@@ -29,7 +29,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
 	"github.com/jeremyhahn/go-xkms/pkg/tpm2/store"
 	"github.com/stretchr/testify/assert"

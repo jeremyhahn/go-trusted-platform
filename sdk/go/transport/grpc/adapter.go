@@ -53,23 +53,35 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 	// Build dial options - TLS is mandatory for gRPC transport
 	var dialOpts []grpc.DialOption
 
+	var tlsConfig *tls.Config
 	if opts.TLSConfig != nil {
-		tlsConfig := opts.TLSConfig.Clone()
+		tlsConfig = opts.TLSConfig.Clone()
 		if tlsConfig.MinVersion < tls.VersionTLS13 {
 			tlsConfig.MinVersion = tls.VersionTLS13
 		}
-		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
 	} else {
 		// Use system certificate pool with TLS 1.3 minimum
-		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+		tlsConfig = &tls.Config{
 			MinVersion: tls.VersionTLS13,
-		})))
+		}
 	}
+	if opts.TLSServerName != "" {
+		tlsConfig.ServerName = opts.TLSServerName
+	}
+	dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
 
 	dialOpts = append(dialOpts, grpc.WithDefaultCallOptions(
 		grpc.MaxCallRecvMsgSize(maxMsgSize),
 		grpc.MaxCallSendMsgSize(maxMsgSize),
 	))
+
+	// Inject the bearer token via PerRPCCredentials so every unary /
+	// streaming call carries `authorization: Bearer <token>` in its
+	// gRPC metadata. The platform's gRPC servers use the same
+	// authorization header convention as REST.
+	if opts.BearerToken != "" {
+		dialOpts = append(dialOpts, grpc.WithPerRPCCredentials(bearerTokenCreds{token: opts.BearerToken}))
+	}
 
 	// Connect to gRPC server
 	conn, err := grpc.NewClient(opts.GRPCAddr, dialOpts...)
@@ -128,3 +140,19 @@ func (a *Adapter) Target() string {
 
 // Ensure Adapter implements transport.Adapter interface.
 var _ transport.Adapter = (*Adapter)(nil)
+
+// bearerTokenCreds implements credentials.PerRPCCredentials so every
+// outbound gRPC request carries `authorization: Bearer <token>`. The
+// daemon's gRPC interceptors compare this header against the JWT
+// signing key.
+type bearerTokenCreds struct{ token string }
+
+func (c bearerTokenCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
+	return map[string]string{"authorization": "Bearer " + c.token}, nil
+}
+
+func (c bearerTokenCreds) RequireTransportSecurity() bool {
+	// The gRPC transport mandates TLS (see Connect above), so
+	// requiring transport security here mirrors that contract.
+	return true
+}

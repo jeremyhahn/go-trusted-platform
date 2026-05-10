@@ -394,6 +394,17 @@ type OSConfig struct {
 
 	// Debug mode - when enabled, installs and configures SSH for debug access
 	Debug bool `yaml:"-" json:"-"`
+
+	// HardwareManufacturer is the Redfish System.Manufacturer string for the
+	// target host (e.g. "Supermicro", "Dell Inc.", "HPE"). Propagated from
+	// Config at construction time. OS installers use this together with
+	// HardwareModel to resolve pkg/quirks entries for vendor-specific behaviour
+	// (serial console device, kernel modules, Samba protocol).
+	HardwareManufacturer string `yaml:"-" json:"-"`
+
+	// HardwareModel is the Redfish System.Model string (e.g. "X10SDV-TP8F",
+	// "PowerEdge R640"). Propagated from Config at construction time.
+	HardwareModel string `yaml:"-" json:"-"`
 }
 
 // UKIConfig defines Unified Kernel Image configuration
@@ -461,6 +472,18 @@ type Config struct {
 	// Environment specifies the platform environment (dev, preprod, prod, test)
 	// When set to "test", platformd skips external service checks like public IP detection
 	Environment string `yaml:"environment,omitempty" json:"environment,omitempty"`
+
+	// HardwareManufacturer is the Redfish System.Manufacturer string for the
+	// target host (e.g. "Supermicro", "Dell Inc.", "HPE"). When set, the
+	// installer resolves vendor-specific quirks (kernel cmdline, Samba
+	// protocol) via pkg/quirks.Resolve. An empty string causes the generic
+	// cross-vendor defaults to be used.
+	HardwareManufacturer string `yaml:"hardware-manufacturer,omitempty" json:"hardware_manufacturer,omitempty"`
+
+	// HardwareModel is the Redfish System.Model string for the target host
+	// (e.g. "X10SDV-TP8F", "PowerEdge R640"). Used together with
+	// HardwareManufacturer to select board-specific quirks.
+	HardwareModel string `yaml:"hardware-model,omitempty" json:"hardware_model,omitempty"`
 }
 
 // FIDO2Config holds FIDO2 enrollment configuration
@@ -502,10 +525,119 @@ const (
 	BridgeTypeOVS BridgeType = "ovs"
 )
 
+// BondType represents how the bond is realised: via the Linux kernel
+// `bonding` driver (ifenslave-style netdev, requires the kernel module
+// loaded) or as an OVS bond (a port group on an OVS bridge with LACP
+// handled by ovs-vswitchd, no kernel bonding module required).
+type BondType string
+
+const (
+	// BondTypeLinux uses the Linux kernel `bonding` driver and creates
+	// a bondN netdev that member NICs are enslaved to via
+	// `ip link set <member> master bond0`. The bond netdev is then added
+	// as a port on whatever bridge consumes it.
+	BondTypeLinux BondType = "linux"
+	// BondTypeOVS creates the bond natively in Open vSwitch: a single
+	// port on the bridge owns multiple member NICs and OVS handles LACP
+	// (`ovs-vsctl add-bond <bridge> <bond> <if1> <if2> ...`). No Linux
+	// `bonding` kernel module is required. This is the default for new
+	// deployments because it collocates the data-plane bonding state
+	// with OVS flow rules and plays better with SDN controllers.
+	BondTypeOVS BondType = "ovs"
+)
+
+// SubnetScope classifies the purpose and ownership of a subnet.
+type SubnetScope string
+
+const (
+	// SubnetScopeInternal represents SDN-managed internal segments.
+	SubnetScopeInternal SubnetScope = "internal"
+	// SubnetScopePublic represents ARIN-assigned, BGP-announced subnets.
+	SubnetScopePublic SubnetScope = "public"
+	// SubnetScopeTransit represents GRE tunnel point-to-point subnets.
+	SubnetScopeTransit SubnetScope = "transit"
+	// SubnetScopeISP represents ISP-assigned subnets that are not owned.
+	SubnetScopeISP SubnetScope = "isp"
+)
+
+// SubnetRole identifies a special operational role for a subnet.
+type SubnetRole string
+
+const (
+	// SubnetRoleProvisioning marks the subnet used for PXE/provisioning.
+	SubnetRoleProvisioning SubnetRole = "provisioning"
+	// SubnetRoleQuarantine marks the subnet used for quarantined nodes.
+	SubnetRoleQuarantine SubnetRole = "quarantine"
+)
+
+// DHCPScopeConfig defines DHCP serving parameters for a subnet.
+type DHCPScopeConfig struct {
+	// Enabled controls whether DHCP is served on this subnet.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// RangeStart is the first allocatable DHCP address.
+	RangeStart string `yaml:"range-start" json:"range_start"`
+
+	// RangeEnd is the last allocatable DHCP address.
+	RangeEnd string `yaml:"range-end" json:"range_end"`
+
+	// LeaseDuration is the DHCP lease duration (e.g., "1h", "24h").
+	LeaseDuration string `yaml:"lease-duration,omitempty" json:"lease_duration,omitempty"`
+}
+
+// SubnetConfig defines a named subnet with scope, VLAN binding, and optional
+// DHCP serving parameters. Subnets are the single source of truth for IP
+// addressing; IPAM pools and SDN networks are derived from them.
+type SubnetConfig struct {
+	// Name is the unique identifier for this subnet.
+	Name string `yaml:"name" json:"name"`
+
+	// Scope classifies the subnet (internal, public, transit, isp).
+	Scope SubnetScope `yaml:"scope,omitempty" json:"scope,omitempty"`
+
+	// VLANID is the IEEE 802.1Q VLAN identifier (1-4094). Zero means untagged.
+	VLANID uint16 `yaml:"vlan-id,omitempty" json:"vlan_id,omitempty"`
+
+	// CIDR is the network prefix in CIDR notation (e.g., "10.200.0.0/24").
+	CIDR string `yaml:"cidr" json:"cidr"`
+
+	// Gateway is the default gateway address for this subnet.
+	Gateway string `yaml:"gateway,omitempty" json:"gateway,omitempty"`
+
+	// DNS is the list of DNS server addresses for this subnet.
+	DNS []string `yaml:"dns,omitempty" json:"dns,omitempty"`
+
+	// DHCP configures DHCP serving parameters for this subnet.
+	DHCP *DHCPScopeConfig `yaml:"dhcp,omitempty" json:"dhcp,omitempty"`
+
+	// Role identifies a special operational role (provisioning, quarantine).
+	Role SubnetRole `yaml:"role,omitempty" json:"role,omitempty"`
+}
+
+// BondVLANConfig defines a VLAN sub-interface on a bond. The VLAN ID is
+// resolved from the referenced SubnetConfig by name.
+type BondVLANConfig struct {
+	// Subnet is the name of the SubnetConfig to bind this sub-interface to.
+	Subnet string `yaml:"subnet" json:"subnet" mapstructure:"subnet"`
+
+	// IPv4Address is the static IPv4 address for this sub-interface.
+	IPv4Address string `yaml:"ipv4-address" json:"ipv4_address" mapstructure:"ipv4-address"`
+
+	// AutoStart controls whether this sub-interface starts on boot.
+	AutoStart bool `yaml:"auto-start" json:"auto_start" mapstructure:"auto-start"`
+}
+
 // NetworkConfig defines network configuration for the installed system
 type NetworkConfig struct {
 	// DNS configuration
 	DNS *DNSConfig `yaml:"dns,omitempty" json:"dns,omitempty"`
+
+	// DNSMasq configures the local dnsmasq forwarder. When Enabled, the
+	// installer installs the dnsmasq package, writes /etc/dnsmasq.conf,
+	// enables the OpenRC service, and points /etc/resolv.conf at
+	// 127.0.0.1 so all DNS queries flow through the local cache before
+	// being forwarded to UpstreamServers.
+	DNSMasq *DNSMasqConfig `yaml:"dnsmasq,omitempty" json:"dnsmasq,omitempty"`
 
 	// Network interfaces configuration
 	Interfaces []InterfaceConfig `yaml:"interfaces,omitempty" json:"interfaces,omitempty"`
@@ -518,6 +650,9 @@ type NetworkConfig struct {
 
 	// VLAN configurations
 	VLANs []VLANConfig `yaml:"vlans,omitempty" json:"vlans,omitempty"`
+
+	// Subnets defines named subnet configurations with scope, VLAN, and DHCP.
+	Subnets []SubnetConfig `yaml:"subnets,omitempty" json:"subnets,omitempty"`
 
 	// Wait for network before completing boot (useful for TPM sealing)
 	WaitOnline bool `yaml:"wait-online" json:"wait_online"`
@@ -542,6 +677,23 @@ type DNSConfig struct {
 	// When set, dnsmasq is installed and configured to forward to this server,
 	// and resolv.conf points to localhost.
 	UpstreamDNS string `yaml:"upstream-dns,omitempty" json:"upstream_dns,omitempty"`
+}
+
+// DNSMasqConfig configures the local dnsmasq DNS forwarder.
+type DNSMasqConfig struct {
+	// Enabled toggles dnsmasq install + configure.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// UpstreamServers are forwarded to as `server=...` lines. Each
+	// entry may be a plain IP, an IP with `#port`, or a domain-scoped
+	// `/example.com/IP#port` form. Multiple entries become multiple
+	// `server=` lines so dnsmasq does round-robin / split-horizon.
+	UpstreamServers []string `yaml:"upstream-servers,omitempty" json:"upstream_servers,omitempty"`
+
+	// LocalDomain populates `local=/<domain>/` and `domain=<domain>`
+	// directives so unqualified names resolve under this suffix without
+	// forwarding upstream.
+	LocalDomain string `yaml:"local-domain,omitempty" json:"local_domain,omitempty"`
 }
 
 // InterfaceConfig defines configuration for a network interface
@@ -633,11 +785,35 @@ type BondConfig struct {
 	// Bond name (e.g., "bond0")
 	Name string `yaml:"name" json:"name"`
 
-	// Bond mode: balance-rr, active-backup, balance-xor, broadcast, 802.3ad, balance-tlb, balance-alb
+	// Type chooses the bonding implementation. "ovs" creates the bond
+	// as an OVS port (default), "linux" uses the kernel bonding driver.
+	// Empty defaults to "ovs".
+	Type BondType `yaml:"type,omitempty" json:"type,omitempty"`
+
+	// Bridge names the OVS bridge this bond attaches to when Type=ovs.
+	// Ignored for Type=linux. Must match a `network.bridges[].name`
+	// entry with type=ovs. Defaults to the first OVS bridge if unset.
+	Bridge string `yaml:"bridge,omitempty" json:"bridge,omitempty"`
+
+	// Bond mode.
+	//   Linux: balance-rr, active-backup, balance-xor, broadcast,
+	//          802.3ad, balance-tlb, balance-alb (raw kernel driver values)
+	//   OVS:   active-backup, balance-slb, balance-tcp (OVS port
+	//          bond_mode values — 802.3ad is implicit when LACP is
+	//          enabled on balance-tcp)
 	Mode string `yaml:"mode" json:"mode"`
 
-	// Slave interfaces
-	Slaves []string `yaml:"slaves" json:"slaves"`
+	// LACP controls OVS LACP negotiation when Type=ovs.
+	// Values: "active", "passive", "off". Ignored for Type=linux
+	// (kernel 802.3ad is controlled via Mode instead).
+	LACP string `yaml:"lacp,omitempty" json:"lacp,omitempty"`
+
+	// Interfaces lists the member interfaces for this bond.
+	Interfaces []string `yaml:"interfaces" json:"interfaces"`
+
+	// VLANs defines VLAN sub-interfaces on this bond. Each entry references
+	// a SubnetConfig by name to resolve the VLAN ID.
+	VLANs []BondVLANConfig `yaml:"vlans,omitempty" json:"vlans,omitempty"`
 
 	// IP configuration
 	IPv4Address string `yaml:"ipv4-address,omitempty" json:"ipv4_address,omitempty"`
@@ -647,7 +823,7 @@ type BondConfig struct {
 	// Use DHCP
 	DHCP bool `yaml:"dhcp,omitempty" json:"dhcp,omitempty"`
 
-	// Primary slave (for active-backup mode)
+	// Primary interface (for active-backup mode)
 	Primary string `yaml:"primary,omitempty" json:"primary,omitempty"`
 
 	// MII monitoring interval in ms
@@ -707,13 +883,13 @@ func (nc *NetworkConfig) Validate() error {
 		}
 	}
 
-	// Validate bridges
+	// Validate bridges. A bridge with no interfaces is legal — it's a
+	// host-local bridge (typical for OVS bridges that only carry
+	// VM/container traffic and don't need an uplink port). Bonds that
+	// declare `bridge: <name>` attach themselves later via OVSDB.
 	for i, br := range nc.Bridges {
 		if br.Name == "" {
 			return ErrInvalidConfig(fmt.Sprintf("bridge %d: name is required", i))
-		}
-		if len(br.Interfaces) == 0 {
-			return ErrInvalidConfig(fmt.Sprintf("bridge %s: at least one interface is required", br.Name))
 		}
 	}
 
@@ -722,8 +898,8 @@ func (nc *NetworkConfig) Validate() error {
 		if bond.Name == "" {
 			return ErrInvalidConfig(fmt.Sprintf("bond %d: name is required", i))
 		}
-		if len(bond.Slaves) < 2 {
-			return ErrInvalidConfig(fmt.Sprintf("bond %s: at least two slave interfaces are required", bond.Name))
+		if len(bond.Interfaces) < 2 {
+			return ErrInvalidConfig(fmt.Sprintf("bond %s: at least two member interfaces are required", bond.Name))
 		}
 		if bond.Mode == "" {
 			return ErrInvalidConfig(fmt.Sprintf("bond %s: mode is required", bond.Name))
@@ -731,6 +907,59 @@ func (nc *NetworkConfig) Validate() error {
 	}
 
 	return nil
+}
+
+
+// SubnetByName returns the SubnetConfig with the given name, or nil if not found.
+func (nc *NetworkConfig) SubnetByName(name string) *SubnetConfig {
+	for i := range nc.Subnets {
+		if nc.Subnets[i].Name == name {
+			return &nc.Subnets[i]
+		}
+	}
+	return nil
+}
+
+// ProvisioningSubnet returns the first subnet with role "provisioning", or nil.
+func (nc *NetworkConfig) ProvisioningSubnet() *SubnetConfig {
+	for i := range nc.Subnets {
+		if nc.Subnets[i].Role == SubnetRoleProvisioning {
+			return &nc.Subnets[i]
+		}
+	}
+	return nil
+}
+
+// QuarantineSubnet returns the first subnet with role "quarantine", or nil.
+func (nc *NetworkConfig) QuarantineSubnet() *SubnetConfig {
+	for i := range nc.Subnets {
+		if nc.Subnets[i].Role == SubnetRoleQuarantine {
+			return &nc.Subnets[i]
+		}
+	}
+	return nil
+}
+
+// InternalSubnets returns all subnets with scope "internal".
+func (nc *NetworkConfig) InternalSubnets() []SubnetConfig {
+	var result []SubnetConfig
+	for _, s := range nc.Subnets {
+		if s.Scope == SubnetScopeInternal {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+// PublicSubnets returns all subnets with scope "public".
+func (nc *NetworkConfig) PublicSubnets() []SubnetConfig {
+	var result []SubnetConfig
+	for _, s := range nc.Subnets {
+		if s.Scope == SubnetScopePublic {
+			result = append(result, s)
+		}
+	}
+	return result
 }
 
 // Validate validates the configuration

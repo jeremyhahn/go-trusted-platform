@@ -28,7 +28,7 @@ import (
 	quicbaascrypto "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // QuicBaaSKeyStore implements xkmssdk.ServiceBackend using QuicBaaS SDK for all
@@ -565,6 +565,20 @@ func (ks *QuicBaaSKeyStore) CertExists(keyID string) (bool, error) {
 // GetTLSCertificate returns a TLS certificate for the key.
 // The keyID parameter is used to locate the certificate.
 // The attrs parameter is used to locate the signing key.
+//
+// The chain lookup is best-effort — when the cert chain object is
+// missing from the cert store we fall back to serving just the leaf
+// certificate, matching go-xkms's compositeBackend behaviour. This
+// matters because the webservice's initial cert issuance only stores
+// the leaf under the target CN: the chain object is only written when
+// an explicit cross-sign or chain-import runs, which may not have
+// happened at first startup. Without this fallback the webserver's
+// startHTTPS path calls logger.FatalError and silently exits 255 (we
+// debugged this on lab-node-2 first boot: cert PEM was in QuicBaaS
+// objectstorage, `<cn>.chain.pem` was not, server died before opening
+// any listening ports). Serving only the leaf is correct in
+// single-hop CA topologies; clients that need the issuer chain pull
+// it via AIA.
 func (ks *QuicBaaSKeyStore) GetTLSCertificate(keyID string, attrs *xkmssdk.KeyAttributes) (tls.Certificate, error) {
 	if keyID == "" {
 		return tls.Certificate{}, ErrInvalidInput{Field: "keyID", Reason: "key ID is required"}
@@ -578,13 +592,15 @@ func (ks *QuicBaaSKeyStore) GetTLSCertificate(keyID string, attrs *xkmssdk.KeyAt
 		return tls.Certificate{}, err
 	}
 
-	chain, err := ks.GetCertChain(keyID)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	if len(chain) == 0 {
-		return tls.Certificate{}, ErrKeyNotFound{KeyID: keyID, Cause: ErrCertNotFound{CertID: keyID}}
+	chain, chainErr := ks.GetCertChain(keyID)
+	if chainErr != nil || len(chain) == 0 {
+		// Chain not available — fall back to the leaf cert under the
+		// same CN. GetCert handles the bare cert lookup.
+		leaf, leafErr := ks.GetCert(keyID)
+		if leafErr != nil {
+			return tls.Certificate{}, ErrKeyNotFound{KeyID: keyID, Cause: leafErr}
+		}
+		chain = []*x509.Certificate{leaf}
 	}
 
 	tlsCert := tls.Certificate{

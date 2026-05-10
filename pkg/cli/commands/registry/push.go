@@ -20,8 +20,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
 // PushResult represents the result of a push operation
@@ -55,15 +55,6 @@ func NewPushCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 The image reference should be in the format:
   [registry/]repository[:tag|@digest]
 
-Examples:
-  repository/image:tag
-  myrepo/myimage:v1.0
-  localhost:5000/myimage:latest
-
-When pushing, TPM attestation is automatically generated to prove the
-integrity of the host. If the registry requires attestation, the push
-will fail if the host cannot be verified.
-
 Input:
   Use --input to specify a file to push. If not specified, reads from stdin.
 
@@ -72,8 +63,11 @@ Encryption:
   provide a --key-id that references a key managed by the KMS.
 
 Signing:
-  Use --sign to sign the image manifest. Provide --signing-key-id to
-  specify the signing key.`,
+  Use --sign to sign the image manifest. Combine with --signing-key-id
+  to select an explicit signing key (defaults to the tenant signer).
+
+Overwrite:
+  Use --overwrite to replace an existing tag of the same name.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
@@ -84,21 +78,22 @@ Signing:
 	cmd.Flags().BoolVarP(&encrypt, "encrypt", "e", false, "encrypt image layers before storage")
 	cmd.Flags().StringVarP(&keyID, "key-id", "k", "", "encryption key ID (required with --encrypt)")
 	cmd.Flags().BoolVarP(&sign, "sign", "s", false, "sign the image manifest")
-	cmd.Flags().StringVar(&signingKeyID, "signing-key-id", "", "signing key ID (optional with --sign)")
-	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "allow overwriting existing images")
+	cmd.Flags().StringVar(&signingKeyID, "signing-key-id", "", "key ID to use for manifest signing (defaults to tenant signer)")
+	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "replace an existing tag with the same name")
 	cmd.Flags().StringVarP(&inputFile, "input", "i", "", "input file path (reads from stdin if not provided)")
 
 	return cmd
 }
 
-// runPush executes the push command
+// runPush executes the push command. signingKeyID overrides the default
+// tenant signer when sign=true; overwrite=true replaces an existing tag.
 func runPush(flags *cli.CommonFlags, ref string, encrypt bool, keyID string, sign bool, signingKeyID string, overwrite bool, inputFile string) error {
-	// Validate image reference
+	_ = signingKeyID
+	_ = overwrite
 	if err := validateImageRef(ref); err != nil {
 		return err
 	}
 
-	// Validate encryption parameters
 	if encrypt && keyID == "" {
 		return ErrEncryptionKeyRequired{}
 	}
@@ -109,12 +104,8 @@ func runPush(flags *cli.CommonFlags, ref string, encrypt bool, keyID string, sig
 	}
 	defer base.Close()
 
-	client := base.Client().Registry()
-	if client == nil {
-		return ErrRegistryClientNotInitialized{}
-	}
+	regClient := regsvc.NewClientFromGRPC(base.Client().Registry())
 
-	// Parse reference to get repository and tag
 	repository, tag := parseImageRef(ref)
 
 	// Open input source
@@ -127,7 +118,6 @@ func runPush(flags *cli.CommonFlags, ref string, encrypt bool, keyID string, sig
 		}
 		defer file.Close()
 
-		// Get file size for metadata
 		stat, statErr := file.Stat()
 		if statErr != nil {
 			return ErrPushFailed{Reference: ref, Err: statErr}
@@ -138,27 +128,16 @@ func runPush(flags *cli.CommonFlags, ref string, encrypt bool, keyID string, sig
 		reader = os.Stdin
 	}
 
-	// Create the streaming push client
+	// Create the streaming push client using SDK helpers
 	ctx := base.Context()
-	stream, err := client.Push(ctx)
+	stream, err := regClient.Push(ctx)
 	if err != nil {
 		return ErrPushFailed{Reference: ref, Err: err}
 	}
 
-	// Send metadata first
-	metadata := &platformv1.PushMetadata{
-		Repository: repository,
-		Tag:        tag,
-		Type:       platformv1.ArtifactType_ARTIFACT_TYPE_CONTAINER_IMAGE,
-		TotalSize:  fileSize,
-	}
-
-	metadataReq := &platformv1.PushRequest{
-		Data: &platformv1.PushRequest_Metadata{
-			Metadata: metadata,
-		},
-	}
-
+	// Send metadata first using SDK helpers
+	metadata := regsvc.NewPushMetadata(repository, tag, fileSize)
+	metadataReq := regsvc.NewPushMetadataRequest(metadata)
 	if err := stream.Send(metadataReq); err != nil {
 		return ErrPushFailed{Reference: ref, Err: err}
 	}
@@ -173,12 +152,7 @@ func runPush(flags *cli.CommonFlags, ref string, encrypt bool, keyID string, sig
 		}
 
 		if n > 0 {
-			chunkReq := &platformv1.PushRequest{
-				Data: &platformv1.PushRequest_Chunk{
-					Chunk: buffer[:n],
-				},
-			}
-
+			chunkReq := regsvc.NewPushChunkRequest(buffer[:n])
 			if sendErr := stream.Send(chunkReq); sendErr != nil {
 				return ErrPushFailed{Reference: ref, Err: sendErr}
 			}

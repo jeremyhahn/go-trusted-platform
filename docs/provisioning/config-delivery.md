@@ -1,4 +1,17 @@
-# Config Delivery
+# Config Delivery (Post-Bootstrap / Production)
+
+> **Scope:** This doc covers **post-bootstrap (production) config delivery** —
+> how already-installed devices fetch updated config from a running control
+> plane over authenticated HTTPS with DANE / Noise / SPKI trust bootstrap
+> and EAB authentication.
+>
+> For **bootstrap-time config delivery** (during `platformctl bootstrap run`,
+> before the target has any TLS trust store, uses plain HTTP on a private
+> deployer network, keyed by MAC address), see
+> [`docs/bootstrap/config-delivery.md`](../bootstrap/config-delivery.md).
+>
+> For the architectural overview that ties both flows together, see
+> [`docs/architecture/bootstrap-flow.md`](../architecture/bootstrap-flow.md).
 
 The config delivery system enables devices to fetch their platform configuration from a server at boot time, before ACME enrollment or IDevID issuance.
 

@@ -19,6 +19,7 @@ package tenant
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -570,6 +571,183 @@ func tenantDataFromEntity(entity *tenantpkg.TenantEntity) *TenantData {
 	}
 
 	return data
+}
+
+// =============================================================================
+// Per-Tenant Barrier Operations (added 2026-04-28)
+// =============================================================================
+//
+// The barrier CLI subcommands accept a tenant-name positional argument (not
+// --id). The TenantCommands interface passes opts.TenantID (a UUID), so we
+// resolve the tenant name first via GetTenant and pass that name to the
+// barrier subcommand.
+
+// resolveTenantNameByID resolves a tenant UUID to its name via the CLI's
+// existing tenant show --id pathway.
+func (a *CLIAdapter) resolveTenantNameByID(ctx context.Context, tenantID string) (string, error) {
+	res, err := a.GetTenant(ctx, GetTenantOptions{TenantID: tenantID})
+	if err != nil {
+		return "", err
+	}
+	if res == nil || res.Tenant == nil {
+		return "", ErrCLICommandFailed{
+			Operation: "ResolveTenantName",
+			Message:   "tenant not found",
+			Output:    tenantID,
+		}
+	}
+	return res.Tenant.Name, nil
+}
+
+// InitTenantBarrier explicitly initializes a per-tenant barrier.
+func (a *CLIAdapter) InitTenantBarrier(ctx context.Context, opts InitTenantBarrierOptions) (*InitTenantBarrierResult, error) {
+	name, err := a.resolveTenantNameByID(ctx, opts.TenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	args := []string{"tenant", "barrier", "init", name, "--output", "json"}
+	if opts.Threshold > 0 {
+		args = append(args, "--threshold", fmt.Sprintf("%d", opts.Threshold))
+	}
+	if opts.Shares > 0 {
+		args = append(args, "--shares", fmt.Sprintf("%d", opts.Shares))
+	}
+
+	output, err := a.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		TenantID   string `json:"tenant_id"`
+		TenantName string `json:"tenant_name"`
+		Threshold  int32  `json:"threshold"`
+		Shares     int32  `json:"shares"`
+		Success    bool   `json:"success"`
+	}
+	if err := json.Unmarshal(output, &resp); err != nil {
+		return nil, ErrCLICommandFailed{
+			Operation: "InitTenantBarrier",
+			Message:   "failed to parse response",
+			Output:    string(output),
+		}
+	}
+
+	return &InitTenantBarrierResult{
+		Success: resp.Success,
+		Message: fmt.Sprintf("tenant barrier initialized for %s", resp.TenantName),
+	}, nil
+}
+
+// UnsealTenantBarrier unseals a per-tenant barrier with the supplied key bytes.
+// An empty key falls back to the deterministic init credential.
+func (a *CLIAdapter) UnsealTenantBarrier(ctx context.Context, opts UnsealTenantBarrierOptions) (*UnsealTenantBarrierResult, error) {
+	name, err := a.resolveTenantNameByID(ctx, opts.TenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	args := []string{"tenant", "barrier", "unseal", name, "--output", "json"}
+	if len(opts.Key) > 0 {
+		args = append(args, "--key-base64", base64.StdEncoding.EncodeToString(opts.Key))
+	}
+
+	output, err := a.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		TenantID   string `json:"tenant_id"`
+		TenantName string `json:"tenant_name"`
+		Success    bool   `json:"success"`
+	}
+	if err := json.Unmarshal(output, &resp); err != nil {
+		return nil, ErrCLICommandFailed{
+			Operation: "UnsealTenantBarrier",
+			Message:   "failed to parse response",
+			Output:    string(output),
+		}
+	}
+
+	return &UnsealTenantBarrierResult{
+		Success: resp.Success,
+		Message: fmt.Sprintf("tenant barrier unsealed for %s", resp.TenantName),
+	}, nil
+}
+
+// SealTenantBarrier seals a per-tenant barrier.
+func (a *CLIAdapter) SealTenantBarrier(ctx context.Context, opts SealTenantBarrierOptions) (*SealTenantBarrierResult, error) {
+	name, err := a.resolveTenantNameByID(ctx, opts.TenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	args := []string{"tenant", "barrier", "seal", name, "--output", "json"}
+
+	output, err := a.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		TenantID   string `json:"tenant_id"`
+		TenantName string `json:"tenant_name"`
+		Success    bool   `json:"success"`
+	}
+	if err := json.Unmarshal(output, &resp); err != nil {
+		return nil, ErrCLICommandFailed{
+			Operation: "SealTenantBarrier",
+			Message:   "failed to parse response",
+			Output:    string(output),
+		}
+	}
+
+	return &SealTenantBarrierResult{
+		Success: resp.Success,
+		Message: fmt.Sprintf("tenant barrier sealed for %s", resp.TenantName),
+	}, nil
+}
+
+// TenantBarrierStatus reports the current sealed/initialized state and active
+// strategy metadata of a per-tenant barrier.
+func (a *CLIAdapter) TenantBarrierStatus(ctx context.Context, opts TenantBarrierStatusOptions) (*TenantBarrierStatusResult, error) {
+	name, err := a.resolveTenantNameByID(ctx, opts.TenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	args := []string{"tenant", "barrier", "status", name, "--output", "json"}
+
+	output, err := a.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		TenantID       string `json:"tenant_id"`
+		TenantName     string `json:"tenant_name"`
+		Sealed         bool   `json:"sealed"`
+		Initialized    bool   `json:"initialized"`
+		Strategy       string `json:"strategy"`
+		HardwareBacked bool   `json:"hardware_backed"`
+	}
+	if err := json.Unmarshal(output, &resp); err != nil {
+		return nil, ErrCLICommandFailed{
+			Operation: "TenantBarrierStatus",
+			Message:   "failed to parse response",
+			Output:    string(output),
+		}
+	}
+
+	return &TenantBarrierStatusResult{
+		TenantID:       resp.TenantID,
+		Sealed:         resp.Sealed,
+		Initialized:    resp.Initialized,
+		Strategy:       resp.Strategy,
+		HardwareBacked: resp.HardwareBacked,
+	}, nil
 }
 
 // =============================================================================

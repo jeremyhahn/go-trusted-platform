@@ -30,15 +30,50 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/vlan"
 )
 
-// TenantBarrierClient defines the minimal interface for per-tenant barrier
-// operations. This interface is satisfied by the QRDB TenantClient
-// (quicbaassdk.QRDBTenantClient) from the go-quicbaas SDK.
+// TenantBarrierClient defines the interface for per-tenant barrier operations.
+// This interface is satisfied by the QRDB TenantClient
+// (quicbaassdk.QRDBTenantClient) from the go-quicbaas SDK and gives the
+// platform tenant manager full lifecycle control over per-tenant barriers
+// (init, unseal, seal, status) across every QRDB transport (REST, gRPC, QUIC,
+// MCP, Unix).
 type TenantBarrierClient interface {
 	// TenantBarrierInit initializes a per-tenant barrier.
 	TenantBarrierInit(ctx context.Context, req *quicbaassdk.QRDBTenantBarrierInitRequest) error
 
 	// TenantBarrierUnseal unseals a per-tenant barrier.
 	TenantBarrierUnseal(ctx context.Context, req *quicbaassdk.QRDBTenantBarrierUnsealRequest) error
+
+	// TenantBarrierSeal seals a per-tenant barrier, refusing further reads
+	// and writes against the tenant namespace until unsealed again.
+	TenantBarrierSeal(ctx context.Context, req *quicbaassdk.QRDBTenantBarrierSealRequest) error
+
+	// TenantBarrierStatus reports the current sealed/initialized state and
+	// active strategy metadata of a per-tenant barrier.
+	TenantBarrierStatus(ctx context.Context, req *quicbaassdk.QRDBTenantBarrierStatusRequest) (*quicbaassdk.QRDBTenantBarrierStatusResponse, error)
+}
+
+// TenantBarrierState describes the current state of a per-tenant barrier as
+// returned by Manager.TenantBarrierStatus. It mirrors the SDK's
+// QRDBTenantBarrierStatusResponse without exposing the wire-level type to
+// platform callers.
+type TenantBarrierState struct {
+	// TenantID is the tenant whose barrier is being reported on.
+	TenantID string
+
+	// Sealed is true when the tenant barrier is in sealed state.
+	Sealed bool
+
+	// Initialized is true when the tenant barrier has been registered and
+	// initialized at least once via TenantBarrierInit.
+	Initialized bool
+
+	// Strategy identifies the active sealing strategy (e.g. "software",
+	// "shamir", "pkcs11").
+	Strategy string
+
+	// HardwareBacked is true when the active strategy uses dedicated
+	// cryptographic hardware (HSM, TPM, etc.).
+	HardwareBacked bool
 }
 
 // DEKStatus represents the status of a tenant's DEK.
@@ -726,14 +761,23 @@ func (m *Manager) DeleteTenant(ctx context.Context, id string) error {
 		}
 	}
 
-	// Step 5: Log barrier cleanup
-	// The SDK does not currently provide TenantBarrierSeal, so we log a
-	// warning. The per-tenant barrier will be cleaned up when the QRDB
-	// tenant record is removed by the IAM delete below.
+	// Step 5: Seal the per-tenant barrier before IAM tenant deletion so any
+	// in-flight reads/writes are refused while the metadata cleanup runs.
+	// A failed seal is logged but does not block deletion — the IAM delete
+	// below removes the underlying QRDB tenant record which implicitly
+	// tears down the barrier registry entry.
 	if m.tenantBarrierClient != nil {
-		m.logger.Warn("per-tenant barrier cleanup deferred to IAM tenant deletion; explicit seal not yet supported by SDK",
-			slog.String("tenant_id", id),
-		)
+		sealReq := &quicbaassdk.QRDBTenantBarrierSealRequest{TenantID: id}
+		if err := m.tenantBarrierClient.TenantBarrierSeal(ctx, sealReq); err != nil {
+			m.logger.Warn("failed to seal per-tenant barrier before delete",
+				slog.String("tenant_id", id),
+				slog.Any("error", err),
+			)
+		} else {
+			m.logger.Info("per-tenant barrier sealed before IAM delete",
+				slog.String("tenant_id", id),
+			)
+		}
 	}
 
 	// Step 6: Delete from QuicBaaS IAM
@@ -906,10 +950,14 @@ func (m *Manager) UpdateQuotas(ctx context.Context, tenantID string, quotas *Ten
 	return nil
 }
 
-// GetUsage returns tenant resource usage.
+// GetUsage returns tenant resource usage. When the usage tracker is not
+// configured (e.g. on a daemon wired with IAM-only tenant management),
+// the manager returns a zero-valued TenantUsage rather than an error so
+// dashboards and admin tools can still render the page without the
+// optional quota subsystem online.
 func (m *Manager) GetUsage(ctx context.Context, tenantID string) (*quota.TenantUsage, error) {
 	if m.usageTracker == nil {
-		return nil, ErrInvalidRequest{Reason: "usage tracker not configured"}
+		return &quota.TenantUsage{TenantID: tenantID, Timestamp: time.Now()}, nil
 	}
 
 	return m.usageTracker.GetAllUsage(ctx, tenantID)
@@ -1168,25 +1216,57 @@ func (m *Manager) UnsealTenantBarrier(ctx context.Context, tenantID string, key 
 	return nil
 }
 
-// SealTenantBarrier seals a per-tenant barrier. This operation is not yet
-// supported by the QRDB SDK and returns ErrBarrierNotSupported.
+// SealTenantBarrier seals a per-tenant barrier, returning it to the sealed
+// state. Subsequent reads and writes against the tenant's namespace fail
+// until the barrier is unsealed again via UnsealTenantBarrier. The tenant
+// must exist and its barrier must have been previously initialized.
 func (m *Manager) SealTenantBarrier(ctx context.Context, tenantID string) error {
 	if tenantID == "" {
 		return ErrInvalidRequest{Reason: "tenant ID is required"}
 	}
-
-	return ErrBarrierNotSupported{Operation: "SealTenantBarrier"}
-}
-
-// TenantBarrierStatus returns the sealed state of a per-tenant barrier.
-// This operation is not yet supported by the QRDB SDK and returns
-// ErrBarrierNotSupported.
-func (m *Manager) TenantBarrierStatus(ctx context.Context, tenantID string) (bool, error) {
-	if tenantID == "" {
-		return false, ErrInvalidRequest{Reason: "tenant ID is required"}
+	if m.tenantBarrierClient == nil {
+		return ErrBarrierNotSupported{Operation: "SealTenantBarrier"}
 	}
 
-	return false, ErrBarrierNotSupported{Operation: "TenantBarrierStatus"}
+	req := &quicbaassdk.QRDBTenantBarrierSealRequest{TenantID: tenantID}
+	if err := m.tenantBarrierClient.TenantBarrierSeal(ctx, req); err != nil {
+		return ErrStorageFailed{Operation: "SealTenantBarrier", Err: err}
+	}
+
+	m.logger.Info("per-tenant barrier sealed", slog.String("tenant_id", tenantID))
+
+	return nil
+}
+
+// TenantBarrierStatus returns the current sealed/initialized state and active
+// strategy metadata of a per-tenant barrier. When the barrier has never been
+// registered the response carries Sealed=true, Initialized=false, and an
+// empty Strategy — callers can use the Initialized flag to decide whether to
+// call InitTenantBarrier first.
+func (m *Manager) TenantBarrierStatus(ctx context.Context, tenantID string) (*TenantBarrierState, error) {
+	if tenantID == "" {
+		return nil, ErrInvalidRequest{Reason: "tenant ID is required"}
+	}
+	if m.tenantBarrierClient == nil {
+		return nil, ErrBarrierNotSupported{Operation: "TenantBarrierStatus"}
+	}
+
+	req := &quicbaassdk.QRDBTenantBarrierStatusRequest{TenantID: tenantID}
+	resp, err := m.tenantBarrierClient.TenantBarrierStatus(ctx, req)
+	if err != nil {
+		return nil, ErrStorageFailed{Operation: "TenantBarrierStatus", Err: err}
+	}
+	if resp == nil {
+		return nil, ErrStorageFailed{Operation: "TenantBarrierStatus", Err: ErrNilBarrierStatus}
+	}
+
+	return &TenantBarrierState{
+		TenantID:       resp.TenantID,
+		Sealed:         resp.Sealed,
+		Initialized:    resp.Initialized,
+		Strategy:       resp.Strategy,
+		HardwareBacked: resp.HardwareBacked,
+	}, nil
 }
 
 // BarrierManager returns the platform barrier manager, or nil if not configured.

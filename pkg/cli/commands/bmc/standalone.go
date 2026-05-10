@@ -38,6 +38,12 @@ type standaloneBMCFlags struct {
 	passwordFile  string
 	protocol      string
 	skipTLSVerify bool
+
+	// solInstance is the explicit IPMI 2.0 SOL payload instance override
+	// for the bmc console subcommand. Zero (the flag default) means
+	// "consult the quirk registry, fall back to 0x01". Permitted values
+	// per IPMI 2.0 Table 24-2: 0x01 - 0x0F.
+	solInstance uint8
 }
 
 // addStandaloneFlags registers the standalone BMC flag set on the given cobra
@@ -140,12 +146,13 @@ func newStandaloneClient(ctx context.Context, f *standaloneBMCFlags, logger *slo
 	}
 
 	cfg := &bmc.Config{
-		Address:       f.host,
-		Port:          port,
-		Protocol:      proto,
-		Username:      f.user,
-		Password:      pw,
-		SkipTLSVerify: f.skipTLSVerify,
+		Address:            f.host,
+		Port:               port,
+		Protocol:           proto,
+		Username:           f.user,
+		Password:           pw,
+		SkipTLSVerify:      f.skipTLSVerify,
+		SOLPayloadInstance: f.solInstance,
 	}
 	return newBMCClient(cfg, logger)
 }

@@ -40,9 +40,10 @@ type MockClient struct {
 	UnmountISOErr       error
 	VirtualMediaStatErr error
 	GetSensorsErr       error
-	GetSystemInfoErr    error
-	CloseErr            error
-	ConsoleErr          error
+	GetSystemInfoErr        error
+	CloseErr                error
+	ConsoleErr              error
+	ClearUEFIBootEntriesErr error
 
 	// Call counters (atomic for lock-free access)
 	powerOnCalls          atomic.Int64
@@ -57,8 +58,9 @@ type MockClient struct {
 	virtualMediaStatCalls atomic.Int64
 	getSensorsCalls       atomic.Int64
 	getSystemInfoCalls    atomic.Int64
-	closeCalls            atomic.Int64
-	consoleCalls          atomic.Int64
+	closeCalls                atomic.Int64
+	consoleCalls              atomic.Int64
+	clearUEFIBootEntriesCalls atomic.Int64
 }
 
 // Compile-time interface check.
@@ -221,6 +223,21 @@ func (m *MockClient) Console(_ context.Context) (*SOLSession, error) {
 // ConsoleCalls returns the number of times Console was called.
 func (m *MockClient) ConsoleCalls() int64 {
 	return m.consoleCalls.Load()
+}
+
+// ClearUEFIBootEntries records the call and returns the configured
+// error. The mock has no notion of UEFI NVRAM state to mutate; tests
+// either set ClearUEFIBootEntriesErr to assert the error path or leave
+// it nil to assert the no-op success path.
+func (m *MockClient) ClearUEFIBootEntries(_ context.Context) error {
+	m.clearUEFIBootEntriesCalls.Add(1)
+	return m.ClearUEFIBootEntriesErr
+}
+
+// ClearUEFIBootEntriesCalls returns the number of times the method was
+// called.
+func (m *MockClient) ClearUEFIBootEntriesCalls() int64 {
+	return m.clearUEFIBootEntriesCalls.Load()
 }
 func (m *MockClient) Close() error {
 	m.closeCalls.Add(1)

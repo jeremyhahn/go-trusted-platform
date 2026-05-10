@@ -176,60 +176,84 @@ cmdline_param() {
 
 # Find the platformctl-static binary
 find_platformctl() {
-    if [ -x /media/cdrom/platformd-bin/platformctl-static ]; then
+    if [ -x /media/cdrom/platformd-bin/platformctl ]; then
+        echo "/media/cdrom/platformd-bin/platformctl"
+    elif [ -x /usr/bin/platformctl ]; then
+        echo "/usr/bin/platformctl"
+    elif [ -x /media/cdrom/platformd-bin/platformctl-static ]; then
         echo "/media/cdrom/platformd-bin/platformctl-static"
     elif [ -x /usr/bin/platformctl-static ]; then
         echo "/usr/bin/platformctl-static"
-    elif [ -x /media/cdrom/platformd-bin/platformctl ]; then
-        echo "/media/cdrom/platformd-bin/platformctl"
     else
         echo ""
     fi
 }
 
-# Fetch config from server using trust bootstrap + EAB authentication
+# Fetch config from the control plane using the embedded CA bundle.
+# The CA bundle is included in the ISO at /media/cdrom/configs/ca-bundle.pem
+# and provides TLS verification without needing DANE/Noise/SPKI trust bootstrap.
+# The server URL is the config delivery endpoint; the device MAC address is
+# appended as a query parameter so the CP can match the device profile.
 fetch_config_from_server() {
     SERVER_URL="$1"
-    PLATFORMCTL=$(find_platformctl)
 
-    if [ -z "$PLATFORMCTL" ]; then
-        log "platformctl-static not found, cannot fetch config from server"
-        return 1
-    fi
-
-    # Read bootstrap params from kernel cmdline
-    BOOTSTRAP_STRATEGY=$(cmdline_param "bootstrap_strategy" "auto")
-    BOOTSTRAP_DNS=$(cmdline_param "bootstrap_dns" "")
-    BOOTSTRAP_NOISE_KEY=$(cmdline_param "bootstrap_noise_key" "")
-    BOOTSTRAP_SPKI_PIN=$(cmdline_param "bootstrap_spki_pin" "")
-
-    # Step 1: Bootstrap CA trust via DANE/Noise/SPKI
-    log "Bootstrapping CA trust from $SERVER_URL (strategy: $BOOTSTRAP_STRATEGY)..."
-    "$PLATFORMCTL" bootstrap trust \
-        --server-url "$SERVER_URL" \
-        --strategy "$BOOTSTRAP_STRATEGY" \
-        --install-to-system-trust \
-        ${BOOTSTRAP_DNS:+--dns-server "$BOOTSTRAP_DNS"} \
-        ${BOOTSTRAP_NOISE_KEY:+--noise-key "$BOOTSTRAP_NOISE_KEY"} \
-        ${BOOTSTRAP_SPKI_PIN:+--spki-pin "$BOOTSTRAP_SPKI_PIN"} \
-        2>&1
-    if [ $? -ne 0 ]; then
-        log "Trust bootstrap failed"
-        return 1
-    fi
-    log "CA trust established"
-
-    # Step 2: Gather device identity
-    EK_SERIAL=$("$PLATFORMCTL" tpm ek-serial 2>/dev/null || echo "")
+    # Discover device MAC address for profile matching
     MAC_ADDR=$(ip link show eth0 2>/dev/null | grep ether | awk '{print $2}' || echo "")
-    EAB_KID=$(cmdline_param "eab_kid" "")
-    EAB_HMAC=$(cmdline_param "eab_hmac" "")
+    if [ -z "$MAC_ADDR" ]; then
+        # Try other interfaces
+        for iface in eth1 eth2 eth3 eno1 eno2 enp0s25; do
+            MAC_ADDR=$(ip link show "$iface" 2>/dev/null | grep ether | awk '{print $2}' || echo "")
+            [ -n "$MAC_ADDR" ] && break
+        done
+    fi
+    log "Device MAC: $MAC_ADDR"
 
-    log "Device identity: EK=$EK_SERIAL MAC=$MAC_ADDR"
+    # Build config URL with MAC query parameter
+    CONFIG_URL="${SERVER_URL}?mac=${MAC_ADDR}"
+    log "Fetching config from: $CONFIG_URL"
 
-    # Step 3: Fetch config via EAB-authenticated HTTPS
-    "$PLATFORMCTL" provision fetch-config \
-        --server-url "$SERVER_URL" \
+    # Use the CA bundle embedded in the ISO for TLS verification.
+    # This avoids the need for DANE/Noise/SPKI trust bootstrap.
+    CA_BUNDLE="/media/cdrom/configs/ca-bundle.pem"
+    if [ ! -f "$CA_BUNDLE" ]; then
+        log "WARNING: CA bundle not found at $CA_BUNDLE, trying without TLS verification"
+        CA_BUNDLE=""
+    fi
+
+    # Bring up network with DHCP for config fetch (install hasn't run yet)
+    if ! ip addr show eth0 2>/dev/null | grep -q "inet "; then
+        log "Bringing up eth0 with DHCP for config fetch..."
+        ip link set eth0 up 2>/dev/null
+        udhcpc -i eth0 -t 10 -T 3 -n 2>/dev/null
+    fi
+
+    # Fetch config via HTTPS using curl with the CA bundle
+    FETCH_OPTS=""
+    if [ -n "$CA_BUNDLE" ]; then
+        FETCH_OPTS="--cacert $CA_BUNDLE"
+    fi
+
+    curl -sf $FETCH_OPTS -o /tmp/platform-config.yaml "$CONFIG_URL" 2>&1
+    CURL_RESULT=$?
+
+    if [ "$CURL_RESULT" -ne 0 ]; then
+        log "Config fetch failed (curl exit $CURL_RESULT), trying platformctl fallback..."
+
+        # Fallback: try platformctl if available
+        PLATFORMCTL=$(find_platformctl)
+        if [ -z "$PLATFORMCTL" ]; then
+            log "platformctl not found, cannot use fallback"
+            return 1
+        fi
+
+        # Gather device identity for platformctl
+        EK_SERIAL=$("$PLATFORMCTL" tpm ek-serial 2>/dev/null || echo "")
+        EAB_KID=$(cmdline_param "eab_kid" "")
+        EAB_HMAC=$(cmdline_param "eab_hmac" "")
+        log "Device identity: EK=$EK_SERIAL MAC=$MAC_ADDR"
+
+        "$PLATFORMCTL" provision fetch-config \
+            --server-url "$SERVER_URL" \
         --output /tmp/platform-config.yaml \
         ${EK_SERIAL:+--ek-serial "$EK_SERIAL"} \
         ${MAC_ADDR:+--mac "$MAC_ADDR"} \
@@ -312,6 +336,70 @@ scan_usb_config() {
     return 1
 }
 
+# Fetch per-MAC installer.yaml from the bootstrap HTTP sink (pxeboot
+# container). The orchestrator stages merged per-node config at
+#   /config/mac/<MAC>/installer.yaml
+# for every boot method; virtual-media boot has no way to set kernel
+# cmdline params, so use platform_debug_sink (always set for debug
+# installs) as the implicit config URL. Returns 0 on success, 1 on
+# failure (caller proceeds to next priority).
+fetch_config_from_bootstrap_sink() {
+    SINK=$(cmdline_param "platform_debug_sink" "")
+    if [ -z "$SINK" ]; then
+        return 1
+    fi
+
+    # Bring up eth0 with DHCP if no IP yet. The kernel modules for
+    # onboard NICs have already been loaded above; this just leases.
+    if ! ip addr show eth0 2>/dev/null | grep -q "inet "; then
+        log "Bringing up eth0 with DHCP to reach bootstrap sink $SINK..."
+        ip link set eth0 up 2>/dev/null
+        udhcpc -i eth0 -t 10 -T 3 -n 2>/dev/null
+    fi
+
+    # Resolve the active MAC. Match fetch_config_from_server.
+    MAC_ADDR=$(ip link show eth0 2>/dev/null | grep ether | awk '{print $2}' || echo "")
+    if [ -z "$MAC_ADDR" ]; then
+        for iface in eth1 eth2 eth3 eno1 eno2 enp0s25; do
+            MAC_ADDR=$(ip link show "$iface" 2>/dev/null | grep ether | awk '{print $2}' || echo "")
+            [ -n "$MAC_ADDR" ] && break
+        done
+    fi
+    if [ -z "$MAC_ADDR" ]; then
+        log "fetch_config_from_bootstrap_sink: no MAC found, skipping"
+        return 1
+    fi
+
+    # Normalize MAC to dash-separated lowercase (matches orchestrator
+    # sanitizeMACForPath in pkg/bootstrap/virtual_media.go).
+    MAC_PATH=$(echo "$MAC_ADDR" | tr ':' '-' | tr '[:upper:]' '[:lower:]')
+    URL="http://${SINK}/config/mac/${MAC_PATH}/installer.yaml"
+    log "Fetching per-MAC installer config: $URL"
+
+    # Plain HTTP on the bootstrap network — the pxeboot container runs
+    # on the deployer host on-LAN. No CA bundle needed.
+    if command -v curl >/dev/null 2>&1; then
+        curl --silent --show-error --max-time 10 --fail -o /tmp/platform-config.yaml "$URL" 2>&1
+        RESULT=$?
+    elif command -v wget >/dev/null 2>&1; then
+        wget --quiet --timeout=10 -O /tmp/platform-config.yaml "$URL" 2>&1
+        RESULT=$?
+    else
+        log "fetch_config_from_bootstrap_sink: neither curl nor wget available"
+        return 1
+    fi
+
+    if [ "$RESULT" -ne 0 ] || [ ! -s /tmp/platform-config.yaml ]; then
+        log "Per-MAC config fetch failed or empty (exit=$RESULT); falling through"
+        rm -f /tmp/platform-config.yaml
+        return 1
+    fi
+
+    log "Config source: bootstrap sink (http://${SINK}/config/mac/${MAC_PATH}/installer.yaml)"
+    INSTALLER_CONFIG="/tmp/platform-config.yaml"
+    return 0
+}
+
 # Main config resolution function
 resolve_config() {
     INSTALLER_CONFIG=""
@@ -338,12 +426,23 @@ resolve_config() {
         fi
     fi
 
-    # Priority 2: USB/removable media
+    # Priority 2: Per-MAC installer.yaml on the bootstrap HTTP sink.
+    # The orchestrator's virtual-media path stages merged per-node config at
+    #   http://${platform_debug_sink}/config/mac/<MAC>/installer.yaml
+    # Virtual-media boot cannot inject kernel cmdline, so rely on the
+    # debug sink address (always set for debug installs) to locate the
+    # pxeboot HTTP server and fetch the per-device config before falling
+    # back to the stub baked into the ISO.
+    if fetch_config_from_bootstrap_sink; then
+        return 0
+    fi
+
+    # Priority 3: USB/removable media
     if scan_usb_config; then
         return 0
     fi
 
-    # Priority 3: Embedded in ISO (check both new and legacy config names)
+    # Priority 4: Embedded in ISO (check both new and legacy config names)
     if [ -f /media/cdrom/configs/config.yaml ]; then
         log "Config source: embedded ISO (config.yaml)"
         INSTALLER_CONFIG="/media/cdrom/configs/config.yaml"
@@ -355,7 +454,7 @@ resolve_config() {
         return 0
     fi
 
-    # Priority 4: Interactive QR (if server URL available but no auto-match)
+    # Priority 5: Interactive QR (if server URL available but no auto-match)
     PLATFORM_SERVER=$(cmdline_param "platform_server" "")
     if [ -n "$PLATFORM_SERVER" ]; then
         log "Config source: interactive provisioning via $PLATFORM_SERVER"

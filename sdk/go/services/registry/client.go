@@ -1,0 +1,143 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+// Package registry provides a client for registry service operations.
+package registry
+
+import (
+	"context"
+
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/common"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
+)
+
+// Client provides access to registry service operations.
+type Client struct {
+	grpc platformv1.RegistryServiceClient
+}
+
+// NewClient creates a new registry service client.
+func NewClient(conn transport.Adapter) (*Client, error) {
+	if conn == nil {
+		return nil, common.ErrNilConnection
+	}
+	grpcConn := conn.Connection()
+	if grpcConn == nil {
+		return nil, common.ErrNilConnection
+	}
+	return &Client{
+		grpc: platformv1.NewRegistryServiceClient(grpcConn),
+	}, nil
+}
+
+// NewClientFromGRPC creates a new registry service client from a gRPC client.
+func NewClientFromGRPC(grpcClient platformv1.RegistryServiceClient) *Client {
+	return &Client{grpc: grpcClient}
+}
+
+// GRPCClient returns the underlying gRPC client for streaming operations.
+func (c *Client) GRPCClient() platformv1.RegistryServiceClient {
+	return c.grpc
+}
+
+// Status retrieves the registry status.
+func (c *Client) Status(ctx context.Context) (*platformv1.RegistryStatusResponse, error) {
+	resp, err := c.grpc.Status(ctx, &platformv1.RegistryStatusRequest{})
+	if err != nil {
+		return nil, &ErrStatusFailed{Cause: err}
+	}
+	return resp, nil
+}
+
+// List lists artifacts in the registry.
+func (c *Client) List(ctx context.Context, repository string, limit int32, cursor, sortBy string, ascending bool) (*platformv1.ListArtifactsResponse, error) {
+	resp, err := c.grpc.List(ctx, &platformv1.ListArtifactsRequest{
+		Repository: repository,
+		Limit:      limit,
+		Cursor:     cursor,
+		SortBy:     sortBy,
+		Ascending:  ascending,
+	})
+	if err != nil {
+		return nil, &ErrListFailed{Cause: err}
+	}
+	return resp, nil
+}
+
+// Inspect inspects an artifact.
+func (c *Client) Inspect(ctx context.Context, repository, reference, digest string, includeSignatures bool) (*platformv1.InspectArtifactResponse, error) {
+	req := &platformv1.InspectArtifactRequest{
+		Repository:        repository,
+		Reference:         reference,
+		Digest:            digest,
+		IncludeSignatures: includeSignatures,
+	}
+	resp, err := c.grpc.Inspect(ctx, req)
+	if err != nil {
+		return nil, &ErrInspectFailed{Reference: reference, Cause: err}
+	}
+	return resp, nil
+}
+
+// Delete deletes an artifact.
+func (c *Client) Delete(ctx context.Context, repository, reference, digest string, force bool) (*platformv1.DeleteArtifactResponse, error) {
+	req := &platformv1.DeleteArtifactRequest{
+		Repository: repository,
+		Reference:  reference,
+		Digest:     digest,
+		Force:      force,
+	}
+	resp, err := c.grpc.Delete(ctx, req)
+	if err != nil {
+		return nil, &ErrDeleteFailed{Reference: reference, Cause: err}
+	}
+	return resp, nil
+}
+
+// NewPushMetadata creates a PushMetadata proto for streaming push operations.
+func NewPushMetadata(repository, tag string, totalSize int64) *platformv1.PushMetadata {
+	return &platformv1.PushMetadata{
+		Repository: repository,
+		Tag:        tag,
+		Type:       platformv1.ArtifactType_ARTIFACT_TYPE_CONTAINER_IMAGE,
+		TotalSize:  totalSize,
+	}
+}
+
+// NewPushMetadataRequest creates a PushRequest containing metadata.
+func NewPushMetadataRequest(metadata *platformv1.PushMetadata) *platformv1.PushRequest {
+	return &platformv1.PushRequest{
+		Data: &platformv1.PushRequest_Metadata{
+			Metadata: metadata,
+		},
+	}
+}
+
+// NewPushChunkRequest creates a PushRequest containing a data chunk.
+func NewPushChunkRequest(chunk []byte) *platformv1.PushRequest {
+	return &platformv1.PushRequest{
+		Data: &platformv1.PushRequest_Chunk{
+			Chunk: chunk,
+		},
+	}
+}
+
+// NewPullRequest creates a PullRequest.
+func NewPullRequest(repository, reference, digest string) *platformv1.PullRequest {
+	return &platformv1.PullRequest{
+		Repository: repository,
+		Reference:  reference,
+		Digest:     digest,
+	}
+}

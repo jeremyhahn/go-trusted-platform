@@ -252,24 +252,33 @@ export default function TenantQuotasPage() {
       };
     }
 
-    const computeUsage = Math.round(
-      ((usage.vcpus / quotas.compute.max_vcpus) * 100 +
-        (usage.memory_mb / quotas.compute.max_memory_mb) * 100 +
-        (usage.disk_gb / quotas.compute.max_disk_gb) * 100) /
-        3
-    );
+    // Average only the dimensions where a non-zero limit is set so an
+    // unconfigured quota (limit = 0) doesn't divide by zero into NaN.
+    const safeAvg = (parts: Array<{ used: number; limit: number }>): number => {
+      const valid = parts.filter((p) => p.limit > 0);
+      if (valid.length === 0) return 0;
+      const sum = valid.reduce(
+        (acc, p) => acc + Math.min((p.used / p.limit) * 100, 100),
+        0,
+      );
+      return Math.round(sum / valid.length);
+    };
 
-    const networkUsage = Math.round(
-      ((usage.bridges / quotas.network.max_bridges) * 100 +
-        (usage.ports / quotas.network.max_ports) * 100) /
-        2
-    );
+    const computeUsage = safeAvg([
+      { used: usage.vcpus, limit: quotas.compute.max_vcpus },
+      { used: usage.memory_mb, limit: quotas.compute.max_memory_mb },
+      { used: usage.disk_gb, limit: quotas.compute.max_disk_gb },
+    ]);
 
-    const storageUsage = Math.round(
-      ((usage.volumes / quotas.storage.max_volumes_gb) * 100 +
-        (usage.snapshots / quotas.storage.max_snapshots) * 100) /
-        2
-    );
+    const networkUsage = safeAvg([
+      { used: usage.bridges, limit: quotas.network.max_bridges },
+      { used: usage.ports, limit: quotas.network.max_ports },
+    ]);
+
+    const storageUsage = safeAvg([
+      { used: usage.volumes, limit: quotas.storage.max_volumes_gb },
+      { used: usage.snapshots, limit: quotas.storage.max_snapshots },
+    ]);
 
     return {
       compute: computeUsage,

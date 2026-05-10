@@ -53,13 +53,14 @@ func TestNewCommand(t *testing.T) {
 
 	// Verify subcommands are registered
 	subcommands := cmd.Commands()
-	assert.Len(t, subcommands, 4) // list, get, find-serial, delete
+	assert.Len(t, subcommands, 5) // list, get, find-serial, register, delete
 
 	// Verify key subcommands exist
 	expectedCommands := map[string]bool{
 		"list":                 false,
 		"get <id>":             false,
 		"find-serial <serial>": false,
+		"register":             false,
 		"delete <id>":          false,
 	}
 	for _, sub := range subcommands {

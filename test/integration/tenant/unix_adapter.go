@@ -590,6 +590,86 @@ func (a *UnixAdapter) pbToStorageQuotaData(pb *platformv1.StorageQuota) *Storage
 }
 
 // =============================================================================
+// Per-Tenant Barrier Operations
+// =============================================================================
+
+// InitTenantBarrier explicitly initializes a per-tenant barrier via gRPC over Unix socket.
+func (a *UnixAdapter) InitTenantBarrier(ctx context.Context, opts InitTenantBarrierOptions) (*InitTenantBarrierResult, error) {
+	req := &platformv1.InitTenantBarrierRequest{
+		TenantId:  opts.TenantID,
+		Threshold: opts.Threshold,
+		Shares:    opts.Shares,
+	}
+
+	resp, err := a.client.InitTenantBarrier(ctx, req)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "InitTenantBarrier", Err: err}
+	}
+
+	return &InitTenantBarrierResult{
+		Success: resp.GetStatus().GetSuccess(),
+		Message: resp.GetStatus().GetMessage(),
+	}, nil
+}
+
+// UnsealTenantBarrier unseals a per-tenant barrier via gRPC over Unix socket.
+func (a *UnixAdapter) UnsealTenantBarrier(ctx context.Context, opts UnsealTenantBarrierOptions) (*UnsealTenantBarrierResult, error) {
+	req := &platformv1.UnsealTenantBarrierRequest{
+		TenantId: opts.TenantID,
+		Key:      opts.Key,
+	}
+
+	resp, err := a.client.UnsealTenantBarrier(ctx, req)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "UnsealTenantBarrier", Err: err}
+	}
+
+	return &UnsealTenantBarrierResult{
+		Success: resp.GetStatus().GetSuccess(),
+		Message: resp.GetStatus().GetMessage(),
+	}, nil
+}
+
+// SealTenantBarrier seals a per-tenant barrier via gRPC over Unix socket.
+func (a *UnixAdapter) SealTenantBarrier(ctx context.Context, opts SealTenantBarrierOptions) (*SealTenantBarrierResult, error) {
+	req := &platformv1.SealTenantBarrierRequest{
+		TenantId: opts.TenantID,
+	}
+
+	resp, err := a.client.SealTenantBarrier(ctx, req)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "SealTenantBarrier", Err: err}
+	}
+
+	return &SealTenantBarrierResult{
+		Success: resp.GetStatus().GetSuccess(),
+		Message: resp.GetStatus().GetMessage(),
+	}, nil
+}
+
+// TenantBarrierStatus reports the current sealed/initialized state of a per-tenant
+// barrier via gRPC over Unix socket.
+func (a *UnixAdapter) TenantBarrierStatus(ctx context.Context, opts TenantBarrierStatusOptions) (*TenantBarrierStatusResult, error) {
+	req := &platformv1.GetTenantBarrierStatusRequest{
+		TenantId: opts.TenantID,
+	}
+
+	resp, err := a.client.GetTenantBarrierStatus(ctx, req)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "GetTenantBarrierStatus", Err: err}
+	}
+
+	status := resp.GetBarrierStatus()
+	return &TenantBarrierStatusResult{
+		TenantID:       status.GetTenantId(),
+		Sealed:         status.GetSealed(),
+		Initialized:    status.GetInitialized(),
+		Strategy:       status.GetStrategy(),
+		HardwareBacked: status.GetHardwareBacked(),
+	}, nil
+}
+
+// =============================================================================
 // Compile-time Interface Verification
 // =============================================================================
 

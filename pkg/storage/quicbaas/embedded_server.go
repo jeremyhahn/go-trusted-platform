@@ -21,7 +21,7 @@ import (
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -44,7 +44,7 @@ type EmbeddedServer struct {
 	config     *Config
 	logger     *logging.Logger
 	server     *quicbaassdk.Server
-	externalCA xkmssdk.XKMSCA // optional; forwarded to server as WithCA option
+	externalCA xkmssdk.TrustedCA // optional; forwarded to server as WithCA option
 
 	started atomic.Bool
 	closed  atomic.Bool
@@ -70,7 +70,7 @@ func NewEmbeddedServer(config *Config, logger *logging.Logger) (*EmbeddedServer,
 // CA bootstrap and use the given CA for TLS certificate operations.
 // The CA must have already been initialized (Load or Init called) before
 // being passed here.
-func NewEmbeddedServerWithCA(config *Config, logger *logging.Logger, ca xkmssdk.XKMSCA) (*EmbeddedServer, error) {
+func NewEmbeddedServerWithCA(config *Config, logger *logging.Logger, ca xkmssdk.TrustedCA) (*EmbeddedServer, error) {
 	srv, err := NewEmbeddedServer(config, logger)
 	if err != nil {
 		return nil, err
@@ -220,4 +220,23 @@ func (s *EmbeddedServer) Server() *quicbaassdk.Server {
 		return nil
 	}
 	return s.server
+}
+
+// SetCA replaces the Certificate Authority used by the running embedded
+// QuicBaaS server. The swap is atomic: in-flight certificate operations
+// complete against the previous CA before the new one takes effect. Returns
+// ErrServerNotStarted when the server has not been started, or the error
+// returned by the underlying server's UpdateCA (e.g. when TLS is disabled).
+// Passing nil is a no-op.
+func (s *EmbeddedServer) SetCA(ca xkmssdk.TrustedCA) error {
+	if ca == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if !s.started.Load() || s.server == nil {
+		return ErrServerNotStarted{}
+	}
+	return s.server.UpdateCA(ca)
 }

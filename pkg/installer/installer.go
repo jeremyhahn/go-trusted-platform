@@ -35,8 +35,9 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uki"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"golang.org/x/sys/unix"
 
 	// Import Alpine package to register FIPS installer
@@ -72,6 +73,15 @@ func NewInstaller(
 	// This enables SSH installation and root login configuration
 	if config.OS != nil && config.Debug {
 		config.OS.Debug = true
+	}
+
+	// Propagate hardware identity fields into OSConfig so that OS-specific
+	// installers (e.g. alpineInstaller) can resolve pkg/quirks entries for
+	// vendor-specific console wiring, kernel modules, and Samba settings
+	// without needing access to the outer Config struct.
+	if config.OS != nil {
+		config.OS.HardwareManufacturer = config.HardwareManufacturer
+		config.OS.HardwareModel = config.HardwareModel
 	}
 
 	// Create disk manager
@@ -128,7 +138,25 @@ func NewInstaller(
 func (i *installer) Install(ctx context.Context) error {
 	i.logger.Info("[INSTALLER] Starting system installation")
 
-	// Step 1: Disk partitioning and LUKS setup
+	// Step 1: Clear TPM state before provisioning.
+	//
+	// Always attempt TPM2_Clear, independent of EnableTPMSealing. On re-install
+	// stale TPM state (keys, PCR policies, ownership) from the previous
+	// installation causes PCR_POLICY_FAIL / TPM_RC_POLICY errors at first
+	// boot when platformd tries to seal against the current PCR values. A
+	// clear-on-install always leaves the TPM ready for a fresh hierarchy.
+	//
+	// Failure is non-fatal: when no TPM is present at all (VM, hardware
+	// without a TPM chip) the install must still proceed. clearTPM itself
+	// attempts modprobe(tpm_tis/tpm_crb) so the live ISO doesn't need the
+	// modules preloaded.
+	if err := i.clearTPM(); err != nil {
+		i.logger.Warn("[INSTALLER] TPM clear skipped or failed (continuing)", "error", err)
+	} else {
+		i.logger.Info("[INSTALLER] TPM cleared successfully - ready for fresh provisioning")
+	}
+
+	// Step 2: Disk partitioning and LUKS setup
 	diskInfo, err := i.setupDisk(ctx)
 	if err != nil {
 		return fmt.Errorf("disk setup failed: %w", err)
@@ -531,6 +559,129 @@ func (i *installer) Install(ctx context.Context) error {
 	return nil
 }
 
+// clearTPM resets the TPM to a clean state by sending the TPM2_Clear command
+// via the lockout hierarchy with empty authorization. This removes all
+// persistent keys, resets owner/endorsement/lockout auth to empty, and
+// changes the storage primary seed so fresh keys can be provisioned against
+// the current PCR values. On a first install this is a no-op (the TPM is
+// already clear). On re-install this prevents PCR mismatch errors caused by
+// stale TPM state from the previous installation.
+func (i *installer) clearTPM() error {
+	device := i.resolveTPMDevice()
+	if device == "" {
+		// Try loading TPM kernel modules as a safety net in case the ISO
+		// environment didn't autoload them.
+		i.loadTPMModules()
+		device = i.resolveTPMDevice()
+		if device == "" {
+			return ErrTPM("no TPM device found after modprobe tpm_tis/tpm_crb", nil)
+		}
+	}
+
+	i.logger.Info("[TPM] Clearing TPM state", "device", device)
+
+	params := &xkmssdk.TPMParams{
+		Config: &xkmssdk.TPMConfig{
+			Device: device,
+		},
+	}
+
+	tpm, err := xkmssdk.NewTPM2(params)
+	if err != nil {
+		return ErrTPM("failed to open TPM device", err)
+	}
+	defer tpm.Close()
+
+	// Clear with empty lockout auth (default on fresh or previously-cleared TPM)
+	if err := tpm.Clear(nil); err != nil {
+		// DA lockout recovery: if LOCKOUT hierarchy refuses the clear
+		// because of accumulated bad-auth counter from prior failed
+		// provisioning runs, fall back to the UEFI Physical Presence
+		// Interface. PPI-scheduled clears bypass DA lockout because
+		// they're executed by firmware during POST with physical
+		// presence asserted. The installer triggers a reboot after
+		// scheduling so firmware services the clear on the next boot.
+		if strings.Contains(err.Error(), "TPM_RC_LOCKOUT") {
+			i.logger.Warn("[TPM] TPM2_Clear blocked by DA lockout; scheduling UEFI PPI ForceClear (reboot required)")
+			if fcErr := tpm.ForceClear(); fcErr != nil {
+				return ErrTPM("TPM2_Clear failed (lockout) and ForceClear via PPI also failed", fcErr)
+			}
+			i.logger.Info("[TPM] UEFI PPI ForceClear scheduled; issuing warm reset via SysRq-b so firmware services the clear at next POST")
+			// Use the SysRq-based HardReset helper rather than
+			// `reboot -f`. On Supermicro X10, the busybox reboot gets
+			// translated into an ACPI S5 shutdown, which leaves the
+			// system off and the PPI request unserviced until the next
+			// manual power-on. SysRq-b forces the CPU reset vector
+			// directly, skipping init/ACPI and guaranteeing a warm
+			// reboot into POST where PPI is processed.
+			HardReset()
+			return ErrTPM("TPM2_Clear failed (lockout) — scheduled PPI ForceClear; reboot initiated", err)
+		}
+		return ErrTPM("TPM2_Clear failed", err)
+	}
+
+	i.logger.Info("[TPM] TPM2_Clear completed - all hierarchies reset")
+	return nil
+}
+
+// tpmDeviceCandidates lists the TPM character devices, preferred first.
+// Package variable so tests can override it to point at tmpdir fakes;
+// production code never mutates this.
+var tpmDeviceCandidates = []string{"/dev/tpmrm0", "/dev/tpm0"}
+
+// resolveTPMDevice returns the preferred TPM character device if present.
+// The resource-manager device /dev/tpmrm0 is preferred; /dev/tpm0 is the
+// fallback for kernels without in-kernel RM support.
+func (i *installer) resolveTPMDevice() string {
+	for _, path := range tpmDeviceCandidates {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
+// tpmModprobe runs modprobe for a single module; overridable for tests so
+// unit tests never mutate the host's kernel module state.
+var tpmModprobe = func(module string) (string, error) {
+	cmd := exec.Command("modprobe", module)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// tpmDeviceWaitTimeout bounds how long loadTPMModules polls for a TPM
+// character device to appear after modprobe. udev/mdev create the node
+// asynchronously; a short poll loop is the deterministic alternative to a
+// fixed Sleep. Exported via var so tests can shrink it.
+var tpmDeviceWaitTimeout = 2 * time.Second
+
+// loadTPMModules attempts to modprobe the standard TPM drivers so that
+// /dev/tpm0 appears in environments (live ISO) that don't autoload them.
+// Errors from modprobe are logged and ignored — the caller re-checks for
+// the device. After modprobe we poll (not sleep) for up to
+// tpmDeviceWaitTimeout so udev/mdev has time to create the node.
+func (i *installer) loadTPMModules() {
+	modules := []string{"tpm", "tpm_tis_core", "tpm_tis", "tpm_crb"}
+	for _, m := range modules {
+		out, err := tpmModprobe(m)
+		if err != nil {
+			i.logger.Debug("[TPM] modprobe failed", "module", m, "error", err, "output", out)
+			continue
+		}
+		i.logger.Info("[TPM] loaded kernel module", "module", m)
+	}
+	// Poll for device node creation rather than sleeping a fixed interval.
+	deadline := time.Now().Add(tpmDeviceWaitTimeout)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for time.Now().Before(deadline) {
+		if i.resolveTPMDevice() != "" {
+			return
+		}
+		<-ticker.C
+	}
+}
+
 // setupDisk handles disk partitioning, LUKS encryption, and mounting
 func (i *installer) setupDisk(ctx context.Context) (*DiskInfo, error) {
 	i.logger.Info("[DISK] Setting up disk", "device", i.config.Disk.Device)
@@ -875,43 +1026,27 @@ func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 		}
 	}
 
+	// Resolve vendor-specific quirks for this host.  HardwareManufacturer
+	// and HardwareModel come from the installer Config (typically populated
+	// from Redfish System.Manufacturer / System.Model by the bootstrap
+	// orchestrator).  When neither field is set the generic cross-vendor
+	// defaults are used (see pkg/quirks.Default).
+	hwQuirk := quirks.Resolve(i.config.HardwareManufacturer, i.config.HardwareModel)
+	i.logger.Info("[UKI] Resolved hardware quirks",
+		"manufacturer", i.config.HardwareManufacturer,
+		"model", i.config.HardwareModel,
+		"sol_port", hwQuirk.SOLPort,
+		"earlycon", hwQuirk.EarlyconSpec)
+
 	// Add standard boot parameters
 	cmdlineParts = append(cmdlineParts,
 		"rootfstype=ext4",
 		"ro",
-		// Kernel console — robust cross-vendor SOL coverage:
-		//   earlyprintk=efi,keep — use UEFI ConOut for output BEFORE the
-		//                          regular kernel serial driver loads. The
-		//                          BIOS routes ConOut to the SOL UART so this
-		//                          works on every BMC that publishes SOL via
-		//                          its serial concentrator (Supermicro, Dell,
-		//                          HPE, Lenovo, Cisco). "keep" preserves the
-		//                          binding past ExitBootServices.
-		//   earlycon             — auto-discover via ACPI SPCR table for the
-		//                          regular kernel console handover.
-		//   console=ttyS0,1      — explicit fallbacks. Last wins as primary.
-		//   console=tty0         — VGA for SMM-snooping setups.
-		"earlyprintk=efi,keep",
-		// Explicit early-console probe at the legacy COM2 IO base (0x2f8).
-		// On Supermicro boards with Aspeed AST24xx/25xx BMCs the SOL channel
-		// is wired to COM2, and BIOS exposes the AST VUART at the standard
-		// PC IO port 0x2f8 even though the chip is non-standard. Without
-		// this explicit anchor, `earlycon` (ACPI SPCR auto-discover) and
-		// the regular `console=ttyS1` parameter both fail to bind because
-		// no driver in the stock Alpine kernel knows about the AST VUART
-		// — the kernel goes silent immediately after ExitBootServices.
-		// Explicit io,0x2f8 forces the in-tree 8250 driver to claim the
-		// port directly. This works for any board that exposes COM2 at
-		// the legacy IO base (every Supermicro / Dell / HPE board we've
-		// tested) and is harmless on systems where it isn't present —
-		// the 8250 driver simply fails to find the port and falls
-		// through to the next console= entry.
-		"earlycon=uart8250,io,0x2f8,115200n8",
-		"console=tty0",
-		"console=ttyS0,115200n8",
-		"console=ttyS1,115200n8",
-		"loglevel=7",
 	)
+	// Append vendor-specific console/earlycon parameters from the quirk
+	// table.  These cover SOL UART wiring, early console binding, and VGA
+	// mirroring for the resolved hardware platform.
+	cmdlineParts = append(cmdlineParts, hwQuirk.KernelCmdline...)
 
 	// Add security parameters based on configuration
 	if i.config.OS != nil {
@@ -1300,15 +1435,26 @@ func (i *installer) signUKI(ctx context.Context, diskInfo *DiskInfo) error {
 
 	i.logger.Info("[SECUREBOOT] Found Secure Boot keys", "source", keysOnISO)
 
-	// Read private key
+	// Read private key. Treat read/decode/parse failures as
+	// "keys present but unusable" — log a warning and skip signing,
+	// matching the keysOnISO=="" path above. Hard-failing the install
+	// over Secure Boot signing strands a perfectly bootable system
+	// (UEFI without Secure Boot enrollment still boots fine); the
+	// user can re-enroll keys post-install. Aborting an entire
+	// platform deploy because of a stale or malformed DB.key on a
+	// week-old ISO build is the wrong tradeoff.
 	keyPEM, err := os.ReadFile(keyPath)
 	if err != nil {
-		return fmt.Errorf("failed to read Secure Boot key: %w", err)
+		i.logger.Warn("[SECUREBOOT] Failed to read Secure Boot key — UKI will not be signed",
+			"path", keyPath, "error", err)
+		return nil
 	}
 
 	keyBlock, _ := pem.Decode(keyPEM)
 	if keyBlock == nil {
-		return fmt.Errorf("failed to decode Secure Boot key PEM")
+		i.logger.Warn("[SECUREBOOT] Failed to decode Secure Boot key PEM — UKI will not be signed",
+			"path", keyPath, "size", len(keyPEM))
+		return nil
 	}
 
 	// Parse the private key (support both PKCS#1 and PKCS#8)
@@ -1319,23 +1465,31 @@ func (i *installer) signUKI(ctx context.Context, diskInfo *DiskInfo) error {
 		privateKey, err = x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
 	}
 	if err != nil {
-		return fmt.Errorf("failed to parse Secure Boot private key: %w", err)
+		i.logger.Warn("[SECUREBOOT] Failed to parse Secure Boot private key — UKI will not be signed",
+			"path", keyPath, "type", keyBlock.Type, "error", err)
+		return nil
 	}
 
 	// Read certificate
 	certPEM, err := os.ReadFile(certPath)
 	if err != nil {
-		return fmt.Errorf("failed to read Secure Boot certificate: %w", err)
+		i.logger.Warn("[SECUREBOOT] Failed to read Secure Boot certificate — UKI will not be signed",
+			"path", certPath, "error", err)
+		return nil
 	}
 
 	certBlock, _ := pem.Decode(certPEM)
 	if certBlock == nil {
-		return fmt.Errorf("failed to decode Secure Boot certificate PEM")
+		i.logger.Warn("[SECUREBOOT] Failed to decode Secure Boot certificate PEM — UKI will not be signed",
+			"path", certPath, "size", len(certPEM))
+		return nil
 	}
 
 	cert, err := x509.ParseCertificate(certBlock.Bytes)
 	if err != nil {
-		return fmt.Errorf("failed to parse Secure Boot certificate: %w", err)
+		i.logger.Warn("[SECUREBOOT] Failed to parse Secure Boot certificate — UKI will not be signed",
+			"path", certPath, "error", err)
+		return nil
 	}
 
 	// Create a simple keystore backend for signing
@@ -1541,11 +1695,18 @@ func (i *installer) configureUEFIBoot(ctx context.Context, diskInfo *DiskInfo) e
 		i.logger.Info("[UEFI] Mounted efivarfs", "path", efiVarsDir)
 	}
 
-	// Install efibootmgr if not available
+	// Install efibootmgr if not available. --allow-untrusted is required
+	// because the offline prefetch repo's APKINDEX is unsigned (the package
+	// files themselves are byte-identical to the official Alpine mirror,
+	// but apk has no key for our locally-regenerated index). Without this
+	// flag apk silently treats prefetched packages as unselectable, which
+	// surfaces as `efibootmgr (no such package)` even when the .apk file
+	// is sitting in /media/cdrom/apks-prefetch/.
 	efibootmgrPath, err := exec.LookPath("efibootmgr")
 	if err != nil {
 		i.logger.Info("[UEFI] Installing efibootmgr...")
-		installCmd := exec.CommandContext(ctx, "apk", "add", "--no-cache", "efibootmgr")
+		installCmd := exec.CommandContext(ctx, "apk", "add", "--no-cache",
+			"--allow-untrusted", "efibootmgr")
 		installCmd.Stdout = os.Stderr
 		installCmd.Stderr = os.Stderr
 		if err := installCmd.Run(); err != nil {
@@ -1589,19 +1750,49 @@ func (i *installer) configureUEFIBoot(ctx context.Context, diskInfo *DiskInfo) e
 		i.logger.Warnf("[UEFI] Failed to list boot entries: %v", listErr)
 	}
 
-	// Do NOT create a NVRAM boot entry. The UKI lives at the UEFI
-	// removable media fallback path (/EFI/BOOT/BOOTX64.EFI) which the
-	// firmware discovers automatically without NVRAM entries.
+	// Create a `Trusted Platform` UEFI NVRAM entry pointing at the UKI
+	// at /EFI/BOOT/BOOTX64.EFI on the ESP. This is necessary on platforms
+	// whose firmware does NOT implement the UEFI removable-media fallback
+	// correctly — notably Supermicro X10SDV-class boards, where the
+	// default boot order is `PXE → HDD/efi/boot/bootx64.efi`. PXE always
+	// fails (`PXE-E79: NBP is too big to fit in free base memory`) and
+	// the firmware halts at "Reboot and Select proper Boot device"
+	// instead of falling through to the disk ESP. With an explicit
+	// NVRAM entry the firmware respects it ahead of PXE.
 	//
-	// This is critical for re-installs: if we create a NVRAM entry
-	// pointing to the disk's UKI, it takes priority over the virtual CD
-	// on the next bootstrap run, preventing the ISO from booting.
-	// Without NVRAM entries, the UEFI spec fallback order is:
-	//   1. Removable media (virtual CD if mounted) → ISO boots
-	//   2. Internal disk ESPs (/EFI/BOOT/BOOTX64.EFI) → UKI boots
-	// This handles both fresh installs and re-installs automatically.
-	i.logger.Info("[UEFI] Relying on UEFI removable media fallback for boot (no NVRAM entry created)",
-		"uki_path", "\\EFI\\BOOT\\BOOTX64.EFI")
+	// Re-installs are still safe: the BMC's
+	// `BootSourceOverrideTarget=Cd / BootSourceOverrideEnabled=Once|Continuous`
+	// is consumed by firmware BEFORE the NVRAM BootOrder, so the virtual
+	// CD wins on bootstrap-orchestrator runs.
+	if diskInfo != nil && diskInfo.Device != "" {
+		espDevice := diskInfo.Device + "1"
+		espPart := "1"
+		i.logger.Info("[UEFI] Creating NVRAM boot entry",
+			"label", "Trusted Platform", "disk", diskInfo.Device,
+			"part", espPart, "loader", "\\EFI\\BOOT\\BOOTX64.EFI")
+		createCmd := exec.CommandContext(ctx, efibootmgrPath,
+			"--create",
+			"--disk", diskInfo.Device,
+			"--part", espPart,
+			"--label", "Trusted Platform",
+			"--loader", `\EFI\BOOT\BOOTX64.EFI`)
+		// Discard the verbose efibootmgr output (full BootOrder with
+		// PCI device paths can contain bytes that confuse log encoders
+		// and have caused silent process exits in earlier runs). The
+		// presence/absence of the new entry is verified by listing
+		// boot entries downstream.
+		createCmd.Stdout = io.Discard
+		createCmd.Stderr = io.Discard
+		if createErr := createCmd.Run(); createErr != nil {
+			i.logger.Warnf("[UEFI] efibootmgr --create failed (continuing with fallback path): %v",
+				createErr)
+		} else {
+			i.logger.Info("[UEFI] NVRAM boot entry registered",
+				"esp_device", espDevice, "label", "Trusted Platform")
+		}
+	} else {
+		i.logger.Warn("[UEFI] No disk info available, skipping NVRAM entry creation")
+	}
 
 	// Write the TRUSTED_PLATFORM=1 custom EFI variable.
 	//
@@ -1769,6 +1960,17 @@ func (i *installer) prepareLUKSKeyForTPM(ctx context.Context, diskInfo *DiskInfo
 		i.logger.Warn("[TPM] Failed to write firstboot network config, ACME enrollment may fail", "error", err)
 	}
 
+	// Write a minimal pcr-banks file to EFI at install time so the dracut
+	// unlock hook can pass --pcrs to platform-initrd on the very first
+	// boot — before firstboot writes the full pcr-banks. Without this,
+	// platform-initrd falls through to searching config.yaml inside
+	// installer.luks, which is unreachable if the EFI mount itself
+	// failed. firstboot will overwrite this file with the authoritative
+	// values (platform-pcr, keystore-srk-handle, etc) after provisioning.
+	if err := i.writeInitialPCRBanks(efiDir); err != nil {
+		i.logger.Warn("[TPM] Failed to write initial pcr-banks file", "error", err)
+	}
+
 	installerPath := filepath.Join(efiDir, "installer.luks")
 	if err := i.createInstallerContainer(ctx, installerPath, luksKey, recoveryKey, configData); err != nil {
 		return fmt.Errorf("failed to create installer container: %w", err)
@@ -1802,6 +2004,32 @@ func generateRecoveryKey() string {
 // findPlatformConfig searches for the platform config file on the ISO
 // IMPORTANT: Config MUST have seal-pcrs at root level for LUKS TPM sealing
 func (i *installer) findPlatformConfig() ([]byte, error) {
+	// Priority 1: dynamically-fetched merged config written by autoinstall.sh
+	// (customize.go Priority 1). This carries the orchestrator-published
+	// template+overrides merge, including per-node `debug:`, `domain:`,
+	// and static IP fields. Without this path the installer falls back to
+	// the ISO-baked default (single-node/default.yaml), which has
+	// debug:false and a generic hostname — wiping out the override file
+	// contents the operator put in bootstrap.yaml.
+	//
+	// See docs/bootstrap/config-delivery.md §3 (dynamic mode) and
+	// docs/installer/autoinstall.md for the fetch flow that writes
+	// /tmp/platform-config.yaml.
+	for _, dynPath := range []string{"/tmp/platform-config.yaml"} {
+		if data, err := os.ReadFile(dynPath); err == nil {
+			i.logger.Info("[TPM] Found platform config (dynamic fetch)", "path", dynPath, "size", len(data))
+			if !bytes.Contains(data, []byte("seal-pcrs:")) {
+				i.logger.Warn("[TPM] Dynamic config missing seal-pcrs, falling back to baked",
+					"path", dynPath)
+			} else {
+				i.logger.Info("[TPM] Config validated - has seal-pcrs", "path", dynPath)
+				return data, nil
+			}
+		}
+	}
+
+	// Priority 2: ISO-baked config. Used when --config-server was not
+	// specified at iso create time, or when dynamic fetch failed.
 	for _, isoMount := range []string{"/media/cdrom", "/media/usb", "/mnt/cdrom"} {
 		for _, configName := range []string{
 			"installer.yaml",
@@ -1811,7 +2039,7 @@ func (i *installer) findPlatformConfig() ([]byte, error) {
 		} {
 			testPath := filepath.Join(isoMount, "configs", configName)
 			if data, err := os.ReadFile(testPath); err == nil {
-				i.logger.Info("[TPM] Found platform config", "path", testPath, "size", len(data))
+				i.logger.Info("[TPM] Found platform config (baked)", "path", testPath, "size", len(data))
 
 				// Validate config has seal-pcrs before returning
 				if !bytes.Contains(data, []byte("seal-pcrs:")) {
@@ -1826,7 +2054,7 @@ func (i *installer) findPlatformConfig() ([]byte, error) {
 			}
 		}
 	}
-	return nil, fmt.Errorf("platform config not found on ISO (or all found configs missing seal-pcrs)")
+	return nil, fmt.Errorf("platform config not found on ISO or at /tmp/platform-config.yaml (or all found configs missing seal-pcrs)")
 }
 
 // createInstallerContainer creates a LUKS-encrypted container with keys and config
@@ -2665,9 +2893,25 @@ start() {
         touch /var/lib/trusted-platform/.initialized || ewarn "Failed to create init flag"
         einfo "Platform marked as initialized"
 
-        einfo "System will reboot to verify sealed boot works..."
-        sleep 3
-        reboot
+        # IMPORTANT: do NOT auto-reboot here. The seal is already in place
+        # on the EFI partition; the LUKS root is already unlocked via
+        # the keyfile fallback path; platformd starts cleanly on this
+        # very boot. The next *natural* reboot will exercise the
+        # TPM-PCR unseal — if PCRs match, the system switches to
+        # TPM-only unlock; if not, the keyfile fallback continues to
+        # cover us with no operational impact.
+        #
+        # Auto-rebooting here was a self-defeating loop on hardware
+        # where PCR 9 differs between the installer initramfs and the
+        # production initramfs (a known X10/SLB9665 reality): every
+        # "verify" reboot would fall through to keyfile, then we'd
+        # auto-reboot again, forever. The keyfile-fallback path is
+        # the validation — it ran successfully *this* boot, that is
+        # the proof we need. Defer seal-confirmation to the natural
+        # next boot.
+        einfo "Seal staged on EFI partition. TPM-PCR unlock will be"
+        einfo "attempted on the next natural reboot; keyfile fallback"
+        einfo "guarantees the system remains operational either way."
     else
         eerror "Platform sealing failed"
         eend 1
@@ -2745,7 +2989,7 @@ error_log="/var/log/trusted-platform/platformd.log"
 BASE_ARGS="%s"
 
 depend() {
-    need localmount networking
+    need localmount networking ovsdb-server ovs-vswitchd
     after tpm-firstboot-seal
     keyword -shutdown
 }
@@ -2755,6 +2999,22 @@ start_pre() {
     mkdir -p /var/log/trusted-platform
     mkdir -p /etc/trusted-platform
     command_args="serve $BASE_ARGS"
+
+    # Wait for ovs-vswitchd to populate the Open_vSwitch root row in
+    # OVSDB before platformd tries to create bridges. On cold boots
+    # (especially fresh installs), ovs-vswitchd can take 60-180s to
+    # finish its startup dance; without this gate, platformd's own
+    # retry window exhausts and SDN init gets deferred permanently.
+    einfo "Waiting for ovs-vswitchd to populate Open_vSwitch root row..."
+    local deadline=$(( $(date +%%s) + 300 ))
+    while [ $(date +%%s) -lt $deadline ]; do
+        if ovs-vsctl --timeout=3 list Open_vSwitch 2>/dev/null | grep -q '^_uuid'; then
+            einfo "OVS root row populated"
+            return 0
+        fi
+        sleep 2
+    done
+    ewarn "OVS root row never appeared within 300s — platformd will retry, SDN may defer"
 }
 
 start() {
@@ -3040,6 +3300,38 @@ func (i *installer) writeFirstbootNetworkConfig(efiDir string) error {
 	}
 
 	i.logger.Info("[TPM] Firstboot network config written", "path", networkConfigPath)
+
+	return nil
+}
+
+// writeInitialPCRBanks writes a minimal pcr-banks file containing only the
+// seal-pcrs line, before firstboot has had a chance to write the full
+// authoritative version. It lets the dracut unlock hook (which reads
+// /boot/efi/tpm2/pcr-banks to decide the --pcrs flag for platform-initrd)
+// work correctly on the very first boot. firstboot overwrites this file
+// with the full set of fields (platform-pcr, keystore-srk-handle,
+// ssrk-handle, etc) once TPM provisioning has populated them.
+func (i *installer) writeInitialPCRBanks(efiDir string) error {
+	if len(i.config.PCRs) == 0 {
+		i.logger.Info("[TPM] No seal-pcrs configured, skipping initial pcr-banks write")
+		return nil
+	}
+
+	// Format PCRs as comma-separated decimal (matches firstboot's output).
+	pcrStrs := make([]string, 0, len(i.config.PCRs))
+	for _, p := range i.config.PCRs {
+		pcrStrs = append(pcrStrs, fmt.Sprintf("%d", p))
+	}
+	pcrLine := fmt.Sprintf("seal-pcrs=%s\n", strings.Join(pcrStrs, ","))
+
+	pcrBanksPath := filepath.Join(efiDir, "pcr-banks")
+	if err := os.WriteFile(pcrBanksPath, []byte(pcrLine), 0644); err != nil {
+		return fmt.Errorf("failed to write initial pcr-banks: %w", err)
+	}
+
+	i.logger.Info("[TPM] Initial pcr-banks written",
+		"path", pcrBanksPath,
+		"seal-pcrs", strings.Join(pcrStrs, ","))
 
 	return nil
 }

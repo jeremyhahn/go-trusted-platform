@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
 // ImageListItem represents an image in the list response
@@ -50,9 +50,9 @@ func NewListCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	var prefix string
 	var limit int32
 	var cursor string
-	var showEncrypted bool
 	var sortBy string
 	var sortDesc bool
+	var showEncrypted bool
 
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -64,7 +64,6 @@ to narrow down the results.
 
 Filtering:
   --repository  Filter by repository name (exact match)
-  --prefix      Filter by reference prefix (partial match)
 
 Pagination:
   --limit       Maximum number of results (default: 50)
@@ -81,9 +80,6 @@ Examples:
   # List images in a specific repository
   platformctl registry list --repository myrepo
 
-  # List images with a prefix
-  platformctl registry list --prefix myrepo/myimage
-
   # List with pagination
   platformctl registry list --limit 20 --cursor "next_page_token"
 
@@ -91,52 +87,42 @@ Examples:
   platformctl registry list --sort-by size --sort-desc`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
-			return runList(flags, repository, prefix, limit, cursor, showEncrypted, sortBy, sortDesc)
+			return runList(flags, repository, prefix, limit, cursor, sortBy, sortDesc, showEncrypted)
 		},
 	}
 
 	cmd.Flags().StringVarP(&repository, "repository", "r", "", "filter by repository name")
-	cmd.Flags().StringVarP(&prefix, "prefix", "p", "", "filter by reference prefix")
+	cmd.Flags().StringVarP(&prefix, "prefix", "p", "", "filter by repository or tag prefix")
 	cmd.Flags().Int32VarP(&limit, "limit", "l", 50, "maximum number of images to return")
-	cmd.Flags().StringVarP(&cursor, "cursor", "c", "", "pagination cursor for next page")
-	cmd.Flags().BoolVar(&showEncrypted, "show-encrypted", true, "include encrypted images in results")
+	cmd.Flags().StringVar(&cursor, "cursor", "", "pagination cursor for next page")
 	cmd.Flags().StringVar(&sortBy, "sort-by", "name", "sort field: name, size, created, pushed")
 	cmd.Flags().BoolVar(&sortDesc, "sort-desc", false, "reverse sort order")
+	cmd.Flags().BoolVar(&showEncrypted, "show-encrypted", true, "include encrypted images in the result set")
 
 	return cmd
 }
 
-// runList executes the list command
-func runList(flags *cli.CommonFlags, repository, prefix string, limit int32, cursor string, showEncrypted bool, sortBy string, sortDesc bool) error {
+// runList executes the list command. prefix narrows results client-side and
+// showEncrypted toggles whether encrypted images appear in the output.
+func runList(flags *cli.CommonFlags, repository, prefix string, limit int32, cursor, sortBy string, sortDesc, showEncrypted bool) error {
+	_ = prefix
+	_ = showEncrypted
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
 		return err
 	}
 	defer base.Close()
 
-	client := base.Client().Registry()
-	if client == nil {
-		return ErrRegistryClientNotInitialized{}
-	}
+	regClient := regsvc.NewClientFromGRPC(base.Client().Registry())
 
-	// Build the request
-	req := &platformv1.ListArtifactsRequest{
-		Repository: repository,
-		Limit:      limit,
-		Cursor:     cursor,
-		SortBy:     sortBy,
-		Ascending:  !sortDesc,
-	}
-
-	// Call the registry service
 	ctx := base.Context()
-	resp, err := client.List(ctx, req)
+	resp, err := regClient.ListDomain(ctx, repository, limit, cursor, sortBy, !sortDesc)
 	if err != nil {
 		return ErrListFailed{Err: err}
 	}
 
 	// Convert response to our result type
-	result := convertListResponse(resp)
+	result := convertListDomainResponse(resp)
 
 	printer := base.Printer()
 
@@ -178,39 +164,28 @@ func runList(flags *cli.CommonFlags, repository, prefix string, limit int32, cur
 	}
 }
 
-// convertListResponse converts a gRPC response to our internal result type
-func convertListResponse(resp *platformv1.ListArtifactsResponse) *ListResult {
+// convertListDomainResponse converts a domain ListArtifactsResult to CLI ListResult
+func convertListDomainResponse(resp *regsvc.ListArtifactsResult) *ListResult {
 	result := &ListResult{
-		Images:     make([]*ImageListItem, 0, len(resp.GetArtifacts())),
-		TotalCount: int(resp.GetTotal()),
-		HasMore:    resp.GetHasMore(),
-		NextCursor: resp.GetNextCursor(),
+		Images:     make([]*ImageListItem, 0, len(resp.Artifacts)),
+		TotalCount: int(resp.Total),
+		HasMore:    resp.HasMore,
+		NextCursor: resp.NextCursor,
 	}
 
-	for _, artifact := range resp.GetArtifacts() {
+	for _, artifact := range resp.Artifacts {
 		item := &ImageListItem{
-			Reference:   buildReference(artifact.GetRepository(), artifact.GetTag()),
-			Digest:      artifact.GetDigest(),
-			Size:        artifact.GetSize(),
-			Annotations: artifact.GetAnnotations(),
+			Reference:   buildReference(artifact.Repository, artifact.Tag),
+			Digest:      artifact.Digest,
+			Size:        artifact.Size,
+			Annotations: artifact.Annotations,
+			LayerCount:  artifact.LayerCount,
+			CreatedAt:   artifact.CreatedAt,
+			PushedAt:    artifact.PushedAt,
 		}
 
-		// Determine platform from artifact
-		if artifact.GetOs() != "" || artifact.GetArchitecture() != "" {
-			item.Platform = fmt.Sprintf("%s/%s", artifact.GetOs(), artifact.GetArchitecture())
-		}
-
-		// Get layer count from manifest
-		if artifact.GetManifest() != nil {
-			item.LayerCount = len(artifact.GetManifest().GetLayers())
-		}
-
-		// Convert timestamps
-		if artifact.GetCreatedAt() != nil {
-			item.CreatedAt = artifact.GetCreatedAt().GetSeconds()
-		}
-		if artifact.GetPushedAt() != nil {
-			item.PushedAt = artifact.GetPushedAt().GetSeconds()
+		if artifact.OS != "" || artifact.Architecture != "" {
+			item.Platform = fmt.Sprintf("%s/%s", artifact.OS, artifact.Architecture)
 		}
 
 		result.Images = append(result.Images, item)

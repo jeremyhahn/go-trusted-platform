@@ -32,8 +32,10 @@ type redfishCollection struct {
 
 // redfishBoot represents the Boot section of a Redfish System resource.
 type redfishBoot struct {
-	BootSourceOverrideTarget  string `json:"BootSourceOverrideTarget"`
-	BootSourceOverrideEnabled string `json:"BootSourceOverrideEnabled"`
+	BootSourceOverrideTarget               string   `json:"BootSourceOverrideTarget"`
+	BootSourceOverrideEnabled              string   `json:"BootSourceOverrideEnabled"`
+	BootSourceOverrideMode                 string   `json:"BootSourceOverrideMode,omitempty"`
+	BootSourceOverrideTargetAllowableValues []string `json:"BootSourceOverrideTarget@Redfish.AllowableValues,omitempty"`
 }
 
 // redfishProcessorSummary represents the ProcessorSummary of a Redfish System.
@@ -57,6 +59,26 @@ type redfishActions struct {
 	ComputerSystemReset redfishResetAction `json:"#ComputerSystem.Reset"`
 }
 
+// redfishBiosResetAction represents the #Bios.ResetBios action target on a
+// Redfish Bios resource. BMCs that expose this action let the host clear
+// its UEFI NVRAM boot entries (and reset BIOS attributes to defaults) on
+// the next reset. Most enterprise iDRAC/iLO firmware ships it; older
+// Supermicro X10 BMCs do not.
+type redfishBiosResetAction struct {
+	Target string `json:"target"`
+}
+
+// redfishBiosActions represents the Actions block on a Redfish Bios resource.
+type redfishBiosActions struct {
+	ResetBios redfishBiosResetAction `json:"#Bios.ResetBios"`
+}
+
+// redfishBios represents a Redfish /redfish/v1/Systems/{id}/Bios resource.
+type redfishBios struct {
+	Attributes map[string]any     `json:"Attributes,omitempty"`
+	Actions    redfishBiosActions `json:"Actions"`
+}
+
 // redfishSystem represents a Redfish /redfish/v1/Systems/{id} resource.
 type redfishSystem struct {
 	Manufacturer     string                  `json:"Manufacturer"`
@@ -65,6 +87,7 @@ type redfishSystem struct {
 	BiosVersion      string                  `json:"BiosVersion"`
 	PowerState       string                  `json:"PowerState"`
 	Boot             redfishBoot             `json:"Boot"`
+	Bios             redfishRef              `json:"Bios,omitempty"`
 	ProcessorSummary redfishProcessorSummary `json:"ProcessorSummary"`
 	MemorySummary    redfishMemorySummary    `json:"MemorySummary"`
 	Actions          redfishActions          `json:"Actions"`
@@ -153,7 +176,21 @@ type redfishInsertMediaBody struct {
 // redfishError represents a Redfish error response body.
 type redfishError struct {
 	Error struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
+		Code            string                 `json:"code"`
+		Message         string                 `json:"message"`
+		ExtendedInfo    []redfishExtendedInfo  `json:"@Message.ExtendedInfo"`
 	} `json:"error"`
+}
+
+// redfishExtendedInfo captures one entry of the Redfish @Message.ExtendedInfo
+// array — the specific actionable diagnostic that Supermicro (and most BMCs)
+// surface for 4xx responses. The top-level message is often a generic
+// "A general error has occurred", while ExtendedInfo[i].Message / MessageArgs /
+// Resolution carry the real cause + fix.
+type redfishExtendedInfo struct {
+	MessageId   string   `json:"MessageId"`
+	Message     string   `json:"Message"`
+	MessageArgs []string `json:"MessageArgs"`
+	Severity    string   `json:"Severity"`
+	Resolution  string   `json:"Resolution"`
 }

@@ -33,8 +33,8 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	goca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

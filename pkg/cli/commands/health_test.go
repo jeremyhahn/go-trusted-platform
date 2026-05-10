@@ -16,7 +16,6 @@ package commands
 import (
 	"testing"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -63,137 +62,6 @@ func TestHealthCommandFlags(t *testing.T) {
 	}
 }
 
-func TestPrintHealthTable(t *testing.T) {
-	printer := cli.NewPrinter(cli.OutputFormatTable, false)
-	resp := &platformv1.GetHealthResponse{
-		Status: platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-		Components: []*platformv1.ComponentHealth{
-			{
-				Name:    "tpm",
-				Status:  platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-				Message: "TPM is healthy",
-			},
-			{
-				Name:    "dns",
-				Status:  platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-				Message: "DNS is healthy",
-			},
-		},
-	}
-
-	err := printHealthTable(printer, resp, true)
-	if err != nil {
-		t.Errorf("printHealthTable failed: %v", err)
-	}
-}
-
-func TestPrintHealthTableNotDetailed(t *testing.T) {
-	printer := cli.NewPrinter(cli.OutputFormatTable, false)
-	resp := &platformv1.GetHealthResponse{
-		Status: platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-		Components: []*platformv1.ComponentHealth{
-			{
-				Name:    "tpm",
-				Status:  platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-				Message: "TPM is healthy",
-			},
-		},
-	}
-
-	err := printHealthTable(printer, resp, false)
-	if err != nil {
-		t.Errorf("printHealthTable not detailed failed: %v", err)
-	}
-}
-
-func TestPrintHealthTableNoComponents(t *testing.T) {
-	printer := cli.NewPrinter(cli.OutputFormatTable, false)
-	resp := &platformv1.GetHealthResponse{
-		Status:     platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-		Components: nil,
-	}
-
-	err := printHealthTable(printer, resp, true)
-	if err != nil {
-		t.Errorf("printHealthTable with no components failed: %v", err)
-	}
-}
-
-func TestPrintHealthTableEmptyComponents(t *testing.T) {
-	printer := cli.NewPrinter(cli.OutputFormatTable, false)
-	resp := &platformv1.GetHealthResponse{
-		Status:     platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-		Components: []*platformv1.ComponentHealth{},
-	}
-
-	err := printHealthTable(printer, resp, true)
-	if err != nil {
-		t.Errorf("printHealthTable with empty components failed: %v", err)
-	}
-}
-
-func TestPrintHealthTableDegraded(t *testing.T) {
-	printer := cli.NewPrinter(cli.OutputFormatTable, false)
-	resp := &platformv1.GetHealthResponse{
-		Status: platformv1.HealthStatus_HEALTH_STATUS_DEGRADED,
-		Components: []*platformv1.ComponentHealth{
-			{
-				Name:    "tpm",
-				Status:  platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-				Message: "TPM is healthy",
-			},
-			{
-				Name:    "dns",
-				Status:  platformv1.HealthStatus_HEALTH_STATUS_DEGRADED,
-				Message: "DNS is degraded",
-			},
-		},
-	}
-
-	err := printHealthTable(printer, resp, true)
-	if err != nil {
-		t.Errorf("printHealthTable degraded status failed: %v", err)
-	}
-}
-
-func TestPrintHealthTableUnhealthy(t *testing.T) {
-	printer := cli.NewPrinter(cli.OutputFormatTable, false)
-	resp := &platformv1.GetHealthResponse{
-		Status: platformv1.HealthStatus_HEALTH_STATUS_UNHEALTHY,
-		Components: []*platformv1.ComponentHealth{
-			{
-				Name:    "tpm",
-				Status:  platformv1.HealthStatus_HEALTH_STATUS_UNHEALTHY,
-				Message: "TPM is unhealthy",
-			},
-		},
-	}
-
-	err := printHealthTable(printer, resp, true)
-	if err != nil {
-		t.Errorf("printHealthTable unhealthy status failed: %v", err)
-	}
-}
-
-func TestPrintHealthTableUnknownStatus(t *testing.T) {
-	printer := cli.NewPrinter(cli.OutputFormatTable, false)
-	resp := &platformv1.GetHealthResponse{
-		Status: platformv1.HealthStatus_HEALTH_STATUS_UNSPECIFIED,
-		Components: []*platformv1.ComponentHealth{
-			{
-				Name:    "tpm",
-				Status:  platformv1.HealthStatus_HEALTH_STATUS_UNSPECIFIED,
-				Message: "Status unknown",
-			},
-		},
-	}
-
-	err := printHealthTable(printer, resp, true)
-	if err != nil {
-		t.Errorf("printHealthTable unknown status failed: %v", err)
-	}
-}
-
 func TestHealthCommandStructure(t *testing.T) {
 	cmd := NewHealthCommand(func() *cli.CommonFlags {
 		return &cli.CommonFlags{}
@@ -201,40 +69,6 @@ func TestHealthCommandStructure(t *testing.T) {
 
 	if cmd.Long == "" {
 		t.Error("Long description should not be empty")
-	}
-}
-
-func TestPrintHealthTableMultipleComponents(t *testing.T) {
-	printer := cli.NewPrinter(cli.OutputFormatTable, false)
-	resp := &platformv1.GetHealthResponse{
-		Status: platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-		Components: []*platformv1.ComponentHealth{
-			{
-				Name:    "tpm",
-				Status:  platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-				Message: "TPM is healthy",
-			},
-			{
-				Name:    "dns",
-				Status:  platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-				Message: "DNS is healthy",
-			},
-			{
-				Name:    "acme",
-				Status:  platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-				Message: "ACME is healthy",
-			},
-			{
-				Name:    "webservice",
-				Status:  platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-				Message: "WebService is healthy",
-			},
-		},
-	}
-
-	err := printHealthTable(printer, resp, true)
-	if err != nil {
-		t.Errorf("printHealthTable with multiple components failed: %v", err)
 	}
 }
 

@@ -1,0 +1,947 @@
+# =============================================================================
+# Single-Node Default Template
+#
+# Reference-architecture default for `platformctl iso create` with no flags.
+# Deploys a single-box Trusted Platform running BOTH control-plane services
+# (platformd server mode: CA, ACME, DNS authoritative, IAM, KMS, QuicBaaS)
+# AND gateway/data-plane services (gatewayd: DHCP, firewall, NAT,
+# load-balancer, tunnels, edge onboarding) collocated on one host.
+#
+# DEPLOYMENT PROFILE: single-node
+#   All roles on one box. Non-HA. Local pebble storage. No Raft consensus.
+#   Matches docs/architecture/deployment-reference.md §1.
+#
+# PROCESS MODEL:
+#   platformd.service  - Control plane daemon (root master + deprivileged
+#                        workers per binary-separation.md)
+#   gatewayd.service   - Data plane daemon (CAP_NET_ADMIN, delegates OVS
+#                        ops to platformd master over unix socket)
+#   Both started by systemd target: trusted-platform.target
+#
+# TRUST MODEL: The platform CA bundle is baked into the install ISO and
+#   installed to the system trust store via update-ca-certificates during
+#   installation. Runtime trust bootstrap (DANE/Noise/SPKI) is intentionally
+#   absent for single-node.
+#
+# HARDWARE: Vendor-neutral. Tested on Supermicro X10 and Dell R640;
+#   should work on any x86_64 box with UEFI + TPM 2.0 (hardware or swtpm).
+#
+# DEPLOYER: Before using this template in production, override the following:
+#   - domain, hostmaster (your domain)
+#   - os.hostname (default: trusted-platform.local)
+#   - network.interfaces[].name (match your NIC, default: eth0)
+#   - tpm.idevid.serial (actual chassis serial)
+#   - webservices[].sans (DNS SANs for TLS certs)
+#   - DHCP pool (if serving DHCP to LAN devices — off by default)
+# =============================================================================
+
+debug: false
+debug-secrets: false
+platform-dir: /var/lib/trusted-platform
+config-dir: /etc/trusted-platform
+log-dir: /var/log/trusted-platform
+ca-dir: /var/log/trusted-platform/ca
+domain: trusted-platform.local
+hostmaster: hostmaster@trusted-platform.local
+tenant-id: platform
+pin-seal-policy: true
+
+secrets:
+  enabled: true
+  auto-generate: true
+  local-kms: true
+  migrate-to-kms: true
+  update-config-file: true
+
+platform:
+  # Vault-style persistent auto-generation via QuicBaaS EnsureSecret.
+  # First boot generates per spec (length + encoding) and persists at
+  # the path; every subsequent boot returns the same stable bytes via
+  # a distributed lock in the SecretsService. Paths are short-form —
+  # tenant and node identifiers are implicitly prepended at resolution
+  # time from platform.tenant_id and the node hostname.
+  so-pin:   "kms://platform/so-pin?ensure=true&len=8&enc=numeric"
+  user-pin: "kms://platform/user-pin?ensure=true&len=6&enc=numeric"
+
+
+# =============================================================================
+# INSTALLATION CONFIGURATION (System Manifest)
+# =============================================================================
+
+# Disk configuration for system installation
+disk:
+  device: ""
+  partition-table: gpt
+  efi-partition-size: 538
+  root-filesystem: lvm
+  lvm-volume-group: vg0
+  lvm-logical-volume: root
+  encryption:
+    version: luks2
+    cipher: aes-xts-plain64
+    key-size: 512
+    hash: sha256
+    pbkdf: argon2id
+    mapped-name: cryptroot
+    tpm:
+      enabled: true
+      # DESTRUCTIVE — DEFAULT FOR REFERENCE ARCHITECTURE.
+      #
+      # When true, firstboot calls FactoryResetWithClear which issues a
+      # TPM2_Clear via the LOCKOUT hierarchy with empty auth BEFORE
+      # provisioning. This wipes any persistent objects in the owner /
+      # endorsement / lockout hierarchies that may have been left behind
+      # by a previous failed install run, AND resets those hierarchy auths
+      # to empty. Manufacturer EK certificates in the Platform hierarchy
+      # are preserved.
+      #
+      # The reference architecture defaults this to TRUE because:
+      #   - Fresh hardware deployment is the primary use case
+      #   - First-time provisioning of newly-purchased servers
+      #   - Recovery from a stuck TPM after a failed previous run
+      #
+      # Set this to FALSE if you are re-imaging a node and need to
+      # preserve known-good TPM state from a prior provisioning, or in
+      # multi-tenant scenarios where another component owns the TPM.
+      #
+      # The Go library default is FALSE — only this template-level
+      # opt-in enables the destructive behaviour.
+      #
+      # See: docs/installer/factory-reset.md
+      factory-reset-on-firstboot: true
+
+# Operating system configuration
+os:
+  os: alpine
+  version: "3.22.2"
+  architecture: x86_64
+  hostname: trusted-platform.local
+  packages:
+    - bash
+    - vim
+    - curl
+    - wget
+    - htop
+    - lsblk
+    - parted
+    - e2fsprogs
+    - lvm2
+    - tpm2-tools
+    - dracut
+    - softhsm
+    - openvswitch
+    - openvswitch-openrc
+  kernel-modules:
+    - igb
+    - ixgbe
+    - e1000e
+    - i40e
+    - ice
+    - openvswitch
+    - vxlan
+  filesystem-type: lvm
+  fips: false
+  lockdown: true
+  lockdown-mode: confidentiality
+  tpm-auto-upgrade-seal: true
+  enable-fido2: false
+  ima:
+    enabled: false
+    policy: tcb
+    hash-algorithm: sha256
+    evm: false
+    appraise-mode: off
+    audit-enabled: true
+
+# Network configuration for installed system
+#
+# Single-node default: one NIC (eth0) gets its address from upstream DHCP
+# (home/office router). A single internal OVS bridge (trusted0) hosts
+# local VMs and containers with an RFC1918 subnet NAT'd out eth0.
+#
+# Operators should override `network.interfaces[].name` to match their
+# actual NIC (run `ip link` on the target host).
+network:
+  dns:
+    nameservers:
+      - 1.1.1.1
+      - 1.0.0.1
+    search-domains:
+      - trusted-platform.local
+  subnets:
+    - name: trusted
+      scope: internal
+      cidr: 192.168.100.0/24
+      gateway: 192.168.100.1
+      dns:
+        - 192.168.100.1
+      dhcp:
+        enabled: true
+        range-start: 192.168.100.10
+        range-end: 192.168.100.254
+        lease-duration: 24h
+  interfaces:
+    - name: eth0
+      type: dhcp
+      auto-start: true
+  bridges:
+    - name: trusted0
+      type: ovs
+      auto-start: true
+      stp: false
+      # No uplink interface attached — bridge is host-local for VMs/containers.
+      # Operators who want L2 extension to a physical port should add:
+      #   interfaces: [ eth1 ]
+  bonds: []
+  vlans: []
+  wait-online: true
+  wait-timeout: 30
+
+# UKI (Unified Kernel Image) configuration
+uki:
+  cmdline: "root=/dev/mapper/vg0-root ro quiet"
+  kernel-path: /boot/vmlinuz-lts
+  initramfs-path: /boot/initramfs-lts
+
+# Secure Boot configuration
+secure-boot:
+  key-path: /boot/efi/secure-boot/db.key
+  cert-path: /boot/efi/secure-boot/db.crt
+
+# Enable TPM-based LUKS key sealing
+enable-tpm-sealing: true
+
+# PCR registers to seal LUKS keys against
+# This is THE SINGLE SOURCE OF TRUTH for seal PCRs used by:
+# - Installer (initial LUKS key sealing)
+# - Initrd firstboot (writes to pcr-banks file)
+# - Initrd boot (reads from config or pcr-banks file)
+#
+# Common PCRs:
+#   0: BIOS/UEFI firmware
+#   7: Secure Boot state
+#   9: Kernel command line
+#   10: Linux IMA - DON'T USE for LUKS (changes on every boot)
+seal-pcrs:
+  - 0
+  - 7
+  - 9
+
+# FIDO2 configuration
+enable-fido2-enrollment: false
+fido2:
+  relying-party-id: cp.example.com
+  keyslot: 3
+  user-presence-required: true
+  timeout: 60
+
+
+# =============================================================================
+# DNS CONFIGURATION
+# =============================================================================
+
+dns:
+  resolver:
+    servers:
+      - address: "127.0.0.1"
+        port: 8053
+    fallback:
+      - "1.1.1.1:53"
+      - "8.8.8.8:53"
+    local-forwarder:
+      enabled: false
+  allow-registration: true
+  allow-external-registration: true
+  allow-internal-registration: true
+  quicbaas:
+    data-dir: /var/lib/trusted-platform/quicbaas
+    storage-backend: file
+    node-id: 1
+    cache-size: 67108864
+    log-level: warn
+    consistency-level: linearizable
+    request-timeout: 30s
+  default-ttl: 3600
+  dnssec:
+    enabled: true
+    default-key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+    signature-expiry: 30d
+    nsec-mode: nsec3
+    nsec3-iterations: 1
+    nsec3-salt: ""
+    ksk:
+      lifetime: 365d
+      ttl: 86400
+    zsk:
+      lifetime: 30d
+      ttl: 3600
+  dane:
+    enabled: true
+    auto-generate: true
+    default-port: 8443
+    ttl: 3600
+    default-usage: 2
+    default-selector: 1
+    default-matching-type: 1
+    publish-dane-ee: true
+    key-reuse: true
+    rollover-ttl: 0
+  public:
+    port: 8053
+    forwarders:
+      - 1.1.1.1
+      - 8.8.8.8
+    zone:
+      description: Public zone for cp.example.com
+      name: example.com.
+      ttl: 3600
+      records:
+        soa:
+          name: cp.example.com.
+          mname: ns1.cp.example.com.
+          rname: hostmaster.cp.example.com.
+          serial: 1
+          refresh: 86400
+          retry: 7200
+          expire: 86400
+          minimum_ttl: 3600
+          ttl: 3600
+        ns:
+          - name: cp.example.com.
+            value: ns1.cp.example.com.
+            ttl: 3600
+        a:
+          - name: "@"
+            value: ${PUBLIC_IPv4}
+            ttl: 3600
+          - name: ns1
+            value: ${PUBLIC_IPv4}
+            ttl: 3600
+          - name: www
+            value: ${PUBLIC_IPv4}
+            ttl: 3600
+        cname:
+          - name: www
+            value: cp.example.com.
+            ttl: 3600
+        mx:
+          - name: cp.example.com.
+            value: mail.cp.example.com.
+            priority: 10
+            ttl: 3600
+        txt:
+          - name: cp.example.com.
+            value: v=spf1 include:_spf.google.com ~all
+            ttl: 3600
+  internal:
+    port: 9053
+    forwarders:
+      - 127.0.0.1:8053
+    zone:
+      description: Internal zone for example.internal
+      name: example.internal.
+      ttl: 3600
+      internal: true
+      records:
+        soa:
+          name: example.internal.
+          mname: ns1.example.internal.
+          rname: hostmaster.example.internal.
+          serial: 1
+          refresh: 86400
+          retry: 7200
+          expire: 86400
+          minimum_ttl: 3600
+          ttl: 3600
+        ns:
+          - name: example.internal.
+            value: ns1.example.internal.
+            ttl: 3600
+        a:
+          - name: "@"
+            value: ${PRIVATE_IPv4}
+            ttl: 3600
+          - name: ns1
+            value: ${PRIVATE_IPv4}
+            ttl: 3600
+          - name: ${HOSTNAME}
+            value: ${PRIVATE_IPv4}
+            ttl: 3600
+        cname:
+          - name: www
+            value: example.internal.
+            ttl: 3600
+
+
+# =============================================================================
+# ACME CLIENT CONFIGURATION
+# =============================================================================
+
+acme:
+  client:
+    directory: https://cp.example.internal:9443/api/v1/acme/directory
+    account:
+      email: hostmaster@cp.example.com
+      key:
+        # TPM 2.0 ECDSA
+        algorithm: ECDSA
+        cn: acme-account
+        debug: true
+        hash: SHA-256
+        password: "kms://acme/account-key/password?ensure=true&len=32&enc=base64"
+        platform-policy: true
+        ecc:
+          curve: P-256
+        signature-algorithm: ECDSA-SHA256
+        store: tpm2
+      register: true
+
+
+# =============================================================================
+# DATASTORE CONFIGURATION
+# =============================================================================
+
+bmc:
+  address: 198.18.0.1
+  port: 623
+  username: admin
+  password: "kms://bmc/password?ensure=true&len=16&enc=base64"
+  protocol: ipmi
+
+# QuicBaaS runs in STANDALONE EMBEDDED MODE (non-HA reference architecture).
+# storage-backend=file with node-id=1 and no join-addresses means Raft
+# consensus is NOT engaged. For HA, switch to storage-backend=raft and
+# populate join-addresses (see configs/platform/templates/high-availability/).
+quicbaas:
+  data-dir: /var/lib/trusted-platform/quicbaas
+  storage-backend: file
+  node-id: 1
+  cache-size: 67108864
+  log-level: warn
+  consistency-level: linearizable
+  request-timeout: 30s
+
+
+# =============================================================================
+# SDN CONFIGURATION
+# =============================================================================
+
+sdn:
+  enabled: true
+  controller: true
+  ovs:
+    socket: /var/run/openvswitch/db.sock
+    bridge: trusted0
+    datapath: system
+    protocols:
+      - OpenFlow13
+      - OpenFlow15
+  ipam:
+    backend: quicbaas
+    pools:
+      - name: trusted
+        cidr: 192.168.100.0/24
+        gateway: 192.168.100.1
+        dns:
+          - 192.168.100.1
+        range-start: 192.168.100.10
+        range-end: 192.168.100.254
+        lease-duration: 24h
+        dhcp: true
+  dhcp:
+    enabled: true
+    interface: trusted0
+  networks:
+    trusted:
+      pool: trusted
+  # Physical switch fabric not used in single-node (box only sees its
+  # own NICs, no managed switches). Add switches under `fabric:` only
+  # when promoting this node to a multi-box deployment.
+  fabric:
+    mode: vlan
+    switches: []
+    peers: []
+    segments:
+      # Single-node trusted segment. No role (empty = general data
+      # plane); only `provisioning` and `quarantine` are first-class
+      # fabric roles. Assign any VLAN in 1-4094 — `100` is a common
+      # homelab default for the trusted LAN.
+      - name: trusted
+        vlan: 100
+  overlay:
+    enabled: false
+    vxlan-port: 4789
+  # Gateway data-plane services run in the separate `gatewayd` daemon
+  # on the same host. This block tells platformd about the gatewayd
+  # endpoint for OVS delegation. gatewayd itself is configured via
+  # the `gatewayd:` top-level block below.
+  gateway:
+    enabled: true
+    mode: edge
+    endpoint: unix:///run/gatewayd.sock
+
+
+# =============================================================================
+# GATEWAYD CONFIGURATION
+# =============================================================================
+#
+# gatewayd runs alongside platformd on the same host (single-node). It
+# holds CAP_NET_ADMIN + CAP_NET_BIND_SERVICE and delegates OVS/flow
+# operations to platformd's root master over the platformd unix socket.
+#
+# For a pure control-plane node (no local data plane), set
+# `gatewayd.enabled: false` and gatewayd.service will not start.
+
+gatewayd:
+  enabled: true
+  data-dir: /var/lib/trusted-platform/gatewayd
+  log-level: info
+  # REST/gRPC listen addresses — bound to localhost only by default;
+  # platformctl talks to gatewayd over the unix socket.
+  api:
+    rest-listen: 127.0.0.1:8080
+    grpc-listen: 127.0.0.1:10444
+    unix-socket: /run/gatewayd.sock
+  # Service enablement — flip to true as needed per deployment.
+  edge:
+    enabled: true
+  dhcp:
+    enabled: false
+    # DHCP server off by default. Enable when this box should serve
+    # DHCP for the `trusted` subnet to local VMs/containers.
+    pools:
+      - subnet: 192.168.100.0/24
+        gateway: 192.168.100.1
+        dns: [192.168.100.1]
+        range-start: 192.168.100.100
+        range-end: 192.168.100.200
+        lease-duration: 24h
+  firewall:
+    enabled: true
+    default-policy: drop
+    trusted-interfaces:
+      - trusted0
+  nat:
+    enabled: true
+    # NAT the internal trusted subnet out via eth0.
+    rules:
+      - source: 192.168.100.0/24
+        out-interface: eth0
+        type: masquerade
+  bgp:
+    enabled: false
+    # Single-node typically sits behind a consumer router. Enable
+    # and populate asn + router-id + neighbors for dedicated/HA.
+  load-balancer:
+    enabled: false
+  tunnels:
+    enabled: false
+
+
+# =============================================================================
+# TPM CONFIGURATION
+# =============================================================================
+
+tpm:
+  device: /dev/tpmrm0
+  simulator: false
+  encrypt-sessions: false
+  entropy: false
+  hash: SHA-256
+  ek:
+    debug: true
+    handle: 0x81010001
+    hash: SHA-256
+    password:
+    rsa:
+      size: 2048
+  ssrk:
+    debug: true
+    handle: 0x81000001
+    hierarchy-auth:
+    password:
+    platform-policy: false
+    rsa:
+      size: 2048
+  iak:
+    auth:
+    debug: true
+    hash: SHA-256
+    handle: 0x81010002
+    password:
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSA
+  idevid:
+    model: control-plane
+    serial: tp-cp-01
+    cert-handle: 0x01C90000
+    debug: true
+    handle: 0x81020000
+    hash: SHA-256
+    pad: true
+    password:
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSA
+  platform-pcr: 23
+  platform-pcr-bank: sha256
+  # Golden PCRs for platform policy (separate from seal-pcrs)
+  # NOTE: PCR 10 (IMA) changes on every boot - DO NOT include for LUKS unlock!
+  # PCR 10 is only suitable for post-boot application key sealing when IMA measurements are complete.
+  golden-pcrs: [7, 9]
+  platform-srk:
+    srk-handle: 0x81000002
+    srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=base64"
+    platform-policy: true
+
+
+# =============================================================================
+# CERTIFICATE AUTHORITY CONFIGURATION
+# =============================================================================
+
+certificate-authority:
+  platform-ca: 1
+  auto-import-issuing-ca: true
+  system-cert-pool: false
+  default-validity: 365
+  default-idevid-cn: default-device-id
+  sans-include-localhost: true
+  require-password: true
+  quantum-safe: true
+  identity:
+    - # Root Certificate Authority
+      is-root: true
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000001
+          srk-auth: "kms://ca/root/tpm2/srk-auth?ensure=true&len=32&enc=base64"
+          platform-policy: true
+      keys:
+        # PKCS #8 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: tpm2
+          password: "kms://ca/root/keys/1/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: "kms://ca/root/keys/2/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: "kms://ca/root/keys/3/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 Ed25519
+        - algorithm: Ed25519
+          ecc:
+            curve: P-256
+          signature-algorithm: Ed25519
+          hash: SHA-256
+          store: software
+          password: "kms://ca/root/keys/4/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+      valid: 50
+      subject:
+        cn: root-ca.cp.example.com
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns:
+          - root-ca.cp.example.com
+        email:
+          - hostmaster@cp.example.com
+
+    - # Intermediate Certificate Authority
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000001
+          srk-auth: "kms://ca/issuing/tpm2/srk-auth?ensure=true&len=32&enc=base64"
+          platform-policy: true
+      keys:
+        - # PKCS #8 RSA w/ PSS
+          algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: "kms://ca/issuing/keys/0/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: tpm2
+          password: "kms://ca/issuing/keys/1/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: "kms://ca/issuing/keys/2/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: "kms://ca/issuing/keys/3/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 Ed25519
+        - algorithm: Ed25519
+          ecc:
+            curve: P-256
+          signature-algorithm: Ed25519
+          hash: SHA-256
+          store: software
+          password: "kms://ca/issuing/keys/4/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+      valid: 10
+      subject:
+        cn: ca01.cp.example.com
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns:
+          - ca01.cp.example.com
+          - ca.cp.example.com
+        email:
+          - hostmaster@cp.example.com
+
+
+# =============================================================================
+# WEBSERVICES CONFIGURATION
+# =============================================================================
+
+webservices:
+  # Public webservice - external/internet facing
+  - name: public
+    home: /var/lib/trusted-platform/public_html
+    port: 8080
+    tls-port: 8443
+    index: index.html
+    acme:
+      enabled: true
+      directory: https://cp.example.com/api/v1/acme/directory
+      terms-of-service: /tos.html
+      challenges:
+        - enroll-01
+        - device-attest-01
+        - dns-01
+        - endorse-01
+        - http-01
+        - http-8080
+        - http-8081
+        - enroll-8080
+        - enroll-8081
+    rewrite:
+    - pattern: "^/test.html$"
+      target: /swagger/
+    jwt:
+      expiration: 525960
+      issuer: trusted-platform
+    webauthn:
+      display-name: Trusted Platform
+      id: cp.example.com
+      origins:
+        - https://cp.example.com
+        - https://cp.example.com:8443
+        - http://cp.example.com
+        - http://cp.example.com:8080
+    cors:
+      allowed-origins:
+        - https://cp.example.com
+        - https://cp.example.com:8443
+        - http://cp.example.com
+        - http://cp.example.com:8080
+      allowed-methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+      allowed-headers:
+        - "*"
+      allow-credentials: true
+    key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+      password: "kms://webservices/0/key/password?ensure=true&len=32&enc=base64"
+      platform-policy: true
+      debug: true
+    certificate:
+      # Public webservice TLS — issued by the platform's internal ACME
+      # directory via http-01 (self-referential for single-node — the
+      # ACME server and client both run on this host), then cross-signed
+      # by a public ACME directory so browsers trust the chain.
+      # Operator owns public DNS + upstream routing; Alpine ships
+      # without a host firewall so inbound :80 reaches platformd on
+      # 0.0.0.0 without extra configuration.
+      acme:
+        challenge: http-01
+        authz-type: dns
+        authz-value: cp.example.com
+        renew: 15
+        cross-sign:
+          directory: https://acme-staging-v02.api.letsencrypt.org/directory
+          challenge: http-01
+      subject:
+        cn: cp.example.com
+        organization: ACME Corporation
+        country: US
+        province: Florida
+        locality: West Palm Beach
+        address: 123 Automation Street
+        postal-code: 12345
+      sans:
+        dns:
+          - cp.example.com
+          - www.cp.example.com
+        email:
+          - hostmaster@cp.example.com
+
+  # Internal webservice - local network facing
+  - name: internal
+    home: /var/lib/trusted-platform/public_html
+    port: 9080
+    tls-port: 9443
+    index: index.html
+    acme:
+      enabled: true
+      directory: https://cp.example.internal:9443/api/v1/acme/directory
+      terms-of-service: /tos.html
+      challenges:
+        - enroll-01
+        - device-attest-01
+        - dns-01
+        - endorse-01
+        - http-01
+        - http-8080
+        - http-8081
+        - enroll-8080
+        - enroll-8081
+    jwt:
+      expiration: 525960
+      issuer: trusted-platform
+    cors:
+      allowed-origins:
+        - https://cp.example.internal
+        - http://cp.example.internal
+      allowed-methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+      allowed-headers:
+        - "*"
+      allow-credentials: true
+    webauthn:
+      display-name: Trusted Platform Internal
+      id: cp.example.internal
+      origins:
+        - https://cp.example.internal
+        - https://cp.example.internal:9443
+        - http://cp.example.internal
+        - http://cp.example.internal:9080
+    key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+      password: "kms://webservices/1/key/password?ensure=true&len=32&enc=base64"
+      platform-policy: true
+      debug: true
+    certificate:
+      subject:
+        cn: cp.example.internal
+        organization: ACME Corporation
+        country: US
+        province: Florida
+        locality: West Palm Beach
+        address: 123 Automation Street
+        postal-code: 12345
+      sans:
+        dns:
+          - cp.example.internal
+        email:
+          - hostmaster@cp.example.com

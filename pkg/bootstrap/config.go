@@ -13,7 +13,11 @@
 
 package bootstrap
 
-import "time"
+import (
+	"os"
+	"strings"
+	"time"
+)
 
 // Bootstrap strategy constants define the supported trust bootstrap methods.
 const (
@@ -61,8 +65,19 @@ type ClientNoiseConfig struct {
 }
 
 // ClientSPKIConfig configures SPKI-pinned TLS client bootstrap.
+//
+// Either Pin (the literal base64-std SHA-256 of the server SPKI) or
+// PinFile (a path on disk holding the same value) must be set. PinFile
+// is the form the autoinstall flow writes during install:
+// /etc/trusted-platform/bootstrap-spki-pin. Direct Pin is used when an
+// operator hand-curates the deploy YAML.
 type ClientSPKIConfig struct {
 	Pin string `yaml:"pin" json:"pin" mapstructure:"pin"`
+	// PinFile is an absolute path to a file containing the
+	// base64-std SHA-256 SPKI pin (whitespace tolerated, single
+	// pin per file). Resolved by Validate so callers see Pin
+	// populated regardless of which form the YAML used.
+	PinFile string `yaml:"pin-file" json:"pin_file" mapstructure:"pin-file"`
 }
 
 // DefaultConfig returns a Config with sensible defaults for the bootstrap server.
@@ -131,10 +146,24 @@ func (c *ClientConfig) Validate() error {
 				Reason: "SPKI configuration is required for spki strategy",
 			}
 		}
+		// Resolve PinFile into Pin if Pin is unset. The autoinstall
+		// flow writes /etc/trusted-platform/bootstrap-spki-pin; this
+		// reconciliation lets the YAML reference the file path
+		// instead of duplicating the value.
+		if c.SPKI.Pin == "" && c.SPKI.PinFile != "" {
+			data, err := os.ReadFile(c.SPKI.PinFile)
+			if err != nil {
+				return &ErrInvalidConfig{
+					Field:  "spki.pin-file",
+					Reason: "could not read pin file: " + err.Error(),
+				}
+			}
+			c.SPKI.Pin = strings.TrimSpace(string(data))
+		}
 		if c.SPKI.Pin == "" {
 			return &ErrInvalidConfig{
 				Field:  "spki.pin",
-				Reason: "SPKI pin is required for spki strategy",
+				Reason: "SPKI pin is required for spki strategy (set spki.pin or spki.pin-file)",
 			}
 		}
 	}

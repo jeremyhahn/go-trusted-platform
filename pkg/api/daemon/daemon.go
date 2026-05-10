@@ -38,11 +38,12 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // DaemonOption is a functional option for configuring the Daemon
@@ -85,33 +86,52 @@ func WithGRPCUDSServer(s GRPCServerInterface) DaemonOption {
 
 // Daemon manages the platformd daemon lifecycle
 type Daemon struct {
-	config             *Config
-	logger             *logging.Logger
-	grpcServer         GRPCServerInterface // gRPC server for TCP
-	grpcListener       net.Listener
-	grpcUDSServer      GRPCServerInterface // gRPC server for Unix socket
-	grpcUDSListener    net.Listener        // Unix socket listener for gRPC
-	quicServer         QUICServerInterface
-	quicHandler        *QUICServiceHandler
-	restServer         RESTServerInterface
-	service            *Service
-	caService          *CAGRPCService
-	sdnService         *SDNService
-	kmsService         *KMSService
-	iamService         *IAMService
-	tenantService      *TenantService
-	vtpmService        *VTPMServiceServer
-	deviceService      *DeviceGRPCService
-	computeService     *ComputeGRPCService
-	idevidService      *IDevIDGRPCService
-	tpmService         *TPMGRPCService
-	barrierService     *BarrierGRPCService
-	attestationService *AttestationServiceServer
-	registryService    *grpccreds.RegistryGRPCService
-	tpm2Service        xkmssdk.TrustedPlatformModule
-	mcpServer          MCPServerInterface
-	mcpProvider        *MCPServiceProvider
-	healthRegistry     health.Registry
+	config                *Config
+	logger                *logging.Logger
+	grpcServer            GRPCServerInterface // gRPC server for TCP
+	grpcListener          net.Listener
+	grpcUDSServer         GRPCServerInterface // gRPC server for Unix socket
+	grpcUDSListener       net.Listener        // Unix socket listener for gRPC
+	quicServer            QUICServerInterface
+	quicHandler           *QUICServiceHandler
+	restServer            RESTServerInterface
+	service               *Service
+	caService             *CAGRPCService
+	sdnService            *SDNService
+	kmsService            *KMSService
+	iamService            *IAMService
+	tenantService         *TenantService
+	vtpmService           *VTPMServiceServer
+	deviceService         *DeviceGRPCService
+	computeService        *ComputeGRPCService
+	idevidService         *IDevIDGRPCService
+	tpmService            *TPMGRPCService
+	barrierService        *BarrierGRPCService
+	attestationService    *AttestationServiceServer
+	registryService       *grpccreds.RegistryGRPCService
+	// grpcAuthValidator and quicAuthValidator are kept around so the
+	// daemon can late-bind a platform JWT verifier after webservices
+	// initialize (the JWT signing key isn't available at daemon.New).
+	grpcAuthValidator *grpcTokenValidator
+	quicAuthValidator *grpcTokenValidator
+	tpm2Service           xkmssdk.TrustedPlatformModule
+	ceremonyService       *CeremonyGRPCService
+	pivService            *PIVGRPCService
+	luksService           *LUKSGRPCService
+	fido2Service          *FIDO2GRPCService
+	mcpServer             MCPServerInterface
+	mcpProvider           *MCPServiceProvider
+	bmcService            BMCServicer
+	eabService            EABServicer
+	eabGRPCService        *EABGRPCService
+	eabDelivery           EABDeliveryServicer
+	clusterService        ClusterServicer
+	invitationService     platformservice.InvitationServicer
+	invitationGRPCService *InvitationGRPCService
+	gatewayGRPCService    *GatewayService
+	overlayGRPCService    *OverlayService
+	pxeGRPCService        *PXEGRPCService
+	healthRegistry        health.Registry
 
 	// Concrete server references for accessor methods (set only for real servers)
 	concreteRestServer    *RESTServer
@@ -137,6 +157,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if logger == nil {
 		logger = logging.DefaultLogger()
 	}
+
+	// grpcAuthValidator + quicAuthValidator are populated later when the
+	// gRPC TCP / QUIC servers configure their auth interceptors. The
+	// outer scope holds the references so we can attach them to the
+	// returned *Daemon (and late-bind a platform JWT verifier after
+	// webservices initialize).
+	var grpcAuthValidator *grpcTokenValidator
+	var quicAuthValidator *grpcTokenValidator
 
 	// Create the daemon service implementation
 	service, err := NewService(config)
@@ -223,12 +251,26 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			// Skip authentication when SkipIAMValidation is set (testing mode)
 			var tokenValidator grpccreds.TokenValidator
 			if !config.SkipIAMValidation && config.App != nil {
+				var localValidator *grpcTokenValidator
 				dbSvc := config.App.QuicBaaSService()
 				if dbSvc != nil {
 					// Adapt QuicBaaS service to ServiceInterface for token validation
 					svcAdapter := &quicbaasServiceAdapter{svc: dbSvc}
-					tokenValidator = newGRPCTokenValidator(svcAdapter, logger)
+					localValidator = newGRPCTokenValidator(svcAdapter, logger)
 					logger.Info("gRPC TCP server: OIDC authentication enabled via QuicBaaS")
+				} else if config.PlatformJWTVerifier != nil {
+					// QuicBaaS auth not available, but platform JWT is —
+					// build a JWT-only validator so /api/v1/login tokens
+					// still authenticate over gRPC TCP.
+					localValidator = newGRPCTokenValidator(nil, logger)
+				}
+				if localValidator != nil {
+					if config.PlatformJWTVerifier != nil {
+						localValidator.SetJWTVerifier(config.PlatformJWTVerifier)
+						logger.Info("gRPC TCP server: platform JWT verification enabled")
+					}
+					tokenValidator = localValidator
+					grpcAuthValidator = localValidator
 				}
 			}
 
@@ -384,6 +426,19 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 			logger.Info("IAM service initialized (using QuicBaaS SDK clients)")
 
+			// Wire the PlatformIAMService gRPC handler so platformctl --transport
+			// {unix,grpc,quic} iam … reaches IAM operations. Without this the
+			// gRPC servers report "unknown service platform.v1.PlatformIAMService"
+			// even though the REST router has IAM available via the embedded
+			// transport.
+			iamGRPCService := NewIAMGRPCService(logger.Slog(), iamService.Client(), iamService.PEP())
+			if grpcServer != nil {
+				platformv1.RegisterPlatformIAMServiceServer(grpcServer, iamGRPCService)
+			}
+			if grpcUDSServer != nil {
+				platformv1.RegisterPlatformIAMServiceServer(grpcUDSServer, iamGRPCService)
+			}
+
 			// Create Tenant service (depends on IAM/QuicBaaS)
 			var tenantErr error
 			tenantService, tenantErr = NewTenantService(config.App, logger.Slog())
@@ -487,24 +542,23 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Info("Compute service not available (ComputeOrchestrator not configured)")
 	}
 
-	// Create Attestation gRPC service if AttestationService is configured
-	var attestationService *AttestationServiceServer
+	// Always construct the Attestation gRPC service. When the
+	// AttestationService backend is configured the server returns real
+	// data; when it is not (or when built without the attestation_grpc
+	// tag) the stub returns codes.Unimplemented for each method. Either
+	// way the gRPC method set is registered so REST/CLI clients receive
+	// a proper 501 instead of a misleading 404 from a missing route.
+	attestationService := NewAttestationServiceServer(config.AttestationService, logger.Slog())
+	if grpcServer != nil {
+		platformv1.RegisterAttestationServiceServer(grpcServer, attestationService)
+	}
+	if grpcUDSServer != nil {
+		platformv1.RegisterAttestationServiceServer(grpcUDSServer, attestationService)
+	}
 	if config.AttestationService != nil {
-		attestationService = NewAttestationServiceServer(config.AttestationService, logger.Slog())
-
-		// Register with TCP gRPC server if enabled
-		if grpcServer != nil {
-			platformv1.RegisterAttestationServiceServer(grpcServer, attestationService)
-		}
-
-		// Register with UDS gRPC server if enabled
-		if grpcUDSServer != nil {
-			platformv1.RegisterAttestationServiceServer(grpcUDSServer, attestationService)
-		}
-
-		logger.Info("Attestation service initialized and registered successfully")
+		logger.Info("Attestation service initialized with backend implementation")
 	} else {
-		logger.Info("Attestation service not available (AttestationService not configured)")
+		logger.Info("Attestation gRPC service registered (stub - returns Unimplemented for all operations)")
 	}
 
 	// Create Registry gRPC service if RegistryService is configured
@@ -527,8 +581,19 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Info("Registry service not available (RegistryService not configured)")
 	}
 
-	// Create IDevID gRPC service - always created, TPM2 service injected later via SetTPM2Service
+	// Create IDevID gRPC service and wire the live TPM from the App at
+	// construction — the previous "inject later via SetTPM2Service"
+	// pattern was never completed in the startup path, so every call
+	// returned FailedPrecondition "TPM2 service not initialized" even
+	// though app.TPM was alive. This mirrors the TPM gRPC service
+	// wiring below so both services are ready to serve on first call.
 	idevidService := NewIDevIDGRPCService(logger)
+	if config.App != nil && config.App.TPM != nil {
+		idevidService.SetTPM2Service(config.App.TPM)
+		logger.Info("IDevID gRPC service wired to app.TPM")
+	} else {
+		logger.Warn("IDevID gRPC service created but app.TPM is nil; IDevID/IAK ops will return FailedPrecondition")
+	}
 
 	// Register with TCP gRPC server if enabled
 	if grpcServer != nil {
@@ -599,8 +664,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("EAB gRPC service registered (stub)")
 
-	// Create Invitation gRPC service - stub returning Unimplemented
-	invitationService := NewInvitationGRPCService(logger)
+	// Create Invitation gRPC service. The InvitationServicer is injected
+	// later (see createMCPServer) once the Daemon struct exists. Until
+	// SetService is called the service returns Unimplemented per the
+	// legacy stub.
+	invitationService := NewInvitationGRPCService(logger, nil)
 	if grpcServer != nil {
 		platformv1.RegisterInvitationServiceServer(grpcServer, invitationService)
 	}
@@ -642,6 +710,66 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("PXE gRPC service registered")
 
+	// Create Switch gRPC service - stub returning Unimplemented
+	// Full implementation wired when switch service is available
+	switchGRPCService := NewSwitchGRPCService(logger, nil)
+	if grpcServer != nil {
+		platformv1.RegisterSwitchServiceServer(grpcServer, switchGRPCService)
+	}
+	if grpcUDSServer != nil {
+		platformv1.RegisterSwitchServiceServer(grpcUDSServer, switchGRPCService)
+	}
+	logger.Info("Switch gRPC service registered")
+
+	// Create Ceremony gRPC service (Phase 3.5 scaffolding).
+	// Backend is wired post-construction via SetCeremonyBackend once the
+	// app-level ceremony backend is available. Until then, handlers return
+	// Unavailable with ErrCeremonyNotConfigured.
+	ceremonySvc := NewCeremonyService(logger, nil)
+	ceremonyGRPCService := NewCeremonyGRPCService(logger, ceremonySvc)
+	if grpcServer != nil {
+		platformv1.RegisterCeremonyServiceServer(grpcServer, ceremonyGRPCService)
+	}
+	if grpcUDSServer != nil {
+		platformv1.RegisterCeremonyServiceServer(grpcUDSServer, ceremonyGRPCService)
+	}
+	logger.Info("Ceremony gRPC service registered (Phase 3.5)")
+
+	// Create PIV gRPC service (Phase 3.5 scaffolding).
+	pivSvc := NewPIVService(logger, nil)
+	pivGRPCService := NewPIVGRPCService(logger, pivSvc)
+	if grpcServer != nil {
+		platformv1.RegisterPIVServiceServer(grpcServer, pivGRPCService)
+	}
+	if grpcUDSServer != nil {
+		platformv1.RegisterPIVServiceServer(grpcUDSServer, pivGRPCService)
+	}
+	logger.Info("PIV gRPC service registered (Phase 3.5)")
+
+	// Create LUKS gRPC service (Phase 3.5 scaffolding).
+	// Root checker is conservative by default — no mutating operation
+	// succeeds unless a real root-aware checker is injected later.
+	luksSvc := NewLUKSService(logger, nil, nil)
+	luksGRPCService := NewLUKSGRPCService(logger, luksSvc)
+	if grpcServer != nil {
+		platformv1.RegisterLUKSServiceServer(grpcServer, luksGRPCService)
+	}
+	if grpcUDSServer != nil {
+		platformv1.RegisterLUKSServiceServer(grpcUDSServer, luksGRPCService)
+	}
+	logger.Info("LUKS gRPC service registered (Phase 3.5)")
+
+	// Create FIDO2 gRPC service (Phase 3.5 scaffolding).
+	fido2Svc := NewFIDO2Service(logger, nil)
+	fido2GRPCService := NewFIDO2GRPCService(logger, fido2Svc)
+	if grpcServer != nil {
+		platformv1.RegisterFIDO2ServiceServer(grpcServer, fido2GRPCService)
+	}
+	if grpcUDSServer != nil {
+		platformv1.RegisterFIDO2ServiceServer(grpcUDSServer, fido2GRPCService)
+	}
+	logger.Info("FIDO2 gRPC service registered (Phase 3.5)")
+
 	logger.Info("Creating health registry...")
 	// Create health registry
 	healthRegistry := health.NewRegistry()
@@ -672,10 +800,20 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		} else if !config.SkipIAMValidation && config.App != nil {
 			// Fall back to OIDC token authentication via QuicBaaS
 			dbSvc := config.App.QuicBaaSService()
+			var quicTokenValidator *grpcTokenValidator
 			if dbSvc != nil {
 				// Adapt QuicBaaS service to ServiceInterface for token validation
 				svcAdapter := &quicbaasServiceAdapter{svc: dbSvc}
-				quicTokenValidator := newGRPCTokenValidator(svcAdapter, logger)
+				quicTokenValidator = newGRPCTokenValidator(svcAdapter, logger)
+			} else if config.PlatformJWTVerifier != nil {
+				quicTokenValidator = newGRPCTokenValidator(nil, logger)
+			}
+			if quicTokenValidator != nil {
+				if config.PlatformJWTVerifier != nil {
+					quicTokenValidator.SetJWTVerifier(config.PlatformJWTVerifier)
+					logger.Info("QUIC server: platform JWT verification enabled")
+				}
+				quicAuthValidator = quicTokenValidator
 				quicAuthMiddleware = quic.NewAuthMiddleware(
 					quic.WithQUICTokenValidator(quicTokenValidator),
 					quic.WithQUICRequireAuth(true),
@@ -707,6 +845,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// Set Device service if available
 		if config.DeviceService != nil {
 			quicHandler.SetDeviceService(config.DeviceService)
+		}
+
+		// Set Device Profile service if available so QUIC profile sub-opcodes
+		// (Get/List/Create/Delete profile) return real data instead of
+		// StatusUnavailable + ErrDeviceProfileServiceNotAvailable.
+		if config.DeviceProfileService != nil {
+			quicHandler.SetDeviceProfileService(config.DeviceProfileService)
 		}
 
 		// Set Container orchestrator if available
@@ -753,6 +898,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		quicHandler.SetOverlayHandler(quic.NewOverlayHandler(quicLogger, nil))
 		quicHandler.SetGatewayHandler(quic.NewGatewayHandler(quicLogger, nil))
 		logger.Debug("Overlay and gateway handlers set for QUIC handler")
+
+		// Wire Phase 3.5 services into QUIC handler. The service layers have
+		// nil backends until the app-level wiring is complete — handlers
+		// return Unavailable until then.
+		quicHandler.SetCeremonyService(ceremonySvc)
+		quicHandler.SetPIVService(pivSvc)
+		quicHandler.SetLUKSService(luksSvc)
+		quicHandler.SetFIDO2Service(fido2Svc)
 
 		// Prepare QUIC server configuration
 		quicConfig := config.QUICConfig
@@ -820,6 +973,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	daemon := &Daemon{
 		config:                config,
 		logger:                logger,
+		grpcAuthValidator:     grpcAuthValidator,
+		quicAuthValidator:     quicAuthValidator,
 		grpcServer:            grpcServerIntf,
 		grpcUDSServer:         grpcUDSServerIntf,
 		concreteGrpcUDSServer: grpcUDSServer,
@@ -839,12 +994,35 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		idevidService:         idevidService,
 		tpmService:            tpmService,
 		barrierService:        barrierService,
+		ceremonyService:       ceremonyGRPCService,
+		pivService:            pivGRPCService,
+		luksService:           luksGRPCService,
+		fido2Service:          fido2GRPCService,
+		invitationGRPCService: invitationService,
+		eabGRPCService:        eabService,
+		gatewayGRPCService:    gatewayService,
+		overlayGRPCService:    overlayService,
+		pxeGRPCService:        pxeGRPCService,
 		healthRegistry:        healthRegistry,
 	}
 
 	// Apply functional options (allows overriding servers with mocks)
 	for _, opt := range opts {
 		opt(daemon)
+	}
+
+	// Wire the platform InvitationServicer from the App's service registry
+	// so the gRPC/MCP/REST invitation surfaces all share one backend
+	// instead of returning Unimplemented.
+	if daemon.invitationService == nil && config.App != nil {
+		if reg := config.App.ServiceRegistry(); reg != nil {
+			if svc := reg.InvitationService(); svc != nil {
+				daemon.invitationService = svc
+				if daemon.invitationGRPCService != nil {
+					daemon.invitationGRPCService.SetService(svc)
+				}
+			}
+		}
 	}
 
 	// Create REST server if enabled and not overridden by option
@@ -867,10 +1045,61 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Info("vTPM service wired into REST server")
 	}
 
+	// Wire device + profile REST handlers if the services are available.
+	// Without this, /api/v1/devices/* would not be served and the REST
+	// adapter for `platformctl --protocol rest device list` would 404.
+	if daemon.concreteRestServer != nil && (config.DeviceService != nil || config.DeviceProfileService != nil) {
+		daemon.concreteRestServer.SetDeviceHandlers(config.DeviceService, config.DeviceProfileService)
+	}
+
+	// Wire CA REST handlers if the CA service is available. Without this,
+	// /api/v1/ca/* would not be served and the REST adapter for
+	// `platformctl --protocol rest ca list` would 404. The handlers share
+	// the same CA instance as the gRPC, QUIC, MCP and Unix-socket adapters
+	// so all transports return identical results.
+	if daemon.concreteRestServer != nil && config.CAService != nil {
+		daemon.concreteRestServer.SetCAHandlers(config.CAService)
+	}
+
+	// Wire platform tenant manager into REST handlers + gRPC server when
+	// available. Without this, /api/v1/tenants/* would 404 and the gRPC
+	// TenantService methods would return FailedPrecondition. The manager
+	// instance is shared across REST, gRPC, QUIC, MCP, and Unix so every
+	// transport sees identical per-tenant state including barrier lifecycle.
+	if config.PlatformTenantManager != nil {
+		if daemon.concreteRestServer != nil {
+			daemon.concreteRestServer.SetTenantHandlers(config.PlatformTenantManager)
+		}
+		if daemon.tenantService != nil && daemon.tenantService.grpcServer != nil {
+			daemon.tenantService.grpcServer.SetManager(config.PlatformTenantManager)
+			logger.Info("Platform tenant manager wired into gRPC TenantService")
+		}
+	}
+
 	// Wire SDN service into REST server if both are available
 	if daemon.concreteRestServer != nil && daemon.sdnService != nil {
 		daemon.concreteRestServer.SetSDNService(daemon.sdnService.OVSClient())
 		logger.Info("SDN service wired into REST server")
+	}
+
+	// Wire Phase 3.5 services (ceremony/piv/luks/fido2) into REST server.
+	if daemon.concreteRestServer != nil {
+		if daemon.ceremonyService != nil && daemon.ceremonyService.service != nil {
+			daemon.concreteRestServer.SetCeremonyService(daemon.ceremonyService.service)
+		}
+		if daemon.pivService != nil && daemon.pivService.service != nil {
+			daemon.concreteRestServer.SetPIVService(daemon.pivService.service)
+		}
+		if daemon.luksService != nil && daemon.luksService.service != nil {
+			daemon.concreteRestServer.SetLUKSService(daemon.luksService.service)
+		}
+		if daemon.fido2Service != nil && daemon.fido2Service.service != nil {
+			daemon.concreteRestServer.SetFIDO2Service(daemon.fido2Service.service)
+		}
+		// Cluster REST always mounts; if no coordinator is wired the
+		// handlers return 503 with a clear "not configured" body so the
+		// dashboard can render an actionable empty state rather than 404.
+		daemon.concreteRestServer.SetClusterService(clusterGRPCService)
 	}
 
 	// Wire config delivery handler into REST server for pre-enrollment provisioning
@@ -896,13 +1125,31 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 	}
 
-	// Wire BMC handler into REST server for bare metal management
-	if daemon.concreteRestServer != nil {
-		bmcSvc, bmcErr := bmc.NewService(bmc.ServiceParams{
-			Factory: bmc.NewIPMIClientFactory(logger.Slog()),
-			Logger:  logger.Slog(),
-		})
-		if bmcErr == nil {
+	// Create BMC service for bare metal management. The same service
+	// powers the gRPC, REST and (when configured) the orchestrated
+	// baremetal provisioning workflows.
+	bmcSvc, bmcErr := bmc.NewService(bmc.ServiceParams{
+		Factory: bmc.NewIPMIClientFactory(logger.Slog()),
+		Logger:  logger.Slog(),
+	})
+	if bmcErr != nil {
+		logger.Warn("BMC service creation failed", "error", bmcErr)
+	} else {
+		// Register BMC gRPC service with both TCP and UDS endpoints.
+		// The baremetal service is left nil here; Provision and
+		// ProvisionStatus return FailedPrecondition until a baremetal
+		// orchestrator is wired via SetBaremetalService.
+		bmcGRPCService := NewBMCGRPCService(bmcSvc, nil, logger.Slog())
+		if grpcServer != nil {
+			platformv1.RegisterBMCServiceServer(grpcServer, bmcGRPCService)
+		}
+		if grpcUDSServer != nil {
+			platformv1.RegisterBMCServiceServer(grpcUDSServer, bmcGRPCService)
+		}
+		logger.Info("BMC gRPC service initialized and registered successfully")
+
+		// Wire BMC handler into REST server for bare metal management.
+		if daemon.concreteRestServer != nil {
 			respWriter := response.NewResponseWriter(logger, nil)
 			bmcHandler, bmcHandlerErr := bmcwebsvc.NewHandler(bmcwebsvc.HandlerParams{
 				BMCService:     bmcSvc,
@@ -915,9 +1162,12 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			} else {
 				logger.Warn("BMC handler creation failed", "error", bmcHandlerErr)
 			}
-		} else {
-			logger.Warn("BMC service creation failed", "error", bmcErr)
 		}
+
+		// Stash the BMC service so the MCP server (created below) can
+		// expose it via the platform_bmc_* tools. Direct field assignment
+		// keeps the gRPC and MCP surfaces backed by the same Servicer.
+		daemon.bmcService = bmcSvc
 	}
 
 	// Create MCP server if enabled and not overridden by option
@@ -932,6 +1182,17 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 	} else if !config.EnableMCP {
 		logger.Info("MCP server not enabled")
+	}
+
+	// Inject the live TPM into every protocol handler (REST, QUIC, MCP,
+	// plus the IDevID/TPM gRPC services). Without this, handlers that
+	// came up after the initial service construction (REST server, QUIC
+	// handler, MCP provider) return FailedPrecondition "TPM2 service
+	// not initialized". The gRPC IDevID/TPM services are already wired
+	// in-line above; this call is a belt-and-suspenders pass that also
+	// covers any handler created between service construction and now.
+	if config.App != nil && config.App.TPM != nil {
+		daemon.SetTPM2Service(config.App.TPM)
 	}
 
 	logger.Info("Registering health checkers...")
@@ -994,13 +1255,20 @@ func (w *grpcServerWrapper) Unwrap() *grpc.Server {
 func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 	// Create the MCP service provider that bridges MCP to daemon services
 	serviceProvider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		CAService:           d.caService,
-		VTPMService:         d.config.VTPMService,
-		DeviceService:       d.config.DeviceService,
-		SDNService:          d.sdnService,
-		HealthService:       d.service,
-		Logger:              d.logger.Slog(),
-		ComputeOrchestrator: d.config.ComputeOrchestrator,
+		CAService:            d.caService,
+		VTPMService:          d.config.VTPMService,
+		DeviceService:        d.config.DeviceService,
+		DeviceProfileService: d.config.DeviceProfileService,
+		SDNService:           d.sdnService,
+		HealthService:        d.service,
+		Logger:               d.logger.Slog(),
+		ComputeOrchestrator:  d.config.ComputeOrchestrator,
+		BMCService:           d.bmcService,
+		RegistryService:      d.config.RegistryService,
+		EABService:           d.eabService,
+		EABDelivery:          d.eabDelivery,
+		ClusterService:       d.clusterService,
+		InvitationService:    d.invitationService,
 	})
 
 	// Wire DNS service to MCP provider if available via App
@@ -1008,8 +1276,32 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		serviceProvider.dnsService = d.config.App.DNSService
 	}
 
+	// Mirror the invitation servicer into the gRPC service so MCP and gRPC
+	// share the same backing implementation. When d.invitationService is nil
+	// the gRPC service stays in stub mode (Unimplemented).
+	if d.invitationService != nil && d.invitationGRPCService != nil {
+		d.invitationGRPCService.SetService(d.invitationService)
+	}
+
 	// Store the provider for later service injection
 	d.mcpProvider = serviceProvider
+
+	// Wire Phase 3.5 services (ceremony/piv/luks/fido2) into the MCP provider
+	// so MCP tools can delegate to the real backends set via Set*Backend.
+	phase35Svcs := Phase35Services{}
+	if d.ceremonyService != nil {
+		phase35Svcs.Ceremony = d.ceremonyService.service
+	}
+	if d.pivService != nil {
+		phase35Svcs.PIV = d.pivService.service
+	}
+	if d.luksService != nil {
+		phase35Svcs.LUKS = d.luksService.service
+	}
+	if d.fido2Service != nil {
+		phase35Svcs.FIDO2 = d.fido2Service.service
+	}
+	serviceProvider.SetPhase35Services(phase35Svcs)
 
 	// Build MCP config from daemon MCPConfig
 	mcpCfg := d.config.MCPConfig
@@ -1185,8 +1477,10 @@ func (a *quicbaasServiceAdapter) ValidateToken(ctx context.Context, req *quicbaa
 // using QuicBaaS for token validation. This adapter returns (bool, error)
 // as required by the gRPC and QUIC authentication interfaces.
 type grpcTokenValidator struct {
-	service quicbaas.ServiceInterface
-	logger  *logging.Logger
+	service      quicbaas.ServiceInterface
+	jwtVerifier  PlatformJWTVerifier
+	jwtVerifiers []PlatformJWTVerifier
+	logger       *logging.Logger
 }
 
 // newGRPCTokenValidator creates a token validator for gRPC/QUIC authentication.
@@ -1198,7 +1492,48 @@ func newGRPCTokenValidator(service quicbaas.ServiceInterface, logger *logging.Lo
 }
 
 // ValidateToken implements grpc.TokenValidator and quic.TokenValidator.
+//
+// Validation order:
+//  1. Try the platform-JWT verifier when configured (jwtVerifier). Tokens
+//     issued by the webserver's /api/v1/login endpoint pass here. This
+//     gives gRPC, QUIC, and MCP transports the same token surface as
+//     REST without requiring callers to mint a separate QuicBaaS token.
+//  2. Fall back to QuicBaaS service.ValidateToken for tokens minted by
+//     the QuicBaaS auth provider (the legacy path).
+//
+// At least one verifier must be configured or every call returns an
+// "authentication service not configured" error.
 func (v *grpcTokenValidator) ValidateToken(ctx context.Context, token string) (bool, error) {
+	// Try every registered platform JWT verifier (one per webservice).
+	// Multiple webservices may each mint tokens with their own signing
+	// key; we accept the token if ANY verifier validates it.
+	for idx, vf := range v.jwtVerifiers {
+		if vf == nil {
+			continue
+		}
+		ok, err := vf.VerifyToken(token)
+		if err == nil && ok {
+			return true, nil
+		}
+		if v.logger != nil {
+			v.logger.Debug("Platform JWT verifier rejected token",
+				"verifier_index", idx,
+				"verifier_count", len(v.jwtVerifiers),
+				"ok", ok,
+				"err", err)
+		}
+	}
+	if v.jwtVerifier != nil && len(v.jwtVerifiers) == 0 {
+		ok, err := v.jwtVerifier.VerifyToken(token)
+		if err == nil && ok {
+			return true, nil
+		}
+		if v.logger != nil {
+			v.logger.Debug("Platform JWT verification rejected token, trying QuicBaaS",
+				"ok", ok, "err", err)
+		}
+	}
+
 	if v.service == nil {
 		if v.logger != nil {
 			v.logger.Debug("Token validation failed: QuicBaaS service not available")
@@ -1217,6 +1552,44 @@ func (v *grpcTokenValidator) ValidateToken(ctx context.Context, token string) (b
 	}
 
 	return resp.Valid, nil
+}
+
+// PlatformJWTVerifier is the minimal surface needed by grpcTokenValidator
+// to verify a platform-issued JWT. The webserver's jwt.Service satisfies
+// this via a thin adapter (see pkg/api/daemon/jwt_verifier.go).
+type PlatformJWTVerifier interface {
+	VerifyToken(tokenString string) (bool, error)
+}
+
+// SetPlatformJWTVerifier wires a platform JWT verifier into the daemon's
+// existing gRPC TCP and QUIC auth interceptors. Call this after the
+// webserver's JWT service is initialized so both transports accept
+// /api/v1/login-issued tokens. Safe to call before or after Start();
+// the validators are protected by atomic-pointer semantics.
+func (d *Daemon) SetPlatformJWTVerifier(verifier PlatformJWTVerifier) {
+	if d == nil || verifier == nil {
+		return
+	}
+	if d.grpcAuthValidator != nil {
+		d.grpcAuthValidator.SetJWTVerifier(verifier)
+		d.logger.Info("Platform JWT verifier attached to gRPC TCP validator")
+	}
+	if d.quicAuthValidator != nil {
+		d.quicAuthValidator.SetJWTVerifier(verifier)
+		d.logger.Info("Platform JWT verifier attached to QUIC validator")
+	}
+}
+
+// SetJWTVerifier wires the platform JWT verifier so gRPC/QUIC/MCP
+// requests authenticated with platform-issued tokens (e.g. from
+// /api/v1/login) succeed without requiring a separate QuicBaaS-issued
+// token. Multiple verifiers can be registered (one per webservice the
+// daemon serves); the validator accepts a token if ANY verifier
+// validates it. This handles deployments with multiple webservices
+// each minting JWTs with their own signing key.
+func (v *grpcTokenValidator) SetJWTVerifier(verifier PlatformJWTVerifier) {
+	v.jwtVerifier = verifier
+	v.jwtVerifiers = append(v.jwtVerifiers, verifier)
 }
 
 // Start starts the daemon
@@ -1681,6 +2054,46 @@ func (d *Daemon) SetTPMGRPCService(svc *TPMGRPCService) {
 	d.tpmService = svc
 }
 
+// EABGRPCService returns the EAB gRPC service backing /api/v1/eab.
+// Returns nil if not configured.
+func (d *Daemon) EABGRPCService() *EABGRPCService {
+	return d.eabGRPCService
+}
+
+// InvitationGRPCService returns the Invitation gRPC service backing
+// /api/v1/invitations. Returns nil if not configured.
+func (d *Daemon) InvitationGRPCService() *InvitationGRPCService {
+	return d.invitationGRPCService
+}
+
+// GatewayGRPCService returns the Gateway gRPC service backing /api/v1/gateway.
+// Returns nil if not configured.
+func (d *Daemon) GatewayGRPCService() *GatewayService {
+	return d.gatewayGRPCService
+}
+
+// OverlayGRPCService returns the Overlay gRPC service backing /api/v1/overlay.
+// Returns nil if not configured.
+func (d *Daemon) OverlayGRPCService() *OverlayService {
+	return d.overlayGRPCService
+}
+
+// PXEGRPCServiceServer returns the PXE gRPC service backing /api/v1/pxe.
+// Returns nil if not configured.
+func (d *Daemon) PXEGRPCServiceServer() *PXEGRPCService {
+	return d.pxeGRPCService
+}
+
+// TenantGRPCServer returns the Tenant gRPC server backing /api/v1/tenants.
+// Returns nil if the tenant service is not configured or has not registered
+// its gRPC server yet.
+func (d *Daemon) TenantGRPCServer() *TenantGRPCServer {
+	if d.tenantService == nil {
+		return nil
+	}
+	return d.tenantService.grpcServer
+}
+
 // RESTServer returns the REST server for direct access.
 // Returns nil if REST is not enabled or if a mock was injected.
 func (d *Daemon) RESTServer() *RESTServer {
@@ -1728,6 +2141,21 @@ func (d *Daemon) MCPListenAddr() string {
 // Returns nil if MCP is not enabled.
 func (d *Daemon) MCPServiceProvider() *MCPServiceProvider {
 	return d.mcpProvider
+}
+
+// SetClusterService injects the platform cluster servicer used by the
+// MCP cluster tools. The build-tagged cluster wiring calls this once the
+// real *cluster.ClusterService coordinator is up. When unset (e.g.,
+// daemon built without -tags cluster) the MCP cluster tools return
+// ErrClusterNotConfigured, mirroring the gRPC stub's Unimplemented.
+func (d *Daemon) SetClusterService(svc ClusterServicer) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.clusterService = svc
+	if d.mcpProvider != nil {
+		d.mcpProvider.SetClusterService(svc)
+	}
 }
 
 // SetTPM2Service sets the TPM2 service across all protocol handlers.
@@ -2081,4 +2509,97 @@ func (d *Daemon) registerHealthCheckers() {
 	}
 
 	d.logger.Info("Health checkers registered", "count", d.healthRegistry.Count())
+}
+
+// CeremonyService returns the Ceremony gRPC service, or nil when not wired.
+func (d *Daemon) CeremonyService() *CeremonyGRPCService {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.ceremonyService
+}
+
+// SetCeremonyBackend wires a backend into the ceremony service. Passing nil
+// is a no-op so tests and partial wirings do not accidentally clear an
+// already-configured backend.
+func (d *Daemon) SetCeremonyBackend(b CeremonyBackend) {
+	d.mu.RLock()
+	svc := d.ceremonyService
+	d.mu.RUnlock()
+	if svc == nil || svc.service == nil || b == nil {
+		return
+	}
+	svc.service.SetBackend(b)
+	d.logger.Info("Ceremony backend wired")
+}
+
+// PIVService returns the PIV gRPC service, or nil when not wired.
+func (d *Daemon) PIVService() *PIVGRPCService {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.pivService
+}
+
+// SetPIVBackend wires a backend into the PIV service.
+func (d *Daemon) SetPIVBackend(b PIVBackend) {
+	d.mu.RLock()
+	svc := d.pivService
+	d.mu.RUnlock()
+	if svc == nil || svc.service == nil || b == nil {
+		return
+	}
+	svc.service.SetBackend(b)
+	d.logger.Info("PIV backend wired")
+}
+
+// LUKSService returns the LUKS gRPC service, or nil when not wired.
+func (d *Daemon) LUKSService() *LUKSGRPCService {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.luksService
+}
+
+// SetLUKSBackend wires a backend into the LUKS service.
+func (d *Daemon) SetLUKSBackend(b LUKSBackend) {
+	d.mu.RLock()
+	svc := d.luksService
+	d.mu.RUnlock()
+	if svc == nil || svc.service == nil || b == nil {
+		return
+	}
+	svc.service.SetBackend(b)
+	d.logger.Info("LUKS backend wired")
+}
+
+// SetLUKSRootChecker replaces the LUKS root checker. The default checker
+// always reports non-root, so installations that run as root must inject a
+// real checker (for example RootCheckerFunc(func() bool { return os.Geteuid() == 0 })).
+func (d *Daemon) SetLUKSRootChecker(rc RootChecker) {
+	d.mu.RLock()
+	svc := d.luksService
+	d.mu.RUnlock()
+	if svc == nil || svc.service == nil || rc == nil {
+		return
+	}
+	svc.service.mu.Lock()
+	svc.service.root = rc
+	svc.service.mu.Unlock()
+}
+
+// FIDO2Service returns the FIDO2 gRPC service, or nil when not wired.
+func (d *Daemon) FIDO2Service() *FIDO2GRPCService {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.fido2Service
+}
+
+// SetFIDO2Backend wires a backend into the FIDO2 service.
+func (d *Daemon) SetFIDO2Backend(b FIDO2Backend) {
+	d.mu.RLock()
+	svc := d.fido2Service
+	d.mu.RUnlock()
+	if svc == nil || svc.service == nil || b == nil {
+		return
+	}
+	svc.service.SetBackend(b)
+	d.logger.Info("FIDO2 backend wired")
 }

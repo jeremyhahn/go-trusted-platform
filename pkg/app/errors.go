@@ -13,7 +13,20 @@
 
 package app
 
-import "fmt"
+import (
+	"fmt"
+
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+)
+
+// ErrTPMNotInitialized is returned by App.Init when the platform TPM has
+// not yet been provisioned (no Endorsement Key configured). It is
+// re-exported here so consumers in pkg/daemon can match the sentinel via
+// errors.Is without importing go-xkms directly. The SDK-only dependency
+// rule (08-bootstrap-auth-architecture.md §5d) requires go-trusted-platform
+// to depend solely on go-quicbaas/sdk/go; until the equivalent sentinel is
+// re-exported from quicbaas, pkg/app remains the bridge.
+var ErrTPMNotInitialized = xkmssdk.ErrTPMNotInitialized
 
 // ErrXKMSStorageInit is returned when a filesystem storage backend cannot be created.
 type ErrXKMSStorageInit struct {
@@ -351,3 +364,18 @@ func (e ErrSDNIPAMPoolCreate) Error() string {
 
 // Unwrap returns the underlying cause.
 func (e ErrSDNIPAMPoolCreate) Unwrap() error { return e.Cause }
+
+// ErrWebserviceCertRead wraps a failure reading the live TLS certificate
+// from a webservice endpoint. Returned by the cert renewal handler when
+// the local TLS handshake or trust-pool construction fails.
+type ErrWebserviceCertRead struct {
+	Cause error
+}
+
+// Error returns the error message.
+func (e ErrWebserviceCertRead) Error() string {
+	return fmt.Sprintf("app: webservice cert read failed: %v", e.Cause)
+}
+
+// Unwrap returns the underlying cause.
+func (e ErrWebserviceCertRead) Unwrap() error { return e.Cause }

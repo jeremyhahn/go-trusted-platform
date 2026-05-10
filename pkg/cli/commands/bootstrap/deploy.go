@@ -118,13 +118,7 @@ func buildDeployConfig(config *bootstrap.BootstrapConfig, configPath string) *de
 		TransferServer:   config.Deployer.TransferServer,
 		CiscoAppID:       config.Deployer.AppID,
 		CiscoImageFile:   config.Deployer.ImageFile,
-		ProvisioningNetwork: deployer.ProvisioningNetworkConfig{
-			Subnet:     config.ProvisioningNetwork.Subnet,
-			Gateway:    config.ProvisioningNetwork.Gateway,
-			RangeStart: config.ProvisioningNetwork.DHCPRangeStart,
-			RangeEnd:   config.ProvisioningNetwork.DHCPRangeEnd,
-			DNS:        config.ProvisioningNetwork.DNS,
-		},
+		ProvisioningSubnet: config.ProvisioningSubnet(),
 	}
 
 	// Resolve relative config file path against bootstrap.yaml directory.

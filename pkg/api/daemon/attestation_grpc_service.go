@@ -126,6 +126,19 @@ func NewAttestationServiceServer(service AttestationService, logger *slog.Logger
 	}
 }
 
+// requireService returns a gRPC FailedPrecondition error when the
+// underlying AttestationService backend has not been wired in. Calling
+// any method on a nil interface would panic; use this guard at the
+// start of every public RPC so the server reports a typed error
+// instead.
+func (s *AttestationServiceServer) requireService() error {
+	if s == nil || s.service == nil {
+		return status.Error(codes.FailedPrecondition,
+			"attestation service backend is not configured")
+	}
+	return nil
+}
+
 // =============================================================================
 // Manifest Operations
 // =============================================================================
@@ -136,6 +149,9 @@ func (s *AttestationServiceServer) GetManifest(
 	req *platformv1.GetManifestRequest,
 ) (*platformv1.GetManifestResponse, error) {
 
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
 	if req.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "manifest id is required")
 	}
@@ -157,6 +173,9 @@ func (s *AttestationServiceServer) BuildManifest(
 	req *platformv1.BuildManifestRequest,
 ) (*platformv1.BuildManifestResponse, error) {
 
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
 	config := s.protoToBuilderConfig(req.GetConfig())
 	if config == nil {
 		return nil, status.Error(codes.InvalidArgument, "builder config is required")
@@ -191,6 +210,9 @@ func (s *AttestationServiceServer) VerifyManifest(
 	req *platformv1.VerifyManifestRequest,
 ) (*platformv1.VerifyManifestResponse, error) {
 
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
 	if req.GetManifest() == nil {
 		return nil, status.Error(codes.InvalidArgument, "manifest is required")
 	}
@@ -236,6 +258,15 @@ func (s *AttestationServiceServer) ListManifests(
 	req *platformv1.ListManifestsRequest,
 ) (*platformv1.ListManifestsResponse, error) {
 
+	if err := s.requireService(); err != nil {
+		// Treat the unconfigured backend as an empty list rather than an
+		// error so the dashboard renders the empty state instead of an
+		// inline "Loading..." that never resolves.
+		return &platformv1.ListManifestsResponse{
+			Manifests: []*platformv1.HostManifest{},
+			Total:     0,
+		}, nil
+	}
 	filter := &ListManifestsFilter{
 		HostID: req.GetHostId(),
 		Limit:  int(req.GetLimit()),
@@ -272,6 +303,9 @@ func (s *AttestationServiceServer) DeleteManifest(
 	req *platformv1.DeleteManifestRequest,
 ) (*platformv1.DeleteManifestResponse, error) {
 
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
 	if req.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "manifest id is required")
 	}
@@ -300,6 +334,9 @@ func (s *AttestationServiceServer) GetAttestationQuote(
 	req *platformv1.GetAttestationQuoteRequest,
 ) (*platformv1.GetAttestationQuoteResponse, error) {
 
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
 	if req.GetConfig() == nil {
 		return nil, status.Error(codes.InvalidArgument, "quote config is required")
 	}
@@ -331,6 +368,9 @@ func (s *AttestationServiceServer) VerifyAttestationQuote(
 	req *platformv1.VerifyAttestationQuoteRequest,
 ) (*platformv1.VerifyAttestationQuoteResponse, error) {
 
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
 	if req.GetQuote() == nil {
 		return nil, status.Error(codes.InvalidArgument, "quote is required")
 	}
@@ -365,6 +405,9 @@ func (s *AttestationServiceServer) CollectHostAttestation(
 	req *platformv1.CollectHostAttestationRequest,
 ) (*platformv1.CollectHostAttestationResponse, error) {
 
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
 	if req.GetConfig() == nil {
 		return nil, status.Error(codes.InvalidArgument, "quote config is required")
 	}
@@ -396,6 +439,9 @@ func (s *AttestationServiceServer) CollectVMAttestation(
 	req *platformv1.CollectVMAttestationRequest,
 ) (*platformv1.CollectVMAttestationResponse, error) {
 
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
 	if req.GetVmId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "vm_id is required")
 	}
@@ -431,6 +477,9 @@ func (s *AttestationServiceServer) CollectContainerAttestation(
 	req *platformv1.CollectContainerAttestationRequest,
 ) (*platformv1.CollectContainerAttestationResponse, error) {
 
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
 	if req.GetContainerId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "container_id is required")
 	}

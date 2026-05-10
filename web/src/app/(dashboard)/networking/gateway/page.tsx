@@ -100,7 +100,14 @@ export default function APIGatewayPage() {
   );
 
   const isLoading = statusLoading || bgpStatusLoading || prefixesLoading || ipamPoolsLoading;
-  const error = statusError || bgpStatusError || prefixesError || ipamPoolsError;
+  // The gateway service can be deployed without a backing controller
+  // (gatewayd not running). When all four endpoints return the typed
+  // 503 "gateway not configured" we want to render the empty page
+  // shell, not block on it forever. Treat that specific error as an
+  // empty state so the user sees the page and can navigate away.
+  const allUnavailable = [statusError, bgpStatusError, prefixesError, ipamPoolsError]
+    .every((e) => !!e && /(unavailable|not configured|503)/i.test((e as any).message || ''));
+  const error = allUnavailable ? undefined : (statusError || bgpStatusError || prefixesError || ipamPoolsError);
 
   const status = statusData?.status || null;
   const bgpStatus = bgpStatusData?.status || null;

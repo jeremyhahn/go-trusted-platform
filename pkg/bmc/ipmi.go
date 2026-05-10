@@ -20,6 +20,8 @@ import (
 	"log/slog"
 	"math"
 	"sync/atomic"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 )
 
 // SDR record types per IPMI spec.
@@ -292,7 +294,11 @@ func (c *ipmiClient) ensureRedfishClient() error {
 		SkipTLSVerify: skipTLS,
 		CACertPath:    c.config.CACertPath,
 	}
-	c.redfishClient = newRedfishClient(redfishConfig, c.logger)
+	rc, err := newRedfishClient(redfishConfig, c.logger)
+	if err != nil {
+		return err
+	}
+	c.redfishClient = rc
 	c.logger.Info("bmc: created Redfish fallback client for virtual media",
 		"address", c.config.Address)
 	return nil
@@ -458,15 +464,84 @@ func (c *ipmiClient) GetSystemInfo(_ context.Context) (*SystemInfo, error) {
 }
 
 // Console opens an interactive SOL console session over the IPMI RMCP+ session.
+//
+// IPMI 2.0 lets each board route serial-console bytes to a different SOL
+// payload instance (Table 24-2). Most BMCs use 0x01; a few — notably
+// Supermicro X10SDV-TP8F — route to 0x02 because their SOL UART is wired
+// to COM2 instead of COM1. Activating the wrong instance yields a
+// successful Activate Payload response from the BMC followed by silence on
+// the receive loop (the operator sees a zero-byte SOL log).
+//
+// To pick the right instance, Console resolves the platform Quirk via the
+// lazy Redfish client (which fetches Manufacturer/Model from the System
+// resource). If the BMC does not expose Redfish or System discovery fails,
+// Console falls back to the IPMI default (0x01) — preserving prior
+// behaviour for vendors where the default works.
+//
+// SOLPayloadInstanceOverride on the Config wins over the resolved quirk so
+// operators can diagnose new hardware without a code change.
 func (c *ipmiClient) Console(ctx context.Context) (*SOLSession, error) {
 	if err := c.ensureOpen(); err != nil {
 		return nil, err
 	}
-	sol, err := c.session.ActivateSOL(ctx)
+	instance := c.resolveSOLPayloadInstance(ctx)
+	sol, err := c.session.ActivateSOL(ctx, instance)
 	if err != nil {
 		return nil, err
 	}
 	return sol, nil
+}
+
+// resolveSOLPayloadInstance picks the IPMI 2.0 SOL payload instance for
+// this BMC: explicit Config override wins, then quirks.Resolve from the
+// Redfish-discovered Manufacturer/Model, then the IPMI default (0x01).
+//
+// Returns 0x01 on any error path so a transient discovery failure never
+// silently breaks SOL — at worst the operator gets prior behaviour.
+func (c *ipmiClient) resolveSOLPayloadInstance(ctx context.Context) byte {
+	if c.config != nil && c.config.SOLPayloadInstance != 0 {
+		c.logger.Debug("bmc: SOL payload instance from explicit config",
+			"instance", c.config.SOLPayloadInstance)
+		return c.config.SOLPayloadInstance
+	}
+	if err := c.ensureRedfishClient(); err != nil {
+		c.logger.Debug("bmc: SOL payload instance defaulting (no Redfish)",
+			"error", err.Error())
+		return 0x01
+	}
+	rc, ok := c.redfishClient.(*redfishClient)
+	if !ok {
+		return 0x01
+	}
+	if err := rc.ensureDiscovered(ctx); err != nil {
+		c.logger.Debug("bmc: SOL payload instance defaulting (Redfish discovery failed)",
+			"error", err.Error())
+		return 0x01
+	}
+	q := rc.resolveQuirk()
+	if q.SOLPayloadInstance != 0 {
+		c.logger.Info("bmc: SOL payload instance from quirk",
+			"manufacturer", q.Manufacturer,
+			"model", q.Model,
+			"instance", q.SOLPayloadInstance)
+		return q.SOLPayloadInstance
+	}
+	return 0x01
+}
+
+// _ keeps the quirks import live for resolveSOLPayloadInstance even if
+// its return type doesn't reference quirks.Quirk directly.
+var _ = quirks.Default
+
+// ClearUEFIBootEntries delegates to the lazy Redfish fallback because
+// IPMI 2.0 does not provide a standard command for clearing UEFI NVRAM
+// boot entries. When the BMC speaks Redfish, the fallback tries
+// Bios.ResetBios; otherwise we propagate ErrUEFIBootClearUnsupported.
+func (c *ipmiClient) ClearUEFIBootEntries(ctx context.Context) error {
+	if err := c.ensureRedfishClient(); err != nil {
+		return ErrUEFIBootClearUnsupported{Cause: err}
+	}
+	return c.redfishClient.ClearUEFIBootEntries(ctx)
 }
 
 // Close releases the IPMI session and underlying transport.
@@ -493,10 +568,10 @@ func (c *ipmiClient) readSDRRepository() ([]sdrFullSensorRecord, error) {
 	// Get SDR Repository Info to learn record count.
 	infoResp, err := c.session.Send(netFnStorage, cmdGetSDRRepositoryInfo, nil)
 	if err != nil {
-		return nil, fmt.Errorf("bmc: get SDR repository info: %w", err)
+		return nil, ErrGetSDRRepoInfo{Cause: err}
 	}
 	if len(infoResp) < 6 {
-		return nil, fmt.Errorf("bmc: SDR repository info response too short: %d bytes", len(infoResp))
+		return nil, ErrSDRResponseTooShort{Operation: "SDR repository info", Length: len(infoResp), Expected: 6}
 	}
 	recordCount := binary.LittleEndian.Uint16(infoResp[1:3])
 	if recordCount == 0 {
@@ -506,10 +581,10 @@ func (c *ipmiClient) readSDRRepository() ([]sdrFullSensorRecord, error) {
 	// Reserve SDR Repository for partial reads.
 	reserveResp, err := c.session.Send(netFnStorage, cmdReserveSDRRepository, nil)
 	if err != nil {
-		return nil, fmt.Errorf("bmc: reserve SDR repository: %w", err)
+		return nil, ErrReserveSDR{Cause: err}
 	}
 	if len(reserveResp) < 2 {
-		return nil, fmt.Errorf("bmc: reserve SDR response too short: %d bytes", len(reserveResp))
+		return nil, ErrSDRResponseTooShort{Operation: "reserve SDR", Length: len(reserveResp), Expected: 2}
 	}
 	reservationID := binary.LittleEndian.Uint16(reserveResp[0:2])
 
@@ -584,7 +659,7 @@ func (c *ipmiClient) readFRU(deviceID uint8) (*fruData, error) {
 	// Get FRU Inventory Area Info to determine total size.
 	infoResp, err := c.session.Send(netFnStorage, cmdGetFRUInventoryArea, []byte{deviceID})
 	if err != nil {
-		return nil, fmt.Errorf("bmc: get FRU inventory area info: %w", err)
+		return nil, ErrGetFRUInfo{Cause: err}
 	}
 	if len(infoResp) < 3 {
 		return nil, ErrFRURead{Reason: "FRU inventory area info response too short"}
@@ -621,7 +696,7 @@ func (c *ipmiClient) readFRUBytes(deviceID uint8, size uint16) ([]byte, error) {
 
 		resp, err := c.session.Send(netFnStorage, cmdReadFRUData, readReq)
 		if err != nil {
-			return nil, fmt.Errorf("bmc: read FRU data at offset %d: %w", offset, err)
+			return nil, ErrReadFRU{Offset: int(offset), Cause: err}
 		}
 		if len(resp) < 1 {
 			break

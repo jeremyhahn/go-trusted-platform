@@ -22,7 +22,7 @@ import (
 	"strconv"
 	"strings"
 
-	casdk "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	casdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 )
 

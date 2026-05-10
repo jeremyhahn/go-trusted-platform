@@ -60,6 +60,10 @@ type createFlags struct {
 	preFetch        bool
 	overrides       string
 
+	// CA trust configuration
+	caBundle       string
+	caKeyAlgorithm string
+
 	// Dynamic configuration
 	configServer      string
 	bootstrapStrategy string
@@ -152,6 +156,10 @@ Examples:
 	cmd.Flags().StringVar(&flags.bootstrapDNS, "bootstrap-dns", "", "DNS server for DANE TLSA lookups")
 	cmd.Flags().StringVar(&flags.bootstrapNoiseKey, "bootstrap-noise-key", "", "Noise server public key (hex-encoded)")
 	cmd.Flags().StringVar(&flags.bootstrapSPKIPin, "bootstrap-spki-pin", "", "SPKI pin SHA-256 hash for certificate pinning")
+
+	// CA trust flags
+	cmd.Flags().StringVar(&flags.caBundle, "ca-bundle", "", "Path to CA bundle PEM file to embed in the ISO for client trust store")
+	cmd.Flags().StringVar(&flags.caKeyAlgorithm, "ca-key-algorithm", "", "CA key algorithm filter (e.g., rsa, ecdsa, ed25519); empty = all algorithms")
 
 	return cmd
 }
@@ -358,18 +366,33 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	// Set platform type
 	config.PlatformType = pkgiso.PlatformType(flags.platformType)
 
-	// Set platform config file (for TPM provisioning)
+	// Resolve platform config file.
+	//
+	// Precedence:
+	//   1. --platform-config flag (explicit operator choice)
+	//   2. single-node default template (reference architecture baseline)
+	//   3. legacy standalone qemu templates (tests / pre-template-system
+	//      deployments that still live under configs/platform/standalone/)
+	//
+	// The single-node default deploys CP + GW on one box per
+	// configs/platform/templates/single-node/README.md. It is the
+	// preferred default because it is vendor-neutral and produces a
+	// working, bootable ISO with no flags required.
+	//
+	// See docs/bootstrap/config-delivery.md §2 and
+	// docs/installer/iso-building.md §Config Delivery Modes.
 	if flags.platformConfig != "" {
 		config.PlatformConfigFile = flags.platformConfig
 	} else {
-		// Auto-detect config file based on platform type
 		var defaultConfigPaths []string
 		if flags.platformType == "server" {
 			defaultConfigPaths = []string{
+				"configs/platform/templates/single-node/default.yaml",
 				"configs/platform/standalone/qemu.server.example.com.yaml",
 			}
 		} else {
 			defaultConfigPaths = []string{
+				"configs/platform/templates/single-node/default.yaml",
 				"configs/platform/standalone/qemu.node0.example.com.yaml",
 				"configs/platform/standalone/qemu.client.example.com.yaml",
 			}
@@ -434,6 +457,12 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	}
 	if flags.bootstrapSPKIPin != "" {
 		config.BootstrapSPKIPin = flags.bootstrapSPKIPin
+	}
+	if flags.caBundle != "" {
+		config.CABundlePath = flags.caBundle
+	}
+	if flags.caKeyAlgorithm != "" {
+		config.CAKeyAlgorithm = flags.caKeyAlgorithm
 	}
 
 	// Load config file if specified
@@ -602,6 +631,7 @@ func customizeISO(ctx context.Context, logger *logging.Logger, config *pkgiso.IS
 			PlatformdBinary:   config.PlatformdBinary,
 			ConfigFile:        config.PlatformConfigFile,
 			CABundlePath:      config.CABundlePath,
+			CAKeyAlgorithm:     config.CAKeyAlgorithm,
 			WebUIPath:         config.WebUIPath,
 			PlatformType:      config.PlatformType,
 			ConfigServerURL:   config.ConfigServerURL,

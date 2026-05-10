@@ -56,14 +56,14 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webserver/embed"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -384,12 +384,51 @@ func (server *WebServerV1) serveEmbeddedFiles(index string, rewriteRules []*v1.R
 			return
 		}
 
+		// Next.js static export of a dynamic route ([id], [zone], …) only
+		// pre-renders a single `__placeholder__` segment. When a real ID is
+		// requested at runtime there is no matching directory on disk, so
+		// without help Next would fall through to its built-in 404 → /auth
+		// redirect. Walk the path from right to left looking for a sibling
+		// `__placeholder__` directory and serve its index.html instead so
+		// the SPA can hydrate and read the actual ID from the URL.
+		if placeholderPath := findPlaceholderFallback(requestPath, index); placeholderPath != "" {
+			server.logger.Debug("Serving Next dynamic-route placeholder (embedded)",
+				slog.String("requestPath", requestPath),
+				slog.String("placeholder", placeholderPath),
+			)
+			server.serveEmbeddedFile(w, r, placeholderPath)
+			return
+		}
+
 		// Fallback to SPA index
 		server.logger.Debug("Fallback to SPA index file (embedded)",
 			slog.String("requestedPath", requestPath),
 		)
 		server.serveEmbeddedFile(w, r, index)
 	}
+}
+
+// findPlaceholderFallback returns the embedded path of a Next.js
+// `__placeholder__` index that should be served for `requestPath`, or
+// an empty string when no candidate exists. The function walks the URL
+// from the deepest segment up; for each prefix it tries replacing the
+// next segment with `__placeholder__` and checks whether that sibling
+// directory contains the static `index` file.
+func findPlaceholderFallback(requestPath, index string) string {
+	if requestPath == "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(requestPath, "/"), "/")
+	for i := len(parts) - 1; i >= 0; i-- {
+		candidateParts := append([]string{}, parts[:i]...)
+		candidateParts = append(candidateParts, "__placeholder__")
+		candidate := strings.Join(candidateParts, "/") + "/" + index
+		if f, err := embed.WebFS.Open(candidate); err == nil {
+			f.Close()
+			return candidate
+		}
+	}
+	return ""
 }
 
 // serveEmbeddedFile serves a single file from the embedded filesystem
@@ -668,13 +707,18 @@ func (server *WebServerV1) startHTTPS() {
 	// Configure TLS for HTTP/1.1, HTTP/2, and HTTP/3
 	var tlsconf *tls.Config
 	var err error
-	if server.config.Certificate.ACME != nil && server.config.Certificate.ACME.CrossSigner != nil {
-		var issuerCN string
-		issuerCN, err = util.ParseFQDN(server.config.Certificate.ACME.CrossSigner.DirectoryURL)
-		if err != nil {
+	if server.config.Certificate.ACME != nil && server.config.Certificate.ACME.CrossSign != nil {
+		// Validate the configured cross-signer URL to surface misconfigurations
+		// early, matching the legacy wrapper's behavior.
+		if _, err = util.ParseFQDN(server.config.Certificate.ACME.CrossSign.DirectoryURL); err != nil {
 			server.logger.FatalError(err)
 		}
-		tlsconf, err = server.ca.TLSConfigWithXSigner(server.keyAttributes, issuerCN)
+		// Native pkg/ca.TLSConfigWithXSigner uses its xsigner argument as a
+		// non-nil toggle that opts the returned tls.Config into the
+		// cross-signed trust augmentation. The CA itself implements
+		// crypto.Signer, so passing server.ca preserves the cross-signed
+		// behavior the wrapper provided with only a CN hint.
+		tlsconf, err = server.ca.TLSConfigWithXSigner(server.keyAttributes, server.ca)
 	} else {
 		tlsconf, err = server.ca.TLSConfig(server.keyAttributes)
 	}

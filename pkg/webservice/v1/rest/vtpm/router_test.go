@@ -49,7 +49,7 @@ func TestVTPMRouter_RegisterRoutes(t *testing.T) {
 	muxRouter := mux.NewRouter()
 
 	// Should not panic
-	vtpmRouter.RegisterRoutes(muxRouter)
+	vtpmRouter.RegisterRoutes(muxRouter.PathPrefix("/api/v1").Subrouter())
 
 	// Verify that routes are registered by checking that the router can match them
 	testCases := []struct {
@@ -96,7 +96,7 @@ func TestVTPMRouter_BundleRoutes_Functional(t *testing.T) {
 
 	vtpmRouter := NewVTPMRouter(logger, service, writer)
 	muxRouter := mux.NewRouter()
-	vtpmRouter.RegisterRoutes(muxRouter)
+	vtpmRouter.RegisterRoutes(muxRouter.PathPrefix("/api/v1").Subrouter())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/bundles/test-bundle", nil)
 	rec := httptest.NewRecorder()
@@ -120,7 +120,7 @@ func TestVTPMRouter_TemplateRoutes_Functional(t *testing.T) {
 
 	vtpmRouter := NewVTPMRouter(logger, service, writer)
 	muxRouter := mux.NewRouter()
-	vtpmRouter.RegisterRoutes(muxRouter)
+	vtpmRouter.RegisterRoutes(muxRouter.PathPrefix("/api/v1").Subrouter())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/templates/test-template", nil)
 	rec := httptest.NewRecorder()
@@ -138,7 +138,7 @@ func TestVTPMRouter_UnregisteredRoute_Returns404(t *testing.T) {
 
 	vtpmRouter := NewVTPMRouter(logger, service, writer)
 	muxRouter := mux.NewRouter()
-	vtpmRouter.RegisterRoutes(muxRouter)
+	vtpmRouter.RegisterRoutes(muxRouter.PathPrefix("/api/v1").Subrouter())
 
 	// Test that unregistered routes return 404
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/nonexistent", nil)
@@ -156,7 +156,7 @@ func TestVTPMRouter_WrongMethod_ReturnsNotFound(t *testing.T) {
 
 	vtpmRouter := NewVTPMRouter(logger, service, writer)
 	muxRouter := mux.NewRouter()
-	vtpmRouter.RegisterRoutes(muxRouter)
+	vtpmRouter.RegisterRoutes(muxRouter.PathPrefix("/api/v1").Subrouter())
 
 	// Mux returns 404 for unmatched method on a registered path by default
 	// (unless MethodNotAllowedHandler is configured). This tests that behavior.
@@ -182,7 +182,7 @@ func TestVTPMRouter_ListBundles_Functional(t *testing.T) {
 
 	vtpmRouter := NewVTPMRouter(logger, service, writer)
 	muxRouter := mux.NewRouter()
-	vtpmRouter.RegisterRoutes(muxRouter)
+	vtpmRouter.RegisterRoutes(muxRouter.PathPrefix("/api/v1").Subrouter())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/bundles", nil)
 	rec := httptest.NewRecorder()
@@ -205,7 +205,7 @@ func TestVTPMRouter_ListTemplates_Functional(t *testing.T) {
 
 	vtpmRouter := NewVTPMRouter(logger, service, writer)
 	muxRouter := mux.NewRouter()
-	vtpmRouter.RegisterRoutes(muxRouter)
+	vtpmRouter.RegisterRoutes(muxRouter.PathPrefix("/api/v1").Subrouter())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/templates", nil)
 	rec := httptest.NewRecorder()

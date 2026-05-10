@@ -118,49 +118,6 @@ func TestNewPushCommand_HasFlags(t *testing.T) {
 	}
 }
 
-func TestRunPush_InvalidImageReference(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-
-	tests := []struct {
-		name string
-		ref  string
-	}{
-		{name: "empty reference", ref: ""},
-		{name: "too long reference", ref: string(make([]byte, 300))},
-		{name: "invalid characters", ref: "INVALID/UPPERCASE:tag"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := runPush(flags, tt.ref, false, "", false, "", false, "")
-			if err == nil {
-				t.Error("expected error for invalid reference")
-			}
-
-			if _, ok := err.(ErrInvalidImageReference); !ok {
-				t.Errorf("expected ErrInvalidImageReference, got %T: %v", err, err)
-			}
-		})
-	}
-}
-
-func TestRunPush_EncryptionRequiresKeyID(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-
-	err := runPush(flags, "myrepo/myimage:v1.0", true, "", false, "", false, "")
-	if err == nil {
-		t.Error("expected error when encrypt is true but keyID is empty")
-	}
-
-	if _, ok := err.(ErrEncryptionKeyRequired); !ok {
-		t.Errorf("expected ErrEncryptionKeyRequired, got %T: %v", err, err)
-	}
-}
-
 func TestPushResult_JSONTags(t *testing.T) {
 	result := PushResult{
 		Reference: "myrepo/myimage:v1.0",

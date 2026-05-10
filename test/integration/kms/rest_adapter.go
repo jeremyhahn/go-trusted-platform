@@ -30,7 +30,7 @@ import (
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	resttypes "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // =============================================================================

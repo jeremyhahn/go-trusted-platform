@@ -1032,7 +1032,7 @@ func TestInstaller_Install_OSInstallFailure(t *testing.T) {
 func TestNetworkConfig_Validate_BondMissingMode(t *testing.T) {
 	nc := &NetworkConfig{
 		Bonds: []BondConfig{
-			{Name: "bond0", Slaves: []string{"eth0", "eth1"}},
+			{Name: "bond0", Interfaces: []string{"eth0", "eth1"}},
 		},
 	}
 	err := nc.Validate()

@@ -73,7 +73,6 @@ func (h *SDNHandlers) createContext() (context.Context, context.CancelFunc) {
 
 func (h *SDNHandlers) decodeJSON(r *http.Request, v interface{}) error {
 	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
 	return decoder.Decode(v)
 }
 
@@ -434,6 +433,36 @@ func (h *SDNHandlers) SetPortState(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ListPorts handles GET /api/v1/sdn/bridges/{name}/ports.
+//
+// The bridge identifier may be either the OVS bridge name or a UUID;
+// findBridgeName resolves both via the SDN service.
+func (h *SDNHandlers) ListPorts(w http.ResponseWriter, r *http.Request) {
+	bridgeID := h.getBridgeName(r)
+	if bridgeID == "" {
+		h.respWriter.Error400(w, r, ErrMissingBridgeName{})
+		return
+	}
+
+	ctx, cancel := h.createContext()
+	defer cancel()
+
+	resp, err := h.sdnService.ListPorts(ctx, &platformv1.ListPortsRequest{
+		BridgeId: bridgeID,
+	})
+	if err != nil {
+		h.handleGRPCError(w, r, err)
+		return
+	}
+
+	ports := make([]PortResponse, 0, len(resp.Ports))
+	for _, p := range resp.Ports {
+		ports = append(ports, h.portToResponse(p))
+	}
+
+	h.respWriter.Success200(w, r, ListPortsResponse{Ports: ports})
+}
+
 func (h *SDNHandlers) portToResponse(p *platformv1.Port) PortResponse {
 	if p == nil {
 		return PortResponse{}
@@ -516,7 +545,8 @@ func (h *SDNHandlers) portStatusToString(s platformv1.PortStatus) string {
 
 // Flow Handlers
 
-// AddFlow handles POST /api/v1/sdn/flows
+// AddFlow handles POST /api/v1/sdn/flows and the nested
+// POST /api/v1/sdn/bridges/{name}/flows variant.
 func (h *SDNHandlers) AddFlow(w http.ResponseWriter, r *http.Request) {
 	var req AddFlowRequest
 	if err := h.decodeJSON(r, &req); err != nil {
@@ -524,6 +554,9 @@ func (h *SDNHandlers) AddFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if pathBridge := mux.Vars(r)["name"]; pathBridge != "" {
+		req.BridgeID = pathBridge
+	}
 	if req.BridgeID == "" {
 		h.respWriter.Error400(w, r, ErrMissingBridgeID{})
 		return
@@ -592,8 +625,13 @@ func (h *SDNHandlers) DeleteFlow(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListFlows handles GET /api/v1/sdn/flows
+// ListFlows handles GET /api/v1/sdn/flows?bridge_id=… and the nested
+// GET /api/v1/sdn/bridges/{name}/flows variant.
 func (h *SDNHandlers) ListFlows(w http.ResponseWriter, r *http.Request) {
-	bridgeID := r.URL.Query().Get("bridge_id")
+	bridgeID := mux.Vars(r)["name"]
+	if bridgeID == "" {
+		bridgeID = r.URL.Query().Get("bridge_id")
+	}
 	if bridgeID == "" {
 		h.respWriter.Error400(w, r, ErrMissingBridgeID{})
 		return
@@ -838,7 +876,10 @@ func (h *SDNHandlers) GetPolicy(w http.ResponseWriter, r *http.Request) {
 
 // VLAN Handlers
 
-// CreateVLAN handles POST /api/v1/sdn/vlans
+// CreateVLAN handles POST /api/v1/sdn/vlans and the nested
+// POST /api/v1/sdn/bridges/{bridge_id}/vlans variant. When a bridge ID
+// is present in the path it overrides any value in the body so callers
+// can omit BridgeID from JSON for nested URLs.
 func (h *SDNHandlers) CreateVLAN(w http.ResponseWriter, r *http.Request) {
 	var req CreateVLANRequest
 	if err := h.decodeJSON(r, &req); err != nil {
@@ -846,6 +887,9 @@ func (h *SDNHandlers) CreateVLAN(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if pathBridge := mux.Vars(r)["bridge_id"]; pathBridge != "" {
+		req.BridgeID = pathBridge
+	}
 	if req.BridgeID == "" {
 		h.respWriter.Error400(w, r, ErrMissingBridgeID{})
 		return
@@ -877,9 +921,13 @@ func (h *SDNHandlers) CreateVLAN(w http.ResponseWriter, r *http.Request) {
 	h.respWriter.Success200(w, r, h.vlanToResponse(resp.Vlan))
 }
 
-// ListVLANs handles GET /api/v1/sdn/vlans
+// ListVLANs handles GET /api/v1/sdn/vlans and the nested
+// GET /api/v1/sdn/bridges/{bridge_id}/vlans variant.
 func (h *SDNHandlers) ListVLANs(w http.ResponseWriter, r *http.Request) {
-	bridgeID := r.URL.Query().Get("bridge_id")
+	bridgeID := mux.Vars(r)["bridge_id"]
+	if bridgeID == "" {
+		bridgeID = r.URL.Query().Get("bridge_id")
+	}
 	if bridgeID == "" {
 		h.respWriter.Error400(w, r, ErrMissingBridgeID{})
 		return

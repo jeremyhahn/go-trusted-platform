@@ -48,6 +48,18 @@ func TestGetHealth_WithoutRegistry(t *testing.T) {
 	if !resp.Success {
 		t.Error("expected success to be true")
 	}
+
+	payload, ok := resp.Payload.(map[string]interface{})
+	if !ok {
+		t.Fatal("expected payload to be a map")
+	}
+	healthBlock, ok := payload["health"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected payload.health to be a map")
+	}
+	if healthy, _ := healthBlock["healthy"].(bool); !healthy {
+		t.Error("expected health.healthy to be true when no registry is configured")
+	}
 }
 
 func TestGetHealth_WithRegistry(t *testing.T) {
@@ -55,11 +67,9 @@ func TestGetHealth_WithRegistry(t *testing.T) {
 	respWriter := response.NewResponseWriter(logger, nil)
 	handlers := NewPlatformHandlers(logger, respWriter)
 
-	// Create a mock health registry
 	registry := health.NewRegistry()
 	handlers.SetHealthRegistry(registry)
 
-	// Register a test health checker
 	registry.Register(&mockHealthChecker{
 		name:   "test-component",
 		status: health.StatusHealthy,
@@ -83,19 +93,28 @@ func TestGetHealth_WithRegistry(t *testing.T) {
 		t.Error("expected success to be true")
 	}
 
-	// Verify payload structure
 	payload, ok := resp.Payload.(map[string]interface{})
 	if !ok {
 		t.Fatal("expected payload to be a map")
 	}
-
-	status, ok := payload["status"].(string)
+	healthBlock, ok := payload["health"].(map[string]interface{})
 	if !ok {
-		t.Fatal("expected status to be a string")
+		t.Fatal("expected payload.health to be a map")
 	}
 
-	if status != "healthy" {
-		t.Errorf("expected status 'healthy', got '%s'", status)
+	if status, _ := healthBlock["status"].(string); status != "healthy" {
+		t.Errorf("expected health.status 'healthy', got '%v'", healthBlock["status"])
+	}
+	if healthy, _ := healthBlock["healthy"].(bool); !healthy {
+		t.Error("expected health.healthy to be true")
+	}
+	services, ok := healthBlock["services"].([]interface{})
+	if !ok || len(services) != 1 {
+		t.Fatalf("expected one service in health.services, got %v", healthBlock["services"])
+	}
+	svc, _ := services[0].(map[string]interface{})
+	if name, _ := svc["name"].(string); name != "test-component" {
+		t.Errorf("expected service name 'test-component', got %v", svc["name"])
 	}
 }
 
@@ -178,6 +197,60 @@ func TestGetVersion(t *testing.T) {
 	}
 	if _, ok := payload["go_version"]; !ok {
 		t.Error("expected payload to contain 'go_version'")
+	}
+}
+
+func TestGetMetrics_DashboardShape(t *testing.T) {
+	logger := logging.DefaultLogger()
+	respWriter := response.NewResponseWriter(logger, nil)
+	handlers := NewPlatformHandlers(logger, respWriter)
+
+	registry := health.NewRegistry()
+	handlers.SetHealthRegistry(registry)
+	registry.Register(&mockHealthChecker{
+		name:   "tpm",
+		status: health.StatusHealthy,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/platform/metrics", nil)
+	rec := httptest.NewRecorder()
+	handlers.GetMetrics(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var resp response.WebServiceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode: %v", err)
+	}
+	if !resp.Success {
+		t.Error("expected success")
+	}
+
+	payload, ok := resp.Payload.(map[string]interface{})
+	if !ok {
+		t.Fatal("expected payload map")
+	}
+	metrics, ok := payload["metrics"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected payload.metrics map")
+	}
+	if _, ok := metrics["cpuUsagePercent"]; !ok {
+		t.Error("expected metrics.cpuUsagePercent field")
+	}
+	if _, ok := metrics["memoryUsagePercent"]; !ok {
+		t.Error("expected metrics.memoryUsagePercent field")
+	}
+	if _, ok := metrics["diskUsagePercent"]; !ok {
+		t.Error("expected metrics.diskUsagePercent field")
+	}
+	if _, ok := metrics["timestamp"].(string); !ok {
+		t.Error("expected metrics.timestamp string")
+	}
+	services, ok := metrics["services"].([]interface{})
+	if !ok || len(services) != 1 {
+		t.Fatalf("expected one entry in metrics.services, got %v", metrics["services"])
 	}
 }
 

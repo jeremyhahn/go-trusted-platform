@@ -34,14 +34,14 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 // XKMSServicer is the interface for the embedded XKMS service.
 // This is used by the adapter when running in embedded mode.
-type XKMSServicer = xkms.XKMSServicer
+type XKMSServicer = xkmssdk.XKMSServicer
 
 // Adapter wraps the go-xkms SDK client providing unified access to all
 // XKMS operations including key management, cryptographic operations,
@@ -49,7 +49,7 @@ type XKMSServicer = xkms.XKMSServicer
 //
 // The adapter is thread-safe and manages the SDK client lifecycle.
 type Adapter struct {
-	client xkms.Client
+	client xkmssdk.Client
 	config *Config
 	logger *logging.Logger
 
@@ -148,7 +148,7 @@ func (a *Adapter) Stop(ctx context.Context) error {
 }
 
 // createClient creates the SDK client based on transport mode.
-func (a *Adapter) createClient(embeddedService XKMSServicer) (xkms.Client, error) {
+func (a *Adapter) createClient(embeddedService XKMSServicer) (xkmssdk.Client, error) {
 	switch a.config.Transport {
 	case TransportEmbedded:
 		return a.createEmbeddedClient(embeddedService)
@@ -168,16 +168,16 @@ func (a *Adapter) createClient(embeddedService XKMSServicer) (xkms.Client, error
 }
 
 // createEmbeddedClient creates an SDK client for embedded (in-process) mode.
-func (a *Adapter) createEmbeddedClient(svc XKMSServicer) (xkms.Client, error) {
+func (a *Adapter) createEmbeddedClient(svc XKMSServicer) (xkmssdk.Client, error) {
 	if svc == nil {
 		return nil, ErrEmbeddedServiceRequired
 	}
 
-	return xkms.NewEmbedded(svc)
+	return xkmssdk.NewEmbedded(svc)
 }
 
 // applyTLSConfig applies the platform TLS configuration to the SDK backend config.
-func (a *Adapter) applyTLSConfig(cfg *xkms.BackendConfig) {
+func (a *Adapter) applyTLSConfig(cfg *xkmssdk.BackendConfig) {
 	if a.config.TLS == nil {
 		return
 	}
@@ -191,61 +191,61 @@ func (a *Adapter) applyTLSConfig(cfg *xkms.BackendConfig) {
 }
 
 // createUnixClient creates an SDK client for Unix socket transport.
-func (a *Adapter) createUnixClient() (xkms.Client, error) {
+func (a *Adapter) createUnixClient() (xkmssdk.Client, error) {
 	if a.config.UnixSocket == "" {
 		return nil, ErrMissingUnixSocket
 	}
 
-	cfg := &xkms.BackendConfig{
-		Protocol: xkms.ProtocolUnix,
+	cfg := &xkmssdk.BackendConfig{
+		Protocol: xkmssdk.ProtocolUnix,
 		Address:  a.config.UnixSocket,
 	}
 
 	a.applyTLSConfig(cfg)
 
-	return xkms.New(cfg)
+	return xkmssdk.New(cfg)
 }
 
 // createGRPCClient creates an SDK client for gRPC transport.
-func (a *Adapter) createGRPCClient() (xkms.Client, error) {
+func (a *Adapter) createGRPCClient() (xkmssdk.Client, error) {
 	if a.config.Address == "" {
 		return nil, ErrMissingAddress
 	}
 
-	cfg := &xkms.BackendConfig{
-		Protocol: xkms.ProtocolGRPC,
+	cfg := &xkmssdk.BackendConfig{
+		Protocol: xkmssdk.ProtocolGRPC,
 		Address:  a.config.Address,
 	}
 
 	a.applyTLSConfig(cfg)
 
-	return xkms.New(cfg)
+	return xkmssdk.New(cfg)
 }
 
 // createRESTClient creates an SDK client for REST/HTTP transport.
-func (a *Adapter) createRESTClient() (xkms.Client, error) {
+func (a *Adapter) createRESTClient() (xkmssdk.Client, error) {
 	if a.config.Address == "" {
 		return nil, ErrMissingAddress
 	}
 
-	cfg := &xkms.BackendConfig{
-		Protocol: xkms.ProtocolREST,
+	cfg := &xkmssdk.BackendConfig{
+		Protocol: xkmssdk.ProtocolREST,
 		Address:  a.config.Address,
 	}
 
 	a.applyTLSConfig(cfg)
 
-	return xkms.New(cfg)
+	return xkmssdk.New(cfg)
 }
 
 // createQUICClient creates an SDK client for QUIC transport.
-func (a *Adapter) createQUICClient() (xkms.Client, error) {
+func (a *Adapter) createQUICClient() (xkmssdk.Client, error) {
 	if a.config.Address == "" {
 		return nil, ErrMissingAddress
 	}
 
-	cfg := &xkms.BackendConfig{
-		Protocol:   xkms.ProtocolQUIC,
+	cfg := &xkmssdk.BackendConfig{
+		Protocol:   xkmssdk.ProtocolQUIC,
 		Address:    a.config.Address,
 		TLSEnabled: true, // QUIC always uses TLS
 	}
@@ -259,28 +259,28 @@ func (a *Adapter) createQUICClient() (xkms.Client, error) {
 		}
 	}
 
-	return xkms.New(cfg)
+	return xkmssdk.New(cfg)
 }
 
 // createMCPClient creates an SDK client for MCP transport.
-func (a *Adapter) createMCPClient() (xkms.Client, error) {
+func (a *Adapter) createMCPClient() (xkmssdk.Client, error) {
 	if a.config.Address == "" {
 		return nil, ErrMissingAddress
 	}
 
-	cfg := &xkms.BackendConfig{
-		Protocol: xkms.ProtocolMCP,
+	cfg := &xkmssdk.BackendConfig{
+		Protocol: xkmssdk.ProtocolMCP,
 		Address:  a.config.Address,
 	}
 
 	a.applyTLSConfig(cfg)
 
-	return xkms.New(cfg)
+	return xkmssdk.New(cfg)
 }
 
 // Client returns the underlying SDK client.
 // Returns nil if the adapter is not started or closed.
-func (a *Adapter) Client() xkms.Client {
+func (a *Adapter) Client() xkmssdk.Client {
 	if !a.started.Load() || a.closed.Load() {
 		return nil
 	}
@@ -324,7 +324,7 @@ func (a *Adapter) Transport() Transport {
 // =============================================================================
 
 // Health checks the health of the XKMS service.
-func (a *Adapter) Health(ctx context.Context) (*xkms.HealthResponse, error) {
+func (a *Adapter) Health(ctx context.Context) (*xkmssdk.HealthResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -337,7 +337,7 @@ func (a *Adapter) Health(ctx context.Context) (*xkms.HealthResponse, error) {
 // =============================================================================
 
 // ListBackends returns a list of available key storage backends.
-func (a *Adapter) ListBackends(ctx context.Context) (*xkms.ListBackendsResponse, error) {
+func (a *Adapter) ListBackends(ctx context.Context) (*xkmssdk.ListBackendsResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -346,7 +346,7 @@ func (a *Adapter) ListBackends(ctx context.Context) (*xkms.ListBackendsResponse,
 }
 
 // GetBackend returns information about a specific backend.
-func (a *Adapter) GetBackend(ctx context.Context, backendID string) (*xkms.BackendInfo, error) {
+func (a *Adapter) GetBackend(ctx context.Context, backendID string) (*xkmssdk.BackendInfo, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -359,7 +359,7 @@ func (a *Adapter) GetBackend(ctx context.Context, backendID string) (*xkms.Backe
 // =============================================================================
 
 // GenerateKey generates a new key in the specified backend.
-func (a *Adapter) GenerateKey(ctx context.Context, req *xkms.GenerateKeyRequest) (*xkms.GenerateKeyResponse, error) {
+func (a *Adapter) GenerateKey(ctx context.Context, req *xkmssdk.GenerateKeyRequest) (*xkmssdk.GenerateKeyResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -368,7 +368,7 @@ func (a *Adapter) GenerateKey(ctx context.Context, req *xkms.GenerateKeyRequest)
 }
 
 // ListKeys returns a list of keys in the specified backend.
-func (a *Adapter) ListKeys(ctx context.Context, backend string) (*xkms.ListKeysResponse, error) {
+func (a *Adapter) ListKeys(ctx context.Context, backend string) (*xkmssdk.ListKeysResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -377,7 +377,7 @@ func (a *Adapter) ListKeys(ctx context.Context, backend string) (*xkms.ListKeysR
 }
 
 // GetKey returns information about a specific key.
-func (a *Adapter) GetKey(ctx context.Context, backend, keyID string) (*xkms.GetKeyResponse, error) {
+func (a *Adapter) GetKey(ctx context.Context, backend, keyID string) (*xkmssdk.GetKeyResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -386,7 +386,7 @@ func (a *Adapter) GetKey(ctx context.Context, backend, keyID string) (*xkms.GetK
 }
 
 // DeleteKey deletes a key from the specified backend.
-func (a *Adapter) DeleteKey(ctx context.Context, backend, keyID string) (*xkms.DeleteKeyResponse, error) {
+func (a *Adapter) DeleteKey(ctx context.Context, backend, keyID string) (*xkmssdk.DeleteKeyResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -399,7 +399,7 @@ func (a *Adapter) DeleteKey(ctx context.Context, backend, keyID string) (*xkms.D
 // =============================================================================
 
 // Sign signs data with the specified key.
-func (a *Adapter) Sign(ctx context.Context, req *xkms.SignRequest) (*xkms.SignResponse, error) {
+func (a *Adapter) Sign(ctx context.Context, req *xkmssdk.SignRequest) (*xkmssdk.SignResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -408,7 +408,7 @@ func (a *Adapter) Sign(ctx context.Context, req *xkms.SignRequest) (*xkms.SignRe
 }
 
 // Verify verifies a signature.
-func (a *Adapter) Verify(ctx context.Context, req *xkms.VerifyRequest) (*xkms.VerifyResponse, error) {
+func (a *Adapter) Verify(ctx context.Context, req *xkmssdk.VerifyRequest) (*xkmssdk.VerifyResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -417,7 +417,7 @@ func (a *Adapter) Verify(ctx context.Context, req *xkms.VerifyRequest) (*xkms.Ve
 }
 
 // Encrypt encrypts data with the specified key (symmetric encryption).
-func (a *Adapter) Encrypt(ctx context.Context, req *xkms.EncryptRequest) (*xkms.EncryptResponse, error) {
+func (a *Adapter) Encrypt(ctx context.Context, req *xkmssdk.EncryptRequest) (*xkmssdk.EncryptResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -426,7 +426,7 @@ func (a *Adapter) Encrypt(ctx context.Context, req *xkms.EncryptRequest) (*xkms.
 }
 
 // Decrypt decrypts data with the specified key (symmetric decryption).
-func (a *Adapter) Decrypt(ctx context.Context, req *xkms.DecryptRequest) (*xkms.DecryptResponse, error) {
+func (a *Adapter) Decrypt(ctx context.Context, req *xkmssdk.DecryptRequest) (*xkmssdk.DecryptResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -435,7 +435,7 @@ func (a *Adapter) Decrypt(ctx context.Context, req *xkms.DecryptRequest) (*xkms.
 }
 
 // EncryptAsym encrypts data with RSA public key (asymmetric encryption).
-func (a *Adapter) EncryptAsym(ctx context.Context, req *xkms.EncryptAsymRequest) (*xkms.EncryptAsymResponse, error) {
+func (a *Adapter) EncryptAsym(ctx context.Context, req *xkmssdk.EncryptAsymRequest) (*xkmssdk.EncryptAsymResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -448,7 +448,7 @@ func (a *Adapter) EncryptAsym(ctx context.Context, req *xkms.EncryptAsymRequest)
 // =============================================================================
 
 // GetCertificate returns the certificate for a key.
-func (a *Adapter) GetCertificate(ctx context.Context, backend, keyID string) (*xkms.GetCertificateResponse, error) {
+func (a *Adapter) GetCertificate(ctx context.Context, backend, keyID string) (*xkmssdk.GetCertificateResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -457,7 +457,7 @@ func (a *Adapter) GetCertificate(ctx context.Context, backend, keyID string) (*x
 }
 
 // SaveCertificate saves a certificate for a key.
-func (a *Adapter) SaveCertificate(ctx context.Context, req *xkms.SaveCertificateRequest) error {
+func (a *Adapter) SaveCertificate(ctx context.Context, req *xkmssdk.SaveCertificateRequest) error {
 	client := a.Client()
 	if client == nil {
 		return ErrAdapterNotStarted
@@ -484,7 +484,7 @@ func (a *Adapter) CertificateExists(ctx context.Context, backend, keyID string) 
 }
 
 // ListCertificates lists all certificates in the specified backend.
-func (a *Adapter) ListCertificates(ctx context.Context, backend string) (*xkms.ListCertificatesResponse, error) {
+func (a *Adapter) ListCertificates(ctx context.Context, backend string) (*xkmssdk.ListCertificatesResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -493,7 +493,7 @@ func (a *Adapter) ListCertificates(ctx context.Context, backend string) (*xkms.L
 }
 
 // SaveCertificateChain saves a certificate chain for a key.
-func (a *Adapter) SaveCertificateChain(ctx context.Context, req *xkms.SaveCertificateChainRequest) error {
+func (a *Adapter) SaveCertificateChain(ctx context.Context, req *xkmssdk.SaveCertificateChainRequest) error {
 	client := a.Client()
 	if client == nil {
 		return ErrAdapterNotStarted
@@ -502,7 +502,7 @@ func (a *Adapter) SaveCertificateChain(ctx context.Context, req *xkms.SaveCertif
 }
 
 // GetCertificateChain returns the certificate chain for a key.
-func (a *Adapter) GetCertificateChain(ctx context.Context, backend, keyID string) (*xkms.GetCertificateChainResponse, error) {
+func (a *Adapter) GetCertificateChain(ctx context.Context, backend, keyID string) (*xkmssdk.GetCertificateChainResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -511,7 +511,7 @@ func (a *Adapter) GetCertificateChain(ctx context.Context, backend, keyID string
 }
 
 // GetTLSCertificate returns the TLS certificate bundle for a key.
-func (a *Adapter) GetTLSCertificate(ctx context.Context, backend, keyID string) (*xkms.GetTLSCertificateResponse, error) {
+func (a *Adapter) GetTLSCertificate(ctx context.Context, backend, keyID string) (*xkmssdk.GetTLSCertificateResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -524,7 +524,7 @@ func (a *Adapter) GetTLSCertificate(ctx context.Context, backend, keyID string) 
 // =============================================================================
 
 // ImportKey imports a key into the specified backend.
-func (a *Adapter) ImportKey(ctx context.Context, req *xkms.ImportKeyRequest) (*xkms.ImportKeyResponse, error) {
+func (a *Adapter) ImportKey(ctx context.Context, req *xkmssdk.ImportKeyRequest) (*xkmssdk.ImportKeyResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -533,7 +533,7 @@ func (a *Adapter) ImportKey(ctx context.Context, req *xkms.ImportKeyRequest) (*x
 }
 
 // ExportKey exports a key from the specified backend.
-func (a *Adapter) ExportKey(ctx context.Context, req *xkms.ExportKeyRequest) (*xkms.ExportKeyResponse, error) {
+func (a *Adapter) ExportKey(ctx context.Context, req *xkmssdk.ExportKeyRequest) (*xkmssdk.ExportKeyResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -542,7 +542,7 @@ func (a *Adapter) ExportKey(ctx context.Context, req *xkms.ExportKeyRequest) (*x
 }
 
 // RotateKey rotates a key by generating a new version.
-func (a *Adapter) RotateKey(ctx context.Context, req *xkms.RotateKeyRequest) (*xkms.RotateKeyResponse, error) {
+func (a *Adapter) RotateKey(ctx context.Context, req *xkmssdk.RotateKeyRequest) (*xkmssdk.RotateKeyResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -551,7 +551,7 @@ func (a *Adapter) RotateKey(ctx context.Context, req *xkms.RotateKeyRequest) (*x
 }
 
 // GetImportParameters gets the parameters needed to import a key.
-func (a *Adapter) GetImportParameters(ctx context.Context, req *xkms.GetImportParametersRequest) (*xkms.GetImportParametersResponse, error) {
+func (a *Adapter) GetImportParameters(ctx context.Context, req *xkmssdk.GetImportParametersRequest) (*xkmssdk.GetImportParametersResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -560,7 +560,7 @@ func (a *Adapter) GetImportParameters(ctx context.Context, req *xkms.GetImportPa
 }
 
 // WrapKey wraps key material for secure transport.
-func (a *Adapter) WrapKey(ctx context.Context, req *xkms.WrapKeyRequest) (*xkms.WrapKeyResponse, error) {
+func (a *Adapter) WrapKey(ctx context.Context, req *xkmssdk.WrapKeyRequest) (*xkmssdk.WrapKeyResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -569,7 +569,7 @@ func (a *Adapter) WrapKey(ctx context.Context, req *xkms.WrapKeyRequest) (*xkms.
 }
 
 // UnwrapKey unwraps key material.
-func (a *Adapter) UnwrapKey(ctx context.Context, req *xkms.UnwrapKeyRequest) (*xkms.UnwrapKeyResponse, error) {
+func (a *Adapter) UnwrapKey(ctx context.Context, req *xkmssdk.UnwrapKeyRequest) (*xkmssdk.UnwrapKeyResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -578,7 +578,7 @@ func (a *Adapter) UnwrapKey(ctx context.Context, req *xkms.UnwrapKeyRequest) (*x
 }
 
 // CopyKey copies a key from one backend to another.
-func (a *Adapter) CopyKey(ctx context.Context, req *xkms.CopyKeyRequest) (*xkms.CopyKeyResponse, error) {
+func (a *Adapter) CopyKey(ctx context.Context, req *xkmssdk.CopyKeyRequest) (*xkmssdk.CopyKeyResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -591,7 +591,7 @@ func (a *Adapter) CopyKey(ctx context.Context, req *xkms.CopyKeyRequest) (*xkms.
 // =============================================================================
 
 // Seal seals data using the backend's sealing mechanism (e.g., TPM2).
-func (a *Adapter) Seal(ctx context.Context, req *xkms.SealRequest) (*xkms.SealResponse, error) {
+func (a *Adapter) Seal(ctx context.Context, req *xkmssdk.SealRequest) (*xkmssdk.SealResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -600,7 +600,7 @@ func (a *Adapter) Seal(ctx context.Context, req *xkms.SealRequest) (*xkms.SealRe
 }
 
 // Unseal unseals previously sealed data.
-func (a *Adapter) Unseal(ctx context.Context, req *xkms.UnsealRequest) (*xkms.UnsealResponse, error) {
+func (a *Adapter) Unseal(ctx context.Context, req *xkmssdk.UnsealRequest) (*xkmssdk.UnsealResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -609,7 +609,7 @@ func (a *Adapter) Unseal(ctx context.Context, req *xkms.UnsealRequest) (*xkms.Un
 }
 
 // CanSeal checks if the backend supports sealing operations.
-func (a *Adapter) CanSeal(ctx context.Context, backend string) (*xkms.CanSealResponse, error) {
+func (a *Adapter) CanSeal(ctx context.Context, backend string) (*xkmssdk.CanSealResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -622,7 +622,7 @@ func (a *Adapter) CanSeal(ctx context.Context, backend string) (*xkms.CanSealRes
 // =============================================================================
 
 // ListUsers returns a list of all users.
-func (a *Adapter) ListUsers(ctx context.Context) (*xkms.ListUsersResponse, error) {
+func (a *Adapter) ListUsers(ctx context.Context) (*xkmssdk.ListUsersResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -631,7 +631,7 @@ func (a *Adapter) ListUsers(ctx context.Context) (*xkms.ListUsersResponse, error
 }
 
 // GetUser returns information about a specific user.
-func (a *Adapter) GetUser(ctx context.Context, username string) (*xkms.GetUserResponse, error) {
+func (a *Adapter) GetUser(ctx context.Context, username string) (*xkmssdk.GetUserResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -667,7 +667,7 @@ func (a *Adapter) DisableUser(ctx context.Context, username string) error {
 }
 
 // ListUserCredentials returns a list of credentials for a user.
-func (a *Adapter) ListUserCredentials(ctx context.Context, username string) (*xkms.ListUserCredentialsResponse, error) {
+func (a *Adapter) ListUserCredentials(ctx context.Context, username string) (*xkmssdk.ListUserCredentialsResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -680,7 +680,7 @@ func (a *Adapter) ListUserCredentials(ctx context.Context, username string) (*xk
 // =============================================================================
 
 // BeginRegistration begins a WebAuthn registration flow.
-func (a *Adapter) BeginRegistration(ctx context.Context, req *xkms.BeginRegistrationRequest) (*xkms.BeginRegistrationResponse, error) {
+func (a *Adapter) BeginRegistration(ctx context.Context, req *xkmssdk.BeginRegistrationRequest) (*xkmssdk.BeginRegistrationResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -689,7 +689,7 @@ func (a *Adapter) BeginRegistration(ctx context.Context, req *xkms.BeginRegistra
 }
 
 // FinishRegistration completes a WebAuthn registration flow.
-func (a *Adapter) FinishRegistration(ctx context.Context, req *xkms.FinishRegistrationRequest) (*xkms.FinishRegistrationResponse, error) {
+func (a *Adapter) FinishRegistration(ctx context.Context, req *xkmssdk.FinishRegistrationRequest) (*xkmssdk.FinishRegistrationResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -698,7 +698,7 @@ func (a *Adapter) FinishRegistration(ctx context.Context, req *xkms.FinishRegist
 }
 
 // BeginAuthentication begins a WebAuthn authentication flow.
-func (a *Adapter) BeginAuthentication(ctx context.Context, req *xkms.BeginAuthenticationRequest) (*xkms.BeginAuthenticationResponse, error) {
+func (a *Adapter) BeginAuthentication(ctx context.Context, req *xkmssdk.BeginAuthenticationRequest) (*xkmssdk.BeginAuthenticationResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted
@@ -707,7 +707,7 @@ func (a *Adapter) BeginAuthentication(ctx context.Context, req *xkms.BeginAuthen
 }
 
 // FinishAuthentication completes a WebAuthn authentication flow.
-func (a *Adapter) FinishAuthentication(ctx context.Context, req *xkms.FinishAuthenticationRequest) (*xkms.FinishAuthenticationResponse, error) {
+func (a *Adapter) FinishAuthentication(ctx context.Context, req *xkmssdk.FinishAuthenticationRequest) (*xkmssdk.FinishAuthenticationResponse, error) {
 	client := a.Client()
 	if client == nil {
 		return nil, ErrAdapterNotStarted

@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, usePathname, useRouter } from 'next/navigation';
+import { resolveDynamicId } from '@/utils/dynamic-route';
 import {
   ArrowLeft,
   Play,
@@ -38,7 +39,9 @@ const statusColors = {
 
 export default function VMDetailPage() {
   const params = useParams();
+  const pathname = usePathname();
   const router = useRouter();
+  const vmId = resolveDynamicId(params, pathname, 'vms');
   const [vm, setVM] = useState<VMDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -46,9 +49,13 @@ export default function VMDetailPage() {
   const { toast } = useToast();
 
   const fetchVM = async () => {
+    if (!vmId) {
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
-      const response = await compute.getVM(params.id as string);
+      const response = await compute.getVM(vmId);
       if (response.success && response.data) {
         // SDK returns { vm: VM }, but we need VMDetail
         // For now, cast to VMDetail - proper type mapping would be handled by backend
@@ -67,9 +74,10 @@ export default function VMDetailPage() {
 
   useEffect(() => {
     fetchVM();
+    if (!vmId) return;
     const interval = setInterval(fetchVM, 5000);
     return () => clearInterval(interval);
-  }, [params.id]);
+  }, [vmId]);
 
   const startVMMutation = useMutation(
     (vmId: string) => compute.startVM(vmId),
@@ -213,32 +221,32 @@ export default function VMDetailPage() {
 
   const handleStart = () => {
     setActionLoading(true);
-    startVMMutation.mutate(params.id as string);
+    startVMMutation.mutate(vmId);
   };
 
   const handleStop = () => {
     setActionLoading(true);
-    stopVMMutation.mutate(params.id as string);
+    stopVMMutation.mutate(vmId);
   };
 
   const handleReboot = () => {
     setActionLoading(true);
-    rebootVMMutation.mutate(params.id as string);
+    rebootVMMutation.mutate(vmId);
   };
 
   const handleSuspend = () => {
     setActionLoading(true);
-    suspendVMMutation.mutate(params.id as string);
+    suspendVMMutation.mutate(vmId);
   };
 
   const handleResume = () => {
     setActionLoading(true);
-    resumeVMMutation.mutate(params.id as string);
+    resumeVMMutation.mutate(vmId);
   };
 
   const handleDelete = () => {
     setActionLoading(true);
-    deleteVMMutation.mutate(params.id as string);
+    deleteVMMutation.mutate(vmId);
   };
 
   const handleClone = () => {
@@ -246,7 +254,7 @@ export default function VMDetailPage() {
     if (!name) return;
 
     setActionLoading(true);
-    cloneVMMutation.mutate({ vmId: params.id as string, name });
+    cloneVMMutation.mutate({ vmId: vmId, name });
   };
 
   if (loading || !vm) {

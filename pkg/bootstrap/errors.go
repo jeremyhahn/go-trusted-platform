@@ -568,6 +568,36 @@ func (e ErrISOStagingFailed) Error() string {
 
 func (e ErrISOStagingFailed) Unwrap() error { return e.Cause }
 
+// ErrISOStageFreshnessCheck is returned when the iso-stager can't perform
+// or verify a freshness check (compute the local sha256, read or write the
+// sidecar metadata file). The Cause preserves the underlying typed error
+// (filesystem, transport, or ErrInvalidStageMeta) for errors.As inspection.
+type ErrISOStageFreshnessCheck struct {
+	Path  string
+	Cause error
+}
+
+func (e ErrISOStageFreshnessCheck) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bootstrap: iso-stager: freshness check failed for %s: %v", e.Path, e.Cause)
+	}
+	return fmt.Sprintf("bootstrap: iso-stager: freshness check failed for %s", e.Path)
+}
+
+func (e ErrISOStageFreshnessCheck) Unwrap() error { return e.Cause }
+
+// ErrInvalidStageMeta is returned when the iso-stager's sidecar metadata
+// file exists but contains a malformed or out-of-range field. It is always
+// wrapped by ErrISOStageFreshnessCheck before being surfaced to callers.
+type ErrInvalidStageMeta struct {
+	Field string
+	Value any
+}
+
+func (e ErrInvalidStageMeta) Error() string {
+	return fmt.Sprintf("bootstrap: iso-stager: invalid sidecar field %q: %v", e.Field, e.Value)
+}
+
 // ErrBootDeviceSetFailed is returned when SetBootDevice fails on a node's
 // BMC during virtual-media boot.
 type ErrBootDeviceSetFailed struct {

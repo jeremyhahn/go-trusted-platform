@@ -94,6 +94,11 @@ func NewMockOVSClientInterface() *MockOVSClientInterface {
 	}
 }
 
+// AddBond creates a bonded OVS port (stub — used only for interface conformance).
+func (m *MockOVSClientInterface) AddBond(ctx context.Context, bridgeName, bondName string, members []string, mode string, lacp string) (*ovs.Port, error) {
+	return nil, nil
+}
+
 // Connection management
 func (m *MockOVSClientInterface) Connect(ctx context.Context) error {
 	if m.connectErr != nil {

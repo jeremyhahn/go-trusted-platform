@@ -122,7 +122,10 @@ func DiscoverMACs(ctx context.Context, config *Config, logger *slog.Logger) ([]s
 // discoverMACsRedfish queries the Redfish EthernetInterfaces endpoint and
 // returns every valid MAC address advertised by the system.
 func discoverMACsRedfish(ctx context.Context, config *Config, logger *slog.Logger) ([]string, error) {
-	rc := newRedfishClient(config, logger)
+	rc, err := newRedfishClient(config, logger)
+	if err != nil {
+		return nil, ErrMACNotFound{Address: config.Address}
+	}
 	defer rc.Close()
 
 	if err := rc.ensureDiscovered(ctx); err != nil {

@@ -19,7 +19,7 @@ import (
 	"crypto/x509"
 	"testing"
 
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 func TestKeyConfigToKeyAttributes_RSA(t *testing.T) {

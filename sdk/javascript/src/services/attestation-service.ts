@@ -5,6 +5,7 @@
  */
 
 import type { ApiClient } from '../client/api-client.js';
+import type { Transport } from '../transport/transport.js';
 import type { ApiResponse } from '../types/api.js';
 import { BaseService } from './base-service.js';
 import type {
@@ -54,7 +55,7 @@ export class AttestationService extends BaseService {
    *
    * @param client - The API client to use for requests
    */
-  constructor(client: ApiClient) {
+  constructor(client: Transport | ApiClient) {
     super(client, '/v1/attestation');
   }
 

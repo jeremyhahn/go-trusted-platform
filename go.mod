@@ -14,6 +14,7 @@ replace github.com/armon/go-metrics => github.com/armon/go-metrics v0.4.1
 require (
 	github.com/GeertJohan/yubigo v0.0.0-20190917122436-175bc097e60e
 	github.com/anatol/devmapper.go v0.0.0-20250316020617-2671eefd35d7
+	github.com/awnumar/memguard v0.23.0
 	github.com/boombuler/barcode v1.1.0
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/codegangsta/negroni v1.0.0
@@ -36,15 +37,7 @@ require (
 	github.com/jeremyhahn/go-codec v1.3.0
 	github.com/jeremyhahn/go-luks2 v0.1.4-alpha
 	github.com/jeremyhahn/go-objstore v0.1.4-alpha
-	github.com/jeremyhahn/go-qrdb v0.0.0
-	github.com/jeremyhahn/go-qrdb/sdk/go v0.0.0
-	github.com/jeremyhahn/go-quicbaas v0.0.0
-	github.com/jeremyhahn/go-quicbaas/sdk/go v0.0.0
-	github.com/jeremyhahn/go-trusted-ca v0.0.0
-	github.com/jeremyhahn/go-trusted-ca/sdk/go v0.0.0
 	github.com/jeremyhahn/go-truststrap v0.1.1-alpha
-	github.com/jeremyhahn/go-xkms v0.2.2-develop
-	github.com/jeremyhahn/go-xkms/sdk/go v0.2.2-alpha
 	github.com/libp2p/go-libp2p v0.46.0
 	github.com/libp2p/go-libp2p-kad-dht v0.37.0
 	github.com/mdlayher/packet v1.1.2
@@ -65,8 +58,8 @@ require (
 	github.com/wailsapp/wails/v2 v2.12.0
 	golang.org/x/crypto v0.49.0
 	golang.org/x/net v0.52.0
-	golang.org/x/sys v0.42.0
-	golang.org/x/term v0.41.0
+	golang.org/x/sys v0.43.0
+	golang.org/x/term v0.42.0
 	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v2 v2.4.0
@@ -108,7 +101,6 @@ require (
 	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/apparentlymart/go-cidr v1.1.0 // indirect
 	github.com/awnumar/memcall v0.5.0 // indirect
-	github.com/awnumar/memguard v0.23.0 // indirect
 	github.com/aws/aws-sdk-go v1.55.8 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.4 // indirect
 	github.com/aws/aws-sdk-go-v2/config v1.32.12 // indirect
@@ -187,7 +179,6 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
-	github.com/google/go-tpm-tools v0.4.8 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.14 // indirect
@@ -221,14 +212,16 @@ require (
 	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
 	github.com/jeremyhahn/go-auth v0.0.0-20251115074454-fdb02f328d92 // indirect
 	github.com/jeremyhahn/go-frost v0.1.6-alpha // indirect
+	github.com/jeremyhahn/go-qrdb v0.0.0 // indirect
 	github.com/jeremyhahn/go-quicraft v0.0.0 // indirect
-	github.com/jmespath/go-jmespath v0.4.1-0.20220621161143-b0104c826a24 // indirect
+	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/josharian/native v1.1.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/k-sone/critbitgo v1.4.0 // indirect
 	github.com/klauspost/compress v1.18.4 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/koron/go-ssdp v0.0.6 // indirect
+	github.com/kr/fs v0.1.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
@@ -312,6 +305,7 @@ require (
 	github.com/pires/go-proxyproto v0.11.0 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/pkg/sftp v1.13.6 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20250313105119-ba97887b0a25 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/polydawn/refmt v0.89.0 // indirect
@@ -400,4 +394,41 @@ require (
 	lukechampine.com/blake3 v1.4.1 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 	software.sslmate.com/src/go-pkcs12 v0.7.0 // indirect
+)
+
+replace github.com/jeremyhahn/go-quicbaas => /home/jhahn/sources/go-quicbaas
+
+replace github.com/jeremyhahn/go-quicbaas/sdk/go => /home/jhahn/sources/go-quicbaas/sdk/go
+
+replace github.com/jeremyhahn/go-xkms => /home/jhahn/sources/go-xkms
+
+replace github.com/jeremyhahn/go-xkms/sdk/go => /home/jhahn/sources/go-xkms/sdk/go
+
+replace github.com/jeremyhahn/go-objstore => /home/jhahn/sources/go-objstore
+
+replace github.com/jeremyhahn/go-qrdb => /home/jhahn/sources/go-qrdb
+
+replace github.com/jeremyhahn/go-qrdb/sdk/go => /home/jhahn/sources/go-qrdb/sdk/go
+
+replace github.com/jeremyhahn/go-quicraft => /home/jhahn/sources/go-quicraft
+
+replace github.com/jeremyhahn/go-truststrap => /home/jhahn/sources/go-truststrap
+
+replace github.com/jeremyhahn/go-frost => /home/jhahn/sources/go-frost
+
+replace github.com/jeremyhahn/go-auth => /home/jhahn/sources/go-auth
+
+replace github.com/jeremyhahn/go-codec => /home/jhahn/sources/go-codec
+
+replace github.com/jeremyhahn/go-luks2 => /home/jhahn/sources/go-luks2
+
+replace github.com/jeremyhahn/go-signal => /home/jhahn/sources/go-signal
+
+require (
+	github.com/google/go-tpm-tools v0.4.8
+	github.com/jeremyhahn/go-qrdb/sdk/go v0.0.0
+	github.com/jeremyhahn/go-quicbaas v0.0.0
+	github.com/jeremyhahn/go-quicbaas/sdk/go v0.0.0
+	github.com/jeremyhahn/go-xkms v0.0.0
+	github.com/jeremyhahn/go-xkms/sdk/go v0.0.0
 )

@@ -168,7 +168,8 @@ func (c *SSHClient) CopyFile(ctx context.Context, localPath, remotePath string) 
 // the same filesystem.
 //
 // Idempotency is up to the caller — this method always uploads. The
-// orchestrator's ISO stager compares size+mtime first and skips this call on
+// orchestrator's ISO stager compares the local sha256 against a sidecar
+// metadata file written next to the staged payload and skips this call on
 // match.
 func (c *SSHClient) CopyFileStream(ctx context.Context, localPath, remotePath string) error {
 	if !c.connected.Load() {

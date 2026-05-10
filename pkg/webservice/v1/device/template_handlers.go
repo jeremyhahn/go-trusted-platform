@@ -90,12 +90,38 @@ func (h *TemplateHandler) CreateTemplate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if req.ID == 0 {
-		h.responseWriter.Error400(w, r, ErrMissingTemplateID{})
-		return
+	// Promote nested envelope fields when present so the WebUI's
+	// `{template: {name, role}}` payload reaches the entity mapper.
+	if req.Template != nil {
+		if req.Template.ID != 0 {
+			req.ID = req.Template.ID
+		}
+		if req.Template.TenantID != "" {
+			req.TenantID = req.Template.TenantID
+		}
+		if req.Template.Name != "" {
+			req.Name = req.Template.Name
+		}
+		if req.Template.Description != "" {
+			req.Description = req.Template.Description
+		}
+		if req.Template.Role != "" {
+			req.Role = req.Template.Role
+		}
+		if len(req.Template.Config) > 0 {
+			req.Config = req.Template.Config
+		}
+		if req.Template.MatchRules != nil {
+			req.MatchRules = req.Template.MatchRules
+		}
 	}
 
 	templateEntity := h.requestToTemplate(&req)
+	if templateEntity.ID == 0 {
+		// Server-side ID generation matches the device CRUD path so
+		// callers don't need to mint identifiers client-side.
+		templateEntity.ID = nextDeviceID()
+	}
 
 	if err := h.templateService.Save(r.Context(), templateEntity); err != nil {
 		h.logger.Errorf("failed to create template: %v", err)

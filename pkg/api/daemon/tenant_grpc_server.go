@@ -726,6 +726,117 @@ func (s *TenantGRPCServer) GetTenantDEKStatus(
 }
 
 // =============================================================================
+// Per-Tenant Barrier Operations (added 2026-04-28)
+// =============================================================================
+
+// InitTenantBarrier explicitly initializes a per-tenant barrier. The optional
+// threshold/shares parameters configure Shamir secret sharing; both zero
+// means deterministic non-Shamir init. The tenant must already exist.
+func (s *TenantGRPCServer) InitTenantBarrier(
+	ctx context.Context,
+	req *platformv1.InitTenantBarrierRequest,
+) (*platformv1.InitTenantBarrierResponse, error) {
+	if s.manager == nil {
+		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
+	}
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+
+	if err := s.manager.InitTenantBarrier(ctx, req.GetTenantId()); err != nil {
+		s.logger.Error("failed to init tenant barrier", "tenant_id", req.GetTenantId(), "error", err)
+		return nil, s.toGRPCError(err)
+	}
+
+	s.logger.Info("tenant barrier initialized", "tenant_id", req.GetTenantId())
+
+	return &platformv1.InitTenantBarrierResponse{
+		Status: &platformv1.Status{Success: true, Message: "tenant barrier initialized"},
+	}, nil
+}
+
+// UnsealTenantBarrier unseals a per-tenant barrier with the provided key
+// material. An empty key falls back to the deterministic init credential.
+func (s *TenantGRPCServer) UnsealTenantBarrier(
+	ctx context.Context,
+	req *platformv1.UnsealTenantBarrierRequest,
+) (*platformv1.UnsealTenantBarrierResponse, error) {
+	if s.manager == nil {
+		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
+	}
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+
+	if err := s.manager.UnsealTenantBarrier(ctx, req.GetTenantId(), req.GetKey()); err != nil {
+		s.logger.Error("failed to unseal tenant barrier", "tenant_id", req.GetTenantId(), "error", err)
+		return nil, s.toGRPCError(err)
+	}
+
+	s.logger.Info("tenant barrier unsealed", "tenant_id", req.GetTenantId())
+
+	return &platformv1.UnsealTenantBarrierResponse{
+		Status: &platformv1.Status{Success: true, Message: "tenant barrier unsealed"},
+	}, nil
+}
+
+// SealTenantBarrier seals a per-tenant barrier. Subsequent reads/writes
+// against the tenant namespace fail until unsealed again.
+func (s *TenantGRPCServer) SealTenantBarrier(
+	ctx context.Context,
+	req *platformv1.SealTenantBarrierRequest,
+) (*platformv1.SealTenantBarrierResponse, error) {
+	if s.manager == nil {
+		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
+	}
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+
+	if err := s.manager.SealTenantBarrier(ctx, req.GetTenantId()); err != nil {
+		s.logger.Error("failed to seal tenant barrier", "tenant_id", req.GetTenantId(), "error", err)
+		return nil, s.toGRPCError(err)
+	}
+
+	s.logger.Info("tenant barrier sealed", "tenant_id", req.GetTenantId())
+
+	return &platformv1.SealTenantBarrierResponse{
+		Status: &platformv1.Status{Success: true, Message: "tenant barrier sealed"},
+	}, nil
+}
+
+// GetTenantBarrierStatus reports the current sealed/initialized state and
+// active strategy metadata of a per-tenant barrier. Uninitialized barriers
+// return Sealed=true, Initialized=false rather than erroring.
+func (s *TenantGRPCServer) GetTenantBarrierStatus(
+	ctx context.Context,
+	req *platformv1.GetTenantBarrierStatusRequest,
+) (*platformv1.GetTenantBarrierStatusResponse, error) {
+	if s.manager == nil {
+		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
+	}
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+
+	st, err := s.manager.TenantBarrierStatus(ctx, req.GetTenantId())
+	if err != nil {
+		s.logger.Error("failed to get tenant barrier status", "tenant_id", req.GetTenantId(), "error", err)
+		return nil, s.toGRPCError(err)
+	}
+
+	return &platformv1.GetTenantBarrierStatusResponse{
+		BarrierStatus: &platformv1.TenantBarrierStatus{
+			TenantId:       st.TenantID,
+			Sealed:         st.Sealed,
+			Initialized:    st.Initialized,
+			Strategy:       st.Strategy,
+			HardwareBacked: st.HardwareBacked,
+		},
+	}, nil
+}
+
+// =============================================================================
 // Helper Methods
 // =============================================================================
 

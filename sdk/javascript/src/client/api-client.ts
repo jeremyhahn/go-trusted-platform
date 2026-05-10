@@ -16,6 +16,7 @@ import { ApiError } from '../errors/api-error.js';
 import type { ApiErrorDetails } from '../errors/types.js';
 import type { ApiResponse, HttpMethod, QueryParams, RequestBody } from '../types/api.js';
 import { appendQueryParams } from '../types/api.js';
+import type { Transport } from '../transport/transport.js';
 import type { ApiClientConfig, ResolvedApiClientConfig } from './config.js';
 import { resolveConfig, validateConfig } from './config.js';
 import type {
@@ -72,7 +73,7 @@ export interface RequestOptions {
  * });
  * ```
  */
-export class ApiClient {
+export class ApiClient implements Transport {
   private readonly config: ResolvedApiClientConfig;
 
   /** Interceptor managers */
@@ -206,12 +207,21 @@ export class ApiClient {
   }
 
   /**
-   * Determines if a request should be retried
+   * Determines if a request should be retried.
+   *
+   * Mutating HTTP verbs (POST, PUT, PATCH, DELETE) are NOT retried on
+   * server errors by default — the operation may have partially
+   * succeeded server-side, and retrying turns a fast user-visible
+   * failure into a 15+ second spinner that ultimately still fails.
+   * Read methods (GET, HEAD) keep the legacy retry-on-5xx behaviour.
+   * Callers can re-enable mutation retries via
+   * `options.retry.retryOnMutation = true`.
    */
   private shouldRetry(
     attempt: number,
     error: ApiError | Error,
-    options?: RequestOptions
+    options?: RequestOptions,
+    method?: HttpMethod,
   ): boolean {
     // Check if retries are explicitly disabled
     if (options?.retry?.enabled === false) {
@@ -223,12 +233,21 @@ export class ApiClient {
       return false;
     }
 
+    const isMutation = method !== undefined && method !== 'GET' && method !== 'HEAD';
+    const allowMutationRetry =
+      (options?.retry as { retryOnMutation?: boolean } | undefined)?.retryOnMutation === true;
+
     if (error instanceof ApiError) {
       // Check if the status code is retryable
       if (error.status !== undefined) {
+        if (isMutation && !allowMutationRetry) {
+          return false;
+        }
         return this.config.retry.retryableStatuses.includes(error.status);
       }
-      // Retry network errors
+      // Retry network errors (safe even for mutations because no
+      // server-side state was modified when the connection failed
+      // before reaching the server).
       if (error.isNetworkError() && this.config.retry.retryOnNetworkError) {
         return true;
       }
@@ -281,7 +300,7 @@ export class ApiClient {
           const apiError = ApiError.fromResponse(response.error,
             (response as ApiResponse<T> & { _status?: number })._status);
 
-          if (this.shouldRetry(attempt, apiError, options)) {
+          if (this.shouldRetry(attempt, apiError, options, method)) {
             const delay = this.calculateBackoffDelay(attempt);
             await this.wait(delay);
             attempt++;
@@ -302,7 +321,7 @@ export class ApiClient {
         const processedError = await this.applyErrorInterceptors(err, context);
 
         // Check if we should retry
-        if (this.shouldRetry(attempt, processedError, options)) {
+        if (this.shouldRetry(attempt, processedError, options, method)) {
           const delay = this.calculateBackoffDelay(attempt);
           await this.wait(delay);
           attempt++;
@@ -402,12 +421,23 @@ export class ApiClient {
         const json = await rawResponse.json();
 
         if (rawResponse.ok) {
-          data = json as T;
+          // The platform REST API wraps every successful response in
+          // {code, error, success, payload}. Unwrap so service code can
+          // use response.payload fields directly without each page
+          // needing to know about the envelope. Plain objects (no
+          // success field) are returned as-is.
+          if (json && typeof json === 'object' && 'success' in json && 'payload' in json) {
+            data = (json.payload ?? {}) as T;
+          } else {
+            data = json as T;
+          }
         } else {
+          // The platform error envelope uses `error` (string) instead of
+          // `message`. Surface either so callers see the actual cause.
           error = ApiError.fromResponse(
             {
               code: json.code ?? `HTTP_${rawResponse.status}`,
-              message: json.message ?? rawResponse.statusText ?? 'An error occurred',
+              message: json.message ?? json.error ?? rawResponse.statusText ?? 'An error occurred',
               details: json.details,
             },
             rawResponse.status

@@ -36,6 +36,7 @@ type Client interface {
 	VTPM() platformv1.VTPMServiceClient
 	SDN() platformv1.SDNServiceClient
 	Compute() platformv1.ComputeServiceClient
+	BMC() platformv1.BMCServiceClient
 	IDevID() platformv1.IDevIDServiceClient
 	Attestation() platformv1.AttestationServiceClient
 	Tenant() platformv1.TenantServiceClient
@@ -73,6 +74,7 @@ type ServiceClients struct {
 	Barrier     platformv1.BarrierServiceClient
 	SDN         platformv1.SDNServiceClient
 	Compute     platformv1.ComputeServiceClient
+	BMC         platformv1.BMCServiceClient
 	IDevID      platformv1.IDevIDServiceClient
 	Attestation platformv1.AttestationServiceClient
 	Tenant      platformv1.TenantServiceClient
@@ -286,6 +288,7 @@ func (c *platformClient) initServiceClients() {
 		Barrier:     platformv1.NewBarrierServiceClient(conn),
 		SDN:         platformv1.NewSDNServiceClient(conn),
 		Compute:     platformv1.NewComputeServiceClient(conn),
+		BMC:         platformv1.NewBMCServiceClient(conn),
 		IDevID:      platformv1.NewIDevIDServiceClient(conn),
 		Attestation: platformv1.NewAttestationServiceClient(conn),
 		Tenant:      platformv1.NewTenantServiceClient(conn),
@@ -376,6 +379,14 @@ func (c *platformClient) Compute() platformv1.ComputeServiceClient {
 		return nil
 	}
 	return c.services.Compute
+}
+
+// BMC returns the BMC service client.
+func (c *platformClient) BMC() platformv1.BMCServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.BMC
 }
 
 // IDevID returns the IDevID service client.

@@ -19,12 +19,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
-	xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // XKMSSigner provides access to crypto.Signer instances for key attributes.
@@ -44,6 +46,24 @@ type TokenClaims struct {
 	Organizations  []uint64 `json:"orgs"`
 	Services       []uint64 `json:"svcs"`
 	UserID         uint64   `json:"uid"`
+	// UserIDStr mirrors UserID as a decimal string under the standard
+	// "user_id" claim so JS/TS consumers (and any other library that
+	// expects a string identifier) can read it without dealing with
+	// JSON-number precision loss on uint64.
+	UserIDStr      string   `json:"user_id"`
+	// Email is exposed under the standard "email" claim so the frontend
+	// AuthContext can populate the user object after a successful login.
+	Email          string   `json:"email,omitempty"`
+	// TenantID surfaces the active tenant in the standard "tenant_id"
+	// claim consumed by the frontend.
+	TenantID       string   `json:"tenant_id,omitempty"`
+	// IsTenantOwner mirrors the tenant ownership flag the frontend uses
+	// to gate admin-only UI.
+	IsTenantOwner  bool     `json:"is_tenant_owner,omitempty"`
+	// Roles is the list of role names the frontend uses for UI
+	// authorisation; the omitempty keeps tokens compact when no roles
+	// have been assigned yet.
+	Roles          []string `json:"roles,omitempty"`
 	WebAuthnClaims *webauthn.SessionData
 	jwt.RegisteredClaims
 }
@@ -91,10 +111,23 @@ func NewService(params ServiceParams) (*Service, error) {
 
 func (service *Service) GenerateToken(user *entities.User) (string, error) {
 	now := time.Now()
+	// Surface the user's tenant in the standard "tenant_id" claim so the
+	// WebUI's AuthContext can pick up the active tenant and unlock IAM
+	// pages (the dashboard's IAM screens fail with "No tenant ID
+	// available" otherwise). Default to "default" when the user record
+	// lacks a tenant assignment so single-tenant deployments still
+	// function.
+	tenantID := user.TenantID
+	if tenantID == "" {
+		tenantID = "default"
+	}
 	token := jwt.NewWithClaims(service.signingMethod, TokenClaims{
-		UserID: user.ID,
-		// Email:  user.Email,
+		UserID:    user.ID,
+		UserIDStr: strconv.FormatUint(user.ID, 10),
+		Email:     user.Email,
+		TenantID:  tenantID,
 		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:  strconv.FormatUint(user.ID, 10),
 			Audience: jwt.ClaimStrings{service.params.Audience},
 			Issuer:   service.params.Issuer,
 			IssuedAt: jwt.NewNumericDate(now),
@@ -152,4 +185,27 @@ func (service *Service) Verify(token *jwt.Token) error {
 	}
 	opts := jwt.WithAudience(service.params.Audience)
 	return jwt.NewValidator(opts).Validate(token.Claims)
+}
+
+// VerifyToken parses and validates a token string. Returns true when the
+// token is valid (signature checks out and claims pass validation),
+// false otherwise. Satisfies the daemon's PlatformJWTVerifier interface
+// so gRPC/QUIC/MCP transports can accept platform-issued JWTs.
+func (service *Service) VerifyToken(tokenString string) (bool, error) {
+	if service == nil {
+		return false, ErrInvalidToken
+	}
+	tokenString = strings.TrimPrefix(tokenString, "Bearer ")
+	tokenString = strings.TrimSpace(tokenString)
+	if tokenString == "" {
+		return false, ErrInvalidToken
+	}
+	token, err := service.ParseTokenString(tokenString)
+	if err != nil {
+		return false, err
+	}
+	if err := service.Verify(token); err != nil {
+		return false, err
+	}
+	return true, nil
 }

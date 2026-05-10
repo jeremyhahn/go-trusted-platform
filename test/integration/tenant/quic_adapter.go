@@ -488,6 +488,66 @@ func (a *QUICAdapter) SyncTenants(ctx context.Context) (*SyncTenantsResult, erro
 }
 
 // =============================================================================
+// Per-Tenant Barrier Operations
+// =============================================================================
+
+// InitTenantBarrier explicitly initializes a per-tenant barrier.
+func (a *QUICAdapter) InitTenantBarrier(ctx context.Context, opts InitTenantBarrierOptions) (*InitTenantBarrierResult, error) {
+	path := fmt.Sprintf("/tenants/%s/barrier/init", opts.TenantID)
+
+	_, err := a.doRequest(ctx, "POST", path, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return &InitTenantBarrierResult{Success: true, Message: "tenant barrier initialized"}, nil
+}
+
+// UnsealTenantBarrier unseals a per-tenant barrier.
+func (a *QUICAdapter) UnsealTenantBarrier(ctx context.Context, opts UnsealTenantBarrierOptions) (*UnsealTenantBarrierResult, error) {
+	path := fmt.Sprintf("/tenants/%s/barrier/unseal", opts.TenantID)
+
+	_, err := a.doRequest(ctx, "POST", path, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return &UnsealTenantBarrierResult{Success: true, Message: "tenant barrier unsealed"}, nil
+}
+
+// SealTenantBarrier seals a per-tenant barrier.
+func (a *QUICAdapter) SealTenantBarrier(ctx context.Context, opts SealTenantBarrierOptions) (*SealTenantBarrierResult, error) {
+	path := fmt.Sprintf("/tenants/%s/barrier/seal", opts.TenantID)
+
+	_, err := a.doRequest(ctx, "POST", path, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SealTenantBarrierResult{Success: true, Message: "tenant barrier sealed"}, nil
+}
+
+// TenantBarrierStatus reports the current barrier state for a tenant.
+func (a *QUICAdapter) TenantBarrierStatus(ctx context.Context, opts TenantBarrierStatusOptions) (*TenantBarrierStatusResult, error) {
+	path := fmt.Sprintf("/tenants/%s/barrier/status", opts.TenantID)
+
+	body, err := a.doRequest(ctx, "GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result TenantBarrierStatusResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, ErrQUICRequestFailed{
+			Operation: "TenantBarrierStatus",
+			Message:   "failed to parse response: " + err.Error(),
+		}
+	}
+
+	return &result, nil
+}
+
+// =============================================================================
 // Compile-time Interface Verification
 // =============================================================================
 

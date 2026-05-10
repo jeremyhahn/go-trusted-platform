@@ -117,7 +117,6 @@ func (h *AttestationHandlers) createContext() (context.Context, context.CancelFu
 
 func (h *AttestationHandlers) decodeJSON(r *http.Request, v interface{}) error {
 	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
 	return decoder.Decode(v)
 }
 

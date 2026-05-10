@@ -192,11 +192,13 @@ function AssignTemplateDialog({ session, onClose, onAssign, isLoading }: AssignT
                   <SelectValue placeholder="Choose a device template..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {templates.map((t) => (
-                    <SelectItem key={t.id} value={String(t.id)}>
-                      {t.name} ({t.role})
-                    </SelectItem>
-                  ))}
+                  {templates
+                    .filter((t) => t.id != null && String(t.id) !== '')
+                    .map((t) => (
+                      <SelectItem key={t.id} value={String(t.id)}>
+                        {t.name} ({t.role})
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             )}

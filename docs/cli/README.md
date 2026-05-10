@@ -110,9 +110,19 @@ All commands support these global options:
 | Option | Description |
 |--------|-------------|
 | `--context` | Context to use (overrides current-context) |
-| `--output`, `-o` | Output format: table, json, yaml |
+| `--server` | Server address override (implies remote context). Default: gRPC over `/run/platformd.sock` when omitted, gRPC TCP against the address when set |
+| `--server-name` | TLS SNI / certificate verification hostname override |
+| `--transport` | Transport protocol override: `unix`, `grpc`, `rest`, `quic`, `mcp`, `embedded`. Default: `grpc` over the Unix socket (or `grpc` TCP when `--server` is set) |
+| `--output`, `-o` | Output format: `table`, `json`, `yaml` |
 | `--verbose`, `-v` | Verbose output |
-| `--protocol` | Protocol: unix, grpc, rest, quic (default: unix) |
+| `--no-color` | Disable colored output (also honors `NO_COLOR`) |
+
+The corresponding environment variables (`PLATFORMCTL_CONFIG`,
+`PLATFORMCTL_CONTEXT`, `PLATFORMCTL_SERVER`, `PLATFORMCTL_SERVER_NAME`,
+`PLATFORMCTL_TRANSPORT`, `PLATFORMCTL_OUTPUT`) follow kubectl precedence:
+flag > env > config file > built-in default.
+
+See [global-flags.md](global-flags.md) for the authoritative reference.
 
 ## Shell Completion
 

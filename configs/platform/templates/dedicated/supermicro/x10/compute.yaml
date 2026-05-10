@@ -1,0 +1,608 @@
+# =============================================================================
+# Supermicro X10 - Compute Worker Template (dedicated profile)
+#
+# Reusable hardware template for Supermicro X10-family motherboards
+# (X10SDV-TP8F and variants) configured for the compute/worker role.
+# These boards feature dual 10GbE SFP+, dual 1GbE RJ45, Intel Xeon D-1500
+# series processors, and hardware TPM 2.0 (Nuvoton NPCT750 ATEN BMC).
+#
+# DEPLOYMENT PROFILE: dedicated
+#   3-node layout: 1 control-plane, 1 gateway, 1 compute (this role).
+#   Non-HA reference architecture -- QuicBaaS runs in standalone embedded
+#   mode with storage-backend=file and no Raft consensus.
+#
+# TRUST MODEL: The platform CA bundle is baked into the install ISO and
+#   installed to the system trust store via update-ca-certificates during
+#   installation. Runtime trust bootstrap (DANE/Noise/SPKI) is intentionally
+#   absent; acme.client.system-cert-pool=true means ACME uses the system
+#   trust store established at install time.
+#
+# DEPLOYER: Before using this template, update the following for your environment:
+#   - IP addresses (172.16.200.x, PREFERRED_IP)
+#   - Domain names (compute.example.com, example.internal)
+#   - TPM serial number (idevid.serial)
+#   - ACME directory URL
+#   - WebAuthn origins and CORS origins
+# =============================================================================
+
+debug: false
+debug-secrets: false
+platform-dir: /var/lib/trusted-platform
+config-dir: /etc/trusted-platform
+log-dir: /var/log/trusted-platform
+ca-dir: /var/lib/trusted-platform/ca
+domain: compute.example.com
+hostmaster: hostmaster@compute.example.com
+tenant-id: platform
+pin-seal-policy: true
+
+secrets:
+  enabled: true
+  auto-generate: true
+  local-kms: true
+  migrate-to-kms: true
+  update-config-file: true
+
+platform:
+  # Vault-style persistent auto-generation via QuicBaaS EnsureSecret.
+  # First boot generates per spec (length + encoding) and persists at
+  # the path; every subsequent boot returns the same stable bytes via
+  # a distributed lock in the SecretsService. Paths are short-form —
+  # tenant and node identifiers are implicitly prepended at resolution
+  # time from platform.tenant_id and the node hostname.
+  # TODO: revert to kms:// once firstboot seeds SecretsService pre-platformd.
+  so-pin: "12345678"
+  user-pin: "123456"
+
+
+# =============================================================================
+# INSTALLATION CONFIGURATION (System Manifest)
+# =============================================================================
+
+# Disk configuration for system installation
+disk:
+  device: ""
+  partition-table: gpt
+  efi-partition-size: 538
+  root-filesystem: lvm
+  lvm-volume-group: vg0
+  lvm-logical-volume: root
+  encryption:
+    version: luks2
+    cipher: aes-xts-plain64
+    key-size: 512
+    hash: sha256
+    pbkdf: argon2id
+    mapped-name: cryptroot
+    tpm:
+      enabled: true
+      # See control-plane.yaml for the full rationale of this destructive
+      # default. In short: fresh-hardware reference deploys assume the TPM
+      # may be in a stuck state from a prior failed run, and platformd
+      # cannot provision PIN seals against a TPM with non-empty hierarchy
+      # auths. firstboot issues TPM2_Clear via LOCKOUT (empty auth)
+      # BEFORE platformd starts so provisioning succeeds.
+      # See: docs/installer/factory-reset.md
+      factory-reset-on-firstboot: true
+
+# Operating system configuration
+os:
+  os: alpine
+  version: "3.22.2"
+  architecture: x86_64
+  hostname: compute
+  packages:
+    - bash
+    - vim
+    - curl
+    - wget
+    - htop
+    - lsblk
+    - parted
+    - e2fsprogs
+    - lvm2
+    - tpm2-tools
+    - dracut
+    - openvswitch
+    - openvswitch-openrc
+  kernel-modules:
+    - igb
+    - ixgbe
+    - e1000e
+    - i40e
+    - ice
+    - openvswitch
+    - vxlan
+  filesystem-type: lvm
+  fips: false
+  lockdown: true
+  lockdown-mode: confidentiality
+  tpm-auto-upgrade-seal: true
+  enable-fido2: false
+  ima:
+    enabled: false
+    policy: tcb
+    hash-algorithm: sha256
+    evm: false
+    appraise-mode: off
+    audit-enabled: true
+
+# Network configuration for installed system
+# DNS resolution: dnsmasq (127.0.0.1:53) forwards to CP's DNS servers.
+# Domain-specific forwarding sends example.internal queries to the internal
+# zone server (port 9053) while all other queries go to the general resolver
+# (port 8053).
+# NOTE: upstream-servers MUST use IP address - hostname would create chicken-and-egg problem
+# Format: dnsmasq server directive syntax (ip#port, /domain/ip#port)
+network:
+  dns:
+    nameservers:
+      - 127.0.0.1
+    search-domains:
+      - example.internal
+  dnsmasq:
+    enabled: true
+    upstream-servers:
+      - "/example.internal/198.18.0.1#9053"
+      - "198.18.0.1#8053"
+    local-domain: example.internal
+  # Compute nodes share the control plane's trusted0 OVS topology so
+  # tenant VM traffic, storage, and management all ride the same 10G
+  # LACP bond into the fabric. Layout mirrors control-plane.yaml:
+  #   - eth0: 1G management, static on the mgmt subnet
+  #   - bond0 (eth6 + eth7, balance-tcp + active LACP) enslaved to
+  #     trusted0 OVS bridge
+  #   - VLAN sub-interfaces on bond0 for each platform subnet
+  subnets:
+    - name: production
+      scope: internal
+      vlan-id: 200
+      cidr: 198.18.0.0/24
+      gateway: 198.18.0.1
+      dns:
+        - 198.18.0.1
+    - name: provisioning
+      scope: internal
+      vlan-id: 201
+      role: provisioning
+      cidr: 172.16.201.0/24
+      gateway: 172.16.201.1
+      dns:
+        - 172.16.201.1
+    - name: quarantine
+      scope: internal
+      vlan-id: 202
+      role: quarantine
+      cidr: 172.16.202.0/24
+      gateway: 172.16.202.1
+      dns:
+        - 172.16.202.1
+    - name: storage
+      scope: internal
+      vlan-id: 203
+      cidr: 172.16.203.0/24
+      gateway: 172.16.203.1
+      dns:
+        - 172.16.203.1
+  interfaces:
+    - name: eth0
+      type: static
+      ipv4-address: 198.18.1.141/24
+      ipv4-gateway: 198.18.1.1
+      auto-start: true
+  bridges:
+    - name: trusted0
+      type: ovs
+      interfaces:
+        - bond0
+      stp: false
+      auto-start: true
+  bonds:
+    - name: bond0
+      type: ovs
+      bridge: trusted0
+      mode: balance-tcp
+      lacp: active
+      interfaces:
+        - eth6
+        - eth7
+      vlans:
+        - subnet: production
+          ipv4-address: 198.18.0.3/24
+          auto-start: true
+        - subnet: provisioning
+          ipv4-address: 172.16.201.3/24
+          auto-start: true
+        - subnet: quarantine
+          ipv4-address: 172.16.202.3/24
+          auto-start: true
+        - subnet: storage
+          ipv4-address: 172.16.203.3/24
+          auto-start: true
+      auto-start: true
+  vlans: []
+  wait-online: true
+  wait-timeout: 30
+
+# UKI (Unified Kernel Image) configuration
+uki:
+  cmdline: "root=/dev/mapper/vg0-root ro quiet"
+  kernel-path: /boot/vmlinuz-lts
+  initramfs-path: /boot/initramfs-lts
+
+# Secure Boot configuration
+secure-boot:
+  key-path: /boot/efi/secure-boot/db.key
+  cert-path: /boot/efi/secure-boot/db.crt
+
+# Enable TPM-based LUKS key sealing
+enable-tpm-sealing: true
+
+# PCR registers to seal LUKS keys against
+# This is THE SINGLE SOURCE OF TRUTH for seal PCRs used by:
+# - Installer (initial LUKS key sealing)
+# - Initrd firstboot (writes to pcr-banks file)
+# - Initrd boot (reads from config or pcr-banks file)
+#
+# Common PCRs:
+#   0: BIOS/UEFI firmware
+#   7: Secure Boot state
+#   9: Kernel command line
+#   10: Linux IMA - DON'T USE for LUKS (changes on every boot)
+seal-pcrs:
+  - 7
+  - 9
+
+# FIDO2 configuration
+enable-fido2-enrollment: false
+fido2:
+  relying-party-id: compute.example.com
+  keyslot: 3
+  user-presence-required: true
+  timeout: 60
+
+
+# =============================================================================
+# DNS CONFIGURATION
+# =============================================================================
+
+# Platform-wide DNS resolver configuration.
+# Compute nodes do not run CoreDNS but need a resolver pointing to the CP's
+# public DNS. All DNS consumers (bootstrap, ACME, installer) use this as the
+# platform-wide default.
+dns:
+  resolver:
+    servers:
+      - address: "198.18.0.1"
+        port: 8053
+    search-domains:
+      - example.internal
+    fallback:
+      - "1.1.1.1:53"
+      - "8.8.8.8:53"
+    local-forwarder:
+      enabled: true
+      listen: "127.0.0.1:53"
+      cache-size: 1000
+
+
+# =============================================================================
+# ACME CLIENT CONFIGURATION
+# =============================================================================
+
+acme:
+  client:
+    directory: https://cp.example.internal:9443/api/v1/acme/directory
+    # Use OS system certificate pool for CA trust.
+    # The platform CA is installed to the system trust store during ISO
+    # installation via /usr/local/share/ca-certificates/ and
+    # update-ca-certificates. This is more secure than insecure-bootstrap
+    # which disables TLS verification.
+    system-cert-pool: true
+    enrollment:
+      challenge: enroll-01
+      ip: ${PREFERRED_IP}
+    account:
+      email: hostmaster@compute.example.com
+      key:
+        # PKCS #8 RSA w/ PSS (for initial enrollment before TPM is provisioned)
+        algorithm: RSA
+        cn: acme-account
+        debug: true
+        hash: SHA-256
+        password: "kms://acme/account-key/password?ensure=true&len=32&enc=base64"
+        platform-policy: true
+        rsa:
+          size: 2048
+        signature-algorithm: SHA256-RSAPSS
+        store: software
+      register: true
+
+
+# =============================================================================
+# DATASTORE CONFIGURATION
+# =============================================================================
+
+bmc:
+  address: 198.18.0.3
+  port: 623
+  username: admin
+  password: "kms://bmc/password?ensure=true&len=16&enc=base64"
+  protocol: ipmi
+
+# QuicBaaS runs in STANDALONE EMBEDDED MODE (non-HA reference architecture).
+# storage-backend=file with node-id=1 and no join-addresses means Raft
+# consensus is NOT engaged. For HA, switch to storage-backend=raft and
+# populate join-addresses (see configs/platform/templates/high-availability/).
+quicbaas:
+  data-dir: /var/lib/trusted-platform/quicbaas
+  storage-backend: file
+  node-id: 1
+  cache-size: 67108864
+  log-level: warn
+  consistency-level: linearizable
+  request-timeout: 30s
+
+
+# =============================================================================
+# SDN CONFIGURATION
+# =============================================================================
+
+sdn:
+  enabled: true
+  controller: false
+  ovs:
+    socket: /var/run/openvswitch/db.sock
+    bridge: trusted0
+    datapath: system
+    protocols:
+      - OpenFlow13
+      - OpenFlow15
+  ipam:
+    backend: quicbaas
+    pools: []
+  dhcp:
+    enabled: false
+    interface: trusted0
+  # Static sdn.networks/pools are derived at runtime from
+  # network.subnets by pkg/app/sdn.go::deriveSDNFromSubnets.
+  # Omitting explicit networks/pools here avoids the validator
+  # rejecting "network references unknown ipam pool" on first boot
+  # (matches gateway.yaml convention).
+  overlay:
+    enabled: false
+    vxlan-port: 4789
+  gateway:
+    enabled: false
+
+
+# =============================================================================
+# TPM CONFIGURATION
+# =============================================================================
+
+tpm:
+  device: /dev/tpmrm0
+  simulator: false
+  encrypt-sessions: false
+  entropy: false
+  hash: SHA-256
+  ek:
+    debug: true
+    handle: 0x81010001
+    hash: SHA-256
+    password:
+    rsa:
+      size: 2048
+  ssrk:
+    debug: true
+    handle: 0x81000001
+    hierarchy-auth:
+    password:
+    platform-policy: false
+    rsa:
+      size: 2048
+  iak:
+    auth:
+    debug: true
+    hash: SHA-256
+    handle: 0x81010002
+    password:
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSA
+  idevid:
+    model: SuperMicro X10
+    serial: sm-compute-01
+    cert-handle: 0x01C90000
+    debug: true
+    handle: 0x81020000
+    hash: SHA-256
+    pad: true
+    password:
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSA
+  platform-pcr: 23
+  platform-pcr-bank: sha256
+  # Golden PCRs for platform policy (separate from seal-pcrs)
+  # NOTE: PCR 10 (IMA) changes on every boot - DO NOT include for LUKS unlock!
+  golden-pcrs: [7, 9]
+  platform-srk:
+    srk-handle: 0x81000002
+    srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=base64"
+    platform-policy: true
+
+
+# =============================================================================
+# CERTIFICATE AUTHORITY CONFIGURATION
+# =============================================================================
+
+certificate-authority:
+  platform-ca: 1
+  auto-import-issuing-ca: true
+  system-cert-pool: true
+  default-validity: 365
+  default-idevid-cn: default-device-id
+  sans-include-localhost: true
+  require-password: true
+  quantum-safe: true
+  identity:
+    - # Root Certificate Authority
+      is-root: true
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000003
+          srk-auth: "kms://ca/root/tpm2/srk-auth?ensure=true&len=32&enc=base64"
+          platform-policy: true
+      keys:
+        # PKCS #8 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: "kms://ca/root/keys/1/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+      valid: 50
+      subject:
+        cn: root-ca.compute.example.com
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns:
+          - root-ca.compute.example.com
+        email:
+          - hostmaster@compute.example.com
+
+    - # Intermediate Certificate Authority
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000004
+          srk-auth: "kms://ca/issuing/tpm2/srk-auth?ensure=true&len=32&enc=base64"
+          platform-policy: true
+      keys:
+        - # PKCS #8 RSA
+          algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: "kms://ca/issuing/keys/0/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: "kms://ca/issuing/keys/1/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+      valid: 10
+      subject:
+        cn: ca01.compute.example.com
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns:
+          - ca01.compute.example.com
+        email:
+          - hostmaster@compute.example.com
+
+
+# =============================================================================
+# WEBSERVICE CONFIGURATION (Compute Worker)
+# =============================================================================
+
+webservice:
+  home: /var/lib/trusted-platform/public_html
+  port: 9080
+  tls-port: 9443
+  index: index.html
+  jwt:
+    expiration: 525960
+    issuer: compute.example.internal
+  webauthn:
+    display-name: Trusted Platform Compute
+    id: compute.example.internal
+    origins:
+      - https://compute.example.internal
+      - https://compute.example.internal:9443
+      - http://compute.example.internal
+      - http://compute.example.internal:9080
+  cors:
+    allowed-origins:
+      - https://compute.example.internal
+      - https://compute.example.internal:9443
+      - http://compute.example.internal
+      - http://compute.example.internal:9080
+    allowed-methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+    allowed-headers:
+      - "*"
+    allow-credentials: true
+  key:
+    algorithm: ECDSA
+    ecc:
+      curve: P-256
+    signature-algorithm: ECDSA-SHA256
+    hash: SHA-256
+    store: software
+    password: "kms://webservice/key/password?ensure=true&len=32&enc=base64"
+    platform-policy: true
+    debug: true
+  certificate:
+    subject:
+      cn: compute.example.internal
+      organization: Trusted Platform
+      country: US
+      province: Florida
+      locality: West Palm Beach
+      address: 123 Automation Street
+      postal-code: 12345
+    sans:
+      dns:
+        - compute.example.com
+        - compute.example.internal
+      email:
+        - hostmaster@compute.example.com
