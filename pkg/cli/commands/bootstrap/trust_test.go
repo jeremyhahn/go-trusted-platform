@@ -96,12 +96,40 @@ func TestBuildBootstrapConfig(t *testing.T) {
 
 	assert.Equal(t, "https://platform:8443", config.ServerURL)
 	assert.Equal(t, bootstrap.StrategyAuto, config.Strategy)
-	assert.Equal(t, "8.8.8.8", config.DNSServer)
+	// normalizeDNSServer auto-appends :53 for backward-compat with the
+	// previous host-only flag form.
+	assert.Equal(t, "8.8.8.8:53", config.DNSServer)
 	assert.Equal(t, "platform.example.com", config.Hostname)
 	assert.Equal(t, "/tmp/ca-bundle.pem", config.BundlePath)
 	assert.Equal(t, 10*time.Second, config.PerMethodTimeout)
 	assert.Nil(t, config.Noise)
 	assert.Nil(t, config.SPKI)
+}
+
+func TestNormalizeDNSServer(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"  ", ""},
+		{"8.8.8.8", "8.8.8.8:53"},
+		{"8.8.8.8:53", "8.8.8.8:53"},
+		{"198.18.1.140", "198.18.1.140:53"},
+		{"198.18.1.140:8053", "198.18.1.140:8053"},
+		{"[::1]:53", "[::1]:53"},
+		{"::1", "[::1]:53"},
+		{"2001:db8::1", "[2001:db8::1]:53"},
+		{"[2001:db8::1]:8053", "[2001:db8::1]:8053"},
+		{"dns.example.com", "dns.example.com:53"},
+		{"dns.example.com:8053", "dns.example.com:8053"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			got := normalizeDNSServer(tt.in)
+			assert.Equal(t, tt.want, got, "normalizeDNSServer(%q)", tt.in)
+		})
+	}
 }
 
 func TestBuildBootstrapConfig_MissingURL(t *testing.T) {

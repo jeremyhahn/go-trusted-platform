@@ -17,8 +17,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -107,7 +109,12 @@ Examples:
 
 	cmd.Flags().StringVar(&flags.serverURL, "server-url", "", "platform server URL (required)")
 	cmd.Flags().StringVar(&flags.strategy, "strategy", bootstrap.StrategyAuto, "bootstrap strategy: auto, dane, noise, spki, embedded")
-	cmd.Flags().StringVar(&flags.dnsServer, "dns-server", "", "DNS server for DANE lookups")
+	cmd.Flags().StringVar(&flags.dnsServer, "dns-server", "",
+		"DNS server for DANE lookups. Accepts \"host\" (port 53 assumed) "+
+			"or \"host:port\" for non-standard ports. Trusted Platform CPs "+
+			"intentionally do NOT bind privileged port 53 (platformd runs "+
+			"as a non-root user); the canonical DANE resolver port for a "+
+			"control plane is 8053. Example: --dns-server 198.18.1.140:8053")
 	cmd.Flags().StringVar(&flags.hostname, "hostname", "", "server hostname for DANE TLSA lookups")
 	cmd.Flags().StringVar(&flags.noiseKey, "noise-key", "", "Noise_NK server static key (hex)")
 	cmd.Flags().StringVar(&flags.noiseAddr, "noise-addr", "", "Noise server address (host:port)")
@@ -130,7 +137,7 @@ func buildBootstrapConfig(flags *trustFlags) (*bootstrap.ClientConfig, error) {
 		Strategy:         flags.strategy,
 		ServerURL:        flags.serverURL,
 		Hostname:         flags.hostname,
-		DNSServer:        flags.dnsServer,
+		DNSServer:        normalizeDNSServer(flags.dnsServer),
 		BundlePath:       flags.bundlePath,
 		PerMethodTimeout: flags.perMethodTimeout,
 	}
@@ -151,6 +158,30 @@ func buildBootstrapConfig(flags *trustFlags) (*bootstrap.ClientConfig, error) {
 	}
 
 	return config, nil
+}
+
+// normalizeDNSServer accepts "host" or "host:port" and returns the
+// host:port form the underlying DANE resolver expects. Empty input
+// passes through unchanged so the caller's empty-server check still
+// works. Bare host (no port) defaults to :53 — the standard DNS
+// port — preserving backward compatibility with the original
+// host-only flag form. Trusted Platform CPs bind DANE on :8053
+// because platformd runs unprivileged; operators targeting a CP
+// must pass `host:8053` explicitly (documented in --dns-server help).
+func normalizeDNSServer(in string) string {
+	in = strings.TrimSpace(in)
+	if in == "" {
+		return ""
+	}
+	if _, _, err := net.SplitHostPort(in); err == nil {
+		// Already host:port (handles bracketed IPv6 too).
+		return in
+	}
+	// IPv6 without port needs brackets before we can append.
+	if strings.Count(in, ":") >= 2 {
+		return net.JoinHostPort(in, "53")
+	}
+	return net.JoinHostPort(in, "53")
 }
 
 // logLevelFromVerbose returns slog.LevelDebug when verbose is true, slog.LevelInfo otherwise.

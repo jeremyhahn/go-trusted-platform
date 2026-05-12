@@ -720,7 +720,13 @@ func (server *WebServerV1) startHTTPS() {
 		// behavior the wrapper provided with only a CN hint.
 		tlsconf, err = server.ca.TLSConfigWithXSigner(server.keyAttributes, server.ca)
 	} else {
-		tlsconf, err = server.ca.TLSConfig(server.keyAttributes)
+		// ServerTLSConfig (not bare TLSConfig) makes the server intent
+		// explicit. Bare TLSConfig defaults IsServer:false and triggers
+		// "TLS: ServerName not specified for client connection - SNI may
+		// fail" on every startup; the resulting config still works as
+		// a server (Go's TLS server ignores client-only fields) but
+		// the WARN is misleading and clutters platformd logs.
+		tlsconf, err = server.ca.ServerTLSConfig(server.keyAttributes, false)
 	}
 	if err != nil {
 		server.logger.FatalError(err)
