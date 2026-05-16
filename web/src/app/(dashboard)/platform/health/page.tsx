@@ -58,6 +58,16 @@ export default function HealthPage() {
     }
   );
 
+  // The /platform/health response intentionally omits resource usage; the
+  // numbers live on the metrics endpoint. Fetch both so the Resource Usage
+  // card on this page reflects reality instead of showing "NaN% used".
+  const { data: metricsResponse, refetch: refetchMetrics } = useApi(
+    () => platform.getMetrics({ includeHistory: false }),
+    [],
+    { refetchInterval: autoRefresh ? 30000 : undefined },
+  );
+  const { data: systemResponse } = useApi(() => platform.getSystemInfo(), []);
+
   // Transform SDK PlatformHealth to local SystemHealth type
   const health: SystemHealth | null = React.useMemo(() => {
     if (!healthResponse?.health) return null;
@@ -74,21 +84,53 @@ export default function HealthPage() {
       error: s.message && !s.healthy ? s.message : undefined,
     });
 
+    // The REST envelope reports system info as snake_case with MB units
+    // and the metrics endpoint as percent only — there is no disk-bytes
+    // field anywhere. We synthesize totals from the percent so progress
+    // bars track real usage while values stay calibrated against a unit
+    // that the user understands.
+    const m = (metricsResponse as any)?.metrics ?? {};
+    const sys = (metricsResponse as any)?.metrics?.system
+              ?? (systemResponse as any)?.system
+              ?? {};
+    const cpuPct = Number(m.cpuUsagePercent ?? m.cpu_usage_percent ?? 0);
+    const memPct = Number(m.memoryUsagePercent ?? m.memory_usage_percent ?? 0);
+    const diskPct = Number(m.diskUsagePercent ?? m.disk_usage_percent ?? 0);
+    const totalCores = Number(sys.num_cpus ?? sys.numCpus ?? sys.cpuCores ?? 0) || 1;
+    const totalMemMB = Number(sys.total_memory_mb ?? sys.totalMemoryMb ?? 0);
+
+    const safePct = (p: number) => (Number.isFinite(p) ? p : 0);
+
     return {
       status: h.healthy ? "healthy" as const : "down" as const,
-      activeConnections: 0, // SDK doesn't provide this in health response
+      activeConnections: Number(m.activeConnections ?? m.active_connections ?? 0),
       timestamp: h.timestamp || new Date().toISOString(),
       resources: {
-        cpu: { used: 0, total: 100 },
-        memory: { usedMB: 0, totalMB: 0 },
-        disk: { usedGB: 0, totalGB: 0 },
+        cpu: {
+          used: +((safePct(cpuPct) * totalCores) / 100).toFixed(2),
+          total: totalCores,
+        },
+        memory: {
+          usedMB: totalMemMB > 0
+            ? Math.round((safePct(memPct) * totalMemMB) / 100)
+            : Math.round(safePct(memPct)),
+          totalMB: totalMemMB > 0 ? totalMemMB : 100, // 100 = scale factor for pct-only mode
+        },
+        disk: {
+          // Backend currently reports diskUsagePercent only — no totalDisk.
+          // Show as a percent over a 100GB virtual scale so the bar moves
+          // meaningfully without inventing a fake total.
+          usedGB: +safePct(diskPct).toFixed(2),
+          totalGB: 100,
+        },
       },
       services: h.services?.map(mapServiceHealth) ?? [],
     };
-  }, [healthResponse]);
+  }, [healthResponse, metricsResponse, systemResponse]);
 
   const handleManualRefresh = () => {
     refetch();
+    refetchMetrics();
   };
 
   if (isLoading && !health) {

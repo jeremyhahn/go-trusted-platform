@@ -33,46 +33,31 @@ export default function CABundlePage() {
 
   // The platform REST envelope wraps every payload as
   //   {code, error, success, payload: {...}}
-  // so what useApi gives us as `bundleResponse` is the full envelope.
-  // The CA endpoint's payload is `{bundle: "<base64-PEM>", certificates,
-  // cert_count, timestamp}`. We accept the SDK's stricter
-  // {bundle: {pem}} shape too in case a future SDK version unwraps it.
+  // and the CA endpoint's payload itself wraps the PEM another level deep:
+  //   {payload: {bundle: {pem: "<base64-PEM>", certificates, certCount}}}
+  // useApi may or may not unwrap the outer envelope depending on SDK shape,
+  // and SDK refactors have also produced bundle as a flat string. Tolerate
+  // every observed shape and always return decoded PEM with newlines so the
+  // <pre> renders one cert per block instead of one giant line that
+  // overflows the page horizontally.
   const pem: string = React.useMemo(() => {
-    const r = bundleResponse as unknown as
-      | {
-          payload?: { bundle?: string; pem?: string };
-          bundle?: string | { pem?: string; pemData?: string };
-          pem?: string;
-        }
-      | undefined;
+    const decode = (s: string): string => {
+      if (!s) return "";
+      if (s.startsWith("-----")) return s;
+      try { return atob(s); } catch { return s; }
+    };
+    const tryNode = (n: any): string => {
+      if (!n) return "";
+      if (typeof n === "string") return decode(n);
+      if (typeof n.pem === "string") return decode(n.pem);
+      if (typeof n.pemData === "string") return decode(n.pemData);
+      if (typeof n.bundle === "string") return decode(n.bundle);
+      if (n.bundle) return tryNode(n.bundle);
+      return "";
+    };
+    const r = bundleResponse as any;
     if (!r) return "";
-    // Inner payload first (production envelope).
-    const p = r.payload;
-    if (p) {
-      if (typeof p.pem === "string") return p.pem;
-      if (typeof p.bundle === "string") {
-        if (p.bundle.startsWith("-----")) return p.bundle;
-        try {
-          return atob(p.bundle);
-        } catch {
-          return p.bundle;
-        }
-      }
-    }
-    if (typeof r.pem === "string") return r.pem;
-    const b = r.bundle;
-    if (!b) return "";
-    if (typeof b === "string") {
-      if (b.startsWith("-----")) return b;
-      try {
-        return atob(b);
-      } catch {
-        return b;
-      }
-    }
-    if (typeof b.pem === "string") return b.pem;
-    if (typeof b.pemData === "string") return b.pemData;
-    return "";
+    return tryNode(r.payload) || tryNode(r);
   }, [bundleResponse]);
 
   const certCount = React.useMemo(() => {
@@ -159,7 +144,10 @@ export default function CABundlePage() {
               Loading CA bundle...
             </div>
           ) : pem ? (
-            <pre className="max-h-[480px] overflow-auto rounded-md border bg-muted p-4 text-xs leading-relaxed">
+            // whitespace-pre-wrap + break-all so a single long base64 line
+            // (when the upstream decode fails) still wraps and never breaks
+            // the page layout. font-mono keeps the PEM legible.
+            <pre className="max-h-[480px] overflow-auto whitespace-pre-wrap break-all rounded-md border bg-muted p-4 font-mono text-xs leading-relaxed">
               {pem}
             </pre>
           ) : (

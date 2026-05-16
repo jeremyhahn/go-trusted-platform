@@ -153,14 +153,28 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
     }
   };
 
-  const getStatusBadge = (status: Device['status']) => {
-    const variants: Record<Device['status'], { variant: 'default' | 'secondary' | 'destructive' | 'outline'; label: string }> = {
-      online: { variant: 'default', label: 'Online' },
-      offline: { variant: 'secondary', label: 'Offline' },
-      disabled: { variant: 'destructive', label: 'Disabled' },
+  const getStatusBadge = (device: Device) => {
+    const variants = {
+      online: { variant: 'default' as const, label: 'Online' },
+      offline: { variant: 'secondary' as const, label: 'Offline' },
+      disabled: { variant: 'destructive' as const, label: 'Disabled' },
+      unknown: { variant: 'outline' as const, label: 'Unknown' },
     };
 
-    const { variant, label } = variants[status];
+    // The platform doesn't currently track per-device heartbeats, so
+    // "Online" is meaningless when lastSeen is empty. Show Unknown
+    // instead of lying — once heartbeat ingest lands we'll drive the
+    // badge off recent activity vs a stale timestamp.
+    let key: keyof typeof variants;
+    if (device.status === 'disabled') {
+      key = 'disabled';
+    } else if (!device.lastSeen) {
+      key = 'unknown';
+    } else {
+      const ageMs = Date.now() - new Date(device.lastSeen).getTime();
+      key = Number.isFinite(ageMs) && ageMs < 5 * 60_000 ? 'online' : 'offline';
+    }
+    const { variant, label } = variants[key];
     return <Badge variant={variant}>{label}</Badge>;
   };
 
@@ -210,8 +224,23 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
             </TableRow>
           ) : (
             devices.map((device) => (
-              <TableRow key={device.id}>
-                <TableCell className="font-medium">{device.name}</TableCell>
+              <TableRow
+                key={device.id}
+                className="cursor-pointer hover:bg-muted/40"
+                onClick={() => router.push(`/devices/${device.id}`)}
+              >
+                <TableCell className="font-medium">
+                  <button
+                    type="button"
+                    className="text-left hover:underline focus:underline focus:outline-none"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      router.push(`/devices/${device.id}`);
+                    }}
+                  >
+                    {device.name}
+                  </button>
+                </TableCell>
                 <TableCell>{getTypeBadge(device.type)}</TableCell>
                 <TableCell>
                   {device.tpm ? (
@@ -226,14 +255,15 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
                 <TableCell className="text-sm text-muted-foreground">
                   {formatLastSeen(device.lastSeen)}
                 </TableCell>
-                <TableCell>{getStatusBadge(device.status)}</TableCell>
-                <TableCell className="text-right">
+                <TableCell>{getStatusBadge(device)}</TableCell>
+                <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button
                         variant="ghost"
                         size="icon"
                         disabled={loadingId === device.id}
+                        onClick={(e) => e.stopPropagation()}
                       >
                         <MoreHorizontal className="h-4 w-4" />
                         <span className="sr-only">Open menu</span>

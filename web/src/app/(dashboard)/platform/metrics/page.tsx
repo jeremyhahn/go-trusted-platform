@@ -49,11 +49,12 @@ interface ServiceMetrics {
 }
 
 /**
- * Format bytes to human readable
+ * Format bytes to human readable. Tolerant of undefined/NaN so the page
+ * does not crash when the backend hasn't populated a metric yet.
  */
-function formatBytes(bytes: number): string {
+function formatBytes(bytes: number | undefined | null): string {
   const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
+  let value = typeof bytes === "number" && Number.isFinite(bytes) ? bytes : 0;
   let unitIndex = 0;
   while (value >= 1024 && unitIndex < units.length - 1) {
     value /= 1024;
@@ -65,7 +66,8 @@ function formatBytes(bytes: number): string {
 /**
  * Format uptime to human readable
  */
-function formatUptime(seconds: number): string {
+function formatUptime(seconds: number | undefined | null): string {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds)) seconds = 0;
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
@@ -167,7 +169,7 @@ function ServiceMetricsCard({ metrics }: { metrics: ServiceMetrics }) {
           </div>
           <div>
             <p className="text-muted-foreground">Latency</p>
-            <p className="font-medium">{metrics.latencyMs.toFixed(1)} ms</p>
+            <p className="font-medium">{(metrics.latencyMs ?? 0).toFixed(1)} ms</p>
           </div>
         </div>
       </CardContent>

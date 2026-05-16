@@ -75,6 +75,15 @@ export default function CertificatesPage() {
   // Transform server CertificateSummary to local Certificate type. The
   // platform CA REST handler returns snake_case keys with numeric Unix
   // timestamps; tolerate both shapes so the table renders correctly.
+  //
+  // The CertificateSummary proto does not (yet) carry is_ca, so we derive
+  // the type column from the data we have:
+  //   - root          : commonName == issuer (self-signed)
+  //   - intermediate  : any other cert in the list lists this cert's
+  //                     commonName as its issuer (i.e. this cert signed
+  //                     another cert that we can see)
+  //   - leaf          : everything else
+  // When the backend starts emitting is_ca on the summary, prefer it.
   const certificates: Certificate[] = React.useMemo(() => {
     const certs = (certificatesResponse?.certificates ?? []) as any[];
     const toIso = (v: any): string => {
@@ -82,12 +91,35 @@ export default function CertificatesPage() {
       if (typeof v === "number") return new Date(v * 1000).toISOString();
       return String(v);
     };
+    const subjectOf = (c: any): string =>
+      c.commonName ?? c.common_name ?? c.subject?.common_name ?? c.subject?.commonName ?? "Unknown";
+    const issuerOf = (c: any): string => c.issuer ?? "Unknown";
+
+    // Pre-compute the set of CN's that appear as someone's issuer; those CN's
+    // are CAs we have visibility into.
+    const issuingCNs = new Set<string>();
+    for (const c of certs) {
+      const iss = issuerOf(c);
+      if (iss && iss !== "Unknown") issuingCNs.add(iss);
+    }
+
+    const resolveType = (c: any): "root" | "intermediate" | "leaf" => {
+      const isCAField = c.is_ca ?? c.isCA;
+      const subj = subjectOf(c);
+      const iss = issuerOf(c);
+      const selfSigned = subj && iss && subj === iss;
+      if (selfSigned) return "root";
+      if (isCAField === true) return "intermediate";
+      if (issuingCNs.has(subj)) return "intermediate";
+      return "leaf";
+    };
+
     return certs.map((cert: any) => ({
       id: cert.serial,
       serialNumber: cert.serial,
-      subject: cert.commonName ?? cert.common_name ?? cert.subject?.common_name ?? cert.subject?.commonName ?? "Unknown",
-      issuer: cert.issuer ?? "Unknown",
-      type: (cert.is_ca ?? cert.isCA) ? ("intermediate" as const) : ("leaf" as const),
+      subject: subjectOf(cert),
+      issuer: issuerOf(cert),
+      type: resolveType(cert),
       status: String(cert.status).toUpperCase() === "REVOKED" ? "revoked" as const :
               String(cert.status).toUpperCase() === "EXPIRED" ? "expired" as const : "active" as const,
       notBefore: toIso(cert.notBefore ?? cert.not_before),

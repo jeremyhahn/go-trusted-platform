@@ -111,8 +111,11 @@ function getRoleBadge(role: DeviceRole) {
   return <Badge variant="outline">{roleLabels[role]}</Badge>;
 }
 
-function formatDate(dateString: string) {
-  return new Date(dateString).toLocaleDateString('en-US', {
+function formatDate(dateString: string | null | undefined) {
+  if (!dateString) return '—';
+  const d = new Date(dateString);
+  if (!Number.isFinite(d.getTime())) return '—';
+  return d.toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',

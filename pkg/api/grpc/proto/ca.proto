@@ -148,6 +148,8 @@ message CertificateSummary {
   google.protobuf.Timestamp not_after = 5;
   CertificateStatus status = 6;
   KeyAlgorithm key_algorithm = 7;
+  bool is_ca = 8;          // True when the certificate is a CA (root or intermediate).
+  bool is_self_signed = 9; // True when issuer == subject; identifies the root.
 }
 
 // CertificateRequest contains certificate issuance parameters
