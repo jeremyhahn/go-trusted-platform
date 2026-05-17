@@ -36,13 +36,14 @@ service DeviceService {
   // Device activation
   rpc ActivateDevice(ActivateDeviceRequest) returns (ActivateDeviceResponse);
 
-  // Template CRUD operations
-  rpc CreateTemplate(CreateTemplateRequest) returns (CreateTemplateResponse);
-  rpc GetTemplate(GetTemplateRequest) returns (GetTemplateResponse);
-  rpc UpdateTemplate(UpdateTemplateRequest) returns (UpdateTemplateResponse);
-  rpc DeleteTemplate(DeleteTemplateRequest) returns (DeleteTemplateResponse);
-  rpc ListTemplates(ListTemplatesRequest) returns (ListTemplatesResponse);
-  rpc FindTemplateByName(FindTemplateByNameRequest) returns (FindTemplateByNameResponse);
+  // Device-template CRUD lives on the REST surface only (see
+  // pkg/webservice/v1/device/template_handlers.go). The Create/Get/Update/
+  // Delete/List/FindByName Template RPCs that used to be declared here
+  // collided with vtpm.proto's identically-named messages, never got
+  // generated into device.pb.go, and were not referenced from any Go code.
+  // They have been removed; if a gRPC device-template service is needed
+  // in the future, define it with `DeviceTemplate…` message prefixes so
+  // the names cannot collide with vtpm.
 
   // Template operations
   rpc CreateProfileFromTemplate(CreateProfileFromTemplateRequest) returns (CreateProfileResponse);
@@ -346,56 +347,11 @@ message ActivateDeviceResponse {
   google.protobuf.Timestamp transitioned_at = 4;
 }
 
-// Template CRUD messages
-
-message CreateTemplateRequest {
-  DeviceTemplate template = 1;
-}
-
-message CreateTemplateResponse {
-  DeviceTemplate template = 1;
-}
-
-message GetTemplateRequest {
-  uint64 id = 1;
-}
-
-message GetTemplateResponse {
-  DeviceTemplate template = 1;
-}
-
-message UpdateTemplateRequest {
-  DeviceTemplate template = 1;
-}
-
-message UpdateTemplateResponse {
-  DeviceTemplate template = 1;
-}
-
-message DeleteTemplateRequest {
-  uint64 id = 1;
-}
-
-message DeleteTemplateResponse {}
-
-message ListTemplatesRequest {
-  uint64 page = 1;
-  uint64 page_size = 2;
-}
-
-message ListTemplatesResponse {
-  repeated DeviceTemplate templates = 1;
-  uint64 total = 2;
-}
-
-message FindTemplateByNameRequest {
-  string tenant_id = 1;
-  string name = 2;
-}
-
-message FindTemplateByNameResponse {
-  DeviceTemplate template = 1;
-}
+// Template CRUD messages were removed from this proto to resolve a
+// fully-qualified-name collision with vtpm.proto. Device-template CRUD is
+// served from the REST surface only — see pkg/webservice/v1/device/
+// template_handlers.go. The DeviceTemplate message itself (used as a
+// nested field on other RPCs) remains defined below.
 
 // Template operation messages
 
