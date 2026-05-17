@@ -262,6 +262,40 @@ func buildChallengeMap(challenges []string, ca tcgEnrollmentCA) map[string]quicb
 // cert (the gRPC listener will start without TLS, surfacing the error to
 // remote clients) so the platform stays observable rather than failing
 // to come up entirely.
+// initVTPMServiceOnConfig populates cfg.VTPMService from App.VTPMConfig,
+// defaulting to a fresh &vtpm.Config{} when no explicit `vtpm:` block is
+// present in config.yaml. vtpm.Config.ApplyDefaults fills BaseDir
+// (/var/lib/trusted-platform/vtpm) so the surface no longer requires
+// operator boilerplate to be reachable.
+//
+// Both runWithWebservices and runDaemonOnly call this. The webservices
+// path used to leave cfg.VTPMService nil, which the REST router (lines
+// 821-823) then read back as nil — surfacing as a permanently dark
+// /api/v1/vtpm/* surface even though the service + handlers + SDK
+// methods were all in tree.
+func initVTPMServiceOnConfig(logger *logging.Logger, a *app.App, cfg *daemon.Config) {
+	if a == nil || cfg == nil {
+		return
+	}
+	if cfg.VTPMService != nil {
+		// Already wired (e.g. test injection). Don't clobber.
+		return
+	}
+	vtpmCfg := a.VTPMConfig
+	if vtpmCfg == nil {
+		vtpmCfg = &vtpm.Config{}
+	}
+	vtpmCfg.ApplyDefaults()
+	svc, err := vtpm.NewService(vtpmCfg, logger, nil)
+	if err != nil {
+		logger.Warn("vTPM service creation failed (vTPM operations will fail)",
+			"error", err)
+		return
+	}
+	cfg.VTPMService = svc
+	logger.Info("vTPM service initialized", "base_dir", vtpmCfg.BaseDir)
+}
+
 func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.App, cfg *daemon.Config, requireClientCert bool) {
 	if a == nil || a.CA == nil || cfg == nil {
 		// Surface why TLS provisioning was skipped so production deploys
@@ -585,6 +619,13 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	// to start with no TLS at all. Mirroring the daemon-only path keeps
 	// remote platformctl invocations TLS-authenticated regardless of mode.
 	applyDaemonTLSIdentity(ctx, logger, App, daemonConfig, serveEnableMTLS)
+
+	// Wire the vTPM service into daemonConfig before daemon.New runs.
+	// The runDaemonOnly path does the same; both paths need it because
+	// the REST router reads daemonConfig.VTPMService back through the
+	// daemon.Service handle. Skipping it here is what left
+	// /api/v1/vtpm/* dark on the webservices-mode CP.
+	initVTPMServiceOnConfig(logger, App, daemonConfig)
 
 	platformDaemon, err := daemon.New(daemonConfig)
 	if err != nil {
@@ -1022,19 +1063,7 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	// listener TLS-protected in both modes.
 	applyDaemonTLSIdentity(ctx, logger, App, config, serveEnableMTLS)
 
-	if App != nil && App.VTPMConfig != nil {
-		vtpmConfig := App.VTPMConfig
-		vtpmConfig.ApplyDefaults()
-
-		vtpmService, vtpmErr := vtpm.NewService(vtpmConfig, logger, nil)
-		if vtpmErr != nil {
-			logger.Warn("vTPM service creation failed (vTPM operations will fail)",
-				"error", vtpmErr)
-		} else {
-			config.VTPMService = vtpmService
-			logger.Info("vTPM service initialized", "base_dir", vtpmConfig.BaseDir)
-		}
-	}
+	initVTPMServiceOnConfig(logger, App, config)
 
 	if App != nil && App.DNSService != nil {
 		config.DNSService = App.DNSService

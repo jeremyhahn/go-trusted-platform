@@ -2765,53 +2765,54 @@ func TestService_ListBundles_NilOptions(t *testing.T) {
 // Additional Config Validation Tests
 // =============================================================================
 
-func TestConfig_Validate_OVMFCodeNotFound(t *testing.T) {
+// Validate no longer requires OVMF files to exist on disk; the service
+// can still manage templates and bundles when the host can't actually
+// launch VMs. Use OVMFAvailable() to gate operations that need the
+// firmware.
+
+func TestConfig_OVMFAvailable_MissingCode(t *testing.T) {
 	tmpDir := t.TempDir()
 	ovmfVars := filepath.Join(tmpDir, "OVMF_VARS.fd")
 	os.WriteFile(ovmfVars, []byte("test"), 0644)
 
 	config := &Config{
-		BaseDir:  tmpDir,
-		OVMFCode: "/nonexistent/OVMF_CODE.fd",
-		OVMFVars: ovmfVars,
-		PCRBanks: []string{"sha256"},
+		BaseDir:           tmpDir,
+		OVMFCode:          "/nonexistent/OVMF_CODE.fd",
+		OVMFVars:          ovmfVars,
+		PCRBanks:          []string{"sha256"},
+		SecureBootKeySize: 2048,
 	}
 
-	err := config.Validate()
-	if err == nil {
-		t.Error("Validate should fail when OVMF code doesn't exist")
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate must not fail on missing OVMFCode, got %v", err)
 	}
-
-	var ovmfErr ErrOVMFNotFound
-	if !errors.As(err, &ovmfErr) {
-		t.Errorf("Expected ErrOVMFNotFound, got %T", err)
+	if config.OVMFAvailable() {
+		t.Fatal("OVMFAvailable should be false when code file is missing")
 	}
 }
 
-func TestConfig_Validate_OVMFVarsNotFound(t *testing.T) {
+func TestConfig_OVMFAvailable_MissingVars(t *testing.T) {
 	tmpDir := t.TempDir()
 	ovmfCode := filepath.Join(tmpDir, "OVMF_CODE.fd")
 	os.WriteFile(ovmfCode, []byte("test"), 0644)
 
 	config := &Config{
-		BaseDir:  tmpDir,
-		OVMFCode: ovmfCode,
-		OVMFVars: "/nonexistent/OVMF_VARS.fd",
-		PCRBanks: []string{"sha256"},
+		BaseDir:           tmpDir,
+		OVMFCode:          ovmfCode,
+		OVMFVars:          "/nonexistent/OVMF_VARS.fd",
+		PCRBanks:          []string{"sha256"},
+		SecureBootKeySize: 2048,
 	}
 
-	err := config.Validate()
-	if err == nil {
-		t.Error("Validate should fail when OVMF vars doesn't exist")
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate must not fail on missing OVMFVars, got %v", err)
 	}
-
-	var ovmfErr ErrOVMFNotFound
-	if !errors.As(err, &ovmfErr) {
-		t.Errorf("Expected ErrOVMFNotFound, got %T", err)
+	if config.OVMFAvailable() {
+		t.Fatal("OVMFAvailable should be false when vars file is missing")
 	}
 }
 
-func TestConfig_Validate_OVMFCodeSecureNotFound(t *testing.T) {
+func TestConfig_OVMFAvailable_BothPresent(t *testing.T) {
 	tmpDir := t.TempDir()
 	ovmfCode := filepath.Join(tmpDir, "OVMF_CODE.fd")
 	ovmfVars := filepath.Join(tmpDir, "OVMF_VARS.fd")
@@ -2819,21 +2820,18 @@ func TestConfig_Validate_OVMFCodeSecureNotFound(t *testing.T) {
 	os.WriteFile(ovmfVars, []byte("test"), 0644)
 
 	config := &Config{
-		BaseDir:        tmpDir,
-		OVMFCode:       ovmfCode,
-		OVMFCodeSecure: "/nonexistent/OVMF_CODE_SECURE.fd",
-		OVMFVars:       ovmfVars,
-		PCRBanks:       []string{"sha256"},
+		BaseDir:           tmpDir,
+		OVMFCode:          ovmfCode,
+		OVMFVars:          ovmfVars,
+		PCRBanks:          []string{"sha256"},
+		SecureBootKeySize: 2048,
 	}
 
-	err := config.Validate()
-	if err == nil {
-		t.Error("Validate should fail when OVMF code secure doesn't exist")
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
 	}
-
-	var ovmfErr ErrOVMFNotFound
-	if !errors.As(err, &ovmfErr) {
-		t.Errorf("Expected ErrOVMFNotFound, got %T", err)
+	if !config.OVMFAvailable() {
+		t.Fatal("OVMFAvailable should be true when both files exist")
 	}
 }
 

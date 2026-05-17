@@ -85,6 +85,15 @@ func DefaultConfig() *Config {
 }
 
 // Validate validates the configuration.
+//
+// OVMF firmware presence is no longer a hard prerequisite — the service
+// can list, create, and delete vTPM templates / bundles entirely from
+// state on disk. Booting a virtual machine against a bundle does need
+// OVMF, but that's a runtime concern on the machine ACTUALLY launching
+// the VM, not a startup gate for the platformd that manages the
+// templates. Previously a missing OVMF made the whole vTPM REST surface
+// dark on hosts that don't intend to run VMs (notably the Alpine CP).
+// Use OVMFAvailable() to check before launching an instance.
 func (c *Config) Validate() error {
 	if c.BaseDir == "" {
 		return ErrInvalidConfig{Field: "BaseDir", Reason: "cannot be empty"}
@@ -96,22 +105,6 @@ func (c *Config) Validate() error {
 
 	if c.OVMFVars == "" {
 		return ErrInvalidConfig{Field: "OVMFVars", Reason: "cannot be empty"}
-	}
-
-	// Check OVMF files exist
-	if _, err := os.Stat(c.OVMFCode); err != nil {
-		return ErrOVMFNotFound{Path: c.OVMFCode}
-	}
-
-	if _, err := os.Stat(c.OVMFVars); err != nil {
-		return ErrOVMFNotFound{Path: c.OVMFVars}
-	}
-
-	// OVMFCodeSecure is optional, only validate if specified
-	if c.OVMFCodeSecure != "" {
-		if _, err := os.Stat(c.OVMFCodeSecure); err != nil {
-			return ErrOVMFNotFound{Path: c.OVMFCodeSecure}
-		}
 	}
 
 	// Validate PCR banks
@@ -144,6 +137,25 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// OVMFAvailable reports whether the configured OVMFCode and OVMFVars
+// files exist on disk and the firmware is therefore usable for booting
+// a VM. CRUD operations on templates / bundles do not require OVMF;
+// only instance launch does. Callers that need to run a VM should check
+// this before invoking the launch path and surface ErrOVMFNotFound
+// instead of attempting to start qemu with a missing firmware.
+func (c *Config) OVMFAvailable() bool {
+	if c.OVMFCode == "" || c.OVMFVars == "" {
+		return false
+	}
+	if _, err := os.Stat(c.OVMFCode); err != nil {
+		return false
+	}
+	if _, err := os.Stat(c.OVMFVars); err != nil {
+		return false
+	}
+	return true
 }
 
 // BundlesDir returns the path to the bundles directory.
