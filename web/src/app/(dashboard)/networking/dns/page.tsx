@@ -52,15 +52,19 @@ export default function DNSZonesPage() {
     }
   );
 
-  // Transform SDK zones to local DNSZone type for UI compatibility
+  // Transform SDK zones to local DNSZone type for UI compatibility.
+  // createdAt / updatedAt come from the REST envelope when the backend
+  // has real timestamps; otherwise we leave them empty and the table
+  // renders "—". Never fall back to `new Date()` — that made every zone
+  // look freshly minted on every page render.
   const zones: DNSZone[] = useMemo(() => {
     if (!zonesData?.zones) return [];
-    return zonesData.zones.map((zone) => ({
+    return zonesData.zones.map((zone: any) => ({
       id: String(zone.id),
       name: zone.name,
       type: (zone.internal ? 'primary' : 'secondary') as DNSZone['type'],
       status: 'active',
-      recordCount: zone.records ? Object.keys(zone.records).reduce((count, key) => {
+      recordCount: zone.records ? Object.keys(zone.records).reduce((count: number, key: string) => {
         const records = zone.records?.[key as keyof typeof zone.records];
         return count + (Array.isArray(records) ? records.length : (records ? 1 : 0));
       }, 0) : 0,
@@ -69,8 +73,8 @@ export default function DNSZonesPage() {
       refresh: zone.records?.soa?.refresh || 3600,
       retry: zone.records?.soa?.retry || 600,
       expire: zone.records?.soa?.expire || 604800,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: zone.created_at || zone.createdAt || '',
+      updatedAt: zone.updated_at || zone.updatedAt || '',
     }));
   }, [zonesData]);
 

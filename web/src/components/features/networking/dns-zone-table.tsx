@@ -29,6 +29,21 @@ interface DNSZoneTableProps {
   onRefresh: () => void;
 }
 
+/**
+ * Render a zone's createdAt as a "X ago" string. Empty or invalid
+ * timestamps render as "—"; previously this column always read
+ * `formatDistanceToNow(new Date(zone.createdAt))` and would happily
+ * format `new Date(undefined)` (=> Invalid Date) or accept a fabricated
+ * `new Date()` placeholder, making every zone look freshly created on
+ * every page load.
+ */
+function formatZoneCreatedAt(value: string | undefined | null): string {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (!Number.isFinite(d.getTime())) return '—';
+  return formatDistanceToNow(d, { addSuffix: true });
+}
+
 export function DNSZoneTable({ zones, onRefresh }: DNSZoneTableProps) {
   const { toast } = useToast();
   const router = useRouter();
@@ -96,9 +111,7 @@ export function DNSZoneTable({ zones, onRefresh }: DNSZoneTableProps) {
                 </TableCell>
                 <TableCell>{zone.recordCount}</TableCell>
                 <TableCell className="font-mono text-sm">{zone.serial}</TableCell>
-                <TableCell>
-                  {formatDistanceToNow(new Date(zone.createdAt), { addSuffix: true })}
-                </TableCell>
+                <TableCell>{formatZoneCreatedAt(zone.createdAt)}</TableCell>
                 <TableCell className="text-right">
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>

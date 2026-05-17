@@ -644,7 +644,7 @@ func (h *DNSHandlers) zoneToResponse(zone *entities.Zone) ZoneResponse {
 		return ZoneResponse{}
 	}
 
-	return ZoneResponse{
+	resp := ZoneResponse{
 		ID:          zone.ID,
 		Name:        zone.Name,
 		TTL:         zone.TTL,
@@ -652,6 +652,17 @@ func (h *DNSHandlers) zoneToResponse(zone *entities.Zone) ZoneResponse {
 		Internal:    zone.Internal,
 		Records:     h.recordSetToResponse(&zone.RecordSet),
 	}
+	// Only emit real lifecycle timestamps; a zero-value time would render
+	// as "0001-01-01T00:00:00Z" which is worse than absent. The frontend
+	// shows "—" when the field is missing instead of falling back to
+	// `new Date()` and lying about when the zone was created.
+	if !zone.CreatedAt.IsZero() {
+		resp.CreatedAt = zone.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	if !zone.UpdatedAt.IsZero() {
+		resp.UpdatedAt = zone.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	return resp
 }
 
 func (h *DNSHandlers) recordSetToResponse(rs *entities.RecordSet) *RecordSetResponse {

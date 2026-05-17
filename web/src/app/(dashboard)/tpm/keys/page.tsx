@@ -78,6 +78,20 @@ interface TPMKey {
 }
 
 /**
+ * Render a TPM-key createdAt timestamp. The backend does not yet expose
+ * a creation timestamp for EK / SRK / PSRK (those are persisted in NV at
+ * fixed handles and survive every restart), so the field is often empty.
+ * Returning "—" is honest; falling back to `new Date()` would make every
+ * key look like it was generated today on every page load.
+ */
+function formatCreatedAt(value: string | undefined | null): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (!Number.isFinite(d.getTime())) return "—";
+  return d.toLocaleDateString();
+}
+
+/**
  * TPM Keys Management Page
  *
  * Features:
@@ -221,6 +235,13 @@ export default function TPMKeysPage() {
   const keys: TPMKey[] = React.useMemo(() => {
     const result: TPMKey[] = [];
 
+    // TPM keys are persisted in NV at fixed handles; they are created
+    // once during platform provisioning and survive every subsequent
+    // platformd restart. The backend currently doesn't surface a real
+    // "created at" timestamp for EK / SRK / PSRK, so we leave the field
+    // empty rather than fabricating `new Date()` and lying about it.
+    // The UI renders an empty createdAt as "—". When the backend grows
+    // a real timestamp we'll pick it up here without further changes.
     if (ekData?.publicKey) {
       result.push({
         id: "ek",
@@ -230,7 +251,7 @@ export default function TPMKeysPage() {
         status: "active",
         handle: ekData.handle,
         publicKey: ekData.publicKey,
-        createdAt: new Date().toISOString(),
+        createdAt: (ekData as any).createdAt || "",
       });
     }
 
@@ -243,7 +264,7 @@ export default function TPMKeysPage() {
         status: "active",
         handle: srkData.handle,
         publicKey: srkData.publicKey,
-        createdAt: new Date().toISOString(),
+        createdAt: (srkData as any).createdAt || "",
       });
     }
 
@@ -256,7 +277,7 @@ export default function TPMKeysPage() {
         status: "active",
         handle: platformSRKData.handle,
         publicKey: platformSRKData.publicKey,
-        createdAt: new Date().toISOString(),
+        createdAt: (platformSRKData as any).createdAt || "",
       });
     }
 
@@ -272,7 +293,7 @@ export default function TPMKeysPage() {
         status: "active",
         handle: iak.handle,
         publicKey: iak.publicKeyPem || "",
-        createdAt: iak.createdAt || new Date().toISOString(),
+        createdAt: iak.createdAt || "",
         certificatePresent: iak.hasCertificate === true,
       });
     }
@@ -288,7 +309,7 @@ export default function TPMKeysPage() {
         status: "active",
         handle: idv.handle,
         publicKey: idv.publicKeyPem || "",
-        createdAt: idv.createdAt || new Date().toISOString(),
+        createdAt: idv.createdAt || "",
         certificatePresent: idv.hasCertificate === true,
       });
     }
@@ -506,7 +527,7 @@ export default function TPMKeysPage() {
                       </TableCell>
                       <TableCell>
                         <span className="text-sm text-muted-foreground">
-                          {new Date(key.createdAt).toLocaleDateString()}
+                          {formatCreatedAt(key.createdAt)}
                         </span>
                       </TableCell>
                       <TableCell>

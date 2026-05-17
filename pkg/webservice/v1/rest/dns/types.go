@@ -42,13 +42,20 @@ type UpdateZoneRequest struct {
 	Description string `json:"description,omitempty"`
 }
 
-// ZoneResponse is the response for zone operations
+// ZoneResponse is the response for zone operations.
+//
+// CreatedAt + UpdatedAt are RFC3339 strings reflecting the zone entity's
+// real lifecycle timestamps. They are emitted even on zones with a
+// zero-value time so the frontend can render "—" when unknown without
+// falling back to `new Date()` and lying about when the zone was made.
 type ZoneResponse struct {
 	ID          uint64             `json:"id"`
 	Name        string             `json:"name"`
 	TTL         uint32             `json:"ttl"`
 	Description string             `json:"description,omitempty"`
 	Internal    bool               `json:"internal"`
+	CreatedAt   string             `json:"created_at,omitempty"`
+	UpdatedAt   string             `json:"updated_at,omitempty"`
 	Records     *RecordSetResponse `json:"records,omitempty"`
 }
 
