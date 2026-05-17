@@ -57,6 +57,7 @@ type Router struct {
 	router              *mux.Router
 	responseWriter      response.HttpWriter
 	serverKeyAttributes *xkmssdk.KeyAttributes
+	serviceRegistry     *ServiceRegistry
 	router.WebServiceRouter
 }
 
@@ -74,7 +75,9 @@ func NewRouter(
 		logger:              logger,
 		restHandlerRegistry: restHandlerRegistry,
 		serverKeyAttributes: serverKeyAttribtues,
-		responseWriter:      responseWriter}
+		responseWriter:      responseWriter,
+		serviceRegistry:     NewServiceRegistry(logger, responseWriter),
+	}
 }
 
 // Registers all websocket and REST services
@@ -104,6 +107,15 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.tpmRoutes()
 	v1Router.vtpmRoutes()
 	v1Router.quicbaasStubRoutes()
+
+	// Always mount /platform/service-registry last so it observes the
+	// full set of *Routes() outcomes recorded above. The endpoint is
+	// public-but-useful even without auth — it only reports wire state,
+	// never sensitive config — so the platform Services tab can show
+	// dark surfaces without a token.
+	if v1Router.serviceRegistry != nil {
+		v1Router.serviceRegistry.RegisterStatusEndpoint(v1Router.router)
+	}
 }
 
 // quicbaasStubRoutes registers placeholder GET handlers for QuicBaaS
@@ -242,15 +254,16 @@ func (v1Router *Router) acmeRoutes() {
 }
 
 func (v1Router *Router) caRoutes() {
-	if v1Router.ca == nil {
-		v1Router.logger.Debug("CA service is nil - CA routes not registered")
-		return
-	}
-	caRouter := restca.NewCARouter(
-		v1Router.logger,
-		v1Router.ca,
-		v1Router.responseWriter)
-	caRouter.RegisterRoutes(v1Router.router)
+	v1Router.serviceRegistry.requireService(
+		v1Router.router, "ca", "/ca", v1Router.ca,
+		func() {
+			caRouter := restca.NewCARouter(
+				v1Router.logger,
+				v1Router.ca,
+				v1Router.responseWriter)
+			caRouter.RegisterRoutes(v1Router.router)
+		},
+	)
 }
 
 func (v1Router *Router) deviceRoutes() {
@@ -312,15 +325,16 @@ func (v1Router *Router) deviceRoutes() {
 
 func (v1Router *Router) dnsRoutes() {
 	dnsService := v1Router.restHandlerRegistry.DNSService()
-	if dnsService == nil {
-		v1Router.logger.Debug("DNS service is nil - DNS routes not registered")
-		return
-	}
-	dnsRouter := restdns.NewDNSRouter(
-		v1Router.logger,
-		dnsService,
-		v1Router.responseWriter)
-	dnsRouter.RegisterRoutes(v1Router.router)
+	v1Router.serviceRegistry.requireService(
+		v1Router.router, "dns", "/dns", dnsService,
+		func() {
+			dnsRouter := restdns.NewDNSRouter(
+				v1Router.logger,
+				dnsService,
+				v1Router.responseWriter)
+			dnsRouter.RegisterRoutes(v1Router.router)
+		},
+	)
 }
 
 func (v1Router *Router) attestationRoutes() {
@@ -485,48 +499,62 @@ func (v1Router *Router) kmsRoutes() {
 
 func (v1Router *Router) sdnRoutes() {
 	sdnService := v1Router.restHandlerRegistry.SDNService()
-	if sdnService == nil {
-		v1Router.logger.Debug("SDN service is nil - SDN routes not registered")
-		return
-	}
-	sdnRouter := sdn.NewSDNRouter(
-		v1Router.logger,
-		sdnService,
-		v1Router.restHandlerRegistry.ResponseWriter())
-	sdnRouter.RegisterRoutes(v1Router.router)
+	v1Router.serviceRegistry.requireService(
+		v1Router.router, "sdn", "/sdn", sdnService,
+		func() {
+			sdnRouter := sdn.NewSDNRouter(
+				v1Router.logger,
+				sdnService,
+				v1Router.restHandlerRegistry.ResponseWriter())
+			sdnRouter.RegisterRoutes(v1Router.router)
+		},
+	)
 }
 
 func (v1Router *Router) switchRoutes() {
 	switchService := v1Router.restHandlerRegistry.SwitchService()
-	if switchService == nil {
-		v1Router.logger.Debug("Switch service is nil - switch routes not registered")
-		return
-	}
-	switchRouter := switchapi.NewSwitchRouter(
-		v1Router.logger,
-		switchService,
-		v1Router.restHandlerRegistry.ResponseWriter())
-	switchRouter.RegisterRoutes(v1Router.router)
+	v1Router.serviceRegistry.requireService(
+		v1Router.router, "switch", "/switches", switchService,
+		func() {
+			switchRouter := switchapi.NewSwitchRouter(
+				v1Router.logger,
+				switchService,
+				v1Router.restHandlerRegistry.ResponseWriter())
+			switchRouter.RegisterRoutes(v1Router.router)
+		},
+	)
 }
 
 func (v1Router *Router) vtpmRoutes() {
 	vtpmService := v1Router.restHandlerRegistry.VTPMService()
-	if vtpmService == nil {
-		v1Router.logger.Debug("vTPM service is nil - vTPM routes not registered")
-		return
-	}
-	vtpmRouter := vtpm.NewVTPMRouter(
-		v1Router.logger,
-		vtpmService,
-		v1Router.restHandlerRegistry.ResponseWriter())
-	vtpmRouter.RegisterRoutes(v1Router.router)
+	v1Router.serviceRegistry.requireService(
+		v1Router.router, "vtpm", "/vtpm", vtpmService,
+		func() {
+			vtpmRouter := vtpm.NewVTPMRouter(
+				v1Router.logger,
+				vtpmService,
+				v1Router.restHandlerRegistry.ResponseWriter())
+			vtpmRouter.RegisterRoutes(v1Router.router)
+		},
+	)
 }
 
 func (v1Router *Router) platformRoutes() {
+	// The platform service surface owns /platform/service-registry —
+	// the very endpoint operators consult to see this status. Don't
+	// register the catch-all 503 stub for it; otherwise an
+	// unconfigured platform router would mask the status endpoint.
 	platformRouter := v1Router.restHandlerRegistry.PlatformRestRouter()
 	if platformRouter == nil {
-		v1Router.logger.Debug("Platform router is nil - platform routes not registered")
+		if v1Router.serviceRegistry != nil {
+			v1Router.serviceRegistry.markUnconfigured("platform", "/platform",
+				"platform service not configured by daemon — /platform/service-registry remains available; other /platform/* routes are dark")
+		}
+		v1Router.logger.Warnf("Platform router is nil - /platform routes not registered (but /platform/service-registry is still wired)")
 		return
 	}
 	platformRouter.RegisterRoutes(v1Router.router)
+	if v1Router.serviceRegistry != nil {
+		v1Router.serviceRegistry.markConfigured("platform", "/platform")
+	}
 }
