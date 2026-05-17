@@ -700,6 +700,58 @@ func (s *SDNService) CreateVLAN(ctx context.Context, req *platformv1.CreateVLANR
 	}, nil
 }
 
+// SeedVLAN registers a single VLAN entry on the supplied bridge in the
+// in-memory map WITHOUT applying any OVS port tags. Use this for
+// reconciling configured (declarative) VLAN definitions at startup so
+// the ListVLANs surface reflects what the operator intended, without
+// pre-binding ports. Idempotent: a second seed for the same
+// (bridgeName, vlanID) pair is a no-op and returns the existing entry.
+//
+// Ports are wired separately, either by the operator via CreateVLAN
+// against a real port list or by a controller that watches for newly
+// attached ports and applies the right tag.
+func (s *SDNService) SeedVLAN(bridgeName, bridgeID string, vlanID uint32, name string) (*platformv1.VLAN, error) {
+	if bridgeName == "" {
+		return nil, fmt.Errorf("bridgeName is required")
+	}
+	if vlanID == 0 || vlanID > 4095 {
+		return nil, fmt.Errorf("vlanID must be 1..4095, got %d", vlanID)
+	}
+
+	vlanKey := fmt.Sprintf("%s:%d", bridgeName, vlanID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, ok := s.vlans[vlanKey]; ok {
+		return seedVLANToProto(existing, bridgeID), nil
+	}
+
+	res := &vlanResource{
+		id:        fmt.Sprintf("vlan-%s-%d", bridgeName, vlanID),
+		vlanID:    vlanID,
+		bridgeID:  bridgeID,
+		name:      name,
+		ports:     nil,
+		createdAt: time.Now(),
+	}
+	s.vlans[vlanKey] = res
+	return seedVLANToProto(res, bridgeID), nil
+}
+
+func seedVLANToProto(r *vlanResource, bridgeID string) *platformv1.VLAN {
+	return &platformv1.VLAN{
+		Id: r.id,
+		Config: &platformv1.VLANConfig{
+			BridgeId: bridgeID,
+			VlanId:   r.vlanID,
+			Name:     r.name,
+		},
+		Stats: &platformv1.VLANStats{
+			PortCount: uint32(len(r.ports)),
+		},
+		CreatedAt: timestamppb.New(r.createdAt),
+	}
+}
+
 // DeleteVLAN deletes a VLAN configuration
 func (s *SDNService) DeleteVLAN(ctx context.Context, req *platformv1.DeleteVLANRequest) (*platformv1.DeleteVLANResponse, error) {
 	if req.GetBridgeId() == "" {

@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	noiseapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/noise"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
@@ -262,6 +263,71 @@ func buildChallengeMap(challenges []string, ca tcgEnrollmentCA) map[string]quicb
 // cert (the gRPC listener will start without TLS, surfacing the error to
 // remote clients) so the platform stays observable rather than failing
 // to come up entirely.
+// seedSDNVLANsFromConfig walks app.SDNConfig.Networks (already derived
+// from installer subnets that carry a vlan-id) and calls SeedVLAN on
+// the running SDN service for each one. The bridge name + UUID come
+// from the live OVS state so the seeded entries link back to the
+// actual bridge the operator's bond materialized.
+//
+// SeedVLAN registers the VLAN in the in-memory map only; port-tag
+// application still happens via CreateVLAN or a future controller.
+// This shortest-path reconciliation makes the Networking → VLANs page
+// non-empty after a deploy, which is what operators expect when they
+// declared `vlan-id: 200` in their config.
+func seedSDNVLANsFromConfig(logger *logging.Logger, a *app.App, sdnSvc *daemon.SDNService) {
+	if a == nil || sdnSvc == nil {
+		return
+	}
+	if a.SDNConfig == nil || len(a.SDNConfig.Networks) == 0 {
+		return
+	}
+
+	// Look up the configured OVS bridge. The platform's installer
+	// always materializes exactly one OVS bridge per node (a.SDNConfig
+	// .OVS.Bridge), so we don't need to round-trip OVS to enumerate.
+	bridgeName := ""
+	if a.SDNConfig.OVS != nil {
+		bridgeName = a.SDNConfig.OVS.Bridge
+	}
+	if bridgeName == "" {
+		logger.Warn("SDN VLAN seeding skipped: no OVS bridge configured")
+		return
+	}
+
+	// Pull the live bridges so we know the UUID to attach VLANs to.
+	listResp, err := sdnSvc.ListBridges(context.Background(), &platformv1.ListBridgesRequest{})
+	if err != nil {
+		logger.Warn("SDN VLAN seeding: failed to list bridges",
+			"error", err)
+		return
+	}
+	var bridgeID string
+	for _, b := range listResp.GetBridges() {
+		if b.GetConfig().GetName() == bridgeName {
+			bridgeID = b.GetId()
+			break
+		}
+	}
+	if bridgeID == "" {
+		logger.Warn("SDN VLAN seeding: configured bridge not found in OVS",
+			"bridge", bridgeName)
+		return
+	}
+
+	for subnetName, net := range a.SDNConfig.Networks {
+		if net == nil || net.VLAN == 0 {
+			continue
+		}
+		if _, err := sdnSvc.SeedVLAN(bridgeName, bridgeID, uint32(net.VLAN), subnetName); err != nil {
+			logger.Warn("SDN VLAN seeding: SeedVLAN failed",
+				"subnet", subnetName, "vlan", net.VLAN, "error", err)
+			continue
+		}
+		logger.Info("SDN VLAN seeded from config",
+			"subnet", subnetName, "vlan", net.VLAN, "bridge", bridgeName)
+	}
+}
+
 // initVTPMServiceOnConfig populates cfg.VTPMService from App.VTPMConfig,
 // defaulting to a fresh &vtpm.Config{} when no explicit `vtpm:` block is
 // present in config.yaml. vtpm.Config.ApplyDefaults fills BaseDir
@@ -854,6 +920,13 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			// "endpoint does not exist" envelope.
 			if svc := platformDaemon.SDNService(); svc != nil {
 				params.SDNService = svc
+				// Reconcile configured VLANs into the in-memory SDN
+				// service so ListVLANs reflects the operator's intent.
+				// Without this seeding the WebUI Networking → VLANs
+				// page shows an empty table even when subnets define
+				// vlan-id values that the platform has already turned
+				// into IPAM pools.
+				seedSDNVLANsFromConfig(logger, App, svc)
 			}
 		}
 		// vtpm.VTPMService is wired by the daemon-only path (config.VTPMService)
