@@ -146,8 +146,8 @@ network:
   dnsmasq:
     enabled: true
     upstream-servers:
-      - "/example.internal/198.18.0.1#9053"
-      - "198.18.0.1#8053"
+      - "/example.internal/198.18.0.10#9053"
+      - "198.18.0.10#8053"
     local-domain: example.internal
   subnets:
     - name: production
@@ -156,14 +156,14 @@ network:
       cidr: 198.18.0.0/24
       gateway: 198.18.0.1
       dns:
-        - 198.18.0.1
+        - 198.18.0.10
     - name: provisioning
       scope: internal
       vlan-id: 201
       cidr: 172.16.201.0/24
       gateway: 172.16.201.1
       dns:
-        - 172.16.201.1
+        - 172.16.201.10
       role: provisioning
       dhcp:
         enabled: true
@@ -176,7 +176,7 @@ network:
       cidr: 172.16.202.0/24
       gateway: 172.16.202.1
       dns:
-        - 172.16.202.1
+        - 172.16.202.10
       role: quarantine
     - name: storage
       scope: internal
@@ -184,7 +184,7 @@ network:
       cidr: 172.16.203.0/24
       gateway: 172.16.203.1
       dns:
-        - 172.16.203.1
+        - 172.16.203.10
   interfaces:
     - name: eth0
       type: static
@@ -279,7 +279,7 @@ fido2:
 dns:
   resolver:
     servers:
-      - address: "198.18.0.1"
+      - address: "198.18.0.10"
         port: 8053
     search-domains:
       - example.internal

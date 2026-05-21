@@ -153,7 +153,7 @@ os:
 network:
   dns:
     nameservers:
-      - 198.18.0.1
+      - 198.18.0.10
     search-domains:
       - example.internal
   subnets:
@@ -163,10 +163,10 @@ network:
       cidr: 198.18.0.0/24
       gateway: 198.18.0.1
       dns:
-        - 198.18.0.1
+        - 198.18.0.10
       dhcp:
         enabled: true
-        range-start: 198.18.0.10
+        range-start: 198.18.0.20
         range-end: 198.18.0.254
         lease-duration: 24h
     - name: provisioning
@@ -175,7 +175,7 @@ network:
       cidr: 172.16.201.0/24
       gateway: 172.16.201.1
       dns:
-        - 172.16.201.1
+        - 172.16.201.10
       role: provisioning
       dhcp:
         enabled: true
@@ -188,7 +188,7 @@ network:
       cidr: 172.16.202.0/24
       gateway: 172.16.202.1
       dns:
-        - 172.16.202.1
+        - 172.16.202.10
       role: quarantine
     - name: storage
       scope: internal
@@ -196,7 +196,7 @@ network:
       cidr: 172.16.203.0/24
       gateway: 172.16.203.1
       dns:
-        - 172.16.203.1
+        - 172.16.203.10
       dhcp:
         enabled: true
         range-start: 172.16.203.10
@@ -205,7 +205,7 @@ network:
   interfaces:
     - name: eth0
       type: static
-      ipv4-address: 198.18.0.1/24
+      ipv4-address: 198.18.0.10/24
       auto-start: true
   bridges:
     - name: trusted0
@@ -231,16 +231,16 @@ network:
         - eth7
       vlans:
         - subnet: production
-          ipv4-address: 198.18.0.1/24
+          ipv4-address: 198.18.0.10/24
           auto-start: true
         - subnet: provisioning
-          ipv4-address: 172.16.201.1/24
+          ipv4-address: 172.16.201.10/24
           auto-start: true
         - subnet: quarantine
-          ipv4-address: 172.16.202.1/24
+          ipv4-address: 172.16.202.10/24
           auto-start: true
         - subnet: storage
-          ipv4-address: 172.16.203.1/24
+          ipv4-address: 172.16.203.10/24
           auto-start: true
       auto-start: true
   vlans: []
@@ -504,8 +504,8 @@ sdn:
         cidr: 198.18.0.0/24
         gateway: 198.18.0.1
         dns:
-          - 198.18.0.1
-        range-start: 198.18.0.10
+          - 198.18.0.10
+        range-start: 198.18.0.20
         range-end: 198.18.0.254
         lease-duration: 24h
         dhcp: true
@@ -513,7 +513,7 @@ sdn:
         cidr: 172.16.201.0/24
         gateway: 172.16.201.1
         dns:
-          - 172.16.201.1
+          - 172.16.201.10
         range-start: 172.16.201.50
         range-end: 172.16.201.254
         lease-duration: 1h
@@ -522,7 +522,7 @@ sdn:
         cidr: 172.16.202.0/24
         gateway: 172.16.202.1
         dns:
-          - 172.16.202.1
+          - 172.16.202.10
         range-start: 172.16.202.50
         range-end: 172.16.202.254
         lease-duration: 1h
@@ -531,8 +531,8 @@ sdn:
         cidr: 172.16.203.0/24
         gateway: 172.16.203.1
         dns:
-          - 172.16.203.1
-        range-start: 172.16.203.10
+          - 172.16.203.10
+        range-start: 172.16.203.20
         range-end: 172.16.203.254
         lease-duration: 24h
         dhcp: true

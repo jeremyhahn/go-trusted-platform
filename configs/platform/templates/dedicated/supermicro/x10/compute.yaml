@@ -143,8 +143,8 @@ network:
   dnsmasq:
     enabled: true
     upstream-servers:
-      - "/example.internal/198.18.0.1#9053"
-      - "198.18.0.1#8053"
+      - "/example.internal/198.18.0.10#9053"
+      - "198.18.0.10#8053"
     local-domain: example.internal
   # Compute nodes share the control plane's trusted0 OVS topology so
   # tenant VM traffic, storage, and management all ride the same 10G
@@ -160,7 +160,7 @@ network:
       cidr: 198.18.0.0/24
       gateway: 198.18.0.1
       dns:
-        - 198.18.0.1
+        - 198.18.0.10
     - name: provisioning
       scope: internal
       vlan-id: 201
@@ -168,7 +168,7 @@ network:
       cidr: 172.16.201.0/24
       gateway: 172.16.201.1
       dns:
-        - 172.16.201.1
+        - 172.16.201.10
     - name: quarantine
       scope: internal
       vlan-id: 202
@@ -176,14 +176,14 @@ network:
       cidr: 172.16.202.0/24
       gateway: 172.16.202.1
       dns:
-        - 172.16.202.1
+        - 172.16.202.10
     - name: storage
       scope: internal
       vlan-id: 203
       cidr: 172.16.203.0/24
       gateway: 172.16.203.1
       dns:
-        - 172.16.203.1
+        - 172.16.203.10
   interfaces:
     - name: eth0
       type: static
@@ -273,7 +273,7 @@ fido2:
 dns:
   resolver:
     servers:
-      - address: "198.18.0.1"
+      - address: "198.18.0.10"
         port: 8053
     search-domains:
       - example.internal
