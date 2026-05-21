@@ -55,12 +55,15 @@ var redfishBootDevicePreferences = map[BootDevice][]string{
 	BootDeviceNone:         {"None"},
 }
 
-// vendorUSBCDPreferences lists Supermicro-style USB-CD aliases that are
-// preferred over the DMTF "Cd" target on BMCs that emulate the virtual CD
-// as a USB CDROM device. They are added to the candidate list whenever the
-// resolved quirk advertises any vendor CD/DVD aliases — i.e. whenever the
-// host is known to deviate from the DMTF spelling.
-var vendorUSBCDPreferences = []string{"UefiUsbCd", "UsbCd"}
+// vendorUSBCDFallbacks lists USB-CD aliases that some BMCs advertise
+// alongside the standard CD/DVD targets. They are tried only as a
+// last-resort fallback because most hardware that exposes them does NOT
+// actually route virtual-media to those slots — on Supermicro X10
+// specifically, the virtual CD is exposed as a real CD/DVD device,
+// not a USB CDROM, so picking UefiUsbCd here would silently fail at
+// boot. The previous design preferred these aliases first; that broke
+// X10 vmedia boot by sending the BIOS to a slot with no media.
+var vendorUSBCDFallbacks = []string{"UefiUsbCd", "UsbCd"}
 
 // redfishBootDeviceReverse maps Redfish BootSourceOverrideTarget values back to
 // BMC BootDevice. Includes vendor-specific values so VerifyBootDevice() can
@@ -83,18 +86,17 @@ var redfishBootDeviceReverse = map[string]BootDevice{
 // the resolved hardware Quirk to weave in vendor-specific CD/DVD aliases.
 //
 // The candidate list is constructed by:
-//  1. Prepending the quirk's vendor CD/DVD aliases (UEFI first, then BIOS-
-//     mode) when the device is a CD/virtual-media target. This wins over
-//     the DMTF spelling on BMCs that prefer non-standard aliases (e.g.
-//     Supermicro X10 "CD/DVD" and "UefiCd"). When no vendor aliases are
-//     declared the DMTF defaults are used unchanged.
-//  2. Adding USB-CD aliases (UefiUsbCd, UsbCd) immediately after the
-//     vendor UEFI alias when the quirk advertises any vendor CD aliases —
-//     these are known on Supermicro ATEN BMCs which emulate the virtual
-//     CD slot as a USB CDROM and prefer the USB variants when both are
-//     advertised.
-//  3. Appending the DMTF-standard preferences from
-//     redfishBootDevicePreferences[device].
+//  1. The quirk's vendor UEFI CD alias first (e.g. Supermicro X10
+//     "UefiCd"). When the BIOS is UEFI-mode this is the slot the BMC
+//     actually routes virtual media to.
+//  2. The quirk's vendor BIOS-mode CD alias (e.g. Supermicro X10
+//     "CD/DVD" with the slash). Used when the BIOS is in Legacy mode.
+//  3. DMTF-standard preferences from redfishBootDevicePreferences[device]
+//     (UefiCd, then Cd).
+//  4. USB-CD fallbacks (UefiUsbCd, UsbCd) — only as a last resort. Some
+//     BMCs advertise these but do NOT actually route virtual media to
+//     them. Preferring them early (the previous behavior) broke X10
+//     vmedia boot by sending the BIOS to an empty USB CD slot.
 //
 // When allowable is empty (older BMCs that don't advertise AllowableValues),
 // the DMTF-standard value from redfishBootDeviceMap is returned as a best-
@@ -158,23 +160,24 @@ func buildBootTargetCandidates(device BootDevice, quirk quirks.Quirk) []string {
 		out = append(out, s)
 	}
 
-	// On vendors known to deviate from the DMTF spec (any non-empty
-	// MediaType field), USB-CD aliases win first because Supermicro
-	// ATEN BMCs emulate the virtual CD as a USB CDROM and prefer
-	// UefiUsbCd over UefiCd when both are advertised.
-	if hasVendorAliases {
-		for _, v := range vendorUSBCDPreferences {
-			add(v)
-		}
-	}
-	// Vendor UEFI alias next (e.g. "UefiCd" on Supermicro X10 — same
-	// string as DMTF, but listed before BIOS-mode aliases).
+	// Vendor UEFI CD alias FIRST — this is the slot the BMC routes
+	// virtual media to on UEFI-mode hosts. On Supermicro X10 this is
+	// "UefiCd"; on other vendors it may differ.
 	add(media.UEFICDAlias)
-	// Vendor BIOS-mode alias (e.g. "CD/DVD" with slash on Supermicro X10).
+	// Vendor BIOS-mode alias next (e.g. "CD/DVD" with slash on
+	// Supermicro X10) for hosts in Legacy mode.
 	add(media.CDDVDAlias)
-	// Finally, the DMTF-standard preferences.
+	// DMTF-standard preferences (UefiCd, Cd) — universal fallback.
 	for _, v := range defaults {
 		add(v)
+	}
+	// USB-CD aliases LAST — some BMCs advertise them but do not route
+	// virtual media there. Picking them early would silently break
+	// vmedia boot on X10 (we did exactly that before this fix).
+	if hasVendorAliases {
+		for _, v := range vendorUSBCDFallbacks {
+			add(v)
+		}
 	}
 	return out
 }
@@ -260,11 +263,22 @@ func (c *redfishClient) performDiscovery(ctx context.Context) error {
 	c.systemPath.Store(systemPath)
 
 	// Discover first chassis.
+	//
+	// Chassis discovery is non-fatal: the resource is only required by
+	// GetSensors (Thermal + Power readings under Chassis/{id}/Thermal +
+	// /Power). All other operations — power control, boot device,
+	// virtual media — work off the System resource. The Supermicro X10
+	// ATEN BMC firmware intermittently returns 503 for /redfish/v1/Chassis
+	// even when the rest of the service is healthy; failing discovery
+	// fast there would break unrelated operators. We log + continue;
+	// GetSensors already degrades cleanly when chassisPath is empty.
 	chassisPath, err := c.discoverFirstMember(ctx, root.Chassis.ODataID, "Chassis")
 	if err != nil {
-		return err
+		c.logger.Warn("bmc: redfish chassis discovery failed; sensors will be unavailable",
+			slog.String("error", err.Error()))
+	} else {
+		c.chassisPath.Store(chassisPath)
 	}
-	c.chassisPath.Store(chassisPath)
 
 	// Discover first manager.
 	managerPath, err := c.discoverFirstMember(ctx, root.Managers.ODataID, "Managers")
@@ -679,6 +693,13 @@ func (c *redfishClient) GetSensors(ctx context.Context) ([]SensorReading, error)
 
 	chassisPath := c.getChassisPath()
 	sensors := make([]SensorReading, 0, 16)
+	if chassisPath == "" {
+		// Chassis was unreachable at discovery time (e.g., X10 ATEN
+		// firmware returning 503). Without it, /Thermal and /Power
+		// can't be addressed — return an empty reading set rather
+		// than emitting bogus URLs.
+		return sensors, nil
+	}
 
 	// Fetch thermal data.
 	var thermal redfishThermal

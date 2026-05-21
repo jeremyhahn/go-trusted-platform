@@ -394,6 +394,75 @@ func TestRedfishClient_Discovery_BadServer(t *testing.T) {
 	}
 }
 
+// TestRedfishClient_Discovery_ChassisUnavailable verifies that a BMC
+// that fails Chassis discovery (e.g., Supermicro X10 ATEN firmware
+// intermittently returning 503 on /redfish/v1/Chassis) still completes
+// discovery: System / Manager / VirtualMedia are independent and must
+// remain usable. GetSensors should degrade gracefully to an empty
+// reading set instead of issuing requests against an empty path.
+func TestRedfishClient_Discovery_ChassisUnavailable(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/redfish/v1/", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, redfishServiceRoot{
+			Systems:  redfishRef{ODataID: "/redfish/v1/Systems"},
+			Chassis:  redfishRef{ODataID: "/redfish/v1/Chassis"},
+			Managers: redfishRef{ODataID: "/redfish/v1/Managers"},
+		})
+	})
+	mux.HandleFunc("/redfish/v1/Systems", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, redfishCollection{Members: []redfishRef{{ODataID: "/redfish/v1/Systems/1"}}})
+	})
+	mux.HandleFunc("/redfish/v1/Systems/1", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, redfishSystem{
+			Actions: redfishActions{
+				ComputerSystemReset: redfishResetAction{
+					Target: "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+				},
+			},
+		})
+	})
+	mux.HandleFunc("/redfish/v1/Chassis", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "503 Service Not Available", http.StatusServiceUnavailable)
+	})
+	mux.HandleFunc("/redfish/v1/Managers", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, redfishCollection{Members: []redfishRef{{ODataID: "/redfish/v1/Managers/1"}}})
+	})
+	mux.HandleFunc("/redfish/v1/Managers/1", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, struct {
+			VirtualMedia redfishRef `json:"VirtualMedia"`
+		}{VirtualMedia: redfishRef{ODataID: "/redfish/v1/Managers/1/VirtualMedia"}})
+	})
+
+	server := httptest.NewTLSServer(mux)
+	t.Cleanup(server.Close)
+
+	client := newTestRedfishClient(t, server)
+	t.Cleanup(func() { client.Close() })
+
+	if err := client.discover(context.Background()); err != nil {
+		t.Fatalf("discovery should succeed even when Chassis returns 503, got: %v", err)
+	}
+	if got := client.getSystemPath(); got != "/redfish/v1/Systems/1" {
+		t.Errorf("systemPath = %q, want /redfish/v1/Systems/1", got)
+	}
+	if got := client.getChassisPath(); got != "" {
+		t.Errorf("chassisPath = %q, want empty (Chassis was unreachable)", got)
+	}
+	if got := client.getVirtualMediaPath(); got != "/redfish/v1/Managers/1/VirtualMedia" {
+		t.Errorf("virtualMediaPath = %q, want /redfish/v1/Managers/1/VirtualMedia", got)
+	}
+
+	// GetSensors should return an empty result, not error, when
+	// Chassis is unavailable.
+	sensors, err := client.GetSensors(context.Background())
+	if err != nil {
+		t.Errorf("GetSensors() error when Chassis empty: %v", err)
+	}
+	if len(sensors) != 0 {
+		t.Errorf("GetSensors() = %d readings, want 0 (Chassis was unreachable)", len(sensors))
+	}
+}
+
 // --- Power Tests ---
 
 func TestRedfishClient_PowerStatus(t *testing.T) {

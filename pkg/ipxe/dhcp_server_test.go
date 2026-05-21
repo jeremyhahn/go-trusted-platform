@@ -1353,6 +1353,108 @@ func TestDHCPServer_AddPXEOptions(t *testing.T) {
 	}
 }
 
+// TestDHCPServer_BootFilenameForArch covers the arch-aware boot
+// filename selection: legacy BIOS PXE clients (arch 0x0000) must
+// receive an MBR-style binary like undionly.kpxe, UEFI x64 clients
+// (0x0007) must receive a 64-bit EFI binary, etc. Pre-fix behavior
+// served ipxe.efi to every client and silently broke legacy BIOS
+// PXE ROMs — this test guards against regressing back to that.
+func TestDHCPServer_BootFilenameForArch(t *testing.T) {
+	cfg := &DHCPConfig{
+		ServerIP:           net.ParseIP("192.168.1.1"),
+		RangeStart:         net.ParseIP("192.168.1.100"),
+		RangeEnd:           net.ParseIP("192.168.1.200"),
+		BootFilename:       "ipxe.efi",
+		BootFilenameByArch: DefaultBootFilenameByArch(),
+	}
+	server, err := NewDHCPServer(cfg, logging.DefaultLogger())
+	require.NoError(t, err)
+
+	cases := []struct {
+		name string
+		arch uint16
+		want string
+	}{
+		{"legacy BIOS x86 -> undionly.kpxe", archBIOSx86, "undionly.kpxe"},
+		{"UEFI IA32 -> ipxe32.efi", archEFIx86, "ipxe32.efi"},
+		{"UEFI x64 -> ipxe.efi", archEFIx64, "ipxe.efi"},
+		{"UEFI bytecode -> ipxe.efi", archEFIBC, "ipxe.efi"},
+		{"unmapped arch falls back to BootFilename", uint16(0x00FF), "ipxe.efi"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := server.bootFilenameForArch(tc.arch)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestDHCPServer_BootFilenameForArch_EmptyMap exercises the
+// backwards-compatibility path: an operator who explicitly sets
+// BootFilenameByArch to an empty map (not nil) intentionally
+// disables arch-aware selection and expects every client to receive
+// the single BootFilename value.
+func TestDHCPServer_BootFilenameForArch_EmptyMap(t *testing.T) {
+	cfg := &DHCPConfig{
+		ServerIP:           net.ParseIP("192.168.1.1"),
+		RangeStart:         net.ParseIP("192.168.1.100"),
+		RangeEnd:           net.ParseIP("192.168.1.200"),
+		BootFilename:       "ipxe.efi",
+		BootFilenameByArch: map[uint16]string{},
+	}
+	server, err := NewDHCPServer(cfg, logging.DefaultLogger())
+	require.NoError(t, err)
+
+	for _, arch := range []uint16{archBIOSx86, archEFIx86, archEFIx64, archEFIBC} {
+		assert.Equal(t, "ipxe.efi", server.bootFilenameForArch(arch))
+	}
+}
+
+// TestDefaultBootFilenameByArch verifies the standard mapping that
+// ships when the operator hasn't customized it. Filenames here are
+// load-bearing — they must match the entries TFTPServer.loadFirmware
+// caches under those names, or the DHCP server will hand clients a
+// path their TFTP fetch can never resolve.
+func TestDefaultBootFilenameByArch(t *testing.T) {
+	m := DefaultBootFilenameByArch()
+	assert.Equal(t, "undionly.kpxe", m[archBIOSx86])
+	assert.Equal(t, "ipxe32.efi", m[archEFIx86])
+	assert.Equal(t, "ipxe.efi", m[archEFIx64])
+	assert.Equal(t, "ipxe.efi", m[archEFIBC])
+}
+
+// TestDHCPServer_AddPXEOptions_ArchAware verifies that addPXEOptions
+// now selects the boot filename from the arch map. Pre-fix it
+// always used config.BootFilename — a legacy-BIOS PXE ROM (arch 0)
+// would receive ipxe.efi (a UEFI binary) and silently fail.
+func TestDHCPServer_AddPXEOptions_ArchAware(t *testing.T) {
+	cfg := &DHCPConfig{
+		ServerIP:           net.ParseIP("192.168.1.1"),
+		RangeStart:         net.ParseIP("192.168.1.100"),
+		RangeEnd:           net.ParseIP("192.168.1.200"),
+		BootFilename:       "ipxe.efi",
+		BootFilenameByArch: DefaultBootFilenameByArch(),
+		TFTPServerIP:       net.ParseIP("192.168.1.1"),
+	}
+	server, err := NewDHCPServer(cfg, logging.DefaultLogger())
+	require.NoError(t, err)
+
+	req := createBaseDHCPRequest(t)
+
+	t.Run("legacy BIOS PXE gets undionly.kpxe", func(t *testing.T) {
+		reply, err := dhcpv4.NewReplyFromRequest(req)
+		require.NoError(t, err)
+		server.addPXEOptions(reply, archBIOSx86, false)
+		assert.Equal(t, "undionly.kpxe", reply.BootFileName)
+	})
+	t.Run("UEFI x64 still gets ipxe.efi", func(t *testing.T) {
+		reply, err := dhcpv4.NewReplyFromRequest(req)
+		require.NoError(t, err)
+		server.addPXEOptions(reply, archEFIx64, false)
+		assert.Equal(t, "ipxe.efi", reply.BootFileName)
+	})
+}
+
 // TestDHCPServer_SendDHCPReply tests DHCP reply sending logic.
 func TestDHCPServer_SendDHCPReply(t *testing.T) {
 	t.Run("sends to relay agent when giaddr set", func(t *testing.T) {

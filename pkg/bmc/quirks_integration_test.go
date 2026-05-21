@@ -73,16 +73,35 @@ func TestPickBootSourceOverrideTarget_X10OnlyCDDVDAdvertised(t *testing.T) {
 	}
 }
 
-// TestPickBootSourceOverrideTarget_X10WithUSBCDAdvertised verifies that when
-// the BMC also advertises "UefiUsbCd", that wins over the plain UEFI variant
-// because Supermicro ATEN BMCs emulate the virtual CD as a USB CDROM.
-func TestPickBootSourceOverrideTarget_X10WithUSBCDAdvertised(t *testing.T) {
+// TestPickBootSourceOverrideTarget_X10PrefersVendorUEFIOverUSBCD verifies
+// that when the BMC advertises both "UefiCd" (the slot the BMC actually
+// routes virtual media to on X10) AND "UefiUsbCd" (an empty USB CD slot),
+// the vendor UEFI CD alias wins. The previous implementation preferred
+// UefiUsbCd on Supermicro hardware and silently broke vmedia boot — the
+// X10 BIOS would set boot target = UefiUsbCd, find no media in that
+// USB CD slot, and fall through to disk.
+func TestPickBootSourceOverrideTarget_X10PrefersVendorUEFIOverUSBCD(t *testing.T) {
 	q := quirks.Resolve("Supermicro", "X10SDV-TP8F")
 	allowable := []string{"None", "Pxe", "Hdd", "CD/DVD", "UefiCd", "UefiUsbCd"}
 
 	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q)
+	if got != "UefiCd" {
+		t.Errorf("X10 picker = %q, want %q (vendor UEFI alias must beat USB-CD)", got, "UefiCd")
+	}
+}
+
+// TestPickBootSourceOverrideTarget_X10USBCDOnlyLastResort verifies the
+// final-fallback behavior: when the BMC advertises ONLY USB-CD targets
+// and no real CD/DVD slot, the picker reluctantly returns UefiUsbCd as
+// the last-resort match. This is the only configuration where the USB
+// alias should be selected.
+func TestPickBootSourceOverrideTarget_X10USBCDOnlyLastResort(t *testing.T) {
+	q := quirks.Resolve("Supermicro", "X10SDV-TP8F")
+	allowable := []string{"None", "Pxe", "Hdd", "UefiUsbCd"}
+
+	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q)
 	if got != "UefiUsbCd" {
-		t.Errorf("X10 picker with UefiUsbCd = %q, want %q", got, "UefiUsbCd")
+		t.Errorf("X10 picker with only USB-CD = %q, want %q (last-resort fallback)", got, "UefiUsbCd")
 	}
 }
 

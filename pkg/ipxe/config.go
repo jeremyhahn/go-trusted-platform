@@ -90,8 +90,19 @@ type ServerConfig struct {
 	// TFTPServerName is the TFTP server hostname (optional).
 	TFTPServerName string
 
-	// BootFilename is the boot filename for non-iPXE clients.
+	// BootFilename is the legacy single-arch boot filename for
+	// non-iPXE clients. When BootFilenameByArch is populated, that
+	// map takes precedence and BootFilename is used only for
+	// architectures not present in the map.
 	BootFilename string
+
+	// BootFilenameByArch overrides the boot filename per DHCP
+	// option-93 client architecture so legacy BIOS and UEFI PXE
+	// clients each receive a firmware-appropriate image. Unset
+	// (nil) falls back to DefaultBootFilenameByArch at server
+	// startup; an explicit empty map disables arch-aware selection
+	// and forces every client to BootFilename.
+	BootFilenameByArch map[uint16]string
 
 	// IPXEScript is the iPXE script URL for iPXE clients.
 	IPXEScript string
@@ -154,10 +165,11 @@ func DefaultServerConfig() *ServerConfig {
 		DHCPDNS:        "",
 		DHCPLeaseTime:  DefaultLeaseTime,
 		DHCPServerIP:   "",
-		TFTPServerName: "",
-		BootFilename:   "ipxe.efi",
-		IPXEScript:     "",
-		BootEntries:    []BootEntry{},
+		TFTPServerName:     "",
+		BootFilename:       "ipxe.efi",
+		BootFilenameByArch: nil,
+		IPXEScript:         "",
+		BootEntries:        []BootEntry{},
 	}
 }
 

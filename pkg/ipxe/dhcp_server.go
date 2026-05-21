@@ -50,10 +50,21 @@ type DHCPConfig struct {
 	DNSServers     []net.IP
 	TFTPServerName string
 	TFTPServerIP   net.IP
-	BootFilename   string
-	IPXEScript     string
-	UseRawSocket   bool
-	RespondToAll   bool // When true, respond to all DHCP clients, not just PXE-tagged ones. Use in bootstrap mode when this is the only DHCP server.
+	// BootFilename is the legacy single-arch default. When
+	// BootFilenameByArch is set, that map wins for any matching
+	// arch; BootFilename is used only as a fallback for
+	// architectures not present in the map.
+	BootFilename string
+	// BootFilenameByArch maps DHCP option-93 client architecture
+	// values to TFTP boot filenames. The DHCP server consults this
+	// map when responding to non-iPXE PXE clients so that legacy
+	// BIOS, UEFI x64, and UEFI IA32 clients each receive a
+	// firmware-appropriate image. Empty map -> use BootFilename
+	// uniformly.
+	BootFilenameByArch map[uint16]string
+	IPXEScript         string
+	UseRawSocket       bool
+	RespondToAll       bool // When true, respond to all DHCP clients, not just PXE-tagged ones. Use in bootstrap mode when this is the only DHCP server.
 }
 
 // lease represents a DHCP IP lease.
@@ -398,10 +409,15 @@ func (s *DHCPServer) addPXEOptions(reply *dhcpv4.DHCPv4, clientArch uint16, isIP
 			s.logger.Debug("Setting iPXE script", "script", s.config.IPXEScript)
 		}
 	} else {
-		// Non-iPXE client - provide initial bootloader
-		if s.config.BootFilename != "" {
-			reply.BootFileName = s.config.BootFilename
-			s.logger.Debug("Setting boot filename", "filename", s.config.BootFilename)
+		// Non-iPXE client - provide initial bootloader. The chosen
+		// filename varies by client architecture so legacy BIOS
+		// clients get a 16-bit binary they can execute and UEFI
+		// clients get an EFI binary their firmware can load.
+		if filename := s.bootFilenameForArch(clientArch); filename != "" {
+			reply.BootFileName = filename
+			s.logger.Debug("Setting boot filename",
+				"filename", filename,
+				"arch", fmt.Sprintf("0x%04x", clientArch))
 		}
 
 		// Set TFTP server
@@ -411,6 +427,35 @@ func (s *DHCPServer) addPXEOptions(reply *dhcpv4.DHCPv4, clientArch uint16, isIP
 		if s.config.TFTPServerIP != nil {
 			reply.ServerIPAddr = s.config.TFTPServerIP
 		}
+	}
+}
+
+// bootFilenameForArch returns the TFTP boot filename appropriate
+// for the given DHCP option-93 client architecture value. It
+// consults s.config.BootFilenameByArch first, then falls back to
+// s.config.BootFilename when the architecture isn't mapped.
+//
+// Mapping a UEFI binary to a legacy BIOS PXE ROM produces a silent
+// boot failure and a DISCOVER loop, so callers that build a
+// DHCPConfig manually should populate BootFilenameByArch via
+// DefaultBootFilenameByArch unless they have a single-arch fleet.
+func (s *DHCPServer) bootFilenameForArch(clientArch uint16) string {
+	if f, ok := s.config.BootFilenameByArch[clientArch]; ok && f != "" {
+		return f
+	}
+	return s.config.BootFilename
+}
+
+// DefaultBootFilenameByArch returns the standard architecture-to-
+// bootfile mapping used when the operator hasn't customized it.
+// The filenames here must match the entries that TFTPServer
+// loadFirmware populates.
+func DefaultBootFilenameByArch() map[uint16]string {
+	return map[uint16]string{
+		archBIOSx86: "undionly.kpxe",
+		archEFIx86:  "ipxe32.efi",
+		archEFIx64:  "ipxe.efi",
+		archEFIBC:   "ipxe.efi",
 	}
 }
 

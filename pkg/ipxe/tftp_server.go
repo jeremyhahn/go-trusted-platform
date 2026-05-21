@@ -31,8 +31,22 @@ import (
 
 const (
 	// iPXE firmware download URLs
+	//
+	// Three architectures are served so PXE clients receive a boot
+	// image their firmware can actually execute. The DHCP server
+	// inspects DHCP option 93 (client system architecture) and
+	// hands back the appropriate filename:
+	//
+	//   arch 0x0000 (legacy BIOS x86)     -> undionly.kpxe
+	//   arch 0x0006 (UEFI IA32)           -> ipxe32.efi
+	//   arch 0x0007 (UEFI x64) / 0x0009   -> ipxe.efi
+	//
+	// Serving a UEFI binary to a legacy-BIOS PXE ROM (the historical
+	// behavior) causes the client to silently fail the TFTP load and
+	// loop the DISCOVER, leaving the operator with no error signal.
 	ipxeEFI64URL = "https://boot.ipxe.org/x86_64-efi/ipxe.efi"
 	ipxeEFI32URL = "https://boot.ipxe.org/i386-efi/ipxe.efi"
+	ipxeBIOSURL  = "https://boot.ipxe.org/undionly.kpxe"
 
 	// tftpTimeout is the timeout for TFTP transfers
 	tftpTimeout = 5 * time.Second
@@ -155,9 +169,14 @@ func (s *TFTPServer) loadFirmware() error {
 		"ipxe.efi": ipxeEFI64URL,
 	}
 
-	// Optional firmware (32-bit EFI) - server will start even if download fails
+	// Optional firmware (32-bit EFI + legacy BIOS) - server still
+	// starts if these aren't available, but PXE clients on those
+	// architectures won't successfully boot. undionly.kpxe is the
+	// 16-bit MBR-style binary required by legacy-BIOS PXE ROMs
+	// (Supermicro X10 with BIOS-mode boot, older HPE/Dell systems).
 	optionalFirmware := map[string]string{
-		"ipxe32.efi": ipxeEFI32URL,
+		"ipxe32.efi":    ipxeEFI32URL,
+		"undionly.kpxe": ipxeBIOSURL,
 	}
 
 	// Load required firmware

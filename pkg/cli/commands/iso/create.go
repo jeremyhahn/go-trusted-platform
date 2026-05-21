@@ -147,8 +147,14 @@ Examples:
 	cmd.Flags().StringVar(&flags.workDir, "work-dir", "work", "Working directory for ISO operations")
 	cmd.Flags().BoolVar(&flags.debug, "debug", false, "Enable debug output")
 	cmd.Flags().BoolVar(&flags.verbose, "verbose", false, "Enable verbose output")
-	cmd.Flags().BoolVar(&flags.preFetch, "pre-fetch", false,
-		"Pre-download all packages into the ISO for offline installation")
+	cmd.Flags().BoolVar(&flags.preFetch, "pre-fetch", true,
+		"Pre-download all packages into the ISO for offline installation. "+
+			"Defaults to true so the built ISO is self-sufficient on networks without "+
+			"upstream Alpine mirror access (BMC virtual media boot, air-gapped installs, "+
+			"PXE installs over the bootstrap subnet). Pass --pre-fetch=false to build a "+
+			"smaller ISO that requires the target host to have outbound HTTPS access to "+
+			"dl-cdn.alpinelinux.org during install — only safe when the install network "+
+			"is known to permit it.")
 
 	// Dynamic configuration flags
 	cmd.Flags().StringVar(&flags.configServer, "config-server", "", "Server URL for dynamic config fetch at boot time")

@@ -341,20 +341,29 @@ func (s *Server) buildDHCPConfig() (*DHCPConfig, error) {
 	// Calculate broadcast IP
 	broadcastIP := calculateBroadcastIP(s.serverIP, subnetMask)
 
+	// Resolve arch-aware boot filename map. nil (the zero value)
+	// means "use the standard defaults"; callers can opt out by
+	// passing an explicit empty map, which falls through to
+	// BootFilename uniformly.
+	archMap := s.config.BootFilenameByArch
+	if archMap == nil {
+		archMap = DefaultBootFilenameByArch()
+	}
 	dhcpConfig := &DHCPConfig{
-		Interface:      dhcpInterface,
-		ServerIP:       s.serverIP,
-		BroadcastIP:    broadcastIP,
-		SubnetMask:     subnetMask.To4(),
-		RangeStart:     rangeStart.To4(),
-		RangeEnd:       rangeEnd.To4(),
-		LeaseTime:      s.config.DHCPLeaseTime,
-		TFTPServerName: s.config.TFTPServerName,
-		TFTPServerIP:   s.serverIP, // Use same IP for TFTP
-		BootFilename:   s.config.BootFilename,
-		IPXEScript:     s.config.IPXEScript,
-		UseRawSocket:   false,
-		RespondToAll:   s.config.DHCPRespondToAll,
+		Interface:          dhcpInterface,
+		ServerIP:           s.serverIP,
+		BroadcastIP:        broadcastIP,
+		SubnetMask:         subnetMask.To4(),
+		RangeStart:         rangeStart.To4(),
+		RangeEnd:           rangeEnd.To4(),
+		LeaseTime:          s.config.DHCPLeaseTime,
+		TFTPServerName:     s.config.TFTPServerName,
+		TFTPServerIP:       s.serverIP, // Use same IP for TFTP
+		BootFilename:       s.config.BootFilename,
+		BootFilenameByArch: archMap,
+		IPXEScript:         s.config.IPXEScript,
+		UseRawSocket:       false,
+		RespondToAll:       s.config.DHCPRespondToAll,
 	}
 
 	// Optional fields
