@@ -8,13 +8,14 @@ FIDO2 / TPM2 / recovery keyslots, slot removal, test-unlock, and passphrase
 change.
 
 All subcommands require **root** privileges (LUKS2 header IO needs
-`CAP_SYS_ADMIN`). All subcommands connect to `platformd` via the SDK and
-therefore honor the global flags `--config`, `--context`, `--transport`,
-`--server`, `--output`.
+`CAP_SYS_ADMIN`). LUKS2 operations are platform-local (they touch a
+block device) and therefore route through the platformd Unix socket via
+the platform SDK, not through the quicbaas SDK. FIDO2 enrollment slots
+delegate to the canonical xkms FIDO2 backend through the quicbaas SDK
+`Security().Auth().FIDO2()` surface.
 
-> Phase 3 status: CLI + SDK scaffolding is complete. Server-side handlers
-> land in Phase 3.5. The SDK currently returns `ErrNotYetWired` for every
-> method.
+The subcommands honor the global flags `--config`, `--context`,
+`--transport`, `--server`, `--output`.
 
 ## Migration from `platformctl fido2`
 
@@ -146,9 +147,9 @@ Non-zero on any SDK or validation error. Typed errors live in both
 
 ## Wire surface
 
-Every CLI subcommand maps 1:1 to a REST endpoint and MCP tool. Task #88
-wires these live at platformd startup. LUKS operations are root-gated; the
-server rejects non-root callers with `ErrLUKSRootRequired` (HTTP 403).
+Every CLI subcommand maps 1:1 to a REST endpoint and MCP tool exposed by
+platformd. LUKS operations are root-gated; the server rejects non-root
+callers with `ErrLUKSRootRequired` (HTTP 403).
 
 | Subcommand | REST | MCP tool |
 |------------|------|----------|

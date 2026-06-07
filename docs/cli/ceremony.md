@@ -2,16 +2,15 @@
 
 Ceremony operations for barrier initialization and officer enrollment.
 
-The `ceremony` command tree mirrors `qrdb ceremony` and drives the n-of-m
-barrier bootstrap flow: initial setup, officer claim-cert challenge /
-response, Shamir share distribution, and Security Officer CSR signing.
+Routes through `quicbaas.SDK().Security().Ceremony()`, which terminates
+at the canonical qrdb `CeremonyService`. The platform repo provides only
+the CLI binding and a thin server-side configurator
+(`pkg/storage/quicbaas/bootstrap_ceremony.go`) that injects runtime
+SO-PIN / User-PIN / hostname / SANs into the ceremony config before
+delegating to qrdb.
 
-All subcommands connect to `platformd` via the SDK and therefore honor the
-global flags `--config`, `--context`, `--transport`, `--server`, `--output`.
-
-> Phase 3 status: CLI + SDK scaffolding is complete. Server-side handlers
-> land in Phase 3.5. The SDK currently returns `ErrNotYetWired` for every
-> method.
+The subcommands honor the global flags `--config`, `--context`,
+`--transport`, `--server`, `--output`.
 
 ## Subcommands
 
@@ -99,17 +98,16 @@ platformctl ceremony sign-csr \
 
 ## Exit codes
 
-`platformctl ceremony` returns non-zero on any SDK error, including the
-Phase 3 `ErrNotYetWired` placeholder. Once the server-side handlers are
-wired, real errors surface via the `*Failed` wrappers defined in
-`sdk/go/services/ceremony/errors.go`.
+`platformctl ceremony` returns non-zero on any SDK error. Typed errors
+surface from `go-quicbaas/sdk/go/security/ceremony` (which wraps the
+canonical qrdb ceremony errors).
 
 ## Wire surface
 
-Every CLI subcommand above maps 1:1 to a REST endpoint, gRPC RPC, QUIC
-opcode, and MCP tool. Callers that want to bypass `platformctl` can invoke
-the backend directly. Phase 3.5 + task #88 wire these live at platformd
-startup.
+Every CLI subcommand maps 1:1 to a REST endpoint, gRPC RPC, QUIC opcode,
+and MCP tool. All transports terminate at the same SDK
+`Security().Ceremony()` backend — there is no transport that returns
+`BaasTransportNotSupportedError` for ceremony verbs.
 
 | Subcommand | REST (POST unless noted) | MCP tool |
 |------------|--------------------------|----------|

@@ -15,13 +15,13 @@
 package rest
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"io"
 	"log/slog"
 	"math/big"
 	"net/http"
@@ -30,8 +30,9 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 )
 
 const (
@@ -432,7 +433,7 @@ type CAServiceInterface interface {
 	// TrustedIntermediate returns the intermediate certificate.
 	TrustedIntermediate() (*x509.Certificate, error)
 	// IssueCertificate issues a new certificate.
-	IssueCertificate(req *goca.CACertificateRequest) (*x509.Certificate, error)
+	IssueCertificate(req *quicbaasca.CACertificateRequest) (*x509.Certificate, error)
 	// Revoke revokes a certificate.
 	Revoke(cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error
 	// CertificateStore returns the certificate store.
@@ -449,18 +450,21 @@ type CAServiceInterface interface {
 
 // CAHandlers provides REST API handlers for CA operations.
 type CAHandlers struct {
-	ca     CAServiceInterface
-	logger *slog.Logger
+	ca         CAServiceInterface
+	logger     *slog.Logger
+	objStorage objectstorage.Client
 }
 
 // NewCAHandlers creates a new CAHandlers instance.
-func NewCAHandlers(ca CAServiceInterface, logger *slog.Logger) *CAHandlers {
+// objStorage may be nil; if nil, the revocation object-store check is skipped.
+func NewCAHandlers(ca CAServiceInterface, logger *slog.Logger, objStorage objectstorage.Client) *CAHandlers {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &CAHandlers{
-		ca:     ca,
-		logger: logger,
+		ca:         ca,
+		logger:     logger,
+		objStorage: objStorage,
 	}
 }
 
@@ -553,8 +557,8 @@ func (h *CAHandlers) handleIssueCertificate(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Build certificate request
-	caReq := &goca.CACertificateRequest{
-		Subject: goca.CASubject{
+	caReq := &quicbaasca.CACertificateRequest{
+		Subject: quicbaasca.CASubject{
 			CommonName:         req.Subject.CommonName,
 			Organization:       req.Subject.Organization,
 			OrganizationalUnit: req.Subject.OrganizationalUnit,
@@ -573,7 +577,7 @@ func (h *CAHandlers) handleIssueCertificate(w http.ResponseWriter, r *http.Reque
 
 	// Add SANs if provided
 	if req.SANs != nil {
-		caReq.SANS = &goca.CASubjectAlternativeNames{
+		caReq.SANS = &quicbaasca.CASubjectAlternativeNames{
 			DNS:   req.SANs.DNS,
 			IPs:   req.SANs.IPs,
 			Email: req.SANs.Email,
@@ -814,8 +818,8 @@ func (h *CAHandlers) handleRenewCertificate(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Build a new certificate request based on the existing certificate
-	caReq := &goca.CACertificateRequest{
-		Subject: goca.CASubject{
+	caReq := &quicbaasca.CACertificateRequest{
+		Subject: quicbaasca.CASubject{
 			CommonName:         existingCert.Subject.CommonName,
 			Organization:       h.firstOrEmpty(existingCert.Subject.Organization),
 			OrganizationalUnit: h.firstOrEmpty(existingCert.Subject.OrganizationalUnit),
@@ -836,7 +840,7 @@ func (h *CAHandlers) handleRenewCertificate(w http.ResponseWriter, r *http.Reque
 	if req.PreserveSANs {
 		if len(existingCert.DNSNames) > 0 || len(existingCert.IPAddresses) > 0 ||
 			len(existingCert.EmailAddresses) > 0 || len(existingCert.URIs) > 0 {
-			caReq.SANS = &goca.CASubjectAlternativeNames{
+			caReq.SANS = &quicbaasca.CASubjectAlternativeNames{
 				DNS:   existingCert.DNSNames,
 				Email: existingCert.EmailAddresses,
 			}
@@ -851,7 +855,7 @@ func (h *CAHandlers) handleRenewCertificate(w http.ResponseWriter, r *http.Reque
 
 	// Apply new SANs if provided
 	if req.NewSANs != nil {
-		caReq.SANS = &goca.CASubjectAlternativeNames{
+		caReq.SANS = &quicbaasca.CASubjectAlternativeNames{
 			DNS:   req.NewSANs.DNS,
 			IPs:   req.NewSANs.IPs,
 			Email: req.NewSANs.Email,
@@ -1232,30 +1236,15 @@ func (h *CAHandlers) findCertificateBySerial(identifier string) *x509.Certificat
 }
 
 // checkRevocationViaObjectStore checks if a certificate has been revoked by
-// querying the CA's object store directly. This works around a bug in
-// go-trusted-ca where Revoke() stores revocation info in the object store
-// but IsRevoked() only checks go-xkms's in-memory map.
+// querying the QuicBaaS ObjectStorage directly. Revocation records are written
+// by go-xkms CA at "revocations/<serial-decimal>.json".
 func (h *CAHandlers) checkRevocationViaObjectStore(cert *x509.Certificate) bool {
-	type objectStoreAccessor interface {
-		ObjectStore() interface {
-			Get(key string) (io.ReadCloser, error)
-		}
-	}
-	accessor, ok := h.ca.(objectStoreAccessor)
-	if !ok {
+	if h.objStorage == nil {
 		return false
 	}
-	objStore := accessor.ObjectStore()
-	if objStore == nil {
-		return false
-	}
-	key := fmt.Sprintf("revocations/%s/%s.json", cert.Subject.CommonName, cert.SerialNumber.String())
-	reader, err := objStore.Get(key)
-	if err != nil {
-		return false
-	}
-	_ = reader.Close()
-	return true
+	key := fmt.Sprintf("revocations/%s.json", cert.SerialNumber.Text(10))
+	_, err := h.objStorage.GetObject(context.Background(), &objectstorage.GetObjectRequest{Key: key})
+	return err == nil
 }
 
 // certToResponse converts an x509.Certificate to CACertificateResponse.

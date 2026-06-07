@@ -19,7 +19,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -30,39 +29,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
-
-// deviceIDCounter is a process-local monotonic counter combined with the
-// boot-time epoch to produce unique uint64 device IDs when the WebUI
-// (or any client) does not supply one. Using time + counter avoids
-// collisions across daemon restarts because Save() is also id-keyed.
-var deviceIDCounter atomic.Uint64
-
-func nextDeviceID() uint64 {
-	// JS Number can only safely represent integers up to 2^53-1
-	// (9007199254740991). uint64 IDs above that lose precision when
-	// the WebUI rounds them in a JSON.parse, breaking subsequent
-	// GET/PUT/DELETE calls that round-trip the id through the URL.
-	// Compose the id as: top 21 bits = seconds since 2024-01-01 (~30
-	// years of headroom before bit 53 overflows), low 32 bits = a
-	// process-local counter. This stays within 2^53-1 while remaining
-	// monotonic and globally unique across daemon restarts.
-	const epoch2024 = uint64(1704067200) // 2024-01-01T00:00:00Z
-	const lowMask = uint64(1)<<32 - 1
-	const hiMask = uint64(1)<<21 - 1
-	now := uint64(time.Now().Unix())
-	if now < epoch2024 {
-		now = epoch2024
-	}
-	hi := (now - epoch2024) & hiMask
-	lo := deviceIDCounter.Add(1) & lowMask
-	id := (hi << 32) | lo
-	if id == 0 {
-		// Extremely unlikely (would need epoch=0 + counter wrap), but
-		// guard so we never hand back the sentinel.
-		id = 1
-	}
-	return id
-}
 
 const (
 	defaultPage     = 1
@@ -139,7 +105,7 @@ func (h *CRUDHandler) CreateDevice(w http.ResponseWriter, r *http.Request) {
 	// the request time + a counter so the platform owns identity
 	// assignment. Callers that supply an explicit ID still win.
 	if deviceEntity.ID == 0 {
-		deviceEntity.ID = nextDeviceID()
+		deviceEntity.ID = device.NewID()
 	}
 	if deviceEntity.Serial == "" {
 		// The device service does not require a serial, but the dashboard
@@ -334,7 +300,7 @@ func (h *CRUDHandler) CreateProfile(w http.ResponseWriter, r *http.Request) {
 	// ID up-front; rejecting on missing ID makes profile creation
 	// impossible from the dashboard.
 	if req.ID == 0 {
-		req.ID = nextDeviceID()
+		req.ID = device.NewID()
 	}
 
 	profileEntity := h.requestToProfile(&req)

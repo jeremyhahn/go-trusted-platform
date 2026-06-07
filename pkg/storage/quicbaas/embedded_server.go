@@ -41,10 +41,22 @@ import (
 //	svc := srv.Service()
 //	client.StartWithService(ctx, svc)
 type EmbeddedServer struct {
-	config     *Config
-	logger     *logging.Logger
-	server     *quicbaassdk.Server
-	externalCA xkmssdk.TrustedCA // optional; forwarded to server as WithCA option
+	config *Config
+	logger *logging.Logger
+	server *quicbaassdk.Server
+
+	// activeCA holds the currently-installed external CA. It is read by
+	// the ceremony CA adapter on every call so the qrdb embedded transport
+	// can be wired before the platform CA is loaded and start dispatching
+	// the moment SetCA installs the live CA. Storing through an
+	// atomic.Pointer keeps the access lock-free for the ceremony hot path.
+	activeCA atomic.Pointer[xkmssdk.TrustedCA]
+
+	// ceremonyCA is the lazy CeremonyCA the SDK wires into the qrdb
+	// embedded transport via WithEmbeddedQRDB. It reads activeCA on every
+	// call, so SetCA's atomic swap is visible to in-flight ceremony
+	// operations without further synchronization.
+	ceremonyCA *CeremonyCAAdapter
 
 	started atomic.Bool
 	closed  atomic.Bool
@@ -58,10 +70,12 @@ func NewEmbeddedServer(config *Config, logger *logging.Logger) (*EmbeddedServer,
 		return nil, err
 	}
 
-	return &EmbeddedServer{
+	srv := &EmbeddedServer{
 		config: config,
 		logger: logger,
-	}, nil
+	}
+	srv.ceremonyCA = NewCeremonyCAAdapter(srv.loadActiveCA)
+	return srv, nil
 }
 
 // NewEmbeddedServerWithCA creates a new embedded QuicBaaS server manager
@@ -75,7 +89,9 @@ func NewEmbeddedServerWithCA(config *Config, logger *logging.Logger, ca xkmssdk.
 	if err != nil {
 		return nil, err
 	}
-	srv.externalCA = ca
+	if ca != nil {
+		srv.storeActiveCA(ca)
+	}
 	return srv, nil
 }
 
@@ -105,8 +121,8 @@ func (s *EmbeddedServer) Start(ctx context.Context) error {
 
 	// Build server options
 	var serverOpts []quicbaassdk.ServerOption
-	if s.externalCA != nil {
-		serverOpts = append(serverOpts, quicbaassdk.WithCA(s.externalCA))
+	if externalCA := s.loadActiveCA(); externalCA != nil {
+		serverOpts = append(serverOpts, quicbaassdk.WithCA(externalCA))
 		s.logger.Debug("QuicBaaS embedded server using external CA")
 	}
 
@@ -222,12 +238,25 @@ func (s *EmbeddedServer) Server() *quicbaassdk.Server {
 	return s.server
 }
 
+// CeremonyCA returns the lazy CeremonyCA adapter used by the SDK's qrdb
+// embedded transport. The adapter resolves the live platform CA on every
+// call so it can be wired before SetCA installs the CA. Returns nil only
+// when the embedded server failed to construct.
+func (s *EmbeddedServer) CeremonyCA() *CeremonyCAAdapter {
+	if s == nil {
+		return nil
+	}
+	return s.ceremonyCA
+}
+
 // SetCA replaces the Certificate Authority used by the running embedded
 // QuicBaaS server. The swap is atomic: in-flight certificate operations
-// complete against the previous CA before the new one takes effect. Returns
-// ErrServerNotStarted when the server has not been started, or the error
-// returned by the underlying server's UpdateCA (e.g. when TLS is disabled).
-// Passing nil is a no-op.
+// complete against the previous CA before the new one takes effect. The
+// adapter returned by CeremonyCA() also picks up the new CA atomically so
+// subsequent ceremony operations use the swapped-in CA without further
+// configuration. Returns ErrServerNotStarted when the server has not been
+// started, or the error returned by the underlying server's UpdateCA
+// (e.g. when TLS is disabled). Passing nil is a no-op.
 func (s *EmbeddedServer) SetCA(ca xkmssdk.TrustedCA) error {
 	if ca == nil {
 		return nil
@@ -238,5 +267,41 @@ func (s *EmbeddedServer) SetCA(ca xkmssdk.TrustedCA) error {
 	if !s.started.Load() || s.server == nil {
 		return ErrServerNotStarted{}
 	}
-	return s.server.UpdateCA(ca)
+	// Surface the CA to the ceremony adapter FIRST so that
+	// Security().Ceremony().Initialize() always sees the latest CA, even
+	// when the QuicBaaS CertificateService swap fails (e.g. TLS is
+	// disabled). The adapter is independent of the CertificateService —
+	// it backs the M6 gate's ceremony bootstrap, which the operator must
+	// be able to drive even on a transport-less server.
+	s.storeActiveCA(ca)
+	// Best-effort UpdateCA: errors are surfaced to the caller but the
+	// ceremony adapter still picks up the new CA above.
+	if err := s.server.UpdateCA(ca); err != nil {
+		return err
+	}
+	return nil
+}
+
+// loadActiveCA returns the currently-installed external CA, or nil when
+// none has been set.
+func (s *EmbeddedServer) loadActiveCA() xkmssdk.TrustedCA {
+	if s == nil {
+		return nil
+	}
+	ptr := s.activeCA.Load()
+	if ptr == nil {
+		return nil
+	}
+	return *ptr
+}
+
+// storeActiveCA atomically installs the supplied CA as the active one.
+// Passing nil clears the stored CA so the adapter reports
+// ErrCeremonyCANotAvailable.
+func (s *EmbeddedServer) storeActiveCA(ca xkmssdk.TrustedCA) {
+	if ca == nil {
+		s.activeCA.Store(nil)
+		return
+	}
+	s.activeCA.Store(&ca)
 }

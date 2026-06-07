@@ -2,15 +2,12 @@
 
 PIV (Personal Identity Verification, NIST SP 800-73-4) smartcard operations.
 
-The `piv` command tree mirrors `xkmsctl piv` and covers device enumeration,
-per-slot key management, signing, attestation, and device reset.
+Routes through `quicbaas.SDK().Security().Auth().PIV()`. The PIV
+implementation lives in go-xkms; the platform repo contains no PIV-side
+code and never imports `go-xkms/pkg/piv` directly.
 
-All subcommands connect to `platformd` via the SDK and therefore honor the
-global flags `--config`, `--context`, `--transport`, `--server`, `--output`.
-
-> Phase 3 status: CLI + SDK scaffolding is complete. Server-side handlers
-> land in Phase 3.5. The SDK currently returns `ErrNotYetWired` for every
-> method.
+The subcommands honor the global flags `--config`, `--context`,
+`--transport`, `--server`, `--output`.
 
 ## Slot reference (NIST SP 800-73-4)
 
@@ -106,8 +103,9 @@ Non-zero on any SDK error. Typed errors live in
 
 ## Wire surface
 
-Every CLI subcommand maps 1:1 to a REST endpoint and MCP tool. Task #88
-wires these live at platformd startup.
+Every CLI subcommand maps 1:1 to a REST endpoint, gRPC RPC, QUIC opcode,
+and MCP tool. All transports terminate at the same SDK
+`Security().Auth().PIV()` backend.
 
 | Subcommand | REST | MCP tool |
 |------------|------|----------|

@@ -29,12 +29,11 @@ import (
 	"testing"
 	"time"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	pkgca "github.com/jeremyhahn/go-xkms/pkg/ca"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 )
 
 // =============================================================================
@@ -214,7 +213,7 @@ func (m *mockCAForMCPCoverage) Signer() (crypto.Signer, error) { return m, nil }
 func (m *mockCAForMCPCoverage) CASigner(_ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
 	return m, nil
 }
-func (m *mockCAForMCPCoverage) IssueCertificate(req *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
+func (m *mockCAForMCPCoverage) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	if m.issueCertErr != nil {
 		return nil, m.issueCertErr
 	}
@@ -223,9 +222,9 @@ func (m *mockCAForMCPCoverage) IssueCertificate(req *goca.CACertificateRequest) 
 	if m.certStore != nil {
 		m.certStore.StoreCertificate(cert)
 	}
-	return &pkgca.IssuedCertificate{Certificate: cert}, nil
+	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 }
-func (m *mockCAForMCPCoverage) RevokeCert(cert *x509.Certificate, _ pkgca.RevokeOptions) error {
+func (m *mockCAForMCPCoverage) RevokeCert(cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	if m.revokeErr != nil {
 		return m.revokeErr
 	}
@@ -294,7 +293,7 @@ func (m *mockCAForMCPCoverage) GenerateCRL() ([]byte, error) {
 
 func createCAGRPCServiceForMCPCoverage(mockCA *mockCAForMCPCoverage) *CAGRPCService {
 	logger := logging.DefaultLogger()
-	return NewCAGRPCService(logger, mockCA)
+	return NewCAGRPCService(logger, mockCA, nil)
 }
 
 // =============================================================================

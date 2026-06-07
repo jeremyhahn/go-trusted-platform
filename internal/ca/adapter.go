@@ -35,9 +35,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	pkgca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -314,7 +314,7 @@ func (a *Adapter) SignCSR(csrPEM []byte, request *CertificateRequest) (*x509.Cer
 		if request == nil {
 			return nil, ErrNilRequest
 		}
-		opts := &pkgca.SignOptions{
+		opts := &quicbaasca.SignOptions{
 			ValidityDays: request.Valid,
 			KeyUsage:     request.KeyUsage,
 			ExtKeyUsage:  request.ExtKeyUsage,
@@ -389,7 +389,7 @@ func (a *Adapter) Revoke(certificate *x509.Certificate, keyAttrs *xkmssdk.KeyAtt
 		if certificate == nil {
 			return ErrNilCertificate
 		}
-		return a.embedded.RevokeCert(certificate, pkgca.RevokeOptions{
+		return a.embedded.RevokeCert(certificate, quicbaasca.RevokeOptions{
 			DeleteKeys: keyAttrs != nil,
 		})
 	}

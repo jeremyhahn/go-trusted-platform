@@ -22,18 +22,18 @@ import (
 	"strconv"
 	"strings"
 
-	casdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 )
 
 // defaultTargetBackend is the QuicBaaS objectstorage backend name.
 // Must match the backend registered with the embedded server (typically "default").
 const defaultTargetBackend = "default"
 
-// genericDAO implements casdk.GenericDAO backed by QuicBaaS ObjectStorage.
+// genericDAO implements trustedca.GenericDAO backed by QuicBaaS ObjectStorage.
 // It provides a single generic implementation that works for all ACME entity types,
 // using reflection-based field lookups for index queries.
-type genericDAO[E casdk.DAOEntity] struct {
+type genericDAO[E trustedca.DAOEntity] struct {
 	storage    objectstorage.Client
 	keyPrefix  string
 	tenantID   string
@@ -42,7 +42,7 @@ type genericDAO[E casdk.DAOEntity] struct {
 }
 
 // Compile-time interface check.
-var _ casdk.GenericDAO[*verifyEntity] = (*genericDAO[*verifyEntity])(nil)
+var _ trustedca.GenericDAO[*verifyEntity] = (*genericDAO[*verifyEntity])(nil)
 
 // verifyEntity is used only for the compile-time interface check above.
 type verifyEntity struct {
@@ -53,7 +53,7 @@ func (e *verifyEntity) EntityID() uint64      { return e.ID }
 func (e *verifyEntity) SetEntityID(id uint64) { e.ID = id }
 
 // newGenericDAO creates a new genericDAO backed by the given ObjectStorage client.
-func newGenericDAO[E casdk.DAOEntity](
+func newGenericDAO[E trustedca.DAOEntity](
 	stor objectstorage.Client,
 	keyPrefix string,
 	tenantID string,
@@ -78,7 +78,7 @@ func (d *genericDAO[E]) makeKey(id uint64) string {
 func (d *genericDAO[E]) Save(ctx context.Context, entity E) error {
 	id := entity.EntityID()
 	if id == 0 {
-		return casdk.DAOInvalidEntityIDError{
+		return trustedca.DAOInvalidEntityIDError{
 			EntityType: d.entityType,
 			Reason:     "entity ID must be non-zero",
 		}
@@ -86,7 +86,7 @@ func (d *genericDAO[E]) Save(ctx context.Context, entity E) error {
 
 	data, err := json.Marshal(entity)
 	if err != nil {
-		return casdk.DAOSerializationFailedError{
+		return trustedca.DAOSerializationFailedError{
 			EntityType: d.entityType,
 			Cause:      err,
 		}
@@ -118,10 +118,10 @@ func (d *genericDAO[E]) Save(ctx context.Context, entity E) error {
 
 // SaveWithCondition persists an entity only if the condition is satisfied
 // against the existing entity.
-func (d *genericDAO[E]) SaveWithCondition(ctx context.Context, entity E, cond casdk.DAOCondition) error {
+func (d *genericDAO[E]) SaveWithCondition(ctx context.Context, entity E, cond trustedca.DAOCondition) error {
 	id := entity.EntityID()
 	if id == 0 {
-		return casdk.DAOInvalidEntityIDError{
+		return trustedca.DAOInvalidEntityIDError{
 			EntityType: d.entityType,
 			Reason:     "entity ID must be non-zero",
 		}
@@ -129,14 +129,14 @@ func (d *genericDAO[E]) SaveWithCondition(ctx context.Context, entity E, cond ca
 
 	existing, err := d.Get(ctx, id)
 	if err != nil {
-		if casdk.IsDAONotFound(err) {
+		if trustedca.IsDAONotFound(err) {
 			return d.Save(ctx, entity)
 		}
 		return err
 	}
 
 	if !evaluateCondition(existing, cond) {
-		return casdk.DAOConditionFailedError{
+		return trustedca.DAOConditionFailedError{
 			Condition: cond,
 			Reason:    "condition not satisfied for existing entity",
 		}
@@ -156,7 +156,7 @@ func (d *genericDAO[E]) Get(ctx context.Context, id uint64) (E, error) {
 	})
 	if err != nil {
 		if isNotFoundErr(err) {
-			return zero, casdk.DAONotFoundError{
+			return zero, trustedca.DAONotFoundError{
 				EntityType: d.entityType,
 				ID:         id,
 			}
@@ -171,7 +171,7 @@ func (d *genericDAO[E]) Get(ctx context.Context, id uint64) (E, error) {
 
 	entity := d.newEntity()
 	if unmarshalErr := json.Unmarshal(resp.Value, entity); unmarshalErr != nil {
-		return zero, casdk.DAODeserializationFailedError{
+		return zero, trustedca.DAODeserializationFailedError{
 			EntityType: d.entityType,
 			Cause:      unmarshalErr,
 		}
@@ -184,7 +184,7 @@ func (d *genericDAO[E]) Get(ctx context.Context, id uint64) (E, error) {
 func (d *genericDAO[E]) Delete(ctx context.Context, entity E) error {
 	id := entity.EntityID()
 	if id == 0 {
-		return casdk.DAOInvalidEntityIDError{
+		return trustedca.DAOInvalidEntityIDError{
 			EntityType: d.entityType,
 			Reason:     "entity ID must be non-zero",
 		}
@@ -221,10 +221,10 @@ func (d *genericDAO[E]) Count(ctx context.Context) (int, error) {
 }
 
 // Page retrieves a single page of entities.
-func (d *genericDAO[E]) Page(ctx context.Context, query casdk.DAOPageQuery) (casdk.DAOPageResult[E], error) {
+func (d *genericDAO[E]) Page(ctx context.Context, query trustedca.DAOPageQuery) (trustedca.DAOPageResult[E], error) {
 	entities, err := d.loadAll(ctx)
 	if err != nil {
-		return casdk.DAOPageResult[E]{}, err
+		return trustedca.DAOPageResult[E]{}, err
 	}
 
 	sortEntities(entities, query)
@@ -233,7 +233,7 @@ func (d *genericDAO[E]) Page(ctx context.Context, query casdk.DAOPageQuery) (cas
 }
 
 // ForEachPage iterates over all entities page by page.
-func (d *genericDAO[E]) ForEachPage(ctx context.Context, query casdk.DAOPageQuery, fn casdk.DAOPagerFunc[E]) error {
+func (d *genericDAO[E]) ForEachPage(ctx context.Context, query trustedca.DAOPageQuery, fn trustedca.DAOPagerFunc[E]) error {
 	entities, err := d.loadAll(ctx)
 	if err != nil {
 		return err
@@ -253,7 +253,7 @@ func (d *genericDAO[E]) ForEachPage(ctx context.Context, query casdk.DAOPageQuer
 			end = total
 		}
 
-		result := casdk.DAOPageResult[E]{
+		result := trustedca.DAOPageResult[E]{
 			Entities: entities[offset:end],
 			Page:     (offset / pageSize) + 1,
 			PageSize: pageSize,
@@ -262,7 +262,7 @@ func (d *genericDAO[E]) ForEachPage(ctx context.Context, query casdk.DAOPageQuer
 		}
 
 		if callbackErr := fn(result); callbackErr != nil {
-			if callbackErr == casdk.ErrDAOStopIteration {
+			if callbackErr == trustedca.ErrDAOStopIteration {
 				return nil
 			}
 			return callbackErr
@@ -305,7 +305,7 @@ func (d *genericDAO[E]) QueryOneByIndex(ctx context.Context, fieldName string, v
 	}
 
 	if len(entities) == 0 {
-		return zero, casdk.DAONotFoundError{
+		return zero, trustedca.DAONotFoundError{
 			EntityType: d.entityType,
 			ID:         0,
 		}
@@ -340,10 +340,10 @@ func (d *genericDAO[E]) ScanByIndex(ctx context.Context, fieldName string, start
 }
 
 // PageByIndex returns a page of entities matching the given index field value.
-func (d *genericDAO[E]) PageByIndex(ctx context.Context, fieldName string, value interface{}, query casdk.DAOPageQuery) (casdk.DAOPageResult[E], error) {
+func (d *genericDAO[E]) PageByIndex(ctx context.Context, fieldName string, value interface{}, query trustedca.DAOPageQuery) (trustedca.DAOPageResult[E], error) {
 	entities, err := d.QueryByIndex(ctx, fieldName, value)
 	if err != nil {
-		return casdk.DAOPageResult[E]{}, err
+		return trustedca.DAOPageResult[E]{}, err
 	}
 
 	sortEntities(entities, query)
@@ -438,7 +438,7 @@ func (d *genericDAO[E]) ScanByCompoundIndex(ctx context.Context, indexName strin
 // Find returns nil because QueryBuilder is a qrdb-specific type tightly
 // coupled to qrdb's internal genericDAO. Advanced query building is not
 // supported by the ObjectStorage backend.
-func (d *genericDAO[E]) Find(ctx context.Context) *casdk.DAOQueryBuilder[E] {
+func (d *genericDAO[E]) Find(ctx context.Context) *trustedca.DAOQueryBuilder[E] {
 	return nil
 }
 
@@ -485,7 +485,7 @@ func (d *genericDAO[E]) loadAll(ctx context.Context) ([]E, error) {
 
 		entity, getErr := d.Get(ctx, id)
 		if getErr != nil {
-			if casdk.IsDAONotFound(getErr) {
+			if trustedca.IsDAONotFound(getErr) {
 				continue
 			}
 			return nil, getErr
@@ -498,7 +498,7 @@ func (d *genericDAO[E]) loadAll(ctx context.Context) ([]E, error) {
 }
 
 // paginate applies pagination to a slice of entities.
-func paginate[E casdk.DAOEntity](entities []E, query casdk.DAOPageQuery) casdk.DAOPageResult[E] {
+func paginate[E trustedca.DAOEntity](entities []E, query trustedca.DAOPageQuery) trustedca.DAOPageResult[E] {
 	total := len(entities)
 	page := query.Page
 	if page <= 0 {
@@ -511,7 +511,7 @@ func paginate[E casdk.DAOEntity](entities []E, query casdk.DAOPageQuery) casdk.D
 
 	offset := (page - 1) * pageSize
 	if offset >= total {
-		return casdk.DAOPageResult[E]{
+		return trustedca.DAOPageResult[E]{
 			Entities: nil,
 			Page:     page,
 			PageSize: pageSize,
@@ -525,7 +525,7 @@ func paginate[E casdk.DAOEntity](entities []E, query casdk.DAOPageQuery) casdk.D
 		end = total
 	}
 
-	return casdk.DAOPageResult[E]{
+	return trustedca.DAOPageResult[E]{
 		Entities: entities[offset:end],
 		Page:     page,
 		PageSize: pageSize,
@@ -535,7 +535,7 @@ func paginate[E casdk.DAOEntity](entities []E, query casdk.DAOPageQuery) casdk.D
 }
 
 // sortEntities sorts entities by ID (ascending or descending based on SortOrder).
-func sortEntities[E casdk.DAOEntity](entities []E, query casdk.DAOPageQuery) {
+func sortEntities[E trustedca.DAOEntity](entities []E, query trustedca.DAOPageQuery) {
 	sort.Slice(entities, func(i, j int) bool {
 		if query.SortOrder < 0 {
 			return entities[i].EntityID() > entities[j].EntityID()
@@ -586,10 +586,10 @@ func fieldValue(entity interface{}, fieldName string) string {
 	return fmt.Sprintf("%v", field.Interface())
 }
 
-// evaluateCondition evaluates a casdk.DAOCondition against an existing entity.
-func evaluateCondition(entity interface{}, cond casdk.DAOCondition) bool {
+// evaluateCondition evaluates a trustedca.DAOCondition against an existing entity.
+func evaluateCondition(entity interface{}, cond trustedca.DAOCondition) bool {
 	switch cond.Target {
-	case casdk.DAOConditionValue:
+	case trustedca.DAOConditionValue:
 		return reflect.DeepEqual(entity, cond.Value)
 	default:
 		// Version/timestamp conditions are not tracked by ObjectStorage.
@@ -604,7 +604,7 @@ func isNotFoundErr(err error) bool {
 	if err == nil {
 		return false
 	}
-	if casdk.IsDAONotFound(err) {
+	if trustedca.IsDAONotFound(err) {
 		return true
 	}
 	msg := err.Error()

@@ -18,7 +18,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/fido2"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"

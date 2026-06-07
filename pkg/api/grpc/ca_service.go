@@ -23,12 +23,11 @@ import (
 	"strings"
 	"time"
 
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	objstore "github.com/jeremyhahn/go-objstore/pkg/common"
-	pkgca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -110,21 +109,24 @@ const (
 )
 
 // CAGRPCService implements the gRPC CAService server interface.
-// It wraps the goca.CACertificateAuthority interface to provide gRPC access to CA operations.
+// It wraps the quicbaasca.CACertificateAuthority interface to provide gRPC access to CA operations.
 type CAGRPCService struct {
 	platformv1.UnimplementedCAServiceServer
-	logger *logging.Logger
-	ca     goca.CACertificateAuthority
+	logger     *logging.Logger
+	ca         quicbaasca.CACertificateAuthority
+	objStorage objectstorage.Client
 }
 
 // NewCAGRPCService creates a new CAGRPCService instance.
 func NewCAGRPCService(
 	logger *logging.Logger,
-	ca goca.CACertificateAuthority,
+	ca quicbaasca.CACertificateAuthority,
+	objStorage objectstorage.Client,
 ) *CAGRPCService {
 	return &CAGRPCService{
-		logger: logger,
-		ca:     ca,
+		logger:     logger,
+		ca:         ca,
+		objStorage: objStorage,
 	}
 }
 
@@ -195,8 +197,8 @@ func (s *CAGRPCService) IssueCertificate(
 	keyAlg := s.protoAlgorithmToX509(certReq.GetKeyAlgorithm())
 
 	// Build certificate request
-	caReq := &goca.CACertificateRequest{
-		Subject: goca.CASubject{
+	caReq := &quicbaasca.CACertificateRequest{
+		Subject: quicbaasca.CASubject{
 			CommonName:         subject.GetCommonName(),
 			Organization:       subject.GetOrganization(),
 			OrganizationalUnit: subject.GetOrganizationalUnit(),
@@ -216,7 +218,7 @@ func (s *CAGRPCService) IssueCertificate(
 	// Add SANs if provided
 	sans := certReq.GetSans()
 	if sans != nil {
-		caReq.SANS = &goca.CASubjectAlternativeNames{
+		caReq.SANS = &quicbaasca.CASubjectAlternativeNames{
 			DNS:   sans.GetDnsNames(),
 			IPs:   sans.GetIpAddresses(),
 			Email: sans.GetEmailAddresses(),
@@ -417,7 +419,7 @@ func (s *CAGRPCService) RevokeCertificate(
 	}
 
 	// Revoke the certificate
-	if err := s.ca.RevokeCert(cert, pkgca.RevokeOptions{DeleteKeys: keyAttrs != nil}); err != nil {
+	if err := s.ca.RevokeCert(cert, quicbaasca.RevokeOptions{DeleteKeys: keyAttrs != nil}); err != nil {
 		s.logger.Error(err, "failed to revoke certificate")
 		return nil, status.Errorf(codes.Internal, "failed to revoke certificate: %v", err)
 	}
@@ -460,8 +462,8 @@ func (s *CAGRPCService) RenewCertificate(
 	}
 
 	// Build a new certificate request based on the existing certificate
-	caReq := &goca.CACertificateRequest{
-		Subject: goca.CASubject{
+	caReq := &quicbaasca.CACertificateRequest{
+		Subject: quicbaasca.CASubject{
 			CommonName:         existingCert.Subject.CommonName,
 			Organization:       firstOrEmptyGRPC(existingCert.Subject.Organization),
 			OrganizationalUnit: firstOrEmptyGRPC(existingCert.Subject.OrganizationalUnit),
@@ -482,7 +484,7 @@ func (s *CAGRPCService) RenewCertificate(
 	if req.GetPreserveSans() {
 		if len(existingCert.DNSNames) > 0 || len(existingCert.IPAddresses) > 0 ||
 			len(existingCert.EmailAddresses) > 0 || len(existingCert.URIs) > 0 {
-			caReq.SANS = &goca.CASubjectAlternativeNames{
+			caReq.SANS = &quicbaasca.CASubjectAlternativeNames{
 				DNS:   existingCert.DNSNames,
 				Email: existingCert.EmailAddresses,
 			}
@@ -498,7 +500,7 @@ func (s *CAGRPCService) RenewCertificate(
 	// Apply new SANs if provided
 	newSans := req.GetNewSans()
 	if newSans != nil {
-		caReq.SANS = &goca.CASubjectAlternativeNames{
+		caReq.SANS = &quicbaasca.CASubjectAlternativeNames{
 			DNS:   newSans.GetDnsNames(),
 			IPs:   newSans.GetIpAddresses(),
 			Email: newSans.GetEmailAddresses(),
@@ -847,32 +849,15 @@ func (s *CAGRPCService) findCertByIdentifier(identifier string) *x509.Certificat
 // =============================================================================
 
 // checkRevocationViaObjectStore checks if a certificate has been revoked by
-// querying the CA's object store directly. This works around a bug in
-// go-trusted-ca where Revoke() stores revocation info in the object store
-// but IsRevoked() only checks go-xkms's in-memory map.
-//
-// The native TrustedCA interface does not expose the object store directly;
-// the concrete *pkg/ca.CA struct does. Probe via an ad-hoc interface so this
-// degrades gracefully when the underlying implementation changes.
+// querying the QuicBaaS ObjectStorage directly. Revocation records are written
+// by go-xkms CA at "revocations/<serial-decimal>.json".
 func (s *CAGRPCService) checkRevocationViaObjectStore(cert *x509.Certificate) bool {
-	type objectStoreProvider interface {
-		ObjectStore() objstore.Storage
-	}
-	provider, ok := s.ca.(objectStoreProvider)
-	if !ok {
+	if s.objStorage == nil {
 		return false
 	}
-	objStore := provider.ObjectStore()
-	if objStore == nil {
-		return false
-	}
-	key := fmt.Sprintf("revocations/%s/%s.json", cert.Subject.CommonName, cert.SerialNumber.String())
-	reader, err := objStore.Get(key)
-	if err != nil {
-		return false
-	}
-	_ = reader.Close()
-	return true
+	key := fmt.Sprintf("revocations/%s.json", cert.SerialNumber.Text(10))
+	_, err := s.objStorage.GetObject(context.Background(), &objectstorage.GetObjectRequest{Key: key})
+	return err == nil
 }
 
 // Helper functions

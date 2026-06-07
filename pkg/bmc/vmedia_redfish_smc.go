@@ -221,13 +221,28 @@ func (b *vmediaRedfishSmc) statusFromPath(ctx context.Context, path string) (*Vi
 	var state struct {
 		Image    string `json:"Image"`
 		Inserted bool   `json:"Inserted"`
+		Host     string `json:"Host"`
+		Path     string `json:"Path"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
 		return nil, ErrRedfishRequest{Method: http.MethodGet, Path: path, Cause: err}
 	}
+	// X10 ATEN firmware exposes only Host + Path on the CfgCD shell —
+	// it does not populate Image or Inserted. Treat a non-empty Host
+	// (with a Path) as "mounted" so status reflects the operator's
+	// intent post-PATCH instead of always reporting Mounted: false.
+	imageURL := state.Image
+	if imageURL == "" && state.Host != "" {
+		// Reconstruct a usable URL from Host + Path. We don't know
+		// the protocol the firmware chose, but http:// is the
+		// default for unauthenticated mounts and what platformctl
+		// uses for the BMC HTTP fetch in this codebase.
+		imageURL = "http://" + state.Host + state.Path
+	}
+	mounted := state.Inserted || imageURL != ""
 	return &VirtualMediaInfo{
-		Mounted:   state.Inserted || state.Image != "",
-		ImageURL:  state.Image,
+		Mounted:   mounted,
+		ImageURL:  imageURL,
 		MediaType: "cd",
 	}, nil
 }
@@ -328,8 +343,38 @@ func smcBodyFromSpec(spec *MediaSpec) smcCfgCDBody {
 		body.Path = path
 		return body
 	}
-	body.Image = spec.URL
+	// X10 ATEN BMC firmware (≤4.00) requires HTTP/HTTPS URLs to be
+	// split into Host + Path and REJECTS PATCH bodies that contain
+	// `Image` as an unknown property (witnessed 2026-05-18 against
+	// lab-node-2 BMC: "The property Image is not in the list of valid
+	// properties for the resource."). X11+/X12 firmware accepts the
+	// combined Image form and also tolerates Host+Path with Image
+	// absent. Sending only Host+Path is therefore the lowest-common-
+	// denominator shape that works on every supported revision.
+	host, path := splitHTTPURL(spec.URL)
+	body.Host = host
+	body.Path = path
 	return body
+}
+
+// splitHTTPURL extracts the (Host, Path) pair from an http:// or
+// https:// URL. Supermicro X10 firmware's CfgCD endpoint expects
+// these as separate fields. The Host is host:port verbatim; the
+// Path is the URL path-and-query starting with "/". Returns ("", url)
+// when parsing fails so the BMC surfaces its own error.
+func splitHTTPURL(rawURL string) (string, string) {
+	trimmed := rawURL
+	for _, prefix := range []string{"https://", "http://"} {
+		if strings.HasPrefix(trimmed, prefix) {
+			trimmed = trimmed[len(prefix):]
+			slash := strings.IndexByte(trimmed, '/')
+			if slash < 0 {
+				return trimmed, "/"
+			}
+			return trimmed[:slash], trimmed[slash:]
+		}
+	}
+	return "", rawURL
 }
 
 // splitCIFS extracts the server host and remote path from a CIFS/SMB URL.

@@ -178,7 +178,7 @@ func verifyAllServiceClients(t *testing.T, sdk quicbaassdk.Client) {
 	assert.NotNil(t, sdk.RBAC(), "RBAC client should not be nil")
 	assert.NotNil(t, sdk.DynamicSecrets(), "DynamicSecrets client should not be nil")
 	assert.NotNil(t, sdk.Certificate(), "Certificate client should not be nil")
-	assert.NotNil(t, sdk.ClusterDEK(), "ClusterDEK client should not be nil")
+	assert.NotNil(t, sdk.DEK(), "DEK client should not be nil")
 
 	// IAM Operations
 	assert.NotNil(t, sdk.IAM(), "IAM client should not be nil")

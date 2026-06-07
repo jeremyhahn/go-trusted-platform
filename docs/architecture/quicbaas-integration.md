@@ -108,41 +108,63 @@ quicbaas:
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Direct go-xkms Usage
+## SDK-Only Consumer Invariant
 
-go-trusted-platform uses go-xkms directly **only** for native hardware operations that cannot go through QuicBaaS:
+go-trusted-platform consumes the underlying stack **exclusively** through
+the go-quicbaas SDK. The only exception is a documented build-time
+carve-out for the initramfs binary (described below).
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Direct go-xkms Usage (Native Hardware ONLY)                         │
+│ Application Runtime (cmd/platformd, cmd/platformctl, pkg/*)             │
 │                                                                         │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ 1. FIDO2 LUKS Enrollment                                          │  │
-│  │    • Hardware passkey operations                                  │  │
-│  │    • Must interact with physical device                           │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
+│  ALL crypto / key / auth / trust / ceremony / barrier operations        │
+│  → reach the stack via quicbaas.SDK().Security().*                      │
 │                                                                         │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ 2. TPM2 Direct Operations                                         │  │
-│  │    • Attestation quotes (Quote, VerifyQuote)                      │  │
-│  │    • Sealing to PCRs (Seal, Unseal)                               │  │
-│  │    • Reading PCR values                                           │  │
-│  │    • Reading event log                                            │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
+│  Direct imports of go-xkms/pkg/*, go-qrdb/pkg/*, go-quicraft, or        │
+│  go-truststrap are FORBIDDEN in runtime code.                           │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Initramfs Carve-out (cmd/platform-initrd, pkg/initrd/)                  │
 │                                                                         │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ 3. KeyAttributes Type Definitions                                 │  │
-│  │    • Shared types between go-xkms and QuicBaaS                │  │
-│  │    • Algorithm definitions, key attributes                        │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
+│  Runs before networking / TLS trust / SDK runtime exist.                │
 │                                                                         │
-│ All other key operations go through QuicBaaS for:                       │
-│   • Raft replication (cluster-wide consistency)                         │
-│   • Backend abstraction (software/TPM/HSM/cloud)                        │
-│   • Audit logging                                                       │
-│   • Access control                                                      │
+│  MAY import `quicbaas/sdk/go/xkms/fido2` (and similar `sdk/go/xkms/*`   │
+│  re-export packages) directly — these are type-alias re-exports of      │
+│  the canonical upstream implementations with NO network or runtime      │
+│  dependency, safe for a static initramfs binary.                        │
+│                                                                         │
+│  MUST NOT import `go-xkms/pkg/*` directly — the only blessed upstream   │
+│  path is `quicbaas/sdk/go/xkms/*`.                                      │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Canonical SDK entry points
+
+| Capability | SDK entry point |
+|------------|-----------------|
+| WebAuthn / FIDO2 / PIV ceremony | `quicbaas.SDK().Security().Auth().{WebAuthn,FIDO2,PIV}()` |
+| Auth factors | `quicbaas.SDK().Security().Auth().Factors()` |
+| Barrier lifecycle | `quicbaas.SDK().Security().Barrier()` |
+| Bootstrap ceremony (Shamir M-of-N) | `quicbaas.SDK().Security().Ceremony()` |
+| Versioned credential rotation | `quicbaas.SDK().Security().Credentials()` |
+| Trust bootstrap (DANE / Noise / SPKI / Auto) | `quicbaas.SDK().Security().Trust().Bootstrap()` |
+| ACME (RFC 8555 + ARI + cross-sign) | `quicbaas.SDK().Security().ACME()` |
+| KMS / Secrets / Crypto / Certificates | `quicbaas.SDK().Security().{KMS,Secrets,Crypto,Certificate,CertificateExt}()` |
+| Raft KV / batch / transactions | `quicbaas.SDK().KV()` etc. |
+
+### Phase-6/7 deletions
+
+The refactor that established this invariant deleted these platform-local
+implementations:
+
+| Removed | Replacement |
+|---------|-------------|
+| `pkg/fido2/` (~6,821 LOC) | `quicbaas.SDK().Security().Auth().FIDO2()` (runtime) + `sdk/go/xkms/fido2` re-export (initrd) |
+| Local WebAuthn ceremony state on `User.Credentials` / `User.SessionData` | `quicbaas.SDK().Security().Auth().WebAuthn()` (challenge/session lives in the SDK) |
+| `WebAuthnClaims` on the JWT service | Removed — WebAuthn does not produce a JWT claim |
+| Direct `go-truststrap` import in `pkg/bootstrap/client.go` | `quicbaas/sdk/go/xkms/trust/bootstrap.Fetch()` |
 
 ## KMS Integration
 

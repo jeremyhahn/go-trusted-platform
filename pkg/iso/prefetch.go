@@ -256,6 +256,26 @@ func CollectRequiredPackages(config *PreFetchConfig) []string {
 	// When FIPS is enabled, we use a custom-built FIPS kernel instead
 	if !config.FIPS {
 		packages = append(packages, "linux-lts")
+		// linux-lts depends on the virtual `linux-firmware-any`, which can
+		// be satisfied by linux-firmware (full set), linux-firmware-none
+		// (headless stub), or any individual linux-firmware-<driver>.
+		// Our dependency resolver picks the first provider it finds in
+		// APKINDEX order, which on Alpine 3.22+ ends up at
+		// linux-firmware-ath12k. ath12k declares an exact-version
+		// dependency on linux-firmware-ath11k=<same-version> that APK's
+		// strict resolver rejects at chroot-install time with
+		// "linux-firmware-ath11k (no such package)" — even though ath11k
+		// is in the upstream repo, the exact-version constraint can't be
+		// satisfied from the prefetch set alone, and our installs are
+		// offline so apk can't reach upstream to negotiate.
+		//
+		// Explicitly include linux-firmware-none — a 0-byte stub that
+		// provides linux-firmware-any. APK's resolver prefers explicit
+		// installs over auto-picked providers, so this avoids the
+		// ath12k→ath11k chain entirely. Our X10 servers have no wifi
+		// drivers anyway; the platform's NIC firmware (i40e/ixgbe) is
+		// in linux-lts itself, not in the linux-firmware-* split.
+		packages = append(packages, "linux-firmware-none")
 	}
 
 	// Add LVM packages if filesystem type is LVM

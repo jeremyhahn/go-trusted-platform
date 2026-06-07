@@ -38,6 +38,26 @@ func validTestConfig() RegistryConfig {
 	return cfg
 }
 
+// newTestRegistry constructs a Registry backed by an in-memory mock
+// QuicBaaSStorageClient so Push/Pull/Delete/List exercise the real
+// storage code path instead of returning ErrStorageNotConfigured.
+// Used by the post-Phase-5 tests; the older tests that intentionally
+// run without storage continue to call NewRegistry directly to
+// exercise the unconfigured branch.
+func newTestRegistry(t *testing.T) *Registry {
+	t.Helper()
+	storage, err := NewQuicBaaSStorage(newMockStorageClient())
+	if err != nil {
+		t.Fatalf("NewQuicBaaSStorage: %v", err)
+	}
+	reg, err := NewRegistry(validTestConfig(), testLogger(), WithStorage(storage))
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = reg.Close() })
+	return reg
+}
+
 func TestNewRegistry(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -207,11 +227,7 @@ func TestRegistryPushContextCancellation(t *testing.T) {
 }
 
 func TestRegistryPull(t *testing.T) {
-	reg, err := NewRegistry(validTestConfig(), testLogger())
-	if err != nil {
-		t.Fatalf("failed to create registry: %v", err)
-	}
-	defer func() { _ = reg.Close() }()
+	reg := newTestRegistry(t)
 
 	tests := []struct {
 		name        string
@@ -282,11 +298,7 @@ func TestRegistryPullContextCancellation(t *testing.T) {
 }
 
 func TestRegistryDelete(t *testing.T) {
-	reg, err := NewRegistry(validTestConfig(), testLogger())
-	if err != nil {
-		t.Fatalf("failed to create registry: %v", err)
-	}
-	defer func() { _ = reg.Close() }()
+	reg := newTestRegistry(t)
 
 	tests := []struct {
 		name        string
@@ -332,11 +344,7 @@ func TestRegistryDelete(t *testing.T) {
 }
 
 func TestRegistryList(t *testing.T) {
-	reg, err := NewRegistry(validTestConfig(), testLogger())
-	if err != nil {
-		t.Fatalf("failed to create registry: %v", err)
-	}
-	defer func() { _ = reg.Close() }()
+	reg := newTestRegistry(t)
 
 	ctx := context.Background()
 	manifests, err := reg.List(ctx, RegistryListOptions{})
@@ -344,9 +352,304 @@ func TestRegistryList(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	// Empty registry should return empty list
 	if len(manifests) != 0 {
 		t.Errorf("expected empty list, got %d items", len(manifests))
+	}
+}
+
+// TestRegistryPushPullRoundTrip exercises the full Push -> List ->
+// Pull -> Delete lifecycle against the in-memory storage. This is the
+// production-path test that replaces the pre-Phase-5 stub-as-spec
+// tests.
+func TestRegistryPushPullRoundTrip(t *testing.T) {
+	reg := newTestRegistry(t)
+	ctx := context.Background()
+
+	const ref = "myrepo/myimage:v1"
+	layer := Layer{
+		Digest:    "sha256:" + repeat64("a"),
+		MediaType: "application/vnd.oci.image.layer.v1.tar",
+		Size:      11,
+		Content:   []byte("hello world"),
+	}
+	configBlob := []byte(`{"architecture":"amd64"}`)
+	manifest := &ImageManifest{
+		SchemaVersion: 2,
+		MediaType:     "application/vnd.oci.image.manifest.v1+json",
+		Config: Descriptor{
+			MediaType: "application/vnd.oci.image.config.v1+json",
+			Digest:    "sha256:" + repeat64("b"),
+			Size:      int64(len(configBlob)),
+		},
+		Layers: []Descriptor{{
+			MediaType: layer.MediaType,
+			Digest:    layer.Digest,
+			Size:      layer.Size,
+		}},
+	}
+	image := &Image{Manifest: manifest, Config: configBlob, Layers: []Layer{layer}}
+
+	if err := reg.Push(ctx, ref, image, PushOptions{}); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	// Second push without AllowOverwrite must fail.
+	if err := reg.Push(ctx, ref, image, PushOptions{}); err == nil {
+		t.Fatal("expected ErrImageAlreadyExists on second push without overwrite")
+	}
+
+	// List should include the just-pushed manifest.
+	list, err := reg.List(ctx, RegistryListOptions{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 || list[0].Reference != ref {
+		t.Fatalf("List = %+v, want one manifest at %q", list, ref)
+	}
+
+	// Pull should round-trip the blob bytes.
+	got, err := reg.Pull(ctx, ref, PullOptions{})
+	if err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	if string(got.Config) != string(configBlob) {
+		t.Errorf("config mismatch: got %q want %q", got.Config, configBlob)
+	}
+	if len(got.Layers) != 1 || string(got.Layers[0].Content) != string(layer.Content) {
+		t.Errorf("layer mismatch: got %+v", got.Layers)
+	}
+
+	// Delete + verify gone.
+	if err := reg.Delete(ctx, ref); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := reg.Pull(ctx, ref, PullOptions{}); err == nil {
+		t.Error("expected error after delete")
+	}
+	if err := reg.Delete(ctx, ref); err == nil {
+		t.Error("expected ErrImageNotFound on second delete")
+	}
+}
+
+// TestRegistryPush_Encrypted asserts the Encrypt opt is refused while
+// encryption is deferred. This prevents the surface from silently
+// landing unencrypted blobs when the caller asked for encryption.
+func TestRegistryPush_Encrypted(t *testing.T) {
+	reg := newTestRegistry(t)
+	ctx := context.Background()
+	err := reg.Push(ctx, "myrepo/x:v1", &Image{Manifest: &ImageManifest{}}, PushOptions{Encrypt: true})
+	if err == nil {
+		t.Fatal("expected ErrEncryptionNotConfigured")
+	}
+	var enc ErrEncryptionNotConfigured
+	if !errors.As(err, &enc) {
+		t.Errorf("expected ErrEncryptionNotConfigured, got %T: %v", err, err)
+	}
+}
+
+// TestRegistry_UnconfiguredStorage exercises the failure path when
+// no storage was wired at construction. The Registry is a real
+// boot-time misconfiguration sentinel here, not a silent no-op.
+func TestRegistry_UnconfiguredStorage(t *testing.T) {
+	reg, err := NewRegistry(validTestConfig(), testLogger())
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	defer func() { _ = reg.Close() }()
+	ctx := context.Background()
+	if err := reg.Push(ctx, "x/y:1", &Image{Manifest: &ImageManifest{}}, PushOptions{}); err == nil {
+		t.Error("expected ErrStorageNotConfigured from Push")
+	}
+	if _, err := reg.Pull(ctx, "x/y:1", PullOptions{}); err == nil {
+		t.Error("expected ErrStorageNotConfigured from Pull")
+	}
+	if err := reg.Delete(ctx, "x/y:1"); err == nil {
+		t.Error("expected ErrStorageNotConfigured from Delete")
+	}
+	if _, err := reg.List(ctx, RegistryListOptions{}); err == nil {
+		t.Error("expected ErrStorageNotConfigured from List")
+	}
+}
+
+func repeat64(c string) string {
+	out := make([]byte, 64)
+	for i := range out {
+		out[i] = c[0]
+	}
+	return string(out)
+}
+
+// TestRegistry_EncryptedRoundTrip exercises the full lifecycle of an
+// encrypted push: encrypted layer bytes land in storage, plaintext is
+// never visible, and Pull transparently decrypts. The unencrypted
+// content must come back byte-for-byte.
+func TestRegistry_EncryptedRoundTrip(t *testing.T) {
+	storage, err := NewQuicBaaSStorage(newMockStorageClient())
+	if err != nil {
+		t.Fatalf("NewQuicBaaSStorage: %v", err)
+	}
+	kms, err := NewLocalKMSClient(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalKMSClient: %v", err)
+	}
+	enc, err := NewImageEncryptor(kms)
+	if err != nil {
+		t.Fatalf("NewImageEncryptor: %v", err)
+	}
+	reg, err := NewRegistry(validTestConfig(), testLogger(), WithStorage(storage), WithEncryptor(enc))
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = reg.Close() })
+
+	ctx := context.Background()
+	plaintext := []byte("secret payload that must survive a round trip")
+	digest := "sha256:" + repeat64("f")
+	image := &Image{
+		Manifest: &ImageManifest{
+			SchemaVersion: 2,
+			MediaType:     "application/vnd.oci.image.manifest.v1+json",
+			Config: Descriptor{
+				MediaType: "application/vnd.oci.image.config.v1+json",
+				Digest:    "sha256:" + repeat64("0"),
+				Size:      4,
+			},
+			Layers: []Descriptor{{
+				MediaType: "application/vnd.oci.image.layer.v1.tar",
+				Digest:    digest,
+				Size:      int64(len(plaintext)),
+			}},
+		},
+		Config: []byte("cfg!"),
+		Layers: []Layer{{
+			Digest:    digest,
+			MediaType: "application/vnd.oci.image.layer.v1.tar",
+			Size:      int64(len(plaintext)),
+			Content:   plaintext,
+		}},
+	}
+
+	ref := "encrypted/img:v1"
+	if err := reg.Push(ctx, ref, image, PushOptions{Encrypt: true}); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	// Confirm what landed on disk is NOT the plaintext.
+	storedBlob, err := storage.GetBlob(ctx, digest)
+	if err != nil {
+		t.Fatalf("GetBlob: %v", err)
+	}
+	if string(storedBlob) == string(plaintext) {
+		t.Fatal("encrypted push left plaintext in storage")
+	}
+
+	got, err := reg.Pull(ctx, ref, PullOptions{})
+	if err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	if len(got.Layers) != 1 || string(got.Layers[0].Content) != string(plaintext) {
+		t.Errorf("encrypted round-trip lost plaintext: got %q want %q",
+			got.Layers[0].Content, plaintext)
+	}
+
+	// Manifest annotations must record the encryption choice.
+	manifest, err := storage.GetManifest(ctx, ref)
+	if err != nil {
+		t.Fatalf("GetManifest: %v", err)
+	}
+	if manifest.Annotations[manifestAnnotationEncrypted] != "true" {
+		t.Errorf("expected encrypted annotation, got %v", manifest.Annotations)
+	}
+}
+
+// TestRegistry_EncryptedPushWithoutEncryptor verifies the refusal
+// branch still works when the encryptor option is omitted.
+func TestRegistry_EncryptedPushWithoutEncryptor(t *testing.T) {
+	reg := newTestRegistry(t)
+	ctx := context.Background()
+	err := reg.Push(ctx, "no-enc/img:v1", &Image{Manifest: &ImageManifest{}}, PushOptions{Encrypt: true})
+	if err == nil {
+		t.Fatal("expected ErrEncryptionNotConfigured")
+	}
+	var enc ErrEncryptionNotConfigured
+	if !errors.As(err, &enc) {
+		t.Errorf("expected ErrEncryptionNotConfigured, got %T: %v", err, err)
+	}
+}
+
+// TestRegistry_DeleteGCsOrphanBlobs verifies that Delete reclaims
+// blob storage for layers no longer referenced by any surviving
+// manifest, and that layers shared between images survive deletion
+// of one of the sharing images.
+func TestRegistry_DeleteGCsOrphanBlobs(t *testing.T) {
+	reg := newTestRegistry(t)
+	ctx := context.Background()
+
+	mkImage := func(layerDigest, contentSuffix string) *Image {
+		return &Image{
+			Manifest: &ImageManifest{
+				SchemaVersion: 2,
+				MediaType:     "application/vnd.oci.image.manifest.v1+json",
+				Config: Descriptor{
+					Digest: "sha256:" + repeat64("c"),
+					Size:   4,
+				},
+				Layers: []Descriptor{{
+					MediaType: "application/vnd.oci.image.layer.v1.tar",
+					Digest:    layerDigest,
+					Size:      int64(len("hello" + contentSuffix)),
+				}},
+			},
+			Config: []byte("cfg!"),
+			Layers: []Layer{{
+				Digest:    layerDigest,
+				MediaType: "application/vnd.oci.image.layer.v1.tar",
+				Size:      int64(len("hello" + contentSuffix)),
+				Content:   []byte("hello" + contentSuffix),
+			}},
+		}
+	}
+
+	uniqueLayer := "sha256:" + repeat64("d")
+	sharedLayer := "sha256:" + repeat64("e")
+
+	// Image A: unique layer only.
+	if err := reg.Push(ctx, "img-a:v1", mkImage(uniqueLayer, "A"), PushOptions{}); err != nil {
+		t.Fatalf("push A: %v", err)
+	}
+	// Image B + C: both reference the shared layer.
+	if err := reg.Push(ctx, "img-b:v1", mkImage(sharedLayer, "shared"), PushOptions{}); err != nil {
+		t.Fatalf("push B: %v", err)
+	}
+	if err := reg.Push(ctx, "img-c:v1", mkImage(sharedLayer, "shared"), PushOptions{}); err != nil {
+		t.Fatalf("push C: %v", err)
+	}
+
+	// Delete A: its unique layer should be GC'd.
+	if err := reg.Delete(ctx, "img-a:v1"); err != nil {
+		t.Fatalf("delete A: %v", err)
+	}
+	if exists, _ := reg.storage.BlobExists(ctx, uniqueLayer); exists {
+		t.Errorf("uniqueLayer should be GC'd after deleting its only referent")
+	}
+	if exists, _ := reg.storage.BlobExists(ctx, sharedLayer); !exists {
+		t.Errorf("sharedLayer should survive A's delete (B and C still reference it)")
+	}
+
+	// Delete B: shared layer should still survive (C references it).
+	if err := reg.Delete(ctx, "img-b:v1"); err != nil {
+		t.Fatalf("delete B: %v", err)
+	}
+	if exists, _ := reg.storage.BlobExists(ctx, sharedLayer); !exists {
+		t.Errorf("sharedLayer should survive B's delete (C still references it)")
+	}
+
+	// Delete C: now the shared layer is orphaned and should be GC'd.
+	if err := reg.Delete(ctx, "img-c:v1"); err != nil {
+		t.Fatalf("delete C: %v", err)
+	}
+	if exists, _ := reg.storage.BlobExists(ctx, sharedLayer); exists {
+		t.Errorf("sharedLayer should be GC'd after all referencing images are deleted")
 	}
 }
 

@@ -18,13 +18,16 @@
 //  1. Resolve method ("--method" flag or auto-discover).
 //  2. Gather method-specific proof material:
 //     mtls   → SHA-256 fingerprint of the client certificate.
-//     fido2  → CTAP2 getAssertion against the selected authenticator.
+//     fido2  → WebAuthn getAssertion ceremony against the selected authenticator.
 //     piv    → ECDSA / RSA signature of a fresh nonce by the PIV slot.
 //  3. Submit AuthFactorLoginRequest{Proof, Metadata, FactorName, FactorID}
 //     to the SDK Security().Auth().Factors().Login() endpoint.
 //
 // §5c (vendor-agnostic guarantee): NO xkey-specific code paths. The
-// FIDO2 / PIV sub-clients on the SDK are vendor-agnostic by contract.
+// WebAuthn / PIV sub-clients on the SDK are vendor-agnostic by contract.
+// FIDO2 authenticator discovery and selection is a client-LOCAL USB-HID
+// operation (Security().Auth().Devices()); the WebAuthn ceremony itself
+// (Security().Auth().WebAuthn()) is the single canonical server round-trip.
 package auth
 
 import (
@@ -96,8 +99,10 @@ func (c *Client) autoDiscoverMethod(ctx context.Context, req *LoginRequest) (str
 	hasFIDO2 := false
 	hasPIV := false
 	if !hasMTLS {
-		if fido, err := c.fido2("auth login auto-discovery"); err == nil && fido != nil {
-			if devs, derr := fido.ListDevices(ctx); derr == nil && devs != nil && len(devs.Devices) > 0 {
+		// FIDO2 authenticator discovery is a client-LOCAL USB-HID probe via
+		// Devices().Present(); a server cannot see the client's attached keys.
+		if devices, err := c.devices("auth login auto-discovery"); err == nil && devices != nil {
+			if present, perr := devices.Present(); perr == nil && present {
 				hasFIDO2 = true
 			}
 		}
@@ -154,55 +159,66 @@ func (c *Client) loginMTLS(ctx context.Context, req *LoginRequest) (*LoginResult
 	return factors.Login(ctx, loginReq)
 }
 
-// loginFIDO2 performs a CTAP2 getAssertion against the selected
-// authenticator and submits the assertion as Proof.
+// loginFIDO2 selects a client-LOCAL authenticator and runs the canonical
+// WebAuthn login ceremony against it, submitting the assertion as Proof.
+//
+// Authenticator discovery/selection is intrinsically local (Devices()): a
+// server cannot enumerate the USB keys attached to a remote client. The
+// ceremony itself is the single canonical server round-trip via
+// WebAuthn().BeginLogin (the removed FIDO2().Assert accessor duplicated it).
 func (c *Client) loginFIDO2(ctx context.Context, req *LoginRequest) (*LoginResult, error) {
 	factors, err := c.factors("auth login --method fido2")
 	if err != nil {
 		return nil, err
 	}
-	fido, err := c.fido2("auth login --method fido2")
+	devices, err := c.devices("auth login --method fido2")
 	if err != nil {
 		return nil, err
 	}
-	devices, err := fido.ListDevices(ctx)
+	list, err := devices.List()
 	if err != nil {
-		return nil, &ErrFIDO2Failed{Op: "ListDevices", Cause: err}
+		return nil, &ErrFIDO2Failed{Op: "List", Cause: err}
 	}
-	if devices == nil || len(devices.Devices) == 0 {
+	if len(list) == 0 {
 		return nil, &ErrNoFIDO2Device{}
 	}
-	device, derr := selectFIDO2Device(devices.Devices, req.Device)
+	device, derr := selectFIDO2Device(list, req.Device)
 	if derr != nil {
 		return nil, derr
 	}
-	rpid := req.RPID
-	if rpid == "" {
-		rpid = "platform"
-	}
-	assertReq := &quicbaas.FIDO2BeginAuthenticationRequest{
-		Username: req.Username,
-		RPID:     rpid,
-	}
-	assertResp, err := fido.Assert(ctx, assertReq)
+	webauthn, err := c.webauthn("auth login --method fido2")
 	if err != nil {
-		return nil, &ErrFIDO2Failed{Op: "Assert", Cause: err}
+		return nil, err
+	}
+	// Session-model WebAuthn ceremony: BeginLogin begins the authentication
+	// ceremony server-side and returns an opaque SessionID plus the
+	// JSON-marshaled assertion options the local authenticator signed. The
+	// relying-party id and allowed-credential set are resolved server-side
+	// from the username, so no client-supplied RPID is sent.
+	assertResp, err := webauthn.BeginLogin(ctx, &quicbaas.WebAuthnUser{
+		Username: req.Username,
+	})
+	if err != nil {
+		return nil, &ErrFIDO2Failed{Op: "BeginLogin", Cause: err}
 	}
 	if assertResp == nil {
-		return nil, &ErrFIDO2Failed{Op: "Assert", Cause: errors.New("nil assertion response")}
+		return nil, &ErrFIDO2Failed{Op: "BeginLogin", Cause: errors.New("nil assertion response")}
 	}
+	if assertResp.SessionID == "" || assertResp.OptionsJSON == "" {
+		return nil, &ErrFIDO2Failed{Op: "BeginLogin", Cause: errors.New("assertion response missing session id or options")}
+	}
+	// The proof is the authenticator assertion (OptionsJSON); the server
+	// correlates and verifies it against the begin ceremony via SessionID.
+	// No token is fabricated client-side — the assertion is the proof.
 	loginReq := &quicbaas.AuthFactorLoginRequest{
 		Username:   req.Username,
 		FactorName: "fido2",
 		FactorID:   req.FactorID,
-		Proof:      []byte(assertResp.Challenge),
+		Proof:      []byte(assertResp.OptionsJSON),
 		Metadata: map[string]string{
-			"rp_id":     rpid,
-			"device_id": device.DeviceID,
+			"session_id": assertResp.SessionID,
+			"device_id":  device.Path,
 		},
-	}
-	if len(assertResp.CredentialIDs) > 0 {
-		loginReq.Metadata["credential_id"] = assertResp.CredentialIDs[0]
 	}
 	return factors.Login(ctx, loginReq)
 }
@@ -281,26 +297,27 @@ func (c *Client) loginPIV(ctx context.Context, req *LoginRequest) (*LoginResult,
 	return factors.Login(ctx, loginReq)
 }
 
-// selectFIDO2Device picks the device matching deviceID, or returns
-// ErrAmbiguousFIDO2Device when multiple devices are connected and the
+// selectFIDO2Device picks the locally-attached authenticator matching
+// devicePath (the LocalDevice.Path stable identifier), or returns
+// ErrAmbiguousFIDO2Device when multiple authenticators are connected and the
 // caller did not pin one.
-func selectFIDO2Device(devices []quicbaas.FIDO2Device, deviceID string) (*quicbaas.FIDO2Device, error) {
-	if deviceID != "" {
+func selectFIDO2Device(devices []quicbaas.LocalDevice, devicePath string) (*quicbaas.LocalDevice, error) {
+	if devicePath != "" {
 		for i := range devices {
-			if devices[i].DeviceID == deviceID {
+			if devices[i].Path == devicePath {
 				return &devices[i], nil
 			}
 		}
-		return nil, &ErrFIDO2DeviceNotFound{DeviceID: deviceID}
+		return nil, &ErrFIDO2DeviceNotFound{DeviceID: devicePath}
 	}
 	if len(devices) == 1 {
 		return &devices[0], nil
 	}
-	ids := make([]string, 0, len(devices))
+	paths := make([]string, 0, len(devices))
 	for i := range devices {
-		ids = append(ids, devices[i].DeviceID)
+		paths = append(paths, devices[i].Path)
 	}
-	return nil, &ErrAmbiguousFIDO2Device{Devices: ids}
+	return nil, &ErrAmbiguousFIDO2Device{Devices: paths}
 }
 
 // selectPIVReader picks the reader matching name, or returns

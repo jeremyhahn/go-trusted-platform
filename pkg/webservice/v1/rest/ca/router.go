@@ -16,7 +16,8 @@ package ca
 import (
 	"github.com/gorilla/mux"
 
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
@@ -30,14 +31,27 @@ type CARouter struct {
 	handlers *CAHandlers
 }
 
-// NewCARouter creates a new CARouter instance
+// NewCARouter creates a new CARouter instance.
+// objStorage may be nil; if nil, the revocation object-store check is skipped.
 func NewCARouter(
 	logger *logging.Logger,
-	ca goca.CACertificateAuthority,
+	ca quicbaasca.CACertificateAuthority,
 	respWriter response.HttpWriter,
 ) *CARouter {
 	return &CARouter{
-		handlers: NewCAHandlers(logger, ca, respWriter),
+		handlers: NewCAHandlers(logger, ca, respWriter, nil),
+	}
+}
+
+// NewCARouterWithStorage creates a new CARouter instance with an ObjectStorage client.
+func NewCARouterWithStorage(
+	logger *logging.Logger,
+	ca quicbaasca.CACertificateAuthority,
+	respWriter response.HttpWriter,
+	objStorage objectstorage.Client,
+) *CARouter {
+	return &CARouter{
+		handlers: NewCAHandlers(logger, ca, respWriter, objStorage),
 	}
 }
 

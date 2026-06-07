@@ -27,6 +27,7 @@ import (
 	"time"
 
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -429,4 +430,297 @@ func TestNewDNSRegistrationHook_RegisterError(t *testing.T) {
 	err := hook(ctx)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to register DNS record")
+}
+
+// =============================================================================
+// NewDeviceRegistrationHook tests
+// =============================================================================
+
+// mockDeviceRegistrar captures Save/Update/FindBySerial calls so the
+// hook's create-vs-update branching can be asserted without a real
+// datastore.
+type mockDeviceRegistrar struct {
+	bySerial    map[string]*deviceentities.Device
+	saveCalls   []*deviceentities.Device
+	updateCalls []*deviceentities.Device
+	saveErr     error
+	updateErr   error
+	lookupErr   error
+}
+
+func newMockDeviceRegistrar() *mockDeviceRegistrar {
+	return &mockDeviceRegistrar{bySerial: map[string]*deviceentities.Device{}}
+}
+
+func (m *mockDeviceRegistrar) FindBySerial(_ context.Context, serial string) (*deviceentities.Device, error) {
+	if m.lookupErr != nil {
+		return nil, m.lookupErr
+	}
+	if d, ok := m.bySerial[serial]; ok {
+		// Return a shallow copy so the hook's mutations don't leak
+		// back into the mock's stored snapshot until Update is called.
+		clone := *d
+		return &clone, nil
+	}
+	return nil, errors.New("device not found")
+}
+
+func (m *mockDeviceRegistrar) Save(_ context.Context, d *deviceentities.Device) error {
+	if m.saveErr != nil {
+		return m.saveErr
+	}
+	m.saveCalls = append(m.saveCalls, d)
+	m.bySerial[d.Serial] = d
+	return nil
+}
+
+func (m *mockDeviceRegistrar) Update(_ context.Context, d *deviceentities.Device) error {
+	if m.updateErr != nil {
+		return m.updateErr
+	}
+	m.updateCalls = append(m.updateCalls, d)
+	m.bySerial[d.Serial] = d
+	return nil
+}
+
+func TestNewDeviceRegistrationHook_SkipsNonTCGCSR(t *testing.T) {
+	reg := newMockDeviceRegistrar()
+	hook := NewDeviceRegistrationHook(reg, slog.Default())
+
+	err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:  context.Background(),
+		IsTCGCSR: false,
+	})
+	assert.NoError(t, err)
+	assert.Empty(t, reg.saveCalls)
+	assert.Empty(t, reg.updateCalls)
+}
+
+func TestNewDeviceRegistrationHook_SkipsNilTCGData(t *testing.T) {
+	reg := newMockDeviceRegistrar()
+	hook := NewDeviceRegistrationHook(reg, slog.Default())
+
+	err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:  context.Background(),
+		IsTCGCSR: true,
+		TCGData:  nil,
+	})
+	assert.NoError(t, err)
+	assert.Empty(t, reg.saveCalls)
+}
+
+func TestNewDeviceRegistrationHook_SkipsMissingSerial(t *testing.T) {
+	reg := newMockDeviceRegistrar()
+	hook := NewDeviceRegistrationHook(reg, slog.Default())
+
+	err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:  context.Background(),
+		IsTCGCSR: true,
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductModel:  "TestModel",
+			ProductSerial: "",
+		},
+	})
+	assert.NoError(t, err)
+	assert.Empty(t, reg.saveCalls, "hook must not invent a serial when the TCG CSR lacks one")
+}
+
+func TestNewDeviceRegistrationHook_CreatesNewDevice(t *testing.T) {
+	reg := newMockDeviceRegistrar()
+	hook := NewDeviceRegistrationHook(reg, slog.Default())
+
+	cert := createHookTestCert("Test-IDevID")
+	ek := createHookTestCert("Test-EK")
+	tcg := &trustedca.ACMETCGEnrollmentData{
+		ProductModel:         "TestModel",
+		ProductSerial:        "SN-12345",
+		EKCertificate:        ek,
+		AttestationPublicKey: []byte{0xab, 0xcd, 0xef},
+		SigningPublicKey:     []byte{0x12, 0x34},
+		EventLog:             []byte("event-log-bytes"),
+	}
+
+	err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:     context.Background(),
+		IsTCGCSR:    true,
+		Certificate: cert,
+		TCGData:     tcg,
+	})
+	require.NoError(t, err)
+	require.Len(t, reg.saveCalls, 1)
+	saved := reg.saveCalls[0]
+	assert.NotZero(t, saved.ID, "hook must allocate a non-zero device ID")
+	assert.Equal(t, "TestModel", saved.Model)
+	assert.Equal(t, "SN-12345", saved.Serial)
+	assert.Contains(t, saved.EKCert, "-----BEGIN CERTIFICATE-----")
+	assert.Equal(t, "abcdef", saved.AttestPub)
+	assert.Equal(t, "1234", saved.SigningPub)
+	assert.Equal(t, []byte("event-log-bytes"), saved.EventLog)
+	assert.Equal(t, deviceentities.DeviceStateRegistered, saved.State)
+	assert.False(t, saved.CreatedAt.IsZero())
+}
+
+func TestNewDeviceRegistrationHook_UpdatesExistingDeviceOnReEnroll(t *testing.T) {
+	reg := newMockDeviceRegistrar()
+	reg.bySerial["SN-12345"] = &deviceentities.Device{
+		ID:     0xDEADBEEF,
+		Serial: "SN-12345",
+		Model:  "OldModel",
+		State:  deviceentities.DeviceStateUnknown,
+	}
+
+	hook := NewDeviceRegistrationHook(reg, slog.Default())
+
+	tcg := &trustedca.ACMETCGEnrollmentData{
+		ProductModel:         "NewModel",
+		ProductSerial:        "SN-12345",
+		AttestationPublicKey: []byte{0x77},
+	}
+	err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:     context.Background(),
+		IsTCGCSR:    true,
+		Certificate: createHookTestCert("Test-IDevID"),
+		TCGData:     tcg,
+	})
+	require.NoError(t, err)
+	require.Empty(t, reg.saveCalls, "must not create a duplicate row when serial already exists")
+	require.Len(t, reg.updateCalls, 1)
+	updated := reg.updateCalls[0]
+	assert.Equal(t, uint64(0xDEADBEEF), updated.ID)
+	assert.Equal(t, "NewModel", updated.Model)
+	assert.Equal(t, "77", updated.AttestPub)
+	assert.Equal(t, deviceentities.DeviceStateRegistered, updated.State)
+}
+
+func TestNewDeviceRegistrationHook_SaveErrorPropagates(t *testing.T) {
+	reg := newMockDeviceRegistrar()
+	reg.saveErr = errors.New("datastore write failed")
+	hook := NewDeviceRegistrationHook(reg, slog.Default())
+
+	err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:     context.Background(),
+		IsTCGCSR:    true,
+		Certificate: createHookTestCert("Test-IDevID"),
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductSerial: "SN-fail",
+			ProductModel:  "M",
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "device registration: failed to save device")
+}
+
+func TestNewDeviceRegistrationHook_UpdateErrorPropagates(t *testing.T) {
+	reg := newMockDeviceRegistrar()
+	reg.bySerial["SN-existing"] = &deviceentities.Device{
+		ID:     1,
+		Serial: "SN-existing",
+	}
+	reg.updateErr = errors.New("update failed")
+	hook := NewDeviceRegistrationHook(reg, slog.Default())
+
+	err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:     context.Background(),
+		IsTCGCSR:    true,
+		Certificate: createHookTestCert("Test-IDevID"),
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductSerial: "SN-existing",
+			ProductModel:  "M",
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to update existing device")
+}
+
+func TestNewDeviceRegistrationHook_RejectsSerialMismatch(t *testing.T) {
+	// Defends against the qrdb DeviceDAO secondary-index bug where
+	// FindBySerial("X") can return a record whose serial is in fact
+	// "Y" (the index falls through to "return first record" when the
+	// index entry is missing). Without this guard the hook would
+	// UPDATE the unrelated record in-place and clobber the previously
+	// enrolled device.
+	reg := newMockDeviceRegistrar()
+	reg.bySerial["other-serial"] = &deviceentities.Device{
+		ID:     999,
+		Serial: "other-serial",
+		Model:  "OtherModel",
+	}
+	// Simulate the buggy DAO behaviour: FindBySerial("SN-new") returns
+	// the unrelated "other-serial" record. The mock can't normally do
+	// this since its map is keyed by serial — emulate by overriding
+	// the lookup hook below.
+	reg.lookupErr = nil
+	// Insert a fake mismatched response by hijacking FindBySerial via
+	// a one-off mock subtype.
+	bad := &serialMismatchRegistrar{mockDeviceRegistrar: reg, returnDevice: reg.bySerial["other-serial"]}
+
+	hook := NewDeviceRegistrationHook(bad, slog.Default())
+
+	err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:     context.Background(),
+		IsTCGCSR:    true,
+		Certificate: createHookTestCert("Test-IDevID"),
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductSerial: "SN-new",
+			ProductModel:  "NewModel",
+		},
+	})
+	require.NoError(t, err)
+	// Must create a new record, NOT update the unrelated one.
+	require.Len(t, reg.saveCalls, 1, "mismatch must drive a create, not an update")
+	require.Empty(t, reg.updateCalls)
+	assert.Equal(t, "SN-new", reg.saveCalls[0].Serial)
+	assert.NotEqual(t, uint64(999), reg.saveCalls[0].ID, "must allocate a fresh ID, not reuse the unrelated record")
+}
+
+// serialMismatchRegistrar simulates the qrdb DeviceDAO secondary-index
+// bug where FindBySerial returns an unrelated record. Used only for
+// the regression test above.
+type serialMismatchRegistrar struct {
+	*mockDeviceRegistrar
+	returnDevice *deviceentities.Device
+}
+
+func (s *serialMismatchRegistrar) FindBySerial(_ context.Context, _ string) (*deviceentities.Device, error) {
+	clone := *s.returnDevice
+	return &clone, nil
+}
+
+func TestNewDeviceRegistrationHook_TreatsTransportErrorAsCreate(t *testing.T) {
+	// If FindBySerial fails with a non-not-found error (e.g. transport
+	// timeout) the hook should still create a new row rather than
+	// silently dropping the enrollment.
+	reg := newMockDeviceRegistrar()
+	reg.lookupErr = errors.New("transport timeout")
+	hook := NewDeviceRegistrationHook(reg, slog.Default())
+
+	err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:     context.Background(),
+		IsTCGCSR:    true,
+		Certificate: createHookTestCert("Test-IDevID"),
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductSerial: "SN-new",
+			ProductModel:  "M",
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, reg.saveCalls, 1)
+	assert.Equal(t, "SN-new", reg.saveCalls[0].Serial)
+}
+
+func TestIsNotFoundErr(t *testing.T) {
+	assert.False(t, isNotFoundErr(nil))
+	assert.True(t, isNotFoundErr(errors.New("device not found")))
+	assert.True(t, isNotFoundErr(errors.New("no such key")))
+	assert.True(t, isNotFoundErr(errors.New("entity does not exist")))
+	assert.True(t, isNotFoundErr(errors.New("no rows in result set")))
+	assert.False(t, isNotFoundErr(errors.New("connection refused")))
+}
+
+func TestEncodeCertPEM(t *testing.T) {
+	assert.Equal(t, "", encodeCertPEM(nil))
+	cert := createHookTestCert("cn")
+	pemStr := encodeCertPEM(cert)
+	assert.Contains(t, pemStr, "-----BEGIN CERTIFICATE-----")
+	assert.Contains(t, pemStr, "-----END CERTIFICATE-----")
 }

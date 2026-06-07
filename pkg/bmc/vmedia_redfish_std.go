@@ -63,6 +63,19 @@ func (b *vmediaRedfishStd) Mount(ctx context.Context, spec *MediaSpec) error {
 	}
 	cdPath, err := c.discoverVirtualMediaCD(ctx, vmPath)
 	if err != nil {
+		// X10 ATEN BMC firmware exposes the VirtualMedia collection
+		// but populates it with zero members — the OEM CfgCD path
+		// owns the CD slot instead. Translate the empty-collection
+		// signal to "unsupported" so the dispatcher falls through to
+		// vmediaRedfishSmc instead of short-circuiting the chain.
+		var emptyErr ErrRedfishEmptyCollection
+		if errors.As(err, &emptyErr) && emptyErr.Resource == "VirtualMedia" {
+			return ErrVirtualMediaUnsupported{
+				Backend: b.Name(),
+				Vendor:  "DMTF",
+				Reason:  "VirtualMedia collection is empty; OEM backend owns the CD slot",
+			}
+		}
 		return err
 	}
 	var vm redfishVirtualMedia
@@ -156,6 +169,14 @@ func (b *vmediaRedfishStd) maybeTranslateOEMFallback(err error, action, reason s
 }
 
 // Status returns the current insertion state from the VirtualMedia member.
+//
+// Empty VirtualMedia collection: on X10 ATEN BMC firmware, the standard
+// /redfish/v1/Managers/{id}/VirtualMedia collection has zero members
+// even when an OEM mount is active via CfgCD. Returning Mounted: false
+// directly would cause the dispatcher to short-circuit before the OEM
+// SMC backend gets a chance to read the actual mount state. Translate
+// the empty collection to ErrVirtualMediaUnsupported so the dispatcher
+// falls through to vmediaRedfishSmc (which knows how to read CfgCD).
 func (b *vmediaRedfishStd) Status(ctx context.Context) (*VirtualMediaInfo, error) {
 	c := b.c
 	if err := c.ensureDiscovered(ctx); err != nil {
@@ -163,11 +184,23 @@ func (b *vmediaRedfishStd) Status(ctx context.Context) (*VirtualMediaInfo, error
 	}
 	vmPath := c.getVirtualMediaPath()
 	if vmPath == "" {
-		return &VirtualMediaInfo{Mounted: false}, nil
+		return nil, ErrVirtualMediaUnsupported{
+			Backend: b.Name(),
+			Vendor:  "DMTF",
+			Reason:  "BMC did not advertise a VirtualMedia collection",
+		}
 	}
 	cdPath, err := c.discoverVirtualMediaCD(ctx, vmPath)
 	if err != nil {
-		return &VirtualMediaInfo{Mounted: false}, nil
+		var emptyErr ErrRedfishEmptyCollection
+		if errors.As(err, &emptyErr) && emptyErr.Resource == "VirtualMedia" {
+			return nil, ErrVirtualMediaUnsupported{
+				Backend: b.Name(),
+				Vendor:  "DMTF",
+				Reason:  "VirtualMedia collection is empty; OEM backend owns the CD slot",
+			}
+		}
+		return nil, err
 	}
 	var vm redfishVirtualMedia
 	if err := c.doGET(ctx, cdPath, &vm); err != nil {

@@ -342,3 +342,121 @@ func TestContext_ProtocolField(t *testing.T) {
 
 	assert.Equal(t, "mcp", ctx.Protocol)
 }
+
+// ---------------------------------------------------------------------------
+// QuicBaaS context resolver tests
+// ---------------------------------------------------------------------------
+
+func TestResolveQuicBaaSAddr_LocalDefault(t *testing.T) {
+	ctx := &Context{
+		Name: "local",
+		Type: ContextTypeLocal,
+		Local: &LocalContext{
+			SocketPath: "/run/platformd.sock",
+		},
+	}
+	if got := ctx.ResolveQuicBaaSAddr(); got != DefaultQuicBaaSSocketPath {
+		t.Errorf("expected default quicbaas socket, got %q", got)
+	}
+}
+
+func TestResolveQuicBaaSAddr_LocalOverride(t *testing.T) {
+	ctx := &Context{
+		Type: ContextTypeLocal,
+		Local: &LocalContext{
+			SocketPath:   "/run/platformd.sock",
+			QuicBaaSAddr: "/tmp/custom.sock",
+		},
+	}
+	if got := ctx.ResolveQuicBaaSAddr(); got != "/tmp/custom.sock" {
+		t.Errorf("expected custom socket, got %q", got)
+	}
+}
+
+func TestResolveQuicBaaSAddr_RemoteFallsBackToServer(t *testing.T) {
+	ctx := &Context{
+		Type: ContextTypeRemote,
+		Remote: &RemoteContext{
+			Server: "https://example.com:8443",
+		},
+	}
+	if got := ctx.ResolveQuicBaaSAddr(); got != "https://example.com:8443" {
+		t.Errorf("expected server URL, got %q", got)
+	}
+}
+
+func TestResolveQuicBaaSAddr_RemoteOverride(t *testing.T) {
+	ctx := &Context{
+		Type: ContextTypeRemote,
+		Remote: &RemoteContext{
+			Server:       "https://example.com:8443",
+			QuicBaaSAddr: "https://quicbaasd.example.com:9000",
+		},
+	}
+	if got := ctx.ResolveQuicBaaSAddr(); got != "https://quicbaasd.example.com:9000" {
+		t.Errorf("expected override, got %q", got)
+	}
+}
+
+func TestResolveQuicBaaSAddr_RemoteNil(t *testing.T) {
+	ctx := &Context{Type: ContextTypeRemote}
+	if got := ctx.ResolveQuicBaaSAddr(); got != "" {
+		t.Errorf("expected empty for nil remote, got %q", got)
+	}
+}
+
+func TestResolveQuicBaaSAddr_EmbeddedReturnsEmpty(t *testing.T) {
+	ctx := &Context{Type: ContextTypeEmbedded}
+	if got := ctx.ResolveQuicBaaSAddr(); got != "" {
+		t.Errorf("expected empty for embedded, got %q", got)
+	}
+}
+
+func TestResolveQuicBaaSTransport_LocalDefault(t *testing.T) {
+	ctx := &Context{Type: ContextTypeLocal, Local: &LocalContext{}}
+	if got := ctx.ResolveQuicBaaSTransport(); got != "unix" {
+		t.Errorf("expected unix default, got %q", got)
+	}
+}
+
+func TestResolveQuicBaaSTransport_LocalOverride(t *testing.T) {
+	ctx := &Context{Type: ContextTypeLocal, Local: &LocalContext{QuicBaaSTransport: "rest"}}
+	if got := ctx.ResolveQuicBaaSTransport(); got != "rest" {
+		t.Errorf("expected rest, got %q", got)
+	}
+}
+
+func TestResolveQuicBaaSTransport_RemoteMirrorsProtocol(t *testing.T) {
+	ctx := &Context{
+		Type:     ContextTypeRemote,
+		Protocol: "quic",
+		Remote:   &RemoteContext{Server: "x"},
+	}
+	if got := ctx.ResolveQuicBaaSTransport(); got != "quic" {
+		t.Errorf("expected quic (mirror), got %q", got)
+	}
+}
+
+func TestResolveQuicBaaSTransport_RemoteOverride(t *testing.T) {
+	ctx := &Context{
+		Type:   ContextTypeRemote,
+		Remote: &RemoteContext{Server: "x", QuicBaaSTransport: "mcp"},
+	}
+	if got := ctx.ResolveQuicBaaSTransport(); got != "mcp" {
+		t.Errorf("expected mcp, got %q", got)
+	}
+}
+
+func TestResolveQuicBaaSTransport_RemoteNil(t *testing.T) {
+	ctx := &Context{Type: ContextTypeRemote}
+	if got := ctx.ResolveQuicBaaSTransport(); got != "" {
+		t.Errorf("expected empty, got %q", got)
+	}
+}
+
+func TestResolveQuicBaaSTransport_EmbeddedReturnsEmpty(t *testing.T) {
+	ctx := &Context{Type: ContextTypeEmbedded}
+	if got := ctx.ResolveQuicBaaSTransport(); got != "" {
+		t.Errorf("expected empty, got %q", got)
+	}
+}

@@ -152,6 +152,7 @@ func contextToSDKOptions(ctx *Context) (*platform.Options, error) {
 		return nil, ErrInvalidContext{Context: string(ctx.Type)}
 	}
 
+	opts = append(opts, resolveContextQuicBaaSOptions(ctx)...)
 	return platform.NewOptions(opts...), nil
 }
 
@@ -171,6 +172,46 @@ func protocolAddress(proto platform.Protocol, server string) []platform.Option {
 	default:
 		return nil
 	}
+}
+
+// EnvPlatformQuicBaaSAddr is the environment variable operators set
+// to override the QuicBaaS daemon address resolved from the active
+// CLI context. It mirrors PLATFORMCTL_QUICBAAS_ADDR and takes
+// precedence over any context-level setting.
+const EnvPlatformQuicBaaSAddr = "PLATFORMCTL_QUICBAAS_ADDR"
+
+// EnvPlatformQuicBaaSTransport is the environment variable operators
+// set to override the QuicBaaS transport resolved from the active
+// CLI context. Accepted values match platform protocols (unix, grpc,
+// rest, quic, mcp, embedded).
+const EnvPlatformQuicBaaSTransport = "PLATFORMCTL_QUICBAAS_TRANSPORT"
+
+// resolveContextQuicBaaSOptions resolves the QuicBaaS connection
+// settings from the active CLI context plus the PLATFORMCTL_QUICBAAS_*
+// environment overrides, and returns the corresponding platform.Options
+// slice. Empty addr resolution returns an empty slice so the platform
+// SDK Client is constructed without a QuicBaaS connection (legacy
+// behaviour preserved for non-CLI consumers).
+func resolveContextQuicBaaSOptions(ctx *Context) []platform.Option {
+	if ctx == nil {
+		return nil
+	}
+	addr := ctx.ResolveQuicBaaSAddr()
+	if env := os.Getenv(EnvPlatformQuicBaaSAddr); env != "" {
+		addr = env
+	}
+	if addr == "" {
+		return nil
+	}
+	transport := ctx.ResolveQuicBaaSTransport()
+	if env := os.Getenv(EnvPlatformQuicBaaSTransport); env != "" {
+		transport = env
+	}
+	opts := []platform.Option{platform.WithQuicBaaSAddr(addr)}
+	if transport != "" {
+		opts = append(opts, platform.WithQuicBaaSTransport(transport))
+	}
+	return opts
 }
 
 // buildTLSConfig creates a TLS configuration from remote context settings.

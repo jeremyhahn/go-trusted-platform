@@ -1,8 +1,15 @@
 'use client';
 
+import * as React from 'react';
 import { Plus, RefreshCw, Activity, Lock, AlertCircle, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
 import {
   Table,
   TableBody,
@@ -15,9 +22,59 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useGateway, useApi, useToast } from '@/hooks';
 
+interface ReportedGateway {
+  gateway_id: string;
+  hostname?: string;
+  mode?: string;
+  reported_at: string;
+  received_at: string;
+  health?: { status?: string; components?: Record<string, string> };
+  bgp?: {
+    local_asn?: number;
+    peer_count?: number;
+    established_peers?: number;
+    announced_prefixes?: string[];
+  };
+  pxe?: { status?: string };
+  dhcp?: { status?: string; lease_count?: number };
+}
+
 export default function APIGatewayPage() {
   const { toast } = useToast();
   const gateway = useGateway();
+
+  // Reported gateways consume /api/v1/gateway/state — the platform
+  // control-plane surface that gatewayd POSTs telemetry into. This
+  // path is independent of the legacy SDK GatewayService gRPC calls
+  // below; the data flows regardless of whether the gRPC backend is
+  // reachable, so the WebUI stays useful even when gatewayd hasn't
+  // attached itself to the in-process service.
+  const [reportedGateways, setReportedGateways] = React.useState<ReportedGateway[]>([]);
+  const [reportedLoading, setReportedLoading] = React.useState(true);
+  const [reportedError, setReportedError] = React.useState<string | null>(null);
+
+  const fetchReportedGateways = React.useCallback(async () => {
+    setReportedLoading(true);
+    setReportedError(null);
+    try {
+      const res = await fetch('/api/v1/gateway/state', { credentials: 'include' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await res.json();
+      const list: ReportedGateway[] =
+        body.payload?.gateways ?? body.gateways ?? [];
+      setReportedGateways(list);
+    } catch (e: unknown) {
+      setReportedError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReportedLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void fetchReportedGateways();
+    const id = setInterval(() => void fetchReportedGateways(), 30_000);
+    return () => clearInterval(id);
+  }, [fetchReportedGateways]);
 
   // Fetch gateway status
   const {
@@ -121,42 +178,12 @@ export default function APIGatewayPage() {
     refetchIPAMPools();
   };
 
-  // Show error state
-  if (error) {
-    return (
-      <div className="container mx-auto py-6">
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Error Loading Gateway</AlertTitle>
-          <AlertDescription>
-            {error.message}
-            <Button
-              variant="outline"
-              size="sm"
-              className="ml-4"
-              onClick={fetchData}
-            >
-              Retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      </div>
-    );
-  }
-
-  // Show loading state
-  if (isLoading && !status) {
-    return (
-      <div className="container mx-auto py-6">
-        <Card>
-          <CardContent className="py-6 flex items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin mr-2" />
-            <span>Loading gateway...</span>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
+  // The legacy SDK-backed view (Status / BGP / IPAM cards below)
+  // can hang or error when no in-process GatewayService gRPC
+  // backend is reachable. Don't block the entire page on it — the
+  // Reported Gateways card above still renders useful telemetry
+  // from the control-plane endpoint. We log the error inline if
+  // there is one and let the rest of the page render.
 
   return (
     <div className="space-y-6">
@@ -177,6 +204,79 @@ export default function APIGatewayPage() {
           </Button>
         </div>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Reported Gateways</CardTitle>
+          <CardDescription>
+            Live telemetry posted by each gatewayd via{' '}
+            <code className="font-mono text-xs">POST /api/v1/gateway/telemetry</code>.
+            Updates every 30 seconds.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {reportedLoading && reportedGateways.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4">
+              <Loader2 className="inline-block h-4 w-4 animate-spin mr-2" />
+              Loading reported gateways…
+            </p>
+          ) : reportedError ? (
+            <p className="text-sm text-destructive">
+              Failed to load: {reportedError}
+            </p>
+          ) : reportedGateways.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4">
+              No gatewayd processes have reported yet. Start gatewayd
+              with the platform CP base URL in its config to populate
+              this view.
+            </p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Gateway ID</TableHead>
+                  <TableHead>Hostname</TableHead>
+                  <TableHead>Mode</TableHead>
+                  <TableHead>Health</TableHead>
+                  <TableHead>BGP</TableHead>
+                  <TableHead>Last Report</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {reportedGateways.map((g) => (
+                  <TableRow key={g.gateway_id}>
+                    <TableCell className="font-mono text-xs">
+                      {g.gateway_id}
+                    </TableCell>
+                    <TableCell>{g.hostname ?? '—'}</TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{g.mode ?? '—'}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        className={
+                          g.health?.status === 'healthy'
+                            ? 'bg-green-500/10 text-green-600 border-green-500/20'
+                            : 'bg-red-500/10 text-red-600 border-red-500/20'
+                        }
+                      >
+                        {g.health?.status ?? 'unknown'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-xs">
+                      {g.bgp?.established_peers ?? 0}/
+                      {g.bgp?.peer_count ?? 0} peers
+                    </TableCell>
+                    <TableCell className="text-xs">
+                      {new Date(g.reported_at).toLocaleString()}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 md:grid-cols-4">
         <div className="rounded-lg border border-border bg-card p-6">

@@ -30,6 +30,10 @@ import (
 	"syscall"
 	"time"
 
+	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
+	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
+	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	noiseapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/noise"
@@ -37,20 +41,17 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/log/jsonfile"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	platformrest "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/webauthn"
-	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
-	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
-	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
-	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	"github.com/spf13/cobra"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -475,6 +476,15 @@ Example:
 			logger = App.Logger
 		}
 
+		// Install a JSON-lines structured-log sink so the WebUI Logs
+		// page (and any future cluster-wide forwarder) has data to
+		// surface. The handler fans out alongside the existing
+		// stderr/file logger via MultiHandler so nothing about the
+		// existing logging story changes — every record continues to
+		// land where it always did, plus a structured copy lands in
+		// <LogDir>/jsonl/.
+		jsonlQuerier := installJSONLLogging(logger)
+
 		// First-run escrow consumer.
 		if App != nil && appErr == nil {
 			if result, hoErr := App.ConsumeFirstbootHandoff(ctx); hoErr != nil {
@@ -503,7 +513,7 @@ Example:
 
 		if webservicesEnabled {
 			logger.Info("Starting webservices mode")
-			runWithWebservices(cmd, ctx, sigChan, logger)
+			runWithWebservices(cmd, ctx, sigChan, logger, jsonlQuerier)
 		} else {
 			logger.Info("Starting daemon-only mode", "app_err", appErr)
 			runDaemonOnly(cmd, ctx, sigChan, logger, appErr)
@@ -513,7 +523,14 @@ Example:
 
 // runWithWebservices starts the platform with full webservice support
 // (ACME, WebAuthn, JWT). This mode requires the CA to be initialized.
-func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os.Signal, logger *logging.Logger) {
+//
+// jsonlQuerier is the JSON-lines log surface installed at daemon boot
+// (pkg/daemon/commands/log_sink.go). It is threaded into the REST
+// router via HandlerRegistry params so /api/v1/platform/logs has data
+// to read. When nil — for example when LogDir is unwritable — the
+// /logs endpoints return 503 with a structured "not configured"
+// envelope instead of pretending to be functional.
+func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os.Signal, logger *logging.Logger, jsonlQuerier *jsonfile.Querier) {
 	logger.Info("runWithWebservices: starting CA initialization")
 
 	if App.CA == nil {
@@ -693,11 +710,60 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	// /api/v1/vtpm/* dark on the webservices-mode CP.
 	initVTPMServiceOnConfig(logger, App, daemonConfig)
 
+	// Wire the OCI artifact registry. Backed by a local file store
+	// under <PlatformDir>/registry for Phase 5's first ship; cluster-
+	// replicated QuicBaaS storage lands as a follow-up. The
+	// daemonConfig.RegistryService field plumbs the same handle into
+	// gRPC + MCP transports so platformctl + the WebUI both see the
+	// real registry contents instead of a dark surface.
+	initRegistryServiceOnConfig(logger, App, daemonConfig)
+
+	// Snapshot store backs /api/v1/platform/config/snapshots and the
+	// automatic pre-reload snapshot capture in
+	// Service.ReloadConfigWithSnapshot. Single-node file-backed for
+	// today; replicated storage lands alongside the equivalent
+	// switch in the registry.
+	snapshotStore := initSnapshotStore(logger, App)
+	_ = snapshotStore // installed onto the daemon Service below
+
+	// Attestation store + service backs /api/v1/attestation/manifests
+	// and the per-enrollment capture hook below. When no attestation
+	// backend is configured this is a no-op and the REST surface
+	// returns 503 via the service registry.
+	attestationSvcs := initAttestationServices(logger, App)
+	attachAttestationServiceToDaemonConfig(daemonConfig, attestationSvcs)
+
+	// Gateway control-plane state cache backs /api/v1/gateway/state,
+	// /api/v1/gateway/telemetry, and /api/v1/gateway/desired-config.
+	// Single-node file-backed for today; gatewayd reports here and
+	// reads its desired config from here.
+	gwControl := initGatewayControlPlane(logger, App)
+
+	// M6 barrier-unseal gate: bind only the Unix socket + a loopback
+	// /healthz + /init + /unseal HTTP listener and block until the
+	// barrier is unsealed. Production transports (gRPC TCP, REST, QUIC,
+	// MCP) are NOT bound while this runs. On a subsequent restart where
+	// the barrier is already unsealed the gate returns immediately.
+	if gateErr := invokeBarrierGate(ctx, App, logger); gateErr != nil {
+		logger.Error(gateErr, "init-only mode gate failed")
+		cmd.PrintErrln(fmt.Sprintf("init-only mode gate failed: %v", gateErr))
+		return
+	}
+
 	platformDaemon, err := daemon.New(daemonConfig)
 	if err != nil {
 		logger.Error(err, "Failed to create platform daemon")
 		cmd.PrintErrln(fmt.Sprintf("Failed to create platform daemon: %v", err))
 		return
+	}
+
+	// Plug snapshot store into the daemon Service so reload captures
+	// a pre-reload snapshot automatically and rollback is reachable
+	// from REST + gRPC.
+	if snapshotStore != nil {
+		if svc := platformDaemon.Service(); svc != nil {
+			svc.SetSnapshotStore(snapshotStore)
+		}
 	}
 
 	if err := platformDaemon.Start(ctx); err != nil {
@@ -844,12 +910,22 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		var cryptoSDK cryptoclient.Client
 		var dekSDK dekclient.Client
 		var secretsSDK secretsclient.Client
+		var webauthnSDK quicbaassdk.WebAuthnClient
+		var authSDK quicbaassdk.AuthService
 		if App != nil {
 			if sdkClient := App.QuicBaaSSDKClient(); sdkClient != nil {
 				kmsSDK = sdkClient.KMS()
 				cryptoSDK = sdkClient.Crypto()
 				dekSDK = sdkClient.DEK()
 				secretsSDK = sdkClient.Secrets()
+				if security := sdkClient.Security(); security != nil {
+					if auth := security.Auth(); auth != nil {
+						webauthnSDK = auth.WebAuthn()
+						// Unified login surface consumed by the /login REST
+						// endpoint (BeginLogin/FinishLogin + OIDC bearer).
+						authSDK = auth
+					}
+				}
 			}
 		}
 		params := v1.RegistryParams{
@@ -875,6 +951,8 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			TPM:                 App.TPM,
 			WebServiceConfig:    wsConfig,
 			WebAuthnConfig:      webauthnConfig,
+			WebAuthnSDKClient:   webauthnSDK,
+			AuthSDKClient:       authSDK,
 		}
 		if platformDaemon != nil {
 			if svc := platformDaemon.Service(); svc != nil {
@@ -966,6 +1044,49 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		// HealthRegistry powers /api/v1/platform/{health,metrics}.
 		if platformDaemon != nil {
 			params.HealthRegistry = platformDaemon.HealthRegistry()
+		}
+		// /platform/config/reload delegates to the running daemon
+		// Service. /platform/logs is fed by the JSON-lines sink we
+		// installed earlier.
+		if platformDaemon != nil {
+			if svc := platformDaemon.Service(); svc != nil {
+				params.ConfigReloader = svc
+			}
+		}
+		if jsonlQuerier != nil {
+			params.LogQuerier = jsonlQuerier
+		}
+		// RegistryService is wired by initRegistryServiceOnConfig (called
+		// before daemon.New). Surface it on the REST router so
+		// /api/v1/compute/images has a backend to delegate to.
+		if daemonConfig.RegistryService != nil {
+			params.RegistryService = daemonConfig.RegistryService
+		}
+		// The OCI Distribution-spec /v2/ surface needs richer access
+		// to the same *Registry (blob/manifest CRUD with raw bytes).
+		// initRegistryServiceOnConfig stashes the backend pointer on
+		// the daemonConfig via the same field type the REST layer
+		// consumes, so callers don't need to know about the
+		// pkg/registry concrete type.
+		if backend := registryDistBackend(daemonConfig); backend != nil {
+			params.OCIDistBackend = backend
+		}
+		// AttestationCapture surfaces the platform attestation service
+		// into the WebAuthn / ACME registry hook chain so each TCG CSR
+		// enrollment writes a HostManifest + manifest_captured event.
+		if cap := attestationCaptureAdapter(attestationSvcs); cap != nil {
+			params.AttestationCapture = cap
+		}
+		if reader := attestationEventReader(attestationSvcs); reader != nil {
+			params.AttestationEventReader = reader
+		}
+		if gwControl != nil {
+			if gwControl.Store != nil {
+				params.GatewayStateStore = gwControl.Store
+			}
+			if gwControl.DesiredCfg != nil {
+				params.GatewayDesiredConfig = gwControl.DesiredCfg
+			}
 		}
 		restHandlerRegistry := v1.NewHandlerRegistry(params)
 
@@ -1170,6 +1291,17 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	} else {
 		config.ComputeOrchestrator = computeOrchestrator
 		logger.Info("Compute orchestrator initialized successfully")
+	}
+
+	// M6 barrier-unseal gate: bind only the Unix socket + a loopback
+	// /healthz + /init + /unseal HTTP listener and block until the
+	// barrier is unsealed. Production transports (gRPC TCP, REST, QUIC,
+	// MCP) are NOT bound while this runs. On a subsequent restart where
+	// the barrier is already unsealed the gate returns immediately.
+	if gateErr := invokeBarrierGate(ctx, App, logger); gateErr != nil {
+		logger.Error(gateErr, "init-only mode gate failed")
+		cmd.PrintErrln(fmt.Sprintf("init-only mode gate failed: %v", gateErr))
+		return
 	}
 
 	d, err := daemon.New(config)

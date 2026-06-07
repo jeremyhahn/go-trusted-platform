@@ -120,7 +120,7 @@ func (h *TemplateHandler) CreateTemplate(w http.ResponseWriter, r *http.Request)
 	if templateEntity.ID == 0 {
 		// Server-side ID generation matches the device CRUD path so
 		// callers don't need to mint identifiers client-side.
-		templateEntity.ID = nextDeviceID()
+		templateEntity.ID = device.NewID()
 	}
 
 	if err := h.templateService.Save(r.Context(), templateEntity); err != nil {

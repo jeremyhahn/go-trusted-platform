@@ -1,87 +1,100 @@
 # Unified SDK Integration Architecture
 
-This document describes the unified SDK integration architecture for go-trusted-platform, which provides a single entry point for all services through clean abstraction layers.
+This document describes the SDK integration architecture for
+go-trusted-platform after the Phase 6 / Phase 7 / Phase 8 refactors that
+established quicbaas as the **only** consumer-facing surface for the
+underlying crypto / KV / IAM / trust stack.
 
 ## Overview
 
-go-trusted-platform uses a **unified SDK integration pattern** where:
+go-trusted-platform consumes the stack through a single SDK:
 
-1. **go-trusted-platform is the ONLY entry point** for consumer applications
-2. **External dependencies** (go-quicbaas, go-trusted-ca, go-xkms) are accessed **exclusively through SDKs**
-3. **Abstraction layers** allow changing implementations without breaking the SDK interface
-4. **Multi-transport support** enables embedded OR remote service endpoints per-service
+1. **go-quicbaas SDK is the ONLY runtime path** to crypto, KV, IAM,
+   barrier, ceremony, trust-bootstrap, ACME, and identity capabilities.
+2. **No direct imports** of `go-qrdb`, `go-xkms`, `go-quicraft`, or
+   `go-truststrap` from application runtime code. The single documented
+   exception is the initramfs build-time carve-out (see
+   [SDK Consumption Invariant](../../CLAUDE.md#sdk-consumption-invariant)).
+3. **Multi-transport support** — the quicbaas SDK auto-selects between
+   embedded, Unix socket, gRPC, REST, QUIC, and MCP transports.
+4. **`Security().*` grouping** — all crypto/auth/trust verbs are reachable
+   from `quicbaas.SDK().Security()`; there are no flat shortcuts
+   (`Client.Barrier()` etc. were removed in Phase 8a).
 
 ## Architecture Diagram
 
 ```
-                        Consumer Applications
-                   (platformctl, web dashboard, third-party)
+                          Consumer Applications
+                  (platformctl, web dashboard, third-party)
                                    |
                                    v
 +--------------------------------------------------------------------------+
-|                      go-trusted-platform SDKs                             |
-|                                                                           |
-|  sdk/go/platform/                    sdk/javascript/                      |
-|  +-------------------------+         +---------------------------+        |
-|  | Client interface        |         | PlatformClient            |        |
-|  | - 16 Platform services  |         | - 16 Platform services    |        |
-|  | - QuicBaaS() accessor   |         | - 28 QuicBaaS services    |        |
-|  | - Multi-transport       |         | - REST/WebSocket support  |        |
-|  +-------------------------+         +---------------------------+        |
-+--------------------------------------------------------------------------+
-                                   |
-                                   v
-+--------------------------------------------------------------------------+
-|                      Multi-Protocol API Layer                             |
-|                        pkg/api/daemon/                                    |
-|                                                                           |
-|  Embedded   | REST (8443) | gRPC (10443) | QUIC (9444) | MCP (9445)       |
-|  (in-proc)  |             |              |             | Unix (/run)      |
+|                       go-trusted-platform SDK                            |
+|                                                                          |
+|  sdk/go/platform/                    sdk/javascript/                     |
+|  +-------------------------+         +---------------------------+       |
+|  | Client interface        |         | PlatformClient            |       |
+|  | - Platform-native verbs |         | - Platform-native verbs   |       |
+|  |   (TPM, IDevID, SDN,    |         |   (TPM, IDevID, SDN,      |       |
+|  |    BMC, attestation)    |         |    BMC, attestation)      |       |
+|  | - QuicBaaS() accessor   |         | - QuicBaaS() accessor     |       |
+|  +-------------------------+         +---------------------------+       |
 +--------------------------------------------------------------------------+
                                    |
                                    v
 +--------------------------------------------------------------------------+
-|                    Platform Service Registry                              |
-|                      pkg/platform/registry.go                             |
-|                                                                           |
-|  Provides unified access to:                                              |
-|  - SDK Adapters (QuicBaaS, CA, XKMS)                                  |
-|  - Native Services (Device, DNS, TPM, vTPM, etc.)                         |
-|  - QuicBaaS convenience accessors (KV, KMS, Secrets, IAM, etc.)           |
+|              Multi-Protocol Transport Layer (platformd)                  |
+|                                                                          |
+|  Embedded   | REST (8443) | gRPC (10443) | QUIC (9444) | MCP (9445)      |
+|  (in-proc)  |             |              |             | Unix (/run)     |
+|                                                                          |
+|  M6 INIT-ONLY GATE: before barrier unseal, only Unix + 127.0.0.1:9446    |
+|  (/healthz + /init + /unseal) are bound. Remote transports gate.         |
 +--------------------------------------------------------------------------+
-              |                                     |
-              v                                     v
-+----------------------------+        +--------------------------------+
-| NATIVE SERVICES (pkg/)     |        | SDK-WRAPPED SERVICES (internal/)|
-| ALWAYS EMBEDDED            |        | EMBEDDED or REMOTE              |
-| NO BUILD TAGS              |        | BUILD TAGS OPTIONAL             |
-|                            |        |                                  |
-| pkg/tpm/                   |        | internal/quicbaas/               |
-| pkg/vtpm/                  |        |   - adapter.go (all 28 services) |
-| pkg/idevid/                |        |                                  |
-| pkg/attestation/           |        | internal/ca/                     |
-| pkg/device/                |        |   - adapter.go                   |
-| pkg/sdn/                   |        |                                  |
-| pkg/dns/                   |        | internal/xkms/               |
-| pkg/compute/               |        |   - adapter.go                   |
-| pkg/pxe/                   |        |                                  |
-| pkg/overlay/               |        +--------------------------------+
-| pkg/gateway/               |                        |
-| pkg/tenant/                |                        v
-+----------------------------+        +--------------------------------+
-                                      | External SDKs (SDK Access ONLY) |
-                                      |                                  |
-                                      | go-quicbaas/sdk/go               |
-                                      |   - KV(), KMS(), Secrets(), etc. |
-                                      |   - 28 service clients           |
-                                      |                                  |
-                                      | go-trusted-ca (interfaces)       |
-                                      |   - CertificateAuthority         |
-                                      |                                  |
-                                      | go-xkms                      |
-                                      |   - XKMSServicer             |
-                                      +----------------------------------+
+                                   |
+                                   v
++--------------------------------------------------------------------------+
+|       Platform-Native Services (always embedded in platformd)            |
+|                                                                          |
+|  pkg/tpm/         pkg/vtpm/        pkg/idevid/      pkg/attestation/     |
+|  pkg/device/      pkg/sdn/         pkg/dns/         pkg/compute/         |
+|  pkg/bmc/         pkg/initrd/      pkg/iso/         pkg/ipxe/            |
++--------------------------------------------------------------------------+
+                                   |
+                                   v
++--------------------------------------------------------------------------+
+|             go-quicbaas SDK  (the only path to the stack below)          |
+|                                                                          |
+|  Imported as: github.com/jeremyhahn/go-quicbaas/sdk/go                   |
+|  Composed in: pkg/storage/quicbaas/sdk_embedded_qrdb.go                  |
+|                                                                          |
+|  Security().Auth().{WebAuthn,FIDO2,PIV,Factors}()                        |
+|  Security().{Barrier,Ceremony,Credentials}()                             |
+|  Security().Trust().Bootstrap()      Security().ACME()                   |
+|  Security().{KMS,Secrets,Crypto,Certificate,CertificateExt}()            |
+|  KV() / Batch() / Transaction() / Query() / Vector() / TimeSeries() ...  |
++--------------------------------------------------------------------------+
+                                   |
+                                   v
++--------------------------------------------------------------------------+
+|               Upstream stack (NOT directly imported by platform)         |
+|                                                                          |
+|  go-qrdb              go-xkms                    go-quicraft / go-truststrap
+|  (Raft KV +           (TPM2 + PKCS#11 + cloud    (Raft consensus +
+|   software seal +      KMS + FIDO2 CTAP2 +        truststrap dispatch
+|   PINBackend +         WebAuthn RP + PIV +        — composed inside xkms
+|   ceremony +           TrustedCA + ACME +         and quicbaas)
+|   credentials)         pkg/trust/bootstrap)                              |
++--------------------------------------------------------------------------+
 ```
+
+### What the diagram replaces
+
+The pre-Phase-6 architecture had per-dependency adapters under
+`internal/quicbaas/`, `internal/ca/`, and `internal/xkms/`. Those were
+removed when the quicbaas SDK absorbed the trusted-ca and xkms surfaces
+into `Security().*`. The platform repo now imports exactly one SDK module
+(`go-quicbaas/sdk/go`) for everything that used to be three.
 
 ## Key Components
 
@@ -89,17 +102,17 @@ go-trusted-platform uses a **unified SDK integration pattern** where:
 
 The registry is the central access point for all platform services. It:
 
-- **Manages SDK adapter lifecycle** (create, start, stop)
-- **Provides unified accessors** for all services
+- **Manages a single SDK client lifecycle** (create, start, stop)
+- **Provides unified accessors** for native services and SDK verbs
 - **Supports thread-safe access** via atomic operations and RWMutex
-- **Handles graceful shutdown** with cleanup of all adapters
+- **Handles graceful shutdown** with cleanup of the SDK client
 
 ```go
 type Registry struct {
-    // SDK Adapters (SDK-wrapped services)
-    quicBaaSAdapter *quicbaas.Adapter
-    caAdapter       *ca.Adapter
-    xkmsAdapter *xkms.Adapter
+    // Single SDK client — composes qrdb (KV/seal/ceremony/credentials)
+    // and xkms (TPM/PKCS#11/cloud KMS/FIDO2/WebAuthn/PIV/TrustedCA/
+    // ACME/trust-bootstrap) behind quicbaas.SDK().Security().*.
+    quicBaaSClient quicbaassdk.Client
 
     // Native Services (always embedded)
     deviceService *device.Service
@@ -118,10 +131,11 @@ type Registry struct {
 type RegistryConfig struct {
     Logger *logging.Logger
 
-    // SDK Adapter Configurations (nil = not configured)
+    // Single quicbaas SDK configuration. Trusted-CA and xkms inputs
+    // are folded into the SDK's Security().ACME() / Security().Trust()
+    // / Security().{KMS,Certificate,...} surfaces, so the platform
+    // registry no longer carries CAConfig / XKMSConfig fields.
     QuicBaaSConfig *quicbaas.Config
-    CAConfig       *ca.Config
-    XKMSConfig *xkms.Config
 
     // Native Service References
     DeviceService *device.Service
@@ -131,52 +145,54 @@ type RegistryConfig struct {
 
 #### Start Parameters
 
-For embedded mode, pass service implementations to the Start method:
+For embedded mode, pass the in-process quicbaas SDK client to the Start
+method. After the Phase 6 / Phase 7 / Phase 8 refactors there is **one**
+SDK client; the previous trusted-ca and xkms adapter inputs were folded
+into the quicbaas SDK's `Security().ACME()` / `Security().Trust()` /
+`Security().{KMS,Certificate,...}` surfaces.
 
 ```go
 type StartParams struct {
-    QuicBaaSService dbservice.QuicBaaS      // Embedded QuicBaaS service
-    CAService       ca.CertificateAuthority // Embedded CA service
-    XKMSService xkms.XKMSServicer // Embedded XKMS service
+    QuicBaaSClient quicbaassdk.Client // Embedded quicbaas SDK client
+    DeviceService  *device.Service
+    DNSService     *dns.Service
 }
 ```
 
-### SDK Adapters (`internal/`)
+### Embedded composition
 
-Each SDK adapter wraps an external SDK providing:
+When the platform daemon runs `serve --embedded` (the default for
+single-node deployments) it composes the quicbaas SDK in-process via
+`pkg/storage/quicbaas/sdk_embedded_qrdb.go`. The embedded SDK is wired
+against the local qrdb sharded client so application code reaches the
+same in-memory KV state that backs the QuicBaaS facade, with no transport
+hop. See `embeddedQRDBOption` in that file for the canonical wiring.
 
-- **Thread-safe access** with atomic started/closed state
-- **Multi-transport support** (embedded, gRPC, REST, QUIC, Unix)
-- **Consistent lifecycle** (NewAdapter, Start, Stop, IsStarted, IsClosed)
+The composition uses the canonical `WithEmbeddedQRDB` option exported by
+`go-quicbaas/sdk/go` — it accepts a `QRDBEmbeddedServicers` struct that
+bundles the KV, Admin, Barrier, Ceremony, Credential, and CeremonyCA
+servicers the SDK needs.
 
-#### QuicBaaS Adapter (`internal/quicbaas/adapter.go`)
+### Capability map (per quicbaas SDK)
 
-Wraps go-quicbaas SDK providing access to all 28 services:
+| Category | SDK accessor |
+|----------|--------------|
+| Core Data | `Client.KV()`, `Batch()`, `Transaction()`, `Query()`, `TimeSeries()`, `Backup()` |
+| AI/ML | `Client.Vector()`, `Embedding()`, `Ollama()`, `RAG()` |
+| Security (auth) | `Security().Auth().{WebAuthn,FIDO2,PIV,Factors}()` plus the embedded `AuthClient` |
+| Security (barrier/ceremony) | `Security().Barrier()`, `Security().Ceremony()`, `Security().Credentials()` |
+| Security (keys/secrets) | `Security().{KMS,Secrets,Crypto,Certificate,CertificateExt,Seal,RBAC,ClusterDEK,DEK,DynamicSecrets,SealStore}()` |
+| Security (trust) | `Security().Trust().Bootstrap()`, `Security().Trust().{DANE,Pools,AIA}()` |
+| Security (ACME) | `Security().ACME()` |
+| Infrastructure | `Cluster()`, `Health()`, `Operations()`, `Cache()`, `ParameterStore()`, `Scheduler()`, `ObjectStorage()`, `ObjectStorageAdmin()`, `ObjectTransfer()` |
+| Identity | `IAM()` (with sub-clients) |
+| Messaging | `Messaging()` (pub/sub, push notifications, delta sync) |
+| Tenant | `Tenant()` |
 
-| Category | Services |
-|----------|----------|
-| Core Data | KV, Batch, Transaction, Query, TimeSeries, Backup |
-| AI/ML | Vector, Embedding, Ollama |
-| Security | Auth, KMS, Secrets, Crypto, DynamicSecrets, Certificate, Seal, RBAC, ClusterDEK |
-| Infrastructure | Cluster, Health, Operations, Cache, ParameterStore, Scheduler, ObjectStorage, ObjectStorageAdmin, ObjectTransfer |
-| Identity | IAM (with 11 sub-clients) |
-| Messaging | Messaging (pub/sub, push notifications, delta sync) |
-
-#### CA Adapter (`internal/ca/adapter.go`)
-
-Wraps go-trusted-ca for certificate authority operations:
-
-- Certificate issuance and revocation
-- ACME protocol support
-- Cross-signing and certificate chains
-
-#### XKMS Adapter (`internal/xkms/adapter.go`)
-
-Wraps go-xkms for key management:
-
-- TPM-backed key storage
-- Software keystore
-- PKCS#11 HSM integration
+The complete interface set lives in `quicbaas/sdk/go/services.go`. There
+are **no flat shortcuts** for capabilities grouped under `Security()` —
+the Phase 8a refactor removed the deprecated `Client.Barrier()` /
+`Client.BarrierCeremony()` accessors.
 
 ## Multi-Transport Support
 
@@ -257,27 +273,31 @@ if err != nil {
     return err
 }
 
-// Start with embedded services
+// Start with the embedded quicbaas SDK client. The platform's
+// pkg/storage/quicbaas/sdk_embedded_qrdb.go wires the canonical
+// WithEmbeddedQRDB option so the SDK shares the in-memory qrdb
+// state with platformd.
 err = registry.Start(ctx, &platform.StartParams{
-    QuicBaaSService: embeddedQuicBaaS,
+    QuicBaaSClient: embeddedQuicBaaSClient,
 })
 ```
 
 ### Accessing Services
 
 ```go
-// Access QuicBaaS services via convenience accessors
+// Convenience accessors on the registry.
 kv := registry.KV()           // Key-value client
 kms := registry.KMS()         // KMS client
 secrets := registry.Secrets() // Secrets client
 
-// Or access the full adapter
-if adapter := registry.QuicBaaS(); adapter != nil {
-    vector := adapter.Vector()
-    embedding := adapter.Embedding()
-}
+// Or reach the full SDK surface.
+sdk := registry.QuicBaaS()
+vec := sdk.Vector()
+emb := sdk.Embedding()
+auth := sdk.Security().Auth()      // WebAuthn/FIDO2/PIV/Factors
+trust := sdk.Security().Trust()    // DANE/Bootstrap/Pools/AIA
 
-// Access native services
+// Native services are unchanged.
 deviceSvc := registry.DeviceService()
 dnsSvc := registry.DNSService()
 ```
@@ -285,19 +305,31 @@ dnsSvc := registry.DNSService()
 ### SDK Client Usage
 
 ```go
-// Connect to platform daemon
+// Connect to platform daemon over the configured transport.
 client, err := platform.Connect(ctx, platform.NewOptions())
 if err != nil {
     return err
 }
 defer client.Close()
 
-// Use platform services
+// Platform-native verbs (TPM, IDevID, attestation, SDN, BMC).
 resp, err := client.TPM().GetEK(ctx, &req)
 
-// Use QuicBaaS services
-kvClient := client.QuicBaaS().KV()
-_, err = kvClient.Put(ctx, &quicbaas.PutRequest{Key: "foo", Value: []byte("bar")})
+// Stack capabilities (everything else).
+sdk := client.QuicBaaS()
+
+// Core data
+_, err = sdk.KV().Put(ctx, &quicbaas.PutRequest{Key: "foo", Value: []byte("bar")})
+
+// Barrier / ceremony
+barrier, err := sdk.Security().Barrier()
+ceremony, err := sdk.Security().Ceremony()
+
+// Auth (WebAuthn / FIDO2 / PIV / factors)
+opts, err := sdk.Security().Auth().WebAuthn().BeginRegistration(ctx, user)
+
+// Trust bootstrap
+trust := sdk.Security().Trust()
 ```
 
 ## Error Handling

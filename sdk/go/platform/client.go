@@ -17,6 +17,8 @@ import (
 	"context"
 	"os"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
 )
@@ -27,6 +29,13 @@ import (
 // All services are exposed as platform services. Implementation details like
 // the underlying data stores are abstracted away. Services are accessed through
 // the platform's gRPC API.
+//
+// In addition to platformd service clients, the platform SDK Client
+// also exposes a separate connection to the QuicBaaS daemon
+// (quicbaasd) via QuicBaaS(). platformd and quicbaasd are independent
+// processes and the two connections are independent. Constructing a
+// Client without WithQuicBaaSAddr is supported; QuicBaaS() then returns
+// ErrQuicBaaSNotConfigured.
 type Client interface {
 	// Core Platform Services
 	Daemon() platformv1.PlatformDaemonClient
@@ -51,6 +60,12 @@ type Client interface {
 	IAM() platformv1.PlatformIAMServiceClient
 	KMS() platformv1.KeyManagementServiceClient
 	Barrier() platformv1.BarrierServiceClient
+
+	// QuicBaaS returns the QuicBaaS SDK client used to reach quicbaasd.
+	// Returns ErrQuicBaaSNotConfigured when no QuicBaaS address was
+	// supplied at construction time, and ErrQuicBaaSInitFailed when
+	// construction was attempted but failed.
+	QuicBaaS() (quicbaassdk.Client, error)
 
 	// Connection management
 	Close() error
@@ -258,15 +273,28 @@ type platformClient struct {
 	adapter  transport.Adapter
 	services *ServiceClients
 	protocol Protocol
+
+	// quicbaas is the QuicBaaS SDK client used to reach quicbaasd.
+	// It is constructed lazily by newClientFromAdapter when the
+	// supplied Options carry a QuicBaaSAddr. nil means the operator
+	// did not configure a QuicBaaS connection.
+	quicbaas quicbaassdk.Client
+
+	// quicbaasInitErr captures a failure to construct the QuicBaaS
+	// client. Returning the error from QuicBaaS() (rather than panicking
+	// at construction time) means a Client without a working QuicBaaS
+	// connection still works for platformd-only verbs.
+	quicbaasInitErr error
 }
 
 // newClientFromAdapter creates a new client from a transport adapter.
-func newClientFromAdapter(adapter transport.Adapter, proto Protocol, _ *Options) *platformClient {
+func newClientFromAdapter(adapter transport.Adapter, proto Protocol, opts *Options) *platformClient {
 	c := &platformClient{
 		adapter:  adapter,
 		protocol: proto,
 	}
 	c.initServiceClients()
+	c.initQuicBaaSClient(opts)
 	return c
 }
 
@@ -299,6 +327,52 @@ func (c *platformClient) initServiceClients() {
 		Registry:    platformv1.NewRegistryServiceClient(conn),
 		Cluster:     platformv1.NewClusterServiceClient(conn),
 	}
+}
+
+// quicbaasTransportOptions maps a CLI/context transport string to the
+// corresponding go-quicbaas SDK option. Empty (or unknown) returns nil
+// so the SDK falls back to its built-in auto-detection
+// (HTTP URL -> REST, .sock path -> Unix, otherwise gRPC).
+//
+// Note: WithUnix is the only option that takes the socket path; every
+// other transport reads the path from the NewClient address argument.
+func quicbaasTransportOptions(addr, transport string) []quicbaassdk.Option {
+	switch transport {
+	case "unix":
+		return []quicbaassdk.Option{quicbaassdk.WithUnix(addr)}
+	case "rest":
+		return []quicbaassdk.Option{quicbaassdk.WithREST()}
+	case "quic":
+		return []quicbaassdk.Option{quicbaassdk.WithQUIC()}
+	case "mcp":
+		return []quicbaassdk.Option{quicbaassdk.WithMCP()}
+	case "grpc", "":
+		// gRPC is the SDK default; nil lets auto-detect fire so a
+		// .sock path still picks Unix when transport is unset.
+		return nil
+	default:
+		return nil
+	}
+}
+
+// initQuicBaaSClient constructs the QuicBaaS SDK client when the
+// supplied Options carry a QuicBaaSAddr. Failures are recorded on the
+// client (not returned) so platformd-only verbs continue to function.
+func (c *platformClient) initQuicBaaSClient(opts *Options) {
+	if opts == nil || opts.QuicBaaSAddr == "" {
+		return
+	}
+	qOpts := quicbaasTransportOptions(opts.QuicBaaSAddr, opts.QuicBaaSTransport)
+	sdk, err := quicbaassdk.NewClient(opts.QuicBaaSAddr, qOpts...)
+	if err != nil {
+		c.quicbaasInitErr = ErrQuicBaaSInitFailed{
+			Addr:      opts.QuicBaaSAddr,
+			Transport: opts.QuicBaaSTransport,
+			Err:       err,
+		}
+		return
+	}
+	c.quicbaas = sdk
 }
 
 // Daemon returns the platform daemon service client.
@@ -358,6 +432,12 @@ func (c *platformClient) KMS() platformv1.KeyManagementServiceClient {
 }
 
 // Barrier returns the barrier service client.
+//
+// NOTE: With the canonical 9-verb barrier tree migrated to the
+// QuicBaaS-backed quicbaasd surface, platformctl barrier verbs go
+// through QuicBaaS().Security().Barrier() instead. This accessor stays
+// on the interface for legacy non-CLI callers that still talk to
+// platformd's local BarrierServiceClient.
 func (c *platformClient) Barrier() platformv1.BarrierServiceClient {
 	if c.services == nil {
 		return nil
@@ -461,8 +541,38 @@ func (c *platformClient) Cluster() platformv1.ClusterServiceClient {
 	return c.services.Cluster
 }
 
-// Close closes the client connection.
+// QuicBaaS returns the QuicBaaS SDK client used to reach quicbaasd.
+//
+// Returns ErrQuicBaaSInitFailed when the platform SDK Client was
+// constructed with a QuicBaaSAddr that the go-quicbaas SDK rejected
+// (e.g. malformed address). Returns ErrQuicBaaSNotConfigured when the
+// Client was constructed without a QuicBaaSAddr — in that case the
+// caller must construct a quicbaas client directly or set the
+// platform.WithQuicBaaSAddr option.
+func (c *platformClient) QuicBaaS() (quicbaassdk.Client, error) {
+	if c.quicbaasInitErr != nil {
+		return nil, c.quicbaasInitErr
+	}
+	if c.quicbaas == nil {
+		return nil, ErrQuicBaaSNotConfigured{}
+	}
+	return c.quicbaas, nil
+}
+
+// Close closes the client connection, including the QuicBaaS SDK
+// connection when one was constructed.
 func (c *platformClient) Close() error {
+	// Close the QuicBaaS client first so its in-flight RPCs cancel
+	// before the platform adapter tears down.
+	if c.quicbaas != nil {
+		if qErr := c.quicbaas.Close(); qErr != nil {
+			// Wrap with the platform protocol so consumers can match
+			// the close error with errors.As(ErrCloseFailed{}).
+			return ErrCloseFailed{Protocol: c.protocol, Err: qErr}
+		}
+		c.quicbaas = nil
+	}
+
 	// Close platform adapter
 	if c.adapter != nil {
 		if err := c.adapter.Close(); err != nil {

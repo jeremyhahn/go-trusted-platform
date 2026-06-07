@@ -162,9 +162,9 @@ func (c *Client) Certificate() quicbaas.CertificateClient {
 	return c.sdk.Certificate()
 }
 
-// ClusterDEK returns the cluster data encryption key service client.
-func (c *Client) ClusterDEK() quicbaas.ClusterDEKClient {
-	return c.sdk.ClusterDEK()
+// DEK returns the Data Encryption Key service client.
+func (c *Client) DEK() quicbaas.DEKClient {
+	return c.sdk.DEK()
 }
 
 // =============================================================================

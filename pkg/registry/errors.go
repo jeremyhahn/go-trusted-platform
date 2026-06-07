@@ -447,3 +447,37 @@ func (e ErrInvalidDigest) Error() string {
 	}
 	return "registry: invalid digest"
 }
+
+// ErrImageAlreadyExists is returned by Push when the reference is
+// already populated and the caller did not request overwrite.
+type ErrImageAlreadyExists struct {
+	Reference string
+}
+
+func (e ErrImageAlreadyExists) Error() string {
+	return fmt.Sprintf("registry: image already exists: %s", e.Reference)
+}
+
+// ErrStorageNotConfigured is returned by Registry methods when no
+// QuicBaaSStorage backend was wired at construction time. The
+// daemon's Phase 5 wiring uses registry.WithStorage(...) — if you
+// see this in production it means the boot flow forgot to call it.
+type ErrStorageNotConfigured struct {
+	Op string
+}
+
+func (e ErrStorageNotConfigured) Error() string {
+	return fmt.Sprintf("registry: storage not configured for %s", e.Op)
+}
+
+// ErrEncryptionNotConfigured is returned when a caller requests
+// per-image encryption but the encryption pipeline has not been
+// wired into the Registry. Encryption + signing land in a follow-up
+// after the unencrypted-pipeline ships.
+type ErrEncryptionNotConfigured struct {
+	Reference string
+}
+
+func (e ErrEncryptionNotConfigured) Error() string {
+	return fmt.Sprintf("registry: encryption not configured (ref=%s)", e.Reference)
+}

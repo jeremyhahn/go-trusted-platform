@@ -271,6 +271,37 @@ Refer to [reference-network.md](reference-network.md) for detailed VLAN design:
 
 ## Bootstrap Scenarios
 
+### M6 Barrier-Unseal Gate (applies to every scenario)
+
+Every `platformd serve` invocation honors the M6 init-only invariant:
+remote transports do not bind until the storage barrier reports
+`initialized=true, sealed=false`. At startup the daemon binds:
+
+| Surface | Bind | Endpoints |
+|---------|------|-----------|
+| Unix socket | `/run/platformd.sock` | full local surface (operator + `platformctl --transport unix`) |
+| Loopback HTTP | `127.0.0.1:9446` | `GET /healthz`, `POST /init`, `POST /unseal` |
+
+Production transports (REST `8443`, gRPC `10443`, QUIC `9444`, MCP `9445`)
+remain unbound while the gate is active. The implementation lives in
+`pkg/daemon/commands/serve_barrier_gate.go`; the ceremony backend behind
+`POST /init` is the canonical quicbaas SDK `Security().Ceremony()`
+handler, and `POST /unseal` drives the platform-side `barrier.Manager`
+(for single-secret unseals and Shamir share submissions).
+
+Operational implications:
+
+- **Reverse-proxies and load balancers** should health-check
+  `/healthz` over the loopback or over the Unix socket — the public TLS
+  listeners simply do not exist during boot.
+- **Recovery procedures** that submit Shamir shares against `POST
+  /unseal` must reach the daemon via the Unix socket or
+  `127.0.0.1:9446` until the threshold is met.
+- **Development environments** can skip the gate entirely by starting
+  with `--barrier-strategy none`, which wires the qrdb `StrategyNone`
+  seal strategy and makes the daemon transition directly to unsealed at
+  boot. PIN flags become optional under this strategy.
+
 ### Single-Node Deployment
 
 **USB ISO Installation**

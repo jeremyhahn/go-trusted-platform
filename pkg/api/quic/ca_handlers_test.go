@@ -34,10 +34,9 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-codec"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	pkgca "github.com/jeremyhahn/go-xkms/pkg/ca"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -161,15 +160,15 @@ func (m *mockCA) Signer() (crypto.Signer, error) { return m, nil }
 func (m *mockCA) CASigner(_ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
 	return m, nil
 }
-func (m *mockCA) IssueCertificate(req *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
+func (m *mockCA) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	cert := generateTestCertificate(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
 	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
 		m.certStore.StoreCertificate(cert)
 	}
-	return &pkgca.IssuedCertificate{Certificate: cert}, nil
+	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 }
-func (m *mockCA) RevokeCert(cert *x509.Certificate, _ pkgca.RevokeOptions) error {
+func (m *mockCA) RevokeCert(cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	m.revokedCerts = append(m.revokedCerts, cert)
 	return nil
 }
@@ -232,7 +231,7 @@ func TestNewCAHandler(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
 
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	assert.NotNil(t, handler)
 	assert.Equal(t, ca, handler.ca)
@@ -242,7 +241,7 @@ func TestNewCAHandler(t *testing.T) {
 func TestCAHandler_HandleRequest_NilRequest(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	resp := handler.HandleRequest(context.Background(), nil)
 
@@ -253,7 +252,7 @@ func TestCAHandler_HandleRequest_NilRequest(t *testing.T) {
 func TestCAHandler_HandleRequest_UnknownOperation(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  0xFF,
@@ -269,7 +268,7 @@ func TestCAHandler_HandleRequest_UnknownOperation(t *testing.T) {
 func TestCAHandler_HandleInfo_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  OpCAInfo,
@@ -293,7 +292,7 @@ func TestCAHandler_HandleInfo_Success(t *testing.T) {
 
 func TestCAHandler_HandleInfo_CANotInitialized(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewCAHandler(logger, nil)
+	handler := NewCAHandler(logger, nil, nil)
 
 	req := &Request{
 		Opcode:  OpCAInfo,
@@ -310,7 +309,7 @@ func TestCAHandler_HandleInfo_NotInitializedCA(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
 	ca.initialized = false
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  OpCAInfo,
@@ -334,7 +333,7 @@ func TestCAHandler_HandleInfo_WithoutIntermediate(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
 	ca.intermCert = nil
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  OpCAInfo,
@@ -356,7 +355,7 @@ func TestCAHandler_HandleInfo_WithoutIntermediate(t *testing.T) {
 func TestCAHandler_HandleIssue_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	issueReq := &CAIssueRequest{
 		Subject: &Subject{
@@ -390,7 +389,7 @@ func TestCAHandler_HandleIssue_Success(t *testing.T) {
 func TestCAHandler_HandleIssue_WithSANs(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	issueReq := &CAIssueRequest{
 		Subject: &Subject{
@@ -422,7 +421,7 @@ func TestCAHandler_HandleIssue_WithSANs(t *testing.T) {
 func TestCAHandler_HandleIssue_WithKeyUsage(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	issueReq := &CAIssueRequest{
 		Subject: &Subject{
@@ -449,7 +448,7 @@ func TestCAHandler_HandleIssue_WithKeyUsage(t *testing.T) {
 func TestCAHandler_HandleIssue_MissingCommonName(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	issueReq := &CAIssueRequest{
 		Subject: &Subject{
@@ -474,7 +473,7 @@ func TestCAHandler_HandleIssue_MissingCommonName(t *testing.T) {
 func TestCAHandler_HandleIssue_InvalidAlgorithm(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	issueReq := &CAIssueRequest{
 		Subject: &Subject{
@@ -500,7 +499,7 @@ func TestCAHandler_HandleIssue_InvalidAlgorithm(t *testing.T) {
 func TestCAHandler_HandleIssue_InvalidPayload(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  OpCAIssue,
@@ -515,7 +514,7 @@ func TestCAHandler_HandleIssue_InvalidPayload(t *testing.T) {
 func TestCAHandler_HandleIssue_NilSubject(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	issueReq := &CAIssueRequest{
 		Subject:   nil,
@@ -539,7 +538,7 @@ func TestCAHandler_HandleIssue_NilSubject(t *testing.T) {
 func TestCAHandler_HandleGet_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// First issue a certificate
 	cert := generateTestCertificate("test.example.com", false, ca.intermCert, ca.privateKey)
@@ -574,7 +573,7 @@ func TestCAHandler_HandleGet_Success(t *testing.T) {
 func TestCAHandler_HandleGet_MissingSerial(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	getReq := &CAGetRequest{
 		Serial: "",
@@ -597,7 +596,7 @@ func TestCAHandler_HandleGet_MissingSerial(t *testing.T) {
 func TestCAHandler_HandleGet_NotFound(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	getReq := &CAGetRequest{
 		Serial: "nonexistent",
@@ -620,7 +619,7 @@ func TestCAHandler_HandleGet_NotFound(t *testing.T) {
 func TestCAHandler_HandleGet_InvalidPayload(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  OpCAGet,
@@ -635,7 +634,7 @@ func TestCAHandler_HandleGet_InvalidPayload(t *testing.T) {
 func TestCAHandler_HandleList_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	listReq := &CAListRequest{
 		Limit: 10,
@@ -664,7 +663,7 @@ func TestCAHandler_HandleList_Success(t *testing.T) {
 func TestCAHandler_HandleList_InvalidPayload(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  OpCAList,
@@ -679,7 +678,7 @@ func TestCAHandler_HandleList_InvalidPayload(t *testing.T) {
 func TestCAHandler_HandleList_DefaultLimit(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Test with zero limit - should use default
 	listReq := &CAListRequest{
@@ -702,7 +701,7 @@ func TestCAHandler_HandleList_DefaultLimit(t *testing.T) {
 func TestCAHandler_HandleList_MaxLimit(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Test with limit exceeding max - should cap at max
 	listReq := &CAListRequest{
@@ -726,7 +725,7 @@ func TestCAHandler_HandleList_NilCertStore(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
 	ca.certStore = nil
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	listReq := &CAListRequest{
 		Limit: 10,
@@ -749,7 +748,7 @@ func TestCAHandler_HandleList_NilCertStore(t *testing.T) {
 func TestCAHandler_HandleRevoke_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// First issue a certificate
 	cert := generateTestCertificate("test.example.com", false, ca.intermCert, ca.privateKey)
@@ -784,7 +783,7 @@ func TestCAHandler_HandleRevoke_Success(t *testing.T) {
 func TestCAHandler_HandleRevoke_WithDeleteKeys(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// First issue a certificate
 	cert := generateTestCertificate("test.example.com", false, ca.intermCert, ca.privateKey)
@@ -812,7 +811,7 @@ func TestCAHandler_HandleRevoke_WithDeleteKeys(t *testing.T) {
 func TestCAHandler_HandleRevoke_MissingSerial(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	revokeReq := &CARevokeRequest{
 		Serial: "",
@@ -834,7 +833,7 @@ func TestCAHandler_HandleRevoke_MissingSerial(t *testing.T) {
 func TestCAHandler_HandleRevoke_InvalidPayload(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  OpCARevoke,
@@ -849,7 +848,7 @@ func TestCAHandler_HandleRevoke_InvalidPayload(t *testing.T) {
 func TestCAHandler_HandleRevoke_NotFound(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	revokeReq := &CARevokeRequest{
 		Serial:     "nonexistent-serial",
@@ -874,7 +873,7 @@ func TestCAHandler_HandleRevoke_NilCertStore(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
 	ca.certStore = nil
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	revokeReq := &CARevokeRequest{
 		Serial: "12345",
@@ -897,7 +896,7 @@ func TestCAHandler_HandleRevoke_NilCertStore(t *testing.T) {
 func TestCAHandler_HandleRenew_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// First issue a certificate
 	cert := generateTestCertificate("test.example.com", false, ca.intermCert, ca.privateKey)
@@ -931,7 +930,7 @@ func TestCAHandler_HandleRenew_Success(t *testing.T) {
 func TestCAHandler_HandleRenew_InvalidExtendDays(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	renewReq := &CARenewRequest{
 		Serial:     "12345",
@@ -955,7 +954,7 @@ func TestCAHandler_HandleRenew_InvalidExtendDays(t *testing.T) {
 func TestCAHandler_HandleRenew_InvalidPayload(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  OpCARenew,
@@ -970,7 +969,7 @@ func TestCAHandler_HandleRenew_InvalidPayload(t *testing.T) {
 func TestCAHandler_HandleRenew_MissingSerial(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	renewReq := &CARenewRequest{
 		Serial:     "",
@@ -994,7 +993,7 @@ func TestCAHandler_HandleRenew_MissingSerial(t *testing.T) {
 func TestCAHandler_HandleRenew_NotFound(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	renewReq := &CARenewRequest{
 		Serial:     "nonexistent-serial",
@@ -1018,7 +1017,7 @@ func TestCAHandler_HandleRenew_NilCertStore(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
 	ca.certStore = nil
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	renewReq := &CARenewRequest{
 		Serial:     "12345",
@@ -1041,7 +1040,7 @@ func TestCAHandler_HandleRenew_NilCertStore(t *testing.T) {
 func TestCAHandler_HandleRenew_WithSANs(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Create a certificate with SANs
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -1086,7 +1085,7 @@ func TestCAHandler_HandleRenew_WithSANs(t *testing.T) {
 func TestCAHandler_HandleVerify_ValidCertificate(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Create a certificate signed by the CA's root
 	cert := generateTestCertificate("test.example.com", false, ca.rootCert, ca.privateKey)
@@ -1119,7 +1118,7 @@ func TestCAHandler_HandleVerify_ValidCertificate(t *testing.T) {
 func TestCAHandler_HandleVerify_MissingCertificate(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	verifyReq := &CAVerifyRequest{}
 
@@ -1140,7 +1139,7 @@ func TestCAHandler_HandleVerify_MissingCertificate(t *testing.T) {
 func TestCAHandler_HandleVerify_InvalidPayload(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  OpCAVerify,
@@ -1155,7 +1154,7 @@ func TestCAHandler_HandleVerify_InvalidPayload(t *testing.T) {
 func TestCAHandler_HandleVerify_WithDER(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Create a certificate
 	cert := generateTestCertificate("test.example.com", false, ca.rootCert, ca.privateKey)
@@ -1181,7 +1180,7 @@ func TestCAHandler_HandleVerify_WithDER(t *testing.T) {
 func TestCAHandler_HandleVerify_WithPEM(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Create a certificate
 	cert := generateTestCertificate("test.example.com", false, ca.rootCert, ca.privateKey)
@@ -1212,7 +1211,7 @@ func TestCAHandler_HandleVerify_WithPEM(t *testing.T) {
 func TestCAHandler_HandleVerify_InvalidDER(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	verifyReq := &CAVerifyRequest{
 		CertificateDer: []byte("invalid der data"),
@@ -1234,7 +1233,7 @@ func TestCAHandler_HandleVerify_InvalidDER(t *testing.T) {
 func TestCAHandler_HandleVerify_ExpiredCertificate(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Create an expired certificate
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -1276,7 +1275,7 @@ func TestCAHandler_HandleVerify_ExpiredCertificate(t *testing.T) {
 func TestCAHandler_HandleVerify_NotYetValidCertificate(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Create a not-yet-valid certificate
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -1311,7 +1310,7 @@ func TestCAHandler_HandleVerify_NotYetValidCertificate(t *testing.T) {
 func TestCAHandler_HandleCRL_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  OpCACRL,
@@ -1332,7 +1331,7 @@ func TestCAHandler_HandleCRL_Success(t *testing.T) {
 
 func TestCAHandler_HandleCRL_CANotInitialized(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewCAHandler(logger, nil)
+	handler := NewCAHandler(logger, nil, nil)
 
 	req := &Request{
 		Opcode:  OpCACRL,
@@ -1349,7 +1348,7 @@ func TestCAHandler_HandleCRL_NotSupported(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
 	ca.generateCRL = false
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  OpCACRL,
@@ -1365,7 +1364,7 @@ func TestCAHandler_HandleCRL_NotSupported(t *testing.T) {
 func TestCAHandler_HandleBundle_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	bundleReq := &CABundleRequest{}
 
@@ -1392,7 +1391,7 @@ func TestCAHandler_HandleBundle_Success(t *testing.T) {
 func TestCAHandler_HandleBundle_InvalidPayload(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  OpCABundle,
@@ -1406,7 +1405,7 @@ func TestCAHandler_HandleBundle_InvalidPayload(t *testing.T) {
 
 func TestCAHandler_HandleBundle_CANotInitialized(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewCAHandler(logger, nil)
+	handler := NewCAHandler(logger, nil, nil)
 
 	bundleReq := &CABundleRequest{}
 	payload, _ := EncodePayload(bundleReq)
@@ -1424,7 +1423,7 @@ func TestCAHandler_HandleBundle_CANotInitialized(t *testing.T) {
 func TestCAHandler_HandleBundle_WithStoreType(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	bundleReq := &CABundleRequest{
 		StoreType: "PKCS11",
@@ -1453,7 +1452,7 @@ func TestCAHandler_HandleBundle_WithStoreType(t *testing.T) {
 func TestCAHandler_HandleBundle_InvalidAlgorithm(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	bundleReq := &CABundleRequest{
 		Algorithm: "INVALID_ALG",
@@ -1947,7 +1946,7 @@ func TestCAOperationConstants(t *testing.T) {
 func TestCAHandler_HandleGet_RootCertBySerial(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Get the root certificate by its serial (encoded as hex)
 	rootSerial := ca.rootCert.SerialNumber.Bytes()
@@ -1982,7 +1981,7 @@ func TestCAHandler_HandleGet_RootCertBySerial(t *testing.T) {
 func TestCAHandler_HandleGet_IntermediateCertBySerial(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Get the intermediate certificate by its serial (encoded as hex)
 	intermSerial := ca.intermCert.SerialNumber.Bytes()
@@ -2016,7 +2015,7 @@ func TestCAHandler_HandleGet_IntermediateCertBySerial(t *testing.T) {
 
 func TestCAHandler_HandleGet_CANotInitialized(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewCAHandler(logger, nil)
+	handler := NewCAHandler(logger, nil, nil)
 
 	getReq := &CAGetRequest{
 		Serial: "12345",
@@ -2038,7 +2037,7 @@ func TestCAHandler_HandleGet_CANotInitialized(t *testing.T) {
 
 func TestCAHandler_HandleList_CANotInitialized(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewCAHandler(logger, nil)
+	handler := NewCAHandler(logger, nil, nil)
 
 	listReq := &CAListRequest{
 		Limit: 10,
@@ -2059,7 +2058,7 @@ func TestCAHandler_HandleList_CANotInitialized(t *testing.T) {
 
 func TestCAHandler_HandleRevoke_CANotInitialized(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewCAHandler(logger, nil)
+	handler := NewCAHandler(logger, nil, nil)
 
 	revokeReq := &CARevokeRequest{
 		Serial: "12345",
@@ -2081,7 +2080,7 @@ func TestCAHandler_HandleRevoke_CANotInitialized(t *testing.T) {
 
 func TestCAHandler_HandleRenew_CANotInitialized(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewCAHandler(logger, nil)
+	handler := NewCAHandler(logger, nil, nil)
 
 	renewReq := &CARenewRequest{
 		Serial:     "12345",
@@ -2103,7 +2102,7 @@ func TestCAHandler_HandleRenew_CANotInitialized(t *testing.T) {
 
 func TestCAHandler_HandleVerify_CANotInitialized(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewCAHandler(logger, nil)
+	handler := NewCAHandler(logger, nil, nil)
 
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	cert := generateTestCertificate("test.example.com", false, nil, key)
@@ -2127,7 +2126,7 @@ func TestCAHandler_HandleVerify_CANotInitialized(t *testing.T) {
 
 func TestCAHandler_HandleIssue_CANotInitialized(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewCAHandler(logger, nil)
+	handler := NewCAHandler(logger, nil, nil)
 
 	issueReq := &CAIssueRequest{
 		Subject: &Subject{
@@ -2152,7 +2151,7 @@ func TestCAHandler_HandleIssue_CANotInitialized(t *testing.T) {
 func TestCAHandler_HandleList_WithPagination(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Issue a few more certificates to test pagination
 	for i := 0; i < 3; i++ {
@@ -2186,7 +2185,7 @@ func TestCAHandler_HandleList_WithPagination(t *testing.T) {
 func TestCAHandler_HandleVerify_WithInvalidPEM(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	verifyReq := &CAVerifyRequest{
 		CertificatePem: "not a valid PEM",
@@ -2208,7 +2207,7 @@ func TestCAHandler_HandleVerify_WithInvalidPEM(t *testing.T) {
 func TestCAHandler_HandleRenew_NegativeExtendDays(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	renewReq := &CARenewRequest{
 		Serial:     "12345",
@@ -2242,7 +2241,7 @@ func TestCAHandler_HandleInfo_WithNilRoot(t *testing.T) {
 	logger := logging.DefaultLogger()
 	baseCa := newMockCA()
 	ca := &mockCAWithNilRoot{mockCA: baseCa}
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  OpCAInfo,
@@ -2273,7 +2272,7 @@ func TestCAHandler_HandleInfo_WithNilIntermediate(t *testing.T) {
 	logger := logging.DefaultLogger()
 	baseCa := newMockCA()
 	ca := &mockCAWithNilIntermediate{mockCA: baseCa}
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  OpCAInfo,
@@ -2301,7 +2300,7 @@ func TestCAHandler_HandleGet_WithNilCertStore(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
 	ca.certStore = nil
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	getReq := &CAGetRequest{
 		Serial:     "nonexistent",
@@ -2325,7 +2324,7 @@ func TestCAHandler_HandleGet_WithNilCertStore(t *testing.T) {
 func TestCAHandler_HandleIssue_DefaultStoreType(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	issueReq := &CAIssueRequest{
 		Subject: &Subject{
@@ -2352,7 +2351,7 @@ func TestCAHandler_HandleList_WithoutIntermediateCert(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
 	ca.intermCert = nil
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	listReq := &CAListRequest{
 		Limit: 10,
@@ -2382,7 +2381,7 @@ func TestCAHandler_HandleList_WithoutRootCert(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
 	ca.rootCert = nil
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	listReq := &CAListRequest{
 		Limit: 10,
@@ -2434,7 +2433,7 @@ func TestCAHandler_HandleIssue_AllAlgorithms(t *testing.T) {
 	for _, alg := range algorithms {
 		t.Run(alg, func(t *testing.T) {
 			ca := newMockCA()
-			handler := NewCAHandler(logger, ca)
+			handler := NewCAHandler(logger, ca, nil)
 
 			issueReq := &CAIssueRequest{
 				Subject: &Subject{
@@ -2473,7 +2472,7 @@ func TestCAHandler_HandleBundle_AllAlgorithms(t *testing.T) {
 	for _, alg := range algorithms {
 		t.Run("alg_"+alg, func(t *testing.T) {
 			ca := newMockCA()
-			handler := NewCAHandler(logger, ca)
+			handler := NewCAHandler(logger, ca, nil)
 
 			bundleReq := &CABundleRequest{
 				Algorithm: alg,
@@ -2509,7 +2508,7 @@ func TestCAHandler_HandleBundle_AllStoreTypes(t *testing.T) {
 	for _, st := range storeTypes {
 		t.Run("store_"+st, func(t *testing.T) {
 			ca := newMockCA()
-			handler := NewCAHandler(logger, ca)
+			handler := NewCAHandler(logger, ca, nil)
 
 			bundleReq := &CABundleRequest{
 				StoreType: st,
@@ -2534,7 +2533,7 @@ func TestCAHandler_HandleBundle_AllStoreTypes(t *testing.T) {
 func TestCAHandler_HandleIssue_CAFlag(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	issueReq := &CAIssueRequest{
 		Subject: &Subject{
@@ -2562,7 +2561,7 @@ func TestCAHandler_HandleIssue_CAFlag(t *testing.T) {
 func TestCAHandler_HandleVerify_ValidChain(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Create a self-signed certificate that chains to the root
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -2660,15 +2659,15 @@ func (m *mockCANoCRL) Signer() (crypto.Signer, error) { return m, nil }
 func (m *mockCANoCRL) CASigner(_ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
 	return m, nil
 }
-func (m *mockCANoCRL) IssueCertificate(req *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
+func (m *mockCANoCRL) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	cert := generateTestCertificate(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
 	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
 		m.certStore.StoreCertificate(cert)
 	}
-	return &pkgca.IssuedCertificate{Certificate: cert}, nil
+	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 }
-func (m *mockCANoCRL) RevokeCert(cert *x509.Certificate, _ pkgca.RevokeOptions) error {
+func (m *mockCANoCRL) RevokeCert(cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	m.revokedCerts = append(m.revokedCerts, cert)
 	return nil
 }
@@ -2693,7 +2692,7 @@ func (m *mockCANoCRL) GenerateCRL() ([]byte, error) {
 func TestCAHandler_HandleCRL_InterfaceNotImplemented(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCANoCRL()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  OpCACRL,
@@ -2711,7 +2710,7 @@ type mockCAIssueFails struct {
 	*mockCA
 }
 
-func (m *mockCAIssueFails) IssueCertificate(req *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
+func (m *mockCAIssueFails) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	return nil, errors.New("certificate issuance failed")
 }
 
@@ -2719,7 +2718,7 @@ func TestCAHandler_HandleIssue_IssueFails(t *testing.T) {
 	logger := logging.DefaultLogger()
 	baseCa := newMockCA()
 	ca := &mockCAIssueFails{mockCA: baseCa}
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	issueReq := &CAIssueRequest{
 		Subject: &Subject{
@@ -2747,7 +2746,7 @@ type mockCARevokeFails struct {
 	*mockCA
 }
 
-func (m *mockCARevokeFails) RevokeCert(cert *x509.Certificate, _ pkgca.RevokeOptions) error {
+func (m *mockCARevokeFails) RevokeCert(cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	return errors.New("revocation failed")
 }
 
@@ -2755,7 +2754,7 @@ func TestCAHandler_HandleRevoke_RevokeFails(t *testing.T) {
 	logger := logging.DefaultLogger()
 	baseCa := newMockCA()
 	ca := &mockCARevokeFails{mockCA: baseCa}
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// First issue a certificate
 	cert := generateTestCertificate("test.example.com", false, baseCa.intermCert, baseCa.privateKey)
@@ -2786,7 +2785,7 @@ type mockCARenewFails struct {
 	shouldFail bool
 }
 
-func (m *mockCARenewFails) IssueCertificate(req *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
+func (m *mockCARenewFails) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	if m.shouldFail {
 		return nil, errors.New("renewal failed")
 	}
@@ -2795,14 +2794,14 @@ func (m *mockCARenewFails) IssueCertificate(req *goca.CACertificateRequest) (*pk
 	if m.certStore != nil {
 		m.certStore.StoreCertificate(cert)
 	}
-	return &pkgca.IssuedCertificate{Certificate: cert}, nil
+	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 }
 
 func TestCAHandler_HandleRenew_RenewFails(t *testing.T) {
 	logger := logging.DefaultLogger()
 	baseCa := newMockCA()
 	ca := &mockCARenewFails{mockCA: baseCa, shouldFail: false}
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// First issue a certificate (shouldFail is false)
 	cert := generateTestCertificate("test.example.com", false, baseCa.intermCert, baseCa.privateKey)
@@ -2846,7 +2845,7 @@ func TestCAHandler_HandleBundle_EmptyBundle(t *testing.T) {
 	logger := logging.DefaultLogger()
 	baseCa := newMockCA()
 	ca := &mockCAEmptyBundle{mockCA: baseCa}
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	bundleReq := &CABundleRequest{}
 
@@ -2880,7 +2879,7 @@ func TestCAHandler_HandleBundle_BundleFails(t *testing.T) {
 	logger := logging.DefaultLogger()
 	baseCa := newMockCA()
 	ca := &mockCABundleFails{mockCA: baseCa}
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	bundleReq := &CABundleRequest{}
 
@@ -2902,7 +2901,7 @@ func TestCAHandler_HandleBundle_BundleFails(t *testing.T) {
 func TestCAHandler_HandleList_LimitTriggersSlicing(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Issue many certificates to exceed limit
 	for i := 0; i < 10; i++ {
@@ -2943,7 +2942,7 @@ func TestCAHandler_HandleList_LimitTriggersSlicing(t *testing.T) {
 func TestCAHandler_HandleCRL_WithRevokedCerts(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Add some revoked certificates to the CRL by revoking them first
 	cert := generateTestCertificate("revoked.example.com", false, ca.intermCert, ca.privateKey)
@@ -2995,7 +2994,7 @@ func TestCAHandler_HandleCRL_WithRevokedEntries(t *testing.T) {
 	logger := logging.DefaultLogger()
 	baseCa := newMockCA()
 	ca := &mockCAWithRevokedCRL{mockCA: baseCa}
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  OpCACRL,
@@ -3020,7 +3019,7 @@ func TestCAHandler_HandleCRL_WithRevokedEntries(t *testing.T) {
 func TestCAHandler_HandleGet_RootCertSuccess(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Get the root certificate by its serial
 	rootSerial := hex.EncodeToString(ca.rootCert.SerialNumber.Bytes())
@@ -3053,7 +3052,7 @@ func TestCAHandler_HandleGet_RootCertSuccess(t *testing.T) {
 func TestCAHandler_HandleGet_IntermediateCertSuccess(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Get the intermediate certificate by its serial
 	intermSerial := hex.EncodeToString(ca.intermCert.SerialNumber.Bytes())
@@ -3087,7 +3086,7 @@ func TestCAHandler_HandleGet_IntermediateCertSuccess(t *testing.T) {
 func TestCAHandler_HandleGet_FromCertStore(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Issue a certificate and store it
 	cert := generateTestCertificate("stored.example.com", false, ca.intermCert, ca.privateKey)
@@ -3121,7 +3120,7 @@ func TestCAHandler_HandleGet_FromCertStore(t *testing.T) {
 func TestCAHandler_HandleVerify_ExpiredReturnsValidResponse(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Create a certificate signed by the root but expired
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -3166,7 +3165,7 @@ func TestCAHandler_HandleVerify_ExpiredReturnsValidResponse(t *testing.T) {
 func TestCAHandler_HandleVerify_NotYetValidReturnsValidResponse(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	// Create a certificate signed by the root but not yet valid
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -3208,7 +3207,7 @@ func TestCAHandler_HandleVerify_NotYetValidReturnsValidResponse(t *testing.T) {
 // Test handleCRL with service unavailable
 func TestCAHandler_HandleCRL_ServiceUnavailable(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewCAHandler(logger, nil)
+	handler := NewCAHandler(logger, nil, nil)
 
 	crlReq := &CACRLRequest{}
 
@@ -3229,7 +3228,7 @@ func TestCAHandler_HandleCRL_ServiceUnavailable(t *testing.T) {
 func TestCAHandler_HandleCRL_GenerateError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := &mockCAGenerateCRLFails{mockCA: newMockCA()}
-	handler := NewCAHandler(logger, ca)
+	handler := NewCAHandler(logger, ca, nil)
 
 	req := &Request{
 		Opcode:  OpCACRL,

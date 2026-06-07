@@ -46,7 +46,7 @@ export default function DeviceDetailPage() {
       const response = await deviceService.getDevice(deviceId as any);
 
       if (response.data) {
-        setDevice(response.data as any);
+        setDevice(normalizeDevice(response.data));
       } else {
         throw new Error('Failed to fetch device');
       }
@@ -60,6 +60,63 @@ export default function DeviceDetailPage() {
       setIsLoading(false);
     }
   };
+
+  // normalizeDevice reshapes the raw SDK/REST device payload into the
+  // DeviceDetail shape this page expects. The REST API returns
+  // snake_case fields (`attest_pub`, `ek_cert`, `created_at`) and the
+  // SDK does not yet transform them, so we have to accept both forms.
+  // The list page does the same transform — keep them in sync.
+  function normalizeDevice(raw: any): DeviceDetail {
+    const attestPub = raw.attestPub || raw.attest_pub;
+    const ekCert = raw.ekCert || raw.ek_cert;
+    const eventLog = raw.eventLog || raw.event_log;
+    const signingPub = raw.signingPub || raw.signing_pub;
+    const createdAt = raw.createdAt || raw.created_at;
+    const updatedAt = raw.updatedAt || raw.updated_at;
+    const serial: string | undefined = raw.serial || undefined;
+    const model: string | undefined = raw.model || undefined;
+    return {
+      id: String(raw.id),
+      // Use the hostname-derived serial as the user-visible name. Falls
+      // back to model only when no serial was supplied (manual UI
+      // registration where serial is optional).
+      name: serial || model || 'Unknown',
+      // Devices enrolled via ACME enroll-01 are hardware nodes with a
+      // real TPM. The Device entity doesn't yet carry a separate
+      // physical/virtual type flag, so default to physical to match
+      // the list-page transformer.
+      type: 'physical',
+      model,
+      serial,
+      status: 'online',
+      lastSeen: updatedAt || undefined,
+      registeredAt: createdAt || new Date().toISOString(),
+      tpm: attestPub ? {
+        manufacturer: model || 'Unknown',
+        version: '2.0',
+        firmwareVersion: '1.0',
+        hasEK: !!ekCert,
+        hasSRK: false,
+      } : undefined,
+      endorsementKey: ekCert ? {
+        id: `${raw.id}-ek`,
+        keyType: 'RSA',
+        publicKey: ekCert,
+        createdAt: createdAt || new Date().toISOString(),
+      } : undefined,
+      // Attestation history + per-device certificate list are populated
+      // by separate endpoints (not yet wired into the WebUI), so leave
+      // empty rather than dropping invented rows in.
+      attestationHistory: [],
+      certificates: [],
+      // Carry through the raw enrollment blobs in case downstream
+      // components need them. Cast as any to widen DeviceDetail without
+      // touching its declared shape; the local type is permissive enough
+      // because the page already passes `device as any` in places.
+      ...(eventLog ? { eventLog } : {}),
+      ...(signingPub ? { signingPub } : {}),
+    } as DeviceDetail;
+  }
 
   useEffect(() => {
     if (deviceId) {

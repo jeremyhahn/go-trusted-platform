@@ -55,24 +55,29 @@ MIIDYTCCAkmgAwIBAgIJAKB2...
 curl -o ca-bundle.pem https://server.example.com:8443/api/v1/ca/bootstrap
 ```
 
-With DNSSEC TLSA verification (go-truststrap handles this):
+With DNSSEC TLSA verification (the canonical `xkms/pkg/trust/bootstrap`
+dispatch composes `go-truststrap` internally; consumers reach it via the
+quicbaas SDK re-export):
 
 ```bash
-truststrap -strategy dane \
-  -server-url https://server.example.com:8443 \
-  -dns-server 8.8.8.8:53 \
-  -bundle-path /api/v1/ca/bootstrap
+# Embedded xkmsctl-side dispatcher
+xkmsctl bootstrap fetch \
+  --strategy dane \
+  --server-url https://server.example.com:8443 \
+  --dns-server 8.8.8.8:53 \
+  --bundle-path /api/v1/ca/bootstrap
 ```
 
 ### Fetch CA Bundle (SPKI)
 
-With SPKI pin verification (go-truststrap handles this):
+With SPKI pin verification (same canonical dispatch):
 
 ```bash
-truststrap -strategy spki \
-  -server-url https://server.example.com:8443 \
-  -spki-pin sha256/sMgbLWtKLKr4Yp8P2C3N5C8K2L1M9N7O6P5Q4R3S2T1U \
-  -bundle-path /api/v1/ca/bootstrap
+xkmsctl bootstrap fetch \
+  --strategy spki \
+  --server-url https://server.example.com:8443 \
+  --spki-pin sha256/sMgbLWtKLKr4Yp8P2C3N5C8K2L1M9N7O6P5Q4R3S2T1U \
+  --bundle-path /api/v1/ca/bootstrap
 ```
 
 ### Filter by Algorithm

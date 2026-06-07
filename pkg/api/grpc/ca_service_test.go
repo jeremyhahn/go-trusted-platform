@@ -31,11 +31,10 @@ import (
 	"testing"
 	"time"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	pkgca "github.com/jeremyhahn/go-xkms/pkg/ca"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -371,16 +370,16 @@ func (m *configurableMockCA) CABundleFiltered(_ xkmssdk.StoreType, _ x509.Public
 func (m *configurableMockCA) ParseBundle(_ []byte) ([]*x509.Certificate, error) {
 	return m.parsedBundle, nil
 }
-func (m *configurableMockCA) IssueCertificate(_ *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
+func (m *configurableMockCA) IssueCertificate(_ *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	if m.issueCertErr != nil {
 		return nil, m.issueCertErr
 	}
 	if m.issuedCert == nil {
 		return nil, nil
 	}
-	return &pkgca.IssuedCertificate{Certificate: m.issuedCert}, nil
+	return &xkmsca.IssuedCertificate{Certificate: m.issuedCert}, nil
 }
-func (m *configurableMockCA) RevokeCert(_ *x509.Certificate, _ pkgca.RevokeOptions) error {
+func (m *configurableMockCA) RevokeCert(_ *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	return m.revokeErr
 }
 func (m *configurableMockCA) CertStore() xkmssdk.CertStore { return m.certStore }
@@ -393,7 +392,7 @@ func TestNewCAGRPCService(t *testing.T) {
 	logger := createTestLogger()
 	mockCA := &configurableMockCA{}
 
-	service := NewCAGRPCService(logger, mockCA)
+	service := NewCAGRPCService(logger, mockCA, nil)
 
 	if service == nil {
 		t.Fatal("expected non-nil service")
@@ -404,7 +403,7 @@ func TestGetCAInfo_NilCA(t *testing.T) {
 	t.Parallel()
 
 	logger := createTestLogger()
-	service := NewCAGRPCService(logger, nil)
+	service := NewCAGRPCService(logger, nil, nil)
 	ctx := context.Background()
 
 	_, err := service.GetCAInfo(ctx, &platformv1.GetCAInfoRequest{})
@@ -427,7 +426,7 @@ func TestGetCAInfo_Success(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.GetCAInfo(ctx, &platformv1.GetCAInfoRequest{})
@@ -459,7 +458,7 @@ func TestGetCAInfo_NotInitialized(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.GetCAInfo(ctx, &platformv1.GetCAInfoRequest{})
@@ -475,7 +474,7 @@ func TestIssueCertificate_NilCA(t *testing.T) {
 	t.Parallel()
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, nil)
+	svc := NewCAGRPCService(logger, nil, nil)
 	ctx := context.Background()
 
 	_, err := svc.IssueCertificate(ctx, &platformv1.IssueCertificateRequest{})
@@ -487,7 +486,7 @@ func TestIssueCertificate_MissingRequest(t *testing.T) {
 
 	mockCA := &configurableMockCA{}
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	_, err := svc.IssueCertificate(ctx, &platformv1.IssueCertificateRequest{})
@@ -499,7 +498,7 @@ func TestIssueCertificate_MissingSubject(t *testing.T) {
 
 	mockCA := &configurableMockCA{}
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	_, err := svc.IssueCertificate(ctx, &platformv1.IssueCertificateRequest{
@@ -513,7 +512,7 @@ func TestIssueCertificate_MissingCommonName(t *testing.T) {
 
 	mockCA := &configurableMockCA{}
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	_, err := svc.IssueCertificate(ctx, &platformv1.IssueCertificateRequest{
@@ -535,7 +534,7 @@ func TestIssueCertificate_Success(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.IssueCertificate(ctx, &platformv1.IssueCertificateRequest{
@@ -576,7 +575,7 @@ func TestIssueCertificate_Error(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	_, err := svc.IssueCertificate(ctx, &platformv1.IssueCertificateRequest{
@@ -593,7 +592,7 @@ func TestGetCertificate_NilCA(t *testing.T) {
 	t.Parallel()
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, nil)
+	svc := NewCAGRPCService(logger, nil, nil)
 	ctx := context.Background()
 
 	_, err := svc.GetCertificate(ctx, &platformv1.GetCertificateRequest{Serial: "test"})
@@ -605,7 +604,7 @@ func TestGetCertificate_MissingSerial(t *testing.T) {
 
 	mockCA := &configurableMockCA{}
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	_, err := svc.GetCertificate(ctx, &platformv1.GetCertificateRequest{})
@@ -623,7 +622,7 @@ func TestGetCertificate_FromRoot(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.GetCertificate(ctx, &platformv1.GetCertificateRequest{
@@ -658,7 +657,7 @@ func TestGetCertificate_FromIntermediate(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.GetCertificate(ctx, &platformv1.GetCertificateRequest{
@@ -688,7 +687,7 @@ func TestGetCertificate_FromCertStore(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.GetCertificate(ctx, &platformv1.GetCertificateRequest{
@@ -708,7 +707,7 @@ func TestGetCertificate_NotFound(t *testing.T) {
 
 	mockCA := &configurableMockCA{}
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	_, err := svc.GetCertificate(ctx, &platformv1.GetCertificateRequest{
@@ -721,7 +720,7 @@ func TestListCertificates_NilCA(t *testing.T) {
 	t.Parallel()
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, nil)
+	svc := NewCAGRPCService(logger, nil, nil)
 	ctx := context.Background()
 
 	_, err := svc.ListCertificates(ctx, &platformv1.ListCertificatesRequest{})
@@ -744,7 +743,7 @@ func TestListCertificates_Success(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.ListCertificates(ctx, &platformv1.ListCertificatesRequest{
@@ -775,7 +774,7 @@ func TestListCertificates_WithFilters(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.ListCertificates(ctx, &platformv1.ListCertificatesRequest{
@@ -795,7 +794,7 @@ func TestListCertificates_PaginationBeyondTotal(t *testing.T) {
 
 	mockCA := &configurableMockCA{}
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.ListCertificates(ctx, &platformv1.ListCertificatesRequest{
@@ -818,7 +817,7 @@ func TestListCertificates_MaxPageSize(t *testing.T) {
 
 	mockCA := &configurableMockCA{}
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.ListCertificates(ctx, &platformv1.ListCertificatesRequest{
@@ -840,7 +839,7 @@ func TestRevokeCertificate_NilCA(t *testing.T) {
 	t.Parallel()
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, nil)
+	svc := NewCAGRPCService(logger, nil, nil)
 	ctx := context.Background()
 
 	_, err := svc.RevokeCertificate(ctx, &platformv1.RevokeCertificateRequest{Serial: "test"})
@@ -852,7 +851,7 @@ func TestRevokeCertificate_MissingSerial(t *testing.T) {
 
 	mockCA := &configurableMockCA{}
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	_, err := svc.RevokeCertificate(ctx, &platformv1.RevokeCertificateRequest{})
@@ -864,7 +863,7 @@ func TestRevokeCertificate_NotFound(t *testing.T) {
 
 	mockCA := &configurableMockCA{}
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	_, err := svc.RevokeCertificate(ctx, &platformv1.RevokeCertificateRequest{
@@ -888,7 +887,7 @@ func TestRevokeCertificate_Success(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.RevokeCertificate(ctx, &platformv1.RevokeCertificateRequest{
@@ -924,7 +923,7 @@ func TestRevokeCertificate_Error(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	_, err := svc.RevokeCertificate(ctx, &platformv1.RevokeCertificateRequest{
@@ -937,7 +936,7 @@ func TestRenewCertificate_NilCA(t *testing.T) {
 	t.Parallel()
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, nil)
+	svc := NewCAGRPCService(logger, nil, nil)
 	ctx := context.Background()
 
 	_, err := svc.RenewCertificate(ctx, &platformv1.RenewCertificateRequest{Serial: "test", ValidDays: 365})
@@ -949,7 +948,7 @@ func TestRenewCertificate_MissingSerial(t *testing.T) {
 
 	mockCA := &configurableMockCA{}
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	_, err := svc.RenewCertificate(ctx, &platformv1.RenewCertificateRequest{ValidDays: 365})
@@ -961,7 +960,7 @@ func TestRenewCertificate_MissingValidDays(t *testing.T) {
 
 	mockCA := &configurableMockCA{}
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	_, err := svc.RenewCertificate(ctx, &platformv1.RenewCertificateRequest{Serial: "test"})
@@ -973,7 +972,7 @@ func TestRenewCertificate_NotFound(t *testing.T) {
 
 	mockCA := &configurableMockCA{}
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	_, err := svc.RenewCertificate(ctx, &platformv1.RenewCertificateRequest{
@@ -1000,7 +999,7 @@ func TestRenewCertificate_Success(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.RenewCertificate(ctx, &platformv1.RenewCertificateRequest{
@@ -1040,7 +1039,7 @@ func TestRenewCertificate_WithNewSans(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.RenewCertificate(ctx, &platformv1.RenewCertificateRequest{
@@ -1076,7 +1075,7 @@ func TestRenewCertificate_Error(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	_, err := svc.RenewCertificate(ctx, &platformv1.RenewCertificateRequest{
@@ -1090,7 +1089,7 @@ func TestVerifyCertificate_NilCA(t *testing.T) {
 	t.Parallel()
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, nil)
+	svc := NewCAGRPCService(logger, nil, nil)
 	ctx := context.Background()
 
 	_, err := svc.VerifyCertificate(ctx, &platformv1.VerifyCertificateRequest{CertificatePem: []byte("test")})
@@ -1102,7 +1101,7 @@ func TestVerifyCertificate_MissingCertificate(t *testing.T) {
 
 	mockCA := &configurableMockCA{}
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	_, err := svc.VerifyCertificate(ctx, &platformv1.VerifyCertificateRequest{})
@@ -1114,7 +1113,7 @@ func TestVerifyCertificate_InvalidPEM(t *testing.T) {
 
 	mockCA := &configurableMockCA{}
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.VerifyCertificate(ctx, &platformv1.VerifyCertificateRequest{
@@ -1137,7 +1136,7 @@ func TestVerifyCertificate_InvalidDER(t *testing.T) {
 
 	mockCA := &configurableMockCA{}
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.VerifyCertificate(ctx, &platformv1.VerifyCertificateRequest{
@@ -1168,7 +1167,7 @@ func TestVerifyCertificate_ValidWithPEM(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.VerifyCertificate(ctx, &platformv1.VerifyCertificateRequest{
@@ -1195,7 +1194,7 @@ func TestVerifyCertificate_ValidWithDER(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.VerifyCertificate(ctx, &platformv1.VerifyCertificateRequest{
@@ -1226,7 +1225,7 @@ func TestVerifyCertificate_Expired(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.VerifyCertificate(ctx, &platformv1.VerifyCertificateRequest{
@@ -1258,7 +1257,7 @@ func TestVerifyCertificate_NotYetValid(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.VerifyCertificate(ctx, &platformv1.VerifyCertificateRequest{
@@ -1288,7 +1287,7 @@ func TestVerifyCertificate_WithTrustedRoots(t *testing.T) {
 	mockCA := &configurableMockCA{}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.VerifyCertificate(ctx, &platformv1.VerifyCertificateRequest{
@@ -1308,7 +1307,7 @@ func TestGetCRL_NilCA(t *testing.T) {
 	t.Parallel()
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, nil)
+	svc := NewCAGRPCService(logger, nil, nil)
 	ctx := context.Background()
 
 	_, err := svc.GetCRL(ctx, &platformv1.GetCRLRequest{})
@@ -1320,7 +1319,7 @@ func TestGetCRL_NoCRLSupport(t *testing.T) {
 
 	mockCA := &configurableMockCA{}
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.GetCRL(ctx, &platformv1.GetCRLRequest{})
@@ -1339,7 +1338,7 @@ func TestGetCABundle_NilCA(t *testing.T) {
 	t.Parallel()
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, nil)
+	svc := NewCAGRPCService(logger, nil, nil)
 	ctx := context.Background()
 
 	_, err := svc.GetCABundle(ctx, &platformv1.GetCABundleRequest{})
@@ -1354,7 +1353,7 @@ func TestGetCABundle_Error(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	_, err := svc.GetCABundle(ctx, &platformv1.GetCABundleRequest{})
@@ -1369,7 +1368,7 @@ func TestGetCABundle_Empty(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	_, err := svc.GetCABundle(ctx, &platformv1.GetCABundleRequest{})
@@ -1398,7 +1397,7 @@ func TestGetCABundle_Success(t *testing.T) {
 	}
 
 	logger := createTestLogger()
-	svc := NewCAGRPCService(logger, mockCA)
+	svc := NewCAGRPCService(logger, mockCA, nil)
 	ctx := context.Background()
 
 	resp, err := svc.GetCABundle(ctx, &platformv1.GetCABundleRequest{
@@ -1797,7 +1796,7 @@ func TestMatchesCertFilter(t *testing.T) {
 func TestCAGRPCService_parseKeyUsage_AllTypes(t *testing.T) {
 	logger := createTestLogger()
 	mockCA := &configurableMockCA{}
-	service := NewCAGRPCService(logger, mockCA)
+	service := NewCAGRPCService(logger, mockCA, nil)
 
 	tests := []struct {
 		input    []string
@@ -1827,7 +1826,7 @@ func TestCAGRPCService_parseKeyUsage_AllTypes(t *testing.T) {
 func TestCAGRPCService_parseExtKeyUsage_AllTypes(t *testing.T) {
 	logger := createTestLogger()
 	mockCA := &configurableMockCA{}
-	service := NewCAGRPCService(logger, mockCA)
+	service := NewCAGRPCService(logger, mockCA, nil)
 
 	tests := []struct {
 		input    []string
@@ -1861,7 +1860,7 @@ func TestCAGRPCService_parseExtKeyUsage_AllTypes(t *testing.T) {
 func TestCAGRPCService_keyUsageToStrings_AllTypes(t *testing.T) {
 	logger := createTestLogger()
 	mockCA := &configurableMockCA{}
-	service := NewCAGRPCService(logger, mockCA)
+	service := NewCAGRPCService(logger, mockCA, nil)
 
 	tests := []struct {
 		input    x509.KeyUsage
@@ -1896,7 +1895,7 @@ func TestCAGRPCService_keyUsageToStrings_AllTypes(t *testing.T) {
 func TestCAGRPCService_extKeyUsageToStrings_AllTypes(t *testing.T) {
 	logger := createTestLogger()
 	mockCA := &configurableMockCA{}
-	service := NewCAGRPCService(logger, mockCA)
+	service := NewCAGRPCService(logger, mockCA, nil)
 
 	tests := []struct {
 		input    []x509.ExtKeyUsage

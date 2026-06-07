@@ -5,14 +5,14 @@ import (
 	"errors"
 	"testing"
 
-	casdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // pq is a test helper to build a DAOPageQuery.
-func pq(page, pageSize int) casdk.DAOPageQuery {
-	return casdk.DAOPageQuery{Page: page, PageSize: pageSize}
+func pq(page, pageSize int) trustedca.DAOPageQuery {
+	return trustedca.DAOPageQuery{Page: page, PageSize: pageSize}
 }
 
 func TestNewFactory(t *testing.T) {
@@ -340,17 +340,17 @@ func TestEvaluateCondition(t *testing.T) {
 	entity := &verifyEntity{ID: 42}
 
 	t.Run("value match", func(t *testing.T) {
-		cond := casdk.DAOCondition{Target: casdk.DAOConditionValue, Value: entity}
+		cond := trustedca.DAOCondition{Target: trustedca.DAOConditionValue, Value: entity}
 		assert.True(t, evaluateCondition(entity, cond))
 	})
 
 	t.Run("value mismatch", func(t *testing.T) {
-		cond := casdk.DAOCondition{Target: casdk.DAOConditionValue, Value: &verifyEntity{ID: 99}}
+		cond := trustedca.DAOCondition{Target: trustedca.DAOConditionValue, Value: &verifyEntity{ID: 99}}
 		assert.False(t, evaluateCondition(entity, cond))
 	})
 
 	t.Run("unknown target returns true", func(t *testing.T) {
-		cond := casdk.DAOCondition{Target: 999}
+		cond := trustedca.DAOCondition{Target: 999}
 		assert.True(t, evaluateCondition(entity, cond))
 	})
 }

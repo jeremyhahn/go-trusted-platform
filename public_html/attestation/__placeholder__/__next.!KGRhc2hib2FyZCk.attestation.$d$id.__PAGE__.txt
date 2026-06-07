@@ -2,6 +2,6 @@
 2:I[73585,["9060","static/chunks/9060-913201171cc3fbd2.js","3159","static/chunks/3159-b71b2f51258ae15e.js","6383","static/chunks/app/(dashboard)/attestation/%5Bid%5D/page-ba0ea3513aa2941e.js"],"default"]
 4:I[90484,[],"OutletBoundary"]
 5:"$Sreact.suspense"
-0:{"rsc":["$","$1","c",{"children":[["$","$L2",null,{"params":"$@3"}],null,["$","$L4",null,{"children":["$","$5",null,{"name":"Next.MetadataOutlet","children":"$@6"}]}]]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"RZtoPOI1BZHNI8jYk4dB0"}
+0:{"rsc":["$","$1","c",{"children":[["$","$L2",null,{"params":"$@3"}],null,["$","$L4",null,{"children":["$","$5",null,{"name":"Next.MetadataOutlet","children":"$@6"}]}]]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"QHTHLfjPmE-uzIJZMBSTz"}
 3:{"id":"__placeholder__"}
 6:null

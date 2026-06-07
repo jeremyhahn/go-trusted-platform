@@ -16,10 +16,16 @@ package commands
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
 	"testing"
 
 	apidaemon "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 // =============================================================================
@@ -252,4 +258,207 @@ func TestDefaultBarrierGateConfig(t *testing.T) {
 	if cfg.pollEvery <= 0 {
 		t.Error("pollEvery default must be positive")
 	}
+}
+
+// =============================================================================
+// defaultBarrierGateHTTPAddr / port assignment
+// =============================================================================
+
+// TestDefaultBarrierGateHTTPAddr_Is9446 pins the gate's default loopback
+// bind address to 127.0.0.1:9446. The previous value (9445) collided with
+// the production MCP listener; regressing to 9445 would cause the gate
+// to fight MCP for the same port at boot.
+func TestDefaultBarrierGateHTTPAddr_Is9446(t *testing.T) {
+	if defaultBarrierGateHTTPAddr != "127.0.0.1:9446" {
+		t.Errorf("defaultBarrierGateHTTPAddr = %q, want %q (must not collide with MCP on :9445)",
+			defaultBarrierGateHTTPAddr, "127.0.0.1:9446")
+	}
+	if defaultBarrierGateConfig().httpAddr != "127.0.0.1:9446" {
+		t.Errorf("defaultBarrierGateConfig().httpAddr = %q, want %q",
+			defaultBarrierGateConfig().httpAddr, "127.0.0.1:9446")
+	}
+}
+
+// =============================================================================
+// invokeBarrierGate / initOnlyGate hook
+// =============================================================================
+
+// fakeInitOnlyGate records each invocation of the M6 gate so tests can
+// assert that runWithWebservices and runDaemonOnly both reach the gate.
+// The recorded gate config lets us verify that the CLI socket path is
+// threaded through to the listener.
+type fakeInitOnlyGate struct {
+	called    int
+	lastApp   *app.App
+	lastCfg   barrierGateConfig
+	returnErr error
+}
+
+func (f *fakeInitOnlyGate) run(_ context.Context, a *app.App, _ *logging.Logger, cfg barrierGateConfig) error {
+	f.called++
+	f.lastApp = a
+	f.lastCfg = cfg
+	return f.returnErr
+}
+
+// withFakeGate swaps initOnlyGate for the duration of a test and restores
+// the production hook on cleanup. Tests use this to assert the gate is
+// invoked without standing up a real Unix socket / HTTP listener.
+func withFakeGate(t *testing.T, fake *fakeInitOnlyGate) {
+	t.Helper()
+	prev := initOnlyGate
+	initOnlyGate = fake.run
+	t.Cleanup(func() { initOnlyGate = prev })
+}
+
+// withSocketPath swaps the package-level serveSocketPath CLI flag for the
+// duration of a test and restores the prior value on cleanup. The gate
+// helper reads this variable to thread the operator-configured socket
+// path into the init-only listener.
+func withSocketPath(t *testing.T, path string) {
+	t.Helper()
+	prev := serveSocketPath
+	serveSocketPath = path
+	t.Cleanup(func() { serveSocketPath = prev })
+}
+
+// TestInvokeBarrierGate_DispatchesViaHook proves invokeBarrierGate routes
+// through the swappable initOnlyGate hook. This is the seam both
+// runWithWebservices and runDaemonOnly use to call the gate.
+func TestInvokeBarrierGate_DispatchesViaHook(t *testing.T) {
+	fake := &fakeInitOnlyGate{}
+	withFakeGate(t, fake)
+	withSocketPath(t, "/tmp/test-platformd.sock")
+
+	logger := logging.NewLogger(0, nil)
+	if err := invokeBarrierGate(context.Background(), nil, logger); err != nil {
+		t.Fatalf("invokeBarrierGate: unexpected error %v", err)
+	}
+	if fake.called != 1 {
+		t.Errorf("fake gate called %d times, want 1", fake.called)
+	}
+}
+
+// TestInvokeBarrierGate_ThreadsSocketPath confirms the operator-configured
+// --socket-path CLI value is threaded into the gate config. Without this,
+// the gate would bind /run/platformd.sock and the production daemon would
+// silently bind whatever the CLI specified, leaving local platformctl
+// pointed at the wrong socket during the unseal window.
+func TestInvokeBarrierGate_ThreadsSocketPath(t *testing.T) {
+	fake := &fakeInitOnlyGate{}
+	withFakeGate(t, fake)
+	withSocketPath(t, "/var/run/custom-platformd.sock")
+
+	logger := logging.NewLogger(0, nil)
+	if err := invokeBarrierGate(context.Background(), nil, logger); err != nil {
+		t.Fatalf("invokeBarrierGate: %v", err)
+	}
+	if fake.lastCfg.socketPath != "/var/run/custom-platformd.sock" {
+		t.Errorf("gate socketPath = %q, want %q",
+			fake.lastCfg.socketPath, "/var/run/custom-platformd.sock")
+	}
+	if fake.lastCfg.httpAddr != defaultBarrierGateHTTPAddr {
+		t.Errorf("gate httpAddr = %q, want default %q",
+			fake.lastCfg.httpAddr, defaultBarrierGateHTTPAddr)
+	}
+	if fake.lastCfg.pollEvery <= 0 {
+		t.Errorf("gate pollEvery = %v, want positive default", fake.lastCfg.pollEvery)
+	}
+}
+
+// TestInvokeBarrierGate_PropagatesError ensures gate failures reach the
+// caller so runWithWebservices/runDaemonOnly can abort before binding
+// production listeners. Treating the gate as fallible-but-fatal is the
+// whole point of M6: a sealed barrier MUST keep remote transports dark.
+func TestInvokeBarrierGate_PropagatesError(t *testing.T) {
+	sentinel := errors.New("gate-down")
+	fake := &fakeInitOnlyGate{returnErr: sentinel}
+	withFakeGate(t, fake)
+	withSocketPath(t, "/tmp/x.sock")
+
+	logger := logging.NewLogger(0, nil)
+	err := invokeBarrierGate(context.Background(), nil, logger)
+	if !errors.Is(err, sentinel) {
+		t.Errorf("invokeBarrierGate err = %v, want %v", err, sentinel)
+	}
+}
+
+// =============================================================================
+// Entry-point wiring: runWithWebservices + runDaemonOnly both call the gate
+// =============================================================================
+
+// readServeSource reads serve.go once per test invocation. Failing to read
+// it is a test infrastructure problem, not a regression, so the helper
+// fails the test immediately rather than masking with an empty buffer.
+func readServeSource(t *testing.T) string {
+	t.Helper()
+	const path = "serve.go"
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
+}
+
+// TestRunWithWebservices_InvokesBarrierGate enforces — at the source level
+// — that runWithWebservices calls invokeBarrierGate. A purely runtime
+// assertion is impractical because runWithWebservices requires a fully
+// initialized App (CA, web services, SDK client) before the gate is
+// reached, and standing all of that up in a unit test would violate the
+// "never run heavy logic in unit tests" rule from CLAUDE.md.
+//
+// The check uses Go's parser so a comment containing the text doesn't
+// produce a false positive. We walk the function body and look for an
+// identifier call to invokeBarrierGate.
+func TestRunWithWebservices_InvokesBarrierGate(t *testing.T) {
+	if !functionCallsHelper(t, "runWithWebservices", "invokeBarrierGate") {
+		t.Errorf("runWithWebservices does not call invokeBarrierGate; the M6 gate is bypassed in webservices mode")
+	}
+}
+
+// TestRunDaemonOnly_InvokesBarrierGate enforces the same wiring guarantee
+// for the daemon-only entry point. See TestRunWithWebservices_InvokesBarrierGate
+// for why this is a source-level rather than runtime test.
+func TestRunDaemonOnly_InvokesBarrierGate(t *testing.T) {
+	if !functionCallsHelper(t, "runDaemonOnly", "invokeBarrierGate") {
+		t.Errorf("runDaemonOnly does not call invokeBarrierGate; the M6 gate is bypassed in daemon-only mode")
+	}
+}
+
+// functionCallsHelper parses serve.go and reports whether the named
+// function's body contains a call to the named helper. The check is
+// AST-based so source comments referencing the helper don't produce
+// false positives.
+func functionCallsHelper(t *testing.T, fnName, helper string) bool {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "serve.go", nil, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse serve.go: %v", err)
+	}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name == nil || fn.Name.Name != fnName || fn.Body == nil {
+			continue
+		}
+		found := false
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := call.Fun.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if ident.Name == helper {
+				found = true
+				return false
+			}
+			return true
+		})
+		return found
+	}
+	t.Fatalf("function %q not found in serve.go", fnName)
+	return false
 }

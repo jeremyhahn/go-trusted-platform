@@ -272,24 +272,29 @@ func TestNewClient_SPKIWithoutPin(t *testing.T) {
 	assert.Equal(t, "spki.pin", configErr.Field)
 }
 
-// --- NewClient handler map tests ---
+// --- strategy → mode mapping ---
 
-func TestNewClient_HandlerMapContainsAllStrategies(t *testing.T) {
-	client, err := NewClient(validEmbeddedConfig(), newClientTestLogger())
-	require.NoError(t, err)
-
-	expectedStrategies := []string{
-		StrategyDANE,
-		StrategyNoise,
-		StrategySPKI,
-		StrategyEmbedded,
-		StrategyAuto,
+func TestStrategyToMode_AllSupportedStrategies(t *testing.T) {
+	cases := map[string]bool{
+		StrategyDANE:  true,
+		StrategyNoise: true,
+		StrategySPKI:  true,
+		StrategyAuto:  true,
+		// StrategyEmbedded is intentionally NOT mapped — FetchCABundle
+		// short-circuits before reaching the library.
+		StrategyEmbedded: false,
 	}
-	for _, strategy := range expectedStrategies {
-		_, ok := client.handlers[strategy]
-		assert.True(t, ok, "handler map missing strategy: %s", strategy)
+	for strategy, wantSupported := range cases {
+		strategy, wantSupported := strategy, wantSupported
+		t.Run(strategy, func(t *testing.T) {
+			_, err := strategyToMode(strategy)
+			if wantSupported {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+			}
+		})
 	}
-	assert.Len(t, client.handlers, len(expectedStrategies))
 }
 
 // --- FetchCABundle tests ---
@@ -305,7 +310,7 @@ func TestFetchCABundle_EmbeddedStrategy_ReturnsNil(t *testing.T) {
 
 func TestFetchCABundle_UnknownStrategy_ReturnsError(t *testing.T) {
 	// Build a client with a valid strategy, then mutate the config to simulate
-	// an unsupported strategy reaching the dispatch map.
+	// an unsupported strategy reaching the dispatch layer.
 	client, err := NewClient(validEmbeddedConfig(), newClientTestLogger())
 	require.NoError(t, err)
 
@@ -321,43 +326,10 @@ func TestFetchCABundle_UnknownStrategy_ReturnsError(t *testing.T) {
 	assert.Equal(t, "quantum", stratErr.Strategy)
 }
 
-func TestFetchCABundle_WrapsHandlerError(t *testing.T) {
-	// Create a client and inject a failing handler to verify error wrapping.
-	client, err := NewClient(validEmbeddedConfig(), newClientTestLogger())
-	require.NoError(t, err)
-
-	handlerErr := errors.New("simulated fetch failure")
-	client.handlers[StrategyEmbedded] = func(_ context.Context) ([]byte, error) {
-		return nil, handlerErr
-	}
-
-	bundle, err := client.FetchCABundle(context.Background())
-	require.Error(t, err)
-	assert.Nil(t, bundle)
-
-	var fetchErr *ErrBootstrapFetchFailed
-	assert.True(t, errors.As(err, &fetchErr))
-	assert.Equal(t, StrategyEmbedded, fetchErr.Strategy)
-	assert.ErrorIs(t, fetchErr.Cause, handlerErr)
-}
-
-func TestFetchCABundle_ReturnsDataFromHandler(t *testing.T) {
-	client, err := NewClient(validEmbeddedConfig(), newClientTestLogger())
-	require.NoError(t, err)
-
-	expectedPEM := []byte("-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----\n")
-	client.handlers[StrategyEmbedded] = func(_ context.Context) ([]byte, error) {
-		return expectedPEM, nil
-	}
-
-	bundle, err := client.FetchCABundle(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, expectedPEM, bundle)
-}
-
 func TestFetchCABundle_NoiseWithoutNoiseConfig_ReturnsError(t *testing.T) {
-	// Create a client with embedded strategy, then swap to noise strategy
-	// with a handler that mirrors the real fetchNoise nil-config check.
+	// Config-validation errors are returned directly (not wrapped in
+	// ErrBootstrapFetchFailed) because they happen before the
+	// bootstrap library is invoked.
 	client, err := NewClient(validEmbeddedConfig(), newClientTestLogger())
 	require.NoError(t, err)
 
@@ -368,12 +340,8 @@ func TestFetchCABundle_NoiseWithoutNoiseConfig_ReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, bundle)
 
-	var fetchErr *ErrBootstrapFetchFailed
-	assert.True(t, errors.As(err, &fetchErr))
-	assert.Equal(t, StrategyNoise, fetchErr.Strategy)
-
 	var configErr *ErrInvalidConfig
-	assert.True(t, errors.As(fetchErr.Cause, &configErr))
+	assert.True(t, errors.As(err, &configErr))
 	assert.Equal(t, "noise", configErr.Field)
 }
 
@@ -388,12 +356,8 @@ func TestFetchCABundle_SPKIWithoutSPKIConfig_ReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, bundle)
 
-	var fetchErr *ErrBootstrapFetchFailed
-	assert.True(t, errors.As(err, &fetchErr))
-	assert.Equal(t, StrategySPKI, fetchErr.Strategy)
-
 	var configErr *ErrInvalidConfig
-	assert.True(t, errors.As(fetchErr.Cause, &configErr))
+	assert.True(t, errors.As(err, &configErr))
 	assert.Equal(t, "spki", configErr.Field)
 }
 

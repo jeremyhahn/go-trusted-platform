@@ -138,7 +138,7 @@ endif
 # building with -tags directly; the WITH_* env vars remain for legacy
 # control over truly optional features.
 # =============================================================================
-BUILD_TAGS := iam rest quic mcp attestation_grpc
+BUILD_TAGS := iam rest quic mcp cluster
 
 # go-quicbaas tags
 ifeq ($(strip $(WITH_RAFT)),1)
@@ -1215,6 +1215,26 @@ integration-test-device:
 integration-test-cold-start:
 	@echo "Running cold-start lifecycle integration tests..."
 	./build/docker/devcontainer/run-integration-tests.sh cold-start
+
+## integration-test-barrier-gate: Run M6 barrier-gate (init-only loopback) integration tests in devcontainer
+.PHONY: integration-test-barrier-gate
+integration-test-barrier-gate: build-devcontainer
+	@echo "Running M6 barrier-gate integration tests in development container..."
+	@docker run --rm --privileged \
+		--name go-trusted-platform-barrier-gate-test \
+		--device /dev/net/tun:/dev/net/tun \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):$(SOURCES_BASE)/go-trusted-platform \
+		-v $(PWD):/workspace \
+		-v $(SOURCES_BASE)/go.work:$(SOURCES_BASE)/go.work:ro \
+		$(DOCKER_MODULE_MOUNTS) \
+		-v $(SOURCES_BASE)/go-frostdkg:$(SOURCES_BASE)/go-frostdkg \
+		-w $(SOURCES_BASE)/go-trusted-platform \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=1 \
+		-e GOTOOLCHAIN=auto \
+		$(DEVCONTAINER_IMAGE) \
+		bash /workspace/build/docker/devcontainer/run-integration-tests.sh barrier-gate
 
 ## integration-test-tpm: Run TPM multi-protocol integration tests in devcontainer
 .PHONY: integration-test-tpm

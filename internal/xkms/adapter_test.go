@@ -390,22 +390,6 @@ func (m *mockClient) BarrierUnsealWithShares(ctx context.Context, req *xkms.Barr
 	return nil
 }
 
-func (m *mockClient) BarrierShamirListShares(ctx context.Context) (*xkms.BarrierShamirSharesResponse, error) {
-	return nil, nil
-}
-
-func (m *mockClient) BarrierShamirDeleteShare(ctx context.Context, req *xkms.BarrierShamirDeleteShareRequest) error {
-	return nil
-}
-
-func (m *mockClient) BarrierShamirDeleteAllShares(ctx context.Context) error {
-	return nil
-}
-
-func (m *mockClient) BarrierShamirVerify(ctx context.Context) error {
-	return nil
-}
-
 func (m *mockClient) BarrierRekey(ctx context.Context, req *xkms.BarrierRekeyRequest) (*xkms.BarrierRekeyResponse, error) {
 	return nil, nil
 }

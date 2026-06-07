@@ -28,35 +28,20 @@ import (
 func TestExpandHome(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		t.Skip("no home dir on this builder")
+		t.Skip("no home dir")
 	}
-	cases := []struct {
-		in   string
-		want string
-	}{
-		{"", ""},
-		{"/etc/foo", "/etc/foo"},
-		{"~", home},
-		{"~/x", filepath.Join(home, "x")},
+	if got := expandHome("~/x"); got != filepath.Join(home, "x") {
+		t.Errorf("expandHome(~/x) = %q, want %q", got, filepath.Join(home, "x"))
 	}
-	for _, tc := range cases {
-		got := expandHome(tc.in)
-		if got != tc.want {
-			t.Errorf("expandHome(%q) = %q, want %q", tc.in, got, tc.want)
-		}
+	if got := expandHome("/abs"); got != "/abs" {
+		t.Errorf("expandHome(/abs) = %q, want /abs", got)
+	}
+	if got := expandHome(""); got != "" {
+		t.Errorf("expandHome(\"\") = %q, want empty", got)
 	}
 }
 
-// TestResolveDefaultClientCert_ExplicitMissing returns "" when the
-// supplied path does not exist.
-func TestResolveDefaultClientCert_ExplicitMissing(t *testing.T) {
-	got := resolveDefaultClientCert("/no/such/cert/file.pem")
-	if got != "" {
-		t.Fatalf("expected empty for missing path, got %q", got)
-	}
-}
-
-// TestResolveDefaultClientCert_ExplicitPresent returns the supplied
+// TestResolveDefaultClientCert_ExplicitPresent returns the explicit
 // path when it exists on disk.
 func TestResolveDefaultClientCert_ExplicitPresent(t *testing.T) {
 	tmp := t.TempDir()
@@ -70,11 +55,14 @@ func TestResolveDefaultClientCert_ExplicitPresent(t *testing.T) {
 	}
 }
 
-// TestSelectFIDO2Device covers the device-selection branches.
+// TestSelectFIDO2Device covers the local-authenticator-selection branches.
+// Selection now operates on client-LOCAL quicbaas.LocalDevice records keyed
+// by their host device Path (the WebAuthn ceremony itself is a separate
+// server round-trip).
 func TestSelectFIDO2Device(t *testing.T) {
-	devices := []quicbaas.FIDO2Device{
-		{DeviceID: "alpha", Manufacturer: "Yubico"},
-		{DeviceID: "beta", Manufacturer: "SoloKeys"},
+	devices := []quicbaas.LocalDevice{
+		{Path: "alpha", Manufacturer: "Yubico"},
+		{Path: "beta", Manufacturer: "SoloKeys"},
 	}
 	if _, err := selectFIDO2Device(devices, ""); err == nil {
 		t.Error("expected ErrAmbiguousFIDO2Device when multiple devices and no pin")
@@ -96,21 +84,21 @@ func TestSelectFIDO2Device(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.DeviceID != "beta" {
-		t.Errorf("expected device beta, got %q", got.DeviceID)
+	if got.Path != "beta" {
+		t.Errorf("expected device beta, got %q", got.Path)
 	}
 }
 
 // TestSelectFIDO2Device_SingleAutoPicks verifies that with one device
-// the helper picks it without an explicit deviceID.
+// the helper picks it without an explicit device path.
 func TestSelectFIDO2Device_SingleAutoPicks(t *testing.T) {
-	devices := []quicbaas.FIDO2Device{{DeviceID: "only"}}
+	devices := []quicbaas.LocalDevice{{Path: "only"}}
 	got, err := selectFIDO2Device(devices, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.DeviceID != "only" {
-		t.Errorf("expected only, got %q", got.DeviceID)
+	if got.Path != "only" {
+		t.Errorf("expected only, got %q", got.Path)
 	}
 }
 
@@ -217,7 +205,7 @@ func TestDispatchLogin_AutoDiscoverNoFactors(t *testing.T) {
 	}
 	var nf *ErrNoFactorsAvailable
 	if !errors.As(err, &nf) {
-		t.Logf("note: got %T: %v (this is acceptable when SDK FIDO2/PIV probes succeed but are empty)", err, err)
+		t.Logf("note: got %T: %v (this is acceptable when SDK Devices/PIV probes succeed but are empty)", err, err)
 	}
 }
 

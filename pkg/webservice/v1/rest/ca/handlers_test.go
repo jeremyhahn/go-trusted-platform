@@ -35,12 +35,10 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/jeremyhahn/go-objstore/pkg/common"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	pkgca "github.com/jeremyhahn/go-xkms/pkg/ca"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -60,27 +58,25 @@ type mockCertificateAuthority struct {
 	defaultValidity   int
 	hash              crypto.Hash
 	isAutoImportingCA bool
-	config            pkgca.CAConfig
+	config            xkmsca.CAConfig
 
 	// Certificates
 	rootCert         *x509.Certificate
 	intermediateCert *x509.Certificate
 
 	// Store mocks
-	certStore   xkmssdk.CertStore
-	objectStore common.Storage
+	certStore xkmssdk.CertStore
 
 	// Method overrides for testing
-	signCSRFn             func(csrPEM []byte, opts *pkgca.SignOptions) (*x509.Certificate, error)
+	signCSRFn             func(csrPEM []byte, opts *xkmsca.SignOptions) (*x509.Certificate, error)
 	caBundleFn            func(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error)
-	issueCertificateFn    func(request *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error)
-	revokeFn              func(certificate *x509.Certificate, opts pkgca.RevokeOptions) error
+	issueCertificateFn    func(request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error)
+	revokeFn              func(certificate *x509.Certificate, opts xkmsca.RevokeOptions) error
 	parseBundleFn         func(bundle []byte) ([]*x509.Certificate, error)
 	trustedRootFn         func() (*x509.Certificate, error)
 	trustedIntermediateFn func() (*x509.Certificate, error)
 	certificateFn         func(attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error)
 	certificateStoreFn    func() xkmssdk.CertStore
-	objectStoreFn         func() common.Storage
 	signerFn              func() (crypto.Signer, error)
 	publicKeyFn           func() crypto.PublicKey
 	signFn                func(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error)
@@ -99,7 +95,7 @@ func (m *mockCertificateAuthority) Sign(r io.Reader, digest []byte, opts crypto.
 	}
 	return []byte("mock-signature"), nil
 }
-func (m *mockCertificateAuthority) SignCSR(csrPEM []byte, opts *pkgca.SignOptions) (*x509.Certificate, error) {
+func (m *mockCertificateAuthority) SignCSR(csrPEM []byte, opts *xkmsca.SignOptions) (*x509.Certificate, error) {
 	if m.signCSRFn != nil {
 		return m.signCSRFn(csrPEM, opts)
 	}
@@ -141,14 +137,14 @@ func (m *mockCertificateAuthority) TrustedIntermediate() (*x509.Certificate, err
 	}
 	return m.intermediateCert, nil
 }
-func (m *mockCertificateAuthority) IssueCertificate(request *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
+func (m *mockCertificateAuthority) IssueCertificate(request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	if m.issueCertificateFn != nil {
 		return m.issueCertificateFn(request)
 	}
 	cert := createTestCertificate(request.Subject.CommonName)
-	return &pkgca.IssuedCertificate{Certificate: cert}, nil
+	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 }
-func (m *mockCertificateAuthority) RevokeCert(cert *x509.Certificate, opts pkgca.RevokeOptions) error {
+func (m *mockCertificateAuthority) RevokeCert(cert *x509.Certificate, opts xkmsca.RevokeOptions) error {
 	if m.revokeFn != nil {
 		return m.revokeFn(cert, opts)
 	}
@@ -168,12 +164,6 @@ func (m *mockCertificateAuthority) CertStore() xkmssdk.CertStore {
 		return m.certificateStoreFn()
 	}
 	return m.certStore
-}
-func (m *mockCertificateAuthority) ObjectStore() common.Storage {
-	if m.objectStoreFn != nil {
-		return m.objectStoreFn()
-	}
-	return m.objectStore
 }
 func (m *mockCertificateAuthority) IsAutoImportingIssuerCAs() bool { return m.isAutoImportingCA }
 func (m *mockCertificateAuthority) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm {
@@ -210,8 +200,8 @@ func (m *mockCertificateAuthority) Init() error {
 	m.initialized = true
 	return nil
 }
-func (m *mockCertificateAuthority) IsInitialized() bool      { return m.initialized }
-func (m *mockCertificateAuthority) CAConfig() pkgca.CAConfig { return m.config }
+func (m *mockCertificateAuthority) IsInitialized() bool       { return m.initialized }
+func (m *mockCertificateAuthority) CAConfig() xkmsca.CAConfig { return m.config }
 func (m *mockCertificateAuthority) GenerateCRL() ([]byte, error) {
 	return nil, errors.New("CRL generation not supported")
 }
@@ -396,10 +386,10 @@ func newTestLogger() *logging.Logger {
 	return logging.NewLogger(slog.LevelDebug, os.Stdout)
 }
 
-func newTestHandlers(ca goca.CACertificateAuthority) (*CAHandlers, *mockHttpWriter) {
+func newTestHandlers(ca xkmsca.TCGCA) (*CAHandlers, *mockHttpWriter) {
 	logger := newTestLogger()
 	writer := &mockHttpWriter{}
-	handlers := NewCAHandlers(logger, ca, writer)
+	handlers := NewCAHandlers(logger, ca, writer, nil)
 	return handlers, writer
 }
 
@@ -519,7 +509,7 @@ func TestNewCAHandlers(t *testing.T) {
 		mockCA := &mockCertificateAuthority{}
 		writer := &mockHttpWriter{}
 
-		handlers := NewCAHandlers(logger, mockCA, writer)
+		handlers := NewCAHandlers(logger, mockCA, writer, nil)
 
 		require.NotNil(t, handlers)
 		assert.NotNil(t, handlers.logger)
@@ -531,7 +521,7 @@ func TestNewCAHandlers(t *testing.T) {
 		logger := newTestLogger()
 		writer := &mockHttpWriter{}
 
-		handlers := NewCAHandlers(logger, nil, writer)
+		handlers := NewCAHandlers(logger, nil, writer, nil)
 
 		require.NotNil(t, handlers)
 		assert.Nil(t, handlers.ca)
@@ -913,8 +903,8 @@ func TestIssueCertificate_Success(t *testing.T) {
 	t.Run("issues certificate with minimal request", func(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
-			issueCertificateFn: func(request *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
-				return &pkgca.IssuedCertificate{Certificate: createTestCertificate(request.Subject.CommonName)}, nil
+			issueCertificateFn: func(request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+				return &xkmsca.IssuedCertificate{Certificate: createTestCertificate(request.Subject.CommonName)}, nil
 			},
 		}
 		handlers, writer := newTestHandlers(mockCA)
@@ -940,8 +930,8 @@ func TestIssueCertificate_Success(t *testing.T) {
 	t.Run("issues certificate with full request", func(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
-			issueCertificateFn: func(request *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
-				return &pkgca.IssuedCertificate{Certificate: createTestCertificate(request.Subject.CommonName)}, nil
+			issueCertificateFn: func(request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+				return &xkmsca.IssuedCertificate{Certificate: createTestCertificate(request.Subject.CommonName)}, nil
 			},
 		}
 		handlers, writer := newTestHandlers(mockCA)
@@ -969,10 +959,10 @@ func TestIssueCertificate_Success(t *testing.T) {
 	t.Run("issues CA certificate", func(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
-			issueCertificateFn: func(request *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
+			issueCertificateFn: func(request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 				cert := createTestCertificate(request.Subject.CommonName)
 				cert.IsCA = request.IsCA
-				return &pkgca.IssuedCertificate{Certificate: cert}, nil
+				return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 			},
 		}
 		handlers, writer := newTestHandlers(mockCA)
@@ -1069,7 +1059,7 @@ func TestIssueCertificate_Error(t *testing.T) {
 	t.Run("returns error when CA fails to issue", func(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
-			issueCertificateFn: func(request *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
+			issueCertificateFn: func(request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 				return nil, errors.New("issuance failed")
 			},
 		}
@@ -1103,7 +1093,7 @@ func TestRevokeCertificate_Success(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
 			certStore:   mockCertStore,
-			revokeFn: func(certificate *x509.Certificate, _ pkgca.RevokeOptions) error {
+			revokeFn: func(certificate *x509.Certificate, _ xkmsca.RevokeOptions) error {
 				return nil
 			},
 		}
@@ -1163,7 +1153,7 @@ func TestRevokeCertificate_Success(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
 			certStore:   mockCertStore,
-			revokeFn: func(_ *x509.Certificate, opts pkgca.RevokeOptions) error {
+			revokeFn: func(_ *x509.Certificate, opts xkmsca.RevokeOptions) error {
 				capturedDeleteKeys = opts.DeleteKeys
 				return nil
 			},
@@ -1268,7 +1258,7 @@ func TestRevokeCertificate_Error(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
 			certStore:   mockCertStore,
-			revokeFn: func(certificate *x509.Certificate, _ pkgca.RevokeOptions) error {
+			revokeFn: func(certificate *x509.Certificate, _ xkmsca.RevokeOptions) error {
 				return errors.New("revocation failed")
 			},
 		}
@@ -1444,7 +1434,7 @@ func TestGetCRL_Success(t *testing.T) {
 
 		logger := newTestLogger()
 		writer := &mockHttpWriter{}
-		handlers := NewCAHandlers(logger, mockCA, writer)
+		handlers := NewCAHandlers(logger, mockCA, writer, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/crl", nil)
 		rec := httptest.NewRecorder()
@@ -1478,7 +1468,6 @@ func TestGetCRL_Error(t *testing.T) {
 	t.Run("returns error when CRL generation not supported", func(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
-			objectStore: nil,
 		}
 		handlers, writer := newTestHandlers(mockCA)
 
@@ -1502,7 +1491,7 @@ func TestGetCRL_Error(t *testing.T) {
 
 		logger := newTestLogger()
 		writer := &mockHttpWriter{}
-		handlers := NewCAHandlers(logger, mockCA, writer)
+		handlers := NewCAHandlers(logger, mockCA, writer, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/crl", nil)
 		rec := httptest.NewRecorder()
@@ -1524,7 +1513,7 @@ func TestGetCRL_Error(t *testing.T) {
 
 		logger := newTestLogger()
 		writer := &mockHttpWriter{}
-		handlers := NewCAHandlers(logger, mockCA, writer)
+		handlers := NewCAHandlers(logger, mockCA, writer, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/crl", nil)
 		rec := httptest.NewRecorder()

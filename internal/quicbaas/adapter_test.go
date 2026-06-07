@@ -345,8 +345,8 @@ func TestAdapter_NotStarted(t *testing.T) {
 	if adapter.Certificate() != nil {
 		t.Error("expected Certificate() to return nil when not started")
 	}
-	if adapter.ClusterDEK() != nil {
-		t.Error("expected ClusterDEK() to return nil when not started")
+	if adapter.DEK() != nil {
+		t.Error("expected DEK() to return nil when not started")
 	}
 	if adapter.IAM() != nil {
 		t.Error("expected IAM() to return nil when not started")
@@ -984,9 +984,9 @@ func TestAdapter_AllServiceAccessors(t *testing.T) {
 		}
 	})
 
-	t.Run("ClusterDEK", func(t *testing.T) {
-		if adapter.ClusterDEK() != mockClient.ClusterDEK() {
-			t.Error("ClusterDEK() did not return expected client")
+	t.Run("DEK", func(t *testing.T) {
+		if adapter.DEK() != mockClient.DEK() {
+			t.Error("DEK() did not return expected client")
 		}
 	})
 

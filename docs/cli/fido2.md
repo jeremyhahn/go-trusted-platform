@@ -2,20 +2,19 @@
 
 FIDO2 authenticator device operations and WebAuthn register / authenticate.
 
-The `fido2` command tree mirrors `xkmsctl fido2` and covers CTAP2 device
-enumeration and WebAuthn credential ceremonies.
+All subcommands route through the go-quicbaas SDK
+(`Security().Auth().FIDO2()` for device-level verbs,
+`Security().Auth().WebAuthn()` for ceremony verbs). The platform repo does
+not implement any FIDO2 CTAP2 or WebAuthn logic locally — the canonical
+implementation lives in go-xkms and is re-exported through
+`go-quicbaas/sdk/go/xkms/fido2` for the initramfs carve-out.
 
-All subcommands connect to `platformd` via the SDK and therefore honor the
-global flags `--config`, `--context`, `--transport`, `--server`, `--output`.
-
-> Phase 3 status: CLI + SDK scaffolding is complete. Server-side handlers
-> land in Phase 3.5. The SDK currently returns `ErrNotYetWired` for every
-> method.
+The subcommands honor the global flags `--config`, `--context`,
+`--transport`, `--server`, `--output`.
 
 ## Migration from the LUKS-focused command tree
 
-Prior to Phase 3 this command tree hosted LUKS-specific subcommands. Those
-use cases have moved:
+LUKS-specific FIDO2 management has moved under `platformctl luks`:
 
 | Old command | New command |
 |-------------|-------------|
@@ -84,18 +83,19 @@ platformctl fido2 authenticate --credential-id <base64url credID>
 
 ## Exit codes
 
-Non-zero on any SDK error. Typed errors live in
-`sdk/go/services/fido2/errors.go`.
+Non-zero on any SDK error. Typed errors propagate from
+`go-quicbaas/sdk/go/security/fido2` (device verbs) and
+`go-quicbaas/sdk/go/security/webauthn` (ceremony verbs).
 
 ## Wire surface
 
-Every CLI subcommand maps 1:1 to a REST endpoint and MCP tool. Task #88
-wires these live at platformd startup.
+Every CLI subcommand maps 1:1 to a quicbaas SDK call and is reachable
+over every quicbaas transport (REST, gRPC, QUIC, MCP, Unix, embedded).
 
-| Subcommand | REST | MCP tool |
-|------------|------|----------|
-| `fido2 list-devices` | `GET /api/v1/fido2/devices` | `platform_fido2_list_devices` |
-| `fido2 wait-device` | `GET /api/v1/fido2/devices/wait?timeout_seconds=…` | `platform_fido2_wait_device` |
-| `fido2 info` | `GET /api/v1/fido2/devices/{device}` | `platform_fido2_info` |
-| `fido2 register` | `POST /api/v1/fido2/register` | `platform_fido2_register` |
-| `fido2 authenticate` | `POST /api/v1/fido2/authenticate` | `platform_fido2_authenticate` |
+| Subcommand | SDK call | REST endpoint | MCP tool |
+|------------|----------|---------------|----------|
+| `fido2 list-devices` | `Security().Auth().FIDO2().ListDevices` | `GET /api/v1/fido2/devices` | `platform_fido2_list_devices` |
+| `fido2 wait-device` | `Security().Auth().FIDO2().WaitDevice` | `GET /api/v1/fido2/devices/wait?timeout_seconds=…` | `platform_fido2_wait_device` |
+| `fido2 info` | `Security().Auth().FIDO2().Info` | `GET /api/v1/fido2/devices/{device}` | `platform_fido2_info` |
+| `fido2 register` | `Security().Auth().WebAuthn().BeginRegistration` + `FinishRegistration` | `POST /api/v1/fido2/register` | `platform_fido2_register` |
+| `fido2 authenticate` | `Security().Auth().WebAuthn().BeginLogin` + `FinishLogin` | `POST /api/v1/fido2/authenticate` | `platform_fido2_authenticate` |

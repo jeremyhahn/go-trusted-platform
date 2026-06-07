@@ -18,20 +18,23 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/jeremyhahn/go-truststrap/pkg/truststrap"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/bootstrap"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
-// fetchFunc is the function type used for map-based strategy dispatch.
-type fetchFunc func(ctx context.Context) ([]byte, error)
-
-// Client performs trust bootstrap by fetching a CA certificate bundle from a
-// remote server using a configured strategy (DANE, Noise, SPKI, or auto).
+// Client performs trust bootstrap by fetching a CA certificate bundle
+// from a remote server using a configured strategy (DANE, Noise, SPKI,
+// Direct, or Auto).
+//
+// Mode dispatch lives in xkms/pkg/trust/bootstrap (the canonical
+// trust-bootstrap library in the stack) and is reached through the
+// QuicBaaS SDK type-alias re-export. Platform does NOT call
+// go-truststrap directly per the SDK-consumption invariant documented
+// in CLAUDE.md.
 type Client struct {
-	config   *ClientConfig
-	logger   *logging.Logger
-	handlers map[string]fetchFunc
+	config *ClientConfig
+	logger *logging.Logger
 }
 
 // NewClient creates a new bootstrap Client from the given config and logger.
@@ -49,43 +52,38 @@ func NewClient(config *ClientConfig, logger *logging.Logger) (*Client, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-
-	c := &Client{
-		config: config,
-		logger: logger,
-	}
-
-	c.handlers = map[string]fetchFunc{
-		StrategyDANE:     c.fetchDANE,
-		StrategyNoise:    c.fetchNoise,
-		StrategySPKI:     c.fetchSPKI,
-		StrategyEmbedded: c.fetchEmbedded,
-		StrategyAuto:     c.fetchAuto,
-	}
-
-	return c, nil
+	return &Client{config: config, logger: logger}, nil
 }
 
-// FetchCABundle fetches the CA bundle using the configured strategy. It returns
-// the PEM-encoded certificate chain bytes. For the embedded strategy, it returns
-// nil (trust comes from the ISO-embedded CA bundle, no fetch needed).
+// FetchCABundle fetches the CA bundle using the configured strategy.
+// Returns the PEM-encoded certificate chain bytes. For the embedded
+// strategy the caller's ISO-embedded bundle is authoritative, so the
+// method returns (nil, nil) without contacting the network.
 func (c *Client) FetchCABundle(ctx context.Context) ([]byte, error) {
-	handler, ok := c.handlers[c.config.Strategy]
-	if !ok {
-		return nil, &ErrStrategyNotSupported{Strategy: c.config.Strategy}
+	if c.config.Strategy == StrategyEmbedded {
+		return nil, nil
+	}
+
+	mode, err := strategyToMode(c.config.Strategy)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg, err := c.buildBootstrapConfig(mode)
+	if err != nil {
+		return nil, err
 	}
 
 	c.logger.Infof("Bootstrap: fetching CA bundle using strategy %s", c.config.Strategy)
 
-	bundlePEM, err := handler(ctx)
+	bundle, err := bootstrap.Fetch(ctx, cfg)
 	if err != nil {
 		return nil, &ErrBootstrapFetchFailed{
 			Strategy: c.config.Strategy,
 			Cause:    err,
 		}
 	}
-
-	return bundlePEM, nil
+	return bundle.PEM, nil
 }
 
 // InstallToSystemTrust writes the PEM-encoded CA bundle to the given certificate
@@ -115,139 +113,79 @@ func (c *Client) InstallToSystemTrust(bundlePEM []byte, certPath string) error {
 	return nil
 }
 
-// fetchDANE fetches the CA bundle using DANE/TLSA DNS verification.
-func (c *Client) fetchDANE(ctx context.Context) ([]byte, error) {
-	bootstrapper, err := truststrap.NewDANEBootstrapper(&truststrap.DANEConfig{
-		ServerURL:      c.config.ServerURL,
-		Hostname:       c.config.Hostname,
-		DNSServer:      c.config.DNSServer,
-		ConnectTimeout: c.config.PerMethodTimeout,
-		Logger:         c.logger.Slog(),
-		BundlePath:     c.config.BundlePath,
-	})
-	if err != nil {
-		return nil, err
+// strategyToMode maps platform's strategy constants onto the
+// canonical bootstrap.Mode values the library consumes. Embedded is
+// handled by the caller (no library call needed) and is therefore
+// rejected here as an unsupported mode.
+func strategyToMode(strategy string) (bootstrap.Mode, error) {
+	switch strategy {
+	case StrategyDANE:
+		return bootstrap.ModeDANE, nil
+	case StrategyNoise:
+		return bootstrap.ModeNoise, nil
+	case StrategySPKI:
+		return bootstrap.ModeSPKI, nil
+	case StrategyAuto:
+		return bootstrap.ModeAuto, nil
+	default:
+		return "", &ErrStrategyNotSupported{Strategy: strategy}
 	}
-	defer bootstrapper.Close()
-
-	resp, err := bootstrapper.FetchCABundle(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return resp.BundlePEM, nil
 }
 
-// fetchNoise fetches the CA bundle using the Noise_NK protocol.
-func (c *Client) fetchNoise(ctx context.Context) ([]byte, error) {
-	if c.config.Noise == nil {
-		return nil, &ErrInvalidConfig{
-			Field:  "noise",
-			Reason: "noise configuration is required for noise strategy",
-		}
-	}
-
-	bootstrapper, err := truststrap.NewNoiseBootstrapper(&truststrap.NoiseConfig{
-		ServerAddr:       c.config.Noise.ServerAddr,
-		ServerStaticKey:  c.config.Noise.ServerStaticKey,
-		ConnectTimeout:   c.config.PerMethodTimeout,
-		OperationTimeout: c.config.PerMethodTimeout,
-		Logger:           c.logger.Slog(),
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer bootstrapper.Close()
-
-	resp, err := bootstrapper.FetchCABundle(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return resp.BundlePEM, nil
-}
-
-// fetchSPKI fetches the CA bundle using SPKI-pinned TLS.
-func (c *Client) fetchSPKI(ctx context.Context) ([]byte, error) {
-	if c.config.SPKI == nil {
-		return nil, &ErrInvalidConfig{
-			Field:  "spki",
-			Reason: "SPKI configuration is required for spki strategy",
-		}
-	}
-
-	bootstrapper, err := truststrap.NewSPKIBootstrapper(&truststrap.SPKIConfig{
-		ServerURL:      c.config.ServerURL,
-		SPKIPinSHA256:  c.config.SPKI.Pin,
-		ConnectTimeout: c.config.PerMethodTimeout,
-		Logger:         c.logger.Slog(),
-		BundlePath:     c.config.BundlePath,
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer bootstrapper.Close()
-
-	resp, err := bootstrapper.FetchCABundle(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return resp.BundlePEM, nil
-}
-
-// fetchEmbedded returns nil for the embedded strategy since trust comes from
-// the ISO-embedded CA bundle and no network fetch is needed.
-func (c *Client) fetchEmbedded(_ context.Context) ([]byte, error) {
-	return nil, nil
-}
-
-// fetchAuto tries multiple bootstrap methods in priority order using the
-// AutoBootstrapper from go-truststrap.
-func (c *Client) fetchAuto(ctx context.Context) ([]byte, error) {
-	autoCfg := &truststrap.AutoConfig{
+// buildBootstrapConfig projects platform's ClientConfig onto the
+// canonical bootstrap.Config shape. Per-mode sub-configs are
+// populated only when the relevant inputs are present so ModeAuto
+// silently skips unconfigured methods.
+func (c *Client) buildBootstrapConfig(mode bootstrap.Mode) (bootstrap.Config, error) {
+	cfg := bootstrap.Config{
+		Mode:             mode,
+		ServerURL:        c.config.ServerURL,
+		BundlePath:       c.config.BundlePath,
 		PerMethodTimeout: c.config.PerMethodTimeout,
 		Logger:           c.logger.Slog(),
 	}
 
-	// Configure DANE if DNS server is available.
-	if c.config.DNSServer != "" {
-		autoCfg.DANE = &truststrap.DANEConfig{
-			ServerURL:      c.config.ServerURL,
-			Hostname:       c.config.Hostname,
-			DNSServer:      c.config.DNSServer,
-			ConnectTimeout: c.config.PerMethodTimeout,
-			Logger:         c.logger.Slog(),
-			BundlePath:     c.config.BundlePath,
+	switch mode {
+	case bootstrap.ModeDANE:
+		cfg.DANE = &bootstrap.DANEConfig{
+			Hostname:  c.config.Hostname,
+			DNSServer: c.config.DNSServer,
+		}
+	case bootstrap.ModeNoise:
+		if c.config.Noise == nil {
+			return bootstrap.Config{}, &ErrInvalidConfig{
+				Field:  "noise",
+				Reason: "noise configuration is required for noise strategy",
+			}
+		}
+		cfg.Noise = &bootstrap.NoiseConfig{
+			ServerAddr:      c.config.Noise.ServerAddr,
+			ServerStaticKey: c.config.Noise.ServerStaticKey,
+		}
+	case bootstrap.ModeSPKI:
+		if c.config.SPKI == nil {
+			return bootstrap.Config{}, &ErrInvalidConfig{
+				Field:  "spki",
+				Reason: "SPKI configuration is required for spki strategy",
+			}
+		}
+		cfg.SPKI = &bootstrap.SPKIConfig{Pin: c.config.SPKI.Pin}
+	case bootstrap.ModeAuto:
+		if c.config.DNSServer != "" {
+			cfg.DANE = &bootstrap.DANEConfig{
+				Hostname:  c.config.Hostname,
+				DNSServer: c.config.DNSServer,
+			}
+		}
+		if c.config.Noise != nil && c.config.Noise.ServerStaticKey != "" {
+			cfg.Noise = &bootstrap.NoiseConfig{
+				ServerAddr:      c.config.Noise.ServerAddr,
+				ServerStaticKey: c.config.Noise.ServerStaticKey,
+			}
+		}
+		if c.config.SPKI != nil && c.config.SPKI.Pin != "" {
+			cfg.SPKI = &bootstrap.SPKIConfig{Pin: c.config.SPKI.Pin}
 		}
 	}
-
-	// Configure Noise if noise config is available.
-	if c.config.Noise != nil && c.config.Noise.ServerStaticKey != "" {
-		autoCfg.Noise = &truststrap.NoiseConfig{
-			ServerAddr:       c.config.Noise.ServerAddr,
-			ServerStaticKey:  c.config.Noise.ServerStaticKey,
-			ConnectTimeout:   c.config.PerMethodTimeout,
-			OperationTimeout: c.config.PerMethodTimeout,
-			Logger:           c.logger.Slog(),
-		}
-	}
-
-	// Configure SPKI if pin is available.
-	if c.config.SPKI != nil && c.config.SPKI.Pin != "" {
-		autoCfg.SPKI = &truststrap.SPKIConfig{
-			ServerURL:      c.config.ServerURL,
-			SPKIPinSHA256:  c.config.SPKI.Pin,
-			ConnectTimeout: c.config.PerMethodTimeout,
-			Logger:         c.logger.Slog(),
-			BundlePath:     c.config.BundlePath,
-		}
-	}
-
-	resp, err := truststrap.AutoFetch(ctx, autoCfg)
-	if err != nil {
-		return nil, err
-	}
-
-	return resp.BundlePEM, nil
+	return cfg, nil
 }

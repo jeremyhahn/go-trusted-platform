@@ -30,14 +30,15 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 const (
@@ -337,11 +338,11 @@ func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface) {
 
 // SetCAHandlers wires the CA REST handlers onto the daemon's REST router so
 // /api/v1/ca/* endpoints are served. The handlers wrap the production CA
-// (goca.CACertificateAuthority) via CAAuthorityAdapter, which delegates to
+// (quicbaasca.CACertificateAuthority) via CAAuthorityAdapter, which delegates to
 // the same CA instance used by the gRPC, QUIC, MCP and Unix-socket adapters.
 // All transports therefore share state — certificates issued via gRPC are
 // visible via REST and vice-versa.
-func (s *RESTServer) SetCAHandlers(ca goca.CACertificateAuthority) {
+func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority) {
 	if ca == nil {
 		return
 	}
@@ -349,7 +350,11 @@ func (s *RESTServer) SetCAHandlers(ca goca.CACertificateAuthority) {
 	if adapter == nil {
 		return
 	}
-	handlers := restapi.NewCAHandlers(adapter, s.logger)
+	var caObjStorage objectstorage.Client
+	if s.config != nil && s.config.App != nil {
+		caObjStorage = s.config.App.Storage
+	}
+	handlers := restapi.NewCAHandlers(adapter, s.logger, caObjStorage)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("CA REST routes registered")
 

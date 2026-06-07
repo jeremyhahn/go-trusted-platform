@@ -1405,3 +1405,36 @@ func (e ErrTenantDEKDeprovision) Error() string {
 func (e ErrTenantDEKDeprovision) Unwrap() error {
 	return e.Cause
 }
+
+// ErrConfigReloadFailed wraps a failure during runtime reload of the
+// platformd configuration from disk. The cause exposes the underlying
+// viper / unmarshal error for log analysis.
+type ErrConfigReloadFailed struct {
+	Cause error
+}
+
+func (e ErrConfigReloadFailed) Error() string {
+	return fmt.Sprintf("daemon: config reload failed: %v", e.Cause)
+}
+
+func (e ErrConfigReloadFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrConfigInvalid is returned by validation paths when a YAML body
+// fails to parse or fails schema checks.
+type ErrConfigInvalid struct {
+	Issues []string
+}
+
+func (e ErrConfigInvalid) Error() string {
+	return fmt.Sprintf("daemon: invalid config: %v", e.Issues)
+}
+
+// ErrAttestationManifestIDRequired is returned by AttestationService
+// operations that need a non-empty manifest ID.
+type ErrAttestationManifestIDRequired struct{}
+
+func (ErrAttestationManifestIDRequired) Error() string {
+	return "daemon: attestation manifest id is required"
+}

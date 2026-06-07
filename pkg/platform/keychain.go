@@ -204,7 +204,7 @@ func (p *PlatformKeyStore) Initialize(soPIN, userPIN string) error {
 }
 
 // InitializeWithDefaults creates the Platform KeyStore SRK using empty (default)
-// TPM hierarchy auth, skipping PINManager setup entirely. This is used when
+// TPM hierarchy auth, skipping PIN backend setup entirely. This is used when
 // the user chose not to set TPM hierarchy authorization passwords.
 func (p *PlatformKeyStore) InitializeWithDefaults() error {
 	if p.config.CN == "" {
@@ -242,12 +242,6 @@ func (p *PlatformKeyStore) InitializeWithDefaults() error {
 // with PINs and SRK.
 func (p *PlatformKeyStore) IsInitialized() bool {
 	return p.initialized.Load()
-}
-
-// PINManager returns the integrated PIN manager. This implementation does not
-// use a PIN manager, so it returns nil. Callers should check for nil before use.
-func (p *PlatformKeyStore) PINManager() xkmssdk.PINManager { //nolint:staticcheck // SA1019: implements upstream interface
-	return nil
 }
 
 // PlatformPolicyEnabled returns true if TPM platform policy is enabled

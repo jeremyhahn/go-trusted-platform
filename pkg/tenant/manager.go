@@ -21,9 +21,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/clusterdek"
-	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/bridge"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
@@ -121,8 +120,8 @@ type Manager struct {
 	// QuicBaaS IAM SDK tenant client for tenant CRUD
 	iamTenantClient iam.TenantClient
 
-	// ClusterDEK client for tenant DEK isolation
-	dekClient clusterdek.Client
+	// Tenant DEK client for per-tenant DEK isolation
+	dekClient TenantDEKClient
 
 	// Per-tenant barrier client for barrier init/unseal
 	tenantBarrierClient TenantBarrierClient
@@ -149,7 +148,7 @@ type Manager struct {
 // ManagerConfig holds manager dependencies.
 type ManagerConfig struct {
 	IAMTenantClient     iam.TenantClient
-	DEKClient           clusterdek.Client
+	DEKClient           TenantDEKClient
 	TenantBarrierClient TenantBarrierClient
 	BarrierManager      *barrier.Manager
 	BridgeManager       *bridge.Manager
@@ -1060,12 +1059,13 @@ func (m *Manager) RotateTenantDEKWithOptions(ctx context.Context, tenantID strin
 		slog.Bool("background", background),
 	)
 
-	req := &clusterdek.RotateClusterDEKRequest{
+	req := &RotateTenantDEKRequest{
+		TenantID:              tenantID,
 		Reason:                fmt.Sprintf("tenant DEK rotation for %s", tenantID),
 		AutoStartReencryption: background,
 	}
 
-	resp, err := m.dekClient.RotateClusterDEK(ctx, req)
+	resp, err := m.dekClient.RotateTenantDEK(ctx, req)
 	if err != nil {
 		m.logger.Error("failed to rotate DEK",
 			slog.String("tenant_id", tenantID),
@@ -1117,7 +1117,7 @@ func (m *Manager) GetTenantDEKStatus(ctx context.Context, tenantID string) (*DEK
 		return nil, ErrInvalidRequest{Reason: "tenant has no DEK configured"}
 	}
 
-	resp, err := m.dekClient.GetClusterDEKStatus(ctx)
+	resp, err := m.dekClient.TenantDEKStatus(ctx, &TenantDEKStatusRequest{TenantID: tenantID})
 	if err != nil {
 		m.logger.Error("failed to get DEK status",
 			slog.String("tenant_id", tenantID),
@@ -1433,7 +1433,7 @@ func (m *Manager) deleteFromIAM(ctx context.Context, id string) error {
 }
 
 // ---------------------------------------------------------------------------
-// DEK integration methods (using go-quicbaas ClusterDEK SDK)
+// DEK integration methods (using the go-quicbaas DEK SDK via TenantDEKClient)
 // ---------------------------------------------------------------------------
 
 func (m *Manager) ensureTenantDEK(ctx context.Context, tenantID string) (string, error) {
@@ -1441,7 +1441,7 @@ func (m *Manager) ensureTenantDEK(ctx context.Context, tenantID string) (string,
 		return "", ErrInvalidRequest{Reason: "DEK client is not configured"}
 	}
 
-	req := &clusterdek.EnsureTenantDEKRequest{
+	req := &EnsureTenantDEKRequest{
 		TenantID:  tenantID,
 		Algorithm: m.config.DEKAlgorithm,
 	}
@@ -1459,12 +1459,14 @@ func (m *Manager) deleteTenantDEK(ctx context.Context, tenantID string) error {
 		return ErrInvalidRequest{Reason: "DEK client is not configured"}
 	}
 
-	req := &clusterdek.DeleteTenantDEKRequest{
+	req := &DeleteTenantDEKRequest{
 		TenantID: tenantID,
 	}
 
-	_, err := m.dekClient.DeleteTenantDEK(ctx, req)
-	return err
+	if _, err := m.dekClient.DeleteTenantDEK(ctx, req); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

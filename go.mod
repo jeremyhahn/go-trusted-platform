@@ -1,6 +1,6 @@
 module github.com/jeremyhahn/go-trusted-platform
 
-go 1.26.1
+go 1.26.4
 
 // VictoriaMetrics/metrics v1.18.1 requires deleted valyala/histogram repo
 replace github.com/VictoriaMetrics/metrics => github.com/VictoriaMetrics/metrics v1.35.1
@@ -396,33 +396,10 @@ require (
 	software.sslmate.com/src/go-pkcs12 v0.7.0 // indirect
 )
 
-replace github.com/jeremyhahn/go-quicbaas => /home/jhahn/sources/go-quicbaas
-
-replace github.com/jeremyhahn/go-quicbaas/sdk/go => /home/jhahn/sources/go-quicbaas/sdk/go
-
-replace github.com/jeremyhahn/go-xkms => /home/jhahn/sources/go-xkms
-
-replace github.com/jeremyhahn/go-xkms/sdk/go => /home/jhahn/sources/go-xkms/sdk/go
-
-replace github.com/jeremyhahn/go-objstore => /home/jhahn/sources/go-objstore
-
-replace github.com/jeremyhahn/go-qrdb => /home/jhahn/sources/go-qrdb
-
-replace github.com/jeremyhahn/go-qrdb/sdk/go => /home/jhahn/sources/go-qrdb/sdk/go
-
-replace github.com/jeremyhahn/go-quicraft => /home/jhahn/sources/go-quicraft
-
-replace github.com/jeremyhahn/go-truststrap => /home/jhahn/sources/go-truststrap
-
-replace github.com/jeremyhahn/go-frost => /home/jhahn/sources/go-frost
-
-replace github.com/jeremyhahn/go-auth => /home/jhahn/sources/go-auth
-
-replace github.com/jeremyhahn/go-codec => /home/jhahn/sources/go-codec
-
-replace github.com/jeremyhahn/go-luks2 => /home/jhahn/sources/go-luks2
-
-replace github.com/jeremyhahn/go-signal => /home/jhahn/sources/go-signal
+// Cross-repo dependency resolution for local development is handled by the
+// parent go.work `use` directives (single source of truth: /mnt/vm-host-1).
+// No cross-repo local-path replaces are committed here; the `require` versions
+// above are what GitHub builds use once those modules are published.
 
 require (
 	github.com/google/go-tpm-tools v0.4.8

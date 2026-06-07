@@ -21,6 +21,7 @@ import (
 
 	"github.com/gorilla/mux"
 
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
@@ -30,6 +31,16 @@ import (
 
 var (
 	ErrInvalidOrganiztionID = errors.New("rest/jwt: invalid organization id")
+
+	// ErrLoginUnavailable is returned when the unified quicbaas login
+	// client is not wired. The locked architecture forbids minting a
+	// platform-local JWT from an unauthenticated credential, so /login
+	// fails closed instead of issuing an unverified token.
+	ErrLoginUnavailable = errors.New("rest/jwt: unified login backend is not configured")
+
+	// ErrLoginFailed is returned when the unified login ceremony resolves
+	// no bearer (no identity authenticated).
+	ErrLoginFailed = errors.New("rest/jwt: authentication failed")
 )
 
 type TokenHandler interface {
@@ -41,6 +52,11 @@ type RestHandler struct {
 	responseWriter response.HttpWriter
 	jwtService     *Service
 	userService    service.UserServicer
+	// loginClient routes /login through the quicbaas SDK unified login
+	// ceremony (Security().Auth().BeginLogin/FinishLogin). When nil,
+	// /login fails closed with ErrLoginUnavailable rather than minting an
+	// unverified local JWT.
+	loginClient UnifiedLoginClient
 	TokenHandler
 }
 
@@ -56,6 +72,14 @@ func NewRestHandler(
 		responseWriter: responseWriter,
 		jwtService:     jwtService,
 		userService:    userService}, nil
+}
+
+// SetUnifiedLoginClient wires the quicbaas SDK unified login client so
+// /login authenticates via BeginLogin/FinishLogin and returns the
+// SDK-issued OIDC bearer. Wired by the handler registry at boot when the
+// SDK AuthService is available.
+func (handler *RestHandler) SetUnifiedLoginClient(client UnifiedLoginClient) {
+	handler.loginClient = client
 }
 
 // Creates a new web service session from the parsed JWT
@@ -106,8 +130,20 @@ func (handler *RestHandler) CreateSession(
 		user), nil
 }
 
-// Decodes the requst body to a service.UserCredentials structure and generates a new
-// JWT using the unmarshalled username and password.
+// GenerateToken authenticates the caller through the quicbaas SDK unified
+// login ceremony and returns the SDK-issued OIDC bearer.
+//
+// The locked architecture makes qrdb's LoginClient the single canonical
+// login backbone and quicbaas's OIDC TokenService the SessionIssuer; the
+// platform is a consumer, not an issuer. /login is a single-shot POST over
+// the webserver's mTLS-capable connection, so it drives the mTLS factor:
+// BeginLogin(mtls) opens the attempt and FinishLogin(mtls) lets the
+// quicbaas server derive the lookup key from the verified peer certificate
+// and mint the bearer. WebAuthn/FIDO2 and PIV use challenge round-trips and
+// are handled by the dedicated /webauthn router.
+//
+// When no unified login client is wired the handler fails closed with
+// ErrLoginUnavailable — it never fabricates an unverified local JWT.
 func (handler *RestHandler) GenerateToken(w http.ResponseWriter, req *http.Request) {
 
 	handler.logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
@@ -119,76 +155,43 @@ func (handler *RestHandler) GenerateToken(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-	// userService := jwtService.serviceRegistry.GetUserService()
-	// userAccount, orgs, Services, err := userService.Login(&user)
-	// if err != nil {
-	// 	jwtService.logger.Errorf("GenerateToken login error: %s", err)
-	// 	jwtService.responseWriter.Write(w, req, http.StatusForbidden,
-	// 		JsonWebToken{Error: "Invalid credentials"})
-	// 	return
-	// }
-
-	// if len(userAccount.GetRoles()) == 0 {
-	// 	// Must be a new user that hasn't been assigned to any roles yet
-	// 	userAccount.SetRoles([]model.Role{
-	// 		&model.RoleStruct{
-	// 			ID:   jwtService.defaultRole.ID,
-	// 			Name: jwtService.defaultRole.Name}})
-	// }
-
-	// jwtService.logger.Debugf("user: %+v", user)
-	// jwtService.logger.Debugf("userAccount: %+v", userAccount)
-	// jwtService.logger.Debugf("orgs: %+v", orgs)
-	// jwtService.logger.Debugf("org.len: %+v", len(orgs))
-	// jwtService.logger.Debugf("Services.len: %+v", len(Services))
-
-	// roleClaims := make([]string, len(userAccount.GetRoles()))
-	// for j, role := range userAccount.GetRoles() {
-	// 	roleClaims[j] = role.GetName()
-	// }
-
-	// orgClaims := make([]service.OrganizationClaim, len(orgs))
-	// for i, org := range orgs {
-	// 	ServiceClaims := make([]service.ServiceClaim, len(org.GetServices()))
-	// 	for j, Service := range org.GetServices() {
-	// 		ServiceClaims[j] = service.ServiceClaim{
-	// 			ID:   Service.ID,
-	// 			Name: Service.GetName()}
-	// 		// Not sending roles here to keep JWT compact; imposes
-	// 		// logic to default Service roles to org roles on the client
-	// 		//Roles: roleClaims}
-	// 	}
-	// 	orgClaims[i] = service.OrganizationClaim{
-	// 		ID:       org.Identifier(),
-	// 		Name:     org.GetName(),
-	// 		Services: ServiceClaims,
-	// 		Roles:    roleClaims}
-	// }
-
-	// serviceClaims := make([]service.ServiceClaim, len(Services))
-	// for i, Service := range serviceClaims {
-	// 	serviceClaims[i] = service.ServiceClaim{
-	// 		ID:   Service.Identifier(),
-	// 		Name: Service.GetName()}
-	// }
-	// serviceClaimsJson, err := json.Marshal(serviceClaims)
-	// if err != nil {
-	// 	jwtService.responseWriter.Write(w, req, http.StatusInternalServerError,
-	// 		JsonWebToken{Error: "Error marshaling Services"})
-	// 	return
-	// }
-
-	user := entities.NewUser(userCred.Email)
-
-	tokenString, err := handler.jwtService.GenerateToken(user)
-	if err != nil {
-		handler.responseWriter.Error500(w, req, err)
+	if handler.loginClient == nil {
+		handler.logger.Error(ErrLoginUnavailable, "unified login client not configured")
+		handler.responseWriter.Error403(w, req, ErrLoginUnavailable, nil)
 		return
 	}
 
-	handler.logger.Debugf("rest/jwt: generated token: %s", tokenString)
+	ctx := req.Context()
 
-	handler.responseWriter.Success200(w, req, tokenString)
+	begin, err := handler.loginClient.BeginLogin(ctx, quicbaas.BeginLoginRequest{
+		Type: quicbaas.FactorTypeMTLS,
+		Hint: userCred.Email,
+	})
+	if err != nil {
+		handler.logger.Error(err, "unified BeginLogin(mtls) failed")
+		handler.responseWriter.Error401(w, req, err)
+		return
+	}
+
+	finish, err := handler.loginClient.FinishLogin(ctx, quicbaas.FinishLoginRequest{
+		SessionID: begin.SessionID,
+		Type:      quicbaas.FactorTypeMTLS,
+	})
+	if err != nil {
+		handler.logger.Error(err, "unified FinishLogin(mtls) failed")
+		handler.responseWriter.Error401(w, req, err)
+		return
+	}
+
+	if finish == nil || finish.Bearer == "" {
+		handler.logger.Error(ErrLoginFailed, "unified FinishLogin returned no bearer")
+		handler.responseWriter.Error401(w, req, ErrLoginFailed)
+		return
+	}
+
+	handler.logger.Debug("rest/jwt: unified login issued OIDC bearer")
+
+	handler.responseWriter.Success200(w, req, finish.Bearer)
 }
 
 // Exchange a JWT for a new token with a new expiration date
@@ -209,36 +212,6 @@ func (handler *RestHandler) RefreshToken(w http.ResponseWriter, r *http.Request)
 	}
 
 	handler.logger.Debugf("rest/jwt: claims: %+v", claims)
-
-	// userService := jwtService.serviceRegistry.GetUserService()
-	// userAccount, services, err := userService.Refresh(claims.UserID)
-	// if err != nil {
-	// 	jwtService.logger.Errorf("Error refreshing token: %s", err)
-	// 	jwtService.responseWriter.Write(w, req, http.StatusUnauthorized,
-	// 		JsonWebToken{Error: "Invalid token"})
-	// 	return
-	// }
-
-	// serviceClaims := make([]service.ServiceClaim, len(services))
-	// for i, Service := range services {
-	// 	roles := make([]string, 0)
-	// 	for _, user := range Service.GetUsers() {
-	// 		if user.ID == userAccount.Identifier() {
-	// 			for _, role := range user.GetRoles() {
-	// 				roles = append(roles, role.GetName())
-	// 			}
-	// 		}
-	// 	}
-	// 	serviceClaims[i] = service.ServiceClaim{
-	// 		ID:    Service.Identifier(),
-	// 		Name:  Service.GetName()}
-	// }
-	// serviceClaimsJson, err := json.Marshal(serviceClaims)
-	// if err != nil {
-	// 	jwtService.responseWriter.Write(w, req, http.StatusInternalServerError,
-	// 		JsonWebToken{Error: "Error marshaling Services"})
-	// 	return
-	// }
 
 	user := &entities.User{
 		ID: claims.UserID,

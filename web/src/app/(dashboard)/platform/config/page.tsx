@@ -1,72 +1,256 @@
 "use client";
 
 import * as React from "react";
-import { Download, Upload, Loader2 } from "lucide-react";
+import { Download, RefreshCw, Loader2, Camera, RotateCcw, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { ConfigSection } from "@/components/features/platform";
-// TODO: SDK doesn't have platform config service yet - legacy API removed
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
-import type { PlatformConfig } from "@/types/platform";
+
+interface ConfigSource {
+  path: string;
+  format: string;
+}
+
+interface ConfigTree {
+  sources: ConfigSource[];
+  tree: Record<string, unknown>;
+  generated_at: string;
+  redacted_keys?: string[];
+  secrets_hidden: boolean;
+}
+
+interface SnapshotSummary {
+  id: string;
+  created_at: string;
+  reason?: string;
+  actor?: string;
+  source_path?: string;
+  size_bytes: number;
+}
 
 /**
- * Configuration Page
+ * Platform Configuration page.
  *
- * Features:
- * - General settings (platform name, timezone, locale)
- * - Security settings (session timeout, MFA, password policy)
- * - Network settings (API endpoint, TLS configuration)
- * - TPM settings (PCR policy, attestation interval)
- * - CA settings (validity period, key algorithm)
- * - Export/Import configuration
+ * Reads /api/v1/platform/config — the live merged Viper config tree
+ * (defaults + overrides + env), with secret values replaced by ••••.
+ * Sources lists every config file that contributed, with format,
+ * so operators can see at a glance what the daemon actually loaded.
+ *
+ * A "Reload" button calls POST /api/v1/platform/config/reload which
+ * tells platformd to re-read the file without restart; the page then
+ * refreshes the tree.
+ *
+ * This replaces the static "Coming Soon" stub that lied about the
+ * config service being in development — the underlying viper config
+ * has always been queryable; the surface just wasn't wired up.
  */
 export default function ConfigPage() {
   const { toast } = useToast();
-  const [config, setConfig] = React.useState<PlatformConfig | null>(null);
+  const [config, setConfig] = React.useState<ConfigTree | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
-  const [isExporting, setIsExporting] = React.useState(false);
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [isReloading, setIsReloading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [filter, setFilter] = React.useState("");
+  const [snapshots, setSnapshots] = React.useState<SnapshotSummary[]>([]);
+  const [isCapturing, setIsCapturing] = React.useState(false);
+
+  // JWT auth runs through HTTP-only cookies set at WebAuthn login;
+  // browsers attach them automatically when credentials: "include".
+  const fetchOpts: RequestInit = React.useMemo(
+    () => ({
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    }),
+    [],
+  );
+
+  const fetchConfig = React.useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/v1/platform/config", fetchOpts);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      }
+      const body = await res.json();
+      const tree: ConfigTree =
+        body.payload && typeof body.payload === "object"
+          ? (body.payload as ConfigTree)
+          : (body as ConfigTree);
+      setConfig(tree);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [fetchOpts]);
+
+  const fetchSnapshots = React.useCallback(async () => {
+    try {
+      const res = await fetch("/api/v1/platform/config/snapshots", fetchOpts);
+      if (!res.ok) return; // 503 when store isn't configured — non-fatal
+      const body = await res.json();
+      const list: SnapshotSummary[] =
+        body.payload?.snapshots ?? body.snapshots ?? [];
+      setSnapshots(list);
+    } catch {
+      // snapshot listing is best-effort; failure shouldn't block the page
+    }
+  }, [fetchOpts]);
 
   React.useEffect(() => {
-    // TODO: SDK doesn't have platform config service yet
-    // Using placeholder data until SDK implementation is available
-    setIsLoading(false);
-    setConfig(null);
-  }, [toast]);
+    void fetchConfig();
+    void fetchSnapshots();
+  }, [fetchConfig, fetchSnapshots]);
 
-  const handleExport = async () => {
-    // TODO: SDK doesn't have platform config service yet
-    toast({
-      title: "Export not available",
-      description: "Platform configuration service is currently in development",
-      variant: "destructive",
-    });
-    setIsExporting(false);
+  const handleCaptureSnapshot = async () => {
+    setIsCapturing(true);
+    try {
+      const reason =
+        window.prompt("Snapshot reason (optional)", "manual") ?? "manual";
+      const res = await fetch("/api/v1/platform/config/snapshots", {
+        ...fetchOpts,
+        method: "POST",
+        headers: { ...fetchOpts.headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      }
+      const body = await res.json();
+      const id = body.payload?.id ?? body.id;
+      toast({ title: "Snapshot captured", description: id });
+      await fetchSnapshots();
+    } catch (e: unknown) {
+      toast({
+        title: "Snapshot failed",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
+      });
+    } finally {
+      setIsCapturing(false);
+    }
   };
 
-  const handleImportClick = () => {
-    fileInputRef.current?.click();
+  const handleRollback = async (snap: SnapshotSummary) => {
+    if (
+      !window.confirm(
+        `Roll back configuration to snapshot ${snap.id}? The current state will be captured as a new snapshot so this is reversible.`,
+      )
+    )
+      return;
+    try {
+      const res = await fetch(
+        `/api/v1/platform/config/snapshots/${encodeURIComponent(snap.id)}/rollback`,
+        { ...fetchOpts, method: "POST" },
+      );
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      }
+      const body = await res.json();
+      const pre = body.payload?.pre_rollback_snapshot ?? "";
+      toast({
+        title: "Rolled back",
+        description: pre ? `Pre-rollback snapshot: ${pre}` : "OK",
+      });
+      await fetchConfig();
+      await fetchSnapshots();
+    } catch (e: unknown) {
+      toast({
+        title: "Rollback failed",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
+      });
+    }
   };
 
-  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    // TODO: SDK doesn't have platform config service yet
-    toast({
-      title: "Import not available",
-      description: "Platform configuration service is currently in development",
-      variant: "destructive",
+  const handleDeleteSnapshot = async (snap: SnapshotSummary) => {
+    if (!window.confirm(`Delete snapshot ${snap.id}?`)) return;
+    try {
+      const res = await fetch(
+        `/api/v1/platform/config/snapshots/${encodeURIComponent(snap.id)}`,
+        { ...fetchOpts, method: "DELETE" },
+      );
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      }
+      toast({ title: "Snapshot deleted", description: snap.id });
+      await fetchSnapshots();
+    } catch (e: unknown) {
+      toast({
+        title: "Delete failed",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleReload = async () => {
+    setIsReloading(true);
+    try {
+      const res = await fetch("/api/v1/platform/config/reload", {
+        ...fetchOpts,
+        method: "POST",
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      }
+      const body = await res.json();
+      const sections =
+        body.payload?.sections ?? body.sections ?? [];
+      const snapID = body.payload?.pre_reload_snapshot ?? "";
+      toast({
+        title: "Configuration reloaded",
+        description: snapID
+          ? `Refreshed ${sections.length} sections. Pre-reload snapshot: ${snapID}`
+          : `Refreshed ${sections.length} top-level sections`,
+      });
+      await fetchConfig();
+      await fetchSnapshots();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast({
+        title: "Reload failed",
+        description: msg,
+        variant: "destructive",
+      });
+    } finally {
+      setIsReloading(false);
+    }
+  };
+
+  const handleDownload = () => {
+    if (!config) return;
+    const blob = new Blob([JSON.stringify(config.tree, null, 2)], {
+      type: "application/json",
     });
-    // Reset file input
-    event.target.value = "";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "platform-config.json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   if (isLoading) {
@@ -74,31 +258,10 @@ export default function ConfigPage() {
       <div className="space-y-6">
         <PageHeader
           title="Configuration"
-          description="Manage platform configuration settings"
+          description="Live merged platform configuration"
         />
         <div className="flex items-center justify-center h-64">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-        </div>
-      </div>
-    );
-  }
-
-  if (!config) {
-    return (
-      <div className="space-y-6">
-        <PageHeader
-          title="Configuration"
-          description="Manage platform configuration settings"
-        />
-        <div className="flex items-center justify-center h-64 border-2 border-dashed rounded-lg">
-          <div className="text-center">
-            <p className="text-lg font-medium text-muted-foreground mb-2">
-              Platform Configuration Coming Soon
-            </p>
-            <p className="text-sm text-muted-foreground">
-              SDK support for platform configuration is currently in development
-            </p>
-          </div>
         </div>
       </div>
     );
@@ -108,290 +271,241 @@ export default function ConfigPage() {
     <div className="space-y-6">
       <PageHeader
         title="Configuration"
-        description="Manage platform configuration settings"
+        description="Live merged platform configuration"
       >
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={handleImportClick}>
-            <Upload className="h-4 w-4 mr-2" />
-            Import Config
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCaptureSnapshot}
+            disabled={isCapturing}
+          >
+            {isCapturing ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Camera className="h-4 w-4 mr-2" />
+            )}
+            Snapshot
           </Button>
           <Button
             variant="outline"
             size="sm"
-            onClick={handleExport}
-            disabled={isExporting}
+            onClick={handleReload}
+            disabled={isReloading}
           >
-            {isExporting ? (
+            {isReloading ? (
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
             ) : (
-              <Download className="h-4 w-4 mr-2" />
+              <RefreshCw className="h-4 w-4 mr-2" />
             )}
-            Export Config
+            Reload
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleDownload}
+            disabled={!config}
+          >
+            <Download className="h-4 w-4 mr-2" />
+            Download
           </Button>
         </div>
       </PageHeader>
 
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".json"
-        className="hidden"
-        onChange={handleFileChange}
-      />
+      {error && (
+        <Card className="border-destructive/50">
+          <CardContent className="pt-6">
+            <p className="text-sm text-destructive">
+              Failed to load configuration: {error}
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
-      <div className="space-y-6">
-        {/* General Settings */}
-        <ConfigSection
-          title="General Settings"
-          description="Configure general platform settings"
-          onSave={async (data) => {
-            // TODO: SDK doesn't have platform config service yet
-            throw new Error("Platform configuration service is currently in development");
-          }}
-        >
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="name">Platform Name</Label>
-              <Input
-                id="name"
-                name="name"
-                defaultValue={config.general.name}
-                placeholder="Trusted Platform"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="timezone">Timezone</Label>
-              <Select name="timezone" defaultValue={config.general.timezone}>
-                <SelectTrigger id="timezone">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="UTC">UTC</SelectItem>
-                  <SelectItem value="America/New_York">Eastern Time</SelectItem>
-                  <SelectItem value="America/Chicago">Central Time</SelectItem>
-                  <SelectItem value="America/Denver">Mountain Time</SelectItem>
-                  <SelectItem value="America/Los_Angeles">Pacific Time</SelectItem>
-                  <SelectItem value="Europe/London">London</SelectItem>
-                  <SelectItem value="Europe/Paris">Paris</SelectItem>
-                  <SelectItem value="Asia/Tokyo">Tokyo</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="locale">Locale</Label>
-              <Select name="locale" defaultValue={config.general.locale}>
-                <SelectTrigger id="locale">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="en-US">English (US)</SelectItem>
-                  <SelectItem value="en-GB">English (UK)</SelectItem>
-                  <SelectItem value="fr-FR">French</SelectItem>
-                  <SelectItem value="de-DE">German</SelectItem>
-                  <SelectItem value="ja-JP">Japanese</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </ConfigSection>
-
-        {/* Security Settings */}
-        <ConfigSection
-          title="Security Settings"
-          description="Configure security and authentication settings"
-          onSave={async (data) => {
-            // TODO: SDK doesn't have platform config service yet
-            throw new Error("Platform configuration service is currently in development");
-          }}
-        >
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="sessionTimeout">Session Timeout (minutes)</Label>
-              <Input
-                id="sessionTimeout"
-                name="sessionTimeoutMinutes"
-                type="number"
-                defaultValue={config.security.sessionTimeoutMinutes}
-                min="5"
-                max="1440"
-              />
-            </div>
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="mfaRequired"
-                name="mfaRequired"
-                defaultChecked={config.security.mfaRequired}
-              />
-              <Label htmlFor="mfaRequired" className="cursor-pointer">
-                Require Multi-Factor Authentication
-              </Label>
-            </div>
-            <div className="space-y-3">
-              <Label>Password Policy</Label>
-              <div className="space-y-2 pl-4">
-                <div className="space-y-2">
-                  <Label htmlFor="minLength" className="text-sm">
-                    Minimum Length
-                  </Label>
-                  <Input
-                    id="minLength"
-                    name="passwordPolicy.minLength"
-                    type="number"
-                    defaultValue={config.security.passwordPolicy.minLength}
-                    min="8"
-                    max="128"
-                  />
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="requireUppercase"
-                    name="passwordPolicy.requireUppercase"
-                    defaultChecked={config.security.passwordPolicy.requireUppercase}
-                  />
-                  <Label htmlFor="requireUppercase" className="cursor-pointer text-sm">
-                    Require Uppercase Letters
-                  </Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="requireNumbers"
-                    name="passwordPolicy.requireNumbers"
-                    defaultChecked={config.security.passwordPolicy.requireNumbers}
-                  />
-                  <Label htmlFor="requireNumbers" className="cursor-pointer text-sm">
-                    Require Numbers
-                  </Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="requireSymbols"
-                    name="passwordPolicy.requireSymbols"
-                    defaultChecked={config.security.passwordPolicy.requireSymbols}
-                  />
-                  <Label htmlFor="requireSymbols" className="cursor-pointer text-sm">
-                    Require Symbols
-                  </Label>
-                </div>
+      {config && (
+        <>
+          <Card>
+            <CardHeader>
+              <CardTitle>Sources</CardTitle>
+              <CardDescription>
+                Files merged to produce the live configuration
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {config.sources.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No config file is currently loaded.
+                </p>
+              ) : (
+                <ul className="space-y-1 text-sm font-mono">
+                  {config.sources.map((src, i) => (
+                    <li key={i} className="flex items-center justify-between">
+                      <span>{src.path}</span>
+                      <Badge variant="secondary">{src.format}</Badge>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+                <span>
+                  Generated{" "}
+                  {new Date(config.generated_at).toLocaleString()}
+                </span>
+                {config.secrets_hidden && (
+                  <Badge variant="outline">
+                    {config.redacted_keys?.length ?? 0} secret
+                    {(config.redacted_keys?.length ?? 0) === 1 ? "" : "s"}{" "}
+                    redacted
+                  </Badge>
+                )}
               </div>
-            </div>
-          </div>
-        </ConfigSection>
+            </CardContent>
+          </Card>
 
-        {/* Network Settings */}
-        <ConfigSection
-          title="Network Settings"
-          description="Configure network and TLS settings"
-          onSave={async (data) => {
-            // TODO: SDK doesn't have platform config service yet
-            throw new Error("Platform configuration service is currently in development");
-          }}
-        >
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="apiEndpoint">API Endpoint</Label>
-              <Input
-                id="apiEndpoint"
-                name="apiEndpoint"
-                defaultValue={config.network.apiEndpoint}
-                placeholder="https://api.example.com"
-              />
-            </div>
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="tlsEnabled"
-                name="tlsEnabled"
-                defaultChecked={config.network.tlsEnabled}
-              />
-              <Label htmlFor="tlsEnabled" className="cursor-pointer">
-                Enable TLS
-              </Label>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="tlsMinVersion">Minimum TLS Version</Label>
-              <Select name="tlsMinVersion" defaultValue={config.network.tlsMinVersion}>
-                <SelectTrigger id="tlsMinVersion">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="1.2">TLS 1.2</SelectItem>
-                  <SelectItem value="1.3">TLS 1.3</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </ConfigSection>
+          <Card>
+            <CardHeader>
+              <CardTitle>Snapshots</CardTitle>
+              <CardDescription>
+                Pre-reload snapshots are captured automatically. Click
+                Rollback to restore a previous configuration — the
+                rollback itself is reversible.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {snapshots.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-4">
+                  No snapshots yet. The next reload (or a manual
+                  Snapshot click) will capture one.
+                </p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>ID</TableHead>
+                      <TableHead>When</TableHead>
+                      <TableHead>Reason</TableHead>
+                      <TableHead>Actor</TableHead>
+                      <TableHead className="text-right">Size</TableHead>
+                      <TableHead className="w-32" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {snapshots.map((s) => (
+                      <TableRow key={s.id}>
+                        <TableCell className="font-mono text-xs">
+                          {s.id}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {new Date(s.created_at).toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {s.reason ?? "—"}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {s.actor ?? "—"}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-xs">
+                          {s.size_bytes}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex gap-1 justify-end">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="Roll back to this snapshot"
+                              onClick={() => handleRollback(s)}
+                            >
+                              <RotateCcw className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="Delete snapshot"
+                              onClick={() => handleDeleteSnapshot(s)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
 
-        {/* TPM Settings */}
-        <ConfigSection
-          title="TPM Settings"
-          description="Configure Trusted Platform Module settings"
-          onSave={async (data) => {
-            // TODO: SDK doesn't have platform config service yet
-            throw new Error("Platform configuration service is currently in development");
-          }}
-        >
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="defaultPcrPolicy">Default PCR Policy (comma-separated)</Label>
+          <Card>
+            <CardHeader>
+              <CardTitle>Configuration Tree</CardTitle>
+              <CardDescription>
+                Merged values — secrets are shown as ••••
+              </CardDescription>
               <Input
-                id="defaultPcrPolicy"
-                name="defaultPcrPolicy"
-                defaultValue={config.tpm.defaultPcrPolicy.join(",")}
-                placeholder="0,1,2,3"
+                placeholder="Filter by key (case-insensitive)…"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                className="mt-2 max-w-md"
               />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="attestationInterval">Attestation Interval (minutes)</Label>
-              <Input
-                id="attestationInterval"
-                name="attestationIntervalMinutes"
-                type="number"
-                defaultValue={config.tpm.attestationIntervalMinutes}
-                min="1"
-                max="1440"
-              />
-            </div>
-          </div>
-        </ConfigSection>
-
-        {/* CA Settings */}
-        <ConfigSection
-          title="Certificate Authority Settings"
-          description="Configure CA and certificate settings"
-          onSave={async (data) => {
-            // TODO: SDK doesn't have platform config service yet
-            throw new Error("Platform configuration service is currently in development");
-          }}
-        >
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="defaultValidityDays">Default Validity Period (days)</Label>
-              <Input
-                id="defaultValidityDays"
-                name="defaultValidityDays"
-                type="number"
-                defaultValue={config.ca.defaultValidityDays}
-                min="1"
-                max="3650"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="defaultKeyAlgorithm">Default Key Algorithm</Label>
-              <Select name="defaultKeyAlgorithm" defaultValue={config.ca.defaultKeyAlgorithm}>
-                <SelectTrigger id="defaultKeyAlgorithm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="RSA2048">RSA 2048</SelectItem>
-                  <SelectItem value="RSA4096">RSA 4096</SelectItem>
-                  <SelectItem value="ECDSA256">ECDSA P-256</SelectItem>
-                  <SelectItem value="ECDSA384">ECDSA P-384</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </ConfigSection>
-      </div>
+            </CardHeader>
+            <CardContent>
+              <ScrollArea className="h-[480px] w-full rounded-md border">
+                <pre className="p-4 text-xs font-mono leading-relaxed">
+                  {filter
+                    ? filterTree(config.tree, filter.toLowerCase())
+                    : JSON.stringify(config.tree, null, 2)}
+                </pre>
+              </ScrollArea>
+            </CardContent>
+          </Card>
+        </>
+      )}
     </div>
   );
+}
+
+// filterTree returns a JSON pretty-print of the subset of tree whose
+// dotted-path keys contain the lowercase substring. Leaves are kept
+// alongside their full ancestry so the result still parses as valid
+// JSON-shaped output. Matches anywhere in the path so "tpm.device"
+// matches when the user types "device".
+function filterTree(tree: Record<string, unknown>, q: string): string {
+  const matches: Record<string, unknown> = {};
+  walk(tree, "", (key, val) => {
+    if (key.toLowerCase().includes(q)) {
+      assignAtPath(matches, key.split("."), val);
+    }
+  });
+  return JSON.stringify(matches, null, 2);
+}
+
+function walk(
+  obj: unknown,
+  prefix: string,
+  visit: (key: string, val: unknown) => void,
+): void {
+  if (obj !== null && typeof obj === "object" && !Array.isArray(obj)) {
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      const path = prefix ? `${prefix}.${k}` : k;
+      walk(v, path, visit);
+    }
+  } else {
+    visit(prefix, obj);
+  }
+}
+
+function assignAtPath(
+  target: Record<string, unknown>,
+  parts: string[],
+  val: unknown,
+): void {
+  let cur = target;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const part = parts[i];
+    if (!(part in cur) || typeof cur[part] !== "object" || cur[part] === null) {
+      cur[part] = {};
+    }
+    cur = cur[part] as Record<string, unknown>;
+  }
+  cur[parts[parts.length - 1]] = val;
 }

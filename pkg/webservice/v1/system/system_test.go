@@ -28,12 +28,12 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	pkgca "github.com/jeremyhahn/go-xkms/pkg/ca"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -71,9 +71,9 @@ func (m *mockCertificateAuthority) CABundleFiltered(storeType xkmssdk.StoreType,
 	return args.Get(0).([]byte), args.Error(1)
 }
 
-func (m *mockCertificateAuthority) CAConfig() pkgca.CAConfig {
+func (m *mockCertificateAuthority) CAConfig() xkmsca.CAConfig {
 	args := m.Called()
-	return args.Get(0).(pkgca.CAConfig)
+	return args.Get(0).(xkmsca.CAConfig)
 }
 
 // mockTrustedPlatformModule is a simple mock that only implements methods used by system.TPMInfo

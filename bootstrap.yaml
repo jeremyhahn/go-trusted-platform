@@ -1,0 +1,273 @@
+# Three-node deployment bootstrap.
+#
+# Full deployment: lab-node-2 (CP) + lab-node-1 (GW) + lab-node-3 (compute)
+#
+# Bootstrap ordering:
+#   1. Deploy lab-node-2 (control plane) via virtual media
+#   2. Deploy lab-node-1 (gateway) via virtual media
+#      - GW enrolls with CP's CA (ACME enroll-01)
+#      - GW starts DHCP/PXE on provisioning VLAN
+#   3. lab-node-3 (compute) PXE boots via GW, fetches config from CP
+#   4. CP moves lab-node-3 port to production VLAN
+#   5. Bootstrap complete
+
+iso_path: bin/trusted-platform-cp.iso
+
+deployer:
+  target: linux
+  host: 198.51.100.91
+  smb_host: 198.18.1.91
+  user: jhahn
+  ssh_key: ~/.ssh/id_rsa
+  container_runtime: docker
+  container_image: platform-pxeboot:latest
+  # Fix D: explicit data dir + redeploy mode. /tmp/pxeboot-data is the
+  # historical staging directory used by the manually-launched bootstrap
+  # container — keeping it lets a fresh deploy reuse the existing smbd
+  # share path without wiping it. The orchestrator now extracts kernel,
+  # initramfs, and autoinstall.sh from the container image into this
+  # directory so the bind-mount doesn't shadow them.
+  data_dir: /tmp/pxeboot-data
+  # if-stale (default): Verify before Deploy; redeploy only when image,
+  # bind-mount, or running state diverges from this config. Avoids
+  # wiping a healthy bootstrap container on every orchestrator run.
+  redeploy_mode: if-stale
+  # Jumpbox's bootstrap-network NIC is a USB Ethernet dongle
+  # (198.18.1.91/24 lives on enxc8a362b837de). Override the
+  # container's eth0 default so pxeboot binds DHCP/TFTP to the
+  # right interface inside the --net=host container.
+  bootstrap_interface: enxc8a362b837de
+  # Bind pxeboot HTTP/TFTP/script-server on the management network
+  # (198.18.1.0/24). The entrypoint default (172.16.201.1) is for
+  # the eventual provisioning-VLAN bring-up by the gateway; for the
+  # transient jumpbox container we need to bind on an IP the host
+  # actually holds, otherwise the script server fails with
+  # "bind: cannot assign requested address" and supervisord enters
+  # FATAL state. The mini BMCs reach the install-log endpoint on
+  # http://198.18.1.91:8080/installs/... over this network.
+  bootstrap_server_ip: 198.18.1.91
+  # DHCP from the bootstrap container is only relevant when a node
+  # PXE-boots on this jumpbox network. All three minis use
+  # virtual-media boot, so the DHCP server runs but never serves a
+  # request. Pick a tiny range well outside the static allocations
+  # (.102-.106 BMC, .139-.141 hosts) so it can't accidentally
+  # interfere with anything.
+  bootstrap_dhcp_start: 198.18.1.220
+  bootstrap_dhcp_end:   198.18.1.230
+  bootstrap_gateway:    198.18.1.1
+  bootstrap_dns:        198.18.1.1
+
+subnets:
+  - name: production
+    scope: internal
+    vlan-id: 200
+    cidr: 198.18.0.0/24
+    gateway: 198.18.0.1
+    dns:
+      - 198.18.0.1
+    dhcp:
+      enabled: true
+      range-start: 198.18.0.10
+      range-end: 198.18.0.254
+      lease-duration: 24h
+  - name: provisioning
+    scope: internal
+    vlan-id: 201
+    cidr: 172.16.201.0/24
+    gateway: 172.16.201.1
+    dns:
+      - 172.16.201.1
+    role: provisioning
+    dhcp:
+      enabled: true
+      range-start: 172.16.201.50
+      range-end: 172.16.201.254
+      lease-duration: 1h
+  - name: quarantine
+    scope: internal
+    vlan-id: 202
+    cidr: 172.16.202.0/24
+    gateway: 172.16.202.1
+    dns:
+      - 172.16.202.1
+    role: quarantine
+  - name: storage
+    scope: internal
+    vlan-id: 203
+    cidr: 172.16.203.0/24
+    gateway: 172.16.203.1
+    dns:
+      - 172.16.203.1
+    dhcp:
+      enabled: true
+      range-start: 172.16.203.10
+      range-end: 172.16.203.254
+      lease-duration: 24h
+
+fabric:
+  mode: vlan
+  switches:
+    - id: nexus-01
+      vendor: cisco-nexus
+      model: N9K-C93180YC-EX
+      mgmt-ip: 198.18.1.4
+      credentials-ref: "encrypted://placeholder-nexus-01-credentials"
+    - id: nexus-02
+      vendor: cisco-nexus
+      model: N9K-C93180YC-EX
+      mgmt-ip: 198.18.1.5
+      credentials-ref: "encrypted://placeholder-nexus-02-credentials"
+  peers:
+    - switch-a: nexus-01
+      switch-b: nexus-02
+      peer-link-ports:
+        - Ethernet1/47
+        - Ethernet1/48
+  segments:
+    # Fabric segment roles: provisioning | quarantine | <empty>.
+    # Production + storage leave role unset (matches platform validator
+    # pkg/sdn/fabric/config.go).
+    - name: production
+      vlan: 200
+    - name: provisioning
+      vlan: 201
+      role: provisioning
+    - name: quarantine
+      vlan: 202
+      role: quarantine
+    - name: storage
+      vlan: 203
+
+platform:
+  domain: trusted-platform.io
+  internal_domain: trusted-platform.internal
+  hostmaster: hostmaster@trusted-platform.io
+  tenant_id: default
+  environment: production
+  upstream_dns:
+    - "8.8.8.8"
+    - "8.8.4.4"
+  bootstrap_strategy: dane
+
+templates:
+  control-plane: configs/platform/templates/dedicated/supermicro/x10/control-plane.yaml
+  gateway: configs/platform/templates/dedicated/supermicro/x10/gateway.yaml
+  worker: configs/platform/templates/dedicated/supermicro/x10/compute.yaml
+
+nodes:
+  # CP (lab-node-4 hardware, lab-node-2 BMC dead and replaced).
+  # Hostname stays lab-node-2 so the existing per-node override file
+  # (overrides/lab-node-2.control-plane.yaml) and platform-internal DNS/cert
+  # records line up. BMC is .105 (lab-node-4 chassis) and the discovered
+  # primary MAC from that hardware is ac:1f:6b:7c:84:02.
+  - bmc_address: "198.18.1.105"
+    bmc_user: claude
+    bmc_password: "REMOVED-BMC-PASSWORD"
+    bmc_protocol: ipmi
+    bmc_skip_tls_verify: true
+    role: control-plane
+    hostname: lab-node-2
+    mac: "ac:1f:6b:7c:84:02"
+    boot_method: virtual-media
+    # Already deployed in the 2026-05-22 run (live at 198.18.1.140 with
+    # WebUI on :8443, gRPC on :10443, DNS on :8053). Skip reinstall — the
+    # orchestrator still gates on its health endpoint and runs the seed
+    # phase against it.
+    skip_install: true
+    switch_port: "Ethernet1/36"
+    # External per-node override file. Deep-merged on top of the role
+    # template (control-plane.yaml) BEFORE the inline `overrides:` below
+    # so the inline entries still win on conflict. Carries DNS,
+    # dnsmasq, OVS bridge, eth6/eth7 bond, and the full control-plane
+    # network stack.
+    overrides_file: overrides/lab-node-2.control-plane.yaml
+    overrides:
+      os:
+        hostname: lab-node-2
+      network:
+        interfaces:
+          - name: eth0
+            type: static
+            ipv4-address: 198.18.1.140/24
+            ipv4-gateway: 198.18.1.1
+            auto-start: true
+      bmc:
+        address: 198.18.1.103
+      tpm:
+        idevid:
+          serial: lab-node-2-cp-01
+
+  # Gateway - deployed second via virtual media, enrolls with CP
+  - bmc_address: "198.18.1.102"
+    bmc_user: claude
+    bmc_password: "REMOVED-BMC-PASSWORD"
+    bmc_protocol: ipmi
+    bmc_skip_tls_verify: true
+    role: gateway
+    hostname: lab-node-1
+    mac: "00:25:90:5e:01:aa"
+    boot_method: virtual-media
+    # Already deployed in the 2026-05-22 run (live at 198.18.1.139 with
+    # edge HTTP/HTTPS on :80/:443 and internal gRPC on :10443).
+    skip_install: true
+    switch_port: "Ethernet1/35"
+    overrides_file: overrides/lab-node-1.gateway.yaml
+    overrides:
+      os:
+        hostname: lab-node-1
+      network:
+        interfaces:
+          - name: eth0
+            type: static
+            ipv4-address: 198.18.1.139/24
+            ipv4-gateway: 198.18.1.1
+            auto-start: true
+      bmc:
+        address: 198.18.1.102
+      tpm:
+        idevid:
+          serial: lab-node-1-gw-01
+
+  # Compute (lab-node-5 hardware, BMC .106).
+  # Replaces lab-node-3 hardware whose SLB9665 TPM has the NV_SPACE bug
+  # (insufficient NV memory for IDevID allocation — verified end-to-end
+  # 2026-05-23: OS installed cleanly, EK/SRK provisioned, but IDevID
+  # NV alloc fails so platformd never finishes enrollment). lab-node-5 is
+  # the spare Supermicro X10 chassis with the same hardware family and
+  # a healthy TPM.
+  - bmc_address: "198.18.1.106"
+    bmc_user: claude
+    bmc_password: "REMOVED-BMC-PASSWORD"
+    bmc_protocol: ipmi
+    bmc_skip_tls_verify: true
+    role: worker
+    hostname: lab-node-5
+    mac: "3c:ec:ef:6c:f8:ec"
+    # Virtual-media boot. lab-node-5 has a clean disk path (no prior
+    # platform install) so the X10 NVRAM/disk-entry wall that forced
+    # lab-node-3 to PXE doesn't apply here. PXE was attempted first but
+    # lab-node-5's BIOS silently ignores boot overrides — Redfish
+    # Continuous + Pxe gets reset to Disabled after cycle, OEM IPMI
+    # 0x30/0x70/0x0c PXE also consumed without effect, and no DHCP
+    # offers reach the bootstrap container from any of the 8 NICs.
+    # vmedia works the same way it worked on lab-node-4 (identical
+    # Supermicro X10 + ATEN BMC 4.0 + BIOS 2.6) — UefiCd Continuous
+    # override + SMB1 vmedia mount.
+    boot_method: virtual-media
+    switch_port: "Ethernet1/37"
+    overrides_file: overrides/lab-node-5.compute.yaml
+    overrides:
+      os:
+        hostname: lab-node-5
+      network:
+        interfaces:
+          - name: eth0
+            type: static
+            ipv4-address: 198.18.1.143/24
+            ipv4-gateway: 198.18.1.1
+            auto-start: true
+      bmc:
+        address: 198.18.1.106
+      tpm:
+        idevid:
+          serial: lab-node-5-compute-01

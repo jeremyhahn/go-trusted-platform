@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
@@ -30,8 +30,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
 
 // QUICServiceHandler implements quic.Handler interface and delegates to daemon services.
@@ -62,20 +62,21 @@ type QUICServiceHandler struct {
 	gatewayHandler     *quic.GatewayHandler
 	switchService      switchServiceProvider
 	// Phase 3.5 handlers - wired via Set*Service on the daemon.
-	ceremonyQUIC       *ceremonyQUICHandlers
-	pivQUIC            *pivQUICHandlers
-	luksQUIC           *luksQUICHandlers
-	fido2QUIC          *fido2QUICHandlers
+	ceremonyQUIC *ceremonyQUICHandlers
+	pivQUIC      *pivQUICHandlers
+	luksQUIC     *luksQUICHandlers
+	fido2QUIC    *fido2QUICHandlers
 }
 
 // QUICServiceHandlerOption is a functional option for configuring QUICServiceHandler
 type QUICServiceHandlerOption func(*QUICServiceHandler)
 
-// WithQUICCAService sets the CA service for the QUIC handler
-func WithQUICCAService(ca goca.CACertificateAuthority) QUICServiceHandlerOption {
+// WithQUICCAService sets the CA service for the QUIC handler.
+// objStorage may be nil; if nil, the revocation object-store check is skipped.
+func WithQUICCAService(ca quicbaasca.CACertificateAuthority) QUICServiceHandlerOption {
 	return func(h *QUICServiceHandler) {
 		if ca != nil {
-			h.caHandler = quic.NewCAHandler(h.logger, ca)
+			h.caHandler = quic.NewCAHandler(h.logger, ca, nil)
 		}
 	}
 }

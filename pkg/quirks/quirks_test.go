@@ -437,6 +437,38 @@ func TestHPEVmediaRedfishOEMFallbackFalse(t *testing.T) {
 	assert.False(t, q.VmediaRedfishOEMFallback)
 }
 
+// TestResolveVeloCloudEDGE840 verifies the VeloCloud Networks EDGE840
+// (Supermicro X10SDV silicon under an OEM SMBIOS skin) inherits every
+// X10 quirk the orchestrator needs to bootstrap a node whose disk
+// already holds a UEFI Linux entry. Without these, the X10 BIOS erases
+// "Once" overrides before POST and the node falls back to the on-disk
+// installation, causing the install-log probe to time out.
+func TestResolveVeloCloudEDGE840(t *testing.T) {
+	q := Resolve("VeloCloud Networks, Inc.", "EDGE840")
+
+	assert.Equal(t, "VeloCloud Networks, Inc.", q.Manufacturer,
+		"VeloCloud entry must be selected (not the generic Default)")
+	assert.True(t, q.BootOverrideContinuous,
+		"X10 ATEN BMC erases Once overrides before BIOS POST — must force Continuous")
+	assert.Equal(t, "smc-oem-ipmi", q.BootOverrideStrategy,
+		"OEM IPMI 0x30/0x70/0x0c is honored by ATEN firmware where standard PATCH is not")
+	assert.True(t, q.VmediaRedfishOEMFallback,
+		"X10 ATEN BMC 404s standard EjectMedia — fallback signal must be set")
+	assert.Equal(t, "NT1", q.SambaMinProtocol,
+		"X10 ATEN BMC only speaks SMB1 for virtual-media mounts")
+	assert.Equal(t, "UefiCd", q.BootMediaType.UEFICDAlias,
+		"UEFI CDROM slot is spelled 'UefiCd' on this BMC")
+}
+
+// TestResolveVeloCloudCaseInsensitive verifies the lookup matches even
+// when Redfish returns mixed-case or trimmed manufacturer/model strings.
+func TestResolveVeloCloudCaseInsensitive(t *testing.T) {
+	q := Resolve("  velocloud networks, inc.  ", "edge840")
+
+	assert.Equal(t, "VeloCloud Networks, Inc.", q.Manufacturer,
+		"manufacturer match must be case- and whitespace-insensitive")
+}
+
 // --- helpers ---
 
 // assertContainsParam checks that params contains the expected string.

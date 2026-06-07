@@ -23,11 +23,10 @@ import (
 	"strings"
 	"time"
 
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	objstore "github.com/jeremyhahn/go-objstore/pkg/common"
-	pkgca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 // CA pagination defaults
@@ -39,15 +38,18 @@ const (
 
 // CAHandler handles Certificate Authority operations over QUIC
 type CAHandler struct {
-	ca     goca.CACertificateAuthority
-	logger *logging.Logger
+	ca         quicbaasca.CACertificateAuthority
+	logger     *logging.Logger
+	objStorage objectstorage.Client
 }
 
-// NewCAHandler creates a new CA handler
-func NewCAHandler(logger *logging.Logger, ca goca.CACertificateAuthority) *CAHandler {
+// NewCAHandler creates a new CA handler.
+// objStorage may be nil; if nil, the revocation object-store check is skipped.
+func NewCAHandler(logger *logging.Logger, ca quicbaasca.CACertificateAuthority, objStorage objectstorage.Client) *CAHandler {
 	return &CAHandler{
-		ca:     ca,
-		logger: logger,
+		ca:         ca,
+		logger:     logger,
+		objStorage: objStorage,
 	}
 }
 
@@ -336,8 +338,8 @@ func (h *CAHandler) handleIssue(ctx context.Context, req *Request) *Response {
 		return h.errorResponse(StatusInvalidArgument, err)
 	}
 
-	caReq := &goca.CACertificateRequest{
-		Subject: goca.CASubject{
+	caReq := &quicbaasca.CACertificateRequest{
+		Subject: quicbaasca.CASubject{
 			CommonName:         issueReq.Subject.CommonName,
 			Organization:       issueReq.Subject.Organization,
 			OrganizationalUnit: issueReq.Subject.OrganizationalUnit,
@@ -355,7 +357,7 @@ func (h *CAHandler) handleIssue(ctx context.Context, req *Request) *Response {
 	}
 
 	if issueReq.Sans != nil {
-		caReq.SANS = &goca.CASubjectAlternativeNames{
+		caReq.SANS = &quicbaasca.CASubjectAlternativeNames{
 			DNS:   issueReq.Sans.DNS,
 			IPs:   issueReq.Sans.IPs,
 			Email: issueReq.Sans.Email,
@@ -518,7 +520,7 @@ func (h *CAHandler) handleRevoke(ctx context.Context, req *Request) *Response {
 		}
 	}
 
-	if err := h.ca.RevokeCert(cert, pkgca.RevokeOptions{DeleteKeys: keyAttrs != nil}); err != nil {
+	if err := h.ca.RevokeCert(cert, quicbaasca.RevokeOptions{DeleteKeys: keyAttrs != nil}); err != nil {
 		h.logger.Error(err, "failed to revoke certificate")
 		return h.errorResponse(StatusInternalError, ErrCARevokeFailed{Cause: err})
 	}
@@ -566,8 +568,8 @@ func (h *CAHandler) handleRenew(ctx context.Context, req *Request) *Response {
 		return h.errorResponse(StatusNotFound, ErrCACertNotFound{Serial: renewReq.Serial})
 	}
 
-	caReq := &goca.CACertificateRequest{
-		Subject: goca.CASubject{
+	caReq := &quicbaasca.CACertificateRequest{
+		Subject: quicbaasca.CASubject{
 			CommonName:         existingCert.Subject.CommonName,
 			Organization:       firstOrEmpty(existingCert.Subject.Organization),
 			OrganizationalUnit: firstOrEmpty(existingCert.Subject.OrganizationalUnit),
@@ -586,7 +588,7 @@ func (h *CAHandler) handleRenew(ctx context.Context, req *Request) *Response {
 
 	if len(existingCert.DNSNames) > 0 || len(existingCert.IPAddresses) > 0 ||
 		len(existingCert.EmailAddresses) > 0 || len(existingCert.URIs) > 0 {
-		caReq.SANS = &goca.CASubjectAlternativeNames{
+		caReq.SANS = &quicbaasca.CASubjectAlternativeNames{
 			DNS:   existingCert.DNSNames,
 			Email: existingCert.EmailAddresses,
 		}
@@ -942,32 +944,15 @@ func (h *CAHandler) findCertByIdentifier(identifier string) *x509.Certificate {
 // =============================================================================
 
 // checkRevocationViaObjectStore checks if a certificate has been revoked by
-// querying the CA's object store directly. This works around a bug in
-// go-trusted-ca where Revoke() stores revocation info in the object store
-// but IsRevoked() only checks go-xkms's in-memory map.
-//
-// The native TrustedCA interface does not expose the object store directly;
-// the concrete *pkg/ca.CA struct does. Probe via an ad-hoc interface so this
-// degrades gracefully when the underlying implementation changes.
+// querying the QuicBaaS ObjectStorage directly. Revocation records are written
+// by go-xkms CA at "revocations/<serial-decimal>.json".
 func (h *CAHandler) checkRevocationViaObjectStore(cert *x509.Certificate) bool {
-	type objectStoreProvider interface {
-		ObjectStore() objstore.Storage
-	}
-	provider, ok := h.ca.(objectStoreProvider)
-	if !ok {
+	if h.objStorage == nil {
 		return false
 	}
-	objStore := provider.ObjectStore()
-	if objStore == nil {
-		return false
-	}
-	key := fmt.Sprintf("revocations/%s/%s.json", cert.Subject.CommonName, cert.SerialNumber.String())
-	reader, err := objStore.Get(key)
-	if err != nil {
-		return false
-	}
-	_ = reader.Close()
-	return true
+	key := fmt.Sprintf("revocations/%s.json", cert.SerialNumber.Text(10))
+	_, err := h.objStorage.GetObject(context.Background(), &objectstorage.GetObjectRequest{Key: key})
+	return err == nil
 }
 
 // =============================================================================

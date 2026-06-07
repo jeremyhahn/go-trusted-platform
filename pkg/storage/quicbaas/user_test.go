@@ -295,7 +295,6 @@ func TestUserDAO_ComplexUser(t *testing.T) {
 	user.Password = "hashedpassword123"
 	user.OrganizationRefs = []uint64{100, 200, 300}
 	user.ServiceRefs = []uint64{1000, 2000}
-	user.SessionData = []byte(`{"session":"data"}`)
 	user.AddRole(&entities.Role{ID: 1, Name: "admin"})
 
 	err := dao.Save(ctx, user)
@@ -309,6 +308,5 @@ func TestUserDAO_ComplexUser(t *testing.T) {
 	assert.Equal(t, "hashedpassword123", retrieved.Password)
 	assert.Equal(t, []uint64{100, 200, 300}, retrieved.OrganizationRefs)
 	assert.Equal(t, []uint64{1000, 2000}, retrieved.ServiceRefs)
-	assert.Equal(t, []byte(`{"session":"data"}`), retrieved.SessionData)
 	assert.True(t, retrieved.HasRole("admin"))
 }

@@ -75,7 +75,12 @@ func (m *Manager) SyncStatus(ctx context.Context) error {
 		return &ManagerError{Op: "SyncStatus", Err: err}
 	}
 
-	m.initialized.Store(true)
+	// A non-empty InitializedAt is the canonical signal the underlying
+	// StorageBarrier has been initialized. A fresh barrier returns
+	// Sealed=true with an empty InitializedAt; without this distinction
+	// the M6 gate misreports the platform state as "sealed" instead of
+	// "uninitialized" right after boot.
+	m.initialized.Store(status.InitializedAt != "")
 	m.sealed.Store(status.Sealed)
 
 	if !status.Sealed {
@@ -489,7 +494,7 @@ func (m *Manager) ClaimShare(ctx context.Context, username string) ([]byte, erro
 
 // ceremonyClient returns the QRDB CeremonyClient from the SDK.
 func (m *Manager) ceremonyClient() (quicbaassdk.QRDBCeremonyClient, error) {
-	return m.sdk.BarrierCeremony()
+	return m.sdk.Security().Ceremony()
 }
 
 // WaitReady blocks until the barrier is unsealed or the context is cancelled.
@@ -522,7 +527,7 @@ func (m *Manager) Config() *Config {
 
 // barrierClient returns the QRDB BarrierClient from the SDK.
 func (m *Manager) barrierClient() (quicbaassdk.QRDBBarrierClient, error) {
-	return m.sdk.Barrier()
+	return m.sdk.Security().Barrier()
 }
 
 // barrierStatus queries the barrier status via the SDK.

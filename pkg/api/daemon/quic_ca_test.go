@@ -30,11 +30,10 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-codec"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	pkgca "github.com/jeremyhahn/go-xkms/pkg/ca"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -156,15 +155,15 @@ func (m *mockCAForDaemon) Signer() (crypto.Signer, error)                     { 
 func (m *mockCAForDaemon) CASigner(_ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
 	return m, nil
 }
-func (m *mockCAForDaemon) IssueCertificate(req *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
+func (m *mockCAForDaemon) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	cert := generateTestCertificateForDaemon(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
 	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
 		m.certStore.StoreCertificate(cert)
 	}
-	return &pkgca.IssuedCertificate{Certificate: cert}, nil
+	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 }
-func (m *mockCAForDaemon) RevokeCert(cert *x509.Certificate, _ pkgca.RevokeOptions) error {
+func (m *mockCAForDaemon) RevokeCert(cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	m.revokedCerts = append(m.revokedCerts, cert)
 	return nil
 }
@@ -800,7 +799,7 @@ func TestQUICServiceHandler_SetCAHandler(t *testing.T) {
 	assert.Equal(t, quic.StatusUnavailable, resp.Status)
 
 	// Set CA handler
-	caHandler := quic.NewCAHandler(logger, mockCA)
+	caHandler := quic.NewCAHandler(logger, mockCA, nil)
 	handler.SetCAHandler(caHandler)
 
 	// Now CA should be available

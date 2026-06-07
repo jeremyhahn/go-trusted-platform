@@ -11,94 +11,53 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
+// unseal.go implements the canonical "barrier unseal" verb. Single
+// passphrase unseal — the Shamir-share path lives in unseal_shares.go.
 package barrier
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	barriersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/barrier"
 )
 
-// newUnsealCommand creates the barrier unseal subcommand
-func newUnsealCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
-	var (
-		secret string
-		share  string
-	)
+// unsealFlags holds the canonical `barrier unseal` flag set.
+type unsealFlags struct {
+	secret string
+}
 
+// newUnsealCommand builds the canonical `barrier unseal` command.
+func newUnsealCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
+	f := &unsealFlags{}
 	cmd := &cobra.Command{
 		Use:   "unseal",
-		Short: "Unseal the barrier",
-		Long: `Unseal the barrier to allow access to encrypted platform data.
+		Short: "Unseal the barrier with a single passphrase",
+		Long: `Unseal the barrier using a single passphrase.
 
-For single-key mode, provide the secret with --secret.
-For Shamir mode, provide a share with --share. Multiple unseal
-commands may be needed until the threshold is reached.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			flags := getFlags()
-			return runUnseal(flags, secret, share)
+For Shamir-sharded barriers use "barrier unseal-shares" instead.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runUnseal(getFlags(), f)
 		},
 	}
-
-	cmd.Flags().StringVar(&secret, "secret", "", "unseal secret (single-key mode)")
-	cmd.Flags().StringVar(&share, "share", "", "Shamir share for unseal")
-
+	cmd.Flags().StringVar(&f.secret, "passphrase", "", "Unseal passphrase (required)")
 	return cmd
 }
 
-func runUnseal(flags *cli.CommonFlags, secret, share string) error {
-	// Determine the unseal key from flags
-	unsealKey := secret
-	if share != "" {
-		unsealKey = share
-	}
-
-	if unsealKey == "" {
+// runUnseal validates and delegates to dispatchUnseal.
+func runUnseal(flags *cli.CommonFlags, f *unsealFlags) error {
+	if f.secret == "" {
 		return ErrMissingSecret{}
 	}
-
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
 		return err
 	}
 	defer base.Close()
 
-	sdkClient := barriersvc.NewClientFromGRPC(base.Client().Barrier())
-
-	ctx := base.Context()
-	result, err := sdkClient.Unseal(ctx, &barriersvc.UnsealParams{
-		Secret: unsealKey,
-	})
-	if err != nil {
-		return ErrBarrierUnsealFailed{Err: err}
+	bc, qerr := openBarrierClient(base)
+	if qerr != nil {
+		return qerr
 	}
-
-	printer := base.Printer()
-
-	switch flags.OutputFormat {
-	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(result)
-
-	case cli.OutputFormatTable:
-		return printUnsealTable(printer, result)
-
-	default:
-		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
-	}
-}
-
-func printUnsealTable(printer *cli.Printer, result *barriersvc.UnsealResult) error {
-	if !result.Sealed {
-		printer.PrintSuccess("Barrier unsealed successfully")
-		return nil
-	}
-
-	// Shamir mode: show progress
-	printer.PrintInfo(fmt.Sprintf("Unseal progress: %d/%d shares provided",
-		result.SharesProvided, result.SharesThreshold))
-
-	return nil
+	return dispatchUnseal(newDispatcherFromBase(base, bc), f.secret)
 }

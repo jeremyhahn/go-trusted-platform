@@ -29,8 +29,7 @@ import (
 	"time"
 
 	acmeclient "github.com/jeremyhahn/go-xkms/pkg/acme/client"
-	pkgca "github.com/jeremyhahn/go-xkms/pkg/ca"
-	casdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
@@ -64,12 +63,12 @@ func (f *fakeACME) RequestCertificate(_ context.Context, req *acmeclient.Certifi
 type fakeLocalCA struct {
 	mu      sync.Mutex
 	err     error
-	lastReq *casdk.CACertificateRequest
+	lastReq *xkmsca.CertificateRequest
 	callCnt int
 	retCert *x509.Certificate
 }
 
-func (f *fakeLocalCA) IssueCertificate(req *casdk.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
+func (f *fakeLocalCA) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.callCnt++
@@ -78,9 +77,9 @@ func (f *fakeLocalCA) IssueCertificate(req *casdk.CACertificateRequest) (*pkgca.
 		return nil, f.err
 	}
 	if f.retCert != nil {
-		return &pkgca.IssuedCertificate{Certificate: f.retCert}, nil
+		return &xkmsca.IssuedCertificate{Certificate: f.retCert}, nil
 	}
-	return &pkgca.IssuedCertificate{Certificate: testIssuedCertificate()}, nil
+	return &xkmsca.IssuedCertificate{Certificate: testIssuedCertificate()}, nil
 }
 
 type fakeDNS struct {
@@ -267,11 +266,11 @@ func TestNamedCurve(t *testing.T) {
 // --- buildBMCSubjectAltNames ---
 
 func TestBuildBMCSubjectAltNames_ExplicitSANS(t *testing.T) {
-	sans := &casdk.CASubjectAlternativeNames{DNS: []string{"a", "b"}}
+	sans := &xkmsca.SubjectAlternativeNames{DNS: []string{"a", "b"}}
 	cfg := &bmc.Config{
 		Certificate: &common.Identity{
 			SANS:    sans,
-			Subject: casdk.CASubject{CommonName: "ignored"},
+			Subject: xkmsca.Subject{CommonName: "ignored"},
 		},
 	}
 	got := buildBMCSubjectAltNames(cfg, "ops@x.com")
@@ -283,7 +282,7 @@ func TestBuildBMCSubjectAltNames_ExplicitSANS(t *testing.T) {
 func TestBuildBMCSubjectAltNames_DerivedFromCN(t *testing.T) {
 	cfg := &bmc.Config{
 		Certificate: &common.Identity{
-			Subject: casdk.CASubject{CommonName: "bmc01.internal"},
+			Subject: xkmsca.Subject{CommonName: "bmc01.internal"},
 		},
 	}
 	got := buildBMCSubjectAltNames(cfg, "ops@x.com")
@@ -308,7 +307,7 @@ func TestBuildBMCSubjectAltNames_NilConfig(t *testing.T) {
 // --- casdkSubjectToPKIXName ---
 
 func TestCASDKSubjectToPKIXName(t *testing.T) {
-	n := casdkSubjectToPKIXName(casdk.CASubject{
+	n := casdkSubjectToPKIXName(xkmsca.Subject{
 		CommonName:   "cn",
 		Organization: "org",
 		Country:      "US",
@@ -326,7 +325,7 @@ func TestCASDKSubjectToPKIXName(t *testing.T) {
 }
 
 func TestCASDKSubjectToPKIXName_EmptyFields(t *testing.T) {
-	n := casdkSubjectToPKIXName(casdk.CASubject{CommonName: "cn"})
+	n := casdkSubjectToPKIXName(xkmsca.Subject{CommonName: "cn"})
 	if n.Organization != nil {
 		t.Errorf("empty org should be nil, got %v", n.Organization)
 	}
@@ -363,8 +362,8 @@ func TestBuildBMCCSR_IncludesIPs(t *testing.T) {
 	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	cfg := &bmc.Config{
 		Certificate: &common.Identity{
-			Subject: casdk.CASubject{CommonName: "bmc01.internal"},
-			SANS: &casdk.CASubjectAlternativeNames{
+			Subject: xkmsca.Subject{CommonName: "bmc01.internal"},
+			SANS: &xkmsca.SubjectAlternativeNames{
 				DNS: []string{"bmc01.internal"},
 				IPs: []string{"10.0.0.1", "not-an-ip", "192.168.1.1"},
 			},
@@ -414,7 +413,7 @@ func TestBuildBMCACMERequest_OK(t *testing.T) {
 }
 
 func TestBuildBMCACMERequest_MissingACME(t *testing.T) {
-	cfg := &bmc.Config{Certificate: &common.Identity{Subject: casdk.CASubject{CommonName: "x"}}}
+	cfg := &bmc.Config{Certificate: &common.Identity{Subject: xkmsca.Subject{CommonName: "x"}}}
 	_, err := buildBMCACMERequest(context.Background(), cfg, nil, &fakeDNS{}, 60, nil)
 	if !errors.Is(err, ErrMissingACMEConfig) {
 		t.Errorf("err = %v, want ErrMissingACMEConfig", err)
@@ -694,7 +693,7 @@ func minimalCertConfig(cn string) *bmc.Config {
 		Password: "x",
 		Protocol: bmc.ProtocolIPMI,
 		Certificate: &common.Identity{
-			Subject: casdk.CASubject{CommonName: cn},
+			Subject: xkmsca.Subject{CommonName: cn},
 			ACME: &common.ACMEIdentityConfig{
 				AuthzType:  "dns",
 				AuthzValue: cn,

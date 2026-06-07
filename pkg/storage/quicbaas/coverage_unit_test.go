@@ -898,7 +898,7 @@ func TestEmbeddedServer_NewWithCA_ValidConfig(t *testing.T) {
 	srv, err := NewEmbeddedServerWithCA(cfg, logger, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, srv)
-	assert.Nil(t, srv.externalCA) // nil CA was passed
+	assert.Nil(t, srv.loadActiveCA()) // nil CA was passed
 }
 
 // =============================================================================

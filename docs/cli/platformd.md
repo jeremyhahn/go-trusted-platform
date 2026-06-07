@@ -26,6 +26,10 @@ platformd serve --so-pin --pin
 
 # Debug mode
 platformd serve --debug
+
+# Start without barrier encryption (development / lab only).
+# PIN flags become optional; barrier strategy is "none" end-to-end.
+platformd serve --barrier-strategy none
 ```
 
 When web services are configured, the server provides:
@@ -33,6 +37,42 @@ When web services are configured, the server provides:
 - Swagger/OpenAPI documentation at `/swagger`
 - ACME server (RFC 8555) for certificate management
 - Static file hosting
+
+#### Barrier-unseal gate (init-only mode)
+
+`platformd serve` honors the M6 init-only invariant: **remote transports
+do not bind until the storage barrier reports `initialized=true,
+sealed=false`**. At startup the daemon first comes up in init-only mode
+and exposes only:
+
+| Surface | Bind | Endpoints |
+|---------|------|-----------|
+| Unix socket | `/run/platformd.sock` | full platformd surface (local only) |
+| Loopback HTTP | `127.0.0.1:9446` | `GET /healthz`, `POST /init`, `POST /unseal` |
+
+The gate runs from `pkg/daemon/commands/serve_barrier_gate.go`. The
+ceremony backend behind `POST /init` is the quicbaas SDK
+`Security().Ceremony()` handler; the platform's own `barrier.Manager`
+drives `POST /unseal` (both single-secret unseals and Shamir share
+submissions). After the barrier transitions to unsealed the init-only
+listeners are torn down and the production transports (REST 8443,
+gRPC 10443, QUIC 9444, MCP 9445) bind.
+
+The same gate runs whether the daemon is invoked via
+`platformd serve` (`runWithWebservices`) or `platformd serve --no-web`
+(`runDaemonOnly`). Both paths invoke `invokeBarrierGate` between
+`App.Init()` and `daemon.New()` so any caller of platformd ends up
+behind the M6 gate.
+
+#### `--barrier-strategy none`
+
+When the daemon is started with `--barrier-strategy none` (introduced in
+Phase 9c) the barrier wires the qrdb `StrategyNone` seal strategy. PIN
+handling becomes optional: `--pin` and `--so-pin` are accepted but not
+required, and the ceremony backend emits a `none`-typed manifest. This
+mode is suitable for local development and integration test runs only —
+do NOT use it in production, where the default Shamir-quorum strategy
+applies.
 
 ### api
 

@@ -26,12 +26,11 @@ import (
 	"testing"
 	"time"
 
-	pkgca "github.com/jeremyhahn/go-xkms/pkg/ca"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme/transport"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme/workflow"
+	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -39,7 +38,7 @@ import (
 // mockCertificateAuthority implements the CertificateAuthority interface for testing.
 type mockCertificateAuthority struct {
 	baseMockCA
-	signCSRFunc             func(csrPEM []byte, opts *pkgca.SignOptions) (*x509.Certificate, error)
+	signCSRFunc             func(csrPEM []byte, opts *xkmsca.SignOptions) (*x509.Certificate, error)
 	caBundleFunc            func(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error)
 	importCertificateFunc   func(certificate *x509.Certificate) error
 	certificateFunc         func(attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error)
@@ -47,11 +46,11 @@ type mockCertificateAuthority struct {
 	signerFunc              func() (crypto.Signer, error)
 	trustedRootFunc         func() (*x509.Certificate, error)
 	trustedIntermediateFunc func() (*x509.Certificate, error)
-	issueCertificateFunc    func(request *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error)
-	revokeFunc              func(certificate *x509.Certificate, opts pkgca.RevokeOptions) error
+	issueCertificateFunc    func(request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error)
+	revokeFunc              func(certificate *x509.Certificate, opts xkmsca.RevokeOptions) error
 }
 
-func (m *mockCertificateAuthority) SignCSR(csrPEM []byte, opts *pkgca.SignOptions) (*x509.Certificate, error) {
+func (m *mockCertificateAuthority) SignCSR(csrPEM []byte, opts *xkmsca.SignOptions) (*x509.Certificate, error) {
 	if m.signCSRFunc != nil {
 		return m.signCSRFunc(csrPEM, opts)
 	}
@@ -105,13 +104,13 @@ func (m *mockCertificateAuthority) TrustedIntermediate() (*x509.Certificate, err
 	}
 	return nil, nil
 }
-func (m *mockCertificateAuthority) IssueCertificate(request *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
+func (m *mockCertificateAuthority) IssueCertificate(request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	if m.issueCertificateFunc != nil {
 		return m.issueCertificateFunc(request)
 	}
 	return nil, nil
 }
-func (m *mockCertificateAuthority) RevokeCert(cert *x509.Certificate, opts pkgca.RevokeOptions) error {
+func (m *mockCertificateAuthority) RevokeCert(cert *x509.Certificate, opts xkmsca.RevokeOptions) error {
 	if m.revokeFunc != nil {
 		return m.revokeFunc(cert, opts)
 	}
@@ -1050,13 +1049,13 @@ func TestAdapter_EmbeddedOperations(t *testing.T) {
 	}
 
 	mockCA := &mockCertificateAuthority{
-		signCSRFunc: func(csrPEM []byte, opts *pkgca.SignOptions) (*x509.Certificate, error) {
+		signCSRFunc: func(csrPEM []byte, opts *xkmsca.SignOptions) (*x509.Certificate, error) {
 			return testCert, nil
 		},
-		issueCertificateFunc: func(request *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
-			return &pkgca.IssuedCertificate{Certificate: testCert}, nil
+		issueCertificateFunc: func(request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+			return &xkmsca.IssuedCertificate{Certificate: testCert}, nil
 		},
-		revokeFunc: func(_ *x509.Certificate, _ pkgca.RevokeOptions) error {
+		revokeFunc: func(_ *x509.Certificate, _ xkmsca.RevokeOptions) error {
 			return nil
 		},
 		verifyFunc: func(certificate *x509.Certificate, _ ...crypto.Signer) ([][]*x509.Certificate, error) {

@@ -126,99 +126,53 @@ type VolumeStatus struct {
 }
 ```
 
-#### 2. pkg/fido2 - Offline FIDO2 CTAP2 Protocol Support
+#### 2. FIDO2 CTAP2 Protocol Support (consumed from go-xkms via the quicbaas SDK re-export)
+
+The initrd does NOT host its own FIDO2 CTAP2 implementation. The
+canonical authenticator interface, CTAP2 wire framing, USB HID device
+communication, and HMAC-secret derivation all live in **go-xkms**
+(`go-xkms/pkg/fido2`). The platform initrd reaches them via the type-alias
+re-export at `github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2`.
+
+A representative slice of the types the initrd imports through the
+re-export (full set lives in the canonical xkms package):
 
 ```go
-// pkg/fido2/types.go
-package fido2
-
-import (
-    "crypto"
-    "github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
-)
-
-// Authenticator represents a FIDO2 authenticator
-type Authenticator interface {
-    // GetInfo returns authenticator capabilities
-    GetInfo() (*AuthenticatorInfo, error)
-
-    // MakeCredential creates a new credential
-    MakeCredential(req *MakeCredentialRequest) (*MakeCredentialResponse, error)
-
-    // GetAssertion gets an assertion for authentication
-    GetAssertion(req *GetAssertionRequest) (*GetAssertionResponse, error)
-
-    // Reset performs factory reset (requires user presence)
-    Reset() error
+// EnrollmentConfig drives FIDO2 credential creation.
+type EnrollmentConfig struct {
+    RelyingParty RelyingParty
+    User         User
+    Timeout      time.Duration
+    // ...
 }
 
-// AuthenticatorInfo contains device capabilities
-type AuthenticatorInfo struct {
-    Versions   []string
-    AAGUID     []byte
-    Options    map[string]bool
-    Algorithms []Algorithm
-    PinUVAuth  []byte
-}
-
-// Algorithm represents a COSE algorithm
-type Algorithm struct {
-    Type int
-    Alg  int
-}
-
-// MakeCredentialRequest for creating credentials
-type MakeCredentialRequest struct {
-    ClientDataHash []byte
-    RP             RelyingParty
-    User           User
-    PubKeyCredParams []PubKeyCredParam
-    Extensions     map[string]interface{}
-    Options        AuthenticatorOptions
-    PinUVAuth      []byte
-}
-
-// GetAssertionRequest for getting assertions
-type GetAssertionRequest struct {
-    RPID           string
-    ClientDataHash []byte
-    AllowList      []PublicKeyCredentialDescriptor
-    Extensions     map[string]interface{}
-    Options        AuthenticatorOptions
-    PinUVAuth      []byte
-}
-
-// Handler provides FIDO2 operations for LUKS
-type Handler interface {
-    // EnrollKey enrolls a FIDO2 key for LUKS
-    EnrollKey(device string, slot int) (*EnrollmentResult, error)
-
-    // UnlockWithKey unlocks using FIDO2
-    UnlockWithKey(device string) ([]byte, error)
-
-    // ListDevices returns available FIDO2 devices
-    ListDevices() ([]Device, error)
-
-    // WaitForDevice waits for device insertion
-    WaitForDevice(timeout int) (*Device, error)
-}
-
-// EnrollmentResult contains enrollment data
+// EnrollmentResult contains enrollment data persisted into LUKS2 token metadata.
 type EnrollmentResult struct {
     CredentialID []byte
     Salt         []byte
-    Iterations   int
-    Slot         int
+    // ...
 }
 
-// Device represents a FIDO2 device
-type Device struct {
-    Path         string
-    Vendor       string
-    Product      string
-    SerialNumber string
+// AuthenticationConfig drives FIDO2 authentication during boot.
+type AuthenticationConfig struct {
+    RelyingPartyID string
+    Timeout        time.Duration
+    CredentialID   []byte
+    Salt           []byte
 }
 ```
+
+The full type set is documented in the go-xkms FIDO2 reference; the
+re-export package exposes them under the same names so callers (the
+initrd strategy in particular) read the same surface they would have
+seen if they imported xkms directly.
+
+Why a re-export instead of a direct import? The initramfs binary must
+remain a separate compilation unit from the SDK runtime — early boot
+runs before networking and TLS trust. The re-export gives the initrd a
+stable path that does NOT carry SDK runtime state, while still funneling
+every consumer through one upstream module path the platform repo knows
+about.
 
 #### 3. pkg/initrd - Initrd-Specific Utilities
 
@@ -227,8 +181,13 @@ type Device struct {
 package initrd
 
 import (
-    "github.com/jeremyhahn/go-trusted-platform/pkg/fido2"
-    "github.com/jeremyhahn/go-trusted-platform/pkg/luks"
+    // Canonical FIDO2 surface, reached via the quicbaas SDK type-alias
+    // re-export. The initrd is the only platform-repo caller permitted
+    // to import this re-export directly; everything else goes through
+    // quicbaas.SDK().Security().Auth().FIDO2().
+    "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
+
+    "github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
     "github.com/jeremyhahn/go-trusted-platform/pkg/store/keystore"
     "github.com/jeremyhahn/go-trusted-platform/pkg/tpm2"
 )
@@ -612,8 +571,10 @@ sequenceDiagram
 INITRD_BINARY := platform-initrd
 INITRD_SOURCES := cmd/platform-initrd/*.go \
                    pkg/luks/*.go \
-                   pkg/fido2/*.go \
                    pkg/initrd/*.go
+# Note: FIDO2 CTAP2 sources live in go-xkms and are pulled in via the
+# `go-quicbaas/sdk/go/xkms/fido2` type-alias re-export. No platform-repo
+# pkg/fido2/ directory exists post-Phase 6c.
 
 # Static linking flags for initrd
 INITRD_LDFLAGS := -linkmode external \
@@ -838,10 +799,13 @@ func (tf *TestFramework) SimulateBoot(scenario BootScenario) error {
 4. ✅ Implement PCR unlock strategy
 
 ### Phase 2: Extended Features (Week 3-4)
-1. ⬜ Implement upgrade PCR strategy
-2. ⬜ Create pkg/fido2 with CTAP2 support
-3. ⬜ Implement FIDO2 unlock strategy
-4. ⬜ Add password fallback strategy
+1. ✅ Implement upgrade PCR strategy
+2. ✅ Use canonical FIDO2 CTAP2 support from go-xkms via the
+   `go-quicbaas/sdk/go/xkms/fido2` type-alias re-export (a local
+   `pkg/fido2/` was implemented and later removed during Phase 6c when
+   the stack consolidated FIDO2 ownership in go-xkms).
+3. ✅ Implement FIDO2 unlock strategy (`pkg/initrd/strategy_fido2.go`)
+4. ✅ Add password fallback strategy
 
 ### Phase 3: Production Hardening (Week 5-6)
 1. ⬜ Add comprehensive error handling

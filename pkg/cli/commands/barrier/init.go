@@ -11,6 +11,12 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
+// init.go implements the canonical "barrier init" verb. The verb is
+// a real (no-op-free) dispatcher per docs/08-bootstrap-auth-architecture.md
+// §6 and is part of the 9-verb tree shared with qrdbctl, xkmsctl, and
+// quicbaas. The root "platformctl init" command remains an
+// operator-friendly aggregate that internally invokes "barrier init"
+// alongside CA, admin-cert, and role setup.
 package barrier
 
 import (
@@ -19,39 +25,107 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
-// CanonicalRedirectError is emitted when an operator runs a legacy
-// renamed command path. Per docs/08-bootstrap-auth-architecture.md §6
-// "platformctl barrier init" is collapsed into the root "init" command.
-type CanonicalRedirectError struct {
-	Old string
-	New string
+// Strategy tokens for the canonical --barrier-strategy flag.
+const (
+	StrategyNone       = "none"
+	StrategyPassphrase = "passphrase"
+	StrategyShamir     = "shamir"
+)
+
+// allowedInitStrategies is the canonical strategy set for `barrier init`.
+// `shamir` is also a valid init verb but operators are pushed to
+// `init-shamir` to surface the threshold/total flags up-front.
+var allowedInitStrategies = map[string]struct{}{
+	StrategyNone:       {},
+	StrategyPassphrase: {},
+	StrategyShamir:     {},
 }
 
-// Error returns a human-readable description.
-func (e *CanonicalRedirectError) Error() string {
-	return "subcommand '" + e.Old +
-		"' has been replaced by '" + e.New +
-		"' (per docs/08-bootstrap-auth-architecture.md §6). Run: " + e.New
+// initFlags holds the canonical `barrier init` flag set.
+type initFlags struct {
+	strategy string
+	secret   string
+	soPin    string
+	userPin  string
 }
 
-// newInitCommand returns a redirect stub. Per
-// docs/08-bootstrap-auth-architecture.md §6 the legacy "barrier init"
-// subcommand is collapsed into the root "platformctl init" command.
-//
-// Operators running the legacy path receive a CanonicalRedirectError
-// pointing at the new canonical command.
+// newInitCommand builds the canonical `barrier init` command.
 func newInitCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
-	return &cobra.Command{
-		Use:                "init",
-		Short:              "REMOVED: use the root 'platformctl init' command instead",
-		Long:               "The legacy \"platformctl barrier init\" command has been collapsed into the root \"platformctl init\" command per docs/08-bootstrap-auth-architecture.md §6.",
-		DisableFlagParsing: true,
-		Args:               cobra.ArbitraryArgs,
+	f := &initFlags{}
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "Initialize the barrier with the chosen strategy",
+		Long: `Initialize the barrier with the chosen sealing strategy.
+
+  --barrier-strategy  Required. One of: none, passphrase, shamir.
+  --passphrase        Required for passphrase / shamir. Forbidden for none.
+  --so-pin            Optional. Sets the Security Officer PIN on the
+                      canonical PINBackend. Forbidden for --barrier-strategy=none.
+  --user-pin          Optional. Sets the user PIN. Requires --so-pin.
+                      Forbidden for --barrier-strategy=none.
+
+The verb dispatches to the QuicBaaS daemon via the platform SDK
+Client.QuicBaaS().Security().Barrier() surface and is part of the
+canonical 9-verb tree.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return &CanonicalRedirectError{
-				Old: "platformctl barrier init",
-				New: "platformctl init --barrier-strategy <name> --so-pin ... --user-pin ... [...]",
-			}
+			return runInit(getFlags(), f)
 		},
 	}
+	cmd.Flags().StringVar(&f.strategy, "barrier-strategy", "",
+		"Barrier strategy: none | passphrase | shamir (required)")
+	cmd.Flags().StringVar(&f.secret, "passphrase", "",
+		"Wrapping passphrase (required for passphrase / shamir; forbidden for none)")
+	cmd.Flags().StringVar(&f.soPin, "so-pin", "",
+		"Security Officer PIN (canonical PINBackend; forbidden when --barrier-strategy=none)")
+	cmd.Flags().StringVar(&f.userPin, "user-pin", "",
+		"User PIN (requires --so-pin; forbidden when --barrier-strategy=none)")
+	return cmd
+}
+
+// validateInitFlags applies the canonical flag-combination rules. The
+// rules are pure functions of the flag set so they can be unit-tested
+// without a live daemon.
+func validateInitFlags(f *initFlags) error {
+	if _, ok := allowedInitStrategies[f.strategy]; !ok {
+		return ErrInvalidBarrierStrategy{Strategy: f.strategy}
+	}
+	if f.strategy == StrategyNone {
+		if f.secret != "" {
+			return ErrSecretNotAllowed{Strategy: f.strategy}
+		}
+		if f.soPin != "" {
+			return PINsNotAllowedError{Flag: "so-pin", Strategy: f.strategy}
+		}
+		if f.userPin != "" {
+			return PINsNotAllowedError{Flag: "user-pin", Strategy: f.strategy}
+		}
+		return nil
+	}
+	if f.secret == "" {
+		return ErrSecretRequired{Strategy: f.strategy}
+	}
+	if f.userPin != "" && f.soPin == "" {
+		return ErrUserPinRequiresSOPin{}
+	}
+	return nil
+}
+
+// runInit validates the flag set, opens the SDK connection, and
+// delegates the RPC + rendering to dispatchInit.
+func runInit(flags *cli.CommonFlags, f *initFlags) error {
+	if err := validateInitFlags(f); err != nil {
+		return err
+	}
+	base, err := cli.NewBaseCommand(flags)
+	if err != nil {
+		return err
+	}
+	defer base.Close()
+
+	bc, err := openBarrierClient(base)
+	if err != nil {
+		return err
+	}
+	return dispatchInit(newDispatcherFromBase(base, bc), f)
 }

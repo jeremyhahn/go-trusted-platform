@@ -33,8 +33,8 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -110,7 +110,7 @@ func (m *mockCAService) TrustedIntermediate() (*x509.Certificate, error) {
 	return m.intermediateCert, nil
 }
 
-func (m *mockCAService) IssueCertificate(req *goca.CACertificateRequest) (*x509.Certificate, error) {
+func (m *mockCAService) IssueCertificate(req *quicbaasca.CACertificateRequest) (*x509.Certificate, error) {
 	if m.issueErr != nil {
 		return nil, m.issueErr
 	}
@@ -260,7 +260,7 @@ func (m *mockCertStore) Close() error { return nil }
 // generateTestCertificate creates a self-signed test certificate.
 // The parent parameter is kept for API compatibility but is ignored - all test
 // certificates are self-signed to avoid key management complexity in tests.
-func generateTestCertificate(cn string, isCA bool, parent *x509.Certificate, req *goca.CACertificateRequest) *x509.Certificate {
+func generateTestCertificate(cn string, isCA bool, parent *x509.Certificate, req *quicbaasca.CACertificateRequest) *x509.Certificate {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil
@@ -357,7 +357,7 @@ func generateTestCRL(issuer *x509.Certificate) ([]byte, error) {
 
 func setupCAHandlers(ca CAServiceInterface) (*CAHandlers, *mux.Router) {
 	logger := slog.Default()
-	handlers := NewCAHandlers(ca, logger)
+	handlers := NewCAHandlers(ca, logger, nil)
 	router := mux.NewRouter()
 	handlers.RegisterRoutes(router)
 	return handlers, router
@@ -704,7 +704,7 @@ func TestCAHandlers_GetCertificate_EmptySerial(t *testing.T) {
 	ca := newMockCAService()
 
 	// Test the handler directly
-	handlers := NewCAHandlers(ca, nil)
+	handlers := NewCAHandlers(ca, nil, nil)
 	req, _ := http.NewRequest(http.MethodGet, "/api/v1/ca/certificates/", nil)
 	req = mux.SetURLVars(req, map[string]string{"serial": ""})
 	rr := httptest.NewRecorder()
@@ -866,9 +866,9 @@ func TestCAHandlers_RenewCertificate_Success(t *testing.T) {
 
 func TestCAHandlers_RenewCertificate_PreserveSANs(t *testing.T) {
 	ca := newMockCAService()
-	cert := generateTestCertificate("renew.test.com", false, nil, &goca.CACertificateRequest{
-		Subject: goca.CASubject{CommonName: "renew.test.com"},
-		SANS:    &goca.CASubjectAlternativeNames{DNS: []string{"www.renew.test.com"}},
+	cert := generateTestCertificate("renew.test.com", false, nil, &quicbaasca.CACertificateRequest{
+		Subject: quicbaasca.CASubject{CommonName: "renew.test.com"},
+		SANS:    &quicbaasca.CASubjectAlternativeNames{DNS: []string{"www.renew.test.com"}},
 	})
 	serial := hex.EncodeToString(cert.SerialNumber.Bytes())
 	ca.certStore.certs[serial] = cert
@@ -1348,7 +1348,7 @@ func TestCAHandlers_ErrorUnwrap(t *testing.T) {
 // =============================================================================
 
 func TestCAHandlers_ParseKeyAlgorithm(t *testing.T) {
-	handlers := NewCAHandlers(nil, nil)
+	handlers := NewCAHandlers(nil, nil, nil)
 
 	tests := []struct {
 		input    string
@@ -1382,7 +1382,7 @@ func TestCAHandlers_ParseKeyAlgorithm(t *testing.T) {
 }
 
 func TestCAHandlers_KeyAlgorithmToString(t *testing.T) {
-	handlers := NewCAHandlers(nil, nil)
+	handlers := NewCAHandlers(nil, nil, nil)
 
 	tests := []struct {
 		input    x509.PublicKeyAlgorithm
@@ -1403,7 +1403,7 @@ func TestCAHandlers_KeyAlgorithmToString(t *testing.T) {
 }
 
 func TestCAHandlers_ParseKeyUsage(t *testing.T) {
-	handlers := NewCAHandlers(nil, nil)
+	handlers := NewCAHandlers(nil, nil, nil)
 
 	usages := []string{
 		"DIGITAL_SIGNATURE",
@@ -1421,7 +1421,7 @@ func TestCAHandlers_ParseKeyUsage(t *testing.T) {
 }
 
 func TestCAHandlers_ParseExtKeyUsage(t *testing.T) {
-	handlers := NewCAHandlers(nil, nil)
+	handlers := NewCAHandlers(nil, nil, nil)
 
 	usages := []string{
 		"SERVER_AUTH",
@@ -1437,7 +1437,7 @@ func TestCAHandlers_ParseExtKeyUsage(t *testing.T) {
 }
 
 func TestCAHandlers_KeyUsageToStrings(t *testing.T) {
-	handlers := NewCAHandlers(nil, nil)
+	handlers := NewCAHandlers(nil, nil, nil)
 
 	usage := x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign | x509.KeyUsageCRLSign
 
@@ -1449,7 +1449,7 @@ func TestCAHandlers_KeyUsageToStrings(t *testing.T) {
 }
 
 func TestCAHandlers_ExtKeyUsageToStrings(t *testing.T) {
-	handlers := NewCAHandlers(nil, nil)
+	handlers := NewCAHandlers(nil, nil, nil)
 
 	usages := []x509.ExtKeyUsage{
 		x509.ExtKeyUsageServerAuth,
@@ -1465,7 +1465,7 @@ func TestCAHandlers_ExtKeyUsageToStrings(t *testing.T) {
 }
 
 func TestCAHandlers_FirstOrEmpty(t *testing.T) {
-	handlers := NewCAHandlers(nil, nil)
+	handlers := NewCAHandlers(nil, nil, nil)
 
 	assert.Equal(t, "first", handlers.firstOrEmpty([]string{"first", "second"}))
 	assert.Equal(t, "", handlers.firstOrEmpty([]string{}))
@@ -1473,7 +1473,7 @@ func TestCAHandlers_FirstOrEmpty(t *testing.T) {
 }
 
 func TestCAHandlers_ParseInt(t *testing.T) {
-	handlers := NewCAHandlers(nil, nil)
+	handlers := NewCAHandlers(nil, nil, nil)
 
 	assert.Equal(t, 10, handlers.parseInt("10", 5))
 	assert.Equal(t, 5, handlers.parseInt("", 5))
@@ -1481,7 +1481,7 @@ func TestCAHandlers_ParseInt(t *testing.T) {
 }
 
 func TestCAHandlers_CertStatusToString(t *testing.T) {
-	handlers := NewCAHandlers(nil, nil)
+	handlers := NewCAHandlers(nil, nil, nil)
 
 	// Valid certificate
 	validCert := generateTestCertificate("valid.test.com", false, nil, nil)
@@ -1489,7 +1489,7 @@ func TestCAHandlers_CertStatusToString(t *testing.T) {
 }
 
 func TestCAHandlers_CertToSummary(t *testing.T) {
-	handlers := NewCAHandlers(nil, nil)
+	handlers := NewCAHandlers(nil, nil, nil)
 
 	cert := generateTestCertificate("test.example.com", false, nil, nil)
 	summary := handlers.certToSummary(cert)
@@ -1500,14 +1500,14 @@ func TestCAHandlers_CertToSummary(t *testing.T) {
 }
 
 func TestCAHandlers_CertToSummary_NilCert(t *testing.T) {
-	handlers := NewCAHandlers(nil, nil)
+	handlers := NewCAHandlers(nil, nil, nil)
 
 	summary := handlers.certToSummary(nil)
 	assert.Equal(t, CACertificateSummary{}, summary)
 }
 
 func TestCAHandlers_CertToResponse(t *testing.T) {
-	handlers := NewCAHandlers(nil, nil)
+	handlers := NewCAHandlers(nil, nil, nil)
 
 	cert := generateTestCertificate("test.example.com", false, nil, nil)
 	resp := handlers.certToResponse(cert, true)
@@ -1519,14 +1519,14 @@ func TestCAHandlers_CertToResponse(t *testing.T) {
 }
 
 func TestCAHandlers_CertToResponse_NilCert(t *testing.T) {
-	handlers := NewCAHandlers(nil, nil)
+	handlers := NewCAHandlers(nil, nil, nil)
 
 	resp := handlers.certToResponse(nil, true)
 	assert.Nil(t, resp)
 }
 
 func TestCAHandlers_CertToResponse_NoPEM(t *testing.T) {
-	handlers := NewCAHandlers(nil, nil)
+	handlers := NewCAHandlers(nil, nil, nil)
 
 	cert := generateTestCertificate("test.example.com", false, nil, nil)
 	resp := handlers.certToResponse(cert, false)
@@ -1544,13 +1544,13 @@ func TestNewCAHandlers(t *testing.T) {
 
 	// With logger
 	logger := slog.Default()
-	handlers := NewCAHandlers(ca, logger)
+	handlers := NewCAHandlers(ca, logger, nil)
 	assert.NotNil(t, handlers)
 	assert.Equal(t, ca, handlers.ca)
 	assert.Equal(t, logger, handlers.logger)
 
 	// Without logger (should use default)
-	handlers2 := NewCAHandlers(ca, nil)
+	handlers2 := NewCAHandlers(ca, nil, nil)
 	assert.NotNil(t, handlers2)
 	assert.NotNil(t, handlers2.logger)
 }
@@ -1561,7 +1561,7 @@ func TestNewCAHandlers(t *testing.T) {
 
 func TestCAHandlers_RegisterRoutes(t *testing.T) {
 	ca := newMockCAService()
-	handlers := NewCAHandlers(ca, nil)
+	handlers := NewCAHandlers(ca, nil, nil)
 	router := mux.NewRouter()
 
 	handlers.RegisterRoutes(router)

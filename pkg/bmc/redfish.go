@@ -197,6 +197,14 @@ type redfishClient struct {
 	logger *slog.Logger
 	closed atomic.Bool
 
+	// config is the original Config the client was constructed
+	// with. Kept so vendor-specific boot-override backends that
+	// need to open their own out-of-band channel (e.g. an OEM
+	// IPMI raw command session for the smc-oem-ipmi backend) can
+	// reach back to the BMC credentials and address without
+	// reconstructing a Config from the transport's fragments.
+	config *Config
+
 	// transport carries the shared HTTP + auth + error-parsing
 	// plumbing. doGET/doPOST/doPATCH delegate to transport methods
 	// so the wire logic lives in one place.
@@ -232,6 +240,7 @@ func newRedfishClient(config *Config, logger *slog.Logger) (*redfishClient, erro
 		return nil, ErrRedfishTransportInit{Cause: err}
 	}
 	return &redfishClient{
+		config:    config,
 		logger:    logger,
 		transport: t,
 	}, nil
@@ -578,6 +587,14 @@ func (c *redfishClient) bootOverrideBackend(strategy string) bootOverrideBackend
 	switch strategy {
 	case "smc-cgi":
 		return newVbootSmcCGI(c)
+	case "smc-oem-ipmi":
+		// Supermicro OEM IPMI 0x30/0x70/0x0c "Set Boot Option
+		// Override". Honored by X10 ATEN firmware even when the
+		// disk has a competing UEFI NVRAM boot entry, where
+		// standard Redfish PATCH is silently ignored. See
+		// pkg/bmc/vboot_smc_oem_ipmi.go for firmware-specific
+		// device-code limitations.
+		return newVbootSmcOEMIPMI(c)
 	default:
 		return nil
 	}

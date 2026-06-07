@@ -20,8 +20,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -374,19 +374,4 @@ func TestServiceParams_Validation(t *testing.T) {
 	assert.Equal(t, "test-audience", params.Audience)
 	assert.Equal(t, 3600, params.Expiration)
 	assert.Equal(t, "test-issuer", params.Issuer)
-}
-
-// TestTokenClaims_WebAuthn tests the TokenClaims with WebAuthn session data.
-func TestTokenClaims_WebAuthn(t *testing.T) {
-	claims := &TokenClaims{
-		Organizations:  []uint64{1, 2},
-		Services:       []uint64{3, 4},
-		UserID:         100,
-		WebAuthnClaims: nil, // WebAuthn claims can be nil
-	}
-
-	assert.Nil(t, claims.WebAuthnClaims)
-	assert.Equal(t, uint64(100), claims.UserID)
-	assert.Equal(t, []uint64{1, 2}, claims.Organizations)
-	assert.Equal(t, []uint64{3, 4}, claims.Services)
 }

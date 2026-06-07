@@ -33,8 +33,7 @@ import (
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	certclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/certificate"
-	pkgca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
-	casdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 )
 
 // daemonCertIssuer is the minimum surface of the quicbaas
@@ -83,7 +82,7 @@ func newSDKCertIssuer(client quicbaassdk.Client) daemonCertIssuer {
 // applyDaemonTLSIdentity runs, so we use it directly to mint the
 // daemon's gRPC TCP / QUIC server cert and admin client cert.
 type localCACertIssuer struct {
-	ca casdk.CACertificateAuthority
+	ca quicbaasca.CACertificateAuthority
 }
 
 // IssueCertificate generates a fresh ECDSA P-256 key locally, builds a
@@ -128,7 +127,7 @@ func (i *localCACertIssuer) IssueCertificate(_ context.Context, req *certclient.
 	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
 
 	usage := strings.ToLower(strings.TrimSpace(req.Usage))
-	signOpts := &pkgca.SignOptions{
+	signOpts := &quicbaasca.SignOptions{
 		ValidityDays: int(req.ValidityDays),
 	}
 	switch usage {
@@ -173,7 +172,7 @@ func (i *localCACertIssuer) GetCABundle(_ context.Context, _ *certclient.GetCABu
 // newLocalCACertIssuer returns an issuer that delegates to the platform
 // CA directly. Returns nil when the CA is missing so the caller can
 // surface ErrProvisionMissingCA.
-func newLocalCACertIssuer(ca casdk.CACertificateAuthority) daemonCertIssuer {
+func newLocalCACertIssuer(ca quicbaasca.CACertificateAuthority) daemonCertIssuer {
 	if ca == nil {
 		return nil
 	}

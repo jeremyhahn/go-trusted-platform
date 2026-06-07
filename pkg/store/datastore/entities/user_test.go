@@ -14,10 +14,8 @@
 package entities
 
 import (
-	"fmt"
 	"testing"
 
-	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,15 +29,12 @@ func TestNewUser(t *testing.T) {
 		require.NotNil(t, user)
 		assert.Equal(t, email, user.Email)
 		assert.Equal(t, util.NewID([]byte(email)), user.ID)
-		assert.NotNil(t, user.Credentials)
-		assert.Empty(t, user.Credentials)
 		assert.NotNil(t, user.Roles)
 		assert.Empty(t, user.Roles)
 		assert.Empty(t, user.DisplayName)
 		assert.Empty(t, user.Password)
 		assert.Empty(t, user.OrganizationRefs)
 		assert.Empty(t, user.ServiceRefs)
-		assert.Nil(t, user.SessionData)
 	})
 
 	t.Run("Create user with empty email", func(t *testing.T) {
@@ -63,96 +58,6 @@ func TestNewUser(t *testing.T) {
 
 		assert.NotEqual(t, user1.ID, user2.ID)
 	})
-}
-
-func TestUser_WebAuthnID(t *testing.T) {
-	user := NewUser("test@example.com")
-	webAuthnID := user.WebAuthnID()
-
-	require.NotNil(t, webAuthnID)
-	assert.NotEmpty(t, webAuthnID)
-	// WebAuthnID should be a byte slice representation of the user ID
-	expectedID := fmt.Sprintf("%d", user.ID)
-	assert.Equal(t, []byte(expectedID), webAuthnID)
-}
-
-func TestUser_WebAuthnName(t *testing.T) {
-	email := "test@example.com"
-	user := NewUser(email)
-
-	assert.Equal(t, email, user.WebAuthnName())
-}
-
-func TestUser_WebAuthnDisplayName(t *testing.T) {
-	email := "test@example.com"
-	user := NewUser(email)
-
-	// Currently returns email, may use DisplayName in future
-	assert.Equal(t, email, user.WebAuthnDisplayName())
-}
-
-func TestUser_WebAuthnCredentials(t *testing.T) {
-	user := NewUser("test@example.com")
-
-	credentials := user.WebAuthnCredentials()
-	require.NotNil(t, credentials)
-	assert.Empty(t, credentials)
-
-	// Add a credential
-	cred := webauthn.Credential{
-		ID:        []byte("credential-id-1"),
-		PublicKey: []byte("public-key-1"),
-	}
-	user.AddCredential(&cred)
-
-	credentials = user.WebAuthnCredentials()
-	assert.Len(t, credentials, 1)
-	assert.Equal(t, cred.ID, credentials[0].ID)
-}
-
-func TestUser_AddCredential(t *testing.T) {
-	user := NewUser("test@example.com")
-
-	assert.Empty(t, user.Credentials)
-
-	cred1 := &webauthn.Credential{
-		ID:        []byte("cred-1"),
-		PublicKey: []byte("key-1"),
-	}
-	user.AddCredential(cred1)
-
-	assert.Len(t, user.Credentials, 1)
-	assert.Equal(t, cred1.ID, user.Credentials[0].ID)
-
-	cred2 := &webauthn.Credential{
-		ID:        []byte("cred-2"),
-		PublicKey: []byte("key-2"),
-	}
-	user.AddCredential(cred2)
-
-	assert.Len(t, user.Credentials, 2)
-	assert.Equal(t, cred2.ID, user.Credentials[1].ID)
-}
-
-func TestUser_UpdateCredential(t *testing.T) {
-	user := NewUser("test@example.com")
-
-	// Add initial credential
-	cred := &webauthn.Credential{
-		ID:        []byte("cred-1"),
-		PublicKey: []byte("key-1"),
-	}
-	user.AddCredential(cred)
-
-	// Update the credential
-	updatedCred := &webauthn.Credential{
-		ID:        []byte("cred-1"),
-		PublicKey: []byte("key-1-updated"),
-	}
-	user.UpdateCredential(updatedCred)
-
-	assert.Len(t, user.Credentials, 1)
-	assert.Equal(t, []byte("key-1-updated"), user.Credentials[0].PublicKey)
 }
 
 func TestUser_SetEntityID(t *testing.T) {
@@ -228,31 +133,6 @@ func TestUser_KeyValueEntity(t *testing.T) {
 	assert.Equal(t, newID, entity.EntityID())
 }
 
-func TestUser_MultipleCredentials(t *testing.T) {
-	user := NewUser("test@example.com")
-
-	// Add multiple credentials
-	for i := 0; i < 5; i++ {
-		cred := &webauthn.Credential{
-			ID:        []byte{byte(i)},
-			PublicKey: []byte{byte(i * 10)},
-		}
-		user.AddCredential(cred)
-	}
-
-	assert.Len(t, user.Credentials, 5)
-
-	// Update one credential
-	updatedCred := &webauthn.Credential{
-		ID:        []byte{2},
-		PublicKey: []byte{200}, // Changed value
-	}
-	user.UpdateCredential(updatedCred)
-
-	assert.Len(t, user.Credentials, 5)
-	assert.Equal(t, []byte{200}, user.Credentials[2].PublicKey)
-}
-
 func TestUser_OrganizationRefs(t *testing.T) {
 	user := NewUser("test@example.com")
 
@@ -283,7 +163,6 @@ func TestUser_CompleteUserProfile(t *testing.T) {
 
 	user.DisplayName = "System Administrator"
 	user.Password = "hashed_password"
-	user.SessionData = []byte("session_data")
 	user.OrganizationRefs = []uint64{1, 2}
 	user.ServiceRefs = []uint64{10, 20, 30}
 
@@ -291,22 +170,13 @@ func TestUser_CompleteUserProfile(t *testing.T) {
 	user.AddRole(NewRole("admin"))
 	user.AddRole(NewRole("superuser"))
 
-	// Add credentials
-	cred := &webauthn.Credential{
-		ID:        []byte("cred-1"),
-		PublicKey: []byte("key-1"),
-	}
-	user.AddCredential(cred)
-
 	// Verify all fields
 	assert.Equal(t, "admin@example.com", user.Email)
 	assert.Equal(t, "System Administrator", user.DisplayName)
 	assert.Equal(t, "hashed_password", user.Password)
-	assert.Equal(t, []byte("session_data"), user.SessionData)
 	assert.Len(t, user.OrganizationRefs, 2)
 	assert.Len(t, user.ServiceRefs, 3)
 	assert.Len(t, user.Roles, 2)
-	assert.Len(t, user.Credentials, 1)
 	assert.True(t, user.HasRole("admin"))
 	assert.True(t, user.HasRole("superuser"))
 	assert.False(t, user.HasRole("guest"))

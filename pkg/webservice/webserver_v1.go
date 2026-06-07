@@ -62,6 +62,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webserver/embed"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
+	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
@@ -431,6 +432,35 @@ func findPlaceholderFallback(requestPath, index string) string {
 	return ""
 }
 
+// findPlaceholderFallbackFS is the on-disk counterpart to
+// findPlaceholderFallback. It returns the absolute filesystem path to a
+// Next.js `__placeholder__` index that should be served for
+// `requestPath`, or an empty string when no candidate exists. Same
+// walk-from-deepest-segment-up strategy as the embedded variant.
+//
+// This is the path the deployed CP exercises — `public_html` is
+// installed to /var/lib/trusted-platform/public_html during ISO
+// install, and the server reads from it instead of the embedded FS.
+// Without this fallback, clicks on detail rows (e.g.
+// /devices/5168606593679365) miss the disk file, isn't a non-SPA
+// path, and end up served `/index.html` (the dashboard) — which the
+// browser interprets as a navigation back to dashboard.
+func findPlaceholderFallbackFS(rootDir, requestPath, index string) string {
+	if requestPath == "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(requestPath, "/"), "/")
+	for i := len(parts) - 1; i >= 0; i-- {
+		candidateParts := append([]string{}, parts[:i]...)
+		candidateParts = append(candidateParts, "__placeholder__", index)
+		candidate := filepath.Join(append([]string{rootDir}, candidateParts...)...)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	return ""
+}
+
 // serveEmbeddedFile serves a single file from the embedded filesystem
 func (server *WebServerV1) serveEmbeddedFile(w http.ResponseWriter, r *http.Request, path string) {
 	f, err := embed.WebFS.Open(path)
@@ -536,6 +566,23 @@ func (server *WebServerV1) serveFilesystemFiles(rootDir, index string, rewriteRu
 				slog.String("requestPath", requestPath),
 			)
 			writeJSONNotFound(w, r)
+			return
+		}
+
+		// Next.js static export of a dynamic route ([id], [zone], …) only
+		// pre-renders a single `__placeholder__` segment. When a real ID
+		// is requested at runtime there is no matching directory on disk,
+		// so without help we fall through to `/index.html` (the dashboard
+		// root) and the user lands back on the dashboard instead of the
+		// detail page. Walk the path from right to left looking for a
+		// sibling `__placeholder__` directory and serve its index.html
+		// instead so the client component can hydrate from the URL.
+		if placeholderPath := findPlaceholderFallbackFS(rootDir, requestPath, index); placeholderPath != "" {
+			server.logger.Debug("Serving Next dynamic-route placeholder",
+				slog.String("requestPath", requestPath),
+				slog.String("placeholder", placeholderPath),
+			)
+			http.ServeFile(w, r, placeholderPath)
 			return
 		}
 
@@ -823,6 +870,16 @@ func (server *WebServerV1) buildRoutes() {
 	}
 
 	muxRouter.HandleFunc("/endpoints", server.endpoints)
+
+	// Mount the OCI Distribution-spec surface at /v2 directly on the
+	// root router. The spec mandates "/v2/" at the host root — under
+	// /api/v1 would make `crane pull cp.example.com/foo:1` fail. The
+	// backend handle comes from the handler registry alongside the
+	// platform-curated RegistryService so both surfaces share the
+	// same on-disk *Registry instance.
+	if backend := server.restServiceRegistry.OCIDistBackend(); backend != nil {
+		restregistry.RegisterOCIDistRoutes(muxRouter, server.logger, backend)
+	}
 
 	apiRouter := muxRouter.PathPrefix(server.baseURI).Subrouter()
 

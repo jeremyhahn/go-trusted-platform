@@ -14,94 +14,59 @@
 package entities
 
 import (
-	"fmt"
 	"time"
 
-	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 )
 
+// User is the platform-local identity record. WebAuthn credentials are
+// authoritative in the quicbaas IAM tenant — the platform no longer
+// caches them here. The platform User retains tenant ownership, roles,
+// and the foreign-key handles consumed by the rest of the system.
 type User struct {
-	ID               uint64                `yaml:"id" json:"id"`
-	TenantID         string                `yaml:"tenant-id" json:"tenant_id"`
-	IsTenantOwner    bool                  `yaml:"is-tenant-owner" json:"is_tenant_owner"`
-	Credentials      []webauthn.Credential `yaml:"credentials" json:"credentials"`
-	DisplayName      string                `yaml:"display" json:"display"`
-	Email            string                `yaml:"email" json:"email"`
-	OrganizationRefs []uint64              `yaml:"orgs" json:"orgs"`
-	Password         string                `yaml:"password" json:"password" secret:"true"`
-	Roles            []*Role               `yaml:"roles" json:"roles"`
-	ServiceRefs      []uint64              `yaml:"services" json:"services"`
-	SessionData      []byte                `yaml:"session" json:"session"`
-	CreatedAt        time.Time             `yaml:"created-at" json:"created_at"`
-	UpdatedAt        time.Time             `yaml:"updated-at" json:"updated_at"`
+	ID               uint64    `yaml:"id" json:"id"`
+	TenantID         string    `yaml:"tenant-id" json:"tenant_id"`
+	IsTenantOwner    bool      `yaml:"is-tenant-owner" json:"is_tenant_owner"`
+	DisplayName      string    `yaml:"display" json:"display"`
+	Email            string    `yaml:"email" json:"email"`
+	OrganizationRefs []uint64  `yaml:"orgs" json:"orgs"`
+	Password         string    `yaml:"password" json:"password" secret:"true"`
+	Roles            []*Role   `yaml:"roles" json:"roles"`
+	ServiceRefs      []uint64  `yaml:"services" json:"services"`
+	CreatedAt        time.Time `yaml:"created-at" json:"created_at"`
+	UpdatedAt        time.Time `yaml:"updated-at" json:"updated_at"`
 	KeyValueEntity   `yaml:"-" json:"-"`
-	webauthn.User    `yaml:"-" json:"-"`
 }
 
+// NewUser constructs a User with the email-derived ID and zero-valued
+// secondary fields. Callers populate DisplayName/Roles/TenantID after.
 func NewUser(email string) *User {
 	now := time.Now().UTC()
 	return &User{
-		Credentials: make([]webauthn.Credential, 0),
-		ID:          util.NewID([]byte(email)),
-		Email:       email,
-		Roles:       make([]*Role, 0),
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:        util.NewID([]byte(email)),
+		Email:     email,
+		Roles:     make([]*Role, 0),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 }
 
-// Specification: §5.4.3. User Account Parameters for Credential Generation
-// https://w3c.github.io/webauthn/#dom-publickeycredentialuserentity-id
-func (user *User) WebAuthnID() []byte {
-	return []byte(fmt.Sprintf("%d", user.ID))
-}
-
-// Specification: §5.4.3. User Account Parameters for Credential Generation
-// https://w3c.github.io/webauthn/#dictdef-publickeycredentialuserentity
-func (user *User) WebAuthnName() string {
-	return user.Email
-}
-
-// Specification: §5.4.3. User Account Parameters for Credential Generation
-// https://www.w3.org/TR/webauthn/#dom-publickeycredentialuserentity-displayname
-func (user *User) WebAuthnDisplayName() string {
-	if user.DisplayName != "" {
-		return user.DisplayName
-	}
-	return user.Email
-}
-
-// WebAuthnCredentials provides the list of Credential objects owned by the user.
-func (user *User) WebAuthnCredentials() []webauthn.Credential {
-	return user.Credentials
-}
-
-// Adds a new WebAuthn credential
-func (user *User) AddCredential(credential *webauthn.Credential) {
-	user.Credentials = append(user.Credentials, *credential)
-}
-
-func (user *User) UpdateCredential(credential *webauthn.Credential) {
-	for i, c := range user.Credentials {
-		if string(c.ID) == string(credential.ID) {
-			user.Credentials[i] = *credential
-		}
-	}
-}
-
+// SetEntityID implements KeyValueEntity.
 func (user *User) SetEntityID(id uint64) {
 	user.ID = id
 }
 
+// EntityID implements KeyValueEntity.
 func (user *User) EntityID() uint64 {
 	return user.ID
 }
 
+// AddRole appends a role to the user.
 func (user *User) AddRole(role *Role) {
 	user.Roles = append(user.Roles, role)
 }
 
+// HasRole reports whether the named role is present on the user.
 func (user *User) HasRole(name string) bool {
 	for _, role := range user.Roles {
 		if role.Name == name {

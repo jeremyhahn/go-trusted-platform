@@ -28,7 +28,9 @@ import (
 
 	"github.com/jeremyhahn/go-codec"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	grpccreds "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
@@ -43,7 +45,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // DaemonOption is a functional option for configuring the Daemon
@@ -86,34 +87,34 @@ func WithGRPCUDSServer(s GRPCServerInterface) DaemonOption {
 
 // Daemon manages the platformd daemon lifecycle
 type Daemon struct {
-	config                *Config
-	logger                *logging.Logger
-	grpcServer            GRPCServerInterface // gRPC server for TCP
-	grpcListener          net.Listener
-	grpcUDSServer         GRPCServerInterface // gRPC server for Unix socket
-	grpcUDSListener       net.Listener        // Unix socket listener for gRPC
-	quicServer            QUICServerInterface
-	quicHandler           *QUICServiceHandler
-	restServer            RESTServerInterface
-	service               *Service
-	caService             *CAGRPCService
-	sdnService            *SDNService
-	kmsService            *KMSService
-	iamService            *IAMService
-	tenantService         *TenantService
-	vtpmService           *VTPMServiceServer
-	deviceService         *DeviceGRPCService
-	computeService        *ComputeGRPCService
-	idevidService         *IDevIDGRPCService
-	tpmService            *TPMGRPCService
-	barrierService        *BarrierGRPCService
-	attestationService    *AttestationServiceServer
-	registryService       *grpccreds.RegistryGRPCService
+	config             *Config
+	logger             *logging.Logger
+	grpcServer         GRPCServerInterface // gRPC server for TCP
+	grpcListener       net.Listener
+	grpcUDSServer      GRPCServerInterface // gRPC server for Unix socket
+	grpcUDSListener    net.Listener        // Unix socket listener for gRPC
+	quicServer         QUICServerInterface
+	quicHandler        *QUICServiceHandler
+	restServer         RESTServerInterface
+	service            *Service
+	caService          *CAGRPCService
+	sdnService         *SDNService
+	kmsService         *KMSService
+	iamService         *IAMService
+	tenantService      *TenantService
+	vtpmService        *VTPMServiceServer
+	deviceService      *DeviceGRPCService
+	computeService     *ComputeGRPCService
+	idevidService      *IDevIDGRPCService
+	tpmService         *TPMGRPCService
+	barrierService     *BarrierGRPCService
+	attestationService *AttestationServiceServer
+	registryService    *grpccreds.RegistryGRPCService
 	// grpcAuthValidator and quicAuthValidator are kept around so the
 	// daemon can late-bind a platform JWT verifier after webservices
 	// initialize (the JWT signing key isn't available at daemon.New).
-	grpcAuthValidator *grpcTokenValidator
-	quicAuthValidator *grpcTokenValidator
+	grpcAuthValidator     *grpcTokenValidator
+	quicAuthValidator     *grpcTokenValidator
 	tpm2Service           xkmssdk.TrustedPlatformModule
 	ceremonyService       *CeremonyGRPCService
 	pivService            *PIVGRPCService
@@ -370,7 +371,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			caLogger = logging.DefaultLogger()
 		}
 
-		caService = NewCAGRPCService(caLogger, config.CAService)
+		var caObjStorage objectstorage.Client
+		if config.App != nil {
+			caObjStorage = config.App.Storage
+		}
+		caService = NewCAGRPCService(caLogger, config.CAService, caObjStorage)
 
 		// Register with TCP gRPC server if available
 		if grpcServer != nil {
@@ -544,10 +549,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	// Always construct the Attestation gRPC service. When the
 	// AttestationService backend is configured the server returns real
-	// data; when it is not (or when built without the attestation_grpc
-	// tag) the stub returns codes.Unimplemented for each method. Either
-	// way the gRPC method set is registered so REST/CLI clients receive
-	// a proper 501 instead of a misleading 404 from a missing route.
+	// data; when it is nil every RPC returns a gRPC error via
+	// requireService. Either way the gRPC method set is registered so
+	// REST/CLI clients receive a proper status instead of a misleading
+	// 404 from a missing route.
 	attestationService := NewAttestationServiceServer(config.AttestationService, logger.Slog())
 	if grpcServer != nil {
 		platformv1.RegisterAttestationServiceServer(grpcServer, attestationService)
@@ -834,7 +839,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 		// Set CA handler if available
 		if config.CAService != nil {
-			quicHandler.SetCAHandler(quic.NewCAHandler(quicLogger, config.CAService))
+			var quicObjStorage objectstorage.Client
+			if config.App != nil {
+				quicObjStorage = config.App.Storage
+			}
+			quicHandler.SetCAHandler(quic.NewCAHandler(quicLogger, config.CAService, quicObjStorage))
 		}
 
 		// Set vTPM service if available

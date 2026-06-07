@@ -22,6 +22,9 @@ export interface Device {
   id: string;
   name: string;
   type: DeviceType;
+  /** Hardware model (e.g. "SuperMicro X10"). Populated from the TCG
+   *  CSR ProductModel field at enrollment time. */
+  model?: string;
   serial?: string;
   status: DeviceStatus;
   lastSeen?: string;

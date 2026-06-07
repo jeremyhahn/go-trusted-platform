@@ -142,11 +142,13 @@ func (r *DeviceRouter) registerProfileCRUD(router *mux.Router) {
 	// (sdk/javascript/src/services/device-service.ts) calls
 	// `/v1/devices/templates` while the legacy REST surface used
 	// `/v1/device/templates`. Both must work.
-	router.HandleFunc("/devices/templates", r.templateHandler.CreateTemplate).Methods("POST")
-	router.HandleFunc("/devices/templates", r.templateHandler.ListTemplates).Methods("GET")
-	router.HandleFunc("/devices/templates/{id:[0-9]+}", r.templateHandler.GetTemplate).Methods("GET")
-	router.HandleFunc("/devices/templates/{id:[0-9]+}", r.templateHandler.UpdateTemplate).Methods("PUT")
-	router.HandleFunc("/devices/templates/{id:[0-9]+}", r.templateHandler.DeleteTemplate).Methods("DELETE")
+	if r.templateHandler != nil {
+		router.HandleFunc("/devices/templates", r.templateHandler.CreateTemplate).Methods("POST")
+		router.HandleFunc("/devices/templates", r.templateHandler.ListTemplates).Methods("GET")
+		router.HandleFunc("/devices/templates/{id:[0-9]+}", r.templateHandler.GetTemplate).Methods("GET")
+		router.HandleFunc("/devices/templates/{id:[0-9]+}", r.templateHandler.UpdateTemplate).Methods("PUT")
+		router.HandleFunc("/devices/templates/{id:[0-9]+}", r.templateHandler.DeleteTemplate).Methods("DELETE")
+	}
 
 	// GET /api/v1/device/profiles/count - Count profiles
 	router.HandleFunc("/device/profiles/count", r.crudHandler.CountProfiles).Methods("GET")

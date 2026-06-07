@@ -11,13 +11,6 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
-//go:build attestation_grpc
-
-// NOTE: This file requires proto generation before it can compile.
-// Run `make proto` or `cd pkg/api/grpc && buf generate` to generate the
-// required platformv1.AttestationService* types from attestation.proto.
-// Then build with: go build -tags attestation_grpc ./...
-
 package daemon
 
 import (

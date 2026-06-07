@@ -29,10 +29,9 @@ import (
 	"testing"
 	"time"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
-	pkgca "github.com/jeremyhahn/go-xkms/pkg/ca"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -41,7 +40,7 @@ func TestNewCAGRPCService(t *testing.T) {
 	t.Parallel()
 
 	t.Run("creates service with nil CA", func(t *testing.T) {
-		svc := NewCAGRPCService(nil, nil)
+		svc := NewCAGRPCService(nil, nil, nil)
 		if svc == nil {
 			t.Fatal("expected non-nil service")
 		}
@@ -51,7 +50,7 @@ func TestNewCAGRPCService(t *testing.T) {
 func TestCAGRPCService_GetCAInfo_NilCA(t *testing.T) {
 	t.Parallel()
 
-	svc := NewCAGRPCService(nil, nil)
+	svc := NewCAGRPCService(nil, nil, nil)
 	ctx := context.Background()
 
 	resp, err := svc.GetCAInfo(ctx, &platformv1.GetCAInfoRequest{})
@@ -141,7 +140,7 @@ func TestCAGRPCService_GetCAInfo_NotInitialized(t *testing.T) {
 func TestCAGRPCService_IssueCertificate_NilCA(t *testing.T) {
 	t.Parallel()
 
-	svc := NewCAGRPCService(nil, nil)
+	svc := NewCAGRPCService(nil, nil, nil)
 	ctx := context.Background()
 
 	resp, err := svc.IssueCertificate(ctx, &platformv1.IssueCertificateRequest{})
@@ -275,7 +274,7 @@ func TestCAGRPCService_IssueCertificate_Error(t *testing.T) {
 func TestCAGRPCService_GetCertificate_NilCA(t *testing.T) {
 	t.Parallel()
 
-	svc := NewCAGRPCService(nil, nil)
+	svc := NewCAGRPCService(nil, nil, nil)
 	ctx := context.Background()
 
 	resp, err := svc.GetCertificate(ctx, &platformv1.GetCertificateRequest{Serial: "test"})
@@ -424,7 +423,7 @@ func TestCAGRPCService_GetCertificate_NotFound(t *testing.T) {
 func TestCAGRPCService_ListCertificates_NilCA(t *testing.T) {
 	t.Parallel()
 
-	svc := NewCAGRPCService(nil, nil)
+	svc := NewCAGRPCService(nil, nil, nil)
 	ctx := context.Background()
 
 	resp, err := svc.ListCertificates(ctx, &platformv1.ListCertificatesRequest{})
@@ -537,7 +536,7 @@ func TestCAGRPCService_ListCertificates_Pagination(t *testing.T) {
 func TestCAGRPCService_RevokeCertificate_NilCA(t *testing.T) {
 	t.Parallel()
 
-	svc := NewCAGRPCService(nil, nil)
+	svc := NewCAGRPCService(nil, nil, nil)
 	ctx := context.Background()
 
 	resp, err := svc.RevokeCertificate(ctx, &platformv1.RevokeCertificateRequest{Serial: "test"})
@@ -696,7 +695,7 @@ func TestCAGRPCService_RevokeCertificate_Error(t *testing.T) {
 func TestCAGRPCService_RenewCertificate_NilCA(t *testing.T) {
 	t.Parallel()
 
-	svc := NewCAGRPCService(nil, nil)
+	svc := NewCAGRPCService(nil, nil, nil)
 	ctx := context.Background()
 
 	resp, err := svc.RenewCertificate(ctx, &platformv1.RenewCertificateRequest{Serial: "test", ValidDays: 365})
@@ -889,7 +888,7 @@ func TestCAGRPCService_RenewCertificate_Error(t *testing.T) {
 func TestCAGRPCService_VerifyCertificate_NilCA(t *testing.T) {
 	t.Parallel()
 
-	svc := NewCAGRPCService(nil, nil)
+	svc := NewCAGRPCService(nil, nil, nil)
 	ctx := context.Background()
 
 	resp, err := svc.VerifyCertificate(ctx, &platformv1.VerifyCertificateRequest{CertificatePem: []byte("test")})
@@ -1169,7 +1168,7 @@ func TestCAGRPCService_VerifyCertificate_WithTrustedRoots(t *testing.T) {
 func TestCAGRPCService_GetCRL_NilCA(t *testing.T) {
 	t.Parallel()
 
-	svc := NewCAGRPCService(nil, nil)
+	svc := NewCAGRPCService(nil, nil, nil)
 	ctx := context.Background()
 
 	resp, err := svc.GetCRL(ctx, &platformv1.GetCRLRequest{})
@@ -1273,7 +1272,7 @@ func TestCAGRPCService_GetCRL_WithEntries(t *testing.T) {
 func TestCAGRPCService_GetCABundle_NilCA(t *testing.T) {
 	t.Parallel()
 
-	svc := NewCAGRPCService(nil, nil)
+	svc := NewCAGRPCService(nil, nil, nil)
 	ctx := context.Background()
 
 	resp, err := svc.GetCABundle(ctx, &platformv1.GetCABundleRequest{})
@@ -2526,16 +2525,16 @@ func (m *configurableMockCA) CABundleFiltered(_ xkmssdk.StoreType, _ x509.Public
 func (m *configurableMockCA) ParseBundle(_ []byte) ([]*x509.Certificate, error) {
 	return m.parsedBundle, nil
 }
-func (m *configurableMockCA) IssueCertificate(_ *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
+func (m *configurableMockCA) IssueCertificate(_ *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	if m.issueCertErr != nil {
 		return nil, m.issueCertErr
 	}
 	if m.issuedCert == nil {
 		return nil, nil
 	}
-	return &pkgca.IssuedCertificate{Certificate: m.issuedCert}, nil
+	return &xkmsca.IssuedCertificate{Certificate: m.issuedCert}, nil
 }
-func (m *configurableMockCA) RevokeCert(_ *x509.Certificate, _ pkgca.RevokeOptions) error {
+func (m *configurableMockCA) RevokeCert(_ *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	return m.revokeErr
 }
 func (m *configurableMockCA) CertStore() xkmssdk.CertStore { return m.certStore }

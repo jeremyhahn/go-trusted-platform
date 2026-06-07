@@ -17,9 +17,8 @@ import (
 	"crypto/x509"
 	"time"
 
-	pkgca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 )
 
 // =============================================================================
@@ -27,7 +26,7 @@ import (
 // =============================================================================
 //
 // CAAuthorityAdapter bridges the production CA implementation
-// (goca.CACertificateAuthority / pkg/ca.TCGCA) to the REST handler interface
+// (quicbaasca.CACertificateAuthority / pkg/ca.TCGCA) to the REST handler interface
 // (CAServiceInterface). The adapter exists because the production CA returns
 // *IssuedCertificate from IssueCertificate and uses RevokeCert(cert, opts) +
 // DefaultValidityPeriod() (days as int), while the REST handler interface
@@ -39,14 +38,14 @@ import (
 
 // CAAuthorityAdapter wraps a production CA to satisfy CAServiceInterface.
 type CAAuthorityAdapter struct {
-	ca goca.CACertificateAuthority
+	ca quicbaasca.CACertificateAuthority
 }
 
 // NewCAAuthorityAdapter creates a CAAuthorityAdapter wrapping the given CA.
 // Returns nil when ca is nil so callers can use the result directly with
 // NewCAHandlers without nil checks (NewCAHandlers itself accepts a nil CA
 // and will return ErrCAServiceNotAvailable on every operation).
-func NewCAAuthorityAdapter(ca goca.CACertificateAuthority) *CAAuthorityAdapter {
+func NewCAAuthorityAdapter(ca quicbaasca.CACertificateAuthority) *CAAuthorityAdapter {
 	if ca == nil {
 		return nil
 	}
@@ -89,7 +88,7 @@ func (a *CAAuthorityAdapter) TrustedIntermediate() (*x509.Certificate, error) {
 // IssueCertificate issues a new certificate via the underlying CA.
 // The production CA returns *IssuedCertificate; the adapter unwraps the
 // embedded x509 certificate for the REST handler.
-func (a *CAAuthorityAdapter) IssueCertificate(req *goca.CACertificateRequest) (*x509.Certificate, error) {
+func (a *CAAuthorityAdapter) IssueCertificate(req *quicbaasca.CACertificateRequest) (*x509.Certificate, error) {
 	issued, err := a.ca.IssueCertificate(req)
 	if err != nil {
 		return nil, err
@@ -103,7 +102,7 @@ func (a *CAAuthorityAdapter) IssueCertificate(req *goca.CACertificateRequest) (*
 // Revoke revokes a certificate. The production CA exposes RevokeCert(cert,
 // opts); we map the keyAttrs nil/non-nil signal into RevokeOptions.DeleteKeys.
 func (a *CAAuthorityAdapter) Revoke(cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
-	return a.ca.RevokeCert(cert, pkgca.RevokeOptions{
+	return a.ca.RevokeCert(cert, quicbaasca.RevokeOptions{
 		DeleteKeys: keyAttrs != nil,
 	})
 }

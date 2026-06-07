@@ -24,6 +24,7 @@ import (
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"google.golang.org/grpc/codes"
@@ -62,6 +63,12 @@ type Service struct {
 
 	shutdownCh chan struct{}
 	shutdownFn func() error
+
+	// snapshotStore persists pre-reload snapshots so configuration
+	// changes are reversible. Wired by the daemon boot path via
+	// SetSnapshotStore; nil disables snapshot capture and the
+	// rollback REST surface.
+	snapshotStore tpconfig.SnapshotStore
 }
 
 // ServiceOption is a functional option for configuring the Service
@@ -427,11 +434,27 @@ func (s *Service) UpdateConfig(ctx context.Context, req *platformv1.UpdateConfig
 	return nil, status.Error(codes.Unimplemented, "config updates not yet implemented")
 }
 
-// ReloadConfig reloads the configuration from disk
+// ReloadConfig reloads the configuration from disk and reflects the
+// updated values into the bound *app.App. The list of top-level
+// sections that were reloaded is returned for downstream broadcast.
+//
+// This RPC is best-effort: a partial unmarshal failure mid-way is
+// reported as Internal and the *app.App may be left in an
+// inconsistent state. Callers that need atomicity should
+// ValidateConfig first against the proposed body and only call
+// ReloadConfig once it returns clean.
 func (s *Service) ReloadConfig(ctx context.Context, req *platformv1.ReloadConfigRequest) (*platformv1.ReloadConfigResponse, error) {
-	// Configuration reloading would require file I/O and validation
-	// For now, return unimplemented
-	return nil, status.Error(codes.Unimplemented, "config reload not yet implemented")
+	sections, err := s.ReloadConfigFromDisk()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &platformv1.ReloadConfigResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "configuration reloaded from disk",
+		},
+		ReloadedSections: sections,
+	}, nil
 }
 
 // StartService starts a managed service

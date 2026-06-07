@@ -150,7 +150,7 @@ func TestSDKClient_ServiceAccessorsReturnNilWhenClosed(t *testing.T) {
 	assert.Nil(t, sdkClient.RBAC())
 	assert.Nil(t, sdkClient.DynamicSecrets())
 	assert.Nil(t, sdkClient.Certificate())
-	assert.Nil(t, sdkClient.ClusterDEK())
+	assert.Nil(t, sdkClient.DEK())
 	assert.Nil(t, sdkClient.ObjectStorage())
 	assert.Nil(t, sdkClient.ObjectStorageAdmin())
 	assert.Nil(t, sdkClient.ObjectTransfer())

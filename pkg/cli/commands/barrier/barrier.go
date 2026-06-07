@@ -11,9 +11,30 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
-// Package barrier provides CLI commands for barrier storage management.
-// The barrier protects sensitive platform data at rest using encryption,
-// supporting both single-key and Shamir secret sharing unseal strategies.
+// Package barrier provides CLI commands for the canonical 9-verb
+// platformctl barrier surface.
+//
+// The verb tree is identical across qrdbctl, xkmsctl, quicbaas, and
+// platformctl per docs/08-bootstrap-auth-architecture.md §6. Verbs are
+// dispatched to quicbaasd through the platform SDK's
+// Client.QuicBaaS().Security().Barrier() accessor; platformd still
+// exposes a legacy BarrierServiceClient for non-CLI callers that have
+// not migrated.
+//
+// Canonical verb tree:
+//
+//	barrier status
+//	barrier init           --barrier-strategy <none|passphrase|shamir>
+//	                       [--passphrase <pass>] [--so-pin <pin>] [--user-pin <pin>]
+//	barrier init-shamir    --passphrase <pass> --threshold <N> --total <M>
+//	                       [--so-pin <pin>] [--user-pin <pin>]
+//	barrier unseal         --passphrase <pass>
+//	barrier unseal-shares  --share <s> [--share <s> ...]  |  --shares-file <path|->
+//	barrier seal           [--so-pin <pin>] [-y]
+//	barrier rekey          --passphrase <new> [--so-pin <pin>]
+//	                       [--threshold <N> --total <M>]
+//	barrier recovery generate --threshold <N> --total <M> [--so-pin <pin>]
+//	barrier recovery recover  --share <s> [--share <s> ...]
 package barrier
 
 import (
@@ -22,47 +43,39 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
-// NewCommand creates the barrier root command for barrier storage management
+// NewCommand creates the barrier root command for the canonical 9-verb
+// barrier surface.
 func NewCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "barrier",
 		Short: "Barrier storage management",
-		Long: `Manage the platform barrier storage that protects sensitive data at rest.
+		Long: `Manage the cryptographic barrier that protects sensitive platform data at rest.
 
-The barrier subsystem provides:
-  - Initialization with single-key or Shamir secret sharing
-  - Seal/unseal operations to protect and access encrypted data
-  - Status monitoring of the barrier state
-  - Rekeying to rotate unseal credentials
+The barrier subsystem provides the canonical 9-verb surface shared by
+qrdbctl, xkmsctl, quicbaas, and platformctl:
 
-Examples:
-  # Initialize barrier with single key
-  platformctl barrier init --secret "my-secret-key"
+  status                 Show barrier state
+  init                   Initialize with strategy (none|passphrase|shamir)
+  init-shamir            Initialize with Shamir secret sharing (M-of-N)
+  unseal                 Unseal with a single passphrase
+  unseal-shares          Unseal with one or more Shamir shares
+  seal                   Seal the barrier
+  rekey                  Generate a new master key
+  recovery generate      Generate recovery shares
+  recovery recover       Unseal with recovery shares
 
-  # Initialize barrier with Shamir secret sharing (3-of-5)
-  platformctl barrier init --threshold 3 --shares 5
-
-  # Check barrier status
-  platformctl barrier status
-
-  # Unseal with single key
-  platformctl barrier unseal --secret "my-secret-key"
-
-  # Unseal with Shamir share
-  platformctl barrier unseal --share "shamir-share-1"
-
-  # Seal the barrier
-  platformctl barrier seal
-
-  # Rekey with new Shamir parameters
-  platformctl barrier rekey --threshold 3 --shares 5`,
+All verbs are dispatched to the QuicBaaS daemon (quicbaasd) via the
+platform SDK Client.QuicBaaS().Security().Barrier() surface.`,
 	}
 
-	cmd.AddCommand(newInitCommand(getFlags))
 	cmd.AddCommand(newStatusCommand(getFlags))
+	cmd.AddCommand(newInitCommand(getFlags))
+	cmd.AddCommand(newInitShamirCommand(getFlags))
 	cmd.AddCommand(newUnsealCommand(getFlags))
+	cmd.AddCommand(newUnsealSharesCommand(getFlags))
 	cmd.AddCommand(newSealCommand(getFlags))
 	cmd.AddCommand(newRekeyCommand(getFlags))
+	cmd.AddCommand(newRecoveryCommand(getFlags))
 
 	return cmd
 }

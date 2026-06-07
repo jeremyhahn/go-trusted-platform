@@ -29,10 +29,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	objstore "github.com/jeremyhahn/go-objstore/pkg/common"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
-	pkgca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -51,20 +50,24 @@ const (
 // CAHandlers provides REST handlers for CA operations
 type CAHandlers struct {
 	logger     *logging.Logger
-	ca         goca.CACertificateAuthority
+	ca         quicbaasca.CACertificateAuthority
 	respWriter response.HttpWriter
+	objStorage objectstorage.Client
 }
 
-// NewCAHandlers creates a new CAHandlers instance
+// NewCAHandlers creates a new CAHandlers instance.
+// objStorage may be nil; if nil, the revocation object-store check is skipped.
 func NewCAHandlers(
 	logger *logging.Logger,
-	ca goca.CACertificateAuthority,
+	ca quicbaasca.CACertificateAuthority,
 	respWriter response.HttpWriter,
+	objStorage objectstorage.Client,
 ) *CAHandlers {
 	return &CAHandlers{
 		logger:     logger,
 		ca:         ca,
 		respWriter: respWriter,
+		objStorage: objStorage,
 	}
 }
 
@@ -765,8 +768,8 @@ func (h *CAHandlers) IssueCertificate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	caReq := &goca.CACertificateRequest{
-		Subject: goca.CASubject{
+	caReq := &quicbaasca.CACertificateRequest{
+		Subject: quicbaasca.CASubject{
 			CommonName:         subject.GetCommonName(),
 			Organization:       subject.GetOrganization(),
 			OrganizationalUnit: subject.GetOrganizationalUnit(),
@@ -784,7 +787,7 @@ func (h *CAHandlers) IssueCertificate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if sans := certReq.GetSans(); sans != nil {
-		caReq.SANS = &goca.CASubjectAlternativeNames{
+		caReq.SANS = &quicbaasca.CASubjectAlternativeNames{
 			DNS:   sans.GetDnsNames(),
 			IPs:   sans.GetIpAddresses(),
 			Email: sans.GetEmailAddresses(),
@@ -883,7 +886,7 @@ func (h *CAHandlers) RevokeCertificate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.ca.RevokeCert(cert, pkgca.RevokeOptions{DeleteKeys: req.GetDeleteKeys()}); err != nil {
+	if err := h.ca.RevokeCert(cert, quicbaasca.RevokeOptions{DeleteKeys: req.GetDeleteKeys()}); err != nil {
 		protorest.WriteError(w, r, h.respWriter,
 			status.Error(codes.Internal, err.Error()))
 		return
@@ -1039,12 +1042,9 @@ func (h *CAHandlers) GetBootstrapBundle(w http.ResponseWriter, r *http.Request) 
 
 // GetCRL handles GET /api/v1/ca/crl.
 //
-// Emits platformv1.GetCRLResponse on success. The handler probes the
-// concrete CA via an ad-hoc interface for GenerateCRL() because the
-// goca.CACertificateAuthority surface does not expose CRL generation;
-// when neither GenerateCRL() nor an object-store fallback is available
-// the response is a gRPC Unimplemented (HTTP 501) so callers can degrade
-// gracefully.
+// Emits platformv1.GetCRLResponse on success. CRL generation is part of the
+// quicbaasca.CACertificateAuthority surface (via TrustedCA.GenerateCRL), so
+// the handler invokes it directly and returns HTTP 500 on failure.
 func (h *CAHandlers) GetCRL(w http.ResponseWriter, r *http.Request) {
 	if h.ca == nil {
 		protorest.WriteError(w, r, h.respWriter,
@@ -1052,32 +1052,7 @@ func (h *CAHandlers) GetCRL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type crlGenerator interface {
-		GenerateCRL() ([]byte, error)
-	}
-
-	gen, ok := h.ca.(crlGenerator)
-	if !ok {
-		// No GenerateCRL — try the object store as a fallback.
-		type objectStoreProvider interface {
-			ObjectStore() objstore.Storage
-		}
-		var objStore objstore.Storage
-		if provider, hasProvider := h.ca.(objectStoreProvider); hasProvider {
-			objStore = provider.ObjectStore()
-		}
-		if objStore == nil {
-			protorest.WriteError(w, r, h.respWriter,
-				status.Error(codes.Internal, ErrCRLNotFound{}.Error()))
-			return
-		}
-		// Object-store-backed CRL retrieval is not implemented yet.
-		protorest.WriteError(w, r, h.respWriter,
-			status.Error(codes.Internal, ErrCRLNotFound{}.Error()))
-		return
-	}
-
-	crlDER, err := gen.GenerateCRL()
+	crlDER, err := h.ca.GenerateCRL()
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter,
 			status.Error(codes.Internal, ErrCRLGenerationFailed{Reason: err.Error()}.Error()))

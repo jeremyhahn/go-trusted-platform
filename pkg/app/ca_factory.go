@@ -17,8 +17,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/jeremyhahn/go-objstore/pkg/local"
-	objmemory "github.com/jeremyhahn/go-objstore/pkg/memory"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
@@ -323,7 +321,8 @@ func (f *BootstrapCAStoreFactory) CreateCertStore(cn string) (interface{}, error
 }
 
 // CreateObjectStore implements ca.ObjectStoreFactory.
-// Creates a local filesystem-backed common.Storage for the given CA identity.
+// Creates a common.Storage for the given CA identity backed by an in-memory
+// QuicBaaS ObjectStorage client for the bootstrap path (before QuicBaaS starts).
 // Objects are stored under platformDir/ca/<cn>/.
 func (f *BootstrapCAStoreFactory) CreateObjectStore(cn string) (interface{}, error) {
 	caRoot := fmt.Sprintf("%s/ca/%s", f.platformDir, cn)
@@ -332,15 +331,9 @@ func (f *BootstrapCAStoreFactory) CreateObjectStore(cn string) (interface{}, err
 		slog.String("cn", cn),
 		slog.String("path", caRoot))
 
-	var objStorage interface{ Configure(map[string]string) error }
-
-	if f.environment == EnvTest {
-		objStorage = objmemory.New()
-	} else {
-		objStorage = local.New()
-	}
-
-	if err := objStorage.Configure(map[string]string{"path": caRoot}); err != nil {
+	memClient := object.NewMemoryClient()
+	caObjStorage := object.NewObjStoreAdapter(memClient)
+	if err := caObjStorage.Configure(map[string]string{"path": caRoot}); err != nil {
 		return nil, ErrBootstrapStoreInit{
 			Store: "object-store",
 			CN:    cn,
@@ -351,7 +344,7 @@ func (f *BootstrapCAStoreFactory) CreateObjectStore(cn string) (interface{}, err
 	f.logger.Debug("Created bootstrap objectstore for CA",
 		slog.String("cn", cn))
 
-	return objStorage, nil
+	return caObjStorage, nil
 }
 
 // Ensure BootstrapCAStoreFactory implements the expected interfaces

@@ -32,7 +32,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	pkgca "github.com/jeremyhahn/go-xkms/pkg/ca"
+	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +41,7 @@ import (
 // Minimal authCA stub for auth factor handler tests.
 //
 // authTestCA satisfies the authCA interface:
-//   SignCSR(csrPEM []byte, opts *pkgca.SignOptions) (*x509.Certificate, error)
+//   SignCSR(csrPEM []byte, opts *xkmsca.SignOptions) (*x509.Certificate, error)
 //   TrustedRootCertPool(cert *x509.Certificate) (*x509.CertPool, error)
 //   CABundle() ([]byte, error)
 // =============================================================================
@@ -101,7 +101,7 @@ func newAuthTestCA(t *testing.T) *authTestCA {
 	}
 }
 
-func (a *authTestCA) SignCSR(_ []byte, _ *pkgca.SignOptions) (*x509.Certificate, error) {
+func (a *authTestCA) SignCSR(_ []byte, _ *xkmsca.SignOptions) (*x509.Certificate, error) {
 	if a.signErr != nil {
 		return nil, a.signErr
 	}

@@ -90,6 +90,18 @@ type ServerConfig struct {
 	// TFTPServerName is the TFTP server hostname (optional).
 	TFTPServerName string
 
+	// DataDir is the on-disk directory whose contents are exposed
+	// to iPXE clients under the HTTP /data/ URL prefix. Lets the
+	// generated bootstrap.ipxe script reference files by path
+	// (e.g. `kernel /data/vmlinuz`, `initrd /data/initramfs`) and
+	// have them served by the same pxeboot HTTP server. Without
+	// this, the iPXE chainload that reaches the /boot/<name>.ipxe
+	// script succeeds but the subsequent kernel/initrd fetches
+	// return 404 because no handler exists for /data/. Defaults
+	// to InstallsDir's parent when unset (typically "/data").
+	// Set to "" to disable the /data/ endpoint entirely.
+	DataDir string
+
 	// BootFilename is the legacy single-arch boot filename for
 	// non-iPXE clients. When BootFilenameByArch is populated, that
 	// map takes precedence and BootFilename is used only for

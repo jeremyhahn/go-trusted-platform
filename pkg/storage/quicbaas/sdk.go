@@ -40,17 +40,82 @@ type SDKClient struct {
 // NewSDKClient creates a new SDK client based on the config transport mode.
 // For embedded mode, the embeddedService parameter must be provided.
 // For remote transports, embeddedService should be nil.
+//
+// Note: this entry point does NOT wire the qrdb sub-client's in-process
+// transport. SDK callers that need Security().Barrier(),
+// Security().Ceremony(), or Security().Credentials() to dispatch in-process
+// against an embedded server MUST use NewSDKClientWithEmbeddedServer
+// instead. Calling Security().Ceremony() on a client built here under
+// embedded transport will return a "TransportEmbedded requires
+// WithEmbeddedQRDB(...)" configuration error on the first qrdb-backed call.
 func NewSDKClient(cfg *Config, embeddedService service.QuicBaaS) (*SDKClient, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
-	var client quicbaas.Client
-	var err error
+	client, err := buildClient(cfg, embeddedService, nil)
+	if err != nil {
+		return nil, err
+	}
 
+	return &SDKClient{
+		client: client,
+		config: cfg,
+	}, nil
+}
+
+// NewSDKClientWithEmbeddedServer creates an SDK client whose qrdb sub-client
+// dispatches in-process against the supplied embedded server. This is the
+// constructor the factory uses in embedded mode so that platformd's gate
+// /init handler (and every other Security().Ceremony() / Security().Credentials()
+// / Security().Barrier() caller) reaches the embedded server's qrdb services
+// without trying to dial a network address.
+//
+// For non-embedded transports, embeddedServer is ignored and behaviour
+// matches NewSDKClient. For embedded transport, both the embedded service
+// (passed via embeddedServer.Service()) AND the qrdb servicers (pulled
+// from embeddedServer.Server()) are wired into the SDK client. Returns
+// EmbeddedQRDBWiringError when the qrdb wiring cannot be assembled (for
+// example, when the embedded server has not started yet).
+func NewSDKClientWithEmbeddedServer(cfg *Config, embeddedServer *EmbeddedServer) (*SDKClient, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
+	var (
+		svc service.QuicBaaS
+		es  *EmbeddedServer
+	)
+	if cfg.Transport == TransportEmbedded {
+		if embeddedServer == nil {
+			return nil, ErrEmbeddedServiceRequired{}
+		}
+		svc = embeddedServer.Service()
+		es = embeddedServer
+	}
+
+	client, err := buildClient(cfg, svc, es)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SDKClient{
+		client: client,
+		config: cfg,
+	}, nil
+}
+
+// buildClient dispatches transport construction. embeddedService and
+// embeddedServer are only consulted when cfg.Transport == TransportEmbedded;
+// remote transports ignore both parameters.
+func buildClient(cfg *Config, embeddedService service.QuicBaaS, embeddedServer *EmbeddedServer) (quicbaas.Client, error) {
+	var (
+		client quicbaas.Client
+		err    error
+	)
 	switch cfg.Transport {
 	case TransportEmbedded:
-		client, err = createEmbeddedSDKClient(cfg, embeddedService)
+		client, err = createEmbeddedSDKClient(cfg, embeddedService, embeddedServer)
 	case TransportUnix:
 		client, err = createUnixSDKClient(cfg)
 	case TransportGRPC:
@@ -66,29 +131,47 @@ func NewSDKClient(cfg *Config, embeddedService service.QuicBaaS) (*SDKClient, er
 	if err != nil {
 		return nil, ErrConnectionFailed{Cause: err}
 	}
-
-	return &SDKClient{
-		client: client,
-		config: cfg,
-	}, nil
+	return client, nil
 }
 
 // createEmbeddedSDKClient creates an SDK client for embedded (in-process) mode.
-func createEmbeddedSDKClient(cfg *Config, svc service.QuicBaaS) (quicbaas.Client, error) {
+// When embeddedServer is non-nil, WithEmbeddedQRDB is wired so the qrdb
+// sub-client dispatches in-process; when nil, the qrdb sub-client is left
+// uninstalled and Security().Ceremony() calls return a configuration error
+// on first use.
+func createEmbeddedSDKClient(cfg *Config, svc service.QuicBaaS, embeddedServer *EmbeddedServer) (quicbaas.Client, error) {
 	if svc == nil {
 		return nil, ErrEmbeddedServiceRequired{}
 	}
 
-	// Use the address field if set, otherwise use empty string for embedded
+	// Use the address field if set, otherwise use the conventional embedded
+	// label so log output and error messages identify the transport mode.
 	address := cfg.Address
 	if address == "" {
 		address = "embedded"
 	}
 
-	return quicbaas.NewClient(address,
+	opts := []quicbaas.Option{
 		quicbaas.WithEmbedded(svc),
 		quicbaas.WithTimeout(cfg.RequestTimeout),
-	)
+	}
+
+	// Wire the qrdb sub-client to dispatch in-process against the embedded
+	// server's per-shard baasTransport (via the BaaS KV + Admin adapters)
+	// plus the bootstrap ceremony services. Without WithEmbeddedQRDB the
+	// qrdb sub-client has no listener to dial in embedded mode and any
+	// Security().Ceremony() / Security().Credentials() / Security().Barrier()
+	// call fails with a "produced zero addresses" transport error — which
+	// is exactly what blocks platformd's gate /init handler.
+	if embeddedServer != nil {
+		qrdbOpt, err := embeddedQRDBOption(embeddedServer)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, qrdbOpt)
+	}
+
+	return quicbaas.NewClient(address, opts...)
 }
 
 // createUnixSDKClient creates an SDK client for Unix socket transport.
@@ -365,13 +448,13 @@ func (s *SDKClient) Certificate() quicbaas.CertificateClient {
 	return client.Certificate()
 }
 
-// ClusterDEK returns the ClusterDEK client for cluster data encryption keys.
-func (s *SDKClient) ClusterDEK() quicbaas.ClusterDEKClient {
+// DEK returns the Data Encryption Key client for per-tenant DEK management.
+func (s *SDKClient) DEK() quicbaas.DEKClient {
 	client := s.Client()
 	if client == nil {
 		return nil
 	}
-	return client.ClusterDEK()
+	return client.DEK()
 }
 
 // ObjectStorage returns the ObjectStorage client for distributed object storage.

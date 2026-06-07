@@ -53,4 +53,16 @@ var (
 
 	// ErrInvalidInvitationStatus is returned when the invitation has an unexpected status.
 	ErrInvalidInvitationStatus = errors.New("webauthn: invalid invitation status")
+
+	// ErrSDKClientRequired is returned when the WebAuthn handler is
+	// constructed without a SDK relying-party client.
+	ErrSDKClientRequired = errors.New("webauthn: SDK WebAuthn client is required")
+
+	// ErrInvalidConfig is returned when the relying-party Config is
+	// missing the RPID or RPOrigins fields.
+	ErrInvalidConfig = errors.New("webauthn: invalid relying-party configuration")
+
+	// ErrRefreshUnsupported is returned when a caller attempts to use
+	// the WebAuthn handler as a refresh-token middleware.
+	ErrRefreshUnsupported = errors.New("webauthn: refresh tokens are issued via /jwt/refresh")
 )

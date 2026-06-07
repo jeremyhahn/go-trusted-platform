@@ -48,11 +48,10 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 
 	// go-trusted-ca SDK
-	casdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
-	pkgca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
-	xkmscertstore "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/certstore"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
-	objstorecommon "github.com/jeremyhahn/go-objstore/pkg/common"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	xkmscertstore "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/certstore"
 	acmequicbaas "github.com/jeremyhahn/go-trusted-platform/pkg/acme/storage/quicbaas"
 
 	// Local platform imports
@@ -65,9 +64,9 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
-	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
 
 	// QuicBaaS service for KMS access
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -129,8 +128,8 @@ var (
 	}
 )
 
-func defaultCAConfig() *casdk.CAConfig {
-	return pkgca.DefaultMultiIdentityCAConfig()
+func defaultCAConfig() *trustedca.CAConfig {
+	return quicbaasca.DefaultMultiIdentityCAConfig()
 }
 
 // newKeyBackend creates a new KeyBackend using go-xkms native file storage.
@@ -299,13 +298,13 @@ type PlatformInitConfig struct {
 }
 
 type App struct {
-	ACMEConfig              *casdk.ACMEConfig                 `yaml:"acme" json:"acme" mapstructure:"acme" swaggerignore:"true"`
-	ACMEClient              *casdk.ACMEClient                 `yaml:"-" json:"-" mapstructure:"-"`
+	ACMEConfig              *trustedca.ACMEConfig             `yaml:"acme" json:"acme" mapstructure:"acme" swaggerignore:"true"`
+	ACMEClient              *trustedca.ACMEClient             `yaml:"-" json:"-" mapstructure:"-"`
 	Argon2                  argon2.Argon2Config               `yaml:"argon2" json:"argon2" mapstructure:"argon2"`
 	AttestationConfig       config.Attestation                `yaml:"attestation" json:"attestation" mapstructure:"attestation"`
 	ObjectStore             object.ObjectStorer               `yaml:"-" json:"-" mapstructure:"-"`
-	CA                      casdk.CACertificateAuthority      `yaml:"-" json:"-" mapstructure:"-"`
-	CAConfig                *casdk.CAConfig                   `yaml:"certificate-authority" json:"certificate_authority" mapstructure:"certificate-authority" swaggerignore:"true"`
+	CA                      quicbaasca.CACertificateAuthority `yaml:"-" json:"-" mapstructure:"-"`
+	CAConfig                *trustedca.CAConfig               `yaml:"certificate-authority" json:"certificate_authority" mapstructure:"certificate-authority" swaggerignore:"true"`
 	ConfigDir               string                            `yaml:"config-dir" json:"config_dir" mapstructure:"config-dir"`
 	QuicBaaSConfig          *quicbaas.Config                  `yaml:"quicbaas" json:"quicbaas" mapstructure:"quicbaas"`
 	DebugFlag               bool                              `yaml:"debug" json:"debug" mapstructure:"debug"`
@@ -322,7 +321,7 @@ type App struct {
 	Logger                  *logging.Logger                   `yaml:"-" json:"-" mapstructure:"-"`
 	PlatformDir             string                            `yaml:"platform-dir" json:"platform_dir" mapstructure:"platform-dir"`
 	PlatformKS              xkmssdk.PlatformKeyStorer         `yaml:"-" json:"-" mapstructure:"-"`
-	PlatformCertStore       xkmssdk.CertStore                 `yaml:"-" json:"-" mapstructure:"-"`
+	ManagedCertStore        xkmssdk.CertStore                 `yaml:"-" json:"-" mapstructure:"-"`
 	PlatformConfig          *PlatformInitConfig               `yaml:"platform,omitempty" json:"platform,omitempty" mapstructure:"platform"`
 	SecretsConfig           *SecretsConfig                    `yaml:"secrets,omitempty" json:"secrets,omitempty" mapstructure:"secrets"`
 	BMCConfig               *bmc.Config                       `yaml:"bmc,omitempty" json:"bmc,omitempty" mapstructure:"bmc"`
@@ -688,6 +687,43 @@ func (app *App) parsePrivateAndPublicIPs() error {
 }
 
 // Returns a singleton instance of the platform service registry
+// systemTenantID is the fixed ID of the system tenant created by go-qrdb's
+// firstboot on first server start. It mirrors go-qrdb/pkg/tenant.SystemTenantID;
+// the platform consumes it through the go-quicbaas IAM SDK rather than importing
+// go-qrdb directly.
+const systemTenantID = "system"
+
+// adoptSystemTenant verifies that firstboot's system tenant exists in IAM (the
+// embedded QuicBaaS server runs firstboot idempotently on Start) and adopts it
+// as the platform's operating tenant, replacing the bootstrap "default"
+// placeholder. The platform never seeds tenants/roles/admin itself — it consumes
+// what firstboot created. On lean builds without IAM the call is a graceful
+// no-op and the configured TenantID is left unchanged.
+func (app *App) adoptSystemTenant(ctx context.Context) error {
+	sdk := app.QuicBaaSSDKClient()
+	if sdk == nil {
+		return nil
+	}
+	iamClient := sdk.IAM()
+	if iamClient == nil {
+		return nil
+	}
+	tenantClient := iamClient.Tenant()
+	if tenantClient == nil {
+		return nil
+	}
+	t, err := tenantClient.Get(ctx, systemTenantID)
+	if err != nil {
+		return fmt.Errorf(
+			"adopt system tenant: firstboot system tenant %q not present after factory start: %w",
+			systemTenantID, err)
+	}
+	app.TenantID = t.ID
+	app.Logger.Info("adopted firstboot system tenant",
+		slog.String("tenant_id", t.ID), slog.String("name", t.Name))
+	return nil
+}
+
 func (app *App) ServiceRegistry() *service.Registry {
 
 	if app.serviceRegistry != nil {
@@ -715,6 +751,16 @@ func (app *App) ServiceRegistry() *service.Registry {
 		app.Logger.Info("Started QuicBaaS factory")
 
 		app.daoFactory = daoFactory
+
+		// Adopt firstboot's system tenant as the platform operating
+		// tenant. The embedded QuicBaaS server runs firstboot during
+		// Start(), idempotently creating the system tenant + built-in
+		// roles + admin in IAM. We consume that tenant via the IAM SDK
+		// rather than seeding our own, replacing the bootstrap "default"
+		// placeholder. No-op on lean builds without IAM.
+		if err := app.adoptSystemTenant(ctx); err != nil {
+			app.Logger.FatalError(err)
+		}
 	}
 
 	// Create device datastore from QuicBaaS factory
@@ -1321,7 +1367,7 @@ func (app *App) initStores() error {
 	if err != nil {
 		return err
 	}
-	app.PlatformCertStore = cs
+	app.ManagedCertStore = cs
 
 	return nil
 }
@@ -1873,7 +1919,7 @@ func (app *App) InitACMEClient(initialize bool) error {
 		}
 	}
 
-	clientConfig := &casdk.ACMEClientConfig{
+	clientConfig := &trustedca.ACMEClientConfig{
 		DirectoryURL:        app.ACMEConfig.Client.DirectoryURL,
 		SystemCertPool:      app.ACMEConfig.Client.SystemCertPool,
 		RequestServerBundle: app.ACMEConfig.Client.RequestServerBundle,
@@ -1904,8 +1950,8 @@ func (app *App) InitACMEClient(initialize bool) error {
 		app.Logger.Warn("ACME client will use system DNS resolver - internal domains may not resolve!")
 	}
 
-	// Create the ACME client directly using go-trusted-ca
-	client, err := casdk.NewACMEClient(&casdk.ACMEClientParams{
+	// Create the ACME client via the go-quicbaas SDK ACME re-export.
+	client, err := trustedca.NewACMEClient(&trustedca.ACMEClientParams{
 		AccountEmail:       accountEmail,
 		AccountSigner:      signer,
 		Config:             clientConfig,
@@ -1936,7 +1982,7 @@ func (app *App) InitACMEClient(initialize bool) error {
 		app.ACMEConfig.Client.Account != nil &&
 		app.ACMEConfig.Client.Account.Register {
 
-		xsigner, err := casdk.ACMECrossSignerFromClient(
+		xsigner, err := trustedca.ACMECrossSignerFromClient(
 			app.ACMEClient, primaryWS.Certificate.ACME.CrossSign)
 		if err != nil {
 			return err
@@ -1952,14 +1998,14 @@ func (app *App) InitACMEClient(initialize bool) error {
 
 // Initializes a new ACME cross-signer client using the account email
 // provided in the platform configuration.
-func (app *App) NewACMECrossSigner(crossSigner *casdk.ACMECrossSignConfig, initialize bool) (*casdk.ACMEClient, error) {
+func (app *App) NewACMECrossSigner(crossSigner *trustedca.ACMECrossSignConfig, initialize bool) (*trustedca.ACMEClient, error) {
 	if app.ACMEConfig == nil {
 		return nil, nil
 	}
 	if app.ACMEClient == nil {
-		return nil, casdk.ACMEErrInvalidConfiguration
+		return nil, trustedca.ACMEErrInvalidConfiguration
 	}
-	client, err := casdk.ACMECrossSignerFromClient(app.ACMEClient, crossSigner)
+	client, err := trustedca.ACMECrossSignerFromClient(app.ACMEClient, crossSigner)
 	if err != nil {
 		return nil, err
 	}
@@ -2129,10 +2175,10 @@ func (app *App) ProvisionPlatform(
 				app.Logger.Info("Resolved PREFERRED_IP for ACME enrollment", "ip", enrollmentIP)
 			}
 
-			enrollConfig := &casdk.ACMEEnrollmentConfig{
+			enrollConfig := &trustedca.ACMEEnrollmentConfig{
 				Challenge:  app.ACMEConfig.Client.Enrollment.Challenge,
 				IPAddress:  enrollmentIP,
-				TPMModule:  casdk.NewACMEXKMSTPMAdapter(app.TPM),
+				TPMModule:  trustedca.NewACMEXKMSTPMAdapter(app.TPM),
 				CommonName: app.Hostname,
 			}
 			enrollResult, err := app.ACMEClient.EnrollDevice(ctx, enrollConfig)
@@ -2220,11 +2266,11 @@ func (app *App) ProvisionPlatform(
 			}
 
 			// Sign TCG_CSR_IDEVID, create IDevID x509 device certificate
-			iakDER, idevidDER, err := app.CA.SignTCGCSRIDevID(tcgCSRIDevID, &casdk.CACertificateRequest{
+			iakDER, idevidDER, err := app.CA.SignTCGCSRIDevID(tcgCSRIDevID, &quicbaasca.CACertificateRequest{
 				// KeyAttributes: ekAttrs,
 				KeyAttributes: idevidAttrs,
 				Valid:         0, // Valid until 99991231235959Z
-				Subject: casdk.CASubject{
+				Subject: quicbaasca.CASubject{
 					CommonName:   idevidAttrs.CN,
 					Organization: app.PrimaryWebService().Certificate.Subject.Organization,
 					Country:      app.PrimaryWebService().Certificate.Subject.Country,
@@ -2232,7 +2278,7 @@ func (app *App) ProvisionPlatform(
 					Address:      app.PrimaryWebService().Certificate.Subject.Address,
 					PostalCode:   app.PrimaryWebService().Certificate.Subject.PostalCode,
 				},
-				SANS: &casdk.CASubjectAlternativeNames{
+				SANS: &quicbaasca.CASubjectAlternativeNames{
 					DNS: []string{
 						app.Domain,
 					},
@@ -2419,9 +2465,9 @@ func (app *App) ImportEndorsementKeyCertificate() (*x509.Certificate, error) {
 				return nil, xkmssdk.ErrInvalidKeyAlgorithm
 			}
 
-			certReq := casdk.CACertificateRequest{
+			certReq := quicbaasca.CACertificateRequest{
 				KeyAttributes: ekAttrs,
-				Subject: casdk.CASubject{
+				Subject: quicbaasca.CASubject{
 					CommonName:   ekAttrs.CN,
 					Organization: app.PrimaryWebService().Certificate.Subject.Organization,
 					Country:      app.PrimaryWebService().Certificate.Subject.Country,
@@ -2429,7 +2475,7 @@ func (app *App) ImportEndorsementKeyCertificate() (*x509.Certificate, error) {
 					Address:      app.PrimaryWebService().Certificate.Subject.Address,
 					PostalCode:   app.PrimaryWebService().Certificate.Subject.PostalCode,
 				},
-				SANS: &casdk.CASubjectAlternativeNames{
+				SANS: &quicbaasca.CASubjectAlternativeNames{
 					DNS: []string{
 						app.Domain,
 					},
@@ -2461,10 +2507,10 @@ func (app *App) ImportEndorsementKeyCertificate() (*x509.Certificate, error) {
 				defer cancel()
 
 				// Request EK certificate from Enterprise CA using endorse-01 challenge
-				ekConfig := &casdk.ACMEEnrollmentConfig{
+				ekConfig := &trustedca.ACMEEnrollmentConfig{
 					Challenge:  "endorse-01",
 					IPAddress:  enrollmentIP,
-					TPMModule:  casdk.NewACMEXKMSTPMAdapter(app.TPM),
+					TPMModule:  trustedca.NewACMEXKMSTPMAdapter(app.TPM),
 					CommonName: app.Hostname,
 				}
 				ekCert, err = app.ACMEClient.RequestEndorsementKeyCertificate(ctx, ekConfig)
@@ -2538,7 +2584,7 @@ func (app *App) ImportEndorsementKeyCertificate() (*x509.Certificate, error) {
 func (app *App) LoadCA(soPIN, userPIN xkmssdk.Password) error {
 
 	if len(app.CAConfig.Identity) == 0 {
-		return casdk.CAErrInvalidConfig
+		return trustedca.CAErrInvalidConfig
 	}
 
 	// Ensure SelectedCA (platform-ca) is properly set when an intermediate CA is configured
@@ -2587,7 +2633,7 @@ func (app *App) LoadCA(soPIN, userPIN xkmssdk.Password) error {
 	// through NewCA which auto-initializes both. We then re-load from
 	// storage via Load() to match the "lazy" (load existing) contract of
 	// this function.
-	root, intermediate, err := pkgca.NewCA(&pkgca.Params{
+	root, intermediate, err := quicbaasca.NewCA(&quicbaasca.Params{
 		Identity:           app.CAConfig.Identity,
 		KeyStoreFactory:    keyStoreFactoryAdapter(storeFactory),
 		CertStoreFactory:   certStoreFactoryAdapter(storeFactory),
@@ -2610,7 +2656,7 @@ func (app *App) LoadCA(soPIN, userPIN xkmssdk.Password) error {
 	}
 
 	// Set TPM for enrollment operations
-	if tcg, ok := caInstance.(pkgca.TCGCA); ok && app.TPM != nil {
+	if tcg, ok := caInstance.(quicbaasca.TCGCA); ok && app.TPM != nil {
 		tcg.SetTPM(app.TPM)
 	}
 
@@ -2621,7 +2667,7 @@ func (app *App) LoadCA(soPIN, userPIN xkmssdk.Password) error {
 // Initializes all Certificate Authorities provided in the
 // platform configuration file and returns the selected
 // "Platform CA" as the default CA used for Platform operations.
-func (app *App) InitCA(soPIN, userPIN xkmssdk.Password, initParams *AppInitParams) (casdk.CACertificateAuthority, error) {
+func (app *App) InitCA(soPIN, userPIN xkmssdk.Password, initParams *AppInitParams) (quicbaasca.CACertificateAuthority, error) {
 
 	if app.TPM == nil {
 		if err := app.OpenTPM(initParams.Initialize); err != nil {
@@ -2634,7 +2680,7 @@ func (app *App) InitCA(soPIN, userPIN xkmssdk.Password, initParams *AppInitParam
 	}
 
 	if len(app.CAConfig.Identity) == 0 {
-		return nil, casdk.CAErrInvalidConfig
+		return nil, trustedca.CAErrInvalidConfig
 	}
 
 	// Set the selected CA index (use intermediate by default if available)
@@ -2675,7 +2721,7 @@ func (app *App) InitCA(soPIN, userPIN xkmssdk.Password, initParams *AppInitParam
 	// per CA CN at platformDir/ca/<cn>/).
 	storeFactory := NewCAStoreFactory(app, app.PlatformDir, app.Storage, soPIN, userPIN)
 
-	root, intermediate, err := pkgca.NewCA(&pkgca.Params{
+	root, intermediate, err := quicbaasca.NewCA(&quicbaasca.Params{
 		Identity:           app.CAConfig.Identity,
 		KeyStoreFactory:    keyStoreFactoryAdapter(storeFactory),
 		CertStoreFactory:   certStoreFactoryAdapter(storeFactory),
@@ -2691,7 +2737,7 @@ func (app *App) InitCA(soPIN, userPIN xkmssdk.Password, initParams *AppInitParam
 	}
 
 	// Set TPM for enrollment operations (TCG operations require TPM wiring).
-	if tcg, ok := caInstance.(pkgca.TCGCA); ok && app.TPM != nil {
+	if tcg, ok := caInstance.(quicbaasca.TCGCA); ok && app.TPM != nil {
 		tcg.SetTPM(app.TPM)
 	}
 
@@ -2735,7 +2781,7 @@ func (app *App) VerifyLocalQuote(
 // The adapter performs a type assertion to the xkms.Backend interface so that
 // shape mismatches fail fast at the factory boundary rather than during key
 // operations later.
-func keyStoreFactoryAdapter(f *CAStoreFactory) pkgca.KeyStoreFactoryFunc {
+func keyStoreFactoryAdapter(f *CAStoreFactory) quicbaasca.KeyStoreFactoryFunc {
 	return func(cn string) (xkmsbackend.Backend, error) {
 		result, err := f.CreateKeyStore(cn)
 		if err != nil {
@@ -2750,7 +2796,7 @@ func keyStoreFactoryAdapter(f *CAStoreFactory) pkgca.KeyStoreFactoryFunc {
 }
 
 // certStoreFactoryAdapter wraps a *CAStoreFactory into pkg/ca.CertStoreFactoryFunc.
-func certStoreFactoryAdapter(f *CAStoreFactory) pkgca.CertStoreFactoryFunc {
+func certStoreFactoryAdapter(f *CAStoreFactory) quicbaasca.CertStoreFactoryFunc {
 	return func(cn string) (xkmscertstore.CertStore, error) {
 		result, err := f.CreateCertStore(cn)
 		if err != nil {
@@ -2767,8 +2813,8 @@ func certStoreFactoryAdapter(f *CAStoreFactory) pkgca.CertStoreFactoryFunc {
 // objectStoreFactoryAdapter wraps a *CAStoreFactory into pkg/ca.ObjectStoreFactoryFunc.
 // Returning (nil, nil) is a valid "no object store for this CA" signal per
 // pkg/ca semantics, so assertion failures are surfaced as errors.
-func objectStoreFactoryAdapter(f *CAStoreFactory) pkgca.ObjectStoreFactoryFunc {
-	return func(cn string) (objstorecommon.Storage, error) {
+func objectStoreFactoryAdapter(f *CAStoreFactory) quicbaasca.ObjectStoreFactoryFunc {
+	return func(cn string) (xkmssdk.ObjectStorage, error) {
 		result, err := f.CreateObjectStore(cn)
 		if err != nil {
 			return nil, err
@@ -2776,9 +2822,9 @@ func objectStoreFactoryAdapter(f *CAStoreFactory) pkgca.ObjectStoreFactoryFunc {
 		if result == nil {
 			return nil, nil
 		}
-		os, ok := result.(objstorecommon.Storage)
+		os, ok := result.(xkmssdk.ObjectStorage)
 		if !ok {
-			return nil, fmt.Errorf("object store factory returned %T, want common.Storage", result)
+			return nil, fmt.Errorf("object store factory returned %T, want ObjectStorage", result)
 		}
 		return os, nil
 	}
@@ -2788,7 +2834,7 @@ func objectStoreFactoryAdapter(f *CAStoreFactory) pkgca.ObjectStoreFactoryFunc {
 // For single-identity configurations the root is returned; for root+intermediate
 // configurations the intermediate is returned when SelectedCA != 0 and
 // intermediate is non-nil.
-func selectIssuingCA(cfg *casdk.CAConfig, root, intermediate pkgca.TrustedCA) pkgca.TrustedCA {
+func selectIssuingCA(cfg *trustedca.CAConfig, root, intermediate quicbaasca.TrustedCA) quicbaasca.TrustedCA {
 	if cfg == nil {
 		return nil
 	}
@@ -2802,18 +2848,18 @@ func selectIssuingCA(cfg *casdk.CAConfig, root, intermediate pkgca.TrustedCA) pk
 // constructors return TrustedCA even though the concrete type implements
 // TCGCA; this helper performs the assertion and returns nil when the
 // underlying type does not support TCG operations.
-func mustTCGCA(ca pkgca.TrustedCA) casdk.CACertificateAuthority {
-	if tcg, ok := ca.(pkgca.TCGCA); ok {
+func mustTCGCA(ca quicbaasca.TrustedCA) quicbaasca.CACertificateAuthority {
+	if tcg, ok := ca.(quicbaasca.TCGCA); ok {
 		return tcg
 	}
 	return nil
 }
 
 // isCertNotFoundError returns true if the error indicates a certificate was
-// not found. Checks for casdk.CAErrCertificateNotFound which is the canonical
+// not found. Checks for trustedca.CAErrCertificateNotFound which is the canonical
 // sentinel returned by the CA layer for missing certificates.
 func isCertNotFoundError(err error) bool {
-	return errors.Is(err, casdk.CAErrCertificateNotFound)
+	return errors.Is(err, trustedca.CAErrCertificateNotFound)
 }
 
 // InitWebServer starts the embedded web server. When the initialize parameter is true,
@@ -3060,11 +3106,11 @@ func (app *App) issueWebServiceCertificate(wsName string, wsConfig *v1.Config, k
 	}
 
 	// Build SANS from webservice config
-	var sans *casdk.CASubjectAlternativeNames
+	var sans *quicbaasca.CASubjectAlternativeNames
 	if wsConfig.Certificate.SANS != nil {
 		sans = wsConfig.Certificate.SANS
 	} else {
-		sans = &casdk.CASubjectAlternativeNames{
+		sans = &quicbaasca.CASubjectAlternativeNames{
 			DNS:   []string{keyAttrs.CN},
 			IPs:   []string{},
 			Email: []string{app.Hostmaster},
@@ -3138,10 +3184,10 @@ func (app *App) issueWebServiceCertificate(wsName string, wsConfig *v1.Config, k
 			}
 		}
 
-		csrDER, err := app.CA.CreateCSR(&casdk.CACertificateRequest{
+		csrDER, err := app.CA.CreateCSR(&quicbaasca.CACertificateRequest{
 			KeyAttributes: keyAttrs,
 			Valid:         365,
-			Subject: casdk.CASubject{
+			Subject: quicbaasca.CASubject{
 				CommonName:   keyAttrs.CN,
 				Organization: wsConfig.Certificate.Subject.Organization,
 				Country:      wsConfig.Certificate.Subject.Country,
@@ -3157,7 +3203,7 @@ func (app *App) issueWebServiceCertificate(wsName string, wsConfig *v1.Config, k
 			return fmt.Errorf("failed to create CSR for ACME webservice %s: %w", wsName, err)
 		}
 
-		acmeCertRequest := &casdk.ACMECertificateRequest{
+		acmeCertRequest := &trustedca.ACMECertificateRequest{
 			AuthzType:     authzType,
 			AuthzValue:    authzValue,
 			ChallengeType: challengeType,
@@ -3178,8 +3224,8 @@ func (app *App) issueWebServiceCertificate(wsName string, wsConfig *v1.Config, k
 		// Issue from local CA
 		app.Logger.Info("Issuing TLS certificate from local CA", "webservice", wsName, "cn", keyAttrs.CN)
 
-		certReq := &casdk.CACertificateRequest{
-			Subject: casdk.CASubject{
+		certReq := &quicbaasca.CACertificateRequest{
+			Subject: quicbaasca.CASubject{
 				CommonName:   keyAttrs.CN,
 				Organization: wsConfig.Certificate.Subject.Organization,
 				Country:      wsConfig.Certificate.Subject.Country,

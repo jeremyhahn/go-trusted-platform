@@ -11,7 +11,7 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
-//go:build iam && codec_msgpack && codec_cbor && codec_json && !attestation_grpc
+//go:build iam && codec_msgpack && codec_cbor && codec_json
 
 package daemon
 
@@ -125,99 +125,6 @@ func TestIDevIDTypes_NormalizeKeyAlgorithm(t *testing.T) {
 			assert.Equal(t, tc.expected, result)
 		})
 	}
-}
-
-// =============================================================================
-// Attestation gRPC Service Stub Tests - attestation_grpc_service_stub.go coverage
-// =============================================================================
-
-func TestAttestationServiceStub(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-
-	t.Run("NewAttestationServiceServer", func(t *testing.T) {
-		server := NewAttestationServiceServer(nil, logger)
-		require.NotNil(t, server)
-		assert.Equal(t, logger, server.logger)
-	})
-
-	t.Run("attestationNotAvailable", func(t *testing.T) {
-		server := NewAttestationServiceServer(nil, logger)
-		err := server.attestationNotAvailable()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "Attestation gRPC service not available")
-	})
-
-	ctx := context.Background()
-
-	t.Run("GetManifest returns unimplemented", func(t *testing.T) {
-		server := NewAttestationServiceServer(nil, logger)
-		_, err := server.GetManifest(ctx, nil)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not available")
-	})
-
-	t.Run("BuildManifest returns unimplemented", func(t *testing.T) {
-		server := NewAttestationServiceServer(nil, logger)
-		_, err := server.BuildManifest(ctx, nil)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not available")
-	})
-
-	t.Run("VerifyManifest returns unimplemented", func(t *testing.T) {
-		server := NewAttestationServiceServer(nil, logger)
-		_, err := server.VerifyManifest(ctx, nil)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not available")
-	})
-
-	t.Run("ListManifests returns unimplemented", func(t *testing.T) {
-		server := NewAttestationServiceServer(nil, logger)
-		_, err := server.ListManifests(ctx, nil)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not available")
-	})
-
-	t.Run("DeleteManifest returns unimplemented", func(t *testing.T) {
-		server := NewAttestationServiceServer(nil, logger)
-		_, err := server.DeleteManifest(ctx, nil)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not available")
-	})
-
-	t.Run("GetAttestationQuote returns unimplemented", func(t *testing.T) {
-		server := NewAttestationServiceServer(nil, logger)
-		_, err := server.GetAttestationQuote(ctx, nil)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not available")
-	})
-
-	t.Run("VerifyAttestationQuote returns unimplemented", func(t *testing.T) {
-		server := NewAttestationServiceServer(nil, logger)
-		_, err := server.VerifyAttestationQuote(ctx, nil)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not available")
-	})
-
-	t.Run("CollectHostAttestation returns unimplemented", func(t *testing.T) {
-		server := NewAttestationServiceServer(nil, logger)
-		_, err := server.CollectHostAttestation(ctx, nil)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not available")
-	})
-
-	t.Run("CollectVMAttestation returns unimplemented", func(t *testing.T) {
-		server := NewAttestationServiceServer(nil, logger)
-		_, err := server.CollectVMAttestation(ctx, nil)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not available")
-	})
-
-	t.Run("CollectContainerAttestation returns unimplemented", func(t *testing.T) {
-		server := NewAttestationServiceServer(nil, logger)
-		_, err := server.CollectContainerAttestation(ctx, nil)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not available")
-	})
 }
 
 // =============================================================================

@@ -1755,7 +1755,6 @@ func (m *mockPlatformKeyStorer) Backend() xkmssdk.TPMKeyBackend {
 func (m *mockPlatformKeyStorer) Initialize(soPIN, userPIN string) error     { return nil }
 func (m *mockPlatformKeyStorer) InitializeWithDefaults() error              { return nil }
 func (m *mockPlatformKeyStorer) IsInitialized() bool                        { return false }
-func (m *mockPlatformKeyStorer) PINManager() xkmssdk.PINManager             { return nil } //nolint:staticcheck // SA1019: implements upstream interface
 func (m *mockPlatformKeyStorer) PlatformPolicyEnabled() bool                { return false }
 func (m *mockPlatformKeyStorer) ChangeAuth(currentPIN, newPIN string) error { return nil }
 func (m *mockPlatformKeyStorer) VerifyAuth(userPIN string) error            { return nil }

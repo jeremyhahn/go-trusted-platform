@@ -11,104 +11,97 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
+// rekey.go implements the canonical "barrier rekey" verb.
+//
+// Per the canonical PIN matrix:
+//   - --passphrase  is required (new wrapping passphrase).
+//   - --so-pin  is optional (NO --user-pin — the wire request has no
+//     UserPin field; the PIN backend handles user-PIN rotation
+//     as a separate ceremony).
+//   - --threshold / --total are paired (both supplied or both omitted).
 package barrier
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	barriersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/barrier"
 )
 
-// newRekeyCommand creates the barrier rekey subcommand
-func newRekeyCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
-	var (
-		threshold int32
-		shares    int32
-	)
+// rekeyFlags holds the canonical `barrier rekey` flag set.
+type rekeyFlags struct {
+	secret    string
+	soPin     string
+	threshold int
+	total     int
+}
 
+// newRekeyCommand builds the canonical `barrier rekey` command.
+func newRekeyCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
+	f := &rekeyFlags{}
 	cmd := &cobra.Command{
 		Use:   "rekey",
 		Short: "Rekey the barrier",
-		Long: `Generate new unseal keys for the barrier.
+		Long: `Generate a new barrier master key and optionally a new Shamir split.
 
-This operation rotates the barrier encryption keys and generates new
-unseal credentials. The barrier must be unsealed to perform a rekey.
+  --passphrase  Required. New wrapping passphrase.
+  --so-pin      Optional. Security Officer PIN verified against the canonical PINBackend.
+  --threshold   Optional. New Shamir threshold (paired with --total).
+  --total       Optional. New Shamir total (paired with --threshold).
 
-If threshold >= 2 and shares >= threshold, Shamir secret sharing mode is used.
-Otherwise, a single new unseal key is generated.
-
-The new unseal keys are only shown once and must be stored securely.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			flags := getFlags()
-			return runRekey(flags, threshold, shares)
+When --threshold / --total are omitted the existing share layout is
+preserved. The new shares are returned to stdout and MUST be captured
+and re-distributed before the operator forgets them.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runRekey(getFlags(), f)
 		},
 	}
-
-	cmd.Flags().Int32Var(&threshold, "threshold", 1, "minimum shares required to unseal (>= 2 for Shamir mode)")
-	cmd.Flags().Int32Var(&shares, "shares", 1, "total number of Shamir shares to generate")
-
+	cmd.Flags().StringVar(&f.secret, "passphrase", "", "New wrapping passphrase (required)")
+	cmd.Flags().StringVar(&f.soPin, "so-pin", "",
+		"Security Officer PIN (canonical PINBackend; no --user-pin counterpart on rekey)")
+	cmd.Flags().IntVar(&f.threshold, "threshold", 0,
+		"New Shamir threshold (paired with --total)")
+	cmd.Flags().IntVar(&f.total, "total", 0,
+		"New Shamir total (paired with --threshold)")
 	return cmd
 }
 
-func runRekey(flags *cli.CommonFlags, threshold, shares int32) error {
-	if threshold >= 2 && shares < threshold {
-		return ErrInvalidThreshold{Threshold: threshold, Shares: shares}
+// validateRekeyFlags applies the canonical flag-combination rules.
+func validateRekeyFlags(f *rekeyFlags) error {
+	if f.secret == "" {
+		return ErrMissingSecret{}
 	}
-
-	if shares < 1 {
-		return ErrInvalidShares{Shares: shares}
+	// --threshold and --total must be set together (or both omitted).
+	thresholdSet := f.threshold != 0
+	totalSet := f.total != 0
+	if thresholdSet != totalSet {
+		return ErrRekeyPartialFlags{}
 	}
+	if thresholdSet {
+		if f.total < 2 {
+			return ErrInvalidTotal{Total: f.total}
+		}
+		if f.threshold < 2 || f.threshold > f.total {
+			return ErrInvalidThreshold{Threshold: f.threshold, Total: f.total}
+		}
+	}
+	return nil
+}
 
+// runRekey validates the flag set and delegates to dispatchRekey.
+func runRekey(flags *cli.CommonFlags, f *rekeyFlags) error {
+	if err := validateRekeyFlags(f); err != nil {
+		return err
+	}
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
 		return err
 	}
 	defer base.Close()
 
-	sdkClient := barriersvc.NewClientFromGRPC(base.Client().Barrier())
-
-	ctx := base.Context()
-	result, err := sdkClient.Rekey(ctx, &barriersvc.RekeyParams{
-		Threshold: threshold,
-		Shares:    shares,
-	})
-	if err != nil {
-		return ErrBarrierRekeyFailed{Err: err}
+	bc, qerr := openBarrierClient(base)
+	if qerr != nil {
+		return qerr
 	}
-
-	printer := base.Printer()
-
-	switch flags.OutputFormat {
-	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(result)
-
-	case cli.OutputFormatTable:
-		return printRekeyTable(printer, result)
-
-	default:
-		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
-	}
-}
-
-func printRekeyTable(printer *cli.Printer, result *barriersvc.RekeyResult) error {
-	printer.PrintSuccess("Barrier rekeyed successfully")
-	fmt.Println()
-
-	printer.PrintKeyValue("Strategy", formatStrategy(result.Strategy))
-
-	fmt.Println()
-
-	if len(result.UnsealKeys) > 0 {
-		printer.PrintWarning("Store the following new unseal keys securely. They are only shown once.")
-		fmt.Println()
-
-		for i, key := range result.UnsealKeys {
-			printer.PrintKeyValue(fmt.Sprintf("Unseal Key %d", i+1), key)
-		}
-	}
-
-	return nil
+	return dispatchRekey(newDispatcherFromBase(base, bc), f)
 }

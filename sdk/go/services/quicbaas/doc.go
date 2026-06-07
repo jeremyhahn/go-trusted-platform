@@ -44,7 +44,7 @@
 //   - Certificate: X.509 certificate management
 //   - Seal: Seal/unseal operations
 //   - RBAC: Role-based access control
-//   - ClusterDEK: Cluster data encryption keys
+//   - DEK: Data encryption keys
 //
 // Infrastructure Services:
 //   - Cluster: Cluster status and management

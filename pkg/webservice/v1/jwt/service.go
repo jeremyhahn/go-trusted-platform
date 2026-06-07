@@ -23,10 +23,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 )
 
 // XKMSSigner provides access to crypto.Signer instances for key attributes.
@@ -43,28 +42,27 @@ var (
 )
 
 type TokenClaims struct {
-	Organizations  []uint64 `json:"orgs"`
-	Services       []uint64 `json:"svcs"`
-	UserID         uint64   `json:"uid"`
+	Organizations []uint64 `json:"orgs"`
+	Services      []uint64 `json:"svcs"`
+	UserID        uint64   `json:"uid"`
 	// UserIDStr mirrors UserID as a decimal string under the standard
 	// "user_id" claim so JS/TS consumers (and any other library that
 	// expects a string identifier) can read it without dealing with
 	// JSON-number precision loss on uint64.
-	UserIDStr      string   `json:"user_id"`
+	UserIDStr string `json:"user_id"`
 	// Email is exposed under the standard "email" claim so the frontend
 	// AuthContext can populate the user object after a successful login.
-	Email          string   `json:"email,omitempty"`
+	Email string `json:"email,omitempty"`
 	// TenantID surfaces the active tenant in the standard "tenant_id"
 	// claim consumed by the frontend.
-	TenantID       string   `json:"tenant_id,omitempty"`
+	TenantID string `json:"tenant_id,omitempty"`
 	// IsTenantOwner mirrors the tenant ownership flag the frontend uses
 	// to gate admin-only UI.
-	IsTenantOwner  bool     `json:"is_tenant_owner,omitempty"`
+	IsTenantOwner bool `json:"is_tenant_owner,omitempty"`
 	// Roles is the list of role names the frontend uses for UI
 	// authorisation; the omitempty keeps tokens compact when no roles
 	// have been assigned yet.
-	Roles          []string `json:"roles,omitempty"`
-	WebAuthnClaims *webauthn.SessionData
+	Roles []string `json:"roles,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -121,11 +119,24 @@ func (service *Service) GenerateToken(user *entities.User) (string, error) {
 	if tenantID == "" {
 		tenantID = "default"
 	}
+	// Surface the user's role names in the "roles" claim so the WebUI's
+	// per-route authorization gates can decide what to show without an
+	// extra /me round-trip. The platform-service flow grants "admin" to
+	// the first user in a fresh tenant, so a newly-registered user's
+	// JWT carries that role from the first request.
+	roles := make([]string, 0, len(user.Roles))
+	for _, r := range user.Roles {
+		if r != nil && r.Name != "" {
+			roles = append(roles, r.Name)
+		}
+	}
 	token := jwt.NewWithClaims(service.signingMethod, TokenClaims{
-		UserID:    user.ID,
-		UserIDStr: strconv.FormatUint(user.ID, 10),
-		Email:     user.Email,
-		TenantID:  tenantID,
+		UserID:        user.ID,
+		UserIDStr:     strconv.FormatUint(user.ID, 10),
+		Email:         user.Email,
+		TenantID:      tenantID,
+		IsTenantOwner: user.IsTenantOwner,
+		Roles:         roles,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:  strconv.FormatUint(user.ID, 10),
 			Audience: jwt.ClaimStrings{service.params.Audience},

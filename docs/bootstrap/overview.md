@@ -112,15 +112,35 @@ _8443._tcp.server.example.com. 3600 IN TLSA 2 1 1 <SHA256-SPKI-hash>
 
 ### Noise Protocol
 
-- Uses go-truststrap's `noiseboot.Server`
+- Server-side: the platform's noise listener (a documented server-side
+  carve-out, not a consumer surface) wraps `noiseboot.Server`.
 - Pattern: Noise_NK (No static client key, server known)
 - Static key generated on server startup
 - Client connects to `<server-addr>`, completes handshake with `<server-static-key>`
 - Returns CA bundle in single message
+
+### Client-side dispatch (DANE / Noise / SPKI / Auto)
+
+Client-side trust-bootstrap (used by `pkg/bootstrap/client.go` and the
+platform installer / iPXE flow) goes through the canonical
+mode-dispatch library at `xkms/pkg/trust/bootstrap`, reached via the
+type-alias re-export at
+`github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/bootstrap`.
+
+The platform repo does NOT import `go-truststrap` directly from
+application code. The canonical dispatch table maps strategy strings
+(`dane`, `noise`, `spki`, `auto`, `embedded`) onto
+`bootstrap.ModeDANE` / `ModeNoise` / `ModeSPKI` / `ModeAuto`. See
+`pkg/bootstrap/client.go::strategyToMode` for the platform-side
+projection.
 
 ## Related Concepts
 
 - **RFC 6698**: DANE (DNS-based Authentication of Named Entities)
 - **RFC 7671**: DANE Certificate Usage Rollover
 - **Noise Protocol Framework**: https://noiseprotocol.org/
-- **go-truststrap**: Upstream bootstrap library providing DANE, Noise, SPKI implementations
+- **xkms `pkg/trust/bootstrap`**: canonical dispatch library; composes
+  `go-truststrap` internally so consumers never reach the upstream
+  module directly.
+- **`quicbaas/sdk/go/xkms/trust/bootstrap`**: SDK-side type-alias
+  re-export of the canonical dispatch library.

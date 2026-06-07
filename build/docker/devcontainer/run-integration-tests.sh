@@ -40,6 +40,7 @@ declare -A TARGET_PACKAGES=(
     [device]="./test/integration/device/..."
     [tpm]="./test/integration/tpm/..."
     [cold-start]="./test/integration/cold_start/..."
+    [barrier-gate]="./test/integration/barrier_gate/..."
     [restroutes]="./test/integration/restroutes/..."
 )
 
@@ -218,7 +219,20 @@ start_swtpm() {
 build_binaries() {
     echo "=== Building platformd and platformctl ==="
 
-    cd /workspace
+    # Detect a Go workspace setup: when /home/jhahn/sources/go.work exists
+    # the host has mounted a multi-repo go workspace into the container, and
+    # the build must run from the in-workspace path of go-trusted-platform
+    # so the `use ./go-trusted-platform` directive resolves. Otherwise fall
+    # back to the legacy /workspace cwd. This keeps the legacy single-mount
+    # path working unchanged while supporting the barrier-gate / cold-start
+    # targets that need local source replaces for go-xkms, go-quicbaas etc.
+    local build_dir="/workspace"
+    if [ -f /home/jhahn/sources/go.work ] && [ -d /home/jhahn/sources/go-trusted-platform ]; then
+        build_dir="/home/jhahn/sources/go-trusted-platform"
+        export GOTOOLCHAIN="${GOTOOLCHAIN:-auto}"
+        echo "Detected go workspace; building from $build_dir (GOTOOLCHAIN=$GOTOOLCHAIN)"
+    fi
+    cd "$build_dir"
 
     # Pre-download ALL module dependencies before building or testing.
     # This prevents stalls during 'go test' when large deps (libovsdb,
@@ -424,16 +438,23 @@ start_ovs || echo "WARNING: OVS setup failed, SDN/network tests may skip"
 # swtpm is required for vTPM tests (non-fatal if unavailable)
 start_swtpm || echo "WARNING: swtpm setup failed, vTPM tests may skip"
 
-# Cold-start scenario manages its own platformd lifecycle; the shared
-# auto-unsealed daemon must NOT be running when the harness boots a
-# fresh init-only daemon. Skip the shared start and seed the cold-start
-# env vars instead.
+# Cold-start and barrier-gate scenarios manage their own platformd
+# lifecycle; the shared auto-unsealed daemon must NOT be running when
+# the harness boots a fresh init-only daemon. Skip the shared start and
+# seed the per-scenario env vars instead.
 if [ "$RUN_TARGET" = "cold-start" ]; then
     echo "=== cold-start target: skipping shared platformd ==="
     rm -rf /tmp/platformd-cold-start
     mkdir -p /tmp/platformd-cold-start
     export PLATFORM_COLD_START_DIR="/tmp/platformd-cold-start"
     export PLATFORM_COLD_START_BIN="/tmp/platformd"
+elif [ "$RUN_TARGET" = "barrier-gate" ]; then
+    echo "=== barrier-gate target: skipping shared platformd ==="
+    rm -rf /tmp/platformd-barrier-gate
+    mkdir -p /tmp/platformd-barrier-gate
+    export PLATFORM_BARRIER_GATE_DIR="/tmp/platformd-barrier-gate"
+    export PLATFORM_BARRIER_GATE_BIN="/tmp/platformd"
+    export PLATFORM_BARRIER_GATE_CONFIG="/workspace/test/integration/barrier_gate/config.yaml"
 else
     # platformd is required for standalone protocol tests (non-fatal if unavailable)
     start_platformd || echo "WARNING: platformd setup failed, some protocol tests may skip"
@@ -499,6 +520,12 @@ echo "=== platformd log dir listing ==="
 ls -la /tmp/platformd-integration/log/ 2>/dev/null || echo "(missing)"
 echo "=== platformd CA dir listing ==="
 ls -laR /tmp/platformd-integration/ca/ 2>/dev/null || echo "(missing)"
+echo "=== barrier-gate platformd stderr (post-test) ==="
+cat /tmp/platformd-barrier-gate/platformd.log 2>/dev/null || echo "(empty or missing)"
+echo "=== barrier-gate platformd app log (post-test) ==="
+cat /tmp/platformd-barrier-gate/log/trusted-platform.log 2>/dev/null || echo "(empty or missing)"
+echo "=== barrier-gate data dir listing ==="
+ls -laR /tmp/platformd-barrier-gate/ 2>/dev/null | head -60 || echo "(missing)"
 echo "=== end platformd diagnostics ==="
 
 echo ""

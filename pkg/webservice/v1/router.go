@@ -38,6 +38,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 	restoverlay "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/overlay"
 	restpxe "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/pxe"
+	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/sdn"
 	switchapi "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/switch"
 	resttenant "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/tenant"
@@ -91,6 +92,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.attestationRoutes()
 	v1Router.caRoutes()
 	v1Router.computeRoutes()
+	v1Router.computeImagesRoutes()
 	v1Router.deviceRoutes()
 	v1Router.dnsRoutes()
 	v1Router.eabRoutes()
@@ -348,6 +350,18 @@ func (v1Router *Router) attestationRoutes() {
 		server,
 		v1Router.responseWriter)
 	r.RegisterRoutes(v1Router.router)
+
+	// Events surface — distinct from the proto-defined manifest /
+	// quote / collect surfaces. Wired from the platform attestation
+	// store so the WebUI's /attestation/eventlogs page renders the
+	// enrollment timeline.
+	if reader := v1Router.restHandlerRegistry.AttestationEventReader(); reader != nil {
+		eventsRouter := restattestation.NewEventsRouter(
+			v1Router.logger,
+			reader,
+			v1Router.responseWriter)
+		eventsRouter.RegisterRoutes(v1Router.router)
+	}
 }
 
 func (v1Router *Router) computeRoutes() {
@@ -361,6 +375,28 @@ func (v1Router *Router) computeRoutes() {
 		server,
 		v1Router.responseWriter)
 	r.RegisterRoutes(v1Router.router)
+}
+
+// computeImagesRoutes mounts /api/v1/compute/images backed by the
+// OCI artifact registry adapter. The registry is wired by the daemon
+// boot path; here we just look it up and either install handlers or
+// register a structured-503 stub via the service registry so callers
+// see "registry not configured" instead of a 404.
+func (v1Router *Router) computeImagesRoutes() {
+	svc := v1Router.restHandlerRegistry.RegistryService()
+	v1Router.serviceRegistry.requireService(
+		v1Router.router,
+		"registry",
+		"/compute/images",
+		svc,
+		func() {
+			r := restregistry.NewRouter(
+				v1Router.logger,
+				svc,
+				v1Router.responseWriter)
+			r.RegisterRoutes(v1Router.router)
+		},
+	)
 }
 
 func (v1Router *Router) eabRoutes() {
@@ -378,15 +414,31 @@ func (v1Router *Router) eabRoutes() {
 
 func (v1Router *Router) gatewayRoutes() {
 	server := v1Router.restHandlerRegistry.GatewayServiceServer()
-	if server == nil {
-		v1Router.logger.Debug("Gateway service server is nil - gateway routes not registered")
-		return
+	if server != nil {
+		r := restgateway.NewGatewayRouter(
+			v1Router.logger,
+			server,
+			v1Router.responseWriter)
+		r.RegisterRoutes(v1Router.router)
+	} else {
+		v1Router.logger.Debug("Gateway service server is nil - gateway service routes not registered")
 	}
-	r := restgateway.NewGatewayRouter(
-		v1Router.logger,
-		server,
-		v1Router.responseWriter)
-	r.RegisterRoutes(v1Router.router)
+
+	// Control-plane endpoints (state cache + telemetry ingestion +
+	// desired-config pull) are independent of the in-process
+	// GatewayService gRPC implementation — they let a separate
+	// gatewayd process report into the CP. Wired unconditionally so
+	// the structured loud-failure envelope surfaces when the store
+	// isn't configured.
+	store, cfgSource := v1Router.restHandlerRegistry.GatewayControlPlane()
+	if store != nil || cfgSource != nil {
+		cp := restgateway.NewControlPlane(
+			v1Router.logger,
+			store,
+			cfgSource,
+			v1Router.responseWriter)
+		cp.RegisterRoutes(v1Router.router)
+	}
 }
 
 func (v1Router *Router) idevidRoutes() {

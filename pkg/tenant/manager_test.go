@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/clusterdek"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/vlan"
@@ -169,7 +168,10 @@ type mockDEKData struct {
 	RotatedAt time.Time
 }
 
-// mockDEKClient implements clusterdek.Client for testing.
+// mockDEKClient implements the platform TenantDEKClient boundary for
+// testing. It performs no cryptography — the real DEK semantics are owned by
+// the quicbaas server — and only records the tenant -> DEK bookkeeping the
+// manager relies on.
 type mockDEKClient struct {
 	mu   sync.RWMutex
 	deks map[string]*mockDEKData // keyed by tenant ID
@@ -190,114 +192,7 @@ func newMockDEKClient() *mockDEKClient {
 	}
 }
 
-func (m *mockDEKClient) InitializeClusterDEK(ctx context.Context, req *clusterdek.InitClusterDEKRequest) (*clusterdek.InitClusterDEKResponse, error) {
-	return &clusterdek.InitClusterDEKResponse{
-		Version:   1,
-		CreatedAt: time.Now(),
-		Algorithm: req.Algorithm,
-		KeySize:   req.KeySize,
-	}, nil
-}
-
-func (m *mockDEKClient) GetClusterDEKStatus(ctx context.Context) (*clusterdek.ClusterDEKStatusResponse, error) {
-	if m.getStatusErr != nil {
-		return nil, m.getStatusErr
-	}
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	// Return a status based on the first DEK found (for testing)
-	resp := &clusterdek.ClusterDEKStatusResponse{
-		Initialized:            true,
-		CurrentVersion:         1,
-		CreatedAt:              time.Now(),
-		Algorithm:              "aes-256-gcm",
-		ReencryptionInProgress: m.reencryptionInProgress,
-	}
-
-	// If we have DEKs, use the first one's version
-	for _, dek := range m.deks {
-		resp.CurrentVersion = dek.Version
-		resp.Algorithm = dek.Algorithm
-		resp.CreatedAt = dek.CreatedAt
-		if !dek.RotatedAt.IsZero() {
-			rotatedAt := dek.RotatedAt
-			resp.RotatedAt = &rotatedAt
-		}
-		break
-	}
-
-	return resp, nil
-}
-
-func (m *mockDEKClient) RotateClusterDEK(ctx context.Context, req *clusterdek.RotateClusterDEKRequest) (*clusterdek.RotateClusterDEKResponse, error) {
-	if m.rotateErr != nil {
-		return nil, m.rotateErr
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Find any DEK and rotate it
-	for _, dek := range m.deks {
-		oldVersion := dek.Version
-		dek.Version++
-		dek.RotatedAt = time.Now()
-
-		return &clusterdek.RotateClusterDEKResponse{
-			OldVersion: oldVersion,
-			NewVersion: dek.Version,
-			RotatedAt:  dek.RotatedAt,
-		}, nil
-	}
-
-	return nil, errors.New("no DEK to rotate")
-}
-
-func (m *mockDEKClient) SyncNodeDEK(ctx context.Context, req *clusterdek.SyncNodeDEKRequest) (*clusterdek.SyncNodeDEKResponse, error) {
-	return &clusterdek.SyncNodeDEKResponse{
-		NodeID:         req.NodeID,
-		CurrentVersion: 1,
-		SyncedAt:       time.Now(),
-	}, nil
-}
-
-func (m *mockDEKClient) GetNodeDEKStatus(ctx context.Context, req *clusterdek.GetNodeDEKStatusRequest) (*clusterdek.GetNodeDEKStatusResponse, error) {
-	return &clusterdek.GetNodeDEKStatusResponse{
-		NodeID:         req.NodeID,
-		CurrentVersion: 1,
-		LastSyncedAt:   time.Now(),
-		Status:         clusterdek.NodeDEKSynced,
-	}, nil
-}
-
-func (m *mockDEKClient) StartReencryption(ctx context.Context, req *clusterdek.StartReencryptionRequest) (*clusterdek.StartReencryptionResponse, error) {
-	return &clusterdek.StartReencryptionResponse{
-		Started:   true,
-		StartedAt: time.Now(),
-	}, nil
-}
-
-func (m *mockDEKClient) GetReencryptionStatus(ctx context.Context) (*clusterdek.ReencryptionStatusResponse, error) {
-	return &clusterdek.ReencryptionStatusResponse{
-		State: clusterdek.ReencryptionCompleted,
-	}, nil
-}
-
-func (m *mockDEKClient) CancelReencryption(ctx context.Context) error {
-	return nil
-}
-
-func (m *mockDEKClient) RecoverDEK(ctx context.Context, req *clusterdek.RecoverDEKRequest) (*clusterdek.RecoverDEKResponse, error) {
-	return &clusterdek.RecoverDEKResponse{
-		Success:          true,
-		RecoveredVersion: 1,
-		RecoveredAt:      time.Now(),
-	}, nil
-}
-
-func (m *mockDEKClient) EnsureTenantDEK(ctx context.Context, req *clusterdek.EnsureTenantDEKRequest) (*clusterdek.EnsureTenantDEKResponse, error) {
+func (m *mockDEKClient) EnsureTenantDEK(ctx context.Context, req *EnsureTenantDEKRequest) (*EnsureTenantDEKResponse, error) {
 	if m.createErr != nil {
 		return nil, m.createErr
 	}
@@ -311,9 +206,8 @@ func (m *mockDEKClient) EnsureTenantDEK(ctx context.Context, req *clusterdek.Ens
 		algorithm = "aes-256-gcm"
 	}
 
-	// Check if already exists
 	if existing, ok := m.deks[req.TenantID]; ok {
-		return &clusterdek.EnsureTenantDEKResponse{
+		return &EnsureTenantDEKResponse{
 			DEKID:     existing.DEKID,
 			Created:   false,
 			Algorithm: existing.Algorithm,
@@ -330,7 +224,7 @@ func (m *mockDEKClient) EnsureTenantDEK(ctx context.Context, req *clusterdek.Ens
 		CreatedAt: now,
 	}
 
-	return &clusterdek.EnsureTenantDEKResponse{
+	return &EnsureTenantDEKResponse{
 		DEKID:     dekID,
 		Created:   true,
 		Algorithm: algorithm,
@@ -338,7 +232,7 @@ func (m *mockDEKClient) EnsureTenantDEK(ctx context.Context, req *clusterdek.Ens
 	}, nil
 }
 
-func (m *mockDEKClient) DeleteTenantDEK(ctx context.Context, req *clusterdek.DeleteTenantDEKRequest) (*clusterdek.DeleteTenantDEKResponse, error) {
+func (m *mockDEKClient) DeleteTenantDEK(ctx context.Context, req *DeleteTenantDEKRequest) (*DeleteTenantDEKResponse, error) {
 	if m.deleteErr != nil {
 		return nil, m.deleteErr
 	}
@@ -353,10 +247,62 @@ func (m *mockDEKClient) DeleteTenantDEK(ctx context.Context, req *clusterdek.Del
 
 	delete(m.deks, req.TenantID)
 
-	return &clusterdek.DeleteTenantDEKResponse{
+	return &DeleteTenantDEKResponse{
 		DEKID:     dek.DEKID,
 		DeletedAt: time.Now(),
 	}, nil
+}
+
+func (m *mockDEKClient) RotateTenantDEK(ctx context.Context, req *RotateTenantDEKRequest) (*RotateTenantDEKResponse, error) {
+	if m.rotateErr != nil {
+		return nil, m.rotateErr
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	dek, ok := m.deks[req.TenantID]
+	if !ok {
+		return nil, errors.New("no DEK to rotate")
+	}
+
+	oldVersion := dek.Version
+	dek.Version++
+	dek.RotatedAt = time.Now()
+
+	return &RotateTenantDEKResponse{
+		OldVersion: oldVersion,
+		NewVersion: dek.Version,
+		RotatedAt:  dek.RotatedAt,
+	}, nil
+}
+
+func (m *mockDEKClient) TenantDEKStatus(ctx context.Context, req *TenantDEKStatusRequest) (*TenantDEKStatusResponse, error) {
+	if m.getStatusErr != nil {
+		return nil, m.getStatusErr
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	resp := &TenantDEKStatusResponse{
+		CurrentVersion:         1,
+		CreatedAt:              time.Now(),
+		Algorithm:              "aes-256-gcm",
+		ReencryptionInProgress: m.reencryptionInProgress,
+	}
+
+	if dek, ok := m.deks[req.TenantID]; ok {
+		resp.CurrentVersion = dek.Version
+		resp.Algorithm = dek.Algorithm
+		resp.CreatedAt = dek.CreatedAt
+		if !dek.RotatedAt.IsZero() {
+			rotatedAt := dek.RotatedAt
+			resp.RotatedAt = &rotatedAt
+		}
+	}
+
+	return resp, nil
 }
 
 // mockQuotaStore implements quota.QuotaStore for testing.
@@ -533,8 +479,8 @@ func newTestManager(t *testing.T) (*Manager, *mockIAMClient) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
-		Config:    DefaultConfig(),
-		Logger:    logger,
+		Config:          DefaultConfig(),
+		Logger:          logger,
 	}
 
 	// Disable DEK isolation for basic tests
@@ -567,11 +513,11 @@ func newTestManagerWithQuota(t *testing.T) (*Manager, *mockIAMClient, *mockQuota
 	}
 
 	cfg := &ManagerConfig{
-		IAMTenantClient:     iamClient,
-		QuotaEnforcer: enforcer,
-		UsageTracker:  tracker,
-		Config:        DefaultConfig(),
-		Logger:        logger,
+		IAMTenantClient: iamClient,
+		QuotaEnforcer:   enforcer,
+		UsageTracker:    tracker,
+		Config:          DefaultConfig(),
+		Logger:          logger,
 	}
 
 	cfg.Config.EnableDEKIsolation = false
@@ -601,11 +547,11 @@ func newTestManagerWithVLAN(t *testing.T) (*Manager, *mockIAMClient, *mockVLANSt
 	validator := vlan.NewValidator(allocator, logger)
 
 	cfg := &ManagerConfig{
-		IAMTenantClient:     iamClient,
-		VLANAllocator: allocator,
-		VLANValidator: validator,
-		Config:        DefaultConfig(),
-		Logger:        logger,
+		IAMTenantClient: iamClient,
+		VLANAllocator:   allocator,
+		VLANValidator:   validator,
+		Config:          DefaultConfig(),
+		Logger:          logger,
 	}
 
 	cfg.Config.EnableDEKIsolation = false
@@ -629,8 +575,8 @@ func TestNewManager_Success(t *testing.T) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
-		Config:    config,
-		Logger:    logger,
+		Config:          config,
+		Logger:          logger,
 	}
 
 	manager, err := NewManager(cfg)
@@ -662,7 +608,7 @@ func TestNewManager_NilConfig(t *testing.T) {
 func TestNewManager_NilIAMClient(t *testing.T) {
 	cfg := &ManagerConfig{
 		IAMTenantClient: nil,
-		Config:    DefaultConfig(),
+		Config:          DefaultConfig(),
 	}
 
 	_, err := NewManager(cfg)
@@ -697,8 +643,8 @@ func TestNewManager_DefaultConfig(t *testing.T) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
-		DEKClient: newMockDEKClient(),
-		Config:    nil, // Should use defaults
+		DEKClient:       newMockDEKClient(),
+		Config:          nil, // Should use defaults
 	}
 
 	manager, err := NewManager(cfg)
@@ -716,9 +662,9 @@ func TestNewManager_DefaultLogger(t *testing.T) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
-		DEKClient: newMockDEKClient(),
-		Config:    DefaultConfig(),
-		Logger:    nil, // Should use default
+		DEKClient:       newMockDEKClient(),
+		Config:          DefaultConfig(),
+		Logger:          nil, // Should use default
 	}
 
 	manager, err := NewManager(cfg)
@@ -2512,9 +2458,9 @@ func newTestManagerWithDEK(t *testing.T) (*Manager, *mockIAMClient, *mockDEKClie
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
-		DEKClient: dekClient,
-		Config:    DefaultConfig(),
-		Logger:    logger,
+		DEKClient:       dekClient,
+		Config:          DefaultConfig(),
+		Logger:          logger,
 	}
 
 	// Enable DEK isolation
@@ -2718,8 +2664,8 @@ func TestNewManager_DEKClientRequired(t *testing.T) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
-		Config:    DefaultConfig(),
-		Logger:    logger,
+		Config:          DefaultConfig(),
+		Logger:          logger,
 	}
 
 	// Enable DEK isolation but don't provide DEK client
@@ -2884,8 +2830,8 @@ func BenchmarkCreateTenant(b *testing.B) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
-		Config:    DefaultConfig(),
-		Logger:    logger,
+		Config:          DefaultConfig(),
+		Logger:          logger,
 	}
 	cfg.Config.EnableDEKIsolation = false
 
@@ -2909,8 +2855,8 @@ func BenchmarkGetTenant(b *testing.B) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
-		Config:    DefaultConfig(),
-		Logger:    logger,
+		Config:          DefaultConfig(),
+		Logger:          logger,
 	}
 	cfg.Config.EnableDEKIsolation = false
 
@@ -2940,8 +2886,8 @@ func BenchmarkConcurrentGetTenant(b *testing.B) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
-		Config:    DefaultConfig(),
-		Logger:    logger,
+		Config:          DefaultConfig(),
+		Logger:          logger,
 	}
 	cfg.Config.EnableDEKIsolation = false
 
@@ -2973,8 +2919,8 @@ func BenchmarkListTenants(b *testing.B) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
-		Config:    DefaultConfig(),
-		Logger:    logger,
+		Config:          DefaultConfig(),
+		Logger:          logger,
 	}
 	cfg.Config.EnableDEKIsolation = false
 
@@ -3022,9 +2968,9 @@ func TestRotateTenantDEKWithOptions_NoDEKClient(t *testing.T) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
-		DEKClient: nil, // No DEK client
-		Config:    DefaultConfig(),
-		Logger:    logger,
+		DEKClient:       nil, // No DEK client
+		Config:          DefaultConfig(),
+		Logger:          logger,
 	}
 	cfg.Config.EnableDEKIsolation = true
 
@@ -3234,9 +3180,9 @@ func TestCreateTenant_DEKCreateError(t *testing.T) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
-		DEKClient: dekClient,
-		Config:    DefaultConfig(),
-		Logger:    logger,
+		DEKClient:       dekClient,
+		Config:          DefaultConfig(),
+		Logger:          logger,
 	}
 	cfg.Config.EnableDEKIsolation = true
 

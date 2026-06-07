@@ -81,22 +81,41 @@ export default function DevicesPage() {
     const rawDevices: SDKDevice[] = devicesResponse?.devices ?? [];
 
     // First transform SDK devices to local Device type
-    const transformedDevices = rawDevices.map((device: SDKDevice): Device => ({
-      id: String(device.id),
-      name: device.model || device.serial || 'Unknown',
-      type: 'physical' as const, // SDK doesn't have device type yet
-      status: 'online' as const, // SDK doesn't have device status yet
-      serial: device.serial || undefined,
-      lastSeen: device.updatedAt || undefined,
-      registeredAt: device.createdAt,
-      tpm: device.attestPub ? {
-        manufacturer: 'Unknown',
-        version: '2.0',
-        firmwareVersion: '1.0',
-        hasEK: !!device.ekCert,
-        hasSRK: false,
-      } : undefined,
-    }));
+    const transformedDevices = rawDevices.map((device: SDKDevice): Device => {
+      // ACME enroll-01 registered devices carry the hostname-derived
+      // identifier in `serial` (e.g. "lab-node-1-gw-01") and the hardware
+      // model in `model` (e.g. "SuperMicro X10"). Operators expect the
+      // Name column to be the unique node identifier; fall back to model
+      // only when no serial was supplied (manual UI registration where
+      // serial is optional).
+      // The REST API uses snake_case (`attest_pub`, `ek_cert`); the SDK
+      // currently passes the response through untouched, so we also
+      // accept the underscored names to detect TPM-backed devices until
+      // a proper SDK transform lands.
+      const anyDev = device as SDKDevice & {
+        attest_pub?: string;
+        ek_cert?: string;
+      };
+      const attestPub = device.attestPub || anyDev.attest_pub;
+      const ekCert = device.ekCert || anyDev.ek_cert;
+      return {
+        id: String(device.id),
+        name: device.serial || device.model || 'Unknown',
+        type: 'physical' as const, // SDK doesn't have device type yet
+        status: 'online' as const, // SDK doesn't have device status yet
+        serial: device.serial || undefined,
+        model: device.model || undefined,
+        lastSeen: device.updatedAt || undefined,
+        registeredAt: device.createdAt,
+        tpm: attestPub ? {
+          manufacturer: device.model || 'Unknown',
+          version: '2.0',
+          firmwareVersion: '1.0',
+          hasEK: !!ekCert,
+          hasSRK: false,
+        } : undefined,
+      };
+    });
 
     // Apply client-side filtering
     return transformedDevices.filter((device: Device) => {

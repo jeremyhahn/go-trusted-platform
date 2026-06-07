@@ -105,6 +105,11 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 		// across container restarts and is browseable both via SMB and via
 		// HTTP at /installs/.
 		InstallsDir: "/data/installs",
+		// /data is the bind-mounted host directory inside the container.
+		// Exposing it under HTTP /data/ lets the generated bootstrap.ipxe
+		// script's `kernel /data/vmlinuz` / `initrd /data/initramfs`
+		// directives resolve to real downloads rather than 404s.
+		DataDir: "/data",
 		EnableDHCP:     true,
 		DHCPRangeStart: config.DHCPConfig.RangeStart,
 		DHCPRangeEnd:   config.DHCPConfig.RangeEnd,
@@ -120,6 +125,48 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 				Description: "Bootstrap installer",
 				Kernel:      config.KernelPath,
 				Initrd:      config.InitrdPath,
+				// Kernel cmdline mirrors the grub.cfg that
+				// platformctl iso create generates for the same
+				// vmlinuz/initramfs pair. Without these args:
+				//   - alpine_start=autoinstall: autoinstall.sh
+				//     never runs (initramfs init falls through to
+				//     a shell), so the install never starts.
+				//   - console=ttyS0/ttyS1: kernel doesn't print
+				//     to serial, leaving SOL captures silent and
+				//     making boot failures invisible to the
+				//     operator.
+				//   - modules=loop,squashfs,...: required modules
+				//     for mounting the Alpine modloop / live
+				//     squashfs are not loaded.
+				//   - platform_debug=1 + platform_debug_sink:
+				//     turns on the kernel-debug log forwarder so
+				//     boot diagnostics PUT to /installs/.../
+				//     install.log on this same pxeboot host.
+				Args: "modules=loop,squashfs,sd-mod,usb-storage " +
+					"earlyprintk=efi,keep earlycon=uart8250,io,0x3f8,115200n8 " +
+					"console=tty0 console=ttyS1,115200n8 console=ttyS0,115200n8 " +
+					"loglevel=7 console=tty1 " +
+					"alpine_start=autoinstall " +
+					// ip=dhcp — required so the Alpine initramfs
+					// init script (nlplug-findfs / mkinitfs) brings
+					// up the boot NIC and obtains a DHCP lease
+					// BEFORE attempting to fetch modloop= over HTTP.
+					// Without this the network isn't configured at
+					// modloop-fetch time, the fetch fails, and the
+					// kernel boots with only its built-in modules.
+					"ip=dhcp " +
+					// modloop URL — Alpine's initramfs init looks
+					// for the kernel-modules squashfs first on
+					// /media/cdrom/boot/modloop-lts (CD boot path)
+					// and, when that's absent, fetches a URL passed
+					// via the modloop= kernel arg. PXE-booted nodes
+					// have no CD; without this arg the kernel boots
+					// with the built-in modules only — no extra
+					// NIC drivers, no dm-crypt, no LUKS, no LVM —
+					// and autoinstall silently dies before it can
+					// upload a checkpoint.
+					"modloop=http://" + config.DHCPConfig.ServerIP + ":" + fmt.Sprintf("%d", config.HTTPPort) + "/data/modloop-lts " +
+					"platform_debug=1 platform_debug_sink=" + config.DHCPConfig.ServerIP + ":" + fmt.Sprintf("%d", config.HTTPPort),
 			},
 		},
 	}

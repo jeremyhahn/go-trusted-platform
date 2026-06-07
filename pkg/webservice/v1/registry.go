@@ -19,12 +19,22 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
+	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
+	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
+	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -37,19 +47,18 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
+	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
 	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/platform"
+	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/system"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/webauthn"
-	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
-	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
-	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
-	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	sdktransport "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 )
 
@@ -170,6 +179,180 @@ func NewAttestationImportHook(caInstance AttestationImporter, logger *slog.Logge
 		return nil
 	}
 }
+
+// DeviceRegistrar is the minimal slice of devicepkg.DeviceService the
+// device-registration finalize hook needs. Defined narrowly so unit
+// tests can satisfy it without standing up a real datastore.
+type DeviceRegistrar interface {
+	FindBySerial(ctx context.Context, serial string) (*deviceentities.Device, error)
+	Save(ctx context.Context, device *deviceentities.Device) error
+	Update(ctx context.Context, device *deviceentities.Device) error
+}
+
+// NewDeviceRegistrationHook creates an order finalization hook that
+// materialises an enrolled device in the platform's device service.
+// Without this hook the CA mints the IDevID and persists the certificate
+// but the platform's device inventory stays empty — the WebUI Devices
+// page would never show the device, and downstream consumers
+// (attestation gate, SDN policy, dashboard counters) have nothing to
+// join against.
+//
+// The hook is a no-op for non-TCG enrollments — only TCG-CSR-IDEVID
+// flows have product model/serial metadata to bind a Device row to.
+//
+// Idempotency: the hook looks up an existing Device by ProductSerial
+// before allocating a new one. Re-enrollment of the same device updates
+// the existing row instead of creating a duplicate.
+func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logger) trustedca.ACMEOrderFinalizeHook {
+	return func(ctx *trustedca.ACMEOrderFinalizeHookContext) error {
+		logger.Info("Device registration hook called",
+			slog.Bool("is_tcg_csr", ctx.IsTCGCSR),
+			slog.Bool("tcg_data_nil", ctx.TCGData == nil),
+			slog.String("client_ip", ctx.ClientIP))
+
+		if !ctx.IsTCGCSR || ctx.TCGData == nil {
+			logger.Info("Skipping device registration - not a TCG CSR enrollment")
+			return nil
+		}
+
+		serial := strings.TrimSpace(ctx.TCGData.ProductSerial)
+		if serial == "" {
+			logger.Warn("Device registration: TCG enrollment has no ProductSerial - skipping",
+				slog.String("client_ip", ctx.ClientIP))
+			return nil
+		}
+
+		ekPEM := encodeCertPEM(ctx.TCGData.EKCertificate)
+
+		// Find-or-create. FindBySerial may return a typed not-found error
+		// from any of the storage backends, so we treat any error as
+		// "create" unless it's clearly a transport-level failure we
+		// shouldn't paper over. The device service has no canonical
+		// not-found sentinel exposed, so we fall back to nil-or-error
+		// semantics: nil error + nil device is also treated as create.
+		//
+		// IMPORTANT: the qrdb-backed DeviceDAO's secondary-index path
+		// returns records WITHOUT verifying the serial actually matches
+		// — when the index is incomplete, Query() returns the first
+		// record of the entity type regardless of key. So we verify
+		// the returned record's serial matches before treating it as
+		// an existing match; otherwise we fall through to create. This
+		// also defends against any future index drift.
+		existing, lookupErr := deviceService.FindBySerial(ctx.Context, serial)
+		if lookupErr != nil && !isNotFoundErr(lookupErr) {
+			logger.Warn("Device registration: FindBySerial failed - falling through to create",
+				slog.String("serial", serial),
+				slog.String("error", lookupErr.Error()))
+			existing = nil
+		}
+		if existing != nil && existing.Serial != serial {
+			logger.Warn("Device registration: FindBySerial returned a mismatched record - treating as create",
+				slog.String("requested_serial", serial),
+				slog.String("returned_serial", existing.Serial),
+				slog.Uint64("returned_id", existing.ID))
+			existing = nil
+		}
+
+		now := time.Now().UTC()
+		if existing != nil && existing.ID != 0 {
+			existing.Model = ctx.TCGData.ProductModel
+			existing.Serial = serial
+			if ekPEM != "" {
+				existing.EKCert = ekPEM
+			}
+			if len(ctx.TCGData.AttestationPublicKey) > 0 {
+				existing.AttestPub = hex.EncodeToString(ctx.TCGData.AttestationPublicKey)
+			}
+			if len(ctx.TCGData.SigningPublicKey) > 0 {
+				existing.SigningPub = hex.EncodeToString(ctx.TCGData.SigningPublicKey)
+			}
+			if len(ctx.TCGData.EventLog) > 0 {
+				existing.EventLog = ctx.TCGData.EventLog
+			}
+			existing.State = deviceentities.DeviceStateRegistered
+			existing.UpdatedAt = now
+			if err := deviceService.Update(ctx.Context, existing); err != nil {
+				return fmt.Errorf("device registration: failed to update existing device %q: %w", serial, err)
+			}
+			logger.Info("Device registration: updated existing device",
+				slog.String("serial", serial),
+				slog.String("model", existing.Model),
+				slog.Uint64("device_id", existing.ID))
+			return nil
+		}
+
+		dev := &deviceentities.Device{
+			ID:        devicepkg.NewID(),
+			Model:     ctx.TCGData.ProductModel,
+			Serial:    serial,
+			EKCert:    ekPEM,
+			EventLog:  ctx.TCGData.EventLog,
+			State:     deviceentities.DeviceStateRegistered,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		if len(ctx.TCGData.AttestationPublicKey) > 0 {
+			dev.AttestPub = hex.EncodeToString(ctx.TCGData.AttestationPublicKey)
+		}
+		if len(ctx.TCGData.SigningPublicKey) > 0 {
+			dev.SigningPub = hex.EncodeToString(ctx.TCGData.SigningPublicKey)
+		}
+
+		if err := deviceService.Save(ctx.Context, dev); err != nil {
+			return fmt.Errorf("device registration: failed to save device %q: %w", serial, err)
+		}
+		logger.Info("Device registration: created new device",
+			slog.String("serial", serial),
+			slog.String("model", dev.Model),
+			slog.Uint64("device_id", dev.ID))
+		return nil
+	}
+}
+
+// encodeCertPEM PEM-encodes an x509 certificate, returning "" when the
+// input is nil. Kept inline because the Device entity stores the EK as
+// a string and PEM is the canonical wire format the WebUI + API
+// clients already expect.
+func encodeCertPEM(cert *x509.Certificate) string {
+	if cert == nil || len(cert.Raw) == 0 {
+		return ""
+	}
+	return string(pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: cert.Raw,
+	}))
+}
+
+// isNotFoundErr is a heuristic that detects storage-layer "no rows"
+// errors. The device service / datastore layer doesn't yet expose a
+// canonical sentinel, and not-found errors get wrapped through
+// multiple transports (qrdb -> baas-transport -> sdk -> service). We
+// match on the textual signatures the various layers use today; this
+// matches the same pattern already in place for SDK storage lookups
+// in the daemon's storage adapters.
+func isNotFoundErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	// errors.Is for common sentinels first — cheap path.
+	for _, target := range knownNotFoundErrors {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	msg := strings.ToLower(err.Error())
+	for _, needle := range []string{"not found", "no such", "does not exist", "no rows"} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// knownNotFoundErrors collects sentinels the device service might
+// surface today. The list is intentionally short — we expand it as
+// new sentinels are added rather than swallowing arbitrary errors.
+var knownNotFoundErrors = []error{}
 
 // NewDNSRegistrationHook creates an order finalization hook that registers
 // DNS records for enrolled devices. This hook is called by go-trusted-ca's
@@ -572,6 +755,10 @@ type RestHandlerRegistry interface {
 	OverlayServiceServer() platformv1.OverlayServiceServer
 	PlatformRestRouter() *platform.PlatformRouter
 	PXEServiceServer() platformv1.PXEServiceServer
+	RegistryService() grpcapi.RegistryService
+	OCIDistBackend() restregistry.OCIDistBackend
+	AttestationEventReader() restattestation.EventReader
+	GatewayControlPlane() (restgateway.GatewayStateStore, restgateway.DesiredConfigSource)
 	ResponseWriter() response.HttpWriter
 	SDNService() platformv1.SDNServiceServer
 	TenantServiceServer() platformv1.TenantServiceServer
@@ -670,13 +857,53 @@ type RegistryParams struct {
 	VersionInfo *platform.VersionInfo
 	// HealthRegistry powers the platform health and metrics endpoints.
 	HealthRegistry health.Registry
-	SwitchService            device.SwitchServiceProvider
-	TenantServiceServer      platformv1.TenantServiceServer
-	TPMServiceServer         platformv1.TPMServiceServer
-	TPM                     xkmssdk.TrustedPlatformModule
-	VTPMService             vtpm.VTPMService
-	WebServiceConfig        *Config
-	WebAuthnConfig          *webauthn.Config
+	// ConfigReloader wires /api/v1/platform/config/reload. When nil
+	// the endpoint returns 503 with a structured "not configured"
+	// envelope so callers can tell it apart from an actual reload
+	// failure.
+	ConfigReloader platform.ConfigReloader
+	// LogQuerier wires /api/v1/platform/logs. When nil the endpoint
+	// returns 503 with the same structured-honesty pattern.
+	LogQuerier platform.LogQuerier
+	// RegistryService wires /api/v1/compute/images. When nil the
+	// /compute/images surface returns 503 via the service registry.
+	RegistryService grpcapi.RegistryService
+	// AttestationCapture, when set, receives a manifest capture for
+	// every TCG-CSR enrollment that completes via enroll-01. The
+	// captured manifests are surfaced by /api/v1/attestation/manifests.
+	// Decoupled via the interface so registry.go doesn't import
+	// pkg/attestation/service directly.
+	AttestationCapture AttestationCaptureSvc
+	// AttestationEventReader backs /api/v1/attestation/events. When
+	// nil the surface returns 503.
+	AttestationEventReader restattestation.EventReader
+	// GatewayStateStore + GatewayDesiredConfig back /api/v1/gateway/*.
+	// When both nil, control-plane routes are not registered.
+	GatewayStateStore    restgateway.GatewayStateStore
+	GatewayDesiredConfig restgateway.DesiredConfigSource
+	// OCIDistBackend wires the spec-compliant /v2/ distribution
+	// surface so `crane` / `skopeo` / `oras` can push and pull
+	// against the registry directly. Set by the daemon boot path
+	// alongside RegistryService — both point at the same *Registry.
+	OCIDistBackend      restregistry.OCIDistBackend
+	SwitchService       device.SwitchServiceProvider
+	TenantServiceServer platformv1.TenantServiceServer
+	TPMServiceServer    platformv1.TPMServiceServer
+	TPM                 xkmssdk.TrustedPlatformModule
+	VTPMService         vtpm.VTPMService
+	WebServiceConfig    *Config
+	WebAuthnConfig      *webauthn.Config
+	// WebAuthnSDKClient is the relying-party client the WebAuthn REST
+	// handler delegates ceremony operations to. Required whenever
+	// WebAuthnConfig is supplied; when nil the WebAuthn routes are
+	// disabled.
+	WebAuthnSDKClient quicbaassdk.WebAuthnClient
+	// AuthSDKClient is the quicbaas SDK unified login surface
+	// (Security().Auth()). When wired, the /login REST endpoint
+	// authenticates via the SDK BeginLogin/FinishLogin ceremony and
+	// returns the SDK-issued OIDC bearer instead of a local JWT. When nil
+	// the /login endpoint fails closed.
+	AuthSDKClient quicbaassdk.AuthService
 }
 
 type HandlerRegistry struct {
@@ -722,6 +949,15 @@ func (registry *HandlerRegistry) JSONWebTokenHandler() jwt.TokenHandler {
 	if err != nil {
 		registry.params.Logger.FatalError(err)
 	}
+	// Wire the unified quicbaas login client so /login authenticates via
+	// the SDK BeginLogin/FinishLogin ceremony and returns the SDK-issued
+	// OIDC bearer. When the SDK AuthService is unavailable the handler
+	// fails closed rather than minting an unverified local JWT.
+	if registry.params.AuthSDKClient != nil {
+		if rh, ok := handler.(*jwt.RestHandler); ok {
+			rh.SetUnifiedLoginClient(registry.params.AuthSDKClient)
+		}
+	}
 	return handler
 }
 
@@ -762,12 +998,27 @@ func (registry *HandlerRegistry) SDNService() platformv1.SDNServiceServer {
 	return registry.params.SDNService
 }
 
-// WebAuthnRestService returns the WebAuthn REST handler, or nil if WebAuthn
-// is not configured. Callers must check for nil before using the handler.
+// WebAuthnRestService returns the WebAuthn REST handler, or nil if
+// WebAuthn is not configured or no SDK client is wired. Callers must
+// check for nil before using the handler.
 func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 	if !webauthn.IsConfigured(registry.params.WebAuthnConfig) {
 		registry.params.Logger.Warn("WebAuthn not configured, WebAuthn routes will not be registered")
 		return nil
+	}
+	if registry.params.WebAuthnSDKClient == nil {
+		registry.params.Logger.Warn("WebAuthn SDK client not wired, WebAuthn routes will not be registered")
+		return nil
+	}
+	tus := registry.params.ServiceRegistry.TenantUserService()
+	// Wire the QuicBaaS IAM mirror so RegisterNewUser surfaces the
+	// freshly-registered user into /api/v1/iam/users. The mirror is
+	// constructed lazily here because TenantUserService is built at
+	// service-registry construction time, before the IAM client is
+	// available, and the cleanest decoupling is "the IAM REST adapter
+	// owns the mirror; the platform service receives it via setter."
+	if tus != nil && registry.params.IAMClient != nil {
+		tus.SetIAMMirror(restiam.NewQuicBaaSUserMirror(registry.params.IAMClient))
 	}
 	params := webauthn.ServiceParams{
 		Config:              registry.params.WebAuthnConfig,
@@ -778,8 +1029,9 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 		ResponseWriter:      registry.params.HTTPWriter,
 		SessionService:      registry.params.ServiceRegistry.WebAuthnSessionService(),
 		UserService:         registry.params.ServiceRegistry.UserService(),
-		TenantUserService:   registry.params.ServiceRegistry.TenantUserService(),
+		TenantUserService:   tus,
 		InvitationService:   registry.params.ServiceRegistry.InvitationService(),
+		WebAuthnClient:      registry.params.WebAuthnSDKClient,
 	}
 	handler, err := webauthn.NewHandler(params)
 	if err != nil {
@@ -910,6 +1162,32 @@ func (registry *HandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
 		registry.params.Logger.Warn("CA is nil - attestation import hook not registered")
 	}
 
+	// Register attestation MANIFEST capture hook — distinct from the
+	// CA import hook above. The CA hook stores raw evidence blobs in
+	// the CA's per-device attestation store (used at policy time);
+	// this hook turns the same evidence into a HostManifest for the
+	// /api/v1/attestation/manifests surface. Both run on every TCG
+	// CSR finalize.
+	if registry.params.AttestationCapture != nil {
+		manifestHook := NewAttestationManifestCaptureHook(
+			registry.params.AttestationCapture,
+			registry.params.Logger.Slog())
+		hookRegistry.Register(manifestHook)
+		registry.params.Logger.Info("Registered attestation manifest capture hook for ACME device enrollment")
+	}
+
+	// Register device-registration hook so each enrolled device shows
+	// up in the platform's device inventory. The CA persists the
+	// certificate; without this hook the WebUI Devices page and
+	// dashboard counters stay empty even when enroll-01 succeeds.
+	if deviceService := registry.params.ServiceRegistry.DeviceService(); deviceService != nil {
+		deviceHook := NewDeviceRegistrationHook(deviceService, registry.params.Logger.Slog())
+		hookRegistry.Register(deviceHook)
+		registry.params.Logger.Info("Registered device registration hook for ACME device enrollment")
+	} else {
+		registry.params.Logger.Warn("Device service is nil - device registration hook not registered")
+	}
+
 	// Register DNS hook if DNS service is available
 	// This hook is defined entirely within go-trusted-platform - the CA has no knowledge of DNS
 	dnsService := registry.params.ServiceRegistry.DNSService()
@@ -1009,6 +1287,12 @@ func (registry *HandlerRegistry) PlatformRestRouter() *platform.PlatformRouter {
 	if registry.params.HealthRegistry != nil {
 		router.SetHealthRegistry(registry.params.HealthRegistry)
 	}
+	if registry.params.ConfigReloader != nil {
+		router.SetConfigReloader(registry.params.ConfigReloader)
+	}
+	if registry.params.LogQuerier != nil {
+		router.SetLogQuerier(registry.params.LogQuerier)
+	}
 	return router
 }
 
@@ -1063,6 +1347,34 @@ func (registry *HandlerRegistry) AttestationServiceServer() platformv1.Attestati
 // implementation used by the REST compute router, or nil.
 func (registry *HandlerRegistry) ComputeServiceServer() platformv1.ComputeServiceServer {
 	return registry.params.ComputeServiceServer
+}
+
+// RegistryService returns the OCI artifact registry adapter wired
+// into the daemon, or nil. Used by the /compute/images REST surface
+// + the gRPC + MCP transports.
+func (registry *HandlerRegistry) RegistryService() grpcapi.RegistryService {
+	return registry.params.RegistryService
+}
+
+// OCIDistBackend returns the spec-compliant /v2/ distribution
+// backend wired into the daemon, or nil. Used by the root-level
+// /v2/ router so `crane`/`skopeo`/`oras` can push and pull.
+func (registry *HandlerRegistry) OCIDistBackend() restregistry.OCIDistBackend {
+	return registry.params.OCIDistBackend
+}
+
+// AttestationEventReader returns the platform attestation events
+// reader, or nil. Used by /api/v1/attestation/events.
+func (registry *HandlerRegistry) AttestationEventReader() restattestation.EventReader {
+	return registry.params.AttestationEventReader
+}
+
+// GatewayControlPlane returns the gateway state store + the desired-
+// config source backing /api/v1/gateway/*. Either may be nil; the
+// router still mounts the surface so the structured 503 envelope
+// surfaces when components are unwired.
+func (registry *HandlerRegistry) GatewayControlPlane() (restgateway.GatewayStateStore, restgateway.DesiredConfigSource) {
+	return registry.params.GatewayStateStore, registry.params.GatewayDesiredConfig
 }
 
 // EABServiceServer returns the in-process EABService gRPC implementation, or nil.

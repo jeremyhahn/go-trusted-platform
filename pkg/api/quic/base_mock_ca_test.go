@@ -20,8 +20,7 @@ import (
 	"io"
 	"math/big"
 
-	common "github.com/jeremyhahn/go-objstore/pkg/common"
-	pkgca "github.com/jeremyhahn/go-xkms/pkg/ca"
+	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 	certstore "github.com/jeremyhahn/go-xkms/pkg/certstore"
 	tpm2 "github.com/jeremyhahn/go-xkms/pkg/tpm2"
 	types "github.com/jeremyhahn/go-xkms/pkg/types"
@@ -46,20 +45,20 @@ func (m *baseMockCA) Load() error         { return nil }
 func (m *baseMockCA) IsInitialized() bool { return false }
 
 // CSR / Issuance
-func (m *baseMockCA) SignCSR(_ []byte, _ *pkgca.SignOptions) (*x509.Certificate, error) {
+func (m *baseMockCA) SignCSR(_ []byte, _ *xkmsca.SignOptions) (*x509.Certificate, error) {
 	return nil, nil
 }
-func (m *baseMockCA) CreateCSR(_ *pkgca.CertificateRequest) ([]byte, error) { return nil, nil }
-func (m *baseMockCA) IssueCertificate(_ *pkgca.CertificateRequest) (*pkgca.IssuedCertificate, error) {
+func (m *baseMockCA) CreateCSR(_ *xkmsca.CertificateRequest) ([]byte, error) { return nil, nil }
+func (m *baseMockCA) IssueCertificate(_ *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	return nil, nil
 }
-func (m *baseMockCA) IssueCertificateWithProfile(_ *pkgca.CertificateRequest, _ string) (*pkgca.IssuedCertificate, error) {
+func (m *baseMockCA) IssueCertificateWithProfile(_ *xkmsca.CertificateRequest, _ string) (*xkmsca.IssuedCertificate, error) {
 	return nil, nil
 }
 
 // Trust chain
-func (m *baseMockCA) CACertificate() (*x509.Certificate, error)           { return nil, nil }
-func (m *baseMockCA) CABundle() ([]byte, error)                           { return nil, nil }
+func (m *baseMockCA) CACertificate() (*x509.Certificate, error) { return nil, nil }
+func (m *baseMockCA) CABundle() ([]byte, error)                 { return nil, nil }
 func (m *baseMockCA) CABundleFiltered(_ types.StoreType, _ x509.PublicKeyAlgorithm) ([]byte, error) {
 	return nil, nil
 }
@@ -88,17 +87,17 @@ func (m *baseMockCA) RootCertificate(_ *x509.Certificate) (*x509.Certificate, er
 func (m *baseMockCA) OSTrustStore() (*x509.CertPool, error) { return nil, nil }
 
 // Revocation
-func (m *baseMockCA) Revoke(_ *big.Int, _ int) error                                    { return nil }
-func (m *baseMockCA) RevokeCert(_ *x509.Certificate, _ pkgca.RevokeOptions) error       { return nil }
-func (m *baseMockCA) IsRevoked(_ *big.Int) (bool, error)                                { return false, nil }
-func (m *baseMockCA) GenerateCRL() ([]byte, error)                                      { return nil, nil }
-func (m *baseMockCA) ImportDistributionCRLs(_ *x509.Certificate) error                  { return nil }
+func (m *baseMockCA) Revoke(_ *big.Int, _ int) error                               { return nil }
+func (m *baseMockCA) RevokeCert(_ *x509.Certificate, _ xkmsca.RevokeOptions) error { return nil }
+func (m *baseMockCA) IsRevoked(_ *big.Int) (bool, error)                           { return false, nil }
+func (m *baseMockCA) GenerateCRL() ([]byte, error)                                 { return nil, nil }
+func (m *baseMockCA) ImportDistributionCRLs(_ *x509.Certificate) error             { return nil }
 
 // TLS
 func (m *baseMockCA) TLSCertificate(_ *types.KeyAttributes) (tls.Certificate, error) {
 	return tls.Certificate{}, nil
 }
-func (m *baseMockCA) TLSConfig(_ *types.KeyAttributes) (*tls.Config, error)           { return nil, nil }
+func (m *baseMockCA) TLSConfig(_ *types.KeyAttributes) (*tls.Config, error) { return nil, nil }
 func (m *baseMockCA) TLSConfigWithXSigner(_ *types.KeyAttributes, _ crypto.Signer) (*tls.Config, error) {
 	return nil, nil
 }
@@ -109,20 +108,26 @@ func (m *baseMockCA) TLSBundle(_ *types.KeyAttributes) ([]byte, error) { return 
 func (m *baseMockCA) TLSBundleWithCrossSigner(_ *types.KeyAttributes, _ crypto.Signer) ([]byte, error) {
 	return nil, nil
 }
+func (m *baseMockCA) ServerTLSConfig(_ *types.KeyAttributes, _ bool) (*tls.Config, error) {
+	return nil, nil
+}
+func (m *baseMockCA) ClientTLSConfig(_ *types.KeyAttributes, _ string) (*tls.Config, error) {
+	return nil, nil
+}
 
 // Config
-func (m *baseMockCA) Config() *pkgca.Identity { return nil }
-func (m *baseMockCA) Identity() string        { return "" }
-func (m *baseMockCA) IssuingIdentity() pkgca.Identity          { return pkgca.Identity{} }
-func (m *baseMockCA) CAConfig() pkgca.CAConfig                  { return pkgca.CAConfig{} }
+func (m *baseMockCA) Config() *xkmsca.Identity         { return nil }
+func (m *baseMockCA) Identity() string                 { return "" }
+func (m *baseMockCA) IssuingIdentity() xkmsca.Identity { return xkmsca.Identity{} }
+func (m *baseMockCA) CAConfig() xkmsca.CAConfig        { return xkmsca.CAConfig{} }
 func (m *baseMockCA) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm {
 	return x509.UnknownPublicKeyAlgorithm
 }
 func (m *baseMockCA) DefaultSignatureAlgorithm() x509.SignatureAlgorithm {
 	return x509.UnknownSignatureAlgorithm
 }
-func (m *baseMockCA) DefaultValidityPeriod() int    { return 0 }
-func (m *baseMockCA) Hash() crypto.Hash             { return crypto.SHA256 }
+func (m *baseMockCA) DefaultValidityPeriod() int     { return 0 }
+func (m *baseMockCA) Hash() crypto.Hash              { return crypto.SHA256 }
 func (m *baseMockCA) IsAutoImportingIssuerCAs() bool { return false }
 
 // Keys & signing identity
@@ -140,28 +145,24 @@ func (m *baseMockCA) CASigner(_ types.StoreType, _ x509.PublicKeyAlgorithm) (cry
 }
 
 // Storage access
-func (m *baseMockCA) KeyStore() xkms.Backend       { return nil }
+func (m *baseMockCA) KeyStore() xkms.Backend         { return nil }
 func (m *baseMockCA) CertStore() certstore.CertStore { return nil }
-// ObjectStore is NOT part of ca.TCGCA but is used by the daemon/grpc/quic
-// service layer via a narrow type assertion. Keeping it on the base mock
-// preserves that capability when assertions resolve.
-func (m *baseMockCA) ObjectStore() common.Storage { return nil }
 
 // Certificates
-func (m *baseMockCA) Issued(_ string) (bool, error)                          { return false, nil }
+func (m *baseMockCA) Issued(_ string) (bool, error) { return false, nil }
 func (m *baseMockCA) Exists(_ string, _ x509.PublicKeyAlgorithm) (bool, error) {
 	return false, nil
 }
 func (m *baseMockCA) Certificate(_ *types.KeyAttributes) (*x509.Certificate, error) {
 	return nil, nil
 }
-func (m *baseMockCA) CertificatePEM(_ string) ([]byte, error)                    { return nil, nil }
-func (m *baseMockCA) ImportCertificate(_ *x509.Certificate) error                { return nil }
-func (m *baseMockCA) ImportCertificatePEM(_ string, _ []byte) error              { return nil }
-func (m *baseMockCA) PEM(_ *types.KeyAttributes) ([]byte, error)                 { return nil, nil }
+func (m *baseMockCA) CertificatePEM(_ string) ([]byte, error)       { return nil, nil }
+func (m *baseMockCA) ImportCertificate(_ *x509.Certificate) error   { return nil }
+func (m *baseMockCA) ImportCertificatePEM(_ string, _ []byte) error { return nil }
+func (m *baseMockCA) PEM(_ *types.KeyAttributes) ([]byte, error)    { return nil, nil }
 
 // Object store helpers
-func (m *baseMockCA) Blob(_ []byte) ([]byte, error)    { return nil, nil }
+func (m *baseMockCA) Blob(_ []byte) ([]byte, error)       { return nil, nil }
 func (m *baseMockCA) ImportBlob(_ []byte, _ []byte) error { return nil }
 
 // Cross-signing
@@ -203,16 +204,16 @@ func (m *baseMockCA) VerifyTCG_CSR_IDevIDBytes(_ []byte, _ x509.SignatureAlgorit
 }
 
 // TCGCA extensions
-func (m *baseMockCA) IssueEKCertificate(_ *pkgca.CertificateRequest, _ crypto.PublicKey) (*x509.Certificate, error) {
+func (m *baseMockCA) IssueEKCertificate(_ *xkmsca.CertificateRequest, _ crypto.PublicKey) (*x509.Certificate, error) {
 	return nil, nil
 }
-func (m *baseMockCA) IssueAKCertificate(_ *pkgca.CertificateRequest, _ crypto.PublicKey) (*x509.Certificate, error) {
+func (m *baseMockCA) IssueAKCertificate(_ *xkmsca.CertificateRequest, _ crypto.PublicKey) (*x509.Certificate, error) {
 	return nil, nil
 }
-func (m *baseMockCA) SignTCGCSRIDevID(_ *tpm2.TCG_CSR_IDEVID, _ *pkgca.CertificateRequest) ([]byte, []byte, error) {
+func (m *baseMockCA) SignTCGCSRIDevID(_ *tpm2.TCG_CSR_IDEVID, _ *xkmsca.CertificateRequest) ([]byte, []byte, error) {
 	return nil, nil, nil
 }
-func (m *baseMockCA) EnrollDevice(_ []byte, _ *pkgca.CertificateRequest) (*pkgca.TCGEnrollmentResult, error) {
+func (m *baseMockCA) EnrollDevice(_ []byte, _ *xkmsca.CertificateRequest) (*xkmsca.TCGEnrollmentResult, error) {
 	return nil, nil
 }
 func (m *baseMockCA) SetTPM(_ tpm2.TrustedPlatformModule) {}

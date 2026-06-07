@@ -23,20 +23,19 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
-	pkgca "github.com/jeremyhahn/go-xkms/pkg/ca"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // =============================================================================
-// Mock CA exposing the goca.CACertificateAuthority surface SetCAHandlers needs.
+// Mock CA exposing the xkmsca.TCGCA surface SetCAHandlers needs.
 // =============================================================================
 
 type fakeRESTCA struct {
-	goca.CACertificateAuthority // embed for any methods we don't override
+	xkmsca.TCGCA // embed for any methods we don't override
 }
 
 func (f *fakeRESTCA) Identity() string                                { return "Test CA" }
@@ -45,11 +44,11 @@ func (f *fakeRESTCA) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm    { return x
 func (f *fakeRESTCA) DefaultValidityPeriod() int                      { return 365 }
 func (f *fakeRESTCA) TrustedRoot() (*x509.Certificate, error)         { return nil, nil }
 func (f *fakeRESTCA) TrustedIntermediate() (*x509.Certificate, error) { return nil, nil }
-func (f *fakeRESTCA) IssueCertificate(req *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
+func (f *fakeRESTCA) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	return nil, nil
 }
-func (f *fakeRESTCA) RevokeCert(*x509.Certificate, pkgca.RevokeOptions) error { return nil }
-func (f *fakeRESTCA) CABundle() ([]byte, error)                               { return []byte{}, nil }
+func (f *fakeRESTCA) RevokeCert(*x509.Certificate, xkmsca.RevokeOptions) error { return nil }
+func (f *fakeRESTCA) CABundle() ([]byte, error)                                { return []byte{}, nil }
 func (f *fakeRESTCA) CABundleFiltered(xkmssdk.StoreType, x509.PublicKeyAlgorithm) ([]byte, error) {
 	return []byte{}, nil
 }
@@ -118,15 +117,15 @@ func TestRESTServer_SetCAHandlers_AllRoutesRegistered(t *testing.T) {
 	// inspect the route table directly. Each route is identified by its
 	// (method, path-template) tuple.
 	expected := map[string]string{
-		"GET /api/v1/ca/info":                                 "",
-		"GET /api/v1/ca/certificates":                         "",
-		"POST /api/v1/ca/certificates":                        "",
-		"GET /api/v1/ca/certificates/{serial}":                "",
-		"POST /api/v1/ca/certificates/{serial}/revoke":        "",
-		"POST /api/v1/ca/certificates/{serial}/renew":         "",
-		"POST /api/v1/ca/certificates/verify":                 "",
-		"GET /api/v1/ca/crl":                                  "",
-		"GET /api/v1/ca/bundle":                               "",
+		"GET /api/v1/ca/info":                          "",
+		"GET /api/v1/ca/certificates":                  "",
+		"POST /api/v1/ca/certificates":                 "",
+		"GET /api/v1/ca/certificates/{serial}":         "",
+		"POST /api/v1/ca/certificates/{serial}/revoke": "",
+		"POST /api/v1/ca/certificates/{serial}/renew":  "",
+		"POST /api/v1/ca/certificates/verify":          "",
+		"GET /api/v1/ca/crl":                           "",
+		"GET /api/v1/ca/bundle":                        "",
 	}
 	found := map[string]bool{}
 	walkErr := server.router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {

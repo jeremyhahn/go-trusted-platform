@@ -72,8 +72,9 @@ type LoginRequest struct {
 	// When empty, "platform" is used.
 	RPID string
 
-	// Device pins the --method fido2 flow to a specific authenticator
-	// (matched by FIDO2Device.DeviceID).
+	// Device pins the --method fido2 flow to a specific client-LOCAL
+	// authenticator (matched by quicbaas.LocalDevice.Path as enumerated
+	// by Security().Auth().Devices()).
 	Device string
 
 	// Reader pins the --method piv flow to a specific PC/SC reader

@@ -88,6 +88,17 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 		mux.HandleFunc("/files/", s.handleLocalFiles)
 	}
 
+	// /data/ endpoint serves the container's bind-mounted data
+	// directory (vmlinuz, initramfs, ISOs, ...). The bootstrap.ipxe
+	// boot-entry script references kernel/initrd as `/data/<file>`
+	// so iPXE fetches them from this URL prefix on the same HTTP
+	// server. Without this handler, the iPXE chainload succeeds
+	// but kernel/initrd fetches 404 — the iPXE shell drops out
+	// with "Could not boot: Not found".
+	if s.config.DataDir != "" {
+		mux.HandleFunc("/data/", s.handleDataFiles)
+	}
+
 	// Proxy endpoint for HTTPS resources (iPXE doesn't support HTTPS)
 	mux.HandleFunc("/proxy/", s.handleProxy)
 
@@ -169,9 +180,47 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-// handleBootScript serves the initial boot script that chains to the menu.
+// handleBootScript serves the initial boot script.
+//
+// When exactly one BootEntry is configured (the common bootstrap-
+// container case) the script inlines the kernel + initrd + args
+// directly so iPXE only needs one HTTP fetch to start the boot.
+// This avoids the boot.ipxe → menu.ipxe → bootstrap.ipxe chain
+// pattern, which on some BIOS+iPXE combinations (observed on
+// Supermicro X10 + Intel Boot Agent GE 1.5.13 + iPXE 2.0.0+) times
+// out on the second chained HTTP request even though the first
+// fetch from the same server succeeds. Inlining produces a single
+// successful HTTP exchange that the X10 firmware does not drop.
+//
+// When zero or more than one BootEntry is configured the script
+// falls back to the menu-based flow so operators with multi-image
+// setups still get an interactive selection.
 func (s *HTTPServer) handleBootScript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
+
+	if len(s.config.BootEntries) == 1 {
+		entry := s.config.BootEntries[0]
+		if entry.Kernel != "" && entry.Initrd != "" {
+			kernelURL := s.proxyURL(entry.Kernel)
+			initrdURL := s.proxyURL(entry.Initrd)
+			args := s.proxyArgsURLs(entry.Args)
+			script := fmt.Sprintf(`#!ipxe
+
+# Single-entry inline boot (avoids second-chain TCP timeout on
+# firmware that drops chained HTTP requests; see handleBootScript
+# docs in pkg/ipxe/http_server.go).
+
+echo Booting %s...
+echo
+
+kernel %s %s
+initrd %s
+boot || shell
+`, entry.Description, kernelURL, args, initrdURL)
+			w.Write([]byte(script))
+			return
+		}
+	}
 
 	script := `#!ipxe
 
@@ -387,6 +436,54 @@ func (s *HTTPServer) handleLocalFiles(w http.ResponseWriter, r *http.Request) {
 	s.logger.Info("serving local file", "file", filename, "size", info.Size())
 
 	// Serve the file
+	http.ServeFile(w, r, fullPath)
+}
+
+// handleDataFiles serves files from the configured DataDir under the
+// /data/ URL prefix. Used by the iPXE bootstrap script to fetch
+// kernel and initrd images that the container has staged on its
+// bind-mounted /data volume.
+//
+// Path traversal is rejected (any ".." segment aborts the request),
+// directory listings are denied, and missing files return 404 with
+// a logged warning so the operator can diagnose mis-staged content.
+//
+// Symlinks INSIDE DataDir are followed via http.ServeFile, which is
+// consistent with handleLocalFiles. DataDir itself is expected to be
+// owned by the operator; this handler does not attempt to sandbox
+// against an attacker who controls files inside it.
+func (s *HTTPServer) handleDataFiles(w http.ResponseWriter, r *http.Request) {
+	if s.config.DataDir == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	filename := strings.TrimPrefix(r.URL.Path, "/data/")
+	if filename == "" || strings.Contains(filename, "..") {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	fullPath := filepath.Join(s.config.DataDir, filename)
+
+	info, err := os.Stat(fullPath)
+	if os.IsNotExist(err) {
+		s.logger.Warn("data file not found", "path", fullPath)
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		s.logger.Errorf("error accessing data file %s: %v", fullPath, err)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
+	if info.IsDir() {
+		http.Error(w, "Cannot serve directories", http.StatusForbidden)
+		return
+	}
+
+	s.logger.Info("serving data file", "file", filename, "size", info.Size())
 	http.ServeFile(w, r, fullPath)
 }
 

@@ -908,3 +908,60 @@ func TestNewBaseCommand_NilGetContext(t *testing.T) {
 	assert.Nil(t, baseCmd)
 	assert.IsType(t, ErrNoContextSet{}, err)
 }
+
+// ---------------------------------------------------------------------------
+// QuicBaaS option resolver tests
+// ---------------------------------------------------------------------------
+
+func TestResolveContextQuicBaaSOptions_NilContextReturnsNil(t *testing.T) {
+	if got := resolveContextQuicBaaSOptions(nil); got != nil {
+		t.Errorf("expected nil for nil context, got %v", got)
+	}
+}
+
+func TestResolveContextQuicBaaSOptions_LocalDefaults(t *testing.T) {
+	ctx := &Context{Type: ContextTypeLocal, Local: &LocalContext{SocketPath: "/run/platformd.sock"}}
+	got := resolveContextQuicBaaSOptions(ctx)
+	if len(got) == 0 {
+		t.Fatal("expected options for local context")
+	}
+	// Apply the options to an Options struct and verify the addr.
+	o := platformNewOptionsForTest(got...)
+	if o.QuicBaaSAddr != DefaultQuicBaaSSocketPath {
+		t.Errorf("expected default quicbaas socket, got %q", o.QuicBaaSAddr)
+	}
+	if o.QuicBaaSTransport != "unix" {
+		t.Errorf("expected unix transport, got %q", o.QuicBaaSTransport)
+	}
+}
+
+func TestResolveContextQuicBaaSOptions_EnvOverridesContext(t *testing.T) {
+	t.Setenv(EnvPlatformQuicBaaSAddr, "/tmp/from-env.sock")
+	t.Setenv(EnvPlatformQuicBaaSTransport, "rest")
+
+	ctx := &Context{Type: ContextTypeLocal, Local: &LocalContext{
+		QuicBaaSAddr:      "/run/quicbaas.sock",
+		QuicBaaSTransport: "unix",
+	}}
+	o := platformNewOptionsForTest(resolveContextQuicBaaSOptions(ctx)...)
+	if o.QuicBaaSAddr != "/tmp/from-env.sock" {
+		t.Errorf("env addr must win, got %q", o.QuicBaaSAddr)
+	}
+	if o.QuicBaaSTransport != "rest" {
+		t.Errorf("env transport must win, got %q", o.QuicBaaSTransport)
+	}
+}
+
+func TestResolveContextQuicBaaSOptions_EmbeddedReturnsNil(t *testing.T) {
+	ctx := &Context{Type: ContextTypeEmbedded}
+	if got := resolveContextQuicBaaSOptions(ctx); got != nil {
+		t.Errorf("expected nil for embedded context (no addr), got %v", got)
+	}
+}
+
+// platformNewOptionsForTest applies a slice of platform.Option to a
+// fresh Options struct and returns it. Used by the QuicBaaS resolver
+// tests to inspect the values written into Options.
+func platformNewOptionsForTest(opts ...platform.Option) *platform.Options {
+	return platform.NewOptions(opts...)
+}

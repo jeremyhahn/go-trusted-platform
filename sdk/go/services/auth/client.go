@@ -128,8 +128,10 @@ func (c *Client) factors(op string) (quicbaas.AuthFactorsClient, error) {
 	return f, nil
 }
 
-// fido2 resolves the FIDO2 sub-client.
-func (c *Client) fido2(op string) (quicbaas.FIDO2Client, error) {
+// webauthn resolves the WebAuthn relying-party client. It is the single
+// canonical ceremony accessor (registration + login) — the removed FIDO2()
+// accessor duplicated this ceremony and no longer exists.
+func (c *Client) webauthn(op string) (quicbaas.WebAuthnClient, error) {
 	if c.sdk == nil {
 		return nil, &ErrSecuritySurfaceUnavailable{Op: op}
 	}
@@ -137,11 +139,29 @@ func (c *Client) fido2(op string) (quicbaas.FIDO2Client, error) {
 	if auth == nil {
 		return nil, &ErrSecuritySurfaceUnavailable{Op: op}
 	}
-	f := auth.FIDO2()
-	if f == nil {
+	w := auth.WebAuthn()
+	if w == nil {
 		return nil, &ErrSecuritySurfaceUnavailable{Op: op}
 	}
-	return f, nil
+	return w, nil
+}
+
+// devices resolves the client-LOCAL CTAP2 authenticator helper. Unlike the
+// WebAuthn ceremony, Devices() enumerates USB-HID authenticators physically
+// attached to THIS client and performs no transport request.
+func (c *Client) devices(op string) (quicbaas.LocalDevices, error) {
+	if c.sdk == nil {
+		return nil, &ErrSecuritySurfaceUnavailable{Op: op}
+	}
+	auth := c.sdk.Security().Auth()
+	if auth == nil {
+		return nil, &ErrSecuritySurfaceUnavailable{Op: op}
+	}
+	d := auth.Devices()
+	if d == nil {
+		return nil, &ErrSecuritySurfaceUnavailable{Op: op}
+	}
+	return d, nil
 }
 
 // piv resolves the PIV sub-client.
@@ -265,13 +285,19 @@ func (c *Client) buildEnrollRequest(ctx context.Context, req *AddFactorRequest) 
 			params[k] = v
 		}
 	case "fido2":
-		fido2, err := c.fido2("auth factor add --type fido2")
+		webauthn, err := c.webauthn("auth factor add --type fido2")
 		if err != nil {
 			return nil, err
 		}
-		regResp, err := fido2.Register(ctx, &quicbaas.FIDO2BeginRegistrationRequest{})
+		// BeginRegistration is the single canonical registration ceremony
+		// (the removed FIDO2().Register accessor was a duplicate). It returns
+		// the CredentialCreationOptions the local authenticator consumes.
+		regResp, err := webauthn.BeginRegistration(ctx, &quicbaas.WebAuthnUser{
+			Username:    req.User,
+			DisplayName: req.User,
+		})
 		if err != nil {
-			return nil, &ErrFIDO2Failed{Op: "Register", Cause: err}
+			return nil, &ErrFIDO2Failed{Op: "BeginRegistration", Cause: err}
 		}
 		params["fido2_credential_create_options"] = regResp
 		if req.FIDO2Device != "" {

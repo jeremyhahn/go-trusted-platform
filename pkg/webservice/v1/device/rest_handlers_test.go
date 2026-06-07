@@ -353,7 +353,11 @@ func TestCRUDHandler_CreateDevice(t *testing.T) {
 }
 
 func TestCRUDHandler_CreateDevice_MissingID(t *testing.T) {
-	handler, _, _ := newTestHandler()
+	// The handler auto-allocates a non-zero device ID when the client
+	// omits it (the WebUI Register Device dialog can't know one up-front
+	// and the platform owns identity assignment). The expected result is
+	// 201 Created with a synthesised ID, not a 400.
+	handler, deviceSvc, _ := newTestHandler()
 
 	body := `{"model": "TestTPM", "serial": "SN001"}`
 	req := httptest.NewRequest(http.MethodPost, "/devices", bytes.NewBufferString(body))
@@ -362,7 +366,14 @@ func TestCRUDHandler_CreateDevice_MissingID(t *testing.T) {
 
 	handler.CreateDevice(w, req)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, http.StatusCreated, w.Code)
+	// Exactly one device should have been saved with a non-zero ID.
+	require.Len(t, deviceSvc.devices, 1)
+	for id, dev := range deviceSvc.devices {
+		assert.NotZero(t, id)
+		assert.Equal(t, "TestTPM", dev.Model)
+		assert.Equal(t, "SN001", dev.Serial)
+	}
 }
 
 func TestCRUDHandler_CreateDevice_InvalidJSON(t *testing.T) {
@@ -590,7 +601,11 @@ func TestCRUDHandler_CreateProfile(t *testing.T) {
 }
 
 func TestCRUDHandler_CreateProfile_MissingID(t *testing.T) {
-	handler, _, _ := newTestHandler()
+	// Profile create auto-allocates the ID — mirror the device-create
+	// behaviour so the WebUI Create Profile dialog can submit without
+	// inventing one. Expected result is 201 Created with a non-zero
+	// synthesised ID.
+	handler, _, profileSvc := newTestHandler()
 
 	body := `{"name": "TestProfile"}`
 	req := httptest.NewRequest(http.MethodPost, "/device/profiles", bytes.NewBufferString(body))
@@ -599,7 +614,11 @@ func TestCRUDHandler_CreateProfile_MissingID(t *testing.T) {
 
 	handler.CreateProfile(w, req)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, http.StatusCreated, w.Code)
+	require.Len(t, profileSvc.profiles, 1)
+	for id := range profileSvc.profiles {
+		assert.NotZero(t, id)
+	}
 }
 
 func TestCRUDHandler_CreateProfile_NilService(t *testing.T) {

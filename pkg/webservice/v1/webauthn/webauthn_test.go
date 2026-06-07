@@ -19,7 +19,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -28,12 +27,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-webauthn/webauthn/protocol"
-	"github.com/go-webauthn/webauthn/webauthn"
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -42,1287 +41,964 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Mock implementations
+// =============================================================================
+// Mocks
+// =============================================================================
 
-type MockUserService struct {
-	mock.Mock
+type mockUserService struct{ mock.Mock }
+
+func (m *mockUserService) Save(ctx context.Context, user *entities.User) error {
+	return m.Called(ctx, user).Error(0)
 }
-
-func (m *MockUserService) Save(ctx context.Context, user *entities.User) error {
-	args := m.Called(ctx, user)
-	return args.Error(0)
+func (m *mockUserService) Delete(ctx context.Context, userID uint64) error {
+	return m.Called(ctx, userID).Error(0)
 }
-
-func (m *MockUserService) Delete(ctx context.Context, userID uint64) error {
-	args := m.Called(ctx, userID)
-	return args.Error(0)
-}
-
-func (m *MockUserService) Get(ctx context.Context, userID uint64) (*entities.User, error) {
+func (m *mockUserService) Get(ctx context.Context, userID uint64) (*entities.User, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*entities.User), args.Error(1)
 }
-
-func (m *MockUserService) GetByEmail(ctx context.Context, email string) (*entities.User, error) {
+func (m *mockUserService) GetByEmail(ctx context.Context, email string) (*entities.User, error) {
 	args := m.Called(ctx, email)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*entities.User), args.Error(1)
 }
-
-func (m *MockUserService) GetByTenant(ctx context.Context, tenantID string) ([]*entities.User, error) {
+func (m *mockUserService) GetByTenant(ctx context.Context, tenantID string) ([]*entities.User, error) {
 	args := m.Called(ctx, tenantID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]*entities.User), args.Error(1)
 }
-
-func (m *MockUserService) IsTenantOwner(ctx context.Context, userID uint64) (bool, error) {
+func (m *mockUserService) IsTenantOwner(ctx context.Context, userID uint64) (bool, error) {
 	args := m.Called(ctx, userID)
 	return args.Bool(0), args.Error(1)
 }
 
-type MockRegistrationService struct {
-	mock.Mock
-}
+type mockRegistrationService struct{ mock.Mock }
 
-func (m *MockRegistrationService) Create(ctx context.Context, registration *entities.Registration) error {
-	args := m.Called(ctx, registration)
-	return args.Error(0)
+func (m *mockRegistrationService) Create(ctx context.Context, r *entities.Registration) error {
+	return m.Called(ctx, r).Error(0)
 }
-
-func (m *MockRegistrationService) Delete(ctx context.Context, session service.Session, registrationID uint64) error {
-	args := m.Called(ctx, session, registrationID)
-	return args.Error(0)
+func (m *mockRegistrationService) Delete(ctx context.Context, s service.Session, id uint64) error {
+	return m.Called(ctx, s, id).Error(0)
 }
-
-func (m *MockRegistrationService) Get(ctx context.Context, session service.Session, registrationID uint64) (*entities.Registration, error) {
-	args := m.Called(ctx, session, registrationID)
+func (m *mockRegistrationService) Get(ctx context.Context, s service.Session, id uint64) (*entities.Registration, error) {
+	args := m.Called(ctx, s, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*entities.Registration), args.Error(1)
 }
 
-type MockJWTService struct {
-	mock.Mock
-}
+type mockResponseWriter struct{ mock.Mock }
 
-func (m *MockJWTService) GenerateToken(user *entities.User) (string, error) {
-	args := m.Called(user)
-	return args.String(0), args.Error(1)
-}
-
-type MockResponseWriter struct {
-	mock.Mock
-}
-
-func (m *MockResponseWriter) Write(w http.ResponseWriter, r *http.Request, status int, resp interface{}) {
+func (m *mockResponseWriter) Write(w http.ResponseWriter, r *http.Request, status int, resp interface{}) {
 	m.Called(w, r, status, resp)
 }
-
-func (m *MockResponseWriter) WriteYaml(w http.ResponseWriter, status int, resp interface{}) {
+func (m *mockResponseWriter) WriteYaml(w http.ResponseWriter, status int, resp interface{}) {
 	m.Called(w, status, resp)
 }
-
-func (m *MockResponseWriter) WriteJson(w http.ResponseWriter, status int, resp interface{}) {
+func (m *mockResponseWriter) WriteJson(w http.ResponseWriter, status int, resp interface{}) {
 	m.Called(w, status, resp)
 }
-
-func (m *MockResponseWriter) Success200(w http.ResponseWriter, r *http.Request, payload interface{}) {
+func (m *mockResponseWriter) Success200(w http.ResponseWriter, r *http.Request, payload interface{}) {
 	m.Called(w, r, payload)
 }
-
-func (m *MockResponseWriter) Success201(w http.ResponseWriter, r *http.Request, payload interface{}) {
-	m.Success200(w, r, payload)
+func (m *mockResponseWriter) Success201(w http.ResponseWriter, r *http.Request, payload interface{}) {
+	m.Called(w, r, payload)
 }
-
-func (m *MockResponseWriter) Success404(w http.ResponseWriter, r *http.Request, payload interface{}, err error) {
+func (m *mockResponseWriter) Success404(w http.ResponseWriter, r *http.Request, payload interface{}, err error) {
 	m.Called(w, r, payload, err)
 }
-
-func (m *MockResponseWriter) Error200(w http.ResponseWriter, r *http.Request, err error) {
+func (m *mockResponseWriter) Error200(w http.ResponseWriter, r *http.Request, err error) {
 	m.Called(w, r, err)
 }
-
-func (m *MockResponseWriter) Error401(w http.ResponseWriter, r *http.Request, err error) {
+func (m *mockResponseWriter) Error401(w http.ResponseWriter, r *http.Request, err error) {
 	m.Called(w, r, err)
 }
-
-func (m *MockResponseWriter) Error400(w http.ResponseWriter, r *http.Request, err error) {
+func (m *mockResponseWriter) Error400(w http.ResponseWriter, r *http.Request, err error) {
 	m.Called(w, r, err)
 }
-
-func (m *MockResponseWriter) Error404(w http.ResponseWriter, r *http.Request, err error) {
+func (m *mockResponseWriter) Error404(w http.ResponseWriter, r *http.Request, err error) {
 	m.Called(w, r, err)
 }
-
-func (m *MockResponseWriter) Error403(w http.ResponseWriter, r *http.Request, err error, payload interface{}) {
+func (m *mockResponseWriter) Error403(w http.ResponseWriter, r *http.Request, err error, payload interface{}) {
 	m.Called(w, r, err, payload)
 }
-
-func (m *MockResponseWriter) Error500(w http.ResponseWriter, r *http.Request, err error) {
+func (m *mockResponseWriter) Error500(w http.ResponseWriter, r *http.Request, err error) {
 	m.Called(w, r, err)
 }
 
-// Test helper functions
+// mockWebAuthnClient implements the SDK WebAuthnClient interface.
+type mockWebAuthnClient struct{ mock.Mock }
 
-func createTestHandler(t *testing.T) (*WebAuthnRestHandler, *MockUserService, *MockRegistrationService, *MockJWTService, *MockResponseWriter) {
-	logger := logging.NewLogger(slog.LevelDebug, os.Stderr)
-
-	mockUserService := new(MockUserService)
-	mockRegistrationService := new(MockRegistrationService)
-	mockJWTService := new(MockJWTService)
-	mockResponseWriter := new(MockResponseWriter)
-
-	config := &Config{
-		RPDisplayName: "Test RP",
-		RPID:          "localhost",
-		RPOrigins:     []string{"http://localhost"},
+func (m *mockWebAuthnClient) BeginRegistration(ctx context.Context, user *quicbaassdk.WebAuthnUser) (*quicbaassdk.FIDO2BeginRegistrationResponse, error) {
+	args := m.Called(ctx, user)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
 	}
+	return args.Get(0).(*quicbaassdk.FIDO2BeginRegistrationResponse), args.Error(1)
+}
+func (m *mockWebAuthnClient) FinishRegistration(ctx context.Context, user *quicbaassdk.WebAuthnUser, req *quicbaassdk.FIDO2FinishRegistrationRequest) (*quicbaassdk.WebAuthnCredential, error) {
+	args := m.Called(ctx, user, req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*quicbaassdk.WebAuthnCredential), args.Error(1)
+}
+func (m *mockWebAuthnClient) BeginLogin(ctx context.Context, user *quicbaassdk.WebAuthnUser) (*quicbaassdk.FIDO2BeginAuthenticationResponse, error) {
+	args := m.Called(ctx, user)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*quicbaassdk.FIDO2BeginAuthenticationResponse), args.Error(1)
+}
+func (m *mockWebAuthnClient) FinishLogin(ctx context.Context, user *quicbaassdk.WebAuthnUser, req *quicbaassdk.FIDO2FinishAuthenticationRequest) (*quicbaassdk.WebAuthnSession, error) {
+	args := m.Called(ctx, user, req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*quicbaassdk.WebAuthnSession), args.Error(1)
+}
+
+// =============================================================================
+// Test helpers
+// =============================================================================
+
+type harness struct {
+	handler *WebAuthnRestHandler
+	users   *mockUserService
+	regs    *mockRegistrationService
+	writer  *mockResponseWriter
+	sdk     *mockWebAuthnClient
+	logger  *logging.Logger
+}
+
+func newHarness(t *testing.T) *harness {
+	t.Helper()
+	logger := logging.NewLogger(slog.LevelDebug, os.Stderr)
+	users := new(mockUserService)
+	regs := new(mockRegistrationService)
+	writer := new(mockResponseWriter)
+	sdk := new(mockWebAuthnClient)
 
 	params := ServiceParams{
-		Config:              config,
-		Debug:               false,
+		Config: &Config{
+			RPDisplayName: "Test RP",
+			RPID:          "localhost",
+			RPOrigins:     []string{"http://localhost"},
+		},
 		JWTService:          &jwt.Service{},
 		Logger:              logger,
-		RegistrationService: mockRegistrationService,
-		ResponseWriter:      mockResponseWriter,
-		UserService:         mockUserService,
+		RegistrationService: regs,
+		ResponseWriter:      writer,
+		UserService:         users,
+		WebAuthnClient:      sdk,
 	}
-
-	handler, err := NewHandler(params)
+	rh, err := NewHandler(params)
 	require.NoError(t, err)
-	require.NotNil(t, handler)
-
-	// Override the JWT service with mock after creation
-	restHandler := handler.(*WebAuthnRestHandler)
-	restHandler.jwtService = &jwt.Service{}
-
-	return restHandler, mockUserService, mockRegistrationService, mockJWTService, mockResponseWriter
+	require.NotNil(t, rh)
+	return &harness{
+		handler: rh.(*WebAuthnRestHandler),
+		users:   users,
+		regs:    regs,
+		writer:  writer,
+		sdk:     sdk,
+		logger:  logger,
+	}
 }
 
-func createTestUser(email string) *entities.User {
-	user := entities.NewUser(email)
-	// Add a dummy credential so BeginLogin doesnt fail
-	credential := webauthn.Credential{
-		ID:              []byte("test-credential-id"),
-		PublicKey:       []byte("test-public-key"),
-		AttestationType: "none",
-		Authenticator: webauthn.Authenticator{
-			AAGUID:       []byte("test-aaguid"),
-			SignCount:    0,
-			CloneWarning: false,
-		},
-	}
-	user.AddCredential(&credential)
-
-	sessionData := &webauthn.SessionData{
-		Challenge:            "test-challenge",
-		UserID:               []byte(fmt.Sprintf("%d", user.ID)),
-		Expires:              time.Now().Add(time.Hour),
-		UserVerification:     protocol.VerificationDiscouraged,
-		AllowedCredentialIDs: [][]byte{},
-	}
-	sessionJSON, _ := json.Marshal(sessionData)
-	user.SessionData = sessionJSON
-	return user
+// createTestHandler is a compatibility shim retained so that
+// error_writers_test.go keeps testing the helper functions without
+// duplicating the mock setup. The middle three return values are
+// placeholders left over from the pre-SDK signature; new tests should
+// use newHarness instead.
+func createTestHandler(t *testing.T) (*WebAuthnRestHandler, *mockUserService, *mockRegistrationService, interface{}, *mockResponseWriter) {
+	h := newHarness(t)
+	return h.handler, h.users, h.regs, nil, h.writer
 }
 
-func createExpiredSessionUser(email string) *entities.User {
-	user := entities.NewUser(email)
-	// Add a dummy credential so BeginLogin doesnt fail
-	credential := webauthn.Credential{
-		ID:              []byte("test-credential-id"),
-		PublicKey:       []byte("test-public-key"),
-		AttestationType: "none",
-		Authenticator: webauthn.Authenticator{
-			AAGUID:       []byte("test-aaguid"),
-			SignCount:    0,
-			CloneWarning: false,
-		},
-	}
-	user.AddCredential(&credential)
+// =============================================================================
+// NewHandler
+// =============================================================================
 
-	sessionData := &webauthn.SessionData{
-		Challenge:            "test-challenge",
-		UserID:               []byte(fmt.Sprintf("%d", user.ID)),
-		Expires:              time.Now().Add(-time.Hour), // Expired
-		UserVerification:     protocol.VerificationDiscouraged,
-		AllowedCredentialIDs: [][]byte{},
-	}
-	sessionJSON, _ := json.Marshal(sessionData)
-	user.SessionData = sessionJSON
-	return user
+func TestNewHandler_RequiresSDKClient(t *testing.T) {
+	_, err := NewHandler(ServiceParams{
+		Config:         &Config{RPID: "x", RPOrigins: []string{"https://x"}},
+		Logger:         logging.NewLogger(slog.LevelDebug, os.Stderr),
+		WebAuthnClient: nil,
+	})
+	assert.ErrorIs(t, err, ErrSDKClientRequired)
 }
 
-// Test NewHandler
+func TestNewHandler_RequiresValidConfig(t *testing.T) {
+	sdk := new(mockWebAuthnClient)
+	_, err := NewHandler(ServiceParams{
+		Config:         nil,
+		Logger:         logging.NewLogger(slog.LevelDebug, os.Stderr),
+		WebAuthnClient: sdk,
+	})
+	assert.ErrorIs(t, err, ErrInvalidConfig)
+
+	_, err = NewHandler(ServiceParams{
+		Config:         &Config{RPID: ""},
+		Logger:         logging.NewLogger(slog.LevelDebug, os.Stderr),
+		WebAuthnClient: sdk,
+	})
+	assert.ErrorIs(t, err, ErrInvalidConfig)
+
+	_, err = NewHandler(ServiceParams{
+		Config:         &Config{RPID: "x", RPOrigins: nil},
+		Logger:         logging.NewLogger(slog.LevelDebug, os.Stderr),
+		WebAuthnClient: sdk,
+	})
+	assert.ErrorIs(t, err, ErrInvalidConfig)
+}
 
 func TestNewHandler_Success(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, os.Stderr)
-
-	mockUserService := new(MockUserService)
-	mockRegistrationService := new(MockRegistrationService)
-	mockResponseWriter := new(MockResponseWriter)
-
-	config := &Config{
-		RPDisplayName: "Test RP",
-		RPID:          "localhost",
-		RPOrigins:     []string{"http://localhost"},
-	}
-
-	params := ServiceParams{
-		Config:              config,
-		Debug:               true,
-		JWTService:          &jwt.Service{},
-		Logger:              logger,
-		RegistrationService: mockRegistrationService,
-		ResponseWriter:      mockResponseWriter,
-		UserService:         mockUserService,
-	}
-
-	handler, err := NewHandler(params)
-
-	assert.NoError(t, err)
-	assert.NotNil(t, handler)
-	restHandler, ok := handler.(*WebAuthnRestHandler)
-	assert.True(t, ok)
-	assert.NotNil(t, restHandler.webAuthn)
-	assert.NotNil(t, restHandler.logger)
-	assert.NotNil(t, restHandler.jwtService)
-	assert.NotNil(t, restHandler.userService)
-	assert.NotNil(t, restHandler.registrationService)
-	assert.NotNil(t, restHandler.responseWriter)
+	h := newHarness(t)
+	require.NotNil(t, h.handler)
+	assert.NotNil(t, h.handler.webauthnClient)
 }
 
-func TestNewHandler_NilConfig(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, os.Stderr)
+// =============================================================================
+// BeginRegistration
+// =============================================================================
 
-	mockUserService := new(MockUserService)
-	mockRegistrationService := new(MockRegistrationService)
-	mockResponseWriter := new(MockResponseWriter)
+func TestBeginRegistration_Success(t *testing.T) {
+	h := newHarness(t)
 
-	params := ServiceParams{
-		Config:              nil,
-		Debug:               false,
-		JWTService:          &jwt.Service{},
-		Logger:              logger,
-		RegistrationService: mockRegistrationService,
-		ResponseWriter:      mockResponseWriter,
-		UserService:         mockUserService,
-	}
-
-	handler, err := NewHandler(params)
-
-	// The webauthn library requires RPOrigins to be non-empty
-	assert.Error(t, err)
-	assert.Nil(t, handler)
-}
-
-func TestNewHandler_EmptyConfig(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, os.Stderr)
-
-	mockUserService := new(MockUserService)
-	mockRegistrationService := new(MockRegistrationService)
-	mockResponseWriter := new(MockResponseWriter)
-
-	config := &Config{
-		RPDisplayName: "",
-		RPID:          "",
-		RPOrigins:     []string{},
-	}
-
-	params := ServiceParams{
-		Config:              config,
-		Debug:               false,
-		JWTService:          &jwt.Service{},
-		Logger:              logger,
-		RegistrationService: mockRegistrationService,
-		ResponseWriter:      mockResponseWriter,
-		UserService:         mockUserService,
-	}
-
-	handler, err := NewHandler(params)
-
-	// The webauthn library requires RPOrigins to be non-empty
-	assert.Error(t, err)
-	assert.Nil(t, handler)
-}
-
-// Test BeginRegistration
-
-func TestBeginRegistration_Success_NewUser(t *testing.T) {
-	handler, mockUserService, mockRegistrationService, _, mockResponseWriter := createTestHandler(t)
-
-	username := "test@example.com"
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
-	req := httptest.NewRequest(http.MethodPost, "/register/begin", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
+	username := "alice@example.com"
 	userID := util.NewID([]byte(username))
-
-	mockUserService.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
-	mockRegistrationService.On("Create", mock.Anything, mock.AnythingOfType("*entities.Registration")).Return(nil)
-	mockResponseWriter.On("Write", w, req, http.StatusOK, mock.Anything).Return()
-
-	handler.BeginRegistration(w, req)
-
-	mockUserService.AssertExpectations(t)
-	mockRegistrationService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
-}
-
-func TestBeginRegistration_UserAlreadyExists(t *testing.T) {
-	handler, mockUserService, _, _, mockResponseWriter := createTestHandler(t)
-
-	username := "existing@example.com"
-	existingUser := createTestUser(username)
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
-	req := httptest.NewRequest(http.MethodPost, "/register/begin", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	body, _ := json.Marshal(map[string]string{"username": username})
+	req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
-	mockUserService.On("Get", mock.Anything, existingUser.ID).Return(existingUser, nil)
-	// The implementation calls writeConflictError which calls Write with 409 status
-	mockResponseWriter.On("Write", w, req, http.StatusConflict, mock.MatchedBy(func(resp response.WebServiceResponse) bool {
-		return resp.Code == http.StatusConflict && resp.Error == ErrUserAlreadyExists.Error() && !resp.Success
-	})).Return()
+	h.users.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
+	h.sdk.On("BeginRegistration", mock.Anything, mock.AnythingOfType("*quicbaas.WebAuthnUser")).
+		Return(&quicbaassdk.FIDO2BeginRegistrationResponse{SessionID: "sess", OptionsJSON: `{"challenge":"test"}`}, nil)
+	h.regs.On("Create", mock.Anything, mock.AnythingOfType("*entities.Registration")).Return(nil)
+	h.writer.On("Write", w, req, http.StatusOK, mock.Anything).Return()
 
-	handler.BeginRegistration(w, req)
+	h.handler.BeginRegistration(w, req)
 
-	mockUserService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
+	h.users.AssertExpectations(t)
+	h.sdk.AssertExpectations(t)
+	h.regs.AssertExpectations(t)
+	h.writer.AssertExpectations(t)
 }
 
 func TestBeginRegistration_InvalidJSON(t *testing.T) {
-	handler, _, _, _, mockResponseWriter := createTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodPost, "/register/begin", bytes.NewReader([]byte("invalid json")))
-	req.Header.Set("Content-Type", "application/json")
+	h := newHarness(t)
+	req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader([]byte("not json")))
 	w := httptest.NewRecorder()
-
-	// Handler returns Error400 with ErrInvalidRequestBody on JSON decode error
-	mockResponseWriter.On("Error400", w, req, ErrInvalidRequestBody).Return()
-
-	handler.BeginRegistration(w, req)
-
-	mockResponseWriter.AssertExpectations(t)
+	h.writer.On("Error400", w, req, ErrInvalidRequestBody).Return()
+	h.handler.BeginRegistration(w, req)
+	h.writer.AssertExpectations(t)
 }
 
-func TestBeginRegistration_UserServiceError(t *testing.T) {
-	handler, mockUserService, _, _, mockResponseWriter := createTestHandler(t)
-
-	username := "test@example.com"
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
-	req := httptest.NewRequest(http.MethodPost, "/register/begin", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+func TestBeginRegistration_MissingUsername(t *testing.T) {
+	h := newHarness(t)
+	body, _ := json.Marshal(map[string]string{"username": ""})
+	req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
 	w := httptest.NewRecorder()
+	h.writer.On("Error400", w, req, ErrUsernameRequired).Return()
+	h.handler.BeginRegistration(w, req)
+	h.writer.AssertExpectations(t)
+}
 
+func TestBeginRegistration_UserAlreadyRegistered(t *testing.T) {
+	h := newHarness(t)
+	username := "dup@example.com"
 	userID := util.NewID([]byte(username))
-	testErr := errors.New("database error")
+	body, _ := json.Marshal(map[string]string{"username": username})
+	req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.users.On("Get", mock.Anything, userID).Return(&entities.User{ID: userID, Email: username}, nil)
+	h.writer.On("Write", w, req, http.StatusConflict, mock.MatchedBy(func(resp response.WebServiceResponse) bool {
+		return resp.Code == http.StatusConflict && resp.Error == ErrUserAlreadyExists.Error() && !resp.Success
+	})).Return()
+	h.handler.BeginRegistration(w, req)
+	h.users.AssertExpectations(t)
+	h.writer.AssertExpectations(t)
+}
 
-	mockUserService.On("Get", mock.Anything, userID).Return(nil, testErr)
-	mockResponseWriter.On("Error400", w, req, testErr).Return()
-
-	handler.BeginRegistration(w, req)
-
-	mockUserService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
+func TestBeginRegistration_SDKError(t *testing.T) {
+	h := newHarness(t)
+	username := "sdkerr@example.com"
+	userID := util.NewID([]byte(username))
+	body, _ := json.Marshal(map[string]string{"username": username})
+	req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	sdkErr := errors.New("upstream failed")
+	h.users.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
+	h.sdk.On("BeginRegistration", mock.Anything, mock.Anything).Return(nil, sdkErr)
+	h.writer.On("Error500", w, req, sdkErr).Return()
+	h.handler.BeginRegistration(w, req)
+	h.sdk.AssertExpectations(t)
+	h.writer.AssertExpectations(t)
 }
 
 func TestBeginRegistration_RegistrationServiceError(t *testing.T) {
-	handler, mockUserService, mockRegistrationService, _, mockResponseWriter := createTestHandler(t)
-
-	username := "test@example.com"
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
-	req := httptest.NewRequest(http.MethodPost, "/register/begin", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
+	h := newHarness(t)
+	username := "regsave@example.com"
 	userID := util.NewID([]byte(username))
-	testErr := errors.New("registration save error")
-
-	mockUserService.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
-	mockRegistrationService.On("Create", mock.Anything, mock.AnythingOfType("*entities.Registration")).Return(testErr)
-	mockResponseWriter.On("Error500", w, req, testErr).Return()
-
-	handler.BeginRegistration(w, req)
-
-	mockUserService.AssertExpectations(t)
-	mockRegistrationService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
-}
-
-// Test FinishRegistration
-
-func TestFinishRegistration_MissingUserIDHeader(t *testing.T) {
-	handler, _, _, _, mockResponseWriter := createTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodPost, "/register/finish", nil)
+	body, _ := json.Marshal(map[string]string{"username": username})
+	req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
 	w := httptest.NewRecorder()
-
-	mockResponseWriter.On("Error400", w, req, ErrInvalidUserIDHeader).Return()
-
-	handler.FinishRegistration(w, req)
-
-	mockResponseWriter.AssertExpectations(t)
+	saveErr := errors.New("create failed")
+	h.users.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
+	h.sdk.On("BeginRegistration", mock.Anything, mock.Anything).
+		Return(&quicbaassdk.FIDO2BeginRegistrationResponse{SessionID: "sess", OptionsJSON: `{"challenge":"x"}`}, nil)
+	h.regs.On("Create", mock.Anything, mock.Anything).Return(saveErr)
+	h.writer.On("Error500", w, req, saveErr).Return()
+	h.handler.BeginRegistration(w, req)
+	h.regs.AssertExpectations(t)
+	h.writer.AssertExpectations(t)
 }
 
-func TestFinishRegistration_InvalidUserIDHeader(t *testing.T) {
-	handler, _, _, _, mockResponseWriter := createTestHandler(t)
+// =============================================================================
+// FinishRegistration
+// =============================================================================
 
-	req := httptest.NewRequest(http.MethodPost, "/register/finish", nil)
-	req.Header.Set("X-User-Id", "invalid base64!!!!")
+func TestFinishRegistration_MissingHeader(t *testing.T) {
+	h := newHarness(t)
+	req := httptest.NewRequest(http.MethodPost, "/registration/finish", nil)
 	w := httptest.NewRecorder()
-
-	mockResponseWriter.On("Error400", w, req, mock.Anything).Return()
-
-	handler.FinishRegistration(w, req)
-
-	mockResponseWriter.AssertExpectations(t)
+	h.writer.On("Error400", w, req, ErrInvalidUserIDHeader).Return()
+	h.handler.FinishRegistration(w, req)
+	h.writer.AssertExpectations(t)
 }
 
-func TestFinishRegistration_InvalidUserIDFormat(t *testing.T) {
-	handler, _, _, _, mockResponseWriter := createTestHandler(t)
-
-	invalidUserID := base64.RawURLEncoding.EncodeToString([]byte("not-a-number"))
-	req := httptest.NewRequest(http.MethodPost, "/register/finish", nil)
-	req.Header.Set("X-User-Id", invalidUserID)
+func TestFinishRegistration_BadBase64Header(t *testing.T) {
+	h := newHarness(t)
+	req := httptest.NewRequest(http.MethodPost, "/registration/finish", nil)
+	req.Header.Set("X-User-Id", "not base64!!!")
 	w := httptest.NewRecorder()
-
-	mockResponseWriter.On("Error400", w, req, mock.Anything).Return()
-
-	handler.FinishRegistration(w, req)
-
-	mockResponseWriter.AssertExpectations(t)
+	h.writer.On("Error400", w, req, mock.Anything).Return()
+	h.handler.FinishRegistration(w, req)
+	h.writer.AssertExpectations(t)
 }
 
-func TestFinishRegistration_RegistrationNotFound(t *testing.T) {
-	handler, _, mockRegistrationService, _, mockResponseWriter := createTestHandler(t)
-
-	userID := uint64(12345)
-	encodedUserID := base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatUint(userID, 10)))
-
-	req := httptest.NewRequest(http.MethodPost, "/register/finish", nil)
-	req.Header.Set("X-User-Id", encodedUserID)
+func TestFinishRegistration_RegistrationLookupFails(t *testing.T) {
+	h := newHarness(t)
+	userID := uint64(424242)
+	encoded := base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatUint(userID, 10)))
+	req := httptest.NewRequest(http.MethodPost, "/registration/finish", nil)
+	req.Header.Set("X-User-Id", encoded)
 	w := httptest.NewRecorder()
-
-	testErr := datastore.ErrRecordNotFound
-
-	mockRegistrationService.On("Get", mock.Anything, mock.Anything, userID).Return(nil, testErr)
-	mockResponseWriter.On("Error404", w, req, testErr).Return()
-
-	handler.FinishRegistration(w, req)
-
-	mockRegistrationService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
+	h.regs.On("Get", mock.Anything, mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
+	h.writer.On("Error404", w, req, datastore.ErrRecordNotFound).Return()
+	h.handler.FinishRegistration(w, req)
+	h.regs.AssertExpectations(t)
+	h.writer.AssertExpectations(t)
 }
 
-// Test BeginLogin
+func TestFinishRegistration_InvalidBody(t *testing.T) {
+	h := newHarness(t)
+	userID := uint64(101)
+	encoded := base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatUint(userID, 10)))
+	req := httptest.NewRequest(http.MethodPost, "/registration/finish", bytes.NewReader([]byte("nope")))
+	req.Header.Set("X-User-Id", encoded)
+	w := httptest.NewRecorder()
+	h.regs.On("Get", mock.Anything, mock.Anything, userID).
+		Return(&entities.Registration{ID: userID, Email: "x@example.com"}, nil)
+	h.writer.On("Error400", w, req, ErrInvalidRequestBody).Return()
+	h.handler.FinishRegistration(w, req)
+	h.writer.AssertExpectations(t)
+}
+
+func TestFinishRegistration_SDKError(t *testing.T) {
+	h := newHarness(t)
+	userID := uint64(202)
+	encoded := base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatUint(userID, 10)))
+	body, _ := json.Marshal(quicbaassdk.FIDO2FinishRegistrationRequest{SessionID: "sess", AttestationJSON: `{"id":"x"}`})
+	req := httptest.NewRequest(http.MethodPost, "/registration/finish", bytes.NewReader(body))
+	req.Header.Set("X-User-Id", encoded)
+	w := httptest.NewRecorder()
+	sdkErr := errors.New("attestation invalid")
+	h.regs.On("Get", mock.Anything, mock.Anything, userID).
+		Return(&entities.Registration{ID: userID, Email: "y@example.com"}, nil)
+	h.sdk.On("FinishRegistration", mock.Anything, mock.Anything, mock.Anything).Return(nil, sdkErr)
+	h.writer.On("Error400", w, req, sdkErr).Return()
+	h.handler.FinishRegistration(w, req)
+	h.sdk.AssertExpectations(t)
+	h.writer.AssertExpectations(t)
+}
+
+// =============================================================================
+// BeginLogin
+// =============================================================================
 
 func TestBeginLogin_Success(t *testing.T) {
-	handler, mockUserService, _, _, mockResponseWriter := createTestHandler(t)
-
-	username := "test@example.com"
-	user := createTestUser(username)
-
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
+	h := newHarness(t)
+	username := "bob@example.com"
+	user := entities.NewUser(username)
+	body, _ := json.Marshal(map[string]string{"username": username})
 	req := httptest.NewRequest(http.MethodPost, "/login/begin", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-
-	mockUserService.On("Get", mock.Anything, user.ID).Return(user, nil)
-	mockUserService.On("Save", mock.Anything, mock.AnythingOfType("*entities.User")).Return(nil)
-	mockResponseWriter.On("Write", w, req, http.StatusOK, mock.Anything).Return()
-
-	handler.BeginLogin(w, req)
-
-	mockUserService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
-	assert.Equal(t, fmt.Sprintf("%d", user.ID), w.Header().Get("X-User-ID"))
+	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
+	h.sdk.On("BeginLogin", mock.Anything, mock.AnythingOfType("*quicbaas.WebAuthnUser")).
+		Return(&quicbaassdk.FIDO2BeginAuthenticationResponse{SessionID: "sess", OptionsJSON: `{"challenge":"auth"}`}, nil)
+	h.writer.On("Write", w, req, http.StatusOK, mock.Anything).Return()
+	h.handler.BeginLogin(w, req)
+	h.users.AssertExpectations(t)
+	h.sdk.AssertExpectations(t)
+	h.writer.AssertExpectations(t)
+	assert.Equal(t, strconv.FormatUint(user.ID, 10), w.Header().Get("X-User-ID"))
 }
 
 func TestBeginLogin_UserNotFound(t *testing.T) {
-	handler, mockUserService, _, _, mockResponseWriter := createTestHandler(t)
-
-	username := "nonexistent@example.com"
+	h := newHarness(t)
+	username := "ghost@example.com"
 	userID := util.NewID([]byte(username))
-
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
+	body, _ := json.Marshal(map[string]string{"username": username})
 	req := httptest.NewRequest(http.MethodPost, "/login/begin", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-
-	mockUserService.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
-	mockResponseWriter.On("Error400", w, req, ErrInvalidUserID).Return()
-
-	handler.BeginLogin(w, req)
-
-	mockUserService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
+	h.users.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
+	h.writer.On("Error400", w, req, ErrInvalidUserID).Return()
+	h.handler.BeginLogin(w, req)
+	h.users.AssertExpectations(t)
+	h.writer.AssertExpectations(t)
 }
 
-func TestBeginLogin_UserServiceError(t *testing.T) {
-	handler, mockUserService, _, _, mockResponseWriter := createTestHandler(t)
-
-	username := "test@example.com"
-	userID := util.NewID([]byte(username))
-
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
-	req := httptest.NewRequest(http.MethodPost, "/login/begin", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+func TestBeginLogin_InvalidBody(t *testing.T) {
+	h := newHarness(t)
+	req := httptest.NewRequest(http.MethodPost, "/login/begin", bytes.NewReader([]byte("{")))
 	w := httptest.NewRecorder()
-
-	testErr := errors.New("database error")
-
-	mockUserService.On("Get", mock.Anything, userID).Return(nil, testErr)
-	mockResponseWriter.On("Error400", w, req, testErr).Return()
-
-	handler.BeginLogin(w, req)
-
-	mockUserService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
+	h.writer.On("Error400", w, req, ErrInvalidUserIDHeader).Return()
+	h.handler.BeginLogin(w, req)
+	h.writer.AssertExpectations(t)
 }
 
-func TestBeginLogin_SaveError(t *testing.T) {
-	handler, mockUserService, _, _, mockResponseWriter := createTestHandler(t)
-
-	username := "test@example.com"
-	user := createTestUser(username)
-
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
+func TestBeginLogin_SDKError(t *testing.T) {
+	h := newHarness(t)
+	username := "fail@example.com"
+	user := entities.NewUser(username)
+	body, _ := json.Marshal(map[string]string{"username": username})
 	req := httptest.NewRequest(http.MethodPost, "/login/begin", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-
-	testErr := errors.New("save error")
-
-	mockUserService.On("Get", mock.Anything, user.ID).Return(user, nil)
-	mockUserService.On("Save", mock.Anything, mock.AnythingOfType("*entities.User")).Return(testErr)
-	mockResponseWriter.On("Error500", w, req, testErr).Return()
-
-	handler.BeginLogin(w, req)
-
-	mockUserService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
+	sdkErr := errors.New("upstream down")
+	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
+	h.sdk.On("BeginLogin", mock.Anything, mock.Anything).Return(nil, sdkErr)
+	h.writer.On("Error500", w, req, sdkErr).Return()
+	h.handler.BeginLogin(w, req)
+	h.sdk.AssertExpectations(t)
+	h.writer.AssertExpectations(t)
 }
 
-// Test FinishLogin
+// =============================================================================
+// FinishLogin
+// =============================================================================
 
-func TestFinishLogin_InvalidUserID(t *testing.T) {
-	handler, _, _, _, mockResponseWriter := createTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader([]byte("invalid")))
+func TestFinishLogin_Success_SDKToken(t *testing.T) {
+	h := newHarness(t)
+	username := "ok@example.com"
+	user := entities.NewUser(username)
+	body, _ := json.Marshal(quicbaassdk.FIDO2FinishAuthenticationRequest{SessionID: "sess", Username: username, AssertionJSON: `{"id":"x"}`})
+	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader(body))
+	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
 	w := httptest.NewRecorder()
-
-	mockResponseWriter.On("Error400", w, req, ErrInvalidUserIDHeader).Return()
-
-	handler.FinishLogin(w, req)
-
-	mockResponseWriter.AssertExpectations(t)
+	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
+	h.sdk.On("FinishLogin", mock.Anything, mock.Anything, mock.Anything).
+		Return(&quicbaassdk.WebAuthnSession{Token: "JWT.TOKEN"}, nil)
+	h.writer.On("Success200", w, req, "JWT.TOKEN").Return()
+	h.handler.FinishLogin(w, req)
+	h.sdk.AssertExpectations(t)
+	h.writer.AssertExpectations(t)
 }
 
 func TestFinishLogin_UserNotFound(t *testing.T) {
-	handler, mockUserService, _, _, mockResponseWriter := createTestHandler(t)
-
-	username := "test@example.com"
+	h := newHarness(t)
+	username := "lost@example.com"
 	userID := util.NewID([]byte(username))
-
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
+	body, _ := json.Marshal(map[string]string{"username": username})
 	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-
-	mockUserService.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
-	mockResponseWriter.On("Error404", w, req, datastore.ErrRecordNotFound).Return()
-
-	handler.FinishLogin(w, req)
-
-	mockUserService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
+	h.users.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
+	h.writer.On("Error404", w, req, datastore.ErrRecordNotFound).Return()
+	h.handler.FinishLogin(w, req)
+	h.users.AssertExpectations(t)
+	h.writer.AssertExpectations(t)
 }
 
-func TestFinishLogin_InvalidSessionData(t *testing.T) {
-	handler, mockUserService, _, _, mockResponseWriter := createTestHandler(t)
-
-	username := "test@example.com"
-	user := createTestUser(username)
-	user.SessionData = []byte("invalid json")
-
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
+func TestFinishLogin_SDKError(t *testing.T) {
+	h := newHarness(t)
+	username := "deny@example.com"
+	user := entities.NewUser(username)
+	body, _ := json.Marshal(quicbaassdk.FIDO2FinishAuthenticationRequest{SessionID: "sess", AssertionJSON: `{"id":"x"}`})
 	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
 	w := httptest.NewRecorder()
-
-	mockUserService.On("Get", mock.Anything, user.ID).Return(user, nil)
-	mockResponseWriter.On("Error400", w, req, mock.Anything).Return()
-
-	handler.FinishLogin(w, req)
-
-	mockUserService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
+	sdkErr := errors.New("assertion bad")
+	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
+	h.sdk.On("FinishLogin", mock.Anything, mock.Anything, mock.Anything).Return(nil, sdkErr)
+	h.writer.On("Error400", w, req, sdkErr).Return()
+	h.handler.FinishLogin(w, req)
+	h.sdk.AssertExpectations(t)
+	h.writer.AssertExpectations(t)
 }
 
-// Test Verify
+// =============================================================================
+// RegistrationStatus
+// =============================================================================
 
-func TestVerify_Success(t *testing.T) {
-	handler, mockUserService, _, _, _ := createTestHandler(t)
-
-	username := "test@example.com"
-	user := createTestUser(username)
-
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
-	req := httptest.NewRequest(http.MethodGet, "/verify", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+func TestRegistrationStatus_Registered(t *testing.T) {
+	h := newHarness(t)
+	user := entities.NewUser("yes@example.com")
+	req := httptest.NewRequest(http.MethodGet, "/registration/status", nil)
+	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
 	w := httptest.NewRecorder()
-
-	nextCalled := false
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		nextCalled = true
-	})
-
-	mockUserService.On("Get", mock.Anything, user.ID).Return(user, nil)
-
-	handler.Verify(w, req, next)
-
-	mockUserService.AssertExpectations(t)
-	assert.True(t, nextCalled)
+	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
+	h.writer.On("Write", w, req, http.StatusOK, "registered").Return()
+	h.handler.RegistrationStatus(w, req)
+	h.users.AssertExpectations(t)
+	h.writer.AssertExpectations(t)
 }
-
-func TestVerify_InvalidUserID(t *testing.T) {
-	handler, _, _, _, mockResponseWriter := createTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/verify", bytes.NewReader([]byte("invalid")))
-	w := httptest.NewRecorder()
-
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("next should not be called")
-	})
-
-	mockResponseWriter.On("Error400", w, req, ErrInvalidUserIDHeader).Return()
-
-	handler.Verify(w, req, next)
-
-	mockResponseWriter.AssertExpectations(t)
-}
-
-func TestVerify_UserNotFound(t *testing.T) {
-	handler, mockUserService, _, _, mockResponseWriter := createTestHandler(t)
-
-	username := "test@example.com"
-	userID := util.NewID([]byte(username))
-
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
-	req := httptest.NewRequest(http.MethodGet, "/verify", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("next should not be called")
-	})
-
-	mockUserService.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
-	mockResponseWriter.On("Error404", w, req, datastore.ErrRecordNotFound).Return()
-
-	handler.Verify(w, req, next)
-
-	mockUserService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
-}
-
-func TestVerify_InvalidSessionData(t *testing.T) {
-	handler, mockUserService, _, _, mockResponseWriter := createTestHandler(t)
-
-	username := "test@example.com"
-	user := createTestUser(username)
-	user.SessionData = []byte("invalid json")
-
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
-	req := httptest.NewRequest(http.MethodGet, "/verify", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("next should not be called")
-	})
-
-	mockUserService.On("Get", mock.Anything, user.ID).Return(user, nil)
-	mockResponseWriter.On("Error400", w, req, mock.Anything).Return()
-
-	handler.Verify(w, req, next)
-
-	mockUserService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
-}
-
-func TestVerify_ExpiredSession(t *testing.T) {
-	handler, mockUserService, _, _, _ := createTestHandler(t)
-
-	username := "test@example.com"
-	user := createExpiredSessionUser(username)
-
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
-	req := httptest.NewRequest(http.MethodGet, "/verify", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("next should not be called")
-	})
-
-	mockUserService.On("Get", mock.Anything, user.ID).Return(user, nil)
-
-	handler.Verify(w, req, next)
-
-	mockUserService.AssertExpectations(t)
-	assert.Equal(t, http.StatusSeeOther, w.Code)
-}
-
-// Test RegistrationStatus
 
 func TestRegistrationStatus_NotRegistered_NoHeader(t *testing.T) {
-	handler, _, _, _, mockResponseWriter := createTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/registration/status", bytes.NewReader([]byte("invalid")))
+	h := newHarness(t)
+	req := httptest.NewRequest(http.MethodGet, "/registration/status", bytes.NewReader([]byte("garbage")))
 	w := httptest.NewRecorder()
-
-	mockResponseWriter.On("Write", w, req, http.StatusOK, "not_registered").Return()
-
-	handler.RegistrationStatus(w, req)
-
-	mockResponseWriter.AssertExpectations(t)
-}
-
-func TestRegistrationStatus_NotRegistered_ZeroUserID(t *testing.T) {
-	handler, _, _, _, mockResponseWriter := createTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/registration/status", nil)
-	req.Header.Set("X-User-Id", "0")
-	w := httptest.NewRecorder()
-
-	mockResponseWriter.On("Write", w, req, http.StatusOK, "not_registered").Return()
-
-	handler.RegistrationStatus(w, req)
-
-	mockResponseWriter.AssertExpectations(t)
+	h.writer.On("Write", w, req, http.StatusOK, "not_registered").Return()
+	h.handler.RegistrationStatus(w, req)
+	h.writer.AssertExpectations(t)
 }
 
 func TestRegistrationStatus_NotRegistered_UserNotFound(t *testing.T) {
-	handler, mockUserService, _, _, mockResponseWriter := createTestHandler(t)
-
-	userID := uint64(12345)
+	h := newHarness(t)
+	userID := uint64(99)
 	req := httptest.NewRequest(http.MethodGet, "/registration/status", nil)
 	req.Header.Set("X-User-Id", strconv.FormatUint(userID, 10))
 	w := httptest.NewRecorder()
-
-	mockUserService.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
-	mockResponseWriter.On("Write", w, req, http.StatusOK, "not_registered").Return()
-
-	handler.RegistrationStatus(w, req)
-
-	mockUserService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
+	h.users.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
+	h.writer.On("Write", w, req, http.StatusOK, "not_registered").Return()
+	h.handler.RegistrationStatus(w, req)
+	h.users.AssertExpectations(t)
+	h.writer.AssertExpectations(t)
 }
 
-func TestRegistrationStatus_Registered(t *testing.T) {
-	handler, mockUserService, _, _, mockResponseWriter := createTestHandler(t)
-
-	username := "test@example.com"
-	user := createTestUser(username)
-
+func TestRegistrationStatus_ZeroUserID(t *testing.T) {
+	h := newHarness(t)
 	req := httptest.NewRequest(http.MethodGet, "/registration/status", nil)
-	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
+	req.Header.Set("X-User-Id", "0")
 	w := httptest.NewRecorder()
-
-	mockUserService.On("Get", mock.Anything, user.ID).Return(user, nil)
-	mockResponseWriter.On("Write", w, req, http.StatusOK, "registered").Return()
-
-	handler.RegistrationStatus(w, req)
-
-	mockUserService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
+	h.writer.On("Write", w, req, http.StatusOK, "not_registered").Return()
+	h.handler.RegistrationStatus(w, req)
+	h.writer.AssertExpectations(t)
 }
 
-func TestRegistrationStatus_InvalidSessionData(t *testing.T) {
-	handler, mockUserService, _, _, mockResponseWriter := createTestHandler(t)
+// =============================================================================
+// AuthMiddleware
+// =============================================================================
 
-	username := "test@example.com"
-	user := createTestUser(username)
-	user.SessionData = []byte("invalid json")
-
-	req := httptest.NewRequest(http.MethodGet, "/registration/status", nil)
-	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
+func TestVerify_PassesThrough(t *testing.T) {
+	h := newHarness(t)
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
 	w := httptest.NewRecorder()
-
-	mockUserService.On("Get", mock.Anything, user.ID).Return(user, nil)
-	mockResponseWriter.On("Error400", w, req, mock.Anything).Return()
-
-	handler.RegistrationStatus(w, req)
-
-	mockUserService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true })
+	h.handler.Verify(w, req, next)
+	assert.True(t, called)
 }
 
-func TestRegistrationStatus_ExpiredSession(t *testing.T) {
-	handler, mockUserService, _, _, _ := createTestHandler(t)
-
-	username := "test@example.com"
-	user := createExpiredSessionUser(username)
-
-	req := httptest.NewRequest(http.MethodGet, "/registration/status", nil)
-	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
+func TestRefreshToken_Unsupported(t *testing.T) {
+	h := newHarness(t)
+	req := httptest.NewRequest(http.MethodPost, "/refresh", nil)
 	w := httptest.NewRecorder()
-
-	mockUserService.On("Get", mock.Anything, user.ID).Return(user, nil)
-
-	handler.RegistrationStatus(w, req)
-
-	mockUserService.AssertExpectations(t)
-	assert.Equal(t, http.StatusSeeOther, w.Code)
+	h.writer.On("Error400", w, req, ErrRefreshUnsupported).Return()
+	h.handler.RefreshToken(w, req)
+	h.writer.AssertExpectations(t)
 }
 
-// Test getUserID helper function
+// =============================================================================
+// Helpers + config
+// =============================================================================
 
-func TestGetUserID_FromHeader_ValidNumber(t *testing.T) {
-	userID := uint64(12345)
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.Header.Set("X-User-Id", strconv.FormatUint(userID, 10))
+func TestIsConfigured(t *testing.T) {
+	assert.False(t, IsConfigured(nil))
+	assert.False(t, IsConfigured(&Config{}))
+	assert.False(t, IsConfigured(&Config{RPID: "x"}))
+	assert.False(t, IsConfigured(&Config{RPOrigins: []string{"y"}}))
+	assert.True(t, IsConfigured(&Config{RPID: "x", RPOrigins: []string{"y"}}))
+}
 
-	result, err := getUserID(req)
-
+func TestGetUserIDAndEmail_FromHeaderNumeric(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-User-Id", "12345")
+	id, email, err := getUserIDAndEmail(req)
 	assert.NoError(t, err)
-	assert.Equal(t, userID, result)
+	assert.Equal(t, uint64(12345), id)
+	assert.Empty(t, email)
 }
 
-func TestGetUserID_FromHeader_InvalidNumber_ReturnsError(t *testing.T) {
-	username := "test@example.com"
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.Header.Set("X-User-Id", username)
-
-	_, err := getUserID(req)
-
-	// The code has a bug - it checks err == strconv.ErrSyntax but ParseUint
-	// returns *strconv.NumError so the comparison fails
-	assert.Error(t, err)
-}
-func TestGetUserID_FromBody_ValidEmail(t *testing.T) {
-	username := "test@example.com"
-	expectedID := util.NewID([]byte(username))
-
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
-	req := httptest.NewRequest(http.MethodPost, "/test", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	result, err := getUserID(req)
-
+func TestGetUserIDAndEmail_FromBody(t *testing.T) {
+	body, _ := json.Marshal(map[string]string{"username": "z@example.com"})
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	id, email, err := getUserIDAndEmail(req)
 	assert.NoError(t, err)
-	assert.Equal(t, expectedID, result)
+	assert.Equal(t, util.NewID([]byte("z@example.com")), id)
+	assert.Equal(t, "z@example.com", email)
 }
 
-func TestGetUserID_FromBody_InvalidJSON(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/test", bytes.NewReader([]byte("invalid json")))
+func TestGetUserIDAndEmail_NoHeaderNoBody(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	_, _, err := getUserIDAndEmail(req)
+	assert.ErrorIs(t, err, ErrInvalidUserIDHeader)
+}
 
-	_, err := getUserID(req)
-
+func TestGetUserIDAndEmail_ParseUintRangeError(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-User-Id", "99999999999999999999999999999999999999")
+	_, _, err := getUserIDAndEmail(req)
 	assert.Error(t, err)
-	assert.Equal(t, ErrInvalidUserIDHeader, err)
 }
 
-func TestGetUserID_NoHeaderNoBody(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-
-	_, err := getUserID(req)
-
-	assert.Error(t, err)
-	assert.Equal(t, ErrInvalidUserIDHeader, err)
+func TestDecodeXUserIDHeader_Empty(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	_, err := decodeXUserIDHeader(req)
+	assert.ErrorIs(t, err, ErrInvalidUserIDHeader)
 }
 
-// Test error constants
+func TestDecodeXUserIDHeader_OK(t *testing.T) {
+	encoded := base64.RawURLEncoding.EncodeToString([]byte("4242"))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-User-Id", encoded)
+	id, err := decodeXUserIDHeader(req)
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(4242), id)
+}
+
+func TestDecodeFinishRegistrationBody_Success(t *testing.T) {
+	body, _ := json.Marshal(quicbaassdk.FIDO2FinishRegistrationRequest{
+		SessionID:       "sess-1",
+		AttestationJSON: `{"id":"abc"}`,
+	})
+	out, err := decodeFinishRegistrationBody(bytes.NewReader(body))
+	require.NoError(t, err)
+	assert.Equal(t, "sess-1", out.SessionID)
+	assert.Equal(t, `{"id":"abc"}`, out.AttestationJSON)
+}
+
+func TestDecodeFinishRegistrationBody_Invalid(t *testing.T) {
+	_, err := decodeFinishRegistrationBody(bytes.NewReader([]byte("invalid")))
+	assert.ErrorIs(t, err, ErrInvalidRequestBody)
+}
+
+func TestDecodeFinishAuthenticationBody_Success(t *testing.T) {
+	body, _ := json.Marshal(quicbaassdk.FIDO2FinishAuthenticationRequest{
+		SessionID:     "sess-2",
+		AssertionJSON: `{"id":"z"}`,
+	})
+	out, err := decodeFinishAuthenticationBody(bytes.NewReader(body), "user@y")
+	require.NoError(t, err)
+	assert.Equal(t, "sess-2", out.SessionID)
+	assert.Equal(t, `{"id":"z"}`, out.AssertionJSON)
+	assert.Equal(t, "user@y", out.Username)
+}
+
+func TestDecodeFinishAuthenticationBody_Invalid(t *testing.T) {
+	_, err := decodeFinishAuthenticationBody(bytes.NewReader([]byte("nope")), "x")
+	assert.ErrorIs(t, err, ErrInvalidRequestBody)
+}
 
 func TestErrorConstants(t *testing.T) {
 	assert.Equal(t, "webauthn: invalid organization id", ErrInvalidOrganizationID.Error())
 	assert.Equal(t, "webauthn: user already registered", ErrUserAlreadyExists.Error())
 	assert.Equal(t, "webauthn: invalid user id header", ErrInvalidUserIDHeader.Error())
 	assert.Equal(t, "webauthn: invalid user", ErrInvalidUserID.Error())
+	assert.Equal(t, "webauthn: SDK WebAuthn client is required", ErrSDKClientRequired.Error())
+	assert.Equal(t, "webauthn: invalid relying-party configuration", ErrInvalidConfig.Error())
 }
 
-// Test Config struct
+func TestLoginRequest_JSONRoundtrip(t *testing.T) {
+	out, err := json.Marshal(LoginRequest{Email: "x@y.z"})
+	require.NoError(t, err)
+	assert.Contains(t, string(out), `"username":"x@y.z"`)
 
-func TestConfig_AllFields(t *testing.T) {
-	config := &Config{
-		RPDisplayName: "Test Display Name",
-		RPID:          "example.com",
-		RPOrigins:     []string{"https://example.com", "https://www.example.com"},
-	}
-
-	assert.Equal(t, "Test Display Name", config.RPDisplayName)
-	assert.Equal(t, "example.com", config.RPID)
-	assert.Len(t, config.RPOrigins, 2)
-	assert.Contains(t, config.RPOrigins, "https://example.com")
-	assert.Contains(t, config.RPOrigins, "https://www.example.com")
+	var lr LoginRequest
+	require.NoError(t, json.Unmarshal([]byte(`{"username":"foo@bar"}`), &lr))
+	assert.Equal(t, "foo@bar", lr.Email)
 }
 
-// Test ServiceParams struct
+// =============================================================================
+// Invitation + tenant orchestration coverage
+// =============================================================================
 
-func TestServiceParams_Complete(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, os.Stderr)
-	mockUserService := new(MockUserService)
-	mockRegistrationService := new(MockRegistrationService)
-	mockResponseWriter := new(MockResponseWriter)
+type mockInvitationService struct{ mock.Mock }
 
-	config := &Config{
-		RPDisplayName: "Test RP",
-		RPID:          "localhost",
-		RPOrigins:     []string{"http://localhost"},
+func (m *mockInvitationService) Create(ctx context.Context, req *service.CreateInvitationRequest) (*entities.Invitation, error) {
+	args := m.Called(ctx, req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
 	}
-
-	params := ServiceParams{
-		Config:              config,
-		Debug:               true,
-		JWTService:          &jwt.Service{},
-		Logger:              logger,
-		RegistrationService: mockRegistrationService,
-		ResponseWriter:      mockResponseWriter,
-		UserService:         mockUserService,
+	return args.Get(0).(*entities.Invitation), args.Error(1)
+}
+func (m *mockInvitationService) GetByToken(ctx context.Context, token string) (*entities.Invitation, error) {
+	args := m.Called(ctx, token)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
 	}
-
-	assert.NotNil(t, params.Config)
-	assert.True(t, params.Debug)
-	assert.NotNil(t, params.JWTService)
-	assert.NotNil(t, params.Logger)
-	assert.NotNil(t, params.RegistrationService)
-	assert.NotNil(t, params.ResponseWriter)
-	assert.NotNil(t, params.UserService)
+	return args.Get(0).(*entities.Invitation), args.Error(1)
+}
+func (m *mockInvitationService) GetByID(ctx context.Context, id uint64) (*entities.Invitation, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*entities.Invitation), args.Error(1)
+}
+func (m *mockInvitationService) Accept(ctx context.Context, token string, userID uint64) error {
+	return m.Called(ctx, token, userID).Error(0)
+}
+func (m *mockInvitationService) Revoke(ctx context.Context, id, revokerID uint64) error {
+	return m.Called(ctx, id, revokerID).Error(0)
+}
+func (m *mockInvitationService) ListByTenant(ctx context.Context, tenantID string) ([]*entities.Invitation, error) {
+	args := m.Called(ctx, tenantID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*entities.Invitation), args.Error(1)
+}
+func (m *mockInvitationService) ListPendingByTenant(ctx context.Context, tenantID string) ([]*entities.Invitation, error) {
+	args := m.Called(ctx, tenantID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*entities.Invitation), args.Error(1)
+}
+func (m *mockInvitationService) CleanupExpired(ctx context.Context) (int, error) {
+	args := m.Called(ctx)
+	return args.Int(0), args.Error(1)
+}
+func (m *mockInvitationService) Delete(ctx context.Context, id uint64) error {
+	return m.Called(ctx, id).Error(0)
 }
 
-// Test LoginRequest struct
+// withInvitations rewires the harness with a mock invitation service.
+func (h *harness) withInvitations(t *testing.T) *mockInvitationService {
+	t.Helper()
+	inv := new(mockInvitationService)
+	h.handler.invitationService = inv
+	return inv
+}
 
-func TestLoginRequest_JSONMarshaling(t *testing.T) {
-	req := LoginRequest{
-		Email: "test@example.com",
+func TestValidateInvitation_NoServiceConfigured(t *testing.T) {
+	h := newHarness(t)
+	// invitationService is nil by default
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/registration/begin", nil)
+	h.writer.On("Error500", w, r, ErrInvitationServiceNotConfigured).Return()
+	ok := h.handler.validateInvitation(w, r, "tok", "x@y")
+	assert.False(t, ok)
+	h.writer.AssertExpectations(t)
+}
+
+func TestValidateInvitation_LookupError_NotFound(t *testing.T) {
+	h := newHarness(t)
+	inv := h.withInvitations(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/registration/begin", nil)
+	inv.On("GetByToken", mock.Anything, "tok").
+		Return(nil, service.ErrInvitationNotFound{Token: "tok"})
+	h.writer.On("Error404", w, r, mock.Anything).Return()
+	assert.False(t, h.handler.validateInvitation(w, r, "tok", "x@y"))
+	h.writer.AssertExpectations(t)
+}
+
+func TestValidateInvitation_EmailMismatch(t *testing.T) {
+	h := newHarness(t)
+	inv := h.withInvitations(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/registration/begin", nil)
+	inv.On("GetByToken", mock.Anything, "tok").Return(&entities.Invitation{
+		Token: "tok", Email: "other@example.com", Status: entities.InvitationStatusPending,
+		ExpiresAt: futureTime(),
+	}, nil)
+	h.writer.On("Error400", w, r, ErrInvitationEmailMismatch).Return()
+	assert.False(t, h.handler.validateInvitation(w, r, "tok", "user@example.com"))
+	h.writer.AssertExpectations(t)
+}
+
+func TestValidateInvitation_AcceptedStatus(t *testing.T) {
+	h := newHarness(t)
+	inv := h.withInvitations(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/registration/begin", nil)
+	inv.On("GetByToken", mock.Anything, "tok").Return(&entities.Invitation{
+		Token: "tok", Email: "a@b", Status: entities.InvitationStatusAccepted,
+		ExpiresAt: futureTime(),
+	}, nil)
+	h.writer.On("Error400", w, r, ErrInvitationAlreadyAccepted).Return()
+	assert.False(t, h.handler.validateInvitation(w, r, "tok", "a@b"))
+	h.writer.AssertExpectations(t)
+}
+
+func TestValidateInvitation_Expired(t *testing.T) {
+	h := newHarness(t)
+	inv := h.withInvitations(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/registration/begin", nil)
+	inv.On("GetByToken", mock.Anything, "tok").Return(&entities.Invitation{
+		Token: "tok", Email: "a@b", Status: entities.InvitationStatusPending,
+		ExpiresAt: pastTime(),
+	}, nil)
+	h.writer.On("Error400", w, r, ErrInvitationExpired).Return()
+	assert.False(t, h.handler.validateInvitation(w, r, "tok", "a@b"))
+	h.writer.AssertExpectations(t)
+}
+
+func TestValidateInvitation_Pending_OK(t *testing.T) {
+	h := newHarness(t)
+	inv := h.withInvitations(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/registration/begin", nil)
+	inv.On("GetByToken", mock.Anything, "tok").Return(&entities.Invitation{
+		Token: "tok", Email: "a@b", Status: entities.InvitationStatusPending,
+		ExpiresAt: futureTime(),
+	}, nil)
+	assert.True(t, h.handler.validateInvitation(w, r, "tok", "a@b"))
+	h.writer.AssertNotCalled(t, "Error400", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// =============================================================================
+// IssueToken fallback coverage
+// =============================================================================
+
+type mockTenantUserService struct{ mock.Mock }
+
+func (m *mockTenantUserService) RegisterNewUser(ctx context.Context, user *entities.User) (*service.RegisterResult, error) {
+	args := m.Called(ctx, user)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
 	}
+	return args.Get(0).(*service.RegisterResult), args.Error(1)
+}
+func (m *mockTenantUserService) RegisterInvitedUser(ctx context.Context, user *entities.User, token string) (*service.RegisterResult, error) {
+	args := m.Called(ctx, user, token)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*service.RegisterResult), args.Error(1)
+}
+func (m *mockTenantUserService) GetUserTenant(ctx context.Context, userID uint64) (*tenantEntity, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*tenantEntity), args.Error(1)
+}
+func (m *mockTenantUserService) IsTenantOwner(ctx context.Context, userID uint64) (bool, error) {
+	args := m.Called(ctx, userID)
+	return args.Bool(0), args.Error(1)
+}
+func (m *mockTenantUserService) TransferOwnership(ctx context.Context, currentOwnerID, newOwnerID uint64) error {
+	return m.Called(ctx, currentOwnerID, newOwnerID).Error(0)
+}
+func (m *mockTenantUserService) IssueToken(ctx context.Context, user *entities.User) (string, error) {
+	args := m.Called(ctx, user)
+	return args.String(0), args.Error(1)
+}
+func (m *mockTenantUserService) SetIAMMirror(_ service.IAMUserMirror) {}
 
-	data, err := json.Marshal(req)
+func TestOrchestrateTenant_NoTenantService_SavesDirectly(t *testing.T) {
+	h := newHarness(t)
+	req := httptest.NewRequest(http.MethodPost, "/x", nil)
+	user := &entities.User{ID: 1, Email: "a@b"}
+	h.users.On("Save", mock.Anything, user).Return(nil)
+	id, err := h.handler.orchestrateTenant(req, user, "")
 	assert.NoError(t, err)
-
-	var decoded LoginRequest
-	err = json.Unmarshal(data, &decoded)
-	assert.NoError(t, err)
-	assert.Equal(t, "test@example.com", decoded.Email)
+	assert.Empty(t, id)
+	h.users.AssertExpectations(t)
 }
 
-func TestLoginRequest_JSONUnmarshaling(t *testing.T) {
-	jsonData := []byte(`{"username": "test@example.com"}`)
-
-	var req LoginRequest
-	err := json.Unmarshal(jsonData, &req)
-	assert.NoError(t, err)
-	assert.Equal(t, "test@example.com", req.Email)
+func TestOrchestrateTenant_NewUser_TenantCreated(t *testing.T) {
+	h := newHarness(t)
+	tus := new(mockTenantUserService)
+	h.handler.tenantUserService = tus
+	req := httptest.NewRequest(http.MethodPost, "/x", nil)
+	user := &entities.User{ID: 1, Email: "a@b"}
+	tus.On("RegisterNewUser", mock.Anything, user).Return(&service.RegisterResult{
+		User:   &entities.User{ID: 1, Email: "a@b", TenantID: "T-1"},
+		Tenant: &tenantEntity{ID: "T-1"},
+	}, nil)
+	id, err := h.handler.orchestrateTenant(req, user, "")
+	require.NoError(t, err)
+	assert.Equal(t, "T-1", id)
+	tus.AssertExpectations(t)
 }
 
-// Additional tests for higher coverage
-
-func TestFinishRegistration_SessionDataUnmarshalError(t *testing.T) {
-	handler, _, mockRegistrationService, _, mockResponseWriter := createTestHandler(t)
-
-	userID := uint64(12345)
-	encodedUserID := base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatUint(userID, 10)))
-
-	registration := &entities.Registration{
-		ID:          userID,
-		Email:       "test@example.com",
-		SessionData: []byte("invalid json"),
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/register/finish", nil)
-	req.Header.Set("X-User-Id", encodedUserID)
-	w := httptest.NewRecorder()
-
-	mockRegistrationService.On("Get", mock.Anything, mock.Anything, userID).Return(registration, nil)
-	mockResponseWriter.On("Error500", w, req, mock.Anything).Return()
-
-	handler.FinishRegistration(w, req)
-
-	mockRegistrationService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
+func TestOrchestrateTenant_InvitedUser_JoinsTenant(t *testing.T) {
+	h := newHarness(t)
+	tus := new(mockTenantUserService)
+	h.handler.tenantUserService = tus
+	req := httptest.NewRequest(http.MethodPost, "/x", nil)
+	user := &entities.User{ID: 1, Email: "a@b"}
+	tus.On("RegisterInvitedUser", mock.Anything, user, "tok").Return(&service.RegisterResult{
+		User:   &entities.User{ID: 1, Email: "a@b", TenantID: "T-2"},
+		Tenant: &tenantEntity{ID: "T-2"},
+	}, nil)
+	id, err := h.handler.orchestrateTenant(req, user, "tok")
+	require.NoError(t, err)
+	assert.Equal(t, "T-2", id)
+	tus.AssertExpectations(t)
 }
 
-func TestBeginRegistration_SessionJSONMarshalError(t *testing.T) {
-	// This test validates the happy path where BeginRegistration succeeds
-	// The json.Marshal of session should always work with valid SessionData
-	handler, mockUserService, mockRegistrationService, _, mockResponseWriter := createTestHandler(t)
-
-	username := "test2@example.com"
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
-	req := httptest.NewRequest(http.MethodPost, "/register/begin", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	userID := util.NewID([]byte(username))
-
-	mockUserService.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
-	mockRegistrationService.On("Create", mock.Anything, mock.AnythingOfType("*entities.Registration")).Return(nil)
-	mockResponseWriter.On("Write", w, req, http.StatusOK, mock.Anything).Return()
-
-	handler.BeginRegistration(w, req)
-
-	mockUserService.AssertExpectations(t)
-	mockRegistrationService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
-}
-
-func TestBeginLogin_InvalidUserIDFromBody(t *testing.T) {
-	handler, _, _, _, mockResponseWriter := createTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodPost, "/login/begin", bytes.NewReader([]byte("{invalid json")))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	mockResponseWriter.On("Error400", w, req, ErrInvalidUserIDHeader).Return()
-
-	handler.BeginLogin(w, req)
-
-	mockResponseWriter.AssertExpectations(t)
-}
-
-func TestFinishLogin_SaveError(t *testing.T) {
-	handler, mockUserService, _, _, mockResponseWriter := createTestHandler(t)
-
-	username := "test@example.com"
-	user := createTestUser(username)
-
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
-	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	mockUserService.On("Get", mock.Anything, user.ID).Return(user, nil)
-	// FinishLogin will fail trying to parse the credential response from the request,
-	// but we're testing the early error paths
-	mockResponseWriter.On("Error400", w, req, mock.Anything).Return()
-
-	handler.FinishLogin(w, req)
-
-	mockUserService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
-}
-
-func TestRegistrationStatus_UserServiceError(t *testing.T) {
-	handler, mockUserService, _, _, mockResponseWriter := createTestHandler(t)
-
-	userID := uint64(12345)
-	testErr := errors.New("service error")
-
-	req := httptest.NewRequest(http.MethodGet, "/registration/status", nil)
-	req.Header.Set("X-User-Id", strconv.FormatUint(userID, 10))
-	w := httptest.NewRecorder()
-
-	mockUserService.On("Get", mock.Anything, userID).Return(nil, testErr)
-	mockResponseWriter.On("Write", w, req, http.StatusOK, "not_registered").Return()
-
-	handler.RegistrationStatus(w, req)
-
-	mockUserService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
-}
-
-func TestGetUserID_ParseUintRangeError(t *testing.T) {
-	// Test with a number that's too large for uint64
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.Header.Set("X-User-Id", "99999999999999999999999999999999999999")
-
-	_, err := getUserID(req)
-
+func TestOrchestrateTenant_NewUser_PropagatesError(t *testing.T) {
+	h := newHarness(t)
+	tus := new(mockTenantUserService)
+	h.handler.tenantUserService = tus
+	req := httptest.NewRequest(http.MethodPost, "/x", nil)
+	user := &entities.User{ID: 1, Email: "a@b"}
+	wantErr := service.ErrTenantCreationFailed{Cause: errors.New("boom")}
+	tus.On("RegisterNewUser", mock.Anything, user).Return(nil, wantErr)
+	_, err := h.handler.orchestrateTenant(req, user, "")
 	assert.Error(t, err)
+	tus.AssertExpectations(t)
 }
 
-func TestBeginLogin_EmptyBody(t *testing.T) {
-	handler, _, _, _, mockResponseWriter := createTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodPost, "/login/begin", bytes.NewReader([]byte("")))
-	w := httptest.NewRecorder()
-
-	mockResponseWriter.On("Error400", w, req, ErrInvalidUserIDHeader).Return()
-
-	handler.BeginLogin(w, req)
-
-	mockResponseWriter.AssertExpectations(t)
+func TestIssueToken_PrefersTenantUserService(t *testing.T) {
+	h := newHarness(t)
+	tus := new(mockTenantUserService)
+	h.handler.tenantUserService = tus
+	req := httptest.NewRequest(http.MethodPost, "/x", nil)
+	user := &entities.User{ID: 1, Email: "a@b"}
+	tus.On("IssueToken", mock.Anything, user).Return("tenant-token", nil)
+	out, err := h.handler.issueToken(req, user)
+	require.NoError(t, err)
+	assert.Equal(t, "tenant-token", out)
 }
 
-// Edge case tests for better coverage
-
-func TestBeginRegistration_EmptyUsername(t *testing.T) {
-	handler, _, _, _, mockResponseWriter := createTestHandler(t)
-
-	requestBody := map[string]string{"username": ""}
-	body, _ := json.Marshal(requestBody)
-
-	req := httptest.NewRequest(http.MethodPost, "/register/begin", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	// The implementation now validates that username is required and returns ErrUsernameRequired
-	mockResponseWriter.On("Error400", w, req, ErrUsernameRequired).Return()
-
-	handler.BeginRegistration(w, req)
-
-	mockResponseWriter.AssertExpectations(t)
+func TestResolveTenantID_NilResult(t *testing.T) {
+	user := &entities.User{}
+	assert.Empty(t, resolveTenantID(user, nil))
 }
 
-func TestBeginLogin_WithCredentials(t *testing.T) {
-	handler, mockUserService, _, _, mockResponseWriter := createTestHandler(t)
-
-	username := "user-with-creds@example.com"
-	user := createTestUser(username)
-
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
-
-	req := httptest.NewRequest(http.MethodPost, "/login/begin", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	mockUserService.On("Get", mock.Anything, user.ID).Return(user, nil)
-	mockUserService.On("Save", mock.Anything, mock.AnythingOfType("*entities.User")).Return(nil)
-	mockResponseWriter.On("Write", w, req, http.StatusOK, mock.Anything).Return()
-
-	handler.BeginLogin(w, req)
-
-	mockUserService.AssertExpectations(t)
-	mockResponseWriter.AssertExpectations(t)
+func TestResolveTenantID_PopulatesUser(t *testing.T) {
+	user := &entities.User{}
+	updated := &entities.User{ID: 7, Email: "z@y", TenantID: "T-7"}
+	out := resolveTenantID(user, &service.RegisterResult{User: updated, Tenant: &tenantEntity{ID: "T-7"}})
+	assert.Equal(t, "T-7", out)
+	assert.Equal(t, uint64(7), user.ID)
+	assert.Equal(t, "T-7", user.TenantID)
 }
 
-func TestVerify_ValidSessionNotExpired(t *testing.T) {
-	handler, mockUserService, _, _, _ := createTestHandler(t)
+// =============================================================================
+// time helpers + type aliases
+// =============================================================================
 
-	username := "valid@example.com"
-	user := createTestUser(username)
+// futureTime returns a time 1 hour ahead so IsExpired returns false.
+func futureTime() time.Time { return time.Now().UTC().Add(1 * time.Hour) }
 
-	requestBody := map[string]string{"username": username}
-	body, _ := json.Marshal(requestBody)
+// pastTime returns a time 1 hour ago so IsExpired returns true.
+func pastTime() time.Time { return time.Now().UTC().Add(-1 * time.Hour) }
 
-	req := httptest.NewRequest(http.MethodGet, "/verify", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	nextCalled := false
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		nextCalled = true
-	})
-
-	mockUserService.On("Get", mock.Anything, user.ID).Return(user, nil)
-
-	handler.Verify(w, req, next)
-
-	mockUserService.AssertExpectations(t)
-	assert.True(t, nextCalled, "next handler should be called for valid session")
-}
-
-func TestGetUserID_EmptyEmail(t *testing.T) {
-	requestBody := map[string]string{"username": ""}
-	body, _ := json.Marshal(requestBody)
-
-	req := httptest.NewRequest(http.MethodPost, "/test", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	result, err := getUserID(req)
-
-	assert.NoError(t, err)
-	// Empty email will still generate a valid ID via util.NewID
-	assert.NotEqual(t, uint64(0), result)
-}
-
-func TestWebAuthnRestHandler_StructFields(t *testing.T) {
-	handler, mockUserService, mockRegistrationService, _, mockResponseWriter := createTestHandler(t)
-
-	assert.NotNil(t, handler.logger)
-	assert.NotNil(t, handler.jwtService)
-	assert.NotNil(t, handler.userService)
-	assert.Equal(t, mockUserService, handler.userService)
-	assert.Equal(t, mockRegistrationService, handler.registrationService)
-	assert.Equal(t, mockResponseWriter, handler.responseWriter)
-	assert.NotNil(t, handler.webAuthn)
-}
-
-func TestIsConfigured_NilConfig(t *testing.T) {
-	assert.False(t, IsConfigured(nil))
-}
-
-func TestIsConfigured_EmptyConfig(t *testing.T) {
-	assert.False(t, IsConfigured(&Config{}))
-}
-
-func TestIsConfigured_MissingRPID(t *testing.T) {
-	assert.False(t, IsConfigured(&Config{
-		RPOrigins: []string{"https://example.com"},
-	}))
-}
-
-func TestIsConfigured_MissingOrigins(t *testing.T) {
-	assert.False(t, IsConfigured(&Config{
-		RPID: "example.com",
-	}))
-}
-
-func TestIsConfigured_EmptyOrigins(t *testing.T) {
-	assert.False(t, IsConfigured(&Config{
-		RPID:      "example.com",
-		RPOrigins: []string{},
-	}))
-}
-
-func TestIsConfigured_ValidConfig(t *testing.T) {
-	assert.True(t, IsConfigured(&Config{
-		RPID:      "example.com",
-		RPOrigins: []string{"https://example.com"},
-	}))
-}
-
-func TestIsConfigured_ValidConfigWithDisplayName(t *testing.T) {
-	assert.True(t, IsConfigured(&Config{
-		RPDisplayName: "Example",
-		RPID:          "example.com",
-		RPOrigins:     []string{"https://example.com", "http://localhost"},
-	}))
-}
+// tenantEntity is a local alias so the mock signatures remain readable
+// without importing the heavyweight tenant package transitively.
+type tenantEntity = tenant.TenantEntity

@@ -127,6 +127,10 @@ func (s *barrierInitService) Initialize(ctx context.Context, req *rest.BarrierIn
 	if req.Shares > 0 || req.Threshold > 0 {
 		thresholdSpec = formatThreshold(req.Threshold, req.Shares)
 	}
+
+	// The qrdb embedded ceremony transport threads the per-request
+	// SOPin/UserPin from the ceremony-initialize request directly into the
+	// service layer, so the PINs are supplied on the call itself below.
 	out, err := s.backend.Initialize(ctx, &apidaemon.CeremonyInitRequest{
 		SOPIN:                  req.SOPIN,
 		UserPIN:                req.UserPIN,
@@ -147,6 +151,21 @@ func (s *barrierInitService) Initialize(ctx context.Context, req *rest.BarrierIn
 		resp.State = s.state.State(ctx)
 	}
 	if s.app != nil && s.app.Barrier() != nil {
+		// The qrdb ceremony service does not initialize the data-plane
+		// StorageBarrier as a side effect — it only stores PINs in the
+		// credential service and transitions its own state machine. We
+		// must explicitly drive Manager.Initialize so the BarrierServicer
+		// (which the M6 waitForUnseal loop polls via SDK.Security().
+		// Barrier().BarrierStatus) reports initialized + unsealed and the
+		// gate releases. Failure here is logged but non-fatal: the
+		// operator can retry POST /init or POST /unseal, and the gate
+		// will keep blocking until SyncStatus reflects the unsealed state.
+		if initErr := s.app.Barrier().Initialize(ctx, req.UserPIN); initErr != nil {
+			if s.logger != nil {
+				s.logger.Warn("barrier init after ceremony returned error",
+					"error", initErr.Error())
+			}
+		}
 		// Refresh the barrier manager state from the backend so the next
 		// /healthz call sees the updated initialized/sealed flags without
 		// waiting for the next external sync.
@@ -209,6 +228,11 @@ func (s *barrierUnsealService) Unseal(ctx context.Context, req *rest.BarrierUnse
 // Init-only mode runner
 // =============================================================================
 
+// defaultBarrierGateHTTPAddr is the loopback bind address for the M6
+// init-only HTTP listener. 9446 is reserved for the gate so it does not
+// collide with the production MCP listener on 9445.
+const defaultBarrierGateHTTPAddr = "127.0.0.1:9446"
+
 // barrierGateConfig captures the dependencies required to run the
 // init-only mode listener and the unseal-wait loop.
 type barrierGateConfig struct {
@@ -222,9 +246,28 @@ type barrierGateConfig struct {
 func defaultBarrierGateConfig() barrierGateConfig {
 	return barrierGateConfig{
 		socketPath: "/run/platformd.sock",
-		httpAddr:   "127.0.0.1:9445",
+		httpAddr:   defaultBarrierGateHTTPAddr,
 		pollEvery:  time.Second,
 	}
+}
+
+// initOnlyGate is the function invoked by the daemon entry points to run
+// the M6 barrier-unseal gate. Production code points it at
+// runInitOnlyMode; tests substitute a fake to assert the gate is invoked
+// in both runWithWebservices and runDaemonOnly without standing up an
+// actual listener.
+var initOnlyGate = runInitOnlyMode
+
+// invokeBarrierGate is the single call site used by both runWithWebservices
+// and runDaemonOnly to run the M6 init-only mode gate. It builds the gate
+// config from the package-level CLI flags (so the gate binds the same
+// Unix socket path the production daemon will reuse) and dispatches via
+// the initOnlyGate hook. Returning early from the caller on a non-nil
+// error keeps production listeners gated until the barrier is unsealed.
+func invokeBarrierGate(ctx context.Context, a *app.App, logger *logging.Logger) error {
+	gateCfg := defaultBarrierGateConfig()
+	gateCfg.socketPath = serveSocketPath
+	return initOnlyGate(ctx, a, logger, gateCfg)
 }
 
 // runInitOnlyMode binds the Unix socket and a 127.0.0.1 loopback HTTP

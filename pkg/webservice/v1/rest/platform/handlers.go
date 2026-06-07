@@ -35,6 +35,8 @@ type PlatformHandlers struct {
 	startTime       time.Time
 	restServerRunFn func() bool
 	sysSampler      *sysstats.Sampler
+	configReloader  ConfigReloader
+	logQuerier      LogQuerier
 }
 
 // NewPlatformHandlers creates a new PlatformHandlers instance

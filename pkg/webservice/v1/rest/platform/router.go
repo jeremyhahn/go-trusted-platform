@@ -68,6 +68,19 @@ func (r *PlatformRouter) SetVersionInfo(info *VersionInfo) {
 	r.handlers.SetVersionInfo(info)
 }
 
+// SetConfigReloader wires the daemon's config-reload surface into the
+// /platform/config/reload handler. Routes are always registered; if
+// the reloader is unset, the handler returns 503 with a structured
+// body so the surface is honest about being dark.
+func (r *PlatformRouter) SetConfigReloader(rl ConfigReloader) {
+	r.handlers.SetConfigReloader(rl)
+}
+
+// SetLogQuerier wires the daemon's log surface into /platform/logs.
+func (r *PlatformRouter) SetLogQuerier(q LogQuerier) {
+	r.handlers.SetLogQuerier(q)
+}
+
 // Handlers returns the underlying handlers for direct access if needed
 func (r *PlatformRouter) Handlers() *PlatformHandlers {
 	return r.handlers
@@ -86,6 +99,38 @@ func (r *PlatformRouter) RegisterRoutes(router *mux.Router) {
 	r.registerServiceRoutes(platformRouter)
 	r.registerProtocolRoutes(platformRouter)
 	r.registerMetricsRoutes(platformRouter)
+	r.registerConfigRoutes(platformRouter)
+	r.registerLogRoutes(platformRouter)
+}
+
+// registerConfigRoutes registers platform configuration endpoints.
+// GET    /api/v1/platform/config                              - Full merged config (redacted by default)
+// POST   /api/v1/platform/config/reload                       - Re-read config file (captures pre-reload snapshot)
+// POST   /api/v1/platform/config/validate                     - Dry-run validate proposed YAML
+// GET    /api/v1/platform/config/snapshots                    - List snapshot history
+// POST   /api/v1/platform/config/snapshots                    - Capture current state as a snapshot
+// GET    /api/v1/platform/config/snapshots/{id}               - Get a snapshot (full tree)
+// DELETE /api/v1/platform/config/snapshots/{id}               - Delete a snapshot
+// POST   /api/v1/platform/config/snapshots/{id}/rollback      - Roll back to a snapshot
+func (r *PlatformRouter) registerConfigRoutes(router *mux.Router) {
+	router.HandleFunc("/config", r.handlers.GetConfig).Methods("GET")
+	router.HandleFunc("/config/reload", r.handlers.ReloadConfig).Methods("POST")
+	router.HandleFunc("/config/validate", r.handlers.ValidateConfig).Methods("POST")
+	router.HandleFunc("/config/snapshots", r.handlers.ListSnapshots).Methods("GET")
+	router.HandleFunc("/config/snapshots", r.handlers.CreateSnapshot).Methods("POST")
+	router.HandleFunc("/config/snapshots/{id}", r.handlers.GetSnapshot).Methods("GET")
+	router.HandleFunc("/config/snapshots/{id}", r.handlers.DeleteSnapshot).Methods("DELETE")
+	router.HandleFunc("/config/snapshots/{id}/rollback", r.handlers.Rollback).Methods("POST")
+}
+
+// registerLogRoutes registers structured log query / stream endpoints.
+// GET    /api/v1/platform/logs              - Paginated query
+// GET    /api/v1/platform/logs/services     - Service-selector list
+// GET    /api/v1/platform/logs/stream       - SSE live tail
+func (r *PlatformRouter) registerLogRoutes(router *mux.Router) {
+	router.HandleFunc("/logs", r.handlers.QueryLogs).Methods("GET")
+	router.HandleFunc("/logs/services", r.handlers.ListLogServices).Methods("GET")
+	router.HandleFunc("/logs/stream", r.handlers.StreamLogs).Methods("GET")
 }
 
 // registerHealthRoutes registers health check endpoints

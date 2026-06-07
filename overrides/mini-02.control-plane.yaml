@@ -1,0 +1,166 @@
+# lab-node-2 Control Plane Overrides
+# Supermicro X10 (X10SDV-TP8F)
+# Applied on top of: configs/platform/templates/dedicated/supermicro/x10/control-plane.yaml
+
+debug: true
+debug-secrets: true
+
+os:
+  hostname: lab-node-2
+  # Debug root password for easy iKVM/SOL/SSH access during development.
+  root-password: "password"
+  # Post-install: enable serial getty on ttyS1 so SOL gets a login prompt,
+  # and install the operator SSH key so remote debugging works.
+  post-install: |
+    set -e
+    echo "[post-install] Installing operator SSH authorized_keys"
+    mkdir -p /root/.ssh
+    chmod 700 /root/.ssh
+    cat > /root/.ssh/authorized_keys <<'PUBKEY'
+    ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCox4UwMFegGm6tYMB0lDTX7+QtcufRqs52yxjoAv9auhwIZD5xPLpH2AFI+uW8bRV4nZMO+PrcWgwNPqddVXnyGg1vwaw1CDP+QMWx/vs5ntCAJ6fNI8hM2ZpPCHITlHiODInTB6SOst92yU7YlDUqK//AEt0mUJiHvMY5YVKIysR84KXXnQ1Y2WnXoJex1KEDhTEV6PHCjSKHLXgikLOGu78nS/7cpT7GjmxxWYzzNN5wVBAyqZ2BZPdfJfu9zFyyUdnIIAgkkYHNEqaLiNUFZeAW92D14i2WGrhLjZM5tGg/2JVimydM4Z1w62qMGjKIF66Ev8zxRrFRRPbVlyJ/ mail@jeremyhahn.com
+    PUBKEY
+    chmod 600 /root/.ssh/authorized_keys
+
+    echo "[post-install] Allowing root SSH login + password auth"
+    sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+    sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+
+    echo "[post-install] Enabling agetty on ttyS1 for SOL login"
+    if ! grep -q '^ttyS1:' /etc/inittab 2>/dev/null; then
+      echo "ttyS1::respawn:/sbin/getty -L 115200 ttyS1 vt100" >> /etc/inittab
+    fi
+
+    echo "[post-install] Done"
+
+network:
+  dns:
+    nameservers:
+      - 127.0.0.1
+    search-domains:
+      - trusted-platform.internal
+  subnets:
+    - name: production
+      scope: internal
+      vlan-id: 200
+      cidr: 198.18.0.0/24
+      gateway: 198.18.0.1
+      dns:
+        - 198.18.0.1
+      dhcp:
+        enabled: true
+        range-start: 198.18.0.10
+        range-end: 198.18.0.254
+        lease-duration: 24h
+    - name: provisioning
+      scope: internal
+      vlan-id: 201
+      cidr: 172.16.201.0/24
+      gateway: 172.16.201.1
+      dns:
+        - 172.16.201.1
+      role: provisioning
+      dhcp:
+        enabled: true
+        range-start: 172.16.201.50
+        range-end: 172.16.201.254
+        lease-duration: 1h
+    - name: quarantine
+      scope: internal
+      vlan-id: 202
+      cidr: 172.16.202.0/24
+      gateway: 172.16.202.1
+      dns:
+        - 172.16.202.1
+      role: quarantine
+    - name: storage
+      scope: internal
+      vlan-id: 203
+      cidr: 172.16.203.0/24
+      gateway: 172.16.203.1
+      dns:
+        - 172.16.203.1
+      dhcp:
+        enabled: true
+        range-start: 172.16.203.10
+        range-end: 172.16.203.254
+        lease-duration: 24h
+  interfaces:
+    - name: eth0
+      type: static
+      ipv4-address: 198.18.1.140/24
+      ipv4-gateway: 198.18.1.1
+      auto-start: true
+  bonds:
+    - name: bond0
+      # OVS bond — created at runtime by platformd via native OVSDB
+      # wire protocol. Member NICs (eth6, eth7) are brought up by
+      # the installer and claimed by ovs-vswitchd at boot.
+      type: ovs
+      bridge: trusted0
+      mode: balance-tcp
+      lacp: active
+      interfaces:
+        - eth6
+        - eth7
+      vlans:
+        - subnet: production
+          ipv4-address: 198.18.0.2/24
+          auto-start: true
+        - subnet: provisioning
+          ipv4-address: 172.16.201.2/24
+          auto-start: true
+        - subnet: quarantine
+          ipv4-address: 172.16.202.2/24
+          auto-start: true
+        - subnet: storage
+          ipv4-address: 172.16.203.2/24
+          auto-start: true
+      auto-start: true
+
+sdn:
+  fabric:
+    mode: vlan
+    switches:
+      - id: nexus-01
+        vendor: cisco-nexus
+        model: N9K-C93180YC-EX
+        mgmt-ip: 198.18.1.4
+        credentials-ref: "encrypted://placeholder-nexus-01-credentials"
+      - id: nexus-02
+        vendor: cisco-nexus
+        model: N9K-C93180YC-EX
+        mgmt-ip: 198.18.1.5
+        credentials-ref: "encrypted://placeholder-nexus-02-credentials"
+    peers:
+      - switch-a: nexus-01
+        switch-b: nexus-02
+        peer-link-ports:
+          - Ethernet1/47
+          - Ethernet1/48
+    segments:
+      # Fabric segment roles are an enum: provisioning | quarantine | <empty>.
+      # Production + storage segments leave role unset — matches the platform
+      # validator (pkg/sdn/fabric/config.go:282). Deploy iter 17 failed SDN
+      # init with "segment role must be 'provisioning', 'quarantine', or
+      # empty" when production carried role: server.
+      - name: production
+        vlan: 200
+      - name: provisioning
+        vlan: 201
+        role: provisioning
+      - name: quarantine
+        vlan: 202
+        role: quarantine
+      - name: storage
+        vlan: 203
+
+bmc:
+  address: 198.18.1.103
+  port: 623
+  username: claude
+  password: "REMOVED-BMC-PASSWORD"
+  protocol: ipmi
+
+tpm:
+  idevid:
+    serial: lab-node-2-cp-01

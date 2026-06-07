@@ -15,10 +15,10 @@
 // --barrier-strategy contract per docs/08-bootstrap-auth-architecture.md
 // §6 (Task #126).
 //
-// The test exercises each of the 8 canonical strategies end-to-end at
+// The test exercises each of the 9 canonical strategies end-to-end at
 // the CLI/SDK boundary:
 //
-//	software, shamir, pkcs11, tpm2, awskms, gcpkms, azurekv, vault
+//	software, shamir, pkcs11, tpm2, awskms, gcpkms, azurekv, vault, none
 //
 // Strategy-specific flag validation, SDK request mapping, and the
 // environment variable surface (PLATFORMCTL_BARRIER_STRATEGY) are all
@@ -51,6 +51,7 @@ var canonicalStrategies = []string{
 	"gcpkms",
 	"azurekv",
 	"vault",
+	"none",
 }
 
 // newInitCmdForTest builds an isolated cobra "init" command bound to
@@ -113,7 +114,7 @@ func TestCanonicalInit_AllStrategiesAreRegistered(t *testing.T) {
 // TestCanonicalInit_StrategyValidationMatrix exercises every canonical
 // strategy through resolveAndValidateCanonicalInit:
 //
-//   - software / pkcs11 / tpm2 / awskms / gcpkms / azurekv / vault
+//   - software / pkcs11 / tpm2 / awskms / gcpkms / azurekv / vault / none
 //     pass with no shamir flags;
 //   - shamir requires --shares >= 2 and 2 <= --threshold <= shares;
 //   - non-shamir strategies must reject --shares / --threshold > 0.
@@ -140,6 +141,7 @@ func TestCanonicalInit_StrategyValidationMatrix(t *testing.T) {
 		{name: "gcpkms", strategy: "gcpkms"},
 		{name: "azurekv", strategy: "azurekv"},
 		{name: "vault", strategy: "vault"},
+		{name: "none", strategy: "none"},
 		{name: "shamir-3-of-5", strategy: "shamir", shares: 5, threshold: 3},
 		{name: "shamir-2-of-2", strategy: "shamir", shares: 2, threshold: 2},
 
@@ -168,6 +170,10 @@ func TestCanonicalInit_StrategyValidationMatrix(t *testing.T) {
 		},
 		{
 			name: "vault-with-shares-rejected", strategy: "vault",
+			shares: 5, threshold: 0, wantErr: true, errSubstr: "shamir",
+		},
+		{
+			name: "none-with-shares-rejected", strategy: "none",
 			shares: 5, threshold: 0, wantErr: true, errSubstr: "shamir",
 		},
 
@@ -359,6 +365,9 @@ func TestCanonicalInit_ShamirThresholdFormat(t *testing.T) {
 //   - awskms / gcpkms / azurekv / vault:
 //     validation + mapping covered; envelope encryption
 //     runs server-side and is gated on cloud credentials.
+//   - none:      validation + mapping covered; the qrdb ceremony
+//     service installs a passthrough barrier with no
+//     encryption (dev/test).
 //
 // Backend-specific happy paths are exercised by
 // test/integration/ceremony, which runs the CLI against a real qrdb
@@ -400,6 +409,199 @@ func TestCanonicalInit_StrategyEndToEnd(t *testing.T) {
 			if !errors.Is(initFailed.Cause, ceremonysvc.ErrNotYetWired) {
 				t.Errorf("strategy %q: want ErrNotYetWired, got %v",
 					strategy, initFailed.Cause)
+			}
+		})
+	}
+}
+
+// TestCanonicalInit_NoneStrategyAcceptsNoPins verifies the
+// --barrier-strategy=none surface: when the passthrough barrier is
+// selected, --so-pin and --user-pin are optional because there is no
+// key material to gate. Operators selecting "none" for dev/test must
+// be able to invoke `platformctl init --barrier-strategy=none` without
+// supplying any PIN material.
+func TestCanonicalInit_NoneStrategyAcceptsNoPins(t *testing.T) {
+	// No so-pin / user-pin in the flag set; only the strategy flag is
+	// set to "none". Every other strategy would fail with ErrMissingPIN.
+	cmd, f := newInitCmdForTest(t, map[string]string{
+		"barrier-strategy": "none",
+	})
+	if err := resolveAndValidateCanonicalInit(cmd, f, "PLATFORMCTL_TEST_NONE_NOENV"); err != nil {
+		t.Fatalf("strategy=none with no PINs must validate cleanly; got: %v", err)
+	}
+	if f.soPin != "" || f.userPin != "" {
+		t.Errorf("PINs unexpectedly populated: soPin=%q userPin=%q",
+			f.soPin, f.userPin)
+	}
+	if f.barrierStrategy != "none" {
+		t.Errorf("barrierStrategy: want %q, got %q", "none", f.barrierStrategy)
+	}
+}
+
+// TestCanonicalInit_NoneStrategyProducesWorkingInitRequest verifies
+// that selecting --barrier-strategy=none builds an SDK InitRequest
+// that carries the strategy string verbatim and leaves PIN fields
+// empty (because they were not supplied), with no shamir threshold
+// leak. The qrdb ceremony service interprets an empty PIN + "none"
+// strategy as a request to install the passthrough barrier.
+func TestCanonicalInit_NoneStrategyProducesWorkingInitRequest(t *testing.T) {
+	cmd, f := newInitCmdForTest(t, map[string]string{
+		"barrier-strategy": "none",
+		"hostname":         "dev.example.com",
+		"sans":             "alt.example.com,127.0.0.1",
+	})
+	if err := resolveAndValidateCanonicalInit(cmd, f, "PLATFORMCTL_TEST_NONE_REQ"); err != nil {
+		t.Fatalf("strategy=none validation: %v", err)
+	}
+
+	req := buildInitRequest(f)
+	if req == nil {
+		t.Fatal("buildInitRequest returned nil")
+	}
+	if req.CredentialSealStrategy != "none" {
+		t.Errorf("CredentialSealStrategy: want %q, got %q",
+			"none", req.CredentialSealStrategy)
+	}
+	if req.SOPIN != "" || req.UserPIN != "" {
+		t.Errorf("none-strategy InitRequest must carry empty PINs; got SOPIN=%q UserPIN=%q",
+			req.SOPIN, req.UserPIN)
+	}
+	if req.Threshold != "" {
+		t.Errorf("none-strategy InitRequest must not carry a Shamir threshold; got %q",
+			req.Threshold)
+	}
+	if req.Hostname != "dev.example.com" {
+		t.Errorf("Hostname: want %q, got %q", "dev.example.com", req.Hostname)
+	}
+	if len(req.SANs) != 2 || req.SANs[0] != "alt.example.com" || req.SANs[1] != "127.0.0.1" {
+		t.Errorf("SANs: want [alt.example.com 127.0.0.1], got %v", req.SANs)
+	}
+
+	// Drive the same request through the Phase 3 stub client to
+	// confirm the strategy plumbing is reachable end-to-end. The stub
+	// surfaces ErrNotYetWired wrapped in ErrInitFailed; what we are
+	// asserting here is that "none" is dispatchable rather than
+	// silently filtered upstream.
+	client := ceremonysvc.NewClient()
+	_, callErr := client.Init(t.Context(), req)
+	if callErr == nil {
+		t.Fatal("Phase 3 stub client must surface ErrNotYetWired")
+	}
+	var initFailed *ceremonysvc.ErrInitFailed
+	if !errors.As(callErr, &initFailed) {
+		t.Fatalf("none-strategy: want *ceremonysvc.ErrInitFailed, got %T", callErr)
+	}
+	if !errors.Is(initFailed.Cause, ceremonysvc.ErrNotYetWired) {
+		t.Errorf("none-strategy: want ErrNotYetWired, got %v", initFailed.Cause)
+	}
+}
+
+// TestCanonicalInit_NoneStrategyAcceptsExplicitPins verifies that the
+// "none" passthrough does not REJECT PINs when an operator supplies
+// them. PINs are simply optional, not forbidden; rejecting them would
+// surprise operators who paste a shared template.
+func TestCanonicalInit_NoneStrategyAcceptsExplicitPins(t *testing.T) {
+	cmd, f := newInitCmdForTest(t, map[string]string{
+		"so-pin":           "so",
+		"user-pin":         "user",
+		"barrier-strategy": "none",
+	})
+	if err := resolveAndValidateCanonicalInit(cmd, f, "PLATFORMCTL_TEST_NONE_PINS"); err != nil {
+		t.Fatalf("strategy=none with PINs must validate cleanly; got: %v", err)
+	}
+	req := buildInitRequest(f)
+	if req.SOPIN != "so" || req.UserPIN != "user" {
+		t.Errorf("PIN propagation broken: SOPIN=%q UserPIN=%q", req.SOPIN, req.UserPIN)
+	}
+}
+
+// TestCanonicalInit_NonsenseStrategyRejectedWithTypedError verifies
+// that an unrecognised --barrier-strategy value produces the typed
+// ErrInvalidBarrierStrategy error rather than a free-form string.
+// Operators and wrappers (e.g. devcontainer scripts) match on the
+// typed error to decide whether to retry with a corrected flag.
+func TestCanonicalInit_NonsenseStrategyRejectedWithTypedError(t *testing.T) {
+	cases := []string{"nonsense", "softwareX", "shamir2", "none ", "NONE"}
+	for _, bogus := range cases {
+		bogus := bogus
+		t.Run(bogus, func(t *testing.T) {
+			cmd, f := newInitCmdForTest(t, map[string]string{
+				"so-pin":           "so",
+				"user-pin":         "user",
+				"barrier-strategy": bogus,
+			})
+			err := resolveAndValidateCanonicalInit(cmd, f, "PLATFORMCTL_TEST_NONSENSE")
+			if err == nil {
+				t.Fatalf("strategy %q: expected typed ErrInvalidBarrierStrategy, got nil", bogus)
+			}
+			var typed *ErrInvalidBarrierStrategy
+			if !errors.As(err, &typed) {
+				t.Fatalf("strategy %q: want *ErrInvalidBarrierStrategy, got %T: %v",
+					bogus, err, err)
+			}
+			if typed.Strategy != bogus {
+				t.Errorf("strategy %q: typed.Strategy = %q, want %q",
+					bogus, typed.Strategy, bogus)
+			}
+			if !strings.Contains(typed.Error(), "invalid --barrier-strategy") {
+				t.Errorf("strategy %q: error message missing canonical substring: %q",
+					bogus, typed.Error())
+			}
+			if !strings.Contains(typed.Error(), bogus) {
+				t.Errorf("strategy %q: error message missing offending value: %q",
+					bogus, typed.Error())
+			}
+		})
+	}
+}
+
+// TestCanonicalInit_MissingPinReturnsTypedError verifies that a
+// missing PIN for a non-"none" strategy surfaces the typed
+// ErrMissingPIN error so callers can introspect which flag (so-pin or
+// user-pin) is missing without parsing a free-form string.
+func TestCanonicalInit_MissingPinReturnsTypedError(t *testing.T) {
+	cases := []struct {
+		name     string
+		fields   map[string]string
+		wantFlag string
+		wantEnv  string
+	}{
+		{
+			name: "missing-so-pin",
+			fields: map[string]string{
+				"user-pin":         "user",
+				"barrier-strategy": "software",
+			},
+			wantFlag: "so-pin",
+			wantEnv:  "PLATFORMCTL_TEST_PIN_SO_PIN",
+		},
+		{
+			name: "missing-user-pin",
+			fields: map[string]string{
+				"so-pin":           "so",
+				"barrier-strategy": "software",
+			},
+			wantFlag: "user-pin",
+			wantEnv:  "PLATFORMCTL_TEST_PIN_USER_PIN",
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			cmd, f := newInitCmdForTest(t, c.fields)
+			err := resolveAndValidateCanonicalInit(cmd, f, "PLATFORMCTL_TEST_PIN")
+			if err == nil {
+				t.Fatalf("expected typed ErrMissingPIN, got nil")
+			}
+			var typed *ErrMissingPIN
+			if !errors.As(err, &typed) {
+				t.Fatalf("want *ErrMissingPIN, got %T: %v", err, err)
+			}
+			if typed.Flag != c.wantFlag {
+				t.Errorf("Flag: want %q, got %q", c.wantFlag, typed.Flag)
+			}
+			if typed.EnvVar != c.wantEnv {
+				t.Errorf("EnvVar: want %q, got %q", c.wantEnv, typed.EnvVar)
 			}
 		})
 	}

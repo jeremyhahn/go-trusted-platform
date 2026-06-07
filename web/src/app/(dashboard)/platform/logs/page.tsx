@@ -15,100 +15,156 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { LogViewer } from "@/components/features/platform";
-// TODO: SDK doesn't have platform logs service yet - legacy API removed
 import { useToast } from "@/hooks/use-toast";
-import type { LogEntry, LogFilters, LogLevel } from "@/types/platform";
+import type { LogEntry, LogLevel } from "@/types/platform";
 
 const LOG_LEVELS: LogLevel[] = ["DEBUG", "INFO", "WARN", "ERROR"];
 
+interface WireEntry {
+  time: string;
+  level: string;
+  msg: string;
+  service: string;
+  source?: string;
+  attrs?: Record<string, unknown>;
+}
+
 /**
- * Logs Viewer Page
+ * Platform Logs viewer.
  *
- * Features:
- * - Log level filter (DEBUG, INFO, WARN, ERROR)
- * - Service filter
- * - Search functionality
- * - Time range selection
- * - Real-time log streaming toggle
- * - Export logs
- * - Manual refresh
+ * Reads from /api/v1/platform/logs — the JSON-lines structured log
+ * store written by pkg/log/jsonfile during daemon boot. The store
+ * captures every record from platformd's slog handler (CA issuance,
+ * device enrollment, ACME flows, SDN reconciles, etc.) plus anything
+ * the webserver emits via slog.Default.
+ *
+ * Streaming uses GET /api/v1/platform/logs/stream as SSE; each event
+ * is the raw JSON-line written to disk so clients can choose their
+ * own rendering without re-parsing.
+ *
+ * Replaces the "Coming Soon" stub that lied about the logs service
+ * being in development.
  */
 export default function LogsPage() {
   const { toast } = useToast();
   const [logs, setLogs] = React.useState<LogEntry[]>([]);
+  const [services, setServices] = React.useState<string[]>([]);
   const [isLoading, setIsLoading] = React.useState(false);
   const [isStreaming, setIsStreaming] = React.useState(false);
-  const [selectedLevels, setSelectedLevels] = React.useState<LogLevel[]>([]);
-  // Radix's <Select.Item /> rejects empty-string values; "all" is the
-  // sentinel for the catch-all option.
+  const [selectedLevel, setSelectedLevel] = React.useState<LogLevel | "all">(
+    "all",
+  );
   const [selectedService, setSelectedService] = React.useState<string>("all");
   const [searchQuery, setSearchQuery] = React.useState("");
   const [timeRange, setTimeRange] = React.useState<string>("1h");
   const eventSourceRef = React.useRef<EventSource | null>(null);
 
-  const buildFilters = React.useCallback((): LogFilters => {
-    const filters: LogFilters = {
-      limit: 100,
-    };
+  const fetchOpts: RequestInit = React.useMemo(
+    () => ({
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    }),
+    [],
+  );
 
-    if (selectedLevels.length > 0) {
-      filters.level = selectedLevels;
+  const computeSince = React.useCallback((): string | undefined => {
+    if (timeRange === "all") return undefined;
+    const now = new Date();
+    const start = new Date(now);
+    switch (timeRange) {
+      case "5m":
+        start.setMinutes(now.getMinutes() - 5);
+        break;
+      case "15m":
+        start.setMinutes(now.getMinutes() - 15);
+        break;
+      case "1h":
+        start.setHours(now.getHours() - 1);
+        break;
+      case "6h":
+        start.setHours(now.getHours() - 6);
+        break;
+      case "24h":
+        start.setHours(now.getHours() - 24);
+        break;
+      default:
+        return undefined;
     }
+    return start.toISOString();
+  }, [timeRange]);
 
-    if (selectedService && selectedService !== "all") {
-      filters.service = selectedService;
+  const buildQuery = React.useCallback(() => {
+    const params = new URLSearchParams();
+    if (selectedLevel !== "all") params.set("level", selectedLevel);
+    if (selectedService !== "all") params.append("service", selectedService);
+    if (searchQuery) params.set("grep", searchQuery);
+    const since = computeSince();
+    if (since) params.set("since", since);
+    params.set("limit", "200");
+    return params.toString();
+  }, [selectedLevel, selectedService, searchQuery, computeSince]);
+
+  const fetchServices = React.useCallback(async () => {
+    try {
+      const res = await fetch("/api/v1/platform/logs/services", fetchOpts);
+      if (!res.ok) return;
+      const body = await res.json();
+      const list: string[] =
+        body.payload?.services ?? body.services ?? [];
+      setServices(list);
+    } catch {
+      // services list is best-effort; failure is non-fatal
     }
-
-    if (searchQuery) {
-      filters.search = searchQuery;
-    }
-
-    // Calculate time range
-    if (timeRange !== "all") {
-      const now = new Date();
-      const startTime = new Date(now);
-
-      switch (timeRange) {
-        case "5m":
-          startTime.setMinutes(now.getMinutes() - 5);
-          break;
-        case "15m":
-          startTime.setMinutes(now.getMinutes() - 15);
-          break;
-        case "1h":
-          startTime.setHours(now.getHours() - 1);
-          break;
-        case "6h":
-          startTime.setHours(now.getHours() - 6);
-          break;
-        case "24h":
-          startTime.setHours(now.getHours() - 24);
-          break;
-      }
-
-      filters.startTime = startTime.toISOString();
-      filters.endTime = now.toISOString();
-    }
-
-    return filters;
-  }, [selectedLevels, selectedService, searchQuery, timeRange]);
+  }, [fetchOpts]);
 
   const fetchLogs = React.useCallback(async () => {
-    // TODO: SDK doesn't have platform logs service yet
-    // Using empty array until SDK implementation is available
     setIsLoading(true);
-    setLogs([]);
-    setIsLoading(false);
-  }, [buildFilters, toast]);
+    try {
+      const res = await fetch(
+        `/api/v1/platform/logs?${buildQuery()}`,
+        fetchOpts,
+      );
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      }
+      const body = await res.json();
+      const entries: WireEntry[] =
+        body.payload?.entries ?? body.entries ?? [];
+      setLogs(entries.map(toEntry));
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast({
+        title: "Failed to load logs",
+        description: msg,
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [buildQuery, fetchOpts, toast]);
 
   const startStreaming = React.useCallback(() => {
-    // TODO: SDK doesn't have platform logs service yet
-    toast({
-      title: "Log streaming not available",
-      description: "Platform logs service is currently in development",
-      variant: "destructive",
-    });
-  }, [buildFilters, toast]);
+    const url = `/api/v1/platform/logs/stream?${buildQuery()}`;
+    const es = new EventSource(url, { withCredentials: true });
+    es.onmessage = (e) => {
+      try {
+        const wire = JSON.parse(e.data) as WireEntry;
+        setLogs((prev) => {
+          const next = [toEntry(wire), ...prev];
+          // bound the in-memory buffer; the WebUI never needs more
+          // than a few hundred lines on screen
+          return next.length > 500 ? next.slice(0, 500) : next;
+        });
+      } catch {
+        // ignore malformed lines
+      }
+    };
+    es.onerror = () => {
+      // EventSource auto-reconnects; we just surface state
+    };
+    eventSourceRef.current = es;
+    setIsStreaming(true);
+  }, [buildQuery]);
 
   const stopStreaming = React.useCallback(() => {
     if (eventSourceRef.current) {
@@ -119,11 +175,8 @@ export default function LogsPage() {
   }, []);
 
   const toggleStreaming = () => {
-    if (isStreaming) {
-      stopStreaming();
-    } else {
-      startStreaming();
-    }
+    if (isStreaming) stopStreaming();
+    else startStreaming();
   };
 
   const handleExport = () => {
@@ -137,39 +190,29 @@ export default function LogsPage() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-
     toast({
       title: "Logs exported",
-      description: "Logs have been downloaded as JSON.",
+      description: "Logs downloaded as JSON.",
     });
   };
 
-  const toggleLevel = (level: LogLevel) => {
-    setSelectedLevels((prev) =>
-      prev.includes(level) ? prev.filter((l) => l !== level) : [...prev, level]
-    );
-  };
-
-  // Initial fetch
   React.useEffect(() => {
-    fetchLogs();
+    void fetchServices();
+  }, [fetchServices]);
+
+  React.useEffect(() => {
+    void fetchLogs();
   }, [fetchLogs]);
 
-  // Cleanup on unmount
   React.useEffect(() => {
     return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-      }
+      if (eventSourceRef.current) eventSourceRef.current.close();
     };
   }, []);
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Logs"
-        description="View and search platform logs"
-      >
+      <PageHeader title="Logs" description="Structured platform logs">
         <div className="flex gap-2">
           <Button
             variant={isStreaming ? "destructive" : "default"}
@@ -194,7 +237,9 @@ export default function LogsPage() {
             onClick={fetchLogs}
             disabled={isLoading || isStreaming}
           >
-            <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
+            <RefreshCw
+              className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`}
+            />
             Refresh
           </Button>
           <Button
@@ -209,17 +254,23 @@ export default function LogsPage() {
         </div>
       </PageHeader>
 
-      {/* Filters */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <div className="space-y-2">
-          <Label>Log Level</Label>
+          <Label>Min Level</Label>
           <div className="flex flex-wrap gap-2">
+            <Badge
+              variant={selectedLevel === "all" ? "default" : "outline"}
+              className="cursor-pointer"
+              onClick={() => setSelectedLevel("all")}
+            >
+              ALL
+            </Badge>
             {LOG_LEVELS.map((level) => (
               <Badge
                 key={level}
-                variant={selectedLevels.includes(level) ? "default" : "outline"}
+                variant={selectedLevel === level ? "default" : "outline"}
                 className="cursor-pointer"
-                onClick={() => toggleLevel(level)}
+                onClick={() => setSelectedLevel(level)}
               >
                 {level}
               </Badge>
@@ -235,11 +286,11 @@ export default function LogsPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All services</SelectItem>
-              <SelectItem value="api-server">API Server</SelectItem>
-              <SelectItem value="database">Database</SelectItem>
-              <SelectItem value="tpm-service">TPM Service</SelectItem>
-              <SelectItem value="ca-service">CA Service</SelectItem>
-              <SelectItem value="auth-service">Auth Service</SelectItem>
+              {services.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
@@ -267,7 +318,7 @@ export default function LogsPage() {
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               id="search"
-              placeholder="Search logs..."
+              placeholder="Substring filter on message…"
               className="pl-8"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -276,7 +327,6 @@ export default function LogsPage() {
         </div>
       </div>
 
-      {/* Status */}
       {isStreaming && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
@@ -284,29 +334,33 @@ export default function LogsPage() {
         </div>
       )}
 
-      {/* Logs */}
-      {logs.length === 0 && !isLoading ? (
-        <div className="flex items-center justify-center h-64 border-2 border-dashed rounded-lg">
-          <div className="text-center">
-            <p className="text-lg font-medium text-muted-foreground mb-2">
-              Platform Logs Coming Soon
-            </p>
-            <p className="text-sm text-muted-foreground">
-              SDK support for platform logs is currently in development
-            </p>
-          </div>
-        </div>
-      ) : (
-        <LogViewer
-          logs={logs}
-          maxHeight="600px"
-          emptyMessage={
-            isLoading
-              ? "Loading logs..."
-              : "No logs found matching your filters"
-          }
-        />
-      )}
+      <LogViewer
+        logs={logs}
+        maxHeight="600px"
+        emptyMessage={
+          isLoading
+            ? "Loading logs…"
+            : "No log entries match the current filters."
+        }
+      />
     </div>
   );
+}
+
+// toEntry adapts the on-disk JSON-line shape to the LogViewer's
+// LogEntry contract. Fields not present on the wire fall back to
+// stable defaults so the renderer never has to nil-guard. The id
+// is synthesized from time+message since the JSON-lines store has
+// no separate identifier (entries are append-only).
+let __entrySeq = 0;
+function toEntry(w: WireEntry): LogEntry {
+  __entrySeq = (__entrySeq + 1) & 0x7fffffff;
+  return {
+    id: `${w.time}-${__entrySeq}`,
+    timestamp: w.time,
+    level: (w.level?.toUpperCase() as LogLevel) ?? "INFO",
+    service: w.service ?? "platformd",
+    message: w.msg ?? "",
+    metadata: w.attrs,
+  };
 }

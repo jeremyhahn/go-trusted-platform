@@ -22,21 +22,21 @@ import (
 	"strings"
 	"time"
 
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 // MTLSAdapter implements the Authenticator interface using mTLS certificates.
 type MTLSAdapter struct {
 	logger *logging.Logger
-	ca     goca.CACertificateAuthority
+	ca     quicbaasca.CACertificateAuthority
 	config *MTLSConfig
 }
 
 // NewMTLSAdapter creates a new MTLSAdapter with the provided configuration.
 func NewMTLSAdapter(
 	logger *logging.Logger,
-	ca goca.CACertificateAuthority,
+	ca quicbaasca.CACertificateAuthority,
 	opts ...MTLSOption,
 ) (*MTLSAdapter, error) {
 

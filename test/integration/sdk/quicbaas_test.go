@@ -181,7 +181,7 @@ func TestPlatformSDKClient_AllServiceAccessors(t *testing.T) {
 		assert.NotNil(t, client.RBAC(), "RBAC() should not be nil")
 		assert.NotNil(t, client.DynamicSecrets(), "DynamicSecrets() should not be nil")
 		assert.NotNil(t, client.Certificate(), "Certificate() should not be nil")
-		assert.NotNil(t, client.ClusterDEK(), "ClusterDEK() should not be nil")
+		assert.NotNil(t, client.DEK(), "DEK() should not be nil")
 	})
 
 	t.Run("IAMOperations", func(t *testing.T) {

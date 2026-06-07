@@ -7,7 +7,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/jeremyhahn/go-objstore/pkg/common"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -122,7 +122,7 @@ func TestObjStoreAdapter_PutWithMetadata(t *testing.T) {
 		adapter := NewObjStoreAdapter(client)
 		ctx := context.Background()
 
-		meta := &common.Metadata{
+		meta := &xkmssdk.ObjectMetadata{
 			ContentType: "application/x-pem-file",
 			Custom:      map[string]string{"purpose": "root-ca"},
 		}
@@ -183,7 +183,7 @@ func TestObjStoreAdapter_UpdateMetadata(t *testing.T) {
 		err := adapter.Put("update-meta", bytes.NewReader([]byte("original")))
 		require.NoError(t, err)
 
-		newMeta := &common.Metadata{
+		newMeta := &xkmssdk.ObjectMetadata{
 			ContentType: "text/plain",
 		}
 		err = adapter.UpdateMetadata(ctx, "update-meta", newMeta)
@@ -203,7 +203,7 @@ func TestObjStoreAdapter_UpdateMetadata(t *testing.T) {
 		adapter := NewObjStoreAdapter(client)
 		ctx := context.Background()
 
-		err := adapter.UpdateMetadata(ctx, "missing", &common.Metadata{})
+		err := adapter.UpdateMetadata(ctx, "missing", &xkmssdk.ObjectMetadata{})
 		assert.Error(t, err)
 	})
 }
@@ -320,7 +320,7 @@ func TestObjStoreAdapter_ListWithOptions(t *testing.T) {
 		err = adapter.Put("opts/2.txt", bytes.NewReader([]byte("2")))
 		require.NoError(t, err)
 
-		result, err := adapter.ListWithOptions(ctx, &common.ListOptions{
+		result, err := adapter.ListWithOptions(ctx, &xkmssdk.ObjectListOptions{
 			Prefix:     "platform:opts",
 			MaxResults: 10,
 		})
@@ -354,7 +354,7 @@ func TestObjStoreAdapter_Policies(t *testing.T) {
 	adapter := NewObjStoreAdapter(client)
 
 	t.Run("AddPolicy is no-op", func(t *testing.T) {
-		err := adapter.AddPolicy(common.LifecyclePolicy{})
+		err := adapter.AddPolicy(xkmssdk.ObjectLifecyclePolicy{})
 		require.NoError(t, err)
 	})
 
@@ -371,7 +371,7 @@ func TestObjStoreAdapter_Policies(t *testing.T) {
 }
 
 func TestObjStoreAdapter_CompileTimeInterface(t *testing.T) {
-	var _ common.Storage = (*ObjStoreAdapter)(nil)
+	var _ xkmssdk.ObjectStorage = (*ObjStoreAdapter)(nil)
 }
 
 func TestObjectStoreWithTenant(t *testing.T) {

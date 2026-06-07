@@ -14,423 +14,432 @@
 package barrier
 
 import (
-	"errors"
-	"strings"
 	"testing"
 
 	"github.com/spf13/pflag"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	barriersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/barrier"
 )
 
+// ---------------------------------------------------------------------------
+// Root command structure
+// ---------------------------------------------------------------------------
+
 func TestNewCommand_Structure(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewCommand(getFlags)
-
+	cmd := NewCommand(noopFlags)
 	if cmd.Use != "barrier" {
 		t.Errorf("expected Use 'barrier', got %q", cmd.Use)
 	}
-
 	if cmd.Short != "Barrier storage management" {
-		t.Errorf("expected Short 'Barrier storage management', got %q", cmd.Short)
+		t.Errorf("unexpected Short: %q", cmd.Short)
 	}
-
 	if cmd.Long == "" {
-		t.Error("expected non-empty Long description")
+		t.Error("expected non-empty Long")
 	}
 }
 
-func TestNewCommand_Subcommands(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
+// TestNewCommand_Canonical9VerbTree verifies the exact set of
+// subcommands matches qrdbctl / xkmsctl / quicbaas per
+// docs/08-bootstrap-auth-architecture.md §6. Any drift from the
+// canonical tree fails the test on purpose.
+func TestNewCommand_Canonical9VerbTree(t *testing.T) {
+	cmd := NewCommand(noopFlags)
+
+	// barrier has 8 direct subcommands (recovery is a group); the 9th
+	// verb is "recovery recover", checked separately below.
+	expected := map[string]bool{
+		"status":        false,
+		"init":          false,
+		"init-shamir":   false,
+		"unseal":        false,
+		"unseal-shares": false,
+		"seal":          false,
+		"rekey":         false,
+		"recovery":      false,
 	}
-
-	cmd := NewCommand(getFlags)
-	subcommands := cmd.Commands()
-
-	expectedNames := map[string]bool{
-		"init":   false,
-		"status": false,
-		"unseal": false,
-		"seal":   false,
-		"rekey":  false,
-	}
-
-	for _, sub := range subcommands {
-		if _, ok := expectedNames[sub.Use]; ok {
-			expectedNames[sub.Use] = true
+	for _, sub := range cmd.Commands() {
+		if _, ok := expected[sub.Use]; ok {
+			expected[sub.Use] = true
+		} else {
+			t.Errorf("unexpected subcommand %q", sub.Use)
 		}
 	}
-
-	for name, found := range expectedNames {
+	for name, found := range expected {
 		if !found {
-			t.Errorf("expected subcommand %q not found", name)
+			t.Errorf("canonical subcommand %q missing", name)
 		}
 	}
 
-	if len(subcommands) != len(expectedNames) {
-		t.Errorf("expected %d subcommands, got %d", len(expectedNames), len(subcommands))
+	recovery, _, err := cmd.Find([]string{"recovery"})
+	if err != nil {
+		t.Fatalf("recovery group not found: %v", err)
+	}
+	rExpected := map[string]bool{"generate": false, "recover": false}
+	for _, sub := range recovery.Commands() {
+		if _, ok := rExpected[sub.Use]; ok {
+			rExpected[sub.Use] = true
+		} else {
+			t.Errorf("unexpected recovery subcommand %q", sub.Use)
+		}
+	}
+	for name, found := range rExpected {
+		if !found {
+			t.Errorf("canonical recovery subcommand %q missing", name)
+		}
 	}
 }
 
-func TestNewCommand_SubcommandDescriptions(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
+// TestInitCommand_IsRealVerbNotRedirect verifies that "barrier init"
+// is a real dispatcher (with its canonical flag set) — replacing the
+// historical "redirect to root platformctl init" stub that the locked
+// architecture rejects.
+func TestInitCommand_IsRealVerbNotRedirect(t *testing.T) {
+	cmd := NewCommand(noopFlags)
+	initCmd, _, err := cmd.Find([]string{"init"})
+	if err != nil {
+		t.Fatalf("init subcommand not found: %v", err)
 	}
+	if initCmd.RunE == nil {
+		t.Fatal("expected RunE on barrier init")
+	}
+	expectFlags := []string{"barrier-strategy", "passphrase", "so-pin", "user-pin"}
+	for _, name := range expectFlags {
+		if initCmd.Flags().Lookup(name) == nil {
+			t.Errorf("canonical flag --%s missing on barrier init", name)
+		}
+	}
+}
 
-	cmd := NewCommand(getFlags)
+// ---------------------------------------------------------------------------
+// init flag validation
+// ---------------------------------------------------------------------------
 
-	tests := []struct {
-		name          string
-		expectedShort string
+func TestValidateInitFlags(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      initFlags
+		wantErr any
 	}{
-		{name: "init", expectedShort: "REMOVED: use the root 'platformctl init' command instead"},
-		{name: "status", expectedShort: "Show barrier status"},
-		{name: "unseal", expectedShort: "Unseal the barrier"},
-		{name: "seal", expectedShort: "Seal the barrier"},
-		{name: "rekey", expectedShort: "Rekey the barrier"},
+		{
+			name: "passphrase with secret OK",
+			in:   initFlags{strategy: "passphrase", secret: "p"},
+		},
+		{
+			name: "passphrase with secret and pins OK",
+			in:   initFlags{strategy: "passphrase", secret: "p", soPin: "1", userPin: "2"},
+		},
+		{
+			name:    "passphrase requires secret",
+			in:      initFlags{strategy: "passphrase"},
+			wantErr: ErrSecretRequired{},
+		},
+		{
+			name:    "user-pin requires so-pin",
+			in:      initFlags{strategy: "passphrase", secret: "p", userPin: "2"},
+			wantErr: ErrUserPinRequiresSOPin{},
+		},
+		{
+			name:    "shamir requires secret",
+			in:      initFlags{strategy: "shamir"},
+			wantErr: ErrSecretRequired{},
+		},
+		{
+			name: "none with no secret/pins OK",
+			in:   initFlags{strategy: "none"},
+		},
+		{
+			name:    "none rejects --passphrase",
+			in:      initFlags{strategy: "none", secret: "p"},
+			wantErr: ErrSecretNotAllowed{},
+		},
+		{
+			name:    "none rejects --so-pin (PINsNotAllowedError)",
+			in:      initFlags{strategy: "none", soPin: "1"},
+			wantErr: PINsNotAllowedError{},
+		},
+		{
+			name:    "none rejects --user-pin (PINsNotAllowedError)",
+			in:      initFlags{strategy: "none", userPin: "2"},
+			wantErr: PINsNotAllowedError{},
+		},
+		{
+			name:    "unknown strategy rejected",
+			in:      initFlags{strategy: "bogus"},
+			wantErr: ErrInvalidBarrierStrategy{},
+		},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateInitFlags(&tc.in)
+			assertErrorMatches(t, err, tc.wantErr)
+		})
+	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sub, _, err := cmd.Find([]string{tt.name})
+// TestValidateInitFlags_PINsNotAllowedError_HasFlagName verifies the
+// PINsNotAllowedError carries the rejected flag verbatim so callers
+// can surface it.
+func TestValidateInitFlags_PINsNotAllowedError_HasFlagName(t *testing.T) {
+	err := validateInitFlags(&initFlags{strategy: "none", soPin: "1"})
+	pe, ok := err.(PINsNotAllowedError)
+	if !ok {
+		t.Fatalf("expected PINsNotAllowedError, got %T", err)
+	}
+	if pe.Flag != "so-pin" {
+		t.Errorf("expected Flag=so-pin, got %q", pe.Flag)
+	}
+	if pe.Strategy != "none" {
+		t.Errorf("expected Strategy=none, got %q", pe.Strategy)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// init-shamir flag validation
+// ---------------------------------------------------------------------------
+
+func TestValidateInitShamirFlags(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      initShamirFlags
+		wantErr any
+	}{
+		{
+			name: "valid 3-of-5",
+			in:   initShamirFlags{secret: "p", threshold: 3, total: 5},
+		},
+		{
+			name: "valid 2-of-2",
+			in:   initShamirFlags{secret: "p", threshold: 2, total: 2},
+		},
+		{
+			name:    "missing secret",
+			in:      initShamirFlags{threshold: 3, total: 5},
+			wantErr: ErrMissingSecret{},
+		},
+		{
+			name:    "total < 2",
+			in:      initShamirFlags{secret: "p", threshold: 2, total: 1},
+			wantErr: ErrInvalidTotal{},
+		},
+		{
+			name:    "threshold < 2",
+			in:      initShamirFlags{secret: "p", threshold: 1, total: 5},
+			wantErr: ErrInvalidThreshold{},
+		},
+		{
+			name:    "threshold > total",
+			in:      initShamirFlags{secret: "p", threshold: 5, total: 3},
+			wantErr: ErrInvalidThreshold{},
+		},
+		{
+			name:    "user-pin without so-pin",
+			in:      initShamirFlags{secret: "p", threshold: 3, total: 5, userPin: "u"},
+			wantErr: ErrUserPinRequiresSOPin{},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateInitShamirFlags(&tc.in)
+			assertErrorMatches(t, err, tc.wantErr)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// rekey flag validation
+// ---------------------------------------------------------------------------
+
+func TestValidateRekeyFlags(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      rekeyFlags
+		wantErr any
+	}{
+		{
+			name: "secret only",
+			in:   rekeyFlags{secret: "new"},
+		},
+		{
+			name: "secret + paired thresholds",
+			in:   rekeyFlags{secret: "new", threshold: 3, total: 5},
+		},
+		{
+			name: "secret + so-pin only (no --user-pin counterpart)",
+			in:   rekeyFlags{secret: "new", soPin: "so"},
+		},
+		{
+			name:    "missing secret",
+			in:      rekeyFlags{threshold: 3, total: 5},
+			wantErr: ErrMissingSecret{},
+		},
+		{
+			name:    "threshold without total",
+			in:      rekeyFlags{secret: "new", threshold: 3},
+			wantErr: ErrRekeyPartialFlags{},
+		},
+		{
+			name:    "total without threshold",
+			in:      rekeyFlags{secret: "new", total: 5},
+			wantErr: ErrRekeyPartialFlags{},
+		},
+		{
+			name:    "threshold > total",
+			in:      rekeyFlags{secret: "new", threshold: 5, total: 3},
+			wantErr: ErrInvalidThreshold{},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateRekeyFlags(&tc.in)
+			assertErrorMatches(t, err, tc.wantErr)
+		})
+	}
+}
+
+// TestRekeyCommand_NoUserPinFlag verifies the canonical PIN matrix
+// rule: rekey accepts --so-pin only; --user-pin is NOT exposed because
+// the wire BarrierRekeyRequest has no UserPin field.
+func TestRekeyCommand_NoUserPinFlag(t *testing.T) {
+	cmd := newRekeyCommand(noopFlags)
+	if cmd.Flags().Lookup("user-pin") != nil {
+		t.Error("rekey must NOT expose --user-pin (wire request has no UserPin field)")
+	}
+	if cmd.Flags().Lookup("so-pin") == nil {
+		t.Error("rekey must expose --so-pin")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// recovery generate / recover flag validation
+// ---------------------------------------------------------------------------
+
+func TestValidateRecoveryGenerateFlags(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      recoveryGenerateFlags
+		wantErr any
+	}{
+		{name: "valid", in: recoveryGenerateFlags{threshold: 3, total: 5}},
+		{name: "total < 2", in: recoveryGenerateFlags{threshold: 2, total: 1}, wantErr: ErrInvalidTotal{}},
+		{name: "threshold < 2", in: recoveryGenerateFlags{threshold: 1, total: 5}, wantErr: ErrInvalidThreshold{}},
+		{name: "threshold > total", in: recoveryGenerateFlags{threshold: 6, total: 5}, wantErr: ErrInvalidThreshold{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateRecoveryGenerateFlags(&tc.in)
+			assertErrorMatches(t, err, tc.wantErr)
+		})
+	}
+}
+
+func TestValidateRecoveryRecoverFlags(t *testing.T) {
+	if err := validateRecoveryRecoverFlags(&recoveryRecoverFlags{shares: []string{"s1"}}); err != nil {
+		t.Errorf("expected nil error, got: %v", err)
+	}
+	if err := validateRecoveryRecoverFlags(&recoveryRecoverFlags{}); err == nil {
+		t.Error("expected ErrMissingShares")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Command structure / flag wiring
+// ---------------------------------------------------------------------------
+
+func TestSubcommandUseStrings(t *testing.T) {
+	cmd := NewCommand(noopFlags)
+	checks := []struct{ path, use string }{
+		{"status", "status"},
+		{"init", "init"},
+		{"init-shamir", "init-shamir"},
+		{"unseal", "unseal"},
+		{"unseal-shares", "unseal-shares"},
+		{"seal", "seal"},
+		{"rekey", "rekey"},
+	}
+	for _, c := range checks {
+		t.Run(c.path, func(t *testing.T) {
+			sub, _, err := cmd.Find([]string{c.path})
 			if err != nil {
-				t.Fatalf("failed to find subcommand %q: %v", tt.name, err)
+				t.Fatalf("find %q: %v", c.path, err)
 			}
-			if sub.Short != tt.expectedShort {
-				t.Errorf("expected Short %q, got %q", tt.expectedShort, sub.Short)
+			if sub.Use != c.use {
+				t.Errorf("Use=%q want %q", sub.Use, c.use)
 			}
 		})
 	}
 }
 
-// TestInitCommand_RedirectsToRootInit verifies that the legacy
-// "platformctl barrier init" subcommand emits CanonicalRedirectError
-// pointing at the root "platformctl init" command per
-// docs/08-bootstrap-auth-architecture.md §6.
-func TestInitCommand_RedirectsToRootInit(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewCommand(getFlags)
-	initCmd, _, err := cmd.Find([]string{"init"})
-	if err != nil {
-		t.Fatalf("failed to find init subcommand: %v", err)
-	}
-	if initCmd.RunE == nil {
-		t.Fatal("legacy barrier init must have a RunE that emits CanonicalRedirectError")
-	}
-
-	runErr := initCmd.RunE(initCmd, nil)
-	if runErr == nil {
-		t.Fatal("expected CanonicalRedirectError from legacy barrier init")
-	}
-	var redirect *CanonicalRedirectError
-	if !errors.As(runErr, &redirect) {
-		t.Fatalf("expected *CanonicalRedirectError, got %T: %v", runErr, runErr)
-	}
-	if redirect.Old != "platformctl barrier init" {
-		t.Errorf("expected Old=\"platformctl barrier init\", got %q", redirect.Old)
-	}
-}
-
-// TestInitCommand_RedirectIgnoresLegacyFlags verifies the redirect
-// stub disables flag parsing entirely so legacy --secret / --threshold
-// / --shares arguments are passed through to the redirect handler.
-func TestInitCommand_RedirectIgnoresLegacyFlags(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewCommand(getFlags)
-	initCmd, _, err := cmd.Find([]string{"init"})
-	if err != nil {
-		t.Fatalf("failed to find init subcommand: %v", err)
-	}
-
-	// The redirect command MUST NOT register the legacy flags; the
-	// canonical flag set lives on the root "platformctl init" command.
-	if flag := initCmd.Flags().Lookup("secret"); flag != nil {
-		t.Error("legacy --secret flag must not be exposed on the redirect stub")
-	}
-	if flag := initCmd.Flags().Lookup("threshold"); flag != nil {
-		t.Error("legacy --threshold flag must not be exposed on the redirect stub")
-	}
-	if flag := initCmd.Flags().Lookup("shares"); flag != nil {
-		t.Error("legacy --shares flag must not be exposed on the redirect stub")
+func TestInitShamirCommand_Flags(t *testing.T) {
+	cmd := newInitShamirCommand(noopFlags)
+	for _, name := range []string{"passphrase", "threshold", "total", "so-pin", "user-pin"} {
+		if cmd.Flags().Lookup(name) == nil {
+			t.Errorf("init-shamir missing flag --%s", name)
+		}
 	}
 }
 
 func TestUnsealCommand_Flags(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
+	cmd := newUnsealCommand(noopFlags)
+	if cmd.Flags().Lookup("passphrase") == nil {
+		t.Error("unseal missing --passphrase")
 	}
-
-	cmd := NewCommand(getFlags)
-	unsealCmd, _, err := cmd.Find([]string{"unseal"})
-	if err != nil {
-		t.Fatalf("failed to find unseal subcommand: %v", err)
-	}
-
-	tests := []struct {
-		flagName     string
-		defaultValue string
-	}{
-		{flagName: "secret", defaultValue: ""},
-		{flagName: "share", defaultValue: ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.flagName, func(t *testing.T) {
-			flag := unsealCmd.Flags().Lookup(tt.flagName)
-			if flag == nil {
-				t.Fatalf("expected flag %q not found", tt.flagName)
-			}
-			if flag.DefValue != tt.defaultValue {
-				t.Errorf("expected default %q, got %q", tt.defaultValue, flag.DefValue)
-			}
-		})
+	// "--share" is reserved for unseal-shares; the single-secret unseal
+	// MUST NOT expose it.
+	if cmd.Flags().Lookup("share") != nil {
+		t.Error("unseal must not expose --share")
 	}
 }
 
-func TestRekeyCommand_Flags(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewCommand(getFlags)
-	rekeyCmd, _, err := cmd.Find([]string{"rekey"})
-	if err != nil {
-		t.Fatalf("failed to find rekey subcommand: %v", err)
-	}
-
-	tests := []struct {
-		flagName     string
-		defaultValue string
-	}{
-		{flagName: "threshold", defaultValue: "1"},
-		{flagName: "shares", defaultValue: "1"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.flagName, func(t *testing.T) {
-			flag := rekeyCmd.Flags().Lookup(tt.flagName)
-			if flag == nil {
-				t.Fatalf("expected flag %q not found", tt.flagName)
-			}
-			if flag.DefValue != tt.defaultValue {
-				t.Errorf("expected default %q, got %q", tt.defaultValue, flag.DefValue)
-			}
-		})
+func TestUnsealSharesCommand_Flags(t *testing.T) {
+	cmd := newUnsealSharesCommand(noopFlags)
+	for _, name := range []string{"share", "shares-file"} {
+		if cmd.Flags().Lookup(name) == nil {
+			t.Errorf("unseal-shares missing flag --%s", name)
+		}
 	}
 }
 
-func TestValidateInitParams_SingleKeyValid(t *testing.T) {
-	err := validateInitParams("my-secret", 1, 1)
-	if err != nil {
-		t.Errorf("expected no error for valid single-key params, got: %v", err)
+func TestSealCommand_Flags(t *testing.T) {
+	cmd := newSealCommand(noopFlags)
+	if cmd.Flags().Lookup("so-pin") == nil {
+		t.Error("seal missing --so-pin")
+	}
+	if cmd.Flags().Lookup("assume-yes") == nil {
+		t.Error("seal missing --assume-yes")
+	}
+	if cmd.Flags().ShorthandLookup("y") == nil {
+		t.Error("seal missing -y shorthand")
 	}
 }
 
-func TestValidateInitParams_SingleKeyMissingSecret(t *testing.T) {
-	err := validateInitParams("", 1, 1)
-	if err == nil {
-		t.Error("expected error for missing secret in single-key mode")
+func TestRecoveryGroup_Subcommands(t *testing.T) {
+	cmd := newRecoveryCommand(noopFlags)
+	expect := map[string]bool{"generate": false, "recover": false}
+	for _, sub := range cmd.Commands() {
+		if _, ok := expect[sub.Use]; ok {
+			expect[sub.Use] = true
+		}
 	}
-
-	if _, ok := err.(ErrMissingSecret); !ok {
-		t.Errorf("expected ErrMissingSecret, got %T: %v", err, err)
-	}
-}
-
-func TestValidateInitParams_ShamirValid(t *testing.T) {
-	err := validateInitParams("", 3, 5)
-	if err != nil {
-		t.Errorf("expected no error for valid Shamir params, got: %v", err)
+	for k, v := range expect {
+		if !v {
+			t.Errorf("recovery missing %q", k)
+		}
 	}
 }
 
-func TestValidateInitParams_ShamirInvalidThreshold(t *testing.T) {
-	err := validateInitParams("", 5, 3)
-	if err == nil {
-		t.Error("expected error when threshold > shares")
-	}
-
-	e, ok := err.(ErrInvalidThreshold)
-	if !ok {
-		t.Errorf("expected ErrInvalidThreshold, got %T: %v", err, err)
-	}
-
-	if e.Threshold != 5 || e.Shares != 3 {
-		t.Errorf("expected threshold=5 shares=3, got threshold=%d shares=%d", e.Threshold, e.Shares)
-	}
-}
-
-func TestValidateInitParams_ShamirEqualThresholdAndShares(t *testing.T) {
-	err := validateInitParams("", 3, 3)
-	if err != nil {
-		t.Errorf("expected no error when threshold == shares, got: %v", err)
-	}
-}
-
-func TestValidateInitParams_ShamirWithSecret(t *testing.T) {
-	// Shamir mode should work even if secret is provided (threshold >= 2 takes precedence)
-	err := validateInitParams("some-secret", 3, 5)
-	if err != nil {
-		t.Errorf("expected no error for Shamir mode with secret, got: %v", err)
-	}
-}
-
-func TestFormatStrategy(t *testing.T) {
-	tests := []struct {
-		strategy barriersvc.Strategy
-		expected string
-	}{
-		{strategy: barriersvc.StrategyUnspecified, expected: "unspecified"},
-		{strategy: barriersvc.StrategySingleKey, expected: "single-key"},
-		{strategy: barriersvc.StrategyShamir, expected: "shamir"},
-		{strategy: barriersvc.Strategy("bogus"), expected: "unknown"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.expected, func(t *testing.T) {
-			result := formatStrategy(tt.strategy)
-			if result != tt.expected {
-				t.Errorf("expected %q, got %q", tt.expected, result)
-			}
-		})
-	}
-}
-
-func TestErrors_Messages(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      error
-		contains string
-	}{
-		{
-			name:     "ErrBarrierInitFailed",
-			err:      ErrBarrierInitFailed{Err: ErrMissingSecret{}},
-			contains: "barrier initialization failed",
-		},
-		{
-			name:     "ErrBarrierStatusFailed",
-			err:      ErrBarrierStatusFailed{Err: ErrMissingSecret{}},
-			contains: "failed to get barrier status",
-		},
-		{
-			name:     "ErrBarrierUnsealFailed",
-			err:      ErrBarrierUnsealFailed{Err: ErrMissingSecret{}},
-			contains: "barrier unseal failed",
-		},
-		{
-			name:     "ErrBarrierSealFailed",
-			err:      ErrBarrierSealFailed{Err: ErrMissingSecret{}},
-			contains: "barrier seal failed",
-		},
-		{
-			name:     "ErrBarrierRekeyFailed",
-			err:      ErrBarrierRekeyFailed{Err: ErrMissingSecret{}},
-			contains: "barrier rekey failed",
-		},
-		{
-			name:     "ErrInvalidThreshold",
-			err:      ErrInvalidThreshold{Threshold: 5, Shares: 3},
-			contains: "invalid threshold",
-		},
-		{
-			name:     "ErrInvalidShares",
-			err:      ErrInvalidShares{Shares: 0},
-			contains: "invalid shares",
-		},
-		{
-			name:     "ErrMissingSecret",
-			err:      ErrMissingSecret{},
-			contains: "secret is required",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			msg := tt.err.Error()
-			if msg == "" {
-				t.Error("expected non-empty error message")
-			}
-			if !strings.Contains(msg, tt.contains) {
-				t.Errorf("expected error to contain %q, got %q", tt.contains, msg)
-			}
-		})
-	}
-}
-
-func TestSealCommand_NoLocalFlags(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewCommand(getFlags)
-	sealCmd, _, err := cmd.Find([]string{"seal"})
-	if err != nil {
-		t.Fatalf("failed to find seal subcommand: %v", err)
-	}
-
-	// Seal should have no command-specific flags
-	count := 0
-	sealCmd.LocalFlags().VisitAll(func(f *pflag.Flag) {
-		count++
-	})
-	if count != 0 {
-		t.Errorf("expected no local flags on seal command, got %d", count)
-	}
-}
-
+// TestStatusCommand_NoLocalFlags retains the legacy guarantee that
+// "barrier status" has no command-specific flags.
 func TestStatusCommand_NoLocalFlags(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewCommand(getFlags)
-	statusCmd, _, err := cmd.Find([]string{"status"})
-	if err != nil {
-		t.Fatalf("failed to find status subcommand: %v", err)
-	}
-
-	// Status should have no command-specific flags
+	cmd := newStatusCommand(noopFlags)
 	count := 0
-	statusCmd.LocalFlags().VisitAll(func(f *pflag.Flag) {
-		count++
-	})
+	cmd.LocalFlags().VisitAll(func(*pflag.Flag) { count++ })
 	if count != 0 {
-		t.Errorf("expected no local flags on status command, got %d", count)
+		t.Errorf("expected no local flags on status, got %d", count)
 	}
 }
 
-func TestErrors_Wrapping(t *testing.T) {
-	// Verify that wrapped errors preserve the inner error message
-	inner := ErrMissingSecret{}
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
 
-	tests := []struct {
-		name string
-		err  error
-	}{
-		{name: "init", err: ErrBarrierInitFailed{Err: inner}},
-		{name: "status", err: ErrBarrierStatusFailed{Err: inner}},
-		{name: "unseal", err: ErrBarrierUnsealFailed{Err: inner}},
-		{name: "seal", err: ErrBarrierSealFailed{Err: inner}},
-		{name: "rekey", err: ErrBarrierRekeyFailed{Err: inner}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			msg := tt.err.Error()
-			if !strings.Contains(msg, inner.Error()) {
-				t.Errorf("expected wrapped error to contain inner error message %q, got %q", inner.Error(), msg)
-			}
-		})
-	}
-}
+func noopFlags() *cli.CommonFlags { return &cli.CommonFlags{} }

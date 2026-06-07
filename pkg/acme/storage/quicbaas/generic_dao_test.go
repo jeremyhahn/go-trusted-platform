@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	casdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -48,7 +48,7 @@ func TestGenericDAO_ForEachPage(t *testing.T) {
 
 	var pages int
 	var totalEntities int
-	err := d.ForEachPage(ctx, pq(1, 2), func(result casdk.DAOPageResult[*verifyEntity]) error {
+	err := d.ForEachPage(ctx, pq(1, 2), func(result trustedca.DAOPageResult[*verifyEntity]) error {
 		pages++
 		totalEntities += len(result.Entities)
 		return nil
@@ -69,9 +69,9 @@ func TestGenericDAO_ForEachPage_StopIteration(t *testing.T) {
 	}
 
 	var pages int
-	err := d.ForEachPage(ctx, pq(1, 3), func(result casdk.DAOPageResult[*verifyEntity]) error {
+	err := d.ForEachPage(ctx, pq(1, 3), func(result trustedca.DAOPageResult[*verifyEntity]) error {
 		pages++
-		return casdk.ErrDAOStopIteration
+		return trustedca.ErrDAOStopIteration
 	})
 	require.NoError(t, err)
 	assert.Equal(t, 1, pages)
@@ -177,7 +177,7 @@ func TestGenericDAO_SaveWithCondition_NewEntity(t *testing.T) {
 
 	ctx := context.Background()
 	entity := &verifyEntity{ID: 1}
-	cond := casdk.DAOCondition{Target: casdk.DAOConditionValue, Value: entity}
+	cond := trustedca.DAOCondition{Target: trustedca.DAOConditionValue, Value: entity}
 
 	err := d.SaveWithCondition(ctx, entity, cond)
 	require.NoError(t, err)
@@ -191,7 +191,7 @@ func TestGenericDAO_SaveWithCondition_ZeroID(t *testing.T) {
 	store := newMockObjectStorage()
 	d := newGenericDAO[*verifyEntity](store, "condzero", "", func() *verifyEntity { return &verifyEntity{} }, "test")
 
-	err := d.SaveWithCondition(context.Background(), &verifyEntity{ID: 0}, casdk.DAOCondition{})
+	err := d.SaveWithCondition(context.Background(), &verifyEntity{ID: 0}, trustedca.DAOCondition{})
 	require.Error(t, err)
 }
 
@@ -206,7 +206,7 @@ func TestGenericDAO_Delete_NotFound(t *testing.T) {
 
 func TestSortEntities_Ascending(t *testing.T) {
 	entities := []*verifyEntity{{ID: 3}, {ID: 1}, {ID: 2}}
-	sortEntities(entities, casdk.DAOPageQuery{SortOrder: 1})
+	sortEntities(entities, trustedca.DAOPageQuery{SortOrder: 1})
 	assert.Equal(t, uint64(1), entities[0].ID)
 	assert.Equal(t, uint64(2), entities[1].ID)
 	assert.Equal(t, uint64(3), entities[2].ID)
@@ -214,7 +214,7 @@ func TestSortEntities_Ascending(t *testing.T) {
 
 func TestSortEntities_Descending(t *testing.T) {
 	entities := []*verifyEntity{{ID: 1}, {ID: 3}, {ID: 2}}
-	sortEntities(entities, casdk.DAOPageQuery{SortOrder: -1})
+	sortEntities(entities, trustedca.DAOPageQuery{SortOrder: -1})
 	assert.Equal(t, uint64(3), entities[0].ID)
 	assert.Equal(t, uint64(2), entities[1].ID)
 	assert.Equal(t, uint64(1), entities[2].ID)

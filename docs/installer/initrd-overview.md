@@ -21,17 +21,52 @@ Platform-initrd is a comprehensive boot-time orchestration system that provides 
 go-trusted-platform/
 ├── pkg/
 │   ├── luks/          # LUKS/cryptsetup integration
-│   ├── fido2/         # Offline FIDO2 CTAP2 protocol
-│   ├── initrd/        # Boot orchestration
-│   └── tpm2/          # TPM operations (existing)
+│   ├── initrd/        # Boot orchestration (SDK-aware)
+│   ├── tpm/           # Host TPM operations
+│   └── ...
 ├── cmd/
-│   └── platform-initrd/  # Main binary
+│   └── platform-initrd/  # Static initramfs binary
 └── build/
     ├── platform/
     │   └── amd64-alpine/  # Alpine platform build system
     └── iso/
         └── alpine/        # ISO builder entry point
 ```
+
+There is **no `pkg/fido2/`** in the platform repository. The Phase 6c
+refactor deleted that package (~6,821 LOC) and routed every consumer
+through the canonical xkms implementation. The initrd reaches the FIDO2
+CTAP2 primitives through the quicbaas SDK type-alias re-export at
+`github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2`.
+
+### Build-time carve-out for the initramfs
+
+`pkg/initrd/` and `cmd/platform-initrd/` are a **separate compilation
+unit** that runs in early boot before networking, TLS trust, and the SDK
+runtime are available. The initrd binary therefore cannot open a
+quicbaas SDK connection. Two import rules apply:
+
+1. The initrd MAY import `github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2`
+   directly. The package is a thin **type-alias re-export** of the
+   canonical xkms implementation; it carries no network or runtime
+   state and is safe to link statically into the initramfs binary.
+2. The initrd MUST NOT import `github.com/jeremyhahn/go-xkms/pkg/*`
+   directly. The only blessed upstream path from the platform repo is
+   the quicbaas SDK re-export.
+
+The relevant import is visible in `pkg/initrd/strategy_fido2.go`:
+
+```go
+import (
+    "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
+    // ...
+)
+```
+
+This is a **build-time carve-out**, not a runtime SDK exception.
+Application code that runs under `platformd` or `platformctl` reaches
+FIDO2 only through `quicbaas.SDK().Security().Auth().FIDO2()` /
+`Security().Auth().WebAuthn()` and never via the re-export directly.
 
 ### Package Responsibilities
 
@@ -47,17 +82,22 @@ go-trusted-platform/
 - `keyslot.go` - Keyslot operations
 - `token.go` - Token management
 
-#### pkg/fido2
-- FIDO2 CTAP2 protocol implementation
-- USB HID device communication
-- HMAC-secret extension for key derivation
-- Credential enrollment and authentication
+#### FIDO2 (re-exported from go-xkms via the quicbaas SDK)
 
-**Key Files:**
-- `fido2.go` - Handler interface
-- `device.go` - USB HID communication
-- `ctap2.go` - CTAP2 protocol
-- `hmac_secret.go` - Key derivation
+The initrd consumes the canonical xkms FIDO2 CTAP2 implementation via
+`github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2`. The type aliases
+exposed by that package include:
+
+- `fido2.EnrollmentConfig` / `fido2.EnrollmentResult` — credential
+  enrollment payloads used by `pkg/initrd/strategy_fido2.go`.
+- `fido2.AuthenticationConfig` — slot-level credential metadata loaded
+  during boot.
+- `fido2.RelyingParty`, `fido2.User` — identifiers for the LUKS-root
+  relying party.
+
+The CTAP2 protocol, USB HID device communication, and HMAC-secret
+derivation all live in go-xkms and are NOT duplicated in this
+repository.
 
 #### pkg/initrd
 - Boot mode detection (install, boot, recovery)
@@ -69,9 +109,12 @@ go-trusted-platform/
 **Key Files:**
 - `initrd.go` - Manager interface
 - `strategy.go` - Unlock strategy chain
+- `strategy_tpm_pcr.go` - PCR-sealed TPM strategy
+- `strategy_tpm_upgrade.go` - Upgrade-resilient TPM strategy
+- `strategy_fido2.go` - FIDO2 strategy (consumes the xkms re-export)
+- `strategy_password.go` - Interactive password fallback
 - `install.go` - Installation workflow
 - `boot.go` - Boot workflow
-- `recovery.go` - Recovery workflow
 
 #### cmd/platform-initrd
 - Command-line interface
@@ -307,9 +350,13 @@ make test-initrd
 
 # Test specific package
 go test -v ./pkg/luks/...
-go test -v ./pkg/fido2/...
 go test -v ./pkg/initrd/...
 ```
+
+FIDO2 CTAP2 unit tests live in the canonical xkms repository
+(`go-xkms/pkg/fido2`). The platform initrd's FIDO2 strategy test
+(`pkg/initrd/strategy_fido2_test.go`) exercises the integration against
+the SDK re-export only.
 
 ### Integration Tests
 
@@ -488,9 +535,9 @@ The strategy pattern allows adding new unlock methods without modifying core cod
 ### Source Code
 
 - pkg/luks - LUKS integration
-- pkg/fido2 - FIDO2 implementation
-- pkg/initrd - Boot orchestration
+- pkg/initrd - Boot orchestration (FIDO2 strategy lives in `strategy_fido2.go`)
 - cmd/platform-initrd - CLI implementation
+- go-quicbaas `sdk/go/xkms/fido2` - canonical FIDO2 CTAP2 types (re-exported from go-xkms)
 
 ### External Resources
 

@@ -19,7 +19,7 @@ import (
 	"os"
 	"time"
 
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
@@ -89,7 +89,7 @@ type Config struct {
 
 	// CAService is the certificate authority implementation.
 	// When set, the daemon will register the CA gRPC service.
-	CAService goca.CACertificateAuthority
+	CAService quicbaasca.CACertificateAuthority
 
 	// VTPMService is the vTPM service implementation.
 	// When set, the daemon will register the vTPM gRPC service.

@@ -19,16 +19,15 @@ import (
 	"testing"
 	"time"
 
-	pkgca "github.com/jeremyhahn/go-xkms/pkg/ca"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // =============================================================================
-// Mock production CA implementing goca.CACertificateAuthority surface
+// Mock production CA implementing xkmsca.TCGCA surface
 // =============================================================================
 //
 // We only implement the methods exercised by CAAuthorityAdapter; the rest are
@@ -36,18 +35,18 @@ import (
 // =============================================================================
 
 type fakeProdCA struct {
-	goca.CACertificateAuthority // embed for any unimplemented methods (will panic if called)
+	xkmsca.TCGCA // embed for any unimplemented methods (will panic if called)
 
-	identity         string
+	identity        string
 	initialized     bool
 	defaultKeyAlg   x509.PublicKeyAlgorithm
 	defaultValidity int
 	rootCert        *x509.Certificate
 	intermediate    *x509.Certificate
-	issued          *pkgca.IssuedCertificate
+	issued          *xkmsca.IssuedCertificate
 	issueErr        error
 	revokeErr       error
-	revokeOpts      pkgca.RevokeOptions
+	revokeOpts      xkmsca.RevokeOptions
 	revokeCert      *x509.Certificate
 	bundle          []byte
 	bundleErr       error
@@ -58,16 +57,16 @@ type fakeProdCA struct {
 	certStore       xkmssdk.CertStore
 }
 
-func (f *fakeProdCA) Identity() string                                  { return f.identity }
-func (f *fakeProdCA) IsInitialized() bool                               { return f.initialized }
-func (f *fakeProdCA) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm      { return f.defaultKeyAlg }
-func (f *fakeProdCA) DefaultValidityPeriod() int                        { return f.defaultValidity }
-func (f *fakeProdCA) TrustedRoot() (*x509.Certificate, error)           { return f.rootCert, nil }
-func (f *fakeProdCA) TrustedIntermediate() (*x509.Certificate, error)   { return f.intermediate, nil }
-func (f *fakeProdCA) IssueCertificate(req *goca.CACertificateRequest) (*pkgca.IssuedCertificate, error) {
+func (f *fakeProdCA) Identity() string                                { return f.identity }
+func (f *fakeProdCA) IsInitialized() bool                             { return f.initialized }
+func (f *fakeProdCA) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm    { return f.defaultKeyAlg }
+func (f *fakeProdCA) DefaultValidityPeriod() int                      { return f.defaultValidity }
+func (f *fakeProdCA) TrustedRoot() (*x509.Certificate, error)         { return f.rootCert, nil }
+func (f *fakeProdCA) TrustedIntermediate() (*x509.Certificate, error) { return f.intermediate, nil }
+func (f *fakeProdCA) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	return f.issued, f.issueErr
 }
-func (f *fakeProdCA) RevokeCert(cert *x509.Certificate, opts pkgca.RevokeOptions) error {
+func (f *fakeProdCA) RevokeCert(cert *x509.Certificate, opts xkmsca.RevokeOptions) error {
 	f.revokeCert = cert
 	f.revokeOpts = opts
 	return f.revokeErr
@@ -126,10 +125,10 @@ func TestCAAuthorityAdapter_PassthroughGetters(t *testing.T) {
 
 func TestCAAuthorityAdapter_IssueCertificate_Success(t *testing.T) {
 	cert := &x509.Certificate{}
-	prod := &fakeProdCA{issued: &pkgca.IssuedCertificate{Certificate: cert}}
+	prod := &fakeProdCA{issued: &xkmsca.IssuedCertificate{Certificate: cert}}
 	a := NewCAAuthorityAdapter(prod)
 
-	got, err := a.IssueCertificate(&goca.CACertificateRequest{})
+	got, err := a.IssueCertificate(&xkmsca.CertificateRequest{})
 	require.NoError(t, err)
 	assert.Same(t, cert, got)
 }
@@ -139,7 +138,7 @@ func TestCAAuthorityAdapter_IssueCertificate_PropagatesError(t *testing.T) {
 	prod := &fakeProdCA{issueErr: prodErr}
 	a := NewCAAuthorityAdapter(prod)
 
-	got, err := a.IssueCertificate(&goca.CACertificateRequest{})
+	got, err := a.IssueCertificate(&xkmsca.CertificateRequest{})
 	assert.Nil(t, got)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, prodErr)
@@ -149,7 +148,7 @@ func TestCAAuthorityAdapter_IssueCertificate_NilFromCAReturnsErr(t *testing.T) {
 	prod := &fakeProdCA{issued: nil}
 	a := NewCAAuthorityAdapter(prod)
 
-	got, err := a.IssueCertificate(&goca.CACertificateRequest{})
+	got, err := a.IssueCertificate(&xkmsca.CertificateRequest{})
 	assert.Nil(t, got)
 	require.Error(t, err)
 	var issueErr ErrCertificateIssueFailed
@@ -157,10 +156,10 @@ func TestCAAuthorityAdapter_IssueCertificate_NilFromCAReturnsErr(t *testing.T) {
 }
 
 func TestCAAuthorityAdapter_IssueCertificate_NilCertReturnsErr(t *testing.T) {
-	prod := &fakeProdCA{issued: &pkgca.IssuedCertificate{Certificate: nil}}
+	prod := &fakeProdCA{issued: &xkmsca.IssuedCertificate{Certificate: nil}}
 	a := NewCAAuthorityAdapter(prod)
 
-	got, err := a.IssueCertificate(&goca.CACertificateRequest{})
+	got, err := a.IssueCertificate(&xkmsca.CertificateRequest{})
 	assert.Nil(t, got)
 	require.Error(t, err)
 }

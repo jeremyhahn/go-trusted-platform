@@ -18,7 +18,7 @@ import (
 	"errors"
 	"testing"
 
-	casdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -163,7 +163,7 @@ func TestGenericDAO_SaveWithCondition_ExistingEntity(t *testing.T) {
 
 	// Try to update with value condition
 	updated := &verifyEntity{ID: 1}
-	cond := casdk.DAOCondition{Target: casdk.DAOConditionValue, Operator: casdk.DAOOpNotEqual, Value: nil}
+	cond := trustedca.DAOCondition{Target: trustedca.DAOConditionValue, Operator: trustedca.DAOOpNotEqual, Value: nil}
 	err = d.SaveWithCondition(ctx, updated, cond)
 	// Condition evaluation depends on implementation
 	_ = err
@@ -184,7 +184,7 @@ func TestGenericDAO_Page_SecondPage(t *testing.T) {
 	}
 
 	// Fetch second page
-	query := casdk.DAOPageQuery{Page: 2, PageSize: 2}
+	query := trustedca.DAOPageQuery{Page: 2, PageSize: 2}
 	result, err := d.Page(ctx, query)
 	require.NoError(t, err)
 	assert.NotNil(t, result.Entities)
@@ -249,7 +249,7 @@ func TestGenericDAO_ForEachPage_CallbackError(t *testing.T) {
 	require.NoError(t, err)
 
 	callbackErr := errors.New("callback failed")
-	err = d.ForEachPage(ctx, pq(1, 10), func(result casdk.DAOPageResult[*verifyEntity]) error {
+	err = d.ForEachPage(ctx, pq(1, 10), func(result trustedca.DAOPageResult[*verifyEntity]) error {
 		return callbackErr
 	})
 	require.ErrorIs(t, err, callbackErr)

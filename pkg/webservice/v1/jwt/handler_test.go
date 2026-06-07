@@ -25,11 +25,11 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -97,7 +97,7 @@ func TestNewRestHandler(t *testing.T) {
 	assert.NotNil(t, handler)
 }
 
-func TestHandlerGenerateToken_Success(t *testing.T) {
+func TestHandlerGenerateToken_NoLoginClientFailsClosed(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -129,14 +129,14 @@ func TestHandlerGenerateToken_Success(t *testing.T) {
 	// Call handler
 	handler.(*RestHandler).GenerateToken(w, req)
 
-	// Check response
-	assert.Equal(t, http.StatusOK, w.Code)
+	// With no unified login client wired the /login endpoint must fail
+	// closed: the locked architecture forbids minting an unverified JWT.
+	assert.Equal(t, http.StatusForbidden, w.Code)
 
 	var resp response.WebServiceResponse
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	assert.Nil(t, err)
-	assert.True(t, resp.Success)
-	assert.NotNil(t, resp.Payload)
+	assert.False(t, resp.Success)
 }
 
 func TestHandlerGenerateToken_InvalidJSON(t *testing.T) {

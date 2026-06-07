@@ -100,6 +100,19 @@ type Options struct {
 	// This is an opaque value that is passed to the embedded transport adapter.
 	// Type: *embedded.ServiceRegistry (stored as interface{} to avoid circular import).
 	EmbeddedServices interface{}
+
+	// QuicBaaSAddr is the address of the QuicBaaS daemon (quicbaasd).
+	// platformd and quicbaasd are independent processes; the platform
+	// SDK client maintains a separate connection to quicbaasd alongside
+	// the platformd connection. Empty means the QuicBaaS client is not
+	// constructed.
+	QuicBaaSAddr string
+
+	// QuicBaaSTransport selects the transport used to dial quicbaasd.
+	// Accepted values: "unix", "grpc", "rest", "quic", "mcp",
+	// "embedded". Empty defers to the go-quicbaas SDK auto-detection
+	// rules (HTTP URLs -> REST, .sock paths -> Unix, otherwise gRPC).
+	QuicBaaSTransport string
 }
 
 // Option is a functional option for configuring Options.
@@ -218,6 +231,26 @@ func WithEmbeddedServices(registry interface{}) Option {
 	}
 }
 
+// WithQuicBaaSAddr sets the QuicBaaS daemon address. When non-empty
+// the platform SDK Client constructs a separate quicbaas SDK client
+// connection alongside the platformd connection. The two connections
+// are independent so callers can mix-and-match transports per daemon.
+func WithQuicBaaSAddr(addr string) Option {
+	return func(o *Options) {
+		o.QuicBaaSAddr = addr
+	}
+}
+
+// WithQuicBaaSTransport selects the transport used to dial quicbaasd.
+// Accepted values: "unix", "grpc", "rest", "quic", "mcp",
+// "embedded". Empty defers to the go-quicbaas SDK auto-detection
+// rules.
+func WithQuicBaaSTransport(transport string) Option {
+	return func(o *Options) {
+		o.QuicBaaSTransport = transport
+	}
+}
+
 // Validate validates the options and returns an error if invalid.
 func (o *Options) Validate() error {
 	if o.OnlyProtocol != ProtocolUnknown && !o.OnlyProtocol.IsValid() {
@@ -283,4 +316,9 @@ func (o *Options) HasMCPAddr() bool {
 // HasEmbeddedServices returns true if embedded services are configured.
 func (o *Options) HasEmbeddedServices() bool {
 	return o.EmbeddedServices != nil
+}
+
+// HasQuicBaaSAddr returns true if a QuicBaaS address is configured.
+func (o *Options) HasQuicBaaSAddr() bool {
+	return o.QuicBaaSAddr != ""
 }

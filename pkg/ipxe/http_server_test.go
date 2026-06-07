@@ -359,6 +359,94 @@ func TestHTTPServer_handleLocalFiles(t *testing.T) {
 	}
 }
 
+// TestHTTPServer_handleDataFiles verifies the /data/ endpoint that
+// serves the container's bind-mounted data directory to iPXE clients.
+// The bootstrap.ipxe script generated for the "bootstrap" boot entry
+// references kernel/initrd as /data/<file>; without this handler,
+// every iPXE chainload that reaches the boot-entry script proceeds
+// to fetch kernel/initrd at /data/vmlinuz / /data/initramfs and
+// 404s, dropping the client to an iPXE shell with "Could not boot:
+// Not found" — exactly the failure mode observed on lab-node-4 PXE
+// boot before this handler was added.
+func TestHTTPServer_handleDataFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	vmlinuz := filepath.Join(tmpDir, "vmlinuz")
+	require.NoError(t, os.WriteFile(vmlinuz, []byte("kernel bytes"), 0644))
+	initramfs := filepath.Join(tmpDir, "initramfs")
+	require.NoError(t, os.WriteFile(initramfs, []byte("initrd bytes"), 0644))
+	subDir := filepath.Join(tmpDir, "subdir")
+	require.NoError(t, os.MkdirAll(subDir, 0755))
+
+	tests := []struct {
+		name           string
+		dataDir        string
+		path           string
+		expectStatus   int
+		expectContains string
+	}{
+		{
+			name:           "vmlinuz served",
+			dataDir:        tmpDir,
+			path:           "/data/vmlinuz",
+			expectStatus:   http.StatusOK,
+			expectContains: "kernel bytes",
+		},
+		{
+			name:           "initramfs served",
+			dataDir:        tmpDir,
+			path:           "/data/initramfs",
+			expectStatus:   http.StatusOK,
+			expectContains: "initrd bytes",
+		},
+		{
+			name:         "no DataDir configured -> 404",
+			dataDir:      "",
+			path:         "/data/vmlinuz",
+			expectStatus: http.StatusNotFound,
+		},
+		{
+			name:         "traversal attempt rejected",
+			dataDir:      tmpDir,
+			path:         "/data/../../etc/passwd",
+			expectStatus: http.StatusBadRequest,
+		},
+		{
+			name:         "missing file -> 404",
+			dataDir:      tmpDir,
+			path:         "/data/does-not-exist",
+			expectStatus: http.StatusNotFound,
+		},
+		{
+			name:         "directory listing denied",
+			dataDir:      tmpDir,
+			path:         "/data/subdir",
+			expectStatus: http.StatusForbidden,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultServerConfig()
+			cfg.DataDir = tt.dataDir
+			server := newTestHTTPServer(t, cfg)
+
+			req := httptest.NewRequest("GET", tt.path, nil)
+			w := httptest.NewRecorder()
+			server.handleDataFiles(w, req)
+
+			resp := w.Result()
+			defer resp.Body.Close()
+			assert.Equal(t, tt.expectStatus, resp.StatusCode)
+			if tt.expectContains != "" {
+				body, err := io.ReadAll(resp.Body)
+				require.NoError(t, err)
+				assert.Contains(t, string(body), tt.expectContains)
+			}
+		})
+	}
+}
+
 func TestHTTPServer_handleProxy(t *testing.T) {
 	// Create a test HTTPS server to proxy with custom TLS config
 	testServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

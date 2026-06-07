@@ -17,10 +17,11 @@ import (
 	"context"
 	"errors"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/fido2"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 var (
@@ -187,7 +188,7 @@ type Manager interface {
 // Platform provides unified platform access
 type Platform struct {
 	// TPM provides TPM2 operations
-	TPM xkmssdk.TrustedPlatformModule
+	TPM xkms.TrustedPlatformModule
 
 	// LUKS provides LUKS operations
 	LUKS luks.Handler
@@ -200,7 +201,7 @@ type Platform struct {
 
 	// Backend provides direct key storage access for minimal boot scenarios
 	// When XKMS is nil, this is used directly for TPM unsealing
-	Backend xkmssdk.TPMKeyBackend
+	Backend xkms.TPMKeyBackend
 
 	// Config is the initrd configuration
 	Config *Config

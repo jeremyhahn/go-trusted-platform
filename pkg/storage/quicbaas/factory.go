@@ -148,7 +148,7 @@ func (f *Factory) Start(ctx context.Context) error {
 		}
 
 		// Create SDK client wrapper for additional functionality
-		sdkClient, err := NewSDKClient(f.config, f.embeddedServer.Service())
+		sdkClient, err := NewSDKClientWithEmbeddedServer(f.config, f.embeddedServer)
 		if err != nil {
 			// Clean up on failure
 			stopCtx := context.Background()

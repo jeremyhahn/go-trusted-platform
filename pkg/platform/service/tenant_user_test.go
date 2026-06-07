@@ -242,12 +242,17 @@ func (s *TestableTenantUserService) RegisterNewUser(
 
 	tenantID := tenantEntity.ID
 
-	// Configure user as tenant owner
+	// Configure user as tenant owner. Mirrors the production
+	// RegisterNewUser flow which grants the default tenant-owner
+	// role on the first user; without this the test harness drifts
+	// from real behavior and a regression in the role-grant code
+	// path goes undetected.
 	now := time.Now().UTC()
 	user.TenantID = tenantID
 	user.IsTenantOwner = true
 	user.CreatedAt = now
 	user.UpdatedAt = now
+	user.AddRole(entities.NewRole(DefaultTenantOwnerRole))
 
 	// Save the user
 	if err := s.userService.Save(ctx, user); err != nil {
@@ -379,6 +384,9 @@ func TestTenantUserService_RegisterNewUser_Success(t *testing.T) {
 	assert.Equal(t, tenantID, resultTenantID)
 	assert.Equal(t, tenantID, resultUser.TenantID)
 	assert.True(t, resultUser.IsTenantOwner)
+	assert.True(t, resultUser.HasRole(DefaultTenantOwnerRole),
+		"first user in a fresh tenant should automatically get the %q role; got %+v",
+		DefaultTenantOwnerRole, resultUser.Roles)
 	assert.False(t, resultUser.CreatedAt.IsZero())
 	assert.False(t, resultUser.UpdatedAt.IsZero())
 

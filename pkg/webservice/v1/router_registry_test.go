@@ -23,7 +23,9 @@ import (
 	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
 	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
@@ -34,11 +36,13 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
+	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
 	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/platform"
+	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/webauthn"
 	sdktransport "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -205,6 +209,22 @@ func (r *testHandlerRegistry) TenantServiceServer() platformv1.TenantServiceServ
 
 func (r *testHandlerRegistry) TPMServiceServer() platformv1.TPMServiceServer {
 	return nil
+}
+
+func (r *testHandlerRegistry) RegistryService() grpcapi.RegistryService {
+	return nil
+}
+
+func (r *testHandlerRegistry) OCIDistBackend() restregistry.OCIDistBackend {
+	return nil
+}
+
+func (r *testHandlerRegistry) AttestationEventReader() restattestation.EventReader {
+	return nil
+}
+
+func (r *testHandlerRegistry) GatewayControlPlane() (restgateway.GatewayStateStore, restgateway.DesiredConfigSource) {
+	return nil, nil
 }
 
 // Tests

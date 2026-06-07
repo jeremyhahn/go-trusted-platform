@@ -267,13 +267,6 @@ func TestNetworkInfo_Print(t *testing.T) {
 	assert.Contains(t, output, "::1")
 }
 
-func TestUser_WebAuthnDisplayName_WithDisplayName(t *testing.T) {
-	user := NewUser("test@example.com")
-	user.DisplayName = "John Doe"
-
-	assert.Equal(t, "John Doe", user.WebAuthnDisplayName())
-}
-
 func TestErrTokenGeneration_Error(t *testing.T) {
 	t.Run("with cause", func(t *testing.T) {
 		err := ErrTokenGeneration{Cause: fmt.Errorf("crypto/rand failed")}

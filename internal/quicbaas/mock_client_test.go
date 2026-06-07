@@ -16,10 +16,17 @@ package quicbaas
 import (
 	"sync"
 
+	"github.com/jeremyhahn/go-quicbaas/pkg/registry"
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 )
 
 // MockClient is a mock implementation of the quicbaas.Client interface for testing.
+//
+// The mock is kept in lock-step with the canonical Client surface defined in
+// go-quicbaas/sdk/go/quicbaas.go. When upstream adds, renames, or removes a
+// method on quicbaas.Client, this mock must be updated to match — the
+// compile-time assertion at the bottom of the file (`var _ quicbaas.Client =
+// (*MockClient)(nil)`) is the source of truth for that contract.
 type MockClient struct {
 	mu sync.RWMutex
 
@@ -46,7 +53,7 @@ type MockClient struct {
 	rbacClient           quicbaas.RBACClient
 	dynamicSecretsClient quicbaas.DynamicSecretsClient
 	certificateClient    quicbaas.CertificateClient
-	clusterDEKClient     quicbaas.ClusterDEKClient
+	dekClient            quicbaas.DEKClient
 	iamClient            quicbaas.IAMClient
 	vectorClient         quicbaas.VectorClient
 	timeSeriesClient     quicbaas.TimeSeriesClient
@@ -340,18 +347,24 @@ func (m *MockClient) SetCertificate(c quicbaas.CertificateClient) {
 	m.certificateClient = c
 }
 
-// ClusterDEK returns the ClusterDEK client.
-func (m *MockClient) ClusterDEK() quicbaas.ClusterDEKClient {
+// DEK returns the DEK client.
+func (m *MockClient) DEK() quicbaas.DEKClient {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.clusterDEKClient
+	return m.dekClient
 }
 
-// SetClusterDEK sets the ClusterDEK client.
-func (m *MockClient) SetClusterDEK(c quicbaas.ClusterDEKClient) {
+// Discovery returns the service-discovery registry. The mock returns nil;
+// platform consumers of MockClient do not exercise discovery.
+func (m *MockClient) Discovery() (*registry.Registry, error) {
+	return nil, nil
+}
+
+// SetDEK sets the DEK client.
+func (m *MockClient) SetDEK(c quicbaas.DEKClient) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.clusterDEKClient = c
+	m.dekClient = c
 }
 
 // IAM returns the IAM client.
@@ -536,11 +549,6 @@ func (m *MockClient) SetRAG(c quicbaas.RAGClient) {
 	m.ragClient = c
 }
 
-// QRDB returns nil (stub for testing).
-func (m *MockClient) QRDB() (*quicbaas.QRDBClient, error) {
-	return nil, nil
-}
-
 // =============================================================================
 // Connection Management
 // =============================================================================
@@ -583,14 +591,8 @@ func (m *MockClient) Reset() {
 }
 
 // =============================================================================
-// Barrier & Tenant Management Accessors
+// QRDB-Backed Accessors
 // =============================================================================
-
-// Barrier returns nil (stub for testing).
-func (m *MockClient) Barrier() (quicbaas.QRDBBarrierClient, error) { return nil, nil }
-
-// BarrierCeremony returns nil (stub for testing).
-func (m *MockClient) BarrierCeremony() (quicbaas.QRDBCeremonyClient, error) { return nil, nil }
 
 // SealStore returns nil (stub for testing).
 func (m *MockClient) SealStore() (quicbaas.QRDBSealStoreClient, error) { return nil, nil }
@@ -613,13 +615,18 @@ func (m *MockClient) BarrierCeremonyMgmt() quicbaas.BarrierCeremonyService { ret
 // TenantMgmtService returns nil (stub for testing).
 func (m *MockClient) TenantMgmtService() quicbaas.TenantService { return nil }
 
+// =============================================================================
+// Project & Orchestrator Accessors
+// =============================================================================
+
+// Project returns nil (stub for testing).
+func (m *MockClient) Project() quicbaas.ProjectClient { return nil }
+
 // Orchestrator returns nil (stub for testing).
 func (m *MockClient) Orchestrator() quicbaas.OrchestratorClient { return nil }
 
-// Verify MockClient implements quicbaas.Client.
-var _ quicbaas.Client = (*MockClient)(nil)
+// DEK returns nil (stub for testing).
 
-// SSHKeys, DEK, ClusterDEK stubs satisfying the updated quicbaassdk.Client
-// interface. Tests don't exercise these sub-clients.
-func (m *MockClient) SSHKeys() quicbaas.SSHKeyClient { return nil }
-func (m *MockClient) DEK() quicbaas.DEKClient { return nil }
+// Verify MockClient implements quicbaas.Client. This assertion is the
+// source of truth for keeping the mock in lock-step with upstream.
+var _ quicbaas.Client = (*MockClient)(nil)

@@ -29,8 +29,7 @@ import (
 
 	acmeclient "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme/client"
 	dns01 "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme/dns01"
-	casdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
-	pkgca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	_ "github.com/jeremyhahn/go-trusted-platform/pkg/bmc/smc" // register CGI cert backend
@@ -55,7 +54,7 @@ type ACMEIssuer interface {
 // *IssuedCertificate wrapping the parsed certificate, its PEM encoding and
 // chain metadata.
 type LocalCAIssuer interface {
-	IssueCertificate(req *casdk.CACertificateRequest) (*pkgca.IssuedCertificate, error)
+	IssueCertificate(req *quicbaasca.CACertificateRequest) (*quicbaasca.IssuedCertificate, error)
 }
 
 // bmcDeployer is the narrow interface the deployment step uses.
@@ -141,14 +140,14 @@ func namedCurve(name string) (elliptic.Curve, error) {
 // buildBMCSubjectAltNames constructs SANs for a BMC certificate.
 // Uses configured SANS when present; otherwise derives from CN +
 // hostmaster.
-func buildBMCSubjectAltNames(bmcCfg *bmc.Config, hostmaster string) *casdk.CASubjectAlternativeNames {
+func buildBMCSubjectAltNames(bmcCfg *bmc.Config, hostmaster string) *quicbaasca.CASubjectAlternativeNames {
 	if bmcCfg == nil || bmcCfg.Certificate == nil {
-		return &casdk.CASubjectAlternativeNames{}
+		return &quicbaasca.CASubjectAlternativeNames{}
 	}
 	if bmcCfg.Certificate.SANS != nil {
 		return bmcCfg.Certificate.SANS
 	}
-	sans := &casdk.CASubjectAlternativeNames{}
+	sans := &quicbaasca.CASubjectAlternativeNames{}
 	if cn := bmcCfg.Certificate.Subject.CommonName; cn != "" {
 		sans.DNS = []string{cn}
 	}
@@ -159,10 +158,10 @@ func buildBMCSubjectAltNames(bmcCfg *bmc.Config, hostmaster string) *casdk.CASub
 }
 
 // casdkSubjectToPKIXName converts a CA SDK subject into a pkix.Name
-// for CSR construction. casdk.CASubject carries scalar strings;
+// for CSR construction. quicbaasca.CASubject carries scalar strings;
 // pkix.Name expects []string per multi-valued RDN, so we wrap when
 // non-empty.
-func casdkSubjectToPKIXName(s casdk.CASubject) pkix.Name {
+func casdkSubjectToPKIXName(s quicbaasca.CASubject) pkix.Name {
 	name := pkix.Name{CommonName: s.CommonName}
 	if s.Organization != "" {
 		name.Organization = []string{s.Organization}
@@ -275,12 +274,12 @@ func buildBMCACMERequest(
 
 // buildBMCLocalCARequest constructs the CACertificateRequest for
 // local-CA fallback issuance.
-func buildBMCLocalCARequest(bmcCfg *bmc.Config, hostmaster string) *casdk.CACertificateRequest {
+func buildBMCLocalCARequest(bmcCfg *bmc.Config, hostmaster string) *quicbaasca.CACertificateRequest {
 	valid := defaultBMCCertValidDays
 	if bmcCfg.Certificate.Valid > 0 {
 		valid = bmcCfg.Certificate.Valid
 	}
-	return &casdk.CACertificateRequest{
+	return &quicbaasca.CACertificateRequest{
 		Subject: bmcCfg.Certificate.Subject,
 		SANS:    buildBMCSubjectAltNames(bmcCfg, hostmaster),
 		Valid:   valid,

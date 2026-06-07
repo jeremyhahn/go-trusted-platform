@@ -82,13 +82,17 @@ func buildRegistry() map[key]Quirk {
 				// burned lab-node-2 in the 2026-04-30 session). Continuous
 				// is the only mode that survives the X10 reset cycle.
 				BootOverrideContinuous: true,
-				// Try the legacy CGI op.cgi boot-device endpoint
-				// before the standard Redfish PATCH. The CGI path is
-				// documented as a stub today (see vboot_smc_cgi.go);
-				// the strategy value is wired so once the wire
-				// protocol is captured the dispatcher routes to it
-				// without further code changes.
-				BootOverrideStrategy: "smc-cgi",
+				// Try the Supermicro OEM IPMI 0x30/0x70/0x0c "Set
+				// Boot Option Override" before the standard Redfish
+				// PATCH. The OEM path is honored by ATEN firmware even
+				// when the disk has a UEFI Linux entry in NVRAM that
+				// would otherwise win against BootSourceOverrideTarget.
+				// On X10 the OEM command only accepts PXE on the wire
+				// (other documented codes return CC=0x80); the
+				// dispatcher in redfish.go falls back to Redfish PATCH
+				// for non-PXE devices automatically. See
+				// pkg/bmc/vboot_smc_oem_ipmi.go for the wire details.
+				BootOverrideStrategy: "smc-oem-ipmi",
 			},
 		},
 
@@ -137,6 +141,64 @@ func buildRegistry() map[key]Quirk {
 				VmediaRedfishOEMFallback: true,
 				BootOverrideContinuous:   true,
 				BootOverrideStrategy:     "smc-cgi",
+			},
+		},
+
+		// ---------------------------------------------------------------
+		// VeloCloud Networks EDGE840 — Supermicro X10SDV silicon under
+		// a VeloCloud OEM SMBIOS skin.
+		//
+		// The EDGE840 is a Supermicro-built SD-WAN appliance for
+		// VeloCloud Networks (now part of VMware). Hardware identity:
+		//
+		//   System.Manufacturer = "VeloCloud Networks, Inc."
+		//   System.Model        = "EDGE840"
+		//   System.BiosVersion  = "2.6"          (matches X10 BIOS)
+		//   Manager.Model       = "ASPEED"       (X10 ATEN BMC stack)
+		//   Manager.FirmwareVer = "4.0"          (same ATEN firmware)
+		//   Boot.AllowableValues includes "UefiCd", "Pxe", "CD/DVD".
+		//
+		// Because the BMC + BIOS + UART wiring are byte-identical to a
+		// Supermicro X10SDV, every X10 quirk applies: SMB1 vmedia,
+		// COM1 SOL, "UefiCd" alias, BootOverrideContinuous to survive
+		// the X10 ATEN "Once → cleared before POST" trap, and the
+		// smc-oem-ipmi 0x30/0x70/0x0c override backend for PXE
+		// fallback when the disk has an existing UEFI Linux entry in
+		// NVRAM. Without this entry, Resolve() returns the generic
+		// Default() quirk and BootSourceOverrideTarget=UefiCd lands
+		// with enabled=Once — which the X10 BIOS silently erases,
+		// falling back to the on-disk Linux entry and causing the
+		// orchestrator's install-log probe to time out.
+		// ---------------------------------------------------------------
+		{
+			mfr:   "velocloud networks, inc.",
+			model: "",
+			quirk: Quirk{
+				Manufacturer: "VeloCloud Networks, Inc.",
+				KernelCmdline: []string{
+					"earlyprintk=efi,keep",
+					"earlycon=uart8250,io,0x3f8,115200n8",
+					"console=tty0",
+					"console=ttyS1,115200n8",
+					"console=ttyS0,115200n8",
+					"loglevel=7",
+				},
+				SOLPort:            "ttyS0",
+				SOLPayloadInstance: 0x01,
+				EarlyconSpec:       "uart8250,io,0x3f8,115200n8",
+				SambaMinProtocol:   "NT1",
+				SambaEncryption:    "disabled",
+				BootMediaType: MediaType{
+					CDDVDAlias:  "CD/DVD",
+					UEFICDAlias: "UefiCd",
+				},
+				CertBackendFallback: []string{
+					"redfish",
+					"smc-cgi",
+				},
+				VmediaRedfishOEMFallback: true,
+				BootOverrideContinuous:   true,
+				BootOverrideStrategy:     "smc-oem-ipmi",
 			},
 		},
 

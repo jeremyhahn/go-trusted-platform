@@ -25,16 +25,15 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	pkgca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
-	goca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 )
 
 // authCA is the minimal interface required from the CA by AuthFactorHandlers.
 // Using a narrow internal interface allows tests to inject lightweight stubs
-// without satisfying the full goca.CACertificateAuthority surface.
+// without satisfying the full quicbaasca.CACertificateAuthority surface.
 type authCA interface {
 	// SignCSR signs a PEM-encoded CSR and returns the issued certificate.
-	SignCSR(csrPEM []byte, opts *pkgca.SignOptions) (*x509.Certificate, error)
+	SignCSR(csrPEM []byte, opts *quicbaasca.SignOptions) (*x509.Certificate, error)
 	// TrustedRootCertPool returns the trusted root pool for validating a leaf cert.
 	TrustedRootCertPool(cert *x509.Certificate) (*x509.CertPool, error)
 	// CABundle returns the CA certificate bundle in PEM format.
@@ -128,15 +127,15 @@ type IssueMTLSCertResponse struct {
 
 // MFAPolicyResponse is returned by GET /api/v1/tenants/{id}/security/mfa-policy.
 type MFAPolicyResponse struct {
-	TenantID              string `json:"tenant_id"`
+	TenantID               string `json:"tenant_id"`
 	RequireMultipleFactors bool   `json:"require_multiple_factors"`
-	MinFactorCount        int    `json:"min_factor_count"`
+	MinFactorCount         int    `json:"min_factor_count"`
 }
 
 // MFAPolicyRequest is the payload for PUT /api/v1/tenants/{id}/security/mfa-policy.
 type MFAPolicyUpdateRequest struct {
 	RequireMultipleFactors bool `json:"require_multiple_factors"`
-	MinFactorCount        int  `json:"min_factor_count"`
+	MinFactorCount         int  `json:"min_factor_count"`
 }
 
 // =============================================================================
@@ -145,8 +144,8 @@ type MFAPolicyUpdateRequest struct {
 
 // aaguidEntry is a cached AAGUID lookup result.
 type aaguidEntry struct {
-	resp      AAGUIDLookupResponse
-	cachedAt  time.Time
+	resp     AAGUIDLookupResponse
+	cachedAt time.Time
 }
 
 // aaguidCacheTTL is the lifetime of a cached AAGUID lookup.
@@ -158,42 +157,42 @@ const aaguidCacheTTL = 24 * time.Hour
 var wellKnownAAGUIDs = map[string]AAGUIDLookupResponse{
 	// YubiKey 5 series (FIDO2)
 	"ee882879-721c-4913-9775-3dfcce97072a": {
-		AAGUID: "ee882879-721c-4913-9775-3dfcce97072a",
-		Name:   "YubiKey 5 Series",
-		Vendor: "Yubico",
-		Model:  "YubiKey 5 Series",
+		AAGUID:         "ee882879-721c-4913-9775-3dfcce97072a",
+		Name:           "YubiKey 5 Series",
+		Vendor:         "Yubico",
+		Model:          "YubiKey 5 Series",
 		MetadataStatus: "FIDO_CERTIFIED_L1",
 	},
 	// YubiKey 5C NFC
 	"c1f9a0bc-1dd2-404a-b27f-8e29047a43fd": {
-		AAGUID: "c1f9a0bc-1dd2-404a-b27f-8e29047a43fd",
-		Name:   "YubiKey 5C NFC",
-		Vendor: "Yubico",
-		Model:  "YubiKey 5C NFC",
+		AAGUID:         "c1f9a0bc-1dd2-404a-b27f-8e29047a43fd",
+		Name:           "YubiKey 5C NFC",
+		Vendor:         "Yubico",
+		Model:          "YubiKey 5C NFC",
 		MetadataStatus: "FIDO_CERTIFIED_L1",
 	},
 	// Windows Hello (PIN/TPM)
 	"08987058-cadc-4b81-b6e1-30de50dcbe96": {
-		AAGUID: "08987058-cadc-4b81-b6e1-30de50dcbe96",
-		Name:   "Windows Hello",
-		Vendor: "Microsoft",
-		Model:  "Windows Hello (Software Authenticator)",
+		AAGUID:         "08987058-cadc-4b81-b6e1-30de50dcbe96",
+		Name:           "Windows Hello",
+		Vendor:         "Microsoft",
+		Model:          "Windows Hello (Software Authenticator)",
 		MetadataStatus: "NOT_FIDO_CERTIFIED",
 	},
 	// Touch ID / Face ID on macOS / iOS
 	"adce0002-35bc-c60a-648b-0b25f1f05503": {
-		AAGUID: "adce0002-35bc-c60a-648b-0b25f1f05503",
-		Name:   "Apple Touch ID",
-		Vendor: "Apple",
-		Model:  "Touch ID / Face ID",
+		AAGUID:         "adce0002-35bc-c60a-648b-0b25f1f05503",
+		Name:           "Apple Touch ID",
+		Vendor:         "Apple",
+		Model:          "Touch ID / Face ID",
 		MetadataStatus: "FIDO_CERTIFIED",
 	},
 	// Android built-in authenticator
 	"b93fd961-f2e6-462f-b122-82002247de78": {
-		AAGUID: "b93fd961-f2e6-462f-b122-82002247de78",
-		Name:   "Android Authenticator",
-		Vendor: "Google",
-		Model:  "Android Built-in Authenticator",
+		AAGUID:         "b93fd961-f2e6-462f-b122-82002247de78",
+		Name:           "Android Authenticator",
+		Vendor:         "Google",
+		Model:          "Android Built-in Authenticator",
 		MetadataStatus: "FIDO_CERTIFIED",
 	},
 }
@@ -205,7 +204,7 @@ var wellKnownAAGUIDs = map[string]AAGUIDLookupResponse{
 // mfaPolicy holds the per-tenant MFA configuration.
 type mfaPolicy struct {
 	RequireMultipleFactors bool
-	MinFactorCount        int
+	MinFactorCount         int
 }
 
 // =============================================================================
@@ -214,11 +213,11 @@ type mfaPolicy struct {
 
 // AuthFactorHandlers implements the M12 auth factor REST endpoints:
 //
-//   GET  /api/v1/auth/factors/aaguid-lookup
-//   HEAD /api/v1/auth/mtls/probe
-//   POST /api/v1/users/{id}/factors/mtls/issue-cert
-//   GET  /api/v1/tenants/{id}/security/mfa-policy
-//   PUT  /api/v1/tenants/{id}/security/mfa-policy
+//	GET  /api/v1/auth/factors/aaguid-lookup
+//	HEAD /api/v1/auth/mtls/probe
+//	POST /api/v1/users/{id}/factors/mtls/issue-cert
+//	GET  /api/v1/tenants/{id}/security/mfa-policy
+//	PUT  /api/v1/tenants/{id}/security/mfa-policy
 //
 // The handler holds a reference to the platform CA for certificate issuance
 // and an in-memory MFA policy store. The AAGUID cache is package-level to
@@ -228,8 +227,8 @@ type AuthFactorHandlers struct {
 	logger *slog.Logger
 
 	// aaguid cache — keyed by lowercase UUID string
-	cacheMu   sync.RWMutex
-	cache     map[string]aaguidEntry
+	cacheMu sync.RWMutex
+	cache   map[string]aaguidEntry
 
 	// MFA policy store — keyed by tenant ID
 	policyMu sync.RWMutex
@@ -238,8 +237,8 @@ type AuthFactorHandlers struct {
 
 // NewAuthFactorHandlers creates an AuthFactorHandlers. ca may be nil when the
 // CA service is not configured; cert issuance handlers will return 503.
-// The ca parameter accepts goca.CACertificateAuthority which satisfies authCA.
-func NewAuthFactorHandlers(ca goca.CACertificateAuthority, logger *slog.Logger) *AuthFactorHandlers {
+// The ca parameter accepts quicbaasca.CACertificateAuthority which satisfies authCA.
+func NewAuthFactorHandlers(ca quicbaasca.CACertificateAuthority, logger *slog.Logger) *AuthFactorHandlers {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -321,8 +320,9 @@ func (h *AuthFactorHandlers) storeCache(aaguid string, resp AAGUIDLookupResponse
 // handleMTLSProbe handles HEAD /api/v1/auth/mtls/probe.
 //
 // Returns:
-//   204 No Content — client cert present and chain validates against platform CA
-//   401 Unauthorized — no client cert (or validation failed)
+//
+//	204 No Content — client cert present and chain validates against platform CA
+//	401 Unauthorized — no client cert (or validation failed)
 func (h *AuthFactorHandlers) handleMTLSProbe(w http.ResponseWriter, r *http.Request) {
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -399,7 +399,7 @@ func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Requ
 
 	// Sign with EKU=clientAuth profile. The platform CA's "client" profile
 	// sets x509.ExtKeyUsageClientAuth by convention.
-	opts := &pkgca.SignOptions{
+	opts := &quicbaasca.SignOptions{
 		Profile:      "client",
 		ValidityDays: 365,
 	}
@@ -468,9 +468,9 @@ func (h *AuthFactorHandlers) handleGetMFAPolicy(w http.ResponseWriter, r *http.R
 
 	policy := h.getPolicy(tenantID)
 	h.writeJSON(w, http.StatusOK, MFAPolicyResponse{
-		TenantID:              tenantID,
+		TenantID:               tenantID,
 		RequireMultipleFactors: policy.RequireMultipleFactors,
-		MinFactorCount:        policy.MinFactorCount,
+		MinFactorCount:         policy.MinFactorCount,
 	})
 }
 
@@ -494,13 +494,13 @@ func (h *AuthFactorHandlers) handlePutMFAPolicy(w http.ResponseWriter, r *http.R
 
 	h.setPolicy(tenantID, mfaPolicy{
 		RequireMultipleFactors: req.RequireMultipleFactors,
-		MinFactorCount:        req.MinFactorCount,
+		MinFactorCount:         req.MinFactorCount,
 	})
 
 	h.writeJSON(w, http.StatusOK, MFAPolicyResponse{
-		TenantID:              tenantID,
+		TenantID:               tenantID,
 		RequireMultipleFactors: req.RequireMultipleFactors,
-		MinFactorCount:        req.MinFactorCount,
+		MinFactorCount:         req.MinFactorCount,
 	})
 }
 

@@ -55,6 +55,14 @@ type TenantUserServicer interface {
 
 	// IssueToken generates a JWT token for the user with tenant claims.
 	IssueToken(ctx context.Context, user *entities.User) (string, error)
+
+	// SetIAMMirror installs the QuicBaaS IAM mirror used by
+	// RegisterNewUser to surface newly-registered users into
+	// /api/v1/iam/users. Implementations that don't support mirroring
+	// (test doubles) may no-op; the interface bump is the only way
+	// to wire the mirror without leaking the concrete type through
+	// the service registry.
+	SetIAMMirror(m IAMUserMirror)
 }
 
 // RegisterResult contains the result of a user registration operation.
@@ -77,6 +85,22 @@ type TokenIssuer interface {
 	IssueToken(ctx context.Context, userID uint64, tenantID string, roles []string) (string, error)
 }
 
+// IAMUserMirror is the narrow surface TenantUserService uses to
+// mirror a newly-registered user into the QuicBaaS IAM tenant. The
+// platform's authoritative user record lives in the platform store
+// (WebAuthn credentials + tenant ownership flag); the IAM tenant
+// surfaces the same identity for /iam/users, role assignment, group
+// membership, and the WebUI's permission gates.
+//
+// Implementations are expected to be idempotent — registering the
+// same email twice should not produce duplicate IAM rows. Failures
+// here are non-fatal for registration: the platform user is already
+// saved, the JWT is already minted; the worst case is that the user
+// must be re-mirrored later by an explicit /iam/users PUT.
+type IAMUserMirror interface {
+	MirrorUser(ctx context.Context, tenantID, email, displayName string, roles []string) error
+}
+
 // TenantUserService implements TenantUserServicer.
 type TenantUserService struct {
 	logger            *logging.Logger
@@ -84,6 +108,7 @@ type TenantUserService struct {
 	invitationService InvitationServicer
 	tenantManager     TenantManager
 	tokenIssuer       TokenIssuer
+	iamMirror         IAMUserMirror
 }
 
 // TenantUserServiceConfig holds configuration for TenantUserService.
@@ -93,6 +118,10 @@ type TenantUserServiceConfig struct {
 	InvitationService InvitationServicer
 	TenantManager     TenantManager
 	TokenIssuer       TokenIssuer
+	// IAMMirror, when non-nil, is called after a successful platform-
+	// store save to mirror the user into the QuicBaaS IAM tenant. This
+	// is what makes /api/v1/iam/users surface freshly-registered users.
+	IAMMirror IAMUserMirror
 }
 
 // NewTenantUserService creates a new TenantUserService.
@@ -103,7 +132,16 @@ func NewTenantUserService(config *TenantUserServiceConfig) TenantUserServicer {
 		invitationService: config.InvitationService,
 		tenantManager:     config.TenantManager,
 		tokenIssuer:       config.TokenIssuer,
+		iamMirror:         config.IAMMirror,
 	}
+}
+
+// SetIAMMirror installs the IAM mirror after construction. The
+// service registry wires this when the IAM client becomes available
+// — registration ordering means the QuicBaaS IAM client may be set
+// up after the TenantUserService.
+func (s *TenantUserService) SetIAMMirror(m IAMUserMirror) {
+	s.iamMirror = m
 }
 
 // RegisterNewUser creates a new tenant and registers the user as the owner.
@@ -153,12 +191,18 @@ func (s *TenantUserService) RegisterNewUser(
 	// Use the tenant ID returned by the manager (it may be different from our generated one)
 	tenantID = tenantEntity.ID
 
-	// Configure user as tenant owner
+	// Configure user as tenant owner. First user in a tenant gets
+	// the "admin" role automatically — this is how the WebUI knows
+	// they have permission to manage other users without making them
+	// re-elevate themselves. The role is granted alongside
+	// IsTenantOwner so a JWT carrying either signal can authorize
+	// admin operations.
 	now := time.Now().UTC()
 	user.TenantID = tenantID
 	user.IsTenantOwner = true
 	user.CreatedAt = now
 	user.UpdatedAt = now
+	user.AddRole(entities.NewRole(DefaultTenantOwnerRole))
 
 	// Save the user
 	if err := s.userService.Save(ctx, user); err != nil {
@@ -179,7 +223,25 @@ func (s *TenantUserService) RegisterNewUser(
 		"email", user.Email,
 		"tenant_id", tenantID,
 		"is_owner", true,
+		"role", DefaultTenantOwnerRole,
 	)
+
+	// Mirror the user into the QuicBaaS IAM tenant so /api/v1/iam/users
+	// surfaces them and the per-user role / group / policy paths have
+	// an entity to operate on. Failure is non-fatal — the platform
+	// registration already succeeded — but loud-log so operators can
+	// reconcile manually if the mirror is misconfigured.
+	if s.iamMirror != nil {
+		mirrorRoles := []string{DefaultTenantOwnerRole}
+		if err := s.iamMirror.MirrorUser(ctx, tenantID, user.Email, user.DisplayName, mirrorRoles); err != nil {
+			s.logger.Warn("failed to mirror user into IAM tenant",
+				"user_id", user.ID,
+				"email", user.Email,
+				"tenant_id", tenantID,
+				"error", err,
+			)
+		}
+	}
 
 	return &RegisterResult{
 		User:        user,
@@ -187,6 +249,12 @@ func (s *TenantUserService) RegisterNewUser(
 		IsNewTenant: true,
 	}, nil
 }
+
+// DefaultTenantOwnerRole is the role granted automatically to the
+// first user in a freshly-created tenant. "admin" matches the role
+// name the IAM authorization middleware checks for full-tenant
+// admin operations.
+const DefaultTenantOwnerRole = "admin"
 
 // RegisterInvitedUser registers a user from an invitation, joining an existing tenant.
 // Steps:

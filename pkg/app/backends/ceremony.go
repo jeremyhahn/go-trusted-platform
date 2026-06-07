@@ -19,7 +19,6 @@ import (
 	"time"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
-	qrdbtransport "github.com/jeremyhahn/go-qrdb/sdk/go/transport"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -62,7 +61,7 @@ func NewCeremonyBackend(logger *logging.Logger, client quicbaassdk.Client) *Cere
 
 // transport resolves the ceremony transport client from the QuicBaaS SDK.
 // Returned errors are typed for uniform translation by transport adapters.
-func (b *CeremonyBackend) transport() (qrdbtransport.CeremonyClient, error) {
+func (b *CeremonyBackend) transport() (quicbaassdk.QRDBCeremonyClient, error) {
 	if b == nil || b.client == nil {
 		return nil, ErrCeremonyBackendClientNil
 	}
@@ -157,7 +156,7 @@ func (b *CeremonyBackend) Initialize(ctx context.Context, req *daemon.CeremonyIn
 		return nil, err
 	}
 
-	initReq := &qrdbtransport.CeremonyInitializeRequest{
+	initReq := &quicbaassdk.QRDBCeremonyInitializeRequest{
 		SOPin:                  req.SOPIN,
 		UserPin:                req.UserPIN,
 		CredentialSealStrategy: req.CredentialSealStrategy,
@@ -214,7 +213,7 @@ func (b *CeremonyBackend) ClaimCertBegin(ctx context.Context, req *daemon.Ceremo
 		return nil, err
 	}
 
-	resp, err := c.CeremonyClaimCertBegin(ctx, &qrdbtransport.ClaimCertBeginRequest{
+	resp, err := c.CeremonyClaimCertBegin(ctx, &quicbaassdk.QRDBClaimCertBeginRequest{
 		Username: req.Username,
 	})
 	if err != nil {
@@ -238,7 +237,7 @@ func (b *CeremonyBackend) ClaimCertComplete(ctx context.Context, req *daemon.Cer
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.CeremonyClaimCertComplete(ctx, &qrdbtransport.ClaimCertCompleteRequest{
+	resp, err := c.CeremonyClaimCertComplete(ctx, &quicbaassdk.QRDBClaimCertCompleteRequest{
 		Username:  req.Username,
 		NonceHex:  req.Nonce,
 		Signature: req.Signature,
@@ -261,7 +260,7 @@ func (b *CeremonyBackend) ClaimShare(ctx context.Context, username string) (*dae
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.CeremonyClaimShare(ctx, &qrdbtransport.ClaimShareRequest{Username: username})
+	resp, err := c.CeremonyClaimShare(ctx, &quicbaassdk.QRDBClaimShareRequest{Username: username})
 	if err != nil {
 		return nil, err
 	}
@@ -279,7 +278,7 @@ func (b *CeremonyBackend) SignCSR(ctx context.Context, req *daemon.CeremonySignC
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.CeremonySignCSR(ctx, &qrdbtransport.SignCSRInitRequest{
+	resp, err := c.CeremonySignCSR(ctx, &quicbaassdk.QRDBSignCSRInitRequest{
 		Username: req.Username,
 		SOPin:    req.SOPIN,
 		CSRPEM:   req.CSRPEM,

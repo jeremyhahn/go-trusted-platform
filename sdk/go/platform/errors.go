@@ -170,3 +170,35 @@ type ErrTLSConfigRequired struct {
 func (e ErrTLSConfigRequired) Error() string {
 	return fmt.Sprintf("TLS configuration required for %s transport", e.Protocol)
 }
+
+// ErrQuicBaaSNotConfigured is returned by Client.QuicBaaS() when the
+// platform SDK client was constructed without a QuicBaaSAddr option.
+// platformctl barrier verbs require a quicbaas SDK connection; the CLI
+// surfaces this error to the operator with guidance on setting
+// PLATFORMCTL_QUICBAAS_ADDR or the context's quicbaas_addr field.
+type ErrQuicBaaSNotConfigured struct{}
+
+// Error implements the error interface.
+func (ErrQuicBaaSNotConfigured) Error() string {
+	return "QuicBaaS client is not configured: set platform.WithQuicBaaSAddr or the context's quicbaas_addr field"
+}
+
+// ErrQuicBaaSInitFailed is returned when the platform SDK client failed
+// to construct the underlying go-quicbaas SDK client (e.g. invalid
+// address, unsupported transport).
+type ErrQuicBaaSInitFailed struct {
+	Addr      string
+	Transport string
+	Err       error
+}
+
+// Error implements the error interface.
+func (e ErrQuicBaaSInitFailed) Error() string {
+	return fmt.Sprintf("failed to initialize QuicBaaS client (addr=%q, transport=%q): %v",
+		e.Addr, e.Transport, e.Err)
+}
+
+// Unwrap returns the underlying error for errors.Is and errors.As support.
+func (e ErrQuicBaaSInitFailed) Unwrap() error {
+	return e.Err
+}

@@ -20,7 +20,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/jeremyhahn/go-objstore/pkg/common"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 )
 
@@ -38,7 +38,7 @@ type ObjStoreAdapter struct {
 
 // NewObjStoreAdapter creates a new adapter that wraps a QuicBaaS
 // ObjectStorage client and implements go-objstore's common.Storage interface.
-func NewObjStoreAdapter(client objectstorage.Client) common.Storage {
+func NewObjStoreAdapter(client objectstorage.Client) xkmssdk.ObjectStorage {
 	return &ObjStoreAdapter{
 		client:    client,
 		backend:   DefaultBackend,
@@ -47,7 +47,7 @@ func NewObjStoreAdapter(client objectstorage.Client) common.Storage {
 }
 
 // NewObjStoreAdapterWithTenant creates a new adapter with tenant isolation.
-func NewObjStoreAdapterWithTenant(client objectstorage.Client, tenantID string) common.Storage {
+func NewObjStoreAdapterWithTenant(client objectstorage.Client, tenantID string) xkmssdk.ObjectStorage {
 	return &ObjStoreAdapter{
 		client:    client,
 		tenantID:  tenantID,
@@ -98,7 +98,7 @@ func (a *ObjStoreAdapter) PutWithContext(ctx context.Context, key string, data i
 }
 
 // PutWithMetadata stores an object with metadata via the QuicBaaS client.
-func (a *ObjStoreAdapter) PutWithMetadata(ctx context.Context, key string, data io.Reader, metadata *common.Metadata) error {
+func (a *ObjStoreAdapter) PutWithMetadata(ctx context.Context, key string, data io.Reader, metadata *xkmssdk.ObjectMetadata) error {
 	value, err := io.ReadAll(data)
 	if err != nil {
 		return err
@@ -138,7 +138,7 @@ func (a *ObjStoreAdapter) GetWithContext(ctx context.Context, key string) (io.Re
 }
 
 // GetMetadata retrieves metadata for an object.
-func (a *ObjStoreAdapter) GetMetadata(ctx context.Context, key string) (*common.Metadata, error) {
+func (a *ObjStoreAdapter) GetMetadata(ctx context.Context, key string) (*xkmssdk.ObjectMetadata, error) {
 	resp, err := a.client.HeadObject(ctx, &objectstorage.HeadObjectRequest{
 		Key:      a.formatKey(key),
 		TenantID: a.tenantID,
@@ -149,7 +149,7 @@ func (a *ObjStoreAdapter) GetMetadata(ctx context.Context, key string) (*common.
 	if !resp.Exists {
 		return nil, errors.New("object not found: " + key)
 	}
-	return &common.Metadata{
+	return &xkmssdk.ObjectMetadata{
 		ContentType: resp.ContentType,
 		Size:        resp.Size,
 		Custom:      resp.Tags,
@@ -159,7 +159,7 @@ func (a *ObjStoreAdapter) GetMetadata(ctx context.Context, key string) (*common.
 // UpdateMetadata updates metadata for an existing object.
 // QuicBaaS ObjectStorage does not support metadata-only updates,
 // so this reads the object and re-puts it with new metadata.
-func (a *ObjStoreAdapter) UpdateMetadata(ctx context.Context, key string, metadata *common.Metadata) error {
+func (a *ObjStoreAdapter) UpdateMetadata(ctx context.Context, key string, metadata *xkmssdk.ObjectMetadata) error {
 	resp, err := a.client.GetObject(ctx, &objectstorage.GetObjectRequest{
 		Key:      a.formatKey(key),
 		TenantID: a.tenantID,
@@ -218,7 +218,7 @@ func (a *ObjStoreAdapter) ListWithContext(ctx context.Context, prefix string) ([
 }
 
 // ListWithOptions returns a paginated list of objects with full metadata.
-func (a *ObjStoreAdapter) ListWithOptions(ctx context.Context, opts *common.ListOptions) (*common.ListResult, error) {
+func (a *ObjStoreAdapter) ListWithOptions(ctx context.Context, opts *xkmssdk.ObjectListOptions) (*xkmssdk.ObjectListResult, error) {
 	req := &objectstorage.ListObjectsRequest{
 		TenantID: a.tenantID,
 	}
@@ -231,17 +231,17 @@ func (a *ObjStoreAdapter) ListWithOptions(ctx context.Context, opts *common.List
 	if err != nil {
 		return nil, err
 	}
-	objects := make([]*common.ObjectInfo, 0, len(resp.Objects))
+	objects := make([]*xkmssdk.ObjectInfo, 0, len(resp.Objects))
 	for _, obj := range resp.Objects {
-		objects = append(objects, &common.ObjectInfo{
+		objects = append(objects, &xkmssdk.ObjectInfo{
 			Key: obj.Key,
-			Metadata: &common.Metadata{
+			Metadata: &xkmssdk.ObjectMetadata{
 				ContentType: obj.ContentType,
 				Size:        obj.Size,
 			},
 		})
 	}
-	return &common.ListResult{
+	return &xkmssdk.ObjectListResult{
 		Objects:   objects,
 		NextToken: resp.NextCursor,
 		Truncated: resp.HasMore,
@@ -250,12 +250,12 @@ func (a *ObjStoreAdapter) ListWithOptions(ctx context.Context, opts *common.List
 
 // Archive copies an object to an archive destination. QuicBaaS uses its own
 // archive operations, so this is not supported via this adapter.
-func (a *ObjStoreAdapter) Archive(key string, destination common.Archiver) error {
+func (a *ObjStoreAdapter) Archive(key string, destination xkmssdk.ObjectArchiver) error {
 	return errors.New("archive not supported via ObjStoreAdapter, use QuicBaaS archive policies")
 }
 
 // AddPolicy is a no-op since QuicBaaS manages lifecycle policies internally.
-func (a *ObjStoreAdapter) AddPolicy(policy common.LifecyclePolicy) error {
+func (a *ObjStoreAdapter) AddPolicy(policy xkmssdk.ObjectLifecyclePolicy) error {
 	return nil
 }
 
@@ -265,9 +265,9 @@ func (a *ObjStoreAdapter) RemovePolicy(id string) error {
 }
 
 // GetPolicies returns an empty list since QuicBaaS manages policies internally.
-func (a *ObjStoreAdapter) GetPolicies() ([]common.LifecyclePolicy, error) {
+func (a *ObjStoreAdapter) GetPolicies() ([]xkmssdk.ObjectLifecyclePolicy, error) {
 	return nil, nil
 }
 
 // Compile-time interface check.
-var _ common.Storage = (*ObjStoreAdapter)(nil)
+var _ xkmssdk.ObjectStorage = (*ObjStoreAdapter)(nil)

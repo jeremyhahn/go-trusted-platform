@@ -31,6 +31,18 @@ import (
 	ceremonysvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ceremony"
 )
 
+// BarrierStrategyNone is the canonical CLI token for the no-encryption
+// passthrough barrier strategy. It mirrors qrdb/quicraft StrategyNone
+// and is intentionally opt-in: operators select it explicitly via
+// --barrier-strategy=none and it is never auto-selected.
+//
+// Selecting "none" disables barrier-level encryption entirely. It is
+// intended for development, integration testing, or deployments that
+// rely on OS-level full-disk encryption where the barrier indirection
+// is redundant. Because there is no key material to gate, --so-pin and
+// --user-pin are not required when this strategy is chosen.
+const BarrierStrategyNone = "none"
+
 // validBarrierStrategies is the canonical --barrier-strategy set per
 // docs/08-bootstrap-auth-architecture.md §2. Each strategy resolves to
 // a distinct credential-seal backend on the qrdb ceremony service:
@@ -43,20 +55,22 @@ import (
 //	gcpkms    GCP Cloud KMS envelope encryption.
 //	azurekv   Azure Key Vault envelope encryption.
 //	vault     HashiCorp Vault transit envelope encryption.
+//	none      No barrier encryption (dev/test or OS-level FDE).
 //
 // The CLI is opaque about the chosen backend: the strategy string is
 // validated for membership and forwarded as InitRequest.CredentialSealStrategy
 // to the SDK; backend-specific failures (missing HSM, no TPM, no cloud
 // credentials) surface from the qrdb ceremony service.
 var validBarrierStrategies = map[string]struct{}{
-	"software": {},
-	"shamir":   {},
-	"pkcs11":   {},
-	"tpm2":     {},
-	"awskms":   {},
-	"gcpkms":   {},
-	"azurekv":  {},
-	"vault":    {},
+	"software":          {},
+	"shamir":            {},
+	"pkcs11":            {},
+	"tpm2":              {},
+	"awskms":            {},
+	"gcpkms":            {},
+	"azurekv":           {},
+	"vault":             {},
+	BarrierStrategyNone: {},
 }
 
 // canonicalInitFlags holds the canonical init flag set per
@@ -115,6 +129,45 @@ func (e *ErrAdminBundleEmpty) Error() string {
 	return "ceremony response did not include admin certificate or key; the platform did not return an admin bundle"
 }
 
+// ErrInvalidBarrierStrategy indicates the operator passed an
+// unrecognised --barrier-strategy value. The Strategy field carries
+// the offending input verbatim so callers can surface it in higher
+// level diagnostics and so errors.As-based matchers can extract it.
+//
+// The message preserves the historical "init: invalid --barrier-strategy"
+// prefix so existing operator runbooks and substring-based test
+// assertions continue to work.
+type ErrInvalidBarrierStrategy struct {
+	// Strategy is the rejected --barrier-strategy value.
+	Strategy string
+}
+
+// Error returns a human-readable description.
+func (e *ErrInvalidBarrierStrategy) Error() string {
+	return fmt.Sprintf("init: invalid --barrier-strategy %q", e.Strategy)
+}
+
+// ErrMissingPIN indicates the operator omitted a required PIN flag for
+// a barrier strategy that gates on credentials. The Flag field names
+// the missing flag (so-pin or user-pin) and EnvVar names its
+// environment-variable equivalent so the operator can satisfy the
+// requirement without consulting the help text.
+//
+// PINs are intentionally not required when --barrier-strategy=none
+// because the passthrough barrier has no key material to gate.
+type ErrMissingPIN struct {
+	// Flag is the missing CLI flag name (so-pin or user-pin).
+	Flag string
+	// EnvVar is the fully-qualified environment variable that
+	// satisfies the same requirement.
+	EnvVar string
+}
+
+// Error returns a human-readable description.
+func (e *ErrMissingPIN) Error() string {
+	return fmt.Sprintf("init: --%s is required (or set %s)", e.Flag, e.EnvVar)
+}
+
 // NewInitCommand builds the canonical root "init" command.
 func NewInitCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	f := &canonicalInitFlags{}
@@ -136,11 +189,15 @@ Supported barrier strategies (per spec §2):
   gcpkms     GCP Cloud KMS envelope encryption
   azurekv    Azure Key Vault envelope encryption
   vault      HashiCorp Vault transit envelope encryption
+  none       No barrier encryption (dev/test or OS-level FDE; PINs optional)
 
 --shares and --threshold are required when --barrier-strategy=shamir
 and rejected for every other strategy. Backend-specific configuration
 (HSM PINs, KMS key ARNs, Vault tokens) is supplied to platformd via
 configuration; the CLI is opaque about backend wiring.
+
+--so-pin and --user-pin are required for every strategy except "none",
+which is a passthrough barrier with no key material to gate.
 
 Canonical environment variables (Viper-bound):
   PLATFORMCTL_SO_PIN              equivalent to --so-pin
@@ -167,11 +224,11 @@ Canonical environment variables (Viper-bound):
 // command.
 func wireCanonicalInitFlags(cmd *cobra.Command, f *canonicalInitFlags) {
 	cmd.Flags().StringVar(&f.soPin, "so-pin", "",
-		"Security Officer PIN (required, FIPS 140-3 / PCI-DSS v4 SO credential)")
+		"Security Officer PIN (required, FIPS 140-3 / PCI-DSS v4 SO credential; optional when --barrier-strategy=none)")
 	cmd.Flags().StringVar(&f.userPin, "user-pin", "",
-		"User PIN (required, FIPS 140-3 / PCI-DSS v4 user credential)")
+		"User PIN (required, FIPS 140-3 / PCI-DSS v4 user credential; optional when --barrier-strategy=none)")
 	cmd.Flags().StringVar(&f.barrierStrategy, "barrier-strategy", "software",
-		"Barrier sealing strategy: software | shamir | pkcs11 | tpm2 | awskms | gcpkms | azurekv | vault")
+		"Barrier sealing strategy: software | shamir | pkcs11 | tpm2 | awskms | gcpkms | azurekv | vault | none")
 	cmd.Flags().IntVar(&f.shares, "shares", 0,
 		"Total Shamir shares (required when --barrier-strategy=shamir)")
 	cmd.Flags().IntVar(&f.threshold, "threshold", 0,
@@ -214,14 +271,19 @@ func resolveAndValidateCanonicalInit(cmd *cobra.Command, f *canonicalInitFlags, 
 		}
 	}
 
-	if f.soPin == "" {
-		return fmt.Errorf("init: --so-pin is required (or set %s_SO_PIN)", envPrefix)
-	}
-	if f.userPin == "" {
-		return fmt.Errorf("init: --user-pin is required (or set %s_USER_PIN)", envPrefix)
+	// The "none" passthrough barrier has no key material to gate, so
+	// --so-pin / --user-pin are intentionally optional. Every other
+	// strategy still requires both PINs.
+	if f.barrierStrategy != BarrierStrategyNone {
+		if f.soPin == "" {
+			return &ErrMissingPIN{Flag: "so-pin", EnvVar: envPrefix + "_SO_PIN"}
+		}
+		if f.userPin == "" {
+			return &ErrMissingPIN{Flag: "user-pin", EnvVar: envPrefix + "_USER_PIN"}
+		}
 	}
 	if _, ok := validBarrierStrategies[f.barrierStrategy]; !ok {
-		return fmt.Errorf("init: invalid --barrier-strategy %q", f.barrierStrategy)
+		return &ErrInvalidBarrierStrategy{Strategy: f.barrierStrategy}
 	}
 	if f.barrierStrategy == "shamir" {
 		if f.shares < 2 {

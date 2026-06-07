@@ -418,10 +418,10 @@ func (a *Adapter) Certificate() quicbaas.CertificateClient {
 	return nil
 }
 
-// ClusterDEK returns the ClusterDEK client for cluster data encryption keys.
-func (a *Adapter) ClusterDEK() quicbaas.ClusterDEKClient {
+// DEK returns the Data Encryption Key client for per-tenant DEK management.
+func (a *Adapter) DEK() quicbaas.DEKClient {
 	if client := a.Client(); client != nil {
-		return client.ClusterDEK()
+		return client.DEK()
 	}
 	return nil
 }

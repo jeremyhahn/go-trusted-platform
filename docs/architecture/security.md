@@ -18,7 +18,15 @@ Trust is **never** granted by network location or implicit assumptions — only 
 
 ### Cold Start Problem
 
-When platform starts for the first time, it faces the chicken-and-egg problem: it has no identity, but needs one to communicate securely. go-trusted-platform solves this via [go-truststrap](https://github.com/jeremyhahn/go-truststrap) with 4 methods:
+When platform starts for the first time, it faces the chicken-and-egg
+problem: it has no identity, but needs one to communicate securely.
+go-trusted-platform solves this by dispatching through the canonical
+`xkms/pkg/trust/bootstrap` library (reached from `pkg/bootstrap/client.go`
+via the type-alias re-export
+`github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/bootstrap`). That
+library composes [go-truststrap](https://github.com/jeremyhahn/go-truststrap)
+internally — the platform repo does NOT import `go-truststrap` directly
+from application code. Four bootstrap modes are supported:
 
 #### Method 1: DANE/TLSA DNS Records
 
@@ -565,7 +573,13 @@ Decision: trusted or untrusted
 
 ### Key Storage
 
-Platform uses [go-xkms](https://github.com/jeremyhahn/go-xkms) for key management:
+Platform key management is reached via `quicbaas.SDK().Security().KMS()`
+(and `Security().Crypto()` / `Security().Certificate()`). The KMS
+implementation behind those interfaces is provided by
+[go-xkms](https://github.com/jeremyhahn/go-xkms) — the canonical home
+for hardware-backed crypto in the stack — but the platform repo never
+imports `go-xkms` directly from runtime code (see the SDK Consumption
+Invariant in `CLAUDE.md`). The supported key storage tiers are:
 
 | Key Type | Storage | Use |
 |----------|---------|-----|

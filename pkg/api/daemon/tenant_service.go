@@ -79,7 +79,7 @@ func NewTenantService(application *app.App, logger *slog.Logger) (*TenantService
 		return nil, ErrInvalidConfig{Reason: "QuicBaaS service does not support tenant management (build with -tags iam)"}
 	}
 
-	// Obtain the SDK client for ClusterDEK operations
+	// Obtain the SDK client for DEK operations
 	sdk := factory.SDK()
 	if sdk == nil {
 		return nil, ErrInvalidConfig{Reason: "QuicBaaS SDK client not available"}

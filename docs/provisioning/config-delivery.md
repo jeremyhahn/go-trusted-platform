@@ -19,7 +19,7 @@ The config delivery system enables devices to fetch their platform configuration
 
 At boot time, the device has no TLS trust store and no client certificate. Trust is established in two steps:
 
-1. **Trust Bootstrap**: `platformctl-static bootstrap trust` uses [go-truststrap](https://github.com/jeremyhahn/go-truststrap) to verify the server via DANE (TLSA DNS records), Noise_NK protocol, or SPKI pinning
+1. **Trust Bootstrap**: `platformctl-static bootstrap trust` dispatches through the canonical `xkms/pkg/trust/bootstrap` library (reached via the `go-quicbaas/sdk/go/xkms/trust/bootstrap` type-alias re-export) to verify the server via DANE (TLSA DNS records), Noise_NK protocol, or SPKI pinning. That library composes [go-truststrap](https://github.com/jeremyhahn/go-truststrap) internally; the platform repo does not import `go-truststrap` directly
 2. **Config Fetch**: Once CA trust is established, the device fetches its config over verified HTTPS, authenticated via EAB credentials
 
 ## Authentication

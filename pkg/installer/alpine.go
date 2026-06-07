@@ -323,6 +323,19 @@ func (ai *alpineInstaller) InstallBase(ctx context.Context, rootPath string) err
 	if !ai.config.FIPS {
 		ai.logger.Info("[ALPINE] Adding linux-lts kernel")
 		packages = append(packages, "linux-lts") // Includes all kernel modules
+		// linux-lts pulls the virtual `linux-firmware-any`. With only
+		// `linux-firmware-none` in the prefetch (a 0-byte stub) the
+		// dependency is satisfied by the stub. Without this explicit
+		// install, APK's resolver picks the first compatible provider
+		// it finds — often `linux-firmware-brcm` on Alpine 3.22.4+ —
+		// which then declares strict-version deps on subpackages like
+		// `linux-firmware-cypress` and `linux-firmware-synaptics` that
+		// aren't in the offline prefetch set. The chroot-install then
+		// fails with `(no such package)`. The "-none" stub provides
+		// `linux-firmware-any` with no transitive subpackage deps, so
+		// it satisfies the constraint without dragging in WiFi/BT
+		// firmware our X10 servers never use.
+		packages = append(packages, "linux-firmware-none")
 	} else {
 		ai.logger.Info("[ALPINE] Skipping linux-lts kernel (using custom FIPS kernel)")
 
