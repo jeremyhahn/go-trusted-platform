@@ -106,8 +106,59 @@ func TestLinuxDeployer_DataDirOverride(t *testing.T) {
 	}
 
 	teardown := GenerateTeardownCommand(config)
-	if !strings.Contains(teardown, "rm -rf '/var/lib/trusted-bootstrap'") {
-		t.Errorf("expected DataDir honoured in teardown, got: %s", teardown)
+	// With an image configured the data dir is removed by a root cleanup
+	// container that mounts the DataDir's parent and removes the leaf.
+	if !strings.Contains(teardown, "-v '/var/lib':/host 'img:v1' rm -rf '/host/trusted-bootstrap'") {
+		t.Errorf("expected root cleanup container honouring DataDir, got: %s", teardown)
+	}
+	if !strings.Contains(teardown, "'docker' rm -f '"+DefaultContainerName+"'") {
+		t.Errorf("expected container removal in teardown, got: %s", teardown)
+	}
+}
+
+func TestLinuxDeployer_GenerateTeardownCommand_RootCleanupContainer(t *testing.T) {
+	config := &DeployConfig{
+		ContainerRuntime: "docker",
+		ContainerImage:   "platform-pxeboot:latest",
+		DataDir:          "/tmp/pxeboot-data",
+	}
+	config.ApplyDefaults()
+
+	cmd := GenerateTeardownCommand(config)
+
+	// Container must be removed before the cleanup container runs so its
+	// bind mount is released.
+	rmIdx := strings.Index(cmd, "rm -f")
+	cleanIdx := strings.Index(cmd, "run --rm")
+	if rmIdx == -1 || cleanIdx == -1 || rmIdx > cleanIdx {
+		t.Fatalf("expected container removal before root cleanup container, got: %s", cmd)
+	}
+	// Cleanup mounts the parent and removes the leaf as root.
+	if !strings.Contains(cmd, "-v '/tmp':/host 'platform-pxeboot:latest' rm -rf '/host/pxeboot-data'") {
+		t.Errorf("expected parent-mount root cleanup of leaf dir, got: %s", cmd)
+	}
+	// A plain host-side rm of the root-owned dir must not be used when an
+	// image is available.
+	if strings.Contains(cmd, "&& rm -rf '/tmp/pxeboot-data'") {
+		t.Errorf("expected no host-side rm of root-owned data dir, got: %s", cmd)
+	}
+}
+
+func TestLinuxDeployer_GenerateTeardownCommand_NoImageHostRemoval(t *testing.T) {
+	// Without an image we cannot run a root cleanup container; the command
+	// degrades to a host-side removal.
+	config := &DeployConfig{
+		ContainerRuntime: "docker",
+		DataDir:          "/tmp/pxeboot-data",
+	}
+	config.ApplyDefaults()
+
+	cmd := GenerateTeardownCommand(config)
+	if !strings.Contains(cmd, "&& rm -rf '/tmp/pxeboot-data'") {
+		t.Errorf("expected host-side rm fallback when no image, got: %s", cmd)
+	}
+	if strings.Contains(cmd, "run --rm") {
+		t.Errorf("expected no cleanup container without an image, got: %s", cmd)
 	}
 }
 

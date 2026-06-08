@@ -67,6 +67,50 @@ type Identity = common.Identity
 type JWT struct {
 	Expiration int64  `yaml:"expiration" json:"expiration" mapstructure:"expiration"`
 	Issuer     string `yaml:"issuer" json:"issuer" mapstructure:"issuer"`
+
+	// PlatformToken configures the QuicBaaS broker platform-token validator
+	// (the "pure validator" inbound auth path). When Enabled, the platform
+	// validates broker-issued, JWKS-published, DPoP-bound access tokens
+	// instead of locally minted JWTs. See pkg/webservice/v1/middleware/iam.
+	PlatformToken PlatformTokenConfig `yaml:"platform-token" json:"platform_token" mapstructure:"platform-token"`
+}
+
+// PlatformTokenConfig configures the inbound platform-token validator that the
+// platform uses as a pure consumer of QuicBaaS-issued access tokens. The
+// validator verifies the token signature against the broker JWKS (selected by
+// kid), checks iss/aud/exp, optionally binds a presented DPoP proof to the
+// token's cnf.jkt, and maps scp -> RBAC + tenant_id -> RLS.
+type PlatformTokenConfig struct {
+	// Enabled turns on broker platform-token validation for the inbound
+	// request path. When false the platform retains its legacy locally
+	// minted JWT validation.
+	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
+
+	// Issuer is the single trusted broker token issuer. The token iss claim
+	// must equal this value (e.g. https://broker.example.com).
+	Issuer string `yaml:"issuer" json:"issuer" mapstructure:"issuer"`
+
+	// JWKSURL is the broker JWKS endpoint the validator fetches and caches
+	// by kid (e.g. https://broker.example.com/.well-known/jwks.json). It is
+	// typically discovered from the broker OIDC metadata.
+	JWKSURL string `yaml:"jwks-url" json:"jwks_url" mapstructure:"jwks-url"`
+
+	// Audience is this platform service's resource identifier. The token aud
+	// claim must contain it. Defaults to "api://platform" when unset.
+	Audience string `yaml:"audience" json:"audience" mapstructure:"audience"`
+
+	// AllowBearer accepts a non-sender-constrained bearer token (no DPoP
+	// proof) when no DPoP header is presented. When false, every request
+	// must carry a DPoP proof bound to the token's cnf.jkt.
+	AllowBearer bool `yaml:"allow-bearer" json:"allow_bearer" mapstructure:"allow-bearer"`
+
+	// ClockSkewSeconds is the permitted clock drift, in seconds, applied to
+	// DPoP proof iat checks. Defaults to 60 when unset.
+	ClockSkewSeconds int64 `yaml:"clock-skew-seconds" json:"clock_skew_seconds" mapstructure:"clock-skew-seconds"`
+
+	// CacheTTLSeconds bounds how long fetched JWKS keys are cached, in
+	// seconds. Defaults to 3600 (one hour) when unset.
+	CacheTTLSeconds int64 `yaml:"cache-ttl-seconds" json:"cache_ttl_seconds" mapstructure:"cache-ttl-seconds"`
 }
 
 type ProxyConfig struct {

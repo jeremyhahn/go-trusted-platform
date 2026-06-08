@@ -195,6 +195,20 @@ func OIDCUnaryInterceptor(opts ...OIDCInterceptorOption) grpc.UnaryServerInterce
 			return nil, status.Error(codes.Unauthenticated, err.Error())
 		}
 
+		// Prefer the platform-token (claims) path when the validator supports
+		// it: validate, project scp -> RBAC / tenant_id -> RLS, and stash the
+		// AuthorizedContext for downstream handlers. Fall back to the bool-only
+		// path otherwise (legacy QuicBaaS / platform-JWT adapter).
+		if cv, ok := config.TokenValidator.(ClaimsTokenValidator); ok {
+			authCtx, aerr := cv.AuthorizeToken(ctx, token, dpopProofFromContext(ctx), info.FullMethod, "")
+			if aerr != nil {
+				return nil, status.Error(codes.Unauthenticated, ErrTokenValidationFailed{Cause: aerr}.Error())
+			}
+			ctx = ContextWithAuthorizedContext(ctx, authCtx)
+			ctx = ContextWithToken(ctx, token)
+			return handler(ctx, req)
+		}
+
 		// Validate the token
 		valid, err := config.TokenValidator.ValidateToken(ctx, token)
 		if err != nil {
@@ -262,6 +276,20 @@ func OIDCStreamInterceptor(opts ...OIDCInterceptorOption) grpc.StreamServerInter
 		token, err := extractBearerToken(ctx)
 		if err != nil {
 			return status.Error(codes.Unauthenticated, err.Error())
+		}
+
+		// Prefer the platform-token (claims) path when the validator supports
+		// it, stashing the AuthorizedContext in the wrapped stream context.
+		if cv, ok := config.TokenValidator.(ClaimsTokenValidator); ok {
+			authCtx, aerr := cv.AuthorizeToken(ctx, token, dpopProofFromContext(ctx), info.FullMethod, "")
+			if aerr != nil {
+				return status.Error(codes.Unauthenticated, ErrTokenValidationFailed{Cause: aerr}.Error())
+			}
+			wrapped := &wrappedServerStream{
+				ServerStream: ss,
+				ctx:          ContextWithToken(ContextWithAuthorizedContext(ctx, authCtx), token),
+			}
+			return handler(srv, wrapped)
 		}
 
 		// Validate the token

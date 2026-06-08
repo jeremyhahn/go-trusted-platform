@@ -58,6 +58,13 @@ type EmbeddedServer struct {
 	// operations without further synchronization.
 	ceremonyCA *CeremonyCAAdapter
 
+	// danePublisher is the lazy DANE TLSA publisher the SDK wires into the
+	// QuicBaaS server via WithDANEPublisher. It resolves the live platform
+	// DNS-backed publisher on every call so the embedded server can be wired
+	// before the platform DNS service is initialized. Security().Trust().
+	// PublishDANE dispatches through it.
+	danePublisher *DANEPublisherAdapter
+
 	started atomic.Bool
 	closed  atomic.Bool
 	mu      sync.RWMutex
@@ -75,6 +82,7 @@ func NewEmbeddedServer(config *Config, logger *logging.Logger) (*EmbeddedServer,
 		logger: logger,
 	}
 	srv.ceremonyCA = NewCeremonyCAAdapter(srv.loadActiveCA)
+	srv.danePublisher = NewDANEPublisherAdapter(nil)
 	return srv, nil
 }
 
@@ -124,6 +132,10 @@ func (s *EmbeddedServer) Start(ctx context.Context) error {
 	if externalCA := s.loadActiveCA(); externalCA != nil {
 		serverOpts = append(serverOpts, quicbaassdk.WithCA(externalCA))
 		s.logger.Debug("QuicBaaS embedded server using external CA")
+	}
+	if s.danePublisher != nil {
+		serverOpts = append(serverOpts, quicbaassdk.WithDANEPublisher(s.danePublisher))
+		s.logger.Debug("QuicBaaS embedded server using DANE publisher")
 	}
 
 	// Create the server with options
@@ -247,6 +259,17 @@ func (s *EmbeddedServer) CeremonyCA() *CeremonyCAAdapter {
 		return nil
 	}
 	return s.ceremonyCA
+}
+
+// DANEPublisher returns the lazy DANE publisher adapter registered with the
+// QuicBaaS server. The platform installs the live DNS-backed backend via the
+// adapter's SetBackend once the DNS service is available. Returns nil only when
+// the embedded server failed to construct.
+func (s *EmbeddedServer) DANEPublisher() *DANEPublisherAdapter {
+	if s == nil {
+		return nil
+	}
+	return s.danePublisher
 }
 
 // SetCA replaces the Certificate Authority used by the running embedded

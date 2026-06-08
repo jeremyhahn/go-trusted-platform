@@ -111,6 +111,10 @@ func (r *testHandlerRegistry) JSONWebTokenHandler() jwt.TokenHandler {
 	return r.tokenHandler
 }
 
+func (r *testHandlerRegistry) PlatformTokenMiddleware() middleware.AuthMiddleware {
+	return nil
+}
+
 func (r *testHandlerRegistry) KMSSDKClients() (kmsclient.Client, cryptoclient.Client, dekclient.Client, secretsclient.Client) {
 	return nil, nil, nil, nil
 }

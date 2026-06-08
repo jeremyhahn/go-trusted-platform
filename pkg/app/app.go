@@ -790,6 +790,12 @@ func (app *App) ServiceRegistry() *service.Registry {
 		}
 		// Assign to app field so it's accessible from serve.go for webservice DNS registration
 		app.DNSService = dnsService
+		// Register the DNS-backed DANE publisher with the embedded QuicBaaS
+		// server so Security().Trust().PublishDANE writes TLSA records through
+		// the platform DNS service. The DNS service is created lazily here, so
+		// the backend can only be wired now (the embedded server was started
+		// earlier with a not-yet-wired adapter).
+		app.wireDANEPublisherBackend()
 	}
 
 	registry, err := service.NewRegistry(app.Logger, deviceService, profileService, templateService, dnsService, app.daoFactory)
@@ -3421,10 +3427,9 @@ func (app *App) publishDANETLSA(wsName string, certDER []byte, keyAttrs *xkmssdk
 		return nil
 	}
 
-	// Lazily create the DANE publisher
-	if app.danePublisher == nil {
-		app.danePublisher = bootstrap.NewDANEPublisher(app.DNSService, app.DNSConfig.DANE, app.Logger)
-	}
+	// Reuse the single DANE publisher instance (shared with the
+	// SDK-registered publisher) so there is one DNS-write path.
+	app.ensureDANEPublisher()
 
 	// Parse the leaf certificate from DER
 	leafCert, err := x509.ParseCertificate(certDER)
@@ -3519,6 +3524,67 @@ func (app *App) resolveDANEZone(hostname string) (string, error) {
 	}
 
 	return "", &ErrDANENoZone{Hostname: hostname}
+}
+
+// ensureDANEPublisher lazily constructs the single DNS-backed
+// bootstrap.DANEPublisher and caches it on the app. It is shared by the
+// platform's cert-deriving publication flow (publishDANETLSA / rollover) and
+// the SDK-registered DANEPublisherAdapter so there is exactly one DNS-write
+// path. Callers must ensure app.DNSService and app.DNSConfig.DANE are set.
+func (app *App) ensureDANEPublisher() *bootstrap.DANEPublisher {
+	if app.danePublisher == nil {
+		app.danePublisher = bootstrap.NewDANEPublisher(app.DNSService, app.DNSConfig.DANE, app.Logger)
+	}
+	return app.danePublisher
+}
+
+// wireDANEPublisherBackend registers the platform DNS-backed DANE publisher
+// with the embedded QuicBaaS server's lazy adapter so
+// Security().Trust().PublishDANE writes pre-derived TLSA records through the
+// platform DNS service. It is a no-op when DANE is disabled, when the storage
+// factory is not an embedded QuicBaaS factory, or when the embedded server has
+// no DANE adapter (remote transport modes).
+func (app *App) wireDANEPublisherBackend() {
+	if app.DNSConfig == nil || app.DNSConfig.DANE == nil || !app.DNSConfig.DANE.Enabled {
+		return
+	}
+	if app.DNSService == nil {
+		return
+	}
+	dbFactory, ok := app.daoFactory.(*quicbaas.Factory)
+	if !ok {
+		return
+	}
+	adapter := dbFactory.DANEPublisher()
+	if adapter == nil {
+		return
+	}
+	adapter.SetBackend(func() (quicbaas.DANERecordWriter, quicbaas.DANEZoneResolver) {
+		if app.DNSService == nil {
+			return nil, nil
+		}
+		return app.ensureDANEPublisher(), app.resolveDANEZoneFromTLSA
+	})
+}
+
+// resolveDANEZoneFromTLSA resolves the authoritative DNS zone that owns a TLSA
+// record from its owner name (e.g. "_443._tcp.host.example.com."). It strips
+// the RFC 6698 "_<port>._<proto>." prefix to recover the service hostname and
+// delegates to resolveDANEZone for the actual zone match.
+func (app *App) resolveDANEZoneFromTLSA(tlsaName string) (string, error) {
+	hostname := strings.TrimSuffix(tlsaName, ".")
+	// Strip leading "_port._proto." labels if present.
+	for i := 0; i < 2; i++ {
+		if !strings.HasPrefix(hostname, "_") {
+			break
+		}
+		idx := strings.IndexByte(hostname, '.')
+		if idx < 0 {
+			break
+		}
+		hostname = hostname[idx+1:]
+	}
+	return app.resolveDANEZone(hostname)
 }
 
 // Returns a new platform XKMS backend given a "keystores" config,

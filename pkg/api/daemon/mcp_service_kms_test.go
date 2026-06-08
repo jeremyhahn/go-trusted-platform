@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 )
 
 // =============================================================================
@@ -130,6 +130,18 @@ func (m *mockKMSServiceForMCPTests) SetKeyPolicy(ctx context.Context, req *servi
 	return nil, errors.New("not implemented")
 }
 func (m *mockKMSServiceForMCPTests) GetKeyPolicy(ctx context.Context, req *service.GetKeyPolicyRequest) (*service.GetKeyPolicyResponse, error) {
+	return nil, errors.New("not implemented")
+}
+func (m *mockKMSServiceForMCPTests) DeleteKeyPolicy(ctx context.Context, req *service.DeleteKeyPolicyRequest) (*service.DeleteKeyPolicyResponse, error) {
+	return nil, errors.New("not implemented")
+}
+func (m *mockKMSServiceForMCPTests) SetKeyRotationPolicy(ctx context.Context, req *service.SetKeyRotationPolicyRequest) (*service.SetKeyRotationPolicyResponse, error) {
+	return nil, errors.New("not implemented")
+}
+func (m *mockKMSServiceForMCPTests) GetKeyRotationPolicy(ctx context.Context, req *service.GetKeyRotationPolicyRequest) (*service.GetKeyRotationPolicyResponse, error) {
+	return nil, errors.New("not implemented")
+}
+func (m *mockKMSServiceForMCPTests) DeleteKeyRotationPolicy(ctx context.Context, req *service.DeleteKeyRotationPolicyRequest) (*service.DeleteKeyRotationPolicyResponse, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockKMSServiceForMCPTests) CreateDEK(ctx context.Context, req *service.CreateDEKRequest) (*service.CreateDEKResponse, error) {

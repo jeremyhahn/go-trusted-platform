@@ -103,6 +103,14 @@ type Config struct {
 	// Used for device provisioning and profile management.
 	DeviceProfileService device.DeviceProfileService
 
+	// PlatformToken configures the shared broker platform-token validator used
+	// across the gRPC, QUIC, and MCP inbound transports. When Enabled, those
+	// transports validate the same QuicBaaS OIDC tokens the HTTP path validates
+	// (JWKS-by-kid + aud + exp + DPoP where applicable) and enforce scp -> RBAC
+	// + tenant_id -> RLS via the AuthorizedContext. When disabled, the legacy
+	// per-transport validators are used, so the cutover is additive.
+	PlatformToken PlatformTokenConfig
+
 	// PlatformJWTVerifier verifies platform-issued JWT bearer tokens for
 	// gRPC TCP / QUIC / MCP transports. When set, the daemon's auth
 	// interceptor accepts the same JWTs minted by the webserver's

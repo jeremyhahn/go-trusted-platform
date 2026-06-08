@@ -187,7 +187,23 @@ func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *Request) 
 		}
 	}
 
-	// Validate token
+	// Prefer the platform-token (claims) path when the validator supports it:
+	// validate the framed bearer token, project scp -> RBAC / tenant_id -> RLS,
+	// and stash the AuthorizedContext for AuthorizeRequest and downstream
+	// handlers. QUIC has no DPoP frame, so this is always a bearer validation.
+	if cv, ok := m.tokenValidator.(ClaimsTokenValidator); ok {
+		authCtx, err := cv.AuthorizeToken(ctx, req.Token, "", "", "")
+		if err != nil {
+			return ctx, &Response{
+				Status:  StatusUnauthorized,
+				Payload: []byte(ErrTokenValidationFailed{Cause: err}.Error()),
+			}
+		}
+		ctx = ContextWithAuthorizedContext(ctx, authCtx)
+		return ContextWithToken(ctx, req.Token), nil
+	}
+
+	// Validate token (legacy bool-only path)
 	valid, err := m.tokenValidator.ValidateToken(ctx, req.Token)
 	if err != nil {
 		return ctx, &Response{
@@ -214,7 +230,25 @@ func (m *AuthMiddleware) AuthorizeRequest(ctx context.Context, req *Request, res
 		return nil
 	}
 
-	// If no authorization checker, allow
+	// When the request was validated via the platform-token (claims) path, an
+	// AuthorizedContext is present: enforce scp -> RBAC against it directly
+	// (the resource/action pair projects to the "<svc>.<verb>" scope). This is
+	// the canonical authorization path for broker-issued tokens.
+	if authCtx, ok := AuthorizedContextFromContext(ctx); ok {
+		scope := scopeForOperation(resource, action)
+		if scope == "" {
+			return nil
+		}
+		if err := authCtx.RequireScope(scope); err != nil {
+			return &Response{
+				Status:  StatusPermissionDenied,
+				Payload: []byte(ErrPermissionDenied{Resource: resource, Action: action}.Error()),
+			}
+		}
+		return nil
+	}
+
+	// If no authorization checker, allow (legacy path)
 	if m.authzChecker == nil {
 		return nil
 	}

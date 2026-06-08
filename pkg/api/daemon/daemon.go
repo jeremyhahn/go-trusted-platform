@@ -113,26 +113,30 @@ type Daemon struct {
 	// grpcAuthValidator and quicAuthValidator are kept around so the
 	// daemon can late-bind a platform JWT verifier after webservices
 	// initialize (the JWT signing key isn't available at daemon.New).
-	grpcAuthValidator     *grpcTokenValidator
-	quicAuthValidator     *grpcTokenValidator
-	tpm2Service           xkmssdk.TrustedPlatformModule
-	ceremonyService       *CeremonyGRPCService
-	pivService            *PIVGRPCService
-	luksService           *LUKSGRPCService
-	fido2Service          *FIDO2GRPCService
-	mcpServer             MCPServerInterface
-	mcpProvider           *MCPServiceProvider
-	bmcService            BMCServicer
-	eabService            EABServicer
-	eabGRPCService        *EABGRPCService
-	eabDelivery           EABDeliveryServicer
-	clusterService        ClusterServicer
-	invitationService     platformservice.InvitationServicer
-	invitationGRPCService *InvitationGRPCService
-	gatewayGRPCService    *GatewayService
-	overlayGRPCService    *OverlayService
-	pxeGRPCService        *PXEGRPCService
-	healthRegistry        health.Registry
+	grpcAuthValidator *grpcTokenValidator
+	quicAuthValidator *grpcTokenValidator
+	// platformTokenValidatorShared is the broker platform-token validator
+	// shared across gRPC/QUIC/MCP when config.PlatformToken.Enabled. Stored so
+	// the lazily-built MCP server can reuse the same instance.
+	platformTokenValidatorShared *platformTokenValidator
+	tpm2Service                  xkmssdk.TrustedPlatformModule
+	ceremonyService              *CeremonyGRPCService
+	pivService                   *PIVGRPCService
+	luksService                  *LUKSGRPCService
+	fido2Service                 *FIDO2GRPCService
+	mcpServer                    MCPServerInterface
+	mcpProvider                  *MCPServiceProvider
+	bmcService                   BMCServicer
+	eabService                   EABServicer
+	eabGRPCService               *EABGRPCService
+	eabDelivery                  EABDeliveryServicer
+	clusterService               ClusterServicer
+	invitationService            platformservice.InvitationServicer
+	invitationGRPCService        *InvitationGRPCService
+	gatewayGRPCService           *GatewayService
+	overlayGRPCService           *OverlayService
+	pxeGRPCService               *PXEGRPCService
+	healthRegistry               health.Registry
 
 	// Concrete server references for accessor methods (set only for real servers)
 	concreteRestServer    *RESTServer
@@ -166,6 +170,23 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// webservices initialize).
 	var grpcAuthValidator *grpcTokenValidator
 	var quicAuthValidator *grpcTokenValidator
+
+	// Build the shared broker platform-token validator once when configured. It
+	// is reused across the gRPC, QUIC, and MCP inbound transports so all of them
+	// validate the same QuicBaaS OIDC tokens (JWKS-by-kid + aud + exp + DPoP
+	// where applicable) and enforce scp -> RBAC + tenant_id -> RLS via the
+	// AuthorizedContext, matching the HTTP path. nil means the legacy
+	// per-transport validators are used (additive cutover).
+	var platformTokenValidatorShared *platformTokenValidator
+	if config.PlatformToken.Enabled {
+		ptv, err := newPlatformTokenValidator(config.PlatformToken, logger)
+		if err != nil {
+			return nil, err
+		}
+		platformTokenValidatorShared = ptv
+		logger.Info("Shared platform-token validator enabled for gRPC/QUIC/MCP",
+			"issuer", config.PlatformToken.Issuer)
+	}
 
 	// Create the daemon service implementation
 	service, err := NewService(config)
@@ -251,7 +272,12 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			// Configure OIDC authentication interceptors if QuicBaaS is available
 			// Skip authentication when SkipIAMValidation is set (testing mode)
 			var tokenValidator grpccreds.TokenValidator
-			if !config.SkipIAMValidation && config.App != nil {
+			if !config.SkipIAMValidation && platformTokenValidatorShared != nil {
+				// Preferred path: validate broker platform tokens and project
+				// scp -> RBAC / tenant_id -> RLS into the request context.
+				tokenValidator = platformTokenValidatorShared
+				logger.Info("gRPC TCP server: platform-token validation enabled")
+			} else if !config.SkipIAMValidation && config.App != nil {
 				var localValidator *grpcTokenValidator
 				dbSvc := config.App.QuicBaaSService()
 				if dbSvc != nil {
@@ -802,6 +828,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		var quicAuthMiddleware *quic.AuthMiddleware
 		if config.EnableMTLS {
 			logger.Info("QUIC server: mTLS authentication enabled (TLS layer)")
+		} else if !config.SkipIAMValidation && platformTokenValidatorShared != nil {
+			// Preferred path: validate broker platform tokens (framed bearer)
+			// and project scp -> RBAC / tenant_id -> RLS via AuthorizedContext.
+			quicAuthMiddleware = quic.NewAuthMiddleware(
+				quic.WithQUICTokenValidator(platformTokenValidatorShared),
+				quic.WithQUICRequireAuth(true),
+			)
+			logger.Info("QUIC server: platform-token validation enabled")
 		} else if !config.SkipIAMValidation && config.App != nil {
 			// Fall back to OIDC token authentication via QuicBaaS
 			dbSvc := config.App.QuicBaaSService()
@@ -980,39 +1014,40 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 
 	daemon := &Daemon{
-		config:                config,
-		logger:                logger,
-		grpcAuthValidator:     grpcAuthValidator,
-		quicAuthValidator:     quicAuthValidator,
-		grpcServer:            grpcServerIntf,
-		grpcUDSServer:         grpcUDSServerIntf,
-		concreteGrpcUDSServer: grpcUDSServer,
-		quicServer:            quicServerIntf,
-		quicHandler:           quicHandler,
-		service:               service,
-		caService:             caService,
-		sdnService:            sdnService,
-		kmsService:            kmsService,
-		iamService:            iamService,
-		tenantService:         tenantService,
-		vtpmService:           vtpmService,
-		deviceService:         deviceService,
-		computeService:        computeService,
-		attestationService:    attestationService,
-		registryService:       registryService,
-		idevidService:         idevidService,
-		tpmService:            tpmService,
-		barrierService:        barrierService,
-		ceremonyService:       ceremonyGRPCService,
-		pivService:            pivGRPCService,
-		luksService:           luksGRPCService,
-		fido2Service:          fido2GRPCService,
-		invitationGRPCService: invitationService,
-		eabGRPCService:        eabService,
-		gatewayGRPCService:    gatewayService,
-		overlayGRPCService:    overlayService,
-		pxeGRPCService:        pxeGRPCService,
-		healthRegistry:        healthRegistry,
+		config:                       config,
+		logger:                       logger,
+		grpcAuthValidator:            grpcAuthValidator,
+		quicAuthValidator:            quicAuthValidator,
+		platformTokenValidatorShared: platformTokenValidatorShared,
+		grpcServer:                   grpcServerIntf,
+		grpcUDSServer:                grpcUDSServerIntf,
+		concreteGrpcUDSServer:        grpcUDSServer,
+		quicServer:                   quicServerIntf,
+		quicHandler:                  quicHandler,
+		service:                      service,
+		caService:                    caService,
+		sdnService:                   sdnService,
+		kmsService:                   kmsService,
+		iamService:                   iamService,
+		tenantService:                tenantService,
+		vtpmService:                  vtpmService,
+		deviceService:                deviceService,
+		computeService:               computeService,
+		attestationService:           attestationService,
+		registryService:              registryService,
+		idevidService:                idevidService,
+		tpmService:                   tpmService,
+		barrierService:               barrierService,
+		ceremonyService:              ceremonyGRPCService,
+		pivService:                   pivGRPCService,
+		luksService:                  luksGRPCService,
+		fido2Service:                 fido2GRPCService,
+		invitationGRPCService:        invitationService,
+		eabGRPCService:               eabService,
+		gatewayGRPCService:           gatewayService,
+		overlayGRPCService:           overlayService,
+		pxeGRPCService:               pxeGRPCService,
+		healthRegistry:               healthRegistry,
 	}
 
 	// Apply functional options (allows overriding servers with mocks)
@@ -1327,11 +1362,16 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		MaxConcurrentRequests: mcpCfg.MaxConcurrentRequests,
 	}
 
-	// Try to set up QuicBaaS auth adapter if available
-	// Skip authentication when SkipIAMValidation is set (testing mode)
+	// Try to set up MCP auth. Prefer the shared broker platform-token
+	// validator (claims path: scp -> RBAC, tenant_id -> RLS) when configured,
+	// falling back to the legacy QuicBaaS adapter otherwise.
+	// Skip authentication when SkipIAMValidation is set (testing mode).
 	if !d.config.SkipIAMValidation {
-		authAdapter := d.createMCPAuthAdapter()
-		if authAdapter != nil {
+		if d.platformTokenValidatorShared != nil {
+			mcpConfig.AuthorizationService = d.platformTokenValidatorShared
+			mcpConfig.AuthManager = d.platformTokenValidatorShared
+			d.logger.Info("MCP server configured with platform-token validation")
+		} else if authAdapter := d.createMCPAuthAdapter(); authAdapter != nil {
 			mcpConfig.AuthorizationService = authAdapter
 			mcpConfig.AuthManager = authAdapter
 			d.logger.Info("MCP server configured with QuicBaaS authorization")

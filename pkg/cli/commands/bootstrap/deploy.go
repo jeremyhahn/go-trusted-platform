@@ -114,10 +114,16 @@ func buildDeployConfig(config *bootstrap.BootstrapConfig, configPath string) *de
 		User:             config.Deployer.User,
 		SSHKeyPath:       sshKey,
 		ContainerRuntime: config.Deployer.ContainerRuntime,
-		TransferProtocol: config.Deployer.TransferProtocol,
-		TransferServer:   config.Deployer.TransferServer,
-		CiscoAppID:       config.Deployer.AppID,
-		CiscoImageFile:   config.Deployer.ImageFile,
+		ContainerImage:   config.Deployer.ContainerImage,
+		// DataDir is required by teardown so the root cleanup container
+		// targets the configured staging directory rather than the
+		// package default; EffectiveDataDir falls back to that default
+		// when unset.
+		DataDir:            config.Deployer.EffectiveDataDir(),
+		TransferProtocol:   config.Deployer.TransferProtocol,
+		TransferServer:     config.Deployer.TransferServer,
+		CiscoAppID:         config.Deployer.AppID,
+		CiscoImageFile:     config.Deployer.ImageFile,
 		ProvisioningSubnet: config.ProvisioningSubnet(),
 	}
 

@@ -462,6 +462,17 @@ func (f *Factory) EmbeddedServer() *EmbeddedServer {
 	return f.embeddedServer
 }
 
+// DANEPublisher returns the lazy DANE publisher adapter registered with the
+// embedded QuicBaaS server, or nil for remote transport modes (which manage
+// their own DANE publication server-side). The platform installs the live
+// DNS-backed backend via the adapter's SetBackend once the DNS service exists.
+func (f *Factory) DANEPublisher() *DANEPublisherAdapter {
+	if f.embeddedServer == nil {
+		return nil
+	}
+	return f.embeddedServer.DANEPublisher()
+}
+
 // Transport returns the transport type being used.
 func (f *Factory) Transport() Transport {
 	return f.config.Transport

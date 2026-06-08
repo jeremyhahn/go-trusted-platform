@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
@@ -45,7 +46,6 @@ import (
 	resttpm "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/tpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 type Router struct {
@@ -207,10 +207,17 @@ func (v1Router *Router) quicbaasStubRoutes() {
 }
 
 func (v1Router *Router) systemRoutes() {
-	// Use WebAuthn as auth middleware if configured, otherwise fall back to JWT.
+	// Auth middleware precedence for protected system routes:
+	//  1. Broker platform-token validator (pure-validator inbound path) when
+	//     JWT.PlatformToken.Enabled — validates broker-issued, JWKS-published,
+	//     DPoP-bound tokens (iss/aud/exp + cnf.jkt) and maps scp -> RBAC +
+	//     tenant_id -> RLS.
+	//  2. WebAuthn handler when configured.
+	//  3. Legacy locally minted JWT handler.
 	var authMiddleware middleware.AuthMiddleware
-	webAuthnHandler := v1Router.restHandlerRegistry.WebAuthnRestService()
-	if webAuthnHandler != nil {
+	if platformToken := v1Router.restHandlerRegistry.PlatformTokenMiddleware(); platformToken != nil {
+		authMiddleware = platformToken
+	} else if webAuthnHandler := v1Router.restHandlerRegistry.WebAuthnRestService(); webAuthnHandler != nil {
 		authMiddleware = webAuthnHandler
 	} else {
 		authMiddleware = v1Router.restHandlerRegistry.JSONWebTokenHandler()

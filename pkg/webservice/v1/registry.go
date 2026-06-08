@@ -46,6 +46,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
 	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
@@ -750,6 +751,7 @@ type RestHandlerRegistry interface {
 	IDevIDServiceServer() platformv1.IDevIDServiceServer
 	InvitationServiceServer() platformv1.InvitationServiceServer
 	JSONWebTokenHandler() jwt.TokenHandler
+	PlatformTokenMiddleware() middleware.AuthMiddleware
 	KMSSDKClients() (kmsclient.Client, cryptoclient.Client, dekclient.Client, secretsclient.Client)
 	MTLSMiddleware() middleware.MTLSMiddleware
 	OverlayServiceServer() platformv1.OverlayServiceServer
@@ -907,8 +909,9 @@ type RegistryParams struct {
 }
 
 type HandlerRegistry struct {
-	jwtService *jwt.Service
-	params     RegistryParams
+	jwtService              *jwt.Service
+	platformTokenMiddleware *iammw.PlatformTokenMiddleware
+	params                  RegistryParams
 	RestHandlerRegistry
 }
 
@@ -959,6 +962,49 @@ func (registry *HandlerRegistry) JSONWebTokenHandler() jwt.TokenHandler {
 		}
 	}
 	return handler
+}
+
+// PlatformTokenMiddleware returns the broker platform-token validator
+// middleware when JWT.PlatformToken.Enabled is set in the webservice config,
+// or nil otherwise. It is the pure-validator inbound auth path: the platform
+// validates broker-issued, JWKS-published, DPoP-bound access tokens (iss/aud/
+// exp + cnf.jkt) and maps scp -> RBAC + tenant_id -> RLS, instead of locally
+// minted JWTs. The validator (and its JWKS cache) is built once and reused.
+//
+// Returning middleware.AuthMiddleware lets it slot into the same router auth
+// seam as the legacy JWT handler. The build fails closed: a configured-but-
+// invalid broker validator aborts startup rather than silently disabling auth.
+func (registry *HandlerRegistry) PlatformTokenMiddleware() middleware.AuthMiddleware {
+	cfg := registry.params.WebServiceConfig
+	if cfg == nil || !cfg.JWT.PlatformToken.Enabled {
+		return nil
+	}
+	if registry.platformTokenMiddleware != nil {
+		return registry.platformTokenMiddleware
+	}
+
+	pt := cfg.JWT.PlatformToken
+	validator, err := iammw.NewPlatformTokenValidator(iammw.PlatformTokenValidatorParams{
+		Issuer:   pt.Issuer,
+		JWKSURL:  pt.JWKSURL,
+		Audience: pt.Audience,
+		CacheTTL: time.Duration(pt.CacheTTLSeconds) * time.Second,
+	})
+	if err != nil {
+		registry.params.Logger.FatalError(err)
+	}
+
+	mw, err := iammw.NewPlatformTokenMiddleware(
+		registry.params.Logger,
+		registry.params.HTTPWriter,
+		validator,
+		iammw.PlatformTokenConfig{AllowBearer: pt.AllowBearer},
+	)
+	if err != nil {
+		registry.params.Logger.FatalError(err)
+	}
+	registry.platformTokenMiddleware = mw
+	return mw
 }
 
 // KMSSDKClients returns the four QuicBaaS SDK clients used by the KMS

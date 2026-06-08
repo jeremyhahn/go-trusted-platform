@@ -426,10 +426,15 @@ func (s *Server) handleToolsCall(ctx context.Context, req *JSONRPCRequest) *JSON
 		token = TokenFromContext(ctx)
 	}
 
-	// Check authorization before executing tool
-	if authErr := s.authChecker.CheckToolAuthorization(ctx, name, token); authErr != nil {
+	// Check authorization before executing tool. AuthorizeTool returns a
+	// context enriched with the validated AuthorizedContext (scp -> RBAC,
+	// tenant_id -> RLS) when the platform-token claims path is in effect, so
+	// downstream tool handlers can enforce tenant isolation uniformly.
+	authCtx, authErr := s.authChecker.AuthorizeTool(ctx, name, token)
+	if authErr != nil {
 		return s.handleAuthError(req.ID, authErr)
 	}
+	ctx = authCtx
 
 	// Execute tool
 	result, err := s.tools.ExecuteTool(ctx, name, arguments)

@@ -197,8 +197,8 @@ func (p *DANEPublisher) PrePublishRollover(
 		TTL:          ttl,
 	}
 
-	if err := p.dnsService.AddTLSARecord(ctx, zoneName, record); err != nil {
-		return ErrDANEPublishFailed{Zone: zoneName, Cause: err}
+	if err := p.addRecord(ctx, zoneName, record); err != nil {
+		return err
 	}
 
 	zone, err := p.dnsService.Zone(ctx, zoneName)
@@ -221,7 +221,9 @@ func (p *DANEPublisher) PrePublishRollover(
 }
 
 // publishRecord computes TLSA data for the given certificate and publishes it
-// as a TLSA record with the specified usage to the DNS zone.
+// as a TLSA record with the specified usage to the DNS zone. The DNS write
+// itself is delegated to addRecord so there is a single TLSA-write path
+// shared with the SDK-registered publisher.
 func (p *DANEPublisher) publishRecord(
 	ctx context.Context,
 	cert *x509.Certificate,
@@ -245,9 +247,59 @@ func (p *DANEPublisher) publishRecord(
 		TTL:          p.config.DefaultTTL,
 	}
 
+	return p.addRecord(ctx, zoneName, record)
+}
+
+// addRecord writes a single pre-derived TLSA record to the DNS zone. It is the
+// single low-level TLSA write used by every publish path in this package
+// (cert-deriving and SDK-registered alike).
+func (p *DANEPublisher) addRecord(
+	ctx context.Context,
+	zoneName string,
+	record *entities.TLSARecord,
+) error {
+
 	if err := p.dnsService.AddTLSARecord(ctx, zoneName, record); err != nil {
 		return ErrDANEPublishFailed{Zone: zoneName, Cause: err}
 	}
+	return nil
+}
+
+// PublishRecords writes a set of already-derived TLSA records to the given DNS
+// zone and re-signs the zone with DNSSEC. It performs NO cert→TLSA derivation:
+// the records are taken as authoritative. This is the canonical write path used
+// by the SDK-registered DANE publisher, whose records are derived server-side by
+// go-quicbaas before the publisher is invoked. It returns ErrDANEPublishFailed
+// if any record write, zone lookup, or re-sign fails.
+func (p *DANEPublisher) PublishRecords(
+	ctx context.Context,
+	zoneName string,
+	records []*entities.TLSARecord,
+) error {
+
+	if len(records) == 0 {
+		return nil
+	}
+
+	for _, record := range records {
+		if err := p.addRecord(ctx, zoneName, record); err != nil {
+			return err
+		}
+	}
+
+	zone, err := p.dnsService.Zone(ctx, zoneName)
+	if err != nil {
+		return ErrDANEPublishFailed{Zone: zoneName, Cause: err}
+	}
+	if err := p.dnsService.SaveAndSign(ctx, zone); err != nil {
+		return ErrDANEPublishFailed{Zone: zoneName, Cause: err}
+	}
+
+	p.logger.Info(
+		"DANE TLSA records published",
+		slog.String("zone", zoneName),
+		slog.Int("records", len(records)),
+	)
 
 	return nil
 }

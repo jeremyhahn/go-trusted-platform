@@ -92,40 +92,75 @@ func (c *AuthorizationChecker) initToolPermissions() {
 	c.toolPermissions["platform_readiness"] = ""
 }
 
-// CheckToolAuthorization checks if the given token has permission to execute the tool.
+// CheckToolAuthorization checks if the given token has permission to execute the
+// tool. It is the context-less form retained for callers that do not need the
+// projected AuthorizedContext; it delegates to AuthorizeTool and discards the
+// returned context.
 func (c *AuthorizationChecker) CheckToolAuthorization(ctx context.Context, toolName string, token string) *AuthorizationError {
+	_, authErr := c.AuthorizeTool(ctx, toolName, token)
+	return authErr
+}
+
+// AuthorizeTool validates the token and authorizes the tool, returning a context
+// enriched with the validated AuthorizedContext (scp -> RBAC, tenant_id -> RLS)
+// when the configured AuthManager supports the claims path. The returned context
+// is the input context unchanged on the legacy / unauthenticated paths.
+func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName string, token string) (context.Context, *AuthorizationError) {
 	// When no authorization backend is configured, allow all operations.
 	// This supports test mode (SkipIAMValidation) and standalone deployments
 	// where IAM is not available.
 	if c.authService == nil && c.authManager == nil {
-		return nil
+		return ctx, nil
 	}
 
 	// Get required permission for tool
 	permission, exists := c.toolPermissions[toolName]
 	if !exists {
 		// Unknown tool - let the tool registry handle the error
-		return nil
+		return ctx, nil
 	}
 
 	// If no permission required, allow
 	if permission == "" {
-		return nil
+		return ctx, nil
 	}
 
 	// Token required for protected tools
 	if token == "" {
-		return &AuthorizationError{
+		return ctx, &AuthorizationError{
 			Type:    AuthErrorMissingToken,
 			Message: "Authentication required for this operation",
 		}
 	}
 
-	// Validate token if auth manager configured
+	// Prefer the platform-token (claims) path when the AuthManager supports it:
+	// validate the token, project scp -> RBAC / tenant_id -> RLS, stash the
+	// AuthorizedContext, and enforce the tool's required scope against it.
+	if cv, ok := c.authManager.(ClaimsAuthManager); ok && cv != nil {
+		authCtx, err := cv.AuthorizeToken(ctx, token, "", "", "")
+		if err != nil {
+			return ctx, &AuthorizationError{
+				Type:    AuthErrorInvalidToken,
+				Message: "Invalid or expired token",
+			}
+		}
+		scope := scopeForToolPermission(permission)
+		if scope != "" {
+			if serr := authCtx.RequireScope(scope); serr != nil {
+				return ctx, &AuthorizationError{
+					Type:    AuthErrorPermissionDenied,
+					Message: "Permission denied: insufficient privileges",
+				}
+			}
+		}
+		return ContextWithAuthorizedContext(ctx, authCtx), nil
+	}
+
+	// Validate token if auth manager configured (legacy bool-only path)
 	if c.authManager != nil {
 		valid, err := c.authManager.ValidateToken(ctx, token)
 		if err != nil || !valid {
-			return &AuthorizationError{
+			return ctx, &AuthorizationError{
 				Type:    AuthErrorInvalidToken,
 				Message: "Invalid or expired token",
 			}
@@ -137,7 +172,7 @@ func (c *AuthorizationChecker) CheckToolAuthorization(ctx context.Context, toolN
 		// Parse permission into resource and action
 		parts := strings.SplitN(permission, ":", 2)
 		if len(parts) != 2 {
-			return &AuthorizationError{
+			return ctx, &AuthorizationError{
 				Type:    AuthErrorPermissionDenied,
 				Message: "Invalid permission configuration",
 			}
@@ -148,14 +183,14 @@ func (c *AuthorizationChecker) CheckToolAuthorization(ctx context.Context, toolN
 
 		allowed, err := c.authService.CheckPermission(ctx, token, resource, action)
 		if err != nil || !allowed {
-			return &AuthorizationError{
+			return ctx, &AuthorizationError{
 				Type:    AuthErrorPermissionDenied,
 				Message: "Permission denied: insufficient privileges",
 			}
 		}
 	}
 
-	return nil
+	return ctx, nil
 }
 
 // IsEnabled returns true if authorization checking is enabled.

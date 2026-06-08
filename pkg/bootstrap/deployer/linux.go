@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 )
 
@@ -419,12 +420,46 @@ func bootstrapEnvFlags(config *DeployConfig) string {
 }
 
 // GenerateTeardownCommand builds the container teardown command string.
-// Honours ContainerName + DataDir from the config.
+// Honours ContainerName + DataDir + ContainerImage from the config.
+//
+// The bootstrap container runs as root and writes root-owned files
+// (install logs, registration JSON, per-MAC config bundles) into the
+// bind-mounted DataDir. A non-root SSH user therefore cannot remove
+// them with a plain host-side `rm -rf` — the previous implementation
+// failed teardown with "Permission denied" on every container-written
+// file and left stale state between runs.
+//
+// To delete root-owned files over SSH without sudo (which would prompt),
+// we run the removal inside a throwaway root container of the bootstrap
+// image, mounting the DataDir's parent so the leaf — including its
+// mountpoint — is removed cleanly. The bootstrap container is removed
+// first so its bind mount is released before the cleanup container runs.
+//
+// When no image is configured (teardown-only invocations that never
+// supplied container_image) a root cleanup container cannot be started,
+// so the command degrades to the host-side removal that works for the
+// deployer-owned portions of the tree.
 func GenerateTeardownCommand(config *DeployConfig) string {
-	return fmt.Sprintf(
-		"%s rm -f %s && rm -rf %s",
-		shellQuote(config.ContainerRuntime),
-		shellQuote(config.ContainerName),
-		shellQuote(config.DataDir),
+	rt := shellQuote(config.ContainerRuntime)
+	removeContainer := fmt.Sprintf("%s rm -f %s", rt, shellQuote(config.ContainerName))
+
+	dataDir := strings.TrimRight(config.DataDir, "/")
+	base := filepath.Base(dataDir)
+	parent := filepath.Dir(dataDir)
+
+	// Guard against an empty image (no root container available) and
+	// pathological DataDir values that would target a parent directory
+	// or the filesystem root.
+	if config.ContainerImage == "" || base == "" || base == "." || base == ".." || base == "/" {
+		return fmt.Sprintf("%s && rm -rf %s", removeContainer, shellQuote(config.DataDir))
+	}
+
+	cleanData := fmt.Sprintf(
+		"%s run --rm -v %s:/host %s rm -rf %s",
+		rt,
+		shellQuote(parent),
+		shellQuote(config.ContainerImage),
+		shellQuote("/host/"+base),
 	)
+	return fmt.Sprintf("%s ; %s", removeContainer, cleanData)
 }

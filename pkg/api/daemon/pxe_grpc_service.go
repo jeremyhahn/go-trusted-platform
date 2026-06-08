@@ -133,9 +133,7 @@ func (s *PXEGRPCService) GetDeviceByMAC(ctx context.Context, req *platformv1.Get
 // without surfacing a 400/precondition error to the user.
 func (s *PXEGRPCService) ListDevices(ctx context.Context, req *platformv1.ListPXEDevicesRequest) (*platformv1.ListPXEDevicesResponse, error) {
 	if s.pxeService == nil {
-		return &platformv1.ListPXEDevicesResponse{
-			Devices: []*platformv1.PXEDeviceInfo{},
-		}, nil
+		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
 	}
 
 	filter := s.filterFromProto(req.GetFilter())
@@ -404,11 +402,7 @@ func (s *PXEGRPCService) GetEvents(ctx context.Context, req *platformv1.GetPXEEv
 // status so the dashboard can render the page without a 400 error.
 func (s *PXEGRPCService) GetStatus(ctx context.Context, req *platformv1.GetPXEStatusRequest) (*platformv1.GetPXEStatusResponse, error) {
 	if s.pxeService == nil {
-		return &platformv1.GetPXEStatusResponse{
-			Status: &platformv1.PXEServiceStatus{
-				Running: false,
-			},
-		}, nil
+		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
 	}
 
 	svcStatus := s.pxeService.Status()
