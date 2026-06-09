@@ -14,6 +14,7 @@
 package jwt
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -73,7 +74,7 @@ func TestSigningMethodRS(t *testing.T) {
 			},
 		}
 
-		opaque, err := ks.GenerateKey(keyAttrs)
+		opaque, err := ks.GenerateKey(context.Background(), keyAttrs)
 		assert.Nil(t, err)
 
 		// Use go-xkms's SigningMethodSigner
@@ -96,7 +97,7 @@ func TestSigningMethodRS(t *testing.T) {
 		err = signingMethod.Verify(signingString, signature, pub)
 		assert.Nil(t, err)
 
-		err = ks.DeleteKey(keyAttrs)
+		err = ks.DeleteKey(context.Background(), keyAttrs)
 		assert.Nil(t, err)
 	}
 }
@@ -144,7 +145,7 @@ func TestSigningMethodPS(t *testing.T) {
 			},
 		}
 
-		opaque, err := ks.GenerateKey(keyAttrs)
+		opaque, err := ks.GenerateKey(context.Background(), keyAttrs)
 		assert.Nil(t, err)
 
 		// Use go-xkms's SigningMethodSigner
@@ -171,7 +172,7 @@ func TestSigningMethodPS(t *testing.T) {
 		err = signingMethod.Verify(signingString, signature, pub)
 		assert.Nil(t, err)
 
-		err = ks.DeleteKey(keyAttrs)
+		err = ks.DeleteKey(context.Background(), keyAttrs)
 		assert.Nil(t, err)
 	}
 }
@@ -223,7 +224,7 @@ func TestSigningMethodES(t *testing.T) {
 			},
 		}
 
-		opaque, err := ks.GenerateKey(keyAttrs)
+		opaque, err := ks.GenerateKey(context.Background(), keyAttrs)
 		assert.Nil(t, err)
 
 		// Use go-xkms's SigningMethodSigner
@@ -247,7 +248,7 @@ func TestSigningMethodES(t *testing.T) {
 		err = signingMethod.Verify(signingString, signature, pub)
 		assert.Nil(t, err)
 
-		err = ks.DeleteKey(keyAttrs)
+		err = ks.DeleteKey(context.Background(), keyAttrs)
 		assert.Nil(t, err)
 	}
 }
@@ -269,7 +270,7 @@ func TestSigningMethodES_Ed25519(t *testing.T) {
 		StoreType:          xkmssdk.StoreSoftware,
 	}
 
-	opaque, err := ks.GenerateKey(keyAttrs)
+	opaque, err := ks.GenerateKey(context.Background(), keyAttrs)
 	assert.Nil(t, err)
 
 	// Use go-xkms's SigningMethodSigner
@@ -290,6 +291,6 @@ func TestSigningMethodES_Ed25519(t *testing.T) {
 	err = signingMethod.Verify(signingString, signature, pub)
 	assert.Nil(t, err)
 
-	err = ks.DeleteKey(keyAttrs)
+	err = ks.DeleteKey(context.Background(), keyAttrs)
 	assert.Nil(t, err)
 }

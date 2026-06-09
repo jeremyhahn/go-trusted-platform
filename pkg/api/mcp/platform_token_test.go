@@ -50,7 +50,7 @@ func TestAuthorizeTool_ClaimsPath_AllowsGrantedScope(t *testing.T) {
 	want := &platformtoken.AuthorizedContext{
 		Subject:  "u",
 		TenantID: "t",
-		Scopes:   []string{"dns.write"},
+		Scopes:   []string{"dns:write"},
 	}
 	mgr := &claimsAuthManagerStub{authCtx: want}
 	checker := NewAuthorizationChecker(nil, mgr)
@@ -69,7 +69,7 @@ func TestAuthorizeTool_ClaimsPath_AllowsGrantedScope(t *testing.T) {
 }
 
 func TestAuthorizeTool_ClaimsPath_DeniesMissingScope(t *testing.T) {
-	mgr := &claimsAuthManagerStub{authCtx: &platformtoken.AuthorizedContext{Scopes: []string{"dns.read"}}}
+	mgr := &claimsAuthManagerStub{authCtx: &platformtoken.AuthorizedContext{Scopes: []string{"dns:read"}}}
 	checker := NewAuthorizationChecker(nil, mgr)
 
 	_, authErr := checker.AuthorizeTool(context.Background(), "dns_add_record", "tok")
@@ -145,7 +145,7 @@ func TestAuthorizeTool_LegacyFallback(t *testing.T) {
 }
 
 func TestCheckToolAuthorization_DelegatesToAuthorizeTool(t *testing.T) {
-	mgr := &claimsAuthManagerStub{authCtx: &platformtoken.AuthorizedContext{Scopes: []string{"dns.write"}}}
+	mgr := &claimsAuthManagerStub{authCtx: &platformtoken.AuthorizedContext{Scopes: []string{"dns:write"}}}
 	checker := NewAuthorizationChecker(nil, mgr)
 
 	if authErr := checker.CheckToolAuthorization(context.Background(), "dns_add_record", "tok"); authErr != nil {
@@ -155,8 +155,8 @@ func TestCheckToolAuthorization_DelegatesToAuthorizeTool(t *testing.T) {
 
 func TestScopeForToolPermission(t *testing.T) {
 	cases := map[string]string{
-		"dns:write": "dns.write",
-		"vtpm:read": "vtpm.read",
+		"dns:write": "dns:write",
+		"vtpm:read": "vtpm:read",
 		"":          "",
 		"bad":       "",
 		"a:":        "",

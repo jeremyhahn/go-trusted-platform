@@ -40,7 +40,7 @@ func newMockSDKClient() *mockSDKClient {
 // Sub-interface accessors (organized API).
 func (m *mockSDKClient) CoreData() quicbaas.CoreDataService             { return nil }
 func (m *mockSDKClient) ClusterMgmt() quicbaas.ClusterManagementService { return nil }
-func (m *mockSDKClient) Security() quicbaas.SecurityService             { return nil }
+func (m *mockSDKClient) Security() quicbaas.SecurityService             { return &mockSecurityService{} }
 func (m *mockSDKClient) Identity() quicbaas.IdentityService             { return nil }
 func (m *mockSDKClient) Search() quicbaas.SearchService                 { return nil }
 func (m *mockSDKClient) Storage() quicbaas.StorageService               { return nil }
@@ -60,15 +60,6 @@ func (m *mockSDKClient) Cluster() quicbaas.ClusterClient                       {
 func (m *mockSDKClient) Health() quicbaas.HealthClient                         { return nil }
 func (m *mockSDKClient) Operations() quicbaas.OperationsClient                 { return nil }
 func (m *mockSDKClient) Cache() quicbaas.CacheClient                           { return nil }
-func (m *mockSDKClient) Auth() quicbaas.AuthClient                             { return nil }
-func (m *mockSDKClient) Seal() quicbaas.SealClient                             { return nil }
-func (m *mockSDKClient) KMS() quicbaas.KMSClient                               { return nil }
-func (m *mockSDKClient) Secrets() quicbaas.SecretsClient                       { return nil }
-func (m *mockSDKClient) Crypto() quicbaas.CryptoClient                         { return nil }
-func (m *mockSDKClient) RBAC() quicbaas.RBACClient                             { return nil }
-func (m *mockSDKClient) DynamicSecrets() quicbaas.DynamicSecretsClient         { return nil }
-func (m *mockSDKClient) Certificate() quicbaas.CertificateClient               { return nil }
-func (m *mockSDKClient) DEK() quicbaas.DEKClient                               { return nil }
 func (m *mockSDKClient) Discovery() (*registry.Registry, error)                { return nil, nil }
 func (m *mockSDKClient) IAM() quicbaas.IAMClient                               { return nil }
 func (m *mockSDKClient) Vector() quicbaas.VectorClient                         { return nil }
@@ -105,6 +96,23 @@ func (m *mockSDKClient) Close() error {
 	m.closed = true
 	return m.closeErr
 }
+
+// mockSecurityService is a minimal SecurityService that returns nil for every
+// capability. It lets the wrapper's Security().X() delegation execute without
+// panicking while preserving the test's "expected nil" expectations.
+type mockSecurityService struct {
+	quicbaas.SecurityService
+}
+
+func (mockSecurityService) Auth() quicbaas.AuthService                    { return nil }
+func (mockSecurityService) Seal() quicbaas.SealClient                     { return nil }
+func (mockSecurityService) KMS() quicbaas.KMSClient                       { return nil }
+func (mockSecurityService) Secrets() quicbaas.SecretsClient               { return nil }
+func (mockSecurityService) Crypto() quicbaas.CryptoClient                 { return nil }
+func (mockSecurityService) RBAC() quicbaas.RBACClient                     { return nil }
+func (mockSecurityService) DynamicSecrets() quicbaas.DynamicSecretsClient { return nil }
+func (mockSecurityService) Certificate() quicbaas.CertificateClient       { return nil }
+func (mockSecurityService) DEK() quicbaas.DEKClient                       { return nil }
 
 // TestNewClientFromSDK_Success tests creating a client from an existing SDK client.
 func TestNewClientFromSDK_Success(t *testing.T) {

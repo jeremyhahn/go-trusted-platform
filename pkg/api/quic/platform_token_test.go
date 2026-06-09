@@ -44,7 +44,7 @@ func (s *claimsValidatorStub) AuthorizeToken(ctx context.Context, token, dpopPro
 }
 
 func TestQUICAuthenticateRequest_ClaimsPath_StashesAuthorizedContext(t *testing.T) {
-	want := &platformtoken.AuthorizedContext{Subject: "u", TenantID: "t", Scopes: []string{"dns.write"}}
+	want := &platformtoken.AuthorizedContext{Subject: "u", TenantID: "t", Scopes: []string{"dns:write"}}
 	stub := &claimsValidatorStub{authCtx: want}
 	mw := NewAuthMiddleware(WithQUICTokenValidator(stub), WithQUICRequireAuth(true))
 
@@ -68,7 +68,7 @@ func TestQUICAuthenticateRequest_ClaimsPath_StashesAuthorizedContext(t *testing.
 
 func TestQUICAuthorizeRequest_ClaimsPath_EnforcesScope(t *testing.T) {
 	mw := NewAuthMiddleware(WithQUICTokenValidator(
-		&claimsValidatorStub{authCtx: &platformtoken.AuthorizedContext{Scopes: []string{"dns.write"}}}),
+		&claimsValidatorStub{authCtx: &platformtoken.AuthorizedContext{Scopes: []string{"dns:write"}}}),
 		WithQUICRequireAuth(true))
 
 	req := &Request{Opcode: OpDNSAddRecord, Token: "tok"}
@@ -166,8 +166,8 @@ func TestQUICAuthorize_LegacyFallback(t *testing.T) {
 }
 
 func TestScopeForOperation(t *testing.T) {
-	if got := scopeForOperation("dns", "write"); got != "dns.write" {
-		t.Errorf("got %q, want dns.write", got)
+	if got := scopeForOperation("dns", "write"); got != "dns:write" {
+		t.Errorf("got %q, want dns:write", got)
 	}
 	if got := scopeForOperation("", "write"); got != "" {
 		t.Errorf("empty resource should yield empty scope, got %q", got)

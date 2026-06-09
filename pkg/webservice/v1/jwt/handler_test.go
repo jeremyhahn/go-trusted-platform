@@ -82,10 +82,10 @@ func TestNewRestHandler(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -101,10 +101,10 @@ func TestHandlerGenerateToken_NoLoginClientFailsClosed(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -143,10 +143,10 @@ func TestHandlerGenerateToken_InvalidJSON(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -177,10 +177,10 @@ func TestHandlerRefreshToken_Success(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -219,10 +219,10 @@ func TestHandlerRefreshToken_MissingToken(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -248,10 +248,10 @@ func TestHandlerRefreshToken_InvalidToken(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -281,11 +281,11 @@ func TestHandlerRefreshToken_ExpiredToken(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
 	// Create service with short expiration for testing expired tokens
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -329,10 +329,10 @@ func TestHandlerVerify_Success(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -370,10 +370,10 @@ func TestHandlerVerify_MissingToken(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -405,10 +405,10 @@ func TestHandlerVerify_InvalidToken(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -445,10 +445,10 @@ func TestHandlerVerify_VerificationFailure(t *testing.T) {
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 	params.Audience = "correct-audience"
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -498,10 +498,10 @@ func TestCreateSession_Success(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -539,10 +539,10 @@ func TestCreateSession_WithOrgID(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -585,10 +585,10 @@ func TestCreateSession_WithServiceID(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -631,10 +631,10 @@ func TestCreateSession_InvalidOrgID(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -671,10 +671,10 @@ func TestCreateSession_UserServiceError(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -711,10 +711,10 @@ func TestCreateSession_MissingToken(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -739,10 +739,10 @@ func TestCreateSession_ParseServiceIDError(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()
@@ -804,10 +804,10 @@ func TestCreateSession_ParseUintEdgeCases(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	logger := logging.DefaultLogger()

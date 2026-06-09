@@ -180,8 +180,8 @@ func TestHandler_Create_NotOwner(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	h.Create(rec, req)
-	// Error403 in response writer actually sends StatusBadRequest (400)
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	// Non-owner is rejected with 403 Forbidden (fail closed).
+	assert.Equal(t, http.StatusForbidden, rec.Code)
 }
 
 func TestHandler_Create_MissingProfileID(t *testing.T) {
@@ -586,8 +586,8 @@ func TestHandler_Delete_NotOwner(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	h.Delete(rec, req)
-	// Error403 sends StatusBadRequest (400) in current implementation
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	// Non-owner is rejected with 403 Forbidden (fail closed).
+	assert.Equal(t, http.StatusForbidden, rec.Code)
 }
 
 func TestHandler_Delete_ServiceError(t *testing.T) {

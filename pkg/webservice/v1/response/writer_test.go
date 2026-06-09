@@ -484,7 +484,7 @@ func TestError401(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Contains(t, rec.Body.String(), `"success":false`)
-	// Note: The code says 404 but status is 401 - this appears to be a bug in the implementation
+	assert.Contains(t, rec.Body.String(), `"code":401`)
 	assert.Contains(t, rec.Body.String(), `"error":"unauthorized"`)
 }
 
@@ -500,7 +500,8 @@ func TestError403(t *testing.T) {
 	payload := map[string]string{"reason": "insufficient permissions"}
 	writer.Error403(rec, req, err, payload)
 
-	assert.Equal(t, http.StatusBadRequest, rec.Code) // Note: Implementation uses 400, not 403
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"code":403`)
 	assert.Contains(t, rec.Body.String(), `"success":false`)
 	assert.Contains(t, rec.Body.String(), `"error":"forbidden"`)
 	assert.Contains(t, rec.Body.String(), `"reason":"insufficient permissions"`)

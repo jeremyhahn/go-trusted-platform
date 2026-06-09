@@ -154,7 +154,8 @@ func TestHandler_Revoke_NotOwner(t *testing.T) {
 
 	h.Revoke(w, req)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	// Non-owner is rejected with 403 Forbidden (fail closed).
+	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
 // TestHandler_Revoke_MissingID tests Revoke with missing credential ID.

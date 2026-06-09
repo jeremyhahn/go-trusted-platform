@@ -37,6 +37,10 @@ type mockSDKKMSClient struct {
 	listKeysFunc     func(ctx context.Context) (*kms.ListKeysResponse, error)
 	rotateKeyFunc    func(ctx context.Context, keyID string) (*kms.RotateKeyResponse, error)
 	deleteKeyFunc    func(ctx context.Context, keyID string) error
+
+	setKeyRotationPolicyFunc    func(ctx context.Context, req *kms.SetKeyRotationPolicyRequest) (*kms.KeyRotationPolicy, error)
+	getKeyRotationPolicyFunc    func(ctx context.Context, keyID string) (*kms.KeyRotationPolicy, error)
+	deleteKeyRotationPolicyFunc func(ctx context.Context, keyID string) error
 }
 
 func (m *mockSDKKMSClient) GenerateKey(ctx context.Context, req *kms.GenerateKeyRequest) (*kms.GenerateKeyResponse, error) {
@@ -79,6 +83,27 @@ func (m *mockSDKKMSClient) DeleteKey(ctx context.Context, keyID string) error {
 		return m.deleteKeyFunc(ctx, keyID)
 	}
 	return errors.New("deleteKey not implemented")
+}
+
+func (m *mockSDKKMSClient) SetKeyRotationPolicy(ctx context.Context, req *kms.SetKeyRotationPolicyRequest) (*kms.KeyRotationPolicy, error) {
+	if m.setKeyRotationPolicyFunc != nil {
+		return m.setKeyRotationPolicyFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockSDKKMSClient) GetKeyRotationPolicy(ctx context.Context, keyID string) (*kms.KeyRotationPolicy, error) {
+	if m.getKeyRotationPolicyFunc != nil {
+		return m.getKeyRotationPolicyFunc(ctx, keyID)
+	}
+	return nil, nil
+}
+
+func (m *mockSDKKMSClient) DeleteKeyRotationPolicy(ctx context.Context, keyID string) error {
+	if m.deleteKeyRotationPolicyFunc != nil {
+		return m.deleteKeyRotationPolicyFunc(ctx, keyID)
+	}
+	return nil
 }
 
 func (m *mockSDKKMSClient) ImportKey(ctx context.Context, req *kms.ImportKeyRequest) (*kms.ImportKeyResponse, error) {

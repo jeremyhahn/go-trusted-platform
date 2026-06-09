@@ -15,6 +15,7 @@ package authenticode
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/sha256"
 	"crypto/x509"
@@ -24,8 +25,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 // Authenticode provides PE/COFF (Windows Authenticode) signing functionality
@@ -53,6 +54,7 @@ type Authenticode interface {
 
 // Signer implements Authenticode signing using keystore integration
 type Signer struct {
+	ctx          context.Context
 	keystore     xkmssdk.KeyProvider
 	keyAttrs     *xkmssdk.KeyAttributes
 	cert         *x509.Certificate
@@ -83,7 +85,7 @@ type SignerOptions struct {
 }
 
 // NewSigner creates a new Authenticode signer with keystore integration
-func NewSigner(opts *SignerOptions) (Authenticode, error) {
+func NewSigner(ctx context.Context, opts *SignerOptions) (Authenticode, error) {
 	if opts.KeyStore == nil {
 		return nil, fmt.Errorf("keystore is required")
 	}
@@ -101,12 +103,13 @@ func NewSigner(opts *SignerOptions) (Authenticode, error) {
 	}
 
 	// Verify the key exists
-	_, err := opts.KeyStore.Signer(opts.KeyAttributes)
+	_, err := opts.KeyStore.Signer(ctx, opts.KeyAttributes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get signer from keystore: %w", err)
 	}
 
 	return &Signer{
+		ctx:          ctx,
 		keystore:     opts.KeyStore,
 		keyAttrs:     opts.KeyAttributes,
 		cert:         opts.Certificate,
@@ -161,7 +164,7 @@ func (s *Signer) Sign(input io.Reader, output io.Writer) error {
 	s.logger.Info("[AUTHENTICODE] Authenticated attributes digest computed")
 
 	// Get signer from keystore (TPM, PKCS#11, or PKCS8)
-	signer, err := s.keystore.Signer(s.keyAttrs)
+	signer, err := s.keystore.Signer(s.ctx, s.keyAttrs)
 	if err != nil {
 		return fmt.Errorf("failed to get signer from keystore: %w", err)
 	}

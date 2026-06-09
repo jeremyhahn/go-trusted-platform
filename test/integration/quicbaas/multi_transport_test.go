@@ -170,15 +170,15 @@ func verifyAllServiceClients(t *testing.T, sdk quicbaassdk.Client) {
 	assert.NotNil(t, sdk.Cache(), "Cache client should not be nil")
 
 	// Security Operations
-	assert.NotNil(t, sdk.Auth(), "Auth client should not be nil")
-	assert.NotNil(t, sdk.Seal(), "Seal client should not be nil")
-	assert.NotNil(t, sdk.KMS(), "KMS client should not be nil")
-	assert.NotNil(t, sdk.Secrets(), "Secrets client should not be nil")
-	assert.NotNil(t, sdk.Crypto(), "Crypto client should not be nil")
-	assert.NotNil(t, sdk.RBAC(), "RBAC client should not be nil")
-	assert.NotNil(t, sdk.DynamicSecrets(), "DynamicSecrets client should not be nil")
-	assert.NotNil(t, sdk.Certificate(), "Certificate client should not be nil")
-	assert.NotNil(t, sdk.DEK(), "DEK client should not be nil")
+	assert.NotNil(t, sdk.Security().Auth(), "Auth client should not be nil")
+	assert.NotNil(t, sdk.Security().Seal(), "Seal client should not be nil")
+	assert.NotNil(t, sdk.Security().KMS(), "KMS client should not be nil")
+	assert.NotNil(t, sdk.Security().Secrets(), "Secrets client should not be nil")
+	assert.NotNil(t, sdk.Security().Crypto(), "Crypto client should not be nil")
+	assert.NotNil(t, sdk.Security().RBAC(), "RBAC client should not be nil")
+	assert.NotNil(t, sdk.Security().DynamicSecrets(), "DynamicSecrets client should not be nil")
+	assert.NotNil(t, sdk.Security().Certificate(), "Certificate client should not be nil")
+	assert.NotNil(t, sdk.Security().DEK(), "DEK client should not be nil")
 
 	// IAM Operations
 	assert.NotNil(t, sdk.IAM(), "IAM client should not be nil")
@@ -367,8 +367,8 @@ func TestSDKClientServiceAccessors(t *testing.T) {
 	health2 := sdk.Health()
 	assert.Same(t, health1, health2, "Health client should be cached")
 
-	kms1 := sdk.KMS()
-	kms2 := sdk.KMS()
+	kms1 := sdk.Security().KMS()
+	kms2 := sdk.Security().KMS()
 	assert.Same(t, kms1, kms2, "KMS client should be cached")
 
 	iam1 := sdk.IAM()
@@ -461,7 +461,7 @@ func TestSDKClientConcurrentAccess(t *testing.T) {
 			// Access various services
 			_ = sdk.KV()
 			_ = sdk.Health()
-			_ = sdk.KMS()
+			_ = sdk.Security().KMS()
 			_ = sdk.IAM()
 			_ = sdk.Vector()
 			_ = sdk.Batch()

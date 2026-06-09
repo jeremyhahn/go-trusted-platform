@@ -23,8 +23,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 )
 
 const (

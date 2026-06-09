@@ -89,10 +89,64 @@ func (m *MockClient) ClusterMgmt() quicbaas.ClusterManagementService {
 	return nil
 }
 
-// Security returns nil (stub for testing).
+// Security returns a mock SecurityService that delegates each accessor back to
+// the MockClient's flat service fields. This mirrors the canonical
+// securityService in go-quicbaas (sdk/go/services.go), which delegates to its
+// underlying client. Delegating keeps the grouped Security() surface in
+// lock-step with the flat accessors, so adapter methods that route through
+// Security() (e.g. Adapter.KMS -> client.Security().KMS()) compare equal to the
+// corresponding MockClient field.
 func (m *MockClient) Security() quicbaas.SecurityService {
-	return nil
+	return &mockSecurityService{m: m}
 }
+
+// mockSecurityService is a test SecurityService whose accessors resolve to the
+// owning MockClient's flat service fields.
+type mockSecurityService struct {
+	m *MockClient
+}
+
+// Auth returns a nil AuthService. The owning MockClient's flat authClient field
+// is also nil, so the adapter's Security().Auth() and the mock's flat Auth()
+// compare equal (both nil) without requiring a full AuthService implementation.
+func (s *mockSecurityService) Auth() quicbaas.AuthService { return nil }
+
+func (s *mockSecurityService) Seal() quicbaas.SealClient       { return s.m.Seal() }
+func (s *mockSecurityService) KMS() quicbaas.KMSClient         { return s.m.KMS() }
+func (s *mockSecurityService) Secrets() quicbaas.SecretsClient { return s.m.Secrets() }
+func (s *mockSecurityService) Crypto() quicbaas.CryptoClient   { return s.m.Crypto() }
+
+func (s *mockSecurityService) Certificate() quicbaas.CertificateClient {
+	return s.m.Certificate()
+}
+
+func (s *mockSecurityService) CertificateExt() quicbaas.CertificateExtensions { return nil }
+
+func (s *mockSecurityService) DEK() quicbaas.DEKClient { return s.m.DEK() }
+
+func (s *mockSecurityService) DynamicSecrets() quicbaas.DynamicSecretsClient {
+	return s.m.DynamicSecrets()
+}
+
+func (s *mockSecurityService) RBAC() quicbaas.RBACClient { return s.m.RBAC() }
+
+func (s *mockSecurityService) SealStore() (quicbaas.QRDBSealStoreClient, error) {
+	return s.m.SealStore()
+}
+
+func (s *mockSecurityService) ACME() quicbaas.ACMEService   { return nil }
+func (s *mockSecurityService) Trust() quicbaas.TrustService { return nil }
+
+func (s *mockSecurityService) Barrier() (quicbaas.QRDBBarrierClient, error) { return nil, nil }
+
+func (s *mockSecurityService) Ceremony() (quicbaas.QRDBCeremonyClient, error) { return nil, nil }
+
+func (s *mockSecurityService) Credentials() (quicbaas.QRDBCredentialClient, error) {
+	return nil, nil
+}
+
+// Verify mockSecurityService implements quicbaas.SecurityService.
+var _ quicbaas.SecurityService = (*mockSecurityService)(nil)
 
 // Identity returns nil (stub for testing).
 func (m *MockClient) Identity() quicbaas.IdentityService {

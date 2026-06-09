@@ -347,7 +347,7 @@ func TestQuicBaaSKeyStore_GenerateRSA(t *testing.T) {
 			Prefix: "ca.root.",
 		})
 
-		key, err := ks.GenerateRSA(&xkmssdk.KeyAttributes{
+		key, err := ks.GenerateRSA(context.Background(), &xkmssdk.KeyAttributes{
 			CN: "test-key",
 		})
 
@@ -387,7 +387,7 @@ func TestQuicBaaSKeyStore_GenerateRSA(t *testing.T) {
 			Prefix: "ca.root.",
 		})
 
-		key, err := ks.GenerateRSA(&xkmssdk.KeyAttributes{
+		key, err := ks.GenerateRSA(context.Background(), &xkmssdk.KeyAttributes{
 			CN: "test-key",
 			RSAAttributes: &xkmssdk.RSAAttributes{
 				KeySize: 4096,
@@ -407,7 +407,7 @@ func TestQuicBaaSKeyStore_GenerateRSA(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		key, err := ks.GenerateRSA(nil)
+		key, err := ks.GenerateRSA(context.Background(), nil)
 
 		require.Error(t, err)
 		assert.Nil(t, key)
@@ -430,7 +430,7 @@ func TestQuicBaaSKeyStore_GenerateRSA(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		key, err := ks.GenerateRSA(&xkmssdk.KeyAttributes{CN: "test"})
+		key, err := ks.GenerateRSA(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
 
 		require.Error(t, err)
 		assert.Nil(t, key)
@@ -477,7 +477,7 @@ func TestQuicBaaSKeyStore_GenerateECDSA(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		key, err := ks.GenerateECDSA(&xkmssdk.KeyAttributes{CN: "ecdsa-test"})
+		key, err := ks.GenerateECDSA(context.Background(), &xkmssdk.KeyAttributes{CN: "ecdsa-test"})
 
 		require.NoError(t, err)
 		require.NotNil(t, key)
@@ -492,7 +492,7 @@ func TestQuicBaaSKeyStore_GenerateECDSA(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		key, err := ks.GenerateECDSA(nil)
+		key, err := ks.GenerateECDSA(context.Background(), nil)
 
 		require.Error(t, err)
 		assert.Nil(t, key)
@@ -535,7 +535,7 @@ func TestQuicBaaSKeyStore_GenerateEd25519(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		key, err := ks.GenerateEd25519(&xkmssdk.KeyAttributes{CN: "ed25519-test"})
+		key, err := ks.GenerateEd25519(context.Background(), &xkmssdk.KeyAttributes{CN: "ed25519-test"})
 
 		require.NoError(t, err)
 		require.NotNil(t, key)
@@ -550,7 +550,7 @@ func TestQuicBaaSKeyStore_GenerateEd25519(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		key, err := ks.GenerateEd25519(nil)
+		key, err := ks.GenerateEd25519(context.Background(), nil)
 
 		require.Error(t, err)
 		assert.Nil(t, key)
@@ -595,7 +595,7 @@ func TestQuicBaaSKeyStore_GetKey(t *testing.T) {
 			Prefix: "ca.root.",
 		})
 
-		key, err := ks.GetKey(&xkmssdk.KeyAttributes{CN: "existing-key"})
+		key, err := ks.GetKey(context.Background(), &xkmssdk.KeyAttributes{CN: "existing-key"})
 
 		require.NoError(t, err)
 		require.NotNil(t, key)
@@ -614,7 +614,7 @@ func TestQuicBaaSKeyStore_GetKey(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		key, err := ks.GetKey(&xkmssdk.KeyAttributes{CN: "nonexistent"})
+		key, err := ks.GetKey(context.Background(), &xkmssdk.KeyAttributes{CN: "nonexistent"})
 
 		require.Error(t, err)
 		assert.Nil(t, key)
@@ -632,7 +632,7 @@ func TestQuicBaaSKeyStore_GetKey(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		key, err := ks.GetKey(nil)
+		key, err := ks.GetKey(context.Background(), nil)
 
 		require.Error(t, err)
 		assert.Nil(t, key)
@@ -670,7 +670,7 @@ func TestQuicBaaSKeyStore_GetKeyByID(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		key, err := ks.GetKeyByID("my-key")
+		key, err := ks.GetKeyByID(context.Background(), "my-key")
 
 		require.NoError(t, err)
 		require.NotNil(t, key)
@@ -682,7 +682,7 @@ func TestQuicBaaSKeyStore_GetKeyByID(t *testing.T) {
 			Crypto: &mockSDKCryptoClient{},
 		})
 
-		key, err := ks.GetKeyByID("")
+		key, err := ks.GetKeyByID(context.Background(), "")
 
 		require.Error(t, err)
 		assert.Nil(t, key)
@@ -715,7 +715,7 @@ func TestQuicBaaSKeyStore_GetKeyByID(t *testing.T) {
 			Prefix: "ca.root.",
 		})
 
-		key, err := ks.GetKeyByID("my-key")
+		key, err := ks.GetKeyByID(context.Background(), "my-key")
 
 		require.NoError(t, err)
 		require.NotNil(t, key)
@@ -752,7 +752,7 @@ func TestQuicBaaSKeyStore_GetSignerByID(t *testing.T) {
 			Crypto: &mockSDKCryptoClient{},
 		})
 
-		signer, err := ks.GetSignerByID("signing-key")
+		signer, err := ks.GetSignerByID(context.Background(), "signing-key")
 
 		require.NoError(t, err)
 		require.NotNil(t, signer)
@@ -764,7 +764,7 @@ func TestQuicBaaSKeyStore_GetSignerByID(t *testing.T) {
 			Crypto: &mockSDKCryptoClient{},
 		})
 
-		signer, err := ks.GetSignerByID("")
+		signer, err := ks.GetSignerByID(context.Background(), "")
 
 		require.Error(t, err)
 		assert.Nil(t, signer)
@@ -788,7 +788,7 @@ func TestQuicBaaSKeyStore_GetDecrypterByID(t *testing.T) {
 			Crypto: &mockSDKCryptoClient{},
 		})
 
-		decrypter, err := ks.GetDecrypterByID("decrypt-key")
+		decrypter, err := ks.GetDecrypterByID(context.Background(), "decrypt-key")
 
 		require.NoError(t, err)
 		require.NotNil(t, decrypter)
@@ -800,7 +800,7 @@ func TestQuicBaaSKeyStore_GetDecrypterByID(t *testing.T) {
 			Crypto: &mockSDKCryptoClient{},
 		})
 
-		decrypter, err := ks.GetDecrypterByID("")
+		decrypter, err := ks.GetDecrypterByID(context.Background(), "")
 
 		require.Error(t, err)
 		assert.Nil(t, decrypter)
@@ -826,7 +826,7 @@ func TestQuicBaaSKeyStore_DeleteKey(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		err := ks.DeleteKey(&xkmssdk.KeyAttributes{CN: "test-key"})
+		err := ks.DeleteKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test-key"})
 
 		require.NoError(t, err)
 	})
@@ -840,7 +840,7 @@ func TestQuicBaaSKeyStore_DeleteKey(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		err := ks.DeleteKey(nil)
+		err := ks.DeleteKey(context.Background(), nil)
 
 		require.Error(t, err)
 	})
@@ -869,7 +869,7 @@ func TestQuicBaaSKeyStore_ListKeys(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		keys, err := ks.ListKeys()
+		keys, err := ks.ListKeys(context.Background())
 
 		require.NoError(t, err)
 		assert.Len(t, keys, 2)
@@ -896,7 +896,7 @@ func TestQuicBaaSKeyStore_ListKeys(t *testing.T) {
 			Prefix: "ca.root.",
 		})
 
-		keys, err := ks.ListKeys()
+		keys, err := ks.ListKeys(context.Background())
 
 		require.NoError(t, err)
 		assert.Len(t, keys, 1)
@@ -916,7 +916,7 @@ func TestQuicBaaSKeyStore_ListKeys(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		keys, err := ks.ListKeys()
+		keys, err := ks.ListKeys(context.Background())
 
 		require.Error(t, err)
 		assert.Nil(t, keys)
@@ -1056,7 +1056,7 @@ func TestQuicBaaSKeyStore_RotateKey(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		key, err := ks.RotateKey(&xkmssdk.KeyAttributes{CN: "rotate-key"})
+		key, err := ks.RotateKey(context.Background(), &xkmssdk.KeyAttributes{CN: "rotate-key"})
 
 		require.NoError(t, err)
 		require.NotNil(t, key)
@@ -1071,7 +1071,7 @@ func TestQuicBaaSKeyStore_RotateKey(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		key, err := ks.RotateKey(nil)
+		key, err := ks.RotateKey(context.Background(), nil)
 
 		require.Error(t, err)
 		assert.Nil(t, key)
@@ -1107,7 +1107,7 @@ func TestQuicBaaSKeyStore_Signer(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		signer, err := ks.Signer(&xkmssdk.KeyAttributes{CN: "signing-key"})
+		signer, err := ks.Signer(context.Background(), &xkmssdk.KeyAttributes{CN: "signing-key"})
 
 		require.NoError(t, err)
 		require.NotNil(t, signer)
@@ -1126,7 +1126,7 @@ func TestQuicBaaSKeyStore_Signer(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		signer, err := ks.Signer(&xkmssdk.KeyAttributes{CN: "nonexistent"})
+		signer, err := ks.Signer(context.Background(), &xkmssdk.KeyAttributes{CN: "nonexistent"})
 
 		require.Error(t, err)
 		assert.Nil(t, signer)
@@ -1151,7 +1151,7 @@ func TestQuicBaaSKeyStore_Decrypter(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		decrypter, err := ks.Decrypter(&xkmssdk.KeyAttributes{CN: "encryption-key"})
+		decrypter, err := ks.Decrypter(context.Background(), &xkmssdk.KeyAttributes{CN: "encryption-key"})
 
 		require.NoError(t, err)
 		require.NotNil(t, decrypter)
@@ -1170,7 +1170,7 @@ func TestQuicBaaSKeyStore_Decrypter(t *testing.T) {
 			Crypto: mockCrypto,
 		})
 
-		decrypter, err := ks.Decrypter(&xkmssdk.KeyAttributes{CN: "nonexistent"})
+		decrypter, err := ks.Decrypter(context.Background(), &xkmssdk.KeyAttributes{CN: "nonexistent"})
 
 		require.Error(t, err)
 		assert.Nil(t, decrypter)
@@ -1363,7 +1363,7 @@ func TestQuicBaaSKeyStore_GetTLSCertificate(t *testing.T) {
 			CertStore: mockCerts,
 		})
 
-		tlsCert, err := ks.GetTLSCertificate("tls-cert", &xkmssdk.KeyAttributes{CN: "tls-cert"})
+		tlsCert, err := ks.GetTLSCertificate(context.Background(), "tls-cert", &xkmssdk.KeyAttributes{CN: "tls-cert"})
 
 		require.NoError(t, err)
 		require.NotNil(t, tlsCert.PrivateKey)
@@ -1377,7 +1377,7 @@ func TestQuicBaaSKeyStore_GetTLSCertificate(t *testing.T) {
 			Crypto: &mockSDKCryptoClient{},
 		})
 
-		_, err := ks.GetTLSCertificate("", &xkmssdk.KeyAttributes{CN: "test"})
+		_, err := ks.GetTLSCertificate(context.Background(), "", &xkmssdk.KeyAttributes{CN: "test"})
 
 		require.Error(t, err)
 	})
@@ -1388,7 +1388,7 @@ func TestQuicBaaSKeyStore_GetTLSCertificate(t *testing.T) {
 			Crypto: &mockSDKCryptoClient{},
 		})
 
-		_, err := ks.GetTLSCertificate("test", nil)
+		_, err := ks.GetTLSCertificate(context.Background(), "test", nil)
 
 		require.Error(t, err)
 	})
@@ -1832,7 +1832,7 @@ func TestQuicBaaSKeyStore_GenerateECDSA_NilAttrs(t *testing.T) {
 		Crypto: &mockSDKCryptoClient{},
 	})
 
-	key, err := ks.GenerateECDSA(nil)
+	key, err := ks.GenerateECDSA(context.Background(), nil)
 	require.Error(t, err)
 	assert.Nil(t, key)
 	assert.IsType(t, ErrInvalidInput{}, err)
@@ -1844,7 +1844,7 @@ func TestQuicBaaSKeyStore_GenerateEd25519_NilAttrs(t *testing.T) {
 		Crypto: &mockSDKCryptoClient{},
 	})
 
-	key, err := ks.GenerateEd25519(nil)
+	key, err := ks.GenerateEd25519(context.Background(), nil)
 	require.Error(t, err)
 	assert.Nil(t, key)
 	assert.IsType(t, ErrInvalidInput{}, err)
@@ -1862,7 +1862,7 @@ func TestQuicBaaSKeyStore_GetSignerByID_GetKeyError(t *testing.T) {
 		Crypto: &mockSDKCryptoClient{},
 	})
 
-	signer, err := ks.GetSignerByID("signing-key")
+	signer, err := ks.GetSignerByID(context.Background(), "signing-key")
 	require.Error(t, err)
 	assert.Nil(t, signer)
 	assert.IsType(t, ErrKeyNotFound{}, err)
@@ -1883,7 +1883,7 @@ func TestQuicBaaSKeyStore_GetSignerByID_GetPublicKeyError(t *testing.T) {
 		Crypto: &mockSDKCryptoClient{},
 	})
 
-	signer, err := ks.GetSignerByID("signing-key")
+	signer, err := ks.GetSignerByID(context.Background(), "signing-key")
 	require.Error(t, err)
 	assert.Nil(t, signer)
 	assert.IsType(t, ErrOperationFailed{}, err)
@@ -1901,7 +1901,7 @@ func TestQuicBaaSKeyStore_GetDecrypterByID_GetKeyError(t *testing.T) {
 		Crypto: &mockSDKCryptoClient{},
 	})
 
-	decrypter, err := ks.GetDecrypterByID("decrypt-key")
+	decrypter, err := ks.GetDecrypterByID(context.Background(), "decrypt-key")
 	require.Error(t, err)
 	assert.Nil(t, decrypter)
 	assert.IsType(t, ErrKeyNotFound{}, err)
@@ -1922,7 +1922,7 @@ func TestQuicBaaSKeyStore_GetKeyByID_GetPublicKeyError(t *testing.T) {
 		Crypto: &mockSDKCryptoClient{},
 	})
 
-	key, err := ks.GetKeyByID("test-key")
+	key, err := ks.GetKeyByID(context.Background(), "test-key")
 	require.Error(t, err)
 	assert.Nil(t, key)
 	assert.IsType(t, ErrOperationFailed{}, err)
@@ -1943,7 +1943,7 @@ func TestQuicBaaSKeyStore_RotateKey_GetKeyError(t *testing.T) {
 		Crypto: &mockSDKCryptoClient{},
 	})
 
-	key, err := ks.RotateKey(&xkmssdk.KeyAttributes{CN: "test-key"})
+	key, err := ks.RotateKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test-key"})
 	require.Error(t, err)
 	assert.Nil(t, key)
 }
@@ -1960,7 +1960,7 @@ func TestQuicBaaSKeyStore_Signer_GetKeyError(t *testing.T) {
 		Crypto: &mockSDKCryptoClient{},
 	})
 
-	signer, err := ks.Signer(&xkmssdk.KeyAttributes{CN: "test-key"})
+	signer, err := ks.Signer(context.Background(), &xkmssdk.KeyAttributes{CN: "test-key"})
 	require.Error(t, err)
 	assert.Nil(t, signer)
 }
@@ -1980,7 +1980,7 @@ func TestQuicBaaSKeyStore_Signer_GetPublicKeyError(t *testing.T) {
 		Crypto: &mockSDKCryptoClient{},
 	})
 
-	signer, err := ks.Signer(&xkmssdk.KeyAttributes{CN: "test-key"})
+	signer, err := ks.Signer(context.Background(), &xkmssdk.KeyAttributes{CN: "test-key"})
 	require.Error(t, err)
 	assert.Nil(t, signer)
 }

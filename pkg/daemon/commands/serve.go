@@ -914,10 +914,10 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		var authSDK quicbaassdk.AuthService
 		if App != nil {
 			if sdkClient := App.QuicBaaSSDKClient(); sdkClient != nil {
-				kmsSDK = sdkClient.KMS()
-				cryptoSDK = sdkClient.Crypto()
-				dekSDK = sdkClient.DEK()
-				secretsSDK = sdkClient.Secrets()
+				kmsSDK = sdkClient.Security().KMS()
+				cryptoSDK = sdkClient.Security().Crypto()
+				dekSDK = sdkClient.Security().DEK()
+				secretsSDK = sdkClient.Security().Secrets()
 				if security := sdkClient.Security(); security != nil {
 					if auth := security.Auth(); auth != nil {
 						webauthnSDK = auth.WebAuthn()
@@ -1088,7 +1088,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 				params.GatewayDesiredConfig = gwControl.DesiredCfg
 			}
 		}
-		restHandlerRegistry := v1.NewHandlerRegistry(params)
+		restHandlerRegistry := v1.NewHandlerRegistry(ctx, params)
 
 		// Wire the webserver's JWT service into the daemon's gRPC TCP /
 		// QUIC / MCP auth interceptors so platformctl --transport

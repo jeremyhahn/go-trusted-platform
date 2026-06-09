@@ -27,8 +27,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 // BackendType represents the key storage backend type
@@ -366,7 +366,7 @@ func (km *XKMSManager) generateKey(ctx context.Context, keyType KeyType, descrip
 	var privateKey crypto.PrivateKey
 	var genErr error
 	if km.rawBackend != nil {
-		privateKey, genErr = km.rawBackend.GenerateKey(attrs)
+		privateKey, genErr = km.rawBackend.GenerateKey(ctx, attrs)
 		if genErr != nil {
 			return fmt.Errorf("%w: failed to generate key via raw backend: %v", ErrKeyGenFailed, genErr)
 		}

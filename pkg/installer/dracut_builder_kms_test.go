@@ -14,12 +14,13 @@
 package installer
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,43 +53,43 @@ func TestDracutSigningBackend(t *testing.T) {
 	})
 
 	t.Run("Signer", func(t *testing.T) {
-		signer, err := backend.Signer(nil)
+		signer, err := backend.Signer(context.Background(), nil)
 		require.NoError(t, err)
 		assert.NotNil(t, signer)
 	})
 
 	t.Run("GetKey", func(t *testing.T) {
-		key, err := backend.GetKey(nil)
+		key, err := backend.GetKey(context.Background(), nil)
 		require.NoError(t, err)
 		assert.Equal(t, privateKey, key)
 	})
 
 	t.Run("GenerateKey - not implemented", func(t *testing.T) {
-		_, err := backend.GenerateKey(nil)
+		_, err := backend.GenerateKey(context.Background(), nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not implemented")
 	})
 
 	t.Run("DeleteKey - not implemented", func(t *testing.T) {
-		err := backend.DeleteKey(nil)
+		err := backend.DeleteKey(context.Background(), nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not implemented")
 	})
 
 	t.Run("ListKeys", func(t *testing.T) {
-		keys, err := backend.ListKeys()
+		keys, err := backend.ListKeys(context.Background())
 		require.NoError(t, err)
 		assert.Nil(t, keys)
 	})
 
 	t.Run("Decrypter - not implemented", func(t *testing.T) {
-		_, err := backend.Decrypter(nil)
+		_, err := backend.Decrypter(context.Background(), nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not implemented")
 	})
 
 	t.Run("RotateKey - not implemented", func(t *testing.T) {
-		err := backend.RotateKey(nil)
+		err := backend.RotateKey(context.Background(), nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not implemented")
 	})
@@ -121,7 +122,7 @@ func TestDracutSigningBackend_WithInvalidKey(t *testing.T) {
 	}
 
 	t.Run("Signer with invalid key type", func(t *testing.T) {
-		_, err := backend.Signer(nil)
+		_, err := backend.Signer(context.Background(), nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "does not implement crypto.Signer")
 	})

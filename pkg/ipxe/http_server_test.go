@@ -75,8 +75,37 @@ func TestHTTPServer_handleBootScript(t *testing.T) {
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 
-	assert.Contains(t, string(body), "#!ipxe")
-	assert.Contains(t, string(body), "chain menu.ipxe")
+	// A single configured BootEntry inlines the kernel + initrd so iPXE
+	// only needs one HTTP fetch (avoids the second-chain TCP timeout on
+	// firmware that drops chained requests). It must NOT chain to the menu.
+	single := string(body)
+	assert.Contains(t, single, "#!ipxe")
+	assert.Contains(t, single, "kernel http://example.com/vmlinuz")
+	assert.Contains(t, single, "initrd http://example.com/initrd")
+	assert.Contains(t, single, "boot || shell")
+	assert.NotContains(t, single, "chain menu.ipxe")
+
+	// With more than one BootEntry the script falls back to the
+	// menu-based flow so multi-image setups still get a selection.
+	multiCfg := DefaultServerConfig()
+	multiCfg.BootEntries = []BootEntry{
+		{Name: "a", Description: "A", Kernel: "http://example.com/a/vmlinuz", Initrd: "http://example.com/a/initrd"},
+		{Name: "b", Description: "B", Kernel: "http://example.com/b/vmlinuz", Initrd: "http://example.com/b/initrd"},
+	}
+	multiServer := newTestHTTPServer(t, multiCfg)
+
+	multiReq := httptest.NewRequest("GET", "/boot.ipxe", nil)
+	multiW := httptest.NewRecorder()
+	multiServer.handleBootScript(multiW, multiReq)
+
+	multiResp := multiW.Result()
+	defer multiResp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, multiResp.StatusCode)
+	multiBody, err := io.ReadAll(multiResp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(multiBody), "#!ipxe")
+	assert.Contains(t, string(multiBody), "chain menu.ipxe")
 }
 
 func TestHTTPServer_handleMenuScript(t *testing.T) {

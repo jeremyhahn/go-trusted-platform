@@ -385,7 +385,7 @@ func (a *Adapter) GenerateKey(ctx context.Context, req *quicbaas.GenerateKeyRequ
 		return nil, ErrAdapterNotStarted
 	}
 
-	kmsClient := client.KMS()
+	kmsClient := client.Security().KMS()
 	if kmsClient == nil {
 		return nil, ErrAdapterNotStarted
 	}
@@ -405,7 +405,7 @@ func (a *Adapter) GetKey(ctx context.Context, keyID string) (*quicbaas.KeyInfo, 
 		return nil, ErrAdapterNotStarted
 	}
 
-	kmsClient := client.KMS()
+	kmsClient := client.Security().KMS()
 	if kmsClient == nil {
 		return nil, ErrAdapterNotStarted
 	}
@@ -425,7 +425,7 @@ func (a *Adapter) ListKeys(ctx context.Context) (*quicbaas.ListKeysResponse, err
 		return nil, ErrAdapterNotStarted
 	}
 
-	kmsClient := client.KMS()
+	kmsClient := client.Security().KMS()
 	if kmsClient == nil {
 		return nil, ErrAdapterNotStarted
 	}
@@ -440,7 +440,7 @@ func (a *Adapter) RotateKey(ctx context.Context, keyID string) (*quicbaas.Rotate
 		return nil, ErrAdapterNotStarted
 	}
 
-	kmsClient := client.KMS()
+	kmsClient := client.Security().KMS()
 	if kmsClient == nil {
 		return nil, ErrAdapterNotStarted
 	}
@@ -460,7 +460,7 @@ func (a *Adapter) DeleteKey(ctx context.Context, keyID string) error {
 		return ErrAdapterNotStarted
 	}
 
-	kmsClient := client.KMS()
+	kmsClient := client.Security().KMS()
 	if kmsClient == nil {
 		return ErrAdapterNotStarted
 	}
@@ -483,7 +483,7 @@ func (a *Adapter) Sign(ctx context.Context, req *quicbaas.SignRequest) (*quicbaa
 		return nil, ErrAdapterNotStarted
 	}
 
-	cryptoClient := client.Crypto()
+	cryptoClient := client.Security().Crypto()
 	if cryptoClient == nil {
 		return nil, ErrAdapterNotStarted
 	}
@@ -503,7 +503,7 @@ func (a *Adapter) Verify(ctx context.Context, req *quicbaas.VerifyRequest) (*qui
 		return nil, ErrAdapterNotStarted
 	}
 
-	cryptoClient := client.Crypto()
+	cryptoClient := client.Security().Crypto()
 	if cryptoClient == nil {
 		return nil, ErrAdapterNotStarted
 	}
@@ -523,7 +523,7 @@ func (a *Adapter) Encrypt(ctx context.Context, req *quicbaas.EncryptRequest) (*q
 		return nil, ErrAdapterNotStarted
 	}
 
-	cryptoClient := client.Crypto()
+	cryptoClient := client.Security().Crypto()
 	if cryptoClient == nil {
 		return nil, ErrAdapterNotStarted
 	}
@@ -543,7 +543,7 @@ func (a *Adapter) Decrypt(ctx context.Context, req *quicbaas.DecryptRequest) (*q
 		return nil, ErrAdapterNotStarted
 	}
 
-	cryptoClient := client.Crypto()
+	cryptoClient := client.Security().Crypto()
 	if cryptoClient == nil {
 		return nil, ErrAdapterNotStarted
 	}
@@ -567,7 +567,7 @@ func (a *Adapter) KMS() quicbaas.KMSClient {
 	if client == nil {
 		return nil
 	}
-	return client.KMS()
+	return client.Security().KMS()
 }
 
 // Crypto returns the underlying Crypto client for advanced operations.
@@ -577,7 +577,7 @@ func (a *Adapter) Crypto() quicbaas.CryptoClient {
 	if client == nil {
 		return nil
 	}
-	return client.Crypto()
+	return client.Security().Crypto()
 }
 
 // HealthClient returns the underlying Health client for advanced operations.

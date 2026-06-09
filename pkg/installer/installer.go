@@ -32,12 +32,12 @@ import (
 
 	"github.com/anatol/devmapper.go"
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uki"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"golang.org/x/sys/unix"
 
 	// Import Alpine package to register FIPS installer
@@ -1499,7 +1499,7 @@ func (i *installer) signUKI(ctx context.Context, diskInfo *DiskInfo) error {
 	}
 
 	// Create authenticode signer
-	signer, err := authenticode.NewSigner(&authenticode.SignerOptions{
+	signer, err := authenticode.NewSigner(ctx, &authenticode.SignerOptions{
 		KeyStore:      signingBackend,
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "secure-boot"},
 		Certificate:   cert,
@@ -1559,7 +1559,7 @@ func (b *secureBootKeyBackend) Capabilities() xkmssdk.Capabilities {
 	}
 }
 
-func (b *secureBootKeyBackend) Signer(attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
+func (b *secureBootKeyBackend) Signer(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
 	signer, ok := b.privateKey.(crypto.Signer)
 	if !ok {
 		return nil, fmt.Errorf("private key does not implement crypto.Signer")
@@ -1567,27 +1567,27 @@ func (b *secureBootKeyBackend) Signer(attrs *xkmssdk.KeyAttributes) (crypto.Sign
 	return signer, nil
 }
 
-func (b *secureBootKeyBackend) GenerateKey(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (b *secureBootKeyBackend) GenerateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (b *secureBootKeyBackend) GetKey(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (b *secureBootKeyBackend) GetKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	return b.privateKey, nil
 }
 
-func (b *secureBootKeyBackend) DeleteKey(attrs *xkmssdk.KeyAttributes) error {
+func (b *secureBootKeyBackend) DeleteKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
 	return fmt.Errorf("not implemented")
 }
 
-func (b *secureBootKeyBackend) ListKeys() ([]*xkmssdk.KeyAttributes, error) {
+func (b *secureBootKeyBackend) ListKeys(ctx context.Context) ([]*xkmssdk.KeyAttributes, error) {
 	return nil, nil
 }
 
-func (b *secureBootKeyBackend) Decrypter(attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
+func (b *secureBootKeyBackend) Decrypter(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (b *secureBootKeyBackend) RotateKey(attrs *xkmssdk.KeyAttributes) error {
+func (b *secureBootKeyBackend) RotateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
 	return fmt.Errorf("not implemented")
 }
 

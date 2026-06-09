@@ -143,7 +143,7 @@ func (ks *QuicBaaSKeyStore) getPublicKey(ctx context.Context, keyID string) (cry
 }
 
 // GenerateRSA generates a new RSA key pair using QuicBaaS KMS.
-func (ks *QuicBaaSKeyStore) GenerateRSA(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (ks *QuicBaaSKeyStore) GenerateRSA(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	if attrs == nil {
 		return nil, ErrInvalidInput{Field: "attrs", Reason: "key attributes are required"}
 	}
@@ -160,7 +160,6 @@ func (ks *QuicBaaSKeyStore) GenerateRSA(attrs *xkmssdk.KeyAttributes) (crypto.Pr
 		Usage:     []kms.KeyUsage{kms.KeyUsageSign, kms.KeyUsageVerify},
 	}
 
-	ctx := context.Background()
 	_, err := ks.kms.GenerateKey(ctx, req)
 	if err != nil {
 		return nil, ErrOperationFailed{Operation: "GenerateRSA", Cause: err}
@@ -182,7 +181,7 @@ func (ks *QuicBaaSKeyStore) GenerateRSA(attrs *xkmssdk.KeyAttributes) (crypto.Pr
 }
 
 // GenerateECDSA generates a new ECDSA key pair using QuicBaaS KMS.
-func (ks *QuicBaaSKeyStore) GenerateECDSA(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (ks *QuicBaaSKeyStore) GenerateECDSA(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	if attrs == nil {
 		return nil, ErrInvalidInput{Field: "attrs", Reason: "key attributes are required"}
 	}
@@ -199,7 +198,6 @@ func (ks *QuicBaaSKeyStore) GenerateECDSA(attrs *xkmssdk.KeyAttributes) (crypto.
 		Usage:     []kms.KeyUsage{kms.KeyUsageSign, kms.KeyUsageVerify},
 	}
 
-	ctx := context.Background()
 	_, err := ks.kms.GenerateKey(ctx, req)
 	if err != nil {
 		return nil, ErrOperationFailed{Operation: "GenerateECDSA", Cause: err}
@@ -220,7 +218,7 @@ func (ks *QuicBaaSKeyStore) GenerateECDSA(attrs *xkmssdk.KeyAttributes) (crypto.
 }
 
 // GenerateEd25519 generates a new Ed25519 key pair using QuicBaaS KMS.
-func (ks *QuicBaaSKeyStore) GenerateEd25519(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (ks *QuicBaaSKeyStore) GenerateEd25519(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	if attrs == nil {
 		return nil, ErrInvalidInput{Field: "attrs", Reason: "key attributes are required"}
 	}
@@ -233,7 +231,6 @@ func (ks *QuicBaaSKeyStore) GenerateEd25519(attrs *xkmssdk.KeyAttributes) (crypt
 		Usage:     []kms.KeyUsage{kms.KeyUsageSign, kms.KeyUsageVerify},
 	}
 
-	ctx := context.Background()
 	_, err := ks.kms.GenerateKey(ctx, req)
 	if err != nil {
 		return nil, ErrOperationFailed{Operation: "GenerateEd25519", Cause: err}
@@ -254,14 +251,13 @@ func (ks *QuicBaaSKeyStore) GenerateEd25519(attrs *xkmssdk.KeyAttributes) (crypt
 }
 
 // GetKey retrieves an existing key.
-func (ks *QuicBaaSKeyStore) GetKey(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (ks *QuicBaaSKeyStore) GetKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	if attrs == nil {
 		return nil, ErrInvalidInput{Field: "attrs", Reason: "key attributes are required"}
 	}
 
 	keyID := ks.keyIDFromAttrs(attrs)
 
-	ctx := context.Background()
 	_, err := ks.kms.GetKey(ctx, keyID)
 	if err != nil {
 		return nil, ErrKeyNotFound{KeyID: keyID, Cause: err}
@@ -283,7 +279,7 @@ func (ks *QuicBaaSKeyStore) GetKey(attrs *xkmssdk.KeyAttributes) (crypto.Private
 
 // GetKeyByID retrieves a key using the unified Key ID format.
 // The keyID is used directly (with prefix applied if configured).
-func (ks *QuicBaaSKeyStore) GetKeyByID(keyID string) (crypto.PrivateKey, error) {
+func (ks *QuicBaaSKeyStore) GetKeyByID(ctx context.Context, keyID string) (crypto.PrivateKey, error) {
 	if keyID == "" {
 		return nil, ErrInvalidInput{Field: "keyID", Reason: "key ID is required"}
 	}
@@ -294,7 +290,6 @@ func (ks *QuicBaaSKeyStore) GetKeyByID(keyID string) (crypto.PrivateKey, error) 
 		fullKeyID = ks.prefix + keyID
 	}
 
-	ctx := context.Background()
 	_, err := ks.kms.GetKey(ctx, fullKeyID)
 	if err != nil {
 		return nil, ErrKeyNotFound{KeyID: fullKeyID, Cause: err}
@@ -315,7 +310,7 @@ func (ks *QuicBaaSKeyStore) GetKeyByID(keyID string) (crypto.PrivateKey, error) 
 }
 
 // GetSignerByID retrieves a crypto.Signer using the unified Key ID format.
-func (ks *QuicBaaSKeyStore) GetSignerByID(keyID string) (crypto.Signer, error) {
+func (ks *QuicBaaSKeyStore) GetSignerByID(ctx context.Context, keyID string) (crypto.Signer, error) {
 	if keyID == "" {
 		return nil, ErrInvalidInput{Field: "keyID", Reason: "key ID is required"}
 	}
@@ -326,7 +321,6 @@ func (ks *QuicBaaSKeyStore) GetSignerByID(keyID string) (crypto.Signer, error) {
 		fullKeyID = ks.prefix + keyID
 	}
 
-	ctx := context.Background()
 	_, err := ks.kms.GetKey(ctx, fullKeyID)
 	if err != nil {
 		return nil, ErrKeyNotFound{KeyID: fullKeyID, Cause: err}
@@ -347,7 +341,7 @@ func (ks *QuicBaaSKeyStore) GetSignerByID(keyID string) (crypto.Signer, error) {
 }
 
 // GetDecrypterByID retrieves a crypto.Decrypter using the unified Key ID format.
-func (ks *QuicBaaSKeyStore) GetDecrypterByID(keyID string) (crypto.Decrypter, error) {
+func (ks *QuicBaaSKeyStore) GetDecrypterByID(ctx context.Context, keyID string) (crypto.Decrypter, error) {
 	if keyID == "" {
 		return nil, ErrInvalidInput{Field: "keyID", Reason: "key ID is required"}
 	}
@@ -358,7 +352,6 @@ func (ks *QuicBaaSKeyStore) GetDecrypterByID(keyID string) (crypto.Decrypter, er
 		fullKeyID = ks.prefix + keyID
 	}
 
-	ctx := context.Background()
 	_, err := ks.kms.GetKey(ctx, fullKeyID)
 	if err != nil {
 		return nil, ErrKeyNotFound{KeyID: fullKeyID, Cause: err}
@@ -371,20 +364,18 @@ func (ks *QuicBaaSKeyStore) GetDecrypterByID(keyID string) (crypto.Decrypter, er
 }
 
 // DeleteKey deletes a key.
-func (ks *QuicBaaSKeyStore) DeleteKey(attrs *xkmssdk.KeyAttributes) error {
+func (ks *QuicBaaSKeyStore) DeleteKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
 	if attrs == nil {
 		return ErrInvalidInput{Field: "attrs", Reason: "key attributes are required"}
 	}
 
 	keyID := ks.keyIDFromAttrs(attrs)
 
-	ctx := context.Background()
 	return ks.kms.DeleteKey(ctx, keyID)
 }
 
 // ListKeys returns all key attributes for keys managed by this XKMS backend.
-func (ks *QuicBaaSKeyStore) ListKeys() ([]*xkmssdk.KeyAttributes, error) {
-	ctx := context.Background()
+func (ks *QuicBaaSKeyStore) ListKeys(ctx context.Context) ([]*xkmssdk.KeyAttributes, error) {
 	resp, err := ks.kms.ListKeys(ctx)
 	if err != nil {
 		return nil, ErrOperationFailed{Operation: "ListKeys", Cause: err}
@@ -408,14 +399,13 @@ func (ks *QuicBaaSKeyStore) ListKeys() ([]*xkmssdk.KeyAttributes, error) {
 }
 
 // RotateKey rotates a key to a new version.
-func (ks *QuicBaaSKeyStore) RotateKey(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (ks *QuicBaaSKeyStore) RotateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	if attrs == nil {
 		return nil, ErrInvalidInput{Field: "attrs", Reason: "key attributes are required"}
 	}
 
 	keyID := ks.keyIDFromAttrs(attrs)
 
-	ctx := context.Background()
 	_, err := ks.kms.RotateKey(ctx, keyID)
 	if err != nil {
 		return nil, ErrOperationFailed{Operation: "RotateKey", Cause: err}
@@ -436,7 +426,7 @@ func (ks *QuicBaaSKeyStore) RotateKey(attrs *xkmssdk.KeyAttributes) (crypto.Priv
 }
 
 // Signer returns a crypto.Signer for the key.
-func (ks *QuicBaaSKeyStore) Signer(attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
+func (ks *QuicBaaSKeyStore) Signer(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
 	if attrs == nil {
 		return nil, ErrInvalidInput{Field: "attrs", Reason: "key attributes are required"}
 	}
@@ -444,7 +434,6 @@ func (ks *QuicBaaSKeyStore) Signer(attrs *xkmssdk.KeyAttributes) (crypto.Signer,
 	keyID := ks.keyIDFromAttrs(attrs)
 
 	// Verify key exists
-	ctx := context.Background()
 	_, err := ks.kms.GetKey(ctx, keyID)
 	if err != nil {
 		return nil, ErrKeyNotFound{KeyID: keyID, Cause: err}
@@ -465,7 +454,7 @@ func (ks *QuicBaaSKeyStore) Signer(attrs *xkmssdk.KeyAttributes) (crypto.Signer,
 }
 
 // Decrypter returns a crypto.Decrypter for the key.
-func (ks *QuicBaaSKeyStore) Decrypter(attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
+func (ks *QuicBaaSKeyStore) Decrypter(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
 	if attrs == nil {
 		return nil, ErrInvalidInput{Field: "attrs", Reason: "key attributes are required"}
 	}
@@ -473,7 +462,6 @@ func (ks *QuicBaaSKeyStore) Decrypter(attrs *xkmssdk.KeyAttributes) (crypto.Decr
 	keyID := ks.keyIDFromAttrs(attrs)
 
 	// Verify key exists
-	ctx := context.Background()
 	_, err := ks.kms.GetKey(ctx, keyID)
 	if err != nil {
 		return nil, ErrKeyNotFound{KeyID: keyID, Cause: err}
@@ -579,7 +567,7 @@ func (ks *QuicBaaSKeyStore) CertExists(keyID string) (bool, error) {
 // any listening ports). Serving only the leaf is correct in
 // single-hop CA topologies; clients that need the issuer chain pull
 // it via AIA.
-func (ks *QuicBaaSKeyStore) GetTLSCertificate(keyID string, attrs *xkmssdk.KeyAttributes) (tls.Certificate, error) {
+func (ks *QuicBaaSKeyStore) GetTLSCertificate(ctx context.Context, keyID string, attrs *xkmssdk.KeyAttributes) (tls.Certificate, error) {
 	if keyID == "" {
 		return tls.Certificate{}, ErrInvalidInput{Field: "keyID", Reason: "key ID is required"}
 	}
@@ -587,7 +575,7 @@ func (ks *QuicBaaSKeyStore) GetTLSCertificate(keyID string, attrs *xkmssdk.KeyAt
 		return tls.Certificate{}, ErrInvalidInput{Field: "attrs", Reason: "key attributes are required"}
 	}
 
-	signer, err := ks.Signer(attrs)
+	signer, err := ks.Signer(ctx, attrs)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
@@ -687,6 +675,8 @@ func (s *quicbaasSigner) Public() crypto.PublicKey {
 
 // Sign signs the digest.
 func (s *quicbaasSigner) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	// crypto.Signer.Sign is a fixed stdlib interface boundary with no ctx
+	// parameter, so the request context cannot be threaded here.
 	ctx := context.Background()
 
 	// Map crypto.SignerOpts to QuicBaaS hash algorithm
@@ -731,6 +721,8 @@ func (d *quicbaasDecrypter) Public() crypto.PublicKey {
 
 // Decrypt decrypts the ciphertext.
 func (d *quicbaasDecrypter) Decrypt(rand io.Reader, ciphertext []byte, opts crypto.DecrypterOpts) ([]byte, error) {
+	// crypto.Decrypter.Decrypt is a fixed stdlib interface boundary with no
+	// ctx parameter, so the request context cannot be threaded here.
 	ctx := context.Background()
 
 	req := &quicbaascrypto.DecryptRequest{

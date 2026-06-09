@@ -186,6 +186,7 @@ func (a *Adapter) createUnixClient() (quicbaas.Client, error) {
 	if a.config.RequestTimeout > 0 {
 		opts = append(opts, quicbaas.WithTimeout(a.config.RequestTimeout))
 	}
+	a.appendTLSOptions(&opts)
 
 	return a.clientFactory(a.config.UnixSocket, opts...)
 }
@@ -200,6 +201,7 @@ func (a *Adapter) createGRPCClient() (quicbaas.Client, error) {
 	if a.config.RequestTimeout > 0 {
 		opts = append(opts, quicbaas.WithTimeout(a.config.RequestTimeout))
 	}
+	a.appendTLSOptions(&opts)
 
 	// gRPC is the default transport
 	return a.clientFactory(a.config.Address, opts...)
@@ -217,6 +219,7 @@ func (a *Adapter) createRESTClient() (quicbaas.Client, error) {
 	if a.config.RequestTimeout > 0 {
 		opts = append(opts, quicbaas.WithTimeout(a.config.RequestTimeout))
 	}
+	a.appendTLSOptions(&opts)
 
 	return a.clientFactory(a.config.Address, opts...)
 }
@@ -233,8 +236,38 @@ func (a *Adapter) createQUICClient() (quicbaas.Client, error) {
 	if a.config.RequestTimeout > 0 {
 		opts = append(opts, quicbaas.WithTimeout(a.config.RequestTimeout))
 	}
+	a.appendTLSOptions(&opts)
 
 	return a.clientFactory(a.config.Address, opts...)
+}
+
+// appendTLSOptions wires the configured mTLS material into the SDK client
+// options. The client certificate (config.TLS.ClientCert / ClientKey) is the
+// platform's cluster service identity: when it carries a SPIFFE "svc" SAN in
+// the broker's pinned trust domain, the broker's default-deny authorization
+// gate short-circuits on the verified mTLS chain — no platform token is
+// required for these service-to-service calls.
+//
+// TLS is mandatory for remote transports (enforced by Config.Validate, which
+// requires CACert). The client certificate is optional at this layer: brokers
+// that do not enforce default-deny still accept a CA-only (server-auth) TLS
+// connection. When no TLS config is present (embedded transport) this is a
+// no-op. A malformed certificate pair is rejected when the SDK applies the
+// option in the client factory, surfacing as a construction error rather than
+// silently dropping the service identity.
+func (a *Adapter) appendTLSOptions(opts *[]quicbaas.Option) {
+	if a.config.TLS == nil {
+		return
+	}
+	if a.config.TLS.CACert == "" && a.config.TLS.ClientCert == "" {
+		return
+	}
+
+	*opts = append(*opts, quicbaas.WithTLS(quicbaas.TLSConfig{
+		CAFile:   a.config.TLS.CACert,
+		CertFile: a.config.TLS.ClientCert,
+		KeyFile:  a.config.TLS.ClientKey,
+	}))
 }
 
 // Client returns the underlying SDK client.
@@ -357,7 +390,7 @@ func (a *Adapter) Cache() quicbaas.CacheClient {
 // Auth returns the Auth client for authentication.
 func (a *Adapter) Auth() quicbaas.AuthClient {
 	if client := a.Client(); client != nil {
-		return client.Auth()
+		return client.Security().Auth()
 	}
 	return nil
 }
@@ -365,7 +398,7 @@ func (a *Adapter) Auth() quicbaas.AuthClient {
 // Seal returns the Seal client for seal/unseal operations.
 func (a *Adapter) Seal() quicbaas.SealClient {
 	if client := a.Client(); client != nil {
-		return client.Seal()
+		return client.Security().Seal()
 	}
 	return nil
 }
@@ -373,7 +406,7 @@ func (a *Adapter) Seal() quicbaas.SealClient {
 // KMS returns the KMS client for key management.
 func (a *Adapter) KMS() quicbaas.KMSClient {
 	if client := a.Client(); client != nil {
-		return client.KMS()
+		return client.Security().KMS()
 	}
 	return nil
 }
@@ -381,7 +414,7 @@ func (a *Adapter) KMS() quicbaas.KMSClient {
 // Secrets returns the Secrets client for secret storage.
 func (a *Adapter) Secrets() quicbaas.SecretsClient {
 	if client := a.Client(); client != nil {
-		return client.Secrets()
+		return client.Security().Secrets()
 	}
 	return nil
 }
@@ -389,7 +422,7 @@ func (a *Adapter) Secrets() quicbaas.SecretsClient {
 // Crypto returns the Crypto client for encryption/decryption operations.
 func (a *Adapter) Crypto() quicbaas.CryptoClient {
 	if client := a.Client(); client != nil {
-		return client.Crypto()
+		return client.Security().Crypto()
 	}
 	return nil
 }
@@ -397,7 +430,7 @@ func (a *Adapter) Crypto() quicbaas.CryptoClient {
 // RBAC returns the RBAC client for role-based access control.
 func (a *Adapter) RBAC() quicbaas.RBACClient {
 	if client := a.Client(); client != nil {
-		return client.RBAC()
+		return client.Security().RBAC()
 	}
 	return nil
 }
@@ -405,7 +438,7 @@ func (a *Adapter) RBAC() quicbaas.RBACClient {
 // DynamicSecrets returns the DynamicSecrets client for dynamic credentials.
 func (a *Adapter) DynamicSecrets() quicbaas.DynamicSecretsClient {
 	if client := a.Client(); client != nil {
-		return client.DynamicSecrets()
+		return client.Security().DynamicSecrets()
 	}
 	return nil
 }
@@ -413,7 +446,7 @@ func (a *Adapter) DynamicSecrets() quicbaas.DynamicSecretsClient {
 // Certificate returns the Certificate client for X.509 certificate management.
 func (a *Adapter) Certificate() quicbaas.CertificateClient {
 	if client := a.Client(); client != nil {
-		return client.Certificate()
+		return client.Security().Certificate()
 	}
 	return nil
 }
@@ -421,7 +454,7 @@ func (a *Adapter) Certificate() quicbaas.CertificateClient {
 // DEK returns the Data Encryption Key client for per-tenant DEK management.
 func (a *Adapter) DEK() quicbaas.DEKClient {
 	if client := a.Client(); client != nil {
-		return client.DEK()
+		return client.Security().DEK()
 	}
 	return nil
 }

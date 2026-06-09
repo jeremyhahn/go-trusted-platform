@@ -14,6 +14,7 @@
 package authenticode
 
 import (
+	"context"
 	"crypto"
 	"crypto/x509"
 	"encoding/pem"
@@ -22,10 +23,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // newVerifyCommand creates the verify subcommand for verifying Authenticode signatures
@@ -53,7 +54,7 @@ Examples:
   platformctl authenticode verify --input signed.efi -o json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
-			return runVerify(flags, certPath, input)
+			return runVerify(cmd.Context(), flags, certPath, input)
 		},
 	}
 
@@ -66,7 +67,7 @@ Examples:
 }
 
 // runVerify executes the verify command
-func runVerify(flags *cli.CommonFlags, certPath, input string) error {
+func runVerify(ctx context.Context, flags *cli.CommonFlags, certPath, input string) error {
 	logger := logging.DefaultLogger()
 	printer := cli.NewPrinter(flags.OutputFormat, flags.NoColor)
 
@@ -96,7 +97,7 @@ func runVerify(flags *cli.CommonFlags, certPath, input string) error {
 	}
 
 	// Create authenticode signer (also used for verification)
-	signer, err := authenticode.NewSigner(&authenticode.SignerOptions{
+	signer, err := authenticode.NewSigner(ctx, &authenticode.SignerOptions{
 		KeyStore:      verifyBackend,
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "verify"},
 		Certificate:   cert,
@@ -150,31 +151,31 @@ func (b *cliVerifyBackend) Capabilities() xkmssdk.Capabilities {
 	}
 }
 
-func (b *cliVerifyBackend) Signer(attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
+func (b *cliVerifyBackend) Signer(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
 	return nil, ErrNotImplemented{Operation: "Signer (verification only)"}
 }
 
-func (b *cliVerifyBackend) GenerateKey(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (b *cliVerifyBackend) GenerateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	return nil, ErrNotImplemented{Operation: "GenerateKey"}
 }
 
-func (b *cliVerifyBackend) GetKey(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (b *cliVerifyBackend) GetKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	return nil, ErrNotImplemented{Operation: "GetKey"}
 }
 
-func (b *cliVerifyBackend) DeleteKey(attrs *xkmssdk.KeyAttributes) error {
+func (b *cliVerifyBackend) DeleteKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
 	return ErrNotImplemented{Operation: "DeleteKey"}
 }
 
-func (b *cliVerifyBackend) ListKeys() ([]*xkmssdk.KeyAttributes, error) {
+func (b *cliVerifyBackend) ListKeys(ctx context.Context) ([]*xkmssdk.KeyAttributes, error) {
 	return nil, nil
 }
 
-func (b *cliVerifyBackend) Decrypter(attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
+func (b *cliVerifyBackend) Decrypter(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
 	return nil, ErrNotImplemented{Operation: "Decrypter"}
 }
 
-func (b *cliVerifyBackend) RotateKey(attrs *xkmssdk.KeyAttributes) error {
+func (b *cliVerifyBackend) RotateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
 	return ErrNotImplemented{Operation: "RotateKey"}
 }
 

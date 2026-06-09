@@ -161,7 +161,7 @@ func (writer *ResponseWriter) Error200(w http.ResponseWriter, r *http.Request, e
 func (writer *ResponseWriter) Error401(w http.ResponseWriter, r *http.Request, err error) {
 	writer.logError(r, err)
 	writer.Write(w, r, http.StatusUnauthorized, WebServiceResponse{
-		Code:    http.StatusNotFound,
+		Code:    http.StatusUnauthorized,
 		Error:   err.Error(),
 		Success: false,
 		Payload: nil})
@@ -187,8 +187,8 @@ func (writer *ResponseWriter) Error404(w http.ResponseWriter, r *http.Request, e
 
 func (writer *ResponseWriter) Error403(w http.ResponseWriter, r *http.Request, err error, payload interface{}) {
 	writer.logError(r, err)
-	writer.Write(w, r, http.StatusBadRequest, WebServiceResponse{
-		Code:    http.StatusBadRequest,
+	writer.Write(w, r, http.StatusForbidden, WebServiceResponse{
+		Code:    http.StatusForbidden,
 		Error:   err.Error(),
 		Success: false,
 		Payload: payload})

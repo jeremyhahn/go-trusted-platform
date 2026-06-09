@@ -177,8 +177,8 @@ func (v *platformTokenValidator) GetTokenClaims(ctx context.Context, token strin
 
 // CheckPermission implements mcp.AuthorizationService for the legacy MCP seam.
 // The subject argument is the bearer token (per the MCP authorization checker's
-// convention). It validates the token and enforces the "<resource>.<action>"
-// scope against the granted scope set.
+// convention). It validates the token and enforces the qrdb-canonical
+// "resource:action" scope against the granted scope set.
 func (v *platformTokenValidator) CheckPermission(ctx context.Context, subject, resource, action string) (bool, error) {
 	claims, err := v.validator.ValidatePlatformToken(ctx, subject)
 	if err != nil {
@@ -188,7 +188,7 @@ func (v *platformTokenValidator) CheckPermission(ctx context.Context, subject, r
 	if resource == "" || action == "" {
 		return true, nil
 	}
-	if err := authCtx.RequireScope(resource + "." + action); err != nil {
+	if err := authCtx.RequireScope(resource + ":" + action); err != nil {
 		return false, nil
 	}
 	return true, nil

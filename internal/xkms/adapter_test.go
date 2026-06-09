@@ -97,11 +97,18 @@ type mockClient struct {
 	attestKeyErr             error
 	listUsersResp            *xkms.ListUsersResponse
 	listUsersErr             error
+	createUserResp           *xkms.GetUserResponse
+	createUserErr            error
+	createUserReq            *xkms.CreateUserRequest
 	getUserResp              *xkms.GetUserResponse
 	getUserErr               error
 	deleteUserErr            error
 	enableUserErr            error
 	disableUserErr           error
+	bindUserCertErr          error
+	bindUserCertUsername     string
+	bindUserCertThumbprint   string
+	bindUserCertNotAfter     int64
 	listUserCredentialsResp  *xkms.ListUserCredentialsResponse
 	listUserCredentialsErr   error
 	beginRegistrationResp    *xkms.BeginRegistrationResponse
@@ -308,6 +315,11 @@ func (m *mockClient) AttestKey(ctx context.Context, req *xkms.AttestKeyRequest) 
 	return m.attestKeyResp, m.attestKeyErr
 }
 
+func (m *mockClient) CreateUser(ctx context.Context, req *xkms.CreateUserRequest) (*xkms.GetUserResponse, error) {
+	m.createUserReq = req
+	return m.createUserResp, m.createUserErr
+}
+
 func (m *mockClient) ListUsers(ctx context.Context, opts ...xkms.ListOption) (*xkms.ListUsersResponse, error) {
 	return m.listUsersResp, m.listUsersErr
 }
@@ -326,6 +338,13 @@ func (m *mockClient) EnableUser(ctx context.Context, username string) error {
 
 func (m *mockClient) DisableUser(ctx context.Context, username string) error {
 	return m.disableUserErr
+}
+
+func (m *mockClient) BindUserCert(ctx context.Context, username, thumbprint string, notAfterUnix int64) error {
+	m.bindUserCertUsername = username
+	m.bindUserCertThumbprint = thumbprint
+	m.bindUserCertNotAfter = notAfterUnix
+	return m.bindUserCertErr
 }
 
 func (m *mockClient) ListUserCredentials(ctx context.Context, username string) (*xkms.ListUserCredentialsResponse, error) {
@@ -833,6 +852,7 @@ func TestConfig_Validate(t *testing.T) {
 		cfg := &Config{
 			Backend: "xkms-cluster",
 			Address: "localhost:9443",
+			TLS:     &TLSConfig{CACert: "/etc/ssl/ca.crt"},
 		}
 		err := cfg.Validate()
 		if err != nil {
@@ -878,6 +898,7 @@ func TestConfig_Validate(t *testing.T) {
 		cfg := &Config{
 			Transport: TransportGRPC,
 			Address:   "localhost:9443",
+			TLS:       &TLSConfig{CACert: "/etc/ssl/ca.crt"},
 		}
 		err := cfg.Validate()
 		if err != nil {
@@ -899,6 +920,7 @@ func TestConfig_Validate(t *testing.T) {
 		cfg := &Config{
 			Transport: TransportREST,
 			Address:   "https://localhost:8443",
+			TLS:       &TLSConfig{CACert: "/etc/ssl/ca.crt"},
 		}
 		err := cfg.Validate()
 		if err != nil {
@@ -920,6 +942,7 @@ func TestConfig_Validate(t *testing.T) {
 		cfg := &Config{
 			Transport: TransportQUIC,
 			Address:   "localhost:8444",
+			TLS:       &TLSConfig{CACert: "/etc/ssl/ca.crt"},
 		}
 		err := cfg.Validate()
 		if err != nil {
@@ -941,6 +964,7 @@ func TestConfig_Validate(t *testing.T) {
 		cfg := &Config{
 			Transport: TransportMCP,
 			Address:   "localhost:9444",
+			TLS:       &TLSConfig{CACert: "/etc/ssl/ca.crt"},
 		}
 		err := cfg.Validate()
 		if err != nil {
@@ -1328,6 +1352,7 @@ func TestAdapter_TransportHelpers(t *testing.T) {
 		cfg := &Config{
 			Transport: TransportGRPC,
 			Address:   "localhost:9443",
+			TLS:       &TLSConfig{CACert: "/etc/ssl/ca.crt"},
 		}
 		adapter, err := NewAdapter(cfg, logger)
 		if err != nil {
@@ -1348,6 +1373,7 @@ func TestAdapter_TransportHelpers(t *testing.T) {
 		cfg := &Config{
 			Transport: TransportREST,
 			Address:   "https://localhost:8443",
+			TLS:       &TLSConfig{CACert: "/etc/ssl/ca.crt"},
 		}
 		adapter, err := NewAdapter(cfg, logger)
 		if err != nil {
@@ -1388,6 +1414,7 @@ func TestAdapter_TransportHelpers(t *testing.T) {
 		cfg := &Config{
 			Transport: TransportQUIC,
 			Address:   "localhost:8444",
+			TLS:       &TLSConfig{CACert: "/etc/ssl/ca.crt"},
 		}
 		adapter, err := NewAdapter(cfg, logger)
 		if err != nil {
@@ -1408,6 +1435,7 @@ func TestAdapter_TransportHelpers(t *testing.T) {
 		cfg := &Config{
 			Transport: TransportMCP,
 			Address:   "localhost:9444",
+			TLS:       &TLSConfig{CACert: "/etc/ssl/ca.crt"},
 		}
 		adapter, err := NewAdapter(cfg, logger)
 		if err != nil {
@@ -1625,6 +1653,7 @@ func TestPoolConfig(t *testing.T) {
 	cfg := &Config{
 		Transport: TransportGRPC,
 		Address:   "localhost:9443",
+		TLS:       &TLSConfig{CACert: "/etc/ssl/ca.crt"},
 		Pool: &PoolConfig{
 			MaxConnections: 100,
 			MinConnections: 10,

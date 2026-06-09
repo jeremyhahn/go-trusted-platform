@@ -116,7 +116,7 @@ func (s *QuicBaaSKMSKeyStore) generateKey(ctx context.Context, tenantID, zoneNam
 		Usage:     []kms.KeyUsage{kms.KeyUsageSign, kms.KeyUsageVerify},
 	}
 
-	genResp, err := s.client.KMS().GenerateKey(ctx, req)
+	genResp, err := s.client.Security().KMS().GenerateKey(ctx, req)
 	if err != nil {
 		return nil, &DNSSECError{
 			Op:   "GenerateKey",
@@ -131,7 +131,7 @@ func (s *QuicBaaSKMSKeyStore) generateKey(ctx context.Context, tenantID, zoneNam
 	// as part of the GenerateKey response.
 	pubKey, pubKeyPEM, err := generateLocalPublicKey(keyAlg)
 	if err != nil {
-		_ = s.client.KMS().DeleteKey(ctx, keyID)
+		_ = s.client.Security().KMS().DeleteKey(ctx, keyID)
 		return nil, &DNSSECError{
 			Op:   "GenerateKey",
 			Zone: zoneName,
@@ -153,7 +153,7 @@ func (s *QuicBaaSKMSKeyStore) generateKey(ctx context.Context, tenantID, zoneNam
 
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
-		_ = s.client.KMS().DeleteKey(ctx, keyID)
+		_ = s.client.Security().KMS().DeleteKey(ctx, keyID)
 		return nil, &DNSSECError{
 			Op:   "GenerateKey",
 			Zone: zoneName,
@@ -169,7 +169,7 @@ func (s *QuicBaaSKMSKeyStore) generateKey(ctx context.Context, tenantID, zoneNam
 		Data:       metadataJSON,
 	})
 	if err != nil {
-		_ = s.client.KMS().DeleteKey(ctx, keyID)
+		_ = s.client.Security().KMS().DeleteKey(ctx, keyID)
 		return nil, &DNSSECError{
 			Op:   "GenerateKey",
 			Zone: zoneName,
@@ -223,7 +223,7 @@ func (s *QuicBaaSKMSKeyStore) generateKeyWithPublicKey(ctx context.Context, tena
 		Usage:     []kms.KeyUsage{kms.KeyUsageSign, kms.KeyUsageVerify},
 	}
 
-	genResp, err := s.client.KMS().GenerateKey(ctx, req)
+	genResp, err := s.client.Security().KMS().GenerateKey(ctx, req)
 	if err != nil {
 		return nil, &DNSSECError{
 			Op:   "GenerateKeyWithPublicKey",
@@ -235,7 +235,7 @@ func (s *QuicBaaSKMSKeyStore) generateKeyWithPublicKey(ctx context.Context, tena
 	// Encode the provided public key to PEM
 	pubKeyPEM, err := encodePublicKeyToPEM(pubKey)
 	if err != nil {
-		_ = s.client.KMS().DeleteKey(ctx, keyID)
+		_ = s.client.Security().KMS().DeleteKey(ctx, keyID)
 		return nil, &DNSSECError{
 			Op:   "GenerateKeyWithPublicKey",
 			Zone: zoneName,
@@ -257,7 +257,7 @@ func (s *QuicBaaSKMSKeyStore) generateKeyWithPublicKey(ctx context.Context, tena
 
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
-		_ = s.client.KMS().DeleteKey(ctx, keyID)
+		_ = s.client.Security().KMS().DeleteKey(ctx, keyID)
 		return nil, &DNSSECError{
 			Op:   "GenerateKeyWithPublicKey",
 			Zone: zoneName,
@@ -273,7 +273,7 @@ func (s *QuicBaaSKMSKeyStore) generateKeyWithPublicKey(ctx context.Context, tena
 		Data:       metadataJSON,
 	})
 	if err != nil {
-		_ = s.client.KMS().DeleteKey(ctx, keyID)
+		_ = s.client.Security().KMS().DeleteKey(ctx, keyID)
 		return nil, &DNSSECError{
 			Op:   "GenerateKeyWithPublicKey",
 			Zone: zoneName,
@@ -299,7 +299,7 @@ func (s *QuicBaaSKMSKeyStore) GetSigner(ctx context.Context, tenantID, zoneName 
 	keyID := makeKeyID(tenantID, zoneName, keyType)
 
 	// Verify the key exists
-	keyInfo, err := s.client.KMS().GetKey(ctx, keyID)
+	keyInfo, err := s.client.Security().KMS().GetKey(ctx, keyID)
 	if err != nil {
 		return nil, &DNSSECError{
 			Op:   "GetSigner",
@@ -388,7 +388,7 @@ func (s *QuicBaaSKMSKeyStore) GetDNSKEY(ctx context.Context, tenantID, zoneName 
 func (s *QuicBaaSKMSKeyStore) KeyExists(ctx context.Context, tenantID, zoneName string, keyType KeyType) bool {
 	keyID := makeKeyID(tenantID, zoneName, keyType)
 
-	keyInfo, err := s.client.KMS().GetKey(ctx, keyID)
+	keyInfo, err := s.client.Security().KMS().GetKey(ctx, keyID)
 	if err != nil {
 		return false
 	}
@@ -401,7 +401,7 @@ func (s *QuicBaaSKMSKeyStore) DeleteKey(ctx context.Context, tenantID, zoneName 
 	keyID := makeKeyID(tenantID, zoneName, keyType)
 
 	// Delete the KMS key
-	err := s.client.KMS().DeleteKey(ctx, keyID)
+	err := s.client.Security().KMS().DeleteKey(ctx, keyID)
 	if err != nil {
 		return &DNSSECError{
 			Op:   "DeleteKey",
@@ -503,7 +503,7 @@ func (s *quicbaasKMSSigner) Sign(rand io.Reader, digest []byte, opts crypto.Sign
 		HashAlg: hashAlg,
 	}
 
-	resp, err := s.client.Crypto().Sign(ctx, req)
+	resp, err := s.client.Security().Crypto().Sign(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("quicbaas sign failed: %w", err)
 	}

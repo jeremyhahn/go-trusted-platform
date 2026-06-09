@@ -14,6 +14,7 @@
 package jwt
 
 import (
+	"context"
 	"crypto"
 	"crypto/x509"
 	"fmt"
@@ -31,10 +32,10 @@ func TestGenerateToken(t *testing.T) {
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
 	// Generate the key using the full XKMS (which has GenerateKey)
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	service, err := NewService(params)
+	service, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 	assert.NotNil(t, service)
 
@@ -51,11 +52,11 @@ func TestNewService(t *testing.T) {
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
 	// Generate the key
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
 	// Test successful service creation
-	service, err := NewService(params)
+	service, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 	assert.NotNil(t, service)
 	assert.NotNil(t, service.signer)
@@ -67,7 +68,7 @@ func TestNewService_SignerError(t *testing.T) {
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
 	// Don't generate key - should cause signer error
-	service, err := NewService(params)
+	service, err := NewService(context.Background(), params)
 	assert.NotNil(t, err)
 	assert.Nil(t, service)
 }
@@ -80,7 +81,7 @@ func TestNewService_SigningMethodError(t *testing.T) {
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
 	// Generate a valid key first
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
 	// Modify KeyAttrs to have an unsupported/invalid signature algorithm
@@ -89,7 +90,7 @@ func TestNewService_SigningMethodError(t *testing.T) {
 	params.KeyAttrs.KeyAlgorithm = x509.PublicKeyAlgorithm(999)       // Invalid key algorithm
 
 	// This should fail at NewSigningMethodSigner due to unsupported algorithm
-	service, err := NewService(params)
+	service, err := NewService(context.Background(), params)
 	assert.NotNil(t, err)
 	assert.Nil(t, service)
 }
@@ -120,7 +121,7 @@ func TestNewService_UnsupportedAlgorithm(t *testing.T) {
 	}
 
 	// This should fail because DSA is not a supported JWT signing algorithm
-	service, err := NewService(params)
+	service, err := NewService(context.Background(), params)
 	assert.NotNil(t, err)
 	assert.Nil(t, service)
 }
@@ -129,10 +130,10 @@ func TestParseToken(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	service, err := NewService(params)
+	service, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	// Generate a valid token
@@ -159,10 +160,10 @@ func TestParseToken_MissingAuthHeader(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	service, err := NewService(params)
+	service, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	// Create a request without Authorization header
@@ -180,10 +181,10 @@ func TestParseToken_InvalidToken(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	service, err := NewService(params)
+	service, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	// Create a request with invalid token
@@ -202,10 +203,10 @@ func TestParseTokenString(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	service, err := NewService(params)
+	service, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	// Generate a valid token
@@ -229,10 +230,10 @@ func TestParseTokenString_InvalidToken(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	service, err := NewService(params)
+	service, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	// Parse invalid token string
@@ -245,10 +246,10 @@ func TestKeyFunc(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	service, err := NewService(params)
+	service, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	// KeyFunc should return the public key
@@ -262,10 +263,10 @@ func TestPublicKey(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	service, err := NewService(params)
+	service, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	// PublicKey should return the signer's public key
@@ -278,10 +279,10 @@ func TestServiceVerify(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	service, err := NewService(params)
+	service, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	// Generate a valid token
@@ -301,10 +302,10 @@ func TestServiceVerify_InvalidToken(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	service, err := NewService(params)
+	service, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	// Generate a valid token
@@ -328,10 +329,10 @@ func TestServiceVerify_WrongAudience(t *testing.T) {
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 	params.Audience = "localhost"
 
-	_, err := ks.GenerateKey(params.KeyAttrs)
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
 	assert.Nil(t, err)
 
-	service, err := NewService(params)
+	service, err := NewService(context.Background(), params)
 	assert.Nil(t, err)
 
 	// Generate a valid token

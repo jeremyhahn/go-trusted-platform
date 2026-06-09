@@ -64,6 +64,21 @@ func (e ErrTokenValidationFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrScopeDenied is returned when a validated platform token lacks the scope a
+// gRPC method requires. The interceptor maps it to codes.PermissionDenied,
+// matching the QUIC StatusPermissionDenied and MCP AuthErrorPermissionDenied
+// responses for the same condition.
+type ErrScopeDenied struct {
+	// Method is the gRPC FullMethod that was denied.
+	Method string
+	// Scope is the colon "resource:action" scope that was required.
+	Scope string
+}
+
+func (e ErrScopeDenied) Error() string {
+	return "permission denied: " + e.Method + " requires scope " + e.Scope
+}
+
 // =============================================================================
 // Token Validator Interface
 // =============================================================================
@@ -196,13 +211,19 @@ func OIDCUnaryInterceptor(opts ...OIDCInterceptorOption) grpc.UnaryServerInterce
 		}
 
 		// Prefer the platform-token (claims) path when the validator supports
-		// it: validate, project scp -> RBAC / tenant_id -> RLS, and stash the
-		// AuthorizedContext for downstream handlers. Fall back to the bool-only
-		// path otherwise (legacy QuicBaaS / platform-JWT adapter).
+		// it: validate, project scp -> RBAC / tenant_id -> RLS, stash the
+		// AuthorizedContext, and enforce the method's required scope against it
+		// (mirroring QUIC AuthorizeRequest and MCP AuthorizeTool). Fall back to
+		// the bool-only path otherwise (legacy QuicBaaS / platform-JWT adapter).
 		if cv, ok := config.TokenValidator.(ClaimsTokenValidator); ok {
 			authCtx, aerr := cv.AuthorizeToken(ctx, token, dpopProofFromContext(ctx), info.FullMethod, "")
 			if aerr != nil {
 				return nil, status.Error(codes.Unauthenticated, ErrTokenValidationFailed{Cause: aerr}.Error())
+			}
+			if scope := scopeForMethod(info.FullMethod); scope != "" {
+				if serr := authCtx.RequireScope(scope); serr != nil {
+					return nil, status.Error(codes.PermissionDenied, ErrScopeDenied{Method: info.FullMethod, Scope: scope}.Error())
+				}
 			}
 			ctx = ContextWithAuthorizedContext(ctx, authCtx)
 			ctx = ContextWithToken(ctx, token)
@@ -279,11 +300,17 @@ func OIDCStreamInterceptor(opts ...OIDCInterceptorOption) grpc.StreamServerInter
 		}
 
 		// Prefer the platform-token (claims) path when the validator supports
-		// it, stashing the AuthorizedContext in the wrapped stream context.
+		// it: stash the AuthorizedContext in the wrapped stream context and
+		// enforce the method's required scope against it (mirroring QUIC/MCP).
 		if cv, ok := config.TokenValidator.(ClaimsTokenValidator); ok {
 			authCtx, aerr := cv.AuthorizeToken(ctx, token, dpopProofFromContext(ctx), info.FullMethod, "")
 			if aerr != nil {
 				return status.Error(codes.Unauthenticated, ErrTokenValidationFailed{Cause: aerr}.Error())
+			}
+			if scope := scopeForMethod(info.FullMethod); scope != "" {
+				if serr := authCtx.RequireScope(scope); serr != nil {
+					return status.Error(codes.PermissionDenied, ErrScopeDenied{Method: info.FullMethod, Scope: scope}.Error())
+				}
 			}
 			wrapped := &wrappedServerStream{
 				ServerStream: ss,

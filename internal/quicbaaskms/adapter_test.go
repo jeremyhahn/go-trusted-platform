@@ -24,6 +24,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testCACertPath is a placeholder CA certificate path for config-validation
+// tests. Config.Validate only requires a non-empty TLS.CACert for remote
+// transports (presence check, no file load), so a fixed path satisfies the
+// mTLS security posture without an on-disk fixture.
+const testCACertPath = "/path/to/ca.crt"
+
 func TestNewAdapter(t *testing.T) {
 	t.Parallel()
 
@@ -253,6 +259,7 @@ func TestAdapter_TransportType(t *testing.T) {
 
 	t.Run("grpc transport", func(t *testing.T) {
 		cfg := GRPCConfig("localhost:50051")
+		cfg.TLS = &TLSConfig{CACert: testCACertPath}
 		adapter, err := NewAdapter(cfg, logger)
 
 		require.NoError(t, err)
@@ -263,6 +270,7 @@ func TestAdapter_TransportType(t *testing.T) {
 
 	t.Run("rest transport", func(t *testing.T) {
 		cfg := RESTConfig("http://localhost:8080")
+		cfg.TLS = &TLSConfig{CACert: testCACertPath}
 		adapter, err := NewAdapter(cfg, logger)
 
 		require.NoError(t, err)
@@ -273,6 +281,7 @@ func TestAdapter_TransportType(t *testing.T) {
 
 	t.Run("quic transport", func(t *testing.T) {
 		cfg := QUICConfig("localhost:50051")
+		cfg.TLS = &TLSConfig{CACert: testCACertPath}
 		adapter, err := NewAdapter(cfg, logger)
 
 		require.NoError(t, err)
@@ -283,6 +292,7 @@ func TestAdapter_TransportType(t *testing.T) {
 
 	t.Run("mcp transport", func(t *testing.T) {
 		cfg := MCPConfig("localhost:9000")
+		cfg.TLS = &TLSConfig{CACert: testCACertPath}
 		adapter, err := NewAdapter(cfg, logger)
 
 		require.NoError(t, err)
@@ -325,6 +335,7 @@ func TestConfig_Validate(t *testing.T) {
 
 	t.Run("valid grpc config", func(t *testing.T) {
 		cfg := GRPCConfig("localhost:50051")
+		cfg.TLS = &TLSConfig{CACert: testCACertPath}
 		err := cfg.Validate()
 
 		require.NoError(t, err)
@@ -387,6 +398,9 @@ func TestConfig_Validate(t *testing.T) {
 		cfg := &Config{
 			Backend: "remote-backend",
 			Address: "localhost:50051",
+			TLS: &TLSConfig{
+				CACert: testCACertPath,
+			},
 		}
 		err := cfg.Validate()
 
@@ -553,6 +567,9 @@ func TestPoolConfig(t *testing.T) {
 		cfg := &Config{
 			Transport: TransportGRPC,
 			Address:   "localhost:50051",
+			TLS: &TLSConfig{
+				CACert: testCACertPath,
+			},
 			Pool: &PoolConfig{
 				MinConnections: 5,
 				MaxConnections: 50,

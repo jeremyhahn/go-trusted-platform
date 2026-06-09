@@ -25,9 +25,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // dracutUKIBuilder implements UKIBuilder using dracut's native UKI support
@@ -227,7 +227,7 @@ func (db *dracutUKIBuilder) SignUKI(ctx context.Context, ukiPath string, config 
 	}
 
 	// Create authenticode signer
-	signer, err := authenticode.NewSigner(&authenticode.SignerOptions{
+	signer, err := authenticode.NewSigner(ctx, &authenticode.SignerOptions{
 		KeyStore:      signingBackend,
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "secure-boot"},
 		Certificate:   cert,
@@ -283,34 +283,34 @@ func (b *dracutSigningBackend) Capabilities() xkmssdk.Capabilities {
 	}
 }
 
-func (b *dracutSigningBackend) Signer(attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
+func (b *dracutSigningBackend) Signer(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
 	if signer, ok := b.privateKey.(crypto.Signer); ok {
 		return signer, nil
 	}
 	return nil, fmt.Errorf("private key does not implement crypto.Signer")
 }
 
-func (b *dracutSigningBackend) GenerateKey(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (b *dracutSigningBackend) GenerateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (b *dracutSigningBackend) GetKey(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (b *dracutSigningBackend) GetKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	return b.privateKey, nil
 }
 
-func (b *dracutSigningBackend) DeleteKey(attrs *xkmssdk.KeyAttributes) error {
+func (b *dracutSigningBackend) DeleteKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
 	return fmt.Errorf("not implemented")
 }
 
-func (b *dracutSigningBackend) ListKeys() ([]*xkmssdk.KeyAttributes, error) {
+func (b *dracutSigningBackend) ListKeys(ctx context.Context) ([]*xkmssdk.KeyAttributes, error) {
 	return nil, nil
 }
 
-func (b *dracutSigningBackend) Decrypter(attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
+func (b *dracutSigningBackend) Decrypter(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (b *dracutSigningBackend) RotateKey(attrs *xkmssdk.KeyAttributes) error {
+func (b *dracutSigningBackend) RotateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
 	return fmt.Errorf("not implemented")
 }
 

@@ -26,6 +26,13 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
+// testCACertPath is a placeholder CA certificate path used by config-validation
+// tests. Config.Validate only requires a non-empty TLS.CACert for remote
+// transports (it does not load or parse the file), so a fixed path satisfies
+// the security posture without needing an on-disk fixture. Tests that actually
+// load certificates use writeSvcClientCert in adapter_tls_test.go instead.
+const testCACertPath = "/path/to/ca.crt"
+
 func TestNewAdapter(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 
@@ -112,6 +119,9 @@ func TestConfig_Validate(t *testing.T) {
 		cfg := &Config{
 			Backend: "quicbaas-primary",
 			Address: "localhost:10443",
+			TLS: &TLSConfig{
+				CACert: testCACertPath,
+			},
 		}
 		err := cfg.Validate()
 		if err != nil {
@@ -157,6 +167,9 @@ func TestConfig_Validate(t *testing.T) {
 		cfg := &Config{
 			Transport: TransportGRPC,
 			Address:   "localhost:10443",
+			TLS: &TLSConfig{
+				CACert: testCACertPath,
+			},
 		}
 		err := cfg.Validate()
 		if err != nil {
@@ -178,6 +191,9 @@ func TestConfig_Validate(t *testing.T) {
 		cfg := &Config{
 			Transport: TransportREST,
 			Address:   "https://localhost:8443",
+			TLS: &TLSConfig{
+				CACert: testCACertPath,
+			},
 		}
 		err := cfg.Validate()
 		if err != nil {
@@ -199,6 +215,9 @@ func TestConfig_Validate(t *testing.T) {
 		cfg := &Config{
 			Transport: TransportQUIC,
 			Address:   "localhost:9444",
+			TLS: &TLSConfig{
+				CACert: testCACertPath,
+			},
 		}
 		err := cfg.Validate()
 		if err != nil {
@@ -254,6 +273,9 @@ func TestConfig_IsEmbedded(t *testing.T) {
 		cfg := &Config{
 			Transport: TransportGRPC,
 			Address:   "localhost:10443",
+			TLS: &TLSConfig{
+				CACert: testCACertPath,
+			},
 		}
 		if cfg.IsEmbedded() {
 			t.Error("expected gRPC transport to be remote")
@@ -577,6 +599,9 @@ func TestAdapter_StateTransitions(t *testing.T) {
 		cfg := &Config{
 			Transport: TransportGRPC,
 			Address:   "localhost:10443",
+			TLS: &TLSConfig{
+				CACert: testCACertPath,
+			},
 		}
 		adapter, err := NewAdapter(cfg, logger)
 		if err != nil {
@@ -609,6 +634,9 @@ func TestAdapter_StateTransitions(t *testing.T) {
 		cfg := &Config{
 			Transport: TransportGRPC,
 			Address:   "localhost:10443",
+			TLS: &TLSConfig{
+				CACert: testCACertPath,
+			},
 		}
 		adapter, err := NewAdapter(cfg, logger)
 		if err != nil {
@@ -1203,6 +1231,9 @@ func TestConfig_WithTLSAndPool(t *testing.T) {
 		cfg := &Config{
 			Transport: TransportGRPC,
 			Address:   "localhost:10443",
+			TLS: &TLSConfig{
+				CACert: testCACertPath,
+			},
 			Pool: &PoolConfig{
 				MaxConnections: 50,
 				MinConnections: 5,
@@ -1301,6 +1332,9 @@ func TestAdapter_StartWithGRPCTransport(t *testing.T) {
 		Transport:      TransportGRPC,
 		Address:        "localhost:10443",
 		RequestTimeout: 30 * time.Second,
+		TLS: &TLSConfig{
+			CACert: testCACertPath,
+		},
 	}
 
 	adapter, err := NewAdapter(cfg, logger)
@@ -1332,6 +1366,9 @@ func TestAdapter_StartWithRESTTransport(t *testing.T) {
 		Transport:      TransportREST,
 		Address:        "https://localhost:8443",
 		RequestTimeout: 30 * time.Second,
+		TLS: &TLSConfig{
+			CACert: testCACertPath,
+		},
 	}
 
 	adapter, err := NewAdapter(cfg, logger)
@@ -1360,6 +1397,9 @@ func TestAdapter_StartWithQUICTransport(t *testing.T) {
 		Transport:      TransportQUIC,
 		Address:        "localhost:9444",
 		RequestTimeout: 30 * time.Second,
+		TLS: &TLSConfig{
+			CACert: testCACertPath,
+		},
 	}
 
 	adapter, err := NewAdapter(cfg, logger)
@@ -1415,6 +1455,9 @@ func TestAdapter_StartWithClientFactoryError(t *testing.T) {
 	cfg := &Config{
 		Transport: TransportGRPC,
 		Address:   "localhost:10443",
+		TLS: &TLSConfig{
+			CACert: testCACertPath,
+		},
 	}
 
 	adapter, err := NewAdapter(cfg, logger)
@@ -1446,6 +1489,9 @@ func TestAdapter_GRPCWithTimeout(t *testing.T) {
 		Transport:      TransportGRPC,
 		Address:        "localhost:10443",
 		RequestTimeout: 60 * time.Second,
+		TLS: &TLSConfig{
+			CACert: testCACertPath,
+		},
 	}
 
 	adapter, err := NewAdapter(cfg, logger)
@@ -1473,6 +1519,9 @@ func TestAdapter_RESTWithTimeout(t *testing.T) {
 		Transport:      TransportREST,
 		Address:        "https://localhost:8443",
 		RequestTimeout: 60 * time.Second,
+		TLS: &TLSConfig{
+			CACert: testCACertPath,
+		},
 	}
 
 	adapter, err := NewAdapter(cfg, logger)
@@ -1500,6 +1549,9 @@ func TestAdapter_QUICWithTimeout(t *testing.T) {
 		Transport:      TransportQUIC,
 		Address:        "localhost:9444",
 		RequestTimeout: 60 * time.Second,
+		TLS: &TLSConfig{
+			CACert: testCACertPath,
+		},
 	}
 
 	adapter, err := NewAdapter(cfg, logger)
@@ -1553,6 +1605,9 @@ func TestAdapter_StartWithNilClient(t *testing.T) {
 	cfg := &Config{
 		Transport: TransportGRPC,
 		Address:   "localhost:10443",
+		TLS: &TLSConfig{
+			CACert: testCACertPath,
+		},
 	}
 
 	adapter, err := NewAdapter(cfg, logger)
@@ -1586,6 +1641,9 @@ func TestAdapter_FullLifecycle(t *testing.T) {
 	cfg := &Config{
 		Transport: TransportGRPC,
 		Address:   "localhost:10443",
+		TLS: &TLSConfig{
+			CACert: testCACertPath,
+		},
 	}
 
 	adapter, err := NewAdapter(cfg, logger)
@@ -1723,6 +1781,9 @@ func TestAdapter_GRPCWithoutTimeout(t *testing.T) {
 		Transport:      TransportGRPC,
 		Address:        "localhost:10443",
 		RequestTimeout: 0, // No timeout
+		TLS: &TLSConfig{
+			CACert: testCACertPath,
+		},
 	}
 
 	adapter, err := NewAdapter(cfg, logger)
@@ -1750,6 +1811,9 @@ func TestAdapter_RESTWithoutTimeout(t *testing.T) {
 		Transport:      TransportREST,
 		Address:        "https://localhost:8443",
 		RequestTimeout: 0, // No timeout
+		TLS: &TLSConfig{
+			CACert: testCACertPath,
+		},
 	}
 
 	adapter, err := NewAdapter(cfg, logger)
@@ -1777,6 +1841,9 @@ func TestAdapter_QUICWithoutTimeout(t *testing.T) {
 		Transport:      TransportQUIC,
 		Address:        "localhost:9444",
 		RequestTimeout: 0, // No timeout
+		TLS: &TLSConfig{
+			CACert: testCACertPath,
+		},
 	}
 
 	adapter, err := NewAdapter(cfg, logger)
@@ -1836,6 +1903,9 @@ func TestAdapter_UnsupportedTransportInCreateClient(t *testing.T) {
 	cfg := &Config{
 		Transport: TransportGRPC,
 		Address:   "localhost:10443",
+		TLS: &TLSConfig{
+			CACert: testCACertPath,
+		},
 	}
 
 	adapter, err := NewAdapter(cfg, logger)
@@ -1871,6 +1941,9 @@ func TestAdapter_StartDoubleCheckAfterLock(t *testing.T) {
 	cfg := &Config{
 		Transport: TransportGRPC,
 		Address:   "localhost:10443",
+		TLS: &TLSConfig{
+			CACert: testCACertPath,
+		},
 	}
 
 	adapter, err := NewAdapter(cfg, logger)

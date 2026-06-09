@@ -15,6 +15,7 @@ package authenticode
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -34,8 +35,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
 // Test helper to create CommonFlags getter
@@ -139,7 +140,7 @@ func TestRunSignReadKeyFailure(t *testing.T) {
 		NoColor:      true,
 	}
 
-	err := runSign(flags, "/nonexistent/key.pem", "/some/cert.pem", "/some/input", "/some/output")
+	err := runSign(context.Background(), flags, "/nonexistent/key.pem", "/some/cert.pem", "/some/input", "/some/output")
 
 	require.Error(t, err)
 	var readKeyErr ErrReadKeyFailed
@@ -162,7 +163,7 @@ func TestRunSignDecodeKeyFailure(t *testing.T) {
 		NoColor:      true,
 	}
 
-	err = runSign(flags, keyPath, "/some/cert.pem", "/some/input", "/some/output")
+	err = runSign(context.Background(), flags, keyPath, "/some/cert.pem", "/some/input", "/some/output")
 
 	require.Error(t, err)
 	var decodeKeyErr ErrDecodeKeyFailed
@@ -190,7 +191,7 @@ func TestRunSignParseKeyFailure(t *testing.T) {
 		NoColor:      true,
 	}
 
-	err = runSign(flags, keyPath, "/some/cert.pem", "/some/input", "/some/output")
+	err = runSign(context.Background(), flags, keyPath, "/some/cert.pem", "/some/input", "/some/output")
 
 	require.Error(t, err)
 	var parseKeyErr ErrParseKeyFailed
@@ -223,7 +224,7 @@ func TestRunSignPKCS8KeyParsing(t *testing.T) {
 	}
 
 	// Should fail on cert reading, not key parsing
-	err = runSign(flags, keyPath, "/nonexistent/cert.pem", "/some/input", "/some/output")
+	err = runSign(context.Background(), flags, keyPath, "/nonexistent/cert.pem", "/some/input", "/some/output")
 
 	require.Error(t, err)
 	var readCertErr ErrReadCertificateFailed
@@ -251,7 +252,7 @@ func TestRunSignReadCertFailure(t *testing.T) {
 		NoColor:      true,
 	}
 
-	err = runSign(flags, keyPath, "/nonexistent/cert.pem", "/some/input", "/some/output")
+	err = runSign(context.Background(), flags, keyPath, "/nonexistent/cert.pem", "/some/input", "/some/output")
 
 	require.Error(t, err)
 	var readCertErr ErrReadCertificateFailed
@@ -285,7 +286,7 @@ func TestRunSignDecodeCertFailure(t *testing.T) {
 		NoColor:      true,
 	}
 
-	err = runSign(flags, keyPath, certPath, "/some/input", "/some/output")
+	err = runSign(context.Background(), flags, keyPath, certPath, "/some/input", "/some/output")
 
 	require.Error(t, err)
 	var decodeCertErr ErrDecodeCertificateFailed
@@ -323,7 +324,7 @@ func TestRunSignParseCertFailure(t *testing.T) {
 		NoColor:      true,
 	}
 
-	err = runSign(flags, keyPath, certPath, "/some/input", "/some/output")
+	err = runSign(context.Background(), flags, keyPath, certPath, "/some/input", "/some/output")
 
 	require.Error(t, err)
 	var parseCertErr ErrParseCertificateFailed
@@ -337,7 +338,7 @@ func TestRunVerifyReadCertFailure(t *testing.T) {
 		NoColor:      true,
 	}
 
-	err := runVerify(flags, "/nonexistent/cert.pem", "/some/input")
+	err := runVerify(context.Background(), flags, "/nonexistent/cert.pem", "/some/input")
 
 	require.Error(t, err)
 	var readCertErr ErrReadCertificateFailed
@@ -359,7 +360,7 @@ func TestRunVerifyDecodeCertFailure(t *testing.T) {
 		NoColor:      true,
 	}
 
-	err = runVerify(flags, certPath, "/some/input")
+	err = runVerify(context.Background(), flags, certPath, "/some/input")
 
 	require.Error(t, err)
 	var decodeCertErr ErrDecodeCertificateFailed
@@ -385,7 +386,7 @@ func TestRunVerifyParseCertFailure(t *testing.T) {
 		NoColor:      true,
 	}
 
-	err = runVerify(flags, certPath, "/some/input")
+	err = runVerify(context.Background(), flags, certPath, "/some/input")
 
 	require.Error(t, err)
 	var parseCertErr ErrParseCertificateFailed
@@ -401,7 +402,7 @@ func TestRunVerifyWithNoCertificate(t *testing.T) {
 		NoColor:      true,
 	}
 
-	err := runVerify(flags, "", "/nonexistent/input.efi")
+	err := runVerify(context.Background(), flags, "", "/nonexistent/input.efi")
 
 	require.Error(t, err)
 	// The authenticode.NewSigner requires a certificate, so creation fails
@@ -438,7 +439,7 @@ func TestCliSigningBackendSignerSuccess(t *testing.T) {
 		privateKey: privateKey,
 	}
 
-	signer, err := backend.Signer(&xkmssdk.KeyAttributes{CN: "test"})
+	signer, err := backend.Signer(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
 	require.NoError(t, err)
 	require.NotNil(t, signer)
 }
@@ -450,7 +451,7 @@ func TestCliSigningBackendSignerFailure(t *testing.T) {
 		privateKey: &nonSignerKey{},
 	}
 
-	signer, err := backend.Signer(&xkmssdk.KeyAttributes{CN: "test"})
+	signer, err := backend.Signer(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
 
 	require.Error(t, err)
 	var keyNotSignerErr ErrKeyNotSigner
@@ -462,7 +463,7 @@ func TestCliSigningBackendSignerFailure(t *testing.T) {
 func TestCliSigningBackendGenerateKey(t *testing.T) {
 	backend := &cliSigningBackend{}
 
-	key, err := backend.GenerateKey(&xkmssdk.KeyAttributes{CN: "test"})
+	key, err := backend.GenerateKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
 
 	require.Error(t, err)
 	var notImplErr ErrNotImplemented
@@ -480,7 +481,7 @@ func TestCliSigningBackendGetKey(t *testing.T) {
 		privateKey: privateKey,
 	}
 
-	key, err := backend.GetKey(&xkmssdk.KeyAttributes{CN: "test"})
+	key, err := backend.GetKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
 	require.NoError(t, err)
 	assert.Equal(t, privateKey, key)
 }
@@ -489,7 +490,7 @@ func TestCliSigningBackendGetKey(t *testing.T) {
 func TestCliSigningBackendDeleteKey(t *testing.T) {
 	backend := &cliSigningBackend{}
 
-	err := backend.DeleteKey(&xkmssdk.KeyAttributes{CN: "test"})
+	err := backend.DeleteKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
 
 	require.Error(t, err)
 	var notImplErr ErrNotImplemented
@@ -501,7 +502,7 @@ func TestCliSigningBackendDeleteKey(t *testing.T) {
 func TestCliSigningBackendListKeys(t *testing.T) {
 	backend := &cliSigningBackend{}
 
-	keys, err := backend.ListKeys()
+	keys, err := backend.ListKeys(context.Background())
 	require.NoError(t, err)
 	assert.Nil(t, keys)
 }
@@ -510,7 +511,7 @@ func TestCliSigningBackendListKeys(t *testing.T) {
 func TestCliSigningBackendDecrypter(t *testing.T) {
 	backend := &cliSigningBackend{}
 
-	decrypter, err := backend.Decrypter(&xkmssdk.KeyAttributes{CN: "test"})
+	decrypter, err := backend.Decrypter(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
 
 	require.Error(t, err)
 	var notImplErr ErrNotImplemented
@@ -523,7 +524,7 @@ func TestCliSigningBackendDecrypter(t *testing.T) {
 func TestCliSigningBackendRotateKey(t *testing.T) {
 	backend := &cliSigningBackend{}
 
-	err := backend.RotateKey(&xkmssdk.KeyAttributes{CN: "test"})
+	err := backend.RotateKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
 
 	require.Error(t, err)
 	var notImplErr ErrNotImplemented
@@ -561,7 +562,7 @@ func TestCliVerifyBackendCapabilities(t *testing.T) {
 func TestCliVerifyBackendSigner(t *testing.T) {
 	backend := &cliVerifyBackend{}
 
-	signer, err := backend.Signer(&xkmssdk.KeyAttributes{CN: "test"})
+	signer, err := backend.Signer(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
 
 	require.Error(t, err)
 	var notImplErr ErrNotImplemented
@@ -574,7 +575,7 @@ func TestCliVerifyBackendSigner(t *testing.T) {
 func TestCliVerifyBackendGenerateKey(t *testing.T) {
 	backend := &cliVerifyBackend{}
 
-	key, err := backend.GenerateKey(&xkmssdk.KeyAttributes{CN: "test"})
+	key, err := backend.GenerateKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
 
 	require.Error(t, err)
 	var notImplErr ErrNotImplemented
@@ -587,7 +588,7 @@ func TestCliVerifyBackendGenerateKey(t *testing.T) {
 func TestCliVerifyBackendGetKey(t *testing.T) {
 	backend := &cliVerifyBackend{}
 
-	key, err := backend.GetKey(&xkmssdk.KeyAttributes{CN: "test"})
+	key, err := backend.GetKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
 
 	require.Error(t, err)
 	var notImplErr ErrNotImplemented
@@ -600,7 +601,7 @@ func TestCliVerifyBackendGetKey(t *testing.T) {
 func TestCliVerifyBackendDeleteKey(t *testing.T) {
 	backend := &cliVerifyBackend{}
 
-	err := backend.DeleteKey(&xkmssdk.KeyAttributes{CN: "test"})
+	err := backend.DeleteKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
 
 	require.Error(t, err)
 	var notImplErr ErrNotImplemented
@@ -612,7 +613,7 @@ func TestCliVerifyBackendDeleteKey(t *testing.T) {
 func TestCliVerifyBackendListKeys(t *testing.T) {
 	backend := &cliVerifyBackend{}
 
-	keys, err := backend.ListKeys()
+	keys, err := backend.ListKeys(context.Background())
 	require.NoError(t, err)
 	assert.Nil(t, keys)
 }
@@ -621,7 +622,7 @@ func TestCliVerifyBackendListKeys(t *testing.T) {
 func TestCliVerifyBackendDecrypter(t *testing.T) {
 	backend := &cliVerifyBackend{}
 
-	decrypter, err := backend.Decrypter(&xkmssdk.KeyAttributes{CN: "test"})
+	decrypter, err := backend.Decrypter(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
 
 	require.Error(t, err)
 	var notImplErr ErrNotImplemented
@@ -634,7 +635,7 @@ func TestCliVerifyBackendDecrypter(t *testing.T) {
 func TestCliVerifyBackendRotateKey(t *testing.T) {
 	backend := &cliVerifyBackend{}
 
-	err := backend.RotateKey(&xkmssdk.KeyAttributes{CN: "test"})
+	err := backend.RotateKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
 
 	require.Error(t, err)
 	var notImplErr ErrNotImplemented
@@ -842,7 +843,7 @@ func TestRunSignInputFileNotFound(t *testing.T) {
 		NoColor:      true,
 	}
 
-	err := runSign(flags, keyPath, certPath, "/nonexistent/input.efi", "/some/output.efi")
+	err := runSign(context.Background(), flags, keyPath, certPath, "/nonexistent/input.efi", "/some/output.efi")
 
 	require.Error(t, err)
 	var signErr ErrSignFileFailed
@@ -863,7 +864,7 @@ func TestRunVerifyWithCertificateSignerCreationFails(t *testing.T) {
 	}
 
 	// The cliVerifyBackend doesn't implement Signer(), so signer creation fails
-	err := runVerify(flags, certPath, "/nonexistent/input.efi")
+	err := runVerify(context.Background(), flags, certPath, "/nonexistent/input.efi")
 
 	require.Error(t, err)
 	var createSignerErr ErrCreateSignerFailed
@@ -917,7 +918,7 @@ func TestOutputFormatTableSign(t *testing.T) {
 	}
 
 	// Should still fail on signing but exercise the table output path
-	err := runSign(flags, keyPath, certPath, "/nonexistent/input.efi", "/some/output.efi")
+	err := runSign(context.Background(), flags, keyPath, certPath, "/nonexistent/input.efi", "/some/output.efi")
 	require.Error(t, err)
 }
 
@@ -933,7 +934,7 @@ func TestOutputFormatTableVerify(t *testing.T) {
 	}
 
 	// Should fail on verification (signer creation fails for verify backend)
-	err := runVerify(flags, certPath, "/nonexistent/input.efi")
+	err := runVerify(context.Background(), flags, certPath, "/nonexistent/input.efi")
 	require.Error(t, err)
 }
 
@@ -960,7 +961,7 @@ func TestRSAKeyParsing(t *testing.T) {
 	}
 
 	// Should fail on cert reading, not key parsing
-	err = runSign(flags, keyPath, "/nonexistent/cert.pem", "/some/input", "/some/output")
+	err = runSign(context.Background(), flags, keyPath, "/nonexistent/cert.pem", "/some/input", "/some/output")
 
 	require.Error(t, err)
 	var readCertErr ErrReadCertificateFailed
@@ -1234,7 +1235,7 @@ func TestRunSignSuccessJSON(t *testing.T) {
 	}
 
 	// Sign the PE file
-	err = runSign(flags, keyPath, certPath, inputPath, outputPath)
+	err = runSign(context.Background(), flags, keyPath, certPath, inputPath, outputPath)
 	require.NoError(t, err)
 
 	// Verify output file was created
@@ -1263,7 +1264,7 @@ func TestRunSignSuccessTable(t *testing.T) {
 	}
 
 	// Sign the PE file
-	err = runSign(flags, keyPath, certPath, inputPath, outputPath)
+	err = runSign(context.Background(), flags, keyPath, certPath, inputPath, outputPath)
 	require.NoError(t, err)
 
 	// Verify output file was created
@@ -1292,7 +1293,7 @@ func TestRunSignSuccessYAML(t *testing.T) {
 	}
 
 	// Sign the PE file
-	err = runSign(flags, keyPath, certPath, inputPath, outputPath)
+	err = runSign(context.Background(), flags, keyPath, certPath, inputPath, outputPath)
 	require.NoError(t, err)
 
 	// Verify output file was created

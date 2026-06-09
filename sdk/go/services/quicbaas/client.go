@@ -124,47 +124,47 @@ func (c *Client) Cache() quicbaas.CacheClient {
 
 // Auth returns the authentication service client.
 func (c *Client) Auth() quicbaas.AuthClient {
-	return c.sdk.Auth()
+	return c.sdk.Security().Auth()
 }
 
 // Seal returns the seal service client for seal/unseal operations.
 func (c *Client) Seal() quicbaas.SealClient {
-	return c.sdk.Seal()
+	return c.sdk.Security().Seal()
 }
 
 // KMS returns the key management service client.
 func (c *Client) KMS() quicbaas.KMSClient {
-	return c.sdk.KMS()
+	return c.sdk.Security().KMS()
 }
 
 // Secrets returns the secrets service client for secret storage.
 func (c *Client) Secrets() quicbaas.SecretsClient {
-	return c.sdk.Secrets()
+	return c.sdk.Security().Secrets()
 }
 
 // Crypto returns the cryptographic service client for encryption and signatures.
 func (c *Client) Crypto() quicbaas.CryptoClient {
-	return c.sdk.Crypto()
+	return c.sdk.Security().Crypto()
 }
 
 // RBAC returns the role-based access control service client.
 func (c *Client) RBAC() quicbaas.RBACClient {
-	return c.sdk.RBAC()
+	return c.sdk.Security().RBAC()
 }
 
 // DynamicSecrets returns the dynamic secrets service client.
 func (c *Client) DynamicSecrets() quicbaas.DynamicSecretsClient {
-	return c.sdk.DynamicSecrets()
+	return c.sdk.Security().DynamicSecrets()
 }
 
 // Certificate returns the certificate service client.
 func (c *Client) Certificate() quicbaas.CertificateClient {
-	return c.sdk.Certificate()
+	return c.sdk.Security().Certificate()
 }
 
 // DEK returns the Data Encryption Key service client.
 func (c *Client) DEK() quicbaas.DEKClient {
-	return c.sdk.DEK()
+	return c.sdk.Security().DEK()
 }
 
 // =============================================================================

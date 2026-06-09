@@ -14,6 +14,7 @@
 package platform
 
 import (
+	"context"
 	"crypto"
 	"crypto/x509"
 	"errors"
@@ -618,7 +619,7 @@ func (kc *XKMS) TPM() xkmssdk.TrustedPlatformModule {
 // GenerateKey generates a new key using the appropriate backend.
 // If PlatformPolicy is true and the key has a password, the password
 // is sealed to TPM before generating the key.
-func (kc *XKMS) GenerateKey(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (kc *XKMS) GenerateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	backend, ok := kc.backends[attrs.StoreType]
 	if !ok {
 		return nil, xkmssdk.ErrInvalidKeyStore
@@ -651,36 +652,36 @@ func (kc *XKMS) GenerateKey(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, er
 	// Dispatch to algorithm-specific generation methods
 	switch attrs.KeyAlgorithm {
 	case x509.RSA:
-		return backend.GenerateRSA(attrs)
+		return backend.GenerateRSA(ctx, attrs)
 	case x509.ECDSA:
-		return backend.GenerateECDSA(attrs)
+		return backend.GenerateECDSA(ctx, attrs)
 	case x509.Ed25519:
-		return backend.GenerateEd25519(attrs)
+		return backend.GenerateEd25519(ctx, attrs)
 	default:
 		return nil, ErrUnsupportedKeyAlgorithm{Algorithm: attrs.KeyAlgorithm}
 	}
 }
 
 // GetKey retrieves an existing key.
-func (kc *XKMS) GetKey(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (kc *XKMS) GetKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	backend, ok := kc.backends[attrs.StoreType]
 	if !ok {
 		return nil, xkmssdk.ErrInvalidKeyStore
 	}
-	return backend.GetKey(attrs)
+	return backend.GetKey(ctx, attrs)
 }
 
 // DeleteKey removes a key.
-func (kc *XKMS) DeleteKey(attrs *xkmssdk.KeyAttributes) error {
+func (kc *XKMS) DeleteKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
 	backend, ok := kc.backends[attrs.StoreType]
 	if !ok {
 		return xkmssdk.ErrInvalidKeyStore
 	}
-	return backend.DeleteKey(attrs)
+	return backend.DeleteKey(ctx, attrs)
 }
 
 // Signer returns a crypto.Signer for the key.
-func (kc *XKMS) Signer(attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
+func (kc *XKMS) Signer(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
 	// Handle TPM2 keys using TPMSigner wrapper
 	if attrs.StoreType == xkmssdk.StoreTPM2 {
 		if kc.tpm == nil {
@@ -694,24 +695,24 @@ func (kc *XKMS) Signer(attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
 	if !ok {
 		return nil, xkmssdk.ErrInvalidKeyStore
 	}
-	return backend.Signer(attrs)
+	return backend.Signer(ctx, attrs)
 }
 
 // Decrypter returns a crypto.Decrypter for the key.
-func (kc *XKMS) Decrypter(attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
+func (kc *XKMS) Decrypter(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
 	backend, ok := kc.backends[attrs.StoreType]
 	if !ok {
 		return nil, xkmssdk.ErrInvalidKeyStore
 	}
-	return backend.Decrypter(attrs)
+	return backend.Decrypter(ctx, attrs)
 }
 
 // RotateKey rotates the key.
-func (kc *XKMS) RotateKey(attrs *xkmssdk.KeyAttributes) error {
+func (kc *XKMS) RotateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
 	backend, ok := kc.backends[attrs.StoreType]
 	if !ok {
 		return xkmssdk.ErrInvalidKeyStore
 	}
-	_, err := backend.RotateKey(attrs)
+	_, err := backend.RotateKey(ctx, attrs)
 	return err
 }

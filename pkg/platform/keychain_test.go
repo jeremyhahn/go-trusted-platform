@@ -982,7 +982,7 @@ func TestXKMS_GenerateKey_InvalidBackend(t *testing.T) {
 		StoreType: xkmssdk.StoreTPM2, // Not configured
 	}
 
-	key, err := kc.GenerateKey(attrs)
+	key, err := kc.GenerateKey(context.Background(), attrs)
 	assert.Nil(t, key)
 	assert.Equal(t, xkmssdk.ErrInvalidKeyStore, err)
 }
@@ -1010,7 +1010,7 @@ func TestXKMS_GenerateKey_SoftwareBackend(t *testing.T) {
 		},
 	}
 
-	key, err := kc.GenerateKey(attrs)
+	key, err := kc.GenerateKey(context.Background(), attrs)
 	require.NoError(t, err)
 	assert.NotNil(t, key)
 }
@@ -1029,7 +1029,7 @@ func TestXKMS_GetKey_InvalidBackend(t *testing.T) {
 		StoreType: xkmssdk.StoreTPM2,
 	}
 
-	key, err := kc.GetKey(attrs)
+	key, err := kc.GetKey(context.Background(), attrs)
 	assert.Nil(t, key)
 	assert.Equal(t, xkmssdk.ErrInvalidKeyStore, err)
 }
@@ -1048,7 +1048,7 @@ func TestXKMS_DeleteKey_InvalidBackend(t *testing.T) {
 		StoreType: xkmssdk.StoreTPM2,
 	}
 
-	err = kc.DeleteKey(attrs)
+	err = kc.DeleteKey(context.Background(), attrs)
 	assert.Equal(t, xkmssdk.ErrInvalidKeyStore, err)
 }
 
@@ -1069,7 +1069,7 @@ func TestXKMS_Signer_TPM2Key(t *testing.T) {
 		StoreType: xkmssdk.StoreTPM2,
 	}
 
-	signer, err := kc.Signer(attrs)
+	signer, err := kc.Signer(context.Background(), attrs)
 	require.NoError(t, err)
 	assert.NotNil(t, signer)
 
@@ -1093,7 +1093,7 @@ func TestXKMS_Signer_TPM2Key_NoTPM(t *testing.T) {
 		StoreType: xkmssdk.StoreTPM2,
 	}
 
-	signer, err := kc.Signer(attrs)
+	signer, err := kc.Signer(context.Background(), attrs)
 	assert.Nil(t, signer)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "TPM not configured")
@@ -1114,7 +1114,7 @@ func TestXKMS_Signer_InvalidBackend(t *testing.T) {
 		StoreType: xkmssdk.StorePKCS11, // Not configured
 	}
 
-	signer, err := kc.Signer(attrs)
+	signer, err := kc.Signer(context.Background(), attrs)
 	assert.Nil(t, signer)
 	assert.Equal(t, xkmssdk.ErrInvalidKeyStore, err)
 }
@@ -1134,7 +1134,7 @@ func TestXKMS_Decrypter_InvalidBackend(t *testing.T) {
 		StoreType: xkmssdk.StoreTPM2,
 	}
 
-	decrypter, err := kc.Decrypter(attrs)
+	decrypter, err := kc.Decrypter(context.Background(), attrs)
 	assert.Nil(t, decrypter)
 	assert.Equal(t, xkmssdk.ErrInvalidKeyStore, err)
 }
@@ -1154,7 +1154,7 @@ func TestXKMS_RotateKey_InvalidBackend(t *testing.T) {
 		StoreType: xkmssdk.StoreTPM2,
 	}
 
-	err = kc.RotateKey(attrs)
+	err = kc.RotateKey(context.Background(), attrs)
 	assert.Equal(t, xkmssdk.ErrInvalidKeyStore, err)
 }
 
@@ -1182,11 +1182,11 @@ func TestXKMS_GetKey_SoftwareBackend(t *testing.T) {
 		},
 	}
 
-	_, err = kc.GenerateKey(attrs)
+	_, err = kc.GenerateKey(context.Background(), attrs)
 	require.NoError(t, err)
 
 	// Then get the key
-	key, err := kc.GetKey(attrs)
+	key, err := kc.GetKey(context.Background(), attrs)
 	require.NoError(t, err)
 	assert.NotNil(t, key)
 }
@@ -1215,15 +1215,15 @@ func TestXKMS_DeleteKey_SoftwareBackend(t *testing.T) {
 		},
 	}
 
-	_, err = kc.GenerateKey(attrs)
+	_, err = kc.GenerateKey(context.Background(), attrs)
 	require.NoError(t, err)
 
 	// Then delete the key
-	err = kc.DeleteKey(attrs)
+	err = kc.DeleteKey(context.Background(), attrs)
 	require.NoError(t, err)
 
 	// Verify key is deleted - GetKey should return error
-	_, err = kc.GetKey(attrs)
+	_, err = kc.GetKey(context.Background(), attrs)
 	assert.Error(t, err)
 }
 
@@ -1251,11 +1251,11 @@ func TestXKMS_Signer_SoftwareBackend(t *testing.T) {
 		},
 	}
 
-	_, err = kc.GenerateKey(attrs)
+	_, err = kc.GenerateKey(context.Background(), attrs)
 	require.NoError(t, err)
 
 	// Get signer for the key
-	signer, err := kc.Signer(attrs)
+	signer, err := kc.Signer(context.Background(), attrs)
 	require.NoError(t, err)
 	assert.NotNil(t, signer)
 }
@@ -1284,11 +1284,11 @@ func TestXKMS_Decrypter_SoftwareBackend(t *testing.T) {
 		},
 	}
 
-	_, err = kc.GenerateKey(attrs)
+	_, err = kc.GenerateKey(context.Background(), attrs)
 	require.NoError(t, err)
 
 	// Get decrypter for the key
-	decrypter, err := kc.Decrypter(attrs)
+	decrypter, err := kc.Decrypter(context.Background(), attrs)
 	require.NoError(t, err)
 	assert.NotNil(t, decrypter)
 }
@@ -1317,11 +1317,11 @@ func TestXKMS_RotateKey_SoftwareBackend(t *testing.T) {
 		},
 	}
 
-	_, err = kc.GenerateKey(attrs)
+	_, err = kc.GenerateKey(context.Background(), attrs)
 	require.NoError(t, err)
 
 	// Rotate the key
-	err = kc.RotateKey(attrs)
+	err = kc.RotateKey(context.Background(), attrs)
 	require.NoError(t, err)
 }
 
@@ -1531,15 +1531,15 @@ func (m *mockTPM) HMAC(auth []byte) tpm2.Session                      { return n
 func (m *mockTPM) HMACSaltedSession(handle tpm2.TPMHandle, pub tpm2.TPMTPublic, auth []byte) (tpm2.Session, func() error, error) {
 	return nil, nil, nil
 }
-func (m *mockTPM) HMACSession(auth []byte) (tpm2.Session, func() error, error) { return nil, nil, nil }
-func (m *mockTPM) IAK() (crypto.PublicKey, error)                              { return nil, nil }
-func (m *mockTPM) IAKAttributes() (*xkmssdk.KeyAttributes, error)              { return nil, nil }
-func (m *mockTPM) IDevID() (crypto.PublicKey, error)                           { return nil, nil }
-func (m *mockTPM) IDevIDAttributes() (*xkmssdk.KeyAttributes, error)           { return nil, nil }
-func (m *mockTPM) Info() (string, error)                                       { return "", nil }
-func (m *mockTPM) IsFIPS140_2() (bool, error)                                  { return false, nil }
-func (m *mockTPM) IsPlatformPCRExtended() (bool, error)                        { return false, nil }
-func (m *mockTPM) ExtendPCR(pcrIndex int, hashAlg string, data []byte) error   { return nil }
+func (m *mockTPM) HMACSession(auth []byte) (tpm2.Session, func() error, error)         { return nil, nil, nil }
+func (m *mockTPM) IAK() (crypto.PublicKey, error)                                      { return nil, nil }
+func (m *mockTPM) IAKAttributes() (*xkmssdk.KeyAttributes, error)                      { return nil, nil }
+func (m *mockTPM) IDevID() (crypto.PublicKey, error)                                   { return nil, nil }
+func (m *mockTPM) IDevIDAttributes() (*xkmssdk.KeyAttributes, error)                   { return nil, nil }
+func (m *mockTPM) Info() (string, error)                                               { return "", nil }
+func (m *mockTPM) IsFIPS140_2() (bool, error)                                          { return false, nil }
+func (m *mockTPM) IsPlatformPCRExtended() (bool, error)                                { return false, nil }
+func (m *mockTPM) ExtendPCR(pcrIndex int, hashAlg string, data []byte) error           { return nil }
 func (m *mockTPM) Install(soPIN xkmssdk.Password, opts *xkmstpm2.InstallOptions) error { return nil }
 func (m *mockTPM) LoadKeyPair(keyAttrs *xkmssdk.KeyAttributes, session *tpm2.Session, backend xkmssdk.TPMKeyBackend) (*tpm2.LoadResponse, error) {
 	return nil, nil
@@ -1669,7 +1669,7 @@ func (m *mockTPM) ECDHZGen(keyAttrs *xkmssdk.KeyAttributes, peerPublicKey *tpm2.
 func (m *mockTPM) FactoryReset(ownerAuth []byte) error          { return nil }
 func (m *mockTPM) FactoryResetWithClear(ownerAuth []byte) error { return nil }
 func (m *mockTPM) ForceClear() error                            { return nil }
-func (m *mockTPM) SSRK() *xkmssdk.SRKConfig            { return nil }
+func (m *mockTPM) SSRK() *xkmssdk.SRKConfig                     { return nil }
 func (m *mockTPM) PlatformKeyStore() xkmssdk.PlatformKeyStorer {
 	return nil
 }
@@ -1777,25 +1777,29 @@ func (m *mockKeyStore) Close() error {
 }
 
 // Stub the rest of KeyStore interface
-func (m *mockKeyStore) GenerateRSA(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (m *mockKeyStore) GenerateRSA(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	return nil, nil
 }
-func (m *mockKeyStore) GenerateECDSA(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (m *mockKeyStore) GenerateECDSA(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	return nil, nil
 }
-func (m *mockKeyStore) GenerateEd25519(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (m *mockKeyStore) GenerateEd25519(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	return nil, nil
 }
-func (m *mockKeyStore) GetKey(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (m *mockKeyStore) GetKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	return nil, nil
 }
-func (m *mockKeyStore) DeleteKey(attrs *xkmssdk.KeyAttributes) error { return nil }
-func (m *mockKeyStore) ListKeys() ([]*xkmssdk.KeyAttributes, error)  { return nil, nil }
-func (m *mockKeyStore) RotateKey(attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+func (m *mockKeyStore) DeleteKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error { return nil }
+func (m *mockKeyStore) ListKeys(ctx context.Context) ([]*xkmssdk.KeyAttributes, error) {
 	return nil, nil
 }
-func (m *mockKeyStore) Signer(attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) { return nil, nil }
-func (m *mockKeyStore) Decrypter(attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
+func (m *mockKeyStore) RotateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+	return nil, nil
+}
+func (m *mockKeyStore) Signer(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
+	return nil, nil
+}
+func (m *mockKeyStore) Decrypter(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
 	return nil, nil
 }
 func (m *mockKeyStore) SaveCert(keyID string, cert *x509.Certificate) error         { return nil }
@@ -1805,14 +1809,20 @@ func (m *mockKeyStore) SaveCertChain(keyID string, chain []*x509.Certificate) er
 func (m *mockKeyStore) GetCertChain(keyID string) ([]*x509.Certificate, error)      { return nil, nil }
 func (m *mockKeyStore) ListCerts() ([]string, error)                                { return nil, nil }
 func (m *mockKeyStore) CertExists(keyID string) (bool, error)                       { return false, nil }
-func (m *mockKeyStore) GetTLSCertificate(keyID string, attrs *xkmssdk.KeyAttributes) (tls.Certificate, error) {
+func (m *mockKeyStore) GetTLSCertificate(ctx context.Context, keyID string, attrs *xkmssdk.KeyAttributes) (tls.Certificate, error) {
 	return tls.Certificate{}, nil
 }
-func (m *mockKeyStore) GetKeyByID(keyID string) (crypto.PrivateKey, error)      { return nil, nil }
-func (m *mockKeyStore) GetSignerByID(keyID string) (crypto.Signer, error)       { return nil, nil }
-func (m *mockKeyStore) GetDecrypterByID(keyID string) (crypto.Decrypter, error) { return nil, nil }
-func (m *mockKeyStore) KeyProvider() xkmssdk.KeyProvider                        { return nil }
-func (m *mockKeyStore) CertStorage() xkmssdk.CertificateStorageAdapter          { return nil }
+func (m *mockKeyStore) GetKeyByID(ctx context.Context, keyID string) (crypto.PrivateKey, error) {
+	return nil, nil
+}
+func (m *mockKeyStore) GetSignerByID(ctx context.Context, keyID string) (crypto.Signer, error) {
+	return nil, nil
+}
+func (m *mockKeyStore) GetDecrypterByID(ctx context.Context, keyID string) (crypto.Decrypter, error) {
+	return nil, nil
+}
+func (m *mockKeyStore) KeyProvider() xkmssdk.KeyProvider               { return nil }
+func (m *mockKeyStore) CertStorage() xkmssdk.CertificateStorageAdapter { return nil }
 func (m *mockKeyStore) Seal(ctx context.Context, data []byte, opts *xkmssdk.SealOptions) (*xkmssdk.SealedData, error) {
 	return nil, nil
 }

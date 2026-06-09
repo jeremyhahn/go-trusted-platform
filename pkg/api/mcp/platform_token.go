@@ -56,9 +56,12 @@ func AuthorizedContextFromContext(ctx context.Context) (*platformtoken.Authorize
 	return authCtx, ok
 }
 
-// scopeForToolPermission maps an MCP tool-permission string ("<svc>:<verb>",
-// e.g. "dns:write") to the platform token scope convention "<svc>.<verb>"
-// (e.g. "dns.write"). An empty permission means no scope is required.
+// scopeForToolPermission maps an MCP tool-permission string to the platform
+// token scope. MCP tool permissions are already in the qrdb-canonical colon
+// "<svc>:<verb>" form (e.g. "dns:write"), which is now the platform scope
+// vocabulary verbatim, so a well-formed permission passes through unchanged
+// (the previous colon->dot conversion is removed). An empty or malformed
+// permission means no scope is required.
 func scopeForToolPermission(permission string) string {
 	if permission == "" {
 		return ""
@@ -67,5 +70,5 @@ func scopeForToolPermission(permission string) string {
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return ""
 	}
-	return parts[0] + "." + parts[1]
+	return permission
 }

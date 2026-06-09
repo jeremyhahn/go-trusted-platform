@@ -62,7 +62,7 @@ func TestOIDCUnaryInterceptor_ClaimsPath_StashesAuthorizedContext(t *testing.T) 
 	want := &platformtoken.AuthorizedContext{
 		Subject:  "user-1",
 		TenantID: "tenant-a",
-		Scopes:   []string{"dns.write"},
+		Scopes:   []string{"dns:write"},
 	}
 	stub := &claimsValidatorStub{authCtx: want}
 
@@ -77,7 +77,7 @@ func TestOIDCUnaryInterceptor_ClaimsPath_StashesAuthorizedContext(t *testing.T) 
 		}
 		seen = ac
 		// Downstream scope gate (scp -> RBAC).
-		scopeErr = ac.RequireScope("dns.write")
+		scopeErr = ac.RequireScope("dns:write")
 		return "ok", nil
 	}
 
@@ -109,13 +109,13 @@ func TestOIDCUnaryInterceptor_ClaimsPath_StashesAuthorizedContext(t *testing.T) 
 func TestOIDCUnaryInterceptor_ClaimsPath_ScopeGateDenies(t *testing.T) {
 	stub := &claimsValidatorStub{authCtx: &platformtoken.AuthorizedContext{
 		Subject: "user-1",
-		Scopes:  []string{"dns.read"},
+		Scopes:  []string{"dns:read"},
 	}}
 	interceptor := OIDCUnaryInterceptor(WithTokenValidator(stub))
 
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		ac, _ := AuthorizedContextFromContext(ctx)
-		if err := ac.RequireScope("dns.write"); err != nil {
+		if err := ac.RequireScope("dns:write"); err != nil {
 			return nil, err
 		}
 		return "ok", nil
@@ -198,7 +198,7 @@ type streamStub struct {
 func (s *streamStub) Context() context.Context { return s.ctx }
 
 func TestOIDCStreamInterceptor_ClaimsPath_StashesAuthorizedContext(t *testing.T) {
-	want := &platformtoken.AuthorizedContext{Subject: "u", Scopes: []string{"kms.read"}}
+	want := &platformtoken.AuthorizedContext{Subject: "u", Scopes: []string{"keys:get"}}
 	stub := &claimsValidatorStub{authCtx: want}
 	interceptor := OIDCStreamInterceptor(WithTokenValidator(stub))
 

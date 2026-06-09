@@ -1984,14 +1984,18 @@ func TestGetUsage_NoUsageTracker(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
 
-	_, err := manager.GetUsage(ctx, "test-tenant")
-	if err == nil {
-		t.Fatal("expected error when usage tracker not configured")
+	// GetUsage degrades gracefully when the optional quota subsystem is
+	// not wired: it returns an empty usage snapshot (no error) so that
+	// dashboards and admin tools can still render the page.
+	usage, err := manager.GetUsage(ctx, "test-tenant")
+	if err != nil {
+		t.Fatalf("expected no error when usage tracker not configured, got %v", err)
 	}
-
-	var invalidReq ErrInvalidRequest
-	if !errors.As(err, &invalidReq) {
-		t.Errorf("expected ErrInvalidRequest, got %T", err)
+	if usage == nil {
+		t.Fatal("expected non-nil usage snapshot")
+	}
+	if usage.TenantID != "test-tenant" {
+		t.Errorf("expected TenantID test-tenant, got %q", usage.TenantID)
 	}
 }
 

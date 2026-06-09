@@ -142,8 +142,8 @@ func (f *CAStoreFactory) CreateKeyStore(cn string) (interface{}, error) {
 
 	// Create QuicBaaS-backed keystore
 	ks, err := caquicbaas.NewQuicBaaSKeyStore(&caquicbaas.QuicBaaSKeyStoreConfig{
-		KMS:       sdkClient.KMS(),
-		Crypto:    sdkClient.Crypto(),
+		KMS:       sdkClient.Security().KMS(),
+		Crypto:    sdkClient.Security().Crypto(),
 		CertStore: certStore,
 		Prefix:    fmt.Sprintf("ca.%s.", cn),
 	})

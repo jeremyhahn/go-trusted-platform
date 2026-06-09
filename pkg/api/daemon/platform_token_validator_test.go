@@ -115,7 +115,7 @@ func TestPlatformTokenValidator_AuthorizeToken_Valid(t *testing.T) {
 	srv := key.jwksHandler(t)
 	v := newSharedValidator(t, srv.URL, true)
 
-	tok := key.sign(t, "user-1", "tenant-a", []string{"dns.write", "kms.read"})
+	tok := key.sign(t, "user-1", "tenant-a", []string{"dns:write", "keys:get"})
 	authCtx, err := v.AuthorizeToken(context.Background(), tok, "", "/svc/Method", "")
 	if err != nil {
 		t.Fatalf("AuthorizeToken: %v", err)
@@ -123,10 +123,10 @@ func TestPlatformTokenValidator_AuthorizeToken_Valid(t *testing.T) {
 	if authCtx.Subject != "user-1" || authCtx.TenantID != "tenant-a" {
 		t.Fatalf("unexpected authCtx: %+v", authCtx)
 	}
-	if err := authCtx.RequireScope("dns.write"); err != nil {
+	if err := authCtx.RequireScope("dns:write"); err != nil {
 		t.Errorf("granted scope denied: %v", err)
 	}
-	if err := authCtx.RequireScope("dns.delete"); err == nil {
+	if err := authCtx.RequireScope("dns:delete"); err == nil {
 		t.Error("ungranted scope should be denied")
 	}
 }
@@ -138,7 +138,7 @@ func TestPlatformTokenValidator_AuthorizeToken_InvalidSignature(t *testing.T) {
 
 	// Sign with a different (untrusted) key; the published JWKS will not verify it.
 	attacker := newPTIssuerKey(t)
-	tok := attacker.sign(t, "mallory", "tenant-a", []string{"dns.write"})
+	tok := attacker.sign(t, "mallory", "tenant-a", []string{"dns:write"})
 
 	if _, err := v.AuthorizeToken(context.Background(), tok, "", "/svc/Method", ""); err == nil {
 		t.Fatal("expected verification failure for token signed by untrusted key")
@@ -151,7 +151,7 @@ func TestPlatformTokenValidator_AuthorizeToken_BearerGate(t *testing.T) {
 	// allowBearer=false: a bearer (no DPoP proof) must be rejected.
 	v := newSharedValidator(t, srv.URL, false)
 
-	tok := key.sign(t, "user-1", "tenant-a", []string{"dns.write"})
+	tok := key.sign(t, "user-1", "tenant-a", []string{"dns:write"})
 	_, err := v.AuthorizeToken(context.Background(), tok, "", "/svc/Method", "")
 	if err == nil {
 		t.Fatal("expected bearer rejection when AllowBearer is false")
@@ -184,7 +184,7 @@ func TestPlatformTokenValidator_CheckPermission(t *testing.T) {
 	srv := key.jwksHandler(t)
 	v := newSharedValidator(t, srv.URL, true)
 
-	tok := key.sign(t, "user-1", "tenant-a", []string{"dns.write"})
+	tok := key.sign(t, "user-1", "tenant-a", []string{"dns:write"})
 
 	allowed, err := v.CheckPermission(context.Background(), tok, "dns", "write")
 	if err != nil || !allowed {
@@ -204,7 +204,7 @@ func TestPlatformTokenValidator_GetTokenClaims(t *testing.T) {
 	srv := key.jwksHandler(t)
 	v := newSharedValidator(t, srv.URL, true)
 
-	tok := key.sign(t, "user-1", "tenant-a", []string{"dns.write"})
+	tok := key.sign(t, "user-1", "tenant-a", []string{"dns:write"})
 	claims, err := v.GetTokenClaims(context.Background(), tok)
 	if err != nil {
 		t.Fatalf("GetTokenClaims: %v", err)

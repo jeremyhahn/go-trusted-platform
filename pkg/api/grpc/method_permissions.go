@@ -1,0 +1,267 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package grpc
+
+// =============================================================================
+// gRPC Method -> Scope Permission Catalog
+// =============================================================================
+//
+// This is the gRPC projection of the QUIC DefaultOpcodePermissions and MCP
+// toolPermissions catalogs onto the platform token scope vocabulary. Scopes are
+// the qrdb-canonical colon "<resource>:<action>" form (e.g. "dns:write"), which
+// is verbatim what the broker mints into the scp claim from a subject's
+// qrdb-resolved permissions.
+//
+// The map is keyed by the gRPC FullMethod string ("/platform.v1.Service/Method")
+// so the interceptor can resolve a method's required scope in O(1) and enforce
+// it against the validated AuthorizedContext (RequireScope), matching the QUIC
+// (AuthorizeRequest) and MCP (AuthorizeTool) per-operation enforcement.
+//
+// A method that is absent from the map carries no required scope: the
+// interceptor allows it once the token is validated. This mirrors MCP's
+// "unknown tool" passthrough and QUIC's nil OpcodePermission, and keeps the
+// catalog focused on the resource services that participate in scope-based
+// authorization (vtpm, dns, device, sdn, kms, iam, ca). Public / health methods
+// never reach this point — they are handled by the interceptor's skip list.
+
+// grpcMethodPermissions maps a gRPC FullMethod to its required colon
+// "resource:action" scope. It is built once and treated as read-only.
+var grpcMethodPermissions = buildGRPCMethodPermissions()
+
+// scopeForMethod returns the colon "resource:action" scope a gRPC method
+// requires, or the empty string when the method is not in the catalog (no scope
+// required). The lookup is constant time.
+func scopeForMethod(fullMethod string) string {
+	return grpcMethodPermissions[fullMethod]
+}
+
+// buildGRPCMethodPermissions constructs the FullMethod -> scope catalog. The
+// resource/action pairs mirror the QUIC DefaultOpcodePermissions and MCP
+// toolPermissions for the same capabilities.
+func buildGRPCMethodPermissions() map[string]string {
+	const (
+		read   = "read"
+		write  = "write"
+		del    = "delete"
+		vtpm   = "vtpm"
+		dns    = "dns"
+		device = "device"
+		sdn    = "sdn"
+		kms    = "kms"
+		iam    = "iam"
+		ca     = "ca"
+	)
+
+	scope := func(resource, action string) string {
+		return resource + ":" + action
+	}
+
+	return map[string]string{
+		// ---------------------------------------------------------------------
+		// vTPM (VTPMService + VTPMInstanceService)
+		// ---------------------------------------------------------------------
+		"/platform.v1.VTPMService/CreateTemplate":   scope(vtpm, write),
+		"/platform.v1.VTPMService/CloneTemplate":    scope(vtpm, write),
+		"/platform.v1.VTPMService/DeleteTemplate":   scope(vtpm, del),
+		"/platform.v1.VTPMService/GetTemplate":      scope(vtpm, read),
+		"/platform.v1.VTPMService/ListTemplates":    scope(vtpm, read),
+		"/platform.v1.VTPMService/CreateBundle":     scope(vtpm, write),
+		"/platform.v1.VTPMService/DeleteBundle":     scope(vtpm, del),
+		"/platform.v1.VTPMService/ExportBundle":     scope(vtpm, read),
+		"/platform.v1.VTPMService/ImportBundle":     scope(vtpm, write),
+		"/platform.v1.VTPMService/GetBundle":        scope(vtpm, read),
+		"/platform.v1.VTPMService/GetBundlePath":    scope(vtpm, read),
+		"/platform.v1.VTPMService/ListBundles":      scope(vtpm, read),
+		"/platform.v1.VTPMService/ValidateBundle":   scope(vtpm, read),
+		"/platform.v1.VTPMService/GetNVRAMPath":     scope(vtpm, read),
+		"/platform.v1.VTPMService/GetTPMSocketPath": scope(vtpm, read),
+		"/platform.v1.VTPMService/IsVTPMRunning":    scope(vtpm, read),
+		"/platform.v1.VTPMService/StartVTPM":        scope(vtpm, write),
+		"/platform.v1.VTPMService/StopVTPM":         scope(vtpm, write),
+		"/platform.v1.VTPMService/QuoteVTPM":        scope(vtpm, read),
+		"/platform.v1.VTPMService/ExtendVTPMPCR":    scope(vtpm, write),
+		"/platform.v1.VTPMService/ReadVTPMPCR":      scope(vtpm, read),
+		"/platform.v1.VTPMService/SealVTPM":         scope(vtpm, write),
+		"/platform.v1.VTPMService/UnsealVTPM":       scope(vtpm, read),
+
+		"/platform.v1.VTPMInstanceService/CreateInstance":       scope(vtpm, write),
+		"/platform.v1.VTPMInstanceService/DeleteInstance":       scope(vtpm, del),
+		"/platform.v1.VTPMInstanceService/StartInstance":        scope(vtpm, write),
+		"/platform.v1.VTPMInstanceService/StopInstance":         scope(vtpm, write),
+		"/platform.v1.VTPMInstanceService/GetInstance":          scope(vtpm, read),
+		"/platform.v1.VTPMInstanceService/GetInstanceByProfile": scope(vtpm, read),
+		"/platform.v1.VTPMInstanceService/GetInstanceStatus":    scope(vtpm, read),
+		"/platform.v1.VTPMInstanceService/ListInstances":        scope(vtpm, read),
+		"/platform.v1.VTPMInstanceService/ExportEKCertificate":  scope(vtpm, read),
+		"/platform.v1.VTPMInstanceService/GetEKFingerprint":     scope(vtpm, read),
+
+		// ---------------------------------------------------------------------
+		// DNS (DNSService)
+		// ---------------------------------------------------------------------
+		"/platform.v1.DNSService/AddRecord":       scope(dns, write),
+		"/platform.v1.DNSService/UpdateRecord":    scope(dns, write),
+		"/platform.v1.DNSService/DeleteRecord":    scope(dns, del),
+		"/platform.v1.DNSService/ListRecords":     scope(dns, read),
+		"/platform.v1.DNSService/CreateZone":      scope(dns, write),
+		"/platform.v1.DNSService/UpdateZone":      scope(dns, write),
+		"/platform.v1.DNSService/DeleteZone":      scope(dns, del),
+		"/platform.v1.DNSService/GetZone":         scope(dns, read),
+		"/platform.v1.DNSService/ListZones":       scope(dns, read),
+		"/platform.v1.DNSService/Resolve":         scope(dns, read),
+		"/platform.v1.DNSService/Register":        scope(dns, write),
+		"/platform.v1.DNSService/SignZone":        scope(dns, write),
+		"/platform.v1.DNSService/GetDNSSECStatus": scope(dns, read),
+
+		// ---------------------------------------------------------------------
+		// Device (DeviceService)
+		// ---------------------------------------------------------------------
+		"/platform.v1.DeviceService/CreateDevice":              scope(device, write),
+		"/platform.v1.DeviceService/UpdateDevice":              scope(device, write),
+		"/platform.v1.DeviceService/DeleteDevice":              scope(device, del),
+		"/platform.v1.DeviceService/GetDevice":                 scope(device, read),
+		"/platform.v1.DeviceService/ListDevices":               scope(device, read),
+		"/platform.v1.DeviceService/CountDevices":              scope(device, read),
+		"/platform.v1.DeviceService/ActivateDevice":            scope(device, write),
+		"/platform.v1.DeviceService/AssignProfileToDevice":     scope(device, write),
+		"/platform.v1.DeviceService/FindConfigForDevice":       scope(device, read),
+		"/platform.v1.DeviceService/FindDeviceBySerial":        scope(device, read),
+		"/platform.v1.DeviceService/CreateProfile":             scope(device, write),
+		"/platform.v1.DeviceService/CreateProfileFromTemplate": scope(device, write),
+		"/platform.v1.DeviceService/UpdateProfile":             scope(device, write),
+		"/platform.v1.DeviceService/DeleteProfile":             scope(device, del),
+		"/platform.v1.DeviceService/GetProfile":                scope(device, read),
+		"/platform.v1.DeviceService/ListProfiles":              scope(device, read),
+		"/platform.v1.DeviceService/CountProfiles":             scope(device, read),
+		"/platform.v1.DeviceService/FindMatchingProfile":       scope(device, read),
+		"/platform.v1.DeviceService/FindProfileByMACAddress":   scope(device, read),
+		"/platform.v1.DeviceService/FindProfileBySerial":       scope(device, read),
+
+		// ---------------------------------------------------------------------
+		// SDN (SDNService)
+		// ---------------------------------------------------------------------
+		"/platform.v1.SDNService/CreateBridge":     scope(sdn, write),
+		"/platform.v1.SDNService/DeleteBridge":     scope(sdn, del),
+		"/platform.v1.SDNService/GetBridge":        scope(sdn, read),
+		"/platform.v1.SDNService/ListBridges":      scope(sdn, read),
+		"/platform.v1.SDNService/AddPort":          scope(sdn, write),
+		"/platform.v1.SDNService/DeletePort":       scope(sdn, del),
+		"/platform.v1.SDNService/GetPort":          scope(sdn, read),
+		"/platform.v1.SDNService/ListPorts":        scope(sdn, read),
+		"/platform.v1.SDNService/SetPortState":     scope(sdn, write),
+		"/platform.v1.SDNService/GetPortStats":     scope(sdn, read),
+		"/platform.v1.SDNService/AuthenticatePort": scope(sdn, write),
+		"/platform.v1.SDNService/RevokePortAuth":   scope(sdn, write),
+		"/platform.v1.SDNService/ApplyPolicy":      scope(sdn, write),
+		"/platform.v1.SDNService/GetPolicy":        scope(sdn, read),
+		"/platform.v1.SDNService/ListPolicies":     scope(sdn, read),
+		"/platform.v1.SDNService/DeletePolicy":     scope(sdn, del),
+		"/platform.v1.SDNService/AddFlow":          scope(sdn, write),
+		"/platform.v1.SDNService/DeleteFlow":       scope(sdn, del),
+		"/platform.v1.SDNService/FlushFlows":       scope(sdn, write),
+		"/platform.v1.SDNService/ListFlows":        scope(sdn, read),
+		"/platform.v1.SDNService/GetFlowStats":     scope(sdn, read),
+		"/platform.v1.SDNService/StreamFlowLogs":   scope(sdn, read),
+		"/platform.v1.SDNService/CreateVLAN":       scope(sdn, write),
+		"/platform.v1.SDNService/DeleteVLAN":       scope(sdn, del),
+		"/platform.v1.SDNService/ListVLANs":        scope(sdn, read),
+
+		// ---------------------------------------------------------------------
+		// KMS (KeyManagementService)
+		// ---------------------------------------------------------------------
+		"/platform.v1.KeyManagementService/GenerateKey":            scope(kms, write),
+		"/platform.v1.KeyManagementService/ImportKey":              scope(kms, write),
+		"/platform.v1.KeyManagementService/GetKey":                 scope(kms, read),
+		"/platform.v1.KeyManagementService/GetKeyVersions":         scope(kms, read),
+		"/platform.v1.KeyManagementService/ListKeys":               scope(kms, read),
+		"/platform.v1.KeyManagementService/DeleteKey":              scope(kms, del),
+		"/platform.v1.KeyManagementService/RotateKey":              scope(kms, write),
+		"/platform.v1.KeyManagementService/UpdateKeyStatus":        scope(kms, write),
+		"/platform.v1.KeyManagementService/ExportKey":              scope(kms, read),
+		"/platform.v1.KeyManagementService/Encrypt":                scope(kms, write),
+		"/platform.v1.KeyManagementService/Decrypt":                scope(kms, read),
+		"/platform.v1.KeyManagementService/BatchEncrypt":           scope(kms, write),
+		"/platform.v1.KeyManagementService/BatchDecrypt":           scope(kms, read),
+		"/platform.v1.KeyManagementService/Sign":                   scope(kms, write),
+		"/platform.v1.KeyManagementService/Verify":                 scope(kms, read),
+		"/platform.v1.KeyManagementService/HMAC":                   scope(kms, write),
+		"/platform.v1.KeyManagementService/VerifyHMAC":             scope(kms, read),
+		"/platform.v1.KeyManagementService/Hash":                   scope(kms, read),
+		"/platform.v1.KeyManagementService/GenerateDataKey":        scope(kms, write),
+		"/platform.v1.KeyManagementService/GenerateWrappedDataKey": scope(kms, write),
+		"/platform.v1.KeyManagementService/GenerateRandom":         scope(kms, read),
+		"/platform.v1.KeyManagementService/Rewrap":                 scope(kms, write),
+		"/platform.v1.KeyManagementService/BackendStatus":          scope(kms, read),
+
+		// ---------------------------------------------------------------------
+		// IAM (PlatformIAMService)
+		// ---------------------------------------------------------------------
+		"/platform.v1.PlatformIAMService/CreateUser":        scope(iam, write),
+		"/platform.v1.PlatformIAMService/UpdateUser":        scope(iam, write),
+		"/platform.v1.PlatformIAMService/DeleteUser":        scope(iam, del),
+		"/platform.v1.PlatformIAMService/GetUser":           scope(iam, read),
+		"/platform.v1.PlatformIAMService/ListUsers":         scope(iam, read),
+		"/platform.v1.PlatformIAMService/CreateRole":        scope(iam, write),
+		"/platform.v1.PlatformIAMService/UpdateRole":        scope(iam, write),
+		"/platform.v1.PlatformIAMService/DeleteRole":        scope(iam, del),
+		"/platform.v1.PlatformIAMService/GetRole":           scope(iam, read),
+		"/platform.v1.PlatformIAMService/ListRoles":         scope(iam, read),
+		"/platform.v1.PlatformIAMService/AssignRole":        scope(iam, write),
+		"/platform.v1.PlatformIAMService/RevokeRole":        scope(iam, write),
+		"/platform.v1.PlatformIAMService/CreateGroup":       scope(iam, write),
+		"/platform.v1.PlatformIAMService/UpdateGroup":       scope(iam, write),
+		"/platform.v1.PlatformIAMService/DeleteGroup":       scope(iam, del),
+		"/platform.v1.PlatformIAMService/GetGroup":          scope(iam, read),
+		"/platform.v1.PlatformIAMService/ListGroups":        scope(iam, read),
+		"/platform.v1.PlatformIAMService/AddGroupMember":    scope(iam, write),
+		"/platform.v1.PlatformIAMService/RemoveGroupMember": scope(iam, write),
+		"/platform.v1.PlatformIAMService/CreatePolicy":      scope(iam, write),
+		"/platform.v1.PlatformIAMService/UpdatePolicy":      scope(iam, write),
+		"/platform.v1.PlatformIAMService/DeletePolicy":      scope(iam, del),
+		"/platform.v1.PlatformIAMService/GetPolicy":         scope(iam, read),
+		"/platform.v1.PlatformIAMService/ListPolicies":      scope(iam, read),
+		"/platform.v1.PlatformIAMService/TestPolicy":        scope(iam, read),
+		"/platform.v1.PlatformIAMService/ValidatePolicy":    scope(iam, read),
+		"/platform.v1.PlatformIAMService/CheckPermission":   scope(iam, read),
+		"/platform.v1.PlatformIAMService/CreateTenant":      scope(iam, write),
+		"/platform.v1.PlatformIAMService/UpdateTenant":      scope(iam, write),
+		"/platform.v1.PlatformIAMService/DeleteTenant":      scope(iam, del),
+		"/platform.v1.PlatformIAMService/GetTenant":         scope(iam, read),
+		"/platform.v1.PlatformIAMService/ListTenants":       scope(iam, read),
+		"/platform.v1.PlatformIAMService/RegisterApp":       scope(iam, write),
+		"/platform.v1.PlatformIAMService/UpdateApp":         scope(iam, write),
+		"/platform.v1.PlatformIAMService/DeleteApp":         scope(iam, del),
+		"/platform.v1.PlatformIAMService/GetApp":            scope(iam, read),
+		"/platform.v1.PlatformIAMService/ListApps":          scope(iam, read),
+		"/platform.v1.PlatformIAMService/RotateAppSecret":   scope(iam, write),
+		"/platform.v1.PlatformIAMService/CreateToken":       scope(iam, write),
+		"/platform.v1.PlatformIAMService/RevokeToken":       scope(iam, write),
+		"/platform.v1.PlatformIAMService/VerifyToken":       scope(iam, read),
+
+		// ---------------------------------------------------------------------
+		// CA (CAService)
+		// ---------------------------------------------------------------------
+		"/platform.v1.CAService/InitCA":                  scope(ca, write),
+		"/platform.v1.CAService/IssueCertificate":        scope(ca, write),
+		"/platform.v1.CAService/RenewCertificate":        scope(ca, write),
+		"/platform.v1.CAService/RevokeCertificate":       scope(ca, write),
+		"/platform.v1.CAService/GetCertificate":          scope(ca, read),
+		"/platform.v1.CAService/ListCertificates":        scope(ca, read),
+		"/platform.v1.CAService/VerifyCertificate":       scope(ca, read),
+		"/platform.v1.CAService/GetCAInfo":               scope(ca, read),
+		"/platform.v1.CAService/GetCABundle":             scope(ca, read),
+		"/platform.v1.CAService/GetCRL":                  scope(ca, read),
+		"/platform.v1.CAService/InstallCACertificates":   scope(ca, write),
+		"/platform.v1.CAService/UninstallCACertificates": scope(ca, del),
+	}
+}

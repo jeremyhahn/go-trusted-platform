@@ -93,10 +93,10 @@ func (s *KMSService) initializeServers() error {
 	}
 
 	// Create SDK-based server adapters for gRPC service registration
-	s.kmsAdapter = NewKMSServerAdapter(sdkClient.KMS(), s.logger)
-	s.secretsServer = NewSecretsServerAdapter(sdkClient.Secrets(), s.logger)
-	s.cryptoServer = NewCryptoServerAdapter(sdkClient.Crypto(), s.logger)
-	s.dekServer = NewDEKServerAdapter(sdkClient.KMS(), s.logger)
+	s.kmsAdapter = NewKMSServerAdapter(sdkClient.Security().KMS(), s.logger)
+	s.secretsServer = NewSecretsServerAdapter(sdkClient.Security().Secrets(), s.logger)
+	s.cryptoServer = NewCryptoServerAdapter(sdkClient.Security().Crypto(), s.logger)
+	s.dekServer = NewDEKServerAdapter(sdkClient.Security().KMS(), s.logger)
 
 	s.initialized.Store(true)
 	return nil

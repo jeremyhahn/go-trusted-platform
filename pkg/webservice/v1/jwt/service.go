@@ -14,6 +14,7 @@
 package jwt
 
 import (
+	"context"
 	"crypto"
 	"errors"
 	"fmt"
@@ -31,7 +32,7 @@ import (
 // XKMSSigner provides access to crypto.Signer instances for key attributes.
 // This interface is satisfied by both xkms.Backend and platform.XKMS.
 type XKMSSigner interface {
-	Signer(attrs *xkmssdk.KeyAttributes) (crypto.Signer, error)
+	Signer(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Signer, error)
 }
 
 var (
@@ -80,7 +81,7 @@ type Service struct {
 	signingMethod jwt.SigningMethod
 }
 
-func NewService(params ServiceParams) (*Service, error) {
+func NewService(ctx context.Context, params ServiceParams) (*Service, error) {
 	// Debug: log the password type to trace the issue
 	var pwType string
 	if params.KeyAttrs.Password != nil {
@@ -96,7 +97,7 @@ func NewService(params ServiceParams) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	signer, err := params.XKMS.Signer(params.KeyAttrs)
+	signer, err := params.XKMS.Signer(ctx, params.KeyAttrs)
 	if err != nil {
 		return nil, err
 	}

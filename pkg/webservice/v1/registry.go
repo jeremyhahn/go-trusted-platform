@@ -733,7 +733,7 @@ func NewTLSAGenerationHook(
 // XKMSSigner provides access to crypto.Signer instances for key attributes.
 // This interface is satisfied by both xkms.Backend and platform.XKMS.
 type XKMSSigner interface {
-	Signer(attrs *xkmssdk.KeyAttributes) (crypto.Signer, error)
+	Signer(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Signer, error)
 }
 
 type RestHandlerRegistry interface {
@@ -925,7 +925,7 @@ func (registry *HandlerRegistry) JWTService() *jwt.Service {
 	return registry.jwtService
 }
 
-func NewHandlerRegistry(params RegistryParams) RestHandlerRegistry {
+func NewHandlerRegistry(ctx context.Context, params RegistryParams) RestHandlerRegistry {
 	jwtParams := jwt.ServiceParams{
 		Audience:   params.JWTAudience,
 		Expiration: params.JWTExpiration,
@@ -933,7 +933,7 @@ func NewHandlerRegistry(params RegistryParams) RestHandlerRegistry {
 		KeyAttrs:   params.ServerKeyAttributes,
 		XKMS:       params.XKMS,
 	}
-	jwtService, err := jwt.NewService(jwtParams)
+	jwtService, err := jwt.NewService(ctx, jwtParams)
 	if err != nil {
 		params.Logger.FatalError(err)
 	}

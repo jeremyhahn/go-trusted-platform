@@ -73,10 +73,10 @@ func newLoginHandler(t *testing.T, loginClient UnifiedLoginClient) (*RestHandler
 	t.Helper()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
-	if _, err := ks.GenerateKey(params.KeyAttrs); err != nil {
+	if _, err := ks.GenerateKey(context.Background(), params.KeyAttrs); err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	jwtService, err := NewService(params)
+	jwtService, err := NewService(context.Background(), params)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

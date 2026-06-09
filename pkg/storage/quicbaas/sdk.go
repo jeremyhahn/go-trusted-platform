@@ -328,7 +328,7 @@ func (s *SDKClient) Auth() quicbaas.AuthClient {
 	if client == nil {
 		return nil
 	}
-	return client.Auth()
+	return client.Security().Auth()
 }
 
 // Seal returns the Seal client for seal/unseal operations.
@@ -337,7 +337,7 @@ func (s *SDKClient) Seal() quicbaas.SealClient {
 	if client == nil {
 		return nil
 	}
-	return client.Seal()
+	return client.Security().Seal()
 }
 
 // KMS returns the KMS client for key management.
@@ -346,7 +346,7 @@ func (s *SDKClient) KMS() quicbaas.KMSClient {
 	if client == nil {
 		return nil
 	}
-	return client.KMS()
+	return client.Security().KMS()
 }
 
 // Secrets returns the Secrets client for secret storage.
@@ -355,7 +355,7 @@ func (s *SDKClient) Secrets() quicbaas.SecretsClient {
 	if client == nil {
 		return nil
 	}
-	return client.Secrets()
+	return client.Security().Secrets()
 }
 
 // Crypto returns the Crypto client for encryption/decryption operations.
@@ -364,7 +364,7 @@ func (s *SDKClient) Crypto() quicbaas.CryptoClient {
 	if client == nil {
 		return nil
 	}
-	return client.Crypto()
+	return client.Security().Crypto()
 }
 
 // Vector returns the Vector client for vector similarity search.
@@ -427,7 +427,7 @@ func (s *SDKClient) RBAC() quicbaas.RBACClient {
 	if client == nil {
 		return nil
 	}
-	return client.RBAC()
+	return client.Security().RBAC()
 }
 
 // DynamicSecrets returns the DynamicSecrets client for dynamic credentials.
@@ -436,7 +436,7 @@ func (s *SDKClient) DynamicSecrets() quicbaas.DynamicSecretsClient {
 	if client == nil {
 		return nil
 	}
-	return client.DynamicSecrets()
+	return client.Security().DynamicSecrets()
 }
 
 // Certificate returns the Certificate client for X.509 certificate management.
@@ -445,7 +445,7 @@ func (s *SDKClient) Certificate() quicbaas.CertificateClient {
 	if client == nil {
 		return nil
 	}
-	return client.Certificate()
+	return client.Security().Certificate()
 }
 
 // DEK returns the Data Encryption Key client for per-tenant DEK management.
@@ -454,7 +454,7 @@ func (s *SDKClient) DEK() quicbaas.DEKClient {
 	if client == nil {
 		return nil
 	}
-	return client.DEK()
+	return client.Security().DEK()
 }
 
 // ObjectStorage returns the ObjectStorage client for distributed object storage.

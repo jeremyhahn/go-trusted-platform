@@ -20,9 +20,9 @@ import (
 	"log/slog"
 
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config/secrets"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // PlatformConfigKeyID is the well-known KMS key identifier used for
@@ -202,7 +202,7 @@ func (app *App) SetupSecretResolvers(ctx context.Context, cfg *SecretsConfig) (*
 	if cfg.DynamicSecrets {
 		sdkClient := app.QuicBaaSSDKClient()
 		if sdkClient != nil {
-			dynClient := sdkClient.DynamicSecrets()
+			dynClient := sdkClient.Security().DynamicSecrets()
 			if dynClient != nil {
 				resolver := NewDynamicSecretsResolver(dynClient, logger)
 				registry.Register(resolver)
@@ -220,7 +220,7 @@ func (app *App) SetupSecretResolvers(ctx context.Context, cfg *SecretsConfig) (*
 		sdkClient := app.QuicBaaSSDKClient()
 		if sdkClient != nil {
 			// Use the XKMS client from the QuicBaaS SDK if available
-			xkmsClient := sdkClient.KMS()
+			xkmsClient := sdkClient.Security().KMS()
 			if xkmsClient != nil {
 				// Create an adapter that satisfies XKMSClient from the KMS client
 				resolver := NewXKMSSecretsResolver(&xkmsKMSClientAdapter{kms: xkmsClient}, logger)
