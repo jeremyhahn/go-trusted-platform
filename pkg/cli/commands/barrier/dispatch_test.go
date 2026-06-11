@@ -206,9 +206,9 @@ func TestDispatchInit_RPCError_WrappedAs(t *testing.T) {
 // dispatchInitShamir
 // ---------------------------------------------------------------------------
 
-func TestDispatchInitShamir_Table_RendersShares(t *testing.T) {
+func TestDispatchInitShamir_Table_RendersShareCount(t *testing.T) {
 	fake := &fakeBarrierClient{initShamirResp: &quicbaassdk.QRDBBarrierInitializeShamirResponse{
-		Shares:      []string{"a", "b", "c"},
+		ShareCount:  3,
 		Threshold:   2,
 		TotalShares: 3,
 	}}
@@ -217,7 +217,7 @@ func TestDispatchInitShamir_Table_RendersShares(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	for _, want := range []string{"Share 1", "Share 2", "Share 3", "a", "b", "c", "Shamir"} {
+	for _, want := range []string{"Share Count", "3", "Shamir"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("expected output to contain %q, got %q", want, out.String())
 		}
@@ -385,11 +385,11 @@ func TestDispatchSeal_RPCError(t *testing.T) {
 func TestDispatchRekey_NoShamir(t *testing.T) {
 	fake := &fakeBarrierClient{rekeyResp: &quicbaassdk.QRDBBarrierRekeyResponse{}}
 	d, out := newTestDispatcher(cli.OutputFormatTable, fake)
-	if err := dispatchRekey(d, &rekeyFlags{secret: "new"}); err != nil {
+	if err := dispatchRekey(d, &rekeyFlags{}); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
-	if fake.rekeyReq.NewSecret != "new" {
-		t.Errorf("expected NewSecret propagated, got %+v", fake.rekeyReq)
+	if fake.rekeyReq == nil {
+		t.Fatalf("expected rekey request to be recorded")
 	}
 	if !strings.Contains(out.String(), "rekeyed successfully") {
 		t.Errorf("expected success output, got %q", out.String())
@@ -398,16 +398,16 @@ func TestDispatchRekey_NoShamir(t *testing.T) {
 
 func TestDispatchRekey_WithShamir(t *testing.T) {
 	fake := &fakeBarrierClient{rekeyResp: &quicbaassdk.QRDBBarrierRekeyResponse{
-		Shares: []string{"x", "y"}, Threshold: 2, TotalShares: 2,
+		ShareCount: 2, Threshold: 2, TotalShares: 2,
 	}}
 	d, out := newTestDispatcher(cli.OutputFormatTable, fake)
-	if err := dispatchRekey(d, &rekeyFlags{secret: "new", threshold: 2, total: 2, soPin: "so"}); err != nil {
+	if err := dispatchRekey(d, &rekeyFlags{threshold: 2, total: 2, soPin: "so"}); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 	if fake.rekeyReq.SOPin != "so" || fake.rekeyReq.Threshold != 2 || fake.rekeyReq.Total != 2 {
 		t.Errorf("expected so-pin/threshold/total propagated, got %+v", fake.rekeyReq)
 	}
-	for _, w := range []string{"Threshold", "Share 1", "Share 2"} {
+	for _, w := range []string{"Threshold", "Share Count"} {
 		if !strings.Contains(out.String(), w) {
 			t.Errorf("output missing %q: %q", w, out.String())
 		}
@@ -417,7 +417,7 @@ func TestDispatchRekey_WithShamir(t *testing.T) {
 func TestDispatchRekey_RPCError(t *testing.T) {
 	fake := &fakeBarrierClient{rekeyErr: errors.New("x")}
 	d, _ := newTestDispatcher(cli.OutputFormatJSON, fake)
-	err := dispatchRekey(d, &rekeyFlags{secret: "new"})
+	err := dispatchRekey(d, &rekeyFlags{})
 	var typed ErrBarrierRekeyFailed
 	if !errors.As(err, &typed) {
 		t.Errorf("expected ErrBarrierRekeyFailed, got %T", err)
@@ -430,9 +430,9 @@ func TestDispatchRekey_RPCError(t *testing.T) {
 
 func TestDispatchRecoveryGenerate_Table(t *testing.T) {
 	fake := &fakeBarrierClient{recoveryGenResp: &quicbaassdk.QRDBBarrierRecoveryKeysResponse{
-		Keys:      []string{"r1", "r2"},
-		Threshold: 2,
-		Total:     2,
+		ShareCount: 2,
+		Threshold:  2,
+		Total:      2,
 	}}
 	d, out := newTestDispatcher(cli.OutputFormatTable, fake)
 	if err := dispatchRecoveryGenerate(d, &recoveryGenerateFlags{threshold: 2, total: 2, soPin: "so"}); err != nil {
@@ -441,7 +441,7 @@ func TestDispatchRecoveryGenerate_Table(t *testing.T) {
 	if fake.recoveryGenReq.SOPin != "so" {
 		t.Errorf("expected so-pin propagated, got %+v", fake.recoveryGenReq)
 	}
-	for _, w := range []string{"Recovery 1", "Recovery 2", "r1", "r2"} {
+	for _, w := range []string{"Share Count", "2"} {
 		if !strings.Contains(out.String(), w) {
 			t.Errorf("output missing %q: %q", w, out.String())
 		}

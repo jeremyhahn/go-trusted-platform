@@ -14,6 +14,7 @@
 package quicbaas
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/pem"
 	"net"
@@ -107,13 +108,13 @@ func (a *CeremonyCAAdapter) resolve() (xkmssdk.TrustedCA, error) {
 
 // SignCSR delegates to the platform CA's SignCSR with options translated
 // from the qrdb ceremony struct into the go-xkms equivalent.
-func (a *CeremonyCAAdapter) SignCSR(csrPEM []byte, opts *quicbaas.QRDBCeremonySignCSROptions) (*x509.Certificate, error) {
+func (a *CeremonyCAAdapter) SignCSR(ctx context.Context, csrPEM []byte, opts *quicbaas.QRDBCeremonySignCSROptions) (*x509.Certificate, error) {
 	ca, err := a.resolve()
 	if err != nil {
 		return nil, err
 	}
 	signOpts := translateSignCSROptions(opts)
-	return ca.SignCSR(csrPEM, signOpts)
+	return ca.SignCSR(ctx, csrPEM, signOpts)
 }
 
 // CACertificate returns the platform CA's own certificate.
@@ -142,13 +143,13 @@ func (a *CeremonyCAAdapter) CABundle() ([]byte, error) {
 // The platform CA stores the generated key in its keystore as a side
 // effect; the qrdb ceremony only needs the PEM bytes returned here so the
 // share envelope it builds carries the private key out to the operator.
-func (a *CeremonyCAAdapter) IssueCertificate(req *quicbaas.QRDBCeremonyIssueCertRequest) (*quicbaas.QRDBCeremonyIssuedCert, error) {
+func (a *CeremonyCAAdapter) IssueCertificate(ctx context.Context, req *quicbaas.QRDBCeremonyIssueCertRequest) (*quicbaas.QRDBCeremonyIssuedCert, error) {
 	ca, err := a.resolve()
 	if err != nil {
 		return nil, err
 	}
 	xkmsReq := translateIssueCertRequest(req)
-	issued, err := ca.IssueCertificate(xkmsReq)
+	issued, err := ca.IssueCertificate(ctx, xkmsReq)
 	if err != nil {
 		return nil, err
 	}

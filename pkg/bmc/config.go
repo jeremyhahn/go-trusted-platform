@@ -69,6 +69,12 @@ type Config struct {
 	// Supermicro ATEN CGI cert upload backend in auto mode. Default
 	// false — gated until hardware validation clears (task #9).
 	AllowCGIFallback bool `yaml:"allow_cgi_fallback,omitempty" json:"allow_cgi_fallback,omitempty"`
+
+	// TLS is the runtime TLS provider injected by the daemon after config
+	// loading. It is never serialized; callers that load Config from YAML
+	// must inject a provider separately. When non-nil, BuildTLSConfig uses
+	// it in preference to the legacy SkipTLSVerify / CACertPath fields.
+	TLS TLSProvider `yaml:"-" json:"-"`
 }
 
 // DefaultConfig returns a Config with sensible defaults for IPMI.

@@ -77,7 +77,7 @@ func (s *SDKKeyStore) generateKey(ctx context.Context, tenantID, zoneName string
 		}
 	}
 
-	privKey, err := xkmssdk.ServiceGenerateKeyWithBackend(s.backend, attrs)
+	privKey, err := xkmssdk.ServiceGenerateKeyWithBackend(ctx, s.backend, attrs)
 	if err != nil {
 		return nil, &DNSSECError{
 			Op:   "GenerateKey",
@@ -111,7 +111,7 @@ func (s *SDKKeyStore) generateKey(ctx context.Context, tenantID, zoneName string
 func (s *SDKKeyStore) GetSigner(ctx context.Context, tenantID, zoneName string, keyType KeyType) (crypto.Signer, error) {
 	keyID := makeKeyID(tenantID, zoneName, keyType)
 
-	signer, err := xkmssdk.ServiceSignerByID(keyID)
+	signer, err := xkmssdk.ServiceSignerByID(ctx, keyID)
 	if err != nil {
 		return nil, &DNSSECError{
 			Op:   "GetSigner",
@@ -127,7 +127,7 @@ func (s *SDKKeyStore) GetSigner(ctx context.Context, tenantID, zoneName string, 
 func (s *SDKKeyStore) GetDNSKEY(ctx context.Context, tenantID, zoneName string, keyType KeyType) (*dns.DNSKEY, error) {
 	keyID := makeKeyID(tenantID, zoneName, keyType)
 
-	privKey, err := xkmssdk.ServiceKeyByID(keyID)
+	privKey, err := xkmssdk.ServiceKeyByID(ctx, keyID)
 	if err != nil {
 		return nil, &DNSSECError{
 			Op:   "GetDNSKEY",
@@ -176,7 +176,7 @@ func (s *SDKKeyStore) GetDNSKEY(ctx context.Context, tenantID, zoneName string, 
 // KeyExists checks if a key exists for the specified tenant, zone, and key type.
 func (s *SDKKeyStore) KeyExists(ctx context.Context, tenantID, zoneName string, keyType KeyType) bool {
 	keyID := makeKeyID(tenantID, zoneName, keyType)
-	_, err := xkmssdk.ServiceKeyByID(keyID)
+	_, err := xkmssdk.ServiceKeyByID(ctx, keyID)
 	return err == nil
 }
 
@@ -184,7 +184,7 @@ func (s *SDKKeyStore) KeyExists(ctx context.Context, tenantID, zoneName string, 
 func (s *SDKKeyStore) DeleteKey(ctx context.Context, tenantID, zoneName string, keyType KeyType) error {
 	keyID := makeKeyID(tenantID, zoneName, keyType)
 
-	if err := xkmssdk.ServiceDeleteKeyByID(keyID); err != nil {
+	if err := xkmssdk.ServiceDeleteKeyByID(ctx, keyID); err != nil {
 		return &DNSSECError{
 			Op:   "DeleteKey",
 			Zone: zoneName,

@@ -433,9 +433,9 @@ type CAServiceInterface interface {
 	// TrustedIntermediate returns the intermediate certificate.
 	TrustedIntermediate() (*x509.Certificate, error)
 	// IssueCertificate issues a new certificate.
-	IssueCertificate(req *quicbaasca.CACertificateRequest) (*x509.Certificate, error)
+	IssueCertificate(ctx context.Context, req *quicbaasca.CACertificateRequest) (*x509.Certificate, error)
 	// Revoke revokes a certificate.
-	Revoke(cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error
+	Revoke(ctx context.Context, cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error
 	// CertificateStore returns the certificate store.
 	CertificateStore() xkmssdk.CertStore
 	// CABundle returns the CA bundle.
@@ -599,7 +599,7 @@ func (h *CAHandlers) handleIssueCertificate(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Issue the certificate
-	cert, err := h.ca.IssueCertificate(caReq)
+	cert, err := h.ca.IssueCertificate(r.Context(), caReq)
 	if err != nil {
 		h.logger.Error("Failed to issue certificate", "error", err, "cn", req.Subject.CommonName)
 		h.writeError(w, http.StatusInternalServerError, ErrCertificateIssueFailed{Err: err})
@@ -766,7 +766,7 @@ func (h *CAHandlers) handleRevokeCertificate(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Revoke the certificate
-	if err := h.ca.Revoke(cert, keyAttrs); err != nil {
+	if err := h.ca.Revoke(r.Context(), cert, keyAttrs); err != nil {
 		h.logger.Error("Failed to revoke certificate", "error", err, "serial", serial)
 		h.writeError(w, http.StatusInternalServerError, ErrCertificateRevokeFailed{Serial: serial, Err: err})
 		return
@@ -872,7 +872,7 @@ func (h *CAHandlers) handleRenewCertificate(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Issue the renewed certificate
-	newCert, err := h.ca.IssueCertificate(caReq)
+	newCert, err := h.ca.IssueCertificate(r.Context(), caReq)
 	if err != nil {
 		h.logger.Error("Failed to renew certificate", "error", err, "serial", serial)
 		h.writeError(w, http.StatusInternalServerError, ErrCertificateRenewFailed{Serial: serial, Err: err})

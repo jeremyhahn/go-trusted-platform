@@ -98,6 +98,15 @@ type RestHandler interface {
 	// existing BMC user slot.
 	// PUT /api/v1/bmc/{profileID}/users/{slot}/privilege
 	SetUserPrivilege(w http.ResponseWriter, r *http.Request)
+
+	// EnrollBMC runs the BMC enrollment ceremony for the given profile.
+	// POST /api/v1/bmc/{profileID}/enroll
+	EnrollBMC(w http.ResponseWriter, r *http.Request)
+
+	// SetEnroller injects the enroller and profile lookup after handler
+	// construction. The daemon calls this once App and DeviceProfileService
+	// are available.
+	SetEnroller(enroller BMCEnrollerServicer, lookup ProfileLookup)
 }
 
 // BMCServicer defines the BMC service operations required by the handler.

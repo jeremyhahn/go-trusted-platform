@@ -377,7 +377,7 @@ func (h *CAHandler) handleIssue(ctx context.Context, req *Request) *Response {
 		KeyType:      xkmssdk.KeyTypeTLS,
 	}
 
-	issued, err := h.ca.IssueCertificate(caReq)
+	issued, err := h.ca.IssueCertificate(ctx, caReq)
 	if err != nil {
 		h.logger.Error(err, "failed to issue certificate")
 		return h.errorResponse(StatusInternalError, ErrCAIssueFailed{Cause: err})
@@ -520,7 +520,7 @@ func (h *CAHandler) handleRevoke(ctx context.Context, req *Request) *Response {
 		}
 	}
 
-	if err := h.ca.RevokeCert(cert, quicbaasca.RevokeOptions{DeleteKeys: keyAttrs != nil}); err != nil {
+	if err := h.ca.RevokeCert(ctx, cert, quicbaasca.RevokeOptions{DeleteKeys: keyAttrs != nil}); err != nil {
 		h.logger.Error(err, "failed to revoke certificate")
 		return h.errorResponse(StatusInternalError, ErrCARevokeFailed{Cause: err})
 	}
@@ -607,7 +607,7 @@ func (h *CAHandler) handleRenew(ctx context.Context, req *Request) *Response {
 		KeyType:      xkmssdk.KeyTypeTLS,
 	}
 
-	issuedRenew, err := h.ca.IssueCertificate(caReq)
+	issuedRenew, err := h.ca.IssueCertificate(ctx, caReq)
 	if err != nil {
 		h.logger.Error(err, "failed to renew certificate")
 		return h.errorResponse(StatusInternalError, ErrCARenewFailed{Cause: err})

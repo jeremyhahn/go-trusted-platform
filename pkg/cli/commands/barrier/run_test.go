@@ -149,22 +149,15 @@ func TestRunSeal_AssumeYes_BypassesPrompt(t *testing.T) {
 // runRekey
 // ---------------------------------------------------------------------------
 
-func TestRunRekey_MissingSecret(t *testing.T) {
-	err := runRekey(flagsWithBrokenContext(), &rekeyFlags{})
-	if _, ok := err.(ErrMissingSecret); !ok {
-		t.Errorf("expected ErrMissingSecret, got %T: %v", err, err)
-	}
-}
-
 func TestRunRekey_PartialShamirFlags(t *testing.T) {
-	err := runRekey(flagsWithBrokenContext(), &rekeyFlags{secret: "x", threshold: 3})
+	err := runRekey(flagsWithBrokenContext(), &rekeyFlags{threshold: 3})
 	if _, ok := err.(ErrRekeyPartialFlags); !ok {
 		t.Errorf("expected ErrRekeyPartialFlags, got %T: %v", err, err)
 	}
 }
 
 func TestRunRekey_NoContextAfterValidation(t *testing.T) {
-	err := runRekey(flagsWithBrokenContext(), &rekeyFlags{secret: "x"})
+	err := runRekey(flagsWithBrokenContext(), &rekeyFlags{})
 	if err == nil {
 		t.Fatal("expected error")
 	}

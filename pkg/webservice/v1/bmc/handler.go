@@ -57,6 +57,7 @@ type handler struct {
 	baremetalService BaremetalServicer
 	responseWriter   response.HttpWriter
 	powerActions     map[string]powerActionHandler
+	enrollDeps       enrollDeps
 }
 
 // NewHandler creates a new BMC REST handler with the given parameters.

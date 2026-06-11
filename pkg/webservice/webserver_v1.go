@@ -144,6 +144,7 @@ type WebServerV1 struct {
 	closeChan           chan bool
 	certReloader        *bootstrap.CertReloader
 	config              *v1.Config
+	ctx                 context.Context
 	debug               bool
 	eventType           string
 	httpServer          *http.Server
@@ -156,6 +157,7 @@ type WebServerV1 struct {
 }
 
 func NewWebServerV1(
+	ctx context.Context,
 	debug bool,
 	logger *logging.Logger,
 	_ca trustedca.CACertificateAuthority,
@@ -174,6 +176,7 @@ func NewWebServerV1(
 		caConfig:            caConfig,
 		closeChan:           make(chan bool, 1),
 		config:              config,
+		ctx:                 ctx,
 		debug:               debug,
 		eventType:           "WebServer",
 		logger:              logger,
@@ -765,7 +768,7 @@ func (server *WebServerV1) startHTTPS() {
 		// cross-signed trust augmentation. The CA itself implements
 		// crypto.Signer, so passing server.ca preserves the cross-signed
 		// behavior the wrapper provided with only a CN hint.
-		tlsconf, err = server.ca.TLSConfigWithXSigner(server.keyAttributes, server.ca)
+		tlsconf, err = server.ca.TLSConfigWithXSigner(server.ctx, server.keyAttributes, server.ca)
 	} else {
 		// ServerTLSConfig (not bare TLSConfig) makes the server intent
 		// explicit. Bare TLSConfig defaults IsServer:false and triggers
@@ -773,7 +776,7 @@ func (server *WebServerV1) startHTTPS() {
 		// fail" on every startup; the resulting config still works as
 		// a server (Go's TLS server ignores client-only fields) but
 		// the WARN is misleading and clutters platformd logs.
-		tlsconf, err = server.ca.ServerTLSConfig(server.keyAttributes, false)
+		tlsconf, err = server.ca.ServerTLSConfig(server.ctx, server.keyAttributes, false)
 	}
 	if err != nil {
 		server.logger.FatalError(err)

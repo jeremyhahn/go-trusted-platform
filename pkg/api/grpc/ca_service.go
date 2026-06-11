@@ -240,7 +240,7 @@ func (s *CAGRPCService) IssueCertificate(
 	}
 
 	// Issue the certificate
-	issued, err := s.ca.IssueCertificate(caReq)
+	issued, err := s.ca.IssueCertificate(ctx, caReq)
 	if err != nil {
 		s.logger.Error(err, "failed to issue certificate")
 		return nil, status.Errorf(codes.Internal, "failed to issue certificate: %v", err)
@@ -419,7 +419,7 @@ func (s *CAGRPCService) RevokeCertificate(
 	}
 
 	// Revoke the certificate
-	if err := s.ca.RevokeCert(cert, quicbaasca.RevokeOptions{DeleteKeys: keyAttrs != nil}); err != nil {
+	if err := s.ca.RevokeCert(ctx, cert, quicbaasca.RevokeOptions{DeleteKeys: keyAttrs != nil}); err != nil {
 		s.logger.Error(err, "failed to revoke certificate")
 		return nil, status.Errorf(codes.Internal, "failed to revoke certificate: %v", err)
 	}
@@ -517,7 +517,7 @@ func (s *CAGRPCService) RenewCertificate(
 	}
 
 	// Issue the renewed certificate
-	issuedRenew, err := s.ca.IssueCertificate(caReq)
+	issuedRenew, err := s.ca.IssueCertificate(ctx, caReq)
 	if err != nil {
 		s.logger.Error(err, "failed to renew certificate")
 		return nil, status.Errorf(codes.Internal, "failed to renew certificate: %v", err)

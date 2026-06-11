@@ -807,7 +807,7 @@ func (h *CAHandlers) IssueCertificate(w http.ResponseWriter, r *http.Request) {
 		KeyType:      xkmssdk.KeyTypeTLS,
 	}
 
-	issued, err := h.ca.IssueCertificate(caReq)
+	issued, err := h.ca.IssueCertificate(r.Context(), caReq)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter,
 			status.Error(codes.Internal, ErrInvalidCertificateRequest{Reason: err.Error()}.Error()))
@@ -886,7 +886,7 @@ func (h *CAHandlers) RevokeCertificate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.ca.RevokeCert(cert, quicbaasca.RevokeOptions{DeleteKeys: req.GetDeleteKeys()}); err != nil {
+	if err := h.ca.RevokeCert(r.Context(), cert, quicbaasca.RevokeOptions{DeleteKeys: req.GetDeleteKeys()}); err != nil {
 		protorest.WriteError(w, r, h.respWriter,
 			status.Error(codes.Internal, err.Error()))
 		return
@@ -1052,7 +1052,7 @@ func (h *CAHandlers) GetCRL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	crlDER, err := h.ca.GenerateCRL()
+	crlDER, err := h.ca.GenerateCRL(r.Context())
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter,
 			status.Error(codes.Internal, ErrCRLGenerationFailed{Reason: err.Error()}.Error()))

@@ -38,9 +38,8 @@ func InitResultFromProto(resp *platformv1.BarrierInitResponse) *InitResult {
 		return nil
 	}
 	result := &InitResult{
-		Strategy:   StrategyFromProto(resp.Strategy),
-		RootToken:  resp.RootToken,
-		UnsealKeys: resp.UnsealKeys,
+		Strategy:  StrategyFromProto(resp.Strategy),
+		RootToken: resp.RootToken,
 	}
 	if resp.InitializedAt != nil {
 		t := resp.InitializedAt.AsTime()
@@ -97,7 +96,6 @@ func RekeyResultFromProto(resp *platformv1.BarrierRekeyResponse) *RekeyResult {
 		return nil
 	}
 	return &RekeyResult{
-		Strategy:   StrategyFromProto(resp.Strategy),
-		UnsealKeys: resp.UnsealKeys,
+		Strategy: StrategyFromProto(resp.Strategy),
 	}
 }

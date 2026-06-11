@@ -67,9 +67,9 @@ import (
 // attestation data from TCG enrollments. This interface is satisfied by
 // ca.CertificateAuthority and allows for easier testing with mocks.
 type AttestationImporter interface {
-	ImportAttestationEventLog(akAttrs *xkmssdk.KeyAttributes, eventLog []byte) error
-	ImportAttestationQuote(akAttrs *xkmssdk.KeyAttributes, quote []byte) error
-	ImportAttestationPCRs(akAttrs *xkmssdk.KeyAttributes, pcrs []byte) error
+	ImportAttestationEventLog(ctx context.Context, akAttrs *xkmssdk.KeyAttributes, eventLog []byte) error
+	ImportAttestationQuote(ctx context.Context, akAttrs *xkmssdk.KeyAttributes, quote []byte) error
+	ImportAttestationPCRs(ctx context.Context, akAttrs *xkmssdk.KeyAttributes, pcrs []byte) error
 }
 
 // NewAttestationImportHook creates an order finalization hook that imports
@@ -107,7 +107,7 @@ func NewAttestationImportHook(caInstance AttestationImporter, logger *slog.Logge
 				slog.String("cn", akAttrs.CN),
 				slog.Int("event_log_size", len(ctx.TCGData.EventLog)))
 
-			if err := caInstance.ImportAttestationEventLog(akAttrs, ctx.TCGData.EventLog); err != nil {
+			if err := caInstance.ImportAttestationEventLog(ctx.Context, akAttrs, ctx.TCGData.EventLog); err != nil {
 				logger.Error("Failed to import attestation event log",
 					slog.String("cn", akAttrs.CN),
 					slog.String("error", err.Error()))
@@ -144,7 +144,7 @@ func NewAttestationImportHook(caInstance AttestationImporter, logger *slog.Logge
 
 				// Import Quote (store the Quoted data - matches local attestation behavior)
 				if len(quote.Quoted) > 0 {
-					if err := caInstance.ImportAttestationQuote(akAttrs, quote.Quoted); err != nil {
+					if err := caInstance.ImportAttestationQuote(ctx.Context, akAttrs, quote.Quoted); err != nil {
 						logger.Error("Failed to import attestation quote",
 							slog.String("cn", akAttrs.CN),
 							slog.String("error", err.Error()))
@@ -160,7 +160,7 @@ func NewAttestationImportHook(caInstance AttestationImporter, logger *slog.Logge
 
 				// Import PCRs
 				if len(quote.PCRs) > 0 {
-					if err := caInstance.ImportAttestationPCRs(akAttrs, quote.PCRs); err != nil {
+					if err := caInstance.ImportAttestationPCRs(ctx.Context, akAttrs, quote.PCRs); err != nil {
 						logger.Error("Failed to import attestation PCRs",
 							slog.String("cn", akAttrs.CN),
 							slog.String("error", err.Error()))

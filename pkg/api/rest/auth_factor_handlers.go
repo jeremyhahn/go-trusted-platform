@@ -15,6 +15,7 @@
 package rest
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -33,7 +34,7 @@ import (
 // without satisfying the full quicbaasca.CACertificateAuthority surface.
 type authCA interface {
 	// SignCSR signs a PEM-encoded CSR and returns the issued certificate.
-	SignCSR(csrPEM []byte, opts *quicbaasca.SignOptions) (*x509.Certificate, error)
+	SignCSR(ctx context.Context, csrPEM []byte, opts *quicbaasca.SignOptions) (*x509.Certificate, error)
 	// TrustedRootCertPool returns the trusted root pool for validating a leaf cert.
 	TrustedRootCertPool(cert *x509.Certificate) (*x509.CertPool, error)
 	// CABundle returns the CA certificate bundle in PEM format.
@@ -403,7 +404,7 @@ func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Requ
 		Profile:      "client",
 		ValidityDays: 365,
 	}
-	cert, err := h.ca.SignCSR([]byte(req.CSRPEM), opts)
+	cert, err := h.ca.SignCSR(r.Context(), []byte(req.CSRPEM), opts)
 	if err != nil {
 		h.logger.Error("CSR signing failed", "user_id", userID, "error", err)
 		h.writeError(w, http.StatusBadRequest, ErrCertIssueFailed{Reason: err.Error()})

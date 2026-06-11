@@ -14,13 +14,14 @@
 package webservice
 
 import (
+	"context"
 	"crypto/tls"
 	"io"
 	"net/http"
 
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 type MutualTLSClient struct {
@@ -40,7 +41,7 @@ func NewMutalTLSClient(
 			TLSClientConfig: &tls.Config{
 				GetClientCertificate: func(
 					info *tls.CertificateRequestInfo) (*tls.Certificate, error) {
-					return client.certificate(attrs)
+					return client.certificate(info.Context(), attrs)
 				},
 			},
 		},
@@ -69,11 +70,11 @@ func (client MutualTLSClient) Get(url string) ([]byte, error) {
 }
 
 // Retrieves the mTLS client certificate from the Certificate Authority
-func (client MutualTLSClient) certificate(attrs *xkmssdk.KeyAttributes) (*tls.Certificate, error) {
+func (client MutualTLSClient) certificate(ctx context.Context, attrs *xkmssdk.KeyAttributes) (*tls.Certificate, error) {
 
 	client.logger.Infof("requesting client certificate: %s", attrs.CN)
 
-	cert, err := client.ca.Certificate(attrs)
+	cert, err := client.ca.Certificate(ctx, attrs)
 	if err != nil {
 		return nil, err
 	}

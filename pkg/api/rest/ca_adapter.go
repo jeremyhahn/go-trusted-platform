@@ -14,6 +14,7 @@
 package rest
 
 import (
+	"context"
 	"crypto/x509"
 	"time"
 
@@ -88,8 +89,8 @@ func (a *CAAuthorityAdapter) TrustedIntermediate() (*x509.Certificate, error) {
 // IssueCertificate issues a new certificate via the underlying CA.
 // The production CA returns *IssuedCertificate; the adapter unwraps the
 // embedded x509 certificate for the REST handler.
-func (a *CAAuthorityAdapter) IssueCertificate(req *quicbaasca.CACertificateRequest) (*x509.Certificate, error) {
-	issued, err := a.ca.IssueCertificate(req)
+func (a *CAAuthorityAdapter) IssueCertificate(ctx context.Context, req *quicbaasca.CACertificateRequest) (*x509.Certificate, error) {
+	issued, err := a.ca.IssueCertificate(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -101,8 +102,8 @@ func (a *CAAuthorityAdapter) IssueCertificate(req *quicbaasca.CACertificateReque
 
 // Revoke revokes a certificate. The production CA exposes RevokeCert(cert,
 // opts); we map the keyAttrs nil/non-nil signal into RevokeOptions.DeleteKeys.
-func (a *CAAuthorityAdapter) Revoke(cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
-	return a.ca.RevokeCert(cert, quicbaasca.RevokeOptions{
+func (a *CAAuthorityAdapter) Revoke(ctx context.Context, cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+	return a.ca.RevokeCert(ctx, cert, quicbaasca.RevokeOptions{
 		DeleteKeys: keyAttrs != nil,
 	})
 }

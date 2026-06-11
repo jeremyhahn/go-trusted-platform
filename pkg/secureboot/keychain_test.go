@@ -242,7 +242,7 @@ func TestXKMSManagerGetSigner(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get signer for PK
-	signer, err := km.GetSigner(KeyTypePK)
+	signer, err := km.GetSigner(t.Context(), KeyTypePK)
 	require.NoError(t, err)
 	assert.NotNil(t, signer)
 	assert.NotNil(t, signer.Public())
@@ -466,7 +466,7 @@ func TestGetSignerError(t *testing.T) {
 	defer km.Close()
 
 	// Try to get signer for non-existent key
-	_, err = km.GetSigner(KeyTypePK)
+	_, err = km.GetSigner(t.Context(), KeyTypePK)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get key")
 }
@@ -848,7 +848,7 @@ func TestGetSignerNonSigner(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		signer, err := km2.GetSigner(keyType)
+		signer, err := km2.GetSigner(t.Context(), keyType)
 		require.NoError(t, err)
 		assert.NotNil(t, signer)
 		km2.Close()
@@ -1573,7 +1573,7 @@ func TestGenerateAllWithAllOptionalConfig(t *testing.T) {
 
 	// Verify signers work for all key types
 	for _, keyType := range []KeyType{KeyTypePK, KeyTypeKEK, KeyTypeDB} {
-		signer, err := km.GetSigner(keyType)
+		signer, err := km.GetSigner(t.Context(), keyType)
 		require.NoError(t, err, "Failed to get signer for %s", keyType)
 		assert.NotNil(t, signer)
 	}

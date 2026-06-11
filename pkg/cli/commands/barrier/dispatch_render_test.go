@@ -61,13 +61,13 @@ func TestDispatchUnsealShares_JSON(t *testing.T) {
 
 // TestDispatchRekey_JSON exercises the JSON rendering branch.
 func TestDispatchRekey_JSON(t *testing.T) {
-	fake := &fakeBarrierClient{rekeyResp: &quicbaassdk.QRDBBarrierRekeyResponse{Shares: []string{"a"}, Threshold: 1, TotalShares: 1}}
+	fake := &fakeBarrierClient{rekeyResp: &quicbaassdk.QRDBBarrierRekeyResponse{ShareCount: 1, Threshold: 1, TotalShares: 1}}
 	d, out := newTestDispatcher(cli.OutputFormatJSON, fake)
-	if err := dispatchRekey(d, &rekeyFlags{secret: "new"}); err != nil {
+	if err := dispatchRekey(d, &rekeyFlags{}); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
-	if !strings.Contains(out.String(), "\"shares\"") {
-		t.Errorf("expected JSON shares, got %q", out.String())
+	if !strings.Contains(out.String(), "\"share_count\"") {
+		t.Errorf("expected JSON share_count, got %q", out.String())
 	}
 }
 
@@ -75,20 +75,20 @@ func TestDispatchRekey_JSON(t *testing.T) {
 func TestDispatchRekey_NilResponseHandled(t *testing.T) {
 	fake := &fakeBarrierClient{rekeyResp: nil}
 	d, _ := newTestDispatcher(cli.OutputFormatTable, fake)
-	if err := dispatchRekey(d, &rekeyFlags{secret: "new"}); err != nil {
+	if err := dispatchRekey(d, &rekeyFlags{}); err != nil {
 		t.Errorf("nil rekey response must not propagate, got %v", err)
 	}
 }
 
 // TestDispatchRecoveryGenerate_JSON exercises the JSON branch.
 func TestDispatchRecoveryGenerate_JSON(t *testing.T) {
-	fake := &fakeBarrierClient{recoveryGenResp: &quicbaassdk.QRDBBarrierRecoveryKeysResponse{Keys: []string{"a"}, Threshold: 2, Total: 3}}
+	fake := &fakeBarrierClient{recoveryGenResp: &quicbaassdk.QRDBBarrierRecoveryKeysResponse{ShareCount: 1, Threshold: 2, Total: 3}}
 	d, out := newTestDispatcher(cli.OutputFormatJSON, fake)
 	if err := dispatchRecoveryGenerate(d, &recoveryGenerateFlags{threshold: 2, total: 3}); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
-	if !strings.Contains(out.String(), "\"keys\"") {
-		t.Errorf("expected JSON keys, got %q", out.String())
+	if !strings.Contains(out.String(), "\"share_count\"") {
+		t.Errorf("expected JSON share_count, got %q", out.String())
 	}
 }
 
@@ -173,7 +173,7 @@ func TestDispatchSeal_InvalidOutputFormat(t *testing.T) {
 func TestDispatchRekey_InvalidOutputFormat(t *testing.T) {
 	fake := &fakeBarrierClient{rekeyResp: &quicbaassdk.QRDBBarrierRekeyResponse{}}
 	d, _ := newTestDispatcher(cli.OutputFormat("xml"), fake)
-	err := dispatchRekey(d, &rekeyFlags{secret: "new"})
+	err := dispatchRekey(d, &rekeyFlags{})
 	var typed cli.ErrInvalidOutputFormat
 	if !errors.As(err, &typed) {
 		t.Errorf("expected ErrInvalidOutputFormat, got %T: %v", err, err)

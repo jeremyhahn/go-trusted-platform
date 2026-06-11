@@ -352,9 +352,9 @@ func (km *XKMSManager) generateKey(ctx context.Context, keyType KeyType, descrip
 
 	// Check if key already exists and delete it if so (for fresh generation)
 	// Use service-level function to check
-	if existingKey, err := xkmssdk.ServiceKey(attrs); err == nil && existingKey != nil {
+	if existingKey, err := xkmssdk.ServiceKey(ctx, attrs); err == nil && existingKey != nil {
 		km.logger.Debug("Deleting existing key before regeneration", "type", keyType)
-		if err := xkmssdk.ServiceDeleteKey(attrs); err != nil {
+		if err := xkmssdk.ServiceDeleteKey(ctx, attrs); err != nil {
 			km.logger.Warn("Failed to delete existing key", "type", keyType, "error", err)
 			// Continue anyway - generation might still work
 		}
@@ -372,7 +372,7 @@ func (km *XKMSManager) generateKey(ctx context.Context, keyType KeyType, descrip
 		}
 	} else {
 		// Fallback to service (returns opaque key - export won't work)
-		privateKey, genErr = xkmssdk.ServiceGenerateKey(attrs)
+		privateKey, genErr = xkmssdk.ServiceGenerateKey(ctx, attrs)
 		if genErr != nil {
 			return fmt.Errorf("%w: failed to generate key via XKMS service: %v", ErrKeyGenFailed, genErr)
 		}
@@ -402,7 +402,7 @@ func (km *XKMSManager) generateKey(ctx context.Context, keyType KeyType, descrip
 	}
 
 	// Save certificate via go-xkms service using the key attributes
-	if err := xkmssdk.ServiceSaveCertificate(attrs, cert); err != nil {
+	if err := xkmssdk.ServiceSaveCertificate(ctx, attrs, cert); err != nil {
 		return fmt.Errorf("%w: failed to save certificate: %v", ErrKeyGenFailed, err)
 	}
 
@@ -498,7 +498,7 @@ func (km *XKMSManager) GetKeyPaths() KeyPaths {
 
 // GetSigner returns a crypto.Signer for the specified key type using go-xkms service.
 // This supports both software keys and hardware-backed keys (TPM, HSM, etc.) via go-xkms.
-func (km *XKMSManager) GetSigner(keyType KeyType) (crypto.Signer, error) {
+func (km *XKMSManager) GetSigner(ctx context.Context, keyType KeyType) (crypto.Signer, error) {
 	// Build KeyAttributes to retrieve the key by its CN (Common Name)
 	storeType := backendToStoreType(km.config.Backend)
 	attrs := &xkmssdk.KeyAttributes{
@@ -512,7 +512,7 @@ func (km *XKMSManager) GetSigner(keyType KeyType) (crypto.Signer, error) {
 	}
 
 	// Get the key using KeyAttributes
-	key, err := xkmssdk.ServiceKey(attrs)
+	key, err := xkmssdk.ServiceKey(ctx, attrs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get key: %w", err)
 	}

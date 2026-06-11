@@ -479,7 +479,7 @@ func (ks *QuicBaaSKeyStore) Decrypter(ctx context.Context, attrs *xkmssdk.KeyAtt
 // are indexed by their Subject.CommonName.
 
 // SaveCert saves a certificate.
-func (ks *QuicBaaSKeyStore) SaveCert(keyID string, cert *x509.Certificate) error {
+func (ks *QuicBaaSKeyStore) SaveCert(_ context.Context, keyID string, cert *x509.Certificate) error {
 	if ks.certStore == nil {
 		return ErrInvalidInput{Field: "certStore", Reason: "cert store not configured"}
 	}
@@ -487,7 +487,7 @@ func (ks *QuicBaaSKeyStore) SaveCert(keyID string, cert *x509.Certificate) error
 }
 
 // GetCert retrieves a certificate.
-func (ks *QuicBaaSKeyStore) GetCert(keyID string) (*x509.Certificate, error) {
+func (ks *QuicBaaSKeyStore) GetCert(_ context.Context, keyID string) (*x509.Certificate, error) {
 	if ks.certStore == nil {
 		return nil, ErrInvalidInput{Field: "certStore", Reason: "cert store not configured"}
 	}
@@ -495,7 +495,7 @@ func (ks *QuicBaaSKeyStore) GetCert(keyID string) (*x509.Certificate, error) {
 }
 
 // DeleteCert deletes a certificate.
-func (ks *QuicBaaSKeyStore) DeleteCert(keyID string) error {
+func (ks *QuicBaaSKeyStore) DeleteCert(_ context.Context, keyID string) error {
 	if ks.certStore == nil {
 		return ErrInvalidInput{Field: "certStore", Reason: "cert store not configured"}
 	}
@@ -503,7 +503,7 @@ func (ks *QuicBaaSKeyStore) DeleteCert(keyID string) error {
 }
 
 // SaveCertChain saves a certificate chain.
-func (ks *QuicBaaSKeyStore) SaveCertChain(keyID string, certs []*x509.Certificate) error {
+func (ks *QuicBaaSKeyStore) SaveCertChain(_ context.Context, keyID string, certs []*x509.Certificate) error {
 	if ks.certStore == nil {
 		return ErrInvalidInput{Field: "certStore", Reason: "cert store not configured"}
 	}
@@ -511,7 +511,7 @@ func (ks *QuicBaaSKeyStore) SaveCertChain(keyID string, certs []*x509.Certificat
 }
 
 // GetCertChain retrieves a certificate chain.
-func (ks *QuicBaaSKeyStore) GetCertChain(keyID string) ([]*x509.Certificate, error) {
+func (ks *QuicBaaSKeyStore) GetCertChain(_ context.Context, keyID string) ([]*x509.Certificate, error) {
 	if ks.certStore == nil {
 		return nil, ErrInvalidInput{Field: "certStore", Reason: "cert store not configured"}
 	}
@@ -519,7 +519,7 @@ func (ks *QuicBaaSKeyStore) GetCertChain(keyID string) ([]*x509.Certificate, err
 }
 
 // ListCerts returns all certificate IDs currently stored.
-func (ks *QuicBaaSKeyStore) ListCerts() ([]string, error) {
+func (ks *QuicBaaSKeyStore) ListCerts(_ context.Context) ([]string, error) {
 	if ks.certStore == nil {
 		return nil, ErrInvalidInput{Field: "certStore", Reason: "cert store not configured"}
 	}
@@ -537,7 +537,7 @@ func (ks *QuicBaaSKeyStore) ListCerts() ([]string, error) {
 }
 
 // CertExists checks if a certificate exists for the given key ID.
-func (ks *QuicBaaSKeyStore) CertExists(keyID string) (bool, error) {
+func (ks *QuicBaaSKeyStore) CertExists(ctx context.Context, keyID string) (bool, error) {
 	if ks.certStore == nil {
 		return false, ErrInvalidInput{Field: "certStore", Reason: "cert store not configured"}
 	}
@@ -580,11 +580,11 @@ func (ks *QuicBaaSKeyStore) GetTLSCertificate(ctx context.Context, keyID string,
 		return tls.Certificate{}, err
 	}
 
-	chain, chainErr := ks.GetCertChain(keyID)
+	chain, chainErr := ks.GetCertChain(ctx, keyID)
 	if chainErr != nil || len(chain) == 0 {
 		// Chain not available — fall back to the leaf cert under the
 		// same CN. GetCert handles the bare cert lookup.
-		leaf, leafErr := ks.GetCert(keyID)
+		leaf, leafErr := ks.GetCert(ctx, keyID)
 		if leafErr != nil {
 			return tls.Certificate{}, ErrKeyNotFound{KeyID: keyID, Cause: leafErr}
 		}

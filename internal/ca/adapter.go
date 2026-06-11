@@ -296,7 +296,7 @@ func (a *Adapter) CA() CertificateAuthority {
 //
 // Returns ErrNilRequest if the request argument is nil in embedded mode (where
 // the request fields are dereferenced to build SignOptions).
-func (a *Adapter) SignCSR(csrPEM []byte, request *CertificateRequest) (*x509.Certificate, error) {
+func (a *Adapter) SignCSR(ctx context.Context, csrPEM []byte, request *CertificateRequest) (*x509.Certificate, error) {
 	if !a.started.Load() {
 		return nil, ErrAdapterNotStarted
 	}
@@ -323,7 +323,7 @@ func (a *Adapter) SignCSR(csrPEM []byte, request *CertificateRequest) (*x509.Cer
 			Signer:       request.Signer,
 			IssuerCert:   request.IssuerCert,
 		}
-		return a.embedded.SignCSR(csrPEM, opts)
+		return a.embedded.SignCSR(ctx, csrPEM, opts)
 	}
 
 	// Remote mode - CSR signing goes through ACME workflow
@@ -335,7 +335,7 @@ func (a *Adapter) SignCSR(csrPEM []byte, request *CertificateRequest) (*x509.Cer
 // Only available in embedded mode.
 //
 // Returns ErrNilRequest if the request argument is nil in embedded mode.
-func (a *Adapter) IssueCertificate(request *CertificateRequest) (*x509.Certificate, error) {
+func (a *Adapter) IssueCertificate(ctx context.Context, request *CertificateRequest) (*x509.Certificate, error) {
 	if !a.started.Load() {
 		return nil, ErrAdapterNotStarted
 	}
@@ -353,7 +353,7 @@ func (a *Adapter) IssueCertificate(request *CertificateRequest) (*x509.Certifica
 		if request == nil {
 			return nil, ErrNilRequest
 		}
-		issued, err := a.embedded.IssueCertificate(request)
+		issued, err := a.embedded.IssueCertificate(ctx, request)
 		if err != nil {
 			return nil, err
 		}
@@ -371,7 +371,7 @@ func (a *Adapter) IssueCertificate(request *CertificateRequest) (*x509.Certifica
 // In remote mode, uses the SDK client's certificate revocation.
 //
 // Returns ErrNilCertificate if certificate is nil in embedded mode.
-func (a *Adapter) Revoke(certificate *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+func (a *Adapter) Revoke(ctx context.Context, certificate *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
 	if !a.started.Load() {
 		return ErrAdapterNotStarted
 	}
@@ -389,7 +389,7 @@ func (a *Adapter) Revoke(certificate *x509.Certificate, keyAttrs *xkmssdk.KeyAtt
 		if certificate == nil {
 			return ErrNilCertificate
 		}
-		return a.embedded.RevokeCert(certificate, quicbaasca.RevokeOptions{
+		return a.embedded.RevokeCert(ctx, certificate, quicbaasca.RevokeOptions{
 			DeleteKeys: keyAttrs != nil,
 		})
 	}
@@ -498,7 +498,7 @@ func (a *Adapter) TrustedIntermediate() (*x509.Certificate, error) {
 
 // Signer returns a crypto.Signer for the CA's signing key.
 // Only available in embedded mode.
-func (a *Adapter) Signer() (crypto.Signer, error) {
+func (a *Adapter) Signer(ctx context.Context) (crypto.Signer, error) {
 	if !a.started.Load() {
 		return nil, ErrAdapterNotStarted
 	}
@@ -513,7 +513,7 @@ func (a *Adapter) Signer() (crypto.Signer, error) {
 		if a.embedded == nil {
 			return nil, ErrCANotInitialized
 		}
-		return a.embedded.Signer()
+		return a.embedded.Signer(ctx)
 	}
 
 	return nil, &AdapterError{Op: "Signer", Msg: "direct signer access not supported in remote mode"}
@@ -521,7 +521,7 @@ func (a *Adapter) Signer() (crypto.Signer, error) {
 
 // Certificate retrieves a previously issued certificate.
 // The attrs argument may be nil; the embedded CA's behavior governs nil handling.
-func (a *Adapter) Certificate(attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
+func (a *Adapter) Certificate(ctx context.Context, attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
 	if !a.started.Load() {
 		return nil, ErrAdapterNotStarted
 	}
@@ -536,7 +536,7 @@ func (a *Adapter) Certificate(attrs *xkmssdk.KeyAttributes) (*x509.Certificate, 
 		if a.embedded == nil {
 			return nil, ErrCANotInitialized
 		}
-		return a.embedded.Certificate(attrs)
+		return a.embedded.Certificate(ctx, attrs)
 	}
 
 	return nil, &AdapterError{Op: "Certificate", Msg: "direct certificate retrieval not supported in remote mode, use SDK Certificate().Get()"}
@@ -545,7 +545,7 @@ func (a *Adapter) Certificate(attrs *xkmssdk.KeyAttributes) (*x509.Certificate, 
 // ImportCertificate imports a certificate into the CA's certificate store.
 //
 // Returns ErrNilCertificate if certificate is nil in embedded mode.
-func (a *Adapter) ImportCertificate(certificate *x509.Certificate) error {
+func (a *Adapter) ImportCertificate(ctx context.Context, certificate *x509.Certificate) error {
 	if !a.started.Load() {
 		return ErrAdapterNotStarted
 	}
@@ -563,7 +563,7 @@ func (a *Adapter) ImportCertificate(certificate *x509.Certificate) error {
 		if certificate == nil {
 			return ErrNilCertificate
 		}
-		return a.embedded.ImportCertificate(certificate)
+		return a.embedded.ImportCertificate(ctx, certificate)
 	}
 
 	return &AdapterError{Op: "ImportCertificate", Msg: "certificate import not supported in remote mode"}

@@ -452,7 +452,7 @@ func NewApp() *App {
 
 // Initialize and start the platform based on the provided
 // initialization parameters.
-func (app *App) Init(initParams *AppInitParams) (*App, error) {
+func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, error) {
 	// Override config file with CLI options FIRST (matching original behavior)
 	// The config file is loaded next and will overwrite these with config values
 	// This allows config file settings (like debug: true) to take effect
@@ -620,7 +620,7 @@ func (app *App) Init(initParams *AppInitParams) (*App, error) {
 	// node coming online), it runs ProvisionPlatform which mints IAK +
 	// IDevID and — when acme.client.enrollment is configured — enrolls
 	// the device via endorse-01/enroll-01 with the CP's CA.
-	if err := app.InitTPM(soPIN, userPIN, initParams); err != nil {
+	if err := app.InitTPM(ctx, soPIN, userPIN, initParams); err != nil {
 		return nil, err
 	}
 
@@ -1432,7 +1432,7 @@ func (app *App) ParsePINs(soPIN, userPIN []byte) (xkmssdk.Password, xkmssdk.Pass
 // byte cryptographic PIN will be generated. The random input source for
 // entropy is the Golang runtime rand.Reader. Possibly in the future this
 // will support a HSM TRNG.
-func (app *App) InitTPM(soPIN, userPIN xkmssdk.Password, initParams *AppInitParams) error {
+func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, initParams *AppInitParams) error {
 	err := app.OpenTPM(initParams.Initialize)
 	needsProvisioning := false
 	if err != nil {
@@ -1577,7 +1577,7 @@ func (app *App) InitTPM(soPIN, userPIN xkmssdk.Password, initParams *AppInitPara
 				_ = os.Remove("/var/lib/tpm2/ppi-clear-attempted")
 			}
 		}
-		if _, err := app.ProvisionPlatform(soPIN, userPIN, initParams); err != nil {
+		if _, err := app.ProvisionPlatform(ctx, soPIN, userPIN, initParams); err != nil {
 			return err
 		}
 	}
@@ -1864,7 +1864,7 @@ func (app *App) InitPlatformKeyStore(soPIN, userPIN xkmssdk.Password) error {
 
 // Initializes a new ACME client using the account email provided in the
 // platform configuration.
-func (app *App) InitACMEClient(initialize bool) error {
+func (app *App) InitACMEClient(ctx context.Context, initialize bool) error {
 	if app.ACMEConfig == nil || app.ACMEConfig.Client == nil {
 		return nil
 	}
@@ -1873,7 +1873,7 @@ func (app *App) InitACMEClient(initialize bool) error {
 	if app.CA == nil {
 		return errors.New("CA not configured")
 	}
-	signer, err := app.CA.Signer()
+	signer, err := app.CA.Signer(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account signer: %w", err)
 	}
@@ -2050,6 +2050,7 @@ func (app *App) exportCertToDisk(name string, cert *x509.Certificate) error {
 }
 
 func (app *App) ProvisionPlatform(
+	ctx context.Context,
 	soPIN, userPIN xkmssdk.Password,
 	initParams *AppInitParams) (*xkmssdk.KeyAttributes, error) {
 
@@ -2090,7 +2091,7 @@ func (app *App) ProvisionPlatform(
 
 	// Initialize the Certificate Authorities
 	if app.CAConfig != nil {
-		if _, err := app.InitCA(soPIN, userPIN, initParams); err != nil {
+		if _, err := app.InitCA(ctx, soPIN, userPIN, initParams); err != nil {
 			return nil, err
 		}
 	}
@@ -2121,7 +2122,7 @@ func (app *App) ProvisionPlatform(
 			// the OS trust store (e.g., installed by the trusted-platform ISO
 			// installer or platform-initrd). Only fall back to BootstrapTrust when
 			// the initial attempt fails, which covers non-trusted OS environments.
-			if err := app.InitACMEClient(true); err != nil {
+			if err := app.InitACMEClient(ctx, true); err != nil {
 				app.Logger.Warn("ACME client init failed, attempting trust bootstrap",
 					"error", err)
 				if bsErr := app.BootstrapTrust(context.Background()); bsErr != nil {
@@ -2129,7 +2130,7 @@ func (app *App) ProvisionPlatform(
 					return nil, fmt.Errorf("ACME client init failed: %w (bootstrap: %v)", err, bsErr)
 				}
 				// Retry after bootstrap installed the server CA bundle
-				if err := app.InitACMEClient(true); err != nil {
+				if err := app.InitACMEClient(ctx, true); err != nil {
 					return nil, err
 				}
 			}
@@ -2137,7 +2138,7 @@ func (app *App) ProvisionPlatform(
 	}
 
 	// Imports the TPM Endorsement Key into the Certificate Authority
-	ekCert, err := app.ImportEndorsementKeyCertificate()
+	ekCert, err := app.ImportEndorsementKeyCertificate(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -2162,7 +2163,7 @@ func (app *App) ProvisionPlatform(
 			app.ACMEConfig.Client.Enrollment != nil {
 
 			if app.ACMEClient == nil {
-				if err := app.InitACMEClient(initParams.Initialize); err != nil {
+				if err := app.InitACMEClient(ctx, initParams.Initialize); err != nil {
 					return nil, err
 				}
 			}
@@ -2196,7 +2197,7 @@ func (app *App) ProvisionPlatform(
 			if enrollResult.IAKCertificate != nil {
 				app.Logger.Info("Importing IAK certificate from ACME enrollment",
 					slog.String("subject", enrollResult.IAKCertificate.Subject.CommonName))
-				if err := app.CA.ImportCertificate(enrollResult.IAKCertificate); err != nil {
+				if err := app.CA.ImportCertificate(ctx, enrollResult.IAKCertificate); err != nil {
 					app.Logger.Error(err, slog.String("context", "Failed to import IAK certificate"))
 				}
 				fmt.Println("IAK Certificate:")
@@ -2207,7 +2208,7 @@ func (app *App) ProvisionPlatform(
 			if enrollResult.IDevIDCertificate != nil {
 				app.Logger.Info("Importing IDevID certificate from ACME enrollment",
 					slog.String("subject", enrollResult.IDevIDCertificate.Subject.CommonName))
-				if err := app.CA.ImportCertificate(enrollResult.IDevIDCertificate); err != nil {
+				if err := app.CA.ImportCertificate(ctx, enrollResult.IDevIDCertificate); err != nil {
 					app.Logger.Error(err, slog.String("context", "Failed to import IDevID certificate"))
 				}
 				fmt.Println("IDevID Certificate:")
@@ -2272,7 +2273,7 @@ func (app *App) ProvisionPlatform(
 			}
 
 			// Sign TCG_CSR_IDEVID, create IDevID x509 device certificate
-			iakDER, idevidDER, err := app.CA.SignTCGCSRIDevID(tcgCSRIDevID, &quicbaasca.CACertificateRequest{
+			iakDER, idevidDER, err := app.CA.SignTCGCSRIDevID(ctx, tcgCSRIDevID, &quicbaasca.CACertificateRequest{
 				// KeyAttributes: ekAttrs,
 				KeyAttributes: idevidAttrs,
 				Valid:         0, // Valid until 99991231235959Z
@@ -2303,7 +2304,7 @@ func (app *App) ProvisionPlatform(
 			if err != nil {
 				return nil, err
 			}
-			if err := app.CA.ImportCertificate(iakCert); err != nil {
+			if err := app.CA.ImportCertificate(ctx, iakCert); err != nil {
 				return nil, err
 			}
 
@@ -2312,7 +2313,7 @@ func (app *App) ProvisionPlatform(
 			if err != nil {
 				return nil, err
 			}
-			if err := app.CA.ImportCertificate(idevidCert); err != nil {
+			if err := app.CA.ImportCertificate(ctx, idevidCert); err != nil {
 				return nil, err
 			}
 
@@ -2323,13 +2324,13 @@ func (app *App) ProvisionPlatform(
 			}
 
 			// Verify the quote and import attestation data
-			if err := app.VerifyLocalQuote(iakAttrs, quote, nonce); err != nil {
+			if err := app.VerifyLocalQuote(ctx, iakAttrs, quote, nonce); err != nil {
 				return nil, fmt.Errorf("failed to verify local quote: %w", err)
 			}
 		}
 	}
 
-	if err := app.InitWebServer(); err != nil {
+	if err := app.InitWebServer(ctx); err != nil {
 		return nil, err
 	}
 
@@ -2434,7 +2435,7 @@ func (app *App) FetchProfileAndActivate(
 // and imported into the TPM or certificate store. If the ACME client
 // is configured, the EK certificate is requested from the Enterprise CA,
 // otherwise, the EK certificate is generated using the local CA.
-func (app *App) ImportEndorsementKeyCertificate() (*x509.Certificate, error) {
+func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Certificate, error) {
 
 	if app.CAConfig == nil {
 		return nil, ErrMissingEKWithoutEnabledCA
@@ -2527,7 +2528,7 @@ func (app *App) ImportEndorsementKeyCertificate() (*x509.Certificate, error) {
 			} else {
 				// Generate new Endorsement Key x509 Certificate using the local CA and save
 				// the certificate to blob storage.
-				ekCert, err = app.CA.IssueEKCertificate(&certReq, publicKey)
+				ekCert, err = app.CA.IssueEKCertificate(ctx, &certReq, publicKey)
 				if err != nil {
 					return nil, err
 				}
@@ -2587,7 +2588,7 @@ func (app *App) ImportEndorsementKeyCertificate() (*x509.Certificate, error) {
 }
 
 // Loads an initialized Certificate Authority
-func (app *App) LoadCA(soPIN, userPIN xkmssdk.Password) error {
+func (app *App) LoadCA(ctx context.Context, soPIN, userPIN xkmssdk.Password) error {
 
 	if len(app.CAConfig.Identity) == 0 {
 		return trustedca.CAErrInvalidConfig
@@ -2639,7 +2640,7 @@ func (app *App) LoadCA(soPIN, userPIN xkmssdk.Password) error {
 	// through NewCA which auto-initializes both. We then re-load from
 	// storage via Load() to match the "lazy" (load existing) contract of
 	// this function.
-	root, intermediate, err := quicbaasca.NewCA(&quicbaasca.Params{
+	root, intermediate, err := quicbaasca.NewCA(ctx, &quicbaasca.Params{
 		Identity:           app.CAConfig.Identity,
 		KeyStoreFactory:    keyStoreFactoryAdapter(storeFactory),
 		CertStoreFactory:   certStoreFactoryAdapter(storeFactory),
@@ -2657,7 +2658,7 @@ func (app *App) LoadCA(soPIN, userPIN xkmssdk.Password) error {
 	// Load existing CA from storage to honor the "load existing" contract
 	// previously expressed via LazyInitialization=true. Errors here are
 	// surfaced to the caller so misconfigured deployments fail fast.
-	if err := caInstance.Load(); err != nil {
+	if err := caInstance.Load(ctx); err != nil {
 		return fmt.Errorf("failed to load CA: %w", err)
 	}
 
@@ -2673,7 +2674,7 @@ func (app *App) LoadCA(soPIN, userPIN xkmssdk.Password) error {
 // Initializes all Certificate Authorities provided in the
 // platform configuration file and returns the selected
 // "Platform CA" as the default CA used for Platform operations.
-func (app *App) InitCA(soPIN, userPIN xkmssdk.Password, initParams *AppInitParams) (quicbaasca.CACertificateAuthority, error) {
+func (app *App) InitCA(ctx context.Context, soPIN, userPIN xkmssdk.Password, initParams *AppInitParams) (quicbaasca.CACertificateAuthority, error) {
 
 	if app.TPM == nil {
 		if err := app.OpenTPM(initParams.Initialize); err != nil {
@@ -2727,7 +2728,7 @@ func (app *App) InitCA(soPIN, userPIN xkmssdk.Password, initParams *AppInitParam
 	// per CA CN at platformDir/ca/<cn>/).
 	storeFactory := NewCAStoreFactory(app, app.PlatformDir, app.Storage, soPIN, userPIN)
 
-	root, intermediate, err := quicbaasca.NewCA(&quicbaasca.Params{
+	root, intermediate, err := quicbaasca.NewCA(ctx, &quicbaasca.Params{
 		Identity:           app.CAConfig.Identity,
 		KeyStoreFactory:    keyStoreFactoryAdapter(storeFactory),
 		CertStoreFactory:   certStoreFactoryAdapter(storeFactory),
@@ -2765,6 +2766,7 @@ func (app *App) AttestLocal(serverAttrs *xkmssdk.KeyAttributes) (xkmssdk.Quote, 
 
 // Verifies a local TPM 2.0 quote
 func (app *App) VerifyLocalQuote(
+	ctx context.Context,
 	akAttrs *xkmssdk.KeyAttributes,
 	quote xkmssdk.Quote,
 	nonce []byte) error {
@@ -2775,7 +2777,7 @@ func (app *App) VerifyLocalQuote(
 		return fmt.Errorf("%w: %v", ErrInvalidLocalAttestationSignature, err)
 	}
 
-	if err := app.CA.ImportLocalAttestation(akAttrs, &quote); err != nil {
+	if err := app.CA.ImportLocalAttestation(ctx, akAttrs, &quote); err != nil {
 		return fmt.Errorf("failed to import local attestation: %w", err)
 	}
 
@@ -2879,7 +2881,7 @@ func isCertNotFoundError(err error) bool {
 // If an ACME cross-sign configuration is also present in the certificate configuration,
 // the ACME directory provided in the cross-signing configuration will be used to
 // cross-sign the certificate.
-func (app *App) InitWebServer() error {
+func (app *App) InitWebServer(ctx context.Context) error {
 
 	if len(app.WebServices) == 0 {
 		app.Logger.Warn("web services disabled")
@@ -2905,7 +2907,7 @@ func (app *App) InitWebServer() error {
 			wsName = "default"
 		}
 
-		if err := app.initWebServiceKeyAttributes(wsConfig); err != nil {
+		if err := app.initWebServiceKeyAttributes(ctx, wsConfig); err != nil {
 			return fmt.Errorf("failed to initialize webservice %s: %w", wsName, err)
 		}
 	}
@@ -2915,7 +2917,7 @@ func (app *App) InitWebServer() error {
 
 // initWebServiceKeyAttributes initializes the key attributes and TLS certificate
 // for a single webservice. This is called for each configured webservice.
-func (app *App) initWebServiceKeyAttributes(wsConfig *v1.Config) error {
+func (app *App) initWebServiceKeyAttributes(ctx context.Context, wsConfig *v1.Config) error {
 	wsName := wsConfig.Name
 	if wsName == "" {
 		wsName = "default"
@@ -3007,7 +3009,7 @@ func (app *App) initWebServiceKeyAttributes(wsConfig *v1.Config) error {
 			"webservice", wsName,
 			"cn", keyAttrs.CN)
 
-		_, err := app.CA.PEM(keyAttrs)
+		_, err := app.CA.PEM(ctx, keyAttrs)
 		if err == nil {
 			// Cert exists and loaded successfully, keep PlatformPassword
 			app.Logger.Debug("PlatformPassword configured for webservice (existing cert)",
@@ -3064,7 +3066,7 @@ func (app *App) initWebServiceKeyAttributes(wsConfig *v1.Config) error {
 			"webservice", wsName,
 			"cn", keyAttrs.CN)
 
-		_, err := app.CA.PEM(keyAttrs)
+		_, err := app.CA.PEM(ctx, keyAttrs)
 		if err == nil {
 			goto certLoaded
 		}
@@ -3088,7 +3090,7 @@ func (app *App) initWebServiceKeyAttributes(wsConfig *v1.Config) error {
 	}
 
 	// Issue new certificate
-	if err := app.issueWebServiceCertificate(wsName, wsConfig, keyAttrs); err != nil {
+	if err := app.issueWebServiceCertificate(ctx, wsName, wsConfig, keyAttrs); err != nil {
 		return err
 	}
 
@@ -3099,7 +3101,7 @@ certLoaded:
 }
 
 // issueWebServiceCertificate issues a new TLS certificate for a webservice
-func (app *App) issueWebServiceCertificate(wsName string, wsConfig *v1.Config, keyAttrs *xkmssdk.KeyAttributes) error {
+func (app *App) issueWebServiceCertificate(ctx context.Context, wsName string, wsConfig *v1.Config, keyAttrs *xkmssdk.KeyAttributes) error {
 	var certDER, xsignedDER []byte
 
 	// Check if this webservice runs an ACME server
@@ -3176,21 +3178,21 @@ func (app *App) issueWebServiceCertificate(wsName string, wsConfig *v1.Config, k
 			// Try ACME client init — the CA bundle is typically already in the OS
 			// trust store (installed by ISO installer or platform-initrd). Fall
 			// back to BootstrapTrust only on TLS failure.
-			if err := app.InitACMEClient(true); err != nil {
+			if err := app.InitACMEClient(ctx, true); err != nil {
 				app.Logger.Warn("ACME client init failed, attempting trust bootstrap",
 					"webservice", wsName, "error", err)
 				if bsErr := app.BootstrapTrust(context.Background()); bsErr != nil {
 					app.Logger.Error(bsErr, "Trust bootstrap also failed", "webservice", wsName)
 					return fmt.Errorf("failed to initialize ACME client for webservice %s: %w (bootstrap: %v)", wsName, err, bsErr)
 				}
-				if err := app.InitACMEClient(true); err != nil {
+				if err := app.InitACMEClient(ctx, true); err != nil {
 					app.Logger.Error(err, "ACME client init failed after trust bootstrap", "webservice", wsName)
 					return fmt.Errorf("failed to initialize ACME client for webservice %s after bootstrap: %w", wsName, err)
 				}
 			}
 		}
 
-		csrDER, err := app.CA.CreateCSR(&quicbaasca.CACertificateRequest{
+		csrDER, err := app.CA.CreateCSR(ctx, &quicbaasca.CACertificateRequest{
 			KeyAttributes: keyAttrs,
 			Valid:         365,
 			Subject: quicbaasca.CASubject{
@@ -3245,7 +3247,7 @@ func (app *App) issueWebServiceCertificate(wsName string, wsConfig *v1.Config, k
 			KeyAttributes: keyAttrs,
 		}
 
-		localCert, err := app.CA.IssueCertificate(certReq)
+		localCert, err := app.CA.IssueCertificate(ctx, certReq)
 		if err != nil {
 			app.Logger.Error(err, "Failed to issue TLS certificate from local CA", "webservice", wsName, "cn", keyAttrs.CN)
 			return fmt.Errorf("failed to issue certificate for webservice %s: %w", wsName, err)
@@ -3272,7 +3274,7 @@ func (app *App) issueWebServiceCertificate(wsName string, wsConfig *v1.Config, k
 				"webservice", wsName, "cn", keyAttrs.CN,
 				"cross_signer", wsConfig.Certificate.ACME.CrossSign.DirectoryURL)
 
-			csrDER, err := app.CA.CreateCSR(certReq)
+			csrDER, err := app.CA.CreateCSR(ctx, certReq)
 			if err != nil {
 				app.Logger.Warn("cross-sign skipped — CSR creation failed (non-fatal)",
 					"webservice", wsName, "cn", keyAttrs.CN, "err", err.Error())
@@ -3325,7 +3327,7 @@ func (app *App) issueWebServiceCertificate(wsName string, wsConfig *v1.Config, k
 	// picks it up alongside BMC targets. Replace (not Register)
 	// because re-issuance on renewal re-enters this function and we
 	// want the update to be idempotent.
-	if target, err := buildWebServiceCertTarget(wsName, wsConfig, keyAttrs, certDER, app); err != nil {
+	if target, err := buildWebServiceCertTarget(ctx, wsName, wsConfig, keyAttrs, certDER, app); err != nil {
 		app.Logger.Warn("failed to build webservice cert target",
 			"webservice", wsName, "error", err)
 		// Non-fatal: cert is issued and installed; renewal won't
@@ -3355,7 +3357,7 @@ func (app *App) certTargets() *CertTargetRegistry {
 // sees the certificate actually being served, not a stale cached copy.
 // The Reissue closure re-invokes issueWebServiceCertificate, which
 // loops back through here to update the target in place via Replace.
-func buildWebServiceCertTarget(wsName string, wsConfig *v1.Config, keyAttrs *xkmssdk.KeyAttributes, certDER []byte, app *App) (*CertTarget, error) {
+func buildWebServiceCertTarget(ctx context.Context, wsName string, wsConfig *v1.Config, keyAttrs *xkmssdk.KeyAttributes, certDER []byte, app *App) (*CertTarget, error) {
 	// Build a trusted root pool from the platform CA so the live
 	// handshake validates the served certificate without
 	// InsecureSkipVerify.
@@ -3399,7 +3401,7 @@ func buildWebServiceCertTarget(wsName string, wsConfig *v1.Config, keyAttrs *xkm
 			return certs[0], nil
 		},
 		Reissue: func(context.Context) error {
-			return app.issueWebServiceCertificate(wsName, wsConfig, keyAttrs)
+			return app.issueWebServiceCertificate(ctx, wsName, wsConfig, keyAttrs)
 		},
 	}, nil
 }

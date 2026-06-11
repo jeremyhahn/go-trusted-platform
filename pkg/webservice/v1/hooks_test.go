@@ -46,19 +46,19 @@ type mockAttestationImporter struct {
 	lastAKAttrs    *xkmssdk.KeyAttributes
 }
 
-func (m *mockAttestationImporter) ImportAttestationEventLog(akAttrs *xkmssdk.KeyAttributes, eventLog []byte) error {
+func (m *mockAttestationImporter) ImportAttestationEventLog(_ context.Context, akAttrs *xkmssdk.KeyAttributes, eventLog []byte) error {
 	m.eventLogCalled = true
 	m.lastAKAttrs = akAttrs
 	return m.eventLogErr
 }
 
-func (m *mockAttestationImporter) ImportAttestationQuote(akAttrs *xkmssdk.KeyAttributes, quote []byte) error {
+func (m *mockAttestationImporter) ImportAttestationQuote(_ context.Context, akAttrs *xkmssdk.KeyAttributes, quote []byte) error {
 	m.quoteCalled = true
 	m.lastAKAttrs = akAttrs
 	return m.quoteErr
 }
 
-func (m *mockAttestationImporter) ImportAttestationPCRs(akAttrs *xkmssdk.KeyAttributes, pcrs []byte) error {
+func (m *mockAttestationImporter) ImportAttestationPCRs(_ context.Context, akAttrs *xkmssdk.KeyAttributes, pcrs []byte) error {
 	m.pcrsCalled = true
 	m.lastAKAttrs = akAttrs
 	return m.pcrsErr

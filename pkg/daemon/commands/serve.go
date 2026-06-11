@@ -418,6 +418,37 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 }
 
 // =============================================================================
+// bridgePlatformTokenConfig
+// =============================================================================
+
+// bridgePlatformTokenConfig projects the operator's webservice
+// JWT.PlatformToken block (pkg/webservice/v1.PlatformTokenConfig) onto the
+// daemon-layer daemon.PlatformTokenConfig consumed by daemon.New to build the
+// shared gRPC/QUIC/MCP broker-token validator.
+//
+// The mapping is field-for-field with the HTTP middleware path
+// (pkg/webservice/v1.HandlerRegistry.PlatformTokenMiddleware): the same
+// Issuer/JWKSURL/Audience/AllowBearer fields are carried through, and
+// CacheTTLSeconds (an int64 second count) is converted to the daemon's
+// CacheTTL time.Duration. ClockSkewSeconds is not carried because the daemon
+// validator seam (newPlatformTokenValidator -> platformtoken.Options) does not
+// expose a clock-skew input, matching the HTTP path which also drops it.
+//
+// A disabled (Enabled == false) input yields a zero-Enabled daemon config, so
+// an absent webservice JWT.PlatformToken section keeps daemon.New on its legacy
+// per-transport validators and does not fail boot.
+func bridgePlatformTokenConfig(src v1.PlatformTokenConfig) daemon.PlatformTokenConfig {
+	return daemon.PlatformTokenConfig{
+		Enabled:     src.Enabled,
+		Issuer:      src.Issuer,
+		JWKSURL:     src.JWKSURL,
+		Audience:    src.Audience,
+		AllowBearer: src.AllowBearer,
+		CacheTTL:    time.Duration(src.CacheTTLSeconds) * time.Second,
+	}
+}
+
+// =============================================================================
 // serveCmd
 // =============================================================================
 
@@ -455,11 +486,11 @@ Example:
 		// run in a "limited functionality" mode where critical services
 		// (CA, key store, DNSSEC signing) are silently broken.
 		var appErr error
-		if _, appErr = App.Init(InitParams); appErr != nil {
+		if _, appErr = App.Init(ctx, InitParams); appErr != nil {
 			if errors.Is(appErr, app.ErrTPMNotInitialized) {
 				logger.Info("Platform not initialized, auto-provisioning...")
 				InitParams.Initialize = true
-				if _, appErr = App.Init(InitParams); appErr != nil {
+				if _, appErr = App.Init(ctx, InitParams); appErr != nil {
 					logger.Error(appErr, "App initialization FAILED during auto-provisioning")
 					cmd.PrintErrln(fmt.Sprintf("FATAL: App initialization failed during auto-provisioning: %v", appErr))
 					os.Exit(2)
@@ -542,9 +573,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			return
 		}
 		logger.Info("runWithWebservices: loading CA")
-		if err := App.LoadCA(soPIN, userPIN); err != nil {
+		if err := App.LoadCA(ctx, soPIN, userPIN); err != nil {
 			logger.Warn("CA not found, attempting to initialize", "error", err)
-			if _, initErr := App.InitCA(soPIN, userPIN, InitParams); initErr != nil {
+			if _, initErr := App.InitCA(ctx, soPIN, userPIN, InitParams); initErr != nil {
 				logger.Error(initErr)
 				cmd.PrintErrln(fmt.Sprintf("Failed to load or initialize CA: load error: %v, init error: %v", err, initErr))
 				return
@@ -559,7 +590,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 
 	logger.Info("runWithWebservices: initializing web server")
 	if App.WebServiceKeyAttributes == nil {
-		if err := App.InitWebServer(); err != nil {
+		if err := App.InitWebServer(ctx); err != nil {
 			logger.Error(err, "runWithWebservices: InitWebServer failed")
 			cmd.PrintErrln(err)
 			return
@@ -738,6 +769,23 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	// Single-node file-backed for today; gatewayd reports here and
 	// reads its desired config from here.
 	gwControl := initGatewayControlPlane(logger, App)
+
+	// Bridge the operator's webservice JWT.PlatformToken block into the
+	// daemon-side validator config so the gRPC/QUIC/MCP transports enforce
+	// the same broker-token liveness/revocation policy as the HTTP path. The
+	// primary webservice config is the canonical source (it owns the broker
+	// issuer/JWKS/audience). When the section is absent or disabled the bridge
+	// produces a zero/disabled daemon config, so boot behavior is unchanged
+	// (the daemon retains its legacy per-transport validators).
+	if primary := App.PrimaryWebService(); primary != nil {
+		daemonConfig.PlatformToken = bridgePlatformTokenConfig(primary.JWT.PlatformToken)
+		if daemonConfig.PlatformToken.Enabled {
+			logger.Info("Bridged webservice JWT.PlatformToken into daemon validator config",
+				"issuer", daemonConfig.PlatformToken.Issuer,
+				"jwks_url", daemonConfig.PlatformToken.JWKSURL,
+				"allow_bearer", daemonConfig.PlatformToken.AllowBearer)
+		}
+	}
 
 	// M6 barrier-unseal gate: bind only the Unix socket + a loopback
 	// /healthz + /init + /unseal HTTP listener and block until the
@@ -1105,6 +1153,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		}
 
 		webserver := webservice.NewWebServerV1(
+			ctx,
 			App.DebugFlag,
 			logger,
 			App.CA,
@@ -1216,9 +1265,9 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 		if pinErr != nil {
 			logger.Warn("CA PIN parsing failed (CA will not be available)", "error", pinErr)
 		} else {
-			if loadErr := App.LoadCA(soPIN, userPIN); loadErr != nil {
+			if loadErr := App.LoadCA(ctx, soPIN, userPIN); loadErr != nil {
 				logger.Warn("CA not found, attempting to initialize", "error", loadErr)
-				if _, initErr := App.InitCA(soPIN, userPIN, InitParams); initErr != nil {
+				if _, initErr := App.InitCA(ctx, soPIN, userPIN, InitParams); initErr != nil {
 					logger.Warn("CA initialization failed (CA will not be available)",
 						"load_error", loadErr, "init_error", initErr)
 				} else {

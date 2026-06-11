@@ -101,11 +101,9 @@ func renderInitShamirDispatch(d *dispatcher, resp *quicbaassdk.QRDBBarrierInitia
 		d.Printer.PrintSuccess("Barrier initialized successfully (Shamir)")
 		d.Printer.PrintKeyValue("Threshold", fmt.Sprintf("%d", resp.Threshold))
 		d.Printer.PrintKeyValue("Total Shares", fmt.Sprintf("%d", resp.TotalShares))
-		if len(resp.Shares) > 0 {
-			d.Printer.PrintWarning("Store the following shares securely. They are only shown once.")
-			for i, s := range resp.Shares {
-				d.Printer.PrintKeyValue(fmt.Sprintf("Share %d", i+1), s)
-			}
+		if resp.ShareCount > 0 {
+			d.Printer.PrintKeyValue("Share Count", fmt.Sprintf("%d", resp.ShareCount))
+			d.Printer.PrintInfo("Shares are sealed to enrolled Security Officers. Use barrier share claim to retrieve individual shares.")
 		}
 		return nil
 	default:
@@ -192,7 +190,6 @@ func dispatchSeal(d *dispatcher) error {
 // dispatchRekey performs the BarrierRekey RPC.
 func dispatchRekey(d *dispatcher, f *rekeyFlags) error {
 	req := &quicbaassdk.QRDBBarrierRekeyRequest{
-		NewSecret: f.secret,
 		SOPin:     f.soPin,
 		Threshold: f.threshold,
 		Total:     f.total,
@@ -213,11 +210,9 @@ func dispatchRekey(d *dispatcher, f *rekeyFlags) error {
 			d.Printer.PrintKeyValue("Threshold", fmt.Sprintf("%d", resp.Threshold))
 			d.Printer.PrintKeyValue("Total Shares", fmt.Sprintf("%d", resp.TotalShares))
 		}
-		if len(resp.Shares) > 0 {
-			d.Printer.PrintWarning("Store the following new shares securely. They are only shown once.")
-			for i, s := range resp.Shares {
-				d.Printer.PrintKeyValue(fmt.Sprintf("Share %d", i+1), s)
-			}
+		if resp.ShareCount > 0 {
+			d.Printer.PrintKeyValue("Share Count", fmt.Sprintf("%d", resp.ShareCount))
+			d.Printer.PrintInfo("New shares are sealed to enrolled Security Officers. Use barrier share claim to retrieve individual shares.")
 		}
 		return nil
 	default:
@@ -246,11 +241,9 @@ func dispatchRecoveryGenerate(d *dispatcher, f *recoveryGenerateFlags) error {
 		d.Printer.PrintSuccess("Recovery shares generated")
 		d.Printer.PrintKeyValue("Threshold", fmt.Sprintf("%d", resp.Threshold))
 		d.Printer.PrintKeyValue("Total", fmt.Sprintf("%d", resp.Total))
-		if len(resp.Keys) > 0 {
-			d.Printer.PrintWarning("Store the following recovery shares securely. They are only shown once.")
-			for i, s := range resp.Keys {
-				d.Printer.PrintKeyValue(fmt.Sprintf("Recovery %d", i+1), s)
-			}
+		if resp.ShareCount > 0 {
+			d.Printer.PrintKeyValue("Share Count", fmt.Sprintf("%d", resp.ShareCount))
+			d.Printer.PrintInfo("Recovery shares are sealed to enrolled Recovery Officers. Use barrier share claim to retrieve individual shares.")
 		}
 		return nil
 	default:

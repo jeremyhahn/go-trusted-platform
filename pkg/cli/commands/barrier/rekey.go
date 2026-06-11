@@ -13,11 +13,12 @@
 
 // rekey.go implements the canonical "barrier rekey" verb.
 //
+// Rekey is a Shamir-only operation: the server generates a fresh unseal key
+// and share set itself. New shares are sealed to enrolled Security Officers
+// and claimed via the ShareClaimBegin/ShareClaimComplete flow.
+//
 // Per the canonical PIN matrix:
-//   - --passphrase  is required (new wrapping passphrase).
-//   - --so-pin  is optional (NO --user-pin — the wire request has no
-//     UserPin field; the PIN backend handles user-PIN rotation
-//     as a separate ceremony).
+//   - --so-pin      is optional (Security Officer PIN verified against the canonical PINBackend).
 //   - --threshold / --total are paired (both supplied or both omitted).
 package barrier
 
@@ -29,7 +30,6 @@ import (
 
 // rekeyFlags holds the canonical `barrier rekey` flag set.
 type rekeyFlags struct {
-	secret    string
 	soPin     string
 	threshold int
 	total     int
@@ -43,20 +43,20 @@ func newRekeyCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Short: "Rekey the barrier",
 		Long: `Generate a new barrier master key and optionally a new Shamir split.
 
-  --passphrase  Required. New wrapping passphrase.
   --so-pin      Optional. Security Officer PIN verified against the canonical PINBackend.
   --threshold   Optional. New Shamir threshold (paired with --total).
   --total       Optional. New Shamir total (paired with --threshold).
 
-When --threshold / --total are omitted the existing share layout is
-preserved. The new shares are returned to stdout and MUST be captured
-and re-distributed before the operator forgets them.`,
+Rekey is a Shamir-only operation. The server generates the new key and share
+material itself. New shares are sealed to enrolled Security Officers and must
+be claimed via the 'barrier share claim' flow.
+
+When --threshold / --total are omitted the existing share layout is preserved.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runRekey(getFlags(), f)
 		},
 	}
-	cmd.Flags().StringVar(&f.secret, "passphrase", "", "New wrapping passphrase (required)")
 	cmd.Flags().StringVar(&f.soPin, "so-pin", "",
 		"Security Officer PIN (canonical PINBackend; no --user-pin counterpart on rekey)")
 	cmd.Flags().IntVar(&f.threshold, "threshold", 0,
@@ -68,9 +68,6 @@ and re-distributed before the operator forgets them.`,
 
 // validateRekeyFlags applies the canonical flag-combination rules.
 func validateRekeyFlags(f *rekeyFlags) error {
-	if f.secret == "" {
-		return ErrMissingSecret{}
-	}
 	// --threshold and --total must be set together (or both omitted).
 	thresholdSet := f.threshold != 0
 	totalSet := f.total != 0

@@ -67,7 +67,7 @@ func NewHandler(
 
 // Writes the web server public key in PEM form
 func (restService *Handler) PublicKey(w http.ResponseWriter, r *http.Request) {
-	cert, err := restService.ca.Certificate(restService.serverKeyAttributes)
+	cert, err := restService.ca.Certificate(r.Context(), restService.serverKeyAttributes)
 	if err != nil {
 		if errors.Is(err, xkmssdk.ErrCertNotFound) || errors.Is(err, trustedca.ErrNotFound) {
 			restService.httpWriter.Error404(w, r, err)
@@ -87,7 +87,7 @@ func (restService *Handler) PublicKey(w http.ResponseWriter, r *http.Request) {
 // Writes the web server x509 certificate in PEM form
 func (restService *Handler) Certificate(w http.ResponseWriter, r *http.Request) {
 	keyAttrs := restService.serverKeyAttributes
-	cert, err := restService.ca.PEM(keyAttrs)
+	cert, err := restService.ca.PEM(r.Context(), keyAttrs)
 	if err != nil {
 		if errors.Is(err, xkmssdk.ErrCertNotFound) || errors.Is(err, trustedca.ErrNotFound) {
 			restService.httpWriter.Error404(w, r, err)
