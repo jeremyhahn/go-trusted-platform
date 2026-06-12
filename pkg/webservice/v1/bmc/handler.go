@@ -58,6 +58,7 @@ type handler struct {
 	responseWriter   response.HttpWriter
 	powerActions     map[string]powerActionHandler
 	enrollDeps       enrollDeps
+	restoreDeps      restoreDeps
 }
 
 // NewHandler creates a new BMC REST handler with the given parameters.

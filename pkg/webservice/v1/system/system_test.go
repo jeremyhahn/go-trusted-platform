@@ -14,6 +14,7 @@
 package system
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -44,7 +45,7 @@ type mockCertificateAuthority struct {
 	trustedca.CACertificateAuthority // Embed to satisfy interface
 }
 
-func (m *mockCertificateAuthority) Certificate(keyAttrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
+func (m *mockCertificateAuthority) Certificate(_ context.Context, keyAttrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
 	args := m.Called(keyAttrs)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -52,7 +53,7 @@ func (m *mockCertificateAuthority) Certificate(keyAttrs *xkmssdk.KeyAttributes) 
 	return args.Get(0).(*x509.Certificate), args.Error(1)
 }
 
-func (m *mockCertificateAuthority) PEM(keyAttrs *xkmssdk.KeyAttributes) ([]byte, error) {
+func (m *mockCertificateAuthority) PEM(_ context.Context, keyAttrs *xkmssdk.KeyAttributes) ([]byte, error) {
 	args := m.Called(keyAttrs)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)

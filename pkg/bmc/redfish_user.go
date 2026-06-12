@@ -87,7 +87,7 @@ var _ ManagedUserManager = (*redfishUserManager)(nil)
 // AccountService. The returned manager owns its HTTP transport and
 // the auth credentials; callers must Close it when finished.
 func NewRedfishUserManager(cfg *Config, logger *slog.Logger) (ManagedUserManager, error) {
-	t, err := newRedfishTransport(cfg, logger)
+	t, err := newRedfishTransport(context.Background(), cfg, logger)
 	if err != nil {
 		return nil, err
 	}

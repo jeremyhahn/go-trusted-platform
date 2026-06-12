@@ -50,7 +50,7 @@ type mockCertificateAuthority struct {
 	revokeFunc              func(certificate *x509.Certificate, opts xkmsca.RevokeOptions) error
 }
 
-func (m *mockCertificateAuthority) SignCSR(csrPEM []byte, opts *xkmsca.SignOptions) (*x509.Certificate, error) {
+func (m *mockCertificateAuthority) SignCSR(_ context.Context, csrPEM []byte, opts *xkmsca.SignOptions) (*x509.Certificate, error) {
 	if m.signCSRFunc != nil {
 		return m.signCSRFunc(csrPEM, opts)
 	}
@@ -68,13 +68,13 @@ func (m *mockCertificateAuthority) CABundleFiltered(storeType xkmssdk.StoreType,
 	}
 	return nil, nil
 }
-func (m *mockCertificateAuthority) ImportCertificate(certificate *x509.Certificate) error {
+func (m *mockCertificateAuthority) ImportCertificate(_ context.Context, certificate *x509.Certificate) error {
 	if m.importCertificateFunc != nil {
 		return m.importCertificateFunc(certificate)
 	}
 	return nil
 }
-func (m *mockCertificateAuthority) Certificate(attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
+func (m *mockCertificateAuthority) Certificate(_ context.Context, attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
 	if m.certificateFunc != nil {
 		return m.certificateFunc(attrs)
 	}
@@ -86,7 +86,7 @@ func (m *mockCertificateAuthority) Verify(certificate *x509.Certificate, xsigner
 	}
 	return nil, nil
 }
-func (m *mockCertificateAuthority) Signer() (crypto.Signer, error) {
+func (m *mockCertificateAuthority) Signer(_ context.Context) (crypto.Signer, error) {
 	if m.signerFunc != nil {
 		return m.signerFunc()
 	}
@@ -104,13 +104,13 @@ func (m *mockCertificateAuthority) TrustedIntermediate() (*x509.Certificate, err
 	}
 	return nil, nil
 }
-func (m *mockCertificateAuthority) IssueCertificate(request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (m *mockCertificateAuthority) IssueCertificate(_ context.Context, request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	if m.issueCertificateFunc != nil {
 		return m.issueCertificateFunc(request)
 	}
 	return nil, nil
 }
-func (m *mockCertificateAuthority) RevokeCert(cert *x509.Certificate, opts xkmsca.RevokeOptions) error {
+func (m *mockCertificateAuthority) RevokeCert(_ context.Context, cert *x509.Certificate, opts xkmsca.RevokeOptions) error {
 	if m.revokeFunc != nil {
 		return m.revokeFunc(cert, opts)
 	}
@@ -600,17 +600,17 @@ func TestAdapter_Operations_NotStarted(t *testing.T) {
 	}
 
 	// Operations should fail when not started
-	_, err = adapter.SignCSR(nil, nil)
+	_, err = adapter.SignCSR(context.Background(), nil, nil)
 	if err != ErrAdapterNotStarted {
 		t.Errorf("expected ErrAdapterNotStarted, got %v", err)
 	}
 
-	_, err = adapter.IssueCertificate(nil)
+	_, err = adapter.IssueCertificate(context.Background(), nil)
 	if err != ErrAdapterNotStarted {
 		t.Errorf("expected ErrAdapterNotStarted for IssueCertificate, got %v", err)
 	}
 
-	err = adapter.Revoke(nil, nil)
+	err = adapter.Revoke(context.Background(), nil, nil)
 	if err != ErrAdapterNotStarted {
 		t.Errorf("expected ErrAdapterNotStarted for Revoke, got %v", err)
 	}
@@ -635,17 +635,17 @@ func TestAdapter_Operations_NotStarted(t *testing.T) {
 		t.Errorf("expected ErrAdapterNotStarted for TrustedIntermediate, got %v", err)
 	}
 
-	_, err = adapter.Signer()
+	_, err = adapter.Signer(context.Background())
 	if err != ErrAdapterNotStarted {
 		t.Errorf("expected ErrAdapterNotStarted for Signer, got %v", err)
 	}
 
-	_, err = adapter.Certificate(nil)
+	_, err = adapter.Certificate(context.Background(), nil)
 	if err != ErrAdapterNotStarted {
 		t.Errorf("expected ErrAdapterNotStarted for Certificate, got %v", err)
 	}
 
-	err = adapter.ImportCertificate(nil)
+	err = adapter.ImportCertificate(context.Background(), nil)
 	if err != ErrAdapterNotStarted {
 		t.Errorf("expected ErrAdapterNotStarted for ImportCertificate, got %v", err)
 	}
@@ -1087,7 +1087,7 @@ func TestAdapter_EmbeddedOperations(t *testing.T) {
 	}
 
 	t.Run("SignCSR", func(t *testing.T) {
-		cert, err := adapter.SignCSR([]byte("csr"), &CertificateRequest{})
+		cert, err := adapter.SignCSR(context.Background(), []byte("csr"), &CertificateRequest{})
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
 		}
@@ -1098,14 +1098,14 @@ func TestAdapter_EmbeddedOperations(t *testing.T) {
 
 	t.Run("SignCSR_nil_request", func(t *testing.T) {
 		// Guards against the nil-deref regression at adapter.go:312.
-		_, err := adapter.SignCSR([]byte("csr"), nil)
+		_, err := adapter.SignCSR(context.Background(), []byte("csr"), nil)
 		if err != ErrNilRequest {
 			t.Errorf("expected ErrNilRequest, got %v", err)
 		}
 	})
 
 	t.Run("IssueCertificate", func(t *testing.T) {
-		cert, err := adapter.IssueCertificate(&CertificateRequest{})
+		cert, err := adapter.IssueCertificate(context.Background(), &CertificateRequest{})
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
 		}
@@ -1115,14 +1115,14 @@ func TestAdapter_EmbeddedOperations(t *testing.T) {
 	})
 
 	t.Run("IssueCertificate_nil_request", func(t *testing.T) {
-		_, err := adapter.IssueCertificate(nil)
+		_, err := adapter.IssueCertificate(context.Background(), nil)
 		if err != ErrNilRequest {
 			t.Errorf("expected ErrNilRequest, got %v", err)
 		}
 	})
 
 	t.Run("Revoke", func(t *testing.T) {
-		err := adapter.Revoke(testCert, nil)
+		err := adapter.Revoke(context.Background(), testCert, nil)
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
 		}
@@ -1169,7 +1169,7 @@ func TestAdapter_EmbeddedOperations(t *testing.T) {
 	})
 
 	t.Run("Signer", func(t *testing.T) {
-		signer, err := adapter.Signer()
+		signer, err := adapter.Signer(context.Background())
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
 		}
@@ -1179,7 +1179,7 @@ func TestAdapter_EmbeddedOperations(t *testing.T) {
 	})
 
 	t.Run("Certificate", func(t *testing.T) {
-		cert, err := adapter.Certificate(nil)
+		cert, err := adapter.Certificate(context.Background(), nil)
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
 		}
@@ -1189,7 +1189,7 @@ func TestAdapter_EmbeddedOperations(t *testing.T) {
 	})
 
 	t.Run("ImportCertificate", func(t *testing.T) {
-		err := adapter.ImportCertificate(testCert)
+		err := adapter.ImportCertificate(context.Background(), testCert)
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
 		}
@@ -1220,21 +1220,21 @@ func TestAdapter_EmbeddedOperations_NilCA(t *testing.T) {
 	adapter.started.Store(true)
 
 	t.Run("SignCSR_nil_embedded", func(t *testing.T) {
-		_, err := adapter.SignCSR(nil, nil)
+		_, err := adapter.SignCSR(context.Background(), nil, nil)
 		if err != ErrCANotInitialized {
 			t.Errorf("expected ErrCANotInitialized, got %v", err)
 		}
 	})
 
 	t.Run("IssueCertificate_nil_embedded", func(t *testing.T) {
-		_, err := adapter.IssueCertificate(nil)
+		_, err := adapter.IssueCertificate(context.Background(), nil)
 		if err != ErrCANotInitialized {
 			t.Errorf("expected ErrCANotInitialized, got %v", err)
 		}
 	})
 
 	t.Run("Revoke_nil_embedded", func(t *testing.T) {
-		err := adapter.Revoke(nil, nil)
+		err := adapter.Revoke(context.Background(), nil, nil)
 		if err != ErrCANotInitialized {
 			t.Errorf("expected ErrCANotInitialized, got %v", err)
 		}
@@ -1269,21 +1269,21 @@ func TestAdapter_EmbeddedOperations_NilCA(t *testing.T) {
 	})
 
 	t.Run("Signer_nil_embedded", func(t *testing.T) {
-		_, err := adapter.Signer()
+		_, err := adapter.Signer(context.Background())
 		if err != ErrCANotInitialized {
 			t.Errorf("expected ErrCANotInitialized, got %v", err)
 		}
 	})
 
 	t.Run("Certificate_nil_embedded", func(t *testing.T) {
-		_, err := adapter.Certificate(nil)
+		_, err := adapter.Certificate(context.Background(), nil)
 		if err != ErrCANotInitialized {
 			t.Errorf("expected ErrCANotInitialized, got %v", err)
 		}
 	})
 
 	t.Run("ImportCertificate_nil_embedded", func(t *testing.T) {
-		err := adapter.ImportCertificate(nil)
+		err := adapter.ImportCertificate(context.Background(), nil)
 		if err != ErrCANotInitialized {
 			t.Errorf("expected ErrCANotInitialized, got %v", err)
 		}
@@ -1316,17 +1316,17 @@ func TestAdapter_Operations_Closed(t *testing.T) {
 	}
 
 	// All operations should fail when closed
-	_, err = adapter.SignCSR(nil, nil)
+	_, err = adapter.SignCSR(context.Background(), nil, nil)
 	if err != ErrAdapterClosed {
 		t.Errorf("expected ErrAdapterClosed for SignCSR, got %v", err)
 	}
 
-	_, err = adapter.IssueCertificate(nil)
+	_, err = adapter.IssueCertificate(context.Background(), nil)
 	if err != ErrAdapterClosed {
 		t.Errorf("expected ErrAdapterClosed for IssueCertificate, got %v", err)
 	}
 
-	err = adapter.Revoke(nil, nil)
+	err = adapter.Revoke(context.Background(), nil, nil)
 	if err != ErrAdapterClosed {
 		t.Errorf("expected ErrAdapterClosed for Revoke, got %v", err)
 	}
@@ -1351,17 +1351,17 @@ func TestAdapter_Operations_Closed(t *testing.T) {
 		t.Errorf("expected ErrAdapterClosed for TrustedIntermediate, got %v", err)
 	}
 
-	_, err = adapter.Signer()
+	_, err = adapter.Signer(context.Background())
 	if err != ErrAdapterClosed {
 		t.Errorf("expected ErrAdapterClosed for Signer, got %v", err)
 	}
 
-	_, err = adapter.Certificate(nil)
+	_, err = adapter.Certificate(context.Background(), nil)
 	if err != ErrAdapterClosed {
 		t.Errorf("expected ErrAdapterClosed for Certificate, got %v", err)
 	}
 
-	err = adapter.ImportCertificate(nil)
+	err = adapter.ImportCertificate(context.Background(), nil)
 	if err != ErrAdapterClosed {
 		t.Errorf("expected ErrAdapterClosed for ImportCertificate, got %v", err)
 	}
@@ -1395,7 +1395,7 @@ func TestAdapter_RemoteOperations_NotSupported(t *testing.T) {
 	adapter.client = &mockClient{}
 
 	t.Run("SignCSR_remote", func(t *testing.T) {
-		_, err := adapter.SignCSR(nil, nil)
+		_, err := adapter.SignCSR(context.Background(), nil, nil)
 		if err == nil {
 			t.Error("expected error for SignCSR in remote mode")
 		}
@@ -1409,7 +1409,7 @@ func TestAdapter_RemoteOperations_NotSupported(t *testing.T) {
 	})
 
 	t.Run("IssueCertificate_remote", func(t *testing.T) {
-		_, err := adapter.IssueCertificate(nil)
+		_, err := adapter.IssueCertificate(context.Background(), nil)
 		if err == nil {
 			t.Error("expected error for IssueCertificate in remote mode")
 		}
@@ -1423,7 +1423,7 @@ func TestAdapter_RemoteOperations_NotSupported(t *testing.T) {
 	})
 
 	t.Run("Revoke_remote", func(t *testing.T) {
-		err := adapter.Revoke(nil, nil)
+		err := adapter.Revoke(context.Background(), nil, nil)
 		if err == nil {
 			t.Error("expected error for Revoke in remote mode")
 		}
@@ -1493,7 +1493,7 @@ func TestAdapter_RemoteOperations_NotSupported(t *testing.T) {
 	})
 
 	t.Run("Signer_remote", func(t *testing.T) {
-		_, err := adapter.Signer()
+		_, err := adapter.Signer(context.Background())
 		if err == nil {
 			t.Error("expected error for Signer in remote mode")
 		}
@@ -1507,7 +1507,7 @@ func TestAdapter_RemoteOperations_NotSupported(t *testing.T) {
 	})
 
 	t.Run("Certificate_remote", func(t *testing.T) {
-		_, err := adapter.Certificate(nil)
+		_, err := adapter.Certificate(context.Background(), nil)
 		if err == nil {
 			t.Error("expected error for Certificate in remote mode")
 		}
@@ -1521,7 +1521,7 @@ func TestAdapter_RemoteOperations_NotSupported(t *testing.T) {
 	})
 
 	t.Run("ImportCertificate_remote", func(t *testing.T) {
-		err := adapter.ImportCertificate(nil)
+		err := adapter.ImportCertificate(context.Background(), nil)
 		if err == nil {
 			t.Error("expected error for ImportCertificate in remote mode")
 		}

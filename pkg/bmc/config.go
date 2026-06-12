@@ -27,8 +27,6 @@ type Config struct {
 	Password      string   `yaml:"password" json:"password" secret:"true"`
 	Protocol      Protocol `yaml:"protocol" json:"protocol"`
 	EncryptionKey string   `yaml:"encryption-key,omitempty" json:"encryption_key,omitempty" secret:"true"` // Hex-encoded KG key for IPMI 2.0 RAKP
-	SkipTLSVerify bool     `yaml:"skip-tls-verify,omitempty" json:"skip_tls_verify,omitempty"`
-	CACertPath    string   `yaml:"ca-cert-path,omitempty" json:"ca_cert_path,omitempty"` // Path to custom CA certificate PEM file
 
 	// SOLPayloadInstance overrides the IPMI 2.0 SOL payload instance the
 	// Console session activates against. Most BMCs route serial-console
@@ -72,9 +70,25 @@ type Config struct {
 
 	// TLS is the runtime TLS provider injected by the daemon after config
 	// loading. It is never serialized; callers that load Config from YAML
-	// must inject a provider separately. When non-nil, BuildTLSConfig uses
-	// it in preference to the legacy SkipTLSVerify / CACertPath fields.
+	// must inject a provider separately. When non-nil, BuildTLSConfig
+	// delegates to it exclusively. When nil, system roots with TLS 1.2+
+	// minimum are used — connections to BMCs presenting self-signed or
+	// private-CA certificates will fail, which is the correct secure
+	// default; operators must configure a TLSProvider.
 	TLS TLSProvider `yaml:"-" json:"-"`
+
+	// Enrollment controls which optional steps the BMC enrollment ceremony
+	// performs for this BMC. Nil selects DefaultEnrollmentConfig.
+	Enrollment *EnrollmentConfig `yaml:"enrollment,omitempty" json:"enrollment,omitempty" mapstructure:"enrollment"`
+}
+
+// effectiveEnrollment returns the enrollment configuration in effect for
+// this BMC: the explicit Enrollment when set, otherwise the package default.
+func (c *Config) effectiveEnrollment() *EnrollmentConfig {
+	if c.Enrollment != nil {
+		return c.Enrollment
+	}
+	return DefaultEnrollmentConfig()
 }
 
 // DefaultConfig returns a Config with sensible defaults for IPMI.

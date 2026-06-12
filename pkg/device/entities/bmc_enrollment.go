@@ -23,6 +23,12 @@ type BMCEnrollment struct {
 	// EnrolledAt is the timestamp of the most recent successful enrollment.
 	EnrolledAt time.Time `yaml:"enrolled_at" json:"enrolled_at"`
 
+	// Host is the BMC address (host only, no port) the enrollment ceremony
+	// ran against. It is the join key used to match a platform node's BMC
+	// config to its device record (e.g. at cert-renewal time), since the
+	// Device entity itself carries no BMC address.
+	Host string `yaml:"host" json:"host"`
+
 	// PinSPKISHA256 is the hex-encoded SHA-256 of the SubjectPublicKeyInfo
 	// of the BMC's current TLS leaf certificate (platform-issued if
 	// ReplaceCertificate was true, factory otherwise). This matches the

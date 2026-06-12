@@ -33,7 +33,10 @@ import (
 type ClaimsTokenValidator interface {
 	// AuthorizeToken validates the bearer token and returns the projected
 	// AuthorizedContext, or a typed error mapped to StatusUnauthorized.
-	AuthorizeToken(ctx context.Context, token, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error)
+	// requiredPerm is the qrdb-canonical "resource:action" scope to enforce
+	// during validation; the middleware passes "" and AuthorizeRequest
+	// enforces the required scope post-hoc against the AuthorizedContext.
+	AuthorizeToken(ctx context.Context, token, requiredPerm, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error)
 }
 
 // authorizedContextKeyType is the context key for the validated AuthorizedContext.

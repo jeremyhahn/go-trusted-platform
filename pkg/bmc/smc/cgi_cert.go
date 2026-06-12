@@ -88,7 +88,7 @@ func NewCertManager(cfg *bmc.Config, logger *slog.Logger) (*CertManager, error) 
 	if cfg.Username == "" {
 		return nil, ErrInvalidInput{Field: "username", Reason: "required for CGI login"}
 	}
-	tlsCfg, err := tlsConfigFor(cfg)
+	tlsCfg, err := bmc.BuildTLSConfig(context.Background(), cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +125,7 @@ func (m *CertManager) Backend() bmc.CertBackend {
 // the BMC's HTTPS port. Implemented via a direct TLS handshake so it
 // works on every ATEN firmware revision without any CGI round-trip.
 func (m *CertManager) GetWebCertificate(ctx context.Context) (*x509.Certificate, error) {
-	tlsCfg, err := tlsConfigFor(m.cfg)
+	tlsCfg, err := bmc.BuildTLSConfig(ctx, m.cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +337,7 @@ func (m *CertManager) logout(ctx context.Context, sid string) {
 // waitForReady polls the BMC HTTPS port until a TLS handshake succeeds
 // or the context/deadline fires.
 func (m *CertManager) waitForReady(ctx context.Context) error {
-	tlsCfg, err := tlsConfigFor(m.cfg)
+	tlsCfg, err := bmc.BuildTLSConfig(ctx, m.cfg)
 	if err != nil {
 		return err
 	}
@@ -373,25 +373,6 @@ func (m *CertManager) log(msg string, args ...any) {
 }
 
 // --- helpers ---
-
-// tlsConfigFor builds a TLS client config from a bmc.Config. Mirrors
-// the BMC package's vendor-probe TLS logic (CA pool, skip-verify gated
-// by config), kept duplicated here to avoid exporting the parent
-// package internal helper.
-func tlsConfigFor(cfg *bmc.Config) (*tls.Config, error) {
-	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
-	if cfg.SkipTLSVerify {
-		tlsCfg.InsecureSkipVerify = true //nolint:gosec // BMC self-signed cert support, guarded by config flag
-	}
-	if cfg.CACertPath != "" {
-		pool, err := loadPool(cfg.CACertPath)
-		if err != nil {
-			return nil, err
-		}
-		tlsCfg.RootCAs = pool
-	}
-	return tlsCfg, nil
-}
 
 // dialTLS opens a TLS connection respecting ctx cancellation.
 func dialTLS(ctx context.Context, host string, port int, tlsCfg *tls.Config) (*tls.Conn, error) {
@@ -492,16 +473,3 @@ func looksValid(body []byte) bool {
 	return false
 }
 
-// loadPool reads a PEM CA bundle and returns a CertPool. Kept local
-// to the smc package to avoid importing unexported helpers from bmc.
-func loadPool(path string) (*x509.CertPool, error) {
-	pem, err := readFile(path)
-	if err != nil {
-		return nil, ErrInvalidInput{Field: "ca_cert_path", Reason: err.Error()}
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pem) {
-		return nil, ErrInvalidInput{Field: "ca_cert_path", Reason: "no parseable PEM certificates"}
-	}
-	return pool, nil
-}

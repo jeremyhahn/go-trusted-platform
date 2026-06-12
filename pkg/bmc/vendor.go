@@ -15,7 +15,6 @@ package bmc
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -148,20 +147,24 @@ type vendorProbeRoot struct {
 //
 // The probe is intentionally lightweight: no session establishment, no
 // resource discovery, no caching. Callers wanting to reuse the result
-// should store it themselves. SkipTLSVerify and CACertPath from cfg are
-// honored so the probe can run against BMCs presenting their initial
-// self-signed certificate (the common case before TLS provisioning).
+// should store it themselves. TLS is configured via the provider-or-system-roots
+// contract (BuildTLSConfig): cfg.TLS when set, otherwise system roots with
+// TLS 1.2+ minimum.
 type VendorProbe struct {
 	httpClient *http.Client
 	logger     *slog.Logger
 }
 
 // NewVendorProbe builds a VendorProbe that uses cfg's TLS settings.
+// TLS is configured via BuildTLSConfig: cfg.TLS (TLSProvider) when set,
+// otherwise secure system roots (TLS 1.2+). A background context is used
+// for the TLS provider call at construction time; the per-request context
+// is used for the actual probe.
 func NewVendorProbe(cfg *Config, logger *slog.Logger) (*VendorProbe, error) {
 	if cfg == nil {
 		return nil, ErrNilConfig{}
 	}
-	tlsConfig, err := buildVendorProbeTLS(cfg)
+	tlsConfig, err := BuildTLSConfig(context.Background(), cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -240,23 +243,4 @@ func classifyVendor(root vendorProbeRoot) Vendor {
 		return VendorGeneric
 	}
 	return VendorUnknown
-}
-
-// buildVendorProbeTLS mirrors the redfishClient TLS config logic but is
-// scoped to probe usage so it can be exercised independently in tests.
-func buildVendorProbeTLS(cfg *Config) (*tls.Config, error) {
-	tlsConfig := &tls.Config{
-		MinVersion: tls.VersionTLS12,
-	}
-	if cfg.SkipTLSVerify {
-		tlsConfig.InsecureSkipVerify = true //nolint:gosec // BMC self-signed cert support, guarded by config flag
-	}
-	if cfg.CACertPath != "" {
-		pool, err := loadCAPool(cfg.CACertPath)
-		if err != nil {
-			return nil, err
-		}
-		tlsConfig.RootCAs = pool
-	}
-	return tlsConfig, nil
 }

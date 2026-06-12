@@ -73,6 +73,19 @@ type BMCProvider interface {
 	// User management (read-only over MCP — write operations require
 	// privileged credentials and live on the gRPC/Unix surfaces).
 	BMCListUsers(ctx context.Context, profileID uint64) (interface{}, error)
+
+	// Enrollment ceremony
+	// BMCEnrollBMC runs the BMC enrollment ceremony for the given profile.
+	// Optional bool pointer fields override the profile's enrollment config
+	// defaults when non-nil; nil means use the profile default.
+	BMCEnrollBMC(ctx context.Context, profileID uint64,
+		replaceCertificate, rotatePassword, dnsRegister, danePublish *bool,
+	) (interface{}, error)
+
+	// BMCRestoreFactoryCert runs the BMC factory-certificate restore ceremony
+	// for the given profile. It instructs the BMC to regenerate its default
+	// self-signed certificate and cleans up platform-side trust state.
+	BMCRestoreFactoryCert(ctx context.Context, profileID uint64) (interface{}, error)
 }
 
 // bmcProvider returns the BMCProvider interface if the ServiceProvider
@@ -197,6 +210,43 @@ func (r *ToolRegistry) registerBMCTools() {
 		Description: "List populated BMC user slots (slot, username, enabled, privilege, channel)",
 		InputSchema: profileSchema,
 	})
+
+	r.addTool(ToolDefinition{
+		Name:        "platform_bmc_enroll",
+		Description: "Run the BMC enrollment ceremony: establish trust, capture factory certificate, optionally replace the certificate, register DNS, and publish DANE TLSA records",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"profile_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Device profile ID identifying the BMC-managed system",
+				},
+				"replace_certificate": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Override replace_certificate enrollment flag (nil = use profile default)",
+				},
+				"rotate_password": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Override rotate_password enrollment flag (nil = use profile default)",
+				},
+				"dns_register": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Override dns_register enrollment flag (nil = use profile default)",
+				},
+				"dane_publish": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Override dane_publish enrollment flag (nil = use profile default)",
+				},
+			},
+			"required": []string{"profile_id"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "platform_bmc_cert_restore",
+		Description: "Run the BMC factory-certificate restore ceremony: instruct the BMC to regenerate its default self-signed certificate, delete the stored SPKI pin, unpublish DANE TLSA records, and clear the device enrollment state",
+		InputSchema: profileSchema,
+	})
 }
 
 // =============================================================================
@@ -222,6 +272,8 @@ var bmcToolDispatch = map[string]bmcToolHandler{
 	"platform_bmc_get_system_info":      (*ToolRegistry).executeBMCGetSystemInfo,
 	"platform_bmc_get_web_certificate":  (*ToolRegistry).executeBMCGetWebCertificate,
 	"platform_bmc_list_users":           (*ToolRegistry).executeBMCListUsers,
+	"platform_bmc_enroll":               (*ToolRegistry).executeBMCEnroll,
+	"platform_bmc_cert_restore":         (*ToolRegistry).executeBMCCertRestore,
 }
 
 // dispatchBMCTool looks up a BMC tool and invokes it. Returns
@@ -439,4 +491,45 @@ func (r *ToolRegistry) executeBMCListUsers(ctx context.Context, args map[string]
 		return nil, err
 	}
 	return p.BMCListUsers(ctx, id)
+}
+
+func (r *ToolRegistry) executeBMCEnroll(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	p := r.bmcProvider()
+	if p == nil {
+		return nil, ErrBMCNotConfigured
+	}
+	id, err := bmcProfileID(args)
+	if err != nil {
+		return nil, err
+	}
+	var replaceCert, rotatePass, dnsReg, danePublish *bool
+	if v, ok := args["replace_certificate"]; ok && v != nil {
+		b := getBool(args, "replace_certificate")
+		replaceCert = &b
+	}
+	if v, ok := args["rotate_password"]; ok && v != nil {
+		b := getBool(args, "rotate_password")
+		rotatePass = &b
+	}
+	if v, ok := args["dns_register"]; ok && v != nil {
+		b := getBool(args, "dns_register")
+		dnsReg = &b
+	}
+	if v, ok := args["dane_publish"]; ok && v != nil {
+		b := getBool(args, "dane_publish")
+		danePublish = &b
+	}
+	return p.BMCEnrollBMC(ctx, id, replaceCert, rotatePass, dnsReg, danePublish)
+}
+
+func (r *ToolRegistry) executeBMCCertRestore(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	p := r.bmcProvider()
+	if p == nil {
+		return nil, ErrBMCNotConfigured
+	}
+	id, err := bmcProfileID(args)
+	if err != nil {
+		return nil, err
+	}
+	return p.BMCRestoreFactoryCert(ctx, id)
 }

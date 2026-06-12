@@ -137,7 +137,7 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 	// validate the token, project scp -> RBAC / tenant_id -> RLS, stash the
 	// AuthorizedContext, and enforce the tool's required scope against it.
 	if cv, ok := c.authManager.(ClaimsAuthManager); ok && cv != nil {
-		authCtx, err := cv.AuthorizeToken(ctx, token, "", "", "")
+		authCtx, err := cv.AuthorizeToken(ctx, token, "", "", "", "")
 		if err != nil {
 			return ctx, &AuthorizationError{
 				Type:    AuthErrorInvalidToken,

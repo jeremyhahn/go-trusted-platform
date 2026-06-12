@@ -224,5 +224,36 @@ func (u *UnixAdapter) ListUsers(ctx context.Context, profileID uint64) ([]bmcsvc
 	return users, nil
 }
 
+// =============================================================================
+// Enrollment Operations
+// =============================================================================
+
+// EnrollBMC runs the BMC enrollment ceremony via gRPC over the Unix domain socket.
+// It delegates to the SDK client exactly as the TCP gRPC adapter does — the
+// transport difference is transparent at the SDK level.
+func (u *UnixAdapter) EnrollBMC(ctx context.Context, profileID uint64, opts *EnrollOptions) (*EnrollResult, error) {
+	sdkOpts := enrollOptionsToSDK(opts)
+	resp, err := u.client.EnrollBMC(ctx, profileID, sdkOpts)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "EnrollBMC", Err: err}
+	}
+	return sdkEnrollResultToDomain(resp), nil
+}
+
+// =============================================================================
+// Factory Certificate Restore Operations
+// =============================================================================
+
+// RestoreBMC runs the BMC factory-certificate restore ceremony via gRPC over
+// the Unix domain socket. It delegates to the SDK client exactly as the TCP
+// gRPC adapter does.
+func (u *UnixAdapter) RestoreBMC(ctx context.Context, profileID uint64) (*RestoreResult, error) {
+	resp, err := u.client.RestoreFactoryCert(ctx, profileID)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "RestoreFactoryCert", Err: err}
+	}
+	return sdkRestoreResultToDomain(resp), nil
+}
+
 // Ensure UnixAdapter implements BMCCommands interface.
 var _ BMCCommands = (*UnixAdapter)(nil)

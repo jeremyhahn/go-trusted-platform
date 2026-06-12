@@ -273,26 +273,21 @@ func (c *ipmiClient) GetBootDevice(_ context.Context) (BootDevice, error) {
 
 // ensureRedfishClient lazily creates a Redfish client for virtual media operations.
 // Uses the same BMC address and credentials but connects via HTTPS (port 443).
-// When used as a fallback from IPMI, SkipTLSVerify defaults to true since BMCs
-// that need IPMI typically have self-signed certificates.
+// The TLSProvider from the parent IPMI config is carried over so all Redfish
+// connections use the same class-BMC trust resolver as the IPMI client itself.
+// When no provider is set, BuildTLSConfig falls back to system roots (TLS 1.2+)
+// which is the secure default.
 func (c *ipmiClient) ensureRedfishClient() error {
 	if c.redfishClient != nil {
 		return nil
 	}
-	skipTLS := c.config.SkipTLSVerify
-	if !skipTLS && c.config.CACertPath == "" {
-		// Default to skip TLS verify for IPMI fallback since BMCs typically
-		// have self-signed certs and the user chose IPMI (not Redfish) as primary.
-		skipTLS = true
-	}
 	redfishConfig := &Config{
-		Address:       c.config.Address,
-		Port:          443,
-		Username:      c.config.Username,
-		Password:      c.config.Password,
-		Protocol:      ProtocolRedfish,
-		SkipTLSVerify: skipTLS,
-		CACertPath:    c.config.CACertPath,
+		Address:  c.config.Address,
+		Port:     443,
+		Username: c.config.Username,
+		Password: c.config.Password,
+		Protocol: ProtocolRedfish,
+		TLS:      c.config.TLS,
 	}
 	rc, err := newRedfishClient(redfishConfig, c.logger)
 	if err != nil {

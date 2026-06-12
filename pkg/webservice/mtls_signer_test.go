@@ -14,6 +14,7 @@
 package webservice
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -63,7 +64,7 @@ func TestNewSigner(t *testing.T) {
 	cert, _ := generateTestCertificate(t)
 
 	t.Run("creates signer with all fields", func(t *testing.T) {
-		signer := NewSigner(logger, nil, cert, "test-cn", []byte("password"))
+		signer := NewSigner(context.Background(), logger, nil, cert, "test-cn", []byte("password"))
 
 		assert.NotNil(t, signer)
 		assert.Equal(t, logger, signer.logger)
@@ -74,21 +75,21 @@ func TestNewSigner(t *testing.T) {
 	})
 
 	t.Run("creates signer with nil password", func(t *testing.T) {
-		signer := NewSigner(logger, nil, cert, "test-cn", nil)
+		signer := NewSigner(context.Background(), logger, nil, cert, "test-cn", nil)
 
 		assert.NotNil(t, signer)
 		assert.Nil(t, signer.password)
 	})
 
 	t.Run("creates signer with empty cn", func(t *testing.T) {
-		signer := NewSigner(logger, nil, cert, "", []byte("password"))
+		signer := NewSigner(context.Background(), logger, nil, cert, "", []byte("password"))
 
 		assert.NotNil(t, signer)
 		assert.Equal(t, "", signer.cn)
 	})
 
 	t.Run("creates signer with nil cert", func(t *testing.T) {
-		signer := NewSigner(logger, nil, nil, "test-cn", nil)
+		signer := NewSigner(context.Background(), logger, nil, nil, "test-cn", nil)
 
 		assert.NotNil(t, signer)
 		assert.Nil(t, signer.cert)
@@ -100,7 +101,7 @@ func TestSignerPublic(t *testing.T) {
 	cert, _ := generateTestCertificate(t)
 
 	t.Run("returns certificate public key", func(t *testing.T) {
-		signer := NewSigner(logger, nil, cert, "test-cn", nil)
+		signer := NewSigner(context.Background(), logger, nil, cert, "test-cn", nil)
 
 		publicKey := signer.Public()
 
@@ -109,7 +110,7 @@ func TestSignerPublic(t *testing.T) {
 	})
 
 	t.Run("returns ECDSA public key type", func(t *testing.T) {
-		signer := NewSigner(logger, nil, cert, "test-cn", nil)
+		signer := NewSigner(context.Background(), logger, nil, cert, "test-cn", nil)
 
 		publicKey := signer.Public()
 
@@ -123,7 +124,7 @@ func TestSignerImplementsCryptoSigner(t *testing.T) {
 	cert, _ := generateTestCertificate(t)
 
 	t.Run("implements crypto.Signer interface", func(t *testing.T) {
-		signer := NewSigner(logger, nil, cert, "test-cn", nil)
+		signer := NewSigner(context.Background(), logger, nil, cert, "test-cn", nil)
 
 		// Verify that Signer implements crypto.Signer
 		var _ crypto.Signer = signer
@@ -157,7 +158,7 @@ func TestSignerPublic_DifferentKeyTypes(t *testing.T) {
 
 	t.Run("ECDSA P-256 public key", func(t *testing.T) {
 		cert, _ := generateTestCertificate(t)
-		signer := NewSigner(logger, nil, cert, "test-cn", nil)
+		signer := NewSigner(context.Background(), logger, nil, cert, "test-cn", nil)
 
 		publicKey := signer.Public()
 
@@ -173,20 +174,20 @@ func TestSignerFieldValues(t *testing.T) {
 
 	t.Run("password is stored correctly", func(t *testing.T) {
 		password := []byte("secret-password-123")
-		signer := NewSigner(logger, nil, cert, "test-cn", password)
+		signer := NewSigner(context.Background(), logger, nil, cert, "test-cn", password)
 
 		assert.Equal(t, password, signer.password)
 	})
 
 	t.Run("cn is stored correctly", func(t *testing.T) {
 		cn := "unique-common-name.example.com"
-		signer := NewSigner(logger, nil, cert, cn, nil)
+		signer := NewSigner(context.Background(), logger, nil, cert, cn, nil)
 
 		assert.Equal(t, cn, signer.cn)
 	})
 
 	t.Run("logger is stored correctly", func(t *testing.T) {
-		signer := NewSigner(logger, nil, cert, "test-cn", nil)
+		signer := NewSigner(context.Background(), logger, nil, cert, "test-cn", nil)
 
 		assert.Same(t, logger, signer.logger)
 	})

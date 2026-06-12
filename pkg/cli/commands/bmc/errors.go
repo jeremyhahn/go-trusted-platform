@@ -185,7 +185,7 @@ func (e ErrConsoleTerminalFailed) Unwrap() error {
 }
 
 // =============================================================================
-// Standalone-mode errors (Gap 4)
+// Standalone-mode errors
 // =============================================================================
 
 // ErrBMCFlagConflict is returned when mutually exclusive flag sets are both set.
@@ -328,6 +328,39 @@ func (e ErrBMCConsoleSendWrite) Error() string {
 }
 
 func (e ErrBMCConsoleSendWrite) Unwrap() error { return e.Cause }
+
+// ErrBMCNoPinOrCAFile is returned in non-interactive sessions when neither
+// --bmc-pin nor --bmc-ca-file was supplied. The operator must provide one of
+// these flags to establish a verified TLS connection to the BMC.
+type ErrBMCNoPinOrCAFile struct{}
+
+func (e ErrBMCNoPinOrCAFile) Error() string {
+	return "bmc: non-interactive session requires --bmc-pin <hex-spki-sha256> or --bmc-ca-file <path> " +
+		"to verify the BMC TLS certificate; pass --bmc-pin with the BMC's SPKI fingerprint"
+}
+
+// ErrBMCCaptureDial is returned when the capture-only TLS dial to collect
+// the BMC peer certificate fails.
+type ErrBMCCaptureDial struct {
+	Host  string
+	Cause error
+}
+
+func (e ErrBMCCaptureDial) Error() string {
+	return "bmc: TLS capture dial to " + e.Host + " failed: " + e.Cause.Error()
+}
+
+func (e ErrBMCCaptureDial) Unwrap() error { return e.Cause }
+
+// ErrBMCNoPeerCert is returned when the capture dial succeeded but the BMC
+// presented no peer certificate.
+type ErrBMCNoPeerCert struct {
+	Host string
+}
+
+func (e ErrBMCNoPeerCert) Error() string {
+	return "bmc: TLS handshake with " + e.Host + " completed but BMC presented no peer certificate"
+}
 
 // =============================================================================
 // Certificate management errors

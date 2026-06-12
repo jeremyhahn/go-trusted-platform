@@ -116,10 +116,6 @@ func (h *QUICServiceHandler) SetBMCEnroller(enroller BMCEnroller, profileSvc dev
 // The first byte of the payload selects the sub-operation; the remaining
 // bytes carry the MessagePack-encoded sub-request.
 func (h *QUICServiceHandler) handleBMCCategory(ctx context.Context, req *quic.Request) *quic.Response {
-	if h.bmcEnrollQUIC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "bmc-enroll"})
-	}
-
 	if len(req.Payload) == 0 {
 		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICMissingField{Field: "sub_opcode"})
 	}
@@ -135,7 +131,15 @@ func (h *QUICServiceHandler) handleBMCCategory(ctx context.Context, req *quic.Re
 
 	switch subOpcode {
 	case quic.BMCSubEnroll:
+		if h.bmcEnrollQUIC == nil {
+			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "bmc-enroll"})
+		}
 		return h.handleBMCEnroll(ctx, subReq)
+	case quic.BMCSubRestore:
+		if h.bmcRestoreQUIC == nil {
+			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "bmc-restore"})
+		}
+		return h.handleBMCRestore(ctx, subReq)
 	default:
 		return h.errorResponse(quic.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: subOpcode})
 	}
@@ -233,5 +237,139 @@ func quicBMCEnrollResultToResponse(r *app.BMCEnrollResult) *QUICBMCEnrollRespons
 		CACertPEM:       r.CACertPEM,
 		Steps:           steps,
 		Timestamp:       time.Now().Unix(),
+	}
+}
+
+// =============================================================================
+// QUIC BMC restore handler
+// =============================================================================
+//
+// BMCSubRestore (0x02) – BMC factory-certificate restore ceremony.
+//
+// The restore sub-opcode follows the same category-opcode pattern as
+// BMCSubEnroll: the first payload byte selects the sub-operation and the
+// remaining bytes carry the MessagePack-encoded sub-request.
+
+// bmcRestoreQUICHandlers holds the BMCRestorer and DeviceProfileService
+// needed to drive the restore ceremony over QUIC.
+type bmcRestoreQUICHandlers struct {
+	restorer   BMCRestorer
+	profileSvc device.DeviceProfileService
+}
+
+// QUICBMCRestoreRequest is the MessagePack wire format for the BMC restore
+// sub-request. Only a profile_id is required.
+type QUICBMCRestoreRequest struct {
+	ProfileID uint64 `codec:"profile_id"`
+}
+
+// QUICBMCRestoreResponse is the MessagePack wire format for a successful BMC
+// factory-certificate restore ceremony result. DeviceID uses uint64 directly —
+// MessagePack preserves full integer precision.
+type QUICBMCRestoreResponse struct {
+	DeviceID    uint64                         `codec:"device_id"`
+	Endpoint    string                         `codec:"endpoint"`
+	Hostname    string                         `codec:"hostname"`
+	NewCertMeta QUICBMCFactoryCertMetaResponse `codec:"new_cert_meta"`
+	NewCertPEM  []byte                         `codec:"new_cert_pem,omitempty"`
+	Steps       []QUICBMCEnrollStepResponse    `codec:"steps"`
+	Timestamp   int64                          `codec:"timestamp"`
+}
+
+// SetBMCRestorer wires the BMCRestorer and DeviceProfileService into the QUIC
+// handler after construction. The daemon calls this once the App has been
+// initialized so the QUIC restore handler can drive the ceremony.
+func (h *QUICServiceHandler) SetBMCRestorer(restorer BMCRestorer, profileSvc device.DeviceProfileService) {
+	if restorer == nil {
+		return
+	}
+	h.bmcRestoreQUIC = &bmcRestoreQUICHandlers{
+		restorer:   restorer,
+		profileSvc: profileSvc,
+	}
+}
+
+// handleBMCRestore handles the BMC factory-certificate restore ceremony
+// sub-operation (BMCSubRestore, 0x02). It decodes the request, loads the BMC
+// config from the profile store, and drives the restore ceremony via the
+// BMCRestorer.
+func (h *QUICServiceHandler) handleBMCRestore(ctx context.Context, req *quic.Request) *quic.Response {
+	var restoreReq QUICBMCRestoreRequest
+	if err := quic.DecodePayload(req.Payload, &restoreReq); err != nil {
+		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	if restoreReq.ProfileID == 0 {
+		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "profile_id"})
+	}
+
+	bmcCfg, err := loadBMCConfigForRestorer(ctx, h.bmcRestoreQUIC.profileSvc, restoreReq.ProfileID, h.bmcRestoreQUIC.restorer)
+	if err != nil {
+		return h.errorResponse(quic.StatusNotFound, ErrQUICOperationFailed{Op: "bmc_restore_load_config", Cause: err})
+	}
+
+	result, err := h.bmcRestoreQUIC.restorer.RestoreBMC(ctx, restoreReq.ProfileID, bmcCfg)
+	if err != nil {
+		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "bmc_restore", Cause: err})
+	}
+
+	resp := quicBMCRestoreResultToResponse(result)
+
+	payload, encErr := quic.EncodePayload(resp)
+	if encErr != nil {
+		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
+	}
+
+	h.logger.Info("bmc restore ceremony completed via QUIC",
+		"profile_id", restoreReq.ProfileID,
+		"device_id", result.DeviceID)
+
+	return &quic.Response{
+		Status:  quic.StatusOK,
+		Payload: payload,
+	}
+}
+
+// quicBMCRestoreResultToResponse converts an app.BMCRestoreResult into the
+// QUIC wire response struct.
+func quicBMCRestoreResultToResponse(r *app.BMCRestoreResult) *QUICBMCRestoreResponse {
+	if r == nil {
+		return &QUICBMCRestoreResponse{Timestamp: time.Now().Unix()}
+	}
+
+	meta := QUICBMCFactoryCertMetaResponse{
+		Subject:      r.NewCertMeta.Subject,
+		Issuer:       r.NewCertMeta.Issuer,
+		SerialNumber: r.NewCertMeta.SerialNumber,
+		SPKISHA256:   r.NewCertMeta.SPKISHA256,
+		SHA256:       r.NewCertMeta.SHA256,
+	}
+	if !r.NewCertMeta.NotBefore.IsZero() {
+		meta.NotBefore = r.NewCertMeta.NotBefore.Unix()
+	}
+	if !r.NewCertMeta.NotAfter.IsZero() {
+		meta.NotAfter = r.NewCertMeta.NotAfter.Unix()
+	}
+	if !r.NewCertMeta.CapturedAt.IsZero() {
+		meta.CapturedAt = r.NewCertMeta.CapturedAt.Unix()
+	}
+
+	steps := make([]QUICBMCEnrollStepResponse, len(r.Steps))
+	for i, s := range r.Steps {
+		steps[i] = QUICBMCEnrollStepResponse{
+			Name:   s.Name,
+			OK:     s.OK,
+			Detail: s.Detail,
+		}
+	}
+
+	return &QUICBMCRestoreResponse{
+		DeviceID:    r.DeviceID,
+		Endpoint:    r.Endpoint,
+		Hostname:    r.Hostname,
+		NewCertMeta: meta,
+		NewCertPEM:  r.NewCertPEM,
+		Steps:       steps,
+		Timestamp:   time.Now().Unix(),
 	}
 }

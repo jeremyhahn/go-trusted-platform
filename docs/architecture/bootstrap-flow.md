@@ -275,6 +275,11 @@ AND its per-node hostname, both keyed by MAC.
        │                                              │
        │◀── Phase 6: Watch — install-log upload ──────│
        │                                              │
+       │   Phase 5a: BMC Enroll (if bmc_enroll: true)│
+       │      POST /api/v1/bmc/{profileID}/enroll     │
+       │      write backups (factory-cert + meta)     │
+       │      per-node non-fatal; all outcomes logged │
+       │                                              │
        │   Phase 7: Teardown                          │
        │      BMC unmount vmedia                      │
        │      cleanup SMB stage                       │
@@ -376,6 +381,8 @@ name but are otherwise independent code paths. Do not confuse them.
 | ISO build (baked mode) | `pkg/iso/customize.go`, `pkg/cli/commands/iso/create.go` | `docs/installer/iso-building.md` |
 | autoinstall priority chain | `pkg/iso/customize.go` (embedded shell) | `docs/installer/autoinstall.md` |
 | Kernel cmdline params | `pkg/iso/customize.go::buildDynamicConfigParams` | `docs/reference/kernel-cmdline.md` |
+| cmdline → trust: YAML mapping | `pkg/trust/config.go`, `pkg/iso/customize.go` lines 3342-3351 | `docs/reference/kernel-cmdline.md` §3a |
+| BMC enroll phase (Phase 5a) | `pkg/bootstrap/orchestrator.go` | `docs/bmc/configuration.md` |
 | Single-node template | `configs/platform/templates/single-node/default.yaml` | `configs/platform/templates/single-node/README.md`, `docs/device-templates.md` |
 | Dedicated templates | `configs/platform/templates/dedicated/<vendor>/<model>/` | `configs/platform/templates/dedicated/README.md`, `docs/device-templates.md` |
 | OVS bond creation (native OVSDB) | `pkg/app/sdn.go::initOVSBonds`, `pkg/sdn/ovs/port.go::AddBond` | `configs/platform/templates/dedicated/README.md` §Network Architecture |

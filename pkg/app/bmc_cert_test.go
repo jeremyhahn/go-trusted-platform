@@ -68,7 +68,7 @@ type fakeLocalCA struct {
 	retCert *x509.Certificate
 }
 
-func (f *fakeLocalCA) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (f *fakeLocalCA) IssueCertificate(_ context.Context, req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.callCnt++

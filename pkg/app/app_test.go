@@ -621,14 +621,14 @@ func TestApp_InitACMEClient_EarlyReturns(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	t.Run("nil_config", func(t *testing.T) {
-		assert.NoError(t, (&App{Logger: logger, ACMEConfig: nil}).InitACMEClient(false))
+		assert.NoError(t, (&App{Logger: logger, ACMEConfig: nil}).InitACMEClient(t.Context(), false))
 	})
 
 	t.Run("nil_client", func(t *testing.T) {
 		assert.NoError(t, (&App{
 			Logger:     logger,
 			ACMEConfig: &acmeclient.ACMEConfig{Client: nil},
-		}).InitACMEClient(false))
+		}).InitACMEClient(t.Context(), false))
 	})
 
 	t.Run("nil_ca", func(t *testing.T) {
@@ -636,7 +636,7 @@ func TestApp_InitACMEClient_EarlyReturns(t *testing.T) {
 			Logger:     logger,
 			ACMEConfig: &acmeclient.ACMEConfig{Client: &acmeclient.ACMEClientConfig{}},
 			CA:         nil,
-		}).InitACMEClient(false)
+		}).InitACMEClient(t.Context(), false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "CA not configured")
 	})

@@ -20,6 +20,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -212,6 +213,35 @@ func (app *App) BMCTLSProvider() bmc.TLSProvider {
 		return nil
 	}
 	return &resolverTLSProvider{resolver: r, class: trust.ClassBMC}
+}
+
+// InternalCAPool returns an *x509.CertPool anchored to the platform's internal
+// CA bundle, obtained via the ClassInternal trust resolver. It is intended for
+// wiring into internal-service clients (SDN reporter, attestation push, mTLS
+// webservice client, QUIC client) so they verify server certificates against
+// the platform CA rather than the operating-system trust store.
+//
+// Returns (nil, nil) when TrustConfig has no internal scope configured —
+// callers must treat a nil pool as "use system roots" and preserve existing
+// behavior. Returns a non-nil error only when the resolver is available but
+// the CA pool fetch fails.
+func (app *App) InternalCAPool(ctx context.Context) (*x509.CertPool, error) {
+	r := app.TrustResolver()
+	if r == nil {
+		return nil, nil
+	}
+	pool, err := r.CAPool(ctx, trust.ClassInternal, "")
+	if err != nil {
+		// ErrClassNotConfigured means the operator has not added an internal
+		// scope; treat it as "no pool available" rather than a hard error so
+		// deployments without the trust: internal YAML block keep working.
+		var notCfg *trust.ErrClassNotConfigured
+		if errors.As(err, &notCfg) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return pool, nil
 }
 
 // EnrollBMC performs the BMC enrollment ceremony for the device identified by
@@ -621,6 +651,7 @@ func runEnrollCore(
 
 	enrollment := &entities.BMCEnrollment{
 		EnrolledAt:    time.Now().UTC(),
+		Host:          result.Hostname,
 		PinSPKISHA256: result.PinSPKISHA256,
 		DNSName:       result.DNSName,
 		TLSAPublished: tlsaPublished,

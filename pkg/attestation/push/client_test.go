@@ -16,6 +16,7 @@ package push
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -89,6 +90,45 @@ func TestNewClient(t *testing.T) {
 			t.Fatalf("expected no error, got %v", err)
 		}
 		defer client.Close()
+	})
+
+	t.Run("with RootCAs option sets pool on fallback TLS config", func(t *testing.T) {
+		cfg := DefaultClientConfig()
+		pool := x509.NewCertPool()
+		client, err := NewClient(cfg, WithRootCAs(pool))
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		defer client.Close()
+		tr, ok := client.httpClient.Transport.(*http.Transport)
+		if !ok {
+			t.Fatalf("expected *http.Transport, got %T", client.httpClient.Transport)
+		}
+		if tr.TLSClientConfig == nil {
+			t.Fatal("TLSClientConfig must not be nil when RootCAs option is provided")
+		}
+		if tr.TLSClientConfig.RootCAs != pool {
+			t.Error("TLSClientConfig.RootCAs does not match the provided pool")
+		}
+	})
+
+	t.Run("with nil RootCAs option falls back to system roots", func(t *testing.T) {
+		cfg := DefaultClientConfig()
+		client, err := NewClient(cfg, WithRootCAs(nil))
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		defer client.Close()
+		tr, ok := client.httpClient.Transport.(*http.Transport)
+		if !ok {
+			t.Fatalf("expected *http.Transport, got %T", client.httpClient.Transport)
+		}
+		if tr.TLSClientConfig == nil {
+			t.Fatal("TLSClientConfig must not be nil")
+		}
+		if tr.TLSClientConfig.RootCAs != nil {
+			t.Error("RootCAs must be nil (system roots) when no pool is provided")
+		}
 	})
 }
 

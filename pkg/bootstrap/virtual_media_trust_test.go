@@ -195,6 +195,28 @@ func TestFetchControlPlaneCABundle_RejectsMismatchedBundle(t *testing.T) {
 	}
 }
 
+func TestFetchControlPlaneCABundle_RejectsMixedBundle(t *testing.T) {
+	serving := newTestCPPKI(t)
+	attacker := newTestCPPKI(t)
+	// MITM attack: the bundle contains the genuine CA (matching the
+	// handshake) PLUS an attacker CA appended. Every cert must be
+	// anchored in the handshake chain, so this must be rejected — a
+	// weaker "at least one matches" check would poison cpCAPool with
+	// the attacker CA.
+	mixed := append(append([]byte{}, serving.caPEM...), attacker.caPEM...)
+	startTestCPServer(t, serving, http.StatusOK, mixed)
+
+	o := newTrustTestOrchestrator()
+	_, err := o.fetchControlPlaneCABundle(context.Background())
+	var verifyErr ErrCABundleVerifyFailed
+	if !errors.As(err, &verifyErr) {
+		t.Fatalf("expected ErrCABundleVerifyFailed for mixed bundle, got %v", err)
+	}
+	if o.cpCAPool != nil {
+		t.Error("cpCAPool must not be stored when a bundle cert is unanchored")
+	}
+}
+
 func TestFetchControlPlaneCABundle_RejectsInvalidPEM(t *testing.T) {
 	pki := newTestCPPKI(t)
 	startTestCPServer(t, pki, http.StatusOK, []byte("this is not a PEM bundle"))
@@ -227,6 +249,25 @@ func TestFetchControlPlaneSPKIPin_RequiresCAPool(t *testing.T) {
 	var required ErrCABundleRequired
 	if !errors.As(err, &required) {
 		t.Fatalf("expected ErrCABundleRequired, got %v", err)
+	}
+}
+
+func TestFetchControlPlaneSPKIPin_RejectsUnverifiedChain(t *testing.T) {
+	serving := newTestCPPKI(t)
+	other := newTestCPPKI(t)
+	startTestCPServer(t, serving, http.StatusOK, serving.caPEM)
+
+	// cpCAPool holds an unrelated CA: the server's chain must fail
+	// verification and no pin may be extracted from it.
+	o := newTrustTestOrchestrator()
+	pool := x509.NewCertPool()
+	pool.AddCert(other.caCert)
+	o.cpCAPool = pool
+
+	_, err := o.fetchControlPlaneSPKIPin(context.Background())
+	var verifyErr ErrCABundleVerifyFailed
+	if !errors.As(err, &verifyErr) {
+		t.Fatalf("expected ErrCABundleVerifyFailed for unverified chain, got %v", err)
 	}
 }
 

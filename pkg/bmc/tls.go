@@ -74,23 +74,15 @@ func HTTPSEndpoint(cfg *Config) string {
 // BuildTLSConfig returns a *tls.Config suitable for connecting to the
 // BMC described by cfg.
 //
-// Provider path (preferred): when cfg.TLS is non-nil, TLSConfig is
-// called on the provider with the HTTPS endpoint derived from cfg.
-// The provider's result is returned directly. The legacy fields
-// SkipTLSVerify and CACertPath are ignored when a provider is set —
-// the provider takes absolute precedence.
+// Provider path: when cfg.TLS is non-nil, TLSConfig is called on the
+// provider with the HTTPS endpoint derived from cfg. The provider's
+// result is returned directly.
 //
-// Legacy path (deprecated): when cfg.TLS is nil, the function falls
-// back to building a *tls.Config from the SkipTLSVerify and CACertPath
-// fields. This path exists only until Phase 3d migrates all callers to
-// supply a TLSProvider. Do not add new callers that depend on the
-// legacy path.
-//
-// Nil-provider + no legacy fields: returns a standard verified TLS
-// config (system roots, no skip-verify). This is the correct
-// secure-by-default posture; connections to BMCs presenting self-signed
-// certificates will fail, which is intentional — operators must
-// explicitly configure either a provider or a trusted CA.
+// Secure default: when cfg.TLS is nil, a standard verified TLS config
+// is returned (system roots, TLS 1.2+, no InsecureSkipVerify). Connections
+// to BMCs presenting self-signed or private-CA certificates will fail;
+// operators must supply a TLSProvider (e.g. via the platform trust resolver
+// ClassBMC scope with an spki, ca-file, or tofu strategy).
 func BuildTLSConfig(ctx context.Context, cfg *Config) (*tls.Config, error) {
 	if cfg.TLS != nil {
 		endpoint := httpsEndpoint(cfg)
@@ -101,19 +93,10 @@ func BuildTLSConfig(ctx context.Context, cfg *Config) (*tls.Config, error) {
 		return tlsCfg, nil
 	}
 
-	// Legacy path: honor deprecated SkipTLSVerify / CACertPath fields.
-	tlsCfg := &tls.Config{
+	// No provider configured: return a secure system-roots default.
+	// Callers must inject a TLSProvider for BMCs with private-CA or
+	// self-signed certificates.
+	return &tls.Config{
 		MinVersion: tls.VersionTLS12,
-	}
-	if cfg.SkipTLSVerify {
-		tlsCfg.InsecureSkipVerify = true //nolint:gosec // BMC self-signed cert support, guarded by config flag
-	}
-	if cfg.CACertPath != "" {
-		pool, err := loadCAPool(cfg.CACertPath)
-		if err != nil {
-			return nil, err
-		}
-		tlsCfg.RootCAs = pool
-	}
-	return tlsCfg, nil
+	}, nil
 }

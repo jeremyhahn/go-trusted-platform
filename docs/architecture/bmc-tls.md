@@ -225,8 +225,10 @@ AutoCertManager probe.
 
 Test harness at `test/integration/bmc/harness.go` (integration
 build tag) provides:
-- `ConfigFor(flavor)` -- pre-populated `*bmc.Config` targeting the
-  compose-network hostname
+- `ConfigFor(ctx, flavor)` -- pre-populated `*bmc.Config` with a
+  SPKI-pin `TLSProvider` derived from capturing the vBMC's self-signed
+  cert (capture-then-verify pattern; no `InsecureSkipVerify` in the
+  resulting client)
 - `WithDNSCert(cfg, cn)` -- fills the dns-01 Identity block
 - `WaitForReady(ctx, flavor)` -- barriers on vBMC startup
 - `GetStats(ctx, flavor)` -- reads the vBMC's `/debug/stats` for

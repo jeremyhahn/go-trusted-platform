@@ -944,7 +944,7 @@ func TestQuicBaaSKeyStore_ListCerts(t *testing.T) {
 			CertStore: mockCerts,
 		})
 
-		ids, err := ks.ListCerts()
+		ids, err := ks.ListCerts(context.Background())
 
 		require.NoError(t, err)
 		assert.Len(t, ids, 2)
@@ -958,7 +958,7 @@ func TestQuicBaaSKeyStore_ListCerts(t *testing.T) {
 			Crypto: &mockSDKCryptoClient{},
 		})
 
-		ids, err := ks.ListCerts()
+		ids, err := ks.ListCerts(context.Background())
 
 		require.Error(t, err)
 		assert.Nil(t, ids)
@@ -983,7 +983,7 @@ func TestQuicBaaSKeyStore_CertExists(t *testing.T) {
 			CertStore: mockCerts,
 		})
 
-		exists, err := ks.CertExists("test-cert")
+		exists, err := ks.CertExists(context.Background(), "test-cert")
 
 		require.NoError(t, err)
 		assert.True(t, exists)
@@ -1002,7 +1002,7 @@ func TestQuicBaaSKeyStore_CertExists(t *testing.T) {
 			CertStore: mockCerts,
 		})
 
-		exists, err := ks.CertExists("nonexistent")
+		exists, err := ks.CertExists(context.Background(), "nonexistent")
 
 		require.NoError(t, err)
 		assert.False(t, exists)
@@ -1014,7 +1014,7 @@ func TestQuicBaaSKeyStore_CertExists(t *testing.T) {
 			Crypto: &mockSDKCryptoClient{},
 		})
 
-		exists, err := ks.CertExists("test-cert")
+		exists, err := ks.CertExists(context.Background(), "test-cert")
 
 		require.Error(t, err)
 		assert.False(t, exists)
@@ -1196,7 +1196,7 @@ func TestQuicBaaSKeyStore_SaveCert(t *testing.T) {
 		})
 
 		cert := createTestCertificate(t, "test-cert")
-		err := ks.SaveCert("test-cert", cert)
+		err := ks.SaveCert(context.Background(), "test-cert", cert)
 
 		require.NoError(t, err)
 	})
@@ -1208,7 +1208,7 @@ func TestQuicBaaSKeyStore_SaveCert(t *testing.T) {
 			CertStore: nil,
 		})
 
-		err := ks.SaveCert("test-cert", nil)
+		err := ks.SaveCert(context.Background(), "test-cert", nil)
 
 		require.Error(t, err)
 
@@ -1233,7 +1233,7 @@ func TestQuicBaaSKeyStore_GetCert(t *testing.T) {
 			CertStore: mockCerts,
 		})
 
-		cert, err := ks.GetCert("test-cert")
+		cert, err := ks.GetCert(context.Background(), "test-cert")
 
 		require.NoError(t, err)
 		require.NotNil(t, cert)
@@ -1247,7 +1247,7 @@ func TestQuicBaaSKeyStore_GetCert(t *testing.T) {
 			CertStore: nil,
 		})
 
-		cert, err := ks.GetCert("test-cert")
+		cert, err := ks.GetCert(context.Background(), "test-cert")
 
 		require.Error(t, err)
 		assert.Nil(t, cert)
@@ -1269,7 +1269,7 @@ func TestQuicBaaSKeyStore_DeleteCert(t *testing.T) {
 			CertStore: mockCerts,
 		})
 
-		err := ks.DeleteCert("test-cert")
+		err := ks.DeleteCert(context.Background(), "test-cert")
 
 		require.NoError(t, err)
 	})
@@ -1294,7 +1294,7 @@ func TestQuicBaaSKeyStore_SaveCertChain(t *testing.T) {
 			createTestCertificate(t, "leaf"),
 			createTestCertificate(t, "root"),
 		}
-		err := ks.SaveCertChain("leaf", chain)
+		err := ks.SaveCertChain(context.Background(), "leaf", chain)
 
 		require.NoError(t, err)
 	})
@@ -1318,7 +1318,7 @@ func TestQuicBaaSKeyStore_GetCertChain(t *testing.T) {
 			CertStore: mockCerts,
 		})
 
-		chain, err := ks.GetCertChain("leaf")
+		chain, err := ks.GetCertChain(context.Background(), "leaf")
 
 		require.NoError(t, err)
 		assert.Len(t, chain, 2)
@@ -1737,7 +1737,7 @@ func TestQuicBaaSKeyStore_DeleteCert_NilCertStore(t *testing.T) {
 		Crypto: &mockSDKCryptoClient{},
 	})
 
-	err := ks.DeleteCert("test-cert")
+	err := ks.DeleteCert(context.Background(), "test-cert")
 	require.Error(t, err)
 	assert.IsType(t, ErrInvalidInput{}, err)
 }
@@ -1748,7 +1748,7 @@ func TestQuicBaaSKeyStore_SaveCertChain_NilCertStore(t *testing.T) {
 		Crypto: &mockSDKCryptoClient{},
 	})
 
-	err := ks.SaveCertChain("test-key", []*x509.Certificate{createTestCertificate(t, "test")})
+	err := ks.SaveCertChain(context.Background(), "test-key", []*x509.Certificate{createTestCertificate(t, "test")})
 	require.Error(t, err)
 	assert.IsType(t, ErrInvalidInput{}, err)
 }
@@ -1759,7 +1759,7 @@ func TestQuicBaaSKeyStore_GetCertChain_NilCertStore(t *testing.T) {
 		Crypto: &mockSDKCryptoClient{},
 	})
 
-	chain, err := ks.GetCertChain("test-key")
+	chain, err := ks.GetCertChain(context.Background(), "test-key")
 	require.Error(t, err)
 	assert.Nil(t, chain)
 	assert.IsType(t, ErrInvalidInput{}, err)
@@ -1998,7 +1998,7 @@ func TestQuicBaaSKeyStore_ListCerts_Error(t *testing.T) {
 		CertStore: mockCerts,
 	})
 
-	ids, err := ks.ListCerts()
+	ids, err := ks.ListCerts(context.Background())
 	require.Error(t, err)
 	assert.Nil(t, ids)
 	assert.IsType(t, ErrOperationFailed{}, err)

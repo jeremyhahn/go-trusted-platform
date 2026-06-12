@@ -192,7 +192,7 @@ func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *Request) 
 	// and stash the AuthorizedContext for AuthorizeRequest and downstream
 	// handlers. QUIC has no DPoP frame, so this is always a bearer validation.
 	if cv, ok := m.tokenValidator.(ClaimsTokenValidator); ok {
-		authCtx, err := cv.AuthorizeToken(ctx, req.Token, "", "", "")
+		authCtx, err := cv.AuthorizeToken(ctx, req.Token, "", "", "", "")
 		if err != nil {
 			return ctx, &Response{
 				Status:  StatusUnauthorized,

@@ -15,6 +15,7 @@ package ca
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -95,7 +96,7 @@ func (m *mockCertificateAuthority) Sign(r io.Reader, digest []byte, opts crypto.
 	}
 	return []byte("mock-signature"), nil
 }
-func (m *mockCertificateAuthority) SignCSR(csrPEM []byte, opts *xkmsca.SignOptions) (*x509.Certificate, error) {
+func (m *mockCertificateAuthority) SignCSR(_ context.Context, csrPEM []byte, opts *xkmsca.SignOptions) (*x509.Certificate, error) {
 	if m.signCSRFn != nil {
 		return m.signCSRFn(csrPEM, opts)
 	}
@@ -113,13 +114,13 @@ func (m *mockCertificateAuthority) CABundleFiltered(storeType xkmssdk.StoreType,
 	}
 	return []byte("-----BEGIN CERTIFICATE-----\nMOCK\n-----END CERTIFICATE-----"), nil
 }
-func (m *mockCertificateAuthority) Certificate(attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
+func (m *mockCertificateAuthority) Certificate(_ context.Context, attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
 	if m.certificateFn != nil {
 		return m.certificateFn(attrs)
 	}
 	return nil, errors.New("not found")
 }
-func (m *mockCertificateAuthority) Signer() (crypto.Signer, error) {
+func (m *mockCertificateAuthority) Signer(_ context.Context) (crypto.Signer, error) {
 	if m.signerFn != nil {
 		return m.signerFn()
 	}
@@ -137,14 +138,14 @@ func (m *mockCertificateAuthority) TrustedIntermediate() (*x509.Certificate, err
 	}
 	return m.intermediateCert, nil
 }
-func (m *mockCertificateAuthority) IssueCertificate(request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (m *mockCertificateAuthority) IssueCertificate(_ context.Context, request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	if m.issueCertificateFn != nil {
 		return m.issueCertificateFn(request)
 	}
 	cert := createTestCertificate(request.Subject.CommonName)
 	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 }
-func (m *mockCertificateAuthority) RevokeCert(cert *x509.Certificate, opts xkmsca.RevokeOptions) error {
+func (m *mockCertificateAuthority) RevokeCert(_ context.Context, cert *x509.Certificate, opts xkmsca.RevokeOptions) error {
 	if m.revokeFn != nil {
 		return m.revokeFn(cert, opts)
 	}
@@ -196,13 +197,13 @@ func (m *mockCertificateAuthority) Identity() string {
 	}
 	return "Test CA"
 }
-func (m *mockCertificateAuthority) Init() error {
+func (m *mockCertificateAuthority) Init(_ context.Context) error {
 	m.initialized = true
 	return nil
 }
 func (m *mockCertificateAuthority) IsInitialized() bool       { return m.initialized }
 func (m *mockCertificateAuthority) CAConfig() xkmsca.CAConfig { return m.config }
-func (m *mockCertificateAuthority) GenerateCRL() ([]byte, error) {
+func (m *mockCertificateAuthority) GenerateCRL(_ context.Context) ([]byte, error) {
 	return nil, errors.New("CRL generation not supported")
 }
 
@@ -215,7 +216,7 @@ type mockCAWithCRLGenerator struct {
 	generateCRLFn func() ([]byte, error)
 }
 
-func (m *mockCAWithCRLGenerator) GenerateCRL() ([]byte, error) {
+func (m *mockCAWithCRLGenerator) GenerateCRL(_ context.Context) ([]byte, error) {
 	if m.generateCRLFn != nil {
 		return m.generateCRLFn()
 	}

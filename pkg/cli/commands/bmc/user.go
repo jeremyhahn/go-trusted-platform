@@ -768,13 +768,22 @@ func withStandaloneUserManager(cmd *cobra.Command, standalone *standaloneBMCFlag
 		return ErrBMCMissingCredential{Field: "username (set --bmc-user)"}
 	}
 
+	port := standalone.port
+	if port == 0 {
+		port = 443
+	}
+	tlsProvider, err := standaloneTLSProvider(cmd.Context(), standalone, port)
+	if err != nil {
+		return err
+	}
+
 	cfg := &bmc.Config{
-		Address:       standalone.host,
-		Port:          standalone.port,
-		Protocol:      bmc.Protocol(standalone.protocol),
-		Username:      standalone.user,
-		Password:      pw,
-		SkipTLSVerify: standalone.skipTLSVerify,
+		Address:  standalone.host,
+		Port:     port,
+		Protocol: bmc.Protocol(standalone.protocol),
+		Username: standalone.user,
+		Password: pw,
+		TLS:      tlsProvider,
 	}
 
 	mgr, err := bmc.NewUserManager(cmd.Context(), cfg, standaloneLogger())

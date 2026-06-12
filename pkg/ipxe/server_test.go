@@ -15,6 +15,7 @@ package ipxe
 
 import (
 	"context"
+	"net"
 	"os"
 	"syscall"
 	"testing"
@@ -224,11 +225,36 @@ func TestServer_IsRunning(t *testing.T) {
 	}
 }
 
+// freeTCPPort asks the OS for an unused TCP port so tests never collide
+// with daemons already listening on fixed ports.
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("freeTCPPort: %v", err)
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+// freeUDPPort asks the OS for an unused UDP port so tests never collide
+// with daemons already listening on fixed ports.
+func freeUDPPort(t *testing.T) int {
+	t.Helper()
+	c, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("freeUDPPort: %v", err)
+	}
+	defer c.Close()
+	return c.LocalAddr().(*net.UDPAddr).Port
+}
+
 func TestServer_StartStop(t *testing.T) {
-	// Use unique ports to avoid conflicts
+	// OS-allocated ports avoid conflicts with anything already
+	// listening on the host (e.g. a fixed-port daemon).
 	config := &ServerConfig{
-		HTTPPort:      18080,
-		TFTPPort:      10069,
+		HTTPPort:      freeTCPPort(t),
+		TFTPPort:      freeUDPPort(t),
 		LocalFilesDir: t.TempDir(),
 		EnableDHCP:    false,
 		BootEntries: []BootEntry{
@@ -252,10 +278,32 @@ func TestServer_StartStop(t *testing.T) {
 		errChan <- server.Start(ctx)
 	}()
 
-	// Give services time to start
-	time.Sleep(500 * time.Millisecond)
+	// Poll for readiness with a bounded ticker instead of a fixed sleep.
+	ready := false
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.After(2 * time.Second)
+pollLoop:
+	for {
+		select {
+		case <-ticker.C:
+			if server.IsRunning() {
+				ready = true
+				break pollLoop
+			}
+			// A failed Start surfaces on errChan — fail fast instead of
+			// polling out the deadline.
+			select {
+			case err := <-errChan:
+				t.Fatalf("Start() failed before becoming ready: %v", err)
+			default:
+			}
+		case <-deadline:
+			break pollLoop
+		}
+	}
 
-	if !server.IsRunning() {
+	if !ready {
 		t.Error("Server should be running after Start()")
 	}
 

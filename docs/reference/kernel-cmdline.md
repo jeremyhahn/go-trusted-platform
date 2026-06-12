@@ -136,6 +136,57 @@ config fetch request.
 
 EAB HMAC key used to sign the config fetch request.
 
+
+---
+
+## 3a. Kernel cmdline → `trust:` YAML Mapping
+
+The bootstrap kernel cmdline parameters are set by `platformctl iso create`
+and propagate through the install flow to the running platform daemon's
+`trust:` configuration block.
+
+```
+Kernel cmdline param          Install-time action               trust: YAML key
+─────────────────────────────────────────────────────────────────────────────────
+bootstrap_strategy=<s>        passed to provisioning client     trust.default.strategies: [<s>]
+bootstrap_dns=<server>        passed to provisioning client     trust.default.dane.dns-server: <server>
+bootstrap_noise_key=<hex>     passed to provisioning client     trust.default.noise.server-static-key: <hex>
+bootstrap_spki_pin=<pin>      autoinstall.sh writes pin to      trust.default.spki.pin-file:
+                              /etc/trusted-platform/                /etc/trusted-platform/bootstrap-spki-pin
+                              bootstrap-spki-pin
+```
+
+**How the pin-file flow works** (source: `pkg/iso/customize.go` lines 3342-3351):
+
+1. The orchestrator stages the CP's SPKI pin to `/tmp/cp-spki-pin` on the
+   installer filesystem.
+2. `autoinstall.sh` copies it to `/mnt/etc/trusted-platform/bootstrap-spki-pin`
+   on the installed disk.
+3. The platform YAML template references it via:
+
+```yaml
+trust:
+  default:
+    strategies: [spki]
+    spki:
+      pin-file: /etc/trusted-platform/bootstrap-spki-pin
+```
+
+4. At boot, `pkg/trust.Config.Validate()` reads `pin-file` and resolves it
+   into the in-memory `spki.pin` field (`pkg/trust/config.go`).
+
+**`trust:` YAML class summary** (source: `pkg/trust/config.go`):
+
+| Class | Allowed strategies | Typical use |
+|-------|--------------------|-------------|
+| `default` | dane, noise, spki, embedded, tofu | First-boot CA bundle fetch; provisioning client TLS |
+| `bmc` | dane, spki, ca-file, tofu | BMC Redfish / IPMI-over-TLS client |
+| `internal` | platform-ca | Intra-platform mTLS (attestation push, SDN reporter) |
+
+The `trust:` key is read into `pkg/app.AppConfig.TrustConfig` and wired to
+`pkg/trust.NewResolver()`. It is NOT the same as the `pkg/bootstrap.ClientConfig`
+used for the one-shot CA bundle fetch at first-boot; that path uses
+`bootstrap.Fetch()` from the QuicBaaS SDK re-export.
 ---
 
 ## 4. Platform-initrd (LUKS unlock) Parameters

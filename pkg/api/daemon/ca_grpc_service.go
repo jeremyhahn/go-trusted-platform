@@ -160,7 +160,7 @@ func (s *CAGRPCService) IssueCertificate(ctx context.Context, req *platformv1.Is
 	}
 
 	// Issue the certificate
-	issued, err := s.ca.IssueCertificate(caReq)
+	issued, err := s.ca.IssueCertificate(ctx, caReq)
 	if err != nil {
 		s.logger.Error(err, "failed to issue certificate")
 		return nil, status.Error(codes.Internal, "failed to issue certificate: "+err.Error())
@@ -286,7 +286,7 @@ func (s *CAGRPCService) RevokeCertificate(ctx context.Context, req *platformv1.R
 	}
 
 	// Revoke the certificate
-	if err := s.ca.RevokeCert(cert, quicbaasca.RevokeOptions{DeleteKeys: keyAttrs != nil}); err != nil {
+	if err := s.ca.RevokeCert(ctx, cert, quicbaasca.RevokeOptions{DeleteKeys: keyAttrs != nil}); err != nil {
 		s.logger.Error(err, "failed to revoke certificate")
 		return nil, status.Error(codes.Internal, "failed to revoke certificate: "+err.Error())
 	}
@@ -384,7 +384,7 @@ func (s *CAGRPCService) RenewCertificate(ctx context.Context, req *platformv1.Re
 	}
 
 	// Issue the renewed certificate
-	issuedRenew, err := s.ca.IssueCertificate(caReq)
+	issuedRenew, err := s.ca.IssueCertificate(ctx, caReq)
 	if err != nil {
 		s.logger.Error(err, "failed to renew certificate")
 		return nil, status.Error(codes.Internal, "failed to renew certificate: "+err.Error())
@@ -528,14 +528,14 @@ func (s *CAGRPCService) GetCRL(ctx context.Context, req *platformv1.GetCRLReques
 
 	// Try to generate CRL if the CA supports it
 	type crlGenerator interface {
-		GenerateCRL() ([]byte, error)
+		GenerateCRL(ctx context.Context) ([]byte, error)
 	}
 
 	var crlDER []byte
 	var err error
 
 	if gen, ok := s.ca.(crlGenerator); ok {
-		crlDER, err = gen.GenerateCRL()
+		crlDER, err = gen.GenerateCRL(ctx)
 		if err != nil {
 			s.logger.Error(err, "failed to generate CRL")
 			// Check if CRL generation is not supported by this CA

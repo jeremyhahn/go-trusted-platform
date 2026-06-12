@@ -91,7 +91,7 @@ type localCACertIssuer struct {
 // return PEM) so the daemon's TLS listeners can use the resulting
 // cert + key directly. Returns the certificate and the freshly-minted
 // PEM-encoded EC private key.
-func (i *localCACertIssuer) IssueCertificate(_ context.Context, req *certclient.IssueCertificateRequest) (*certclient.IssueCertificateResponse, error) {
+func (i *localCACertIssuer) IssueCertificate(ctx context.Context, req *certclient.IssueCertificateRequest) (*certclient.IssueCertificateResponse, error) {
 	if req == nil {
 		return nil, ErrProvisionMissingCA{}
 	}
@@ -139,7 +139,7 @@ func (i *localCACertIssuer) IssueCertificate(_ context.Context, req *certclient.
 		signOpts.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
 	}
 
-	cert, err := i.ca.SignCSR(csrPEM, signOpts)
+	cert, err := i.ca.SignCSR(ctx, csrPEM, signOpts)
 	if err != nil {
 		return nil, ErrProvisionIssue{Role: req.Usage, Cause: err}
 	}

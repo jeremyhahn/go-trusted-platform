@@ -172,7 +172,7 @@ func (c *ClientConfig) Validate() error {
 		if c.DNSServer == "" {
 			return &ErrInvalidConfig{
 				Field:  "dns-server",
-				Reason: "DNS server is required for dane strategy (set bootstrap-client.dns-server or dns.resolver.servers)",
+				Reason: "DNS server is required for dane strategy (set --dns-server, trust.default.dane.dns-server, or dns.resolver.servers)",
 			}
 		}
 	}

@@ -453,7 +453,7 @@ func withFakeCGIFactory(t *testing.T, factory CertManagerFactory) {
 // primary is redfish and AllowCGIFallback is true, the fallback must be the
 // SMC-CGI manager.
 func TestWireFallbackBackend_SupermicroWithCGIAllowed(t *testing.T) {
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	cfg.AllowCGIFallback = true
 	m, err := NewAutoCertManager(cfg, CertBackendAuto, nil)
 	if err != nil {
@@ -475,7 +475,7 @@ func TestWireFallbackBackend_SupermicroWithCGIAllowed(t *testing.T) {
 // AllowCGIFallback is false the SMC-CGI candidate is skipped, and since the
 // only other entry is "redfish" (== primary), no fallback is wired.
 func TestWireFallbackBackend_SupermicroWithCGIDenied(t *testing.T) {
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	cfg.AllowCGIFallback = false
 	m, err := NewAutoCertManager(cfg, CertBackendAuto, nil)
 	if err != nil {
@@ -493,7 +493,7 @@ func TestWireFallbackBackend_SupermicroWithCGIDenied(t *testing.T) {
 // TestWireFallbackBackend_DellNoFallback verifies Dell has no fallback chain
 // in its Quirk so wireFallbackBackend returns nil.
 func TestWireFallbackBackend_DellNoFallback(t *testing.T) {
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	cfg.AllowCGIFallback = true
 	m, err := NewAutoCertManager(cfg, CertBackendAuto, nil)
 	if err != nil {
@@ -509,7 +509,7 @@ func TestWireFallbackBackend_DellNoFallback(t *testing.T) {
 // TestWireFallbackBackend_UnknownVendorNoFallback verifies an unrecognised
 // vendor resolves to Default (no fallback chain) so the function returns nil.
 func TestWireFallbackBackend_UnknownVendorNoFallback(t *testing.T) {
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	cfg.AllowCGIFallback = true
 	m, err := NewAutoCertManager(cfg, CertBackendAuto, nil)
 	if err != nil {
@@ -525,7 +525,7 @@ func TestWireFallbackBackend_UnknownVendorNoFallback(t *testing.T) {
 // fallback chain entry has no registered factory, that entry is skipped and
 // the function continues to the next candidate (or returns nil).
 func TestWireFallbackBackend_FactoryUnavailableSkipped(t *testing.T) {
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	cfg.AllowCGIFallback = true
 	m, err := NewAutoCertManager(cfg, CertBackendAuto, nil)
 	if err != nil {
@@ -544,7 +544,7 @@ func TestWireFallbackBackend_FactoryUnavailableSkipped(t *testing.T) {
 // TestWireFallbackBackend_FactoryConstructionErrorSkipped verifies that when
 // the candidate factory returns an error, that candidate is skipped.
 func TestWireFallbackBackend_FactoryConstructionErrorSkipped(t *testing.T) {
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	cfg.AllowCGIFallback = true
 	m, err := NewAutoCertManager(cfg, CertBackendAuto, nil)
 	if err != nil {

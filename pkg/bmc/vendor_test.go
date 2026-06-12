@@ -25,8 +25,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strconv"
 	"testing"
 )
@@ -143,9 +141,10 @@ func TestClassifyVendor(t *testing.T) {
 }
 
 // startVendorProbeServer spins up an httptest TLS server that returns the
-// given JSON body for /redfish/v1/. Returns the parsed host/port for use
-// in a *Config.
-func startVendorProbeServer(t *testing.T, status int, body string) (host string, port int, close func()) {
+// given JSON body for /redfish/v1/. Returns the parsed host/port and a
+// TLSProvider that trusts the server's self-signed certificate via its
+// certificate pool (no InsecureSkipVerify).
+func startVendorProbeServer(t *testing.T, status int, body string) (host string, port int, tlsProv TLSProvider, close func()) {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/redfish/v1/", func(w http.ResponseWriter, r *http.Request) {
@@ -164,23 +163,29 @@ func startVendorProbeServer(t *testing.T, status int, body string) (host string,
 		srv.Close()
 		t.Fatalf("parse server port: %v", err)
 	}
-	return u.Hostname(), p, srv.Close
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	prov := &fakeTLSProvider{cfg: &tls.Config{
+		RootCAs:    pool,
+		MinVersion: tls.VersionTLS12,
+	}}
+	return u.Hostname(), p, prov, srv.Close
 }
 
 func TestVendorProbe_DetectSupermicro(t *testing.T) {
 	body := `{"RedfishVersion":"1.0.2","Oem":{"Supermicro":{"VirtualMedia":{}}}}`
-	host, port, closeSrv := startVendorProbeServer(t, http.StatusOK, body)
+	host, port, tlsProv, closeSrv := startVendorProbeServer(t, http.StatusOK, body)
 	defer closeSrv()
 
 	probe, err := NewVendorProbe(&Config{
-		Address: host, Port: port, SkipTLSVerify: true,
+		Address: host, Port: port, TLS: tlsProv,
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewVendorProbe: %v", err)
 	}
 
 	got, err := probe.Detect(context.Background(), &Config{
-		Address: host, Port: port, SkipTLSVerify: true,
+		Address: host, Port: port, TLS: tlsProv,
 	})
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
@@ -192,16 +197,16 @@ func TestVendorProbe_DetectSupermicro(t *testing.T) {
 
 func TestVendorProbe_DetectDellByVendorField(t *testing.T) {
 	body := `{"RedfishVersion":"1.8.0","Vendor":"Dell Inc."}`
-	host, port, closeSrv := startVendorProbeServer(t, http.StatusOK, body)
+	host, port, tlsProv, closeSrv := startVendorProbeServer(t, http.StatusOK, body)
 	defer closeSrv()
 
-	probe, err := NewVendorProbe(&Config{Address: host, Port: port, SkipTLSVerify: true}, nil)
+	probe, err := NewVendorProbe(&Config{Address: host, Port: port, TLS: tlsProv}, nil)
 	if err != nil {
 		t.Fatalf("NewVendorProbe: %v", err)
 	}
 
 	got, err := probe.Detect(context.Background(), &Config{
-		Address: host, Port: port, SkipTLSVerify: true,
+		Address: host, Port: port, TLS: tlsProv,
 	})
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
@@ -212,15 +217,15 @@ func TestVendorProbe_DetectDellByVendorField(t *testing.T) {
 }
 
 func TestVendorProbe_DetectHTTPError(t *testing.T) {
-	host, port, closeSrv := startVendorProbeServer(t, http.StatusInternalServerError, "{}")
+	host, port, tlsProv, closeSrv := startVendorProbeServer(t, http.StatusInternalServerError, "{}")
 	defer closeSrv()
 
-	probe, err := NewVendorProbe(&Config{Address: host, Port: port, SkipTLSVerify: true}, nil)
+	probe, err := NewVendorProbe(&Config{Address: host, Port: port, TLS: tlsProv}, nil)
 	if err != nil {
 		t.Fatalf("NewVendorProbe: %v", err)
 	}
 	_, err = probe.Detect(context.Background(), &Config{
-		Address: host, Port: port, SkipTLSVerify: true,
+		Address: host, Port: port, TLS: tlsProv,
 	})
 	var want ErrConnectionFailed
 	if !errors.As(err, &want) {
@@ -229,15 +234,15 @@ func TestVendorProbe_DetectHTTPError(t *testing.T) {
 }
 
 func TestVendorProbe_DetectMalformedJSON(t *testing.T) {
-	host, port, closeSrv := startVendorProbeServer(t, http.StatusOK, "not-json")
+	host, port, tlsProv, closeSrv := startVendorProbeServer(t, http.StatusOK, "not-json")
 	defer closeSrv()
 
-	probe, err := NewVendorProbe(&Config{Address: host, Port: port, SkipTLSVerify: true}, nil)
+	probe, err := NewVendorProbe(&Config{Address: host, Port: port, TLS: tlsProv}, nil)
 	if err != nil {
 		t.Fatalf("NewVendorProbe: %v", err)
 	}
 	_, err = probe.Detect(context.Background(), &Config{
-		Address: host, Port: port, SkipTLSVerify: true,
+		Address: host, Port: port, TLS: tlsProv,
 	})
 	var want ErrConnectionFailed
 	if !errors.As(err, &want) {
@@ -246,12 +251,13 @@ func TestVendorProbe_DetectMalformedJSON(t *testing.T) {
 }
 
 func TestVendorProbe_DetectConnectionRefused(t *testing.T) {
-	probe, err := NewVendorProbe(&Config{Address: "127.0.0.1", Port: 1, SkipTLSVerify: true}, nil)
+	// No TLS provider; system roots used. Port 1 refuses connections.
+	probe, err := NewVendorProbe(&Config{Address: "127.0.0.1", Port: 1}, nil)
 	if err != nil {
 		t.Fatalf("NewVendorProbe: %v", err)
 	}
 	v, err := probe.Detect(context.Background(), &Config{
-		Address: "127.0.0.1", Port: 1, SkipTLSVerify: true,
+		Address: "127.0.0.1", Port: 1,
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -274,57 +280,21 @@ func TestVendorProbe_NilConfig(t *testing.T) {
 	}
 }
 
-func TestBuildVendorProbeTLS_WithCAPath(t *testing.T) {
-	tmp := t.TempDir()
-	pemPath := filepath.Join(tmp, "ca.pem")
-	// Reuse the httptest TLS cert so we have valid PEM material.
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	defer srv.Close()
-	pem := certPEMOf(t, srv.Certificate())
-	if err := os.WriteFile(pemPath, pem, 0o600); err != nil {
-		t.Fatalf("write pem: %v", err)
+// TestNewVendorProbe_ProviderError verifies that when the TLSProvider returns
+// an error, NewVendorProbe propagates it immediately at construction time.
+func TestNewVendorProbe_ProviderError(t *testing.T) {
+	cause := errors.New("provider unavailable")
+	cfg := &Config{
+		Address: "x",
+		Port:    443,
+		TLS:     &fakeTLSProvider{err: cause},
 	}
-
-	cfg := &Config{Address: "x", Port: 443, CACertPath: pemPath}
-	got, err := buildVendorProbeTLS(cfg)
-	if err != nil {
-		t.Fatalf("buildVendorProbeTLS: %v", err)
+	_, err := NewVendorProbe(cfg, nil)
+	if err == nil {
+		t.Fatal("expected error from NewVendorProbe with failing provider")
 	}
-	if got.RootCAs == nil {
-		t.Error("RootCAs not populated")
-	}
-	if got.MinVersion != tls.VersionTLS12 {
-		t.Errorf("MinVersion = %d, want TLS12", got.MinVersion)
-	}
-}
-
-func TestBuildVendorProbeTLS_BadCAPath(t *testing.T) {
-	cfg := &Config{Address: "x", Port: 443, CACertPath: "/nonexistent/ca.pem"}
-	_, err := buildVendorProbeTLS(cfg)
-	var want ErrInvalidConfig
-	if !errors.As(err, &want) {
-		t.Errorf("err = %v, want ErrInvalidConfig", err)
-	}
-}
-
-func TestBuildVendorProbeTLS_BadCAContent(t *testing.T) {
-	tmp := t.TempDir()
-	pemPath := filepath.Join(tmp, "ca.pem")
-	if err := os.WriteFile(pemPath, []byte("not a cert"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	cfg := &Config{Address: "x", Port: 443, CACertPath: pemPath}
-	_, err := buildVendorProbeTLS(cfg)
-	var want ErrInvalidConfig
-	if !errors.As(err, &want) {
-		t.Errorf("err = %v, want ErrInvalidConfig", err)
-	}
-}
-
-func TestNewVendorProbe_RejectsBadCAPath(t *testing.T) {
-	cfg := &Config{Address: "x", Port: 443, CACertPath: "/no/such/file"}
-	if _, err := NewVendorProbe(cfg, nil); err == nil {
-		t.Fatal("expected error from NewVendorProbe with bad CA path")
+	if !errors.Is(err, cause) {
+		t.Errorf("cause not wrapped: got %v", err)
 	}
 }
 

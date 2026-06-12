@@ -342,6 +342,100 @@ func (r *RESTAdapter) ListUsers(ctx context.Context, profileID uint64) ([]bmcsvc
 }
 
 // =============================================================================
+// Enrollment Operations
+// =============================================================================
+
+// EnrollBMC runs the BMC enrollment ceremony via the REST API.
+// POST /api/v1/bmc/{profileID}/enroll
+func (r *RESTAdapter) EnrollBMC(ctx context.Context, profileID uint64, opts *EnrollOptions) (*EnrollResult, error) {
+	var body restEnrollRequest
+	if opts != nil {
+		body.ReplaceCertificate = opts.ReplaceCertificate
+		body.RotatePassword = opts.RotatePassword
+		body.DNSRegister = opts.DNSRegister
+		body.DANEPublish = opts.DANEPublish
+	}
+
+	var resp restEnrollResponse
+	if err := r.doPost(ctx, r.bmcURL(profileID, "enroll"), body, &resp); err != nil {
+		return nil, err
+	}
+	return restEnrollResponseToDomain(&resp), nil
+}
+
+// restEnrollResponseToDomain converts the REST wire response to the local
+// domain EnrollResult type.
+func restEnrollResponseToDomain(r *restEnrollResponse) *EnrollResult {
+	if r == nil {
+		return &EnrollResult{}
+	}
+	steps := make([]EnrollStep, len(r.Steps))
+	for i, s := range r.Steps {
+		steps[i] = EnrollStep{Name: s.Name, OK: s.OK, Detail: s.Detail}
+	}
+	return &EnrollResult{
+		DeviceID:      r.DeviceID,
+		Endpoint:      r.Endpoint,
+		Hostname:      r.Hostname,
+		DNSName:       r.DNSName,
+		PinSPKISHA256: r.PinSPKISHA256,
+		FactoryCertMeta: EnrollFactoryCertMeta{
+			Subject:      r.FactoryCertMeta.Subject,
+			Issuer:       r.FactoryCertMeta.Issuer,
+			SerialNumber: r.FactoryCertMeta.SerialNumber,
+			NotBefore:    r.FactoryCertMeta.NotBefore,
+			NotAfter:     r.FactoryCertMeta.NotAfter,
+			SPKISHA256:   r.FactoryCertMeta.SPKISHA256,
+			SHA256:       r.FactoryCertMeta.SHA256,
+			CapturedAt:   r.FactoryCertMeta.CapturedAt,
+		},
+		Steps: steps,
+	}
+}
+
+// =============================================================================
+// Factory Certificate Restore Operations
+// =============================================================================
+
+// RestoreBMC runs the BMC factory-certificate restore ceremony via the REST API.
+// POST /api/v1/bmc/{profileID}/cert/restore
+func (r *RESTAdapter) RestoreBMC(ctx context.Context, profileID uint64) (*RestoreResult, error) {
+	var resp restRestoreResponse
+	if err := r.doPost(ctx, r.bmcURL(profileID, "cert", "restore"), nil, &resp); err != nil {
+		return nil, err
+	}
+	return restRestoreResponseToDomain(&resp), nil
+}
+
+// restRestoreResponseToDomain converts the REST wire response to the local
+// domain RestoreResult type.
+func restRestoreResponseToDomain(r *restRestoreResponse) *RestoreResult {
+	if r == nil {
+		return &RestoreResult{}
+	}
+	steps := make([]EnrollStep, len(r.Steps))
+	for i, s := range r.Steps {
+		steps[i] = EnrollStep{Name: s.Name, OK: s.OK, Detail: s.Detail}
+	}
+	return &RestoreResult{
+		DeviceID: r.DeviceID,
+		Endpoint: r.Endpoint,
+		Hostname: r.Hostname,
+		NewCertMeta: RestoreFactoryCertMeta{
+			Subject:      r.NewCertMeta.Subject,
+			Issuer:       r.NewCertMeta.Issuer,
+			SerialNumber: r.NewCertMeta.SerialNumber,
+			NotBefore:    r.NewCertMeta.NotBefore,
+			NotAfter:     r.NewCertMeta.NotAfter,
+			SPKISHA256:   r.NewCertMeta.SPKISHA256,
+			SHA256:       r.NewCertMeta.SHA256,
+			CapturedAt:   r.NewCertMeta.CapturedAt,
+		},
+		Steps: steps,
+	}
+}
+
+// =============================================================================
 // REST Response Types
 // =============================================================================
 
@@ -416,6 +510,56 @@ type restUserInfo struct {
 type restUsersResponse struct {
 	ProfileID string         `json:"profile_id"`
 	Users     []restUserInfo `json:"users"`
+}
+
+// restEnrollRequest is the JSON body sent to POST /api/v1/bmc/{profileID}/enroll.
+type restEnrollRequest struct {
+	ReplaceCertificate *bool `json:"replace_certificate,omitempty"`
+	RotatePassword     *bool `json:"rotate_password,omitempty"`
+	DNSRegister        *bool `json:"dns_register,omitempty"`
+	DANEPublish        *bool `json:"dane_publish,omitempty"`
+}
+
+// restEnrollStep mirrors pkg/webservice/v1/bmc.EnrollStepResponse.
+type restEnrollStep struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// restFactoryCertMeta mirrors pkg/webservice/v1/bmc.FactoryCertMetaResponse.
+type restFactoryCertMeta struct {
+	Subject      string    `json:"subject"`
+	Issuer       string    `json:"issuer"`
+	SerialNumber string    `json:"serial_number"`
+	NotBefore    time.Time `json:"not_before"`
+	NotAfter     time.Time `json:"not_after"`
+	SPKISHA256   string    `json:"spki_sha256"`
+	SHA256       string    `json:"sha256"`
+	CapturedAt   time.Time `json:"captured_at"`
+}
+
+// restEnrollResponse mirrors pkg/webservice/v1/bmc.EnrollResponse.
+// DeviceID uses the `json:",string"` tag to match the server's uint64-as-string
+// serialisation that preserves precision across JavaScript JSON parsers.
+type restEnrollResponse struct {
+	DeviceID        uint64              `json:"device_id,string"`
+	Endpoint        string              `json:"endpoint"`
+	Hostname        string              `json:"hostname"`
+	DNSName         string              `json:"dns_name,omitempty"`
+	PinSPKISHA256   string              `json:"pin_spki_sha256"`
+	FactoryCertMeta restFactoryCertMeta `json:"factory_cert_meta"`
+	Steps           []restEnrollStep    `json:"steps"`
+}
+
+// restRestoreResponse mirrors pkg/webservice/v1/bmc.RestoreResponse.
+// DeviceID uses `json:",string"` for uint64 precision preservation.
+type restRestoreResponse struct {
+	DeviceID    uint64              `json:"device_id,string"`
+	Endpoint    string              `json:"endpoint"`
+	Hostname    string              `json:"hostname"`
+	NewCertMeta restFactoryCertMeta `json:"new_cert_meta"`
+	Steps       []restEnrollStep    `json:"steps"`
 }
 
 // Ensure RESTAdapter implements BMCCommands interface.

@@ -680,14 +680,14 @@ func (s *CAGRPCService) GetCRL(
 
 	// Try to generate CRL if the CA supports it
 	type crlGenerator interface {
-		GenerateCRL() ([]byte, error)
+		GenerateCRL(ctx context.Context) ([]byte, error)
 	}
 
 	var crlDER []byte
 	var err error
 
 	if gen, ok := s.ca.(crlGenerator); ok {
-		crlDER, err = gen.GenerateCRL()
+		crlDER, err = gen.GenerateCRL(ctx)
 		if err != nil {
 			s.logger.Error(err, "failed to generate CRL")
 			return nil, status.Errorf(codes.Internal, "failed to generate CRL: %v", err)

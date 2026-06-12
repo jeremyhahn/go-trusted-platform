@@ -85,6 +85,15 @@ type qrdbBarrierClient = interface {
 	BarrierDeleteRecoveryKeys(ctx context.Context) error
 	BarrierHasRecoveryKeys(ctx context.Context) (*quicbaassdk.QRDBBarrierHasRecoveryKeysResponse, error)
 	BarrierGenerateRootToken(ctx context.Context, req *quicbaassdk.QRDBBarrierGenerateRootTokenRequest) (*quicbaassdk.QRDBBarrierRootTokenResponse, error)
+	OfficerClaimStatus(ctx context.Context) ([]*quicbaassdk.QRDBOfficerStatus, error)
+	OfficerRegister(ctx context.Context, req *quicbaassdk.QRDBOfficerRegisterRequest) (*quicbaassdk.QRDBOfficerRegisterResponse, error)
+	OfficerList(ctx context.Context) ([]*quicbaassdk.QRDBOfficerStatus, error)
+	ShareClaimBegin(ctx context.Context, req *quicbaassdk.QRDBShareClaimBeginRequest) (*quicbaassdk.QRDBShareClaimBeginResponse, error)
+	ShareClaimComplete(ctx context.Context, req *quicbaassdk.QRDBShareClaimCompleteRequest) (*quicbaassdk.QRDBShareClaimCompleteResponse, error)
+	ShamirSealVote(ctx context.Context, req *quicbaassdk.QRDBShamirSealVoteRequest) (*quicbaassdk.QRDBShamirSealVoteResponse, error)
+	RecoveryOfficerRegister(ctx context.Context, req *quicbaassdk.QRDBOfficerRegisterRequest) (*quicbaassdk.QRDBOfficerRegisterResponse, error)
+	RecoveryShareClaimBegin(ctx context.Context, req *quicbaassdk.QRDBShareClaimBeginRequest) (*quicbaassdk.QRDBShareClaimBeginResponse, error)
+	RecoveryShareClaimComplete(ctx context.Context, req *quicbaassdk.QRDBShareClaimCompleteRequest) (*quicbaassdk.QRDBShareClaimCompleteResponse, error)
 }
 
 func (f *fakeBarrierClient) BarrierInitialize(_ context.Context, req *quicbaassdk.QRDBBarrierInitializeRequest) error {
@@ -132,6 +141,33 @@ func (f *fakeBarrierClient) BarrierHasRecoveryKeys(_ context.Context) (*quicbaas
 }
 func (f *fakeBarrierClient) BarrierGenerateRootToken(_ context.Context, _ *quicbaassdk.QRDBBarrierGenerateRootTokenRequest) (*quicbaassdk.QRDBBarrierRootTokenResponse, error) {
 	return f.rootTokenResp, nil
+}
+func (f *fakeBarrierClient) OfficerClaimStatus(_ context.Context) ([]*quicbaassdk.QRDBOfficerStatus, error) {
+	return nil, nil
+}
+func (f *fakeBarrierClient) OfficerRegister(_ context.Context, _ *quicbaassdk.QRDBOfficerRegisterRequest) (*quicbaassdk.QRDBOfficerRegisterResponse, error) {
+	return nil, nil
+}
+func (f *fakeBarrierClient) OfficerList(_ context.Context) ([]*quicbaassdk.QRDBOfficerStatus, error) {
+	return nil, nil
+}
+func (f *fakeBarrierClient) ShareClaimBegin(_ context.Context, _ *quicbaassdk.QRDBShareClaimBeginRequest) (*quicbaassdk.QRDBShareClaimBeginResponse, error) {
+	return nil, nil
+}
+func (f *fakeBarrierClient) ShareClaimComplete(_ context.Context, _ *quicbaassdk.QRDBShareClaimCompleteRequest) (*quicbaassdk.QRDBShareClaimCompleteResponse, error) {
+	return nil, nil
+}
+func (f *fakeBarrierClient) ShamirSealVote(_ context.Context, _ *quicbaassdk.QRDBShamirSealVoteRequest) (*quicbaassdk.QRDBShamirSealVoteResponse, error) {
+	return nil, nil
+}
+func (f *fakeBarrierClient) RecoveryOfficerRegister(_ context.Context, _ *quicbaassdk.QRDBOfficerRegisterRequest) (*quicbaassdk.QRDBOfficerRegisterResponse, error) {
+	return nil, nil
+}
+func (f *fakeBarrierClient) RecoveryShareClaimBegin(_ context.Context, _ *quicbaassdk.QRDBShareClaimBeginRequest) (*quicbaassdk.QRDBShareClaimBeginResponse, error) {
+	return nil, nil
+}
+func (f *fakeBarrierClient) RecoveryShareClaimComplete(_ context.Context, _ *quicbaassdk.QRDBShareClaimCompleteRequest) (*quicbaassdk.QRDBShareClaimCompleteResponse, error) {
+	return nil, nil
 }
 
 // newTestDispatcher builds a dispatcher backed by an in-memory printer

@@ -37,7 +37,7 @@ func (s *claimsAuthManagerStub) GetTokenClaims(ctx context.Context, token string
 	return map[string]interface{}{}, nil
 }
 
-func (s *claimsAuthManagerStub) AuthorizeToken(ctx context.Context, token, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error) {
+func (s *claimsAuthManagerStub) AuthorizeToken(ctx context.Context, token, requiredPerm, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error) {
 	s.calls++
 	s.gotToken = token
 	if s.err != nil {

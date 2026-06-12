@@ -150,8 +150,16 @@ type ClientConfig struct {
 	// ServerAddr is the address of the QUIC server
 	ServerAddr string
 
-	// TLSConfig is the TLS configuration
+	// TLSConfig is the TLS configuration. When non-nil it is used as-is
+	// (with TLS 1.3 minimum and NextProtos filled in if absent). When nil,
+	// a minimal tls.Config is built from NextProtos and RootCAs.
 	TLSConfig *tls.Config
+
+	// RootCAs anchors the fallback TLS configuration to the given pool
+	// instead of the operating-system trust store. Ignored when TLSConfig
+	// is non-nil (the caller's TLS config is used as-is). Set to nil to
+	// preserve existing system-roots behavior.
+	RootCAs *x509.CertPool
 
 	// Timeout is the connection timeout
 	Timeout time.Duration

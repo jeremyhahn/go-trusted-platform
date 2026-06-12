@@ -932,7 +932,7 @@ softhsm-init:
 # - CA: github.com/jeremyhahn/go-trusted-ca/pkg/ca
 # - Keystore: github.com/jeremyhahn/go-xkms/pkg/backend/*
 .PHONY: test
-test:
+test: check-insecure-tls
 	@echo "Running all unit tests..."
 	go test -tags "$(BUILD_TAGS)" -v $$(go list ./pkg/... ./cmd/... 2>/dev/null | grep -v -E "$(TEST_EXCLUDE)")
 
@@ -2532,6 +2532,27 @@ fmt-check:
 		exit 1; \
 	fi
 	@echo "$(GREEN)✓ All files are properly formatted$(RESET)"
+
+.PHONY: check-insecure-tls
+## check-insecure-tls: Enforce InsecureSkipVerify allowlist (fails on unapproved use)
+check-insecure-tls:
+	@echo "$(CYAN)$(BOLD)→ Checking InsecureSkipVerify allowlist...$(RESET)"
+	@violations=$$(grep -rPn 'InsecureSkipVerify[[:space:]]*:[[:space:]]*true' --include="*.go" . \
+		| grep -Pv '^[^:]+:[0-9]+:[[:space:]]*//' \
+		| grep -v 'pkg/bootstrap/virtual_media.go' \
+		| grep -v 'pkg/bootstrap/orchestrator.go' \
+		| grep -v 'pkg/bmc/discovery.go' \
+		| grep -v 'pkg/cli/commands/bmc/standalone.go' \
+		| grep -v 'pkg/cli/commands/bootstrap/status.go' \
+		| grep -v 'test/integration/bmc/harness.go' \
+		|| true); \
+	if [ -n "$$violations" ]; then \
+		echo "$(RED)$(BOLD)✗ FORBIDDEN InsecureSkipVerify outside allowlist:$(RESET)"; \
+		printf '%s\n' "$$violations"; \
+		exit 1; \
+	fi
+	@echo "$(GREEN)✓ InsecureSkipVerify allowlist check passed$(RESET)"
+
 
 .PHONY: vet
 ## vet: Run go vet on all packages

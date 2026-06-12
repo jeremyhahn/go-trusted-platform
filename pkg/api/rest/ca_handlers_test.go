@@ -15,6 +15,7 @@ package rest
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -110,7 +111,7 @@ func (m *mockCAService) TrustedIntermediate() (*x509.Certificate, error) {
 	return m.intermediateCert, nil
 }
 
-func (m *mockCAService) IssueCertificate(req *quicbaasca.CACertificateRequest) (*x509.Certificate, error) {
+func (m *mockCAService) IssueCertificate(_ context.Context, req *quicbaasca.CACertificateRequest) (*x509.Certificate, error) {
 	if m.issueErr != nil {
 		return nil, m.issueErr
 	}
@@ -123,7 +124,7 @@ func (m *mockCAService) IssueCertificate(req *quicbaasca.CACertificateRequest) (
 	return cert, nil
 }
 
-func (m *mockCAService) Revoke(cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+func (m *mockCAService) Revoke(_ context.Context, cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
 	if m.revokeErr != nil {
 		return m.revokeErr
 	}

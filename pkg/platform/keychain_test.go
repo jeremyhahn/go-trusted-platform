@@ -1802,13 +1802,21 @@ func (m *mockKeyStore) Signer(ctx context.Context, attrs *xkmssdk.KeyAttributes)
 func (m *mockKeyStore) Decrypter(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
 	return nil, nil
 }
-func (m *mockKeyStore) SaveCert(keyID string, cert *x509.Certificate) error         { return nil }
-func (m *mockKeyStore) GetCert(keyID string) (*x509.Certificate, error)             { return nil, nil }
-func (m *mockKeyStore) DeleteCert(keyID string) error                               { return nil }
-func (m *mockKeyStore) SaveCertChain(keyID string, chain []*x509.Certificate) error { return nil }
-func (m *mockKeyStore) GetCertChain(keyID string) ([]*x509.Certificate, error)      { return nil, nil }
-func (m *mockKeyStore) ListCerts() ([]string, error)                                { return nil, nil }
-func (m *mockKeyStore) CertExists(keyID string) (bool, error)                       { return false, nil }
+func (m *mockKeyStore) SaveCert(_ context.Context, keyID string, cert *x509.Certificate) error {
+	return nil
+}
+func (m *mockKeyStore) GetCert(_ context.Context, keyID string) (*x509.Certificate, error) {
+	return nil, nil
+}
+func (m *mockKeyStore) DeleteCert(_ context.Context, keyID string) error { return nil }
+func (m *mockKeyStore) SaveCertChain(_ context.Context, keyID string, chain []*x509.Certificate) error {
+	return nil
+}
+func (m *mockKeyStore) GetCertChain(_ context.Context, keyID string) ([]*x509.Certificate, error) {
+	return nil, nil
+}
+func (m *mockKeyStore) ListCerts(_ context.Context) ([]string, error)            { return nil, nil }
+func (m *mockKeyStore) CertExists(_ context.Context, keyID string) (bool, error) { return false, nil }
 func (m *mockKeyStore) GetTLSCertificate(ctx context.Context, keyID string, attrs *xkmssdk.KeyAttributes) (tls.Certificate, error) {
 	return tls.Certificate{}, nil
 }

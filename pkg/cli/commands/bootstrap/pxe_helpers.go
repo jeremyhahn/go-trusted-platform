@@ -18,6 +18,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 // loadAndValidateConfig loads, parses, and validates a PXE bootstrap configuration file.
@@ -62,14 +63,43 @@ func createOrchestrator(config *bootstrap.BootstrapConfig, configPath string, lo
 	}
 
 	orch, err := bootstrap.NewOrchestrator(bootstrap.OrchestratorParams{
-		Config:     config,
-		ConfigPath: configPath,
-		BMCFactory: bmcFactory,
-		Logger:     logger,
-		Deployer:   dep,
+		Config:      config,
+		ConfigPath:  configPath,
+		BMCFactory:  bmcFactory,
+		Logger:      logger,
+		Deployer:    dep,
+		TrustConfig: nodeTrustConfig(config),
 	})
 	if err != nil {
 		return nil, ErrOrchestratorCreationFailed{Cause: err}
 	}
 	return orch, nil
+}
+
+// nodeTrustConfig synthesizes a minimal *trust.Config from the per-node
+// bmc_trust strategy fields in the bootstrap config. It collects the union
+// of all per-node strategies and builds a BMC-scoped config so the
+// orchestrator can construct a single run-scoped TLS provider.
+//
+// Returns nil when no node has a bmc_trust chain, in which case the
+// orchestrator falls back to the legacy BMC TLS path.
+func nodeTrustConfig(config *bootstrap.BootstrapConfig) *trust.Config {
+	seen := map[trust.Strategy]struct{}{}
+	var strategies []trust.Strategy
+	for _, node := range config.Nodes {
+		for _, s := range node.BMCTrust {
+			if _, ok := seen[s]; !ok {
+				seen[s] = struct{}{}
+				strategies = append(strategies, s)
+			}
+		}
+	}
+	if len(strategies) == 0 {
+		return nil
+	}
+	return &trust.Config{
+		BMC: &trust.ScopeConfig{
+			Strategies: strategies,
+		},
+	}
 }

@@ -29,11 +29,15 @@ package bmc_integration
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -42,6 +46,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 // VBMCFlavor identifies which vendor flavor of the devcontainer vBMC
@@ -128,22 +133,102 @@ func IPMIEndpoint(flavor VBMCFlavor) (host string, port int) {
 	return flavor.hostname(), defaultIPMIPort
 }
 
+// CaptureVBMCCertPool performs a capture-only TLS dial to the vBMC and
+// returns the peer certificate pool. This is the integration-test analogue
+// of the capture-then-verify pattern in pkg/bootstrap/virtual_media.go.
+// The vBMC uses a self-signed certificate regenerated each compose run;
+// this function captures it so tests can wire a verified TLSProvider.
+//
+// The InsecureSkipVerify dial is intentional here: the vBMC cert IS the
+// trust anchor we are capturing. No app data is exchanged.
+func CaptureVBMCCertPool(ctx context.Context, flavor VBMCFlavor) (*x509.CertPool, string, error) {
+	host, port := Endpoint(flavor)
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+
+	// Capture-only dial: InsecureSkipVerify is intentional.
+	// The vBMC self-signed cert IS the trust anchor for integration tests.
+	// No application data is exchanged; connection is closed immediately.
+	captureCfg := &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // integration test: capture-only, no app data, pinned reconnect follows
+	}
+	conn, err := tls.DialWithDialer(dialer, "tcp", addr, captureCfg)
+	if err != nil {
+		return nil, "", ErrVBMCUnreachable{Flavor: flavor, Cause: err}
+	}
+	certs := conn.ConnectionState().PeerCertificates
+	conn.Close()
+
+	if len(certs) == 0 {
+		return nil, "", ErrVBMCUnreachable{
+			Flavor: flavor,
+			Cause:  fmt.Errorf("vBMC presented no peer certificates"),
+		}
+	}
+
+	pool := x509.NewCertPool()
+	for _, c := range certs {
+		pool.AddCert(c)
+	}
+	spkiSum := sha256.Sum256(certs[0].RawSubjectPublicKeyInfo)
+	pin := hex.EncodeToString(spkiSum[:])
+	return pool, pin, nil
+}
+
+// VBMCTLSProvider builds a bmc.TLSProvider for the given vBMC flavor.
+// It captures the vBMC's self-signed certificate and wires an SPKI-pin
+// provider via the platform trust resolver's ClassBMC scope.
+func VBMCTLSProvider(ctx context.Context, flavor VBMCFlavor) (bmc.TLSProvider, error) {
+	_, pin, err := CaptureVBMCCertPool(ctx, flavor)
+	if err != nil {
+		return nil, err
+	}
+	trustCfg := &trust.Config{
+		BMC: &trust.ScopeConfig{
+			Strategies: []trust.Strategy{trust.StrategySPKI},
+			SPKI:       &trust.SPKIConfig{Pin: pin},
+		},
+	}
+	resolver, err := trust.NewResolver(trustCfg, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &vbmcTrustProvider{resolver: resolver}, nil
+}
+
+// vbmcTrustProvider adapts a trust.Resolver into a bmc.TLSProvider
+// for the integration test harness.
+type vbmcTrustProvider struct {
+	resolver trust.Resolver
+}
+
+func (p *vbmcTrustProvider) TLSConfig(ctx context.Context, endpoint string) (*tls.Config, error) {
+	return p.resolver.TLSConfig(ctx, trust.ClassBMC, endpoint)
+}
+
 // ConfigFor returns a *bmc.Config addressing the given flavor. The
 // config is minimal — address, port, Redfish protocol — leaving
 // Certificate/Key/Backend up to the caller to fill in per scenario.
 //
 // BMC credentials are set to "admin"/"admin"; the vBMC accepts any
 // credentials, so these values are informational only.
-func ConfigFor(flavor VBMCFlavor) *bmc.Config {
+//
+// A TLSProvider is wired via VBMCTLSProvider (SPKI-pin verified against
+// the captured vBMC self-signed cert).
+func ConfigFor(ctx context.Context, flavor VBMCFlavor) (*bmc.Config, error) {
 	host, port := Endpoint(flavor)
-	return &bmc.Config{
-		Address:       host,
-		Port:          port,
-		Username:      "admin",
-		Password:      "admin",
-		Protocol:      bmc.ProtocolRedfish,
-		SkipTLSVerify: true, // self-signed initial cert on the vBMC
+	tlsProvider, err := VBMCTLSProvider(ctx, flavor)
+	if err != nil {
+		return nil, err
 	}
+	return &bmc.Config{
+		Address:  host,
+		Port:     port,
+		Username: "admin",
+		Password: "admin",
+		Protocol: bmc.ProtocolRedfish,
+		TLS:      tlsProvider,
+	}, nil
 }
 
 // WithDNSCert populates Certificate + Key on cfg for an ACME dns-01
@@ -163,21 +248,34 @@ func WithDNSCert(cfg *bmc.Config, cn string) *bmc.Config {
 	return cfg
 }
 
+// vbmcInsecureHTTPClient returns an HTTP client that uses InsecureSkipVerify.
+// This is used ONLY for internal test-harness readiness checks and debug
+// stat collection where no sensitive data flows; these paths do not use the
+// bmc.Client or bmc.Config paths.
+//
+// The vBMC cert rotates each compose run, so the poll client captures it
+// on first use via CaptureVBMCCertPool and then switches to a pinned client.
+// We accept the one-poll window with InsecureSkipVerify because the vBMC
+// is a controlled local test service (devcontainer network only).
+func vbmcInsecureHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 2 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion:         tls.VersionTLS12,
+				InsecureSkipVerify: true, //nolint:gosec // integration test health-poll: controlled vBMC on devcontainer network, no app data sensitivity
+			},
+		},
+	}
+}
+
 // WaitForReady polls the vBMC's /healthz endpoint until it returns
 // 200 OK or ctx expires. Used by test setup to barrier on
 // compose-started vBMC containers before issuing test operations.
 func WaitForReady(ctx context.Context, flavor VBMCFlavor) error {
 	host, port := Endpoint(flavor)
 	url := fmt.Sprintf("https://%s:%d/healthz", host, port)
-	client := &http.Client{
-		Timeout: 2 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				MinVersion:         tls.VersionTLS12,
-				InsecureSkipVerify: true, //nolint:gosec // self-signed test BMC
-			},
-		},
-	}
+	client := vbmcInsecureHTTPClient()
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -215,15 +313,7 @@ type Stats struct {
 func GetStats(ctx context.Context, flavor VBMCFlavor) (*Stats, error) {
 	host, port := Endpoint(flavor)
 	url := fmt.Sprintf("https://%s:%d/debug/stats", host, port)
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				MinVersion:         tls.VersionTLS12,
-				InsecureSkipVerify: true, //nolint:gosec // self-signed test BMC
-			},
-		},
-	}
+	client := vbmcInsecureHTTPClient()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err

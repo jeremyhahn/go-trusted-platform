@@ -26,15 +26,36 @@ import (
 	"testing"
 )
 
-// fakeTLSProvider is a TLSProvider that returns a distinctive tls.Config
-// so tests can verify the provider path was taken.
+// fakeTLSProvider is a TLSProvider that returns a cloned tls.Config with
+// ServerName populated from the endpoint, or a fixed error.
+// Tests that provide a cert pool (e.g. httptest server cert) rely on
+// ServerName matching the server's hostname so the TLS handshake succeeds.
 type fakeTLSProvider struct {
 	cfg *tls.Config
 	err error
 }
 
-func (f *fakeTLSProvider) TLSConfig(_ context.Context, _ string) (*tls.Config, error) {
-	return f.cfg, f.err
+func (f *fakeTLSProvider) TLSConfig(_ context.Context, endpoint string) (*tls.Config, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.cfg == nil {
+		return nil, nil
+	}
+	cloned := f.cfg.Clone()
+	// Derive ServerName from host:port endpoint so TLS handshakes succeed
+	// against httptest servers (127.0.0.1:port).
+	host := endpoint
+	for i := len(endpoint) - 1; i >= 0; i-- {
+		if endpoint[i] == ':' {
+			host = endpoint[:i]
+			break
+		}
+	}
+	if cloned.ServerName == "" {
+		cloned.ServerName = host
+	}
+	return cloned, nil
 }
 
 // recordingTLSProvider records the endpoint it receives.
@@ -68,25 +89,6 @@ func TestBuildTLSConfig_ProviderPath(t *testing.T) {
 	}
 }
 
-func TestBuildTLSConfig_ProviderPrecedenceOverLegacy(t *testing.T) {
-	// SkipTLSVerify is set but provider is also set; provider must win and
-	// InsecureSkipVerify must NOT appear in the returned config.
-	providerCfg := &tls.Config{MinVersion: tls.VersionTLS13}
-	cfg := &Config{
-		Address:       "192.168.1.1",
-		Port:          443,
-		TLS:           &fakeTLSProvider{cfg: providerCfg},
-		SkipTLSVerify: true, // must be ignored
-	}
-	got, err := BuildTLSConfig(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("BuildTLSConfig: %v", err)
-	}
-	if got.InsecureSkipVerify {
-		t.Error("provider is set but InsecureSkipVerify was set (legacy field leaked through)")
-	}
-}
-
 func TestBuildTLSConfig_ProviderErrorPropagates(t *testing.T) {
 	cause := errors.New("resolver unavailable")
 	cfg := &Config{
@@ -110,67 +112,52 @@ func TestBuildTLSConfig_ProviderErrorPropagates(t *testing.T) {
 	}
 }
 
-func TestBuildTLSConfig_LegacySkipVerify(t *testing.T) {
-	cfg := &Config{SkipTLSVerify: true}
+// TestBuildTLSConfig_NoProviderSystemRoots verifies that when no TLSProvider
+// is set the returned config uses system roots (no InsecureSkipVerify, TLS 1.2+).
+func TestBuildTLSConfig_NoProviderSystemRoots(t *testing.T) {
+	cfg := &Config{Address: "192.168.1.1", Port: 443}
 	got, err := BuildTLSConfig(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("BuildTLSConfig: %v", err)
 	}
-	if !got.InsecureSkipVerify {
-		t.Error("SkipTLSVerify=true not reflected")
+	if got.InsecureSkipVerify {
+		t.Error("system-roots default must not set InsecureSkipVerify")
 	}
 	if got.MinVersion != tls.VersionTLS12 {
 		t.Errorf("MinVersion = %d, want TLS12", got.MinVersion)
 	}
-}
-
-func TestBuildTLSConfig_LegacyCACertPath(t *testing.T) {
-	// Build a PEM bundle using an httptest TLS server certificate.
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	defer srv.Close()
-
-	tmp := t.TempDir()
-	pemPath := filepath.Join(tmp, "ca.pem")
-	pemBytes := encodeCertPEM(t, srv.Certificate())
-	if err := os.WriteFile(pemPath, pemBytes, 0o600); err != nil {
-		t.Fatalf("write CA PEM: %v", err)
-	}
-
-	cfg := &Config{CACertPath: pemPath}
-	got, err := BuildTLSConfig(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("BuildTLSConfig: %v", err)
-	}
-	if got.RootCAs == nil {
-		t.Error("RootCAs not populated")
+	// RootCAs nil = system roots in the standard library.
+	if got.RootCAs != nil {
+		t.Error("system-roots config must leave RootCAs nil (use OS trust store)")
 	}
 }
 
-func TestBuildTLSConfig_LegacyCACertPath_ReadFailure(t *testing.T) {
-	cfg := &Config{CACertPath: "/nonexistent/path/ca.pem"}
-	_, err := BuildTLSConfig(context.Background(), cfg)
-	if err == nil {
-		t.Fatal("expected error for bad CA path")
-	}
-	var want ErrInvalidConfig
-	if !errors.As(err, &want) {
-		t.Errorf("err type = %T, want ErrInvalidConfig", err)
-	}
-}
-
-func TestBuildTLSConfig_NilProviderNoLegacy_DefaultVerified(t *testing.T) {
-	// No provider, no skip-verify, no CA path: should produce a standard
-	// verified config with no InsecureSkipVerify.
+// TestBuildTLSConfig_EmptyConfig ensures a zero-value Config produces a
+// secure default.
+func TestBuildTLSConfig_EmptyConfig(t *testing.T) {
 	cfg := &Config{}
 	got, err := BuildTLSConfig(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("BuildTLSConfig: %v", err)
 	}
 	if got.InsecureSkipVerify {
-		t.Error("default config must not have InsecureSkipVerify set")
+		t.Error("empty config must not produce InsecureSkipVerify")
 	}
 	if got.MinVersion != tls.VersionTLS12 {
 		t.Errorf("MinVersion = %d, want TLS12", got.MinVersion)
+	}
+}
+
+// TestBuildTLSConfig_ProviderEndpointFormatted verifies the endpoint passed
+// to the provider is correctly formatted as host:port.
+func TestBuildTLSConfig_ProviderEndpointFormatted(t *testing.T) {
+	rec := &recordingTLSProvider{}
+	cfg := &Config{Address: "10.0.0.1", Port: 8443, TLS: rec}
+	if _, err := BuildTLSConfig(context.Background(), cfg); err != nil {
+		t.Fatalf("BuildTLSConfig: %v", err)
+	}
+	if rec.endpoint == "" {
+		t.Error("endpoint not passed to provider")
 	}
 }
 
@@ -231,4 +218,48 @@ func TestErrTLSProvider_NoEndpoint(t *testing.T) {
 func encodeCertPEM(t *testing.T, cert *x509.Certificate) []byte {
 	t.Helper()
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+}
+
+// newTLSProviderFromServer returns a fakeTLSProvider whose tls.Config trusts
+// the given httptest.Server's certificate. Callers use this instead of
+// SkipTLSVerify to wire test HTTP servers in a TLSProvider-backed config.
+func newTLSProviderFromServer(t *testing.T, srv *httptest.Server) *fakeTLSProvider {
+	t.Helper()
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	return &fakeTLSProvider{
+		cfg: &tls.Config{
+			RootCAs:    pool,
+			MinVersion: tls.VersionTLS12,
+		},
+	}
+}
+
+// newHTTPClientFromServer returns an *http.Client that trusts the given
+// httptest.Server's certificate using a TLSProvider-sourced pool rather
+// than InsecureSkipVerify.
+func newHTTPClientFromServer(t *testing.T, srv *httptest.Server) *http.Client {
+	t.Helper()
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	return &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs:    pool,
+				MinVersion: tls.VersionTLS12,
+			},
+		},
+	}
+}
+
+// writePEMFile writes a single PEM certificate to a temp file and
+// returns the path.
+func writePEMFile(t *testing.T, cert *x509.Certificate) string {
+	t.Helper()
+	tmp := t.TempDir()
+	p := filepath.Join(tmp, "ca.pem")
+	if err := os.WriteFile(p, encodeCertPEM(t, cert), 0o600); err != nil {
+		t.Fatalf("write PEM file: %v", err)
+	}
+	return p
 }

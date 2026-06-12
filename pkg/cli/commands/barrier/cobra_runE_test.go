@@ -147,7 +147,7 @@ func TestCobra_SealRunE_AssumeYesSkipsPrompt(t *testing.T) {
 // with only --threshold (no --total).
 func TestCobra_RekeyRunE_PartialFlags(t *testing.T) {
 	root := NewCommand(brokenFlagsCtor())
-	err := runCobra(root, []string{"rekey", "--passphrase", "new", "--threshold", "3"}, "")
+	err := runCobra(root, []string{"rekey", "--threshold", "3"}, "")
 	if _, ok := err.(ErrRekeyPartialFlags); !ok {
 		t.Errorf("expected ErrRekeyPartialFlags, got %T: %v", err, err)
 	}

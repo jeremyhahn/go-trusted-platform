@@ -105,7 +105,7 @@ var _ ManagedCertificateManager = (*redfishCertManager)(nil)
 // Redfish CertificateService. Suitable for X11+, iDRAC9+, iLO5+
 // generation hardware.
 func NewRedfishCertManager(cfg *Config, logger *slog.Logger) (ManagedCertificateManager, error) {
-	t, err := newRedfishTransport(cfg, logger)
+	t, err := newRedfishTransport(context.Background(), cfg, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +133,7 @@ func (m *redfishCertManager) Backend() CertBackend {
 // handshake — this works on every BMC regardless of CertificateService
 // support, so it can be called even before TLS provisioning.
 func (m *redfishCertManager) GetWebCertificate(ctx context.Context) (*x509.Certificate, error) {
-	tlsCfg, err := buildVendorProbeTLS(m.cfg)
+	tlsCfg, err := BuildTLSConfig(ctx, m.cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +250,7 @@ func (m *redfishCertManager) resetManager(ctx context.Context, target string) er
 // CA, so we re-validate against the configured trust store on each
 // attempt.
 func (m *redfishCertManager) waitForReady(ctx context.Context) error {
-	tlsCfg, err := buildVendorProbeTLS(m.cfg)
+	tlsCfg, err := BuildTLSConfig(ctx, m.cfg)
 	if err != nil {
 		return err
 	}

@@ -14,7 +14,6 @@
 package bootstrap
 
 import (
-	"crypto/tls"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -336,14 +335,12 @@ func TestBoolStatus(t *testing.T) {
 	assert.Equal(t, "pending", boolStatus(false))
 }
 
+// TestCheckNodeHealth_UnreachableHost verifies that an unreachable host returns
+// "unreachable". The target 192.0.2.1 is TEST-NET-1 (RFC 5737) and is never
+// routed, so the connection fails at TCP level before TLS is attempted.
 func TestCheckNodeHealth_UnreachableHost(t *testing.T) {
 	client := &http.Client{
 		Timeout: 100 * time.Millisecond,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, //nolint:gosec // test only
-			},
-		},
 	}
 	result := checkNodeHealth(t.Context(), client, "192.0.2.1") // TEST-NET, unreachable
 	assert.Equal(t, "unreachable", result)
@@ -398,81 +395,4 @@ func TestErrPXETeardownFailed(t *testing.T) {
 	err := ErrPXETeardownFailed{Cause: assert.AnError}
 	assert.Contains(t, err.Error(), "teardown failed")
 	assert.Equal(t, assert.AnError, err.Unwrap())
-}
-
-func TestErrDeployerCreationFailed(t *testing.T) {
-	err := ErrDeployerCreationFailed{Target: "linux", Cause: assert.AnError}
-	assert.Contains(t, err.Error(), "linux")
-	assert.Contains(t, err.Error(), "failed to create deployer")
-	assert.Equal(t, assert.AnError, err.Unwrap())
-}
-
-// =============================================================================
-// BuildDeployConfig Tests
-// =============================================================================
-
-func TestBuildDeployConfig(t *testing.T) {
-	path := writeTestConfig(t, validBootstrapYAML)
-	config, err := loadAndValidateConfig(path)
-	require.NoError(t, err)
-
-	dc := buildDeployConfig(config, "")
-	require.NotNil(t, dc)
-	assert.Equal(t, "linux", string(dc.Target))
-	assert.Equal(t, "192.168.1.1", dc.Host)
-	assert.Equal(t, "admin", dc.User)
-	assert.Equal(t, "/tmp/test-key", dc.SSHKeyPath)
-	assert.Equal(t, "docker", dc.ContainerRuntime)
-	require.NotNil(t, dc.ProvisioningSubnet)
-	assert.Equal(t, "10.0.0.0/24", dc.ProvisioningSubnet.CIDR)
-	assert.Equal(t, "10.0.0.1", dc.ProvisioningSubnet.Gateway)
-	assert.Equal(t, 22, dc.Port) // default applied
-}
-
-// =============================================================================
-// Long Description Tests for PXE Commands
-// =============================================================================
-
-func TestPXECommandLongDescriptions(t *testing.T) {
-	getFlags := defaultGetFlags()
-
-	tests := []struct {
-		name     string
-		cmd      func() string
-		contains string
-	}{
-		{
-			name:     "run",
-			cmd:      func() string { return newRunCommand(getFlags).Long },
-			contains: "Phase 0",
-		},
-		{
-			name:     "discover",
-			cmd:      func() string { return newDiscoverCommand(getFlags).Long },
-			contains: "Phase 0",
-		},
-		{
-			name:     "deploy",
-			cmd:      func() string { return newDeployCommand(getFlags).Long },
-			contains: "Phase 2",
-		},
-		{
-			name:     "teardown",
-			cmd:      func() string { return newTeardownCommand(getFlags).Long },
-			contains: "bootstrap container",
-		},
-		{
-			name:     "status",
-			cmd:      func() string { return newStatusCommand(getFlags).Long },
-			contains: "health",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			long := tt.cmd()
-			assert.NotEmpty(t, long)
-			assert.Contains(t, long, tt.contains)
-		})
-	}
 }

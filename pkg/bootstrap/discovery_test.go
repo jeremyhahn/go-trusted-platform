@@ -23,6 +23,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 func discoveryTestLogger() *slog.Logger {
@@ -164,13 +166,13 @@ func TestDiscoverNodes_Mixed(t *testing.T) {
 func TestDiscoverNodes_BMCFailure(t *testing.T) {
 	nodes := []NodeConfig{
 		{
-			Hostname:         "cp-0",
-			Role:             RoleControlPlane,
-			BMCAddress:       "192.0.2.1",
-			BMCUser:          "admin",
-			BMCPassword:      "pass",
-			BMCProtocol:      "redfish",
-			BMCSkipTLSVerify: true,
+			Hostname:    "cp-0",
+			Role:        RoleControlPlane,
+			BMCAddress:  "192.0.2.1",
+			BMCUser:     "admin",
+			BMCPassword: "pass",
+			BMCProtocol: "redfish",
+			BMCTrust:    []trust.Strategy{trust.StrategyTOFU},
 		},
 	}
 
@@ -219,10 +221,9 @@ func TestBuildBMCConfig_Redfish(t *testing.T) {
 		BMCPassword:      "secret",
 		BMCProtocol:      "redfish",
 		BMCEncryptionKey: "deadbeef",
-		BMCSkipTLSVerify: true,
 	}
 
-	config := buildBMCConfig(node)
+	config := buildBMCConfig(node, nil)
 
 	if config.Address != "10.200.0.10" {
 		t.Errorf("expected address 10.200.0.10, got %s", config.Address)
@@ -233,8 +234,9 @@ func TestBuildBMCConfig_Redfish(t *testing.T) {
 	if config.Protocol != "redfish" {
 		t.Errorf("expected protocol redfish, got %s", config.Protocol)
 	}
-	if !config.SkipTLSVerify {
-		t.Error("expected SkipTLSVerify=true")
+	// TLS field is nil when no provider supplied; legacy path applies.
+	if config.TLS != nil {
+		t.Error("expected nil TLS provider when none passed")
 	}
 }
 
@@ -246,7 +248,7 @@ func TestBuildBMCConfig_IPMI(t *testing.T) {
 		BMCProtocol: "ipmi",
 	}
 
-	config := buildBMCConfig(node)
+	config := buildBMCConfig(node, nil)
 
 	if config.Port != 623 {
 		t.Errorf("expected port 623, got %d", config.Port)
@@ -264,9 +266,149 @@ func TestBuildBMCConfig_Auto(t *testing.T) {
 		BMCProtocol: "auto",
 	}
 
-	config := buildBMCConfig(node)
+	config := buildBMCConfig(node, nil)
 
 	if config.Port != 443 {
 		t.Errorf("expected port 443 for auto, got %d", config.Port)
+	}
+}
+
+// TestBuildBMCConfig_WithTLSProvider verifies that a non-nil TLSProvider is
+// wired into the returned config's TLS field.
+func TestBuildBMCConfig_WithTLSProvider(t *testing.T) {
+	node := &NodeConfig{
+		BMCAddress:  "10.200.0.10",
+		BMCUser:     "admin",
+		BMCPassword: "secret",
+		BMCProtocol: "redfish",
+	}
+
+	// Use the bootstrap provider itself as the injected value; we just need
+	// any non-nil TLSProvider to verify the wiring.
+	stub := &bootstrapBMCTLSProvider{}
+	config := buildBMCConfig(node, stub)
+
+	if config.TLS == nil {
+		t.Error("expected TLS provider to be set, got nil")
+	}
+	if config.TLS != stub {
+		t.Error("expected exact TLSProvider reference to be preserved")
+	}
+}
+
+// TestNodeBMCTrustConfig_NoChain verifies that a node without bmc_trust
+// returns the base config unchanged.
+func TestNodeBMCTrustConfig_NoChain(t *testing.T) {
+	node := &NodeConfig{Hostname: "cp-0"}
+	base := &trust.Config{}
+	result := nodeBMCTrustConfig(node, base)
+	if result != base {
+		t.Error("expected base config returned unchanged when node has no bmc_trust")
+	}
+}
+
+// TestNodeBMCTrustConfig_WithChain verifies that a node with bmc_trust builds
+// a new BMC scope with the correct strategies.
+func TestNodeBMCTrustConfig_WithChain(t *testing.T) {
+	node := &NodeConfig{
+		Hostname: "cp-0",
+		BMCTrust: []trust.Strategy{trust.StrategyTOFU},
+	}
+	result := nodeBMCTrustConfig(node, nil)
+	if result == nil {
+		t.Fatal("expected non-nil config")
+	}
+	if result.BMC == nil {
+		t.Fatal("expected BMC scope to be set")
+	}
+	if len(result.BMC.Strategies) != 1 || result.BMC.Strategies[0] != trust.StrategyTOFU {
+		t.Errorf("expected [tofu] strategies, got %v", result.BMC.Strategies)
+	}
+}
+
+// TestNodeBMCTrustConfig_WithSPKIPin verifies that bmc_spki_pin populates
+// the SPKI.Pin field on the BMC scope config.
+func TestNodeBMCTrustConfig_WithSPKIPin(t *testing.T) {
+	const pin = "abc123"
+	node := &NodeConfig{
+		Hostname:   "cp-0",
+		BMCTrust:   []trust.Strategy{trust.StrategySPKI},
+		BMCSPKIPin: pin,
+	}
+	result := nodeBMCTrustConfig(node, nil)
+	if result.BMC == nil {
+		t.Fatal("expected BMC scope to be set")
+	}
+	if result.BMC.SPKI == nil {
+		t.Fatal("expected SPKI config to be non-nil when bmc_spki_pin set")
+	}
+	if result.BMC.SPKI.Pin != pin {
+		t.Errorf("expected pin %q, got %q", pin, result.BMC.SPKI.Pin)
+	}
+}
+
+// TestNodeBMCTrustConfig_PreservesBase verifies that Default and Internal
+// scopes from the base config are preserved in the merged result.
+func TestNodeBMCTrustConfig_PreservesBase(t *testing.T) {
+	defaultScope := &trust.ScopeConfig{Strategies: []trust.Strategy{trust.StrategyTOFU}}
+	base := &trust.Config{Default: defaultScope}
+	node := &NodeConfig{
+		Hostname: "cp-0",
+		BMCTrust: []trust.Strategy{trust.StrategyCAFile},
+	}
+	result := nodeBMCTrustConfig(node, base)
+	if result.Default != defaultScope {
+		t.Error("expected Default scope from base to be preserved")
+	}
+}
+
+// TestNewBootstrapBMCTLSProvider_NilConfig verifies that a nil trust config
+// returns nil, nil, nil without error.
+func TestNewBootstrapBMCTLSProvider_NilConfig(t *testing.T) {
+	provider, pinStore, err := NewBootstrapBMCTLSProvider(nil, discoveryTestLogger())
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if provider != nil {
+		t.Error("expected nil provider for nil config")
+	}
+	if pinStore != nil {
+		t.Error("expected nil pinStore for nil config")
+	}
+}
+
+// TestNewBootstrapBMCTLSProvider_NoBMCScope verifies that a config with no
+// BMC scope returns nil, nil, nil without error.
+func TestNewBootstrapBMCTLSProvider_NoBMCScope(t *testing.T) {
+	cfg := &trust.Config{
+		Default: &trust.ScopeConfig{
+			Strategies: []trust.Strategy{trust.StrategyTOFU},
+		},
+	}
+	provider, pinStore, err := NewBootstrapBMCTLSProvider(cfg, discoveryTestLogger())
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if provider != nil {
+		t.Error("expected nil provider when BMC scope not configured")
+	}
+	if pinStore != nil {
+		t.Error("expected nil pinStore when BMC scope not configured")
+	}
+}
+
+// TestDiscoveryOptions_NilTLSProvider verifies that DiscoverNodes works when
+// no TLSProvider is set in the options (backward-compatible legacy path).
+func TestDiscoveryOptions_NilTLSProvider(t *testing.T) {
+	nodes := []NodeConfig{
+		{Hostname: "w-0", Role: RoleWorker, MACs: []string{"AA:BB:CC:DD:01:01"}},
+	}
+	logger := discoveryTestLogger()
+	discovered, err := DiscoverNodes(context.Background(), nodes, logger, DiscoveryOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(discovered) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(discovered))
 	}
 }

@@ -39,8 +39,8 @@ const (
 type DiscoveredNode struct {
 	NodeConfig
 	DiscoveredMACs []string        `json:"discovered_macs" yaml:"discovered_macs"`
-	SystemInfo    *bmc.SystemInfo `json:"system_info,omitempty" yaml:"system_info,omitempty"`
-	BMCManaged    bool            `json:"bmc_managed" yaml:"bmc_managed"`
+	SystemInfo     *bmc.SystemInfo `json:"system_info,omitempty" yaml:"system_info,omitempty"`
+	BMCManaged     bool            `json:"bmc_managed" yaml:"bmc_managed"`
 }
 
 // discoveryResult holds the outcome of a single node's discovery goroutine.
@@ -50,13 +50,27 @@ type discoveryResult struct {
 	err   error
 }
 
+// DiscoveryOptions carries optional collaborators for node discovery.
+// The zero value is valid: when TLSProvider is nil, BMC connections use
+// system roots with TLS 1.2+ minimum (the secure default from BuildTLSConfig).
+type DiscoveryOptions struct {
+	// TLSProvider is injected by the orchestrator so every BMC connection
+	// uses the run-scoped trust resolver. When nil, system roots are used.
+	TLSProvider bmc.TLSProvider
+}
+
 // DiscoverNodes iterates all nodes, queries BMCs for MAC addresses on
 // BMC-managed nodes, and returns a unified list of discovered nodes.
 // BMC discovery runs concurrently across all BMC-managed nodes.
 // Nodes with SkipInstall set are included without BMC or MAC discovery.
-func DiscoverNodes(ctx context.Context, nodes []NodeConfig, logger *slog.Logger) ([]DiscoveredNode, error) {
+func DiscoverNodes(ctx context.Context, nodes []NodeConfig, logger *slog.Logger, opts ...DiscoveryOptions) ([]DiscoveredNode, error) {
 	if len(nodes) == 0 {
 		return nil, ErrInvalidBootstrapConfig{Reason: "no nodes to discover"}
+	}
+
+	var o DiscoveryOptions
+	if len(opts) > 0 {
+		o = opts[0]
 	}
 
 	results := make([]DiscoveredNode, len(nodes))
@@ -94,7 +108,7 @@ func DiscoverNodes(ctx context.Context, nodes []NodeConfig, logger *slog.Logger)
 		wg.Add(1)
 		go func(idx int, n *NodeConfig) {
 			defer wg.Done()
-			discovered, err := discoverBMCNode(ctx, n, logger)
+			discovered, err := discoverBMCNode(ctx, n, o.TLSProvider, logger)
 			resultCh <- discoveryResult{index: idx, node: discovered, err: err}
 		}(i, node)
 	}
@@ -120,8 +134,8 @@ func DiscoverNodes(ctx context.Context, nodes []NodeConfig, logger *slog.Logger)
 }
 
 // discoverBMCNode performs MAC and system info discovery for a single BMC-managed node.
-func discoverBMCNode(ctx context.Context, node *NodeConfig, logger *slog.Logger) (DiscoveredNode, error) {
-	bmcConfig := buildBMCConfig(node)
+func discoverBMCNode(ctx context.Context, node *NodeConfig, tlsProvider bmc.TLSProvider, logger *slog.Logger) (DiscoveredNode, error) {
+	bmcConfig := buildBMCConfig(node, tlsProvider)
 
 	// Discover protocol if set to auto or empty.
 	if bmcConfig.Protocol == "" || node.BMCProtocol == "auto" {
@@ -212,13 +226,16 @@ func discoverBMCNode(ctx context.Context, node *NodeConfig, logger *slog.Logger)
 }
 
 // buildBMCConfig creates a bmc.Config from a NodeConfig's BMC fields.
-func buildBMCConfig(node *NodeConfig) *bmc.Config {
+// When tlsProvider is non-nil it is wired into cfg.TLS so BuildTLSConfig
+// uses the trust resolver path; the secure system-roots default
+// fields are not set.
+func buildBMCConfig(node *NodeConfig, tlsProvider bmc.TLSProvider) *bmc.Config {
 	config := &bmc.Config{
 		Address:       node.BMCAddress,
 		Username:      node.BMCUser,
 		Password:      node.BMCPassword,
 		EncryptionKey: node.BMCEncryptionKey,
-		SkipTLSVerify: node.BMCSkipTLSVerify,
+		TLS:           tlsProvider,
 	}
 
 	switch node.BMCProtocol {

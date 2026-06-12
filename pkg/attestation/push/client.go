@@ -46,6 +46,7 @@ type ClientOption func(*clientOptions)
 type clientOptions struct {
 	tlsConfig  *tls.Config
 	httpClient *http.Client
+	rootCAs    *x509.CertPool
 }
 
 // WithTLSConfig sets a custom TLS configuration.
@@ -59,6 +60,16 @@ func WithTLSConfig(cfg *tls.Config) ClientOption {
 func WithHTTPClient(client *http.Client) ClientOption {
 	return func(o *clientOptions) {
 		o.httpClient = client
+	}
+}
+
+// WithRootCAs anchors the default HTTP transport to the given CA pool instead
+// of the operating-system trust store. Ignored when WithHTTPClient or
+// WithTLSConfig is also provided (those options supply their own TLS config).
+// Pass a nil pool to restore system-roots behavior.
+func WithRootCAs(pool *x509.CertPool) ClientOption {
+	return func(o *clientOptions) {
+		o.rootCAs = pool
 	}
 }
 
@@ -88,6 +99,7 @@ func NewClient(config *ClientConfig, opts ...ClientOption) (*Client, error) {
 		if tlsConfig == nil {
 			tlsConfig = &tls.Config{
 				MinVersion: tls.VersionTLS12,
+				RootCAs:    options.rootCAs, // nil → system roots
 			}
 		}
 

@@ -216,7 +216,7 @@ func OIDCUnaryInterceptor(opts ...OIDCInterceptorOption) grpc.UnaryServerInterce
 		// (mirroring QUIC AuthorizeRequest and MCP AuthorizeTool). Fall back to
 		// the bool-only path otherwise (legacy QuicBaaS / platform-JWT adapter).
 		if cv, ok := config.TokenValidator.(ClaimsTokenValidator); ok {
-			authCtx, aerr := cv.AuthorizeToken(ctx, token, dpopProofFromContext(ctx), info.FullMethod, "")
+			authCtx, aerr := cv.AuthorizeToken(ctx, token, "", dpopProofFromContext(ctx), info.FullMethod, "")
 			if aerr != nil {
 				return nil, status.Error(codes.Unauthenticated, ErrTokenValidationFailed{Cause: aerr}.Error())
 			}
@@ -303,7 +303,7 @@ func OIDCStreamInterceptor(opts ...OIDCInterceptorOption) grpc.StreamServerInter
 		// it: stash the AuthorizedContext in the wrapped stream context and
 		// enforce the method's required scope against it (mirroring QUIC/MCP).
 		if cv, ok := config.TokenValidator.(ClaimsTokenValidator); ok {
-			authCtx, aerr := cv.AuthorizeToken(ctx, token, dpopProofFromContext(ctx), info.FullMethod, "")
+			authCtx, aerr := cv.AuthorizeToken(ctx, token, "", dpopProofFromContext(ctx), info.FullMethod, "")
 			if aerr != nil {
 				return status.Error(codes.Unauthenticated, ErrTokenValidationFailed{Cause: aerr}.Error())
 			}

@@ -27,6 +27,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -75,6 +76,13 @@ type ReporterConfig struct {
 	// CP can verify the request identity at TLS-handshake time.
 	HTTPClient *http.Client
 
+	// RootCAs anchors the default HTTP client's TLS verification to
+	// the platform internal CA pool. When non-nil it is used as the
+	// RootCAs in the fallback tls.Config that NewReporter builds when
+	// HTTPClient is nil. When nil the default HTTP client falls back to
+	// the operating-system trust store, preserving existing behavior.
+	RootCAs *x509.CertPool
+
 	// Collector produces the per-tick Snapshot.
 	Collector Collector
 
@@ -93,19 +101,23 @@ type Reporter struct {
 // running — call Start to kick off the ticker.
 func NewReporter(cfg ReporterConfig) (*Reporter, error) {
 	if cfg.CPBaseURL == "" {
-		return nil, fmt.Errorf("controlplane: CPBaseURL is required")
+		return nil, ErrMissingField{Field: "CPBaseURL"}
 	}
 	if cfg.GatewayID == "" {
-		return nil, fmt.Errorf("controlplane: GatewayID is required")
+		return nil, ErrMissingField{Field: "GatewayID"}
 	}
 	if cfg.Collector == nil {
-		return nil, fmt.Errorf("controlplane: Collector is required")
+		return nil, ErrMissingField{Field: "Collector"}
 	}
 	if cfg.HTTPClient == nil {
+		tlsCfg := &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			RootCAs:    cfg.RootCAs, // nil → system roots
+		}
 		cfg.HTTPClient = &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+				TLSClientConfig: tlsCfg,
 			},
 		}
 	}

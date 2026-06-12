@@ -87,6 +87,7 @@ func NewClient(config *ClientConfig, opts ...ClientOption) (*Client, error) {
 		tlsConf = &tls.Config{
 			NextProtos: config.NextProtos,
 			MinVersion: tls.VersionTLS13,
+			RootCAs:    config.RootCAs, // nil → system roots
 		}
 	} else {
 		if len(tlsConf.NextProtos) == 0 {

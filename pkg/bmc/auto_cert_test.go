@@ -15,6 +15,7 @@ package bmc
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -88,7 +89,7 @@ func withTempRegistry(t *testing.T, factories map[CertBackend]CertManagerFactory
 // given vendor via Redfish service root. Used for vendor probe in
 // unit tests. This is an in-process fake — integration tests must
 // use the real devcontainer vBMC per project rules.
-func startVendorServer(t *testing.T, vendor string) (host string, port int, close func()) {
+func startVendorServer(t *testing.T, vendor string) (host string, port int, srv *httptest.Server) {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/redfish/v1/", func(w http.ResponseWriter, r *http.Request) {
@@ -100,18 +101,38 @@ func startVendorServer(t *testing.T, vendor string) (host string, port int, clos
 		b, _ := json.Marshal(body)
 		_, _ = w.Write(b)
 	})
-	srv := httptest.NewTLSServer(mux)
+	srv = httptest.NewTLSServer(mux)
 	u, _ := url.Parse(srv.URL)
 	p, _ := strconv.Atoi(u.Port())
-	return u.Hostname(), p, srv.Close
+	return u.Hostname(), p, srv
 }
 
-func baseCfg(host string, port int) *Config {
+// baseCfg builds a minimal Redfish Config for tests.
+//
+// When srv is non-nil the Config carries a TLSProvider backed by the
+// server's self-signed certificate pool. When srv is nil (tests that
+// never actually dial because they inject fake backends via the registry)
+// the Config carries a system-roots TLSProvider — no InsecureSkipVerify.
+func baseCfg(host string, port int, srv *httptest.Server) *Config {
+	var tlsProv TLSProvider
+	if srv != nil {
+		pool := x509.NewCertPool()
+		pool.AddCert(srv.Certificate())
+		tlsProv = &fakeTLSProvider{cfg: &tls.Config{
+			RootCAs:    pool,
+			MinVersion: tls.VersionTLS12,
+		}}
+	} else {
+		// System-roots provider: secure default, never InsecureSkipVerify.
+		tlsProv = &fakeTLSProvider{cfg: &tls.Config{MinVersion: tls.VersionTLS12}}
+	}
 	return &Config{
-		Address: host, Port: port,
-		Username: "u", Password: "p",
-		Protocol:      ProtocolRedfish,
-		SkipTLSVerify: true,
+		Address:  host,
+		Port:     port,
+		Username: "u",
+		Password: "p",
+		Protocol: ProtocolRedfish,
+		TLS:      tlsProv,
 	}
 }
 
@@ -133,7 +154,7 @@ func TestNewAutoCertManager_InvalidConfig(t *testing.T) {
 }
 
 func TestNewAutoCertManager_InvalidBackend(t *testing.T) {
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	_, err := NewAutoCertManager(cfg, CertBackend("nonsense"), nil)
 	var want ErrInvalidConfig
 	if !errors.As(err, &want) {
@@ -142,7 +163,7 @@ func TestNewAutoCertManager_InvalidBackend(t *testing.T) {
 }
 
 func TestNewAutoCertManager_DefaultBackendIsAuto(t *testing.T) {
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	m, err := NewAutoCertManager(cfg, "", nil)
 	if err != nil {
 		t.Fatalf("NewAutoCertManager: %v", err)
@@ -155,7 +176,7 @@ func TestNewAutoCertManager_DefaultBackendIsAuto(t *testing.T) {
 // --- Backend() ---
 
 func TestBackend_UnresolvedReturnsRequested(t *testing.T) {
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	m, _ := NewAutoCertManager(cfg, CertBackendRedfish, nil)
 	if got := m.Backend(); got != CertBackendRedfish {
 		t.Errorf("Backend() = %q, want redfish", got)
@@ -170,7 +191,7 @@ func TestReplace_ExplicitRedfish(t *testing.T) {
 		CertBackendRedfish: func(*Config, *slog.Logger) (ManagedCertificateManager, error) { return fake, nil },
 	})
 
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	m, _ := NewAutoCertManager(cfg, CertBackendRedfish, nil)
 	defer m.Close()
 
@@ -193,7 +214,7 @@ func TestReplace_ExplicitSMCCGI_BypassesGate(t *testing.T) {
 	withTempRegistry(t, map[CertBackend]CertManagerFactory{
 		CertBackendSMCCGI: func(*Config, *slog.Logger) (ManagedCertificateManager, error) { return fake, nil },
 	})
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	// AllowCGIFallback defaults to false; explicit pin bypasses the gate.
 	m, _ := NewAutoCertManager(cfg, CertBackendSMCCGI, nil)
 	defer m.Close()
@@ -206,7 +227,7 @@ func TestReplace_ExplicitSMCCGI_BypassesGate(t *testing.T) {
 
 func TestReplace_NoFactoryRegistered(t *testing.T) {
 	withTempRegistry(t, map[CertBackend]CertManagerFactory{})
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	m, _ := NewAutoCertManager(cfg, CertBackendRedfish, nil)
 	defer m.Close()
 	key := memguard.New([]byte("k"))
@@ -221,15 +242,15 @@ func TestReplace_NoFactoryRegistered(t *testing.T) {
 // --- auto-mode path ---
 
 func TestReplace_AutoDellResolvesRedfish(t *testing.T) {
-	host, port, closeSrv := startVendorServer(t, "Dell Inc.")
-	defer closeSrv()
+	host, port, srv := startVendorServer(t, "Dell Inc.")
+	defer srv.Close()
 
 	redfish := &fakeCertManager{backend: CertBackendRedfish}
 	withTempRegistry(t, map[CertBackend]CertManagerFactory{
 		CertBackendRedfish: func(*Config, *slog.Logger) (ManagedCertificateManager, error) { return redfish, nil },
 	})
 
-	cfg := baseCfg(host, port)
+	cfg := baseCfg(host, port, srv)
 	cfg.AllowCGIFallback = true
 	m, _ := NewAutoCertManager(cfg, CertBackendAuto, nil)
 	defer m.Close()
@@ -246,15 +267,15 @@ func TestReplace_AutoDellResolvesRedfish(t *testing.T) {
 func TestReplace_AutoSupermicroWithCGIAllowed(t *testing.T) {
 	// With AllowCGIFallback=true, Supermicro auto should pick SMC-CGI
 	// directly per RecommendCertBackend.
-	host, port, closeSrv := startVendorServer(t, "Supermicro")
-	defer closeSrv()
+	host, port, srv := startVendorServer(t, "Supermicro")
+	defer srv.Close()
 
 	cgi := &fakeCertManager{backend: CertBackendSMCCGI}
 	withTempRegistry(t, map[CertBackend]CertManagerFactory{
 		CertBackendSMCCGI: func(*Config, *slog.Logger) (ManagedCertificateManager, error) { return cgi, nil },
 	})
 
-	cfg := baseCfg(host, port)
+	cfg := baseCfg(host, port, srv)
 	cfg.AllowCGIFallback = true
 	m, _ := NewAutoCertManager(cfg, CertBackendAuto, nil)
 	defer m.Close()
@@ -269,8 +290,8 @@ func TestReplace_AutoSupermicroWithCGIAllowed(t *testing.T) {
 }
 
 func TestReplace_AutoSupermicroGatedByCGIFlag(t *testing.T) {
-	host, port, closeSrv := startVendorServer(t, "Supermicro")
-	defer closeSrv()
+	host, port, srv := startVendorServer(t, "Supermicro")
+	defer srv.Close()
 
 	withTempRegistry(t, map[CertBackend]CertManagerFactory{
 		CertBackendSMCCGI: func(*Config, *slog.Logger) (ManagedCertificateManager, error) {
@@ -278,7 +299,7 @@ func TestReplace_AutoSupermicroGatedByCGIFlag(t *testing.T) {
 		},
 	})
 
-	cfg := baseCfg(host, port)
+	cfg := baseCfg(host, port, srv)
 	// AllowCGIFallback defaults to false; auto mode must reject SMC-CGI.
 	m, _ := NewAutoCertManager(cfg, CertBackendAuto, nil)
 	defer m.Close()
@@ -292,7 +313,7 @@ func TestReplace_AutoSupermicroGatedByCGIFlag(t *testing.T) {
 }
 
 func TestReplace_AutoVendorProbeFails(t *testing.T) {
-	cfg := baseCfg("127.0.0.1", 1) // closed port
+	cfg := baseCfg("127.0.0.1", 1, nil) // closed port
 	m, _ := NewAutoCertManager(cfg, CertBackendAuto, nil)
 	defer m.Close()
 	key := memguard.New([]byte("k"))
@@ -307,8 +328,8 @@ func TestReplace_AutoVendorProbeFails(t *testing.T) {
 // --- fallback path ---
 
 func TestReplace_Supermicro501FallsBackToCGI(t *testing.T) {
-	host, port, closeSrv := startVendorServer(t, "Supermicro")
-	defer closeSrv()
+	host, port, srv := startVendorServer(t, "Supermicro")
+	defer srv.Close()
 
 	// Supermicro auto resolves directly to SMC-CGI (per RecommendCertBackend),
 	// so there's no Redfish primary to fall back FROM. To cover the
@@ -328,7 +349,7 @@ func TestReplace_Supermicro501FallsBackToCGI(t *testing.T) {
 		CertBackendRedfish: func(*Config, *slog.Logger) (ManagedCertificateManager, error) { return redfish, nil },
 	})
 
-	cfg := baseCfg(host, port)
+	cfg := baseCfg(host, port, srv)
 	cfg.AllowCGIFallback = true
 	m, _ := NewAutoCertManager(cfg, CertBackendRedfish, nil)
 	defer m.Close()
@@ -405,7 +426,7 @@ func TestClose_ReleasesInstantiatedBackends(t *testing.T) {
 	withTempRegistry(t, map[CertBackend]CertManagerFactory{
 		CertBackendRedfish: func(*Config, *slog.Logger) (ManagedCertificateManager, error) { return prim, nil },
 	})
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	m, _ := NewAutoCertManager(cfg, CertBackendRedfish, nil)
 	key := memguard.New([]byte("k"))
 	defer key.Destroy()
@@ -423,7 +444,7 @@ func TestClose_ReleasesInstantiatedBackends(t *testing.T) {
 }
 
 func TestClose_WithoutInstantiation(t *testing.T) {
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	m, _ := NewAutoCertManager(cfg, CertBackendRedfish, nil)
 	if err := m.Close(); err != nil {
 		t.Errorf("Close: %v", err)
@@ -433,10 +454,10 @@ func TestClose_WithoutInstantiation(t *testing.T) {
 // --- GetWebCertificate ---
 
 func TestGetWebCertificate_ReadsPeer(t *testing.T) {
-	host, port, closeSrv := startVendorServer(t, "Dell Inc.")
-	defer closeSrv()
+	host, port, srv := startVendorServer(t, "Dell Inc.")
+	defer srv.Close()
 
-	cfg := baseCfg(host, port)
+	cfg := baseCfg(host, port, srv)
 	m, _ := NewAutoCertManager(cfg, CertBackendRedfish, nil)
 	defer m.Close()
 	cert, err := m.GetWebCertificate(context.Background())
@@ -449,7 +470,7 @@ func TestGetWebCertificate_ReadsPeer(t *testing.T) {
 }
 
 func TestGetWebCertificate_ClosedEndpoint(t *testing.T) {
-	cfg := baseCfg("127.0.0.1", 1)
+	cfg := baseCfg("127.0.0.1", 1, nil)
 	m, _ := NewAutoCertManager(cfg, CertBackendRedfish, nil)
 	defer m.Close()
 	if _, err := m.GetWebCertificate(context.Background()); err == nil {
@@ -517,7 +538,7 @@ func TestAutoClose_PropagatesError(t *testing.T) {
 	withTempRegistry(t, map[CertBackend]CertManagerFactory{
 		CertBackendRedfish: func(*Config, *slog.Logger) (ManagedCertificateManager, error) { return bad, nil },
 	})
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	m, _ := NewAutoCertManager(cfg, CertBackendRedfish, nil)
 	key := memguard.New([]byte("k"))
 	defer key.Destroy()
@@ -539,7 +560,7 @@ func TestReplace_FallbackSuccess(t *testing.T) {
 	}
 	fallback := &fakeCertManager{backend: CertBackendSMCCGI}
 
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	m, _ := NewAutoCertManager(cfg, CertBackendAuto, nil)
 	defer m.Close()
 	// Seed the resolved state directly — simulates the post-probe state
@@ -573,7 +594,7 @@ func TestReplace_FallbackAlsoFails(t *testing.T) {
 		backend:    CertBackendSMCCGI,
 		replaceErr: errors.New("cgi broken"),
 	}
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	m, _ := NewAutoCertManager(cfg, CertBackendAuto, nil)
 	defer m.Close()
 	m.mu.Lock()
@@ -595,7 +616,7 @@ func TestReplace_FallbackAlsoFails(t *testing.T) {
 
 // TestLog_WithLogger covers the non-nil logger branch.
 func TestLog_WithLogger(t *testing.T) {
-	cfg := baseCfg("x", 443)
+	cfg := baseCfg("x", 443, nil)
 	logger := slog.New(slog.NewTextHandler(new(strings.Builder), nil))
 	m, _ := NewAutoCertManager(cfg, CertBackendRedfish, logger)
 	m.log("hello", "key", "value") // exercise non-nil logger path

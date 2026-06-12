@@ -86,6 +86,10 @@ type Device struct {
 	CreatedAt       time.Time   `yaml:"created_at" json:"created_at"`
 	UpdatedAt       time.Time   `yaml:"updated_at" json:"updated_at"`
 
+	// BMCEnrollment records the outcome of the most recent BMC enrollment
+	// ceremony for this device, or nil when the BMC has never been enrolled.
+	BMCEnrollment *BMCEnrollment `yaml:"bmc_enrollment,omitempty" json:"bmc_enrollment,omitempty"`
+
 	entities.KeyValueEntity `yaml:"-" json:"-"`
 }
 

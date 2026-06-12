@@ -36,6 +36,10 @@ const (
 	// (Init/Unseal/Seal/Status). The first byte of the request payload
 	// selects the sub-operation per the TenantBarrierSub* constants below.
 	OpTenantBarrierCategory byte = 0x9E
+	// OpBMCCategory multiplexes BMC enrollment sub-operations.
+	// The first byte of the request payload selects the sub-operation
+	// per the BMCSub* constants below.
+	OpBMCCategory byte = 0x9F
 )
 
 // Tenant barrier sub-opcodes.
@@ -89,4 +93,12 @@ const (
 	FIDO2SubInfo         byte = 0x03
 	FIDO2SubRegister     byte = 0x04
 	FIDO2SubAuthenticate byte = 0x05
+)
+
+// BMC sub-opcodes.
+const (
+	// BMCSubEnroll performs the BMC enrollment ceremony for a device profile.
+	BMCSubEnroll byte = 0x01
+	// BMCSubRestore performs the BMC factory-certificate restore ceremony.
+	BMCSubRestore byte = 0x02
 )

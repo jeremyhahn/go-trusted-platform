@@ -41,13 +41,15 @@ Single-command greenfield deployment of bare metal infrastructure.
 ### Trust Bootstrap (Client)
 
 ```yaml
-bootstrap-client:
-  strategy: dane
-  server-url: "https://server.example.com:8443"
-  dns-server: "8.8.8.8:53"
-  bundle-path: "/api/v1/ca/bootstrap"
-  per-method-timeout: 15s
-  install-to-system-trust: true
+trust:
+  default:
+    strategies: [dane]
+    server-url: "https://server.example.com:8443"
+    dane:
+      dns-server: "8.8.8.8:53"
+    bundle-path: "/api/v1/ca/bootstrap"
+    per-method-timeout: 15s
+    install-to-system-trust: true
 ```
 
 ### PXE Network Bootstrap
@@ -71,4 +73,4 @@ platformctl bootstrap status --config bootstrap.yaml
 | **Noise** | Pre-shared key | Low (distribute key) | Air-gapped, high assurance |
 | **SPKI** | Cert hash | Low (compute hash once) | Rapid deployment, testing |
 | **Embedded** | Hardcoded cert | High (rebuild ISO) | Air-gapped, offline |
-| **Auto** | Multi-method | Medium | Fallback to any available |
+| **Multi-method** | First success | Medium | Fallback to any available |

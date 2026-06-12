@@ -35,6 +35,7 @@ The bmc subsystem provides tools for:
   - Bare metal provisioning
   - Certificate management (get, replace, status)
   - User account management (list, create, delete, update)
+  - BMC enrollment ceremony (PKI certificate issuance, DNS, DANE)
 
 All commands communicate with platformd REST API and require
 --server-url and --profile-id flags, or use --bmc-host for
@@ -66,7 +67,10 @@ Examples:
   platformctl bmc cert get --profile-id 1
 
   # List BMC users
-  platformctl bmc user list --profile-id 1`,
+  platformctl bmc user list --profile-id 1
+
+  # Enroll a BMC into the platform PKI
+  platformctl bmc enroll --profile-id 1`,
 	}
 
 	cmd.AddCommand(newPowerOnCommand(getFlags))
@@ -84,6 +88,7 @@ Examples:
 	cmd.AddCommand(newProvisionCommand(getFlags))
 	cmd.AddCommand(newConsoleCommand(getFlags))
 	cmd.AddCommand(newCertCommand(getFlags))
+	cmd.AddCommand(newEnrollCommand(getFlags))
 	cmd.AddCommand(newUserCommand(getFlags))
 
 	return cmd

@@ -14,6 +14,8 @@
 package webservice
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"log/slog"
 	"net/http"
@@ -220,4 +222,43 @@ func TestMutualTLSClientGet_RequestHeaders(t *testing.T) {
 	require.NoError(t, err)
 	// Verify that basic headers are present
 	assert.NotEmpty(t, receivedHeaders.Get("User-Agent"))
+}
+
+func TestNewMutalTLSClient_WithRootCAsPool(t *testing.T) {
+	logger := logging.NewLogger(slog.LevelError, io.Discard)
+	pool := x509.NewCertPool()
+
+	// Construct with a non-nil pool; verify the TLS transport carries it.
+	client := NewMutalTLSClient(logger, nil, nil, pool)
+
+	tr, ok := client.http.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", client.http.Transport)
+	}
+	if tr.TLSClientConfig == nil {
+		t.Fatal("TLSClientConfig must not be nil when RootCAs pool is provided")
+	}
+	assert.Equal(t, pool, tr.TLSClientConfig.RootCAs, "RootCAs must match the provided pool")
+	// GetClientCertificate must be wired even when ca is nil (it will error at handshake time,
+	// but the function pointer must be non-nil so the transport uses it).
+	assert.NotNil(t, tr.TLSClientConfig.GetClientCertificate)
+}
+
+func TestNewMutalTLSClient_NilRootCAsUsesSystemRoots(t *testing.T) {
+	logger := logging.NewLogger(slog.LevelError, io.Discard)
+
+	// Construct with a nil pool; verify RootCAs remains nil (system roots).
+	client := NewMutalTLSClient(logger, nil, nil, nil)
+
+	tr, ok := client.http.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", client.http.Transport)
+	}
+	if tr.TLSClientConfig == nil {
+		t.Fatal("TLSClientConfig must not be nil")
+	}
+	// A nil RootCAs means the OS trust store is used.
+	assert.Nil(t, tr.TLSClientConfig.RootCAs, "RootCAs must be nil when no pool is provided")
+	// MinVersion must not forbid TLS 1.2 connections (zero value = stdlib default).
+	assert.Less(t, tr.TLSClientConfig.MinVersion, uint16(tls.VersionTLS13), "MinVersion must not be forced to TLS 1.3")
 }

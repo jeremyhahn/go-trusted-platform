@@ -48,16 +48,12 @@ func TestEnsureRedfishClient_WithTLSProvider(t *testing.T) {
 		}
 		// A connection-refused / timeout error is acceptable here.
 	}
-	// Parent config must not be mutated.
-	if cfg.SkipTLSVerify {
-		t.Error("ensureRedfishClient must not mutate SkipTLSVerify on parent config")
-	}
 }
 
 // TestEnsureRedfishClient_NoImplicitInsecure is a regression test for the
 // deleted implicit insecure-skip-verify default. Before the fix, when
-// neither SkipTLSVerify nor CACertPath was set, ensureRedfishClient
-// silently forced skipTLS=true. After the fix it must not.
+// no TLS provider was set, ensureRedfishClient silently forced InsecureSkipVerify.
+// After the fix it must route through BuildTLSConfig (system roots).
 func TestEnsureRedfishClient_NoImplicitInsecure(t *testing.T) {
 	cfg := &Config{
 		Address:  "192.168.1.1",
@@ -65,30 +61,60 @@ func TestEnsureRedfishClient_NoImplicitInsecure(t *testing.T) {
 		Username: "admin",
 		Password: "secret",
 		Protocol: ProtocolIPMI,
-		// Deliberately no TLS provider, no SkipTLSVerify, no CACertPath.
+		// No TLS provider: system roots must be used.
 	}
 	client := newIPMIClient(cfg, slog.Default())
-	// The call will fail to connect, but SkipTLSVerify must remain false.
-	_ = client.ensureRedfishClient()
-	if cfg.SkipTLSVerify {
-		t.Error("ensureRedfishClient must not set SkipTLSVerify on parent config")
+	// Connection will fail (no real BMC at 192.168.1.1) but
+	// ensureRedfishClient must not error on TLS config construction.
+	err := client.ensureRedfishClient()
+	if err != nil {
+		// Only a connection-refused or timeout error is acceptable.
+		var tlsErr ErrTLSProvider
+		if errors.As(err, &tlsErr) {
+			t.Errorf("ensureRedfishClient set an ErrTLSProvider on a config without provider: %v", err)
+		}
 	}
 }
 
 // TestEnsureRedfishClient_Idempotent verifies the lazy guard: calling
 // ensureRedfishClient multiple times does not panic or corrupt state.
 func TestEnsureRedfishClient_Idempotent(t *testing.T) {
+	// Use a provider so the test is self-contained (no dial to real host).
+	provider := &fakeTLSProvider{cfg: &tls.Config{MinVersion: tls.VersionTLS12}}
 	cfg := &Config{
-		Address:       "192.168.1.1",
-		Port:          623,
-		Username:      "admin",
-		Password:      "secret",
-		Protocol:      ProtocolIPMI,
-		SkipTLSVerify: true,
+		Address:  "192.168.1.1",
+		Port:     623,
+		Username: "admin",
+		Password: "secret",
+		Protocol: ProtocolIPMI,
+		TLS:      provider,
 	}
 	client := newIPMIClient(cfg, slog.Default())
 	_ = client.ensureRedfishClient()
 	// Second call must be a no-op (client already set or construction
 	// already attempted). Must not panic.
 	_ = client.ensureRedfishClient()
+}
+
+// TestEnsureRedfishClient_TLSProviderPropagated verifies that the synthesized
+// Redfish sub-config carries the parent TLS provider (not nil, not a new
+// independent config).
+func TestEnsureRedfishClient_TLSProviderPropagated(t *testing.T) {
+	provider := &fakeTLSProvider{cfg: &tls.Config{MinVersion: tls.VersionTLS12}}
+	cfg := &Config{
+		Address:  "192.168.1.1",
+		Port:     623,
+		Username: "admin",
+		Password: "secret",
+		Protocol: ProtocolIPMI,
+		TLS:      provider,
+	}
+	client := newIPMIClient(cfg, slog.Default())
+	// We cannot inspect the internal redfishConfig directly, but we can
+	// verify that the call succeeds at the TLS-config level (provider is
+	// reached) and that the parent config is not mutated.
+	_ = client.ensureRedfishClient()
+	if cfg.TLS != provider {
+		t.Error("parent Config.TLS was mutated by ensureRedfishClient")
+	}
 }

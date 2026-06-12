@@ -14,6 +14,7 @@
 package bmc
 
 import (
+	"crypto/tls"
 	"errors"
 	"log/slog"
 	"testing"
@@ -85,12 +86,12 @@ func TestDefaultClientFactory_Redfish(t *testing.T) {
 
 	t.Run("creates Redfish client", func(t *testing.T) {
 		cfg := &Config{
-			Address:       "192.168.1.100",
-			Port:          443,
-			Username:      "admin",
-			Password:      "secret",
-			Protocol:      ProtocolRedfish,
-			SkipTLSVerify: true,
+			Address:  "192.168.1.100",
+			Port:     443,
+			Username: "admin",
+			Password: "secret",
+			Protocol: ProtocolRedfish,
+			TLS:      &fakeTLSProvider{cfg: &tls.Config{MinVersion: tls.VersionTLS12}},
 		}
 		client, err := factory.NewClient(cfg)
 		if err != nil {
@@ -133,12 +134,12 @@ func TestRedfishClientFactory_NewClient(t *testing.T) {
 
 	t.Run("valid config", func(t *testing.T) {
 		cfg := &Config{
-			Address:       "192.168.1.100",
-			Port:          443,
-			Username:      "admin",
-			Password:      "secret",
-			Protocol:      ProtocolRedfish,
-			SkipTLSVerify: true,
+			Address:  "192.168.1.100",
+			Port:     443,
+			Username: "admin",
+			Password: "secret",
+			Protocol: ProtocolRedfish,
+			TLS:      &fakeTLSProvider{cfg: &tls.Config{MinVersion: tls.VersionTLS12}},
 		}
 		client, err := factory.NewClient(cfg)
 		if err != nil {
@@ -198,7 +199,8 @@ func TestDefaultRedfishConfig(t *testing.T) {
 	if cfg.Protocol != ProtocolRedfish {
 		t.Errorf("Protocol = %q, want %q", cfg.Protocol, ProtocolRedfish)
 	}
-	if cfg.SkipTLSVerify {
-		t.Error("SkipTLSVerify should default to false")
+	// TLS is nil by default: provider-or-system-roots contract.
+	if cfg.TLS != nil {
+		t.Error("TLS provider should be nil in the default config")
 	}
 }

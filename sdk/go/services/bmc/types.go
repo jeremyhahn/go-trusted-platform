@@ -203,3 +203,94 @@ type User struct {
 	// Channel is the IPMI channel index.
 	Channel uint32 `json:"channel" yaml:"channel"`
 }
+
+// =============================================================================
+// Enrollment types
+// =============================================================================
+
+// EnrollOptions carries optional per-enrollment overrides for the BMC
+// enrollment ceremony. Nil pointer fields preserve the profile's stored
+// enrollment config defaults.
+type EnrollOptions struct {
+	// ReplaceCertificate overrides the profile's replace_certificate flag.
+	ReplaceCertificate *bool
+	// RotatePassword overrides the profile's rotate_password flag.
+	RotatePassword *bool
+	// DNSRegister overrides the profile's dns_register flag.
+	DNSRegister *bool
+	// DANEPublish overrides the profile's dane_publish flag.
+	DANEPublish *bool
+}
+
+// EnrollStep records the outcome of a single step in the enrollment ceremony.
+type EnrollStep struct {
+	// Name is the step identifier (e.g. "trust", "factory_cert", "credentials").
+	Name string `json:"name"`
+	// OK indicates whether the step succeeded.
+	OK bool `json:"ok"`
+	// Detail provides optional human-readable detail, typically set on failure.
+	Detail string `json:"detail,omitempty"`
+}
+
+// FactoryCertMeta holds auditable metadata captured from the BMC factory TLS
+// certificate at the start of the enrollment ceremony.
+type FactoryCertMeta struct {
+	// Subject is the certificate subject distinguished name.
+	Subject string `json:"subject"`
+	// Issuer is the certificate issuer distinguished name.
+	Issuer string `json:"issuer"`
+	// SerialNumber is the certificate serial number in hex.
+	SerialNumber string `json:"serial_number"`
+	// NotBefore is the certificate validity start time.
+	NotBefore time.Time `json:"not_before"`
+	// NotAfter is the certificate validity end time.
+	NotAfter time.Time `json:"not_after"`
+	// SPKISHA256 is the hex-encoded SHA-256 digest of the SubjectPublicKeyInfo.
+	SPKISHA256 string `json:"spki_sha256"`
+	// SHA256 is the hex-encoded SHA-256 digest of the full certificate DER.
+	SHA256 string `json:"sha256"`
+	// CapturedAt is the time the factory certificate was captured.
+	CapturedAt time.Time `json:"captured_at"`
+}
+
+// RestoreResult is the full outcome of a successful BMC factory-certificate
+// restore ceremony.
+type RestoreResult struct {
+	// DeviceID is the platform device ID of the BMC that was restored.
+	DeviceID uint64 `json:"device_id,string"`
+	// Endpoint is the BMC HTTPS endpoint (host:port).
+	Endpoint string `json:"endpoint"`
+	// Hostname is the BMC hostname.
+	Hostname string `json:"hostname"`
+	// NewCertMeta holds auditable metadata from the new self-signed certificate
+	// that the BMC generated during the restore.
+	NewCertMeta FactoryCertMeta `json:"new_cert_meta"`
+	// NewCertPEM is the PEM-encoded new self-signed certificate.
+	NewCertPEM string `json:"new_cert_pem,omitempty"`
+	// Steps records the per-step outcomes of the restore ceremony.
+	Steps []EnrollStep `json:"steps"`
+}
+
+// EnrollResult is the full outcome of a successful BMC enrollment ceremony.
+type EnrollResult struct {
+	// DeviceID is the platform device ID assigned to the enrolled BMC.
+	DeviceID uint64 `json:"device_id,string"`
+	// Endpoint is the BMC HTTPS endpoint (host:port).
+	Endpoint string `json:"endpoint"`
+	// Hostname is the BMC hostname.
+	Hostname string `json:"hostname"`
+	// DNSName is the FQDN registered in the platform DNS, if requested.
+	DNSName string `json:"dns_name,omitempty"`
+	// PinSPKISHA256 is the HPKP-style SHA-256 pin of the new certificate's SPKI.
+	PinSPKISHA256 string `json:"pin_spki_sha256"`
+	// FactoryCertPEM is the PEM-encoded factory certificate captured before replacement.
+	FactoryCertPEM string `json:"factory_cert_pem,omitempty"`
+	// FactoryCertMeta holds metadata from the captured factory certificate.
+	FactoryCertMeta FactoryCertMeta `json:"factory_cert_meta"`
+	// NewCertPEM is the PEM-encoded replacement certificate issued by the platform CA.
+	NewCertPEM string `json:"new_cert_pem,omitempty"`
+	// CACertPEM is the PEM-encoded platform CA certificate that signed the new cert.
+	CACertPEM string `json:"ca_cert_pem,omitempty"`
+	// Steps records the per-step outcomes of the enrollment ceremony.
+	Steps []EnrollStep `json:"steps"`
+}

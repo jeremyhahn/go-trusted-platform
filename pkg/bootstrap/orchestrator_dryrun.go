@@ -62,17 +62,17 @@ type DryRunResult struct {
 
 // DryRunNodeResult holds validation results for a single node.
 type DryRunNodeResult struct {
-	Hostname       string `json:"hostname" yaml:"hostname"`
-	Role           string `json:"role" yaml:"role"`
-	BMCAddress     string `json:"bmc_address,omitempty" yaml:"bmc_address,omitempty"`
-	BMCProtocol    string `json:"bmc_protocol,omitempty" yaml:"bmc_protocol,omitempty"`
-	BMCReachable   bool   `json:"bmc_reachable" yaml:"bmc_reachable"`
-	BMCManaged     bool   `json:"bmc_managed" yaml:"bmc_managed"`
+	Hostname       string   `json:"hostname" yaml:"hostname"`
+	Role           string   `json:"role" yaml:"role"`
+	BMCAddress     string   `json:"bmc_address,omitempty" yaml:"bmc_address,omitempty"`
+	BMCProtocol    string   `json:"bmc_protocol,omitempty" yaml:"bmc_protocol,omitempty"`
+	BMCReachable   bool     `json:"bmc_reachable" yaml:"bmc_reachable"`
+	BMCManaged     bool     `json:"bmc_managed" yaml:"bmc_managed"`
 	MACs           []string `json:"macs,omitempty" yaml:"macs,omitempty"`
 	DiscoveredMACs []string `json:"discovered_macs,omitempty" yaml:"discovered_macs,omitempty"`
-	ResolvedConfig string `json:"resolved_config,omitempty" yaml:"resolved_config,omitempty"`
-	Status         string `json:"status" yaml:"status"`
-	Error          string `json:"error,omitempty" yaml:"error,omitempty"`
+	ResolvedConfig string   `json:"resolved_config,omitempty" yaml:"resolved_config,omitempty"`
+	Status         string   `json:"status" yaml:"status"`
+	Error          string   `json:"error,omitempty" yaml:"error,omitempty"`
 }
 
 // SwitchPlan describes the planned switch configuration changes.
@@ -525,7 +525,7 @@ func (o *Orchestrator) dryRunSingleNode(ctx context.Context, node *NodeConfig) D
 // attempts read-only MAC discovery via bmc.DiscoverMAC. No write operations
 // are performed.
 func (o *Orchestrator) dryRunBMCNode(ctx context.Context, node *NodeConfig, nr *DryRunNodeResult) {
-	bmcConfig := buildBMCConfig(node)
+	bmcConfig := buildBMCConfig(node, o.bmcTLSProvider)
 
 	client, err := o.bmcFactory.NewClient(bmcConfig)
 	if err != nil {

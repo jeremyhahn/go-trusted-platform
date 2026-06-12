@@ -58,12 +58,16 @@ Examples:
 
   # Replace the BMC web certificate
   platformctl bmc cert replace --profile-id 1 \
-    --cert /path/to/cert.pem --key /path/to/key.pem`,
+    --cert /path/to/cert.pem --key /path/to/key.pem
+
+  # Restore the BMC factory certificate
+  platformctl bmc cert restore --profile-id 1 --factory`,
 	}
 
 	cmd.AddCommand(newCertGetCommand(getFlags))
 	cmd.AddCommand(newCertStatusCommand(getFlags))
 	cmd.AddCommand(newCertReplaceCommand(getFlags))
+	cmd.AddCommand(newCertRestoreCommand(getFlags))
 
 	return cmd
 }
@@ -341,13 +345,22 @@ func withStandaloneCertManager(cmd *cobra.Command, standalone *standaloneBMCFlag
 		return ErrBMCMissingCredential{Field: "username (set --bmc-user)"}
 	}
 
+	port := standalone.port
+	if port == 0 {
+		port = 443
+	}
+	tlsProvider, err := standaloneTLSProvider(cmd.Context(), standalone, port)
+	if err != nil {
+		return err
+	}
+
 	cfg := &bmc.Config{
-		Address:       standalone.host,
-		Port:          standalone.port,
-		Protocol:      bmc.Protocol(standalone.protocol),
-		Username:      standalone.user,
-		Password:      pw,
-		SkipTLSVerify: standalone.skipTLSVerify,
+		Address:  standalone.host,
+		Port:     port,
+		Protocol: bmc.Protocol(standalone.protocol),
+		Username: standalone.user,
+		Password: pw,
+		TLS:      tlsProvider,
 	}
 
 	mgr, err := bmc.NewAutoCertManager(cfg, bmc.CertBackendAuto, standaloneLogger())

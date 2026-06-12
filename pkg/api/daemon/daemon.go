@@ -950,6 +950,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		quicHandler.SetLUKSService(luksSvc)
 		quicHandler.SetFIDO2Service(fido2Svc)
 
+		// Wire the BMCEnroller into the QUIC handler so OpBMCCategory
+		// requests execute the real enrollment ceremony. Guarded on both
+		// App and DeviceProfileService being present.
+		if config.App != nil && config.DeviceProfileService != nil {
+			quicHandler.SetBMCEnroller(config.App, config.DeviceProfileService)
+			logger.Info("BMC QUIC enroller wired")
+		}
+
 		// Prepare QUIC server configuration
 		quicConfig := config.QUICConfig
 		if quicConfig == nil {
@@ -1172,9 +1180,29 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Create BMC service for bare metal management. The same service
 	// powers the gRPC, REST and (when configured) the orchestrated
 	// baremetal provisioning workflows.
+	//
+	// Resolve the BMC TLS provider from the App trust resolver. This wires
+	// all daemon-side BMC HTTPS through the platform class-BMC trust chain.
+	// When App is absent the provider is nil and BMC operates without a
+	// custom TLS provider (factory / static TLS only).
+	var bmcTLSProvider bmc.TLSProvider
+	if config.App != nil {
+		bmcTLSProvider = config.App.BMCTLSProvider()
+	}
+
+	// Build the profile store. When DeviceProfileService is absent the
+	// store is nil; callers that require profile-backed config (enrollment)
+	// will return ErrProfileNotFound. The TLS provider is injected so every
+	// profile-resolved config routes through the trust resolver.
+	var bmcProfileStore bmc.ProfileStore
+	if config.DeviceProfileService != nil {
+		bmcProfileStore = newDeviceProfileStore(config.DeviceProfileService, bmcTLSProvider)
+	}
+
 	bmcSvc, bmcErr := bmc.NewService(bmc.ServiceParams{
-		Factory: bmc.NewIPMIClientFactory(logger.Slog()),
-		Logger:  logger.Slog(),
+		Factory:  bmc.NewIPMIClientFactory(logger.Slog()),
+		Profiles: bmcProfileStore,
+		Logger:   logger.Slog(),
 	})
 	if bmcErr != nil {
 		logger.Warn("BMC service creation failed", "error", bmcErr)
@@ -1184,6 +1212,15 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// ProvisionStatus return FailedPrecondition until a baremetal
 		// orchestrator is wired via SetBaremetalService.
 		bmcGRPCService := NewBMCGRPCService(bmcSvc, nil, logger.Slog())
+
+		// Wire the BMCEnroller into the gRPC service so EnrollBMC RPCs
+		// execute the real ceremony rather than returning Unimplemented.
+		// guarded on both App and DeviceProfileService being present.
+		if config.App != nil && config.DeviceProfileService != nil {
+			bmcGRPCService.SetEnroller(config.App, config.DeviceProfileService)
+			logger.Info("BMC gRPC enroller wired")
+		}
+
 		if grpcServer != nil {
 			platformv1.RegisterBMCServiceServer(grpcServer, bmcGRPCService)
 		}
@@ -1201,6 +1238,21 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 				Logger:         logger,
 			})
 			if bmcHandlerErr == nil {
+				// Wire the BMCEnrollerServicer adapter so the REST enroll
+				// endpoint delegates to the real App enrollment ceremony.
+				if config.App != nil && config.DeviceProfileService != nil {
+					lookup := &profileLookupAdapter{profileSvc: config.DeviceProfileService}
+					bmcHandler.SetEnroller(
+						newRESTBMCEnrollerAdapter(config.App),
+						lookup,
+					)
+					logger.Info("BMC REST enroller wired")
+					bmcHandler.SetRestorer(
+						newRESTBMCRestorerAdapter(config.App),
+						lookup,
+					)
+					logger.Info("BMC REST restorer wired")
+				}
 				daemon.concreteRestServer.SetBMCHandler(bmcHandler)
 				logger.Info("BMC management handler wired into REST server")
 			} else {
@@ -1313,6 +1365,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		EABDelivery:          d.eabDelivery,
 		ClusterService:       d.clusterService,
 		InvitationService:    d.invitationService,
+		BMCEnroller:          d.config.App,
 	})
 
 	// Wire DNS service to MCP provider if available via App

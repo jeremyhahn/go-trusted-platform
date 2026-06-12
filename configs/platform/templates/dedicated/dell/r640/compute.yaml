@@ -181,23 +181,32 @@ dns:
 
 
 # =============================================================================
-# BOOTSTRAP CLIENT CONFIGURATION (Trust Bootstrap)
+# TRUST CONFIGURATION (Client-side Trust Bootstrap)
 # =============================================================================
 
-# Client-side trust bootstrap fetches the CA certificate bundle from the server
-# before TLS can be established. Strategies: dane, noise, spki, embedded, auto.
-# NOTE: dns-server is optional when dns.resolver is configured. When omitted,
-# the bootstrap client derives the DNS server from dns.resolver.servers[0].
-bootstrap-client:
-  strategy: dane
-  server-url: "https://198.18.0.1:8443"
-  # hostname is required for DANE when server-url uses an IP address,
-  # because TLSA records are published under the hostname, not the IP.
-  hostname: "cp.example.com"
-  dns-server: "198.18.0.1:8053"
-  bundle-path: "/api/v1/ca/bootstrap"
-  per-method-timeout: 15s
-  install-to-system-trust: true
+# Client-side trust resolution configures how the platform establishes TLS
+# trust before the CA certificate is available. The default scope is used for
+# control-plane endpoints (CA bundle fetch, ACME directory, provisioning server).
+#
+# strategies: ordered fallback chain — the resolver tries each in turn and
+# returns the first success. "auto" in the old schema maps to [dane, noise, spki].
+#
+# NOTE: trust.default.dane.dns-server is optional when dns.resolver is configured.
+# When omitted, the bootstrap client derives the DNS server from
+# dns.resolver.servers[0].
+trust:
+  default:
+    strategies: [dane]
+    server-url: "https://198.18.0.1:8443"
+    # hostname is required for DANE when server-url uses an IP address,
+    # because TLSA records are published under the hostname, not the IP.
+    hostname: "cp.example.com"
+    bundle-path: "/api/v1/ca/bootstrap"
+    per-method-timeout: 15s
+    install-to-system-trust: true
+    dane:
+      # dns-server is optional here; derived from dns.resolver.servers[0] when omitted.
+      dns-server: "198.18.0.1:8053"
 
 # =============================================================================
 # ACME CLIENT CONFIGURATION

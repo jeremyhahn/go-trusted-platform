@@ -66,6 +66,10 @@ type QUICServiceHandler struct {
 	pivQUIC      *pivQUICHandlers
 	luksQUIC     *luksQUICHandlers
 	fido2QUIC    *fido2QUICHandlers
+	// bmcEnrollQUIC is wired via SetBMCEnroller for the OpBMCCategory handler.
+	bmcEnrollQUIC *bmcEnrollQUICHandlers
+	// bmcRestoreQUIC is wired via SetBMCRestorer for the BMCSubRestore handler.
+	bmcRestoreQUIC *bmcRestoreQUICHandlers
 }
 
 // QUICServiceHandlerOption is a functional option for configuring QUICServiceHandler
@@ -482,6 +486,10 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Reques
 	// barrier Init/Unseal/Seal/Status sub-operations.
 	case req.Opcode == quic.OpTenantBarrierCategory:
 		return h.handleTenantBarrierCategory(ctx, req)
+
+	// BMC category opcode (0x9F) - multiplexes BMC enrollment sub-operations.
+	case req.Opcode == quic.OpBMCCategory:
+		return h.handleBMCCategory(ctx, req)
 
 	// KMS Key Management Operations (0xC0-0xCF)
 	case req.Opcode >= quic.OpKMSGenerateKey && req.Opcode <= quic.OpKMSBackendStatus:

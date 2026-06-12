@@ -363,3 +363,102 @@ func timestampToTime(ts *timestamppb.Timestamp) time.Time {
 	}
 	return ts.AsTime()
 }
+
+// =============================================================================
+// Enrollment converters
+// =============================================================================
+
+// enrollStepFromProto converts a proto BMCEnrollStep to a domain EnrollStep.
+func enrollStepFromProto(p *platformv1.BMCEnrollStep) EnrollStep {
+	if p == nil {
+		return EnrollStep{}
+	}
+	return EnrollStep{
+		Name:   p.Name,
+		OK:     p.Ok,
+		Detail: p.Detail,
+	}
+}
+
+// enrollStepsFromProto converts a slice of proto BMCEnrollStep to domain EnrollStep slice.
+func enrollStepsFromProto(steps []*platformv1.BMCEnrollStep) []EnrollStep {
+	if len(steps) == 0 {
+		return nil
+	}
+	result := make([]EnrollStep, len(steps))
+	for i, s := range steps {
+		result[i] = enrollStepFromProto(s)
+	}
+	return result
+}
+
+// factoryCertMetaFromProto converts a proto BMCFactoryCertMeta to a domain FactoryCertMeta.
+func factoryCertMetaFromProto(p *platformv1.BMCFactoryCertMeta) FactoryCertMeta {
+	if p == nil {
+		return FactoryCertMeta{}
+	}
+	return FactoryCertMeta{
+		Subject:      p.Subject,
+		Issuer:       p.Issuer,
+		SerialNumber: p.SerialNumber,
+		NotBefore:    timestampToTime(p.NotBefore),
+		NotAfter:     timestampToTime(p.NotAfter),
+		SPKISHA256:   p.SpkiSha256,
+		SHA256:       p.Sha256,
+		CapturedAt:   timestampToTime(p.CapturedAt),
+	}
+}
+
+// enrollResultFromProto converts a proto BMCEnrollResponse to a domain EnrollResult.
+// Returns nil when the input is nil.
+func enrollResultFromProto(p *platformv1.BMCEnrollResponse) *EnrollResult {
+	if p == nil {
+		return nil
+	}
+	return &EnrollResult{
+		DeviceID:        p.DeviceId,
+		Endpoint:        p.Endpoint,
+		Hostname:        p.Hostname,
+		DNSName:         p.DnsName,
+		PinSPKISHA256:   p.PinSpkiSha256,
+		FactoryCertPEM:  string(p.FactoryCertPem),
+		FactoryCertMeta: factoryCertMetaFromProto(p.FactoryCertMeta),
+		NewCertPEM:      string(p.NewCertPem),
+		CACertPEM:       string(p.CaCertPem),
+		Steps:           enrollStepsFromProto(p.Steps),
+	}
+}
+
+// enrollOptionsToProto converts an EnrollOptions (may be nil) and profileID to
+// a proto BMCEnrollRequest. Nil opts leaves all optional bool fields unset.
+func enrollOptionsToProto(profileID uint64, opts *EnrollOptions) *platformv1.BMCEnrollRequest {
+	req := &platformv1.BMCEnrollRequest{ProfileId: profileID}
+	if opts == nil {
+		return req
+	}
+	req.ReplaceCertificate = opts.ReplaceCertificate
+	req.RotatePassword = opts.RotatePassword
+	req.DnsRegister = opts.DNSRegister
+	req.DanePublish = opts.DANEPublish
+	return req
+}
+
+// =============================================================================
+// Restore converters
+// =============================================================================
+
+// restoreResultFromProto converts a proto BMCRestoreResponse to a domain
+// RestoreResult. Returns nil when the input is nil.
+func restoreResultFromProto(p *platformv1.BMCRestoreResponse) *RestoreResult {
+	if p == nil {
+		return nil
+	}
+	return &RestoreResult{
+		DeviceID:    p.DeviceId,
+		Endpoint:    p.Endpoint,
+		Hostname:    p.Hostname,
+		NewCertMeta: factoryCertMetaFromProto(p.NewCertMeta),
+		NewCertPEM:  string(p.NewCertPem),
+		Steps:       enrollStepsFromProto(p.Steps),
+	}
+}

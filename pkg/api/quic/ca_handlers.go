@@ -757,7 +757,7 @@ func (h *CAHandler) handleCRL(ctx context.Context, req *Request) *Response {
 	}
 
 	type crlGenerator interface {
-		GenerateCRL() ([]byte, error)
+		GenerateCRL(ctx context.Context) ([]byte, error)
 	}
 
 	var crlDER []byte
@@ -768,7 +768,7 @@ func (h *CAHandler) handleCRL(ctx context.Context, req *Request) *Response {
 		return h.errorResponse(StatusNotImplemented, ErrCACRLNotSupported)
 	}
 
-	crlDER, err = gen.GenerateCRL()
+	crlDER, err = gen.GenerateCRL(ctx)
 	if err != nil {
 		h.logger.Error(err, "failed to generate CRL")
 		// Check if CRL generation is not supported by this CA

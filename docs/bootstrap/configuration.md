@@ -8,7 +8,7 @@ Server bootstrap publishes CA bundles via DANE TLSA records and optional Noise_N
 
 Located under `dns.resolver.*` in platform config. All DNS consumers (bootstrap,
 ACME, installer) use this as the platform-wide default. Service-level overrides
-(such as `bootstrap-client.dns-server`) take precedence when explicitly configured.
+(such as `trust.default.dane.dns-server`) take precedence when explicitly configured.
 
 ```yaml
 dns:
@@ -91,21 +91,25 @@ bootstrap:
 
 ## Client Configuration
 
-Client bootstrap fetches CA bundle from server before TLS. Located under `bootstrap-client.*`:
+Client bootstrap fetches the CA bundle from the server before TLS can be
+established. Located under `trust.default.*` (the default class scope):
 
 ```yaml
-bootstrap-client:
-  strategy: dane                              # dane|noise|spki|embedded|auto
-  server-url: "https://10.99.99.2:8443"      # REST endpoint for DANE/SPKI
-  dns-server: "10.99.99.2:8053"              # Optional service-level override
-  bundle-path: "/api/v1/ca/bootstrap"        # REST path for CA bundle
-  per-method-timeout: 15s                    # Timeout per bootstrap attempt
-  install-to-system-trust: true              # Write to system cert store
-  noise:
-    server-addr: "10.99.99.2:9446"           # Noise server address (noise only)
-    server-static-key: "base64-encoded-key"  # Server's Curve25519 pubkey (noise only)
-  spki:
-    pin: "sha256/XXXXXXXX..."                # SPKI pin base64 (spki only)
+trust:
+  default:
+    strategies: [dane]                          # ordered chain: dane|noise|spki|embedded|tofu
+    server-url: "https://10.99.99.2:8443"      # REST endpoint for bundle fetch
+    hostname: "cp.example.com"                  # hostname for DANE TLSA lookups (required when server-url is an IP)
+    bundle-path: "/api/v1/ca/bootstrap"        # REST path for CA bundle
+    per-method-timeout: 15s                    # Timeout per bootstrap attempt
+    install-to-system-trust: true              # Write to system cert store
+    dane:
+      dns-server: "10.99.99.2:8053"            # Optional service-level DNS override
+    noise:
+      server-addr: "10.99.99.2:9446"           # Noise server address (noise only)
+      server-static-key: "base64-encoded-key"  # Server's Curve25519 pubkey (noise only)
+    spki:
+      pin: "sha256/XXXXXXXX..."                # SPKI pin base64 (spki only)
 ```
 
 ### DNS Resolution Priority
@@ -115,7 +119,7 @@ priority order:
 
 1. **`dns.resolver.servers[0]`** -- platform-wide default from the `dns.resolver`
    section. This is the recommended configuration point.
-2. **`bootstrap-client.dns-server`** -- explicit service-level override. Use this
+2. **`trust.default.dane.dns-server`** -- explicit service-level override. Use this
    only when the bootstrap DNS server differs from the platform default.
 3. **Fallback** -- constructed from the server IP address and default public DNS
    port (8053). Used by the test tool when no config is available.
@@ -135,13 +139,14 @@ dns:
       listen: "127.0.0.1:53"
       cache-size: 1000
 
-bootstrap-client:
-  strategy: dane
-  server-url: "https://10.99.99.2:8443"
-  # dns-server is omitted -- derived from dns.resolver.servers[0]
-  bundle-path: "/api/v1/ca/bootstrap"
-  per-method-timeout: 15s
-  install-to-system-trust: true
+trust:
+  default:
+    strategies: [dane]
+    server-url: "https://10.99.99.2:8443"
+    # dane.dns-server is omitted -- derived from dns.resolver.servers[0]
+    bundle-path: "/api/v1/ca/bootstrap"
+    per-method-timeout: 15s
+    install-to-system-trust: true
 ```
 
 ### Strategy Selection
@@ -152,10 +157,13 @@ bootstrap-client:
 - Reliability: Depends on DNS availability
 - Config:
   ```yaml
-  strategy: dane
-  server-url: "https://server.example.com:8443"
-  dns-server: "8.8.8.8:53"
-  bundle-path: "/api/v1/ca/bootstrap"
+  trust:
+    default:
+      strategies: [dane]
+      server-url: "https://server.example.com:8443"
+      bundle-path: "/api/v1/ca/bootstrap"
+      dane:
+        dns-server: "8.8.8.8:53"
   ```
 
 **noise**
@@ -164,10 +172,12 @@ bootstrap-client:
 - Reliability: Direct TCP connection to server
 - Config:
   ```yaml
-  strategy: noise
-  noise:
-    server-addr: "server.example.com:9446"
-    server-static-key: "aEroKDZNvHnfJCSYxlXuOu8MNLIvJnYuLRDNS5gxdxs="
+  trust:
+    default:
+      strategies: [noise]
+      noise:
+        server-addr: "server.example.com:9446"
+        server-static-key: "aEroKDZNvHnfJCSYxlXuOu8MNLIvJnYuLRDNS5gxdxs="
   ```
 
 **spki**
@@ -176,11 +186,13 @@ bootstrap-client:
 - Reliability: Depends on initial cert pinning accuracy
 - Config:
   ```yaml
-  strategy: spki
-  server-url: "https://server.example.com:8443"
-  bundle-path: "/api/v1/ca/bootstrap"
-  spki:
-    pin: "sha256/sMgbLWtKLKr4Yp8P2C3N5C8K2L1M9N7O6P5Q4R3S2T1U"
+  trust:
+    default:
+      strategies: [spki]
+      server-url: "https://server.example.com:8443"
+      bundle-path: "/api/v1/ca/bootstrap"
+      spki:
+        pin: "sha256/sMgbLWtKLKr4Yp8P2C3N5C8K2L1M9N7O6P5Q4R3S2T1U"
   ```
 
 **embedded**
@@ -189,40 +201,43 @@ bootstrap-client:
 - Reliability: Hardcoded, no runtime fetch
 - Config:
   ```yaml
-  strategy: embedded
+  trust:
+    default:
+      strategies: [embedded]
   ```
 
-**auto**
-- Tries multiple methods in priority order: DANE -> Noise -> SPKI
-- Succeeds on first method that works
+**multi-method fallback chain** (formerly "auto")
+- Tries multiple methods in priority order, succeeds on the first that works
 - Config:
   ```yaml
-  strategy: auto
-  server-url: "https://server.example.com:8443"
-  dns-server: "8.8.8.8:53"
-  bundle-path: "/api/v1/ca/bootstrap"
-  per-method-timeout: 15s
-  noise:
-    server-addr: "server.example.com:9446"
-    server-static-key: "aEroKDZNvHnfJCSYxlXuOu8MNLIvJnYuLRDNS5gxdxs="
-  spki:
-    pin: "sha256/sMgbLWtKLKr4Yp8P2C3N5C8K2L1M9N7O6P5Q4R3S2T1U"
+  trust:
+    default:
+      strategies: [dane, noise, spki]
+      server-url: "https://server.example.com:8443"
+      bundle-path: "/api/v1/ca/bootstrap"
+      per-method-timeout: 15s
+      dane:
+        dns-server: "8.8.8.8:53"
+      noise:
+        server-addr: "server.example.com:9446"
+        server-static-key: "aEroKDZNvHnfJCSYxlXuOu8MNLIvJnYuLRDNS5gxdxs="
+      spki:
+        pin: "sha256/sMgbLWtKLKr4Yp8P2C3N5C8K2L1M9N7O6P5Q4R3S2T1U"
   ```
 
 ## Environment Variable Overrides
 
-Bootstrap client respects environment variables (if configured):
+The `platformctl bootstrap trust` command accepts CLI flags that mirror the
+config fields:
 
 ```bash
-BOOTSTRAP_STRATEGY=noise
-BOOTSTRAP_SERVER_URL=https://server.example.com:8443
-BOOTSTRAP_DNS_SERVER=8.8.8.8:53
-BOOTSTRAP_BUNDLE_PATH=/api/v1/ca/bootstrap
-BOOTSTRAP_PER_METHOD_TIMEOUT=15s
-BOOTSTRAP_INSTALL_TO_SYSTEM_TRUST=true
-BOOTSTRAP_NOISE_SERVER_ADDR=server.example.com:9446
-BOOTSTRAP_NOISE_SERVER_STATIC_KEY=aEroKDZNvHnfJCSYxlXuOu8MNLIvJnYuLRDNS5gxdxs=
-BOOTSTRAP_SPKI_PIN=sha256/sMgbLWtKLKr4Yp8P2C3N5C8K2L1M9N7O6P5Q4R3S2T1U
+platformctl bootstrap trust \
+  --server-url https://server.example.com:8443 \
+  --strategy dane \
+  --dns-server 8.8.8.8:53 \
+  --bundle-path /api/v1/ca/bootstrap \
+  --per-method-timeout 15s \
+  --install-to-system-trust
 ```
 
 ## Complete Examples
@@ -294,16 +309,17 @@ dns:
       listen: "127.0.0.1:53"
       cache-size: 1000
 
-bootstrap-client:
-  strategy: dane
-  server-url: "https://10.99.99.2:8443"
-  # dns-server derived from dns.resolver.servers[0]
-  bundle-path: "/api/v1/ca/bootstrap"
-  per-method-timeout: 15s
-  install-to-system-trust: true
+trust:
+  default:
+    strategies: [dane]
+    server-url: "https://10.99.99.2:8443"
+    # dane.dns-server derived from dns.resolver.servers[0]
+    bundle-path: "/api/v1/ca/bootstrap"
+    per-method-timeout: 15s
+    install-to-system-trust: true
 ```
 
-### Client Auto Bootstrap
+### Client Multi-Method Bootstrap
 
 ```yaml
 dns:
@@ -314,26 +330,27 @@ dns:
     search-domains:
       - example.internal
 
-bootstrap-client:
-  strategy: auto
-  server-url: "https://server.example.com:8443"
-  # dns-server derived from dns.resolver.servers[0]
-  bundle-path: "/api/v1/ca/bootstrap"
-  per-method-timeout: 15s
-  install-to-system-trust: true
-  noise:
-    server-addr: "server.example.com:9446"
-    server-static-key: "aEroKDZNvHnfJCSYxlXuOu8MNLIvJnYuLRDNS5gxdxs="
-  spki:
-    pin: "sha256/sMgbLWtKLKr4Yp8P2C3N5C8K2L1M9N7O6P5Q4R3S2T1U"
+trust:
+  default:
+    strategies: [dane, noise, spki]
+    server-url: "https://server.example.com:8443"
+    # dane.dns-server derived from dns.resolver.servers[0]
+    bundle-path: "/api/v1/ca/bootstrap"
+    per-method-timeout: 15s
+    install-to-system-trust: true
+    noise:
+      server-addr: "server.example.com:9446"
+      server-static-key: "aEroKDZNvHnfJCSYxlXuOu8MNLIvJnYuLRDNS5gxdxs="
+    spki:
+      pin: "sha256/sMgbLWtKLKr4Yp8P2C3N5C8K2L1M9N7O6P5Q4R3S2T1U"
 ```
 
 ## Validation Rules
 
 The platform enforces:
 
-- `strategy` is required and must be one of: `dane`, `noise`, `spki`, `embedded`, `auto`
-- DANE strategy requires either `dns.resolver.servers[0]` or `dns-server` to be set
+- `strategies` is required and must contain at least one of: `dane`, `noise`, `spki`, `embedded`, `tofu`, `platform-ca`, `ca-file`
+- DANE strategy requires either `dns.resolver.servers[0]` or `trust.default.dane.dns-server` to be set
 - Noise strategy requires `noise.server-addr` and `noise.server-static-key`
 - SPKI strategy requires `spki.pin` to be set
 - `per-method-timeout` must not be negative

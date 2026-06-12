@@ -14,6 +14,7 @@
 package rest
 
 import (
+	"context"
 	"crypto/x509"
 	"errors"
 	"testing"
@@ -63,10 +64,10 @@ func (f *fakeProdCA) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm    { return f
 func (f *fakeProdCA) DefaultValidityPeriod() int                      { return f.defaultValidity }
 func (f *fakeProdCA) TrustedRoot() (*x509.Certificate, error)         { return f.rootCert, nil }
 func (f *fakeProdCA) TrustedIntermediate() (*x509.Certificate, error) { return f.intermediate, nil }
-func (f *fakeProdCA) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (f *fakeProdCA) IssueCertificate(_ context.Context, req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	return f.issued, f.issueErr
 }
-func (f *fakeProdCA) RevokeCert(cert *x509.Certificate, opts xkmsca.RevokeOptions) error {
+func (f *fakeProdCA) RevokeCert(_ context.Context, cert *x509.Certificate, opts xkmsca.RevokeOptions) error {
 	f.revokeCert = cert
 	f.revokeOpts = opts
 	return f.revokeErr
@@ -128,7 +129,7 @@ func TestCAAuthorityAdapter_IssueCertificate_Success(t *testing.T) {
 	prod := &fakeProdCA{issued: &xkmsca.IssuedCertificate{Certificate: cert}}
 	a := NewCAAuthorityAdapter(prod)
 
-	got, err := a.IssueCertificate(&xkmsca.CertificateRequest{})
+	got, err := a.IssueCertificate(context.Background(), &xkmsca.CertificateRequest{})
 	require.NoError(t, err)
 	assert.Same(t, cert, got)
 }
@@ -138,7 +139,7 @@ func TestCAAuthorityAdapter_IssueCertificate_PropagatesError(t *testing.T) {
 	prod := &fakeProdCA{issueErr: prodErr}
 	a := NewCAAuthorityAdapter(prod)
 
-	got, err := a.IssueCertificate(&xkmsca.CertificateRequest{})
+	got, err := a.IssueCertificate(context.Background(), &xkmsca.CertificateRequest{})
 	assert.Nil(t, got)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, prodErr)
@@ -148,7 +149,7 @@ func TestCAAuthorityAdapter_IssueCertificate_NilFromCAReturnsErr(t *testing.T) {
 	prod := &fakeProdCA{issued: nil}
 	a := NewCAAuthorityAdapter(prod)
 
-	got, err := a.IssueCertificate(&xkmsca.CertificateRequest{})
+	got, err := a.IssueCertificate(context.Background(), &xkmsca.CertificateRequest{})
 	assert.Nil(t, got)
 	require.Error(t, err)
 	var issueErr ErrCertificateIssueFailed
@@ -159,7 +160,7 @@ func TestCAAuthorityAdapter_IssueCertificate_NilCertReturnsErr(t *testing.T) {
 	prod := &fakeProdCA{issued: &xkmsca.IssuedCertificate{Certificate: nil}}
 	a := NewCAAuthorityAdapter(prod)
 
-	got, err := a.IssueCertificate(&xkmsca.CertificateRequest{})
+	got, err := a.IssueCertificate(context.Background(), &xkmsca.CertificateRequest{})
 	assert.Nil(t, got)
 	require.Error(t, err)
 }
@@ -169,7 +170,7 @@ func TestCAAuthorityAdapter_Revoke_DeleteKeysTrue(t *testing.T) {
 	a := NewCAAuthorityAdapter(prod)
 	cert := &x509.Certificate{}
 
-	err := a.Revoke(cert, &xkmssdk.KeyAttributes{CN: "test"})
+	err := a.Revoke(context.Background(), cert, &xkmssdk.KeyAttributes{CN: "test"})
 	require.NoError(t, err)
 	assert.Same(t, cert, prod.revokeCert)
 	assert.True(t, prod.revokeOpts.DeleteKeys, "DeleteKeys should be true when keyAttrs is non-nil")
@@ -180,7 +181,7 @@ func TestCAAuthorityAdapter_Revoke_DeleteKeysFalse(t *testing.T) {
 	a := NewCAAuthorityAdapter(prod)
 	cert := &x509.Certificate{}
 
-	err := a.Revoke(cert, nil)
+	err := a.Revoke(context.Background(), cert, nil)
 	require.NoError(t, err)
 	assert.False(t, prod.revokeOpts.DeleteKeys, "DeleteKeys should be false when keyAttrs is nil")
 }
@@ -190,7 +191,7 @@ func TestCAAuthorityAdapter_Revoke_PropagatesError(t *testing.T) {
 	prod := &fakeProdCA{revokeErr: prodErr}
 	a := NewCAAuthorityAdapter(prod)
 
-	err := a.Revoke(&x509.Certificate{}, nil)
+	err := a.Revoke(context.Background(), &x509.Certificate{}, nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, prodErr)
 }

@@ -70,7 +70,9 @@ func (s *BarrierGRPCService) Init(
 		return &platformv1.BarrierInitResponse{
 			Status:        &platformv1.Status{Success: true, Message: "barrier initialized with shamir secret sharing"},
 			Strategy:      platformv1.BarrierStrategy_BARRIER_STRATEGY_SHAMIR,
-			UnsealKeys:    resp.Shares,
+			Threshold:     int32(resp.Threshold),
+			SharesTotal:   int32(resp.TotalShares),
+			ShareCount:    int32(resp.ShareCount),
 			InitializedAt: now,
 		}, nil
 	}
@@ -83,7 +85,6 @@ func (s *BarrierGRPCService) Init(
 	return &platformv1.BarrierInitResponse{
 		Status:        &platformv1.Status{Success: true, Message: "barrier initialized with single key"},
 		Strategy:      platformv1.BarrierStrategy_BARRIER_STRATEGY_SINGLE_KEY,
-		UnsealKeys:    []string{req.GetSecret()},
 		InitializedAt: now,
 	}, nil
 }
@@ -195,9 +196,11 @@ func (s *BarrierGRPCService) Rekey(
 	}
 
 	return &platformv1.BarrierRekeyResponse{
-		Status:     &platformv1.Status{Success: true, Message: "barrier rekeyed"},
-		Strategy:   platformv1.BarrierStrategy_BARRIER_STRATEGY_SHAMIR,
-		UnsealKeys: resp.Shares,
+		Status:      &platformv1.Status{Success: true, Message: "barrier rekeyed"},
+		Strategy:    platformv1.BarrierStrategy_BARRIER_STRATEGY_SHAMIR,
+		Threshold:   int32(resp.Threshold),
+		SharesTotal: int32(resp.TotalShares),
+		ShareCount:  int32(resp.ShareCount),
 	}, nil
 }
 

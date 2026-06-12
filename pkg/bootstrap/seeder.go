@@ -17,12 +17,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -50,12 +52,25 @@ type profileRequest struct {
 	Config   json.RawMessage `json:"config,omitempty"`
 }
 
+// profileIDResponse is the minimal shape of the create-profile 201 response
+// payload used to capture the new profile's ID. The server serializes the
+// ID as a JSON string (uint64 > 2^53 would lose precision in JS parsers).
+type profileIDResponse struct {
+	ID uint64 `json:"id,string"`
+}
+
 // SeederParams holds the dependencies for creating a Seeder.
 type SeederParams struct {
 	ControlPlaneAddr string
 	Config           *BootstrapConfig
 	Discovered       []DiscoveredNode
 	Logger           *slog.Logger
+	// CPCAPool is the verified control-plane CA pool obtained via
+	// capture-then-verify in fetchControlPlaneCABundle. When non-nil,
+	// the seeder's HTTP client verifies the CP TLS certificate against
+	// this pool. When nil, the seeder falls back to system roots —
+	// never InsecureSkipVerify.
+	CPCAPool *x509.CertPool
 }
 
 // Seeder uploads device templates and creates per-node profiles on the control plane.
@@ -65,24 +80,38 @@ type Seeder struct {
 	discovered       []DiscoveredNode
 	logger           *slog.Logger
 	client           *http.Client
+	// profileIDs maps hostname → profile ID, populated by createProfiles.
+	profileIDs map[string]uint64
 }
 
 // NewSeeder creates a Seeder from the given parameters.
+//
+// When CPCAPool is non-nil the HTTP client verifies the control plane's TLS
+// certificate against the provided pool (the capture-then-verify result from
+// fetchControlPlaneCABundle). When nil the client uses system roots — the
+// same secure default produced by BuildTLSConfig. InsecureSkipVerify is
+// never set.
 func NewSeeder(params SeederParams) *Seeder {
 	logger := params.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	// During bootstrap the CA is not yet trusted on the workstation running the
-	// seeder. InsecureSkipVerify is required and a warning is logged.
-	logger.Warn("bootstrap: seeder using insecure TLS (CA not yet trusted)")
+	tlsCfg := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
+	if params.CPCAPool != nil {
+		tlsCfg.RootCAs = params.CPCAPool
+	} else {
+		logger.Warn("bootstrap: seeder has no verified CA pool; using system roots (ensure the control plane CA is trusted system-wide)")
+	}
 
 	return &Seeder{
 		controlPlaneAddr: params.ControlPlaneAddr,
 		config:           params.Config,
 		discovered:       params.Discovered,
 		logger:           logger,
+		profileIDs:       make(map[string]uint64),
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
@@ -92,12 +121,20 @@ func NewSeeder(params SeederParams) *Seeder {
 					Timeout:  10 * time.Second,
 					Resolver: &net.Resolver{PreferGo: true},
 				}).DialContext,
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true, //nolint:gosec // Required during bootstrap before CA is trusted.
-				},
+				TLSClientConfig: tlsCfg,
 			},
 		},
 	}
+}
+
+// ProfileIDs returns a copy of the hostname-to-profile-ID map populated by
+// a successful Seed call. Callers must call Seed before consulting this map.
+func (s *Seeder) ProfileIDs() map[string]uint64 {
+	result := make(map[string]uint64, len(s.profileIDs))
+	for k, v := range s.profileIDs {
+		result[k] = v
+	}
+	return result
 }
 
 // Seed uploads templates for each role and creates profiles for all discovered nodes.
@@ -224,7 +261,8 @@ func yamlToJSON(data []byte, role, path string) (json.RawMessage, error) {
 	return json.RawMessage(jsonBytes), nil
 }
 
-// createProfiles POSTs a profile creation request for each discovered node.
+// createProfiles POSTs a profile creation request for each discovered node
+// and records the resulting profile ID per hostname in s.profileIDs.
 // For each node, the profile carries the MERGED template + override config
 // so the control plane delivers the complete, per-node configuration on
 // first-boot config fetch.
@@ -274,6 +312,8 @@ func (s *Seeder) createProfiles(ctx context.Context, templateIDs map[string]stri
 		if err != nil {
 			return ErrProfileCreateFailed{Hostname: node.Hostname, Cause: err}
 		}
+
+		respBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
@@ -283,12 +323,65 @@ func (s *Seeder) createProfiles(ctx context.Context, templateIDs map[string]stri
 			}
 		}
 
+		if readErr != nil {
+			return ErrProfileCreateFailed{Hostname: node.Hostname, Cause: readErr}
+		}
+
+		// Parse the profile ID from the 201 response. The REST API wraps
+		// responses in {code, success, payload}; the payload carries
+		// ProfileFullResponse whose "id" field is a JSON string (uint64).
+		profileID, parseErr := parseProfileIDFromResponse(respBody)
+		if parseErr != nil {
+			return ErrProfileIDParseFailed{Hostname: node.Hostname, Cause: parseErr}
+		}
+
+		s.profileIDs[node.Hostname] = profileID
+
 		s.logger.Info("bootstrap: profile created",
 			slog.String("hostname", node.Hostname),
-			slog.String("template_id", templateID))
+			slog.String("template_id", templateID),
+			slog.Uint64("profile_id", profileID))
 	}
 
 	return nil
+}
+
+// parseProfileIDFromResponse extracts the profile ID from a create-profile
+// response body. The server wraps the response in {code, success, payload}
+// and the payload's "id" field is a JSON string encoding of a uint64.
+func parseProfileIDFromResponse(body []byte) (uint64, error) {
+	var envelope struct {
+		Payload struct {
+			ID string `json:"id"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return 0, err
+	}
+	if envelope.Payload.ID == "" {
+		// Tolerate direct (non-enveloped) response shape: {id: "1234"}.
+		var direct profileIDResponse
+		if err := json.Unmarshal(body, &direct); err != nil {
+			return 0, err
+		}
+		if direct.ID == 0 {
+			return 0, ErrProfileIDParseFailed{Cause: errEmptyProfileID{}}
+		}
+		return direct.ID, nil
+	}
+	id, err := strconv.ParseUint(envelope.Payload.ID, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// errEmptyProfileID is an internal sentinel for an empty ID field in the
+// create-profile response.
+type errEmptyProfileID struct{}
+
+func (errEmptyProfileID) Error() string {
+	return "profile ID is empty in create-profile response"
 }
 
 // buildMergedConfig loads the base template YAML for a node's role,

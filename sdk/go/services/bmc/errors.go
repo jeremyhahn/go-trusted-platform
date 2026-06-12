@@ -162,3 +162,43 @@ func (e *ErrUserFailed) Error() string {
 func (e *ErrUserFailed) Unwrap() error {
 	return e.Cause
 }
+
+// Enrollment Errors
+
+// ErrEnrollFailed is returned when the BMC enrollment ceremony fails.
+type ErrEnrollFailed struct {
+	// ProfileID is the device profile ID for which enrollment was attempted.
+	ProfileID uint64
+	// Cause is the underlying error.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *ErrEnrollFailed) Error() string {
+	return fmt.Sprintf("bmc: enrollment failed for profile %d: %v", e.ProfileID, e.Cause)
+}
+
+// Unwrap returns the underlying error for errors.Is and errors.As support.
+func (e *ErrEnrollFailed) Unwrap() error {
+	return e.Cause
+}
+
+// Factory Certificate Restore Errors
+
+// ErrRestoreFailed is returned when the BMC factory-certificate restore ceremony fails.
+type ErrRestoreFailed struct {
+	// ProfileID is the device profile ID for which restore was attempted.
+	ProfileID uint64
+	// Cause is the underlying error.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *ErrRestoreFailed) Error() string {
+	return fmt.Sprintf("bmc: factory cert restore failed for profile %d: %v", e.ProfileID, e.Cause)
+}
+
+// Unwrap returns the underlying error for errors.Is and errors.As support.
+func (e *ErrRestoreFailed) Unwrap() error {
+	return e.Cause
+}

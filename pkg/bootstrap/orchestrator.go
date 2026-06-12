@@ -14,14 +14,19 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +34,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container"
 	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 const (
@@ -60,6 +66,12 @@ const (
 	// phaseRemaining is the name of the remaining node provisioning phase.
 	phaseRemaining = "remaining-nodes"
 
+	// phaseBMCEnroll is the name of the BMC enrollment phase that runs after
+	// all nodes have been provisioned. Enrollment is non-fatal: per-node
+	// failures are recorded in BootstrapResult.BMCEnrollments and logged as
+	// warnings but do not abort the deployment.
+	phaseBMCEnroll = "bmc-enroll"
+
 	// phaseHealthGate is the name of the control-plane health verification
 	// phase that runs before teardown.
 	phaseHealthGate = "health-gate"
@@ -82,19 +94,50 @@ const (
 	// nodeStatusSkipped is the status for a node whose install was skipped
 	// because SkipInstall is true.
 	nodeStatusSkipped = "skipped"
+
+	// bmcEnrollPath is the REST path template for the BMC enrollment endpoint.
+	// The profile ID is interpolated as the single format argument.
+	bmcEnrollPath = "/api/v1/bmc/%d/enroll"
+
+	// bmcBackupDirMode is the permissions used when creating per-node backup
+	// directories under BackupsDir.
+	bmcBackupDirMode = 0700
+
+	// bmcBackupFileMode is the permissions used when writing per-node backup
+	// files.
+	bmcBackupFileMode = 0600
 )
+
+// BMCEnrollOutcome records the result of a single-node BMC enrollment attempt
+// during the bmc-enroll phase.
+type BMCEnrollOutcome struct {
+	// Hostname identifies the node that was enrolled (or attempted).
+	Hostname string `json:"hostname" yaml:"hostname"`
+
+	// ProfileID is the device-profile ID used as the path parameter when
+	// calling POST /api/v1/bmc/{profileID}/enroll.
+	ProfileID uint64 `json:"profile_id" yaml:"profile_id"`
+
+	// OK is true when the enrollment POST returned a success status.
+	OK bool `json:"ok" yaml:"ok"`
+
+	// Detail holds a human-readable description of the outcome. On success
+	// this is empty; on failure it contains the error message.
+	Detail string `json:"detail,omitempty" yaml:"detail,omitempty"`
+}
 
 // BootstrapResult holds the outcome of a complete bootstrap run.
 type BootstrapResult struct {
-	Phase             string        `json:"phase" yaml:"phase"`
-	Nodes             []NodeResult  `json:"nodes" yaml:"nodes"`
-	SwitchConfigured  bool          `json:"switch_configured" yaml:"switch_configured"`
-	ContainerDeployed bool          `json:"container_deployed" yaml:"container_deployed"`
-	ContainerTornDown bool          `json:"container_torn_down" yaml:"container_torn_down"`
-	ControlPlaneReady bool          `json:"control_plane_ready" yaml:"control_plane_ready"`
-	GatewaysReady     bool          `json:"gateways_ready" yaml:"gateways_ready"`
-	WorkersReady      bool          `json:"workers_ready" yaml:"workers_ready"`
-	Duration          time.Duration `json:"duration" yaml:"duration"`
+	Phase             string             `json:"phase" yaml:"phase"`
+	Nodes             []NodeResult       `json:"nodes" yaml:"nodes"`
+	SwitchConfigured  bool               `json:"switch_configured" yaml:"switch_configured"`
+	ContainerDeployed bool               `json:"container_deployed" yaml:"container_deployed"`
+	ContainerTornDown bool               `json:"container_torn_down" yaml:"container_torn_down"`
+	ControlPlaneReady bool               `json:"control_plane_ready" yaml:"control_plane_ready"`
+	GatewaysReady     bool               `json:"gateways_ready" yaml:"gateways_ready"`
+	WorkersReady      bool               `json:"workers_ready" yaml:"workers_ready"`
+	BMCEnrollments    []BMCEnrollOutcome `json:"bmc_enrollments,omitempty" yaml:"bmc_enrollments,omitempty"`
+	Duration          time.Duration      `json:"duration" yaml:"duration"`
 }
 
 // NodeResult holds the bootstrap outcome for a single node.
@@ -130,19 +173,27 @@ type OrchestratorParams struct {
 	Logger        *slog.Logger
 	Deployer      Deployer
 	HealthChecker HealthChecker
+	// TrustConfig is the platform trust configuration. When non-nil and the
+	// BMC scope is configured, the orchestrator constructs a run-scoped
+	// TLSProvider and threads it into every bmc.Config so BMC connections
+	// use the trust resolver. When nil, BMC connections fall back to
+	// system roots with TLS 1.2+ minimum (the BuildTLSConfig secure default).
+	TrustConfig *trust.Config
 	// SkipVirtualMediaMount mirrors Orchestrator.SkipVirtualMediaMount.
 	SkipVirtualMediaMount bool
 }
 
 // Orchestrator runs the complete network bootstrap flow.
 type Orchestrator struct {
-	config     *BootstrapConfig
-	configDir  string // Directory containing the bootstrap YAML, for resolving relative paths.
-	discovered []DiscoveredNode
-	logger     *slog.Logger
-	bmcFactory bmc.ClientFactory
-	deployer   Deployer
-	healthChk  HealthChecker
+	config         *BootstrapConfig
+	configDir      string // Directory containing the bootstrap YAML, for resolving relative paths.
+	discovered     []DiscoveredNode
+	logger         *slog.Logger
+	bmcFactory     bmc.ClientFactory
+	deployer       Deployer
+	healthChk      HealthChecker
+	bmcTLSProvider bmc.TLSProvider // run-scoped TLS provider for BMC connections; nil ⇒ system roots
+	cpCAPool       *x509.CertPool  // cached control-plane CA pool from capture-then-verify
 
 	// SkipVirtualMediaMount lets operators bypass MountVirtualMedia for
 	// boot_method: virtual-media nodes when the BMC needs an out-of-band
@@ -187,6 +238,18 @@ func NewOrchestrator(params OrchestratorParams) (*Orchestrator, error) {
 	if params.ConfigPath != "" {
 		configDir = filepath.Dir(params.ConfigPath)
 	}
+	// Build run-scoped BMC TLS provider when a trust config with a BMC
+	// scope is provided. A single provider is shared across all nodes so
+	// re-contacted BMCs verify against previously captured TOFU pins.
+	var bmcTLSProv bmc.TLSProvider
+	if params.TrustConfig != nil {
+		p, _, err := NewBootstrapBMCTLSProvider(params.TrustConfig, logger)
+		if err != nil {
+			return nil, err
+		}
+		bmcTLSProv = p
+	}
+
 	return &Orchestrator{
 		config:                params.Config,
 		configDir:             configDir,
@@ -194,6 +257,7 @@ func NewOrchestrator(params OrchestratorParams) (*Orchestrator, error) {
 		bmcFactory:            params.BMCFactory,
 		deployer:              params.Deployer,
 		healthChk:             healthChk,
+		bmcTLSProvider:        bmcTLSProv,
 		SkipVirtualMediaMount: params.SkipVirtualMediaMount,
 	}, nil
 }
@@ -243,7 +307,8 @@ func (o *Orchestrator) Run(ctx context.Context) (*BootstrapResult, error) {
 
 	// Phase 4: Seed templates and create profiles.
 	result.Phase = phaseSeed
-	if err := o.seedTemplates(ctx); err != nil {
+	seeder, err := o.seedTemplatesWithSeeder(ctx)
+	if err != nil {
 		result.Duration = time.Since(start)
 		return result, ErrBootstrapFailed{Phase: phaseSeed, Cause: err}
 	}
@@ -257,7 +322,15 @@ func (o *Orchestrator) Run(ctx context.Context) (*BootstrapResult, error) {
 	result.GatewaysReady = true
 	result.WorkersReady = true
 
-	// Phase 6: Auto-teardown bootstrap container (non-fatal).
+	// Phase 6: BMC enrollment (non-fatal, skipped when no node sets bmc_enroll).
+	if o.hasBMCEnrollNodes() {
+		result.Phase = phaseBMCEnroll
+		o.runBMCEnroll(ctx, result, seeder)
+	} else {
+		o.logger.Debug("bootstrap: skipping bmc-enroll phase (no nodes with bmc_enroll: true)")
+	}
+
+	// Phase 7: Auto-teardown bootstrap container (non-fatal).
 	if o.deployer != nil {
 		// Health gate: verify all control-plane nodes are serving before
 		// tearing down the bootstrap container. The container typically
@@ -299,7 +372,9 @@ func (o *Orchestrator) Discover(ctx context.Context) ([]DiscoveredNode, error) {
 func (o *Orchestrator) discover(ctx context.Context) ([]DiscoveredNode, error) {
 	o.logger.Info("bootstrap: starting node discovery",
 		slog.Int("node_count", len(o.config.Nodes)))
-	return DiscoverNodes(ctx, o.config.Nodes, o.logger)
+	return DiscoverNodes(ctx, o.config.Nodes, o.logger, DiscoveryOptions{
+		TLSProvider: o.bmcTLSProvider,
+	})
 }
 
 // configureSwitch creates a switch configurator and applies configuration.
@@ -495,7 +570,7 @@ func (o *Orchestrator) provisionNode(ctx context.Context, node *DiscoveredNode, 
 
 // bmcBootNode connects to the BMC, sets PXE boot, and powers on.
 func (o *Orchestrator) bmcBootNode(ctx context.Context, node *DiscoveredNode) error {
-	bmcConfig := buildBMCConfig(&node.NodeConfig)
+	bmcConfig := buildBMCConfig(&node.NodeConfig, o.bmcTLSProvider)
 
 	client, err := o.bmcFactory.NewClient(bmcConfig)
 	if err != nil {
@@ -510,11 +585,22 @@ func (o *Orchestrator) bmcBootNode(ctx context.Context, node *DiscoveredNode) er
 	return client.PowerOn(ctx)
 }
 
-// seedTemplates creates a seeder and runs it against the first control-plane node.
+// seedTemplates creates a seeder, runs it against the first control-plane
+// node, and returns the seeder so its profile IDs are available to subsequent
+// phases (e.g. bmc-enroll). Use seedTemplatesWithSeeder internally.
 func (o *Orchestrator) seedTemplates(ctx context.Context) error {
+	_, err := o.seedTemplatesWithSeeder(ctx)
+	return err
+}
+
+// seedTemplatesWithSeeder creates a seeder and runs it against the first
+// control-plane node. It returns the seeder so that subsequent phases
+// (bmc-enroll) can retrieve the hostname-to-profile-ID map without making
+// additional API calls.
+func (o *Orchestrator) seedTemplatesWithSeeder(ctx context.Context) (*Seeder, error) {
 	cpNodes := o.nodesByRole(RoleControlPlane)
 	if len(cpNodes) == 0 {
-		return ErrNoControlPlaneNode{}
+		return nil, ErrNoControlPlaneNode{}
 	}
 
 	// Resolve the control-plane IP from registration.json (uploaded by
@@ -553,8 +639,198 @@ func (o *Orchestrator) seedTemplates(ctx context.Context) error {
 		Config:           o.config,
 		Discovered:       o.discovered,
 		Logger:           o.logger,
+		CPCAPool:         o.cpCAPool,
 	})
-	return seeder.Seed(ctx)
+	if err := seeder.Seed(ctx); err != nil {
+		return nil, err
+	}
+	return seeder, nil
+}
+
+// hasBMCEnrollNodes reports whether at least one discovered node has
+// BMCEnroll set to true.
+func (o *Orchestrator) hasBMCEnrollNodes() bool {
+	for i := range o.discovered {
+		if o.discovered[i].BMCEnroll {
+			return true
+		}
+	}
+	return false
+}
+
+// runBMCEnroll iterates over all discovered nodes that have BMCEnroll=true
+// and calls POST /api/v1/bmc/{profileID}/enroll on the control plane for
+// each. Failures are non-fatal: they are logged as warnings and recorded in
+// result.BMCEnrollments so the operator can retry with `platformctl bmc enroll`.
+//
+// The seeder's HTTP client (CA-pool verified when cpCAPool is available,
+// otherwise system roots) is reused for enrollment.
+func (o *Orchestrator) runBMCEnroll(ctx context.Context, result *BootstrapResult, seeder *Seeder) {
+	// Use the seeder's already-resolved control-plane address. The seeder ran
+	// the same registration-lookup + static-IP resolution at seed time, so
+	// reusing its address avoids duplicate network lookups and keeps the
+	// bmc-enroll phase pointed at the same host the seed phase used.
+	controlAddr := seeder.controlPlaneAddr
+	if controlAddr == "" {
+		o.logger.Warn("bootstrap: bmc-enroll: seeder has no control-plane address, skipping")
+		return
+	}
+
+	o.logger.Info("bootstrap: bmc-enroll: using control-plane address",
+		slog.String("address", controlAddr))
+
+	profileIDs := seeder.ProfileIDs()
+
+	// Resolve backup directory once; silently skip backup writing when empty.
+	backupsDir, bdErr := o.config.EffectiveBackupsDir()
+	if bdErr != nil {
+		o.logger.Warn("bootstrap: bmc-enroll: cannot resolve backups_dir, skipping backups",
+			slog.String("error", bdErr.Error()))
+		backupsDir = ""
+	}
+
+	for i := range o.discovered {
+		node := &o.discovered[i]
+		if !node.BMCEnroll {
+			continue
+		}
+
+		profileID, ok := profileIDs[node.Hostname]
+		if !ok || profileID == 0 {
+			o.logger.Warn("bootstrap: bmc-enroll: profile ID not found for node, skipping enrollment",
+				slog.String("hostname", node.Hostname))
+			result.BMCEnrollments = append(result.BMCEnrollments, BMCEnrollOutcome{
+				Hostname:  node.Hostname,
+				ProfileID: 0,
+				OK:        false,
+				Detail:    "profile ID not available (seed phase did not produce an ID)",
+			})
+			continue
+		}
+
+		o.logger.Info("bootstrap: bmc-enroll: enrolling node",
+			slog.String("hostname", node.Hostname),
+			slog.Uint64("profile_id", profileID))
+
+		enrollResp, enrollErr := o.doEnrollRequest(ctx, seeder.client, controlAddr, profileID)
+		outcome := BMCEnrollOutcome{
+			Hostname:  node.Hostname,
+			ProfileID: profileID,
+		}
+		if enrollErr != nil {
+			o.logger.Warn("bootstrap: bmc-enroll: enrollment failed (non-fatal, re-run platformctl bmc enroll)",
+				slog.String("hostname", node.Hostname),
+				slog.Uint64("profile_id", profileID),
+				slog.String("error", enrollErr.Error()))
+			outcome.OK = false
+			outcome.Detail = enrollErr.Error()
+		} else {
+			o.logger.Info("bootstrap: bmc-enroll: enrollment succeeded",
+				slog.String("hostname", node.Hostname),
+				slog.Uint64("profile_id", profileID))
+			outcome.OK = true
+			// Write backup artifacts when backups_dir is configured and the
+			// response carries factory cert data.
+			if backupsDir != "" && enrollResp != nil {
+				if writeErr := writeBMCEnrollBackups(backupsDir, node.Hostname, enrollResp); writeErr != nil {
+					o.logger.Warn("bootstrap: bmc-enroll: failed to write backup artifacts",
+						slog.String("hostname", node.Hostname),
+						slog.String("error", writeErr.Error()))
+				}
+			}
+		}
+		result.BMCEnrollments = append(result.BMCEnrollments, outcome)
+	}
+}
+
+// enrollResponse is a minimal decode target for the BMC enrollment REST
+// response. It captures the fields needed for backup writing; unknown fields
+// are discarded.
+type enrollResponse struct {
+	DeviceID        uint64          `json:"device_id,string"`
+	FactoryCertPEM  string          `json:"factory_cert_pem,omitempty"`
+	FactoryCertMeta json.RawMessage `json:"factory_cert_meta,omitempty"`
+}
+
+// doEnrollRequest posts to POST /api/v1/bmc/{profileID}/enroll on the
+// control plane using the seeder's HTTP client (same TLS trust as seed phase).
+// An empty JSON object is sent as the request body so profile defaults drive
+// the ceremony.
+func (o *Orchestrator) doEnrollRequest(ctx context.Context, client *http.Client, controlAddr string, profileID uint64) (*enrollResponse, error) {
+	url := fmt.Sprintf("https://"+controlAddr+bmcEnrollPath, profileID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte("{}")))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		detail := strconv.Itoa(resp.StatusCode)
+		if len(body) > 0 {
+			detail = fmt.Sprintf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+		return nil, ErrBMCEnrollFailed{Cause: fmt.Errorf("%s", detail)}
+	}
+
+	if readErr != nil {
+		return nil, readErr
+	}
+
+	// Unwrap the standard REST envelope: {code, success, payload}.
+	var envelope struct {
+		Payload enrollResponse `json:"payload"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		// Fall back to direct response shape.
+		var direct enrollResponse
+		if jsonErr := json.Unmarshal(body, &direct); jsonErr != nil {
+			return nil, jsonErr
+		}
+		return &direct, nil
+	}
+	return &envelope.Payload, nil
+}
+
+// writeBMCEnrollBackups writes enrollment artifacts to the backup directory:
+//
+//   - <backupsDir>/<hostname>/bmc/factory-cert.pem (0600) — factory cert PEM
+//   - <backupsDir>/<hostname>/bmc/factory-cert.json (0600) — factory cert metadata
+//   - <backupsDir>/<hostname>/bmc/enrollment.json (0600)  — full response JSON
+//
+// Directories are created with 0700. Missing/empty fields are silently skipped.
+func writeBMCEnrollBackups(backupsDir, hostname string, resp *enrollResponse) error {
+	if resp == nil {
+		return nil
+	}
+	dir := filepath.Join(backupsDir, hostname, "bmc")
+	if err := os.MkdirAll(dir, bmcBackupDirMode); err != nil {
+		return err
+	}
+	if resp.FactoryCertPEM != "" {
+		path := filepath.Join(dir, "factory-cert.pem")
+		if err := os.WriteFile(path, []byte(resp.FactoryCertPEM), bmcBackupFileMode); err != nil {
+			return err
+		}
+	}
+	if len(resp.FactoryCertMeta) > 0 {
+		path := filepath.Join(dir, "factory-cert.json")
+		if err := os.WriteFile(path, resp.FactoryCertMeta, bmcBackupFileMode); err != nil {
+			return err
+		}
+	}
+	// Serialize full enrollment response.
+	fullJSON, err := json.Marshal(resp)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "enrollment.json"), fullJSON, bmcBackupFileMode)
 }
 
 // controlPlaneHealthGate verifies that every control-plane node is healthy
@@ -781,7 +1057,13 @@ func newHTTPHealthChecker(logger *slog.Logger) *httpHealthChecker {
 			Transport: &http.Transport{
 				DialContext: dialer.DialContext,
 				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true, //nolint:gosec // initial bootstrap, CA not yet trusted
+					// Bootstrap-window reachability probe: freshly
+					// installed nodes serve certs from per-node local
+					// CAs that do not exist yet when the orchestrator
+					// starts watching, so no trust anchor is available
+					// by construction. The probe consumes readiness
+					// booleans only — never credentials or config.
+					InsecureSkipVerify: true, //nolint:gosec // bootstrap-window readiness probe; no trust anchor exists yet
 				},
 			},
 		},

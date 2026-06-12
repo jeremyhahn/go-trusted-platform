@@ -197,6 +197,26 @@ func (e ErrProfileCreateFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrProfileIDParseFailed is returned when the profile ID in the create-profile
+// response body cannot be parsed. The server serializes profile IDs as JSON
+// strings (uint64 > 2^53); a malformed or missing "id" field is a hard error
+// because the orchestrator cannot proceed with BMC enrollment without it.
+type ErrProfileIDParseFailed struct {
+	Hostname string
+	Cause    error
+}
+
+func (e ErrProfileIDParseFailed) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bootstrap: failed to parse profile ID for node %s: %v", e.Hostname, e.Cause)
+	}
+	return fmt.Sprintf("bootstrap: failed to parse profile ID for node %s", e.Hostname)
+}
+
+func (e ErrProfileIDParseFailed) Unwrap() error {
+	return e.Cause
+}
+
 // ErrMissingSeederAddr is returned when the control plane address is empty.
 type ErrMissingSeederAddr struct{}
 

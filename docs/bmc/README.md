@@ -38,6 +38,8 @@ Any server with a standards-compliant BMC supporting:
 | User Management | Create/update/delete IPMI + Redfish accounts; automatic 90-day password rotation |
 | TLS Certificate | Automatic dns-01 ACME issuance and deployment via Redfish CertificateService or Supermicro CGI |
 | Credential Store | memguard-locked BMC credential storage backed by QuicBaaS secrets |
+| Enrollment | Trust-lifecycle ceremony: factory cert capture, platform cert replacement, DNS registration, DANE TLSA publication, Device entity stamping |
+| Factory Cert Restore | Reverses enrollment: BMC regenerates default self-signed cert, SPKI pin deleted, TLSA records removed, Device entity cleared |
 
 ## Components
 
@@ -52,15 +54,17 @@ Any server with a standards-compliant BMC supporting:
 | User Management | `pkg/bmc/user.go`, `pkg/bmc/ipmi_user.go`, `pkg/bmc/redfish_user.go` | IPMI + Redfish account CRUD |
 | Password Rotation | `pkg/bmc/rotation.go` | Store-ahead / apply / verify / rollback engine |
 | Credential Store | `pkg/bmc/credentials.go`, `pkg/bmc/credentials/` | memguard-backed secret storage |
-| Configuration | `pkg/bmc/config.go` | Connection parameters + TLS identity |
+| Enrollment ceremony | `pkg/app/bmc_enroll.go` | 7-step trust-lifecycle enrollment |
+| Factory cert restore | `pkg/app/bmc_restore.go`, `pkg/bmc/cert_restore.go`, `pkg/bmc/smc/cert_restore.go` | Redfish and SMC CGI restore paths |
+| Configuration | `pkg/bmc/config.go`, `pkg/bmc/enrollment.go` | Connection parameters, TLS identity, enrollment flags |
 | RMCP Simulator | `test/integration/bmc/rmcpsim/` | Reusable IPMI 2.0 test responder (used by vBMC) |
 | vBMC | `test/integration/bmc/vbmc/` | Virtual BMC responder for integration tests |
 | Bare Metal Provisioning | `pkg/provisioning/baremetal/` | Orchestrated provisioning workflows |
 
 ## Related Documentation
 
-- [Configuration](configuration.md) - BMC connection setup, credentials, and TLS identity
-- [Operations](operations.md) - Power, boot, virtual media, sensor, and TLS-management operations
+- [Configuration](configuration.md) - BMC connection setup, credentials, TLS identity, and enrollment flags
+- [Operations](operations.md) - Power, boot, virtual media, sensor, TLS-management, enrollment, and factory cert restore operations
 - [Testing](testing.md) - devcontainer vBMC harness for integration tests (Redfish + SMC CGI + IPMI 2.0 RMCP+)
 - [Bare Metal Provisioning](../provisioning/bare-metal.md) - End-to-end provisioning workflows
 - [BMC TLS architecture](../architecture/bmc-tls.md) - End-to-end automated cert issuance, deployment, renewal

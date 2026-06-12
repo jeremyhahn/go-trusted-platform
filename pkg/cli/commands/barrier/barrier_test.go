@@ -256,35 +256,30 @@ func TestValidateRekeyFlags(t *testing.T) {
 		wantErr any
 	}{
 		{
-			name: "secret only",
-			in:   rekeyFlags{secret: "new"},
+			name: "no flags (server-generated key, preserve share layout)",
+			in:   rekeyFlags{},
 		},
 		{
-			name: "secret + paired thresholds",
-			in:   rekeyFlags{secret: "new", threshold: 3, total: 5},
+			name: "paired thresholds",
+			in:   rekeyFlags{threshold: 3, total: 5},
 		},
 		{
-			name: "secret + so-pin only (no --user-pin counterpart)",
-			in:   rekeyFlags{secret: "new", soPin: "so"},
-		},
-		{
-			name:    "missing secret",
-			in:      rekeyFlags{threshold: 3, total: 5},
-			wantErr: ErrMissingSecret{},
+			name: "so-pin only (no --user-pin counterpart)",
+			in:   rekeyFlags{soPin: "so"},
 		},
 		{
 			name:    "threshold without total",
-			in:      rekeyFlags{secret: "new", threshold: 3},
+			in:      rekeyFlags{threshold: 3},
 			wantErr: ErrRekeyPartialFlags{},
 		},
 		{
 			name:    "total without threshold",
-			in:      rekeyFlags{secret: "new", total: 5},
+			in:      rekeyFlags{total: 5},
 			wantErr: ErrRekeyPartialFlags{},
 		},
 		{
 			name:    "threshold > total",
-			in:      rekeyFlags{secret: "new", threshold: 5, total: 3},
+			in:      rekeyFlags{threshold: 5, total: 3},
 			wantErr: ErrInvalidThreshold{},
 		},
 	}

@@ -1,8 +1,179 @@
 # BMC Operations
 
 Power control, boot device management, virtual media, sensor
-monitoring, user management, serial-over-LAN console, and TLS
-certificate management.
+monitoring, user management, serial-over-LAN console, TLS
+certificate management, and trust-lifecycle enrollment.
+
+## Enrollment
+
+The enrollment ceremony establishes a BMC's trust relationship with the
+platform: it pins the BMC's TLS certificate into the TOFU store, issues
+a platform-signed replacement certificate via the Trust CA, registers the
+host in internal DNS, and publishes DANE TLSA records. The ceremony is
+also triggered automatically by the bootstrap orchestrator at phase 5a
+(`bmc-enroll`) for nodes that pass PXE provisioning. See
+[docs/bootstrap/pxe-bootstrap.md](../bootstrap/pxe-bootstrap.md) for
+orchestrator context.
+
+### Ceremony steps
+
+The ceremony executes the following ordered steps. Each step is recorded
+independently; a failure in any step returns the partial result so the
+operator can see which steps completed.
+
+| Step | Name in result | Default |
+|---|---|---|
+| Establish TLS trust via class-bmc resolver | `trust` | always runs |
+| Capture the factory TLS certificate | `factory-cert` | always runs |
+| Persist BMC credentials to the credential store | `credentials` | always runs |
+| Issue and deploy a platform-signed TLS certificate | `replace-certificate` | on |
+| Register `<hostname>-bmc.<zone>` A record in internal DNS | `dns-register` | on |
+| Publish DANE TLSA records for the new certificate | `dane-publish` | on |
+| Stamp `Device.BMCEnrollment` with the enrollment record | `device-stamp` | always runs |
+
+Steps that are skipped (via config or unavailable dependencies) are
+recorded with `ok: true` and a skip reason, so the result is always a
+complete audit trail even for partial ceremonies.
+
+**DANE publication failure is non-fatal.** The certificate is already
+deployed to the BMC when the DANE step runs. If TLSA publishing fails
+(e.g., the DNS service is temporarily unavailable), the step is recorded
+but does not abort the ceremony. Operators can re-run enrollment to
+publish the TLSA record once DNS is restored.
+
+All five transports expose the enrollment operation:
+`POST /api/v1/bmc/{profileID}/enroll` (REST), `EnrollBMC` (gRPC),
+`OpBMCCategory`/`BMCSubEnroll` (QUIC), `platform_bmc_enroll` (MCP),
+and `EnrollBMC` (Unix/gRPC-over-UDS).
+
+### Enroll a BMC
+
+Use the profile's stored `enrollment` config defaults:
+
+```bash
+platformctl bmc enroll --profile-id 7
+```
+
+Override specific steps at call time (tri-state flags — when omitted,
+the profile default is used):
+
+```bash
+platformctl bmc enroll --profile-id 7 \
+    --replace-certificate \
+    --rotate-password \
+    --dns-register \
+    --dane-publish
+```
+
+Persist the factory certificate and full enrollment result to disk:
+
+```bash
+platformctl bmc enroll --profile-id 7 \
+    --backups-dir /var/lib/platform/backups
+```
+
+`--backups-dir` may also be set via the `PLATFORMCTL_BACKUPS_DIR`
+environment variable. When not set, a notice is printed to stderr and
+no client-side backup is written.
+
+### Backup layout
+
+When `--backups-dir` (or `PLATFORMCTL_BACKUPS_DIR`) is set and the
+ceremony returns a factory certificate PEM, three files are written
+under `<dir>/<hostname>/bmc/` with mode `0700` (directory) / `0600`
+(files):
+
+| File | Contents |
+|---|---|
+| `factory-cert.pem` | PEM-encoded factory TLS certificate |
+| `factory-cert.json` | Auditable metadata (subject, issuer, serial, validity, SPKI SHA-256, DER SHA-256, capture time) |
+| `enrollment.json` | Full enrollment result (all fields, all steps) |
+
+The backup exists solely for **identity evidence**: the factory
+certificate proves the BMC's original identity at enrollment time.
+The platform never holds the factory certificate's private key and
+never re-uploads the backup.
+
+### REST example
+
+```bash
+curl -X POST https://platform:8443/api/v1/bmc/7/enroll \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+All four override fields (`replace_certificate`, `rotate_password`,
+`dns_register`, `dane_publish`) are optional booleans in the request
+body. Absent fields use the profile's stored enrollment config defaults.
+
+---
+
+## Factory Certificate Restore
+
+Restoring the factory certificate reverses an enrollment: the BMC is
+instructed to regenerate its built-in default self-signed certificate,
+the platform SPKI pin is deleted, DANE TLSA records are removed, and the
+`Device.BMCEnrollment` record is cleared.
+
+**Restore does not re-upload the backed-up factory certificate.** The
+platform never held the factory cert's private key, so it cannot
+re-deploy it. Instead, the BMC's firmware regenerates a fresh self-signed
+certificate. The factory backup (see backup layout above) serves as
+identity evidence only.
+
+### Restore ceremony steps
+
+| Step | Name in result |
+|---|---|
+| Instruct BMC to regenerate its default self-signed cert | `restore-cert` |
+| Delete the stored TOFU SPKI pin from the platform trust store | `pin-delete` |
+| Remove DANE TLSA records keyed by `Device.BMCEnrollment.DNSName` | `dane-unpublish` |
+| Clear `Device.BMCEnrollment` (preserve `FactoryCertSHA256` for audit) | `device-state` |
+
+`pin-delete` failure is non-fatal: the TOFU resolver detects the new
+self-signed certificate on the next connection and updates the pin
+automatically. `dane-unpublish` failure is also non-fatal.
+
+The TLSA removal is keyed by the enrolled DNS name stored in
+`Device.BMCEnrollment.DNSName`, not by the raw BMC address, so the
+record that was published during enrollment is exactly the one removed.
+When no DNS name is recorded (enrollment never ran dns-register), the
+DANE step is skipped silently.
+
+All five transports expose the restore operation:
+`POST /api/v1/bmc/{profileID}/cert/restore` (REST), `RestoreFactoryCert` (gRPC),
+`OpBMCCategory`/`BMCSubRestore` (QUIC), `platform_bmc_cert_restore` (MCP),
+and `RestoreFactoryCert` (Unix/gRPC-over-UDS).
+
+### X10 hardware caveat (SMC CGI backend)
+
+The Supermicro ATEN CGI restore path (`op=SSL_DEFAULT` via `op.cgi`)
+has been tested only against httptest fakes that model the CGI wire
+protocol from the SMCIPMITool manual. Before using the `smc-cgi` backend
+for cert restore on real X10/X11 hardware, capture a HAR trace of the
+default-SSL operation via the iKVM HTML5 UI on the target firmware and
+diff it against the implementation. See
+`docs/operations/x10-smc-cgi-validation.md`.
+
+### Restore command
+
+```bash
+platformctl bmc cert restore --profile-id 7 --factory
+```
+
+The `--factory` flag is **required** and must be explicit. It exists
+to prevent accidental invocation — restore removes the platform-issued
+certificate from the BMC and cannot be undone without re-enrolling.
+
+### REST example
+
+```bash
+curl -X POST https://platform:8443/api/v1/bmc/7/cert/restore
+```
+
+No request body is required.
+
+---
 
 ## TLS Certificate Management
 
@@ -82,6 +253,46 @@ for the target BMC — check the config has `certificate:` and
 `key:` blocks populated.
 
 
+### Renewal trust publication
+
+The 90-day cert-renewal scheduler calls `issueBMCCertificateCore` on
+each registered BMC target. When the scheduler reissues a certificate,
+the platform performs a two-phase DANE rollover following RFC 7671 §8.1
+to ensure DANE validators never observe a certificate that has no
+matching TLSA record.
+
+**Pre-publication (OnCertIssued hook).**  After the new leaf certificate
+is obtained from the CA but before it is deployed to the BMC,
+`DANEPublisher.PrePublishRollover` adds the new DANE-EE TLSA record
+alongside the existing records. DANE validators can therefore resolve
+the new fingerprint at any point during or after the DNS TTL window.
+If pre-publication fails (DNS temporarily unavailable), the failure is
+logged at `warn` level and the deploy continues — a transient DANE gap
+is preferable to withholding the cert renewal.
+
+**Post-deployment pin update and full re-publish (OnCertDeployed hook).**
+After `ReplaceWebCertificate` succeeds, two operations run in order:
+
+1. The stored TOFU SPKI pin for the BMC host is updated to the new
+   certificate's SubjectPublicKeyInfo SHA-256. This ensures the
+   class-bmc TOFU resolver trusts the new cert on the next connection.
+
+2. `DANEPublisher.PublishForCertificate` re-publishes the complete TLSA
+   record set: a DANE-TA record anchored at the Trust CA (when a CA cert
+   is available) plus a DANE-EE record for the leaf.
+
+If the deployed CA cert is unavailable (ACME path), the DANE-TA record
+is omitted and only the DANE-EE record is published. Both operations are
+non-fatal — a failure is logged at `error` level, but the renewal is
+considered successful because the certificate is already deployed. The
+TLSA records can be corrected by re-running enrollment once DNS is
+restored.
+
+The DNS name used for all TLSA operations is read from
+`Device.BMCEnrollment.DNSName` at hook-invocation time (not at boot),
+so devices enrolled after platformd starts are handled correctly. If no
+DNS name is recorded (enrollment skipped `dns-register`), the DANE steps
+are skipped silently but the TOFU pin is still updated.
 
 ## Power Control
 
@@ -461,6 +672,8 @@ All endpoints are prefixed with `/api/v1`.
 | GET | `/bmc/{profileID}/system-info` | Get system info |
 | POST | `/bmc/{profileID}/provision` | Trigger provisioning |
 | GET | `/bmc/{profileID}/provision` | Get provisioning status |
+| POST | `/bmc/{profileID}/enroll` | Run BMC enrollment ceremony |
+| POST | `/bmc/{profileID}/cert/restore` | Restore factory certificate |
 
 ## Error Responses
 

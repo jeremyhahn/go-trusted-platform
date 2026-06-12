@@ -15,6 +15,8 @@ package bmc
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
@@ -67,11 +69,18 @@ func (f *fakeBMC) close() { f.server.Close() }
 func (f *fakeBMC) cfg() *Config {
 	u, _ := url.Parse(f.server.URL)
 	port, _ := strconv.Atoi(u.Port())
+	pool := x509.NewCertPool()
+	pool.AddCert(f.server.Certificate())
 	return &Config{
-		Address: u.Hostname(), Port: port,
-		Username: "admin", Password: "secret",
-		Protocol:      ProtocolRedfish,
-		SkipTLSVerify: true,
+		Address:  u.Hostname(),
+		Port:     port,
+		Username: "admin",
+		Password: "secret",
+		Protocol: ProtocolRedfish,
+		TLS: &fakeTLSProvider{cfg: &tls.Config{
+			RootCAs:    pool,
+			MinVersion: tls.VersionTLS12,
+		}},
 	}
 }
 

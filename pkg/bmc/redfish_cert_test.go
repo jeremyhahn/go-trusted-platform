@@ -15,6 +15,7 @@ package bmc
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -66,11 +67,18 @@ func (f *fakeCertBMC) close() { f.server.Close() }
 func (f *fakeCertBMC) cfg() *Config {
 	u, _ := url.Parse(f.server.URL)
 	port, _ := strconv.Atoi(u.Port())
+	pool := x509.NewCertPool()
+	pool.AddCert(f.server.Certificate())
 	return &Config{
-		Address: u.Hostname(), Port: port,
-		Username: "admin", Password: "secret",
-		Protocol:      ProtocolRedfish,
-		SkipTLSVerify: true,
+		Address:  u.Hostname(),
+		Port:     port,
+		Username: "admin",
+		Password: "secret",
+		Protocol: ProtocolRedfish,
+		TLS: &fakeTLSProvider{cfg: &tls.Config{
+			RootCAs:    pool,
+			MinVersion: tls.VersionTLS12,
+		}},
 	}
 }
 
@@ -195,9 +203,12 @@ func TestRedfishCert_GetWebCertificate(t *testing.T) {
 
 func TestRedfishCert_GetWebCertificate_BadHost(t *testing.T) {
 	cfg := &Config{
-		Address: "127.0.0.1", Port: 1, // closed port
-		Protocol: ProtocolRedfish, SkipTLSVerify: true,
-		Username: "u", Password: "p",
+		Address:  "127.0.0.1",
+		Port:     1, // closed port
+		Protocol: ProtocolRedfish,
+		Username: "u",
+		Password: "p",
+		// No TLSProvider: system roots, will fail at dial not at TLS config.
 	}
 	m := newFastCertManager(t, cfg)
 	defer m.Close()

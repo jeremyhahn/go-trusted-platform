@@ -158,7 +158,7 @@ func (m *AutoCertManager) Close() error {
 // BMC's HTTPS interface. Implementation reads the live TLS handshake
 // peer cert, independent of the configured backend.
 func (m *AutoCertManager) GetWebCertificate(ctx context.Context) (*x509.Certificate, error) {
-	tlsCfg, err := buildVendorProbeTLS(m.cfg)
+	tlsCfg, err := BuildTLSConfig(ctx, m.cfg)
 	if err != nil {
 		return nil, err
 	}

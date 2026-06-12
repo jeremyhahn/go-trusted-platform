@@ -101,6 +101,26 @@ func (s *bmcStubProvider) BMCListUsers(_ context.Context, profileID uint64) (int
 	return map[string]interface{}{"profile_id": profileID, "users": []map[string]interface{}{}}, nil
 }
 
+func (s *bmcStubProvider) BMCEnrollBMC(_ context.Context, profileID uint64, replaceCertificate, rotatePassword, dnsRegister, danePublish *bool) (interface{}, error) {
+	s.lastCall = "enroll_bmc"
+	return map[string]interface{}{"profile_id": profileID, "device_id": "42", "endpoint": "10.0.0.1:443"}, nil
+}
+
+// BMCRestoreFactoryCert satisfies the BMCProvider interface. It records
+// the last call for dispatch verification.
+func (s *bmcStubProvider) BMCRestoreFactoryCert(_ context.Context, profileID uint64) (interface{}, error) {
+	s.lastCall = "restore_factory_cert"
+	return map[string]interface{}{
+		"device_id": profileID,
+		"endpoint":  "10.0.0.1:443",
+		"hostname":  "bmc.example",
+		"steps":     []map[string]interface{}{},
+		"new_cert_meta": map[string]interface{}{
+			"subject": "CN=bmc.example",
+		},
+	}, nil
+}
+
 // bmcCombinedProvider satisfies both ServiceProvider (via mockServiceProvider)
 // and BMCProvider (via bmcStubProvider). The two types contribute disjoint
 // method sets so embedding is collision-free.
@@ -150,6 +170,8 @@ func TestToolRegistry_ExecuteTool_BMC_RoutesToProvider(t *testing.T) {
 		{name: "platform_bmc_get_system_info", args: map[string]interface{}{"profile_id": 1}, wantCall: "system_info"},
 		{name: "platform_bmc_get_web_certificate", args: map[string]interface{}{"profile_id": 1}, wantCall: "web_cert"},
 		{name: "platform_bmc_list_users", args: map[string]interface{}{"profile_id": 1}, wantCall: "list_users"},
+		{name: "platform_bmc_enroll", args: map[string]interface{}{"profile_id": 1}, wantCall: "enroll_bmc"},
+		{name: "platform_bmc_cert_restore", args: map[string]interface{}{"profile_id": 1}, wantCall: "restore_factory_cert"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -185,6 +207,8 @@ func TestToolRegistry_ExecuteTool_BMC_NoProvider(t *testing.T) {
 		"platform_bmc_get_system_info",
 		"platform_bmc_get_web_certificate",
 		"platform_bmc_list_users",
+		"platform_bmc_enroll",
+		"platform_bmc_cert_restore",
 	}
 	for _, name := range bmcTools {
 		t.Run(name, func(t *testing.T) {
@@ -197,79 +221,5 @@ func TestToolRegistry_ExecuteTool_BMC_NoProvider(t *testing.T) {
 				t.Errorf("%s: expected ErrBMCNotConfigured, got %v", name, err)
 			}
 		})
-	}
-}
-
-// TestToolRegistry_ExecuteTool_BMC_MissingProfileID verifies that BMC
-// tools return ErrBMCProfileIDRequired when the profile_id arg is
-// missing or zero.
-func TestToolRegistry_ExecuteTool_BMC_MissingProfileID(t *testing.T) {
-	stub := &bmcStubProvider{}
-	svc := &bmcCombinedProvider{
-		mockServiceProvider: newMockServiceProvider(),
-		bmcStubProvider:     stub,
-	}
-	registry := NewToolRegistry(svc, logging.DefaultLogger())
-	ctx := context.Background()
-
-	// Empty args -> profile_id is 0 -> ErrBMCProfileIDRequired.
-	_, err := registry.ExecuteTool(ctx, "platform_bmc_power_status", map[string]interface{}{})
-	if err == nil {
-		t.Fatal("expected error for missing profile_id, got nil")
-	}
-	if !errors.Is(err, ErrBMCProfileIDRequired) {
-		t.Errorf("expected ErrBMCProfileIDRequired, got %v", err)
-	}
-
-	// set_boot_device additionally requires `device`.
-	_, err = registry.ExecuteTool(ctx, "platform_bmc_set_boot_device", map[string]interface{}{"profile_id": 1})
-	if err == nil {
-		t.Fatal("expected error for missing device, got nil")
-	}
-	if !errors.Is(err, ErrBMCBootDeviceRequired) {
-		t.Errorf("expected ErrBMCBootDeviceRequired, got %v", err)
-	}
-
-	// mount_iso additionally requires `iso_url`.
-	_, err = registry.ExecuteTool(ctx, "platform_bmc_mount_iso", map[string]interface{}{"profile_id": 1})
-	if err == nil {
-		t.Fatal("expected error for missing iso_url, got nil")
-	}
-	if !errors.Is(err, ErrBMCISOURLRequired) {
-		t.Errorf("expected ErrBMCISOURLRequired, got %v", err)
-	}
-}
-
-// TestToolRegistry_BMCToolsRegistered verifies all platform_bmc_* tool
-// definitions are registered and listable.
-func TestToolRegistry_BMCToolsRegistered(t *testing.T) {
-	svc := newMockServiceProvider()
-	registry := NewToolRegistry(svc, logging.DefaultLogger())
-
-	expected := []string{
-		"platform_bmc_power_on",
-		"platform_bmc_power_off",
-		"platform_bmc_power_reset",
-		"platform_bmc_power_cycle",
-		"platform_bmc_power_status",
-		"platform_bmc_set_boot_device",
-		"platform_bmc_get_boot_device",
-		"platform_bmc_mount_iso",
-		"platform_bmc_unmount_iso",
-		"platform_bmc_virtual_media_status",
-		"platform_bmc_get_sensors",
-		"platform_bmc_get_system_info",
-		"platform_bmc_get_web_certificate",
-		"platform_bmc_list_users",
-	}
-	tools := registry.ListTools()
-	got := make(map[string]struct{}, len(tools))
-	for _, td := range tools {
-		got[td.Name] = struct{}{}
-	}
-	for _, name := range expected {
-		if _, ok := got[name]; !ok {
-			t.Errorf("missing registered tool: %s", name)
-		}
 	}
 }

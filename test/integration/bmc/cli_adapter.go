@@ -418,6 +418,129 @@ func (c *CLIAdapter) ListUsers(ctx context.Context, profileID uint64) ([]bmcsvc.
 }
 
 // =============================================================================
+// Enrollment Operations
+// =============================================================================
+
+// EnrollBMC runs the BMC enrollment ceremony via the platformctl CLI.
+// It shells out to `platformctl bmc enroll --profile-id N [--output json]`
+// and parses the JSON EnrollResult emitted to stdout.
+func (c *CLIAdapter) EnrollBMC(ctx context.Context, profileID uint64, opts *EnrollOptions) (*EnrollResult, error) {
+	args := []string{
+		"bmc", "enroll",
+		"--profile-id", strconv.FormatUint(profileID, 10),
+	}
+	if opts != nil {
+		if opts.ReplaceCertificate != nil {
+			args = append(args, "--replace-certificate="+strconv.FormatBool(*opts.ReplaceCertificate))
+		}
+		if opts.RotatePassword != nil {
+			args = append(args, "--rotate-password="+strconv.FormatBool(*opts.RotatePassword))
+		}
+		if opts.DNSRegister != nil {
+			args = append(args, "--dns-register="+strconv.FormatBool(*opts.DNSRegister))
+		}
+		if opts.DANEPublish != nil {
+			args = append(args, "--dane-publish="+strconv.FormatBool(*opts.DANEPublish))
+		}
+	}
+
+	output, err := c.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var result cliEnrollResult
+	if err := json.Unmarshal(output, &result); err != nil {
+		return nil, ErrCLIOutputParseFailed{Operation: "EnrollBMC", Output: string(output), Err: err}
+	}
+
+	return cliEnrollResultToDomain(&result), nil
+}
+
+// cliEnrollResultToDomain converts the CLI JSON response to the local domain type.
+func cliEnrollResultToDomain(r *cliEnrollResult) *EnrollResult {
+	if r == nil {
+		return &EnrollResult{}
+	}
+	steps := make([]EnrollStep, len(r.Steps))
+	for i, s := range r.Steps {
+		steps[i] = EnrollStep{Name: s.Name, OK: s.OK, Detail: s.Detail}
+	}
+	return &EnrollResult{
+		DeviceID:      r.DeviceID,
+		Endpoint:      r.Endpoint,
+		Hostname:      r.Hostname,
+		DNSName:       r.DNSName,
+		PinSPKISHA256: r.PinSPKISHA256,
+		FactoryCertMeta: EnrollFactoryCertMeta{
+			Subject:      r.FactoryCertMeta.Subject,
+			Issuer:       r.FactoryCertMeta.Issuer,
+			SerialNumber: r.FactoryCertMeta.SerialNumber,
+			NotBefore:    r.FactoryCertMeta.NotBefore,
+			NotAfter:     r.FactoryCertMeta.NotAfter,
+			SPKISHA256:   r.FactoryCertMeta.SPKISHA256,
+			SHA256:       r.FactoryCertMeta.SHA256,
+			CapturedAt:   r.FactoryCertMeta.CapturedAt,
+		},
+		Steps: steps,
+	}
+}
+
+// =============================================================================
+// Factory Certificate Restore Operations
+// =============================================================================
+
+// RestoreBMC runs the BMC factory-certificate restore ceremony via the platformctl CLI.
+// It shells out to `platformctl bmc cert restore --profile-id N --factory [--output json]`
+// and parses the JSON RestoreResult emitted to stdout.
+func (c *CLIAdapter) RestoreBMC(ctx context.Context, profileID uint64) (*RestoreResult, error) {
+	args := []string{
+		"bmc", "cert", "restore",
+		"--profile-id", strconv.FormatUint(profileID, 10),
+		"--factory",
+	}
+
+	output, err := c.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var result cliRestoreResult
+	if err := json.Unmarshal(output, &result); err != nil {
+		return nil, ErrCLIOutputParseFailed{Operation: "RestoreBMC", Output: string(output), Err: err}
+	}
+
+	return cliRestoreResultToDomain(&result), nil
+}
+
+// cliRestoreResultToDomain converts the CLI JSON response to the local domain type.
+func cliRestoreResultToDomain(r *cliRestoreResult) *RestoreResult {
+	if r == nil {
+		return &RestoreResult{}
+	}
+	steps := make([]EnrollStep, len(r.Steps))
+	for i, s := range r.Steps {
+		steps[i] = EnrollStep{Name: s.Name, OK: s.OK, Detail: s.Detail}
+	}
+	return &RestoreResult{
+		DeviceID: r.DeviceID,
+		Endpoint: r.Endpoint,
+		Hostname: r.Hostname,
+		NewCertMeta: RestoreFactoryCertMeta{
+			Subject:      r.NewCertMeta.Subject,
+			Issuer:       r.NewCertMeta.Issuer,
+			SerialNumber: r.NewCertMeta.SerialNumber,
+			NotBefore:    r.NewCertMeta.NotBefore,
+			NotAfter:     r.NewCertMeta.NotAfter,
+			SPKISHA256:   r.NewCertMeta.SPKISHA256,
+			SHA256:       r.NewCertMeta.SHA256,
+			CapturedAt:   r.NewCertMeta.CapturedAt,
+		},
+		Steps: steps,
+	}
+}
+
+// =============================================================================
 // CLI Response Types
 // =============================================================================
 
@@ -465,6 +588,49 @@ type cliSystemInfoResponse struct {
 	BMCVersion   string `json:"bmc_version"`
 	PowerState   string `json:"power_state"`
 	Health       string `json:"health"`
+}
+
+// cliEnrollStep is the JSON shape of one enrollment step in CLI output.
+type cliEnrollStep struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// cliFactoryCertMeta is the JSON shape of factory cert metadata in CLI output.
+type cliFactoryCertMeta struct {
+	Subject      string    `json:"subject"`
+	Issuer       string    `json:"issuer"`
+	SerialNumber string    `json:"serial_number"`
+	NotBefore    time.Time `json:"not_before"`
+	NotAfter     time.Time `json:"not_after"`
+	SPKISHA256   string    `json:"spki_sha256"`
+	SHA256       string    `json:"sha256"`
+	CapturedAt   time.Time `json:"captured_at"`
+}
+
+// cliEnrollResult is the JSON output shape of `platformctl bmc enroll --output json`.
+// DeviceID is a string to match the `json:"device_id,string"` convention used
+// across the platform's REST API (preserving uint64 precision in JavaScript).
+type cliEnrollResult struct {
+	DeviceID        uint64             `json:"device_id,string"`
+	Endpoint        string             `json:"endpoint"`
+	Hostname        string             `json:"hostname"`
+	DNSName         string             `json:"dns_name,omitempty"`
+	PinSPKISHA256   string             `json:"pin_spki_sha256"`
+	FactoryCertMeta cliFactoryCertMeta `json:"factory_cert_meta"`
+	Steps           []cliEnrollStep    `json:"steps"`
+}
+
+// cliRestoreResult is the JSON output shape of
+// `platformctl bmc cert restore --factory --output json`.
+// DeviceID is a string to match the `json:"device_id,string"` convention.
+type cliRestoreResult struct {
+	DeviceID    uint64             `json:"device_id,string"`
+	Endpoint    string             `json:"endpoint"`
+	Hostname    string             `json:"hostname"`
+	NewCertMeta cliFactoryCertMeta `json:"new_cert_meta"`
+	Steps       []cliEnrollStep    `json:"steps"`
 }
 
 // Ensure CLIAdapter implements BMCCommands interface.

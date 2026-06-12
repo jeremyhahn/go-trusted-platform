@@ -32,6 +32,7 @@ import (
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
@@ -43,7 +44,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // MCPServiceProviderConfig holds configuration for MCPServiceProvider.
@@ -69,6 +69,7 @@ type MCPServiceProviderConfig struct {
 	InvitationService    platformservice.InvitationServicer
 	EABService           EABServicer
 	EABDelivery          EABDeliveryServicer
+	BMCEnroller          BMCEnroller
 }
 
 // MCPServiceProvider implements mcp.ServiceProvider by bridging to daemon services.
@@ -94,6 +95,8 @@ type MCPServiceProvider struct {
 	invitationService    platformservice.InvitationServicer
 	eabService           EABServicer
 	eabDelivery          EABDeliveryServicer
+	bmcEnroller          BMCEnroller
+	bmcRestorer          BMCRestorer
 	phase35              phase35State
 	logger               *slog.Logger
 }
@@ -121,6 +124,7 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		tpm2Service:          config.TPM2Service,
 		computeOrchestrator:  config.ComputeOrchestrator,
 		bmcService:           config.BMCService,
+		bmcEnroller:          config.BMCEnroller,
 		clusterService:       config.ClusterService,
 		registryService:      config.RegistryService,
 		invitationService:    config.InvitationService,

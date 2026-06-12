@@ -235,7 +235,7 @@ var _ Client = (*redfishClient)(nil)
 
 // newRedfishClient creates a new redfishClient with the given configuration.
 func newRedfishClient(config *Config, logger *slog.Logger) (*redfishClient, error) {
-	t, err := newRedfishTransport(config, logger)
+	t, err := newRedfishTransport(context.Background(), config, logger)
 	if err != nil {
 		return nil, ErrRedfishTransportInit{Cause: err}
 	}

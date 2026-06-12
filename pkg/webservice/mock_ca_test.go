@@ -14,12 +14,13 @@
 package webservice
 
 import (
+	"context"
 	"crypto"
 	"crypto/x509"
 	"io"
 
-	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 )
 
 // mockCAForSigner is a minimal mock that only implements the Signer() method.
@@ -31,7 +32,7 @@ type mockCAForSigner struct {
 	signerErr error
 }
 
-func (m *mockCAForSigner) Signer() (crypto.Signer, error) {
+func (m *mockCAForSigner) Signer(_ context.Context) (crypto.Signer, error) {
 	if m.signerErr != nil {
 		return nil, m.signerErr
 	}
@@ -53,7 +54,7 @@ type mockCAForCert struct {
 	certErr error
 }
 
-func (m *mockCAForCert) Certificate(attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
+func (m *mockCAForCert) Certificate(_ context.Context, attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
 	if m.certErr != nil {
 		return nil, m.certErr
 	}

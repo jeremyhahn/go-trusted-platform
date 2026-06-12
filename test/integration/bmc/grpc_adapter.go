@@ -216,5 +216,35 @@ func (g *GRPCAdapter) ListUsers(ctx context.Context, profileID uint64) ([]bmcsvc
 	return users, nil
 }
 
+// =============================================================================
+// Enrollment Operations
+// =============================================================================
+
+// EnrollBMC runs the BMC enrollment ceremony via gRPC (BMCService/EnrollBMC).
+// It delegates to the SDK client which translates between the local EnrollOptions
+// and the proto BMCEnrollRequest.
+func (g *GRPCAdapter) EnrollBMC(ctx context.Context, profileID uint64, opts *EnrollOptions) (*EnrollResult, error) {
+	sdkOpts := enrollOptionsToSDK(opts)
+	resp, err := g.client.EnrollBMC(ctx, profileID, sdkOpts)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "EnrollBMC", Err: err}
+	}
+	return sdkEnrollResultToDomain(resp), nil
+}
+
+// =============================================================================
+// Factory Certificate Restore Operations
+// =============================================================================
+
+// RestoreBMC runs the BMC factory-certificate restore ceremony via gRPC
+// (BMCService/RestoreFactoryCert). It delegates to the SDK client.
+func (g *GRPCAdapter) RestoreBMC(ctx context.Context, profileID uint64) (*RestoreResult, error) {
+	resp, err := g.client.RestoreFactoryCert(ctx, profileID)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "RestoreFactoryCert", Err: err}
+	}
+	return sdkRestoreResultToDomain(resp), nil
+}
+
 // Ensure GRPCAdapter implements BMCCommands interface.
 var _ BMCCommands = (*GRPCAdapter)(nil)

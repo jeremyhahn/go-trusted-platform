@@ -102,7 +102,9 @@ func TestSeeder_Seed(t *testing.T) {
 
 		case r.Method == http.MethodPost && len(r.URL.Path) > len("/api/v1/devices/templates/"):
 			profileCalls++
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]interface{}{"code": 201, "success": true, "payload": map[string]interface{}{"id": "1"}})
 
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -188,7 +190,9 @@ network:
 			json.NewEncoder(w).Encode(resp)
 
 		case r.Method == http.MethodPost:
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]interface{}{"code": 201, "success": true, "payload": map[string]interface{}{"id": "1"}})
 
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -326,7 +330,9 @@ func TestSeeder_Seed_MultipleRoles(t *testing.T) {
 
 		case r.Method == http.MethodPost:
 			profileCalls++
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]interface{}{"code": 201, "success": true, "payload": map[string]interface{}{"id": "1"}})
 
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -715,7 +721,9 @@ func TestSeeder_Seed_SkipsNodeWithNoTemplate(t *testing.T) {
 			w.WriteHeader(http.StatusCreated)
 			json.NewEncoder(w).Encode(resp)
 		case r.Method == http.MethodPost:
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]interface{}{"code": 201, "success": true, "payload": map[string]interface{}{"id": "1"}})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}

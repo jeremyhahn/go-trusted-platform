@@ -151,13 +151,15 @@ webservices:
 Configure the bootstrap client to use this endpoint:
 
 ```yaml
-bootstrap-client:
-  strategy: dane
-  server-url: "https://server.example.com:8443"
-  dns-server: "8.8.8.8:53"
-  bundle-path: "/api/v1/ca/bootstrap"
-  per-method-timeout: 15s
-  install-to-system-trust: true
+trust:
+  default:
+    strategies: [dane]
+    server-url: "https://server.example.com:8443"
+    dane:
+      dns-server: "8.8.8.8:53"
+    bundle-path: "/api/v1/ca/bootstrap"
+    per-method-timeout: 15s
+    install-to-system-trust: true
 ```
 
 ## Implementation Notes

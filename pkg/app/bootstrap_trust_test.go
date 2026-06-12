@@ -271,3 +271,35 @@ func TestErrBootstrapTOFUPinStore_Unwrap(t *testing.T) {
 	e := ErrBootstrapTOFUPinStore{Cause: cause}
 	assert.Equal(t, cause, e.Unwrap())
 }
+
+// =============================================================================
+// InternalCAPool
+// =============================================================================
+
+func TestInternalCAPool_NilTrustConfig(t *testing.T) {
+	t.Parallel()
+	// When TrustConfig is nil, TrustResolver returns nil, and InternalCAPool
+	// must return (nil, nil) without error.
+	app := &App{}
+	pool, err := app.InternalCAPool(context.Background())
+	require.NoError(t, err)
+	assert.Nil(t, pool)
+}
+
+func TestInternalCAPool_InternalClassNotConfigured(t *testing.T) {
+	t.Parallel()
+	// A TrustConfig with no internal scope must return (nil, nil) without error
+	// so existing deployments without the trust: internal YAML block keep working.
+	app := &App{
+		TrustConfig: &trust.Config{
+			Default: &trust.ScopeConfig{
+				Strategies: []trust.Strategy{trust.StrategyEmbedded},
+			},
+		},
+		Logger: logging.DefaultLogger(),
+	}
+	// Must not error even though ClassInternal is unconfigured.
+	pool, err := app.InternalCAPool(context.Background())
+	require.NoError(t, err)
+	assert.Nil(t, pool, "nil pool expected when internal class not configured")
+}

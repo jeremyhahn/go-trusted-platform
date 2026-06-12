@@ -14,8 +14,15 @@
 package bmc
 
 import (
+	"bufio"
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
+	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -23,6 +30,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 // standaloneBMCFlags holds the flags that select and configure the standalone
@@ -31,13 +39,14 @@ import (
 // There is no audit log and no profile persistence in this mode; it is
 // intended for bootstrap and one-off operations.
 type standaloneBMCFlags struct {
-	host          string
-	port          int
-	user          string
-	password      string
-	passwordFile  string
-	protocol      string
-	skipTLSVerify bool
+	host         string
+	port         int
+	user         string
+	password     string
+	passwordFile string
+	protocol     string
+	bmcPin       string // --bmc-pin <hex-spki-sha256>: pin the BMC's leaf SPKI hash
+	bmcCAFile    string // --bmc-ca-file <path>: trust a custom CA bundle PEM file
 
 	// solInstance is the explicit IPMI 2.0 SOL payload instance override
 	// for the bmc console subcommand. Zero (the flag default) means
@@ -64,8 +73,13 @@ func addStandaloneFlags(cmd *cobra.Command, f *standaloneBMCFlags) {
 		"Path to file containing BMC password (mode 0600 or stricter)")
 	cmd.Flags().StringVar(&f.protocol, "bmc-protocol", "auto",
 		"BMC protocol: redfish | ipmi | auto")
-	cmd.Flags().BoolVar(&f.skipTLSVerify, "bmc-skip-tls-verify", false,
-		"Skip TLS verification (BMC self-signed certs)")
+	cmd.Flags().StringVar(&f.bmcPin, "bmc-pin", "",
+		"Hex-encoded SHA-256 SPKI fingerprint of the BMC TLS leaf certificate. "+
+			"When set, the connection is verified against this pin. "+
+			"Obtain via: platformctl bmc cert get --bmc-host <ip> (interactive mode).")
+	cmd.Flags().StringVar(&f.bmcCAFile, "bmc-ca-file", "",
+		"Path to a PEM CA bundle file used to verify the BMC TLS certificate. "+
+			"Mutually exclusive with --bmc-pin.")
 }
 
 // modeStandalone reports whether the user supplied --bmc-host.
@@ -109,8 +123,7 @@ func checkModeConflict(standalone *standaloneBMCFlags, daemon *bmcFlags) error {
 
 // newStandaloneClient builds a direct bmc.Client from the standalone flag set.
 // It loads the password (file precedence enforced), auto-detects the protocol
-// when requested, and returns a configured client via the package-level
-// newBMCClient hook (overridable in tests).
+// when requested, and wires a TLSProvider from the trust flags.
 func newStandaloneClient(ctx context.Context, f *standaloneBMCFlags, logger *slog.Logger) (bmc.Client, error) {
 	pw, err := loadStandalonePassword(f)
 	if err != nil {
@@ -145,16 +158,178 @@ func newStandaloneClient(ctx context.Context, f *standaloneBMCFlags, logger *slo
 		}
 	}
 
+	// TLS provider resolution only applies to Redfish (HTTPS) connections.
+	// IPMI 2.0 uses UDP/RMCP+ which does not use TLS. Any embedded Redfish
+	// sub-connection from an IPMI client will use system roots when TLS is nil.
+	var tlsProvider bmc.TLSProvider
+	if proto == bmc.ProtocolRedfish {
+		tlsProvider, err = standaloneTLSProvider(ctx, f, port)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	cfg := &bmc.Config{
 		Address:            f.host,
 		Port:               port,
 		Protocol:           proto,
 		Username:           f.user,
 		Password:           pw,
-		SkipTLSVerify:      f.skipTLSVerify,
+		TLS:                tlsProvider,
 		SOLPayloadInstance: f.solInstance,
 	}
 	return newBMCClient(cfg, logger)
+}
+
+// standaloneTLSProvider builds a bmc.TLSProvider for the standalone connection
+// from the trust flags. The resolution order is:
+//
+//  1. --bmc-pin <hex>: SPKI-pinned trust via trust.ClassBMC spki strategy.
+//  2. --bmc-ca-file <path>: custom CA bundle via trust.ClassBMC ca-file strategy.
+//  3. Neither flag set in an interactive terminal: capture-then-confirm. A
+//     raw InsecureSkipVerify dial captures the peer certificate (no app data
+//     is exchanged), its SPKI fingerprint is displayed, and the operator is
+//     prompted for confirmation. After confirmation the connection is verified
+//     via the SPKI-pin path.
+//     See also: pkg/bootstrap/virtual_media.go fetchControlPlaneCABundle for
+//     the documented pattern this is modelled on.
+//  4. Neither flag set in a non-interactive session: ErrBMCNoPinOrCAFile.
+//
+// Passing both --bmc-pin and --bmc-ca-file is a conflict.
+func standaloneTLSProvider(ctx context.Context, f *standaloneBMCFlags, httpsPort int) (bmc.TLSProvider, error) {
+	if f.bmcPin != "" && f.bmcCAFile != "" {
+		return nil, ErrBMCFlagConflict{Fields: []string{"--bmc-pin", "--bmc-ca-file"}}
+	}
+
+	if f.bmcPin != "" {
+		return buildSPKIPinProvider(f.bmcPin)
+	}
+
+	if f.bmcCAFile != "" {
+		return buildCAFileProvider(f.bmcCAFile)
+	}
+
+	// Neither pin nor CA file: capture-then-confirm when stdin is a terminal.
+	if !isTerminal() {
+		return nil, ErrBMCNoPinOrCAFile{}
+	}
+
+	pin, err := captureAndConfirmSPKI(ctx, f.host, httpsPort)
+	if err != nil {
+		return nil, err
+	}
+	return buildSPKIPinProvider(pin)
+}
+
+// buildSPKIPinProvider returns a TLSProvider that verifies the BMC leaf
+// certificate against the given SPKI SHA-256 hex pin via the trust resolver's
+// ClassBMC/spki strategy.
+func buildSPKIPinProvider(pin string) (bmc.TLSProvider, error) {
+	trustCfg := &trust.Config{
+		BMC: &trust.ScopeConfig{
+			Strategies: []trust.Strategy{trust.StrategySPKI},
+			SPKI:       &trust.SPKIConfig{Pin: pin},
+		},
+	}
+	resolver, err := trust.NewResolver(trustCfg, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &standaloneTrustProvider{resolver: resolver}, nil
+}
+
+// buildCAFileProvider returns a TLSProvider that verifies the BMC leaf
+// certificate against the given CA bundle PEM file via the trust resolver's
+// ClassBMC/ca-file strategy.
+func buildCAFileProvider(caFile string) (bmc.TLSProvider, error) {
+	trustCfg := &trust.Config{
+		BMC: &trust.ScopeConfig{
+			Strategies: []trust.Strategy{trust.StrategyCAFile},
+			CAFile:     caFile,
+		},
+	}
+	resolver, err := trust.NewResolver(trustCfg, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &standaloneTrustProvider{resolver: resolver}, nil
+}
+
+// standaloneTrustProvider adapts a trust.Resolver into a bmc.TLSProvider
+// for the ClassBMC scope.
+type standaloneTrustProvider struct {
+	resolver trust.Resolver
+}
+
+func (p *standaloneTrustProvider) TLSConfig(ctx context.Context, endpoint string) (*tls.Config, error) {
+	return p.resolver.TLSConfig(ctx, trust.ClassBMC, endpoint)
+}
+
+// captureAndConfirmSPKI performs a capture-then-confirm handshake:
+//
+//  1. Dial the BMC with InsecureSkipVerify to capture the peer certificate.
+//     No application data is exchanged; the connection is closed immediately
+//     after the handshake.
+//  2. Display the certificate subject and SPKI SHA-256 fingerprint on stderr.
+//  3. Prompt the operator to confirm on stdin.
+//
+// This follows the sanctioned capture-then-verify pattern documented in
+// pkg/bootstrap/virtual_media.go. The InsecureSkipVerify dial is the
+// ONLY permitted use of InsecureSkipVerify in standalone mode; app data
+// is never sent before the pinned reconnect is made.
+func captureAndConfirmSPKI(ctx context.Context, host string, port int) (string, error) {
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+
+	// Step 1: capture-only dial — InsecureSkipVerify is intentional here.
+	// This is the only call site in standalone mode. No app data is sent;
+	// the connection is closed immediately after handshake for pin extraction.
+	captureCfg := &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // capture-then-confirm: peer cert capture only, no app data exchanged; pinned reconnect follows
+	}
+	conn, err := tls.DialWithDialer(dialer, "tcp", addr, captureCfg)
+	if err != nil {
+		return "", ErrBMCCaptureDial{Host: addr, Cause: err}
+	}
+	certs := conn.ConnectionState().PeerCertificates
+	conn.Close()
+
+	if len(certs) == 0 {
+		return "", ErrBMCNoPeerCert{Host: addr}
+	}
+	leaf := certs[0]
+
+	// Compute SPKI SHA-256.
+	spkiSum := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
+	pin := hex.EncodeToString(spkiSum[:])
+
+	// Step 2: display cert info and prompt.
+	fmt.Fprintf(os.Stderr, "\nBMC TLS certificate at %s:\n", addr)
+	fmt.Fprintf(os.Stderr, "  Subject:    %s\n", leaf.Subject)
+	fmt.Fprintf(os.Stderr, "  Issuer:     %s\n", leaf.Issuer)
+	fmt.Fprintf(os.Stderr, "  Not After:  %s\n", leaf.NotAfter.Format(time.RFC3339))
+	fmt.Fprintf(os.Stderr, "  SPKI pin:   %s\n\n", pin)
+	fmt.Fprintf(os.Stderr, "Do you trust this certificate? [yes/no]: ")
+
+	// Step 3: read confirmation.
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
+	if answer != "yes" && answer != "y" {
+		return "", ErrBMCNoPinOrCAFile{}
+	}
+
+	fmt.Fprintf(os.Stderr, "\nAccepted. To skip this prompt in future, pass: --bmc-pin %s\n\n", pin)
+	return pin, nil
+}
+
+// isTerminal reports whether os.Stdin is an interactive terminal.
+func isTerminal() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
 }
 
 // newBMCClient is the package-level constructor used by newStandaloneClient.
@@ -198,4 +373,28 @@ func loadStandalonePassword(f *standaloneBMCFlags) (string, error) {
 // confuse interactive users.
 func standaloneLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+}
+
+// compile-time check: standaloneTrustProvider implements bmc.TLSProvider.
+var _ bmc.TLSProvider = (*standaloneTrustProvider)(nil)
+
+// buildStandaloneTLSConfig builds a *tls.Config for constructors that need
+// the config object directly (cert.go, user.go) rather than going through a
+// full bmc.Client. It applies the same trust flag resolution logic as
+// standaloneTLSProvider.
+func buildStandaloneTLSConfig(ctx context.Context, f *standaloneBMCFlags, httpsPort int) (*tls.Config, error) {
+	provider, err := standaloneTLSProvider(ctx, f, httpsPort)
+	if err != nil {
+		return nil, err
+	}
+	addr := net.JoinHostPort(f.host, fmt.Sprintf("%d", httpsPort))
+	return provider.TLSConfig(ctx, addr)
+}
+
+// verifyX509PeerCert verifies that leaf is signed by one of the CAs in pool.
+// Used in tests to confirm the pin-path actually verifies against the expected cert.
+func verifyX509PeerCert(leaf *x509.Certificate, pool *x509.CertPool) error {
+	opts := x509.VerifyOptions{Roots: pool}
+	_, err := leaf.Verify(opts)
+	return err
 }

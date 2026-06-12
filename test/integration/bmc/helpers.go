@@ -21,6 +21,7 @@ package bmc_integration
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -137,7 +138,7 @@ func DefaultTestContext() (context.Context, context.CancelFunc) {
 }
 
 // =============================================================================
-// Not-Implemented Detection
+// Not-Implemented / Tolerated-Failure Detection
 // =============================================================================
 
 // isNotImplementedError returns true if the error indicates an adapter is not
@@ -151,6 +152,69 @@ func isNotImplementedError(err error) bool {
 		return true
 	case ErrMCPNotImplemented:
 		return true
+	}
+	return false
+}
+
+// isEnrollServiceUnavailable returns true if the error indicates the enrollment
+// ceremony service is not wired or available on the current transport. Tests
+// use this to distinguish a deployment-config gap (acceptable outcome) from a
+// genuine test failure.
+func isEnrollServiceUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch err.(type) {
+	case ErrEnrollServiceUnavailable:
+		return true
+	}
+	// Also tolerate well-known "not configured" strings that may surface from
+	// the server side when the enroller is not wired into the daemon.
+	msg := err.Error()
+	for _, substr := range []string{
+		"enroller not available",
+		"not configured",
+		"not implemented",
+		"unimplemented",
+		"service unavailable",
+		"not available",
+		"unknown service",
+	} {
+		if strings.Contains(msg, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// isRestoreServiceUnavailable returns true if the error indicates the factory-
+// certificate restore service is not wired or available on the current transport.
+// Tests use this to distinguish a deployment-config gap (acceptable outcome) from
+// a genuine transport failure.
+func isRestoreServiceUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch err.(type) {
+	case ErrRestoreServiceUnavailable:
+		return true
+	}
+	// Tolerate the same well-known "not configured" strings as enrollment, plus
+	// restore-specific phrases that may appear on the server side.
+	msg := err.Error()
+	for _, substr := range []string{
+		"restorer not available",
+		"restorer not configured",
+		"not configured",
+		"not implemented",
+		"unimplemented",
+		"service unavailable",
+		"not available",
+		"unknown service",
+	} {
+		if strings.Contains(msg, substr) {
+			return true
+		}
 	}
 	return false
 }

@@ -727,3 +727,49 @@ func (e ErrBMCReconnect) Error() string {
 }
 
 func (e ErrBMCReconnect) Unwrap() error { return e.Cause }
+
+// ErrCABundleVerifyFailed is returned when the control-plane CA bundle
+// fetched over HTTP does not match the CA that signed the TLS connection
+// (capture-then-verify mismatch).
+type ErrCABundleVerifyFailed struct {
+	Reason string
+}
+
+func (e ErrCABundleVerifyFailed) Error() string {
+	return fmt.Sprintf("bootstrap: control-plane CA bundle verify failed: %s", e.Reason)
+}
+
+// ErrCABundleInvalid is returned when the fetched CA bundle cannot be
+// parsed as valid PEM-encoded X.509 certificate data.
+type ErrCABundleInvalid struct {
+	Reason string
+}
+
+func (e ErrCABundleInvalid) Error() string {
+	return fmt.Sprintf("bootstrap: invalid control-plane CA bundle: %s", e.Reason)
+}
+
+// ErrCABundleRequired is returned when an operation that requires a
+// previously captured CA pool is called before fetchControlPlaneCABundle
+// has successfully completed.
+type ErrCABundleRequired struct{}
+
+func (e ErrCABundleRequired) Error() string {
+	return "bootstrap: CP CA bundle required: call fetchControlPlaneCABundle first"
+}
+
+// ErrBMCEnrollFailed is returned when a BMC enrollment POST to the control
+// plane returns a non-2xx status. It is wrapped into BMCEnrollOutcome.Detail
+// and logged as a warning; it does NOT abort the bootstrap run.
+type ErrBMCEnrollFailed struct {
+	Cause error
+}
+
+func (e ErrBMCEnrollFailed) Error() string {
+	if e.Cause != nil {
+		return "bootstrap: bmc enrollment failed: " + e.Cause.Error()
+	}
+	return "bootstrap: bmc enrollment failed"
+}
+
+func (e ErrBMCEnrollFailed) Unwrap() error { return e.Cause }

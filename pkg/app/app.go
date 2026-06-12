@@ -80,6 +80,7 @@ import (
 	localcertstore "github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/object"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
@@ -413,9 +414,13 @@ type App struct {
 	// server and DANE TLSA auto-publication.
 	BootstrapConfig *bootstrap.Config `yaml:"bootstrap,omitempty" json:"bootstrap,omitempty" mapstructure:"bootstrap"`
 
-	// BootstrapClientConfig configures client-side trust bootstrap for fetching
-	// the CA certificate bundle from a remote server.
-	BootstrapClientConfig *bootstrap.ClientConfig `yaml:"bootstrap-client,omitempty" json:"bootstrap_client,omitempty" mapstructure:"bootstrap-client"`
+	// TrustConfig configures client-side trust resolution per class
+	// (default / bmc / internal). It replaces the deleted bootstrap-client
+	// key; BootstrapTrust and TrustResolver both consume it.
+	TrustConfig *trust.Config `yaml:"trust,omitempty" json:"trust,omitempty" mapstructure:"trust"`
+
+	// trustResolver is the lazily-built runtime trust resolver (not serialized).
+	trustResolver trust.Resolver `yaml:"-" json:"-" mapstructure:"-"`
 
 	// danePublisher is the runtime DANE TLSA publisher (not serialized).
 	danePublisher *bootstrap.DANEPublisher
@@ -3885,36 +3890,53 @@ const (
 )
 
 // BootstrapTrust performs runtime trust bootstrap by fetching the server's CA
-// certificate bundle using the configured bootstrap strategy. The bundle is
-// installed to the system trust store if configured. This method is a no-op
-// when the strategy is "embedded" (trust comes from the ISO-embedded CA bundle).
-// When the bootstrap client's DNSServer is empty, it is populated from the
-// platform-wide dns.resolver config so that DANE lookups use the correct server.
+// certificate bundle through the platform trust resolver's default-class
+// strategy chain. The bundle is installed to the system trust store if
+// configured. This method is a no-op when the default class is unset or lists
+// only the embedded strategy (trust comes from the ISO-embedded CA bundle).
+// When the default class's DANE DNS server is empty, it is populated from the
+// platform-wide dns.resolver config so that DANE lookups use the correct
+// server. When any class lists the tofu strategy, a qrdb-backed TOFU pin
+// store is required — ErrBootstrapTOFUNoSDK is returned when the QuicBaaS SDK
+// client is unavailable.
 func (app *App) BootstrapTrust(ctx context.Context) error {
-	if app.BootstrapClientConfig == nil {
-		app.Logger.Debug("No bootstrap client config, skipping trust bootstrap")
+	if app.TrustConfig == nil {
+		app.Logger.Debug("No trust config, skipping trust bootstrap")
 		return nil
 	}
 
-	if app.BootstrapClientConfig.Strategy == bootstrap.StrategyEmbedded {
-		app.Logger.Debug("Bootstrap strategy is embedded, skipping runtime trust fetch")
+	scope := app.TrustConfig.Default
+	if scope == nil {
+		app.Logger.Debug("No default trust scope, skipping trust bootstrap")
 		return nil
 	}
 
-	// Populate DNSServer from platform-wide resolver when not explicitly set
-	if app.BootstrapClientConfig.DNSServer == "" {
+	if scopeIsEmbeddedOnly(scope) {
+		app.Logger.Debug("Default trust strategy is embedded, skipping runtime trust fetch")
+		return nil
+	}
+
+	// Populate the DANE DNS server from the platform-wide resolver when not
+	// explicitly set.
+	if scope.DANE != nil && scope.DANE.DNSServer == "" {
 		if server := app.PrimaryDNSServer(""); server != "" {
 			app.Logger.Info("Bootstrap using platform DNS resolver", "server", server)
-			app.BootstrapClientConfig.DNSServer = server
+			scope.DANE.DNSServer = server
 		}
 	}
 
-	client, err := bootstrap.NewClient(app.BootstrapClientConfig, app.Logger)
+	resolverOpts := app.buildTOFUResolverOpts()
+	if trustConfigNeedsTOFU(app.TrustConfig) && resolverOpts == nil {
+		return ErrBootstrapTOFUNoSDK{}
+	}
+
+	resolver, err := trust.NewResolver(app.TrustConfig, app.Logger, resolverOpts...)
 	if err != nil {
 		return ErrBootstrapClientInit{Cause: err}
 	}
+	app.trustResolver = resolver
 
-	bundlePEM, err := client.FetchCABundle(ctx)
+	bundlePEM, err := resolver.CABundlePEM(ctx, trust.ClassDefault)
 	if err != nil {
 		return ErrBootstrapFetchBundle{Cause: err}
 	}
@@ -3924,9 +3946,9 @@ func (app *App) BootstrapTrust(ctx context.Context) error {
 		return nil
 	}
 
-	if app.BootstrapClientConfig.InstallToSystemTrust {
+	if scope.InstallToSystemTrust {
 		certPath := defaultSystemTrustCertPath
-		if err := client.InstallToSystemTrust(bundlePEM, certPath); err != nil {
+		if err := trust.InstallToSystemTrust(bundlePEM, certPath); err != nil {
 			return ErrBootstrapInstallBundle{Path: certPath, Cause: err}
 		}
 		app.Logger.Infof("CA bundle installed to %s. Run 'update-ca-certificates' to update the system trust store.", certPath)

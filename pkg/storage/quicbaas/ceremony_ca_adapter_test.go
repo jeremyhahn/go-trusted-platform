@@ -14,6 +14,7 @@
 package quicbaas
 
 import (
+	"context"
 	"crypto/x509"
 	"testing"
 
@@ -47,10 +48,10 @@ func TestCeremonyCAAdapter_NoProviderReturnsTypedError(t *testing.T) {
 	_, err = a.CABundle()
 	require.Error(t, err)
 
-	_, err = a.SignCSR([]byte("dummy"), nil)
+	_, err = a.SignCSR(context.Background(), []byte("dummy"), nil)
 	require.Error(t, err)
 
-	_, err = a.IssueCertificate(&quicbaas.QRDBCeremonyIssueCertRequest{CommonName: "x"})
+	_, err = a.IssueCertificate(context.Background(), &quicbaas.QRDBCeremonyIssueCertRequest{CommonName: "x"})
 	require.Error(t, err)
 }
 
@@ -63,10 +64,10 @@ func TestCeremonyCAAdapter_ProviderYieldsNilReturnsTypedError(t *testing.T) {
 	_, err := a.CACertificate()
 	require.Error(t, err)
 
-	_, err = a.SignCSR([]byte("dummy"), nil)
+	_, err = a.SignCSR(context.Background(), []byte("dummy"), nil)
 	require.Error(t, err)
 
-	_, err = a.IssueCertificate(&quicbaas.QRDBCeremonyIssueCertRequest{CommonName: "x"})
+	_, err = a.IssueCertificate(context.Background(), &quicbaas.QRDBCeremonyIssueCertRequest{CommonName: "x"})
 	require.Error(t, err)
 }
 

@@ -106,3 +106,15 @@ type ErrNodeMissingIdentity struct {
 func (e ErrNodeMissingIdentity) Error() string {
 	return fmt.Sprintf("bootstrap: node %s has neither bmc_address nor mac", e.Hostname)
 }
+
+// ErrInvalidBMCTrust indicates a bmc_trust strategy value is not in the
+// ClassBMC allowlist (dane, spki, ca-file, tofu).
+type ErrInvalidBMCTrust struct {
+	Hostname string
+	Strategy string
+}
+
+func (e ErrInvalidBMCTrust) Error() string {
+	return fmt.Sprintf("bootstrap: node %s: invalid bmc_trust strategy %q (allowed: dane, spki, ca-file, tofu)",
+		e.Hostname, e.Strategy)
+}

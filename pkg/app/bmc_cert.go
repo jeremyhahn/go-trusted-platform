@@ -54,7 +54,7 @@ type ACMEIssuer interface {
 // *IssuedCertificate wrapping the parsed certificate, its PEM encoding and
 // chain metadata.
 type LocalCAIssuer interface {
-	IssueCertificate(req *quicbaasca.CACertificateRequest) (*quicbaasca.IssuedCertificate, error)
+	IssueCertificate(ctx context.Context, req *quicbaasca.CACertificateRequest) (*quicbaasca.IssuedCertificate, error)
 }
 
 // bmcDeployer is the narrow interface the deployment step uses.
@@ -315,6 +315,29 @@ type issueBMCCertificateOptions struct {
 	// Deployer is an optional override for the deployment step.
 	// When nil, a fresh *bmc.AutoCertManager is constructed.
 	Deployer bmcDeployer
+
+	// OnCertIssued is an optional hook called after the certificate DER
+	// is obtained and parsed, BEFORE it is deployed to the BMC. It is
+	// used for RFC 7671 §8.1 DANE pre-publication during cert renewal:
+	// the new DANE-EE TLSA record is added alongside the existing records
+	// so DNS validators never see an unmatched certificate during the
+	// transition window. Hook errors are NON-FATAL: the error is logged
+	// at warn level and issuance continues to the deploy step.
+	// nil = no-op; existing tests are unaffected.
+	OnCertIssued func(ctx context.Context, leaf *x509.Certificate) error
+
+	// OnCertDeployed is an optional hook called after
+	// deployer.ReplaceWebCertificate succeeds. It is used to (a) update
+	// the stored TOFU SPKI pin to the new certificate and (b) re-publish
+	// the full TLSA record set (DANE-TA from the CA + EE per policy)
+	// under the device's enrolled DNS name. Hook errors are NON-FATAL
+	// but are logged at error level: a stale pin or TLSA record is
+	// operator-actionable; the deploy itself succeeded and must not be
+	// rolled back. The ca argument may be nil when the CA cert is
+	// unavailable (ACME path without chain access); the hook
+	// implementation must tolerate nil ca.
+	// nil = no-op; existing tests are unaffected.
+	OnCertDeployed func(ctx context.Context, leaf, ca *x509.Certificate) error
 }
 
 // issueBMCCertificateCore is the issuance engine shared by the
@@ -323,8 +346,10 @@ type issueBMCCertificateOptions struct {
 //  1. Generates a fresh in-memory keypair (NOT persisted to KMS).
 //  2. Builds and signs a CSR for the BMC's configured Subject + SANs.
 //  3. Drives ACME (dns-01 via platform DNS) or local-CA fallback.
-//  4. Deploys cert+key PEM to the BMC via AutoCertManager.
-//  5. Returns a CertTarget whose Current/Reissue closures re-enter
+//  4. Invokes OnCertIssued (if set) — non-fatal pre-publish hook.
+//  5. Deploys cert+key PEM to the BMC via AutoCertManager.
+//  6. Invokes OnCertDeployed (if set) — non-fatal pin-update + TLSA hook.
+//  7. Returns a CertTarget whose Current/Reissue closures re-enter
 //     this function for renewal.
 func issueBMCCertificateCore(
 	ctx context.Context,
@@ -363,6 +388,11 @@ func issueBMCCertificateCore(
 	}
 
 	var certDER []byte
+	// caCert is populated on the local-CA path (from CACertificatePEM) and
+	// passed to OnCertDeployed. It remains nil on the ACME path unless a
+	// chain is available in the future; the hook must tolerate nil ca.
+	var caCert *x509.Certificate
+
 	useACME := opts.ACMEIssuer != nil &&
 		bmcCfg.Certificate.ACME != nil &&
 		bmcCfg.Certificate.ACME.Challenge != ""
@@ -378,11 +408,33 @@ func issueBMCCertificateCore(
 		certDER = cert.Raw
 	} else {
 		caReq := buildBMCLocalCARequest(bmcCfg, opts.Hostmaster)
-		issued, issueErr := opts.LocalCAIssuer.IssueCertificate(caReq)
+		issued, issueErr := opts.LocalCAIssuer.IssueCertificate(ctx, caReq)
 		if issueErr != nil {
 			return nil, ErrBMCLocalIssuance{DeviceID: deviceID, Cause: issueErr}
 		}
 		certDER = issued.Certificate.Raw
+		// Parse the issuing CA cert for DANE-TA publication. A parse failure
+		// is non-fatal for the issuance itself — caCert remains nil and the
+		// hook receives nil ca, which is permitted.
+		if len(issued.CACertificatePEM) > 0 {
+			caCert, _ = parsePEMCert(issued.CACertificatePEM)
+		}
+	}
+
+	leaf, parseErr := x509.ParseCertificate(certDER)
+	if parseErr != nil {
+		return nil, ErrBMCLocalIssuance{DeviceID: deviceID, Cause: parseErr}
+	}
+
+	// OnCertIssued — pre-publish hook (RFC 7671 §8.1 rollover).
+	// Failure is non-fatal: pre-publication is a best-effort optimisation.
+	if opts.OnCertIssued != nil {
+		if hookErr := opts.OnCertIssued(ctx, leaf); hookErr != nil {
+			if opts.Logger != nil {
+				opts.Logger.Warn("bmc-cert: OnCertIssued hook failed (non-fatal, continuing deploy)",
+					"device_id", deviceID, "error", hookErr)
+			}
+		}
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
@@ -414,6 +466,18 @@ func issueBMCCertificateCore(
 	// responsible for scrubbing it; mark success so our deferred
 	// scrub is a no-op.
 	scrubOnError = false
+
+	// OnCertDeployed — pin update + full TLSA re-publish hook.
+	// Failure is non-fatal: the deploy succeeded; stale state is
+	// operator-actionable.
+	if opts.OnCertDeployed != nil {
+		if hookErr := opts.OnCertDeployed(ctx, leaf, caCert); hookErr != nil {
+			if opts.Logger != nil {
+				opts.Logger.Error("bmc-cert: OnCertDeployed hook failed (non-fatal, deploy succeeded)",
+					"device_id", deviceID, "error", hookErr)
+			}
+		}
+	}
 
 	target := &CertTarget{
 		Name: "bmc." + deviceID,

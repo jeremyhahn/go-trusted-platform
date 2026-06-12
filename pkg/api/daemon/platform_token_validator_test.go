@@ -88,6 +88,7 @@ func (k *ptIssuerKey) sign(t *testing.T, sub, tid string, scp []string) string {
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodES256, m)
 	tok.Header["kid"] = k.kid
+	tok.Header["typ"] = "at+jwt"
 	s, err := tok.SignedString(k.priv)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
@@ -103,6 +104,7 @@ func newSharedValidator(t *testing.T, jwksURL string, allowBearer bool) *platfor
 		JWKSURL:     jwksURL,
 		Audience:    testPTAudience,
 		AllowBearer: allowBearer,
+		AuthzMode:   "offline",
 	}, nil)
 	if err != nil {
 		t.Fatalf("newPlatformTokenValidator: %v", err)
@@ -116,7 +118,7 @@ func TestPlatformTokenValidator_AuthorizeToken_Valid(t *testing.T) {
 	v := newSharedValidator(t, srv.URL, true)
 
 	tok := key.sign(t, "user-1", "tenant-a", []string{"dns:write", "keys:get"})
-	authCtx, err := v.AuthorizeToken(context.Background(), tok, "", "/svc/Method", "")
+	authCtx, err := v.AuthorizeToken(context.Background(), tok, "", "", "/svc/Method", "")
 	if err != nil {
 		t.Fatalf("AuthorizeToken: %v", err)
 	}
@@ -140,7 +142,7 @@ func TestPlatformTokenValidator_AuthorizeToken_InvalidSignature(t *testing.T) {
 	attacker := newPTIssuerKey(t)
 	tok := attacker.sign(t, "mallory", "tenant-a", []string{"dns:write"})
 
-	if _, err := v.AuthorizeToken(context.Background(), tok, "", "/svc/Method", ""); err == nil {
+	if _, err := v.AuthorizeToken(context.Background(), tok, "", "", "/svc/Method", ""); err == nil {
 		t.Fatal("expected verification failure for token signed by untrusted key")
 	}
 }
@@ -152,7 +154,7 @@ func TestPlatformTokenValidator_AuthorizeToken_BearerGate(t *testing.T) {
 	v := newSharedValidator(t, srv.URL, false)
 
 	tok := key.sign(t, "user-1", "tenant-a", []string{"dns:write"})
-	_, err := v.AuthorizeToken(context.Background(), tok, "", "/svc/Method", "")
+	_, err := v.AuthorizeToken(context.Background(), tok, "", "", "/svc/Method", "")
 	if err == nil {
 		t.Fatal("expected bearer rejection when AllowBearer is false")
 	}
@@ -244,7 +246,7 @@ func TestPlatformTokenValidator_ErrorBranches(t *testing.T) {
 	}
 
 	// AuthorizeToken surfaces validation errors on the bearer path.
-	if _, err := v.AuthorizeToken(context.Background(), "garbage", "", "", ""); err == nil {
+	if _, err := v.AuthorizeToken(context.Background(), "garbage", "", "", "", ""); err == nil {
 		t.Error("AuthorizeToken should error on invalid token")
 	}
 }

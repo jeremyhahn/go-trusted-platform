@@ -164,7 +164,7 @@ nodes:
     bmc_user: claude
     bmc_password: "REMOVED-BMC-PASSWORD"
     bmc_protocol: ipmi
-    bmc_skip_tls_verify: true
+    bmc_trust: [tofu]
     role: control-plane
     hostname: lab-node-2
     mac: "ac:1f:6b:7c:84:02"
@@ -202,7 +202,7 @@ nodes:
     bmc_user: claude
     bmc_password: "REMOVED-BMC-PASSWORD"
     bmc_protocol: ipmi
-    bmc_skip_tls_verify: true
+    bmc_trust: [tofu]
     role: gateway
     hostname: lab-node-1
     mac: "00:25:90:5e:01:aa"
@@ -239,7 +239,7 @@ nodes:
     bmc_user: claude
     bmc_password: "REMOVED-BMC-PASSWORD"
     bmc_protocol: ipmi
-    bmc_skip_tls_verify: true
+    bmc_trust: [tofu]
     role: worker
     hostname: lab-node-5
     mac: "3c:ec:ef:6c:f8:ec"

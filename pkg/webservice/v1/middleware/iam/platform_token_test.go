@@ -99,6 +99,9 @@ func (k *brokerKey) sign(t *testing.T, c brokerClaims) string {
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodES256, m)
 	tok.Header["kid"] = k.kid
+	// RFC 9068: access tokens must carry typ "at+jwt"; the validator
+	// rejects plain "JWT".
+	tok.Header["typ"] = "at+jwt"
 	s, err := tok.SignedString(k.priv)
 	if err != nil {
 		t.Fatalf("sign broker token: %v", err)

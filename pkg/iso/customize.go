@@ -3343,7 +3343,7 @@ if [ $INSTALL_RESULT -eq 0 ]; then
                     # platform's BootstrapTrust SPKI strategy has a
                     # value to pin against. The platform reads from
                     # /etc/trusted-platform/bootstrap-spki-pin via the
-                    # bootstrap-client.spki.pin-file config key.
+                    # trust.default.spki.pin-file config key.
                     if [ -s /tmp/cp-spki-pin ] && [ -d /mnt/etc ]; then
                         mkdir -p /mnt/etc/trusted-platform
                         cp /tmp/cp-spki-pin /mnt/etc/trusted-platform/bootstrap-spki-pin

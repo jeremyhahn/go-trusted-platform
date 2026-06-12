@@ -107,6 +107,18 @@ type RestHandler interface {
 	// construction. The daemon calls this once App and DeviceProfileService
 	// are available.
 	SetEnroller(enroller BMCEnrollerServicer, lookup ProfileLookup)
+
+	// RestoreBMC runs the BMC factory-certificate restore ceremony for
+	// the given profile, reverting the BMC's web TLS certificate to its
+	// vendor-default self-signed certificate and cleaning up platform-side
+	// trust state (SPKI pin + DANE TLSA record).
+	// POST /api/v1/bmc/{profileID}/cert/restore
+	RestoreBMC(w http.ResponseWriter, r *http.Request)
+
+	// SetRestorer injects the restorer and profile lookup after handler
+	// construction. The daemon calls this once App and DeviceProfileService
+	// are available.
+	SetRestorer(restorer BMCRestorerServicer, lookup ProfileLookup)
 }
 
 // BMCServicer defines the BMC service operations required by the handler.

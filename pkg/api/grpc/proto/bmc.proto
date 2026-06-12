@@ -37,6 +37,11 @@ service BMCService {
   rpc GetWebCertificate(BMCGetWebCertificateRequest) returns (BMCGetWebCertificateResponse);
   rpc ReplaceWebCertificate(BMCReplaceWebCertificateRequest) returns (BMCReplaceWebCertificateResponse);
 
+  // Enrollment ceremony
+  rpc EnrollBMC(BMCEnrollRequest) returns (BMCEnrollResponse);
+  // Factory certificate restore
+  rpc RestoreFactoryCert(BMCRestoreRequest) returns (BMCRestoreResponse);
+
   // User management
   rpc ListUsers(BMCListUsersRequest) returns (BMCListUsersResponse);
   rpc CreateUser(BMCCreateUserRequest) returns (BMCCreateUserResponse);
@@ -271,6 +276,104 @@ message BMCReplaceWebCertificateRequest {
 message BMCReplaceWebCertificateResponse {
   // Message is a human-readable status message.
   string message = 1;
+}
+
+// BMCEnrollRequest initiates the BMC enrollment ceremony for the device profile.
+message BMCEnrollRequest {
+  // ProfileId identifies the device profile whose BMC config drives enrollment.
+  uint64 profile_id = 1;
+  // ReplaceCertificate overrides the profile's enrollment.replace_certificate flag.
+  // Absent means "use the profile default".
+  optional bool replace_certificate = 2;
+  // RotatePassword overrides the profile's enrollment.rotate_password flag.
+  optional bool rotate_password = 3;
+  // DnsRegister overrides the profile's enrollment.dns_register flag.
+  optional bool dns_register = 4;
+  // DanePublish overrides the profile's enrollment.dane_publish flag.
+  optional bool dane_publish = 5;
+}
+
+// BMCFactoryCertMeta carries auditable metadata from the factory TLS certificate
+// that existed on the BMC at enrollment time. No secret material is included.
+message BMCFactoryCertMeta {
+  // Subject is the certificate subject distinguished name.
+  string subject = 1;
+  // Issuer is the certificate issuer distinguished name.
+  string issuer = 2;
+  // SerialNumber is the certificate serial in decimal string form.
+  string serial_number = 3;
+  // NotBefore is the certificate validity start time.
+  google.protobuf.Timestamp not_before = 4;
+  // NotAfter is the certificate validity end time.
+  google.protobuf.Timestamp not_after = 5;
+  // SpkiSha256 is the hex-encoded SHA-256 of the SPKI block.
+  string spki_sha256 = 6;
+  // Sha256 is the hex-encoded SHA-256 of the entire certificate DER.
+  string sha256 = 7;
+  // CapturedAt is when the metadata was collected.
+  google.protobuf.Timestamp captured_at = 8;
+}
+
+// BMCEnrollStep records the outcome of a single ceremony step.
+message BMCEnrollStep {
+  // Name is a short identifier for the step (e.g. "trust", "factory-cert").
+  string name = 1;
+  // Ok is true when the step completed successfully or was intentionally skipped.
+  bool ok = 2;
+  // Detail is a human-readable message (success detail, skip reason, or error summary).
+  string detail = 3;
+}
+
+// BMCEnrollResponse is the full outcome of a BMC enrollment ceremony.
+message BMCEnrollResponse {
+  // DeviceId is the platform device entity ID.
+  uint64 device_id = 1;
+  // Endpoint is the host:port used for the Redfish/HTTPS connection.
+  string endpoint = 2;
+  // Hostname is the bare hostname of the BMC address (no port).
+  string hostname = 3;
+  // DnsName is the FQDN registered in internal DNS, e.g. "lab-node-1-bmc.internal.".
+  // Empty when dns-register was skipped.
+  string dns_name = 4;
+  // PinSpkiSha256 is the hex-encoded SHA-256 of the pinned SPKI of the
+  // BMC's effective TLS leaf certificate after the ceremony.
+  string pin_spki_sha256 = 5;
+  // FactoryCertPem holds the factory TLS certificate PEM.
+  bytes factory_cert_pem = 6;
+  // FactoryCertMeta holds auditable metadata from the factory certificate.
+  BMCFactoryCertMeta factory_cert_meta = 7;
+  // NewCertPem holds the platform-issued leaf certificate PEM when
+  // replace-certificate ran successfully. Empty otherwise.
+  bytes new_cert_pem = 8;
+  // CaCertPem holds the issuing CA certificate PEM when replace-certificate
+  // ran successfully. Empty otherwise.
+  bytes ca_cert_pem = 9;
+  // Steps records the ordered ceremony steps and their outcomes.
+  repeated BMCEnrollStep steps = 10;
+}
+
+// BMCRestoreRequest initiates the BMC factory-certificate restore ceremony.
+message BMCRestoreRequest {
+  // ProfileId identifies the device profile whose BMC config drives the restore.
+  uint64 profile_id = 1;
+}
+
+// BMCRestoreResponse is the full outcome of a BMC factory-certificate restore ceremony.
+message BMCRestoreResponse {
+  // DeviceId is the platform device entity ID.
+  uint64 device_id = 1;
+  // Endpoint is the host:port used for the BMC HTTPS connection.
+  string endpoint = 2;
+  // Hostname is the bare hostname of the BMC address (no port).
+  string hostname = 3;
+  // NewCertMeta holds auditable metadata from the new self-signed certificate
+  // that the BMC generated during the restore.
+  BMCFactoryCertMeta new_cert_meta = 4;
+  // NewCertPem is the PEM-encoded new self-signed certificate for client-side
+  // inspection. Never written to disk server-side.
+  bytes new_cert_pem = 5;
+  // Steps records the ordered ceremony steps and their outcomes.
+  repeated BMCEnrollStep steps = 6;
 }
 
 // User management messages

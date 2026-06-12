@@ -308,3 +308,34 @@ func (c *Client) SetUserPrivilege(ctx context.Context, profileID uint64, slot, c
 	}
 	return nil
 }
+
+// Enrollment Ceremony
+
+// EnrollBMC performs the BMC enrollment ceremony for the device identified by
+// profileID. opts may be nil; absent fields use the profile's stored enrollment
+// config defaults. Returns the full ceremony result or an *ErrEnrollFailed
+// wrapping the underlying gRPC error.
+func (c *Client) EnrollBMC(ctx context.Context, profileID uint64, opts *EnrollOptions) (*EnrollResult, error) {
+	req := enrollOptionsToProto(profileID, opts)
+	resp, err := c.grpc.EnrollBMC(ctx, req)
+	if err != nil {
+		return nil, &ErrEnrollFailed{ProfileID: profileID, Cause: err}
+	}
+	return enrollResultFromProto(resp), nil
+}
+
+// Factory Certificate Restore
+
+// RestoreFactoryCert performs the BMC factory-certificate restore ceremony for
+// the device identified by profileID. It instructs the BMC to regenerate its
+// default self-signed certificate and cleans up platform-side trust state
+// (SPKI pin deletion, DANE TLSA record removal, Device entity update).
+// Returns the full ceremony result or an *ErrRestoreFailed wrapping the
+// underlying gRPC error.
+func (c *Client) RestoreFactoryCert(ctx context.Context, profileID uint64) (*RestoreResult, error) {
+	resp, err := c.grpc.RestoreFactoryCert(ctx, &platformv1.BMCRestoreRequest{ProfileId: profileID})
+	if err != nil {
+		return nil, &ErrRestoreFailed{ProfileID: profileID, Cause: err}
+	}
+	return restoreResultFromProto(resp), nil
+}

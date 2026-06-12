@@ -299,6 +299,8 @@ func (s *RESTServer) SetBMCHandler(handler bmcwebsvc.RestHandler) {
 	api.HandleFunc("/bmc/{profileID:[0-9]+}/system-info", handler.GetSystemInfo).Methods(http.MethodGet)
 	api.HandleFunc("/bmc/{profileID:[0-9]+}/provision", handler.Provision).Methods(http.MethodPost)
 	api.HandleFunc("/bmc/{profileID:[0-9]+}/provision", handler.ProvisionStatus).Methods(http.MethodGet)
+	api.HandleFunc("/bmc/{profileID:[0-9]+}/enroll", handler.EnrollBMC).Methods(http.MethodPost)
+	api.HandleFunc("/bmc/{profileID:[0-9]+}/cert/restore", handler.RestoreBMC).Methods(http.MethodPost)
 
 	s.logger.Info("BMC management routes registered")
 }

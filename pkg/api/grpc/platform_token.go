@@ -36,7 +36,11 @@ type ClaimsTokenValidator interface {
 	// AuthorizeToken validates the bearer token (binding the DPoP proof when a
 	// non-empty proof is supplied), returning the projected AuthorizedContext on
 	// success or a typed error the interceptor maps to Unauthenticated.
-	AuthorizeToken(ctx context.Context, token, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error)
+	// requiredPerm is the qrdb-canonical "resource:action" scope to enforce
+	// during validation; the interceptors pass "" and enforce the method's
+	// scope post-hoc against the AuthorizedContext so scope denials map to
+	// PermissionDenied rather than Unauthenticated.
+	AuthorizeToken(ctx context.Context, token, requiredPerm, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error)
 }
 
 // authorizedContextKeyType is the context key for the validated AuthorizedContext.

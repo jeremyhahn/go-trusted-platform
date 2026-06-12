@@ -11,6 +11,7 @@ provisioning_network:  # Required: PXE provisioning network
 platform:           # Required: global platform settings
 templates:          # Required: device template paths by role
 nodes:              # Required: list of nodes to bootstrap
+backups_dir:        # Optional: factory-cert backup directory
 ```
 
 ## Deployer
@@ -150,7 +151,9 @@ List of nodes to bootstrap. Each node must have either `bmc_address` (for BMC-ma
 | `bmc_password` | string | BMC password (supports secret URIs) |
 | `bmc_protocol` | string | `redfish`, `ipmi`, or `auto` |
 | `bmc_encryption_key` | string | IPMI encryption key |
-| `bmc_skip_tls_verify` | bool | Skip TLS verification for Redfish |
+| `bmc_trust` | list | Ordered TLS strategy chain for BMC connections. Allowed: `dane`, `spki`, `ca-file`, `tofu`. Empty uses the platform default. |
+| `bmc_spki_pin` | string | Hex-encoded SHA-256 SPKI pin for the `spki` strategy |
+| `bmc_enroll` | bool | Operator intent to run the BMC enrollment ceremony post-deploy |
 | `overrides` | map | Per-node template overrides |
 
 ### Manual Node
@@ -166,13 +169,14 @@ List of nodes to bootstrap. Each node must have either `bmc_address` (for BMC-ma
 
 ```yaml
 nodes:
-  # BMC-managed node
+  # BMC-managed node (TOFU trust-on-first-use)
   - hostname: cp-01
     role: control-plane
     bmc_address: 192.168.1.10
     bmc_user: admin
     bmc_password: "kms://bmc/cp-01/password"
     bmc_protocol: redfish
+    bmc_trust: [tofu]
 
   # Manual node (no BMC)
   - hostname: edge-01
@@ -181,6 +185,17 @@ nodes:
     overrides:
       disk: /dev/nvme0n1
 ```
+
+## Backups Directory
+
+Optional top-level field specifying where factory-cert backups are written
+during the BMC enrollment ceremony (`bmc_enroll: true` nodes). `~` is expanded
+to the operator's home directory. Defaults to
+`~/sources/automatethethings/infra/backups` when empty.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `backups_dir` | string | `~/sources/automatethethings/infra/backups` | Local directory for BMC cert backups |
 
 ## Validation Rules
 

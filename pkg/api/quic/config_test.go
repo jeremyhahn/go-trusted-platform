@@ -17,6 +17,7 @@ package quic
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"testing"
 	"time"
 )
@@ -465,5 +466,27 @@ func TestDefaultServerConfigWithTLSValidation(t *testing.T) {
 	// The returned config should pass validation
 	if err := config.Validate(); err != nil {
 		t.Errorf("expected valid config, got validation error: %v", err)
+	}
+}
+
+func TestClientConfigRootCAs_SetPool(t *testing.T) {
+	// A pool set on ClientConfig must be passed into the fallback tls.Config
+	// constructed by NewClient when no TLSConfig is provided. This test
+	// verifies the field exists and is preserved by DefaultClientConfig round-trip.
+	pool := x509.NewCertPool()
+	cfg := DefaultClientConfig("localhost:9444")
+	cfg.RootCAs = pool
+
+	if cfg.RootCAs != pool {
+		t.Error("RootCAs must be preserved on ClientConfig")
+	}
+}
+
+func TestClientConfigRootCAs_NilIsSystemRoots(t *testing.T) {
+	// DefaultClientConfig must leave RootCAs nil so system roots are used
+	// in the absence of an explicit pool.
+	cfg := DefaultClientConfig("localhost:9444")
+	if cfg.RootCAs != nil {
+		t.Error("DefaultClientConfig must not set RootCAs (must use system roots by default)")
 	}
 }

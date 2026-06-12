@@ -15,6 +15,7 @@ package rest
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -32,7 +33,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +42,7 @@ import (
 // Minimal authCA stub for auth factor handler tests.
 //
 // authTestCA satisfies the authCA interface:
-//   SignCSR(csrPEM []byte, opts *xkmsca.SignOptions) (*x509.Certificate, error)
+//   SignCSR(ctx context.Context, csrPEM []byte, opts *quicbaasca.SignOptions) (*x509.Certificate, error)
 //   TrustedRootCertPool(cert *x509.Certificate) (*x509.CertPool, error)
 //   CABundle() ([]byte, error)
 // =============================================================================
@@ -101,7 +102,7 @@ func newAuthTestCA(t *testing.T) *authTestCA {
 	}
 }
 
-func (a *authTestCA) SignCSR(_ []byte, _ *xkmsca.SignOptions) (*x509.Certificate, error) {
+func (a *authTestCA) SignCSR(_ context.Context, _ []byte, _ *quicbaasca.SignOptions) (*x509.Certificate, error) {
 	if a.signErr != nil {
 		return nil, a.signErr
 	}

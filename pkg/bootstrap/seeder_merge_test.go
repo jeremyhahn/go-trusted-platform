@@ -72,7 +72,9 @@ network:
 					t.Errorf("config should be valid JSON: %v", err)
 				}
 			}
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]interface{}{"code": 201, "success": true, "payload": map[string]interface{}{"id": "1"}})
 
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -210,7 +212,9 @@ os:
 			if req.Config != nil {
 				json.Unmarshal(req.Config, &receivedConfig)
 			}
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]interface{}{"code": 201, "success": true, "payload": map[string]interface{}{"id": "1"}})
 
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -280,7 +284,9 @@ func TestSeeder_MergedConfig_MissingTemplate(t *testing.T) {
 			var req profileRequest
 			json.NewDecoder(r.Body).Decode(&req)
 			profileConfigs = append(profileConfigs, req.Config)
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]interface{}{"code": 201, "success": true, "payload": map[string]interface{}{"id": "1"}})
 
 		default:
 			w.WriteHeader(http.StatusNotFound)

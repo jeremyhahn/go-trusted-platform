@@ -208,12 +208,12 @@ func (m *mockCAForMCPCoverage) TrustedRoot() (*x509.Certificate, error) { return
 func (m *mockCAForMCPCoverage) TrustedIntermediate() (*x509.Certificate, error) {
 	return m.intermCert, nil
 }
-func (m *mockCAForMCPCoverage) CertStore() xkmssdk.CertStore   { return m.certStore }
-func (m *mockCAForMCPCoverage) Signer() (crypto.Signer, error) { return m, nil }
-func (m *mockCAForMCPCoverage) CASigner(_ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
+func (m *mockCAForMCPCoverage) CertStore() xkmssdk.CertStore                    { return m.certStore }
+func (m *mockCAForMCPCoverage) Signer(_ context.Context) (crypto.Signer, error) { return m, nil }
+func (m *mockCAForMCPCoverage) CASigner(_ context.Context, _ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
 	return m, nil
 }
-func (m *mockCAForMCPCoverage) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (m *mockCAForMCPCoverage) IssueCertificate(_ context.Context, req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	if m.issueCertErr != nil {
 		return nil, m.issueCertErr
 	}
@@ -224,7 +224,7 @@ func (m *mockCAForMCPCoverage) IssueCertificate(req *xkmsca.CertificateRequest) 
 	}
 	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 }
-func (m *mockCAForMCPCoverage) RevokeCert(cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
+func (m *mockCAForMCPCoverage) RevokeCert(_ context.Context, cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	if m.revokeErr != nil {
 		return m.revokeErr
 	}
@@ -268,7 +268,7 @@ func (m *mockCAForMCPCoverage) ParseBundle(bundle []byte) ([]*x509.Certificate, 
 func (m *mockCAForMCPCoverage) RootCertificate(_ *x509.Certificate) (*x509.Certificate, error) {
 	return m.rootCert, nil
 }
-func (m *mockCAForMCPCoverage) GenerateCRL() ([]byte, error) {
+func (m *mockCAForMCPCoverage) GenerateCRL(_ context.Context) ([]byte, error) {
 	if m.generateCRLErr != nil {
 		return nil, m.generateCRLErr
 	}

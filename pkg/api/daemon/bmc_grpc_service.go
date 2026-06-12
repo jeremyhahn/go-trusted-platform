@@ -26,6 +26,7 @@ import (
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/baremetal"
 )
 
@@ -252,6 +253,11 @@ type BMCGRPCService struct {
 	baremetal    BaremetalServicer
 	logger       *slog.Logger
 	powerActions map[string]powerActionFunc
+	// enroller and profileSvc are wired via SetEnroller for the EnrollBMC RPC.
+	enroller   BMCEnroller
+	profileSvc device.DeviceProfileService
+	// restorer is wired via SetRestorer for the RestoreFactoryCert RPC.
+	restorer BMCRestorer
 }
 
 // Compile-time interface check.

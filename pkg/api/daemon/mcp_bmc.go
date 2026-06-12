@@ -17,7 +17,9 @@ import (
 	"context"
 	"errors"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 )
 
 // =============================================================================
@@ -66,6 +68,73 @@ var bmcBootDeviceFromString = map[string]bmc.BootDevice{
 // the MCP and gRPC surfaces stay in lockstep.
 func (p *MCPServiceProvider) SetBMCService(svc BMCServicer) {
 	p.bmcService = svc
+}
+
+// SetBMCEnroller injects the BMCEnroller and DeviceProfileService after
+// construction. The daemon calls this once the App and DeviceProfileService
+// are available so the MCP enrollment tool can drive the ceremony.
+func (p *MCPServiceProvider) SetBMCEnroller(enroller BMCEnroller, profileSvc device.DeviceProfileService) {
+	p.bmcEnroller = enroller
+	p.deviceProfileService = profileSvc
+}
+
+// SetBMCRestorer injects the BMCRestorer and DeviceProfileService after
+// construction. The daemon calls this once the App and DeviceProfileService
+// are available so the MCP restore tool can drive the ceremony.
+func (p *MCPServiceProvider) SetBMCRestorer(restorer BMCRestorer, profileSvc device.DeviceProfileService) {
+	p.bmcRestorer = restorer
+	if p.deviceProfileService == nil {
+		p.deviceProfileService = profileSvc
+	}
+}
+
+// BMCEnrollBMC performs the BMC enrollment ceremony. It satisfies the
+// mcp.BMCProvider extension for the platform_bmc_enroll MCP tool.
+func (p *MCPServiceProvider) BMCEnrollBMC(
+	ctx context.Context,
+	profileID uint64,
+	replaceCertificate, rotatePassword, dnsRegister, danePublish *bool,
+) (interface{}, error) {
+	if p.bmcEnroller == nil {
+		return nil, ErrBMCEnrollerNotConfigured{}
+	}
+	bmcCfg, err := loadBMCConfig(ctx, p.deviceProfileService, profileID, p.bmcEnroller)
+	if err != nil {
+		return nil, err
+	}
+	opts := &app.BMCEnrollOptions{
+		ReplaceCertificate: replaceCertificate,
+		RotatePassword:     rotatePassword,
+		DNSRegister:        dnsRegister,
+		DANEPublish:        danePublish,
+	}
+	result, err := p.bmcEnroller.EnrollBMC(ctx, profileID, bmcCfg, opts)
+	if err != nil {
+		return nil, err
+	}
+	steps := make([]map[string]interface{}, len(result.Steps))
+	for i, s := range result.Steps {
+		steps[i] = map[string]interface{}{
+			"name":   s.Name,
+			"ok":     s.OK,
+			"detail": s.Detail,
+		}
+	}
+	return map[string]interface{}{
+		"device_id":       result.DeviceID,
+		"endpoint":        result.Endpoint,
+		"hostname":        result.Hostname,
+		"dns_name":        result.DNSName,
+		"pin_spki_sha256": result.PinSPKISHA256,
+		"steps":           steps,
+		"factory_cert_meta": map[string]interface{}{
+			"subject":       result.FactoryCertMeta.Subject,
+			"issuer":        result.FactoryCertMeta.Issuer,
+			"serial_number": result.FactoryCertMeta.SerialNumber,
+			"spki_sha256":   result.FactoryCertMeta.SPKISHA256,
+			"sha256":        result.FactoryCertMeta.SHA256,
+		},
+	}, nil
 }
 
 // =============================================================================
@@ -381,4 +450,49 @@ func bmcPowerResultJSON(previous, current bmc.PowerState) map[string]interface{}
 		"previous_state": string(previous),
 		"current_state":  string(current),
 	}
+}
+
+// =============================================================================
+// Factory-certificate restore (MCP)
+// =============================================================================
+
+// BMCRestoreFactoryCert performs the BMC factory-certificate restore ceremony.
+// It satisfies the mcp.BMCProvider extension for the platform_bmc_cert_restore
+// MCP tool.
+func (p *MCPServiceProvider) BMCRestoreFactoryCert(
+	ctx context.Context,
+	profileID uint64,
+) (interface{}, error) {
+	if p.bmcRestorer == nil {
+		return nil, ErrBMCRestorerNotConfigured{}
+	}
+	bmcCfg, err := loadBMCConfigForRestorer(ctx, p.deviceProfileService, profileID, p.bmcRestorer)
+	if err != nil {
+		return nil, err
+	}
+	result, err := p.bmcRestorer.RestoreBMC(ctx, profileID, bmcCfg)
+	if err != nil {
+		return nil, err
+	}
+	steps := make([]map[string]interface{}, len(result.Steps))
+	for i, s := range result.Steps {
+		steps[i] = map[string]interface{}{
+			"name":   s.Name,
+			"ok":     s.OK,
+			"detail": s.Detail,
+		}
+	}
+	return map[string]interface{}{
+		"device_id": result.DeviceID,
+		"endpoint":  result.Endpoint,
+		"hostname":  result.Hostname,
+		"steps":     steps,
+		"new_cert_meta": map[string]interface{}{
+			"subject":       result.NewCertMeta.Subject,
+			"issuer":        result.NewCertMeta.Issuer,
+			"serial_number": result.NewCertMeta.SerialNumber,
+			"spki_sha256":   result.NewCertMeta.SPKISHA256,
+			"sha256":        result.NewCertMeta.SHA256,
+		},
+	}, nil
 }

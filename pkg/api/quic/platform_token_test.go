@@ -33,7 +33,7 @@ func (s *claimsValidatorStub) ValidateToken(ctx context.Context, token string) (
 	return s.err == nil, s.err
 }
 
-func (s *claimsValidatorStub) AuthorizeToken(ctx context.Context, token, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error) {
+func (s *claimsValidatorStub) AuthorizeToken(ctx context.Context, token, requiredPerm, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error) {
 	s.calls++
 	s.gotToken = token
 	s.gotDPoPProof = dpopProof

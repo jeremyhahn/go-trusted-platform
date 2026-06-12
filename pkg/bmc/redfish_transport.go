@@ -47,14 +47,14 @@ type redfishTransport struct {
 // password is taken from cfg.Password and wrapped into a memguard.Secret
 // owned by the transport. The cfg.Password string is not zeroed (Go
 // strings cannot be), but no further references to it are kept here.
-func newRedfishTransport(cfg *Config, logger *slog.Logger) (*redfishTransport, error) {
+func newRedfishTransport(ctx context.Context, cfg *Config, logger *slog.Logger) (*redfishTransport, error) {
 	if cfg == nil {
 		return nil, ErrNilConfig{}
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	tlsConfig, err := buildVendorProbeTLS(cfg)
+	tlsConfig, err := BuildTLSConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}

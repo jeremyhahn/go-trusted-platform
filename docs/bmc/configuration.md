@@ -44,12 +44,46 @@ device_profile:
 | `password` | string | yes | - | BMC authentication password or vault reference |
 | `protocol` | string | no | `ipmi` | Protocol: `ipmi` or `redfish` |
 | `encryption-key` | string | no | - | Hex-encoded KG key for IPMI 2.0 RAKP (optional) |
-| `skip-tls-verify` | bool | no | false | Skip TLS verify on Redfish (self-signed initial BMC certs) |
-| `ca-cert-path` | string | no | - | Custom CA bundle for Redfish TLS verification |
 | `certificate` | object | no | - | BMC web-server TLS identity (see below) |
 | `key` | object | no | - | Private-key config for the cert (see below) |
 | `backend` | string | no | `auto` | Cert-deployment backend: `auto`, `redfish`, or `smc-cgi` |
 | `allow_cgi_fallback` | bool | no | `false` | Enable auto-mode selection of the Supermicro ATEN CGI cert backend. Gated until hardware validation clears (see `../operations/x10-smc-cgi-validation.md`). Explicit `backend: smc-cgi` bypasses this gate. |
+| `enrollment` | object | no | see defaults | Enrollment ceremony flags (see below) |
+
+## Enrollment Config
+
+The `enrollment` block controls which optional steps the BMC enrollment
+ceremony performs. When the block is absent, `DefaultEnrollmentConfig`
+is used (all fields at their documented defaults). A non-nil block
+overrides individual fields; any field not specified in YAML keeps its
+default.
+
+```yaml
+bmc:
+  address: bmc-node-17.internal
+  # ... other fields ...
+  enrollment:
+    auto: false              # default: false
+    replace-certificate: true  # default: true
+    backup: true             # default: true
+    rotate-password: false   # default: false
+    dns-register: true       # default: true
+    dane-publish: true       # default: true
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `auto` | bool | `false` | Trigger enrollment automatically on first BMC contact without an explicit operator call. Opt-in only — unsupervised enrollment is not enabled by default. |
+| `replace-certificate` | bool | `true` | Replace the BMC's factory TLS certificate with a platform-issued certificate during enrollment. |
+| `backup` | bool | `true` | Capture the factory certificate before replacement. The backup is written client-side via `--backups-dir` and is never uploaded to the server. |
+| `rotate-password` | bool | `false` | Generate and persist a new BMC admin password during enrollment. Disabled by default because password rotation is disruptive and should be opted into explicitly. |
+| `dns-register` | bool | `true` | Create an A record for the BMC endpoint in the platform's internal DNS zone as `<hostname>-bmc.<zone>`. |
+| `dane-publish` | bool | `true` | Publish DANE TLSA records for the BMC's TLS certificate. Requires `replace-certificate: true` and `dns-register: true`. |
+
+Per-call CLI flags (`--replace-certificate`, `--rotate-password`,
+`--dns-register`, `--dane-publish`) override these profile defaults for
+a single invocation. When a flag is not passed on the command line, the
+profile's stored value is used unchanged.
 
 ## BMC TLS Identity
 
@@ -65,7 +99,8 @@ bmc:
   username: admin
   password: "vault://bmc/node-17"
   protocol: redfish
-  skip-tls-verify: true         # allow the initial self-signed cert
+  # TLS trust is wired at daemon start via the trust resolver (see docs/bmc/bmc-tls.md).
+  # Use platformctl bmc cert get --bmc-host <ip> to capture the pin for standalone mode.
 
   # Cert identity -- same shape as webservice.certificate
   certificate:

@@ -15,11 +15,17 @@ package app
 
 import (
 	"context"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 // bmcCertInitOptions bundles every dependency that
@@ -82,6 +88,16 @@ type bmcCertInitOptions struct {
 	// DNSTTL is the DNS-01 challenge TXT record TTL. Zero falls
 	// back to the provider default (60s).
 	DNSTTL int
+
+	// OnCertIssued is the optional pre-publication hook propagated
+	// into issueBMCCertificateOptions. See its doc comment there
+	// for full semantics. nil = no-op.
+	OnCertIssued func(ctx context.Context, leaf *x509.Certificate) error
+
+	// OnCertDeployed is the optional post-deploy hook propagated
+	// into issueBMCCertificateOptions. See its doc comment there
+	// for full semantics. nil = no-op.
+	OnCertDeployed func(ctx context.Context, leaf, ca *x509.Certificate) error
 }
 
 // dnsUpdater is the narrow DNS service interface for dns-01 challenge
@@ -131,12 +147,14 @@ func initBMCCertManagement(ctx context.Context, opts bmcCertInitOptions) error {
 
 	// Issue + deploy initial certificate.
 	core := issueBMCCertificateOptions{
-		ACMEIssuer:    opts.ACMEIssuer,
-		LocalCAIssuer: opts.LocalCAIssuer,
-		DNSUpdater:    opts.DNSUpdater,
-		DNSTTL:        opts.DNSTTL,
-		Hostmaster:    opts.Hostmaster,
-		Logger:        opts.Logger,
+		ACMEIssuer:     opts.ACMEIssuer,
+		LocalCAIssuer:  opts.LocalCAIssuer,
+		DNSUpdater:     opts.DNSUpdater,
+		DNSTTL:         opts.DNSTTL,
+		Hostmaster:     opts.Hostmaster,
+		Logger:         opts.Logger,
+		OnCertIssued:   opts.OnCertIssued,
+		OnCertDeployed: opts.OnCertDeployed,
 	}
 	target, err := issueBMCCertificateCore(ctx, deviceID, opts.BMCConfig, core)
 	if err != nil {
@@ -225,16 +243,19 @@ func (app *App) InitCertManagement(ctx context.Context, scheduler SchedulerServi
 	// If BMC is configured, run the BMC-specific init which also
 	// registers its target into the same registry.
 	if app.BMCConfig != nil && app.BMCConfig.Certificate != nil {
+		onIssued, onDeployed := app.buildBMCRenewalHooks()
 		if err := initBMCCertManagement(ctx, bmcCertInitOptions{
-			BMCConfig:     app.BMCConfig,
-			NodeID:        nodeID,
-			ACMEIssuer:    app.ACMEClient,
-			LocalCAIssuer: app.CA,
-			DNSUpdater:    app.DNSService,
-			Hostmaster:    app.Hostmaster,
-			Scheduler:     scheduler,
-			Registry:      reg,
-			Logger:        nil, // see note below on logger adaptation
+			BMCConfig:      app.BMCConfig,
+			NodeID:         nodeID,
+			ACMEIssuer:     app.ACMEClient,
+			LocalCAIssuer:  app.CA,
+			DNSUpdater:     app.DNSService,
+			Hostmaster:     app.Hostmaster,
+			Scheduler:      scheduler,
+			Registry:       reg,
+			Logger:         nil, // see note below on logger adaptation
+			OnCertIssued:   onIssued,
+			OnCertDeployed: onDeployed,
 		}); err != nil {
 			return err
 		}
@@ -249,6 +270,193 @@ func (app *App) InitCertManagement(ctx context.Context, scheduler SchedulerServi
 		Registry:  reg,
 		NodeID:    nodeID,
 	})
+}
+
+// buildBMCRenewalHooks constructs the OnCertIssued and OnCertDeployed
+// hook closures for the platform's BMC certificate renewal lifecycle.
+// Both hooks are nil-safe with respect to optional dependencies (DANE
+// publisher, pin store, device service) so the platform can boot
+// without DNS or a device-service and still renew certificates.
+//
+// OnCertIssued implements RFC 7671 §8.1 pre-publication: the new
+// DANE-EE TLSA record is added alongside existing records BEFORE the
+// new certificate is deployed, so DNS validators never see an
+// unmatched cert during the transition window. Failure is non-fatal.
+//
+// OnCertDeployed:
+//  1. Updates the stored TOFU SPKI pin for the BMC endpoint (host:443).
+//  2. Re-publishes the full TLSA record set (DANE-TA from the CA +
+//     DANE-EE per policy) under the device's enrolled DNS name, which is
+//     loaded fresh from Device.BMCEnrollment.DNSName at call time so the
+//     hook works correctly even when enrollment runs after this wiring
+//     call.
+//
+// When the device has no enrolled DNS name, DANE calls are skipped but
+// the TOFU pin is still updated (pin is keyed by host, not by DNS name).
+func (app *App) buildBMCRenewalHooks() (
+	onIssued func(context.Context, *x509.Certificate) error,
+	onDeployed func(context.Context, *x509.Certificate, *x509.Certificate) error,
+) {
+	// Resolve DANE publisher once — nil when DANE is not configured.
+	var dp daneRenewalPublisher
+	if app.DNSConfig != nil &&
+		app.DNSConfig.DANE != nil &&
+		app.DNSConfig.DANE.Enabled &&
+		app.DNSService != nil {
+		dp = app.ensureDANEPublisher()
+	}
+
+	// Resolve the internal DNS zone name.
+	internalZone := ""
+	if app.DNSConfig != nil && app.DNSConfig.InternalServer != nil {
+		internalZone = app.DNSConfig.InternalServer.Zone.Name
+	}
+
+	// Resolve pin-store factory once — nil when SDK client unavailable.
+	pinUpdater := app.bmcPinUpdater()
+
+	// BMC host address for pin keying (host only, no port in BMC address field).
+	bmcHost := ""
+	if app.BMCConfig != nil {
+		bmcHost = app.BMCConfig.Address
+	}
+
+	// dnsNameLoader loads the enrolled DNS name fresh at each hook
+	// call so enrollments that happen after boot are reflected. It is
+	// keyed by the BMC host so the right device record is matched.
+	dnsNameLoader := app.buildBMCDNSNameLoader(bmcHost)
+
+	// OnCertIssued: pre-publish the new DANE-EE record before deploy.
+	onIssued = func(issuedCtx context.Context, leaf *x509.Certificate) error {
+		if dp == nil || internalZone == "" {
+			return nil
+		}
+		dnsName := dnsNameLoader(issuedCtx)
+		if dnsName == "" {
+			if app.Logger != nil {
+				app.Logger.Debug("bmc-cert renewal: no enrolled DNS name; skipping pre-publish",
+					"host", bmcHost)
+			}
+			return nil
+		}
+		return dp.PrePublishRollover(issuedCtx, leaf, dnsName, 443, internalZone)
+	}
+
+	// OnCertDeployed: update TOFU pin + full TLSA re-publish after deploy.
+	onDeployed = func(deployedCtx context.Context, leaf, ca *x509.Certificate) error {
+		// Step 1: update TOFU SPKI pin (keyed by host, independent of DNS).
+		if bmcHost != "" && pinUpdater != nil {
+			spki := certSPKISHA256(leaf)
+			fp := certDERSHA256(leaf)
+			if err := pinUpdater(deployedCtx, bmcHost, 443, spki, fp); err != nil {
+				if app.Logger != nil {
+					app.Logger.Errorf("bmc-cert renewal: TOFU pin update failed: host=%s err=%v",
+						bmcHost, err)
+				}
+				// Non-fatal per design: return the error so the caller
+				// (issueBMCCertificateCore) logs it at Error level.
+				return err
+			}
+		}
+
+		// Step 2: full TLSA re-publish.
+		if dp == nil || internalZone == "" {
+			return nil
+		}
+		dnsName := dnsNameLoader(deployedCtx)
+		if dnsName == "" {
+			if app.Logger != nil {
+				app.Logger.Debug("bmc-cert renewal: no enrolled DNS name; skipping TLSA re-publish",
+					"host", bmcHost)
+			}
+			return nil
+		}
+		return dp.PublishForCertificate(deployedCtx, leaf, ca, dnsName, 443, internalZone)
+	}
+
+	return onIssued, onDeployed
+}
+
+// daneRenewalPublisher is the narrow subset of *bootstrap.DANEPublisher
+// required by the renewal hooks. Unit tests substitute a fake.
+type daneRenewalPublisher interface {
+	PrePublishRollover(ctx context.Context, newCert *x509.Certificate, hostname string, port uint16, zoneName string) error
+	PublishForCertificate(ctx context.Context, leafCert, caCert *x509.Certificate, hostname string, port uint16, zoneName string) error
+}
+
+// buildBMCDNSNameLoader returns a closure that loads the enrolled DNS
+// name for the BMC at the given host from the Device entities at call
+// time. The device is matched by BMCEnrollment.Host — the join key the
+// enrollment ceremony stamps — so on a control plane holding many
+// enrolled devices the renewal hooks never publish under another
+// device's name. An empty string is returned when the device service
+// is unavailable, no device matches the host, or the matched
+// enrollment has no DNS name.
+//
+// The lookup is best-effort — failures are silently swallowed
+// because the hooks are non-fatal and the DNS name is only needed for
+// DANE publication. The trailing dot is stripped before returning.
+func (app *App) buildBMCDNSNameLoader(bmcHost string) func(ctx context.Context) string {
+	return func(ctx context.Context) string {
+		if bmcHost == "" {
+			return ""
+		}
+		sr := app.ServiceRegistry()
+		if sr == nil {
+			return ""
+		}
+		svc := sr.DeviceService()
+		if svc == nil {
+			return ""
+		}
+		page, err := svc.Page(ctx, datastore.NewPageQuery())
+		if err != nil {
+			return ""
+		}
+		return enrolledDNSNameForHost(page.Entities, bmcHost)
+	}
+}
+
+// enrolledDNSNameForHost returns the enrolled DNS name (trailing dot
+// stripped) of the device whose BMCEnrollment.Host matches bmcHost, or
+// an empty string when no device matches or the matched enrollment has
+// no DNS name. Pure function — testable without a device service.
+func enrolledDNSNameForHost(devices []*entities.Device, bmcHost string) string {
+	for _, dev := range devices {
+		if dev == nil || dev.BMCEnrollment == nil || dev.BMCEnrollment.Host != bmcHost {
+			continue
+		}
+		return strings.TrimSuffix(dev.BMCEnrollment.DNSName, ".")
+	}
+	return ""
+}
+
+// bmcPinUpdater returns a closure that persists an updated TOFU pin
+// using the same quicbaas.NewTOFUPinStore path the enroll ceremony
+// uses. Returns nil when the SDK client is unavailable.
+func (app *App) bmcPinUpdater() func(ctx context.Context, host string, port int, spkiPin, certFP string) error {
+	dbFactory, ok := app.daoFactory.(*quicbaas.Factory)
+	if !ok || dbFactory == nil {
+		return nil
+	}
+	sdkClient := dbFactory.SDKClient()
+	if sdkClient == nil {
+		return nil
+	}
+	pinStore, err := quicbaas.NewTOFUPinStore(sdkClient)
+	if err != nil {
+		return nil
+	}
+	return func(ctx context.Context, host string, port int, spkiPin, certFP string) error {
+		return pinStore.Put(ctx, &trust.TOFUPin{
+			Host:            host,
+			Port:            port,
+			SPKISHA256:      spkiPin,
+			CertFingerprint: certFP,
+			FirstSeen:       time.Now().UTC(),
+			Source:          "renewal",
+		})
+	}
 }
 
 // deriveBMCDeviceID produces a stable device ID for the CertTarget

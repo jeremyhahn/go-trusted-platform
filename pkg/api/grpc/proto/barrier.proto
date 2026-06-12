@@ -46,17 +46,25 @@ message BarrierInitRequest {
   int32 shares = 3;
 }
 
-// BarrierInitResponse contains the result of barrier initialization.
+// BarrierInitResponse contains the share-free result of barrier
+// initialization. Share material is never returned over the wire;
+// Security Officers claim their individual shares via the share-claim
+// flow using their mTLS certificate.
 message BarrierInitResponse {
   Status status = 1;
   // strategy is the unseal strategy that was configured.
   BarrierStrategy strategy = 2;
-  // unseal_keys contains the generated unseal keys (Shamir shares or single key).
-  // These are only returned once during initialization and must be stored securely.
-  repeated string unseal_keys = 3;
+  reserved 3;
+  reserved "unseal_keys";
   // root_token is the initial root token for platform authentication.
   string root_token = 4;
   google.protobuf.Timestamp initialized_at = 5;
+  // threshold is the minimum number of shares required to unseal (Shamir mode).
+  int32 threshold = 6;
+  // shares_total is the total number of Shamir shares generated.
+  int32 shares_total = 7;
+  // share_count is the number of shares sealed to enrolled Security Officers.
+  int32 share_count = 8;
 }
 
 // BarrierStatusRequest is an empty request for barrier status.
@@ -115,12 +123,19 @@ message BarrierRekeyRequest {
   int32 shares = 2;
 }
 
-// BarrierRekeyResponse contains the new unseal keys after rekeying.
+// BarrierRekeyResponse contains the share-free result of a rekey. New
+// shares are sealed to enrolled Security Officers and claimed via the
+// share-claim flow; share material is never returned over the wire.
 message BarrierRekeyResponse {
   Status status = 1;
   // strategy is the new unseal strategy.
   BarrierStrategy strategy = 2;
-  // unseal_keys contains the new unseal keys.
-  // These are only returned once and must be stored securely.
-  repeated string unseal_keys = 3;
+  reserved 3;
+  reserved "unseal_keys";
+  // threshold is the new minimum number of shares required to unseal.
+  int32 threshold = 4;
+  // shares_total is the new total number of Shamir shares.
+  int32 shares_total = 5;
+  // share_count is the number of shares sealed to enrolled Security Officers.
+  int32 share_count = 6;
 }

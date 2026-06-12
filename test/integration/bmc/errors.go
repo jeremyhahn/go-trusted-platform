@@ -147,6 +147,30 @@ func (e ErrQUICNotImplemented) Error() string {
 	return "bmc: QUIC protocol adapter not implemented for BMC service"
 }
 
+// ErrQUICConnectionFailed indicates a QUIC connection failure.
+type ErrQUICConnectionFailed struct {
+	Endpoint string
+	Err      error
+}
+
+func (e ErrQUICConnectionFailed) Error() string {
+	return fmt.Sprintf("bmc: QUIC connection failed to %s: %v", e.Endpoint, e.Err)
+}
+
+func (e ErrQUICConnectionFailed) Unwrap() error { return e.Err }
+
+// ErrQUICCallFailed indicates a QUIC sub-operation failure.
+type ErrQUICCallFailed struct {
+	Method string
+	Err    error
+}
+
+func (e ErrQUICCallFailed) Error() string {
+	return fmt.Sprintf("bmc: QUIC call %s failed: %v", e.Method, e.Err)
+}
+
+func (e ErrQUICCallFailed) Unwrap() error { return e.Err }
+
 // =============================================================================
 // MCP Adapter Errors
 // =============================================================================
@@ -169,6 +193,18 @@ func (e ErrMCPConnectionFailed) Error() string {
 }
 
 func (e ErrMCPConnectionFailed) Unwrap() error { return e.Err }
+
+// ErrMCPCallFailed indicates an MCP tool call failure.
+type ErrMCPCallFailed struct {
+	Tool string
+	Err  error
+}
+
+func (e ErrMCPCallFailed) Error() string {
+	return fmt.Sprintf("bmc: MCP tool %s failed: %v", e.Tool, e.Err)
+}
+
+func (e ErrMCPCallFailed) Unwrap() error { return e.Err }
 
 // =============================================================================
 // Unix Socket Adapter Errors
@@ -208,3 +244,37 @@ func (e ErrUnixRPCFailed) Error() string {
 }
 
 func (e ErrUnixRPCFailed) Unwrap() error { return e.Err }
+
+// =============================================================================
+// Enrollment Errors
+// =============================================================================
+
+// ErrEnrollServiceUnavailable indicates the enrollment ceremony service is not
+// wired or not available on the current transport. Tests treat this as a
+// tolerated outcome that reflects a legitimate deployment-config gap rather
+// than a transport-level failure.
+type ErrEnrollServiceUnavailable struct {
+	Protocol string
+	Reason   string
+}
+
+func (e ErrEnrollServiceUnavailable) Error() string {
+	return fmt.Sprintf("bmc: enroll service unavailable on %s: %s", e.Protocol, e.Reason)
+}
+
+// =============================================================================
+// Restore Errors
+// =============================================================================
+
+// ErrRestoreServiceUnavailable indicates the factory-certificate restore service
+// is not wired or not available on the current transport. Tests treat this as a
+// tolerated outcome that reflects a legitimate deployment-config gap rather than
+// a transport-level failure.
+type ErrRestoreServiceUnavailable struct {
+	Protocol string
+	Reason   string
+}
+
+func (e ErrRestoreServiceUnavailable) Error() string {
+	return fmt.Sprintf("bmc: restore service unavailable on %s: %s", e.Protocol, e.Reason)
+}

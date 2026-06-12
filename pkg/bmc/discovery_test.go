@@ -15,6 +15,8 @@ package bmc
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"log/slog"
 	"net"
@@ -115,7 +117,7 @@ func TestDiscoverMAC_Redfish(t *testing.T) {
 		Protocol:      ProtocolRedfish,
 		Username:      "admin",
 		Password:      "pass",
-		SkipTLSVerify: true,
+		TLS: tlsProviderFromTLSServer(ts),
 	}
 
 	logger := newTestLogger()
@@ -241,7 +243,7 @@ func TestDiscoverMAC_IPMIFallthroughRedfish(t *testing.T) {
 		Protocol:      ProtocolIPMI,
 		Username:      "admin",
 		Password:      "pass",
-		SkipTLSVerify: true,
+		TLS: tlsProviderFromTLSServer(ts),
 	}
 
 	mac, err := DiscoverMAC(context.Background(), config, newTestLogger())
@@ -345,7 +347,7 @@ func TestDiscoverMAC_RedfishNoInterfaces(t *testing.T) {
 		Protocol:      ProtocolRedfish,
 		Username:      "admin",
 		Password:      "pass",
-		SkipTLSVerify: true,
+		TLS: tlsProviderFromTLSServer(ts),
 	}
 
 	logger := newTestLogger()
@@ -489,7 +491,7 @@ func TestDiscoverMAC_Redfish_InvalidMAC(t *testing.T) {
 		Protocol:      ProtocolRedfish,
 		Username:      "admin",
 		Password:      "pass",
-		SkipTLSVerify: true,
+		TLS: tlsProviderFromTLSServer(ts),
 	}
 
 	_, err := DiscoverMAC(context.Background(), config, newTestLogger())
@@ -612,7 +614,17 @@ func itoa(i int) string {
 	return string(digits)
 }
 
-func startTLSMux(t *testing.T, mux *http.ServeMux) (string, int, func()) {
+// tlsProviderFromTLSServer returns a fakeTLSProvider trusting srv's cert.
+func tlsProviderFromTLSServer(srv *httptest.Server) TLSProvider {
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	return &fakeTLSProvider{cfg: &tls.Config{
+		RootCAs:    pool,
+		MinVersion: tls.VersionTLS12,
+	}}
+}
+
+func startTLSMux(t *testing.T, mux *http.ServeMux) (string, int, *httptest.Server) {
 	t.Helper()
 	ts := httptest.NewTLSServer(mux)
 	addr := ts.Listener.Addr().String()
@@ -621,7 +633,7 @@ func startTLSMux(t *testing.T, mux *http.ServeMux) (string, int, func()) {
 	for _, c := range port {
 		portNum = portNum*10 + int(c-'0')
 	}
-	return host, portNum, ts.Close
+	return host, portNum, ts
 }
 
 func TestDiscoverMACs_MultipleMACs(t *testing.T) {
@@ -630,8 +642,8 @@ func TestDiscoverMACs_MultipleMACs(t *testing.T) {
 		"00:25:90:5E:02:AB",
 		"00:25:90:5E:02:AC",
 	}
-	host, port, closer := startTLSMux(t, multiNICRedfishMux(macs))
-	defer closer()
+	host, port, ts := startTLSMux(t, multiNICRedfishMux(macs))
+	defer ts.Close()
 
 	got, err := DiscoverMACs(context.Background(), &Config{
 		Address:       host,
@@ -639,7 +651,7 @@ func TestDiscoverMACs_MultipleMACs(t *testing.T) {
 		Protocol:      ProtocolRedfish,
 		Username:      "admin",
 		Password:      "pass",
-		SkipTLSVerify: true,
+		TLS: tlsProviderFromTLSServer(ts),
 	}, newTestLogger())
 	if err != nil {
 		t.Fatalf("DiscoverMACs returned error: %v", err)
@@ -663,14 +675,14 @@ func TestDiscoverMACs_FiltersInvalidSentinels(t *testing.T) {
 		"",                    // empty - filtered
 		"00:25:90:5E:02:AB",   // valid
 	}
-	host, port, closer := startTLSMux(t, multiNICRedfishMux(macs))
-	defer closer()
+	host, port, ts := startTLSMux(t, multiNICRedfishMux(macs))
+	defer ts.Close()
 
 	got, err := DiscoverMACs(context.Background(), &Config{
 		Address:       host,
 		Port:          port,
 		Protocol:      ProtocolRedfish,
-		SkipTLSVerify: true,
+		TLS: tlsProviderFromTLSServer(ts),
 	}, newTestLogger())
 	if err != nil {
 		t.Fatalf("DiscoverMACs returned error: %v", err)
@@ -684,17 +696,17 @@ func TestDiscoverMACs_FiltersInvalidSentinels(t *testing.T) {
 }
 
 func TestDiscoverMACs_AllSentinelsReturnsNotFound(t *testing.T) {
-	host, port, closer := startTLSMux(t, multiNICRedfishMux([]string{
+	host, port, ts := startTLSMux(t, multiNICRedfishMux([]string{
 		"FF:FF:FF:FF:FF:FF",
 		"00:00:00:00:00:00",
 	}))
-	defer closer()
+	defer ts.Close()
 
 	_, err := DiscoverMACs(context.Background(), &Config{
 		Address:       host,
 		Port:          port,
 		Protocol:      ProtocolRedfish,
-		SkipTLSVerify: true,
+		TLS: tlsProviderFromTLSServer(ts),
 	}, newTestLogger())
 	if err == nil {
 		t.Fatal("expected ErrMACNotFound, got nil")
@@ -709,8 +721,8 @@ func TestDiscoverMACs_IPMIFallthroughMultipleMACs(t *testing.T) {
 		"00:25:90:5E:02:AA",
 		"00:25:90:5E:02:AB",
 	}
-	host, port, closer := startTLSMux(t, multiNICRedfishMux(macs))
-	defer closer()
+	host, port, ts := startTLSMux(t, multiNICRedfishMux(macs))
+	defer ts.Close()
 
 	originalProbePort := redfishProbePort
 	redfishProbePort = port
@@ -720,7 +732,7 @@ func TestDiscoverMACs_IPMIFallthroughMultipleMACs(t *testing.T) {
 		Address:       host,
 		Port:          port,
 		Protocol:      ProtocolIPMI,
-		SkipTLSVerify: true,
+		TLS: tlsProviderFromTLSServer(ts),
 	}, newTestLogger())
 	if err != nil {
 		t.Fatalf("expected IPMI fallthrough to succeed, got: %v", err)

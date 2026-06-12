@@ -15,6 +15,8 @@ package controlplane
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -37,23 +39,109 @@ func (c *stubCollector) Collect(_ context.Context) (*gwstate.Snapshot, error) {
 }
 
 func TestNewReporter_ValidatesConfig(t *testing.T) {
-	cases := []ReporterConfig{
-		{GatewayID: "g", Collector: &stubCollector{}},                            // missing CPBaseURL
-		{CPBaseURL: "http://x", Collector: &stubCollector{}},                     // missing GatewayID
-		{CPBaseURL: "http://x", GatewayID: "g"},                                  // missing Collector
+	cases := []struct {
+		cfg     ReporterConfig
+		wantErr bool
+		field   string
+	}{
+		{
+			cfg:     ReporterConfig{GatewayID: "g", Collector: &stubCollector{}},
+			wantErr: true,
+			field:   "CPBaseURL",
+		},
+		{
+			cfg:     ReporterConfig{CPBaseURL: "http://x", Collector: &stubCollector{}},
+			wantErr: true,
+			field:   "GatewayID",
+		},
+		{
+			cfg:     ReporterConfig{CPBaseURL: "http://x", GatewayID: "g"},
+			wantErr: true,
+			field:   "Collector",
+		},
 	}
-	for i, cfg := range cases {
-		if _, err := NewReporter(cfg); err == nil {
-			t.Errorf("case %d: expected validation error", i)
+	for _, tc := range cases {
+		_, err := NewReporter(tc.cfg)
+		if !tc.wantErr {
+			if err != nil {
+				t.Errorf("field %q: unexpected error: %v", tc.field, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("field %q: expected ErrMissingField, got nil", tc.field)
+			continue
+		}
+		e, ok := err.(ErrMissingField)
+		if !ok {
+			t.Errorf("field %q: expected ErrMissingField, got %T: %v", tc.field, err, err)
+			continue
+		}
+		if e.Field != tc.field {
+			t.Errorf("expected missing field %q, got %q", tc.field, e.Field)
 		}
 	}
-	// Happy path.
+	// Happy path with defaults.
 	if _, err := NewReporter(ReporterConfig{
 		CPBaseURL: "http://x",
 		GatewayID: "g",
 		Collector: &stubCollector{},
 	}); err != nil {
 		t.Errorf("happy path: %v", err)
+	}
+}
+
+func TestNewReporter_DefaultHTTPClientUsesRootCAs(t *testing.T) {
+	// When RootCAs is set and no HTTPClient is provided, the default
+	// client must carry the pool in its TLS config.
+	pool := x509.NewCertPool()
+
+	r, err := NewReporter(ReporterConfig{
+		CPBaseURL: "https://cp.example.com:8443",
+		GatewayID: "gw-1",
+		Collector: &stubCollector{snap: &gwstate.Snapshot{}},
+		RootCAs:   pool,
+	})
+	if err != nil {
+		t.Fatalf("NewReporter: %v", err)
+	}
+
+	tr, ok := r.cfg.HTTPClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", r.cfg.HTTPClient.Transport)
+	}
+	if tr.TLSClientConfig == nil {
+		t.Fatal("TLSClientConfig must not be nil when RootCAs is set")
+	}
+	if tr.TLSClientConfig.RootCAs != pool {
+		t.Error("TLSClientConfig.RootCAs does not match the provided pool")
+	}
+	if tr.TLSClientConfig.MinVersion != tls.VersionTLS12 {
+		t.Error("expected TLS 1.2 minimum version")
+	}
+}
+
+func TestNewReporter_DefaultHTTPClientNilRootCAsUsesSystemRoots(t *testing.T) {
+	// When RootCAs is nil, the default TLS config must have a nil RootCAs
+	// field so the system trust store is consulted.
+	r, err := NewReporter(ReporterConfig{
+		CPBaseURL: "https://cp.example.com:8443",
+		GatewayID: "gw-2",
+		Collector: &stubCollector{snap: &gwstate.Snapshot{}},
+	})
+	if err != nil {
+		t.Fatalf("NewReporter: %v", err)
+	}
+
+	tr, ok := r.cfg.HTTPClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", r.cfg.HTTPClient.Transport)
+	}
+	if tr.TLSClientConfig == nil {
+		t.Fatal("TLSClientConfig must not be nil")
+	}
+	if tr.TLSClientConfig.RootCAs != nil {
+		t.Error("RootCAs must be nil when not configured (falls back to system roots)")
 	}
 }
 

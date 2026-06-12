@@ -130,6 +130,16 @@ func NewLoggerWithFormat(level slog.Level, format Format, logWriter io.Writer) *
 	}
 }
 
+// NewFromSlog wraps an existing *slog.Logger in a platform Logger.
+// This lets packages that receive a *slog.Logger from callers (e.g. the
+// orchestrator) construct a logging.Logger without duplicating handler setup.
+func NewFromSlog(l *slog.Logger) *Logger {
+	if l == nil {
+		return DefaultLogger()
+	}
+	return &Logger{logger: l}
+}
+
 // Debug
 func (l *Logger) Debug(message string, args ...any) {
 	if l == nil || l.logger == nil {

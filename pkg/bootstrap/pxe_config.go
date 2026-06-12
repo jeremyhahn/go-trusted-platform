@@ -19,6 +19,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/deployer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 	"gopkg.in/yaml.v3"
 )
 
@@ -34,6 +35,17 @@ var validRoles = map[string]struct{}{
 	RoleControlPlane: {},
 	RoleGateway:      {},
 	RoleWorker:       {},
+}
+
+// validBMCTrustStrategies is the ClassBMC allowlist: the set of trust
+// strategies a node's bmc_trust chain may contain. This mirrors the
+// allowedStrategies[ClassBMC] map in pkg/trust/config.go and is kept
+// here so validation does not require constructing a full Resolver.
+var validBMCTrustStrategies = map[trust.Strategy]struct{}{
+	trust.StrategyDANE:   {},
+	trust.StrategySPKI:   {},
+	trust.StrategyCAFile: {},
+	trust.StrategyTOFU:   {},
 }
 
 // BootstrapConfig is the top-level configuration for PXE network bootstrap.
@@ -52,6 +64,37 @@ type BootstrapConfig struct {
 	// the container's /data host directory and exposed via the container's
 	// SMB share at smb://<deployer.host>/boot/<filename>.
 	ISOPath string `yaml:"iso_path,omitempty"`
+
+	// BackupsDir is the client-side directory where factory-cert backups
+	// are stored during the BMC enrollment ceremony. The orchestrator writes
+	// one PEM file per BMC after a successful bmc_enroll run. Empty defaults
+	// to defaultBackupsDir ("~/sources/automatethethings/infra/backups");
+	// "~" is expanded to the operator's home directory at load time.
+	// BackupsDir is used by the next-wave BMC enrollment flow; parsing and
+	// exposing it here lets operators configure the path in bootstrap.yaml
+	// today.
+	BackupsDir string `yaml:"backups_dir,omitempty"`
+}
+
+// defaultBackupsDir is the backups directory used when BackupsDir is empty.
+// "~" is expanded to os.UserHomeDir() at load time.
+const defaultBackupsDir = "~/sources/automatethethings/infra/backups"
+
+// EffectiveBackupsDir returns the BackupsDir with ~ expanded and the
+// defaultBackupsDir applied when BackupsDir is empty.
+func (c *BootstrapConfig) EffectiveBackupsDir() (string, error) {
+	dir := c.BackupsDir
+	if dir == "" {
+		dir = defaultBackupsDir
+	}
+	if len(dir) >= 2 && dir[:2] == "~/" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		dir = filepath.Join(home, dir[2:])
+	}
+	return dir, nil
 }
 
 // FabricConfig describes the network fabric topology for the bootstrap
@@ -310,7 +353,28 @@ type NodeConfig struct {
 	BMCPassword      string                 `yaml:"bmc_password,omitempty" secret:"true"`
 	BMCProtocol      string                 `yaml:"bmc_protocol,omitempty"`
 	BMCEncryptionKey string                 `yaml:"bmc_encryption_key,omitempty" secret:"true"`
-	BMCSkipTLSVerify bool                   `yaml:"bmc_skip_tls_verify,omitempty"`
+
+	// BMCTrust is the ordered strategy chain the orchestrator uses when
+	// establishing TLS connections to this node's BMC during bootstrap.
+	// Valid strategies: dane, spki, ca-file, tofu.
+	// Empty/omitted → use the platform trust config's ClassBMC default.
+	// Only strategies in the ClassBMC allowlist are accepted; the
+	// orchestrator rejects any unknown value at validation time.
+	BMCTrust []trust.Strategy `yaml:"bmc_trust,omitempty"`
+
+	// BMCSPKIPin is the hex-encoded SHA-256 SubjectPublicKeyInfo pin for
+	// this node's BMC certificate. Required when bmc_trust contains "spki".
+	// The pin is fed into the spki strategy of the per-run trust resolver
+	// as a per-endpoint override.
+	BMCSPKIPin string `yaml:"bmc_spki_pin,omitempty"`
+
+	// BMCEnroll signals operator intent to run the BMC enrollment ceremony
+	// after the node successfully installs. The actual enrollment is
+	// orchestrated by the next-wave `platformctl bmc enroll` flow; this
+	// flag is parsed and exposed so the orchestrator can plan enrollment
+	// alongside installation without requiring a separate operator step.
+	BMCEnroll bool `yaml:"bmc_enroll,omitempty"`
+
 	// MACs lists every NIC MAC the BIOS may PXE-boot from. A node may have
 	// multiple onboard NICs and the BIOS picks one at boot time, so all of
 	// them must be registered with the PXE server. Legacy bootstrap.yaml files
@@ -400,7 +464,9 @@ type nodeConfigYAML struct {
 	BMCPassword      string                 `yaml:"bmc_password,omitempty" secret:"true"`
 	BMCProtocol      string                 `yaml:"bmc_protocol,omitempty"`
 	BMCEncryptionKey string                 `yaml:"bmc_encryption_key,omitempty" secret:"true"`
-	BMCSkipTLSVerify bool                   `yaml:"bmc_skip_tls_verify,omitempty"`
+	BMCTrust         []trust.Strategy       `yaml:"bmc_trust,omitempty"`
+	BMCSPKIPin       string                 `yaml:"bmc_spki_pin,omitempty"`
+	BMCEnroll        bool                   `yaml:"bmc_enroll,omitempty"`
 	MAC              string                 `yaml:"mac,omitempty"`
 	MACs             []string               `yaml:"macs,omitempty"`
 	Role             string                 `yaml:"role"`
@@ -426,7 +492,9 @@ func (n *NodeConfig) UnmarshalYAML(value *yaml.Node) error {
 	n.BMCPassword = shadow.BMCPassword
 	n.BMCProtocol = shadow.BMCProtocol
 	n.BMCEncryptionKey = shadow.BMCEncryptionKey
-	n.BMCSkipTLSVerify = shadow.BMCSkipTLSVerify
+	n.BMCTrust = append([]trust.Strategy(nil), shadow.BMCTrust...)
+	n.BMCSPKIPin = shadow.BMCSPKIPin
+	n.BMCEnroll = shadow.BMCEnroll
 	n.Role = shadow.Role
 	n.Hostname = shadow.Hostname
 	n.Overrides = shadow.Overrides
@@ -478,6 +546,18 @@ func LoadBootstrapConfig(path string) (*BootstrapConfig, error) {
 	var config BootstrapConfig
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, ErrParseYAML{Path: path, Err: err}
+	}
+
+	// Expand ~ in BackupsDir at load time so callers always see an
+	// absolute path and don't need to know the expansion logic.
+	if config.BackupsDir != "" {
+		if len(config.BackupsDir) >= 2 && config.BackupsDir[:2] == "~/" {
+			home, homeErr := os.UserHomeDir()
+			if homeErr != nil {
+				return nil, ErrParseYAML{Path: path, Err: homeErr}
+			}
+			config.BackupsDir = filepath.Join(home, config.BackupsDir[2:])
+		}
 	}
 
 	// Resolve per-node OverridesFile references. Each NodeConfig may
@@ -599,6 +679,13 @@ func (c *BootstrapConfig) Validate() error {
 				return ErrVirtualMediaRequiresBMC{Hostname: node.Hostname}
 			}
 			virtualMediaCount++
+		}
+
+		// Validate bmc_trust strategy chain.
+		for _, strategy := range node.BMCTrust {
+			if _, ok := validBMCTrustStrategies[strategy]; !ok {
+				return ErrInvalidBMCTrust{Hostname: node.Hostname, Strategy: string(strategy)}
+			}
 		}
 
 		if node.Role == RoleControlPlane {

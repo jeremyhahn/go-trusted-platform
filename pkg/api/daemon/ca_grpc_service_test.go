@@ -2525,7 +2525,7 @@ func (m *configurableMockCA) CABundleFiltered(_ xkmssdk.StoreType, _ x509.Public
 func (m *configurableMockCA) ParseBundle(_ []byte) ([]*x509.Certificate, error) {
 	return m.parsedBundle, nil
 }
-func (m *configurableMockCA) IssueCertificate(_ *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (m *configurableMockCA) IssueCertificate(_ context.Context, _ *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	if m.issueCertErr != nil {
 		return nil, m.issueCertErr
 	}
@@ -2534,11 +2534,11 @@ func (m *configurableMockCA) IssueCertificate(_ *xkmsca.CertificateRequest) (*xk
 	}
 	return &xkmsca.IssuedCertificate{Certificate: m.issuedCert}, nil
 }
-func (m *configurableMockCA) RevokeCert(_ *x509.Certificate, _ xkmsca.RevokeOptions) error {
+func (m *configurableMockCA) RevokeCert(_ context.Context, _ *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	return m.revokeErr
 }
 func (m *configurableMockCA) CertStore() xkmssdk.CertStore { return m.certStore }
-func (m *configurableMockCA) GenerateCRL() ([]byte, error) {
+func (m *configurableMockCA) GenerateCRL(_ context.Context) ([]byte, error) {
 	return nil, errors.New("CRL generation not supported")
 }
 func (m *configurableMockCA) IsRevoked(serial *big.Int) (bool, error) {
@@ -2552,7 +2552,7 @@ type mockCAWithCRL struct {
 	crlErr  error
 }
 
-func (m *mockCAWithCRL) GenerateCRL() ([]byte, error) {
+func (m *mockCAWithCRL) GenerateCRL(_ context.Context) ([]byte, error) {
 	if m.crlErr != nil {
 		return nil, m.crlErr
 	}

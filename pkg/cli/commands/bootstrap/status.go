@@ -85,13 +85,15 @@ func runStatus(configPath string, commonFlags *cli.CommonFlags) error {
 		return ErrPXEDiscoveryFailed{Cause: err}
 	}
 
-	// During bootstrap the CA may not yet exist on target nodes, so TLS
-	// verification must be skipped for health probes.
+	// Bootstrap-window reachability probe: target nodes serve certs from
+	// per-node local CAs that do not exist yet at status time, so no
+	// trust anchor is available by construction. The probe consumes
+	// readiness booleans only — never credentials or configuration.
 	httpClient := &http.Client{
 		Timeout: healthCheckTimeout,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, //nolint:gosec // Required during bootstrap before CA exists on nodes.
+				InsecureSkipVerify: true, //nolint:gosec // bootstrap-window readiness probe; no trust anchor exists yet
 			},
 		},
 	}

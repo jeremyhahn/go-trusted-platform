@@ -58,6 +58,11 @@ func (b *EmbeddedServerBinding) Start(configPath string) error {
 
 	b.logger.Info("Starting embedded platform daemon", "config", configPath)
 
+	// Desktop standalone startup has no caller-supplied context; the
+	// embedded client below already roots itself in Background for the
+	// same reason.
+	ctx := context.Background()
+
 	// Initialize the platform App
 	a := app.NewApp()
 	initParams := &app.AppInitParams{
@@ -65,7 +70,7 @@ func (b *EmbeddedServerBinding) Start(configPath string) error {
 		Initialize: true,
 	}
 
-	if _, err := a.Init(initParams); err != nil {
+	if _, err := a.Init(ctx, initParams); err != nil {
 		return &EmbeddedServerError{Op: "init", Err: err}
 	}
 	b.app = a
@@ -122,7 +127,7 @@ func (b *EmbeddedServerBinding) Start(configPath string) error {
 
 	// Create embedded transport client
 	cl, err := platform.NewClient(
-		context.Background(),
+		ctx,
 		platform.WithOnlyProtocol(platform.ProtocolEmbedded),
 		platform.WithEmbeddedServices(registry),
 	)

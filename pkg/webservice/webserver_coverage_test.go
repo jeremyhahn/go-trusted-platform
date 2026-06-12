@@ -14,6 +14,7 @@
 package webservice
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -31,9 +32,9 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -113,7 +114,7 @@ func TestNewMutalTLSClient_CreatesClient(t *testing.T) {
 		CN: "test-client",
 	}
 
-	client := NewMutalTLSClient(logger, nil, attrs)
+	client := NewMutalTLSClient(logger, nil, attrs, nil)
 
 	assert.NotNil(t, client.logger)
 	assert.Nil(t, client.ca)
@@ -218,7 +219,7 @@ func TestCertificate_Success(t *testing.T) {
 	}
 
 	attrs := &xkmssdk.KeyAttributes{CN: "client-cert"}
-	tlsCert, err := client.certificate(attrs)
+	tlsCert, err := client.certificate(context.Background(), attrs)
 	require.NoError(t, err)
 	require.NotNil(t, tlsCert)
 	assert.Equal(t, cert.Raw, tlsCert.Certificate[0])
@@ -235,7 +236,7 @@ func TestCertificate_Error(t *testing.T) {
 	}
 
 	attrs := &xkmssdk.KeyAttributes{CN: "nonexistent"}
-	_, err := client.certificate(attrs)
+	_, err := client.certificate(context.Background(), attrs)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "certificate not found")
 }
