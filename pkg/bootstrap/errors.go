@@ -465,20 +465,6 @@ func (e ErrNoiseServerFailed) Unwrap() error {
 	return e.Cause
 }
 
-// ErrBootstrapFetchFailed is returned when client-side bootstrap fetch fails for a strategy.
-type ErrBootstrapFetchFailed struct {
-	Strategy string
-	Cause    error
-}
-
-func (e ErrBootstrapFetchFailed) Error() string {
-	return fmt.Sprintf("bootstrap: fetch failed for strategy %s: %v", e.Strategy, e.Cause)
-}
-
-func (e ErrBootstrapFetchFailed) Unwrap() error {
-	return e.Cause
-}
-
 // ErrInvalidConfig is returned when the bootstrap configuration is invalid.
 type ErrInvalidConfig struct {
 	Field  string
@@ -503,15 +489,6 @@ type ErrCABundleEmpty struct{}
 
 func (e ErrCABundleEmpty) Error() string {
 	return "bootstrap: CA bundle is empty"
-}
-
-// ErrStrategyNotSupported is returned when an unsupported bootstrap strategy is requested.
-type ErrStrategyNotSupported struct {
-	Strategy string
-}
-
-func (e ErrStrategyNotSupported) Error() string {
-	return fmt.Sprintf("bootstrap: unsupported strategy: %s", e.Strategy)
 }
 
 // ErrInvalidBootMethod is returned when a node config specifies an unrecognised
@@ -727,36 +704,6 @@ func (e ErrBMCReconnect) Error() string {
 }
 
 func (e ErrBMCReconnect) Unwrap() error { return e.Cause }
-
-// ErrCABundleVerifyFailed is returned when the control-plane CA bundle
-// fetched over HTTP does not match the CA that signed the TLS connection
-// (capture-then-verify mismatch).
-type ErrCABundleVerifyFailed struct {
-	Reason string
-}
-
-func (e ErrCABundleVerifyFailed) Error() string {
-	return fmt.Sprintf("bootstrap: control-plane CA bundle verify failed: %s", e.Reason)
-}
-
-// ErrCABundleInvalid is returned when the fetched CA bundle cannot be
-// parsed as valid PEM-encoded X.509 certificate data.
-type ErrCABundleInvalid struct {
-	Reason string
-}
-
-func (e ErrCABundleInvalid) Error() string {
-	return fmt.Sprintf("bootstrap: invalid control-plane CA bundle: %s", e.Reason)
-}
-
-// ErrCABundleRequired is returned when an operation that requires a
-// previously captured CA pool is called before fetchControlPlaneCABundle
-// has successfully completed.
-type ErrCABundleRequired struct{}
-
-func (e ErrCABundleRequired) Error() string {
-	return "bootstrap: CP CA bundle required: call fetchControlPlaneCABundle first"
-}
 
 // ErrBMCEnrollFailed is returned when a BMC enrollment POST to the control
 // plane returns a non-2xx status. It is wrapped into BMCEnrollOutcome.Detail

@@ -12,7 +12,10 @@ The platform provides four complementary strategies for secure trust bootstrap, 
 | **noise** | Pre-shared Curve25519 key | Runtime | 9446 |
 | **spki** | Pre-shared cert SPKI hash | Runtime | 8443 (REST) |
 | **embedded** | Embedded CA cert | Build time | N/A |
-| **auto** | Multi-method fallback | Runtime | Multiple |
+
+A scope may list multiple strategies (`strategies: [dane, noise, spki]`);
+the trust resolver attempts each in order and stops at the first success,
+replacing the former standalone `auto` strategy.
 
 ## Architecture
 
@@ -29,8 +32,9 @@ The server publishes and serves CA bundles through multiple channels:
 
 Clients fetch and install the CA bundle before TLS connections:
 
-- **Bootstrap Client**: Map-based strategy dispatch (`fetchDANE`, `fetchNoise`, `fetchSPKI`, `fetchEmbedded`, `fetchAuto`)
-- **Auto Bootstrapper**: Tries multiple methods in priority order, stops at first success
+- **Trust Resolver** (`pkg/trust`): Map-based strategy dispatch keyed by
+  trust class (default / bmc / internal), each class carrying an ordered
+  strategy chain that falls through to the next strategy on failure
 - **System Trust Installation**: Optional write to system certificate store (e.g., `/usr/local/share/ca-certificates/`)
 
 ## Trust Model
@@ -112,27 +116,27 @@ _8443._tcp.server.example.com. 3600 IN TLSA 2 1 1 <SHA256-SPKI-hash>
 
 ### Noise Protocol
 
-- Server-side: the platform's noise listener (a documented server-side
-  carve-out, not a consumer surface) wraps `noiseboot.Server`.
+- Server-side: the platform's noise listener wraps the Noise server
+  from the `quicbaas/sdk/go/xkms/trust/bootstrap` re-export surface.
 - Pattern: Noise_NK (No static client key, server known)
 - Static key generated on server startup
 - Client connects to `<server-addr>`, completes handshake with `<server-static-key>`
 - Returns CA bundle in single message
 
-### Client-side dispatch (DANE / Noise / SPKI / Auto)
+### Client-side dispatch (DANE / Noise / SPKI)
 
-Client-side trust-bootstrap (used by `pkg/bootstrap/client.go` and the
-platform installer / iPXE flow) goes through the canonical
-mode-dispatch library at `xkms/pkg/trust/bootstrap`, reached via the
-type-alias re-export at
+Client-side trust-bootstrap (used by `pkg/trust` and the platform
+installer / iPXE flow) goes through the canonical fetch library at
+`xkms/pkg/trust/bootstrap`, reached via the type-alias re-export at
 `github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/bootstrap`.
 
 The platform repo does NOT import `go-truststrap` directly from
-application code. The canonical dispatch table maps strategy strings
-(`dane`, `noise`, `spki`, `auto`, `embedded`) onto
-`bootstrap.ModeDANE` / `ModeNoise` / `ModeSPKI` / `ModeAuto`. See
-`pkg/bootstrap/client.go::strategyToMode` for the platform-side
-projection.
+application code. The platform-side resolver (`pkg/trust/resolver.go`)
+maps each `trust.Strategy` (`dane`, `noise`, `spki`, `embedded`,
+`ca-file`, `platform-ca`) onto a fetch function; the network-fetching
+strategies call `bootstrap.Fetch()` with the matching
+`bootstrap.Mode`. Ordered chains in scope config subsume the old
+`ModeAuto` fallback.
 
 ## Related Concepts
 

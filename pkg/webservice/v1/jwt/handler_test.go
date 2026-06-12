@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"testing"
 	"time"
 
@@ -535,52 +534,6 @@ func TestCreateSession_Success(t *testing.T) {
 	mockUserService.AssertExpectations(t)
 }
 
-func TestCreateSession_WithOrgID(t *testing.T) {
-	params, ks := testServiceParamsWithXKMS()
-	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
-
-	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
-	assert.Nil(t, err)
-
-	jwtService, err := NewService(context.Background(), params)
-	assert.Nil(t, err)
-
-	logger := logging.DefaultLogger()
-	responseWriter := response.NewResponseWriter(logger, nil)
-	mockUserService := new(MockUserService)
-
-	handler, err := NewRestHandler(logger, responseWriter, jwtService, mockUserService)
-	assert.Nil(t, err)
-
-	// Generate a valid token
-	user := entities.NewUser("test@localhost")
-	user.ID = 12345
-	tokenString, err := jwtService.GenerateToken(user)
-	assert.Nil(t, err)
-
-	// Setup mock to return the user
-	mockUserService.On("Get", mock.Anything, uint64(12345)).Return(user, nil)
-
-	// Create request with the token and org_id parameter
-	req := httptest.NewRequest("GET", "/session", nil)
-	req.Header.Set("Authorization", "Bearer "+tokenString)
-	req.Header.Set("Accept", "application/json")
-	w := httptest.NewRecorder()
-
-	// Setup mux vars to simulate path parameters
-	req = mux.SetURLVars(req, map[string]string{
-		"organization_id": "999",
-	})
-
-	// Call handler
-	session, err := handler.(*RestHandler).CreateSession(w, req)
-	assert.Nil(t, err)
-	assert.NotNil(t, session)
-	assert.Equal(t, uint64(999), session.RequestedOrganizationID())
-
-	mockUserService.AssertExpectations(t)
-}
-
 func TestCreateSession_WithServiceID(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
@@ -625,46 +578,6 @@ func TestCreateSession_WithServiceID(t *testing.T) {
 	assert.Equal(t, uint64(777), session.RequestedServiceID())
 
 	mockUserService.AssertExpectations(t)
-}
-
-func TestCreateSession_InvalidOrgID(t *testing.T) {
-	params, ks := testServiceParamsWithXKMS()
-	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
-
-	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
-	assert.Nil(t, err)
-
-	jwtService, err := NewService(context.Background(), params)
-	assert.Nil(t, err)
-
-	logger := logging.DefaultLogger()
-	responseWriter := response.NewResponseWriter(logger, nil)
-	mockUserService := new(MockUserService)
-
-	handler, err := NewRestHandler(logger, responseWriter, jwtService, mockUserService)
-	assert.Nil(t, err)
-
-	// Generate a valid token
-	user := entities.NewUser("test@localhost")
-	user.ID = 12345
-	tokenString, err := jwtService.GenerateToken(user)
-	assert.Nil(t, err)
-
-	// Create request with the token and invalid org_id parameter
-	req := httptest.NewRequest("GET", "/session", nil)
-	req.Header.Set("Authorization", "Bearer "+tokenString)
-	req.Header.Set("Accept", "application/json")
-	w := httptest.NewRecorder()
-
-	// Setup mux vars with invalid org_id
-	req = mux.SetURLVars(req, map[string]string{
-		"organization_id": "invalid",
-	})
-
-	// Call handler
-	session, err := handler.(*RestHandler).CreateSession(w, req)
-	assert.Equal(t, ErrInvalidOrganiztionID, err)
-	assert.Nil(t, session)
 }
 
 func TestCreateSession_UserServiceError(t *testing.T) {
@@ -778,70 +691,6 @@ func TestCreateSession_ParseServiceIDError(t *testing.T) {
 	assert.NotNil(t, session)
 	// service_id parsing errors are ignored, so it should be 0
 	assert.Equal(t, uint64(0), session.RequestedServiceID())
-
-	mockUserService.AssertExpectations(t)
-}
-
-func TestTokenClaims_Organizations(t *testing.T) {
-	claims := &TokenClaims{
-		Organizations: []uint64{1, 2, 3},
-		Services:      []uint64{4, 5},
-		UserID:        12345,
-	}
-
-	assert.Equal(t, []uint64{1, 2, 3}, claims.Organizations)
-	assert.Equal(t, []uint64{4, 5}, claims.Services)
-	assert.Equal(t, uint64(12345), claims.UserID)
-}
-
-func TestErrInvalidOrganiztionID(t *testing.T) {
-	err := ErrInvalidOrganiztionID
-	assert.NotNil(t, err)
-	assert.Equal(t, "rest/jwt: invalid organization id", err.Error())
-}
-
-func TestCreateSession_ParseUintEdgeCases(t *testing.T) {
-	params, ks := testServiceParamsWithXKMS()
-	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
-
-	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
-	assert.Nil(t, err)
-
-	jwtService, err := NewService(context.Background(), params)
-	assert.Nil(t, err)
-
-	logger := logging.DefaultLogger()
-	responseWriter := response.NewResponseWriter(logger, nil)
-	mockUserService := new(MockUserService)
-
-	handler, err := NewRestHandler(logger, responseWriter, jwtService, mockUserService)
-	assert.Nil(t, err)
-
-	// Generate a valid token
-	user := entities.NewUser("test@localhost")
-	user.ID = 12345
-	tokenString, err := jwtService.GenerateToken(user)
-	assert.Nil(t, err)
-
-	// Setup mock to return the user
-	mockUserService.On("Get", mock.Anything, uint64(12345)).Return(user, nil)
-
-	// Test with maximum uint64 value
-	req := httptest.NewRequest("GET", "/session", nil)
-	req.Header.Set("Authorization", "Bearer "+tokenString)
-	req.Header.Set("Accept", "application/json")
-	w := httptest.NewRecorder()
-
-	maxUint64 := strconv.FormatUint(^uint64(0), 10)
-	req = mux.SetURLVars(req, map[string]string{
-		"organization_id": maxUint64,
-	})
-
-	// Call handler
-	session, err := handler.(*RestHandler).CreateSession(w, req)
-	assert.Nil(t, err)
-	assert.NotNil(t, session)
-	assert.Equal(t, ^uint64(0), session.RequestedOrganizationID())
 
 	mockUserService.AssertExpectations(t)
 }

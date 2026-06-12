@@ -414,13 +414,10 @@ type App struct {
 	// server and DANE TLSA auto-publication.
 	BootstrapConfig *bootstrap.Config `yaml:"bootstrap,omitempty" json:"bootstrap,omitempty" mapstructure:"bootstrap"`
 
-	// TrustConfig configures client-side trust resolution per class
-	// (default / bmc / internal). It replaces the deleted bootstrap-client
-	// key; BootstrapTrust and TrustResolver both consume it.
+	// TrustConfig configures the platform trust resolver: per-class
+	// (default, bmc, internal) ordered strategy chains for establishing
+	// TLS trust, including the client-side CA bundle fetch at first boot.
 	TrustConfig *trust.Config `yaml:"trust,omitempty" json:"trust,omitempty" mapstructure:"trust"`
-
-	// trustResolver is the lazily-built runtime trust resolver (not serialized).
-	trustResolver trust.Resolver `yaml:"-" json:"-" mapstructure:"-"`
 
 	// danePublisher is the runtime DANE TLSA publisher (not serialized).
 	danePublisher *bootstrap.DANEPublisher
@@ -430,6 +427,12 @@ type App struct {
 
 	// ipamAllocator is the runtime IPAM allocator (not serialized).
 	ipamAllocator ipam.Allocator
+
+	// trustResolver is the lazily-constructed trust Resolver built from
+	// TrustConfig. It is cached here so EnrollBMC and BMCTLSProvider can
+	// use the same instance without rebuilding the resolver on each call.
+	// Access via app.TrustResolver().
+	trustResolver trust.Resolver
 }
 
 type AppInitParams struct {
@@ -2130,7 +2133,7 @@ func (app *App) ProvisionPlatform(
 			if err := app.InitACMEClient(ctx, true); err != nil {
 				app.Logger.Warn("ACME client init failed, attempting trust bootstrap",
 					"error", err)
-				if bsErr := app.BootstrapTrust(context.Background()); bsErr != nil {
+				if bsErr := app.BootstrapTrust(ctx); bsErr != nil {
 					app.Logger.Error(bsErr, "Trust bootstrap also failed")
 					return nil, fmt.Errorf("ACME client init failed: %w (bootstrap: %v)", err, bsErr)
 				}
@@ -2174,8 +2177,8 @@ func (app *App) ProvisionPlatform(
 			}
 
 			// Create context with timeout for enrollment
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			defer cancel()
+			enrollCtx, cancelEnroll := context.WithTimeout(ctx, 5*time.Minute)
+			defer cancelEnroll()
 			// Convert YAML enrollment config to runtime enrollment config
 			// Wrap go-xkms's TPM with the ACME client adapter
 
@@ -2193,7 +2196,7 @@ func (app *App) ProvisionPlatform(
 				TPMModule:  trustedca.NewACMEXKMSTPMAdapter(app.TPM),
 				CommonName: app.Hostname,
 			}
-			enrollResult, err := app.ACMEClient.EnrollDevice(ctx, enrollConfig)
+			enrollResult, err := app.ACMEClient.EnrollDevice(enrollCtx, enrollConfig)
 			if err != nil {
 				return nil, err
 			}
@@ -3186,7 +3189,7 @@ func (app *App) issueWebServiceCertificate(ctx context.Context, wsName string, w
 			if err := app.InitACMEClient(ctx, true); err != nil {
 				app.Logger.Warn("ACME client init failed, attempting trust bootstrap",
 					"webservice", wsName, "error", err)
-				if bsErr := app.BootstrapTrust(context.Background()); bsErr != nil {
+				if bsErr := app.BootstrapTrust(ctx); bsErr != nil {
 					app.Logger.Error(bsErr, "Trust bootstrap also failed", "webservice", wsName)
 					return fmt.Errorf("failed to initialize ACME client for webservice %s: %w (bootstrap: %v)", wsName, err, bsErr)
 				}
@@ -3222,7 +3225,7 @@ func (app *App) issueWebServiceCertificate(ctx context.Context, wsName string, w
 			ChallengeType: challengeType,
 			CSR:           csrDER,
 		}
-		cert, err := app.ACMEClient.RequestCertificate(context.Background(), acmeCertRequest)
+		cert, err := app.ACMEClient.RequestCertificate(ctx, acmeCertRequest)
 		if err != nil {
 			app.Logger.Error(err, "Failed to request certificate via ACME",
 				"webservice", wsName, "cn", keyAttrs.CN, "challenge_type", challengeType)
@@ -3286,7 +3289,7 @@ func (app *App) issueWebServiceCertificate(ctx context.Context, wsName string, w
 			} else if crossSigner, err := app.NewACMECrossSigner(wsConfig.Certificate.ACME.CrossSign, true); err != nil {
 				app.Logger.Warn("cross-sign skipped — ACME cross-signer init failed (non-fatal)",
 					"webservice", wsName, "cn", keyAttrs.CN, "err", err.Error())
-			} else if xsignedCert, err := crossSigner.CrossSign(context.Background(), csrDER, localCert.Certificate.Raw); err != nil {
+			} else if xsignedCert, err := crossSigner.CrossSign(ctx, csrDER, localCert.Certificate.Raw); err != nil {
 				app.Logger.Warn("cross-sign skipped — public ACME cross-sign failed (non-fatal; will retry at renewal)",
 					"webservice", wsName, "cn", keyAttrs.CN, "err", err.Error())
 			} else {
@@ -3405,8 +3408,8 @@ func buildWebServiceCertTarget(ctx context.Context, wsName string, wsConfig *v1.
 			}
 			return certs[0], nil
 		},
-		Reissue: func(context.Context) error {
-			return app.issueWebServiceCertificate(ctx, wsName, wsConfig, keyAttrs)
+		Reissue: func(reissueCtx context.Context) error {
+			return app.issueWebServiceCertificate(reissueCtx, wsName, wsConfig, keyAttrs)
 		},
 	}, nil
 }
@@ -3911,22 +3914,29 @@ func (app *App) BootstrapTrust(ctx context.Context) error {
 		return nil
 	}
 
-	if scopeIsEmbeddedOnly(scope) {
-		app.Logger.Debug("Default trust strategy is embedded, skipping runtime trust fetch")
+	if len(scope.Strategies) == 1 && scope.Strategies[0] == trust.StrategyEmbedded {
+		app.Logger.Debug("Trust strategy is embedded, skipping runtime trust fetch")
 		return nil
 	}
 
-	// Populate the DANE DNS server from the platform-wide resolver when not
-	// explicitly set.
-	if scope.DANE != nil && scope.DANE.DNSServer == "" {
+	// Populate the DANE DNS server from the platform-wide resolver when
+	// not explicitly set.
+	if scope.HasStrategy(trust.StrategyDANE) && (scope.DANE == nil || scope.DANE.DNSServer == "") {
 		if server := app.PrimaryDNSServer(""); server != "" {
-			app.Logger.Info("Bootstrap using platform DNS resolver", "server", server)
+			app.Logger.Info("Trust bootstrap using platform DNS resolver", "server", server)
+			if scope.DANE == nil {
+				scope.DANE = &trust.DANEConfig{}
+			}
 			scope.DANE.DNSServer = server
 		}
 	}
 
+	// If any class chain lists the tofu strategy, construct a
+	// ParameterStore-backed pin store and wire a WARN-level confirm hook.
+	// If tofu is needed but the SDK client is not yet available, return
+	// ErrBootstrapTOFUNoSDK — the daemon must not silently skip the strategy.
 	resolverOpts := app.buildTOFUResolverOpts()
-	if trustConfigNeedsTOFU(app.TrustConfig) && resolverOpts == nil {
+	if resolverOpts == nil && trustConfigNeedsTOFU(app.TrustConfig) {
 		return ErrBootstrapTOFUNoSDK{}
 	}
 
@@ -3942,7 +3952,7 @@ func (app *App) BootstrapTrust(ctx context.Context) error {
 	}
 
 	if len(bundlePEM) == 0 {
-		app.Logger.Warn("Bootstrap returned empty CA bundle, skipping installation")
+		app.Logger.Warn("Trust bootstrap returned empty CA bundle, skipping installation")
 		return nil
 	}
 
@@ -3955,4 +3965,66 @@ func (app *App) BootstrapTrust(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// trustConfigNeedsTOFU reports whether any class chain in cfg lists the tofu
+// strategy. Returns false when cfg is nil.
+func trustConfigNeedsTOFU(cfg *trust.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, class := range []trust.Class{trust.ClassDefault, trust.ClassBMC, trust.ClassInternal} {
+		if s := cfg.Scope(class); s != nil && s.HasStrategy(trust.StrategyTOFU) {
+			return true
+		}
+	}
+	return false
+}
+
+// buildTOFUResolverOpts constructs the trust.Option slice needed when any
+// class chain lists the tofu strategy. The options carry a
+// ParameterStore-backed pin store (Raft-replicated when clustered) and a
+// confirm hook that logs every first-use pin at WARN level so operators can
+// audit first-contact events.
+//
+// Returns nil when tofu is not needed (caller should skip) or when the
+// Factory or SDKClient is not yet available (caller should return
+// ErrBootstrapTOFUNoSDK after calling trustConfigNeedsTOFU).
+func (app *App) buildTOFUResolverOpts() []trust.Option {
+	if !trustConfigNeedsTOFU(app.TrustConfig) {
+		return nil
+	}
+
+	dbFactory, ok := app.daoFactory.(*quicbaas.Factory)
+	if !ok || dbFactory == nil {
+		return nil
+	}
+
+	sdkClient := dbFactory.SDKClient()
+	if sdkClient == nil {
+		return nil
+	}
+
+	pinStore, err := quicbaas.NewTOFUPinStore(sdkClient)
+	if err != nil {
+		app.Logger.Warn("Failed to create TOFU pin store; tofu strategy will be unavailable", "error", err)
+		return nil
+	}
+
+	logger := app.Logger
+	confirmFn := func(_ context.Context, pin *trust.TOFUPin) error {
+		logger.Warn("TOFU: first-use pin captured — verify this host manually",
+			"host", pin.Host,
+			"port", pin.Port,
+			"spki_sha256", pin.SPKISHA256,
+			"cert_fingerprint", pin.CertFingerprint,
+			"source", pin.Source,
+		)
+		return nil
+	}
+
+	return []trust.Option{
+		trust.WithTOFUPinStore(pinStore),
+		trust.WithTOFUConfirmFunc(confirmFn),
+	}
 }

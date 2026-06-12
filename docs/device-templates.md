@@ -266,6 +266,84 @@ With BMC credentials in place, the platform can:
 - Trigger self-healing by automatically rebuilding failed nodes from
   their stored deployment profile.
 
+## BMC Trust Chain (trust.bmc)
+
+Every template that ships a `bmc:` section also ships a `trust:` section with
+a `bmc:` class scope. The `trust.bmc` class configures the TLS trust chain used
+when the platform connects to BMC endpoints (Redfish, IPMI-over-TLS, vendor
+CGI endpoints).
+
+### Chain ordering
+
+All shipped templates use the canonical Phase 3 BMC trust chain:
+
+```yaml
+trust:
+  bmc:
+    # BMC endpoint trust chain. First strategy to succeed wins.
+    # tofu is first-contact only — REMOVE it once DANE TLSA records for
+    # <hostname>-bmc.<internal-zone> are published (bmc enroll does this).
+    strategies: [dane, spki, ca-file, tofu]
+    dane:
+      dns-server: "127.0.0.1:8053"   # local or CP public DNS
+```
+
+Strategies are attempted left-to-right; the first that succeeds is used:
+
+| Strategy | When it succeeds |
+|----------|-----------------|
+| `dane` | DNSSEC-validated TLSA record exists at `_443._tcp.<hostname>-bmc.<internal-zone>` |
+| `spki` | A pinned SPKI SHA-256 hash matches the BMC's leaf certificate |
+| `ca-file` | The BMC certificate chains to the PEM bundle at `trust.bmc.ca-file` |
+| `tofu` | First connection: captures and pins the BMC leaf SPKI. Subsequent connections verify the stored pin. |
+
+### TLSA record naming convention
+
+BMC TLSA records are published at:
+
+```
+_443._tcp.<hostname>-bmc.<internal-zone>
+```
+
+For example, if the node hostname is `lab-node-2` and the internal zone is
+`example.internal`, the TLSA record lives at:
+
+```
+_443._tcp.lab-node-2-bmc.example.internal
+```
+
+The enroll ceremony and the AutoCertManager rotation hook publish this record
+automatically when BMC enrollment completes.
+
+### Explicit-TOFU rule
+
+TOFU is **never an implicit fallback**. It appears in the template chain
+explicitly, with a comment instructing operators to remove it once DANE TLSA
+records are live. The template comment reads:
+
+> tofu is first-contact only — REMOVE it once DANE TLSA records for
+> `<hostname>-bmc.<internal-zone>` are published (bmc enroll does this).
+
+Environments where DANE TLSA records are already published can remove `tofu`
+from the strategies list in their override file:
+
+```yaml
+trust:
+  bmc:
+    strategies: [dane, spki, ca-file]
+```
+
+### Deprecated fields
+
+The following `bmc:` fields that provided ad-hoc TLS configuration are
+deprecated and will be removed in a future release. The `trust.bmc` chain
+supersedes them:
+
+| Deprecated field | Replacement |
+|-----------------|-------------|
+| `bmc.skip-tls-verify` | Remove the field; use `trust.bmc` strategies instead. Never skip TLS verification. |
+| `bmc.ca-cert-path` | Move the path to `trust.bmc.ca-file`; add `ca-file` to the strategies chain. |
+
 ## Platform PINs
 
 Templates include `platform.so-pin` and `platform.user-pin` fields using

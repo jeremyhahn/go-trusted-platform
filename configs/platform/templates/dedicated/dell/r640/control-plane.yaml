@@ -332,6 +332,25 @@ bootstrap:
     read-timeout: 10s
     write-timeout: 10s
 
+# =============================================================================
+# TRUST CONFIGURATION (BMC Trust Bootstrap)
+# =============================================================================
+
+# BMC endpoint trust chain (Phase 3 — BMC TLS lifecycle). Each strategy is
+# attempted in order; the first to succeed is used.
+# NOTE: dane.dns-server is optional when dns.resolver is configured. The CP
+# runs its own DNS on 127.0.0.1:8053 which is the platform-wide default.
+# tofu is first-contact only — REMOVE it once DANE TLSA records for
+# <hostname>-bmc.<internal-zone> are published (bmc enroll does this).
+trust:
+  bmc:
+    # BMC endpoint trust chain. First strategy to succeed wins.
+    # tofu is first-contact only — REMOVE it once DANE TLSA records for
+    # <hostname>-bmc.<internal-zone> are published (bmc enroll does this).
+    strategies: [dane, spki, ca-file, tofu]
+    dane:
+      dns-server: "127.0.0.1:8053"   # CP serves its own public DNS
+
 bmc:
   address: 198.18.0.1
   port: 623
@@ -722,7 +741,7 @@ webservices:
     - pattern: "^/test.html$"
       target: /swagger/
     jwt:
-      expiration: 525960
+      expiration: 60
       issuer: trusted-platform
     webauthn:
       display-name: Trusted Platform
@@ -807,7 +826,7 @@ webservices:
         - enroll-8080
         - enroll-8081
     jwt:
-      expiration: 525960
+      expiration: 60
       issuer: trusted-platform
     cors:
       allowed-origins:

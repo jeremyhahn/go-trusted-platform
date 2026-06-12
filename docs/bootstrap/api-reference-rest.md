@@ -94,34 +94,38 @@ curl 'https://server.example.com:8443/api/v1/ca/bootstrap?store_type=software' \
   -o ca-bundle-software.pem
 ```
 
-### Insecure (Testing Only)
+> Do not fetch this endpoint with TLS verification disabled (`curl -k`).
+> The whole point of the trust-bootstrap strategies (DANE, Noise, SPKI)
+> is to verify the bundle without pre-existing CA trust; use
+> `platformctl bootstrap trust` instead.
 
-```bash
-# Skip TLS verification - NOT SECURE
-curl -k https://server.example.com:8443/api/v1/ca/bootstrap
-```
+## Integration with Client Trust Bootstrap
 
-## Integration with Client Bootstrap
-
-The platform's bootstrap client uses this endpoint via configured strategy:
+The platform's trust resolver uses this endpoint via the configured
+strategy chain:
 
 ```go
-// Client fetches bundle using DANE verification
-client, err := bootstrap.NewClient(&bootstrap.ClientConfig{
-    Strategy:         bootstrap.StrategyDANE,
-    ServerURL:        "https://server.example.com:8443",
-    DNSServer:        "8.8.8.8:53",
-    BundlePath:       "/api/v1/ca/bootstrap",
-    PerMethodTimeout: 15 * time.Second,
+// Resolver fetches the bundle using DANE verification
+resolver, err := trust.NewResolver(&trust.Config{
+    Default: &trust.ScopeConfig{
+        Strategies:       []trust.Strategy{trust.StrategyDANE},
+        ServerURL:        "https://server.example.com:8443",
+        DANE:             &trust.DANEConfig{DNSServer: "8.8.8.8:53"},
+        BundlePath:       "/api/v1/ca/bootstrap",
+        PerMethodTimeout: 15 * time.Second,
+    },
 }, logger)
+if err != nil {
+    log.Fatal(err)
+}
 
-bundlePEM, err := client.FetchCABundle(ctx)
+bundlePEM, err := resolver.CABundlePEM(ctx, trust.ClassDefault)
 if err != nil {
     log.Fatal(err)
 }
 
 // Optionally install to system trust store
-err = client.InstallToSystemTrust(bundlePEM, "/usr/local/share/ca-certificates/platform-ca.crt")
+err = trust.InstallToSystemTrust(bundlePEM, "/usr/local/share/ca-certificates/platform-ca.crt")
 ```
 
 ## Server Configuration
@@ -148,18 +152,18 @@ webservices:
 
 ## Client Configuration
 
-Configure the bootstrap client to use this endpoint:
+Configure the client trust resolver to use this endpoint:
 
 ```yaml
 trust:
   default:
     strategies: [dane]
     server-url: "https://server.example.com:8443"
-    dane:
-      dns-server: "8.8.8.8:53"
     bundle-path: "/api/v1/ca/bootstrap"
     per-method-timeout: 15s
     install-to-system-trust: true
+    dane:
+      dns-server: "8.8.8.8:53"
 ```
 
 ## Implementation Notes

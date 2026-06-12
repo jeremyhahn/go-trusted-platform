@@ -40,6 +40,7 @@ type MutualTLSClient struct {
 // is verified against the platform internal CA pool; when nil the operating
 // system trust store is used.
 func NewMutalTLSClient(
+	ctx context.Context,
 	logger *logging.Logger,
 	ca trustedca.CACertificateAuthority,
 	attrs *xkmssdk.KeyAttributes,

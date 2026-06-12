@@ -570,7 +570,7 @@ webservices:
     - pattern: "^/test.html$"
       target: /swagger/
     jwt:
-      expiration: 525960
+      expiration: 60
       issuer: trusted-platform
     webauthn:
       display-name: Trusted Platform
@@ -651,7 +651,7 @@ webservices:
         - enroll-8080
         - enroll-8081
     jwt:
-      expiration: 525960
+      expiration: 60
       issuer: trusted-platform
     cors:
       allowed-origins:

@@ -257,7 +257,7 @@ webservices:
         - enroll-8081         # Enrollment on port 8081
 
     jwt:
-      expiration: 525960      # Token expiration in minutes
+      expiration: 60      # Token expiration in minutes (1 hour default)
       issuer: trusted-platform
 
     cors:

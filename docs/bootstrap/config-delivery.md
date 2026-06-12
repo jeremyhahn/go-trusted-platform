@@ -185,6 +185,25 @@ state machine. Config-delivery-relevant phases:
 - For each MAC of each node:
   - PUT merged YAML to `/config/mac/<mac>/installer.yaml`
   - PUT hostname to `/config/mac/<mac>/hostname`
+- For client nodes (non-control-plane), additionally stage trust
+  material captured from the control plane:
+  - PUT CA bundle PEM to `/config/mac/<mac>/ca-bundle.pem` (installer
+    adds it to the OS trust store, unblocking first-boot ACME
+    enrollment against the private CA)
+  - PUT SPKI pin to `/config/mac/<mac>/bootstrap-spki-pin` (fallback
+    for the platform's SPKI bootstrap-trust strategy when bundle
+    delivery is unavailable)
+
+  The CA bundle fetch uses **capture-then-verify**, not blind TOFU:
+  the orchestrator captures the TLS chain presented by the control
+  plane during the handshake and, after reading the bundle, verifies
+  that chain against the bundle itself (anchored at the CP address it
+  dialed). A bundle whose serving chain does not verify against it is
+  rejected and never staged. The SPKI pin capture hard-requires the
+  verified CA pool from the bundle fetch — if the bundle fetch failed,
+  no pin is captured (the node falls back to its remaining
+  trust-bootstrap strategies) rather than pinning an unverified
+  endpoint.
 
 **Phase 5 — Boot**
 - Stage ISO to SMB share

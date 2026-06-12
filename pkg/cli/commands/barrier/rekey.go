@@ -20,6 +20,10 @@
 // Per the canonical PIN matrix:
 //   - --so-pin      is optional (Security Officer PIN verified against the canonical PINBackend).
 //   - --threshold / --total are paired (both supplied or both omitted).
+//
+// The rekey is share-free: new shares are sealed to enrolled Security
+// Officers and claimed via the share-claim flow, so no passphrase or
+// share material crosses the wire.
 package barrier
 
 import (

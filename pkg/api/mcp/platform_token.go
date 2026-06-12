@@ -32,13 +32,11 @@ import (
 // for the HTTP transport); DPoP binding follows the HTTP path's optional rule
 // and is supplied via dpopProof when available.
 type ClaimsAuthManager interface {
-	// AuthorizeToken validates the bearer token (binding the DPoP proof when a
-	// non-empty proof is supplied) and returns the projected AuthorizedContext,
-	// or a typed error.
-	// requiredPerm is the qrdb-canonical "resource:action" scope to enforce
-	// during validation; the checker passes "" and enforces the tool's scope
-	// post-hoc against the AuthorizedContext so denials map to
-	// AuthErrorPermissionDenied rather than AuthErrorInvalidToken.
+	// AuthorizeToken runs the full validator pipeline (signature/iss/aud/exp,
+	// DPoP when sender-constrained, offline scope enforcement of requiredPerm,
+	// and per-tenant online liveness) and returns the projected
+	// AuthorizedContext. When requiredPerm is empty the scope check is skipped
+	// but liveness is still enforced.
 	AuthorizeToken(ctx context.Context, token, requiredPerm, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error)
 }
 

@@ -97,13 +97,11 @@ func NewSeeder(params SeederParams) *Seeder {
 		logger = slog.Default()
 	}
 
-	tlsCfg := &tls.Config{
-		MinVersion: tls.VersionTLS12,
-	}
-	if params.CPCAPool != nil {
-		tlsCfg.RootCAs = params.CPCAPool
-	} else {
-		logger.Warn("bootstrap: seeder has no verified CA pool; using system roots (ensure the control plane CA is trusted system-wide)")
+	if params.CPCAPool == nil {
+		// CA pool not provided; system pool will be used. This is expected
+		// on the very first bootstrap run before the CP CA is in the system
+		// trust store. Log a warning so operators can provision the CA.
+		logger.Warn("bootstrap: seeder TLS using system pool (CP CA may not be trusted yet)")
 	}
 
 	return &Seeder{
@@ -121,7 +119,10 @@ func NewSeeder(params SeederParams) *Seeder {
 					Timeout:  10 * time.Second,
 					Resolver: &net.Resolver{PreferGo: true},
 				}).DialContext,
-				TLSClientConfig: tlsCfg,
+				TLSClientConfig: &tls.Config{
+					MinVersion: tls.VersionTLS13,
+					RootCAs:    params.CPCAPool, // nil → system pool
+				},
 			},
 		},
 	}

@@ -42,7 +42,8 @@ func newInitShamirCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
   --passphrase   Required. Wrapping passphrase for the master key.
   --threshold    Required. M — number of shares needed to unseal (>= 2).
   --total        Required. N — total shares to generate (>= threshold).
-  --so-pin       Optional. Sets the Security Officer PIN on the canonical PINBackend.
+  --so-pin       Optional. Sets the Security Officer PIN on the canonical
+                 PINBackend. Requires --user-pin (dual-control).
   --user-pin     Optional. Sets the user PIN. Requires --so-pin.
 
 Returns the freshly-generated shares to stdout; they MUST be captured
@@ -58,7 +59,7 @@ and distributed to custodians before the barrier is sealed.`,
 	cmd.Flags().IntVar(&f.total, "total", 0,
 		"Shamir total N — total shares to generate (required, >= threshold)")
 	cmd.Flags().StringVar(&f.soPin, "so-pin", "",
-		"Security Officer PIN (canonical PINBackend)")
+		"Security Officer PIN (requires --user-pin)")
 	cmd.Flags().StringVar(&f.userPin, "user-pin", "",
 		"User PIN (requires --so-pin)")
 	return cmd
@@ -77,6 +78,9 @@ func validateInitShamirFlags(f *initShamirFlags) error {
 	}
 	if f.userPin != "" && f.soPin == "" {
 		return ErrUserPinRequiresSOPin{}
+	}
+	if f.soPin != "" && f.userPin == "" {
+		return ErrSOPinRequiresUserPin{}
 	}
 	return nil
 }

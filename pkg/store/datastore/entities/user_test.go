@@ -33,7 +33,6 @@ func TestNewUser(t *testing.T) {
 		assert.Empty(t, user.Roles)
 		assert.Empty(t, user.DisplayName)
 		assert.Empty(t, user.Password)
-		assert.Empty(t, user.OrganizationRefs)
 		assert.Empty(t, user.ServiceRefs)
 	})
 
@@ -133,18 +132,6 @@ func TestUser_KeyValueEntity(t *testing.T) {
 	assert.Equal(t, newID, entity.EntityID())
 }
 
-func TestUser_OrganizationRefs(t *testing.T) {
-	user := NewUser("test@example.com")
-
-	assert.Empty(t, user.OrganizationRefs)
-
-	user.OrganizationRefs = []uint64{1, 2, 3}
-	assert.Len(t, user.OrganizationRefs, 3)
-	assert.Contains(t, user.OrganizationRefs, uint64(1))
-	assert.Contains(t, user.OrganizationRefs, uint64(2))
-	assert.Contains(t, user.OrganizationRefs, uint64(3))
-}
-
 func TestUser_ServiceRefs(t *testing.T) {
 	user := NewUser("test@example.com")
 
@@ -163,7 +150,6 @@ func TestUser_CompleteUserProfile(t *testing.T) {
 
 	user.DisplayName = "System Administrator"
 	user.Password = "hashed_password"
-	user.OrganizationRefs = []uint64{1, 2}
 	user.ServiceRefs = []uint64{10, 20, 30}
 
 	// Add roles
@@ -174,7 +160,6 @@ func TestUser_CompleteUserProfile(t *testing.T) {
 	assert.Equal(t, "admin@example.com", user.Email)
 	assert.Equal(t, "System Administrator", user.DisplayName)
 	assert.Equal(t, "hashed_password", user.Password)
-	assert.Len(t, user.OrganizationRefs, 2)
 	assert.Len(t, user.ServiceRefs, 3)
 	assert.Len(t, user.Roles, 2)
 	assert.True(t, user.HasRole("admin"))

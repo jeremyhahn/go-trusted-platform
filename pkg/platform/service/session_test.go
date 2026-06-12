@@ -40,15 +40,11 @@ func TestCreateSession(t *testing.T) {
 		ID:    1,
 		Email: "test@example.com",
 	}
-	orgClaims := []uint64{1, 2, 3}
 	serviceClaims := []uint64{10, 20}
-	requestedOrgID := uint64(2)
 	requestedServiceID := uint64(10)
 
 	session := CreateSession(
 		logger,
-		orgClaims,
-		requestedOrgID,
 		requestedServiceID,
 		serviceClaims,
 		user,
@@ -57,7 +53,6 @@ func TestCreateSession(t *testing.T) {
 	require.NotNil(t, session)
 	assert.Equal(t, logger, session.Logger())
 	assert.Equal(t, user, session.User())
-	assert.Equal(t, requestedOrgID, session.RequestedOrganizationID())
 	assert.Equal(t, requestedServiceID, session.RequestedServiceID())
 	assert.False(t, session.IsSystemSession())
 }
@@ -79,45 +74,12 @@ func TestServiceSession_Logger(t *testing.T) {
 	assert.Equal(t, logger, session.Logger())
 }
 
-func TestServiceSession_RequestedOrganizationID(t *testing.T) {
-	session := &ServiceSession{
-		requestedOrgID: 123,
-	}
-
-	assert.Equal(t, uint64(123), session.RequestedOrganizationID())
-}
-
 func TestServiceSession_RequestedServiceID(t *testing.T) {
 	session := &ServiceSession{
 		requestedServiceID: 456,
 	}
 
 	assert.Equal(t, uint64(456), session.RequestedServiceID())
-}
-
-func TestServiceSession_IsMemberOfOrganization(t *testing.T) {
-	session := &ServiceSession{
-		orgClaims: []uint64{1, 2, 3, 5, 8},
-	}
-
-	tests := []struct {
-		name   string
-		orgID  uint64
-		expect bool
-	}{
-		{"Member of org 1", 1, true},
-		{"Member of org 3", 3, true},
-		{"Member of org 8", 8, true},
-		{"Not member of org 4", 4, false},
-		{"Not member of org 10", 10, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := session.IsMemberOfOrganization(tt.orgID)
-			assert.Equal(t, tt.expect, result)
-		})
-	}
 }
 
 func TestServiceSession_User(t *testing.T) {
@@ -220,42 +182,22 @@ func TestServiceSession_FullWorkflow(t *testing.T) {
 		},
 	}
 
-	orgClaims := []uint64{10, 20, 30}
 	serviceClaims := []uint64{100, 200}
 
 	session := CreateSession(
 		logger,
-		orgClaims,
-		20,  // requested org
 		100, // requested service
 		serviceClaims,
 		user,
 	)
 
 	// Verify session state
-	assert.Equal(t, uint64(20), session.RequestedOrganizationID())
 	assert.Equal(t, uint64(100), session.RequestedServiceID())
-
-	// Type assert to access IsMemberOfOrganization
-	serviceSession := session.(*ServiceSession)
-	assert.True(t, serviceSession.IsMemberOfOrganization(10))
-	assert.True(t, serviceSession.IsMemberOfOrganization(20))
-	assert.True(t, serviceSession.IsMemberOfOrganization(30))
-	assert.False(t, serviceSession.IsMemberOfOrganization(40))
 	assert.Equal(t, user, session.User())
 	assert.False(t, session.IsSystemSession())
 
 	// Close session
 	session.Close()
-}
-
-func TestServiceSession_EmptyOrgClaims(t *testing.T) {
-	session := &ServiceSession{
-		orgClaims: []uint64{},
-	}
-
-	assert.False(t, session.IsMemberOfOrganization(1))
-	assert.False(t, session.IsMemberOfOrganization(999))
 }
 
 func TestServiceSession_NilUser(t *testing.T) {

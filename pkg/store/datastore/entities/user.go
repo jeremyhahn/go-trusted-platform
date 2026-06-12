@@ -24,18 +24,17 @@ import (
 // caches them here. The platform User retains tenant ownership, roles,
 // and the foreign-key handles consumed by the rest of the system.
 type User struct {
-	ID               uint64    `yaml:"id" json:"id"`
-	TenantID         string    `yaml:"tenant-id" json:"tenant_id"`
-	IsTenantOwner    bool      `yaml:"is-tenant-owner" json:"is_tenant_owner"`
-	DisplayName      string    `yaml:"display" json:"display"`
-	Email            string    `yaml:"email" json:"email"`
-	OrganizationRefs []uint64  `yaml:"orgs" json:"orgs"`
-	Password         string    `yaml:"password" json:"password" secret:"true"`
-	Roles            []*Role   `yaml:"roles" json:"roles"`
-	ServiceRefs      []uint64  `yaml:"services" json:"services"`
-	CreatedAt        time.Time `yaml:"created-at" json:"created_at"`
-	UpdatedAt        time.Time `yaml:"updated-at" json:"updated_at"`
-	KeyValueEntity   `yaml:"-" json:"-"`
+	ID             uint64    `yaml:"id" json:"id"`
+	TenantID       string    `yaml:"tenant-id" json:"tenant_id"`
+	IsTenantOwner  bool      `yaml:"is-tenant-owner" json:"is_tenant_owner"`
+	DisplayName    string    `yaml:"display" json:"display"`
+	Email          string    `yaml:"email" json:"email"`
+	Password       string    `yaml:"password" json:"password" secret:"true"`
+	Roles          []*Role   `yaml:"roles" json:"roles"`
+	ServiceRefs    []uint64  `yaml:"services" json:"services"`
+	CreatedAt      time.Time `yaml:"created-at" json:"created_at"`
+	UpdatedAt      time.Time `yaml:"updated-at" json:"updated_at"`
+	KeyValueEntity `yaml:"-" json:"-"`
 }
 
 // NewUser constructs a User with the email-derived ID and zero-valued

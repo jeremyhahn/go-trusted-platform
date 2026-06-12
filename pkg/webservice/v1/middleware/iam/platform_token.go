@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/jeremyhahn/go-quicbaas/pkg/iam/dpop"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 
@@ -33,9 +32,18 @@ const DPoPHeader = "DPoP"
 // the middleware depends on. Defining it as an interface keeps the middleware
 // unit-testable without standing up a JWKS HTTP source while still binding to
 // the real validator in production.
+//
+// The middleware drives the canonical Validate entry point (the validator
+// pipeline WITHOUT a scope check): it verifies signature/iss/aud/exp, binds the
+// DPoP proof when the token is sender-constrained, and enforces the per-tenant
+// online liveness/revocation check. Per-route scope requirements are applied
+// afterwards by the RequireScope / RequireAnyScope / RequireRole route guards
+// against the stored AuthorizedContext, because the required scope is not
+// knowable at middleware time. This two-layer design (validate-then-route-guard)
+// is intentional. The validator owns its DPoP replay cache, so the middleware
+// holds none.
 type platformTokenValidator interface {
-	ValidatePlatformToken(ctx context.Context, token string) (*platformtoken.Claims, error)
-	ValidateWithDPoP(ctx context.Context, token, dpopProof, htm, htu string, replayCache dpop.ReplayCache) (*platformtoken.Claims, error)
+	Validate(ctx context.Context, token, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error)
 }
 
 // PlatformTokenConfig configures the inbound platform-token middleware. It is
@@ -62,7 +70,6 @@ type PlatformTokenMiddleware struct {
 	responseWriter response.HttpWriter
 	validator      platformTokenValidator
 	config         PlatformTokenConfig
-	replayCache    dpop.ReplayCache
 }
 
 // NewPlatformTokenMiddleware constructs a PlatformTokenMiddleware from a fully
@@ -91,7 +98,6 @@ func NewPlatformTokenMiddleware(
 		responseWriter: responseWriter,
 		validator:      validator,
 		config:         config,
-		replayCache:    dpop.NewMemoryReplayCache(dpop.SystemClock{}),
 	}, nil
 }
 
@@ -130,21 +136,22 @@ func (m *PlatformTokenMiddleware) authorize(r *http.Request) (*platformtoken.Aut
 
 	dpopProof := strings.TrimSpace(r.Header.Get(DPoPHeader))
 
-	var claims *platformtoken.Claims
-	if dpopProof != "" {
-		claims, err = m.validator.ValidateWithDPoP(
-			r.Context(), token, dpopProof, r.Method, requestURL(r), m.replayCache)
-	} else {
-		if !m.config.AllowBearer {
-			return nil, ErrTokenInvalid{Reason: "DPoP proof required"}
-		}
-		claims, err = m.validator.ValidatePlatformToken(r.Context(), token)
+	// Preserve the bearer gate: a plain bearer (no DPoP proof) is rejected when
+	// AllowBearer is false. A sender-constrained token without its proof is
+	// rejected by the validator regardless. The validator's scope-free Validate
+	// path runs signature/iss/aud/exp, binds the DPoP proof when the token is
+	// sender-constrained, and enforces per-tenant online liveness; per-route
+	// scope is applied later by the RequireScope route guards.
+	if dpopProof == "" && !m.config.AllowBearer {
+		return nil, ErrTokenInvalid{Reason: "DPoP proof required"}
 	}
+
+	authCtx, err := m.validator.Validate(r.Context(), token, dpopProof, r.Method, requestURL(r))
 	if err != nil {
 		return nil, err
 	}
 
-	return platformtoken.Authorize(claims), nil
+	return authCtx, nil
 }
 
 // RefreshToken is not supported on the pure-validator path: the platform does

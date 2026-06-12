@@ -29,7 +29,7 @@ func TestDefaultConfig(t *testing.T) {
 		assert.Equal(t, "public_html", DefaultConfig.Home)
 		assert.Equal(t, 8080, DefaultConfig.Port)
 		assert.Equal(t, 8443, DefaultConfig.TLSPort)
-		assert.Equal(t, int64(525960), DefaultConfig.JWT.Expiration)
+		assert.Equal(t, int64(60), DefaultConfig.JWT.Expiration)
 	})
 
 	t.Run("has valid certificate subject", func(t *testing.T) {

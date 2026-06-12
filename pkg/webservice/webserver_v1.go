@@ -138,13 +138,13 @@ func writeJSONNotFound(w http.ResponseWriter, r *http.Request) {
 }
 
 type WebServerV1 struct {
+	ctx                 context.Context
 	baseURI             string
 	ca                  trustedca.CACertificateAuthority
 	caConfig            *trustedca.CAConfig
 	closeChan           chan bool
 	certReloader        *bootstrap.CertReloader
 	config              *v1.Config
-	ctx                 context.Context
 	debug               bool
 	eventType           string
 	httpServer          *http.Server
@@ -171,12 +171,12 @@ func NewWebServerV1(
 	}
 
 	webserver := &WebServerV1{
+		ctx:                 ctx,
 		baseURI:             "/api/v1",
 		ca:                  _ca,
 		caConfig:            caConfig,
 		closeChan:           make(chan bool, 1),
 		config:              config,
-		ctx:                 ctx,
 		debug:               debug,
 		eventType:           "WebServer",
 		logger:              logger,

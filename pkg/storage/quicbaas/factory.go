@@ -54,7 +54,6 @@ type Factory struct {
 	config *Config
 
 	// Lazy-initialized DAOs
-	organizationDAO  *OrganizationDAO
 	userDAO          *UserDAO
 	registrationDAO  *RegistrationDAO
 	invitationDAO    *InvitationDAO
@@ -244,25 +243,6 @@ func (f *Factory) Stop(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-// OrganizationDAO returns the organization DAO, creating it lazily if needed.
-func (f *Factory) OrganizationDAO() (datastore.OrganizationDAO, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if f.closed {
-		return nil, ErrFactoryClosed{}
-	}
-
-	if f.storage == nil {
-		return nil, ErrStorageNotStarted{}
-	}
-
-	if f.organizationDAO == nil {
-		f.organizationDAO = NewOrganizationDAO(f.storage, f.logger)
-	}
-	return f.organizationDAO, nil
 }
 
 // UserDAO returns the user DAO, creating it lazily if needed.

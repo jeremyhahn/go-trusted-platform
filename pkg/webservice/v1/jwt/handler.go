@@ -30,8 +30,6 @@ import (
 )
 
 var (
-	ErrInvalidOrganiztionID = errors.New("rest/jwt: invalid organization id")
-
 	// ErrLoginUnavailable is returned when the unified quicbaas login
 	// client is not wired. The locked architecture forbids minting a
 	// platform-local JWT from an unauthenticated credential, so /login
@@ -97,18 +95,11 @@ func (handler *RestHandler) CreateSession(
 
 	handler.logger.Debugf("rest/jwt: claims: %+v", claims)
 
-	var requestedOrgID, requestedServiceID uint64
+	var requestedServiceID uint64
 
 	params := mux.Vars(r)
-	orgIDParam := params["organization_id"]
 	serviceIDParam := params["service_id"]
 
-	if orgIDParam != "" {
-		requestedOrgID, err = strconv.ParseUint(orgIDParam, 10, 64)
-		if err != nil {
-			return nil, ErrInvalidOrganiztionID
-		}
-	}
 	if serviceIDParam != "" {
 		// ignore errors here; may be a new system without any services
 		// configured
@@ -123,8 +114,6 @@ func (handler *RestHandler) CreateSession(
 
 	return service.CreateSession(
 		handler.logger,
-		claims.Organizations,
-		requestedOrgID,
 		requestedServiceID,
 		claims.Services,
 		user), nil

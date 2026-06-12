@@ -17,13 +17,13 @@ import (
 	"context"
 	"testing"
 
-	acmeclient "github.com/jeremyhahn/go-xkms/pkg/acme/client"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
+	acmeclient "github.com/jeremyhahn/go-xkms/pkg/acme/client"
 	"github.com/jeremyhahn/go-xkms/pkg/tpm2"
 	"github.com/jeremyhahn/go-xkms/pkg/types"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

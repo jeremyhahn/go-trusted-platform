@@ -170,6 +170,23 @@ acme:
 
 
 # =============================================================================
+# TRUST CONFIGURATION (BMC Trust Bootstrap)
+# =============================================================================
+
+# BMC endpoint trust chain (Phase 3 — BMC TLS lifecycle). Each strategy is
+# attempted in order; the first to succeed is used.
+# tofu is first-contact only — REMOVE it once DANE TLSA records for
+# <hostname>-bmc.<internal-zone> are published (bmc enroll does this).
+trust:
+  bmc:
+    # BMC endpoint trust chain. First strategy to succeed wins.
+    # tofu is first-contact only — REMOVE it once DANE TLSA records for
+    # <hostname>-bmc.<internal-zone> are published (bmc enroll does this).
+    strategies: [dane, spki, ca-file, tofu]
+    dane:
+      dns-server: "198.18.0.1:8053"   # CP public DNS
+
+# =============================================================================
 # DATASTORE CONFIGURATION
 # =============================================================================
 
@@ -438,7 +455,7 @@ webservices:
         - http-01
         - dns-01
     jwt:
-      expiration: 525960
+      expiration: 60
       issuer: trusted-platform
     cors:
       allowed-origins:
@@ -514,7 +531,7 @@ webservices:
     tls-port: 9443
     index: index.html
     jwt:
-      expiration: 525960
+      expiration: 60
       issuer: trusted-platform
     cors:
       allowed-origins:

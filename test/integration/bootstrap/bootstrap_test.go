@@ -29,8 +29,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 // TestMain gates all tests in this package on the INTEGRATION_TEST environment
@@ -209,18 +209,20 @@ func TestDANEBootstrap_EndToEnd(t *testing.T) {
 
 	logger := logging.NewLogger(slog.LevelInfo, os.Stderr)
 
-	clientConfig := &bootstrap.ClientConfig{
-		Strategy:         bootstrap.StrategyDANE,
-		ServerURL:        serverAddr() + BootstrapPath,
-		DNSServer:        dnsAddr(),
-		BundlePath:       BootstrapPath,
-		PerMethodTimeout: 15 * time.Second,
+	trustConfig := &trust.Config{
+		Default: &trust.ScopeConfig{
+			Strategies:       []trust.Strategy{trust.StrategyDANE},
+			ServerURL:        serverAddr() + BootstrapPath,
+			DANE:             &trust.DANEConfig{DNSServer: dnsAddr()},
+			BundlePath:       BootstrapPath,
+			PerMethodTimeout: 15 * time.Second,
+		},
 	}
 
-	client, err := bootstrap.NewClient(clientConfig, logger)
-	require.NoError(t, err, "failed to create bootstrap client")
+	resolver, err := trust.NewResolver(trustConfig, logger)
+	require.NoError(t, err, "failed to create trust resolver")
 
-	bundlePEM, err := client.FetchCABundle(ctx)
+	bundlePEM, err := resolver.CABundlePEM(ctx, trust.ClassDefault)
 	require.NoError(t, err, "DANE bootstrap fetch failed")
 	require.NotEmpty(t, bundlePEM, "DANE bootstrap returned empty bundle")
 
@@ -247,33 +249,35 @@ func TestDANEBootstrap_EndToEnd(t *testing.T) {
 	}
 }
 
-// TestBootstrapClient_DANE verifies the platform's bootstrap.Client with DANE
+// TestTrustResolver_DANE verifies the platform's trust resolver with the DANE
 // strategy fetches a valid CA bundle and the certificates can be used to build
 // a trust chain.
-func TestBootstrapClient_DANE(t *testing.T) {
+func TestTrustResolver_DANE(t *testing.T) {
 	ctx, cancel := testContext()
 	t.Cleanup(cancel)
 
 	logger := logging.NewLogger(slog.LevelInfo, os.Stderr)
 
-	clientConfig := &bootstrap.ClientConfig{
-		Strategy:         bootstrap.StrategyDANE,
-		ServerURL:        serverAddr() + BootstrapPath,
-		DNSServer:        dnsAddr(),
-		BundlePath:       BootstrapPath,
-		PerMethodTimeout: 15 * time.Second,
+	trustConfig := &trust.Config{
+		Default: &trust.ScopeConfig{
+			Strategies:       []trust.Strategy{trust.StrategyDANE},
+			ServerURL:        serverAddr() + BootstrapPath,
+			DANE:             &trust.DANEConfig{DNSServer: dnsAddr()},
+			BundlePath:       BootstrapPath,
+			PerMethodTimeout: 15 * time.Second,
+		},
 	}
 
-	client, err := bootstrap.NewClient(clientConfig, logger)
-	require.NoError(t, err, "failed to create bootstrap client")
+	resolver, err := trust.NewResolver(trustConfig, logger)
+	require.NoError(t, err, "failed to create trust resolver")
 
-	bundlePEM, err := client.FetchCABundle(ctx)
-	require.NoError(t, err, "bootstrap client DANE fetch failed")
-	require.NotEmpty(t, bundlePEM, "bootstrap client returned empty bundle")
+	bundlePEM, err := resolver.CABundlePEM(ctx, trust.ClassDefault)
+	require.NoError(t, err, "trust resolver DANE fetch failed")
+	require.NotEmpty(t, bundlePEM, "trust resolver returned empty bundle")
 
 	certs, err := parsePEMBundle(bundlePEM)
-	require.NoError(t, err, "failed to parse bootstrap client bundle")
-	assert.NotEmpty(t, certs, "bootstrap client bundle must contain certificates")
+	require.NoError(t, err, "failed to parse trust resolver bundle")
+	assert.NotEmpty(t, certs, "trust resolver bundle must contain certificates")
 
 	// Verify the bundle contains at least a root CA certificate.
 	var hasCA bool

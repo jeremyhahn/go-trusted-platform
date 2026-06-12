@@ -111,6 +111,36 @@ type PlatformTokenConfig struct {
 	// CacheTTLSeconds bounds how long fetched JWKS keys are cached, in
 	// seconds. Defaults to 3600 (one hour) when unset.
 	CacheTTLSeconds int64 `yaml:"cache-ttl-seconds" json:"cache_ttl_seconds" mapstructure:"cache-ttl-seconds"`
+
+	// IntrospectionURL is the broker RFC 7662 token-introspection endpoint the
+	// validator POSTs tokens to for online liveness (revocation / subject
+	// disablement). It is required when AuthzMode is "online" or "hybrid" and
+	// unused for "offline".
+	IntrospectionURL string `yaml:"introspection-url" json:"introspection_url" mapstructure:"introspection-url"`
+
+	// IntrospectionClientID is the RFC 7662 client_id sent as HTTP Basic
+	// credentials on the introspection request (paired with
+	// IntrospectionClientSecret). Leave empty to omit Basic auth.
+	IntrospectionClientID string `yaml:"introspection-client-id" json:"introspection_client_id" mapstructure:"introspection-client-id"`
+
+	// IntrospectionClientSecret is the RFC 7662 client_secret sent as HTTP
+	// Basic credentials on the introspection request.
+	IntrospectionClientSecret string `yaml:"introspection-client-secret" json:"introspection_client_secret" mapstructure:"introspection-client-secret"`
+
+	// IntrospectionBearerToken, when set, is sent as a Bearer Authorization
+	// header on the introspection request instead of Basic credentials.
+	IntrospectionBearerToken string `yaml:"introspection-bearer-token" json:"introspection_bearer_token" mapstructure:"introspection-bearer-token"`
+
+	// AuthzMode selects how tokens are authorized: "offline" (signed scopes +
+	// expiry only), "online" (uncached liveness every request), or "hybrid"
+	// (liveness with a short positive-result cache). Empty resolves to the
+	// stack default, "hybrid".
+	AuthzMode string `yaml:"authz-mode" json:"authz_mode" mapstructure:"authz-mode"`
+
+	// LivenessCacheTTLSeconds bounds, in seconds, how long a positive hybrid
+	// liveness result is cached before the next request live-checks. Zero or
+	// unset defaults to 15s for hybrid; ignored in online mode (no cache).
+	LivenessCacheTTLSeconds int `yaml:"liveness-cache-ttl-seconds" json:"liveness_cache_ttl_seconds" mapstructure:"liveness-cache-ttl-seconds"`
 }
 
 type ProxyConfig struct {

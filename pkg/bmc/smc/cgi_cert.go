@@ -472,4 +472,3 @@ func looksValid(body []byte) bool {
 	}
 	return false
 }
-

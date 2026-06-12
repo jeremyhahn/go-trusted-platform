@@ -426,7 +426,7 @@ webservice:
   tls-port: 9443
   index: index.html
   jwt:
-    expiration: 525960
+    expiration: 60
     issuer: client3.example.internal
   cors:
     allowed-origins:

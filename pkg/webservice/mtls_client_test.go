@@ -14,6 +14,7 @@
 package webservice
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"io"
@@ -229,7 +230,7 @@ func TestNewMutalTLSClient_WithRootCAsPool(t *testing.T) {
 	pool := x509.NewCertPool()
 
 	// Construct with a non-nil pool; verify the TLS transport carries it.
-	client := NewMutalTLSClient(logger, nil, nil, pool)
+	client := NewMutalTLSClient(context.Background(), logger, nil, nil, pool)
 
 	tr, ok := client.http.Transport.(*http.Transport)
 	if !ok {
@@ -248,7 +249,7 @@ func TestNewMutalTLSClient_NilRootCAsUsesSystemRoots(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
 
 	// Construct with a nil pool; verify RootCAs remains nil (system roots).
-	client := NewMutalTLSClient(logger, nil, nil, nil)
+	client := NewMutalTLSClient(context.Background(), logger, nil, nil, nil)
 
 	tr, ok := client.http.Transport.(*http.Transport)
 	if !ok {

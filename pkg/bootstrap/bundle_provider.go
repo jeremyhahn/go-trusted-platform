@@ -16,12 +16,12 @@ package bootstrap
 import (
 	"crypto/x509"
 
-	"github.com/jeremyhahn/go-truststrap/pkg/truststrap"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	trustbootstrap "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/bootstrap"
 )
 
 // Compile-time interface check.
-var _ truststrap.BundleProvider = (*CABundleAdapter)(nil)
+var _ trustbootstrap.BundleProvider = (*CABundleAdapter)(nil)
 
 // CABundler provides access to a CA certificate bundle filtered by store type
 // and key algorithm. The native pkg/ca.TrustedCA exposes this as

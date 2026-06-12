@@ -29,9 +29,8 @@ import (
 )
 
 // baseMockCA is a zero-behavior mock that implements every method of
-// ca.TCGCA (and the ObjectStore() extension used via type assertion by
-// the CA gRPC service). Individual tests embed baseMockCA in their own
-// mock types and override just the methods they care about.
+// ca.TCGCA. Individual tests embed baseMockCA in their own mock types
+// and override just the methods they care about.
 type baseMockCA struct{}
 
 // crypto.Signer
@@ -167,16 +166,12 @@ func (m *baseMockCA) Exists(_ context.Context, _ string, _ x509.PublicKeyAlgorit
 func (m *baseMockCA) Certificate(_ context.Context, _ *types.KeyAttributes) (*x509.Certificate, error) {
 	return nil, nil
 }
-func (m *baseMockCA) CertificatePEM(_ context.Context, _ string) ([]byte, error) { return nil, nil }
-func (m *baseMockCA) ImportCertificate(_ context.Context, _ *x509.Certificate) error {
-	return nil
-}
+func (m *baseMockCA) CertificatePEM(_ context.Context, _ string) ([]byte, error)     { return nil, nil }
+func (m *baseMockCA) ImportCertificate(_ context.Context, _ *x509.Certificate) error { return nil }
 func (m *baseMockCA) ImportCertificatePEM(_ context.Context, _ string, _ []byte) error {
 	return nil
 }
-func (m *baseMockCA) PEM(_ context.Context, _ *types.KeyAttributes) ([]byte, error) {
-	return nil, nil
-}
+func (m *baseMockCA) PEM(_ context.Context, _ *types.KeyAttributes) ([]byte, error) { return nil, nil }
 
 // Object store helpers
 func (m *baseMockCA) Blob(_ []byte) ([]byte, error)       { return nil, nil }
@@ -193,7 +188,9 @@ func (m *baseMockCA) XSignedRootCertificate(_ string, _ *x509.Certificate) (*x50
 func (m *baseMockCA) XSignedIntermediateCertificates(_ string, _ *x509.Certificate) ([]*x509.Certificate, error) {
 	return nil, nil
 }
-func (m *baseMockCA) CrossSignedPEM(_ *types.KeyAttributes) ([]byte, error) { return nil, nil }
+func (m *baseMockCA) CrossSignedPEM(_ *types.KeyAttributes) ([]byte, error) {
+	return nil, nil
+}
 
 // AIA
 func (m *baseMockCA) ImportIssuingCAs(_ context.Context, _ *x509.Certificate) error { return nil }
@@ -233,7 +230,7 @@ func (m *baseMockCA) IssueEKCertificate(_ context.Context, _ *xkmsca.Certificate
 func (m *baseMockCA) IssueAKCertificate(_ context.Context, _ *xkmsca.CertificateRequest, _ crypto.PublicKey) (*x509.Certificate, error) {
 	return nil, nil
 }
-func (m *baseMockCA) SignTCGCSRIDevID(_ context.Context, _ *tpm2.TCG_CSR_IDEVID, _ *xkmsca.CertificateRequest) ([]byte, []byte, error) {
+func (m *baseMockCA) SignTCGCSRIDevID(_ context.Context, _ *tpm2.TCG_CSR_IDEVID, _ *xkmsca.CertificateRequest) (iakDER, idevidDER []byte, err error) {
 	return nil, nil, nil
 }
 func (m *baseMockCA) EnrollDevice(_ context.Context, _ []byte, _ *xkmsca.CertificateRequest) (*xkmsca.TCGEnrollmentResult, error) {

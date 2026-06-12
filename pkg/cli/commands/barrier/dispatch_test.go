@@ -253,7 +253,7 @@ func TestDispatchInitShamir_Table_RendersShareCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	for _, want := range []string{"Share Count", "3", "Shamir"} {
+	for _, want := range []string{"Threshold", "Total Shares", "Shares Sealed", "share-claim", "Shamir"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("expected output to contain %q, got %q", want, out.String())
 		}
@@ -425,7 +425,10 @@ func TestDispatchRekey_NoShamir(t *testing.T) {
 		t.Fatalf("unexpected: %v", err)
 	}
 	if fake.rekeyReq == nil {
-		t.Fatalf("expected rekey request to be recorded")
+		t.Fatal("expected rekey request recorded")
+	}
+	if fake.rekeyReq.SOPin != "" || fake.rekeyReq.Threshold != 0 || fake.rekeyReq.Total != 0 {
+		t.Errorf("expected zero-value share-free request, got %+v", fake.rekeyReq)
 	}
 	if !strings.Contains(out.String(), "rekeyed successfully") {
 		t.Errorf("expected success output, got %q", out.String())
@@ -443,7 +446,7 @@ func TestDispatchRekey_WithShamir(t *testing.T) {
 	if fake.rekeyReq.SOPin != "so" || fake.rekeyReq.Threshold != 2 || fake.rekeyReq.Total != 2 {
 		t.Errorf("expected so-pin/threshold/total propagated, got %+v", fake.rekeyReq)
 	}
-	for _, w := range []string{"Threshold", "Share Count"} {
+	for _, w := range []string{"Threshold", "Shares Sealed", "share-claim"} {
 		if !strings.Contains(out.String(), w) {
 			t.Errorf("output missing %q: %q", w, out.String())
 		}
@@ -477,7 +480,7 @@ func TestDispatchRecoveryGenerate_Table(t *testing.T) {
 	if fake.recoveryGenReq.SOPin != "so" {
 		t.Errorf("expected so-pin propagated, got %+v", fake.recoveryGenReq)
 	}
-	for _, w := range []string{"Share Count", "2"} {
+	for _, w := range []string{"Shares Sealed", "recovery officers", "share-claim"} {
 		if !strings.Contains(out.String(), w) {
 			t.Errorf("output missing %q: %q", w, out.String())
 		}

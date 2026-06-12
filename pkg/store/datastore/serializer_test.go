@@ -24,23 +24,23 @@ import (
 
 func TestSerializers(t *testing.T) {
 
-	org := entities.NewOrganization("test")
+	role := entities.NewRole("test")
 
-	serializers := []serializer.Serializer[*entities.Organization]{
-		serializer.NewJSONSerializer[*entities.Organization](),
-		serializer.NewYAMLSerializer[*entities.Organization](),
+	serializers := []serializer.Serializer[*entities.Role]{
+		serializer.NewJSONSerializer[*entities.Role](),
+		serializer.NewYAMLSerializer[*entities.Role](),
 	}
 
 	for _, serializer := range serializers {
-		bytes, err := serializer.Serialize(org)
+		bytes, err := serializer.Serialize(role)
 		assert.Nil(t, err)
 		assert.NotNil(t, bytes)
 
 		fmt.Println(string(bytes))
 
-		org := &entities.Organization{}
-		err = serializer.Deserialize(bytes, org)
+		decoded := &entities.Role{}
+		err = serializer.Deserialize(bytes, decoded)
 		assert.Nil(t, err)
-		assert.Equal(t, "test", org.Name)
+		assert.Equal(t, "test", decoded.Name)
 	}
 }

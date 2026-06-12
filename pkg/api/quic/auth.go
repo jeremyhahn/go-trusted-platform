@@ -191,6 +191,12 @@ func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *Request) 
 	// validate the framed bearer token, project scp -> RBAC / tenant_id -> RLS,
 	// and stash the AuthorizedContext for AuthorizeRequest and downstream
 	// handlers. QUIC has no DPoP frame, so this is always a bearer validation.
+	//
+	// requiredPerm="" routes through the validator's scope-free path: the
+	// opcode's required scope is only resolved later in AuthorizeRequest,
+	// which enforces it against the stored AuthorizedContext. Online
+	// liveness/revocation is still enforced here on every request. QUIC has
+	// no DPoP frame, so the proof / htm / htu inputs are empty.
 	if cv, ok := m.tokenValidator.(ClaimsTokenValidator); ok {
 		authCtx, err := cv.AuthorizeToken(ctx, req.Token, "", "", "", "")
 		if err != nil {

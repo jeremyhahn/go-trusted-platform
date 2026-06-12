@@ -25,16 +25,20 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 // defaultCertPath is the default system trust store path for Alpine Linux.
 const defaultCertPath = "/usr/local/share/ca-certificates/platform-ca.crt"
 
-// defaultPerMethodTimeout is the default timeout for each bootstrap method.
+// defaultPerMethodTimeout is the default timeout for each trust strategy.
 const defaultPerMethodTimeout = 5 * time.Second
+
+// strategyAuto is the CLI flag value that expands to the full ordered
+// fetch chain (dane, noise, spki).
+const strategyAuto = "auto"
 
 // trustFlags holds the flags for the trust subcommand.
 type trustFlags struct {
@@ -66,7 +70,7 @@ the system trust store. It is used during ISO boot to establish TLS trust
 before the device can communicate securely with the provisioning server.
 
 Strategies:
-  auto     - Try all available methods in priority order (default)
+  auto     - Ordered chain: dane, noise, spki (default)
   dane     - Verify CA via DANE/TLSA DNS records
   noise    - Fetch CA via Noise_NK encrypted channel
   spki     - Fetch CA with SPKI-pinned TLS
@@ -90,7 +94,7 @@ Examples:
   platformctl bootstrap trust \
     --server-url https://platform:8443 \
     --strategy spki \
-    --spki-pin sha256/AAAA... \
+    --spki-pin <64-hex-sha256> \
     --install-to-system-trust
 
   # Use Noise protocol
@@ -103,12 +107,12 @@ Examples:
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			commonFlags := getFlags()
-			return runTrust(&flags, commonFlags)
+			return runTrust(cmd.Context(), &flags, commonFlags)
 		},
 	}
 
 	cmd.Flags().StringVar(&flags.serverURL, "server-url", "", "platform server URL (required)")
-	cmd.Flags().StringVar(&flags.strategy, "strategy", bootstrap.StrategyAuto, "bootstrap strategy: auto, dane, noise, spki, embedded")
+	cmd.Flags().StringVar(&flags.strategy, "strategy", strategyAuto, "bootstrap strategy: auto, dane, noise, spki, embedded")
 	cmd.Flags().StringVar(&flags.dnsServer, "dns-server", "",
 		"DNS server for DANE lookups. Accepts \"host\" (port 53 assumed) "+
 			"or \"host:port\" for non-standard ports. Trusted Platform CPs "+
@@ -118,8 +122,8 @@ Examples:
 	cmd.Flags().StringVar(&flags.hostname, "hostname", "", "server hostname for DANE TLSA lookups")
 	cmd.Flags().StringVar(&flags.noiseKey, "noise-key", "", "Noise_NK server static key (hex)")
 	cmd.Flags().StringVar(&flags.noiseAddr, "noise-addr", "", "Noise server address (host:port)")
-	cmd.Flags().StringVar(&flags.spkiPin, "spki-pin", "", "SPKI pin (sha256/...)")
-	cmd.Flags().StringVar(&flags.bundlePath, "bundle-path", "", "path to write the CA bundle PEM")
+	cmd.Flags().StringVar(&flags.spkiPin, "spki-pin", "", "SPKI pin (hex-encoded SHA-256 of the server SubjectPublicKeyInfo)")
+	cmd.Flags().StringVar(&flags.bundlePath, "bundle-path", "", "CA bundle endpoint path override (empty selects the server default)")
 	cmd.Flags().BoolVar(&flags.installToSystem, "install-to-system-trust", false, "install CA bundle to system trust store")
 	cmd.Flags().StringVar(&flags.certPath, "cert-path", defaultCertPath, "system trust store certificate path")
 	cmd.Flags().DurationVar(&flags.perMethodTimeout, "per-method-timeout", defaultPerMethodTimeout, "timeout per bootstrap method")
@@ -127,24 +131,30 @@ Examples:
 	return cmd
 }
 
-// buildBootstrapConfig creates a bootstrap.ClientConfig from the trust command flags.
-func buildBootstrapConfig(flags *trustFlags) (*bootstrap.ClientConfig, error) {
+// buildTrustConfig creates a trust.Config from the trust command flags.
+// The default class carries the strategy chain; "auto" expands to the
+// full ordered fetch chain (dane, noise, spki).
+func buildTrustConfig(flags *trustFlags) (*trust.Config, error) {
 	if flags.serverURL == "" {
 		return nil, ErrTrustServerURLRequired{}
 	}
 
-	config := &bootstrap.ClientConfig{
-		Strategy:         flags.strategy,
+	scope := &trust.ScopeConfig{
+		Strategies:       strategiesFromFlag(flags.strategy),
 		ServerURL:        flags.serverURL,
 		Hostname:         flags.hostname,
-		DNSServer:        normalizeDNSServer(flags.dnsServer),
 		BundlePath:       flags.bundlePath,
 		PerMethodTimeout: flags.perMethodTimeout,
 	}
 
+	// Configure DANE if a DNS server is provided
+	if dnsServer := normalizeDNSServer(flags.dnsServer); dnsServer != "" {
+		scope.DANE = &trust.DANEConfig{DNSServer: dnsServer}
+	}
+
 	// Configure Noise if key is provided
 	if flags.noiseKey != "" {
-		config.Noise = &bootstrap.ClientNoiseConfig{
+		scope.Noise = &trust.NoiseConfig{
 			ServerAddr:      flags.noiseAddr,
 			ServerStaticKey: flags.noiseKey,
 		}
@@ -152,12 +162,23 @@ func buildBootstrapConfig(flags *trustFlags) (*bootstrap.ClientConfig, error) {
 
 	// Configure SPKI if pin is provided
 	if flags.spkiPin != "" {
-		config.SPKI = &bootstrap.ClientSPKIConfig{
+		scope.SPKI = &trust.SPKIConfig{
 			Pin: flags.spkiPin,
 		}
 	}
 
-	return config, nil
+	return &trust.Config{Default: scope}, nil
+}
+
+// strategiesFromFlag maps the --strategy flag value onto an ordered
+// strategy chain. "auto" (or empty) expands to dane, noise, spki; any
+// other value selects a single-strategy chain. Unknown values are
+// rejected by trust.NewResolver's config validation.
+func strategiesFromFlag(strategy string) []trust.Strategy {
+	if strategy == "" || strategy == strategyAuto {
+		return []trust.Strategy{trust.StrategyDANE, trust.StrategyNoise, trust.StrategySPKI}
+	}
+	return []trust.Strategy{trust.Strategy(strategy)}
 }
 
 // normalizeDNSServer accepts "host" or "host:port" and returns the
@@ -192,10 +213,11 @@ func logLevelFromVerbose(verbose bool) slog.Level {
 	return slog.LevelInfo
 }
 
-// runTrust executes the trust bootstrap command. It creates a bootstrap client,
-// fetches the CA bundle, and optionally installs it to the system trust store.
-func runTrust(flags *trustFlags, commonFlags *cli.CommonFlags) error {
-	config, err := buildBootstrapConfig(flags)
+// runTrust executes the trust bootstrap command. It builds a trust
+// resolver, fetches the CA bundle through the default-class strategy
+// chain, and optionally installs it to the system trust store.
+func runTrust(ctx context.Context, flags *trustFlags, commonFlags *cli.CommonFlags) error {
+	config, err := buildTrustConfig(flags)
 	if err != nil {
 		return err
 	}
@@ -203,18 +225,17 @@ func runTrust(flags *trustFlags, commonFlags *cli.CommonFlags) error {
 	verbose := commonFlags != nil && commonFlags.Verbose
 	logger := logging.NewLogger(logLevelFromVerbose(verbose), os.Stderr)
 
-	client, err := bootstrap.NewClient(config, logger)
+	resolver, err := trust.NewResolver(config, logger)
 	if err != nil {
 		return ErrTrustBootstrapFailed{Cause: err}
 	}
 
-	ctx := context.Background()
-	bundlePEM, err := client.FetchCABundle(ctx)
+	bundlePEM, err := resolver.CABundlePEM(ctx, trust.ClassDefault)
 	if err != nil {
 		return ErrTrustBootstrapFailed{Cause: err}
 	}
 
-	// For embedded strategy, bundlePEM is nil (trust already present)
+	// For the embedded strategy, bundlePEM is nil (trust already present)
 	if bundlePEM == nil {
 		fmt.Fprintln(os.Stdout, "Using embedded CA bundle (no fetch needed)")
 		return nil
@@ -223,7 +244,7 @@ func runTrust(flags *trustFlags, commonFlags *cli.CommonFlags) error {
 	fmt.Fprintf(os.Stdout, "CA bundle fetched successfully (%d bytes)\n", len(bundlePEM))
 
 	if flags.installToSystem {
-		if err := client.InstallToSystemTrust(bundlePEM, flags.certPath); err != nil {
+		if err := trust.InstallToSystemTrust(bundlePEM, flags.certPath); err != nil {
 			return ErrTrustInstallFailed{Path: flags.certPath, Cause: err}
 		}
 		fmt.Fprintf(os.Stdout, "CA bundle installed to %s\n", flags.certPath)

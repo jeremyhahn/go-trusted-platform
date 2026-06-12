@@ -104,7 +104,9 @@ func newSharedValidator(t *testing.T, jwksURL string, allowBearer bool) *platfor
 		JWKSURL:     jwksURL,
 		Audience:    testPTAudience,
 		AllowBearer: allowBearer,
-		AuthzMode:   "offline",
+		// Offline mode: these tests exercise signature / scope projection, not
+		// online liveness, so no introspection endpoint is required.
+		AuthzMode: "offline",
 	}, nil)
 	if err != nil {
 		t.Fatalf("newPlatformTokenValidator: %v", err)

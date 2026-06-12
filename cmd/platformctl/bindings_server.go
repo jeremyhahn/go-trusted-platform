@@ -50,8 +50,11 @@ func (b *EmbeddedServerBinding) IsRunning() bool {
 }
 
 // Start initializes and starts the embedded platform daemon.
-// The configPath parameter specifies the path to the platformd config file.
-func (b *EmbeddedServerBinding) Start(configPath string) error {
+// configPath specifies the path to the platformd config file.
+// skipIAMValidation mirrors the --skip-iam-validation flag: pass false in
+// production and true only when explicitly requested (e.g. integration tests).
+// A prominent WARNING is logged when IAM validation is disabled.
+func (b *EmbeddedServerBinding) Start(configPath string, skipIAMValidation bool) error {
 	if b.running.Load() {
 		return nil
 	}
@@ -78,7 +81,12 @@ func (b *EmbeddedServerBinding) Start(configPath string) error {
 	// Build daemon config for embedded mode
 	config := daemon.DefaultConfig()
 	config.App = a
-	config.SkipIAMValidation = true
+
+	if skipIAMValidation {
+		config.SkipIAMValidation = true
+		b.logger.Warn("WARNING: IAM validation is DISABLED for embedded daemon. DO NOT USE IN PRODUCTION.",
+			"transports", "embedded")
+	}
 
 	// Disable all network protocols for embedded mode
 	config.EnableGRPCTCP = false

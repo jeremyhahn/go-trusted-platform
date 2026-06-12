@@ -54,7 +54,7 @@ type UserCredential struct {
 
 type AuthServicer interface {
 	Activate(registrationID uint64) (*entities.User, error)
-	Login(userCredentials *UserCredential) (*entities.User, []*entities.Organization, []*entities.Service, error)
+	Login(userCredentials *UserCredential) (*entities.User, []*entities.Service, error)
 	Register(userCredentials *UserCredential, baseURI string) (*entities.User, error)
 	ResetPassword(userCredentials *UserCredential) error
 }

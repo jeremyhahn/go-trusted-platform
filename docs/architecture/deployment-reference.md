@@ -166,12 +166,12 @@ platformctl bootstrap run --config deployments/ha-cluster/bootstrap.yaml
 - In 3-node deployment: standalone with local pebble storage
 - In HA cluster: Raft-backed QuicBaaS with replicated state (tolerate 1 node failure with 3-node cluster)
 - Never host application workloads directly
-- Typically on VLAN 7 (provisioning) or dedicated management VLAN
+- Typically on VLAN 201 (provisioning) or VLAN 50 (management)
 
 ### Gateway Nodes
 
 - Run in **client mode** — auto-enroll with control-plane CA via custom ACME extensions (enroll-01, device-attest-01)
-- Bridge between provisioning (VLAN 7), management, and production networks (VLAN 10-22)
+- Bridge between provisioning (VLAN 201), management (VLAN 50), and production networks (VLAN 200/210)
 - Provide DHCP scope and iPXE/TFTP for device bootstrap
 - Recursive DNS forwarder for production networks (queries forwarded to control-plane authoritative DNS)
 - BGP peering with upstream routers for WAN traffic
@@ -189,7 +189,7 @@ platformctl bootstrap run --config deployments/ha-cluster/bootstrap.yaml
 - Optional: hardware TPM for workload attestation and vTPM provision for guests
 - Guest VMs can have vTPM 2.0 for attestation chains
 - No requirement to run management services
-- Connected to production networks (VLAN 10-22)
+- Connected to production network (VLAN 200); storage tier (VLAN 203) if used
 
 ---
 
@@ -210,16 +210,16 @@ platformctl bootstrap run --config deployments/ha-cluster/bootstrap.yaml
    └────┬────┘   └────┬────┘
         │             │
    ┌────▼─────────────▼────┐
-   │  Core Routers         │
-   │  (BGP, NAT, Firewall) │
-   │  VLAN 2-4 uplinks     │
+   │  Upstream Routers     │
+   │  (BGP transit)        │
+   │  VLAN 10 (P2P /31s)   │
    └────┬────────────────┬─┘
         │                │
    ┌────▼────┐      ┌────▼────┐
-   │Core GW A│──────│Core GW B│  HA Pair
+   │Gateway A│──────│Gateway B│  HA Pair
    │         │      │         │  (active/standby
-   │VLAN1-8  │      │VLAN1-8  │   or active-active)
-   │VLAN10-22│      │VLAN10-22│
+   │VLAN 10  │      │VLAN 10  │   or active-active)
+   │200-210  │      │200-210  │
    └────┬────┘      └────┬────┘
         │                │
         │ Trunk uplink   │ (all VLANs)
@@ -240,32 +240,37 @@ platformctl bootstrap run --config deployments/ha-cluster/bootstrap.yaml
    └───────┘ └───────┘
 
 VLAN Connectivity:
-• Core routers: VLAN 2-4 uplinks (WAN)
-• Core GWs: VLAN 1-8 (infrastructure), VLAN 10-22 (production)
-• Rack switches: All VLANs trunked from core
-• CP nodes: VLAN 7 (provisioning) only
-• GW nodes: All VLANs (routing between them)
-• Worker nodes: VLAN 10-22 (production) + VLAN 7 bootstrap
+• Upstream routers: VLAN 10 transit (P2P /31s), BGP
+• Gateways: VLAN 10 (transit) + platform VLANs 200-210 (routing between them)
+• Rack switches: platform VLANs trunked from the gateways
+• CP nodes: VLAN 201 (provisioning) + VLAN 50 OOB
+• GW nodes: all platform VLANs (enforce policy between them)
+• Worker nodes: VLAN 200 (production) + VLAN 201 bootstrap; VLAN 203 if storage tier used
 ```
 
 ### VLAN Assignments
 
-Refer to [reference-network.md](reference-network.md) for detailed VLAN design:
+See [reference-network.md](reference-network.md) for the full design. Platform VLANs use the
+**200-series** with the mnemonic **VLAN _N_ → `172.16.N.0/24`**. Three VLANs are always present;
+the rest are opt-in.
 
-**Infrastructure (VLAN 1-8):**
-- VLAN 7 (provisioning): PXE, DHCP, DNS for bootstrap
-- VLAN 5 (management): IPMI/BMC, Prometheus, logging
+**Core platform (always present):**
+- VLAN 200 (production): enrolled, attested workloads — `198.18.0.0/24`
+- VLAN 201 (provisioning): PXE, DHCP, DNS, ACME enrollment — `172.16.201.0/24`
+- VLAN 202 (quarantine): non-compliant/untrusted hosts — `172.16.202.0/24`
 
-**Production (VLAN 10-22):**
-- VLAN 10 (home): User/office networks
-- VLAN 11-13: Wireless, guest, IoT
-- VLAN 14-16: Database/application tiers
+**Optional platform:**
+- VLAN 203 (storage): workload/bulk storage tier — `172.16.203.0/24`
+- VLAN 210 (DMZ): public-facing services (single-tier default; expand to 210–212 for 3-tier) — `172.16.210.0/24`
+- VLAN 1000+ (tenant): multi-tenant isolated workloads — `172.17.0.0/16+`
 
-**DMZ (VLAN 20-22):**
-- Public-facing services with defense-in-depth
+**Shared / edge:**
+- VLAN 10 (transit): gateway ↔ upstream routers / BGP; P2P /31s from `172.16.0.0/24`
+- VLAN 50 (management): out-of-band IPMI/BMC/console — separate NIC, never routes to data
+- VLAN 1 (default): IEEE 802.1Q catch-all (no addressed network)
 
-**Cloud Tenant (VLAN 1000+):**
-- Multi-tenant workloads
+> The platform tier is self-contained. Any surrounding site/office/home network is kept entirely
+> separate and is **not** part of this reference — see the deployment's own network docs.
 
 ---
 
@@ -353,25 +358,25 @@ platformctl bootstrap run --config deployments/three-node/bootstrap.yaml
 
 deployments/three-node/bootstrap.yaml:
   network:
-    provisioning_vlan: 7
-    gateway_ip: 172.16.7.1
+    provisioning_vlan: 201
+    gateway_ip: 172.16.201.1
   dhcp:
-    range: 172.16.7.100-172.16.7.200
+    range: 172.16.201.100-172.16.201.200
   dns:
     zone: trusted-platform.local
   devices:
     - hostname: cp-01
       mac: aa:bb:cc:dd:ee:01
       role: control-plane
-      ip: 172.16.7.10
+      ip: 172.16.201.10
     - hostname: gw-01
       mac: aa:bb:cc:dd:ee:02
       role: gateway
-      ip: 172.16.7.20
+      ip: 172.16.201.20
     - hostname: compute-01
       mac: aa:bb:cc:dd:ee:03
       role: worker
-      ip: 172.16.7.30
+      ip: 172.16.201.30
 
 Process:
 1. Bootstrap server provisions all three nodes:
@@ -411,10 +416,10 @@ platformctl bootstrap run --config deployments/ha-cluster/bootstrap.yaml
 
 deployments/ha-cluster/bootstrap.yaml:
   network:
-    provisioning_vlan: 7
-    gateway_ip: 172.16.7.1
+    provisioning_vlan: 201
+    gateway_ip: 172.16.201.1
   dhcp:
-    range: 172.16.7.100-172.16.7.250
+    range: 172.16.201.100-172.16.201.250
   dns:
     zone: trusted-platform.local
   devices:
@@ -422,29 +427,29 @@ deployments/ha-cluster/bootstrap.yaml:
     - hostname: cp-01
       mac: aa:bb:cc:dd:ee:01
       role: control-plane
-      ip: 172.16.7.10
+      ip: 172.16.201.10
     - hostname: cp-02
       mac: aa:bb:cc:dd:ee:02
       role: control-plane
-      ip: 172.16.7.11
+      ip: 172.16.201.11
     - hostname: cp-03
       mac: aa:bb:cc:dd:ee:03
       role: control-plane
-      ip: 172.16.7.12
+      ip: 172.16.201.12
     # Gateways (HA pair)
     - hostname: gw-01
       mac: aa:bb:cc:dd:ee:04
       role: gateway
-      ip: 172.16.7.20
+      ip: 172.16.201.20
     - hostname: gw-02
       mac: aa:bb:cc:dd:ee:05
       role: gateway
-      ip: 172.16.7.21
+      ip: 172.16.201.21
     # Compute workers
     - hostname: compute-01
       mac: aa:bb:cc:dd:ee:06
       role: worker
-      ip: 172.16.7.30
+      ip: 172.16.201.30
     # ... additional compute workers
 
 Process:
@@ -699,7 +704,7 @@ Hardware TPM availability determines the security tier of a deployment. Map tier
 **Pre-Deployment**
 - [ ] Procure 3 servers (1 CP at 16GB RAM, 1 GW at 8GB RAM, 1 compute at 16GB RAM)
 - [ ] Procure 1 managed switch with VLAN support
-- [ ] Plan network layout (VLAN 7 for provisioning, VLAN 10+ for production)
+- [ ] Plan network layout (VLAN 201 for provisioning, VLAN 200 for production)
 - [ ] Prepare `deployments/three-node/bootstrap.yaml` with device manifests and MAC addresses
 - [ ] Prepare custom platform-initrd.efi
 

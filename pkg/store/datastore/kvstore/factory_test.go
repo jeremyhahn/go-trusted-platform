@@ -72,38 +72,6 @@ func TestFactory_StartStop(t *testing.T) {
 	})
 }
 
-func TestFactory_OrganizationDAO(t *testing.T) {
-	t.Run("returns DAO successfully", func(t *testing.T) {
-		storage := newMemoryStorage()
-		logger := logging.DefaultLogger()
-		factory := NewFactory(storage, logger)
-
-		dao, err := factory.OrganizationDAO()
-		require.NoError(t, err)
-		require.NotNil(t, dao)
-
-		// Second call returns same cached instance
-		dao2, err := factory.OrganizationDAO()
-		require.NoError(t, err)
-		assert.Equal(t, dao, dao2)
-	})
-
-	t.Run("returns error when closed", func(t *testing.T) {
-		storage := newMemoryStorage()
-		logger := logging.DefaultLogger()
-		factory := NewFactory(storage, logger)
-
-		ctx := context.Background()
-		require.NoError(t, factory.Start(ctx))
-		require.NoError(t, factory.Stop(ctx))
-
-		_, err := factory.OrganizationDAO()
-		require.Error(t, err)
-		var closedErr ErrFactoryClosed
-		assert.True(t, errors.As(err, &closedErr))
-	})
-}
-
 func TestFactory_UserDAO(t *testing.T) {
 	t.Run("returns DAO successfully", func(t *testing.T) {
 		storage := newMemoryStorage()

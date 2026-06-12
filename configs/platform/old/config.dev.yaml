@@ -515,7 +515,7 @@ webservice:
   - pattern: "^/test.html$"
     target: /swagger/
   jwt:
-    expiration: 525960
+    expiration: 60
     issuer: trusted-platform
   webauthn:
     display-name: Trusted Platform (Dev)

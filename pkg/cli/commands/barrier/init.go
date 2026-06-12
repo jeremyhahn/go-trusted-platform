@@ -60,7 +60,8 @@ func newInitCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
   --barrier-strategy  Required. One of: none, passphrase, shamir.
   --passphrase        Required for passphrase / shamir. Forbidden for none.
   --so-pin            Optional. Sets the Security Officer PIN on the
-                      canonical PINBackend. Forbidden for --barrier-strategy=none.
+                      canonical PINBackend. Requires --user-pin (dual-control).
+                      Forbidden for --barrier-strategy=none.
   --user-pin          Optional. Sets the user PIN. Requires --so-pin.
                       Forbidden for --barrier-strategy=none.
 
@@ -77,7 +78,7 @@ canonical 9-verb tree.`,
 	cmd.Flags().StringVar(&f.secret, "passphrase", "",
 		"Wrapping passphrase (required for passphrase / shamir; forbidden for none)")
 	cmd.Flags().StringVar(&f.soPin, "so-pin", "",
-		"Security Officer PIN (canonical PINBackend; forbidden when --barrier-strategy=none)")
+		"Security Officer PIN (requires --user-pin; forbidden when --barrier-strategy=none)")
 	cmd.Flags().StringVar(&f.userPin, "user-pin", "",
 		"User PIN (requires --so-pin; forbidden when --barrier-strategy=none)")
 	return cmd
@@ -107,6 +108,9 @@ func validateInitFlags(f *initFlags) error {
 	}
 	if f.userPin != "" && f.soPin == "" {
 		return ErrUserPinRequiresSOPin{}
+	}
+	if f.soPin != "" && f.userPin == "" {
+		return ErrSOPinRequiresUserPin{}
 	}
 	return nil
 }

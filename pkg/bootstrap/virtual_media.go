@@ -20,7 +20,6 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1299,11 +1298,18 @@ func staticIPsFromOverrides(overrides map[string]interface{}) []string {
 // for use by subsequent TLS calls (fetchControlPlaneSPKIPin,
 // ControlPlaneCAPool).
 //
-// The initial TLS connection uses InsecureSkipVerify — intentional,
-// because the CA we're fetching IS the trust anchor. The
-// capture-then-verify step restores the security guarantee: the
-// body is only trusted when it is signed by the same issuer that
-// presented the TLS certificate.
+// The CA bundle being fetched IS the trust anchor, so by definition
+// there is no prior trust anchor to verify against at handshake time.
+// Instead of trusting the connection blindly (TOFU), this function
+// uses capture-then-verify: the TLS peer chain presented during the
+// handshake is captured via VerifyConnection, and after the bundle is
+// read the captured chain is verified against the bundle itself. A
+// bundle whose serving chain does not verify against it is rejected
+// with ErrCABundleVerifyFailed and never stored. After this function
+// returns successfully the verified CA pool is stored on the
+// orchestrator (o.cpCAPool) so that all subsequent connections
+// (seeder, health checker, SPKI pin capture) perform standard CA
+// chain verification.
 func (o *Orchestrator) fetchControlPlaneCABundle(ctx context.Context) (string, error) {
 	var cpNode *DiscoveredNode
 	for i := range o.discovered {
@@ -1321,27 +1327,34 @@ func (o *Orchestrator) fetchControlPlaneCABundle(ctx context.Context) (string, e
 		return "", fmt.Errorf("control-plane node has no static IP override")
 	}
 
-	// Step 1: open a raw TLS connection to capture the peer chain
-	// before the HTTP GET, so we have the handshake anchor available
-	// for the verify step regardless of HTTP redirect behaviour.
-	addr := cpIPs[0] + ":" + cpWebservicePort
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	conn, err := tls.DialWithDialer(dialer, "tcp", addr, &tls.Config{
-		InsecureSkipVerify: true, //nolint:gosec // bootstrap trust anchor capture
-	})
-	if err != nil {
-		return "", fmt.Errorf("CP TLS dial %s: %w", addr, err)
-	}
-	peerChain := conn.ConnectionState().PeerCertificates
-	conn.Close()
+	endpoint := net.JoinHostPort(cpIPs[0], cpWebservicePort)
+	url := "https://" + endpoint + "/api/v1/acme/ca-bundle"
 
-	// Step 2: fetch the bundle over HTTPS (InsecureSkipVerify; we verify below).
-	url := "https://" + addr + "/api/v1/acme/ca-bundle"
-	httpClient := &http.Client{
+	// Capture-then-verify: the CP's CA was just self-provisioned, so no
+	// prior trust anchor exists at handshake time. VerifyConnection
+	// captures the peer chain presented by the server; once the bundle
+	// is read, the captured chain is verified against the bundle below.
+	// SessionTicketsDisabled forces a full handshake on every connection
+	// because resumed sessions skip VerifyConnection (CWE-295).
+	var peerChain []*x509.Certificate
+	client := &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, //nolint:gosec // bootstrap trust anchor fetch
+				// InsecureSkipVerify bypasses CA chain validation, which is
+				// impossible here — the CA bundle is what we are fetching.
+				// VerifyConnection captures the chain for the post-hoc
+				// verification against the fetched bundle below.
+				InsecureSkipVerify:     true, //nolint:gosec // chain captured via VerifyConnection and verified against the fetched bundle below
+				MinVersion:             tls.VersionTLS13,
+				SessionTicketsDisabled: true,
+				VerifyConnection: func(cs tls.ConnectionState) error {
+					if len(cs.PeerCertificates) == 0 {
+						return ErrNoPeerCertificates{Endpoint: endpoint}
+					}
+					peerChain = cs.PeerCertificates
+					return nil
+				},
 			},
 		},
 	}
@@ -1349,7 +1362,7 @@ func (o *Orchestrator) fetchControlPlaneCABundle(ctx context.Context) (string, e
 	if err != nil {
 		return "", err
 	}
-	resp, err := httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -1362,114 +1375,50 @@ func (o *Orchestrator) fetchControlPlaneCABundle(ctx context.Context) (string, e
 		return "", err
 	}
 
-	// Step 3: parse the returned PEM bundle.
-	pool, bundleCerts, err := parseCAPEMBundle(body)
-	if err != nil {
-		return "", err
+	// Build a CA pool from the fetched bundle.
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(body) {
+		return "", ErrCABundleInvalid{URL: url}
 	}
 
-	// Step 4: capture-then-verify. Every cert in the bundle must be
-	// anchored in the handshake peer chain. This guards against a MITM
-	// returning an unrelated bundle, and against the subtler attack of
-	// appending an attacker CA to an otherwise genuine bundle.
-	if err := verifyBundleMatchesPeerChain(bundleCerts, peerChain); err != nil {
-		return "", err
+	// Capture-then-verify: the chain that served the bundle must verify
+	// against the bundle itself, anchored at the CP IP we dialed. This
+	// rejects partial interception and guarantees the stored pool
+	// actually validates the endpoint it came from, so every subsequent
+	// connection (seeder, health checker, SPKI pin capture) performs
+	// full CA chain verification against o.cpCAPool.
+	if len(peerChain) == 0 {
+		return "", ErrNoPeerCertificates{Endpoint: endpoint}
+	}
+	intermediates := x509.NewCertPool()
+	for _, c := range peerChain[1:] {
+		intermediates.AddCert(c)
+	}
+	if _, err := peerChain[0].Verify(x509.VerifyOptions{
+		Roots:         pool,
+		Intermediates: intermediates,
+		DNSName:       cpIPs[0],
+		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}); err != nil {
+		return "", ErrCABundleVerifyFailed{URL: url, Cause: err}
 	}
 
+	// Store the verified pool on the orchestrator so that subsequent
+	// connections verify the CP's TLS certificate with standard CA
+	// chain validation.
 	o.cpCAPool = pool
+	// Propagate the freshly verified pool to the health checker so
+	// subsequent probes verify the CP's TLS cert.
+	o.propagateCAPool()
+
 	return string(body), nil
 }
 
-// parseCAPEMBundle decodes a PEM-encoded sequence of X.509 certificates.
-// Returns ErrCABundleInvalid when no valid cert block is found.
-func parseCAPEMBundle(pemBytes []byte) (*x509.CertPool, []*x509.Certificate, error) {
-	pool := x509.NewCertPool()
-	var certs []*x509.Certificate
-	rest := pemBytes
-	for len(rest) > 0 {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		if block.Type != "CERTIFICATE" {
-			continue
-		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			return nil, nil, ErrCABundleInvalid{Reason: err.Error()}
-		}
-		pool.AddCert(cert)
-		certs = append(certs, cert)
-	}
-	if len(certs) == 0 {
-		return nil, nil, ErrCABundleInvalid{Reason: "no valid certificate blocks found"}
-	}
-	return pool, certs, nil
-}
-
-// verifyBundleMatchesPeerChain checks that EVERY cert in bundleCerts is
-// anchored in the TLS handshake peer chain: it either shares a
-// SubjectPublicKeyInfo with a peer-chain cert, or it signed one of the
-// peer-chain certs (the root case — servers commonly omit the
-// self-signed root from the handshake). Requiring every cert to match
-// prevents a MITM from smuggling an attacker CA into an otherwise
-// genuine bundle; "at least one matches" would let the rest of the pool
-// be poisoned. Returns ErrCABundleVerifyFailed on the first unanchored
-// cert.
-//
-// Note this strict policy intentionally rejects rotation-style bundles
-// carrying CAs unrelated to the live handshake chain — at greenfield
-// bootstrap time the CP was just installed, so its bundle is exactly
-// its fresh chain.
-func verifyBundleMatchesPeerChain(bundleCerts, peerChain []*x509.Certificate) error {
-	if len(peerChain) == 0 {
-		return ErrCABundleVerifyFailed{Reason: "TLS handshake returned an empty peer chain"}
-	}
-	spkiHash := func(c *x509.Certificate) ([32]byte, error) {
-		der, err := x509.MarshalPKIXPublicKey(c.PublicKey)
-		if err != nil {
-			return [32]byte{}, err
-		}
-		return sha256.Sum256(der), nil
-	}
-	peerPins := make(map[[32]byte]struct{}, len(peerChain))
-	for _, c := range peerChain {
-		pin, err := spkiHash(c)
-		if err != nil {
-			continue
-		}
-		peerPins[pin] = struct{}{}
-	}
-	for _, c := range bundleCerts {
-		pin, err := spkiHash(c)
-		if err != nil {
-			return ErrCABundleVerifyFailed{Reason: fmt.Sprintf(
-				"marshal SPKI for bundle cert %q: %v", c.Subject.CommonName, err)}
-		}
-		if _, ok := peerPins[pin]; ok {
-			continue
-		}
-		// Root case: accept when this bundle cert signed a cert that
-		// was presented in the handshake.
-		signedPeer := false
-		for _, p := range peerChain {
-			if p.CheckSignatureFrom(c) == nil {
-				signedPeer = true
-				break
-			}
-		}
-		if !signedPeer {
-			return ErrCABundleVerifyFailed{Reason: fmt.Sprintf(
-				"bundle cert %q is not anchored in the TLS handshake chain", c.Subject.CommonName)}
-		}
-	}
-	return nil
-}
-
-// ControlPlaneCAPool returns the CP CA pool, fetching it on first call
-// via fetchControlPlaneCABundle and caching the result. Subsequent
-// calls return the cached pool without a network round-trip.
+// ControlPlaneCAPool returns the control plane's CA pool for verifying
+// TLS connections to bootstrap nodes, fetching the CA bundle via
+// fetchControlPlaneCABundle (capture-then-verify) when it has not been
+// fetched yet. Discover must have been called first so the control-plane
+// node is known.
 func (o *Orchestrator) ControlPlaneCAPool(ctx context.Context) (*x509.CertPool, error) {
 	if o.cpCAPool != nil {
 		return o.cpCAPool, nil
@@ -1494,17 +1443,13 @@ func (o *Orchestrator) ControlPlaneCAPool(ctx context.Context) (*x509.CertPool, 
 // per-MAC config endpoint. Unlike embedded, the pin is only ~64 bytes
 // vs the full bundle, making it cheap to refresh after CA rotation.
 //
-// Uses tls.Dial directly with InsecureSkipVerify (we are establishing
-// the trust anchor — there is by definition no anchor to verify
-// against yet). Same security perimeter argument as
-// fetchControlPlaneCABundle.
+// The dial is verified against o.cpCAPool, the pool captured and
+// verified by fetchControlPlaneCABundle. The bundle fetch is a hard
+// prerequisite: capturing a pin over an unverified connection would
+// pin whichever endpoint answered, defeating the SPKI strategy. When
+// the pool is unavailable this returns ErrCABundleRequired and the
+// caller falls back to the remaining trust-bootstrap strategies.
 func (o *Orchestrator) fetchControlPlaneSPKIPin(ctx context.Context) (string, error) {
-	// Guard: cpCAPool must be populated by fetchControlPlaneCABundle first
-	// so we can verify the peer chain against a known-good anchor.
-	if o.cpCAPool == nil {
-		return "", ErrCABundleRequired{}
-	}
-
 	var cpNode *DiscoveredNode
 	for i := range o.discovered {
 		if o.discovered[i].Role == RoleControlPlane {
@@ -1521,10 +1466,19 @@ func (o *Orchestrator) fetchControlPlaneSPKIPin(ctx context.Context) (string, er
 		return "", fmt.Errorf("control-plane node has no static IP override")
 	}
 
+	// The verified CA pool from fetchControlPlaneCABundle is a hard
+	// prerequisite — never capture a pin over an unverified connection.
+	if o.cpCAPool == nil {
+		return "", ErrCABundleRequired{Operation: "SPKI pin capture"}
+	}
+
+	endpoint := net.JoinHostPort(cpIPs[0], cpWebservicePort)
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	conn, err := tls.DialWithDialer(dialer, "tcp", cpIPs[0]+":"+cpWebservicePort, &tls.Config{
-		InsecureSkipVerify: true, //nolint:gosec // bootstrap trust anchor capture
-	})
+	tlsCfg := &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		RootCAs:    o.cpCAPool,
+	}
+	conn, err := tls.DialWithDialer(dialer, "tcp", endpoint, tlsCfg)
 	if err != nil {
 		return "", err
 	}
@@ -1532,24 +1486,7 @@ func (o *Orchestrator) fetchControlPlaneSPKIPin(ctx context.Context) (string, er
 
 	chain := conn.ConnectionState().PeerCertificates
 	if len(chain) == 0 {
-		return "", fmt.Errorf("control plane TLS handshake returned empty peer chain")
-	}
-
-	// Verify the captured chain against the CA pool established by
-	// fetchControlPlaneCABundle before extracting any pin from it. This
-	// is the verification half of the custom-verifier pattern: the
-	// handshake skipped library verification, so the pin is only ever
-	// derived from a chain the verified bundle actually issued.
-	intermediates := x509.NewCertPool()
-	for _, c := range chain[1:] {
-		intermediates.AddCert(c)
-	}
-	if _, err := chain[0].Verify(x509.VerifyOptions{
-		Roots:         o.cpCAPool,
-		Intermediates: intermediates,
-	}); err != nil {
-		return "", ErrCABundleVerifyFailed{Reason: fmt.Sprintf(
-			"control plane TLS chain does not verify against the captured CA bundle: %v", err)}
+		return "", ErrNoPeerCertificates{Endpoint: endpoint}
 	}
 
 	// The trust anchor for ACME enrollment is the CA cert that signed

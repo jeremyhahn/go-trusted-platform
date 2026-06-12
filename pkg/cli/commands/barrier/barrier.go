@@ -31,8 +31,8 @@
 //	barrier unseal         --passphrase <pass>
 //	barrier unseal-shares  --share <s> [--share <s> ...]  |  --shares-file <path|->
 //	barrier seal           [--so-pin <pin>] [-y]
-//	barrier rekey          --passphrase <new> [--so-pin <pin>]
-//	                       [--threshold <N> --total <M>]
+//	barrier rekey          [--so-pin <pin>]
+//	                       [--threshold <N> --total <M>]    (paired; no secret on the wire)
 //	barrier recovery generate --threshold <N> --total <M> [--so-pin <pin>]
 //	barrier recovery recover  --share <s> [--share <s> ...]
 package barrier

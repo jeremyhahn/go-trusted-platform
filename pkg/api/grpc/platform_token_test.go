@@ -20,7 +20,9 @@ import (
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // claimsValidatorStub is a ClaimsTokenValidator test double. It records the
@@ -30,6 +32,7 @@ type claimsValidatorStub struct {
 	err     error
 
 	gotToken     string
+	gotPerm      string
 	gotDPoPProof string
 	gotHTM       string
 	calls        int
@@ -42,13 +45,23 @@ func (s *claimsValidatorStub) ValidateToken(ctx context.Context, token string) (
 	return s.err == nil, s.err
 }
 
+// AuthorizeToken records the inputs and mirrors the real validator: when a
+// requiredPerm is supplied it enforces it against the configured AuthorizedContext
+// (returning a *platformtoken.ScopeDeniedError on a miss), so the interceptor's
+// scope-threading is exercised at the validator seam rather than downstream.
 func (s *claimsValidatorStub) AuthorizeToken(ctx context.Context, token, requiredPerm, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error) {
 	s.calls++
 	s.gotToken = token
+	s.gotPerm = requiredPerm
 	s.gotDPoPProof = dpopProof
 	s.gotHTM = htm
 	if s.err != nil {
 		return nil, s.err
+	}
+	if requiredPerm != "" {
+		if err := s.authCtx.RequireScope(requiredPerm); err != nil {
+			return nil, err
+		}
 	}
 	return s.authCtx, nil
 }
@@ -132,6 +145,40 @@ func TestOIDCUnaryInterceptor_ClaimsPath_ScopeGateDenies(t *testing.T) {
 	}
 }
 
+// TestOIDCUnaryInterceptor_ClaimsPath_RequiredPermThreaded verifies the
+// interceptor threads the method's catalog scope into the validator as
+// requiredPerm and that a scope-missing token is denied AT THE VALIDATOR (mapped
+// to PermissionDenied), not by a downstream RequireScope call.
+func TestOIDCUnaryInterceptor_ClaimsPath_RequiredPermThreaded(t *testing.T) {
+	// AddRecord on the real catalog requires dns:write; this token lacks it.
+	const method = "/platform.v1.DNSService/AddRecord"
+	stub := &claimsValidatorStub{authCtx: &platformtoken.AuthorizedContext{
+		Subject: "user-1",
+		Scopes:  []string{"dns:read"},
+	}}
+	interceptor := OIDCUnaryInterceptor(WithTokenValidator(stub))
+
+	called := false
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		called = true
+		return "ok", nil
+	}
+	info := &grpc.UnaryServerInfo{FullMethod: method}
+	_, err := interceptor(bearerCtx("tok"), nil, info, handler)
+	if err == nil {
+		t.Fatal("expected permission-denied from the validator")
+	}
+	if called {
+		t.Error("handler must not run when the validator denies scope")
+	}
+	if stub.gotPerm != "dns:write" {
+		t.Errorf("requiredPerm threaded = %q, want dns:write", stub.gotPerm)
+	}
+	if got := status.Code(err); got != codes.PermissionDenied {
+		t.Errorf("status code = %v, want PermissionDenied", got)
+	}
+}
+
 func TestOIDCUnaryInterceptor_ClaimsPath_DPoPMetadataForwarded(t *testing.T) {
 	stub := &claimsValidatorStub{authCtx: &platformtoken.AuthorizedContext{Subject: "u"}}
 	interceptor := OIDCUnaryInterceptor(WithTokenValidator(stub))
@@ -165,6 +212,24 @@ func TestOIDCUnaryInterceptor_ClaimsPath_InvalidTokenRejected(t *testing.T) {
 	}
 	if called {
 		t.Error("handler should not run on invalid token")
+	}
+}
+
+// TestOIDCUnaryInterceptor_ClaimsPath_ConfigErrorMapsToInternal verifies a
+// fail-closed validator configuration error (e.g. a missing liveness backend)
+// surfaces as codes.Internal rather than Unauthenticated.
+func TestOIDCUnaryInterceptor_ClaimsPath_ConfigErrorMapsToInternal(t *testing.T) {
+	stub := &claimsValidatorStub{err: &platformtoken.ConfigError{Detail: "liveness checker required"}}
+	interceptor := OIDCUnaryInterceptor(WithTokenValidator(stub))
+
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) { return "ok", nil }
+	info := &grpc.UnaryServerInfo{FullMethod: "/svc/Method"}
+	_, err := interceptor(bearerCtx("tok"), nil, info, handler)
+	if err == nil {
+		t.Fatal("expected a config error response")
+	}
+	if got := status.Code(err); got != codes.Internal {
+		t.Errorf("status code = %v, want Internal", got)
 	}
 }
 

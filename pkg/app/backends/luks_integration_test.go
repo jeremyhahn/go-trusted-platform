@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
+	luks "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/luks"
 	"github.com/jeremyhahn/go-xkms/pkg/fido2"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
@@ -324,9 +325,9 @@ type integrationStubTPM struct {
 }
 
 func (s *integrationStubTPM) Seal(_ context.Context, _ string, _ []int32) ([]byte, []byte, error) {
-	token := &tpmLUKSToken{
+	token := &luks.TPMToken{
 		Type:        LUKSTPMTokenType,
-		TPM2Blob:    encodeSealBlobs([]byte{0x01}, []byte{0x02}),
+		TPM2Blob:    luks.EncodeTPMSealBlobs([]byte{0x01}, []byte{0x02}),
 		TPM2PCRBank: "sha256",
 		TPM2PCRs:    []int{7},
 		TPM2Handle:  0x81000001,

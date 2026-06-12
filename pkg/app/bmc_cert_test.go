@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	acmeclient "github.com/jeremyhahn/go-xkms/pkg/acme/client"
 	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 
@@ -63,12 +64,12 @@ func (f *fakeACME) RequestCertificate(_ context.Context, req *acmeclient.Certifi
 type fakeLocalCA struct {
 	mu      sync.Mutex
 	err     error
-	lastReq *xkmsca.CertificateRequest
+	lastReq *quicbaasca.CACertificateRequest
 	callCnt int
 	retCert *x509.Certificate
 }
 
-func (f *fakeLocalCA) IssueCertificate(_ context.Context, req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (f *fakeLocalCA) IssueCertificate(_ context.Context, req *quicbaasca.CACertificateRequest) (*quicbaasca.IssuedCertificate, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.callCnt++
@@ -77,9 +78,9 @@ func (f *fakeLocalCA) IssueCertificate(_ context.Context, req *xkmsca.Certificat
 		return nil, f.err
 	}
 	if f.retCert != nil {
-		return &xkmsca.IssuedCertificate{Certificate: f.retCert}, nil
+		return &quicbaasca.IssuedCertificate{Certificate: f.retCert}, nil
 	}
-	return &xkmsca.IssuedCertificate{Certificate: testIssuedCertificate()}, nil
+	return &quicbaasca.IssuedCertificate{Certificate: testIssuedCertificate()}, nil
 }
 
 type fakeDNS struct {

@@ -47,7 +47,6 @@ type UserServicer interface {
 type User struct {
 	logger  *logging.Logger
 	userDAO datastore.UserDAO
-	orgDAO  datastore.OrganizationDAO
 	roleDAO datastore.RoleDAO
 }
 
@@ -55,14 +54,12 @@ type User struct {
 func NewUserService(
 	logger *logging.Logger,
 	userDAO datastore.UserDAO,
-	orgDAO datastore.OrganizationDAO,
 	roleDAO datastore.RoleDAO,
 	authServices map[int]AuthServicer) UserServicer {
 
 	return &User{
 		logger:  logger,
 		userDAO: userDAO,
-		orgDAO:  orgDAO,
 		roleDAO: roleDAO,
 	}
 }

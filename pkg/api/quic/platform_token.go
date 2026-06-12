@@ -31,11 +31,12 @@ import (
 // HTTP header, and has no DPoP frame, so QUIC validation is always bearer: the
 // proof / htm / htu inputs to the validator are empty.
 type ClaimsTokenValidator interface {
-	// AuthorizeToken validates the bearer token and returns the projected
-	// AuthorizedContext, or a typed error mapped to StatusUnauthorized.
-	// requiredPerm is the qrdb-canonical "resource:action" scope to enforce
-	// during validation; the middleware passes "" and AuthorizeRequest
-	// enforces the required scope post-hoc against the AuthorizedContext.
+	// AuthorizeToken runs the full validator pipeline and returns the projected
+	// AuthorizedContext. When requiredPerm is empty the offline scope check is
+	// skipped but the per-tenant online liveness/revocation check is still
+	// enforced. QUIC authenticates with requiredPerm="" (the opcode's required
+	// scope is not known until AuthorizeRequest, which then enforces it against
+	// the stored AuthorizedContext), so liveness runs on every request path.
 	AuthorizeToken(ctx context.Context, token, requiredPerm, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error)
 }
 

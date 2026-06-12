@@ -483,7 +483,7 @@ func TestGenericDAO_SaveAndRetrieve_ComplexEntity(t *testing.T) {
 
 	user := entities.NewUser("test@example.com")
 	user.DisplayName = "Test User"
-	user.OrganizationRefs = []uint64{1, 2, 3}
+	user.ServiceRefs = []uint64{1, 2, 3}
 	user.Roles = []*entities.Role{
 		{ID: 1, Name: "admin"},
 		{ID: 2, Name: "user"},
@@ -497,7 +497,7 @@ func TestGenericDAO_SaveAndRetrieve_ComplexEntity(t *testing.T) {
 
 	assert.Equal(t, user.Email, retrieved.Email)
 	assert.Equal(t, user.DisplayName, retrieved.DisplayName)
-	assert.Equal(t, user.OrganizationRefs, retrieved.OrganizationRefs)
+	assert.Equal(t, user.ServiceRefs, retrieved.ServiceRefs)
 	assert.Len(t, retrieved.Roles, 2)
 	assert.Equal(t, "admin", retrieved.Roles[0].Name)
 	assert.Equal(t, "user", retrieved.Roles[1].Name)

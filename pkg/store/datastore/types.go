@@ -148,13 +148,6 @@ type GenericDAO[E Entity] interface {
 	Pager[E]
 }
 
-// OrganizationDAO provides operations for Organization entities.
-type OrganizationDAO interface {
-	// GetUsers returns all users belonging to the organization.
-	GetUsers(ctx context.Context, id uint64) ([]*entities.User, error)
-	GenericDAO[*entities.Organization]
-}
-
 // UserDAO provides operations for User entities.
 type UserDAO interface {
 	GenericDAO[*entities.User]
@@ -192,7 +185,6 @@ type WebAuthnDAO interface {
 
 // Factory provides access to all DAO implementations.
 type Factory interface {
-	OrganizationDAO() (OrganizationDAO, error)
 	UserDAO() (UserDAO, error)
 	RegistrationDAO() (RegistrationDAO, error)
 	InvitationDAO() (InvitationDAO, error)

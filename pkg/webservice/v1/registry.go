@@ -985,10 +985,16 @@ func (registry *HandlerRegistry) PlatformTokenMiddleware() middleware.AuthMiddle
 
 	pt := cfg.JWT.PlatformToken
 	validator, err := iammw.NewPlatformTokenValidator(iammw.PlatformTokenValidatorParams{
-		Issuer:   pt.Issuer,
-		JWKSURL:  pt.JWKSURL,
-		Audience: pt.Audience,
-		CacheTTL: time.Duration(pt.CacheTTLSeconds) * time.Second,
+		Issuer:                    pt.Issuer,
+		JWKSURL:                   pt.JWKSURL,
+		Audience:                  pt.Audience,
+		CacheTTL:                  time.Duration(pt.CacheTTLSeconds) * time.Second,
+		IntrospectionURL:          pt.IntrospectionURL,
+		IntrospectionClientID:     pt.IntrospectionClientID,
+		IntrospectionClientSecret: pt.IntrospectionClientSecret,
+		IntrospectionBearerToken:  pt.IntrospectionBearerToken,
+		AuthzMode:                 pt.AuthzMode,
+		LivenessCacheTTL:          time.Duration(pt.LivenessCacheTTLSeconds) * time.Second,
 	})
 	if err != nil {
 		registry.params.Logger.FatalError(err)

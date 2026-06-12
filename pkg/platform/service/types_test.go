@@ -90,8 +90,8 @@ func (m *mockAuthServicer) Activate(registrationID uint64) (*entities.User, erro
 	return nil, nil
 }
 
-func (m *mockAuthServicer) Login(userCredentials *UserCredential) (*entities.User, []*entities.Organization, []*entities.Service, error) {
-	return nil, nil, nil, nil
+func (m *mockAuthServicer) Login(userCredentials *UserCredential) (*entities.User, []*entities.Service, error) {
+	return nil, nil, nil
 }
 
 func (m *mockAuthServicer) Register(userCredentials *UserCredential, baseURI string) (*entities.User, error) {

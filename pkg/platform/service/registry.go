@@ -67,11 +67,6 @@ func NewRegistry(
 
 // NewRegistryWithConfig creates a new Registry with full configuration options.
 func NewRegistryWithConfig(config *RegistryConfig) (*Registry, error) {
-	orgDAO, err := config.DAOFactory.OrganizationDAO()
-	if err != nil {
-		return nil, err
-	}
-
 	regDAO, err := config.DAOFactory.RegistrationDAO()
 	if err != nil {
 		return nil, err
@@ -95,7 +90,6 @@ func NewRegistryWithConfig(config *RegistryConfig) (*Registry, error) {
 	userService := NewUserService(
 		config.Logger,
 		userDAO,
-		orgDAO,
 		roleDAO,
 		nil)
 

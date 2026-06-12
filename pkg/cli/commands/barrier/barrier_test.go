@@ -139,6 +139,11 @@ func TestValidateInitFlags(t *testing.T) {
 			wantErr: ErrUserPinRequiresSOPin{},
 		},
 		{
+			name:    "so-pin requires user-pin (bidirectional dual-control)",
+			in:      initFlags{strategy: "passphrase", secret: "p", soPin: "1"},
+			wantErr: ErrSOPinRequiresUserPin{},
+		},
+		{
 			name:    "shamir requires secret",
 			in:      initFlags{strategy: "shamir"},
 			wantErr: ErrSecretRequired{},
@@ -236,6 +241,15 @@ func TestValidateInitShamirFlags(t *testing.T) {
 			in:      initShamirFlags{secret: "p", threshold: 3, total: 5, userPin: "u"},
 			wantErr: ErrUserPinRequiresSOPin{},
 		},
+		{
+			name:    "so-pin without user-pin (bidirectional dual-control)",
+			in:      initShamirFlags{secret: "p", threshold: 3, total: 5, soPin: "s"},
+			wantErr: ErrSOPinRequiresUserPin{},
+		},
+		{
+			name: "both pins OK",
+			in:   initShamirFlags{secret: "p", threshold: 3, total: 5, soPin: "s", userPin: "u"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -281,6 +295,11 @@ func TestValidateRekeyFlags(t *testing.T) {
 			name:    "threshold > total",
 			in:      rekeyFlags{threshold: 5, total: 3},
 			wantErr: ErrInvalidThreshold{},
+		},
+		{
+			name:    "total below minimum",
+			in:      rekeyFlags{threshold: 1, total: 1},
+			wantErr: ErrInvalidTotal{},
 		},
 	}
 	for _, tc := range cases {

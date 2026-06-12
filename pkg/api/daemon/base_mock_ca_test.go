@@ -29,9 +29,8 @@ import (
 )
 
 // baseMockCA is a zero-behavior mock that implements every method of
-// ca.TCGCA (and the ObjectStore() extension used via type assertion by
-// the CA gRPC service). Individual tests embed baseMockCA in their own
-// mock types and override just the methods they care about.
+// ca.TCGCA. Individual tests embed baseMockCA in their own mock types
+// and override just the methods they care about.
 type baseMockCA struct{}
 
 // crypto.Signer

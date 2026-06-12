@@ -36,14 +36,6 @@ type MockDatastoreFactory struct {
 	mock.Mock
 }
 
-func (m *MockDatastoreFactory) OrganizationDAO() (datastore.OrganizationDAO, error) {
-	args := m.Called()
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(datastore.OrganizationDAO), args.Error(1)
-}
-
 func (m *MockDatastoreFactory) UserDAO() (datastore.UserDAO, error) {
 	args := m.Called()
 	if args.Get(0) == nil {
@@ -92,14 +84,12 @@ func (m *MockDatastoreFactory) SerializerType() serializer.SerializerType {
 func TestNewRegistry_Success(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -113,27 +103,9 @@ func TestNewRegistry_Success(t *testing.T) {
 	mockFactory.AssertExpectations(t)
 }
 
-func TestNewRegistry_OrganizationDAOError(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
-	mockFactory := new(MockDatastoreFactory)
-
-	expectedErr := errors.New("organization dao error")
-	mockFactory.On("OrganizationDAO").Return(nil, expectedErr)
-
-	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
-
-	assert.Error(t, err)
-	assert.Equal(t, expectedErr, err)
-	assert.Nil(t, registry)
-	mockFactory.AssertExpectations(t)
-}
-
 func TestNewRegistry_RegistrationDAOError(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
-
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 
 	expectedErr := errors.New("registration dao error")
 	mockFactory.On("RegistrationDAO").Return(nil, expectedErr)
@@ -149,10 +121,8 @@ func TestNewRegistry_RegistrationDAOError(t *testing.T) {
 func TestNewRegistry_RoleDAOError(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 
 	expectedErr := errors.New("role dao error")
@@ -169,11 +139,9 @@ func TestNewRegistry_RoleDAOError(t *testing.T) {
 func TestNewRegistry_UserDAOError(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 
@@ -191,12 +159,10 @@ func TestNewRegistry_UserDAOError(t *testing.T) {
 func TestNewRegistry_WebAuthnDAOError(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -215,14 +181,12 @@ func TestNewRegistry_WebAuthnDAOError(t *testing.T) {
 func TestRegistry_DeviceService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -241,14 +205,12 @@ func TestRegistry_DeviceService(t *testing.T) {
 func TestRegistry_DeviceService_Nil(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -265,14 +227,12 @@ func TestRegistry_DeviceService_Nil(t *testing.T) {
 func TestRegistry_DNSService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -291,14 +251,12 @@ func TestRegistry_DNSService(t *testing.T) {
 func TestRegistry_DNSService_Nil(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -315,14 +273,12 @@ func TestRegistry_DNSService_Nil(t *testing.T) {
 func TestRegistry_UserService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -340,14 +296,12 @@ func TestRegistry_UserService(t *testing.T) {
 func TestRegistry_RegistrationService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -365,14 +319,12 @@ func TestRegistry_RegistrationService(t *testing.T) {
 func TestRegistry_WebAuthnSessionService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -390,14 +342,12 @@ func TestRegistry_WebAuthnSessionService(t *testing.T) {
 func TestRegistry_AllServices(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -421,14 +371,12 @@ func TestRegistry_AllServices(t *testing.T) {
 func TestRegistry_ServicesAreReusable(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -455,14 +403,12 @@ func TestRegistry_ServicesAreReusable(t *testing.T) {
 func TestRegistry_ProfileService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -481,14 +427,12 @@ func TestRegistry_ProfileService(t *testing.T) {
 func TestRegistry_ProfileService_Nil(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -516,14 +460,12 @@ func TestRegistry_Struct(t *testing.T) {
 func TestRegistry_WithMockedUserService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -551,14 +493,12 @@ func TestRegistry_WithMockedUserService(t *testing.T) {
 func TestRegistry_InvitationService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -579,13 +519,11 @@ func TestRegistry_InvitationService(t *testing.T) {
 func TestRegistry_InvitationService_NilWhenDAOFails(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -606,14 +544,12 @@ func TestRegistry_InvitationService_NilWhenDAOFails(t *testing.T) {
 func TestRegistry_TenantUserService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -633,14 +569,12 @@ func TestRegistry_TenantUserService(t *testing.T) {
 func TestRegistry_SetTenantUserService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -668,14 +602,12 @@ func TestRegistry_SetTenantUserService(t *testing.T) {
 func TestRegistry_SetTenantUserService_Nil(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -700,13 +632,11 @@ func TestRegistry_SetTenantUserService_Nil(t *testing.T) {
 func TestRegistry_SetInvitationService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -735,14 +665,12 @@ func TestRegistry_SetInvitationService(t *testing.T) {
 func TestRegistry_SetInvitationService_Nil(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)
@@ -765,14 +693,12 @@ func TestRegistry_SetInvitationService_Nil(t *testing.T) {
 func TestRegistry_SetInvitationService_Replace(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRegDAO := new(MockRegistrationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	mockUserDAO := new(MockUserDAO)
 	mockWebAuthnDAO := new(MockWebAuthnDAO)
 	mockInvitationDAO := new(MockInvitationDAO)
 
-	mockFactory.On("OrganizationDAO").Return(mockOrgDAO, nil)
 	mockFactory.On("RegistrationDAO").Return(mockRegDAO, nil)
 	mockFactory.On("RoleDAO").Return(mockRoleDAO, nil)
 	mockFactory.On("UserDAO").Return(mockUserDAO, nil)

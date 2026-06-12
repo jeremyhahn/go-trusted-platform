@@ -93,6 +93,27 @@ type EngineStats struct {
 	ActiveConnections atomic.Int64
 }
 
+// EngineStatsSnapshot is a plain-value copy of the engine counters at
+// a point in time. Stats returns this type instead of EngineStats so
+// callers never copy the live atomic counters (which carry noCopy
+// semantics).
+type EngineStatsSnapshot struct {
+	// PacketsProcessed is the total number of packets evaluated.
+	PacketsProcessed uint64
+
+	// PacketsAllowed is the number of packets permitted.
+	PacketsAllowed uint64
+
+	// PacketsDenied is the number of packets dropped or rejected.
+	PacketsDenied uint64
+
+	// PacketsNATted is the number of packets with NAT applied.
+	PacketsNATted uint64
+
+	// ActiveConnections is the current number of tracked connections.
+	ActiveConnections int64
+}
+
 // Engine is the stateful firewall packet processor. It combines
 // connection tracking, zone-based policy, NAT, and priority-ordered
 // rules into a single evaluation pipeline.
@@ -240,14 +261,14 @@ func (e *Engine) evaluateRules(pkt *PacketInfo) Action {
 }
 
 // Stats returns a snapshot of the engine statistics.
-func (e *Engine) Stats() EngineStats {
-	var s EngineStats
-	s.PacketsProcessed.Store(e.stats.PacketsProcessed.Load())
-	s.PacketsAllowed.Store(e.stats.PacketsAllowed.Load())
-	s.PacketsDenied.Store(e.stats.PacketsDenied.Load())
-	s.PacketsNATted.Store(e.stats.PacketsNATted.Load())
-	s.ActiveConnections.Store(e.stats.ActiveConnections.Load())
-	return s
+func (e *Engine) Stats() EngineStatsSnapshot {
+	return EngineStatsSnapshot{
+		PacketsProcessed:  e.stats.PacketsProcessed.Load(),
+		PacketsAllowed:    e.stats.PacketsAllowed.Load(),
+		PacketsDenied:     e.stats.PacketsDenied.Load(),
+		PacketsNATted:     e.stats.PacketsNATted.Load(),
+		ActiveConnections: e.stats.ActiveConnections.Load(),
+	}
 }
 
 // ConnTrackCount returns the number of active tracked connections.

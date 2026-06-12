@@ -112,29 +112,7 @@ func (p *MCPServiceProvider) BMCEnrollBMC(
 	if err != nil {
 		return nil, err
 	}
-	steps := make([]map[string]interface{}, len(result.Steps))
-	for i, s := range result.Steps {
-		steps[i] = map[string]interface{}{
-			"name":   s.Name,
-			"ok":     s.OK,
-			"detail": s.Detail,
-		}
-	}
-	return map[string]interface{}{
-		"device_id":       result.DeviceID,
-		"endpoint":        result.Endpoint,
-		"hostname":        result.Hostname,
-		"dns_name":        result.DNSName,
-		"pin_spki_sha256": result.PinSPKISHA256,
-		"steps":           steps,
-		"factory_cert_meta": map[string]interface{}{
-			"subject":       result.FactoryCertMeta.Subject,
-			"issuer":        result.FactoryCertMeta.Issuer,
-			"serial_number": result.FactoryCertMeta.SerialNumber,
-			"spki_sha256":   result.FactoryCertMeta.SPKISHA256,
-			"sha256":        result.FactoryCertMeta.SHA256,
-		},
-	}, nil
+	return bmcEnrollResultToMap(result), nil
 }
 
 // =============================================================================
@@ -436,6 +414,55 @@ func (p *MCPServiceProvider) BMCListUsers(ctx context.Context, profileID uint64)
 		"profile_id": profileID,
 		"users":      out,
 	}, nil
+}
+
+// bmcEnrollResultToMap converts an app.BMCEnrollResult into a JSON-friendly
+// map[string]interface{} so MCP clients receive structured output matching
+// the REST EnrollResponse and gRPC BMCEnrollResponse shapes.
+func bmcEnrollResultToMap(r *app.BMCEnrollResult) map[string]interface{} {
+	if r == nil {
+		return map[string]interface{}{}
+	}
+
+	meta := map[string]interface{}{
+		"subject":       r.FactoryCertMeta.Subject,
+		"issuer":        r.FactoryCertMeta.Issuer,
+		"serial_number": r.FactoryCertMeta.SerialNumber,
+		"not_before":    r.FactoryCertMeta.NotBefore,
+		"not_after":     r.FactoryCertMeta.NotAfter,
+		"spki_sha256":   r.FactoryCertMeta.SPKISHA256,
+		"sha256":        r.FactoryCertMeta.SHA256,
+		"captured_at":   r.FactoryCertMeta.CapturedAt,
+	}
+
+	steps := make([]map[string]interface{}, len(r.Steps))
+	for i, s := range r.Steps {
+		steps[i] = map[string]interface{}{
+			"name":   s.Name,
+			"ok":     s.OK,
+			"detail": s.Detail,
+		}
+	}
+
+	out := map[string]interface{}{
+		"device_id":         r.DeviceID,
+		"endpoint":          r.Endpoint,
+		"hostname":          r.Hostname,
+		"dns_name":          r.DNSName,
+		"pin_spki_sha256":   r.PinSPKISHA256,
+		"factory_cert_meta": meta,
+		"steps":             steps,
+	}
+	if len(r.FactoryCertPEM) > 0 {
+		out["factory_cert_pem"] = string(r.FactoryCertPEM)
+	}
+	if len(r.NewCertPEM) > 0 {
+		out["new_cert_pem"] = string(r.NewCertPEM)
+	}
+	if len(r.CACertPEM) > 0 {
+		out["ca_cert_pem"] = string(r.CACertPEM)
+	}
+	return out
 }
 
 // =============================================================================

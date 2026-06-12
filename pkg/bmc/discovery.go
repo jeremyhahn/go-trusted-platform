@@ -16,6 +16,8 @@ package bmc
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -208,15 +210,23 @@ func DetectProtocol(ctx context.Context, address string, timeout time.Duration) 
 var redfishProbePort = 443
 
 // probeRedfish attempts an HTTPS connection to the Redfish service root on
-// redfishProbePort. Returns true if a 2xx-4xx response comes back within the
-// supplied timeout (5xx and connection failures both report unreachable).
+// redfishProbePort. The dial performs standard certificate verification —
+// no InsecureSkipVerify. Two outcomes report "Redfish present":
+//
+//  1. The request completes with a 2xx-4xx status (verifiable cert chain).
+//  2. The handshake fails certificate verification. Reaching certificate
+//     validation proves a live TLS stack answered on the Redfish port;
+//     BMCs ship self-signed certificates by default, so a verification
+//     failure is the expected signature of an unprovisioned BMC. No
+//     request body is sent on this path — the handshake is abandoned.
+//
+// Connection failures, timeouts, and 5xx responses report unreachable.
 func probeRedfish(ctx context.Context, address string, timeout time.Duration) bool {
 	client := &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, //nolint:gosec // Protocol detection probe only, no data exchange
-				MinVersion:         tls.VersionTLS12,
+				MinVersion: tls.VersionTLS12,
 			},
 		},
 	}
@@ -230,10 +240,31 @@ func probeRedfish(ctx context.Context, address string, timeout time.Duration) bo
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return false
+		return isCertVerificationError(err)
 	}
 	resp.Body.Close()
 	return resp.StatusCode >= 200 && resp.StatusCode < 500
+}
+
+// isCertVerificationError reports whether err is a TLS certificate
+// verification failure. A verification failure proves a live TLS endpoint
+// completed a handshake up to certificate validation, which is the probe's
+// detection signal for BMCs serving self-signed certificates.
+func isCertVerificationError(err error) bool {
+	var certErr *tls.CertificateVerificationError
+	if errors.As(err, &certErr) {
+		return true
+	}
+	var unknownAuthority x509.UnknownAuthorityError
+	if errors.As(err, &unknownAuthority) {
+		return true
+	}
+	var hostnameErr x509.HostnameError
+	if errors.As(err, &hostnameErr) {
+		return true
+	}
+	var invalidErr x509.CertificateInvalidError
+	return errors.As(err, &invalidErr)
 }
 
 // probeIPMI attempts a UDP connection to the standard IPMI/RMCP port.

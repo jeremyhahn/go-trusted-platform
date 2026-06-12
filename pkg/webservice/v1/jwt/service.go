@@ -17,8 +17,6 @@ import (
 	"context"
 	"crypto"
 	"errors"
-	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -43,9 +41,8 @@ var (
 )
 
 type TokenClaims struct {
-	Organizations []uint64 `json:"orgs"`
-	Services      []uint64 `json:"svcs"`
-	UserID        uint64   `json:"uid"`
+	Services []uint64 `json:"svcs"`
+	UserID   uint64   `json:"uid"`
 	// UserIDStr mirrors UserID as a decimal string under the standard
 	// "user_id" claim so JS/TS consumers (and any other library that
 	// expects a string identifier) can read it without dealing with
@@ -82,16 +79,6 @@ type Service struct {
 }
 
 func NewService(ctx context.Context, params ServiceParams) (*Service, error) {
-	// Debug: log the password type to trace the issue
-	var pwType string
-	if params.KeyAttrs.Password != nil {
-		pwType = fmt.Sprintf("%T", params.KeyAttrs.Password)
-	} else {
-		pwType = "nil"
-	}
-	log.Printf("jwt.NewService: KeyAttrs.CN=%s, Password type=%s, PlatformPolicy=%v",
-		params.KeyAttrs.CN, pwType, params.KeyAttrs.PlatformPolicy)
-
 	// Use go-xkms's SigningMethodSigner for crypto.Signer support
 	signingMethod, err := xkmssdk.NewJWTSigningMethodSigner(params.KeyAttrs)
 	if err != nil {

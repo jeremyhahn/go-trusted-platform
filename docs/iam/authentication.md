@@ -210,7 +210,7 @@ JWT settings control token issuance and validation:
 webservices:
   - name: public
     jwt:
-      expiration: 525960    # Token expiration in minutes
+      expiration: 60    # Token expiration in minutes (1 hour default)
       issuer: trusted-platform
 ```
 
@@ -225,8 +225,8 @@ webservices:
 
 | Use Case | Recommended Expiration |
 |----------|------------------------|
-| Development | 525960 (365 days) |
-| Production Web | 60 (1 hour) |
+| Development | 1440 (24 hours) |
+| Production Web | 60 (1 hour — default) |
 | Production API | 1440 (24 hours) |
 | High Security | 15 (15 minutes) |
 

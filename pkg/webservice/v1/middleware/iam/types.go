@@ -201,20 +201,23 @@ type AuthConfig struct {
 }
 
 // JWTConfig holds configuration for JWT token validation.
+// Only asymmetric public-key verification is supported. Symmetric (HMAC) keys
+// are not accepted; the SigningKey field has been removed to make this
+// explicit at the type level.
 type JWTConfig struct {
-	// SigningKey is the key used to validate JWT signatures (for symmetric algorithms).
-	SigningKey []byte
-
-	// PublicKey is the public key for asymmetric JWT validation.
+	// PublicKey is the asymmetric public key used to verify JWT signatures.
+	// It must be one of *rsa.PublicKey, *ecdsa.PublicKey, or ed25519.PublicKey.
+	// This field is required — construction fails when it is nil.
 	PublicKey any
 
-	// Issuer is the expected token issuer.
+	// Issuer is the expected token issuer (iss claim). Optional.
 	Issuer string
 
-	// Audience is the expected token audience.
+	// Audience is the expected token audience (aud claim). Optional.
 	Audience []string
 
-	// ClockSkew allows for clock drift between servers.
+	// ClockSkew allows for clock drift between servers. Capped at
+	// maxClockSkew (60 s); values larger than the cap are silently reduced.
 	ClockSkew time.Duration
 
 	// RequireMFA requires MFA verification claim in tokens.

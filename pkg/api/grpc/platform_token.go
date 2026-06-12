@@ -33,13 +33,13 @@ const DPoPMetadataKey = "dpop"
 // ValidateToken path (the legacy QuicBaaS / platform-JWT adapter). This keeps
 // the cutover additive — existing validators continue to work unchanged.
 type ClaimsTokenValidator interface {
-	// AuthorizeToken validates the bearer token (binding the DPoP proof when a
-	// non-empty proof is supplied), returning the projected AuthorizedContext on
-	// success or a typed error the interceptor maps to Unauthenticated.
-	// requiredPerm is the qrdb-canonical "resource:action" scope to enforce
-	// during validation; the interceptors pass "" and enforce the method's
-	// scope post-hoc against the AuthorizedContext so scope denials map to
-	// PermissionDenied rather than Unauthenticated.
+	// AuthorizeToken runs the full validator pipeline (signature/iss/aud/exp,
+	// DPoP when sender-constrained, offline scope enforcement of requiredPerm,
+	// and per-tenant online liveness) and returns the projected
+	// AuthorizedContext. When requiredPerm is empty the scope check is skipped
+	// but liveness is still enforced. It returns a typed error the interceptor
+	// maps to Unauthenticated (auth/liveness failures) or PermissionDenied
+	// (scope denied).
 	AuthorizeToken(ctx context.Context, token, requiredPerm, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error)
 }
 

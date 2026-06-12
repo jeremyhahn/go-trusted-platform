@@ -21,8 +21,8 @@ Trust is **never** granted by network location or implicit assumptions — only 
 When platform starts for the first time, it faces the chicken-and-egg
 problem: it has no identity, but needs one to communicate securely.
 go-trusted-platform solves this by dispatching through the canonical
-`xkms/pkg/trust/bootstrap` library (reached from `pkg/bootstrap/client.go`
-via the type-alias re-export
+`xkms/pkg/trust/bootstrap` library (reached from the platform trust
+resolver in `pkg/trust` via the type-alias re-export
 `github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/bootstrap`). That
 library composes [go-truststrap](https://github.com/jeremyhahn/go-truststrap)
 internally — the platform repo does NOT import `go-truststrap` directly

@@ -48,17 +48,26 @@
 // fields so platformd's AutoCertManager vendor probe resolves the
 // expected branch.
 //
+// A plain HTTP listener on VBMC_CA_ADDR (default :8445) serves
+// GET /tls/ca returning the PEM of the initial self-signed certificate.
+// Clients use this endpoint to obtain a trust anchor and verify the
+// HTTPS connection without InsecureSkipVerify.
+//
 // NOT in scope: full IPMI 2.0 RMCP+ responder. A later follow-up will
 // either productionize the rmcpsim package into a reusable package or
 // ship a standalone IPMI responder binary.
 //
 // Operator / test harness entry points:
 //
-//	env VBMC_VENDOR=Supermicro VBMC_HTTPS_ADDR=:8443 ./vbmc
+//	env VBMC_VENDOR=Supermicro VBMC_HTTPS_ADDR=:8443 VBMC_CA_ADDR=:8445 ./vbmc
 //
 // Health check:
 //
 //	curl -sk https://vbmc:8443/healthz    -> 200 "ok"
+//
+// CA cert retrieval (plain HTTP):
+//
+//	curl http://vbmc:8445/tls/ca          -> PEM certificate
 package main
 
 import (
@@ -95,6 +104,7 @@ import (
 // docker-compose service.
 type config struct {
 	httpsAddr    string // e.g., ":8443"
+	caAddr       string // e.g., ":8445" — plain HTTP for CA cert retrieval
 	vendor       string // "Supermicro" | "Dell" | "Generic"
 	cn           string // self-signed cert CN
 	logLevel     slog.Level
@@ -106,6 +116,7 @@ type config struct {
 func loadConfig() config {
 	c := config{
 		httpsAddr:    getenv("VBMC_HTTPS_ADDR", ":8443"),
+		caAddr:       getenv("VBMC_CA_ADDR", ":8445"),
 		vendor:       getenv("VBMC_VENDOR", "Supermicro"),
 		cn:           getenv("VBMC_CN", "vbmc.trusted-platform.internal"),
 		ipmiAddr:     getenv("VBMC_IPMI_ADDR", ":6230"),
@@ -153,10 +164,12 @@ func (h *certHolder) replace(c *tls.Certificate) {
 
 // generateSelfSignedCert builds a short-lived self-signed ECDSA P-256
 // cert used on startup before any replacement has been uploaded.
-func generateSelfSignedCert(cn string) (*tls.Certificate, error) {
+// It returns the tls.Certificate and the PEM encoding of the certificate
+// (the trust anchor callers use to verify HTTPS connections).
+func generateSelfSignedCert(cn string) (*tls.Certificate, []byte, error) {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(time.Now().UnixNano()),
@@ -168,12 +181,13 @@ func generateSelfSignedCert(cn string) (*tls.Certificate, error) {
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	return &tls.Certificate{
 		Certificate: [][]byte{der},
 		PrivateKey:  priv,
-	}, nil
+	}, certPEM, nil
 }
 
 // sessionStore tracks active SMC CGI sessions keyed by SID cookie.
@@ -224,24 +238,30 @@ type vbmcServer struct {
 	certs    *certHolder
 	sessions *sessionStore
 
+	// initialCertPEM holds the PEM of the self-signed cert generated at
+	// startup. It is served by the plain HTTP /tls/ca endpoint so clients
+	// can build a verified TLS trust anchor without InsecureSkipVerify.
+	initialCertPEM []byte
+
 	// replaceCount tracks cert replacement operations for audit /
 	// test assertions. Read via GET /debug/stats.
 	replaceCount atomic.Uint64
 	resetCount   atomic.Uint64
 }
 
-func newVBMC(cfg config, logger *slog.Logger, initial *tls.Certificate) *vbmcServer {
+func newVBMC(cfg config, logger *slog.Logger, initial *tls.Certificate, initialCertPEM []byte) *vbmcServer {
 	s := &vbmcServer{
-		cfg:      cfg,
-		logger:   logger,
-		certs:    &certHolder{},
-		sessions: newSessionStore(),
+		cfg:            cfg,
+		logger:         logger,
+		certs:          &certHolder{},
+		sessions:       newSessionStore(),
+		initialCertPEM: initialCertPEM,
 	}
 	s.certs.replace(initial)
 	return s
 }
 
-// routes wires the HTTP mux.
+// routes wires the HTTP mux for the HTTPS server.
 func (s *vbmcServer) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -264,6 +284,28 @@ func (s *vbmcServer) routes() *http.ServeMux {
 	mux.HandleFunc("/cgi/logout.cgi", s.handleCGILogout)
 
 	return mux
+}
+
+// caRoutes wires the plain HTTP mux for the CA trust-bootstrap server.
+// This separate listener exposes only the /tls/ca endpoint so harness
+// clients can retrieve the initial self-signed certificate PEM and build
+// a verified TLS trust anchor — no InsecureSkipVerify required.
+func (s *vbmcServer) caRoutes() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/tls/ca", s.handleTLSCA)
+	return mux
+}
+
+// handleTLSCA serves the PEM of the initial self-signed certificate over
+// plain HTTP. Clients use this to bootstrap TLS trust before connecting
+// to the HTTPS endpoints.
+func (s *vbmcServer) handleTLSCA(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	_, _ = w.Write(s.initialCertPEM)
 }
 
 // --- health / debug ---
@@ -566,13 +608,13 @@ func main() {
 	cfg := loadConfig()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.logLevel}))
 
-	initial, err := generateSelfSignedCert(cfg.cn)
+	initial, certPEM, err := generateSelfSignedCert(cfg.cn)
 	if err != nil {
 		logger.Error("vbmc: self-signed cert generation failed", "err", err)
 		os.Exit(1)
 	}
 
-	server := newVBMC(cfg, logger, initial)
+	server := newVBMC(cfg, logger, initial, certPEM)
 
 	tlsConfig := &tls.Config{
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
@@ -589,6 +631,15 @@ func main() {
 		Addr:              cfg.httpsAddr,
 		Handler:           server.routes(),
 		TLSConfig:         tlsConfig,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	// Plain HTTP server exposing GET /tls/ca so harness clients can
+	// retrieve the initial self-signed certificate PEM and build a
+	// verified TLS trust anchor without InsecureSkipVerify.
+	caSrv := &http.Server{
+		Addr:              cfg.caAddr,
+		Handler:           server.caRoutes(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -615,6 +666,14 @@ func main() {
 	logger.Info("vbmc: IPMI simulator listening", "addr", sim.LocalAddr().String(), "user", cfg.ipmiUser)
 
 	go func() {
+		logger.Info("vbmc: CA endpoint listening", "addr", cfg.caAddr)
+		if err := caSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("vbmc: CA server error", "err", err)
+			cancel()
+		}
+	}()
+
+	go func() {
 		logger.Info("vbmc: listening", "addr", cfg.httpsAddr, "vendor", cfg.vendor)
 		if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("vbmc: serve error", "err", err)
@@ -628,4 +687,5 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	_ = srv.Shutdown(shutdownCtx)
+	_ = caSrv.Shutdown(shutdownCtx)
 }

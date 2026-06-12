@@ -26,6 +26,7 @@ type claimsAuthManagerStub struct {
 	authCtx  *platformtoken.AuthorizedContext
 	err      error
 	gotToken string
+	gotPerm  string
 	calls    int
 }
 
@@ -37,11 +38,21 @@ func (s *claimsAuthManagerStub) GetTokenClaims(ctx context.Context, token string
 	return map[string]interface{}{}, nil
 }
 
+// AuthorizeToken records inputs and mirrors the real validator: a non-empty
+// requiredPerm is enforced against the configured AuthorizedContext, returning a
+// *platformtoken.ScopeDeniedError on a miss so the checker's mapping to
+// AuthErrorPermissionDenied is exercised at the validator seam.
 func (s *claimsAuthManagerStub) AuthorizeToken(ctx context.Context, token, requiredPerm, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error) {
 	s.calls++
 	s.gotToken = token
+	s.gotPerm = requiredPerm
 	if s.err != nil {
 		return nil, s.err
+	}
+	if requiredPerm != "" {
+		if err := s.authCtx.RequireScope(requiredPerm); err != nil {
+			return nil, err
+		}
 	}
 	return s.authCtx, nil
 }
@@ -61,6 +72,11 @@ func TestAuthorizeTool_ClaimsPath_AllowsGrantedScope(t *testing.T) {
 	}
 	if mgr.calls != 1 || mgr.gotToken != "tok-1" {
 		t.Fatalf("validator not called as expected; calls=%d token=%q", mgr.calls, mgr.gotToken)
+	}
+	// The tool's required scope is threaded into the validator as requiredPerm
+	// (enforced there), not by a downstream RequireScope.
+	if mgr.gotPerm != "dns:write" {
+		t.Errorf("requiredPerm threaded = %q, want dns:write", mgr.gotPerm)
 	}
 	ac, ok := AuthorizedContextFromContext(ctx)
 	if !ok || ac != want {

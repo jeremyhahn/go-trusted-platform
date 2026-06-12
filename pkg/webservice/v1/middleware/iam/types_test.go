@@ -90,7 +90,7 @@ func TestHTTPMethodToAction(t *testing.T) {
 func TestGetSessionFromContext(t *testing.T) {
 	t.Run("returns_session_when_present", func(t *testing.T) {
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 
@@ -141,7 +141,7 @@ func TestGetSessionFromContext(t *testing.T) {
 func TestSetSessionInContext(t *testing.T) {
 	t.Run("sets_session_in_context", func(t *testing.T) {
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 
@@ -166,11 +166,11 @@ func TestSetSessionInContext(t *testing.T) {
 
 	t.Run("overwrites_existing_session", func(t *testing.T) {
 		session1 := NewIAMSession(&sdkiam.User{
-			ID: "user-1",
+			ID:       "user-1",
 			TenantID: "tenant-1",
 		})
 		session2 := NewIAMSession(&sdkiam.User{
-			ID: "user-2",
+			ID:       "user-2",
 			TenantID: "tenant-2",
 		})
 
@@ -299,9 +299,6 @@ func TestJWTConfig(t *testing.T) {
 	t.Run("zero_value_defaults", func(t *testing.T) {
 		config := JWTConfig{}
 
-		if config.SigningKey != nil {
-			t.Error("expected SigningKey to be nil")
-		}
 		if config.PublicKey != nil {
 			t.Error("expected PublicKey to be nil")
 		}
@@ -312,7 +309,6 @@ func TestJWTConfig(t *testing.T) {
 
 	t.Run("all_fields_settable", func(t *testing.T) {
 		config := JWTConfig{
-			SigningKey:      []byte("secret"),
 			PublicKey:       "public-key",
 			Issuer:          "auth.example.com",
 			Audience:        []string{"api.example.com"},
@@ -322,9 +318,6 @@ func TestJWTConfig(t *testing.T) {
 			AccessTokenTTL:  1 * time.Hour,
 		}
 
-		if string(config.SigningKey) != "secret" {
-			t.Error("SigningKey not set correctly")
-		}
 		if config.Issuer != "auth.example.com" {
 			t.Error("Issuer not set correctly")
 		}
@@ -390,7 +383,7 @@ func TestAuthzConfig(t *testing.T) {
 func TestIAMSession_Interface(t *testing.T) {
 	t.Run("interface_has_all_required_methods", func(t *testing.T) {
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 

@@ -92,7 +92,10 @@ func dispatchInitShamir(d *dispatcher, f *initShamirFlags) error {
 	return renderInitShamirDispatch(d, resp)
 }
 
-// renderInitShamirDispatch renders the init-shamir response.
+// renderInitShamirDispatch renders the share-free init-shamir response.
+// Share material is never returned over the wire; Security Officers
+// claim their individual shares via the share-claim flow using their
+// mTLS certificate.
 func renderInitShamirDispatch(d *dispatcher, resp *quicbaassdk.QRDBBarrierInitializeShamirResponse) error {
 	switch d.Output {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
@@ -102,8 +105,8 @@ func renderInitShamirDispatch(d *dispatcher, resp *quicbaassdk.QRDBBarrierInitia
 		d.Printer.PrintKeyValue("Threshold", fmt.Sprintf("%d", resp.Threshold))
 		d.Printer.PrintKeyValue("Total Shares", fmt.Sprintf("%d", resp.TotalShares))
 		if resp.ShareCount > 0 {
-			d.Printer.PrintKeyValue("Share Count", fmt.Sprintf("%d", resp.ShareCount))
-			d.Printer.PrintInfo("Shares are sealed to enrolled Security Officers. Use barrier share claim to retrieve individual shares.")
+			d.Printer.PrintKeyValue("Shares Sealed", fmt.Sprintf("%d", resp.ShareCount))
+			d.Printer.PrintWarning("Shares are sealed to enrolled Security Officers. Each officer claims their share via the share-claim flow.")
 		}
 		return nil
 	default:
@@ -211,8 +214,8 @@ func dispatchRekey(d *dispatcher, f *rekeyFlags) error {
 			d.Printer.PrintKeyValue("Total Shares", fmt.Sprintf("%d", resp.TotalShares))
 		}
 		if resp.ShareCount > 0 {
-			d.Printer.PrintKeyValue("Share Count", fmt.Sprintf("%d", resp.ShareCount))
-			d.Printer.PrintInfo("New shares are sealed to enrolled Security Officers. Use barrier share claim to retrieve individual shares.")
+			d.Printer.PrintKeyValue("Shares Sealed", fmt.Sprintf("%d", resp.ShareCount))
+			d.Printer.PrintWarning("New shares are sealed to enrolled Security Officers. Each officer claims their share via the share-claim flow.")
 		}
 		return nil
 	default:
@@ -242,8 +245,8 @@ func dispatchRecoveryGenerate(d *dispatcher, f *recoveryGenerateFlags) error {
 		d.Printer.PrintKeyValue("Threshold", fmt.Sprintf("%d", resp.Threshold))
 		d.Printer.PrintKeyValue("Total", fmt.Sprintf("%d", resp.Total))
 		if resp.ShareCount > 0 {
-			d.Printer.PrintKeyValue("Share Count", fmt.Sprintf("%d", resp.ShareCount))
-			d.Printer.PrintInfo("Recovery shares are sealed to enrolled Recovery Officers. Use barrier share claim to retrieve individual shares.")
+			d.Printer.PrintKeyValue("Shares Sealed", fmt.Sprintf("%d", resp.ShareCount))
+			d.Printer.PrintWarning("Recovery shares are sealed to enrolled recovery officers. Each officer claims their share via the recovery share-claim flow.")
 		}
 		return nil
 	default:

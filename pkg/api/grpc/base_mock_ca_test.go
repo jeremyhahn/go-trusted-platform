@@ -191,7 +191,9 @@ func (m *baseMockCA) XSignedRootCertificate(_ string, _ *x509.Certificate) (*x50
 func (m *baseMockCA) XSignedIntermediateCertificates(_ string, _ *x509.Certificate) ([]*x509.Certificate, error) {
 	return nil, nil
 }
-func (m *baseMockCA) CrossSignedPEM(_ *types.KeyAttributes) ([]byte, error) { return nil, nil }
+func (m *baseMockCA) CrossSignedPEM(_ *types.KeyAttributes) ([]byte, error) {
+	return nil, nil
+}
 
 // AIA
 func (m *baseMockCA) ImportIssuingCAs(_ context.Context, _ *x509.Certificate) error { return nil }

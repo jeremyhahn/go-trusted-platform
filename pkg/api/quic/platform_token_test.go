@@ -25,6 +25,7 @@ type claimsValidatorStub struct {
 	authCtx      *platformtoken.AuthorizedContext
 	err          error
 	gotToken     string
+	gotPerm      string
 	gotDPoPProof string
 	calls        int
 }
@@ -36,9 +37,15 @@ func (s *claimsValidatorStub) ValidateToken(ctx context.Context, token string) (
 func (s *claimsValidatorStub) AuthorizeToken(ctx context.Context, token, requiredPerm, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error) {
 	s.calls++
 	s.gotToken = token
+	s.gotPerm = requiredPerm
 	s.gotDPoPProof = dpopProof
 	if s.err != nil {
 		return nil, s.err
+	}
+	if requiredPerm != "" {
+		if err := s.authCtx.RequireScope(requiredPerm); err != nil {
+			return nil, err
+		}
 	}
 	return s.authCtx, nil
 }
@@ -59,6 +66,12 @@ func TestQUICAuthenticateRequest_ClaimsPath_StashesAuthorizedContext(t *testing.
 	// QUIC carries no DPoP frame: proof must be empty (bearer validation).
 	if stub.gotDPoPProof != "" {
 		t.Errorf("dpop proof = %q, want empty (QUIC bearer)", stub.gotDPoPProof)
+	}
+	// Authentication routes through the scope-free Validate path: the opcode's
+	// required scope is enforced later in AuthorizeRequest, so requiredPerm is
+	// empty here while online liveness still runs on every request.
+	if stub.gotPerm != "" {
+		t.Errorf("requiredPerm at authenticate = %q, want empty (scope deferred to AuthorizeRequest)", stub.gotPerm)
 	}
 	ac, ok := AuthorizedContextFromContext(ctx)
 	if !ok || ac != want {

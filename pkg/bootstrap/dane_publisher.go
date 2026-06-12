@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/jeremyhahn/go-truststrap/pkg/dane"
+	dane "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/dane"
 
 	dnsconfig "github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
@@ -37,8 +37,9 @@ type DANEDNSService interface {
 }
 
 // DANEPublisher publishes DANE TLSA records to the platform's DNS service.
-// It computes TLSA record data from X.509 certificates using go-truststrap's
-// DANE primitives and manages record lifecycle including rollover.
+// It computes TLSA record data from X.509 certificates using the stack's
+// canonical DANE primitives (owned by go-xkms, reached through the QuicBaaS
+// SDK) and manages record lifecycle including rollover.
 type DANEPublisher struct {
 	dnsService DANEDNSService
 	config     *dnsconfig.DANEConfig

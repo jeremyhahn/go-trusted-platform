@@ -1065,7 +1065,7 @@ func TestAuthMiddleware_CreateSession(t *testing.T) {
 	t.Run("creates_session_with_jwt_when_mtls_fails", func(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
-		signingKey := []byte("test-secret-key-32-bytes-long!!!")
+		rsaPrivKey, rsaPubKey := generateTestRSAKeyPair()
 
 		iamService.getUserFunc = func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
 			return &sdkiam.User{
@@ -1076,7 +1076,7 @@ func TestAuthMiddleware_CreateSession(t *testing.T) {
 		}
 
 		jwtConfig := JWTConfig{
-			SigningKey: signingKey,
+			PublicKey: rsaPubKey,
 		}
 		jwtMiddleware, _ := NewJWTMiddleware(logger, httpWriter, jwtConfig, iamService)
 
@@ -1091,8 +1091,8 @@ func TestAuthMiddleware_CreateSession(t *testing.T) {
 			"iat":       time.Now().Unix(),
 			"exp":       time.Now().Add(time.Hour).Unix(),
 		}
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-		tokenString, _ := token.SignedString(signingKey)
+		token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+		tokenString, _ := token.SignedString(rsaPrivKey)
 
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		req.Header.Set(AuthorizationHeader, BearerPrefix+tokenString)
@@ -1115,7 +1115,7 @@ func TestAuthMiddleware_CreateSession(t *testing.T) {
 // TestAuthMiddleware_AuthenticateWithJWT tests JWT authentication fallback.
 func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 	logger := createTestLogger()
-	signingKey := []byte("test-secret-key-32-bytes-long!!!")
+	rsaPrivKey, rsaPubKey := generateTestRSAKeyPair()
 
 	t.Run("authenticates_with_valid_jwt", func(t *testing.T) {
 		httpWriter := newMockHttpWriter()
@@ -1132,7 +1132,7 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 		}
 
 		jwtConfig := JWTConfig{
-			SigningKey: signingKey,
+			PublicKey: rsaPubKey,
 		}
 		jwtMiddleware, _ := NewJWTMiddleware(logger, httpWriter, jwtConfig, iamService)
 
@@ -1149,8 +1149,8 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 			"iat":       time.Now().Unix(),
 			"exp":       time.Now().Add(time.Hour).Unix(),
 		}
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-		tokenString, _ := token.SignedString(signingKey)
+		token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+		tokenString, _ := token.SignedString(rsaPrivKey)
 
 		var sessionFromContext IAMSession
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1181,7 +1181,7 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 		}
 
 		jwtConfig := JWTConfig{
-			SigningKey: signingKey,
+			PublicKey: rsaPubKey,
 		}
 		jwtMiddleware, _ := NewJWTMiddleware(logger, httpWriter, jwtConfig, iamService)
 
@@ -1201,8 +1201,8 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 			"iat":       time.Now().Unix(),
 			"exp":       time.Now().Add(time.Hour).Unix(),
 		}
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-		tokenString, _ := token.SignedString(signingKey)
+		token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+		tokenString, _ := token.SignedString(rsaPrivKey)
 
 		var sessionFromContext IAMSession
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1239,7 +1239,7 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 		}
 
 		jwtConfig := JWTConfig{
-			SigningKey: signingKey,
+			PublicKey: rsaPubKey,
 		}
 		jwtMiddleware, _ := NewJWTMiddleware(logger, httpWriter, jwtConfig, iamService)
 
@@ -1254,8 +1254,8 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 			"iat": time.Now().Unix(),
 			"exp": time.Now().Add(time.Hour).Unix(),
 		}
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-		tokenString, _ := token.SignedString(signingKey)
+		token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+		tokenString, _ := token.SignedString(rsaPrivKey)
 
 		var sessionFromContext IAMSession
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1282,7 +1282,7 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 		iamService := newMockIAMServiceClient()
 
 		jwtConfig := JWTConfig{
-			SigningKey: signingKey,
+			PublicKey: rsaPubKey,
 		}
 		jwtMiddleware, _ := NewJWTMiddleware(logger, httpWriter, jwtConfig, iamService)
 
@@ -1315,7 +1315,7 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 		iamService := newMockIAMServiceClient()
 
 		jwtConfig := JWTConfig{
-			SigningKey: signingKey,
+			PublicKey: rsaPubKey,
 		}
 		jwtMiddleware, _ := NewJWTMiddleware(logger, httpWriter, jwtConfig, iamService)
 
@@ -1331,8 +1331,8 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 			"iat": time.Now().Unix(),
 			"exp": time.Now().Add(time.Hour).Unix(),
 		}
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-		tokenString, _ := token.SignedString(signingKey)
+		token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+		tokenString, _ := token.SignedString(rsaPrivKey)
 
 		called := false
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1429,7 +1429,7 @@ func TestGetSetSessionInContext(t *testing.T) {
 // TestAuthMiddleware_LookupUserByID tests the lookupUserByID internal function.
 func TestAuthMiddleware_LookupUserByID(t *testing.T) {
 	logger := createTestLogger()
-	signingKey := []byte("test-secret-key-32-bytes-long!!!")
+	rsaPrivKey, rsaPubKey := generateTestRSAKeyPair()
 
 	t.Run("returns_service_unavailable_on_iam_error", func(t *testing.T) {
 		httpWriter := newMockHttpWriter()
@@ -1441,7 +1441,7 @@ func TestAuthMiddleware_LookupUserByID(t *testing.T) {
 		}
 
 		jwtConfig := JWTConfig{
-			SigningKey: signingKey,
+			PublicKey: rsaPubKey,
 		}
 		jwtMiddleware, _ := NewJWTMiddleware(logger, httpWriter, jwtConfig, iamService)
 
@@ -1456,8 +1456,8 @@ func TestAuthMiddleware_LookupUserByID(t *testing.T) {
 			"iat":       time.Now().Unix(),
 			"exp":       time.Now().Add(time.Hour).Unix(),
 		}
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-		tokenString, _ := token.SignedString(signingKey)
+		token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+		tokenString, _ := token.SignedString(rsaPrivKey)
 
 		// Even though IAM service returns error, authentication should succeed
 		// by falling back to creating session from claims
@@ -1487,7 +1487,7 @@ func TestAuthMiddleware_LookupUserByID(t *testing.T) {
 		}
 
 		jwtConfig := JWTConfig{
-			SigningKey: signingKey,
+			PublicKey: rsaPubKey,
 		}
 		jwtMiddleware, _ := NewJWTMiddleware(logger, httpWriter, jwtConfig, iamService)
 
@@ -1502,8 +1502,8 @@ func TestAuthMiddleware_LookupUserByID(t *testing.T) {
 			"iat":       time.Now().Unix(),
 			"exp":       time.Now().Add(time.Hour).Unix(),
 		}
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-		tokenString, _ := token.SignedString(signingKey)
+		token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+		tokenString, _ := token.SignedString(rsaPrivKey)
 
 		var sessionFromContext IAMSession
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

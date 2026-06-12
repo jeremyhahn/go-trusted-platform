@@ -115,31 +115,6 @@ func TestFactory_Stop_Idempotent(t *testing.T) {
 	assert.True(t, factory.IsClosed())
 }
 
-func TestFactory_OrganizationDAO_Success(t *testing.T) {
-	factory, cleanup := newTestFactory(t)
-	defer cleanup()
-
-	dao, err := factory.OrganizationDAO()
-	require.NoError(t, err)
-	assert.NotNil(t, dao)
-
-	// Second call should return same instance
-	dao2, err := factory.OrganizationDAO()
-	require.NoError(t, err)
-	assert.Same(t, dao, dao2)
-}
-
-func TestFactory_OrganizationDAO_FactoryClosed(t *testing.T) {
-	factory, cleanup := newTestFactory(t)
-	cleanup()
-
-	_, err := factory.OrganizationDAO()
-	require.Error(t, err)
-
-	var closedErr ErrFactoryClosed
-	assert.ErrorAs(t, err, &closedErr)
-}
-
 func TestFactory_UserDAO_Success(t *testing.T) {
 	factory, cleanup := newTestFactory(t)
 	defer cleanup()
@@ -265,15 +240,7 @@ func TestFactory_ConcurrentDAOAccess(t *testing.T) {
 
 	// Concurrently access all DAOs
 	for i := 0; i < 10; i++ {
-		wg.Add(5)
-
-		go func() {
-			defer wg.Done()
-			_, err := factory.OrganizationDAO()
-			if err != nil {
-				errors <- err
-			}
-		}()
+		wg.Add(4)
 
 		go func() {
 			defer wg.Done()
@@ -321,9 +288,6 @@ func TestFactory_AllDAOs_Integration(t *testing.T) {
 	defer cleanup()
 
 	// Get all DAOs
-	orgDAO, err := factory.OrganizationDAO()
-	require.NoError(t, err)
-
 	userDAO, err := factory.UserDAO()
 	require.NoError(t, err)
 
@@ -337,7 +301,6 @@ func TestFactory_AllDAOs_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify they all work
-	assert.NotNil(t, orgDAO)
 	assert.NotNil(t, userDAO)
 	assert.NotNil(t, roleDAO)
 	assert.NotNil(t, regDAO)

@@ -613,6 +613,12 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	daemonConfig.SocketPath = serveSocketPath
 	daemonConfig.SocketGroup = ""
 
+	if serveSkipIAM {
+		daemonConfig.SkipIAMValidation = true
+		logger.Warn("WARNING: IAM validation is DISABLED. All transports will accept unauthenticated requests. DO NOT USE IN PRODUCTION.",
+			"transports", "gRPC,QUIC,MCP,Unix")
+	}
+
 	daemonConfig.EnableREST = false
 	daemonConfig.EnableGRPCTCP = serveEnableGRPC
 	daemonConfig.GRPCListenAddr = fmt.Sprintf("0.0.0.0:%d", serveGRPCPort)
@@ -1231,7 +1237,8 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 
 	if serveSkipIAM {
 		config.SkipIAMValidation = true
-		logger.Warn("IAM validation disabled. DO NOT USE IN PRODUCTION!")
+		logger.Warn("WARNING: IAM validation is DISABLED. All transports will accept unauthenticated requests. DO NOT USE IN PRODUCTION.",
+			"transports", "gRPC,QUIC,MCP,Unix")
 	}
 
 	config.EnableREST = serveEnableREST

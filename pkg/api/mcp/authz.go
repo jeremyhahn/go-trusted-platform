@@ -15,7 +15,10 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"strings"
+
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 )
 
 // AuthorizationChecker validates tool authorization.
@@ -136,21 +139,25 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 	// Prefer the platform-token (claims) path when the AuthManager supports it:
 	// validate the token, project scp -> RBAC / tenant_id -> RLS, stash the
 	// AuthorizedContext, and enforce the tool's required scope against it.
+	//
+	// The tool's required scope is enforced INSIDE the validator: pass it as
+	// requiredPerm so the offline scope check and online liveness run in one
+	// pipeline. A scope denial surfaces as a *platformtoken.ScopeDeniedError;
+	// every other failure (auth, liveness) is an invalid/expired token.
 	if cv, ok := c.authManager.(ClaimsAuthManager); ok && cv != nil {
-		authCtx, err := cv.AuthorizeToken(ctx, token, "", "", "", "")
-		if err != nil {
-			return ctx, &AuthorizationError{
-				Type:    AuthErrorInvalidToken,
-				Message: "Invalid or expired token",
-			}
-		}
 		scope := scopeForToolPermission(permission)
-		if scope != "" {
-			if serr := authCtx.RequireScope(scope); serr != nil {
+		authCtx, err := cv.AuthorizeToken(ctx, token, scope, "", "", "")
+		if err != nil {
+			var scopeErr *platformtoken.ScopeDeniedError
+			if errors.As(err, &scopeErr) {
 				return ctx, &AuthorizationError{
 					Type:    AuthErrorPermissionDenied,
 					Message: "Permission denied: insufficient privileges",
 				}
+			}
+			return ctx, &AuthorizationError{
+				Type:    AuthErrorInvalidToken,
+				Message: "Invalid or expired token",
 			}
 		}
 		return ContextWithAuthorizedContext(ctx, authCtx), nil

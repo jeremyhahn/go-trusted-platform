@@ -42,9 +42,10 @@ import (
 // Minimal authCA stub for auth factor handler tests.
 //
 // authTestCA satisfies the authCA interface:
-//   SignCSR(ctx context.Context, csrPEM []byte, opts *quicbaasca.SignOptions) (*x509.Certificate, error)
-//   TrustedRootCertPool(cert *x509.Certificate) (*x509.CertPool, error)
-//   CABundle() ([]byte, error)
+//
+//	SignCSR(ctx context.Context, csrPEM []byte, opts *quicbaasca.SignOptions) (*x509.Certificate, error)
+//	TrustedRootCertPool(cert *x509.Certificate) (*x509.CertPool, error)
+//	CABundle() ([]byte, error)
 // =============================================================================
 
 type authTestCA struct {

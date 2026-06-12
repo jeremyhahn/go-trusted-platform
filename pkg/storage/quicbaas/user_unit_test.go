@@ -266,7 +266,7 @@ func TestUserDAO_ComplexUser_Mock(t *testing.T) {
 	user.Roles = []*entities.Role{
 		{ID: 1, Name: "admin"},
 	}
-	user.OrganizationRefs = []uint64{100, 200, 300}
+	user.ServiceRefs = []uint64{100, 200, 300}
 
 	require.NoError(t, dao.Save(ctx, user))
 
@@ -276,7 +276,7 @@ func TestUserDAO_ComplexUser_Mock(t *testing.T) {
 	assert.Equal(t, "complex@example.com", retrieved.Email)
 	assert.Len(t, retrieved.Roles, 1)
 	assert.Equal(t, "admin", retrieved.Roles[0].Name)
-	assert.Equal(t, []uint64{100, 200, 300}, retrieved.OrganizationRefs)
+	assert.Equal(t, []uint64{100, 200, 300}, retrieved.ServiceRefs)
 }
 
 func TestUserDAO_Save_StorageError_Mock(t *testing.T) {

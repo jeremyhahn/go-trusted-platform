@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rsa"
 	"net/http"
 	"strings"
@@ -28,6 +29,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
+// maxClockSkew is the hard upper bound on clock-skew tolerance accepted during
+// token validation. No configuration can exceed this value.
+const maxClockSkew = 60 * time.Second
+
 // JWTMiddleware handles JWT token validation and extraction.
 type JWTMiddleware struct {
 	logger         *logging.Logger
@@ -35,6 +40,10 @@ type JWTMiddleware struct {
 	config         JWTConfig
 	iamService     IAMServiceClient
 	signingMethod  jwt.SigningMethod
+	// allowedAlgs is the set of algorithm strings accepted during header
+	// validation. It is derived from the verification key type and never
+	// includes symmetric (HMAC) algorithms.
+	allowedAlgs map[string]struct{}
 }
 
 // NewJWTMiddleware creates a new JWT middleware instance.
@@ -52,22 +61,31 @@ func NewJWTMiddleware(
 		return nil, ErrInvalidConfig{Field: "responseWriter", Reason: "response writer is required"}
 	}
 
-	// Determine signing method based on key type
-	var signingMethod jwt.SigningMethod
-	if config.PublicKey != nil {
-		switch config.PublicKey.(type) {
-		case *rsa.PublicKey:
-			signingMethod = jwt.SigningMethodRS256
-		case *ecdsa.PublicKey:
-			signingMethod = jwt.SigningMethodES256
-		case ed25519.PublicKey:
-			signingMethod = jwt.SigningMethodEdDSA
-		default:
-			return nil, ErrInvalidConfig{Field: "publicKey", Reason: "unsupported key type"}
+	// Symmetric (HMAC) keys are not accepted. Every token must be signed with
+	// an asymmetric algorithm whose type is known at construction time.
+	if config.PublicKey == nil {
+		return nil, ErrInvalidConfig{
+			Field:  "publicKey",
+			Reason: "asymmetric public key is required; symmetric HMAC signing is not supported",
 		}
-	} else if len(config.SigningKey) > 0 {
-		signingMethod = jwt.SigningMethodHS256
 	}
+
+	// Derive the permitted algorithms from the verification key's actual type.
+	// The allowlist is exact: a P-256 key permits only ES256, a P-384 key only
+	// ES384, etc. This prevents algorithm confusion (e.g. RS256 token accepted
+	// by an EdDSA verifier) regardless of what the token header claims.
+	signingMethod, allowedAlgs, err := signingMethodFromKey(config.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cap clock skew so callers cannot accidentally set an unreasonably wide
+	// window. The zero value means no skew is tolerated (strict mode).
+	skew := config.ClockSkew
+	if skew > maxClockSkew {
+		skew = maxClockSkew
+	}
+	config.ClockSkew = skew
 
 	return &JWTMiddleware{
 		logger:         logger,
@@ -75,7 +93,51 @@ func NewJWTMiddleware(
 		config:         config,
 		iamService:     iamService,
 		signingMethod:  signingMethod,
+		allowedAlgs:    allowedAlgs,
 	}, nil
+}
+
+// signingMethodFromKey resolves the canonical jwt.SigningMethod and the set of
+// allowed algorithm strings for a given public key. Only asymmetric algorithms
+// are permitted; the allowlist is derived from the key's concrete type and
+// curve so that the JWT header "alg" field cannot be used to confuse the
+// verifier into accepting a weaker algorithm.
+func signingMethodFromKey(pub any) (jwt.SigningMethod, map[string]struct{}, error) {
+	switch k := pub.(type) {
+	case *ecdsa.PublicKey:
+		// Map curve to the matching ES* variant so a P-384 key never accepts
+		// an ES256 token (which uses a P-256 curve internally).
+		switch k.Curve {
+		case elliptic.P256():
+			return jwt.SigningMethodES256, map[string]struct{}{jwt.SigningMethodES256.Alg(): {}}, nil
+		case elliptic.P384():
+			return jwt.SigningMethodES384, map[string]struct{}{jwt.SigningMethodES384.Alg(): {}}, nil
+		case elliptic.P521():
+			return jwt.SigningMethodES512, map[string]struct{}{jwt.SigningMethodES512.Alg(): {}}, nil
+		default:
+			return nil, nil, ErrInvalidConfig{Field: "publicKey", Reason: "unsupported ECDSA curve"}
+		}
+	case ed25519.PublicKey:
+		return jwt.SigningMethodEdDSA, map[string]struct{}{jwt.SigningMethodEdDSA.Alg(): {}}, nil
+	case *rsa.PublicKey:
+		// The platform signer issues PS256/PS384/PS512 (RSASSA-PSS) or
+		// RS256/RS384/RS512 (PKCS1v15) depending on the key attributes.
+		// Accept all RSA algorithms that match the key size; the token
+		// header alg will be checked against this allowlist.
+		allowed := map[string]struct{}{
+			jwt.SigningMethodRS256.Alg(): {},
+			jwt.SigningMethodRS384.Alg(): {},
+			jwt.SigningMethodRS512.Alg(): {},
+			jwt.SigningMethodPS256.Alg(): {},
+			jwt.SigningMethodPS384.Alg(): {},
+			jwt.SigningMethodPS512.Alg(): {},
+		}
+		// Default to RS256 as the primary method; the actual alg used by a
+		// token is checked against the allowlist in keyFunc.
+		return jwt.SigningMethodRS256, allowed, nil
+	default:
+		return nil, nil, ErrInvalidConfig{Field: "publicKey", Reason: "unsupported key type"}
+	}
 }
 
 // Handler returns an http.Handler middleware that validates JWT tokens.
@@ -137,8 +199,19 @@ func (m *JWTMiddleware) extractToken(r *http.Request) (string, error) {
 
 // validateToken parses and validates the JWT token.
 func (m *JWTMiddleware) validateToken(tokenString string) (*JWTClaims, error) {
-	// Parse the token with custom claims
-	token, err := jwt.Parse(tokenString, m.keyFunc, jwt.WithValidMethods([]string{m.signingMethod.Alg()}))
+	// Build the set of algorithm strings accepted by the parser. For RSA keys
+	// the allowlist covers all RS*/PS* variants; for ECDSA/EdDSA it is a
+	// single string. jwt.WithValidMethods rejects tokens whose header "alg"
+	// is not in this list before the signature is verified.
+	allowedAlgs := make([]string, 0, len(m.allowedAlgs))
+	for alg := range m.allowedAlgs {
+		allowedAlgs = append(allowedAlgs, alg)
+	}
+
+	// Parse the token with the derived allowlist. The parser also validates
+	// exp/nbf/iat via the standard claims so basic temporal checks happen
+	// before our secondary validation below.
+	token, err := jwt.Parse(tokenString, m.keyFunc, jwt.WithValidMethods(allowedAlgs))
 	if err != nil {
 		return nil, m.translateJWTError(err)
 	}
@@ -153,9 +226,39 @@ func (m *JWTMiddleware) validateToken(tokenString string) (*JWTClaims, error) {
 		return nil, ErrTokenInvalid{Reason: "invalid claims format"}
 	}
 
+	// Hard-require the exp claim. A token without exp is never valid — it
+	// would otherwise be accepted forever because the zero-value check below
+	// would be skipped.
+	if _, hasExp := mapClaims["exp"]; !hasExp {
+		return nil, ErrTokenMissingExp{}
+	}
+
 	claims, err := m.extractClaims(mapClaims)
 	if err != nil {
 		return nil, err
+	}
+
+	// Secondary temporal validation with explicit clock-skew tolerance.
+	// These checks are in addition to the parser's built-in validation so
+	// that the clock-skew cap (maxClockSkew) is always enforced.
+	now := time.Now()
+
+	// exp must be present (enforced above) and must not be in the past
+	// beyond the allowed clock skew.
+	if claims.ExpiresAt.IsZero() || claims.ExpiresAt.Add(m.config.ClockSkew).Before(now) {
+		return nil, ErrTokenExpired{ExpiredAt: claims.ExpiresAt.Format(time.RFC3339)}
+	}
+
+	// nbf: if present, the token must not be used before its valid-from time
+	// (allowing for clock skew).
+	if !claims.NotBefore.IsZero() && now.Add(m.config.ClockSkew).Before(claims.NotBefore) {
+		return nil, ErrTokenNotYetValid{NotBefore: claims.NotBefore.Format(time.RFC3339)}
+	}
+
+	// iat: if present, it must not be in the future beyond the clock skew.
+	// A future iat indicates a clock problem or token forgery.
+	if !claims.IssuedAt.IsZero() && claims.IssuedAt.After(now.Add(m.config.ClockSkew)) {
+		return nil, ErrTokenInvalid{Reason: "iat claim is in the future"}
 	}
 
 	// Validate issuer if configured
@@ -172,31 +275,18 @@ func (m *JWTMiddleware) validateToken(tokenString string) (*JWTClaims, error) {
 		}
 	}
 
-	// Validate expiration with clock skew
-	now := time.Now()
-	if !claims.ExpiresAt.IsZero() && claims.ExpiresAt.Add(m.config.ClockSkew).Before(now) {
-		return nil, ErrTokenExpired{ExpiredAt: claims.ExpiresAt.Format(time.RFC3339)}
-	}
-
-	// Validate not before with clock skew
-	if !claims.NotBefore.IsZero() && claims.NotBefore.Add(-m.config.ClockSkew).After(now) {
-		return nil, ErrTokenNotYetValid{NotBefore: claims.NotBefore.Format(time.RFC3339)}
-	}
-
 	return claims, nil
 }
 
-// keyFunc returns the key for validating the token.
+// keyFunc returns the public key for validating the token signature.
+// It also enforces the algorithm allowlist so a token whose header "alg"
+// names a method not derived from the configured key type is rejected even
+// if the jwt.Parse WithValidMethods check somehow passed.
 func (m *JWTMiddleware) keyFunc(token *jwt.Token) (any, error) {
-	// Verify the signing method matches
-	if token.Method.Alg() != m.signingMethod.Alg() {
-		return nil, ErrTokenInvalid{Reason: "unexpected signing method"}
+	if _, ok := m.allowedAlgs[token.Method.Alg()]; !ok {
+		return nil, ErrAlgorithmNotAllowed{Algorithm: token.Method.Alg()}
 	}
-
-	if m.config.PublicKey != nil {
-		return m.config.PublicKey, nil
-	}
-	return m.config.SigningKey, nil
+	return m.config.PublicKey, nil
 }
 
 // extractClaims extracts and converts JWT claims to our JWTClaims structure.
@@ -326,42 +416,16 @@ func (m *JWTMiddleware) translateJWTError(err error) error {
 }
 
 // GenerateToken generates a new JWT token with the provided claims.
+// The middleware is verification-only: it holds a public key and cannot sign
+// tokens. Token generation is the responsibility of the JWT service
+// (pkg/webservice/v1/jwt/service.go) which holds the private signer.
 func (m *JWTMiddleware) GenerateToken(session IAMSession, ttl time.Duration) (string, error) {
-	now := time.Now()
-
-	claims := jwt.MapClaims{
-		"sub":          session.UserID(),
-		"tenant_id":    session.TenantID(),
-		"email":        session.Email(),
-		"name":         session.Name(),
-		"roles":        session.Roles(),
-		"groups":       session.Groups(),
-		"mfa_verified": session.IsMFAVerified(),
-		"iat":          now.Unix(),
-		"exp":          now.Add(ttl).Unix(),
+	// The middleware is configured with a public key for verification only.
+	// Private-key signing must be done via the platform JWT service.
+	return "", ErrInvalidConfig{
+		Field:  "signingKey",
+		Reason: "private key required for token generation; use the platform JWT service",
 	}
-
-	if m.config.Issuer != "" {
-		claims["iss"] = m.config.Issuer
-	}
-	if len(m.config.Audience) > 0 {
-		claims["aud"] = m.config.Audience
-	}
-	if !session.MFATimestamp().IsZero() {
-		claims["mfa_timestamp"] = session.MFATimestamp().Unix()
-	}
-
-	token := jwt.NewWithClaims(m.signingMethod, claims)
-
-	var key any
-	if m.config.PublicKey != nil {
-		// For asymmetric algorithms, we need the private key for signing
-		// This would typically come from a separate configuration
-		return "", ErrInvalidConfig{Field: "signingKey", Reason: "private key required for token generation"}
-	}
-	key = m.config.SigningKey
-
-	return token.SignedString(key)
 }
 
 // RefreshToken generates a new token from an existing valid token.
@@ -373,8 +437,15 @@ func (m *JWTMiddleware) RefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build the per-instance allowlist so the same algorithm restrictions that
+	// apply during regular validation also apply during refresh.
+	allowedAlgs := make([]string, 0, len(m.allowedAlgs))
+	for alg := range m.allowedAlgs {
+		allowedAlgs = append(allowedAlgs, alg)
+	}
+
 	// Validate the existing token (allowing expired tokens for refresh)
-	token, err := jwt.Parse(tokenString, m.keyFunc, jwt.WithValidMethods([]string{m.signingMethod.Alg()}))
+	token, err := jwt.Parse(tokenString, m.keyFunc, jwt.WithValidMethods(allowedAlgs))
 	if err != nil && !strings.Contains(err.Error(), "token is expired") {
 		m.responseWriter.Error401(w, r, m.translateJWTError(err))
 		return

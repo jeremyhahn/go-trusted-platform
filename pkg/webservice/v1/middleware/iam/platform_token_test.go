@@ -118,6 +118,12 @@ func newRealValidator(t *testing.T, key *brokerKey) *platformtoken.Validator {
 		Issuer:   testBrokerIssuer,
 		Audience: testBrokerAudience,
 		JWKS:     key.jwks(),
+		// Offline mode: these middleware tests exercise the signature / iss /
+		// aud / exp / DPoP path, not online liveness, so no liveness backend is
+		// required and the scope-free Validate path returns the projected
+		// context without a network round trip.
+		ModeResolver: func(string) platformtoken.AuthzMode { return platformtoken.AuthzModeOffline },
+		ReplayCache:  dpop.NewMemoryReplayCache(dpop.SystemClock{}),
 	})
 	if err != nil {
 		t.Fatalf("NewValidator: %v", err)
@@ -569,9 +575,11 @@ func TestRequestURL(t *testing.T) {
 
 func TestNewPlatformTokenValidator(t *testing.T) {
 	t.Run("valid params with defaults", func(t *testing.T) {
+		// Offline mode needs no introspection URL: a minimal valid config builds.
 		v, err := NewPlatformTokenValidator(PlatformTokenValidatorParams{
-			Issuer:  testBrokerIssuer,
-			JWKSURL: "https://broker.test/.well-known/jwks.json",
+			Issuer:    testBrokerIssuer,
+			JWKSURL:   "https://broker.test/.well-known/jwks.json",
+			AuthzMode: string(platformtoken.AuthzModeOffline),
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -603,10 +611,11 @@ func TestNewPlatformTokenValidator(t *testing.T) {
 
 	t.Run("explicit audience and ttl honored", func(t *testing.T) {
 		v, err := NewPlatformTokenValidator(PlatformTokenValidatorParams{
-			Issuer:   testBrokerIssuer,
-			JWKSURL:  "https://broker.test/.well-known/jwks.json",
-			Audience: "api://custom",
-			CacheTTL: 5 * time.Minute,
+			Issuer:    testBrokerIssuer,
+			JWKSURL:   "https://broker.test/.well-known/jwks.json",
+			Audience:  "api://custom",
+			CacheTTL:  5 * time.Minute,
+			AuthzMode: string(platformtoken.AuthzModeOffline),
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -624,12 +633,14 @@ type fakeValidator struct {
 	err    error
 }
 
-func (f *fakeValidator) ValidatePlatformToken(ctx context.Context, token string) (*platformtoken.Claims, error) {
-	return f.claims, f.err
-}
-
-func (f *fakeValidator) ValidateWithDPoP(ctx context.Context, token, dpopProof, htm, htu string, replayCache dpop.ReplayCache) (*platformtoken.Claims, error) {
-	return f.claims, f.err
+func (f *fakeValidator) Validate(ctx context.Context, token, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.claims == nil {
+		return nil, errors.New("fakeValidator: no claims configured")
+	}
+	return platformtoken.Authorize(f.claims), nil
 }
 
 func TestPlatformTokenMiddleware_Verify_ValidatorErrorMapsTo401(t *testing.T) {
@@ -672,6 +683,9 @@ func TestPlatformTokenMiddleware_RemoteJWKS(t *testing.T) {
 		JWKSURL:    jwksServer.URL,
 		Audience:   testBrokerAudience,
 		HTTPClient: jwksServer.Client(),
+		// Offline mode: this test exercises the JWKS-by-kid + DPoP path, not
+		// online liveness, so no introspection endpoint is required.
+		AuthzMode: string(platformtoken.AuthzModeOffline),
 	})
 	if err != nil {
 		t.Fatalf("NewPlatformTokenValidator: %v", err)

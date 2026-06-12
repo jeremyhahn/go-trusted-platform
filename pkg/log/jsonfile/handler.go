@@ -69,9 +69,20 @@ type Options struct {
 // callers. It also exposes Query for offline scans of the rotated
 // history.
 type Handler struct {
-	opts     Options
-	service  string
-	dir      string
+	opts    Options
+	service string
+	dir     string
+	out     *output
+	attrs   []slog.Attr
+	group   string
+}
+
+// output holds the mutable file + subscriber state shared by every
+// Handler clone produced via WithAttrs / WithGroup. It lives behind a
+// pointer so cloning a Handler never copies its locks — all clones
+// write through the same mutex to the same file and fan out to the
+// same subscriber set.
+type output struct {
 	mu       sync.Mutex
 	file     *os.File
 	filePath string
@@ -79,8 +90,6 @@ type Handler struct {
 	subsMu   sync.RWMutex
 	subs     map[uint64]chan []byte
 	nextID   atomic.Uint64
-	attrs    []slog.Attr
-	group    string
 }
 
 // NewHandler opens (or creates) the active JSON-lines file for
@@ -105,7 +114,7 @@ func NewHandler(opts Options) (*Handler, error) {
 		opts:    opts,
 		service: opts.Service,
 		dir:     opts.Dir,
-		subs:    make(map[uint64]chan []byte),
+		out:     &output{subs: make(map[uint64]chan []byte)},
 	}
 	if err := h.openActive(); err != nil {
 		return nil, err
@@ -131,9 +140,9 @@ func (h *Handler) openActive() error {
 		_ = f.Close()
 		return ErrIO{Op: "stat", Path: p, Err: err}
 	}
-	h.file = f
-	h.filePath = p
-	h.written = st.Size()
+	h.out.file = f
+	h.out.filePath = p
+	h.out.written = st.Size()
 	return nil
 }
 
@@ -178,20 +187,20 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	}
 	line := buf.Bytes()
 
-	h.mu.Lock()
-	if h.opts.MaxSize > 0 && h.written+int64(len(line)) > h.opts.MaxSize {
+	h.out.mu.Lock()
+	if h.opts.MaxSize > 0 && h.out.written+int64(len(line)) > h.opts.MaxSize {
 		if err := h.rotateLocked(); err != nil {
-			h.mu.Unlock()
+			h.out.mu.Unlock()
 			return err
 		}
 	}
-	n, err := h.file.Write(line)
+	n, err := h.out.file.Write(line)
 	if err == nil {
-		h.written += int64(n)
+		h.out.written += int64(n)
 	}
-	h.mu.Unlock()
+	h.out.mu.Unlock()
 	if err != nil {
-		return ErrIO{Op: "write", Path: h.filePath, Err: err}
+		return ErrIO{Op: "write", Path: h.out.filePath, Err: err}
 	}
 
 	// Fan-out without holding the file mutex.
@@ -206,21 +215,21 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	return nil
 }
 
-// rotateLocked must be called with h.mu held.
+// rotateLocked must be called with h.out.mu held.
 func (h *Handler) rotateLocked() error {
-	if h.file == nil {
+	if h.out.file == nil {
 		return nil
 	}
-	if err := h.file.Close(); err != nil {
-		return ErrIO{Op: "close", Path: h.filePath, Err: err}
+	if err := h.out.file.Close(); err != nil {
+		return ErrIO{Op: "close", Path: h.out.filePath, Err: err}
 	}
 	// Include nanoseconds so multiple rotations within the same wall
 	// second don't collide on rename. Format chosen to sort
 	// lexicographically by mod time for the cull pass.
 	ts := time.Now().UTC().Format("20060102T150405.000000000Z")
 	target := filepath.Join(h.dir, h.service+".jsonl."+ts)
-	if err := os.Rename(h.filePath, target); err != nil {
-		return ErrIO{Op: "rotate", Path: h.filePath, Err: err}
+	if err := os.Rename(h.out.filePath, target); err != nil {
+		return ErrIO{Op: "rotate", Path: h.out.filePath, Err: err}
 	}
 	if err := h.openActive(); err != nil {
 		return err
@@ -238,7 +247,7 @@ type rotatedFile struct {
 }
 
 // cullLocked applies MaxFiles / MaxAge to rotated history. Must be
-// called with h.mu held.
+// called with h.out.mu held.
 func (h *Handler) cullLocked() {
 	if h.opts.MaxFiles <= 0 && h.opts.MaxAge <= 0 {
 		return
@@ -301,13 +310,13 @@ func (h *Handler) numKeptAbove(rs []rotatedFile, r rotatedFile) int {
 // Close flushes and closes the underlying file. After Close, the
 // handler is unusable.
 func (h *Handler) Close() error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.file == nil {
+	h.out.mu.Lock()
+	defer h.out.mu.Unlock()
+	if h.out.file == nil {
 		return nil
 	}
-	err := h.file.Close()
-	h.file = nil
+	err := h.out.file.Close()
+	h.out.file = nil
 	return err
 }
 
@@ -316,17 +325,17 @@ func (h *Handler) Close() error {
 // unsubscribe func MUST be called when the subscriber is done; it is
 // safe to call more than once.
 func (h *Handler) Subscribe() (<-chan []byte, func()) {
-	id := h.nextID.Add(1)
+	id := h.out.nextID.Add(1)
 	ch := make(chan []byte, h.opts.SubscriberBuffer)
-	h.subsMu.Lock()
-	h.subs[id] = ch
-	h.subsMu.Unlock()
+	h.out.subsMu.Lock()
+	h.out.subs[id] = ch
+	h.out.subsMu.Unlock()
 	once := sync.Once{}
 	return ch, func() {
 		once.Do(func() {
-			h.subsMu.Lock()
-			delete(h.subs, id)
-			h.subsMu.Unlock()
+			h.out.subsMu.Lock()
+			delete(h.out.subs, id)
+			h.out.subsMu.Unlock()
 			close(ch)
 		})
 	}
@@ -339,9 +348,9 @@ func (h *Handler) Subscribe() (<-chan []byte, func()) {
 func (h *Handler) broadcast(line []byte) {
 	cp := make([]byte, len(line))
 	copy(cp, line)
-	h.subsMu.RLock()
-	defer h.subsMu.RUnlock()
-	for _, ch := range h.subs {
+	h.out.subsMu.RLock()
+	defer h.out.subsMu.RUnlock()
+	for _, ch := range h.out.subs {
 		select {
 		case ch <- cp:
 		default:

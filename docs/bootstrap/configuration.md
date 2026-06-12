@@ -1,5 +1,22 @@
 # Bootstrap Configuration Reference
 
+## Architecture Note: Trust Resolver Layering
+
+The platform trust resolver is a thin wrapper over the canonical generic
+resolver that lives in `go-xkms/pkg/trust/resolver`, reached through the
+QuicBaaS SDK re-export (`go-quicbaas/sdk/go/xkms/trust/resolver`).
+
+The platform layer owns:
+- Three class constants (`default`, `bmc`, `internal`) used as scope names.
+- Per-class strategy allowlists (see Validation Rules below).
+- `platform-ca` → `provider-ca` normalisation: the platform YAML spells the
+  strategy `platform-ca`; the generic resolver receives `provider-ca`.
+- TOFU pin-store threading: `WithTOFUPinStore` must be supplied at resolver
+  construction for any class that lists `tofu` in its strategies chain.
+
+Strategy dispatch, per-strategy fetch logic, caching, and install are all
+owned by the generic resolver in go-xkms.
+
 ## Server Configuration
 
 Server bootstrap publishes CA bundles via DANE TLSA records and optional Noise_NK server.
@@ -91,36 +108,42 @@ bootstrap:
 
 ## Client Configuration
 
-Client bootstrap fetches the CA bundle from the server before TLS can be
-established. Located under `trust.default.*` (the default class scope):
+Client trust bootstrap fetches the CA bundle from the server before TLS can be
+established. Located under `trust.*` in platform config. The `trust:` section
+carries one scope per trust class -- `default` (provisioning/CP trust), `bmc`
+(BMC endpoints), and `internal` (platform-internal mTLS sites). Each scope
+declares an ordered `strategies` chain; the resolver attempts each strategy in
+order until one succeeds.
 
 ```yaml
 trust:
   default:
-    strategies: [dane]                          # ordered chain: dane|noise|spki|embedded|tofu
-    server-url: "https://10.99.99.2:8443"      # REST endpoint for bundle fetch
-    hostname: "cp.example.com"                  # hostname for DANE TLSA lookups (required when server-url is an IP)
+    strategies: [dane, noise, spki]            # Ordered fetch chain
+    server-url: "https://10.99.99.2:8443"      # REST endpoint for DANE/SPKI
+    hostname: "server.example.com"             # DANE TLSA lookup name (required when server-url is an IP)
     bundle-path: "/api/v1/ca/bootstrap"        # REST path for CA bundle
-    per-method-timeout: 15s                    # Timeout per bootstrap attempt
+    per-method-timeout: 15s                    # Timeout per strategy attempt
     install-to-system-trust: true              # Write to system cert store
     dane:
-      dns-server: "10.99.99.2:8053"            # Optional service-level DNS override
+      dns-server: "10.99.99.2:8053"            # Optional service-level override
     noise:
       server-addr: "10.99.99.2:9446"           # Noise server address (noise only)
-      server-static-key: "base64-encoded-key"  # Server's Curve25519 pubkey (noise only)
+      server-static-key: "<64-hex-curve25519>" # Server's hex-encoded Curve25519 pubkey (noise only)
     spki:
-      pin: "sha256/XXXXXXXX..."                # SPKI pin base64 (spki only)
+      pin: "<64-hex-sha256>"                   # Hex SHA-256 of server SPKI (spki only)
+      # pin-file: /etc/trusted-platform/bootstrap-spki-pin  # or read the pin from disk
 ```
 
 ### DNS Resolution Priority
 
-The bootstrap client determines the DNS server address using the following
+The trust resolver determines the DANE DNS server address using the following
 priority order:
 
-1. **`dns.resolver.servers[0]`** -- platform-wide default from the `dns.resolver`
-   section. This is the recommended configuration point.
-2. **`trust.default.dane.dns-server`** -- explicit service-level override. Use this
-   only when the bootstrap DNS server differs from the platform default.
+1. **`trust.default.dane.dns-server`** -- explicit service-level override. Use
+   this only when the bootstrap DNS server differs from the platform default.
+2. **`dns.resolver.servers[0]`** -- platform-wide default from the `dns.resolver`
+   section. This is the recommended configuration point; the platform populates
+   `dane.dns-server` from it automatically when the override is omitted.
 3. **Fallback** -- constructed from the server IP address and default public DNS
    port (8053). Used by the test tool when no config is available.
 
@@ -143,6 +166,7 @@ trust:
   default:
     strategies: [dane]
     server-url: "https://10.99.99.2:8443"
+    hostname: "server.example.com"
     # dane.dns-server is omitted -- derived from dns.resolver.servers[0]
     bundle-path: "/api/v1/ca/bootstrap"
     per-method-timeout: 15s
@@ -155,6 +179,7 @@ trust:
 - Requires: DNSSEC-validating resolver
 - Benefits: No secrets to manage, automatic rollover
 - Reliability: Depends on DNS availability
+- Allowed in: `default`, `bmc`
 - Config:
   ```yaml
   trust:
@@ -170,6 +195,7 @@ trust:
 - Requires: Server's static Curve25519 public key (distributed out-of-band)
 - Benefits: No DNS/DNSSEC dependency, high assurance
 - Reliability: Direct TCP connection to server
+- Allowed in: `default`
 - Config:
   ```yaml
   trust:
@@ -177,13 +203,14 @@ trust:
       strategies: [noise]
       noise:
         server-addr: "server.example.com:9446"
-        server-static-key: "aEroKDZNvHnfJCSYxlXuOu8MNLIvJnYuLRDNS5gxdxs="
+        server-static-key: "1f4b...64-hex-chars...9d2c"
   ```
 
 **spki**
-- Requires: Server's certificate SPKI SHA-256 hash
+- Requires: Server's certificate SPKI SHA-256 hash (64 hex chars)
 - Benefits: No out-of-band secrets, resilient to DNSSEC misconfigs
 - Reliability: Depends on initial cert pinning accuracy
+- Allowed in: `default`, `bmc`
 - Config:
   ```yaml
   trust:
@@ -192,13 +219,14 @@ trust:
       server-url: "https://server.example.com:8443"
       bundle-path: "/api/v1/ca/bootstrap"
       spki:
-        pin: "sha256/sMgbLWtKLKr4Yp8P2C3N5C8K2L1M9N7O6P5Q4R3S2T1U"
+        pin: "a1b2...64-hex-chars...c3d4"
   ```
 
 **embedded**
 - Requires: CA certificate baked into ISO at build time
 - Benefits: No network required, maximum simplicity
 - Reliability: Hardcoded, no runtime fetch
+- Allowed in: `default`
 - Config:
   ```yaml
   trust:
@@ -206,8 +234,93 @@ trust:
       strategies: [embedded]
   ```
 
-**multi-method fallback chain** (formerly "auto")
-- Tries multiple methods in priority order, succeeds on the first that works
+**tofu** (Trust-on-First-Use)
+- Requires: A `TOFUPinStore` injected at resolver construction time via
+  `WithTOFUPinStore`. On first connection the server's leaf SPKI pin is
+  captured and persisted; subsequent connections verify the stored pin.
+- Benefits: Zero configuration, self-provisioning for environments without
+  DANE DNS or pre-distributed keys. Suitable for BMC enrollment (the captured
+  BMC pin becomes the credential for all subsequent SPKI verifications).
+- Risks: First connection is unauthenticated (trust-on-first-use). Only
+  suitable when the initial connection occurs over a trusted provisioning
+  network or is confirmed by an operator via the confirm hook.
+- Allowed in: `default`, `bmc`
+- **TOFU is never an implicit fallback — it MUST be listed explicitly** in the
+  `strategies` chain. Environments without DANE publishing should use
+  `[dane, noise, spki, tofu]` with a comment explaining the semantics.
+- Config:
+  ```yaml
+  trust:
+    # Recommended chain for environments without DANE publishing.
+    # TOFU captures and pins the server certificate on first contact.
+    # Subsequent connections verify the stored pin; any certificate change
+    # requires manual pin rotation in the TOFU store.
+    default:
+      strategies: [dane, noise, spki, tofu]
+      server-url: "https://server.example.com:8443"
+      bundle-path: "/api/v1/ca/bootstrap"
+      per-method-timeout: 15s
+    bmc:
+      # Phase 3 BMC trust chain. TOFU captures the BMC SPKI on first contact;
+      # remove tofu once DANE TLSA records for <hostname>-bmc.<zone> are live.
+      strategies: [dane, spki, ca-file, tofu]
+      dane:
+        dns-server: "127.0.0.1:8053"   # platform public DNS
+  ```
+
+**ca-file**
+- Requires: A CA bundle PEM file on local disk
+- Benefits: Offline, no network dependency
+- Allowed in: `bmc`
+- Config:
+  ```yaml
+  trust:
+    bmc:
+      strategies: [ca-file]
+      ca-file: /etc/trusted-platform/bmc-ca.pem
+  ```
+
+### BMC TLSA naming convention
+
+BMC DANE TLSA records are published at:
+
+```
+_443._tcp.<hostname>-bmc.<internal-zone>
+```
+
+For example, if the node hostname is `lab-node-2` and the internal zone is
+`example.internal`, the TLSA record lives at:
+
+```
+_443._tcp.lab-node-2-bmc.example.internal
+```
+
+The BMC enroll ceremony and the AutoCertManager rotation hook publish this
+record automatically. Until the record is published, the `tofu` strategy in
+the BMC chain handles first contact. Once the TLSA record is live, remove
+`tofu` from the chain — either in the template directly or in your override
+file:
+
+```yaml
+trust:
+  bmc:
+    strategies: [dane, spki, ca-file]
+```
+
+**platform-ca**
+- Requires: Platform CA bundle provider injected via `WithPlatformCA`
+- Benefits: Automatically uses the platform's own CA; no external config
+- Allowed in: `internal` only
+- Config:
+  ```yaml
+  trust:
+    internal:
+      strategies: [platform-ca]
+  ```
+
+**Ordered chain** (replaces the old `auto` strategy)
+- List multiple strategies; the resolver attempts each in order and succeeds
+  on the first one that works
 - Config:
   ```yaml
   trust:
@@ -220,25 +333,10 @@ trust:
         dns-server: "8.8.8.8:53"
       noise:
         server-addr: "server.example.com:9446"
-        server-static-key: "aEroKDZNvHnfJCSYxlXuOu8MNLIvJnYuLRDNS5gxdxs="
+        server-static-key: "1f4b...64-hex-chars...9d2c"
       spki:
-        pin: "sha256/sMgbLWtKLKr4Yp8P2C3N5C8K2L1M9N7O6P5Q4R3S2T1U"
+        pin: "a1b2...64-hex-chars...c3d4"
   ```
-
-## Environment Variable Overrides
-
-The `platformctl bootstrap trust` command accepts CLI flags that mirror the
-config fields:
-
-```bash
-platformctl bootstrap trust \
-  --server-url https://server.example.com:8443 \
-  --strategy dane \
-  --dns-server 8.8.8.8:53 \
-  --bundle-path /api/v1/ca/bootstrap \
-  --per-method-timeout 15s \
-  --install-to-system-trust
-```
 
 ## Complete Examples
 
@@ -313,13 +411,14 @@ trust:
   default:
     strategies: [dane]
     server-url: "https://10.99.99.2:8443"
+    hostname: "server.example.com"
     # dane.dns-server derived from dns.resolver.servers[0]
     bundle-path: "/api/v1/ca/bootstrap"
     per-method-timeout: 15s
     install-to-system-trust: true
 ```
 
-### Client Multi-Method Bootstrap
+### Client Ordered-Chain Bootstrap
 
 ```yaml
 dns:
@@ -340,17 +439,50 @@ trust:
     install-to-system-trust: true
     noise:
       server-addr: "server.example.com:9446"
-      server-static-key: "aEroKDZNvHnfJCSYxlXuOu8MNLIvJnYuLRDNS5gxdxs="
+      server-static-key: "1f4b...64-hex-chars...9d2c"
     spki:
-      pin: "sha256/sMgbLWtKLKr4Yp8P2C3N5C8K2L1M9N7O6P5Q4R3S2T1U"
+      pin: "a1b2...64-hex-chars...c3d4"
+```
+
+### Client Without DANE (TOFU Fallback)
+
+Environments that have not yet set up DNSSEC or DANE publishing should include
+`tofu` at the end of the chain so the first connection establishes a stored pin
+that all subsequent connections verify against.
+
+```yaml
+trust:
+  # TOFU captures and stores the server's SPKI hash on first contact.
+  # Subsequent connections verify against the stored hash exactly like spki.
+  # TOFU requires a TOFUPinStore; the platform wires one automatically when
+  # a storage backend is available (after the QuicBaaS SDK is initialized).
+  default:
+    strategies: [dane, noise, spki, tofu]
+    server-url: "https://server.example.com:8443"
+    bundle-path: "/api/v1/ca/bootstrap"
+    per-method-timeout: 15s
+    install-to-system-trust: true
 ```
 
 ## Validation Rules
 
 The platform enforces:
 
-- `strategies` is required and must contain at least one of: `dane`, `noise`, `spki`, `embedded`, `tofu`, `platform-ca`, `ca-file`
-- DANE strategy requires either `dns.resolver.servers[0]` or `trust.default.dane.dns-server` to be set
-- Noise strategy requires `noise.server-addr` and `noise.server-static-key`
-- SPKI strategy requires `spki.pin` to be set
+- `strategies` is required per scope and each entry must be allowed for the
+  scope's class:
+  - `default` allows `dane`, `noise`, `spki`, `embedded`, `tofu`
+  - `bmc` allows `dane`, `spki`, `ca-file`, `tofu`
+  - `internal` allows only `platform-ca`
+- When a `noise` sub-config is present, `noise.server-addr` and
+  `noise.server-static-key` are required
+- When an `spki` sub-config sets `pin-file`, the file must be readable; its
+  contents populate `spki.pin`. A scope without any pin is still valid because
+  a PinStore may supply per-endpoint pins at resolution time
+- When `tofu` is listed in any scope, a `TOFUPinStore` must be injected at
+  resolver construction time via `WithTOFUPinStore`; omitting it returns
+  `ErrTOFUPinStoreRequired`
 - `per-method-timeout` must not be negative
+
+Whether a strategy can actually run (e.g. DANE has a DNS server, SPKI has a
+resolved pin) is determined at fetch time: an unconfigured strategy fails its
+attempt and the resolver falls through to the next strategy in the chain.

@@ -125,12 +125,12 @@ func TestDumpCommand_JSONFormat(t *testing.T) {
 	ctx := context.Background()
 
 	// Create and save test entities
-	orgDAO, err := tc.factory.OrganizationDAO()
+	roleDAO, err := tc.factory.RoleDAO()
 	require.NoError(t, err)
 
-	org := &entities.Organization{Name: "TestOrg-JSON"}
-	require.NoError(t, orgDAO.Save(ctx, org))
-	require.NotZero(t, org.ID)
+	role := &entities.Role{Name: "TestOrg-JSON"}
+	require.NoError(t, roleDAO.Save(ctx, role))
+	require.NotZero(t, role.ID)
 
 	zoneDAO, err := tc.factory.ZoneDAO()
 	require.NoError(t, err)
@@ -143,16 +143,16 @@ func TestDumpCommand_JSONFormat(t *testing.T) {
 	outputDir := filepath.Join(tc.outputDir, "json-dump")
 	require.NoError(t, os.MkdirAll(outputDir, 0755))
 
-	// Dump Organization entities
-	orgEntities, _, err := tc.client.List(ctx, "Organization", 100, "", 0)
+	// Dump Role entities
+	roleEntities, _, err := tc.client.List(ctx, "Role", 100, "", 0)
 	require.NoError(t, err)
 
-	if len(orgEntities) > 0 {
-		orgDir := filepath.Join(outputDir, "Organization")
-		require.NoError(t, os.MkdirAll(orgDir, 0755))
+	if len(roleEntities) > 0 {
+		roleDir := filepath.Join(outputDir, "Role")
+		require.NoError(t, os.MkdirAll(roleDir, 0755))
 
-		for _, entity := range orgEntities {
-			filename := filepath.Join(orgDir, fmt.Sprintf("%d.json", entity.ID))
+		for _, entity := range roleEntities {
+			filename := filepath.Join(roleDir, fmt.Sprintf("%d.json", entity.ID))
 			require.NoError(t, os.WriteFile(filename, entity.Data, 0644))
 		}
 	}
@@ -171,15 +171,15 @@ func TestDumpCommand_JSONFormat(t *testing.T) {
 		}
 	}
 
-	// Verify Organization files were created
-	orgDir := filepath.Join(outputDir, "Organization")
-	files, err := os.ReadDir(orgDir)
+	// Verify Role files were created
+	roleDir := filepath.Join(outputDir, "Role")
+	files, err := os.ReadDir(roleDir)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(files), 1, "expected at least 1 organization file")
 
 	// Verify content is valid JSON
 	for _, file := range files {
-		content, err := os.ReadFile(filepath.Join(orgDir, file.Name()))
+		content, err := os.ReadFile(filepath.Join(roleDir, file.Name()))
 		require.NoError(t, err)
 
 		var parsed map[string]interface{}
@@ -277,24 +277,24 @@ func TestDumpCommand_PrettyJSON(t *testing.T) {
 	ctx := context.Background()
 
 	// Create and save test entity
-	orgDAO, err := tc.factory.OrganizationDAO()
+	roleDAO, err := tc.factory.RoleDAO()
 	require.NoError(t, err)
 
-	org := &entities.Organization{Name: "PrettyOrg"}
-	require.NoError(t, orgDAO.Save(ctx, org))
+	role := &entities.Role{Name: "PrettyOrg"}
+	require.NoError(t, roleDAO.Save(ctx, role))
 
 	// Execute dump with pretty printing
 	outputDir := filepath.Join(tc.outputDir, "pretty-dump")
 	require.NoError(t, os.MkdirAll(outputDir, 0755))
 
-	orgEntities, _, err := tc.client.List(ctx, "Organization", 100, "", 0)
+	roleEntities, _, err := tc.client.List(ctx, "Role", 100, "", 0)
 	require.NoError(t, err)
 
-	if len(orgEntities) > 0 {
-		orgDir := filepath.Join(outputDir, "Organization")
-		require.NoError(t, os.MkdirAll(orgDir, 0755))
+	if len(roleEntities) > 0 {
+		roleDir := filepath.Join(outputDir, "Role")
+		require.NoError(t, os.MkdirAll(roleDir, 0755))
 
-		for _, entity := range orgEntities {
+		for _, entity := range roleEntities {
 			// Pretty print the JSON
 			var parsed interface{}
 			require.NoError(t, json.Unmarshal(entity.Data, &parsed))
@@ -302,18 +302,18 @@ func TestDumpCommand_PrettyJSON(t *testing.T) {
 			prettyJSON, err := json.MarshalIndent(parsed, "", "  ")
 			require.NoError(t, err)
 
-			filename := filepath.Join(orgDir, fmt.Sprintf("%d.json", entity.ID))
+			filename := filepath.Join(roleDir, fmt.Sprintf("%d.json", entity.ID))
 			require.NoError(t, os.WriteFile(filename, prettyJSON, 0644))
 		}
 	}
 
 	// Verify pretty JSON contains indentation
-	orgDir := filepath.Join(outputDir, "Organization")
-	files, err := os.ReadDir(orgDir)
+	roleDir := filepath.Join(outputDir, "Role")
+	files, err := os.ReadDir(roleDir)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(files), 1)
 
-	content, err := os.ReadFile(filepath.Join(orgDir, files[0].Name()))
+	content, err := os.ReadFile(filepath.Join(roleDir, files[0].Name()))
 	require.NoError(t, err)
 
 	// Pretty JSON should contain newlines and indentation
@@ -331,11 +331,6 @@ func TestDumpCommand_PartitionFilter(t *testing.T) {
 	ctx := context.Background()
 
 	// Create multiple entity types
-	orgDAO, err := tc.factory.OrganizationDAO()
-	require.NoError(t, err)
-	org := &entities.Organization{Name: "FilterTestOrg"}
-	require.NoError(t, orgDAO.Save(ctx, org))
-
 	roleDAO, err := tc.factory.RoleDAO()
 	require.NoError(t, err)
 	role := &entities.Role{Name: "FilterTestRole"}
@@ -421,11 +416,6 @@ func TestDumpCommand_MultipleEntityTypes(t *testing.T) {
 	ctx := context.Background()
 
 	// Create entities of different types
-	orgDAO, err := tc.factory.OrganizationDAO()
-	require.NoError(t, err)
-	org := &entities.Organization{Name: "MultiOrg"}
-	require.NoError(t, orgDAO.Save(ctx, org))
-
 	roleDAO, err := tc.factory.RoleDAO()
 	require.NoError(t, err)
 	role := &entities.Role{Name: "MultiRole"}
@@ -445,7 +435,7 @@ func TestDumpCommand_MultipleEntityTypes(t *testing.T) {
 	outputDir := filepath.Join(tc.outputDir, "multi-dump")
 	require.NoError(t, os.MkdirAll(outputDir, 0755))
 
-	entityTypes := []string{"Organization", "User", "Role", "Zone"}
+	entityTypes := []string{"User", "Role", "Zone"}
 	totalExported := 0
 
 	for _, entityType := range entityTypes {
@@ -465,10 +455,10 @@ func TestDumpCommand_MultipleEntityTypes(t *testing.T) {
 	}
 
 	// Verify we exported at least the entities we created
-	assert.GreaterOrEqual(t, totalExported, 4, "should export at least 4 entities")
+	assert.GreaterOrEqual(t, totalExported, 3, "should export at least 3 entities")
 
 	// Verify each entity type directory was created
-	for _, entityType := range []string{"Organization", "User", "Role", "Zone"} {
+	for _, entityType := range []string{"User", "Role", "Zone"} {
 		entityDir := filepath.Join(outputDir, entityType)
 		_, err := os.Stat(entityDir)
 		require.NoError(t, err, "directory for %s should exist", entityType)
@@ -584,13 +574,13 @@ func TestDumpCommand_LargeDataset(t *testing.T) {
 	ctx := context.Background()
 
 	// Create multiple organizations
-	orgDAO, err := tc.factory.OrganizationDAO()
+	roleDAO, err := tc.factory.RoleDAO()
 	require.NoError(t, err)
 
-	numOrgs := 20
-	for i := 0; i < numOrgs; i++ {
-		org := &entities.Organization{Name: "BulkOrg-" + time.Now().Format("20060102150405.000000000")}
-		require.NoError(t, orgDAO.Save(ctx, org))
+	numRoles := 20
+	for i := 0; i < numRoles; i++ {
+		role := &entities.Role{Name: "BulkRole-" + time.Now().Format("20060102150405.000000000")}
+		require.NoError(t, roleDAO.Save(ctx, role))
 		time.Sleep(time.Microsecond) // Ensure unique timestamps
 	}
 
@@ -598,22 +588,22 @@ func TestDumpCommand_LargeDataset(t *testing.T) {
 	outputDir := filepath.Join(tc.outputDir, "large-dump")
 	require.NoError(t, os.MkdirAll(outputDir, 0755))
 
-	orgEntities, _, err := tc.client.List(ctx, "Organization", 100, "", 0)
+	roleEntities, _, err := tc.client.List(ctx, "Role", 100, "", 0)
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(orgEntities), numOrgs)
+	require.GreaterOrEqual(t, len(roleEntities), numRoles)
 
-	orgDir := filepath.Join(outputDir, "Organization")
-	require.NoError(t, os.MkdirAll(orgDir, 0755))
+	roleDir := filepath.Join(outputDir, "Role")
+	require.NoError(t, os.MkdirAll(roleDir, 0755))
 
-	for _, entity := range orgEntities {
-		filename := filepath.Join(orgDir, fmt.Sprintf("%d.json", entity.ID))
+	for _, entity := range roleEntities {
+		filename := filepath.Join(roleDir, fmt.Sprintf("%d.json", entity.ID))
 		require.NoError(t, os.WriteFile(filename, entity.Data, 0644))
 	}
 
 	// Verify all files were created
-	files, err := os.ReadDir(orgDir)
+	files, err := os.ReadDir(roleDir)
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(files), numOrgs, "should have at least %d organization files", numOrgs)
+	assert.GreaterOrEqual(t, len(files), numRoles, "should have at least %d role files", numRoles)
 }
 
 // TestDumpCommand_DataIntegrity tests that dumped data can be parsed back.
@@ -683,12 +673,12 @@ func TestDumpCommand_ConcurrentDump(t *testing.T) {
 	ctx := context.Background()
 
 	// Create some test data
-	orgDAO, err := tc.factory.OrganizationDAO()
+	roleDAO, err := tc.factory.RoleDAO()
 	require.NoError(t, err)
 
 	for i := 0; i < 5; i++ {
-		org := &entities.Organization{Name: "ConcurrentOrg-" + time.Now().Format("150405.000000000")}
-		require.NoError(t, orgDAO.Save(ctx, org))
+		role := &entities.Role{Name: "ConcurrentRole-" + time.Now().Format("150405.000000000")}
+		require.NoError(t, roleDAO.Save(ctx, role))
 		time.Sleep(time.Microsecond)
 	}
 
@@ -707,21 +697,21 @@ func TestDumpCommand_ConcurrentDump(t *testing.T) {
 				return
 			}
 
-			orgEntities, _, err := tc.client.List(ctx, "Organization", 100, "", 0)
+			roleEntities, _, err := tc.client.List(ctx, "Role", 100, "", 0)
 			if err != nil {
 				errChan <- err
 				return
 			}
 
-			if len(orgEntities) > 0 {
-				orgDir := filepath.Join(outputDir, "Organization")
-				if err := os.MkdirAll(orgDir, 0755); err != nil {
+			if len(roleEntities) > 0 {
+				roleDir := filepath.Join(outputDir, "Role")
+				if err := os.MkdirAll(roleDir, 0755); err != nil {
 					errChan <- err
 					return
 				}
 
-				for _, entity := range orgEntities {
-					filename := filepath.Join(orgDir, fmt.Sprintf("%d.json", entity.ID))
+				for _, entity := range roleEntities {
+					filename := filepath.Join(roleDir, fmt.Sprintf("%d.json", entity.ID))
 					if err := os.WriteFile(filename, entity.Data, 0644); err != nil {
 						errChan <- err
 						return
@@ -755,32 +745,32 @@ func TestDumpCommand_OutputDirectoryPermissions(t *testing.T) {
 	ctx := context.Background()
 
 	// Create test data
-	orgDAO, err := tc.factory.OrganizationDAO()
+	roleDAO, err := tc.factory.RoleDAO()
 	require.NoError(t, err)
 
-	org := &entities.Organization{Name: "PermTest"}
-	require.NoError(t, orgDAO.Save(ctx, org))
+	role := &entities.Role{Name: "PermTest"}
+	require.NoError(t, roleDAO.Save(ctx, role))
 
 	// Test creating nested output directories
 	nestedDir := filepath.Join(tc.outputDir, "a", "b", "c", "d", "dump")
 	require.NoError(t, os.MkdirAll(nestedDir, 0755))
 
-	orgEntities, _, err := tc.client.List(ctx, "Organization", 100, "", 0)
+	roleEntities, _, err := tc.client.List(ctx, "Role", 100, "", 0)
 	require.NoError(t, err)
 
-	if len(orgEntities) > 0 {
-		orgDir := filepath.Join(nestedDir, "Organization")
-		require.NoError(t, os.MkdirAll(orgDir, 0755))
+	if len(roleEntities) > 0 {
+		roleDir := filepath.Join(nestedDir, "Role")
+		require.NoError(t, os.MkdirAll(roleDir, 0755))
 
-		for _, entity := range orgEntities {
-			filename := filepath.Join(orgDir, fmt.Sprintf("%d.json", entity.ID))
+		for _, entity := range roleEntities {
+			filename := filepath.Join(roleDir, fmt.Sprintf("%d.json", entity.ID))
 			require.NoError(t, os.WriteFile(filename, entity.Data, 0644))
 		}
 	}
 
 	// Verify nested structure was created correctly
-	orgDir := filepath.Join(nestedDir, "Organization")
-	info, err := os.Stat(orgDir)
+	roleDir := filepath.Join(nestedDir, "Role")
+	info, err := os.Stat(roleDir)
 	require.NoError(t, err)
 	assert.True(t, info.IsDir())
 }
@@ -795,19 +785,19 @@ func TestDumpCommand_JSONFormatInvalid(t *testing.T) {
 	ctx := context.Background()
 
 	// Create and save a valid entity first
-	orgDAO, err := tc.factory.OrganizationDAO()
+	roleDAO, err := tc.factory.RoleDAO()
 	require.NoError(t, err)
 
-	org := &entities.Organization{Name: "ValidOrg"}
-	require.NoError(t, orgDAO.Save(ctx, org))
+	role := &entities.Role{Name: "ValidOrg"}
+	require.NoError(t, roleDAO.Save(ctx, role))
 
 	// Dump and verify JSON can be parsed
-	orgEntities, _, err := tc.client.List(ctx, "Organization", 100, "", 0)
+	roleEntities, _, err := tc.client.List(ctx, "Role", 100, "", 0)
 	require.NoError(t, err)
-	require.NotEmpty(t, orgEntities)
+	require.NotEmpty(t, roleEntities)
 
 	// All entities should have valid JSON data
-	for _, entity := range orgEntities {
+	for _, entity := range roleEntities {
 		var parsed map[string]interface{}
 		err := json.Unmarshal(entity.Data, &parsed)
 		require.NoError(t, err, "entity data should be valid JSON")

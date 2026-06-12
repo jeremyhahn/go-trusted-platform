@@ -296,7 +296,6 @@ type MockFactory struct {
 	StopError  error
 
 	// Mock DAOs
-	organizationDAO  datastore.OrganizationDAO
 	userDAO          datastore.UserDAO
 	registrationDAO  datastore.RegistrationDAO
 	invitationDAO    datastore.InvitationDAO
@@ -390,16 +389,6 @@ func (m *MockFactory) DataDir() string {
 // SetDataDir sets the mock data directory path.
 func (m *MockFactory) SetDataDir(dir string) {
 	m.dataDir = dir
-}
-
-// OrganizationDAO returns the mock organization DAO.
-func (m *MockFactory) OrganizationDAO() (datastore.OrganizationDAO, error) {
-	return m.organizationDAO, nil
-}
-
-// SetOrganizationDAO sets the mock organization DAO.
-func (m *MockFactory) SetOrganizationDAO(dao datastore.OrganizationDAO) {
-	m.organizationDAO = dao
 }
 
 // UserDAO returns the mock user DAO.

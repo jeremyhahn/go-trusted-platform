@@ -24,9 +24,9 @@ import (
 	"testing"
 	"time"
 
+	dane "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/dane"
 	dnsconfig "github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
-	"github.com/jeremyhahn/go-truststrap/pkg/dane"
 )
 
 // rolloverTestConfig creates a DANEConfig suitable for rollover tests.

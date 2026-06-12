@@ -436,10 +436,6 @@ func TestMockFactory_SerializerType(t *testing.T) {
 func TestMockFactory_DAOs_DefaultNil(t *testing.T) {
 	mf := NewMockFactory()
 
-	dao, err := mf.OrganizationDAO()
-	require.NoError(t, err)
-	assert.Nil(t, dao)
-
 	userDAO, err := mf.UserDAO()
 	require.NoError(t, err)
 	assert.Nil(t, userDAO)
@@ -809,13 +805,10 @@ func TestFactory_DAO_NotStarted(t *testing.T) {
 	factory, err := NewFactory(cfg, logger, nil)
 	require.NoError(t, err)
 
-	_, err = factory.OrganizationDAO()
+	_, err = factory.UserDAO()
 	require.Error(t, err)
 	var target ErrStorageNotStarted
 	assert.ErrorAs(t, err, &target)
-
-	_, err = factory.UserDAO()
-	require.Error(t, err)
 	_, err = factory.RegistrationDAO()
 	require.Error(t, err)
 	_, err = factory.InvitationDAO()
@@ -1249,36 +1242,6 @@ func TestRoleDAO_GetByName_QueryReturnsMismatch_FallsBackToScan(t *testing.T) {
 }
 
 // =============================================================================
-// OrganizationDAO: GetUsers with invalid JSON
-// =============================================================================
-
-func TestOrganizationDAO_GetUsers_InvalidJSON(t *testing.T) {
-	mock := NewMockStorage()
-	require.NoError(t, mock.Start(context.Background()))
-	defer mock.Stop(context.Background())
-
-	logger := logging.DefaultLogger()
-	dao := NewOrganizationDAO(mock, logger, WithRequestTimeout(5*time.Second))
-
-	ctx := context.Background()
-
-	// Invalid JSON user
-	mock.SetData("User", 1, []byte("not valid json"))
-
-	// Valid user
-	user := dsentities.NewUser("valid@test.com")
-	user.ID = 2
-	user.OrganizationRefs = []uint64{12345}
-	data, _ := json.Marshal(user)
-	mock.SetData("User", 2, data)
-
-	users, err := dao.GetUsers(ctx, 12345)
-	require.NoError(t, err)
-	assert.Len(t, users, 1)
-	assert.Equal(t, "valid@test.com", users[0].Email)
-}
-
-// =============================================================================
 // Invitation: edge cases with invalid JSON in scan
 // =============================================================================
 
@@ -1528,11 +1491,6 @@ func TestMockFactory_SetDAOs(t *testing.T) {
 
 	// We just verify that Set* methods work and DAOs are returned correctly
 	// No real DAO instances needed - nil values are acceptable for mock setters
-	mf.SetOrganizationDAO(nil)
-	dao, err := mf.OrganizationDAO()
-	require.NoError(t, err)
-	assert.Nil(t, dao)
-
 	mf.SetUserDAO(nil)
 	userDAO, err := mf.UserDAO()
 	require.NoError(t, err)

@@ -297,6 +297,33 @@ func (e ErrBootstrapInstallBundle) Error() string {
 // Unwrap returns the underlying cause.
 func (e ErrBootstrapInstallBundle) Unwrap() error { return e.Cause }
 
+// ErrBootstrapTOFUNoSDK is returned when the trust configuration lists the
+// tofu strategy in any class chain but the QuicBaaS SDK client is not yet
+// available at trust-resolver construction time. The tofu strategy requires
+// a live SDK connection so that pins can be persisted to the Raft-replicated
+// ParameterStore.
+type ErrBootstrapTOFUNoSDK struct{}
+
+// Error returns the error message.
+func (e ErrBootstrapTOFUNoSDK) Error() string {
+	return "app: trust config lists tofu strategy but QuicBaaS SDK client is not available; " +
+		"ensure the quicbaas service is started before calling BootstrapTrust"
+}
+
+// ErrBootstrapTOFUPinStore is returned when the TOFU pin store cannot be
+// constructed from the platform's QuicBaaS SDK client.
+type ErrBootstrapTOFUPinStore struct {
+	Cause error
+}
+
+// Error returns the error message.
+func (e ErrBootstrapTOFUPinStore) Error() string {
+	return fmt.Sprintf("app: failed to create TOFU pin store: %v", e.Cause)
+}
+
+// Unwrap returns the underlying cause.
+func (e ErrBootstrapTOFUPinStore) Unwrap() error { return e.Cause }
+
 // ErrSDNConfigValidation is returned when the SDN configuration fails validation.
 type ErrSDNConfigValidation struct {
 	Cause error

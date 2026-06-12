@@ -77,11 +77,10 @@ func (m *MockRoleDAO) ForEachPage(ctx context.Context, pageQuery datastore.PageQ
 func TestNewUserService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockUserDAO := new(MockUserDAO)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	authServices := make(map[int]AuthServicer)
 
-	service := NewUserService(logger, mockUserDAO, mockOrgDAO, mockRoleDAO, authServices)
+	service := NewUserService(logger, mockUserDAO, mockRoleDAO, authServices)
 
 	require.NotNil(t, service)
 	assert.IsType(t, &User{}, service)
@@ -90,7 +89,6 @@ func TestNewUserService(t *testing.T) {
 func TestUser_Save_Success(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockUserDAO := new(MockUserDAO)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	ctx := context.Background()
 
@@ -101,7 +99,7 @@ func TestUser_Save_Success(t *testing.T) {
 
 	mockUserDAO.On("Save", ctx, user).Return(nil)
 
-	service := NewUserService(logger, mockUserDAO, mockOrgDAO, mockRoleDAO, nil)
+	service := NewUserService(logger, mockUserDAO, mockRoleDAO, nil)
 	err := service.Save(ctx, user)
 
 	require.NoError(t, err)
@@ -111,7 +109,6 @@ func TestUser_Save_Success(t *testing.T) {
 func TestUser_Save_Error(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockUserDAO := new(MockUserDAO)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	ctx := context.Background()
 
@@ -123,7 +120,7 @@ func TestUser_Save_Error(t *testing.T) {
 	expectedErr := errors.New("database error")
 	mockUserDAO.On("Save", ctx, user).Return(expectedErr)
 
-	service := NewUserService(logger, mockUserDAO, mockOrgDAO, mockRoleDAO, nil)
+	service := NewUserService(logger, mockUserDAO, mockRoleDAO, nil)
 	err := service.Save(ctx, user)
 
 	assert.Error(t, err)
@@ -134,7 +131,6 @@ func TestUser_Save_Error(t *testing.T) {
 func TestUser_Delete_Success(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockUserDAO := new(MockUserDAO)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	ctx := context.Background()
 
@@ -142,7 +138,7 @@ func TestUser_Delete_Success(t *testing.T) {
 
 	mockUserDAO.On("Delete", ctx, &entities.User{ID: userID}).Return(nil)
 
-	service := NewUserService(logger, mockUserDAO, mockOrgDAO, mockRoleDAO, nil)
+	service := NewUserService(logger, mockUserDAO, mockRoleDAO, nil)
 	err := service.Delete(ctx, userID)
 
 	require.NoError(t, err)
@@ -152,7 +148,6 @@ func TestUser_Delete_Success(t *testing.T) {
 func TestUser_Delete_Error(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockUserDAO := new(MockUserDAO)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	ctx := context.Background()
 
@@ -161,7 +156,7 @@ func TestUser_Delete_Error(t *testing.T) {
 	expectedErr := errors.New("user not found")
 	mockUserDAO.On("Delete", ctx, &entities.User{ID: userID}).Return(expectedErr)
 
-	service := NewUserService(logger, mockUserDAO, mockOrgDAO, mockRoleDAO, nil)
+	service := NewUserService(logger, mockUserDAO, mockRoleDAO, nil)
 	err := service.Delete(ctx, userID)
 
 	assert.Error(t, err)
@@ -172,7 +167,6 @@ func TestUser_Delete_Error(t *testing.T) {
 func TestUser_Get_Success(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockUserDAO := new(MockUserDAO)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	ctx := context.Background()
 
@@ -184,7 +178,7 @@ func TestUser_Get_Success(t *testing.T) {
 
 	mockUserDAO.On("Get", ctx, userID).Return(expectedUser, nil)
 
-	service := NewUserService(logger, mockUserDAO, mockOrgDAO, mockRoleDAO, nil)
+	service := NewUserService(logger, mockUserDAO, mockRoleDAO, nil)
 	user, err := service.Get(ctx, userID)
 
 	require.NoError(t, err)
@@ -197,7 +191,6 @@ func TestUser_Get_Success(t *testing.T) {
 func TestUser_Get_NotFound(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockUserDAO := new(MockUserDAO)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	ctx := context.Background()
 
@@ -206,7 +199,7 @@ func TestUser_Get_NotFound(t *testing.T) {
 
 	mockUserDAO.On("Get", ctx, userID).Return(nil, expectedErr)
 
-	service := NewUserService(logger, mockUserDAO, mockOrgDAO, mockRoleDAO, nil)
+	service := NewUserService(logger, mockUserDAO, mockRoleDAO, nil)
 	user, err := service.Get(ctx, userID)
 
 	assert.Error(t, err)
@@ -218,7 +211,6 @@ func TestUser_Get_NotFound(t *testing.T) {
 func TestUser_Get_Error(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockUserDAO := new(MockUserDAO)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	ctx := context.Background()
 
@@ -227,7 +219,7 @@ func TestUser_Get_Error(t *testing.T) {
 
 	mockUserDAO.On("Get", ctx, userID).Return(nil, expectedErr)
 
-	service := NewUserService(logger, mockUserDAO, mockOrgDAO, mockRoleDAO, nil)
+	service := NewUserService(logger, mockUserDAO, mockRoleDAO, nil)
 	user, err := service.Get(ctx, userID)
 
 	assert.Error(t, err)
@@ -257,7 +249,6 @@ func TestErrUserNotFound(t *testing.T) {
 func TestUserService_MultipleOperations(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockUserDAO := new(MockUserDAO)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	ctx := context.Background()
 
@@ -269,7 +260,7 @@ func TestUserService_MultipleOperations(t *testing.T) {
 
 	mockUserDAO.On("Save", ctx, user).Return(nil)
 
-	service := NewUserService(logger, mockUserDAO, mockOrgDAO, mockRoleDAO, nil)
+	service := NewUserService(logger, mockUserDAO, mockRoleDAO, nil)
 	err := service.Save(ctx, user)
 	require.NoError(t, err)
 
@@ -291,7 +282,6 @@ func TestUserService_MultipleOperations(t *testing.T) {
 func TestUser_GetByEmail_Success(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockUserDAO := new(MockUserDAO)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	ctx := context.Background()
 
@@ -317,7 +307,7 @@ func TestUser_GetByEmail_Success(t *testing.T) {
 			_ = fn(result)
 		}).Return(datastore.ErrStopIteration)
 
-	service := NewUserService(logger, mockUserDAO, mockOrgDAO, mockRoleDAO, nil)
+	service := NewUserService(logger, mockUserDAO, mockRoleDAO, nil)
 	user, err := service.GetByEmail(ctx, email)
 
 	require.NoError(t, err)
@@ -331,7 +321,6 @@ func TestUser_GetByEmail_Success(t *testing.T) {
 func TestUser_GetByEmail_NotFound(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockUserDAO := new(MockUserDAO)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	ctx := context.Background()
 
@@ -353,7 +342,7 @@ func TestUser_GetByEmail_NotFound(t *testing.T) {
 			_ = fn(result)
 		}).Return(nil)
 
-	service := NewUserService(logger, mockUserDAO, mockOrgDAO, mockRoleDAO, nil)
+	service := NewUserService(logger, mockUserDAO, mockRoleDAO, nil)
 	user, err := service.GetByEmail(ctx, email)
 
 	require.Error(t, err)
@@ -369,7 +358,6 @@ func TestUser_GetByEmail_NotFound(t *testing.T) {
 func TestUser_GetByEmail_DAOError(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockUserDAO := new(MockUserDAO)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	ctx := context.Background()
 
@@ -378,7 +366,7 @@ func TestUser_GetByEmail_DAOError(t *testing.T) {
 
 	mockUserDAO.On("ForEachPage", ctx, mock.Anything, mock.Anything).Return(expectedErr)
 
-	service := NewUserService(logger, mockUserDAO, mockOrgDAO, mockRoleDAO, nil)
+	service := NewUserService(logger, mockUserDAO, mockRoleDAO, nil)
 	user, err := service.GetByEmail(ctx, email)
 
 	require.Error(t, err)
@@ -391,7 +379,6 @@ func TestUser_GetByEmail_DAOError(t *testing.T) {
 func TestUser_GetByTenant_Success(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockUserDAO := new(MockUserDAO)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	ctx := context.Background()
 
@@ -418,7 +405,7 @@ func TestUser_GetByTenant_Success(t *testing.T) {
 			_ = fn(result)
 		}).Return(nil)
 
-	service := NewUserService(logger, mockUserDAO, mockOrgDAO, mockRoleDAO, nil)
+	service := NewUserService(logger, mockUserDAO, mockRoleDAO, nil)
 	users, err := service.GetByTenant(ctx, tenantID)
 
 	require.NoError(t, err)
@@ -433,7 +420,6 @@ func TestUser_GetByTenant_Success(t *testing.T) {
 func TestUser_GetByTenant_Empty(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockUserDAO := new(MockUserDAO)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	ctx := context.Background()
 
@@ -454,7 +440,7 @@ func TestUser_GetByTenant_Empty(t *testing.T) {
 			_ = fn(result)
 		}).Return(nil)
 
-	service := NewUserService(logger, mockUserDAO, mockOrgDAO, mockRoleDAO, nil)
+	service := NewUserService(logger, mockUserDAO, mockRoleDAO, nil)
 	users, err := service.GetByTenant(ctx, tenantID)
 
 	require.NoError(t, err)
@@ -466,7 +452,6 @@ func TestUser_GetByTenant_Empty(t *testing.T) {
 func TestUser_GetByTenant_DAOError(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockUserDAO := new(MockUserDAO)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	ctx := context.Background()
 
@@ -475,7 +460,7 @@ func TestUser_GetByTenant_DAOError(t *testing.T) {
 
 	mockUserDAO.On("ForEachPage", ctx, mock.Anything, mock.Anything).Return(expectedErr)
 
-	service := NewUserService(logger, mockUserDAO, mockOrgDAO, mockRoleDAO, nil)
+	service := NewUserService(logger, mockUserDAO, mockRoleDAO, nil)
 	users, err := service.GetByTenant(ctx, tenantID)
 
 	require.Error(t, err)
@@ -487,7 +472,6 @@ func TestUser_GetByTenant_DAOError(t *testing.T) {
 // TestUser_IsTenantOwner_Success verifies owner check
 func TestUser_IsTenantOwner_Success(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	ctx := context.Background()
 
@@ -502,7 +486,7 @@ func TestUser_IsTenantOwner_Success(t *testing.T) {
 
 		mockUserDAO2.On("Get", ctx, userID).Return(user, nil)
 
-		service := NewUserService(logger, mockUserDAO2, mockOrgDAO, mockRoleDAO, nil)
+		service := NewUserService(logger, mockUserDAO2, mockRoleDAO, nil)
 		isOwner, err := service.IsTenantOwner(ctx, userID)
 
 		require.NoError(t, err)
@@ -521,7 +505,7 @@ func TestUser_IsTenantOwner_Success(t *testing.T) {
 
 		mockUserDAO3.On("Get", ctx, userID).Return(user, nil)
 
-		service := NewUserService(logger, mockUserDAO3, mockOrgDAO, mockRoleDAO, nil)
+		service := NewUserService(logger, mockUserDAO3, mockRoleDAO, nil)
 		isOwner, err := service.IsTenantOwner(ctx, userID)
 
 		require.NoError(t, err)
@@ -534,7 +518,6 @@ func TestUser_IsTenantOwner_Success(t *testing.T) {
 func TestUser_IsTenantOwner_Error(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockUserDAO := new(MockUserDAO)
-	mockOrgDAO := new(MockOrganizationDAO)
 	mockRoleDAO := new(MockRoleDAO)
 	ctx := context.Background()
 
@@ -543,7 +526,7 @@ func TestUser_IsTenantOwner_Error(t *testing.T) {
 
 	mockUserDAO.On("Get", ctx, userID).Return(nil, expectedErr)
 
-	service := NewUserService(logger, mockUserDAO, mockOrgDAO, mockRoleDAO, nil)
+	service := NewUserService(logger, mockUserDAO, mockRoleDAO, nil)
 	isOwner, err := service.IsTenantOwner(ctx, userID)
 
 	require.Error(t, err)

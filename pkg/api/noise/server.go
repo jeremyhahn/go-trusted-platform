@@ -18,22 +18,21 @@ import (
 	"net"
 	"sync/atomic"
 
-	"github.com/flynn/noise"
-	"github.com/jeremyhahn/go-truststrap/pkg/noiseproto"
-	noiseboot "github.com/jeremyhahn/go-truststrap/pkg/noiseproto/bootstrap"
+	noiseboot "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/bootstrap"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
-// Server wraps the go-truststrap Noise_NK bootstrap server as a platform
-// protocol listener. It serves CA certificate bundles over Noise_NK encrypted
-// TCP connections for secure trust bootstrapping without requiring TLS.
+// Server wraps the stack's canonical Noise_NK bootstrap server (composed by
+// go-xkms, reached through the QuicBaaS SDK) as a platform protocol listener.
+// It serves CA certificate bundles over Noise_NK encrypted TCP connections
+// for secure trust bootstrapping without requiring TLS.
 type Server struct {
-	inner     *noiseboot.Server
+	inner     *noiseboot.NoiseServer
 	config    *bootstrap.NoiseServerConfig
 	logger    *logging.Logger
-	staticKey *noise.DHKey
+	staticKey *noiseboot.NoiseStaticKey
 	started   atomic.Bool
 }
 
@@ -43,7 +42,7 @@ type Server struct {
 // PublicKey for out-of-band distribution to clients.
 func NewServer(
 	cfg *bootstrap.NoiseServerConfig,
-	bundler noiseboot.BundleProvider,
+	bundler noiseboot.NoiseBundleProvider,
 	logger *logging.Logger,
 ) (*Server, error) {
 
@@ -57,12 +56,12 @@ func NewServer(
 		return nil, &ErrNilLogger{}
 	}
 
-	staticKey, err := noiseproto.GenerateStaticKey()
+	staticKey, err := noiseboot.GenerateNoiseStaticKey()
 	if err != nil {
 		return nil, &ErrKeyGenerationFailed{Cause: err}
 	}
 
-	innerCfg := &noiseboot.ServerConfig{
+	innerCfg := &noiseboot.NoiseServerConfig{
 		ListenAddr:     cfg.ListenAddr,
 		StaticKey:      staticKey,
 		CABundler:      bundler,
@@ -72,7 +71,7 @@ func NewServer(
 		Logger:         logger.Slog(),
 	}
 
-	inner, err := noiseboot.NewServer(innerCfg)
+	inner, err := noiseboot.NewNoiseServer(innerCfg)
 	if err != nil {
 		return nil, &ErrServerStartFailed{Cause: err}
 	}

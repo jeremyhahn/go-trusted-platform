@@ -193,7 +193,12 @@ type Orchestrator struct {
 	deployer       Deployer
 	healthChk      HealthChecker
 	bmcTLSProvider bmc.TLSProvider // run-scoped TLS provider for BMC connections; nil ⇒ system roots
-	cpCAPool       *x509.CertPool  // cached control-plane CA pool from capture-then-verify
+
+	// cpCAPool is populated after the control-plane CA bundle is successfully
+	// fetched via fetchControlPlaneCABundle (capture-then-verify). Once set,
+	// the seeder and health checker verify the CP's TLS certificate against
+	// this pool rather than relying on the system pool.
+	cpCAPool *x509.CertPool
 
 	// SkipVirtualMediaMount lets operators bypass MountVirtualMedia for
 	// boot_method: virtual-media nodes when the BMC needs an out-of-band
@@ -224,7 +229,7 @@ func NewOrchestrator(params OrchestratorParams) (*Orchestrator, error) {
 	}
 	healthChk := params.HealthChecker
 	if healthChk == nil {
-		hc := newHTTPHealthChecker(logger)
+		hc := newHTTPHealthChecker(logger, nil)
 		// Wire the pxeboot base URL so the checker can consult the
 		// node-uploaded registration.json as the authoritative signal
 		// that platformd is actually running, instead of guessing at
@@ -586,8 +591,8 @@ func (o *Orchestrator) bmcBootNode(ctx context.Context, node *DiscoveredNode) er
 }
 
 // seedTemplates creates a seeder, runs it against the first control-plane
-// node, and returns the seeder so its profile IDs are available to subsequent
-// phases (e.g. bmc-enroll). Use seedTemplatesWithSeeder internally.
+// node, and returns an error. This is a convenience wrapper over
+// seedTemplatesWithSeeder for callers that don't need the seeder back.
 func (o *Orchestrator) seedTemplates(ctx context.Context) error {
 	_, err := o.seedTemplatesWithSeeder(ctx)
 	return err
@@ -869,8 +874,7 @@ func (o *Orchestrator) controlPlaneHealthGate(ctx context.Context) error {
 		wg.Add(1)
 		go func(n *DiscoveredNode) {
 			defer wg.Done()
-			address := n.Hostname
-			err := o.waitForHealth(gateCtx, address)
+			err := o.waitForHealth(gateCtx, n.Hostname)
 			resultCh <- nodeHealth{hostname: n.Hostname, err: err}
 		}(node)
 	}
@@ -887,10 +891,7 @@ func (o *Orchestrator) controlPlaneHealthGate(ctx context.Context) error {
 				slog.String("hostname", nh.hostname),
 				slog.String("error", nh.err.Error()))
 			if firstErr == nil {
-				firstErr = ErrHealthCheckFailed{
-					Address: nh.hostname,
-					Cause:   nh.err,
-				}
+				firstErr = nh.err
 			}
 		} else {
 			o.logger.Info("bootstrap: control-plane node passed health gate",
@@ -919,6 +920,19 @@ func (o *Orchestrator) teardownContainer(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// propagateCAPool updates the health checker's TLS root CA pool once the
+// control-plane CA bundle has been fetched and stored in o.cpCAPool. This
+// is a no-op when the health checker was injected externally (not an
+// *httpHealthChecker) or when o.cpCAPool is nil.
+func (o *Orchestrator) propagateCAPool() {
+	if o.cpCAPool == nil {
+		return
+	}
+	if hc, ok := o.healthChk.(*httpHealthChecker); ok {
+		hc.WithCAPool(o.cpCAPool)
+	}
 }
 
 // waitForHealth polls a node's health endpoint until healthy or context expires.
@@ -1034,16 +1048,15 @@ type httpHealthChecker struct {
 	logger     *slog.Logger
 	pxebootURL string
 	httpsPorts []int
+	mu         sync.Mutex
 }
 
 // newHTTPHealthChecker creates a health checker that first probes the
 // pxeboot-hosted registration.json (plain HTTP, known-trusted) and
 // falls back to HTTPS /api/v1/status across the candidate platformd
-// ports. HTTPS fallback uses InsecureSkipVerify because the ACME-issued
-// cert is signed by the node's local CA, which the orchestrator hasn't
-// bootstrapped yet; this is a deliberate trade-off limited to initial
-// provisioning.
-func newHTTPHealthChecker(logger *slog.Logger) *httpHealthChecker {
+// ports. When caPool is non-nil it is used to verify the server's TLS
+// certificate; when nil the system certificate pool is used.
+func newHTTPHealthChecker(logger *slog.Logger, caPool *x509.CertPool) *httpHealthChecker {
 	// Force the pure-Go DNS resolver to avoid SIGFPE in CGO's getaddrinfo
 	// when running as a statically linked binary with glibc.
 	goResolver := &net.Resolver{PreferGo: true}
@@ -1057,18 +1070,30 @@ func newHTTPHealthChecker(logger *slog.Logger) *httpHealthChecker {
 			Transport: &http.Transport{
 				DialContext: dialer.DialContext,
 				TLSClientConfig: &tls.Config{
-					// Bootstrap-window reachability probe: freshly
-					// installed nodes serve certs from per-node local
-					// CAs that do not exist yet when the orchestrator
-					// starts watching, so no trust anchor is available
-					// by construction. The probe consumes readiness
-					// booleans only — never credentials or config.
-					InsecureSkipVerify: true, //nolint:gosec // bootstrap-window readiness probe; no trust anchor exists yet
+					MinVersion: tls.VersionTLS13,
+					RootCAs:    caPool, // nil → system pool
 				},
 			},
 		},
 		logger:     logger,
 		httpsPorts: []int{8443, 9443, 443},
+	}
+}
+
+// WithCAPool replaces the HTTP client's TLS root CA pool on the checker.
+// This is called once the control-plane CA bundle has been fetched so
+// subsequent health probes verify the server certificate rather than
+// relying on the system pool.
+func (h *httpHealthChecker) WithCAPool(pool *x509.CertPool) {
+	if pool == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if t, ok := h.client.Transport.(*http.Transport); ok {
+		cfg := t.TLSClientConfig.Clone()
+		cfg.RootCAs = pool
+		t.TLSClientConfig = cfg
 	}
 }
 

@@ -1041,14 +1041,14 @@ func (h *CAHandlers) handleGetCRL(w http.ResponseWriter, r *http.Request) {
 	// The CA interface does not directly expose GenerateCRL, but we can access
 	// the underlying CA if it implements the method
 	type crlGenerator interface {
-		GenerateCRL() ([]byte, error)
+		GenerateCRL(ctx context.Context) ([]byte, error)
 	}
 
 	var crlDER []byte
 	var err error
 
 	if gen, ok := h.ca.(crlGenerator); ok {
-		crlDER, err = gen.GenerateCRL()
+		crlDER, err = gen.GenerateCRL(r.Context())
 		if err != nil {
 			h.logger.Error("Failed to generate CRL", "error", err)
 			// Check if this is a "not supported" error

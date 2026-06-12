@@ -63,7 +63,7 @@ webservices:
 
     # JWT token configuration
     jwt:
-      expiration: 525960    # Token expiration in minutes
+      expiration: 60    # Token expiration in minutes (1 hour default)
       issuer: trusted-platform
 
     # WebAuthn/FIDO2 passwordless authentication

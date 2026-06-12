@@ -68,7 +68,7 @@ func (s *BarrierGRPCService) Init(
 		}
 
 		return &platformv1.BarrierInitResponse{
-			Status:        &platformv1.Status{Success: true, Message: "barrier initialized with shamir secret sharing"},
+			Status:        &platformv1.Status{Success: true, Message: "barrier initialized with shamir secret sharing; shares are sealed to enrolled security officers and claimed via the share-claim flow"},
 			Strategy:      platformv1.BarrierStrategy_BARRIER_STRATEGY_SHAMIR,
 			Threshold:     int32(resp.Threshold),
 			SharesTotal:   int32(resp.TotalShares),
@@ -196,7 +196,7 @@ func (s *BarrierGRPCService) Rekey(
 	}
 
 	return &platformv1.BarrierRekeyResponse{
-		Status:      &platformv1.Status{Success: true, Message: "barrier rekeyed"},
+		Status:      &platformv1.Status{Success: true, Message: "barrier rekeyed; new shares are sealed to enrolled security officers and claimed via the share-claim flow"},
 		Strategy:    platformv1.BarrierStrategy_BARRIER_STRATEGY_SHAMIR,
 		Threshold:   int32(resp.Threshold),
 		SharesTotal: int32(resp.TotalShares),

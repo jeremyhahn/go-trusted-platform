@@ -302,6 +302,20 @@ func bmcProfileID(args map[string]interface{}) (uint64, error) {
 	return id, nil
 }
 
+// bmcOptionalBool extracts an optional boolean from args. Returns (*bool)(nil)
+// when the key is absent so callers can preserve profile defaults.
+func bmcOptionalBool(args map[string]interface{}, key string) *bool {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return nil
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return nil
+	}
+	return &b
+}
+
 // ErrBMCProfileIDRequired indicates the profile_id argument is missing
 // or zero. profile_id is the primary key for every BMC RPC.
 var ErrBMCProfileIDRequired = errors.New("bmc: profile_id is required and must be non-zero")
@@ -502,23 +516,10 @@ func (r *ToolRegistry) executeBMCEnroll(ctx context.Context, args map[string]int
 	if err != nil {
 		return nil, err
 	}
-	var replaceCert, rotatePass, dnsReg, danePublish *bool
-	if v, ok := args["replace_certificate"]; ok && v != nil {
-		b := getBool(args, "replace_certificate")
-		replaceCert = &b
-	}
-	if v, ok := args["rotate_password"]; ok && v != nil {
-		b := getBool(args, "rotate_password")
-		rotatePass = &b
-	}
-	if v, ok := args["dns_register"]; ok && v != nil {
-		b := getBool(args, "dns_register")
-		dnsReg = &b
-	}
-	if v, ok := args["dane_publish"]; ok && v != nil {
-		b := getBool(args, "dane_publish")
-		danePublish = &b
-	}
+	replaceCert := bmcOptionalBool(args, "replace_certificate")
+	rotatePass := bmcOptionalBool(args, "rotate_password")
+	dnsReg := bmcOptionalBool(args, "dns_register")
+	danePublish := bmcOptionalBool(args, "dane_publish")
 	return p.BMCEnrollBMC(ctx, id, replaceCert, rotatePass, dnsReg, danePublish)
 }
 

@@ -34,13 +34,13 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/swtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 // isTerminalFD checks if the given file descriptor is a terminal
@@ -989,7 +989,7 @@ func verifyCSPlatformdStatus(ctx context.Context, logger *logging.Logger, flags 
 // directly in the ISO. For all other strategies, the client fetches the bundle
 // at runtime, so no embedding is needed.
 func csClientCABundlePath(bundlePath string, flags *clientServerFlags) string {
-	if flags.bootstrapStrategy == bootstrap.StrategyEmbedded || flags.bootstrapStrategy == "" {
+	if flags.bootstrapStrategy == string(trust.StrategyEmbedded) || flags.bootstrapStrategy == "" {
 		return bundlePath
 	}
 	return ""
@@ -1001,9 +1001,9 @@ func csClientCABundlePath(bundlePath string, flags *clientServerFlags) string {
 // section when available, falling back to serverIP with the default public
 // DNS port.
 func fetchCSCABundle(ctx context.Context, logger *logging.Logger, serverIP string, outputPath string, flags *clientServerFlags) error {
-	strategy := flags.bootstrapStrategy
-	if strategy == "" {
-		strategy = bootstrap.StrategyDANE
+	strategy := trust.Strategy(flags.bootstrapStrategy)
+	if flags.bootstrapStrategy == "" {
+		strategy = trust.StrategyDANE
 	}
 
 	serverURL := fmt.Sprintf("https://%s:8443", serverIP)
@@ -1015,34 +1015,37 @@ func fetchCSCABundle(ctx context.Context, logger *logging.Logger, serverIP strin
 		logger.Infof("Bootstrap DANE hostname: %s", serverHostname)
 	}
 
-	clientCfg := &bootstrap.ClientConfig{
-		Strategy:         strategy,
+	scope := &trust.ScopeConfig{
+		Strategies:       []trust.Strategy{strategy},
 		ServerURL:        serverURL,
 		Hostname:         serverHostname,
-		DNSServer:        dnsServer,
 		BundlePath:       "/api/v1/ca/bootstrap",
 		PerMethodTimeout: 15 * time.Second,
 	}
 
+	if dnsServer != "" {
+		scope.DANE = &trust.DANEConfig{DNSServer: dnsServer}
+	}
+
 	if flags.bootstrapNoiseKey != "" {
-		clientCfg.Noise = &bootstrap.ClientNoiseConfig{
+		scope.Noise = &trust.NoiseConfig{
 			ServerAddr:      fmt.Sprintf("%s:9999", serverIP),
 			ServerStaticKey: flags.bootstrapNoiseKey,
 		}
 	}
 
 	if flags.bootstrapSPKIPin != "" {
-		clientCfg.SPKI = &bootstrap.ClientSPKIConfig{
+		scope.SPKI = &trust.SPKIConfig{
 			Pin: flags.bootstrapSPKIPin,
 		}
 	}
 
-	client, err := bootstrap.NewClient(clientCfg, logger)
+	resolver, err := trust.NewResolver(&trust.Config{Default: scope}, logger)
 	if err != nil {
 		return ErrBootstrapClientCreate{Reason: err.Error()}
 	}
 
-	bundlePEM, err := client.FetchCABundle(ctx)
+	bundlePEM, err := resolver.CABundlePEM(ctx, trust.ClassDefault)
 	if err != nil {
 		return ErrCABundleFetch{Reason: err.Error()}
 	}
@@ -1051,7 +1054,7 @@ func fetchCSCABundle(ctx context.Context, logger *logging.Logger, serverIP strin
 		return ErrCABundleEmpty{}
 	}
 
-	if err := client.InstallToSystemTrust(bundlePEM, outputPath); err != nil {
+	if err := trust.InstallToSystemTrust(bundlePEM, outputPath); err != nil {
 		return ErrCABundleWrite{Path: outputPath, Reason: err.Error()}
 	}
 

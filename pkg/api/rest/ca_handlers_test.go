@@ -182,7 +182,7 @@ func (m *mockCAService) ParseBundle(bundle []byte) ([]*x509.Certificate, error) 
 	return certs, nil
 }
 
-func (m *mockCAService) GenerateCRL() ([]byte, error) {
+func (m *mockCAService) GenerateCRL(_ context.Context) ([]byte, error) {
 	if !m.generateCRLSupport {
 		return nil, errors.New("CRL generation not supported")
 	}

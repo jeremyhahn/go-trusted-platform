@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jeremyhahn/go-truststrap/pkg/dane"
+	dane "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/dane"
 
 	dnsconfig "github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"

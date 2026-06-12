@@ -369,7 +369,7 @@ webservices:
         - http-01
         - dns-01
     jwt:
-      expiration: 525960
+      expiration: 60
       issuer: trusted-platform
     cors:
       allowed-origins:
@@ -435,7 +435,7 @@ webservices:
     tls-port: 9443
     index: index.html
     jwt:
-      expiration: 525960
+      expiration: 60
       issuer: trusted-platform
     cors:
       allowed-origins:

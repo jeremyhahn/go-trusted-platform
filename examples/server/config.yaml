@@ -357,7 +357,7 @@ webservice:
   port: 8080
   tls-port: 8443
   jwt:
-    expiration: 525960
+    expiration: 60
     # algorithm: PS256
     issuer: my_org_id
   webauthn:

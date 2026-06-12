@@ -234,6 +234,7 @@ func TestErrorTypes_Messages(t *testing.T) {
 		{ErrSecretNotAllowed{Strategy: "none"}, "--passphrase is not allowed"},
 		{PINsNotAllowedError{Flag: "so-pin", Strategy: "none"}, "--so-pin is not allowed"},
 		{ErrUserPinRequiresSOPin{}, "--user-pin requires --so-pin"},
+		{ErrSOPinRequiresUserPin{}, "--so-pin requires --user-pin"},
 		{ErrInvalidThreshold{Threshold: 5, Total: 3}, "invalid threshold"},
 		{ErrInvalidTotal{Total: 1}, "invalid total"},
 		{ErrMissingSecret{}, "passphrase is required"},

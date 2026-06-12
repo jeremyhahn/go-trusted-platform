@@ -154,19 +154,15 @@ dns:
 
 
 # =============================================================================
-# TRUST CONFIGURATION (Client-side Trust Bootstrap)
+# TRUST CONFIGURATION (Trust Bootstrap)
 # =============================================================================
 
-# Client-side trust resolution configures how the platform establishes TLS
-# trust before the CA certificate is available. The default scope is used for
-# control-plane endpoints (CA bundle fetch, ACME directory, provisioning server).
-#
-# strategies: ordered fallback chain — the resolver tries each in turn and
-# returns the first success. "auto" in the old schema maps to [dane, noise, spki].
-#
-# NOTE: trust.default.dane.dns-server is optional when dns.resolver is configured.
-# When omitted, the bootstrap client derives the DNS server from
-# dns.resolver.servers[0].
+# Client-side trust bootstrap fetches the CA certificate bundle from the server
+# before TLS can be established. Each class (default, bmc, internal) carries an
+# ordered strategy chain; strategies are attempted in order until one succeeds.
+# Strategies: dane, noise, spki, embedded (default class).
+# NOTE: dane.dns-server is optional when dns.resolver is configured. When
+# omitted, the resolver derives the DNS server from dns.resolver.servers[0].
 trust:
   default:
     strategies: [dane]
@@ -178,7 +174,7 @@ trust:
     per-method-timeout: 15s
     install-to-system-trust: true
     dane:
-      # dns-server is optional here; derived from dns.resolver.servers[0] when omitted.
+
       dns-server: "10.99.99.2:8053"
 
 # =============================================================================
@@ -472,7 +468,7 @@ webservice:
   tls-port: 9443
   index: index.html
   jwt:
-    expiration: 525960
+    expiration: 60
     issuer: client.example.internal
   webauthn:
     display-name: Trusted Platform Client

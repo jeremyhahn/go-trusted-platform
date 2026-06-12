@@ -303,7 +303,7 @@ func TestRegistration_GetWithDifferentSessions(t *testing.T) {
 
 	// Test with user session
 	user := &entities.User{ID: 1, Email: "user@example.com"}
-	userSession := CreateSession(logger, nil, 0, 0, nil, user)
+	userSession := CreateSession(logger, 0, nil, user)
 	mockDAO.On("Get", mock.Anything, registrationID).Return(registration, nil).Once()
 	result, err = service.Get(ctx, userSession, registrationID)
 	require.NoError(t, err)

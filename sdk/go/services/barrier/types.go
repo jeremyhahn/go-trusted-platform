@@ -38,14 +38,20 @@ type InitParams struct {
 	Shares int32
 }
 
-// InitResult contains the result of barrier initialization.
+// InitResult contains the share-free result of barrier initialization.
+// Share material is never returned over the wire; Security Officers
+// claim their individual shares via the share-claim flow.
 type InitResult struct {
 	// Strategy is the unseal strategy used.
 	Strategy Strategy `json:"strategy" yaml:"strategy"`
 	// RootToken is the root token (single-key mode only).
 	RootToken string `json:"root_token,omitempty" yaml:"root_token,omitempty"`
-	// UnsealKeys are the unseal keys or Shamir shares.
-	UnsealKeys []string `json:"unseal_keys,omitempty" yaml:"unseal_keys,omitempty"`
+	// Threshold is the minimum number of shares required to unseal (Shamir mode).
+	Threshold int32 `json:"threshold,omitempty" yaml:"threshold,omitempty"`
+	// SharesTotal is the total number of Shamir shares generated.
+	SharesTotal int32 `json:"shares_total,omitempty" yaml:"shares_total,omitempty"`
+	// ShareCount is the number of shares sealed to enrolled Security Officers.
+	ShareCount int32 `json:"share_count,omitempty" yaml:"share_count,omitempty"`
 	// InitializedAt is when the barrier was initialized.
 	InitializedAt *time.Time `json:"initialized_at,omitempty" yaml:"initialized_at,omitempty"`
 }
@@ -98,10 +104,16 @@ type RekeyParams struct {
 	Shares int32
 }
 
-// RekeyResult contains the result of a rekey operation.
+// RekeyResult contains the share-free result of a rekey operation. New
+// shares are sealed to enrolled Security Officers and claimed via the
+// share-claim flow.
 type RekeyResult struct {
 	// Strategy is the new unseal strategy.
 	Strategy Strategy `json:"strategy" yaml:"strategy"`
-	// UnsealKeys are the new unseal keys or Shamir shares.
-	UnsealKeys []string `json:"unseal_keys,omitempty" yaml:"unseal_keys,omitempty"`
+	// Threshold is the new minimum number of shares required to unseal.
+	Threshold int32 `json:"threshold,omitempty" yaml:"threshold,omitempty"`
+	// SharesTotal is the new total number of Shamir shares.
+	SharesTotal int32 `json:"shares_total,omitempty" yaml:"shares_total,omitempty"`
+	// ShareCount is the number of shares sealed to enrolled Security Officers.
+	ShareCount int32 `json:"share_count,omitempty" yaml:"share_count,omitempty"`
 }

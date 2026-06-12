@@ -15,8 +15,10 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"strings"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -215,15 +217,17 @@ func OIDCUnaryInterceptor(opts ...OIDCInterceptorOption) grpc.UnaryServerInterce
 		// AuthorizedContext, and enforce the method's required scope against it
 		// (mirroring QUIC AuthorizeRequest and MCP AuthorizeTool). Fall back to
 		// the bool-only path otherwise (legacy QuicBaaS / platform-JWT adapter).
+		//
+		// The method's required scope (if any) is enforced INSIDE the
+		// validator: a mapped method passes its colon "resource:action"
+		// scope, an unmapped one passes "" and is routed through the
+		// scope-free Validate path (preserving the historical passthrough
+		// for unmapped methods) while still enforcing online liveness.
 		if cv, ok := config.TokenValidator.(ClaimsTokenValidator); ok {
-			authCtx, aerr := cv.AuthorizeToken(ctx, token, "", dpopProofFromContext(ctx), info.FullMethod, "")
+			scope := scopeForMethod(info.FullMethod)
+			authCtx, aerr := cv.AuthorizeToken(ctx, token, scope, dpopProofFromContext(ctx), info.FullMethod, "")
 			if aerr != nil {
-				return nil, status.Error(codes.Unauthenticated, ErrTokenValidationFailed{Cause: aerr}.Error())
-			}
-			if scope := scopeForMethod(info.FullMethod); scope != "" {
-				if serr := authCtx.RequireScope(scope); serr != nil {
-					return nil, status.Error(codes.PermissionDenied, ErrScopeDenied{Method: info.FullMethod, Scope: scope}.Error())
-				}
+				return nil, mapClaimsAuthError(info.FullMethod, scope, aerr)
 			}
 			ctx = ContextWithAuthorizedContext(ctx, authCtx)
 			ctx = ContextWithToken(ctx, token)
@@ -303,14 +307,10 @@ func OIDCStreamInterceptor(opts ...OIDCInterceptorOption) grpc.StreamServerInter
 		// it: stash the AuthorizedContext in the wrapped stream context and
 		// enforce the method's required scope against it (mirroring QUIC/MCP).
 		if cv, ok := config.TokenValidator.(ClaimsTokenValidator); ok {
-			authCtx, aerr := cv.AuthorizeToken(ctx, token, "", dpopProofFromContext(ctx), info.FullMethod, "")
+			scope := scopeForMethod(info.FullMethod)
+			authCtx, aerr := cv.AuthorizeToken(ctx, token, scope, dpopProofFromContext(ctx), info.FullMethod, "")
 			if aerr != nil {
-				return status.Error(codes.Unauthenticated, ErrTokenValidationFailed{Cause: aerr}.Error())
-			}
-			if scope := scopeForMethod(info.FullMethod); scope != "" {
-				if serr := authCtx.RequireScope(scope); serr != nil {
-					return status.Error(codes.PermissionDenied, ErrScopeDenied{Method: info.FullMethod, Scope: scope}.Error())
-				}
+				return mapClaimsAuthError(info.FullMethod, scope, aerr)
 			}
 			wrapped := &wrappedServerStream{
 				ServerStream: ss,
@@ -341,6 +341,28 @@ func OIDCStreamInterceptor(opts ...OIDCInterceptorOption) grpc.StreamServerInter
 // =============================================================================
 // Helper Functions
 // =============================================================================
+
+// mapClaimsAuthError maps a validator pipeline error to the gRPC status code the
+// transport returns. A scope denial maps to PermissionDenied; a fail-closed
+// configuration error maps to Internal; every other token/liveness failure maps
+// to Unauthenticated (a liveness transport failure denies fail-closed as an
+// authentication failure).
+//
+// Decision: using mapClaimsAuthError (stash approach) rather than the post-hoc
+// RequireScope call (our original approach) so that scope denials surface as
+// codes.PermissionDenied rather than codes.Unauthenticated — matching QUIC and
+// MCP transport behavior and preserving the error-code contract.
+func mapClaimsAuthError(method, scope string, err error) error {
+	var scopeErr *platformtoken.ScopeDeniedError
+	if errors.As(err, &scopeErr) {
+		return status.Error(codes.PermissionDenied, ErrScopeDenied{Method: method, Scope: scope}.Error())
+	}
+	var cfgErr *platformtoken.ConfigError
+	if errors.As(err, &cfgErr) {
+		return status.Error(codes.Internal, ErrTokenValidationFailed{Cause: err}.Error())
+	}
+	return status.Error(codes.Unauthenticated, ErrTokenValidationFailed{Cause: err}.Error())
+}
 
 // extractBearerToken extracts the Bearer token from the Authorization metadata.
 func extractBearerToken(ctx context.Context) (string, error) {

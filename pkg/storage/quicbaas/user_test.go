@@ -116,10 +116,10 @@ func TestUserDAO_Get_Success(t *testing.T) {
 
 	ctx := context.Background()
 	user := &entities.User{
-		ID:               99999,
-		Email:            "get@example.com",
-		DisplayName:      "Get Test User",
-		OrganizationRefs: []uint64{1, 2, 3},
+		ID:          99999,
+		Email:       "get@example.com",
+		DisplayName: "Get Test User",
+		ServiceRefs: []uint64{1, 2, 3},
 	}
 
 	err := dao.Save(ctx, user)
@@ -130,7 +130,7 @@ func TestUserDAO_Get_Success(t *testing.T) {
 	assert.Equal(t, uint64(99999), retrieved.EntityID())
 	assert.Equal(t, "get@example.com", retrieved.Email)
 	assert.Equal(t, "Get Test User", retrieved.DisplayName)
-	assert.Equal(t, []uint64{1, 2, 3}, retrieved.OrganizationRefs)
+	assert.Equal(t, []uint64{1, 2, 3}, retrieved.ServiceRefs)
 }
 
 func TestUserDAO_Get_NotFound(t *testing.T) {
@@ -293,7 +293,7 @@ func TestUserDAO_ComplexUser(t *testing.T) {
 	user.ID = 11111
 	user.DisplayName = "Complex User"
 	user.Password = "hashedpassword123"
-	user.OrganizationRefs = []uint64{100, 200, 300}
+	user.ServiceRefs = []uint64{100, 200, 300}
 	user.ServiceRefs = []uint64{1000, 2000}
 	user.AddRole(&entities.Role{ID: 1, Name: "admin"})
 
@@ -306,7 +306,7 @@ func TestUserDAO_ComplexUser(t *testing.T) {
 	assert.Equal(t, "complex@example.com", retrieved.Email)
 	assert.Equal(t, "Complex User", retrieved.DisplayName)
 	assert.Equal(t, "hashedpassword123", retrieved.Password)
-	assert.Equal(t, []uint64{100, 200, 300}, retrieved.OrganizationRefs)
+	assert.Equal(t, []uint64{100, 200, 300}, retrieved.ServiceRefs)
 	assert.Equal(t, []uint64{1000, 2000}, retrieved.ServiceRefs)
 	assert.True(t, retrieved.HasRole("admin"))
 }

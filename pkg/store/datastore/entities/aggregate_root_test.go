@@ -22,7 +22,7 @@ import (
 
 func TestNewAggregateRoot(t *testing.T) {
 	t.Run("Create aggregate root with references", func(t *testing.T) {
-		root := NewOrganization("test-org")
+		root := NewUser("root@test.com")
 		refs := []KeyValueEntity{
 			NewRole("admin"),
 			NewRole("user"),
@@ -38,7 +38,7 @@ func TestNewAggregateRoot(t *testing.T) {
 	})
 
 	t.Run("Create aggregate root with empty references", func(t *testing.T) {
-		root := NewOrganization("test-org")
+		root := NewUser("root@test.com")
 		refs := []KeyValueEntity{}
 
 		aggregate, err := NewAggregateRoot(root, "organization", refs, "roles")
@@ -47,7 +47,7 @@ func TestNewAggregateRoot(t *testing.T) {
 	})
 
 	t.Run("Create aggregate root with nil references", func(t *testing.T) {
-		root := NewOrganization("test-org")
+		root := NewUser("root@test.com")
 
 		aggregate, err := NewAggregateRoot(root, "organization", nil, "roles")
 		assert.ErrorIs(t, err, ErrEmptyReferencesSlice)
@@ -57,7 +57,7 @@ func TestNewAggregateRoot(t *testing.T) {
 
 func TestAggregateRoot_Partition(t *testing.T) {
 	t.Run("Get partition", func(t *testing.T) {
-		root := NewOrganization("test-org")
+		root := NewUser("root@test.com")
 		refs := []KeyValueEntity{
 			NewRole("admin"),
 		}
@@ -70,7 +70,7 @@ func TestAggregateRoot_Partition(t *testing.T) {
 	})
 
 	t.Run("Get partition with empty root partition", func(t *testing.T) {
-		root := NewOrganization("test-org")
+		root := NewUser("root@test.com")
 		refs := []KeyValueEntity{
 			NewRole("admin"),
 		}
@@ -83,7 +83,7 @@ func TestAggregateRoot_Partition(t *testing.T) {
 	})
 
 	t.Run("Get partition with empty reference partition", func(t *testing.T) {
-		root := NewOrganization("test-org")
+		root := NewUser("root@test.com")
 		refs := []KeyValueEntity{
 			NewRole("admin"),
 		}
@@ -98,7 +98,7 @@ func TestAggregateRoot_Partition(t *testing.T) {
 
 func TestAggregateRoot_EntityIDs(t *testing.T) {
 	t.Run("Get entity IDs", func(t *testing.T) {
-		root := NewOrganization("test-org")
+		root := NewUser("root@test.com")
 		role1 := NewRole("admin")
 		role2 := NewRole("user")
 		role3 := NewRole("guest")
@@ -115,7 +115,7 @@ func TestAggregateRoot_EntityIDs(t *testing.T) {
 	})
 
 	t.Run("Get entity IDs with single reference", func(t *testing.T) {
-		root := NewOrganization("test-org")
+		root := NewUser("root@test.com")
 		role := NewRole("admin")
 		refs := []KeyValueEntity{role}
 
@@ -128,7 +128,7 @@ func TestAggregateRoot_EntityIDs(t *testing.T) {
 	})
 
 	t.Run("Entity IDs maintain order", func(t *testing.T) {
-		root := NewOrganization("test-org")
+		root := NewUser("root@test.com")
 		role1 := NewRole("admin")
 		role2 := NewRole("user")
 		refs := []KeyValueEntity{role1, role2}

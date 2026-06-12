@@ -204,3 +204,22 @@ type ErrIssuerMismatch struct {
 func (e ErrIssuerMismatch) Error() string {
 	return fmt.Sprintf("issuer mismatch: expected %q, got %q", e.Expected, e.Actual)
 }
+
+// ErrTokenMissingExp indicates a token that has no exp claim.
+// Every token must carry an explicit expiration; tokens without exp are
+// rejected unconditionally to prevent never-expiring sessions.
+type ErrTokenMissingExp struct{}
+
+func (e ErrTokenMissingExp) Error() string {
+	return "token missing required exp claim"
+}
+
+// ErrAlgorithmNotAllowed indicates the token's signing algorithm is not in
+// the allowlist derived from the configured verification key type.
+type ErrAlgorithmNotAllowed struct {
+	Algorithm string
+}
+
+func (e ErrAlgorithmNotAllowed) Error() string {
+	return fmt.Sprintf("signing algorithm not allowed: %s", e.Algorithm)
+}

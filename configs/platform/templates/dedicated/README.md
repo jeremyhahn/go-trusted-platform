@@ -264,6 +264,43 @@ webservices:
 
 ---
 
+### `trust.bmc` — BMC Trust Chain (Phase 3)
+
+All three templates now ship a `trust.bmc` scope alongside the existing
+`bmc:` section. This configures the TLS trust chain used when the platform
+connects to BMC endpoints (Redfish HTTPS, IPMI-over-TLS, vendor CGI).
+
+```yaml
+trust:
+  bmc:
+    # BMC endpoint trust chain. First strategy to succeed wins.
+    # tofu is first-contact only — REMOVE it once DANE TLSA records for
+    # <hostname>-bmc.<internal-zone> are published (bmc enroll does this).
+    strategies: [dane, spki, ca-file, tofu]
+    dane:
+      dns-server: "198.18.0.10:8053"   # CP public DNS (GW/compute)
+      # dns-server: "127.0.0.1:8053"     # for CP itself
+```
+
+TLSA records are published at `_443._tcp.<hostname>-bmc.<internal-zone>` by
+the BMC enroll ceremony and the AutoCertManager rotation hook.
+
+**Remove `tofu` from the chain once DANE TLSA records are live.** The comment
+in each template tells operators exactly when to do this. Override in your
+private overrides file:
+
+```yaml
+trust:
+  bmc:
+    strategies: [dane, spki, ca-file]
+```
+
+See [`docs/device-templates.md`](../../../../docs/device-templates.md#bmc-trust-chain-trustbmc)
+for the full chain semantics, TLSA naming convention, and deprecated field
+replacements (`bmc.skip-tls-verify` and `bmc.ca-cert-path`).
+
+---
+
 ## Keeping This Doc Current
 
 **This README is the single source of truth for the dedicated profile's

@@ -30,7 +30,6 @@ type Factory struct {
 	storage Storage
 	logger  *logging.Logger
 
-	organizationDAO *OrganizationDAO
 	userDAO         *UserDAO
 	registrationDAO *RegistrationDAO
 	invitationDAO   *InvitationDAO
@@ -74,21 +73,6 @@ func (f *Factory) Stop(ctx context.Context) error {
 
 	f.closed.Store(true)
 	return f.storage.Stop(ctx)
-}
-
-// OrganizationDAO returns the organization DAO, creating it lazily if needed.
-func (f *Factory) OrganizationDAO() (datastore.OrganizationDAO, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if f.closed.Load() {
-		return nil, ErrFactoryClosed{}
-	}
-
-	if f.organizationDAO == nil {
-		f.organizationDAO = NewOrganizationDAO(f.storage, f.logger)
-	}
-	return f.organizationDAO, nil
 }
 
 // UserDAO returns the user DAO, creating it lazily if needed.

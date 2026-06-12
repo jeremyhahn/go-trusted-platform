@@ -18,10 +18,10 @@ import (
 	"crypto/elliptic"
 	"crypto/x509"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 var (
@@ -29,7 +29,7 @@ var (
 		Home: "public_html",
 		Port: 8080,
 		JWT: v1.JWT{
-			Expiration: 525960, // 1 year
+			Expiration: 60, // 1 hour
 		},
 		TLSPort: 8443,
 		Certificate: v1.Identity{

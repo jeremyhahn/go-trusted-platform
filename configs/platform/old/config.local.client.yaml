@@ -335,7 +335,7 @@ webservice:
   tls-port: 8443
   index: index.html
   jwt:
-    expiration: 525960
+    expiration: 60
     issuer: edge01.dev.trusted-platform.local
   webauthn:
     display-name: Trusted Platform (Dev)

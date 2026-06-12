@@ -390,3 +390,53 @@ func (e ErrTemplateMergeFailed) Error() string {
 func (e ErrTemplateMergeFailed) Unwrap() error {
 	return e.Cause
 }
+
+// ErrCABundleInvalid is returned when the fetched control-plane CA bundle
+// contains no parseable CA certificates.
+type ErrCABundleInvalid struct {
+	URL string
+}
+
+func (e ErrCABundleInvalid) Error() string {
+	return fmt.Sprintf("bootstrap: control-plane CA bundle from %s contains no parseable certificates", e.URL)
+}
+
+// ErrCABundleVerifyFailed is returned when the TLS certificate chain that
+// served the control-plane CA bundle does not verify against the bundle
+// itself (capture-then-verify). The bundle is rejected and never stored
+// as a trust anchor.
+type ErrCABundleVerifyFailed struct {
+	URL   string
+	Cause error
+}
+
+func (e ErrCABundleVerifyFailed) Error() string {
+	return fmt.Sprintf("bootstrap: TLS chain serving %s does not verify against the fetched CA bundle, rejecting bundle: %v", e.URL, e.Cause)
+}
+
+func (e ErrCABundleVerifyFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrCABundleRequired is returned when an operation requires the
+// control-plane CA pool captured by fetchControlPlaneCABundle but the
+// bundle has not been (successfully) fetched. Operations that establish
+// trust material, such as SPKI pin capture, must never proceed over an
+// unverified connection.
+type ErrCABundleRequired struct {
+	Operation string
+}
+
+func (e ErrCABundleRequired) Error() string {
+	return fmt.Sprintf("bootstrap: %s requires the control-plane CA bundle, but it has not been fetched", e.Operation)
+}
+
+// ErrNoPeerCertificates is returned when a TLS handshake with the control
+// plane completes without the server presenting any certificates.
+type ErrNoPeerCertificates struct {
+	Endpoint string
+}
+
+func (e ErrNoPeerCertificates) Error() string {
+	return fmt.Sprintf("bootstrap: TLS handshake with %s returned no peer certificates", e.Endpoint)
+}

@@ -154,7 +154,7 @@ webservice:
   home: public_html
   index: ""
   jwt:
-    expiration: 525960
+    expiration: 1440
     issuer: ""
   key:
     hash: SHA-256
@@ -201,7 +201,7 @@ webservices:
   home: public_html
   index: ""
   jwt:
-    expiration: 525960
+    expiration: 1440
     issuer: ""
   key:
     hash: SHA-256

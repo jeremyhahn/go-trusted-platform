@@ -192,11 +192,11 @@ func TestEngine_ProcessEstablishedFastPath(t *testing.T) {
 	}
 
 	stats := engine.Stats()
-	if stats.PacketsProcessed.Load() != 2 {
-		t.Errorf("packets processed: got %d, want 2", stats.PacketsProcessed.Load())
+	if stats.PacketsProcessed != 2 {
+		t.Errorf("packets processed: got %d, want 2", stats.PacketsProcessed)
 	}
-	if stats.PacketsAllowed.Load() != 2 {
-		t.Errorf("packets allowed: got %d, want 2", stats.PacketsAllowed.Load())
+	if stats.PacketsAllowed != 2 {
+		t.Errorf("packets allowed: got %d, want 2", stats.PacketsAllowed)
 	}
 }
 
@@ -226,8 +226,8 @@ func TestEngine_ProcessDenied_WanToLan(t *testing.T) {
 	}
 
 	stats := engine.Stats()
-	if stats.PacketsDenied.Load() != 1 {
-		t.Errorf("packets denied: got %d, want 1", stats.PacketsDenied.Load())
+	if stats.PacketsDenied != 1 {
+		t.Errorf("packets denied: got %d, want 1", stats.PacketsDenied)
 	}
 }
 
@@ -425,14 +425,14 @@ func TestEngine_Stats(t *testing.T) {
 	})
 
 	stats := engine.Stats()
-	if stats.PacketsProcessed.Load() != 2 {
-		t.Errorf("processed: got %d, want 2", stats.PacketsProcessed.Load())
+	if stats.PacketsProcessed != 2 {
+		t.Errorf("processed: got %d, want 2", stats.PacketsProcessed)
 	}
-	if stats.PacketsAllowed.Load() != 1 {
-		t.Errorf("allowed: got %d, want 1", stats.PacketsAllowed.Load())
+	if stats.PacketsAllowed != 1 {
+		t.Errorf("allowed: got %d, want 1", stats.PacketsAllowed)
 	}
-	if stats.PacketsDenied.Load() != 1 {
-		t.Errorf("denied: got %d, want 1", stats.PacketsDenied.Load())
+	if stats.PacketsDenied != 1 {
+		t.Errorf("denied: got %d, want 1", stats.PacketsDenied)
 	}
 }
 

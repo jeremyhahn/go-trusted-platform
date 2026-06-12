@@ -45,10 +45,6 @@ func (m *mockSession) Logger() *logging.Logger {
 	return logging.NewLogger(slog.LevelInfo, os.Stdout)
 }
 
-func (m *mockSession) RequestedOrganizationID() uint64 {
-	return 1
-}
-
 func (m *mockSession) RequestedServiceID() uint64 {
 	return 1
 }

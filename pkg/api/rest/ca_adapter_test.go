@@ -21,6 +21,7 @@ import (
 	"time"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 
 	"github.com/stretchr/testify/assert"
@@ -129,7 +130,7 @@ func TestCAAuthorityAdapter_IssueCertificate_Success(t *testing.T) {
 	prod := &fakeProdCA{issued: &xkmsca.IssuedCertificate{Certificate: cert}}
 	a := NewCAAuthorityAdapter(prod)
 
-	got, err := a.IssueCertificate(context.Background(), &xkmsca.CertificateRequest{})
+	got, err := a.IssueCertificate(context.Background(), &quicbaasca.CACertificateRequest{})
 	require.NoError(t, err)
 	assert.Same(t, cert, got)
 }
@@ -139,7 +140,7 @@ func TestCAAuthorityAdapter_IssueCertificate_PropagatesError(t *testing.T) {
 	prod := &fakeProdCA{issueErr: prodErr}
 	a := NewCAAuthorityAdapter(prod)
 
-	got, err := a.IssueCertificate(context.Background(), &xkmsca.CertificateRequest{})
+	got, err := a.IssueCertificate(context.Background(), &quicbaasca.CACertificateRequest{})
 	assert.Nil(t, got)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, prodErr)
@@ -149,7 +150,7 @@ func TestCAAuthorityAdapter_IssueCertificate_NilFromCAReturnsErr(t *testing.T) {
 	prod := &fakeProdCA{issued: nil}
 	a := NewCAAuthorityAdapter(prod)
 
-	got, err := a.IssueCertificate(context.Background(), &xkmsca.CertificateRequest{})
+	got, err := a.IssueCertificate(context.Background(), &quicbaasca.CACertificateRequest{})
 	assert.Nil(t, got)
 	require.Error(t, err)
 	var issueErr ErrCertificateIssueFailed
@@ -160,7 +161,7 @@ func TestCAAuthorityAdapter_IssueCertificate_NilCertReturnsErr(t *testing.T) {
 	prod := &fakeProdCA{issued: &xkmsca.IssuedCertificate{Certificate: nil}}
 	a := NewCAAuthorityAdapter(prod)
 
-	got, err := a.IssueCertificate(context.Background(), &xkmsca.CertificateRequest{})
+	got, err := a.IssueCertificate(context.Background(), &quicbaasca.CACertificateRequest{})
 	assert.Nil(t, got)
 	require.Error(t, err)
 }

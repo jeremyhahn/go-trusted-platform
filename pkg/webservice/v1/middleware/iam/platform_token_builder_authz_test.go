@@ -20,13 +20,14 @@ import (
 
 // TestNewPlatformTokenValidator_ConfigValidation asserts that
 // NewPlatformTokenValidator fails closed on missing required fields and
-// succeeds with valid inputs.  AuthzMode was removed from
-// PlatformTokenValidatorParams; the validator now only requires Issuer and
-// JWKSURL.
+// succeeds with valid inputs. An empty AuthzMode resolves to hybrid, which
+// requires an introspection URL — so liveness-requiring modes without one
+// fail closed rather than silently downgrading to offline.
 func TestNewPlatformTokenValidator_ConfigValidation(t *testing.T) {
 	const (
-		issuer  = "https://broker.test"
-		jwksURL = "https://broker.test/jwks"
+		issuer           = "https://broker.test"
+		jwksURL          = "https://broker.test/jwks"
+		introspectionURL = "https://broker.test/introspect"
 	)
 
 	t.Run("missing issuer fails closed", func(t *testing.T) {
@@ -69,24 +70,54 @@ func TestNewPlatformTokenValidator_ConfigValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("valid params build a non-nil validator", func(t *testing.T) {
-		v, err := NewPlatformTokenValidator(PlatformTokenValidatorParams{
+	t.Run("default hybrid mode without introspection URL fails closed", func(t *testing.T) {
+		_, err := NewPlatformTokenValidator(PlatformTokenValidatorParams{
 			Issuer: issuer, JWKSURL: jwksURL,
 		})
+		var cfgErr ErrInvalidConfig
+		if !errors.As(err, &cfgErr) || cfgErr.Field != "introspection-url" {
+			t.Fatalf("expected introspection-url config error for hybrid default, got %v", err)
+		}
+	})
+
+	t.Run("online mode without introspection URL fails closed", func(t *testing.T) {
+		_, err := NewPlatformTokenValidator(PlatformTokenValidatorParams{
+			Issuer: issuer, JWKSURL: jwksURL, AuthzMode: "online",
+		})
+		var cfgErr ErrInvalidConfig
+		if !errors.As(err, &cfgErr) || cfgErr.Field != "introspection-url" {
+			t.Fatalf("expected introspection-url config error for online mode, got %v", err)
+		}
+	})
+
+	t.Run("unrecognized authz mode fails closed", func(t *testing.T) {
+		_, err := NewPlatformTokenValidator(PlatformTokenValidatorParams{
+			Issuer: issuer, JWKSURL: jwksURL, AuthzMode: "bogus",
+		})
+		var modeErr ErrInvalidAuthzMode
+		if !errors.As(err, &modeErr) || modeErr.Value != "bogus" {
+			t.Fatalf("expected ErrInvalidAuthzMode for bogus mode, got %v", err)
+		}
+	})
+
+	t.Run("offline mode builds a non-nil validator", func(t *testing.T) {
+		v, err := NewPlatformTokenValidator(PlatformTokenValidatorParams{
+			Issuer: issuer, JWKSURL: jwksURL, AuthzMode: "offline",
+		})
 		if err != nil {
-			t.Fatalf("valid params must not fail: %v", err)
+			t.Fatalf("offline mode must not fail: %v", err)
 		}
 		if v == nil {
 			t.Fatal("expected non-nil validator")
 		}
 	})
 
-	t.Run("empty audience defaults without error", func(t *testing.T) {
+	t.Run("hybrid mode with introspection URL builds a non-nil validator", func(t *testing.T) {
 		v, err := NewPlatformTokenValidator(PlatformTokenValidatorParams{
-			Issuer: issuer, JWKSURL: jwksURL,
+			Issuer: issuer, JWKSURL: jwksURL, IntrospectionURL: introspectionURL,
 		})
 		if err != nil {
-			t.Fatalf("empty audience should default: %v", err)
+			t.Fatalf("hybrid with introspection URL must not fail: %v", err)
 		}
 		if v == nil {
 			t.Fatal("expected non-nil validator")
@@ -95,9 +126,10 @@ func TestNewPlatformTokenValidator_ConfigValidation(t *testing.T) {
 
 	t.Run("explicit audience is accepted", func(t *testing.T) {
 		v, err := NewPlatformTokenValidator(PlatformTokenValidatorParams{
-			Issuer:   issuer,
-			JWKSURL:  jwksURL,
-			Audience: "api://my-platform",
+			Issuer:    issuer,
+			JWKSURL:   jwksURL,
+			AuthzMode: "offline",
+			Audience:  "api://my-platform",
 		})
 		if err != nil {
 			t.Fatalf("explicit audience must not fail: %v", err)

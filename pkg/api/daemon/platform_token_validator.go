@@ -15,7 +15,6 @@ package daemon
 
 import (
 	"context"
-	"net/http"
 	"strings"
 	"time"
 
@@ -61,36 +60,67 @@ type PlatformTokenConfig struct {
 	// CacheTTL bounds JWKS key caching. Defaults to one hour when zero.
 	CacheTTL time.Duration
 
-	// AuthzMode selects the per-request liveness strategy: "offline" (no
-	// liveness call), "online" (uncached RFC 7662 introspection on every
-	// request), or "hybrid" (cached positive result with short TTL). Defaults
-	// to "hybrid" when empty, which also requires IntrospectionURL.
-	AuthzMode string
-
-	// IntrospectionURL is the RFC 7662 token introspection endpoint. Required
-	// when AuthzMode is "online" or "hybrid" (or empty, which defaults to
-	// "hybrid").
+	// IntrospectionURL is the broker RFC 7662 token-introspection endpoint the
+	// validator uses for online liveness. Required when AuthzMode is online or
+	// hybrid; unused for offline.
 	IntrospectionURL string
 
-	// IntrospectionBearerToken, when non-empty, is sent as a Bearer
-	// Authorization header on each introspection POST.
-	IntrospectionBearerToken string
-
-	// IntrospectionClientID and IntrospectionClientSecret enable HTTP Basic
-	// authentication on the introspection endpoint. They are ignored when
-	// IntrospectionBearerToken is set.
+	// IntrospectionClientID / IntrospectionClientSecret are the RFC 7662 HTTP
+	// Basic credentials presented on the introspection request when set.
 	IntrospectionClientID     string
 	IntrospectionClientSecret string
 
-	// LivenessCacheTTL bounds how long a positive introspection result is
-	// cached on the hybrid path. Zero disables caching (every hybrid request
-	// live-checks). Only used when AuthzMode is "hybrid".
+	// IntrospectionBearerToken, when set, is presented as a Bearer credential
+	// on the introspection request instead of Basic auth.
+	IntrospectionBearerToken string
+
+	// AuthzMode selects the deployment-wide authorization mode (offline,
+	// online, or hybrid). Empty resolves to hybrid.
+	AuthzMode string
+
+	// LivenessCacheTTL bounds how long a positive hybrid-mode liveness result
+	// is cached before the next request live-checks. Zero defaults to 15s for
+	// hybrid; ignored in online mode.
 	LivenessCacheTTL time.Duration
 }
 
 // DefaultPlatformAudience is the resource identifier the platform claims when no
 // audience is configured.
 const DefaultPlatformAudience = "api://platform"
+
+// DefaultLivenessCacheTTL bounds how long a positive hybrid-mode liveness
+// result is cached before the next request live-checks. It is the deployment
+// default used when LivenessCacheTTL is unset (zero) in hybrid mode.
+const DefaultLivenessCacheTTL = 15 * time.Second
+
+// ErrInvalidAuthzMode is returned when the configured authz_mode string does not
+// name one of the supported authorization modes.
+type ErrInvalidAuthzMode struct {
+	// Value is the offending authz_mode string.
+	Value string
+}
+
+func (e ErrInvalidAuthzMode) Error() string {
+	return "platform-token validator config invalid: authz-mode: must be one of offline, online, hybrid; got " + e.Value
+}
+
+// parseAuthzMode validates an authz_mode string and maps it to the SDK
+// platformtoken.AuthzMode. An empty string resolves to the stack default
+// (hybrid). Any unrecognized value returns an ErrInvalidAuthzMode.
+func parseAuthzMode(s string) (platformtoken.AuthzMode, error) {
+	switch s {
+	case "":
+		return platformtoken.AuthzModeHybrid, nil
+	case string(platformtoken.AuthzModeOffline):
+		return platformtoken.AuthzModeOffline, nil
+	case string(platformtoken.AuthzModeOnline):
+		return platformtoken.AuthzModeOnline, nil
+	case string(platformtoken.AuthzModeHybrid):
+		return platformtoken.AuthzModeHybrid, nil
+	default:
+		return "", ErrInvalidAuthzMode{Value: s}
+	}
+}
 
 // platformTokenValidator wraps a QuicBaaS platformtoken.Validator and adapts it
 // to every transport's auth seam. It implements the optional claims interfaces
@@ -105,7 +135,6 @@ const DefaultPlatformAudience = "api://platform"
 type platformTokenValidator struct {
 	validator   *platformtoken.Validator
 	allowBearer bool
-	replayCache dpop.ReplayCache
 	logger      *logging.Logger
 }
 
@@ -120,8 +149,16 @@ var (
 )
 
 // newPlatformTokenValidator builds the shared validator from PlatformTokenConfig.
-// It returns a typed error when a required field is missing so callers fail
-// closed rather than installing an unsafe validator.
+// It returns a typed error when a required field is missing or the authz-mode /
+// liveness configuration is inconsistent, so callers fail closed rather than
+// installing an unsafe validator.
+//
+// AuthzMode governs online liveness: "offline" trusts the signed scopes and
+// expiry only; "online" enforces an uncached RFC 7662 introspection check on
+// every request; "hybrid" (the default) caches positive introspection results
+// for LivenessCacheTTL. When the effective mode requires liveness (online or
+// hybrid) and no IntrospectionURL is configured, construction fails rather than
+// silently downgrading to offline.
 func newPlatformTokenValidator(cfg PlatformTokenConfig, logger *logging.Logger) (*platformTokenValidator, error) {
 	if strings.TrimSpace(cfg.Issuer) == "" {
 		return nil, ErrPlatformTokenConfig{Field: "issuer", Reason: "broker token issuer is required"}
@@ -130,19 +167,9 @@ func newPlatformTokenValidator(cfg PlatformTokenConfig, logger *logging.Logger) 
 		return nil, ErrPlatformTokenConfig{Field: "jwks-url", Reason: "broker JWKS URL is required"}
 	}
 
-	mode := strings.TrimSpace(cfg.AuthzMode)
-	if mode == "" {
-		mode = string(platformtoken.AuthzModeHybrid)
-	}
-	switch platformtoken.AuthzMode(mode) {
-	case platformtoken.AuthzModeOffline:
-		// no introspection URL required
-	case platformtoken.AuthzModeOnline, platformtoken.AuthzModeHybrid:
-		if strings.TrimSpace(cfg.IntrospectionURL) == "" {
-			return nil, ErrPlatformTokenConfig{Field: "introspection-url", Reason: "introspection URL is required for online and hybrid authz modes"}
-		}
-	default:
-		return nil, ErrInvalidAuthzMode{Value: mode}
+	mode, err := parseAuthzMode(strings.TrimSpace(cfg.AuthzMode))
+	if err != nil {
+		return nil, err
 	}
 
 	audience := strings.TrimSpace(cfg.Audience)
@@ -154,29 +181,57 @@ func newPlatformTokenValidator(cfg PlatformTokenConfig, logger *logging.Logger) 
 		cacheTTL = time.Hour
 	}
 
-	opts := platformtoken.Options{
+	introspectionURL := strings.TrimSpace(cfg.IntrospectionURL)
+
+	// Build the online liveness checker for the modes that require it. A missing
+	// introspection endpoint in a liveness-requiring mode is a fail-closed
+	// misconfiguration, NOT a silent downgrade to offline.
+	var (
+		livenessChecker  platformtoken.LivenessChecker
+		livenessCacheTTL time.Duration
+	)
+	switch mode {
+	case platformtoken.AuthzModeOffline:
+		// No liveness backend; revocation is bounded by token lifetime.
+	case platformtoken.AuthzModeOnline:
+		if introspectionURL == "" {
+			return nil, ErrPlatformTokenConfig{
+				Field:  "introspection-url",
+				Reason: "introspection URL is required for online authz-mode",
+			}
+		}
+		livenessChecker = newIntrospectionChecker(cfg, introspectionURL)
+		// Online mode disables caching: every request live-checks.
+		livenessCacheTTL = 0
+	case platformtoken.AuthzModeHybrid:
+		if introspectionURL == "" {
+			return nil, ErrPlatformTokenConfig{
+				Field:  "introspection-url",
+				Reason: "introspection URL is required for hybrid authz-mode",
+			}
+		}
+		livenessChecker = newIntrospectionChecker(cfg, introspectionURL)
+		livenessCacheTTL = cfg.LivenessCacheTTL
+		if livenessCacheTTL <= 0 {
+			livenessCacheTTL = DefaultLivenessCacheTTL
+		}
+	}
+
+	// A single deployment-wide mode resolver: every tenant resolves to the
+	// configured mode. Per-tenant overrides can be layered on later by replacing
+	// this constant resolver.
+	modeResolver := func(string) platformtoken.AuthzMode { return mode }
+
+	validator, err := platformtoken.NewValidator(platformtoken.Options{
 		Issuer:           cfg.Issuer,
 		Audience:         audience,
 		JWKSURL:          cfg.JWKSURL,
 		CacheTTL:         cacheTTL,
-		LivenessCacheTTL: cfg.LivenessCacheTTL,
-	}
-
-	// Build the liveness checker and mode resolver for non-offline modes.
-	if platformtoken.AuthzMode(mode) != platformtoken.AuthzModeOffline {
-		checker := buildIntrospectionChecker(cfg)
-		var liveness platformtoken.LivenessChecker = checker
-		if cfg.LivenessCacheTTL > 0 {
-			liveness = platformtoken.NewCachedLivenessChecker(checker, cfg.LivenessCacheTTL, nil)
-		}
-		opts.LivenessChecker = liveness
-		finalMode := platformtoken.AuthzMode(mode)
-		opts.ModeResolver = func(_ string) platformtoken.AuthzMode { return finalMode }
-	} else {
-		opts.ModeResolver = func(_ string) platformtoken.AuthzMode { return platformtoken.AuthzModeOffline }
-	}
-
-	validator, err := platformtoken.NewValidator(opts)
+		LivenessChecker:  livenessChecker,
+		ModeResolver:     modeResolver,
+		LivenessCacheTTL: livenessCacheTTL,
+		ReplayCache:      dpop.NewMemoryReplayCache(dpop.SystemClock{}),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -184,44 +239,62 @@ func newPlatformTokenValidator(cfg PlatformTokenConfig, logger *logging.Logger) 
 	return &platformTokenValidator{
 		validator:   validator,
 		allowBearer: cfg.AllowBearer,
-		replayCache: dpop.NewMemoryReplayCache(dpop.SystemClock{}),
 		logger:      logger,
 	}, nil
 }
 
-// buildIntrospectionChecker constructs an RFC 7662 introspection liveness
-// checker from the supplied config credentials.
-func buildIntrospectionChecker(cfg PlatformTokenConfig) *platformtoken.IntrospectionLivenessChecker {
-	checker := platformtoken.NewIntrospectionLivenessChecker(cfg.IntrospectionURL, (*http.Client)(nil))
-	if cfg.IntrospectionBearerToken != "" {
-		checker = checker.WithBearer(cfg.IntrospectionBearerToken)
-	} else if cfg.IntrospectionClientID != "" || cfg.IntrospectionClientSecret != "" {
-		checker = checker.WithBasicAuth(cfg.IntrospectionClientID, cfg.IntrospectionClientSecret)
+// newIntrospectionChecker builds the RFC 7662 introspection liveness checker
+// from the config, applying Bearer credentials when a bearer token is set and
+// HTTP Basic credentials when a client id/secret is set.
+func newIntrospectionChecker(cfg PlatformTokenConfig, endpoint string) platformtoken.LivenessChecker {
+	checker := platformtoken.NewIntrospectionLivenessChecker(endpoint, nil)
+	if bearer := strings.TrimSpace(cfg.IntrospectionBearerToken); bearer != "" {
+		return checker.WithBearer(bearer)
+	}
+	if strings.TrimSpace(cfg.IntrospectionClientID) != "" || strings.TrimSpace(cfg.IntrospectionClientSecret) != "" {
+		return checker.WithBasicAuth(cfg.IntrospectionClientID, cfg.IntrospectionClientSecret)
 	}
 	return checker
 }
 
-// AuthorizeToken validates the bearer token, enforces the required permission
-// scope when non-empty, and optionally binds a DPoP proof. It projects the
-// validated claims into an AuthorizedContext (scp -> RBAC, tenant_id -> RLS).
+// AuthorizeToken runs the canonical SDK validator pipeline for one request and
+// returns the projected AuthorizedContext (scp -> RBAC, tenant_id -> RLS). It
+// implements the claims interface every transport type-asserts for.
 //
-// requiredPerm is the qrdb-canonical "resource:action" scope the operation
-// requires; an empty string skips the scope check and only runs signature
-// validation (and liveness, per the configured authz mode).
+// When requiredPerm is non-empty it delegates to Validator.Authorize, which
+// verifies the token (and its DPoP proof when the token is sender-constrained),
+// enforces the required colon "resource:action" scope OFFLINE, and then applies
+// the per-tenant authz mode's online liveness/revocation check (offline = none,
+// online = uncached, hybrid = cached). When requiredPerm is empty it delegates
+// to Validator.Validate, which runs the same pipeline WITHOUT the scope check —
+// used for genuinely scope-free authenticated operations so liveness is still
+// enforced on every request path.
 //
-// When a DPoP proof is supplied the token must carry a cnf.jkt binding and the
-// proof is verified against it (RFC 9449). When no proof is supplied the call
-// succeeds only if AllowBearer is set, mirroring the HTTP path's policy.
+// The bearer gate is preserved from the HTTP path: when no DPoP proof is
+// supplied and AllowBearer is false, the request is rejected before any token
+// work. A sender-constrained token without its proof is rejected by the SDK
+// validator regardless of this gate.
 func (v *platformTokenValidator) AuthorizeToken(ctx context.Context, token, requiredPerm, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error) {
 	if strings.TrimSpace(dpopProof) == "" && !v.allowBearer {
 		return nil, ErrDPoPProofRequired{}
 	}
-	// When no required scope is specified, use Validate (no scope check) to
-	// avoid RequireScope("") always denying.
-	if strings.TrimSpace(requiredPerm) == "" {
-		return v.validator.Validate(ctx, token, dpopProof, htm, htu)
+
+	var (
+		authCtx *platformtoken.AuthorizedContext
+		err     error
+	)
+	if strings.TrimSpace(requiredPerm) != "" {
+		authCtx, err = v.validator.Authorize(ctx, token, requiredPerm, dpopProof, htm, htu)
+	} else {
+		authCtx, err = v.validator.Validate(ctx, token, dpopProof, htm, htu)
 	}
-	return v.validator.Authorize(ctx, token, requiredPerm, dpopProof, htm, htu)
+	if err != nil {
+		if v.logger != nil {
+			v.logger.Debugf("platform-token: authorization failed: %v", err)
+		}
+		return nil, err
+	}
+	return authCtx, nil
 }
 
 // ValidateToken implements the legacy bool-only token-validator interface
@@ -280,15 +353,6 @@ type ErrPlatformTokenConfig struct {
 
 func (e ErrPlatformTokenConfig) Error() string {
 	return "platform-token validator config invalid: " + e.Field + ": " + e.Reason
-}
-
-// ErrInvalidAuthzMode indicates an unrecognized authorization mode string.
-type ErrInvalidAuthzMode struct {
-	Value string
-}
-
-func (e ErrInvalidAuthzMode) Error() string {
-	return "platform-token validator: invalid authz-mode " + e.Value + ": must be offline, online, or hybrid"
 }
 
 // ErrDPoPProofRequired indicates a claims-path request presented no DPoP proof

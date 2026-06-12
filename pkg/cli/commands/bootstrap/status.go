@@ -85,17 +85,26 @@ func runStatus(configPath string, commonFlags *cli.CommonFlags) error {
 		return ErrPXEDiscoveryFailed{Cause: err}
 	}
 
-	// Bootstrap-window reachability probe: target nodes serve certs from
-	// per-node local CAs that do not exist yet at status time, so no
-	// trust anchor is available by construction. The probe consumes
-	// readiness booleans only — never credentials or configuration.
-	httpClient := &http.Client{
-		Timeout: healthCheckTimeout,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, //nolint:gosec // bootstrap-window readiness probe; no trust anchor exists yet
+	// Health probes verify each node's TLS certificate against the
+	// control plane's CA pool (fetched capture-then-verify). When the
+	// CP CA bundle is unavailable — e.g. the CP itself is not yet
+	// provisioned — health is reported as unknown rather than probing
+	// over an unverified connection.
+	var httpClient *http.Client
+	caPool, caErr := orch.ControlPlaneCAPool(ctx)
+	if caErr != nil {
+		fmt.Fprintf(os.Stderr,
+			"warning: control-plane CA bundle unavailable, node health cannot be verified: %v\n", caErr)
+	} else {
+		httpClient = &http.Client{
+			Timeout: healthCheckTimeout,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					MinVersion: tls.VersionTLS13,
+					RootCAs:    caPool,
+				},
 			},
-		},
+		}
 	}
 
 	fmt.Fprintf(os.Stdout, "\nNode Status (%d nodes)\n", len(discovered))
@@ -122,7 +131,12 @@ func runStatus(configPath string, commonFlags *cli.CommonFlags) error {
 }
 
 // checkNodeHealth performs an HTTPS GET against the node's health endpoint.
+// A nil client means no verified trust anchor is available; health is
+// reported as unknown instead of probing over an unverified connection.
 func checkNodeHealth(ctx context.Context, client *http.Client, hostname string) string {
+	if client == nil {
+		return "unknown"
+	}
 	url := "https://" + hostname + ":8443" + healthEndpointPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

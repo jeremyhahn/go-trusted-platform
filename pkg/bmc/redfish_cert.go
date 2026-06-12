@@ -276,4 +276,3 @@ func (m *redfishCertManager) waitForReady(ctx context.Context) error {
 		}
 	}
 }
-

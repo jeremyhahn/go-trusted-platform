@@ -201,6 +201,17 @@ func (ErrUserPinRequiresSOPin) Error() string {
 	return "--user-pin requires --so-pin (the SO PIN must be set before any user PIN)"
 }
 
+// ErrSOPinRequiresUserPin is returned when --so-pin is supplied
+// without --user-pin on init verbs. The PIN pair is bidirectional
+// (FIPS 140-3 / PCI-DSS v4 dual-control): a lone SO PIN would leave
+// the user role ungated.
+type ErrSOPinRequiresUserPin struct{}
+
+// Error implements the error interface.
+func (ErrSOPinRequiresUserPin) Error() string {
+	return "--so-pin requires --user-pin (FIPS 140-3 / PCI-DSS v4 dual-control)"
+}
+
 // ErrInvalidThreshold is returned when threshold and total are
 // inconsistent (e.g. threshold > total).
 type ErrInvalidThreshold struct {

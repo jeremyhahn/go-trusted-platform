@@ -114,7 +114,7 @@ func TestNewMutalTLSClient_CreatesClient(t *testing.T) {
 		CN: "test-client",
 	}
 
-	client := NewMutalTLSClient(logger, nil, attrs, nil)
+	client := NewMutalTLSClient(context.Background(), logger, nil, attrs, nil)
 
 	assert.NotNil(t, client.logger)
 	assert.Nil(t, client.ca)

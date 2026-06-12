@@ -45,16 +45,16 @@ type mockCertificateAuthority struct {
 	trustedca.CACertificateAuthority // Embed to satisfy interface
 }
 
-func (m *mockCertificateAuthority) Certificate(_ context.Context, keyAttrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
-	args := m.Called(keyAttrs)
+func (m *mockCertificateAuthority) Certificate(ctx context.Context, keyAttrs *xkmssdk.KeyAttributes) (*x509.Certificate, error) {
+	args := m.Called(ctx, keyAttrs)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*x509.Certificate), args.Error(1)
 }
 
-func (m *mockCertificateAuthority) PEM(_ context.Context, keyAttrs *xkmssdk.KeyAttributes) ([]byte, error) {
-	args := m.Called(keyAttrs)
+func (m *mockCertificateAuthority) PEM(ctx context.Context, keyAttrs *xkmssdk.KeyAttributes) ([]byte, error) {
+	args := m.Called(ctx, keyAttrs)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -257,7 +257,7 @@ func TestPublicKey_Success(t *testing.T) {
 	pubPEM, err := xkmssdk.EncodePubKeyPEM(cert.PublicKey)
 	assert.NoError(t, err)
 
-	mockCA.On("Certificate", keyAttrs).Return(cert, nil)
+	mockCA.On("Certificate", mock.Anything, keyAttrs).Return(cert, nil)
 	mockWriter.On("Write", mock.Anything, mock.Anything, http.StatusOK, string(pubPEM)).Return()
 
 	handler := NewHandler(mockCA, nil, keyAttrs, mockWriter, logger, nil)
@@ -278,7 +278,7 @@ func TestPublicKey_CertNotFound(t *testing.T) {
 	logger := logging.DefaultLogger()
 	keyAttrs := createTestKeyAttributes()
 
-	mockCA.On("Certificate", keyAttrs).Return(nil, xkmssdk.ErrCertNotFound)
+	mockCA.On("Certificate", mock.Anything, keyAttrs).Return(nil, xkmssdk.ErrCertNotFound)
 	mockWriter.On("Error404", mock.Anything, mock.Anything, xkmssdk.ErrCertNotFound).Return()
 
 	handler := NewHandler(mockCA, nil, keyAttrs, mockWriter, logger, nil)
@@ -300,7 +300,7 @@ func TestPublicKey_CAError(t *testing.T) {
 	keyAttrs := createTestKeyAttributes()
 
 	expectedErr := errors.New("CA error")
-	mockCA.On("Certificate", keyAttrs).Return(nil, expectedErr)
+	mockCA.On("Certificate", mock.Anything, keyAttrs).Return(nil, expectedErr)
 	mockWriter.On("Error500", mock.Anything, mock.Anything, expectedErr).Return()
 
 	handler := NewHandler(mockCA, nil, keyAttrs, mockWriter, logger, nil)
@@ -326,7 +326,7 @@ func TestPublicKey_EncodingError(t *testing.T) {
 		PublicKey: "invalid-key-type", // This will cause EncodePubKeyPEM to fail
 	}
 
-	mockCA.On("Certificate", keyAttrs).Return(cert, nil)
+	mockCA.On("Certificate", mock.Anything, keyAttrs).Return(cert, nil)
 	mockWriter.On("Error500", mock.Anything, mock.Anything, mock.AnythingOfType("*errors.errorString")).Return()
 
 	handler := NewHandler(mockCA, nil, keyAttrs, mockWriter, logger, nil)
@@ -348,7 +348,7 @@ func TestCertificate_Success(t *testing.T) {
 	keyAttrs := createTestKeyAttributes()
 
 	certPEM := []byte("-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----")
-	mockCA.On("PEM", keyAttrs).Return(certPEM, nil)
+	mockCA.On("PEM", mock.Anything, keyAttrs).Return(certPEM, nil)
 	mockWriter.On("Write", mock.Anything, mock.Anything, http.StatusOK, string(certPEM)).Return()
 
 	handler := NewHandler(mockCA, nil, keyAttrs, mockWriter, logger, nil)
@@ -369,7 +369,7 @@ func TestCertificate_NotFound(t *testing.T) {
 	logger := logging.DefaultLogger()
 	keyAttrs := createTestKeyAttributes()
 
-	mockCA.On("PEM", keyAttrs).Return(nil, xkmssdk.ErrCertNotFound)
+	mockCA.On("PEM", mock.Anything, keyAttrs).Return(nil, xkmssdk.ErrCertNotFound)
 	mockWriter.On("Error404", mock.Anything, mock.Anything, xkmssdk.ErrCertNotFound).Return()
 
 	handler := NewHandler(mockCA, nil, keyAttrs, mockWriter, logger, nil)
@@ -391,7 +391,7 @@ func TestCertificate_CAError(t *testing.T) {
 	keyAttrs := createTestKeyAttributes()
 
 	expectedErr := errors.New("CA error")
-	mockCA.On("PEM", keyAttrs).Return(nil, expectedErr)
+	mockCA.On("PEM", mock.Anything, keyAttrs).Return(nil, expectedErr)
 	mockWriter.On("Error500", mock.Anything, mock.Anything, expectedErr).Return()
 
 	handler := NewHandler(mockCA, nil, keyAttrs, mockWriter, logger, nil)

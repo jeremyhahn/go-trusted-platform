@@ -339,7 +339,7 @@ webservice:
   home: public_html
   index: index.html
   jwt:
-    expiration: 525960
+    expiration: 60
     issuer: example
   key:
     debug: false

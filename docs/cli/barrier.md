@@ -9,7 +9,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 `platformctl barrier` exposes the **canonical 9-verb barrier tree**
 shared byte-for-byte by `qrdb barrier`, `xkmsctl barrier`, and
 `quicbaas barrier`. The canonical narrative — flag semantics,
-validation matrix, PIN flow, the `--secret` vs. PIN distinction — lives
+validation matrix, PIN flow, the `--passphrase` vs. PIN distinction — lives
 in the qrdb doc
 ([`go-qrdb/docs/cli/barrier.md`](../../../go-qrdb/docs/cli/barrier.md)).
 This page documents the **platform-specific specifics**: namely that
@@ -24,22 +24,21 @@ Implementation: [`pkg/cli/commands/barrier/`](../../pkg/cli/commands/barrier/).
 
 ```
 platformctl barrier status
-platformctl barrier init           --barrier-strategy <none|software|shamir>
-                                   [--secret <pp>]               (required for software/shamir; rejected for none)
+platformctl barrier init           --barrier-strategy <none|passphrase|shamir>
+                                   [--passphrase <pp>]               (required for passphrase/shamir; rejected for none)
                                    [--so-pin <pin>]              (optional; rejected when --barrier-strategy=none)
                                    [--user-pin <pin>]            (optional; requires --so-pin)
-platformctl barrier init-shamir    --secret <pp>
+platformctl barrier init-shamir    --passphrase <pp>
                                    --threshold N
                                    --total M
                                    [--so-pin <pin>]
                                    [--user-pin <pin>]            (requires --so-pin)
-platformctl barrier unseal         --secret <pp>                 (software / single-secret only)
+platformctl barrier unseal         --passphrase <pp>                 (passphrase / single-secret only)
 platformctl barrier unseal-shares  --share <s1> [--share <s2> ...]
                                    | --shares-file <path>        ('-' = stdin)
 platformctl barrier seal           [--so-pin <pin>]
                                    [-y | --assume-yes]
-platformctl barrier rekey          --secret <new-pp>
-                                   [--so-pin <pin>]              (NO --user-pin on rekey)
+platformctl barrier rekey          [--so-pin <pin>]              (NO --user-pin on rekey)
                                    [--threshold N --total M]     (paired; Shamir share regeneration)
 platformctl barrier recovery generate
                                    --threshold N --total M
@@ -57,6 +56,16 @@ platformctl barrier recovery recover
 `unix` is the default across all four CLIs. See
 [`docs/cli/global-flags.md`](global-flags.md) for the full root-flag
 set.
+
+### Security-officer ceremony verbs (canonical; platformctl mirror pending)
+
+The officer ceremony verb tree (`barrier officer *`,
+`barrier shamir-seal-vote`, `barrier recovery officer *`) is part of
+the canonical surface — under the share-free INV-1 contract the claim
+ceremony is the only way an officer ever holds a share. qrdb is the
+reference implementation; the platformctl mirror is pending. See
+[`08-bootstrap-auth-architecture.md §6`](https://github.com/automatethethings/software/blob/main/docs/08-bootstrap-auth-architecture.md#6-cli-surface-convergence)
+and [go-qrdb `docs/cli/barrier.md` §3.10](../../../go-qrdb/docs/cli/barrier.md).
 
 ---
 
@@ -119,14 +128,14 @@ duplication and keeps the security boundary single-sourced.
 
 ---
 
-## 3. `--secret` is the strategy wrapping passphrase, not a PIN
+## 3. `--passphrase` is the strategy wrapping passphrase, not a PIN
 
 | Flag | Concern | Backend (server-side, in quicbaasd) |
 |------|---------|--------------------------------------|
-| `--secret` | Strategy wrapping passphrase. `software` Argon2id-derives the wrapping key; `shamir` uses it as the strategy seal; `none` ignores it. | qrdb `pkg/seal` strategy registry |
+| `--passphrase` | Strategy wrapping passphrase. `passphrase` Argon2id-derives the wrapping key; `shamir` uses it as the strategy seal; `none` ignores it. | qrdb `pkg/seal` strategy registry |
 | `--so-pin`, `--user-pin` | Two-PIN compliance-gating material (FIPS 140-3 / PCI-DSS v4). Gates rekey / seal / recovery-generate. | qrdb `pkg/pin.PINBackend` (composed via `WithPINBackend`) |
 
-See [the canonical doc §2](../../../go-qrdb/docs/cli/barrier.md#2-architectural-concept---secret-is-not-a-pin)
+See [the canonical doc §2](../../../go-qrdb/docs/cli/barrier.md#2-architectural-concept---passphrase-is-not-a-pin)
 for the architectural rationale. PIN-pair dual-control is enforced at
 the platformctl CLI before the RPC leaves the host
 ([`validateInitFlags`](../../pkg/cli/commands/barrier/init.go),
@@ -143,7 +152,7 @@ tested without dialing a live daemon:
 |------|-----------|--------|
 | `init` | `validateInitFlags` | [`init.go`](../../pkg/cli/commands/barrier/init.go) |
 | `init-shamir` | `validateInitShamirFlags` | [`init_shamir.go`](../../pkg/cli/commands/barrier/init_shamir.go) |
-| `unseal` | `runUnseal` (inline `--secret` check) | [`unseal.go`](../../pkg/cli/commands/barrier/unseal.go) |
+| `unseal` | `runUnseal` (inline `--passphrase` check) | [`unseal.go`](../../pkg/cli/commands/barrier/unseal.go) |
 | `unseal-shares` | `resolveShares` | [`unseal_shares.go`](../../pkg/cli/commands/barrier/unseal_shares.go) |
 | `seal` | `confirmSeal` + `runSeal` | [`seal.go`](../../pkg/cli/commands/barrier/seal.go) |
 | `rekey` | `validateRekeyFlags` | [`rekey.go`](../../pkg/cli/commands/barrier/rekey.go) |
@@ -157,9 +166,9 @@ Typed errors live in
 
 | Rule | Verb(s) | Error |
 |------|---------|-------|
-| `--barrier-strategy` not in `{none, software, shamir}` | `init` | `ErrInvalidBarrierStrategy` |
-| `--secret` empty for `software` / `shamir` | `init`, `init-shamir`, `unseal`, `rekey` | `ErrSecretRequired` / `ErrMissingSecret` |
-| `--secret` supplied with `--barrier-strategy=none` | `init` | `ErrSecretNotAllowed` |
+| `--barrier-strategy` not in `{none, passphrase, shamir}` | `init` | `ErrInvalidBarrierStrategy` |
+| `--passphrase` empty for `passphrase` / `shamir` | `init`, `init-shamir`, `unseal` | `ErrSecretRequired` / `ErrMissingSecret` |
+| `--passphrase` supplied with `--barrier-strategy=none` | `init` | `ErrSecretNotAllowed` |
 | `--so-pin` with `--barrier-strategy=none` | `init` | `PINsNotAllowedError` |
 | `--user-pin` with `--barrier-strategy=none` | `init` | `PINsNotAllowedError` |
 | `--user-pin` without `--so-pin` | `init`, `init-shamir` | `ErrUserPinRequiresSOPin` |
@@ -175,25 +184,27 @@ Typed errors live in
 
 ## 5. Examples
 
-### Routine production posture (software + PIN)
+### Routine production posture (passphrase + PIN)
 
 ```bash
 platformctl barrier init \
-  --barrier-strategy software \
-  --secret '<wrapping-passphrase>' \
+  --barrier-strategy passphrase \
+  --passphrase '<wrapping-passphrase>' \
   --so-pin SO12345 \
   --user-pin USR12345
 
 platformctl barrier status
 platformctl barrier seal --so-pin SO12345 -y
-platformctl barrier unseal --secret '<wrapping-passphrase>'
+platformctl barrier unseal --passphrase '<wrapping-passphrase>'
 ```
 
 ### Shamir M-of-N with stdin share submission
 
 ```bash
-platformctl barrier init-shamir --secret '<seed>' --threshold 3 --total 5
-# capture printed shares, distribute out-of-band
+platformctl barrier init-shamir --passphrase '<seed>' --threshold 3 --total 5
+# Share-free: shares are sealed to enrolled Security Officers; each
+# officer claims their share via the share-claim flow. No share
+# material is printed or crosses the wire.
 
 cat /run/secrets/shares.txt | platformctl barrier unseal-shares --shares-file -
 ```
@@ -202,10 +213,12 @@ cat /run/secrets/shares.txt | platformctl barrier unseal-shares --shares-file -
 
 ```bash
 platformctl barrier rekey \
-  --secret '<new-pp>' \
   --so-pin SO12345 \
   --threshold 3 \
   --total 5
+# Share-free: new shares are sealed to enrolled Security Officers and
+# claimed via the share-claim flow. No passphrase or share material
+# crosses the wire.
 ```
 
 ### Disaster-recovery sideband

@@ -2540,10 +2540,8 @@ check-insecure-tls:
 	@violations=$$(grep -rPn 'InsecureSkipVerify[[:space:]]*:[[:space:]]*true' --include="*.go" . \
 		| grep -Pv '^[^:]+:[0-9]+:[[:space:]]*//' \
 		| grep -v 'pkg/bootstrap/virtual_media.go' \
-		| grep -v 'pkg/bootstrap/orchestrator.go' \
 		| grep -v 'pkg/bmc/discovery.go' \
 		| grep -v 'pkg/cli/commands/bmc/standalone.go' \
-		| grep -v 'pkg/cli/commands/bootstrap/status.go' \
 		| grep -v 'test/integration/bmc/harness.go' \
 		|| true); \
 	if [ -n "$$violations" ]; then \

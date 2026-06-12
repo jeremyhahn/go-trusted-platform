@@ -22,7 +22,7 @@ import (
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
+	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 )
 
 // ErrCeremonyCANotAvailable indicates the ceremony CA backend (the platform
@@ -190,12 +190,12 @@ func translateSignCSROptions(opts *quicbaas.QRDBCeremonySignCSROptions) *xkmsca.
 // into the go-xkms CertificateRequest. SANs are partitioned into DNS,
 // email, IP and URI buckets using net.ParseIP and a literal-IP test so a
 // caller can pass mixed-form SANs and have them routed correctly.
-func translateIssueCertRequest(req *quicbaas.QRDBCeremonyIssueCertRequest) *xkmsca.CertificateRequest {
+func translateIssueCertRequest(req *quicbaas.QRDBCeremonyIssueCertRequest) *xkmsca.CACertificateRequest {
 	if req == nil {
 		return nil
 	}
-	out := &xkmsca.CertificateRequest{
-		Subject: xkmsca.Subject{
+	out := &xkmsca.CACertificateRequest{
+		Subject: xkmsca.CASubject{
 			CommonName: req.CommonName,
 		},
 		Valid:       req.ValidityDays,
@@ -203,7 +203,7 @@ func translateIssueCertRequest(req *quicbaas.QRDBCeremonyIssueCertRequest) *xkms
 		ExtKeyUsage: req.ExtKeyUsage,
 	}
 	if len(req.SANs) > 0 {
-		sans := &xkmsca.SubjectAlternativeNames{}
+		sans := &xkmsca.CASubjectAlternativeNames{}
 		for _, s := range req.SANs {
 			if ip := net.ParseIP(s); ip != nil {
 				sans.IPs = append(sans.IPs, ip.String())
