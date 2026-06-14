@@ -15,7 +15,10 @@ package quic
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"net"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -147,7 +150,7 @@ func (s *Server) Start() error {
 	s.listener = listener
 	s.running.Store(true)
 
-	s.logger.Info("QUIC server started on %s", s.config.ListenAddr)
+	s.logger.Infof("QUIC server started on %s", s.config.ListenAddr)
 
 	s.wg.Add(1)
 	go s.acceptConnections()
@@ -168,7 +171,7 @@ func (s *Server) Stop() error {
 
 	if s.listener != nil {
 		if err := s.listener.Close(); err != nil {
-			s.logger.Warn("Error closing QUIC listener: %v", err)
+			s.logger.Warnf("Error closing QUIC listener: %v", err)
 		}
 	}
 
@@ -215,7 +218,11 @@ func (s *Server) handleConnection(conn *quicgo.Conn) {
 	defer s.wg.Done()
 	defer s.activeConns.Add(-1)
 
-	s.logger.Debug("New QUIC connection from %s", conn.RemoteAddr())
+	remoteAddr := conn.RemoteAddr().String()
+	slog.Debug("QUIC connection accepted",
+		slog.String("remote_addr", remoteAddr),
+		slog.Int64("active_conns", s.activeConns.Load()),
+	)
 
 	for s.running.Load() {
 		stream, err := conn.AcceptStream(s.ctx)
@@ -223,45 +230,112 @@ func (s *Server) handleConnection(conn *quicgo.Conn) {
 			if !s.running.Load() {
 				return
 			}
-			s.logger.Debug("Connection closed: %v", err)
+			// Log connection close at DEBUG: normal EOF on peer close is not an error.
+			slog.Debug("QUIC connection closed",
+				slog.String("remote_addr", remoteAddr),
+				slog.String("error", err.Error()),
+				slog.String("conn_ctx_err", ctxErrString(conn.Context())),
+			)
 			return
 		}
 
 		if s.activeStreams.Load() >= int64(s.config.MaxStreams) {
 			s.logger.Warn("Maximum concurrent streams reached")
-			_ = stream.Close()
+			if err := stream.Close(); err != nil {
+				slog.Debug("QUIC stream close failed (max-streams reject)",
+					slog.Int64("stream_id", int64(stream.StreamID())),
+					slog.String("error", err.Error()),
+				)
+			}
 			continue
 		}
 
 		s.activeStreams.Add(1)
 		s.wg.Add(1)
-		go s.handleStream(stream)
+		go s.handleStream(stream, remoteAddr)
 	}
 }
 
-// handleStream handles a single QUIC stream
-func (s *Server) handleStream(stream *quicgo.Stream) {
+// handleStream handles a single QUIC stream.
+// A deferred recover guard catches any panic that escapes the Handler
+// (defense-in-depth: the Handler itself should recover, but this goroutine-level
+// guard ensures the stream goroutine is never silently killed). A panicking
+// handler produces a StatusInternalError response so the client always receives
+// a valid response frame rather than an EOF.
+func (s *Server) handleStream(stream *quicgo.Stream, remoteAddr string) {
 	defer s.wg.Done()
 	defer s.activeStreams.Add(-1)
-	defer stream.Close()
+
+	streamID := int64(stream.StreamID())
+
+	slog.Debug("QUIC stream accepted",
+		slog.String("remote_addr", remoteAddr),
+		slog.Int64("stream_id", streamID),
+		slog.Int64("active_streams", s.activeStreams.Load()),
+	)
+
+	// Goroutine-level panic guard: write an error response before the stream
+	// closes so the client never sees a bare EOF from a panicking handler.
+	var panicResp *Response
+	defer func() {
+		if r := recover(); r != nil {
+			s.totalErrors.Add(1)
+			s.logger.Errorf("QUIC stream handler panic: %v\n%s", r, debug.Stack())
+			panicResp = &Response{
+				Status:  StatusInternalError,
+				Payload: []byte(fmt.Sprintf("internal server error: %v", r)),
+			}
+			if werr := WriteResponse(stream, panicResp); werr != nil {
+				slog.Debug("QUIC WriteResponse failed after panic recovery",
+					slog.Int64("stream_id", streamID),
+					slog.String("error", werr.Error()),
+				)
+			}
+		}
+	}()
+	defer func() {
+		if cerr := stream.Close(); cerr != nil {
+			slog.Debug("QUIC stream close error",
+				slog.String("remote_addr", remoteAddr),
+				slog.Int64("stream_id", streamID),
+				slog.String("error", cerr.Error()),
+			)
+		}
+	}()
 
 	startTime := time.Now()
 
 	req, err := ReadRequest(stream)
 	if err != nil {
 		s.totalErrors.Add(1)
-		s.logger.Errorf("Failed to read request: %v", err)
+		slog.Debug("QUIC stream read request failed",
+			slog.String("remote_addr", remoteAddr),
+			slog.Int64("stream_id", streamID),
+			slog.String("error", err.Error()),
+		)
 		resp := &Response{
 			Status:  StatusInvalidRequest,
 			Payload: []byte(err.Error()),
 		}
-		_ = WriteResponse(stream, resp)
+		if werr := WriteResponse(stream, resp); werr != nil {
+			slog.Debug("QUIC WriteResponse failed after read error",
+				slog.String("remote_addr", remoteAddr),
+				slog.Int64("stream_id", streamID),
+				slog.String("error", werr.Error()),
+			)
+		}
 		return
 	}
 
 	s.totalRequests.Add(1)
 
-	s.logger.Debug("Processing request: %s", OpcodeToString(req.Opcode))
+	slog.Debug("QUIC stream request read",
+		slog.String("remote_addr", remoteAddr),
+		slog.Int64("stream_id", streamID),
+		slog.String("opcode", OpcodeToString(req.Opcode)),
+		slog.String("opcode_hex", fmt.Sprintf("0x%02X", req.Opcode)),
+		slog.Int("payload_len", len(req.Payload)),
+	)
 
 	var resp *Response
 	if s.handler != nil {
@@ -273,13 +347,47 @@ func (s *Server) handleStream(stream *quicgo.Stream) {
 		}
 	}
 
-	if err := WriteResponse(stream, resp); err != nil {
+	respPayloadLen := 0
+	if resp != nil {
+		respPayloadLen = len(resp.Payload)
+	}
+
+	slog.Debug("QUIC stream response ready",
+		slog.String("remote_addr", remoteAddr),
+		slog.Int64("stream_id", streamID),
+		slog.String("opcode", OpcodeToString(req.Opcode)),
+		slog.String("status", StatusToString(resp.Status)),
+		slog.Int("payload_len", respPayloadLen),
+	)
+
+	if werr := WriteResponse(stream, resp); werr != nil {
 		s.totalErrors.Add(1)
-		s.logger.Errorf("Failed to write response: %v", err)
+		slog.Error("QUIC stream WriteResponse failed",
+			slog.String("remote_addr", remoteAddr),
+			slog.Int64("stream_id", streamID),
+			slog.String("opcode", OpcodeToString(req.Opcode)),
+			slog.String("error", werr.Error()),
+		)
 		return
 	}
 
-	s.logger.Debug("Request completed in %v", time.Since(startTime))
+	elapsed := time.Since(startTime)
+	slog.Debug("QUIC stream request completed",
+		slog.String("remote_addr", remoteAddr),
+		slog.Int64("stream_id", streamID),
+		slog.String("opcode", OpcodeToString(req.Opcode)),
+		slog.String("status", StatusToString(resp.Status)),
+		slog.Int64("elapsed_us", elapsed.Microseconds()),
+	)
+}
+
+// ctxErrString returns the context error string, or "nil" if the context has
+// no error. Used to include connection-level cancellation state in log lines.
+func ctxErrString(ctx context.Context) string {
+	if err := ctx.Err(); err != nil {
+		return err.Error()
+	}
+	return "nil"
 }
 
 // GetMetrics returns current server metrics

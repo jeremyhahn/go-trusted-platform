@@ -118,6 +118,16 @@ func (m *mockDeviceService) FindBySerial(ctx context.Context, serial string) (*e
 	return nil, datastore.ErrRecordNotFound
 }
 
+// FindByHostname finds a device by its IDevID hostname.
+func (m *mockDeviceService) FindByHostname(ctx context.Context, hostname string) (*entities.Device, error) {
+	for _, d := range m.devices {
+		if d.Hostname == hostname {
+			return d, nil
+		}
+	}
+	return nil, errors.New("device not found by hostname")
+}
+
 // Ensure mockDeviceService implements DeviceService.
 var _ DeviceService = (*mockDeviceService)(nil)
 
@@ -1275,7 +1285,7 @@ func TestDeviceNetworkConfigConversion(t *testing.T) {
 		Subnet:       "192.168.1.0/24",
 		DnsServers:   []string{"8.8.8.8"},
 		Dhcp:         true,
-		FirewallZone: "trusted",
+		Zone: "trusted",
 	}
 
 	entity := protoNetworkConfigToEntity(protoConfig)
@@ -1559,19 +1569,21 @@ func TestDeviceGRPCService_CreateProfile_FullConfiguration(t *testing.T) {
 			Name:  "Full Config Profile",
 			Model: "Enterprise Server",
 			Role:  platformv1.DeviceRole_DEVICE_ROLE_SERVER,
-			ProvisioningNetwork: &platformv1.NetworkPhaseConfig{
-				Vlan:    10,
-				Dhcp:    true,
-				Gateway: "192.168.10.1",
-			},
-			ProductionNetwork: &platformv1.NetworkPhaseConfig{
-				Vlan:     100,
-				StaticIp: "10.0.0.100",
-				Gateway:  "10.0.0.1",
-			},
-			QuarantineNetwork: &platformv1.NetworkPhaseConfig{
-				Vlan:    999,
-				Gateway: "192.168.99.1",
+			Networks: map[string]*platformv1.NetworkPhaseConfig{
+				"provisioning": {
+					Vlan:    10,
+					Dhcp:    true,
+					Gateway: "192.168.10.1",
+				},
+				"trusted": {
+					Vlan:     100,
+					StaticIp: "10.0.0.100",
+					Gateway:  "10.0.0.1",
+				},
+				"quarantine": {
+					Vlan:    999,
+					Gateway: "192.168.99.1",
+				},
 			},
 			PlatformdConfig: &platformv1.PlatformdConfigRef{
 				ConfigType: "reference",
@@ -1598,15 +1610,16 @@ func TestDeviceGRPCService_CreateProfile_FullConfiguration(t *testing.T) {
 		t.Fatal("Expected profile in response")
 	}
 
-	if profile.GetProvisioningNetwork() == nil {
+	if profile.GetNetworks() == nil {
+		t.Error("Expected networks map")
+	}
+	if profile.GetNetworks()["provisioning"] == nil {
 		t.Error("Expected provisioning network")
 	}
-
-	if profile.GetProductionNetwork() == nil {
-		t.Error("Expected production network")
+	if profile.GetNetworks()["trusted"] == nil {
+		t.Error("Expected trusted network")
 	}
-
-	if profile.GetQuarantineNetwork() == nil {
+	if profile.GetNetworks()["quarantine"] == nil {
 		t.Error("Expected quarantine network")
 	}
 

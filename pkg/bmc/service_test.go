@@ -96,6 +96,30 @@ func TestNewService_OptionalProfileStore(t *testing.T) {
 	}
 }
 
+func TestService_PowerStatus_NilProfileStore(t *testing.T) {
+	// Regression: a profile-based call on a service constructed without a
+	// profile store must return ErrProfileNotFound, never panic on a nil
+	// store dereference (see pkg/bmc/service.go clientFor).
+	ctx := context.Background()
+	svc, err := NewService(ServiceParams{
+		Factory: &MockClientFactory{Client: NewMockClient()},
+		Logger:  slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("NewService() error: %v", err)
+	}
+	t.Cleanup(func() { svc.Close() })
+
+	_, err = svc.PowerStatus(ctx, 1)
+	if err == nil {
+		t.Fatal("expected error for missing profile store")
+	}
+	var target ErrProfileNotFound
+	if !errors.As(err, &target) {
+		t.Errorf("expected ErrProfileNotFound, got %T: %v", err, err)
+	}
+}
+
 func TestService_PowerOn(t *testing.T) {
 	ctx := context.Background()
 	mock := NewMockClient()

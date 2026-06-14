@@ -532,7 +532,15 @@ func ReadRequest(r io.Reader) (*Request, error) {
 	}, nil
 }
 
-// WriteResponse writes a response to the stream
+// WriteResponse writes a response to the stream.
+//
+// The entire frame [status:1][payloadLen:4][payload:N] is assembled into a
+// single buffer and written with one Write call. This is critical for QUIC
+// streams: quic-go may flush each Write as a separate STREAM frame, and when
+// stream.Close() follows immediately (as in handleStream's defer), the FIN can
+// race with a pending multi-write sequence, causing the client to receive the
+// 5-byte header (status + length) but get EOF before the payload bytes arrive.
+// A single atomic Write eliminates that race entirely.
 func WriteResponse(w io.Writer, resp *Response) error {
 	if resp == nil {
 		return fmt.Errorf("response cannot be nil")
@@ -543,23 +551,17 @@ func WriteResponse(w io.Writer, resp *Response) error {
 		return fmt.Errorf("payload size %d exceeds maximum %d", payloadLen, MaxPayloadSize)
 	}
 
-	// Write status
-	if _, err := w.Write([]byte{resp.Status}); err != nil {
-		return fmt.Errorf("failed to write status: %w", err)
-	}
-
-	// Write payload length (big-endian)
-	lenBuf := make([]byte, 4)
-	binary.BigEndian.PutUint32(lenBuf, payloadLen)
-	if _, err := w.Write(lenBuf); err != nil {
-		return fmt.Errorf("failed to write payload length: %w", err)
-	}
-
-	// Write payload
+	// Assemble [status:1][len:4][payload:N] into a single buffer so the
+	// entire response is dispatched in one Write call.
+	frame := make([]byte, 5+payloadLen)
+	frame[0] = resp.Status
+	binary.BigEndian.PutUint32(frame[1:5], payloadLen)
 	if payloadLen > 0 {
-		if _, err := w.Write(resp.Payload); err != nil {
-			return fmt.Errorf("failed to write payload: %w", err)
-		}
+		copy(frame[5:], resp.Payload)
+	}
+
+	if _, err := w.Write(frame); err != nil {
+		return fmt.Errorf("failed to write response: %w", err)
 	}
 
 	return nil

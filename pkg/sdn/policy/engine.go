@@ -25,16 +25,17 @@ import (
 
 // Engine implements the PolicyEngine interface
 type Engine struct {
-	mu             sync.RWMutex
-	logger         *slog.Logger
-	stateMachine   *PortStateMachine
-	flowController FlowController
-	portController OVSPortController // Added OVS-specific port operations
-	extractor      PolicyExtractor
-	validator      CertificateValidator
-	ruleGenerator  *RuleGenerator
-	bridgeName     string
-	monitor        *CertificateMonitor
+	mu              sync.RWMutex
+	logger          *slog.Logger
+	stateMachine    *PortStateMachine
+	flowController  FlowController
+	portController  OVSPortController
+	extractor       PolicyExtractor
+	validator       CertificateValidator
+	ruleGenerator   *RuleGenerator
+	bridgeName      string
+	monitor         *CertificateMonitor
+	zoneFlowManager *ZoneFlowManager // optional; enables zone-keyed flow installation
 }
 
 // Config configures the policy engine
@@ -63,6 +64,12 @@ type Config struct {
 
 	// MonitorConfig configures the certificate monitor
 	MonitorConfig MonitorConfig
+
+	// ZoneFlowManager, when non-nil, enables zone-keyed flow installation.
+	// When a PortPolicy carries a non-empty Zone, ApplyPolicy delegates VLAN
+	// resolution and flow installation to the ZoneFlowManager instead of
+	// calling SetPortVLAN + GenerateAuthorizationRules directly.
+	ZoneFlowManager *ZoneFlowManager
 }
 
 // PolicyEngine defines the interface for the policy engine
@@ -127,14 +134,15 @@ func NewEngine(config Config) (*Engine, error) {
 	}
 
 	engine := &Engine{
-		logger:         logger,
-		stateMachine:   NewPortStateMachine(),
-		flowController: config.FlowController,
-		portController: portController,
-		extractor:      config.PolicyExtractor,
-		validator:      config.CertificateValidator,
-		ruleGenerator:  NewRuleGenerator(),
-		bridgeName:     config.BridgeName,
+		logger:          logger,
+		stateMachine:    NewPortStateMachine(),
+		flowController:  config.FlowController,
+		portController:  portController,
+		extractor:       config.PolicyExtractor,
+		validator:       config.CertificateValidator,
+		ruleGenerator:   NewRuleGenerator(),
+		bridgeName:      config.BridgeName,
+		zoneFlowManager: config.ZoneFlowManager,
 	}
 
 	// Setup monitoring if enabled
@@ -385,8 +393,22 @@ applyPolicy:
 		return err
 	}
 
-	// Set VLAN via OVSDB first (this ensures proper VLAN tagging at port level)
-	if policy.VLAN > 0 {
+	// When a zone is declared, delegate VLAN resolution + flow installation to
+	// the ZoneFlowManager. When no ZoneFlowManager is configured, fall through
+	// to the VLAN-direct path.
+	if policy.Zone != "" && e.zoneFlowManager != nil {
+		ctx := context.Background()
+		if err := e.zoneFlowManager.ApplyZoneFlows(ctx, portID, policy.Zone); err != nil {
+			_ = e.stateMachine.SetPolicy(portID, nil)
+			_ = e.stateMachine.SetState(portID, PortStateUnauthorized)
+			return fmt.Errorf("engine: apply zone flows: %w", err)
+		}
+		// Populate VLAN on the policy from the resolved value so GetPortVLAN works.
+		if v, err := e.zoneFlowManager.GetPortVLAN(portID); err == nil {
+			policy.VLAN = v
+		}
+	} else if policy.VLAN > 0 {
+		// Legacy VLAN-direct path: set VLAN via OVSDB first.
 		ctx := context.Background()
 		if err := e.portController.SetPortVLAN(ctx, portID, int64(policy.VLAN)); err != nil {
 			// Rollback policy on VLAN configuration failure
@@ -395,17 +417,17 @@ applyPolicy:
 			_ = e.stateMachine.SetState(portID, PortStateUnauthorized)
 			return fmt.Errorf("failed to set port VLAN: %w", err)
 		}
-	}
 
-	// Generate and install flows
-	if err := e.installPolicyFlows(portID, policy); err != nil {
-		// Rollback policy and VLAN on failure
-		ctx := context.Background()
-		_ = e.portController.SetPortVLAN(ctx, portID, 0)
-		_ = e.stateMachine.SetPolicy(portID, nil)
-		_ = e.stateMachine.SetState(portID, PortStateProvisioning)
-		_ = e.stateMachine.SetState(portID, PortStateUnauthorized)
-		return err
+		// Generate and install flows
+		if err := e.installPolicyFlows(portID, policy); err != nil {
+			// Rollback policy and VLAN on failure
+			ctx := context.Background()
+			_ = e.portController.SetPortVLAN(ctx, portID, 0)
+			_ = e.stateMachine.SetPolicy(portID, nil)
+			_ = e.stateMachine.SetState(portID, PortStateProvisioning)
+			_ = e.stateMachine.SetState(portID, PortStateUnauthorized)
+			return err
+		}
 	}
 
 	// Get current state again to see if we already transitioned to Authorized
@@ -432,6 +454,7 @@ applyPolicy:
 	e.logger.Info("applied policy to port",
 		slog.String("port_id", portID),
 		slog.String("tenant_id", policy.TenantID),
+		slog.String("zone", string(policy.Zone)),
 		slog.Int("vlan", int(policy.VLAN)),
 		slog.Int("acl_count", len(policy.ACLs)))
 
@@ -450,6 +473,15 @@ func (e *Engine) RemovePolicy(portID string) error {
 	// Remove flows
 	if err := e.removeFlows(portID); err != nil {
 		return err
+	}
+
+	// Also clean up zone flow manager state when configured.
+	if e.zoneFlowManager != nil {
+		if err := e.zoneFlowManager.RemoveFlows(portID); err != nil {
+			e.logger.Warn("failed to remove zone flows",
+				slog.String("port_id", portID),
+				slog.String("error", err.Error()))
+		}
 	}
 
 	// Remove VLAN assignment
@@ -629,7 +661,8 @@ func (e *Engine) validatePolicy(policy *PortPolicy) error {
 		return ErrMissingTenantID
 	}
 
-	if policy.VLAN < 1 || policy.VLAN > 4094 {
+	// When a zone is set the VLAN is resolved at apply time; skip VLAN validation.
+	if policy.Zone == "" && (policy.VLAN < 1 || policy.VLAN > 4094) {
 		return ErrInvalidVLAN
 	}
 
@@ -655,21 +688,31 @@ func (e *Engine) applyPolicyInternal(portID string, policy *PortPolicy) error {
 		return err
 	}
 
-	// Set VLAN via OVSDB
-	if policy.VLAN > 0 {
+	// Zone path: delegate to ZoneFlowManager when zone is set.
+	if policy.Zone != "" && e.zoneFlowManager != nil {
+		ctx := context.Background()
+		if err := e.zoneFlowManager.ApplyZoneFlows(ctx, portID, policy.Zone); err != nil {
+			_ = e.stateMachine.SetPolicy(portID, nil)
+			return fmt.Errorf("engine: apply zone flows: %w", err)
+		}
+		if v, err := e.zoneFlowManager.GetPortVLAN(portID); err == nil {
+			policy.VLAN = v
+		}
+	} else if policy.VLAN > 0 {
+		// Legacy VLAN-direct path
 		ctx := context.Background()
 		if err := e.portController.SetPortVLAN(ctx, portID, int64(policy.VLAN)); err != nil {
 			_ = e.stateMachine.SetPolicy(portID, nil)
 			return fmt.Errorf("failed to set port VLAN: %w", err)
 		}
-	}
 
-	// Install flows
-	if err := e.installPolicyFlows(portID, policy); err != nil {
-		ctx := context.Background()
-		_ = e.portController.SetPortVLAN(ctx, portID, 0)
-		_ = e.stateMachine.SetPolicy(portID, nil)
-		return err
+		// Install flows
+		if err := e.installPolicyFlows(portID, policy); err != nil {
+			ctx := context.Background()
+			_ = e.portController.SetPortVLAN(ctx, portID, 0)
+			_ = e.stateMachine.SetPolicy(portID, nil)
+			return err
+		}
 	}
 
 	// Transition to authorized

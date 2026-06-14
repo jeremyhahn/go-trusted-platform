@@ -91,6 +91,9 @@ message Device {
   string switch_name = 11;
   // Physical port identifier on the switch (e.g., "Eth1/3").
   string switch_port = 12;
+  // OVS port (tap/interface name) the device's NIC is attached to, stamped at
+  // SDN enrollment activation. Distinct from switch_port (physical switch port).
+  string network_port_id = 13;
 }
 
 // DHCPPoolConfig defines DHCP pool configuration
@@ -112,7 +115,8 @@ message ACLConfig {
   string action = 7;
 }
 
-// NetworkPhaseConfig defines network configuration for a provisioning phase
+// NetworkPhaseConfig defines network configuration for a provisioning phase.
+// Field 11 (firewall_zone) is reserved; use zone (field 12) instead.
 message NetworkPhaseConfig {
   uint32 vlan = 1;
   DHCPPoolConfig dhcp_pool = 2;
@@ -124,7 +128,11 @@ message NetworkPhaseConfig {
   string subnet = 8;
   repeated string dns_servers = 9;
   bool dhcp = 10;
-  string firewall_zone = 11;
+  reserved 11;
+  reserved "firewall_zone";
+  // zone is the SDN zone name for this network phase (e.g. "trusted",
+  // "provisioning", "quarantine").
+  string zone = 12;
 }
 
 // PlatformdConfigRef represents a reference to platformd configuration
@@ -159,16 +167,18 @@ message BMCConfig {
   string protocol = 5;
 }
 
-// DeviceProfile represents a device profile configuration
+// DeviceProfile represents a device profile configuration.
+// Fields 6, 7, 8 (provisioning_network / production_network / quarantine_network)
+// are reserved; use the networks map + enrollment_network / post_enrollment_network /
+// failure_network instead.
 message DeviceProfile {
   uint64 id = 1;
   string name = 2;
   string model = 3;
   DeviceRole role = 4;
   bytes event_log = 5;
-  NetworkPhaseConfig provisioning_network = 6;
-  NetworkPhaseConfig production_network = 7;
-  NetworkPhaseConfig quarantine_network = 8;
+  reserved 6, 7, 8;
+  reserved "provisioning_network", "production_network", "quarantine_network";
   PlatformdConfigRef platformd_config = 9;
   ProfileMatchRules match_rules = 10;
   google.protobuf.Timestamp created_at = 11;
@@ -179,6 +189,22 @@ message DeviceProfile {
   bool assigned = 16;
   google.protobuf.Timestamp assigned_at = 17;
   BMCConfig bmc = 18;
+  // zone is the profile-level SDN zone. Individual network phase configs may
+  // override this value with their own zone field.
+  string zone = 19;
+  // networks maps logical network names (e.g. "provisioning", "trusted",
+  // "quarantine") to their phase configurations.
+  map<string, NetworkPhaseConfig> networks = 20;
+  // enrollment_network is the key into networks used during device enrollment.
+  // Defaults to "provisioning" when empty.
+  string enrollment_network = 21;
+  // post_enrollment_network is the key into networks the device transitions to
+  // after successful enrollment. Defaults to "trusted" when empty.
+  string post_enrollment_network = 22;
+  // failure_network is the key into networks the device is placed in on
+  // enrollment or attestation failure. Defaults to "quarantine" when empty.
+  string failure_network = 23;
+  string tenant_id = 24;
 }
 
 // DeviceTemplate is a reusable configuration blueprint for device provisioning

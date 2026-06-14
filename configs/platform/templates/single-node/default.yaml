@@ -477,7 +477,8 @@ sdn:
     enabled: true
     interface: trusted0
   networks:
-    trusted:
+    - name: trusted
+      zone: trusted
       pool: trusted
   # Physical switch fabric not used in single-node (box only sees its
   # own NICs, no managed switches). Add switches under `fabric:` only
@@ -486,13 +487,19 @@ sdn:
     mode: vlan
     switches: []
     peers: []
+    # zones: built-in zones are pre-declared in the code defaults registry.
+    # Override only if you need to change default policy. Example:
+    #   zones:
+    #     - {name: trusted, internet_ingress: false}
+    #     - {name: public,  internet_ingress: true, isolate_from: [trusted]}
     segments:
       # Single-node trusted segment. No role (empty = general data
       # plane); only `provisioning` and `quarantine` are first-class
-      # fabric roles. Assign any VLAN in 1-4094 — `100` is a common
-      # homelab default for the trusted LAN.
+      # fabric roles. VLAN 200 is the reference-architecture default
+      # for the trusted LAN (matches DefaultTrustedVLAN in pkg/sdn/vlan).
+      # Override in your site override file if your LAN uses a different VLAN.
       - name: trusted
-        vlan: 100
+        vlan: 200
   overlay:
     enabled: false
     vxlan-port: 4789

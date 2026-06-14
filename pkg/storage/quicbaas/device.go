@@ -66,6 +66,30 @@ func (d *DeviceDAO) FindBySerial(ctx context.Context, serial string) (*entities.
 	return &device, nil
 }
 
+
+// FindByHostname finds a device by its IDevID hostname (CN).
+// Falls back to scanning all devices when the secondary index is unavailable.
+func (d *DeviceDAO) FindByHostname(ctx context.Context, hostname string) (*entities.Device, error) {
+	ctx, cancel := context.WithTimeout(ctx, d.requestTimeout)
+	defer cancel()
+
+	// Try secondary index query first.
+	results, err := d.storage.Query(ctx, entityTypeDevice, "Hostname", []byte(hostname), d.shardID)
+	if err != nil {
+		return d.getDeviceByScan(ctx, "Hostname", hostname)
+	}
+
+	if len(results) == 0 {
+		return d.getDeviceByScan(ctx, "Hostname", hostname)
+	}
+
+	var device entities.Device
+	if err := json.Unmarshal(results[0].Data, &device); err != nil {
+		return nil, ErrDeserializationFailed{EntityType: entityTypeDevice, Cause: err}
+	}
+
+	return &device, nil
+}
 // GetByModel retrieves all devices matching a specific model.
 func (d *DeviceDAO) GetByModel(ctx context.Context, model string) ([]*entities.Device, error) {
 	ctx, cancel := context.WithTimeout(ctx, d.requestTimeout)
@@ -125,6 +149,10 @@ func (d *DeviceDAO) getDeviceByScan(ctx context.Context, field, value string) (*
 				}
 			case "Model":
 				if device.Model == value {
+					return &device, nil
+				}
+			case "Hostname":
+				if device.Hostname == value {
 					return &device, nil
 				}
 			}

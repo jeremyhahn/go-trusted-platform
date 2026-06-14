@@ -457,11 +457,11 @@ func TestSimulator_AllIPMIHandlers(t *testing.T) {
 	}
 }
 
-// TestHandleIPMI_UnhandledCommand covers the "unhandled cmd" path in
-// dispatchIPMI / handleIPMI. Sends a well-formed authenticated IPMI
-// packet after the handshake that asks for a command the simulator
-// doesn't know about, and verifies the simulator drops the request.
-func TestHandleIPMI_UnhandledCommand(t *testing.T) {
+// TestHandleIPMI_UnknownSession verifies that IPMI-typed packets whose
+// RMCP+ session ID does not match any active session are silently
+// dropped. This exercises the "session not found" early-return in
+// handleIPMI without requiring a full RAKP handshake.
+func TestHandleIPMI_UnknownSession(t *testing.T) {
 	sim, err := rmcpsim.New(rmcpsim.Options{
 		Addr:     "127.0.0.1:0",
 		Username: "admin",
@@ -475,31 +475,28 @@ func TestHandleIPMI_UnhandledCommand(t *testing.T) {
 	}
 	defer sim.Stop()
 
-	// We exercise this path indirectly: the IPMI client's
-	// PowerCycle command is implemented (ChassisControl), but
-	// "Get SEL Entry" (netfn=0x0A, cmd=0x43) is not. We don't
-	// have a public client method for that -- so instead, we
-	// verify the path by constructing a Config pointing at a
-	// simulator that has NOT completed a handshake yet and then
-	// sending a short IPMI-typed packet that will bypass the
-	// handshake state. The simulator should silently drop.
+	// Build an IPMI-typed packet with a non-zero session ID that has
+	// never been established (no prior Open Session exchange).
+	// packet[6:10] = BMC session ID = 0xDEADBEEF -- unknown.
 	pkt := make([]byte, 24)
-	pkt[0] = 0x06
-	pkt[3] = 0x07
+	pkt[0] = 0x06 // RMCP version
+	pkt[3] = 0x07 // RMCP class IPMI
 	pkt[5] = bmc.PayloadTypeIPMI
+	pkt[6] = 0xEF // session ID byte 0 (little-endian 0xDEADBEEF)
+	pkt[7] = 0xBE
+	pkt[8] = 0xAD
+	pkt[9] = 0xDE
 	// Declare an 8-byte payload so payload[:8] is accessible.
 	pkt[14] = 0x08
 	pkt[15] = 0x00
-	// Inside the payload at offset 16..23 put an IPMI command with
-	// netfn=0x0A (Storage) cmd=0x43 (Get SEL Entry) which is not in
-	// ipmiHandlers.
-	pkt[16] = 0x20        // rsAddr
+	// Arbitrary IPMI command bytes inside the payload.
+	pkt[16] = 0x20
 	pkt[17] = (0x0A << 2) // netfn=Storage
 	pkt[18] = bmc.IPMIChecksum(pkt[16:18])
-	pkt[19] = 0x81 // rqAddr
-	pkt[20] = 0x00 // rqSeq
-	pkt[21] = 0x43 // cmd
-	pkt[22] = 0x00 // data (empty)
+	pkt[19] = 0x81
+	pkt[20] = 0x00
+	pkt[21] = 0x43 // cmd: Get SEL Entry
+	pkt[22] = 0x00
 	pkt[23] = bmc.IPMIChecksum(pkt[19:23])
 	sendRawAndExpectSilence(t, sim, pkt)
 }

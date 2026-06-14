@@ -64,6 +64,7 @@ type SDNGRPCAdapter struct {
 	conn     *grpc.ClientConn
 	overlay  platformv1.OverlayServiceClient
 	gateway  platformv1.GatewayServiceClient
+	sdn      platformv1.SDNServiceClient
 }
 
 // NewSDNGRPCAdapter creates a new gRPC adapter for SDN integration testing.
@@ -93,12 +94,14 @@ func (g *SDNGRPCAdapter) Setup(ctx context.Context) error {
 	g.conn = conn
 	g.overlay = platformv1.NewOverlayServiceClient(conn)
 	g.gateway = platformv1.NewGatewayServiceClient(conn)
+	g.sdn = platformv1.NewSDNServiceClient(conn)
 
-	// Verify connectivity with a status call using the same short timeout
+	// Verify connectivity with a zone list call; this does not require an
+	// overlay controller, so it succeeds as long as platformd is reachable.
 	verifyCtx, verifyCancel := context.WithTimeout(ctx, sdnGRPCDialTimeout)
 	defer verifyCancel()
 
-	_, err = g.overlay.GetOverlayStatus(verifyCtx, &platformv1.GetOverlayStatusRequest{})
+	_, err = g.sdn.ListNetworkZones(verifyCtx, &platformv1.ListNetworkZonesRequest{})
 	if err != nil {
 		closeErr := g.conn.Close()
 		if closeErr != nil {
@@ -351,29 +354,107 @@ func (g *SDNGRPCAdapter) WithdrawPrefix(ctx context.Context, prefix string) erro
 // IPAM Operations
 // =============================================================================
 
-// ListPools returns all IPAM pools via gRPC.
-func (g *SDNGRPCAdapter) ListPools(ctx context.Context) (*IPAMPoolListResponse, error) {
-	resp, err := g.gateway.ListIPAMPools(ctx, &platformv1.ListIPAMPoolsRequest{})
+// CreatePool creates a new IPAM pool via gRPC.
+func (g *SDNGRPCAdapter) CreatePool(ctx context.Context, req IPAMPoolCreateRequest) (*IPAMPoolEntry, error) {
+	protoReq := &platformv1.CreateIPAMPoolRequest{
+		Id:          req.ID,
+		Name:        req.Name,
+		Cidr:        req.CIDR,
+		Gateway:     req.Gateway,
+		Zone:        req.Zone,
+		Description: req.Description,
+	}
+	if req.LeaseDuration > 0 {
+		protoReq.DefaultLeaseDurationNanos = req.LeaseDuration.Nanoseconds()
+	}
+
+	resp, err := g.gateway.CreateIPAMPool(ctx, protoReq)
+	if err != nil {
+		return nil, fmt.Errorf("gRPC CreateIPAMPool failed: %w", err)
+	}
+
+	return grpcPoolToEntry(resp.Pool), nil
+}
+
+// GetPool retrieves an IPAM pool by ID via gRPC.
+func (g *SDNGRPCAdapter) GetPool(ctx context.Context, poolID string) (*IPAMPoolEntry, error) {
+	resp, err := g.gateway.GetIPAMPool(ctx, &platformv1.GetIPAMPoolRequest{Id: poolID})
+	if err != nil {
+		return nil, fmt.Errorf("gRPC GetIPAMPool failed: %w", err)
+	}
+
+	return grpcPoolToEntry(resp.Pool), nil
+}
+
+// UpdatePool updates mutable fields of an IPAM pool via gRPC.
+func (g *SDNGRPCAdapter) UpdatePool(ctx context.Context, poolID string, req IPAMPoolUpdateRequest) (*IPAMPoolEntry, error) {
+	protoReq := &platformv1.UpdateIPAMPoolRequest{
+		Id:          poolID,
+		Name:        req.Name,
+		Gateway:     req.Gateway,
+		Zone:        req.Zone,
+		Description: req.Description,
+	}
+	if req.LeaseDuration > 0 {
+		protoReq.DefaultLeaseDurationNanos = req.LeaseDuration.Nanoseconds()
+	}
+
+	resp, err := g.gateway.UpdateIPAMPool(ctx, protoReq)
+	if err != nil {
+		return nil, fmt.Errorf("gRPC UpdateIPAMPool failed: %w", err)
+	}
+
+	return grpcPoolToEntry(resp.Pool), nil
+}
+
+// DeletePool removes an IPAM pool by ID via gRPC.
+func (g *SDNGRPCAdapter) DeletePool(ctx context.Context, poolID string) error {
+	_, err := g.gateway.DeleteIPAMPool(ctx, &platformv1.DeleteIPAMPoolRequest{Id: poolID})
+	if err != nil {
+		return fmt.Errorf("gRPC DeleteIPAMPool failed: %w", err)
+	}
+	return nil
+}
+
+// ListPools returns all IPAM pools, optionally filtered by zone, via gRPC.
+func (g *SDNGRPCAdapter) ListPools(ctx context.Context, zone string) (*IPAMPoolListResponse, error) {
+	resp, err := g.gateway.ListIPAMPools(ctx, &platformv1.ListIPAMPoolsRequest{Zone: zone})
 	if err != nil {
 		return nil, fmt.Errorf("gRPC ListIPAMPools failed: %w", err)
 	}
 
 	pools := make([]IPAMPoolEntry, 0, len(resp.Pools))
 	for _, p := range resp.Pools {
-		pools = append(pools, IPAMPoolEntry{
-			ID:           p.Id,
-			CIDR:         p.Cidr,
-			Gateway:      p.Gateway,
-			TotalIPs:     int64(p.Total),
-			AllocatedIPs: int64(p.Allocated),
-			AvailableIPs: int64(p.Available),
-		})
+		pools = append(pools, *grpcPoolToEntry(p))
 	}
 
 	return &IPAMPoolListResponse{
 		Pools:      pools,
 		TotalCount: len(pools),
 	}, nil
+}
+
+// grpcPoolToEntry converts a protobuf IPAMPool to a test IPAMPoolEntry.
+func grpcPoolToEntry(p *platformv1.IPAMPool) *IPAMPoolEntry {
+	if p == nil {
+		return &IPAMPoolEntry{}
+	}
+	var leaseDur time.Duration
+	if p.DefaultLeaseDurationNanos > 0 {
+		leaseDur = time.Duration(p.DefaultLeaseDurationNanos)
+	}
+	return &IPAMPoolEntry{
+		ID:            p.Id,
+		Name:          p.Name,
+		CIDR:          p.Cidr,
+		Gateway:       p.Gateway,
+		Zone:          p.Zone,
+		Description:   p.Description,
+		TotalIPs:      int64(p.Total),
+		AllocatedIPs:  int64(p.Allocated),
+		AvailableIPs:  int64(p.Available),
+		LeaseDuration: leaseDur,
+	}
 }
 
 // AllocateIP allocates an IP from a pool via gRPC.
@@ -424,6 +505,110 @@ func (g *SDNGRPCAdapter) GetDHCPStatus(ctx context.Context) (*DHCPStatusResponse
 // Note: DHCP leases are not currently exposed via gRPC; returns not implemented error.
 func (g *SDNGRPCAdapter) ListLeases(ctx context.Context) (*DHCPLeaseListResponse, error) {
 	return nil, ErrAdapterNotImplemented{Protocol: "gRPC", Operation: "ListLeases"}
+}
+
+// =============================================================================
+// Network Zone Operations
+// =============================================================================
+
+func grpcNetworkZoneToEntry(z *platformv1.NetworkZone) *ZoneEntry {
+	if z == nil {
+		return nil
+	}
+	cfg := z.GetConfig()
+	entry := &ZoneEntry{
+		RestartRequired: z.GetRestartRequired(),
+	}
+	if cfg != nil {
+		entry.Name = cfg.GetName()
+		entry.InternetIngress = cfg.GetInternetIngress()
+		entry.Isolate = cfg.GetIsolate()
+		entry.IsolatePerTenant = cfg.GetIsolatePerTenant()
+		entry.OOB = cfg.GetOob()
+		entry.LifecycleRole = cfg.GetLifecycleRole()
+	}
+	if ts := z.GetCreatedAt(); ts != nil {
+		entry.CreatedAt = ts.AsTime()
+	}
+	if ts := z.GetUpdatedAt(); ts != nil {
+		entry.UpdatedAt = ts.AsTime()
+	}
+	return entry
+}
+
+// CreateZone creates a new network trust zone via gRPC.
+func (s *SDNGRPCAdapter) CreateZone(ctx context.Context, req ZoneCreateRequest) (*ZoneEntry, error) {
+	resp, err := s.sdn.CreateNetworkZone(ctx, &platformv1.CreateNetworkZoneRequest{
+		Config: &platformv1.NetworkZoneConfig{
+			Name:             req.Name,
+			InternetIngress:  req.InternetIngress,
+			Isolate:          req.Isolate,
+			IsolatePerTenant: req.IsolatePerTenant,
+			Oob:              req.OOB,
+			LifecycleRole:    req.LifecycleRole,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return grpcNetworkZoneToEntry(resp.GetZone()), nil
+}
+
+// UpdateZone updates an existing network trust zone via gRPC.
+func (s *SDNGRPCAdapter) UpdateZone(ctx context.Context, name string, req ZoneUpdateRequest) (*ZoneEntry, error) {
+	resp, err := s.sdn.UpdateNetworkZone(ctx, &platformv1.UpdateNetworkZoneRequest{
+		Name: name,
+		Config: &platformv1.NetworkZoneConfig{
+			Name:             name,
+			InternetIngress:  req.InternetIngress,
+			Isolate:          req.Isolate,
+			IsolatePerTenant: req.IsolatePerTenant,
+			Oob:              req.OOB,
+			LifecycleRole:    req.LifecycleRole,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return grpcNetworkZoneToEntry(resp.GetZone()), nil
+}
+
+// DeleteZone deletes a network trust zone via gRPC.
+func (s *SDNGRPCAdapter) DeleteZone(ctx context.Context, name string) (bool, error) {
+	resp, err := s.sdn.DeleteNetworkZone(ctx, &platformv1.DeleteNetworkZoneRequest{Name: name})
+	if err != nil {
+		return false, err
+	}
+	return resp.GetRestartRequired(), nil
+}
+
+// ListZones returns all network trust zones via gRPC.
+func (s *SDNGRPCAdapter) ListZones(ctx context.Context, lifecycleRole string) (*ZoneListResponse, error) {
+	resp, err := s.sdn.ListNetworkZones(ctx, &platformv1.ListNetworkZonesRequest{
+		LifecycleRole: lifecycleRole,
+	})
+	if err != nil {
+		return nil, err
+	}
+	zones := make([]ZoneEntry, 0, len(resp.GetZones()))
+	for _, z := range resp.GetZones() {
+		if e := grpcNetworkZoneToEntry(z); e != nil {
+			zones = append(zones, *e)
+		}
+	}
+	return &ZoneListResponse{Zones: zones, TotalCount: len(zones)}, nil
+}
+
+// AssignZone assigns a network segment to a trust zone via gRPC.
+func (s *SDNGRPCAdapter) AssignZone(ctx context.Context, network string, zoneName string) (bool, error) {
+	resp, err := s.sdn.AssignNetworkZone(ctx, &platformv1.AssignNetworkZoneRequest{
+		Network: network,
+		Zone:    zoneName,
+	})
+	if err != nil {
+		return false, err
+	}
+	return resp.GetRestartRequired(), nil
 }
 
 // Ensure SDNGRPCAdapter implements SDNTestAdapter interface.

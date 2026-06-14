@@ -81,30 +81,41 @@ func NewQuicBaaSKeyStore(cfg *QuicBaaSKeyStoreConfig) (*QuicBaaSKeyStore, error)
 }
 
 // keyIDFromAttrs generates a namespaced key ID from the key attributes.
-// The keyID format is: prefix + algorithm (e.g., "ca.root-ca.example.com.rsa")
-// The prefix already contains the CA identity (CN), so we only append the algorithm
-// to create a unique key identifier within the CA namespace.
+//
+// Format: prefix + CN + "." + algorithm (e.g., "ca.root-ca.example.com.leaf.example.com.ecdsa")
+//
+// The prefix already scopes the key to a specific CA (e.g., "ca.ca01.localhost.").
+// Within that namespace each key must be uniquely identified by both the certificate's
+// CN and the algorithm, because a single CA issues many leaf certificates and stores
+// one key per certificate. Using only the algorithm as the suffix (the previous
+// design) caused all ECDSA leaf keys — including the CA's own signing key — to
+// collide on the same name, which caused revocation of any ECDSA leaf to delete the
+// CA's signing key and rendered subsequent issuances impossible within the same
+// daemon session.
+//
+// When attrs.CN is empty and the algorithm is unknown, the key falls back to "key"
+// to remain safe for symmetric or exotic key types.
 func (ks *QuicBaaSKeyStore) keyIDFromAttrs(attrs *xkmssdk.KeyAttributes) string {
-	// Use algorithm as the key name suffix to avoid CN duplication
-	// The prefix already contains the CA identity namespace
-	var keyName string
+	var algSuffix string
 	switch attrs.KeyAlgorithm {
 	case x509.RSA:
-		keyName = "rsa"
+		algSuffix = "rsa"
 	case x509.ECDSA:
-		keyName = "ecdsa"
+		algSuffix = "ecdsa"
 	case x509.Ed25519:
-		keyName = "ed25519"
+		algSuffix = "ed25519"
 	default:
-		// Fallback to CN only if algorithm is not set
-		// This handles edge cases like symmetric keys or unknown algorithms
+		// Unknown or symmetric key: use CN alone when available.
 		if attrs.CN != "" {
-			keyName = attrs.CN
-		} else {
-			keyName = "key"
+			return ks.prefix + attrs.CN
 		}
+		return ks.prefix + "key"
 	}
-	return ks.prefix + keyName
+
+	if attrs.CN != "" {
+		return ks.prefix + attrs.CN + "." + algSuffix
+	}
+	return ks.prefix + algSuffix
 }
 
 // sdkAlgorithmToX509 maps QuicBaaS SDK algorithm to x509 key algorithm.

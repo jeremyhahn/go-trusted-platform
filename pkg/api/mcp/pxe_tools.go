@@ -207,10 +207,10 @@ func (r *ToolRegistry) registerPXETools() {
 		},
 	})
 
-	// pxe_authorize_device - Authorize device for production network
+	// pxe_authorize_device - Authorize device onto its target zone
 	r.addTool(ToolDefinition{
 		Name:        "pxe_authorize_device",
-		Description: "Authorize a device for production network access. Moves the device from provisioning to production VLAN.",
+		Description: "Authorize a device onto its target network zone. Moves the device from the provisioning zone to the requested zone (e.g. trusted).",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -218,12 +218,12 @@ func (r *ToolRegistry) registerPXETools() {
 					"type":        "string",
 					"description": "Device ID (required)",
 				},
-				"target_vlan": map[string]interface{}{
-					"type":        "integer",
-					"description": "Target production VLAN ID (1-4094)",
+				"target_zone": map[string]interface{}{
+					"type":        "string",
+					"description": "Target trust zone name (e.g. 'trusted', 'tenant')",
 				},
 			},
-			"required": []string{"device_id", "target_vlan"},
+			"required": []string{"device_id", "target_zone"},
 		},
 	})
 
@@ -517,6 +517,7 @@ func (r *ToolRegistry) executePXEUpdateState(ctx context.Context, args map[strin
 }
 
 // executePXEAuthorizeDevice handles the pxe_authorize_device tool execution.
+// The target_zone string is resolved to a VLAN ID via GatewayNetworkZoneVLAN.
 func (r *ToolRegistry) executePXEAuthorizeDevice(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	pxeSvc := r.getPXEService()
 	if pxeSvc == nil {
@@ -528,16 +529,23 @@ func (r *ToolRegistry) executePXEAuthorizeDevice(ctx context.Context, args map[s
 		return nil, ErrPXEDeviceIDRequired
 	}
 
-	targetVLAN := getInt(args, "target_vlan")
-	if targetVLAN < 1 || targetVLAN > 4094 {
+	targetZone := getString(args, "target_zone")
+	if targetZone == "" {
 		return nil, &PXEError{
-			Code:    "PXE_INVALID_VLAN",
-			Message: "target_vlan must be between 1 and 4094",
+			Code:    "PXE_TARGET_ZONE_REQUIRED",
+			Message: "target_zone is required",
 		}
 	}
 
-	err := pxeSvc.AuthorizeDevice(ctx, deviceID, uint16(targetVLAN))
+	targetVLAN, err := r.service.GatewayNetworkZoneVLAN(ctx, targetZone)
 	if err != nil {
+		return nil, &PXEError{
+			Code:    "PXE_ZONE_RESOLUTION_FAILED",
+			Message: "failed to resolve zone to VLAN: " + err.Error(),
+		}
+	}
+
+	if err := pxeSvc.AuthorizeDevice(ctx, deviceID, targetVLAN); err != nil {
 		return nil, err
 	}
 

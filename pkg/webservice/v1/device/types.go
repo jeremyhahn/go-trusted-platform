@@ -26,10 +26,10 @@ const ContextKeyDeviceSerial ContextKey = "device_serial"
 // Two shapes are accepted to bridge the legacy REST contract and the SDK
 // contract:
 //
-//   1. Flat: {"id", "serial", "model", ...} — original REST shape used
-//      by the v1 integration tests.
-//   2. Nested: {"device": {"name", "serial", ...}} — shape produced by
-//      the JS SDK's `createDevice({device: {...}})` and the React form.
+//  1. Flat: {"id", "serial", "model", ...} — original REST shape used
+//     by the v1 integration tests.
+//  2. Nested: {"device": {"name", "serial", ...}} — shape produced by
+//     the JS SDK's `createDevice({device: {...}})` and the React form.
 //
 // All fields below are optional: the handler infers the canonical
 // representation from whichever subtree carries data. Unknown extra
@@ -55,14 +55,14 @@ type DeviceRequest struct {
 	// UI-only fields tolerated for forwards-compatibility with WebUI
 	// forms. The server captures Name into the Device record's serial
 	// when no other identifier is supplied; the rest are informational.
-	Name              string `json:"name,omitempty"`
-	Type              string `json:"type,omitempty"`
-	DeviceType        string `json:"device_type,omitempty"`
-	Description       string `json:"description,omitempty"`
-	Manufacturer      string `json:"manufacturer,omitempty"`
-	Version           string `json:"version,omitempty"`
-	TPMManufacturer   string `json:"tpm_manufacturer,omitempty"`
-	TPMVersion        string `json:"tpm_version,omitempty"`
+	Name               string `json:"name,omitempty"`
+	Type               string `json:"type,omitempty"`
+	DeviceType         string `json:"device_type,omitempty"`
+	Description        string `json:"description,omitempty"`
+	Manufacturer       string `json:"manufacturer,omitempty"`
+	Version            string `json:"version,omitempty"`
+	TPMManufacturer    string `json:"tpm_manufacturer,omitempty"`
+	TPMVersion         string `json:"tpm_version,omitempty"`
 	TPMFirmwareVersion string `json:"tpm_firmware_version,omitempty"`
 }
 
@@ -108,33 +108,39 @@ type DeviceListResponse struct {
 	Pagination PaginationResponse `json:"pagination"`
 }
 
-// ProfileRequest represents the request body for profile creation/update
+// ProfileRequest represents the request body for profile creation/update.
+// Networks maps logical phase names (e.g. "provisioning", "trusted",
+// "quarantine") to their configurations. EnrollmentNetwork,
+// PostEnrollmentNetwork, and FailureNetwork name the active phases.
 type ProfileRequest struct {
-	ID                  uint64                  `json:"id"`
-	Name                string                  `json:"name"`
-	Model               string                  `json:"model,omitempty"`
-	Role                string                  `json:"role,omitempty"`
-	EventLog            []byte                  `json:"event_log,omitempty"`
-	ProvisioningNetwork *NetworkPhaseRequest    `json:"provisioning_network,omitempty"`
-	ProductionNetwork   *NetworkPhaseRequest    `json:"production_network,omitempty"`
-	QuarantineNetwork   *NetworkPhaseRequest    `json:"quarantine_network,omitempty"`
-	PlatformdConfig     *PlatformdConfigRequest `json:"platformd_config,omitempty"`
-	MatchRules          *MatchRulesRequest      `json:"match_rules,omitempty"`
+	ID                   uint64                          `json:"id"`
+	Name                 string                          `json:"name"`
+	Zone                 string                          `json:"zone,omitempty"`
+	Model                string                          `json:"model,omitempty"`
+	Role                 string                          `json:"role,omitempty"`
+	EventLog             []byte                          `json:"event_log,omitempty"`
+	Networks             map[string]*NetworkPhaseRequest `json:"networks,omitempty"`
+	EnrollmentNetwork    string                          `json:"enrollment_network,omitempty"`
+	PostEnrollmentNetwork string                         `json:"post_enrollment_network,omitempty"`
+	FailureNetwork       string                          `json:"failure_network,omitempty"`
+	PlatformdConfig      *PlatformdConfigRequest         `json:"platformd_config,omitempty"`
+	MatchRules           *MatchRulesRequest              `json:"match_rules,omitempty"`
 }
 
-// NetworkPhaseRequest represents network configuration for a phase
+// NetworkPhaseRequest represents network configuration for a phase.
+// Zone is the SDN zone name for this network phase (e.g. "trusted").
 type NetworkPhaseRequest struct {
-	VLAN         uint16           `json:"vlan"`
-	DHCPPool     *DHCPPoolRequest `json:"dhcp_pool,omitempty"`
-	StaticIP     string           `json:"static_ip,omitempty"`
-	Gateway      string           `json:"gateway,omitempty"`
-	DNS          []string         `json:"dns,omitempty"`
-	AuthMethod   string           `json:"auth_method,omitempty"`
-	ACLs         []ACLRequest     `json:"acls,omitempty"`
-	Subnet       string           `json:"subnet,omitempty"`
-	DNSServers   []string         `json:"dns_servers,omitempty"`
-	DHCP         bool             `json:"dhcp"`
-	FirewallZone string           `json:"firewall_zone,omitempty"`
+	VLAN       uint16           `json:"vlan"`
+	DHCPPool   *DHCPPoolRequest `json:"dhcp_pool,omitempty"`
+	StaticIP   string           `json:"static_ip,omitempty"`
+	Gateway    string           `json:"gateway,omitempty"`
+	DNS        []string         `json:"dns,omitempty"`
+	AuthMethod string           `json:"auth_method,omitempty"`
+	ACLs       []ACLRequest     `json:"acls,omitempty"`
+	Subnet     string           `json:"subnet,omitempty"`
+	DNSServers []string         `json:"dns_servers,omitempty"`
+	DHCP       bool             `json:"dhcp"`
+	Zone       string           `json:"zone,omitempty"`
 }
 
 // DHCPPoolRequest represents DHCP pool configuration
@@ -185,32 +191,36 @@ type ProfileListResponse struct {
 
 // ProfileFullResponse represents a complete device profile.
 // See DeviceResponse for why ID is encoded as a JSON string.
+// Networks maps logical phase names to their configurations.
 type ProfileFullResponse struct {
-	ID                  uint64                   `json:"id,string"`
-	Name                string                   `json:"name"`
-	Model               string                   `json:"model,omitempty"`
-	Role                string                   `json:"role,omitempty"`
-	EventLog            []byte                   `json:"event_log,omitempty"`
-	ProvisioningNetwork *NetworkPhaseResponse    `json:"provisioning_network,omitempty"`
-	ProductionNetwork   *NetworkPhaseResponse    `json:"production_network,omitempty"`
-	QuarantineNetwork   *NetworkPhaseResponse    `json:"quarantine_network,omitempty"`
-	PlatformdConfig     *PlatformdConfigResponse `json:"platformd_config,omitempty"`
-	MatchRules          *MatchRulesResponse      `json:"match_rules,omitempty"`
+	ID                    uint64                           `json:"id,string"`
+	Name                  string                           `json:"name"`
+	Zone                  string                           `json:"zone,omitempty"`
+	Model                 string                           `json:"model,omitempty"`
+	Role                  string                           `json:"role,omitempty"`
+	EventLog              []byte                           `json:"event_log,omitempty"`
+	Networks              map[string]*NetworkPhaseResponse `json:"networks,omitempty"`
+	EnrollmentNetwork     string                           `json:"enrollment_network,omitempty"`
+	PostEnrollmentNetwork string                           `json:"post_enrollment_network,omitempty"`
+	FailureNetwork        string                           `json:"failure_network,omitempty"`
+	PlatformdConfig       *PlatformdConfigResponse         `json:"platformd_config,omitempty"`
+	MatchRules            *MatchRulesResponse              `json:"match_rules,omitempty"`
 }
 
-// NetworkPhaseResponse represents network configuration in response
+// NetworkPhaseResponse represents network configuration in response.
+// Zone is the SDN zone name for this network phase.
 type NetworkPhaseResponse struct {
-	VLAN         uint16            `json:"vlan"`
-	DHCPPool     *DHCPPoolResponse `json:"dhcp_pool,omitempty"`
-	StaticIP     string            `json:"static_ip,omitempty"`
-	Gateway      string            `json:"gateway,omitempty"`
-	DNS          []string          `json:"dns,omitempty"`
-	AuthMethod   string            `json:"auth_method,omitempty"`
-	ACLs         []ACLResponse     `json:"acls,omitempty"`
-	Subnet       string            `json:"subnet,omitempty"`
-	DNSServers   []string          `json:"dns_servers,omitempty"`
-	DHCP         bool              `json:"dhcp"`
-	FirewallZone string            `json:"firewall_zone,omitempty"`
+	VLAN       uint16            `json:"vlan"`
+	DHCPPool   *DHCPPoolResponse `json:"dhcp_pool,omitempty"`
+	StaticIP   string            `json:"static_ip,omitempty"`
+	Gateway    string            `json:"gateway,omitempty"`
+	DNS        []string          `json:"dns,omitempty"`
+	AuthMethod string            `json:"auth_method,omitempty"`
+	ACLs       []ACLResponse     `json:"acls,omitempty"`
+	Subnet     string            `json:"subnet,omitempty"`
+	DNSServers []string          `json:"dns_servers,omitempty"`
+	DHCP       bool              `json:"dhcp"`
+	Zone       string            `json:"zone,omitempty"`
 }
 
 // DHCPPoolResponse represents DHCP pool in response

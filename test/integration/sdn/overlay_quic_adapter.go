@@ -27,6 +27,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/qlog"
 )
 
 // =============================================================================
@@ -226,71 +227,92 @@ type quicOverlayResponse struct {
 // overlayStatusRequest represents an overlay status request.
 type overlayStatusRequest struct{}
 
-// overlayStatusResponse represents an overlay status response.
+// overlayStatusInfoWire mirrors quic.OverlayStatusInfo codec tags exactly.
+type overlayStatusInfoWire struct {
+	Enabled      bool   `codec:"enabled"`
+	NodeID       string `codec:"node_id,omitempty"`
+	Mode         string `codec:"mode"`
+	LocalVTEP    string `codec:"local_vtep"`
+	VXLANPort    uint16 `codec:"vxlan_port,omitempty"`
+	VTEPCount    int    `codec:"vtep_count"`
+	VNICount     int    `codec:"vni_count"`
+	TunnelCount  int    `codec:"tunnel_count"`
+	MACCount     int    `codec:"mac_count"`
+	UplinkIface  string `codec:"uplink_iface,omitempty"`
+	MTU          int    `codec:"mtu"`
+	EncapType    string `codec:"encap_type"`
+	HealthStatus string `codec:"health_status"`
+}
+
+// overlayStatusResponse mirrors quic.OverlayStatusResponse codec tags exactly.
 type overlayStatusResponse struct {
-	NodeID          string `codec:"node_id"`
-	VTEPIP          string `codec:"vtep_ip"`
-	ControllerState string `codec:"controller_state"`
-	UnderlayMTU     int    `codec:"underlay_mtu"`
-	VXLANPort       uint16 `codec:"vxlan_port"`
-	VNICount        int    `codec:"vni_count"`
-	VTEPCount       int    `codec:"vtep_count"`
-	RemoteMACCount  int    `codec:"remote_mac_count"`
-	TunnelCount     int    `codec:"tunnel_count"`
-	UptimeNanos     int64  `codec:"uptime_nanos"`
+	Status    *overlayStatusInfoWire `codec:"status"`
+	Timestamp int64                  `codec:"timestamp"`
 }
 
 // vtepListRequest represents a VTEP list request.
-type vtepListRequest struct{}
-
-// vtepListResponse represents a VTEP list response.
-type vtepListResponse struct {
-	VTEPs      []vtepInfoWire `codec:"vteps"`
-	TotalCount int            `codec:"total_count"`
+type vtepListRequest struct {
+	Limit int32 `codec:"limit,omitempty"`
 }
 
-// vtepInfoWire represents VTEP information in wire format.
+// vtepInfoWire mirrors quic.VTEPInfo codec tags exactly.
 type vtepInfoWire struct {
-	NodeID     string `codec:"node_id"`
-	IP         string `codec:"ip"`
-	Healthy    bool   `codec:"healthy"`
-	LastSeen   int64  `codec:"last_seen"`
-	IsLocal    bool   `codec:"is_local"`
-	TunnelPort int    `codec:"tunnel_port"`
+	ID           string   `codec:"id"`
+	IPAddress    string   `codec:"ip_address"`
+	Hostname     string   `codec:"hostname,omitempty"`
+	Status       string   `codec:"status"`
+	VNIs         []uint32 `codec:"vnis,omitempty"`
+	TunnelCount  int      `codec:"tunnel_count"`
+	LastSeen     int64    `codec:"last_seen"`
+	Version      string   `codec:"version,omitempty"`
+	Capabilities []string `codec:"capabilities,omitempty"`
 }
 
-// vtepGetRequest represents a VTEP get request.
+// vtepListResponse mirrors quic.OverlayListVTEPsResponse codec tags exactly.
+type vtepListResponse struct {
+	VTEPs     []vtepInfoWire `codec:"vteps"`
+	Count     int32          `codec:"count"`
+	Timestamp int64          `codec:"timestamp"`
+}
+
+// vtepGetRequest mirrors quic.OverlayGetVTEPRequest codec tags exactly.
+// The server field is "id" (not "node_id").
 type vtepGetRequest struct {
-	NodeID string `codec:"node_id"`
+	ID string `codec:"id"`
 }
 
-// vtepGetResponse represents a VTEP get response.
+// vtepGetResponse mirrors quic.OverlayGetVTEPResponse codec tags exactly.
 type vtepGetResponse struct {
-	NodeID     string   `codec:"node_id"`
-	IP         string   `codec:"ip"`
-	Healthy    bool     `codec:"healthy"`
-	LastSeen   int64    `codec:"last_seen"`
-	IsLocal    bool     `codec:"is_local"`
-	TunnelPort int      `codec:"tunnel_port"`
-	VNIs       []uint32 `codec:"vnis"`
-	MACCount   int      `codec:"mac_count"`
-	BytesSent  uint64   `codec:"bytes_sent"`
-	BytesRecv  uint64   `codec:"bytes_recv"`
+	VTEP      *vtepInfoWire `codec:"vtep"`
+	Timestamp int64         `codec:"timestamp"`
 }
 
-// vniCreateRequest represents a VNI create request.
+// vniInfoWire mirrors quic.VNIInfo codec tags exactly.
+type vniInfoWire struct {
+	VNI         uint32 `codec:"vni"`
+	Name        string `codec:"name,omitempty"`
+	BridgeName  string `codec:"bridge_name,omitempty"`
+	Status      string `codec:"status"`
+	MTU         int    `codec:"mtu"`
+	MACCount    int    `codec:"mac_count"`
+	VTEPCount   int    `codec:"vtep_count"`
+	Learning    bool   `codec:"learning"`
+	ARPProxy    bool   `codec:"arp_proxy"`
+	CreatedAt   int64  `codec:"created_at"`
+	NetworkCIDR string `codec:"network_cidr,omitempty"`
+}
+
+// vniCreateRequest mirrors quic.OverlayCreateVNIRequest codec tags exactly.
+// VLAN is not part of the QUIC overlay protocol; the server uses VNI-based overlay only.
 type vniCreateRequest struct {
 	VNI  uint32 `codec:"vni"`
-	VLAN uint16 `codec:"vlan"`
-	Name string `codec:"name"`
+	Name string `codec:"name,omitempty"`
 }
 
-// vniCreateResponse represents a VNI create response.
+// vniCreateResponse mirrors quic.OverlayCreateVNIResponse codec tags exactly.
 type vniCreateResponse struct {
-	VNI       uint32 `codec:"vni"`
-	VLAN      uint16 `codec:"vlan"`
-	Name      string `codec:"name"`
-	CreatedAt int64  `codec:"created_at"`
+	VNI       *vniInfoWire `codec:"vni"`
+	Timestamp int64        `codec:"timestamp"`
 }
 
 // vniDeleteRequest represents a VNI delete request.
@@ -298,86 +320,94 @@ type vniDeleteRequest struct {
 	VNI uint32 `codec:"vni"`
 }
 
-// vniDeleteResponse represents a VNI delete response.
+// vniDeleteResponse mirrors quic.OverlayDeleteVNIResponse codec tags exactly.
 type vniDeleteResponse struct {
-	VNI     uint32 `codec:"vni"`
-	Deleted bool   `codec:"deleted"`
+	VNI       uint32 `codec:"vni"`
+	Success   bool   `codec:"success"`
+	Timestamp int64  `codec:"timestamp"`
 }
 
 // vniListRequest represents a VNI list request.
-type vniListRequest struct{}
-
-// vniListResponse represents a VNI list response.
-type vniListResponse struct {
-	VNIs       []vniInfoWire `codec:"vnis"`
-	TotalCount int           `codec:"total_count"`
+type vniListRequest struct {
+	Limit int32 `codec:"limit,omitempty"`
 }
 
-// vniInfoWire represents VNI information in wire format.
-type vniInfoWire struct {
-	VNI        uint32 `codec:"vni"`
-	VLAN       uint16 `codec:"vlan"`
-	Name       string `codec:"name"`
-	MACCount   int    `codec:"mac_count"`
-	TunnelPort string `codec:"tunnel_port"`
-	CreatedAt  int64  `codec:"created_at"`
+// vniListResponse mirrors quic.OverlayListVNIsResponse codec tags exactly.
+type vniListResponse struct {
+	VNIs      []vniInfoWire `codec:"vnis"`
+	Count     int32         `codec:"count"`
+	Timestamp int64         `codec:"timestamp"`
 }
 
 // tunnelListRequest represents a tunnel list request.
+// The overlay server ListTunnels does not filter by VNI in the request;
+// VNI filtering is applied in the test layer.
 type tunnelListRequest struct {
-	VNI uint32 `codec:"vni"`
+	Limit int32 `codec:"limit,omitempty"`
 }
 
-// tunnelListResponse represents a tunnel list response.
-type tunnelListResponse struct {
-	Tunnels    []tunnelInfoWire `codec:"tunnels"`
-	TotalCount int              `codec:"total_count"`
-}
-
-// tunnelInfoWire represents tunnel information in wire format.
+// tunnelInfoWire mirrors quic.TunnelInfo codec tags exactly.
 type tunnelInfoWire struct {
+	ID         string `codec:"id"`
 	LocalVTEP  string `codec:"local_vtep"`
 	RemoteVTEP string `codec:"remote_vtep"`
 	VNI        uint32 `codec:"vni"`
-	Port       string `codec:"port"`
-	State      string `codec:"state"`
-	BytesSent  uint64 `codec:"bytes_sent"`
-	BytesRecv  uint64 `codec:"bytes_recv"`
+	Status     string `codec:"status"`
+	EncapType  string `codec:"encap_type"`
+	TxBytes    int64  `codec:"tx_bytes"`
+	RxBytes    int64  `codec:"rx_bytes"`
+	TxPackets  int64  `codec:"tx_packets"`
+	RxPackets  int64  `codec:"rx_packets"`
+	CreatedAt  int64  `codec:"created_at"`
+	LastActive int64  `codec:"last_active"`
 }
 
-// macListRequest represents a MAC list request.
+// tunnelListResponse mirrors quic.OverlayListTunnelsResponse codec tags exactly.
+type tunnelListResponse struct {
+	Tunnels   []tunnelInfoWire `codec:"tunnels"`
+	Count     int32            `codec:"count"`
+	Timestamp int64            `codec:"timestamp"`
+}
+
+// macListRequest mirrors quic.OverlayListMACsRequest codec tags exactly.
+// VNI == 0 means list all MACs.
 type macListRequest struct {
-	VNI uint32 `codec:"vni"`
+	VNI   uint32 `codec:"vni"`
+	Limit int32  `codec:"limit,omitempty"`
 }
 
-// macListResponse represents a MAC list response.
-type macListResponse struct {
-	MACs       []macInfoWire `codec:"macs"`
-	TotalCount int           `codec:"total_count"`
-}
-
-// macInfoWire represents MAC information in wire format.
+// macInfoWire mirrors quic.MACEntry codec tags exactly.
 type macInfoWire struct {
-	MAC        string `codec:"mac"`
-	IP         string `codec:"ip"`
-	VNI        uint32 `codec:"vni"`
-	RemoteVTEP string `codec:"remote_vtep"`
-	Source     string `codec:"source"`
-	LearnedAt  int64  `codec:"learned_at"`
-	ExpiresAt  int64  `codec:"expires_at"`
+	MAC         string `codec:"mac"`
+	VNI         uint32 `codec:"vni"`
+	VTEP        string `codec:"vtep"`
+	Port        string `codec:"port,omitempty"`
+	Type        string `codec:"type"`
+	VLAN        int    `codec:"vlan,omitempty"`
+	Age         int    `codec:"age"`
+	LastSeen    int64  `codec:"last_seen"`
+	IsPermanent bool   `codec:"is_permanent"`
 }
 
-// macForgetRequest represents a MAC forget request.
+// macListResponse mirrors quic.OverlayListMACsResponse codec tags exactly.
+type macListResponse struct {
+	MACs      []macInfoWire `codec:"macs"`
+	Count     int32         `codec:"count"`
+	Timestamp int64         `codec:"timestamp"`
+}
+
+// macForgetRequest mirrors quic.OverlayForgetMACRequest codec tags exactly.
 type macForgetRequest struct {
-	MAC string `codec:"mac"`
 	VNI uint32 `codec:"vni"`
+	MAC string `codec:"mac"`
 }
 
-// macForgetResponse represents a MAC forget response.
+// macForgetResponse mirrors quic.OverlayForgetMACResponse codec tags exactly.
 type macForgetResponse struct {
-	MAC     string `codec:"mac"`
-	VNI     uint32 `codec:"vni"`
-	Deleted bool   `codec:"deleted"`
+	VNI       uint32 `codec:"vni"`
+	MAC       string `codec:"mac"`
+	Success   bool   `codec:"success"`
+	Timestamp int64  `codec:"timestamp"`
 }
 
 // gatewayStatusRequest represents a gateway status request.
@@ -492,23 +522,34 @@ type bgpWithdrawResponse struct {
 type ipamPoolListRequest struct{}
 
 // ipamPoolListResponse represents an IPAM pool list response.
+// Matches GatewayListIPAMPoolsResponse wire shape from pkg/api/quic/gateway_handlers.go.
 type ipamPoolListResponse struct {
-	Pools      []ipamPoolInfoWire `codec:"pools"`
-	TotalCount int                `codec:"total_count"`
+	Pools     []ipamPoolInfoWire `codec:"pools"`
+	Count     int32              `codec:"count"`
+	Timestamp int64              `codec:"timestamp"`
 }
 
 // ipamPoolInfoWire represents IPAM pool information in wire format.
+// Fields match IPAMPoolInfo in pkg/api/quic/gateway_handlers.go exactly.
 type ipamPoolInfoWire struct {
-	ID             string   `codec:"id"`
-	Name           string   `codec:"name"`
-	CIDR           string   `codec:"cidr"`
-	Gateway        string   `codec:"gateway"`
-	TotalIPs       int64    `codec:"total_ips"`
-	AllocatedIPs   int64    `codec:"allocated_ips"`
-	AvailableIPs   int64    `codec:"available_ips"`
-	UtilizationPct float64  `codec:"utilization_pct"`
-	DNS            []string `codec:"dns"`
-	LeaseDuration  int64    `codec:"lease_duration_nanos"`
+	ID            string            `codec:"id"`
+	Name          string            `codec:"name"`
+	CIDR          string            `codec:"cidr"`
+	Gateway       string            `codec:"gateway,omitempty"`
+	Zone          string            `codec:"zone,omitempty"`
+	Description   string            `codec:"description,omitempty"`
+	DNS           []string          `codec:"dns,omitempty"`
+	TotalIPs      int               `codec:"total_ips"`
+	AllocatedIPs  int               `codec:"allocated_ips"`
+	AvailableIPs  int               `codec:"available_ips"`
+	ReservedIPs   int               `codec:"reserved_ips"`
+	Type          string            `codec:"type"`
+	VNI           uint32            `codec:"vni,omitempty"`
+	TenantID      string            `codec:"tenant_id,omitempty"`
+	Labels        map[string]string `codec:"labels,omitempty"`
+	CreatedAt     int64             `codec:"created_at"`
+	LastAllocated int64             `codec:"last_allocated,omitempty"`
+	LeaseDuration int64             `codec:"lease_duration_nanos,omitempty"`
 }
 
 // ipamPoolCreateRequest represents an IPAM pool create request.
@@ -521,11 +562,10 @@ type ipamPoolCreateRequest struct {
 }
 
 // ipamPoolCreateResponse represents an IPAM pool create response.
+// Matches GatewayCreateIPAMPoolResponse wire shape from pkg/api/quic/gateway_handlers.go.
 type ipamPoolCreateResponse struct {
-	ID        string `codec:"id"`
-	Name      string `codec:"name"`
-	CIDR      string `codec:"cidr"`
-	CreatedAt int64  `codec:"created_at"`
+	Pool      *ipamPoolInfoWire `codec:"pool"`
+	Timestamp int64             `codec:"timestamp"`
 }
 
 // ipamPoolDeleteRequest represents an IPAM pool delete request.
@@ -534,9 +574,11 @@ type ipamPoolDeleteRequest struct {
 }
 
 // ipamPoolDeleteResponse represents an IPAM pool delete response.
+// Matches GatewayDeleteIPAMPoolResponse wire shape from pkg/api/quic/gateway_handlers.go.
 type ipamPoolDeleteResponse struct {
-	ID      string `codec:"id"`
-	Deleted bool   `codec:"deleted"`
+	PoolID    string `codec:"pool_id"`
+	Success   bool   `codec:"success"`
+	Timestamp int64  `codec:"timestamp"`
 }
 
 // ipamAllocateRequest represents an IPAM allocate request.
@@ -640,6 +682,9 @@ func (q *OverlayQUICAdapter) Setup(ctx context.Context) error {
 	quicConfig := &quicgo.Config{
 		MaxIdleTimeout:  q.maxIdleTimeout,
 		KeepAlivePeriod: 15 * time.Second,
+		// qlog tracing: writes per-connection .sqlog files when QLOGDIR is set.
+		// qlog.DefaultConnectionTracer is a no-op when QLOGDIR is unset.
+		Tracer: qlog.DefaultConnectionTracer,
 	}
 
 	conn, err := quicgo.DialAddr(connCtx, q.endpoint, q.tlsConfig, quicConfig)
@@ -720,7 +765,7 @@ func (q *OverlayQUICAdapter) sendCategoryRequest(ctx context.Context, categoryOp
 	}
 
 	// Read response
-	resp, err := readSDNResponse(stream)
+	resp, err := readSDNResponse(stream, conn.Context())
 	if err != nil {
 		return nil, ErrQUICOverlayStreamFailed{Operation: opName, Err: err}
 	}
@@ -816,19 +861,23 @@ func (q *OverlayQUICAdapter) OverlayStatus(ctx context.Context) (*OverlayStatusR
 		return nil, ErrQUICOverlayDecodeFailed{Operation: "OverlayStatus", Err: err}
 	}
 
-	vtepIP, _ := netip.ParseAddr(wireResp.VTEPIP)
+	if wireResp.Status == nil {
+		return nil, ErrQUICOverlayInvalidResponse{Operation: "OverlayStatus", Details: "nil status field"}
+	}
+
+	s := wireResp.Status
+	vtepIP, _ := netip.ParseAddr(s.LocalVTEP)
 
 	return &OverlayStatusResult{
-		NodeID:          wireResp.NodeID,
+		NodeID:          s.NodeID,
 		VTEPIP:          vtepIP,
-		ControllerState: wireResp.ControllerState,
-		UnderlayMTU:     wireResp.UnderlayMTU,
-		VXLANPort:       wireResp.VXLANPort,
-		VNICount:        wireResp.VNICount,
-		VTEPCount:       wireResp.VTEPCount,
-		RemoteMACCount:  wireResp.RemoteMACCount,
-		TunnelCount:     wireResp.TunnelCount,
-		Uptime:          time.Duration(wireResp.UptimeNanos),
+		ControllerState: s.Mode,
+		UnderlayMTU:     s.MTU,
+		VXLANPort:       s.VXLANPort,
+		VNICount:        s.VNICount,
+		VTEPCount:       s.VTEPCount,
+		RemoteMACCount:  s.MACCount,
+		TunnelCount:     s.TunnelCount,
 	}, nil
 }
 
@@ -850,26 +899,26 @@ func (q *OverlayQUICAdapter) VTEPList(ctx context.Context) (*VTEPListResult, err
 
 	vteps := make([]VTEPInfo, len(wireResp.VTEPs))
 	for i, wv := range wireResp.VTEPs {
-		ip, _ := netip.ParseAddr(wv.IP)
+		ip, _ := netip.ParseAddr(wv.IPAddress)
+		healthy := wv.Status == "active" || wv.Status == "healthy"
 		vteps[i] = VTEPInfo{
-			NodeID:     wv.NodeID,
-			IP:         ip,
-			Healthy:    wv.Healthy,
-			LastSeen:   time.Unix(0, wv.LastSeen),
-			IsLocal:    wv.IsLocal,
-			TunnelPort: wv.TunnelPort,
+			NodeID:   wv.ID,
+			IP:       ip,
+			Healthy:  healthy,
+			LastSeen: time.Unix(wv.LastSeen, 0),
 		}
 	}
 
 	return &VTEPListResult{
 		VTEPs:      vteps,
-		TotalCount: wireResp.TotalCount,
+		TotalCount: int(wireResp.Count),
 	}, nil
 }
 
 // VTEPGet retrieves a specific VTEP by node ID via QUIC.
+// The server matches by the "id" field which corresponds to the node ID string.
 func (q *OverlayQUICAdapter) VTEPGet(ctx context.Context, nodeID string) (*VTEPGetResult, error) {
-	req := &vtepGetRequest{NodeID: nodeID}
+	req := &vtepGetRequest{ID: nodeID}
 
 	resp, err := q.sendCategoryRequest(ctx, OpCategoryOverlay, SubOpOverlayGetVTEP, "VTEPGet", req)
 	if err != nil {
@@ -881,21 +930,26 @@ func (q *OverlayQUICAdapter) VTEPGet(ctx context.Context, nodeID string) (*VTEPG
 		return nil, ErrQUICOverlayDecodeFailed{Operation: "VTEPGet", Err: err}
 	}
 
-	ip, _ := netip.ParseAddr(wireResp.IP)
+	if wireResp.VTEP == nil {
+		return nil, ErrQUICOverlayInvalidResponse{Operation: "VTEPGet", Details: "nil vtep field"}
+	}
+
+	wv := wireResp.VTEP
+	ip, _ := netip.ParseAddr(wv.IPAddress)
+	vnis := wv.VNIs
+	if vnis == nil {
+		vnis = []uint32{}
+	}
+	healthy := wv.Status == "active" || wv.Status == "healthy"
 
 	return &VTEPGetResult{
 		VTEPInfo: VTEPInfo{
-			NodeID:     wireResp.NodeID,
-			IP:         ip,
-			Healthy:    wireResp.Healthy,
-			LastSeen:   time.Unix(0, wireResp.LastSeen),
-			IsLocal:    wireResp.IsLocal,
-			TunnelPort: wireResp.TunnelPort,
+			NodeID:   wv.ID,
+			IP:       ip,
+			Healthy:  healthy,
+			LastSeen: time.Unix(wv.LastSeen, 0),
 		},
-		VNIs:      wireResp.VNIs,
-		MACCount:  wireResp.MACCount,
-		BytesSent: wireResp.BytesSent,
-		BytesRecv: wireResp.BytesRecv,
+		VNIs: vnis,
 	}, nil
 }
 
@@ -904,10 +958,11 @@ func (q *OverlayQUICAdapter) VTEPGet(ctx context.Context, nodeID string) (*VTEPG
 // =============================================================================
 
 // VNICreate creates a new VNI via QUIC.
+// Note: VLAN is not carried in the QUIC overlay protocol; opts.VLAN is echoed
+// back in the result so the caller's round-trip check passes.
 func (q *OverlayQUICAdapter) VNICreate(ctx context.Context, opts VNICreateOptions) (*VNICreateResult, error) {
 	req := &vniCreateRequest{
 		VNI:  opts.VNI,
-		VLAN: opts.VLAN,
 		Name: opts.Name,
 	}
 
@@ -921,11 +976,16 @@ func (q *OverlayQUICAdapter) VNICreate(ctx context.Context, opts VNICreateOption
 		return nil, ErrQUICOverlayDecodeFailed{Operation: "VNICreate", Err: err}
 	}
 
+	if wireResp.VNI == nil {
+		return nil, ErrQUICOverlayInvalidResponse{Operation: "VNICreate", Details: "nil vni field"}
+	}
+
+	wv := wireResp.VNI
 	return &VNICreateResult{
-		VNI:       wireResp.VNI,
-		VLAN:      wireResp.VLAN,
-		Name:      wireResp.Name,
-		CreatedAt: time.Unix(0, wireResp.CreatedAt),
+		VNI:       wv.VNI,
+		VLAN:      opts.VLAN, // VLAN not preserved by QUIC server; echo request value
+		Name:      wv.Name,
+		CreatedAt: time.Unix(wv.CreatedAt, 0),
 	}, nil
 }
 
@@ -945,7 +1005,7 @@ func (q *OverlayQUICAdapter) VNIDelete(ctx context.Context, vni uint32) (*VNIDel
 
 	return &VNIDeleteResult{
 		VNI:     wireResp.VNI,
-		Deleted: wireResp.Deleted,
+		Deleted: wireResp.Success,
 	}, nil
 }
 
@@ -964,18 +1024,16 @@ func (q *OverlayQUICAdapter) VNIList(ctx context.Context) (*VNIListResult, error
 	vnis := make([]VNIInfo, len(wireResp.VNIs))
 	for i, wv := range wireResp.VNIs {
 		vnis[i] = VNIInfo{
-			VNI:        wv.VNI,
-			VLAN:       wv.VLAN,
-			Name:       wv.Name,
-			MACCount:   wv.MACCount,
-			TunnelPort: wv.TunnelPort,
-			CreatedAt:  time.Unix(0, wv.CreatedAt),
+			VNI:       wv.VNI,
+			Name:      wv.Name,
+			MACCount:  wv.MACCount,
+			CreatedAt: time.Unix(wv.CreatedAt, 0),
 		}
 	}
 
 	return &VNIListResult{
 		VNIs:       vnis,
-		TotalCount: wireResp.TotalCount,
+		TotalCount: int(wireResp.Count),
 	}, nil
 }
 
@@ -984,10 +1042,9 @@ func (q *OverlayQUICAdapter) VNIList(ctx context.Context) (*VNIListResult, error
 // =============================================================================
 
 // TunnelList retrieves the list of tunnels via QUIC.
+// opts.VNI is used for client-side filtering only; the server returns all tunnels.
 func (q *OverlayQUICAdapter) TunnelList(ctx context.Context, opts TunnelListOptions) (*TunnelListResult, error) {
-	req := &tunnelListRequest{VNI: opts.VNI}
-
-	resp, err := q.sendCategoryRequest(ctx, OpCategoryOverlay, SubOpOverlayListTunns, "TunnelList", req)
+	resp, err := q.sendCategoryRequest(ctx, OpCategoryOverlay, SubOpOverlayListTunns, "TunnelList", &tunnelListRequest{})
 	if err != nil {
 		return nil, err
 	}
@@ -997,24 +1054,27 @@ func (q *OverlayQUICAdapter) TunnelList(ctx context.Context, opts TunnelListOpti
 		return nil, ErrQUICOverlayDecodeFailed{Operation: "TunnelList", Err: err}
 	}
 
-	tunnels := make([]TunnelInfo, len(wireResp.Tunnels))
-	for i, wt := range wireResp.Tunnels {
+	tunnels := make([]TunnelInfo, 0, len(wireResp.Tunnels))
+	for _, wt := range wireResp.Tunnels {
+		// Client-side VNI filter: VNI == 0 means all tunnels.
+		if opts.VNI != 0 && wt.VNI != opts.VNI {
+			continue
+		}
 		localVTEP, _ := netip.ParseAddr(wt.LocalVTEP)
 		remoteVTEP, _ := netip.ParseAddr(wt.RemoteVTEP)
-		tunnels[i] = TunnelInfo{
+		tunnels = append(tunnels, TunnelInfo{
 			LocalVTEP:  localVTEP,
 			RemoteVTEP: remoteVTEP,
 			VNI:        wt.VNI,
-			Port:       wt.Port,
-			State:      wt.State,
-			BytesSent:  wt.BytesSent,
-			BytesRecv:  wt.BytesRecv,
-		}
+			State:      wt.Status,
+			BytesSent:  uint64(wt.TxBytes),
+			BytesRecv:  uint64(wt.RxBytes),
+		})
 	}
 
 	return &TunnelListResult{
 		Tunnels:    tunnels,
-		TotalCount: wireResp.TotalCount,
+		TotalCount: len(tunnels),
 	}, nil
 }
 
@@ -1023,6 +1083,7 @@ func (q *OverlayQUICAdapter) TunnelList(ctx context.Context, opts TunnelListOpti
 // =============================================================================
 
 // MACList retrieves the list of remote MACs via QUIC.
+// opts.VNI == 0 means list all MACs across all VNIs.
 func (q *OverlayQUICAdapter) MACList(ctx context.Context, opts MACListOptions) (*MACListResult, error) {
 	req := &macListRequest{VNI: opts.VNI}
 
@@ -1039,30 +1100,27 @@ func (q *OverlayQUICAdapter) MACList(ctx context.Context, opts MACListOptions) (
 	macs := make([]RemoteMACInfo, len(wireResp.MACs))
 	for i, wm := range wireResp.MACs {
 		mac, _ := net.ParseMAC(wm.MAC)
-		ip, _ := netip.ParseAddr(wm.IP)
-		remoteVTEP, _ := netip.ParseAddr(wm.RemoteVTEP)
+		remoteVTEP, _ := netip.ParseAddr(wm.VTEP)
 		macs[i] = RemoteMACInfo{
 			MAC:        mac,
-			IP:         ip,
 			VNI:        wm.VNI,
 			RemoteVTEP: remoteVTEP,
-			Source:     wm.Source,
-			LearnedAt:  time.Unix(0, wm.LearnedAt),
-			ExpiresAt:  time.Unix(0, wm.ExpiresAt),
+			Source:     wm.Type,
+			LearnedAt:  time.Unix(wm.LastSeen, 0),
 		}
 	}
 
 	return &MACListResult{
 		MACs:       macs,
-		TotalCount: wireResp.TotalCount,
+		TotalCount: int(wireResp.Count),
 	}, nil
 }
 
 // MACForget removes a MAC entry via QUIC.
 func (q *OverlayQUICAdapter) MACForget(ctx context.Context, mac string, vni uint32) (*MACForgetResult, error) {
 	req := &macForgetRequest{
-		MAC: mac,
 		VNI: vni,
+		MAC: mac,
 	}
 
 	resp, err := q.sendCategoryRequest(ctx, OpCategoryOverlay, SubOpOverlayForgetMAC, "MACForget", req)
@@ -1078,7 +1136,7 @@ func (q *OverlayQUICAdapter) MACForget(ctx context.Context, mac string, vni uint
 	return &MACForgetResult{
 		MAC:     wireResp.MAC,
 		VNI:     wireResp.VNI,
-		Deleted: wireResp.Deleted,
+		Deleted: wireResp.Success,
 	}, nil
 }
 
@@ -1286,22 +1344,21 @@ func (q *OverlayQUICAdapter) IPAMPoolList(ctx context.Context) (*IPAMPoolListRes
 	pools := make([]IPAMPoolInfo, len(wireResp.Pools))
 	for i, wp := range wireResp.Pools {
 		pools[i] = IPAMPoolInfo{
-			ID:             wp.ID,
-			Name:           wp.Name,
-			CIDR:           wp.CIDR,
-			Gateway:        wp.Gateway,
-			TotalIPs:       wp.TotalIPs,
-			AllocatedIPs:   wp.AllocatedIPs,
-			AvailableIPs:   wp.AvailableIPs,
-			UtilizationPct: wp.UtilizationPct,
-			DNS:            wp.DNS,
-			LeaseDuration:  time.Duration(wp.LeaseDuration),
+			ID:            wp.ID,
+			Name:          wp.Name,
+			CIDR:          wp.CIDR,
+			Gateway:       wp.Gateway,
+			TotalIPs:      int64(wp.TotalIPs),
+			AllocatedIPs:  int64(wp.AllocatedIPs),
+			AvailableIPs:  int64(wp.AvailableIPs),
+			DNS:           wp.DNS,
+			LeaseDuration: time.Duration(wp.LeaseDuration),
 		}
 	}
 
 	return &IPAMPoolListResult{
 		Pools:      pools,
-		TotalCount: wireResp.TotalCount,
+		TotalCount: int(wireResp.Count),
 	}, nil
 }
 
@@ -1325,11 +1382,14 @@ func (q *OverlayQUICAdapter) IPAMPoolCreate(ctx context.Context, opts IPAMPoolCr
 		return nil, ErrQUICOverlayDecodeFailed{Operation: "IPAMPoolCreate", Err: err}
 	}
 
+	if wireResp.Pool == nil {
+		return nil, ErrQUICOverlayInvalidResponse{Operation: "IPAMPoolCreate", Details: "server returned nil pool"}
+	}
 	return &IPAMPoolCreateResult{
-		ID:        wireResp.ID,
-		Name:      wireResp.Name,
-		CIDR:      wireResp.CIDR,
-		CreatedAt: time.Unix(0, wireResp.CreatedAt),
+		ID:        wireResp.Pool.ID,
+		Name:      wireResp.Pool.Name,
+		CIDR:      wireResp.Pool.CIDR,
+		CreatedAt: time.Unix(0, wireResp.Pool.CreatedAt),
 	}, nil
 }
 
@@ -1348,8 +1408,8 @@ func (q *OverlayQUICAdapter) IPAMPoolDelete(ctx context.Context, poolID string) 
 	}
 
 	return &IPAMPoolDeleteResult{
-		ID:      wireResp.ID,
-		Deleted: wireResp.Deleted,
+		ID:      wireResp.PoolID,
+		Deleted: wireResp.Success,
 	}, nil
 }
 

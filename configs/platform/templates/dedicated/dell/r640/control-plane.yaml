@@ -385,7 +385,7 @@ sdn:
   ipam:
     backend: quicbaas
     pools:
-      - name: production
+      - name: trusted
         cidr: 198.18.0.0/24
         gateway: 198.18.0.1
         dns:
@@ -446,26 +446,33 @@ sdn:
     enabled: true
     interface: trusted0
   networks:
-    production:
+    - name: trusted
       vlan: 200
-      pool: production
-    provisioning:
+      zone: trusted
+      pool: trusted
+    - name: provisioning
       vlan: 201
+      zone: provisioning
       pool: provisioning
-    quarantine:
+    - name: quarantine
       vlan: 202
+      zone: quarantine
       pool: quarantine
-    storage:
+    - name: storage
       vlan: 203
+      zone: storage
       pool: storage
-    dmz-public:
+    - name: dmz-public
       vlan: 210
+      zone: public
       pool: dmz-public
-    dmz-private:
+    - name: dmz-private
       vlan: 211
+      zone: trusted
       pool: dmz-private
-    dmz-data:
+    - name: dmz-data
       vlan: 212
+      zone: trusted
       pool: dmz-data
   overlay:
     enabled: false

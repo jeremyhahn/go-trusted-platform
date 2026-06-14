@@ -65,11 +65,31 @@ type Allocator interface {
     GetAllocationsByPool(ctx context.Context, poolID string) ([]*Allocation, error)
     ExpireInactive(ctx context.Context, poolID string) ([]*Allocation, error)
 
+    // Zone Queries
+    ListPoolsByZone(ctx context.Context, zone string) ([]*Pool, error)
+
     // Health and Lifecycle
     Ping(ctx context.Context) error
     Close() error
 }
 ```
+
+### Zone Integration
+
+Pools carry a `Zone string` field that links them to the platform's SDN zone topology. Allocations inherit the zone from their pool at allocation time so callers can determine the security segment without a second lookup.
+
+```
+Pool.Zone ──────────────────────────────────────────────────────► Allocation.Zone
+(set at CreatePool or inherited from network.zone at Validate())    (stamped on Allocate)
+```
+
+Zone values are validated against the resolved zone set (`sdn.Config.ZoneIndex()`) during `sdn.Config.Validate()`:
+
+- A pool with no explicit zone and referenced by a network entry inherits `network.Zone`.
+- A pool with an explicit zone that disagrees with its referencing network returns `ErrNetworkPoolZoneMismatch`.
+- A pool with an explicit zone not in the resolved set returns `ErrPoolZoneUndeclared`.
+
+`ListPoolsByZone(ctx, zone)` filters pools by zone on all three backends. An empty zone string returns all pools.
 
 ### Extended Interfaces
 
@@ -102,6 +122,7 @@ type ReservationAllocator interface {
 |  Pool ID: prod-v4                                                  |
 |  Name: Production IPv4                                             |
 |  CIDR: 10.0.0.0/24                                                 |
+|  Zone: trusted                                                     |
 |                                                                    |
 |  +--------------------------------------------------------------+  |
 |  |                    Address Space                              |  |
@@ -324,6 +345,22 @@ func findFirstSetBit(word uint64) uint64 {
 ```
 
 ## Backend Architecture
+
+### Backend Dispatch
+
+The backend is selected at startup via `sdn.ipam.backend` in the config and resolved through a map-based factory registry:
+
+```go
+var ipamBackendFactory = map[string]func(ctx context.Context, app *App) (ipam.Allocator, error){}
+```
+
+| Config value | Factory registered in | Availability |
+|-------------|----------------------|--------------|
+| `memory` | `sdn_ipam_backends.go` | Always |
+| `quicbaas` | `sdn_ipam_backends.go` | Requires QuicBaaS SDK client |
+| `dht` | `sdn_ipam_backends_p2p.go` | Requires `platform_p2p` build tag |
+
+An unknown backend returns `ErrIPAMBackendUnknown`. Requesting `dht` without the build tag returns `ErrIPAMBackendP2PRequired`. Requesting `quicbaas` without a configured SDK client returns `ErrIPAMBackendUnconfigured`.
 
 ### Memory Backend
 

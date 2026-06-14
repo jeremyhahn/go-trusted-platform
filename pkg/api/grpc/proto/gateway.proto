@@ -20,8 +20,14 @@ service GatewayService {
   rpc WithdrawPrefix(WithdrawPrefixRequest) returns (WithdrawPrefixResponse);
   rpc ListAnnouncedPrefixes(ListAnnouncedPrefixesRequest) returns (ListAnnouncedPrefixesResponse);
 
-  // IPAM operations
+  // IPAM pool CRUD operations
+  rpc CreateIPAMPool(CreateIPAMPoolRequest) returns (CreateIPAMPoolResponse);
+  rpc GetIPAMPool(GetIPAMPoolRequest) returns (GetIPAMPoolResponse);
+  rpc UpdateIPAMPool(UpdateIPAMPoolRequest) returns (UpdateIPAMPoolResponse);
+  rpc DeleteIPAMPool(DeleteIPAMPoolRequest) returns (DeleteIPAMPoolResponse);
   rpc ListIPAMPools(ListIPAMPoolsRequest) returns (ListIPAMPoolsResponse);
+
+  // IPAM allocation operations
   rpc AllocateIP(AllocateIPRequest) returns (AllocateIPResponse);
   rpc ReleaseIP(ReleaseIPRequest) returns (ReleaseIPResponse);
   rpc ListAllocations(ListAllocationsRequest) returns (ListAllocationsResponse);
@@ -75,14 +81,34 @@ message AnnouncedPrefix {
   google.protobuf.Timestamp announced_at = 3;
 }
 
-// IPAM pool
+// IPAMPool represents a managed IP address pool.
 message IPAMPool {
+  // Unique pool identifier.
   string id = 1;
-  string cidr = 2;
-  string gateway = 3;
-  uint32 total = 4;
-  uint32 allocated = 5;
-  uint32 available = 6;
+  // Human-readable display name.
+  string name = 2;
+  // CIDR range for the pool (immutable after creation).
+  string cidr = 3;
+  // Optional gateway address within the CIDR.
+  string gateway = 4;
+  // Trust/exposure zone for this pool (e.g. "trusted", "provisioning").
+  string zone = 5;
+  // Optional description of the pool's purpose.
+  string description = 6;
+  // Total usable IP count.
+  uint64 total = 7;
+  // Currently allocated IP count.
+  uint64 allocated = 8;
+  // Currently available IP count.
+  uint64 available = 9;
+  // Default lease duration in nanoseconds (0 = never expire).
+  int64 default_lease_duration_nanos = 10;
+  // Inactivity timeout in nanoseconds before an allocation expires.
+  int64 inactivity_timeout_nanos = 11;
+  // When this pool was created.
+  google.protobuf.Timestamp created_at = 12;
+  // When this pool was last modified.
+  google.protobuf.Timestamp updated_at = 13;
 }
 
 // IP allocation
@@ -95,7 +121,8 @@ message IPAllocation {
   google.protobuf.Timestamp expires_at = 6;
 }
 
-// Request/Response messages
+// Request/Response messages — Gateway
+
 message GetGatewayStatusRequest {}
 message GetGatewayStatusResponse {
   GatewayStatus status = 1;
@@ -139,10 +166,88 @@ message ListAnnouncedPrefixesResponse {
   repeated AnnouncedPrefix prefixes = 1;
 }
 
-message ListIPAMPoolsRequest {}
+// Request/Response messages — IPAM Pool CRUD
+
+// CreateIPAMPoolRequest creates a new IP address pool.
+message CreateIPAMPoolRequest {
+  // Pool ID; generated server-side when empty.
+  string id = 1;
+  // Human-readable display name (required).
+  string name = 2;
+  // CIDR range (required; immutable after creation).
+  string cidr = 3;
+  // Optional gateway address within the CIDR.
+  string gateway = 4;
+  // Optional zone for the pool (e.g. "trusted", "provisioning").
+  string zone = 5;
+  // Optional description.
+  string description = 6;
+  // Default lease duration in nanoseconds (0 = never expire).
+  int64 default_lease_duration_nanos = 7;
+  // Inactivity timeout in nanoseconds.
+  int64 inactivity_timeout_nanos = 8;
+}
+
+message CreateIPAMPoolResponse {
+  Status status = 1;
+  IPAMPool pool = 2;
+}
+
+// GetIPAMPoolRequest retrieves a pool by ID.
+message GetIPAMPoolRequest {
+  string id = 1;
+}
+
+message GetIPAMPoolResponse {
+  IPAMPool pool = 1;
+}
+
+// UpdateIPAMPoolRequest updates mutable pool fields.
+// CIDR is immutable and will be rejected if changed.
+message UpdateIPAMPoolRequest {
+  string id = 1;
+  // Updated display name.
+  string name = 2;
+  // Updated gateway address.
+  string gateway = 3;
+  // Updated zone.
+  string zone = 4;
+  // Updated description.
+  string description = 5;
+  // Updated default lease duration in nanoseconds.
+  int64 default_lease_duration_nanos = 6;
+  // Updated inactivity timeout in nanoseconds.
+  int64 inactivity_timeout_nanos = 7;
+}
+
+message UpdateIPAMPoolResponse {
+  Status status = 1;
+  IPAMPool pool = 2;
+}
+
+// DeleteIPAMPoolRequest deletes a pool by ID.
+// Returns NOT_FOUND when the pool does not exist (idempotent on repeat calls
+// after the pool is gone is acceptable — callers should treat NOT_FOUND as
+// success on a delete).  Returns FAILED_PRECONDITION when active allocations
+// exist.
+message DeleteIPAMPoolRequest {
+  string id = 1;
+}
+
+message DeleteIPAMPoolResponse {
+  Status status = 1;
+}
+
+// ListIPAMPoolsRequest lists pools with optional zone filter.
+message ListIPAMPoolsRequest {
+  // Optional zone filter; empty returns all pools.
+  string zone = 1;
+}
 message ListIPAMPoolsResponse {
   repeated IPAMPool pools = 1;
 }
+
+// Request/Response messages — IPAM Allocations
 
 message AllocateIPRequest {
   string pool_id = 1;

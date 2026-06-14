@@ -43,26 +43,26 @@ var protoCertStatusToStatus = map[platformv1.CertificateStatus]CertificateStatus
 }
 
 var protoRevocationReasonToReason = map[platformv1.RevocationReason]RevocationReason{
-	platformv1.RevocationReason_REVOCATION_REASON_UNSPECIFIED:          RevocationReasonUnspecified,
-	platformv1.RevocationReason_REVOCATION_REASON_KEY_COMPROMISE:       RevocationReasonKeyCompromise,
-	platformv1.RevocationReason_REVOCATION_REASON_CA_COMPROMISE:        RevocationReasonCACompromise,
-	platformv1.RevocationReason_REVOCATION_REASON_AFFILIATION_CHANGED:  RevocationReasonAffiliationChanged,
-	platformv1.RevocationReason_REVOCATION_REASON_SUPERSEDED:           RevocationReasonSuperseded,
+	platformv1.RevocationReason_REVOCATION_REASON_UNSPECIFIED:            RevocationReasonUnspecified,
+	platformv1.RevocationReason_REVOCATION_REASON_KEY_COMPROMISE:         RevocationReasonKeyCompromise,
+	platformv1.RevocationReason_REVOCATION_REASON_CA_COMPROMISE:          RevocationReasonCACompromise,
+	platformv1.RevocationReason_REVOCATION_REASON_AFFILIATION_CHANGED:    RevocationReasonAffiliationChanged,
+	platformv1.RevocationReason_REVOCATION_REASON_SUPERSEDED:             RevocationReasonSuperseded,
 	platformv1.RevocationReason_REVOCATION_REASON_CESSATION_OF_OPERATION: RevocationReasonCessationOfOperation,
-	platformv1.RevocationReason_REVOCATION_REASON_CERTIFICATE_HOLD:     RevocationReasonCertificateHold,
-	platformv1.RevocationReason_REVOCATION_REASON_PRIVILEGE_WITHDRAWN:  RevocationReasonPrivilegeWithdrawn,
+	platformv1.RevocationReason_REVOCATION_REASON_CERTIFICATE_HOLD:       RevocationReasonCertificateHold,
+	platformv1.RevocationReason_REVOCATION_REASON_PRIVILEGE_WITHDRAWN:    RevocationReasonPrivilegeWithdrawn,
 }
 
 // Domain-to-proto enum maps
 
 var algorithmToProto = map[KeyAlgorithm]platformv1.KeyAlgorithm{
 	KeyAlgorithmUnspecified: platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED,
-	KeyAlgorithmRSA2048:    platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
-	KeyAlgorithmRSA3072:    platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072,
-	KeyAlgorithmRSA4096:    platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096,
-	KeyAlgorithmECDSAP256:  platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
-	KeyAlgorithmECDSAP384:  platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384,
-	KeyAlgorithmEd25519:    platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519,
+	KeyAlgorithmRSA2048:     platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
+	KeyAlgorithmRSA3072:     platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072,
+	KeyAlgorithmRSA4096:     platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096,
+	KeyAlgorithmECDSAP256:   platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
+	KeyAlgorithmECDSAP384:   platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384,
+	KeyAlgorithmEd25519:     platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519,
 }
 
 var statusToProto = map[CertificateStatus]platformv1.CertificateStatus{
@@ -109,20 +109,20 @@ var StringToCertificateStatus = map[string]CertificateStatus{
 
 // StringToRevocationReason maps user-facing reason strings to domain RevocationReason.
 var StringToRevocationReason = map[string]RevocationReason{
-	"unspecified":          RevocationReasonUnspecified,
-	"key-compromise":       RevocationReasonKeyCompromise,
-	"keycompromise":        RevocationReasonKeyCompromise,
-	"ca-compromise":        RevocationReasonCACompromise,
-	"cacompromise":         RevocationReasonCACompromise,
-	"affiliation-changed":  RevocationReasonAffiliationChanged,
-	"affiliationchanged":   RevocationReasonAffiliationChanged,
-	"superseded":           RevocationReasonSuperseded,
-	"cessation":            RevocationReasonCessationOfOperation,
+	"unspecified":            RevocationReasonUnspecified,
+	"key-compromise":         RevocationReasonKeyCompromise,
+	"keycompromise":          RevocationReasonKeyCompromise,
+	"ca-compromise":          RevocationReasonCACompromise,
+	"cacompromise":           RevocationReasonCACompromise,
+	"affiliation-changed":    RevocationReasonAffiliationChanged,
+	"affiliationchanged":     RevocationReasonAffiliationChanged,
+	"superseded":             RevocationReasonSuperseded,
+	"cessation":              RevocationReasonCessationOfOperation,
 	"cessation-of-operation": RevocationReasonCessationOfOperation,
-	"hold":                 RevocationReasonCertificateHold,
-	"certificate-hold":     RevocationReasonCertificateHold,
-	"privilege-withdrawn":  RevocationReasonPrivilegeWithdrawn,
-	"privilegewithdrawn":   RevocationReasonPrivilegeWithdrawn,
+	"hold":                   RevocationReasonCertificateHold,
+	"certificate-hold":       RevocationReasonCertificateHold,
+	"privilege-withdrawn":    RevocationReasonPrivilegeWithdrawn,
+	"privilegewithdrawn":     RevocationReasonPrivilegeWithdrawn,
 }
 
 // ParseKeyAlgorithm parses a user-facing algorithm string to a domain KeyAlgorithm.
@@ -214,10 +214,10 @@ func CAInfoFromProto(p *platformv1.CAInfo) *CAInfo {
 		return nil
 	}
 	info := &CAInfo{
-		IsInitialized:    p.IsInitialized,
-		CommonName:       p.CommonName,
-		IsIntermediate:   p.IsIntermediate,
-		DefaultAlgorithm: p.DefaultAlgorithm,
+		IsInitialized:       p.IsInitialized,
+		CommonName:          p.CommonName,
+		IsIntermediate:      p.IsIntermediate,
+		DefaultAlgorithm:    p.DefaultAlgorithm,
 		DefaultValidityDays: p.DefaultValidityDays,
 	}
 	if p.RootCert != nil {
@@ -276,6 +276,13 @@ func CertificateFromProto(p *platformv1.Certificate) *Certificate {
 		cert.Subject = &Subject{
 			CommonName:   p.Subject.CommonName,
 			Organization: p.Subject.Organization,
+		}
+	}
+	if p.Sans != nil {
+		cert.SANs = &SubjectAlternativeNames{
+			DNSNames:       p.Sans.DnsNames,
+			IPAddresses:    p.Sans.IpAddresses,
+			EmailAddresses: p.Sans.EmailAddresses,
 		}
 	}
 	return cert
@@ -350,6 +357,7 @@ func VerifyCertificateResultFromProto(p *platformv1.VerifyCertificateResponse) *
 	}
 	return &VerifyCertificateResult{
 		Valid:    p.Valid,
+		Revoked:  p.Revoked,
 		Chain:    p.Chain,
 		Errors:   p.Errors,
 		Warnings: p.Warnings,

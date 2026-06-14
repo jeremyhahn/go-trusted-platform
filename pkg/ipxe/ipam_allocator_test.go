@@ -69,6 +69,10 @@ func (m *mockIPAMAllocator) ListPools(ctx context.Context) ([]*ipam.Pool, error)
 	return nil, nil
 }
 
+func (m *mockIPAMAllocator) ListPoolsByZone(ctx context.Context, zone string) ([]*ipam.Pool, error) {
+	return nil, nil
+}
+
 func (m *mockIPAMAllocator) UpdatePool(ctx context.Context, pool *ipam.Pool) error {
 	return nil
 }

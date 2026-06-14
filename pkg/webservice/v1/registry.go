@@ -18,6 +18,7 @@ import (
 	"crypto"
 	"crypto/sha256"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
@@ -40,6 +41,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/arp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
@@ -361,7 +363,18 @@ var knownNotFoundErrors = []error{}
 //
 // The CA has no knowledge of DNS - this hook is entirely defined within
 // go-trusted-platform and registered with the CA's generic hook registry.
-func NewDNSRegistrationHook(dnsService DNSRegistrar, internalDomain string, logger *slog.Logger) trustedca.ACMEOrderFinalizeHook {
+//
+// When profiles is non-nil and zone_subdomains is enabled on the DNS service,
+// the hook additionally registers the device hostname under its network zone
+// subdomain (<host>.<networkZone>.<domain>) IN ADDITION to the standard
+// <host>.<domain> record. BMC names are never zone-qualified. This is a
+// reflect-only DNS operation; no SDN policy is affected.
+func NewDNSRegistrationHook(
+	dnsService DNSRegistrar,
+	internalDomain string,
+	logger *slog.Logger,
+	profiles ZoneProfileResolver,
+) trustedca.ACMEOrderFinalizeHook {
 	return func(ctx *trustedca.ACMEOrderFinalizeHookContext) error {
 		logger.Info("DNS registration hook called",
 			slog.Bool("is_tcg_csr", ctx.IsTCGCSR),
@@ -428,6 +441,46 @@ func NewDNSRegistrationHook(dnsService DNSRegistrar, internalDomain string, logg
 				slog.String("serial", ctx.TCGData.ProductSerial))
 		}
 
+		// Zone-qualified registration (reflect-only; additional to standard records).
+		// Requires zone_subdomains to be enabled on the DNS service and a resolvable
+		// device profile with a declared network zone.
+		if profiles != nil {
+			serial := strings.TrimSpace(ctx.TCGData.ProductSerial)
+			if serial != "" {
+				if profile, err := profiles.FindBySerial(ctx.Context, serial); err == nil && profile != nil {
+					var networkZone string
+					if postCfg := profile.GetPostEnrollmentNetworkConfig(); postCfg != nil && postCfg.Zone != "" {
+						networkZone = postCfg.Zone
+					} else if profile.Zone != "" {
+						networkZone = profile.Zone
+					}
+					if networkZone != "" {
+						for _, fqdn := range fqdns {
+							host := extractHostFromFQDN(fqdn, internalDomain)
+							if host == "" || dns.IsBMCName(host) {
+								continue
+							}
+							if err := dnsService.RegisterWithNetworkZone(
+								context.Background(), host, networkZone, ctx.ClientIP,
+							); err != nil {
+								logger.Warn("zone-qualified DNS registration failed",
+									slog.String("host", host),
+									slog.String("networkZone", networkZone),
+									slog.String("ip", ctx.ClientIP),
+									slog.String("error", err.Error()))
+								// Best-effort: do not fail the hook for zone-subdomain errors.
+							} else {
+								logger.Info("Registered zone-qualified DNS record for enrolled device",
+									slog.String("host", host),
+									slog.String("networkZone", networkZone),
+									slog.String("ip", ctx.ClientIP))
+							}
+						}
+					}
+				}
+			}
+		}
+
 		logger.Info("DNS registration hook completed",
 			slog.Int("fqdns_total", len(fqdns)),
 			slog.Int("fqdns_registered", registered),
@@ -439,6 +492,24 @@ func NewDNSRegistrationHook(dnsService DNSRegistrar, internalDomain string, logg
 		// operator gets resolvable names even if one entry collided.
 		return firstErr
 	}
+}
+
+// extractHostFromFQDN extracts the bare host label from an FQDN by stripping
+// the internal domain suffix. Returns "" when the FQDN does not match the domain.
+func extractHostFromFQDN(fqdn, internalDomain string) string {
+	// Normalise: remove trailing dots for comparison.
+	domain := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(internalDomain)), ".")
+	name := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(fqdn)), ".")
+	suffix := "." + domain
+	if !strings.HasSuffix(name, suffix) {
+		return ""
+	}
+	host := strings.TrimSuffix(name, suffix)
+	// Only the first label (no further dots) is a plain host label.
+	if strings.Contains(host, ".") {
+		return ""
+	}
+	return host
 }
 
 // collectFQDNsForInternalZone derives the full set of DNS A-record
@@ -609,6 +680,9 @@ func NewSDNEnrollmentHookAdapter(hook *policy.SDNEnrollmentHook, logger *slog.Lo
 // This interface is satisfied by dns.Service and allows for easier testing with mocks.
 type DNSRegistrar interface {
 	Register(ctx context.Context, fqdn, ip string) (*dnsentities.Zone, error)
+	// RegisterWithNetworkZone registers the host under <host>.<networkZone>.<domain>
+	// when zone_subdomains is enabled. No-op when zone_subdomains is false.
+	RegisterWithNetworkZone(ctx context.Context, host, networkZone, ip string) error
 }
 
 // TLSARegistrar provides TLSA record management for DANE auto-generation.
@@ -817,6 +891,123 @@ func (s *EnrollmentHookProfileService) GetBySerial(_ context.Context, serial str
 	return device.ProfileFromDeviceProfile(pending.Profile, serial), nil
 }
 
+// ZoneProfileResolver resolves a DeviceProfile by device serial number for zone
+// extension injection. This minimal interface is satisfied by DeviceProfileService.
+type ZoneProfileResolver interface {
+	FindBySerial(ctx context.Context, serial string) (*deviceentities.DeviceProfile, error)
+}
+
+// ErrPreSignZoneResolutionFailed is returned when the zone extension pre-sign hook
+// cannot determine the network zone for a certificate and encode_zone_in_cert
+// requires one. Wrapping the underlying cause preserves the errors.Is / errors.As chain.
+type ErrPreSignZoneResolutionFailed struct {
+	Serial string
+	Cause  error
+}
+
+// Error implements the error interface.
+func (e ErrPreSignZoneResolutionFailed) Error() string {
+	return "sdn: zone extension pre-sign hook failed for serial " + e.Serial + ": " + e.Cause.Error()
+}
+
+// Unwrap returns the underlying cause.
+func (e ErrPreSignZoneResolutionFailed) Unwrap() error { return e.Cause }
+
+// ErrDeviceZoneUnresolvable is returned when a TCG-CSR-IDEVID (device)
+// enrollment cannot resolve a network zone from the device profile while
+// encode_zone_in_cert is enabled. Device enrollments fail closed: falling
+// back to the platform zone would issue a device certificate carrying an
+// operator-level zone (management by default), silently granting the device
+// the wrong network placement.
+type ErrDeviceZoneUnresolvable struct {
+	Serial string
+	Reason string
+}
+
+// Error implements the error interface.
+func (e ErrDeviceZoneUnresolvable) Error() string {
+	return "sdn: device zone unresolvable for serial " + e.Serial + " (" + e.Reason + "); refusing to issue zone-encoded device certificate"
+}
+
+// NewZoneExtensionPreSignHook returns an ACME OrderPreSignHook that embeds the
+// OIDTPNetworkZone extension into every DEVICE certificate when
+// sdn.identity.encode_zone_in_cert is true.
+//
+// Zone resolution for TCG-CSR-IDEVID (enroll-01) DEVICE enrollments:
+//  1. DeviceProfile.GetPostEnrollmentNetworkConfig().Zone  (per-profile, per-phase)
+//  2. DeviceProfile.Zone                                   (profile-level default)
+//  3. FAIL CLOSED (ErrDeviceZoneUnresolvable) — a device whose zone cannot be
+//     determined from its profile must not receive a zone-encoded certificate;
+//     falling back to the platform zone would grant it operator-level network
+//     placement (management by default).
+//
+// For standard CSR paths (non-TCG, e.g. service/server certificates) the
+// operator-configured IdentityConfig.ResolvedPlatformZone() is used.
+// Returns nil, nil when encode_zone_in_cert is false or the identity config is nil.
+func NewZoneExtensionPreSignHook(
+	profiles ZoneProfileResolver,
+	identity *sdn.IdentityConfig,
+	logger *slog.Logger,
+) trustedca.ACMEOrderPreSignHook {
+	return func(ctx *trustedca.ACMEOrderPreSignHookContext) ([]pkix.Extension, error) {
+		if identity == nil || !identity.EncodeZoneInCert {
+			return nil, nil
+		}
+
+		var zoneName, serial string
+
+		if ctx.IsTCGCSR {
+			// Device enrollment: the device profile is the only authoritative
+			// zone source. Fail closed on any gap in the resolution chain.
+			if ctx.TCGData == nil {
+				return nil, ErrDeviceZoneUnresolvable{Reason: "no TCG data on enrollment"}
+			}
+			serial = strings.TrimSpace(ctx.TCGData.ProductSerial)
+			if serial == "" {
+				return nil, ErrDeviceZoneUnresolvable{Reason: "empty product serial"}
+			}
+			if profiles == nil {
+				return nil, ErrDeviceZoneUnresolvable{Serial: serial, Reason: "no profile resolver configured"}
+			}
+			profile, err := profiles.FindBySerial(ctx.Context, serial)
+			if err != nil || profile == nil {
+				logger.Warn("zone extension pre-sign: device profile unresolvable, refusing zone-encoded issuance",
+					slog.String("serial", serial))
+				return nil, ErrDeviceZoneUnresolvable{Serial: serial, Reason: "device profile not found"}
+			}
+			if postCfg := profile.GetPostEnrollmentNetworkConfig(); postCfg != nil && postCfg.Zone != "" {
+				zoneName = postCfg.Zone
+			} else if profile.Zone != "" {
+				zoneName = profile.Zone
+			} else {
+				return nil, ErrDeviceZoneUnresolvable{Serial: serial, Reason: "profile declares no zone"}
+			}
+		} else {
+			// Non-device certificate: the operator-configured platform zone
+			// applies (explicit config, not a guess about a device).
+			zoneName = identity.ResolvedPlatformZone()
+		}
+
+		exts, err := sdn.BuildNetworkZoneExtensions(identity, zoneName, serial)
+		if err != nil {
+			logger.Warn("zone extension pre-sign hook failed",
+				slog.String("serial", serial),
+				slog.String("zone", zoneName),
+				slog.String("error", err.Error()))
+			return nil, ErrPreSignZoneResolutionFailed{Serial: serial, Cause: err}
+		}
+
+		if len(exts) > 0 {
+			logger.Debug("zone extension pre-sign hook: embedding network zone",
+				slog.String("serial", serial),
+				slog.String("zone", zoneName),
+				slog.Bool("is_tcg_csr", ctx.IsTCGCSR))
+		}
+
+		return exts, nil
+	}
+}
+
 // RegistryParams holds all dependencies required to construct the handler registry.
 type RegistryParams struct {
 	ACMEServerConfig         *ACMEServerConfig
@@ -847,10 +1038,14 @@ type RegistryParams struct {
 	OverlayServiceServer     platformv1.OverlayServiceServer
 	PXEServiceServer         platformv1.PXEServiceServer
 	SDNEnrollmentHook        *policy.SDNEnrollmentHook
-	SDNService               platformv1.SDNServiceServer
-	ServerKeyAttributes      *xkmssdk.KeyAttributes
-	ServiceRegistry          *service.Registry
-	ServicesManager          platform.ServicesManager
+	// SDNIdentityConfig is sourced from app.SDNConfig.Identity. When present and
+	// encode_zone_in_cert is true, the ACME pre-sign hook embeds the device's
+	// network zone into every issued DEVICE certificate via OIDTPNetworkZone.
+	SDNIdentityConfig   *sdn.IdentityConfig
+	SDNService          platformv1.SDNServiceServer
+	ServerKeyAttributes *xkmssdk.KeyAttributes
+	ServiceRegistry     *service.Registry
+	ServicesManager     platform.ServicesManager
 	// ProtocolConfig is the bound protocol address/enabled snapshot used by
 	// GET /api/v1/platform/protocols. When nil the handler returns 500.
 	ProtocolConfig *platform.ProtocolConfig
@@ -1094,7 +1289,7 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 
 // DeviceRestHandler returns the PXE device activation REST handler.
 // When a SwitchService is configured, it is injected into the handler so
-// that Activate can move the device's physical port to the production VLAN.
+// that Activate can move the device's physical port to the trusted VLAN.
 func (registry *HandlerRegistry) DeviceRestHandler() device.RestHandler {
 	// Check if SDN enrollment hook is available
 	if registry.params.SDNEnrollmentHook == nil {
@@ -1248,10 +1443,15 @@ func (registry *HandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
 	} else if registry.params.ACMEServerConfig.InternalDomain == "" {
 		registry.params.Logger.Warn("InternalDomain is empty - DNS registration hook not registered")
 	} else {
+		var dnsProfileResolver ZoneProfileResolver
+		if registry.params.ServiceRegistry != nil {
+			dnsProfileResolver = registry.params.ServiceRegistry.ProfileService()
+		}
 		dnsHook := NewDNSRegistrationHook(
 			dnsService,
 			registry.params.ACMEServerConfig.InternalDomain,
-			registry.params.Logger.Slog())
+			registry.params.Logger.Slog(),
+			dnsProfileResolver)
 		hookRegistry.Register(dnsHook)
 		registry.params.Logger.Info("Registered DNS hook for ACME device enrollment",
 			"internal_domain", registry.params.ACMEServerConfig.InternalDomain)
@@ -1304,6 +1504,26 @@ func (registry *HandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
 		registry.params.Logger.Debug("TLSA generation hook not registered - DNS service or DANE config unavailable")
 	}
 
+	// Build the pre-sign extension hook registry and register the zone extension
+	// hook when SDN identity zone encoding is configured.
+	preSignRegistry := trustedca.NewACMEOrderPreSignHookRegistry()
+	if registry.params.SDNIdentityConfig != nil && registry.params.SDNIdentityConfig.EncodeZoneInCert {
+		var profileResolver ZoneProfileResolver
+		if registry.params.ServiceRegistry != nil {
+			profileResolver = registry.params.ServiceRegistry.ProfileService()
+		}
+		zoneHook := NewZoneExtensionPreSignHook(
+			profileResolver,
+			registry.params.SDNIdentityConfig,
+			registry.params.Logger.Slog(),
+		)
+		preSignRegistry.Register(zoneHook)
+		registry.params.Logger.Info("Registered zone extension pre-sign hook for ACME device enrollment",
+			"platform_zone", registry.params.SDNIdentityConfig.ResolvedPlatformZone())
+	} else {
+		registry.params.Logger.Debug("Zone extension pre-sign hook not registered - encode_zone_in_cert disabled or SDN identity config absent")
+	}
+
 	params := &trustedca.ACMERestServiceParams{
 		BaseRESTURI:             registry.params.ACMEServerConfig.BaseRESTURI,
 		CA:                      registry.params.CA,
@@ -1312,6 +1532,7 @@ func (registry *HandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
 		ExternalAccountRequired: registry.params.ACMEServerConfig.ExternalAccountRequired,
 		Logger:                  registry.params.Logger.Slog(),
 		OrderFinalizeHooks:      hookRegistry,
+		OrderPreSignHooks:       preSignRegistry,
 		StorageFactory:          registry.params.ACMEStorageFactory,
 		TermsOfService:          registry.params.ACMEServerConfig.TermsOfService,
 	}

@@ -299,26 +299,30 @@ type DeviceActionResponse struct {
 
 // ProfileCreateRequest represents a profile creation request.
 type ProfileCreateRequest struct {
-	Name                string                     `json:"name"`
-	Model               string                     `json:"model,omitempty"`
-	Role                string                     `json:"role,omitempty"`
-	EventLog            []byte                     `json:"event_log,omitempty"`
-	ProvisioningNetwork *NetworkPhaseConfigRequest `json:"provisioning_network,omitempty"`
-	ProductionNetwork   *NetworkPhaseConfigRequest `json:"production_network,omitempty"`
-	QuarantineNetwork   *NetworkPhaseConfigRequest `json:"quarantine_network,omitempty"`
-	MatchRules          *ProfileMatchRulesRequest  `json:"match_rules,omitempty"`
+	Name                  string                               `json:"name"`
+	Model                 string                               `json:"model,omitempty"`
+	Role                  string                               `json:"role,omitempty"`
+	EventLog              []byte                               `json:"event_log,omitempty"`
+	Zone                  string                               `json:"zone,omitempty"`
+	Networks              map[string]*NetworkPhaseConfigRequest `json:"networks,omitempty"`
+	EnrollmentNetwork     string                               `json:"enrollment_network,omitempty"`
+	PostEnrollmentNetwork string                               `json:"post_enrollment_network,omitempty"`
+	FailureNetwork        string                               `json:"failure_network,omitempty"`
+	MatchRules            *ProfileMatchRulesRequest            `json:"match_rules,omitempty"`
 }
 
 // ProfileUpdateRequest represents a profile update request.
 type ProfileUpdateRequest struct {
-	Name                string                     `json:"name,omitempty"`
-	Model               string                     `json:"model,omitempty"`
-	Role                string                     `json:"role,omitempty"`
-	EventLog            []byte                     `json:"event_log,omitempty"`
-	ProvisioningNetwork *NetworkPhaseConfigRequest `json:"provisioning_network,omitempty"`
-	ProductionNetwork   *NetworkPhaseConfigRequest `json:"production_network,omitempty"`
-	QuarantineNetwork   *NetworkPhaseConfigRequest `json:"quarantine_network,omitempty"`
-	MatchRules          *ProfileMatchRulesRequest  `json:"match_rules,omitempty"`
+	Name                  string                               `json:"name,omitempty"`
+	Model                 string                               `json:"model,omitempty"`
+	Role                  string                               `json:"role,omitempty"`
+	EventLog              []byte                               `json:"event_log,omitempty"`
+	Zone                  string                               `json:"zone,omitempty"`
+	Networks              map[string]*NetworkPhaseConfigRequest `json:"networks,omitempty"`
+	EnrollmentNetwork     string                               `json:"enrollment_network,omitempty"`
+	PostEnrollmentNetwork string                               `json:"post_enrollment_network,omitempty"`
+	FailureNetwork        string                               `json:"failure_network,omitempty"`
+	MatchRules            *ProfileMatchRulesRequest            `json:"match_rules,omitempty"`
 }
 
 // NetworkPhaseConfigRequest represents network phase configuration in requests.
@@ -328,6 +332,7 @@ type NetworkPhaseConfigRequest struct {
 	Gateway    string   `json:"gateway,omitempty"`
 	DNS        []string `json:"dns,omitempty"`
 	AuthMethod string   `json:"auth_method,omitempty"`
+	Zone       string   `json:"zone,omitempty"`
 }
 
 // ProfileMatchRulesRequest represents profile match rules in requests.
@@ -339,15 +344,17 @@ type ProfileMatchRulesRequest struct {
 
 // ProfileResponse represents a profile in API responses.
 type ProfileResponse struct {
-	ID                  uint64                      `json:"id"`
-	Name                string                      `json:"name"`
-	Model               string                      `json:"model,omitempty"`
-	Role                string                      `json:"role,omitempty"`
-	EventLog            []byte                      `json:"event_log,omitempty"`
-	ProvisioningNetwork *NetworkPhaseConfigResponse `json:"provisioning_network,omitempty"`
-	ProductionNetwork   *NetworkPhaseConfigResponse `json:"production_network,omitempty"`
-	QuarantineNetwork   *NetworkPhaseConfigResponse `json:"quarantine_network,omitempty"`
-	MatchRules          *ProfileMatchRulesResponse  `json:"match_rules,omitempty"`
+	ID                    uint64                                `json:"id"`
+	Name                  string                                `json:"name"`
+	Model                 string                                `json:"model,omitempty"`
+	Role                  string                                `json:"role,omitempty"`
+	EventLog              []byte                                `json:"event_log,omitempty"`
+	Zone                  string                                `json:"zone,omitempty"`
+	Networks              map[string]*NetworkPhaseConfigResponse `json:"networks,omitempty"`
+	EnrollmentNetwork     string                                `json:"enrollment_network,omitempty"`
+	PostEnrollmentNetwork string                                `json:"post_enrollment_network,omitempty"`
+	FailureNetwork        string                                `json:"failure_network,omitempty"`
+	MatchRules            *ProfileMatchRulesResponse            `json:"match_rules,omitempty"`
 }
 
 // NetworkPhaseConfigResponse represents network phase configuration in responses.
@@ -357,6 +364,7 @@ type NetworkPhaseConfigResponse struct {
 	Gateway    string   `json:"gateway,omitempty"`
 	DNS        []string `json:"dns,omitempty"`
 	AuthMethod string   `json:"auth_method,omitempty"`
+	Zone       string   `json:"zone,omitempty"`
 }
 
 // ProfileMatchRulesResponse represents profile match rules in responses.
@@ -1070,17 +1078,15 @@ func (h *DeviceHandlers) handleCreateProfile(w http.ResponseWriter, r *http.Requ
 		EventLog: req.EventLog,
 	}
 
-	// Set network configurations
+	// Set network configurations from map-based request.
 	profile.Networks = make(map[string]*entities.NetworkPhaseConfig)
-	if req.ProvisioningNetwork != nil {
-		profile.Networks[entities.DefaultEnrollmentNetwork] = h.networkRequestToEntity(req.ProvisioningNetwork)
+	for k, v := range req.Networks {
+		profile.Networks[k] = h.networkRequestToEntity(v)
 	}
-	if req.ProductionNetwork != nil {
-		profile.Networks[entities.DefaultPostEnrollmentNetwork] = h.networkRequestToEntity(req.ProductionNetwork)
-	}
-	if req.QuarantineNetwork != nil {
-		profile.Networks[entities.DefaultFailureNetwork] = h.networkRequestToEntity(req.QuarantineNetwork)
-	}
+	profile.Zone = req.Zone
+	profile.EnrollmentNetwork = req.EnrollmentNetwork
+	profile.PostEnrollmentNetwork = req.PostEnrollmentNetwork
+	profile.FailureNetwork = req.FailureNetwork
 
 	// Set match rules
 	if req.MatchRules != nil {
@@ -1222,19 +1228,25 @@ func (h *DeviceHandlers) handleUpdateProfile(w http.ResponseWriter, r *http.Requ
 	if req.EventLog != nil {
 		existing.EventLog = req.EventLog
 	}
-	if req.ProvisioningNetwork != nil || req.ProductionNetwork != nil || req.QuarantineNetwork != nil {
+	if len(req.Networks) > 0 {
 		if existing.Networks == nil {
-			existing.Networks = make(map[string]*entities.NetworkPhaseConfig)
+			existing.Networks = make(map[string]*entities.NetworkPhaseConfig, len(req.Networks))
 		}
-		if req.ProvisioningNetwork != nil {
-			existing.Networks[entities.DefaultEnrollmentNetwork] = h.networkRequestToEntity(req.ProvisioningNetwork)
+		for k, v := range req.Networks {
+			existing.Networks[k] = h.networkRequestToEntity(v)
 		}
-		if req.ProductionNetwork != nil {
-			existing.Networks[entities.DefaultPostEnrollmentNetwork] = h.networkRequestToEntity(req.ProductionNetwork)
-		}
-		if req.QuarantineNetwork != nil {
-			existing.Networks[entities.DefaultFailureNetwork] = h.networkRequestToEntity(req.QuarantineNetwork)
-		}
+	}
+	if req.Zone != "" {
+		existing.Zone = req.Zone
+	}
+	if req.EnrollmentNetwork != "" {
+		existing.EnrollmentNetwork = req.EnrollmentNetwork
+	}
+	if req.PostEnrollmentNetwork != "" {
+		existing.PostEnrollmentNetwork = req.PostEnrollmentNetwork
+	}
+	if req.FailureNetwork != "" {
+		existing.FailureNetwork = req.FailureNetwork
 	}
 	if req.MatchRules != nil {
 		existing.MatchRules = &entities.ProfileMatchRules{
@@ -1339,21 +1351,22 @@ func (h *DeviceHandlers) deviceToResponse(d *entities.Device) DeviceResponse {
 // profileToResponse converts a profile entity to a ProfileResponse.
 func (h *DeviceHandlers) profileToResponse(p *entities.DeviceProfile) ProfileResponse {
 	resp := ProfileResponse{
-		ID:       p.ID,
-		Name:     p.Name,
-		Model:    p.Model,
-		Role:     string(p.Role),
-		EventLog: p.EventLog,
+		ID:                    p.ID,
+		Name:                  p.Name,
+		Model:                 p.Model,
+		Role:                  string(p.Role),
+		EventLog:              p.EventLog,
+		Zone:                  p.Zone,
+		EnrollmentNetwork:     p.EnrollmentNetwork,
+		PostEnrollmentNetwork: p.PostEnrollmentNetwork,
+		FailureNetwork:        p.FailureNetwork,
 	}
 
-	if provNet := p.GetEnrollmentNetworkConfig(); provNet != nil {
-		resp.ProvisioningNetwork = h.networkEntityToResponse(provNet)
-	}
-	if prodNet := p.GetPostEnrollmentNetworkConfig(); prodNet != nil {
-		resp.ProductionNetwork = h.networkEntityToResponse(prodNet)
-	}
-	if quarNet := p.GetFailureNetworkConfig(); quarNet != nil {
-		resp.QuarantineNetwork = h.networkEntityToResponse(quarNet)
+	if len(p.Networks) > 0 {
+		resp.Networks = make(map[string]*NetworkPhaseConfigResponse, len(p.Networks))
+		for k, v := range p.Networks {
+			resp.Networks[k] = h.networkEntityToResponse(v)
+		}
 	}
 	if p.MatchRules != nil {
 		resp.MatchRules = &ProfileMatchRulesResponse{
@@ -1377,6 +1390,7 @@ func (h *DeviceHandlers) networkRequestToEntity(req *NetworkPhaseConfigRequest) 
 		Gateway:    req.Gateway,
 		DNS:        req.DNS,
 		AuthMethod: entities.AuthMethod(req.AuthMethod),
+		Zone:       req.Zone,
 	}
 }
 
@@ -1391,6 +1405,7 @@ func (h *DeviceHandlers) networkEntityToResponse(cfg *entities.NetworkPhaseConfi
 		Gateway:    cfg.Gateway,
 		DNS:        cfg.DNS,
 		AuthMethod: string(cfg.AuthMethod),
+		Zone:       cfg.Zone,
 	}
 }
 

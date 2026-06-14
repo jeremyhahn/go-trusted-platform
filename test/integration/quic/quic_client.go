@@ -26,6 +26,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/qlog"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -142,6 +143,9 @@ func (c *TestClient) Connect(ctx context.Context) error {
 	quicConfig := &quicgo.Config{
 		MaxIdleTimeout:  30 * time.Second,
 		KeepAlivePeriod: 15 * time.Second,
+		// qlog tracing: writes per-connection .sqlog files when QLOGDIR is set.
+		// qlog.DefaultConnectionTracer is a no-op when QLOGDIR is unset.
+		Tracer: qlog.DefaultConnectionTracer,
 	}
 
 	conn, err := quicgo.DialAddr(connCtx, c.serverAddr, c.tlsConfig, quicConfig)

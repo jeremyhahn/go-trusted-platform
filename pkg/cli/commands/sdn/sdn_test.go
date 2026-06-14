@@ -37,7 +37,7 @@ func TestNewCommandSubcommands(t *testing.T) {
 
 	expectedSubs := []string{
 		"bridge", "port", "flow", "vlan",
-		"overlay", "gateway", "ipam", "policy",
+		"overlay", "gateway", "ipam", "policy", "zone",
 	}
 
 	commands := cmd.Commands()

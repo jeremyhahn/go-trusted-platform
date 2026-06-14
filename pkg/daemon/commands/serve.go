@@ -43,6 +43,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/log/jsonfile"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice"
@@ -315,17 +316,17 @@ func seedSDNVLANsFromConfig(logger *logging.Logger, a *app.App, sdnSvc *daemon.S
 		return
 	}
 
-	for subnetName, net := range a.SDNConfig.Networks {
-		if net == nil || net.VLAN == 0 {
+	for _, net := range a.SDNConfig.Networks {
+		if net.VLAN == 0 {
 			continue
 		}
-		if _, err := sdnSvc.SeedVLAN(bridgeName, bridgeID, uint32(net.VLAN), subnetName); err != nil {
+		if _, err := sdnSvc.SeedVLAN(bridgeName, bridgeID, uint32(net.VLAN), net.Name); err != nil {
 			logger.Warn("SDN VLAN seeding: SeedVLAN failed",
-				"subnet", subnetName, "vlan", net.VLAN, "error", err)
+				"subnet", net.Name, "vlan", net.VLAN, "error", err)
 			continue
 		}
 		logger.Info("SDN VLAN seeded from config",
-			"subnet", subnetName, "vlan", net.VLAN, "bridge", bridgeName)
+			"subnet", net.Name, "vlan", net.VLAN, "bridge", bridgeName)
 	}
 }
 
@@ -611,6 +612,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	daemonConfig.App = App
 	daemonConfig.Logger = logger
 	daemonConfig.SocketPath = serveSocketPath
+	daemonConfig.GRPCSocketPath = serveSocketPath
 	daemonConfig.SocketGroup = ""
 
 	if serveSkipIAM {
@@ -769,6 +771,30 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	// returns 503 via the service registry.
 	attestationSvcs := initAttestationServices(logger, App)
 	attachAttestationServiceToDaemonConfig(daemonConfig, attestationSvcs)
+
+	// Build the shared SDN flow-policy machinery (engine + zone flow manager)
+	// once; the quarantine observer and the SDN enrollment hook below both
+	// consume it so port-policy state lives in a single engine. Nil when SDN
+	// or OVS is unavailable.
+	sdnPolicy := initSDNPolicy(App, logger.Slog())
+
+	// Wire the quarantine observer: when both attestation and SDN-OVS are
+	// available, failed attestations move devices to the quarantine zone and
+	// successful re-attestations restore them. No-op when either subsystem is
+	// absent so boot behavior is unchanged on nodes without OVS.
+	wireQuarantineObserver(attestationSvcs, sdnPolicy, daemonConfig.DeviceService, logger)
+
+	// Construct the SDN enrollment hook on the same engine. The webservice
+	// registry registers it as an ACME order-finalization hook; on device
+	// activation it applies the port policy and stamps device.NetworkPortID
+	// (via the PortBinder) so the quarantine observer can act on real ports.
+	var sdnEnrollmentHook *policy.SDNEnrollmentHook
+	if sdnPolicy != nil && App != nil {
+		if reg := App.ServiceRegistry(); reg != nil {
+			sdnEnrollmentHook = initSDNEnrollmentHook(
+				sdnPolicy.Engine, daemonConfig.DeviceService, reg.ProfileService(), logger)
+		}
+	}
 
 	// Gateway control-plane state cache backs /api/v1/gateway/state,
 	// /api/v1/gateway/telemetry, and /api/v1/gateway/desired-config.
@@ -1007,6 +1033,10 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			WebAuthnConfig:      webauthnConfig,
 			WebAuthnSDKClient:   webauthnSDK,
 			AuthSDKClient:       authSDK,
+			SDNEnrollmentHook:   sdnEnrollmentHook,
+		}
+		if App != nil && App.SDNConfig != nil {
+			params.SDNIdentityConfig = App.SDNConfig.Identity
 		}
 		if platformDaemon != nil {
 			if svc := platformDaemon.Service(); svc != nil {
@@ -1233,6 +1263,7 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	}
 	config.Logger = logger
 	config.SocketPath = serveSocketPath
+	config.GRPCSocketPath = serveSocketPath
 	config.SocketGroup = ""
 
 	if serveSkipIAM {
@@ -1318,6 +1349,24 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	if App != nil && App.DNSService != nil {
 		config.DNSService = App.DNSService
 		logger.Info("DNS service configured for daemon")
+	}
+
+	// Surface device + profile services into the daemon config so the BMC,
+	// Device, and PXE gRPC services can resolve profile-backed configuration.
+	// runWithWebservices wires these the same way; without them the daemon-only
+	// path leaves bmc.Service with a nil profile store, so every profile-based
+	// BMC operation reports ErrProfileNotFound.
+	if App != nil {
+		if reg := App.ServiceRegistry(); reg != nil {
+			if devSvc := reg.DeviceService(); devSvc != nil {
+				config.DeviceService = devSvc
+				logger.Info("device service wired for daemon gRPC")
+			}
+			if profileSvc := reg.ProfileService(); profileSvc != nil {
+				config.DeviceProfileService = profileSvc
+				logger.Info("device profile service wired for daemon gRPC")
+			}
+		}
 	}
 
 	ovsSocketPath := "/var/run/openvswitch/db.sock"

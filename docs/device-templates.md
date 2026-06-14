@@ -400,3 +400,84 @@ combined with overrides. This enables:
 
 Profiles are stored in QuicBaaS and accessible via all platform protocols
 (REST, gRPC, QUIC, MCP, Unix socket).
+
+## Zone Override Seam
+
+Templates define network segments (`sdn.networks`, `sdn.fabric.segments`,
+`network.subnets`) but do **not** materialize built-in zone policy. The
+`trusted`, `provisioning`, `quarantine`, `public`, and `storage` zone
+definitions live in the code defaults registry (`pkg/sdn/zone/defaults.go`).
+Baking them into every template would freeze policy defaults and make version
+upgrades painful.
+
+### What "trusted" means
+
+`trusted` is the post-enrollment operational zone for attested, compliant
+devices. A device transitions to the trusted zone after successful ACME
+enrollment, IDevID attestation, and compliance check. The reference
+architecture uses VLAN 200 for this zone.
+
+### Template contract
+
+Each template names its operational segment `trusted` and assigns it VLAN 200:
+
+```yaml
+sdn:
+  fabric:
+    segments:
+      - name: trusted
+        vlan: 200            # reference-architecture default
+      - name: provisioning
+        vlan: 201
+        role: provisioning
+      - name: quarantine
+        vlan: 202
+        role: quarantine
+```
+
+The `name: trusted` field is the zone identity key. The VLAN is a plain L2
+segment identifier with no inherent policy meaning.
+
+### Overriding zone policy
+
+Override files can supply a `zones:` block to change default policy for any
+built-in zone without touching the code defaults:
+
+```yaml
+sdn:
+  zones:
+    - name: trusted
+      internet_ingress: false   # default; shown for documentation
+    - name: public
+      internet_ingress: true
+      isolate_from: [trusted]   # defense-in-depth
+```
+
+Only list zones whose policy you need to change. Zones omitted from the
+override block use their code defaults.
+
+### Changing the trusted VLAN
+
+If your site uses a VLAN other than 200 for the trusted zone, override the
+segment and any subnet references in your private override file:
+
+```yaml
+sdn:
+  fabric:
+    segments:
+      - name: trusted
+        vlan: 300             # site-specific VLAN
+  networks:
+    - name: trusted
+      pool: trusted
+      vlan: 300
+network:
+  subnets:
+    - name: trusted
+      vlan-id: 300
+      cidr: 10.100.0.0/24
+```
+
+Do not change the segment `name` — `trusted` is the zone identity key that
+the platform validator and SDN engine use. Only the VLAN number is
+site-specific.

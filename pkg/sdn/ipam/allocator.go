@@ -36,6 +36,10 @@ type Allocator interface {
 	// ListPools returns all pools.
 	ListPools(ctx context.Context) ([]*Pool, error)
 
+	// ListPoolsByZone returns all pools whose Zone field matches zone.
+	// An empty zone string returns all pools (equivalent to ListPools).
+	ListPoolsByZone(ctx context.Context, zone string) ([]*Pool, error)
+
 	// UpdatePool updates an existing pool's configuration.
 	// Returns ErrPoolNotFound if the pool does not exist.
 	// Note: CIDR cannot be changed after pool creation.

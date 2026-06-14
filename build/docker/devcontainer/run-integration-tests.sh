@@ -42,6 +42,7 @@ declare -A TARGET_PACKAGES=(
     [cold-start]="./test/integration/cold_start/..."
     [barrier-gate]="./test/integration/barrier_gate/..."
     [restroutes]="./test/integration/restroutes/..."
+    [sdn]="./test/integration/sdn/..."
 )
 
 RUN_TARGET="all"
@@ -59,7 +60,27 @@ fi
 BUILD_TAGS_ARG="-tags ${BUILD_TAGS}"
 
 PLATFORMD_PID=""
+VBMC_PID=""
 CLEANUP_DONE=false
+
+# Build directory — set by build_binaries(), used by start_platformd() for the
+# config path. Defaults to the legacy /workspace Docker mount path; overridden
+# to the actual source tree when a Go workspace is detected on the host.
+PLATFORM_BUILD_DIR="/workspace"
+
+# Platformd startup log — written to /tmp so the script works on the host
+# (where /var/log is root-owned) as well as inside the devcontainer.
+PLATFORMD_STARTUP_LOG="/tmp/platformd-integration/platformd-startup.log"
+
+# Platformd Unix socket path — /tmp is always writable; /run requires root on
+# the host. The path is exported for use by setup_env_vars() and test adapters.
+PLATFORMD_SOCK_PATH="/tmp/platformd-integration/platformd.sock"
+
+# OVS bridge name used by the integration test config (sdn.ovs.bridge).
+# Platformd reads this from test/integration/config.yaml; the bridge is
+# pre-created here so the App.initSDN path finds it immediately and avoids
+# the 120-retry wait loop in initOVSBridge.
+OVS_INT_BRIDGE="br-platform-int"
 
 # =============================================================================
 # Cleanup
@@ -79,6 +100,13 @@ cleanup() {
         echo "Stopping platformd (PID: $PLATFORMD_PID)..."
         kill "$PLATFORMD_PID" 2>/dev/null || true
         wait "$PLATFORMD_PID" 2>/dev/null || true
+    fi
+
+    # Stop vBMC
+    if [ -n "$VBMC_PID" ] && kill -0 "$VBMC_PID" 2>/dev/null; then
+        echo "Stopping vBMC (PID: $VBMC_PID)..."
+        kill "$VBMC_PID" 2>/dev/null || true
+        wait "$VBMC_PID" 2>/dev/null || true
     fi
 
     # Stop swtpm
@@ -161,11 +189,23 @@ start_ovs() {
         sleep 2
     fi
 
-    # Verify
+    # Verify OVS is operational
     if ovs-vsctl show > /dev/null 2>&1; then
         echo "OVS started successfully"
     else
         echo "WARNING: OVS may not be fully operational"
+    fi
+
+    # Create the integration test bridge that config.yaml references under
+    # sdn.ovs.bridge. Pre-creating it here means App.initSDN finds the bridge
+    # immediately and skips the 120-retry wait loop in initOVSBridge. The
+    # add-br command is idempotent — it silently succeeds when the bridge already
+    # exists (e.g., on a second run without a full OVS reset).
+    if ovs-vsctl show > /dev/null 2>&1; then
+        echo "Creating integration test OVS bridge: ${OVS_INT_BRIDGE}"
+        ovs-vsctl --may-exist add-br "${OVS_INT_BRIDGE}" || \
+            echo "WARNING: failed to create ${OVS_INT_BRIDGE} (overlay tests may degrade)"
+        echo "OVS bridge ${OVS_INT_BRIDGE} ready"
     fi
 
     echo "=== OVS started ==="
@@ -226,13 +266,13 @@ build_binaries() {
     # back to the legacy /workspace cwd. This keeps the legacy single-mount
     # path working unchanged while supporting the barrier-gate / cold-start
     # targets that need local source replaces for go-xkms, go-quicbaas etc.
-    local build_dir="/workspace"
+    PLATFORM_BUILD_DIR="/workspace"
     if [ -f /home/jhahn/sources/go.work ] && [ -d /home/jhahn/sources/go-trusted-platform ]; then
-        build_dir="/home/jhahn/sources/go-trusted-platform"
+        PLATFORM_BUILD_DIR="/home/jhahn/sources/go-trusted-platform"
         export GOTOOLCHAIN="${GOTOOLCHAIN:-auto}"
-        echo "Detected go workspace; building from $build_dir (GOTOOLCHAIN=$GOTOOLCHAIN)"
+        echo "Detected go workspace; building from $PLATFORM_BUILD_DIR (GOTOOLCHAIN=$GOTOOLCHAIN)"
     fi
-    cd "$build_dir"
+    cd "$PLATFORM_BUILD_DIR"
 
     # Pre-download ALL module dependencies before building or testing.
     # This prevents stalls during 'go test' when large deps (libovsdb,
@@ -282,21 +322,141 @@ build_binaries() {
     echo "=== Binaries built ==="
 }
 
+# =============================================================================
+# vBMC Setup (bmc integration target only)
+# =============================================================================
+
+# start_vbmc builds and starts the virtual BMC responder, exports the harness
+# environment variables, downloads the vBMC CA cert for daemon trust injection,
+# and generates a modified platformd config that trusts the vBMC HTTPS cert.
+# Must be called before start_platformd for the bmc target so the daemon starts
+# with the correct trust configuration.
+#
+# Port layout (TCP/UDP can share the same port number):
+#   TCP 6230 — vBMC HTTPS/TLS (peerCertificate, GetWebCertificate)
+#   UDP 6230 — vBMC IPMI RMCP+ (power/boot/sensors/sysinfo)
+#   TCP 8645 — vBMC plain HTTP CA cert endpoint (bootstrap trust)
+start_vbmc() {
+    if [ "$RUN_TARGET" != "bmc" ]; then
+        return 0
+    fi
+
+    echo "=== Building and starting vBMC ==="
+
+    # Build the vBMC binary from source.
+    if ! go build -buildvcs=false -o /tmp/vbmc "${PLATFORM_BUILD_DIR}/test/integration/bmc/vbmc/"; then
+        echo "FATAL: vBMC build failed"
+        exit 1
+    fi
+    echo "vBMC built: /tmp/vbmc"
+
+    # Start vBMC. TCP:6230 serves TLS (HTTPS for GetWebCertificate / Redfish).
+    # UDP:6230 serves IPMI RMCP+. OS-level TCP vs UDP separation means both
+    # can bind the same port number without conflict.
+    VBMC_HTTPS_ADDR=127.0.0.1:6230 \
+    VBMC_CA_ADDR=127.0.0.1:8645 \
+    VBMC_IPMI_ADDR=127.0.0.1:6230 \
+    VBMC_IPMI_USER=ADMIN \
+    VBMC_IPMI_PASSWORD=ADMIN \
+    VBMC_VENDOR=Dell \
+    VBMC_LOG_LEVEL=debug \
+    /tmp/vbmc > /tmp/vbmc.log 2>&1 &
+    VBMC_PID=$!
+    echo "vBMC starting (PID: $VBMC_PID)..."
+
+    # Wait for the plain-HTTP CA endpoint to be ready (TCP 8645).
+    # That server starts before the HTTPS and IPMI listeners, so it is the
+    # safest readiness proxy. Poll via /dev/tcp — no external tool needed.
+    for i in $(seq 1 20); do
+        if kill -0 "$VBMC_PID" 2>/dev/null; then
+            if (exec 3<>/dev/tcp/127.0.0.1/8645) 2>/dev/null; then
+                exec 3>&-
+                echo "vBMC CA endpoint ready (attempt $i)"
+                break
+            fi
+        else
+            echo "FATAL: vBMC process died on startup"
+            cat /tmp/vbmc.log 2>/dev/null || true
+            exit 1
+        fi
+        sleep 1
+        if [ "$i" = "20" ]; then
+            echo "WARNING: vBMC CA endpoint not ready after 20s — continuing"
+            cat /tmp/vbmc.log 2>/dev/null || true
+        fi
+    done
+
+    # Download the vBMC self-signed CA cert from the plain-HTTP endpoint.
+    # This cert is used to configure the daemon's BMC trust resolver so
+    # GetWebCertificate can verify the TLS handshake against the vBMC.
+    if curl -sf http://127.0.0.1:8645/tls/ca -o /tmp/vbmc-ca.pem 2>/dev/null; then
+        echo "vBMC CA cert downloaded to /tmp/vbmc-ca.pem"
+    else
+        # Fallback: wget (in case curl is absent)
+        wget -q -O /tmp/vbmc-ca.pem http://127.0.0.1:8645/tls/ca 2>/dev/null || true
+        if [ -s /tmp/vbmc-ca.pem ]; then
+            echo "vBMC CA cert downloaded to /tmp/vbmc-ca.pem (via wget)"
+        else
+            echo "WARNING: could not download vBMC CA cert; GetWebCertificate tests may fail"
+        fi
+    fi
+
+    # Generate a modified platformd config that adds trust.bmc so the daemon
+    # trusts the vBMC's self-signed cert when calling GetWebCertificate.
+    # The config is a copy of the standard integration config with a trust
+    # section appended. YAML append is safe here because the base config has
+    # no trust: key.
+    VBMC_PLATFORMD_CONFIG="/tmp/platformd-bmc-config.yaml"
+    cp "${PLATFORM_BUILD_DIR}/test/integration/config.yaml" "${VBMC_PLATFORMD_CONFIG}"
+    cat >> "${VBMC_PLATFORMD_CONFIG}" << 'TRUSTEOF'
+
+# vBMC trust configuration injected by run-integration-tests.sh for the
+# bmc target. Trusts the vBMC self-signed cert via ca-file strategy so
+# GetWebCertificate can verify the TLS handshake without InsecureSkipVerify.
+trust:
+  bmc:
+    strategies:
+      - ca-file
+    ca-file: /tmp/vbmc-ca.pem
+TRUSTEOF
+    echo "vBMC platformd config written: ${VBMC_PLATFORMD_CONFIG}"
+
+    # Export harness env vars so the test adapters can address the vBMC.
+    # The vBMC advertises vendor=Dell so the platform's AutoCertManager vendor
+    # probe resolves the standards-based Redfish backend (Supermicro ATEN CGI is
+    # the gated X10 fallback, validated on real hardware). Endpoint()/IPMIEndpoint()
+    # read the VBMC_DELL_* keys for the matching flavor.
+    # VBMC_DELL_ADDR  — HTTPS endpoint (Endpoint() / WaitForReady)
+    # VBMC_DELL_IPMI_ADDR — IPMI UDP endpoint (IPMIEndpoint())
+    export VBMC_DELL_ADDR=127.0.0.1:6230
+    export VBMC_DELL_IPMI_ADDR=127.0.0.1:6230
+    export VBMC_IPMI_USER=ADMIN
+    export VBMC_IPMI_PASSWORD=ADMIN
+
+    echo "=== vBMC started ==="
+}
+
 start_platformd() {
-    echo "=== Starting platformd ==="
+    local config_file="${1:-${PLATFORM_BUILD_DIR}/test/integration/config.yaml}"
+    echo "=== Starting platformd (config: ${config_file}) ==="
 
     # Clean stale data from previous runs to avoid key/cert mismatches
     rm -rf /tmp/platformd-integration
-    mkdir -p /run /tmp/platformd-integration/log /tmp/platformd-integration/ca /tmp/platformd-integration/vtpm /tmp/platformd-integration/quicbaas
+    mkdir -p /tmp/platformd-integration/log \
+             /tmp/platformd-integration/ca \
+             /tmp/platformd-integration/vtpm \
+             /tmp/platformd-integration/quicbaas
 
-    # Start platformd with mTLS authentication (all protocols)
+    # Start platformd with mTLS authentication (all protocols).
     # --skip-iam-validation disables token-based auth on MCP since integration
-    # tests don't set up an IAM/token infrastructure
+    # tests don't set up an IAM/token infrastructure.
+    # Log goes to /tmp (writable on both host and devcontainer without root).
+    # Socket path is /tmp/platformd-integration/platformd.sock for the same reason.
     /tmp/platformd serve \
-        --config /workspace/test/integration/config.yaml \
+        --config "${config_file}" \
         --enable-mtls \
         --skip-iam-validation \
-        --socket-path=/run/platformd.sock \
+        --socket-path="${PLATFORMD_SOCK_PATH}" \
         --rest-port=8443 \
         --grpc-port=10443 \
         --quic-port=9444 \
@@ -304,17 +464,17 @@ start_platformd() {
         --raw-so-pin="123456" \
         --raw-pin="123456" \
         --debug \
-        > /var/log/platformd.log 2>&1 &
+        > "${PLATFORMD_STARTUP_LOG}" 2>&1 &
 
     PLATFORMD_PID=$!
     echo "platformd starting (PID: $PLATFORMD_PID)..."
 
     # Wait for socket to be ready
     for i in $(seq 1 30); do
-        if [ -S /run/platformd.sock ]; then
+        if [ -S "${PLATFORMD_SOCK_PATH}" ]; then
             echo "platformd started successfully"
             echo "=== platformd startup log (stdout/stderr) ==="
-            cat /var/log/platformd.log 2>/dev/null || true
+            cat "${PLATFORMD_STARTUP_LOG}" 2>/dev/null || true
             echo "=== platformd app log ==="
             cat /tmp/platformd-integration/log/trusted-platform.log 2>/dev/null || true
 
@@ -336,7 +496,7 @@ start_platformd() {
 
     echo "WARNING: platformd socket not ready after 30 seconds"
     echo "platformd logs:"
-    tail -50 /var/log/platformd.log 2>/dev/null || true
+    tail -50 "${PLATFORMD_STARTUP_LOG}" 2>/dev/null || true
     echo "=== platformd may not be fully operational ==="
     return 1
 }
@@ -353,10 +513,10 @@ setup_env_vars() {
 
     # Socket path for Unix adapters (daemon, sdn, vtpm, overlay, and the new
     # ceremony/piv/luks/fido2 suites that share the adapter pattern).
-    export PLATFORMD_SOCKET="/run/platformd.sock"
-    export PLATFORM_SOCKET_PATH="/run/platformd.sock"
-    export PLATFORM_UNIX_SOCKET="/run/platformd.sock"
-    export VTPM_SOCKET_PATH="/run/platformd.sock"
+    export PLATFORMD_SOCKET="${PLATFORMD_SOCK_PATH}"
+    export PLATFORM_SOCKET_PATH="${PLATFORMD_SOCK_PATH}"
+    export PLATFORM_UNIX_SOCKET="${PLATFORMD_SOCK_PATH}"
+    export VTPM_SOCKET_PATH="${PLATFORMD_SOCK_PATH}"
 
     # mTLS client certificate paths for test adapters
     # Client bundle contains both cert and key PEM blocks;
@@ -454,7 +614,12 @@ elif [ "$RUN_TARGET" = "barrier-gate" ]; then
     mkdir -p /tmp/platformd-barrier-gate
     export PLATFORM_BARRIER_GATE_DIR="/tmp/platformd-barrier-gate"
     export PLATFORM_BARRIER_GATE_BIN="/tmp/platformd"
-    export PLATFORM_BARRIER_GATE_CONFIG="/workspace/test/integration/barrier_gate/config.yaml"
+    export PLATFORM_BARRIER_GATE_CONFIG="${PLATFORM_BUILD_DIR}/test/integration/barrier_gate/config.yaml"
+elif [ "$RUN_TARGET" = "bmc" ]; then
+    # BMC target: start vBMC first (generates /tmp/vbmc-ca.pem and the
+    # modified config that trusts it), then start platformd with that config.
+    start_vbmc || echo "WARNING: vBMC setup failed, BMC tests may fail"
+    start_platformd "${VBMC_PLATFORMD_CONFIG}" || echo "WARNING: platformd setup failed, some protocol tests may skip"
 else
     # platformd is required for standalone protocol tests (non-fatal if unavailable)
     start_platformd || echo "WARNING: platformd setup failed, some protocol tests may skip"
@@ -512,8 +677,8 @@ else
 fi
 
 echo ""
-echo "=== platformd stderr log (post-test) ==="
-cat /var/log/platformd.log 2>/dev/null || echo "(empty or missing)"
+echo "=== platformd startup log (post-test) ==="
+cat "${PLATFORMD_STARTUP_LOG}" 2>/dev/null || echo "(empty or missing)"
 echo "=== platformd app log (post-test) ==="
 cat /tmp/platformd-integration/log/trusted-platform.log 2>/dev/null || echo "(empty or missing)"
 echo "=== platformd log dir listing ==="

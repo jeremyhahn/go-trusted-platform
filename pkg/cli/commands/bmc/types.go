@@ -19,6 +19,17 @@ package bmc
 type bmcFlags struct {
 	serverURL string
 	profileID string
+	// caCert is the path to a PEM CA bundle used to verify the platformd
+	// TLS certificate on the daemon-mode REST path. When empty, the
+	// PLATFORM_CA_CERT environment variable is consulted, then the system
+	// trust store.
+	caCert string
+	// clientCert and clientKey are the PEM client certificate/key presented
+	// for mutual TLS when platformd requires a client certificate on the
+	// daemon-mode REST path. When empty, the PLATFORM_CLIENT_CERT /
+	// PLATFORM_CLIENT_KEY environment variables are consulted.
+	clientCert string
+	clientKey  string
 }
 
 // PowerAction represents a BMC power action.

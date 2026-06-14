@@ -21,19 +21,44 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 )
 
-// NetworkConfigGenerator generates network configuration files from device profiles
+// ZoneNetwork holds the zone identity, logical network name, and VLAN ID for
+// a single network phase. Zone is the SDN zone name (e.g. "trusted"); Name is
+// the key used to look the network up in the profile's Networks map (e.g.
+// "trusted"); VLAN is the 802.1Q VLAN ID.
+type ZoneNetwork struct {
+	// Zone is the SDN zone name for this network phase (e.g. "provisioning",
+	// "trusted", "quarantine"). Empty when neither the NetworkPhaseConfig nor
+	// the profile-level Zone field carries a value.
+	Zone string
+	// Name is the logical network name from the device profile's Networks map
+	// (e.g. "provisioning", "trusted", "quarantine").
+	Name string
+	// VLAN is the 802.1Q VLAN ID. Zero means no VLAN is configured.
+	VLAN uint16
+}
+
+// ZoneNetworkSet carries the zone identity, network name, and VLAN ID for all
+// three network phases recognised by the platform: provisioning (enrollment),
+// trusted (post-enrollment operational), and quarantine (failure isolation).
+type ZoneNetworkSet struct {
+	Provisioning ZoneNetwork
+	Trusted      ZoneNetwork
+	Quarantine   ZoneNetwork
+}
+
+// NetworkConfigGenerator generates network configuration files from device profiles.
 type NetworkConfigGenerator struct {
 	profile *entities.DeviceProfile
 }
 
-// NewNetworkConfigGenerator creates a new network configuration generator
+// NewNetworkConfigGenerator creates a new network configuration generator.
 func NewNetworkConfigGenerator(profile *entities.DeviceProfile) *NetworkConfigGenerator {
 	return &NetworkConfigGenerator{
 		profile: profile,
 	}
 }
 
-// GenerateProvisioningConfig generates provisioning network configuration
+// GenerateProvisioningConfig generates provisioning network configuration.
 func (g *NetworkConfigGenerator) GenerateProvisioningConfig() *entities.NetworkPhaseConfig {
 	if g.profile == nil {
 		return nil
@@ -45,19 +70,19 @@ func (g *NetworkConfigGenerator) GenerateProvisioningConfig() *entities.NetworkP
 	return g.copyNetworkConfig(provNet)
 }
 
-// GenerateProductionConfig generates production network configuration
-func (g *NetworkConfigGenerator) GenerateProductionConfig() *entities.NetworkPhaseConfig {
+// GenerateTrustedConfig generates trusted-zone (post-enrollment) network configuration.
+func (g *NetworkConfigGenerator) GenerateTrustedConfig() *entities.NetworkPhaseConfig {
 	if g.profile == nil {
 		return nil
 	}
-	prodNet := g.profile.GetPostEnrollmentNetworkConfig()
-	if prodNet == nil {
+	trustedNet := g.profile.GetPostEnrollmentNetworkConfig()
+	if trustedNet == nil {
 		return nil
 	}
-	return g.copyNetworkConfig(prodNet)
+	return g.copyNetworkConfig(trustedNet)
 }
 
-// GenerateQuarantineConfig generates quarantine network configuration
+// GenerateQuarantineConfig generates quarantine network configuration.
 func (g *NetworkConfigGenerator) GenerateQuarantineConfig() *entities.NetworkPhaseConfig {
 	if g.profile == nil {
 		return nil
@@ -69,35 +94,35 @@ func (g *NetworkConfigGenerator) GenerateQuarantineConfig() *entities.NetworkPha
 	return g.copyNetworkConfig(quarNet)
 }
 
-// copyNetworkConfig creates a deep copy of network configuration
+// copyNetworkConfig creates a deep copy of network configuration.
 func (g *NetworkConfigGenerator) copyNetworkConfig(config *entities.NetworkPhaseConfig) *entities.NetworkPhaseConfig {
 	if config == nil {
 		return nil
 	}
 
-	copy := &entities.NetworkPhaseConfig{
-		VLAN:         config.VLAN,
-		StaticIP:     config.StaticIP,
-		Gateway:      config.Gateway,
-		DNS:          make([]string, len(config.DNS)),
-		AuthMethod:   config.AuthMethod,
-		Subnet:       config.Subnet,
-		DNSServers:   make([]string, len(config.DNSServers)),
-		DHCP:         config.DHCP,
-		FirewallZone: config.FirewallZone,
+	cp := &entities.NetworkPhaseConfig{
+		VLAN:       config.VLAN,
+		StaticIP:   config.StaticIP,
+		Gateway:    config.Gateway,
+		DNS:        make([]string, len(config.DNS)),
+		AuthMethod: config.AuthMethod,
+		Subnet:     config.Subnet,
+		DNSServers: make([]string, len(config.DNSServers)),
+		DHCP:       config.DHCP,
+		Zone:       config.Zone,
 	}
 
 	// Deep copy DNS slices
 	for i, dns := range config.DNS {
-		copy.DNS[i] = dns
+		cp.DNS[i] = dns
 	}
 	for i, dns := range config.DNSServers {
-		copy.DNSServers[i] = dns
+		cp.DNSServers[i] = dns
 	}
 
 	// Deep copy DHCP pool if present
 	if config.DHCPPool != nil {
-		copy.DHCPPool = &entities.DHCPPoolConfig{
+		cp.DHCPPool = &entities.DHCPPoolConfig{
 			Network:    config.DHCPPool.Network,
 			RangeStart: config.DHCPPool.RangeStart,
 			RangeEnd:   config.DHCPPool.RangeEnd,
@@ -107,35 +132,76 @@ func (g *NetworkConfigGenerator) copyNetworkConfig(config *entities.NetworkPhase
 
 	// Deep copy ACLs
 	if len(config.ACLs) > 0 {
-		copy.ACLs = make([]entities.ACLConfig, len(config.ACLs))
+		cp.ACLs = make([]entities.ACLConfig, len(config.ACLs))
 		for i, acl := range config.ACLs {
-			copy.ACLs[i] = acl
+			cp.ACLs[i] = acl
 		}
 	}
 
-	return copy
+	return cp
 }
 
-// ExtractVLANs extracts VLAN IDs from the device profile
-func (g *NetworkConfigGenerator) ExtractVLANs() VLANSet {
-	vlans := VLANSet{}
+// networkName returns the resolved logical network name for the given phase
+// accessor and its default name when the profile's override field is empty.
+func networkName(override, defaultName string) string {
+	if override != "" {
+		return override
+	}
+	return defaultName
+}
 
-	if g.profile != nil {
-		if provNet := g.profile.GetEnrollmentNetworkConfig(); provNet != nil {
-			vlans.Provisioning = provNet.VLAN
-		}
-		if prodNet := g.profile.GetPostEnrollmentNetworkConfig(); prodNet != nil {
-			vlans.Production = prodNet.VLAN
-		}
-		if quarNet := g.profile.GetFailureNetworkConfig(); quarNet != nil {
-			vlans.Quarantine = quarNet.VLAN
-		}
+// ExtractZoneNetworks extracts the zone identity, network name, and VLAN ID
+// for all three network phases from the device profile. Missing zone values
+// are left as empty strings (consistent with how missing VLANs are left as
+// zero — no error is returned for absent data).
+func (g *NetworkConfigGenerator) ExtractZoneNetworks() ZoneNetworkSet {
+	if g.profile == nil {
+		return ZoneNetworkSet{}
 	}
 
-	return vlans
+	set := ZoneNetworkSet{}
+
+	// Provisioning (enrollment) phase
+	provName := networkName(g.profile.EnrollmentNetwork, entities.DefaultEnrollmentNetwork)
+	if provNet := g.profile.GetEnrollmentNetworkConfig(); provNet != nil {
+		set.Provisioning = ZoneNetwork{
+			Zone: provNet.Zone,
+			Name: provName,
+			VLAN: provNet.VLAN,
+		}
+	} else {
+		set.Provisioning = ZoneNetwork{Name: provName}
+	}
+
+	// Trusted (post-enrollment) phase — GetPostEnrollmentNetworkConfig already
+	// applies the profile-level Zone fallback when the per-network Zone is empty.
+	trustedName := networkName(g.profile.PostEnrollmentNetwork, entities.DefaultPostEnrollmentNetwork)
+	if trustedNet := g.profile.GetPostEnrollmentNetworkConfig(); trustedNet != nil {
+		set.Trusted = ZoneNetwork{
+			Zone: trustedNet.Zone,
+			Name: trustedName,
+			VLAN: trustedNet.VLAN,
+		}
+	} else {
+		set.Trusted = ZoneNetwork{Name: trustedName}
+	}
+
+	// Quarantine (failure) phase
+	quarName := networkName(g.profile.FailureNetwork, entities.DefaultFailureNetwork)
+	if quarNet := g.profile.GetFailureNetworkConfig(); quarNet != nil {
+		set.Quarantine = ZoneNetwork{
+			Zone: quarNet.Zone,
+			Name: quarName,
+			VLAN: quarNet.VLAN,
+		}
+	} else {
+		set.Quarantine = ZoneNetwork{Name: quarName}
+	}
+
+	return set
 }
 
-// ExtractACLs extracts ACL rules from a network configuration
+// ExtractACLs extracts ACL rules from a network configuration.
 func (g *NetworkConfigGenerator) ExtractACLs(config *entities.NetworkPhaseConfig) []entities.ACLConfig {
 	if config == nil || len(config.ACLs) == 0 {
 		return nil
@@ -146,32 +212,35 @@ func (g *NetworkConfigGenerator) ExtractACLs(config *entities.NetworkPhaseConfig
 	return acls
 }
 
-// VLANSet represents VLAN IDs for all network phases
-type VLANSet struct {
-	Provisioning uint16
-	Production   uint16
-	Quarantine   uint16
-}
-
-// SystemdNetworkdConfigGenerator generates systemd-networkd configuration files
+// SystemdNetworkdConfigGenerator generates systemd-networkd configuration files.
 type SystemdNetworkdConfigGenerator struct {
 	interfaceName string
 }
 
-// NewSystemdNetworkdConfigGenerator creates a new systemd-networkd config generator
+// NewSystemdNetworkdConfigGenerator creates a new systemd-networkd config generator.
 func NewSystemdNetworkdConfigGenerator(interfaceName string) *SystemdNetworkdConfigGenerator {
 	return &SystemdNetworkdConfigGenerator{
 		interfaceName: interfaceName,
 	}
 }
 
-// Generate creates systemd-networkd configuration from network phase config
+// Generate creates systemd-networkd configuration from network phase config.
+// When config.Zone is non-empty a comment header
+// "# trusted-platform-zone: <zone>" is prepended so the installed OS can
+// identify which SDN zone this interface belongs to (systemd-networkd has no
+// native zone concept).
 func (s *SystemdNetworkdConfigGenerator) Generate(config *entities.NetworkPhaseConfig) string {
 	if config == nil {
 		return ""
 	}
 
 	var builder strings.Builder
+
+	// Emit zone metadata comment when zone is known. systemd-networkd has no
+	// zone concept; a comment header is the correct vehicle.
+	if config.Zone != "" {
+		fmt.Fprintf(&builder, "# trusted-platform-zone: %s\n", config.Zone)
+	}
 
 	// Match section
 	builder.WriteString("[Match]\n")
@@ -214,25 +283,25 @@ func (s *SystemdNetworkdConfigGenerator) Generate(config *entities.NetworkPhaseC
 	return builder.String()
 }
 
-// GenerateFilename generates the appropriate filename for the network config
+// GenerateFilename generates the appropriate filename for the network config.
 func (s *SystemdNetworkdConfigGenerator) GenerateFilename(phase string) string {
 	// systemd-networkd filenames use priority prefix (e.g., 10-eth0.network)
 	return fmt.Sprintf("10-%s-%s.network", s.interfaceName, phase)
 }
 
-// DnsmasqConfigGenerator generates dnsmasq DHCP server configuration files
+// DnsmasqConfigGenerator generates dnsmasq DHCP server configuration files.
 type DnsmasqConfigGenerator struct {
 	interfaceName string
 }
 
-// NewDnsmasqConfigGenerator creates a new dnsmasq config generator
+// NewDnsmasqConfigGenerator creates a new dnsmasq config generator.
 func NewDnsmasqConfigGenerator(interfaceName string) *DnsmasqConfigGenerator {
 	return &DnsmasqConfigGenerator{
 		interfaceName: interfaceName,
 	}
 }
 
-// Generate creates dnsmasq configuration from network phase config
+// Generate creates dnsmasq configuration from network phase config.
 func (d *DnsmasqConfigGenerator) Generate(config *entities.NetworkPhaseConfig) string {
 	if config == nil || config.DHCPPool == nil {
 		return ""
@@ -276,18 +345,18 @@ func (d *DnsmasqConfigGenerator) Generate(config *entities.NetworkPhaseConfig) s
 	return builder.String()
 }
 
-// GenerateFilename generates the appropriate filename for the dnsmasq config
+// GenerateFilename generates the appropriate filename for the dnsmasq config.
 func (d *DnsmasqConfigGenerator) GenerateFilename(phase string) string {
 	return fmt.Sprintf("dnsmasq-%s.conf", phase)
 }
 
-// NetworkConfigWriter handles writing network configuration files to ISO overlay
+// NetworkConfigWriter handles writing network configuration files to ISO overlay.
 type NetworkConfigWriter struct {
 	overlayDir string
 	generator  *NetworkConfigGenerator
 }
 
-// NewNetworkConfigWriter creates a new network config writer
+// NewNetworkConfigWriter creates a new network config writer.
 func NewNetworkConfigWriter(overlayDir string, profile *entities.DeviceProfile) *NetworkConfigWriter {
 	return &NetworkConfigWriter{
 		overlayDir: overlayDir,
@@ -295,55 +364,55 @@ func NewNetworkConfigWriter(overlayDir string, profile *entities.DeviceProfile) 
 	}
 }
 
-// GetNetworkConfigDir returns the directory path for network configs in the overlay
+// GetNetworkConfigDir returns the directory path for network configs in the overlay.
 func (w *NetworkConfigWriter) GetNetworkConfigDir() string {
 	return filepath.Join(w.overlayDir, "etc", "platformd", "network")
 }
 
-// GetSystemdNetworkdDir returns the directory path for systemd-networkd configs
+// GetSystemdNetworkdDir returns the directory path for systemd-networkd configs.
 func (w *NetworkConfigWriter) GetSystemdNetworkdDir() string {
 	return filepath.Join(w.overlayDir, "etc", "systemd", "network")
 }
 
-// GetDnsmasqConfigDir returns the directory path for dnsmasq configs
+// GetDnsmasqConfigDir returns the directory path for dnsmasq configs.
 func (w *NetworkConfigWriter) GetDnsmasqConfigDir() string {
 	return filepath.Join(w.overlayDir, "etc", "dnsmasq.d")
 }
 
-// GetProvisioningConfigPath returns the path for provisioning network config
+// GetProvisioningConfigPath returns the path for provisioning network config.
 func (w *NetworkConfigWriter) GetProvisioningConfigPath() string {
 	return filepath.Join(w.GetNetworkConfigDir(), "provisioning.yaml")
 }
 
-// GetProductionConfigPath returns the path for production network config
-func (w *NetworkConfigWriter) GetProductionConfigPath() string {
-	return filepath.Join(w.GetNetworkConfigDir(), "production.yaml")
+// GetTrustedConfigPath returns the path for the trusted-zone (post-enrollment) network config.
+func (w *NetworkConfigWriter) GetTrustedConfigPath() string {
+	return filepath.Join(w.GetNetworkConfigDir(), "trusted.yaml")
 }
 
-// GetQuarantineConfigPath returns the path for quarantine network config
+// GetQuarantineConfigPath returns the path for quarantine network config.
 func (w *NetworkConfigWriter) GetQuarantineConfigPath() string {
 	return filepath.Join(w.GetNetworkConfigDir(), "quarantine.yaml")
 }
 
-// PlatformAPIConfig represents platform API endpoint configuration for provisioning
+// PlatformAPIConfig represents platform API endpoint configuration for provisioning.
 type PlatformAPIConfig struct {
-	// Endpoint is the platform API URL
+	// Endpoint is the platform API URL.
 	Endpoint string `yaml:"endpoint" json:"endpoint"`
 
-	// ProfileID is the device profile ID to fetch
+	// ProfileID is the device profile ID to fetch.
 	ProfileID uint64 `yaml:"profile_id,omitempty" json:"profile_id,omitempty"`
 
-	// ProfileName is the device profile name to fetch (alternative to ID)
+	// ProfileName is the device profile name to fetch (alternative to ID).
 	ProfileName string `yaml:"profile_name,omitempty" json:"profile_name,omitempty"`
 
-	// TLSVerify controls TLS certificate verification
+	// TLSVerify controls TLS certificate verification.
 	TLSVerify bool `yaml:"tls_verify" json:"tls_verify"`
 
-	// CACertPath is the path to the CA certificate bundle
+	// CACertPath is the path to the CA certificate bundle.
 	CACertPath string `yaml:"ca_cert_path,omitempty" json:"ca_cert_path,omitempty"`
 }
 
-// GetPlatformAPIConfigPath returns the path for platform API config
+// GetPlatformAPIConfigPath returns the path for platform API config.
 func (w *NetworkConfigWriter) GetPlatformAPIConfigPath() string {
 	return filepath.Join(w.GetNetworkConfigDir(), "platform-api.yaml")
 }

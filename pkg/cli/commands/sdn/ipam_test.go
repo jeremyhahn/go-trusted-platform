@@ -40,11 +40,17 @@ func TestIPAMCommandSubcommands(t *testing.T) {
 func TestIPAMPoolSubcommands(t *testing.T) {
 	cmd := newIPAMPoolCommand(testGetFlags())
 	commands := cmd.Commands()
-	if len(commands) != 1 {
-		t.Errorf("expected 1 subcommand (list), got %d", len(commands))
+	if len(commands) != 5 {
+		t.Errorf("expected 5 subcommands (create, get, update, delete, list), got %d", len(commands))
 	}
-	if len(commands) > 0 && commands[0].Name() != "list" {
-		t.Errorf("expected 'list' subcommand, got %s", commands[0].Name())
+	found := make(map[string]bool, len(commands))
+	for _, sub := range commands {
+		found[sub.Name()] = true
+	}
+	for _, expected := range []string{"create", "get", "update", "delete", "list"} {
+		if !found[expected] {
+			t.Errorf("expected %q subcommand not found", expected)
+		}
 	}
 }
 

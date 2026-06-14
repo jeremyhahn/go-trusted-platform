@@ -880,7 +880,7 @@ func (r *OverlayRESTAdapter) IPAMPoolCreate(ctx context.Context, opts IPAMPoolCr
 		"lease_duration_seconds": int64(opts.LeaseDuration.Seconds()),
 	}
 
-	respBody, err := r.doRequest(ctx, http.MethodPost, "/api/v1/sdn/ipam/pools", reqBody)
+	respBody, err := r.doRequest(ctx, http.MethodPost, "/api/v1/sdn/gateway/ipam/pools", reqBody)
 	if err != nil {
 		return nil, err
 	}
@@ -908,7 +908,7 @@ func (r *OverlayRESTAdapter) IPAMPoolCreate(ctx context.Context, opts IPAMPoolCr
 
 // IPAMPoolDelete deletes an IPAM pool via REST API.
 func (r *OverlayRESTAdapter) IPAMPoolDelete(ctx context.Context, poolID string) (*IPAMPoolDeleteResult, error) {
-	path := "/api/v1/sdn/ipam/pools/" + url.PathEscape(poolID)
+	path := "/api/v1/sdn/gateway/ipam/pools/" + url.PathEscape(poolID)
 	_, err := r.doRequest(ctx, http.MethodDelete, path, nil)
 	if err != nil {
 		return nil, err

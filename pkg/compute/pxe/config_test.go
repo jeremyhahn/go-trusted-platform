@@ -377,8 +377,9 @@ func TestFirmwareConfig_Validate_UnknownSource(t *testing.T) {
 }
 
 func TestConstants(t *testing.T) {
-	assert.Equal(t, uint16(1), DefaultQuarantineVLAN)
-	assert.Equal(t, uint16(2), DefaultProvisioningVLAN)
+	// VLAN defaults now sourced from pkg/sdn/vlan (reference-network.md).
+	assert.Equal(t, uint16(202), DefaultQuarantineVLAN)
+	assert.Equal(t, uint16(201), DefaultProvisioningVLAN)
 	assert.Equal(t, 3, DefaultMaxRetries)
 	assert.Equal(t, 30*time.Minute, DefaultInstallTimeout)
 	assert.Equal(t, 5*time.Minute, DefaultEnrollmentTimeout)

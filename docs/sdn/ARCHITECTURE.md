@@ -139,7 +139,7 @@ TAP device management using netlink protocol.
          └───────────┬───────────┘
                      │ client activates
          ┌───────────▼───────────┐
-         │      Authorized       │ Full production access
+         │      Authorized       │ Full access (profile zone)
          └───────────┬───────────┘
                      │ cert revoked/expired
          ┌───────────▼───────────┐

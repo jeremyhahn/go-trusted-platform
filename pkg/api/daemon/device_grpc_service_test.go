@@ -120,6 +120,16 @@ func (m *mockDeviceService) FindBySerial(ctx context.Context, serial string) (*e
 	return nil, errors.New("device not found")
 }
 
+// FindByHostname finds a device by its IDevID hostname.
+func (m *mockDeviceService) FindByHostname(ctx context.Context, hostname string) (*entities.Device, error) {
+	for _, d := range m.devices {
+		if d.Hostname == hostname {
+			return d, nil
+		}
+	}
+	return nil, errors.New("device not found by hostname")
+}
+
 // Mock profile service for testing
 type mockProfileService struct {
 	profiles               map[uint64]*entities.DeviceProfile
@@ -1288,38 +1298,40 @@ func TestDeviceGRPCService_pbToProfile_WithAllNetworkConfigs(t *testing.T) {
 		Model:    "TestModel",
 		Role:     platformv1.DeviceRole_DEVICE_ROLE_SERVER,
 		EventLog: []byte{0x10, 0x20},
-		ProvisioningNetwork: &platformv1.NetworkPhaseConfig{
-			Vlan:       10,
-			StaticIp:   "192.168.1.100",
-			Gateway:    "192.168.1.1",
-			AuthMethod: platformv1.AuthMethod_AUTH_METHOD_802_1X,
-			Subnet:     "192.168.1.0/24",
-			Dhcp:       true,
-			DhcpPool: &platformv1.DHCPPoolConfig{
-				Network:    "192.168.1.0/24",
-				RangeStart: "192.168.1.10",
-				RangeEnd:   "192.168.1.50",
-				LeaseTime:  3600,
-			},
-			Acls: []*platformv1.ACLConfig{
-				{
-					Priority: 1,
-					Protocol: "tcp",
-					SrcIp:    "192.168.1.0/24",
-					DstIp:    "0.0.0.0/0",
-					SrcPort:  0,
-					DstPort:  443,
-					Action:   "allow",
+		Networks: map[string]*platformv1.NetworkPhaseConfig{
+			entities.DefaultEnrollmentNetwork: {
+				Vlan:       10,
+				StaticIp:   "192.168.1.100",
+				Gateway:    "192.168.1.1",
+				AuthMethod: platformv1.AuthMethod_AUTH_METHOD_802_1X,
+				Subnet:     "192.168.1.0/24",
+				Dhcp:       true,
+				DhcpPool: &platformv1.DHCPPoolConfig{
+					Network:    "192.168.1.0/24",
+					RangeStart: "192.168.1.10",
+					RangeEnd:   "192.168.1.50",
+					LeaseTime:  3600,
+				},
+				Acls: []*platformv1.ACLConfig{
+					{
+						Priority: 1,
+						Protocol: "tcp",
+						SrcIp:    "192.168.1.0/24",
+						DstIp:    "0.0.0.0/0",
+						SrcPort:  0,
+						DstPort:  443,
+						Action:   "allow",
+					},
 				},
 			},
-		},
-		ProductionNetwork: &platformv1.NetworkPhaseConfig{
-			Vlan:    20,
-			Gateway: "10.0.0.1",
-		},
-		QuarantineNetwork: &platformv1.NetworkPhaseConfig{
-			Vlan:         999,
-			FirewallZone: "quarantine",
+			entities.DefaultPostEnrollmentNetwork: {
+				Vlan:    20,
+				Gateway: "10.0.0.1",
+			},
+			entities.DefaultFailureNetwork: {
+				Vlan: 999,
+				Zone: "quarantine",
+			},
 		},
 		PlatformdConfig: &platformv1.PlatformdConfigRef{
 			ConfigType: "reference",
@@ -1369,7 +1381,7 @@ func TestDeviceGRPCService_pbToProfile_WithAllNetworkConfigs(t *testing.T) {
 	// Check quarantine network
 	require.NotNil(t, result.GetFailureNetworkConfig())
 	assert.Equal(t, uint16(999), result.GetFailureNetworkConfig().VLAN)
-	assert.Equal(t, "quarantine", result.GetFailureNetworkConfig().FirewallZone)
+	assert.Equal(t, "quarantine", result.GetFailureNetworkConfig().Zone)
 
 	// Check platformd config
 	require.NotNil(t, result.PlatformdConfig)
@@ -1424,7 +1436,7 @@ func TestDeviceGRPCService_profileToPb_WithAllNetworkConfigs(t *testing.T) {
 						Action:   "allow",
 					},
 				},
-				FirewallZone: "trusted",
+				Zone: "trusted",
 			},
 			entities.DefaultPostEnrollmentNetwork: {
 				VLAN:    40,
@@ -1432,7 +1444,7 @@ func TestDeviceGRPCService_profileToPb_WithAllNetworkConfigs(t *testing.T) {
 			},
 			entities.DefaultFailureNetwork: {
 				VLAN:         888,
-				FirewallZone: "isolated",
+				Zone: "isolated",
 			},
 		},
 		PlatformdConfig: &entities.PlatformdConfigRef{
@@ -1462,23 +1474,27 @@ func TestDeviceGRPCService_profileToPb_WithAllNetworkConfigs(t *testing.T) {
 	assert.Equal(t, platformv1.DeviceRole_DEVICE_ROLE_GATEWAY, result.Role)
 	assert.Equal(t, []byte{0x30, 0x40}, result.EventLog)
 
-	// Check provisioning network
-	require.NotNil(t, result.ProvisioningNetwork)
-	assert.Equal(t, uint32(30), result.ProvisioningNetwork.Vlan)
-	assert.Equal(t, "10.0.0.100", result.ProvisioningNetwork.StaticIp)
-	assert.Equal(t, entities.AuthMethod802_1X.String(), svc.pbToAuthMethod(result.ProvisioningNetwork.AuthMethod).String())
-	require.NotNil(t, result.ProvisioningNetwork.DhcpPool)
-	assert.Equal(t, "10.0.0.0/24", result.ProvisioningNetwork.DhcpPool.Network)
-	require.Len(t, result.ProvisioningNetwork.Acls, 1)
-	assert.Equal(t, "allow", result.ProvisioningNetwork.Acls[0].Action)
+	// Check networks map
+	require.NotNil(t, result.Networks)
+	provNet := result.Networks[entities.DefaultEnrollmentNetwork]
+	require.NotNil(t, provNet)
+	assert.Equal(t, uint32(30), provNet.Vlan)
+	assert.Equal(t, "10.0.0.100", provNet.StaticIp)
+	assert.Equal(t, entities.AuthMethod802_1X.String(), svc.pbToAuthMethod(provNet.AuthMethod).String())
+	require.NotNil(t, provNet.DhcpPool)
+	assert.Equal(t, "10.0.0.0/24", provNet.DhcpPool.Network)
+	require.Len(t, provNet.Acls, 1)
+	assert.Equal(t, "allow", provNet.Acls[0].Action)
 
-	// Check production network
-	require.NotNil(t, result.ProductionNetwork)
-	assert.Equal(t, uint32(40), result.ProductionNetwork.Vlan)
+	// Check trusted (post-enrollment) network
+	prodNet := result.Networks[entities.DefaultPostEnrollmentNetwork]
+	require.NotNil(t, prodNet)
+	assert.Equal(t, uint32(40), prodNet.Vlan)
 
 	// Check quarantine network
-	require.NotNil(t, result.QuarantineNetwork)
-	assert.Equal(t, uint32(888), result.QuarantineNetwork.Vlan)
+	quarNet := result.Networks[entities.DefaultFailureNetwork]
+	require.NotNil(t, quarNet)
+	assert.Equal(t, uint32(888), quarNet.Vlan)
 
 	// Check platformd config
 	require.NotNil(t, result.PlatformdConfig)
@@ -1519,7 +1535,7 @@ func TestDeviceGRPCService_pbToNetworkPhaseConfig_WithDHCPPool(t *testing.T) {
 			RangeEnd:   "198.18.1.200",
 			LeaseTime:  43200,
 		},
-		FirewallZone: "dmz",
+		Zone: "dmz",
 		Acls: []*platformv1.ACLConfig{
 			{
 				Priority: 5,
@@ -1542,7 +1558,7 @@ func TestDeviceGRPCService_pbToNetworkPhaseConfig_WithDHCPPool(t *testing.T) {
 	assert.Equal(t, entities.AuthMethod802_1X, result.AuthMethod)
 	assert.Equal(t, "198.18.1.0/24", result.Subnet)
 	assert.True(t, result.DHCP)
-	assert.Equal(t, "dmz", result.FirewallZone)
+	assert.Equal(t, "dmz", result.Zone)
 
 	require.NotNil(t, result.DHCPPool)
 	assert.Equal(t, "198.18.1.0/24", result.DHCPPool.Network)
@@ -1589,7 +1605,7 @@ func TestDeviceGRPCService_networkPhaseConfigToPb_WithDHCPPool(t *testing.T) {
 			RangeEnd:   "172.16.60.150",
 			LeaseTime:  86400,
 		},
-		FirewallZone: "internal",
+		Zone: "internal",
 		ACLs: []entities.ACLConfig{
 			{
 				Priority: 100,
@@ -1610,7 +1626,7 @@ func TestDeviceGRPCService_networkPhaseConfigToPb_WithDHCPPool(t *testing.T) {
 	assert.Equal(t, "172.16.60.1", result.Gateway)
 	assert.Equal(t, platformv1.AuthMethod_AUTH_METHOD_NONE, result.AuthMethod)
 	assert.False(t, result.Dhcp)
-	assert.Equal(t, "internal", result.FirewallZone)
+	assert.Equal(t, "internal", result.Zone)
 
 	require.NotNil(t, result.DhcpPool)
 	assert.Equal(t, "172.16.60.0/24", result.DhcpPool.Network)

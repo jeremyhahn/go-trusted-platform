@@ -494,9 +494,12 @@ func TestFinalCov_Daemon_OtherServiceAccessors(t *testing.T) {
 		t.Fatalf("New() failed: %v", err)
 	}
 
-	// Test various service accessors that return nil when not configured
-	if d.SDNService() != nil {
-		t.Error("SDNService() should return nil when not configured")
+	// SDNService always returns a non-nil zone-capable stub; OVSClient is nil when no socket is configured.
+	if d.SDNService() == nil {
+		t.Error("SDNService() must return a non-nil zone-capable stub")
+	}
+	if d.SDNService().OVSClient() != nil {
+		t.Error("SDNService().OVSClient() must be nil when OVSSocketPath is empty")
 	}
 
 	if d.KMSService() != nil {

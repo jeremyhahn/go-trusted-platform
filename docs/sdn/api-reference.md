@@ -122,3 +122,20 @@ type PortPolicy struct {
 ## Authentication
 
 All protocols require mTLS authentication. Clients must present valid certificates signed by the platform CA.
+
+## Network Zone Management
+
+All zone endpoints are available across REST, gRPC, QUIC, MCP, Unix socket, and CLI:
+
+| Operation | REST | gRPC | CLI |
+|-----------|------|------|-----|
+| Create | `POST /api/v1/sdn/zones` | `CreateNetworkZone` | `platformctl sdn zone create` |
+| List | `GET /api/v1/sdn/zones` | `ListNetworkZones` | `platformctl sdn zone list` |
+| Update | `PUT /api/v1/sdn/zones/{name}` | `UpdateNetworkZone` | `platformctl sdn zone update` |
+| Delete | `DELETE /api/v1/sdn/zones/{name}` | `DeleteNetworkZone` | `platformctl sdn zone delete` |
+| Assign | `PUT /api/v1/sdn/networks/{network}/zone` | `AssignNetworkZone` | `platformctl sdn zone assign` |
+
+MCP tools: `gateway_zone_list`, `gateway_zone_create`, `gateway_zone_update`,
+`gateway_zone_delete`, `gateway_zone_assign`.
+
+See the protocol-specific reference docs for full request/response schemas.

@@ -276,3 +276,64 @@ func (e *ErrListPoliciesFailed) Error() string {
 }
 
 func (e *ErrListPoliciesFailed) Unwrap() error { return e.Cause }
+
+// Network Zone Errors
+
+// ErrCreateNetworkZoneFailed indicates failure to create a network zone.
+type ErrCreateNetworkZoneFailed struct {
+	Cause error
+}
+
+func (e *ErrCreateNetworkZoneFailed) Error() string {
+	return fmt.Sprintf("failed to create network zone: %v", e.Cause)
+}
+
+func (e *ErrCreateNetworkZoneFailed) Unwrap() error { return e.Cause }
+
+// ErrUpdateNetworkZoneFailed indicates failure to update a network zone.
+type ErrUpdateNetworkZoneFailed struct {
+	Name  string
+	Cause error
+}
+
+func (e *ErrUpdateNetworkZoneFailed) Error() string {
+	return fmt.Sprintf("failed to update network zone %s: %v", e.Name, e.Cause)
+}
+
+func (e *ErrUpdateNetworkZoneFailed) Unwrap() error { return e.Cause }
+
+// ErrDeleteNetworkZoneFailed indicates failure to delete a network zone.
+type ErrDeleteNetworkZoneFailed struct {
+	Name  string
+	Cause error
+}
+
+func (e *ErrDeleteNetworkZoneFailed) Error() string {
+	return fmt.Sprintf("failed to delete network zone %s: %v", e.Name, e.Cause)
+}
+
+func (e *ErrDeleteNetworkZoneFailed) Unwrap() error { return e.Cause }
+
+// ErrListNetworkZonesFailed indicates failure to list network zones.
+type ErrListNetworkZonesFailed struct {
+	Cause error
+}
+
+func (e *ErrListNetworkZonesFailed) Error() string {
+	return fmt.Sprintf("failed to list network zones: %v", e.Cause)
+}
+
+func (e *ErrListNetworkZonesFailed) Unwrap() error { return e.Cause }
+
+// ErrAssignNetworkZoneFailed indicates failure to assign a network to a zone.
+type ErrAssignNetworkZoneFailed struct {
+	Network string
+	Zone    string
+	Cause   error
+}
+
+func (e *ErrAssignNetworkZoneFailed) Error() string {
+	return fmt.Sprintf("failed to assign network %s to zone %s: %v", e.Network, e.Zone, e.Cause)
+}
+
+func (e *ErrAssignNetworkZoneFailed) Unwrap() error { return e.Cause }

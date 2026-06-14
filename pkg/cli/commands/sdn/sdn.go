@@ -91,6 +91,7 @@ Examples:
 	cmd.AddCommand(NewOverlayCommand(getFlags))
 	cmd.AddCommand(NewGatewayCommand(getFlags))
 	cmd.AddCommand(NewIPAMCommand(getFlags))
+	cmd.AddCommand(NewZoneCommand(getFlags))
 	cmd.AddCommand(NewPolicyCommand(getFlags))
 
 	return cmd

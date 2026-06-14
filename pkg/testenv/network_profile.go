@@ -76,7 +76,7 @@ func (b *ProfileNetworkBuilder) WithClientProfile(p *deviceentities.DeviceProfil
 }
 
 // Build creates a NetworkConfig from the profiles
-// Uses production network config from server profile and provisioning from client profile
+// Uses trusted network config from server profile and provisioning from client profile
 func (b *ProfileNetworkBuilder) Build() (*NetworkConfig, error) {
 	// Start with base config or create default
 	cfg := b.baseConfig
@@ -84,7 +84,7 @@ func (b *ProfileNetworkBuilder) Build() (*NetworkConfig, error) {
 		cfg = DefaultNetworkConfig()
 	}
 
-	// Extract server production network configuration
+	// Extract server trusted network configuration
 	if b.serverProfile != nil {
 		prodNet := b.serverProfile.GetPostEnrollmentNetworkConfig()
 		if prodNet != nil {
@@ -94,7 +94,7 @@ func (b *ProfileNetworkBuilder) Build() (*NetworkConfig, error) {
 			}
 			cfg.ServerIP = serverIP
 
-			// Extract subnet from server production network
+			// Extract subnet from server trusted network
 			subnet, err := b.extractSubnetFromNetworkPhase(prodNet)
 			if err != nil {
 				return nil, fmt.Errorf("failed to extract server subnet: %w", err)
@@ -113,7 +113,7 @@ func (b *ProfileNetworkBuilder) Build() (*NetworkConfig, error) {
 				cfg.GatewayIP = gateway
 			}
 		} else {
-			return nil, &ErrMissingNetworkConfig{Phase: "production (server)"}
+			return nil, &ErrMissingNetworkConfig{Phase: "trusted (server)"}
 		}
 	}
 

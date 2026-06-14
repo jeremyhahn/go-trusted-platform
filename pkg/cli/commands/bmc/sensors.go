@@ -17,7 +17,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -54,6 +53,9 @@ Examples:
 	}
 
 	cmd.Flags().StringVar(&flags.serverURL, "server-url", "", "platformd server URL (required)")
+	cmd.Flags().StringVar(&flags.caCert, "ca-cert", "", "CA bundle to verify the platformd TLS certificate (defaults to $PLATFORM_CA_CERT)")
+	cmd.Flags().StringVar(&flags.clientCert, "client-cert", "", "client certificate for mutual TLS (defaults to $PLATFORM_CLIENT_CERT)")
+	cmd.Flags().StringVar(&flags.clientKey, "client-key", "", "client key for mutual TLS (defaults to $PLATFORM_CLIENT_KEY)")
 	cmd.Flags().StringVar(&flags.profileID, "profile-id", "", "BMC profile ID (required)")
 	addStandaloneFlags(cmd, &standalone)
 
@@ -67,11 +69,14 @@ func runSensors(flags *bmcFlags, getFlags func() *cli.CommonFlags) error {
 	}
 
 	ctx := context.Background()
-	client := &http.Client{}
+	client, err := newBMCHTTPClient(flags)
+	if err != nil {
+		return err
+	}
 
 	url := buildURL(flags.serverURL, flags.profileID, "sensors")
 
-	var resp sensorsResponse
+	var resp []sensorReading
 	if err := doGet(ctx, client, url, &resp); err != nil {
 		return err
 	}
@@ -81,8 +86,8 @@ func runSensors(flags *bmcFlags, getFlags func() *cli.CommonFlags) error {
 		return json.NewEncoder(os.Stdout).Encode(resp)
 	}
 
-	fmt.Fprintf(os.Stdout, "Profile: %s\nSensors:\n", resp.ProfileID)
-	for _, s := range resp.Sensors {
+	fmt.Fprintf(os.Stdout, "Sensors:\n")
+	for _, s := range resp {
 		fmt.Fprintf(os.Stdout, "  %-30s %8.2f %-10s [%s]\n", s.Name, s.Value, s.Units, s.Status)
 	}
 	return nil

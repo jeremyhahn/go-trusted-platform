@@ -36,9 +36,9 @@ var (
 	// The policy engine is required for evaluating network access policies.
 	ErrPolicyEngineNil = errors.New("policy engine is nil")
 
-	// ErrVLANManagerNil indicates the VLAN flow manager dependency was not provided.
-	// The VLAN manager is required for installing and managing OVS flow rules.
-	ErrVLANManagerNil = errors.New("VLAN flow manager is nil")
+	// ErrZoneFlowManagerNil indicates the zone flow manager dependency was not provided.
+	// The zone flow manager is required for installing and managing OVS flow rules.
+	ErrZoneFlowManagerNil = errors.New("zone flow manager is nil")
 
 	// ErrProfileDAONil indicates the profile data access object was not provided.
 	// The profile DAO is required for retrieving device network profiles.
@@ -92,9 +92,9 @@ var (
 	// Profiles must contain valid network configuration to assign access.
 	ErrInvalidProfile = errors.New("device profile is invalid or incomplete")
 
-	// ErrNoProductionNetwork indicates the profile is missing production network config.
-	// Production network configuration is required for trusted device access.
-	ErrNoProductionNetwork = errors.New("profile missing production network config")
+	// ErrNoTrustedNetwork indicates the profile is missing post-enrollment (trusted) network config.
+	// Trusted network configuration is required for authorized device access.
+	ErrNoTrustedNetwork = errors.New("profile missing trusted network config")
 
 	// ErrNoQuarantineNetwork indicates the profile is missing quarantine network config.
 	// Quarantine network configuration is required for untrusted device isolation.

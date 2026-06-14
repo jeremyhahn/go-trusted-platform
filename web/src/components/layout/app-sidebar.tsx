@@ -147,6 +147,8 @@ const navigation = [
     icon: Network,
     children: [
       { title: "SDN Bridges", href: "/networking/sdn" },
+      { title: "Network Zones", href: "/networking/zones" },
+      { title: "IPAM Pools", href: "/networking/ipam" },
       { title: "Ports", href: "/networking/ports" },
       { title: "Flows", href: "/networking/flows" },
       { title: "VLANs", href: "/networking/vlans" },

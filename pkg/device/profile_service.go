@@ -46,6 +46,13 @@ func NewProfileService(ds *Datastore) (*ProfileService, error) {
 	}, nil
 }
 
+// DAO returns the underlying DeviceProfileDAO. It is used by the SDN
+// enrollment hook constructor which requires direct DAO access for
+// profile matching during device enrollment.
+func (s *ProfileService) DAO() dao.DeviceProfileDAO {
+	return s.profileDAO
+}
+
 // Save persists a device profile.
 func (s *ProfileService) Save(ctx context.Context, profile *entities.DeviceProfile) error {
 

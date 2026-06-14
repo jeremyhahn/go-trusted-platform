@@ -31,6 +31,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	devicedao "github.com/jeremyhahn/go-trusted-platform/pkg/device/dao"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
 // HandlerFunc defines the function signature for network event handlers.
@@ -47,8 +48,8 @@ type AdapterConfig struct {
 	// PolicyEngine is the SDN policy engine for managing port states and policies.
 	PolicyEngine policy.PolicyEngine
 
-	// VLANManager manages VLAN flow rules for device network phases.
-	VLANManager *policy.VLANFlowManager
+	// ZoneFlowManager manages zone-keyed flow rules for device network phases.
+	ZoneFlowManager *policy.ZoneFlowManager
 
 	// EnrollmentHook handles device enrollment callbacks and port registration.
 	EnrollmentHook *policy.SDNEnrollmentHook
@@ -61,12 +62,12 @@ type AdapterConfig struct {
 // device lifecycle events to SDN policy enforcement. It uses map-based dispatch
 // for O(1) handler lookup when processing network events.
 type DeviceSDNAdapter struct {
-	logger         *slog.Logger
-	policyEngine   policy.PolicyEngine
-	vlanManager    *policy.VLANFlowManager
-	enrollmentHook *policy.SDNEnrollmentHook
-	profileDAO     devicedao.DeviceProfileDAO
-	handlers       map[device.NetworkEvent]HandlerFunc
+	logger          *slog.Logger
+	policyEngine    policy.PolicyEngine
+	zoneFlowManager *policy.ZoneFlowManager
+	enrollmentHook  *policy.SDNEnrollmentHook
+	profileDAO      devicedao.DeviceProfileDAO
+	handlers        map[device.NetworkEvent]HandlerFunc
 }
 
 // NewDeviceSDNAdapter creates a new DeviceSDNAdapter with the provided configuration.
@@ -76,8 +77,8 @@ func NewDeviceSDNAdapter(config AdapterConfig) (*DeviceSDNAdapter, error) {
 		return nil, ErrPolicyEngineNil
 	}
 
-	if config.VLANManager == nil {
-		return nil, ErrVLANManagerNil
+	if config.ZoneFlowManager == nil {
+		return nil, ErrZoneFlowManagerNil
 	}
 
 	if config.EnrollmentHook == nil {
@@ -94,12 +95,12 @@ func NewDeviceSDNAdapter(config AdapterConfig) (*DeviceSDNAdapter, error) {
 	}
 
 	adapter := &DeviceSDNAdapter{
-		logger:         logger,
-		policyEngine:   config.PolicyEngine,
-		vlanManager:    config.VLANManager,
-		enrollmentHook: config.EnrollmentHook,
-		profileDAO:     config.ProfileDAO,
-		handlers:       make(map[device.NetworkEvent]HandlerFunc, 4),
+		logger:          logger,
+		policyEngine:    config.PolicyEngine,
+		zoneFlowManager: config.ZoneFlowManager,
+		enrollmentHook:  config.EnrollmentHook,
+		profileDAO:      config.ProfileDAO,
+		handlers:        make(map[device.NetworkEvent]HandlerFunc, 4),
 	}
 
 	adapter.initHandlers()
@@ -186,7 +187,7 @@ func (a *DeviceSDNAdapter) dispatch(ctx context.Context, eventType device.Networ
 func (a *DeviceSDNAdapter) applyPhase(ctx context.Context, event *device.NetworkEventContext) error {
 	phaseHandlers := map[device.NetworkPhase]func(context.Context, *device.NetworkEventContext) error{
 		device.NetworkPhaseProvisioning: a.applyProvisioningPhase,
-		device.NetworkPhaseProduction:   a.applyProductionPhase,
+		device.NetworkPhaseTrusted:   a.applyProductionPhase,
 		device.NetworkPhaseQuarantine:   a.applyQuarantinePhase,
 	}
 
@@ -201,13 +202,14 @@ func (a *DeviceSDNAdapter) applyPhase(ctx context.Context, event *device.Network
 }
 
 // applyProvisioningPhase configures the port for provisioning network access.
+// The port is placed in zone.ZoneProvisioning; VLAN is resolved via ZoneIndex.
 func (a *DeviceSDNAdapter) applyProvisioningPhase(ctx context.Context, event *device.NetworkEventContext) error {
 	a.logger.Info("applying provisioning phase",
 		slog.String("port_id", event.PortID),
 		slog.String("mac", event.MAC))
 
-	if err := a.vlanManager.ApplyProvisioningFlows(event.PortID, event.MAC); err != nil {
-		a.logger.Error("failed to apply provisioning flows",
+	if err := a.zoneFlowManager.ApplyZoneFlows(ctx, event.PortID, zone.ZoneProvisioning); err != nil {
+		a.logger.Error("failed to apply provisioning zone flows",
 			slog.String("port_id", event.PortID),
 			slog.String("error", err.Error()))
 		return ErrFlowInstallFailed
@@ -223,7 +225,9 @@ func (a *DeviceSDNAdapter) applyProvisioningPhase(ctx context.Context, event *de
 	return nil
 }
 
-// applyProductionPhase configures the port for production network access.
+// applyProductionPhase configures the port for production (trusted) network access.
+// Enrolled+authorized devices are moved to zone.ZoneTrusted; VLAN is resolved via
+// ZoneIndex. Profile-level ACLs are applied through the policy engine.
 func (a *DeviceSDNAdapter) applyProductionPhase(ctx context.Context, event *device.NetworkEventContext) error {
 	a.logger.Info("applying production phase",
 		slog.String("port_id", event.PortID),
@@ -234,11 +238,11 @@ func (a *DeviceSDNAdapter) applyProductionPhase(ctx context.Context, event *devi
 	}
 
 	if event.Profile.GetPostEnrollmentNetworkConfig() == nil {
-		return ErrNoProductionNetwork
+		return ErrNoTrustedNetwork
 	}
 
-	if err := a.vlanManager.ApplyProductionFlows(event.PortID, event.Profile); err != nil {
-		a.logger.Error("failed to apply production flows",
+	if err := a.zoneFlowManager.ApplyZoneFlows(ctx, event.PortID, zone.ZoneTrusted); err != nil {
+		a.logger.Error("failed to apply trusted zone flows",
 			slog.String("port_id", event.PortID),
 			slog.String("error", err.Error()))
 		return ErrFlowInstallFailed
@@ -255,14 +259,15 @@ func (a *DeviceSDNAdapter) applyProductionPhase(ctx context.Context, event *devi
 }
 
 // applyQuarantinePhase configures the port for quarantine network access.
+// The port is placed in zone.ZoneQuarantine; VLAN is resolved via ZoneIndex.
 func (a *DeviceSDNAdapter) applyQuarantinePhase(ctx context.Context, event *device.NetworkEventContext) error {
 	a.logger.Info("applying quarantine phase",
 		slog.String("port_id", event.PortID),
 		slog.String("mac", event.MAC),
 		slog.String("reason", event.Reason))
 
-	if err := a.vlanManager.ApplyQuarantineFlows(event.PortID, event.MAC); err != nil {
-		a.logger.Error("failed to apply quarantine flows",
+	if err := a.zoneFlowManager.ApplyZoneFlows(ctx, event.PortID, zone.ZoneQuarantine); err != nil {
+		a.logger.Error("failed to apply quarantine zone flows",
 			slog.String("port_id", event.PortID),
 			slog.String("error", err.Error()))
 		return ErrFlowInstallFailed

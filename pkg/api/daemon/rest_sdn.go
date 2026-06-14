@@ -15,16 +15,44 @@ package daemon
 
 import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 )
 
 // SetSDNService sets the SDN service for REST handlers.
 // This allows SDN bridge, port, flow, and policy operations via REST API.
 // The ovs.ClientInterface satisfies rest.SDNServiceInterface.
+// When svc is nil (no OVS socket configured), handlers are still created so
+// that zone endpoints (registered unconditionally in RegisterRoutes) are
+// available; bridge/port/flow/policy handlers return 503 when svc is nil.
 func (s *RESTServer) SetSDNService(svc ovs.ClientInterface) {
-	if svc != nil {
-		sdnHandlers := rest.NewSDNHandlers(svc, s.logger)
-		sdnHandlers.RegisterRoutes(s.router)
-		s.logger.Info("SDN REST routes registered")
+	sdnHandlers := rest.NewSDNHandlers(svc, s.logger)
+	sdnHandlers.RegisterRoutes(s.router)
+	s.sdnHandlers = sdnHandlers
+}
+
+// SetGatewayIPAMService wires IPAM and gateway REST handlers using the provided
+// allocator. When allocator is nil, a default in-memory allocator is used so
+// that IPAM pool CRUD endpoints work out-of-the-box without a full SDN controller.
+func (s *RESTServer) SetGatewayIPAMService(allocator ipam.Allocator) {
+	svc := newGatewayRESTService(allocator, s.logger)
+	handlers := rest.NewGatewayHandlers(svc, s.logger)
+	handlers.RegisterRoutes(s.router)
+	s.logger.Info("Gateway REST routes registered (IPAM + gateway status)")
+}
+
+// SetZoneService wires the zone service into the SDN REST handlers.
+// Must be called after SetSDNService.
+func (s *RESTServer) SetZoneService(svc gateway.ZoneService) {
+	if svc == nil {
+		return
 	}
+	if s.sdnHandlers == nil {
+		// Ensure handlers exist even if SetSDNService was never called.
+		s.sdnHandlers = rest.NewSDNHandlers(nil, s.logger)
+		s.sdnHandlers.RegisterRoutes(s.router)
+	}
+	s.sdnHandlers.SetZoneService(svc)
+	s.logger.Info("Zone service wired into SDN REST handlers")
 }

@@ -71,8 +71,8 @@ type OVSNetworkOptions struct {
 	// ProvisioningVLAN is the VLAN for provisioning ports
 	ProvisioningVLAN uint16
 
-	// ProductionVLAN is the default VLAN for production ports
-	ProductionVLAN uint16
+	// TrustedVLAN is the default VLAN for trusted-zone ports
+	TrustedVLAN uint16
 
 	// QuarantineVLAN is the VLAN for quarantined ports
 	QuarantineVLAN uint16
@@ -92,7 +92,7 @@ func DefaultOVSNetworkOptions() *OVSNetworkOptions {
 		ClientVLAN:        0,
 		EnableFlowControl: false,
 		ProvisioningVLAN:  100,
-		ProductionVLAN:    200,
+		TrustedVLAN:    200,
 		QuarantineVLAN:    300,
 	}
 }
@@ -654,8 +654,8 @@ func (n *OVSIsolatedNetwork) SetPhase(portID string, phase NetworkPhase) error {
 	switch phase {
 	case NetworkPhaseProvisioning:
 		info.VLAN = n.opts.ProvisioningVLAN
-	case NetworkPhaseProduction:
-		info.VLAN = n.opts.ProductionVLAN
+	case NetworkPhaseTrusted:
+		info.VLAN = n.opts.TrustedVLAN
 	case NetworkPhaseQuarantine:
 		info.VLAN = n.opts.QuarantineVLAN
 	case NetworkPhaseBlocked, NetworkPhaseUnconnected:
@@ -711,8 +711,8 @@ func (n *OVSIsolatedNetwork) GetPhaseInfo(portID string) (*PortPhaseInfo, error)
 	return &infoCopy, nil
 }
 
-// TransitionToProduction moves a port from provisioning to production
-func (n *OVSIsolatedNetwork) TransitionToProduction(portID string, cert *x509.Certificate) error {
+// TransitionToTrusted moves a port from provisioning to the trusted zone
+func (n *OVSIsolatedNetwork) TransitionToTrusted(portID string, cert *x509.Certificate) error {
 	if portID == "" {
 		return fmt.Errorf("port ID cannot be empty")
 	}
@@ -744,20 +744,20 @@ func (n *OVSIsolatedNetwork) TransitionToProduction(portID string, cert *x509.Ce
 		}
 	}
 
-	// Update phase to production
-	info.Phase = NetworkPhaseProduction
-	info.VLAN = n.opts.ProductionVLAN
+	// Update phase to trusted
+	info.Phase = NetworkPhaseTrusted
+	info.VLAN = n.opts.TrustedVLAN
 	info.LastChange = time.Now()
 
-	// Apply production flows and VLAN
-	if err := n.installPhaseFlows(portID, NetworkPhaseProduction); err != nil {
+	// Apply trusted-zone flows and VLAN
+	if err := n.installPhaseFlows(portID, NetworkPhaseTrusted); err != nil {
 		// Rollback on error
 		info.Phase = NetworkPhaseProvisioning
 		info.VLAN = n.opts.ProvisioningVLAN
-		return fmt.Errorf("failed to install production flows: %w", err)
+		return fmt.Errorf("failed to install trusted flows: %w", err)
 	}
 
-	// Set production VLAN
+	// Set trusted VLAN
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -765,7 +765,7 @@ func (n *OVSIsolatedNetwork) TransitionToProduction(portID string, cert *x509.Ce
 		// Rollback on error
 		info.Phase = NetworkPhaseProvisioning
 		info.VLAN = n.opts.ProvisioningVLAN
-		return fmt.Errorf("failed to set production VLAN: %w", err)
+		return fmt.Errorf("failed to set trusted VLAN: %w", err)
 	}
 
 	return nil
@@ -823,7 +823,7 @@ func (n *OVSIsolatedNetwork) QuarantinePort(portID string, reason string) error 
 	return nil
 }
 
-// UnquarantinePort moves a port back to production
+// UnquarantinePort moves a port back to the trusted zone
 func (n *OVSIsolatedNetwork) UnquarantinePort(portID string) error {
 	if portID == "" {
 		return fmt.Errorf("port ID cannot be empty")
@@ -846,9 +846,9 @@ func (n *OVSIsolatedNetwork) UnquarantinePort(portID string) error {
 		return fmt.Errorf("cannot unquarantine port %s: no certificate available", portID)
 	}
 
-	// Update phase to production
-	info.Phase = NetworkPhaseProduction
-	info.VLAN = n.opts.ProductionVLAN
+	// Update phase to trusted
+	info.Phase = NetworkPhaseTrusted
+	info.VLAN = n.opts.TrustedVLAN
 	info.Reason = ""
 	info.LastChange = time.Now()
 
@@ -861,21 +861,21 @@ func (n *OVSIsolatedNetwork) UnquarantinePort(portID string) error {
 		}
 	}
 
-	// Install production flows
-	if err := n.installPhaseFlows(portID, NetworkPhaseProduction); err != nil {
+	// Install trusted flows
+	if err := n.installPhaseFlows(portID, NetworkPhaseTrusted); err != nil {
 		info.Phase = NetworkPhaseQuarantine
 		info.VLAN = n.opts.QuarantineVLAN
-		return fmt.Errorf("failed to install production flows: %w", err)
+		return fmt.Errorf("failed to install trusted flows: %w", err)
 	}
 
-	// Set production VLAN
+	// Set trusted VLAN
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := n.ovsClient.SetPortVLAN(ctx, portID, int64(info.VLAN)); err != nil {
 		info.Phase = NetworkPhaseQuarantine
 		info.VLAN = n.opts.QuarantineVLAN
-		return fmt.Errorf("failed to set production VLAN: %w", err)
+		return fmt.Errorf("failed to set trusted VLAN: %w", err)
 	}
 
 	return nil
@@ -996,15 +996,15 @@ func (n *OVSIsolatedNetwork) installPhaseFlows(portID string, phase NetworkPhase
 			}
 		}
 
-	case NetworkPhaseProduction:
-		// For production, use policy engine if available, otherwise allow all
+	case NetworkPhaseTrusted:
+		// For trusted zone, use policy engine if available, otherwise allow all
 		if n.policyEngine != nil {
-			// Policy engine will handle production flows
-			// This is typically done during TransitionToProduction when
+			// Policy engine will handle trusted-zone flows
+			// This is typically done during TransitionToTrusted when
 			// the certificate is authenticated
 			return nil
 		}
-		// Default production: allow all traffic on production VLAN
+		// Default trusted: allow all traffic on trusted VLAN
 		flow := &policy.FlowRule{
 			Table:    0,
 			Priority: 1000,
@@ -1012,7 +1012,7 @@ func (n *OVSIsolatedNetwork) installPhaseFlows(portID string, phase NetworkPhase
 			Actions:  "normal",
 		}
 		if err := n.installFlow(ctx, flow); err != nil {
-			return fmt.Errorf("failed to install production flow: %w", err)
+			return fmt.Errorf("failed to install trusted flow: %w", err)
 		}
 
 	case NetworkPhaseQuarantine:

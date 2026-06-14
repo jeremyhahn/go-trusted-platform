@@ -188,6 +188,16 @@ func (m *mockAllocator) GetAllocationsByPool(ctx context.Context, poolID string)
 	return allocs, nil
 }
 
+func (m *mockAllocator) ListPoolsByZone(ctx context.Context, zone string) ([]*ipam.Pool, error) {
+	if zone == "" {
+		return m.ListPools(ctx)
+	}
+	if m.pool != nil && m.pool.Zone == zone {
+		return []*ipam.Pool{m.pool}, nil
+	}
+	return nil, nil
+}
+
 func (m *mockAllocator) ExpireInactive(ctx context.Context, poolID string) ([]*ipam.Allocation, error) {
 	return nil, nil
 }

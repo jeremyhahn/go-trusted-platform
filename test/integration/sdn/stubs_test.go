@@ -231,7 +231,6 @@ func (g *stubGateway) GetNode() gateway.GatewayNode {
 		ID:         "test-gateway-001",
 		NodeID:     12345,
 		Tier:       bgp.SpeakerTierCoordinator,
-		Modes:      g.activeModes,
 		Reputation: 0.95,
 		Age:        180 * 24 * time.Hour,
 		Uptime:     99.9,
@@ -427,6 +426,21 @@ func (a *stubIPAMAllocator) ListPools(ctx context.Context) ([]*ipam.Pool, error)
 	var pools []*ipam.Pool
 	for _, pool := range a.pools {
 		pools = append(pools, pool)
+	}
+	return pools, nil
+}
+
+// ListPoolsByZone returns pools matching the given zone.
+// An empty zone returns all pools.
+func (a *stubIPAMAllocator) ListPoolsByZone(ctx context.Context, zone string) ([]*ipam.Pool, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	var pools []*ipam.Pool
+	for _, pool := range a.pools {
+		if zone == "" || pool.Zone == zone {
+			pools = append(pools, pool)
+		}
 	}
 	return pools, nil
 }

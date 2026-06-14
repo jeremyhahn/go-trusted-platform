@@ -57,6 +57,7 @@ var (
 	caddyInstance *caddy.Instance
 )
 
+// Params holds all dependencies required to create a DNS Service.
 type Params struct {
 	AppName        string
 	AppVersion     string
@@ -69,6 +70,12 @@ type Params struct {
 	Datastore      *Datastore
 	XKMSAdapter    *xkmsadapter.Adapter // Deprecated: Use DNSSECKeyStore instead
 	DNSSECKeyStore DNSSECKeyStore       // DNSSEC key store (XKMS or QuicBaaS KMS)
+	// NetworkZones is the resolved list of network zone names sourced from
+	// sdn.Config.ResolvedZones(). When Config.ZoneSubdomains is true, the
+	// service uses this list to pre-create per-zone sub-zones under the
+	// internal domain at startup. Must not be nil when ZoneSubdomains is true;
+	// ignored otherwise.
+	NetworkZones []string
 }
 
 // DNSService handles zone and record operations.
@@ -525,6 +532,70 @@ func (s *Service) register(
 	}
 
 	return nil, nil
+}
+
+// RegisterWithNetworkZone registers a device hostname under its network zone
+// subdomain when zone_subdomains is enabled. The zone-qualified FQDN is
+// <host>.<networkZone>.<domain> and is registered IN ADDITION to the standard
+// <host>.<domain> registration. When zone_subdomains is disabled or networkZone
+// is empty the method returns nil without registering any extra record.
+//
+// BMC names (host labels ending in "-bmc") are never zone-qualified; this
+// method returns nil immediately for such hosts regardless of other flags.
+//
+// The sub-zone <networkZone>.<domain> must have been pre-created by
+// InitNetworkZoneSubdomains before this method is called; if the sub-zone does
+// not exist, the registration is skipped and nil is returned (best-effort).
+func (s *Service) RegisterWithNetworkZone(
+	ctx context.Context,
+	host, networkZone, ip string,
+) error {
+	if !s.params.Config.ZoneSubdomains {
+		return nil
+	}
+	if networkZone == "" {
+		return nil
+	}
+	if IsBMCName(host) {
+		return nil
+	}
+	if s.params.Config.InternalServer == nil {
+		return nil
+	}
+
+	internalDomain := strings.TrimSuffix(s.params.Config.InternalServer.Zone.Name, ".")
+	subZoneName := fmt.Sprintf("%s.%s.", networkZone, internalDomain)
+	id := util.NewID([]byte(subZoneName))
+
+	subZone, err := s.zoneDAO.Get(ctx, id)
+	if err != nil {
+		// Sub-zone not pre-created: skip best-effort.
+		return nil
+	}
+
+	// Ensure TenantID so Save does not reject the zone.
+	if subZone.TenantID == "" {
+		subZone.TenantID = s.params.TenantID
+	}
+
+	// Idempotent: skip if the A record already exists with the same value.
+	for _, r := range subZone.RecordSet.ARecords {
+		if r.Name == host && r.Value == ip {
+			return nil
+		}
+	}
+
+	subZone.AddARecord(&entities.ARecord{
+		Name:  host,
+		Value: ip,
+		TTL:   3600,
+	})
+
+	if err := s.zoneDAO.Save(ctx, subZone); err != nil {
+		return fmt.Errorf("dns: failed to save zone-qualified A record %s in %s: %w", host, subZoneName, err)
+	}
+
+	return nil
 }
 
 func Run(

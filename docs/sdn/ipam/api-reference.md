@@ -26,7 +26,8 @@ Operations for managing IP address pools:
 | GetPool | Get pool by ID |
 | GetPoolByName | Get pool by name |
 | GetPoolByCIDR | Get pool by CIDR |
-| ListPools | List all pools |
+| ListPools | List all pools (optional zone filter) |
+| ListPoolsByZone | List pools matching a specific zone |
 | UpdatePool | Update pool configuration |
 | DeletePool | Delete a pool |
 | GetPoolStats | Get pool statistics |
@@ -130,6 +131,7 @@ Local IPC for CLI and same-host services.
   "name": "Production IPv4",
   "cidr": "10.0.0.0/24",
   "gateway": "10.0.0.1",
+  "zone":    "trusted",
   "description": "Internal production workloads",
   "tags": ["production", "internal"],
   "total_ips": 254,

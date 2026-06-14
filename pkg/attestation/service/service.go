@@ -24,6 +24,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
@@ -34,7 +35,10 @@ import (
 // Service is the production AttestationService backed by a store +
 // the existing manifest verifier.
 type Service struct {
-	store store.Store
+	store          store.Store
+	mu             sync.RWMutex
+	observers      []AttestationObserver
+	deviceResolver DeviceResolver
 }
 
 // NewService constructs a Service bound to the supplied store.
@@ -70,6 +74,9 @@ func (s *Service) BuildManifest(ctx context.Context, config *manifest.BuilderCon
 // Used by /attestation/manifests/verify and by the WebUI's per-row
 // Verify action. Both success and rejection paths emit events for
 // the audit trail.
+//
+// On completion, registered AttestationObservers are notified so the
+// quarantine loop can react to failures and re-attestation successes.
 func (s *Service) VerifyManifest(
 	ctx context.Context,
 	m *manifest.HostManifest,
@@ -149,6 +156,11 @@ func (s *Service) VerifyManifest(
 		Outcome:    outcome,
 		Reason:     reason,
 	})
+
+	// Notify quarantine-loop observers of the verification outcome.
+	passed := result.Status == manifest.VerificationStatusVerified
+	s.notifyObservers(ctx, m.HostID, passed, attestationDetail(result.Errors))
+
 	return result, nil
 }
 

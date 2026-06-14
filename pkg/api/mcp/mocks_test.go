@@ -1955,8 +1955,12 @@ func (m *mockServiceProvider) GatewayBGPPrefixes(ctx context.Context) ([]interfa
 }
 
 // Gateway IPAM operations
-func (m *mockServiceProvider) GatewayIPAMPools(ctx context.Context) ([]interface{}, error) {
+func (m *mockServiceProvider) GatewayIPAMPools(ctx context.Context, zone string) ([]interface{}, error) {
 	return []interface{}{}, nil
+}
+
+func (m *mockServiceProvider) GatewayIPAMPoolGet(ctx context.Context, poolID string) (interface{}, error) {
+	return map[string]interface{}{"id": poolID, "name": "test-pool", "cidr": "10.0.0.0/24"}, nil
 }
 
 func (m *mockServiceProvider) GatewayIPAMAllocate(ctx context.Context, poolID string, deviceID string, hostname string) (interface{}, error) {
@@ -1975,8 +1979,36 @@ func (m *mockServiceProvider) GatewayIPAMPoolCreate(ctx context.Context, req *IP
 	return map[string]interface{}{"id": "test-pool-id", "name": req.Name, "cidr": req.CIDR}, nil
 }
 
+func (m *mockServiceProvider) GatewayIPAMPoolUpdate(ctx context.Context, poolID string, req *IPAMPoolUpdateRequest) (interface{}, error) {
+	return map[string]interface{}{"id": poolID, "name": req.Name}, nil
+}
+
 func (m *mockServiceProvider) GatewayIPAMPoolDelete(ctx context.Context, poolID string) error {
 	return nil
+}
+
+func (m *mockServiceProvider) GatewayNetworkZoneList(ctx context.Context, lifecycleRole string) ([]interface{}, error) {
+	return []interface{}{}, nil
+}
+
+func (m *mockServiceProvider) GatewayNetworkZoneCreate(ctx context.Context, req *NetworkZoneCreateRequest) (interface{}, error) {
+	return map[string]interface{}{"zone": req, "restart_required": false}, nil
+}
+
+func (m *mockServiceProvider) GatewayNetworkZoneUpdate(ctx context.Context, name string, req *NetworkZoneUpdateRequest) (interface{}, error) {
+	return map[string]interface{}{"zone": req, "restart_required": false}, nil
+}
+
+func (m *mockServiceProvider) GatewayNetworkZoneDelete(ctx context.Context, name string) (bool, error) {
+	return false, nil
+}
+
+func (m *mockServiceProvider) GatewayNetworkZoneAssign(ctx context.Context, network string, zoneName string) (bool, error) {
+	return false, nil
+}
+
+func (m *mockServiceProvider) GatewayNetworkZoneVLAN(ctx context.Context, zoneName string) (uint16, error) {
+	return 100, nil
 }
 
 // Physical TPM operations

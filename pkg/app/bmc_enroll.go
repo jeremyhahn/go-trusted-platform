@@ -304,12 +304,28 @@ func (app *App) EnrollBMC(ctx context.Context, deviceID uint64, bmcCfg *bmc.Conf
 
 	core := &enrollCore{
 		resolver: resolver,
-		certIssuer: func(ctx context.Context) (*x509.Certificate, []byte, []byte, error) {
-			if bmcCfg.Certificate == nil {
-				return nil, nil, nil, ErrBMCCertDisabled
-			}
+		pinUpdater: func(ctx context.Context, host string, port int, spkiPin string, certFP string) error {
+			return app.updateTOFUPin(ctx, host, port, spkiPin, certFP)
+		},
+		credStore:    credStore,
+		deviceLoader: app.loadDeviceForEnroll,
+		deviceSaver:  app.saveDeviceForEnroll,
+	}
+
+	// Wire AutoCertManager as the factory-cert fetcher when Certificate config
+	// is present (it provides GetWebCertificate via live TLS handshake).
+	// Also wire the cert-replace issuer — both require a Certificate config.
+	// When Certificate is nil the replace-certificate step is skipped gracefully
+	// because certIssuer remains nil (step 4 checks core.certIssuer == nil).
+	if bmcCfg.Certificate != nil {
+		mgr, err := bmc.NewAutoCertManager(bmcCfg, bmc.CertBackendAuto, app.Logger.Slog())
+		if err == nil {
+			core.certFetcher = mgr
+		}
+		localCARef := localCA
+		core.certIssuer = func(ctx context.Context) (*x509.Certificate, []byte, []byte, error) {
 			issueOpts := issueBMCCertificateOptions{
-				LocalCAIssuer: localCA,
+				LocalCAIssuer: localCARef,
 				Hostmaster:    app.Hostmaster,
 				Logger:        app.Logger.Slog(),
 			}
@@ -341,21 +357,6 @@ func (app *App) EnrollBMC(ctx context.Context, deviceID uint64, bmcCfg *bmc.Conf
 				}
 			}
 			return newLeaf, leafPEM, caPEM, nil
-		},
-		pinUpdater: func(ctx context.Context, host string, port int, spkiPin string, certFP string) error {
-			return app.updateTOFUPin(ctx, host, port, spkiPin, certFP)
-		},
-		credStore:    credStore,
-		deviceLoader: app.loadDeviceForEnroll,
-		deviceSaver:  app.saveDeviceForEnroll,
-	}
-
-	// Wire AutoCertManager as the factory-cert fetcher when Certificate config
-	// is present (it provides GetWebCertificate via live TLS handshake).
-	if bmcCfg.Certificate != nil {
-		mgr, err := bmc.NewAutoCertManager(bmcCfg, bmc.CertBackendAuto, app.Logger.Slog())
-		if err == nil {
-			core.certFetcher = mgr
 		}
 	}
 

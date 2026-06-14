@@ -801,8 +801,8 @@ func TestService_Status(t *testing.T) {
 	// Check status of initialized but not running service
 	status := svc.Status()
 	assert.False(t, status.Running)
-	assert.Equal(t, uint16(1), status.QuarantineVLAN)
-	assert.Equal(t, uint16(2), status.ProvisioningVLAN)
+	assert.Equal(t, DefaultQuarantineVLAN, status.QuarantineVLAN)
+	assert.Equal(t, DefaultProvisioningVLAN, status.ProvisioningVLAN)
 
 	// Register some devices
 	_, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
@@ -1102,13 +1102,13 @@ func TestService_ListDevices_FilterByVLAN(t *testing.T) {
 	svc, _ := initializeTestService(t)
 	ctx := context.Background()
 
-	// Register devices - they start in quarantine VLAN (1)
+	// Register devices - they start in quarantine VLAN (DefaultQuarantineVLAN=202)
 	_, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
 	require.NoError(t, err)
 	_, err = svc.RegisterDevice(ctx, "00:11:22:33:44:66", "port-2")
 	require.NoError(t, err)
 
-	devices, err := svc.ListDevices(ctx, &DeviceFilter{VLAN: 1})
+	devices, err := svc.ListDevices(ctx, &DeviceFilter{VLAN: DefaultQuarantineVLAN})
 	assert.NoError(t, err)
 	assert.Len(t, devices, 2)
 

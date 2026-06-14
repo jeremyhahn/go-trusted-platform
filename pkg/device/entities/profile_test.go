@@ -291,7 +291,7 @@ func TestDeviceProfile_NetworkConfiguration(t *testing.T) {
 				Gateway:      "10.0.1.1",
 				DNSServers:   []string{"8.8.8.8", "8.8.4.4"},
 				DHCP:         true,
-				FirewallZone: "provisioning",
+				Zone: "provisioning",
 			},
 			DefaultPostEnrollmentNetwork: {
 				VLAN:         0,
@@ -300,7 +300,7 @@ func TestDeviceProfile_NetworkConfiguration(t *testing.T) {
 				DNSServers:   []string{"10.0.2.53"},
 				DHCP:         false,
 				StaticIP:     "10.0.2.100",
-				FirewallZone: "production",
+				Zone: "production",
 			},
 		},
 	}
@@ -311,7 +311,7 @@ func TestDeviceProfile_NetworkConfiguration(t *testing.T) {
 	assert.Equal(t, "10.0.1.1", profile.GetEnrollmentNetworkConfig().Gateway)
 	assert.Equal(t, []string{"8.8.8.8", "8.8.4.4"}, profile.GetEnrollmentNetworkConfig().DNSServers)
 	assert.True(t, profile.GetEnrollmentNetworkConfig().DHCP)
-	assert.Equal(t, "provisioning", profile.GetEnrollmentNetworkConfig().FirewallZone)
+	assert.Equal(t, "provisioning", profile.GetEnrollmentNetworkConfig().Zone)
 
 	require.NotNil(t, profile.GetPostEnrollmentNetworkConfig())
 	assert.Equal(t, uint16(0), profile.GetPostEnrollmentNetworkConfig().VLAN)
@@ -320,7 +320,7 @@ func TestDeviceProfile_NetworkConfiguration(t *testing.T) {
 	assert.Equal(t, []string{"10.0.2.53"}, profile.GetPostEnrollmentNetworkConfig().DNSServers)
 	assert.False(t, profile.GetPostEnrollmentNetworkConfig().DHCP)
 	assert.Equal(t, "10.0.2.100", profile.GetPostEnrollmentNetworkConfig().StaticIP)
-	assert.Equal(t, "production", profile.GetPostEnrollmentNetworkConfig().FirewallZone)
+	assert.Equal(t, "production", profile.GetPostEnrollmentNetworkConfig().Zone)
 
 	assert.Nil(t, profile.GetFailureNetworkConfig())
 }
@@ -423,7 +423,7 @@ func TestDeviceProfile_YAMLSerialization(t *testing.T) {
 				Gateway:      "192.168.1.1",
 				DNSServers:   []string{"192.168.1.53"},
 				DHCP:         true,
-				FirewallZone: "provisioning",
+				Zone: "provisioning",
 			},
 		},
 		PlatformdConfig: &PlatformdConfigRef{
@@ -482,7 +482,7 @@ func TestDeviceProfile_JSONSerialization(t *testing.T) {
 				DNSServers:   []string{"172.16.0.53", "172.16.0.54"},
 				DHCP:         false,
 				StaticIP:     "172.16.10.50",
-				FirewallZone: "production",
+				Zone: "production",
 			},
 			DefaultFailureNetwork: {
 				VLAN:         0,
@@ -490,7 +490,7 @@ func TestDeviceProfile_JSONSerialization(t *testing.T) {
 				Gateway:      "192.168.99.1",
 				DNSServers:   []string{"192.168.99.53"},
 				DHCP:         true,
-				FirewallZone: "quarantine",
+				Zone: "quarantine",
 			},
 		},
 		PlatformdConfig: &PlatformdConfigRef{
@@ -526,7 +526,7 @@ func TestDeviceProfile_JSONSerialization(t *testing.T) {
 	require.NotNil(t, decoded.GetFailureNetworkConfig())
 	assert.Equal(t, uint16(0), decoded.GetFailureNetworkConfig().VLAN)
 	assert.Equal(t, original.GetFailureNetworkConfig().Subnet, decoded.GetFailureNetworkConfig().Subnet)
-	assert.Equal(t, original.GetFailureNetworkConfig().FirewallZone, decoded.GetFailureNetworkConfig().FirewallZone)
+	assert.Equal(t, original.GetFailureNetworkConfig().Zone, decoded.GetFailureNetworkConfig().Zone)
 
 	require.NotNil(t, decoded.PlatformdConfig)
 	assert.Equal(t, original.PlatformdConfig.ConfigName, decoded.PlatformdConfig.ConfigName)
@@ -596,7 +596,7 @@ func TestDeviceProfile_CompleteConfiguration(t *testing.T) {
 				Gateway:      "10.1.0.1",
 				DNSServers:   []string{"10.1.0.53"},
 				DHCP:         true,
-				FirewallZone: "provision",
+				Zone: "provision",
 			},
 			DefaultPostEnrollmentNetwork: {
 				VLAN:         uint16(vlan2),
@@ -605,7 +605,7 @@ func TestDeviceProfile_CompleteConfiguration(t *testing.T) {
 				DNSServers:   []string{"10.2.0.53", "10.2.0.54"},
 				DHCP:         false,
 				StaticIP:     "10.2.100.100",
-				FirewallZone: "prod",
+				Zone: "prod",
 			},
 			DefaultFailureNetwork: {
 				VLAN:         uint16(vlan3),
@@ -613,7 +613,7 @@ func TestDeviceProfile_CompleteConfiguration(t *testing.T) {
 				Gateway:      "10.99.0.1",
 				DNSServers:   []string{"10.99.0.53"},
 				DHCP:         true,
-				FirewallZone: "quarantine",
+				Zone: "quarantine",
 			},
 		},
 		PlatformdConfig: &PlatformdConfigRef{
@@ -663,7 +663,7 @@ func TestNetworkPhaseConfig_AllFieldsPopulated(t *testing.T) {
 		DNSServers:   []string{"10.42.0.53", "10.42.0.54", "10.42.0.55"},
 		DHCP:         true,
 		StaticIP:     "10.42.100.200",
-		FirewallZone: "dmz",
+		Zone: "dmz",
 	}
 
 	assert.Equal(t, uint16(42), config.VLAN)
@@ -672,7 +672,7 @@ func TestNetworkPhaseConfig_AllFieldsPopulated(t *testing.T) {
 	assert.Len(t, config.DNSServers, 3)
 	assert.True(t, config.DHCP)
 	assert.Equal(t, "10.42.100.200", config.StaticIP)
-	assert.Equal(t, "dmz", config.FirewallZone)
+	assert.Equal(t, "dmz", config.Zone)
 }
 
 func TestNetworkPhaseConfig_EmptyConfiguration(t *testing.T) {
@@ -684,7 +684,7 @@ func TestNetworkPhaseConfig_EmptyConfiguration(t *testing.T) {
 	assert.Nil(t, config.DNSServers)
 	assert.False(t, config.DHCP)
 	assert.Empty(t, config.StaticIP)
-	assert.Empty(t, config.FirewallZone)
+	assert.Empty(t, config.Zone)
 }
 
 func TestPlatformdConfigRef_AllFields(t *testing.T) {
@@ -754,7 +754,7 @@ func TestDeviceProfile_RoundTripYAMLWithComplexData(t *testing.T) {
 					"8.8.8.8",
 				},
 				DHCP:         true,
-				FirewallZone: "iot-provision",
+				Zone: "iot-provision",
 			},
 		},
 		PlatformdConfig: &PlatformdConfigRef{
@@ -810,7 +810,7 @@ func TestDeviceProfile_RoundTripJSONWithComplexData(t *testing.T) {
 				DNSServers:   []string{"172.31.0.53"},
 				DHCP:         false,
 				StaticIP:     "172.31.50.100",
-				FirewallZone: "secure-prod",
+				Zone: "secure-prod",
 			},
 		},
 		PlatformdConfig: &PlatformdConfigRef{

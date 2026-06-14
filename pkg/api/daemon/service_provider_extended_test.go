@@ -279,6 +279,10 @@ func (m *spExtMockDNSService) Resolve(ctx context.Context, name string, recordTy
 	return nil, errors.New("no records found")
 }
 
+func (m *spExtMockDNSService) RegisterWithNetworkZone(ctx context.Context, host, networkZone, ip string) error {
+	return nil
+}
+
 func (m *spExtMockDNSService) CreateZone(ctx context.Context, zoneName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

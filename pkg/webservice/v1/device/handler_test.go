@@ -87,7 +87,7 @@ func TestGetProfile_Success(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-12345",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN:    100,
 			UseDHCP: true,
 			DNS:     []string{"10.99.99.2"},
@@ -121,8 +121,8 @@ func TestGetProfile_Success(t *testing.T) {
 	err := json.NewDecoder(w.Body).Decode(&response)
 	require.NoError(t, err)
 	assert.Equal(t, "DEVICE-12345", response.SerialNumber)
-	assert.Equal(t, uint16(100), response.ProductionNetwork.VLAN)
-	assert.True(t, response.ProductionNetwork.UseDHCP)
+	assert.Equal(t, uint16(100), response.TrustedNetwork.VLAN)
+	assert.True(t, response.TrustedNetwork.UseDHCP)
 	assert.Len(t, response.ACLs, 1)
 
 	mockProfileService.AssertExpectations(t)
@@ -268,7 +268,7 @@ func TestActivate_Success(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-12345",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN:    200,
 			UseDHCP: false,
 		},
@@ -454,7 +454,7 @@ func TestActivate_PortTransitionFailed(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-12345",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN: 200,
 		},
 	}
@@ -500,7 +500,7 @@ func TestActivate_PolicyApplicationFails_ContinuesAnyway(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-12345",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN: 200,
 		},
 	}
@@ -595,7 +595,7 @@ func TestActivate_WithXForwardedFor(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-12345",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN: 300,
 		},
 	}
@@ -644,7 +644,7 @@ func TestActivate_PortPolicyCorrectlySet(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-12345",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN: 500,
 		},
 	}
@@ -733,7 +733,7 @@ func TestGetProfile_WithRateLimit(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-WITH-RATELIMIT",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN:    150,
 			UseDHCP: true,
 		},
@@ -781,7 +781,7 @@ func TestGetProfile_WithStaticIP(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-STATIC",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN:     200,
 			UseDHCP:  false,
 			StaticIP: "10.100.1.50",
@@ -804,10 +804,10 @@ func TestGetProfile_WithStaticIP(t *testing.T) {
 	var response ProfileResponse
 	err := json.NewDecoder(w.Body).Decode(&response)
 	require.NoError(t, err)
-	assert.False(t, response.ProductionNetwork.UseDHCP)
-	assert.Equal(t, "10.100.1.50", response.ProductionNetwork.StaticIP)
-	assert.Equal(t, "10.100.1.1", response.ProductionNetwork.Gateway)
-	assert.Len(t, response.ProductionNetwork.DNS, 2)
+	assert.False(t, response.TrustedNetwork.UseDHCP)
+	assert.Equal(t, "10.100.1.50", response.TrustedNetwork.StaticIP)
+	assert.Equal(t, "10.100.1.1", response.TrustedNetwork.Gateway)
+	assert.Len(t, response.TrustedNetwork.DNS, 2)
 
 	mockProfileService.AssertExpectations(t)
 }
@@ -829,7 +829,7 @@ func TestGetProfile_MultipleACLs(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-ACLS",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN:    100,
 			UseDHCP: true,
 		},
@@ -892,7 +892,7 @@ func TestActivate_UsesCorrectPortID(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-12345",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN: 100,
 		},
 	}
@@ -936,7 +936,7 @@ func TestActivate_ResponseContainsCorrectFields(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-999",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN: 777,
 		},
 	}

@@ -141,6 +141,8 @@ RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     python3-venv \
+    python3-jsonschema \
+    python3-jinja2 \
     libglib2.0-dev \
     libfdt-dev \
     libpixman-1-dev \

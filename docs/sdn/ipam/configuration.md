@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document provides a comprehensive configuration reference for the IPAM service, covering pool configuration, backend settings, lease management, and operational parameters.
+This document provides a comprehensive configuration reference for the IPAM service, covering pool configuration, backend selection, zone assignment, seed reconciliation, lease management, and operational parameters.
 
 ## Configuration Structure
 
@@ -11,61 +11,36 @@ This document provides a comprehensive configuration reference for the IPAM serv
 ```yaml
 sdn:
   ipam:
-    # Enable IPAM service
-    enabled: true
+    # Backend selection: "memory" (default), "quicbaas", or "dht" (requires platform_p2p build tag)
+    backend: "quicbaas"
 
-    # Backend configuration
-    backend:
-      type: "quicbaas"  # memory, quicbaas, dht
-      quicbaas:
-        partition: "sdn/ipam"
-        max_retries: 10
-        request_timeout: "30s"
-      dht:
-        claim_timeout: "5s"
-        propagation_delay: "100ms"
-        max_allocation_retries: 50
-
-    # Pool definitions
+    # Pool definitions (seed-only: created when missing, never overwritten at runtime)
     pools:
-      - id: "prod-v4"
-        name: "Production IPv4"
+      - name: "production"
         cidr: "10.0.0.0/24"
         gateway: "10.0.0.1"
+        zone: "trusted"               # optional; inherited from network.zone when omitted
         default_lease_duration: "24h"
-        inactivity_timeout: "720h"  # 30 days
-        tags:
-          - "production"
-          - "internal"
+        inactivity_timeout: "720h"
 
-      - id: "prod-v6"
-        name: "Production IPv6"
-        cidr: "2602:F5BB:1234::/64"
-        gateway: "2602:F5BB:1234::1"
-        tags:
-          - "production"
-          - "public"
+      - name: "provisioning"
+        cidr: "10.1.0.0/24"
+        gateway: "10.1.0.1"
+        zone: "provisioning"
 
     # Lease management
     lease:
       default_duration: "24h"
-      max_duration: "168h"  # 7 days
-      renewal_threshold: "20%"  # Renew when 20% time remaining
-      inactivity_timeout: "720h"  # 30 days
+      max_duration: "168h"
+      renewal_threshold: "20%"
+      inactivity_timeout: "720h"
       expiration_check_interval: "1h"
-
-    # Logging
-    logging:
-      level: "info"
-      format: "json"
-
-    # Metrics
-    metrics:
-      enabled: true
-      port: 9180
 ```
 
-## Backend Configuration
+## Backend Selection
+
+The `backend` field controls which storage engine is used for IPAM state.
+Valid values are `"memory"` (default when omitted), `"quicbaas"`, and `"dht"`.
 
 ### Memory Backend
 
@@ -74,8 +49,7 @@ In-memory storage for development and testing:
 ```yaml
 sdn:
   ipam:
-    backend:
-      type: "memory"
+    backend: memory
 ```
 
 **Characteristics:**
@@ -94,24 +68,10 @@ Production backend with Raft-based distributed consensus:
 ```yaml
 sdn:
   ipam:
-    backend:
-      type: "quicbaas"
-      quicbaas:
-        # QuicBaaS partition for IPAM data
-        partition: "sdn/ipam"
-
-        # Maximum retry attempts for CAS conflicts
-        max_retries: 10
-
-        # Request timeout for QuicBaaS operations
-        request_timeout: "30s"
-
-        # Entity type prefixes
-        entity_prefixes:
-          pool: "ipam_pool"
-          allocation: "ipam_allocation"
-          index: "ipam_index"
+    backend: quicbaas
 ```
+
+Requires the platform QuicBaaS SDK client to be configured under the top-level `quicbaas:` section. If the SDK client is not configured when `platformd` starts, the service returns `ErrIPAMBackendUnconfigured`.
 
 **Characteristics:**
 
@@ -122,42 +82,21 @@ sdn:
 | Performance | Moderate (network consensus) |
 | Use Case | Production, multi-node clusters |
 
-**QuicBaaS Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `partition` | string | "sdn/ipam" | QuicBaaS data partition |
-| `max_retries` | int | 10 | CAS conflict retry count |
-| `request_timeout` | duration | 30s | Operation timeout |
-
 ### DHT Backend
 
-Distributed backend for P2P environments (requires `platform_p2p` build tag):
+Distributed backend for P2P environments. Requires the binary to be built with the `platform_p2p` build tag:
+
+```
+go build -tags platform_p2p ./cmd/platformd
+```
 
 ```yaml
 sdn:
   ipam:
-    backend:
-      type: "dht"
-      dht:
-        # Timeout for claim verification
-        claim_timeout: "5s"
-
-        # Delay before verifying claim
-        propagation_delay: "100ms"
-
-        # Maximum random IP attempts
-        max_allocation_retries: 50
-
-        # DHT operation timeout
-        operation_timeout: "10s"
-
-        # Key prefixes
-        key_prefixes:
-          pool: "/ipam/pool/"
-          allocation: "/ipam/alloc/"
-          device: "/ipam/device/"
+    backend: dht
 ```
+
+If `backend: dht` is set but the binary was built without `platform_p2p`, `platformd` returns `ErrIPAMBackendP2PRequired` at startup.
 
 **Characteristics:**
 
@@ -168,94 +107,83 @@ sdn:
 | Performance | Variable (network dependent) |
 | Use Case | P2P networks, decentralized deployments |
 
-**DHT Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `claim_timeout` | duration | 5s | Claim verification timeout |
-| `propagation_delay` | duration | 100ms | Wait before verification |
-| `max_allocation_retries` | int | 50 | Random IP retry limit |
-| `operation_timeout` | duration | 10s | DHT operation timeout |
-
 ## Pool Configuration
 
 ### Pool Parameters
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `id` | string | Yes | - | Unique pool identifier |
-| `name` | string | Yes | - | Human-readable name |
+| `name` | string | Yes | - | Unique pool name |
 | `cidr` | string | Yes | - | Network prefix (CIDR notation) |
 | `gateway` | string | No | - | Gateway IP address |
+| `zone` | string | No | inherited | Zone for zone-filtered queries |
 | `description` | string | No | "" | Pool description |
 | `tags` | []string | No | [] | Classification tags |
 | `default_lease_duration` | duration | No | 0 (no expiry) | Default lease time |
 | `inactivity_timeout` | duration | No | 720h | Inactivity expiration |
 
-### Pool Definition
+### Zone Field
 
-```yaml
-pools:
-  # IPv4 Production Pool
-  - id: "prod-v4"
-    name: "Production IPv4"
-    cidr: "10.0.0.0/24"
-    gateway: "10.0.0.1"
-    description: "Internal production workloads"
-    tags:
-      - "production"
-      - "internal"
-    default_lease_duration: "24h"
-    inactivity_timeout: "720h"
+The `zone` field on a pool enables zone-filtered queries via `ListPoolsByZone`. It is a string matching one of the resolved zone names declared in the `sdn.zones` section (or the built-in zone set).
 
-  # IPv6 Production Pool
-  - id: "prod-v6"
-    name: "Production IPv6"
-    cidr: "2602:F5BB:1234::/64"
-    gateway: "2602:F5BB:1234::1"
-    tags:
-      - "production"
-      - "public"
-    default_lease_duration: "0"  # No expiry
+Zone resolution order at `Validate()` time:
 
-  # Development Pool
-  - id: "dev-v4"
-    name: "Development"
-    cidr: "192.168.100.0/24"
-    gateway: "192.168.100.1"
-    tags:
-      - "development"
-    default_lease_duration: "1h"
-    inactivity_timeout: "24h"
+1. If a pool's `zone` is empty **and** a network entry references the pool, the network's `zone` is inherited in-place. The pool's YAML on disk is not modified — the inheritance is runtime-only.
+2. If a pool has an explicit `zone` that differs from a referencing network's `zone`, `Validate()` returns `ErrNetworkPoolZoneMismatch`.
+3. If a pool has an explicit `zone` that is not declared in the resolved zone set, `Validate()` returns `ErrPoolZoneUndeclared`. This check applies to standalone pools (not referenced by any network) as well.
 
-  # DHCP Pool
-  - id: "dhcp-pool"
-    name: "DHCP Dynamic Pool"
-    cidr: "192.168.1.0/24"
-    gateway: "192.168.1.1"
-    default_lease_duration: "8h"
-    inactivity_timeout: "24h"
-```
+**Allocation stamping:** when an IP is allocated from a pool, the `Allocation.Zone` field is set to the pool's zone automatically. The `AllocationRequest.Zone` field is informational and is not currently used to select a pool; use `PoolID` for explicit targeting.
+
+### Seeding Semantics
+
+The `pools` list in IPAM config is a **seed list**, not an authoritative runtime state. On startup `initIPAMPools`:
+
+1. Creates the backend allocator.
+2. For each pool in config: if a pool with that name already exists in the backend, it is **skipped** (no mutation). If it does not exist, it is created with the zone from config.
+3. Existing pools and their allocations are never deleted or overwritten by the seed step.
+
+This means:
+- Operators can change a runtime pool's zone or CIDR by editing the backend directly; the config will not override it on next boot.
+- New pools can be added to config and they will be created on the next start.
+- Removing a pool from config does not delete it from the backend.
+
+### Zone Derivation from Subnets
+
+When `sdn.ipam` is not explicitly configured but `network.subnets` entries exist (from the installer config), `platformd` automatically derives IPAM pools from internal subnets. The zone is derived from the subnet name using these mappings:
+
+| Subnet name | Derived zone |
+|------------|-------------|
+| `production` | `trusted` |
+| `provisioning` | `provisioning` |
+| `quarantine` | `quarantine` |
+| `storage` | `storage` |
+| `management` | `management` |
+| *(any other)* | `trusted` (with a warning log) |
+
+Explicit pool config entries take precedence: if a pool with the same name exists in `sdn.ipam.pools`, the subnet-derived entry is skipped.
 
 ### Pool Validation Rules
 
 | Rule | Validation |
 |------|------------|
-| ID | Non-empty, unique across all pools |
 | Name | Non-empty, unique across all pools |
 | CIDR | Valid IPv4 or IPv6 prefix |
+| Zone | Must be a declared zone name when set (validated after zone resolution) |
 | Gateway | Must be within CIDR range if specified |
 | Lease Duration | Non-negative duration |
 | Inactivity Timeout | Non-negative duration |
 
-### Computed Pool Statistics
+## Zone-Filtered Queries
 
-| Field | Calculation |
-|-------|-------------|
-| `total_ips` | Pool size (excludes network/broadcast for IPv4) |
-| `allocated_ips` | Count of active allocations |
-| `available_ips` | total_ips - allocated_ips |
-| `utilization_pct` | (allocated_ips / total_ips) * 100 |
+```go
+// Returns all pools in the "provisioning" zone.
+pools, err := allocator.ListPoolsByZone(ctx, "provisioning")
+
+// An empty zone string returns all pools (equivalent to ListPools).
+all, err := allocator.ListPoolsByZone(ctx, "")
+```
+
+`ListPoolsByZone` is available on all three backends (memory, quicbaas, dht).
 
 ## Lease Configuration
 
@@ -265,297 +193,79 @@ pools:
 sdn:
   ipam:
     lease:
-      # Default lease duration for pools without explicit setting
       default_duration: "24h"
-
-      # Maximum allowed lease duration
-      max_duration: "168h"  # 7 days
-
-      # Renew when this percentage of lease time remains
+      max_duration: "168h"
       renewal_threshold: "20%"
-
-      # Mark inactive allocations as expired after this duration
-      inactivity_timeout: "720h"  # 30 days
-
-      # How often to check for expired allocations
+      inactivity_timeout: "720h"
       expiration_check_interval: "1h"
-```
-
-### Lease Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `default_duration` | duration | 24h | Default lease time |
-| `max_duration` | duration | 168h | Maximum lease time |
-| `renewal_threshold` | string | "20%" | When to allow renewal |
-| `inactivity_timeout` | duration | 720h | Inactivity expiration |
-| `expiration_check_interval` | duration | 1h | Expiration scan interval |
-
-### Lease Behavior
-
-```
-Allocation Timeline:
-
-|-------- Lease Duration (24h) --------|
-|                                      |
-|        |-------- Renew Window -------| (last 20%)
-|        |                             |
-Created  Renewal   Expiration          |
-         Allowed   Warning             Expired
 ```
 
 ### Per-Pool Lease Override
 
 ```yaml
 pools:
-  - id: "short-lease"
-    name: "Short Lease Pool"
+  - name: "short-lease"
     cidr: "10.1.0.0/24"
-    default_lease_duration: "1h"  # Override global default
+    zone: "provisioning"
+    default_lease_duration: "1h"
     inactivity_timeout: "4h"
 
-  - id: "no-expiry"
-    name: "Permanent Allocations"
+  - name: "no-expiry"
     cidr: "10.2.0.0/24"
-    default_lease_duration: "0"   # Never expires
-    inactivity_timeout: "0"       # No inactivity timeout
+    zone: "management"
+    default_lease_duration: "0"
+    inactivity_timeout: "0"
 ```
 
-## Allocation Request Configuration
-
-### Request Parameters
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `pool_id` | string | Yes | Target pool ID |
-| `device_id` | string | Yes | Device identifier |
-| `hostname` | string | No | Device hostname |
-| `description` | string | No | Allocation description |
-| `tags` | []string | No | Allocation tags |
-| `metadata` | map[string]string | No | Custom key-value data |
-| `requested_ip` | string | No | Specific IP (for AllocateSpecific) |
-| `lease_duration` | duration | No | Override pool default |
-
-### Allocation Request Examples
+## Allocation Request
 
 ```go
-// Automatic allocation
+// Automatic allocation from a zone-tagged pool
 req := &ipam.AllocationRequest{
-    PoolID:   "prod-v4",
+    PoolID:   "production",
     DeviceID: "vm-001",
     Hostname: "webserver-01",
-    Tags:     []string{"web", "frontend"},
-    Metadata: map[string]string{
-        "environment": "production",
-        "owner":       "platform-team",
-    },
 }
+alloc, err := allocator.Allocate(ctx, req)
+// alloc.Zone == "trusted" (stamped from pool)
 
-// Specific IP allocation
+// Specific IP
 req := &ipam.AllocationRequest{
-    PoolID:      "prod-v4",
+    PoolID:      "production",
     DeviceID:    "db-001",
     RequestedIP: netip.MustParseAddr("10.0.0.100"),
-    Hostname:    "database-01",
-    Metadata: map[string]string{
-        "role": "primary",
-    },
 }
-
-// Custom lease duration
-req := &ipam.AllocationRequest{
-    PoolID:        "dhcp-pool",
-    DeviceID:      "laptop-001",
-    LeaseDuration: 4 * time.Hour,
-}
-```
-
-## Logging Configuration
-
-```yaml
-sdn:
-  ipam:
-    logging:
-      # Log level: debug, info, warn, error
-      level: "info"
-
-      # Output format: json, text
-      format: "json"
-
-      # Component-specific levels
-      components:
-        allocator: "info"
-        backend: "debug"
-        lease: "info"
-
-      # Output configuration
-      output:
-        stdout: true
-        file:
-          enabled: true
-          path: "/var/log/platform/ipam.log"
-          max_size: "100M"
-          max_age: "7d"
-          compress: true
-```
-
-### Log Levels
-
-| Level | Description |
-|-------|-------------|
-| `debug` | Detailed debugging information |
-| `info` | General operational messages |
-| `warn` | Warning conditions |
-| `error` | Error conditions |
-
-### Structured Log Examples
-
-```json
-{
-  "level": "info",
-  "time": "2026-01-19T10:30:00Z",
-  "component": "ipam",
-  "msg": "IP allocated",
-  "pool_id": "prod-v4",
-  "ip": "10.0.0.50",
-  "device_id": "vm-001",
-  "hostname": "webserver"
-}
-
-{
-  "level": "warn",
-  "time": "2026-01-19T10:31:00Z",
-  "component": "ipam",
-  "msg": "pool utilization high",
-  "pool_id": "prod-v4",
-  "utilization_pct": 85.5,
-  "available_ips": 37
-}
-```
-
-## Metrics Configuration
-
-```yaml
-sdn:
-  ipam:
-    metrics:
-      # Enable Prometheus metrics
-      enabled: true
-
-      # Metrics HTTP port
-      port: 9180
-
-      # Metrics path
-      path: "/metrics"
-
-      # Metric types to collect
-      types:
-        pool_stats: true
-        allocation_latency: true
-        backend_operations: true
-        lease_events: true
-```
-
-### Available Metrics
-
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `ipam_pools_total` | Gauge | - | Total pool count |
-| `ipam_pool_total_ips` | Gauge | pool_id, name | Total IPs per pool |
-| `ipam_pool_allocated_ips` | Gauge | pool_id, name | Allocated IPs per pool |
-| `ipam_pool_available_ips` | Gauge | pool_id, name | Available IPs per pool |
-| `ipam_pool_utilization_ratio` | Gauge | pool_id, name | Utilization (0-1) |
-| `ipam_allocations_total` | Counter | pool_id, status | Total allocations |
-| `ipam_releases_total` | Counter | pool_id | Total releases |
-| `ipam_allocation_duration_seconds` | Histogram | pool_id, backend | Allocation latency |
-| `ipam_backend_errors_total` | Counter | backend, operation | Backend errors |
-| `ipam_lease_renewals_total` | Counter | pool_id | Lease renewals |
-| `ipam_lease_expirations_total` | Counter | pool_id | Lease expirations |
-
-## Environment Variables
-
-Configuration values can be sourced from environment variables:
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `IPAM_BACKEND_TYPE` | Backend type | quicbaas |
-| `IPAM_DEFAULT_LEASE` | Default lease duration | 24h |
-| `IPAM_INACTIVITY_TIMEOUT` | Inactivity timeout | 720h |
-| `IPAM_LOG_LEVEL` | Log level | info |
-| `IPAM_METRICS_PORT` | Metrics port | 9180 |
-
-```yaml
-# Using environment variables
-sdn:
-  ipam:
-    backend:
-      type: ${IPAM_BACKEND_TYPE}
-    lease:
-      default_duration: ${IPAM_DEFAULT_LEASE}
-      inactivity_timeout: ${IPAM_INACTIVITY_TIMEOUT}
-    logging:
-      level: ${IPAM_LOG_LEVEL}
-    metrics:
-      port: ${IPAM_METRICS_PORT}
 ```
 
 ## Complete Example
 
 ```yaml
 sdn:
+  enabled: true
+  backend: quicbaas
+
   ipam:
-    enabled: true
-
-    backend:
-      type: "quicbaas"
-      quicbaas:
-        partition: "sdn/ipam"
-        max_retries: 10
-        request_timeout: "30s"
-
+    backend: quicbaas
     pools:
-      # Production IPv4
-      - id: "prod-v4"
-        name: "Production IPv4"
+      - name: "production"
         cidr: "10.0.0.0/24"
         gateway: "10.0.0.1"
-        description: "Primary production workloads"
-        tags:
-          - "production"
-          - "internal"
+        zone: "trusted"
         default_lease_duration: "24h"
         inactivity_timeout: "720h"
 
-      # Production IPv6
-      - id: "prod-v6"
-        name: "Production IPv6"
-        cidr: "2602:F5BB:1234::/64"
-        gateway: "2602:F5BB:1234::1"
-        tags:
-          - "production"
-          - "public"
+      - name: "provisioning"
+        cidr: "10.1.0.0/24"
+        gateway: "10.1.0.1"
+        zone: "provisioning"
+        default_lease_duration: "8h"
+        inactivity_timeout: "48h"
+
+      - name: "management"
+        cidr: "192.168.1.0/24"
+        gateway: "192.168.1.1"
+        zone: "management"
         default_lease_duration: "0"
-
-      # Development
-      - id: "dev-v4"
-        name: "Development"
-        cidr: "192.168.100.0/24"
-        gateway: "192.168.100.1"
-        tags:
-          - "development"
-        default_lease_duration: "1h"
-        inactivity_timeout: "24h"
-
-      # Edge/IoT
-      - id: "edge-v6"
-        name: "Edge IoT Pool"
-        cidr: "2602:F5BB:5678::/48"
-        gateway: "2602:F5BB:5678::1"
-        tags:
-          - "edge"
-          - "iot"
-        default_lease_duration: "168h"  # 7 days
-        inactivity_timeout: "720h"
 
     lease:
       default_duration: "24h"
@@ -564,22 +274,16 @@ sdn:
       inactivity_timeout: "720h"
       expiration_check_interval: "1h"
 
-    logging:
-      level: "info"
-      format: "json"
-      output:
-        stdout: true
-        file:
-          enabled: true
-          path: "/var/log/platform/ipam.log"
-          max_size: "100M"
-          max_age: "7d"
-          compress: true
+  networks:
+    - name: "production-net"
+      vlan: 10
+      zone: trusted
+      pool: "production"
 
-    metrics:
-      enabled: true
-      port: 9180
-      path: "/metrics"
+    - name: "provisioning-net"
+      vlan: 20
+      zone: provisioning
+      pool: "provisioning"
 ```
 
 ## See Also

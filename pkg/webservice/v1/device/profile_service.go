@@ -28,7 +28,7 @@ var (
 )
 
 // StaticProfileService provides a simple in-memory profile service for testing.
-// In production, this would be replaced with a database-backed implementation.
+// In a full deployment this would be replaced with a database-backed implementation.
 type StaticProfileService struct {
 	mu       sync.RWMutex
 	profiles map[string]*ProfileResponse // keyed by serial number
@@ -67,13 +67,13 @@ func (s *StaticProfileService) RemoveProfile(serial string) {
 	delete(s.profiles, serial)
 }
 
-// DefaultProductionProfile returns a default production profile for testing.
-// This profile configures the device for production VLAN 100 with DHCP.
-func DefaultProductionProfile(serial string) *ProfileResponse {
+// DefaultTrustedProfile returns a default trusted-zone profile for testing.
+// This profile configures the device for trusted VLAN 200 with DHCP.
+func DefaultTrustedProfile(serial string) *ProfileResponse {
 	return &ProfileResponse{
 		SerialNumber: serial,
-		ProductionNetwork: NetworkConfig{
-			VLAN:    100,
+		TrustedNetwork: NetworkConfig{
+			VLAN:    200,
 			UseDHCP: true,
 			DNS:     []string{"10.99.99.2"},
 		},
@@ -104,18 +104,18 @@ func ProfileFromDeviceProfile(dp *entities.DeviceProfile, serial string) *Profil
 		SerialNumber: serial,
 	}
 
-	// Convert production network config
-	if prodNet := dp.GetPostEnrollmentNetworkConfig(); prodNet != nil {
-		resp.ProductionNetwork = NetworkConfig{
-			VLAN:     prodNet.VLAN,
-			UseDHCP:  prodNet.DHCP,
-			StaticIP: prodNet.StaticIP,
-			Gateway:  prodNet.Gateway,
-			DNS:      prodNet.DNS,
+	// Convert trusted network config
+	if trustedNet := dp.GetPostEnrollmentNetworkConfig(); trustedNet != nil {
+		resp.TrustedNetwork = NetworkConfig{
+			VLAN:     trustedNet.VLAN,
+			UseDHCP:  trustedNet.DHCP,
+			StaticIP: trustedNet.StaticIP,
+			Gateway:  trustedNet.Gateway,
+			DNS:      trustedNet.DNS,
 		}
 
 		// Convert ACLs
-		for i, acl := range prodNet.ACLs {
+		for i, acl := range trustedNet.ACLs {
 			// Build match map from ACL fields
 			match := make(map[string]string)
 			if acl.Protocol != "" && acl.Protocol != "any" {

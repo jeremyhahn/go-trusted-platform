@@ -1593,7 +1593,7 @@ func TestQuicBaaSKeyStore_Close(t *testing.T) {
 // =============================================================================
 
 func TestQuicBaaSKeyStore_KeyID(t *testing.T) {
-	t.Run("RSA algorithm uses rsa suffix", func(t *testing.T) {
+	t.Run("RSA key name includes CN and rsa suffix", func(t *testing.T) {
 		ks, _ := NewQuicBaaSKeyStore(&QuicBaaSKeyStoreConfig{
 			KMS:    &mockSDKKMSClient{},
 			Crypto: &mockSDKCryptoClient{},
@@ -1601,15 +1601,16 @@ func TestQuicBaaSKeyStore_KeyID(t *testing.T) {
 		})
 
 		attrs := &xkmssdk.KeyAttributes{
-			CN:           "root-ca.example.com", // CN should not be duplicated
+			CN:           "root-ca.example.com",
 			KeyAlgorithm: x509.RSA,
 		}
 		keyID := ks.KeyID(attrs)
-		// Key ID should use algorithm, not CN to avoid duplication
-		assert.Equal(t, "ca.root-ca.example.com.rsa", keyID)
+		// Key ID includes CN so each certificate's key is uniquely named even
+		// within the same CA namespace.
+		assert.Equal(t, "ca.root-ca.example.com.root-ca.example.com.rsa", keyID)
 	})
 
-	t.Run("ECDSA algorithm uses ecdsa suffix", func(t *testing.T) {
+	t.Run("ECDSA key name includes CN and ecdsa suffix", func(t *testing.T) {
 		ks, _ := NewQuicBaaSKeyStore(&QuicBaaSKeyStoreConfig{
 			KMS:    &mockSDKKMSClient{},
 			Crypto: &mockSDKCryptoClient{},
@@ -1621,10 +1622,10 @@ func TestQuicBaaSKeyStore_KeyID(t *testing.T) {
 			KeyAlgorithm: x509.ECDSA,
 		}
 		keyID := ks.KeyID(attrs)
-		assert.Equal(t, "ca.intermediate.ecdsa", keyID)
+		assert.Equal(t, "ca.intermediate.intermediate.ecdsa", keyID)
 	})
 
-	t.Run("Ed25519 algorithm uses ed25519 suffix", func(t *testing.T) {
+	t.Run("Ed25519 key name includes CN and ed25519 suffix", func(t *testing.T) {
 		ks, _ := NewQuicBaaSKeyStore(&QuicBaaSKeyStoreConfig{
 			KMS:    &mockSDKKMSClient{},
 			Crypto: &mockSDKCryptoClient{},
@@ -1636,7 +1637,32 @@ func TestQuicBaaSKeyStore_KeyID(t *testing.T) {
 			KeyAlgorithm: x509.Ed25519,
 		}
 		keyID := ks.KeyID(attrs)
-		assert.Equal(t, "ca.signing.ed25519", keyID)
+		assert.Equal(t, "ca.signing.signing.ed25519", keyID)
+	})
+
+	t.Run("CA signing key and leaf cert key do not collide", func(t *testing.T) {
+		// This is the critical invariant that prevents the already_exists KMS error.
+		// Before the fix, both keys produced "ca.ca01.localhost.ecdsa", causing the
+		// CA's own signing key to be deleted when a leaf cert was revoked, and then
+		// preventing re-issuance because the KMS keyNames sync.Map still held the name.
+		ks, _ := NewQuicBaaSKeyStore(&QuicBaaSKeyStoreConfig{
+			KMS:    &mockSDKKMSClient{},
+			Crypto: &mockSDKCryptoClient{},
+			Prefix: "ca.ca01.localhost.",
+		})
+
+		caKeyID := ks.KeyID(&xkmssdk.KeyAttributes{
+			CN:           "ca01.localhost",
+			KeyAlgorithm: x509.ECDSA,
+		})
+		leafKeyID := ks.KeyID(&xkmssdk.KeyAttributes{
+			CN:           "leaf.example.com",
+			KeyAlgorithm: x509.ECDSA,
+		})
+
+		assert.Equal(t, "ca.ca01.localhost.ca01.localhost.ecdsa", caKeyID)
+		assert.Equal(t, "ca.ca01.localhost.leaf.example.com.ecdsa", leafKeyID)
+		assert.NotEqual(t, caKeyID, leafKeyID, "CA signing key and leaf key must not collide")
 	})
 
 	t.Run("unknown algorithm falls back to CN", func(t *testing.T) {

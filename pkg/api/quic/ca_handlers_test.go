@@ -156,11 +156,11 @@ func (m *mockCA) CertStore() xkmssdk.CertStore {
 	}
 	return m.certStore
 }
-func (m *mockCA) Signer() (crypto.Signer, error) { return m, nil }
-func (m *mockCA) CASigner(_ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
+func (m *mockCA) Signer(_ context.Context) (crypto.Signer, error) { return m, nil }
+func (m *mockCA) CASigner(_ context.Context, _ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
 	return m, nil
 }
-func (m *mockCA) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (m *mockCA) IssueCertificate(_ context.Context, req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	cert := generateTestCertificate(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
 	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
@@ -168,7 +168,7 @@ func (m *mockCA) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.Issue
 	}
 	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 }
-func (m *mockCA) RevokeCert(cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
+func (m *mockCA) RevokeCert(_ context.Context, cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	m.revokedCerts = append(m.revokedCerts, cert)
 	return nil
 }
@@ -186,7 +186,7 @@ func (m *mockCA) ParseBundle(bundle []byte) ([]*x509.Certificate, error) {
 func (m *mockCA) RootCertificate(_ *x509.Certificate) (*x509.Certificate, error) {
 	return m.rootCert, nil
 }
-func (m *mockCA) GenerateCRL() ([]byte, error) {
+func (m *mockCA) GenerateCRL(_ context.Context) ([]byte, error) {
 	if !m.generateCRL {
 		return nil, ErrCACRLNotSupported
 	}
@@ -2655,11 +2655,11 @@ func (m *mockCANoCRL) CertStore() xkmssdk.CertStore {
 	}
 	return m.certStore
 }
-func (m *mockCANoCRL) Signer() (crypto.Signer, error) { return m, nil }
-func (m *mockCANoCRL) CASigner(_ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
+func (m *mockCANoCRL) Signer(_ context.Context) (crypto.Signer, error) { return m, nil }
+func (m *mockCANoCRL) CASigner(_ context.Context, _ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
 	return m, nil
 }
-func (m *mockCANoCRL) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (m *mockCANoCRL) IssueCertificate(_ context.Context, req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	cert := generateTestCertificate(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
 	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
@@ -2667,7 +2667,7 @@ func (m *mockCANoCRL) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.
 	}
 	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 }
-func (m *mockCANoCRL) RevokeCert(cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
+func (m *mockCANoCRL) RevokeCert(_ context.Context, cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	m.revokedCerts = append(m.revokedCerts, cert)
 	return nil
 }
@@ -2685,7 +2685,7 @@ func (m *mockCANoCRL) ParseBundle(bundle []byte) ([]*x509.Certificate, error) {
 func (m *mockCANoCRL) RootCertificate(_ *x509.Certificate) (*x509.Certificate, error) {
 	return m.rootCert, nil
 }
-func (m *mockCANoCRL) GenerateCRL() ([]byte, error) {
+func (m *mockCANoCRL) GenerateCRL(_ context.Context) ([]byte, error) {
 	return nil, ErrCACRLNotSupported
 }
 
@@ -2710,7 +2710,7 @@ type mockCAIssueFails struct {
 	*mockCA
 }
 
-func (m *mockCAIssueFails) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (m *mockCAIssueFails) IssueCertificate(_ context.Context, req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	return nil, errors.New("certificate issuance failed")
 }
 
@@ -2746,7 +2746,7 @@ type mockCARevokeFails struct {
 	*mockCA
 }
 
-func (m *mockCARevokeFails) RevokeCert(cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
+func (m *mockCARevokeFails) RevokeCert(_ context.Context, cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	return errors.New("revocation failed")
 }
 
@@ -2785,7 +2785,7 @@ type mockCARenewFails struct {
 	shouldFail bool
 }
 
-func (m *mockCARenewFails) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (m *mockCARenewFails) IssueCertificate(_ context.Context, req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	if m.shouldFail {
 		return nil, errors.New("renewal failed")
 	}
@@ -2970,7 +2970,7 @@ type mockCAWithRevokedCRL struct {
 	*mockCA
 }
 
-func (m *mockCAWithRevokedCRL) GenerateCRL() ([]byte, error) {
+func (m *mockCAWithRevokedCRL) GenerateCRL(_ context.Context) ([]byte, error) {
 	// Create a CRL with a revoked certificate entry
 	revokedCerts := []x509.RevocationListEntry{
 		{
@@ -3246,6 +3246,6 @@ type mockCAGenerateCRLFails struct {
 	*mockCA
 }
 
-func (m *mockCAGenerateCRLFails) GenerateCRL() ([]byte, error) {
+func (m *mockCAGenerateCRLFails) GenerateCRL(_ context.Context) ([]byte, error) {
 	return nil, errors.New("CRL generation failed")
 }

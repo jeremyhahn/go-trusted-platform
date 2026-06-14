@@ -45,7 +45,8 @@ type mockDNSService struct {
 	registerErr   error
 	resolveErr    error
 	resolveValues []string
-	dnssecEnabled bool
+	dnssecEnabled                bool
+	registerWithNetworkZoneErr   error
 }
 
 func newMockDNSService() *mockDNSService {
@@ -186,6 +187,10 @@ func (m *mockDNSService) Resolve(ctx context.Context, name string, recordType st
 		return m.resolveValues, nil
 	}
 	return []string{"192.168.1.1"}, nil
+}
+
+func (m *mockDNSService) RegisterWithNetworkZone(ctx context.Context, host, networkZone, ip string) error {
+	return m.registerWithNetworkZoneErr
 }
 
 func (m *mockDNSService) addTestZone(name string) *entities.Zone {

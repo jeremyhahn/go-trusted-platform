@@ -161,6 +161,19 @@ type Config struct {
 	PublicIPv4                string             `yaml:"public-ipv4" json:"public_ipv4" mapstructure:"public-ipv4"`
 	PublicIPv6                string             `yaml:"public-ipv6" json:"public_ipv6" mapstructure:"public-ipv6"`
 	Resolver                  *ResolverConfig    `yaml:"resolver" json:"resolver" mapstructure:"resolver"`
+	// ZoneSubdomains, when true, enables per-network-zone subdomain support in
+	// the internal DNS server. At startup the server pre-creates one DNS
+	// sub-zone per declared network zone under the internal domain
+	// (<networkzone>.<domain>). During device enrollment, hosts are registered
+	// as <host>.<networkzone>.<domain> in addition to the standard
+	// <host>.<domain> A record. BMC names (<host>-bmc.<domain>) are never
+	// zone-qualified. Defaults to false (off).
+	ZoneSubdomains bool `yaml:"zone-subdomains" json:"zone_subdomains" mapstructure:"zone-subdomains"`
+	// NetworkZones is the runtime-injected list of network zone names sourced
+	// from sdn.Config.ResolvedZones(). Not read from YAML; populated by the
+	// app wiring before dns.Run is called. Used by the CoreDNS plugin setup
+	// to pre-create per-zone sub-zones when ZoneSubdomains is true.
+	NetworkZones []string `yaml:"-" json:"-" mapstructure:"-"`
 }
 
 // AttestationConfig contains attestation-gated DNS update settings.

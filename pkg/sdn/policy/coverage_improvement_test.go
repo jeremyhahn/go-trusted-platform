@@ -23,11 +23,12 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
-	"net"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -133,7 +134,7 @@ func TestSDNEnrollmentHook_BuildPortPolicy_DenyAction(t *testing.T) {
 		},
 	}
 
-	policy := hook.buildPortPolicy(profile, cert)
+	policy, _ := hook.buildPortPolicy(profile, cert)
 	require.NotNil(t, policy)
 	require.Len(t, policy.ACLs, 1)
 	assert.Equal(t, FlowActionDeny, policy.ACLs[0].Action.Type)
@@ -176,7 +177,7 @@ func TestSDNEnrollmentHook_BuildPortPolicy_NoOrganization(t *testing.T) {
 
 	profile := createTestDeviceProfile(1, "Test Profile", "52:54:00", "", 100)
 
-	policy := hook.buildPortPolicy(profile, cert)
+	policy, _ := hook.buildPortPolicy(profile, cert)
 	require.NotNil(t, policy)
 	// Verify default tenant ID is used when Organization is empty
 	assert.Equal(t, "default", policy.TenantID)
@@ -217,132 +218,87 @@ func TestSDNEnrollmentHook_ActivateDevice_NilPolicyBuild(t *testing.T) {
 	assert.True(t, ok, "pending activation should be restored on policy build failure")
 }
 
-// TestVLANFlowManager_NewWithCustomConfigs tests VLAN flow manager with custom configs
-func TestVLANFlowManager_NewWithCustomConfigs(t *testing.T) {
-	t.Run("with custom provisioning config that has VLAN set", func(t *testing.T) {
-		mockController := newVLANMockFlowController()
-		// Note: The manager uses config.ProvisioningVLAN for manager.provisioningVLAN
-		// but ProvisioningConfig.ProvisioningVLAN is used when generating flows
-		provConfig := &ProvisioningFlowConfig{
-			ProvisioningVLAN: 999,
-			ACMEServerIPs:    []net.IP{net.ParseIP("192.168.1.100")},
-		}
-
-		config := VLANFlowManagerConfig{
-			BridgeName:         "br0",
-			FlowController:     mockController,
-			ProvisioningVLAN:   999, // This is used for manager.provisioningVLAN
-			ProvisioningConfig: provConfig,
-		}
-
-		manager, err := NewVLANFlowManager(config)
-		require.NoError(t, err)
-		require.NotNil(t, manager)
-		assert.Equal(t, uint16(999), manager.provisioningVLAN)
+// TestZoneFlowManager_WithCustomGeneratorSet tests construction with a custom generator set.
+func TestZoneFlowManager_WithCustomGeneratorSet(t *testing.T) {
+	ctrl := newZoneTestController()
+	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{BridgeName: "br0"})
+	m, err := NewZoneFlowManager(ZoneFlowManagerConfig{
+		BridgeName:     "br0",
+		FlowController: ctrl,
+		PortController: ctrl,
+		GeneratorSet:   gs,
 	})
-
-	t.Run("with custom quarantine config that has VLAN set", func(t *testing.T) {
-		mockController := newVLANMockFlowController()
-		quarConfig := &QuarantineFlowConfig{
-			QuarantineVLAN:       777,
-			RemediationServerIPs: []net.IP{net.ParseIP("192.168.1.200")},
-		}
-
-		config := VLANFlowManagerConfig{
-			BridgeName:       "br0",
-			FlowController:   mockController,
-			QuarantineVLAN:   777, // This is used for manager.quarantineVLAN
-			QuarantineConfig: quarConfig,
-		}
-
-		manager, err := NewVLANFlowManager(config)
-		require.NoError(t, err)
-		require.NotNil(t, manager)
-		assert.Equal(t, uint16(777), manager.quarantineVLAN)
-	})
-
-	t.Run("with provisioning config but zero vlan", func(t *testing.T) {
-		mockController := newVLANMockFlowController()
-		provConfig := &ProvisioningFlowConfig{
-			ProvisioningVLAN: 0, // Zero VLAN, should use default
-		}
-
-		config := VLANFlowManagerConfig{
-			BridgeName:         "br0",
-			FlowController:     mockController,
-			ProvisioningConfig: provConfig,
-		}
-
-		manager, err := NewVLANFlowManager(config)
-		require.NoError(t, err)
-		require.NotNil(t, manager)
-		assert.Equal(t, DefaultProvisioningVLAN, manager.provisioningVLAN)
-	})
-
-	t.Run("with quarantine config but zero vlan", func(t *testing.T) {
-		mockController := newVLANMockFlowController()
-		quarConfig := &QuarantineFlowConfig{
-			QuarantineVLAN: 0, // Zero VLAN, should use default
-		}
-
-		config := VLANFlowManagerConfig{
-			BridgeName:       "br0",
-			FlowController:   mockController,
-			QuarantineConfig: quarConfig,
-		}
-
-		manager, err := NewVLANFlowManager(config)
-		require.NoError(t, err)
-		require.NotNil(t, manager)
-		assert.Equal(t, DefaultQuarantineVLAN, manager.quarantineVLAN)
-	})
+	require.NoError(t, err)
+	require.NotNil(t, m)
 }
 
-// TestVLANFlowManager_ConvertACLConfig_DefaultAction tests default deny action
-func TestVLANFlowManager_ConvertACLConfig_DefaultAction(t *testing.T) {
-	mockController := newVLANMockFlowController()
-	config := VLANFlowManagerConfig{
+// TestZoneFlowManager_MultipleZonesOnSamePort tests transitioning a port through
+// provisioning → trusted → quarantine zones in sequence.
+func TestZoneFlowManager_MultipleZonesOnSamePort(t *testing.T) {
+	ctrl := newZoneTestController()
+	m, err := NewZoneFlowManager(ZoneFlowManagerConfig{
 		BridgeName:     "br0",
-		FlowController: mockController,
-	}
-
-	manager, err := NewVLANFlowManager(config)
+		FlowController: ctrl,
+		PortController: ctrl,
+	})
 	require.NoError(t, err)
+	ctx := context.Background()
 
-	// Test with unknown action (should default to deny)
-	acl := entities.ACLConfig{
-		Priority: 100,
-		Protocol: "tcp",
-		Action:   "unknown", // Unknown action, should default to deny
+	phases := []struct {
+		z    zone.Zone
+		vlan uint16
+	}{
+		{zone.ZoneProvisioning, DefaultProvisioningVLAN},
+		{zone.ZoneTrusted, 200},
+		{zone.ZoneQuarantine, DefaultQuarantineVLAN},
 	}
 
-	rule := manager.convertACLConfig(acl)
-	assert.Equal(t, FlowActionDeny, rule.Action.Type)
+	for _, p := range phases {
+		require.NoError(t, m.ApplyZoneFlows(ctx, "eth0", p.z))
+		v, err := m.GetPortVLAN("eth0")
+		require.NoError(t, err)
+		assert.Equal(t, p.vlan, v, "zone %s", p.z)
+		z, err := m.GetPortZone("eth0")
+		require.NoError(t, err)
+		assert.Equal(t, p.z, z)
+	}
 }
 
-// TestVLANFlowManager_ConvertACLConfig_UDP tests UDP rule with source port
-func TestVLANFlowManager_ConvertACLConfig_UDP_SourcePort(t *testing.T) {
-	mockController := newVLANMockFlowController()
-	config := VLANFlowManagerConfig{
+// TestZoneFlowManager_NilZoneIndex_FallsBackToDefaults verifies that when no
+// ZoneIndex is configured, the built-in VLAN defaults are used.
+func TestZoneFlowManager_NilZoneIndex_FallsBackToDefaults(t *testing.T) {
+	ctrl := newZoneTestController()
+	m, err := NewZoneFlowManager(ZoneFlowManagerConfig{
 		BridgeName:     "br0",
-		FlowController: mockController,
-	}
-
-	manager, err := NewVLANFlowManager(config)
+		FlowController: ctrl,
+		PortController: ctrl,
+	})
 	require.NoError(t, err)
 
-	acl := entities.ACLConfig{
-		Priority: 100,
-		Protocol: "udp",
-		SrcPort:  12345, // Source port for UDP
-		DstPort:  53,
-		Action:   "allow",
-	}
+	err = m.ApplyZoneFlows(context.Background(), "eth0", zone.ZoneProvisioning)
+	require.NoError(t, err)
 
-	rule := manager.convertACLConfig(acl)
-	assert.Equal(t, ProtoUDP, rule.Match.IPProto)
-	assert.Equal(t, uint16(12345), rule.Match.UDPSrc)
-	assert.Equal(t, uint16(53), rule.Match.UDPDst)
+	v, err := m.GetPortVLAN("eth0")
+	require.NoError(t, err)
+	assert.Equal(t, DefaultProvisioningVLAN, v)
+}
+
+// TestZoneFlowManager_StorageZone_SufficientlyIsolated verifies that the
+// storage zone uses its own VLAN (203) and that a fresh port assignment tracks it.
+func TestZoneFlowManager_StorageZone_SufficientlyIsolated(t *testing.T) {
+	ctrl := newZoneTestController()
+	m, err := NewZoneFlowManager(ZoneFlowManagerConfig{
+		BridgeName:     "br0",
+		FlowController: ctrl,
+		PortController: ctrl,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, m.ApplyZoneFlows(context.Background(), "storage-port", zone.ZoneStorage))
+
+	v, err := m.GetPortVLAN("storage-port")
+	require.NoError(t, err)
+	assert.Equal(t, uint16(203), v)
 }
 
 // TestSDNEnrollmentHook_OnEnrollmentComplete_ProfileNotFoundBySerial tests fallback to MAC lookup
@@ -539,28 +495,16 @@ func TestEngine_RemovePolicyFromEnrolled(t *testing.T) {
 
 // TestEngine_AuthenticatePort_FromUnauthorized tests authentication from unauthorized state
 func TestEngine_AuthenticatePort_FromUnauthorized(t *testing.T) {
-	controller := newMockFlowController()
-	config := Config{
-		BridgeName:     "br0",
-		FlowController: controller,
-	}
-
-	engine, err := NewEngine(config)
-	require.NoError(t, err)
+	engine := createTestEngineWithZones(t)
 
 	// First set to provisioning, then unauthorized
 	require.NoError(t, engine.SetPortState("port1", PortStateProvisioning))
 	require.NoError(t, engine.SetPortState("port1", PortStateUnauthorized))
 
-	// Authenticate from unauthorized
-	cert := createTestCertificate(t, x509.Certificate{
-		Subject: pkix.Name{
-			Organization:       []string{"tenant-1"},
-			OrganizationalUnit: []string{"vlan=100"},
-		},
-	})
+	// Authenticate from unauthorized using zone-extension cert
+	cert := createZoneCert(t, "tenant-1", "trusted")
 
-	err = engine.AuthenticatePort("port1", cert)
+	err := engine.AuthenticatePort("port1", cert)
 	assert.NoError(t, err)
 
 	// Verify authorized
@@ -571,27 +515,15 @@ func TestEngine_AuthenticatePort_FromUnauthorized(t *testing.T) {
 
 // TestEngine_AuthenticatePort_FromProvisioning tests authentication from provisioning state
 func TestEngine_AuthenticatePort_FromProvisioning(t *testing.T) {
-	controller := newMockFlowController()
-	config := Config{
-		BridgeName:     "br0",
-		FlowController: controller,
-	}
-
-	engine, err := NewEngine(config)
-	require.NoError(t, err)
+	engine := createTestEngineWithZones(t)
 
 	// Set to provisioning
 	require.NoError(t, engine.SetPortState("port1", PortStateProvisioning))
 
-	// Authenticate from provisioning
-	cert := createTestCertificate(t, x509.Certificate{
-		Subject: pkix.Name{
-			Organization:       []string{"tenant-1"},
-			OrganizationalUnit: []string{"vlan=100"},
-		},
-	})
+	// Authenticate from provisioning using zone-extension cert
+	cert := createZoneCert(t, "tenant-1", "trusted")
 
-	err = engine.AuthenticatePort("port1", cert)
+	err := engine.AuthenticatePort("port1", cert)
 	assert.NoError(t, err)
 
 	// Verify authorized

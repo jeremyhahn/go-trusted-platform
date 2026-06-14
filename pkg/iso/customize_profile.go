@@ -18,13 +18,30 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v2"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 )
 
-// EmbedDeviceProfileNetworkConfig embeds device profile network configurations into the ISO overlay
+// GetNetworkEnvPath returns the path for the baked network environment file
+// within the ISO overlay. The file carries zone env vars (e.g.
+// TP_NETWORK_ZONE) for consumption by firstboot scripts and services.
+func (w *NetworkConfigWriter) GetNetworkEnvPath() string {
+	return filepath.Join(w.GetNetworkConfigDir(), "network.env")
+}
+
+// EmbedDeviceProfileNetworkConfig embeds device profile network configurations
+// into the ISO overlay. For each configured phase it writes:
+//   - a per-phase YAML artifact (e.g. trusted.yaml) that includes the zone field,
+//   - a systemd-networkd stub (with a # trusted-platform-zone: header comment),
+//   - a dnsmasq DHCP config when DHCPPool is set.
+//
+// After all phases are processed, a network.env file is written with
+// TP_NETWORK_ZONE set to the trusted zone name (the zone the device
+// operates in after successful enrollment). The file is sourced by
+// firstboot services and the trusted-platform-network service.
 func (c *Customizer) EmbedDeviceProfileNetworkConfig(ctx context.Context, profile *entities.DeviceProfile) error {
 	if profile == nil {
 		c.logger.Debug("No device profile provided, skipping network config embedding")
@@ -50,9 +67,9 @@ func (c *Customizer) EmbedDeviceProfileNetworkConfig(ctx context.Context, profil
 		return fmt.Errorf("failed to embed provisioning network config: %w", err)
 	}
 
-	// Embed production network config
-	if err := c.embedNetworkPhaseConfig(writer, gen, "production", gen.GenerateProductionConfig()); err != nil {
-		return fmt.Errorf("failed to embed production network config: %w", err)
+	// Embed trusted network config (post-enrollment operational zone)
+	if err := c.embedNetworkPhaseConfig(writer, gen, "trusted", gen.GenerateTrustedConfig()); err != nil {
+		return fmt.Errorf("failed to embed trusted network config: %w", err)
 	}
 
 	// Embed quarantine network config
@@ -60,11 +77,17 @@ func (c *Customizer) EmbedDeviceProfileNetworkConfig(ctx context.Context, profil
 		return fmt.Errorf("failed to embed quarantine network config: %w", err)
 	}
 
+	// Bake zone env vars into the overlay so firstboot services and scripts
+	// can export TP_NETWORK_ZONE without having to parse the YAML.
+	if err := c.embedNetworkEnv(writer, gen); err != nil {
+		return fmt.Errorf("failed to embed network env: %w", err)
+	}
+
 	c.logger.Info("Successfully embedded device profile network configurations")
 	return nil
 }
 
-// embedNetworkPhaseConfig embeds a single network phase configuration
+// embedNetworkPhaseConfig embeds a single network phase configuration.
 func (c *Customizer) embedNetworkPhaseConfig(
 	writer *NetworkConfigWriter,
 	gen *NetworkConfigGenerator,
@@ -76,15 +99,16 @@ func (c *Customizer) embedNetworkPhaseConfig(
 		return nil
 	}
 
-	c.logger.Debug("Embedding network configuration", "phase", phase, "vlan", config.VLAN)
+	c.logger.Debug("Embedding network configuration", "phase", phase, "vlan", config.VLAN, "zone", config.Zone)
 
-	// Write YAML config for platformd to read
+	// Write YAML config for platformd to read. NetworkPhaseConfig.Zone is
+	// marshalled by yaml.Marshal when non-empty (yaml:"zone,omitempty").
 	var configPath string
 	switch phase {
 	case "provisioning":
 		configPath = writer.GetProvisioningConfigPath()
-	case "production":
-		configPath = writer.GetProductionConfigPath()
+	case "trusted":
+		configPath = writer.GetTrustedConfigPath()
 	case "quarantine":
 		configPath = writer.GetQuarantineConfigPath()
 	default:
@@ -102,7 +126,9 @@ func (c *Customizer) embedNetworkPhaseConfig(
 
 	c.logger.Debug("Wrote network config", "phase", phase, "path", configPath)
 
-	// Generate systemd-networkd config if we have network settings
+	// Generate systemd-networkd config if we have network settings.
+	// The generator prepends a "# trusted-platform-zone: <zone>" comment
+	// when config.Zone is non-empty.
 	if err := c.embedSystemdNetworkdConfig(writer, config, phase); err != nil {
 		c.logger.Warn("Failed to generate systemd-networkd config",
 			"phase", phase, "error", err)
@@ -121,7 +147,31 @@ func (c *Customizer) embedNetworkPhaseConfig(
 	return nil
 }
 
-// embedSystemdNetworkdConfig generates and embeds systemd-networkd configuration
+// embedNetworkEnv writes a shell-sourceable env file to the ISO overlay.
+// TP_NETWORK_ZONE is set to the trusted zone name so that firstboot scripts
+// and systemd services can export the zone without parsing YAML.
+// When the trusted zone is empty the var is written as an empty assignment
+// (consistent with how missing VLANs are emitted as zero rather than an error).
+func (c *Customizer) embedNetworkEnv(writer *NetworkConfigWriter, gen *NetworkConfigGenerator) error {
+	zones := gen.ExtractZoneNetworks()
+
+	var sb strings.Builder
+	sb.WriteString("# Trusted Platform – network zone environment\n")
+	sb.WriteString("# Generated by platformctl iso create; do not edit manually.\n")
+	sb.WriteString("# Sourced by trusted-platform-network.service and firstboot scripts.\n\n")
+
+	fmt.Fprintf(&sb, "TP_NETWORK_ZONE=%q\n", zones.Trusted.Zone)
+
+	envPath := writer.GetNetworkEnvPath()
+	if err := os.WriteFile(envPath, []byte(sb.String()), 0644); err != nil {
+		return fmt.Errorf("failed to write network env file: %w", err)
+	}
+
+	c.logger.Debug("Wrote network env file", "path", envPath, "zone", zones.Trusted.Zone)
+	return nil
+}
+
+// embedSystemdNetworkdConfig generates and embeds systemd-networkd configuration.
 func (c *Customizer) embedSystemdNetworkdConfig(
 	writer *NetworkConfigWriter,
 	config *entities.NetworkPhaseConfig,
@@ -154,7 +204,7 @@ func (c *Customizer) embedSystemdNetworkdConfig(
 	return nil
 }
 
-// embedDnsmasqConfig generates and embeds dnsmasq DHCP server configuration
+// embedDnsmasqConfig generates and embeds dnsmasq DHCP server configuration.
 func (c *Customizer) embedDnsmasqConfig(
 	writer *NetworkConfigWriter,
 	config *entities.NetworkPhaseConfig,
@@ -187,7 +237,7 @@ func (c *Customizer) embedDnsmasqConfig(
 	return nil
 }
 
-// EmbedPlatformAPIConfig embeds platform API endpoint configuration for profile fetching
+// EmbedPlatformAPIConfig embeds platform API endpoint configuration for profile fetching.
 func (c *Customizer) EmbedPlatformAPIConfig(ctx context.Context, apiConfig *PlatformAPIConfig) error {
 	if apiConfig == nil || apiConfig.Endpoint == "" {
 		c.logger.Debug("No platform API endpoint configured, skipping")

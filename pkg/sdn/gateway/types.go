@@ -548,7 +548,19 @@ type DHCPServiceConfig struct {
 
 	// Segment is the name of the provisioning subnet to resolve IPAM pool from.
 	// When set, PoolStart, PoolEnd, and Interface are derived from the subnet.
+	//
+	// Deprecated: Use Zone instead for zone-scoped pool selection. Segment is
+	// kept for backward compatibility with existing templates that set it.
+	// When both Segment and Zone are set, Zone takes precedence.
 	Segment string `yaml:"segment,omitempty" json:"segment,omitempty" mapstructure:"segment"`
+
+	// Zone is the zone name used to resolve the IPAM pool for this DHCP service.
+	// The gateway selects a pool by calling Allocator.ListPoolsByZone with this
+	// value. Explicit PoolStart/PoolEnd values take precedence over zone-derived
+	// selection (explicit beats derived).
+	//
+	// Precedence (highest first): PoolStart+PoolEnd → Zone → Segment.
+	Zone string `yaml:"zone,omitempty" json:"zone,omitempty" mapstructure:"zone"`
 
 	// PoolStart is the start of the DHCP address pool.
 	PoolStart string `yaml:"pool-start,omitempty" json:"pool_start,omitempty" mapstructure:"pool-start"`
@@ -742,6 +754,16 @@ type GatewayConfig struct {
 	// NAT is the NAT gateway configuration.
 	NAT *NATConfig `yaml:"nat,omitempty" json:"nat,omitempty" mapstructure:"nat"`
 
+	// Transit is the transit (gateway ↔ upstream/BGP) service configuration.
+	// When present and enabled, the gateway activates its transit BGP/p2p
+	// service for point-to-point link management on the transit VLAN.
+	Transit *TransitServiceConfig `yaml:"transit,omitempty" json:"transit,omitempty" mapstructure:"transit"`
+
+	// ManagementVPN is the WireGuard admin VPN service configuration.
+	// When present and enabled, the gateway exposes the WireGuard endpoint
+	// for authenticated operator access to management zone endpoints.
+	ManagementVPN *ManagementVPNServiceConfig `yaml:"management_vpn,omitempty" json:"management_vpn,omitempty" mapstructure:"management_vpn"`
+
 	// Tunnels are GRE/VXLAN tunnel configurations.
 	Tunnels []TunnelConfig `yaml:"tunnels,omitempty" json:"tunnels,omitempty" mapstructure:"tunnels"`
 }
@@ -803,6 +825,16 @@ func (c *GatewayConfig) Validate() error {
 			return err
 		}
 	}
+	if c.Transit != nil {
+		if err := c.Transit.Validate(); err != nil {
+			return err
+		}
+	}
+	if c.ManagementVPN != nil {
+		if err := c.ManagementVPN.Validate(); err != nil {
+			return err
+		}
+	}
 	for i := range c.Tunnels {
 		if err := c.Tunnels[i].Validate(); err != nil {
 			return err
@@ -837,10 +869,54 @@ func (c *GatewayConfig) HasEnabledServices() bool {
 	if c.NAT != nil && c.NAT.Enabled {
 		return true
 	}
+	if c.Transit != nil && c.Transit.Enabled {
+		return true
+	}
+	if c.ManagementVPN != nil && c.ManagementVPN.Enabled {
+		return true
+	}
 	if len(c.Tunnels) > 0 {
 		return true
 	}
 	return false
+}
+
+// TransitServiceConfig holds gateway transit service configuration.
+// The transit service manages point-to-point BGP/upstream links on the
+// transit VLAN. The VLAN and p2p prefix are typically set at the sdn.transit
+// level; this service block controls gateway-side activation.
+//
+// Doc reference: docs/architecture/reference-network.md §Configuration
+type TransitServiceConfig struct {
+	// Enabled controls whether the transit service is active.
+	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
+}
+
+// Validate checks the transit service configuration.
+func (c *TransitServiceConfig) Validate() error {
+	return nil
+}
+
+// ManagementVPNServiceConfig holds the WireGuard admin VPN gateway service
+// configuration. The platform WireGuard endpoint exposes access to management
+// zone endpoints only; operator workstations authenticate through this tunnel
+// and are never dual-homed onto a data zone.
+//
+// The runtime-undefined aspects (WireGuard key management, peer enrollment,
+// IP assignment within the admin subnet) are handled by go-xkms WireGuard
+// support reached via the quicbaas SDK; this struct holds only the gateway
+// service activation flag.
+//
+// Doc reference: docs/architecture/reference-network.md §Management access
+type ManagementVPNServiceConfig struct {
+	// Enabled controls whether the management VPN service is active.
+	// Gateways SHOULD expose this by default.
+	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
+}
+
+// Validate checks the management VPN service configuration.
+func (c *ManagementVPNServiceConfig) Validate() error {
+	return nil
 }
 
 // GatewayStatus represents the current status of a gateway.

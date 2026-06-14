@@ -133,6 +133,8 @@ type Certificate struct {
 	IsCa bool `json:"is_ca" yaml:"is_ca"`
 	// FingerprintSha256 is the SHA-256 fingerprint.
 	FingerprintSha256 string `json:"fingerprint_sha256,omitempty" yaml:"fingerprint_sha256,omitempty"`
+	// SANs are the subject alternative names.
+	SANs *SubjectAlternativeNames `json:"sans,omitempty" yaml:"sans,omitempty"`
 	// Pem is the PEM-encoded certificate.
 	Pem []byte `json:"pem,omitempty" yaml:"pem,omitempty"`
 	// Der is the DER-encoded certificate.
@@ -281,6 +283,8 @@ type VerifyCertificateParams struct {
 type VerifyCertificateResult struct {
 	// Valid indicates whether the certificate is valid.
 	Valid bool `json:"valid" yaml:"valid"`
+	// Revoked indicates whether the certificate has been revoked.
+	Revoked bool `json:"revoked" yaml:"revoked"`
 	// Chain is the certificate chain names.
 	Chain []string `json:"chain,omitempty" yaml:"chain,omitempty"`
 	// Errors are validation errors.

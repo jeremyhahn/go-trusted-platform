@@ -556,3 +556,10 @@ if err != nil {
 - [QUIC API Reference](api-reference-quic.md)
 - [MCP API Reference](api-reference-mcp.md)
 - [Architecture](architecture.md)
+
+
+## Gateway Pool CRUD via Unix Socket (Z5b)
+
+The Unix adapter uses gRPC over the Unix socket to the same `GatewayService`
+RPCs described in api-reference-grpc.md. The zone filter is passed in
+`ListIPAMPoolsRequest.zone`; empty returns all pools.

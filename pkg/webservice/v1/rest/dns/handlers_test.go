@@ -180,6 +180,10 @@ func (m *mockDNSService) Resolve(ctx context.Context, name, recordType string) (
 	return nil, nil
 }
 
+func (m *mockDNSService) RegisterWithNetworkZone(ctx context.Context, host, networkZone, ip string) error {
+	return nil
+}
+
 // mockHttpWriter implements response.HttpWriter for testing
 type mockHttpWriter struct {
 	lastStatus  int

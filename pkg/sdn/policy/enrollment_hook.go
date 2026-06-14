@@ -25,6 +25,7 @@ import (
 	devicedao "github.com/jeremyhahn/go-trusted-platform/pkg/device/dao"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/arp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
 
@@ -63,6 +64,12 @@ type EnrollmentHook func(event *EnrollmentEvent) error
 // This allows for dependency injection during testing
 type MACExtractor func(ipAddr string) string
 
+// PortBinder is called after a device is successfully activated so that the
+// OVS port name can be persisted on the device record. serial is the device
+// serial number; portID is the real OVS tap/interface name resolved from the
+// enrollment hook's MAC-to-port registry.
+type PortBinder func(ctx context.Context, serial, portID string) error
+
 // PendingActivation stores pending activation data
 type PendingActivation struct {
 	PortID      string
@@ -77,9 +84,12 @@ type SDNEnrollmentHook struct {
 	logger             *slog.Logger
 	policyEngine       PolicyEngine
 	profileDAO         devicedao.DeviceProfileDAO
+	portBinder         PortBinder        // Optional: called after successful activation to persist portID
 	macToPort          map[string]string // MAC address to port ID mapping
 	macExtractor       MACExtractor      // Pluggable MAC extraction function
 	pendingActivations sync.Map          // serial -> *PendingActivation
+	extractor          PolicyExtractor   // Optional: extracts zone from certificate extensions
+	zones              []zone.ZoneConfig // Resolved zone set for quarantine resolution
 }
 
 // SDNEnrollmentHookConfig configures the enrollment hook
@@ -88,6 +98,21 @@ type SDNEnrollmentHookConfig struct {
 	PolicyEngine PolicyEngine
 	ProfileDAO   devicedao.DeviceProfileDAO
 	MACExtractor MACExtractor // Optional: defaults to ARP-based extraction
+	// PortBinder is an optional callback invoked after a device is successfully
+	// activated. It receives the device serial number and the real OVS port ID
+	// so that the port can be stamped onto the device record for restart
+	// survivability. When nil, the stamp step is skipped (useful in tests that
+	// do not need persistence).
+	PortBinder PortBinder
+	// Extractor is an optional PolicyExtractor used to read the
+	// OIDTPNetworkZone extension from issued certificates during zone
+	// cross-check in buildPortPolicy. When nil, zone cross-check is skipped
+	// and the profile zone is used unconditionally.
+	Extractor PolicyExtractor
+	// Zones is the resolved zone set used to determine the quarantine zone
+	// when a zone mismatch is detected. When nil the default quarantine zone
+	// name is used.
+	Zones []zone.ZoneConfig
 }
 
 // NewSDNEnrollmentHook creates a new SDN enrollment hook
@@ -109,7 +134,10 @@ func NewSDNEnrollmentHook(config SDNEnrollmentHookConfig) (*SDNEnrollmentHook, e
 		logger:       logger,
 		policyEngine: config.PolicyEngine,
 		profileDAO:   config.ProfileDAO,
+		portBinder:   config.PortBinder,
 		macToPort:    make(map[string]string),
+		extractor:    config.Extractor,
+		zones:        config.Zones,
 	}
 
 	// Use provided MAC extractor or default to ARP-based extraction
@@ -259,8 +287,9 @@ func (h *SDNEnrollmentHook) PeekPendingActivation(serial string) (*PendingActiva
 	return pending, ok
 }
 
-// ActivateDevice transitions a device from Enrolled to Authorized
-// This is called when the client explicitly requests activation via /device/activate
+// ActivateDevice transitions a device from Enrolled to Authorized and stamps
+// the OVS port ID onto the device record via the PortBinder callback (when set).
+// This is called when the client explicitly requests activation via /device/activate.
 func (h *SDNEnrollmentHook) ActivateDevice(serial string) error {
 	// Retrieve pending activation
 	pending, ok := h.GetPendingActivation(serial)
@@ -273,8 +302,11 @@ func (h *SDNEnrollmentHook) ActivateDevice(serial string) error {
 		slog.String("port_id", pending.PortID),
 		slog.String("profile", pending.Profile.Name))
 
-	// Build the production policy from the profile
-	policy := h.buildPortPolicy(pending.Profile, pending.Certificate)
+	// Build the production policy from the profile. A non-nil error indicates
+	// a zone mismatch — the policy is still usable (quarantine zone applied)
+	// but we log the mismatch and surface it after applying the policy so the
+	// caller can emit an audit event.
+	policy, policyErr := h.buildPortPolicy(pending.Profile, pending.Certificate)
 	if policy == nil {
 		// Re-store the pending activation since we failed
 		h.pendingActivations.Store(serial, pending)
@@ -292,13 +324,34 @@ func (h *SDNEnrollmentHook) ActivateDevice(serial string) error {
 		return fmt.Errorf("failed to apply production policy: %w", err)
 	}
 
+	// Port zone application: SC-7 (boundary), AC-4 (flow enforcement).
 	h.logger.Info("successfully activated device",
 		slog.String("port_id", pending.PortID),
 		slog.String("serial", serial),
 		slog.Uint64("vlan", uint64(policy.VLAN)),
-		slog.String("tenant_id", policy.TenantID))
+		slog.String("zone", string(policy.Zone)),
+		slog.String("tenant_id", policy.TenantID),
+		complianceAttr(complianceSC7, complianceAC4))
 
-	return nil
+	// Stamp the real OVS port ID onto the device record so it survives
+	// daemon restarts. The binder is optional; when nil (e.g. in unit tests)
+	// the stamp step is skipped.
+	if h.portBinder != nil {
+		ctx := context.Background()
+		if err := h.portBinder(ctx, serial, pending.PortID); err != nil {
+			// Log the failure but do not roll back the policy application —
+			// the device is on the correct VLAN. The missing stamp means the
+			// quarantine observer will warn and skip on next restart, which is
+			// safer than leaving the device in an ambiguous policy state.
+			h.logger.Warn("failed to stamp network port ID on device record",
+				slog.String("serial", serial),
+				slog.String("port_id", pending.PortID),
+				slog.String("error", err.Error()))
+		}
+	}
+
+	// Return any zone mismatch error (policy was applied with quarantine zone).
+	return policyErr
 }
 
 // RegisterPort maps a MAC address to a port ID for later lookup
@@ -446,13 +499,20 @@ func (h *SDNEnrollmentHook) findProfileByMAC(mac string) (*entities.DeviceProfil
 	return nil, fmt.Errorf("no profile found for MAC: %s", mac)
 }
 
-// buildPortPolicy creates a PortPolicy from a DeviceProfile's production network config
-func (h *SDNEnrollmentHook) buildPortPolicy(profile *entities.DeviceProfile, cert *x509.Certificate) *PortPolicy {
+// buildPortPolicy creates a PortPolicy from a DeviceProfile's production network
+// config and the issued certificate. When an extractor is configured, the zone
+// embedded in the certificate is compared against the profile zone:
+//   - When both match, the cert zone is used (authoritative).
+//   - When they differ, the device is placed in the quarantine zone and
+//     ErrZoneMismatch is returned so the caller can emit an audit event.
+//   - When the cert carries no zone extension, the profile zone is used
+//     (backward compatible with pre-Z3 certs).
+func (h *SDNEnrollmentHook) buildPortPolicy(profile *entities.DeviceProfile, cert *x509.Certificate) (*PortPolicy, error) {
 	prodNet := profile.GetPostEnrollmentNetworkConfig()
 	if prodNet == nil {
 		h.logger.Warn("profile has no production network configuration",
 			slog.String("profile", profile.Name))
-		return nil
+		return nil, nil
 	}
 
 	// Extract tenant ID from certificate (e.g., from Organization field)
@@ -461,9 +521,46 @@ func (h *SDNEnrollmentHook) buildPortPolicy(profile *entities.DeviceProfile, cer
 		tenantID = cert.Subject.Organization[0]
 	}
 
+	// Resolve zone: cert zone is authoritative; fall back to profile zone.
+	resolvedZone := zone.Zone(prodNet.Zone)
+	var zoneErr error
+	if h.extractor != nil {
+		certZoneName, extractErr := h.extractor.ExtractZone(cert)
+		if extractErr == nil {
+			// Cert carries a zone — cross-check against profile zone.
+			certZone := zone.Zone(certZoneName)
+			profileZone := zone.Zone(prodNet.Zone)
+			if profileZone != "" && certZone != profileZone {
+				// Zone mismatch: resolve quarantine and fail closed.
+				quarantine := zone.ZoneQuarantine
+				if qz, qErr := zone.ZoneForRole(h.zones, zone.LifecycleRoleQuarantine); qErr == nil {
+					quarantine = qz
+				}
+				// Zone mismatch quarantine: SC-7 (boundary), SC-4 (tenant isolation), AC-4 (flow).
+				h.logger.Warn("zone mismatch between certificate and profile, applying quarantine",
+					slog.String("cert_zone", string(certZone)),
+					slog.String("profile_zone", string(profileZone)),
+					slog.String("zone", string(quarantine)),
+					slog.String("serial", cert.Subject.CommonName),
+					slog.String("profile", profile.Name),
+					complianceAttr(complianceSC7, complianceSC4, complianceAC4))
+				resolvedZone = quarantine
+				zoneErr = ErrZoneMismatch{
+					CertZone:    certZone,
+					ProfileZone: profileZone,
+					Serial:      cert.Subject.CommonName,
+				}
+			} else {
+				resolvedZone = certZone
+			}
+		}
+		// ErrMissingZoneExtension is non-fatal: use profile zone (backward compat).
+	}
+
 	// Build the port policy
 	policy := &PortPolicy{
 		TenantID:    tenantID,
+		Zone:        resolvedZone,
 		VLAN:        prodNet.VLAN,
 		Certificate: cert,
 		ExpiresAt:   cert.NotAfter,
@@ -544,9 +641,10 @@ func (h *SDNEnrollmentHook) buildPortPolicy(profile *entities.DeviceProfile, cer
 
 	h.logger.Debug("built port policy from profile",
 		slog.String("profile", profile.Name),
+		slog.String("zone", string(resolvedZone)),
 		slog.Uint64("vlan", uint64(policy.VLAN)),
 		slog.Int("acl_count", len(policy.ACLs)),
 		slog.String("tenant_id", tenantID))
 
-	return policy
+	return policy, zoneErr
 }

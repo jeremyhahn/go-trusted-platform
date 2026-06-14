@@ -186,3 +186,37 @@ argon2:
   parallelism: 1
   saltLen: 16
   keyLen: 32
+
+# =============================================================================
+# SDN CONFIGURATION
+# =============================================================================
+# Enables the overlay controller so TestOverlayMultiProtocol and
+# TestOverlayCLIOperations pass against real in-process services.
+#
+# OVS socket: the devcontainer starts ovsdb-server at /var/run/openvswitch/db.sock
+# before platformd; run-integration-tests.sh creates the br-platform-int bridge.
+#
+# Overlay: controller is wired into the gRPC/REST/QUIC/MCP/Unix overlay service
+# by daemon.go when sdn.overlay.enabled=true. VTEP IP is derived at runtime from
+# App.PublicIPv4 (or loopback when not available). Underlay interface defaults to
+# "lo" so no kernel VXLAN device is required in the container.
+#
+# IPAM: memory backend is explicit here so the zone/IPAM test suites that were
+# passing WITHOUT an sdn section continue to use the same in-memory allocator
+# (the daemon always initialised a defaultIPAM memory backend regardless).
+#
+# Networks: intentionally absent — no VLAN seeding is triggered, preserving the
+# existing behaviour of the zone/network integration test suites.
+
+sdn:
+  enabled: true
+  controller: true
+  ovs:
+    socket: /var/run/openvswitch/db.sock
+    bridge: br-platform-int
+  ipam:
+    backend: memory
+  overlay:
+    enabled: true
+    vxlan-port: 4789
+    underlay-interface: lo

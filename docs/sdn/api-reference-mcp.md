@@ -434,3 +434,20 @@ platformctl mcp sdn --stdio
 ```
 
 The MCP server communicates via stdin/stdout using JSON-RPC.
+
+## Network Zone Tools
+
+| Tool | Description |
+|------|-------------|
+| `gateway_zone_list` | List all SDN network trust zones, optionally filtered by `lifecycle_role` |
+| `gateway_zone_create` | Create a new network trust zone (required: `name`) |
+| `gateway_zone_update` | Update policy settings of an existing zone (required: `name`) |
+| `gateway_zone_delete` | Delete a zone by name (required: `name`) |
+| `gateway_zone_assign` | Assign a network segment to a zone (required: `network`, `zone`) |
+
+All create/update tools return `restart_required: true` when a policy-relevant
+field change requires the flow matrix to be recompiled.
+
+Note: `pxe_authorize_device` now accepts `target_zone` (zone name string) instead
+of the former `target_vlan` (integer). The daemon resolves the zone name to a VLAN
+ID via the configured network map.

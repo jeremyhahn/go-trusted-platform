@@ -134,6 +134,16 @@ func (m *spMockDeviceService) FindBySerial(ctx context.Context, serial string) (
 	return nil, ErrDeviceNotFound{DeviceID: serial}
 }
 
+// FindByHostname finds a device by its IDevID hostname.
+func (m *spMockDeviceService) FindByHostname(ctx context.Context, hostname string) (*deviceentities.Device, error) {
+	for _, d := range m.devices {
+		if d.Hostname == hostname {
+			return d, nil
+		}
+	}
+	return nil, errors.New("device not found by hostname")
+}
+
 // =============================================================================
 // Mock SDN Service for service_provider coverage tests
 // =============================================================================

@@ -7,8 +7,8 @@
  * Uses the trusted-platform-sdk for API interactions.
  */
 
-import { useMemo, useState } from 'react';
-import { Loader2, Plus, RefreshCw, Network as NetworkIcon } from 'lucide-react';
+import { useMemo, useState, useCallback } from 'react';
+import { Loader2, Plus, RefreshCw, Network as NetworkIcon, Tag } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -48,6 +48,65 @@ export default function SDNPage() {
   const [createName, setCreateName] = useState('');
   const [createType, setCreateType] = useState<'ovs' | 'linux'>('ovs');
   const [createSubmitting, setCreateSubmitting] = useState(false);
+
+  // Zone assignment state
+  const [zoneAssignOpen, setZoneAssignOpen] = useState(false);
+  const [zoneAssignNetwork, setZoneAssignNetwork] = useState<string>('');
+  const [zoneAssignValue, setZoneAssignValue] = useState('');
+  const [zoneAssignSubmitting, setZoneAssignSubmitting] = useState(false);
+  const [availableZones, setAvailableZones] = useState<string[]>([]);
+  // Map of network name → assigned zone (populated when zone assign dialog opens)
+  const [networkZoneMap, setNetworkZoneMap] = useState<Record<string, string>>({});
+
+  const fetchZones = useCallback(async () => {
+    try {
+      const res = await fetch('/api/v1/sdn/zones', { credentials: 'include' });
+      if (!res.ok) return;
+      const body = await res.json();
+      const names: string[] = (body.zones ?? []).map((z: { name: string }) => z.name);
+      setAvailableZones(names);
+    } catch {
+      // Non-fatal — zone dropdown just stays empty
+    }
+  }, []);
+
+  const openZoneAssign = useCallback((networkName: string) => {
+    setZoneAssignNetwork(networkName);
+    setZoneAssignValue(networkZoneMap[networkName] ?? '');
+    void fetchZones();
+    setZoneAssignOpen(true);
+  }, [networkZoneMap, fetchZones]);
+
+  const handleZoneAssign = useCallback(async () => {
+    if (!zoneAssignNetwork || !zoneAssignValue) return;
+    setZoneAssignSubmitting(true);
+    try {
+      const res = await fetch(
+        `/api/v1/sdn/networks/${encodeURIComponent(zoneAssignNetwork)}/zone`,
+        {
+          method: 'PUT',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ zone: zoneAssignValue }),
+        }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      toast({ title: 'Zone assigned', description: `Network "${zoneAssignNetwork}" → zone "${zoneAssignValue}"`, variant: 'success' });
+      setNetworkZoneMap((prev) => ({ ...prev, [zoneAssignNetwork]: zoneAssignValue }));
+      setZoneAssignOpen(false);
+    } catch (err) {
+      toast({
+        title: 'Failed to assign zone',
+        description: err instanceof Error ? err.message : 'Unknown error',
+        variant: 'destructive',
+      });
+    } finally {
+      setZoneAssignSubmitting(false);
+    }
+  }, [zoneAssignNetwork, zoneAssignValue, toast]);
 
   // Fetch bridges using SDK
   const {
@@ -299,14 +358,16 @@ export default function SDNPage() {
                   <TableHead>Type</TableHead>
                   <TableHead>CIDR</TableHead>
                   <TableHead>Gateway</TableHead>
+                  <TableHead>Zone</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {networks.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={5}
+                      colSpan={7}
                       className="text-center text-muted-foreground"
                     >
                       No networks found
@@ -328,6 +389,15 @@ export default function SDNPage() {
                         {network.gateway || '-'}
                       </TableCell>
                       <TableCell>
+                        {networkZoneMap[network.name] ? (
+                          <Badge variant="outline" className="font-mono text-xs">
+                            {networkZoneMap[network.name]}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground text-xs">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
                         <Badge
                           variant="outline"
                           className={
@@ -339,6 +409,19 @@ export default function SDNPage() {
                           {network.status}
                         </Badge>
                       </TableCell>
+                      <TableCell>
+                        <div onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => openZoneAssign(network.name)}
+                          >
+                            <Tag className="h-3 w-3 mr-1" />
+                            Assign Zone
+                          </Button>
+                        </div>
+                      </TableCell>
                     </TableRow>
                   ))
                 )}
@@ -347,6 +430,51 @@ export default function SDNPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Zone assignment dialog */}
+      <Dialog open={zoneAssignOpen} onOpenChange={setZoneAssignOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Assign Zone to Network: {zoneAssignNetwork}</DialogTitle>
+            <DialogDescription>
+              Assign a network zone to this bridge. The change will apply to the SDN policy
+              engine on next evaluation.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="zone-assign-select">Zone</Label>
+              <Select
+                value={zoneAssignValue || '__none__'}
+                onValueChange={(v) => setZoneAssignValue(v === '__none__' ? '' : v)}
+              >
+                <SelectTrigger id="zone-assign-select">
+                  <SelectValue placeholder="Select a zone..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">— No zone —</SelectItem>
+                  {availableZones.map((z) => (
+                    <SelectItem key={z} value={z}>{z}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setZoneAssignOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={!zoneAssignValue || zoneAssignSubmitting}
+              onClick={handleZoneAssign}
+            >
+              {zoneAssignSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Assign Zone
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Card>
         <CardHeader>

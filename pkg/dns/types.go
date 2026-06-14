@@ -96,6 +96,13 @@ type DNSService interface {
 
 	// Resolve resolves a DNS name to its values.
 	Resolve(ctx context.Context, name string, recordType string) ([]string, error)
+
+	// RegisterWithNetworkZone registers a device hostname under its network
+	// zone subdomain when zone_subdomains is enabled. The zone-qualified FQDN
+	// <host>.<networkZone>.<domain> is registered IN ADDITION to the standard
+	// <host>.<domain> entry. BMC names are never zone-qualified. No-op when
+	// zone_subdomains is false or networkZone is empty.
+	RegisterWithNetworkZone(ctx context.Context, host, networkZone, ip string) error
 }
 
 // Ensure Service implements DNSService interface at compile time.

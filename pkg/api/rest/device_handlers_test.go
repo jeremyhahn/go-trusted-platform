@@ -123,6 +123,16 @@ func (m *mockDeviceService) FindBySerial(ctx context.Context, serial string) (*e
 	return nil, errors.New("device not found")
 }
 
+// FindByHostname finds a device by its IDevID hostname.
+func (m *mockDeviceService) FindByHostname(ctx context.Context, hostname string) (*entities.Device, error) {
+	for _, d := range m.devices {
+		if d.Hostname == hostname {
+			return d, nil
+		}
+	}
+	return nil, errors.New("device not found by hostname")
+}
+
 func (m *mockDeviceService) addDevice(d *entities.Device) {
 	m.devices[d.ID] = d
 }
@@ -1522,26 +1532,28 @@ func TestHandleCreateProfile(t *testing.T) {
 			Name:  "network-profile",
 			Model: "Model-B",
 			Role:  "edge",
-			ProvisioningNetwork: &NetworkPhaseConfigRequest{
-				VLAN:       100,
-				StaticIP:   "192.168.1.10",
-				Gateway:    "192.168.1.1",
-				DNS:        []string{"8.8.8.8", "8.8.4.4"},
-				AuthMethod: "cert",
-			},
-			ProductionNetwork: &NetworkPhaseConfigRequest{
-				VLAN:       200,
-				StaticIP:   "10.0.0.10",
-				Gateway:    "10.0.0.1",
-				DNS:        []string{"10.0.0.2"},
-				AuthMethod: "mTLS",
-			},
-			QuarantineNetwork: &NetworkPhaseConfigRequest{
-				VLAN:       999,
-				StaticIP:   "172.16.0.10",
-				Gateway:    "172.16.0.1",
-				DNS:        []string{"172.16.0.2"},
-				AuthMethod: "none",
+			Networks: map[string]*NetworkPhaseConfigRequest{
+				"provisioning": {
+					VLAN:       100,
+					StaticIP:   "192.168.1.10",
+					Gateway:    "192.168.1.1",
+					DNS:        []string{"8.8.8.8", "8.8.4.4"},
+					AuthMethod: "cert",
+				},
+				"trusted": {
+					VLAN:       200,
+					StaticIP:   "10.0.0.10",
+					Gateway:    "10.0.0.1",
+					DNS:        []string{"10.0.0.2"},
+					AuthMethod: "mTLS",
+				},
+				"quarantine": {
+					VLAN:       999,
+					StaticIP:   "172.16.0.10",
+					Gateway:    "172.16.0.1",
+					DNS:        []string{"172.16.0.2"},
+					AuthMethod: "none",
+				},
 			},
 			MatchRules: &ProfileMatchRulesRequest{
 				MACPrefix:    "00:11:22",
@@ -1565,12 +1577,13 @@ func TestHandleCreateProfile(t *testing.T) {
 		var profileResp ProfileResponse
 		decodeDeviceResponse(t, w.Body, &profileResp)
 		assert.Equal(t, "network-profile", profileResp.Name)
-		assert.NotNil(t, profileResp.ProvisioningNetwork)
-		assert.Equal(t, uint16(100), profileResp.ProvisioningNetwork.VLAN)
-		assert.NotNil(t, profileResp.ProductionNetwork)
-		assert.Equal(t, uint16(200), profileResp.ProductionNetwork.VLAN)
-		assert.NotNil(t, profileResp.QuarantineNetwork)
-		assert.Equal(t, uint16(999), profileResp.QuarantineNetwork.VLAN)
+		assert.NotNil(t, profileResp.Networks)
+		assert.NotNil(t, profileResp.Networks["provisioning"])
+		assert.Equal(t, uint16(100), profileResp.Networks["provisioning"].VLAN)
+		assert.NotNil(t, profileResp.Networks["trusted"])
+		assert.Equal(t, uint16(200), profileResp.Networks["trusted"].VLAN)
+		assert.NotNil(t, profileResp.Networks["quarantine"])
+		assert.Equal(t, uint16(999), profileResp.Networks["quarantine"].VLAN)
 		assert.NotNil(t, profileResp.MatchRules)
 		assert.Equal(t, "00:11:22", profileResp.MatchRules.MACPrefix)
 	})
@@ -1713,7 +1726,7 @@ func TestHandleListProfiles(t *testing.T) {
 		var listResp ProfileListResponse
 		decodeDeviceResponse(t, w.Body, &listResp)
 		assert.Len(t, listResp.Profiles, 1)
-		assert.NotNil(t, listResp.Profiles[0].ProvisioningNetwork)
+		assert.NotNil(t, listResp.Profiles[0].Networks)
 		assert.NotNil(t, listResp.Profiles[0].MatchRules)
 	})
 
@@ -1871,17 +1884,19 @@ func TestHandleUpdateProfile(t *testing.T) {
 		reqBody := ProfileUpdateRequest{
 			Role:     "edge",
 			EventLog: []byte{0x01, 0x02},
-			ProvisioningNetwork: &NetworkPhaseConfigRequest{
-				VLAN:     100,
-				StaticIP: "192.168.1.10",
-			},
-			ProductionNetwork: &NetworkPhaseConfigRequest{
-				VLAN:     200,
-				StaticIP: "10.0.0.10",
-			},
-			QuarantineNetwork: &NetworkPhaseConfigRequest{
-				VLAN:     999,
-				StaticIP: "172.16.0.10",
+			Networks: map[string]*NetworkPhaseConfigRequest{
+				"provisioning": {
+					VLAN:     100,
+					StaticIP: "192.168.1.10",
+				},
+				"trusted": {
+					VLAN:     200,
+					StaticIP: "10.0.0.10",
+				},
+				"quarantine": {
+					VLAN:     999,
+					StaticIP: "172.16.0.10",
+				},
 			},
 			MatchRules: &ProfileMatchRulesRequest{
 				MACPrefix:    "00:11:22",
@@ -1905,9 +1920,10 @@ func TestHandleUpdateProfile(t *testing.T) {
 		var profileResp ProfileResponse
 		decodeDeviceResponse(t, w.Body, &profileResp)
 		assert.Equal(t, "edge", profileResp.Role)
-		assert.NotNil(t, profileResp.ProvisioningNetwork)
-		assert.NotNil(t, profileResp.ProductionNetwork)
-		assert.NotNil(t, profileResp.QuarantineNetwork)
+		assert.NotNil(t, profileResp.Networks)
+		assert.NotNil(t, profileResp.Networks["provisioning"])
+		assert.NotNil(t, profileResp.Networks["trusted"])
+		assert.NotNil(t, profileResp.Networks["quarantine"])
 		assert.NotNil(t, profileResp.MatchRules)
 	})
 
@@ -2473,9 +2489,7 @@ func TestProfileWithNilNetworkConfigs(t *testing.T) {
 		var listResp ProfileListResponse
 		decodeDeviceResponse(t, w.Body, &listResp)
 		assert.Len(t, listResp.Profiles, 1)
-		assert.Nil(t, listResp.Profiles[0].ProvisioningNetwork)
-		assert.Nil(t, listResp.Profiles[0].ProductionNetwork)
-		assert.Nil(t, listResp.Profiles[0].QuarantineNetwork)
+		assert.Nil(t, listResp.Profiles[0].Networks)
 		assert.Nil(t, listResp.Profiles[0].MatchRules)
 	})
 
@@ -2502,9 +2516,7 @@ func TestProfileWithNilNetworkConfigs(t *testing.T) {
 		var profileResp ProfileResponse
 		decodeDeviceResponse(t, w.Body, &profileResp)
 		assert.Equal(t, "minimal-profile", profileResp.Name)
-		assert.Nil(t, profileResp.ProvisioningNetwork)
-		assert.Nil(t, profileResp.ProductionNetwork)
-		assert.Nil(t, profileResp.QuarantineNetwork)
+		assert.Nil(t, profileResp.Networks)
 		assert.Nil(t, profileResp.MatchRules)
 	})
 
@@ -2535,9 +2547,7 @@ func TestProfileWithNilNetworkConfigs(t *testing.T) {
 		var profileResp ProfileResponse
 		decodeDeviceResponse(t, w.Body, &profileResp)
 		assert.Equal(t, "no-network-profile", profileResp.Name)
-		assert.Nil(t, profileResp.ProvisioningNetwork)
-		assert.Nil(t, profileResp.ProductionNetwork)
-		assert.Nil(t, profileResp.QuarantineNetwork)
+		assert.Nil(t, profileResp.Networks)
 	})
 
 	t.Run("updates profile without network configs", func(t *testing.T) {
@@ -2568,6 +2578,6 @@ func TestProfileWithNilNetworkConfigs(t *testing.T) {
 		var profileResp ProfileResponse
 		decodeDeviceResponse(t, w.Body, &profileResp)
 		assert.Equal(t, "updated-no-network", profileResp.Name)
-		assert.Nil(t, profileResp.ProvisioningNetwork)
+		assert.Nil(t, profileResp.Networks)
 	})
 }

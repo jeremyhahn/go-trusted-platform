@@ -55,6 +55,15 @@ var (
 	OIDTPKeyStore       = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 29377, 101, 2}
 	OIDTPFIPS140        = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 29377, 101, 3}
 
+	// OIDTPNetworkZone is tp-networkZone (1.3.6.1.4.1.29377.101.21).
+	// It carries the platform network zone assigned to the certificate subject.
+	// The SDN policy engine evaluates this extension at enforcement time to
+	// determine which network segments the subject is permitted to access.
+	// Defined canonically in go-xkms/pkg/ca and re-exported via
+	// go-quicbaas/sdk/go/xkms/ca. Mirrored here for platform-local consumers
+	// that resolve OIDs without importing the CA package.
+	OIDTPNetworkZone = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 29377, 101, 21}
+
 	OIDQuantumAlgorithm = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 29377, 101, 10}
 	OIDQuantumSignature = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 29377, 101, 11}
 

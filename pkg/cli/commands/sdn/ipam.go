@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/gateway"
 )
 
@@ -38,6 +39,9 @@ IPAM provides:
 Examples:
   # List all pools
   platformctl sdn ipam pool list
+
+  # Create a pool
+  platformctl sdn ipam pool create --name trusted-net --cidr 10.0.0.0/24
 
   # Allocate an IP
   platformctl sdn ipam allocate --pool-id pool1 --device-id vm-123
@@ -61,26 +65,162 @@ func newIPAMPoolCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Long:  "Manage IPAM pools",
 	}
 
-	// pool list
+	cmd.AddCommand(newIPAMPoolListCommand(getFlags))
+	cmd.AddCommand(newIPAMPoolGetCommand(getFlags))
+	cmd.AddCommand(newIPAMPoolCreateCommand(getFlags))
+	cmd.AddCommand(newIPAMPoolUpdateCommand(getFlags))
+	cmd.AddCommand(newIPAMPoolDeleteCommand(getFlags))
+
+	return cmd
+}
+
+func newIPAMPoolListCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
+	var zone string
+
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List pools",
-		Long: `List all IPAM pools.
+		Long: `List IPAM pools with optional zone filter.
 
 Shows:
-  - Pool ID and CIDR
+  - Pool ID, name, and CIDR
   - Gateway address
+  - Zone
   - Total, allocated, and available addresses
 
 Examples:
   platformctl sdn ipam pool list
+  platformctl sdn ipam pool list --zone trusted
   platformctl sdn ipam pool list -o json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runIPAMPoolList(getFlags())
+			return runIPAMPoolList(getFlags(), zone)
 		},
 	}
 
-	cmd.AddCommand(listCmd)
+	listCmd.Flags().StringVar(&zone, "zone", "", "Filter by zone (empty returns all pools)")
+
+	return listCmd
+}
+
+func newIPAMPoolGetCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
+	var poolID string
+
+	cmd := &cobra.Command{
+		Use:   "get",
+		Short: "Get a pool",
+		Long: `Get details of a specific IPAM pool by ID.
+
+Examples:
+  platformctl sdn ipam pool get --id pool-1
+  platformctl sdn ipam pool get --id pool-1 -o json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runIPAMPoolGet(getFlags(), poolID)
+		},
+	}
+
+	cmd.Flags().StringVar(&poolID, "id", "", "Pool ID (required)")
+	cmd.MarkFlagRequired("id")
+
+	return cmd
+}
+
+func newIPAMPoolCreateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
+	var (
+		id          string
+		name        string
+		cidr        string
+		gatewayAddr string
+		zone        string
+		description string
+		leaseSecs   int64
+	)
+
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "Create a pool",
+		Long: `Create a new IPAM pool.
+
+The CIDR is immutable after creation. All other fields can be updated later.
+
+Examples:
+  platformctl sdn ipam pool create --name trusted-net --cidr 10.0.0.0/24
+  platformctl sdn ipam pool create --name prov-net --cidr 192.168.10.0/24 --gateway 192.168.10.1 --zone provisioning
+  platformctl sdn ipam pool create --name dev-net --cidr 172.16.0.0/20 --lease-seconds 86400`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runIPAMPoolCreate(getFlags(), id, name, cidr, gatewayAddr, zone, description, leaseSecs)
+		},
+	}
+
+	cmd.Flags().StringVar(&id, "id", "", "Optional pool ID (generated if omitted)")
+	cmd.Flags().StringVar(&name, "name", "", "Display name for the pool (required)")
+	cmd.Flags().StringVar(&cidr, "cidr", "", "CIDR range for the pool, e.g. 10.0.0.0/24 (required, immutable)")
+	cmd.Flags().StringVar(&gatewayAddr, "gateway", "", "Gateway IP address within the CIDR")
+	cmd.Flags().StringVar(&zone, "zone", "", "Trust/exposure zone, e.g. 'trusted' or 'provisioning'")
+	cmd.Flags().StringVar(&description, "description", "", "Description of the pool's purpose")
+	cmd.Flags().Int64Var(&leaseSecs, "lease-seconds", 0, "Default lease duration in seconds (0 = never expire)")
+	cmd.MarkFlagRequired("name")
+	cmd.MarkFlagRequired("cidr")
+
+	return cmd
+}
+
+func newIPAMPoolUpdateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
+	var (
+		poolID      string
+		name        string
+		gatewayAddr string
+		zone        string
+		description string
+		leaseSecs   int64
+	)
+
+	cmd := &cobra.Command{
+		Use:   "update",
+		Short: "Update a pool",
+		Long: `Update mutable fields of an existing IPAM pool.
+
+The CIDR cannot be changed after pool creation.
+
+Examples:
+  platformctl sdn ipam pool update --id pool-1 --name new-name
+  platformctl sdn ipam pool update --id pool-1 --zone trusted --gateway 10.0.0.254
+  platformctl sdn ipam pool update --id pool-1 --lease-seconds 3600`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runIPAMPoolUpdate(getFlags(), poolID, name, gatewayAddr, zone, description, leaseSecs)
+		},
+	}
+
+	cmd.Flags().StringVar(&poolID, "id", "", "Pool ID to update (required)")
+	cmd.Flags().StringVar(&name, "name", "", "Updated display name")
+	cmd.Flags().StringVar(&gatewayAddr, "gateway", "", "Updated gateway IP address")
+	cmd.Flags().StringVar(&zone, "zone", "", "Updated zone")
+	cmd.Flags().StringVar(&description, "description", "", "Updated description")
+	cmd.Flags().Int64Var(&leaseSecs, "lease-seconds", 0, "Updated default lease duration in seconds (0 = no change)")
+	cmd.MarkFlagRequired("id")
+
+	return cmd
+}
+
+func newIPAMPoolDeleteCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
+	var poolID string
+
+	cmd := &cobra.Command{
+		Use:   "delete",
+		Short: "Delete a pool",
+		Long: `Delete an IPAM pool.
+
+The pool must have no active IP allocations before it can be deleted.
+
+Examples:
+  platformctl sdn ipam pool delete --id pool-1`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runIPAMPoolDelete(getFlags(), poolID)
+		},
+	}
+
+	cmd.Flags().StringVar(&poolID, "id", "", "Pool ID to delete (required)")
+	cmd.MarkFlagRequired("id")
+
 	return cmd
 }
 
@@ -158,24 +298,117 @@ Examples:
 }
 
 // Implementation functions
-func runIPAMPoolList(flags *cli.CommonFlags) error {
+
+func runIPAMPoolList(flags *cli.CommonFlags, zone string) error {
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
 		return err
 	}
 	defer base.Close()
 
-	// Create gateway service client from the platform client
 	gatewayClient := gateway.NewClientFromGRPC(base.Client().Gateway())
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	resp, err := gatewayClient.ListIPAMPools(ctx)
+	resp, err := gatewayClient.ListIPAMPools(ctx, zone)
 	if err != nil {
 		return fmt.Errorf("failed to list IPAM pools: %w", err)
 	}
 
 	return base.Output(resp)
+}
+
+func runIPAMPoolGet(flags *cli.CommonFlags, poolID string) error {
+	base, err := cli.NewBaseCommand(flags)
+	if err != nil {
+		return err
+	}
+	defer base.Close()
+
+	gatewayClient := gateway.NewClientFromGRPC(base.Client().Gateway())
+
+	ctx, cancel := newCLIContext()
+	defer cancel()
+	pool, err := gatewayClient.GetIPAMPool(ctx, poolID)
+	if err != nil {
+		return fmt.Errorf("failed to get IPAM pool: %w", err)
+	}
+
+	return base.Output(pool)
+}
+
+func runIPAMPoolCreate(flags *cli.CommonFlags, id, name, cidr, gatewayAddr, zone, description string, leaseSecs int64) error {
+	base, err := cli.NewBaseCommand(flags)
+	if err != nil {
+		return err
+	}
+	defer base.Close()
+
+	gatewayClient := gateway.NewClientFromGRPC(base.Client().Gateway())
+
+	ctx, cancel := newCLIContext()
+	defer cancel()
+	req := &platformv1.CreateIPAMPoolRequest{
+		Id:                        id,
+		Name:                      name,
+		Cidr:                      cidr,
+		Gateway:                   gatewayAddr,
+		Zone:                      zone,
+		Description:               description,
+		DefaultLeaseDurationNanos: leaseSecs * int64(1e9),
+	}
+	pool, err := gatewayClient.CreateIPAMPool(ctx, req)
+	if err != nil {
+		return fmt.Errorf("failed to create IPAM pool: %w", err)
+	}
+
+	return base.Output(pool)
+}
+
+func runIPAMPoolUpdate(flags *cli.CommonFlags, poolID, name, gatewayAddr, zone, description string, leaseSecs int64) error {
+	base, err := cli.NewBaseCommand(flags)
+	if err != nil {
+		return err
+	}
+	defer base.Close()
+
+	gatewayClient := gateway.NewClientFromGRPC(base.Client().Gateway())
+
+	ctx, cancel := newCLIContext()
+	defer cancel()
+	req := &platformv1.UpdateIPAMPoolRequest{
+		Id:                        poolID,
+		Name:                      name,
+		Gateway:                   gatewayAddr,
+		Zone:                      zone,
+		Description:               description,
+		DefaultLeaseDurationNanos: leaseSecs * int64(1e9),
+	}
+	pool, err := gatewayClient.UpdateIPAMPool(ctx, req)
+	if err != nil {
+		return fmt.Errorf("failed to update IPAM pool: %w", err)
+	}
+
+	return base.Output(pool)
+}
+
+func runIPAMPoolDelete(flags *cli.CommonFlags, poolID string) error {
+	base, err := cli.NewBaseCommand(flags)
+	if err != nil {
+		return err
+	}
+	defer base.Close()
+
+	gatewayClient := gateway.NewClientFromGRPC(base.Client().Gateway())
+
+	ctx, cancel := newCLIContext()
+	defer cancel()
+	if err := gatewayClient.DeleteIPAMPool(ctx, poolID); err != nil {
+		return fmt.Errorf("failed to delete IPAM pool: %w", err)
+	}
+
+	fmt.Printf("IPAM pool %s deleted successfully\n", poolID)
+	return nil
 }
 
 func runIPAMAllocate(flags *cli.CommonFlags, poolID, deviceID, hostname string) error {
@@ -185,7 +418,6 @@ func runIPAMAllocate(flags *cli.CommonFlags, poolID, deviceID, hostname string) 
 	}
 	defer base.Close()
 
-	// Create gateway service client from the platform client
 	gatewayClient := gateway.NewClientFromGRPC(base.Client().Gateway())
 
 	ctx, cancel := newCLIContext()
@@ -205,7 +437,6 @@ func runIPAMRelease(flags *cli.CommonFlags, ip string) error {
 	}
 	defer base.Close()
 
-	// Create gateway service client from the platform client
 	gatewayClient := gateway.NewClientFromGRPC(base.Client().Gateway())
 
 	ctx, cancel := newCLIContext()
@@ -225,7 +456,6 @@ func runIPAMAllocations(flags *cli.CommonFlags, poolID string) error {
 	}
 	defer base.Close()
 
-	// Create gateway service client from the platform client
 	gatewayClient := gateway.NewClientFromGRPC(base.Client().Gateway())
 
 	ctx, cancel := newCLIContext()

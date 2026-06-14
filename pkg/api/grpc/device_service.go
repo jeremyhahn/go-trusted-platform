@@ -637,14 +637,15 @@ func protoDeviceToEntity(d *platformv1.Device) *entities.Device {
 		return nil
 	}
 	return &entities.Device{
-		ID:         d.GetId(),
-		AttestPub:  d.GetAttestPub(),
-		EKCert:     d.GetEkCert(),
-		EventLog:   d.GetEventLog(),
-		HashAlgoId: d.GetHashAlgoId(),
-		Model:      d.GetModel(),
-		Serial:     d.GetSerial(),
-		SigningPub: d.GetSigningPub(),
+		ID:            d.GetId(),
+		AttestPub:     d.GetAttestPub(),
+		EKCert:        d.GetEkCert(),
+		EventLog:      d.GetEventLog(),
+		HashAlgoId:    d.GetHashAlgoId(),
+		Model:         d.GetModel(),
+		Serial:        d.GetSerial(),
+		SigningPub:    d.GetSigningPub(),
+		NetworkPortID: d.GetNetworkPortId(),
 	}
 }
 
@@ -653,14 +654,15 @@ func entityDeviceToProto(d *entities.Device) *platformv1.Device {
 		return nil
 	}
 	return &platformv1.Device{
-		Id:         d.ID,
-		AttestPub:  d.AttestPub,
-		EkCert:     d.EKCert,
-		EventLog:   d.EventLog,
-		HashAlgoId: d.HashAlgoId,
-		Model:      d.Model,
-		Serial:     d.Serial,
-		SigningPub: d.SigningPub,
+		Id:            d.ID,
+		AttestPub:     d.AttestPub,
+		EkCert:        d.EKCert,
+		EventLog:      d.EventLog,
+		HashAlgoId:    d.HashAlgoId,
+		Model:         d.Model,
+		Serial:        d.Serial,
+		SigningPub:    d.SigningPub,
+		NetworkPortId: d.NetworkPortID,
 	}
 }
 
@@ -669,22 +671,25 @@ func protoProfileToEntity(p *platformv1.DeviceProfile) *entities.DeviceProfile {
 		return nil
 	}
 	profile := &entities.DeviceProfile{
-		ID:       p.GetId(),
-		Name:     p.GetName(),
-		Model:    p.GetModel(),
-		Role:     protoRoleToEntity(p.GetRole()),
-		EventLog: p.GetEventLog(),
+		ID:                    p.GetId(),
+		TenantID:              p.GetTenantId(),
+		Name:                  p.GetName(),
+		Model:                 p.GetModel(),
+		Role:                  protoRoleToEntity(p.GetRole()),
+		EventLog:              p.GetEventLog(),
+		Zone:                  p.GetZone(),
+		EnrollmentNetwork:     p.GetEnrollmentNetwork(),
+		PostEnrollmentNetwork: p.GetPostEnrollmentNetwork(),
+		FailureNetwork:        p.GetFailureNetwork(),
 	}
 
-	profile.Networks = make(map[string]*entities.NetworkPhaseConfig)
-	if p.GetProvisioningNetwork() != nil {
-		profile.Networks[entities.DefaultEnrollmentNetwork] = protoNetworkConfigToEntity(p.GetProvisioningNetwork())
-	}
-	if p.GetProductionNetwork() != nil {
-		profile.Networks[entities.DefaultPostEnrollmentNetwork] = protoNetworkConfigToEntity(p.GetProductionNetwork())
-	}
-	if p.GetQuarantineNetwork() != nil {
-		profile.Networks[entities.DefaultFailureNetwork] = protoNetworkConfigToEntity(p.GetQuarantineNetwork())
+	if pbNets := p.GetNetworks(); len(pbNets) > 0 {
+		profile.Networks = make(map[string]*entities.NetworkPhaseConfig, len(pbNets))
+		for k, v := range pbNets {
+			profile.Networks[k] = protoNetworkConfigToEntity(v)
+		}
+	} else {
+		profile.Networks = make(map[string]*entities.NetworkPhaseConfig)
 	}
 	if p.GetPlatformdConfig() != nil {
 		profile.PlatformdConfig = protoPlatformdConfigToEntity(p.GetPlatformdConfig())
@@ -701,21 +706,23 @@ func entityProfileToProto(p *entities.DeviceProfile) *platformv1.DeviceProfile {
 		return nil
 	}
 	profile := &platformv1.DeviceProfile{
-		Id:       p.ID,
-		Name:     p.Name,
-		Model:    p.Model,
-		Role:     entityRoleToProto(p.Role),
-		EventLog: p.EventLog,
+		Id:                    p.ID,
+		TenantId:              p.TenantID,
+		Name:                  p.Name,
+		Model:                 p.Model,
+		Role:                  entityRoleToProto(p.Role),
+		EventLog:              p.EventLog,
+		Zone:                  p.Zone,
+		EnrollmentNetwork:     p.EnrollmentNetwork,
+		PostEnrollmentNetwork: p.PostEnrollmentNetwork,
+		FailureNetwork:        p.FailureNetwork,
 	}
 
-	if net := p.GetNetwork(entities.DefaultEnrollmentNetwork); net != nil {
-		profile.ProvisioningNetwork = entityNetworkConfigToProto(net)
-	}
-	if net := p.GetNetwork(entities.DefaultPostEnrollmentNetwork); net != nil {
-		profile.ProductionNetwork = entityNetworkConfigToProto(net)
-	}
-	if net := p.GetNetwork(entities.DefaultFailureNetwork); net != nil {
-		profile.QuarantineNetwork = entityNetworkConfigToProto(net)
+	if len(p.Networks) > 0 {
+		profile.Networks = make(map[string]*platformv1.NetworkPhaseConfig, len(p.Networks))
+		for k, v := range p.Networks {
+			profile.Networks[k] = entityNetworkConfigToProto(v)
+		}
 	}
 	if p.PlatformdConfig != nil {
 		profile.PlatformdConfig = entityPlatformdConfigToProto(p.PlatformdConfig)
@@ -774,15 +781,15 @@ func protoNetworkConfigToEntity(n *platformv1.NetworkPhaseConfig) *entities.Netw
 		return nil
 	}
 	config := &entities.NetworkPhaseConfig{
-		VLAN:         uint16(n.GetVlan()),
-		StaticIP:     n.GetStaticIp(),
-		Gateway:      n.GetGateway(),
-		DNS:          n.GetDns(),
-		AuthMethod:   protoAuthMethodToEntity(n.GetAuthMethod()),
-		Subnet:       n.GetSubnet(),
-		DNSServers:   n.GetDnsServers(),
-		DHCP:         n.GetDhcp(),
-		FirewallZone: n.GetFirewallZone(),
+		VLAN:       uint16(n.GetVlan()),
+		StaticIP:   n.GetStaticIp(),
+		Gateway:    n.GetGateway(),
+		DNS:        n.GetDns(),
+		AuthMethod: protoAuthMethodToEntity(n.GetAuthMethod()),
+		Subnet:     n.GetSubnet(),
+		DNSServers: n.GetDnsServers(),
+		DHCP:       n.GetDhcp(),
+		Zone:       n.GetZone(),
 	}
 
 	if n.GetDhcpPool() != nil {
@@ -816,15 +823,15 @@ func entityNetworkConfigToProto(n *entities.NetworkPhaseConfig) *platformv1.Netw
 		return nil
 	}
 	config := &platformv1.NetworkPhaseConfig{
-		Vlan:         uint32(n.VLAN),
-		StaticIp:     n.StaticIP,
-		Gateway:      n.Gateway,
-		Dns:          n.DNS,
-		AuthMethod:   entityAuthMethodToProto(n.AuthMethod),
-		Subnet:       n.Subnet,
-		DnsServers:   n.DNSServers,
-		Dhcp:         n.DHCP,
-		FirewallZone: n.FirewallZone,
+		Vlan:       uint32(n.VLAN),
+		StaticIp:   n.StaticIP,
+		Gateway:    n.Gateway,
+		Dns:        n.DNS,
+		AuthMethod: entityAuthMethodToProto(n.AuthMethod),
+		Subnet:     n.Subnet,
+		DnsServers: n.DNSServers,
+		Dhcp:       n.DHCP,
+		Zone:       n.Zone,
 	}
 
 	if n.DHCPPool != nil {

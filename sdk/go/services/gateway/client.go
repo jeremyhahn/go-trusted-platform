@@ -138,13 +138,52 @@ func (c *Client) ListAnnouncedPrefixes(ctx context.Context) ([]*platformv1.Annou
 
 // IPAM Operations
 
-// ListIPAMPools lists all IPAM pools.
-func (c *Client) ListIPAMPools(ctx context.Context) ([]*platformv1.IPAMPool, error) {
-	resp, err := c.grpc.ListIPAMPools(ctx, &platformv1.ListIPAMPoolsRequest{})
+// ListIPAMPools lists IPAM pools, optionally filtered by zone.
+// An empty zone returns all pools.
+func (c *Client) ListIPAMPools(ctx context.Context, zone string) ([]*platformv1.IPAMPool, error) {
+	resp, err := c.grpc.ListIPAMPools(ctx, &platformv1.ListIPAMPoolsRequest{Zone: zone})
 	if err != nil {
 		return nil, &ErrListIPAMPoolsFailed{Cause: err}
 	}
 	return resp.Pools, nil
+}
+
+// CreateIPAMPool creates a new IP address management pool.
+func (c *Client) CreateIPAMPool(ctx context.Context, req *platformv1.CreateIPAMPoolRequest) (*platformv1.IPAMPool, error) {
+	resp, err := c.grpc.CreateIPAMPool(ctx, req)
+	if err != nil {
+		return nil, &ErrCreateIPAMPoolFailed{Name: req.GetName(), Cause: err}
+	}
+	return resp.Pool, nil
+}
+
+// GetIPAMPool retrieves an IPAM pool by ID.
+func (c *Client) GetIPAMPool(ctx context.Context, poolID string) (*platformv1.IPAMPool, error) {
+	resp, err := c.grpc.GetIPAMPool(ctx, &platformv1.GetIPAMPoolRequest{Id: poolID})
+	if err != nil {
+		return nil, &ErrGetIPAMPoolFailed{ID: poolID, Cause: err}
+	}
+	return resp.Pool, nil
+}
+
+// UpdateIPAMPool updates mutable fields of an IPAM pool.
+// The CIDR is immutable and cannot be changed after pool creation.
+func (c *Client) UpdateIPAMPool(ctx context.Context, req *platformv1.UpdateIPAMPoolRequest) (*platformv1.IPAMPool, error) {
+	resp, err := c.grpc.UpdateIPAMPool(ctx, req)
+	if err != nil {
+		return nil, &ErrUpdateIPAMPoolFailed{ID: req.GetId(), Cause: err}
+	}
+	return resp.Pool, nil
+}
+
+// DeleteIPAMPool deletes an IPAM pool.
+// Returns ErrDeleteIPAMPoolFailed when the pool has active allocations or does not exist.
+func (c *Client) DeleteIPAMPool(ctx context.Context, poolID string) error {
+	_, err := c.grpc.DeleteIPAMPool(ctx, &platformv1.DeleteIPAMPoolRequest{Id: poolID})
+	if err != nil {
+		return &ErrDeleteIPAMPoolFailed{ID: poolID, Cause: err}
+	}
+	return nil
 }
 
 // AllocateIP allocates an IP address from a pool.

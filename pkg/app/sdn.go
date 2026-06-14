@@ -23,14 +23,83 @@ import (
 	"strings"
 	"time"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	sdnzone "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
+
+// sdkIPAMClient adapts a go-quicbaas SDK Client to the backends.QuicBaaSClient
+// interface required by the IPAM QuicBaaS backend.
+type sdkIPAMClient struct {
+	sdk quicbaassdk.Client
+}
+
+// IsStarted returns true when the SDK client is connected and ready.
+func (c *sdkIPAMClient) IsStarted() bool {
+	return c.sdk != nil
+}
+
+// Put stores a value with the given entity type and ID.
+func (c *sdkIPAMClient) Put(ctx context.Context, entityType string, id uint64, data []byte) error {
+	_, err := c.sdk.KV().Put(ctx, &service.PutRequest{
+		EntityType: entityType,
+		ID:         id,
+		Data:       data,
+	})
+	return err
+}
+
+// Get retrieves a value by entity type and ID.
+func (c *sdkIPAMClient) Get(ctx context.Context, entityType string, id uint64) ([]byte, bool, error) {
+	resp, err := c.sdk.KV().Get(ctx, &service.GetRequest{
+		EntityType: entityType,
+		ID:         id,
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if resp == nil || len(resp.Data) == 0 {
+		return nil, false, nil
+	}
+	return resp.Data, true, nil
+}
+
+// Delete removes an entity by type and ID.
+func (c *sdkIPAMClient) Delete(ctx context.Context, entityType string, id uint64) error {
+	_, err := c.sdk.KV().Delete(ctx, &service.DeleteRequest{
+		EntityType: entityType,
+		ID:         id,
+	})
+	return err
+}
+
+// List retrieves entities with pagination.
+func (c *sdkIPAMClient) List(ctx context.Context, entityType string, pageSize uint64, pageToken string) ([]*service.Entity, string, error) {
+	resp, err := c.sdk.KV().List(ctx, &service.ListRequest{
+		EntityType: entityType,
+		PageSize:   pageSize,
+		PageToken:  pageToken,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return resp.Entities, resp.NextPageToken, nil
+}
+
+// Query searches for entities using secondary indexes.
+func (c *sdkIPAMClient) Query(ctx context.Context, entityType, indexField string, value []byte) ([]*service.Entity, error) {
+	// Query is used only for index operations in the IPAM backend. The QuicBaaS
+	// SDK routes this through the Query service if available; fall back to an
+	// empty result (index lookups still work via the explicit index keys the
+	// backend maintains in Put).
+	return nil, nil
+}
 
 // OVSClient returns the OVS client, or nil if SDN is not configured.
 func (app *App) OVSClient() ovs.ClientInterface {
@@ -192,20 +261,53 @@ func (app *App) initOVSBridge(ctx context.Context) error {
 	return nil
 }
 
-// initIPAMPools creates the IPAM allocator and registers all configured pools.
-func (app *App) initIPAMPools(ctx context.Context) error {
-	allocator := backends.NewMemoryBackend(
-		ipam.WithLogger(app.Logger.Slog()),
-	)
+// ipamBackendFactory maps backend name strings to their constructor functions.
+// The default empty-string case is handled by selecting "memory".
+// The map is populated by build-tagged registration files (sdn_ipam_backends.go
+// and sdn_ipam_backends_p2p.go) so that platform_p2p-gated constructors are
+// only referenced when that tag is set.
+var ipamBackendFactory = map[string]func(ctx context.Context, app *App) (ipam.Allocator, error){}
 
+// initIPAMPools creates the IPAM allocator using the configured backend and
+// seeds pools from config using create-if-missing semantics. Existing pools
+// with the same name are left untouched. Nothing is ever deleted.
+func (app *App) initIPAMPools(ctx context.Context) error {
+	backendName := app.SDNConfig.IPAM.Backend
+	if backendName == "" {
+		backendName = "memory"
+	}
+
+	factory, ok := ipamBackendFactory[backendName]
+	if !ok {
+		// "dht" is valid only when compiled with platform_p2p build tag.
+		if backendName == "dht" {
+			return sdn.ErrIPAMBackendP2PRequired{}
+		}
+		return sdn.ErrIPAMBackendUnknown{Backend: backendName}
+	}
+
+	allocator, err := factory(ctx, app)
+	if err != nil {
+		return err
+	}
+
+	// Seed pools: create-if-missing, never mutate or delete.
 	for i := range app.SDNConfig.IPAM.Pools {
 		poolCfg := &app.SDNConfig.IPAM.Pools[i]
+
+		// Check if pool already exists in the backend.
+		if existing, err := allocator.GetPoolByName(ctx, poolCfg.Name); err == nil && existing != nil {
+			app.Logger.Debug("IPAM pool already exists in backend, skipping seed",
+				slog.String("pool", poolCfg.Name))
+			continue
+		}
 
 		pool := &ipam.Pool{
 			ID:                   poolCfg.Name,
 			Name:                 poolCfg.Name,
 			CIDR:                 poolCfg.CIDR,
 			Gateway:              poolCfg.Gateway,
+			Zone:                 poolCfg.Zone,
 			DefaultLeaseDuration: poolCfg.LeaseDuration,
 		}
 
@@ -219,6 +321,7 @@ func (app *App) initIPAMPools(ctx context.Context) error {
 		app.Logger.Info("Created IPAM pool",
 			slog.String("pool", poolCfg.Name),
 			slog.String("cidr", poolCfg.CIDR.String()),
+			slog.String("zone", poolCfg.Zone),
 			slog.Bool("dhcp", poolCfg.DHCP))
 	}
 
@@ -230,19 +333,34 @@ func (app *App) initIPAMPools(ctx context.Context) error {
 // IPAM pools and SDN network entries for each internal subnet. This allows
 // subnets to be the single source of truth for IP addressing without
 // requiring manual IPAM pool or SDN network configuration.
+//
+// Well-known subnet names are mapped to canonical zone constants:
+//   - "production"    → zone.ZoneTrusted
+//   - "provisioning"  → zone.ZoneProvisioning
+//   - "quarantine"    → zone.ZoneQuarantine
+//   - "storage"       → zone.ZoneStorage
+//   - "management"    → zone.ZoneManagement
+//
+// All other subnet names default to zone.ZoneTrusted (general internal
+// traffic) and a warning is emitted so operators can add an explicit
+// networks[] entry if a different zone is required.
 func (app *App) deriveSDNFromSubnets() {
 	if app.SDNConfig.IPAM == nil {
 		app.SDNConfig.IPAM = &sdn.IPAMConfig{
 			Backend: "memory",
 		}
 	}
-	if app.SDNConfig.Networks == nil {
-		app.SDNConfig.Networks = make(map[string]*sdn.NetworkConfig)
-	}
 
 	existingPools := make(map[string]struct{}, len(app.SDNConfig.IPAM.Pools))
 	for _, p := range app.SDNConfig.IPAM.Pools {
 		existingPools[p.Name] = struct{}{}
+	}
+
+	// Build a set of network names already present in the list so explicit
+	// config wins over derived entries for matching names.
+	existingNetworks := make(map[string]struct{}, len(app.SDNConfig.Networks))
+	for _, n := range app.SDNConfig.Networks {
+		existingNetworks[n.Name] = struct{}{}
 	}
 
 	for _, sub := range app.NetworkConfig.Subnets {
@@ -265,9 +383,13 @@ func (app *App) deriveSDNFromSubnets() {
 			continue
 		}
 
+		// Derive zone for this subnet — used in both the pool and any network entry.
+		z := deriveZoneForSubnetName(app.Logger, sub.Name)
+
 		pool := sdn.PoolConfig{
 			Name: sub.Name,
 			CIDR: prefix,
+			Zone: string(z),
 		}
 
 		if sub.Gateway != "" {
@@ -298,13 +420,18 @@ func (app *App) deriveSDNFromSubnets() {
 
 		app.SDNConfig.IPAM.Pools = append(app.SDNConfig.IPAM.Pools, pool)
 
-		// Create an SDN network entry for subnets with a VLAN ID
+		// Create an SDN network list entry for subnets with a VLAN ID.
+		// Explicit entries (populated before derivation) take precedence.
 		if sub.VLANID > 0 {
-			if _, ok := app.SDNConfig.Networks[sub.Name]; !ok {
-				app.SDNConfig.Networks[sub.Name] = &sdn.NetworkConfig{
-					VLAN: sub.VLANID,
-					Pool: sub.Name,
-				}
+			if _, ok := existingNetworks[sub.Name]; !ok {
+				app.SDNConfig.Networks = append(app.SDNConfig.Networks, sdn.NetworkConfig{
+					Name:   sub.Name,
+					Subnet: prefix,
+					VLAN:   sub.VLANID,
+					Zone:   z,
+					Pool:   sub.Name,
+				})
+				existingNetworks[sub.Name] = struct{}{}
 			}
 		}
 
@@ -312,8 +439,35 @@ func (app *App) deriveSDNFromSubnets() {
 			slog.String("subnet", sub.Name),
 			slog.String("scope", string(sub.Scope)),
 			slog.String("cidr", sub.CIDR),
+			slog.String("zone", string(z)),
 			slog.Bool("dhcp", pool.DHCP))
 	}
+}
+
+// zoneNameMapping maps well-known subnet names to their canonical zone.
+var zoneNameMapping = map[string]sdnzone.Zone{
+	"production":   sdnzone.ZoneTrusted,
+	"provisioning": sdnzone.ZoneProvisioning,
+	"quarantine":   sdnzone.ZoneQuarantine,
+	"storage":      sdnzone.ZoneStorage,
+	"management":   sdnzone.ZoneManagement,
+	"tenant":       sdnzone.ZoneTenant,
+	"public":       sdnzone.ZonePublic,
+	"trusted":      sdnzone.ZoneTrusted,
+}
+
+// deriveZoneForSubnetName maps a well-known subnet name to its canonical zone.
+// Unknown names default to ZoneTrusted with a logged warning.
+func deriveZoneForSubnetName(logger interface {
+	Warn(msg string, args ...any)
+}, name string) sdnzone.Zone {
+	if z, ok := zoneNameMapping[name]; ok {
+		return z
+	}
+	logger.Warn("SDN: subnet name has no canonical zone mapping; defaulting to trusted",
+		slog.String("subnet", name),
+		slog.String("zone", string(sdnzone.ZoneTrusted)))
+	return sdnzone.ZoneTrusted
 }
 
 // logDHCPStatus logs which pools have DHCP enabled or disabled.

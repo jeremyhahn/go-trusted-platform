@@ -397,3 +397,9 @@ decoder.Decode(&resp)
 | -32003 | Invalid VLAN |
 | -32004 | Policy not found |
 | -32005 | Transaction failed |
+
+## Network Zone Operations (Unix Socket / gRPC over UDS)
+
+Zone operations are available over the Unix socket using the same gRPC
+`SDNService` RPCs as the TCP gRPC transport. See `api-reference-grpc.md`
+for the full RPC list.

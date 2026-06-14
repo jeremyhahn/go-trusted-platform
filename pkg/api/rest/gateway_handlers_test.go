@@ -114,6 +114,24 @@ func TestGatewayErrors(t *testing.T) {
 		assert.Equal(t, "IPAM pool not found: pool-123", err.Error())
 	})
 
+	t.Run("ErrIPAMPoolAlreadyExists", func(t *testing.T) {
+		t.Parallel()
+		err := ErrIPAMPoolAlreadyExists{ID: "pool-123"}
+		assert.Equal(t, "IPAM pool already exists: pool-123", err.Error())
+	})
+
+	t.Run("ErrIPAMPoolHasAllocations", func(t *testing.T) {
+		t.Parallel()
+		err := ErrIPAMPoolHasAllocations{ID: "pool-123"}
+		assert.Equal(t, "IPAM pool has active allocations: pool-123", err.Error())
+	})
+
+	t.Run("ErrIPAMCIDRImmutable", func(t *testing.T) {
+		t.Parallel()
+		err := ErrIPAMCIDRImmutable{}
+		assert.Equal(t, "CIDR cannot be changed after pool creation", err.Error())
+	})
+
 	t.Run("ErrIPAllocationNotFound", func(t *testing.T) {
 		t.Parallel()
 		err := ErrIPAllocationNotFound{IP: "10.0.0.5"}
@@ -170,6 +188,9 @@ func TestGatewayErrorsImplementError(t *testing.T) {
 		{"ErrPrefixNotFound", ErrPrefixNotFound{Prefix: "test"}},
 		{"ErrPrefixAlreadyAnnounced", ErrPrefixAlreadyAnnounced{Prefix: "test"}},
 		{"ErrIPAMPoolNotFound", ErrIPAMPoolNotFound{ID: "test"}},
+		{"ErrIPAMPoolAlreadyExists", ErrIPAMPoolAlreadyExists{ID: "test"}},
+		{"ErrIPAMPoolHasAllocations", ErrIPAMPoolHasAllocations{ID: "test"}},
+		{"ErrIPAMCIDRImmutable", ErrIPAMCIDRImmutable{}},
 		{"ErrIPAllocationNotFound", ErrIPAllocationNotFound{IP: "test"}},
 		{"ErrIPAlreadyAllocated", ErrIPAlreadyAllocated{IP: "test"}},
 		{"ErrIPAMPoolExhausted", ErrIPAMPoolExhausted{ID: "test"}},
@@ -203,6 +224,13 @@ type mockGatewayService struct {
 	withdrawPrefixErr   error
 	listPrefixesResp    []AnnouncedPrefixResponse
 	listPrefixesErr     error
+	createPoolResp      *IPAMPoolResponse
+	createPoolErr       error
+	getPoolResp         *IPAMPoolResponse
+	getPoolErr          error
+	updatePoolResp      *IPAMPoolResponse
+	updatePoolErr       error
+	deletePoolErr       error
 	listPoolsResp       []IPAMPoolResponse
 	listPoolsErr        error
 	allocateIPResp      *IPAllocationResponse
@@ -314,7 +342,71 @@ func (m *mockGatewayService) ListAnnouncedPrefixes(ctx context.Context) ([]Annou
 	}, nil
 }
 
-func (m *mockGatewayService) ListIPAMPools(ctx context.Context) ([]IPAMPoolResponse, error) {
+func (m *mockGatewayService) CreateIPAMPool(ctx context.Context, req *CreateIPAMPoolRequest) (*IPAMPoolResponse, error) {
+	if m.createPoolErr != nil {
+		return nil, m.createPoolErr
+	}
+	if m.createPoolResp != nil {
+		return m.createPoolResp, nil
+	}
+	return &IPAMPoolResponse{
+		ID:        "pool-1",
+		Name:      req.Name,
+		CIDR:      req.CIDR,
+		Gateway:   req.Gateway,
+		Zone:      req.Zone,
+		Total:     254,
+		Allocated: 0,
+		Available: 254,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}, nil
+}
+
+func (m *mockGatewayService) GetIPAMPool(ctx context.Context, poolID string) (*IPAMPoolResponse, error) {
+	if m.getPoolErr != nil {
+		return nil, m.getPoolErr
+	}
+	if m.getPoolResp != nil {
+		return m.getPoolResp, nil
+	}
+	return &IPAMPoolResponse{
+		ID:        poolID,
+		Name:      "test-pool",
+		CIDR:      "10.0.0.0/24",
+		Gateway:   "10.0.0.1",
+		Zone:      "trusted",
+		Total:     254,
+		Allocated: 10,
+		Available: 244,
+	}, nil
+}
+
+func (m *mockGatewayService) UpdateIPAMPool(ctx context.Context, poolID string, req *UpdateIPAMPoolRequest) (*IPAMPoolResponse, error) {
+	if m.updatePoolErr != nil {
+		return nil, m.updatePoolErr
+	}
+	if m.updatePoolResp != nil {
+		return m.updatePoolResp, nil
+	}
+	return &IPAMPoolResponse{
+		ID:        poolID,
+		Name:      req.Name,
+		CIDR:      "10.0.0.0/24",
+		Gateway:   req.Gateway,
+		Zone:      req.Zone,
+		Total:     254,
+		Allocated: 10,
+		Available: 244,
+		UpdatedAt: time.Now().UTC(),
+	}, nil
+}
+
+func (m *mockGatewayService) DeleteIPAMPool(ctx context.Context, poolID string) error {
+	return m.deletePoolErr
+}
+
+func (m *mockGatewayService) ListIPAMPools(ctx context.Context, zone string) ([]IPAMPoolResponse, error) {
 	if m.listPoolsErr != nil {
 		return nil, m.listPoolsErr
 	}
@@ -324,6 +416,7 @@ func (m *mockGatewayService) ListIPAMPools(ctx context.Context) ([]IPAMPoolRespo
 	return []IPAMPoolResponse{
 		{
 			ID:        "pool-1",
+			Name:      "default",
 			CIDR:      "10.0.0.0/24",
 			Gateway:   "10.0.0.1",
 			Total:     254,
@@ -455,7 +548,13 @@ func TestGatewayRegisterRoutes(t *testing.T) {
 			{http.MethodPost, "/api/v1/sdn/gateway/bgp/prefixes"},
 			{http.MethodDelete, "/api/v1/sdn/gateway/bgp/prefixes/prefix-123"},
 			{http.MethodGet, "/api/v1/sdn/gateway/bgp/prefixes"},
+			// IPAM pool CRUD
+			{http.MethodPost, "/api/v1/sdn/gateway/ipam/pools"},
 			{http.MethodGet, "/api/v1/sdn/gateway/ipam/pools"},
+			{http.MethodGet, "/api/v1/sdn/gateway/ipam/pools/pool-1"},
+			{http.MethodPut, "/api/v1/sdn/gateway/ipam/pools/pool-1"},
+			{http.MethodDelete, "/api/v1/sdn/gateway/ipam/pools/pool-1"},
+			// IPAM allocations
 			{http.MethodPost, "/api/v1/sdn/gateway/ipam/allocations"},
 			{http.MethodDelete, "/api/v1/sdn/gateway/ipam/allocations/10.0.0.10"},
 			{http.MethodGet, "/api/v1/sdn/gateway/ipam/allocations"},
@@ -816,7 +915,10 @@ func TestHandleAnnouncePrefix(t *testing.T) {
 		router := mux.NewRouter()
 		handlers.RegisterRoutes(router)
 
-		reqBody := AnnouncePrefixRequest{Prefix: "10.0.0.0/8"}
+		reqBody := AnnouncePrefixRequest{
+			Prefix:  "10.0.0.0/8",
+			NextHop: "10.0.0.1",
+		}
 		body, _ := json.Marshal(reqBody)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/gateway/bgp/prefixes", bytes.NewReader(body))
@@ -1017,7 +1119,396 @@ func TestHandleListAnnouncedPrefixes(t *testing.T) {
 }
 
 // =============================================================================
-// IPAM Pools Handler Tests
+// IPAM Pool CRUD Handler Tests
+// =============================================================================
+
+func TestHandleCreateIPAMPool(t *testing.T) {
+	t.Parallel()
+
+	t.Run("creates pool successfully", func(t *testing.T) {
+		t.Parallel()
+		svc := newMockGatewayService()
+		_, router := setupGatewayTestHandler(svc)
+
+		reqBody := CreateIPAMPoolRequest{
+			Name:    "dev-pool",
+			CIDR:    "192.168.10.0/24",
+			Gateway: "192.168.10.1",
+			Zone:    "dev",
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/gateway/ipam/pools", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusCreated, resp.StatusCode)
+
+		var poolResp IPAMPoolResponse
+		decodeGatewayResponse(t, resp, &poolResp)
+		assert.Equal(t, "pool-1", poolResp.ID)
+		assert.Equal(t, "dev-pool", poolResp.Name)
+		assert.Equal(t, "192.168.10.0/24", poolResp.CIDR)
+	})
+
+	t.Run("returns error when service unavailable", func(t *testing.T) {
+		t.Parallel()
+		handlers := NewGatewayHandlers(nil, nil)
+		router := mux.NewRouter()
+		handlers.RegisterRoutes(router)
+
+		reqBody := CreateIPAMPoolRequest{Name: "pool", CIDR: "10.0.0.0/24"}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/gateway/ipam/pools", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	})
+
+	t.Run("returns error for invalid JSON body", func(t *testing.T) {
+		t.Parallel()
+		svc := newMockGatewayService()
+		_, router := setupGatewayTestHandler(svc)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/gateway/ipam/pools", bytes.NewReader([]byte("not-json")))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("returns error for missing name", func(t *testing.T) {
+		t.Parallel()
+		svc := newMockGatewayService()
+		_, router := setupGatewayTestHandler(svc)
+
+		reqBody := CreateIPAMPoolRequest{CIDR: "10.0.0.0/24"}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/gateway/ipam/pools", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("returns error for missing cidr", func(t *testing.T) {
+		t.Parallel()
+		svc := newMockGatewayService()
+		_, router := setupGatewayTestHandler(svc)
+
+		reqBody := CreateIPAMPoolRequest{Name: "pool"}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/gateway/ipam/pools", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("returns conflict when pool already exists", func(t *testing.T) {
+		t.Parallel()
+		svc := newMockGatewayService()
+		svc.createPoolErr = ErrIPAMPoolAlreadyExists{ID: "pool-1"}
+		_, router := setupGatewayTestHandler(svc)
+
+		reqBody := CreateIPAMPoolRequest{Name: "pool", CIDR: "10.0.0.0/24"}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/gateway/ipam/pools", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusConflict, resp.StatusCode)
+	})
+}
+
+func TestHandleGetIPAMPool(t *testing.T) {
+	t.Parallel()
+
+	t.Run("gets pool successfully", func(t *testing.T) {
+		t.Parallel()
+		svc := newMockGatewayService()
+		_, router := setupGatewayTestHandler(svc)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/gateway/ipam/pools/pool-1", nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var poolResp IPAMPoolResponse
+		decodeGatewayResponse(t, resp, &poolResp)
+		assert.Equal(t, "pool-1", poolResp.ID)
+		assert.Equal(t, "test-pool", poolResp.Name)
+		assert.Equal(t, "10.0.0.0/24", poolResp.CIDR)
+	})
+
+	t.Run("returns error when service unavailable", func(t *testing.T) {
+		t.Parallel()
+		handlers := NewGatewayHandlers(nil, nil)
+		router := mux.NewRouter()
+		handlers.RegisterRoutes(router)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/gateway/ipam/pools/pool-1", nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	})
+
+	t.Run("returns not found when pool does not exist", func(t *testing.T) {
+		t.Parallel()
+		svc := newMockGatewayService()
+		svc.getPoolErr = ErrIPAMPoolNotFound{ID: "missing-pool"}
+		_, router := setupGatewayTestHandler(svc)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/gateway/ipam/pools/missing-pool", nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+}
+
+func TestHandleUpdateIPAMPool(t *testing.T) {
+	t.Parallel()
+
+	t.Run("updates pool successfully", func(t *testing.T) {
+		t.Parallel()
+		svc := newMockGatewayService()
+		_, router := setupGatewayTestHandler(svc)
+
+		reqBody := UpdateIPAMPoolRequest{
+			Name:    "updated-pool",
+			Gateway: "10.0.0.254",
+			Zone:    "provisioning",
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/gateway/ipam/pools/pool-1", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var poolResp IPAMPoolResponse
+		decodeGatewayResponse(t, resp, &poolResp)
+		assert.Equal(t, "pool-1", poolResp.ID)
+		assert.Equal(t, "updated-pool", poolResp.Name)
+		// CIDR is immutable — mock always returns 10.0.0.0/24
+		assert.Equal(t, "10.0.0.0/24", poolResp.CIDR)
+	})
+
+	t.Run("returns error when service unavailable", func(t *testing.T) {
+		t.Parallel()
+		handlers := NewGatewayHandlers(nil, nil)
+		router := mux.NewRouter()
+		handlers.RegisterRoutes(router)
+
+		reqBody := UpdateIPAMPoolRequest{Name: "pool"}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/gateway/ipam/pools/pool-1", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	})
+
+	t.Run("returns error for invalid JSON body", func(t *testing.T) {
+		t.Parallel()
+		svc := newMockGatewayService()
+		_, router := setupGatewayTestHandler(svc)
+
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/gateway/ipam/pools/pool-1", bytes.NewReader([]byte("not-json")))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("returns not found when pool does not exist", func(t *testing.T) {
+		t.Parallel()
+		svc := newMockGatewayService()
+		svc.updatePoolErr = ErrIPAMPoolNotFound{ID: "missing-pool"}
+		_, router := setupGatewayTestHandler(svc)
+
+		reqBody := UpdateIPAMPoolRequest{Name: "pool"}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/gateway/ipam/pools/missing-pool", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+
+	t.Run("returns bad request when CIDR change attempted", func(t *testing.T) {
+		t.Parallel()
+		svc := newMockGatewayService()
+		svc.updatePoolErr = ErrIPAMCIDRImmutable{}
+		_, router := setupGatewayTestHandler(svc)
+
+		reqBody := UpdateIPAMPoolRequest{Name: "pool"}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/gateway/ipam/pools/pool-1", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+}
+
+func TestHandleDeleteIPAMPool(t *testing.T) {
+	t.Parallel()
+
+	t.Run("deletes pool successfully", func(t *testing.T) {
+		t.Parallel()
+		svc := newMockGatewayService()
+		_, router := setupGatewayTestHandler(svc)
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/sdn/gateway/ipam/pools/pool-1", nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var actionResp GatewayActionResponse
+		decodeGatewayResponse(t, resp, &actionResp)
+		assert.True(t, actionResp.Success)
+		assert.Equal(t, "pool-1", actionResp.ResourceID)
+	})
+
+	t.Run("returns error when service unavailable", func(t *testing.T) {
+		t.Parallel()
+		handlers := NewGatewayHandlers(nil, nil)
+		router := mux.NewRouter()
+		handlers.RegisterRoutes(router)
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/sdn/gateway/ipam/pools/pool-1", nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	})
+
+	t.Run("returns not found when pool does not exist", func(t *testing.T) {
+		t.Parallel()
+		svc := newMockGatewayService()
+		svc.deletePoolErr = ErrIPAMPoolNotFound{ID: "missing-pool"}
+		_, router := setupGatewayTestHandler(svc)
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/sdn/gateway/ipam/pools/missing-pool", nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+
+	t.Run("returns conflict when pool has active allocations", func(t *testing.T) {
+		t.Parallel()
+		svc := newMockGatewayService()
+		svc.deletePoolErr = ErrIPAMPoolHasAllocations{ID: "pool-1"}
+		_, router := setupGatewayTestHandler(svc)
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/sdn/gateway/ipam/pools/pool-1", nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusConflict, resp.StatusCode)
+	})
+}
+
+// =============================================================================
+// IPAM Pools List Handler Tests
 // =============================================================================
 
 func TestHandleListIPAMPools(t *testing.T) {
@@ -1042,6 +1533,30 @@ func TestHandleListIPAMPools(t *testing.T) {
 		decodeGatewayResponse(t, resp, &poolsResp)
 		assert.Equal(t, 1, poolsResp.Count)
 		assert.Equal(t, "pool-1", poolsResp.Pools[0].ID)
+	})
+
+	t.Run("lists pools filtered by zone", func(t *testing.T) {
+		t.Parallel()
+		svc := newMockGatewayService()
+		svc.listPoolsResp = []IPAMPoolResponse{
+			{ID: "pool-2", Name: "trusted-pool", CIDR: "10.1.0.0/24", Zone: "trusted"},
+		}
+		_, router := setupGatewayTestHandler(svc)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/gateway/ipam/pools?zone=trusted", nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var poolsResp IPAMPoolListResponse
+		decodeGatewayResponse(t, resp, &poolsResp)
+		assert.Equal(t, 1, poolsResp.Count)
+		assert.Equal(t, "trusted", poolsResp.Pools[0].Zone)
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {
@@ -1394,6 +1909,9 @@ func TestGatewayWriteGatewayError(t *testing.T) {
 		{"ErrPrefixNotFound", ErrPrefixNotFound{Prefix: "test"}, http.StatusNotFound},
 		{"ErrPrefixAlreadyAnnounced", ErrPrefixAlreadyAnnounced{Prefix: "test"}, http.StatusConflict},
 		{"ErrIPAMPoolNotFound", ErrIPAMPoolNotFound{ID: "test"}, http.StatusNotFound},
+		{"ErrIPAMPoolAlreadyExists", ErrIPAMPoolAlreadyExists{ID: "test"}, http.StatusConflict},
+		{"ErrIPAMPoolHasAllocations", ErrIPAMPoolHasAllocations{ID: "test"}, http.StatusConflict},
+		{"ErrIPAMCIDRImmutable", ErrIPAMCIDRImmutable{}, http.StatusBadRequest},
 		{"ErrIPAllocationNotFound", ErrIPAllocationNotFound{IP: "test"}, http.StatusNotFound},
 		{"ErrIPAlreadyAllocated", ErrIPAlreadyAllocated{IP: "test"}, http.StatusConflict},
 		{"ErrIPAMPoolExhausted", ErrIPAMPoolExhausted{ID: "test"}, http.StatusServiceUnavailable},

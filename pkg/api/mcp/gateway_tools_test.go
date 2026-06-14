@@ -370,6 +370,90 @@ func TestGatewayToolExecution(t *testing.T) {
 	})
 }
 
+func TestGatewayIPAMPoolCRUD(t *testing.T) {
+	ctx := context.Background()
+	log := newTestLogger()
+
+	t.Run("executeGatewayIPAMPools with zone filter", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		result, err := registry.ExecuteTool(ctx, "gateway_ipam_pools", map[string]interface{}{
+			"zone": "trusted",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		resultMap, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatal("result should be a map")
+		}
+		if _, exists := resultMap["pools"]; !exists {
+			t.Fatal("result should contain 'pools' key")
+		}
+	})
+
+	t.Run("executeGatewayIPAMPoolGet success", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		result, err := registry.ExecuteTool(ctx, "gateway_ipam_pool_get", map[string]interface{}{
+			"pool_id": "pool-123",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("result should not be nil")
+		}
+	})
+
+	t.Run("executeGatewayIPAMPoolGet missing pool_id", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		_, err := registry.ExecuteTool(ctx, "gateway_ipam_pool_get", map[string]interface{}{})
+		if err == nil {
+			t.Fatal("expected error for missing pool_id")
+		}
+		if err != ErrIPAMPoolIDRequired {
+			t.Fatalf("expected ErrIPAMPoolIDRequired, got %v", err)
+		}
+	})
+
+	t.Run("executeGatewayIPAMPoolUpdate success", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		result, err := registry.ExecuteTool(ctx, "gateway_ipam_pool_update", map[string]interface{}{
+			"pool_id": "pool-123",
+			"name":    "updated-pool",
+			"zone":    "provisioning",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("result should not be nil")
+		}
+	})
+
+	t.Run("executeGatewayIPAMPoolUpdate missing pool_id", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		_, err := registry.ExecuteTool(ctx, "gateway_ipam_pool_update", map[string]interface{}{
+			"name": "updated-pool",
+		})
+		if err == nil {
+			t.Fatal("expected error for missing pool_id")
+		}
+		if err != ErrIPAMPoolIDRequired {
+			t.Fatalf("expected ErrIPAMPoolIDRequired, got %v", err)
+		}
+	})
+}
+
 func TestGatewayErrorTypes(t *testing.T) {
 	t.Run("GatewayError format", func(t *testing.T) {
 		err := &GatewayError{Code: "TEST_CODE", Message: "test message"}

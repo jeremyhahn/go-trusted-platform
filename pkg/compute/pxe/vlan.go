@@ -22,13 +22,15 @@ import (
 	"sync/atomic"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
 // DefaultBridgeName is the default OVS bridge name.
 const DefaultBridgeName = "br-int"
 
-// VLANIntegration defines the interface for VLAN management operations.
-// This is the base interface used by the PXE service for VLAN transitions.
+// VLANIntegration defines the interface for network zone management operations.
+// The PXE service uses this interface to transition device ports between network
+// zones during the provisioning lifecycle.
 type VLANIntegration interface {
 	// ApplyQuarantineVLAN places the device in the quarantine VLAN.
 	ApplyQuarantineVLAN(ctx context.Context, portID string, vlanID uint16) error
@@ -36,28 +38,29 @@ type VLANIntegration interface {
 	// ApplyProvisioningVLAN moves the device to the provisioning VLAN.
 	ApplyProvisioningVLAN(ctx context.Context, portID string, vlanID uint16) error
 
-	// ApplyProductionVLAN moves the device to the production VLAN.
-	ApplyProductionVLAN(ctx context.Context, portID string, vlanID uint16) error
+	// ApplyZoneVLAN moves the device to the VLAN for the given zone.
+	// The VLAN is resolved by the underlying ZoneFlowManager via its ZoneIndex
+	// or built-in zone defaults.
+	ApplyZoneVLAN(ctx context.Context, portID string, z zone.Zone) error
 
 	// GetCurrentVLAN returns the current VLAN assignment for a port.
 	GetCurrentVLAN(ctx context.Context, portID string) (uint16, error)
 
-	// ApplyQuarantineFlows moves device to quarantine VLAN.
+	// ApplyQuarantineFlows moves device to quarantine zone.
 	// Only allows access to auth service and remediation portal.
 	ApplyQuarantineFlows(ctx context.Context, portID string, mac net.HardwareAddr) error
 
-	// ApplyProvisioningFlows moves device to provisioning VLAN.
+	// ApplyProvisioningFlows moves device to provisioning zone.
 	// Allows DHCP, TFTP, HTTP, DNS, ACME access.
 	ApplyProvisioningFlows(ctx context.Context, portID string, mac net.HardwareAddr) error
 
-	// ApplyProductionFlows moves device to production VLAN per profile.
-	// Applies ACLs from device profile.
-	ApplyProductionFlows(ctx context.Context, portID string, mac net.HardwareAddr, targetVLAN uint16) error
+	// ApplyProductionFlows moves device to trusted production zone.
+	// The zone is zone.ZoneTrusted; the VLAN is resolved by ZoneFlowManager.
+	ApplyProductionFlows(ctx context.Context, portID string, mac net.HardwareAddr) error
 }
 
 // VLANIntegrationWrapper provides an extended interface with additional
 // PXE-specific operations beyond the base VLANIntegration interface.
-// It embeds VLANIntegration to maintain compatibility with the service.
 type VLANIntegrationWrapper interface {
 	VLANIntegration
 
@@ -74,14 +77,13 @@ type VLANIntegrationWrapper interface {
 	Close() error
 }
 
-// vlanIntegrationWrapper implements the VLANIntegrationWrapper interface by wrapping the SDN VLANFlowManager.
+// vlanIntegrationWrapper implements VLANIntegrationWrapper by delegating zone
+// transitions to the SDN ZoneFlowManager.
 type vlanIntegrationWrapper struct {
-	flowManager      *policy.VLANFlowManager
+	flowManager      *policy.ZoneFlowManager
 	bridgeName       string
 	quarantineVLAN   uint16
 	provisioningVLAN uint16
-	acmeServerIPs    []net.IP
-	dnsServerIPs     []net.IP
 	logger           *slog.Logger
 	closed           atomic.Bool
 }
@@ -89,8 +91,8 @@ type vlanIntegrationWrapper struct {
 // VLANIntegrationOption is a functional option for configuring VLANIntegrationWrapper.
 type VLANIntegrationOption func(*vlanIntegrationWrapper)
 
-// WithFlowManager sets the SDN VLANFlowManager to use.
-func WithFlowManager(fm *policy.VLANFlowManager) VLANIntegrationOption {
+// WithFlowManager sets the SDN ZoneFlowManager to use.
+func WithFlowManager(fm *policy.ZoneFlowManager) VLANIntegrationOption {
 	return func(v *vlanIntegrationWrapper) {
 		v.flowManager = fm
 	}
@@ -103,31 +105,17 @@ func WithBridgeName(name string) VLANIntegrationOption {
 	}
 }
 
-// WithQuarantineVLAN sets the quarantine VLAN ID.
+// WithQuarantineVLAN sets the fallback quarantine VLAN ID.
 func WithQuarantineVLAN(vlan uint16) VLANIntegrationOption {
 	return func(v *vlanIntegrationWrapper) {
 		v.quarantineVLAN = vlan
 	}
 }
 
-// WithProvisioningVLAN sets the provisioning VLAN ID.
+// WithProvisioningVLAN sets the fallback provisioning VLAN ID.
 func WithProvisioningVLAN(vlan uint16) VLANIntegrationOption {
 	return func(v *vlanIntegrationWrapper) {
 		v.provisioningVLAN = vlan
-	}
-}
-
-// WithACMEServers sets the ACME server IPs allowed in provisioning VLAN.
-func WithACMEServers(ips []net.IP) VLANIntegrationOption {
-	return func(v *vlanIntegrationWrapper) {
-		v.acmeServerIPs = ips
-	}
-}
-
-// WithDNSServers sets the DNS server IPs allowed in provisioning VLAN.
-func WithDNSServers(ips []net.IP) VLANIntegrationOption {
-	return func(v *vlanIntegrationWrapper) {
-		v.dnsServerIPs = ips
 	}
 }
 
@@ -146,371 +134,126 @@ func NewVLANIntegrationWrapper(opts ...VLANIntegrationOption) VLANIntegrationWra
 		provisioningVLAN: DefaultProvisioningVLAN,
 		logger:           slog.Default(),
 	}
-
 	for _, opt := range opts {
 		opt(v)
 	}
-
 	return v
 }
 
 // ApplyQuarantineVLAN implements VLANIntegration.ApplyQuarantineVLAN.
-// Places the device in the quarantine VLAN.
 func (v *vlanIntegrationWrapper) ApplyQuarantineVLAN(ctx context.Context, portID string, vlanID uint16) error {
 	if v.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
-
 	if portID == "" {
-		return ErrInvalidConfiguration{
-			Field:  "portID",
-			Reason: "port ID is required",
-		}
+		return ErrInvalidConfiguration{Field: "portID", Reason: "port ID is required"}
 	}
-
-	v.logger.Info("applying quarantine VLAN",
-		slog.String("port_id", portID),
-		slog.Uint64("vlan", uint64(vlanID)))
-
-	// If no flow manager configured, this is a no-op
-	if v.flowManager == nil {
-		v.logger.Debug("no flow manager configured, skipping quarantine VLAN application",
-			slog.String("port_id", portID))
-		return nil
-	}
-
-	// Delegate to the SDN flow manager
-	if err := v.flowManager.ApplyQuarantineFlows(portID, ""); err != nil {
-		return ErrVLANTransitionFailed{
-			DeviceID: portID,
-			ToVLAN:   vlanID,
-			Reason:   "failed to apply quarantine VLAN",
-			Cause:    err,
-		}
-	}
-
-	v.logger.Info("quarantine VLAN applied successfully",
-		slog.String("port_id", portID))
-
-	return nil
+	return v.applyZone(ctx, portID, zone.ZoneQuarantine)
 }
 
 // ApplyProvisioningVLAN implements VLANIntegration.ApplyProvisioningVLAN.
-// Moves the device to the provisioning VLAN.
 func (v *vlanIntegrationWrapper) ApplyProvisioningVLAN(ctx context.Context, portID string, vlanID uint16) error {
 	if v.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
-
 	if portID == "" {
-		return ErrInvalidConfiguration{
-			Field:  "portID",
-			Reason: "port ID is required",
-		}
+		return ErrInvalidConfiguration{Field: "portID", Reason: "port ID is required"}
 	}
-
-	v.logger.Info("applying provisioning VLAN",
-		slog.String("port_id", portID),
-		slog.Uint64("vlan", uint64(vlanID)))
-
-	// If no flow manager configured, this is a no-op
-	if v.flowManager == nil {
-		v.logger.Debug("no flow manager configured, skipping provisioning VLAN application",
-			slog.String("port_id", portID))
-		return nil
-	}
-
-	// Delegate to the SDN flow manager
-	if err := v.flowManager.ApplyProvisioningFlows(portID, ""); err != nil {
-		return ErrVLANTransitionFailed{
-			DeviceID: portID,
-			ToVLAN:   vlanID,
-			Reason:   "failed to apply provisioning VLAN",
-			Cause:    err,
-		}
-	}
-
-	v.logger.Info("provisioning VLAN applied successfully",
-		slog.String("port_id", portID))
-
-	return nil
+	return v.applyZone(ctx, portID, zone.ZoneProvisioning)
 }
 
-// ApplyProductionVLAN implements VLANIntegration.ApplyProductionVLAN.
-// Moves the device to the production VLAN.
-func (v *vlanIntegrationWrapper) ApplyProductionVLAN(ctx context.Context, portID string, vlanID uint16) error {
+// ApplyZoneVLAN implements VLANIntegration.ApplyZoneVLAN.
+// The VLAN is resolved by the ZoneFlowManager from the zone name.
+func (v *vlanIntegrationWrapper) ApplyZoneVLAN(ctx context.Context, portID string, z zone.Zone) error {
 	if v.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
-
 	if portID == "" {
-		return ErrInvalidConfiguration{
-			Field:  "portID",
-			Reason: "port ID is required",
-		}
+		return ErrInvalidConfiguration{Field: "portID", Reason: "port ID is required"}
 	}
-
-	if vlanID == 0 {
-		return ErrInvalidConfiguration{
-			Field:  "vlanID",
-			Reason: "VLAN ID must be non-zero",
-		}
+	if z == "" {
+		return ErrInvalidConfiguration{Field: "zone", Reason: "zone is required"}
 	}
-
-	v.logger.Info("applying production VLAN",
-		slog.String("port_id", portID),
-		slog.Uint64("vlan", uint64(vlanID)))
-
-	// If no flow manager configured, this is a no-op
-	if v.flowManager == nil {
-		v.logger.Debug("no flow manager configured, skipping production VLAN application",
-			slog.String("port_id", portID))
-		return nil
-	}
-
-	// For production flows, we remove existing flows first.
-	// In a full implementation, you would apply profile-specific ACLs here.
-	if err := v.flowManager.RemoveFlows(portID); err != nil {
-		v.logger.Warn("failed to remove existing flows before applying production VLAN",
-			slog.String("port_id", portID),
-			slog.String("error", err.Error()))
-	}
-
-	v.logger.Info("production VLAN applied successfully",
-		slog.String("port_id", portID),
-		slog.Uint64("vlan", uint64(vlanID)))
-
-	return nil
+	return v.applyZone(ctx, portID, z)
 }
 
 // GetCurrentVLAN implements VLANIntegration.GetCurrentVLAN.
-// Returns the current VLAN assignment for a port.
 func (v *vlanIntegrationWrapper) GetCurrentVLAN(ctx context.Context, portID string) (uint16, error) {
 	if v.closed.Load() {
 		return 0, ErrServiceNotRunning{}
 	}
-
 	if portID == "" {
-		return 0, ErrInvalidConfiguration{
-			Field:  "portID",
-			Reason: "port ID is required",
-		}
+		return 0, ErrInvalidConfiguration{Field: "portID", Reason: "port ID is required"}
 	}
-
-	// If no flow manager configured, return 0
 	if v.flowManager == nil {
 		return 0, ErrDeviceNotFound{DeviceID: portID}
 	}
-
-	vlan, err := v.flowManager.GetPortVLAN(portID)
+	vlanID, err := v.flowManager.GetPortVLAN(portID)
 	if err != nil {
 		return 0, ErrDeviceNotFound{DeviceID: portID}
 	}
-
-	return vlan, nil
+	return vlanID, nil
 }
 
-// ApplyQuarantineFlows moves device to quarantine VLAN.
-// Only allows access to auth service (8443) and remediation portal.
+// ApplyQuarantineFlows implements VLANIntegration.ApplyQuarantineFlows.
 func (v *vlanIntegrationWrapper) ApplyQuarantineFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
 	if v.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
-
 	if err := v.validateInputs(portID, mac); err != nil {
 		return err
 	}
-
-	v.logger.Info("applying quarantine flows",
-		slog.String("port_id", portID),
-		slog.String("mac", mac.String()),
-		slog.Uint64("vlan", uint64(v.quarantineVLAN)))
-
-	// If no flow manager configured, this is a no-op
-	if v.flowManager == nil {
-		v.logger.Debug("no flow manager configured, skipping quarantine flow application",
-			slog.String("port_id", portID))
-		return nil
-	}
-
-	// Delegate to the SDN flow manager
-	if err := v.flowManager.ApplyQuarantineFlows(portID, mac.String()); err != nil {
-		return ErrVLANTransitionFailed{
-			DeviceID: portID,
-			ToVLAN:   v.quarantineVLAN,
-			Reason:   "failed to apply quarantine flows",
-			Cause:    err,
-		}
-	}
-
-	v.logger.Info("quarantine flows applied successfully",
-		slog.String("port_id", portID),
-		slog.String("mac", mac.String()))
-
-	return nil
+	return v.applyZoneWithLog(ctx, portID, zone.ZoneQuarantine, mac, v.quarantineVLAN)
 }
 
-// ApplyProvisioningFlows moves device to provisioning VLAN.
-// Allows DHCP (67-68), TFTP (69), HTTP/S (80, 443), DNS (53), ACME (8443).
-// Blocks east-west traffic and internet access.
+// ApplyProvisioningFlows implements VLANIntegration.ApplyProvisioningFlows.
 func (v *vlanIntegrationWrapper) ApplyProvisioningFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
 	if v.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
-
 	if err := v.validateInputs(portID, mac); err != nil {
 		return err
 	}
-
-	v.logger.Info("applying provisioning flows",
-		slog.String("port_id", portID),
-		slog.String("mac", mac.String()),
-		slog.Uint64("vlan", uint64(v.provisioningVLAN)))
-
-	// If no flow manager configured, this is a no-op
-	if v.flowManager == nil {
-		v.logger.Debug("no flow manager configured, skipping provisioning flow application",
-			slog.String("port_id", portID))
-		return nil
-	}
-
-	// Delegate to the SDN flow manager
-	if err := v.flowManager.ApplyProvisioningFlows(portID, mac.String()); err != nil {
-		return ErrVLANTransitionFailed{
-			DeviceID: portID,
-			ToVLAN:   v.provisioningVLAN,
-			Reason:   "failed to apply provisioning flows",
-			Cause:    err,
-		}
-	}
-
-	v.logger.Info("provisioning flows applied successfully",
-		slog.String("port_id", portID),
-		slog.String("mac", mac.String()))
-
-	return nil
+	return v.applyZoneWithLog(ctx, portID, zone.ZoneProvisioning, mac, v.provisioningVLAN)
 }
 
-// ApplyProductionFlows moves device to production VLAN per profile.
-// Applies ACLs from device profile.
-func (v *vlanIntegrationWrapper) ApplyProductionFlows(
-	ctx context.Context,
-	portID string,
-	mac net.HardwareAddr,
-	targetVLAN uint16,
-) error {
+// ApplyProductionFlows implements VLANIntegration.ApplyProductionFlows.
+// The device is placed in zone.ZoneTrusted; the VLAN is resolved by the ZoneFlowManager.
+func (v *vlanIntegrationWrapper) ApplyProductionFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
 	if v.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
-
 	if err := v.validateInputs(portID, mac); err != nil {
 		return err
 	}
-
-	if targetVLAN == 0 {
-		return ErrInvalidConfiguration{
-			Field:  "targetVLAN",
-			Reason: "target VLAN must be non-zero",
-		}
-	}
-
-	v.logger.Info("applying production flows",
-		slog.String("port_id", portID),
-		slog.String("mac", mac.String()),
-		slog.Uint64("vlan", uint64(targetVLAN)))
-
-	// If no flow manager configured, this is a no-op
-	if v.flowManager == nil {
-		v.logger.Debug("no flow manager configured, skipping production flow application",
-			slog.String("port_id", portID))
-		return nil
-	}
-
-	// For production flows, we need a device profile. Since we don't have one here,
-	// we'll remove existing flows and let the caller handle ACLs.
-	// This is a simplified version - in production, you'd pass the full profile.
-	if err := v.flowManager.RemoveFlows(portID); err != nil {
-		v.logger.Warn("failed to remove existing flows before applying production flows",
-			slog.String("port_id", portID),
-			slog.String("error", err.Error()))
-	}
-
-	v.logger.Info("production flows applied successfully",
-		slog.String("port_id", portID),
-		slog.String("mac", mac.String()),
-		slog.Uint64("vlan", uint64(targetVLAN)))
-
-	return nil
+	return v.applyZoneWithLog(ctx, portID, zone.ZoneTrusted, mac, 0)
 }
 
-// BlockPort sets OVS port admin state to down (for severe violations).
+// BlockPort removes all OVS flows for the port (no new traffic accepted).
 func (v *vlanIntegrationWrapper) BlockPort(ctx context.Context, portID string) error {
 	if v.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
-
 	if portID == "" {
-		return ErrInvalidConfiguration{
-			Field:  "portID",
-			Reason: "port ID is required",
-		}
+		return ErrInvalidConfiguration{Field: "portID", Reason: "port ID is required"}
 	}
-
-	v.logger.Info("blocking port",
-		slog.String("port_id", portID))
-
-	// If no flow manager configured, this is a no-op
 	if v.flowManager == nil {
-		v.logger.Debug("no flow manager configured, skipping port block",
-			slog.String("port_id", portID))
 		return nil
 	}
-
-	// Remove all flows for this port (effectively blocking it)
 	if err := v.flowManager.RemoveFlows(portID); err != nil {
-		return ErrVLANTransitionFailed{
-			DeviceID: portID,
-			Reason:   "failed to block port",
-			Cause:    err,
-		}
+		return ErrVLANTransitionFailed{DeviceID: portID, Reason: "failed to block port", Cause: err}
 	}
-
-	v.logger.Info("port blocked successfully",
-		slog.String("port_id", portID))
-
 	return nil
 }
 
-// UnblockPort sets OVS port admin state to up.
+// UnblockPort prepares a port for the next zone assignment (no flows restored here).
 func (v *vlanIntegrationWrapper) UnblockPort(ctx context.Context, portID string) error {
 	if v.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
-
 	if portID == "" {
-		return ErrInvalidConfiguration{
-			Field:  "portID",
-			Reason: "port ID is required",
-		}
+		return ErrInvalidConfiguration{Field: "portID", Reason: "port ID is required"}
 	}
-
-	v.logger.Info("unblocking port",
-		slog.String("port_id", portID))
-
-	// If no flow manager configured, this is a no-op
-	if v.flowManager == nil {
-		v.logger.Debug("no flow manager configured, skipping port unblock",
-			slog.String("port_id", portID))
-		return nil
-	}
-
-	// Note: Unblocking doesn't apply any specific flows - it just prepares the port
-	// for the next VLAN assignment. The caller should apply the appropriate flows
-	// after unblocking.
-
-	v.logger.Info("port unblocked successfully",
-		slog.String("port_id", portID))
-
 	return nil
 }
 
@@ -521,34 +264,73 @@ func (v *vlanIntegrationWrapper) GetPortVLAN(ctx context.Context, portID string)
 
 // Close releases resources.
 func (v *vlanIntegrationWrapper) Close() error {
-	if v.closed.Swap(true) {
-		return nil // Already closed
+	v.closed.Swap(true)
+	return nil
+}
+
+// applyZone delegates zone flow installation to the ZoneFlowManager. When no
+// flow manager is configured the call is a no-op (policy does not require OVS).
+func (v *vlanIntegrationWrapper) applyZone(ctx context.Context, portID string, z zone.Zone) error {
+	if v.flowManager == nil {
+		v.logger.Debug("no flow manager configured, skipping zone flow application",
+			slog.String("port_id", portID),
+			slog.String("zone", string(z)))
+		return nil
+	}
+	if err := v.flowManager.ApplyZoneFlows(ctx, portID, z); err != nil {
+		return ErrVLANTransitionFailed{
+			DeviceID: portID,
+			Reason:   fmt.Sprintf("failed to apply %s zone flows", z),
+			Cause:    err,
+		}
+	}
+	return nil
+}
+
+// applyZoneWithLog is applyZone with structured logging. The logVLAN parameter
+// is informational only (used when the VLAN is already known to the caller).
+func (v *vlanIntegrationWrapper) applyZoneWithLog(
+	ctx context.Context,
+	portID string,
+	z zone.Zone,
+	mac net.HardwareAddr,
+	logVLAN uint16,
+) error {
+	v.logger.Info("applying zone flows",
+		slog.String("port_id", portID),
+		slog.String("zone", string(z)),
+		slog.String("mac", mac.String()),
+		slog.Uint64("vlan_hint", uint64(logVLAN)))
+
+	if err := v.applyZone(ctx, portID, z); err != nil {
+		return err
 	}
 
-	v.logger.Info("closing VLAN integration wrapper")
+	v.logger.Info("zone flows applied successfully",
+		slog.String("port_id", portID),
+		slog.String("zone", string(z)),
+		slog.String("mac", mac.String()))
 
 	return nil
 }
 
-// validateInputs validates the common inputs for VLAN operations.
+// validateInputs validates the common inputs for network operations.
 func (v *vlanIntegrationWrapper) validateInputs(portID string, mac net.HardwareAddr) error {
 	if portID == "" {
-		return ErrInvalidConfiguration{
-			Field:  "portID",
-			Reason: "port ID is required",
-		}
+		return ErrInvalidConfiguration{Field: "portID", Reason: "port ID is required"}
 	}
-
 	if len(mac) == 0 {
-		return ErrInvalidMACAddress{
-			Reason: "MAC address is required",
-		}
+		return ErrInvalidMACAddress{Reason: "MAC address is required"}
 	}
-
 	return nil
 }
 
-// noopVLANIntegration is a no-op implementation of VLANIntegrationWrapper for testing.
+// ---------------------------------------------------------------------------
+// noopVLANIntegration — in-memory implementation for tests
+// ---------------------------------------------------------------------------
+
+// noopVLANIntegration implements VLANIntegrationWrapper without requiring OVS.
+// Port→VLAN mappings are stored in memory. Intended for unit tests only.
 type noopVLANIntegration struct {
 	portVLANs    sync.Map // map[string]uint16
 	blockedPorts sync.Map // map[string]bool
@@ -556,266 +338,150 @@ type noopVLANIntegration struct {
 	logger       *slog.Logger
 }
 
-// NewNoopVLANIntegration creates a new no-op VLANIntegrationWrapper for testing.
-// It stores VLAN assignments in memory without requiring OVS.
+// NewNoopVLANIntegration creates a no-op VLANIntegrationWrapper for testing.
 func NewNoopVLANIntegration() VLANIntegrationWrapper {
 	return &noopVLANIntegration{
 		logger: slog.Default(),
 	}
 }
 
-// ApplyQuarantineVLAN implements VLANIntegration.ApplyQuarantineVLAN.
 func (n *noopVLANIntegration) ApplyQuarantineVLAN(ctx context.Context, portID string, vlanID uint16) error {
 	if n.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
-
 	if portID == "" {
-		return ErrInvalidConfiguration{
-			Field:  "portID",
-			Reason: "port ID is required",
-		}
+		return ErrInvalidConfiguration{Field: "portID", Reason: "port ID is required"}
 	}
-
 	n.portVLANs.Store(portID, vlanID)
 	n.blockedPorts.Delete(portID)
-
-	n.logger.Debug("noop: applied quarantine VLAN",
-		slog.String("port_id", portID),
-		slog.Uint64("vlan", uint64(vlanID)))
-
 	return nil
 }
 
-// ApplyProvisioningVLAN implements VLANIntegration.ApplyProvisioningVLAN.
 func (n *noopVLANIntegration) ApplyProvisioningVLAN(ctx context.Context, portID string, vlanID uint16) error {
 	if n.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
-
 	if portID == "" {
-		return ErrInvalidConfiguration{
-			Field:  "portID",
-			Reason: "port ID is required",
-		}
+		return ErrInvalidConfiguration{Field: "portID", Reason: "port ID is required"}
 	}
-
 	n.portVLANs.Store(portID, vlanID)
 	n.blockedPorts.Delete(portID)
-
-	n.logger.Debug("noop: applied provisioning VLAN",
-		slog.String("port_id", portID),
-		slog.Uint64("vlan", uint64(vlanID)))
-
 	return nil
 }
 
-// ApplyProductionVLAN implements VLANIntegration.ApplyProductionVLAN.
-func (n *noopVLANIntegration) ApplyProductionVLAN(ctx context.Context, portID string, vlanID uint16) error {
+func (n *noopVLANIntegration) ApplyZoneVLAN(ctx context.Context, portID string, z zone.Zone) error {
 	if n.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
-
 	if portID == "" {
-		return ErrInvalidConfiguration{
-			Field:  "portID",
-			Reason: "port ID is required",
-		}
+		return ErrInvalidConfiguration{Field: "portID", Reason: "port ID is required"}
 	}
-
-	if vlanID == 0 {
-		return ErrInvalidConfiguration{
-			Field:  "vlanID",
-			Reason: "VLAN ID must be non-zero",
-		}
+	if z == "" {
+		return ErrInvalidConfiguration{Field: "zone", Reason: "zone is required"}
 	}
-
+	// Map zone to a VLAN for in-memory tracking.
+	vlanID := zoneToDefaultVLAN(z)
 	n.portVLANs.Store(portID, vlanID)
 	n.blockedPorts.Delete(portID)
-
-	n.logger.Debug("noop: applied production VLAN",
-		slog.String("port_id", portID),
-		slog.Uint64("vlan", uint64(vlanID)))
-
 	return nil
 }
 
-// GetCurrentVLAN implements VLANIntegration.GetCurrentVLAN.
 func (n *noopVLANIntegration) GetCurrentVLAN(ctx context.Context, portID string) (uint16, error) {
 	if n.closed.Load() {
 		return 0, ErrServiceNotRunning{}
 	}
-
 	if portID == "" {
-		return 0, ErrInvalidConfiguration{
-			Field:  "portID",
-			Reason: "port ID is required",
-		}
+		return 0, ErrInvalidConfiguration{Field: "portID", Reason: "port ID is required"}
 	}
-
 	value, ok := n.portVLANs.Load(portID)
 	if !ok {
 		return 0, ErrDeviceNotFound{DeviceID: portID}
 	}
-
 	vlan, ok := value.(uint16)
 	if !ok {
 		return 0, fmt.Errorf("pxe: invalid VLAN type stored for port %s", portID)
 	}
-
 	return vlan, nil
 }
 
-// ApplyQuarantineFlows stores the quarantine VLAN assignment in memory.
 func (n *noopVLANIntegration) ApplyQuarantineFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
 	if n.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
-
 	if err := n.validateInputs(portID, mac); err != nil {
 		return err
 	}
-
 	n.portVLANs.Store(portID, DefaultQuarantineVLAN)
-	n.blockedPorts.Delete(portID) // Ensure port is not blocked
-
-	n.logger.Debug("noop: applied quarantine flows",
-		slog.String("port_id", portID),
-		slog.String("mac", mac.String()))
-
+	n.blockedPorts.Delete(portID)
 	return nil
 }
 
-// ApplyProvisioningFlows stores the provisioning VLAN assignment in memory.
 func (n *noopVLANIntegration) ApplyProvisioningFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
 	if n.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
-
 	if err := n.validateInputs(portID, mac); err != nil {
 		return err
 	}
-
 	n.portVLANs.Store(portID, DefaultProvisioningVLAN)
-	n.blockedPorts.Delete(portID) // Ensure port is not blocked
-
-	n.logger.Debug("noop: applied provisioning flows",
-		slog.String("port_id", portID),
-		slog.String("mac", mac.String()))
-
+	n.blockedPorts.Delete(portID)
 	return nil
 }
 
-// ApplyProductionFlows stores the production VLAN assignment in memory.
-func (n *noopVLANIntegration) ApplyProductionFlows(
-	ctx context.Context,
-	portID string,
-	mac net.HardwareAddr,
-	targetVLAN uint16,
-) error {
+func (n *noopVLANIntegration) ApplyProductionFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
 	if n.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
-
 	if err := n.validateInputs(portID, mac); err != nil {
 		return err
 	}
-
-	if targetVLAN == 0 {
-		return ErrInvalidConfiguration{
-			Field:  "targetVLAN",
-			Reason: "target VLAN must be non-zero",
-		}
-	}
-
-	n.portVLANs.Store(portID, targetVLAN)
-	n.blockedPorts.Delete(portID) // Ensure port is not blocked
-
-	n.logger.Debug("noop: applied production flows",
-		slog.String("port_id", portID),
-		slog.String("mac", mac.String()),
-		slog.Uint64("vlan", uint64(targetVLAN)))
-
+	n.portVLANs.Store(portID, DefaultTrustedVLAN)
+	n.blockedPorts.Delete(portID)
 	return nil
 }
 
-// BlockPort marks the port as blocked in memory.
 func (n *noopVLANIntegration) BlockPort(ctx context.Context, portID string) error {
 	if n.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
-
 	if portID == "" {
-		return ErrInvalidConfiguration{
-			Field:  "portID",
-			Reason: "port ID is required",
-		}
+		return ErrInvalidConfiguration{Field: "portID", Reason: "port ID is required"}
 	}
-
 	n.blockedPorts.Store(portID, true)
-
-	n.logger.Debug("noop: blocked port",
-		slog.String("port_id", portID))
-
 	return nil
 }
 
-// UnblockPort removes the blocked status in memory.
 func (n *noopVLANIntegration) UnblockPort(ctx context.Context, portID string) error {
 	if n.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
-
 	if portID == "" {
-		return ErrInvalidConfiguration{
-			Field:  "portID",
-			Reason: "port ID is required",
-		}
+		return ErrInvalidConfiguration{Field: "portID", Reason: "port ID is required"}
 	}
-
 	n.blockedPorts.Delete(portID)
-
-	n.logger.Debug("noop: unblocked port",
-		slog.String("port_id", portID))
-
 	return nil
 }
 
-// GetPortVLAN returns the current VLAN for a port from memory.
 func (n *noopVLANIntegration) GetPortVLAN(ctx context.Context, portID string) (uint16, error) {
 	return n.GetCurrentVLAN(ctx, portID)
 }
 
-// Close marks the no-op integration as closed.
 func (n *noopVLANIntegration) Close() error {
-	if n.closed.Swap(true) {
-		return nil // Already closed
-	}
-
-	n.logger.Debug("noop: closing VLAN integration")
-
+	n.closed.Swap(true)
 	return nil
 }
 
-// validateInputs validates the common inputs for VLAN operations.
 func (n *noopVLANIntegration) validateInputs(portID string, mac net.HardwareAddr) error {
 	if portID == "" {
-		return ErrInvalidConfiguration{
-			Field:  "portID",
-			Reason: "port ID is required",
-		}
+		return ErrInvalidConfiguration{Field: "portID", Reason: "port ID is required"}
 	}
-
 	if len(mac) == 0 {
-		return ErrInvalidMACAddress{
-			Reason: "MAC address is required",
-		}
+		return ErrInvalidMACAddress{Reason: "MAC address is required"}
 	}
-
 	return nil
 }
 
-// IsPortBlocked returns true if the port is blocked (noop-specific helper for testing).
+// IsPortBlocked returns true if the port is blocked (test helper).
 func (n *noopVLANIntegration) IsPortBlocked(portID string) bool {
 	value, ok := n.blockedPorts.Load(portID)
 	if !ok {
@@ -823,4 +489,20 @@ func (n *noopVLANIntegration) IsPortBlocked(portID string) bool {
 	}
 	blocked, _ := value.(bool)
 	return blocked
+}
+
+// zoneToDefaultVLAN maps a zone name to its default VLAN using the built-in
+// policy package defaults.
+func zoneToDefaultVLAN(z zone.Zone) uint16 {
+	defaults := map[zone.Zone]uint16{
+		zone.ZoneTrusted:      DefaultTrustedVLAN,
+		zone.ZoneProvisioning: DefaultProvisioningVLAN,
+		zone.ZoneQuarantine:   DefaultQuarantineVLAN,
+		zone.ZoneStorage:      DefaultStorageVLAN,
+		zone.ZoneManagement:   DefaultManagementVLAN,
+	}
+	if v, ok := defaults[z]; ok {
+		return v
+	}
+	return 0
 }

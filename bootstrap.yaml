@@ -8,7 +8,7 @@
 #      - GW enrolls with CP's CA (ACME enroll-01)
 #      - GW starts DHCP/PXE on provisioning VLAN
 #   3. lab-node-3 (compute) PXE boots via GW, fetches config from CP
-#   4. CP moves lab-node-3 port to production VLAN
+#   4. CP moves lab-node-3 port to trusted VLAN
 #   5. Bootstrap complete
 
 iso_path: bin/trusted-platform-cp.iso
@@ -58,7 +58,7 @@ deployer:
   bootstrap_dns:        198.18.1.1
 
 subnets:
-  - name: production
+  - name: trusted
     scope: internal
     vlan-id: 200
     cidr: 198.18.0.0/24
@@ -125,9 +125,9 @@ fabric:
         - Ethernet1/48
   segments:
     # Fabric segment roles: provisioning | quarantine | <empty>.
-    # Production + storage leave role unset (matches platform validator
+    # Trusted + storage leave role unset (matches platform validator
     # pkg/sdn/fabric/config.go).
-    - name: production
+    - name: trusted
       vlan: 200
     - name: provisioning
       vlan: 201

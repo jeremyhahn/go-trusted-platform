@@ -47,6 +47,13 @@ service SDNService {
   rpc ListPolicies(ListPoliciesRequest) returns (ListPoliciesResponse);
   rpc DeletePolicy(DeletePolicyRequest) returns (DeletePolicyResponse);
 
+  // Network zone operations (SDN trust/exposure zones, not DNS zones)
+  rpc CreateNetworkZone(CreateNetworkZoneRequest) returns (CreateNetworkZoneResponse);
+  rpc UpdateNetworkZone(UpdateNetworkZoneRequest) returns (UpdateNetworkZoneResponse);
+  rpc DeleteNetworkZone(DeleteNetworkZoneRequest) returns (DeleteNetworkZoneResponse);
+  rpc ListNetworkZones(ListNetworkZonesRequest) returns (ListNetworkZonesResponse);
+  rpc AssignNetworkZone(AssignNetworkZoneRequest) returns (AssignNetworkZoneResponse);
+
   // Streaming logs
   rpc StreamFlowLogs(StreamFlowLogsRequest) returns (stream FlowLogEntry);
 }
@@ -123,6 +130,8 @@ message PortConfig {
   bool promiscuous = 7;
   map<string, string> options = 8;
   map<string, string> labels = 9;
+  // zone is the network trust zone this port is assigned to. Empty means unassigned.
+  string zone = 10;
 }
 
 // Port status
@@ -361,6 +370,8 @@ message PolicyTarget {
   PolicyTargetType type = 1;
   string id = 2;
   string direction = 3;
+  // zone is the network trust zone this policy target is bound to.
+  string zone = 4;
 }
 
 // Policy schedule
@@ -639,4 +650,114 @@ message DeletePolicyResponse {
 message StreamFlowLogsRequest {
   string bridge_id = 1;
   FlowMatch filter = 2;
+}
+
+// =============================================================================
+// Network zone messages (Z7) — SDN trust/exposure zones, distinct from DNS zones
+// =============================================================================
+
+// NetworkZonePath declares a directed traffic path to a destination zone with
+// an optional service allowlist. An empty services list permits all services.
+message NetworkZonePath {
+  // zone is the destination zone name.
+  string zone = 1;
+  // services is the optional list of service names permitted on this path.
+  repeated string services = 2;
+}
+
+// NetworkZoneConfig mirrors pkg/sdn/zone.ZoneConfig 1:1. It is the declarative
+// schema for a single network trust/exposure zone.
+message NetworkZoneConfig {
+  // name is the unique zone identifier (lowercase DNS-label string).
+  string name = 1;
+  // internet_ingress indicates this zone accepts inbound internet traffic.
+  bool internet_ingress = 2;
+  // isolate_from lists zones from which this zone unconditionally denies traffic.
+  repeated string isolate_from = 3;
+  // allow_to declares directed traffic paths from this zone to other zones.
+  repeated NetworkZonePath allow_to = 4;
+  // services lists services permitted within this zone.
+  repeated string services = 5;
+  // isolate, when true, denies all inter-zone traffic except explicit allow_to paths.
+  bool isolate = 6;
+  // isolate_per_tenant enforces per-tenant micro-zone isolation within this zone.
+  bool isolate_per_tenant = 7;
+  // oob marks this zone as out-of-band hardware management (IPMI/BMC).
+  bool oob = 8;
+  // lifecycle_role indicates the device-lifecycle function:
+  // "" (none) | "provisioning" | "quarantine".
+  string lifecycle_role = 9;
+  // omit, when true on a user entry whose name matches a built-in, drops the
+  // built-in from the resolved set.
+  bool omit = 10;
+}
+
+// NetworkZone is a runtime zone record returned by the service layer.
+// It wraps NetworkZoneConfig with created/updated timestamps.
+message NetworkZone {
+  NetworkZoneConfig config = 1;
+  google.protobuf.Timestamp created_at = 2;
+  google.protobuf.Timestamp updated_at = 3;
+  // restart_required is true when a flow-policy-relevant field was mutated
+  // and the flow matrix needs recompilation via daemon restart.
+  bool restart_required = 4;
+}
+
+// CreateNetworkZone request/response
+message CreateNetworkZoneRequest {
+  NetworkZoneConfig config = 1;
+}
+
+message CreateNetworkZoneResponse {
+  Status status = 1;
+  NetworkZone zone = 2;
+}
+
+// UpdateNetworkZone request/response
+message UpdateNetworkZoneRequest {
+  // name identifies the zone to update (must match config.name).
+  string name = 1;
+  NetworkZoneConfig config = 2;
+}
+
+message UpdateNetworkZoneResponse {
+  Status status = 1;
+  NetworkZone zone = 2;
+}
+
+// DeleteNetworkZone request/response
+message DeleteNetworkZoneRequest {
+  // name is the zone to delete.
+  string name = 1;
+}
+
+message DeleteNetworkZoneResponse {
+  Status status = 1;
+  // restart_required is true when flow-policy-relevant state was affected
+  // and the flow matrix needs recompilation via daemon restart.
+  bool restart_required = 2;
+}
+
+// ListNetworkZones request/response
+message ListNetworkZonesRequest {
+  // lifecycle_role filters by lifecycle role ("" returns all zones).
+  string lifecycle_role = 1;
+}
+
+message ListNetworkZonesResponse {
+  repeated NetworkZone zones = 1;
+}
+
+// AssignNetworkZone assigns a named network segment to a zone.
+message AssignNetworkZoneRequest {
+  // network is the network name to reassign.
+  string network = 1;
+  // zone is the target zone name.
+  string zone = 2;
+}
+
+message AssignNetworkZoneResponse {
+  Status status = 1;
+  // restart_required is true when the assignment triggers a flow matrix rebuild.
+  bool restart_required = 2;
 }

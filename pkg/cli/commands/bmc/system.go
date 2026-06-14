@@ -17,7 +17,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -55,6 +54,9 @@ Examples:
 	}
 
 	cmd.Flags().StringVar(&flags.serverURL, "server-url", "", "platformd server URL (required)")
+	cmd.Flags().StringVar(&flags.caCert, "ca-cert", "", "CA bundle to verify the platformd TLS certificate (defaults to $PLATFORM_CA_CERT)")
+	cmd.Flags().StringVar(&flags.clientCert, "client-cert", "", "client certificate for mutual TLS (defaults to $PLATFORM_CLIENT_CERT)")
+	cmd.Flags().StringVar(&flags.clientKey, "client-key", "", "client key for mutual TLS (defaults to $PLATFORM_CLIENT_KEY)")
 	cmd.Flags().StringVar(&flags.profileID, "profile-id", "", "BMC profile ID (required)")
 	addStandaloneFlags(cmd, &standalone)
 
@@ -68,9 +70,12 @@ func runSystemInfo(flags *bmcFlags, getFlags func() *cli.CommonFlags) error {
 	}
 
 	ctx := context.Background()
-	client := &http.Client{}
+	client, err := newBMCHTTPClient(flags)
+	if err != nil {
+		return err
+	}
 
-	url := buildURL(flags.serverURL, flags.profileID, "system")
+	url := buildURL(flags.serverURL, flags.profileID, "system-info")
 
 	var resp systemInfoResponse
 	if err := doGet(ctx, client, url, &resp); err != nil {

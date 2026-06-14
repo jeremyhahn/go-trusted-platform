@@ -253,6 +253,23 @@ func (d *DHTBackend) ListPools(ctx context.Context) ([]*ipam.Pool, error) {
 	return pools, nil
 }
 
+// ListPoolsByZone returns all pools whose Zone field matches zone.
+// An empty zone returns all pools (equivalent to ListPools).
+func (d *DHTBackend) ListPoolsByZone(ctx context.Context, zone string) ([]*ipam.Pool, error) {
+	if zone == "" {
+		return d.ListPools(ctx)
+	}
+	var filtered []*ipam.Pool
+	d.poolCache.Range(func(key, value any) bool {
+		pool := value.(*ipam.Pool)
+		if pool.Zone == zone {
+			filtered = append(filtered, pool.Clone())
+		}
+		return true
+	})
+	return filtered, nil
+}
+
 // UpdatePool updates an existing pool's configuration.
 func (d *DHTBackend) UpdatePool(ctx context.Context, pool *ipam.Pool) error {
 	if pool == nil || pool.ID == "" {
@@ -460,6 +477,7 @@ func (d *DHTBackend) tryClaim(ctx context.Context, pool *ipam.Pool, ip netip.Add
 	alloc := &ipam.Allocation{
 		ID:          d.generateAllocationID(ip),
 		PoolID:      pool.ID,
+		Zone:        pool.Zone,
 		IP:          ip,
 		DeviceID:    req.DeviceID,
 		Hostname:    req.Hostname,

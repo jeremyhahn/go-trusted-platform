@@ -26,7 +26,7 @@ func TestStaticProfileService_AddAndGet(t *testing.T) {
 
 	profile := &ProfileResponse{
 		SerialNumber: "TEST-SERIAL-001",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN:    100,
 			UseDHCP: true,
 		},
@@ -37,7 +37,7 @@ func TestStaticProfileService_AddAndGet(t *testing.T) {
 	retrieved, err := service.GetBySerial("TEST-SERIAL-001")
 	require.NoError(t, err)
 	assert.Equal(t, "TEST-SERIAL-001", retrieved.SerialNumber)
-	assert.Equal(t, uint16(100), retrieved.ProductionNetwork.VLAN)
+	assert.Equal(t, uint16(100), retrieved.TrustedNetwork.VLAN)
 }
 
 func TestStaticProfileService_GetNotFound(t *testing.T) {
@@ -92,12 +92,12 @@ func TestStaticProfileService_ConcurrentAccess(t *testing.T) {
 	}
 }
 
-func TestDefaultProductionProfile(t *testing.T) {
-	profile := DefaultProductionProfile("TEST-DEVICE-001")
+func TestDefaultTrustedProfile(t *testing.T) {
+	profile := DefaultTrustedProfile("TEST-DEVICE-001")
 
 	assert.Equal(t, "TEST-DEVICE-001", profile.SerialNumber)
-	assert.Equal(t, uint16(100), profile.ProductionNetwork.VLAN)
-	assert.True(t, profile.ProductionNetwork.UseDHCP)
+	assert.Equal(t, uint16(200), profile.TrustedNetwork.VLAN)
+	assert.True(t, profile.TrustedNetwork.UseDHCP)
 	assert.Len(t, profile.ACLs, 2)
 	assert.Equal(t, "allow-https", profile.ACLs[0].Name)
 	assert.Equal(t, "allow-dns", profile.ACLs[1].Name)
@@ -108,7 +108,7 @@ func TestProfileFromDeviceProfile_Nil(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-func TestProfileFromDeviceProfile_NilProductionNetwork(t *testing.T) {
+func TestProfileFromDeviceProfile_NilTrustedNetwork(t *testing.T) {
 	dp := &entities.DeviceProfile{
 		ID:   1,
 		Name: "test-profile",
@@ -117,8 +117,8 @@ func TestProfileFromDeviceProfile_NilProductionNetwork(t *testing.T) {
 	result := ProfileFromDeviceProfile(dp, "TEST-SERIAL")
 	require.NotNil(t, result)
 	assert.Equal(t, "TEST-SERIAL", result.SerialNumber)
-	assert.Equal(t, uint16(0), result.ProductionNetwork.VLAN)
-	assert.False(t, result.ProductionNetwork.UseDHCP)
+	assert.Equal(t, uint16(0), result.TrustedNetwork.VLAN)
+	assert.False(t, result.TrustedNetwork.UseDHCP)
 	assert.Empty(t, result.ACLs)
 }
 
@@ -159,11 +159,11 @@ func TestProfileFromDeviceProfile_FullProfile(t *testing.T) {
 
 	// Verify basic fields
 	assert.Equal(t, "DEVICE-001", result.SerialNumber)
-	assert.Equal(t, uint16(200), result.ProductionNetwork.VLAN)
-	assert.True(t, result.ProductionNetwork.UseDHCP)
-	assert.Equal(t, "10.100.1.50", result.ProductionNetwork.StaticIP)
-	assert.Equal(t, "10.100.1.1", result.ProductionNetwork.Gateway)
-	assert.Equal(t, []string{"10.100.1.2", "8.8.8.8"}, result.ProductionNetwork.DNS)
+	assert.Equal(t, uint16(200), result.TrustedNetwork.VLAN)
+	assert.True(t, result.TrustedNetwork.UseDHCP)
+	assert.Equal(t, "10.100.1.50", result.TrustedNetwork.StaticIP)
+	assert.Equal(t, "10.100.1.1", result.TrustedNetwork.Gateway)
+	assert.Equal(t, []string{"10.100.1.2", "8.8.8.8"}, result.TrustedNetwork.DNS)
 
 	// Verify ACLs
 	require.Len(t, result.ACLs, 2)
@@ -368,14 +368,14 @@ func TestStaticProfileService_OverwriteProfile(t *testing.T) {
 
 	profile1 := &ProfileResponse{
 		SerialNumber: "TEST-001",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN: 100,
 		},
 	}
 
 	profile2 := &ProfileResponse{
 		SerialNumber: "TEST-001",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN: 200,
 		},
 	}
@@ -383,13 +383,13 @@ func TestStaticProfileService_OverwriteProfile(t *testing.T) {
 	service.AddProfile("TEST-001", profile1)
 	retrieved, err := service.GetBySerial("TEST-001")
 	require.NoError(t, err)
-	assert.Equal(t, uint16(100), retrieved.ProductionNetwork.VLAN)
+	assert.Equal(t, uint16(100), retrieved.TrustedNetwork.VLAN)
 
 	// Overwrite with new profile
 	service.AddProfile("TEST-001", profile2)
 	retrieved, err = service.GetBySerial("TEST-001")
 	require.NoError(t, err)
-	assert.Equal(t, uint16(200), retrieved.ProductionNetwork.VLAN)
+	assert.Equal(t, uint16(200), retrieved.TrustedNetwork.VLAN)
 }
 
 func TestStaticProfileService_RemoveNonExistent(t *testing.T) {

@@ -59,6 +59,13 @@ func (s *Service) clientFor(ctx context.Context, profileID uint64) (Client, erro
 		return existing.(Client), nil
 	}
 
+	// Profiles is an optional dependency (see NewService): when no profile
+	// store is wired, profile-based methods cannot resolve config and must
+	// report the profile as missing rather than dereferencing a nil store.
+	if s.profiles == nil {
+		return nil, ErrProfileNotFound{ProfileID: profileID}
+	}
+
 	config, err := s.profiles.Get(ctx, profileID)
 	if err != nil {
 		return nil, ErrProfileNotFound{ProfileID: profileID}

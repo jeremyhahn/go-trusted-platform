@@ -131,6 +131,7 @@ func (e ErrOverlayOperationFailed) Unwrap() error {
 type VTEPInfoResponse struct {
 	NodeID   string    `json:"node_id"`
 	IP       string    `json:"ip"`
+	VNIs     []uint32  `json:"vnis"`
 	Healthy  bool      `json:"healthy"`
 	LastSeen time.Time `json:"last_seen"`
 }
@@ -201,6 +202,7 @@ type RemoteMACListResponse struct {
 type OverlayStatusResponse struct {
 	NodeID         string    `json:"node_id"`
 	VTEPIP         string    `json:"vtep_ip"`
+	VXLANPort      uint16    `json:"vxlan_port"`
 	VTEPCount      uint32    `json:"vtep_count"`
 	VNICount       uint32    `json:"vni_count"`
 	TunnelCount    uint32    `json:"tunnel_count"`

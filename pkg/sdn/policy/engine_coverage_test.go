@@ -164,11 +164,10 @@ func TestEngine_AuthenticatePortErrorPaths(t *testing.T) {
 		engine, err := NewEngine(config)
 		require.NoError(t, err)
 
-		// Create an expired certificate
+		// Create an expired certificate — validation fails before extraction
 		cert := createTestCertificate(t, x509.Certificate{
 			Subject: pkix.Name{
-				Organization:       []string{"tenant-1"},
-				OrganizationalUnit: []string{"vlan=100"},
+				Organization: []string{"tenant-1"},
 			},
 			NotBefore: time.Now().Add(-48 * time.Hour),
 			NotAfter:  time.Now().Add(-24 * time.Hour),
@@ -194,12 +193,8 @@ func TestEngine_AuthenticatePortErrorPaths(t *testing.T) {
 		engine, err := NewEngine(config)
 		require.NoError(t, err)
 
-		// Create cert without VLAN (will fail extraction)
-		cert := createTestCertificate(t, x509.Certificate{
-			Subject: pkix.Name{
-				Organization: []string{"tenant-1"},
-			},
-		})
+		// Create cert with no Organization and no CommonName → ErrMissingTenantID
+		cert := createTestCertificate(t, x509.Certificate{})
 
 		err = engine.AuthenticatePort("port1", cert)
 		assert.Error(t, err)
@@ -217,20 +212,17 @@ func TestEngine_AuthenticatePortErrorPaths(t *testing.T) {
 			BridgeName:     "br0",
 			FlowController: controller,
 		}
-
 		engine, err := NewEngine(config)
 		require.NoError(t, err)
 
-		// Create valid cert
+		// Cert with tenant but without zone extension and without VLAN.
+		// ExtractPolicy succeeds (tenant extracted), validatePolicy fails
+		// (Zone="" and VLAN=0) → "policy application failed: invalid VLAN ID".
 		cert := createTestCertificate(t, x509.Certificate{
 			Subject: pkix.Name{
-				Organization:       []string{"tenant-1"},
-				OrganizationalUnit: []string{"vlan=100"},
+				Organization: []string{"tenant-1"},
 			},
 		})
-
-		// Cause flow installation to fail
-		controller.installError = errors.New("flow installation failed")
 
 		err = engine.AuthenticatePort("port1", cert)
 		assert.Error(t, err)
@@ -351,11 +343,10 @@ func TestEngine_AuthenticatePortStateRecording(t *testing.T) {
 		engine, err := NewEngine(config)
 		require.NoError(t, err)
 
-		// Create an expired certificate
+		// Create an expired certificate — validation fails before extraction
 		cert := createTestCertificate(t, x509.Certificate{
 			Subject: pkix.Name{
-				Organization:       []string{"tenant-1"},
-				OrganizationalUnit: []string{"vlan=100"},
+				Organization: []string{"tenant-1"},
 			},
 			NotBefore: time.Now().Add(-48 * time.Hour),
 			NotAfter:  time.Now().Add(-24 * time.Hour),
@@ -371,28 +362,15 @@ func TestEngine_AuthenticatePortStateRecording(t *testing.T) {
 	})
 
 	t.Run("Auth attempts incremented", func(t *testing.T) {
-		controller := newMockFlowController()
-		config := Config{
-			BridgeName:     "br0",
-			FlowController: controller,
-		}
+		// Create valid cert with zone extension for Z3-compatible authentication
+		cert := createZoneCert(t, "tenant-1", "trusted")
 
-		engine, err := NewEngine(config)
-		require.NoError(t, err)
-
-		// Create valid cert
-		cert := createTestCertificate(t, x509.Certificate{
-			Subject: pkix.Name{
-				Organization:       []string{"tenant-1"},
-				OrganizationalUnit: []string{"vlan=100"},
-			},
-		})
-
-		// Authenticate successfully
-		require.NoError(t, engine.AuthenticatePort("port1", cert))
+		// Authenticate successfully using zone-aware engine
+		engineWithZones := createTestEngineWithZones(t)
+		require.NoError(t, engineWithZones.AuthenticatePort("port1", cert))
 
 		// Check auth attempts
-		info, err := engine.GetPortInfo("port1")
+		info, err := engineWithZones.GetPortInfo("port1")
 		require.NoError(t, err)
 		assert.Equal(t, 1, info.AuthAttempts)
 	})

@@ -397,10 +397,22 @@ type BGPStatus struct {
 // VNIConfig contains configuration for a VNI.
 type VNIConfig struct {
 	// VNI is the VXLAN Network Identifier.
+	// When Zone is set and VNI is zero, the controller derives the VNI from
+	// the zone-specific allocation base:
+	//   - ZoneTenant zones use vlan.TenantBase (1000) as the VNI base.
+	//   - All other zones use the overlay Config.VNIBase.
+	// Callers may override by setting VNI explicitly to a non-zero value.
 	VNI uint32
 
 	// VLAN is the optional associated VLAN ID.
 	VLAN uint16
+
+	// Zone is the trust/exposure zone for this VNI. When set for a
+	// ZoneTenant zone, VNI allocation uses vlan.TenantBase as the base,
+	// providing per-tenant isolation in the 1000+ range. For all other
+	// zones the overlay Config.VNIBase is used. An empty Zone means no
+	// zone-specific allocation; VNI must be set explicitly.
+	Zone string
 
 	// Multicast is the optional multicast group for BUM traffic.
 	Multicast netip.Addr

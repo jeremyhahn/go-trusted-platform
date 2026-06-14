@@ -21,7 +21,10 @@ import (
 	"sync"
 	"testing"
 
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -371,15 +374,10 @@ func TestEngine_GetPolicy(t *testing.T) {
 }
 
 func TestEngine_AuthenticatePort(t *testing.T) {
-	t.Run("Valid certificate", func(t *testing.T) {
-		engine := createTestEngine(t)
+	t.Run("Valid certificate with zone extension", func(t *testing.T) {
+		engine := createTestEngineWithZones(t)
 
-		cert := createTestCertificate(t, x509.Certificate{
-			Subject: pkix.Name{
-				Organization:       []string{"tenant-1"},
-				OrganizationalUnit: []string{"vlan=100"},
-			},
-		})
+		cert := createZoneCert(t, "tenant-1", "trusted")
 
 		err := engine.AuthenticatePort("port1", cert)
 		assert.NoError(t, err)
@@ -389,11 +387,11 @@ func TestEngine_AuthenticatePort(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, PortStateAuthorized, state)
 
-		// Verify policy was extracted and applied
+		// Verify policy was extracted and applied with zone
 		policy, err := engine.GetPolicy("port1")
 		assert.NoError(t, err)
 		assert.Equal(t, "tenant-1", policy.TenantID)
-		assert.Equal(t, uint16(100), policy.VLAN)
+		assert.Equal(t, zone.Zone("trusted"), policy.Zone)
 	})
 
 	t.Run("Invalid port ID", func(t *testing.T) {
@@ -411,7 +409,7 @@ func TestEngine_AuthenticatePort(t *testing.T) {
 		assert.ErrorIs(t, err, ErrInvalidCertificate)
 	})
 
-	t.Run("Certificate missing VLAN", func(t *testing.T) {
+	t.Run("Certificate without zone or VLAN fails policy application", func(t *testing.T) {
 		engine := createTestEngine(t)
 
 		cert := createTestCertificate(t, x509.Certificate{
@@ -422,12 +420,24 @@ func TestEngine_AuthenticatePort(t *testing.T) {
 
 		err := engine.AuthenticatePort("port2", cert)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "policy extraction failed")
+		// No zone extension and no VLAN: fails at policy application (invalid VLAN)
+		assert.Contains(t, err.Error(), "policy application failed")
 
 		// Verify port is unauthorized
 		state, err := engine.GetPortState("port2")
 		assert.NoError(t, err)
 		assert.Equal(t, PortStateUnauthorized, state)
+	})
+
+	t.Run("Certificate without tenant ID fails policy extraction", func(t *testing.T) {
+		engine := createTestEngine(t)
+
+		// No Organization or CommonName — ErrMissingTenantID from extractor
+		cert := createTestCertificate(t, x509.Certificate{})
+
+		err := engine.AuthenticatePort("port3", cert)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "policy extraction failed")
 	})
 }
 
@@ -611,4 +621,50 @@ func createTestEngine(t *testing.T) *Engine {
 	require.NoError(t, err)
 
 	return engine
+}
+
+// createTestEngineWithZones creates a test engine configured with a ZoneFlowManager
+// that can apply zone-based policies. The resolved zones include "trusted" (VLAN 200)
+// and "provisioning" (VLAN 201) so that zone-extension certs can be authenticated.
+func createTestEngineWithZones(t *testing.T) *Engine {
+	t.Helper()
+	ctrl := newMockFlowController()
+	zones, err := zone.Resolve(nil)
+	require.NoError(t, err)
+	zfi, err := sdn.BuildZoneIndex(zones, nil)
+	require.NoError(t, err)
+	zfm, err := NewZoneFlowManager(ZoneFlowManagerConfig{
+		BridgeName:     "br0",
+		FlowController: ctrl,
+		PortController: ctrl,
+		ZoneIndex:      zfi,
+		Zones:          zones,
+	})
+	require.NoError(t, err)
+
+	config := Config{
+		BridgeName:      "br0",
+		FlowController:  ctrl,
+		PortController:  ctrl,
+		ZoneFlowManager: zfm,
+		PolicyExtractor: NewX509PolicyExtractor(WithPolicyExtractorZones(zones)),
+	}
+
+	engine, err := NewEngine(config)
+	require.NoError(t, err)
+	return engine
+}
+
+// createZoneCert creates a self-signed certificate carrying the OIDTPNetworkZone
+// extension for the given zone name. The org field is set to tenantID.
+func createZoneCert(t *testing.T, tenantID, zoneName string) *x509.Certificate {
+	t.Helper()
+	ext, err := quicbaasca.CreateNetworkZoneExtension(zoneName)
+	require.NoError(t, err)
+	return createTestCertificate(t, x509.Certificate{
+		Subject: pkix.Name{
+			Organization: []string{tenantID},
+		},
+		ExtraExtensions: []pkix.Extension{ext},
+	})
 }

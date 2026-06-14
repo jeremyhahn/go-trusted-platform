@@ -30,6 +30,7 @@ import (
 	"github.com/jeremyhahn/go-codec/pkg/factory"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/qlog"
 )
 
 // =============================================================================
@@ -154,14 +155,23 @@ func (e ErrQUICSDNClientClosed) Error() string {
 	return "QUIC client is closed"
 }
 
-// ErrQUICSDNNotImplemented indicates a method is not yet implemented.
+// ErrQUICSDNNotImplemented indicates a method is not yet implemented. Cause,
+// when set, carries the underlying transport/server error so skip messages
+// stay diagnosable instead of masking the real failure.
 type ErrQUICSDNNotImplemented struct {
 	Method string
+	Cause  error
 }
 
 func (e ErrQUICSDNNotImplemented) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("QUIC method %s not implemented: %v", e.Method, e.Cause)
+	}
 	return fmt.Sprintf("QUIC method %s not implemented", e.Method)
 }
+
+// Unwrap returns the underlying cause.
+func (e ErrQUICSDNNotImplemented) Unwrap() error { return e.Cause }
 
 // =============================================================================
 // Wire Protocol Types
@@ -551,6 +561,10 @@ func (q *QUICAdapter) Name() string {
 }
 
 // Setup establishes the QUIC connection to the platform endpoint.
+//
+// When QLOGDIR is set in the environment, qlog tracing is enabled for this
+// connection. quic-go's qlog.DefaultConnectionTracer reads QLOGDIR directly
+// and writes one <odcid>_client.sqlog file per connection.
 func (q *QUICAdapter) Setup(ctx context.Context) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -565,6 +579,9 @@ func (q *QUICAdapter) Setup(ctx context.Context) error {
 	quicConfig := &quicgo.Config{
 		MaxIdleTimeout:  q.maxIdleTimeout,
 		KeepAlivePeriod: 15 * time.Second,
+		// qlog tracing: writes per-connection .sqlog files when QLOGDIR is set.
+		// qlog.DefaultConnectionTracer is a no-op when QLOGDIR is unset.
+		Tracer: qlog.DefaultConnectionTracer,
 	}
 
 	conn, err := quicgo.DialAddr(connCtx, q.endpoint, q.tlsConfig, quicConfig)
@@ -598,7 +615,6 @@ func (q *QUICAdapter) Teardown() error {
 // Wire Protocol Methods
 // =============================================================================
 
-// sendRequest sends a QUIC request and returns the response.
 // sendRequest sends a QUIC request and returns the response.
 // A per-operation timeout prevents individual QUIC operations from blocking
 // indefinitely when the server is under contention.
@@ -655,8 +671,8 @@ func (q *QUICAdapter) sendRequest(ctx context.Context, opcode byte, payload inte
 		return nil, err
 	}
 
-	// Read response
-	resp, err := readSDNResponse(stream)
+	// Read response — include connection-level cancellation state on error.
+	resp, err := readSDNResponse(stream, conn.Context())
 	if err != nil {
 		log.Printf("[QUIC] readSDNResponse failed: op=%s err=%v", opName, err)
 		return nil, err
@@ -680,66 +696,64 @@ func (q *QUICAdapter) sendRequest(ctx context.Context, opcode byte, payload inte
 	return resp, nil
 }
 
-// writeSDNRequest writes a request to the stream.
+// writeSDNRequest writes a request to the stream as a single atomic Write.
+// Using a single Write call is essential for QUIC streams: multiple Write calls
+// may produce separate STREAM frames, and the server reads field-by-field with
+// io.ReadFull — if a FIN or RST arrives between frames the read returns EOF
+// mid-frame. A single Write gives the QUIC stack the full frame in one shot.
 func writeSDNRequest(w io.Writer, req *quicSDNRequest) error {
 	payloadLen := uint32(len(req.Payload))
 	if payloadLen > MaxQUICPayloadSizeSDN {
 		return fmt.Errorf("payload size %d exceeds maximum %d", payloadLen, MaxQUICPayloadSizeSDN)
 	}
 
-	tokenLen := uint16(len(req.Token))
+	tokenBytes := []byte(req.Token)
+	tokenLen := uint16(len(tokenBytes))
 	if tokenLen > MaxQUICTokenSizeSDN {
 		return fmt.Errorf("token size %d exceeds maximum %d", tokenLen, MaxQUICTokenSizeSDN)
 	}
 
-	// Write opcode
-	if _, err := w.Write([]byte{req.Opcode}); err != nil {
-		return fmt.Errorf("failed to write opcode: %w", err)
-	}
-
-	// Write token length
-	tokenLenBuf := make([]byte, 2)
-	binary.BigEndian.PutUint16(tokenLenBuf, tokenLen)
-	if _, err := w.Write(tokenLenBuf); err != nil {
-		return fmt.Errorf("failed to write token length: %w", err)
-	}
-
-	// Write token
+	// Build the full frame in a single buffer: [opcode 1B | token_len 2B | token nB | payload_len 4B | payload nB]
+	frameLen := 1 + 2 + int(tokenLen) + 4 + int(payloadLen)
+	buf := make([]byte, frameLen)
+	off := 0
+	buf[off] = req.Opcode
+	off++
+	binary.BigEndian.PutUint16(buf[off:], tokenLen)
+	off += 2
 	if tokenLen > 0 {
-		if _, err := w.Write([]byte(req.Token)); err != nil {
-			return fmt.Errorf("failed to write token: %w", err)
-		}
+		copy(buf[off:], tokenBytes)
+		off += int(tokenLen)
 	}
-
-	// Write payload length
-	lenBuf := make([]byte, 4)
-	binary.BigEndian.PutUint32(lenBuf, payloadLen)
-	if _, err := w.Write(lenBuf); err != nil {
-		return fmt.Errorf("failed to write payload length: %w", err)
-	}
-
-	// Write payload
+	binary.BigEndian.PutUint32(buf[off:], payloadLen)
+	off += 4
 	if payloadLen > 0 {
-		if _, err := w.Write(req.Payload); err != nil {
-			return fmt.Errorf("failed to write payload: %w", err)
-		}
+		copy(buf[off:], req.Payload)
 	}
 
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("failed to write request frame: %w", err)
+	}
 	return nil
 }
 
 // readSDNResponse reads a response from the stream.
-func readSDNResponse(r io.Reader) (*quicSDNResponse, error) {
+//
+// connCtx is the parent QUIC connection context. When an unexpected EOF occurs
+// mid-payload, connCtx.Err() is included in the error so the log distinguishes
+// a server-initiated stream reset from an OS-level EOF — both surface as
+// io.ErrUnexpectedEOF from io.ReadFull but the connection-level cause differs.
+func readSDNResponse(r io.Reader, connCtx context.Context) (*quicSDNResponse, error) {
 	// Read status
 	statusBuf := make([]byte, 1)
 	if _, err := io.ReadFull(r, statusBuf); err != nil {
-		return nil, fmt.Errorf("failed to read status: %w", err)
+		return nil, fmt.Errorf("failed to read status: %w (conn_ctx=%s)", err, ctxErrSDN(connCtx))
 	}
 
 	// Read payload length
 	lenBuf := make([]byte, 4)
 	if _, err := io.ReadFull(r, lenBuf); err != nil {
-		return nil, fmt.Errorf("failed to read payload length: %w", err)
+		return nil, fmt.Errorf("failed to read payload length: %w (conn_ctx=%s)", err, ctxErrSDN(connCtx))
 	}
 	payloadLen := binary.BigEndian.Uint32(lenBuf)
 
@@ -747,12 +761,16 @@ func readSDNResponse(r io.Reader) (*quicSDNResponse, error) {
 		return nil, fmt.Errorf("payload size %d exceeds maximum %d", payloadLen, MaxQUICPayloadSizeSDN)
 	}
 
-	// Read payload
+	// Read payload — track actual bytes read for truncation diagnosis.
 	var payload []byte
 	if payloadLen > 0 {
 		payload = make([]byte, payloadLen)
-		if _, err := io.ReadFull(r, payload); err != nil {
-			return nil, fmt.Errorf("failed to read payload: %w", err)
+		n, err := io.ReadFull(r, payload)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"failed to read payload: %w (expected=%d read=%d conn_ctx=%s)",
+				err, payloadLen, n, ctxErrSDN(connCtx),
+			)
 		}
 	}
 
@@ -760,6 +778,19 @@ func readSDNResponse(r io.Reader) (*quicSDNResponse, error) {
 		Status:  statusBuf[0],
 		Payload: payload,
 	}, nil
+}
+
+// ctxErrSDN returns a string representation of a context's error, or "nil"
+// when the context has not been cancelled. Used in error messages to expose
+// connection-level cancellation state alongside stream-level EOF errors.
+func ctxErrSDN(ctx context.Context) string {
+	if ctx == nil {
+		return "nil"
+	}
+	if err := ctx.Err(); err != nil {
+		return err.Error()
+	}
+	return "nil"
 }
 
 // defaultCodecType is the codec type used for payload encoding/decoding
@@ -1213,11 +1244,8 @@ func (q *QUICAdapter) FlowList(ctx context.Context, bridgeID string, opts FlowLi
 			Duration:    int64(f.Duration),
 			IdleAge:     int64(f.IdleAge),
 			HardAge:     int64(f.HardAge),
-			Match:       FlowMatch{
-				// The server returns match as a string; parse it back into structured fields
-				// where possible, but the raw match string is the primary identifier
-			},
-			Actions: parseActionsString(f.Actions),
+			Match:       FlowMatch{},
+			Actions:     parseActionsString(f.Actions),
 		})
 	}
 

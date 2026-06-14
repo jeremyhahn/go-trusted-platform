@@ -26,6 +26,9 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
@@ -42,6 +45,8 @@ type PlatformServiceProvider struct {
 	deviceService  device.DeviceService
 	profileService device.DeviceProfileService
 	sdnService     *SDNService
+	zoneService    gateway.ZoneService
+	sdnNetworks    []sdn.NetworkConfig
 	healthService  *Service
 	logger         *slog.Logger
 }
@@ -53,6 +58,8 @@ type PlatformServiceProviderConfig struct {
 	DeviceService  device.DeviceService
 	ProfileService device.DeviceProfileService
 	SDNService     *SDNService
+	ZoneService    gateway.ZoneService
+	SDNNetworks    []sdn.NetworkConfig
 	HealthService  *Service
 	Logger         *slog.Logger
 }
@@ -70,6 +77,8 @@ func NewPlatformServiceProvider(config *PlatformServiceProviderConfig) *Platform
 		deviceService:  config.DeviceService,
 		profileService: config.ProfileService,
 		sdnService:     config.SDNService,
+		zoneService:    config.ZoneService,
+		sdnNetworks:    config.SDNNetworks,
 		healthService:  config.HealthService,
 		logger:         logger,
 	}
@@ -1705,9 +1714,14 @@ func (p *PlatformServiceProvider) GatewayBGPPrefixes(ctx context.Context) ([]int
 	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayBGPPrefixes"}
 }
 
-// GatewayIPAMPools lists all IPAM pools.
-func (p *PlatformServiceProvider) GatewayIPAMPools(ctx context.Context) ([]interface{}, error) {
+// GatewayIPAMPools lists IPAM pools, optionally filtered by zone.
+func (p *PlatformServiceProvider) GatewayIPAMPools(ctx context.Context, zone string) ([]interface{}, error) {
 	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMPools"}
+}
+
+// GatewayIPAMPoolGet retrieves a single IPAM pool by ID.
+func (p *PlatformServiceProvider) GatewayIPAMPoolGet(ctx context.Context, poolID string) (interface{}, error) {
+	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMPoolGet"}
 }
 
 // GatewayIPAMAllocate allocates an IP address from a pool.
@@ -1730,9 +1744,146 @@ func (p *PlatformServiceProvider) GatewayIPAMPoolCreate(ctx context.Context, req
 	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMPoolCreate"}
 }
 
+// GatewayIPAMPoolUpdate updates mutable fields of an IPAM pool.
+func (p *PlatformServiceProvider) GatewayIPAMPoolUpdate(ctx context.Context, poolID string, req *mcp.IPAMPoolUpdateRequest) (interface{}, error) {
+	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMPoolUpdate"}
+}
+
 // GatewayIPAMPoolDelete deletes an IPAM pool.
 func (p *PlatformServiceProvider) GatewayIPAMPoolDelete(ctx context.Context, poolID string) error {
 	return ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMPoolDelete"}
+}
+
+// =============================================================================
+// Gateway Network Zone Operations
+// =============================================================================
+
+// GatewayNetworkZoneList lists runtime network zones, optionally filtered by lifecycle role.
+func (p *PlatformServiceProvider) GatewayNetworkZoneList(ctx context.Context, lifecycleRole string) ([]interface{}, error) {
+	if p.zoneService == nil {
+		return nil, ErrServiceNotAvailable{Service: "zone"}
+	}
+	recs, err := p.zoneService.List(ctx, zone.LifecycleRole(lifecycleRole))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]interface{}, 0, len(recs))
+	for _, r := range recs {
+		out = append(out, map[string]interface{}{
+			"name":               string(r.Config.Name),
+			"internet_ingress":   r.Config.InternetIngress,
+			"isolate":            r.Config.Isolate,
+			"isolate_per_tenant": r.Config.IsolatePerTenant,
+			"oob":                r.Config.OOB,
+			"lifecycle_role":     string(r.Config.LifecycleRole),
+			"omit":               r.Config.Omit,
+			"created_at":         r.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			"updated_at":         r.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		})
+	}
+	return out, nil
+}
+
+// GatewayNetworkZoneCreate creates a new network zone.
+func (p *PlatformServiceProvider) GatewayNetworkZoneCreate(ctx context.Context, req *mcp.NetworkZoneCreateRequest) (interface{}, error) {
+	if p.zoneService == nil {
+		return nil, ErrServiceNotAvailable{Service: "zone"}
+	}
+	cfg := zone.ZoneConfig{
+		Name:             zone.Zone(req.Name),
+		InternetIngress:  req.InternetIngress,
+		Isolate:          req.Isolate,
+		IsolatePerTenant: req.IsolatePerTenant,
+		OOB:              req.OOB,
+		LifecycleRole:    zone.LifecycleRole(req.LifecycleRole),
+		Omit:             req.Omit,
+	}
+	if len(req.IsolateFrom) > 0 {
+		cfg.IsolateFrom = make([]zone.Zone, 0, len(req.IsolateFrom))
+		for _, z := range req.IsolateFrom {
+			cfg.IsolateFrom = append(cfg.IsolateFrom, zone.Zone(z))
+		}
+	}
+	if len(req.AllowTo) > 0 {
+		cfg.AllowTo = make([]zone.ZonePath, 0, len(req.AllowTo))
+		for _, p := range req.AllowTo {
+			cfg.AllowTo = append(cfg.AllowTo, zone.ZonePath{Zone: zone.Zone(p.Zone), Services: p.Services})
+		}
+	}
+	rec, _, err := p.zoneService.Create(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"name":       string(rec.Config.Name),
+		"created_at": rec.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}, nil
+}
+
+// GatewayNetworkZoneUpdate updates an existing network zone.
+func (p *PlatformServiceProvider) GatewayNetworkZoneUpdate(ctx context.Context, name string, req *mcp.NetworkZoneUpdateRequest) (interface{}, error) {
+	if p.zoneService == nil {
+		return nil, ErrServiceNotAvailable{Service: "zone"}
+	}
+	cfg := zone.ZoneConfig{
+		Name:             zone.Zone(name),
+		InternetIngress:  req.InternetIngress,
+		Isolate:          req.Isolate,
+		IsolatePerTenant: req.IsolatePerTenant,
+		OOB:              req.OOB,
+		LifecycleRole:    zone.LifecycleRole(req.LifecycleRole),
+		Omit:             req.Omit,
+	}
+	if len(req.IsolateFrom) > 0 {
+		cfg.IsolateFrom = make([]zone.Zone, 0, len(req.IsolateFrom))
+		for _, z := range req.IsolateFrom {
+			cfg.IsolateFrom = append(cfg.IsolateFrom, zone.Zone(z))
+		}
+	}
+	if len(req.AllowTo) > 0 {
+		cfg.AllowTo = make([]zone.ZonePath, 0, len(req.AllowTo))
+		for _, ap := range req.AllowTo {
+			cfg.AllowTo = append(cfg.AllowTo, zone.ZonePath{Zone: zone.Zone(ap.Zone), Services: ap.Services})
+		}
+	}
+	rec, restartRequired, err := p.zoneService.Update(ctx, zone.Zone(name), cfg)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"name":             string(rec.Config.Name),
+		"restart_required": restartRequired,
+		"updated_at":       rec.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}, nil
+}
+
+// GatewayNetworkZoneDelete deletes a network zone.
+// Returns restartRequired=true when the deleted zone had active policy fields.
+func (p *PlatformServiceProvider) GatewayNetworkZoneDelete(ctx context.Context, name string) (bool, error) {
+	if p.zoneService == nil {
+		return false, ErrServiceNotAvailable{Service: "zone"}
+	}
+	return p.zoneService.Delete(ctx, zone.Zone(name))
+}
+
+// GatewayNetworkZoneAssign assigns a network segment to a trust zone.
+func (p *PlatformServiceProvider) GatewayNetworkZoneAssign(ctx context.Context, network string, zoneName string) (bool, error) {
+	if p.zoneService == nil {
+		return false, ErrServiceNotAvailable{Service: "zone"}
+	}
+	return p.zoneService.AssignNetwork(ctx, network, zone.Zone(zoneName))
+}
+
+// GatewayNetworkZoneVLAN resolves a trust zone name to its associated VLAN ID.
+// It iterates the SDN network config to find the first network whose zone matches.
+func (p *PlatformServiceProvider) GatewayNetworkZoneVLAN(ctx context.Context, zoneName string) (uint16, error) {
+	z := zone.Zone(zoneName)
+	for _, n := range p.sdnNetworks {
+		if n.Zone == z && n.VLAN > 0 {
+			return n.VLAN, nil
+		}
+	}
+	return 0, ErrServiceNotAvailable{Service: "zone vlan for " + zoneName}
 }
 
 // =============================================================================

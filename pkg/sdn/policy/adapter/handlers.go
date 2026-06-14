@@ -73,7 +73,7 @@ func (a *DeviceSDNAdapter) handleEnrolled(ctx context.Context, event *device.Net
 	}
 
 	// Apply production phase for enrolled device
-	event.Phase = device.NetworkPhaseProduction
+	event.Phase = device.NetworkPhaseTrusted
 	return a.applyPhase(ctx, event)
 }
 
@@ -110,9 +110,9 @@ func (a *DeviceSDNAdapter) handleDisconnect(ctx context.Context, event *device.N
 		slog.String("port_id", event.PortID),
 		slog.String("device_id", event.DeviceID))
 
-	// Remove all flows for the port
-	if err := a.vlanManager.RemoveFlows(event.PortID); err != nil {
-		a.logger.Warn("failed to remove flows on disconnect",
+	// Remove all zone flows for the port
+	if err := a.zoneFlowManager.RemoveFlows(event.PortID); err != nil {
+		a.logger.Warn("failed to remove zone flows on disconnect",
 			slog.String("port_id", event.PortID),
 			slog.String("error", err.Error()))
 		// Continue with state cleanup even if flow removal fails

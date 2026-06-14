@@ -26,7 +26,9 @@ import (
 	"testing"
 	"time"
 
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -614,7 +616,7 @@ func TestSDNEnrollmentHook_BuildPortPolicy(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			policy := hook.buildPortPolicy(tt.profile, cert)
+			policy, _ := hook.buildPortPolicy(tt.profile, cert)
 
 			if tt.expectPolicy {
 				assert.NotNil(t, policy)
@@ -1045,7 +1047,7 @@ func TestSDNEnrollmentHook_BuildPortPolicy_ACLProtocols(t *testing.T) {
 				},
 			}
 
-			policy := hook.buildPortPolicy(profile, cert)
+			policy, _ := hook.buildPortPolicy(profile, cert)
 			require.NotNil(t, policy)
 			require.Len(t, policy.ACLs, 1)
 
@@ -1177,4 +1179,231 @@ func (m *MockPolicyEngine) GetMonitor() *CertificateMonitor {
 		return nil
 	}
 	return args.Get(0).(*CertificateMonitor)
+}
+
+// TestSDNEnrollmentHook_ActivateDevice_PortBinderCalled verifies that a
+// successful activation invokes the PortBinder callback with the correct serial
+// and port ID so the device record is stamped.
+func TestSDNEnrollmentHook_ActivateDevice_PortBinderCalled(t *testing.T) {
+	mockEngine := &MockPolicyEngine{}
+	mockDAO := &MockDeviceProfileDAO{}
+
+	var binderSerial, binderPortID string
+	binder := func(ctx context.Context, serial, portID string) error {
+		binderSerial = serial
+		binderPortID = portID
+		return nil
+	}
+
+	hook, err := NewSDNEnrollmentHook(SDNEnrollmentHookConfig{
+		Logger:       slog.Default(),
+		PolicyEngine: mockEngine,
+		ProfileDAO:   mockDAO,
+		PortBinder:   binder,
+	})
+	require.NoError(t, err)
+
+	profile := createTestDeviceProfile(1, "Server Profile", "", "SRV-", 100)
+	cert := createEnrollmentCertificate(t, "TestOrg")
+	hook.pendingActivations.Store("SRV-12345", &PendingActivation{
+		PortID:      "tap0abc",
+		Profile:     profile,
+		Certificate: cert,
+		EnrolledAt:  time.Now(),
+	})
+
+	mockEngine.On("ApplyPolicy", "tap0abc", mock.AnythingOfType("*policy.PortPolicy")).
+		Return(nil).Once()
+
+	require.NoError(t, hook.ActivateDevice("SRV-12345"))
+
+	if binderSerial != "SRV-12345" {
+		t.Errorf("expected binder serial SRV-12345, got %q", binderSerial)
+	}
+	if binderPortID != "tap0abc" {
+		t.Errorf("expected binder portID tap0abc, got %q", binderPortID)
+	}
+	mockEngine.AssertExpectations(t)
+}
+
+// TestSDNEnrollmentHook_ActivateDevice_PortBinderError verifies that a binder
+// failure does not roll back the policy application — the device stays on the
+// correct VLAN but activation still returns nil (binder errors are logged, not
+// propagated, to avoid leaving the device in an ambiguous policy state).
+func TestSDNEnrollmentHook_ActivateDevice_PortBinderError(t *testing.T) {
+	mockEngine := &MockPolicyEngine{}
+	mockDAO := &MockDeviceProfileDAO{}
+
+	binder := func(ctx context.Context, serial, portID string) error {
+		return fmt.Errorf("storage unavailable")
+	}
+
+	hook, err := NewSDNEnrollmentHook(SDNEnrollmentHookConfig{
+		Logger:       slog.Default(),
+		PolicyEngine: mockEngine,
+		ProfileDAO:   mockDAO,
+		PortBinder:   binder,
+	})
+	require.NoError(t, err)
+
+	profile := createTestDeviceProfile(1, "Server Profile", "", "SRV-", 100)
+	cert := createEnrollmentCertificate(t, "TestOrg")
+	hook.pendingActivations.Store("SRV-99999", &PendingActivation{
+		PortID:      "tap99",
+		Profile:     profile,
+		Certificate: cert,
+		EnrolledAt:  time.Now(),
+	})
+
+	mockEngine.On("ApplyPolicy", "tap99", mock.AnythingOfType("*policy.PortPolicy")).
+		Return(nil).Once()
+
+	// Binder failure must not propagate — device is on the correct VLAN.
+	require.NoError(t, hook.ActivateDevice("SRV-99999"), "binder error must not propagate")
+
+	// Pending activation was consumed (success path).
+	_, ok := hook.pendingActivations.Load("SRV-99999")
+	assert.False(t, ok, "pending activation should be removed even when binder fails")
+
+	mockEngine.AssertExpectations(t)
+}
+
+// TestBuildPortPolicy_ZoneCrossCheck verifies zone authoritative behaviour
+// and mismatch quarantine in buildPortPolicy.
+func TestBuildPortPolicy_ZoneCrossCheck(t *testing.T) {
+	t.Parallel()
+
+	zones, err := zone.Resolve(nil)
+	require.NoError(t, err)
+
+	extractor := NewX509PolicyExtractor(WithPolicyExtractorZones(zones))
+
+	buildHook := func(t *testing.T) *SDNEnrollmentHook {
+		t.Helper()
+		mockEngine := &MockPolicyEngine{}
+		mockDAO := &MockDeviceProfileDAO{}
+		hook, err := NewSDNEnrollmentHook(SDNEnrollmentHookConfig{
+			Logger:       slog.Default(),
+			PolicyEngine: mockEngine,
+			ProfileDAO:   mockDAO,
+			Extractor:    extractor,
+			Zones:        zones,
+		})
+		require.NoError(t, err)
+		return hook
+	}
+
+	certWithZone := func(t *testing.T, org, zoneName string) *x509.Certificate {
+		t.Helper()
+		ext, err := quicbaasca.CreateNetworkZoneExtension(zoneName)
+		require.NoError(t, err)
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		require.NoError(t, err)
+		tmpl := x509.Certificate{
+			SerialNumber: big.NewInt(42),
+			Subject:      pkix.Name{Organization: []string{org}, CommonName: "device-sn"},
+			NotBefore:    time.Now().Add(-time.Minute),
+			NotAfter:     time.Now().Add(24 * time.Hour),
+			ExtraExtensions: []pkix.Extension{ext},
+		}
+		der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+		require.NoError(t, err)
+		cert, err := x509.ParseCertificate(der)
+		require.NoError(t, err)
+		return cert
+	}
+
+	certNoZone := func(t *testing.T, org string) *x509.Certificate {
+		t.Helper()
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		require.NoError(t, err)
+		tmpl := x509.Certificate{
+			SerialNumber: big.NewInt(43),
+			Subject:      pkix.Name{Organization: []string{org}},
+			NotBefore:    time.Now().Add(-time.Minute),
+			NotAfter:     time.Now().Add(24 * time.Hour),
+		}
+		der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+		require.NoError(t, err)
+		cert, err := x509.ParseCertificate(der)
+		require.NoError(t, err)
+		return cert
+	}
+
+	// profileWithZone creates a profile whose post-enrollment network is stored
+	// under the default key "trusted" (entities.DefaultPostEnrollmentNetwork).
+	profileWithZone := func(profileZone string) *entities.DeviceProfile {
+		return &entities.DeviceProfile{
+			ID:   1,
+			Name: "test-profile",
+			Networks: map[string]*entities.NetworkPhaseConfig{
+				entities.DefaultPostEnrollmentNetwork: {
+					VLAN: 200,
+					Zone: profileZone,
+				},
+			},
+		}
+	}
+
+	t.Run("cert zone matches profile zone - cert is authoritative", func(t *testing.T) {
+		hook := buildHook(t)
+		cert := certWithZone(t, "org", "trusted")
+		profile := profileWithZone("trusted")
+
+		policy, err := hook.buildPortPolicy(profile, cert)
+		require.NoError(t, err)
+		require.NotNil(t, policy)
+		assert.Equal(t, zone.Zone("trusted"), policy.Zone)
+	})
+
+	t.Run("cert zone differs from profile zone - quarantine applied", func(t *testing.T) {
+		hook := buildHook(t)
+		// Cert says "trusted" but profile says "provisioning" → mismatch
+		cert := certWithZone(t, "org", "trusted")
+		profile := profileWithZone("provisioning")
+
+		policy, err := hook.buildPortPolicy(profile, cert)
+		require.NotNil(t, policy)
+		require.Error(t, err)
+		var mismatch ErrZoneMismatch
+		assert.ErrorAs(t, err, &mismatch)
+		assert.Equal(t, zone.Zone("trusted"), mismatch.CertZone)
+		assert.Equal(t, zone.Zone("provisioning"), mismatch.ProfileZone)
+		// Policy zone is set to quarantine
+		quarantine, _ := zone.ZoneForRole(zones, zone.LifecycleRoleQuarantine)
+		assert.Equal(t, quarantine, policy.Zone)
+	})
+
+	t.Run("cert without zone extension falls back to profile zone", func(t *testing.T) {
+		hook := buildHook(t)
+		cert := certNoZone(t, "org")
+		profile := profileWithZone("trusted")
+
+		policy, err := hook.buildPortPolicy(profile, cert)
+		require.NoError(t, err)
+		require.NotNil(t, policy)
+		// Backward-compat: profile zone is used
+		assert.Equal(t, zone.Zone("trusted"), policy.Zone)
+	})
+
+	t.Run("no extractor configured - profile zone used unconditionally", func(t *testing.T) {
+		mockEngine := &MockPolicyEngine{}
+		mockDAO := &MockDeviceProfileDAO{}
+		hook, err := NewSDNEnrollmentHook(SDNEnrollmentHookConfig{
+			Logger:       slog.Default(),
+			PolicyEngine: mockEngine,
+			ProfileDAO:   mockDAO,
+			// No Extractor — zone cross-check is skipped
+		})
+		require.NoError(t, err)
+
+		cert := certWithZone(t, "org", "trusted")
+		profile := profileWithZone("production")
+
+		// Without extractor there is no cross-check even if zones differ
+		policy, pErr := hook.buildPortPolicy(profile, cert)
+		require.NoError(t, pErr)
+		require.NotNil(t, policy)
+		assert.Equal(t, zone.Zone("production"), policy.Zone)
+	})
 }

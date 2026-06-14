@@ -122,6 +122,16 @@ func (m *mockDeviceService) FindBySerial(ctx context.Context, serial string) (*e
 	return nil, errors.New("device not found")
 }
 
+// FindByHostname finds a device by its IDevID hostname.
+func (m *mockDeviceService) FindByHostname(ctx context.Context, hostname string) (*entities.Device, error) {
+	for _, d := range m.devices {
+		if d.Hostname == hostname {
+			return d, nil
+		}
+	}
+	return nil, errors.New("device not found by hostname")
+}
+
 // Mock profile service for testing
 type mockProfileService struct {
 	profiles               map[uint64]*entities.DeviceProfile
@@ -1088,14 +1098,10 @@ func TestProfileConversions(t *testing.T) {
 			ID:   1,
 			Name: "TestProfile",
 			Role: "server",
-			ProvisioningNetwork: &NetworkPhaseRequest{
-				VLAN: 10,
-			},
-			ProductionNetwork: &NetworkPhaseRequest{
-				VLAN: 100,
-			},
-			QuarantineNetwork: &NetworkPhaseRequest{
-				VLAN: 999,
+			Networks: map[string]*NetworkPhaseRequest{
+				entities.DefaultEnrollmentNetwork:    {VLAN: 10},
+				entities.DefaultPostEnrollmentNetwork: {VLAN: 100},
+				entities.DefaultFailureNetwork:       {VLAN: 999},
 			},
 			PlatformdConfig: &PlatformdConfigRequest{
 				ConfigType: "yaml",
@@ -1145,9 +1151,9 @@ func TestProfileConversions(t *testing.T) {
 		resp := handler.profileToResponse(profile)
 		assert.Equal(t, uint64(1), resp.ID)
 		assert.Equal(t, "TestProfile", resp.Name)
-		assert.NotNil(t, resp.ProvisioningNetwork)
-		assert.NotNil(t, resp.ProductionNetwork)
-		assert.NotNil(t, resp.QuarantineNetwork)
+		assert.NotNil(t, resp.Networks[entities.DefaultEnrollmentNetwork])
+		assert.NotNil(t, resp.Networks[entities.DefaultPostEnrollmentNetwork])
+		assert.NotNil(t, resp.Networks[entities.DefaultFailureNetwork])
 		assert.NotNil(t, resp.PlatformdConfig)
 		assert.NotNil(t, resp.MatchRules)
 	})

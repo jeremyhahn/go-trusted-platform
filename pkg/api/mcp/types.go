@@ -262,8 +262,53 @@ type IPAMPoolCreateRequest struct {
 	Name                 string   `json:"name"`
 	CIDR                 string   `json:"cidr"`
 	Gateway              string   `json:"gateway,omitempty"`
+	Zone                 string   `json:"zone,omitempty"`
+	Description          string   `json:"description,omitempty"`
 	DNS                  []string `json:"dns,omitempty"`
 	LeaseDurationSeconds int64    `json:"lease_duration_seconds,omitempty"`
+}
+
+// IPAMPoolUpdateRequest represents an IPAM pool update request for MCP.
+// CIDR is immutable and must not be specified.
+type IPAMPoolUpdateRequest struct {
+	Name                 string `json:"name,omitempty"`
+	Gateway              string `json:"gateway,omitempty"`
+	Zone                 string `json:"zone,omitempty"`
+	Description          string `json:"description,omitempty"`
+	LeaseDurationSeconds int64  `json:"lease_duration_seconds,omitempty"`
+}
+// NetworkZonePathRequest represents a directed traffic path for zone creation/update.
+type NetworkZonePathRequest struct {
+	Zone     string   `json:"zone"`
+	Services []string `json:"services,omitempty"`
+}
+
+// NetworkZoneCreateRequest represents a network zone creation request for MCP.
+type NetworkZoneCreateRequest struct {
+	Name             string                 `json:"name"`
+	InternetIngress  bool                   `json:"internet_ingress,omitempty"`
+	IsolateFrom      []string               `json:"isolate_from,omitempty"`
+	AllowTo          []*NetworkZonePathRequest `json:"allow_to,omitempty"`
+	Services         []string               `json:"services,omitempty"`
+	Isolate          bool                   `json:"isolate,omitempty"`
+	IsolatePerTenant bool                   `json:"isolate_per_tenant,omitempty"`
+	OOB              bool                   `json:"oob,omitempty"`
+	LifecycleRole    string                 `json:"lifecycle_role,omitempty"`
+	Omit             bool                   `json:"omit,omitempty"`
+}
+
+// NetworkZoneUpdateRequest represents a network zone update request for MCP.
+// Name is the identifier of the zone to update and must not change.
+type NetworkZoneUpdateRequest struct {
+	InternetIngress  bool                   `json:"internet_ingress,omitempty"`
+	IsolateFrom      []string               `json:"isolate_from,omitempty"`
+	AllowTo          []*NetworkZonePathRequest `json:"allow_to,omitempty"`
+	Services         []string               `json:"services,omitempty"`
+	Isolate          bool                   `json:"isolate,omitempty"`
+	IsolatePerTenant bool                   `json:"isolate_per_tenant,omitempty"`
+	OOB              bool                   `json:"oob,omitempty"`
+	LifecycleRole    string                 `json:"lifecycle_role,omitempty"`
+	Omit             bool                   `json:"omit,omitempty"`
 }
 
 // ServiceProvider is the interface that MCP uses to access platform services.
@@ -373,12 +418,22 @@ type ServiceProvider interface {
 	GatewayBGPPrefixes(ctx context.Context) ([]interface{}, error)
 
 	// Gateway IPAM operations
-	GatewayIPAMPools(ctx context.Context) ([]interface{}, error)
+	GatewayIPAMPools(ctx context.Context, zone string) ([]interface{}, error)
+	GatewayIPAMPoolGet(ctx context.Context, poolID string) (interface{}, error)
 	GatewayIPAMPoolCreate(ctx context.Context, req *IPAMPoolCreateRequest) (interface{}, error)
+	GatewayIPAMPoolUpdate(ctx context.Context, poolID string, req *IPAMPoolUpdateRequest) (interface{}, error)
 	GatewayIPAMPoolDelete(ctx context.Context, poolID string) error
 	GatewayIPAMAllocate(ctx context.Context, poolID string, deviceID string, hostname string) (interface{}, error)
 	GatewayIPAMRelease(ctx context.Context, ip string) error
 	GatewayIPAMAllocations(ctx context.Context, poolID string) ([]interface{}, error)
+
+	// Gateway Network Zone operations
+	GatewayNetworkZoneCreate(ctx context.Context, req *NetworkZoneCreateRequest) (interface{}, error)
+	GatewayNetworkZoneUpdate(ctx context.Context, name string, req *NetworkZoneUpdateRequest) (interface{}, error)
+	GatewayNetworkZoneDelete(ctx context.Context, name string) (bool, error)
+	GatewayNetworkZoneList(ctx context.Context, lifecycleRole string) ([]interface{}, error)
+	GatewayNetworkZoneAssign(ctx context.Context, network string, zoneName string) (bool, error)
+	GatewayNetworkZoneVLAN(ctx context.Context, zoneName string) (uint16, error)
 
 	// Health operations
 	Health(ctx context.Context) (interface{}, error)

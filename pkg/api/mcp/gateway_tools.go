@@ -134,6 +134,24 @@ var ErrIPAMAllocationFailed = &GatewayError{
 	Message: "IP allocation failed",
 }
 
+// ErrNetworkZoneNameRequired indicates a zone name is required.
+var ErrNetworkZoneNameRequired = &GatewayError{
+	Code:    "NETWORK_ZONE_NAME_REQUIRED",
+	Message: "zone name is required",
+}
+
+// ErrNetworkZoneNetworkRequired indicates a network name is required for assign.
+var ErrNetworkZoneNetworkRequired = &GatewayError{
+	Code:    "NETWORK_ZONE_NETWORK_REQUIRED",
+	Message: "network name is required",
+}
+
+// ErrNetworkZoneTargetRequired indicates a target zone name is required for assign.
+var ErrNetworkZoneTargetRequired = &GatewayError{
+	Code:    "NETWORK_ZONE_TARGET_REQUIRED",
+	Message: "target zone name is required",
+}
+
 // =============================================================================
 // Gateway Tool Registration
 // =============================================================================
@@ -233,16 +251,36 @@ func (r *ToolRegistry) registerGatewayTools() {
 	// IPAM operations
 	r.addTool(ToolDefinition{
 		Name:        "gateway_ipam_pools",
-		Description: "List all IPAM (IP Address Management) pools with their CIDR, gateway, and allocation statistics",
+		Description: "List IPAM (IP Address Management) pools with their CIDR, gateway, and allocation statistics; optionally filter by zone",
 		InputSchema: map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{},
+			"type": "object",
+			"properties": map[string]interface{}{
+				"zone": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional zone filter (e.g. 'trusted', 'provisioning'); empty returns all pools",
+				},
+			},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "gateway_ipam_pool_get",
+		Description: "Get details of a specific IPAM pool by its ID",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"pool_id": map[string]interface{}{
+					"type":        "string",
+					"description": "The ID of the IPAM pool to retrieve",
+				},
+			},
+			"required": []string{"pool_id"},
 		},
 	})
 
 	r.addTool(ToolDefinition{
 		Name:        "gateway_ipam_pool_create",
-		Description: "Create a new IPAM pool with a name, CIDR range, optional gateway, DNS servers, and lease duration",
+		Description: "Create a new IPAM pool with a name, CIDR range, optional gateway, zone, DNS servers, and lease duration",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -258,6 +296,14 @@ func (r *ToolRegistry) registerGatewayTools() {
 					"type":        "string",
 					"description": "Optional gateway IP address for the pool",
 				},
+				"zone": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional network zone the pool serves (e.g., trusted)",
+				},
+				"description": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional human-readable pool description",
+				},
 				"dns": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
@@ -269,6 +315,41 @@ func (r *ToolRegistry) registerGatewayTools() {
 				},
 			},
 			"required": []string{"name", "cidr"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "gateway_ipam_pool_update",
+		Description: "Update mutable fields of an existing IPAM pool. CIDR cannot be changed after creation.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"pool_id": map[string]interface{}{
+					"type":        "string",
+					"description": "The ID of the IPAM pool to update",
+				},
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "Updated display name for the pool",
+				},
+				"gateway": map[string]interface{}{
+					"type":        "string",
+					"description": "Updated gateway IP address",
+				},
+				"zone": map[string]interface{}{
+					"type":        "string",
+					"description": "Updated zone (e.g. 'trusted', 'provisioning')",
+				},
+				"description": map[string]interface{}{
+					"type":        "string",
+					"description": "Updated description",
+				},
+				"lease_duration_seconds": map[string]interface{}{
+					"type":        "integer",
+					"description": "Updated lease duration in seconds (0 = never expire)",
+				},
+			},
+			"required": []string{"pool_id"},
 		},
 	})
 
@@ -334,6 +415,128 @@ func (r *ToolRegistry) registerGatewayTools() {
 				"pool_id": map[string]interface{}{
 					"type":        "string",
 					"description": "Optional pool ID to filter allocations by",
+				},
+			},
+		},
+	})
+	r.registerGatewayZoneTools()
+}
+
+// registerGatewayZoneTools registers MCP tools for SDN network trust zone management.
+func (r *ToolRegistry) registerGatewayZoneTools() {
+	r.addTool(ToolDefinition{
+		Name:        "gateway_zone_list",
+		Description: "List all SDN network trust zones, optionally filtered by lifecycle role",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"lifecycle_role": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional filter: provisioning, quarantine (empty returns all)",
+				},
+			},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "gateway_zone_create",
+		Description: "Create a new SDN network trust zone",
+		InputSchema: map[string]interface{}{
+			"type":     "object",
+			"required": []string{"name"},
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "Unique zone name",
+				},
+				"internet_ingress": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Zone accepts internet ingress traffic",
+				},
+				"isolate": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Fully isolate zone from all others",
+				},
+				"isolate_per_tenant": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Isolate tenants within the zone from each other",
+				},
+				"oob": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Out-of-band management zone",
+				},
+				"lifecycle_role": map[string]interface{}{
+					"type":        "string",
+					"description": "Lifecycle role (provisioning, quarantine)",
+				},
+			},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "gateway_zone_update",
+		Description: "Update policy settings of an existing SDN network trust zone. Returns restart_required when the flow matrix must be rebuilt.",
+		InputSchema: map[string]interface{}{
+			"type":     "object",
+			"required": []string{"name"},
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "Name of the zone to update",
+				},
+				"internet_ingress": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Zone accepts internet ingress traffic",
+				},
+				"isolate": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Fully isolate zone from all others",
+				},
+				"isolate_per_tenant": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Isolate tenants within the zone from each other",
+				},
+				"oob": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Out-of-band management zone",
+				},
+				"lifecycle_role": map[string]interface{}{
+					"type":        "string",
+					"description": "Lifecycle role (provisioning, quarantine)",
+				},
+			},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "gateway_zone_delete",
+		Description: "Delete an SDN network trust zone by name. Fails if the zone is the sole holder of a required lifecycle role.",
+		InputSchema: map[string]interface{}{
+			"type":     "object",
+			"required": []string{"name"},
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "Name of the zone to delete",
+				},
+			},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "gateway_zone_assign",
+		Description: "Assign a network segment to a trust zone. Returns restart_required when the flow matrix must be rebuilt.",
+		InputSchema: map[string]interface{}{
+			"type":     "object",
+			"required": []string{"network", "zone"},
+			"properties": map[string]interface{}{
+				"network": map[string]interface{}{
+					"type":        "string",
+					"description": "Network segment name",
+				},
+				"zone": map[string]interface{}{
+					"type":        "string",
+					"description": "Target trust zone name",
 				},
 			},
 		},
@@ -416,11 +619,25 @@ func (r *ToolRegistry) executeGatewayBGPPrefixes(ctx context.Context, args map[s
 }
 
 func (r *ToolRegistry) executeGatewayIPAMPools(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	pools, err := r.service.GatewayIPAMPools(ctx)
+	zone := getString(args, "zone")
+	pools, err := r.service.GatewayIPAMPools(ctx, zone)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]interface{}{"pools": pools}, nil
+}
+
+func (r *ToolRegistry) executeGatewayIPAMPoolGet(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	poolID := getString(args, "pool_id")
+	if poolID == "" {
+		return nil, ErrIPAMPoolIDRequired
+	}
+
+	result, err := r.service.GatewayIPAMPoolGet(ctx, poolID)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
 }
 
 func (r *ToolRegistry) executeGatewayIPAMPoolCreate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -438,11 +655,34 @@ func (r *ToolRegistry) executeGatewayIPAMPoolCreate(ctx context.Context, args ma
 		Name:                 name,
 		CIDR:                 cidr,
 		Gateway:              getString(args, "gateway"),
+		Zone:                 getString(args, "zone"),
+		Description:          getString(args, "description"),
 		DNS:                  getStringSlice(args, "dns"),
 		LeaseDurationSeconds: getInt64(args, "lease_duration_seconds"),
 	}
 
 	result, err := r.service.GatewayIPAMPoolCreate(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeGatewayIPAMPoolUpdate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	poolID := getString(args, "pool_id")
+	if poolID == "" {
+		return nil, ErrIPAMPoolIDRequired
+	}
+
+	req := &IPAMPoolUpdateRequest{
+		Name:                 getString(args, "name"),
+		Gateway:              getString(args, "gateway"),
+		Zone:                 getString(args, "zone"),
+		Description:          getString(args, "description"),
+		LeaseDurationSeconds: getInt64(args, "lease_duration_seconds"),
+	}
+
+	result, err := r.service.GatewayIPAMPoolUpdate(ctx, poolID, req)
 	if err != nil {
 		return nil, err
 	}
@@ -501,4 +741,90 @@ func (r *ToolRegistry) executeGatewayIPAMAllocations(ctx context.Context, args m
 		return nil, err
 	}
 	return map[string]interface{}{"allocations": allocations}, nil
+}
+
+// =============================================================================
+// Network Zone Execute Functions
+// =============================================================================
+
+func (r *ToolRegistry) executeGatewayZoneList(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	lifecycleRole := getString(args, "lifecycle_role")
+	zones, err := r.service.GatewayNetworkZoneList(ctx, lifecycleRole)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"zones": zones}, nil
+}
+
+func (r *ToolRegistry) executeGatewayZoneCreate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	name := getString(args, "name")
+	if name == "" {
+		return nil, ErrNetworkZoneNameRequired
+	}
+	req := &NetworkZoneCreateRequest{
+		Name:             name,
+		InternetIngress:  getBool(args, "internet_ingress"),
+		Isolate:          getBool(args, "isolate"),
+		IsolatePerTenant: getBool(args, "isolate_per_tenant"),
+		OOB:              getBool(args, "oob"),
+		LifecycleRole:    getString(args, "lifecycle_role"),
+	}
+	result, err := r.service.GatewayNetworkZoneCreate(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeGatewayZoneUpdate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	name := getString(args, "name")
+	if name == "" {
+		return nil, ErrNetworkZoneNameRequired
+	}
+	req := &NetworkZoneUpdateRequest{
+		InternetIngress:  getBool(args, "internet_ingress"),
+		Isolate:          getBool(args, "isolate"),
+		IsolatePerTenant: getBool(args, "isolate_per_tenant"),
+		OOB:              getBool(args, "oob"),
+		LifecycleRole:    getString(args, "lifecycle_role"),
+	}
+	result, err := r.service.GatewayNetworkZoneUpdate(ctx, name, req)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeGatewayZoneDelete(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	name := getString(args, "name")
+	if name == "" {
+		return nil, ErrNetworkZoneNameRequired
+	}
+	restartRequired, err := r.service.GatewayNetworkZoneDelete(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"success":          true,
+		"restart_required": restartRequired,
+	}, nil
+}
+
+func (r *ToolRegistry) executeGatewayZoneAssign(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	network := getString(args, "network")
+	if network == "" {
+		return nil, ErrNetworkZoneNetworkRequired
+	}
+	zoneName := getString(args, "zone")
+	if zoneName == "" {
+		return nil, ErrNetworkZoneTargetRequired
+	}
+	restartRequired, err := r.service.GatewayNetworkZoneAssign(ctx, network, zoneName)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"success":          true,
+		"restart_required": restartRequired,
+	}, nil
 }

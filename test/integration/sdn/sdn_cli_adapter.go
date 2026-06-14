@@ -20,10 +20,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -35,6 +38,10 @@ import (
 // This adapter executes the platformctl binary and parses JSON output.
 type SDNCLIAdapter struct {
 	binaryPath string
+	socketPath string
+	grpcAddr   string
+	configPath string
+	configDir  string
 }
 
 // NewSDNCLIAdapter creates a new CLI adapter for SDN integration testing.
@@ -47,37 +54,88 @@ func (c *SDNCLIAdapter) Name() string {
 	return "CLI"
 }
 
-// Setup locates the platformctl binary.
+// Setup locates the platformctl binary and creates a temporary config file
+// pointing to the test daemon's Unix socket.
 func (c *SDNCLIAdapter) Setup(ctx context.Context) error {
-	// Check common locations for platformctl
-	paths := []string{
-		"platformctl",
-		"/usr/local/bin/platformctl",
-		"/usr/bin/platformctl",
-		"./bin/platformctl",
-		"../../bin/platformctl",
-	}
-
-	for _, p := range paths {
-		if _, err := exec.LookPath(p); err == nil {
-			c.binaryPath = p
-			return nil
-		}
-	}
-
-	// Check if PLATFORMCTL_PATH is set
+	// Resolve binary path: prefer PLATFORMCTL_PATH env var, then well-known locations.
 	if envPath := os.Getenv("PLATFORMCTL_PATH"); envPath != "" {
 		if _, err := os.Stat(envPath); err == nil {
 			c.binaryPath = envPath
-			return nil
 		}
 	}
+	if c.binaryPath == "" {
+		for _, p := range []string{"/tmp/platformctl", "platformctl", "/usr/local/bin/platformctl"} {
+			if _, err := exec.LookPath(p); err == nil {
+				c.binaryPath = p
+				break
+			}
+		}
+	}
+	if c.binaryPath == "" {
+		return ErrAdapterSetupFailed{Protocol: "CLI", Err: fmt.Errorf("platformctl binary not found")}
+	}
 
-	return ErrAdapterSetupFailed{Protocol: "CLI", Err: fmt.Errorf("platformctl binary not found")}
+	// Resolve socket path: check all three env vars set by run-integration-tests.sh
+	// (PLATFORMD_SOCKET, PLATFORM_UNIX_SOCKET, PLATFORM_SOCKET_PATH) before falling
+	// back to the hardcoded default. This mirrors the convention in cli_adapter.go.
+	c.socketPath = os.Getenv(EnvPlatformdSocket)
+	if c.socketPath == "" {
+		c.socketPath = os.Getenv("PLATFORM_UNIX_SOCKET")
+	}
+	if c.socketPath == "" {
+		c.socketPath = os.Getenv("PLATFORM_SOCKET_PATH")
+	}
+	if c.socketPath == "" {
+		c.socketPath = DefaultPlatformdSocket
+	}
+
+	// Resolve gRPC address for the config file.
+	c.grpcAddr = os.Getenv(EnvPlatformdGRPCEndpoint)
+	if c.grpcAddr == "" {
+		c.grpcAddr = DefaultPlatformdGRPCEndpoint
+	}
+
+	if err := c.createTestConfig(); err != nil {
+		return ErrAdapterSetupFailed{Protocol: "CLI", Err: err}
+	}
+
+	return nil
 }
 
-// Teardown is a no-op for CLI adapter.
+// createTestConfig writes a temporary platformctl config file that points
+// to the test daemon's Unix socket and gRPC address.
+func (c *SDNCLIAdapter) createTestConfig() error {
+	tmpDir, err := os.MkdirTemp("", "platformctl-sdn-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp config dir: %w", err)
+	}
+	c.configDir = tmpDir
+
+	configContent := fmt.Sprintf(`current_context: integration-test
+contexts:
+  - name: integration-test
+    type: local
+    local:
+      socket_path: %s
+      grpc_addr: %s
+`, c.socketPath, c.grpcAddr)
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+		return fmt.Errorf("failed to write temp config: %w", err)
+	}
+	c.configPath = configPath
+	log.Printf("[CLI] created test config at %s (socket=%s)", configPath, c.socketPath)
+	return nil
+}
+
+// Teardown removes temporary config files created during setup.
 func (c *SDNCLIAdapter) Teardown() error {
+	if c.configDir != "" {
+		os.RemoveAll(c.configDir)
+		c.configDir = ""
+		c.configPath = ""
+	}
 	return nil
 }
 
@@ -86,18 +144,23 @@ func (c *SDNCLIAdapter) Teardown() error {
 // =============================================================================
 
 // runCommand executes a platformctl command and returns JSON output.
+// It prepends --output json and --config/--context flags so every invocation
+// connects to the test daemon rather than the system default socket.
 func (c *SDNCLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
-	// Append --output json for structured output
-	args = append(args, "--output", "json")
+	fullArgs := []string{"--output", "json"}
+	if c.configPath != "" {
+		fullArgs = append(fullArgs, "--config", c.configPath, "--context", "integration-test")
+	}
+	fullArgs = append(fullArgs, args...)
 
-	cmd := exec.CommandContext(ctx, c.binaryPath, args...)
+	cmd := exec.CommandContext(ctx, c.binaryPath, fullArgs...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("command failed: %w, stderr: %s", err, stderr.String())
+		return nil, fmt.Errorf("command %q failed: %w; stderr: %s", args[0], err, stderr.String())
 	}
 
 	return stdout.Bytes(), nil
@@ -239,9 +302,101 @@ func (c *SDNCLIAdapter) WithdrawPrefix(ctx context.Context, prefix string) error
 // IPAM Operations
 // =============================================================================
 
-// ListPools returns all IPAM pools via CLI.
-func (c *SDNCLIAdapter) ListPools(ctx context.Context) (*IPAMPoolListResponse, error) {
-	output, err := c.runCommand(ctx, "sdn", "ipam", "pool", "list")
+// CreatePool creates a new IPAM pool via CLI.
+func (c *SDNCLIAdapter) CreatePool(ctx context.Context, req IPAMPoolCreateRequest) (*IPAMPoolEntry, error) {
+	args := []string{"sdn", "ipam", "pool", "create",
+		"--name", req.Name,
+		"--cidr", req.CIDR,
+	}
+	if req.ID != "" {
+		args = append(args, "--id", req.ID)
+	}
+	if req.Gateway != "" {
+		args = append(args, "--gateway", req.Gateway)
+	}
+	if req.Zone != "" {
+		args = append(args, "--zone", req.Zone)
+	}
+	if req.Description != "" {
+		args = append(args, "--description", req.Description)
+	}
+	if req.LeaseDuration > 0 {
+		args = append(args, "--lease-seconds", fmt.Sprintf("%d", int64(req.LeaseDuration.Seconds())))
+	}
+
+	output, err := c.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var entry cliIPAMPoolEntry
+	if err := json.Unmarshal(output, &entry); err != nil {
+		return nil, fmt.Errorf("failed to parse created pool: %w", err)
+	}
+
+	return entry.toEntry(), nil
+}
+
+// GetPool retrieves an IPAM pool by ID via CLI.
+func (c *SDNCLIAdapter) GetPool(ctx context.Context, poolID string) (*IPAMPoolEntry, error) {
+	output, err := c.runCommand(ctx, "sdn", "ipam", "pool", "get", "--id", poolID)
+	if err != nil {
+		return nil, err
+	}
+
+	var entry cliIPAMPoolEntry
+	if err := json.Unmarshal(output, &entry); err != nil {
+		return nil, fmt.Errorf("failed to parse pool: %w", err)
+	}
+
+	return entry.toEntry(), nil
+}
+
+// UpdatePool updates mutable fields of an IPAM pool via CLI.
+func (c *SDNCLIAdapter) UpdatePool(ctx context.Context, poolID string, req IPAMPoolUpdateRequest) (*IPAMPoolEntry, error) {
+	args := []string{"sdn", "ipam", "pool", "update", "--id", poolID}
+	if req.Name != "" {
+		args = append(args, "--name", req.Name)
+	}
+	if req.Gateway != "" {
+		args = append(args, "--gateway", req.Gateway)
+	}
+	if req.Zone != "" {
+		args = append(args, "--zone", req.Zone)
+	}
+	if req.Description != "" {
+		args = append(args, "--description", req.Description)
+	}
+	if req.LeaseDuration > 0 {
+		args = append(args, "--lease-seconds", fmt.Sprintf("%d", int64(req.LeaseDuration.Seconds())))
+	}
+
+	output, err := c.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var entry cliIPAMPoolEntry
+	if err := json.Unmarshal(output, &entry); err != nil {
+		return nil, fmt.Errorf("failed to parse updated pool: %w", err)
+	}
+
+	return entry.toEntry(), nil
+}
+
+// DeletePool removes an IPAM pool by ID via CLI.
+func (c *SDNCLIAdapter) DeletePool(ctx context.Context, poolID string) error {
+	_, err := c.runCommand(ctx, "sdn", "ipam", "pool", "delete", "--id", poolID)
+	return err
+}
+
+// ListPools returns all IPAM pools, optionally filtered by zone, via CLI.
+func (c *SDNCLIAdapter) ListPools(ctx context.Context, zone string) (*IPAMPoolListResponse, error) {
+	args := []string{"sdn", "ipam", "pool", "list"}
+	if zone != "" {
+		args = append(args, "--zone", zone)
+	}
+	output, err := c.runCommand(ctx, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -542,6 +697,8 @@ type cliIPAMPoolEntry struct {
 	Name             string   `json:"name"`
 	CIDR             string   `json:"cidr"`
 	Gateway          string   `json:"gateway"`
+	Zone             string   `json:"zone"`
+	Description      string   `json:"description"`
 	TotalIPs         int64    `json:"total_ips"`
 	AllocatedIPs     int64    `json:"allocated_ips"`
 	AvailableIPs     int64    `json:"available_ips"`
@@ -550,21 +707,27 @@ type cliIPAMPoolEntry struct {
 	LeaseDurationSec int64    `json:"lease_duration_sec"`
 }
 
+func (e *cliIPAMPoolEntry) toEntry() *IPAMPoolEntry {
+	return &IPAMPoolEntry{
+		ID:             e.ID,
+		Name:           e.Name,
+		CIDR:           e.CIDR,
+		Gateway:        e.Gateway,
+		Zone:           e.Zone,
+		Description:    e.Description,
+		TotalIPs:       e.TotalIPs,
+		AllocatedIPs:   e.AllocatedIPs,
+		AvailableIPs:   e.AvailableIPs,
+		UtilizationPct: e.UtilizationPct,
+		DNS:            e.DNS,
+		LeaseDuration:  time.Duration(e.LeaseDurationSec) * time.Second,
+	}
+}
+
 func (r *cliIPAMPoolListResponse) toResponse() *IPAMPoolListResponse {
 	pools := make([]IPAMPoolEntry, 0, len(r.Pools))
 	for _, p := range r.Pools {
-		pools = append(pools, IPAMPoolEntry{
-			ID:             p.ID,
-			Name:           p.Name,
-			CIDR:           p.CIDR,
-			Gateway:        p.Gateway,
-			TotalIPs:       p.TotalIPs,
-			AllocatedIPs:   p.AllocatedIPs,
-			AvailableIPs:   p.AvailableIPs,
-			UtilizationPct: p.UtilizationPct,
-			DNS:            p.DNS,
-			LeaseDuration:  time.Duration(p.LeaseDurationSec) * time.Second,
-		})
+		pools = append(pools, *p.toEntry())
 	}
 	return &IPAMPoolListResponse{
 		Pools:      pools,
@@ -673,6 +836,158 @@ func (r *cliDHCPLeaseListResponse) toResponse() *DHCPLeaseListResponse {
 		Leases:     leases,
 		TotalCount: r.TotalCount,
 	}
+}
+
+// =============================================================================
+// Network Zone Operations
+// =============================================================================
+
+// cliNetworkZoneConfig mirrors the JSON output of platformv1.NetworkZoneConfig.
+type cliNetworkZoneConfig struct {
+	Name             string `json:"name,omitempty"`
+	InternetIngress  bool   `json:"internet_ingress,omitempty"`
+	Isolate          bool   `json:"isolate,omitempty"`
+	IsolatePerTenant bool   `json:"isolate_per_tenant,omitempty"`
+	Oob              bool   `json:"oob,omitempty"`
+	LifecycleRole    string `json:"lifecycle_role,omitempty"`
+}
+
+// cliNetworkZone mirrors the JSON output of platformv1.NetworkZone.
+type cliNetworkZone struct {
+	Config          *cliNetworkZoneConfig `json:"config,omitempty"`
+	RestartRequired bool                  `json:"restart_required,omitempty"`
+	CreatedAt       *cliTimestamp         `json:"created_at,omitempty"`
+	UpdatedAt       *cliTimestamp         `json:"updated_at,omitempty"`
+}
+
+// cliTimestamp mirrors google.protobuf.Timestamp JSON shape.
+type cliTimestamp struct {
+	Seconds int64 `json:"seconds,omitempty"`
+	Nanos   int32 `json:"nanos,omitempty"`
+}
+
+func (t *cliTimestamp) AsTime() time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return time.Unix(t.Seconds, int64(t.Nanos))
+}
+
+func (z *cliNetworkZone) toEntry() *ZoneEntry {
+	entry := &ZoneEntry{RestartRequired: z.RestartRequired}
+	if z.Config != nil {
+		entry.Name = z.Config.Name
+		entry.InternetIngress = z.Config.InternetIngress
+		entry.Isolate = z.Config.Isolate
+		entry.IsolatePerTenant = z.Config.IsolatePerTenant
+		entry.OOB = z.Config.Oob
+		entry.LifecycleRole = z.Config.LifecycleRole
+	}
+	entry.CreatedAt = z.CreatedAt.AsTime()
+	entry.UpdatedAt = z.UpdatedAt.AsTime()
+	return entry
+}
+
+// CreateZone creates a new network trust zone via CLI.
+func (c *SDNCLIAdapter) CreateZone(ctx context.Context, req ZoneCreateRequest) (*ZoneEntry, error) {
+	args := []string{"sdn", "zone", "create", "--name", req.Name}
+	if req.InternetIngress {
+		args = append(args, "--internet-ingress")
+	}
+	if req.Isolate {
+		args = append(args, "--isolate")
+	}
+	if req.IsolatePerTenant {
+		args = append(args, "--isolate-per-tenant")
+	}
+	if req.OOB {
+		args = append(args, "--oob")
+	}
+	if req.LifecycleRole != "" {
+		args = append(args, "--lifecycle-role", req.LifecycleRole)
+	}
+	output, err := c.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	var z cliNetworkZone
+	if err := json.Unmarshal(output, &z); err != nil {
+		return nil, fmt.Errorf("failed to parse zone create response: %w", err)
+	}
+	return z.toEntry(), nil
+}
+
+// UpdateZone updates an existing network trust zone via CLI.
+func (c *SDNCLIAdapter) UpdateZone(ctx context.Context, name string, req ZoneUpdateRequest) (*ZoneEntry, error) {
+	args := []string{"sdn", "zone", "update", "--name", name}
+	if req.InternetIngress {
+		args = append(args, "--internet-ingress")
+	}
+	if req.Isolate {
+		args = append(args, "--isolate")
+	}
+	if req.IsolatePerTenant {
+		args = append(args, "--isolate-per-tenant")
+	}
+	if req.OOB {
+		args = append(args, "--oob")
+	}
+	if req.LifecycleRole != "" {
+		args = append(args, "--lifecycle-role", req.LifecycleRole)
+	}
+	output, err := c.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	var z cliNetworkZone
+	if err := json.Unmarshal(output, &z); err != nil {
+		return nil, fmt.Errorf("failed to parse zone update response: %w", err)
+	}
+	return z.toEntry(), nil
+}
+
+// DeleteZone deletes a network trust zone via CLI.
+// The CLI outputs a human-readable message rather than JSON for delete; always returns false, nil on success.
+func (c *SDNCLIAdapter) DeleteZone(ctx context.Context, name string) (bool, error) {
+	_, err := c.runCommand(ctx, "sdn", "zone", "delete", "--name", name)
+	if err != nil {
+		return false, err
+	}
+	// CLI does not output structured JSON for delete — treat success as non-restart.
+	return false, nil
+}
+
+// ListZones returns all network trust zones via CLI.
+func (c *SDNCLIAdapter) ListZones(ctx context.Context, lifecycleRole string) (*ZoneListResponse, error) {
+	args := []string{"sdn", "zone", "list"}
+	if lifecycleRole != "" {
+		args = append(args, "--lifecycle-role", lifecycleRole)
+	}
+	output, err := c.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	var zones []cliNetworkZone
+	if err := json.Unmarshal(output, &zones); err != nil {
+		return nil, fmt.Errorf("failed to parse zone list response: %w", err)
+	}
+	entries := make([]ZoneEntry, 0, len(zones))
+	for _, z := range zones {
+		entries = append(entries, *z.toEntry())
+	}
+	return &ZoneListResponse{Zones: entries, TotalCount: len(entries)}, nil
+}
+
+// AssignZone assigns a network segment to a trust zone via CLI.
+func (c *SDNCLIAdapter) AssignZone(ctx context.Context, network string, zoneName string) (bool, error) {
+	output, err := c.runCommand(ctx, "sdn", "zone", "assign", "--network", network, "--zone", zoneName)
+	if err != nil {
+		return false, err
+	}
+	// The assign command prints "Daemon restart required to rebuild flow
+	// matrix." when the assignment changes active policy; that line is the
+	// CLI's restart-required contract.
+	return strings.Contains(strings.ToLower(string(output)), "restart required"), nil
 }
 
 // Ensure SDNCLIAdapter implements SDNTestAdapter interface.

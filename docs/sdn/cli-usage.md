@@ -19,6 +19,7 @@ Subcommands:
   overlay   Manage VXLAN overlay network (VTEPs, VNIs, tunnels, MACs)
   gateway   Manage multi-mode gateway (modes, BGP, IPAM)
   ipam      Manage IP address pools and allocations
+  zone      Manage network trust zones
 ```
 
 ## Bridge Commands
@@ -765,4 +766,84 @@ Examples:
   platformctl sdn ipam release 10.0.0.50
   platformctl sdn ipam list
   platformctl sdn ipam list --pool prod-v4
+```
+
+## Zone Commands
+
+`platformctl sdn zone` manages network trust zones — named policy boundaries
+that govern isolation, internet ingress, OOB access, and inter-zone routing.
+
+### List Zones
+
+```bash
+platformctl sdn zone list [--lifecycle-role <role>] [--json]
+
+Options:
+  --lifecycle-role  Filter zones by role: provisioning|quarantine (empty = all)
+  --json            Output in JSON format
+
+Examples:
+  platformctl sdn zone list
+  platformctl sdn zone list --lifecycle-role provisioning
+```
+
+### Create Zone
+
+```bash
+platformctl sdn zone create --name <name> [options]
+
+Options:
+  --name                Zone name (required)
+  --isolate             Isolate this zone from all others (default: false)
+  --isolate-per-tenant  Isolate traffic per tenant within the zone
+  --internet-ingress    Allow inbound internet traffic
+  --oob                 Mark zone as out-of-band management
+  --lifecycle-role      provisioning|quarantine
+  --allow-to            Comma-separated list of zones this zone may reach
+  --isolate-from        Comma-separated list of zones this zone is isolated from
+  --json                Output in JSON format
+
+Examples:
+  platformctl sdn zone create --name dmz --internet-ingress
+  platformctl sdn zone create --name quarantine --lifecycle-role quarantine --isolate
+```
+
+### Update Zone
+
+```bash
+platformctl sdn zone update --name <name> [options]
+
+Options: same policy flags as create (all optional)
+
+Examples:
+  platformctl sdn zone update --name dmz --isolate-per-tenant
+```
+
+The response includes `restart_required: true` when a policy-relevant field
+(Isolate, OOB, IsolatePerTenant, InternetIngress, AllowTo, IsolateFrom) changes.
+
+### Delete Zone
+
+```bash
+platformctl sdn zone delete --name <name>
+
+Examples:
+  platformctl sdn zone delete dmz
+```
+
+Fails when the zone is the sole holder of the `provisioning` or `quarantine`
+lifecycle role — the platform requires at least one zone for each special role.
+
+### Assign Network to Zone
+
+```bash
+platformctl sdn zone assign --network <cidr-or-name> --zone <zone-name>
+
+Options:
+  --network  Network segment identifier (required)
+  --zone     Target zone name (required)
+
+Examples:
+  platformctl sdn zone assign --network corp-lan --zone trusted
+  platformctl sdn zone assign --network 10.0.0.0/24 --zone dmz
 ```

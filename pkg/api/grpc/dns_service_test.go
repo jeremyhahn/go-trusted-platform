@@ -212,6 +212,10 @@ func (m *mockDNSService) Delete(ctx context.Context, zone *entities.Zone) error 
 	return nil
 }
 
+func (m *mockDNSService) RegisterWithNetworkZone(ctx context.Context, host, networkZone, ip string) error {
+	return nil
+}
+
 func newTestDNSService() (*DNSGRPCService, *mockDNSService) {
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
 	mock := newMockDNSService()

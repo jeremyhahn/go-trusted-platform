@@ -1323,11 +1323,15 @@ integration-test: build-devcontainer
 		--name go-trusted-platform-integration-test \
 		--device /dev/net/tun:/dev/net/tun \
 		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):$(SOURCES_BASE)/go-trusted-platform \
 		-v $(PWD):/workspace \
+		-v $(SOURCES_BASE)/go.work:$(SOURCES_BASE)/go.work:ro \
 		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
+		-v $(SOURCES_BASE)/go-frostdkg:$(SOURCES_BASE)/go-frostdkg \
+		-w $(SOURCES_BASE)/go-trusted-platform \
 		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=1 \
+		-e GOTOOLCHAIN=auto \
 		$(DEVCONTAINER_IMAGE) \
 		bash /workspace/build/docker/devcontainer/run-integration-tests.sh "$(strip $(TEST_BUILD_TAGS))"
 
@@ -1354,29 +1358,25 @@ integration-test-webservice: docker-builder-load
 # SDN Integration Tests (using devcontainer)
 .PHONY: integration-test-sdn
 ## integration-test-sdn: Run SDN integration tests in development container
-## Starts OVS before running SDN tests.
+## Starts OVS, swtpm, and platformd via the shared devcontainer runner.
 integration-test-sdn: build-devcontainer
 	@echo "Running SDN integration tests in development container..."
+	@echo "Build tags: $(TEST_BUILD_TAGS)"
 	@docker run --rm --privileged \
 		--name go-trusted-platform-sdn-test \
 		--device /dev/net/tun:/dev/net/tun \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):$(SOURCES_BASE)/go-trusted-platform \
 		-v $(PWD):/workspace \
+		-v $(SOURCES_BASE)/go.work:$(SOURCES_BASE)/go.work:ro \
 		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
+		-v $(SOURCES_BASE)/go-frostdkg:$(SOURCES_BASE)/go-frostdkg \
+		-w $(SOURCES_BASE)/go-trusted-platform \
 		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=1 \
+		-e GOTOOLCHAIN=auto \
 		$(DEVCONTAINER_IMAGE) \
-		bash -c "\
-		mkdir -p /var/run/openvswitch /var/log/openvswitch /etc/openvswitch && \
-		if [ ! -f /etc/openvswitch/conf.db ]; then \
-			ovsdb-tool create /etc/openvswitch/conf.db /usr/share/openvswitch/vswitch.ovsschema; \
-		fi && \
-		ovsdb-server --remote=punix:/var/run/openvswitch/db.sock --pidfile --detach \
-			--log-file=/var/log/openvswitch/ovsdb-server.log /etc/openvswitch/conf.db && \
-		sleep 2 && ovs-vsctl --no-wait init || true && \
-		ovs-vswitchd --pidfile --detach --log-file=/var/log/openvswitch/ovs-vswitchd.log && \
-		sleep 2 && \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/sdn/..."
+		bash /workspace/build/docker/devcontainer/run-integration-tests.sh sdn "$(strip $(TEST_BUILD_TAGS))"
 
 .PHONY: integration-test-sdn-shell
 ## integration-test-sdn-shell: Start interactive shell for SDN testing

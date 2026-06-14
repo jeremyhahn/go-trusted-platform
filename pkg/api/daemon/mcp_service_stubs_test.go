@@ -316,7 +316,7 @@ func TestMCPServiceProvider_GatewayStubs(t *testing.T) {
 		{"GatewayBGPAnnounce", func() error { return p.GatewayBGPAnnounce(ctx, "10.0.0.0/24", "10.0.0.1") }},
 		{"GatewayBGPWithdraw", func() error { return p.GatewayBGPWithdraw(ctx, "10.0.0.0/24") }},
 		{"GatewayBGPPrefixes", func() error { _, err := p.GatewayBGPPrefixes(ctx); return err }},
-		{"GatewayIPAMPools", func() error { _, err := p.GatewayIPAMPools(ctx); return err }},
+		{"GatewayIPAMPools", func() error { _, err := p.GatewayIPAMPools(ctx, ""); return err }},
 		{"GatewayIPAMAllocate", func() error { _, err := p.GatewayIPAMAllocate(ctx, "p", "d", "h"); return err }},
 		{"GatewayIPAMRelease", func() error { return p.GatewayIPAMRelease(ctx, "10.0.0.5") }},
 		{"GatewayIPAMAllocations", func() error { _, err := p.GatewayIPAMAllocations(ctx, "p"); return err }},

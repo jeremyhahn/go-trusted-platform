@@ -16,6 +16,7 @@ func TestDeviceState_String(t *testing.T) {
 		{DeviceStateRegistered, "registered"},
 		{DeviceStateActivated, "activated"},
 		{DeviceStateAttested, "attested"},
+		{DeviceStateQuarantined, "quarantined"},
 		{DeviceStateSuspended, "suspended"},
 		{DeviceStateRevoked, "revoked"},
 	}
@@ -36,6 +37,7 @@ func TestDeviceState_IsValid(t *testing.T) {
 		{DeviceStateRegistered, true},
 		{DeviceStateActivated, true},
 		{DeviceStateAttested, true},
+		{DeviceStateQuarantined, true},
 		{DeviceStateSuspended, true},
 		{DeviceStateRevoked, true},
 		{DeviceState("invalid"), false},
@@ -85,6 +87,23 @@ func TestDevice_IsAttested(t *testing.T) {
 		t.Run(string(tt.state), func(t *testing.T) {
 			d := &Device{State: tt.state}
 			assert.Equal(t, tt.expected, d.IsAttested())
+		})
+	}
+}
+
+func TestDevice_IsQuarantined(t *testing.T) {
+	tests := []struct {
+		state    DeviceState
+		expected bool
+	}{
+		{DeviceStateQuarantined, true},
+		{DeviceStateAttested, false},
+		{DeviceStateSuspended, false},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.state), func(t *testing.T) {
+			d := &Device{State: tt.state}
+			assert.Equal(t, tt.expected, d.IsQuarantined())
 		})
 	}
 }

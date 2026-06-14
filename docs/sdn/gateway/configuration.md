@@ -549,6 +549,109 @@ sdn:
         rate_limit: 10/min
 ```
 
+## Transit Link Service (`transit:`)
+
+The `gateway.transit` block is a service activation flag for the L2/L3 transit
+link that connects the gateway to an upstream peer or adjacent node on the
+transit VLAN. This is separate from the BGP transit configuration described
+above — the BGP config controls route policy; this block controls whether the
+transit link service itself starts.
+
+The transit link VLAN and P2P subnet are defined in the top-level `sdn.transit`
+block (see [SDN Configuration — Transit Configuration](../configuration.md#transit-configuration-transit)).
+
+```yaml
+sdn:
+  gateway:
+    transit:
+      enabled: true   # activates the transit link service
+```
+
+### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | When `true`, the gateway starts its transit link service and programs flows for the transit VLAN. |
+
+`GatewayConfig.HasEnabledServices()` returns `true` when this block is present
+and `enabled: true`.
+
+## Management VPN Service (`management_vpn:`)
+
+The `gateway.management_vpn` block activates the management VPN service on the
+gateway. The VPN itself is WireGuard; key generation, peer enrollment, and IP
+assignment are handled by the go-xkms WireGuard support reached through the
+quicbaas SDK. This config block is the activation flag only — the allowed zones
+and VPN endpoint configuration live in the top-level `sdn.management_vpn` block
+(see [SDN Configuration — Management VPN Configuration](../configuration.md#management-vpn-configuration-management_vpn)).
+
+```yaml
+sdn:
+  gateway:
+    management_vpn:
+      enabled: true   # activates the management VPN service
+```
+
+### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | When `true`, the gateway starts its management VPN service. |
+
+`GatewayConfig.HasEnabledServices()` returns `true` when this block is present
+and `enabled: true`.
+
+## DHCP Zone Awareness
+
+The gateway DHCP service can resolve its IPAM pool by zone name rather than
+requiring an explicit pool ID. This allows operators to define their network
+zones in one place and have the DHCP service follow the zone automatically.
+
+### Pool resolution precedence
+
+The `dhcp.ResolvePoolForZone` helper selects an IPAM pool ID using the following
+precedence (highest to lowest):
+
+| Tier | Field | Behaviour |
+|------|-------|-----------|
+| 1. Explicit | `pool_start` / `pool_end` set, or explicit `pool_id` | Used as-is; no lookup required. |
+| 2. Zone-derived | `zone:` non-empty | Calls `Allocator.ListPoolsByZone`; single match wins. Multiple matches return `ErrAmbiguousZonePool` — the operator must supply an explicit binding. Zero matches return `ErrNoPoolForZone`. |
+| 3. Segment fallback | `segment:` non-empty | Calls `Allocator.GetPoolByName` with the segment name. Preserved for backward compatibility with templates that pre-date zone support. |
+
+The resolution tier is returned as a `PoolResolution` value so callers can log
+or audit which path was taken.
+
+### `zone:` field
+
+```yaml
+sdn:
+  gateway:
+    dhcp:
+      enabled: true
+      interface: "eth1"
+      zone: "provisioning"   # preferred: derive pool from IPAM zone
+      # segment: "provisioning"  # legacy fallback (still accepted; zone takes precedence)
+```
+
+### Segment field migration
+
+The `segment:` field on `DHCPServiceConfig` is kept for backward compatibility.
+The shipped Supermicro X10 template
+(`configs/platform/templates/dedicated/supermicro/x10/gateway.yaml`) uses
+`segment: provisioning`; existing deployments continue to work without change.
+
+New deployments should use `zone:` instead of `segment:`. When both are set,
+`zone:` takes precedence because it is checked at tier 2 before the tier 3
+segment fallback.
+
+### Error reference
+
+| Error | Cause | Resolution |
+|-------|-------|------------|
+| `ErrNoPoolForZone` | No IPAM pool has the requested `zone` label | Create a pool with `zone: <name>` in `sdn.ipam.pools`, or set an explicit pool ID |
+| `ErrAmbiguousZonePool` | Multiple IPAM pools share the same zone | Set an explicit pool ID to break the ambiguity |
+| `ErrPoolIDRequired` | Neither `pool_id`, `zone`, nor `segment` is set | Supply at least one of the three fields |
+
 ## Load Balancer Configuration
 
 ### VIP Management
@@ -842,6 +945,7 @@ sdn:
             burst: 20
 
     transit:
+      enabled: true  # transit link service activation
       bgp:
         local_as: 65001
         router_id: "10.0.0.1"
@@ -888,6 +992,15 @@ sdn:
         coordinator_cluster:
           endpoint: "grpc://coordinator:10443"
         quorum: 3
+
+    management_vpn:
+      enabled: true   # management VPN service activation
+
+    dhcp:
+      enabled: true
+      interface: "eth1"
+      zone: "provisioning"   # IPAM pool resolved by zone (preferred)
+      # segment: "provisioning"  # legacy fallback still accepted
 
     loadbalancer:
       enabled: true
@@ -952,4 +1065,5 @@ sdn:
 - [Edge Mode](edge-mode.md) - Edge gateway configuration
 - [Transit Mode](transit-mode.md) - BGP transit configuration
 - [Load Balancer](loadbalancer.md) - Load balancing features
+- [SDN Configuration](../configuration.md) - Top-level SDN config (transit, management_vpn, services)
 - [00-CONSTANTS.md](../../dht/00-CONSTANTS.md) - System constants reference

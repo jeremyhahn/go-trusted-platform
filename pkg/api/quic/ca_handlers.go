@@ -607,6 +607,15 @@ func (h *CAHandler) handleRenew(ctx context.Context, req *Request) *Response {
 		KeyType:      xkmssdk.KeyTypeTLS,
 	}
 
+	// Supersede the existing certificate before issuing the renewal.
+	// DeleteKeys must be true: it removes the old cert-store entry and the
+	// leaf's CN-namespaced key — without it IssueCertificate fails with
+	// ErrCertificateAlreadyExists. Mirrors the gRPC and REST renew handlers.
+	if revokeErr := h.ca.RevokeCert(ctx, existingCert, quicbaasca.RevokeOptions{DeleteKeys: true}); revokeErr != nil {
+		h.logger.Error(revokeErr, "failed to supersede old certificate during renewal")
+		return h.errorResponse(StatusInternalError, ErrCARenewFailed{Cause: revokeErr})
+	}
+
 	issuedRenew, err := h.ca.IssueCertificate(ctx, caReq)
 	if err != nil {
 		h.logger.Error(err, "failed to renew certificate")
@@ -813,7 +822,14 @@ func (h *CAHandler) handleCRL(ctx context.Context, req *Request) *Response {
 	}
 }
 
-// handleBundle returns the CA bundle
+// handleBundle returns the CA bundle.
+//
+// When no store-type or algorithm filter is present in the request the handler
+// calls the unfiltered CABundle() path (mirroring the gRPC and REST adapters).
+// CABundleFiltered with StoreUnknown ("unknown") as the store-type argument
+// triggers the identity-matching filter path in go-xkms and returns
+// "no certificates match filter" when none of the configured CA identities
+// advertise that store type — which is always the case for a normal software CA.
 func (h *CAHandler) handleBundle(ctx context.Context, req *Request) *Response {
 	if h.ca == nil {
 		return h.errorResponse(StatusUnavailable, ErrCANotInitialized)
@@ -822,11 +838,6 @@ func (h *CAHandler) handleBundle(ctx context.Context, req *Request) *Response {
 	var bundleReq CABundleRequest
 	if err := DecodePayload(req.Payload, &bundleReq); err != nil {
 		return h.errorResponse(StatusInvalidRequest, ErrCADecodingFailed{Cause: err})
-	}
-
-	storeType := xkmssdk.StoreUnknown
-	if bundleReq.StoreType != "" {
-		storeType = h.parseStoreType(bundleReq.StoreType)
 	}
 
 	var keyAlg x509.PublicKeyAlgorithm
@@ -838,7 +849,16 @@ func (h *CAHandler) handleBundle(ctx context.Context, req *Request) *Response {
 		}
 	}
 
-	bundle, err := h.ca.CABundleFiltered(storeType, keyAlg)
+	// No filters: take the fast unfiltered path so we never pass StoreUnknown
+	// into CABundleFiltered, which would silently return an empty result.
+	var bundle []byte
+	var err error
+	if bundleReq.StoreType == "" && keyAlg == x509.UnknownPublicKeyAlgorithm {
+		bundle, err = h.ca.CABundle()
+	} else {
+		storeType := h.parseStoreType(bundleReq.StoreType)
+		bundle, err = h.ca.CABundleFiltered(storeType, keyAlg)
+	}
 	if err != nil {
 		h.logger.Error(err, "failed to get CA bundle")
 		return h.errorResponse(StatusInternalError, ErrCABundleFailed{Cause: err})

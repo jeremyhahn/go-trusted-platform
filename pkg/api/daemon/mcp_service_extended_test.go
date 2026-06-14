@@ -321,6 +321,10 @@ func (m *mcpMockDNSService) Resolve(ctx context.Context, name string, recordType
 	return []string{"192.168.1.1"}, nil
 }
 
+func (m *mcpMockDNSService) RegisterWithNetworkZone(ctx context.Context, host, networkZone, ip string) error {
+	return nil
+}
+
 // =============================================================================
 // Mock Device Service for MCP tests
 // =============================================================================
@@ -388,6 +392,16 @@ func (m *mcpMockDeviceService) FindBySerial(ctx context.Context, serial string) 
 		}
 	}
 	return nil, ErrDeviceNotFound{DeviceID: serial}
+}
+
+// FindByHostname finds a device by its IDevID hostname.
+func (m *mcpMockDeviceService) FindByHostname(ctx context.Context, hostname string) (*deviceentities.Device, error) {
+	for _, d := range m.devices {
+		if d.Hostname == hostname {
+			return d, nil
+		}
+	}
+	return nil, ErrDeviceNotFound{DeviceID: hostname}
 }
 
 // =============================================================================

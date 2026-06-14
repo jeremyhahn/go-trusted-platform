@@ -471,3 +471,19 @@ platformctl --transport quic ipam reserve \
 - [MCP API Reference](api-reference-mcp.md)
 - [Unix Socket API Reference](api-reference-unix.md)
 - [Architecture](architecture.md)
+
+
+## Gateway Pool CRUD via QUIC (Z5b)
+
+The QUIC adapter routes pool CRUD operations over HTTP/3 to the same gateway
+REST endpoints. All standard IPAM QUIC paths remain unchanged.
+
+| Operation | Method | Path |
+|-----------|--------|------|
+| Create | POST | `/api/v1/sdn/gateway/ipam/pools` |
+| Get | GET | `/api/v1/sdn/gateway/ipam/pools/{id}` |
+| Update | PUT | `/api/v1/sdn/gateway/ipam/pools/{id}` |
+| Delete | DELETE | `/api/v1/sdn/gateway/ipam/pools/{id}` |
+| List | GET | `/api/v1/sdn/gateway/ipam/pools[?zone=<zone>]` |
+
+Request/response JSON is identical to the REST API (see api-reference-rest.md).

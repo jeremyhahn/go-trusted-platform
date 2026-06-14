@@ -793,6 +793,10 @@ func testPolicyList(t *testing.T, ctx context.Context, adapter SDNCommands) {
 func skipIfNotImplemented(t *testing.T, err error) {
 	t.Helper()
 
+	if err == nil {
+		return
+	}
+
 	switch err.(type) {
 	case ErrGRPCNotImplemented:
 		t.Skipf("Not implemented: %v", err)

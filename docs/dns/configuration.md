@@ -117,6 +117,10 @@ dns:
   # Dynamic DNS client configuration
   ddns: {}
 
+  # Enable per-network-zone subdomain support (reflect-only; does not enforce policy)
+  # Requires sdn.zones to be resolved before DNS startup.
+  zone-subdomains: false
+
   # Scheduler configuration
   scheduler: {}
 ```
@@ -133,6 +137,7 @@ dns:
 | `private-ipv6` | string | - | Private IPv6 address for `${PRIVATE_IPv6}` macro |
 | `public-ipv4` | string | - | Public IPv4 address for `${PUBLIC_IPv4}` macro |
 | `public-ipv6` | string | - | Public IPv6 address for `${PUBLIC_IPv6}` macro |
+| `zone-subdomains` | bool | `false` | Enable per-network-zone subdomains. When true, the internal DNS server pre-creates one sub-zone per network zone (`<zone>.<domain>`) and device enrollment registers hosts as `<host>.<zone>.<domain>` in addition to `<host>.<domain>`. BMC names are never zone-qualified. Requires `sdn.zones` to be validated before DNS startup so that resolved zone names are available. |
 
 ## QuicBaaS Configuration
 

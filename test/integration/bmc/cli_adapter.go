@@ -330,13 +330,14 @@ func (c *CLIAdapter) GetSensors(ctx context.Context, profileID uint64) ([]bmcsvc
 		return nil, err
 	}
 
-	var resp cliSensorsResponse
+	// The `bmc sensors` command emits a bare JSON array of sensor readings.
+	var resp []cliSensorReading
 	if err := json.Unmarshal(output, &resp); err != nil {
 		return nil, ErrCLIOutputParseFailed{Operation: "GetSensors", Output: string(output), Err: err}
 	}
 
-	sensors := make([]bmcsvc.SensorReading, len(resp.Sensors))
-	for i, s := range resp.Sensors {
+	sensors := make([]bmcsvc.SensorReading, len(resp))
+	for i, s := range resp {
 		sensors[i] = bmcsvc.SensorReading{
 			Name:   s.Name,
 			Value:  s.Value,

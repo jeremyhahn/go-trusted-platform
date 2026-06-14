@@ -139,12 +139,15 @@ type NetworkPhaseConfig struct {
 	AuthMethod AuthMethod `json:"auth_method" yaml:"auth_method"`
 	// ACLs is the list of access control rules
 	ACLs []ACLConfig `json:"acls,omitempty" yaml:"acls,omitempty"`
+	// Zone is the SDN zone name assigned to this network phase (e.g. "trusted",
+	// "provisioning", "quarantine"). When empty the SDN engine derives the zone
+	// from the profile-level Zone field.
+	Zone string `json:"zone,omitempty" yaml:"zone,omitempty"`
 
-	// Legacy fields for backward compatibility
-	Subnet       string   `json:"subnet,omitempty" yaml:"subnet,omitempty"`
-	DNSServers   []string `json:"dns_servers,omitempty" yaml:"dns_servers,omitempty"`
-	DHCP         bool     `json:"dhcp" yaml:"dhcp"`
-	FirewallZone string   `json:"firewall_zone,omitempty" yaml:"firewall_zone,omitempty"`
+	// Legacy fields retained for YAML/JSON unmarshalling of existing configs.
+	Subnet     string   `json:"subnet,omitempty" yaml:"subnet,omitempty"`
+	DNSServers []string `json:"dns_servers,omitempty" yaml:"dns_servers,omitempty"`
+	DHCP       bool     `json:"dhcp" yaml:"dhcp"`
 }
 
 // PlatformdConfigRef represents a reference to platformd configuration
@@ -255,7 +258,7 @@ func (p *ProfileMatchRules) Matches(macAddr, serial, model string) bool {
 // or failure network fields are not explicitly configured.
 const (
 	DefaultEnrollmentNetwork     = "provisioning"
-	DefaultPostEnrollmentNetwork = "production"
+	DefaultPostEnrollmentNetwork = "trusted"
 	DefaultFailureNetwork        = "quarantine"
 )
 
@@ -269,8 +272,12 @@ type DeviceProfile struct {
 	Role     DeviceRole `yaml:"role" json:"role"`
 	EventLog []byte     `yaml:"eventLog" json:"eventLog"`
 
+	// Zone declares the default SDN zone for this device profile. Individual
+	// network phase configs may override this with their own Zone field.
+	Zone string `yaml:"zone,omitempty" json:"zone,omitempty"`
+
 	// Networks is a map of named network phase configurations keyed by
-	// logical network name (e.g., "provisioning", "production", "quarantine").
+	// logical network name (e.g., "provisioning", "trusted", "quarantine").
 	Networks map[string]*NetworkPhaseConfig `yaml:"networks,omitempty" json:"networks,omitempty"`
 
 	// EnrollmentNetwork is the name of the network used during device enrollment.
@@ -278,7 +285,7 @@ type DeviceProfile struct {
 	EnrollmentNetwork string `yaml:"enrollment-network,omitempty" json:"enrollment_network,omitempty"`
 
 	// PostEnrollmentNetwork is the name of the network the device transitions to
-	// after successful enrollment. Defaults to "production" when empty.
+	// after successful enrollment. Defaults to "trusted" when empty.
 	PostEnrollmentNetwork string `yaml:"post-enrollment-network,omitempty" json:"post_enrollment_network,omitempty"`
 
 	// FailureNetwork is the name of the network the device is moved to when
@@ -315,7 +322,6 @@ type DeviceProfile struct {
 
 	// AssignedAt is the timestamp when the profile was assigned to a device.
 	AssignedAt time.Time `yaml:"assigned_at,omitempty" json:"assigned_at,omitempty"`
-
 }
 
 // DefaultWorkloadPCR is the default PCR index for workload attestation.
@@ -369,7 +375,8 @@ func (dp *DeviceProfile) GetEnrollmentNetworkConfig() *NetworkPhaseConfig {
 
 // GetPostEnrollmentNetworkConfig returns the network configuration the device
 // transitions to after successful enrollment. If PostEnrollmentNetwork is
-// empty, it defaults to "production".
+// empty, it defaults to "trusted". When the resolved config has no Zone set,
+// the profile-level Zone is applied.
 func (dp *DeviceProfile) GetPostEnrollmentNetworkConfig() *NetworkPhaseConfig {
 	if dp == nil {
 		return nil
@@ -378,7 +385,15 @@ func (dp *DeviceProfile) GetPostEnrollmentNetworkConfig() *NetworkPhaseConfig {
 	if name == "" {
 		name = DefaultPostEnrollmentNetwork
 	}
-	return dp.GetNetwork(name)
+	cfg := dp.GetNetwork(name)
+	if cfg != nil && cfg.Zone == "" && dp.Zone != "" {
+		// Return a copy with the profile Zone applied so the original map entry
+		// is not mutated.
+		copy := *cfg
+		copy.Zone = dp.Zone
+		return &copy
+	}
+	return cfg
 }
 
 // GetFailureNetworkConfig returns the network configuration for devices that

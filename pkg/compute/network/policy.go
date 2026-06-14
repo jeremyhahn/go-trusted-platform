@@ -36,15 +36,6 @@ var (
 
 	// OIDExtendedKeyUsage is the OID for the extended key usage extension.
 	OIDExtendedKeyUsage = asn1.ObjectIdentifier{2, 5, 29, 37}
-
-	// OIDDeviceAttestation is a custom OID for device attestation policy.
-	OIDDeviceAttestation = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 99999, 1, 1}
-
-	// OIDNetworkAccess is a custom OID for network access policy.
-	OIDNetworkAccess = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 99999, 1, 2}
-
-	// OIDProductionAccess is a custom OID for production network access.
-	OIDProductionAccess = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 99999, 1, 3}
 )
 
 // PolicyExtractor extracts policy information from x509 certificates.

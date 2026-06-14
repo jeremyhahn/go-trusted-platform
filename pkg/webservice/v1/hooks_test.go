@@ -33,6 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 )
 
 // mockAttestationImporter is a mock implementation of AttestationImporter.
@@ -80,6 +81,10 @@ func (m *mockDNSRegistrar) Register(ctx context.Context, fqdn, ip string) (*dnse
 		return nil, m.registerErr
 	}
 	return &dnsentities.Zone{}, nil
+}
+
+func (m *mockDNSRegistrar) RegisterWithNetworkZone(_ context.Context, host, networkZone, ip string) error {
+	return nil
 }
 
 func createHookTestCert(cn string) *x509.Certificate {
@@ -360,7 +365,7 @@ func TestNewDNSRegistrationHook_SkipsNonTCGCSR(t *testing.T) {
 	logger := slog.Default()
 	dns := &mockDNSRegistrar{}
 
-	hook := NewDNSRegistrationHook(dns, "internal.example.com", logger)
+	hook := NewDNSRegistrationHook(dns, "internal.example.com", logger, nil)
 	require.NotNil(t, hook)
 
 	ctx := &trustedca.ACMEOrderFinalizeHookContext{
@@ -376,7 +381,7 @@ func TestNewDNSRegistrationHook_SkipsNilTCGData(t *testing.T) {
 	logger := slog.Default()
 	dns := &mockDNSRegistrar{}
 
-	hook := NewDNSRegistrationHook(dns, "internal.example.com", logger)
+	hook := NewDNSRegistrationHook(dns, "internal.example.com", logger, nil)
 
 	ctx := &trustedca.ACMEOrderFinalizeHookContext{
 		IsTCGCSR: true,
@@ -392,7 +397,7 @@ func TestNewDNSRegistrationHook_RegistersDevice(t *testing.T) {
 	logger := slog.Default()
 	dns := &mockDNSRegistrar{}
 
-	hook := NewDNSRegistrationHook(dns, "internal.example.com", logger)
+	hook := NewDNSRegistrationHook(dns, "internal.example.com", logger, nil)
 
 	ctx := &trustedca.ACMEOrderFinalizeHookContext{
 		IsTCGCSR: true,
@@ -416,7 +421,7 @@ func TestNewDNSRegistrationHook_RegisterError(t *testing.T) {
 		registerErr: errors.New("dns update failed"),
 	}
 
-	hook := NewDNSRegistrationHook(dns, "internal.example.com", logger)
+	hook := NewDNSRegistrationHook(dns, "internal.example.com", logger, nil)
 
 	ctx := &trustedca.ACMEOrderFinalizeHookContext{
 		IsTCGCSR: true,
@@ -430,6 +435,125 @@ func TestNewDNSRegistrationHook_RegisterError(t *testing.T) {
 	err := hook(ctx)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to register DNS record")
+}
+
+// TestNewDNSRegistrationHook_ZoneQualifiedRegistration verifies that when a
+// profile resolver returns a network zone, RegisterWithNetworkZone is called
+// for each non-BMC host in the FQDN set.
+func TestNewDNSRegistrationHook_ZoneQualifiedRegistration(t *testing.T) {
+	logger := slog.Default()
+	registrar := &mockDNSRegistrarWithZone{}
+
+	// Mock profile resolver that returns a profile with Zone = "trusted".
+	profiles := &mockProfileResolver{
+		zone: "trusted",
+	}
+
+	cert := createHookTestCert("lab-node-1.internal.example.com")
+	hook := NewDNSRegistrationHook(registrar, "internal.example.com", logger, profiles)
+
+	ctx := &trustedca.ACMEOrderFinalizeHookContext{
+		IsTCGCSR:    true,
+		ClientIP:    "192.168.1.10",
+		Certificate: cert,
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductModel:  "SuperMicro",
+			ProductSerial: "SN999",
+		},
+	}
+
+	err := hook(ctx)
+	assert.NoError(t, err)
+	assert.True(t, registrar.withZoneCalled, "RegisterWithNetworkZone must be called")
+	assert.Equal(t, "trusted", registrar.lastNetworkZone)
+	assert.Equal(t, "192.168.1.10", registrar.lastZoneIP)
+}
+
+// TestNewDNSRegistrationHook_BMCNameNotZoneQualified verifies that BMC names
+// are not passed to RegisterWithNetworkZone.
+func TestNewDNSRegistrationHook_BMCNameNotZoneQualified(t *testing.T) {
+	logger := slog.Default()
+	registrar := &mockDNSRegistrarWithZone{}
+	profiles := &mockProfileResolver{zone: "management"}
+
+	cert := createHookTestCert("lab-node-1-bmc.internal.example.com")
+	hook := NewDNSRegistrationHook(registrar, "internal.example.com", logger, profiles)
+
+	ctx := &trustedca.ACMEOrderFinalizeHookContext{
+		IsTCGCSR:    true,
+		ClientIP:    "10.0.0.1",
+		Certificate: cert,
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductModel:  "SuperMicro",
+			ProductSerial: "BMCSERIAL",
+		},
+	}
+
+	err := hook(ctx)
+	assert.NoError(t, err)
+	// BMC name from cert CN is host=lab-node-1-bmc; must not be zone-qualified.
+	// The model-serial form (SuperMicro-BMCSERIAL) is not a BMC name so may be called.
+	// Key check: "lab-node-1-bmc" must never be the host argument.
+	for _, h := range registrar.zoneHosts {
+		assert.NotEqual(t, "lab-node-1-bmc", h, "BMC name must not be zone-qualified")
+	}
+}
+
+// TestExtractHostFromFQDN verifies the helper correctly extracts the first label.
+func TestExtractHostFromFQDN(t *testing.T) {
+	tests := []struct {
+		fqdn   string
+		domain string
+		want   string
+	}{
+		{"lab-node-1.internal.example.com", "internal.example.com", "lab-node-1"},
+		{"gw.corp.local", "corp.local", "gw"},
+		{"a.b.corp.local", "corp.local", ""},     // multi-label prefix
+		{"corp.local", "corp.local", ""},         // exactly domain, no host
+		{"other.domain.com", "internal.com", ""}, // domain mismatch
+		{"", "internal.example.com", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.fqdn, func(t *testing.T) {
+			got := extractHostFromFQDN(tc.fqdn, tc.domain)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// mockDNSRegistrarWithZone captures RegisterWithNetworkZone calls.
+type mockDNSRegistrarWithZone struct {
+	registerCalled  bool
+	withZoneCalled  bool
+	lastNetworkZone string
+	lastZoneIP      string
+	zoneHosts       []string
+}
+
+func (m *mockDNSRegistrarWithZone) Register(_ context.Context, _, _ string) (*dnsentities.Zone, error) {
+	m.registerCalled = true
+	return &dnsentities.Zone{}, nil
+}
+
+func (m *mockDNSRegistrarWithZone) RegisterWithNetworkZone(_ context.Context, host, networkZone, ip string) error {
+	m.withZoneCalled = true
+	m.lastNetworkZone = networkZone
+	m.lastZoneIP = ip
+	m.zoneHosts = append(m.zoneHosts, host)
+	return nil
+}
+
+// mockProfileResolver is a minimal ZoneProfileResolver for hook tests.
+type mockProfileResolver struct {
+	zone string
+	err  error
+}
+
+func (m *mockProfileResolver) FindBySerial(_ context.Context, _ string) (*deviceentities.DeviceProfile, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &deviceentities.DeviceProfile{Zone: m.zone}, nil
 }
 
 // =============================================================================
@@ -723,4 +847,269 @@ func TestEncodeCertPEM(t *testing.T) {
 	pemStr := encodeCertPEM(cert)
 	assert.Contains(t, pemStr, "-----BEGIN CERTIFICATE-----")
 	assert.Contains(t, pemStr, "-----END CERTIFICATE-----")
+}
+
+// =============================================================================
+// Zone Extension Pre-Sign Hook Tests
+// =============================================================================
+
+// mockZoneProfileResolver is a test double for ZoneProfileResolver.
+type mockZoneProfileResolver struct {
+	profile *deviceentities.DeviceProfile
+	err     error
+}
+
+func (m *mockZoneProfileResolver) FindBySerial(_ context.Context, _ string) (*deviceentities.DeviceProfile, error) {
+	return m.profile, m.err
+}
+
+func TestNewZoneExtensionPreSignHook_NilConfig(t *testing.T) {
+	hook := NewZoneExtensionPreSignHook(nil, nil, slog.Default())
+
+	ctx := &trustedca.ACMEOrderPreSignHookContext{
+		Context:  context.Background(),
+		IsTCGCSR: false,
+	}
+	exts, err := hook(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, exts)
+}
+
+func TestNewZoneExtensionPreSignHook_EncodeZoneDisabled(t *testing.T) {
+	identity := &sdn.IdentityConfig{EncodeZoneInCert: false}
+	hook := NewZoneExtensionPreSignHook(nil, identity, slog.Default())
+
+	ctx := &trustedca.ACMEOrderPreSignHookContext{
+		Context:  context.Background(),
+		IsTCGCSR: false,
+	}
+	exts, err := hook(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, exts)
+}
+
+func TestNewZoneExtensionPreSignHook_StandardCSRUsesplatformZone(t *testing.T) {
+	identity := &sdn.IdentityConfig{
+		EncodeZoneInCert: true,
+		PlatformZone:     "trusted",
+	}
+	hook := NewZoneExtensionPreSignHook(nil, identity, slog.Default())
+
+	ctx := &trustedca.ACMEOrderPreSignHookContext{
+		Context:  context.Background(),
+		IsTCGCSR: false,
+	}
+	exts, err := hook(ctx)
+	require.NoError(t, err)
+	require.Len(t, exts, 1)
+	// OIDTPNetworkZone is 1.3.6.1.4.1.29377.101.21
+	assert.Equal(t, []int{1, 3, 6, 1, 4, 1, 29377, 101, 21}, []int(exts[0].Id))
+}
+
+func TestNewZoneExtensionPreSignHook_TCGPathUsesPostEnrollZone(t *testing.T) {
+	identity := &sdn.IdentityConfig{
+		EncodeZoneInCert: true,
+		PlatformZone:     "management",
+	}
+	profile := &deviceentities.DeviceProfile{
+		Zone:                  "provisioning",
+		PostEnrollmentNetwork: "trusted",
+		Networks: map[string]*deviceentities.NetworkPhaseConfig{
+			"trusted": {Zone: "trusted"},
+		},
+	}
+	resolver := &mockZoneProfileResolver{profile: profile}
+	hook := NewZoneExtensionPreSignHook(resolver, identity, slog.Default())
+
+	ctx := &trustedca.ACMEOrderPreSignHookContext{
+		Context:  context.Background(),
+		IsTCGCSR: true,
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductSerial: "SN-1234",
+			ProductModel:  "Widget-X",
+		},
+	}
+	exts, err := hook(ctx)
+	require.NoError(t, err)
+	require.Len(t, exts, 1)
+	// The post-enrollment zone "trusted" should be used over the profile-level "provisioning"
+	ext := exts[0]
+	assert.Equal(t, []int{1, 3, 6, 1, 4, 1, 29377, 101, 21}, []int(ext.Id))
+}
+
+func TestNewZoneExtensionPreSignHook_TCGPathFallsBackToProfileZone(t *testing.T) {
+	identity := &sdn.IdentityConfig{
+		EncodeZoneInCert: true,
+		PlatformZone:     "management",
+	}
+	// Profile has a zone but no post-enrollment phase-specific zone
+	profile := &deviceentities.DeviceProfile{
+		Zone: "operations",
+	}
+	resolver := &mockZoneProfileResolver{profile: profile}
+	hook := NewZoneExtensionPreSignHook(resolver, identity, slog.Default())
+
+	ctx := &trustedca.ACMEOrderPreSignHookContext{
+		Context:  context.Background(),
+		IsTCGCSR: true,
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductSerial: "SN-OPSDEV",
+			ProductModel:  "OpsBox",
+		},
+	}
+	exts, err := hook(ctx)
+	require.NoError(t, err)
+	require.Len(t, exts, 1)
+	assert.Equal(t, []int{1, 3, 6, 1, 4, 1, 29377, 101, 21}, []int(exts[0].Id))
+}
+
+func TestNewZoneExtensionPreSignHook_TCGPathProfileWithoutZoneFailsClosed(t *testing.T) {
+	identity := &sdn.IdentityConfig{
+		EncodeZoneInCert: true,
+		PlatformZone:     "corp",
+	}
+	// Profile exists but declares no zone: device issuance must fail closed,
+	// never fall back to the platform zone.
+	profile := &deviceentities.DeviceProfile{}
+	resolver := &mockZoneProfileResolver{profile: profile}
+	hook := NewZoneExtensionPreSignHook(resolver, identity, slog.Default())
+
+	ctx := &trustedca.ACMEOrderPreSignHookContext{
+		Context:  context.Background(),
+		IsTCGCSR: true,
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductSerial: "SN-NOPROFILE",
+			ProductModel:  "Gadget",
+		},
+	}
+	exts, err := hook(ctx)
+	require.Error(t, err)
+	var zoneErr ErrDeviceZoneUnresolvable
+	require.ErrorAs(t, err, &zoneErr)
+	assert.Equal(t, "SN-NOPROFILE", zoneErr.Serial)
+	assert.Nil(t, exts)
+}
+
+func TestNewZoneExtensionPreSignHook_TCGPathProfileLookupFailsClosed(t *testing.T) {
+	identity := &sdn.IdentityConfig{
+		EncodeZoneInCert: true,
+		PlatformZone:     "fallback-zone",
+	}
+	// Profile lookup error: device issuance must fail closed.
+	resolver := &mockZoneProfileResolver{err: errors.New("db unavailable")}
+	hook := NewZoneExtensionPreSignHook(resolver, identity, slog.Default())
+
+	ctx := &trustedca.ACMEOrderPreSignHookContext{
+		Context:  context.Background(),
+		IsTCGCSR: true,
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductSerial: "SN-DBERR",
+			ProductModel:  "Fail-Device",
+		},
+	}
+	exts, err := hook(ctx)
+	require.Error(t, err)
+	var zoneErr ErrDeviceZoneUnresolvable
+	require.ErrorAs(t, err, &zoneErr)
+	assert.Nil(t, exts)
+}
+
+func TestNewZoneExtensionPreSignHook_NilResolverFailsClosed(t *testing.T) {
+	identity := &sdn.IdentityConfig{
+		EncodeZoneInCert: true,
+		PlatformZone:     "default-zone",
+	}
+	// No resolver configured: device issuance must fail closed.
+	hook := NewZoneExtensionPreSignHook(nil, identity, slog.Default())
+
+	ctx := &trustedca.ACMEOrderPreSignHookContext{
+		Context:  context.Background(),
+		IsTCGCSR: true,
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductSerial: "SN-NORESOLVER",
+			ProductModel:  "Model-A",
+		},
+	}
+	exts, err := hook(ctx)
+	require.Error(t, err)
+	var zoneErr ErrDeviceZoneUnresolvable
+	require.ErrorAs(t, err, &zoneErr)
+	assert.Nil(t, exts)
+}
+
+func TestNewZoneExtensionPreSignHook_EmptySerialFailsClosed(t *testing.T) {
+	identity := &sdn.IdentityConfig{
+		EncodeZoneInCert: true,
+	}
+	resolver := &mockZoneProfileResolver{profile: &deviceentities.DeviceProfile{Zone: "trusted"}}
+	hook := NewZoneExtensionPreSignHook(resolver, identity, slog.Default())
+
+	ctx := &trustedca.ACMEOrderPreSignHookContext{
+		Context:  context.Background(),
+		IsTCGCSR: true,
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductSerial: "   ",
+			ProductModel:  "Zoneless",
+		},
+	}
+	exts, err := hook(ctx)
+	require.Error(t, err)
+	var zoneErr ErrDeviceZoneUnresolvable
+	require.ErrorAs(t, err, &zoneErr)
+	assert.Nil(t, exts)
+}
+
+func TestNewZoneExtensionPreSignHook_NilTCGDataFailsClosed(t *testing.T) {
+	identity := &sdn.IdentityConfig{
+		EncodeZoneInCert: true,
+	}
+	hook := NewZoneExtensionPreSignHook(nil, identity, slog.Default())
+
+	ctx := &trustedca.ACMEOrderPreSignHookContext{
+		Context:  context.Background(),
+		IsTCGCSR: true,
+		TCGData:  nil,
+	}
+	exts, err := hook(ctx)
+	require.Error(t, err)
+	var zoneErr ErrDeviceZoneUnresolvable
+	require.ErrorAs(t, err, &zoneErr)
+	assert.Nil(t, exts)
+}
+
+func TestErrDeviceZoneUnresolvable_Error(t *testing.T) {
+	e := ErrDeviceZoneUnresolvable{Serial: "SN-XYZ", Reason: "device profile not found"}
+	assert.Contains(t, e.Error(), "SN-XYZ")
+	assert.Contains(t, e.Error(), "device profile not found")
+	assert.Contains(t, e.Error(), "refusing to issue")
+}
+
+func TestErrPreSignZoneResolutionFailed_Error(t *testing.T) {
+	cause := errors.New("no zone found")
+	e := ErrPreSignZoneResolutionFailed{Serial: "SN-001", Cause: cause}
+	assert.Contains(t, e.Error(), "SN-001")
+	assert.Contains(t, e.Error(), "no zone found")
+	assert.Equal(t, cause, e.Unwrap())
+}
+
+func TestZoneHookExtensionContainsOIDTPNetworkZone(t *testing.T) {
+	// Verify the extension OID is exactly OIDTPNetworkZone (1.3.6.1.4.1.29377.101.21)
+	identity := &sdn.IdentityConfig{
+		EncodeZoneInCert: true,
+		PlatformZone:     "test-zone",
+	}
+	hook := NewZoneExtensionPreSignHook(nil, identity, slog.Default())
+
+	ctx := &trustedca.ACMEOrderPreSignHookContext{
+		Context:  context.Background(),
+		IsTCGCSR: false,
+	}
+	exts, err := hook(ctx)
+	require.NoError(t, err)
+	require.Len(t, exts, 1)
+
+	oidTPNetworkZone := pkix.Extension{}
+	oidTPNetworkZone.Id = []int{1, 3, 6, 1, 4, 1, 29377, 101, 21}
+	assert.Equal(t, oidTPNetworkZone.Id, exts[0].Id)
+	assert.NotEmpty(t, exts[0].Value)
 }

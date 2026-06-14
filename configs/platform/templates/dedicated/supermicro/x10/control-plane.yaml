@@ -157,7 +157,7 @@ network:
     search-domains:
       - example.internal
   subnets:
-    - name: production
+    - name: trusted
       scope: internal
       vlan-id: 200
       cidr: 198.18.0.0/24
@@ -230,7 +230,7 @@ network:
         - eth6
         - eth7
       vlans:
-        - subnet: production
+        - subnet: trusted
           ipv4-address: 198.18.0.10/24
           auto-start: true
         - subnet: provisioning
@@ -519,7 +519,7 @@ sdn:
   ipam:
     backend: quicbaas
     pools:
-      - name: production
+      - name: trusted
         cidr: 198.18.0.0/24
         gateway: 198.18.0.1
         dns:
@@ -580,26 +580,33 @@ sdn:
     enabled: true
     interface: trusted0
   networks:
-    production:
+    - name: trusted
       vlan: 200
-      pool: production
-    provisioning:
+      zone: trusted
+      pool: trusted
+    - name: provisioning
       vlan: 201
+      zone: provisioning
       pool: provisioning
-    quarantine:
+    - name: quarantine
       vlan: 202
+      zone: quarantine
       pool: quarantine
-    storage:
+    - name: storage
       vlan: 203
+      zone: storage
       pool: storage
-    dmz-public:
+    - name: dmz-public
       vlan: 210
+      zone: public
       pool: dmz-public
-    dmz-private:
+    - name: dmz-private
       vlan: 211
+      zone: trusted
       pool: dmz-private
-    dmz-data:
+    - name: dmz-data
       vlan: 212
+      zone: trusted
       pool: dmz-data
   fabric:
     mode: vlan
@@ -620,15 +627,22 @@ sdn:
         peer-link-ports:
           - Ethernet1/47
           - Ethernet1/48
+    # zones: built-in zones are pre-declared in the code defaults registry.
+    # Override only when you need to change default policy. Example:
+    #   zones:
+    #     - {name: trusted,      internet_ingress: false}
+    #     - {name: public,       internet_ingress: true, isolate_from: [trusted]}
+    #     - {name: provisioning, services: [dhcp, tftp, dns, acme]}
+    #     - {name: quarantine,   services: [auth, remediation]}
     segments:
       # Fabric segment roles: only `provisioning` and `quarantine` are
       # first-class roles recognised by the fabric manager (they trigger
-      # PXE onboarding and isolation flows respectively). Production
+      # PXE onboarding and isolation flows respectively). Trusted
       # and storage segments have NO role — an empty/absent role is
       # semantically "general data plane", which is what they are.
       # Do NOT set role: server or role: storage; the validator
       # rejects them and SDN init gets deferred.
-      - name: production
+      - name: trusted
         vlan: 200
       - name: provisioning
         vlan: 201

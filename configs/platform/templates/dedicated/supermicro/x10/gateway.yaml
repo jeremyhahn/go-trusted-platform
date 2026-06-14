@@ -150,7 +150,7 @@ network:
       - "198.18.0.10#8053"
     local-domain: example.internal
   subnets:
-    - name: production
+    - name: trusted
       scope: internal
       vlan-id: 200
       cidr: 198.18.0.0/24
@@ -213,7 +213,7 @@ network:
         - eth6
         - eth7
       vlans:
-        - subnet: production
+        - subnet: trusted
           ipv4-address: 198.18.0.2/24
           auto-start: true
         - subnet: provisioning

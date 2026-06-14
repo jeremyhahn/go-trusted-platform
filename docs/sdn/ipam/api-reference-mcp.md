@@ -554,3 +554,14 @@ Recovered 15 IP addresses. Pool now has 239 available IPs
 - [QUIC API Reference](api-reference-quic.md)
 - [Unix Socket API Reference](api-reference-unix.md)
 - [Architecture](architecture.md)
+
+
+## Gateway Pool CRUD Tools (Z5b)
+
+| Tool | Arguments | Description |
+|------|-----------|-------------|
+| `gateway_ipam_pool_create` | `name` (req), `cidr` (req), `id`?, `gateway`?, `zone`?, `description`?, `lease_duration_seconds`? | Create a new pool |
+| `gateway_ipam_pool_get` | `pool_id` (req) | Retrieve a pool by ID |
+| `gateway_ipam_pool_update` | `pool_id` (req), `name`?, `gateway`?, `zone`?, `description`?, `lease_duration_seconds`? | Update mutable pool fields |
+| `gateway_ipam_pool_delete` | `pool_id` (req) | Delete a pool (fails if active allocations exist) |
+| `gateway_ipam_pools` | `zone`? | List pools, optional zone filter |

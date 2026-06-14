@@ -48,7 +48,7 @@ func TestActivate_WithSwitchService_VLANTransition(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-12345",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN: 200,
 		},
 	}
@@ -105,7 +105,7 @@ func TestActivate_SwitchVLANFailed_ReturnsError(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-12345",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN: 200,
 		},
 	}
@@ -159,7 +159,7 @@ func TestActivate_SwitchNotConfigured_ReturnsError(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-12345",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN: 200,
 		},
 	}
@@ -210,7 +210,7 @@ func TestActivate_NoSwitchInfo_SkipsVLANMove(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-12345",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN: 200,
 		},
 	}
@@ -254,7 +254,7 @@ func TestActivate_NilSwitchService_SkipsVLANMove(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-12345",
-		ProductionNetwork: NetworkConfig{
+		TrustedNetwork: NetworkConfig{
 			VLAN: 200,
 		},
 	}

@@ -154,11 +154,32 @@ func (e *errorServiceProvider) GatewayBGPPrefixes(ctx context.Context) ([]interf
 	return e.mockServiceProvider.GatewayBGPPrefixes(ctx)
 }
 
-func (e *errorServiceProvider) GatewayIPAMPools(ctx context.Context) ([]interface{}, error) {
+func (e *errorServiceProvider) GatewayIPAMPools(ctx context.Context, zone string) ([]interface{}, error) {
 	if e.shouldFail("GatewayIPAMPools") {
 		return nil, ErrMockServiceError
 	}
-	return e.mockServiceProvider.GatewayIPAMPools(ctx)
+	return e.mockServiceProvider.GatewayIPAMPools(ctx, zone)
+}
+
+func (e *errorServiceProvider) GatewayIPAMPoolGet(ctx context.Context, poolID string) (interface{}, error) {
+	if e.shouldFail("GatewayIPAMPoolGet") {
+		return nil, ErrMockServiceError
+	}
+	return e.mockServiceProvider.GatewayIPAMPoolGet(ctx, poolID)
+}
+
+func (e *errorServiceProvider) GatewayIPAMPoolCreate(ctx context.Context, req *IPAMPoolCreateRequest) (interface{}, error) {
+	if e.shouldFail("GatewayIPAMPoolCreate") {
+		return nil, ErrMockServiceError
+	}
+	return e.mockServiceProvider.GatewayIPAMPoolCreate(ctx, req)
+}
+
+func (e *errorServiceProvider) GatewayIPAMPoolUpdate(ctx context.Context, poolID string, req *IPAMPoolUpdateRequest) (interface{}, error) {
+	if e.shouldFail("GatewayIPAMPoolUpdate") {
+		return nil, ErrMockServiceError
+	}
+	return e.mockServiceProvider.GatewayIPAMPoolUpdate(ctx, poolID, req)
 }
 
 func (e *errorServiceProvider) GatewayIPAMPoolDelete(ctx context.Context, poolID string) error {

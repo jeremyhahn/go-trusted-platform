@@ -515,13 +515,13 @@ func (h *SDNHandler) handleCreateBridge(ctx context.Context, req *Request) *Resp
 	// Set additional properties if specified
 	if createReq.FailMode != "" {
 		if err := h.sdnService.SetBridgeFailMode(ctx, createReq.Name, createReq.FailMode); err != nil {
-			h.logger.Warn("failed to set bridge fail mode: %v", err)
+			h.logger.Warnf("failed to set bridge fail mode: %v", err)
 		}
 	}
 
 	if len(createReq.Protocols) > 0 {
 		if err := h.sdnService.SetBridgeProtocols(ctx, createReq.Name, createReq.Protocols); err != nil {
-			h.logger.Warn("failed to set bridge protocols: %v", err)
+			h.logger.Warnf("failed to set bridge protocols: %v", err)
 		}
 	}
 
@@ -697,14 +697,14 @@ func (h *SDNHandler) handleCreatePort(ctx context.Context, req *Request) *Respon
 	// Set VLAN if specified
 	if createReq.VLAN > 0 {
 		if err := h.sdnService.SetPortVLAN(ctx, createReq.PortName, createReq.VLAN); err != nil {
-			h.logger.Warn("failed to set port VLAN: %v", err)
+			h.logger.Warnf("failed to set port VLAN: %v", err)
 		}
 	}
 
 	// Set trunk VLANs if specified
 	if len(createReq.Trunks) > 0 {
 		if err := h.sdnService.SetPortTrunks(ctx, createReq.PortName, createReq.Trunks); err != nil {
-			h.logger.Warn("failed to set port trunks: %v", err)
+			h.logger.Warnf("failed to set port trunks: %v", err)
 		}
 	}
 

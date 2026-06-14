@@ -115,11 +115,20 @@ func (s *Service) Page(ctx context.Context, query datastore.PageQuery) (datastor
 	return result, nil
 }
 
-// FindBySerial finds a device by its serial number
+// FindBySerial finds a device by its serial number.
 func (s *Service) FindBySerial(ctx context.Context, serial string) (*entities.Device, error) {
 	device, err := s.deviceDAO.FindBySerial(ctx, serial)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find device by serial: %w", err)
+	}
+	return device, nil
+}
+
+// FindByHostname finds a device by its IDevID hostname (CN).
+func (s *Service) FindByHostname(ctx context.Context, hostname string) (*entities.Device, error) {
+	device, err := s.deviceDAO.FindByHostname(ctx, hostname)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find device by hostname: %w", err)
 	}
 	return device, nil
 }

@@ -126,6 +126,33 @@ func (e ErrIPAMPoolNotFound) Error() string {
 	return fmt.Sprintf("IPAM pool not found: %s", e.ID)
 }
 
+// ErrIPAMPoolAlreadyExists is returned when attempting to create a pool that
+// already exists.
+type ErrIPAMPoolAlreadyExists struct {
+	ID string
+}
+
+func (e ErrIPAMPoolAlreadyExists) Error() string {
+	return fmt.Sprintf("IPAM pool already exists: %s", e.ID)
+}
+
+// ErrIPAMPoolHasAllocations is returned when attempting to delete a pool that
+// still has active allocations.
+type ErrIPAMPoolHasAllocations struct {
+	ID string
+}
+
+func (e ErrIPAMPoolHasAllocations) Error() string {
+	return fmt.Sprintf("IPAM pool has active allocations: %s", e.ID)
+}
+
+// ErrIPAMCIDRImmutable is returned when attempting to change the CIDR of a pool.
+type ErrIPAMCIDRImmutable struct{}
+
+func (e ErrIPAMCIDRImmutable) Error() string {
+	return "CIDR cannot be changed after pool creation"
+}
+
 // ErrIPAllocationNotFound is returned when an IP allocation is not found.
 type ErrIPAllocationNotFound struct {
 	IP string
@@ -265,12 +292,19 @@ type AnnouncedPrefixListResponse struct {
 
 // IPAMPoolResponse represents an IPAM pool.
 type IPAMPoolResponse struct {
-	ID        string `json:"id"`
-	CIDR      string `json:"cidr"`
-	Gateway   string `json:"gateway"`
-	Total     uint32 `json:"total"`
-	Allocated uint32 `json:"allocated"`
-	Available uint32 `json:"available"`
+	ID                      string    `json:"id"`
+	Name                    string    `json:"name"`
+	CIDR                    string    `json:"cidr"`
+	Gateway                 string    `json:"gateway,omitempty"`
+	Zone                    string    `json:"zone,omitempty"`
+	Description             string    `json:"description,omitempty"`
+	Total                   uint64    `json:"total"`
+	Allocated               uint64    `json:"allocated"`
+	Available               uint64    `json:"available"`
+	DefaultLeaseDurationNs  int64     `json:"default_lease_duration_nanos,omitempty"`
+	InactivityTimeoutNs     int64     `json:"inactivity_timeout_nanos,omitempty"`
+	CreatedAt               time.Time `json:"created_at,omitempty"`
+	UpdatedAt               time.Time `json:"updated_at,omitempty"`
 }
 
 // IPAMPoolListResponse represents a list of IPAM pools.
@@ -278,6 +312,29 @@ type IPAMPoolListResponse struct {
 	Pools     []IPAMPoolResponse `json:"pools"`
 	Count     int                `json:"count"`
 	Timestamp time.Time          `json:"timestamp"`
+}
+
+// CreateIPAMPoolRequest is the REST body for creating an IPAM pool.
+type CreateIPAMPoolRequest struct {
+	ID                      string `json:"id,omitempty"`
+	Name                    string `json:"name"`
+	CIDR                    string `json:"cidr"`
+	Gateway                 string `json:"gateway,omitempty"`
+	Zone                    string `json:"zone,omitempty"`
+	Description             string `json:"description,omitempty"`
+	DefaultLeaseDurationNs  int64  `json:"default_lease_duration_nanos,omitempty"`
+	InactivityTimeoutNs     int64  `json:"inactivity_timeout_nanos,omitempty"`
+}
+
+// UpdateIPAMPoolRequest is the REST body for updating an IPAM pool.
+// CIDR is immutable and must not be included.
+type UpdateIPAMPoolRequest struct {
+	Name                    string `json:"name,omitempty"`
+	Gateway                 string `json:"gateway,omitempty"`
+	Zone                    string `json:"zone,omitempty"`
+	Description             string `json:"description,omitempty"`
+	DefaultLeaseDurationNs  int64  `json:"default_lease_duration_nanos,omitempty"`
+	InactivityTimeoutNs     int64  `json:"inactivity_timeout_nanos,omitempty"`
 }
 
 // AllocateIPRequest represents a request to allocate an IP.
@@ -337,8 +394,14 @@ type GatewayServiceInterface interface {
 	WithdrawPrefix(ctx context.Context, prefix string) error
 	ListAnnouncedPrefixes(ctx context.Context) ([]AnnouncedPrefixResponse, error)
 
-	// IPAM operations
-	ListIPAMPools(ctx context.Context) ([]IPAMPoolResponse, error)
+	// IPAM pool CRUD
+	CreateIPAMPool(ctx context.Context, req *CreateIPAMPoolRequest) (*IPAMPoolResponse, error)
+	GetIPAMPool(ctx context.Context, poolID string) (*IPAMPoolResponse, error)
+	UpdateIPAMPool(ctx context.Context, poolID string, req *UpdateIPAMPoolRequest) (*IPAMPoolResponse, error)
+	DeleteIPAMPool(ctx context.Context, poolID string) error
+	ListIPAMPools(ctx context.Context, zone string) ([]IPAMPoolResponse, error)
+
+	// IPAM allocation operations
 	AllocateIP(ctx context.Context, poolID, deviceID, hostname string) (*IPAllocationResponse, error)
 	ReleaseIP(ctx context.Context, ip string) error
 	ListAllocations(ctx context.Context, poolID string) ([]IPAllocationResponse, error)
@@ -383,8 +446,15 @@ func (h *GatewayHandlers) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/sdn/gateway/bgp/prefixes/{prefix}", h.handleWithdrawPrefix).Methods(http.MethodDelete)
 	router.HandleFunc("/api/v1/sdn/gateway/bgp/prefixes", h.handleListAnnouncedPrefixes).Methods(http.MethodGet)
 
-	// IPAM operations
+	// IPAM pool CRUD — pools collection
+	router.HandleFunc("/api/v1/sdn/gateway/ipam/pools", h.handleCreateIPAMPool).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/sdn/gateway/ipam/pools", h.handleListIPAMPools).Methods(http.MethodGet)
+	// IPAM pool CRUD — single pool
+	router.HandleFunc("/api/v1/sdn/gateway/ipam/pools/{id}", h.handleGetIPAMPool).Methods(http.MethodGet)
+	router.HandleFunc("/api/v1/sdn/gateway/ipam/pools/{id}", h.handleUpdateIPAMPool).Methods(http.MethodPut)
+	router.HandleFunc("/api/v1/sdn/gateway/ipam/pools/{id}", h.handleDeleteIPAMPool).Methods(http.MethodDelete)
+
+	// IPAM allocation operations
 	router.HandleFunc("/api/v1/sdn/gateway/ipam/allocations", h.handleAllocateIP).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/sdn/gateway/ipam/allocations/{ip}", h.handleReleaseIP).Methods(http.MethodDelete)
 	router.HandleFunc("/api/v1/sdn/gateway/ipam/allocations", h.handleListAllocations).Methods(http.MethodGet)
@@ -405,15 +475,15 @@ func (h *GatewayHandlers) handleGetGatewayStatus(w http.ResponseWriter, r *http.
 		return
 	}
 
-	status, err := h.gatewayService.GetGatewayStatus(ctx)
+	gwStatus, err := h.gatewayService.GetGatewayStatus(ctx)
 	if err != nil {
 		h.logger.Error("Failed to get gateway status", "error", err)
 		h.writeGatewayError(w, "get_gateway_status", err)
 		return
 	}
 
-	status.Timestamp = time.Now().UTC()
-	h.writeJSON(w, http.StatusOK, status)
+	gwStatus.Timestamp = time.Now().UTC()
+	h.writeJSON(w, http.StatusOK, gwStatus)
 }
 
 // handleSetGatewayMode handles PUT /api/v1/sdn/gateway/mode
@@ -462,15 +532,15 @@ func (h *GatewayHandlers) handleGetBGPStatus(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	status, err := h.gatewayService.GetBGPStatus(ctx)
+	bgpStatus, err := h.gatewayService.GetBGPStatus(ctx)
 	if err != nil {
 		h.logger.Error("Failed to get BGP status", "error", err)
 		h.writeGatewayError(w, "get_bgp_status", err)
 		return
 	}
 
-	status.Timestamp = time.Now().UTC()
-	h.writeJSON(w, http.StatusOK, status)
+	bgpStatus.Timestamp = time.Now().UTC()
+	h.writeJSON(w, http.StatusOK, bgpStatus)
 }
 
 // handleListBGPPeers handles GET /api/v1/sdn/gateway/bgp/peers
@@ -603,8 +673,134 @@ func (h *GatewayHandlers) handleListAnnouncedPrefixes(w http.ResponseWriter, r *
 }
 
 // =============================================================================
-// IPAM Handlers
+// IPAM Pool CRUD Handlers
 // =============================================================================
+
+// handleCreateIPAMPool handles POST /api/v1/sdn/gateway/ipam/pools
+func (h *GatewayHandlers) handleCreateIPAMPool(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if h.gatewayService == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrGatewayServiceNotAvailable{})
+		return
+	}
+
+	var req CreateIPAMPoolRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
+		return
+	}
+
+	if req.Name == "" {
+		h.writeError(w, http.StatusBadRequest, ErrMissingRequiredField{Field: "name"})
+		return
+	}
+
+	if req.CIDR == "" {
+		h.writeError(w, http.StatusBadRequest, ErrMissingRequiredField{Field: "cidr"})
+		return
+	}
+
+	pool, err := h.gatewayService.CreateIPAMPool(ctx, &req)
+	if err != nil {
+		h.logger.Error("Failed to create IPAM pool", "error", err, "name", req.Name, "cidr", req.CIDR)
+		h.writeGatewayError(w, "create_ipam_pool", err)
+		return
+	}
+
+	h.logger.Info("IPAM pool created", "id", pool.ID, "name", pool.Name, "cidr", pool.CIDR)
+	h.writeJSON(w, http.StatusCreated, pool)
+}
+
+// handleGetIPAMPool handles GET /api/v1/sdn/gateway/ipam/pools/{id}
+func (h *GatewayHandlers) handleGetIPAMPool(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if h.gatewayService == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrGatewayServiceNotAvailable{})
+		return
+	}
+
+	id := mux.Vars(r)["id"]
+	if id == "" {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidPoolID{})
+		return
+	}
+
+	pool, err := h.gatewayService.GetIPAMPool(ctx, id)
+	if err != nil {
+		h.logger.Error("Failed to get IPAM pool", "error", err, "id", id)
+		h.writeGatewayError(w, "get_ipam_pool", err)
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, pool)
+}
+
+// handleUpdateIPAMPool handles PUT /api/v1/sdn/gateway/ipam/pools/{id}
+func (h *GatewayHandlers) handleUpdateIPAMPool(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if h.gatewayService == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrGatewayServiceNotAvailable{})
+		return
+	}
+
+	id := mux.Vars(r)["id"]
+	if id == "" {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidPoolID{})
+		return
+	}
+
+	var req UpdateIPAMPoolRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
+		return
+	}
+
+	pool, err := h.gatewayService.UpdateIPAMPool(ctx, id, &req)
+	if err != nil {
+		h.logger.Error("Failed to update IPAM pool", "error", err, "id", id)
+		h.writeGatewayError(w, "update_ipam_pool", err)
+		return
+	}
+
+	h.logger.Info("IPAM pool updated", "id", id)
+	h.writeJSON(w, http.StatusOK, pool)
+}
+
+// handleDeleteIPAMPool handles DELETE /api/v1/sdn/gateway/ipam/pools/{id}
+func (h *GatewayHandlers) handleDeleteIPAMPool(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if h.gatewayService == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrGatewayServiceNotAvailable{})
+		return
+	}
+
+	id := mux.Vars(r)["id"]
+	if id == "" {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidPoolID{})
+		return
+	}
+
+	if err := h.gatewayService.DeleteIPAMPool(ctx, id); err != nil {
+		h.logger.Error("Failed to delete IPAM pool", "error", err, "id", id)
+		h.writeGatewayError(w, "delete_ipam_pool", err)
+		return
+	}
+
+	resp := GatewayActionResponse{
+		ResourceID:   id,
+		ResourceType: "ipam_pool",
+		Action:       "delete",
+		Success:      true,
+		Message:      "pool deleted successfully",
+	}
+
+	h.logger.Info("IPAM pool deleted", "id", id)
+	h.writeJSON(w, http.StatusOK, resp)
+}
 
 // handleListIPAMPools handles GET /api/v1/sdn/gateway/ipam/pools
 func (h *GatewayHandlers) handleListIPAMPools(w http.ResponseWriter, r *http.Request) {
@@ -615,7 +811,10 @@ func (h *GatewayHandlers) handleListIPAMPools(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	pools, err := h.gatewayService.ListIPAMPools(ctx)
+	// Optional zone filter via query parameter.
+	zone := r.URL.Query().Get("zone")
+
+	pools, err := h.gatewayService.ListIPAMPools(ctx, zone)
 	if err != nil {
 		h.logger.Error("Failed to list IPAM pools", "error", err)
 		h.writeGatewayError(w, "list_ipam_pools", err)
@@ -630,6 +829,10 @@ func (h *GatewayHandlers) handleListIPAMPools(w http.ResponseWriter, r *http.Req
 
 	h.writeJSON(w, http.StatusOK, resp)
 }
+
+// =============================================================================
+// IPAM Allocation Handlers
+// =============================================================================
 
 // handleAllocateIP handles POST /api/v1/sdn/gateway/ipam/allocations
 func (h *GatewayHandlers) handleAllocateIP(w http.ResponseWriter, r *http.Request) {
@@ -741,59 +944,65 @@ func (h *GatewayHandlers) handleListAllocations(w http.ResponseWriter, r *http.R
 // =============================================================================
 
 // writeJSON writes a JSON response.
-func (h *GatewayHandlers) writeJSON(w http.ResponseWriter, status int, data interface{}) {
+func (h *GatewayHandlers) writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
+	w.WriteHeader(statusCode)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		h.logger.Error("Failed to encode JSON response", "error", err)
 	}
 }
 
 // writeError writes an error response.
-func (h *GatewayHandlers) writeError(w http.ResponseWriter, status int, err error) {
-	h.writeJSON(w, status, GatewayErrorResponse{
+func (h *GatewayHandlers) writeError(w http.ResponseWriter, statusCode int, err error) {
+	h.writeJSON(w, statusCode, GatewayErrorResponse{
 		Error:     err.Error(),
-		Code:      status,
+		Code:      statusCode,
 		Timestamp: time.Now().UTC(),
 	})
 }
 
 // writeGatewayError maps gateway errors to appropriate HTTP status codes.
 func (h *GatewayHandlers) writeGatewayError(w http.ResponseWriter, operation string, err error) {
-	var status int
+	var statusCode int
 
 	switch err.(type) {
 	case ErrBGPNotEnabled:
-		status = http.StatusServiceUnavailable
+		statusCode = http.StatusServiceUnavailable
 	case ErrBGPPeerNotFound:
-		status = http.StatusNotFound
+		statusCode = http.StatusNotFound
 	case ErrPrefixNotFound:
-		status = http.StatusNotFound
+		statusCode = http.StatusNotFound
 	case ErrPrefixAlreadyAnnounced:
-		status = http.StatusConflict
+		statusCode = http.StatusConflict
 	case ErrIPAMPoolNotFound:
-		status = http.StatusNotFound
+		statusCode = http.StatusNotFound
+	case ErrIPAMPoolAlreadyExists:
+		statusCode = http.StatusConflict
+	case ErrIPAMPoolHasAllocations:
+		statusCode = http.StatusConflict
+	case ErrIPAMCIDRImmutable:
+		statusCode = http.StatusBadRequest
 	case ErrIPAllocationNotFound:
-		status = http.StatusNotFound
+		statusCode = http.StatusNotFound
 	case ErrIPAlreadyAllocated:
-		status = http.StatusConflict
+		statusCode = http.StatusConflict
 	case ErrIPAMPoolExhausted:
-		status = http.StatusServiceUnavailable
+		statusCode = http.StatusServiceUnavailable
 	case ErrInvalidGatewayMode:
-		status = http.StatusBadRequest
+		statusCode = http.StatusBadRequest
 	case ErrInvalidPrefix:
-		status = http.StatusBadRequest
+		statusCode = http.StatusBadRequest
 	case ErrInvalidIPAddress:
-		status = http.StatusBadRequest
+		statusCode = http.StatusBadRequest
 	case ErrInvalidPoolID:
-		status = http.StatusBadRequest
+		statusCode = http.StatusBadRequest
 	case ErrGatewayServiceNotAvailable:
-		status = http.StatusServiceUnavailable
+		statusCode = http.StatusServiceUnavailable
 	default:
-		status = http.StatusInternalServerError
+		statusCode = http.StatusInternalServerError
 	}
 
-	h.writeError(w, status, ErrGatewayOperationFailed{
+	h.writeError(w, statusCode, ErrGatewayOperationFailed{
 		Operation: operation,
 		Cause:     err,
 	})

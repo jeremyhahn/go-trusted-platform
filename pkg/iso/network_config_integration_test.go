@@ -90,7 +90,7 @@ func TestNetworkConfigGenerationFromDeviceProfile(t *testing.T) {
 		assert.Equal(t, "tcp", config.ACLs[0].Protocol)
 	})
 
-	t.Run("Generate production network configuration", func(t *testing.T) {
+	t.Run("Generate trusted network configuration", func(t *testing.T) {
 		config := generateNetworkConfigFromProfile(profile.GetPostEnrollmentNetworkConfig())
 		require.NotNil(t, config)
 
@@ -175,7 +175,7 @@ func TestNetworkConfigEmbeddingInISO(t *testing.T) {
 		assert.Equal(t, config.Gateway, readConfig.Gateway)
 	})
 
-	t.Run("Embed production network config in overlay", func(t *testing.T) {
+	t.Run("Embed trusted network config in overlay", func(t *testing.T) {
 		config := generateNetworkConfigFromProfile(profile.GetPostEnrollmentNetworkConfig())
 		require.NotNil(t, config)
 
@@ -183,19 +183,19 @@ func TestNetworkConfigEmbeddingInISO(t *testing.T) {
 		netConfigDir := filepath.Join(overlayDir, "etc", "platformd", "network")
 		require.NoError(t, os.MkdirAll(netConfigDir, 0755))
 
-		// Write production config
-		prodConfigPath := filepath.Join(netConfigDir, "production.yaml")
+		// Write trusted config
+		trustedConfigPath := filepath.Join(netConfigDir, "trusted.yaml")
 		data, err := yaml.Marshal(config)
 		require.NoError(t, err)
 
-		err = os.WriteFile(prodConfigPath, data, 0644)
+		err = os.WriteFile(trustedConfigPath, data, 0644)
 		require.NoError(t, err)
 
 		// Verify file was created
-		assert.FileExists(t, prodConfigPath)
+		assert.FileExists(t, trustedConfigPath)
 
 		// Read back and verify
-		readData, err := os.ReadFile(prodConfigPath)
+		readData, err := os.ReadFile(trustedConfigPath)
 		require.NoError(t, err)
 
 		var readConfig entities.NetworkPhaseConfig
@@ -213,7 +213,7 @@ func TestVLANExtractionFromProfile(t *testing.T) {
 		name     string
 		profile  *entities.DeviceProfile
 		wantProv uint16
-		wantProd uint16
+		wantTrusted uint16
 		wantQuar uint16
 	}{
 		{
@@ -226,11 +226,11 @@ func TestVLANExtractionFromProfile(t *testing.T) {
 				},
 			},
 			wantProv: 100,
-			wantProd: 200,
+			wantTrusted: 200,
 			wantQuar: 300,
 		},
 		{
-			name: "Only provisioning and production",
+			name: "Only provisioning and trusted",
 			profile: &entities.DeviceProfile{
 				Networks: map[string]*entities.NetworkPhaseConfig{
 					entities.DefaultEnrollmentNetwork:     {VLAN: 101},
@@ -238,7 +238,7 @@ func TestVLANExtractionFromProfile(t *testing.T) {
 				},
 			},
 			wantProv: 101,
-			wantProd: 201,
+			wantTrusted: 201,
 			wantQuar: 0,
 		},
 	}
@@ -248,7 +248,7 @@ func TestVLANExtractionFromProfile(t *testing.T) {
 			vlans := extractVLANsFromProfile(tt.profile)
 
 			assert.Equal(t, tt.wantProv, vlans.Provisioning)
-			assert.Equal(t, tt.wantProd, vlans.Production)
+			assert.Equal(t, tt.wantTrusted, vlans.Trusted)
 			assert.Equal(t, tt.wantQuar, vlans.Quarantine)
 		})
 	}

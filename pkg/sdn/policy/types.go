@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
 // PortState represents the authentication state of a network port
@@ -79,7 +80,13 @@ type PortPolicy struct {
 	// TenantID is the tenant identifier extracted from the certificate
 	TenantID string
 
-	// VLAN is the VLAN ID assigned to this port
+	// Zone is the network zone assigned to this port. When non-empty the
+	// engine resolves the target VLAN via ZoneIndex rather than using the
+	// VLAN field directly.
+	Zone zone.Zone
+
+	// VLAN is the VLAN ID assigned to this port. Populated from the Zone
+	// resolution when Zone is set, or supplied directly when Zone is empty.
 	VLAN uint16
 
 	// ACLs are the access control list rules for this port
@@ -252,17 +259,19 @@ type CertificateValidator interface {
 	CheckExpiry(cert *x509.Certificate, threshold time.Duration) error
 }
 
-// PolicyExtractor defines the interface for extracting policy from certificates
+// PolicyExtractor defines the interface for extracting policy from certificates.
 type PolicyExtractor interface {
-	// ExtractPolicy extracts policy information from a certificate
+	// ExtractPolicy extracts policy information from a certificate.
 	ExtractPolicy(cert *x509.Certificate) (*PortPolicy, error)
 
-	// ExtractTenantID extracts the tenant ID from a certificate
+	// ExtractTenantID extracts the tenant ID from a certificate.
 	ExtractTenantID(cert *x509.Certificate) (string, error)
 
-	// ExtractVLAN extracts the VLAN ID from a certificate
-	ExtractVLAN(cert *x509.Certificate) (uint16, error)
+	// ExtractZone extracts the SDN network zone from the OIDTPNetworkZone
+	// extension (1.3.6.1.4.1.29377.101.21). Returns ErrMissingZoneExtension
+	// when the extension is absent.
+	ExtractZone(cert *x509.Certificate) (string, error)
 
-	// ExtractACLs extracts ACL rules from a certificate
+	// ExtractACLs extracts ACL rules from a certificate.
 	ExtractACLs(cert *x509.Certificate) ([]ACLRule, error)
 }

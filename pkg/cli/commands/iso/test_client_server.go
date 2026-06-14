@@ -410,7 +410,7 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 				// Configure VLANs for different phases if profiles specify them
 				if serverProfile != nil {
 					if prodNet := serverProfile.GetPostEnrollmentNetworkConfig(); prodNet != nil {
-						ovsOpts.ProductionVLAN = prodNet.VLAN
+						ovsOpts.TrustedVLAN = prodNet.VLAN
 					}
 				}
 				if clientProfile != nil {
@@ -426,7 +426,7 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 					return fmt.Errorf("failed to setup OVS isolated network: %w", err)
 				}
 				// Set initial phases - server starts in production, client starts in provisioning
-				if err := ovsNet.SetPhase(netConfig.ServerTapName, testenv.NetworkPhaseProduction); err != nil {
+				if err := ovsNet.SetPhase(netConfig.ServerTapName, testenv.NetworkPhaseTrusted); err != nil {
 					logger.Warnf("Failed to set server to production phase: %v", err)
 				}
 				if err := ovsNet.SetPhase(netConfig.ClientTapName, testenv.NetworkPhaseProvisioning); err != nil {

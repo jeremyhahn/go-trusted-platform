@@ -48,6 +48,40 @@ func (e ErrDeviceRequired) Error() string {
 	return "bmc: --device is required"
 }
 
+// ErrCABundleLoadFailed is returned when the CA bundle used to verify the
+// platformd TLS certificate cannot be read or parsed.
+type ErrCABundleLoadFailed struct {
+	Path  string
+	Cause error
+}
+
+func (e ErrCABundleLoadFailed) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bmc: failed to load CA bundle %q: %v", e.Path, e.Cause)
+	}
+	return fmt.Sprintf("bmc: failed to parse CA bundle %q", e.Path)
+}
+
+func (e ErrCABundleLoadFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrClientCertLoadFailed is returned when the mutual-TLS client certificate
+// or key cannot be loaded for the daemon-mode REST path.
+type ErrClientCertLoadFailed struct {
+	CertPath string
+	KeyPath  string
+	Cause    error
+}
+
+func (e ErrClientCertLoadFailed) Error() string {
+	return fmt.Sprintf("bmc: failed to load client certificate (cert=%q key=%q): %v", e.CertPath, e.KeyPath, e.Cause)
+}
+
+func (e ErrClientCertLoadFailed) Unwrap() error {
+	return e.Cause
+}
+
 // ErrRequestFailed is returned when an HTTP request to the BMC API fails.
 type ErrRequestFailed struct {
 	URL   string

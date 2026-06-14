@@ -38,6 +38,15 @@ const (
 	OpGatewayListAllocations byte = 0x0B
 	OpGatewayCreateIPAMPool  byte = 0x0C
 	OpGatewayDeleteIPAMPool  byte = 0x0D
+	OpGatewayGetIPAMPool     byte = 0x0E
+	OpGatewayUpdateIPAMPool  byte = 0x0F
+
+	// Network Zone Operations (0x10-0x14)
+	OpGatewayListNetworkZones  byte = 0x10
+	OpGatewayCreateNetworkZone byte = 0x11
+	OpGatewayUpdateNetworkZone byte = 0x12
+	OpGatewayDeleteNetworkZone byte = 0x13
+	OpGatewayAssignNetworkZone byte = 0x14
 
 	// Extended opcode category marker for gateway operations
 	ExtendedOpcodeGateway byte = 0x04
@@ -125,6 +134,25 @@ var (
 
 	// ErrGatewayBGPPeerNotFound is returned when a BGP peer is not found.
 	ErrGatewayBGPPeerNotFound = errors.New("BGP peer not found")
+
+	// ErrGatewayZoneNameRequired is returned when a zone name is required.
+	ErrGatewayZoneNameRequired = errors.New("zone name is required")
+
+	// ErrGatewayZoneNotFound is returned when a zone is not found.
+	ErrGatewayZoneNotFound = errors.New("zone not found")
+
+	// ErrGatewayNetworkRequired is returned when a network name is required.
+	ErrGatewayNetworkRequired = errors.New("network name is required")
+
+	// ErrGatewayZoneTargetRequired is returned when a target zone is required.
+	ErrGatewayZoneTargetRequired = errors.New("target zone name is required")
+
+	// ErrGatewayFeatureNotConfigured is returned when a gateway feature is
+	// requested but the backing service or hardware is not configured. Adapters
+	// that only support a subset of the GatewayServiceInterface (e.g. zone-only
+	// adapters) return this error for every unsupported method so the QUIC
+	// handler correctly emits StatusUnavailable to the client.
+	ErrGatewayFeatureNotConfigured = errors.New("gateway feature not configured")
 )
 
 // GatewayServiceInterface defines the interface for gateway operations.
@@ -143,12 +171,21 @@ type GatewayServiceInterface interface {
 	ListPrefixes(ctx context.Context) ([]*PrefixInfo, error)
 
 	// IPAM operations
-	ListIPAMPools(ctx context.Context) ([]*IPAMPoolInfo, error)
+	ListIPAMPools(ctx context.Context, zone string) ([]*IPAMPoolInfo, error)
+	GetIPAMPool(ctx context.Context, poolID string) (*IPAMPoolInfo, error)
 	CreateIPAMPool(ctx context.Context, opts *CreateIPAMPoolOptions) (*IPAMPoolInfo, error)
+	UpdateIPAMPool(ctx context.Context, poolID string, opts *UpdateIPAMPoolOptions) (*IPAMPoolInfo, error)
 	DeleteIPAMPool(ctx context.Context, poolID string) error
 	AllocateIP(ctx context.Context, poolID string, opts *AllocateIPOptions) (*IPAllocationInfo, error)
 	ReleaseIP(ctx context.Context, poolID string, ip string) error
 	ListAllocations(ctx context.Context, poolID string) ([]*IPAllocationInfo, error)
+
+	// Network Zone operations
+	ListNetworkZones(ctx context.Context, lifecycleRole string) ([]*NetworkZoneInfo, error)
+	CreateNetworkZone(ctx context.Context, opts *CreateNetworkZoneOptions) (*NetworkZoneInfo, error)
+	UpdateNetworkZone(ctx context.Context, name string, opts *UpdateNetworkZoneOptions) (*NetworkZoneInfo, error)
+	DeleteNetworkZone(ctx context.Context, name string) (bool, error)
+	AssignNetworkZone(ctx context.Context, network string, zoneName string) (bool, error)
 }
 
 // GatewayStatusInfo contains gateway status information
@@ -230,6 +267,8 @@ type IPAMPoolInfo struct {
 	Name          string            `codec:"name"`
 	CIDR          string            `codec:"cidr"`
 	Gateway       string            `codec:"gateway,omitempty"`
+	Zone          string            `codec:"zone,omitempty"`
+	Description   string            `codec:"description,omitempty"`
 	DNS           []string          `codec:"dns,omitempty"`
 	TotalIPs      int               `codec:"total_ips"`
 	AllocatedIPs  int               `codec:"allocated_ips"`
@@ -272,11 +311,114 @@ type AllocateIPOptions struct {
 
 // CreateIPAMPoolOptions contains options for creating an IPAM pool
 type CreateIPAMPoolOptions struct {
+	ID            string   `codec:"id,omitempty"`
 	Name          string   `codec:"name"`
 	CIDR          string   `codec:"cidr"`
 	Gateway       string   `codec:"gateway,omitempty"`
+	Zone          string   `codec:"zone,omitempty"`
+	Description   string   `codec:"description,omitempty"`
 	DNS           []string `codec:"dns,omitempty"`
 	LeaseDuration int64    `codec:"lease_duration_nanos,omitempty"`
+}
+
+// UpdateIPAMPoolOptions contains options for updating an IPAM pool.
+// CIDR is immutable and must not be specified.
+type UpdateIPAMPoolOptions struct {
+	Name          string `codec:"name,omitempty"`
+	Gateway       string `codec:"gateway,omitempty"`
+	Zone          string `codec:"zone,omitempty"`
+	Description   string `codec:"description,omitempty"`
+	LeaseDuration int64  `codec:"lease_duration_nanos,omitempty"`
+}
+
+// NetworkZoneInfo contains network zone information.
+type NetworkZoneInfo struct {
+	Name             string   `codec:"name"`
+	InternetIngress  bool     `codec:"internet_ingress,omitempty"`
+	IsolateFrom      []string `codec:"isolate_from,omitempty"`
+	Isolate          bool     `codec:"isolate,omitempty"`
+	IsolatePerTenant bool     `codec:"isolate_per_tenant,omitempty"`
+	OOB              bool     `codec:"oob,omitempty"`
+	LifecycleRole    string   `codec:"lifecycle_role,omitempty"`
+	RestartRequired  bool     `codec:"restart_required,omitempty"`
+	CreatedAt        int64    `codec:"created_at"`
+	UpdatedAt        int64    `codec:"updated_at"`
+}
+
+// CreateNetworkZoneOptions contains options for creating a network zone.
+type CreateNetworkZoneOptions struct {
+	Name             string   `codec:"name"`
+	InternetIngress  bool     `codec:"internet_ingress,omitempty"`
+	IsolateFrom      []string `codec:"isolate_from,omitempty"`
+	Isolate          bool     `codec:"isolate,omitempty"`
+	IsolatePerTenant bool     `codec:"isolate_per_tenant,omitempty"`
+	OOB              bool     `codec:"oob,omitempty"`
+	LifecycleRole    string   `codec:"lifecycle_role,omitempty"`
+}
+
+// UpdateNetworkZoneOptions contains options for updating a network zone.
+type UpdateNetworkZoneOptions struct {
+	InternetIngress  bool     `codec:"internet_ingress,omitempty"`
+	IsolateFrom      []string `codec:"isolate_from,omitempty"`
+	Isolate          bool     `codec:"isolate,omitempty"`
+	IsolatePerTenant bool     `codec:"isolate_per_tenant,omitempty"`
+	OOB              bool     `codec:"oob,omitempty"`
+	LifecycleRole    string   `codec:"lifecycle_role,omitempty"`
+}
+
+// GatewayListNetworkZonesRequest represents a zone list request.
+type GatewayListNetworkZonesRequest struct {
+	LifecycleRole string `codec:"lifecycle_role,omitempty"`
+}
+
+// GatewayListNetworkZonesResponse represents a zone list response.
+type GatewayListNetworkZonesResponse struct {
+	Zones     []*NetworkZoneInfo `codec:"zones"`
+	Timestamp int64              `codec:"timestamp"`
+}
+
+// GatewayCreateNetworkZoneRequest represents a zone create request.
+type GatewayCreateNetworkZoneRequest struct {
+	Opts *CreateNetworkZoneOptions `codec:"opts"`
+}
+
+// GatewayCreateNetworkZoneResponse represents a zone create response.
+type GatewayCreateNetworkZoneResponse struct {
+	Zone *NetworkZoneInfo `codec:"zone"`
+}
+
+// GatewayUpdateNetworkZoneRequest represents a zone update request.
+type GatewayUpdateNetworkZoneRequest struct {
+	Name string                    `codec:"name"`
+	Opts *UpdateNetworkZoneOptions `codec:"opts"`
+}
+
+// GatewayUpdateNetworkZoneResponse represents a zone update response.
+type GatewayUpdateNetworkZoneResponse struct {
+	Zone *NetworkZoneInfo `codec:"zone"`
+}
+
+// GatewayDeleteNetworkZoneRequest represents a zone delete request.
+type GatewayDeleteNetworkZoneRequest struct {
+	Name string `codec:"name"`
+}
+
+// GatewayDeleteNetworkZoneResponse represents a zone delete response.
+type GatewayDeleteNetworkZoneResponse struct {
+	RestartRequired bool  `codec:"restart_required"`
+	Timestamp       int64 `codec:"timestamp"`
+}
+
+// GatewayAssignNetworkZoneRequest represents a zone assign request.
+type GatewayAssignNetworkZoneRequest struct {
+	Network string `codec:"network"`
+	Zone    string `codec:"zone"`
+}
+
+// GatewayAssignNetworkZoneResponse represents a zone assign response.
+type GatewayAssignNetworkZoneResponse struct {
+	RestartRequired bool  `codec:"restart_required"`
+	Timestamp       int64 `codec:"timestamp"`
 }
 
 // GatewayHandler handles gateway operations over QUIC
@@ -330,6 +472,23 @@ func (h *GatewayHandler) HandleRequest(ctx context.Context, req *Request) *Respo
 		return h.handleCreateIPAMPool(ctx, req)
 	case OpGatewayDeleteIPAMPool:
 		return h.handleDeleteIPAMPool(ctx, req)
+	case OpGatewayGetIPAMPool:
+		return h.handleGetIPAMPool(ctx, req)
+	case OpGatewayUpdateIPAMPool:
+		return h.handleUpdateIPAMPool(ctx, req)
+
+	// Network Zone operations
+	case OpGatewayListNetworkZones:
+		return h.handleListNetworkZones(ctx, req)
+	case OpGatewayCreateNetworkZone:
+		return h.handleCreateNetworkZone(ctx, req)
+	case OpGatewayUpdateNetworkZone:
+		return h.handleUpdateNetworkZone(ctx, req)
+	case OpGatewayDeleteNetworkZone:
+		return h.handleDeleteNetworkZone(ctx, req)
+	case OpGatewayAssignNetworkZone:
+		return h.handleAssignNetworkZone(ctx, req)
+
 	default:
 		return &Response{
 			Status:  StatusInvalidRequest,
@@ -427,7 +586,36 @@ type GatewayListPrefixesResponse struct {
 
 // GatewayListIPAMPoolsRequest represents an IPAM pools list request
 type GatewayListIPAMPoolsRequest struct {
-	Limit int32 `codec:"limit,omitempty"`
+	// Zone filters pools by trust/exposure zone; empty returns all pools.
+	Zone  string `codec:"zone,omitempty"`
+	Limit int32  `codec:"limit,omitempty"`
+}
+
+// GatewayGetIPAMPoolRequest represents an IPAM pool get request
+type GatewayGetIPAMPoolRequest struct {
+	PoolID string `codec:"pool_id"`
+}
+
+// GatewayGetIPAMPoolResponse represents an IPAM pool get response
+type GatewayGetIPAMPoolResponse struct {
+	Pool      *IPAMPoolInfo `codec:"pool"`
+	Timestamp int64         `codec:"timestamp"`
+}
+
+// GatewayUpdateIPAMPoolRequest represents an IPAM pool update request
+type GatewayUpdateIPAMPoolRequest struct {
+	PoolID        string `codec:"pool_id"`
+	Name          string `codec:"name,omitempty"`
+	Gateway       string `codec:"gateway,omitempty"`
+	Zone          string `codec:"zone,omitempty"`
+	Description   string `codec:"description,omitempty"`
+	LeaseDuration int64  `codec:"lease_duration_nanos,omitempty"`
+}
+
+// GatewayUpdateIPAMPoolResponse represents an IPAM pool update response
+type GatewayUpdateIPAMPoolResponse struct {
+	Pool      *IPAMPoolInfo `codec:"pool"`
+	Timestamp int64         `codec:"timestamp"`
 }
 
 // GatewayListIPAMPoolsResponse represents an IPAM pools list response
@@ -439,9 +627,12 @@ type GatewayListIPAMPoolsResponse struct {
 
 // GatewayCreateIPAMPoolRequest represents an IPAM pool create request
 type GatewayCreateIPAMPoolRequest struct {
+	ID            string   `codec:"id,omitempty"`
 	Name          string   `codec:"name"`
 	CIDR          string   `codec:"cidr"`
 	Gateway       string   `codec:"gateway,omitempty"`
+	Zone          string   `codec:"zone,omitempty"`
+	Description   string   `codec:"description,omitempty"`
 	DNS           []string `codec:"dns,omitempty"`
 	LeaseDuration int64    `codec:"lease_duration_nanos,omitempty"`
 }
@@ -811,7 +1002,7 @@ func (h *GatewayHandler) handleListIPAMPools(ctx context.Context, req *Request) 
 		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
 	}
 
-	pools, err := h.gatewayService.ListIPAMPools(ctx)
+	pools, err := h.gatewayService.ListIPAMPools(ctx, listReq.Zone)
 	if err != nil {
 		h.logger.Error(err, "failed to list IPAM pools")
 		return h.gatewayErrorResponse(err)
@@ -872,9 +1063,12 @@ func (h *GatewayHandler) handleCreateIPAMPool(ctx context.Context, req *Request)
 	}
 
 	opts := &CreateIPAMPoolOptions{
+		ID:            createReq.ID,
 		Name:          createReq.Name,
 		CIDR:          createReq.CIDR,
 		Gateway:       createReq.Gateway,
+		Zone:          createReq.Zone,
+		Description:   createReq.Description,
 		DNS:           createReq.DNS,
 		LeaseDuration: createReq.LeaseDuration,
 	}
@@ -1050,10 +1244,7 @@ func (h *GatewayHandler) handleListAllocations(ctx context.Context, req *Request
 		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
 	}
 
-	if listReq.PoolID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrGatewayMissingPoolID)
-	}
-
+	// Empty PoolID lists allocations across all pools (same semantics as gRPC ListAllocations).
 	allocations, err := h.gatewayService.ListAllocations(ctx, listReq.PoolID)
 	if err != nil {
 		h.logger.Error(err, "failed to list allocations")
@@ -1076,6 +1267,89 @@ func (h *GatewayHandler) handleListAllocations(ctx context.Context, req *Request
 		Allocations: allocations,
 		Count:       int32(len(allocations)),
 		Timestamp:   time.Now().Unix(),
+	}
+
+	payload, err := EncodePayload(resp)
+	if err != nil {
+		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+	}
+
+	return &Response{
+		Status:  StatusOK,
+		Payload: payload,
+	}
+}
+
+// handleGetIPAMPool returns a single IPAM pool by ID
+func (h *GatewayHandler) handleGetIPAMPool(ctx context.Context, req *Request) *Response {
+	if h.gatewayService == nil {
+		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+	}
+
+	var getReq GatewayGetIPAMPoolRequest
+	if err := DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	}
+
+	if getReq.PoolID == "" {
+		return h.errorResponse(StatusInvalidArgument, ErrGatewayMissingPoolID)
+	}
+
+	pool, err := h.gatewayService.GetIPAMPool(ctx, getReq.PoolID)
+	if err != nil {
+		h.logger.Error(err, "failed to get IPAM pool")
+		return h.gatewayErrorResponse(err)
+	}
+
+	resp := &GatewayGetIPAMPoolResponse{
+		Pool:      pool,
+		Timestamp: time.Now().Unix(),
+	}
+
+	payload, err := EncodePayload(resp)
+	if err != nil {
+		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+	}
+
+	return &Response{
+		Status:  StatusOK,
+		Payload: payload,
+	}
+}
+
+// handleUpdateIPAMPool updates mutable fields of an IPAM pool.
+// CIDR is immutable and cannot be changed after creation.
+func (h *GatewayHandler) handleUpdateIPAMPool(ctx context.Context, req *Request) *Response {
+	if h.gatewayService == nil {
+		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+	}
+
+	var updateReq GatewayUpdateIPAMPoolRequest
+	if err := DecodePayload(req.Payload, &updateReq); err != nil {
+		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	}
+
+	if updateReq.PoolID == "" {
+		return h.errorResponse(StatusInvalidArgument, ErrGatewayMissingPoolID)
+	}
+
+	opts := &UpdateIPAMPoolOptions{
+		Name:          updateReq.Name,
+		Gateway:       updateReq.Gateway,
+		Zone:          updateReq.Zone,
+		Description:   updateReq.Description,
+		LeaseDuration: updateReq.LeaseDuration,
+	}
+
+	pool, err := h.gatewayService.UpdateIPAMPool(ctx, updateReq.PoolID, opts)
+	if err != nil {
+		h.logger.Error(err, "failed to update IPAM pool")
+		return h.gatewayErrorResponse(err)
+	}
+
+	resp := &GatewayUpdateIPAMPoolResponse{
+		Pool:      pool,
+		Timestamp: time.Now().Unix(),
 	}
 
 	payload, err := EncodePayload(resp)
@@ -1144,6 +1418,8 @@ func (h *GatewayHandler) gatewayErrorResponse(err error) *Response {
 		status = StatusUnavailable
 	case errors.Is(err, ErrGatewayServiceNotAvailable):
 		status = StatusUnavailable
+	case errors.Is(err, ErrGatewayFeatureNotConfigured):
+		status = StatusUnavailable
 	default:
 		status = StatusInternalError
 	}
@@ -1193,4 +1469,172 @@ func (e ErrGatewayOperationFailed) Error() string {
 
 func (e ErrGatewayOperationFailed) Unwrap() error {
 	return e.Cause
+}
+
+// =============================================================================
+// Network Zone Handler Implementations
+// =============================================================================
+
+// handleListNetworkZones lists network trust zones.
+func (h *GatewayHandler) handleListNetworkZones(ctx context.Context, req *Request) *Response {
+	if h.gatewayService == nil {
+		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+	}
+
+	var listReq GatewayListNetworkZonesRequest
+	if len(req.Payload) > 0 {
+		if err := DecodePayload(req.Payload, &listReq); err != nil {
+			return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+		}
+	}
+
+	zones, err := h.gatewayService.ListNetworkZones(ctx, listReq.LifecycleRole)
+	if err != nil {
+		h.logger.Error(err, "failed to list network zones")
+		return h.gatewayErrorResponse(err)
+	}
+
+	resp := &GatewayListNetworkZonesResponse{
+		Zones:     zones,
+		Timestamp: time.Now().Unix(),
+	}
+
+	payload, err := EncodePayload(resp)
+	if err != nil {
+		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+	}
+
+	return &Response{Status: StatusOK, Payload: payload}
+}
+
+// handleCreateNetworkZone creates a new network trust zone.
+func (h *GatewayHandler) handleCreateNetworkZone(ctx context.Context, req *Request) *Response {
+	if h.gatewayService == nil {
+		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+	}
+
+	var createReq GatewayCreateNetworkZoneRequest
+	if err := DecodePayload(req.Payload, &createReq); err != nil {
+		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	}
+
+	if createReq.Opts == nil || createReq.Opts.Name == "" {
+		return h.errorResponse(StatusInvalidArgument, ErrGatewayZoneNameRequired)
+	}
+
+	z, err := h.gatewayService.CreateNetworkZone(ctx, createReq.Opts)
+	if err != nil {
+		h.logger.Error(err, "failed to create network zone")
+		return h.gatewayErrorResponse(err)
+	}
+
+	resp := &GatewayCreateNetworkZoneResponse{Zone: z}
+	payload, err := EncodePayload(resp)
+	if err != nil {
+		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+	}
+
+	return &Response{Status: StatusOK, Payload: payload}
+}
+
+// handleUpdateNetworkZone updates an existing network trust zone.
+func (h *GatewayHandler) handleUpdateNetworkZone(ctx context.Context, req *Request) *Response {
+	if h.gatewayService == nil {
+		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+	}
+
+	var updateReq GatewayUpdateNetworkZoneRequest
+	if err := DecodePayload(req.Payload, &updateReq); err != nil {
+		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	}
+
+	if updateReq.Name == "" {
+		return h.errorResponse(StatusInvalidArgument, ErrGatewayZoneNameRequired)
+	}
+	if updateReq.Opts == nil {
+		updateReq.Opts = &UpdateNetworkZoneOptions{}
+	}
+
+	z, err := h.gatewayService.UpdateNetworkZone(ctx, updateReq.Name, updateReq.Opts)
+	if err != nil {
+		h.logger.Error(err, "failed to update network zone")
+		return h.gatewayErrorResponse(err)
+	}
+
+	resp := &GatewayUpdateNetworkZoneResponse{Zone: z}
+	payload, err := EncodePayload(resp)
+	if err != nil {
+		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+	}
+
+	return &Response{Status: StatusOK, Payload: payload}
+}
+
+// handleDeleteNetworkZone deletes a network trust zone.
+func (h *GatewayHandler) handleDeleteNetworkZone(ctx context.Context, req *Request) *Response {
+	if h.gatewayService == nil {
+		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+	}
+
+	var deleteReq GatewayDeleteNetworkZoneRequest
+	if err := DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	}
+
+	if deleteReq.Name == "" {
+		return h.errorResponse(StatusInvalidArgument, ErrGatewayZoneNameRequired)
+	}
+
+	restartRequired, err := h.gatewayService.DeleteNetworkZone(ctx, deleteReq.Name)
+	if err != nil {
+		h.logger.Error(err, "failed to delete network zone")
+		return h.gatewayErrorResponse(err)
+	}
+
+	resp := &GatewayDeleteNetworkZoneResponse{
+		RestartRequired: restartRequired,
+		Timestamp:       time.Now().Unix(),
+	}
+	payload, err := EncodePayload(resp)
+	if err != nil {
+		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+	}
+
+	return &Response{Status: StatusOK, Payload: payload}
+}
+
+// handleAssignNetworkZone assigns a network segment to a trust zone.
+func (h *GatewayHandler) handleAssignNetworkZone(ctx context.Context, req *Request) *Response {
+	if h.gatewayService == nil {
+		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+	}
+
+	var assignReq GatewayAssignNetworkZoneRequest
+	if err := DecodePayload(req.Payload, &assignReq); err != nil {
+		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	}
+
+	if assignReq.Network == "" {
+		return h.errorResponse(StatusInvalidArgument, ErrGatewayNetworkRequired)
+	}
+	if assignReq.Zone == "" {
+		return h.errorResponse(StatusInvalidArgument, ErrGatewayZoneTargetRequired)
+	}
+
+	restartRequired, err := h.gatewayService.AssignNetworkZone(ctx, assignReq.Network, assignReq.Zone)
+	if err != nil {
+		h.logger.Error(err, "failed to assign network zone")
+		return h.gatewayErrorResponse(err)
+	}
+
+	resp := &GatewayAssignNetworkZoneResponse{
+		RestartRequired: restartRequired,
+		Timestamp:       time.Now().Unix(),
+	}
+	payload, err := EncodePayload(resp)
+	if err != nil {
+		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+	}
+
+	return &Response{Status: StatusOK, Payload: payload}
 }

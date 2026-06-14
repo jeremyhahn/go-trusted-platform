@@ -542,3 +542,11 @@ func (m *MockPolicyExtractor) ExtractACLs(cert *x509.Certificate) ([]policy.ACLR
 	}
 	return nil, fmt.Errorf("no ACLs configured")
 }
+
+// ExtractZone extracts the network zone from a certificate.
+func (m *MockPolicyExtractor) ExtractZone(cert *x509.Certificate) (string, error) {
+	if m.err != nil {
+		return "", m.err
+	}
+	return "", nil
+}

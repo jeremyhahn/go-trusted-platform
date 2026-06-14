@@ -17,6 +17,7 @@ import (
 	"context"
 	"net"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -340,7 +341,23 @@ func (h *QUICServiceHandler) errorResponse(status byte, err error) *quic.Respons
 
 // HandleRequest processes a QUIC request and returns a response.
 // It routes the request to the appropriate service handler based on the opcode.
-func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Request) *quic.Response {
+// A deferred recover guard converts any panicking handler into a StatusInternalError
+// response, ensuring the QUIC stream always receives a valid frame and the server
+// goroutine is never killed by a misbehaving sub-handler.
+func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Request) (resp *quic.Response) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.logger.Errorf("QUIC handler panic (opcode 0x%02x): %v\n%s",
+				func() byte {
+					if req != nil {
+						return req.Opcode
+					}
+					return 0
+				}(), r, debug.Stack())
+			resp = h.errorResponse(quic.StatusInternalError, ErrQUICHandlerPanic{Cause: r})
+		}
+	}()
+
 	if req == nil {
 		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICNilRequest{})
 	}

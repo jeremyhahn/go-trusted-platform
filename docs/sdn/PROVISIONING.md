@@ -8,42 +8,47 @@ access with explicit client activation.
 
 ## Network Phases
 
-| Phase | VLAN | Access | Purpose |
-|-------|------|--------|---------|
-| Provisioning | 7 | Limited | ACME enrollment only |
-| Production | Profile-defined | Full | Normal operation |
-| Quarantine | 6 | Isolated | Compliance remediation |
-| Blocked | N/A | None | Certificate revoked |
+Policy is driven by **zones**, not VLAN numbers (see
+[reference-network.md](../architecture/reference-network.md) for the
+authoritative zone taxonomy and default VLAN assignments). The table below
+shows the default segment IDs; all values are configurable.
+
+| Phase | Zone | Default VLAN | Access | Purpose |
+|-------|------|:------------:|--------|---------|
+| Provisioning | `provisioning` | 201 | Limited | ACME enrollment only |
+| Trusted | `trusted` | 200 | Full (per profile) | Normal operation |
+| Quarantine | `quarantine` | 202 | Isolated | Compliance remediation |
+| Blocked | n/a | n/a | None | Certificate revoked |
 
 ## Provisioning Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     PROVISIONING VLAN (7)                       │
+│              PROVISIONING ZONE (default VLAN 201)               │
 ├─────────────────────────────────────────────────────────────────┤
-│ 1. Device boots, receives DHCP lease (172.16.7.x)               │
+│ 1. Device boots, receives DHCP lease                            │
 │ 2. Device initiates ACME enrollment (enroll-01 challenge)       │
 │ 3. Server validates TPM attestation, issues IDevID              │
 │ 4. SDNEnrollmentHook marks port as "enrolled"                   │
 │ 5. Device uses IDevID for mTLS: GET /api/v1/device/profile      │
-│ 6. Device receives full profile with production network config  │
-│ 7. Device prepares for network transition                       │
+│ 6. Device receives full profile with zone + network config      │
+│ 7. Device prepares for zone transition                          │
 │ 8. Device signals ready: POST /api/v1/device/activate           │
 └───────────────────────────────┬─────────────────────────────────┘
                                 │
                     ┌───────────▼───────────┐
                     │   SERVER ACTIVATES    │
                     │  1. Transition port   │
-                    │     to production     │
-                    │  2. Apply 802.1X      │
-                    │  3. Update flows      │
+                    │     to profile zone   │
+                    │  2. Apply zone flows  │
+                    │  3. Update OVS VLAN   │
                     └───────────┬───────────┘
                                 │
 ┌───────────────────────────────▼─────────────────────────────────┐
-│                   PRODUCTION VLAN (from profile)                │
+│          PROFILE ZONE (default: trusted, VLAN per profile)      │
 ├─────────────────────────────────────────────────────────────────┤
-│ 9. Device applies production network config                     │
-│ 10. Device operational on production network                    │
+│ 9. Device applies network config from profile                   │
+│ 10. Device operational on profile zone network                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -90,11 +95,12 @@ Retrieves device profile using mTLS with IDevID.
 {
   "serialNumber": "ABC123",
   "productionNetwork": {
-    "vlan": 11,
+    "zone": "trusted",
+    "vlan": 200,
     "useDHCP": true,
     "staticIP": "",
-    "gateway": "172.16.11.1",
-    "dns": ["172.16.5.1"]
+    "gateway": "198.18.0.1",
+    "dns": ["198.18.0.1"]
   },
   "acls": [
     {
@@ -118,7 +124,7 @@ Retrieves device profile using mTLS with IDevID.
 
 ### POST /api/v1/device/activate
 
-Signals device is ready for production network transition.
+Signals device is ready for zone-based network transition.
 
 **Request:**
 - Method: POST
@@ -129,16 +135,17 @@ Signals device is ready for production network transition.
 ```json
 {
   "status": "activated",
-  "vlan": 11,
+  "zone": "trusted",
+  "vlan": 200,
   "transitionedAt": "2025-01-15T10:30:00Z"
 }
 ```
 
 **Server Actions:**
 1. Look up device port by MAC (via ARP table from client IP)
-2. Get device profile for VLAN configuration
-3. Transition OVS port to production VLAN
-4. Apply production OpenFlow rules
+2. Get device profile for zone + VLAN configuration
+3. Transition OVS port to the profile zone (ZoneFlowManager.ApplyZoneFlows)
+4. Apply per-zone OpenFlow template rules + inter-zone matrix rules
 5. Update port state to Authorized
 
 ## Port State Transitions
@@ -146,10 +153,10 @@ Signals device is ready for production network transition.
 ```go
 const (
     PortStateUnconnected   PortState = iota
-    PortStateProvisioning  // VLAN 7, limited access
-    PortStateEnrolled      // Still VLAN 7, awaiting activation
-    PortStateAuthorized    // Production VLAN, full access
-    PortStateQuarantined   // VLAN 6, remediation required
+    PortStateProvisioning  // provisioning zone (default VLAN 201), limited access
+    PortStateEnrolled      // still provisioning zone, awaiting activation
+    PortStateAuthorized    // profile zone (e.g. trusted VLAN 200), full access
+    PortStateQuarantined   // quarantine zone (default VLAN 202), remediation required
     PortStateBlocked       // DROP all traffic
 )
 ```
@@ -180,25 +187,27 @@ Unconnected ─────────────────────> Pro
 
 ## Provisioning Network Flows
 
-OVS flows for provisioning VLAN allow limited access:
+OVS flows for the provisioning zone enforce least-privilege access. The full
+rule set is generated by `pkg/sdn/policy/zoneflows` (provisioning template).
+Representative rules:
 
 ```
+# ARP
+priority=1900,arp,dl_vlan=201,actions=normal
+
 # DHCP (UDP 67, 68)
-priority=100,udp,tp_dst=67,actions=normal
-priority=100,udp,tp_dst=68,actions=normal
+priority=1850,udp,dl_vlan=201,tp_src=68,tp_dst=67,actions=normal
 
-# DNS (UDP/TCP 53, 8053)
-priority=100,udp,tp_dst=53,actions=normal
-priority=100,tcp,tp_dst=53,actions=normal
-priority=100,udp,tp_dst=8053,actions=normal
-priority=100,tcp,tp_dst=8053,actions=normal
+# DNS (UDP/TCP 53, 8053, 9053)
+priority=1800,udp,dl_vlan=201,tp_dst=53,actions=normal
+priority=1800,tcp,dl_vlan=201,tp_dst=53,actions=normal
 
-# HTTPS to platform server (443, 8443)
-priority=100,tcp,tp_dst=443,actions=normal
-priority=100,tcp,tp_dst=8443,actions=normal
+# ACME/HTTPS to platform server (443, 8443, 9443)
+priority=1700,tcp,dl_vlan=201,tp_dst=443,actions=normal
+priority=1700,tcp,dl_vlan=201,tp_dst=8443,actions=normal
 
-# Drop all other traffic
-priority=0,actions=drop
+# Default drop
+priority=900,dl_vlan=201,actions=drop
 ```
 
 ## Client Implementation
@@ -218,24 +227,25 @@ resp, err := client.Get("https://platform.example.com/api/v1/device/profile")
 var profile DeviceProfile
 json.NewDecoder(resp.Body).Decode(&profile)
 
-// 3. Prepare for network transition
-saveProductionConfig(profile.ProductionNetwork)
+// 3. Prepare for zone transition
+saveNetworkConfig(profile.ProductionNetwork)
 
 // 4. Signal ready for activation
-resp, err = client.Post("https://platform.example.com/api/v1/device/activate", nil, nil)
+resp, err = client.Post("https://platform.example.com/api/v1/device/activate",
+    "application/json", nil)
 
-// 5. Server has transitioned port - apply new network config
-time.Sleep(500 * time.Millisecond) // Allow OVS transition
-applyNetworkConfig(profile.ProductionNetwork)
-
-// 6. Verify connectivity on production network
-waitForConnectivity(profile.ProductionNetwork.Gateway)
+// 5. Apply new network config once server confirms activation
+if resp.StatusCode == http.StatusOK {
+    applyNetworkConfig(profile.ProductionNetwork)
+    waitForConnectivity(profile.ProductionNetwork.Gateway)
+}
 ```
 
 ## Security Considerations
 
-1. **Provisioning Network Isolation** - VLAN 7 only reaches platform server
-2. **mTLS Required** - Profile endpoint requires valid IDevID
+1. **Zone Isolation** - provisioning zone only reaches required CP services (DHCP/DNS/ACME)
+2. **mTLS Required** - Profile endpoint requires valid IDevID; SC-7, AC-4
 3. **No Unauthenticated Access** - All device data requires certificate auth
-4. **Server-Side Transition** - Client cannot force VLAN change
+4. **Server-Side Transition** - Client cannot force zone/VLAN change
 5. **Attestation Required** - IDevID only issued after TPM attestation
+6. **Zone Mismatch Quarantine** - Certificate zone vs. profile zone cross-check; mismatch → quarantine zone; SC-7, SC-4, AC-4

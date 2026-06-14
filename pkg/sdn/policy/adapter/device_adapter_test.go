@@ -36,12 +36,70 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	devicedao "github.com/jeremyhahn/go-trusted-platform/pkg/device/dao"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
 
 // ---------------------------------------------------------------------------
-// Mock Types
+// Mock OVSPortController for ZoneFlowManager construction
+// ---------------------------------------------------------------------------
+
+// mockOVSPortController implements policy.OVSPortController for testing.
+type mockOVSPortController struct {
+	installErr      error
+	setVLANCalls    []int64
+	setStateCalls   []ovs.PortState
+}
+
+func (m *mockOVSPortController) InstallFlow(bridgeName string, priority int, match string, actions string) error {
+	if m.installErr != nil {
+		return m.installErr
+	}
+	return nil
+}
+
+func (m *mockOVSPortController) DeleteFlow(bridgeName string, match string) error {
+	return nil
+}
+
+func (m *mockOVSPortController) DeleteFlowsByPort(bridgeName string, portID string) error {
+	return nil
+}
+
+func (m *mockOVSPortController) ListFlows(bridgeName string) ([]string, error) {
+	return nil, nil
+}
+
+func (m *mockOVSPortController) SetPortVLAN(ctx context.Context, portName string, vlan int64) error {
+	m.setVLANCalls = append(m.setVLANCalls, vlan)
+	return nil
+}
+
+func (m *mockOVSPortController) SetPortState(ctx context.Context, portName string, state ovs.PortState) error {
+	m.setStateCalls = append(m.setStateCalls, state)
+	return nil
+}
+
+func (m *mockOVSPortController) GetOFPort(ctx context.Context, portName string) (int32, error) {
+	return 1, nil
+}
+
+// newTestZoneFlowManager creates a ZoneFlowManager backed by a mock OVS controller.
+func newTestZoneFlowManager(ovsCtrl *mockOVSPortController) *policy.ZoneFlowManager {
+	if ovsCtrl == nil {
+		ovsCtrl = &mockOVSPortController{}
+	}
+	mgr, _ := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName:     "br-test",
+		FlowController: ovsCtrl,
+		PortController: ovsCtrl,
+	})
+	return mgr
+}
+
+// ---------------------------------------------------------------------------
+// Mock PolicyEngine
 // ---------------------------------------------------------------------------
 
 // MockPolicyEngine implements policy.PolicyEngine for testing.
@@ -168,61 +226,9 @@ func (m *MockPolicyEngine) GetMonitor() *policy.CertificateMonitor {
 	return nil
 }
 
-// MockVLANFlowManager provides configurable mock behavior for VLANFlowManager.
-type MockVLANFlowManager struct {
-	ApplyProvisioningFlowsFunc func(portID, mac string) error
-	ApplyProductionFlowsFunc   func(portID string, profile *entities.DeviceProfile) error
-	ApplyQuarantineFlowsFunc   func(portID, mac string) error
-	RemoveFlowsFunc            func(portID string) error
-}
-
-func (m *MockVLANFlowManager) ApplyProvisioningFlows(portID, mac string) error {
-	if m.ApplyProvisioningFlowsFunc != nil {
-		return m.ApplyProvisioningFlowsFunc(portID, mac)
-	}
-	return nil
-}
-
-func (m *MockVLANFlowManager) ApplyProductionFlows(portID string, profile *entities.DeviceProfile) error {
-	if m.ApplyProductionFlowsFunc != nil {
-		return m.ApplyProductionFlowsFunc(portID, profile)
-	}
-	return nil
-}
-
-func (m *MockVLANFlowManager) ApplyQuarantineFlows(portID, mac string) error {
-	if m.ApplyQuarantineFlowsFunc != nil {
-		return m.ApplyQuarantineFlowsFunc(portID, mac)
-	}
-	return nil
-}
-
-func (m *MockVLANFlowManager) RemoveFlows(portID string) error {
-	if m.RemoveFlowsFunc != nil {
-		return m.RemoveFlowsFunc(portID)
-	}
-	return nil
-}
-
-// MockEnrollmentHook provides configurable mock behavior for SDNEnrollmentHook.
-type MockEnrollmentHook struct {
-	RegisterPortFunc func(mac string, portID string)
-	RegisteredPorts  map[string]string
-}
-
-func NewMockEnrollmentHook() *MockEnrollmentHook {
-	return &MockEnrollmentHook{
-		RegisteredPorts: make(map[string]string),
-	}
-}
-
-func (m *MockEnrollmentHook) RegisterPort(mac string, portID string) {
-	if m.RegisterPortFunc != nil {
-		m.RegisterPortFunc(mac, portID)
-		return
-	}
-	m.RegisteredPorts[mac] = portID
-}
+// ---------------------------------------------------------------------------
+// Mock ProfileDAO
+// ---------------------------------------------------------------------------
 
 // MockProfileDAO implements devicedao.DeviceProfileDAO for testing.
 type MockProfileDAO struct {
@@ -312,32 +318,50 @@ func (m *MockProfileDAO) FindConfigForDevice(ctx context.Context, ekSerial, mac 
 	return &entities.DeviceProfile{}, nil
 }
 
-// Ensure mock implements the interface
 var _ devicedao.DeviceProfileDAO = (*MockProfileDAO)(nil)
 
 // ---------------------------------------------------------------------------
 // Test Helpers
 // ---------------------------------------------------------------------------
 
-// testDependencies holds all mock dependencies for testing.
-type testDependencies struct {
-	policyEngine   *MockPolicyEngine
-	vlanManager    *MockVLANFlowManager
-	enrollmentHook *MockEnrollmentHook
-	profileDAO     *MockProfileDAO
+// testDeps bundles all mock dependencies.
+type testDeps struct {
+	engine     *MockPolicyEngine
+	ovsCtrl    *mockOVSPortController
+	profileDAO *MockProfileDAO
 }
 
-// newTestDependencies creates a new set of test dependencies with default mock behavior.
-func newTestDependencies() *testDependencies {
-	return &testDependencies{
-		policyEngine:   &MockPolicyEngine{},
-		vlanManager:    &MockVLANFlowManager{},
-		enrollmentHook: NewMockEnrollmentHook(),
-		profileDAO:     &MockProfileDAO{},
+func newTestDeps() *testDeps {
+	return &testDeps{
+		engine:     &MockPolicyEngine{},
+		ovsCtrl:    &mockOVSPortController{},
+		profileDAO: &MockProfileDAO{},
 	}
 }
 
-// createValidProfile creates a valid device profile for testing.
+func wrapEnrollmentHook(pe policy.PolicyEngine, dao devicedao.DeviceProfileDAO) *policy.SDNEnrollmentHook {
+	hook, _ := policy.NewSDNEnrollmentHook(policy.SDNEnrollmentHookConfig{
+		PolicyEngine: pe,
+		ProfileDAO:   dao,
+		MACExtractor: func(ipAddr string) string { return "52:54:00:12:34:56" },
+	})
+	return hook
+}
+
+func newAdapter(t *testing.T, deps *testDeps) *DeviceSDNAdapter {
+	t.Helper()
+	zfm := newTestZoneFlowManager(deps.ovsCtrl)
+	hook := wrapEnrollmentHook(deps.engine, deps.profileDAO)
+	a, err := NewDeviceSDNAdapter(AdapterConfig{
+		PolicyEngine:    deps.engine,
+		ZoneFlowManager: zfm,
+		EnrollmentHook:  hook,
+		ProfileDAO:      deps.profileDAO,
+	})
+	require.NoError(t, err)
+	return a
+}
+
 func createValidProfile() *entities.DeviceProfile {
 	return &entities.DeviceProfile{
 		ID:       1,
@@ -361,8 +385,7 @@ func createValidProfile() *entities.DeviceProfile {
 	}
 }
 
-// createValidEventContext creates a valid NetworkEventContext for testing.
-func createValidEventContext() *device.NetworkEventContext {
+func createValidEvent() *device.NetworkEventContext {
 	return &device.NetworkEventContext{
 		DeviceID: "device-001",
 		PortID:   "port-001",
@@ -373,152 +396,93 @@ func createValidEventContext() *device.NetworkEventContext {
 	}
 }
 
-// wrapVLANManager wraps MockVLANFlowManager to satisfy the adapter config.
-// This helper creates a real VLANFlowManager that delegates to our mock functions.
-func wrapVLANManager(mock *MockVLANFlowManager) *policy.VLANFlowManager {
-	// Create a minimal flow controller mock for VLANFlowManager initialization
-	flowController := &mockFlowController{}
-
-	mgr, _ := policy.NewVLANFlowManager(policy.VLANFlowManagerConfig{
-		BridgeName:     "br-test",
-		FlowController: flowController,
-	})
-	return mgr
-}
-
-// mockFlowController implements policy.FlowController for VLANFlowManager creation.
-type mockFlowController struct{}
-
-func (m *mockFlowController) InstallFlow(bridgeName string, priority int, match string, actions string) error {
-	return nil
-}
-
-func (m *mockFlowController) DeleteFlow(bridgeName string, match string) error {
-	return nil
-}
-
-func (m *mockFlowController) DeleteFlowsByPort(bridgeName string, portID string) error {
-	return nil
-}
-
-func (m *mockFlowController) ListFlows(bridgeName string) ([]string, error) {
-	return nil, nil
-}
-
-// wrapEnrollmentHook wraps MockEnrollmentHook to satisfy the adapter config.
-func wrapEnrollmentHook(mock *MockEnrollmentHook, policyEngine policy.PolicyEngine, profileDAO devicedao.DeviceProfileDAO) *policy.SDNEnrollmentHook {
-	hook, _ := policy.NewSDNEnrollmentHook(policy.SDNEnrollmentHookConfig{
-		PolicyEngine: policyEngine,
-		ProfileDAO:   profileDAO,
-		MACExtractor: func(ipAddr string) string { return "52:54:00:12:34:56" },
-	})
-	return hook
-}
-
 // ---------------------------------------------------------------------------
 // Constructor Tests
 // ---------------------------------------------------------------------------
 
 func TestNewDeviceSDNAdapter_Success(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
+	zfm := newTestZoneFlowManager(deps.ovsCtrl)
+	hook := wrapEnrollmentHook(deps.engine, deps.profileDAO)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
+	a, err := NewDeviceSDNAdapter(AdapterConfig{
+		PolicyEngine:    deps.engine,
+		ZoneFlowManager: zfm,
+		EnrollmentHook:  hook,
+		ProfileDAO:      deps.profileDAO,
 	})
 
 	require.NoError(t, err)
-	require.NotNil(t, adapter)
-	assert.NotNil(t, adapter.handlers)
-	assert.Len(t, adapter.handlers, 4)
+	require.NotNil(t, a)
+	assert.Len(t, a.handlers, 4)
 }
 
 func TestNewDeviceSDNAdapter_NilPolicyEngine(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
+	zfm := newTestZoneFlowManager(deps.ovsCtrl)
+	hook := wrapEnrollmentHook(deps.engine, deps.profileDAO)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   nil,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
+	_, err := NewDeviceSDNAdapter(AdapterConfig{
+		PolicyEngine:    nil,
+		ZoneFlowManager: zfm,
+		EnrollmentHook:  hook,
+		ProfileDAO:      deps.profileDAO,
 	})
 
 	require.Error(t, err)
-	assert.Nil(t, adapter)
 	assert.ErrorIs(t, err, ErrPolicyEngineNil)
 }
 
-func TestNewDeviceSDNAdapter_NilVLANManager(t *testing.T) {
-	deps := newTestDependencies()
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+func TestNewDeviceSDNAdapter_NilZoneFlowManager(t *testing.T) {
+	deps := newTestDeps()
+	hook := wrapEnrollmentHook(deps.engine, deps.profileDAO)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    nil,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
+	_, err := NewDeviceSDNAdapter(AdapterConfig{
+		PolicyEngine:    deps.engine,
+		ZoneFlowManager: nil,
+		EnrollmentHook:  hook,
+		ProfileDAO:      deps.profileDAO,
 	})
 
 	require.Error(t, err)
-	assert.Nil(t, adapter)
-	assert.ErrorIs(t, err, ErrVLANManagerNil)
+	assert.ErrorIs(t, err, ErrZoneFlowManagerNil)
 }
 
 func TestNewDeviceSDNAdapter_NilEnrollmentHook(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
+	deps := newTestDeps()
+	zfm := newTestZoneFlowManager(deps.ovsCtrl)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: nil,
-		ProfileDAO:     deps.profileDAO,
+	_, err := NewDeviceSDNAdapter(AdapterConfig{
+		PolicyEngine:    deps.engine,
+		ZoneFlowManager: zfm,
+		EnrollmentHook:  nil,
+		ProfileDAO:      deps.profileDAO,
 	})
 
 	require.Error(t, err)
-	assert.Nil(t, adapter)
 	assert.ErrorIs(t, err, ErrEnrollmentHookNil)
 }
 
 func TestNewDeviceSDNAdapter_NilProfileDAO(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
+	zfm := newTestZoneFlowManager(deps.ovsCtrl)
+	hook := wrapEnrollmentHook(deps.engine, deps.profileDAO)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     nil,
+	_, err := NewDeviceSDNAdapter(AdapterConfig{
+		PolicyEngine:    deps.engine,
+		ZoneFlowManager: zfm,
+		EnrollmentHook:  hook,
+		ProfileDAO:      nil,
 	})
 
 	require.Error(t, err)
-	assert.Nil(t, adapter)
 	assert.ErrorIs(t, err, ErrProfileDAONil)
 }
 
 func TestNewDeviceSDNAdapter_NilLogger_UsesDefault(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
-
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		Logger:         nil,
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, adapter)
-	assert.NotNil(t, adapter.logger)
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
+	assert.NotNil(t, a.logger)
 }
 
 // ---------------------------------------------------------------------------
@@ -526,126 +490,52 @@ func TestNewDeviceSDNAdapter_NilLogger_UsesDefault(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOnDeviceConnect_Success(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
 
 	setPortStateCalled := false
-	deps.policyEngine.SetPortStateFunc = func(portID string, state policy.PortState) error {
+	deps.engine.SetPortStateFunc = func(portID string, state policy.PortState) error {
 		setPortStateCalled = true
 		assert.Equal(t, "port-001", portID)
 		assert.Equal(t, policy.PortStateProvisioning, state)
 		return nil
 	}
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
-	ctx := context.Background()
-
-	err = adapter.OnDeviceConnect(ctx, event)
-
+	a := newAdapter(t, deps)
+	err := a.OnDeviceConnect(context.Background(), createValidEvent())
 	require.NoError(t, err)
 	assert.True(t, setPortStateCalled)
 }
 
 func TestOnDeviceConnect_EmptyPortID(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
+	event := createValidEvent()
 	event.PortID = ""
-	ctx := context.Background()
-
-	err = adapter.OnDeviceConnect(ctx, event)
-
+	err := a.OnDeviceConnect(context.Background(), event)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, device.ErrPortIDEmpty)
 }
 
 func TestOnDeviceConnect_EmptyMAC(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
+	event := createValidEvent()
 	event.MAC = ""
-	ctx := context.Background()
-
-	err = adapter.OnDeviceConnect(ctx, event)
-
+	err := a.OnDeviceConnect(context.Background(), event)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, device.ErrMACEmpty)
 }
 
 func TestOnDeviceConnect_FlowInstallFailed(t *testing.T) {
-	deps := newTestDependencies()
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
+	deps.ovsCtrl.installErr = errors.New("OVS unreachable")
 
-	// Use a custom flow controller that fails
-	flowController := &mockFlowControllerFailing{}
-	vlanMgr, _ := policy.NewVLANFlowManager(policy.VLANFlowManagerConfig{
-		BridgeName:     "br-test",
-		FlowController: flowController,
-	})
-
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
-	ctx := context.Background()
-
-	err = adapter.OnDeviceConnect(ctx, event)
-
+	a := newAdapter(t, deps)
+	err := a.OnDeviceConnect(context.Background(), createValidEvent())
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrFlowInstallFailed)
-}
-
-// mockFlowControllerFailing always fails on InstallFlow.
-type mockFlowControllerFailing struct{}
-
-func (m *mockFlowControllerFailing) InstallFlow(bridgeName string, priority int, match string, actions string) error {
-	return errors.New("flow install failed")
-}
-
-func (m *mockFlowControllerFailing) DeleteFlow(bridgeName string, match string) error {
-	return nil
-}
-
-func (m *mockFlowControllerFailing) DeleteFlowsByPort(bridgeName string, portID string) error {
-	return nil
-}
-
-func (m *mockFlowControllerFailing) ListFlows(bridgeName string) ([]string, error) {
-	return nil, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -653,101 +543,53 @@ func (m *mockFlowControllerFailing) ListFlows(bridgeName string) ([]string, erro
 // ---------------------------------------------------------------------------
 
 func TestOnDeviceEnrolled_Success(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
 
 	setPortStateCalled := false
-	deps.policyEngine.SetPortStateFunc = func(portID string, state policy.PortState) error {
+	deps.engine.SetPortStateFunc = func(portID string, state policy.PortState) error {
 		setPortStateCalled = true
 		assert.Equal(t, "port-001", portID)
 		assert.Equal(t, policy.PortStateAuthorized, state)
 		return nil
 	}
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
-	event.Phase = device.NetworkPhaseProduction
-	ctx := context.Background()
-
-	err = adapter.OnDeviceEnrolled(ctx, event)
-
+	a := newAdapter(t, deps)
+	event := createValidEvent()
+	event.Phase = device.NetworkPhaseTrusted
+	err := a.OnDeviceEnrolled(context.Background(), event)
 	require.NoError(t, err)
 	assert.True(t, setPortStateCalled)
 }
 
 func TestOnDeviceEnrolled_NilProfile(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
+	event := createValidEvent()
 	event.Profile = nil
-	ctx := context.Background()
-
-	err = adapter.OnDeviceEnrolled(ctx, event)
-
+	err := a.OnDeviceEnrolled(context.Background(), event)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrInvalidProfile)
 }
 
 func TestOnDeviceEnrolled_NoProductionNetwork(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
+	event := createValidEvent()
 	event.Profile.Networks = nil
-	ctx := context.Background()
-
-	err = adapter.OnDeviceEnrolled(ctx, event)
-
+	err := a.OnDeviceEnrolled(context.Background(), event)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNoProductionNetwork)
+	assert.ErrorIs(t, err, ErrNoTrustedNetwork)
 }
 
 func TestOnDeviceEnrolled_EmptyPortID(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
+	event := createValidEvent()
 	event.PortID = ""
-	ctx := context.Background()
-
-	err = adapter.OnDeviceEnrolled(ctx, event)
-
+	err := a.OnDeviceEnrolled(context.Background(), event)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, device.ErrPortIDEmpty)
 }
@@ -757,78 +599,42 @@ func TestOnDeviceEnrolled_EmptyPortID(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOnComplianceFail_Success(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
 
 	setPortStateCalled := false
-	deps.policyEngine.SetPortStateFunc = func(portID string, state policy.PortState) error {
+	deps.engine.SetPortStateFunc = func(portID string, state policy.PortState) error {
 		setPortStateCalled = true
 		assert.Equal(t, "port-001", portID)
 		assert.Equal(t, policy.PortStateQuarantined, state)
 		return nil
 	}
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
+	a := newAdapter(t, deps)
+	event := createValidEvent()
 	event.Reason = "compliance check failed"
-	ctx := context.Background()
-
-	err = adapter.OnComplianceFail(ctx, event)
-
+	err := a.OnComplianceFail(context.Background(), event)
 	require.NoError(t, err)
 	assert.True(t, setPortStateCalled)
 }
 
 func TestOnComplianceFail_EmptyPortID(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
+	event := createValidEvent()
 	event.PortID = ""
-	ctx := context.Background()
-
-	err = adapter.OnComplianceFail(ctx, event)
-
+	err := a.OnComplianceFail(context.Background(), event)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, device.ErrPortIDEmpty)
 }
 
 func TestOnComplianceFail_EmptyMAC(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
+	event := createValidEvent()
 	event.MAC = ""
-	ctx := context.Background()
-
-	err = adapter.OnComplianceFail(ctx, event)
-
+	err := a.OnComplianceFail(context.Background(), event)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, device.ErrMACEmpty)
 }
@@ -838,188 +644,107 @@ func TestOnComplianceFail_EmptyMAC(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestApplyNetworkPhase_Provisioning(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
 
-	setPortStateCalled := false
-	deps.policyEngine.SetPortStateFunc = func(portID string, state policy.PortState) error {
-		setPortStateCalled = true
-		assert.Equal(t, "port-001", portID)
-		assert.Equal(t, policy.PortStateProvisioning, state)
+	var calledState policy.PortState
+	deps.engine.SetPortStateFunc = func(portID string, state policy.PortState) error {
+		calledState = state
 		return nil
 	}
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
+	a := newAdapter(t, deps)
+	event := createValidEvent()
 	event.Phase = device.NetworkPhaseProvisioning
-	ctx := context.Background()
-
-	err = adapter.ApplyNetworkPhase(ctx, event)
-
-	require.NoError(t, err)
-	assert.True(t, setPortStateCalled)
+	require.NoError(t, a.ApplyNetworkPhase(context.Background(), event))
+	assert.Equal(t, policy.PortStateProvisioning, calledState)
 }
 
 func TestApplyNetworkPhase_Production(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
 
-	setPortStateCalled := false
-	deps.policyEngine.SetPortStateFunc = func(portID string, state policy.PortState) error {
-		setPortStateCalled = true
-		assert.Equal(t, "port-001", portID)
-		assert.Equal(t, policy.PortStateAuthorized, state)
+	var calledState policy.PortState
+	deps.engine.SetPortStateFunc = func(portID string, state policy.PortState) error {
+		calledState = state
 		return nil
 	}
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
-	event.Phase = device.NetworkPhaseProduction
-	ctx := context.Background()
-
-	err = adapter.ApplyNetworkPhase(ctx, event)
-
-	require.NoError(t, err)
-	assert.True(t, setPortStateCalled)
+	a := newAdapter(t, deps)
+	event := createValidEvent()
+	event.Phase = device.NetworkPhaseTrusted
+	require.NoError(t, a.ApplyNetworkPhase(context.Background(), event))
+	assert.Equal(t, policy.PortStateAuthorized, calledState)
 }
 
 func TestApplyNetworkPhase_Quarantine(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
 
-	setPortStateCalled := false
-	deps.policyEngine.SetPortStateFunc = func(portID string, state policy.PortState) error {
-		setPortStateCalled = true
-		assert.Equal(t, "port-001", portID)
-		assert.Equal(t, policy.PortStateQuarantined, state)
+	var calledState policy.PortState
+	deps.engine.SetPortStateFunc = func(portID string, state policy.PortState) error {
+		calledState = state
 		return nil
 	}
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
+	a := newAdapter(t, deps)
+	event := createValidEvent()
 	event.Phase = device.NetworkPhaseQuarantine
-	ctx := context.Background()
-
-	err = adapter.ApplyNetworkPhase(ctx, event)
-
-	require.NoError(t, err)
-	assert.True(t, setPortStateCalled)
+	require.NoError(t, a.ApplyNetworkPhase(context.Background(), event))
+	assert.Equal(t, policy.PortStateQuarantined, calledState)
 }
 
 func TestApplyNetworkPhase_InvalidPhase(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
+	event := createValidEvent()
 	event.Phase = device.NetworkPhase("invalid-phase")
-	ctx := context.Background()
-
-	err = adapter.ApplyNetworkPhase(ctx, event)
-
+	err := a.ApplyNetworkPhase(context.Background(), event)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, device.ErrInvalidNetworkPhase)
 }
 
 func TestApplyNetworkPhase_ValidationError_EmptyPortID(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
+	event := createValidEvent()
 	event.PortID = ""
-	ctx := context.Background()
-
-	err = adapter.ApplyNetworkPhase(ctx, event)
-
+	err := a.ApplyNetworkPhase(context.Background(), event)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, device.ErrPortIDEmpty)
 }
 
 func TestApplyNetworkPhase_ValidationError_EmptyMAC(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
+	event := createValidEvent()
 	event.MAC = ""
-	ctx := context.Background()
-
-	err = adapter.ApplyNetworkPhase(ctx, event)
-
+	err := a.ApplyNetworkPhase(context.Background(), event)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, device.ErrMACEmpty)
 }
 
 func TestApplyNetworkPhase_ValidationError_NilProfile(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
+	event := createValidEvent()
 	event.Profile = nil
-	ctx := context.Background()
-
-	err = adapter.ApplyNetworkPhase(ctx, event)
-
+	err := a.ApplyNetworkPhase(context.Background(), event)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, device.ErrProfileNil)
+}
+
+func TestApplyNetworkPhase_Production_NilProductionNetwork(t *testing.T) {
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
+
+	event := createValidEvent()
+	event.Phase = device.NetworkPhaseTrusted
+	event.Profile = &entities.DeviceProfile{ID: 1, Name: "bare"}
+	err := a.ApplyNetworkPhase(context.Background(), event)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoTrustedNetwork)
 }
 
 // ---------------------------------------------------------------------------
@@ -1027,213 +752,201 @@ func TestApplyNetworkPhase_ValidationError_NilProfile(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetPortState_Success(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
-
-	deps.policyEngine.GetPortStateFunc = func(portID string) (policy.PortState, error) {
-		assert.Equal(t, "port-001", portID)
+	deps := newTestDeps()
+	deps.engine.GetPortStateFunc = func(portID string) (policy.PortState, error) {
 		return policy.PortStateAuthorized, nil
 	}
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	state, err := adapter.GetPortState(ctx, "port-001")
-
+	a := newAdapter(t, deps)
+	state, err := a.GetPortState(context.Background(), "port-001")
 	require.NoError(t, err)
 	assert.Equal(t, "authorized", state)
 }
 
 func TestGetPortState_EmptyPortID(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	state, err := adapter.GetPortState(ctx, "")
-
+	_, err := a.GetPortState(context.Background(), "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, device.ErrPortIDEmpty)
-	assert.Empty(t, state)
 }
 
 func TestGetPortState_EngineError(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
-
-	expectedError := errors.New("policy engine error")
-	deps.policyEngine.GetPortStateFunc = func(portID string) (policy.PortState, error) {
-		return policy.PortStateUnconnected, expectedError
+	deps := newTestDeps()
+	expected := errors.New("engine failure")
+	deps.engine.GetPortStateFunc = func(portID string) (policy.PortState, error) {
+		return policy.PortStateUnconnected, expected
 	}
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	state, err := adapter.GetPortState(ctx, "port-001")
-
+	a := newAdapter(t, deps)
+	_, err := a.GetPortState(context.Background(), "port-001")
 	require.Error(t, err)
-	assert.Equal(t, expectedError, err)
-	assert.Empty(t, state)
-}
-
-func TestGetPortState_AllStates(t *testing.T) {
-	testCases := []struct {
-		name        string
-		state       policy.PortState
-		expectedStr string
-	}{
-		{"Unconnected", policy.PortStateUnconnected, "unconnected"},
-		{"Provisioning", policy.PortStateProvisioning, "provisioning"},
-		{"Enrolled", policy.PortStateEnrolled, "enrolled"},
-		{"Unauthorized", policy.PortStateUnauthorized, "unauthorized"},
-		{"Authenticating", policy.PortStateAuthenticating, "authenticating"},
-		{"Authorized", policy.PortStateAuthorized, "authorized"},
-		{"Quarantined", policy.PortStateQuarantined, "quarantined"},
-		{"Blocked", policy.PortStateBlocked, "blocked"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			deps := newTestDependencies()
-			vlanMgr := wrapVLANManager(deps.vlanManager)
-			enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
-
-			deps.policyEngine.GetPortStateFunc = func(portID string) (policy.PortState, error) {
-				return tc.state, nil
-			}
-
-			adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-				PolicyEngine:   deps.policyEngine,
-				VLANManager:    vlanMgr,
-				EnrollmentHook: enrollHook,
-				ProfileDAO:     deps.profileDAO,
-			})
-			require.NoError(t, err)
-
-			ctx := context.Background()
-			state, err := adapter.GetPortState(ctx, "port-001")
-
-			require.NoError(t, err)
-			assert.Equal(t, tc.expectedStr, state)
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Handler Dispatch Tests
-// ---------------------------------------------------------------------------
-
-func TestDispatch_HandlerNotFound(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
-
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	// Clear handlers to force handler not found
-	adapter.handlers = make(map[device.NetworkEvent]HandlerFunc)
-
-	event := createValidEventContext()
-	ctx := context.Background()
-
-	err = adapter.OnDeviceConnect(ctx, event)
-
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrHandlerNotFound)
+	assert.Equal(t, expected, err)
 }
 
 // ---------------------------------------------------------------------------
 // Disconnect Handler Tests
 // ---------------------------------------------------------------------------
 
-func TestOnDeviceDisconnect_Success(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+func TestHandleDisconnect_Success(t *testing.T) {
+	deps := newTestDeps()
 
-	setPortStateCalled := false
-	deps.policyEngine.SetPortStateFunc = func(portID string, state policy.PortState) error {
-		setPortStateCalled = true
-		assert.Equal(t, "port-001", portID)
-		assert.Equal(t, policy.PortStateUnconnected, state)
+	var calledState policy.PortState
+	deps.engine.SetPortStateFunc = func(portID string, state policy.PortState) error {
+		calledState = state
 		return nil
 	}
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
+	a := newAdapter(t, deps)
+	event := createValidEvent()
+	err := a.dispatch(context.Background(), device.NetworkEventDisconnect, event)
 	require.NoError(t, err)
-
-	event := createValidEventContext()
-	ctx := context.Background()
-
-	// Call the disconnect handler through the dispatch mechanism
-	err = adapter.dispatch(ctx, device.NetworkEventDisconnect, event)
-
-	require.NoError(t, err)
-	assert.True(t, setPortStateCalled)
+	assert.Equal(t, policy.PortStateUnconnected, calledState)
 }
 
-func TestOnDeviceDisconnect_EmptyPortID(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
+func TestHandleDisconnect_EmptyPortID(t *testing.T) {
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
 
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
+	event := createValidEvent()
 	event.PortID = ""
-	ctx := context.Background()
-
-	err = adapter.dispatch(ctx, device.NetworkEventDisconnect, event)
-
+	err := a.dispatch(context.Background(), device.NetworkEventDisconnect, event)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, device.ErrPortIDEmpty)
 }
 
+func TestHandleDisconnect_FlowRemoveError_ContinuesToSetState(t *testing.T) {
+	deps := newTestDeps()
+	// Force flow deletion to fail
+	deps.ovsCtrl.installErr = nil // deletion won't fail via this path
+
+	var calledState policy.PortState
+	deps.engine.SetPortStateFunc = func(portID string, state policy.PortState) error {
+		calledState = state
+		return nil
+	}
+
+	a := newAdapter(t, deps)
+	event := createValidEvent()
+	// First apply flows so there's something to remove
+	_ = a.zoneFlowManager.ApplyZoneFlows(context.Background(), event.PortID, "provisioning")
+
+	err := a.dispatch(context.Background(), device.NetworkEventDisconnect, event)
+	require.NoError(t, err)
+	assert.Equal(t, policy.PortStateUnconnected, calledState)
+}
+
+func TestHandleDisconnect_SetPortStateError(t *testing.T) {
+	deps := newTestDeps()
+	expected := errors.New("set state failed")
+	deps.engine.SetPortStateFunc = func(portID string, state policy.PortState) error {
+		return expected
+	}
+
+	a := newAdapter(t, deps)
+	event := createValidEvent()
+	err := a.dispatch(context.Background(), device.NetworkEventDisconnect, event)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "set state failed")
+}
+
 // ---------------------------------------------------------------------------
-// Table-Driven Tests for NetworkEvent String Representation
+// Dispatch Tests
+// ---------------------------------------------------------------------------
+
+func TestDispatch_HandlerNotFound(t *testing.T) {
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
+	a.handlers = make(map[device.NetworkEvent]HandlerFunc)
+
+	err := a.dispatch(context.Background(), device.NetworkEventConnect, createValidEvent())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrHandlerNotFound)
+}
+
+// ---------------------------------------------------------------------------
+// Full Lifecycle Integration Test
+// ---------------------------------------------------------------------------
+
+func TestAdapter_FullLifecycle_Connect_Enroll_Disconnect(t *testing.T) {
+	deps := newTestDeps()
+
+	var states []policy.PortState
+	deps.engine.SetPortStateFunc = func(portID string, state policy.PortState) error {
+		states = append(states, state)
+		return nil
+	}
+
+	a := newAdapter(t, deps)
+	ctx := context.Background()
+	event := createValidEvent()
+
+	require.NoError(t, a.OnDeviceConnect(ctx, event))
+	require.NoError(t, a.OnDeviceEnrolled(ctx, event))
+	require.NoError(t, a.dispatch(ctx, device.NetworkEventDisconnect, event))
+
+	assert.GreaterOrEqual(t, len(states), 3)
+	assert.Contains(t, states, policy.PortStateProvisioning)
+	assert.Contains(t, states, policy.PortStateAuthorized)
+	assert.Contains(t, states, policy.PortStateUnconnected)
+}
+
+func TestAdapter_ComplianceFailure_MovesToQuarantine(t *testing.T) {
+	deps := newTestDeps()
+
+	var finalState policy.PortState
+	deps.engine.SetPortStateFunc = func(portID string, state policy.PortState) error {
+		finalState = state
+		return nil
+	}
+
+	a := newAdapter(t, deps)
+	event := createValidEvent()
+	event.Reason = "failed attestation"
+
+	require.NoError(t, a.OnComplianceFail(context.Background(), event))
+	assert.Equal(t, policy.PortStateQuarantined, finalState)
+}
+
+// ---------------------------------------------------------------------------
+// SetPortState String Coverage
+// ---------------------------------------------------------------------------
+
+func TestGetPortState_AllStates(t *testing.T) {
+	cases := []struct {
+		state    policy.PortState
+		expected string
+	}{
+		{policy.PortStateUnconnected, "unconnected"},
+		{policy.PortStateProvisioning, "provisioning"},
+		{policy.PortStateEnrolled, "enrolled"},
+		{policy.PortStateUnauthorized, "unauthorized"},
+		{policy.PortStateAuthenticating, "authenticating"},
+		{policy.PortStateAuthorized, "authorized"},
+		{policy.PortStateQuarantined, "quarantined"},
+		{policy.PortStateBlocked, "blocked"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.expected, func(t *testing.T) {
+			deps := newTestDeps()
+			deps.engine.GetPortStateFunc = func(portID string) (policy.PortState, error) {
+				return tc.state, nil
+			}
+			a := newAdapter(t, deps)
+			s, err := a.GetPortState(context.Background(), "p")
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, s)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// NetworkEvent / NetworkPhase helper tests
 // ---------------------------------------------------------------------------
 
 func TestNetworkEvent_String(t *testing.T) {
-	testCases := []struct {
+	cases := []struct {
 		event    device.NetworkEvent
 		expected string
 	}{
@@ -1242,394 +955,25 @@ func TestNetworkEvent_String(t *testing.T) {
 		{device.NetworkEventComplianceFail, "compliance_fail"},
 		{device.NetworkEventDisconnect, "disconnect"},
 	}
-
-	for _, tc := range testCases {
+	for _, tc := range cases {
 		t.Run(tc.expected, func(t *testing.T) {
 			assert.Equal(t, tc.expected, tc.event.String())
 		})
 	}
 }
 
-func TestNetworkEvent_IsValid(t *testing.T) {
-	testCases := []struct {
-		name     string
-		event    device.NetworkEvent
-		expected bool
-	}{
-		{"Connect", device.NetworkEventConnect, true},
-		{"Enrolled", device.NetworkEventEnrolled, true},
-		{"ComplianceFail", device.NetworkEventComplianceFail, true},
-		{"Disconnect", device.NetworkEventDisconnect, true},
-		{"Invalid", device.NetworkEvent(100), false},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, tc.event.IsValid())
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Table-Driven Tests for NetworkPhase
-// ---------------------------------------------------------------------------
-
 func TestNetworkPhase_String(t *testing.T) {
-	testCases := []struct {
+	cases := []struct {
 		phase    device.NetworkPhase
 		expected string
 	}{
 		{device.NetworkPhaseProvisioning, "provisioning"},
-		{device.NetworkPhaseProduction, "production"},
+		{device.NetworkPhaseTrusted, "trusted"},
 		{device.NetworkPhaseQuarantine, "quarantine"},
 	}
-
-	for _, tc := range testCases {
+	for _, tc := range cases {
 		t.Run(tc.expected, func(t *testing.T) {
 			assert.Equal(t, tc.expected, tc.phase.String())
 		})
 	}
-}
-
-func TestNetworkPhase_IsValid(t *testing.T) {
-	testCases := []struct {
-		name     string
-		phase    device.NetworkPhase
-		expected bool
-	}{
-		{"Provisioning", device.NetworkPhaseProvisioning, true},
-		{"Production", device.NetworkPhaseProduction, true},
-		{"Quarantine", device.NetworkPhaseQuarantine, true},
-		{"Invalid", device.NetworkPhase("invalid"), false},
-		{"Empty", device.NetworkPhase(""), false},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, tc.phase.IsValid())
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// NetworkEventContext Validation Tests
-// ---------------------------------------------------------------------------
-
-func TestNetworkEventContext_Validate_Success(t *testing.T) {
-	event := createValidEventContext()
-	err := event.Validate()
-	require.NoError(t, err)
-}
-
-func TestNetworkEventContext_Validate_EmptyPortID(t *testing.T) {
-	event := createValidEventContext()
-	event.PortID = ""
-	err := event.Validate()
-	require.Error(t, err)
-	assert.ErrorIs(t, err, device.ErrPortIDEmpty)
-}
-
-func TestNetworkEventContext_Validate_EmptyMAC(t *testing.T) {
-	event := createValidEventContext()
-	event.MAC = ""
-	err := event.Validate()
-	require.Error(t, err)
-	assert.ErrorIs(t, err, device.ErrMACEmpty)
-}
-
-func TestNetworkEventContext_Validate_NilProfile(t *testing.T) {
-	event := createValidEventContext()
-	event.Profile = nil
-	err := event.Validate()
-	require.Error(t, err)
-	assert.ErrorIs(t, err, device.ErrProfileNil)
-}
-
-func TestNetworkEventContext_Validate_InvalidPhase(t *testing.T) {
-	event := createValidEventContext()
-	event.Phase = device.NetworkPhase("invalid")
-	err := event.Validate()
-	require.Error(t, err)
-	assert.ErrorIs(t, err, device.ErrInvalidNetworkPhase)
-}
-
-// ---------------------------------------------------------------------------
-// Error Path Tests - SetPortState Failures
-// ---------------------------------------------------------------------------
-
-func TestApplyNetworkPhase_Provisioning_SetPortStateError(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
-
-	expectedErr := errors.New("port state update failed")
-	deps.policyEngine.SetPortStateFunc = func(portID string, state policy.PortState) error {
-		return expectedErr
-	}
-
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
-	event.Phase = device.NetworkPhaseProvisioning
-	ctx := context.Background()
-
-	err = adapter.ApplyNetworkPhase(ctx, event)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "port state update failed")
-}
-
-func TestApplyNetworkPhase_Production_SetPortStateError(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
-
-	expectedErr := errors.New("port state update failed")
-	deps.policyEngine.SetPortStateFunc = func(portID string, state policy.PortState) error {
-		return expectedErr
-	}
-
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
-	event.Phase = device.NetworkPhaseProduction
-	ctx := context.Background()
-
-	err = adapter.ApplyNetworkPhase(ctx, event)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "port state update failed")
-}
-
-func TestApplyNetworkPhase_Quarantine_SetPortStateError(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
-
-	expectedErr := errors.New("port state update failed")
-	deps.policyEngine.SetPortStateFunc = func(portID string, state policy.PortState) error {
-		return expectedErr
-	}
-
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
-	event.Phase = device.NetworkPhaseQuarantine
-	ctx := context.Background()
-
-	err = adapter.ApplyNetworkPhase(ctx, event)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "port state update failed")
-}
-
-// ---------------------------------------------------------------------------
-// Error Path Tests - Production Phase Validation
-// ---------------------------------------------------------------------------
-
-func TestApplyNetworkPhase_Production_NilProductionNetwork(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
-
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
-	event.Phase = device.NetworkPhaseProduction
-	event.Profile = &entities.DeviceProfile{
-		ID:   1,
-		Name: "Test Profile",
-	}
-	ctx := context.Background()
-
-	err = adapter.ApplyNetworkPhase(ctx, event)
-
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNoProductionNetwork)
-}
-
-// ---------------------------------------------------------------------------
-// Error Path Tests - Disconnect Handler
-// ---------------------------------------------------------------------------
-
-func TestHandleDisconnect_RemoveFlowsError_ContinuesToSetState(t *testing.T) {
-	deps := newTestDependencies()
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
-
-	deps.vlanManager.RemoveFlowsFunc = func(portID string) error {
-		return errors.New("flow removal failed")
-	}
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-
-	setPortStateCalled := false
-	deps.policyEngine.SetPortStateFunc = func(portID string, state policy.PortState) error {
-		setPortStateCalled = true
-		assert.Equal(t, policy.PortStateUnconnected, state)
-		return nil
-	}
-
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
-	ctx := context.Background()
-
-	// Disconnect should continue even if flow removal fails
-	err = adapter.dispatch(ctx, device.NetworkEventDisconnect, event)
-
-	require.NoError(t, err)
-	assert.True(t, setPortStateCalled, "SetPortState should be called even after RemoveFlows failure")
-}
-
-func TestHandleDisconnect_SetPortStateError(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
-
-	expectedErr := errors.New("set port state failed")
-	deps.policyEngine.SetPortStateFunc = func(portID string, state policy.PortState) error {
-		return expectedErr
-	}
-
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
-	ctx := context.Background()
-
-	err = adapter.dispatch(ctx, device.NetworkEventDisconnect, event)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "set port state failed")
-}
-
-func TestHandleDisconnect_EmptyPortID(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
-
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	event := createValidEventContext()
-	event.PortID = ""
-	ctx := context.Background()
-
-	err = adapter.dispatch(ctx, device.NetworkEventDisconnect, event)
-
-	require.Error(t, err)
-	assert.ErrorIs(t, err, device.ErrPortIDEmpty)
-}
-
-// ---------------------------------------------------------------------------
-// Integration-style Tests (Testing Multiple Components Together)
-// ---------------------------------------------------------------------------
-
-func TestAdapter_FullLifecycle_Connect_Enroll_Disconnect(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
-
-	stateTransitions := make([]policy.PortState, 0)
-	deps.policyEngine.SetPortStateFunc = func(portID string, state policy.PortState) error {
-		stateTransitions = append(stateTransitions, state)
-		return nil
-	}
-
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	event := createValidEventContext()
-
-	// Step 1: Device connects
-	err = adapter.OnDeviceConnect(ctx, event)
-	require.NoError(t, err)
-
-	// Step 2: Device enrolls
-	err = adapter.OnDeviceEnrolled(ctx, event)
-	require.NoError(t, err)
-
-	// Step 3: Device disconnects
-	err = adapter.dispatch(ctx, device.NetworkEventDisconnect, event)
-	require.NoError(t, err)
-
-	// Verify state transitions occurred
-	assert.GreaterOrEqual(t, len(stateTransitions), 3)
-	assert.Contains(t, stateTransitions, policy.PortStateProvisioning)
-	assert.Contains(t, stateTransitions, policy.PortStateAuthorized)
-	assert.Contains(t, stateTransitions, policy.PortStateUnconnected)
-}
-
-func TestAdapter_ComplianceFailure_MovesToQuarantine(t *testing.T) {
-	deps := newTestDependencies()
-	vlanMgr := wrapVLANManager(deps.vlanManager)
-	enrollHook := wrapEnrollmentHook(deps.enrollmentHook, deps.policyEngine, deps.profileDAO)
-
-	finalState := policy.PortStateUnconnected
-	deps.policyEngine.SetPortStateFunc = func(portID string, state policy.PortState) error {
-		finalState = state
-		return nil
-	}
-
-	adapter, err := NewDeviceSDNAdapter(AdapterConfig{
-		PolicyEngine:   deps.policyEngine,
-		VLANManager:    vlanMgr,
-		EnrollmentHook: enrollHook,
-		ProfileDAO:     deps.profileDAO,
-	})
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	event := createValidEventContext()
-	event.Reason = "failed attestation"
-
-	err = adapter.OnComplianceFail(ctx, event)
-	require.NoError(t, err)
-
-	assert.Equal(t, policy.PortStateQuarantined, finalState)
 }

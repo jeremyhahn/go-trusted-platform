@@ -727,7 +727,7 @@ func TestExecutePXEAuthorizeDevice_Success(t *testing.T) {
 
 	args := map[string]interface{}{
 		"device_id":   "device-abc123",
-		"target_vlan": float64(300),
+		"target_zone": "trusted",
 	}
 
 	result, err := registry.executePXEAuthorizeDevice(ctx, args)
@@ -745,39 +745,27 @@ func TestExecutePXEAuthorizeDevice_Success(t *testing.T) {
 	}
 }
 
-func TestExecutePXEAuthorizeDevice_InvalidVLAN(t *testing.T) {
+func TestExecutePXEAuthorizeDevice_MissingZone(t *testing.T) {
 	mockPXE := newMockPXEService()
 	registry := newPXETestRegistry(mockPXE)
 	ctx := context.Background()
 
-	tests := []struct {
-		name       string
-		targetVLAN float64
-	}{
-		{"VLAN too low", 0},
-		{"VLAN too high", 4095},
+	// Omit target_zone entirely — should return PXE_TARGET_ZONE_REQUIRED.
+	args := map[string]interface{}{
+		"device_id": "device-abc123",
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			args := map[string]interface{}{
-				"device_id":   "device-abc123",
-				"target_vlan": tt.targetVLAN,
-			}
+	_, err := registry.executePXEAuthorizeDevice(ctx, args)
+	if err == nil {
+		t.Fatal("expected error for missing target_zone")
+	}
 
-			_, err := registry.executePXEAuthorizeDevice(ctx, args)
-			if err == nil {
-				t.Fatal("expected error for invalid VLAN")
-			}
-
-			pxeErr, ok := err.(*PXEError)
-			if !ok {
-				t.Fatalf("expected PXEError, got %T", err)
-			}
-			if pxeErr.Code != "PXE_INVALID_VLAN" {
-				t.Errorf("expected code PXE_INVALID_VLAN, got %s", pxeErr.Code)
-			}
-		})
+	pxeErr, ok := err.(*PXEError)
+	if !ok {
+		t.Fatalf("expected PXEError, got %T", err)
+	}
+	if pxeErr.Code != "PXE_TARGET_ZONE_REQUIRED" {
+		t.Errorf("expected code PXE_TARGET_ZONE_REQUIRED, got %s", pxeErr.Code)
 	}
 }
 
@@ -1440,7 +1428,7 @@ func TestPXEToolDefinitions_RequiredFields(t *testing.T) {
 		"pxe_get_device_by_mac":   {"mac_address"},
 		"pxe_register_device":     {"mac_address", "port_id"},
 		"pxe_update_state":        {"device_id", "state"},
-		"pxe_authorize_device":    {"device_id", "target_vlan"},
+		"pxe_authorize_device":    {"device_id", "target_zone"},
 		"pxe_quarantine_device":   {"device_id", "reason"},
 		"pxe_retry_device":        {"device_id"},
 		"pxe_get_device_events":   {"device_id"},

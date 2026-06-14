@@ -231,6 +231,14 @@ func (s *DeviceGRPCService) CreateProfile(
 
 	profile := s.pbToProfile(req.GetProfile())
 
+	// Generate an ID when the client did not supply one, matching the REST
+	// CreateProfile handler so profile creation has parity across transports.
+	// ProfileService.Save itself requires a non-zero ID because it doubles as
+	// the update primitive.
+	if profile.ID == 0 {
+		profile.ID = device.NewID()
+	}
+
 	if err := s.profileService.Save(ctx, profile); err != nil {
 		s.logger.Error("failed to create profile", "error", err)
 		return nil, s.toGRPCError(err)
@@ -480,14 +488,15 @@ func (s *DeviceGRPCService) pbToDevice(pb *platformv1.Device) *entities.Device {
 		return nil
 	}
 	return &entities.Device{
-		ID:         pb.GetId(),
-		AttestPub:  pb.GetAttestPub(),
-		EKCert:     pb.GetEkCert(),
-		EventLog:   pb.GetEventLog(),
-		HashAlgoId: pb.GetHashAlgoId(),
-		Model:      pb.GetModel(),
-		Serial:     pb.GetSerial(),
-		SigningPub: pb.GetSigningPub(),
+		ID:            pb.GetId(),
+		AttestPub:     pb.GetAttestPub(),
+		EKCert:        pb.GetEkCert(),
+		EventLog:      pb.GetEventLog(),
+		HashAlgoId:    pb.GetHashAlgoId(),
+		Model:         pb.GetModel(),
+		Serial:        pb.GetSerial(),
+		SigningPub:    pb.GetSigningPub(),
+		NetworkPortID: pb.GetNetworkPortId(),
 	}
 }
 
@@ -496,14 +505,15 @@ func (s *DeviceGRPCService) deviceToPb(d *entities.Device) *platformv1.Device {
 		return nil
 	}
 	return &platformv1.Device{
-		Id:         d.ID,
-		AttestPub:  d.AttestPub,
-		EkCert:     d.EKCert,
-		EventLog:   d.EventLog,
-		HashAlgoId: d.HashAlgoId,
-		Model:      d.Model,
-		Serial:     d.Serial,
-		SigningPub: d.SigningPub,
+		Id:            d.ID,
+		AttestPub:     d.AttestPub,
+		EkCert:        d.EKCert,
+		EventLog:      d.EventLog,
+		HashAlgoId:    d.HashAlgoId,
+		Model:         d.Model,
+		Serial:        d.Serial,
+		SigningPub:    d.SigningPub,
+		NetworkPortId: d.NetworkPortID,
 	}
 }
 
@@ -512,22 +522,25 @@ func (s *DeviceGRPCService) pbToProfile(pb *platformv1.DeviceProfile) *entities.
 		return nil
 	}
 	profile := &entities.DeviceProfile{
-		ID:       pb.GetId(),
-		Name:     pb.GetName(),
-		Model:    pb.GetModel(),
-		Role:     s.pbToDeviceRole(pb.GetRole()),
-		EventLog: pb.GetEventLog(),
+		ID:                    pb.GetId(),
+		TenantID:              pb.GetTenantId(),
+		Name:                  pb.GetName(),
+		Model:                 pb.GetModel(),
+		Role:                  s.pbToDeviceRole(pb.GetRole()),
+		EventLog:              pb.GetEventLog(),
+		Zone:                  pb.GetZone(),
+		EnrollmentNetwork:     pb.GetEnrollmentNetwork(),
+		PostEnrollmentNetwork: pb.GetPostEnrollmentNetwork(),
+		FailureNetwork:        pb.GetFailureNetwork(),
 	}
 
-	profile.Networks = make(map[string]*entities.NetworkPhaseConfig)
-	if pb.GetProvisioningNetwork() != nil {
-		profile.Networks[entities.DefaultEnrollmentNetwork] = s.pbToNetworkPhaseConfig(pb.GetProvisioningNetwork())
-	}
-	if pb.GetProductionNetwork() != nil {
-		profile.Networks[entities.DefaultPostEnrollmentNetwork] = s.pbToNetworkPhaseConfig(pb.GetProductionNetwork())
-	}
-	if pb.GetQuarantineNetwork() != nil {
-		profile.Networks[entities.DefaultFailureNetwork] = s.pbToNetworkPhaseConfig(pb.GetQuarantineNetwork())
+	if pbNets := pb.GetNetworks(); len(pbNets) > 0 {
+		profile.Networks = make(map[string]*entities.NetworkPhaseConfig, len(pbNets))
+		for k, v := range pbNets {
+			profile.Networks[k] = s.pbToNetworkPhaseConfig(v)
+		}
+	} else {
+		profile.Networks = make(map[string]*entities.NetworkPhaseConfig)
 	}
 	if pb.GetPlatformdConfig() != nil {
 		profile.PlatformdConfig = s.pbToPlatformdConfigRef(pb.GetPlatformdConfig())
@@ -535,8 +548,39 @@ func (s *DeviceGRPCService) pbToProfile(pb *platformv1.DeviceProfile) *entities.
 	if pb.GetMatchRules() != nil {
 		profile.MatchRules = s.pbToProfileMatchRules(pb.GetMatchRules())
 	}
+	if pb.GetBmc() != nil {
+		profile.BMC = s.pbToBMCConfig(pb.GetBmc())
+	}
 
 	return profile
+}
+
+// pbToBMCConfig maps a protobuf BMCConfig into the entity BMCConfig.
+func (s *DeviceGRPCService) pbToBMCConfig(pb *platformv1.BMCConfig) *entities.BMCConfig {
+	if pb == nil {
+		return nil
+	}
+	return &entities.BMCConfig{
+		Address:  pb.GetAddress(),
+		Port:     int(pb.GetPort()),
+		Username: pb.GetUsername(),
+		Password: pb.GetPassword(),
+		Protocol: entities.BMCProtocol(pb.GetProtocol()),
+	}
+}
+
+// bmcConfigToPb maps an entity BMCConfig into its protobuf representation.
+func (s *DeviceGRPCService) bmcConfigToPb(b *entities.BMCConfig) *platformv1.BMCConfig {
+	if b == nil {
+		return nil
+	}
+	return &platformv1.BMCConfig{
+		Address:  b.Address,
+		Port:     int32(b.Port),
+		Username: b.Username,
+		Password: b.Password,
+		Protocol: string(b.Protocol),
+	}
 }
 
 func (s *DeviceGRPCService) profileToPb(p *entities.DeviceProfile) *platformv1.DeviceProfile {
@@ -544,27 +588,32 @@ func (s *DeviceGRPCService) profileToPb(p *entities.DeviceProfile) *platformv1.D
 		return nil
 	}
 	profile := &platformv1.DeviceProfile{
-		Id:       p.ID,
-		Name:     p.Name,
-		Model:    p.Model,
-		Role:     s.deviceRoleToPb(p.Role),
-		EventLog: p.EventLog,
+		Id:                    p.ID,
+		TenantId:              p.TenantID,
+		Name:                  p.Name,
+		Model:                 p.Model,
+		Role:                  s.deviceRoleToPb(p.Role),
+		EventLog:              p.EventLog,
+		Zone:                  p.Zone,
+		EnrollmentNetwork:     p.EnrollmentNetwork,
+		PostEnrollmentNetwork: p.PostEnrollmentNetwork,
+		FailureNetwork:        p.FailureNetwork,
 	}
 
-	if provNet := p.GetEnrollmentNetworkConfig(); provNet != nil {
-		profile.ProvisioningNetwork = s.networkPhaseConfigToPb(provNet)
-	}
-	if prodNet := p.GetPostEnrollmentNetworkConfig(); prodNet != nil {
-		profile.ProductionNetwork = s.networkPhaseConfigToPb(prodNet)
-	}
-	if quarNet := p.GetFailureNetworkConfig(); quarNet != nil {
-		profile.QuarantineNetwork = s.networkPhaseConfigToPb(quarNet)
+	if len(p.Networks) > 0 {
+		profile.Networks = make(map[string]*platformv1.NetworkPhaseConfig, len(p.Networks))
+		for k, v := range p.Networks {
+			profile.Networks[k] = s.networkPhaseConfigToPb(v)
+		}
 	}
 	if p.PlatformdConfig != nil {
 		profile.PlatformdConfig = s.platformdConfigRefToPb(p.PlatformdConfig)
 	}
 	if p.MatchRules != nil {
 		profile.MatchRules = s.profileMatchRulesToPb(p.MatchRules)
+	}
+	if p.BMC != nil {
+		profile.Bmc = s.bmcConfigToPb(p.BMC)
 	}
 
 	return profile
@@ -617,15 +666,15 @@ func (s *DeviceGRPCService) pbToNetworkPhaseConfig(pb *platformv1.NetworkPhaseCo
 		return nil
 	}
 	config := &entities.NetworkPhaseConfig{
-		VLAN:         uint16(pb.GetVlan()),
-		StaticIP:     pb.GetStaticIp(),
-		Gateway:      pb.GetGateway(),
-		DNS:          pb.GetDns(),
-		AuthMethod:   s.pbToAuthMethod(pb.GetAuthMethod()),
-		Subnet:       pb.GetSubnet(),
-		DNSServers:   pb.GetDnsServers(),
-		DHCP:         pb.GetDhcp(),
-		FirewallZone: pb.GetFirewallZone(),
+		VLAN:       uint16(pb.GetVlan()),
+		StaticIP:   pb.GetStaticIp(),
+		Gateway:    pb.GetGateway(),
+		DNS:        pb.GetDns(),
+		AuthMethod: s.pbToAuthMethod(pb.GetAuthMethod()),
+		Subnet:     pb.GetSubnet(),
+		DNSServers: pb.GetDnsServers(),
+		DHCP:       pb.GetDhcp(),
+		Zone:       pb.GetZone(),
 	}
 
 	if pb.GetDhcpPool() != nil {
@@ -657,15 +706,15 @@ func (s *DeviceGRPCService) networkPhaseConfigToPb(c *entities.NetworkPhaseConfi
 		return nil
 	}
 	config := &platformv1.NetworkPhaseConfig{
-		Vlan:         uint32(c.VLAN),
-		StaticIp:     c.StaticIP,
-		Gateway:      c.Gateway,
-		Dns:          c.DNS,
-		AuthMethod:   s.authMethodToPb(c.AuthMethod),
-		Subnet:       c.Subnet,
-		DnsServers:   c.DNSServers,
-		Dhcp:         c.DHCP,
-		FirewallZone: c.FirewallZone,
+		Vlan:       uint32(c.VLAN),
+		StaticIp:   c.StaticIP,
+		Gateway:    c.Gateway,
+		Dns:        c.DNS,
+		AuthMethod: s.authMethodToPb(c.AuthMethod),
+		Subnet:     c.Subnet,
+		DnsServers: c.DNSServers,
+		Dhcp:       c.DHCP,
+		Zone:       c.Zone,
 	}
 
 	if c.DHCPPool != nil {

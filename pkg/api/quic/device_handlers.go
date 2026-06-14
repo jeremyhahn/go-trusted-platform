@@ -344,14 +344,16 @@ type DeviceInfo struct {
 
 // ProfileCreateRequest represents a profile creation request
 type ProfileCreateRequest struct {
-	Name                string                  `codec:"name"`
-	Model               string                  `codec:"model"`
-	Role                string                  `codec:"role"`
-	EventLog            []byte                  `codec:"event_log"`
-	ProvisioningNetwork *NetworkPhaseConfigInfo `codec:"provisioning_network"`
-	ProductionNetwork   *NetworkPhaseConfigInfo `codec:"production_network"`
-	QuarantineNetwork   *NetworkPhaseConfigInfo `codec:"quarantine_network"`
-	MatchRules          *ProfileMatchRulesInfo  `codec:"match_rules"`
+	Name                  string                               `codec:"name"`
+	Model                 string                               `codec:"model"`
+	Role                  string                               `codec:"role"`
+	EventLog              []byte                               `codec:"event_log"`
+	Zone                  string                               `codec:"zone"`
+	Networks              map[string]*NetworkPhaseConfigInfo    `codec:"networks"`
+	EnrollmentNetwork     string                               `codec:"enrollment_network"`
+	PostEnrollmentNetwork string                               `codec:"post_enrollment_network"`
+	FailureNetwork        string                               `codec:"failure_network"`
+	MatchRules            *ProfileMatchRulesInfo               `codec:"match_rules"`
 }
 
 // ProfileCreateResponse represents a profile creation response
@@ -391,15 +393,17 @@ type ProfileListResponse struct {
 
 // ProfileUpdateRequest represents a profile update request
 type ProfileUpdateRequest struct {
-	ID                  uint64                  `codec:"id"`
-	Name                string                  `codec:"name"`
-	Model               string                  `codec:"model"`
-	Role                string                  `codec:"role"`
-	EventLog            []byte                  `codec:"event_log"`
-	ProvisioningNetwork *NetworkPhaseConfigInfo `codec:"provisioning_network"`
-	ProductionNetwork   *NetworkPhaseConfigInfo `codec:"production_network"`
-	QuarantineNetwork   *NetworkPhaseConfigInfo `codec:"quarantine_network"`
-	MatchRules          *ProfileMatchRulesInfo  `codec:"match_rules"`
+	ID                    uint64                             `codec:"id"`
+	Name                  string                             `codec:"name"`
+	Model                 string                             `codec:"model"`
+	Role                  string                             `codec:"role"`
+	EventLog              []byte                             `codec:"event_log"`
+	Zone                  string                             `codec:"zone"`
+	Networks              map[string]*NetworkPhaseConfigInfo  `codec:"networks"`
+	EnrollmentNetwork     string                             `codec:"enrollment_network"`
+	PostEnrollmentNetwork string                             `codec:"post_enrollment_network"`
+	FailureNetwork        string                             `codec:"failure_network"`
+	MatchRules            *ProfileMatchRulesInfo             `codec:"match_rules"`
 }
 
 // ProfileUpdateResponse represents a profile update response
@@ -422,15 +426,17 @@ type ProfileDeleteResponse struct {
 
 // ProfileInfo contains profile information
 type ProfileInfo struct {
-	ID                  uint64                  `codec:"id"`
-	Name                string                  `codec:"name"`
-	Model               string                  `codec:"model"`
-	Role                string                  `codec:"role"`
-	EventLog            []byte                  `codec:"event_log"`
-	ProvisioningNetwork *NetworkPhaseConfigInfo `codec:"provisioning_network"`
-	ProductionNetwork   *NetworkPhaseConfigInfo `codec:"production_network"`
-	QuarantineNetwork   *NetworkPhaseConfigInfo `codec:"quarantine_network"`
-	MatchRules          *ProfileMatchRulesInfo  `codec:"match_rules"`
+	ID                    uint64                             `codec:"id"`
+	Name                  string                             `codec:"name"`
+	Model                 string                             `codec:"model"`
+	Role                  string                             `codec:"role"`
+	EventLog              []byte                             `codec:"event_log"`
+	Zone                  string                             `codec:"zone"`
+	Networks              map[string]*NetworkPhaseConfigInfo  `codec:"networks"`
+	EnrollmentNetwork     string                             `codec:"enrollment_network"`
+	PostEnrollmentNetwork string                             `codec:"post_enrollment_network"`
+	FailureNetwork        string                             `codec:"failure_network"`
+	MatchRules            *ProfileMatchRulesInfo             `codec:"match_rules"`
 }
 
 // NetworkPhaseConfigInfo represents network phase configuration
@@ -440,6 +446,7 @@ type NetworkPhaseConfigInfo struct {
 	Gateway    string   `codec:"gateway"`
 	DNS        []string `codec:"dns"`
 	AuthMethod string   `codec:"auth_method"`
+	Zone       string   `codec:"zone"`
 }
 
 // ProfileMatchRulesInfo represents profile match rules
@@ -1103,17 +1110,15 @@ func (h *DeviceHandler) handleCreateProfile(ctx context.Context, req *Request) *
 		EventLog: createReq.EventLog,
 	}
 
-	// Set network configurations
+	// Set network configurations from map-based request.
 	profile.Networks = make(map[string]*entities.NetworkPhaseConfig)
-	if createReq.ProvisioningNetwork != nil {
-		profile.Networks[entities.DefaultEnrollmentNetwork] = h.networkInfoToEntity(createReq.ProvisioningNetwork)
+	for k, v := range createReq.Networks {
+		profile.Networks[k] = h.networkInfoToEntity(v)
 	}
-	if createReq.ProductionNetwork != nil {
-		profile.Networks[entities.DefaultPostEnrollmentNetwork] = h.networkInfoToEntity(createReq.ProductionNetwork)
-	}
-	if createReq.QuarantineNetwork != nil {
-		profile.Networks[entities.DefaultFailureNetwork] = h.networkInfoToEntity(createReq.QuarantineNetwork)
-	}
+	profile.Zone = createReq.Zone
+	profile.EnrollmentNetwork = createReq.EnrollmentNetwork
+	profile.PostEnrollmentNetwork = createReq.PostEnrollmentNetwork
+	profile.FailureNetwork = createReq.FailureNetwork
 
 	// Set match rules
 	if createReq.MatchRules != nil {
@@ -1281,19 +1286,25 @@ func (h *DeviceHandler) handleUpdateProfile(ctx context.Context, req *Request) *
 	if updateReq.EventLog != nil {
 		existing.EventLog = updateReq.EventLog
 	}
-	if updateReq.ProvisioningNetwork != nil || updateReq.ProductionNetwork != nil || updateReq.QuarantineNetwork != nil {
+	if len(updateReq.Networks) > 0 {
 		if existing.Networks == nil {
-			existing.Networks = make(map[string]*entities.NetworkPhaseConfig)
+			existing.Networks = make(map[string]*entities.NetworkPhaseConfig, len(updateReq.Networks))
 		}
-		if updateReq.ProvisioningNetwork != nil {
-			existing.Networks[entities.DefaultEnrollmentNetwork] = h.networkInfoToEntity(updateReq.ProvisioningNetwork)
+		for k, v := range updateReq.Networks {
+			existing.Networks[k] = h.networkInfoToEntity(v)
 		}
-		if updateReq.ProductionNetwork != nil {
-			existing.Networks[entities.DefaultPostEnrollmentNetwork] = h.networkInfoToEntity(updateReq.ProductionNetwork)
-		}
-		if updateReq.QuarantineNetwork != nil {
-			existing.Networks[entities.DefaultFailureNetwork] = h.networkInfoToEntity(updateReq.QuarantineNetwork)
-		}
+	}
+	if updateReq.Zone != "" {
+		existing.Zone = updateReq.Zone
+	}
+	if updateReq.EnrollmentNetwork != "" {
+		existing.EnrollmentNetwork = updateReq.EnrollmentNetwork
+	}
+	if updateReq.PostEnrollmentNetwork != "" {
+		existing.PostEnrollmentNetwork = updateReq.PostEnrollmentNetwork
+	}
+	if updateReq.FailureNetwork != "" {
+		existing.FailureNetwork = updateReq.FailureNetwork
 	}
 	if updateReq.MatchRules != nil {
 		existing.MatchRules = &entities.ProfileMatchRules{
@@ -1395,21 +1406,22 @@ func (h *DeviceHandler) profileToInfo(p *entities.DeviceProfile) *ProfileInfo {
 		return nil
 	}
 	info := &ProfileInfo{
-		ID:       p.ID,
-		Name:     p.Name,
-		Model:    p.Model,
-		Role:     string(p.Role),
-		EventLog: p.EventLog,
+		ID:                    p.ID,
+		Name:                  p.Name,
+		Model:                 p.Model,
+		Role:                  string(p.Role),
+		EventLog:              p.EventLog,
+		Zone:                  p.Zone,
+		EnrollmentNetwork:     p.EnrollmentNetwork,
+		PostEnrollmentNetwork: p.PostEnrollmentNetwork,
+		FailureNetwork:        p.FailureNetwork,
 	}
 
-	if provNet := p.GetEnrollmentNetworkConfig(); provNet != nil {
-		info.ProvisioningNetwork = h.networkEntityToInfo(provNet)
-	}
-	if prodNet := p.GetPostEnrollmentNetworkConfig(); prodNet != nil {
-		info.ProductionNetwork = h.networkEntityToInfo(prodNet)
-	}
-	if quarNet := p.GetFailureNetworkConfig(); quarNet != nil {
-		info.QuarantineNetwork = h.networkEntityToInfo(quarNet)
+	if len(p.Networks) > 0 {
+		info.Networks = make(map[string]*NetworkPhaseConfigInfo, len(p.Networks))
+		for k, v := range p.Networks {
+			info.Networks[k] = h.networkEntityToInfo(v)
+		}
 	}
 	if p.MatchRules != nil {
 		info.MatchRules = &ProfileMatchRulesInfo{
@@ -1433,6 +1445,7 @@ func (h *DeviceHandler) networkInfoToEntity(info *NetworkPhaseConfigInfo) *entit
 		Gateway:    info.Gateway,
 		DNS:        info.DNS,
 		AuthMethod: entities.AuthMethod(info.AuthMethod),
+		Zone:       info.Zone,
 	}
 }
 
@@ -1447,6 +1460,7 @@ func (h *DeviceHandler) networkEntityToInfo(cfg *entities.NetworkPhaseConfig) *N
 		Gateway:    cfg.Gateway,
 		DNS:        cfg.DNS,
 		AuthMethod: string(cfg.AuthMethod),
+		Zone:       cfg.Zone,
 	}
 }
 

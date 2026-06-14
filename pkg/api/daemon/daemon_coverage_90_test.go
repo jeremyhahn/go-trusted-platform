@@ -756,9 +756,13 @@ func TestDaemon_ServiceAccessors_Coverage(t *testing.T) {
 		t.Error("CAGRPCService() should be nil when not configured")
 	}
 
-	// Test SDNService() - should be nil when not configured
-	if d.SDNService() != nil {
-		t.Error("SDNService() should be nil when not configured")
+	// SDNService always returns a non-nil stub; OVSClient is nil when no socket is configured.
+	sdn := d.SDNService()
+	if sdn == nil {
+		t.Error("SDNService() must return a non-nil zone-capable stub")
+	}
+	if sdn != nil && sdn.OVSClient() != nil {
+		t.Error("SDNService().OVSClient() must be nil when OVSSocketPath is empty")
 	}
 
 	// Test KMSService() - should be nil when not configured

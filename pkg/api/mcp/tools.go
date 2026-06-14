@@ -1361,10 +1361,26 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeGatewayIPAMRelease(ctx, args)
 	case "gateway_ipam_allocations":
 		return r.executeGatewayIPAMAllocations(ctx, args)
+	case "gateway_ipam_pool_get":
+		return r.executeGatewayIPAMPoolGet(ctx, args)
 	case "gateway_ipam_pool_create":
 		return r.executeGatewayIPAMPoolCreate(ctx, args)
+	case "gateway_ipam_pool_update":
+		return r.executeGatewayIPAMPoolUpdate(ctx, args)
 	case "gateway_ipam_pool_delete":
 		return r.executeGatewayIPAMPoolDelete(ctx, args)
+
+	// Gateway Network Zone Operations
+	case "gateway_zone_list":
+		return r.executeGatewayZoneList(ctx, args)
+	case "gateway_zone_create":
+		return r.executeGatewayZoneCreate(ctx, args)
+	case "gateway_zone_update":
+		return r.executeGatewayZoneUpdate(ctx, args)
+	case "gateway_zone_delete":
+		return r.executeGatewayZoneDelete(ctx, args)
+	case "gateway_zone_assign":
+		return r.executeGatewayZoneAssign(ctx, args)
 
 	// Health Operations
 	case "platform_health":

@@ -6,6 +6,12 @@
 # It fetches the device profile from the platform API using mTLS (IDevID certificate),
 # parses network configuration, generates systemd-networkd config files,
 # and triggers VLAN transition.
+#
+# Zone identity:
+#   TP_NETWORK_ZONE is exported after extracting the zone field from the
+#   trusted network phase config.  The baked /etc/platformd/network/network.env
+#   (written by platformctl iso create) is sourced first as a fallback so the
+#   zone is always available even when the API fetch fails.
 
 set -euo pipefail
 
@@ -34,6 +40,10 @@ readonly CA_CERT="${PLATFORM_CA_CERT:-/etc/trusted-platform/certs/ca.crt}"
 readonly NETWORKD_CONFIG_DIR="/etc/systemd/network"
 readonly BACKUP_DIR="/var/backups/trusted-platform/network"
 readonly STATE_FILE="/var/lib/trusted-platform/network-state.json"
+
+# Baked network env file written by platformctl iso create.
+# Provides TP_NETWORK_ZONE as a fallback when the API is unreachable.
+readonly BAKED_NETWORK_ENV="/etc/platformd/network/network.env"
 
 # Temporary file for JSON response
 readonly TEMP_PROFILE="/tmp/device-profile-$$.json"
@@ -191,11 +201,11 @@ validate_profile() {
 
 # Extract network configuration for given phase
 extract_network_config() {
-    local phase="$1"  # "provisioning", "production", or "quarantine"
+    local phase="$1"  # "provisioning", "trusted", or "quarantine"
 
     log_debug "Extracting $phase network configuration"
 
-    local config_key="${phase}-network"
+    local config_key="${phase}Network"
 
     # Check if phase network config exists
     if ! jq -e ".${config_key}" "$TEMP_PROFILE" > /dev/null 2>&1; then
@@ -278,28 +288,49 @@ EOF
     return 0
 }
 
-# Apply network configuration for production phase
-apply_production_network_config() {
-    log_info "Applying production network configuration"
+# Apply network configuration for trusted phase.
+# Exports TP_NETWORK_ZONE to the environment after resolving the zone name
+# from the trusted network phase config.  Falls back to the baked
+# /etc/platformd/network/network.env when the zone field is absent from the
+# live API response.
+apply_trusted_network_config() {
+    log_info "Applying trusted network configuration"
 
     local net_config
-    net_config=$(extract_network_config "production")
+    net_config=$(extract_network_config "trusted")
 
     if [[ -z "$net_config" || "$net_config" == "null" ]]; then
-        log_warn "No production network configuration found in profile"
+        log_warn "No trusted network configuration found in profile"
         return 0
     fi
 
     # Extract network parameters
-    local vlan static_ip gateway dns_servers
+    local vlan static_ip gateway dns_servers zone
     vlan=$(echo "$net_config" | jq -r '.vlan // empty')
     static_ip=$(echo "$net_config" | jq -r '.static_ip // empty')
     gateway=$(echo "$net_config" | jq -r '.gateway // empty')
     dns_servers=$(echo "$net_config" | jq -r '.dns[]? // empty' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+    zone=$(echo "$net_config" | jq -r '.zone // empty')
 
     if [[ -z "$vlan" ]]; then
-        log_error "VLAN ID not specified in production network config"
+        log_error "VLAN ID not specified in trusted network config"
         return "$ERR_INVALID_PROFILE"
+    fi
+
+    # Export zone.  When the API response carries no zone field, fall back to
+    # the value baked by platformctl iso create into network.env.
+    if [[ -n "$zone" ]]; then
+        export TP_NETWORK_ZONE="$zone"
+        log_info "Network zone from API: $TP_NETWORK_ZONE"
+    else
+        # Attempt to source the baked env file written at ISO build time.
+        if [[ -f "$BAKED_NETWORK_ENV" ]]; then
+            # shellcheck source=/dev/null
+            . "$BAKED_NETWORK_ENV"
+            log_info "Network zone from baked env: ${TP_NETWORK_ZONE:-<unset>}"
+        else
+            log_warn "No zone in API response and baked env not found: $BAKED_NETWORK_ENV"
+        fi
     fi
 
     # Get primary network interface (typically eth0)
@@ -419,7 +450,8 @@ save_state() {
         --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         --arg profile_id "$(jq -r '.id // "unknown"' "$TEMP_PROFILE")" \
         --arg device_name "$(hostname)" \
-        '{timestamp: $timestamp, profile_id: $profile_id, device_name: $device_name}')
+        --arg zone "${TP_NETWORK_ZONE:-}" \
+        '{timestamp: $timestamp, profile_id: $profile_id, device_name: $device_name, zone: $zone}')
 
     echo "$state_data" > "$STATE_FILE"
     chmod 0600 "$STATE_FILE"
@@ -432,6 +464,14 @@ main() {
 
     # Create log directory if needed
     mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$PID_FILE")" "$(dirname "$LOCK_FILE")"
+
+    # Source the baked network env as an early default so TP_NETWORK_ZONE is
+    # available even if the API fetch later fails.
+    if [[ -f "$BAKED_NETWORK_ENV" ]]; then
+        # shellcheck source=/dev/null
+        . "$BAKED_NETWORK_ENV"
+        log_info "Loaded baked network env: ${TP_NETWORK_ZONE:-<unset>}"
+    fi
 
     # Check prerequisites
     if ! check_prerequisites; then
@@ -461,8 +501,8 @@ main() {
             return $exit_code
         fi
 
-        # Apply production network configuration
-        if ! apply_production_network_config; then
+        # Apply trusted network configuration (also resolves TP_NETWORK_ZONE)
+        if ! apply_trusted_network_config; then
             exit_code=$?
             log_error "Failed to apply network configuration"
             return $exit_code

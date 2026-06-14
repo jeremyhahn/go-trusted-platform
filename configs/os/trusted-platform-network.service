@@ -7,7 +7,7 @@
 # and triggers device activation.
 #
 # The service runs early in the boot sequence after the platform API is available,
-# configures the production network, and activates the device on the platform.
+# configures the trusted network, and activates the device on the platform.
 
 [Unit]
 Description=Trusted Platform Device Network Configuration

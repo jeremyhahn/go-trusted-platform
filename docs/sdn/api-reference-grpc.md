@@ -306,3 +306,18 @@ gRPC status codes:
 - `INVALID_ARGUMENT`: Invalid request parameters
 - `INTERNAL`: Server error
 - `UNAUTHENTICATED`: Missing or invalid credentials
+
+## Network Zone RPC
+
+Service: `platform.v1.SDNService`
+
+| RPC | Request | Response |
+|-----|---------|----------|
+| `CreateNetworkZone` | `CreateNetworkZoneRequest{config}` | `CreateNetworkZoneResponse{zone, status}` |
+| `UpdateNetworkZone` | `UpdateNetworkZoneRequest{name, config}` | `UpdateNetworkZoneResponse{zone, status}` |
+| `DeleteNetworkZone` | `DeleteNetworkZoneRequest{name}` | `DeleteNetworkZoneResponse{status, restart_required}` |
+| `ListNetworkZones`  | `ListNetworkZonesRequest{lifecycle_role}` | `ListNetworkZonesResponse{zones}` |
+| `AssignNetworkZone` | `AssignNetworkZoneRequest{network, zone}` | `AssignNetworkZoneResponse{status, restart_required}` |
+
+The `NetworkZone` message carries a `restart_required` flag that is set when a
+policy-relevant field change requires the flow matrix to be recompiled.

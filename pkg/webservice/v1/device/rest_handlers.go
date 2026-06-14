@@ -562,7 +562,7 @@ func (h *CRUDHandler) ActivateDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get production VLAN
+	// Get trusted VLAN
 	var vlan uint16
 	if prodNet := profileEntity.GetPostEnrollmentNetworkConfig(); prodNet != nil {
 		vlan = prodNet.VLAN
@@ -738,15 +738,19 @@ func (h *CRUDHandler) requestToProfile(req *ProfileRequest) *entities.DeviceProf
 		EventLog: req.EventLog,
 	}
 
-	profile.Networks = make(map[string]*entities.NetworkPhaseConfig)
-	if req.ProvisioningNetwork != nil {
-		profile.Networks[entities.DefaultEnrollmentNetwork] = h.networkPhaseRequestToEntity(req.ProvisioningNetwork)
-	}
-	if req.ProductionNetwork != nil {
-		profile.Networks[entities.DefaultPostEnrollmentNetwork] = h.networkPhaseRequestToEntity(req.ProductionNetwork)
-	}
-	if req.QuarantineNetwork != nil {
-		profile.Networks[entities.DefaultFailureNetwork] = h.networkPhaseRequestToEntity(req.QuarantineNetwork)
+	profile.Zone = req.Zone
+	profile.EnrollmentNetwork = req.EnrollmentNetwork
+	profile.PostEnrollmentNetwork = req.PostEnrollmentNetwork
+	profile.FailureNetwork = req.FailureNetwork
+	if len(req.Networks) > 0 {
+		profile.Networks = make(map[string]*entities.NetworkPhaseConfig, len(req.Networks))
+		for name, n := range req.Networks {
+			if n != nil {
+				profile.Networks[name] = h.networkPhaseRequestToEntity(n)
+			}
+		}
+	} else {
+		profile.Networks = make(map[string]*entities.NetworkPhaseConfig)
 	}
 	if req.PlatformdConfig != nil {
 		profile.PlatformdConfig = &entities.PlatformdConfigRef{
@@ -783,7 +787,7 @@ func (h *CRUDHandler) networkPhaseRequestToEntity(req *NetworkPhaseRequest) *ent
 		Subnet:       req.Subnet,
 		DNSServers:   req.DNSServers,
 		DHCP:         req.DHCP,
-		FirewallZone: req.FirewallZone,
+		Zone:         req.Zone,
 	}
 
 	if req.DHCPPool != nil {
@@ -823,14 +827,15 @@ func (h *CRUDHandler) profileToResponse(p *entities.DeviceProfile) *ProfileFullR
 		EventLog: p.EventLog,
 	}
 
-	if provNet := p.GetEnrollmentNetworkConfig(); provNet != nil {
-		resp.ProvisioningNetwork = h.networkPhaseEntityToResponse(provNet)
-	}
-	if prodNet := p.GetPostEnrollmentNetworkConfig(); prodNet != nil {
-		resp.ProductionNetwork = h.networkPhaseEntityToResponse(prodNet)
-	}
-	if quarNet := p.GetFailureNetworkConfig(); quarNet != nil {
-		resp.QuarantineNetwork = h.networkPhaseEntityToResponse(quarNet)
+	resp.Zone = p.Zone
+	resp.EnrollmentNetwork = p.EnrollmentNetwork
+	resp.PostEnrollmentNetwork = p.PostEnrollmentNetwork
+	resp.FailureNetwork = p.FailureNetwork
+	if len(p.Networks) > 0 {
+		resp.Networks = make(map[string]*NetworkPhaseResponse, len(p.Networks))
+		for name, n := range p.Networks {
+			resp.Networks[name] = h.networkPhaseEntityToResponse(n)
+		}
 	}
 	if p.PlatformdConfig != nil {
 		resp.PlatformdConfig = &PlatformdConfigResponse{
@@ -871,7 +876,7 @@ func (h *CRUDHandler) networkPhaseEntityToResponse(c *entities.NetworkPhaseConfi
 		Subnet:       c.Subnet,
 		DNSServers:   c.DNSServers,
 		DHCP:         c.DHCP,
-		FirewallZone: c.FirewallZone,
+		Zone:         c.Zone,
 	}
 
 	if c.DHCPPool != nil {

@@ -43,8 +43,9 @@ func TestStartExtended_WithoutOptionalServices(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, d.IsRunning())
 
-	// Verify optional services are nil
-	assert.Nil(t, d.sdnService)
+	// SDN service is always a non-nil zone-capable stub; only OVS ops need the socket.
+	assert.NotNil(t, d.sdnService)
+	assert.Nil(t, d.sdnService.OVSClient(), "OVSClient must be nil when OVSSocketPath is empty")
 	assert.Nil(t, d.kmsService)
 	assert.Nil(t, d.iamService)
 	assert.Nil(t, d.tenantService)

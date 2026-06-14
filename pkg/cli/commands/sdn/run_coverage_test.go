@@ -157,7 +157,7 @@ func TestRunBGPRoutes_NoContext(t *testing.T) {
 // =============================================================================
 
 func TestRunIPAMPoolList_NoContext(t *testing.T) {
-	err := runIPAMPoolList(noContextFlags())
+	err := runIPAMPoolList(noContextFlags(), "")
 	assertNoContextError(t, err)
 }
 
@@ -454,6 +454,14 @@ func TestOverlayMACCommand_SubcommandRunE(t *testing.T) {
 func TestIPAMPoolCommand_SubcommandRunE(t *testing.T) {
 	cmd := newIPAMPoolCommand(func() *cli.CommonFlags { return noContextFlags() })
 	subs := cmd.Commands()
-	require.Len(t, subs, 1, "pool should have list subcommand")
-	assert.NotNil(t, subs[0].RunE)
+	require.Len(t, subs, 5, "pool should have create, get, update, delete, and list subcommands")
+
+	names := make(map[string]bool, len(subs))
+	for _, sub := range subs {
+		assert.NotNil(t, sub.RunE, "subcommand %s should have RunE", sub.Name())
+		names[sub.Name()] = true
+	}
+	for _, want := range []string{"create", "get", "update", "delete", "list"} {
+		assert.True(t, names[want], "pool should have %s subcommand", want)
+	}
 }

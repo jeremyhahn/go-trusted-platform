@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strings"
 	"time"
 )
 
@@ -51,7 +52,15 @@ func (m *SDNMCPAdapter) Name() string {
 // Setup initializes the MCP client.
 func (m *SDNMCPAdapter) Setup(ctx context.Context) error {
 	endpoints := GetServiceEndpoints()
-	m.baseURL = "http://" + endpoints.PlatformMCP
+	// PlatformMCP may already carry an "http://" prefix (e.g. when
+	// PLATFORM_MCP_ENDPOINT=http://localhost:9445 is set by the test harness).
+	// Prepending another "http://" would produce "http://http://…" and break DNS.
+	rawMCP := endpoints.PlatformMCP
+	if strings.HasPrefix(rawMCP, "http://") || strings.HasPrefix(rawMCP, "https://") {
+		m.baseURL = rawMCP
+	} else {
+		m.baseURL = "http://" + rawMCP
+	}
 
 	m.httpClient = &http.Client{
 		Timeout: 30 * time.Second,
@@ -74,8 +83,10 @@ func (m *SDNMCPAdapter) Teardown() error {
 
 // mcpRequest represents an MCP tool call request.
 type mcpRequest struct {
-	Method string                 `json:"method"`
-	Params map[string]interface{} `json:"params,omitempty"`
+	JSONRPC string                 `json:"jsonrpc"`
+	ID      int                    `json:"id"`
+	Method  string                 `json:"method"`
+	Params  map[string]interface{} `json:"params,omitempty"`
 }
 
 // mcpResponse represents an MCP tool call response.
@@ -97,7 +108,9 @@ type mcpError struct {
 // callTool invokes an MCP tool and returns the raw result.
 func (m *SDNMCPAdapter) callTool(ctx context.Context, toolName string, params map[string]interface{}) (json.RawMessage, error) {
 	req := mcpRequest{
-		Method: "tools/call",
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "tools/call",
 		Params: map[string]interface{}{
 			"name":      toolName,
 			"arguments": params,
@@ -300,9 +313,112 @@ func (m *SDNMCPAdapter) WithdrawPrefix(ctx context.Context, prefix string) error
 // IPAM Operations
 // =============================================================================
 
-// ListPools returns all IPAM pools via MCP.
-func (m *SDNMCPAdapter) ListPools(ctx context.Context) (*IPAMPoolListResponse, error) {
-	result, err := m.callTool(ctx, "sdn_list_ipam_pools", nil)
+// CreatePool creates a new IPAM pool via MCP.
+func (m *SDNMCPAdapter) CreatePool(ctx context.Context, req IPAMPoolCreateRequest) (*IPAMPoolEntry, error) {
+	params := map[string]interface{}{
+		"name": req.Name,
+		"cidr": req.CIDR,
+	}
+	if req.ID != "" {
+		params["id"] = req.ID
+	}
+	if req.Gateway != "" {
+		params["gateway"] = req.Gateway
+	}
+	if req.Zone != "" {
+		params["zone"] = req.Zone
+	}
+	if req.Description != "" {
+		params["description"] = req.Description
+	}
+	if req.LeaseDuration > 0 {
+		params["lease_duration_seconds"] = int64(req.LeaseDuration.Seconds())
+	}
+
+	result, err := m.callTool(ctx, "gateway_ipam_pool_create", params)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp mcpIPAMPoolEntry
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal created pool: %w", err)
+	}
+
+	return resp.toEntry(), nil
+}
+
+// GetPool retrieves an IPAM pool by ID via MCP.
+func (m *SDNMCPAdapter) GetPool(ctx context.Context, poolID string) (*IPAMPoolEntry, error) {
+	params := map[string]interface{}{
+		"pool_id": poolID,
+	}
+
+	result, err := m.callTool(ctx, "gateway_ipam_pool_get", params)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp mcpIPAMPoolEntry
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal pool: %w", err)
+	}
+
+	return resp.toEntry(), nil
+}
+
+// UpdatePool updates mutable fields of an IPAM pool via MCP.
+func (m *SDNMCPAdapter) UpdatePool(ctx context.Context, poolID string, req IPAMPoolUpdateRequest) (*IPAMPoolEntry, error) {
+	params := map[string]interface{}{
+		"pool_id": poolID,
+	}
+	if req.Name != "" {
+		params["name"] = req.Name
+	}
+	if req.Gateway != "" {
+		params["gateway"] = req.Gateway
+	}
+	if req.Zone != "" {
+		params["zone"] = req.Zone
+	}
+	if req.Description != "" {
+		params["description"] = req.Description
+	}
+	if req.LeaseDuration > 0 {
+		params["lease_duration_seconds"] = int64(req.LeaseDuration.Seconds())
+	}
+
+	result, err := m.callTool(ctx, "gateway_ipam_pool_update", params)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp mcpIPAMPoolEntry
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal updated pool: %w", err)
+	}
+
+	return resp.toEntry(), nil
+}
+
+// DeletePool removes an IPAM pool by ID via MCP.
+func (m *SDNMCPAdapter) DeletePool(ctx context.Context, poolID string) error {
+	params := map[string]interface{}{
+		"pool_id": poolID,
+	}
+
+	_, err := m.callTool(ctx, "gateway_ipam_pool_delete", params)
+	return err
+}
+
+// ListPools returns all IPAM pools, optionally filtered by zone, via MCP.
+func (m *SDNMCPAdapter) ListPools(ctx context.Context, zone string) (*IPAMPoolListResponse, error) {
+	params := map[string]interface{}{}
+	if zone != "" {
+		params["zone"] = zone
+	}
+
+	result, err := m.callTool(ctx, "gateway_ipam_pools", params)
 	if err != nil {
 		return nil, err
 	}
@@ -612,6 +728,8 @@ type mcpIPAMPoolEntry struct {
 	Name             string   `json:"name"`
 	CIDR             string   `json:"cidr"`
 	Gateway          string   `json:"gateway"`
+	Zone             string   `json:"zone"`
+	Description      string   `json:"description"`
 	TotalIPs         int64    `json:"total_ips"`
 	AllocatedIPs     int64    `json:"allocated_ips"`
 	AvailableIPs     int64    `json:"available_ips"`
@@ -620,21 +738,27 @@ type mcpIPAMPoolEntry struct {
 	LeaseDurationSec int64    `json:"lease_duration_sec"`
 }
 
+func (e *mcpIPAMPoolEntry) toEntry() *IPAMPoolEntry {
+	return &IPAMPoolEntry{
+		ID:             e.ID,
+		Name:           e.Name,
+		CIDR:           e.CIDR,
+		Gateway:        e.Gateway,
+		Zone:           e.Zone,
+		Description:    e.Description,
+		TotalIPs:       e.TotalIPs,
+		AllocatedIPs:   e.AllocatedIPs,
+		AvailableIPs:   e.AvailableIPs,
+		UtilizationPct: e.UtilizationPct,
+		DNS:            e.DNS,
+		LeaseDuration:  time.Duration(e.LeaseDurationSec) * time.Second,
+	}
+}
+
 func (r *mcpIPAMPoolListResponse) toResponse() *IPAMPoolListResponse {
 	pools := make([]IPAMPoolEntry, 0, len(r.Pools))
 	for _, p := range r.Pools {
-		pools = append(pools, IPAMPoolEntry{
-			ID:             p.ID,
-			Name:           p.Name,
-			CIDR:           p.CIDR,
-			Gateway:        p.Gateway,
-			TotalIPs:       p.TotalIPs,
-			AllocatedIPs:   p.AllocatedIPs,
-			AvailableIPs:   p.AvailableIPs,
-			UtilizationPct: p.UtilizationPct,
-			DNS:            p.DNS,
-			LeaseDuration:  time.Duration(p.LeaseDurationSec) * time.Second,
-		})
+		pools = append(pools, *p.toEntry())
 	}
 	return &IPAMPoolListResponse{
 		Pools:      pools,
@@ -743,6 +867,167 @@ func (r *mcpDHCPLeaseListResponse) toResponse() *DHCPLeaseListResponse {
 		Leases:     leases,
 		TotalCount: r.TotalCount,
 	}
+}
+
+// =============================================================================
+// Network Zone Operations
+// =============================================================================
+
+// mcpNetworkZoneConfig mirrors the JSON shape of gateway.ZoneConfig (no json tags → Go field names).
+type mcpNetworkZoneConfig struct {
+	Name             string `json:"Name"`
+	InternetIngress  bool   `json:"InternetIngress,omitempty"`
+	Isolate          bool   `json:"Isolate,omitempty"`
+	IsolatePerTenant bool   `json:"IsolatePerTenant,omitempty"`
+	OOB              bool   `json:"OOB,omitempty"`
+	LifecycleRole    string `json:"LifecycleRole,omitempty"`
+}
+
+// mcpNetworkZoneRecord mirrors the JSON shape of gateway.ZoneRecord (no json tags → Go field names).
+type mcpNetworkZoneRecord struct {
+	Config    *mcpNetworkZoneConfig `json:"Config,omitempty"`
+	CreatedAt time.Time             `json:"CreatedAt"`
+	UpdatedAt time.Time             `json:"UpdatedAt"`
+}
+
+// mcpZoneCreateResponse mirrors the JSON shape of GatewayNetworkZoneCreate result.
+type mcpZoneCreateResponse struct {
+	Zone            *mcpNetworkZoneRecord `json:"zone,omitempty"`
+	RestartRequired bool                  `json:"restart_required,omitempty"`
+}
+
+// mcpZoneListResponse mirrors the JSON shape of GatewayNetworkZoneList result.
+type mcpZoneListResponse struct {
+	Zones []interface{} `json:"zones"`
+}
+
+// mcpZoneDeleteResponse mirrors the JSON shape of GatewayNetworkZoneDelete result.
+type mcpZoneDeleteResponse struct {
+	Success         bool `json:"success,omitempty"`
+	RestartRequired bool `json:"restart_required,omitempty"`
+}
+
+func mcpZoneRecordToEntry(z *mcpNetworkZoneRecord, restartRequired bool) *ZoneEntry {
+	if z == nil {
+		return &ZoneEntry{}
+	}
+	entry := &ZoneEntry{
+		RestartRequired: restartRequired,
+		CreatedAt:       z.CreatedAt,
+		UpdatedAt:       z.UpdatedAt,
+	}
+	if z.Config != nil {
+		entry.Name = z.Config.Name
+		entry.InternetIngress = z.Config.InternetIngress
+		entry.Isolate = z.Config.Isolate
+		entry.IsolatePerTenant = z.Config.IsolatePerTenant
+		entry.OOB = z.Config.OOB
+		entry.LifecycleRole = z.Config.LifecycleRole
+	}
+	return entry
+}
+
+// CreateZone creates a new network trust zone via MCP gateway_zone_create tool.
+func (s *SDNMCPAdapter) CreateZone(ctx context.Context, req ZoneCreateRequest) (*ZoneEntry, error) {
+	params := map[string]interface{}{
+		"name":               req.Name,
+		"internet_ingress":   req.InternetIngress,
+		"isolate":            req.Isolate,
+		"isolate_per_tenant": req.IsolatePerTenant,
+		"oob":                req.OOB,
+	}
+	if req.LifecycleRole != "" {
+		params["lifecycle_role"] = req.LifecycleRole
+	}
+	result, err := s.callTool(ctx, "gateway_zone_create", params)
+	if err != nil {
+		return nil, err
+	}
+	var resp mcpZoneCreateResponse
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal zone create response: %w", err)
+	}
+	return mcpZoneRecordToEntry(resp.Zone, resp.RestartRequired), nil
+}
+
+// UpdateZone updates an existing network trust zone via MCP gateway_zone_update tool.
+func (s *SDNMCPAdapter) UpdateZone(ctx context.Context, name string, req ZoneUpdateRequest) (*ZoneEntry, error) {
+	params := map[string]interface{}{
+		"name":               name,
+		"internet_ingress":   req.InternetIngress,
+		"isolate":            req.Isolate,
+		"isolate_per_tenant": req.IsolatePerTenant,
+		"oob":                req.OOB,
+	}
+	if req.LifecycleRole != "" {
+		params["lifecycle_role"] = req.LifecycleRole
+	}
+	result, err := s.callTool(ctx, "gateway_zone_update", params)
+	if err != nil {
+		return nil, err
+	}
+	var resp mcpZoneCreateResponse
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal zone update response: %w", err)
+	}
+	return mcpZoneRecordToEntry(resp.Zone, resp.RestartRequired), nil
+}
+
+// DeleteZone deletes a network trust zone via MCP gateway_zone_delete tool.
+func (s *SDNMCPAdapter) DeleteZone(ctx context.Context, name string) (bool, error) {
+	result, err := s.callTool(ctx, "gateway_zone_delete", map[string]interface{}{"name": name})
+	if err != nil {
+		return false, err
+	}
+	var resp mcpZoneDeleteResponse
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return false, fmt.Errorf("failed to unmarshal zone delete response: %w", err)
+	}
+	return resp.RestartRequired, nil
+}
+
+// ListZones returns all network trust zones via MCP gateway_zone_list tool.
+func (s *SDNMCPAdapter) ListZones(ctx context.Context, lifecycleRole string) (*ZoneListResponse, error) {
+	params := map[string]interface{}{}
+	if lifecycleRole != "" {
+		params["lifecycle_role"] = lifecycleRole
+	}
+	result, err := s.callTool(ctx, "gateway_zone_list", params)
+	if err != nil {
+		return nil, err
+	}
+	// The zones field is []interface{} of zone records; we parse each element.
+	var raw struct {
+		Zones []json.RawMessage `json:"zones"`
+	}
+	if err := json.Unmarshal(result, &raw); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal zone list response: %w", err)
+	}
+	zones := make([]ZoneEntry, 0, len(raw.Zones))
+	for _, rawZone := range raw.Zones {
+		var rec mcpNetworkZoneRecord
+		if err := json.Unmarshal(rawZone, &rec); err != nil {
+			continue
+		}
+		zones = append(zones, *mcpZoneRecordToEntry(&rec, false))
+	}
+	return &ZoneListResponse{Zones: zones, TotalCount: len(zones)}, nil
+}
+
+// AssignZone assigns a network segment to a trust zone via MCP gateway_zone_assign tool.
+func (s *SDNMCPAdapter) AssignZone(ctx context.Context, network string, zoneName string) (bool, error) {
+	result, err := s.callTool(ctx, "gateway_zone_assign", map[string]interface{}{
+		"network": network,
+		"zone":    zoneName,
+	})
+	if err != nil {
+		return false, err
+	}
+	var resp mcpZoneDeleteResponse
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return false, fmt.Errorf("failed to unmarshal zone assign response: %w", err)
+	}
+	return resp.RestartRequired, nil
 }
 
 // Ensure SDNMCPAdapter implements SDNTestAdapter interface.

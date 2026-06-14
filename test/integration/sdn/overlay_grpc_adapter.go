@@ -143,6 +143,7 @@ func (g *OverlayGRPCAdapter) OverlayStatus(ctx context.Context) (*OverlayStatusR
 	return &OverlayStatusResult{
 		NodeID:         resp.Status.NodeId,
 		VTEPIP:         vtepIP,
+		VXLANPort:      uint16(resp.Status.VxlanPort),
 		VNICount:       int(resp.Status.VniCount),
 		VTEPCount:      int(resp.Status.VtepCount),
 		RemoteMACCount: int(resp.Status.RemoteMacCount),
@@ -195,6 +196,9 @@ func (g *OverlayGRPCAdapter) VTEPGet(ctx context.Context, nodeID string) (*VTEPG
 		lastSeen = resp.Vtep.LastSeen.AsTime()
 	}
 
+	vnis := make([]uint32, len(resp.Vtep.Vnis))
+	copy(vnis, resp.Vtep.Vnis)
+
 	return &VTEPGetResult{
 		VTEPInfo: VTEPInfo{
 			NodeID:   resp.Vtep.NodeId,
@@ -202,6 +206,7 @@ func (g *OverlayGRPCAdapter) VTEPGet(ctx context.Context, nodeID string) (*VTEPG
 			Healthy:  resp.Vtep.Healthy,
 			LastSeen: lastSeen,
 		},
+		VNIs: vnis,
 	}, nil
 }
 

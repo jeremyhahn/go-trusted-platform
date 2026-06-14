@@ -19,10 +19,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net"
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -35,24 +38,15 @@ import (
 // OverlayCLIAdapter implements OverlayCommands using the platformctl CLI tool.
 type OverlayCLIAdapter struct {
 	binaryPath string
+	socketPath string
+	grpcAddr   string
 	configPath string
-	timeout    time.Duration
+	configDir  string
 }
 
 // NewOverlayCLIAdapter creates a new overlay CLI adapter.
 func NewOverlayCLIAdapter() *OverlayCLIAdapter {
-	binaryPath := os.Getenv("PLATFORMCTL_PATH")
-	if binaryPath == "" {
-		binaryPath = "platformctl"
-	}
-
-	configPath := os.Getenv("PLATFORMCTL_CONFIG")
-
-	return &OverlayCLIAdapter{
-		binaryPath: binaryPath,
-		configPath: configPath,
-		timeout:    10 * time.Second,
-	}
+	return &OverlayCLIAdapter{}
 }
 
 // Name returns the protocol adapter identifier.
@@ -60,17 +54,88 @@ func (c *OverlayCLIAdapter) Name() string {
 	return "CLI"
 }
 
-// Setup verifies the CLI binary is available.
+// Setup locates the platformctl binary and creates a temporary config file
+// pointing to the test daemon's Unix socket, using the same three-fallback
+// convention as sdn_cli_adapter.go.
 func (c *OverlayCLIAdapter) Setup(ctx context.Context) error {
-	_, err := exec.LookPath(c.binaryPath)
-	if err != nil {
-		return ErrCLINotConfigured{}
+	// Resolve binary path: prefer PLATFORMCTL_PATH env var, then well-known locations.
+	if envPath := os.Getenv("PLATFORMCTL_PATH"); envPath != "" {
+		if _, err := os.Stat(envPath); err == nil {
+			c.binaryPath = envPath
+		}
 	}
+	if c.binaryPath == "" {
+		for _, p := range []string{"/tmp/platformctl", "platformctl", "/usr/local/bin/platformctl"} {
+			if _, err := exec.LookPath(p); err == nil {
+				c.binaryPath = p
+				break
+			}
+		}
+	}
+	if c.binaryPath == "" {
+		return ErrAdapterSetupFailed{Protocol: "CLI", Err: fmt.Errorf("platformctl binary not found")}
+	}
+
+	// Resolve socket path using the three-fallback convention:
+	// PLATFORMD_SOCKET → PLATFORM_UNIX_SOCKET → PLATFORM_SOCKET_PATH → default.
+	c.socketPath = os.Getenv(EnvPlatformdSocket)
+	if c.socketPath == "" {
+		c.socketPath = os.Getenv("PLATFORM_UNIX_SOCKET")
+	}
+	if c.socketPath == "" {
+		c.socketPath = os.Getenv("PLATFORM_SOCKET_PATH")
+	}
+	if c.socketPath == "" {
+		c.socketPath = DefaultPlatformdSocket
+	}
+
+	// Resolve gRPC address for the config file.
+	c.grpcAddr = os.Getenv(EnvPlatformdGRPCEndpoint)
+	if c.grpcAddr == "" {
+		c.grpcAddr = DefaultPlatformdGRPCEndpoint
+	}
+
+	if err := c.createTestConfig(); err != nil {
+		return ErrAdapterSetupFailed{Protocol: "CLI", Err: err}
+	}
+
 	return nil
 }
 
-// Teardown performs any cleanup (none needed for CLI).
+// createTestConfig writes a temporary platformctl config file that points
+// to the test daemon's Unix socket and gRPC address.
+func (c *OverlayCLIAdapter) createTestConfig() error {
+	tmpDir, err := os.MkdirTemp("", "platformctl-overlay-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp config dir: %w", err)
+	}
+	c.configDir = tmpDir
+
+	configContent := fmt.Sprintf(`current_context: integration-test
+contexts:
+  - name: integration-test
+    type: local
+    local:
+      socket_path: %s
+      grpc_addr: %s
+`, c.socketPath, c.grpcAddr)
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+		return fmt.Errorf("failed to write temp config: %w", err)
+	}
+	c.configPath = configPath
+	log.Printf("[OverlayCLI] created test config at %s (socket=%s)", configPath, c.socketPath)
+	return nil
+}
+
+// Teardown removes temporary config files created during setup.
 func (c *OverlayCLIAdapter) Teardown() error {
+	if c.configDir != "" {
+		os.RemoveAll(c.configDir)
+		c.configDir = ""
+		c.configPath = ""
+	}
 	return nil
 }
 
@@ -78,16 +143,17 @@ func (c *OverlayCLIAdapter) Teardown() error {
 // Internal Helpers
 // =============================================================================
 
+// runCommand executes a platformctl command and returns JSON output.
+// It prepends --output json and --config/--context flags so every invocation
+// connects to the test daemon rather than the system default socket.
 func (c *OverlayCLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
-	cmdArgs := append([]string{"--output", "json"}, args...)
+	fullArgs := []string{"--output", "json"}
 	if c.configPath != "" {
-		cmdArgs = append([]string{"--config", c.configPath}, cmdArgs...)
+		fullArgs = append(fullArgs, "--config", c.configPath, "--context", "integration-test")
 	}
+	fullArgs = append(fullArgs, args...)
 
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, c.binaryPath, cmdArgs...)
+	cmd := exec.CommandContext(ctx, c.binaryPath, fullArgs...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -96,7 +162,7 @@ func (c *OverlayCLIAdapter) runCommand(ctx context.Context, args ...string) ([]b
 	err := cmd.Run()
 	if err != nil {
 		return nil, ErrCLIExecutionFailed{
-			Command: strings.Join(cmdArgs, " "),
+			Command: strings.Join(fullArgs, " "),
 			Stdout:  stdout.String(),
 			Stderr:  stderr.String(),
 			Err:     err,
@@ -164,50 +230,60 @@ func (c *OverlayCLIAdapter) OverlayStatus(ctx context.Context) (*OverlayStatusRe
 // VTEP Commands
 // =============================================================================
 
+// protoTimestamp represents a protobuf Timestamp marshaled to JSON.
+type protoTimestamp struct {
+	Seconds int64 `json:"seconds"`
+	Nanos   int32 `json:"nanos"`
+}
+
+func (p *protoTimestamp) Time() time.Time {
+	if p == nil {
+		return time.Time{}
+	}
+	return time.Unix(p.Seconds, int64(p.Nanos))
+}
+
 // VTEPList returns all known VTEPs.
+// The CLI outputs a bare JSON array of VTEPInfo objects (protobuf JSON encoding).
+// Proto timestamps marshal as {"seconds": N, "nanos": N} objects.
 func (c *OverlayCLIAdapter) VTEPList(ctx context.Context) (*VTEPListResult, error) {
 	output, err := c.runCommand(ctx, "sdn", "overlay", "vtep", "list")
 	if err != nil {
 		return nil, err
 	}
 
-	var result struct {
-		VTEPs []struct {
-			NodeID     string `json:"node_id"`
-			IP         string `json:"ip"`
-			Healthy    bool   `json:"healthy"`
-			LastSeen   string `json:"last_seen"`
-			IsLocal    bool   `json:"is_local"`
-			TunnelPort int    `json:"tunnel_port"`
-		} `json:"vteps"`
-		TotalCount int `json:"total_count"`
+	// CLI outputs []*platformv1.VTEPInfo directly - a bare JSON array.
+	var wireVTEPs []struct {
+		NodeID   string          `json:"node_id"`
+		IP       string          `json:"ip"`
+		Healthy  bool            `json:"healthy"`
+		LastSeen *protoTimestamp `json:"last_seen"`
+		Vnis     []uint32        `json:"vnis"`
 	}
 
-	if err := c.parseJSONOutput(output, &result); err != nil {
+	if err := c.parseJSONOutput(output, &wireVTEPs); err != nil {
 		return nil, err
 	}
 
-	vteps := make([]VTEPInfo, len(result.VTEPs))
-	for i, v := range result.VTEPs {
+	vteps := make([]VTEPInfo, len(wireVTEPs))
+	for i, v := range wireVTEPs {
 		ip, _ := netip.ParseAddr(v.IP)
-		lastSeen, _ := time.Parse(time.RFC3339, v.LastSeen)
 		vteps[i] = VTEPInfo{
-			NodeID:     v.NodeID,
-			IP:         ip,
-			Healthy:    v.Healthy,
-			LastSeen:   lastSeen,
-			IsLocal:    v.IsLocal,
-			TunnelPort: v.TunnelPort,
+			NodeID:   v.NodeID,
+			IP:       ip,
+			Healthy:  v.Healthy,
+			LastSeen: v.LastSeen.Time(),
 		}
 	}
 
 	return &VTEPListResult{
 		VTEPs:      vteps,
-		TotalCount: result.TotalCount,
+		TotalCount: len(vteps),
 	}, nil
 }
 
 // VTEPGet returns details for a specific VTEP.
+// The CLI outputs a single *platformv1.VTEPInfo (protobuf JSON encoding).
 func (c *OverlayCLIAdapter) VTEPGet(ctx context.Context, nodeID string) (*VTEPGetResult, error) {
 	output, err := c.runCommand(ctx, "sdn", "overlay", "vtep", "get", nodeID)
 	if err != nil {
@@ -215,16 +291,11 @@ func (c *OverlayCLIAdapter) VTEPGet(ctx context.Context, nodeID string) (*VTEPGe
 	}
 
 	var result struct {
-		NodeID     string   `json:"node_id"`
-		IP         string   `json:"ip"`
-		Healthy    bool     `json:"healthy"`
-		LastSeen   string   `json:"last_seen"`
-		IsLocal    bool     `json:"is_local"`
-		TunnelPort int      `json:"tunnel_port"`
-		VNIs       []uint32 `json:"vnis"`
-		MACCount   int      `json:"mac_count"`
-		BytesSent  uint64   `json:"bytes_sent"`
-		BytesRecv  uint64   `json:"bytes_recv"`
+		NodeID   string          `json:"node_id"`
+		IP       string          `json:"ip"`
+		Healthy  bool            `json:"healthy"`
+		LastSeen *protoTimestamp `json:"last_seen"`
+		Vnis     []uint32        `json:"vnis"`
 	}
 
 	if err := c.parseJSONOutput(output, &result); err != nil {
@@ -232,21 +303,19 @@ func (c *OverlayCLIAdapter) VTEPGet(ctx context.Context, nodeID string) (*VTEPGe
 	}
 
 	ip, _ := netip.ParseAddr(result.IP)
-	lastSeen, _ := time.Parse(time.RFC3339, result.LastSeen)
+	vnis := result.Vnis
+	if vnis == nil {
+		vnis = []uint32{}
+	}
 
 	return &VTEPGetResult{
 		VTEPInfo: VTEPInfo{
-			NodeID:     result.NodeID,
-			IP:         ip,
-			Healthy:    result.Healthy,
-			LastSeen:   lastSeen,
-			IsLocal:    result.IsLocal,
-			TunnelPort: result.TunnelPort,
+			NodeID:   result.NodeID,
+			IP:       ip,
+			Healthy:  result.Healthy,
+			LastSeen: result.LastSeen.Time(),
 		},
-		VNIs:      result.VNIs,
-		MACCount:  result.MACCount,
-		BytesSent: result.BytesSent,
-		BytesRecv: result.BytesRecv,
+		VNIs: vnis,
 	}, nil
 }
 
@@ -255,6 +324,8 @@ func (c *OverlayCLIAdapter) VTEPGet(ctx context.Context, nodeID string) (*VTEPGe
 // =============================================================================
 
 // VNICreate creates a new VNI.
+// The CLI outputs a *platformv1.VNI (protobuf JSON), where created_at is a
+// proto Timestamp object {"seconds": N, "nanos": N}.
 func (c *OverlayCLIAdapter) VNICreate(ctx context.Context, opts VNICreateOptions) (*VNICreateResult, error) {
 	args := []string{"sdn", "overlay", "vni", "create",
 		"--vni", strconv.FormatUint(uint64(opts.VNI), 10),
@@ -270,88 +341,97 @@ func (c *OverlayCLIAdapter) VNICreate(ctx context.Context, opts VNICreateOptions
 		return nil, err
 	}
 
+	// The CLI outputs *platformv1.VNI — a single VNI object with proto JSON encoding.
+	// Fields: id, config{vni,vlan,name}, created_at (proto Timestamp), mac_count.
 	var result struct {
-		VNI       uint32 `json:"vni"`
-		VLAN      uint16 `json:"vlan"`
-		Name      string `json:"name"`
-		CreatedAt string `json:"created_at"`
+		ID     string `json:"id"`
+		Config *struct {
+			VNI  uint32 `json:"vni"`
+			VLAN uint32 `json:"vlan"`
+			Name string `json:"name"`
+		} `json:"config"`
+		CreatedAt *protoTimestamp `json:"created_at"`
+		MACCount  uint32          `json:"mac_count"`
 	}
 
 	if err := c.parseJSONOutput(output, &result); err != nil {
 		return nil, err
 	}
 
-	createdAt, _ := time.Parse(time.RFC3339, result.CreatedAt)
+	var vni uint32
+	var vlan uint16
+	var name string
+	if result.Config != nil {
+		vni = result.Config.VNI
+		vlan = uint16(result.Config.VLAN)
+		name = result.Config.Name
+	}
 
 	return &VNICreateResult{
-		VNI:       result.VNI,
-		VLAN:      result.VLAN,
-		Name:      result.Name,
-		CreatedAt: createdAt,
+		VNI:       vni,
+		VLAN:      vlan,
+		Name:      name,
+		CreatedAt: result.CreatedAt.Time(),
 	}, nil
 }
 
 // VNIDelete deletes a VNI.
+// The CLI prints "VNI N deleted successfully\n" (plain text, not JSON).
+// A successful command exit (err == nil) means the deletion succeeded.
 func (c *OverlayCLIAdapter) VNIDelete(ctx context.Context, vni uint32) (*VNIDeleteResult, error) {
-	output, err := c.runCommand(ctx, "sdn", "overlay", "vni", "delete", strconv.FormatUint(uint64(vni), 10))
+	_, err := c.runCommand(ctx, "sdn", "overlay", "vni", "delete", strconv.FormatUint(uint64(vni), 10))
 	if err != nil {
 		return nil, err
 	}
 
-	var result struct {
-		VNI     uint32 `json:"vni"`
-		Deleted bool   `json:"deleted"`
-	}
-
-	if err := c.parseJSONOutput(output, &result); err != nil {
-		return nil, err
-	}
-
 	return &VNIDeleteResult{
-		VNI:     result.VNI,
-		Deleted: result.Deleted,
+		VNI:     vni,
+		Deleted: true,
 	}, nil
 }
 
 // VNIList lists all VNIs.
+// The CLI outputs []*platformv1.VNI as a bare JSON array. Each element has
+// proto-style fields: id, config{vni,vlan,name}, created_at (proto Timestamp
+// object {"seconds": N, "nanos": N}), mac_count.
 func (c *OverlayCLIAdapter) VNIList(ctx context.Context) (*VNIListResult, error) {
 	output, err := c.runCommand(ctx, "sdn", "overlay", "vni", "list")
 	if err != nil {
 		return nil, err
 	}
 
-	var result struct {
-		VNIs []struct {
-			VNI        uint32 `json:"vni"`
-			VLAN       uint16 `json:"vlan"`
-			Name       string `json:"name"`
-			MACCount   int    `json:"mac_count"`
-			TunnelPort string `json:"tunnel_port"`
-			CreatedAt  string `json:"created_at"`
-		} `json:"vnis"`
-		TotalCount int `json:"total_count"`
+	// The CLI prints the raw []*platformv1.VNI slice — a bare JSON array.
+	var wireVNIs []struct {
+		ID     string `json:"id"`
+		Config *struct {
+			VNI  uint32 `json:"vni"`
+			VLAN uint32 `json:"vlan"`
+			Name string `json:"name"`
+		} `json:"config"`
+		CreatedAt *protoTimestamp `json:"created_at"`
+		MACCount  uint32          `json:"mac_count"`
 	}
 
-	if err := c.parseJSONOutput(output, &result); err != nil {
+	if err := c.parseJSONOutput(output, &wireVNIs); err != nil {
 		return nil, err
 	}
 
-	vnis := make([]VNIInfo, len(result.VNIs))
-	for i, v := range result.VNIs {
-		createdAt, _ := time.Parse(time.RFC3339, v.CreatedAt)
-		vnis[i] = VNIInfo{
-			VNI:        v.VNI,
-			VLAN:       v.VLAN,
-			Name:       v.Name,
-			MACCount:   v.MACCount,
-			TunnelPort: v.TunnelPort,
-			CreatedAt:  createdAt,
+	vnis := make([]VNIInfo, len(wireVNIs))
+	for i, v := range wireVNIs {
+		vni := VNIInfo{
+			CreatedAt: v.CreatedAt.Time(),
 		}
+		if v.Config != nil {
+			vni.VNI = v.Config.VNI
+			vni.VLAN = uint16(v.Config.VLAN)
+			vni.Name = v.Config.Name
+		}
+		vnis[i] = vni
 	}
 
 	return &VNIListResult{
 		VNIs:       vnis,
-		TotalCount: result.TotalCount,
+		TotalCount: len(vnis),
 	}, nil
 }
 

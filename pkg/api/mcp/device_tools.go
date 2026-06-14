@@ -266,38 +266,36 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 					"type":        "string",
 					"description": "Base64-encoded reference event log for attestation",
 				},
-				"provisioning_network": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"vlan":        map[string]interface{}{"type": "integer", "description": "VLAN ID"},
-						"static_ip":   map[string]interface{}{"type": "string", "description": "Static IP address"},
-						"gateway":     map[string]interface{}{"type": "string", "description": "Default gateway"},
-						"dns":         map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "DNS servers"},
-						"auth_method": map[string]interface{}{"type": "string", "description": "Auth method (none, 802.1x)"},
-					},
-					"description": "Network configuration for provisioning phase",
+				"zone": map[string]interface{}{
+					"type":        "string",
+					"description": "Default SDN zone for this profile",
 				},
-				"production_network": map[string]interface{}{
+				"networks": map[string]interface{}{
 					"type": "object",
-					"properties": map[string]interface{}{
-						"vlan":        map[string]interface{}{"type": "integer", "description": "VLAN ID"},
-						"static_ip":   map[string]interface{}{"type": "string", "description": "Static IP address"},
-						"gateway":     map[string]interface{}{"type": "string", "description": "Default gateway"},
-						"dns":         map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "DNS servers"},
-						"auth_method": map[string]interface{}{"type": "string", "description": "Auth method (none, 802.1x)"},
+					"additionalProperties": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"vlan":        map[string]interface{}{"type": "integer", "description": "VLAN ID"},
+							"static_ip":   map[string]interface{}{"type": "string", "description": "Static IP address"},
+							"gateway":     map[string]interface{}{"type": "string", "description": "Default gateway"},
+							"dns":         map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "DNS servers"},
+							"auth_method": map[string]interface{}{"type": "string", "description": "Auth method (none, 802.1x)"},
+							"zone":        map[string]interface{}{"type": "string", "description": "SDN zone for this phase"},
+						},
 					},
-					"description": "Network configuration for production phase",
+					"description": "Network phase configurations keyed by name (e.g. provisioning, trusted, quarantine)",
 				},
-				"quarantine_network": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"vlan":        map[string]interface{}{"type": "integer", "description": "VLAN ID"},
-						"static_ip":   map[string]interface{}{"type": "string", "description": "Static IP address"},
-						"gateway":     map[string]interface{}{"type": "string", "description": "Default gateway"},
-						"dns":         map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "DNS servers"},
-						"auth_method": map[string]interface{}{"type": "string", "description": "Auth method (none, 802.1x)"},
-					},
-					"description": "Network configuration for quarantine phase",
+				"enrollment_network": map[string]interface{}{
+					"type":        "string",
+					"description": "Key of the network used during enrollment (default: provisioning)",
+				},
+				"post_enrollment_network": map[string]interface{}{
+					"type":        "string",
+					"description": "Key of the network after enrollment success (default: trusted)",
+				},
+				"failure_network": map[string]interface{}{
+					"type":        "string",
+					"description": "Key of the network on enrollment/attestation failure (default: quarantine)",
 				},
 				"match_rules": map[string]interface{}{
 					"type": "object",
@@ -374,17 +372,25 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 					"type":        "string",
 					"description": "New base64-encoded reference event log",
 				},
-				"provisioning_network": map[string]interface{}{
-					"type":        "object",
-					"description": "New provisioning network configuration",
+				"zone": map[string]interface{}{
+					"type":        "string",
+					"description": "Default SDN zone for this profile",
 				},
-				"production_network": map[string]interface{}{
+				"networks": map[string]interface{}{
 					"type":        "object",
-					"description": "New production network configuration",
+					"description": "Network phase configurations keyed by name",
 				},
-				"quarantine_network": map[string]interface{}{
-					"type":        "object",
-					"description": "New quarantine network configuration",
+				"enrollment_network": map[string]interface{}{
+					"type":        "string",
+					"description": "Key of the enrollment network",
+				},
+				"post_enrollment_network": map[string]interface{}{
+					"type":        "string",
+					"description": "Key of the post-enrollment network",
+				},
+				"failure_network": map[string]interface{}{
+					"type":        "string",
+					"description": "Key of the failure/quarantine network",
 				},
 				"match_rules": map[string]interface{}{
 					"type":        "object",

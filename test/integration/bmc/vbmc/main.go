@@ -27,6 +27,9 @@
 //   - /redfish/v1/CertificateService/Actions/
 //     CertificateService.ReplaceCertificate            (cert replace)
 //
+//   - /redfish/v1/Managers/1/NetworkProtocol/HTTPS/Certificates/1
+//     (factory cert restore via DELETE)
+//
 //   - /cgi/login.cgi                                       (session open)
 //
 //   - /cgi/upload_ssl.cgi                                  (cert+key upload)
@@ -87,6 +90,7 @@ import (
 	"math/big"
 	"mime"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -177,7 +181,11 @@ func generateSelfSignedCert(cn string) (*tls.Certificate, []byte, error) {
 		NotBefore:             time.Now().Add(-time.Minute),
 		NotAfter:              time.Now().Add(24 * time.Hour),
 		DNSNames:              []string{cn},
+		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
 		BasicConstraintsValid: true,
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
 	if err != nil {
@@ -188,6 +196,46 @@ func generateSelfSignedCert(cn string) (*tls.Certificate, []byte, error) {
 		Certificate: [][]byte{der},
 		PrivateKey:  priv,
 	}, certPEM, nil
+}
+
+// generateRestoredCert builds a fresh ECDSA certificate for the factory restore
+// ceremony. It is signed by the same private key as the initial factory cert
+// (factoryCert) but uses factoryCert as the issuer parent so the resulting cert
+// is NOT self-signed (Issuer != Subject). This is critical for TLS verification:
+// Go's x509 library refuses to verify a self-signed cert via chain — it requires
+// the cert to be directly in the root pool. By making the restored cert a leaf
+// signed by factoryCert-as-CA, any TLS client whose RootCAs pool contains
+// factoryCert can verify the restored cert without InsecureSkipVerify.
+func generateRestoredCert(factoryCert *x509.Certificate, key *ecdsa.PrivateKey) (*tls.Certificate, error) {
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, err
+	}
+	cn := factoryCert.Subject.CommonName
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		// Use a distinct Subject so the cert is not self-signed.
+		// TLS hostname verification uses IP/DNS SANs, not the Subject CN,
+		// so clients connecting to 127.0.0.1 are unaffected by the different CN.
+		Subject:               pkix.Name{CommonName: cn + "-restored"},
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		DNSNames:              []string{cn},
+		IPAddresses:           factoryCert.IPAddresses,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	// factoryCert is the parent/issuer: tmpl.Issuer = factoryCert.Subject.
+	// The signature is produced by key (same as factoryCert's private key).
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, factoryCert, &key.PublicKey, key)
+	if err != nil {
+		return nil, err
+	}
+	return &tls.Certificate{
+		Certificate: [][]byte{der},
+		PrivateKey:  key,
+	}, nil
 }
 
 // sessionStore tracks active SMC CGI sessions keyed by SID cookie.
@@ -238,6 +286,17 @@ type vbmcServer struct {
 	certs    *certHolder
 	sessions *sessionStore
 
+	// factoryKey is the ECDSA private key used to generate the initial
+	// self-signed certificate. The restore handler reuses this key to
+	// sign the restored certificate.
+	factoryKey *ecdsa.PrivateKey
+
+	// factoryCert is the parsed x509.Certificate from the initial self-signed
+	// cert. The restore handler uses it as the issuer parent when generating
+	// the restored leaf cert so the leaf is NOT self-signed (Issuer != Subject),
+	// which is required for Go's x509 chain verification via the RootCAs pool.
+	factoryCert *x509.Certificate
+
 	// initialCertPEM holds the PEM of the self-signed cert generated at
 	// startup. It is served by the plain HTTP /tls/ca endpoint so clients
 	// can build a verified TLS trust anchor without InsecureSkipVerify.
@@ -249,12 +308,14 @@ type vbmcServer struct {
 	resetCount   atomic.Uint64
 }
 
-func newVBMC(cfg config, logger *slog.Logger, initial *tls.Certificate, initialCertPEM []byte) *vbmcServer {
+func newVBMC(cfg config, logger *slog.Logger, initial *tls.Certificate, initialCertPEM []byte, factoryKey *ecdsa.PrivateKey, factoryCert *x509.Certificate) *vbmcServer {
 	s := &vbmcServer{
 		cfg:            cfg,
 		logger:         logger,
 		certs:          &certHolder{},
 		sessions:       newSessionStore(),
+		factoryKey:     factoryKey,
+		factoryCert:    factoryCert,
 		initialCertPEM: initialCertPEM,
 	}
 	s.certs.replace(initial)
@@ -275,6 +336,7 @@ func (s *vbmcServer) routes() *http.ServeMux {
 	mux.HandleFunc("/redfish/v1/Managers/1", s.handleRedfishManager1)
 	mux.HandleFunc("/redfish/v1/Managers/1/Actions/Manager.Reset", s.handleRedfishReset)
 	mux.HandleFunc("/redfish/v1/CertificateService/Actions/CertificateService.ReplaceCertificate", s.handleRedfishReplaceCert)
+	mux.HandleFunc("/redfish/v1/Managers/1/NetworkProtocol/HTTPS/Certificates/1", s.handleRedfishDeleteCert)
 
 	// Supermicro CGI
 	mux.HandleFunc("/cgi/login.cgi", s.handleCGILogin)
@@ -376,6 +438,29 @@ func (s *vbmcServer) handleRedfishReset(w http.ResponseWriter, r *http.Request) 
 	}
 	s.resetCount.Add(1)
 	s.logger.Info("vbmc: Redfish Manager.Reset invoked")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleRedfishDeleteCert handles DELETE /redfish/v1/Managers/1/NetworkProtocol/HTTPS/Certificates/1.
+// Per DMTF Redfish §Certificates, deleting the active HTTPS certificate causes the
+// BMC to fall back to a freshly generated self-signed default certificate on the
+// next web-server restart. The vBMC simulates this by immediately regenerating a
+// new self-signed cert using the original factory private key so the same-key
+// trust chain allows callers to verify the restored cert.
+func (s *vbmcServer) handleRedfishDeleteCert(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	newCert, err := generateRestoredCert(s.factoryCert, s.factoryKey)
+	if err != nil {
+		s.logger.Error("vbmc: factory cert regeneration failed", "err", err)
+		http.Error(w, "cert regeneration failed", http.StatusInternalServerError)
+		return
+	}
+	s.certs.replace(newCert)
+	s.replaceCount.Add(1)
+	s.logger.Info("vbmc: factory cert restored (Redfish DELETE cert)")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -614,7 +699,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	server := newVBMC(cfg, logger, initial, certPEM)
+	factoryKey := initial.PrivateKey.(*ecdsa.PrivateKey)
+	factoryCert, err := x509.ParseCertificate(initial.Certificate[0])
+	if err != nil {
+		logger.Error("vbmc: failed to parse initial factory cert", "err", err)
+		os.Exit(1)
+	}
+	server := newVBMC(cfg, logger, initial, certPEM, factoryKey, factoryCert)
 
 	tlsConfig := &tls.Config{
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {

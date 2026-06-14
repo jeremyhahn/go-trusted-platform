@@ -286,9 +286,10 @@ sdn:
     enabled: false
     interface: trusted0
   networks:
-    production:
+    - name: trusted
       vlan: 200
-      pool: production
+      zone: trusted
+      pool: trusted
   overlay:
     enabled: false
     vxlan-port: 4789

@@ -299,6 +299,25 @@ func (d *QuicBaaSBackend) ListPools(ctx context.Context) ([]*ipam.Pool, error) {
 	return pools, nil
 }
 
+// ListPoolsByZone returns all pools whose Zone field matches zone.
+// An empty zone returns all pools (equivalent to ListPools).
+func (d *QuicBaaSBackend) ListPoolsByZone(ctx context.Context, zone string) ([]*ipam.Pool, error) {
+	if zone == "" {
+		return d.ListPools(ctx)
+	}
+	all, err := d.ListPools(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var filtered []*ipam.Pool
+	for _, p := range all {
+		if p.Zone == zone {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered, nil
+}
+
 // UpdatePool updates an existing pool.
 func (d *QuicBaaSBackend) UpdatePool(ctx context.Context, pool *ipam.Pool) error {
 	if d.closed.Load() {
@@ -515,6 +534,7 @@ func (d *QuicBaaSBackend) Allocate(ctx context.Context, req *ipam.AllocationRequ
 	alloc := &ipam.Allocation{
 		ID:          uuid.New().String(),
 		PoolID:      req.PoolID,
+		Zone:        pool.Zone,
 		IP:          allocatedIP,
 		DeviceID:    req.DeviceID,
 		Hostname:    req.Hostname,
@@ -603,6 +623,7 @@ func (d *QuicBaaSBackend) AllocateSpecific(ctx context.Context, req *ipam.Alloca
 	alloc := &ipam.Allocation{
 		ID:          uuid.New().String(),
 		PoolID:      req.PoolID,
+		Zone:        pool.Zone,
 		IP:          req.RequestedIP,
 		DeviceID:    req.DeviceID,
 		Hostname:    req.Hostname,

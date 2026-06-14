@@ -151,11 +151,11 @@ func (m *mockCAForDaemon) DefaultValidityPeriod() int                         { 
 func (m *mockCAForDaemon) TrustedRoot() (*x509.Certificate, error)            { return m.rootCert, nil }
 func (m *mockCAForDaemon) TrustedIntermediate() (*x509.Certificate, error)    { return m.intermCert, nil }
 func (m *mockCAForDaemon) CertStore() xkmssdk.CertStore                       { return m.certStore }
-func (m *mockCAForDaemon) Signer() (crypto.Signer, error)                     { return m, nil }
-func (m *mockCAForDaemon) CASigner(_ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
+func (m *mockCAForDaemon) Signer(_ context.Context) (crypto.Signer, error)    { return m, nil }
+func (m *mockCAForDaemon) CASigner(_ context.Context, _ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
 	return m, nil
 }
-func (m *mockCAForDaemon) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (m *mockCAForDaemon) IssueCertificate(_ context.Context, req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	cert := generateTestCertificateForDaemon(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
 	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
@@ -163,7 +163,7 @@ func (m *mockCAForDaemon) IssueCertificate(req *xkmsca.CertificateRequest) (*xkm
 	}
 	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 }
-func (m *mockCAForDaemon) RevokeCert(cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
+func (m *mockCAForDaemon) RevokeCert(_ context.Context, cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	m.revokedCerts = append(m.revokedCerts, cert)
 	return nil
 }
@@ -181,7 +181,7 @@ func (m *mockCAForDaemon) ParseBundle(bundle []byte) ([]*x509.Certificate, error
 func (m *mockCAForDaemon) RootCertificate(_ *x509.Certificate) (*x509.Certificate, error) {
 	return m.rootCert, nil
 }
-func (m *mockCAForDaemon) GenerateCRL() ([]byte, error) {
+func (m *mockCAForDaemon) GenerateCRL(_ context.Context) ([]byte, error) {
 	if !m.generateCRL {
 		return nil, quic.ErrCACRLNotSupported
 	}

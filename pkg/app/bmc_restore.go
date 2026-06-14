@@ -142,18 +142,22 @@ func (app *App) RestoreBMC(ctx context.Context, deviceID uint64, bmcCfg *bmc.Con
 		}
 	}
 
-	// Wire the factory-cert restorer via AutoCertManager when cert config present.
+	// Wire the factory-cert restorer via AutoCertManager. Restore does not
+	// require a Certificate (cert-issuance) config — it instructs the BMC to
+	// regenerate its own default self-signed cert. Backend selection uses
+	// CertBackendAuto, identical to enrollment (issueBMCCertificateCore), so
+	// restore honors the same per-vendor dispatch and AllowCGIFallback gating:
+	// Redfish CertificateService for standards-based BMCs, Supermicro ATEN CGI
+	// (SSL_DEFAULT) as the gated vendor fallback for X10-class hardware.
 	core := &restoreCore{
 		pinDeleter:    pinDeleter,
 		daneUnpublish: daneUnpublish,
 		deviceLoader:  app.loadDeviceForEnroll,
 		deviceSaver:   app.saveDeviceForEnroll,
 	}
-	if bmcCfg.Certificate != nil {
-		mgr, err := bmc.NewAutoCertManager(bmcCfg, bmc.CertBackendAuto, app.Logger.Slog())
-		if err == nil {
-			core.restorer = mgr
-		}
+	mgr, err := bmc.NewAutoCertManager(bmcCfg, bmc.CertBackendAuto, app.Logger.Slog())
+	if err == nil {
+		core.restorer = mgr
 	}
 
 	return runRestoreCore(ctx, deviceID, host, endpoint, internalZone, core)

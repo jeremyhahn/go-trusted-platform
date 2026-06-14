@@ -134,7 +134,7 @@ func (c *NetworkConfig) SubnetCIDR() string {
 	return c.Subnet.String()
 }
 
-// NetworkPhase represents the network access phase for a port
+// NetworkPhase represents the network access phase for a port.
 type NetworkPhase int
 
 const (
@@ -144,8 +144,8 @@ const (
 	// NetworkPhaseProvisioning indicates limited access for enrollment
 	NetworkPhaseProvisioning
 
-	// NetworkPhaseProduction indicates full production access
-	NetworkPhaseProduction
+	// NetworkPhaseTrusted indicates full trusted-zone access (post-enrollment operational)
+	NetworkPhaseTrusted
 
 	// NetworkPhaseQuarantine indicates isolated access for remediation
 	NetworkPhaseQuarantine
@@ -161,8 +161,8 @@ func (p NetworkPhase) String() string {
 		return "unconnected"
 	case NetworkPhaseProvisioning:
 		return "provisioning"
-	case NetworkPhaseProduction:
-		return "production"
+	case NetworkPhaseTrusted:
+		return "trusted"
 	case NetworkPhaseQuarantine:
 		return "quarantine"
 	case NetworkPhaseBlocked:
@@ -208,13 +208,13 @@ type IsolatedNetwork interface {
 	// GetPhase returns the current phase for a port
 	GetPhase(portID string) NetworkPhase
 
-	// TransitionToProduction moves a port from provisioning to production
-	TransitionToProduction(portID string, cert *x509.Certificate) error
+	// TransitionToTrusted moves a port from provisioning to the trusted zone
+	TransitionToTrusted(portID string, cert *x509.Certificate) error
 
 	// QuarantinePort moves a port to quarantine VLAN
 	QuarantinePort(portID string, reason string) error
 
-	// UnquarantinePort moves a port back to production
+	// UnquarantinePort moves a port back to the trusted zone
 	UnquarantinePort(portID string) error
 
 	// BlockPort completely blocks a port (DROP all traffic)

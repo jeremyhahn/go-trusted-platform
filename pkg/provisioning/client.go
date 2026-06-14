@@ -20,8 +20,8 @@
 //  2. Device creates mTLS client using IDevID
 //  3. Device fetches profile via GET /api/v1/device/profile
 //  4. Device signals ready via POST /api/v1/device/activate
-//  5. Server transitions port to production VLAN
-//  6. Device applies production network configuration
+//  5. Server transitions port to trusted VLAN
+//  6. Device applies trusted network configuration
 package provisioning
 
 import (
@@ -133,14 +133,14 @@ func (c *Client) FetchProfile(ctx context.Context) (*ProfileResponse, error) {
 
 	c.logger.Info("Device profile fetched successfully",
 		"serial", profile.SerialNumber,
-		"vlan", profile.ProductionNetwork.VLAN,
-		"useDHCP", profile.ProductionNetwork.UseDHCP)
+		"vlan", profile.TrustedNetwork.VLAN,
+		"useDHCP", profile.TrustedNetwork.UseDHCP)
 
 	return &profile, nil
 }
 
 // Activate signals the server that the device is ready for network transition.
-// The server will transition the device's port to the production VLAN.
+// The server will transition the device's port to the trusted VLAN.
 func (c *Client) Activate(ctx context.Context) (*ActivateResponse, error) {
 	url := fmt.Sprintf("%s/api/v1/device/activate", c.config.ServerURL)
 
@@ -186,8 +186,8 @@ func (c *Client) Activate(ctx context.Context) (*ActivateResponse, error) {
 // 2. Signals activation readiness to the server
 // 3. Returns the profile for network configuration
 //
-// After this call returns, the server has transitioned the port to production VLAN.
-// The caller should wait briefly and then apply the production network config.
+// After this call returns, the server has transitioned the port to the trusted VLAN.
+// The caller should then apply the trusted network configuration.
 func (c *Client) FetchProfileAndActivate(ctx context.Context) (*ProfileResponse, *ActivateResponse, error) {
 	// Step 1: Fetch profile
 	profile, err := c.FetchProfile(ctx)
@@ -203,7 +203,7 @@ func (c *Client) FetchProfileAndActivate(ctx context.Context) (*ProfileResponse,
 
 	c.logger.Info("Provisioning flow complete",
 		"serial", profile.SerialNumber,
-		"productionVLAN", profile.ProductionNetwork.VLAN,
+		"trustedVLAN", profile.TrustedNetwork.VLAN,
 		"activationStatus", activateResp.Status)
 
 	return profile, activateResp, nil

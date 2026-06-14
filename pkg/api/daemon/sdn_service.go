@@ -23,8 +23,10 @@ import (
 	"time"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netlink"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -36,6 +38,7 @@ type SDNService struct {
 
 	ovsClient      ovs.ClientInterface
 	netlinkManager *netlink.Manager
+	zoneSvc        gateway.ZoneService
 	mu             sync.RWMutex
 
 	// Track created resources for cleanup
@@ -150,12 +153,17 @@ func (s *SDNService) OVSClient() ovs.ClientInterface {
 	return s.ovsClient
 }
 
-// Connect establishes connection to OVS
+// Connect establishes connection to OVS.
+// Returns ErrOVSNotConfigured when no OVS client has been wired in
+// (zone-only stub mode).
 func (s *SDNService) Connect(ctx context.Context) error {
 	s.mu.RLock()
 	client := s.ovsClient
 	s.mu.RUnlock()
 
+	if client == nil {
+		return ErrOVSNotConfigured{}
+	}
 	if err := client.Connect(ctx); err != nil {
 		return fmt.Errorf("failed to connect to OVS: %w", err)
 	}
@@ -163,12 +171,17 @@ func (s *SDNService) Connect(ctx context.Context) error {
 	return nil
 }
 
-// Disconnect closes connection to OVS
+// Disconnect closes connection to OVS.
+// Returns ErrOVSNotConfigured when no OVS client has been wired in
+// (zone-only stub mode).
 func (s *SDNService) Disconnect() error {
 	s.mu.RLock()
 	client := s.ovsClient
 	s.mu.RUnlock()
 
+	if client == nil {
+		return ErrOVSNotConfigured{}
+	}
 	return client.Disconnect()
 }
 
@@ -1695,4 +1708,216 @@ func (s *SDNService) pbToOvsFlowMod(config *platformv1.FlowConfig) *ovs.FlowMod 
 	}
 
 	return flowMod
+}
+
+// =============================================================================
+// Zone Service wiring
+// =============================================================================
+
+// WithZoneService sets the zone service on the SDNService.
+func (s *SDNService) WithZoneService(svc gateway.ZoneService) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.zoneSvc = svc
+}
+
+// requireZoneService returns a gRPC error when the zone service is unavailable.
+func (s *SDNService) requireZoneService() error {
+	if s.zoneSvc == nil {
+		return status.Error(codes.FailedPrecondition, "zone service is not available")
+	}
+	return nil
+}
+
+// =============================================================================
+// Network Zone gRPC Implementations
+// =============================================================================
+
+// CreateNetworkZone creates a new SDN network trust zone.
+func (s *SDNService) CreateNetworkZone(
+	ctx context.Context,
+	req *platformv1.CreateNetworkZoneRequest,
+) (*platformv1.CreateNetworkZoneResponse, error) {
+	if err := s.requireZoneService(); err != nil {
+		return nil, err
+	}
+	if req.GetConfig() == nil {
+		return nil, status.Error(codes.InvalidArgument, "zone config is required")
+	}
+	cfg := sdnProtoToZoneConfig(req.GetConfig())
+	rec, _, err := s.zoneSvc.Create(ctx, cfg)
+	if err != nil {
+		return nil, sdnMapZoneError(err)
+	}
+	return &platformv1.CreateNetworkZoneResponse{
+		Zone: sdnZoneRecordToProto(rec),
+	}, nil
+}
+
+// UpdateNetworkZone updates an existing SDN network trust zone.
+func (s *SDNService) UpdateNetworkZone(
+	ctx context.Context,
+	req *platformv1.UpdateNetworkZoneRequest,
+) (*platformv1.UpdateNetworkZoneResponse, error) {
+	if err := s.requireZoneService(); err != nil {
+		return nil, err
+	}
+	if req.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "zone name is required")
+	}
+	var cfg zone.ZoneConfig
+	if req.GetConfig() != nil {
+		cfg = sdnProtoToZoneConfig(req.GetConfig())
+	}
+	cfg.Name = zone.Zone(req.GetName())
+	rec, restartRequired, err := s.zoneSvc.Update(ctx, zone.Zone(req.GetName()), cfg)
+	if err != nil {
+		return nil, sdnMapZoneError(err)
+	}
+	pz := sdnZoneRecordToProto(rec)
+	pz.RestartRequired = restartRequired
+	return &platformv1.UpdateNetworkZoneResponse{
+		Zone: pz,
+	}, nil
+}
+
+// DeleteNetworkZone deletes an SDN network trust zone.
+func (s *SDNService) DeleteNetworkZone(
+	ctx context.Context,
+	req *platformv1.DeleteNetworkZoneRequest,
+) (*platformv1.DeleteNetworkZoneResponse, error) {
+	if err := s.requireZoneService(); err != nil {
+		return nil, err
+	}
+	if req.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "zone name is required")
+	}
+	restartRequired, err := s.zoneSvc.Delete(ctx, zone.Zone(req.GetName()))
+	if err != nil {
+		return nil, sdnMapZoneError(err)
+	}
+	return &platformv1.DeleteNetworkZoneResponse{
+		RestartRequired: restartRequired,
+	}, nil
+}
+
+// ListNetworkZones lists SDN network trust zones, optionally filtered by lifecycle role.
+func (s *SDNService) ListNetworkZones(
+	ctx context.Context,
+	req *platformv1.ListNetworkZonesRequest,
+) (*platformv1.ListNetworkZonesResponse, error) {
+	if err := s.requireZoneService(); err != nil {
+		return nil, err
+	}
+	recs, err := s.zoneSvc.List(ctx, zone.LifecycleRole(req.GetLifecycleRole()))
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list zones: %v", err)
+	}
+	zones := make([]*platformv1.NetworkZone, 0, len(recs))
+	for _, r := range recs {
+		zones = append(zones, sdnZoneRecordToProto(r))
+	}
+	return &platformv1.ListNetworkZonesResponse{
+		Zones: zones,
+	}, nil
+}
+
+// AssignNetworkZone assigns a network segment to a trust zone.
+func (s *SDNService) AssignNetworkZone(
+	ctx context.Context,
+	req *platformv1.AssignNetworkZoneRequest,
+) (*platformv1.AssignNetworkZoneResponse, error) {
+	if err := s.requireZoneService(); err != nil {
+		return nil, err
+	}
+	if req.GetNetwork() == "" {
+		return nil, status.Error(codes.InvalidArgument, "network name is required")
+	}
+	if req.GetZone() == "" {
+		return nil, status.Error(codes.InvalidArgument, "zone name is required")
+	}
+	restartRequired, err := s.zoneSvc.AssignNetwork(ctx, req.GetNetwork(), zone.Zone(req.GetZone()))
+	if err != nil {
+		return nil, sdnMapZoneError(err)
+	}
+	return &platformv1.AssignNetworkZoneResponse{
+		RestartRequired: restartRequired,
+	}, nil
+}
+
+// =============================================================================
+// Zone proto helpers (daemon-local copies; mirrors grpc.SDNGRPCService helpers)
+// =============================================================================
+
+// sdnProtoToZoneConfig converts a protobuf NetworkZoneConfig to a zone.ZoneConfig.
+func sdnProtoToZoneConfig(p *platformv1.NetworkZoneConfig) zone.ZoneConfig {
+	cfg := zone.ZoneConfig{
+		Name:             zone.Zone(p.GetName()),
+		InternetIngress:  p.GetInternetIngress(),
+		Isolate:          p.GetIsolate(),
+		IsolatePerTenant: p.GetIsolatePerTenant(),
+		OOB:              p.GetOob(),
+		LifecycleRole:    zone.LifecycleRole(p.GetLifecycleRole()),
+		Omit:             p.GetOmit(),
+	}
+	if len(p.GetIsolateFrom()) > 0 {
+		cfg.IsolateFrom = make([]zone.Zone, 0, len(p.GetIsolateFrom()))
+		for _, z := range p.GetIsolateFrom() {
+			cfg.IsolateFrom = append(cfg.IsolateFrom, zone.Zone(z))
+		}
+	}
+	if len(p.GetAllowTo()) > 0 {
+		cfg.AllowTo = make([]zone.ZonePath, 0, len(p.GetAllowTo()))
+		for _, pt := range p.GetAllowTo() {
+			cfg.AllowTo = append(cfg.AllowTo, zone.ZonePath{
+				Zone:     zone.Zone(pt.GetZone()),
+				Services: pt.GetServices(),
+			})
+		}
+	}
+	return cfg
+}
+
+// sdnZoneRecordToProto converts a gateway.ZoneRecord to a platformv1.NetworkZone.
+func sdnZoneRecordToProto(r *gateway.ZoneRecord) *platformv1.NetworkZone {
+	isolateFrom := make([]string, 0, len(r.Config.IsolateFrom))
+	for _, z := range r.Config.IsolateFrom {
+		isolateFrom = append(isolateFrom, string(z))
+	}
+	allowTo := make([]*platformv1.NetworkZonePath, 0, len(r.Config.AllowTo))
+	for _, p := range r.Config.AllowTo {
+		allowTo = append(allowTo, &platformv1.NetworkZonePath{
+			Zone:     string(p.Zone),
+			Services: p.Services,
+		})
+	}
+	return &platformv1.NetworkZone{
+		Config: &platformv1.NetworkZoneConfig{
+			Name:             string(r.Config.Name),
+			InternetIngress:  r.Config.InternetIngress,
+			IsolateFrom:      isolateFrom,
+			AllowTo:          allowTo,
+			Isolate:          r.Config.Isolate,
+			IsolatePerTenant: r.Config.IsolatePerTenant,
+			Oob:              r.Config.OOB,
+			LifecycleRole:    string(r.Config.LifecycleRole),
+			Omit:             r.Config.Omit,
+		},
+		CreatedAt: timestamppb.New(r.CreatedAt),
+		UpdatedAt: timestamppb.New(r.UpdatedAt),
+	}
+}
+
+// sdnMapZoneError maps gateway zone errors to gRPC status errors.
+func sdnMapZoneError(err error) error {
+	switch err.(type) {
+	case gateway.ErrZoneNotFound:
+		return status.Error(codes.NotFound, err.Error())
+	case gateway.ErrZoneAlreadyExists:
+		return status.Error(codes.AlreadyExists, err.Error())
+	case gateway.ErrZoneValidation:
+		return status.Error(codes.InvalidArgument, err.Error())
+	default:
+		return status.Errorf(codes.Internal, "zone operation: %v", err)
+	}
 }

@@ -17,7 +17,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -65,6 +64,9 @@ Examples:
 	}
 
 	cmd.Flags().StringVar(&flags.serverURL, "server-url", "", "platformd server URL (required)")
+	cmd.Flags().StringVar(&flags.caCert, "ca-cert", "", "CA bundle to verify the platformd TLS certificate (defaults to $PLATFORM_CA_CERT)")
+	cmd.Flags().StringVar(&flags.clientCert, "client-cert", "", "client certificate for mutual TLS (defaults to $PLATFORM_CLIENT_CERT)")
+	cmd.Flags().StringVar(&flags.clientKey, "client-key", "", "client key for mutual TLS (defaults to $PLATFORM_CLIENT_KEY)")
 	cmd.Flags().StringVar(&flags.profileID, "profile-id", "", "BMC profile ID (required)")
 	addStandaloneFlags(cmd, &standalone)
 	cmd.Flags().StringVar(&device, "device", "", "boot device: pxe, disk, cdrom, bios (required)")
@@ -100,6 +102,9 @@ Examples:
 	}
 
 	cmd.Flags().StringVar(&flags.serverURL, "server-url", "", "platformd server URL (required)")
+	cmd.Flags().StringVar(&flags.caCert, "ca-cert", "", "CA bundle to verify the platformd TLS certificate (defaults to $PLATFORM_CA_CERT)")
+	cmd.Flags().StringVar(&flags.clientCert, "client-cert", "", "client certificate for mutual TLS (defaults to $PLATFORM_CLIENT_CERT)")
+	cmd.Flags().StringVar(&flags.clientKey, "client-key", "", "client key for mutual TLS (defaults to $PLATFORM_CLIENT_KEY)")
 	cmd.Flags().StringVar(&flags.profileID, "profile-id", "", "BMC profile ID (required)")
 	addStandaloneFlags(cmd, &standalone)
 
@@ -119,9 +124,12 @@ func runSetBootDevice(flags *bmcFlags, device string, persistent bool, getFlags 
 	}
 
 	ctx := context.Background()
-	client := &http.Client{}
+	client, err := newBMCHTTPClient(flags)
+	if err != nil {
+		return err
+	}
 
-	url := buildURL(flags.serverURL, flags.profileID, "boot")
+	url := buildURL(flags.serverURL, flags.profileID, "boot-device")
 	payload := bootDeviceRequest{
 		Device:     device,
 		Persistent: persistent,
@@ -149,9 +157,12 @@ func runGetBootDevice(flags *bmcFlags, getFlags func() *cli.CommonFlags) error {
 	}
 
 	ctx := context.Background()
-	client := &http.Client{}
+	client, err := newBMCHTTPClient(flags)
+	if err != nil {
+		return err
+	}
 
-	url := buildURL(flags.serverURL, flags.profileID, "boot")
+	url := buildURL(flags.serverURL, flags.profileID, "boot-device")
 
 	var resp bootDeviceResponse
 	if err := doGet(ctx, client, url, &resp); err != nil {

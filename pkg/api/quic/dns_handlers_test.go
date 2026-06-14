@@ -108,6 +108,10 @@ func (m *mockDNSService) Register(ctx context.Context, fqdn, ip string) (*entiti
 	return nil, nil
 }
 
+func (m *mockDNSService) RegisterWithNetworkZone(ctx context.Context, host, networkZone, ip string) error {
+	return nil
+}
+
 func (m *mockDNSService) AddTLSARecord(ctx context.Context, zoneName string, record *entities.TLSARecord) error {
 	return nil
 }

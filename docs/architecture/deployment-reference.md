@@ -171,9 +171,9 @@ platformctl bootstrap run --config deployments/ha-cluster/bootstrap.yaml
 ### Gateway Nodes
 
 - Run in **client mode** — auto-enroll with control-plane CA via custom ACME extensions (enroll-01, device-attest-01)
-- Bridge between provisioning (VLAN 201), management (VLAN 50), and production networks (VLAN 200/210)
+- Bridge between the provisioning, management, and data zones (trusted/public); runs the per-zone flow rules
 - Provide DHCP scope and iPXE/TFTP for device bootstrap
-- Recursive DNS forwarder for production networks (queries forwarded to control-plane authoritative DNS)
+- Recursive DNS forwarder for the data zones (queries forwarded to control-plane authoritative DNS)
 - BGP peering with upstream routers for WAN traffic
 - OVS switches for VLAN management and network isolation
 - NAT/firewall rules for network segmentation
@@ -189,7 +189,7 @@ platformctl bootstrap run --config deployments/ha-cluster/bootstrap.yaml
 - Optional: hardware TPM for workload attestation and vTPM provision for guests
 - Guest VMs can have vTPM 2.0 for attestation chains
 - No requirement to run management services
-- Connected to production network (VLAN 200); storage tier (VLAN 203) if used
+- Connected to the `trusted` zone (VLAN 200); `storage` zone (VLAN 203) if used
 
 ---
 
@@ -245,28 +245,27 @@ VLAN Connectivity:
 • Rack switches: platform VLANs trunked from the gateways
 • CP nodes: VLAN 201 (provisioning) + VLAN 50 OOB
 • GW nodes: all platform VLANs (enforce policy between them)
-• Worker nodes: VLAN 200 (production) + VLAN 201 bootstrap; VLAN 203 if storage tier used
+• Worker nodes: VLAN 200 (trusted) + VLAN 201 bootstrap; VLAN 203 (storage) if used
 ```
 
-### VLAN Assignments
+### Zones & VLAN Assignments
 
-See [reference-network.md](reference-network.md) for the full design. Platform VLANs use the
-**200-series** with the mnemonic **VLAN _N_ → `172.16.N.0/24`**. Three VLANs are always present;
-the rest are opt-in.
+Policy is driven by **zones**, not VLAN numbers — see [reference-network.md](reference-network.md)
+for the full zone model. Subnets are assigned to a zone; the platform applies that zone's policy.
+The default segment IDs use the mnemonic **VLAN _N_ → `172.16.N.0/24`**.
 
-**Core platform (always present):**
-- VLAN 200 (production): enrolled, attested workloads — `198.18.0.0/24`
-- VLAN 201 (provisioning): PXE, DHCP, DNS, ACME enrollment — `172.16.201.0/24`
-- VLAN 202 (quarantine): non-compliant/untrusted hosts — `172.16.202.0/24`
-
-**Optional platform:**
-- VLAN 203 (storage): workload/bulk storage tier — `172.16.203.0/24`
-- VLAN 210 (DMZ): public-facing services (single-tier default; expand to 210–212 for 3-tier) — `172.16.210.0/24`
-- VLAN 1000+ (tenant): multi-tenant isolated workloads — `172.17.0.0/16+`
+**Default zone subnets (`trusted`/`provisioning`/`quarantine` are the working baseline):**
+- VLAN 200 → `198.18.0.0/24` — zone **`trusted`** (enrolled, attested, internal workloads)
+- VLAN 201 → `172.16.201.0/24` — zone **`provisioning`** (PXE, DHCP, DNS, ACME enrollment)
+- VLAN 202 → `172.16.202.0/24` — zone **`quarantine`** (non-compliant/untrusted; isolated)
+- VLAN 203 → `172.16.203.0/24` — zone **`storage`** (optional workload/bulk storage tier)
+- VLAN 1000+ → `172.17.0.0/16+` — zone **`tenant`** (optional multi-tenant isolation)
+- *(deployment public IP block)* — zone **`public`** (internet-facing; isolated from `trusted`).
+  A public block is just a `public`-zone subnet — there is no dedicated "edge"/DMZ VLAN number.
 
 **Shared / edge:**
 - VLAN 10 (transit): gateway ↔ upstream routers / BGP; P2P /31s from `172.16.0.0/24`
-- VLAN 50 (management): out-of-band IPMI/BMC/console — separate NIC, never routes to data
+- VLAN 50 (management): out-of-band IPMI/BMC/console — separate NIC, never routes to a data zone
 - VLAN 1 (default): IEEE 802.1Q catch-all (no addressed network)
 
 > The platform tier is self-contained. Any surrounding site/office/home network is kept entirely
@@ -704,7 +703,7 @@ Hardware TPM availability determines the security tier of a deployment. Map tier
 **Pre-Deployment**
 - [ ] Procure 3 servers (1 CP at 16GB RAM, 1 GW at 8GB RAM, 1 compute at 16GB RAM)
 - [ ] Procure 1 managed switch with VLAN support
-- [ ] Plan network layout (VLAN 201 for provisioning, VLAN 200 for production)
+- [ ] Plan network layout (zones: VLAN 201 provisioning, VLAN 200 trusted, public block as needed)
 - [ ] Prepare `deployments/three-node/bootstrap.yaml` with device manifests and MAC addresses
 - [ ] Prepare custom platform-initrd.efi
 

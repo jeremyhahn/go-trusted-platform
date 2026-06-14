@@ -45,6 +45,7 @@ const (
 
 	NetFnChassis = netFnChassis
 	NetFnApp     = netFnApp
+	NetFnStorage = netFnStorage
 
 	CmdGetDeviceID          = cmdGetDeviceID
 	CmdSetSessionPrivilege  = cmdSetSessionPrivilege
@@ -61,6 +62,12 @@ const (
 	CmdSetUserPassword = cmdSetUserPassword
 
 	BootDevicePXEBits = bootDevicePXEBits
+
+	CmdGetSDRRepositoryInfo = cmdGetSDRRepositoryInfo
+	CmdReserveSDRRepository = cmdReserveSDRRepository
+	CmdGetSDR               = cmdGetSDR
+	CmdGetFRUInventoryArea  = cmdGetFRUInventoryArea
+	CmdReadFRUData          = cmdReadFRUData
 )
 
 // ExtractUnauthPayload is the exported wrapper around the unexported

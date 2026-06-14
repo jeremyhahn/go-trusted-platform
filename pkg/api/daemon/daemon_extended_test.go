@@ -20,7 +20,10 @@ import (
 )
 
 func TestDaemon_SDNService(t *testing.T) {
-	t.Run("returns nil when SDN not configured", func(t *testing.T) {
+	// SDNService always returns a non-nil stub so that zone CRUD RPCs
+	// (which have no OVS dependency) are served even without an OVS socket.
+	// OVS-dependent operations check ovsClient != nil internally.
+	t.Run("returns stub when OVS socket not configured", func(t *testing.T) {
 		config := testConfig("/tmp/test-daemon-sdn.sock")
 
 		d, err := New(config)
@@ -29,8 +32,12 @@ func TestDaemon_SDNService(t *testing.T) {
 		}
 
 		svc := d.SDNService()
-		if svc != nil {
-			t.Error("SDNService() should return nil when not configured")
+		if svc == nil {
+			t.Error("SDNService() must return a non-nil stub so zone RPCs are served")
+		}
+		// OVS client must be nil when no socket path was configured.
+		if svc.OVSClient() != nil {
+			t.Error("SDNService().OVSClient() must be nil when OVSSocketPath is empty")
 		}
 	})
 }

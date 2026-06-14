@@ -32,6 +32,10 @@
 //     safe to update at runtime via SetCredentials. This supports
 //     simulating IPMI Set User Password against a live listener.
 //   - Start/Stop are idempotent and may be called concurrently.
+//   - Multiple concurrent sessions are supported. Each Open Session
+//     request creates an independent session with a unique BMC session
+//     ID so that concurrent or sequential sessions do not interfere
+//     with each other's RAKP key material.
 //
 // Typical use:
 //
@@ -113,6 +117,21 @@ type ErrAlreadyStarted struct{}
 
 func (ErrAlreadyStarted) Error() string { return "rmcpsim: simulator already started" }
 
+// session holds per-session RAKP handshake state for a single IPMI
+// 2.0 RMCP+ session. Fields are populated progressively as the
+// Open Session → RAKP1 → RAKP3 handshake proceeds. authAlgo is
+// written once during Open Session and is thereafter read-only; all
+// other mutable fields are protected by Simulator.sessMu.
+type session struct {
+	bmcSessionID    uint32
+	clientSessionID uint32
+	clientRand      [16]byte
+	authAlgo        uint8
+	sik             []byte
+	k1              []byte
+	k2              []byte
+}
+
 // Simulator is a minimal IPMI 2.0 RMCP+ BMC simulator bound to a UDP
 // address. Zero value is not usable; construct via New.
 type Simulator struct {
@@ -123,8 +142,11 @@ type Simulator struct {
 	username string
 	password string
 
-	guid         [16]byte
-	bmcSessionID uint32
+	guid [16]byte
+
+	// sessionCounter generates unique, non-zero BMC session IDs.
+	// Incremented atomically; first session gets ID 1.
+	sessionCounter atomic.Uint32
 
 	// running guards Start/Stop idempotency.
 	running atomic.Bool
@@ -132,16 +154,9 @@ type Simulator struct {
 	listen  *net.UDPAddr
 	done    chan struct{}
 
-	// Session state captured during the RAKP handshake. The simulator
-	// tracks a single session -- sufficient for unit + integration
-	// tests but not for multi-client scenarios.
-	sessMu          sync.Mutex
-	clientSessionID uint32
-	clientRand      [16]byte
-	authAlgo        uint8
-	sik             []byte
-	k1              []byte
-	k2              []byte
+	// sessMu guards sessions.
+	sessMu   sync.Mutex
+	sessions map[uint32]*session
 
 	// handlers is the instance-level IPMI command dispatch map. It
 	// holds handlers that require per-simulator state (e.g. user
@@ -165,12 +180,12 @@ func New(opts Options) (*Simulator, error) {
 		logger = slog.Default()
 	}
 	sim := &Simulator{
-		logger:       logger,
-		addr:         opts.Addr,
-		username:     opts.Username,
-		password:     opts.Password,
-		bmcSessionID: 0xAABBCCDD,
-		handlers:     make(map[ipmiKey]ipmiHandler),
+		logger:   logger,
+		addr:     opts.Addr,
+		username: opts.Username,
+		password: opts.Password,
+		sessions: make(map[uint32]*session),
+		handlers: make(map[ipmiKey]ipmiHandler),
 	}
 	for i := range sim.guid {
 		sim.guid[i] = byte(i + 0xA0)
@@ -243,18 +258,18 @@ func (s *Simulator) Stop() {
 	<-s.done
 }
 
-// password snapshots the password under the credential lock.
+// passwordSnapshot snapshots the password under the credential lock.
 func (s *Simulator) passwordSnapshot() string {
 	s.credMu.RLock()
 	defer s.credMu.RUnlock()
 	return s.password
 }
 
-// hashFunc returns the hash constructor for the negotiated auth
-// algorithm. Must be called with the session state already populated
-// (i.e. after Open Session / RAKP1).
-func (s *Simulator) hashFunc() func() hash.Hash {
-	if s.authAlgo == bmc.AuthAlgoHMACSHA256 {
+// hashFuncFor returns the hash constructor for the session's negotiated
+// auth algorithm. authAlgo is written once during Open Session and is
+// thereafter read-only, so this may be called without holding sessMu.
+func hashFuncFor(sess *session) func() hash.Hash {
+	if sess.authAlgo == bmc.AuthAlgoHMACSHA256 {
 		return sha256.New
 	}
 	return sha1.New
@@ -316,7 +331,9 @@ func (s *Simulator) handlePacket(packet []byte) []byte {
 }
 
 // handleOpenSession handles Open Session Request and returns Open
-// Session Response.
+// Session Response. Each call creates a new session entry with a
+// unique BMC session ID so that concurrent sessions do not share
+// crypto state.
 func (s *Simulator) handleOpenSession(packet []byte) []byte {
 	payload, err := bmc.ExtractUnauthPayload(packet, bmc.PayloadTypeOpenSessionReq)
 	if err != nil {
@@ -332,22 +349,31 @@ func (s *Simulator) handleOpenSession(packet []byte) []byte {
 		return nil
 	}
 
-	s.sessMu.Lock()
-	s.clientSessionID = binary.LittleEndian.Uint32(payload[4:8])
-	s.authAlgo = payload[12]
-	authAlgo := s.authAlgo
-	s.sessMu.Unlock()
-
+	clientSessionID := binary.LittleEndian.Uint32(payload[4:8])
+	authAlgo := payload[12]
 	integAlgo := payload[20]
 	cryptoAlgo := payload[28]
+
+	// Assign a unique, non-zero BMC session ID for this session.
+	bmcSessionID := s.sessionCounter.Add(1)
+
+	sess := &session{
+		bmcSessionID:    bmcSessionID,
+		clientSessionID: clientSessionID,
+		authAlgo:        authAlgo,
+	}
+
+	s.sessMu.Lock()
+	s.sessions[bmcSessionID] = sess
+	s.sessMu.Unlock()
 
 	resp := make([]byte, 36)
 	resp[0] = 0x00       // Tag
 	resp[1] = 0x00       // Status: no errors
 	resp[2] = payload[1] // Max privilege
 	resp[3] = 0x00
-	binary.LittleEndian.PutUint32(resp[4:8], s.clientSessionID)
-	binary.LittleEndian.PutUint32(resp[8:12], s.bmcSessionID)
+	binary.LittleEndian.PutUint32(resp[4:8], clientSessionID)
+	binary.LittleEndian.PutUint32(resp[8:12], bmcSessionID)
 
 	// Auth algorithm payload.
 	resp[12] = 0x00
@@ -374,6 +400,8 @@ func (s *Simulator) handleOpenSession(packet []byte) []byte {
 }
 
 // handleRAKP1 handles RAKP Message 1 and returns RAKP Message 2.
+// The RAKP1 payload carries the BMC session ID (payload[4:8]) so the
+// simulator can look up the correct session and store its key material.
 func (s *Simulator) handleRAKP1(packet []byte) []byte {
 	payload, err := bmc.ExtractUnauthPayload(packet, bmc.PayloadTypeRAKP1)
 	if err != nil {
@@ -393,14 +421,22 @@ func (s *Simulator) handleRAKP1(packet []byte) []byte {
 		return nil
 	}
 
+	bmcSessionID := binary.LittleEndian.Uint32(payload[4:8])
+
 	s.sessMu.Lock()
-	copy(s.clientRand[:], payload[8:24])
+	sess, ok := s.sessions[bmcSessionID]
+	if !ok {
+		s.sessMu.Unlock()
+		s.logger.Debug("rmcpsim: RAKP1 unknown session", "bmcSessionID", bmcSessionID)
+		return nil
+	}
+	copy(sess.clientRand[:], payload[8:24])
+	// Snapshot immutable fields needed outside the lock.
+	clientSessionID := sess.clientSessionID
+	clientRand := sess.clientRand
 	s.sessMu.Unlock()
 
 	privilege := payload[24]
-	// Username is present at payload[28:28+userLen] -- the simulator
-	// accepts whichever name the client supplies; credentials are
-	// enforced via HMAC verification on the client side (password).
 
 	var bmcRand [16]byte
 	if _, err := rand.Read(bmcRand[:]); err != nil {
@@ -410,33 +446,37 @@ func (s *Simulator) handleRAKP1(packet []byte) []byte {
 
 	password := s.passwordSnapshot()
 
+	// authAlgo is set once in handleOpenSession and never modified;
+	// safe to read without the lock.
+	hf := hashFuncFor(sess)
+
 	// HMAC(password, clientSID || bmcSID || clientRand || bmcRand || bmcGUID || role || userLen || username).
 	hmacData := make([]byte, 0, 58+int(userLen))
 	sidBuf := make([]byte, 4)
-	binary.LittleEndian.PutUint32(sidBuf, s.clientSessionID)
+	binary.LittleEndian.PutUint32(sidBuf, clientSessionID)
 	hmacData = append(hmacData, sidBuf...)
-	binary.LittleEndian.PutUint32(sidBuf, s.bmcSessionID)
+	binary.LittleEndian.PutUint32(sidBuf, bmcSessionID)
 	hmacData = append(hmacData, sidBuf...)
-	hmacData = append(hmacData, s.clientRand[:]...)
+	hmacData = append(hmacData, clientRand[:]...)
 	hmacData = append(hmacData, bmcRand[:]...)
 	hmacData = append(hmacData, s.guid[:]...)
 	hmacData = append(hmacData, privilege)
 	hmacData = append(hmacData, userLen)
 	hmacData = append(hmacData, payload[28:28+userLen]...)
 
-	mac := hmac.New(s.hashFunc(), []byte(password))
+	mac := hmac.New(hf, []byte(password))
 	mac.Write(hmacData)
 	authCode := mac.Sum(nil)
 
 	// Derive SIK for RAKP4.
 	sikData := make([]byte, 0, 34+int(userLen))
-	sikData = append(sikData, s.clientRand[:]...)
+	sikData = append(sikData, clientRand[:]...)
 	sikData = append(sikData, bmcRand[:]...)
 	sikData = append(sikData, privilege)
 	sikData = append(sikData, userLen)
 	sikData = append(sikData, payload[28:28+userLen]...)
 
-	mac = hmac.New(s.hashFunc(), []byte(password))
+	mac = hmac.New(hf, []byte(password))
 	mac.Write(sikData)
 	sik := mac.Sum(nil)
 
@@ -445,7 +485,7 @@ func (s *Simulator) handleRAKP1(packet []byte) []byte {
 	for i := range k1Input {
 		k1Input[i] = 0x01
 	}
-	mac = hmac.New(s.hashFunc(), sik)
+	mac = hmac.New(hf, sik)
 	mac.Write(k1Input)
 	k1 := mac.Sum(nil)
 
@@ -454,20 +494,20 @@ func (s *Simulator) handleRAKP1(packet []byte) []byte {
 	for i := range k2Input {
 		k2Input[i] = 0x02
 	}
-	mac = hmac.New(s.hashFunc(), sik)
+	mac = hmac.New(hf, sik)
 	mac.Write(k2Input)
 	k2 := mac.Sum(nil)
 
 	s.sessMu.Lock()
-	s.sik = sik
-	s.k1 = k1
-	s.k2 = k2
+	sess.sik = sik
+	sess.k1 = k1
+	sess.k2 = k2
 	s.sessMu.Unlock()
 
 	resp := make([]byte, 40+len(authCode))
 	resp[0] = 0x00 // Tag
 	resp[1] = 0x00 // Status
-	binary.LittleEndian.PutUint32(resp[4:8], s.clientSessionID)
+	binary.LittleEndian.PutUint32(resp[4:8], clientSessionID)
 	copy(resp[8:24], bmcRand[:])
 	copy(resp[24:40], s.guid[:])
 	copy(resp[40:], authCode)
@@ -476,14 +516,16 @@ func (s *Simulator) handleRAKP1(packet []byte) []byte {
 }
 
 // handleRAKP3 handles RAKP Message 3 and returns RAKP Message 4.
+// The RAKP3 payload carries the BMC session ID (payload[4:8]) so the
+// simulator can look up the correct session to compute the RAKP4 ICV.
 func (s *Simulator) handleRAKP3(packet []byte) []byte {
 	payload, err := bmc.ExtractUnauthPayload(packet, bmc.PayloadTypeRAKP3)
 	if err != nil {
 		s.logger.Debug("rmcpsim: extract RAKP3", "err", err)
 		return nil
 	}
-	// RAKP3 body needs at least tag + status before we peek.
-	if len(payload) < 2 {
+	// RAKP3 body needs at least 8 bytes: tag(1) + status(1) + reserved(2) + bmcSID(4).
+	if len(payload) < 8 {
 		s.logger.Debug("rmcpsim: RAKP3 payload too short", "len", len(payload))
 		return nil
 	}
@@ -494,32 +536,77 @@ func (s *Simulator) handleRAKP3(packet []byte) []byte {
 		return nil
 	}
 
+	bmcSessionID := binary.LittleEndian.Uint32(payload[4:8])
+
+	s.sessMu.Lock()
+	sess, ok := s.sessions[bmcSessionID]
+	if !ok {
+		s.sessMu.Unlock()
+		s.logger.Debug("rmcpsim: RAKP3 unknown session", "bmcSessionID", bmcSessionID)
+		return nil
+	}
+	// Snapshot mutable fields under the lock.
+	clientSessionID := sess.clientSessionID
+	clientRand := sess.clientRand
+	sik := sess.sik
+	s.sessMu.Unlock()
+
 	// HMAC(SIK, clientRand || bmcSID || bmcGUID).
 	icvData := make([]byte, 0, 36)
-	icvData = append(icvData, s.clientRand[:]...)
+	icvData = append(icvData, clientRand[:]...)
 	sidBuf := make([]byte, 4)
-	binary.LittleEndian.PutUint32(sidBuf, s.bmcSessionID)
+	binary.LittleEndian.PutUint32(sidBuf, bmcSessionID)
 	icvData = append(icvData, sidBuf...)
 	icvData = append(icvData, s.guid[:]...)
 
-	mac := hmac.New(s.hashFunc(), s.sik)
+	// authAlgo is set once in handleOpenSession; safe to read without lock.
+	mac := hmac.New(hashFuncFor(sess), sik)
 	mac.Write(icvData)
 	icv := mac.Sum(nil)
 
 	resp := make([]byte, 8+len(icv))
 	resp[0] = 0x00 // Tag
 	resp[1] = 0x00 // Status
-	binary.LittleEndian.PutUint32(resp[4:8], s.clientSessionID)
+	binary.LittleEndian.PutUint32(resp[4:8], clientSessionID)
 	copy(resp[8:], icv)
 
 	return bmc.BuildRMCPPlusUnauthPacket(bmc.PayloadTypeRAKP4, 0, 0, resp)
 }
 
 // handleIPMI handles an authenticated IPMI command payload.
+//
+// Session lookup uses the BMC session ID embedded in the RMCP+ session
+// header at packet[6:10]. Packets with an unrecognized session ID are
+// dropped silently (returns nil). Recognized sessions with unhandled
+// commands receive a 0xC1 "invalid/illegal command" completion code
+// response so the client gets a fast error rather than a 5-second
+// UDP timeout.
 func (s *Simulator) handleIPMI(packet []byte, isEncrypted, isAuthenticated bool) []byte {
 	if len(packet) < 16 {
 		return nil
 	}
+
+	// RMCP+ session header: RMCP(4) + authType(1) + payloadType(1) +
+	// sessionID(4) + seqNum(4) + payloadLen(2) = 16 bytes.
+	// The session ID the client sends is the BMC session ID from Open
+	// Session Response (the "managed system session ID" per IPMI spec
+	// Table 13-8).
+	bmcSessionID := binary.LittleEndian.Uint32(packet[6:10])
+
+	s.sessMu.Lock()
+	sess, ok := s.sessions[bmcSessionID]
+	if !ok {
+		s.sessMu.Unlock()
+		if bmcSessionID != 0 {
+			s.logger.Debug("rmcpsim: IPMI unknown session", "bmcSessionID", bmcSessionID)
+		}
+		return nil
+	}
+	k1 := sess.k1
+	k2 := sess.k2
+	authAlgo := sess.authAlgo
+	clientSessionID := sess.clientSessionID
+	s.sessMu.Unlock()
 
 	payloadLen := binary.LittleEndian.Uint16(packet[14:16])
 	payloadStart := 16
@@ -529,13 +616,6 @@ func (s *Simulator) handleIPMI(packet []byte, isEncrypted, isAuthenticated bool)
 	}
 
 	payload := packet[payloadStart:payloadEnd]
-
-	s.sessMu.Lock()
-	k1 := s.k1
-	k2 := s.k2
-	authAlgo := s.authAlgo
-	clientSessionID := s.clientSessionID
-	s.sessMu.Unlock()
 
 	if isEncrypted && k2 != nil {
 		decrypted, err := bmc.DecryptSessionPayload(bmc.CryptoAlgoAESCBC128, k2, payload)
@@ -553,10 +633,12 @@ func (s *Simulator) handleIPMI(packet []byte, isEncrypted, isAuthenticated bool)
 	netfn := payload[1] >> 2
 	cmd := payload[5]
 
-	respData, completionCode, ok := s.dispatchIPMI(netfn, cmd, payload)
-	if !ok {
+	respData, completionCode, handled := s.dispatchIPMI(netfn, cmd, payload)
+	if !handled {
 		s.logger.Debug("rmcpsim: unhandled IPMI command", "netfn", netfn, "cmd", cmd)
-		return nil
+		// Return "invalid/illegal command" so the client gets a fast
+		// ErrCompletionCode instead of a 5-second UDP timeout.
+		completionCode = 0xC1
 	}
 
 	// Build IPMI response message.
@@ -592,6 +674,14 @@ func (s *Simulator) handleIPMI(packet []byte, isEncrypted, isAuthenticated bool)
 		s.logger.Debug("rmcpsim: wrap", "err", err)
 		return nil
 	}
+
+	// Remove session state on successful Close Session to keep the map tidy.
+	if netfn == bmc.NetFnApp && cmd == bmc.CmdCloseSession && completionCode == ccSuccess {
+		s.sessMu.Lock()
+		delete(s.sessions, bmcSessionID)
+		s.sessMu.Unlock()
+	}
+
 	return wrapped
 }
 
@@ -646,6 +736,24 @@ var staticHandlers = map[ipmiKey]ipmiHandler{
 		resp[10] = 0x00 // Product ID byte 1
 		resp[11] = 0x00 // Aux firmware rev
 		return resp, ccSuccess
+	},
+	// Get SDR Repository Info: return 6-byte response with record count = 0.
+	// ipmi.go readSDRRepository() short-circuits when recordCount == 0
+	// (returns nil, nil immediately without issuing Reserve/Get SDR commands).
+	// GetSensors therefore returns an empty slice cleanly — the test
+	// tolerates 0 sensors so this makes GetSensors PASS.
+	{bmc.NetFnStorage, bmc.CmdGetSDRRepositoryInfo}: func(_ []byte) ([]byte, byte) {
+		// Per IPMI Table 33-3 SDR Repository Info Response:
+		// byte[0] = SDR version (0x51 = 1.5), byte[1:3] = record count LE,
+		// byte[3:5] = free space LE (0xFFFF = unspecified), byte[5] = timestamp.
+		return []byte{0x51, 0x00, 0x00, 0xFF, 0xFF, 0x00}, ccSuccess
+	},
+	// Get FRU Inventory Area Info: return "command not supported".
+	// readFRU receives ErrCompletionCode{0xD5} and returns an error.
+	// GetSystemInfo treats readFRU failure as non-fatal (debug log + continue).
+	// This gives a fast failure instead of the 5-second default IPMI timeout.
+	{bmc.NetFnStorage, bmc.CmdGetFRUInventoryArea}: func(_ []byte) ([]byte, byte) {
+		return nil, 0xD5 // Command not supported in present state
 	},
 }
 

@@ -134,3 +134,46 @@ func (e *ErrListAllocationsFailed) Error() string {
 }
 
 func (e *ErrListAllocationsFailed) Unwrap() error { return e.Cause }
+type ErrCreateIPAMPoolFailed struct {
+	Name  string
+	Cause error
+}
+
+func (e *ErrCreateIPAMPoolFailed) Error() string {
+	return fmt.Sprintf("failed to create IPAM pool %s: %v", e.Name, e.Cause)
+}
+
+func (e *ErrCreateIPAMPoolFailed) Unwrap() error { return e.Cause }
+
+type ErrGetIPAMPoolFailed struct {
+	ID    string
+	Cause error
+}
+
+func (e *ErrGetIPAMPoolFailed) Error() string {
+	return fmt.Sprintf("failed to get IPAM pool %s: %v", e.ID, e.Cause)
+}
+
+func (e *ErrGetIPAMPoolFailed) Unwrap() error { return e.Cause }
+
+type ErrUpdateIPAMPoolFailed struct {
+	ID    string
+	Cause error
+}
+
+func (e *ErrUpdateIPAMPoolFailed) Error() string {
+	return fmt.Sprintf("failed to update IPAM pool %s: %v", e.ID, e.Cause)
+}
+
+func (e *ErrUpdateIPAMPoolFailed) Unwrap() error { return e.Cause }
+
+type ErrDeleteIPAMPoolFailed struct {
+	ID    string
+	Cause error
+}
+
+func (e *ErrDeleteIPAMPoolFailed) Error() string {
+	return fmt.Sprintf("failed to delete IPAM pool %s: %v", e.ID, e.Cause)
+}
+
+func (e *ErrDeleteIPAMPoolFailed) Unwrap() error { return e.Cause }

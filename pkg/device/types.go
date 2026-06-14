@@ -44,6 +44,9 @@ type DeviceService interface {
 
 	// FindBySerial finds a device by its serial number.
 	FindBySerial(ctx context.Context, serial string) (*entities.Device, error)
+
+	// FindByHostname finds a device by its IDevID hostname (CN).
+	FindByHostname(ctx context.Context, hostname string) (*entities.Device, error)
 }
 
 // DeviceProfileService provides device profile management operations.

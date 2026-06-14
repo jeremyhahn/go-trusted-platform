@@ -510,9 +510,9 @@ func (m *MockPolicyExtractor) ExtractTenantID(cert *x509.Certificate) (string, e
 	return args.String(0), args.Error(1)
 }
 
-func (m *MockPolicyExtractor) ExtractVLAN(cert *x509.Certificate) (uint16, error) {
+func (m *MockPolicyExtractor) ExtractZone(cert *x509.Certificate) (string, error) {
 	args := m.Called(cert)
-	return args.Get(0).(uint16), args.Error(1)
+	return args.String(0), args.Error(1)
 }
 
 func (m *MockPolicyExtractor) ExtractACLs(cert *x509.Certificate) ([]ACLRule, error) {

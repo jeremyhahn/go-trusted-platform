@@ -218,3 +218,15 @@ client, err := sdn.NewClient(ctx, "localhost:9444", tlsConfig,
 | POLICY_NOT_FOUND | Policy does not exist |
 | PROTOCOL_ERROR | Protocol encoding error |
 | CONNECTION_CLOSED | Connection terminated |
+
+## Network Zone Endpoints (QUIC/HTTP3)
+
+The QUIC transport shares the same REST path surface:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/sdn/zones` | Create a zone |
+| GET  | `/api/v1/sdn/zones` | List zones (optional `?lifecycle_role=`) |
+| PUT  | `/api/v1/sdn/zones/{name}` | Update a zone |
+| DELETE | `/api/v1/sdn/zones/{name}` | Delete a zone |
+| PUT  | `/api/v1/sdn/networks/{network}/zone` | Assign a network to a zone |

@@ -754,3 +754,69 @@ curl -X GET https://platform.example.com/api/v1/sdn/ipam/devices/vm-001/allocati
 - [API Overview](api-reference.md)
 - [Configuration](configuration.md)
 - [Architecture](architecture.md)
+
+
+## Gateway Pool CRUD Endpoints (Z5b)
+
+The gateway-side pool CRUD API lives under `/api/v1/sdn/gateway/ipam/pools` and
+is the operator-facing surface for defining networks at runtime (post-bootstrap).
+The zone field enables trust-boundary-aware filtering.
+
+### CreatePool (gateway)
+
+```http
+POST /api/v1/sdn/gateway/ipam/pools
+Content-Type: application/json
+```
+
+**Request:**
+```json
+{
+  "id":          "trusted-pool-01",
+  "name":        "Trusted Network",
+  "cidr":        "10.10.0.0/24",
+  "gateway":     "10.10.0.1",
+  "zone":        "trusted",
+  "description": "Internal trusted workloads",
+  "default_lease_duration_nanos": 86400000000000
+}
+```
+
+`id` is optional; the server generates a UUID when omitted.
+`cidr` is required and **immutable** after creation.
+
+**Response (201):** `IPAMPool` object (see Common Data Types in api-reference.md).
+
+### GetPool (gateway)
+
+```http
+GET /api/v1/sdn/gateway/ipam/pools/{id}
+```
+
+### UpdatePool (gateway)
+
+```http
+PUT /api/v1/sdn/gateway/ipam/pools/{id}
+Content-Type: application/json
+```
+
+Mutable fields: `name`, `gateway`, `zone`, `description`,
+`default_lease_duration_nanos`, `inactivity_timeout_nanos`.
+`cidr` is ignored; the server rejects changes to CIDR.
+
+### DeletePool (gateway)
+
+```http
+DELETE /api/v1/sdn/gateway/ipam/pools/{id}
+```
+
+Returns `409 Conflict` when active allocations exist.
+Treating a `404` on delete as success is acceptable for idempotent callers.
+
+### ListPools with zone filter (gateway)
+
+```http
+GET /api/v1/sdn/gateway/ipam/pools?zone=trusted
+```
+
+`zone` is optional. An empty or absent `zone` returns all pools.

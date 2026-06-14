@@ -661,3 +661,31 @@ rpc StreamPoolStats(StreamPoolStatsRequest) returns (stream PoolStats);
 - [API Overview](api-reference.md)
 - [Configuration](configuration.md)
 - [Architecture](architecture.md)
+
+
+## Gateway IPAM Pool CRUD (GatewayService, Z5b)
+
+Pool CRUD at runtime is exposed through `GatewayService` in
+`pkg/api/grpc/proto/gateway.proto`.
+
+```protobuf
+service GatewayService {
+  rpc CreateIPAMPool(CreateIPAMPoolRequest)   returns (CreateIPAMPoolResponse);
+  rpc GetIPAMPool(GetIPAMPoolRequest)         returns (GetIPAMPoolResponse);
+  rpc UpdateIPAMPool(UpdateIPAMPoolRequest)   returns (UpdateIPAMPoolResponse);
+  rpc DeleteIPAMPool(DeleteIPAMPoolRequest)   returns (DeleteIPAMPoolResponse);
+  rpc ListIPAMPools(ListIPAMPoolsRequest)     returns (ListIPAMPoolsResponse);
+}
+```
+
+Key fields:
+
+| Field | Notes |
+|-------|-------|
+| `IPAMPool.zone` | Trust/exposure zone; empty = unzoned |
+| `IPAMPool.description` | Human-readable purpose |
+| `CreateIPAMPoolRequest.id` | Optional; server generates UUID when empty |
+| `CreateIPAMPoolRequest.cidr` | Required; immutable after creation |
+| `UpdateIPAMPoolRequest` | Accepts `name`, `gateway`, `zone`, `description`, `default_lease_duration_nanos`; CIDR field is ignored |
+| `ListIPAMPoolsRequest.zone` | Optional zone filter; empty returns all pools |
+| `DeleteIPAMPoolRequest` | Returns `NOT_FOUND` for missing pools; `FAILED_PRECONDITION` when active allocations exist |

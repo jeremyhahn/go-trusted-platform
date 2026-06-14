@@ -236,6 +236,28 @@ func setup(c *caddy.Controller) error {
 		}
 	}
 
+	// When zone_subdomains is enabled, pre-create one DNS sub-zone per network
+	// zone under the internal domain. This makes names like
+	// host.trusted.example.internal. resolvable immediately, before any device
+	// has registered. The operation is idempotent: existing sub-zones are left
+	// unchanged.
+	if Configuration.ZoneSubdomains && Configuration.InternalServer != nil {
+		tenantID := ""
+		if Configuration.InternalServer.Zone.TenantID != "" {
+			tenantID = Configuration.InternalServer.Zone.TenantID
+		}
+		if err := InitNetworkZoneSubdomains(
+			context.Background(),
+			Configuration,
+			Configuration.NetworkZones,
+			zoneDAO,
+			tenantID,
+		); err != nil {
+			return fmt.Errorf("failed to initialise network-zone subdomains: %w", err)
+		}
+		log.Infof("Network-zone subdomains initialised: %v", Configuration.NetworkZones)
+	}
+
 	// Register the plugin in the middleware chain
 	dnsserver.GetConfig(c).AddPlugin(func(next plugin.Handler) plugin.Handler {
 		return TrustedPlatformPlugin{

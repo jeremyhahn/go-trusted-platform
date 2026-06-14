@@ -40,6 +40,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
@@ -85,7 +86,7 @@ func (f VBMCFlavor) hostname() string {
 // overridable via the `VBMC_<FLAVOR>_ADDR` env var for ad-hoc test
 // runs outside the compose harness.
 func Endpoint(flavor VBMCFlavor) (host string, port int) {
-	envKey := fmt.Sprintf("VBMC_%s_ADDR", flavor)
+	envKey := fmt.Sprintf("VBMC_%s_ADDR", strings.ToUpper(string(flavor)))
 	// Accept forms: "host", "host:port", or unset.
 	if v := os.Getenv(envKey); v != "" {
 		// Simple split on ':' — tests run inside the devcontainer
@@ -118,7 +119,7 @@ func splitHostPort(s string) (string, int, error) {
 // compose harness. Mirrors Endpoint but targets the RMCP+ simulator
 // surface on the vBMC rather than its HTTPS Redfish/CGI surface.
 func IPMIEndpoint(flavor VBMCFlavor) (host string, port int) {
-	envKey := fmt.Sprintf("VBMC_%s_IPMI_ADDR", flavor)
+	envKey := fmt.Sprintf("VBMC_%s_IPMI_ADDR", strings.ToUpper(string(flavor)))
 	if v := os.Getenv(envKey); v != "" {
 		h, p, err := splitHostPort(v)
 		if err == nil {

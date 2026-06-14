@@ -28,6 +28,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -43,15 +45,19 @@ type SDNRESTAdapter struct {
 // NewSDNRESTAdapter creates a new REST adapter for SDN integration testing.
 func NewSDNRESTAdapter() *SDNRESTAdapter {
 	endpoints := GetServiceEndpoints()
-	endpoint := endpoints.PlatformAPI
-	// Strip any existing protocol prefix to avoid double-prefixing
-	endpoint = strings.TrimPrefix(endpoint, "https://")
-	endpoint = strings.TrimPrefix(endpoint, "http://")
+	rawEndpoint := endpoints.PlatformAPI
+	// Preserve existing scheme; default to https:// for the mTLS REST endpoint.
+	var baseURL string
+	if strings.HasPrefix(rawEndpoint, "https://") || strings.HasPrefix(rawEndpoint, "http://") {
+		baseURL = rawEndpoint
+	} else {
+		baseURL = "https://" + rawEndpoint
+	}
+	// Strip any trailing slash so path concatenation is consistent.
+	baseURL = strings.TrimRight(baseURL, "/")
 	return &SDNRESTAdapter{
-		baseURL: "http://" + endpoint,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		baseURL:    baseURL,
+		httpClient: helpers.NewHTTPClient(30 * time.Second),
 	}
 }
 
@@ -329,9 +335,104 @@ func (r *SDNRESTAdapter) WithdrawPrefix(ctx context.Context, prefix string) erro
 // IPAM Operations
 // =============================================================================
 
-// ListPools returns all IPAM pools via REST API.
-func (r *SDNRESTAdapter) ListPools(ctx context.Context) (*IPAMPoolListResponse, error) {
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodGet, "/api/v1/sdn/ipam/pools", nil)
+// CreatePool creates a new IPAM pool via REST API.
+func (r *SDNRESTAdapter) CreatePool(ctx context.Context, req IPAMPoolCreateRequest) (*IPAMPoolEntry, error) {
+	body := map[string]interface{}{
+		"name": req.Name,
+		"cidr": req.CIDR,
+	}
+	if req.ID != "" {
+		body["id"] = req.ID
+	}
+	if req.Gateway != "" {
+		body["gateway"] = req.Gateway
+	}
+	if req.Zone != "" {
+		body["zone"] = req.Zone
+	}
+	if req.Description != "" {
+		body["description"] = req.Description
+	}
+	if req.LeaseDuration > 0 {
+		body["default_lease_duration_nanos"] = req.LeaseDuration.Nanoseconds()
+	}
+
+	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/sdn/gateway/ipam/pools", body)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp restIPAMPoolEntry
+	if err := r.handleResponse(respBody, statusCode, &resp); err != nil {
+		return nil, err
+	}
+
+	return resp.toEntry(), nil
+}
+
+// GetPool retrieves an IPAM pool by ID via REST API.
+func (r *SDNRESTAdapter) GetPool(ctx context.Context, poolID string) (*IPAMPoolEntry, error) {
+	respBody, statusCode, err := r.doRequest(ctx, http.MethodGet, "/api/v1/sdn/gateway/ipam/pools/"+poolID, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp restIPAMPoolEntry
+	if err := r.handleResponse(respBody, statusCode, &resp); err != nil {
+		return nil, err
+	}
+
+	return resp.toEntry(), nil
+}
+
+// UpdatePool updates mutable fields of an IPAM pool via REST API.
+func (r *SDNRESTAdapter) UpdatePool(ctx context.Context, poolID string, req IPAMPoolUpdateRequest) (*IPAMPoolEntry, error) {
+	body := map[string]interface{}{}
+	if req.Name != "" {
+		body["name"] = req.Name
+	}
+	if req.Gateway != "" {
+		body["gateway"] = req.Gateway
+	}
+	if req.Zone != "" {
+		body["zone"] = req.Zone
+	}
+	if req.Description != "" {
+		body["description"] = req.Description
+	}
+	if req.LeaseDuration > 0 {
+		body["default_lease_duration_nanos"] = req.LeaseDuration.Nanoseconds()
+	}
+
+	respBody, statusCode, err := r.doRequest(ctx, http.MethodPut, "/api/v1/sdn/gateway/ipam/pools/"+poolID, body)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp restIPAMPoolEntry
+	if err := r.handleResponse(respBody, statusCode, &resp); err != nil {
+		return nil, err
+	}
+
+	return resp.toEntry(), nil
+}
+
+// DeletePool removes an IPAM pool by ID via REST API.
+func (r *SDNRESTAdapter) DeletePool(ctx context.Context, poolID string) error {
+	respBody, statusCode, err := r.doRequest(ctx, http.MethodDelete, "/api/v1/sdn/gateway/ipam/pools/"+poolID, nil)
+	if err != nil {
+		return err
+	}
+	return r.handleResponse(respBody, statusCode, nil)
+}
+
+// ListPools returns all IPAM pools, optionally filtered by zone, via REST API.
+func (r *SDNRESTAdapter) ListPools(ctx context.Context, zone string) (*IPAMPoolListResponse, error) {
+	path := "/api/v1/sdn/gateway/ipam/pools"
+	if zone != "" {
+		path += "?zone=" + zone
+	}
+	respBody, statusCode, err := r.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -641,33 +742,46 @@ type restIPAMPoolListResponse struct {
 }
 
 type restIPAMPoolEntry struct {
-	ID               string   `json:"id"`
-	Name             string   `json:"name"`
-	CIDR             string   `json:"cidr"`
-	Gateway          string   `json:"gateway"`
-	TotalIPs         int64    `json:"total_ips"`
-	AllocatedIPs     int64    `json:"allocated_ips"`
-	AvailableIPs     int64    `json:"available_ips"`
-	UtilizationPct   float64  `json:"utilization_pct"`
-	DNS              []string `json:"dns"`
-	LeaseDurationSec int64    `json:"lease_duration_sec"`
+	ID                        string   `json:"id"`
+	Name                      string   `json:"name"`
+	CIDR                      string   `json:"cidr"`
+	Gateway                   string   `json:"gateway"`
+	Zone                      string   `json:"zone"`
+	Description               string   `json:"description"`
+	TotalIPs                  int64    `json:"total_ips"`
+	AllocatedIPs              int64    `json:"allocated_ips"`
+	AvailableIPs              int64    `json:"available_ips"`
+	UtilizationPct            float64  `json:"utilization_pct"`
+	DNS                       []string `json:"dns"`
+	LeaseDurationSec          int64    `json:"lease_duration_sec"`
+	DefaultLeaseDurationNanos int64    `json:"default_lease_duration_nanos"`
+}
+
+func (e *restIPAMPoolEntry) toEntry() *IPAMPoolEntry {
+	leaseDur := time.Duration(e.LeaseDurationSec) * time.Second
+	if leaseDur == 0 && e.DefaultLeaseDurationNanos > 0 {
+		leaseDur = time.Duration(e.DefaultLeaseDurationNanos)
+	}
+	return &IPAMPoolEntry{
+		ID:             e.ID,
+		Name:           e.Name,
+		CIDR:           e.CIDR,
+		Gateway:        e.Gateway,
+		Zone:           e.Zone,
+		Description:    e.Description,
+		TotalIPs:       e.TotalIPs,
+		AllocatedIPs:   e.AllocatedIPs,
+		AvailableIPs:   e.AvailableIPs,
+		UtilizationPct: e.UtilizationPct,
+		DNS:            e.DNS,
+		LeaseDuration:  leaseDur,
+	}
 }
 
 func (r *restIPAMPoolListResponse) toResponse() *IPAMPoolListResponse {
 	pools := make([]IPAMPoolEntry, 0, len(r.Pools))
 	for _, p := range r.Pools {
-		pools = append(pools, IPAMPoolEntry{
-			ID:             p.ID,
-			Name:           p.Name,
-			CIDR:           p.CIDR,
-			Gateway:        p.Gateway,
-			TotalIPs:       p.TotalIPs,
-			AllocatedIPs:   p.AllocatedIPs,
-			AvailableIPs:   p.AvailableIPs,
-			UtilizationPct: p.UtilizationPct,
-			DNS:            p.DNS,
-			LeaseDuration:  time.Duration(p.LeaseDurationSec) * time.Second,
-		})
+		pools = append(pools, *p.toEntry())
 	}
 	return &IPAMPoolListResponse{
 		Pools:      pools,
@@ -776,6 +890,168 @@ func (r *restDHCPLeaseListResponse) toResponse() *DHCPLeaseListResponse {
 		Leases:     leases,
 		TotalCount: r.TotalCount,
 	}
+}
+
+// =============================================================================
+// Network Zone Operations
+// =============================================================================
+
+// restZoneCreateRequest maps to the handler's NetworkZoneCreateRequest.
+type restZoneCreateRequest struct {
+	Name             string `json:"name"`
+	InternetIngress  bool   `json:"internet_ingress,omitempty"`
+	Isolate          bool   `json:"isolate,omitempty"`
+	IsolatePerTenant bool   `json:"isolate_per_tenant,omitempty"`
+	OOB              bool   `json:"oob,omitempty"`
+	LifecycleRole    string `json:"lifecycle_role,omitempty"`
+}
+
+// restZoneUpdateRequest maps to the handler's NetworkZoneUpdateRequest.
+type restZoneUpdateRequest struct {
+	InternetIngress  bool   `json:"internet_ingress,omitempty"`
+	Isolate          bool   `json:"isolate,omitempty"`
+	IsolatePerTenant bool   `json:"isolate_per_tenant,omitempty"`
+	OOB              bool   `json:"oob,omitempty"`
+	LifecycleRole    string `json:"lifecycle_role,omitempty"`
+}
+
+// restZoneResponse mirrors the server's NetworkZoneResponse.
+type restZoneResponse struct {
+	Name             string    `json:"name"`
+	InternetIngress  bool      `json:"internet_ingress,omitempty"`
+	Isolate          bool      `json:"isolate,omitempty"`
+	IsolatePerTenant bool      `json:"isolate_per_tenant,omitempty"`
+	OOB              bool      `json:"oob,omitempty"`
+	LifecycleRole    string    `json:"lifecycle_role,omitempty"`
+	RestartRequired  bool      `json:"restart_required,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// restZoneListResponse mirrors the server's NetworkZoneListResponse.
+type restZoneListResponse struct {
+	Zones []restZoneResponse `json:"zones"`
+	Count int                `json:"count"`
+}
+
+// restZoneDeleteResponse mirrors the server's delete response body.
+type restZoneDeleteResponse struct {
+	Deleted         bool `json:"deleted"`
+	RestartRequired bool `json:"restart_required"`
+}
+
+// restZoneAssignRequest maps to the handler's NetworkZoneAssignRequest.
+type restZoneAssignRequest struct {
+	Zone string `json:"zone"`
+}
+
+// restZoneAssignResponse mirrors the server's assign response body.
+type restZoneAssignResponse struct {
+	Success         bool `json:"success"`
+	RestartRequired bool `json:"restart_required"`
+}
+
+func (rz *restZoneResponse) toEntry() *ZoneEntry {
+	return &ZoneEntry{
+		Name:             rz.Name,
+		InternetIngress:  rz.InternetIngress,
+		Isolate:          rz.Isolate,
+		IsolatePerTenant: rz.IsolatePerTenant,
+		OOB:              rz.OOB,
+		LifecycleRole:    rz.LifecycleRole,
+		RestartRequired:  rz.RestartRequired,
+		CreatedAt:        rz.CreatedAt,
+		UpdatedAt:        rz.UpdatedAt,
+	}
+}
+
+// CreateZone creates a new network trust zone via REST POST /api/v1/sdn/zones.
+func (s *SDNRESTAdapter) CreateZone(ctx context.Context, req ZoneCreateRequest) (*ZoneEntry, error) {
+	body := restZoneCreateRequest{
+		Name:             req.Name,
+		InternetIngress:  req.InternetIngress,
+		Isolate:          req.Isolate,
+		IsolatePerTenant: req.IsolatePerTenant,
+		OOB:              req.OOB,
+		LifecycleRole:    req.LifecycleRole,
+	}
+	respBody, statusCode, err := s.doRequest(ctx, http.MethodPost, "/api/v1/sdn/zones", body)
+	if err != nil {
+		return nil, err
+	}
+	var resp restZoneResponse
+	if err := s.handleResponse(respBody, statusCode, &resp); err != nil {
+		return nil, err
+	}
+	return resp.toEntry(), nil
+}
+
+// UpdateZone updates an existing network trust zone via REST PUT /api/v1/sdn/zones/{name}.
+func (s *SDNRESTAdapter) UpdateZone(ctx context.Context, name string, req ZoneUpdateRequest) (*ZoneEntry, error) {
+	body := restZoneUpdateRequest{
+		InternetIngress:  req.InternetIngress,
+		Isolate:          req.Isolate,
+		IsolatePerTenant: req.IsolatePerTenant,
+		OOB:              req.OOB,
+		LifecycleRole:    req.LifecycleRole,
+	}
+	respBody, statusCode, err := s.doRequest(ctx, http.MethodPut, "/api/v1/sdn/zones/"+url.PathEscape(name), body)
+	if err != nil {
+		return nil, err
+	}
+	var resp restZoneResponse
+	if err := s.handleResponse(respBody, statusCode, &resp); err != nil {
+		return nil, err
+	}
+	return resp.toEntry(), nil
+}
+
+// DeleteZone deletes a network trust zone via REST DELETE /api/v1/sdn/zones/{name}.
+func (s *SDNRESTAdapter) DeleteZone(ctx context.Context, name string) (bool, error) {
+	respBody, statusCode, err := s.doRequest(ctx, http.MethodDelete, "/api/v1/sdn/zones/"+url.PathEscape(name), nil)
+	if err != nil {
+		return false, err
+	}
+	var resp restZoneDeleteResponse
+	if err := s.handleResponse(respBody, statusCode, &resp); err != nil {
+		return false, err
+	}
+	return resp.RestartRequired, nil
+}
+
+// ListZones returns all network trust zones via REST GET /api/v1/sdn/zones.
+func (s *SDNRESTAdapter) ListZones(ctx context.Context, lifecycleRole string) (*ZoneListResponse, error) {
+	path := "/api/v1/sdn/zones"
+	if lifecycleRole != "" {
+		path += "?lifecycle_role=" + url.QueryEscape(lifecycleRole)
+	}
+	respBody, statusCode, err := s.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var resp restZoneListResponse
+	if err := s.handleResponse(respBody, statusCode, &resp); err != nil {
+		return nil, err
+	}
+	zones := make([]ZoneEntry, 0, len(resp.Zones))
+	for _, z := range resp.Zones {
+		zones = append(zones, *z.toEntry())
+	}
+	return &ZoneListResponse{Zones: zones, TotalCount: resp.Count}, nil
+}
+
+// AssignZone assigns a network segment to a trust zone via REST PUT /api/v1/sdn/networks/{network}/zone.
+func (s *SDNRESTAdapter) AssignZone(ctx context.Context, network string, zoneName string) (bool, error) {
+	body := restZoneAssignRequest{Zone: zoneName}
+	respBody, statusCode, err := s.doRequest(ctx, http.MethodPut, "/api/v1/sdn/networks/"+url.PathEscape(network)+"/zone", body)
+	if err != nil {
+		return false, err
+	}
+	var resp restZoneAssignResponse
+	if err := s.handleResponse(respBody, statusCode, &resp); err != nil {
+		return false, err
+	}
+	return resp.RestartRequired, nil
 }
 
 // Ensure SDNRESTAdapter implements SDNTestAdapter interface.

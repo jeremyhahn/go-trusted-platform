@@ -72,7 +72,7 @@ first ACME connection can verify TLS before any cert has been issued.
   `eth6` + `eth7` (Supermicro X10 SFP+ ports).
 - **`trusted0`** is an Open vSwitch bridge created via native OVSDB
   `Transact` from `platformd::initOVSBridge`. The bridge is assigned
-  the production subnet's gateway IP (e.g. `10.200.0.1/24`) at
+  the trusted subnet's gateway IP (e.g. `10.200.0.1/24`) at
   `initBridgeIPs` time.
 - NIC member interfaces (`eth6`, `eth7`) are brought up as raw
   manual-configured interfaces in `/etc/network/interfaces`. OVS
@@ -105,7 +105,7 @@ Search-domain list is populated by the bootstrap orchestrator from
 
 | Name | VLAN | CIDR | Purpose |
 |------|------|------|---------|
-| production | 200 | 10.200.0.0/24 | Server-to-server east/west, CP/GW/compute |
+| trusted | 200 | 10.200.0.0/24 | Server-to-server east/west, CP/GW/compute |
 | provisioning | 201 | 10.201.0.0/24 | PXE boot, initial node setup |
 | quarantine | 202 | 10.202.0.0/24 | Isolated untrusted / failed nodes |
 | storage | 203 | 10.203.0.0/24 | Back-end storage traffic |
@@ -212,9 +212,9 @@ empty/absent role is semantically "general data plane".
 sdn:
   fabric:
     segments:
-      - name: production
+      - name: trusted
         vlan: 200
-        # no role — production is implicit general data plane
+        # no role — trusted is implicit general data plane
       - name: provisioning
         vlan: 201
         role: provisioning

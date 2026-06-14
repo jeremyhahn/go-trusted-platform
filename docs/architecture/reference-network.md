@@ -1,194 +1,227 @@
 # Reference Network Architecture
 
 This document defines the **reference network architecture** for go-trusted-platform. It describes
-the platform's network tiers, VLANs, addressing, device lifecycle, and management access — the
-same design across every deployment topology, from a single box to a high-availability cluster.
+the platform's **zone model**, addressing, device lifecycle, and management access — the same design
+across every deployment topology, from a single box to a high-availability cluster.
 
 > **Scope.** This reference covers the **platform tier only**. It is hardware-agnostic and makes no
 > assumptions about any surrounding site, office, or home network. Deployments that coexist with
-> other networks (shared switches, an enterprise LAN, a lab) keep those networks **entirely
-> separate** and document them in their own deployment docs — they are never part of this
-> reference. All VLAN numbers and subnets here are defaults and are fully configurable.
+> other networks keep those entirely separate and document them in their own deployment docs — they
+> are never part of this reference. All VLAN numbers and subnets here are defaults; everything is
+> configurable.
 
-## Design principles
+## The core idea: zones
 
-- **One scheme everywhere.** The VLAN/subnet design is identical for all topologies (Single-Node,
-  Three-Node, HA Cluster). Topologies differ only in node count and role placement — never in the
-  network design. This is what makes deployments standardized and predictable.
-- **Memorable mnemonic.** Platform VLANs live in the **200-series**, and **VLAN _N_ → `172.16.N.0/24`**
-  (e.g. VLAN 200 = `198.18.0.0/24`). You can derive the subnet from the VLAN and vice versa — no
-  lookup table.
-- **Three VLANs are enough to start.** PRODUCTION, PROVISIONING, and QUARANTINE deliver a working
-  trust lifecycle. Everything else (storage, DMZ, tenants) is **opt-in**.
-- **Zero-trust segmentation.** Every device proves identity before leaving provisioning. Tiers do
-  not route to each other implicitly; crossings happen only through enforced, authenticated points
-  (the gateway, and the management VPN).
+A network segment (a VLAN/subnet) and its **security policy** are two different things. Hardcoding
+"VLAN 200 = production" couples them and can't express "make *this* subnet public" or "have three
+trusted subnets." So the platform decouples them:
 
-## Network tiers & VLANs
+> A **zone** is a named trust/exposure classification that carries policy. **Subnets are assigned to
+> zones.** The platform derives *all* enforcement — SDN flow rules, firewall policy, compute
+> placement, DNS naming, identity, and compliance controls — from the **zone**, not the VLAN number.
 
-| VLAN | Name | Subnet | Always present? | Purpose |
-|-----:|------|--------|-----------------|---------|
-| 200 | PRODUCTION | 198.18.0.0/24 | ✅ | Enrolled, attested workloads (east-west; **no direct internet ingress**) |
-| 201 | PROVISIONING | 172.16.201.0/24 | ✅ | Onboarding — DHCP, iPXE/TFTP, DNS, ACME enrollment |
-| 202 | QUARANTINE | 172.16.202.0/24 | ✅ | Non-compliant / untrusted hosts — auth + remediation only |
-| 203 | STORAGE | 172.16.203.0/24 | optional | Workload/bulk storage tier (see [Storage](#storage)) |
-| 210 | DMZ | 172.16.210.0/24 | optional | Public-facing services (single-tier default; see below) |
-| 1000+ | TENANT | 172.17.0.0/16+ | optional | Multi-tenant isolated workloads |
-| 10 | TRANSIT | 172.16.0.0/24 (P2P /31s) | edge | Gateway ↔ upstream routers / BGP |
-| 50 | MANAGEMENT | deployment-defined | shared | Out-of-band IPMI/BMC/console — **separate NIC, never routes to data** |
-| 1 | DEFAULT | — | — | IEEE 802.1Q catch-all; carries no addressed network |
+You declare a subnet and its zone; the platform automatically applies that zone's policy everywhere.
+VLAN numbers become plain L2 segment identifiers with no inherent meaning.
 
-**Point-to-point links** use `172.16.0.0/24` carved into /31s (router↔router, router↔gateway,
-switch uplinks) — 128 links of capacity, kept out of the host subnets.
+### Zone taxonomy
 
-### PRODUCTION (200) vs DMZ (210) — the key distinction
+| Zone | Trust state | Exposure | Auto-applied policy |
+|------|-------------|----------|---------------------|
+| `provisioning` | onboarding (pre-trust) | none | DHCP / iPXE / TFTP / DNS / ACME only |
+| `quarantine` | untrusted / failed | none | auth + remediation only; fully isolated |
+| **`trusted`** | enrolled + attested + compliant | **internal** | east-west per device profile; **no internet ingress** |
+| **`public`** | enrolled + attested | **internet-facing** | internet ingress; **isolated from `trusted`** (defense-in-depth) |
+| `storage` | attested | internal | storage protocols only; isolated, high-bandwidth |
+| `tenant` | attested | isolated | per-tenant isolation (one micro-zone per tenant) |
+| `management` | n/a (shared OOB) | OOB | IPMI/BMC/console; **never routes to any data zone** |
 
-"Trusted" on the platform means **identity-trusted**: every node on PRODUCTION has proven its
-identity (IDevID certificate via ACME) and passed compliance. It does **not** mean "safe to expose
-to the internet."
+`trusted` (internal, protected) and `public` (internet-facing) are the two primary operational
+zones — the classic trusted/DMZ split. Both hold *enrolled, attested* hosts; the difference is
+**exposure**. `quarantine` and `provisioning` are the lifecycle zones; `storage`/`tenant`/
+`management` are special-purpose.
 
-- **PRODUCTION (200)** is internal east-west workloads. Nothing on the public internet reaches it
-  directly.
-- **DMZ (210)** is the controlled buffer where services that **must** accept inbound internet
-  traffic live (web front-ends, public APIs, load balancers, reverse proxies). It is isolated so
-  that a compromise of an internet-facing service **cannot pivot straight into PRODUCTION**.
+### Assigning subnets to zones
 
-Inbound flow: `Internet → Gateway (transit/NAT) → DMZ (210) → controlled hop → PRODUCTION (200) → STORAGE (203)`.
-The DMZ is **optional** — a deployment that exposes no public services omits it. When present, it
-defaults to a single VLAN (210); deployments needing defense-in-depth expand it to a three-tier
-web/app/db DMZ (210 PUBLIC / 211 PRIVATE / 212 DATA).
+```yaml
+networks:
+  - {name: corp,     subnet: 198.18.0.0/24, vlan: 200,  zone: trusted}
+  - {name: web,      subnet: 203.0.113.0/24,  vlan: 1000, zone: public}    # e.g. your public IP block
+  - {name: backups,  subnet: 172.16.203.0/24, vlan: 203,  zone: storage}
+  - {name: onboard,  subnet: 172.16.201.0/24, vlan: 201,  zone: provisioning}
+```
+
+Mark any subnet `public` or `trusted` (or any zone) and the platform wires up the matching policy.
+Multiple subnets may share a zone; a public IP block is simply a `zone: public` subnet — there is
+no special "edge" VLAN.
+
+## Inter-zone policy matrix
+
+Default is **deny** between zones; the platform installs these allowances:
+
+| From ↓ \ To → | trusted | public | storage | provisioning | quarantine | tenant | mgmt |
+|---------------|:-------:|:------:|:-------:|:------------:|:----------:|:------:|:----:|
+| **trusted** | allow (per profile) | declared service paths only | allow | — | — | — | — |
+| **public** | **deny** | allow | — | — | — | — | — |
+| **storage** | allow (clients) | — | allow | — | — | — | — |
+| **provisioning** | — | — | — | — | — | — | CP services only (DHCP/DNS/ACME) |
+| **quarantine** | — | — | — | — | — | — | auth + remediation only |
+| **tenant** | — | — | per-tenant | — | — | isolated per tenant | — |
+| Internet | — | **ingress → public** | — | — | — | — | — |
+
+Key rules: `public → trusted` is **denied** (a compromised internet-facing host cannot reach
+internal workloads); `trusted → public` is allowed only on declared service paths; `quarantine` and
+`provisioning` reach only the control-plane services they need; `management` is OOB and never
+touches a data zone.
+
+## Integration across the platform
+
+The zone is a single policy primitive enforced uniformly at every layer:
+
+- **SDN (OVS/OpenFlow):** every OVS port is tagged with its subnet's zone. Flow rules are generated
+  from **per-zone templates** (see [Flow rules](#flow-rules)) plus the inter-zone matrix above.
+- **Compute (VMs):** a device profile declares `zone:`; the platform places the VM on a subnet in
+  that zone and applies the zone policy to its vNIC (OVS port). Re-homing a workload = re-tag + re-place.
+- **Containers:** container networks map to zones (CNI / network-policy selector) — the same
+  identity model as VMs.
+- **Identity (zero-trust tie-in):** the workload's **IDevID / ACME certificate encodes its zone**
+  (X.509 extension and/or SAN naming). Policy can then follow *cryptographic identity*, not just IP
+  — a workload proves "I am in `trusted`" and the SDN enforces accordingly.
+- **DNS naming (convention, not coupling):** a host in zone _Z_ is named `<host>.Z.<domain>` and the
+  control-plane authoritative DNS auto-creates the per-zone subdomain. DNS **reflects** zone
+  membership for readability and discovery, but is **never the security boundary** — enforcement
+  lives in the SDN/identity layer, so DNS spoofing cannot grant access. Names and policy stay
+  aligned but independent.
+- **Compliance:** each zone is a control boundary — NIST **SC-7** (boundary protection between
+  zones), **SC-4** (tenant isolation), **AC-4** (the inter-zone flow matrix). Audit and report per zone.
+
+## Addressing
+
+Platform subnets default to `172.16.0.0/16` with the mnemonic **VLAN _N_ → `172.16.N.0/24`** for the
+well-known defaults. Under the zone model the VLAN number is just a segment ID; the zone carries the
+meaning, so the defaults are a convenience, not a constraint.
+
+| Default subnet | VLAN | Default zone |
+|----------------|-----:|--------------|
+| 198.18.0.0/24 | 200 | trusted |
+| 172.16.201.0/24 | 201 | provisioning |
+| 172.16.202.0/24 | 202 | quarantine |
+| 172.16.203.0/24 | 203 | storage |
+| 172.17.0.0/16+ | 1000+ | tenant |
+| (deployment public IP block) | — | public |
+| (deployment OOB net) | 50 | management |
+| 172.16.0.0/24 (/31s) | 10 | transit (gateway ↔ upstream/BGP) |
+
+`management` and `transit` are shared/edge concerns, not data zones. Point-to-point links use
+`172.16.0.0/24` carved into /31s.
 
 ## Deployment topologies
 
-The same VLAN scheme applies to all three. Node **roles** are Control Plane (platformd *server*
-mode: CA/ACME/IAM/KMS/DNS), Gateway (platformd *client* mode: DHCP/iPXE/DNS-forward/BGP/OVS/NAT),
-and Compute Worker (platformd *client* mode: QEMU/KVM + Podman workloads).
+Same zone model for all three. Node **roles**: Control Plane (platformd *server* mode:
+CA/ACME/IAM/KMS/DNS), Gateway (platformd *client* mode: DHCP/iPXE/DNS-forward/BGP/OVS/NAT, runs the
+zone flow rules), Compute Worker (platformd *client* mode: QEMU/KVM + Podman workloads).
 
-| Topology | Nodes | Roles | VLANs typically present |
+| Topology | Nodes | Roles | Zones typically present |
 |----------|-------|-------|-------------------------|
-| **Single-Node** | 1 | CP + Gateway + Worker on one box | 200/201/202 on one OVS bridge; 50 OOB; 10 only if it runs its own transit/BGP |
-| **Three-Node** | 3 | 1 CP (standalone, PebbleDB) · 1 Gateway · 1 Compute Worker | core 200/201/202 + 10 transit on the gateway; 203/210 optional |
-| **HA Cluster** | 7+ | 3 CP (Raft quorum) · 2 Gateway · 2+ Compute Worker | core + 203 STORAGE (resilient) + 210 DMZ (if public) + 1000+ TENANT (if multi-tenant) + 10 transit on both gateways |
+| **Single-Node** | 1 | CP + Gateway + Worker on one box | trusted, provisioning, quarantine on one OVS bridge |
+| **Three-Node** | 3 | 1 CP (standalone, PebbleDB) · 1 Gateway · 1 Compute Worker | + transit on the gateway; storage/public optional |
+| **HA Cluster** | 7+ | 3 CP (Raft quorum) · 2 Gateway · 2+ Compute Worker | + storage (resilient), public (if internet-facing), tenant (if multi-tenant) |
 
-Gateway **modes** (Overlay `0x01` / Edge `0x02` / Transit `0x04`) are independent feature toggles
-on gateway nodes — a gateway can run one or several at once. They do not change the VLAN design.
+Gateway **modes** (Overlay `0x01` / Edge `0x02` / Transit `0x04`) are independent feature toggles —
+e.g. Transit advertises a `public`-zone subnet via BGP. They don't change the zone model.
 
 ## Storage
 
-Distinguish two different things both called "storage":
+Two distinct things both called "storage":
 
-1. **Control-plane state** (CA, IAM, KMS, authoritative DNS): handled by the topology, not the
-   network. Single-Node and Three-Node use local PebbleDB on the control-plane node; HA replicates
-   it via **Raft-backed QuicBaaS** across the 3 control-plane nodes. This is *not* a network tier.
-2. **Workload / bulk storage** (VM disks, datasets, backups): served over the optional **STORAGE
-   tier (VLAN 203)**.
+1. **Control-plane state** (CA/IAM/KMS/DNS): handled by the topology, not the network — local
+   PebbleDB on the CP for Single/Three-Node; **Raft-backed QuicBaaS** across 3 CPs for HA. Not a zone.
+2. **Workload/bulk storage** (VM disks, datasets, backups): served over the **`storage` zone**.
 
-For workload storage, the **storage provider is a configurable role**, not a fixed placement:
+The workload-storage **provider is a configurable role**:
 
 | | Default | Options |
 |--|---------|---------|
-| **Single-Node** | Local disk (no storage network) | — |
-| **Three-Node** | Compute Worker uses **local** storage | Attach a **STORAGE tier (203)** backed by a NAS/SAN **or** a storage VM — **physical or virtual** |
-| **HA Cluster** | Resilient **STORAGE tier (203)** | **Dedicated** storage nodes **or** hyperconverged (replicated across Compute Workers) |
+| Single-Node | Local disk (no storage network) | — |
+| Three-Node | Compute Worker uses **local** storage | a `storage`-zone subnet backed by a NAS/SAN **or** a storage VM — physical or virtual |
+| HA Cluster | Resilient `storage` zone | **dedicated** storage nodes **or** hyperconverged (replicated across workers) |
 
-The provider may be **co-located or dedicated, physical or virtual**, bound in deployment config.
-The storage tier should ride a **dedicated 10GbE+ NIC** (VLANs isolate security, not bandwidth —
-backup traffic can otherwise saturate the production trunk). Keep workload-storage backends for
-different trust tiers on **separate disks/pools** — a shared datastore is a cross-tier data path
-even when the network is isolated.
+Co-located or dedicated, physical or virtual — bound in deployment config. Give the `storage` zone a
+**dedicated 10GbE+ NIC** (VLANs isolate security, not bandwidth). Keep storage backends for
+different trust zones on **separate disks/pools** — a shared datastore is a cross-zone data path
+even with the network isolated.
 
 ## Management access
 
-Two distinct management planes, neither of which implicitly bridges tiers:
+Two planes, neither implicitly bridging zones:
 
-1. **Out-of-band hardware (VLAN 50, shared):** IPMI/BMC/console for power, recovery, and console.
-   On a separate physical NIC; **must never route to any data VLAN**. Shared infrastructure not
-   owned by the platform.
-2. **Platform control plane → WireGuard admin VPN on the gateway.** Administrators reach the
-   platform's control/management endpoints (platformctl API, control plane) by bringing up an
-   authenticated **WireGuard** tunnel to a gateway node, landing in a small admin-VPN subnet that
-   gateway policy restricts to **management endpoints only** — not production workloads or storage.
-
-This means an operator workstation is **never dual-homed** onto a platform data VLAN. It stays on
-its own network and authenticates in through the one enforced, logged chokepoint. A compromise of
-the operator's network cannot reach the platform without also holding the WireGuard key and passing
-gateway policy. Gateway nodes SHOULD expose this WireGuard management endpoint by default.
+1. **Out-of-band hardware (`management` zone, shared):** IPMI/BMC/console on a separate NIC; never
+   routes to a data zone.
+2. **Platform control plane → WireGuard admin VPN on the gateway.** Admins reach control/management
+   endpoints through an authenticated WireGuard tunnel into a small admin subnet that gateway policy
+   restricts to management endpoints only. Operator workstations are **never dual-homed** onto a
+   data zone — they authenticate in through the one enforced, logged chokepoint. Gateways SHOULD
+   expose this endpoint by default.
 
 ## Device lifecycle
 
 ```
-   Device connects (untagged)
+   Device connects (untagged) ─► VLAN 1 DEFAULT (logged, unknown)
+        │ classified
+        ▼
+   provisioning zone ── DHCP/PXE/DNS/ACME ──► (OS installed, IDevID issued, zone stamped in cert)
         │
         ▼
-   VLAN 1 (DEFAULT) ── logged/monitored, unknown
-        │ classified for provisioning
-        ▼
-   VLAN 201 (PROVISIONING) ── DHCP, TFTP, DNS, HTTP(S), ACME
-        │ OS installed, ACME-enrolled (IDevID issued)
-        ▼
-   Production VLAN (per device profile)            ┌─ minor violation ─┐
-   - 200 PRODUCTION                                │   remediated      │
-   - 210–212 DMZ                                   └───────┬───────────┘
-   - 1000+ TENANT                                          ▲
-        │ severe violation        compliance failure       │
-        ▼                              ▼                    │
-   Port DOWN (BLOCKED)            VLAN 202 (QUARANTINE) ─────┘
-   zero network access           auth + remediation only
+   assigned to its zone per device profile        ┌─ minor violation → remediated ─┐
+   - trusted / public / storage / tenant          └──────────────┬─────────────────┘
+        │ severe violation     compliance failure                ▲
+        ▼                          ▼                              │
+   Port DOWN (BLOCKED)        quarantine zone ────────────────────┘
+   zero access                auth + remediation only
 ```
 
-**Blocked devices** are not placed in a "blocked VLAN" — the OVS port is administratively disabled
+**Blocked devices** are not put in a "blocked zone" — the OVS port is administratively disabled
 (`SetPortState(..., PortStateDown)`): zero access (not even ARP), no lateral movement, clear audit.
 
-## Flow rules (OVS / OpenFlow)
+## Flow rules (OVS / OpenFlow) — per-zone templates
 
-### Quarantine (VLAN 202) — minimal connectivity for auth/remediation
+Rules are generated per zone from templates; `<zone-vlan>` is the segment carrying that zone.
+
+### quarantine — auth/remediation only
 ```bash
-ovs-ofctl add-flow br0 "priority=900,in_port=<port>,dl_vlan=202,dl_type=0x0806,actions=normal"               # ARP
-ovs-ofctl add-flow br0 "priority=850,in_port=<port>,dl_vlan=202,udp,tp_src=68,tp_dst=67,actions=normal"      # DHCP
-ovs-ofctl add-flow br0 "priority=850,dl_vlan=202,udp,tp_src=67,tp_dst=68,actions=normal"
-ovs-ofctl add-flow br0 "priority=800,in_port=<port>,dl_vlan=202,udp,nw_dst=<dns_ip>,tp_dst=53,actions=normal" # DNS (internal only)
-ovs-ofctl add-flow br0 "priority=700,in_port=<port>,dl_vlan=202,tcp,nw_dst=<remediation_ip>,tp_dst=443,actions=normal"
-ovs-ofctl add-flow br0 "priority=100,in_port=<port>,dl_vlan=202,actions=drop"                                # default deny
+ovs-ofctl add-flow br0 "priority=900,in_port=<port>,dl_vlan=<quarantine>,dl_type=0x0806,actions=normal"               # ARP
+ovs-ofctl add-flow br0 "priority=850,in_port=<port>,dl_vlan=<quarantine>,udp,tp_src=68,tp_dst=67,actions=normal"      # DHCP
+ovs-ofctl add-flow br0 "priority=800,in_port=<port>,dl_vlan=<quarantine>,udp,nw_dst=<dns_ip>,tp_dst=53,actions=normal"
+ovs-ofctl add-flow br0 "priority=700,in_port=<port>,dl_vlan=<quarantine>,tcp,nw_dst=<remediation_ip>,tp_dst=443,actions=normal"
+ovs-ofctl add-flow br0 "priority=100,in_port=<port>,dl_vlan=<quarantine>,actions=drop"                                # default deny
 ```
 
-### Provisioning (VLAN 201) — PXE boot + certificate enrollment
+### provisioning — PXE + enrollment
 ```bash
-ovs-ofctl add-flow br0 "priority=900,in_port=<port>,dl_vlan=201,dl_type=0x0806,actions=normal"               # ARP
-ovs-ofctl add-flow br0 "priority=850,in_port=<port>,dl_vlan=201,udp,tp_src=68,tp_dst=67,actions=normal"      # DHCP
-ovs-ofctl add-flow br0 "priority=850,dl_vlan=201,udp,tp_src=67,tp_dst=68,actions=normal"
-ovs-ofctl add-flow br0 "priority=800,in_port=<port>,dl_vlan=201,udp,tp_dst=53,actions=normal"                # DNS
-ovs-ofctl add-flow br0 "priority=800,in_port=<port>,dl_vlan=201,tcp,tp_dst=53,actions=normal"
-ovs-ofctl add-flow br0 "priority=750,in_port=<port>,dl_vlan=201,udp,tp_dst=69,actions=normal"                # TFTP (PXE)
-ovs-ofctl add-flow br0 "priority=700,in_port=<port>,dl_vlan=201,tcp,nw_dst=<acme_ip>,tp_dst=443,actions=normal"  # ACME
-ovs-ofctl add-flow br0 "priority=650,in_port=<port>,dl_vlan=201,tcp,tp_dst=80,actions=normal"                # repos
-ovs-ofctl add-flow br0 "priority=650,in_port=<port>,dl_vlan=201,tcp,tp_dst=443,actions=normal"
-ovs-ofctl add-flow br0 "priority=50,in_port=<port>,dl_vlan=201,actions=drop"                                 # default deny
+ovs-ofctl add-flow br0 "priority=900,in_port=<port>,dl_vlan=<provisioning>,dl_type=0x0806,actions=normal"             # ARP
+ovs-ofctl add-flow br0 "priority=850,in_port=<port>,dl_vlan=<provisioning>,udp,tp_src=68,tp_dst=67,actions=normal"    # DHCP
+ovs-ofctl add-flow br0 "priority=800,in_port=<port>,dl_vlan=<provisioning>,udp,tp_dst=53,actions=normal"              # DNS
+ovs-ofctl add-flow br0 "priority=750,in_port=<port>,dl_vlan=<provisioning>,udp,tp_dst=69,actions=normal"              # TFTP
+ovs-ofctl add-flow br0 "priority=700,in_port=<port>,dl_vlan=<provisioning>,tcp,nw_dst=<acme_ip>,tp_dst=443,actions=normal"  # ACME
+ovs-ofctl add-flow br0 "priority=50,in_port=<port>,dl_vlan=<provisioning>,actions=drop"                               # default deny
 ```
 
-### Production / DMZ
+### trusted / public (inter-zone matrix)
 ```bash
-ovs-ofctl add-flow br0 "priority=100,in_port=<port>,dl_vlan=200,actions=normal"                              # production per-profile ACLs
-# Optional 3-tier DMZ: PRIVATE(211) accepts only PUBLIC(210); DATA(212) accepts only PRIVATE(211)
-ovs-ofctl add-flow br0 "priority=200,in_port=<port>,dl_vlan=211,ip,nw_src=172.16.210.0/24,actions=normal"
-ovs-ofctl add-flow br0 "priority=100,in_port=<port>,dl_vlan=211,actions=drop"
-ovs-ofctl add-flow br0 "priority=200,in_port=<port>,dl_vlan=212,ip,nw_src=172.16.211.0/24,actions=normal"
-ovs-ofctl add-flow br0 "priority=100,in_port=<port>,dl_vlan=212,actions=drop"
+ovs-ofctl add-flow br0 "priority=100,in_port=<port>,dl_vlan=<trusted>,actions=normal"                                 # trusted east-west per profile
+# public is isolated from trusted (defense-in-depth): only declared trusted→public service paths
+ovs-ofctl add-flow br0 "priority=200,dl_vlan=<public>,ip,nw_dst=<trusted_subnet>,actions=drop"                        # public ↛ trusted
+ovs-ofctl add-flow br0 "priority=100,in_port=<port>,dl_vlan=<public>,actions=normal"                                  # public ingress/egress
 ```
 
 ## Physical interface recommendations
 
-| Interface | VLANs | Purpose |
+| Interface | Zones | Purpose |
 |-----------|-------|---------|
-| NIC 0 (1+GbE) | VLAN 50 only | Out-of-band management (separate network) |
-| NIC 1 (10+GbE) | 200–212 (trunk) | Production + DMZ |
-| NIC 2–3 (10+GbE) | VLAN 203 only | Storage (bonded, dedicated high bandwidth) |
-
-VLANs isolate security, not bandwidth — all VLANs on a trunk share one pipe. Storage and the OOB
-management plane each warrant their own NIC.
+| NIC 0 (1+GbE) | `management` only | Out-of-band (separate network) |
+| NIC 1 (10+GbE) | trusted / public / provisioning / quarantine (trunk) | Data zones |
+| NIC 2–3 (10+GbE) | `storage` only | Storage (bonded, dedicated high bandwidth) |
 
 ## Configuration
-
-VLAN and subnet assignments are fully configurable; the values below are the reference defaults.
 
 ```yaml
 # /etc/trusted-platform/config.yaml
@@ -196,62 +229,63 @@ sdn:
   enabled: true
   bridge_name: "br0"
 
-  vlans:                 # defaults — override per deployment
-    production: 200
-    provisioning: 201
-    quarantine: 202
-    storage: 203         # optional tier
-    dmz: 210             # optional; expand to dmz_public/private/data for 3-tier
-    cloud_tenant_base: 1000
-    transit: 10
-    management: 50       # shared OOB (separate NIC)
+  # Zones carry policy; subnets are assigned to a zone.
+  zones:                 # built-in zones (extend as needed)
+    - {name: trusted,      internet_ingress: false}
+    - {name: public,       internet_ingress: true,  isolate_from: [trusted]}
+    - {name: provisioning, services: [dhcp, tftp, dns, acme]}
+    - {name: quarantine,   services: [auth, remediation]}
+    - {name: storage,      isolate: true}
+    - {name: tenant,       isolate_per_tenant: true}
+    - {name: management,   oob: true, route_to_data: false}
 
-  subnets:               # VLAN N -> 172.16.N.0/24
-    production:   "198.18.0.0/24"
-    provisioning: "172.16.201.0/24"
-    quarantine:   "172.16.202.0/24"
-    storage:      "172.16.203.0/24"
-    dmz:          "172.16.210.0/24"
-    p2p:          "172.16.0.0/24"     # /31 point-to-point links
+  networks:              # subnet -> zone (defaults shown)
+    - {name: trusted-default,      subnet: "198.18.0.0/24", vlan: 200,  zone: trusted}
+    - {name: provisioning-default, subnet: "172.16.201.0/24", vlan: 201,  zone: provisioning}
+    - {name: quarantine-default,   subnet: "172.16.202.0/24", vlan: 202,  zone: quarantine}
+    - {name: storage-default,      subnet: "172.16.203.0/24", vlan: 203,  zone: storage}
+    # public/tenant subnets are deployment-specific:
+    # - {name: web, subnet: "203.0.113.0/24", vlan: 1000, zone: public}
 
-  storage:
-    provider: local      # local | tier
-    placement: colocated # colocated | dedicated   (when provider: tier)
-    medium: virtual      # physical | virtual       (when provider: tier)
+  dns:
+    zone_subdomains: true            # <host>.<zone>.<domain>; reflects (does not enforce) zones
+  identity:
+    encode_zone_in_cert: true        # IDevID/ACME cert carries the zone (policy follows identity)
 
-  management_vpn:
-    enabled: true        # gateway WireGuard admin endpoint
-    type: wireguard
-    admin_subnet: "172.16.250.0/24"
-    allow_to: ["management"]   # least-privilege: control plane only
+  transit: {vlan: 10, p2p: "172.16.0.0/24"}
+  management_vpn: {enabled: true, type: wireguard, allow_to: [management]}
 
   services:
-    provisioning:
-      acme_server: "172.16.201.10"
-      dns_server:  "172.16.201.1"
-      dhcp_range:  "172.16.201.100-172.16.201.200"
-    quarantine:
-      remediation_server: "172.16.202.10"
-      dns_server: "172.16.202.1"
+    provisioning: {acme_server: "172.16.201.10", dns_server: "172.16.201.1", dhcp_range: "172.16.201.100-172.16.201.200"}
+    quarantine:   {remediation_server: "172.16.202.10", dns_server: "172.16.202.1"}
 ```
 
 ### Default constants
 
 ```go
-// pkg/sdn/vlan/defaults.go
+// pkg/sdn/zone/defaults.go
+type Zone string
 const (
-    DefaultProductionVLAN   = uint16(200)
+    ZoneTrusted      Zone = "trusted"       // internal, attested (was "production")
+    ZonePublic       Zone = "public"        // internet-facing, isolated from trusted
+    ZoneProvisioning Zone = "provisioning"
+    ZoneQuarantine   Zone = "quarantine"
+    ZoneStorage      Zone = "storage"
+    ZoneTenant       Zone = "tenant"
+    ZoneManagement   Zone = "management"    // shared OOB, separate NIC
+)
+
+// pkg/sdn/vlan/defaults.go — default segment IDs for the well-known zone subnets
+const (
+    DefaultTrustedVLAN      = uint16(200)
     DefaultProvisioningVLAN = uint16(201)
     DefaultQuarantineVLAN   = uint16(202)
-    DefaultStorageVLAN      = uint16(203)   // optional
-    DefaultDMZVLAN          = uint16(210)   // optional (single-tier default)
+    DefaultStorageVLAN      = uint16(203)
     DefaultCloudTenantBaseVLAN = uint16(1000)
     DefaultTransitVLAN      = uint16(10)
-    DefaultManagementVLAN   = uint16(50)    // shared OOB, separate NIC
-
-    DefaultVLAN = uint16(1)                 // IEEE 802.1Q default
-    MinVLANID   = uint16(1)
-    MaxVLANID   = uint16(4094)
+    DefaultManagementVLAN   = uint16(50)
+    DefaultVLAN = uint16(1)                 // IEEE 802.1Q default catch-all
+    MinVLANID, MaxVLANID = uint16(1), uint16(4094)
 )
 ```
 
@@ -260,10 +294,10 @@ config YAML → default constants**.
 
 ## Future considerations
 
-- **IPv6:** ULA `fd00::/8` for internal tiers, GUA for internet-facing services, dual-stack flow
-  rules, RA/DHCPv6 in PROVISIONING.
-- **Tenant scaling beyond ~3,000 VLANs:** VXLAN overlay (24-bit VNI) and per-tenant routing domains.
-- **External SDN controllers:** ONOS / OpenDaylight / NSX / Kubernetes network policies.
+- **IPv6:** ULA `fd00::/8` internal, GUA for `public`, dual-stack flow rules, RA/DHCPv6 in `provisioning`.
+- **Tenant scaling beyond ~3,000 VLANs:** VXLAN overlay (24-bit VNI), per-tenant routing domains.
+- **External SDN controllers:** ONOS / OpenDaylight / NSX / Kubernetes network policies — zones map
+  to their policy/identity primitives.
 
 ## Related documentation
 

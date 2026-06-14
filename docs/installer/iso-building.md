@@ -277,6 +277,62 @@ See `docs/installer/autoinstall.md` for implementation detail.
 
 ---
 
+## Network Zone Identity
+
+When a device profile is embedded into the ISO via `platformctl iso customize`
+(or `platformctl iso create` with a `--platform-config` that includes
+network phase configs), the ISO customizer bakes the SDN zone name into every
+network artifact so the installed OS knows its zone at firstboot without
+querying an external API.
+
+### Zone sources
+
+Each `NetworkPhaseConfig` in the device profile's `networks:` map carries an
+optional `zone:` field. For the trusted (post-enrollment) phase,
+`GetPostEnrollmentNetworkConfig()` applies the profile-level `zone:` field as
+a fallback when the per-network `zone:` is absent.
+
+### Baked artifacts
+
+`platformctl iso create` (via `pkg/iso.Customizer.EmbedDeviceProfileNetworkConfig`)
+writes the following zone-aware artifacts into the ISO overlay
+(`<overlay>/etc/platformd/network/`):
+
+| File | Content |
+|------|---------|
+| `provisioning.yaml` | `NetworkPhaseConfig` YAML; includes `zone:` when non-empty |
+| `trusted.yaml` | `NetworkPhaseConfig` YAML; includes `zone:` when non-empty |
+| `quarantine.yaml` | `NetworkPhaseConfig` YAML; includes `zone:` when non-empty |
+| `network.env` | Shell-sourceable env file; always declares `TP_NETWORK_ZONE` |
+
+The systemd-networkd stubs at `<overlay>/etc/systemd/network/10-eth0-<phase>.network`
+carry a comment header `# trusted-platform-zone: <zone>` when the zone is
+known (systemd-networkd has no native zone concept; the comment is the
+correct vehicle).
+
+### `TP_NETWORK_ZONE`
+
+`TP_NETWORK_ZONE` is set to the trusted zone name in
+`/etc/platformd/network/network.env`. This file is sourced by
+`trusted-platform-network.service` at firstboot. The value is the SDN zone
+the device operates in after successful enrollment (e.g. `"trusted"`).
+
+`TP_NETWORK_ZONE` is NOT a kernel cmdline parameter — it does not appear
+in the kernel cmdline and is not listed in `docs/reference/kernel-cmdline.md`.
+It reaches the running OS exclusively through the baked artifact and through
+the live API response (`zone` field in the trusted network phase JSON) fetched
+by `configs/os/trusted-platform-network.sh`.
+
+### Missing zone semantics
+
+When neither the `NetworkPhaseConfig.Zone` field nor the profile-level
+`DeviceProfile.Zone` carries a value, the baked `network.env` declares
+`TP_NETWORK_ZONE=""` (empty string). This is consistent with how missing VLAN
+IDs are emitted as `0` rather than treated as an error — no error is returned
+and the artifact is still written.
+
+---
+
 ## Makefile Integration
 
 For convenience, Makefile targets wrap the CLI commands:

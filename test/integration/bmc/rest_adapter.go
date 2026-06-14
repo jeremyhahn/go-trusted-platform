@@ -43,6 +43,15 @@ const (
 	bmcRESTBasePath = "/api/v1/bmc"
 )
 
+// restEnvelope is the server-side WebServiceResponse wrapper that surrounds
+// every payload returned by the daemon's REST API.
+type restEnvelope struct {
+	Code    int             `json:"code"`
+	Success bool            `json:"success"`
+	Error   string          `json:"error"`
+	Payload json.RawMessage `json:"payload"`
+}
+
 // =============================================================================
 // REST Adapter Implementation
 // =============================================================================
@@ -121,8 +130,21 @@ func (r *RESTAdapter) doGet(ctx context.Context, url string, result interface{})
 		return ErrRESTAPIError{StatusCode: resp.StatusCode, Message: string(body)}
 	}
 
-	if result != nil && len(body) > 0 {
-		if err := json.Unmarshal(body, result); err != nil {
+	if result == nil || len(body) == 0 {
+		return nil
+	}
+
+	var env restEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return ErrRESTRequestFailed{Err: err}
+	}
+
+	if env.Error != "" {
+		return ErrRESTAPIError{StatusCode: resp.StatusCode, Message: env.Error}
+	}
+
+	if len(env.Payload) > 0 {
+		if err := json.Unmarshal(env.Payload, result); err != nil {
 			return ErrRESTRequestFailed{Err: err}
 		}
 	}
@@ -159,8 +181,66 @@ func (r *RESTAdapter) doPost(ctx context.Context, url string, payload interface{
 		return ErrRESTAPIError{StatusCode: resp.StatusCode, Message: string(body)}
 	}
 
-	if result != nil && len(body) > 0 {
-		if err := json.Unmarshal(body, result); err != nil {
+	if result == nil || len(body) == 0 {
+		return nil
+	}
+
+	var env restEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return ErrRESTRequestFailed{Err: err}
+	}
+
+	if env.Error != "" {
+		return ErrRESTAPIError{StatusCode: resp.StatusCode, Message: env.Error}
+	}
+
+	if len(env.Payload) > 0 {
+		if err := json.Unmarshal(env.Payload, result); err != nil {
+			return ErrRESTRequestFailed{Err: err}
+		}
+	}
+
+	return nil
+}
+
+func (r *RESTAdapter) doDelete(ctx context.Context, url string, result interface{}) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return ErrRESTRequestFailed{Err: err}
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return ErrRESTConnectionFailed{URL: url, Err: err}
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ErrRESTRequestFailed{Err: err}
+	}
+
+	if resp.StatusCode >= 400 {
+		return ErrRESTAPIError{StatusCode: resp.StatusCode, Message: string(body)}
+	}
+
+	if result == nil || len(body) == 0 {
+		return nil
+	}
+
+	var env restEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return ErrRESTRequestFailed{Err: err}
+	}
+
+	if env.Error != "" {
+		return ErrRESTAPIError{StatusCode: resp.StatusCode, Message: env.Error}
+	}
+
+	if len(env.Payload) > 0 {
+		if err := json.Unmarshal(env.Payload, result); err != nil {
 			return ErrRESTRequestFailed{Err: err}
 		}
 	}
@@ -216,13 +296,13 @@ func (r *RESTAdapter) SetBootDevice(ctx context.Context, profileID uint64, devic
 		Persistent: persistent,
 	}
 	var resp restBootDeviceResponse
-	return r.doPost(ctx, r.bmcURL(profileID, "boot"), payload, &resp)
+	return r.doPost(ctx, r.bmcURL(profileID, "boot-device"), payload, &resp)
 }
 
 // GetBootDevice queries the current boot device via REST.
 func (r *RESTAdapter) GetBootDevice(ctx context.Context, profileID uint64) (bmcsvc.BootDevice, error) {
 	var resp restBootDeviceResponse
-	if err := r.doGet(ctx, r.bmcURL(profileID, "boot"), &resp); err != nil {
+	if err := r.doGet(ctx, r.bmcURL(profileID, "boot-device"), &resp); err != nil {
 		return bmcsvc.BootDeviceUnspecified, err
 	}
 	device, ok := bmcsvc.ParseBootDevice(resp.Device)
@@ -240,19 +320,19 @@ func (r *RESTAdapter) GetBootDevice(ctx context.Context, profileID uint64) (bmcs
 func (r *RESTAdapter) MountISO(ctx context.Context, profileID uint64, isoURL string) error {
 	payload := restMountMediaRequest{ISOURL: isoURL}
 	var resp restMediaActionResponse
-	return r.doPost(ctx, r.bmcURL(profileID, "media", "mount"), payload, &resp)
+	return r.doPost(ctx, r.bmcURL(profileID, "virtual-media"), payload, &resp)
 }
 
 // UnmountISO unmounts virtual media via REST.
 func (r *RESTAdapter) UnmountISO(ctx context.Context, profileID uint64) error {
 	var resp restMediaActionResponse
-	return r.doPost(ctx, r.bmcURL(profileID, "media", "unmount"), nil, &resp)
+	return r.doDelete(ctx, r.bmcURL(profileID, "virtual-media"), &resp)
 }
 
 // VirtualMediaStatus queries virtual media status via REST.
 func (r *RESTAdapter) VirtualMediaStatus(ctx context.Context, profileID uint64) (*bmcsvc.VirtualMediaInfo, error) {
 	var resp restMediaStatusResponse
-	if err := r.doGet(ctx, r.bmcURL(profileID, "media"), &resp); err != nil {
+	if err := r.doGet(ctx, r.bmcURL(profileID, "virtual-media"), &resp); err != nil {
 		return nil, err
 	}
 	return &bmcsvc.VirtualMediaInfo{
@@ -267,12 +347,12 @@ func (r *RESTAdapter) VirtualMediaStatus(ctx context.Context, profileID uint64) 
 
 // GetSensors queries sensor readings via REST.
 func (r *RESTAdapter) GetSensors(ctx context.Context, profileID uint64) ([]bmcsvc.SensorReading, error) {
-	var resp restSensorsResponse
+	var resp []restSensorReading
 	if err := r.doGet(ctx, r.bmcURL(profileID, "sensors"), &resp); err != nil {
 		return nil, err
 	}
-	sensors := make([]bmcsvc.SensorReading, len(resp.Sensors))
-	for i, s := range resp.Sensors {
+	sensors := make([]bmcsvc.SensorReading, len(resp))
+	for i, s := range resp {
 		sensors[i] = bmcsvc.SensorReading{
 			Name:   s.Name,
 			Value:  s.Value,
@@ -290,7 +370,7 @@ func (r *RESTAdapter) GetSensors(ctx context.Context, profileID uint64) ([]bmcsv
 // GetSystemInfo queries system information via REST.
 func (r *RESTAdapter) GetSystemInfo(ctx context.Context, profileID uint64) (*bmcsvc.SystemInfo, error) {
 	var resp restSystemInfoResponse
-	if err := r.doGet(ctx, r.bmcURL(profileID, "system"), &resp); err != nil {
+	if err := r.doGet(ctx, r.bmcURL(profileID, "system-info"), &resp); err != nil {
 		return nil, err
 	}
 	powerState, _ := bmcsvc.ParsePowerState(resp.PowerState)
@@ -323,13 +403,13 @@ func (r *RESTAdapter) GetWebCertificate(ctx context.Context, profileID uint64) (
 
 // ListUsers lists BMC users via REST.
 func (r *RESTAdapter) ListUsers(ctx context.Context, profileID uint64) ([]bmcsvc.User, error) {
-	var resp restUsersResponse
+	var resp []restUserInfo
 	if err := r.doGet(ctx, r.bmcURL(profileID, "users"), &resp); err != nil {
 		return nil, err
 	}
-	users := make([]bmcsvc.User, len(resp.Users))
-	for i, u := range resp.Users {
-		priv, _ := bmcsvc.ParsePrivilege(u.Privilege)
+	users := make([]bmcsvc.User, len(resp))
+	for i, u := range resp {
+		priv, _ := bmcsvc.ParsePrivilege(ipmiPrivilegeName(u.Privilege))
 		users[i] = bmcsvc.User{
 			Slot:      u.Slot,
 			Username:  u.Username,
@@ -500,11 +580,30 @@ type restSystemInfoResponse struct {
 }
 
 type restUserInfo struct {
-	Slot      uint32 `json:"slot"`
-	Username  string `json:"username"`
-	Enabled   bool   `json:"enabled"`
-	Privilege string `json:"privilege"`
+	Slot     uint32 `json:"slot"`
+	Username string `json:"username"`
+	Enabled  bool   `json:"enabled"`
+	// Privilege is the IPMI privilege enum value as serialized by the daemon
+	// (uint8: 4=administrator, 3=operator, 2=user, 1=callback, else no-access).
+	Privilege uint8  `json:"privilege"`
 	Channel   uint32 `json:"channel"`
+}
+
+// ipmiPrivilegeName maps the IPMI privilege enum value to the canonical
+// lowercase name accepted by bmcsvc.ParsePrivilege.
+func ipmiPrivilegeName(p uint8) string {
+	switch p {
+	case 4:
+		return "administrator"
+	case 3:
+		return "operator"
+	case 2:
+		return "user"
+	case 1:
+		return "callback"
+	default:
+		return "no-access"
+	}
 }
 
 type restUsersResponse struct {

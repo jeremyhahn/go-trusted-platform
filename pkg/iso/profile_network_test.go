@@ -32,6 +32,7 @@ func TestNetworkConfigGenerator(t *testing.T) {
 		Networks: map[string]*entities.NetworkPhaseConfig{
 			entities.DefaultEnrollmentNetwork: {
 				VLAN:    100,
+				Zone:    "provisioning",
 				Gateway: "10.0.100.1",
 				DNS:     []string{"10.0.100.2", "10.0.100.3"},
 				DHCPPool: &entities.DHCPPoolConfig{
@@ -54,6 +55,7 @@ func TestNetworkConfigGenerator(t *testing.T) {
 			},
 			entities.DefaultPostEnrollmentNetwork: {
 				VLAN:       200,
+				Zone:       "trusted",
 				StaticIP:   "10.0.200.50/24",
 				Gateway:    "10.0.200.1",
 				DNS:        []string{"10.0.200.2"},
@@ -61,6 +63,7 @@ func TestNetworkConfigGenerator(t *testing.T) {
 			},
 			entities.DefaultFailureNetwork: {
 				VLAN:    300,
+				Zone:    "quarantine",
 				Gateway: "10.0.300.1",
 				DNS:     []string{"10.0.300.2"},
 			},
@@ -73,6 +76,7 @@ func TestNetworkConfigGenerator(t *testing.T) {
 
 		require.NotNil(t, config)
 		assert.Equal(t, uint16(100), config.VLAN)
+		assert.Equal(t, "provisioning", config.Zone)
 		assert.Equal(t, "10.0.100.1", config.Gateway)
 		assert.Len(t, config.DNS, 2)
 		assert.Contains(t, config.DNS, "10.0.100.2")
@@ -92,12 +96,13 @@ func TestNetworkConfigGenerator(t *testing.T) {
 		assert.Equal(t, uint16(443), config.ACLs[0].DstPort)
 	})
 
-	t.Run("Generate production config", func(t *testing.T) {
+	t.Run("Generate trusted config", func(t *testing.T) {
 		gen := NewNetworkConfigGenerator(profile)
-		config := gen.GenerateProductionConfig()
+		config := gen.GenerateTrustedConfig()
 
 		require.NotNil(t, config)
 		assert.Equal(t, uint16(200), config.VLAN)
+		assert.Equal(t, "trusted", config.Zone)
 		assert.Equal(t, "10.0.200.50/24", config.StaticIP)
 		assert.Equal(t, "10.0.200.1", config.Gateway)
 		assert.Len(t, config.DNS, 1)
@@ -111,17 +116,9 @@ func TestNetworkConfigGenerator(t *testing.T) {
 
 		require.NotNil(t, config)
 		assert.Equal(t, uint16(300), config.VLAN)
+		assert.Equal(t, "quarantine", config.Zone)
 		assert.Equal(t, "10.0.300.1", config.Gateway)
 		assert.Len(t, config.DNS, 1)
-	})
-
-	t.Run("Extract VLANs", func(t *testing.T) {
-		gen := NewNetworkConfigGenerator(profile)
-		vlans := gen.ExtractVLANs()
-
-		assert.Equal(t, uint16(100), vlans.Provisioning)
-		assert.Equal(t, uint16(200), vlans.Production)
-		assert.Equal(t, uint16(300), vlans.Quarantine)
 	})
 
 	t.Run("Extract ACLs", func(t *testing.T) {
@@ -138,7 +135,7 @@ func TestNetworkConfigGenerator(t *testing.T) {
 		gen := NewNetworkConfigGenerator(nil)
 
 		assert.Nil(t, gen.GenerateProvisioningConfig())
-		assert.Nil(t, gen.GenerateProductionConfig())
+		assert.Nil(t, gen.GenerateTrustedConfig())
 		assert.Nil(t, gen.GenerateQuarantineConfig())
 	})
 
@@ -150,15 +147,16 @@ func TestNetworkConfigGenerator(t *testing.T) {
 		gen := NewNetworkConfigGenerator(emptyProfile)
 
 		assert.Nil(t, gen.GenerateProvisioningConfig())
-		assert.Nil(t, gen.GenerateProductionConfig())
+		assert.Nil(t, gen.GenerateTrustedConfig())
 		assert.Nil(t, gen.GenerateQuarantineConfig())
 	})
 }
 
 func TestSystemdNetworkdConfigGenerator(t *testing.T) {
-	t.Run("Generate static IP config", func(t *testing.T) {
+	t.Run("Generate static IP config with zone comment", func(t *testing.T) {
 		config := &entities.NetworkPhaseConfig{
 			VLAN:     200,
+			Zone:     "trusted",
 			StaticIP: "10.0.200.50/24",
 			Gateway:  "10.0.200.1",
 			DNS:      []string{"10.0.200.2", "10.0.200.3"},
@@ -168,6 +166,8 @@ func TestSystemdNetworkdConfigGenerator(t *testing.T) {
 		output := gen.Generate(config)
 
 		assert.NotEmpty(t, output)
+		// Zone comment must appear before Match section.
+		assert.Contains(t, output, "# trusted-platform-zone: trusted")
 		assert.Contains(t, output, "[Match]")
 		assert.Contains(t, output, "Name=eth0")
 		assert.Contains(t, output, "[Network]")
@@ -177,6 +177,20 @@ func TestSystemdNetworkdConfigGenerator(t *testing.T) {
 		assert.Contains(t, output, "DNS=10.0.200.3")
 		assert.Contains(t, output, "[VLAN]")
 		assert.Contains(t, output, "Id=200")
+	})
+
+	t.Run("Generate config without zone emits no comment", func(t *testing.T) {
+		config := &entities.NetworkPhaseConfig{
+			VLAN:     200,
+			StaticIP: "10.0.200.50/24",
+			Gateway:  "10.0.200.1",
+		}
+
+		gen := NewSystemdNetworkdConfigGenerator("eth0")
+		output := gen.Generate(config)
+
+		assert.NotContains(t, output, "trusted-platform-zone")
+		assert.Contains(t, output, "[Match]")
 	})
 
 	t.Run("Generate DHCP config", func(t *testing.T) {
@@ -229,8 +243,8 @@ func TestSystemdNetworkdConfigGenerator(t *testing.T) {
 		filename := gen.GenerateFilename("provisioning")
 		assert.Equal(t, "10-eth0-provisioning.network", filename)
 
-		filename = gen.GenerateFilename("production")
-		assert.Equal(t, "10-eth0-production.network", filename)
+		filename = gen.GenerateFilename("trusted")
+		assert.Equal(t, "10-eth0-trusted.network", filename)
 	})
 
 	t.Run("Nil config returns empty string", func(t *testing.T) {
@@ -368,17 +382,20 @@ func TestNetworkConfigWriter(t *testing.T) {
 		Networks: map[string]*entities.NetworkPhaseConfig{
 			entities.DefaultEnrollmentNetwork: {
 				VLAN:    100,
+				Zone:    "provisioning",
 				Gateway: "10.0.100.1",
 				DNS:     []string{"10.0.100.2"},
 			},
 			entities.DefaultPostEnrollmentNetwork: {
 				VLAN:     200,
+				Zone:     "trusted",
 				StaticIP: "10.0.200.50/24",
 				Gateway:  "10.0.200.1",
 				DNS:      []string{"10.0.200.2"},
 			},
 			entities.DefaultFailureNetwork: {
 				VLAN:    300,
+				Zone:    "quarantine",
 				Gateway: "10.0.300.1",
 			},
 		},
@@ -403,14 +420,17 @@ func TestNetworkConfigWriter(t *testing.T) {
 		provPath := writer.GetProvisioningConfigPath()
 		assert.Equal(t, filepath.Join(tmpDir, "etc", "platformd", "network", "provisioning.yaml"), provPath)
 
-		prodPath := writer.GetProductionConfigPath()
-		assert.Equal(t, filepath.Join(tmpDir, "etc", "platformd", "network", "production.yaml"), prodPath)
+		prodPath := writer.GetTrustedConfigPath()
+		assert.Equal(t, filepath.Join(tmpDir, "etc", "platformd", "network", "trusted.yaml"), prodPath)
 
 		quarPath := writer.GetQuarantineConfigPath()
 		assert.Equal(t, filepath.Join(tmpDir, "etc", "platformd", "network", "quarantine.yaml"), quarPath)
 
 		apiPath := writer.GetPlatformAPIConfigPath()
 		assert.Equal(t, filepath.Join(tmpDir, "etc", "platformd", "network", "platform-api.yaml"), apiPath)
+
+		envPath := writer.GetNetworkEnvPath()
+		assert.Equal(t, filepath.Join(tmpDir, "etc", "platformd", "network", "network.env"), envPath)
 	})
 
 	t.Run("Writer with nil profile", func(t *testing.T) {
@@ -451,32 +471,157 @@ func TestPlatformAPIConfig(t *testing.T) {
 	})
 }
 
-func TestVLANSet(t *testing.T) {
-	t.Run("Create VLAN set", func(t *testing.T) {
-		vlans := VLANSet{
-			Provisioning: 100,
-			Production:   200,
-			Quarantine:   300,
+// TestZoneNetworkSet verifies ZoneNetworkSet population from device profiles.
+func TestZoneNetworkSet(t *testing.T) {
+	t.Run("Explicit zones in all phases", func(t *testing.T) {
+		profile := &entities.DeviceProfile{
+			ID:   1,
+			Name: "full-zones",
+			Networks: map[string]*entities.NetworkPhaseConfig{
+				entities.DefaultEnrollmentNetwork: {
+					VLAN: 100,
+					Zone: "provisioning",
+				},
+				entities.DefaultPostEnrollmentNetwork: {
+					VLAN: 200,
+					Zone: "trusted",
+				},
+				entities.DefaultFailureNetwork: {
+					VLAN: 300,
+					Zone: "quarantine",
+				},
+			},
 		}
 
-		assert.Equal(t, uint16(100), vlans.Provisioning)
-		assert.Equal(t, uint16(200), vlans.Production)
-		assert.Equal(t, uint16(300), vlans.Quarantine)
+		gen := NewNetworkConfigGenerator(profile)
+		set := gen.ExtractZoneNetworks()
+
+		assert.Equal(t, "provisioning", set.Provisioning.Zone)
+		assert.Equal(t, "provisioning", set.Provisioning.Name)
+		assert.Equal(t, uint16(100), set.Provisioning.VLAN)
+
+		assert.Equal(t, "trusted", set.Trusted.Zone)
+		assert.Equal(t, "trusted", set.Trusted.Name)
+		assert.Equal(t, uint16(200), set.Trusted.VLAN)
+
+		assert.Equal(t, "quarantine", set.Quarantine.Zone)
+		assert.Equal(t, "quarantine", set.Quarantine.Name)
+		assert.Equal(t, uint16(300), set.Quarantine.VLAN)
 	})
 
-	t.Run("Zero VLAN values", func(t *testing.T) {
-		vlans := VLANSet{}
+	t.Run("Profile-level zone fallback for trusted phase", func(t *testing.T) {
+		// The profile.Zone field is the fallback when the per-network Zone is
+		// empty. GetPostEnrollmentNetworkConfig applies this fallback.
+		profile := &entities.DeviceProfile{
+			ID:   2,
+			Name: "profile-zone-fallback",
+			Zone: "ops",
+			Networks: map[string]*entities.NetworkPhaseConfig{
+				entities.DefaultPostEnrollmentNetwork: {
+					VLAN: 200,
+					// Zone intentionally empty — should inherit from profile.Zone
+				},
+			},
+		}
 
-		assert.Equal(t, uint16(0), vlans.Provisioning)
-		assert.Equal(t, uint16(0), vlans.Production)
-		assert.Equal(t, uint16(0), vlans.Quarantine)
+		gen := NewNetworkConfigGenerator(profile)
+		set := gen.ExtractZoneNetworks()
+
+		assert.Equal(t, "ops", set.Trusted.Zone)
+		assert.Equal(t, "trusted", set.Trusted.Name)
+		assert.Equal(t, uint16(200), set.Trusted.VLAN)
+	})
+
+	t.Run("Missing zone yields empty string not an error", func(t *testing.T) {
+		// No zone on the network config and no profile.Zone — consistent with
+		// how missing VLANs yield zero (no error).
+		profile := &entities.DeviceProfile{
+			ID:   3,
+			Name: "no-zones",
+			Networks: map[string]*entities.NetworkPhaseConfig{
+				entities.DefaultEnrollmentNetwork: {VLAN: 100},
+				entities.DefaultPostEnrollmentNetwork: {VLAN: 200},
+				entities.DefaultFailureNetwork: {VLAN: 300},
+			},
+		}
+
+		gen := NewNetworkConfigGenerator(profile)
+		set := gen.ExtractZoneNetworks()
+
+		assert.Empty(t, set.Provisioning.Zone)
+		assert.Equal(t, uint16(100), set.Provisioning.VLAN)
+		assert.Empty(t, set.Trusted.Zone)
+		assert.Equal(t, uint16(200), set.Trusted.VLAN)
+		assert.Empty(t, set.Quarantine.Zone)
+		assert.Equal(t, uint16(300), set.Quarantine.VLAN)
+	})
+
+	t.Run("Custom enrollment and post-enrollment network names", func(t *testing.T) {
+		profile := &entities.DeviceProfile{
+			ID:                    4,
+			Name:                  "custom-names",
+			EnrollmentNetwork:     "onboarding",
+			PostEnrollmentNetwork: "production",
+			Networks: map[string]*entities.NetworkPhaseConfig{
+				"onboarding": {VLAN: 101, Zone: "onboarding"},
+				"production": {VLAN: 201, Zone: "production"},
+			},
+		}
+
+		gen := NewNetworkConfigGenerator(profile)
+		set := gen.ExtractZoneNetworks()
+
+		assert.Equal(t, "onboarding", set.Provisioning.Name)
+		assert.Equal(t, "onboarding", set.Provisioning.Zone)
+		assert.Equal(t, uint16(101), set.Provisioning.VLAN)
+
+		assert.Equal(t, "production", set.Trusted.Name)
+		assert.Equal(t, "production", set.Trusted.Zone)
+		assert.Equal(t, uint16(201), set.Trusted.VLAN)
+	})
+
+	t.Run("Nil profile returns empty ZoneNetworkSet", func(t *testing.T) {
+		gen := NewNetworkConfigGenerator(nil)
+		set := gen.ExtractZoneNetworks()
+
+		assert.Empty(t, set.Provisioning.Zone)
+		assert.Empty(t, set.Provisioning.Name)
+		assert.Equal(t, uint16(0), set.Provisioning.VLAN)
+		assert.Empty(t, set.Trusted.Zone)
+		assert.Empty(t, set.Trusted.Name)
+		assert.Equal(t, uint16(0), set.Trusted.VLAN)
+		assert.Empty(t, set.Quarantine.Zone)
+		assert.Empty(t, set.Quarantine.Name)
+		assert.Equal(t, uint16(0), set.Quarantine.VLAN)
+	})
+
+	t.Run("Missing networks yields name-only ZoneNetwork entries", func(t *testing.T) {
+		// Profile defined but no Networks entries — each ZoneNetwork should
+		// carry the default name but zero VLAN and empty zone.
+		profile := &entities.DeviceProfile{ID: 5, Name: "empty-networks"}
+
+		gen := NewNetworkConfigGenerator(profile)
+		set := gen.ExtractZoneNetworks()
+
+		assert.Equal(t, entities.DefaultEnrollmentNetwork, set.Provisioning.Name)
+		assert.Empty(t, set.Provisioning.Zone)
+		assert.Equal(t, uint16(0), set.Provisioning.VLAN)
+
+		assert.Equal(t, entities.DefaultPostEnrollmentNetwork, set.Trusted.Name)
+		assert.Empty(t, set.Trusted.Zone)
+		assert.Equal(t, uint16(0), set.Trusted.VLAN)
+
+		assert.Equal(t, entities.DefaultFailureNetwork, set.Quarantine.Name)
+		assert.Empty(t, set.Quarantine.Zone)
+		assert.Equal(t, uint16(0), set.Quarantine.VLAN)
 	})
 }
 
-// TestNetworkConfigDeepCopy verifies that copyNetworkConfig creates independent copies
+// TestNetworkConfigDeepCopy verifies that copyNetworkConfig creates independent copies.
 func TestNetworkConfigDeepCopy(t *testing.T) {
 	original := &entities.NetworkPhaseConfig{
 		VLAN:    100,
+		Zone:    "provisioning",
 		Gateway: "10.0.100.1",
 		DNS:     []string{"10.0.100.2", "10.0.100.3"},
 		DHCPPool: &entities.DHCPPoolConfig{
@@ -501,6 +646,7 @@ func TestNetworkConfigDeepCopy(t *testing.T) {
 
 	// Modify copy
 	copied.VLAN = 999
+	copied.Zone = "modified"
 	copied.Gateway = "192.168.1.1"
 	copied.DNS[0] = "8.8.8.8"
 	copied.DHCPPool.LeaseTime = 7200
@@ -508,13 +654,14 @@ func TestNetworkConfigDeepCopy(t *testing.T) {
 
 	// Verify original is unchanged
 	assert.Equal(t, uint16(100), original.VLAN)
+	assert.Equal(t, "provisioning", original.Zone)
 	assert.Equal(t, "10.0.100.1", original.Gateway)
 	assert.Equal(t, "10.0.100.2", original.DNS[0])
 	assert.Equal(t, 3600, original.DHCPPool.LeaseTime)
 	assert.Equal(t, 100, original.ACLs[0].Priority)
 }
 
-// TestACLExtraction verifies ACL extraction from network configs
+// TestACLExtraction verifies ACL extraction from network configs.
 func TestACLExtraction(t *testing.T) {
 	t.Run("Extract valid ACLs", func(t *testing.T) {
 		config := &entities.NetworkPhaseConfig{
@@ -567,7 +714,7 @@ func TestACLExtraction(t *testing.T) {
 	})
 }
 
-// TestErrorHandling verifies error conditions are handled properly
+// TestErrorHandling verifies error conditions are handled properly.
 func TestErrorHandling(t *testing.T) {
 	t.Run("Empty interface name for systemd-networkd", func(t *testing.T) {
 		gen := NewSystemdNetworkdConfigGenerator("")

@@ -52,8 +52,12 @@ type DeviceProfileDAO interface {
 type DeviceDAO interface {
 	datastore.GenericDAO[*entities.Device]
 
-	// FindBySerial finds a device by its serial number
+	// FindBySerial finds a device by its serial number.
 	FindBySerial(ctx context.Context, serial string) (*entities.Device, error)
+
+	// FindByHostname finds a device by its IDevID hostname (CN). Returns
+	// ErrNotFoundByIndex when no matching record exists.
+	FindByHostname(ctx context.Context, hostname string) (*entities.Device, error)
 }
 
 // DeviceTemplateDAO provides data access operations for device templates.

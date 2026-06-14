@@ -49,6 +49,11 @@ type Pool struct {
 	CIDR netip.Prefix `json:"cidr"`
 	// Gateway is the optional gateway address for this pool.
 	Gateway netip.Addr `json:"gateway,omitempty"`
+	// Zone is the trust/exposure zone for this pool (e.g. "trusted",
+	// "provisioning", "management"). Empty means no zone classification.
+	// Inherited from the network that references this pool when not set
+	// explicitly in the pool config.
+	Zone string `json:"zone,omitempty"`
 	// Description provides optional context about the pool's purpose.
 	Description string `json:"description,omitempty"`
 	// Tags are optional labels for categorizing and filtering pools.
@@ -93,6 +98,9 @@ type Allocation struct {
 	ID string `json:"id"`
 	// PoolID is the ID of the pool this allocation belongs to.
 	PoolID string `json:"pool_id"`
+	// Zone is the trust zone of the pool at the time of allocation.
+	// Stamped from Pool.Zone when the allocation is created.
+	Zone string `json:"zone,omitempty"`
 	// IP is the allocated IP address.
 	IP netip.Addr `json:"ip"`
 	// DeviceID is the identifier of the device holding this allocation.
@@ -155,6 +163,9 @@ func (a *Allocation) IsActive() bool {
 type AllocationRequest struct {
 	// PoolID is the ID of the pool to allocate from.
 	PoolID string `json:"pool_id"`
+	// Zone is an optional zone filter. When non-empty the allocator verifies
+	// that the target pool's zone matches before allocating.
+	Zone string `json:"zone,omitempty"`
 	// DeviceID is the identifier of the device requesting the allocation.
 	DeviceID string `json:"device_id"`
 	// Hostname is the optional hostname to associate with the allocation.

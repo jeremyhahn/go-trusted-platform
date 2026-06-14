@@ -476,8 +476,19 @@ func (r *RESTAdapter) IssueCertificate(ctx context.Context, opts IssueCertificat
 // =============================================================================
 
 // GetCertificate retrieves a certificate via REST.
+// When only CommonName is provided (Serial empty), the CN is used as the path
+// identifier because the server's findCertificateBySerial accepts both serial
+// numbers and common names.
 func (r *RESTAdapter) GetCertificate(ctx context.Context, opts GetCertificateOptions) (*GetCertificateResult, error) {
-	path := fmt.Sprintf("/api/v1/ca/certificates/%s", url.PathEscape(opts.Serial))
+	identifier := opts.Serial
+	if identifier == "" {
+		identifier = opts.CommonName
+	}
+	if identifier == "" {
+		return nil, ErrCallFailed{Protocol: "REST", Method: "GetCertificate", Err: ErrInvalidSerial{Serial: "<empty>"}}
+	}
+
+	path := fmt.Sprintf("/api/v1/ca/certificates/%s", url.PathEscape(identifier))
 	if opts.IncludePEM {
 		path += "?include_pem=true"
 	}

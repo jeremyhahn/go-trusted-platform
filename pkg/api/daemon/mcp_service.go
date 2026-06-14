@@ -26,8 +26,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -41,7 +44,11 @@ import (
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
@@ -70,6 +77,9 @@ type MCPServiceProviderConfig struct {
 	EABService           EABServicer
 	EABDelivery          EABDeliveryServicer
 	BMCEnroller          BMCEnroller
+	ZoneService          gateway.ZoneService
+	SDNNetworks          []sdn.NetworkConfig
+	IPAMService          ipam.Allocator
 }
 
 // MCPServiceProvider implements mcp.ServiceProvider by bridging to daemon services.
@@ -98,6 +108,9 @@ type MCPServiceProvider struct {
 	bmcEnroller          BMCEnroller
 	bmcRestorer          BMCRestorer
 	phase35              phase35State
+	zoneService          gateway.ZoneService
+	sdnNetworks          []sdn.NetworkConfig
+	ipamService          ipam.Allocator
 	logger               *slog.Logger
 }
 
@@ -130,6 +143,9 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		invitationService:    config.InvitationService,
 		eabService:           config.EABService,
 		eabDelivery:          config.EABDelivery,
+		zoneService:          config.ZoneService,
+		sdnNetworks:          config.SDNNetworks,
+		ipamService:          config.IPAMService,
 		logger:               logger,
 	}
 }
@@ -3501,34 +3517,276 @@ func (m *MCPServiceProvider) GatewayBGPPrefixes(ctx context.Context) ([]interfac
 	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayBGPPrefixes"}
 }
 
-// GatewayIPAMPools lists all IPAM pools.
-func (m *MCPServiceProvider) GatewayIPAMPools(ctx context.Context) ([]interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMPools"}
+// requireIPAMService returns an error when the IPAM allocator is not configured.
+func (m *MCPServiceProvider) requireIPAMService() error {
+	if m.ipamService == nil {
+		return ErrServiceNotAvailable{Service: "ipam"}
+	}
+	return nil
+}
+
+// GatewayIPAMPools lists IPAM pools, optionally filtered by zone.
+func (m *MCPServiceProvider) GatewayIPAMPools(ctx context.Context, filterZone string) ([]interface{}, error) {
+	if err := m.requireIPAMService(); err != nil {
+		return nil, err
+	}
+	var pools []*ipam.Pool
+	var err error
+	if filterZone != "" {
+		pools, err = m.ipamService.ListPoolsByZone(ctx, filterZone)
+	} else {
+		pools, err = m.ipamService.ListPools(ctx)
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := make([]interface{}, 0, len(pools))
+	for _, p := range pools {
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// GatewayIPAMPoolGet retrieves a single IPAM pool by ID.
+func (m *MCPServiceProvider) GatewayIPAMPoolGet(ctx context.Context, poolID string) (interface{}, error) {
+	if err := m.requireIPAMService(); err != nil {
+		return nil, err
+	}
+	return m.ipamService.GetPool(ctx, poolID)
 }
 
 // GatewayIPAMAllocate allocates an IP address from a pool.
 func (m *MCPServiceProvider) GatewayIPAMAllocate(ctx context.Context, poolID string, deviceID string, hostname string) (interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMAllocate"}
+	if err := m.requireIPAMService(); err != nil {
+		return nil, err
+	}
+	alloc, err := m.ipamService.Allocate(ctx, &ipam.AllocationRequest{
+		PoolID:   poolID,
+		DeviceID: deviceID,
+		Hostname: hostname,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return alloc, nil
 }
 
 // GatewayIPAMRelease releases an IP address back to the pool.
-func (m *MCPServiceProvider) GatewayIPAMRelease(ctx context.Context, ip string) error {
-	return ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMRelease"}
+func (m *MCPServiceProvider) GatewayIPAMRelease(ctx context.Context, ipStr string) error {
+	if err := m.requireIPAMService(); err != nil {
+		return err
+	}
+	addr, parseErr := netip.ParseAddr(ipStr)
+	if parseErr != nil {
+		return fmt.Errorf("invalid ip address %q: %w", ipStr, parseErr)
+	}
+	return m.ipamService.Release(ctx, addr)
 }
 
-// GatewayIPAMAllocations lists all IP address allocations.
+// GatewayIPAMAllocations lists all IP address allocations for a pool.
 func (m *MCPServiceProvider) GatewayIPAMAllocations(ctx context.Context, poolID string) ([]interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMAllocations"}
+	if err := m.requireIPAMService(); err != nil {
+		return nil, err
+	}
+	allocs, err := m.ipamService.GetAllocationsByPool(ctx, poolID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]interface{}, 0, len(allocs))
+	for _, a := range allocs {
+		out = append(out, a)
+	}
+	return out, nil
 }
 
 // GatewayIPAMPoolCreate creates a new IPAM pool.
 func (m *MCPServiceProvider) GatewayIPAMPoolCreate(ctx context.Context, req *mcp.IPAMPoolCreateRequest) (interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMPoolCreate"}
+	if err := m.requireIPAMService(); err != nil {
+		return nil, err
+	}
+	cidr, err := netip.ParsePrefix(req.CIDR)
+	if err != nil {
+		return nil, fmt.Errorf("invalid cidr %q: %w", req.CIDR, err)
+	}
+	pool := &ipam.Pool{
+		ID:                   uuid.New().String(),
+		Name:                 req.Name,
+		CIDR:                 cidr.Masked(),
+		Zone:                 req.Zone,
+		Description:          req.Description,
+		DefaultLeaseDuration: time.Duration(req.LeaseDurationSeconds) * time.Second,
+	}
+	if req.Gateway != "" {
+		gw, parseErr := netip.ParseAddr(req.Gateway)
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid gateway %q: %w", req.Gateway, parseErr)
+		}
+		pool.Gateway = gw
+	}
+	if err := m.ipamService.CreatePool(ctx, pool); err != nil {
+		return nil, err
+	}
+	return m.ipamService.GetPool(ctx, pool.ID)
+}
+
+// GatewayIPAMPoolUpdate updates mutable fields of an IPAM pool. CIDR is immutable.
+func (m *MCPServiceProvider) GatewayIPAMPoolUpdate(ctx context.Context, poolID string, req *mcp.IPAMPoolUpdateRequest) (interface{}, error) {
+	if err := m.requireIPAMService(); err != nil {
+		return nil, err
+	}
+	pool, err := m.ipamService.GetPool(ctx, poolID)
+	if err != nil {
+		return nil, err
+	}
+	if req.Name != "" {
+		pool.Name = req.Name
+	}
+	if req.Zone != "" {
+		pool.Zone = req.Zone
+	}
+	if req.Description != "" {
+		pool.Description = req.Description
+	}
+	if req.Gateway != "" {
+		gw, parseErr := netip.ParseAddr(req.Gateway)
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid gateway %q: %w", req.Gateway, parseErr)
+		}
+		pool.Gateway = gw
+	}
+	if req.LeaseDurationSeconds > 0 {
+		pool.DefaultLeaseDuration = time.Duration(req.LeaseDurationSeconds) * time.Second
+	}
+	if err := m.ipamService.UpdatePool(ctx, pool); err != nil {
+		return nil, err
+	}
+	return m.ipamService.GetPool(ctx, poolID)
 }
 
 // GatewayIPAMPoolDelete deletes an IPAM pool.
 func (m *MCPServiceProvider) GatewayIPAMPoolDelete(ctx context.Context, poolID string) error {
-	return ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMPoolDelete"}
+	if err := m.requireIPAMService(); err != nil {
+		return err
+	}
+	return m.ipamService.DeletePool(ctx, poolID)
+}
+
+// =============================================================================
+// Network Zone Operations
+// =============================================================================
+
+// GatewayNetworkZoneList lists runtime network zones, optionally filtered by lifecycle role.
+func (m *MCPServiceProvider) GatewayNetworkZoneList(ctx context.Context, lifecycleRole string) ([]interface{}, error) {
+	if m.zoneService == nil {
+		return nil, ErrServiceNotAvailable{Service: "zone"}
+	}
+	recs, err := m.zoneService.List(ctx, zone.LifecycleRole(lifecycleRole))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]interface{}, 0, len(recs))
+	for _, r := range recs {
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// GatewayNetworkZoneCreate creates a new network zone.
+func (m *MCPServiceProvider) GatewayNetworkZoneCreate(ctx context.Context, req *mcp.NetworkZoneCreateRequest) (interface{}, error) {
+	if m.zoneService == nil {
+		return nil, ErrServiceNotAvailable{Service: "zone"}
+	}
+	paths := make([]zone.ZonePath, 0, len(req.AllowTo))
+	for _, p := range req.AllowTo {
+		paths = append(paths, zone.ZonePath{
+			Zone:     zone.Zone(p.Zone),
+			Services: p.Services,
+		})
+	}
+	isolateFrom := make([]zone.Zone, 0, len(req.IsolateFrom))
+	for _, z := range req.IsolateFrom {
+		isolateFrom = append(isolateFrom, zone.Zone(z))
+	}
+	cfg := zone.ZoneConfig{
+		Name:             zone.Zone(req.Name),
+		InternetIngress:  req.InternetIngress,
+		Isolate:          req.Isolate,
+		IsolatePerTenant: req.IsolatePerTenant,
+		OOB:              req.OOB,
+		LifecycleRole:    zone.LifecycleRole(req.LifecycleRole),
+		AllowTo:          paths,
+		IsolateFrom:      isolateFrom,
+	}
+	rec, restartRequired, err := m.zoneService.Create(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"zone":             rec,
+		"restart_required": restartRequired,
+	}, nil
+}
+
+// GatewayNetworkZoneUpdate updates an existing network zone.
+func (m *MCPServiceProvider) GatewayNetworkZoneUpdate(ctx context.Context, name string, req *mcp.NetworkZoneUpdateRequest) (interface{}, error) {
+	if m.zoneService == nil {
+		return nil, ErrServiceNotAvailable{Service: "zone"}
+	}
+	paths := make([]zone.ZonePath, 0, len(req.AllowTo))
+	for _, p := range req.AllowTo {
+		paths = append(paths, zone.ZonePath{
+			Zone:     zone.Zone(p.Zone),
+			Services: p.Services,
+		})
+	}
+	isolateFrom := make([]zone.Zone, 0, len(req.IsolateFrom))
+	for _, z := range req.IsolateFrom {
+		isolateFrom = append(isolateFrom, zone.Zone(z))
+	}
+	cfg := zone.ZoneConfig{
+		Name:             zone.Zone(name),
+		InternetIngress:  req.InternetIngress,
+		Isolate:          req.Isolate,
+		IsolatePerTenant: req.IsolatePerTenant,
+		OOB:              req.OOB,
+		LifecycleRole:    zone.LifecycleRole(req.LifecycleRole),
+		AllowTo:          paths,
+		IsolateFrom:      isolateFrom,
+	}
+	rec, restartRequired, err := m.zoneService.Update(ctx, zone.Zone(name), cfg)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"zone":             rec,
+		"restart_required": restartRequired,
+	}, nil
+}
+
+// GatewayNetworkZoneDelete deletes a network zone.
+func (m *MCPServiceProvider) GatewayNetworkZoneDelete(ctx context.Context, name string) (bool, error) {
+	if m.zoneService == nil {
+		return false, ErrServiceNotAvailable{Service: "zone"}
+	}
+	return m.zoneService.Delete(ctx, zone.Zone(name))
+}
+
+// GatewayNetworkZoneAssign assigns a network segment to a trust zone.
+func (m *MCPServiceProvider) GatewayNetworkZoneAssign(ctx context.Context, network string, zoneName string) (bool, error) {
+	if m.zoneService == nil {
+		return false, ErrServiceNotAvailable{Service: "zone"}
+	}
+	return m.zoneService.AssignNetwork(ctx, network, zone.Zone(zoneName))
+}
+
+// GatewayNetworkZoneVLAN resolves a trust zone name to its associated VLAN ID.
+func (m *MCPServiceProvider) GatewayNetworkZoneVLAN(ctx context.Context, zoneName string) (uint16, error) {
+	for _, n := range m.sdnNetworks {
+		if string(n.Zone) == zoneName && n.VLAN > 0 {
+			return n.VLAN, nil
+		}
+	}
+	return 0, ErrServiceNotAvailable{Service: "zone-vlan: no network found for zone " + zoneName}
 }
 
 // =============================================================================

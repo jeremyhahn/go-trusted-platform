@@ -79,6 +79,7 @@ type RESTServer struct {
 	vtpmService           vtpm.VTPMService
 	configDeliveryHandler configdelivery.RestHandler
 	bmcHandler            bmcwebsvc.RestHandler
+	sdnHandlers           *restapi.SDNHandlers
 }
 
 // NewRESTServer creates a new REST server for the daemon
@@ -301,6 +302,13 @@ func (s *RESTServer) SetBMCHandler(handler bmcwebsvc.RestHandler) {
 	api.HandleFunc("/bmc/{profileID:[0-9]+}/provision", handler.ProvisionStatus).Methods(http.MethodGet)
 	api.HandleFunc("/bmc/{profileID:[0-9]+}/enroll", handler.EnrollBMC).Methods(http.MethodPost)
 	api.HandleFunc("/bmc/{profileID:[0-9]+}/cert/restore", handler.RestoreBMC).Methods(http.MethodPost)
+	api.HandleFunc("/bmc/{profileID:[0-9]+}/cert", handler.GetWebCertificate).Methods(http.MethodGet)
+	api.HandleFunc("/bmc/{profileID:[0-9]+}/cert", handler.ReplaceWebCertificate).Methods(http.MethodPut)
+	api.HandleFunc("/bmc/{profileID:[0-9]+}/users", handler.ListUsers).Methods(http.MethodGet)
+	api.HandleFunc("/bmc/{profileID:[0-9]+}/users", handler.CreateUser).Methods(http.MethodPost)
+	api.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}", handler.DeleteUser).Methods(http.MethodDelete)
+	api.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password", handler.SetUserPassword).Methods(http.MethodPut)
+	api.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege", handler.SetUserPrivilege).Methods(http.MethodPut)
 
 	s.logger.Info("BMC management routes registered")
 }
@@ -336,6 +344,20 @@ func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface) {
 	)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("Tenant REST routes registered")
+}
+
+// SetOverlayHandlers wires the overlay REST handlers onto the daemon's REST
+// router so /api/v1/sdn/overlay/* endpoints are served. When svc is nil the
+// method is a no-op — routes are not mounted, so callers that 404 get a clear
+// signal that the overlay feature is disabled rather than an internal error.
+// Mirrors SetDeviceHandlers / SetTenantHandlers.
+func (s *RESTServer) SetOverlayHandlers(svc restapi.OverlayServiceInterface) {
+	if svc == nil {
+		return
+	}
+	handlers := restapi.NewOverlayHandlers(svc, s.logger)
+	handlers.RegisterRoutes(s.router)
+	s.logger.Info("Overlay REST routes registered")
 }
 
 // SetCAHandlers wires the CA REST handlers onto the daemon's REST router so

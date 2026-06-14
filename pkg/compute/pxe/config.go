@@ -20,14 +20,29 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vlan"
 )
 
 const (
-	// DefaultQuarantineVLAN is the default VLAN for quarantined devices (IEEE 802.1Q default).
-	DefaultQuarantineVLAN = uint16(1)
+	// DefaultQuarantineVLAN is the default VLAN for quarantined devices.
+	// Sourced from the canonical pkg/sdn/vlan defaults (reference-network.md).
+	DefaultQuarantineVLAN = vlan.DefaultQuarantine
 
 	// DefaultProvisioningVLAN is the default VLAN for devices during provisioning.
-	DefaultProvisioningVLAN = uint16(2)
+	// Sourced from the canonical pkg/sdn/vlan defaults (reference-network.md).
+	DefaultProvisioningVLAN = vlan.DefaultProvisioning
+
+	// DefaultTrustedVLAN is the default VLAN for trusted (enrolled+authorized) devices.
+	// Sourced from the canonical pkg/sdn/vlan defaults (reference-network.md).
+	DefaultTrustedVLAN = vlan.DefaultTrusted
+
+	// DefaultStorageVLAN is the default VLAN for storage zone devices.
+	// Sourced from the canonical pkg/sdn/vlan defaults (reference-network.md).
+	DefaultStorageVLAN = vlan.DefaultStorage
+
+	// DefaultManagementVLAN is the default VLAN for the management zone.
+	// Sourced from the canonical pkg/sdn/vlan defaults (reference-network.md).
+	DefaultManagementVLAN = vlan.DefaultManagement
 
 	// DefaultMaxRetries is the default number of retry attempts.
 	DefaultMaxRetries = 3
@@ -57,10 +72,10 @@ const (
 	FirmwareSourceEmbedded = "embedded"
 
 	// MinVLANID is the minimum valid VLAN ID per IEEE 802.1Q.
-	MinVLANID = uint16(1)
+	MinVLANID = vlan.MinVLAN
 
 	// MaxVLANID is the maximum valid VLAN ID per IEEE 802.1Q.
-	MaxVLANID = uint16(4094)
+	MaxVLANID = vlan.MaxVLAN
 )
 
 // ServiceConfig holds all configuration for the PXE provisioning service.
@@ -71,10 +86,10 @@ type ServiceConfig struct {
 	// BridgeName is the OVS bridge name for VLAN management.
 	BridgeName string
 
-	// QuarantineVLAN is the VLAN ID for quarantined devices (default: 1).
+	// QuarantineVLAN is the VLAN ID for quarantined devices (default: 202).
 	QuarantineVLAN uint16
 
-	// ProvisioningVLAN is the VLAN ID for devices during provisioning (default: 2).
+	// ProvisioningVLAN is the VLAN ID for devices during provisioning (default: 201).
 	ProvisioningVLAN uint16
 
 	// Firmware contains UEFI firmware verification configuration.

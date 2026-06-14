@@ -32,9 +32,9 @@ func TestErrInvalidNetworkPhase_Error(t *testing.T) {
 
 func TestErrMissingNetworkConfig_Error(t *testing.T) {
 	err := &ErrMissingNetworkConfig{
-		Phase: "production",
+		Phase: "trusted",
 	}
-	expected := "missing network configuration for phase: production"
+	expected := "missing network configuration for phase: trusted"
 	if err.Error() != expected {
 		t.Errorf("ErrMissingNetworkConfig.Error() = %v, want %v", err.Error(), expected)
 	}
@@ -296,7 +296,7 @@ func TestProfileNetworkBuilder_Build_Errors(t *testing.T) {
 		expectedError string
 	}{
 		{
-			name: "missing server production network",
+			name: "missing server trusted network",
 			serverProfile: &deviceentities.DeviceProfile{
 				Name: "server",
 			},
@@ -309,7 +309,7 @@ func TestProfileNetworkBuilder_Build_Errors(t *testing.T) {
 				},
 			},
 			baseConfig:    DefaultNetworkConfig(),
-			expectedError: "missing network configuration for phase: production (server)",
+			expectedError: "missing network configuration for phase: trusted (server)",
 		},
 		{
 			name: "missing client provisioning network",

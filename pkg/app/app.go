@@ -1006,6 +1006,16 @@ func (app *App) newDNSService() (*dns.Service, error) {
 		app.Logger.Info("DNSSEC enabled with QuicBaaS KMS key store")
 	}
 
+	// Resolve network zone names for zone-subdomain support.
+	var networkZones []string
+	if app.DNSConfig.ZoneSubdomains && app.SDNConfig != nil {
+		resolved := app.SDNConfig.ResolvedZones()
+		networkZones = make([]string, 0, len(resolved))
+		for _, z := range resolved {
+			networkZones = append(networkZones, string(z.Name))
+		}
+	}
+
 	params := &dns.Params{
 		AppName:        Name,
 		AppVersion:     Version,
@@ -1017,6 +1027,7 @@ func (app *App) newDNSService() (*dns.Service, error) {
 		PublicIPv6:     app.PublicIPv6,
 		Datastore:      dns.NewDatastore(dbFactory.Client(), app.Logger),
 		DNSSECKeyStore: dnssecKeyStore, // DNSSEC key management via QuicBaaS KMS
+		NetworkZones:   networkZones,
 	}
 
 	return dns.NewService(params)
@@ -1092,6 +1103,21 @@ func (app *App) StartDNS() {
 	}
 	if app.DNSConfig.InternalServer != nil && app.DNSConfig.InternalServer.Zone.TenantID == "" {
 		app.DNSConfig.InternalServer.Zone.TenantID = app.TenantID
+	}
+
+	// Inject resolved network zone names so the CoreDNS plugin can
+	// pre-create per-zone subdomains when zone_subdomains is true.
+	// The SDN config must be validated (Validate() called) before StartDNS
+	// so that ResolvedZones() is populated.
+	if app.DNSConfig.ZoneSubdomains && app.SDNConfig != nil {
+		resolved := app.SDNConfig.ResolvedZones()
+		names := make([]string, 0, len(resolved))
+		for _, z := range resolved {
+			names = append(names, string(z.Name))
+		}
+		app.DNSConfig.NetworkZones = names
+		app.Logger.Debug("injecting network zone names for DNS zone-subdomains",
+			"count", len(names))
 	}
 
 	dns.Run(Name, Version, app.Logger, app.DNSConfig)
@@ -2231,7 +2257,7 @@ func (app *App) ProvisionPlatform(
 				} else if profile != nil && activateResp != nil {
 					app.Logger.Info("Post-enrollment provisioning completed",
 						slog.String("serial", profile.SerialNumber),
-						slog.Int("production_vlan", int(profile.ProductionNetwork.VLAN)),
+						slog.Int("production_vlan", int(profile.TrustedNetwork.VLAN)),
 						slog.String("activation_status", activateResp.Status))
 				}
 			}
@@ -2280,11 +2306,27 @@ func (app *App) ProvisionPlatform(
 				return nil, xkmssdk.ErrTPMInvalidActivationCredential
 			}
 
+			// Resolve zone extensions for the platform's own self-IDevID when
+			// encode_zone_in_cert is enabled in the SDN identity config.
+			var sdnIdentityCfg *sdn.IdentityConfig
+			if app.SDNConfig != nil {
+				sdnIdentityCfg = app.SDNConfig.Identity
+			}
+			zoneExts, zoneErr := sdn.BuildNetworkZoneExtensions(
+				sdnIdentityCfg,
+				sdnIdentityCfg.ResolvedPlatformZone(),
+				app.Hostname,
+			)
+			if zoneErr != nil {
+				return nil, zoneErr
+			}
+
 			// Sign TCG_CSR_IDEVID, create IDevID x509 device certificate
 			iakDER, idevidDER, err := app.CA.SignTCGCSRIDevID(ctx, tcgCSRIDevID, &quicbaasca.CACertificateRequest{
 				// KeyAttributes: ekAttrs,
-				KeyAttributes: idevidAttrs,
-				Valid:         0, // Valid until 99991231235959Z
+				KeyAttributes:   idevidAttrs,
+				Valid:           0, // Valid until 99991231235959Z
+				ExtraExtensions: zoneExts,
 				Subject: quicbaasca.CASubject{
 					CommonName:   idevidAttrs.CN,
 					Organization: app.PrimaryWebService().Certificate.Subject.Organization,
@@ -2430,7 +2472,7 @@ func (app *App) FetchProfileAndActivate(
 
 	app.Logger.Info("Device provisioning complete",
 		slog.String("serial", profile.SerialNumber),
-		slog.Int("vlan", int(profile.ProductionNetwork.VLAN)),
+		slog.Int("vlan", int(profile.TrustedNetwork.VLAN)),
 		slog.String("status", activateResp.Status))
 
 	return profile, activateResp, nil

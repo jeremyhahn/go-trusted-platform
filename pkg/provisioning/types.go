@@ -21,13 +21,14 @@ import (
 
 // ProfileResponse mirrors the server's response for GET /device/profile
 type ProfileResponse struct {
-	SerialNumber      string           `json:"serialNumber"`
-	ProductionNetwork NetworkConfig    `json:"productionNetwork"`
-	ACLs              []ACLConfig      `json:"acls,omitempty"`
-	RateLimit         *RateLimitConfig `json:"rateLimit,omitempty"`
+	SerialNumber   string           `json:"serialNumber"`
+	TrustedNetwork NetworkConfig    `json:"trustedNetwork"`
+	ACLs           []ACLConfig      `json:"acls,omitempty"`
+	RateLimit      *RateLimitConfig `json:"rateLimit,omitempty"`
 }
 
-// NetworkConfig defines production network configuration
+// NetworkConfig defines the trusted-zone network configuration delivered to
+// an enrolled device.
 type NetworkConfig struct {
 	VLAN     uint16   `json:"vlan"`
 	UseDHCP  bool     `json:"useDHCP"`

@@ -35,10 +35,10 @@ type RestHandler interface {
 
 // ProfileResponse is the response for GET /device/profile
 type ProfileResponse struct {
-	SerialNumber      string           `json:"serialNumber"`
-	ProductionNetwork NetworkConfig    `json:"productionNetwork"`
-	ACLs              []ACLConfig      `json:"acls,omitempty"`
-	RateLimit         *RateLimitConfig `json:"rateLimit,omitempty"`
+	SerialNumber   string           `json:"serialNumber"`
+	TrustedNetwork NetworkConfig    `json:"trustedNetwork"`
+	ACLs           []ACLConfig      `json:"acls,omitempty"`
+	RateLimit      *RateLimitConfig `json:"rateLimit,omitempty"`
 }
 
 type NetworkConfig struct {
@@ -122,7 +122,7 @@ type HandlerOption func(*Handler)
 
 // WithSwitchService injects a physical switch service into the handler.
 // When set, Activate will move the device's physical port from the
-// provisioning VLAN to the production VLAN on the configured switch.
+// provisioning VLAN to the trusted VLAN on the configured switch.
 func WithSwitchService(svc SwitchServiceProvider) HandlerOption {
 	return func(h *Handler) {
 		h.switchService = svc
@@ -148,7 +148,7 @@ func (h *Handler) GetProfile(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(profile)
 }
 
-// Activate transitions the device to production network
+// Activate transitions the device to the trusted network zone
 func (h *Handler) Activate(w http.ResponseWriter, r *http.Request) {
 	// Extract serial from client certificate
 	serial, ok := r.Context().Value(ContextKeyDeviceSerial).(string)
@@ -176,10 +176,10 @@ func (h *Handler) Activate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Move the physical switch port to the production VLAN if switch info
+	// Move the physical switch port to the trusted VLAN if switch info
 	// is available in the profile. This is a no-op when no switch service
 	// is configured or when the profile lacks switch fields.
-	if switchErr := h.transitionSwitchPort(r.Context(), serial, profile.ProductionNetwork.VLAN); switchErr != nil {
+	if switchErr := h.transitionSwitchPort(r.Context(), serial, profile.TrustedNetwork.VLAN); switchErr != nil {
 		h.logger.Errorf("Switch VLAN transition failed for device %s: %v", serial, switchErr)
 		h.responseWriter.Error500(w, r, switchErr)
 		return
@@ -192,9 +192,9 @@ func (h *Handler) Activate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply production policy with VLAN
+	// Apply trusted zone policy with VLAN
 	portPolicy := &policy.PortPolicy{
-		VLAN:     profile.ProductionNetwork.VLAN,
+		VLAN:     profile.TrustedNetwork.VLAN,
 		IssuedAt: time.Now().UTC(),
 	}
 
@@ -203,11 +203,11 @@ func (h *Handler) Activate(w http.ResponseWriter, r *http.Request) {
 		// Continue - policy application is best-effort
 	}
 
-	h.logger.Infof("Device %s activated on VLAN %d", serial, profile.ProductionNetwork.VLAN)
+	h.logger.Infof("Device %s activated on trusted VLAN %d", serial, profile.TrustedNetwork.VLAN)
 
 	resp := ActivateResponse{
 		Status:         "activated",
-		VLAN:           profile.ProductionNetwork.VLAN,
+		VLAN:           profile.TrustedNetwork.VLAN,
 		TransitionedAt: time.Now().UTC(),
 	}
 
@@ -216,9 +216,9 @@ func (h *Handler) Activate(w http.ResponseWriter, r *http.Request) {
 }
 
 // transitionSwitchPort moves the device's physical switch port to the
-// production VLAN. Returns nil when no switch service is configured or
+// trusted VLAN. Returns nil when no switch service is configured or
 // the device has no switch/port mapping (making VLAN move a no-op).
-func (h *Handler) transitionSwitchPort(ctx context.Context, serial string, productionVLAN uint16) error {
+func (h *Handler) transitionSwitchPort(ctx context.Context, serial string, trustedVLAN uint16) error {
 	if h.switchService == nil {
 		return nil
 	}
@@ -240,17 +240,17 @@ func (h *Handler) transitionSwitchPort(ctx context.Context, serial string, produ
 		return ErrSwitchNotConfigured{SwitchName: switchName}
 	}
 
-	if err := mgr.SetPortVLAN(ctx, switchPort, productionVLAN); err != nil {
+	if err := mgr.SetPortVLAN(ctx, switchPort, trustedVLAN); err != nil {
 		return ErrSwitchVLANTransitionFailed{
 			SwitchName: switchName,
 			Port:       switchPort,
-			VLAN:       productionVLAN,
+			VLAN:       trustedVLAN,
 			Cause:      err,
 		}
 	}
 
-	h.logger.Infof("Switch port %s/%s moved to VLAN %d for device %s",
-		switchName, switchPort, productionVLAN, serial)
+	h.logger.Infof("Switch port %s/%s moved to trusted VLAN %d for device %s",
+		switchName, switchPort, trustedVLAN, serial)
 
 	return nil
 }

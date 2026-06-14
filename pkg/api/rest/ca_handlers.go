@@ -871,6 +871,22 @@ func (h *CAHandlers) handleRenewCertificate(w http.ResponseWriter, r *http.Reque
 		KeyType:      xkmssdk.KeyTypeTLS,
 	}
 
+	// Supersede the existing certificate before issuing the renewal. The
+	// non-nil keyAttrs signals DeleteKeys=true, which is what removes the old
+	// cert-store entry (and the leaf's CN-namespaced key) — without it
+	// IssueCertificate still fails with ErrCertificateAlreadyExists.
+	oldKeyAttrs := &xkmssdk.KeyAttributes{
+		CN:           existingCert.Subject.CommonName,
+		KeyAlgorithm: existingCert.PublicKeyAlgorithm,
+		StoreType:    xkmssdk.StoreSoftware,
+		KeyType:      xkmssdk.KeyTypeTLS,
+	}
+	if revokeErr := h.ca.Revoke(r.Context(), existingCert, oldKeyAttrs); revokeErr != nil {
+		h.logger.Error("Failed to revoke old certificate during renewal", "error", revokeErr, "serial", serial)
+		h.writeError(w, http.StatusInternalServerError, ErrCertificateRenewFailed{Serial: serial, Err: revokeErr})
+		return
+	}
+
 	// Issue the renewed certificate
 	newCert, err := h.ca.IssueCertificate(r.Context(), caReq)
 	if err != nil {

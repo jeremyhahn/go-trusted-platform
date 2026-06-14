@@ -16,6 +16,7 @@ package rest
 import (
 	"context"
 	"crypto/x509"
+	"math/big"
 	"time"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
@@ -128,6 +129,20 @@ func (a *CAAuthorityAdapter) CABundle(storeType xkmssdk.StoreType, keyAlg x509.P
 // ParseBundle parses a PEM-encoded CA bundle into individual certificates.
 func (a *CAAuthorityAdapter) ParseBundle(bundle []byte) ([]*x509.Certificate, error) {
 	return a.ca.ParseBundle(bundle)
+}
+
+// GenerateCRL generates a Certificate Revocation List. The REST handler's CRL
+// endpoint discovers this method via a runtime type assertion to the crlGenerator
+// interface so it does not need to be part of CAServiceInterface.
+func (a *CAAuthorityAdapter) GenerateCRL(ctx context.Context) ([]byte, error) {
+	return a.ca.GenerateCRL(ctx)
+}
+
+// IsRevoked checks whether the certificate identified by serial is revoked.
+// The REST handler's verify endpoint discovers this method via a runtime type
+// assertion to the revokeChecker interface.
+func (a *CAAuthorityAdapter) IsRevoked(serial *big.Int) (bool, error) {
+	return a.ca.IsRevoked(serial)
 }
 
 // =============================================================================

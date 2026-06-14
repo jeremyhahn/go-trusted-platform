@@ -165,9 +165,10 @@ const (
 	// DefaultBMCTestTimeout is the default timeout for BMC integration tests.
 	DefaultBMCTestTimeout = 60 * time.Second
 
-	// DefaultTestProfileID is the profile ID used in tests against the vBMC.
-	DefaultTestProfileID uint64 = 1
-
 	// DefaultTestISOURL is the ISO URL used for virtual media tests.
 	DefaultTestISOURL = "https://images.example.com/test.iso"
 )
+
+// DefaultTestProfileID is the profile ID of the test device profile created
+// by TestMain against the vBMC. Set during test setup; zero until initialized.
+var DefaultTestProfileID uint64

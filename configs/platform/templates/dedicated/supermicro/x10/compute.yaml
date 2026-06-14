@@ -154,7 +154,7 @@ network:
   #     trusted0 OVS bridge
   #   - VLAN sub-interfaces on bond0 for each platform subnet
   subnets:
-    - name: production
+    - name: trusted
       scope: internal
       vlan-id: 200
       cidr: 198.18.0.0/24
@@ -207,7 +207,7 @@ network:
         - eth6
         - eth7
       vlans:
-        - subnet: production
+        - subnet: trusted
           ipv4-address: 198.18.0.3/24
           auto-start: true
         - subnet: provisioning

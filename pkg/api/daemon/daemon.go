@@ -42,6 +42,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	ipambackends "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -137,6 +139,7 @@ type Daemon struct {
 	overlayGRPCService           *OverlayService
 	pxeGRPCService               *PXEGRPCService
 	healthRegistry               health.Registry
+	zoneSvc                      gateway.ZoneService
 
 	// Concrete server references for accessor methods (set only for real servers)
 	concreteRestServer    *RESTServer
@@ -197,7 +200,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Create gRPC TCP server if enabled
 	var grpcServer *grpc.Server
 	if config.EnableGRPCTCP {
+		// Recover handler panics before anything else in the chain so a single
+		// panicking RPC cannot take down the whole daemon (gRPC does not
+		// recover handler panics on its own, unlike net/http and QUIC).
 		var grpcOpts []grpc.ServerOption
+		grpcOpts = append(grpcOpts,
+			grpc.ChainUnaryInterceptor(RecoveryUnaryInterceptor(logger)),
+			grpc.ChainStreamInterceptor(RecoveryStreamInterceptor(logger)),
+		)
 
 		// Configure TLS: prefer in-memory certificate, fall back to files
 		if config.TLSCertificate != nil || (config.GRPCTLSCertFile != "" && config.GRPCTLSKeyFile != "") {
@@ -328,6 +338,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if config.EnableGRPCUDS {
 		grpcOpts := []grpc.ServerOption{
 			grpc.Creds(grpccreds.NewUnixTransportCredentials()),
+			grpc.ChainUnaryInterceptor(RecoveryUnaryInterceptor(logger)),
+			grpc.ChainStreamInterceptor(RecoveryStreamInterceptor(logger)),
 			grpc.ChainUnaryInterceptor(grpccreds.UnixCredentialsUnaryInterceptor()),
 			grpc.ChainStreamInterceptor(grpccreds.UnixCredentialsStreamInterceptor()),
 		}
@@ -344,26 +356,45 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	var iamService *IAMService
 	var tenantService *TenantService
 
-	// Create SDN service if OVS socket path is configured
+	// Create zone service — always available (in-memory, no OVS dependency).
+	var zoneSvcInstance gateway.ZoneService
+	if zs, zErr := gateway.NewZoneService(nil, nil); zErr == nil {
+		zoneSvcInstance = zs
+		logger.Info("Zone service initialized")
+	} else {
+		logger.Warn("Zone service creation failed", "error", zErr)
+	}
+
+	// Create SDN service if OVS socket path is configured.
+	// On failure (or when no socket path is set) create a zone-only stub so
+	// gRPC/Unix zone RPCs remain available.
 	if config.OVSSocketPath != "" {
 		var sdnErr error
 		sdnService, sdnErr = NewSDNService(config.OVSSocketPath)
 		if sdnErr != nil {
-			logger.Warn("SDN service creation failed", "error", sdnErr)
+			logger.Warn("SDN service creation failed; falling back to zone-only stub", "error", sdnErr)
+			sdnService = &SDNService{}
 		} else {
-			// Register SDN gRPC service with TCP gRPC server if enabled
-			if grpcServer != nil {
-				platformv1.RegisterSDNServiceServer(grpcServer, sdnService)
-			}
-			// Register SDN gRPC service with UDS gRPC server if enabled
-			if grpcUDSServer != nil {
-				platformv1.RegisterSDNServiceServer(grpcUDSServer, sdnService)
-			}
 			logger.Info("SDN service initialized (connection deferred to first use)",
 				"ovs_socket", config.OVSSocketPath)
 		}
 	} else {
-		logger.Info("SDN service not available (OVSSocketPath not configured)")
+		logger.Info("SDN service not available (OVSSocketPath not configured); zone service stub registered")
+		sdnService = &SDNService{}
+	}
+
+	// Wire the zone service into the SDN gRPC implementation so
+	// CreateNetworkZone/ListNetworkZones/etc. are served over gRPC/Unix.
+	if zoneSvcInstance != nil {
+		sdnService.WithZoneService(zoneSvcInstance)
+	}
+	// Register SDN gRPC service with TCP gRPC server if enabled
+	if grpcServer != nil {
+		platformv1.RegisterSDNServiceServer(grpcServer, sdnService)
+	}
+	// Register SDN gRPC service with UDS gRPC server if enabled
+	if grpcUDSServer != nil {
+		platformv1.RegisterSDNServiceServer(grpcUDSServer, sdnService)
 	}
 
 	// Create Overlay gRPC service (always available - gracefully handles nil controller)
@@ -376,8 +407,37 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("Overlay service initialized and registered successfully")
 
+	// Wire the overlay controller when the SDN overlay is enabled. The controller
+	// is started synchronously here — Start() only registers the local VTEP in
+	// memory and launches lightweight background goroutines, so it does not block
+	// daemon startup. The VTEP IP defaults to loopback when App.PublicIPv4 is nil
+	// (test and single-node environments without a public IP), and the underlay
+	// interface defaults to "lo" when not set in config.
+	//
+	// overlayCtrl is hoisted so the QUIC overlay adapter can reference it below
+	// when wiring quicHandler.SetOverlayHandler.
+	var overlayCtrl OverlayControllerInterface
+	if config.App != nil &&
+		config.App.SDNConfig != nil &&
+		config.App.SDNConfig.Overlay != nil &&
+		config.App.SDNConfig.Overlay.Enabled {
+		if ctrl, ctrlErr := buildOverlayController(context.Background(), config.App, config.OVSSocketPath, logger); ctrlErr != nil {
+			logger.Warn("overlay controller init failed; overlay endpoints will return unavailable",
+				"error", ctrlErr)
+		} else {
+			overlayCtrl = ctrl
+			overlayService.SetController(ctrl)
+			logger.Info("overlay controller wired and running")
+		}
+	}
+
+	// Create a default in-memory IPAM allocator. This allows IPAM pool CRUD to
+	// work over all transports even when no persistent backend is configured.
+	// Production deployments replace this with a QuicBaaS-backed allocator.
+	defaultIPAM := ipambackends.NewMemoryBackend()
+
 	// Create Gateway gRPC service (always available - gracefully handles nil dependencies)
-	gatewayService := NewGatewayService()
+	gatewayService := NewGatewayService(WithIPAMAllocator(defaultIPAM))
 	if grpcServer != nil {
 		platformv1.RegisterGatewayServiceServer(grpcServer, gatewayService)
 	}
@@ -938,8 +998,21 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// Even without concrete service implementations, having these handlers
 		// ensures overlay/gateway/IPAM requests are routed correctly rather
 		// than colliding with other opcode ranges.
-		quicHandler.SetOverlayHandler(quic.NewOverlayHandler(quicLogger, nil))
-		quicHandler.SetGatewayHandler(quic.NewGatewayHandler(quicLogger, nil))
+		// Wire the overlay QUIC adapter when the controller is available.
+		// When overlayCtrl is nil (overlay disabled), nil is passed and the
+		// handler emits StatusUnavailable for all overlay requests.
+		var overlayQUICService quic.OverlayServiceInterface
+		if overlayCtrl != nil {
+			overlayQUICService = newOverlayControllerQUICAdapter(overlayCtrl)
+		}
+		quicHandler.SetOverlayHandler(quic.NewOverlayHandler(quicLogger, overlayQUICService))
+
+		// Wire the full gateway QUIC adapter so that IPAM pool CRUD (sub-opcodes
+		// 0x08, 0x0C-0x0F) and zone operations (0x10-0x14) are both served over QUIC.
+		// defaultIPAM is the in-memory allocator created above. zoneSvcInstance may
+		// be nil — zone methods degrade to StatusUnavailable in that case.
+		quicGatewaySvc := newFullGatewayQUICAdapter(defaultIPAM, zoneSvcInstance)
+		quicHandler.SetGatewayHandler(quic.NewGatewayHandler(quicLogger, quicGatewaySvc))
 		logger.Debug("Overlay and gateway handlers set for QUIC handler")
 
 		// Wire Phase 3.5 services into QUIC handler. The service layers have
@@ -950,12 +1023,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		quicHandler.SetLUKSService(luksSvc)
 		quicHandler.SetFIDO2Service(fido2Svc)
 
-		// Wire the BMCEnroller into the QUIC handler so OpBMCCategory
-		// requests execute the real enrollment ceremony. Guarded on both
-		// App and DeviceProfileService being present.
+		// Wire the BMCEnroller and BMCRestorer into the QUIC handler so
+		// OpBMCCategory requests execute the real enrollment and restore
+		// ceremonies. Guarded on both App and DeviceProfileService being present.
 		if config.App != nil && config.DeviceProfileService != nil {
 			quicHandler.SetBMCEnroller(config.App, config.DeviceProfileService)
 			logger.Info("BMC QUIC enroller wired")
+			quicHandler.SetBMCRestorer(config.App, config.DeviceProfileService)
+			logger.Info("BMC QUIC restorer wired")
 		}
 
 		// Prepare QUIC server configuration
@@ -1056,6 +1131,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		overlayGRPCService:           overlayService,
 		pxeGRPCService:               pxeGRPCService,
 		healthRegistry:               healthRegistry,
+		zoneSvc:                      zoneSvcInstance,
 	}
 
 	// Apply functional options (allows overriding servers with mocks)
@@ -1132,6 +1208,27 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if daemon.concreteRestServer != nil && daemon.sdnService != nil {
 		daemon.concreteRestServer.SetSDNService(daemon.sdnService.OVSClient())
 		logger.Info("SDN service wired into REST server")
+	}
+
+	// Wire zone service into REST server for zone CRUD endpoints.
+	if daemon.concreteRestServer != nil && daemon.zoneSvc != nil {
+		daemon.concreteRestServer.SetZoneService(daemon.zoneSvc)
+		logger.Info("Zone service wired into REST server")
+	}
+
+	// Wire overlay REST handlers when the overlay controller was built.
+	// Uses the same controller hoisted during QUIC wiring so all transports
+	// share the same in-process overlay state.
+	if daemon.concreteRestServer != nil && overlayCtrl != nil {
+		daemon.concreteRestServer.SetOverlayHandlers(newOverlayControllerRESTAdapter(overlayCtrl))
+		logger.Info("Overlay REST routes registered")
+	}
+
+	// Wire gateway IPAM REST handlers. Pass the same in-memory allocator
+	// used by the gRPC service so REST and gRPC share the same state.
+	if daemon.concreteRestServer != nil && daemon.gatewayGRPCService != nil {
+		daemon.concreteRestServer.SetGatewayIPAMService(daemon.gatewayGRPCService.IPAMAllocator())
+		logger.Info("Gateway IPAM REST service wired into REST server")
 	}
 
 	// Wire Phase 3.5 services (ceremony/piv/luks/fido2) into REST server.
@@ -1219,6 +1316,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if config.App != nil && config.DeviceProfileService != nil {
 			bmcGRPCService.SetEnroller(config.App, config.DeviceProfileService)
 			logger.Info("BMC gRPC enroller wired")
+			bmcGRPCService.SetRestorer(config.App, config.DeviceProfileService)
+			logger.Info("BMC gRPC restorer wired")
 		}
 
 		if grpcServer != nil {
@@ -1366,11 +1465,21 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		ClusterService:       d.clusterService,
 		InvitationService:    d.invitationService,
 		BMCEnroller:          d.config.App,
+		ZoneService:          d.zoneSvc,
+		IPAMService:          d.gatewayGRPCService.IPAMAllocator(),
 	})
 
 	// Wire DNS service to MCP provider if available via App
 	if d.config.App != nil && d.config.App.DNSService != nil {
 		serviceProvider.dnsService = d.config.App.DNSService
+	}
+
+	// Wire the BMCRestorer into the MCP provider so the platform_bmc_cert_restore
+	// tool executes the real ceremony. Guarded on both App and DeviceProfileService
+	// being present, matching the gRPC and QUIC wiring pattern.
+	if d.config.App != nil && d.config.DeviceProfileService != nil {
+		serviceProvider.SetBMCRestorer(d.config.App, d.config.DeviceProfileService)
+		d.logger.Info("BMC MCP restorer wired")
 	}
 
 	// Mirror the invitation servicer into the gRPC service so MCP and gRPC

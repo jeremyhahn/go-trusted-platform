@@ -107,8 +107,10 @@ type OverlayServiceInterface interface {
 // OverlayStatusInfo contains overlay network status information
 type OverlayStatusInfo struct {
 	Enabled      bool   `codec:"enabled"`
+	NodeID       string `codec:"node_id,omitempty"`
 	Mode         string `codec:"mode"`
 	LocalVTEP    string `codec:"local_vtep"`
+	VXLANPort    uint16 `codec:"vxlan_port,omitempty"`
 	VTEPCount    int    `codec:"vtep_count"`
 	VNICount     int    `codec:"vni_count"`
 	TunnelCount  int    `codec:"tunnel_count"`
@@ -668,10 +670,7 @@ func (h *OverlayHandler) handleListMACs(ctx context.Context, req *Request) *Resp
 		return h.errorResponse(StatusInvalidRequest, ErrOverlayDecodingFailed{Cause: err})
 	}
 
-	if listReq.VNI == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrOverlayMissingVNI)
-	}
-
+	// VNI == 0 means list all MACs (same semantics as gRPC ListRemoteMACs).
 	macs, err := h.overlayService.ListMACs(ctx, listReq.VNI)
 	if err != nil {
 		h.logger.Error(err, "failed to list MACs")

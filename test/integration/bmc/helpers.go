@@ -199,22 +199,5 @@ func isRestoreServiceUnavailable(err error) bool {
 	case ErrRestoreServiceUnavailable:
 		return true
 	}
-	// Tolerate the same well-known "not configured" strings as enrollment, plus
-	// restore-specific phrases that may appear on the server side.
-	msg := err.Error()
-	for _, substr := range []string{
-		"restorer not available",
-		"restorer not configured",
-		"not configured",
-		"not implemented",
-		"unimplemented",
-		"service unavailable",
-		"not available",
-		"unknown service",
-	} {
-		if strings.Contains(msg, substr) {
-			return true
-		}
-	}
 	return false
 }

@@ -210,6 +210,29 @@ func (m *MemoryBackend) ListPools(ctx context.Context) ([]*ipam.Pool, error) {
 	return pools, nil
 }
 
+// ListPoolsByZone returns all pools whose Zone matches the given zone string.
+// An empty zone returns all pools (equivalent to ListPools).
+func (m *MemoryBackend) ListPoolsByZone(ctx context.Context, zone string) ([]*ipam.Pool, error) {
+	if err := m.checkClosed(); err != nil {
+		return nil, err
+	}
+	if zone == "" {
+		return m.ListPools(ctx)
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var pools []*ipam.Pool
+	for _, pool := range m.pools {
+		if pool.Zone == zone {
+			pools = append(pools, pool.Clone())
+		}
+	}
+
+	return pools, nil
+}
+
 // UpdatePool updates an existing pool's configuration.
 func (m *MemoryBackend) UpdatePool(ctx context.Context, pool *ipam.Pool) error {
 	if err := m.checkClosed(); err != nil {
@@ -1063,6 +1086,7 @@ func (m *MemoryBackend) createAllocation(req *ipam.AllocationRequest, pool *ipam
 	alloc := &ipam.Allocation{
 		ID:          generateID(),
 		PoolID:      req.PoolID,
+		Zone:        pool.Zone,
 		IP:          ip,
 		DeviceID:    req.DeviceID,
 		Hostname:    req.Hostname,

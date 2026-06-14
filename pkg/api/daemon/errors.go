@@ -316,6 +316,18 @@ func (e ErrQUICNilRequest) Error() string {
 	return "QUIC request cannot be nil"
 }
 
+// ErrQUICHandlerPanic is returned when a handler sub-function panics.
+// The recover() guard in QUICServiceHandler.HandleRequest catches the panic,
+// logs a stack trace, and converts it to a StatusInternalError response so the
+// QUIC stream is never closed without a valid response frame.
+type ErrQUICHandlerPanic struct {
+	Cause interface{}
+}
+
+func (e ErrQUICHandlerPanic) Error() string {
+	return fmt.Sprintf("QUIC handler panic: %v", e.Cause)
+}
+
 // ErrQUICUnknownOpcode is returned when an unknown opcode is received
 type ErrQUICUnknownOpcode struct {
 	Opcode byte
@@ -669,6 +681,14 @@ type ErrSDNMissingParameter struct {
 
 func (e ErrSDNMissingParameter) Error() string {
 	return fmt.Sprintf("missing required parameter: %s", e.Parameter)
+}
+
+// ErrOVSNotConfigured is returned when an OVS connection operation is attempted
+// but no OVS client has been configured (e.g. when running in zone-only stub mode).
+type ErrOVSNotConfigured struct{}
+
+func (ErrOVSNotConfigured) Error() string {
+	return "OVS client not configured"
 }
 
 // =============================================================================

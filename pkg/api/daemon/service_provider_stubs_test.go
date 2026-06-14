@@ -220,7 +220,7 @@ func TestPlatformServiceProvider_GatewayStubs(t *testing.T) {
 		{"GatewayBGPAnnounce", func() error { return provider.GatewayBGPAnnounce(ctx, "10.0.0.0/24", "10.0.0.1") }},
 		{"GatewayBGPWithdraw", func() error { return provider.GatewayBGPWithdraw(ctx, "10.0.0.0/24") }},
 		{"GatewayBGPPrefixes", func() error { _, err := provider.GatewayBGPPrefixes(ctx); return err }},
-		{"GatewayIPAMPools", func() error { _, err := provider.GatewayIPAMPools(ctx); return err }},
+		{"GatewayIPAMPools", func() error { _, err := provider.GatewayIPAMPools(ctx, ""); return err }},
 		{"GatewayIPAMAllocate", func() error {
 			_, err := provider.GatewayIPAMAllocate(ctx, "pool1", "dev1", "host1")
 			return err

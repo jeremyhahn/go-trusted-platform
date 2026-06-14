@@ -126,7 +126,7 @@ func NewClient(config *ClientConfig, opts ...ClientOption) (*Client, error) {
 	c.conn = conn
 	c.connected = true
 
-	c.logger.Debug("QUIC client connected to %s", config.ServerAddr)
+	c.logger.Debugf("QUIC client connected to %s", config.ServerAddr)
 
 	return c, nil
 }

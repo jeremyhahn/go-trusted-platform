@@ -257,11 +257,30 @@ func (s *testGatewayService) ListPrefixes(ctx context.Context) ([]*PrefixInfo, e
 	return s.prefixesResp, nil
 }
 
-func (s *testGatewayService) ListIPAMPools(ctx context.Context) ([]*IPAMPoolInfo, error) {
+func (s *testGatewayService) ListIPAMPools(ctx context.Context, zone string) ([]*IPAMPoolInfo, error) {
 	if s.listIPAMPoolsErr != nil {
 		return nil, s.listIPAMPoolsErr
 	}
 	return s.ipamPoolsResp, nil
+}
+
+func (s *testGatewayService) GetIPAMPool(ctx context.Context, poolID string) (*IPAMPoolInfo, error) {
+	if s.listIPAMPoolsErr != nil {
+		return nil, s.listIPAMPoolsErr
+	}
+	for _, p := range s.ipamPoolsResp {
+		if p != nil && p.ID == poolID {
+			return p, nil
+		}
+	}
+	return nil, ErrGatewayPoolNotFound
+}
+
+func (s *testGatewayService) UpdateIPAMPool(ctx context.Context, poolID string, opts *UpdateIPAMPoolOptions) (*IPAMPoolInfo, error) {
+	if s.listIPAMPoolsErr != nil {
+		return nil, s.listIPAMPoolsErr
+	}
+	return &IPAMPoolInfo{ID: poolID}, nil
 }
 
 func (s *testGatewayService) CreateIPAMPool(ctx context.Context, opts *CreateIPAMPoolOptions) (*IPAMPoolInfo, error) {
@@ -304,6 +323,26 @@ func (s *testGatewayService) ListAllocations(ctx context.Context, poolID string)
 		return nil, s.listAllocErr
 	}
 	return s.allocationsResp, nil
+}
+
+func (s *testGatewayService) ListNetworkZones(ctx context.Context, lifecycleRole string) ([]*NetworkZoneInfo, error) {
+	return []*NetworkZoneInfo{}, nil
+}
+
+func (s *testGatewayService) CreateNetworkZone(ctx context.Context, opts *CreateNetworkZoneOptions) (*NetworkZoneInfo, error) {
+	return &NetworkZoneInfo{Name: opts.Name}, nil
+}
+
+func (s *testGatewayService) UpdateNetworkZone(ctx context.Context, name string, opts *UpdateNetworkZoneOptions) (*NetworkZoneInfo, error) {
+	return &NetworkZoneInfo{Name: name}, nil
+}
+
+func (s *testGatewayService) DeleteNetworkZone(ctx context.Context, name string) (bool, error) {
+	return false, nil
+}
+
+func (s *testGatewayService) AssignNetworkZone(ctx context.Context, network string, zoneName string) (bool, error) {
+	return false, nil
 }
 
 // =============================================================================
@@ -1630,6 +1669,182 @@ func TestGatewayHandleDeleteIPAMPool(t *testing.T) {
 }
 
 // =============================================================================
+// Test: handleGetIPAMPool
+// =============================================================================
+
+func TestGatewayHandleGetIPAMPool(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("returns pool successfully", func(t *testing.T) {
+		t.Parallel()
+		handler, _ := createTestGatewayHandler()
+
+		getReq := &GatewayGetIPAMPoolRequest{PoolID: "pool-1"}
+		payload, err := EncodePayload(getReq)
+		require.NoError(t, err)
+
+		req := &Request{Opcode: OpGatewayGetIPAMPool, Payload: payload}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, StatusOK, resp.Status)
+
+		var getResp GatewayGetIPAMPoolResponse
+		err = DecodePayload(resp.Payload, &getResp)
+		require.NoError(t, err)
+
+		assert.NotNil(t, getResp.Pool)
+		assert.Equal(t, "pool-1", getResp.Pool.ID)
+		assert.Equal(t, "Production", getResp.Pool.Name)
+		assert.Equal(t, "10.0.0.0/24", getResp.Pool.CIDR)
+	})
+
+	t.Run("returns not found when pool does not exist", func(t *testing.T) {
+		t.Parallel()
+		handler, _ := createTestGatewayHandler()
+
+		getReq := &GatewayGetIPAMPoolRequest{PoolID: "pool-does-not-exist"}
+		payload, err := EncodePayload(getReq)
+		require.NoError(t, err)
+
+		req := &Request{Opcode: OpGatewayGetIPAMPool, Payload: payload}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, StatusNotFound, resp.Status)
+	})
+
+	t.Run("returns error for missing pool ID", func(t *testing.T) {
+		t.Parallel()
+		handler, _ := createTestGatewayHandler()
+
+		getReq := &GatewayGetIPAMPoolRequest{PoolID: ""}
+		payload, err := EncodePayload(getReq)
+		require.NoError(t, err)
+
+		req := &Request{Opcode: OpGatewayGetIPAMPool, Payload: payload}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("returns error when service unavailable", func(t *testing.T) {
+		t.Parallel()
+		handler := NewGatewayHandler(newGatewayTestLogger(), nil)
+
+		getReq := &GatewayGetIPAMPoolRequest{PoolID: "pool-1"}
+		payload, err := EncodePayload(getReq)
+		require.NoError(t, err)
+
+		req := &Request{Opcode: OpGatewayGetIPAMPool, Payload: payload}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, StatusUnavailable, resp.Status)
+	})
+
+	t.Run("returns error when get fails", func(t *testing.T) {
+		t.Parallel()
+		handler, service := createTestGatewayHandler()
+		service.listIPAMPoolsErr = errors.New("backend error")
+
+		getReq := &GatewayGetIPAMPoolRequest{PoolID: "pool-1"}
+		payload, err := EncodePayload(getReq)
+		require.NoError(t, err)
+
+		req := &Request{Opcode: OpGatewayGetIPAMPool, Payload: payload}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, StatusInternalError, resp.Status)
+	})
+}
+
+// =============================================================================
+// Test: handleUpdateIPAMPool
+// =============================================================================
+
+func TestGatewayHandleUpdateIPAMPool(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("updates pool successfully", func(t *testing.T) {
+		t.Parallel()
+		handler, _ := createTestGatewayHandler()
+
+		updateReq := &GatewayUpdateIPAMPoolRequest{
+			PoolID:      "pool-1",
+			Name:        "UpdatedName",
+			Description: "updated description",
+		}
+		payload, err := EncodePayload(updateReq)
+		require.NoError(t, err)
+
+		req := &Request{Opcode: OpGatewayUpdateIPAMPool, Payload: payload}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, StatusOK, resp.Status)
+
+		var updateResp GatewayUpdateIPAMPoolResponse
+		err = DecodePayload(resp.Payload, &updateResp)
+		require.NoError(t, err)
+
+		assert.NotNil(t, updateResp.Pool)
+		assert.Equal(t, "pool-1", updateResp.Pool.ID)
+	})
+
+	t.Run("returns error for missing pool ID", func(t *testing.T) {
+		t.Parallel()
+		handler, _ := createTestGatewayHandler()
+
+		updateReq := &GatewayUpdateIPAMPoolRequest{PoolID: "", Name: "NewName"}
+		payload, err := EncodePayload(updateReq)
+		require.NoError(t, err)
+
+		req := &Request{Opcode: OpGatewayUpdateIPAMPool, Payload: payload}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("returns error when service unavailable", func(t *testing.T) {
+		t.Parallel()
+		handler := NewGatewayHandler(newGatewayTestLogger(), nil)
+
+		updateReq := &GatewayUpdateIPAMPoolRequest{PoolID: "pool-1", Name: "NewName"}
+		payload, err := EncodePayload(updateReq)
+		require.NoError(t, err)
+
+		req := &Request{Opcode: OpGatewayUpdateIPAMPool, Payload: payload}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, StatusUnavailable, resp.Status)
+	})
+
+	t.Run("returns error when update fails", func(t *testing.T) {
+		t.Parallel()
+		handler, service := createTestGatewayHandler()
+		service.listIPAMPoolsErr = errors.New("backend error")
+
+		updateReq := &GatewayUpdateIPAMPoolRequest{PoolID: "pool-1", Name: "NewName"}
+		payload, err := EncodePayload(updateReq)
+		require.NoError(t, err)
+
+		req := &Request{Opcode: OpGatewayUpdateIPAMPool, Payload: payload}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, StatusInternalError, resp.Status)
+	})
+
+	t.Run("returns error for invalid payload", func(t *testing.T) {
+		t.Parallel()
+		handler, _ := createTestGatewayHandler()
+
+		req := &Request{Opcode: OpGatewayUpdateIPAMPool, Payload: []byte("invalid payload")}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, StatusInvalidRequest, resp.Status)
+	})
+}
+
+// =============================================================================
 // Test: handleAllocateIP
 // =============================================================================
 
@@ -2038,7 +2253,8 @@ func TestGatewayHandleListAllocations(t *testing.T) {
 		assert.Equal(t, StatusUnavailable, resp.Status)
 	})
 
-	t.Run("returns error for missing pool ID", func(t *testing.T) {
+	t.Run("empty pool ID lists all allocations", func(t *testing.T) {
+		// Empty PoolID means list all allocations (list-all semantics, same as gRPC ListAllocations).
 		t.Parallel()
 		handler, _ := createTestGatewayHandler()
 
@@ -2054,8 +2270,10 @@ func TestGatewayHandleListAllocations(t *testing.T) {
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
-		assert.Contains(t, string(resp.Payload), "pool ID")
+		assert.Equal(t, StatusOK, resp.Status)
+		var listResp GatewayListAllocationsResponse
+		require.NoError(t, DecodePayload(resp.Payload, &listResp))
+		assert.NotNil(t, listResp.Allocations)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {

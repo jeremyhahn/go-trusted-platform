@@ -241,6 +241,19 @@ func (m *mockIPAMAllocator) ListPools(ctx context.Context) ([]*ipam.Pool, error)
 	return result, nil
 }
 
+func (m *mockIPAMAllocator) ListPoolsByZone(ctx context.Context, zone string) ([]*ipam.Pool, error) {
+	if m.listPoolsErr != nil {
+		return nil, m.listPoolsErr
+	}
+	result := make([]*ipam.Pool, 0)
+	for _, pool := range m.pools {
+		if zone == "" || pool.Zone == zone {
+			result = append(result, pool)
+		}
+	}
+	return result, nil
+}
+
 func (m *mockIPAMAllocator) UpdatePool(ctx context.Context, pool *ipam.Pool) error {
 	if _, exists := m.pools[pool.ID]; !exists {
 		return errors.New("pool not found")
@@ -1029,7 +1042,7 @@ func TestGatewayService_AllocateIP(t *testing.T) {
 				return mock
 			},
 			expectError:   true,
-			errorContains: "failed to allocate IP",
+			errorContains: "IPAM operation failed",
 		},
 	}
 
@@ -1115,7 +1128,7 @@ func TestGatewayService_ReleaseIP(t *testing.T) {
 				return mock
 			},
 			expectError:   true,
-			errorContains: "failed to release IP",
+			errorContains: "IPAM operation failed",
 		},
 	}
 
@@ -1286,9 +1299,9 @@ func TestIpamPoolToProto(t *testing.T) {
 		assert.Equal(t, "pool-1", result.Id)
 		assert.Equal(t, "192.168.1.0/24", result.Cidr)
 		assert.Equal(t, "192.168.1.1", result.Gateway)
-		assert.Equal(t, uint32(254), result.Total)
-		assert.Equal(t, uint32(10), result.Allocated)
-		assert.Equal(t, uint32(244), result.Available)
+		assert.Equal(t, uint64(254), result.Total)
+		assert.Equal(t, uint64(10), result.Allocated)
+		assert.Equal(t, uint64(244), result.Available)
 	})
 }
 

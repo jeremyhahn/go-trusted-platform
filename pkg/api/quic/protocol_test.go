@@ -1042,47 +1042,22 @@ func TestWriteRequestWriteErrors(t *testing.T) {
 }
 
 func TestWriteResponseWriteErrors(t *testing.T) {
-	tests := []struct {
-		name        string
-		failAfter   int
-		errorSubstr string
-	}{
-		{
-			name:        "fail on status write",
-			failAfter:   0,
-			errorSubstr: "status",
-		},
-		{
-			name:        "fail on payload length write",
-			failAfter:   1,
-			errorSubstr: "payload length",
-		},
-		{
-			name:        "fail on payload write",
-			failAfter:   5, // 1 (status) + 4 (payload len)
-			errorSubstr: "payload",
-		},
+	// WriteResponse assembles the entire frame into a single buffer and
+	// performs exactly one Write call. The only write-error case is when
+	// that single Write fails (failAfter=0 on the errWriter).
+	resp := &Response{
+		Status:  StatusOK,
+		Payload: []byte("test-payload"),
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			w := &errWriter{failAfter: tt.failAfter}
-			resp := &Response{
-				Status:  StatusOK,
-				Payload: []byte("test-payload"),
-			}
-
-			err := WriteResponse(w, resp)
-
-			if err == nil {
-				t.Error("expected error, got nil")
-				return
-			}
-
-			if !strings.Contains(strings.ToLower(err.Error()), tt.errorSubstr) {
-				t.Errorf("expected error containing '%s', got '%s'", tt.errorSubstr, err.Error())
-			}
-		})
+	w := &errWriter{failAfter: 0}
+	err := WriteResponse(w, resp)
+	if err == nil {
+		t.Error("expected error when Write fails immediately, got nil")
+		return
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "response") {
+		t.Errorf("expected error containing 'response', got '%s'", err.Error())
 	}
 }
 

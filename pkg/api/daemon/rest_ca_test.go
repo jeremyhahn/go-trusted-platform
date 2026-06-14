@@ -16,6 +16,7 @@
 package daemon
 
 import (
+	"context"
 	"crypto/x509"
 	"log/slog"
 	"net/http"
@@ -44,11 +45,13 @@ func (f *fakeRESTCA) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm    { return x
 func (f *fakeRESTCA) DefaultValidityPeriod() int                      { return 365 }
 func (f *fakeRESTCA) TrustedRoot() (*x509.Certificate, error)         { return nil, nil }
 func (f *fakeRESTCA) TrustedIntermediate() (*x509.Certificate, error) { return nil, nil }
-func (f *fakeRESTCA) IssueCertificate(req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (f *fakeRESTCA) IssueCertificate(_ context.Context, req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	return nil, nil
 }
-func (f *fakeRESTCA) RevokeCert(*x509.Certificate, xkmsca.RevokeOptions) error { return nil }
-func (f *fakeRESTCA) CABundle() ([]byte, error)                                { return []byte{}, nil }
+func (f *fakeRESTCA) RevokeCert(_ context.Context, _ *x509.Certificate, _ xkmsca.RevokeOptions) error {
+	return nil
+}
+func (f *fakeRESTCA) CABundle() ([]byte, error) { return []byte{}, nil }
 func (f *fakeRESTCA) CABundleFiltered(xkmssdk.StoreType, x509.PublicKeyAlgorithm) ([]byte, error) {
 	return []byte{}, nil
 }

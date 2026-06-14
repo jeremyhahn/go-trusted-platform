@@ -113,9 +113,24 @@ type SDNTestAdapter interface {
 	// IPAM Operations
 	// =========================================================================
 
-	// ListPools returns all configured IPAM pools.
-	// Pools define IP ranges for allocation with CIDR, gateway, and DNS.
-	ListPools(ctx context.Context) (*IPAMPoolListResponse, error)
+	// CreatePool creates a new IPAM pool.
+	// Returns the created pool or an error if the pool already exists.
+	CreatePool(ctx context.Context, req IPAMPoolCreateRequest) (*IPAMPoolEntry, error)
+
+	// GetPool retrieves an IPAM pool by ID.
+	GetPool(ctx context.Context, poolID string) (*IPAMPoolEntry, error)
+
+	// UpdatePool updates mutable fields of an existing IPAM pool.
+	// CIDR is immutable and cannot be changed after creation.
+	UpdatePool(ctx context.Context, poolID string, req IPAMPoolUpdateRequest) (*IPAMPoolEntry, error)
+
+	// DeletePool removes an IPAM pool by ID.
+	// Returns an error when active allocations exist.
+	DeletePool(ctx context.Context, poolID string) error
+
+	// ListPools returns all configured IPAM pools, optionally filtered by zone.
+	// An empty zone string returns all pools.
+	ListPools(ctx context.Context, zone string) (*IPAMPoolListResponse, error)
 
 	// AllocateIP allocates an IP address from the specified pool.
 	// Returns the allocated IP and lease information.
@@ -134,6 +149,25 @@ type SDNTestAdapter interface {
 
 	// ListLeases returns all active DHCP leases.
 	ListLeases(ctx context.Context) (*DHCPLeaseListResponse, error)
+
+	// =========================================================================
+	// Network Zone Operations
+	// =========================================================================
+
+	// CreateZone creates a new network trust zone.
+	CreateZone(ctx context.Context, req ZoneCreateRequest) (*ZoneEntry, error)
+
+	// UpdateZone updates policy settings of an existing network zone.
+	UpdateZone(ctx context.Context, name string, req ZoneUpdateRequest) (*ZoneEntry, error)
+
+	// DeleteZone deletes a network trust zone by name.
+	DeleteZone(ctx context.Context, name string) (bool, error)
+
+	// ListZones returns all network trust zones, optionally filtered by lifecycle role.
+	ListZones(ctx context.Context, lifecycleRole string) (*ZoneListResponse, error)
+
+	// AssignZone assigns a network segment to a trust zone.
+	AssignZone(ctx context.Context, network string, zoneName string) (bool, error)
 }
 
 // =============================================================================
@@ -435,7 +469,56 @@ type IPAMPoolEntry struct {
 	// DNS is the list of DNS servers for this pool.
 	DNS []string
 
+	// Zone is the trust/exposure zone for this pool (e.g. "trusted", "provisioning").
+	Zone string
+
+	// Description is a human-readable description of the pool.
+	Description string
+
 	// LeaseDuration is the default lease duration for allocations.
+	LeaseDuration time.Duration
+}
+
+// IPAMPoolCreateRequest carries parameters for creating a new IPAM pool.
+type IPAMPoolCreateRequest struct {
+	// ID is the pool identifier; generated server-side when empty.
+	ID string
+
+	// Name is the human-readable display name (required).
+	Name string
+
+	// CIDR is the IP range in CIDR notation (required; immutable after creation).
+	CIDR string
+
+	// Gateway is an optional gateway address within the CIDR.
+	Gateway string
+
+	// Zone is the optional trust/exposure zone (e.g. "trusted", "provisioning").
+	Zone string
+
+	// Description is an optional human-readable description.
+	Description string
+
+	// LeaseDuration is the default lease duration (0 = never expire).
+	LeaseDuration time.Duration
+}
+
+// IPAMPoolUpdateRequest carries mutable fields for updating an IPAM pool.
+// CIDR cannot be changed after creation.
+type IPAMPoolUpdateRequest struct {
+	// Name is the updated display name.
+	Name string
+
+	// Gateway is the updated gateway address.
+	Gateway string
+
+	// Zone is the updated zone.
+	Zone string
+
+	// Description is the updated description.
+	Description string
+
+	// LeaseDuration is the updated default lease duration.
 	LeaseDuration time.Duration
 }
 
@@ -535,6 +618,95 @@ type DHCPLeaseEntry struct {
 
 	// PoolID is the pool from which this lease was allocated.
 	PoolID string
+}
+
+// =============================================================================
+// Network Zone Types
+// =============================================================================
+
+// ZoneListResponse contains the list of network trust zones.
+type ZoneListResponse struct {
+	Zones      []ZoneEntry
+	TotalCount int
+}
+
+// ZoneEntry represents a network trust zone.
+type ZoneEntry struct {
+	// Name is the unique zone identifier.
+	Name string
+
+	// InternetIngress indicates the zone accepts external ingress traffic.
+	InternetIngress bool
+
+	// Isolate indicates the zone is fully isolated from all others.
+	Isolate bool
+
+	// IsolatePerTenant isolates tenants within the zone from each other.
+	IsolatePerTenant bool
+
+	// OOB marks the zone as out-of-band management.
+	OOB bool
+
+	// LifecycleRole is the optional lifecycle role (provisioning, quarantine).
+	LifecycleRole string
+
+	// RestartRequired is true when a policy-relevant field was changed and
+	// the flow matrix needs recompilation.
+	RestartRequired bool
+
+	// CreatedAt is the creation timestamp.
+	CreatedAt time.Time
+
+	// UpdatedAt is the last update timestamp.
+	UpdatedAt time.Time
+}
+
+// ZoneCreateRequest carries parameters for creating a new network zone.
+type ZoneCreateRequest struct {
+	// Name is the unique zone identifier (required).
+	Name string
+
+	// InternetIngress indicates the zone accepts external ingress traffic.
+	InternetIngress bool
+
+	// Isolate fully isolates this zone from all others.
+	Isolate bool
+
+	// IsolatePerTenant isolates tenants within the zone from each other.
+	IsolatePerTenant bool
+
+	// OOB marks the zone as out-of-band management.
+	OOB bool
+
+	// LifecycleRole is the optional lifecycle role (provisioning, quarantine).
+	LifecycleRole string
+}
+
+// ZoneUpdateRequest carries mutable fields for updating a network zone.
+type ZoneUpdateRequest struct {
+	// InternetIngress indicates the zone accepts external ingress traffic.
+	InternetIngress bool
+
+	// Isolate fully isolates this zone from all others.
+	Isolate bool
+
+	// IsolatePerTenant isolates tenants within the zone from each other.
+	IsolatePerTenant bool
+
+	// OOB marks the zone as out-of-band management.
+	OOB bool
+
+	// LifecycleRole is the optional lifecycle role (provisioning, quarantine).
+	LifecycleRole string
+}
+
+// ZoneAssignRequest carries parameters for assigning a network to a zone.
+type ZoneAssignRequest struct {
+	// Network is the network segment name (required).
+	Network string
+
+	// Zone is the target trust zone name (required).
+	Zone string
 }
 
 // =============================================================================

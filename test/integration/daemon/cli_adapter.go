@@ -264,12 +264,13 @@ func (c *CLIAdapter) ListServices(ctx context.Context) (*ListServicesResult, err
 		return nil, err
 	}
 
-	var resp cliListServicesResponse
+	// The CLI serializes []*ServiceInfo as a JSON array directly.
+	var resp []cliServiceInfo
 	if err := json.Unmarshal(output, &resp); err != nil {
 		return nil, ErrCLIOutputParseFailed{Operation: "ListServices", Output: string(output), Err: err}
 	}
 
-	return resp.toResult(), nil
+	return cliServiceInfoSliceToResult(resp), nil
 }
 
 // GetService retrieves a single service's information via CLI.
@@ -279,7 +280,8 @@ func (c *CLIAdapter) GetService(ctx context.Context, serviceName string) (*Servi
 		return nil, err
 	}
 
-	var resp cliServiceStatusResponse
+	// The CLI prints the bare *ServiceInfo struct (not wrapped in {"service": ...}).
+	var resp cliServiceInfo
 	if err := json.Unmarshal(output, &resp); err != nil {
 		return nil, ErrCLIOutputParseFailed{Operation: "GetService", Output: string(output), Err: err}
 	}
@@ -362,75 +364,52 @@ func (c *CLIAdapter) ListProtocols(ctx context.Context) (*ListProtocolsResult, e
 // CLI Response Types and Conversion
 // =============================================================================
 
-// The CLI serializes protobuf responses using encoding/json (via Printer.printJSON).
-// This means:
-//   - Enum fields serialize as integer values (not string names)
-//   - Timestamp fields serialize as {"seconds":N,"nanos":N} objects
-//   - Field names use the protobuf json struct tags (snake_case)
+// The CLI serializes domain types from sdk/go/services/daemon/types.go using
+// encoding/json (via Printer.Print). This means:
+//   - Enum fields (HealthStatus, SystemStatus, ServiceStatus, ServiceType)
+//     serialize as JSON strings using their Go string constant values:
+//     "HEALTHY", "READY", "RUNNING", "TPM", etc.
+//   - The domain HealthInfo and StatusInfo structs have no Timestamp field;
+//     the adapter supplies time.Now() as a fallback for tests that check it.
+//   - Field names use the json struct tags from the domain types (snake_case).
 
-// cliTimestamp represents a protobuf timestamppb.Timestamp serialized via encoding/json.
-type cliTimestamp struct {
-	Seconds int64 `json:"seconds"`
-	Nanos   int32 `json:"nanos"`
-}
-
-// toTime converts a CLI timestamp to a Go time.Time.
-func (t *cliTimestamp) toTime() time.Time {
-	if t == nil {
-		return time.Time{}
-	}
-	return time.Unix(t.Seconds, int64(t.Nanos))
-}
-
-// cliHealthResponse matches GetHealthResponse serialized via encoding/json.
-// Status is a HealthStatus enum (integer).
+// cliHealthResponse matches HealthInfo serialized via encoding/json.
+// Status is a HealthStatus domain string ("HEALTHY", "DEGRADED", "UNHEALTHY").
 type cliHealthResponse struct {
-	Status     int                          `json:"status"`
+	Status     string                       `json:"status"`
 	Components []cliComponentHealthResponse `json:"components,omitempty"`
-	Timestamp  *cliTimestamp                `json:"timestamp,omitempty"`
 }
 
 // cliComponentHealthResponse matches ComponentHealth serialized via encoding/json.
 type cliComponentHealthResponse struct {
-	Name      string        `json:"name"`
-	Status    int           `json:"status"`
-	Message   string        `json:"message,omitempty"`
-	LastCheck *cliTimestamp `json:"last_check,omitempty"`
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
 }
 
 func (r *cliHealthResponse) toResult() *HealthResult {
 	result := &HealthResult{
-		Status: cliHealthStatusToString(r.Status),
-	}
-
-	if r.Timestamp != nil {
-		result.Timestamp = r.Timestamp.toTime()
-	} else {
-		result.Timestamp = time.Now()
+		Status:    normalizeHealthStatus(r.Status),
+		Timestamp: time.Now(),
 	}
 
 	for _, comp := range r.Components {
-		ch := ComponentHealth{
+		result.Components = append(result.Components, ComponentHealth{
 			Name:    comp.Name,
-			Status:  cliHealthStatusToString(comp.Status),
+			Status:  normalizeHealthStatus(comp.Status),
 			Message: comp.Message,
-		}
-		if comp.LastCheck != nil {
-			ch.LastCheck = comp.LastCheck.toTime()
-		}
-		result.Components = append(result.Components, ch)
+		})
 	}
 
 	return result
 }
 
-// cliStatusResponse matches GetStatusResponse serialized via encoding/json.
-// Status is a SystemStatus enum (integer).
+// cliStatusResponse matches StatusInfo serialized via encoding/json.
+// Status is a SystemStatus domain string ("READY", "INITIALIZING", etc.).
 type cliStatusResponse struct {
-	Status    int              `json:"status"`
-	Info      *cliPlatformInfo `json:"info,omitempty"`
-	Services  []cliServiceInfo `json:"services,omitempty"`
-	Timestamp *cliTimestamp    `json:"timestamp,omitempty"`
+	Status   string           `json:"status"`
+	Info     *cliPlatformInfo `json:"info,omitempty"`
+	Services []cliServiceInfo `json:"services,omitempty"`
 }
 
 // cliPlatformInfo matches PlatformInfo serialized via encoding/json.
@@ -440,7 +419,7 @@ type cliPlatformInfo struct {
 	Version    string         `json:"version,omitempty"`
 	BuildTime  string         `json:"build_time,omitempty"`
 	GitCommit  string         `json:"git_commit,omitempty"`
-	FipsMode   bool           `json:"fips_mode,omitempty"`
+	FIPSMode   bool           `json:"fips_mode,omitempty"`
 	SystemInfo *cliSystemInfo `json:"system_info,omitempty"`
 }
 
@@ -457,13 +436,8 @@ type cliSystemInfo struct {
 
 func (r *cliStatusResponse) toResult() *StatusResult {
 	result := &StatusResult{
-		Status: cliSystemStatusToString(r.Status),
-	}
-
-	if r.Timestamp != nil {
-		result.Timestamp = r.Timestamp.toTime()
-	} else {
-		result.Timestamp = time.Now()
+		Status:    normalizeSystemStatus(r.Status),
+		Timestamp: time.Now(),
 	}
 
 	if r.Info != nil {
@@ -488,13 +462,13 @@ func (r *cliStatusResponse) toResult() *StatusResult {
 
 // cliVersionResponse matches the version command JSON output.
 // The version command outputs: {"client":{...},"server":{...}}
-// where server is a GetVersionResponse protobuf serialized via encoding/json.
+// where each part is a VersionInfo struct serialized via encoding/json.
 type cliVersionResponse struct {
 	Client *cliVersionInfo `json:"client,omitempty"`
 	Server *cliVersionInfo `json:"server,omitempty"`
 }
 
-// cliVersionInfo matches GetVersionResponse fields serialized via encoding/json.
+// cliVersionInfo matches VersionInfo fields serialized via encoding/json.
 type cliVersionInfo struct {
 	Version    string            `json:"version,omitempty"`
 	BuildTime  string            `json:"build_time,omitempty"`
@@ -523,69 +497,41 @@ func (r *cliVersionResponse) toResult() *VersionResult {
 }
 
 // cliServiceInfo matches ServiceInfo serialized via encoding/json.
-// Type and Status are protobuf enum integers.
+// Type, Status, and Health are domain string constants
+// ("TPM", "RUNNING", "HEALTHY", etc.).
 type cliServiceInfo struct {
-	Type          int           `json:"type"`
-	Name          string        `json:"name"`
-	Status        int           `json:"status"`
-	StartedAt     *cliTimestamp `json:"started_at,omitempty"`
-	UptimeSeconds uint64        `json:"uptime_seconds,omitempty"`
-	Health        int           `json:"health"`
-	Version       string        `json:"version,omitempty"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	Status        string `json:"status"`
+	Health        string `json:"health"`
+	UptimeSeconds uint64 `json:"uptime_seconds,omitempty"`
+	Version       string `json:"version,omitempty"`
 }
 
-// cliListServicesResponse matches ListServicesResponse serialized via encoding/json.
-type cliListServicesResponse struct {
-	Services []cliServiceInfo `json:"services,omitempty"`
+func (s *cliServiceInfo) toResult() *ServiceInfoResult {
+	return &ServiceInfoResult{
+		Name:   s.Name,
+		Status: normalizeServiceStatus(s.Status),
+		Uptime: fmt.Sprintf("%d seconds", s.UptimeSeconds),
+	}
 }
 
-func (r *cliListServicesResponse) toResult() *ListServicesResult {
+// cliServiceInfoSliceToResult converts a slice of cliServiceInfo to a
+// ListServicesResult.
+func cliServiceInfoSliceToResult(services []cliServiceInfo) *ListServicesResult {
 	result := &ListServicesResult{
-		Count:     len(r.Services),
+		Count:     len(services),
 		Timestamp: time.Now(),
 	}
-
-	for _, svc := range r.Services {
-		info := ServiceInfoResult{
-			Name:   svc.Name,
-			Status: cliServiceStatusToString(svc.Status),
-			Uptime: fmt.Sprintf("%d seconds", svc.UptimeSeconds),
-		}
-		if svc.StartedAt != nil {
-			info.StartedAt = svc.StartedAt.toTime()
-		}
-		result.Services = append(result.Services, info)
+	for _, svc := range services {
+		result.Services = append(result.Services, *svc.toResult())
 	}
-
-	return result
-}
-
-// cliServiceStatusResponse matches GetServiceStatusResponse serialized via encoding/json.
-type cliServiceStatusResponse struct {
-	Service *cliServiceInfo `json:"service,omitempty"`
-}
-
-func (r *cliServiceStatusResponse) toResult() *ServiceInfoResult {
-	result := &ServiceInfoResult{}
-
-	if r.Service != nil {
-		result.Name = r.Service.Name
-		result.Status = cliServiceStatusToString(r.Service.Status)
-		result.Uptime = fmt.Sprintf("%d seconds", r.Service.UptimeSeconds)
-		if r.Service.StartedAt != nil {
-			result.StartedAt = r.Service.StartedAt.toTime()
-		}
-	}
-
 	return result
 }
 
 // cliServiceActionResponse represents a service action result.
-// Service start/stop/restart commands print a success message to stdout
-// and return exit code 0 on success, non-zero on failure. When JSON output
-// is requested, they may not produce JSON for success cases (they use
-// printer.PrintSuccess which writes plain text). This struct handles
-// both structured JSON and fallback cases.
+// Service start/stop/restart commands emit a structured JSON response
+// when --output json is requested (via printServiceAction in service.go).
 type cliServiceActionResponse struct {
 	Service string `json:"service"`
 	Action  string `json:"action"`
@@ -600,91 +546,6 @@ func (r *cliServiceActionResponse) toResult() *ServiceActionResult {
 		Success: r.Success,
 		Message: r.Message,
 	}
-}
-
-// =============================================================================
-// Protobuf Enum Integer to String Conversion
-// =============================================================================
-
-// cliHealthStatusToString converts a HealthStatus protobuf enum integer to
-// the lowercase string expected by tests.
-// HealthStatus enum values from common.proto:
-//
-//	HEALTH_STATUS_UNSPECIFIED = 0
-//	HEALTH_STATUS_HEALTHY     = 1
-//	HEALTH_STATUS_DEGRADED    = 2
-//	HEALTH_STATUS_UNHEALTHY   = 3
-func cliHealthStatusToString(status int) string {
-	switch status {
-	case 1:
-		return HealthStatusHealthy
-	case 2:
-		return HealthStatusDegraded
-	case 3:
-		return HealthStatusUnhealthy
-	default:
-		return "unknown"
-	}
-}
-
-// cliSystemStatusToString converts a SystemStatus protobuf enum integer to
-// the lowercase string expected by tests.
-// SystemStatus enum values from daemon.proto:
-//
-//	SYSTEM_STATUS_UNSPECIFIED   = 0
-//	SYSTEM_STATUS_READY         = 1
-//	SYSTEM_STATUS_INITIALIZING  = 2
-//	SYSTEM_STATUS_DEGRADED      = 3
-//	SYSTEM_STATUS_UNAVAILABLE   = 4
-//	SYSTEM_STATUS_SHUTTING_DOWN = 5
-func cliSystemStatusToString(status int) string {
-	switch status {
-	case 1:
-		return "ready"
-	case 2:
-		return "initializing"
-	case 3:
-		return "degraded"
-	case 4:
-		return "unavailable"
-	case 5:
-		return "shutting_down"
-	default:
-		return "unknown"
-	}
-}
-
-// cliServiceStatusToString converts a ServiceStatus protobuf enum integer to
-// the lowercase string expected by tests.
-// ServiceStatus enum values from daemon.proto:
-//
-//	SERVICE_STATUS_UNSPECIFIED = 0
-//	SERVICE_STATUS_STOPPED     = 1
-//	SERVICE_STATUS_STARTING    = 2
-//	SERVICE_STATUS_RUNNING     = 3
-//	SERVICE_STATUS_STOPPING    = 4
-//	SERVICE_STATUS_ERROR       = 5
-func cliServiceStatusToString(status int) string {
-	switch status {
-	case 1:
-		return ServiceStatusStopped
-	case 2:
-		return ServiceStatusStarting
-	case 3:
-		return ServiceStatusRunning
-	case 4:
-		return ServiceStatusStopping
-	case 5:
-		return ServiceStatusError
-	default:
-		return "unknown"
-	}
-}
-
-// cliServiceStatusIsRunning returns true if the service status enum integer
-// represents a running service.
-func cliServiceStatusIsRunning(status int) bool {
-	return status == 3
 }
 
 // Ensure CLIAdapter implements DaemonCommands interface.

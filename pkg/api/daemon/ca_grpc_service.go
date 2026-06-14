@@ -383,6 +383,17 @@ func (s *CAGRPCService) RenewCertificate(ctx context.Context, req *platformv1.Re
 		KeyType:      xkmssdk.KeyTypeTLS,
 	}
 
+	// Supersede the existing certificate before issuing the renewal.
+	// DeleteKeys must be true: it is what removes the old cert-store entry
+	// (and the leaf's namespaced key) — without it IssueCertificate still
+	// fails with ErrCertificateAlreadyExists. Leaf keys are CN-namespaced,
+	// so this can never touch the CA signing key.
+	revokeErr := s.ca.RevokeCert(ctx, existingCert, quicbaasca.RevokeOptions{DeleteKeys: true})
+	if revokeErr != nil {
+		s.logger.Error(revokeErr, "failed to revoke old certificate during renewal")
+		return nil, status.Error(codes.Internal, "failed to renew certificate: "+revokeErr.Error())
+	}
+
 	// Issue the renewed certificate
 	issuedRenew, err := s.ca.IssueCertificate(ctx, caReq)
 	if err != nil {

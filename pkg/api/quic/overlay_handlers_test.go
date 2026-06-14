@@ -1210,7 +1210,9 @@ func TestOverlayHandleListMACs(t *testing.T) {
 		assert.Equal(t, StatusUnavailable, resp.Status)
 	})
 
-	t.Run("returns error for missing VNI", func(t *testing.T) {
+	t.Run("VNI zero lists all MACs", func(t *testing.T) {
+		// VNI == 0 means list all MACs across all VNIs (list-all semantics).
+		// The server must not reject VNI=0 as an invalid argument.
 		t.Parallel()
 		handler, _ := createTestOverlayHandler()
 
@@ -1226,8 +1228,10 @@ func TestOverlayHandleListMACs(t *testing.T) {
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
-		assert.Contains(t, string(resp.Payload), "VNI")
+		assert.Equal(t, StatusOK, resp.Status)
+		var listResp OverlayListMACsResponse
+		require.NoError(t, DecodePayload(resp.Payload, &listResp))
+		assert.NotNil(t, listResp.MACs)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {

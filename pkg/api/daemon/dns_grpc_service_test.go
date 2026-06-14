@@ -181,6 +181,10 @@ func (m *mockDNSService) Resolve(ctx context.Context, name string, recordType st
 	return nil, nil
 }
 
+func (m *mockDNSService) RegisterWithNetworkZone(ctx context.Context, host, networkZone, ip string) error {
+	return nil
+}
+
 // Test helper to create logger
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
