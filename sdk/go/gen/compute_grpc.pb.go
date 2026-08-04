@@ -38,6 +38,8 @@ const (
 	ComputeService_DeleteSnapshot_FullMethodName      = "/platform.v1.ComputeService/DeleteSnapshot"
 	ComputeService_ListSnapshots_FullMethodName       = "/platform.v1.ComputeService/ListSnapshots"
 	ComputeService_MigrateVM_FullMethodName           = "/platform.v1.ComputeService/MigrateVM"
+	ComputeService_PrepareMigration_FullMethodName    = "/platform.v1.ComputeService/PrepareMigration"
+	ComputeService_FinalizeMigration_FullMethodName   = "/platform.v1.ComputeService/FinalizeMigration"
 	ComputeService_CreateContainer_FullMethodName     = "/platform.v1.ComputeService/CreateContainer"
 	ComputeService_StartContainer_FullMethodName      = "/platform.v1.ComputeService/StartContainer"
 	ComputeService_StopContainer_FullMethodName       = "/platform.v1.ComputeService/StopContainer"
@@ -83,6 +85,9 @@ type ComputeServiceClient interface {
 	ListSnapshots(ctx context.Context, in *ListSnapshotsRequest, opts ...grpc.CallOption) (*ListSnapshotsResponse, error)
 	// VM migration
 	MigrateVM(ctx context.Context, in *MigrateVMRequest, opts ...grpc.CallOption) (*MigrateVMResponse, error)
+	// Inter-daemon migration handshake (destination side)
+	PrepareMigration(ctx context.Context, in *PrepareMigrationRequest, opts ...grpc.CallOption) (*PrepareMigrationResponse, error)
+	FinalizeMigration(ctx context.Context, in *FinalizeMigrationRequest, opts ...grpc.CallOption) (*FinalizeMigrationResponse, error)
 	// Container operations
 	CreateContainer(ctx context.Context, in *CreateContainerRequest, opts ...grpc.CallOption) (*CreateContainerResponse, error)
 	StartContainer(ctx context.Context, in *StartContainerRequest, opts ...grpc.CallOption) (*StartContainerResponse, error)
@@ -321,6 +326,26 @@ func (c *computeServiceClient) MigrateVM(ctx context.Context, in *MigrateVMReque
 	return out, nil
 }
 
+func (c *computeServiceClient) PrepareMigration(ctx context.Context, in *PrepareMigrationRequest, opts ...grpc.CallOption) (*PrepareMigrationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PrepareMigrationResponse)
+	err := c.cc.Invoke(ctx, ComputeService_PrepareMigration_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *computeServiceClient) FinalizeMigration(ctx context.Context, in *FinalizeMigrationRequest, opts ...grpc.CallOption) (*FinalizeMigrationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FinalizeMigrationResponse)
+	err := c.cc.Invoke(ctx, ComputeService_FinalizeMigration_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *computeServiceClient) CreateContainer(ctx context.Context, in *CreateContainerRequest, opts ...grpc.CallOption) (*CreateContainerResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateContainerResponse)
@@ -499,6 +524,9 @@ type ComputeServiceServer interface {
 	ListSnapshots(context.Context, *ListSnapshotsRequest) (*ListSnapshotsResponse, error)
 	// VM migration
 	MigrateVM(context.Context, *MigrateVMRequest) (*MigrateVMResponse, error)
+	// Inter-daemon migration handshake (destination side)
+	PrepareMigration(context.Context, *PrepareMigrationRequest) (*PrepareMigrationResponse, error)
+	FinalizeMigration(context.Context, *FinalizeMigrationRequest) (*FinalizeMigrationResponse, error)
 	// Container operations
 	CreateContainer(context.Context, *CreateContainerRequest) (*CreateContainerResponse, error)
 	StartContainer(context.Context, *StartContainerRequest) (*StartContainerResponse, error)
@@ -582,6 +610,12 @@ func (UnimplementedComputeServiceServer) ListSnapshots(context.Context, *ListSna
 }
 func (UnimplementedComputeServiceServer) MigrateVM(context.Context, *MigrateVMRequest) (*MigrateVMResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MigrateVM not implemented")
+}
+func (UnimplementedComputeServiceServer) PrepareMigration(context.Context, *PrepareMigrationRequest) (*PrepareMigrationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PrepareMigration not implemented")
+}
+func (UnimplementedComputeServiceServer) FinalizeMigration(context.Context, *FinalizeMigrationRequest) (*FinalizeMigrationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FinalizeMigration not implemented")
 }
 func (UnimplementedComputeServiceServer) CreateContainer(context.Context, *CreateContainerRequest) (*CreateContainerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateContainer not implemented")
@@ -960,6 +994,42 @@ func _ComputeService_MigrateVM_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ComputeService_PrepareMigration_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareMigrationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ComputeServiceServer).PrepareMigration(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ComputeService_PrepareMigration_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ComputeServiceServer).PrepareMigration(ctx, req.(*PrepareMigrationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ComputeService_FinalizeMigration_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FinalizeMigrationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ComputeServiceServer).FinalizeMigration(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ComputeService_FinalizeMigration_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ComputeServiceServer).FinalizeMigration(ctx, req.(*FinalizeMigrationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ComputeService_CreateContainer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateContainerRequest)
 	if err := dec(in); err != nil {
@@ -1250,6 +1320,14 @@ var ComputeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "MigrateVM",
 			Handler:    _ComputeService_MigrateVM_Handler,
+		},
+		{
+			MethodName: "PrepareMigration",
+			Handler:    _ComputeService_PrepareMigration_Handler,
+		},
+		{
+			MethodName: "FinalizeMigration",
+			Handler:    _ComputeService_FinalizeMigration_Handler,
 		},
 		{
 			MethodName: "CreateContainer",

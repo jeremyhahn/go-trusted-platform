@@ -39,6 +39,10 @@ service ComputeService {
   // VM migration
   rpc MigrateVM(MigrateVMRequest) returns (MigrateVMResponse);
 
+  // Inter-daemon migration handshake (destination side)
+  rpc PrepareMigration(PrepareMigrationRequest) returns (PrepareMigrationResponse);
+  rpc FinalizeMigration(FinalizeMigrationRequest) returns (FinalizeMigrationResponse);
+
   // Container operations
   rpc CreateContainer(CreateContainerRequest) returns (CreateContainerResponse);
   rpc StartContainer(StartContainerRequest) returns (StartContainerResponse);
@@ -523,6 +527,41 @@ message MigrateVMRequest {
 }
 
 message MigrateVMResponse {
+  Status status = 1;
+}
+
+message VMMigrationSpec {
+  int32  memory_mb    = 1;
+  int32  cpus         = 2;
+  string disk_size    = 3;
+  string boot_mode    = 4;
+  bool   secure_boot  = 5;
+  bool   enable_kvm   = 6;
+  bool   tpm_enabled  = 7;
+  string network_mode = 8;
+  string mac_address  = 9;
+}
+
+message PrepareMigrationRequest {
+  string vm_id   = 1;   // source instance id (informational)
+  string vm_name = 2;   // guest name
+  string mode    = 3;   // "cold" | "live"
+  VMMigrationSpec spec = 4;
+}
+
+message PrepareMigrationResponse {
+  Status status       = 1;
+  string receiver_id  = 2;   // token returned to FinalizeMigration
+  int32  port         = 3;   // TCP port the receiver listens on
+  string tls_hostname = 4;   // hostname the source pins in migration tls-creds
+}
+
+message FinalizeMigrationRequest {
+  string receiver_id = 1;
+  bool   commit      = 2;    // true = register/resume received VM, false = abort
+}
+
+message FinalizeMigrationResponse {
   Status status = 1;
 }
 

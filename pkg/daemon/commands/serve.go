@@ -323,6 +323,22 @@ func newComputeOrchestrator(logger *logging.Logger, a *app.App, ovsSocketPath st
 				computeConfig.DefaultCPUs = a.ComputeConfig.DefaultCPUs
 			}
 		}
+
+		// Wire the inter-daemon VM migration seams for the local QEMU provider.
+		// Both are backed by the platform CA (reached through the QuicBaaS SDK):
+		// the coordinator dials peer daemons over mTLS to drive the prepare/
+		// finalize handshake, and the TLS provider issues the short-lived
+		// migration tls-creds. Both constructors return nil for a nil CA, so
+		// MigrateVM stays gated (ErrMigration*NotConfigured) until a CA exists;
+		// the explicit non-nil guards avoid storing a typed-nil interface.
+		if a != nil && a.CA != nil {
+			if coord := newGRPCMigrationCoordinator(a.CA, logger); coord != nil {
+				computeConfig.MigrationCoordinator = coord
+			}
+			if tlsProv := newCAMigrationTLS(a.CA, filepath.Join(computeConfig.WorkDir, "migration-tls"), logger); tlsProv != nil {
+				computeConfig.MigrationTLS = tlsProv
+			}
+		}
 	}
 
 	deps := &compute.Deps{Logger: logger}
