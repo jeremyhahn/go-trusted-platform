@@ -87,7 +87,7 @@ func TestNewIDevIDCommand(t *testing.T) {
 
 	// Verify subcommands are registered
 	subcommands := cmd.Commands()
-	assert.Len(t, subcommands, 6) // generate, info, delete, csr, install, cert
+	assert.Len(t, subcommands, 7) // generate, info, delete, csr, install, cert, ldevid
 
 	// Find all commands
 	var hasGenerate, hasInfo, hasDelete, hasCSR, hasInstall, hasCert bool

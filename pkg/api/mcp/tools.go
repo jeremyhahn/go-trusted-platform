@@ -101,6 +101,9 @@ func (r *ToolRegistry) registerTools() {
 	// Register IDevID/IAK tools (IEEE 802.1AR device identity)
 	r.registerIDevIDTools()
 
+	// Register LDevID tool (IEEE 802.1AR local device identity)
+	r.registerLDevIDTools()
+
 	// Register Tenant management tools (multi-tenancy)
 	r.registerTenantTools()
 
@@ -1540,6 +1543,8 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeIDevIDDeleteCert(ctx, args)
 	case "idevid_exists":
 		return r.executeIDevIDExists(ctx, args)
+	case "idevid_create_ldevid":
+		return r.executeLDevIDCreate(ctx, args)
 
 	// IAK Operations (IEEE 802.1AR attestation key)
 	case "iak_generate":

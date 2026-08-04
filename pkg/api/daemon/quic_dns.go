@@ -18,44 +18,29 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 )
 
-// DNS request/response types for QUIC protocol
-
-// DNSAddRecordRequest represents a request to add a DNS record
-type DNSAddRecordRequest struct {
-	Zone       string `codec:"zone"`
-	Name       string `codec:"name"`
-	RecordType string `codec:"record_type"`
-	Value      string `codec:"value"`
-	TTL        int    `codec:"ttl"`
-	Priority   uint16 `codec:"priority"`
-}
-
-// DNSAddRecordResponse represents the response after adding a DNS record
-type DNSAddRecordResponse struct {
-	Success   bool   `codec:"success"`
-	Zone      string `codec:"zone"`
-	Name      string `codec:"name"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-// DNSDeleteRecordRequest represents a request to delete a DNS record
-type DNSDeleteRecordRequest struct {
-	Zone       string `codec:"zone"`
-	Name       string `codec:"name"`
-	RecordType string `codec:"record_type"`
-}
-
-// DNSDeleteRecordResponse represents the response after deleting a DNS record
-type DNSDeleteRecordResponse struct {
-	Success   bool   `codec:"success"`
-	Zone      string `codec:"zone"`
-	Name      string `codec:"name"`
-	Timestamp int64  `codec:"timestamp"`
-}
+// DNS QUIC transport.
+//
+// The DNS surface splits into two wire contracts:
+//
+//   - SDK-mapped operations (AddRecord 0x20, DeleteRecord 0x21,
+//     ListRecords 0x24, AddZone/CreateZone 0x25, DeleteZone 0x26,
+//     ListZones 0x28, Resolve 0x29) speak the platform.v1 protobuf wire
+//     contract and delegate to the shared *DNSServiceServer. Their handlers,
+//     mirror wire types, and error mapping live in quic_dns_delegate.go.
+//
+//   - Daemon-native operations (UpdateRecord 0x22, GetRecord 0x23,
+//     GetZone 0x27, GetConfig 0x2A, UpdateConfig 0x2B, GetMetrics 0x2C,
+//     FlushCache 0x2D) have NO SDK QUIC client. They are exercised only by
+//     the local CLI and integration harness and keep their flat wire structs
+//     defined below.
+//
+// The SDK QUIC adapter sends the generated platform.v1 request struct straight
+// to the wire, so the SDK-mapped handlers MUST decode the same message the SDK
+// sent; the previous flat DNSAddRecordRequest{Zone,Name,RecordType,Value} decode
+// silently dropped every field because the Go field names did not match the pb.
 
 // DNSUpdateRecordRequest represents a request to update a DNS record
 type DNSUpdateRecordRequest struct {
@@ -98,48 +83,6 @@ type DNSGetRecordResponse struct {
 	Timestamp int64      `codec:"timestamp"`
 }
 
-// DNSListRecordsRequest represents a request to list DNS records
-type DNSListRecordsRequest struct {
-	Zone       string `codec:"zone"`
-	RecordType string `codec:"record_type"`
-}
-
-// DNSListRecordsResponse represents the response containing DNS records
-type DNSListRecordsResponse struct {
-	Records   []*DNSRecord `codec:"records"`
-	Zone      string       `codec:"zone"`
-	Total     int          `codec:"total"`
-	Timestamp int64        `codec:"timestamp"`
-}
-
-// DNSAddZoneRequest represents a request to create a DNS zone
-type DNSAddZoneRequest struct {
-	Name        string `codec:"name"`
-	Description string `codec:"description"`
-	TTL         uint32 `codec:"ttl"`
-	Internal    bool   `codec:"internal"`
-}
-
-// DNSAddZoneResponse represents the response after creating a DNS zone
-type DNSAddZoneResponse struct {
-	Success   bool   `codec:"success"`
-	Zone      string `codec:"zone"`
-	ID        uint64 `codec:"id"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-// DNSDeleteZoneRequest represents a request to delete a DNS zone
-type DNSDeleteZoneRequest struct {
-	Zone string `codec:"zone"`
-}
-
-// DNSDeleteZoneResponse represents the response after deleting a DNS zone
-type DNSDeleteZoneResponse struct {
-	Success   bool   `codec:"success"`
-	Zone      string `codec:"zone"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
 // DNSGetZoneRequest represents a request to get a DNS zone
 type DNSGetZoneRequest struct {
 	Zone string `codec:"zone"`
@@ -158,32 +101,6 @@ type DNSZone struct {
 // DNSGetZoneResponse represents the response containing a DNS zone
 type DNSGetZoneResponse struct {
 	Zone      *DNSZone `codec:"zone"`
-	Timestamp int64    `codec:"timestamp"`
-}
-
-// DNSListZonesRequest represents a request to list DNS zones
-type DNSListZonesRequest struct {
-	Internal *bool `codec:"internal"`
-}
-
-// DNSListZonesResponse represents the response containing DNS zones
-type DNSListZonesResponse struct {
-	Zones     []*DNSZone `codec:"zones"`
-	Total     int        `codec:"total"`
-	Timestamp int64      `codec:"timestamp"`
-}
-
-// DNSResolveRequest represents a DNS resolution request
-type DNSResolveRequest struct {
-	Name       string `codec:"name"`
-	RecordType string `codec:"record_type"`
-}
-
-// DNSResolveResponse represents a DNS resolution response
-type DNSResolveResponse struct {
-	Name      string   `codec:"name"`
-	Type      string   `codec:"type"`
-	Values    []string `codec:"values"`
 	Timestamp int64    `codec:"timestamp"`
 }
 
@@ -249,33 +166,39 @@ type DNSFlushCacheResponse struct {
 	Timestamp     int64 `codec:"timestamp"`
 }
 
-// handleDNSOperation routes DNS operations to their handlers
+// handleDNSOperation routes DNS operations to their handlers. SDK-mapped
+// operations delegate to the shared *DNSServiceServer (handlers in
+// quic_dns_delegate.go); daemon-native operations use the flat wire structs
+// in this file.
 func (h *QUICServiceHandler) handleDNSOperation(ctx context.Context, req *quic.Request) *quic.Response {
 	if h.dnsService == nil {
 		return h.errorResponse(quic.StatusUnavailable, ErrDNSServiceNotAvailable{})
 	}
 
 	switch req.Opcode {
+	// SDK-mapped operations (pb / mirror wire, delegated to *DNSServiceServer)
 	case quic.OpDNSAddRecord:
 		return h.handleDNSAddRecord(ctx, req)
 	case quic.OpDNSDeleteRecord:
 		return h.handleDNSDeleteRecord(ctx, req)
-	case quic.OpDNSUpdateRecord:
-		return h.handleDNSUpdateRecord(ctx, req)
-	case quic.OpDNSGetRecord:
-		return h.handleDNSGetRecord(ctx, req)
 	case quic.OpDNSListRecords:
 		return h.handleDNSListRecords(ctx, req)
 	case quic.OpDNSAddZone:
 		return h.handleDNSAddZone(ctx, req)
 	case quic.OpDNSDeleteZone:
 		return h.handleDNSDeleteZone(ctx, req)
-	case quic.OpDNSGetZone:
-		return h.handleDNSGetZone(ctx, req)
 	case quic.OpDNSListZones:
 		return h.handleDNSListZones(ctx, req)
 	case quic.OpDNSResolve:
 		return h.handleDNSResolve(ctx, req)
+
+	// Daemon-native operations (flat wire, no SDK QUIC client)
+	case quic.OpDNSUpdateRecord:
+		return h.handleDNSUpdateRecord(ctx, req)
+	case quic.OpDNSGetRecord:
+		return h.handleDNSGetRecord(ctx, req)
+	case quic.OpDNSGetZone:
+		return h.handleDNSGetZone(ctx, req)
 	case quic.OpDNSGetConfig:
 		return h.handleDNSGetConfig(ctx, req)
 	case quic.OpDNSUpdateConfig:
@@ -284,108 +207,13 @@ func (h *QUICServiceHandler) handleDNSOperation(ctx context.Context, req *quic.R
 		return h.handleDNSGetMetrics(ctx, req)
 	case quic.OpDNSFlushCache:
 		return h.handleDNSFlushCache(ctx, req)
+
 	default:
 		return h.errorResponse(quic.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
 	}
 }
 
-// handleDNSAddRecord handles adding a DNS record
-func (h *QUICServiceHandler) handleDNSAddRecord(ctx context.Context, req *quic.Request) *quic.Response {
-	var addReq DNSAddRecordRequest
-	if err := quic.DecodePayload(req.Payload, &addReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
-	}
-
-	if addReq.Zone == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "zone"})
-	}
-	if addReq.Name == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "name"})
-	}
-	if addReq.RecordType == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "record_type"})
-	}
-	if addReq.Value == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "value"})
-	}
-
-	ttl := addReq.TTL
-	if ttl <= 0 {
-		ttl = 3600
-	}
-
-	err := h.dnsService.AddRecord(ctx, addReq.Name, addReq.RecordType, addReq.Value, ttl)
-	if err != nil {
-		h.logger.Error(err, "failed to add DNS record",
-			"zone", addReq.Zone,
-			"name", addReq.Name,
-			"type", addReq.RecordType)
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "DNSAddRecord", Cause: err})
-	}
-
-	resp := &DNSAddRecordResponse{
-		Success:   true,
-		Zone:      addReq.Zone,
-		Name:      addReq.Name,
-		Timestamp: time.Now().Unix(),
-	}
-
-	payload, err := quic.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
-	}
-}
-
-// handleDNSDeleteRecord handles deleting a DNS record
-func (h *QUICServiceHandler) handleDNSDeleteRecord(ctx context.Context, req *quic.Request) *quic.Response {
-	var deleteReq DNSDeleteRecordRequest
-	if err := quic.DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
-	}
-
-	if deleteReq.Zone == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "zone"})
-	}
-	if deleteReq.Name == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "name"})
-	}
-	if deleteReq.RecordType == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "record_type"})
-	}
-
-	err := h.dnsService.DeleteRecord(ctx, deleteReq.Name, deleteReq.RecordType)
-	if err != nil {
-		h.logger.Error(err, "failed to delete DNS record",
-			"zone", deleteReq.Zone,
-			"name", deleteReq.Name,
-			"type", deleteReq.RecordType)
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "DNSDeleteRecord", Cause: err})
-	}
-
-	resp := &DNSDeleteRecordResponse{
-		Success:   true,
-		Zone:      deleteReq.Zone,
-		Name:      deleteReq.Name,
-		Timestamp: time.Now().Unix(),
-	}
-
-	payload, err := quic.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
-	}
-}
-
-// handleDNSUpdateRecord handles updating a DNS record
+// handleDNSUpdateRecord handles updating a DNS record (daemon-native).
 func (h *QUICServiceHandler) handleDNSUpdateRecord(ctx context.Context, req *quic.Request) *quic.Response {
 	var updateReq DNSUpdateRecordRequest
 	if err := quic.DecodePayload(req.Payload, &updateReq); err != nil {
@@ -442,7 +270,7 @@ func (h *QUICServiceHandler) handleDNSUpdateRecord(ctx context.Context, req *qui
 	}
 }
 
-// handleDNSGetRecord handles getting a DNS record
+// handleDNSGetRecord handles getting a DNS record (daemon-native).
 func (h *QUICServiceHandler) handleDNSGetRecord(ctx context.Context, req *quic.Request) *quic.Response {
 	var getReq DNSGetRecordRequest
 	if err := quic.DecodePayload(req.Payload, &getReq); err != nil {
@@ -487,128 +315,7 @@ func (h *QUICServiceHandler) handleDNSGetRecord(ctx context.Context, req *quic.R
 	}
 }
 
-// handleDNSListRecords handles listing DNS records
-func (h *QUICServiceHandler) handleDNSListRecords(ctx context.Context, req *quic.Request) *quic.Response {
-	var listReq DNSListRecordsRequest
-	if len(req.Payload) > 0 {
-		if err := quic.DecodePayload(req.Payload, &listReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
-		}
-	}
-
-	if listReq.Zone == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "zone"})
-	}
-
-	records, err := h.dnsService.ListRecords(ctx, listReq.Zone)
-	if err != nil {
-		h.logger.Error(err, "failed to list DNS records", "zone", listReq.Zone)
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "DNSListRecords", Cause: err})
-	}
-
-	dnsRecords := make([]*DNSRecord, 0, len(records))
-	for _, rec := range records {
-		dnsRec := convertInterfaceToQUICRecord(rec)
-		if dnsRec != nil {
-			if listReq.RecordType == "" || dnsRec.RecordType == listReq.RecordType {
-				dnsRecords = append(dnsRecords, dnsRec)
-			}
-		}
-	}
-
-	resp := &DNSListRecordsResponse{
-		Records:   dnsRecords,
-		Zone:      listReq.Zone,
-		Total:     len(dnsRecords),
-		Timestamp: time.Now().Unix(),
-	}
-
-	payload, err := quic.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
-	}
-}
-
-// handleDNSAddZone handles creating a DNS zone
-func (h *QUICServiceHandler) handleDNSAddZone(ctx context.Context, req *quic.Request) *quic.Response {
-	var addReq DNSAddZoneRequest
-	if err := quic.DecodePayload(req.Payload, &addReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
-	}
-
-	if addReq.Name == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "name"})
-	}
-
-	err := h.dnsService.CreateZone(ctx, addReq.Name)
-	if err != nil {
-		h.logger.Error(err, "failed to create DNS zone", "zone", addReq.Name)
-		if err == dns.ErrZoneAlreadyExists {
-			return h.errorResponse(quic.StatusAlreadyExists, ErrQUICOperationFailed{Op: "DNSAddZone", Cause: err})
-		}
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "DNSAddZone", Cause: err})
-	}
-
-	resp := &DNSAddZoneResponse{
-		Success:   true,
-		Zone:      addReq.Name,
-		Timestamp: time.Now().Unix(),
-	}
-
-	payload, err := quic.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
-	}
-}
-
-// handleDNSDeleteZone handles deleting a DNS zone
-func (h *QUICServiceHandler) handleDNSDeleteZone(ctx context.Context, req *quic.Request) *quic.Response {
-	var deleteReq DNSDeleteZoneRequest
-	if err := quic.DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
-	}
-
-	if deleteReq.Zone == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "zone"})
-	}
-
-	err := h.dnsService.DeleteZone(ctx, deleteReq.Zone)
-	if err != nil {
-		h.logger.Error(err, "failed to delete DNS zone", "zone", deleteReq.Zone)
-		if err == dns.ErrZoneNotFound {
-			return h.errorResponse(quic.StatusNotFound, ErrQUICOperationFailed{Op: "DNSDeleteZone", Cause: err})
-		}
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "DNSDeleteZone", Cause: err})
-	}
-
-	resp := &DNSDeleteZoneResponse{
-		Success:   true,
-		Zone:      deleteReq.Zone,
-		Timestamp: time.Now().Unix(),
-	}
-
-	payload, err := quic.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
-	}
-}
-
-// handleDNSGetZone handles getting a DNS zone
+// handleDNSGetZone handles getting a DNS zone (daemon-native).
 func (h *QUICServiceHandler) handleDNSGetZone(ctx context.Context, req *quic.Request) *quic.Response {
 	var getReq DNSGetZoneRequest
 	if err := quic.DecodePayload(req.Payload, &getReq); err != nil {
@@ -650,96 +357,7 @@ func (h *QUICServiceHandler) handleDNSGetZone(ctx context.Context, req *quic.Req
 	}
 }
 
-// handleDNSListZones handles listing DNS zones
-func (h *QUICServiceHandler) handleDNSListZones(ctx context.Context, req *quic.Request) *quic.Response {
-	var listReq DNSListZonesRequest
-	if len(req.Payload) > 0 {
-		if err := quic.DecodePayload(req.Payload, &listReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
-		}
-	}
-
-	zones, err := h.dnsService.ListZones(ctx)
-	if err != nil {
-		h.logger.Error(err, "failed to list DNS zones")
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "DNSListZones", Cause: err})
-	}
-
-	dnsZones := make([]*DNSZone, 0, len(zones))
-	for _, zone := range zones {
-		if listReq.Internal != nil && *listReq.Internal != zone.Internal {
-			continue
-		}
-		dnsZones = append(dnsZones, &DNSZone{
-			ID:          zone.ID,
-			Name:        zone.Name,
-			TTL:         zone.TTL,
-			Description: zone.Description,
-			Internal:    zone.Internal,
-			RecordCount: countZoneRecords(zone),
-		})
-	}
-
-	resp := &DNSListZonesResponse{
-		Zones:     dnsZones,
-		Total:     len(dnsZones),
-		Timestamp: time.Now().Unix(),
-	}
-
-	payload, err := quic.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
-	}
-}
-
-// handleDNSResolve handles DNS resolution
-func (h *QUICServiceHandler) handleDNSResolve(ctx context.Context, req *quic.Request) *quic.Response {
-	var resolveReq DNSResolveRequest
-	if err := quic.DecodePayload(req.Payload, &resolveReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
-	}
-
-	if resolveReq.Name == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "name"})
-	}
-
-	recordType := resolveReq.RecordType
-	if recordType == "" {
-		recordType = "A"
-	}
-
-	values, err := h.dnsService.Resolve(ctx, resolveReq.Name, recordType)
-	if err != nil {
-		h.logger.Error(err, "failed to resolve DNS",
-			"name", resolveReq.Name,
-			"type", recordType)
-		return h.errorResponse(quic.StatusNotFound, ErrQUICOperationFailed{Op: "DNSResolve", Cause: err})
-	}
-
-	resp := &DNSResolveResponse{
-		Name:      resolveReq.Name,
-		Type:      recordType,
-		Values:    values,
-		Timestamp: time.Now().Unix(),
-	}
-
-	payload, err := quic.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
-	}
-}
-
-// handleDNSGetConfig handles getting DNS configuration
+// handleDNSGetConfig handles getting DNS configuration (daemon-native).
 func (h *QUICServiceHandler) handleDNSGetConfig(ctx context.Context, req *quic.Request) *quic.Response {
 	config := &DNSConfig{
 		InternalDomain: h.dnsService.InternalDomain(),
@@ -763,16 +381,16 @@ func (h *QUICServiceHandler) handleDNSGetConfig(ctx context.Context, req *quic.R
 	}
 }
 
-// handleDNSUpdateConfig handles updating DNS configuration
+// handleDNSUpdateConfig handles updating DNS configuration (daemon-native).
 func (h *QUICServiceHandler) handleDNSUpdateConfig(ctx context.Context, req *quic.Request) *quic.Response {
-	// DNS configuration updates are not directly supported by the service interface
-	// This would require extending the DNS service to support runtime configuration changes
+	// DNS configuration updates are not supported by the service interface.
+	// This would require extending the DNS service to support runtime
+	// configuration changes.
 	return h.errorResponse(quic.StatusNotImplemented, ErrQUICOperationFailed{Op: "DNSUpdateConfig", Cause: ErrDNSConfigUpdateNotSupported{}})
 }
 
-// handleDNSGetMetrics handles getting DNS metrics
+// handleDNSGetMetrics handles getting DNS metrics (daemon-native).
 func (h *QUICServiceHandler) handleDNSGetMetrics(ctx context.Context, req *quic.Request) *quic.Response {
-	// Get zone count
 	zones, err := h.dnsService.ListZones(ctx)
 	if err != nil {
 		h.logger.Error(err, "failed to get DNS zones for metrics")
@@ -805,10 +423,10 @@ func (h *QUICServiceHandler) handleDNSGetMetrics(ctx context.Context, req *quic.
 	}
 }
 
-// handleDNSFlushCache handles flushing DNS cache
+// handleDNSFlushCache handles flushing DNS cache (daemon-native).
 func (h *QUICServiceHandler) handleDNSFlushCache(ctx context.Context, req *quic.Request) *quic.Response {
-	// DNS cache flushing is not directly supported by the service interface
-	// This would require CoreDNS integration to clear caches
+	// DNS cache flushing is not supported by the service interface. This would
+	// require CoreDNS integration to clear caches.
 	return h.errorResponse(quic.StatusNotImplemented, ErrQUICOperationFailed{Op: "DNSFlushCache", Cause: ErrDNSCacheFlushNotSupported{}})
 }
 

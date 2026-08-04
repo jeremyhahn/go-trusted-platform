@@ -26,15 +26,56 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestHandleDNSOperation_ServiceNotAvailable tests that DNS operations return
-// StatusUnavailable when the DNS service is not configured
+// =============================================================================
+// Shared test harness (used by all quic_dns*_test.go files)
+// =============================================================================
+
+// skipIfNoCodec skips the test if the QUIC codec is not available. The codec
+// requires building with -tags codec_msgpack.
+func skipIfNoCodec(t *testing.T) {
+	t.Helper()
+	if _, err := quic.EncodePayload(struct{}{}); err != nil {
+		t.Skip("Skipping test - no codec available (build with -tags codec_msgpack)")
+	}
+}
+
+// createDNSUnitTestHandler creates a QUICServiceHandler wired to the given DNS
+// service. SetDNSService rebuilds the shared *DNSServiceServer delegate when
+// the service implements the full dns.DNSService interface.
+func createDNSUnitTestHandler(svc DNSService) *QUICServiceHandler {
+	logger := logging.DefaultLogger()
+	handler := NewQUICServiceHandler(logger)
+	handler.SetDNSService(svc)
+	return handler
+}
+
+// createDNSUnitTestRequest encodes payload into a QUIC request with the given
+// opcode. A nil payload yields an empty body.
+func createDNSUnitTestRequest(t *testing.T, opcode byte, payload interface{}) *quic.Request {
+	t.Helper()
+	skipIfNoCodec(t)
+
+	var data []byte
+	if payload != nil {
+		var err error
+		data, err = quic.EncodePayload(payload)
+		if err != nil {
+			t.Fatalf("failed to encode payload: %v", err)
+		}
+	}
+	return &quic.Request{Opcode: opcode, Payload: data}
+}
+
+// =============================================================================
+// Service availability
+// =============================================================================
+
 func TestHandleDNSOperation_ServiceNotAvailable(t *testing.T) {
 	logger := logging.DefaultLogger()
 	handler := NewQUICServiceHandler(logger)
-
 	ctx := context.Background()
 
-	testCases := []struct {
+	opcodes := []struct {
 		name   string
 		opcode byte
 	}{
@@ -54,583 +95,280 @@ func TestHandleDNSOperation_ServiceNotAvailable(t *testing.T) {
 		{"FlushCache", quic.OpDNSFlushCache},
 	}
 
-	for _, tc := range testCases {
+	for _, tc := range opcodes {
 		t.Run(tc.name, func(t *testing.T) {
-			req := &quic.Request{
-				Opcode:  tc.opcode,
-				Payload: []byte{},
-			}
+			req := &quic.Request{Opcode: tc.opcode, Payload: []byte{}}
 			resp := handler.HandleRequest(ctx, req)
-
 			assert.Equal(t, quic.StatusUnavailable, resp.Status)
 			assert.Contains(t, string(resp.Payload), "DNS service not available")
 		})
 	}
 }
 
-// TestConvertToQUICRecord tests record type conversion
+// =============================================================================
+// Record conversion helpers
+// =============================================================================
+
 func TestConvertToQUICRecord(t *testing.T) {
-	t.Run("nil record returns nil", func(t *testing.T) {
-		result := convertToQUICRecord(nil, "A")
-		assert.Nil(t, result)
+	t.Run("nil returns nil", func(t *testing.T) {
+		assert.Nil(t, convertToQUICRecord(nil, "A"))
 	})
-
-	t.Run("A record conversion", func(t *testing.T) {
-		record := &entities.ARecord{
-			Name:  "test.example.com",
-			Value: "192.168.1.1",
-			TTL:   3600,
-		}
-		result := convertToQUICRecord(record, "A")
-		require.NotNil(t, result)
-		assert.Equal(t, "test.example.com", result.Name)
-		assert.Equal(t, "192.168.1.1", result.Value)
-		assert.Equal(t, uint32(3600), result.TTL)
-		assert.Equal(t, "A", result.RecordType)
+	t.Run("A", func(t *testing.T) {
+		r := convertToQUICRecord(&entities.ARecord{Name: "www", Value: "1.2.3.4", TTL: 3600}, "A")
+		require.NotNil(t, r)
+		assert.Equal(t, "www", r.Name)
+		assert.Equal(t, "1.2.3.4", r.Value)
+		assert.Equal(t, uint32(3600), r.TTL)
+		assert.Equal(t, "A", r.RecordType)
 	})
-
-	t.Run("AAAA record conversion", func(t *testing.T) {
-		record := &entities.AAAARecord{
-			Name:  "test.example.com",
-			Value: "2001:db8::1",
-			TTL:   3600,
-		}
-		result := convertToQUICRecord(record, "AAAA")
-		require.NotNil(t, result)
-		assert.Equal(t, "test.example.com", result.Name)
-		assert.Equal(t, "2001:db8::1", result.Value)
+	t.Run("MX carries priority", func(t *testing.T) {
+		r := convertToQUICRecord(&entities.MXRecord{Name: "mail", Value: "mx1.", Priority: 10, TTL: 300}, "MX")
+		require.NotNil(t, r)
+		assert.Equal(t, uint16(10), r.Priority)
 	})
-
-	t.Run("CNAME record conversion", func(t *testing.T) {
-		record := &entities.CNAMERecord{
-			Name:  "www.example.com",
-			Value: "example.com",
-			TTL:   3600,
-		}
-		result := convertToQUICRecord(record, "CNAME")
-		require.NotNil(t, result)
-		assert.Equal(t, "www.example.com", result.Name)
-		assert.Equal(t, "example.com", result.Value)
-	})
-
-	t.Run("TXT record conversion", func(t *testing.T) {
-		record := &entities.TXTRecord{
-			Name:  "example.com",
-			Value: "v=spf1 include:_spf.google.com ~all",
-			TTL:   3600,
-		}
-		result := convertToQUICRecord(record, "TXT")
-		require.NotNil(t, result)
-		assert.Equal(t, "example.com", result.Name)
-		assert.Contains(t, result.Value, "spf1")
-	})
-
-	t.Run("MX record conversion", func(t *testing.T) {
-		record := &entities.MXRecord{
-			Name:     "example.com",
-			Value:    "mail.example.com",
-			Priority: 10,
-			TTL:      3600,
-		}
-		result := convertToQUICRecord(record, "MX")
-		require.NotNil(t, result)
-		assert.Equal(t, "example.com", result.Name)
-		assert.Equal(t, "mail.example.com", result.Value)
-		assert.Equal(t, uint16(10), result.Priority)
-	})
-
-	t.Run("NS record conversion", func(t *testing.T) {
-		record := &entities.NSRecord{
-			Name:  "example.com",
-			Value: "ns1.example.com",
-			TTL:   86400,
-		}
-		result := convertToQUICRecord(record, "NS")
-		require.NotNil(t, result)
-		assert.Equal(t, "example.com", result.Name)
-		assert.Equal(t, "ns1.example.com", result.Value)
-	})
-
-	t.Run("unknown record type returns nil", func(t *testing.T) {
-		result := convertToQUICRecord("unknown", "UNKNOWN")
-		assert.Nil(t, result)
+	t.Run("unsupported type returns nil", func(t *testing.T) {
+		assert.Nil(t, convertToQUICRecord(&entities.SRVRecord{Name: "x"}, "SRV"))
 	})
 }
 
-// TestConvertInterfaceToQUICRecord tests generic interface conversion
 func TestConvertInterfaceToQUICRecord(t *testing.T) {
-	t.Run("nil record returns nil", func(t *testing.T) {
-		result := convertInterfaceToQUICRecord(nil)
-		assert.Nil(t, result)
+	t.Run("nil returns nil", func(t *testing.T) {
+		assert.Nil(t, convertInterfaceToQUICRecord(nil))
 	})
-
-	t.Run("A record sets correct type", func(t *testing.T) {
-		record := &entities.ARecord{
-			Name:  "test.example.com",
-			Value: "192.168.1.1",
-			TTL:   3600,
-		}
-		result := convertInterfaceToQUICRecord(record)
-		require.NotNil(t, result)
-		assert.Equal(t, "A", result.RecordType)
-	})
-
-	t.Run("AAAA record sets correct type", func(t *testing.T) {
-		record := &entities.AAAARecord{
-			Name:  "test.example.com",
-			Value: "2001:db8::1",
-			TTL:   3600,
-		}
-		result := convertInterfaceToQUICRecord(record)
-		require.NotNil(t, result)
-		assert.Equal(t, "AAAA", result.RecordType)
-	})
-
-	t.Run("CNAME record sets correct type", func(t *testing.T) {
-		record := &entities.CNAMERecord{
-			Name:  "www.example.com",
-			Value: "example.com",
-			TTL:   3600,
-		}
-		result := convertInterfaceToQUICRecord(record)
-		require.NotNil(t, result)
-		assert.Equal(t, "CNAME", result.RecordType)
-	})
-
-	t.Run("TXT record sets correct type", func(t *testing.T) {
-		record := &entities.TXTRecord{
-			Name:  "example.com",
-			Value: "test",
-			TTL:   3600,
-		}
-		result := convertInterfaceToQUICRecord(record)
-		require.NotNil(t, result)
-		assert.Equal(t, "TXT", result.RecordType)
-	})
-
-	t.Run("MX record sets correct type", func(t *testing.T) {
-		record := &entities.MXRecord{
-			Name:     "example.com",
-			Value:    "mail.example.com",
-			Priority: 10,
-			TTL:      3600,
-		}
-		result := convertInterfaceToQUICRecord(record)
-		require.NotNil(t, result)
-		assert.Equal(t, "MX", result.RecordType)
-		assert.Equal(t, uint16(10), result.Priority)
-	})
-
-	t.Run("NS record sets correct type", func(t *testing.T) {
-		record := &entities.NSRecord{
-			Name:  "example.com",
-			Value: "ns1.example.com",
-			TTL:   86400,
-		}
-		result := convertInterfaceToQUICRecord(record)
-		require.NotNil(t, result)
-		assert.Equal(t, "NS", result.RecordType)
-	})
-
-	t.Run("unknown type returns nil", func(t *testing.T) {
-		result := convertInterfaceToQUICRecord("unknown")
-		assert.Nil(t, result)
+	cases := []struct {
+		name   string
+		record interface{}
+		typ    string
+	}{
+		{"A", &entities.ARecord{Name: "www", Value: "1.2.3.4", TTL: 300}, "A"},
+		{"AAAA", &entities.AAAARecord{Name: "www", Value: "::1", TTL: 300}, "AAAA"},
+		{"CNAME", &entities.CNAMERecord{Name: "a", Value: "b.", TTL: 300}, "CNAME"},
+		{"TXT", &entities.TXTRecord{Name: "@", Value: "v=spf1", TTL: 300}, "TXT"},
+		{"MX", &entities.MXRecord{Name: "mail", Value: "mx.", Priority: 5, TTL: 300}, "MX"},
+		{"NS", &entities.NSRecord{Name: "@", Value: "ns1.", TTL: 300}, "NS"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := convertInterfaceToQUICRecord(tc.record)
+			require.NotNil(t, r)
+			assert.Equal(t, tc.typ, r.RecordType)
+		})
+	}
+	t.Run("unsupported returns nil", func(t *testing.T) {
+		assert.Nil(t, convertInterfaceToQUICRecord(&entities.SRVRecord{Name: "x"}))
 	})
 }
 
-// TestCountZoneRecords tests zone record counting
 func TestCountZoneRecords(t *testing.T) {
-	t.Run("nil zone returns 0", func(t *testing.T) {
-		count := countZoneRecords(nil)
-		assert.Equal(t, 0, count)
+	t.Run("nil zone", func(t *testing.T) {
+		assert.Equal(t, 0, countZoneRecords(nil))
 	})
-
-	t.Run("empty zone returns 0", func(t *testing.T) {
-		zone := &entities.Zone{}
-		count := countZoneRecords(zone)
-		assert.Equal(t, 0, count)
-	})
-
-	t.Run("zone with SOA record counts 1", func(t *testing.T) {
+	t.Run("counts across record sets", func(t *testing.T) {
 		zone := &entities.Zone{
 			RecordSet: entities.RecordSet{
-				SOARecord: entities.SOARecord{
-					Name: "example.com",
-				},
+				ARecords:    []*entities.ARecord{{Name: "a"}, {Name: "b"}},
+				AAAARecords: []*entities.AAAARecord{{Name: "c"}},
+				MXRecords:   []*entities.MXRecord{{Name: "mail"}},
 			},
 		}
-		count := countZoneRecords(zone)
-		assert.Equal(t, 1, count)
+		assert.Equal(t, 4, countZoneRecords(zone))
 	})
-
-	t.Run("zone with multiple records counts correctly", func(t *testing.T) {
+	t.Run("counts SOA when present", func(t *testing.T) {
 		zone := &entities.Zone{
 			RecordSet: entities.RecordSet{
-				SOARecord: entities.SOARecord{Name: "example.com"},
-				ARecords: []*entities.ARecord{
-					{Name: "test1", Value: "1.2.3.4"},
-					{Name: "test2", Value: "5.6.7.8"},
-				},
-				AAAARecords: []*entities.AAAARecord{
-					{Name: "test1", Value: "2001:db8::1"},
-				},
-				MXRecords: []*entities.MXRecord{
-					{Name: "example.com", Value: "mail.example.com"},
-				},
+				SOARecord: entities.SOARecord{Name: "@"},
 			},
 		}
-		count := countZoneRecords(zone)
-		assert.Equal(t, 5, count) // 1 SOA + 2 A + 1 AAAA + 1 MX
-	})
-
-	t.Run("zone with all record types counts correctly", func(t *testing.T) {
-		zone := &entities.Zone{
-			RecordSet: entities.RecordSet{
-				SOARecord: entities.SOARecord{Name: "example.com"},
-				ARecords: []*entities.ARecord{
-					{Name: "test1", Value: "1.2.3.4"},
-				},
-				AAAARecords: []*entities.AAAARecord{
-					{Name: "test1", Value: "2001:db8::1"},
-				},
-				CNAMERecords: []*entities.CNAMERecord{
-					{Name: "www", Value: "example.com"},
-				},
-				TXTRecords: []*entities.TXTRecord{
-					{Name: "@", Value: "v=spf1"},
-				},
-				MXRecords: []*entities.MXRecord{
-					{Name: "example.com", Value: "mail.example.com"},
-				},
-				NSRecords: []*entities.NSRecord{
-					{Name: "ns1", Value: "ns1.example.com"},
-				},
-				SRVRecords: []*entities.SRVRecord{
-					{Name: "_sip._tcp", Target: "sip.example.com"},
-				},
-				CAARecords: []*entities.CAARecord{
-					{Name: "example.com", Tag: "issue", Value: "letsencrypt.org"},
-				},
-				TLSARecords: []*entities.TLSARecord{
-					{Name: "_443._tcp", Data: "abc123"},
-				},
-				DNSKEYRecords: []*entities.DNSKEYRecord{
-					{Name: "example.com", Key: "key123"},
-				},
-				DSRecords: []*entities.DSRecord{
-					{Name: "example.com", Digest: "digest123"},
-				},
-				RRSIGRecords: []*entities.RRSIGRecord{
-					{SignerName: "example.com", Signature: "sig123"},
-				},
-				NSECRecords: []*entities.NSECRecord{
-					{Name: "example.com", NextDomain: "next.example.com"},
-				},
-				NSEC3Records: []*entities.NSEC3Record{
-					{Name: "hash.example.com", NextHashed: "nexthash"},
-				},
-				NSEC3PARAMRecords: []*entities.NSEC3PARAMRecord{
-					{Name: "example.com", Salt: "salt123"},
-				},
-			},
-		}
-		count := countZoneRecords(zone)
-		// 1 SOA + 1 A + 1 AAAA + 1 CNAME + 1 TXT + 1 MX + 1 NS + 1 SRV + 1 CAA +
-		// 1 TLSA + 1 DNSKEY + 1 DS + 1 RRSIG + 1 NSEC + 1 NSEC3 + 1 NSEC3PARAM = 16
-		assert.Equal(t, 16, count)
+		assert.Equal(t, 1, countZoneRecords(zone))
 	})
 }
 
-// TestDNSRequestResponse_Encoding tests that request/response types encode/decode correctly
-func TestDNSRequestResponse_Encoding(t *testing.T) {
-	t.Run("DNSAddRecordRequest roundtrip", func(t *testing.T) {
-		original := &DNSAddRecordRequest{
-			Zone:       "example.com",
-			Name:       "test.example.com",
-			RecordType: "A",
-			Value:      "192.168.1.1",
-			TTL:        3600,
-			Priority:   10,
-		}
+// =============================================================================
+// Wire struct + error behaviors
+// =============================================================================
 
-		encoded, err := quic.EncodePayload(original)
-		require.NoError(t, err)
-
-		var decoded DNSAddRecordRequest
-		err = quic.DecodePayload(encoded, &decoded)
-		require.NoError(t, err)
-
-		assert.Equal(t, original.Zone, decoded.Zone)
-		assert.Equal(t, original.Name, decoded.Name)
-		assert.Equal(t, original.RecordType, decoded.RecordType)
-		assert.Equal(t, original.Value, decoded.Value)
-		assert.Equal(t, original.TTL, decoded.TTL)
-		assert.Equal(t, original.Priority, decoded.Priority)
-	})
-
-	t.Run("DNSAddRecordResponse roundtrip", func(t *testing.T) {
-		original := &DNSAddRecordResponse{
-			Success:   true,
-			Zone:      "example.com",
-			Name:      "test.example.com",
-			Timestamp: 1704067200,
-		}
-
-		encoded, err := quic.EncodePayload(original)
-		require.NoError(t, err)
-
-		var decoded DNSAddRecordResponse
-		err = quic.DecodePayload(encoded, &decoded)
-		require.NoError(t, err)
-
-		assert.Equal(t, original.Success, decoded.Success)
-		assert.Equal(t, original.Zone, decoded.Zone)
-		assert.Equal(t, original.Name, decoded.Name)
-		assert.Equal(t, original.Timestamp, decoded.Timestamp)
-	})
-
-	t.Run("DNSDeleteRecordRequest roundtrip", func(t *testing.T) {
-		original := &DNSDeleteRecordRequest{
-			Zone:       "example.com",
-			Name:       "test.example.com",
-			RecordType: "A",
-		}
-
-		encoded, err := quic.EncodePayload(original)
-		require.NoError(t, err)
-
-		var decoded DNSDeleteRecordRequest
-		err = quic.DecodePayload(encoded, &decoded)
-		require.NoError(t, err)
-
-		assert.Equal(t, original.Zone, decoded.Zone)
-		assert.Equal(t, original.Name, decoded.Name)
-		assert.Equal(t, original.RecordType, decoded.RecordType)
-	})
-
-	t.Run("DNSUpdateRecordRequest roundtrip", func(t *testing.T) {
-		original := &DNSUpdateRecordRequest{
-			Zone:       "example.com",
-			Name:       "test.example.com",
-			RecordType: "A",
-			Value:      "192.168.1.2",
-			TTL:        7200,
-		}
-
-		encoded, err := quic.EncodePayload(original)
-		require.NoError(t, err)
-
-		var decoded DNSUpdateRecordRequest
-		err = quic.DecodePayload(encoded, &decoded)
-		require.NoError(t, err)
-
-		assert.Equal(t, original.Zone, decoded.Zone)
-		assert.Equal(t, original.Name, decoded.Name)
-		assert.Equal(t, original.RecordType, decoded.RecordType)
-		assert.Equal(t, original.Value, decoded.Value)
-		assert.Equal(t, original.TTL, decoded.TTL)
-	})
-
-	t.Run("DNSResolveResponse roundtrip", func(t *testing.T) {
-		original := &DNSResolveResponse{
-			Name:      "test.example.com",
-			Type:      "A",
-			Values:    []string{"192.168.1.1", "192.168.1.2"},
-			Timestamp: 1704067200,
-		}
-
-		encoded, err := quic.EncodePayload(original)
-		require.NoError(t, err)
-
-		var decoded DNSResolveResponse
-		err = quic.DecodePayload(encoded, &decoded)
-		require.NoError(t, err)
-
-		assert.Equal(t, original.Name, decoded.Name)
-		assert.Equal(t, original.Type, decoded.Type)
-		assert.Equal(t, original.Values, decoded.Values)
-		assert.Equal(t, original.Timestamp, decoded.Timestamp)
-	})
-
-	t.Run("DNSZone roundtrip", func(t *testing.T) {
-		original := &DNSZone{
-			ID:          1,
-			Name:        "example.com",
-			TTL:         3600,
-			Description: "Test zone",
-			Internal:    true,
-			RecordCount: 10,
-		}
-
-		encoded, err := quic.EncodePayload(original)
-		require.NoError(t, err)
-
-		var decoded DNSZone
-		err = quic.DecodePayload(encoded, &decoded)
-		require.NoError(t, err)
-
-		assert.Equal(t, original.ID, decoded.ID)
-		assert.Equal(t, original.Name, decoded.Name)
-		assert.Equal(t, original.TTL, decoded.TTL)
-		assert.Equal(t, original.Description, decoded.Description)
-		assert.Equal(t, original.Internal, decoded.Internal)
-		assert.Equal(t, original.RecordCount, decoded.RecordCount)
-	})
-
-	t.Run("DNSConfig roundtrip", func(t *testing.T) {
-		original := &DNSConfig{
-			InternalDomain:    "internal.local",
-			PublicDomain:      "example.com",
-			DNSSECEnabled:     true,
-			AllowRegistration: false,
-		}
-
-		encoded, err := quic.EncodePayload(original)
-		require.NoError(t, err)
-
-		var decoded DNSConfig
-		err = quic.DecodePayload(encoded, &decoded)
-		require.NoError(t, err)
-
-		assert.Equal(t, original.InternalDomain, decoded.InternalDomain)
-		assert.Equal(t, original.PublicDomain, decoded.PublicDomain)
-		assert.Equal(t, original.DNSSECEnabled, decoded.DNSSECEnabled)
-		assert.Equal(t, original.AllowRegistration, decoded.AllowRegistration)
-	})
-
-	t.Run("DNSMetrics roundtrip", func(t *testing.T) {
-		original := &DNSMetrics{
-			ZoneCount:        5,
-			TotalRecords:     100,
-			QueriesTotal:     10000,
-			CacheHits:        8000,
-			CacheMisses:      2000,
-			DNSSECValidated:  9000,
-			ForwardedQueries: 500,
-		}
-
-		encoded, err := quic.EncodePayload(original)
-		require.NoError(t, err)
-
-		var decoded DNSMetrics
-		err = quic.DecodePayload(encoded, &decoded)
-		require.NoError(t, err)
-
-		assert.Equal(t, original.ZoneCount, decoded.ZoneCount)
-		assert.Equal(t, original.TotalRecords, decoded.TotalRecords)
-		assert.Equal(t, original.QueriesTotal, decoded.QueriesTotal)
-		assert.Equal(t, original.CacheHits, decoded.CacheHits)
-		assert.Equal(t, original.CacheMisses, decoded.CacheMisses)
-		assert.Equal(t, original.DNSSECValidated, decoded.DNSSECValidated)
-		assert.Equal(t, original.ForwardedQueries, decoded.ForwardedQueries)
-	})
-
-	t.Run("DNSListZonesRequest with nil internal roundtrip", func(t *testing.T) {
-		original := &DNSListZonesRequest{
-			Internal: nil,
-		}
-
-		encoded, err := quic.EncodePayload(original)
-		require.NoError(t, err)
-
-		var decoded DNSListZonesRequest
-		err = quic.DecodePayload(encoded, &decoded)
-		require.NoError(t, err)
-
-		assert.Nil(t, decoded.Internal)
-	})
-
-	t.Run("DNSListZonesRequest with internal=true roundtrip", func(t *testing.T) {
-		internal := true
-		original := &DNSListZonesRequest{
-			Internal: &internal,
-		}
-
-		encoded, err := quic.EncodePayload(original)
-		require.NoError(t, err)
-
-		var decoded DNSListZonesRequest
-		err = quic.DecodePayload(encoded, &decoded)
-		require.NoError(t, err)
-
-		require.NotNil(t, decoded.Internal)
-		assert.True(t, *decoded.Internal)
-	})
-}
-
-// TestDNSRecord_Fields tests DNSRecord struct field handling
 func TestDNSRecord_Fields(t *testing.T) {
-	t.Run("all fields set correctly", func(t *testing.T) {
-		record := &DNSRecord{
-			Name:       "test.example.com",
-			RecordType: "MX",
-			Value:      "mail.example.com",
-			TTL:        3600,
-			Priority:   10,
-		}
-
-		assert.Equal(t, "test.example.com", record.Name)
-		assert.Equal(t, "MX", record.RecordType)
-		assert.Equal(t, "mail.example.com", record.Value)
-		assert.Equal(t, uint32(3600), record.TTL)
-		assert.Equal(t, uint16(10), record.Priority)
-	})
+	record := &DNSRecord{Name: "mail", RecordType: "MX", Value: "mx.", TTL: 3600, Priority: 10}
+	assert.Equal(t, "mail", record.Name)
+	assert.Equal(t, "MX", record.RecordType)
+	assert.Equal(t, uint32(3600), record.TTL)
+	assert.Equal(t, uint16(10), record.Priority)
 }
 
-// TestDNSErrors tests error type behaviors
 func TestDNSErrors(t *testing.T) {
-	t.Run("ErrDNSServiceNotAvailable error message", func(t *testing.T) {
-		err := ErrDNSServiceNotAvailable{}
-		assert.Equal(t, "DNS service not available", err.Error())
-	})
+	assert.Equal(t, "DNS service not available", ErrDNSServiceNotAvailable{}.Error())
+	assert.Equal(t, "DNS configuration updates are not supported at runtime", ErrDNSConfigUpdateNotSupported{}.Error())
+	assert.Equal(t, "DNS cache flushing is not supported", ErrDNSCacheFlushNotSupported{}.Error())
+	assert.Equal(t, "DNS zone not found: example.com", ErrDNSZoneNotFound{Zone: "example.com"}.Error())
+	assert.Equal(t, "DNS record not found: www.example.com A", ErrDNSRecordNotFound{Name: "www.example.com", RecordType: "A"}.Error())
 
-	t.Run("ErrDNSConfigUpdateNotSupported error message", func(t *testing.T) {
-		err := ErrDNSConfigUpdateNotSupported{}
-		assert.Equal(t, "DNS configuration updates are not supported at runtime", err.Error())
-	})
-
-	t.Run("ErrDNSCacheFlushNotSupported error message", func(t *testing.T) {
-		err := ErrDNSCacheFlushNotSupported{}
-		assert.Equal(t, "DNS cache flushing is not supported", err.Error())
-	})
-
-	t.Run("ErrDNSZoneNotFound error message", func(t *testing.T) {
-		err := ErrDNSZoneNotFound{Zone: "example.com"}
-		assert.Equal(t, "DNS zone not found: example.com", err.Error())
-	})
-
-	t.Run("ErrDNSRecordNotFound error message", func(t *testing.T) {
-		err := ErrDNSRecordNotFound{Name: "test.example.com", RecordType: "A"}
-		assert.Equal(t, "DNS record not found: test.example.com A", err.Error())
-	})
-
-	t.Run("ErrDNSOperationFailed error message and unwrap", func(t *testing.T) {
-		cause := assert.AnError
-		err := ErrDNSOperationFailed{Operation: "AddRecord", Cause: cause}
-		assert.Contains(t, err.Error(), "DNS operation AddRecord failed")
-		assert.Equal(t, cause, err.Unwrap())
-	})
+	cause := assert.AnError
+	opErr := ErrDNSOperationFailed{Operation: "AddRecord", Cause: cause}
+	assert.Contains(t, opErr.Error(), "DNS operation AddRecord failed")
+	assert.Equal(t, cause, opErr.Unwrap())
 }
 
-// TestQUICServiceHandler_SetDNSService tests the SetDNSService method
-func TestQUICServiceHandler_SetDNSService(t *testing.T) {
-	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+// =============================================================================
+// Setters
+// =============================================================================
 
-	// Initially nil
+func TestQUICServiceHandler_SetDNSService(t *testing.T) {
+	handler := NewQUICServiceHandler(logging.DefaultLogger())
 	assert.Nil(t, handler.dnsService)
 
-	// After setting to nil explicitly
 	handler.SetDNSService(nil)
 	assert.Nil(t, handler.dnsService)
+
+	mock := NewMockDNSService()
+	handler.SetDNSService(mock)
+	assert.NotNil(t, handler.dnsService)
 }
 
-// TestWithQUICDNSService tests the functional option
 func TestWithQUICDNSService(t *testing.T) {
-	logger := logging.DefaultLogger()
-
-	t.Run("with nil service", func(t *testing.T) {
-		handler := NewQUICServiceHandler(logger, WithQUICDNSService(nil))
+	t.Run("nil service", func(t *testing.T) {
+		handler := NewQUICServiceHandler(logging.DefaultLogger(), WithQUICDNSService(nil))
 		assert.Nil(t, handler.dnsService)
 	})
+	t.Run("real service", func(t *testing.T) {
+		mock := NewMockDNSService()
+		handler := NewQUICServiceHandler(logging.DefaultLogger(), WithQUICDNSService(mock))
+		assert.NotNil(t, handler.dnsService)
+	})
+}
+
+// =============================================================================
+// Daemon-native handlers (flat wire, no SDK QUIC client)
+// =============================================================================
+
+func TestDNSUpdateRecord_DaemonNative(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success", func(t *testing.T) {
+		mock := NewMockDNSService()
+		handler := createDNSUnitTestHandler(mock)
+		req := createDNSUnitTestRequest(t, quic.OpDNSUpdateRecord, &DNSUpdateRecordRequest{
+			Zone: "example.com.", Name: "www", RecordType: "A", Value: "1.2.3.4", TTL: 300,
+		})
+		resp := handler.HandleRequest(ctx, req)
+		require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+
+		var result DNSUpdateRecordResponse
+		require.NoError(t, quic.DecodePayload(resp.Payload, &result))
+		assert.True(t, result.Success)
+		assert.Equal(t, 1, mock.CallCount("AddRecord"))
+	})
+
+	t.Run("missing zone", func(t *testing.T) {
+		handler := createDNSUnitTestHandler(NewMockDNSService())
+		req := createDNSUnitTestRequest(t, quic.OpDNSUpdateRecord, &DNSUpdateRecordRequest{Name: "www", RecordType: "A", Value: "1.2.3.4"})
+		resp := handler.HandleRequest(ctx, req)
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+}
+
+func TestDNSGetRecord_DaemonNative(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success", func(t *testing.T) {
+		handler := createDNSUnitTestHandler(NewMockDNSService())
+		req := createDNSUnitTestRequest(t, quic.OpDNSGetRecord, &DNSGetRecordRequest{Zone: "example.com.", Name: "www", RecordType: "A"})
+		resp := handler.HandleRequest(ctx, req)
+		require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+
+		var result DNSGetRecordResponse
+		require.NoError(t, quic.DecodePayload(resp.Payload, &result))
+		require.NotNil(t, result.Record)
+		assert.Equal(t, "A", result.Record.RecordType)
+	})
+
+	t.Run("missing name", func(t *testing.T) {
+		handler := createDNSUnitTestHandler(NewMockDNSService())
+		req := createDNSUnitTestRequest(t, quic.OpDNSGetRecord, &DNSGetRecordRequest{Zone: "example.com.", RecordType: "A"})
+		resp := handler.HandleRequest(ctx, req)
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		mock := NewMockDNSService()
+		mock.GetRecordFunc = func(ctx context.Context, name, recordType string) (interface{}, error) {
+			return nil, ErrDNSRecordNotFound{Name: name, RecordType: recordType}
+		}
+		handler := createDNSUnitTestHandler(mock)
+		req := createDNSUnitTestRequest(t, quic.OpDNSGetRecord, &DNSGetRecordRequest{Zone: "example.com.", Name: "missing", RecordType: "A"})
+		resp := handler.HandleRequest(ctx, req)
+		assert.Equal(t, quic.StatusNotFound, resp.Status)
+	})
+}
+
+func TestDNSGetZone_DaemonNative(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success", func(t *testing.T) {
+		handler := createDNSUnitTestHandler(NewMockDNSService())
+		req := createDNSUnitTestRequest(t, quic.OpDNSGetZone, &DNSGetZoneRequest{Zone: "example.com."})
+		resp := handler.HandleRequest(ctx, req)
+		require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+
+		var result DNSGetZoneResponse
+		require.NoError(t, quic.DecodePayload(resp.Payload, &result))
+		require.NotNil(t, result.Zone)
+		assert.Equal(t, "example.com.", result.Zone.Name)
+	})
+
+	t.Run("missing zone", func(t *testing.T) {
+		handler := createDNSUnitTestHandler(NewMockDNSService())
+		req := createDNSUnitTestRequest(t, quic.OpDNSGetZone, &DNSGetZoneRequest{})
+		resp := handler.HandleRequest(ctx, req)
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		mock := NewMockDNSService()
+		mock.ZoneFunc = func(ctx context.Context, zoneName string) (*entities.Zone, error) {
+			return nil, ErrDNSZoneNotFound{Zone: zoneName}
+		}
+		handler := createDNSUnitTestHandler(mock)
+		req := createDNSUnitTestRequest(t, quic.OpDNSGetZone, &DNSGetZoneRequest{Zone: "missing."})
+		resp := handler.HandleRequest(ctx, req)
+		assert.Equal(t, quic.StatusNotFound, resp.Status)
+	})
+}
+
+func TestDNSGetConfig_DaemonNative(t *testing.T) {
+	handler := createDNSUnitTestHandler(NewMockDNSService())
+	req := createDNSUnitTestRequest(t, quic.OpDNSGetConfig, &DNSGetConfigRequest{})
+	resp := handler.HandleRequest(context.Background(), req)
+	require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+
+	var result DNSGetConfigResponse
+	require.NoError(t, quic.DecodePayload(resp.Payload, &result))
+	require.NotNil(t, result.Config)
+	assert.Equal(t, "internal.example.com.", result.Config.InternalDomain)
+	assert.Equal(t, "example.com.", result.Config.PublicDomain)
+}
+
+func TestDNSGetMetrics_DaemonNative(t *testing.T) {
+	handler := createDNSUnitTestHandler(NewMockDNSService())
+	req := createDNSUnitTestRequest(t, quic.OpDNSGetMetrics, &DNSGetMetricsRequest{})
+	resp := handler.HandleRequest(context.Background(), req)
+	require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+
+	var result DNSGetMetricsResponse
+	require.NoError(t, quic.DecodePayload(resp.Payload, &result))
+	require.NotNil(t, result.Metrics)
+	assert.Equal(t, 2, result.Metrics.ZoneCount)
+}
+
+func TestDNSUpdateConfig_DaemonNativeNotImplemented(t *testing.T) {
+	handler := createDNSUnitTestHandler(NewMockDNSService())
+	req := createDNSUnitTestRequest(t, quic.OpDNSUpdateConfig, &DNSUpdateConfigRequest{})
+	resp := handler.HandleRequest(context.Background(), req)
+	assert.Equal(t, quic.StatusNotImplemented, resp.Status)
+}
+
+func TestDNSFlushCache_DaemonNativeNotImplemented(t *testing.T) {
+	handler := createDNSUnitTestHandler(NewMockDNSService())
+	req := createDNSUnitTestRequest(t, quic.OpDNSFlushCache, &DNSFlushCacheRequest{Zone: "example.com."})
+	resp := handler.HandleRequest(context.Background(), req)
+	assert.Equal(t, quic.StatusNotImplemented, resp.Status)
 }

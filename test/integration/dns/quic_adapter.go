@@ -11,8 +11,24 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
-// Package dns provides integration test adapters for DNS services.
-// This file implements the DNSCommands interface using the QUIC protocol.
+// Package dns provides integration test adapters for DNS services. This file
+// implements the DNSCommands interface using the platform binary QUIC protocol
+// (custom opcodes + MessagePack), exercising the SAME wire contract the SDK
+// QUIC transport speaks.
+//
+// The DNS QUIC surface converged onto the platform.v1 protobuf wire contract:
+// the SDK-mapped operations (AddRecord 0x20, DeleteRecord 0x21,
+// ListRecords 0x24, AddZone/CreateZone 0x25, DeleteZone 0x26, ListZones 0x28,
+// Resolve 0x29) encode the generated pb request struct directly (the codec
+// keys on exact Go field names). The remaining operations (GetRecord 0x23,
+// UpdateRecord 0x22, GetZone 0x27) are daemon-native flat structs and use
+// field-name-identical wire structs here. Record-bearing responses (ListRecords,
+// Resolve) carry the protobuf oneof, which cannot decode into raw pb — the
+// daemon encodes a flat mirror, so this adapter decodes the same mirror shape.
+//
+// UpdateZone has NO QUIC opcode (the 0x20-0x2D space is fully allocated and
+// the gRPC UpdateZone RPC is not SDK-mapped over QUIC); it returns a typed
+// unsupported error.
 
 //go:build integration
 
@@ -30,12 +46,13 @@ import (
 
 	"github.com/jeremyhahn/go-codec"
 	"github.com/jeremyhahn/go-codec/pkg/factory"
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
 )
 
 // =============================================================================
-// Environment Variables and Constants
+// Constants
 // =============================================================================
 
 const (
@@ -45,9 +62,6 @@ const (
 	// DefaultQUICMaxIdleTimeout is the default max idle timeout for connections.
 	DefaultQUICMaxIdleTimeout = 60 * time.Second
 
-	// QUICProtocolVersion is the QUIC wire protocol version.
-	QUICProtocolVersion byte = 0x01
-
 	// MaxQUICPayloadSize is the maximum payload size (16MB).
 	MaxQUICPayloadSize uint32 = 16 * 1024 * 1024
 
@@ -55,241 +69,65 @@ const (
 	MaxQUICTokenSize uint16 = 8 * 1024
 )
 
-// QUIC Status codes.
+// QUIC status codes (pkg/api/quic/protocol.go).
 const (
-	QUICStatusOK             byte = 0x00
-	QUICStatusInvalidRequest byte = 0x01
-	QUICStatusNotFound       byte = 0x02
-	QUICStatusUnauthorized   byte = 0x03
-	QUICStatusInternalError  byte = 0x04
-	QUICStatusAlreadyExists  byte = 0x06
+	QUICStatusOK              byte = 0x00
+	QUICStatusInvalidRequest  byte = 0x01
+	QUICStatusNotFound        byte = 0x02
+	QUICStatusUnauthorized    byte = 0x03
+	QUICStatusInternalError   byte = 0x04
+	QUICStatusAlreadyExists   byte = 0x06
+	QUICStatusInvalidArgument byte = 0x09
+	QUICStatusUnavailable     byte = 0x0A
+	QUICStatusNotImplemented  byte = 0x0B
 )
 
-// QUIC Operation codes for DNS operations.
+// DNS opcodes — MUST match pkg/api/quic/protocol.go.
 const (
-	// Zone Operations (0xA0-0xA4).
-	OpQUICDNSCreateZone byte = 0xA0
-	OpQUICDNSGetZone    byte = 0xA1
-	OpQUICDNSUpdateZone byte = 0xA2
-	OpQUICDNSDeleteZone byte = 0xA3
-	OpQUICDNSListZones  byte = 0xA4
-
-	// Record Operations (0xA5-0xA9).
-	OpQUICDNSAddRecord    byte = 0xA5
-	OpQUICDNSGetRecord    byte = 0xA6
-	OpQUICDNSUpdateRecord byte = 0xA7
-	OpQUICDNSDeleteRecord byte = 0xA8
-	OpQUICDNSListRecords  byte = 0xA9
-
-	// Resolution Operations (0xAA).
-	OpQUICDNSResolve byte = 0xAA
-
-	// TLSA Operations (0xAB).
-	OpQUICDNSAddTLSA byte = 0xAB
+	OpDNSAddRecord    byte = 0x20
+	OpDNSDeleteRecord byte = 0x21
+	OpDNSUpdateRecord byte = 0x22
+	OpDNSGetRecord    byte = 0x23
+	OpDNSListRecords  byte = 0x24
+	OpDNSAddZone      byte = 0x25
+	OpDNSDeleteZone   byte = 0x26
+	OpDNSGetZone      byte = 0x27
+	OpDNSListZones    byte = 0x28
+	OpDNSResolve      byte = 0x29
 )
 
 // =============================================================================
-// Wire Protocol Types
+// Daemon-native flat wire structs (field names match pkg/api/daemon/quic_dns.go)
 // =============================================================================
 
-// quicRequest represents a QUIC protocol request.
-type quicRequest struct {
-	Opcode  byte
-	Token   string
-	Payload []byte
+// The QUIC payload codec keys on EXACT Go field names and ignores codec/json
+// struct tags, so these field names — not the tags — are the wire contract.
+
+type quicDNSGetZoneReq struct {
+	Zone string `codec:"zone"`
 }
 
-// quicResponse represents a QUIC protocol response.
-type quicResponse struct {
-	Status  byte
-	Payload []byte
-}
-
-// =============================================================================
-// Request/Response Payload Types (MessagePack encoded)
-// =============================================================================
-
-// Zone management types
-
-type createZoneRequest struct {
-	Name        string      `codec:"name"`
-	TTL         uint32      `codec:"ttl"`
-	Description string      `codec:"description"`
-	Internal    bool        `codec:"internal"`
-	SOA         *soaRequest `codec:"soa"`
-}
-
-type soaRequest struct {
-	MName      string `codec:"mname"`
-	RName      string `codec:"rname"`
-	Serial     uint32 `codec:"serial"`
-	Refresh    uint32 `codec:"refresh"`
-	Retry      uint32 `codec:"retry"`
-	Expire     uint32 `codec:"expire"`
-	MinimumTTL uint32 `codec:"minimum_ttl"`
-}
-
-type createZoneResponse struct {
-	Name      string `codec:"name"`
-	ID        string `codec:"id"`
-	TTL       uint32 `codec:"ttl"`
-	Internal  bool   `codec:"internal"`
-	CreatedAt int64  `codec:"created_at"`
-}
-
-type getZoneRequest struct {
-	Name string `codec:"name"`
-}
-
-type getZoneResponse struct {
-	Name        string       `codec:"name"`
-	ID          string       `codec:"id"`
-	TTL         uint32       `codec:"ttl"`
-	Description string       `codec:"description"`
-	Internal    bool         `codec:"internal"`
-	RecordCount int32        `codec:"record_count"`
-	SOA         *soaResponse `codec:"soa"`
-	CreatedAt   int64        `codec:"created_at"`
-	UpdatedAt   int64        `codec:"updated_at"`
-}
-
-type soaResponse struct {
-	MName      string `codec:"mname"`
-	RName      string `codec:"rname"`
-	Serial     uint32 `codec:"serial"`
-	Refresh    uint32 `codec:"refresh"`
-	Retry      uint32 `codec:"retry"`
-	Expire     uint32 `codec:"expire"`
-	MinimumTTL uint32 `codec:"minimum_ttl"`
-	TTL        uint32 `codec:"ttl"`
-}
-
-type updateZoneRequest struct {
+type quicDNSZone struct {
+	ID          uint64 `codec:"id"`
 	Name        string `codec:"name"`
 	TTL         uint32 `codec:"ttl"`
 	Description string `codec:"description"`
-}
-
-type updateZoneResponse struct {
-	Name      string `codec:"name"`
-	TTL       uint32 `codec:"ttl"`
-	UpdatedAt int64  `codec:"updated_at"`
-}
-
-type deleteZoneRequest struct {
-	Name string `codec:"name"`
-}
-
-type deleteZoneResponse struct {
-	Name    string `codec:"name"`
-	Deleted bool   `codec:"deleted"`
-}
-
-type listZonesRequest struct {
-	Limit    int32  `codec:"limit"`
-	Cursor   string `codec:"cursor"`
-	Internal *bool  `codec:"internal"`
-}
-
-type listZonesResponse struct {
-	Zones      []zoneSummary `codec:"zones"`
-	TotalCount int32         `codec:"total_count"`
-	HasMore    bool          `codec:"has_more"`
-	NextCursor string        `codec:"next_cursor"`
-}
-
-type zoneSummary struct {
-	Name        string `codec:"name"`
-	ID          string `codec:"id"`
-	TTL         uint32 `codec:"ttl"`
 	Internal    bool   `codec:"internal"`
-	RecordCount int32  `codec:"record_count"`
-	CreatedAt   int64  `codec:"created_at"`
+	RecordCount int    `codec:"record_count"`
 }
 
-// Record management types
-
-type addRecordRequest struct {
-	ZoneName   string `codec:"zone_name"`
-	Name       string `codec:"name"`
-	RecordType string `codec:"record_type"`
-	Value      string `codec:"value"`
-	TTL        uint32 `codec:"ttl"`
-	Priority   uint16 `codec:"priority"`
-	Weight     uint16 `codec:"weight"`
-	Port       uint16 `codec:"port"`
+type quicDNSGetZoneResp struct {
+	Zone      *quicDNSZone `codec:"zone"`
+	Timestamp int64        `codec:"timestamp"`
 }
 
-type addRecordResponse struct {
-	Name       string `codec:"name"`
-	RecordType string `codec:"record_type"`
-	Value      string `codec:"value"`
-	TTL        uint32 `codec:"ttl"`
-	CreatedAt  int64  `codec:"created_at"`
-}
-
-type getRecordRequest struct {
+type quicDNSGetRecordReq struct {
+	Zone       string `codec:"zone"`
 	Name       string `codec:"name"`
 	RecordType string `codec:"record_type"`
 }
 
-type getRecordResponse struct {
-	Name       string `codec:"name"`
-	RecordType string `codec:"record_type"`
-	Value      string `codec:"value"`
-	TTL        uint32 `codec:"ttl"`
-	Priority   uint16 `codec:"priority"`
-	Weight     uint16 `codec:"weight"`
-	Port       uint16 `codec:"port"`
-	CreatedAt  int64  `codec:"created_at"`
-	UpdatedAt  int64  `codec:"updated_at"`
-}
-
-type updateRecordRequest struct {
-	ZoneName   string `codec:"zone_name"`
-	Name       string `codec:"name"`
-	RecordType string `codec:"record_type"`
-	Value      string `codec:"value"`
-	TTL        uint32 `codec:"ttl"`
-	Priority   uint16 `codec:"priority"`
-	Weight     uint16 `codec:"weight"`
-	Port       uint16 `codec:"port"`
-}
-
-type updateRecordResponse struct {
-	Name       string `codec:"name"`
-	RecordType string `codec:"record_type"`
-	Value      string `codec:"value"`
-	TTL        uint32 `codec:"ttl"`
-	UpdatedAt  int64  `codec:"updated_at"`
-}
-
-type deleteRecordRequest struct {
-	Name       string `codec:"name"`
-	RecordType string `codec:"record_type"`
-}
-
-type deleteRecordResponse struct {
-	Name       string `codec:"name"`
-	RecordType string `codec:"record_type"`
-	Deleted    bool   `codec:"deleted"`
-}
-
-type listRecordsRequest struct {
-	ZoneName   string `codec:"zone_name"`
-	RecordType string `codec:"record_type"`
-	Limit      int32  `codec:"limit"`
-	Cursor     string `codec:"cursor"`
-}
-
-type listRecordsResponse struct {
-	Records    []recordSummary `codec:"records"`
-	TotalCount int32           `codec:"total_count"`
-	HasMore    bool            `codec:"has_more"`
-	NextCursor string          `codec:"next_cursor"`
-}
-
-type recordSummary struct {
+type quicDNSRecord struct {
 	Name       string `codec:"name"`
 	RecordType string `codec:"record_type"`
 	Value      string `codec:"value"`
@@ -297,48 +135,136 @@ type recordSummary struct {
 	Priority   uint16 `codec:"priority"`
 }
 
-// Resolution types
+type quicDNSGetRecordResp struct {
+	Record    *quicDNSRecord `codec:"record"`
+	Zone      string         `codec:"zone"`
+	Timestamp int64          `codec:"timestamp"`
+}
 
-type resolveRequest struct {
+type quicDNSUpdateRecordReq struct {
+	Zone       string `codec:"zone"`
 	Name       string `codec:"name"`
 	RecordType string `codec:"record_type"`
+	Value      string `codec:"value"`
+	TTL        int    `codec:"ttl"`
+	Priority   uint16 `codec:"priority"`
 }
 
-type resolveResponse struct {
-	Name       string   `codec:"name"`
-	RecordType string   `codec:"record_type"`
-	Values     []string `codec:"values"`
-	TTL        uint32   `codec:"ttl"`
-	Timestamp  int64    `codec:"timestamp"`
-}
-
-// TLSA types
-
-type addTLSARequest struct {
-	ZoneName     string `codec:"zone_name"`
-	Name         string `codec:"name"`
-	Usage        uint8  `codec:"usage"`
-	Selector     uint8  `codec:"selector"`
-	MatchingType uint8  `codec:"matching_type"`
-	Data         string `codec:"data"`
-	TTL          uint32 `codec:"ttl"`
-}
-
-type addTLSAResponse struct {
-	Name         string `codec:"name"`
-	Usage        uint8  `codec:"usage"`
-	Selector     uint8  `codec:"selector"`
-	MatchingType uint8  `codec:"matching_type"`
-	Data         string `codec:"data"`
-	TTL          uint32 `codec:"ttl"`
-	CreatedAt    int64  `codec:"created_at"`
+type quicDNSUpdateRecordResp struct {
+	Success   bool   `codec:"success"`
+	Zone      string `codec:"zone"`
+	Name      string `codec:"name"`
+	Timestamp int64  `codec:"timestamp"`
 }
 
 // =============================================================================
-// QUIC Adapter Implementation
+// Record oneof mirror (field names match the daemon dnsRecordWire mirror)
 // =============================================================================
 
-// QUICAdapter implements DNSCommands using the QUIC protocol.
+type quicSimpleRecordWire struct {
+	Name  string `codec:"Name"`
+	Value string `codec:"Value"`
+	Ttl   uint32 `codec:"Ttl"`
+}
+
+type quicMXRecordWire struct {
+	Name     string `codec:"Name"`
+	Value    string `codec:"Value"`
+	Priority uint32 `codec:"Priority"`
+	Ttl      uint32 `codec:"Ttl"`
+}
+
+type quicSRVRecordWire struct {
+	Name     string `codec:"Name"`
+	Target   string `codec:"Target"`
+	Port     uint32 `codec:"Port"`
+	Priority uint32 `codec:"Priority"`
+	Weight   uint32 `codec:"Weight"`
+	Ttl      uint32 `codec:"Ttl"`
+}
+
+type quicCAARecordWire struct {
+	Name  string `codec:"Name"`
+	Flags uint32 `codec:"Flags"`
+	Tag   string `codec:"Tag"`
+	Value string `codec:"Value"`
+	Ttl   uint32 `codec:"Ttl"`
+}
+
+type quicTLSARecordWire struct {
+	Name         string `codec:"Name"`
+	Usage        uint32 `codec:"Usage"`
+	Selector     uint32 `codec:"Selector"`
+	MatchingType uint32 `codec:"MatchingType"`
+	Data         string `codec:"Data"`
+	Ttl          uint32 `codec:"Ttl"`
+}
+
+type quicRecordOneofWire struct {
+	A     *quicSimpleRecordWire `codec:"A"`
+	Aaaa  *quicSimpleRecordWire `codec:"Aaaa"`
+	Cname *quicSimpleRecordWire `codec:"Cname"`
+	Mx    *quicMXRecordWire     `codec:"Mx"`
+	Ns    *quicSimpleRecordWire `codec:"Ns"`
+	Txt   *quicSimpleRecordWire `codec:"Txt"`
+	Srv   *quicSRVRecordWire    `codec:"Srv"`
+	Caa   *quicCAARecordWire    `codec:"Caa"`
+	Tlsa  *quicTLSARecordWire   `codec:"Tlsa"`
+}
+
+type quicRecordWire struct {
+	Type   int32                `codec:"Type"`
+	Record *quicRecordOneofWire `codec:"Record"`
+}
+
+// toPB rebuilds a pb Record from the mirror so the shared extractRecordInfo /
+// recordTypeProtoToString helpers can be reused.
+func (w *quicRecordWire) toPB() *pb.Record {
+	if w == nil {
+		return nil
+	}
+	rec := &pb.Record{Type: pb.RecordType(w.Type)}
+	o := w.Record
+	if o == nil {
+		return rec
+	}
+	switch {
+	case o.A != nil:
+		rec.Record = &pb.Record_A{A: &pb.ARecord{Name: o.A.Name, Value: o.A.Value, Ttl: o.A.Ttl}}
+	case o.Aaaa != nil:
+		rec.Record = &pb.Record_Aaaa{Aaaa: &pb.AAAARecord{Name: o.Aaaa.Name, Value: o.Aaaa.Value, Ttl: o.Aaaa.Ttl}}
+	case o.Cname != nil:
+		rec.Record = &pb.Record_Cname{Cname: &pb.CNAMERecord{Name: o.Cname.Name, Value: o.Cname.Value, Ttl: o.Cname.Ttl}}
+	case o.Mx != nil:
+		rec.Record = &pb.Record_Mx{Mx: &pb.MXRecord{Name: o.Mx.Name, Value: o.Mx.Value, Priority: o.Mx.Priority, Ttl: o.Mx.Ttl}}
+	case o.Ns != nil:
+		rec.Record = &pb.Record_Ns{Ns: &pb.NSRecord{Name: o.Ns.Name, Value: o.Ns.Value, Ttl: o.Ns.Ttl}}
+	case o.Txt != nil:
+		rec.Record = &pb.Record_Txt{Txt: &pb.TXTRecord{Name: o.Txt.Name, Value: o.Txt.Value, Ttl: o.Txt.Ttl}}
+	case o.Srv != nil:
+		rec.Record = &pb.Record_Srv{Srv: &pb.SRVRecord{Name: o.Srv.Name, Target: o.Srv.Target, Port: o.Srv.Port, Priority: o.Srv.Priority, Weight: o.Srv.Weight, Ttl: o.Srv.Ttl}}
+	case o.Caa != nil:
+		rec.Record = &pb.Record_Caa{Caa: &pb.CAARecord{Name: o.Caa.Name, Flags: o.Caa.Flags, Tag: o.Caa.Tag, Value: o.Caa.Value, Ttl: o.Caa.Ttl}}
+	case o.Tlsa != nil:
+		rec.Record = &pb.Record_Tlsa{Tlsa: &pb.TLSARecord{Name: o.Tlsa.Name, Usage: o.Tlsa.Usage, Selector: o.Tlsa.Selector, MatchingType: o.Tlsa.MatchingType, Data: o.Tlsa.Data, Ttl: o.Tlsa.Ttl}}
+	}
+	return rec
+}
+
+type quicListRecordsWire struct {
+	Records []*quicRecordWire `codec:"Records"`
+}
+
+type quicResolveWire struct {
+	Records       []*quicRecordWire `codec:"Records"`
+	Authoritative bool              `codec:"Authoritative"`
+}
+
+// =============================================================================
+// Adapter
+// =============================================================================
+
+// QUICAdapter implements DNSCommands using the platform binary QUIC protocol.
 type QUICAdapter struct {
 	endpoint       string
 	conn           *quicgo.Conn
@@ -356,7 +282,6 @@ func NewQUICAdapter() *QUICAdapter {
 	if endpoint == "" {
 		endpoint = DefaultPlatformQUICEndpoint
 	}
-
 	return &QUICAdapter{
 		endpoint:       endpoint,
 		timeout:        DefaultQUICTimeout,
@@ -366,9 +291,7 @@ func NewQUICAdapter() *QUICAdapter {
 }
 
 // Name returns the protocol adapter identifier.
-func (q *QUICAdapter) Name() string {
-	return "QUIC"
-}
+func (q *QUICAdapter) Name() string { return "QUIC" }
 
 // Setup establishes the QUIC connection to the platform endpoint.
 func (q *QUICAdapter) Setup(ctx context.Context) error {
@@ -382,12 +305,10 @@ func (q *QUICAdapter) Setup(ctx context.Context) error {
 	connCtx, cancel := context.WithTimeout(ctx, q.timeout)
 	defer cancel()
 
-	quicConfig := &quicgo.Config{
+	conn, err := quicgo.DialAddr(connCtx, q.endpoint, q.tlsConfig, &quicgo.Config{
 		MaxIdleTimeout:  q.maxIdleTimeout,
 		KeepAlivePeriod: 15 * time.Second,
-	}
-
-	conn, err := quicgo.DialAddr(connCtx, q.endpoint, q.tlsConfig, quicConfig)
+	})
 	if err != nil {
 		return ErrQUICConnectionFailed{Endpoint: q.endpoint, Err: err}
 	}
@@ -404,18 +325,15 @@ func (q *QUICAdapter) Teardown() error {
 	if q.closed {
 		return nil
 	}
-
 	q.closed = true
-
 	if q.conn != nil {
 		return q.conn.CloseWithError(0, "adapter teardown")
 	}
-
 	return nil
 }
 
 // =============================================================================
-// Wire Protocol Methods
+// Wire framing
 // =============================================================================
 
 func (q *QUICAdapter) sendRequest(ctx context.Context, opcode byte, payload interface{}) (*quicResponse, error) {
@@ -442,12 +360,7 @@ func (q *QUICAdapter) sendRequest(ctx context.Context, opcode byte, payload inte
 	}
 	defer stream.Close()
 
-	req := &quicRequest{
-		Opcode:  opcode,
-		Payload: payloadBytes,
-	}
-
-	if err := writeRequest(stream, req); err != nil {
+	if err := writeRequest(stream, opcode, payloadBytes); err != nil {
 		return nil, ErrQUICStreamFailed{Operation: "WriteRequest", Err: err}
 	}
 
@@ -461,56 +374,34 @@ func (q *QUICAdapter) sendRequest(ctx context.Context, opcode byte, payload inte
 		if errMsg == "" {
 			errMsg = "unknown error"
 		}
-		return nil, ErrQUICRequestFailed{
-			Operation: opcodeToString(opcode),
-			Status:    resp.Status,
-			Message:   errMsg,
-		}
+		return nil, ErrQUICRequestFailed{Operation: opcodeToString(opcode), Status: resp.Status, Message: errMsg}
 	}
 
 	return resp, nil
 }
 
-func writeRequest(w io.Writer, req *quicRequest) error {
-	payloadLen := uint32(len(req.Payload))
+// quicResponse represents a QUIC protocol response.
+type quicResponse struct {
+	Status  byte
+	Payload []byte
+}
+
+func writeRequest(w io.Writer, opcode byte, payload []byte) error {
+	payloadLen := uint32(len(payload))
 	if payloadLen > MaxQUICPayloadSize {
 		return fmt.Errorf("payload size %d exceeds maximum %d", payloadLen, MaxQUICPayloadSize)
 	}
 
-	tokenLen := uint16(len(req.Token))
-	if tokenLen > MaxQUICTokenSize {
-		return fmt.Errorf("token size %d exceeds maximum %d", tokenLen, MaxQUICTokenSize)
-	}
-
-	if _, err := w.Write([]byte{req.Opcode}); err != nil {
-		return fmt.Errorf("failed to write opcode: %w", err)
-	}
-
-	tokenLenBuf := make([]byte, 2)
-	binary.BigEndian.PutUint16(tokenLenBuf, tokenLen)
-	if _, err := w.Write(tokenLenBuf); err != nil {
-		return fmt.Errorf("failed to write token length: %w", err)
-	}
-
-	if tokenLen > 0 {
-		if _, err := w.Write([]byte(req.Token)); err != nil {
-			return fmt.Errorf("failed to write token: %w", err)
-		}
-	}
-
+	buf := make([]byte, 0, 1+2+4+len(payload))
+	buf = append(buf, opcode)
+	buf = append(buf, 0, 0) // token_len = 0 (no auth token in integration tests)
 	lenBuf := make([]byte, 4)
 	binary.BigEndian.PutUint32(lenBuf, payloadLen)
-	if _, err := w.Write(lenBuf); err != nil {
-		return fmt.Errorf("failed to write payload length: %w", err)
-	}
+	buf = append(buf, lenBuf...)
+	buf = append(buf, payload...)
 
-	if payloadLen > 0 {
-		if _, err := w.Write(req.Payload); err != nil {
-			return fmt.Errorf("failed to write payload: %w", err)
-		}
-	}
-
-	return nil
+	_, err := w.Write(buf)
+	return err
 }
 
 func readResponse(r io.Reader) (*quicResponse, error) {
@@ -524,7 +415,6 @@ func readResponse(r io.Reader) (*quicResponse, error) {
 		return nil, fmt.Errorf("failed to read payload length: %w", err)
 	}
 	payloadLen := binary.BigEndian.Uint32(lenBuf)
-
 	if payloadLen > MaxQUICPayloadSize {
 		return nil, fmt.Errorf("payload size %d exceeds maximum %d", payloadLen, MaxQUICPayloadSize)
 	}
@@ -537,488 +427,386 @@ func readResponse(r io.Reader) (*quicResponse, error) {
 		}
 	}
 
-	return &quicResponse{
-		Status:  statusBuf[0],
-		Payload: payload,
-	}, nil
-}
-
-// defaultCodecType is the codec type used for payload encoding/decoding
-var defaultCodecType = codec.MsgPack
-
-// getCodec creates a codec of the default type using the factory
-func getCodec() (codec.Codec[any], error) {
-	return factory.New[any](defaultCodecType)
+	return &quicResponse{Status: statusBuf[0], Payload: payload}, nil
 }
 
 func encodePayload(entity interface{}) ([]byte, error) {
 	if entity == nil {
 		return nil, nil
 	}
-
-	c, err := getCodec()
+	c, err := factory.New[any](codec.MsgPack)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create codec: %w", err)
 	}
-
-	data, err := c.Marshal(entity)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode payload: %w", err)
-	}
-
-	return data, nil
+	return c.Marshal(entity)
 }
 
 func decodePayload(data []byte, entity interface{}) error {
 	if len(data) == 0 {
 		return nil
 	}
-
-	if entity == nil {
-		return fmt.Errorf("entity cannot be nil")
-	}
-
-	c, err := getCodec()
+	c, err := factory.New[any](codec.MsgPack)
 	if err != nil {
 		return fmt.Errorf("failed to create codec: %w", err)
 	}
-
-	if err := c.Unmarshal(data, &entity); err != nil {
-		return fmt.Errorf("failed to decode payload: %w", err)
-	}
-
-	return nil
+	return c.Unmarshal(data, &entity)
 }
 
 func opcodeToString(opcode byte) string {
 	switch opcode {
-	case OpQUICDNSCreateZone:
-		return "CreateZone"
-	case OpQUICDNSGetZone:
-		return "GetZone"
-	case OpQUICDNSUpdateZone:
-		return "UpdateZone"
-	case OpQUICDNSDeleteZone:
-		return "DeleteZone"
-	case OpQUICDNSListZones:
-		return "ListZones"
-	case OpQUICDNSAddRecord:
+	case OpDNSAddRecord:
 		return "AddRecord"
-	case OpQUICDNSGetRecord:
-		return "GetRecord"
-	case OpQUICDNSUpdateRecord:
-		return "UpdateRecord"
-	case OpQUICDNSDeleteRecord:
+	case OpDNSDeleteRecord:
 		return "DeleteRecord"
-	case OpQUICDNSListRecords:
+	case OpDNSUpdateRecord:
+		return "UpdateRecord"
+	case OpDNSGetRecord:
+		return "GetRecord"
+	case OpDNSListRecords:
 		return "ListRecords"
-	case OpQUICDNSResolve:
+	case OpDNSAddZone:
+		return "CreateZone"
+	case OpDNSDeleteZone:
+		return "DeleteZone"
+	case OpDNSGetZone:
+		return "GetZone"
+	case OpDNSListZones:
+		return "ListZones"
+	case OpDNSResolve:
 		return "Resolve"
-	case OpQUICDNSAddTLSA:
-		return "AddTLSARecord"
 	default:
 		return fmt.Sprintf("Unknown(0x%02X)", opcode)
 	}
 }
 
 // =============================================================================
-// DNSCommands Interface Implementation - Zone Management
+// Zone management
 // =============================================================================
 
-// CreateZone creates a new DNS zone via QUIC protocol.
+// CreateZone creates a new DNS zone (0x25, pb CreateZoneRequest).
 func (q *QUICAdapter) CreateZone(ctx context.Context, opts CreateZoneOptions) (*CreateZoneResult, error) {
-	req := &createZoneRequest{
+	req := &pb.CreateZoneRequest{
 		Name:        opts.Name,
-		TTL:         opts.TTL,
+		Ttl:         opts.TTL,
 		Description: opts.Description,
 		Internal:    opts.Internal,
 	}
-
 	if opts.SOA != nil {
-		req.SOA = &soaRequest{
-			MName:      opts.SOA.MName,
-			RName:      opts.SOA.RName,
+		req.Soa = &pb.SOARecord{
+			Name:       opts.Name,
+			Mname:      opts.SOA.MName,
+			Rname:      opts.SOA.RName,
 			Serial:     opts.SOA.Serial,
 			Refresh:    opts.SOA.Refresh,
 			Retry:      opts.SOA.Retry,
 			Expire:     opts.SOA.Expire,
-			MinimumTTL: opts.SOA.MinimumTTL,
+			MinimumTtl: opts.SOA.MinimumTTL,
+			Ttl:        opts.TTL,
 		}
 	}
 
-	resp, err := q.sendRequest(ctx, OpQUICDNSCreateZone, req)
+	resp, err := q.sendRequest(ctx, OpDNSAddZone, req)
 	if err != nil {
 		return nil, err
 	}
-
-	var result createZoneResponse
+	var result pb.CreateZoneResponse
 	if err := decodePayload(resp.Payload, &result); err != nil {
 		return nil, ErrQUICDecodeFailed{Operation: "CreateZone", Err: err}
 	}
-
 	return &CreateZoneResult{
-		Name:      result.Name,
-		ID:        result.ID,
-		TTL:       result.TTL,
-		Internal:  result.Internal,
-		CreatedAt: time.Unix(result.CreatedAt, 0),
+		Name:      result.GetZone().GetName(),
+		ID:        fmt.Sprintf("%d", result.GetZone().GetId()),
+		TTL:       result.GetZone().GetTtl(),
+		Internal:  result.GetZone().GetInternal(),
+		CreatedAt: time.Now(),
 	}, nil
 }
 
-// GetZone retrieves a DNS zone via QUIC protocol.
+// GetZone retrieves a DNS zone (0x27, daemon-native flat).
 func (q *QUICAdapter) GetZone(ctx context.Context, zoneName string) (*GetZoneResult, error) {
-	req := &getZoneRequest{Name: zoneName}
-
-	resp, err := q.sendRequest(ctx, OpQUICDNSGetZone, req)
+	resp, err := q.sendRequest(ctx, OpDNSGetZone, &quicDNSGetZoneReq{Zone: zoneName})
 	if err != nil {
 		return nil, err
 	}
-
-	var result getZoneResponse
+	var result quicDNSGetZoneResp
 	if err := decodePayload(resp.Payload, &result); err != nil {
 		return nil, ErrQUICDecodeFailed{Operation: "GetZone", Err: err}
 	}
-
-	zoneResult := &GetZoneResult{
-		Name:        result.Name,
-		ID:          result.ID,
-		TTL:         result.TTL,
-		Description: result.Description,
-		Internal:    result.Internal,
-		RecordCount: int(result.RecordCount),
-		CreatedAt:   time.Unix(result.CreatedAt, 0),
-		UpdatedAt:   time.Unix(result.UpdatedAt, 0),
+	if result.Zone == nil {
+		return nil, ErrQUICDecodeFailed{Operation: "GetZone", Err: fmt.Errorf("empty zone")}
 	}
-
-	if result.SOA != nil {
-		zoneResult.SOA = &SOARecordInfo{
-			Name:       result.Name,
-			MName:      result.SOA.MName,
-			RName:      result.SOA.RName,
-			Serial:     result.SOA.Serial,
-			Refresh:    result.SOA.Refresh,
-			Retry:      result.SOA.Retry,
-			Expire:     result.SOA.Expire,
-			MinimumTTL: result.SOA.MinimumTTL,
-			TTL:        result.SOA.TTL,
-		}
-	}
-
-	return zoneResult, nil
-}
-
-// UpdateZone updates a DNS zone via QUIC protocol.
-func (q *QUICAdapter) UpdateZone(ctx context.Context, zoneName string, opts UpdateZoneOptions) (*UpdateZoneResult, error) {
-	req := &updateZoneRequest{
-		Name:        zoneName,
-		TTL:         opts.TTL,
-		Description: opts.Description,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICDNSUpdateZone, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result updateZoneResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "UpdateZone", Err: err}
-	}
-
-	return &UpdateZoneResult{
-		Name:      result.Name,
-		TTL:       result.TTL,
-		UpdatedAt: time.Unix(result.UpdatedAt, 0),
+	return &GetZoneResult{
+		Name:        result.Zone.Name,
+		ID:          fmt.Sprintf("%d", result.Zone.ID),
+		TTL:         result.Zone.TTL,
+		Description: result.Zone.Description,
+		Internal:    result.Zone.Internal,
+		RecordCount: result.Zone.RecordCount,
 	}, nil
 }
 
-// DeleteZone deletes a DNS zone via QUIC protocol.
-func (q *QUICAdapter) DeleteZone(ctx context.Context, zoneName string) (*DeleteZoneResult, error) {
-	req := &deleteZoneRequest{Name: zoneName}
+// UpdateZone has no QUIC opcode (not SDK-mapped and the 0x20-0x2D space is
+// fully allocated). It reports the operation as unsupported over QUIC.
+func (q *QUICAdapter) UpdateZone(ctx context.Context, zoneName string, opts UpdateZoneOptions) (*UpdateZoneResult, error) {
+	return nil, ErrQUICDNSUnsupported{Method: "UpdateZone"}
+}
 
-	resp, err := q.sendRequest(ctx, OpQUICDNSDeleteZone, req)
+// DeleteZone deletes a DNS zone (0x26, pb DeleteZoneRequest).
+func (q *QUICAdapter) DeleteZone(ctx context.Context, zoneName string) (*DeleteZoneResult, error) {
+	resp, err := q.sendRequest(ctx, OpDNSDeleteZone, &pb.DeleteZoneRequest{Name: zoneName})
 	if err != nil {
 		return nil, err
 	}
-
-	var result deleteZoneResponse
+	var result pb.DeleteZoneResponse
 	if err := decodePayload(resp.Payload, &result); err != nil {
 		return nil, ErrQUICDecodeFailed{Operation: "DeleteZone", Err: err}
 	}
-
 	return &DeleteZoneResult{
-		Name:    result.Name,
-		Deleted: result.Deleted,
+		Name:    zoneName,
+		Deleted: result.GetStatus().GetSuccess(),
 	}, nil
 }
 
-// ListZones lists DNS zones via QUIC protocol.
+// ListZones lists DNS zones (0x28, pb ListZonesRequest).
 func (q *QUICAdapter) ListZones(ctx context.Context, opts ListZonesOptions) (*ListZonesResult, error) {
-	req := &listZonesRequest{
-		Limit:    opts.Limit,
-		Cursor:   opts.Cursor,
-		Internal: opts.Internal,
+	req := &pb.ListZonesRequest{}
+	if opts.Internal != nil {
+		if *opts.Internal {
+			req.InternalOnly = true
+		} else {
+			req.PublicOnly = true
+		}
+	}
+	if opts.Limit > 0 {
+		req.Pagination = &pb.PaginationRequest{PageSize: uint32(opts.Limit)}
 	}
 
-	resp, err := q.sendRequest(ctx, OpQUICDNSListZones, req)
+	resp, err := q.sendRequest(ctx, OpDNSListZones, req)
 	if err != nil {
 		return nil, err
 	}
-
-	var result listZonesResponse
+	var result pb.ListZonesResponse
 	if err := decodePayload(resp.Payload, &result); err != nil {
 		return nil, ErrQUICDecodeFailed{Operation: "ListZones", Err: err}
 	}
 
-	zones := make([]ZoneSummary, len(result.Zones))
-	for i, z := range result.Zones {
-		zones[i] = ZoneSummary{
-			Name:        z.Name,
-			ID:          z.ID,
-			TTL:         z.TTL,
-			Internal:    z.Internal,
-			RecordCount: int(z.RecordCount),
-			CreatedAt:   time.Unix(z.CreatedAt, 0),
-		}
+	zones := make([]ZoneSummary, 0, len(result.GetZones()))
+	for _, z := range result.GetZones() {
+		zones = append(zones, ZoneSummary{
+			Name:        z.GetName(),
+			ID:          fmt.Sprintf("%d", z.GetId()),
+			TTL:         z.GetTtl(),
+			Internal:    z.GetInternal(),
+			RecordCount: countRecords(z.GetRecords()),
+		})
 	}
-
-	return &ListZonesResult{
-		Zones:      zones,
-		TotalCount: result.TotalCount,
-		HasMore:    result.HasMore,
-		NextCursor: result.NextCursor,
-	}, nil
+	out := &ListZonesResult{Zones: zones}
+	if result.GetPagination() != nil {
+		out.TotalCount = int32(result.GetPagination().GetTotalItems())
+		out.HasMore = result.GetPagination().GetPage() < result.GetPagination().GetTotalPages()
+	}
+	return out, nil
 }
 
 // =============================================================================
-// DNSCommands Interface Implementation - Record Management
+// Record management
 // =============================================================================
 
-// AddRecord adds a DNS record via QUIC protocol.
+// AddRecord adds a DNS record (0x20, pb AddRecordRequest carrying the oneof).
 func (q *QUICAdapter) AddRecord(ctx context.Context, opts AddRecordOptions) (*AddRecordResult, error) {
-	req := &addRecordRequest{
-		ZoneName:   opts.ZoneName,
+	req := &pb.AddRecordRequest{
+		ZoneName: opts.ZoneName,
+		Record:   buildProtoRecordMessage(opts),
+	}
+	if _, err := q.sendRequest(ctx, OpDNSAddRecord, req); err != nil {
+		return nil, err
+	}
+	return &AddRecordResult{
 		Name:       opts.Name,
 		RecordType: opts.RecordType,
 		Value:      opts.Value,
 		TTL:        opts.TTL,
-		Priority:   opts.Priority,
-		Weight:     opts.Weight,
-		Port:       opts.Port,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICDNSAddRecord, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result addRecordResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "AddRecord", Err: err}
-	}
-
-	return &AddRecordResult{
-		Name:       result.Name,
-		RecordType: result.RecordType,
-		Value:      result.Value,
-		TTL:        result.TTL,
-		CreatedAt:  time.Unix(result.CreatedAt, 0),
+		CreatedAt:  time.Now(),
 	}, nil
 }
 
-// GetRecord retrieves a DNS record via QUIC protocol.
+// GetRecord retrieves a DNS record (0x23, daemon-native flat).
 func (q *QUICAdapter) GetRecord(ctx context.Context, name string, recordType string) (*GetRecordResult, error) {
-	req := &getRecordRequest{
-		Name:       name,
-		RecordType: recordType,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICDNSGetRecord, req)
+	req := &quicDNSGetRecordReq{Zone: extractZoneName(name), Name: name, RecordType: recordType}
+	resp, err := q.sendRequest(ctx, OpDNSGetRecord, req)
 	if err != nil {
 		return nil, err
 	}
-
-	var result getRecordResponse
+	var result quicDNSGetRecordResp
 	if err := decodePayload(resp.Payload, &result); err != nil {
 		return nil, ErrQUICDecodeFailed{Operation: "GetRecord", Err: err}
 	}
-
+	if result.Record == nil {
+		return nil, ErrRecordNotFound{Name: name, Type: recordType}
+	}
 	return &GetRecordResult{
-		Name:       result.Name,
-		RecordType: result.RecordType,
-		Value:      result.Value,
-		TTL:        result.TTL,
-		Priority:   result.Priority,
-		Weight:     result.Weight,
-		Port:       result.Port,
-		CreatedAt:  time.Unix(result.CreatedAt, 0),
-		UpdatedAt:  time.Unix(result.UpdatedAt, 0),
+		Name:       result.Record.Name,
+		RecordType: result.Record.RecordType,
+		Value:      result.Record.Value,
+		TTL:        result.Record.TTL,
+		Priority:   result.Record.Priority,
 	}, nil
 }
 
-// UpdateRecord updates a DNS record via QUIC protocol.
+// UpdateRecord updates a DNS record (0x22, daemon-native flat).
 func (q *QUICAdapter) UpdateRecord(ctx context.Context, opts UpdateRecordOptions) (*UpdateRecordResult, error) {
-	req := &updateRecordRequest{
-		ZoneName:   opts.ZoneName,
+	req := &quicDNSUpdateRecordReq{
+		Zone:       opts.ZoneName,
+		Name:       opts.Name,
+		RecordType: opts.RecordType,
+		Value:      opts.Value,
+		TTL:        int(opts.TTL),
+		Priority:   opts.Priority,
+	}
+	resp, err := q.sendRequest(ctx, OpDNSUpdateRecord, req)
+	if err != nil {
+		return nil, err
+	}
+	var result quicDNSUpdateRecordResp
+	if err := decodePayload(resp.Payload, &result); err != nil {
+		return nil, ErrQUICDecodeFailed{Operation: "UpdateRecord", Err: err}
+	}
+	return &UpdateRecordResult{
 		Name:       opts.Name,
 		RecordType: opts.RecordType,
 		Value:      opts.Value,
 		TTL:        opts.TTL,
-		Priority:   opts.Priority,
-		Weight:     opts.Weight,
-		Port:       opts.Port,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICDNSUpdateRecord, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result updateRecordResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "UpdateRecord", Err: err}
-	}
-
-	return &UpdateRecordResult{
-		Name:       result.Name,
-		RecordType: result.RecordType,
-		Value:      result.Value,
-		TTL:        result.TTL,
-		UpdatedAt:  time.Unix(result.UpdatedAt, 0),
+		UpdatedAt:  time.Now(),
 	}, nil
 }
 
-// DeleteRecord deletes a DNS record via QUIC protocol.
+// DeleteRecord deletes a DNS record (0x21, pb DeleteRecordRequest).
 func (q *QUICAdapter) DeleteRecord(ctx context.Context, name string, recordType string) (*DeleteRecordResult, error) {
-	req := &deleteRecordRequest{
-		Name:       name,
-		RecordType: recordType,
+	req := &pb.DeleteRecordRequest{
+		ZoneName: extractZoneName(name),
+		Type:     recordTypeStringToProto(recordType),
+		Name:     name,
 	}
-
-	resp, err := q.sendRequest(ctx, OpQUICDNSDeleteRecord, req)
+	resp, err := q.sendRequest(ctx, OpDNSDeleteRecord, req)
 	if err != nil {
 		return nil, err
 	}
-
-	var result deleteRecordResponse
+	var result pb.DeleteRecordResponse
 	if err := decodePayload(resp.Payload, &result); err != nil {
 		return nil, ErrQUICDecodeFailed{Operation: "DeleteRecord", Err: err}
 	}
-
 	return &DeleteRecordResult{
-		Name:       result.Name,
-		RecordType: result.RecordType,
-		Deleted:    result.Deleted,
-	}, nil
-}
-
-// ListRecords lists DNS records via QUIC protocol.
-func (q *QUICAdapter) ListRecords(ctx context.Context, zoneName string, opts ListRecordsOptions) (*ListRecordsResult, error) {
-	req := &listRecordsRequest{
-		ZoneName:   zoneName,
-		RecordType: opts.RecordType,
-		Limit:      opts.Limit,
-		Cursor:     opts.Cursor,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICDNSListRecords, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result listRecordsResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "ListRecords", Err: err}
-	}
-
-	records := make([]RecordSummary, len(result.Records))
-	for i, r := range result.Records {
-		records[i] = RecordSummary{
-			Name:       r.Name,
-			RecordType: r.RecordType,
-			Value:      r.Value,
-			TTL:        r.TTL,
-			Priority:   r.Priority,
-		}
-	}
-
-	return &ListRecordsResult{
-		Records:    records,
-		TotalCount: result.TotalCount,
-		HasMore:    result.HasMore,
-		NextCursor: result.NextCursor,
-	}, nil
-}
-
-// =============================================================================
-// DNSCommands Interface Implementation - Resolution
-// =============================================================================
-
-// Resolve performs DNS resolution via QUIC protocol.
-func (q *QUICAdapter) Resolve(ctx context.Context, name string, recordType string) (*ResolveResult, error) {
-	req := &resolveRequest{
 		Name:       name,
 		RecordType: recordType,
-	}
+		Deleted:    result.GetStatus().GetSuccess(),
+	}, nil
+}
 
-	resp, err := q.sendRequest(ctx, OpQUICDNSResolve, req)
+// ListRecords lists DNS records (0x24, pb request, mirror response).
+func (q *QUICAdapter) ListRecords(ctx context.Context, zoneName string, opts ListRecordsOptions) (*ListRecordsResult, error) {
+	req := &pb.ListRecordsRequest{ZoneName: zoneName}
+	if opts.RecordType != "" {
+		req.Type = recordTypeStringToProto(opts.RecordType)
+	}
+	resp, err := q.sendRequest(ctx, OpDNSListRecords, req)
 	if err != nil {
 		return nil, err
 	}
+	var wire quicListRecordsWire
+	if err := decodePayload(resp.Payload, &wire); err != nil {
+		return nil, ErrQUICDecodeFailed{Operation: "ListRecords", Err: err}
+	}
+	records := make([]RecordSummary, 0, len(wire.Records))
+	for _, w := range wire.Records {
+		rec := w.toPB()
+		name, value, ttl, priority, _, _ := extractRecordInfo(rec)
+		records = append(records, RecordSummary{
+			Name:       name,
+			RecordType: recordTypeProtoToString(rec.GetType()),
+			Value:      value,
+			TTL:        ttl,
+			Priority:   priority,
+		})
+	}
+	return &ListRecordsResult{Records: records, TotalCount: int32(len(records))}, nil
+}
 
-	var result resolveResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
+// =============================================================================
+// Resolution
+// =============================================================================
+
+// Resolve performs DNS resolution (0x29, pb request, mirror response).
+func (q *QUICAdapter) Resolve(ctx context.Context, name string, recordType string) (*ResolveResult, error) {
+	req := &pb.ResolveRequest{Fqdn: name, Type: recordTypeStringToProto(recordType)}
+	resp, err := q.sendRequest(ctx, OpDNSResolve, req)
+	if err != nil {
+		return nil, err
+	}
+	var wire quicResolveWire
+	if err := decodePayload(resp.Payload, &wire); err != nil {
 		return nil, ErrQUICDecodeFailed{Operation: "Resolve", Err: err}
 	}
-
+	values := make([]string, 0, len(wire.Records))
+	var ttl uint32
+	for _, w := range wire.Records {
+		rec := w.toPB()
+		_, value, recTTL, _, _, _ := extractRecordInfo(rec)
+		values = append(values, value)
+		if ttl == 0 {
+			ttl = recTTL
+		}
+	}
+	if len(values) == 0 {
+		return nil, ErrRecordNotFound{Name: name, Type: recordType}
+	}
 	return &ResolveResult{
-		Name:       result.Name,
-		RecordType: result.RecordType,
-		Values:     result.Values,
-		TTL:        result.TTL,
-		Timestamp:  time.Unix(result.Timestamp, 0),
+		Name:       name,
+		RecordType: recordType,
+		Values:     values,
+		TTL:        ttl,
+		Timestamp:  time.Now(),
 	}, nil
 }
 
 // =============================================================================
-// DNSCommands Interface Implementation - TLSA/DANE
+// TLSA / DANE
 // =============================================================================
 
-// AddTLSARecord adds a TLSA record via QUIC protocol.
+// AddTLSARecord adds a TLSA record (0x20, pb AddRecordRequest with the TLSA
+// oneof arm).
 func (q *QUICAdapter) AddTLSARecord(ctx context.Context, opts AddTLSARecordOptions) (*AddTLSARecordResult, error) {
-	req := &addTLSARequest{
-		ZoneName:     opts.ZoneName,
+	req := &pb.AddRecordRequest{
+		ZoneName: opts.ZoneName,
+		Record: &pb.Record{
+			Type: pb.RecordType_RECORD_TYPE_TLSA,
+			Record: &pb.Record_Tlsa{
+				Tlsa: &pb.TLSARecord{
+					Name:         opts.Name,
+					Usage:        uint32(opts.Usage),
+					Selector:     uint32(opts.Selector),
+					MatchingType: uint32(opts.MatchingType),
+					Data:         opts.Data,
+					Ttl:          opts.TTL,
+				},
+			},
+		},
+	}
+	if _, err := q.sendRequest(ctx, OpDNSAddRecord, req); err != nil {
+		return nil, err
+	}
+	return &AddTLSARecordResult{
 		Name:         opts.Name,
 		Usage:        opts.Usage,
 		Selector:     opts.Selector,
 		MatchingType: opts.MatchingType,
 		Data:         opts.Data,
 		TTL:          opts.TTL,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICDNSAddTLSA, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result addTLSAResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "AddTLSARecord", Err: err}
-	}
-
-	return &AddTLSARecordResult{
-		Name:         result.Name,
-		Usage:        result.Usage,
-		Selector:     result.Selector,
-		MatchingType: result.MatchingType,
-		Data:         result.Data,
-		TTL:          result.TTL,
-		CreatedAt:    time.Unix(result.CreatedAt, 0),
+		CreatedAt:    time.Now(),
 	}, nil
 }
 
 // =============================================================================
-// Error Types
+// Error types
 // =============================================================================
 
 // ErrQUICConnectionFailed indicates a QUIC connection failure.
@@ -1030,10 +818,7 @@ type ErrQUICConnectionFailed struct {
 func (e ErrQUICConnectionFailed) Error() string {
 	return fmt.Sprintf("QUIC connection to %s failed: %v", e.Endpoint, e.Err)
 }
-
-func (e ErrQUICConnectionFailed) Unwrap() error {
-	return e.Err
-}
+func (e ErrQUICConnectionFailed) Unwrap() error { return e.Err }
 
 // ErrQUICRequestFailed indicates a QUIC request failure.
 type ErrQUICRequestFailed struct {
@@ -1055,10 +840,7 @@ type ErrQUICEncodeFailed struct {
 func (e ErrQUICEncodeFailed) Error() string {
 	return fmt.Sprintf("QUIC encode failed for %s: %v", e.Operation, e.Err)
 }
-
-func (e ErrQUICEncodeFailed) Unwrap() error {
-	return e.Err
-}
+func (e ErrQUICEncodeFailed) Unwrap() error { return e.Err }
 
 // ErrQUICDecodeFailed indicates payload decoding failure.
 type ErrQUICDecodeFailed struct {
@@ -1069,10 +851,7 @@ type ErrQUICDecodeFailed struct {
 func (e ErrQUICDecodeFailed) Error() string {
 	return fmt.Sprintf("QUIC decode failed for %s: %v", e.Operation, e.Err)
 }
-
-func (e ErrQUICDecodeFailed) Unwrap() error {
-	return e.Err
-}
+func (e ErrQUICDecodeFailed) Unwrap() error { return e.Err }
 
 // ErrQUICStreamFailed indicates a stream operation failure.
 type ErrQUICStreamFailed struct {
@@ -1083,16 +862,20 @@ type ErrQUICStreamFailed struct {
 func (e ErrQUICStreamFailed) Error() string {
 	return fmt.Sprintf("QUIC stream operation %s failed: %v", e.Operation, e.Err)
 }
-
-func (e ErrQUICStreamFailed) Unwrap() error {
-	return e.Err
-}
+func (e ErrQUICStreamFailed) Unwrap() error { return e.Err }
 
 // ErrQUICClientClosed indicates the client is closed.
 type ErrQUICClientClosed struct{}
 
-func (e ErrQUICClientClosed) Error() string {
-	return "QUIC client is closed"
+func (e ErrQUICClientClosed) Error() string { return "QUIC client is closed" }
+
+// ErrQUICDNSUnsupported indicates a DNS operation with no QUIC opcode.
+type ErrQUICDNSUnsupported struct {
+	Method string
+}
+
+func (e ErrQUICDNSUnsupported) Error() string {
+	return fmt.Sprintf("DNS operation %s is not supported over QUIC", e.Method)
 }
 
 // Ensure QUICAdapter implements DNSCommands interface.

@@ -69,6 +69,7 @@ Examples:
 	cmd.AddCommand(newIDevIDCSRCommand(getFlags))
 	cmd.AddCommand(newIDevIDInstallCommand(getFlags))
 	cmd.AddCommand(newIDevIDCertCommand(getFlags))
+	cmd.AddCommand(NewLDevIDCommand(getFlags))
 
 	return cmd
 }

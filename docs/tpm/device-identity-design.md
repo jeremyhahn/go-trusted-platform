@@ -318,11 +318,43 @@ certificate metadata (`KeyType = "LDevID"`, TPM handle `0x81010102`).
 
 ### Multi-Protocol Surface
 
-`CreateLDevID` is exposed over gRPC and the Unix socket (both bound to the shared
-`IDevIDGRPCService`), the in-process embedded transport, and the Go SDK
-(`sdk/go/services/idevid.Client.CreateLDevID`). Parity across REST, QUIC, and MCP
-plus the `platformctl idevid ldevid create` CLI verb follows the same request /
-response contract.
+`CreateLDevID` is exposed over **every** platform transport. All of them are thin
+wire adapters that delegate to the one shared `IDevIDGRPCService.CreateLDevID`
+built by the daemon (TPM key + IAK-derived birth gate + CSR + platform-CA
+issuance live there exactly once — no transport re-implements the LDevID flow):
+
+| Transport | Entry point | Wiring |
+|-----------|-------------|--------|
+| gRPC / Unix | `platform.v1.IDevIDService/CreateLDevID` | `IDevIDGRPCService` registered on both servers |
+| Embedded | dispatch table method | in-process call into `IDevIDGRPCService` |
+| REST | `POST /api/v1/idevid/ldevid` | `RESTServer.handleLDevIDCreate` → shared service |
+| QUIC | `OpTPM2Category` (0x99), sub-opcode `SubOpTPM2LDevIDCSR` (0x1D) | `handleTPM2Category` intercepts the LDevID sub-opcode → `handleLDevIDCreate` → shared service |
+| MCP | tool `idevid_create_ldevid` | `MCPServiceProvider.CreateLDevID` → shared service |
+| CLI | `platformctl tpm idevid ldevid create` | Go SDK `idevid.Client.CreateLDevID` over any transport |
+
+Wire contract:
+
+- **REST** bodies are the JSON encodings of the pb `CreateLDevIDRequest` /
+  `CreateLDevIDResponse` messages (snake_case fields; `csr_pem` /
+  `certificate_pem` are base64 per pb `bytes`), so a REST-transport SDK client
+  and the daemon handler are byte-symmetric.
+- **QUIC** reuses the physical-TPM category opcode because the single-byte QUIC
+  opcode namespace is fully allocated; the LDevID request/response are the pb
+  messages encoded by the protocol codec **by their Go field names**, framed as
+  `payload = [0x1D] + codec(CreateLDevIDRequest)`.
+- **MCP** arguments mirror the pb field names (`template`, `algorithm`,
+  `handle`, `profile`, `validity_days`, `overwrite`); the tool returns the pb
+  response as JSON.
+
+The `gRPC → transport` routing tables live in the SDK adapters
+(`sdk/go/transport/{rest,quic,mcp}`), so `idevid.Client.CreateLDevID` works
+unchanged across every protocol.
+
+CLI (`platformctl tpm idevid ldevid create`) flags:
+`--common-name` / `--organization` / `--organizational-unit` / `--country` /
+`--state` / `--locality` (subject template), `--algorithm`, `--handle`,
+`--profile`, `--validity-days`, `--overwrite`, and `--out` (writes the issued
+certificate PEM to the path and the CSR to `<out>.csr`).
 
 ## ACME enroll-01 Challenge Flow (Future)
 

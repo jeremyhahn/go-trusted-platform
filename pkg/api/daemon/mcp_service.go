@@ -120,6 +120,7 @@ type MCPServiceProvider struct {
 	ipamService           ipam.Allocator
 	configDeliveryService *configdelivery.Service
 	logger                *slog.Logger
+	idevidService         *IDevIDGRPCService
 }
 
 // NewMCPServiceProvider creates a new MCPServiceProvider.
@@ -167,6 +168,12 @@ var _ mcp.ServiceProvider = (*MCPServiceProvider)(nil)
 // This allows dynamic injection of the TPM2 service.
 func (p *MCPServiceProvider) SetTPM2Service(svc xkmssdk.TrustedPlatformModule) {
 	p.tpm2Service = svc
+}
+
+// SetIDevIDService injects the shared IDevID gRPC service used for LDevID
+// (802.1AR) issuance over MCP.
+func (p *MCPServiceProvider) SetIDevIDService(svc *IDevIDGRPCService) {
+	p.idevidService = svc
 }
 
 // =============================================================================

@@ -253,6 +253,9 @@ func (s *RESTServer) registerIDevIDRoutes() {
 	api.HandleFunc("/tpm/activate-credential", s.handleActivateCredential).Methods(http.MethodPost)
 
 	s.logger.Info("IDevID/IAK REST routes registered")
+
+	// LDevID (802.1AR) issuance route.
+	s.registerLDevIDRoutes()
 }
 
 // =============================================================================

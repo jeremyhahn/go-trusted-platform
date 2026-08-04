@@ -49,8 +49,12 @@ type QUICServiceHandler struct {
 	// deviceGRPC is the shared DeviceGRPCService the device QUIC handlers
 	// delegate to so the QUIC transport has identical semantics to gRPC.
 	// It is (re)built by the device service setters (rebuildDeviceGRPC).
-	deviceGRPC     *DeviceGRPCService
-	dnsService     DNSService
+	deviceGRPC *DeviceGRPCService
+	dnsService DNSService
+	// dnsGRPC is the shared *DNSServiceServer the SDK-mapped DNS QUIC handlers
+	// delegate to so the QUIC transport has identical semantics to gRPC.
+	// It is (re)built by the DNS service setters (rebuildDNSGRPC).
+	dnsGRPC        *DNSServiceServer
 	computeGRPC    *ComputeGRPCService
 	attestGRPC     *AttestationServiceServer
 	healthRegistry health.Registry
@@ -70,6 +74,9 @@ type QUICServiceHandler struct {
 	// transport (see quic_eab.go).
 	eabService  EABQUICService
 	tpm2Service xkmssdk.TrustedPlatformModule
+	// idevidService is the shared IDevIDGRPCService the QUIC LDevID handler
+	// delegates to so QUIC has identical 802.1AR semantics as gRPC/Unix.
+	idevidService *IDevIDGRPCService
 	// tpm2Handler serves the physical-TPM category opcode
 	// (quic.OpTPM2Category, 0x99) with sub-opcode dispatch in payload[0].
 	tpm2Handler        *quic.TPM2Handler
@@ -136,6 +143,7 @@ func WithQUICDeviceProfileService(svc device.DeviceProfileService) QUICServiceHa
 func WithQUICDNSService(svc DNSService) QUICServiceHandlerOption {
 	return func(h *QUICServiceHandler) {
 		h.dnsService = svc
+		h.rebuildDNSGRPC()
 	}
 }
 
@@ -290,6 +298,7 @@ func (h *QUICServiceHandler) SetDeviceProfileService(svc device.DeviceProfileSer
 // SetDNSService sets the DNS service after construction
 func (h *QUICServiceHandler) SetDNSService(svc DNSService) {
 	h.dnsService = svc
+	h.rebuildDNSGRPC()
 }
 
 // SetComputeGRPCService sets the shared compute gRPC service the container
@@ -332,6 +341,12 @@ func (h *QUICServiceHandler) SetCryptoService(svc CryptoServiceInterface) {
 func (h *QUICServiceHandler) SetTPM2Service(svc xkmssdk.TrustedPlatformModule) {
 	h.tpm2Service = svc
 	h.tpm2Handler.SetTPM2Service(svc)
+}
+
+// SetIDevIDService injects the shared IDevID gRPC service used for LDevID
+// (802.1AR) issuance over QUIC.
+func (h *QUICServiceHandler) SetIDevIDService(svc *IDevIDGRPCService) {
+	h.idevidService = svc
 }
 
 // SetContainerHandler sets the Container handler after construction
@@ -669,6 +684,12 @@ func (h *QUICServiceHandler) handleCA(ctx context.Context, req *quic.Request) *q
 // The first byte of the payload is the sub-opcode that selects the TPM2
 // operation; the remaining payload bytes are the operation request payload.
 func (h *QUICServiceHandler) handleTPM2Category(ctx context.Context, req *quic.Request) *quic.Response {
+	// LDevID (802.1AR) issuance is CA-backed and lives in the shared
+	// IDevIDGRPCService, not the physical-TPM handler. Intercept the LDevID
+	// sub-opcode and delegate so QUIC matches gRPC/Unix/embedded semantics.
+	if h.idevidService != nil && len(req.Payload) > 0 && req.Payload[0] == quic.SubOpTPM2LDevIDCSR {
+		return h.handleLDevIDCreate(ctx, req.Payload[1:])
+	}
 	return h.tpm2Handler.HandleMessage(ctx, req)
 }
 

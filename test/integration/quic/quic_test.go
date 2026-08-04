@@ -390,12 +390,12 @@ func TestQUICDNS(t *testing.T) {
 	})
 
 	t.Run("DNS AddRecord with missing zone returns error", func(t *testing.T) {
-		req := &daemon.DNSAddRecordRequest{
-			Zone:       "",
-			Name:       "test",
-			RecordType: "A",
-			Value:      "192.168.1.1",
-			TTL:        3600,
+		req := &platformv1.AddRecordRequest{
+			ZoneName: "",
+			Record: &platformv1.Record{
+				Type:   platformv1.RecordType_RECORD_TYPE_A,
+				Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "test", Value: "192.168.1.1", Ttl: 3600}},
+			},
 		}
 		resp, err := client.SendExpectStatus(ctx, quic.OpDNSAddRecord, req, quic.StatusInvalidArgument)
 		if err != nil {
@@ -432,7 +432,7 @@ func TestQUICDNS(t *testing.T) {
 	})
 
 	t.Run("DNS AddZone with missing name returns error", func(t *testing.T) {
-		req := &daemon.DNSAddZoneRequest{
+		req := &platformv1.CreateZoneRequest{
 			Name: "",
 		}
 		resp, err := client.SendExpectStatus(ctx, quic.OpDNSAddZone, req, quic.StatusInvalidArgument)

@@ -80,6 +80,7 @@ type RESTServer struct {
 	configDeliveryHandler configdelivery.RestHandler
 	bmcHandler            bmcwebsvc.RestHandler
 	sdnHandlers           *restapi.SDNHandlers
+	idevidService         *IDevIDGRPCService
 }
 
 // NewRESTServer creates a new REST server for the daemon
@@ -258,6 +259,12 @@ func (s *RESTServer) registerRoutes() {
 // This allows IDevID/IAK operations via REST API using go-xkms's TPM2 directly.
 func (s *RESTServer) SetTPM2Service(svc xkmssdk.TrustedPlatformModule) {
 	s.tpm2Service = svc
+}
+
+// SetIDevIDService injects the shared IDevID gRPC service used for LDevID
+// (802.1AR) issuance over REST.
+func (s *RESTServer) SetIDevIDService(svc *IDevIDGRPCService) {
+	s.idevidService = svc
 }
 
 // SetConfigDeliveryHandler sets the config delivery handler and registers

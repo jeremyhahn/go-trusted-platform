@@ -995,6 +995,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 		// Set daemon service for QUIC daemon operations
 		quicHandler.SetDaemonService(service)
+		quicHandler.SetIDevIDService(idevidService)
 
 		// Set CA handler if available
 		if config.CAService != nil {
@@ -1251,6 +1252,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		} else {
 			daemon.restServer = restServer
 			daemon.concreteRestServer = restServer
+			restServer.SetIDevIDService(idevidService)
 			logger.Info("REST server created", "addr", config.RESTListenAddr)
 		}
 	} else if !config.EnableREST {
@@ -1675,6 +1677,12 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 
 	// Store the provider for later service injection
 	d.mcpProvider = serviceProvider
+
+	// Wire the shared IDevID service so the idevid_create_ldevid tool
+	// delegates to the same CA-backed IDevIDGRPCService as every transport.
+	if d.idevidService != nil {
+		serviceProvider.SetIDevIDService(d.idevidService)
+	}
 
 	// Wire Phase 3.5 services (ceremony/piv/luks/fido2) into the MCP provider
 	// so MCP tools can delegate to the real backends set via Set*Backend.
