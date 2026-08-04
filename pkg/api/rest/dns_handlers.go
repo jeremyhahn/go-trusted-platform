@@ -370,6 +370,22 @@ type TransferResponse struct {
 	Timestamp time.Time     `json:"timestamp"`
 }
 
+// ZoneTransferResponse is the management/export view of an authoritative
+// zone transfer. The platform is a PRIMARY nameserver: live AXFR is served
+// over DNS TCP to TSIG-authenticated secondaries by the DNS server itself.
+// This REST surface returns the exact records a secondary would receive
+// (RFC 5936 order) plus the configured secondary key names, without
+// performing a wire transfer or exposing any TSIG secret.
+type ZoneTransferResponse struct {
+	ZoneName    string    `json:"zone_name"`
+	Model       string    `json:"model"`
+	Records     []string  `json:"records"`
+	RecordCount int       `json:"record_count"`
+	Secondaries []string  `json:"secondaries,omitempty"`
+	Message     string    `json:"message,omitempty"`
+	Timestamp   time.Time `json:"timestamp"`
+}
+
 // DNSActionResponse represents a generic DNS action result.
 type DNSActionResponse struct {
 	Action    string    `json:"action"`
@@ -882,8 +898,16 @@ func (h *DNSHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTransfer handles POST /api/v1/dns/transfer
+//
+// Zone transfer is a DNS-protocol operation: authoritative AXFR is served by
+// the platform's DNS server over TCP to TSIG-authenticated secondaries (the
+// platform is a PRIMARY nameserver). This REST endpoint is the management /
+// export projection of that model — it returns exactly the records a
+// secondary would receive, in RFC 5936 order, along with the configured
+// secondary key names. It never performs a wire transfer or discloses a TSIG
+// secret.
 func (h *DNSHandlers) handleTransfer(w http.ResponseWriter, r *http.Request) {
-	_ = r.Context()
+	ctx := r.Context()
 
 	if h.dnsService == nil {
 		h.writeDNSError(w, http.StatusServiceUnavailable, ErrDNSServiceNotAvailable{})
@@ -900,17 +924,43 @@ func (h *DNSHandlers) handleTransfer(w http.ResponseWriter, r *http.Request) {
 		h.writeDNSError(w, http.StatusBadRequest, ErrMissingRequiredField{Field: "zone_name"})
 		return
 	}
-	if req.Server == "" {
-		h.writeDNSError(w, http.StatusBadRequest, ErrMissingRequiredField{Field: "server"})
+
+	transferrer, ok := h.dnsService.(dns.ZoneTransferrer)
+	if !ok {
+		h.writeDNSError(w, http.StatusNotImplemented, ErrDNSOperationFailed{
+			Operation: "transfer",
+			Cause:     errors.New("zone transfer export not supported by this DNS service"),
+		})
 		return
 	}
 
-	// Zone transfer is not currently implemented in the DNS service
-	// This endpoint is reserved for future AXFR/IXFR support
-	h.writeDNSError(w, http.StatusNotImplemented, ErrDNSOperationFailed{
-		Operation: "transfer",
-		Cause:     errors.New("zone transfer not yet implemented"),
-	})
+	records, err := transferrer.ZoneTransfer(ctx, req.ZoneName)
+	if err != nil {
+		h.logger.Error("Failed to export zone for transfer", "error", err, "zone", req.ZoneName)
+		h.handleDNSError(w, "transfer", err)
+		return
+	}
+
+	rrStrings := make([]string, 0, len(records))
+	for _, rr := range records {
+		if rr == nil {
+			continue
+		}
+		rrStrings = append(rrStrings, rr.String())
+	}
+
+	resp := ZoneTransferResponse{
+		ZoneName:    req.ZoneName,
+		Model:       "primary",
+		Records:     rrStrings,
+		RecordCount: len(rrStrings),
+		Secondaries: transferrer.TransferSecondaries(),
+		Message:     "authoritative AXFR is served over DNS TCP to TSIG-authenticated secondaries; this is the zone-export preview",
+		Timestamp:   time.Now().UTC(),
+	}
+
+	h.logger.Info("Zone transfer export served", "zone", req.ZoneName, "records", len(rrStrings))
+	h.writeJSON(w, http.StatusOK, resp)
 }
 
 // =============================================================================

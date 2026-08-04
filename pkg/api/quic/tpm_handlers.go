@@ -25,6 +25,7 @@ import (
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
+	attestvm "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
@@ -283,6 +284,22 @@ type TPM2QuoteResponse struct {
 	Quote     []byte `codec:"quote"`
 	Signature []byte `codec:"signature"`
 	EventLog  []byte `codec:"event_log"`
+	Timestamp int64  `codec:"timestamp"`
+}
+
+// TPM2VerifyQuoteRequest represents a TPM quote verification request.
+// Field names mirror the gRPC VerifyQuoteRequest proto.
+type TPM2VerifyQuoteRequest struct {
+	Quote     []byte `codec:"quote"`
+	Signature []byte `codec:"signature"`
+	Nonce     []byte `codec:"nonce"`
+	AKPublic  []byte `codec:"ak_public"`
+}
+
+// TPM2VerifyQuoteResponse represents a TPM quote verification response.
+type TPM2VerifyQuoteResponse struct {
+	Verified  bool   `codec:"verified"`
+	Message   string `codec:"message"`
 	Timestamp int64  `codec:"timestamp"`
 }
 
@@ -808,10 +825,78 @@ func (h *TPM2Handler) handleQuote(ctx context.Context, payload []byte) *Response
 	})
 }
 
-// handleVerifyQuote verifies a TPM quote.
+// handleVerifyQuote verifies a TPM 2.0 quote for parity with the gRPC
+// TPMService.VerifyQuote RPC. The attestation-key public half is taken
+// from the request (PKIX/PEM DER in ak_public) when supplied, otherwise
+// it falls back to this platform's provisioned IAK. Verification reuses
+// the canonical pkg/attestation/vm helpers: the anti-replay nonce
+// (TPMS_ATTEST extraData) must match, and the signature over the quote
+// must validate against the AK public key.
 func (h *TPM2Handler) handleVerifyQuote(ctx context.Context, payload []byte) *Response {
-	return h.errorResponse(StatusNotImplemented,
-		ErrTPM2OperationFailed{Operation: "VerifyQuote", Cause: errors.New("not yet implemented")})
+	var req TPM2VerifyQuoteRequest
+	if err := DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+	}
+	if len(req.Quote) == 0 {
+		return h.errorResponse(StatusInvalidArgument, errors.New("quote is required"))
+	}
+	if len(req.Signature) == 0 {
+		return h.errorResponse(StatusInvalidArgument, errors.New("signature is required"))
+	}
+
+	akPublic, err := h.resolveVerifyAKPublic(req.AKPublic)
+	if err != nil {
+		return h.encodeResponse(&TPM2VerifyQuoteResponse{
+			Verified:  false,
+			Message:   "ak_public_resolution_failed: " + err.Error(),
+			Timestamp: time.Now().Unix(),
+		})
+	}
+
+	if len(req.Nonce) > 0 {
+		if err := attestvm.VerifyQuoteNonce(req.Quote, req.Nonce); err != nil {
+			return h.encodeResponse(&TPM2VerifyQuoteResponse{
+				Verified:  false,
+				Message:   "nonce_verification_failed: " + err.Error(),
+				Timestamp: time.Now().Unix(),
+			})
+		}
+	}
+
+	if err := attestvm.VerifyQuoteSignature(akPublic, req.Quote, req.Signature); err != nil {
+		return h.encodeResponse(&TPM2VerifyQuoteResponse{
+			Verified:  false,
+			Message:   "signature_verification_failed: " + err.Error(),
+			Timestamp: time.Now().Unix(),
+		})
+	}
+
+	return h.encodeResponse(&TPM2VerifyQuoteResponse{
+		Verified:  true,
+		Message:   "quote verified: nonce matches, signature valid",
+		Timestamp: time.Now().Unix(),
+	})
+}
+
+// resolveVerifyAKPublic returns the PKIX-DER attestation-key public key
+// used to verify a quote. A caller-supplied key (already PKIX/PEM DER)
+// wins; otherwise the platform's provisioned IAK is marshaled to PKIX.
+func (h *TPM2Handler) resolveVerifyAKPublic(akPublic []byte) ([]byte, error) {
+	if len(akPublic) > 0 {
+		return akPublic, nil
+	}
+	pub, err := h.tpm.IAK()
+	if err != nil {
+		return nil, err
+	}
+	if pub == nil {
+		return nil, errors.New("IAK not found")
+	}
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return nil, err
+	}
+	return der, nil
 }
 
 // handleReadPCRs reads PCR values from the TPM.

@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/google/go-tpm/tpm2"
+	"github.com/google/go-tpm/tpm2/transport"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
@@ -36,6 +37,10 @@ import (
 // mockTPM implements xkmssdk.TrustedPlatformModule for handler tests.
 type mockTPM struct {
 	xkmssdk.TrustedPlatformModule
+
+	// transport is nil in unit tests; integration tests against
+	// swtpm / hardware supply a live transport for the NV round-trip.
+	transport transport.TPM
 
 	infoResult         string
 	infoErr            error
@@ -142,6 +147,8 @@ func newMockTPM() *mockTPM {
 		supportedCurves: []string{"P256", "P384"},
 	}
 }
+
+func (m *mockTPM) Transport() transport.TPM { return m.transport }
 
 func (m *mockTPM) Info() (string, error) { return m.infoResult, m.infoErr }
 func (m *mockTPM) FixedProperties() (*xkmssdk.PropertiesFixed, error) {
@@ -667,13 +674,112 @@ func TestTPM2Handler_HandleCapabilities_Errors(t *testing.T) {
 	}
 }
 
-func TestTPM2Handler_HandleNVOps(t *testing.T) {
+func TestTPM2Handler_HandleNVList_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	for _, op := range []byte{SubOpTPM2NVRead, SubOpTPM2NVWrite, SubOpTPM2NVDelete, SubOpTPM2NVList} {
-		resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{op}})
-		assert.Equal(t, StatusNotImplemented, resp.Status)
-	}
+	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2NVList}})
+	assert.Equal(t, StatusOK, resp.Status)
+
+	var out TPM2NVListResponse
+	require.NoError(t, DecodePayload(resp.Payload, &out))
+}
+
+func TestTPM2Handler_HandleNVList_Error(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	mock := newMockTPM()
+	mock.fixedPropsErr = errors.New("cap read failed")
+	h.SetTPM2Service(mock)
+	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2NVList}})
+	assert.NotEqual(t, StatusOK, resp.Status)
+}
+
+func TestTPM2Handler_HandleNVRead_MissingIndex(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	h.SetTPM2Service(newMockTPM())
+	body, err := EncodePayload(&TPM2NVReadRequest{Index: 0})
+	require.NoError(t, err)
+	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2NVRead}, body...)})
+	assert.Equal(t, StatusInvalidArgument, resp.Status)
+}
+
+func TestTPM2Handler_HandleNVRead_TransportUnavailable(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	h.SetTPM2Service(newMockTPM()) // nil transport
+	body, err := EncodePayload(&TPM2NVReadRequest{Index: 0x01500001, Size: 32})
+	require.NoError(t, err)
+	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2NVRead}, body...)})
+	assert.Equal(t, StatusUnavailable, resp.Status)
+}
+
+func TestTPM2Handler_HandleNVWrite_Validation(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	h.SetTPM2Service(newMockTPM())
+
+	// missing index
+	body, err := EncodePayload(&TPM2NVWriteRequest{Index: 0, Data: []byte("x")})
+	require.NoError(t, err)
+	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2NVWrite}, body...)})
+	assert.Equal(t, StatusInvalidArgument, resp.Status)
+
+	// missing data
+	body, err = EncodePayload(&TPM2NVWriteRequest{Index: 0x01500001})
+	require.NoError(t, err)
+	resp = h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2NVWrite}, body...)})
+	assert.Equal(t, StatusInvalidArgument, resp.Status)
+
+	// valid request, nil transport
+	body, err = EncodePayload(&TPM2NVWriteRequest{Index: 0x01500001, Data: []byte("payload")})
+	require.NoError(t, err)
+	resp = h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2NVWrite}, body...)})
+	assert.Equal(t, StatusUnavailable, resp.Status)
+}
+
+func TestTPM2Handler_HandleNVDelete_Validation(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	h.SetTPM2Service(newMockTPM())
+
+	body, err := EncodePayload(&TPM2NVDeleteRequest{Index: 0})
+	require.NoError(t, err)
+	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2NVDelete}, body...)})
+	assert.Equal(t, StatusInvalidArgument, resp.Status)
+
+	body, err = EncodePayload(&TPM2NVDeleteRequest{Index: 0x01500001})
+	require.NoError(t, err)
+	resp = h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2NVDelete}, body...)})
+	assert.Equal(t, StatusUnavailable, resp.Status)
+}
+
+func TestTPM2Handler_HandleVerifyQuote_Validation(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	h.SetTPM2Service(newMockTPM())
+
+	// missing quote
+	body, err := EncodePayload(&TPM2VerifyQuoteRequest{Signature: []byte("sig")})
+	require.NoError(t, err)
+	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2VerifyQuote}, body...)})
+	assert.Equal(t, StatusInvalidArgument, resp.Status)
+
+	// missing signature
+	body, err = EncodePayload(&TPM2VerifyQuoteRequest{Quote: []byte("quote")})
+	require.NoError(t, err)
+	resp = h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2VerifyQuote}, body...)})
+	assert.Equal(t, StatusInvalidArgument, resp.Status)
+}
+
+func TestTPM2Handler_HandleVerifyQuote_BadSignature(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	h.SetTPM2Service(newMockTPM()) // IAK() returns a valid ECDSA key
+	body, err := EncodePayload(&TPM2VerifyQuoteRequest{
+		Quote:     []byte("not-a-real-attest"),
+		Signature: []byte("garbage-signature"),
+	})
+	require.NoError(t, err)
+	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2VerifyQuote}, body...)})
+	// Verification failure is a successful RPC with verified=false.
+	assert.Equal(t, StatusOK, resp.Status)
+	var out TPM2VerifyQuoteResponse
+	require.NoError(t, DecodePayload(resp.Payload, &out))
+	assert.False(t, out.Verified)
 }
 
 func TestTPM2Handler_HandlePlatformAttributes_Success(t *testing.T) {
@@ -719,11 +825,13 @@ func TestTPM2Handler_HandleGetIDevID_AttrsError(t *testing.T) {
 	assert.Equal(t, StatusNotFound, resp.Status)
 }
 
-func TestTPM2Handler_HandleVerifyQuote(t *testing.T) {
+func TestTPM2Handler_HandleVerifyQuote_EmptyPayload(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
+	// A bare sub-opcode with no request body must be rejected, not
+	// silently treated as an empty (and therefore invalid) quote.
 	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2VerifyQuote}})
-	assert.Equal(t, StatusNotImplemented, resp.Status)
+	assert.NotEqual(t, StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleCreateIDevIDCSR(t *testing.T) {

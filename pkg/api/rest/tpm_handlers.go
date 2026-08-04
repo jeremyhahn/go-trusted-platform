@@ -29,6 +29,7 @@ import (
 	tpmgo "github.com/google/go-tpm/tpm2"
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	attestvm "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 )
 
 // =============================================================================
@@ -196,6 +197,23 @@ type TPMQuoteResponse struct {
 	Quote     string    `json:"quote"`
 	Signature string    `json:"signature"`
 	EventLog  string    `json:"event_log,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// TPMVerifyQuoteRequest represents a TPM quote verification request. All
+// binary fields are base64-encoded. ak_public (PKIX/PEM DER) is
+// optional; when omitted the platform's provisioned IAK is used.
+type TPMVerifyQuoteRequest struct {
+	Quote     string `json:"quote"`
+	Signature string `json:"signature"`
+	Nonce     string `json:"nonce,omitempty"`
+	AKPublic  string `json:"ak_public,omitempty"`
+}
+
+// TPMVerifyQuoteResponse represents a TPM quote verification result.
+type TPMVerifyQuoteResponse struct {
+	Verified  bool      `json:"verified"`
+	Message   string    `json:"message"`
 	Timestamp time.Time `json:"timestamp"`
 }
 
@@ -1083,7 +1101,14 @@ func (h *TPMHandlers) handleQuote(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, resp)
 }
 
-// handleVerifyQuote handles POST /api/v1/tpm/verify-quote
+// handleVerifyQuote handles POST /api/v1/tpm/verify-quote. It verifies a
+// TPM 2.0 quote for parity with the gRPC/QUIC VerifyQuote surfaces: the
+// anti-replay nonce (TPMS_ATTEST extraData) must match and the signature
+// over the quote must validate against the attestation-key public half.
+// The AK public key is taken from ak_public (PKIX/PEM DER) when supplied,
+// otherwise the platform's provisioned IAK is used. Verification failures
+// return 200 with verified=false and a diagnostic message; malformed
+// requests return 4xx.
 func (h *TPMHandlers) handleVerifyQuote(w http.ResponseWriter, r *http.Request) {
 	tpm := h.getTPM()
 	if tpm == nil {
@@ -1091,10 +1116,95 @@ func (h *TPMHandlers) handleVerifyQuote(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Quote verification is not yet implemented in the TPM interface
-	h.writeError(w, http.StatusNotImplemented, ErrTPMOperationFailed{
-		Operation: "verify_quote",
-		Cause:     &MessageError{Msg: "quote verification not yet implemented"},
+	var req TPMVerifyQuoteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
+		return
+	}
+	if req.Quote == "" {
+		h.writeError(w, http.StatusBadRequest, ErrMissingRequiredField{Field: "quote"})
+		return
+	}
+	if req.Signature == "" {
+		h.writeError(w, http.StatusBadRequest, ErrMissingRequiredField{Field: "signature"})
+		return
+	}
+
+	quote, err := base64.StdEncoding.DecodeString(req.Quote)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "invalid base64 quote"})
+		return
+	}
+	signature, err := base64.StdEncoding.DecodeString(req.Signature)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "invalid base64 signature"})
+		return
+	}
+	var nonce []byte
+	if req.Nonce != "" {
+		nonce, err = base64.StdEncoding.DecodeString(req.Nonce)
+		if err != nil {
+			h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "invalid base64 nonce"})
+			return
+		}
+	}
+	var akPublic []byte
+	if req.AKPublic != "" {
+		akPublic, err = base64.StdEncoding.DecodeString(req.AKPublic)
+		if err != nil {
+			h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "invalid base64 ak_public"})
+			return
+		}
+	}
+
+	// Resolve the AK public key: caller-supplied wins, otherwise fall
+	// back to the platform IAK marshaled to PKIX DER.
+	if len(akPublic) == 0 {
+		pub, iakErr := tpm.IAK()
+		if iakErr != nil {
+			h.writeTPMError(w, "verify_quote", iakErr)
+			return
+		}
+		if pub == nil {
+			h.writeError(w, http.StatusPreconditionFailed, ErrTPMOperationFailed{
+				Operation: "verify_quote",
+				Cause:     &MessageError{Msg: "no ak_public supplied and platform IAK not found"},
+			})
+			return
+		}
+		der, marshalErr := x509.MarshalPKIXPublicKey(pub)
+		if marshalErr != nil {
+			h.writeTPMError(w, "verify_quote", marshalErr)
+			return
+		}
+		akPublic = der
+	}
+
+	if len(nonce) > 0 {
+		if err := attestvm.VerifyQuoteNonce(quote, nonce); err != nil {
+			h.writeJSON(w, http.StatusOK, TPMVerifyQuoteResponse{
+				Verified:  false,
+				Message:   "nonce_verification_failed: " + err.Error(),
+				Timestamp: time.Now().UTC(),
+			})
+			return
+		}
+	}
+
+	if err := attestvm.VerifyQuoteSignature(akPublic, quote, signature); err != nil {
+		h.writeJSON(w, http.StatusOK, TPMVerifyQuoteResponse{
+			Verified:  false,
+			Message:   "signature_verification_failed: " + err.Error(),
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	h.logger.Debug("TPM quote verified")
+	h.writeJSON(w, http.StatusOK, TPMVerifyQuoteResponse{
+		Verified:  true,
+		Message:   "quote verified: nonce matches, signature valid",
+		Timestamp: time.Now().UTC(),
 	})
 }
 

@@ -197,6 +197,8 @@ export interface CreateBundleOptions {
   labels?: Record<string, string>;
   /** Template ID to use */
   templateId?: string;
+  /** Device profile ID to bind this bundle to (uint64 as string) */
+  deviceProfileId?: string;
 }
 
 /**
@@ -235,6 +237,8 @@ export interface ListBundleOptions {
   limit?: number;
   /** Offset */
   offset?: number;
+  /** Filter bundles bound to this device profile (uint64 as string) */
+  deviceProfileId?: string;
 }
 
 /**

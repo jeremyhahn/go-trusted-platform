@@ -205,6 +205,7 @@ Instance States:
 - [Architecture](architecture.md) - Design and component overview
 - [Configuration](configuration.md) - Configuration reference
 - [Container Orchestrator](container-orchestrator.md) - Container management with attestation
+- [Cloud Providers](cloud-providers.md) - AWS NitroTPM (+ GCP/Azure) provider factory & capability matrix
 - [API Reference](api-reference.md) - Go and gRPC API documentation
 - [CLI Usage](cli-usage.md) - Command-line reference
 - [swtpm Integration](swtpm-integration.md) - vTPM provisioning

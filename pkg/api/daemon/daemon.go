@@ -369,6 +369,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Initialize optional services based on available backends
 	var sdnService *SDNService
 	var iamService *IAMService
+	var iamGRPCService *IAMGRPCService
 	var tenantService *TenantService
 
 	// Create zone service — always available (in-memory, no OVS dependency).
@@ -557,7 +558,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			// gRPC servers report "unknown service platform.v1.PlatformIAMService"
 			// even though the REST router has IAM available via the embedded
 			// transport.
-			iamGRPCService := NewIAMGRPCService(logger.Slog(), iamService.Client(), iamService.PEP())
+			iamGRPCService = NewIAMGRPCService(logger.Slog(), iamService.Client(), iamService.PEP())
 			if grpcServer != nil {
 				platformv1.RegisterPlatformIAMServiceServer(grpcServer, iamGRPCService)
 			}
@@ -1096,6 +1097,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			logger.Info("BMC QUIC restorer wired")
 		}
 
+		// Wire the shared IAM gRPC delegate into the QUIC handler so IAM QUIC
+		// operations dispatch through the pb service instead of returning
+		// Unavailable. Reuses the instance registered on the gRPC servers.
+		if iamGRPCService != nil {
+			quicHandler.SetIAMGRPCService(iamGRPCService)
+			logger.Info("IAM gRPC delegate wired into QUIC handler")
+		}
+
 		// Prepare QUIC server configuration
 		quicConfig := config.QUICConfig
 		if quicConfig == nil {
@@ -1276,6 +1285,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if daemon.tenantService != nil && daemon.tenantService.grpcServer != nil {
 			daemon.tenantService.grpcServer.SetManager(config.PlatformTenantManager)
 			logger.Info("Platform tenant manager wired into gRPC TenantService")
+
+			// Share the same *TenantGRPCServer delegate with the QUIC handler so
+			// tenant QUIC operations dispatch through the pb service instead of
+			// returning Unavailable.
+			if daemon.quicHandler != nil {
+				daemon.quicHandler.SetTenantGRPCServer(daemon.tenantService.grpcServer)
+				logger.Info("Platform tenant manager wired into QUIC handler")
+			}
 		}
 	}
 

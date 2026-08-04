@@ -508,8 +508,12 @@ type Manifest struct {
 	Checksums         map[string]string      `protobuf:"bytes,11,rep,name=checksums,proto3" json:"checksums,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Labels            map[string]string      `protobuf:"bytes,12,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	ClonedFrom        string                 `protobuf:"bytes,13,opt,name=cloned_from,json=clonedFrom,proto3" json:"cloned_from,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// device_profile_id binds this bundle to a device profile (0 when unbound).
+	// This is the profile-facade identity that the QEMU orchestrator uses to
+	// discover a prestaged bundle for a VM at boot time.
+	DeviceProfileId uint64 `protobuf:"varint,14,opt,name=device_profile_id,json=deviceProfileId,proto3" json:"device_profile_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *Manifest) Reset() {
@@ -631,6 +635,13 @@ func (x *Manifest) GetClonedFrom() string {
 		return x.ClonedFrom
 	}
 	return ""
+}
+
+func (x *Manifest) GetDeviceProfileId() uint64 {
+	if x != nil {
+		return x.DeviceProfileId
+	}
+	return 0
 }
 
 // Bundle represents a complete vTPM bundle.
@@ -844,8 +855,12 @@ type CreateBundleOptions struct {
 	SecureBootEnabled bool                   `protobuf:"varint,4,opt,name=secure_boot_enabled,json=secureBootEnabled,proto3" json:"secure_boot_enabled,omitempty"`
 	Labels            map[string]string      `protobuf:"bytes,5,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	TemplateId        string                 `protobuf:"bytes,6,opt,name=template_id,json=templateId,proto3" json:"template_id,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// device_profile_id binds the created bundle to a device profile (optional).
+	// When set, the bundle becomes discoverable via ListBundles profile filter
+	// and via the QEMU orchestrator's profile lookup at VM boot time.
+	DeviceProfileId uint64 `protobuf:"varint,7,opt,name=device_profile_id,json=deviceProfileId,proto3" json:"device_profile_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *CreateBundleOptions) Reset() {
@@ -918,6 +933,13 @@ func (x *CreateBundleOptions) GetTemplateId() string {
 		return x.TemplateId
 	}
 	return ""
+}
+
+func (x *CreateBundleOptions) GetDeviceProfileId() uint64 {
+	if x != nil {
+		return x.DeviceProfileId
+	}
+	return 0
 }
 
 // CreateTemplateOptions configures template creation.
@@ -1052,13 +1074,17 @@ func (x *CloneOptions) GetLabels() map[string]string {
 
 // ListOptions for filtering bundle lists.
 type ListBundleOptions struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Mode          BundleMode             `protobuf:"varint,1,opt,name=mode,proto3,enum=platform.v1.BundleMode" json:"mode,omitempty"`
-	Labels        map[string]string      `protobuf:"bytes,2,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Limit         int32                  `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
-	Offset        int32                  `protobuf:"varint,4,opt,name=offset,proto3" json:"offset,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Mode   BundleMode             `protobuf:"varint,1,opt,name=mode,proto3,enum=platform.v1.BundleMode" json:"mode,omitempty"`
+	Labels map[string]string      `protobuf:"bytes,2,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Limit  int32                  `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
+	Offset int32                  `protobuf:"varint,4,opt,name=offset,proto3" json:"offset,omitempty"`
+	// device_profile_id filters bundles bound to the given device profile.
+	// A zero value disables the filter and returns bundles regardless of
+	// profile binding.
+	DeviceProfileId uint64 `protobuf:"varint,5,opt,name=device_profile_id,json=deviceProfileId,proto3" json:"device_profile_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ListBundleOptions) Reset() {
@@ -1115,6 +1141,13 @@ func (x *ListBundleOptions) GetLimit() int32 {
 func (x *ListBundleOptions) GetOffset() int32 {
 	if x != nil {
 		return x.Offset
+	}
+	return 0
+}
+
+func (x *ListBundleOptions) GetDeviceProfileId() uint64 {
+	if x != nil {
+		return x.DeviceProfileId
 	}
 	return 0
 }
@@ -3504,1278 +3537,6 @@ func (x *ReadVTPMPCRResponse) GetValue() []byte {
 	return nil
 }
 
-// VTPMInstanceConfig contains configuration for vTPM instance creation.
-type VTPMInstanceConfig struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// tpm_version is the TPM specification version (default: 2.0).
-	TpmVersion TPMVersion `protobuf:"varint,1,opt,name=tpm_version,json=tpmVersion,proto3,enum=platform.v1.TPMVersion" json:"tpm_version,omitempty"`
-	// state_path is the directory where vTPM state is stored.
-	StatePath string `protobuf:"bytes,2,opt,name=state_path,json=statePath,proto3" json:"state_path,omitempty"`
-	// hostname is the hostname for the vTPM (used in EK certificate CN).
-	Hostname string `protobuf:"bytes,3,opt,name=hostname,proto3" json:"hostname,omitempty"`
-	// ek_algorithm specifies the EK key algorithm (default: RSA).
-	EkAlgorithm EKAlgorithm `protobuf:"varint,4,opt,name=ek_algorithm,json=ekAlgorithm,proto3,enum=platform.v1.EKAlgorithm" json:"ek_algorithm,omitempty"`
-	// secure_boot_enabled enables Secure Boot key generation and enrollment.
-	SecureBootEnabled bool `protobuf:"varint,5,opt,name=secure_boot_enabled,json=secureBootEnabled,proto3" json:"secure_boot_enabled,omitempty"`
-	// labels contains custom metadata key-value pairs.
-	Labels        map[string]string `protobuf:"bytes,6,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *VTPMInstanceConfig) Reset() {
-	*x = VTPMInstanceConfig{}
-	mi := &file_vtpm_proto_msgTypes[58]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *VTPMInstanceConfig) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*VTPMInstanceConfig) ProtoMessage() {}
-
-func (x *VTPMInstanceConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[58]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use VTPMInstanceConfig.ProtoReflect.Descriptor instead.
-func (*VTPMInstanceConfig) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{58}
-}
-
-func (x *VTPMInstanceConfig) GetTpmVersion() TPMVersion {
-	if x != nil {
-		return x.TpmVersion
-	}
-	return TPMVersion_TPM_VERSION_UNSPECIFIED
-}
-
-func (x *VTPMInstanceConfig) GetStatePath() string {
-	if x != nil {
-		return x.StatePath
-	}
-	return ""
-}
-
-func (x *VTPMInstanceConfig) GetHostname() string {
-	if x != nil {
-		return x.Hostname
-	}
-	return ""
-}
-
-func (x *VTPMInstanceConfig) GetEkAlgorithm() EKAlgorithm {
-	if x != nil {
-		return x.EkAlgorithm
-	}
-	return EKAlgorithm_EK_ALGORITHM_UNSPECIFIED
-}
-
-func (x *VTPMInstanceConfig) GetSecureBootEnabled() bool {
-	if x != nil {
-		return x.SecureBootEnabled
-	}
-	return false
-}
-
-func (x *VTPMInstanceConfig) GetLabels() map[string]string {
-	if x != nil {
-		return x.Labels
-	}
-	return nil
-}
-
-// VTPMInstance represents a virtual TPM instance.
-type VTPMInstance struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// id is the unique identifier for this vTPM instance.
-	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	// profile_id is the associated device profile ID (optional).
-	ProfileId uint64 `protobuf:"varint,2,opt,name=profile_id,json=profileId,proto3" json:"profile_id,omitempty"`
-	// version is the TPM specification version.
-	Version TPMVersion `protobuf:"varint,3,opt,name=version,proto3,enum=platform.v1.TPMVersion" json:"version,omitempty"`
-	// state_path is the directory containing this vTPM's state files.
-	StatePath string `protobuf:"bytes,4,opt,name=state_path,json=statePath,proto3" json:"state_path,omitempty"`
-	// socket_path is the Unix socket path for TPM communication.
-	SocketPath string `protobuf:"bytes,5,opt,name=socket_path,json=socketPath,proto3" json:"socket_path,omitempty"`
-	// nvram_path is the path to the OVMF NVRAM file.
-	NvramPath string `protobuf:"bytes,6,opt,name=nvram_path,json=nvramPath,proto3" json:"nvram_path,omitempty"`
-	// ek_fingerprint is the SHA-256 fingerprint of the EK certificate.
-	EkFingerprint string `protobuf:"bytes,7,opt,name=ek_fingerprint,json=ekFingerprint,proto3" json:"ek_fingerprint,omitempty"`
-	// srk_handle is the TPM handle for the Storage Root Key.
-	SrkHandle uint32 `protobuf:"varint,8,opt,name=srk_handle,json=srkHandle,proto3" json:"srk_handle,omitempty"`
-	// running indicates if the vTPM is currently running.
-	Running bool `protobuf:"varint,9,opt,name=running,proto3" json:"running,omitempty"`
-	// created_at is the instance creation timestamp.
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *VTPMInstance) Reset() {
-	*x = VTPMInstance{}
-	mi := &file_vtpm_proto_msgTypes[59]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *VTPMInstance) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*VTPMInstance) ProtoMessage() {}
-
-func (x *VTPMInstance) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[59]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use VTPMInstance.ProtoReflect.Descriptor instead.
-func (*VTPMInstance) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{59}
-}
-
-func (x *VTPMInstance) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
-func (x *VTPMInstance) GetProfileId() uint64 {
-	if x != nil {
-		return x.ProfileId
-	}
-	return 0
-}
-
-func (x *VTPMInstance) GetVersion() TPMVersion {
-	if x != nil {
-		return x.Version
-	}
-	return TPMVersion_TPM_VERSION_UNSPECIFIED
-}
-
-func (x *VTPMInstance) GetStatePath() string {
-	if x != nil {
-		return x.StatePath
-	}
-	return ""
-}
-
-func (x *VTPMInstance) GetSocketPath() string {
-	if x != nil {
-		return x.SocketPath
-	}
-	return ""
-}
-
-func (x *VTPMInstance) GetNvramPath() string {
-	if x != nil {
-		return x.NvramPath
-	}
-	return ""
-}
-
-func (x *VTPMInstance) GetEkFingerprint() string {
-	if x != nil {
-		return x.EkFingerprint
-	}
-	return ""
-}
-
-func (x *VTPMInstance) GetSrkHandle() uint32 {
-	if x != nil {
-		return x.SrkHandle
-	}
-	return 0
-}
-
-func (x *VTPMInstance) GetRunning() bool {
-	if x != nil {
-		return x.Running
-	}
-	return false
-}
-
-func (x *VTPMInstance) GetCreatedAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.CreatedAt
-	}
-	return nil
-}
-
-type CreateVTPMInstanceRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// profile_id is the device profile to associate with this instance (optional).
-	ProfileId uint64 `protobuf:"varint,1,opt,name=profile_id,json=profileId,proto3" json:"profile_id,omitempty"`
-	// config contains optional configuration for the vTPM instance.
-	Config        *VTPMInstanceConfig `protobuf:"bytes,2,opt,name=config,proto3" json:"config,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateVTPMInstanceRequest) Reset() {
-	*x = CreateVTPMInstanceRequest{}
-	mi := &file_vtpm_proto_msgTypes[60]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateVTPMInstanceRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateVTPMInstanceRequest) ProtoMessage() {}
-
-func (x *CreateVTPMInstanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[60]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateVTPMInstanceRequest.ProtoReflect.Descriptor instead.
-func (*CreateVTPMInstanceRequest) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{60}
-}
-
-func (x *CreateVTPMInstanceRequest) GetProfileId() uint64 {
-	if x != nil {
-		return x.ProfileId
-	}
-	return 0
-}
-
-func (x *CreateVTPMInstanceRequest) GetConfig() *VTPMInstanceConfig {
-	if x != nil {
-		return x.Config
-	}
-	return nil
-}
-
-type CreateVTPMInstanceResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// status indicates operation success/failure.
-	Status *Status `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
-	// instance is the created vTPM instance.
-	Instance      *VTPMInstance `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateVTPMInstanceResponse) Reset() {
-	*x = CreateVTPMInstanceResponse{}
-	mi := &file_vtpm_proto_msgTypes[61]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateVTPMInstanceResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateVTPMInstanceResponse) ProtoMessage() {}
-
-func (x *CreateVTPMInstanceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[61]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateVTPMInstanceResponse.ProtoReflect.Descriptor instead.
-func (*CreateVTPMInstanceResponse) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{61}
-}
-
-func (x *CreateVTPMInstanceResponse) GetStatus() *Status {
-	if x != nil {
-		return x.Status
-	}
-	return nil
-}
-
-func (x *CreateVTPMInstanceResponse) GetInstance() *VTPMInstance {
-	if x != nil {
-		return x.Instance
-	}
-	return nil
-}
-
-type GetVTPMInstanceRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// id is the vTPM instance ID.
-	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetVTPMInstanceRequest) Reset() {
-	*x = GetVTPMInstanceRequest{}
-	mi := &file_vtpm_proto_msgTypes[62]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetVTPMInstanceRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetVTPMInstanceRequest) ProtoMessage() {}
-
-func (x *GetVTPMInstanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[62]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetVTPMInstanceRequest.ProtoReflect.Descriptor instead.
-func (*GetVTPMInstanceRequest) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{62}
-}
-
-func (x *GetVTPMInstanceRequest) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
-type GetVTPMInstanceResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// instance is the retrieved vTPM instance.
-	Instance      *VTPMInstance `protobuf:"bytes,1,opt,name=instance,proto3" json:"instance,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetVTPMInstanceResponse) Reset() {
-	*x = GetVTPMInstanceResponse{}
-	mi := &file_vtpm_proto_msgTypes[63]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetVTPMInstanceResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetVTPMInstanceResponse) ProtoMessage() {}
-
-func (x *GetVTPMInstanceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[63]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetVTPMInstanceResponse.ProtoReflect.Descriptor instead.
-func (*GetVTPMInstanceResponse) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{63}
-}
-
-func (x *GetVTPMInstanceResponse) GetInstance() *VTPMInstance {
-	if x != nil {
-		return x.Instance
-	}
-	return nil
-}
-
-type GetVTPMInstanceByProfileRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// profile_id is the device profile ID.
-	ProfileId     uint64 `protobuf:"varint,1,opt,name=profile_id,json=profileId,proto3" json:"profile_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetVTPMInstanceByProfileRequest) Reset() {
-	*x = GetVTPMInstanceByProfileRequest{}
-	mi := &file_vtpm_proto_msgTypes[64]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetVTPMInstanceByProfileRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetVTPMInstanceByProfileRequest) ProtoMessage() {}
-
-func (x *GetVTPMInstanceByProfileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[64]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetVTPMInstanceByProfileRequest.ProtoReflect.Descriptor instead.
-func (*GetVTPMInstanceByProfileRequest) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{64}
-}
-
-func (x *GetVTPMInstanceByProfileRequest) GetProfileId() uint64 {
-	if x != nil {
-		return x.ProfileId
-	}
-	return 0
-}
-
-type GetVTPMInstanceByProfileResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// instance is the retrieved vTPM instance.
-	Instance      *VTPMInstance `protobuf:"bytes,1,opt,name=instance,proto3" json:"instance,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetVTPMInstanceByProfileResponse) Reset() {
-	*x = GetVTPMInstanceByProfileResponse{}
-	mi := &file_vtpm_proto_msgTypes[65]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetVTPMInstanceByProfileResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetVTPMInstanceByProfileResponse) ProtoMessage() {}
-
-func (x *GetVTPMInstanceByProfileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[65]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetVTPMInstanceByProfileResponse.ProtoReflect.Descriptor instead.
-func (*GetVTPMInstanceByProfileResponse) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{65}
-}
-
-func (x *GetVTPMInstanceByProfileResponse) GetInstance() *VTPMInstance {
-	if x != nil {
-		return x.Instance
-	}
-	return nil
-}
-
-type DeleteVTPMInstanceRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// id is the vTPM instance ID to delete.
-	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeleteVTPMInstanceRequest) Reset() {
-	*x = DeleteVTPMInstanceRequest{}
-	mi := &file_vtpm_proto_msgTypes[66]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeleteVTPMInstanceRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeleteVTPMInstanceRequest) ProtoMessage() {}
-
-func (x *DeleteVTPMInstanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[66]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeleteVTPMInstanceRequest.ProtoReflect.Descriptor instead.
-func (*DeleteVTPMInstanceRequest) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{66}
-}
-
-func (x *DeleteVTPMInstanceRequest) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
-type DeleteVTPMInstanceResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// status indicates operation success/failure.
-	Status        *Status `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeleteVTPMInstanceResponse) Reset() {
-	*x = DeleteVTPMInstanceResponse{}
-	mi := &file_vtpm_proto_msgTypes[67]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeleteVTPMInstanceResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeleteVTPMInstanceResponse) ProtoMessage() {}
-
-func (x *DeleteVTPMInstanceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[67]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeleteVTPMInstanceResponse.ProtoReflect.Descriptor instead.
-func (*DeleteVTPMInstanceResponse) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{67}
-}
-
-func (x *DeleteVTPMInstanceResponse) GetStatus() *Status {
-	if x != nil {
-		return x.Status
-	}
-	return nil
-}
-
-type ListVTPMInstancesRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// pagination contains pagination parameters.
-	Pagination *PaginationRequest `protobuf:"bytes,1,opt,name=pagination,proto3" json:"pagination,omitempty"`
-	// selector contains label selector for filtering.
-	Selector      *LabelSelector `protobuf:"bytes,2,opt,name=selector,proto3" json:"selector,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListVTPMInstancesRequest) Reset() {
-	*x = ListVTPMInstancesRequest{}
-	mi := &file_vtpm_proto_msgTypes[68]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListVTPMInstancesRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListVTPMInstancesRequest) ProtoMessage() {}
-
-func (x *ListVTPMInstancesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[68]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListVTPMInstancesRequest.ProtoReflect.Descriptor instead.
-func (*ListVTPMInstancesRequest) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{68}
-}
-
-func (x *ListVTPMInstancesRequest) GetPagination() *PaginationRequest {
-	if x != nil {
-		return x.Pagination
-	}
-	return nil
-}
-
-func (x *ListVTPMInstancesRequest) GetSelector() *LabelSelector {
-	if x != nil {
-		return x.Selector
-	}
-	return nil
-}
-
-type ListVTPMInstancesResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// instances is the list of vTPM instances.
-	Instances []*VTPMInstance `protobuf:"bytes,1,rep,name=instances,proto3" json:"instances,omitempty"`
-	// pagination contains pagination metadata.
-	Pagination    *PaginationResponse `protobuf:"bytes,2,opt,name=pagination,proto3" json:"pagination,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListVTPMInstancesResponse) Reset() {
-	*x = ListVTPMInstancesResponse{}
-	mi := &file_vtpm_proto_msgTypes[69]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListVTPMInstancesResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListVTPMInstancesResponse) ProtoMessage() {}
-
-func (x *ListVTPMInstancesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[69]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListVTPMInstancesResponse.ProtoReflect.Descriptor instead.
-func (*ListVTPMInstancesResponse) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{69}
-}
-
-func (x *ListVTPMInstancesResponse) GetInstances() []*VTPMInstance {
-	if x != nil {
-		return x.Instances
-	}
-	return nil
-}
-
-func (x *ListVTPMInstancesResponse) GetPagination() *PaginationResponse {
-	if x != nil {
-		return x.Pagination
-	}
-	return nil
-}
-
-type StartVTPMInstanceRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// id is the vTPM instance ID to start.
-	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *StartVTPMInstanceRequest) Reset() {
-	*x = StartVTPMInstanceRequest{}
-	mi := &file_vtpm_proto_msgTypes[70]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StartVTPMInstanceRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StartVTPMInstanceRequest) ProtoMessage() {}
-
-func (x *StartVTPMInstanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[70]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StartVTPMInstanceRequest.ProtoReflect.Descriptor instead.
-func (*StartVTPMInstanceRequest) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{70}
-}
-
-func (x *StartVTPMInstanceRequest) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
-type StartVTPMInstanceResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// status indicates operation success/failure.
-	Status *Status `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
-	// socket_path is the Unix socket path for TPM communication.
-	SocketPath    string `protobuf:"bytes,2,opt,name=socket_path,json=socketPath,proto3" json:"socket_path,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *StartVTPMInstanceResponse) Reset() {
-	*x = StartVTPMInstanceResponse{}
-	mi := &file_vtpm_proto_msgTypes[71]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StartVTPMInstanceResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StartVTPMInstanceResponse) ProtoMessage() {}
-
-func (x *StartVTPMInstanceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[71]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StartVTPMInstanceResponse.ProtoReflect.Descriptor instead.
-func (*StartVTPMInstanceResponse) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{71}
-}
-
-func (x *StartVTPMInstanceResponse) GetStatus() *Status {
-	if x != nil {
-		return x.Status
-	}
-	return nil
-}
-
-func (x *StartVTPMInstanceResponse) GetSocketPath() string {
-	if x != nil {
-		return x.SocketPath
-	}
-	return ""
-}
-
-type StopVTPMInstanceRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// id is the vTPM instance ID to stop.
-	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *StopVTPMInstanceRequest) Reset() {
-	*x = StopVTPMInstanceRequest{}
-	mi := &file_vtpm_proto_msgTypes[72]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StopVTPMInstanceRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StopVTPMInstanceRequest) ProtoMessage() {}
-
-func (x *StopVTPMInstanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[72]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StopVTPMInstanceRequest.ProtoReflect.Descriptor instead.
-func (*StopVTPMInstanceRequest) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{72}
-}
-
-func (x *StopVTPMInstanceRequest) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
-type StopVTPMInstanceResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// status indicates operation success/failure.
-	Status        *Status `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *StopVTPMInstanceResponse) Reset() {
-	*x = StopVTPMInstanceResponse{}
-	mi := &file_vtpm_proto_msgTypes[73]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StopVTPMInstanceResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StopVTPMInstanceResponse) ProtoMessage() {}
-
-func (x *StopVTPMInstanceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[73]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StopVTPMInstanceResponse.ProtoReflect.Descriptor instead.
-func (*StopVTPMInstanceResponse) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{73}
-}
-
-func (x *StopVTPMInstanceResponse) GetStatus() *Status {
-	if x != nil {
-		return x.Status
-	}
-	return nil
-}
-
-type GetVTPMInstanceStatusRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// id is the vTPM instance ID.
-	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetVTPMInstanceStatusRequest) Reset() {
-	*x = GetVTPMInstanceStatusRequest{}
-	mi := &file_vtpm_proto_msgTypes[74]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetVTPMInstanceStatusRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetVTPMInstanceStatusRequest) ProtoMessage() {}
-
-func (x *GetVTPMInstanceStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[74]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetVTPMInstanceStatusRequest.ProtoReflect.Descriptor instead.
-func (*GetVTPMInstanceStatusRequest) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{74}
-}
-
-func (x *GetVTPMInstanceStatusRequest) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
-type GetVTPMInstanceStatusResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// id is the vTPM instance ID.
-	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	// running indicates if the vTPM is currently running.
-	Running bool `protobuf:"varint,2,opt,name=running,proto3" json:"running,omitempty"`
-	// socket_path is the Unix socket path if running.
-	SocketPath    string `protobuf:"bytes,3,opt,name=socket_path,json=socketPath,proto3" json:"socket_path,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetVTPMInstanceStatusResponse) Reset() {
-	*x = GetVTPMInstanceStatusResponse{}
-	mi := &file_vtpm_proto_msgTypes[75]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetVTPMInstanceStatusResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetVTPMInstanceStatusResponse) ProtoMessage() {}
-
-func (x *GetVTPMInstanceStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[75]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetVTPMInstanceStatusResponse.ProtoReflect.Descriptor instead.
-func (*GetVTPMInstanceStatusResponse) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{75}
-}
-
-func (x *GetVTPMInstanceStatusResponse) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
-func (x *GetVTPMInstanceStatusResponse) GetRunning() bool {
-	if x != nil {
-		return x.Running
-	}
-	return false
-}
-
-func (x *GetVTPMInstanceStatusResponse) GetSocketPath() string {
-	if x != nil {
-		return x.SocketPath
-	}
-	return ""
-}
-
-type ExportEKCertificateRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// id is the vTPM instance ID.
-	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	// format specifies the certificate encoding format.
-	// Supported values: "PEM" (default), "DER"
-	Format        string `protobuf:"bytes,2,opt,name=format,proto3" json:"format,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ExportEKCertificateRequest) Reset() {
-	*x = ExportEKCertificateRequest{}
-	mi := &file_vtpm_proto_msgTypes[76]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ExportEKCertificateRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ExportEKCertificateRequest) ProtoMessage() {}
-
-func (x *ExportEKCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[76]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ExportEKCertificateRequest.ProtoReflect.Descriptor instead.
-func (*ExportEKCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{76}
-}
-
-func (x *ExportEKCertificateRequest) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
-func (x *ExportEKCertificateRequest) GetFormat() string {
-	if x != nil {
-		return x.Format
-	}
-	return ""
-}
-
-type ExportEKCertificateResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// id is the vTPM instance ID.
-	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	// certificate is the EK certificate data.
-	Certificate []byte `protobuf:"bytes,2,opt,name=certificate,proto3" json:"certificate,omitempty"`
-	// format is the certificate encoding format.
-	Format string `protobuf:"bytes,3,opt,name=format,proto3" json:"format,omitempty"`
-	// subject is the certificate subject.
-	Subject string `protobuf:"bytes,4,opt,name=subject,proto3" json:"subject,omitempty"`
-	// issuer is the certificate issuer.
-	Issuer string `protobuf:"bytes,5,opt,name=issuer,proto3" json:"issuer,omitempty"`
-	// serial_number is the certificate serial number.
-	SerialNumber string `protobuf:"bytes,6,opt,name=serial_number,json=serialNumber,proto3" json:"serial_number,omitempty"`
-	// not_before is the certificate validity start.
-	NotBefore *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=not_before,json=notBefore,proto3" json:"not_before,omitempty"`
-	// not_after is the certificate validity end.
-	NotAfter      *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ExportEKCertificateResponse) Reset() {
-	*x = ExportEKCertificateResponse{}
-	mi := &file_vtpm_proto_msgTypes[77]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ExportEKCertificateResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ExportEKCertificateResponse) ProtoMessage() {}
-
-func (x *ExportEKCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[77]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ExportEKCertificateResponse.ProtoReflect.Descriptor instead.
-func (*ExportEKCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{77}
-}
-
-func (x *ExportEKCertificateResponse) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
-func (x *ExportEKCertificateResponse) GetCertificate() []byte {
-	if x != nil {
-		return x.Certificate
-	}
-	return nil
-}
-
-func (x *ExportEKCertificateResponse) GetFormat() string {
-	if x != nil {
-		return x.Format
-	}
-	return ""
-}
-
-func (x *ExportEKCertificateResponse) GetSubject() string {
-	if x != nil {
-		return x.Subject
-	}
-	return ""
-}
-
-func (x *ExportEKCertificateResponse) GetIssuer() string {
-	if x != nil {
-		return x.Issuer
-	}
-	return ""
-}
-
-func (x *ExportEKCertificateResponse) GetSerialNumber() string {
-	if x != nil {
-		return x.SerialNumber
-	}
-	return ""
-}
-
-func (x *ExportEKCertificateResponse) GetNotBefore() *timestamppb.Timestamp {
-	if x != nil {
-		return x.NotBefore
-	}
-	return nil
-}
-
-func (x *ExportEKCertificateResponse) GetNotAfter() *timestamppb.Timestamp {
-	if x != nil {
-		return x.NotAfter
-	}
-	return nil
-}
-
-type GetEKFingerprintRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// id is the vTPM instance ID.
-	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetEKFingerprintRequest) Reset() {
-	*x = GetEKFingerprintRequest{}
-	mi := &file_vtpm_proto_msgTypes[78]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetEKFingerprintRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetEKFingerprintRequest) ProtoMessage() {}
-
-func (x *GetEKFingerprintRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[78]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetEKFingerprintRequest.ProtoReflect.Descriptor instead.
-func (*GetEKFingerprintRequest) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{78}
-}
-
-func (x *GetEKFingerprintRequest) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
-type GetEKFingerprintResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// id is the vTPM instance ID.
-	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	// fingerprint is the SHA-256 fingerprint of the EK certificate.
-	Fingerprint string `protobuf:"bytes,2,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`
-	// algorithm is the hash algorithm used for the fingerprint (e.g., "SHA256").
-	Algorithm     string `protobuf:"bytes,3,opt,name=algorithm,proto3" json:"algorithm,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetEKFingerprintResponse) Reset() {
-	*x = GetEKFingerprintResponse{}
-	mi := &file_vtpm_proto_msgTypes[79]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetEKFingerprintResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetEKFingerprintResponse) ProtoMessage() {}
-
-func (x *GetEKFingerprintResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vtpm_proto_msgTypes[79]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetEKFingerprintResponse.ProtoReflect.Descriptor instead.
-func (*GetEKFingerprintResponse) Descriptor() ([]byte, []int) {
-	return file_vtpm_proto_rawDescGZIP(), []int{79}
-}
-
-func (x *GetEKFingerprintResponse) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
-func (x *GetEKFingerprintResponse) GetFingerprint() string {
-	if x != nil {
-		return x.Fingerprint
-	}
-	return ""
-}
-
-func (x *GetEKFingerprintResponse) GetAlgorithm() string {
-	if x != nil {
-		return x.Algorithm
-	}
-	return ""
-}
-
 var File_vtpm_proto protoreflect.FileDescriptor
 
 const file_vtpm_proto_rawDesc = "" +
@@ -4811,7 +3572,7 @@ const file_vtpm_proto_rawDesc = "" +
 	"\rvolatile_file\x18\x03 \x01(\tR\fvolatileFile\"*\n" +
 	"\tOVMFState\x12\x1d\n" +
 	"\n" +
-	"nvram_file\x18\x01 \x01(\tR\tnvramFile\"\xe5\x05\n" +
+	"nvram_file\x18\x01 \x01(\tR\tnvramFile\"\x91\x06\n" +
 	"\bManifest\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12+\n" +
@@ -4828,7 +3589,8 @@ const file_vtpm_proto_rawDesc = "" +
 	"\tchecksums\x18\v \x03(\v2$.platform.v1.Manifest.ChecksumsEntryR\tchecksums\x129\n" +
 	"\x06labels\x18\f \x03(\v2!.platform.v1.Manifest.LabelsEntryR\x06labels\x12\x1f\n" +
 	"\vcloned_from\x18\r \x01(\tR\n" +
-	"clonedFrom\x1a<\n" +
+	"clonedFrom\x12*\n" +
+	"\x11device_profile_id\x18\x0e \x01(\x04R\x0fdeviceProfileId\x1a<\n" +
 	"\x0eChecksumsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a9\n" +
@@ -4857,7 +3619,7 @@ const file_vtpm_proto_rawDesc = "" +
 	"\fek_algorithm\x18\x06 \x01(\x0e2\x18.platform.v1.EKAlgorithmR\vekAlgorithm\x12.\n" +
 	"\x13secure_boot_enabled\x18\a \x01(\bR\x11secureBootEnabled\x129\n" +
 	"\n" +
-	"created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xed\x02\n" +
+	"created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x99\x03\n" +
 	"\x13CreateBundleOptions\x12+\n" +
 	"\x04mode\x18\x01 \x01(\x0e2\x17.platform.v1.BundleModeR\x04mode\x12\x1a\n" +
 	"\bhostname\x18\x02 \x01(\tR\bhostname\x12;\n" +
@@ -4865,7 +3627,8 @@ const file_vtpm_proto_rawDesc = "" +
 	"\x13secure_boot_enabled\x18\x04 \x01(\bR\x11secureBootEnabled\x12D\n" +
 	"\x06labels\x18\x05 \x03(\v2,.platform.v1.CreateBundleOptions.LabelsEntryR\x06labels\x12\x1f\n" +
 	"\vtemplate_id\x18\x06 \x01(\tR\n" +
-	"templateId\x1a9\n" +
+	"templateId\x12*\n" +
+	"\x11device_profile_id\x18\a \x01(\x04R\x0fdeviceProfileId\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb6\x01\n" +
@@ -4881,12 +3644,13 @@ const file_vtpm_proto_rawDesc = "" +
 	"\x06labels\x18\x03 \x03(\v2%.platform.v1.CloneOptions.LabelsEntryR\x06labels\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xed\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x99\x02\n" +
 	"\x11ListBundleOptions\x12+\n" +
 	"\x04mode\x18\x01 \x01(\x0e2\x17.platform.v1.BundleModeR\x04mode\x12B\n" +
 	"\x06labels\x18\x02 \x03(\v2*.platform.v1.ListBundleOptions.LabelsEntryR\x06labels\x12\x14\n" +
 	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12\x16\n" +
-	"\x06offset\x18\x04 \x01(\x05R\x06offset\x1a9\n" +
+	"\x06offset\x18\x04 \x01(\x05R\x06offset\x12*\n" +
+	"\x11device_profile_id\x18\x05 \x01(\x04R\x0fdeviceProfileId\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"Q\n" +
@@ -5027,103 +3791,7 @@ const file_vtpm_proto_rawDesc = "" +
 	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x12\x1b\n" +
 	"\tbundle_id\x18\x02 \x01(\tR\bbundleId\x12\x1b\n" +
 	"\tpcr_index\x18\x03 \x01(\x05R\bpcrIndex\x12\x14\n" +
-	"\x05value\x18\x04 \x01(\fR\x05value\"\xf6\x02\n" +
-	"\x12VTPMInstanceConfig\x128\n" +
-	"\vtpm_version\x18\x01 \x01(\x0e2\x17.platform.v1.TPMVersionR\n" +
-	"tpmVersion\x12\x1d\n" +
-	"\n" +
-	"state_path\x18\x02 \x01(\tR\tstatePath\x12\x1a\n" +
-	"\bhostname\x18\x03 \x01(\tR\bhostname\x12;\n" +
-	"\fek_algorithm\x18\x04 \x01(\x0e2\x18.platform.v1.EKAlgorithmR\vekAlgorithm\x12.\n" +
-	"\x13secure_boot_enabled\x18\x05 \x01(\bR\x11secureBootEnabled\x12C\n" +
-	"\x06labels\x18\x06 \x03(\v2+.platform.v1.VTPMInstanceConfig.LabelsEntryR\x06labels\x1a9\n" +
-	"\vLabelsEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xea\x02\n" +
-	"\fVTPMInstance\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
-	"\n" +
-	"profile_id\x18\x02 \x01(\x04R\tprofileId\x121\n" +
-	"\aversion\x18\x03 \x01(\x0e2\x17.platform.v1.TPMVersionR\aversion\x12\x1d\n" +
-	"\n" +
-	"state_path\x18\x04 \x01(\tR\tstatePath\x12\x1f\n" +
-	"\vsocket_path\x18\x05 \x01(\tR\n" +
-	"socketPath\x12\x1d\n" +
-	"\n" +
-	"nvram_path\x18\x06 \x01(\tR\tnvramPath\x12%\n" +
-	"\x0eek_fingerprint\x18\a \x01(\tR\rekFingerprint\x12\x1d\n" +
-	"\n" +
-	"srk_handle\x18\b \x01(\rR\tsrkHandle\x12\x18\n" +
-	"\arunning\x18\t \x01(\bR\arunning\x129\n" +
-	"\n" +
-	"created_at\x18\n" +
-	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"s\n" +
-	"\x19CreateVTPMInstanceRequest\x12\x1d\n" +
-	"\n" +
-	"profile_id\x18\x01 \x01(\x04R\tprofileId\x127\n" +
-	"\x06config\x18\x02 \x01(\v2\x1f.platform.v1.VTPMInstanceConfigR\x06config\"\x80\x01\n" +
-	"\x1aCreateVTPMInstanceResponse\x12+\n" +
-	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x125\n" +
-	"\binstance\x18\x02 \x01(\v2\x19.platform.v1.VTPMInstanceR\binstance\"(\n" +
-	"\x16GetVTPMInstanceRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"P\n" +
-	"\x17GetVTPMInstanceResponse\x125\n" +
-	"\binstance\x18\x01 \x01(\v2\x19.platform.v1.VTPMInstanceR\binstance\"@\n" +
-	"\x1fGetVTPMInstanceByProfileRequest\x12\x1d\n" +
-	"\n" +
-	"profile_id\x18\x01 \x01(\x04R\tprofileId\"Y\n" +
-	" GetVTPMInstanceByProfileResponse\x125\n" +
-	"\binstance\x18\x01 \x01(\v2\x19.platform.v1.VTPMInstanceR\binstance\"+\n" +
-	"\x19DeleteVTPMInstanceRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"I\n" +
-	"\x1aDeleteVTPMInstanceResponse\x12+\n" +
-	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\"\x92\x01\n" +
-	"\x18ListVTPMInstancesRequest\x12>\n" +
-	"\n" +
-	"pagination\x18\x01 \x01(\v2\x1e.platform.v1.PaginationRequestR\n" +
-	"pagination\x126\n" +
-	"\bselector\x18\x02 \x01(\v2\x1a.platform.v1.LabelSelectorR\bselector\"\x95\x01\n" +
-	"\x19ListVTPMInstancesResponse\x127\n" +
-	"\tinstances\x18\x01 \x03(\v2\x19.platform.v1.VTPMInstanceR\tinstances\x12?\n" +
-	"\n" +
-	"pagination\x18\x02 \x01(\v2\x1f.platform.v1.PaginationResponseR\n" +
-	"pagination\"*\n" +
-	"\x18StartVTPMInstanceRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"i\n" +
-	"\x19StartVTPMInstanceResponse\x12+\n" +
-	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x12\x1f\n" +
-	"\vsocket_path\x18\x02 \x01(\tR\n" +
-	"socketPath\")\n" +
-	"\x17StopVTPMInstanceRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"G\n" +
-	"\x18StopVTPMInstanceResponse\x12+\n" +
-	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\".\n" +
-	"\x1cGetVTPMInstanceStatusRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"j\n" +
-	"\x1dGetVTPMInstanceStatusResponse\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
-	"\arunning\x18\x02 \x01(\bR\arunning\x12\x1f\n" +
-	"\vsocket_path\x18\x03 \x01(\tR\n" +
-	"socketPath\"D\n" +
-	"\x1aExportEKCertificateRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
-	"\x06format\x18\x02 \x01(\tR\x06format\"\xb2\x02\n" +
-	"\x1bExportEKCertificateResponse\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12 \n" +
-	"\vcertificate\x18\x02 \x01(\fR\vcertificate\x12\x16\n" +
-	"\x06format\x18\x03 \x01(\tR\x06format\x12\x18\n" +
-	"\asubject\x18\x04 \x01(\tR\asubject\x12\x16\n" +
-	"\x06issuer\x18\x05 \x01(\tR\x06issuer\x12#\n" +
-	"\rserial_number\x18\x06 \x01(\tR\fserialNumber\x129\n" +
-	"\n" +
-	"not_before\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tnotBefore\x127\n" +
-	"\tnot_after\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\bnotAfter\")\n" +
-	"\x17GetEKFingerprintRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"j\n" +
-	"\x18GetEKFingerprintResponse\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12 \n" +
-	"\vfingerprint\x18\x02 \x01(\tR\vfingerprint\x12\x1c\n" +
-	"\talgorithm\x18\x03 \x01(\tR\talgorithm*a\n" +
+	"\x05value\x18\x04 \x01(\fR\x05value*a\n" +
 	"\n" +
 	"BundleMode\x12\x1b\n" +
 	"\x17BUNDLE_MODE_UNSPECIFIED\x10\x00\x12\x18\n" +
@@ -5157,18 +3825,7 @@ const file_vtpm_proto_rawDesc = "" +
 	"\n" +
 	"UnsealVTPM\x12\x1e.platform.v1.UnsealVTPMRequest\x1a\x1f.platform.v1.UnsealVTPMResponse\x12V\n" +
 	"\rExtendVTPMPCR\x12!.platform.v1.ExtendVTPMPCRRequest\x1a\".platform.v1.ExtendVTPMPCRResponse\x12P\n" +
-	"\vReadVTPMPCR\x12\x1f.platform.v1.ReadVTPMPCRRequest\x1a .platform.v1.ReadVTPMPCRResponse2\xfe\a\n" +
-	"\x13VTPMInstanceService\x12a\n" +
-	"\x0eCreateInstance\x12&.platform.v1.CreateVTPMInstanceRequest\x1a'.platform.v1.CreateVTPMInstanceResponse\x12X\n" +
-	"\vGetInstance\x12#.platform.v1.GetVTPMInstanceRequest\x1a$.platform.v1.GetVTPMInstanceResponse\x12s\n" +
-	"\x14GetInstanceByProfile\x12,.platform.v1.GetVTPMInstanceByProfileRequest\x1a-.platform.v1.GetVTPMInstanceByProfileResponse\x12a\n" +
-	"\x0eDeleteInstance\x12&.platform.v1.DeleteVTPMInstanceRequest\x1a'.platform.v1.DeleteVTPMInstanceResponse\x12^\n" +
-	"\rListInstances\x12%.platform.v1.ListVTPMInstancesRequest\x1a&.platform.v1.ListVTPMInstancesResponse\x12^\n" +
-	"\rStartInstance\x12%.platform.v1.StartVTPMInstanceRequest\x1a&.platform.v1.StartVTPMInstanceResponse\x12[\n" +
-	"\fStopInstance\x12$.platform.v1.StopVTPMInstanceRequest\x1a%.platform.v1.StopVTPMInstanceResponse\x12j\n" +
-	"\x11GetInstanceStatus\x12).platform.v1.GetVTPMInstanceStatusRequest\x1a*.platform.v1.GetVTPMInstanceStatusResponse\x12h\n" +
-	"\x13ExportEKCertificate\x12'.platform.v1.ExportEKCertificateRequest\x1a(.platform.v1.ExportEKCertificateResponse\x12_\n" +
-	"\x10GetEKFingerprint\x12$.platform.v1.GetEKFingerprintRequest\x1a%.platform.v1.GetEKFingerprintResponseBAZ?github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1b\x06proto3"
+	"\vReadVTPMPCR\x12\x1f.platform.v1.ReadVTPMPCRRequest\x1a .platform.v1.ReadVTPMPCRResponseBAZ?github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1b\x06proto3"
 
 var (
 	file_vtpm_proto_rawDescOnce sync.Once
@@ -5183,246 +3840,180 @@ func file_vtpm_proto_rawDescGZIP() []byte {
 }
 
 var file_vtpm_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_vtpm_proto_msgTypes = make([]protoimpl.MessageInfo, 87)
+var file_vtpm_proto_msgTypes = make([]protoimpl.MessageInfo, 64)
 var file_vtpm_proto_goTypes = []any{
-	(BundleMode)(0),                          // 0: platform.v1.BundleMode
-	(EKAlgorithm)(0),                         // 1: platform.v1.EKAlgorithm
-	(*EKCertInfo)(nil),                       // 2: platform.v1.EKCertInfo
-	(*SecureBootKeyInfo)(nil),                // 3: platform.v1.SecureBootKeyInfo
-	(*SecureBootKeyPaths)(nil),               // 4: platform.v1.SecureBootKeyPaths
-	(*TPMState)(nil),                         // 5: platform.v1.TPMState
-	(*OVMFState)(nil),                        // 6: platform.v1.OVMFState
-	(*Manifest)(nil),                         // 7: platform.v1.Manifest
-	(*Bundle)(nil),                           // 8: platform.v1.Bundle
-	(*Template)(nil),                         // 9: platform.v1.Template
-	(*CreateBundleOptions)(nil),              // 10: platform.v1.CreateBundleOptions
-	(*CreateTemplateOptions)(nil),            // 11: platform.v1.CreateTemplateOptions
-	(*CloneOptions)(nil),                     // 12: platform.v1.CloneOptions
-	(*ListBundleOptions)(nil),                // 13: platform.v1.ListBundleOptions
-	(*CreateBundleRequest)(nil),              // 14: platform.v1.CreateBundleRequest
-	(*CreateBundleResponse)(nil),             // 15: platform.v1.CreateBundleResponse
-	(*GetBundleRequest)(nil),                 // 16: platform.v1.GetBundleRequest
-	(*GetBundleResponse)(nil),                // 17: platform.v1.GetBundleResponse
-	(*DeleteBundleRequest)(nil),              // 18: platform.v1.DeleteBundleRequest
-	(*DeleteBundleResponse)(nil),             // 19: platform.v1.DeleteBundleResponse
-	(*ListBundlesRequest)(nil),               // 20: platform.v1.ListBundlesRequest
-	(*ListBundlesResponse)(nil),              // 21: platform.v1.ListBundlesResponse
-	(*CreateTemplateRequest)(nil),            // 22: platform.v1.CreateTemplateRequest
-	(*CreateTemplateResponse)(nil),           // 23: platform.v1.CreateTemplateResponse
-	(*GetTemplateRequest)(nil),               // 24: platform.v1.GetTemplateRequest
-	(*GetTemplateResponse)(nil),              // 25: platform.v1.GetTemplateResponse
-	(*DeleteTemplateRequest)(nil),            // 26: platform.v1.DeleteTemplateRequest
-	(*DeleteTemplateResponse)(nil),           // 27: platform.v1.DeleteTemplateResponse
-	(*ListTemplatesRequest)(nil),             // 28: platform.v1.ListTemplatesRequest
-	(*ListTemplatesResponse)(nil),            // 29: platform.v1.ListTemplatesResponse
-	(*CloneTemplateRequest)(nil),             // 30: platform.v1.CloneTemplateRequest
-	(*CloneTemplateResponse)(nil),            // 31: platform.v1.CloneTemplateResponse
-	(*ExportBundleRequest)(nil),              // 32: platform.v1.ExportBundleRequest
-	(*ExportBundleResponse)(nil),             // 33: platform.v1.ExportBundleResponse
-	(*ImportBundleRequest)(nil),              // 34: platform.v1.ImportBundleRequest
-	(*ImportBundleResponse)(nil),             // 35: platform.v1.ImportBundleResponse
-	(*ValidateBundleRequest)(nil),            // 36: platform.v1.ValidateBundleRequest
-	(*ValidateBundleResponse)(nil),           // 37: platform.v1.ValidateBundleResponse
-	(*GetBundlePathRequest)(nil),             // 38: platform.v1.GetBundlePathRequest
-	(*GetBundlePathResponse)(nil),            // 39: platform.v1.GetBundlePathResponse
-	(*GetTPMSocketPathRequest)(nil),          // 40: platform.v1.GetTPMSocketPathRequest
-	(*GetTPMSocketPathResponse)(nil),         // 41: platform.v1.GetTPMSocketPathResponse
-	(*GetNVRAMPathRequest)(nil),              // 42: platform.v1.GetNVRAMPathRequest
-	(*GetNVRAMPathResponse)(nil),             // 43: platform.v1.GetNVRAMPathResponse
-	(*StartVTPMRequest)(nil),                 // 44: platform.v1.StartVTPMRequest
-	(*StartVTPMResponse)(nil),                // 45: platform.v1.StartVTPMResponse
-	(*StopVTPMRequest)(nil),                  // 46: platform.v1.StopVTPMRequest
-	(*StopVTPMResponse)(nil),                 // 47: platform.v1.StopVTPMResponse
-	(*IsVTPMRunningRequest)(nil),             // 48: platform.v1.IsVTPMRunningRequest
-	(*IsVTPMRunningResponse)(nil),            // 49: platform.v1.IsVTPMRunningResponse
-	(*QuoteVTPMRequest)(nil),                 // 50: platform.v1.QuoteVTPMRequest
-	(*QuoteVTPMResponse)(nil),                // 51: platform.v1.QuoteVTPMResponse
-	(*SealVTPMRequest)(nil),                  // 52: platform.v1.SealVTPMRequest
-	(*SealVTPMResponse)(nil),                 // 53: platform.v1.SealVTPMResponse
-	(*UnsealVTPMRequest)(nil),                // 54: platform.v1.UnsealVTPMRequest
-	(*UnsealVTPMResponse)(nil),               // 55: platform.v1.UnsealVTPMResponse
-	(*ExtendVTPMPCRRequest)(nil),             // 56: platform.v1.ExtendVTPMPCRRequest
-	(*ExtendVTPMPCRResponse)(nil),            // 57: platform.v1.ExtendVTPMPCRResponse
-	(*ReadVTPMPCRRequest)(nil),               // 58: platform.v1.ReadVTPMPCRRequest
-	(*ReadVTPMPCRResponse)(nil),              // 59: platform.v1.ReadVTPMPCRResponse
-	(*VTPMInstanceConfig)(nil),               // 60: platform.v1.VTPMInstanceConfig
-	(*VTPMInstance)(nil),                     // 61: platform.v1.VTPMInstance
-	(*CreateVTPMInstanceRequest)(nil),        // 62: platform.v1.CreateVTPMInstanceRequest
-	(*CreateVTPMInstanceResponse)(nil),       // 63: platform.v1.CreateVTPMInstanceResponse
-	(*GetVTPMInstanceRequest)(nil),           // 64: platform.v1.GetVTPMInstanceRequest
-	(*GetVTPMInstanceResponse)(nil),          // 65: platform.v1.GetVTPMInstanceResponse
-	(*GetVTPMInstanceByProfileRequest)(nil),  // 66: platform.v1.GetVTPMInstanceByProfileRequest
-	(*GetVTPMInstanceByProfileResponse)(nil), // 67: platform.v1.GetVTPMInstanceByProfileResponse
-	(*DeleteVTPMInstanceRequest)(nil),        // 68: platform.v1.DeleteVTPMInstanceRequest
-	(*DeleteVTPMInstanceResponse)(nil),       // 69: platform.v1.DeleteVTPMInstanceResponse
-	(*ListVTPMInstancesRequest)(nil),         // 70: platform.v1.ListVTPMInstancesRequest
-	(*ListVTPMInstancesResponse)(nil),        // 71: platform.v1.ListVTPMInstancesResponse
-	(*StartVTPMInstanceRequest)(nil),         // 72: platform.v1.StartVTPMInstanceRequest
-	(*StartVTPMInstanceResponse)(nil),        // 73: platform.v1.StartVTPMInstanceResponse
-	(*StopVTPMInstanceRequest)(nil),          // 74: platform.v1.StopVTPMInstanceRequest
-	(*StopVTPMInstanceResponse)(nil),         // 75: platform.v1.StopVTPMInstanceResponse
-	(*GetVTPMInstanceStatusRequest)(nil),     // 76: platform.v1.GetVTPMInstanceStatusRequest
-	(*GetVTPMInstanceStatusResponse)(nil),    // 77: platform.v1.GetVTPMInstanceStatusResponse
-	(*ExportEKCertificateRequest)(nil),       // 78: platform.v1.ExportEKCertificateRequest
-	(*ExportEKCertificateResponse)(nil),      // 79: platform.v1.ExportEKCertificateResponse
-	(*GetEKFingerprintRequest)(nil),          // 80: platform.v1.GetEKFingerprintRequest
-	(*GetEKFingerprintResponse)(nil),         // 81: platform.v1.GetEKFingerprintResponse
-	nil,                                      // 82: platform.v1.Manifest.ChecksumsEntry
-	nil,                                      // 83: platform.v1.Manifest.LabelsEntry
-	nil,                                      // 84: platform.v1.CreateBundleOptions.LabelsEntry
-	nil,                                      // 85: platform.v1.CloneOptions.LabelsEntry
-	nil,                                      // 86: platform.v1.ListBundleOptions.LabelsEntry
-	nil,                                      // 87: platform.v1.QuoteVTPMResponse.PcrValuesEntry
-	nil,                                      // 88: platform.v1.VTPMInstanceConfig.LabelsEntry
-	(*timestamppb.Timestamp)(nil),            // 89: google.protobuf.Timestamp
-	(*Status)(nil),                           // 90: platform.v1.Status
-	(TPMVersion)(0),                          // 91: platform.v1.TPMVersion
-	(*PaginationRequest)(nil),                // 92: platform.v1.PaginationRequest
-	(*LabelSelector)(nil),                    // 93: platform.v1.LabelSelector
-	(*PaginationResponse)(nil),               // 94: platform.v1.PaginationResponse
+	(BundleMode)(0),                  // 0: platform.v1.BundleMode
+	(EKAlgorithm)(0),                 // 1: platform.v1.EKAlgorithm
+	(*EKCertInfo)(nil),               // 2: platform.v1.EKCertInfo
+	(*SecureBootKeyInfo)(nil),        // 3: platform.v1.SecureBootKeyInfo
+	(*SecureBootKeyPaths)(nil),       // 4: platform.v1.SecureBootKeyPaths
+	(*TPMState)(nil),                 // 5: platform.v1.TPMState
+	(*OVMFState)(nil),                // 6: platform.v1.OVMFState
+	(*Manifest)(nil),                 // 7: platform.v1.Manifest
+	(*Bundle)(nil),                   // 8: platform.v1.Bundle
+	(*Template)(nil),                 // 9: platform.v1.Template
+	(*CreateBundleOptions)(nil),      // 10: platform.v1.CreateBundleOptions
+	(*CreateTemplateOptions)(nil),    // 11: platform.v1.CreateTemplateOptions
+	(*CloneOptions)(nil),             // 12: platform.v1.CloneOptions
+	(*ListBundleOptions)(nil),        // 13: platform.v1.ListBundleOptions
+	(*CreateBundleRequest)(nil),      // 14: platform.v1.CreateBundleRequest
+	(*CreateBundleResponse)(nil),     // 15: platform.v1.CreateBundleResponse
+	(*GetBundleRequest)(nil),         // 16: platform.v1.GetBundleRequest
+	(*GetBundleResponse)(nil),        // 17: platform.v1.GetBundleResponse
+	(*DeleteBundleRequest)(nil),      // 18: platform.v1.DeleteBundleRequest
+	(*DeleteBundleResponse)(nil),     // 19: platform.v1.DeleteBundleResponse
+	(*ListBundlesRequest)(nil),       // 20: platform.v1.ListBundlesRequest
+	(*ListBundlesResponse)(nil),      // 21: platform.v1.ListBundlesResponse
+	(*CreateTemplateRequest)(nil),    // 22: platform.v1.CreateTemplateRequest
+	(*CreateTemplateResponse)(nil),   // 23: platform.v1.CreateTemplateResponse
+	(*GetTemplateRequest)(nil),       // 24: platform.v1.GetTemplateRequest
+	(*GetTemplateResponse)(nil),      // 25: platform.v1.GetTemplateResponse
+	(*DeleteTemplateRequest)(nil),    // 26: platform.v1.DeleteTemplateRequest
+	(*DeleteTemplateResponse)(nil),   // 27: platform.v1.DeleteTemplateResponse
+	(*ListTemplatesRequest)(nil),     // 28: platform.v1.ListTemplatesRequest
+	(*ListTemplatesResponse)(nil),    // 29: platform.v1.ListTemplatesResponse
+	(*CloneTemplateRequest)(nil),     // 30: platform.v1.CloneTemplateRequest
+	(*CloneTemplateResponse)(nil),    // 31: platform.v1.CloneTemplateResponse
+	(*ExportBundleRequest)(nil),      // 32: platform.v1.ExportBundleRequest
+	(*ExportBundleResponse)(nil),     // 33: platform.v1.ExportBundleResponse
+	(*ImportBundleRequest)(nil),      // 34: platform.v1.ImportBundleRequest
+	(*ImportBundleResponse)(nil),     // 35: platform.v1.ImportBundleResponse
+	(*ValidateBundleRequest)(nil),    // 36: platform.v1.ValidateBundleRequest
+	(*ValidateBundleResponse)(nil),   // 37: platform.v1.ValidateBundleResponse
+	(*GetBundlePathRequest)(nil),     // 38: platform.v1.GetBundlePathRequest
+	(*GetBundlePathResponse)(nil),    // 39: platform.v1.GetBundlePathResponse
+	(*GetTPMSocketPathRequest)(nil),  // 40: platform.v1.GetTPMSocketPathRequest
+	(*GetTPMSocketPathResponse)(nil), // 41: platform.v1.GetTPMSocketPathResponse
+	(*GetNVRAMPathRequest)(nil),      // 42: platform.v1.GetNVRAMPathRequest
+	(*GetNVRAMPathResponse)(nil),     // 43: platform.v1.GetNVRAMPathResponse
+	(*StartVTPMRequest)(nil),         // 44: platform.v1.StartVTPMRequest
+	(*StartVTPMResponse)(nil),        // 45: platform.v1.StartVTPMResponse
+	(*StopVTPMRequest)(nil),          // 46: platform.v1.StopVTPMRequest
+	(*StopVTPMResponse)(nil),         // 47: platform.v1.StopVTPMResponse
+	(*IsVTPMRunningRequest)(nil),     // 48: platform.v1.IsVTPMRunningRequest
+	(*IsVTPMRunningResponse)(nil),    // 49: platform.v1.IsVTPMRunningResponse
+	(*QuoteVTPMRequest)(nil),         // 50: platform.v1.QuoteVTPMRequest
+	(*QuoteVTPMResponse)(nil),        // 51: platform.v1.QuoteVTPMResponse
+	(*SealVTPMRequest)(nil),          // 52: platform.v1.SealVTPMRequest
+	(*SealVTPMResponse)(nil),         // 53: platform.v1.SealVTPMResponse
+	(*UnsealVTPMRequest)(nil),        // 54: platform.v1.UnsealVTPMRequest
+	(*UnsealVTPMResponse)(nil),       // 55: platform.v1.UnsealVTPMResponse
+	(*ExtendVTPMPCRRequest)(nil),     // 56: platform.v1.ExtendVTPMPCRRequest
+	(*ExtendVTPMPCRResponse)(nil),    // 57: platform.v1.ExtendVTPMPCRResponse
+	(*ReadVTPMPCRRequest)(nil),       // 58: platform.v1.ReadVTPMPCRRequest
+	(*ReadVTPMPCRResponse)(nil),      // 59: platform.v1.ReadVTPMPCRResponse
+	nil,                              // 60: platform.v1.Manifest.ChecksumsEntry
+	nil,                              // 61: platform.v1.Manifest.LabelsEntry
+	nil,                              // 62: platform.v1.CreateBundleOptions.LabelsEntry
+	nil,                              // 63: platform.v1.CloneOptions.LabelsEntry
+	nil,                              // 64: platform.v1.ListBundleOptions.LabelsEntry
+	nil,                              // 65: platform.v1.QuoteVTPMResponse.PcrValuesEntry
+	(*timestamppb.Timestamp)(nil),    // 66: google.protobuf.Timestamp
+	(*Status)(nil),                   // 67: platform.v1.Status
 }
 var file_vtpm_proto_depIdxs = []int32{
-	89,  // 0: platform.v1.EKCertInfo.not_before:type_name -> google.protobuf.Timestamp
-	89,  // 1: platform.v1.EKCertInfo.not_after:type_name -> google.protobuf.Timestamp
-	0,   // 2: platform.v1.Manifest.mode:type_name -> platform.v1.BundleMode
-	89,  // 3: platform.v1.Manifest.created_at:type_name -> google.protobuf.Timestamp
-	2,   // 4: platform.v1.Manifest.ek_certificate:type_name -> platform.v1.EKCertInfo
-	1,   // 5: platform.v1.Manifest.ek_algorithm:type_name -> platform.v1.EKAlgorithm
-	3,   // 6: platform.v1.Manifest.secure_boot_keys:type_name -> platform.v1.SecureBootKeyInfo
-	82,  // 7: platform.v1.Manifest.checksums:type_name -> platform.v1.Manifest.ChecksumsEntry
-	83,  // 8: platform.v1.Manifest.labels:type_name -> platform.v1.Manifest.LabelsEntry
-	0,   // 9: platform.v1.Bundle.mode:type_name -> platform.v1.BundleMode
-	7,   // 10: platform.v1.Bundle.manifest:type_name -> platform.v1.Manifest
-	5,   // 11: platform.v1.Bundle.tpm_state:type_name -> platform.v1.TPMState
-	6,   // 12: platform.v1.Bundle.ovmf_state:type_name -> platform.v1.OVMFState
-	4,   // 13: platform.v1.Bundle.secure_boot_keys:type_name -> platform.v1.SecureBootKeyPaths
-	89,  // 14: platform.v1.Bundle.created_at:type_name -> google.protobuf.Timestamp
-	1,   // 15: platform.v1.Template.ek_algorithm:type_name -> platform.v1.EKAlgorithm
-	89,  // 16: platform.v1.Template.created_at:type_name -> google.protobuf.Timestamp
-	0,   // 17: platform.v1.CreateBundleOptions.mode:type_name -> platform.v1.BundleMode
-	1,   // 18: platform.v1.CreateBundleOptions.ek_algorithm:type_name -> platform.v1.EKAlgorithm
-	84,  // 19: platform.v1.CreateBundleOptions.labels:type_name -> platform.v1.CreateBundleOptions.LabelsEntry
-	1,   // 20: platform.v1.CreateTemplateOptions.ek_algorithm:type_name -> platform.v1.EKAlgorithm
-	85,  // 21: platform.v1.CloneOptions.labels:type_name -> platform.v1.CloneOptions.LabelsEntry
-	0,   // 22: platform.v1.ListBundleOptions.mode:type_name -> platform.v1.BundleMode
-	86,  // 23: platform.v1.ListBundleOptions.labels:type_name -> platform.v1.ListBundleOptions.LabelsEntry
-	10,  // 24: platform.v1.CreateBundleRequest.options:type_name -> platform.v1.CreateBundleOptions
-	90,  // 25: platform.v1.CreateBundleResponse.status:type_name -> platform.v1.Status
-	8,   // 26: platform.v1.CreateBundleResponse.bundle:type_name -> platform.v1.Bundle
-	8,   // 27: platform.v1.GetBundleResponse.bundle:type_name -> platform.v1.Bundle
-	90,  // 28: platform.v1.DeleteBundleResponse.status:type_name -> platform.v1.Status
-	13,  // 29: platform.v1.ListBundlesRequest.options:type_name -> platform.v1.ListBundleOptions
-	8,   // 30: platform.v1.ListBundlesResponse.bundles:type_name -> platform.v1.Bundle
-	11,  // 31: platform.v1.CreateTemplateRequest.options:type_name -> platform.v1.CreateTemplateOptions
-	90,  // 32: platform.v1.CreateTemplateResponse.status:type_name -> platform.v1.Status
-	9,   // 33: platform.v1.CreateTemplateResponse.template:type_name -> platform.v1.Template
-	9,   // 34: platform.v1.GetTemplateResponse.template:type_name -> platform.v1.Template
-	90,  // 35: platform.v1.DeleteTemplateResponse.status:type_name -> platform.v1.Status
-	9,   // 36: platform.v1.ListTemplatesResponse.templates:type_name -> platform.v1.Template
-	12,  // 37: platform.v1.CloneTemplateRequest.options:type_name -> platform.v1.CloneOptions
-	90,  // 38: platform.v1.CloneTemplateResponse.status:type_name -> platform.v1.Status
-	8,   // 39: platform.v1.CloneTemplateResponse.bundle:type_name -> platform.v1.Bundle
-	90,  // 40: platform.v1.ImportBundleResponse.status:type_name -> platform.v1.Status
-	8,   // 41: platform.v1.ImportBundleResponse.bundle:type_name -> platform.v1.Bundle
-	90,  // 42: platform.v1.ValidateBundleResponse.status:type_name -> platform.v1.Status
-	90,  // 43: platform.v1.StartVTPMResponse.status:type_name -> platform.v1.Status
-	90,  // 44: platform.v1.StopVTPMResponse.status:type_name -> platform.v1.Status
-	90,  // 45: platform.v1.QuoteVTPMResponse.status:type_name -> platform.v1.Status
-	87,  // 46: platform.v1.QuoteVTPMResponse.pcr_values:type_name -> platform.v1.QuoteVTPMResponse.PcrValuesEntry
-	90,  // 47: platform.v1.SealVTPMResponse.status:type_name -> platform.v1.Status
-	90,  // 48: platform.v1.UnsealVTPMResponse.status:type_name -> platform.v1.Status
-	90,  // 49: platform.v1.ExtendVTPMPCRResponse.status:type_name -> platform.v1.Status
-	90,  // 50: platform.v1.ReadVTPMPCRResponse.status:type_name -> platform.v1.Status
-	91,  // 51: platform.v1.VTPMInstanceConfig.tpm_version:type_name -> platform.v1.TPMVersion
-	1,   // 52: platform.v1.VTPMInstanceConfig.ek_algorithm:type_name -> platform.v1.EKAlgorithm
-	88,  // 53: platform.v1.VTPMInstanceConfig.labels:type_name -> platform.v1.VTPMInstanceConfig.LabelsEntry
-	91,  // 54: platform.v1.VTPMInstance.version:type_name -> platform.v1.TPMVersion
-	89,  // 55: platform.v1.VTPMInstance.created_at:type_name -> google.protobuf.Timestamp
-	60,  // 56: platform.v1.CreateVTPMInstanceRequest.config:type_name -> platform.v1.VTPMInstanceConfig
-	90,  // 57: platform.v1.CreateVTPMInstanceResponse.status:type_name -> platform.v1.Status
-	61,  // 58: platform.v1.CreateVTPMInstanceResponse.instance:type_name -> platform.v1.VTPMInstance
-	61,  // 59: platform.v1.GetVTPMInstanceResponse.instance:type_name -> platform.v1.VTPMInstance
-	61,  // 60: platform.v1.GetVTPMInstanceByProfileResponse.instance:type_name -> platform.v1.VTPMInstance
-	90,  // 61: platform.v1.DeleteVTPMInstanceResponse.status:type_name -> platform.v1.Status
-	92,  // 62: platform.v1.ListVTPMInstancesRequest.pagination:type_name -> platform.v1.PaginationRequest
-	93,  // 63: platform.v1.ListVTPMInstancesRequest.selector:type_name -> platform.v1.LabelSelector
-	61,  // 64: platform.v1.ListVTPMInstancesResponse.instances:type_name -> platform.v1.VTPMInstance
-	94,  // 65: platform.v1.ListVTPMInstancesResponse.pagination:type_name -> platform.v1.PaginationResponse
-	90,  // 66: platform.v1.StartVTPMInstanceResponse.status:type_name -> platform.v1.Status
-	90,  // 67: platform.v1.StopVTPMInstanceResponse.status:type_name -> platform.v1.Status
-	89,  // 68: platform.v1.ExportEKCertificateResponse.not_before:type_name -> google.protobuf.Timestamp
-	89,  // 69: platform.v1.ExportEKCertificateResponse.not_after:type_name -> google.protobuf.Timestamp
-	14,  // 70: platform.v1.VTPMService.CreateBundle:input_type -> platform.v1.CreateBundleRequest
-	16,  // 71: platform.v1.VTPMService.GetBundle:input_type -> platform.v1.GetBundleRequest
-	18,  // 72: platform.v1.VTPMService.DeleteBundle:input_type -> platform.v1.DeleteBundleRequest
-	20,  // 73: platform.v1.VTPMService.ListBundles:input_type -> platform.v1.ListBundlesRequest
-	22,  // 74: platform.v1.VTPMService.CreateTemplate:input_type -> platform.v1.CreateTemplateRequest
-	24,  // 75: platform.v1.VTPMService.GetTemplate:input_type -> platform.v1.GetTemplateRequest
-	26,  // 76: platform.v1.VTPMService.DeleteTemplate:input_type -> platform.v1.DeleteTemplateRequest
-	28,  // 77: platform.v1.VTPMService.ListTemplates:input_type -> platform.v1.ListTemplatesRequest
-	30,  // 78: platform.v1.VTPMService.CloneTemplate:input_type -> platform.v1.CloneTemplateRequest
-	32,  // 79: platform.v1.VTPMService.ExportBundle:input_type -> platform.v1.ExportBundleRequest
-	34,  // 80: platform.v1.VTPMService.ImportBundle:input_type -> platform.v1.ImportBundleRequest
-	36,  // 81: platform.v1.VTPMService.ValidateBundle:input_type -> platform.v1.ValidateBundleRequest
-	38,  // 82: platform.v1.VTPMService.GetBundlePath:input_type -> platform.v1.GetBundlePathRequest
-	40,  // 83: platform.v1.VTPMService.GetTPMSocketPath:input_type -> platform.v1.GetTPMSocketPathRequest
-	42,  // 84: platform.v1.VTPMService.GetNVRAMPath:input_type -> platform.v1.GetNVRAMPathRequest
-	44,  // 85: platform.v1.VTPMService.StartVTPM:input_type -> platform.v1.StartVTPMRequest
-	46,  // 86: platform.v1.VTPMService.StopVTPM:input_type -> platform.v1.StopVTPMRequest
-	48,  // 87: platform.v1.VTPMService.IsVTPMRunning:input_type -> platform.v1.IsVTPMRunningRequest
-	50,  // 88: platform.v1.VTPMService.QuoteVTPM:input_type -> platform.v1.QuoteVTPMRequest
-	52,  // 89: platform.v1.VTPMService.SealVTPM:input_type -> platform.v1.SealVTPMRequest
-	54,  // 90: platform.v1.VTPMService.UnsealVTPM:input_type -> platform.v1.UnsealVTPMRequest
-	56,  // 91: platform.v1.VTPMService.ExtendVTPMPCR:input_type -> platform.v1.ExtendVTPMPCRRequest
-	58,  // 92: platform.v1.VTPMService.ReadVTPMPCR:input_type -> platform.v1.ReadVTPMPCRRequest
-	62,  // 93: platform.v1.VTPMInstanceService.CreateInstance:input_type -> platform.v1.CreateVTPMInstanceRequest
-	64,  // 94: platform.v1.VTPMInstanceService.GetInstance:input_type -> platform.v1.GetVTPMInstanceRequest
-	66,  // 95: platform.v1.VTPMInstanceService.GetInstanceByProfile:input_type -> platform.v1.GetVTPMInstanceByProfileRequest
-	68,  // 96: platform.v1.VTPMInstanceService.DeleteInstance:input_type -> platform.v1.DeleteVTPMInstanceRequest
-	70,  // 97: platform.v1.VTPMInstanceService.ListInstances:input_type -> platform.v1.ListVTPMInstancesRequest
-	72,  // 98: platform.v1.VTPMInstanceService.StartInstance:input_type -> platform.v1.StartVTPMInstanceRequest
-	74,  // 99: platform.v1.VTPMInstanceService.StopInstance:input_type -> platform.v1.StopVTPMInstanceRequest
-	76,  // 100: platform.v1.VTPMInstanceService.GetInstanceStatus:input_type -> platform.v1.GetVTPMInstanceStatusRequest
-	78,  // 101: platform.v1.VTPMInstanceService.ExportEKCertificate:input_type -> platform.v1.ExportEKCertificateRequest
-	80,  // 102: platform.v1.VTPMInstanceService.GetEKFingerprint:input_type -> platform.v1.GetEKFingerprintRequest
-	15,  // 103: platform.v1.VTPMService.CreateBundle:output_type -> platform.v1.CreateBundleResponse
-	17,  // 104: platform.v1.VTPMService.GetBundle:output_type -> platform.v1.GetBundleResponse
-	19,  // 105: platform.v1.VTPMService.DeleteBundle:output_type -> platform.v1.DeleteBundleResponse
-	21,  // 106: platform.v1.VTPMService.ListBundles:output_type -> platform.v1.ListBundlesResponse
-	23,  // 107: platform.v1.VTPMService.CreateTemplate:output_type -> platform.v1.CreateTemplateResponse
-	25,  // 108: platform.v1.VTPMService.GetTemplate:output_type -> platform.v1.GetTemplateResponse
-	27,  // 109: platform.v1.VTPMService.DeleteTemplate:output_type -> platform.v1.DeleteTemplateResponse
-	29,  // 110: platform.v1.VTPMService.ListTemplates:output_type -> platform.v1.ListTemplatesResponse
-	31,  // 111: platform.v1.VTPMService.CloneTemplate:output_type -> platform.v1.CloneTemplateResponse
-	33,  // 112: platform.v1.VTPMService.ExportBundle:output_type -> platform.v1.ExportBundleResponse
-	35,  // 113: platform.v1.VTPMService.ImportBundle:output_type -> platform.v1.ImportBundleResponse
-	37,  // 114: platform.v1.VTPMService.ValidateBundle:output_type -> platform.v1.ValidateBundleResponse
-	39,  // 115: platform.v1.VTPMService.GetBundlePath:output_type -> platform.v1.GetBundlePathResponse
-	41,  // 116: platform.v1.VTPMService.GetTPMSocketPath:output_type -> platform.v1.GetTPMSocketPathResponse
-	43,  // 117: platform.v1.VTPMService.GetNVRAMPath:output_type -> platform.v1.GetNVRAMPathResponse
-	45,  // 118: platform.v1.VTPMService.StartVTPM:output_type -> platform.v1.StartVTPMResponse
-	47,  // 119: platform.v1.VTPMService.StopVTPM:output_type -> platform.v1.StopVTPMResponse
-	49,  // 120: platform.v1.VTPMService.IsVTPMRunning:output_type -> platform.v1.IsVTPMRunningResponse
-	51,  // 121: platform.v1.VTPMService.QuoteVTPM:output_type -> platform.v1.QuoteVTPMResponse
-	53,  // 122: platform.v1.VTPMService.SealVTPM:output_type -> platform.v1.SealVTPMResponse
-	55,  // 123: platform.v1.VTPMService.UnsealVTPM:output_type -> platform.v1.UnsealVTPMResponse
-	57,  // 124: platform.v1.VTPMService.ExtendVTPMPCR:output_type -> platform.v1.ExtendVTPMPCRResponse
-	59,  // 125: platform.v1.VTPMService.ReadVTPMPCR:output_type -> platform.v1.ReadVTPMPCRResponse
-	63,  // 126: platform.v1.VTPMInstanceService.CreateInstance:output_type -> platform.v1.CreateVTPMInstanceResponse
-	65,  // 127: platform.v1.VTPMInstanceService.GetInstance:output_type -> platform.v1.GetVTPMInstanceResponse
-	67,  // 128: platform.v1.VTPMInstanceService.GetInstanceByProfile:output_type -> platform.v1.GetVTPMInstanceByProfileResponse
-	69,  // 129: platform.v1.VTPMInstanceService.DeleteInstance:output_type -> platform.v1.DeleteVTPMInstanceResponse
-	71,  // 130: platform.v1.VTPMInstanceService.ListInstances:output_type -> platform.v1.ListVTPMInstancesResponse
-	73,  // 131: platform.v1.VTPMInstanceService.StartInstance:output_type -> platform.v1.StartVTPMInstanceResponse
-	75,  // 132: platform.v1.VTPMInstanceService.StopInstance:output_type -> platform.v1.StopVTPMInstanceResponse
-	77,  // 133: platform.v1.VTPMInstanceService.GetInstanceStatus:output_type -> platform.v1.GetVTPMInstanceStatusResponse
-	79,  // 134: platform.v1.VTPMInstanceService.ExportEKCertificate:output_type -> platform.v1.ExportEKCertificateResponse
-	81,  // 135: platform.v1.VTPMInstanceService.GetEKFingerprint:output_type -> platform.v1.GetEKFingerprintResponse
-	103, // [103:136] is the sub-list for method output_type
-	70,  // [70:103] is the sub-list for method input_type
-	70,  // [70:70] is the sub-list for extension type_name
-	70,  // [70:70] is the sub-list for extension extendee
-	0,   // [0:70] is the sub-list for field type_name
+	66, // 0: platform.v1.EKCertInfo.not_before:type_name -> google.protobuf.Timestamp
+	66, // 1: platform.v1.EKCertInfo.not_after:type_name -> google.protobuf.Timestamp
+	0,  // 2: platform.v1.Manifest.mode:type_name -> platform.v1.BundleMode
+	66, // 3: platform.v1.Manifest.created_at:type_name -> google.protobuf.Timestamp
+	2,  // 4: platform.v1.Manifest.ek_certificate:type_name -> platform.v1.EKCertInfo
+	1,  // 5: platform.v1.Manifest.ek_algorithm:type_name -> platform.v1.EKAlgorithm
+	3,  // 6: platform.v1.Manifest.secure_boot_keys:type_name -> platform.v1.SecureBootKeyInfo
+	60, // 7: platform.v1.Manifest.checksums:type_name -> platform.v1.Manifest.ChecksumsEntry
+	61, // 8: platform.v1.Manifest.labels:type_name -> platform.v1.Manifest.LabelsEntry
+	0,  // 9: platform.v1.Bundle.mode:type_name -> platform.v1.BundleMode
+	7,  // 10: platform.v1.Bundle.manifest:type_name -> platform.v1.Manifest
+	5,  // 11: platform.v1.Bundle.tpm_state:type_name -> platform.v1.TPMState
+	6,  // 12: platform.v1.Bundle.ovmf_state:type_name -> platform.v1.OVMFState
+	4,  // 13: platform.v1.Bundle.secure_boot_keys:type_name -> platform.v1.SecureBootKeyPaths
+	66, // 14: platform.v1.Bundle.created_at:type_name -> google.protobuf.Timestamp
+	1,  // 15: platform.v1.Template.ek_algorithm:type_name -> platform.v1.EKAlgorithm
+	66, // 16: platform.v1.Template.created_at:type_name -> google.protobuf.Timestamp
+	0,  // 17: platform.v1.CreateBundleOptions.mode:type_name -> platform.v1.BundleMode
+	1,  // 18: platform.v1.CreateBundleOptions.ek_algorithm:type_name -> platform.v1.EKAlgorithm
+	62, // 19: platform.v1.CreateBundleOptions.labels:type_name -> platform.v1.CreateBundleOptions.LabelsEntry
+	1,  // 20: platform.v1.CreateTemplateOptions.ek_algorithm:type_name -> platform.v1.EKAlgorithm
+	63, // 21: platform.v1.CloneOptions.labels:type_name -> platform.v1.CloneOptions.LabelsEntry
+	0,  // 22: platform.v1.ListBundleOptions.mode:type_name -> platform.v1.BundleMode
+	64, // 23: platform.v1.ListBundleOptions.labels:type_name -> platform.v1.ListBundleOptions.LabelsEntry
+	10, // 24: platform.v1.CreateBundleRequest.options:type_name -> platform.v1.CreateBundleOptions
+	67, // 25: platform.v1.CreateBundleResponse.status:type_name -> platform.v1.Status
+	8,  // 26: platform.v1.CreateBundleResponse.bundle:type_name -> platform.v1.Bundle
+	8,  // 27: platform.v1.GetBundleResponse.bundle:type_name -> platform.v1.Bundle
+	67, // 28: platform.v1.DeleteBundleResponse.status:type_name -> platform.v1.Status
+	13, // 29: platform.v1.ListBundlesRequest.options:type_name -> platform.v1.ListBundleOptions
+	8,  // 30: platform.v1.ListBundlesResponse.bundles:type_name -> platform.v1.Bundle
+	11, // 31: platform.v1.CreateTemplateRequest.options:type_name -> platform.v1.CreateTemplateOptions
+	67, // 32: platform.v1.CreateTemplateResponse.status:type_name -> platform.v1.Status
+	9,  // 33: platform.v1.CreateTemplateResponse.template:type_name -> platform.v1.Template
+	9,  // 34: platform.v1.GetTemplateResponse.template:type_name -> platform.v1.Template
+	67, // 35: platform.v1.DeleteTemplateResponse.status:type_name -> platform.v1.Status
+	9,  // 36: platform.v1.ListTemplatesResponse.templates:type_name -> platform.v1.Template
+	12, // 37: platform.v1.CloneTemplateRequest.options:type_name -> platform.v1.CloneOptions
+	67, // 38: platform.v1.CloneTemplateResponse.status:type_name -> platform.v1.Status
+	8,  // 39: platform.v1.CloneTemplateResponse.bundle:type_name -> platform.v1.Bundle
+	67, // 40: platform.v1.ImportBundleResponse.status:type_name -> platform.v1.Status
+	8,  // 41: platform.v1.ImportBundleResponse.bundle:type_name -> platform.v1.Bundle
+	67, // 42: platform.v1.ValidateBundleResponse.status:type_name -> platform.v1.Status
+	67, // 43: platform.v1.StartVTPMResponse.status:type_name -> platform.v1.Status
+	67, // 44: platform.v1.StopVTPMResponse.status:type_name -> platform.v1.Status
+	67, // 45: platform.v1.QuoteVTPMResponse.status:type_name -> platform.v1.Status
+	65, // 46: platform.v1.QuoteVTPMResponse.pcr_values:type_name -> platform.v1.QuoteVTPMResponse.PcrValuesEntry
+	67, // 47: platform.v1.SealVTPMResponse.status:type_name -> platform.v1.Status
+	67, // 48: platform.v1.UnsealVTPMResponse.status:type_name -> platform.v1.Status
+	67, // 49: platform.v1.ExtendVTPMPCRResponse.status:type_name -> platform.v1.Status
+	67, // 50: platform.v1.ReadVTPMPCRResponse.status:type_name -> platform.v1.Status
+	14, // 51: platform.v1.VTPMService.CreateBundle:input_type -> platform.v1.CreateBundleRequest
+	16, // 52: platform.v1.VTPMService.GetBundle:input_type -> platform.v1.GetBundleRequest
+	18, // 53: platform.v1.VTPMService.DeleteBundle:input_type -> platform.v1.DeleteBundleRequest
+	20, // 54: platform.v1.VTPMService.ListBundles:input_type -> platform.v1.ListBundlesRequest
+	22, // 55: platform.v1.VTPMService.CreateTemplate:input_type -> platform.v1.CreateTemplateRequest
+	24, // 56: platform.v1.VTPMService.GetTemplate:input_type -> platform.v1.GetTemplateRequest
+	26, // 57: platform.v1.VTPMService.DeleteTemplate:input_type -> platform.v1.DeleteTemplateRequest
+	28, // 58: platform.v1.VTPMService.ListTemplates:input_type -> platform.v1.ListTemplatesRequest
+	30, // 59: platform.v1.VTPMService.CloneTemplate:input_type -> platform.v1.CloneTemplateRequest
+	32, // 60: platform.v1.VTPMService.ExportBundle:input_type -> platform.v1.ExportBundleRequest
+	34, // 61: platform.v1.VTPMService.ImportBundle:input_type -> platform.v1.ImportBundleRequest
+	36, // 62: platform.v1.VTPMService.ValidateBundle:input_type -> platform.v1.ValidateBundleRequest
+	38, // 63: platform.v1.VTPMService.GetBundlePath:input_type -> platform.v1.GetBundlePathRequest
+	40, // 64: platform.v1.VTPMService.GetTPMSocketPath:input_type -> platform.v1.GetTPMSocketPathRequest
+	42, // 65: platform.v1.VTPMService.GetNVRAMPath:input_type -> platform.v1.GetNVRAMPathRequest
+	44, // 66: platform.v1.VTPMService.StartVTPM:input_type -> platform.v1.StartVTPMRequest
+	46, // 67: platform.v1.VTPMService.StopVTPM:input_type -> platform.v1.StopVTPMRequest
+	48, // 68: platform.v1.VTPMService.IsVTPMRunning:input_type -> platform.v1.IsVTPMRunningRequest
+	50, // 69: platform.v1.VTPMService.QuoteVTPM:input_type -> platform.v1.QuoteVTPMRequest
+	52, // 70: platform.v1.VTPMService.SealVTPM:input_type -> platform.v1.SealVTPMRequest
+	54, // 71: platform.v1.VTPMService.UnsealVTPM:input_type -> platform.v1.UnsealVTPMRequest
+	56, // 72: platform.v1.VTPMService.ExtendVTPMPCR:input_type -> platform.v1.ExtendVTPMPCRRequest
+	58, // 73: platform.v1.VTPMService.ReadVTPMPCR:input_type -> platform.v1.ReadVTPMPCRRequest
+	15, // 74: platform.v1.VTPMService.CreateBundle:output_type -> platform.v1.CreateBundleResponse
+	17, // 75: platform.v1.VTPMService.GetBundle:output_type -> platform.v1.GetBundleResponse
+	19, // 76: platform.v1.VTPMService.DeleteBundle:output_type -> platform.v1.DeleteBundleResponse
+	21, // 77: platform.v1.VTPMService.ListBundles:output_type -> platform.v1.ListBundlesResponse
+	23, // 78: platform.v1.VTPMService.CreateTemplate:output_type -> platform.v1.CreateTemplateResponse
+	25, // 79: platform.v1.VTPMService.GetTemplate:output_type -> platform.v1.GetTemplateResponse
+	27, // 80: platform.v1.VTPMService.DeleteTemplate:output_type -> platform.v1.DeleteTemplateResponse
+	29, // 81: platform.v1.VTPMService.ListTemplates:output_type -> platform.v1.ListTemplatesResponse
+	31, // 82: platform.v1.VTPMService.CloneTemplate:output_type -> platform.v1.CloneTemplateResponse
+	33, // 83: platform.v1.VTPMService.ExportBundle:output_type -> platform.v1.ExportBundleResponse
+	35, // 84: platform.v1.VTPMService.ImportBundle:output_type -> platform.v1.ImportBundleResponse
+	37, // 85: platform.v1.VTPMService.ValidateBundle:output_type -> platform.v1.ValidateBundleResponse
+	39, // 86: platform.v1.VTPMService.GetBundlePath:output_type -> platform.v1.GetBundlePathResponse
+	41, // 87: platform.v1.VTPMService.GetTPMSocketPath:output_type -> platform.v1.GetTPMSocketPathResponse
+	43, // 88: platform.v1.VTPMService.GetNVRAMPath:output_type -> platform.v1.GetNVRAMPathResponse
+	45, // 89: platform.v1.VTPMService.StartVTPM:output_type -> platform.v1.StartVTPMResponse
+	47, // 90: platform.v1.VTPMService.StopVTPM:output_type -> platform.v1.StopVTPMResponse
+	49, // 91: platform.v1.VTPMService.IsVTPMRunning:output_type -> platform.v1.IsVTPMRunningResponse
+	51, // 92: platform.v1.VTPMService.QuoteVTPM:output_type -> platform.v1.QuoteVTPMResponse
+	53, // 93: platform.v1.VTPMService.SealVTPM:output_type -> platform.v1.SealVTPMResponse
+	55, // 94: platform.v1.VTPMService.UnsealVTPM:output_type -> platform.v1.UnsealVTPMResponse
+	57, // 95: platform.v1.VTPMService.ExtendVTPMPCR:output_type -> platform.v1.ExtendVTPMPCRResponse
+	59, // 96: platform.v1.VTPMService.ReadVTPMPCR:output_type -> platform.v1.ReadVTPMPCRResponse
+	74, // [74:97] is the sub-list for method output_type
+	51, // [51:74] is the sub-list for method input_type
+	51, // [51:51] is the sub-list for extension type_name
+	51, // [51:51] is the sub-list for extension extendee
+	0,  // [0:51] is the sub-list for field type_name
 }
 
 func init() { file_vtpm_proto_init() }
@@ -5438,9 +4029,9 @@ func file_vtpm_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_vtpm_proto_rawDesc), len(file_vtpm_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   87,
+			NumMessages:   64,
 			NumExtensions: 0,
-			NumServices:   2,
+			NumServices:   1,
 		},
 		GoTypes:           file_vtpm_proto_goTypes,
 		DependencyIndexes: file_vtpm_proto_depIdxs,

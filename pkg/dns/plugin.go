@@ -127,6 +127,15 @@ func (cp TrustedPlatformPlugin) ServeDNS(ctx context.Context, w dns.ResponseWrit
 
 	}
 
+	// Serve authoritative zone transfers (AXFR/IXFR) to configured,
+	// TSIG-authenticated secondaries. The platform is a PRIMARY nameserver;
+	// a zone transfer is a DNS-protocol operation (TCP), not one of the
+	// platform's API protocols, so it is answered here on the wire rather
+	// than through REST/gRPC/QUIC/MCP/Unix.
+	if isTransferQuery(qtype) {
+		return cp.handleZoneTransfer(ctx, w, r, zone, qname)
+	}
+
 	// Parse the queried records from the zone file
 	rrs, err := parseQueriedRecord(qtype, qname, zone)
 	if err != nil {
@@ -256,6 +265,20 @@ func setup(c *caddy.Controller) error {
 			return &WrappedError{Msg: "failed to initialise network-zone subdomains", Err: err}
 		}
 		log.Infof("Network-zone subdomains initialised: %v", Configuration.NetworkZones)
+	}
+
+	// Install outbound zone-transfer TSIG secrets so the DNS server
+	// validates AXFR requests signed by configured secondaries. When no
+	// keys are configured the AXFR responder stays fail-closed.
+	if secrets := configureTransfer(Configuration.Transfer); len(secrets) > 0 {
+		cfg := dnsserver.GetConfig(c)
+		if cfg.TsigSecret == nil {
+			cfg.TsigSecret = make(map[string]string, len(secrets))
+		}
+		for name, secret := range secrets {
+			cfg.TsigSecret[name] = secret
+		}
+		log.Infof("Outbound zone transfer enabled for %d TSIG secondary key(s)", len(secrets))
 	}
 
 	// Register the plugin in the middleware chain

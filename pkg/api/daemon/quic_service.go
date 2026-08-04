@@ -54,6 +54,9 @@ type QUICServiceHandler struct {
 	healthRegistry health.Registry
 	sdnService     *SDNService
 	iamService     QUICIAMService
+	// iamGRPC is the shared *IAMGRPCService the converged IAM QUIC handlers
+	// delegate to (pb wire), wired via SetIAMGRPCService.
+	iamGRPC        *IAMGRPCService
 	kmsService     KMSServiceInterface
 	cryptoService  CryptoServiceInterface
 	secretsService SecretsServiceInterface
@@ -73,10 +76,13 @@ type QUICServiceHandler struct {
 	vmHandler          *quic.VMHandler
 	pxeService         pxe.Service
 	tenantManager      TenantManagerInterface
-	daemonService      *Service
-	overlayHandler     *quic.OverlayHandler
-	gatewayHandler     *quic.GatewayHandler
-	switchService      switchServiceProvider
+	// tenantGRPC is the shared *TenantGRPCServer the converged tenant QUIC
+	// handlers delegate to (pb wire), wired via SetTenantGRPCServer.
+	tenantGRPC     *TenantGRPCServer
+	daemonService  *Service
+	overlayHandler *quic.OverlayHandler
+	gatewayHandler *quic.GatewayHandler
+	switchService  switchServiceProvider
 	// Phase 3.5 handlers - wired via Set*Service on the daemon.
 	ceremonyQUIC *ceremonyQUICHandlers
 	pivQUIC      *pivQUICHandlers
@@ -834,7 +840,7 @@ func (h *QUICServiceHandler) handleReadiness(ctx context.Context, req *quic.Requ
 	if h.pxeService != nil {
 		resp.Components["pxe"] = "ready"
 	}
-	if h.tenantManager != nil {
+	if h.tenantGRPC != nil {
 		resp.Components["tenant"] = "ready"
 	}
 	if h.overlayHandler != nil {

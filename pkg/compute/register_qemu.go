@@ -35,5 +35,12 @@ func newQEMUOrchestratorForConfig(_ context.Context, cfg *OrchestratorConfig, de
 	local := *cfg
 	local.Type = ComputeTypeVM
 	local.Provider = ProviderLocalQEMU
-	return NewQEMUOrchestrator(&local, deps.logger())
+	orch, err := NewQEMUOrchestrator(&local, deps.logger())
+	if err != nil {
+		return nil, err
+	}
+	if deps != nil && deps.VTPMGenerator != nil {
+		orch.SetVTPMGenerator(deps.VTPMGenerator)
+	}
+	return orch, nil
 }

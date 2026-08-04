@@ -24,6 +24,14 @@ import "common.proto";
 // VTPMService provides virtual TPM bundle management operations.
 // Bundles are complete vTPM provisioning packages containing TPM state,
 // OVMF NVRAM, and optional Secure Boot keys for VM deployment.
+//
+// This is the single, unified vTPM surface. A Bundle is the canonical
+// per-guest-VM swtpm storage/lifecycle primitive (TPM state, OVMF NVRAM,
+// Secure Boot keys). The profile-aware facade (device-profile binding,
+// profile-filtered listing, EK-certificate prestaging) is expressed here via
+// the device_profile_id field on CreateBundleOptions / ListBundleOptions /
+// Manifest rather than as a separate service. The former VTPMInstanceService
+// was collapsed into this service so there is exactly one generated client.
 service VTPMService {
   // Bundle CRUD operations
   rpc CreateBundle(CreateBundleRequest) returns (CreateBundleResponse);
@@ -59,28 +67,6 @@ service VTPMService {
   rpc UnsealVTPM(UnsealVTPMRequest) returns (UnsealVTPMResponse);
   rpc ExtendVTPMPCR(ExtendVTPMPCRRequest) returns (ExtendVTPMPCRResponse);
   rpc ReadVTPMPCR(ReadVTPMPCRRequest) returns (ReadVTPMPCRResponse);
-}
-
-// VTPMInstanceService provides vTPM instance generation and lifecycle management.
-// This service manages the lifecycle of virtual TPM instances for device provisioning,
-// wrapping the bundle service with a simplified API focused on instance generation
-// and device profile association.
-service VTPMInstanceService {
-  // Instance CRUD operations
-  rpc CreateInstance(CreateVTPMInstanceRequest) returns (CreateVTPMInstanceResponse);
-  rpc GetInstance(GetVTPMInstanceRequest) returns (GetVTPMInstanceResponse);
-  rpc GetInstanceByProfile(GetVTPMInstanceByProfileRequest) returns (GetVTPMInstanceByProfileResponse);
-  rpc DeleteInstance(DeleteVTPMInstanceRequest) returns (DeleteVTPMInstanceResponse);
-  rpc ListInstances(ListVTPMInstancesRequest) returns (ListVTPMInstancesResponse);
-
-  // Instance lifecycle operations
-  rpc StartInstance(StartVTPMInstanceRequest) returns (StartVTPMInstanceResponse);
-  rpc StopInstance(StopVTPMInstanceRequest) returns (StopVTPMInstanceResponse);
-  rpc GetInstanceStatus(GetVTPMInstanceStatusRequest) returns (GetVTPMInstanceStatusResponse);
-
-  // EK certificate operations
-  rpc ExportEKCertificate(ExportEKCertificateRequest) returns (ExportEKCertificateResponse);
-  rpc GetEKFingerprint(GetEKFingerprintRequest) returns (GetEKFingerprintResponse);
 }
 
 // BundleMode represents the bundle creation mode.
@@ -159,6 +145,10 @@ message Manifest {
   map<string, string> checksums = 11;
   map<string, string> labels = 12;
   string cloned_from = 13;
+  // device_profile_id binds this bundle to a device profile (0 when unbound).
+  // This is the profile-facade identity that the QEMU orchestrator uses to
+  // discover a prestaged bundle for a VM at boot time.
+  uint64 device_profile_id = 14;
 }
 
 // Bundle represents a complete vTPM bundle.
@@ -193,6 +183,10 @@ message CreateBundleOptions {
   bool secure_boot_enabled = 4;
   map<string, string> labels = 5;
   string template_id = 6;
+  // device_profile_id binds the created bundle to a device profile (optional).
+  // When set, the bundle becomes discoverable via ListBundles profile filter
+  // and via the QEMU orchestrator's profile lookup at VM boot time.
+  uint64 device_profile_id = 7;
 }
 
 // CreateTemplateOptions configures template creation.
@@ -216,6 +210,10 @@ message ListBundleOptions {
   map<string, string> labels = 2;
   int32 limit = 3;
   int32 offset = 4;
+  // device_profile_id filters bundles bound to the given device profile.
+  // A zero value disables the filter and returns bundles regardless of
+  // profile binding.
+  uint64 device_profile_id = 5;
 }
 
 // Bundle CRUD request/response messages
@@ -546,220 +544,4 @@ message ReadVTPMPCRResponse {
 
   // value is the current PCR value.
   bytes value = 4;
-}
-
-// =============================================================================
-// VTPMInstanceService Messages
-// =============================================================================
-
-// VTPMInstanceConfig contains configuration for vTPM instance creation.
-message VTPMInstanceConfig {
-  // tpm_version is the TPM specification version (default: 2.0).
-  TPMVersion tpm_version = 1;
-
-  // state_path is the directory where vTPM state is stored.
-  string state_path = 2;
-
-  // hostname is the hostname for the vTPM (used in EK certificate CN).
-  string hostname = 3;
-
-  // ek_algorithm specifies the EK key algorithm (default: RSA).
-  EKAlgorithm ek_algorithm = 4;
-
-  // secure_boot_enabled enables Secure Boot key generation and enrollment.
-  bool secure_boot_enabled = 5;
-
-  // labels contains custom metadata key-value pairs.
-  map<string, string> labels = 6;
-}
-
-// VTPMInstance represents a virtual TPM instance.
-message VTPMInstance {
-  // id is the unique identifier for this vTPM instance.
-  string id = 1;
-
-  // profile_id is the associated device profile ID (optional).
-  uint64 profile_id = 2;
-
-  // version is the TPM specification version.
-  TPMVersion version = 3;
-
-  // state_path is the directory containing this vTPM's state files.
-  string state_path = 4;
-
-  // socket_path is the Unix socket path for TPM communication.
-  string socket_path = 5;
-
-  // nvram_path is the path to the OVMF NVRAM file.
-  string nvram_path = 6;
-
-  // ek_fingerprint is the SHA-256 fingerprint of the EK certificate.
-  string ek_fingerprint = 7;
-
-  // srk_handle is the TPM handle for the Storage Root Key.
-  uint32 srk_handle = 8;
-
-  // running indicates if the vTPM is currently running.
-  bool running = 9;
-
-  // created_at is the instance creation timestamp.
-  google.protobuf.Timestamp created_at = 10;
-}
-
-// Instance CRUD request/response messages
-
-message CreateVTPMInstanceRequest {
-  // profile_id is the device profile to associate with this instance (optional).
-  uint64 profile_id = 1;
-
-  // config contains optional configuration for the vTPM instance.
-  VTPMInstanceConfig config = 2;
-}
-
-message CreateVTPMInstanceResponse {
-  // status indicates operation success/failure.
-  Status status = 1;
-
-  // instance is the created vTPM instance.
-  VTPMInstance instance = 2;
-}
-
-message GetVTPMInstanceRequest {
-  // id is the vTPM instance ID.
-  string id = 1;
-}
-
-message GetVTPMInstanceResponse {
-  // instance is the retrieved vTPM instance.
-  VTPMInstance instance = 1;
-}
-
-message GetVTPMInstanceByProfileRequest {
-  // profile_id is the device profile ID.
-  uint64 profile_id = 1;
-}
-
-message GetVTPMInstanceByProfileResponse {
-  // instance is the retrieved vTPM instance.
-  VTPMInstance instance = 1;
-}
-
-message DeleteVTPMInstanceRequest {
-  // id is the vTPM instance ID to delete.
-  string id = 1;
-}
-
-message DeleteVTPMInstanceResponse {
-  // status indicates operation success/failure.
-  Status status = 1;
-}
-
-message ListVTPMInstancesRequest {
-  // pagination contains pagination parameters.
-  PaginationRequest pagination = 1;
-
-  // selector contains label selector for filtering.
-  LabelSelector selector = 2;
-}
-
-message ListVTPMInstancesResponse {
-  // instances is the list of vTPM instances.
-  repeated VTPMInstance instances = 1;
-
-  // pagination contains pagination metadata.
-  PaginationResponse pagination = 2;
-}
-
-// Instance lifecycle request/response messages
-
-message StartVTPMInstanceRequest {
-  // id is the vTPM instance ID to start.
-  string id = 1;
-}
-
-message StartVTPMInstanceResponse {
-  // status indicates operation success/failure.
-  Status status = 1;
-
-  // socket_path is the Unix socket path for TPM communication.
-  string socket_path = 2;
-}
-
-message StopVTPMInstanceRequest {
-  // id is the vTPM instance ID to stop.
-  string id = 1;
-}
-
-message StopVTPMInstanceResponse {
-  // status indicates operation success/failure.
-  Status status = 1;
-}
-
-message GetVTPMInstanceStatusRequest {
-  // id is the vTPM instance ID.
-  string id = 1;
-}
-
-message GetVTPMInstanceStatusResponse {
-  // id is the vTPM instance ID.
-  string id = 1;
-
-  // running indicates if the vTPM is currently running.
-  bool running = 2;
-
-  // socket_path is the Unix socket path if running.
-  string socket_path = 3;
-}
-
-// EK certificate request/response messages
-
-message ExportEKCertificateRequest {
-  // id is the vTPM instance ID.
-  string id = 1;
-
-  // format specifies the certificate encoding format.
-  // Supported values: "PEM" (default), "DER"
-  string format = 2;
-}
-
-message ExportEKCertificateResponse {
-  // id is the vTPM instance ID.
-  string id = 1;
-
-  // certificate is the EK certificate data.
-  bytes certificate = 2;
-
-  // format is the certificate encoding format.
-  string format = 3;
-
-  // subject is the certificate subject.
-  string subject = 4;
-
-  // issuer is the certificate issuer.
-  string issuer = 5;
-
-  // serial_number is the certificate serial number.
-  string serial_number = 6;
-
-  // not_before is the certificate validity start.
-  google.protobuf.Timestamp not_before = 7;
-
-  // not_after is the certificate validity end.
-  google.protobuf.Timestamp not_after = 8;
-}
-
-message GetEKFingerprintRequest {
-  // id is the vTPM instance ID.
-  string id = 1;
-}
-
-message GetEKFingerprintResponse {
-  // id is the vTPM instance ID.
-  string id = 1;
-
-  // fingerprint is the SHA-256 fingerprint of the EK certificate.
-  string fingerprint = 2;
-
-  // algorithm is the hash algorithm used for the fingerprint (e.g., "SHA256").
-  string algorithm = 3;
 }

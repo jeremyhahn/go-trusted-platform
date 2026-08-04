@@ -69,7 +69,7 @@ func buildGRPCMethodPermissions() map[string]string {
 
 	return map[string]string{
 		// ---------------------------------------------------------------------
-		// vTPM (VTPMService + VTPMInstanceService)
+		// vTPM (VTPMService)
 		// ---------------------------------------------------------------------
 		"/platform.v1.VTPMService/CreateTemplate":   scope(vtpm, write),
 		"/platform.v1.VTPMService/CloneTemplate":    scope(vtpm, write),
@@ -94,17 +94,6 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.VTPMService/ReadVTPMPCR":      scope(vtpm, read),
 		"/platform.v1.VTPMService/SealVTPM":         scope(vtpm, write),
 		"/platform.v1.VTPMService/UnsealVTPM":       scope(vtpm, read),
-
-		"/platform.v1.VTPMInstanceService/CreateInstance":       scope(vtpm, write),
-		"/platform.v1.VTPMInstanceService/DeleteInstance":       scope(vtpm, del),
-		"/platform.v1.VTPMInstanceService/StartInstance":        scope(vtpm, write),
-		"/platform.v1.VTPMInstanceService/StopInstance":         scope(vtpm, write),
-		"/platform.v1.VTPMInstanceService/GetInstance":          scope(vtpm, read),
-		"/platform.v1.VTPMInstanceService/GetInstanceByProfile": scope(vtpm, read),
-		"/platform.v1.VTPMInstanceService/GetInstanceStatus":    scope(vtpm, read),
-		"/platform.v1.VTPMInstanceService/ListInstances":        scope(vtpm, read),
-		"/platform.v1.VTPMInstanceService/ExportEKCertificate":  scope(vtpm, read),
-		"/platform.v1.VTPMInstanceService/GetEKFingerprint":     scope(vtpm, read),
 
 		// ---------------------------------------------------------------------
 		// DNS (DNSService)

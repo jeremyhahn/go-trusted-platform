@@ -20,6 +20,7 @@ import (
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
 
 // ProviderKind identifies a compute orchestrator backend. Local providers
@@ -96,6 +97,13 @@ type Deps struct {
 	// container attestation is disabled. Cloud providers ignore it (guest
 	// attestation uses the instance's own NitroTPM/vTPM).
 	HostTPM xkmssdk.TrustedPlatformModule
+
+	// VTPMGenerator is the profile-aware vTPM facade used by the local QEMU
+	// orchestrator to source a VM's swtpm from a profile-bound, CA-issued-EK
+	// bundle instead of an anonymous swtpm. Optional; when nil the QEMU
+	// orchestrator fails closed for profiles that require a hardware-rooted
+	// identity and otherwise falls back to an identity-less swtpm.
+	VTPMGenerator vtpm.Generator
 }
 
 // logger returns d.Logger or the default logger when d or d.Logger is nil.

@@ -112,9 +112,6 @@ export {
   // EAB hooks
   useEAB,
   useEABList,
-  // vTPM Instance hooks
-  useVTPMInstance,
-  useVTPMInstanceList,
   // QuicBaaS hooks
   useQuicBaaSKV,
   useQuicBaaSVector,
@@ -138,8 +135,6 @@ export type {
   UseInvitationListOptions,
   UseEABResult,
   UseEABListOptions,
-  UseVTPMInstanceResult,
-  UseVTPMInstanceListOptions,
   UseDeviceTemplateResult,
   UseProvisioningSessionResult,
 } from './hooks/index.js';

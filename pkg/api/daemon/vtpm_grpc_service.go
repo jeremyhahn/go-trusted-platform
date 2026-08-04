@@ -429,6 +429,239 @@ func (s *VTPMServiceServer) GetNVRAMPath(
 	}, nil
 }
 
+// =============================================================================
+// Runtime TPM operations
+//
+// These delegate to the same vtpm.VTPMService the REST / QUIC / MCP handlers
+// use, closing the gRPC/Unix runtime-op gap: before this the pb server fell
+// through to UnimplementedVTPMServiceServer and returned codes.Unimplemented
+// for Start/Stop/IsRunning/Quote/Seal/Unseal/ExtendPCR/ReadPCR.
+// =============================================================================
+
+// StartVTPM starts the swtpm daemon for the specified bundle.
+func (s *VTPMServiceServer) StartVTPM(
+	ctx context.Context,
+	req *platformv1.StartVTPMRequest,
+) (*platformv1.StartVTPMResponse, error) {
+
+	if req.GetBundleId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "bundle_id is required")
+	}
+
+	if err := s.service.Start(ctx, req.GetBundleId()); err != nil {
+		s.logger.Error("StartVTPM failed", "error", err, "bundle_id", req.GetBundleId())
+		return nil, s.mapError(err)
+	}
+
+	return &platformv1.StartVTPMResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "vTPM started successfully",
+		},
+		BundleId:   req.GetBundleId(),
+		Running:    s.service.IsRunning(req.GetBundleId()),
+		SocketPath: s.service.GetTPMSocketPath(req.GetBundleId()),
+	}, nil
+}
+
+// StopVTPM stops the swtpm daemon for the specified bundle.
+func (s *VTPMServiceServer) StopVTPM(
+	ctx context.Context,
+	req *platformv1.StopVTPMRequest,
+) (*platformv1.StopVTPMResponse, error) {
+
+	if req.GetBundleId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "bundle_id is required")
+	}
+
+	if err := s.service.Stop(ctx, req.GetBundleId()); err != nil {
+		s.logger.Error("StopVTPM failed", "error", err, "bundle_id", req.GetBundleId())
+		return nil, s.mapError(err)
+	}
+
+	return &platformv1.StopVTPMResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "vTPM stopped successfully",
+		},
+		BundleId: req.GetBundleId(),
+		Stopped:  !s.service.IsRunning(req.GetBundleId()),
+	}, nil
+}
+
+// IsVTPMRunning reports whether the swtpm daemon for a bundle is running.
+func (s *VTPMServiceServer) IsVTPMRunning(
+	ctx context.Context,
+	req *platformv1.IsVTPMRunningRequest,
+) (*platformv1.IsVTPMRunningResponse, error) {
+
+	if req.GetBundleId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "bundle_id is required")
+	}
+
+	return &platformv1.IsVTPMRunningResponse{
+		BundleId: req.GetBundleId(),
+		Running:  s.service.IsRunning(req.GetBundleId()),
+	}, nil
+}
+
+// QuoteVTPM generates a TPM quote over the requested PCRs.
+func (s *VTPMServiceServer) QuoteVTPM(
+	ctx context.Context,
+	req *platformv1.QuoteVTPMRequest,
+) (*platformv1.QuoteVTPMResponse, error) {
+
+	if req.GetBundleId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "bundle_id is required")
+	}
+
+	result, err := s.service.Quote(ctx, req.GetBundleId(), req.GetNonce(), int32SliceToInt(req.GetPcrs()))
+	if err != nil {
+		s.logger.Error("QuoteVTPM failed", "error", err, "bundle_id", req.GetBundleId())
+		return nil, s.mapError(err)
+	}
+
+	pcrValues := make(map[int32][]byte, len(result.PCRValues))
+	for idx, val := range result.PCRValues {
+		pcrValues[int32(idx)] = val
+	}
+
+	return &platformv1.QuoteVTPMResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "quote generated successfully",
+		},
+		BundleId:      req.GetBundleId(),
+		Quote:         result.Quote,
+		Signature:     result.Signature,
+		PcrValues:     pcrValues,
+		HashAlgorithm: result.HashAlgorithm,
+	}, nil
+}
+
+// SealVTPM seals data to the TPM, optionally binding it to PCR values.
+func (s *VTPMServiceServer) SealVTPM(
+	ctx context.Context,
+	req *platformv1.SealVTPMRequest,
+) (*platformv1.SealVTPMResponse, error) {
+
+	if req.GetBundleId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "bundle_id is required")
+	}
+
+	opts := &vtpm.SealOptions{
+		PCRs:      int32SliceToInt(req.GetPcrs()),
+		AuthValue: req.GetAuthValue(),
+	}
+
+	sealed, err := s.service.Seal(ctx, req.GetBundleId(), req.GetData(), opts)
+	if err != nil {
+		s.logger.Error("SealVTPM failed", "error", err, "bundle_id", req.GetBundleId())
+		return nil, s.mapError(err)
+	}
+
+	return &platformv1.SealVTPMResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "data sealed successfully",
+		},
+		BundleId:   req.GetBundleId(),
+		SealedData: sealed,
+	}, nil
+}
+
+// UnsealVTPM unseals data previously sealed to the TPM.
+func (s *VTPMServiceServer) UnsealVTPM(
+	ctx context.Context,
+	req *platformv1.UnsealVTPMRequest,
+) (*platformv1.UnsealVTPMResponse, error) {
+
+	if req.GetBundleId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "bundle_id is required")
+	}
+
+	data, err := s.service.Unseal(ctx, req.GetBundleId(), req.GetSealedData(), req.GetAuthValue())
+	if err != nil {
+		s.logger.Error("UnsealVTPM failed", "error", err, "bundle_id", req.GetBundleId())
+		return nil, s.mapError(err)
+	}
+
+	return &platformv1.UnsealVTPMResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "data unsealed successfully",
+		},
+		BundleId: req.GetBundleId(),
+		Data:     data,
+	}, nil
+}
+
+// ExtendVTPMPCR extends a PCR with the provided data.
+func (s *VTPMServiceServer) ExtendVTPMPCR(
+	ctx context.Context,
+	req *platformv1.ExtendVTPMPCRRequest,
+) (*platformv1.ExtendVTPMPCRResponse, error) {
+
+	if req.GetBundleId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "bundle_id is required")
+	}
+
+	if err := s.service.ExtendPCR(ctx, req.GetBundleId(), int(req.GetPcrIndex()), req.GetData()); err != nil {
+		s.logger.Error("ExtendVTPMPCR failed", "error", err, "bundle_id", req.GetBundleId())
+		return nil, s.mapError(err)
+	}
+
+	return &platformv1.ExtendVTPMPCRResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "PCR extended successfully",
+		},
+		BundleId: req.GetBundleId(),
+		PcrIndex: req.GetPcrIndex(),
+		Extended: true,
+	}, nil
+}
+
+// ReadVTPMPCR reads the current value of a PCR.
+func (s *VTPMServiceServer) ReadVTPMPCR(
+	ctx context.Context,
+	req *platformv1.ReadVTPMPCRRequest,
+) (*platformv1.ReadVTPMPCRResponse, error) {
+
+	if req.GetBundleId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "bundle_id is required")
+	}
+
+	value, err := s.service.ReadPCR(ctx, req.GetBundleId(), int(req.GetPcrIndex()))
+	if err != nil {
+		s.logger.Error("ReadVTPMPCR failed", "error", err, "bundle_id", req.GetBundleId())
+		return nil, s.mapError(err)
+	}
+
+	return &platformv1.ReadVTPMPCRResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "PCR read successfully",
+		},
+		BundleId: req.GetBundleId(),
+		PcrIndex: req.GetPcrIndex(),
+		Value:    value,
+	}, nil
+}
+
+// int32SliceToInt converts a proto []int32 PCR list to the []int the service
+// layer expects.
+func int32SliceToInt(in []int32) []int {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]int, len(in))
+	for i, v := range in {
+		out[i] = int(v)
+	}
+	return out
+}
+
 // Conversion helpers: proto to service types
 
 func (s *VTPMServiceServer) protoToCreateBundleOptions(opts *platformv1.CreateBundleOptions) *vtpm.CreateBundleOptions {
@@ -439,6 +672,7 @@ func (s *VTPMServiceServer) protoToCreateBundleOptions(opts *platformv1.CreateBu
 		SecureBootEnabled: opts.GetSecureBootEnabled(),
 		Labels:            opts.GetLabels(),
 		TemplateID:        opts.GetTemplateId(),
+		DeviceProfileID:   opts.GetDeviceProfileId(),
 	}
 }
 
@@ -464,10 +698,11 @@ func (s *VTPMServiceServer) protoToListOptions(opts *platformv1.ListBundleOption
 		return nil
 	}
 	return &vtpm.ListOptions{
-		Mode:   s.protoToBundleMode(opts.GetMode()),
-		Labels: opts.GetLabels(),
-		Limit:  int(opts.GetLimit()),
-		Offset: int(opts.GetOffset()),
+		Mode:            s.protoToBundleMode(opts.GetMode()),
+		Labels:          opts.GetLabels(),
+		Limit:           int(opts.GetLimit()),
+		Offset:          int(opts.GetOffset()),
+		DeviceProfileID: opts.GetDeviceProfileId(),
 	}
 }
 
@@ -551,6 +786,7 @@ func (s *VTPMServiceServer) manifestToProto(manifest *vtpm.Manifest) *platformv1
 		Checksums:         manifest.Checksums,
 		Labels:            manifest.Labels,
 		ClonedFrom:        manifest.ClonedFrom,
+		DeviceProfileId:   manifest.DeviceProfileID,
 	}
 
 	if manifest.EKCertificate != nil {

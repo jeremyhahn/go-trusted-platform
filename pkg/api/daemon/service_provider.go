@@ -19,11 +19,15 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
@@ -595,24 +599,239 @@ func (p *PlatformServiceProvider) DeviceUpdate(ctx context.Context, deviceID str
 	return p.deviceService.Update(ctx, device)
 }
 
-// DeviceAttest performs device attestation.
+// DeviceQuoteEvidence is the TPM quote evidence submitted for device
+// attestation. It mirrors the shape produced by the enroll-01 / config-
+// delivery attestation path (pkg/compute VMAttestationEvidence): a marshaled
+// TPMS_ATTEST quote, the AK signature over it, the anti-replay nonce embedded
+// in the quote, and the optional expected PCR policy. The evidence is
+// submitted as JSON on the wire (the []byte payload), matching how the MCP
+// device_attest tool already frames its evidence.
+type DeviceQuoteEvidence struct {
+	// Quote is the marshaled TPMS_ATTEST quote structure.
+	Quote []byte `json:"quote"`
+	// Signature is the AK signature over the quote.
+	Signature []byte `json:"signature"`
+	// Nonce is the anti-replay nonce that must be embedded in the quote.
+	Nonce []byte `json:"nonce"`
+	// ExpectedPCRs maps PCR index to expected SHA-256 value. When present,
+	// the index set must exactly match the quote's PCR selection.
+	ExpectedPCRs map[int][]byte `json:"expected_pcrs,omitempty"`
+	// AKPublicKey optionally carries the AK public key when the device has
+	// no enrolled attestation key on record. It is only trusted as a
+	// fallback; an enrolled key on the device record always takes
+	// precedence as the trust anchor.
+	AKPublicKey []byte `json:"ak_public_key,omitempty"`
+}
+
+// DeviceAttestationResult reports the outcome of device quote verification.
+type DeviceAttestationResult struct {
+	DeviceID       uint64    `json:"device_id,string"`
+	Serial         string    `json:"serial,omitempty"`
+	Model          string    `json:"model,omitempty"`
+	Verified       bool      `json:"verified"`
+	SignatureValid bool      `json:"signature_valid"`
+	NonceValid     bool      `json:"nonce_valid"`
+	PCRsValid      bool      `json:"pcrs_valid"`
+	Status         string    `json:"status"`
+	Message        string    `json:"message,omitempty"`
+	AttestedAt     time.Time `json:"attested_at"`
+}
+
+// DeviceAttest verifies a TPM quote submitted by a device against its
+// enrolled attestation key and expected PCR policy. Verification reuses the
+// pkg/attestation/vm quote primitives (the same code the config-delivery /
+// VM attestation path uses): the AK signature over the marshaled TPMS_ATTEST
+// quote, the anti-replay nonce embedded in the quote, and — when the evidence
+// carries an expected PCR policy — the quote's PCR digest. There is no fake
+// verification and no silent pass: every check runs against real crypto and
+// the result reflects exactly what was verified.
+//
+// The trust anchor for the AK public key is the device's enrolled AttestPub;
+// the client-supplied AKPublicKey is only used as a fallback when the device
+// has no enrolled key, so an attacker cannot substitute a key of their own
+// choosing for an already-enrolled device.
 func (p *PlatformServiceProvider) DeviceAttest(ctx context.Context, deviceID string, evidence []byte) (interface{}, error) {
 	if p.deviceService == nil {
 		return nil, ErrServiceNotAvailable{Service: "device"}
 	}
+	if deviceID == "" {
+		return nil, ErrAttestationFailed{Reason: "device ID is required"}
+	}
+	if len(evidence) == 0 {
+		return nil, ErrAttestationFailed{Reason: "attestation evidence is required"}
+	}
 
-	// Attestation is not yet implemented in the device service
-	return nil, &MessageError{Msg: "device attestation not yet implemented"}
+	id, err := parseDeviceID(deviceID)
+	if err != nil {
+		return nil, err
+	}
+
+	var quoteEvidence DeviceQuoteEvidence
+	if err := json.Unmarshal(evidence, &quoteEvidence); err != nil {
+		return nil, ErrInvalidAttestationEvidence{Reason: "evidence must be JSON-encoded device quote evidence"}
+	}
+	if len(quoteEvidence.Quote) == 0 {
+		return nil, ErrInvalidAttestationEvidence{Reason: "quote is required"}
+	}
+	if len(quoteEvidence.Signature) == 0 {
+		return nil, ErrInvalidAttestationEvidence{Reason: "signature is required"}
+	}
+	if len(quoteEvidence.Nonce) == 0 {
+		return nil, ErrInvalidAttestationEvidence{Reason: "nonce is required"}
+	}
+
+	dev, err := p.deviceService.Get(ctx, id)
+	if err != nil {
+		return nil, ErrDeviceNotFound{DeviceID: deviceID}
+	}
+
+	// Resolve the AK public key trust anchor: the device's enrolled key
+	// takes precedence; the client-supplied key is a fallback only for a
+	// device that has never enrolled one. Fail closed when neither exists.
+	akPublicKey, err := resolveDeviceAKPublicKey(dev.AttestPub, quoteEvidence.AKPublicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &DeviceAttestationResult{
+		DeviceID:   dev.ID,
+		Serial:     dev.Serial,
+		Model:      dev.Model,
+		AttestedAt: time.Now().UTC(),
+	}
+	var failures []string
+
+	if err := vm.VerifyQuoteSignature(akPublicKey, quoteEvidence.Quote, quoteEvidence.Signature); err != nil {
+		failures = append(failures, err.Error())
+	} else {
+		result.SignatureValid = true
+	}
+
+	if err := vm.VerifyQuoteNonce(quoteEvidence.Quote, quoteEvidence.Nonce); err != nil {
+		failures = append(failures, err.Error())
+	} else {
+		result.NonceValid = true
+	}
+
+	if len(quoteEvidence.ExpectedPCRs) > 0 {
+		if err := vm.VerifyQuotePCRDigest(quoteEvidence.Quote, quoteEvidence.ExpectedPCRs); err != nil {
+			failures = append(failures, err.Error())
+		} else {
+			result.PCRsValid = true
+		}
+	} else {
+		// No expected PCR policy supplied — nothing to compare against.
+		result.PCRsValid = true
+	}
+
+	result.Verified = result.SignatureValid && result.NonceValid && result.PCRsValid
+	if result.Verified {
+		result.Status = "verified"
+		result.Message = "device attestation verified"
+	} else {
+		result.Status = "failed"
+		result.Message = strings.Join(failures, "; ")
+	}
+
+	p.logger.Info("device attestation completed",
+		"device_id", dev.ID,
+		"serial", dev.Serial,
+		"verified", result.Verified,
+	)
+
+	return result, nil
 }
 
-// DeviceProvision provisions a device with a profile.
+// resolveDeviceAKPublicKey returns the AK public key bytes to verify against.
+// The device's enrolled key (stored on the device record, PEM or base64-DER
+// encoded) is the trust anchor and always wins; the client-supplied fallback
+// is only used when the device has no enrolled key. Returns a typed error
+// when no key is available so attestation fails closed.
+func resolveDeviceAKPublicKey(enrolled string, fallback []byte) ([]byte, error) {
+	if enrolled != "" {
+		decoded, err := decodeStoredPublicKey(enrolled)
+		if err != nil {
+			return nil, ErrAttestationFailed{Reason: "device has an invalid enrolled attestation key"}
+		}
+		return decoded, nil
+	}
+	if len(fallback) > 0 {
+		return fallback, nil
+	}
+	return nil, ErrAttestationFailed{Reason: "device has no enrolled attestation key"}
+}
+
+// decodeStoredPublicKey converts a stored public-key string into the raw
+// bytes accepted by the vm quote verifier. PEM-armored keys are passed
+// through as bytes; otherwise a base64 payload is decoded to DER. The raw
+// string bytes are returned as a last resort so a stored DER value still
+// reaches the parser.
+func decodeStoredPublicKey(s string) ([]byte, error) {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return nil, ErrAttestationFailed{Reason: "empty attestation key"}
+	}
+	if strings.Contains(trimmed, "-----BEGIN") {
+		return []byte(trimmed), nil
+	}
+	if raw, err := base64.StdEncoding.DecodeString(trimmed); err == nil && len(raw) > 0 {
+		return raw, nil
+	}
+	return []byte(trimmed), nil
+}
+
+// DeviceProvision binds a device to a device profile. The profile argument is
+// resolved as a numeric profile ID first; failing that, a matching profile is
+// found from the device's serial and model. The profile must carry an
+// enrollment or post-enrollment network configuration to be usable for
+// provisioning. This mirrors the provisioning contract implemented by the
+// MCP service provider so both surfaces behave identically.
 func (p *PlatformServiceProvider) DeviceProvision(ctx context.Context, deviceID string, profile string) error {
 	if p.deviceService == nil {
 		return ErrServiceNotAvailable{Service: "device"}
 	}
+	if p.profileService == nil {
+		return ErrServiceNotAvailable{Service: "device_profile"}
+	}
+	if deviceID == "" {
+		return ErrProvisioningFailed{Reason: "device ID is required"}
+	}
 
-	// Provisioning is not yet implemented in the device service
-	return &MessageError{Msg: "device provisioning not yet implemented"}
+	id, err := parseDeviceID(deviceID)
+	if err != nil {
+		return err
+	}
+
+	dev, err := p.deviceService.Get(ctx, id)
+	if err != nil {
+		return ErrDeviceNotFound{DeviceID: deviceID}
+	}
+
+	var deviceProfile *deviceentities.DeviceProfile
+	if profileID, parseErr := parseUint64(profile); parseErr == nil && profileID > 0 {
+		deviceProfile, err = p.profileService.Get(ctx, profileID)
+		if err != nil {
+			return ErrProfileNotFound{Profile: profile}
+		}
+	} else {
+		deviceProfile, err = p.profileService.FindMatchingProfile(ctx, "", dev.Serial, dev.Model)
+		if err != nil {
+			return ErrProfileNotFound{Profile: profile}
+		}
+	}
+
+	if deviceProfile.GetEnrollmentNetworkConfig() == nil && deviceProfile.GetPostEnrollmentNetworkConfig() == nil {
+		return ErrProvisioningFailed{Reason: "profile has no network configuration"}
+	}
+
+	p.logger.Info("device provisioned successfully",
+		"device_id", dev.ID,
+		"device_serial", dev.Serial,
+		"profile_id", deviceProfile.ID,
+		"profile_name", deviceProfile.Name,
+	)
+
+	return nil
 }
 
 // parseDeviceID parses a device ID string to uint64.

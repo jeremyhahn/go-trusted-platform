@@ -27,6 +27,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
+	miekgdns "github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -53,6 +54,26 @@ func newMockDNSService() *mockDNSService {
 	return &mockDNSService{
 		zones: make(map[string]*entities.Zone),
 	}
+}
+
+// mockTransferDNSService augments the mock with the optional ZoneTransferrer
+// capability so the REST zone-export path can be exercised.
+type mockTransferDNSService struct {
+	*mockDNSService
+	secondaries []string
+	transferErr error
+	transferRRs []miekgdns.RR
+}
+
+func (m *mockTransferDNSService) ZoneTransfer(ctx context.Context, zoneName string) ([]miekgdns.RR, error) {
+	if m.transferErr != nil {
+		return nil, m.transferErr
+	}
+	return m.transferRRs, nil
+}
+
+func (m *mockTransferDNSService) TransferSecondaries() []string {
+	return m.secondaries
 }
 
 func (m *mockDNSService) Save(ctx context.Context, zone *entities.Zone) error {
@@ -1278,15 +1299,11 @@ func TestRegister(t *testing.T) {
 }
 
 func TestTransfer(t *testing.T) {
-	t.Run("not implemented", func(t *testing.T) {
+	t.Run("export not supported by service", func(t *testing.T) {
 		svc := newMockDNSService()
 		_, router := setupDNSTestHandler(svc)
 
-		req := TransferRequest{
-			ZoneName: "example.com.",
-			Server:   "ns1.example.com",
-			Port:     53,
-		}
+		req := TransferRequest{ZoneName: "example.com."}
 		body, err := json.Marshal(req)
 		require.NoError(t, err)
 
@@ -1312,9 +1329,24 @@ func TestTransfer(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 
-	t.Run("missing server", func(t *testing.T) {
-		svc := newMockDNSService()
-		_, router := setupDNSTestHandler(svc)
+	t.Run("export success", func(t *testing.T) {
+		soa := &miekgdns.SOA{
+			Hdr:  miekgdns.RR_Header{Name: "example.com.", Rrtype: miekgdns.TypeSOA, Class: miekgdns.ClassINET, Ttl: 3600},
+			Ns:   "ns1.example.com.",
+			Mbox: "hostmaster.example.com.",
+		}
+		a := &miekgdns.A{
+			Hdr: miekgdns.RR_Header{Name: "www.example.com.", Rrtype: miekgdns.TypeA, Class: miekgdns.ClassINET, Ttl: 3600},
+			A:   []byte{192, 0, 2, 1},
+		}
+		svc := &mockTransferDNSService{
+			mockDNSService: newMockDNSService(),
+			secondaries:    []string{"secondary1."},
+			transferRRs:    []miekgdns.RR{soa, a, soa},
+		}
+		handlers := NewDNSHandlers(svc, slog.Default())
+		router := mux.NewRouter()
+		handlers.RegisterRoutes(router)
 
 		req := TransferRequest{ZoneName: "example.com."}
 		body, err := json.Marshal(req)
@@ -1324,7 +1356,34 @@ func TestTransfer(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, r)
 
-		assert.Equal(t, http.StatusBadRequest, w.Code)
+		require.Equal(t, http.StatusOK, w.Code)
+		var resp ZoneTransferResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, "example.com.", resp.ZoneName)
+		assert.Equal(t, "primary", resp.Model)
+		assert.Equal(t, 3, resp.RecordCount)
+		assert.Len(t, resp.Records, 3)
+		assert.Equal(t, []string{"secondary1."}, resp.Secondaries)
+	})
+
+	t.Run("export zone error", func(t *testing.T) {
+		svc := &mockTransferDNSService{
+			mockDNSService: newMockDNSService(),
+			transferErr:    dns.ErrZoneNotFound,
+		}
+		handlers := NewDNSHandlers(svc, slog.Default())
+		router := mux.NewRouter()
+		handlers.RegisterRoutes(router)
+
+		req := TransferRequest{ZoneName: "missing.example.com."}
+		body, err := json.Marshal(req)
+		require.NoError(t, err)
+
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/dns/transfer", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, r)
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
 	})
 
 	t.Run("service not available", func(t *testing.T) {
@@ -1333,7 +1392,7 @@ func TestTransfer(t *testing.T) {
 		router := mux.NewRouter()
 		handlers.RegisterRoutes(router)
 
-		req := TransferRequest{ZoneName: "example.com.", Server: "ns1.example.com"}
+		req := TransferRequest{ZoneName: "example.com."}
 		body, err := json.Marshal(req)
 		require.NoError(t, err)
 

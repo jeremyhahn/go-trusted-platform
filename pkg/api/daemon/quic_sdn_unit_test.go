@@ -926,21 +926,6 @@ func TestQUICSDN_ConvertPbPolicyToSDNPolicy_ZeroCreatedAt(t *testing.T) {
 	assert.Equal(t, int64(0), result.IssuedAt)
 }
 
-func TestQUICSDN_ConvertPbBridgeToSDNBridge_NilInput(t *testing.T) {
-	result := convertPbBridgeToSDNBridge(nil)
-	assert.Nil(t, result)
-}
-
-func TestQUICSDN_ConvertPbPortToSDNPort_NilInput(t *testing.T) {
-	result := convertPbPortToSDNPort(nil)
-	assert.Nil(t, result)
-}
-
-func TestQUICSDN_ConvertPbFlowToSDNFlow_NilInput(t *testing.T) {
-	result := convertPbFlowToSDNFlow(nil)
-	assert.Nil(t, result)
-}
-
 // Mock Policy Engine Interface Verification Test
 // =============================================================================
 

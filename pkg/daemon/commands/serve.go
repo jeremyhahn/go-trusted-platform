@@ -40,7 +40,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
+	_ "github.com/jeremyhahn/go-trusted-platform/pkg/compute/container" // registers the local-container orchestrator factory
 	"github.com/jeremyhahn/go-trusted-platform/pkg/log/jsonfile"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
@@ -263,7 +263,7 @@ func buildChallengeMap(challenges []string, ca tcgEnrollmentCA) map[string]quicb
 // runs without attestation (Attest returns a typed error). OVS networking is
 // enabled only when the OVS socket was detected (ovsSocketPath non-empty),
 // mirroring the SDN service gating.
-func newComputeOrchestrator(logger *logging.Logger, a *app.App, ovsSocketPath string) (compute.Orchestrator, error) {
+func newComputeOrchestrator(logger *logging.Logger, a *app.App, ovsSocketPath string, vtpmSvc vtpm.VTPMService) (compute.Orchestrator, error) {
 	computeConfig := &compute.OrchestratorConfig{
 		Type:            compute.ComputeTypeContainer,
 		MaxInstances:    100,
@@ -275,19 +275,33 @@ func newComputeOrchestrator(logger *logging.Logger, a *app.App, ovsSocketPath st
 		OVSSocketPath:   ovsSocketPath,
 	}
 
-	opts := make([]container.ComputeOrchestratorOption, 0, 1)
-	if a != nil && a.TPM != nil {
-		tpmProvider, tpmErr := container.NewHostTPMProvider(a.TPM)
-		if tpmErr != nil {
-			logger.Warn("container attestation unavailable: failed to create host TPM provider",
-				"error", tpmErr)
+	// Provider selection is explicit: operators opt into a cloud provider via
+	// the `compute:` config section. When unset, Provider is empty and the
+	// factory resolves to the local container orchestrator, preserving the
+	// historical default so nothing breaks. Naming a cloud provider whose
+	// build tag was not compiled in fails closed with a typed
+	// compute.ErrComputeProviderNotCompiled.
+	if a != nil && a.ComputeConfig != nil {
+		computeConfig.Provider = a.ComputeConfig.Provider
+		computeConfig.AWS = a.ComputeConfig.AWS
+		computeConfig.GCP = a.ComputeConfig.GCP
+		computeConfig.Azure = a.ComputeConfig.Azure
+	}
+
+	deps := &compute.Deps{Logger: logger}
+	if a != nil {
+		deps.HostTPM = a.TPM
+	}
+	if vtpmSvc != nil {
+		gen, genErr := vtpm.NewGenerator(nil, vtpmSvc, logger)
+		if genErr != nil {
+			logger.Warn("failed to construct vTPM generator for compute; VMs fall back to identity-less swtpm unless their profile requires an identity", "error", genErr)
 		} else {
-			opts = append(opts, container.WithComputeTPMProvider(tpmProvider))
-			logger.Info("container attestation enabled (host TPM)")
+			deps.VTPMGenerator = gen
 		}
 	}
 
-	return container.NewComputeOrchestrator(computeConfig, logger, opts...)
+	return compute.NewOrchestratorForConfig(context.Background(), computeConfig, deps)
 }
 
 // applyDaemonTLSIdentity provisions the daemon's mTLS material via the
@@ -391,14 +405,23 @@ func initVTPMServiceOnConfig(logger *logging.Logger, a *app.App, cfg *daemon.Con
 		vtpmCfg = &vtpm.Config{}
 	}
 	vtpmCfg.ApplyDefaults()
-	svc, err := vtpm.NewService(vtpmCfg, logger, nil)
+	// Wire the platform TCG CA (reached through the QuicBaaS SDK as a.CA) so
+	// profile-bound pre-assigned bundles receive a TCG-conformant EK
+	// certificate from the same issuer as physical-TPM endorsement
+	// (app.CA.IssueEKCertificate). newVTPMCAAdapter returns a nil interface
+	// when a.CA is unset, keeping the service fail-closed: bundles still get
+	// profile binding and EK-cert injection is simply skipped.
+	vtpmCA := newVTPMCAAdapter(a.CA)
+	svc, err := vtpm.NewService(vtpmCfg, logger, vtpmCA)
 	if err != nil {
 		logger.Warn("vTPM service creation failed (vTPM operations will fail)",
 			"error", err)
 		return
 	}
 	cfg.VTPMService = svc
-	logger.Info("vTPM service initialized", "base_dir", vtpmCfg.BaseDir)
+	logger.Info("vTPM service initialized",
+		"base_dir", vtpmCfg.BaseDir,
+		"ek_ca_wired", vtpmCA != nil)
 }
 
 func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.App, cfg *daemon.Config, requireClientCert bool) {
@@ -693,7 +716,11 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		logger.Info("OVS socket not found, SDN service will not be available", "path", ovsSocketPathWS)
 	}
 
-	computeOrchestrator, computeErr := newComputeOrchestrator(logger, App, daemonConfig.OVSSocketPath)
+	// vTPM service must exist before compute so the QEMU orchestrator can be
+	// wired with the profile-aware generator. Idempotent — the call later in
+	// this function no-ops when already set.
+	initVTPMServiceOnConfig(logger, App, daemonConfig)
+	computeOrchestrator, computeErr := newComputeOrchestrator(logger, App, daemonConfig.OVSSocketPath, daemonConfig.VTPMService)
 	if computeErr != nil {
 		logger.Info("Compute orchestrator not available (container operations will fail)",
 			"reason", computeErr.Error())
@@ -1413,7 +1440,7 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 		logger.Info("OVS socket not found, SDN service will not be available", "path", ovsSocketPath)
 	}
 
-	computeOrchestrator, computeErr := newComputeOrchestrator(logger, App, config.OVSSocketPath)
+	computeOrchestrator, computeErr := newComputeOrchestrator(logger, App, config.OVSSocketPath, config.VTPMService)
 	if computeErr != nil {
 		logger.Info("Compute orchestrator not available (container operations will fail)",
 			"reason", computeErr.Error())

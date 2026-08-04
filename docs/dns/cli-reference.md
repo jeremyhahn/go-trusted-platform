@@ -1690,7 +1690,7 @@ dig @localhost -p 8053 +dnssec example.com A
 | [DANE/TLSA](dane.md) | Certificate pinning guide |
 | [Dynamic DNS](dynamic-dns.md) | RFC 2136 dynamic updates with attestation |
 | [DoT/DoH](dot-doh.md) | DNS over TLS/HTTPS (planned) |
-| [Zone Transfer](zone-transfer.md) | AXFR/IXFR zone transfer (planned) |
+| [Zone Transfer](zone-transfer.md) | Outbound AXFR zone transfer (primary; TSIG) |
 | [Configuration](configuration.md) | Configuration reference |
 | [Operations](operations.md) | Monitoring and maintenance |
 | [API Reference](api-reference.md) | REST and gRPC APIs |

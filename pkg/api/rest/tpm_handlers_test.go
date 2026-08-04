@@ -17,6 +17,9 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -1474,16 +1477,40 @@ func TestTPMHandleQuote(t *testing.T) {
 // =============================================================================
 
 func TestTPMHandleVerifyQuote(t *testing.T) {
-	t.Run("returns not implemented", func(t *testing.T) {
+	t.Run("rejects missing quote", func(t *testing.T) {
 		tpm := newMockTPMService()
 		_, router := setupTPMTestHandler(tpm)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/verify-quote", nil)
+		body, _ := json.Marshal(TPMVerifyQuoteRequest{Signature: base64.StdEncoding.EncodeToString([]byte("s"))})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/verify-quote", bytes.NewReader(body))
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		resp := w.Result()
-		assert.Equal(t, http.StatusNotImplemented, resp.StatusCode)
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+	})
+
+	t.Run("returns verified=false for a bad signature", func(t *testing.T) {
+		tpm := newMockTPMService()
+		_, router := setupTPMTestHandler(tpm)
+
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		assert.NoError(t, err)
+		der, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+		assert.NoError(t, err)
+
+		body, _ := json.Marshal(TPMVerifyQuoteRequest{
+			Quote:     base64.StdEncoding.EncodeToString([]byte("not-a-real-attest")),
+			Signature: base64.StdEncoding.EncodeToString([]byte("garbage")),
+			AKPublic:  base64.StdEncoding.EncodeToString(der),
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/verify-quote", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+		var out TPMVerifyQuoteResponse
+		assert.NoError(t, json.NewDecoder(w.Result().Body).Decode(&out))
+		assert.False(t, out.Verified)
 	})
 
 	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {

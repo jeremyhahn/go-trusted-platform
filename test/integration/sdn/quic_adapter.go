@@ -28,6 +28,7 @@ import (
 
 	"github.com/jeremyhahn/go-codec"
 	"github.com/jeremyhahn/go-codec/pkg/factory"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/qlog"
@@ -196,81 +197,7 @@ type quicSDNResponse struct {
 
 // Bridge wire types
 
-type sdnCreateBridgeRequest struct {
-	Name string `codec:"name"`
-}
-
-type sdnCreateBridgeResponse struct {
-	Name      string `codec:"name"`
-	UUID      string `codec:"uuid"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-type sdnDeleteBridgeRequest struct {
-	Name string `codec:"name"`
-}
-
-type sdnDeleteBridgeResponse struct {
-	Name      string `codec:"name"`
-	Deleted   bool   `codec:"deleted"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-type sdnGetBridgeRequest struct {
-	Name string `codec:"name"`
-}
-
-type sdnBridge struct {
-	UUID          string            `codec:"uuid"`
-	Name          string            `codec:"name"`
-	DatapathType  string            `codec:"datapath_type"`
-	FailMode      string            `codec:"fail_mode"`
-	Ports         []string          `codec:"ports"`
-	FlowProtocols []string          `codec:"flow_protocols"`
-	STP           bool              `codec:"stp"`
-	RSTP          bool              `codec:"rstp"`
-	McastSnooping bool              `codec:"mcast_snooping"`
-	ExternalIDs   map[string]string `codec:"external_ids"`
-	OtherConfig   map[string]string `codec:"other_config"`
-	Status        map[string]string `codec:"status"`
-}
-
-type sdnGetBridgeResponse struct {
-	Bridge    *sdnBridge `codec:"bridge"`
-	Timestamp int64      `codec:"timestamp"`
-}
-
-type sdnListBridgesResponse struct {
-	Bridges   []*sdnBridge `codec:"bridges"`
-	Total     int          `codec:"total"`
-	Timestamp int64        `codec:"timestamp"`
-}
-
 // Port wire types
-
-type sdnCreatePortRequest struct {
-	BridgeName string `codec:"bridge_name"`
-	PortName   string `codec:"port_name"`
-}
-
-type sdnCreatePortResponse struct {
-	BridgeName string `codec:"bridge_name"`
-	PortName   string `codec:"port_name"`
-	UUID       string `codec:"uuid"`
-	Timestamp  int64  `codec:"timestamp"`
-}
-
-type sdnDeletePortRequest struct {
-	BridgeName string `codec:"bridge_name"`
-	PortName   string `codec:"port_name"`
-}
-
-type sdnDeletePortResponse struct {
-	BridgeName string `codec:"bridge_name"`
-	PortName   string `codec:"port_name"`
-	Deleted    bool   `codec:"deleted"`
-	Timestamp  int64  `codec:"timestamp"`
-}
 
 type sdnGetPortStateRequest struct {
 	PortName string `codec:"port_name"`
@@ -282,47 +209,8 @@ type sdnGetPortStateResponse struct {
 	Timestamp int64  `codec:"timestamp"`
 }
 
-type sdnSetPortStateRequest struct {
-	PortName string `codec:"port_name"`
-	State    string `codec:"state"`
-}
-
-type sdnSetPortStateResponse struct {
-	PortName  string `codec:"port_name"`
-	State     string `codec:"state"`
-	Success   bool   `codec:"success"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-type sdnPort struct {
-	UUID        string            `codec:"uuid"`
-	Name        string            `codec:"name"`
-	Interfaces  []string          `codec:"interfaces"`
-	Tag         int64             `codec:"tag"`
-	Trunks      []int64           `codec:"trunks"`
-	VLANMode    string            `codec:"vlan_mode"`
-	MAC         string            `codec:"mac"`
-	ExternalIDs map[string]string `codec:"external_ids"`
-	OtherConfig map[string]string `codec:"other_config"`
-}
-
-type sdnGetPortRequest struct {
-	PortName string `codec:"port_name"`
-}
-
-type sdnGetPortResponse struct {
-	Port      *sdnPort `codec:"port"`
-	Timestamp int64    `codec:"timestamp"`
-}
-
 type sdnListPortsRequest struct {
 	BridgeName string `codec:"bridge_name"`
-}
-
-type sdnListPortsResponse struct {
-	Ports     []*sdnPort `codec:"ports"`
-	Total     int        `codec:"total"`
-	Timestamp int64      `codec:"timestamp"`
 }
 
 // VLAN wire types
@@ -350,57 +238,6 @@ type sdnGetVLANResponse struct {
 }
 
 // Flow wire types
-
-type sdnAddFlowRequest struct {
-	BridgeName  string `codec:"bridge_name"`
-	Table       int    `codec:"table"`
-	Priority    int    `codec:"priority"`
-	Match       string `codec:"match"`
-	Actions     string `codec:"actions"`
-	Cookie      string `codec:"cookie"`
-	IdleTimeout int    `codec:"idle_timeout"`
-	HardTimeout int    `codec:"hard_timeout"`
-}
-
-type sdnAddFlowResponse struct {
-	BridgeName string `codec:"bridge_name"`
-	Success    bool   `codec:"success"`
-	Timestamp  int64  `codec:"timestamp"`
-}
-
-type sdnDeleteFlowRequest struct {
-	BridgeName string `codec:"bridge_name"`
-	Match      string `codec:"match"`
-}
-
-type sdnDeleteFlowResponse struct {
-	BridgeName string `codec:"bridge_name"`
-	Success    bool   `codec:"success"`
-	Timestamp  int64  `codec:"timestamp"`
-}
-
-type sdnListFlowsRequest struct {
-	BridgeName string `codec:"bridge_name"`
-}
-
-type sdnFlow struct {
-	Table       int    `codec:"table"`
-	Priority    int    `codec:"priority"`
-	Match       string `codec:"match"`
-	Actions     string `codec:"actions"`
-	Cookie      string `codec:"cookie"`
-	Duration    int    `codec:"duration"`
-	IdleAge     int    `codec:"idle_age"`
-	HardAge     int    `codec:"hard_age"`
-	PacketCount int64  `codec:"packet_count"`
-	ByteCount   int64  `codec:"byte_count"`
-}
-
-type sdnListFlowsResponse struct {
-	Flows     []*sdnFlow `codec:"flows"`
-	Total     int        `codec:"total"`
-	Timestamp int64      `codec:"timestamp"`
-}
 
 // Policy wire types — must match server-side SDN handler structs in
 // pkg/api/quic/sdn_handlers.go exactly.
@@ -879,8 +716,8 @@ func sdnOpcodeToString(opcode byte) string {
 
 // BridgeCreate creates a new bridge via QUIC.
 func (q *QUICAdapter) BridgeCreate(ctx context.Context, opts BridgeCreateOptions) (*BridgeCreateResult, error) {
-	req := &sdnCreateBridgeRequest{
-		Name: opts.Name,
+	req := &platformv1.CreateBridgeRequest{
+		Config: &platformv1.BridgeConfig{Name: opts.Name},
 	}
 
 	resp, err := q.sendRequest(ctx, OpQUICSDNBridgeCreate, req)
@@ -888,35 +725,36 @@ func (q *QUICAdapter) BridgeCreate(ctx context.Context, opts BridgeCreateOptions
 		return nil, err
 	}
 
-	var wireResp sdnCreateBridgeResponse
+	var wireResp platformv1.CreateBridgeResponse
 	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
 		return nil, ErrQUICSDNDecodeFailed{Operation: "BridgeCreate", Err: err}
 	}
 
-	bridgeID := wireResp.UUID
+	name := wireResp.GetBridge().GetConfig().GetName()
+	bridgeID := wireResp.GetBridge().GetId()
 	if bridgeID == "" {
-		bridgeID = wireResp.Name
+		bridgeID = name
 	}
 
-	// Store MTU for later retrieval (QUIC wire type does not include MTU)
+	// Store MTU for later retrieval (pb wire type does not carry it back)
 	if opts.MTU > 0 {
 		q.bridgeMTUs[bridgeID] = opts.MTU
-		q.bridgeMTUs[wireResp.Name] = opts.MTU
+		q.bridgeMTUs[name] = opts.MTU
 	}
 
 	return &BridgeCreateResult{
 		BridgeID:  bridgeID,
-		Name:      wireResp.Name,
+		Name:      name,
 		Type:      opts.Type,
 		Status:    "active",
-		CreatedAt: time.Unix(wireResp.Timestamp, 0),
+		CreatedAt: time.Now(),
 	}, nil
 }
 
 // BridgeGet retrieves a bridge by ID via QUIC.
 func (q *QUICAdapter) BridgeGet(ctx context.Context, bridgeID string) (*BridgeGetResult, error) {
-	req := &sdnGetBridgeRequest{
-		Name: bridgeID,
+	req := &platformv1.GetBridgeRequest{
+		Id: bridgeID,
 	}
 
 	resp, err := q.sendRequest(ctx, OpQUICSDNBridgeGet, req)
@@ -924,12 +762,13 @@ func (q *QUICAdapter) BridgeGet(ctx context.Context, bridgeID string) (*BridgeGe
 		return nil, err
 	}
 
-	var wireResp sdnGetBridgeResponse
+	var wireResp platformv1.GetBridgeResponse
 	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
 		return nil, ErrQUICSDNDecodeFailed{Operation: "BridgeGet", Err: err}
 	}
 
-	if wireResp.Bridge == nil {
+	b := wireResp.GetBridge()
+	if b == nil {
 		return nil, ErrQUICSDNRequestFailed{
 			Operation: "BridgeGet",
 			Status:    QUICStatusNotFoundSDN,
@@ -937,42 +776,37 @@ func (q *QUICAdapter) BridgeGet(ctx context.Context, bridgeID string) (*BridgeGe
 		}
 	}
 
-	b := wireResp.Bridge
-	ports := make([]PortSummary, 0, len(b.Ports))
-	for _, portName := range b.Ports {
-		ports = append(ports, PortSummary{
-			Name: portName,
-		})
+	name := b.GetConfig().GetName()
+	ports := make([]PortSummary, 0, len(b.GetPorts()))
+	for _, p := range b.GetPorts() {
+		ports = append(ports, PortSummary{Name: p.GetConfig().GetName()})
 	}
 
-	// Retrieve stored MTU (QUIC wire type does not include MTU)
+	// Retrieve stored MTU (pb wire type does not carry it back here)
 	mtu := q.bridgeMTUs[bridgeID]
 	if mtu == 0 {
-		mtu = q.bridgeMTUs[b.Name]
+		mtu = q.bridgeMTUs[name]
 	}
 
 	return &BridgeGetResult{
-		BridgeID:   b.UUID,
-		Name:       b.Name,
-		Type:       b.DatapathType,
-		DatapathID: b.UUID,
+		BridgeID:   b.GetId(),
+		Name:       name,
+		DatapathID: b.GetConfig().GetDatapathId(),
 		Status:     "active",
-		FailMode:   b.FailMode,
-		STP:        b.STP,
-		RSTP:       b.RSTP,
+		STP:        b.GetConfig().GetStpEnabled(),
 		MTU:        mtu,
-		PortCount:  int32(len(b.Ports)),
-		Tags:       b.ExternalIDs,
-		CreatedAt:  time.Unix(wireResp.Timestamp, 0),
-		UpdatedAt:  time.Unix(wireResp.Timestamp, 0),
+		PortCount:  int32(len(b.GetPorts())),
+		Tags:       b.GetConfig().GetLabels(),
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
 		Ports:      ports,
 	}, nil
 }
 
 // BridgeDelete deletes a bridge via QUIC.
 func (q *QUICAdapter) BridgeDelete(ctx context.Context, bridgeID string, opts BridgeDeleteOptions) (*BridgeDeleteResult, error) {
-	req := &sdnDeleteBridgeRequest{
-		Name: bridgeID,
+	req := &platformv1.DeleteBridgeRequest{
+		Id: bridgeID,
 	}
 
 	resp, err := q.sendRequest(ctx, OpQUICSDNBridgeDelete, req)
@@ -980,14 +814,14 @@ func (q *QUICAdapter) BridgeDelete(ctx context.Context, bridgeID string, opts Br
 		return nil, err
 	}
 
-	var wireResp sdnDeleteBridgeResponse
+	var wireResp platformv1.DeleteBridgeResponse
 	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
 		return nil, ErrQUICSDNDecodeFailed{Operation: "BridgeDelete", Err: err}
 	}
 
 	return &BridgeDeleteResult{
 		BridgeID: bridgeID,
-		Deleted:  wireResp.Deleted,
+		Deleted:  wireResp.GetStatus().GetSuccess(),
 	}, nil
 }
 
@@ -998,27 +832,26 @@ func (q *QUICAdapter) BridgeList(ctx context.Context, opts BridgeListOptions) (*
 		return nil, err
 	}
 
-	var wireResp sdnListBridgesResponse
+	var wireResp platformv1.ListBridgesResponse
 	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
 		return nil, ErrQUICSDNDecodeFailed{Operation: "BridgeList", Err: err}
 	}
 
-	bridges := make([]BridgeSummary, 0, len(wireResp.Bridges))
-	for _, b := range wireResp.Bridges {
+	bridges := make([]BridgeSummary, 0, len(wireResp.GetBridges()))
+	for _, b := range wireResp.GetBridges() {
 		bridges = append(bridges, BridgeSummary{
-			BridgeID:   b.UUID,
-			Name:       b.Name,
-			Type:       b.DatapathType,
+			BridgeID:   b.GetId(),
+			Name:       b.GetConfig().GetName(),
 			Status:     "active",
-			PortCount:  int32(len(b.Ports)),
-			DatapathID: b.UUID,
-			CreatedAt:  time.Unix(wireResp.Timestamp, 0),
+			PortCount:  int32(len(b.GetPorts())),
+			DatapathID: b.GetConfig().GetDatapathId(),
+			CreatedAt:  time.Now(),
 		})
 	}
 
 	return &BridgeListResult{
 		Bridges:    bridges,
-		TotalCount: int32(wireResp.Total),
+		TotalCount: int32(len(bridges)),
 	}, nil
 }
 
@@ -1028,9 +861,9 @@ func (q *QUICAdapter) BridgeList(ctx context.Context, opts BridgeListOptions) (*
 
 // PortAdd adds a port to a bridge via QUIC.
 func (q *QUICAdapter) PortAdd(ctx context.Context, opts PortAddOptions) (*PortAddResult, error) {
-	req := &sdnCreatePortRequest{
-		BridgeName: opts.BridgeID,
-		PortName:   opts.Name,
+	req := &platformv1.AddPortRequest{
+		BridgeId: opts.BridgeID,
+		Config:   &platformv1.PortConfig{Name: opts.Name},
 	}
 
 	resp, err := q.sendRequest(ctx, OpQUICSDNPortAdd, req)
@@ -1038,27 +871,28 @@ func (q *QUICAdapter) PortAdd(ctx context.Context, opts PortAddOptions) (*PortAd
 		return nil, err
 	}
 
-	var wireResp sdnCreatePortResponse
+	var wireResp platformv1.AddPortResponse
 	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
 		return nil, ErrQUICSDNDecodeFailed{Operation: "PortAdd", Err: err}
 	}
 
+	port := wireResp.GetPort()
 	return &PortAddResult{
-		BridgeID:  wireResp.BridgeName,
-		PortID:    wireResp.UUID,
-		Name:      wireResp.PortName,
+		BridgeID:  opts.BridgeID,
+		PortID:    port.GetId(),
+		Name:      port.GetConfig().GetName(),
 		Type:      opts.Type,
 		MAC:       opts.MAC,
 		Status:    "active",
-		CreatedAt: time.Unix(wireResp.Timestamp, 0),
+		CreatedAt: time.Now(),
 	}, nil
 }
 
 // PortDelete deletes a port from a bridge via QUIC.
 func (q *QUICAdapter) PortDelete(ctx context.Context, bridgeID, portID string) (*PortDeleteResult, error) {
-	req := &sdnDeletePortRequest{
-		BridgeName: bridgeID,
-		PortName:   portID,
+	req := &platformv1.DeletePortRequest{
+		BridgeId: bridgeID,
+		PortId:   portID,
 	}
 
 	resp, err := q.sendRequest(ctx, OpQUICSDNPortDelete, req)
@@ -1066,7 +900,7 @@ func (q *QUICAdapter) PortDelete(ctx context.Context, bridgeID, portID string) (
 		return nil, err
 	}
 
-	var wireResp sdnDeletePortResponse
+	var wireResp platformv1.DeletePortResponse
 	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
 		return nil, ErrQUICSDNDecodeFailed{Operation: "PortDelete", Err: err}
 	}
@@ -1074,7 +908,7 @@ func (q *QUICAdapter) PortDelete(ctx context.Context, bridgeID, portID string) (
 	return &PortDeleteResult{
 		BridgeID: bridgeID,
 		PortID:   portID,
-		Deleted:  wireResp.Deleted,
+		Deleted:  wireResp.GetStatus().GetSuccess(),
 	}, nil
 }
 
@@ -1104,9 +938,10 @@ func (q *QUICAdapter) PortGetState(ctx context.Context, bridgeID, portID string)
 
 // PortSetState sets the state of a port via QUIC.
 func (q *QUICAdapter) PortSetState(ctx context.Context, bridgeID, portID string, opts PortSetStateOptions) (*PortStateResult, error) {
-	req := &sdnSetPortStateRequest{
-		PortName: portID,
-		State:    opts.AdminState,
+	req := &platformv1.SetPortStateRequest{
+		BridgeId:   bridgeID,
+		PortId:     portID,
+		AdminState: opts.AdminState,
 	}
 
 	resp, err := q.sendRequest(ctx, OpQUICSDNPortSetState, req)
@@ -1114,7 +949,7 @@ func (q *QUICAdapter) PortSetState(ctx context.Context, bridgeID, portID string,
 		return nil, err
 	}
 
-	var wireResp sdnSetPortStateResponse
+	var wireResp platformv1.SetPortStateResponse
 	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
 		return nil, ErrQUICSDNDecodeFailed{Operation: "PortSetState", Err: err}
 	}
@@ -1122,8 +957,8 @@ func (q *QUICAdapter) PortSetState(ctx context.Context, bridgeID, portID string,
 	return &PortStateResult{
 		BridgeID:   bridgeID,
 		PortID:     portID,
-		AdminState: wireResp.State,
-		UpdatedAt:  time.Unix(wireResp.Timestamp, 0),
+		AdminState: opts.AdminState,
+		UpdatedAt:  time.Now(),
 	}, nil
 }
 
@@ -1131,8 +966,9 @@ func (q *QUICAdapter) PortSetState(ctx context.Context, bridgeID, portID string,
 // The QUIC server exposes port information via the GetPort opcode. Statistics
 // are derived from the port metadata returned by the server.
 func (q *QUICAdapter) PortGetStats(ctx context.Context, bridgeID, portID string) (*PortStatsResult, error) {
-	req := &sdnGetPortRequest{
-		PortName: portID,
+	req := &platformv1.GetPortRequest{
+		BridgeId: bridgeID,
+		PortId:   portID,
 	}
 
 	resp, err := q.sendRequest(ctx, OpQUICSDNPortGet, req)
@@ -1140,7 +976,7 @@ func (q *QUICAdapter) PortGetStats(ctx context.Context, bridgeID, portID string)
 		return nil, err
 	}
 
-	var wireResp sdnGetPortResponse
+	var wireResp platformv1.GetPortResponse
 	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
 		return nil, ErrQUICSDNDecodeFailed{Operation: "PortGetStats", Err: err}
 	}
@@ -1148,7 +984,7 @@ func (q *QUICAdapter) PortGetStats(ctx context.Context, bridgeID, portID string)
 	return &PortStatsResult{
 		BridgeID:    bridgeID,
 		PortID:      portID,
-		RetrievedAt: time.Unix(wireResp.Timestamp, 0),
+		RetrievedAt: time.Now(),
 	}, nil
 }
 
@@ -1164,15 +1000,16 @@ func (q *QUICAdapter) FlowAdd(ctx context.Context, opts FlowAddOptions) (*FlowAd
 	// Build actions string from FlowAction list
 	actions := buildActionsString(opts.Actions)
 
-	req := &sdnAddFlowRequest{
-		BridgeName:  opts.BridgeID,
-		Table:       int(opts.Table),
-		Priority:    int(opts.Priority),
-		Match:       match,
-		Actions:     actions,
-		Cookie:      fmt.Sprintf("0x%x", opts.Cookie),
-		IdleTimeout: int(opts.IdleTimeout),
-		HardTimeout: int(opts.HardTimeout),
+	req := &platformv1.AddFlowRequest{
+		Config: &platformv1.FlowConfig{
+			BridgeId:    opts.BridgeID,
+			Table:       platformv1.FlowTable(opts.Table),
+			Priority:    uint32(opts.Priority),
+			Match:       &platformv1.FlowMatch{InPort: match},
+			Actions:     []*platformv1.FlowAction{{Port: actions}},
+			IdleTimeout: uint32(opts.IdleTimeout),
+			HardTimeout: uint32(opts.HardTimeout),
+		},
 	}
 
 	resp, err := q.sendRequest(ctx, OpQUICSDNFlowAdd, req)
@@ -1180,25 +1017,25 @@ func (q *QUICAdapter) FlowAdd(ctx context.Context, opts FlowAddOptions) (*FlowAd
 		return nil, err
 	}
 
-	var wireResp sdnAddFlowResponse
+	var wireResp platformv1.AddFlowResponse
 	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
 		return nil, ErrQUICSDNDecodeFailed{Operation: "FlowAdd", Err: err}
 	}
 
 	return &FlowAddResult{
-		BridgeID:  wireResp.BridgeName,
+		BridgeID:  opts.BridgeID,
 		Table:     opts.Table,
 		Priority:  opts.Priority,
 		Cookie:    opts.Cookie,
-		CreatedAt: time.Unix(wireResp.Timestamp, 0),
+		CreatedAt: time.Now(),
 	}, nil
 }
 
 // FlowDelete deletes a flow from a bridge via QUIC.
 func (q *QUICAdapter) FlowDelete(ctx context.Context, bridgeID, flowID string) (*FlowDeleteResult, error) {
-	req := &sdnDeleteFlowRequest{
-		BridgeName: bridgeID,
-		Match:      flowID,
+	req := &platformv1.DeleteFlowRequest{
+		BridgeId: bridgeID,
+		FlowId:   flowID,
 	}
 
 	resp, err := q.sendRequest(ctx, OpQUICSDNFlowDelete, req)
@@ -1206,7 +1043,7 @@ func (q *QUICAdapter) FlowDelete(ctx context.Context, bridgeID, flowID string) (
 		return nil, err
 	}
 
-	var wireResp sdnDeleteFlowResponse
+	var wireResp platformv1.DeleteFlowResponse
 	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
 		return nil, ErrQUICSDNDecodeFailed{Operation: "FlowDelete", Err: err}
 	}
@@ -1214,14 +1051,14 @@ func (q *QUICAdapter) FlowDelete(ctx context.Context, bridgeID, flowID string) (
 	return &FlowDeleteResult{
 		BridgeID: bridgeID,
 		FlowID:   flowID,
-		Deleted:  wireResp.Success,
+		Deleted:  wireResp.GetStatus().GetSuccess(),
 	}, nil
 }
 
 // FlowList lists flows on a bridge via QUIC.
 func (q *QUICAdapter) FlowList(ctx context.Context, bridgeID string, opts FlowListOptions) (*FlowListResult, error) {
-	req := &sdnListFlowsRequest{
-		BridgeName: bridgeID,
+	req := &platformv1.ListFlowsRequest{
+		BridgeId: bridgeID,
 	}
 
 	resp, err := q.sendRequest(ctx, OpQUICSDNFlowList, req)
@@ -1229,30 +1066,29 @@ func (q *QUICAdapter) FlowList(ctx context.Context, bridgeID string, opts FlowLi
 		return nil, err
 	}
 
-	var wireResp sdnListFlowsResponse
+	var wireResp platformv1.ListFlowsResponse
 	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
 		return nil, ErrQUICSDNDecodeFailed{Operation: "FlowList", Err: err}
 	}
 
-	flows := make([]FlowSummary, 0, len(wireResp.Flows))
-	for _, f := range wireResp.Flows {
+	flows := make([]FlowSummary, 0, len(wireResp.GetFlows()))
+	for _, f := range wireResp.GetFlows() {
+		cfg := f.GetConfig()
 		flows = append(flows, FlowSummary{
-			Table:       int32(f.Table),
-			Priority:    int32(f.Priority),
-			PacketCount: uint64(f.PacketCount),
-			ByteCount:   uint64(f.ByteCount),
-			Duration:    int64(f.Duration),
-			IdleAge:     int64(f.IdleAge),
-			HardAge:     int64(f.HardAge),
+			Table:       int32(cfg.GetTable()),
+			Priority:    int32(cfg.GetPriority()),
+			PacketCount: f.GetStats().GetPacketCount(),
+			ByteCount:   f.GetStats().GetByteCount(),
+			Duration:    int64(f.GetStats().GetDurationSeconds()),
 			Match:       FlowMatch{},
-			Actions:     parseActionsString(f.Actions),
+			Actions:     nil,
 		})
 	}
 
 	return &FlowListResult{
 		BridgeID:   bridgeID,
 		Flows:      flows,
-		TotalCount: int32(wireResp.Total),
+		TotalCount: int32(len(flows)),
 	}, nil
 }
 
@@ -1598,18 +1434,6 @@ func buildActionsString(actions []FlowAction) string {
 		}
 	}
 	return result
-}
-
-// parseActionsString converts an actions string into structured FlowAction list.
-func parseActionsString(actions string) []FlowAction {
-	if actions == "" || actions == "drop" {
-		return []FlowAction{{Type: "drop"}}
-	}
-	if actions == "normal" {
-		return []FlowAction{{Type: "normal"}}
-	}
-	// Return a single action with the raw string as the type for complex cases
-	return []FlowAction{{Type: actions}}
 }
 
 // reconstructTargetsFromMetadata extracts policy targets from metadata map.

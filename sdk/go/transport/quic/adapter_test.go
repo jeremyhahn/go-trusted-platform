@@ -343,10 +343,6 @@ func TestGRPCMethodToOpcodeMap_VTPM(t *testing.T) {
 		method   string
 		expected byte
 	}{
-		{"/platform.v1.VTPMInstanceService/CreateInstance", quicapi.OpVTPMCreate},
-		{"/platform.v1.VTPMInstanceService/DeleteInstance", quicapi.OpVTPMDelete},
-		{"/platform.v1.VTPMInstanceService/StartInstance", quicapi.OpVTPMStart},
-		{"/platform.v1.VTPMInstanceService/StopInstance", quicapi.OpVTPMStop},
 		{"/platform.v1.VTPMService/QuoteVTPM", quicapi.OpVTPMQuote},
 		{"/platform.v1.VTPMService/SealVTPM", quicapi.OpVTPMSeal},
 		{"/platform.v1.VTPMService/UnsealVTPM", quicapi.OpVTPMUnseal},

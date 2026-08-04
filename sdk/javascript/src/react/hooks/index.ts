@@ -45,10 +45,6 @@ export type { UseInvitationResult, UseInvitationListOptions } from './use-invita
 export { useEAB, useEABList } from './use-eab.js';
 export type { UseEABResult, UseEABListOptions } from './use-eab.js';
 
-// vTPM Instance hooks
-export { useVTPMInstance, useVTPMInstanceList } from './use-vtpm-instance.js';
-export type { UseVTPMInstanceResult, UseVTPMInstanceListOptions } from './use-vtpm-instance.js';
-
 // QuicBaaS hooks
 export {
   useQuicBaaSKV,

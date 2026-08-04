@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/google/go-tpm/tpm2"
+	"github.com/google/go-tpm/tpm2/transport"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -83,6 +84,10 @@ type idevIDTestTPM struct {
 	// CSR creation
 	createTCGCSRResult xkmssdk.TCG_CSR_IDEVID
 	createTCGCSRErr    error
+
+	// Raw transport (nil in unit tests; a real/simulated transport is
+	// supplied by integration tests exercising FlushTransientContexts).
+	transport transport.TPM
 }
 
 func newIDevIDTestTPM() *idevIDTestTPM {
@@ -120,6 +125,12 @@ func newIDevIDTestTPM() *idevIDTestTPM {
 		},
 		activateCredResult: []byte("decrypted-secret"),
 	}
+}
+
+// Transport returns nil so FlushTransientContexts exercises its
+// transport-unavailable path without a real TPM connection.
+func (m *idevIDTestTPM) Transport() transport.TPM {
+	return m.transport
 }
 
 func (m *idevIDTestTPM) EKAttributes() (*xkmssdk.KeyAttributes, error) {
@@ -1070,7 +1081,11 @@ func TestIDevIDGRPCService_FlushTransientContexts(t *testing.T) {
 		assert.Equal(t, codes.FailedPrecondition, st.Code())
 	})
 
-	t.Run("returns unimplemented", func(t *testing.T) {
+	t.Run("returns unavailable when transport is nil", func(t *testing.T) {
+		// A configured TPM2 service with no live transport (the unit-test
+		// mock) must surface Unavailable rather than panic. The real
+		// enumerate-and-flush path is covered by integration tests
+		// against swtpm / hardware.
 		svc, _ := createIDevIDTestServiceWithTPM(t)
 
 		resp, err := svc.FlushTransientContexts(ctx, &platformv1.FlushTransientContextsRequest{})
@@ -1079,7 +1094,7 @@ func TestIDevIDGRPCService_FlushTransientContexts(t *testing.T) {
 		require.Error(t, err)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.Unimplemented, st.Code())
+		assert.Equal(t, codes.Unavailable, st.Code())
 	})
 }
 

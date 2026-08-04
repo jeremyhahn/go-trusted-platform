@@ -69,6 +69,12 @@ WITH_GCP_KMS            ?= 0    # Google Cloud KMS
 WITH_AZURE_KV           ?= 0    # Azure Key Vault
 WITH_VAULT              ?= 0    # HashiCorp Vault
 
+# Cloud Compute Providers (individual control). Local compute (QEMU VMs +
+# containers) is always compiled; only the cloud providers are tag-gated.
+WITH_AWS_COMPUTE        ?= 0    # AWS EC2 NitroTPM compute orchestrator
+WITH_GCP_COMPUTE        ?= 0    # Google Compute Engine (Shielded/Confidential VM) orchestrator
+WITH_AZURE_COMPUTE      ?= 0    # Azure Trusted Launch VM orchestrator
+
 # -----------------------------------------------------------------------------
 # go-objstore Build Variables
 # Object storage backend selection
@@ -107,14 +113,17 @@ WITH_CODEC_PROTOBUF     ?= 0    # Protocol Buffers codec
 ifeq ($(strip $(WITH_AWS)),1)
     WITH_AWS_KMS        := 1
     WITH_OBJSTORE_S3    := 1
+    WITH_AWS_COMPUTE    := 1
 endif
 ifeq ($(strip $(WITH_GCP)),1)
     WITH_GCP_KMS        := 1
     WITH_OBJSTORE_GCS   := 1
+    WITH_GCP_COMPUTE    := 1
 endif
 ifeq ($(strip $(WITH_AZURE)),1)
     WITH_AZURE_KV       := 1
     WITH_OBJSTORE_AZURE := 1
+    WITH_AZURE_COMPUTE  := 1
 endif
 
 # =============================================================================
@@ -214,6 +223,17 @@ endif
 # Always include objstore base tag when any backend is enabled
 ifneq ($(strip $(WITH_OBJSTORE_LOCAL)$(WITH_OBJSTORE_S3)$(WITH_OBJSTORE_MINIO)$(WITH_OBJSTORE_GCS)$(WITH_OBJSTORE_AZURE)),00000)
     BUILD_TAGS += objstore
+endif
+
+# cloud compute provider tags (local compute is always compiled)
+ifeq ($(strip $(WITH_AWS_COMPUTE)),1)
+    BUILD_TAGS += awscompute
+endif
+ifeq ($(strip $(WITH_GCP_COMPUTE)),1)
+    BUILD_TAGS += gcpcompute
+endif
+ifeq ($(strip $(WITH_AZURE_COMPUTE)),1)
+    BUILD_TAGS += azurecompute
 endif
 
 # go-trusted-platform tags
@@ -1212,6 +1232,40 @@ integration-test-luks:
 integration-test-fido2:
 	@echo "Running FIDO2 multi-protocol integration tests..."
 	./build/docker/devcontainer/run-integration-tests.sh fido2
+
+## test-cloud-compute-aws: Run AWS EC2 NitroTPM live cloud tests (opt-in, real AWS)
+## Requires AWS credentials in the environment (COMPUTE_AWS_REGION, COMPUTE_AWS_AMI,
+## COMPUTE_AWS_INSTANCE_TYPE and standard AWS_* credentials). Mirrors go-objstore's
+## cloud_integration,awss3 precedent. This test launches real EC2 instances and
+## incurs cost; it is never run by the default suite.
+.PHONY: test-cloud-compute-aws
+test-cloud-compute-aws:
+	@echo "$(CYAN)→ Running AWS NitroTPM compute cloud tests (real AWS, may incur cost)$(RESET)"
+	COMPUTE_AWS_LIVE=1 $(GOBIN)/go test -v -tags 'cloud_integration awscompute' \
+		-count=1 -timeout 20m ./pkg/compute/aws -run TestAWSCompute_RealCloud
+
+## test-cloud-compute-gcp: Run GCP Shielded VM live cloud tests (opt-in, real GCP)
+## Requires GCP application default credentials and COMPUTE_GCP_PROJECT,
+## COMPUTE_GCP_ZONE, COMPUTE_GCP_MACHINE_TYPE, COMPUTE_GCP_IMAGE (optionally
+## COMPUTE_GCP_NETWORK, COMPUTE_GCP_SUBNETWORK, COMPUTE_GCP_CREDENTIALS). This
+## test launches real Compute Engine instances and incurs cost; it is never run
+## by the default suite.
+.PHONY: test-cloud-compute-gcp
+test-cloud-compute-gcp:
+	@echo "$(CYAN)→ Running GCP Shielded VM compute cloud tests (real GCP, may incur cost)$(RESET)"
+	COMPUTE_GCP_LIVE=1 $(GOBIN)/go test -v -tags 'cloud_integration gcpcompute' \
+		-count=1 -timeout 20m ./pkg/compute/gcp -run TestGCPCompute_RealCloud
+
+## test-cloud-compute-azure: Run Azure Trusted Launch live cloud tests (opt-in, real Azure)
+## Requires Azure default credentials and COMPUTE_AZURE_SUBSCRIPTION,
+## COMPUTE_AZURE_RESOURCE_GROUP, COMPUTE_AZURE_LOCATION, COMPUTE_AZURE_VM_SIZE,
+## COMPUTE_AZURE_IMAGE (optionally COMPUTE_AZURE_TENANT). This test launches real
+## Virtual Machines and incurs cost; it is never run by the default suite.
+.PHONY: test-cloud-compute-azure
+test-cloud-compute-azure:
+	@echo "$(CYAN)→ Running Azure Trusted Launch compute cloud tests (real Azure, may incur cost)$(RESET)"
+	COMPUTE_AZURE_LIVE=1 $(GOBIN)/go test -v -tags 'cloud_integration azurecompute' \
+		-count=1 -timeout 25m ./pkg/compute/azure -run TestAzureCompute_RealCloud
 
 ## integration-test-device: Run Device multi-protocol integration tests in devcontainer
 .PHONY: integration-test-device

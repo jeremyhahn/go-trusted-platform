@@ -1,7 +1,12 @@
 /**
  * Virtual TPM (vTPM) Service
  *
- * Provides operations for vTPM bundle management including creation, cloning, and templates.
+ * Provides operations for vTPM bundle management including creation, cloning,
+ * and templates. A bundle IS the per-guest-VM vTPM instance: the former
+ * `/instances/*` surface (a separate VTPMInstanceService) was collapsed into
+ * this bundle surface. Profile binding and profile-filtered listing are
+ * expressed through the bundle create/list options (`deviceProfileId`), not a
+ * distinct endpoint.
  */
 
 import type { ApiClient } from '../client/api-client.js';
@@ -26,19 +31,6 @@ import type {
   GetBundlePathResponse,
   GetTPMSocketPathResponse,
   GetNVRAMPathResponse,
-  // Instance types
-  CreateVTPMInstanceRequest,
-  CreateVTPMInstanceResponse,
-  GetVTPMInstanceResponse,
-  GetVTPMInstanceByProfileResponse,
-  ListVTPMInstancesRequest,
-  ListVTPMInstancesResponse,
-  DeleteVTPMInstanceResponse,
-  StartVTPMInstanceResponse,
-  StopVTPMInstanceResponse,
-  GetVTPMInstanceStatusResponse,
-  GetVTPMInstanceEKCertResponse,
-  GetVTPMInstanceEKFingerprintResponse,
 } from '../types/vtpm.js';
 
 /**
@@ -48,12 +40,13 @@ import type {
  * ```typescript
  * const client = new PlatformClient({ baseUrl: 'https://api.example.com' });
  *
- * // Create a vTPM bundle
+ * // Create a vTPM bundle bound to a device profile
  * const bundle = await client.vtpm.createBundle({
  *   options: {
  *     hostname: 'vm-001',
  *     ekAlgorithm: 'RSA',
  *     secureBootEnabled: true,
+ *     deviceProfileId: '4242',
  *   }
  * });
  *
@@ -78,6 +71,11 @@ export class VTPMService extends BaseService {
 
   // =========================================================================
   // Bundle Operations
+  //
+  // A bundle is the canonical per-guest-VM vTPM (TPM state, OVMF NVRAM,
+  // optional Secure Boot keys, and — when a CA is configured — a CA-issued EK
+  // certificate). Bundle create/list carry the device-profile binding used to
+  // provision and discover a VM's vTPM identity.
   // =========================================================================
 
   /**
@@ -117,7 +115,9 @@ export class VTPMService extends BaseService {
   /**
    * List vTPM bundles
    *
-   * @param request - List request with filters
+   * @param request - List request with filters (mode, labels, pagination, and
+   *                  optional deviceProfileId to return only the bundle bound
+   *                  to a given device profile)
    * @returns List of bundles
    */
   async listBundles(request?: ListBundlesRequest): Promise<ApiResponse<ListBundlesResponse>> {
@@ -129,6 +129,9 @@ export class VTPMService extends BaseService {
       Object.entries(request.options.labels).forEach(([k, v]) => {
         filters[`label_${k}`] = v;
       });
+    }
+    if (request?.options?.deviceProfileId !== undefined) {
+      filters.device_profile_id = request.options.deviceProfileId;
     }
     return this.client.get<ListBundlesResponse>(this.buildUrl('/bundles', {
       limit: request?.options?.limit,
@@ -245,158 +248,6 @@ export class VTPMService extends BaseService {
     return this.client.post<CloneTemplateResponse>(
       this.buildUrl(`/templates/${this.encodePathSegment(request.options.templateId)}/clone`),
       { hostname: request.options.hostname, labels: request.options.labels }
-    );
-  }
-
-  // =========================================================================
-  // Instance Operations (Runtime Management)
-  // =========================================================================
-
-  /**
-   * Create a new vTPM instance
-   *
-   * @param request - Instance creation request
-   * @returns Created instance
-   */
-  async create(request: CreateVTPMInstanceRequest): Promise<ApiResponse<CreateVTPMInstanceResponse>> {
-    return this.client.post<CreateVTPMInstanceResponse>(this.buildUrl('/instances'), request);
-  }
-
-  /**
-   * Get a vTPM instance by ID
-   *
-   * @param id - Instance identifier
-   * @returns Instance information
-   */
-  async get(id: string): Promise<ApiResponse<GetVTPMInstanceResponse>> {
-    return this.client.get<GetVTPMInstanceResponse>(
-      this.buildUrl(`/instances/${this.encodePathSegment(id)}`)
-    );
-  }
-
-  /**
-   * Get a vTPM instance by profile ID
-   *
-   * @param profileId - Profile identifier
-   * @returns Instance information
-   */
-  async getByProfile(profileId: number): Promise<ApiResponse<GetVTPMInstanceByProfileResponse>> {
-    return this.client.get<GetVTPMInstanceByProfileResponse>(
-      this.buildUrl(`/instances/profile/${profileId}`)
-    );
-  }
-
-  /**
-   * List vTPM instances
-   *
-   * @param request - List request with filters
-   * @returns List of instances
-   */
-  async list(request?: ListVTPMInstancesRequest): Promise<ApiResponse<ListVTPMInstancesResponse>> {
-    const filters: Record<string, string | number | boolean | undefined> = {};
-    if (request?.profileId !== undefined) {
-      filters.profileId = request.profileId;
-    }
-    if (request?.isRunning !== undefined) {
-      filters.isRunning = request.isRunning;
-    }
-    if (request?.status !== undefined) {
-      filters.status = request.status;
-    }
-    return this.client.get<ListVTPMInstancesResponse>(this.buildUrl('/instances', {
-      page: request?.page,
-      limit: request?.pageSize,
-      filters,
-    }));
-  }
-
-  /**
-   * Delete a vTPM instance
-   *
-   * @param id - Instance identifier
-   * @param force - Force delete even if running
-   * @returns Deletion result
-   */
-  async delete(id: string, force?: boolean): Promise<ApiResponse<DeleteVTPMInstanceResponse>> {
-    const filters: Record<string, string | number | boolean | undefined> = {};
-    if (force !== undefined) {
-      filters.force = force;
-    }
-    return this.client.delete<DeleteVTPMInstanceResponse>(
-      this.buildUrl(`/instances/${this.encodePathSegment(id)}`, { filters })
-    );
-  }
-
-  /**
-   * Start a vTPM instance
-   *
-   * @param id - Instance identifier
-   * @returns Start result with updated instance
-   */
-  async start(id: string): Promise<ApiResponse<StartVTPMInstanceResponse>> {
-    return this.client.post<StartVTPMInstanceResponse>(
-      this.buildUrl(`/instances/${this.encodePathSegment(id)}/start`),
-      {}
-    );
-  }
-
-  /**
-   * Stop a vTPM instance
-   *
-   * @param id - Instance identifier
-   * @param force - Force stop
-   * @returns Stop result with updated instance
-   */
-  async stop(id: string, force?: boolean): Promise<ApiResponse<StopVTPMInstanceResponse>> {
-    return this.client.post<StopVTPMInstanceResponse>(
-      this.buildUrl(`/instances/${this.encodePathSegment(id)}/stop`),
-      { force }
-    );
-  }
-
-  /**
-   * Get vTPM instance status
-   *
-   * @param id - Instance identifier
-   * @returns Instance status details
-   */
-  async getStatus(id: string): Promise<ApiResponse<GetVTPMInstanceStatusResponse>> {
-    return this.client.get<GetVTPMInstanceStatusResponse>(
-      this.buildUrl(`/instances/${this.encodePathSegment(id)}/status`)
-    );
-  }
-
-  /**
-   * Get vTPM instance EK certificate
-   *
-   * @param id - Instance identifier
-   * @param format - Certificate format (pem or der)
-   * @returns EK certificate
-   */
-  async getEKCert(id: string, format?: 'pem' | 'der'): Promise<ApiResponse<GetVTPMInstanceEKCertResponse>> {
-    const filters: Record<string, string | number | boolean | undefined> = {};
-    if (format !== undefined) {
-      filters.format = format;
-    }
-    return this.client.get<GetVTPMInstanceEKCertResponse>(
-      this.buildUrl(`/instances/${this.encodePathSegment(id)}/ek-cert`, { filters })
-    );
-  }
-
-  /**
-   * Get vTPM instance EK fingerprint
-   *
-   * @param id - Instance identifier
-   * @param algorithm - Hash algorithm for fingerprint
-   * @returns EK fingerprint
-   */
-  async getEKFingerprint(id: string, algorithm?: 'sha256' | 'sha384' | 'sha512'): Promise<ApiResponse<GetVTPMInstanceEKFingerprintResponse>> {
-    const filters: Record<string, string | number | boolean | undefined> = {};
-    if (algorithm !== undefined) {
-      filters.algorithm = algorithm;
-    }
-    return this.client.get<GetVTPMInstanceEKFingerprintResponse>(
-      this.buildUrl(`/instances/${this.encodePathSegment(id)}/ek-fingerprint`, { filters })
     );
   }
 }

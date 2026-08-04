@@ -1899,6 +1899,28 @@ func TestParseListOptions(t *testing.T) {
 
 		assert.Equal(t, 0, opts.Limit)
 	})
+
+	t.Run("parses device_profile_id", func(t *testing.T) {
+		svc := newMockVTPMService()
+		handlers := NewVTPMHandlers(svc, slog.Default())
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/bundles?device_profile_id=4242", nil)
+
+		opts := handlers.parseListOptions(req)
+
+		assert.Equal(t, uint64(4242), opts.DeviceProfileID)
+	})
+
+	t.Run("ignores invalid device_profile_id", func(t *testing.T) {
+		svc := newMockVTPMService()
+		handlers := NewVTPMHandlers(svc, slog.Default())
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/bundles?device_profile_id=not-a-number", nil)
+
+		opts := handlers.parseListOptions(req)
+
+		assert.Equal(t, uint64(0), opts.DeviceProfileID)
+	})
 }
 
 func TestBundleToResponse(t *testing.T) {

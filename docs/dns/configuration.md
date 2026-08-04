@@ -1265,6 +1265,6 @@ Configuration is validated at startup. Common validation errors:
 - [DANE/TLSA](dane.md) - Certificate pinning configuration
 - [Dynamic DNS](dynamic-dns.md) - RFC 2136 dynamic updates with attestation
 - [DoT/DoH](dot-doh.md) - DNS over TLS/HTTPS (planned)
-- [Zone Transfer](zone-transfer.md) - AXFR/IXFR zone transfer (planned)
+- [Zone Transfer](zone-transfer.md) - Outbound AXFR zone transfer (primary; TSIG)
 - [Operations](operations.md) - Monitoring and maintenance
 - [Security](security.md) - Security model and best practices

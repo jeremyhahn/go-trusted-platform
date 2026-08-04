@@ -20,6 +20,7 @@ import (
 	"time"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/spf13/viper"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -1216,21 +1217,32 @@ func TestService_UpdateConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService() error: %v", err)
 	}
-
 	ctx := context.Background()
-	_, err = svc.UpdateConfig(ctx, &platformv1.UpdateConfigRequest{})
 
-	if err == nil {
-		t.Error("UpdateConfig() should return unimplemented error")
+	// A request with no section is a client error.
+	if _, err := svc.UpdateConfig(ctx, &platformv1.UpdateConfigRequest{}); err == nil {
+		t.Fatal("UpdateConfig() should reject a nil section")
+	} else if st, ok := status.FromError(err); !ok || st.Code() != codes.InvalidArgument {
+		t.Fatalf("error code = %v, want InvalidArgument", status.Code(err))
 	}
 
-	st, ok := status.FromError(err)
-	if !ok {
-		t.Fatalf("expected gRPC status error, got %T", err)
+	// An in-memory (non-persisted) section override succeeds and is
+	// visible in the live viper state.
+	resp, err := svc.UpdateConfig(ctx, &platformv1.UpdateConfigRequest{
+		Section: &platformv1.ConfigSection{
+			Section: "daemon",
+			Values:  map[string]string{"socket_group": "trusted"},
+		},
+		Persist: false,
+	})
+	if err != nil {
+		t.Fatalf("UpdateConfig() unexpected error: %v", err)
 	}
-
-	if st.Code() != codes.Unimplemented {
-		t.Errorf("error code = %v, want Unimplemented", st.Code())
+	if resp == nil || resp.GetStatus() == nil || !resp.GetStatus().GetSuccess() {
+		t.Fatalf("UpdateConfig() success response expected, got %+v", resp)
+	}
+	if got := viper.GetString("daemon.socket_group"); got != "trusted" {
+		t.Fatalf("viper daemon.socket_group = %q, want %q", got, "trusted")
 	}
 }
 

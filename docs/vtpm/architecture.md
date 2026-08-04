@@ -12,6 +12,39 @@ The vTPM service provides virtual TPM bundle management for VM provisioning. It 
 4. **Portability** - Export/import bundles between systems
 5. **Integrity** - Checksum verification of bundle contents
 
+## Unified Model: Bundle IS Instance
+
+There is exactly one vTPM concern, expressed at two layers of the same
+package:
+
+| Layer | Type | Responsibility |
+|-------|------|----------------|
+| Primitive | `vtpm.VTPMService` (`pkg/vtpm/service.go`) | Canonical per-guest-VM swtpm storage and lifecycle: TPM state, OVMF NVRAM, Secure Boot keys, EK-cert injection, and the runtime TPM ops (start/stop/quote/seal/unseal/extend/read). A **Bundle** is the unit. |
+| Facade | `vtpm.Generator` (`pkg/vtpm/generator.go`) | A profile-aware view over the same bundles: generate-for-profile, look up by device profile, export the EK certificate, and maintain the profile → bundle index. |
+
+A **bundle** and an **instance** are the same object. Earlier revisions
+shipped a separate `VTPMInstanceService` (proto service, REST `/instances/*`
+router, JS `/instances/*` client, and Go `instance_client.go`) that was never
+wired into the daemon and pointed at endpoints the backend never served. That
+parallel surface was **collapsed into `VTPMService`**:
+
+- The proto `service VTPMInstanceService` and its instance request/response
+  messages were removed. There is now a single generated client.
+- The profile facade is expressed as fields on the bundle surface rather than a
+  second service:
+  - `CreateBundleOptions.device_profile_id` binds a new bundle to a device
+    profile (the profile-binding create path).
+  - `ListBundleOptions.device_profile_id` filters bundles by profile (the
+    profile-filtered list path), alongside the existing `limit`/`offset`
+    pagination.
+  - `Manifest.device_profile_id` records the binding at rest.
+- All protocols (REST, gRPC, QUIC, MCP, Unix) expose the **same** bundle
+  create/list/get plus the runtime TPM ops. The gRPC/Unix server delegates the
+  runtime ops (`StartVTPM`/`StopVTPM`/`IsVTPMRunning`/`QuoteVTPM`/`SealVTPM`/
+  `UnsealVTPM`/`ExtendVTPMPCR`/`ReadVTPMPCR`) to the same `vtpm.VTPMService`
+  the REST/QUIC/MCP handlers use — closing a prior gap where the gRPC server
+  returned `codes.Unimplemented` for those methods.
+
 ## Bundle Structure
 
 ```
@@ -155,6 +188,60 @@ SecureBootCommonName:   "Trusted Platform"
 SecureBootOrganization: "Trusted Platform"
 ```
 
+## Device-Profile Binding: Bundle → Generator → QEMU
+
+The QEMU orchestrator (`pkg/compute/qemu.go`) provisions a VM from a
+`*entities.DeviceProfile`. It reaches the vTPM subsystem **only** through the
+`vtpm.Generator` facade so that every VM boots against a profile-bound,
+CA-issued-EK bundle instead of an anonymous swtpm.
+
+```
+QEMUOrchestrator.Create(ctx, profile)
+     │
+     ├─▶ Generator.GetByProfile(ctx, profile.ID)
+     │        │
+     │        ├─ found ──▶ boot the VM against the prestaged bundle
+     │        │            (SocketPath / NVRAMPath / bundle TPM state dir)
+     │        │
+     │        └─ ErrProfileNotAssociated
+     │                 │
+     │                 └─▶ Generator.GenerateForProfile(ctx, profile, opts)
+     │                          ├─▶ CreateBundle(Mode=PreAssigned,
+     │                          │        DeviceProfileID=profile.ID)
+     │                          ├─▶ (CA configured) issue + inject EK cert
+     │                          └─▶ (Secure Boot) enroll PK/KEK/DB in NVRAM
+     │
+     └─▶ swtpm points at the bundle's tpm/ state dir + swtpm.sock;
+         QEMU attaches the socket + the bundle's OVMF_VARS.fd
+```
+
+A prestaged bundle is produced out-of-band by `platformctl vtpm create` or the
+config-delivery EK-prestaging flow (which also writes the EK serial /
+certificate back onto the device profile via the `ProfileAssigner`), so a VM's
+identity can exist before the VM does.
+
+### No-CA / attestation-disabled behavior
+
+The generator is injected into the orchestrator via the compute `Deps`
+(`pkg/compute/provider.go`) and the local-QEMU factory. Behavior when TPM is
+enabled for the instance:
+
+- **Generator present** — always route through it (`GetByProfile` →
+  `GenerateForProfile`). This yields a profile-bound bundle in every case, and
+  a CA-issued EK certificate whenever the vTPM service was constructed with a
+  CA. This is strictly better than the previous anonymous swtpm.
+- **Generator absent, and the profile requires a hardware-rooted identity** —
+  the orchestrator fails closed with the typed
+  `compute.ErrVTPMIdentityRequired`. A profile is treated as requiring a
+  CA-issued identity when Secure Boot is enabled for the instance, or the
+  profile carries a prestaged `EKCert` / `EKSerial`. The VM is **not** booted
+  with an anonymous swtpm — silently degrading a profile's attestation contract
+  is forbidden.
+- **Generator absent, and the profile does not require an identity** — the
+  orchestrator falls back to a local, identity-less swtpm so dev/test VMs stay
+  bootable, and logs a loud warning that the VM has no CA-issued EK identity.
+  This fallback is explicit and logged, never silent.
+
 ## Export Archive Format
 
 Bundles are exported as gzip-compressed tar archives:
@@ -184,6 +271,7 @@ bundle-{id}.vtpm.tar.gz
   "mode": "pre-assigned",
   "hostname": "vm001.example.com",
   "created_at": "2025-01-15T10:30:00Z",
+  "device_profile_id": 4242,
   "ek_certificate": {
     "subject": "CN=vm001.example.com",
     "issuer": "CN=Trusted Platform CA",
@@ -282,4 +370,3 @@ qemu-system-x86_64 \
 
 - Templates share Secure Boot keys across clones
 - Each clone gets unique EK certificate
-- Consider key rotation for long-lived templates

@@ -47,6 +47,12 @@ type QEMUOrchestrator struct {
 	// sockets for VM attestation.
 	tpmProvider *vtpm.TPMProvider
 
+	// vtpmGenerator is the profile-aware vTPM facade. When set (via
+	// SetVTPMGenerator at factory time) VM TPM provisioning is routed through
+	// it so each VM boots against a profile-bound, CA-issued-EK bundle. Set
+	// once before the orchestrator handles requests.
+	vtpmGenerator vtpm.Generator
+
 	// snapshotOpsFor produces the QMP snapshot operations for an instance.
 	// Overridable seam for tests; defaults to defaultSnapshotOps.
 	snapshotOpsFor func(ctx context.Context, inst *qemuInstance) (vmSnapshotOps, error)
@@ -169,6 +175,100 @@ func (o *QEMUOrchestrator) createSWTPM(ctx context.Context, instanceID, workDir 
 	return tpm, nil
 }
 
+// SetVTPMGenerator injects the profile-aware vTPM facade used to source a VM's
+// swtpm from a profile-bound, CA-issued-EK bundle. It is called once by the
+// compute provider factory before the orchestrator serves any request.
+func (o *QEMUOrchestrator) SetVTPMGenerator(gen vtpm.Generator) {
+	o.vtpmGenerator = gen
+}
+
+// provisionVTPM sources the VM's swtpm through the vTPM Generator facade,
+// returning the swtpm handle, its socket path, and the bundle ID.
+//
+// With a generator wired it resolves an existing profile-bound bundle
+// (prestaged via `platformctl vtpm create` / config-delivery EK prestaging)
+// or mints one for the profile (CA-issued EK when a CA is configured, plus
+// Secure Boot enrollment when requested). Without a generator it fails closed
+// with ErrVTPMIdentityRequired when the profile requires a hardware-rooted
+// identity, and otherwise falls back to a local identity-less swtpm with a
+// loud warning — never a silent downgrade.
+func (o *QEMUOrchestrator) provisionVTPM(ctx context.Context, profile *entities.DeviceProfile, cfg *InstanceConfig) (*swtpm.SWTPM, string, string, error) {
+	if o.vtpmGenerator == nil {
+		if vtpmIdentityRequired(profile, cfg) {
+			return nil, "", "", &SentinelCauseError{
+				Sentinel: ErrVTPMIdentityRequired,
+				Cause:    &MessageError{Msg: fmt.Sprintf("device profile %d (%s)", profile.ID, profile.Name)},
+			}
+		}
+		o.logger.Warnf("No vTPM generator configured; VM for profile %d (%s) will boot with an anonymous swtpm and NO CA-issued EK identity", profile.ID, profile.Name)
+		tpm, err := o.createSWTPM(ctx, profile.Name, cfg.WorkDir)
+		if err != nil {
+			return nil, "", "", &WrappedError{Msg: "failed to create swtpm", Err: err}
+		}
+		return tpm, tpm.SocketPath(), "", nil
+	}
+
+	inst, err := o.vtpmGenerator.GetByProfile(ctx, profile.ID)
+	if err != nil {
+		if _, ok := err.(vtpm.ErrProfileNotAssociated); !ok {
+			return nil, "", "", &WrappedError{Msg: "failed to look up vTPM bundle for profile", Err: err}
+		}
+		inst, err = o.vtpmGenerator.GenerateForProfile(ctx, profile, &vtpm.GenerateOptions{
+			Hostname:          profile.Name,
+			SecureBootEnabled: cfg.SecureBoot,
+		})
+		if err != nil {
+			if _, ok := err.(vtpm.ErrVTPMAlreadyExists); ok {
+				inst, err = o.vtpmGenerator.GetByProfile(ctx, profile.ID)
+			}
+			if err != nil {
+				return nil, "", "", &WrappedError{Msg: "failed to generate vTPM bundle for profile", Err: err}
+			}
+		}
+	}
+
+	tpm, err := o.swtpmForBundle(ctx, inst)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return tpm, inst.SocketPath, inst.ID, nil
+}
+
+// swtpmForBundle opens an swtpm bound to an existing bundle's TPM state dir and
+// socket. The bundle state is already initialized (EK cert injected at bundle
+// creation), so re-initialization is skipped.
+func (o *QEMUOrchestrator) swtpmForBundle(ctx context.Context, inst *vtpm.VTPMInstance) (*swtpm.SWTPM, error) {
+	swtpmConfig := &swtpm.Config{
+		StateDir:   filepath.Join(inst.StoragePath, "tpm"),
+		SocketPath: inst.SocketPath,
+		PCRBanks:   []string{"sha256"},
+		LogLevel:   20,
+		Debug:      o.config.Debug,
+		QEMUMode:   true,
+	}
+	tpm, err := swtpm.NewSWTPM(swtpmConfig, o.logger)
+	if err != nil {
+		return nil, &WrappedError{Msg: "failed to open swtpm for bundle", Err: err}
+	}
+	if !tpm.IsInitialized() {
+		o.logger.Infof("Initializing TPM state for bundle %s", inst.ID)
+		if err := tpm.Initialize(ctx); err != nil {
+			return nil, &WrappedError{Msg: "failed to initialize swtpm for bundle", Err: err}
+		}
+	}
+	return tpm, nil
+}
+
+// vtpmIdentityRequired reports whether the profile requires a CA-issued,
+// hardware-rooted vTPM identity: Secure Boot enabled, or a prestaged EK
+// certificate / EK serial.
+func vtpmIdentityRequired(profile *entities.DeviceProfile, cfg *InstanceConfig) bool {
+	if cfg != nil && cfg.SecureBoot {
+		return true
+	}
+	return profile != nil && (profile.EKCert != "" || profile.EKSerial != "")
+}
+
 // Create creates a new VM instance from a device profile
 func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceProfile) (*Instance, error) {
 	if profile == nil {
@@ -218,18 +318,21 @@ func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceP
 		return nil, &WrappedError{Msg: "failed to create instance work directory", Err: err}
 	}
 
-	// Create and initialize swtpm if TPM is enabled
+	// Source the swtpm through the vTPM Generator facade so the VM boots
+	// against a profile-bound, CA-issued-EK bundle rather than an anonymous
+	// swtpm. Only WHERE the swtpm comes from changes here; the socket/NVRAM
+	// plumbing that boots the VM below is unchanged.
 	var tpm *swtpm.SWTPM
 	var tpmSocket string
+	var bundleID string
 	if instanceConfig.TPMEnabled {
 		var err error
-		tpm, err = o.createSWTPM(ctx, instanceID, instanceConfig.WorkDir)
+		tpm, tpmSocket, bundleID, err = o.provisionVTPM(ctx, profile, instanceConfig)
 		if err != nil {
 			o.lifecycle.SetState(instanceID, StateError)
-			return nil, &WrappedError{Msg: "failed to create swtpm", Err: err}
+			return nil, err
 		}
-		tpmSocket = tpm.SocketPath()
-		o.logger.Infof("Created swtpm for instance %s (socket: %s)", instanceID, tpmSocket)
+		o.logger.Infof("Provisioned vTPM for instance %s (socket: %s, bundle: %s)", instanceID, tpmSocket, bundleID)
 	}
 
 	// Create QEMU configuration
@@ -285,6 +388,9 @@ func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceP
 	// Store TPM socket path in metadata
 	if tpmSocket != "" {
 		instance.Metadata["tpm_socket"] = tpmSocket
+	}
+	if bundleID != "" {
+		instance.Metadata["vtpm_bundle_id"] = bundleID
 	}
 
 	// Store instance

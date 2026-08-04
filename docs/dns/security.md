@@ -620,10 +620,11 @@ dns:
     require-tsig: true
     allowed-update-types: [A, AAAA, TXT, PTR]
 
-  # Zone transfer restrictions
-  zone-transfer:
+  # Zone transfer (outbound AXFR, platform as primary — see zone-transfer.md).
+  # Off by default; served only to TSIG-authenticated secondaries.
+  transfer:
     enabled: false
-    allowed-hosts: []
+    tsig-keys: []
 
 dnssec:
   enabled: true

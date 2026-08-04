@@ -522,7 +522,7 @@ func TestPlatformServiceProvider_VTPMList_ServiceError(t *testing.T) {
 	}
 }
 
-func TestPlatformServiceProvider_VTPMStart_Success_ReturnsNotImplemented(t *testing.T) {
+func TestPlatformServiceProvider_VTPMStart_DelegatesServiceError(t *testing.T) {
 	ctx := context.Background()
 	mockSvc := newSPExtMockVTPMService()
 	mockSvc.bundles["test-vtpm"] = &vtpm.Bundle{ID: "test-vtpm"}
@@ -535,7 +535,7 @@ func TestPlatformServiceProvider_VTPMStart_Success_ReturnsNotImplemented(t *test
 	if err == nil {
 		t.Error("expected error for not implemented")
 	}
-	if err.Error() != "vTPM start not yet implemented in service layer" {
+	if err.Error() != "not implemented" {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
@@ -554,7 +554,7 @@ func TestPlatformServiceProvider_VTPMStart_BundleNotFound(t *testing.T) {
 	}
 }
 
-func TestPlatformServiceProvider_VTPMStop_Success_ReturnsNotImplemented(t *testing.T) {
+func TestPlatformServiceProvider_VTPMStop_DelegatesServiceError(t *testing.T) {
 	ctx := context.Background()
 	mockSvc := newSPExtMockVTPMService()
 	mockSvc.bundles["test-vtpm"] = &vtpm.Bundle{ID: "test-vtpm"}
@@ -567,7 +567,7 @@ func TestPlatformServiceProvider_VTPMStop_Success_ReturnsNotImplemented(t *testi
 	if err == nil {
 		t.Error("expected error for not implemented")
 	}
-	if err.Error() != "vTPM stop not yet implemented in service layer" {
+	if err.Error() != "not implemented" {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
@@ -586,7 +586,7 @@ func TestPlatformServiceProvider_VTPMStop_BundleNotFound(t *testing.T) {
 	}
 }
 
-func TestPlatformServiceProvider_VTPMQuote_Success_ReturnsNotImplemented(t *testing.T) {
+func TestPlatformServiceProvider_VTPMQuote_DelegatesServiceError(t *testing.T) {
 	ctx := context.Background()
 	mockSvc := newSPExtMockVTPMService()
 	mockSvc.bundles["test-vtpm"] = &vtpm.Bundle{ID: "test-vtpm"}
@@ -599,7 +599,7 @@ func TestPlatformServiceProvider_VTPMQuote_Success_ReturnsNotImplemented(t *test
 	if err == nil {
 		t.Error("expected error for not implemented")
 	}
-	if err.Error() != "vTPM quote not yet implemented in service layer" {
+	if err.Error() != "not implemented" {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
@@ -618,7 +618,7 @@ func TestPlatformServiceProvider_VTPMQuote_BundleNotFound(t *testing.T) {
 	}
 }
 
-func TestPlatformServiceProvider_VTPMSeal_Success_ReturnsNotImplemented(t *testing.T) {
+func TestPlatformServiceProvider_VTPMSeal_DelegatesServiceError(t *testing.T) {
 	ctx := context.Background()
 	mockSvc := newSPExtMockVTPMService()
 	mockSvc.bundles["test-vtpm"] = &vtpm.Bundle{ID: "test-vtpm"}
@@ -631,7 +631,7 @@ func TestPlatformServiceProvider_VTPMSeal_Success_ReturnsNotImplemented(t *testi
 	if err == nil {
 		t.Error("expected error for not implemented")
 	}
-	if err.Error() != "vTPM seal not yet implemented in service layer" {
+	if err.Error() != "not implemented" {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
@@ -650,7 +650,7 @@ func TestPlatformServiceProvider_VTPMSeal_BundleNotFound(t *testing.T) {
 	}
 }
 
-func TestPlatformServiceProvider_VTPMUnseal_Success_ReturnsNotImplemented(t *testing.T) {
+func TestPlatformServiceProvider_VTPMUnseal_DelegatesServiceError(t *testing.T) {
 	ctx := context.Background()
 	mockSvc := newSPExtMockVTPMService()
 	mockSvc.bundles["test-vtpm"] = &vtpm.Bundle{ID: "test-vtpm"}
@@ -663,7 +663,7 @@ func TestPlatformServiceProvider_VTPMUnseal_Success_ReturnsNotImplemented(t *tes
 	if err == nil {
 		t.Error("expected error for not implemented")
 	}
-	if err.Error() != "vTPM unseal not yet implemented in service layer" {
+	if err.Error() != "not implemented" {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
@@ -682,7 +682,7 @@ func TestPlatformServiceProvider_VTPMUnseal_BundleNotFound(t *testing.T) {
 	}
 }
 
-func TestPlatformServiceProvider_VTPMExtendPCR_Success_ReturnsNotImplemented(t *testing.T) {
+func TestPlatformServiceProvider_VTPMExtendPCR_DelegatesServiceError(t *testing.T) {
 	ctx := context.Background()
 	mockSvc := newSPExtMockVTPMService()
 	mockSvc.bundles["test-vtpm"] = &vtpm.Bundle{ID: "test-vtpm"}
@@ -695,7 +695,7 @@ func TestPlatformServiceProvider_VTPMExtendPCR_Success_ReturnsNotImplemented(t *
 	if err == nil {
 		t.Error("expected error for not implemented")
 	}
-	if err.Error() != "vTPM extend PCR not yet implemented in service layer" {
+	if err.Error() != "not implemented" {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
@@ -714,7 +714,7 @@ func TestPlatformServiceProvider_VTPMExtendPCR_BundleNotFound(t *testing.T) {
 	}
 }
 
-func TestPlatformServiceProvider_VTPMReadPCR_Success_ReturnsNotImplemented(t *testing.T) {
+func TestPlatformServiceProvider_VTPMReadPCR_DelegatesServiceError(t *testing.T) {
 	ctx := context.Background()
 	mockSvc := newSPExtMockVTPMService()
 	mockSvc.bundles["test-vtpm"] = &vtpm.Bundle{ID: "test-vtpm"}
@@ -727,7 +727,7 @@ func TestPlatformServiceProvider_VTPMReadPCR_Success_ReturnsNotImplemented(t *te
 	if err == nil {
 		t.Error("expected error for not implemented")
 	}
-	if err.Error() != "vTPM read PCR not yet implemented in service layer" {
+	if err.Error() != "not implemented" {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }

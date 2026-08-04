@@ -416,10 +416,6 @@ func TestGRPCMethodToMCPToolMap_VTPM(t *testing.T) {
 		method   string
 		expected string
 	}{
-		{"/platform.v1.VTPMInstanceService/CreateInstance", "vtpm_create"},
-		{"/platform.v1.VTPMInstanceService/DeleteInstance", "vtpm_delete"},
-		{"/platform.v1.VTPMInstanceService/StartInstance", "vtpm_start"},
-		{"/platform.v1.VTPMInstanceService/StopInstance", "vtpm_stop"},
 		{"/platform.v1.VTPMService/QuoteVTPM", "vtpm_quote"},
 		{"/platform.v1.VTPMService/SealVTPM", "vtpm_seal"},
 		{"/platform.v1.VTPMService/UnsealVTPM", "vtpm_unseal"},

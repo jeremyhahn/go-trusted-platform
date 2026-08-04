@@ -26,7 +26,6 @@ import (
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -124,20 +123,6 @@ func TestCoverageFinalUncoveredErrors(t *testing.T) {
 		{"ErrPXERetryFailed", ErrPXERetryFailed{DeviceID: "d1", Cause: sentinel}, "PXE device retry failed"},
 		{"ErrPXEServiceStartFailed", ErrPXEServiceStartFailed{Cause: sentinel}, "PXE service failed to start"},
 		{"ErrPXEServiceStopFailed", ErrPXEServiceStopFailed{Cause: sentinel}, "PXE service failed to stop"},
-
-		// Tenant errors
-		{"ErrTenantNotFound", ErrTenantNotFound{TenantID: "t1"}, "tenant not found: t1"},
-		{"ErrTenantNotFoundByName", ErrTenantNotFoundByName{Name: "acme"}, "tenant not found with name: acme"},
-		{"ErrTenantCreateFailed", ErrTenantCreateFailed{Name: "acme", Cause: sentinel}, "tenant creation failed for acme"},
-		{"ErrTenantUpdateFailed", ErrTenantUpdateFailed{TenantID: "t1", Cause: sentinel}, "tenant update failed for t1"},
-		{"ErrTenantDeleteFailed", ErrTenantDeleteFailed{TenantID: "t1", Cause: sentinel}, "tenant deletion failed for t1"},
-		{"ErrTenantSuspendFailed", ErrTenantSuspendFailed{TenantID: "t1", Cause: sentinel}, "tenant suspension failed for t1"},
-		{"ErrTenantResumeFailed", ErrTenantResumeFailed{TenantID: "t1", Cause: sentinel}, "tenant resume failed for t1"},
-		{"ErrTenantQuotaUpdateFailed", ErrTenantQuotaUpdateFailed{TenantID: "t1", Cause: sentinel}, "tenant quota update failed for t1"},
-		{"ErrTenantBridgeNotFound", ErrTenantBridgeNotFound{TenantID: "t1"}, "tenant bridge not found for: t1"},
-		{"ErrTenantSyncFailed", ErrTenantSyncFailed{Cause: sentinel}, "tenant sync failed"},
-		{"ErrTenantDEKRotationFailed", ErrTenantDEKRotationFailed{TenantID: "t1", Cause: sentinel}, "tenant DEK rotation failed for t1"},
-		{"ErrTenantDEKNotFound", ErrTenantDEKNotFound{TenantID: "t1"}, "tenant DEK not found for: t1"},
 	}
 
 	for _, tc := range tests {
@@ -178,14 +163,6 @@ func TestCoverageFinalUnwrapMethods(t *testing.T) {
 		{"ErrPXERetryFailed", ErrPXERetryFailed{DeviceID: "d", Cause: sentinel}, sentinel},
 		{"ErrPXEServiceStartFailed", ErrPXEServiceStartFailed{Cause: sentinel}, sentinel},
 		{"ErrPXEServiceStopFailed", ErrPXEServiceStopFailed{Cause: sentinel}, sentinel},
-		{"ErrTenantCreateFailed", ErrTenantCreateFailed{Name: "n", Cause: sentinel}, sentinel},
-		{"ErrTenantUpdateFailed", ErrTenantUpdateFailed{TenantID: "t", Cause: sentinel}, sentinel},
-		{"ErrTenantDeleteFailed", ErrTenantDeleteFailed{TenantID: "t", Cause: sentinel}, sentinel},
-		{"ErrTenantSuspendFailed", ErrTenantSuspendFailed{TenantID: "t", Cause: sentinel}, sentinel},
-		{"ErrTenantResumeFailed", ErrTenantResumeFailed{TenantID: "t", Cause: sentinel}, sentinel},
-		{"ErrTenantQuotaUpdateFailed", ErrTenantQuotaUpdateFailed{TenantID: "t", Cause: sentinel}, sentinel},
-		{"ErrTenantSyncFailed", ErrTenantSyncFailed{Cause: sentinel}, sentinel},
-		{"ErrTenantDEKRotationFailed", ErrTenantDEKRotationFailed{TenantID: "t", Cause: sentinel}, sentinel},
 	}
 
 	for _, tc := range unwrapCases {
@@ -549,114 +526,6 @@ func TestCoverageFinalConvertKeyMetadataToQUIC(t *testing.T) {
 // =============================================================================
 // SDN Conversion Helpers
 // =============================================================================
-
-func TestCoverageFinalConvertPbBridgeToSDNBridge(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil", func(t *testing.T) {
-		t.Parallel()
-		if convertPbBridgeToSDNBridge(nil) != nil {
-			t.Error("expected nil for nil input")
-		}
-	})
-
-	t.Run("with_config", func(t *testing.T) {
-		t.Parallel()
-		b := &platformv1.Bridge{
-			Id: "br-uuid-1",
-			Config: &platformv1.BridgeConfig{
-				Name:       "br0",
-				StpEnabled: true,
-				Labels:     map[string]string{"role": "trunk"},
-				Options:    map[string]string{"stp_priority": "32768"},
-			},
-		}
-		result := convertPbBridgeToSDNBridge(b)
-		if result.UUID != "br-uuid-1" {
-			t.Errorf("UUID = %q", result.UUID)
-		}
-		if result.Name != "br0" {
-			t.Errorf("Name = %q", result.Name)
-		}
-		if !result.STP {
-			t.Error("STP should be true")
-		}
-	})
-
-	t.Run("no_config", func(t *testing.T) {
-		t.Parallel()
-		b := &platformv1.Bridge{Id: "br-uuid-2"}
-		result := convertPbBridgeToSDNBridge(b)
-		if result.Name != "" {
-			t.Errorf("Name should be empty, got %q", result.Name)
-		}
-	})
-}
-
-func TestCoverageFinalConvertPbPortToSDNPort(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil", func(t *testing.T) {
-		t.Parallel()
-		if convertPbPortToSDNPort(nil) != nil {
-			t.Error("expected nil for nil input")
-		}
-	})
-
-	t.Run("with_config", func(t *testing.T) {
-		t.Parallel()
-		p := &platformv1.Port{
-			Id: "port-uuid",
-			Config: &platformv1.PortConfig{
-				Name:   "eth0",
-				Vlan:   100,
-				Labels: map[string]string{"type": "access"},
-			},
-		}
-		result := convertPbPortToSDNPort(p)
-		if result.UUID != "port-uuid" {
-			t.Errorf("UUID = %q", result.UUID)
-		}
-		if result.Name != "eth0" {
-			t.Errorf("Name = %q", result.Name)
-		}
-		if result.Tag != 100 {
-			t.Errorf("Tag = %d, want 100", result.Tag)
-		}
-	})
-}
-
-func TestCoverageFinalConvertPbFlowToSDNFlow(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil", func(t *testing.T) {
-		t.Parallel()
-		if convertPbFlowToSDNFlow(nil) != nil {
-			t.Error("expected nil for nil input")
-		}
-	})
-
-	t.Run("with_config", func(t *testing.T) {
-		t.Parallel()
-		f := &platformv1.Flow{
-			Id: "flow-cookie-1",
-			Config: &platformv1.FlowConfig{
-				Table:    2,
-				Priority: 100,
-			},
-		}
-		result := convertPbFlowToSDNFlow(f)
-		if result.Cookie != "flow-cookie-1" {
-			t.Errorf("Cookie = %q", result.Cookie)
-		}
-		if result.Table != 2 {
-			t.Errorf("Table = %d", result.Table)
-		}
-		if result.Priority != 100 {
-			t.Errorf("Priority = %d", result.Priority)
-		}
-	})
-}
 
 func TestCoverageFinalConvertPbPolicyToSDNPolicy(t *testing.T) {
 	t.Parallel()
@@ -1132,78 +1001,6 @@ func TestCoverageFinalFormatX509CertificateInfo(t *testing.T) {
 		}
 		if result["fingerprint"] == "" {
 			t.Error("fingerprint should not be empty")
-		}
-	})
-}
-
-// =============================================================================
-// Tenant Conversion Helpers
-// =============================================================================
-
-func TestCoverageFinalConvertTenantEntityToResponse(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil", func(t *testing.T) {
-		t.Parallel()
-		if convertTenantEntityToResponse(nil) != nil {
-			t.Error("expected nil for nil input")
-		}
-	})
-
-	t.Run("full_entity", func(t *testing.T) {
-		t.Parallel()
-		now := time.Now()
-		entity := &tenant.TenantEntity{
-			ID:          "t-123",
-			Name:        "acme",
-			DisplayName: "ACME Corp",
-			State:       "active",
-			OVSBridge:   "br-acme",
-			VLANRange:   tenant.VLANRange{Start: 100, End: 199},
-			DEKPath:     "/tenant/t-123/default",
-			Labels:      map[string]string{"env": "prod"},
-			Annotations: map[string]string{"note": "test"},
-			ComputeQuota: tenant.ComputeQuota{
-				MaxVMs:        10,
-				MaxContainers: 50,
-				MaxVCPUs:      32,
-			},
-			NetworkQuota: tenant.NetworkQuota{
-				MaxBridges: 5,
-				MaxPorts:   100,
-			},
-			StorageQuota: tenant.StorageQuota{
-				MaxVolumesGB: 500,
-				MaxSnapshots: 20,
-			},
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
-
-		result := convertTenantEntityToResponse(entity)
-		if result == nil {
-			t.Fatal("expected non-nil result")
-		}
-		if result.ID != "t-123" {
-			t.Errorf("ID = %q", result.ID)
-		}
-		if result.Name != "acme" {
-			t.Errorf("Name = %q", result.Name)
-		}
-		if result.VLANStart != 100 || result.VLANEnd != 199 {
-			t.Errorf("VLANRange = %d-%d", result.VLANStart, result.VLANEnd)
-		}
-		if result.ComputeQuota == nil {
-			t.Fatal("ComputeQuota should not be nil")
-		}
-		if result.ComputeQuota.MaxVMs != 10 {
-			t.Errorf("MaxVMs = %d", result.ComputeQuota.MaxVMs)
-		}
-		if result.NetworkQuota == nil || result.NetworkQuota.MaxBridges != 5 {
-			t.Error("NetworkQuota incorrect")
-		}
-		if result.StorageQuota == nil || result.StorageQuota.MaxVolumesGB != 500 {
-			t.Error("StorageQuota incorrect")
 		}
 	})
 }

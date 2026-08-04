@@ -13,6 +13,13 @@
 
 //go:build integration
 
+// Package iam provides multi-protocol integration test adapters for IAM
+// services. This file implements the IAMCommands interface using the platform
+// binary QUIC protocol. The wire contract is the platform.v1 protobuf
+// request/response messages themselves, exactly like the SDK QUIC transport:
+// the adapter hands the generated pb request struct to quic.EncodePayload (the
+// server's own codec) and decodes the pb response struct, so the daemon's
+// converged pb-delegating handlers see the real SDK wire shape.
 package iam
 
 import (
@@ -21,13 +28,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// QUICAdapterError represents an error from the QUIC adapter
+// QUICAdapterError represents an error from the QUIC adapter.
 type QUICAdapterError struct {
 	Operation string
 	Message   string
@@ -37,7 +45,9 @@ func (e *QUICAdapterError) Error() string {
 	return fmt.Sprintf("QUIC adapter error [%s]: %s", e.Operation, e.Message)
 }
 
-// QUICNotSupportedError represents an operation not supported by QUIC protocol
+// QUICNotSupportedError represents an operation with no QUIC opcode. Role and
+// group update have no PlatformIAMService QUIC opcode (the QUIC surface exposes
+// user update only); the multi-protocol harness treats this as a skip.
 type QUICNotSupportedError struct {
 	Operation string
 }
@@ -46,7 +56,7 @@ func (e *QUICNotSupportedError) Error() string {
 	return fmt.Sprintf("QUIC protocol does not support operation: %s", e.Operation)
 }
 
-// QUICAdapter implements IAMCommands using QUIC binary protocol
+// QUICAdapter implements IAMCommands using the platform binary QUIC protocol.
 type QUICAdapter struct {
 	endpoint   string
 	conn       *quicgo.Conn
@@ -55,7 +65,7 @@ type QUICAdapter struct {
 	token      string
 }
 
-// NewQUICAdapter creates a new QUIC adapter
+// NewQUICAdapter creates a new QUIC adapter.
 func NewQUICAdapter() *QUICAdapter {
 	return &QUICAdapter{
 		endpoint:  GetQUICEndpoint(),
@@ -67,21 +77,17 @@ func NewQUICAdapter() *QUICAdapter {
 	}
 }
 
-// Setup prepares the adapter for testing
+// Setup prepares the adapter for testing.
 func (a *QUICAdapter) Setup(ctx context.Context) error {
 	conn, err := quicgo.DialAddr(ctx, a.endpoint, a.tlsConfig, a.quicConfig)
 	if err != nil {
-		return &QUICAdapterError{
-			Operation: "Setup",
-			Message:   "failed to connect: " + err.Error(),
-		}
+		return &QUICAdapterError{Operation: "Setup", Message: "failed to connect: " + err.Error()}
 	}
-
 	a.conn = conn
 	return nil
 }
 
-// Teardown cleans up after testing
+// Teardown cleans up after testing.
 func (a *QUICAdapter) Teardown(ctx context.Context) error {
 	if a.conn != nil {
 		return a.conn.CloseWithError(0, "teardown")
@@ -89,72 +95,45 @@ func (a *QUICAdapter) Teardown(ctx context.Context) error {
 	return nil
 }
 
-// Name returns the adapter name
-func (a *QUICAdapter) Name() string {
-	return "QUIC"
-}
+// Name returns the adapter name.
+func (a *QUICAdapter) Name() string { return "QUIC" }
 
-// doRequest performs a QUIC binary protocol request and returns the response
-func (a *QUICAdapter) doRequest(ctx context.Context, opcode byte, payload interface{}) ([]byte, error) {
+// doRequest performs one binary QUIC request/response round trip. body is a
+// platform.v1 request message (or nil).
+func (a *QUICAdapter) doRequest(ctx context.Context, opcode byte, body interface{}) ([]byte, error) {
 	stream, err := a.conn.OpenStreamSync(ctx)
 	if err != nil {
-		return nil, &QUICAdapterError{
-			Operation: quic.OpcodeToString(opcode),
-			Message:   "failed to open stream: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: quic.OpcodeToString(opcode), Message: "failed to open stream: " + err.Error()}
 	}
 	defer stream.Close()
 
-	// Encode payload
-	var encodedPayload []byte
-	if payload != nil {
-		encodedPayload, err = quic.EncodePayload(payload)
+	var encoded []byte
+	if body != nil {
+		encoded, err = quic.EncodePayload(body)
 		if err != nil {
-			return nil, &QUICAdapterError{
-				Operation: quic.OpcodeToString(opcode),
-				Message:   "failed to encode payload: " + err.Error(),
-			}
+			return nil, &QUICAdapterError{Operation: quic.OpcodeToString(opcode), Message: "failed to encode payload: " + err.Error()}
 		}
 	}
 
-	// Create and write request
-	req := &quic.Request{
-		Opcode:  opcode,
-		Token:   a.token,
-		Payload: encodedPayload,
-	}
-
+	req := &quic.Request{Opcode: opcode, Token: a.token, Payload: encoded}
 	if err := quic.WriteRequest(stream, req); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: quic.OpcodeToString(opcode),
-			Message:   "failed to write request: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: quic.OpcodeToString(opcode), Message: "failed to write request: " + err.Error()}
 	}
-
-	// Close write side to signal end of request
 	if err := stream.Close(); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: quic.OpcodeToString(opcode),
-			Message:   "failed to close write: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: quic.OpcodeToString(opcode), Message: "failed to close write: " + err.Error()}
 	}
 
-	// Read response
 	resp, err := quic.ReadResponse(stream)
 	if err != nil {
-		return nil, &QUICAdapterError{
-			Operation: quic.OpcodeToString(opcode),
-			Message:   "failed to read response: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: quic.OpcodeToString(opcode), Message: "failed to read response: " + err.Error()}
 	}
-
 	if resp.Status != quic.StatusOK {
-		return nil, &QUICAdapterError{
-			Operation: quic.OpcodeToString(opcode),
-			Message:   fmt.Sprintf("server returned status: %s", quic.StatusToString(resp.Status)),
+		msg := string(resp.Payload)
+		if msg == "" {
+			msg = quic.StatusToString(resp.Status)
 		}
+		return nil, &QUICAdapterError{Operation: quic.OpcodeToString(opcode), Message: "server returned status " + quic.StatusToString(resp.Status) + ": " + msg}
 	}
-
 	return resp.Payload, nil
 }
 
@@ -162,615 +141,445 @@ func (a *QUICAdapter) doRequest(ctx context.Context, opcode byte, payload interf
 // User CRUD Operations
 // =============================================================================
 
-// CreateUser creates a new user
+// CreateUser creates a new user. The pb request carries Roles/Groups the flat
+// struct lacked.
 func (a *QUICAdapter) CreateUser(ctx context.Context, opts CreateUserOptions) (*CreateUserResult, error) {
-	req := daemon.CreateUserRequest{
-		TenantID:   opts.TenantID,
-		Email:      opts.Email,
-		Name:       opts.Name,
-		Enabled:    true,
-		Attributes: opts.Attributes,
-	}
-
-	payload, err := a.doRequest(ctx, quic.OpIAMUserCreate, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp daemon.IAMUserResponse
-	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "CreateUser",
-			Message:   "failed to decode response: " + err.Error(),
-		}
-	}
-
-	return &CreateUserResult{
-		User: convertUserResponse(&resp),
-	}, nil
-}
-
-// GetUser retrieves a user by ID
-func (a *QUICAdapter) GetUser(ctx context.Context, opts GetUserOptions) (*GetUserResult, error) {
-	req := daemon.GetUserRequest{
-		TenantID: opts.TenantID,
-		UserID:   opts.UserID,
-	}
-
-	payload, err := a.doRequest(ctx, quic.OpIAMUserGet, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp daemon.IAMUserResponse
-	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "GetUser",
-			Message:   "failed to decode response: " + err.Error(),
-		}
-	}
-
-	return &GetUserResult{
-		User: convertUserResponse(&resp),
-	}, nil
-}
-
-// UpdateUser updates an existing user
-func (a *QUICAdapter) UpdateUser(ctx context.Context, opts UpdateUserOptions) (*UpdateUserResult, error) {
-	req := daemon.UpdateUserRequest{
-		TenantID:   opts.TenantID,
-		UserID:     opts.UserID,
+	payload, err := a.doRequest(ctx, quic.OpIAMUserCreate, &platformv1.CreateIAMUserRequest{
+		TenantId:   opts.TenantID,
 		Email:      opts.Email,
 		Name:       opts.Name,
 		Roles:      opts.Roles,
 		Groups:     opts.Groups,
 		Attributes: opts.Attributes,
-	}
-
-	payload, err := a.doRequest(ctx, quic.OpIAMUserUpdate, req)
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	var resp daemon.IAMUserResponse
+	var resp platformv1.IAMUserResponse
 	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "UpdateUser",
-			Message:   "failed to decode response: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: "CreateUser", Message: "failed to decode response: " + err.Error()}
 	}
-
-	return &UpdateUserResult{
-		User: convertUserResponse(&resp),
-	}, nil
+	return &CreateUserResult{User: pbUserToUser(resp.GetUser())}, nil
 }
 
-// DeleteUser removes a user
+// GetUser retrieves a user by ID.
+func (a *QUICAdapter) GetUser(ctx context.Context, opts GetUserOptions) (*GetUserResult, error) {
+	payload, err := a.doRequest(ctx, quic.OpIAMUserGet, &platformv1.GetIAMUserRequest{
+		TenantId: opts.TenantID,
+		UserId:   opts.UserID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var resp platformv1.IAMUserResponse
+	if err := quic.DecodePayload(payload, &resp); err != nil {
+		return nil, &QUICAdapterError{Operation: "GetUser", Message: "failed to decode response: " + err.Error()}
+	}
+	return &GetUserResult{User: pbUserToUser(resp.GetUser())}, nil
+}
+
+// UpdateUser updates an existing user.
+func (a *QUICAdapter) UpdateUser(ctx context.Context, opts UpdateUserOptions) (*UpdateUserResult, error) {
+	payload, err := a.doRequest(ctx, quic.OpIAMUserUpdate, &platformv1.UpdateIAMUserRequest{
+		TenantId:   opts.TenantID,
+		UserId:     opts.UserID,
+		Email:      opts.Email,
+		Name:       opts.Name,
+		Roles:      opts.Roles,
+		Groups:     opts.Groups,
+		Attributes: opts.Attributes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var resp platformv1.IAMUserResponse
+	if err := quic.DecodePayload(payload, &resp); err != nil {
+		return nil, &QUICAdapterError{Operation: "UpdateUser", Message: "failed to decode response: " + err.Error()}
+	}
+	return &UpdateUserResult{User: pbUserToUser(resp.GetUser())}, nil
+}
+
+// DeleteUser removes a user.
 func (a *QUICAdapter) DeleteUser(ctx context.Context, opts DeleteUserOptions) (*DeleteUserResult, error) {
-	req := daemon.DeleteUserRequest{
-		TenantID: opts.TenantID,
-		UserID:   opts.UserID,
-	}
-
-	payload, err := a.doRequest(ctx, quic.OpIAMUserDelete, req)
+	payload, err := a.doRequest(ctx, quic.OpIAMUserDelete, &platformv1.DeleteIAMUserRequest{
+		TenantId: opts.TenantID,
+		UserId:   opts.UserID,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	var resp daemon.GenericIAMResponse
+	var resp platformv1.DeleteIAMUserResponse
 	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "DeleteUser",
-			Message:   "failed to decode response: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: "DeleteUser", Message: "failed to decode response: " + err.Error()}
 	}
-
-	return &DeleteUserResult{
-		Success: resp.Success,
-	}, nil
+	return &DeleteUserResult{Success: resp.GetStatus().GetSuccess()}, nil
 }
 
-// ListUsers lists all users with optional filtering
+// ListUsers lists users with optional filtering.
 func (a *QUICAdapter) ListUsers(ctx context.Context, opts ListUsersOptions) (*ListUsersResult, error) {
-	req := daemon.ListIAMRequest{
-		TenantID: opts.TenantID,
-		Limit:    int(opts.Limit),
-		Offset:   int(opts.Offset),
+	req := &platformv1.ListIAMUsersRequest{
+		TenantId:    opts.TenantID,
+		EmailFilter: opts.Email,
+		RoleFilter:  opts.Role,
+		GroupFilter: opts.Group,
+	}
+	if opts.Limit > 0 {
+		req.Pagination = &platformv1.PaginationRequest{PageSize: uint32(opts.Limit)}
 	}
 
 	payload, err := a.doRequest(ctx, quic.OpIAMUserList, req)
 	if err != nil {
 		return nil, err
 	}
-
-	var resp daemon.IAMUserListResponse
+	var resp platformv1.ListIAMUsersResponse
 	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "ListUsers",
-			Message:   "failed to decode response: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: "ListUsers", Message: "failed to decode response: " + err.Error()}
 	}
-
-	users := make([]*User, 0, len(resp.Users))
-	for _, u := range resp.Users {
-		users = append(users, convertUserResponse(u))
+	users := make([]*User, 0, len(resp.GetUsers()))
+	for _, u := range resp.GetUsers() {
+		users = append(users, pbUserToUser(u))
 	}
-
-	return &ListUsersResult{
-		Users:  users,
-		Total:  int64(resp.Total),
-		Limit:  int32(resp.Limit),
-		Offset: int32(resp.Offset),
-	}, nil
+	return &ListUsersResult{Users: users, Total: resp.GetTotal(), Limit: opts.Limit, Offset: opts.Offset}, nil
 }
 
-// AssignRole assigns a role to a user
+// =============================================================================
+// User Role Operations
+// =============================================================================
+
+// AssignRole assigns a role to a user.
 func (a *QUICAdapter) AssignRole(ctx context.Context, opts AssignRoleOptions) (*AssignRoleResult, error) {
-	req := daemon.AssignRoleRequest{
-		TenantID: opts.TenantID,
-		UserID:   opts.UserID,
-		RoleID:   opts.RoleID,
-	}
-
-	payload, err := a.doRequest(ctx, quic.OpIAMRoleAssign, req)
+	payload, err := a.doRequest(ctx, quic.OpIAMRoleAssign, &platformv1.AssignIAMRoleRequest{
+		TenantId: opts.TenantID,
+		UserId:   opts.UserID,
+		RoleId:   opts.RoleID,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	var resp daemon.GenericIAMResponse
+	var resp platformv1.AssignIAMRoleResponse
 	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "AssignRole",
-			Message:   "failed to decode response: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: "AssignRole", Message: "failed to decode response: " + err.Error()}
 	}
-
-	return &AssignRoleResult{
-		Success: resp.Success,
-	}, nil
+	return &AssignRoleResult{Success: resp.GetStatus().GetSuccess()}, nil
 }
 
-// RevokeRole revokes a role from a user
+// RevokeRole revokes a role from a user.
 func (a *QUICAdapter) RevokeRole(ctx context.Context, opts RevokeRoleOptions) (*RevokeRoleResult, error) {
-	req := daemon.RevokeRoleRequest{
-		TenantID: opts.TenantID,
-		UserID:   opts.UserID,
-		RoleID:   opts.RoleID,
-	}
-
-	payload, err := a.doRequest(ctx, quic.OpIAMRoleRevoke, req)
+	payload, err := a.doRequest(ctx, quic.OpIAMRoleRevoke, &platformv1.RevokeIAMRoleRequest{
+		TenantId: opts.TenantID,
+		UserId:   opts.UserID,
+		RoleId:   opts.RoleID,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	var resp daemon.GenericIAMResponse
+	var resp platformv1.RevokeIAMRoleResponse
 	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "RevokeRole",
-			Message:   "failed to decode response: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: "RevokeRole", Message: "failed to decode response: " + err.Error()}
 	}
-
-	return &RevokeRoleResult{
-		Success: resp.Success,
-	}, nil
+	return &RevokeRoleResult{Success: resp.GetStatus().GetSuccess()}, nil
 }
 
 // =============================================================================
 // Role CRUD Operations
 // =============================================================================
 
-// CreateRole creates a new role
+// CreateRole creates a new role.
 func (a *QUICAdapter) CreateRole(ctx context.Context, opts CreateRoleOptions) (*CreateRoleResult, error) {
-	req := daemon.CreateRoleRequest{
-		TenantID:    opts.TenantID,
-		RoleID:      opts.ID,
+	payload, err := a.doRequest(ctx, quic.OpIAMRoleCreate, &platformv1.CreateIAMRoleRequest{
+		TenantId:    opts.TenantID,
+		Id:          opts.ID,
 		Name:        opts.Name,
 		Description: opts.Description,
 		Permissions: opts.Permissions,
-	}
-
-	payload, err := a.doRequest(ctx, quic.OpIAMRoleCreate, req)
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	var resp daemon.IAMRoleResponse
+	var resp platformv1.IAMRoleResponse
 	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "CreateRole",
-			Message:   "failed to decode response: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: "CreateRole", Message: "failed to decode response: " + err.Error()}
 	}
-
-	return &CreateRoleResult{
-		Role: convertRoleResponse(&resp),
-	}, nil
+	return &CreateRoleResult{Role: pbRoleToRole(resp.GetRole())}, nil
 }
 
-// GetRole retrieves a role by ID
+// GetRole retrieves a role by ID.
 func (a *QUICAdapter) GetRole(ctx context.Context, opts GetRoleOptions) (*GetRoleResult, error) {
-	req := daemon.GetRoleRequest{
-		TenantID: opts.TenantID,
-		RoleID:   opts.RoleID,
-	}
-
-	payload, err := a.doRequest(ctx, quic.OpIAMRoleGet, req)
+	payload, err := a.doRequest(ctx, quic.OpIAMRoleGet, &platformv1.GetIAMRoleRequest{
+		TenantId: opts.TenantID,
+		RoleId:   opts.RoleID,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	var resp daemon.IAMRoleResponse
+	var resp platformv1.IAMRoleResponse
 	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "GetRole",
-			Message:   "failed to decode response: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: "GetRole", Message: "failed to decode response: " + err.Error()}
 	}
-
-	return &GetRoleResult{
-		Role: convertRoleResponse(&resp),
-	}, nil
+	return &GetRoleResult{Role: pbRoleToRole(resp.GetRole())}, nil
 }
 
-// UpdateRole updates an existing role
-// NOTE: The QUIC protocol does not have a dedicated UpdateRole opcode.
-// This operation is not supported via QUIC.
+// UpdateRole has no QUIC opcode on the PlatformIAMService surface.
 func (a *QUICAdapter) UpdateRole(ctx context.Context, opts UpdateRoleOptions) (*UpdateRoleResult, error) {
 	return nil, &QUICNotSupportedError{Operation: "UpdateRole"}
 }
 
-// DeleteRole removes a role
+// DeleteRole removes a role.
 func (a *QUICAdapter) DeleteRole(ctx context.Context, opts DeleteRoleOptions) (*DeleteRoleResult, error) {
-	req := daemon.DeleteRoleRequest{
-		TenantID: opts.TenantID,
-		RoleID:   opts.RoleID,
-	}
-
-	payload, err := a.doRequest(ctx, quic.OpIAMRoleDelete, req)
+	payload, err := a.doRequest(ctx, quic.OpIAMRoleDelete, &platformv1.DeleteIAMRoleRequest{
+		TenantId: opts.TenantID,
+		RoleId:   opts.RoleID,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	var resp daemon.GenericIAMResponse
+	var resp platformv1.DeleteIAMRoleResponse
 	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "DeleteRole",
-			Message:   "failed to decode response: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: "DeleteRole", Message: "failed to decode response: " + err.Error()}
 	}
-
-	return &DeleteRoleResult{
-		Success: resp.Success,
-	}, nil
+	return &DeleteRoleResult{Success: resp.GetStatus().GetSuccess()}, nil
 }
 
-// ListRoles lists all roles with optional filtering
+// ListRoles lists roles with optional filtering.
 func (a *QUICAdapter) ListRoles(ctx context.Context, opts ListRolesOptions) (*ListRolesResult, error) {
-	req := daemon.ListIAMRequest{
-		TenantID: opts.TenantID,
-		Limit:    int(opts.Limit),
-		Offset:   int(opts.Offset),
+	req := &platformv1.ListIAMRolesRequest{TenantId: opts.TenantID}
+	if opts.Limit > 0 {
+		req.Pagination = &platformv1.PaginationRequest{PageSize: uint32(opts.Limit)}
 	}
 
 	payload, err := a.doRequest(ctx, quic.OpIAMRoleList, req)
 	if err != nil {
 		return nil, err
 	}
-
-	var resp daemon.IAMRoleListResponse
+	var resp platformv1.ListIAMRolesResponse
 	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "ListRoles",
-			Message:   "failed to decode response: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: "ListRoles", Message: "failed to decode response: " + err.Error()}
 	}
-
-	roles := make([]*Role, 0, len(resp.Roles))
-	for _, r := range resp.Roles {
-		roles = append(roles, convertRoleResponse(r))
+	roles := make([]*Role, 0, len(resp.GetRoles()))
+	for _, r := range resp.GetRoles() {
+		roles = append(roles, pbRoleToRole(r))
 	}
-
-	return &ListRolesResult{
-		Roles:  roles,
-		Total:  int64(resp.Total),
-		Limit:  int32(resp.Limit),
-		Offset: int32(resp.Offset),
-	}, nil
+	return &ListRolesResult{Roles: roles, Total: resp.GetTotal(), Limit: opts.Limit, Offset: opts.Offset}, nil
 }
 
 // =============================================================================
 // Group CRUD Operations
 // =============================================================================
 
-// CreateGroup creates a new group
+// CreateGroup creates a new group.
 func (a *QUICAdapter) CreateGroup(ctx context.Context, opts CreateGroupOptions) (*CreateGroupResult, error) {
-	req := daemon.CreateGroupRequest{
-		TenantID:    opts.TenantID,
-		GroupID:     opts.ID,
+	payload, err := a.doRequest(ctx, quic.OpIAMGroupCreate, &platformv1.CreateIAMGroupRequest{
+		TenantId:    opts.TenantID,
+		Id:          opts.ID,
 		Name:        opts.Name,
 		Description: opts.Description,
-	}
-
-	payload, err := a.doRequest(ctx, quic.OpIAMGroupCreate, req)
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	var resp daemon.IAMGroupResponse
+	var resp platformv1.IAMGroupResponse
 	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "CreateGroup",
-			Message:   "failed to decode response: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: "CreateGroup", Message: "failed to decode response: " + err.Error()}
 	}
-
-	return &CreateGroupResult{
-		Group: convertGroupResponse(&resp),
-	}, nil
+	return &CreateGroupResult{Group: pbGroupToGroup(resp.GetGroup())}, nil
 }
 
-// GetGroup retrieves a group by ID
+// GetGroup retrieves a group by ID.
 func (a *QUICAdapter) GetGroup(ctx context.Context, opts GetGroupOptions) (*GetGroupResult, error) {
-	req := daemon.GetGroupRequest{
-		TenantID: opts.TenantID,
-		GroupID:  opts.GroupID,
-	}
-
-	payload, err := a.doRequest(ctx, quic.OpIAMGroupGet, req)
+	payload, err := a.doRequest(ctx, quic.OpIAMGroupGet, &platformv1.GetIAMGroupRequest{
+		TenantId: opts.TenantID,
+		GroupId:  opts.GroupID,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	var resp daemon.IAMGroupResponse
+	var resp platformv1.IAMGroupResponse
 	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "GetGroup",
-			Message:   "failed to decode response: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: "GetGroup", Message: "failed to decode response: " + err.Error()}
 	}
-
-	return &GetGroupResult{
-		Group: convertGroupResponse(&resp),
-	}, nil
+	return &GetGroupResult{Group: pbGroupToGroup(resp.GetGroup())}, nil
 }
 
-// UpdateGroup updates an existing group
-// NOTE: The QUIC protocol does not have a dedicated UpdateGroup opcode.
-// This operation is not supported via QUIC.
+// UpdateGroup has no QUIC opcode on the PlatformIAMService surface.
 func (a *QUICAdapter) UpdateGroup(ctx context.Context, opts UpdateGroupOptions) (*UpdateGroupResult, error) {
 	return nil, &QUICNotSupportedError{Operation: "UpdateGroup"}
 }
 
-// DeleteGroup removes a group
+// DeleteGroup removes a group.
 func (a *QUICAdapter) DeleteGroup(ctx context.Context, opts DeleteGroupOptions) (*DeleteGroupResult, error) {
-	req := daemon.DeleteGroupRequest{
-		TenantID: opts.TenantID,
-		GroupID:  opts.GroupID,
-	}
-
-	payload, err := a.doRequest(ctx, quic.OpIAMGroupDelete, req)
+	payload, err := a.doRequest(ctx, quic.OpIAMGroupDelete, &platformv1.DeleteIAMGroupRequest{
+		TenantId: opts.TenantID,
+		GroupId:  opts.GroupID,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	var resp daemon.GenericIAMResponse
+	var resp platformv1.DeleteIAMGroupResponse
 	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "DeleteGroup",
-			Message:   "failed to decode response: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: "DeleteGroup", Message: "failed to decode response: " + err.Error()}
 	}
-
-	return &DeleteGroupResult{
-		Success: resp.Success,
-	}, nil
+	return &DeleteGroupResult{Success: resp.GetStatus().GetSuccess()}, nil
 }
 
-// ListGroups lists all groups with optional filtering
+// ListGroups lists groups with optional filtering.
 func (a *QUICAdapter) ListGroups(ctx context.Context, opts ListGroupsOptions) (*ListGroupsResult, error) {
-	req := daemon.ListIAMRequest{
-		TenantID: opts.TenantID,
-		Limit:    int(opts.Limit),
-		Offset:   int(opts.Offset),
+	req := &platformv1.ListIAMGroupsRequest{TenantId: opts.TenantID}
+	if opts.Limit > 0 {
+		req.Pagination = &platformv1.PaginationRequest{PageSize: uint32(opts.Limit)}
 	}
 
 	payload, err := a.doRequest(ctx, quic.OpIAMGroupList, req)
 	if err != nil {
 		return nil, err
 	}
-
-	var resp daemon.IAMGroupListResponse
+	var resp platformv1.ListIAMGroupsResponse
 	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "ListGroups",
-			Message:   "failed to decode response: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: "ListGroups", Message: "failed to decode response: " + err.Error()}
 	}
-
-	groups := make([]*Group, 0, len(resp.Groups))
-	for _, g := range resp.Groups {
-		groups = append(groups, convertGroupResponse(g))
+	groups := make([]*Group, 0, len(resp.GetGroups()))
+	for _, g := range resp.GetGroups() {
+		groups = append(groups, pbGroupToGroup(g))
 	}
-
-	return &ListGroupsResult{
-		Groups: groups,
-		Total:  int64(resp.Total),
-		Limit:  int32(resp.Limit),
-		Offset: int32(resp.Offset),
-	}, nil
+	return &ListGroupsResult{Groups: groups, Total: resp.GetTotal(), Limit: opts.Limit, Offset: opts.Offset}, nil
 }
 
-// AddMember adds a user to a group
+// =============================================================================
+// Group Membership Operations
+// =============================================================================
+
+// AddMember adds a user to a group.
 func (a *QUICAdapter) AddMember(ctx context.Context, opts AddMemberOptions) (*AddMemberResult, error) {
-	req := daemon.GroupMemberRequest{
-		TenantID: opts.TenantID,
-		GroupID:  opts.GroupID,
-		UserID:   opts.UserID,
-	}
-
-	payload, err := a.doRequest(ctx, quic.OpIAMGroupAddMember, req)
+	payload, err := a.doRequest(ctx, quic.OpIAMGroupAddMember, &platformv1.AddGroupMemberRequest{
+		TenantId: opts.TenantID,
+		GroupId:  opts.GroupID,
+		UserId:   opts.UserID,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	var resp daemon.GenericIAMResponse
+	var resp platformv1.AddGroupMemberResponse
 	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "AddMember",
-			Message:   "failed to decode response: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: "AddMember", Message: "failed to decode response: " + err.Error()}
 	}
-
-	return &AddMemberResult{
-		Success: resp.Success,
-	}, nil
+	return &AddMemberResult{Success: resp.GetStatus().GetSuccess()}, nil
 }
 
-// RemoveMember removes a user from a group
+// RemoveMember removes a user from a group.
 func (a *QUICAdapter) RemoveMember(ctx context.Context, opts RemoveMemberOptions) (*RemoveMemberResult, error) {
-	req := daemon.GroupMemberRequest{
-		TenantID: opts.TenantID,
-		GroupID:  opts.GroupID,
-		UserID:   opts.UserID,
-	}
-
-	payload, err := a.doRequest(ctx, quic.OpIAMGroupRemoveMember, req)
+	payload, err := a.doRequest(ctx, quic.OpIAMGroupRemoveMember, &platformv1.RemoveGroupMemberRequest{
+		TenantId: opts.TenantID,
+		GroupId:  opts.GroupID,
+		UserId:   opts.UserID,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	var resp daemon.GenericIAMResponse
+	var resp platformv1.RemoveGroupMemberResponse
 	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "RemoveMember",
-			Message:   "failed to decode response: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: "RemoveMember", Message: "failed to decode response: " + err.Error()}
 	}
-
-	return &RemoveMemberResult{
-		Success: resp.Success,
-	}, nil
+	return &RemoveMemberResult{Success: resp.GetStatus().GetSuccess()}, nil
 }
 
 // =============================================================================
 // Permission Operations
 // =============================================================================
 
-// CheckPermission checks if a subject has permission for an action on a resource
+// CheckPermission checks if a subject has permission for an action on a resource.
 func (a *QUICAdapter) CheckPermission(ctx context.Context, opts CheckPermissionOptions) (*CheckPermissionResult, error) {
-	req := daemon.CheckPermissionRequest{
-		TenantID:  opts.TenantID,
-		SubjectID: opts.SubjectID,
-		Resource:  opts.Resource,
-		Action:    opts.Action,
-		Context:   opts.Context,
-	}
-
-	payload, err := a.doRequest(ctx, quic.OpIAMCheckPermission, req)
+	payload, err := a.doRequest(ctx, quic.OpIAMCheckPermission, &platformv1.CheckIAMPermissionRequest{
+		TenantId:   opts.TenantID,
+		SubjectId:  opts.SubjectID,
+		Action:     opts.Action,
+		Resource:   opts.Resource,
+		Roles:      opts.Roles,
+		Groups:     opts.Groups,
+		Context:    opts.Context,
+		Attributes: opts.Attributes,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	var resp daemon.CheckPermissionResponse
+	var resp platformv1.CheckIAMPermissionResponse
 	if err := quic.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "CheckPermission",
-			Message:   "failed to decode response: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: "CheckPermission", Message: "failed to decode response: " + err.Error()}
 	}
-
 	return &CheckPermissionResult{
-		Allowed: resp.Allowed,
+		Allowed:          resp.GetAllowed(),
+		MatchedPolicy:    resp.GetMatchedPolicy(),
+		MatchedRule:      resp.GetMatchedRule(),
+		EvaluationTimeNs: resp.GetEvaluationTimeNs(),
 	}, nil
 }
 
 // =============================================================================
-// Helper Functions
+// Conversion helpers
 // =============================================================================
 
-// convertUserResponse converts daemon.IAMUserResponse to User
-func convertUserResponse(resp *daemon.IAMUserResponse) *User {
-	if resp == nil {
+func pbUserToUser(u *platformv1.IAMUser) *User {
+	if u == nil {
 		return nil
 	}
-
-	var createdAt, updatedAt *time.Time
-	if resp.CreatedAt > 0 {
-		t := time.Unix(resp.CreatedAt, 0)
-		createdAt = &t
-	}
-	if resp.UpdatedAt > 0 {
-		t := time.Unix(resp.UpdatedAt, 0)
-		updatedAt = &t
-	}
-
 	return &User{
-		ID:         resp.ID,
-		TenantID:   resp.TenantID,
-		Email:      resp.Email,
-		Name:       resp.Name,
-		Roles:      resp.Roles,
-		Groups:     resp.Groups,
-		Attributes: resp.Attributes,
-		CreatedAt:  createdAt,
-		UpdatedAt:  updatedAt,
+		ID:          u.GetId(),
+		TenantID:    u.GetTenantId(),
+		Email:       u.GetEmail(),
+		Name:        u.GetName(),
+		Roles:       u.GetRoles(),
+		Groups:      u.GetGroups(),
+		Attributes:  u.GetAttributes(),
+		MFAVerified: u.GetMfaVerified(),
+		CreatedAt:   pbTimePtr(u.GetCreatedAt()),
+		UpdatedAt:   pbTimePtr(u.GetUpdatedAt()),
+		LastAuth:    pbTimePtr(u.GetLastAuth()),
 	}
 }
 
-// convertRoleResponse converts daemon.IAMRoleResponse to Role
-func convertRoleResponse(resp *daemon.IAMRoleResponse) *Role {
-	if resp == nil {
+func pbRoleToRole(r *platformv1.IAMRole) *Role {
+	if r == nil {
 		return nil
 	}
-
-	var createdAt, updatedAt *time.Time
-	if resp.CreatedAt > 0 {
-		t := time.Unix(resp.CreatedAt, 0)
-		createdAt = &t
-	}
-	if resp.UpdatedAt > 0 {
-		t := time.Unix(resp.UpdatedAt, 0)
-		updatedAt = &t
-	}
-
 	return &Role{
-		ID:          resp.ID,
-		TenantID:    resp.TenantID,
-		Name:        resp.Name,
-		Description: resp.Description,
-		Permissions: resp.Permissions,
-		CreatedAt:   createdAt,
-		UpdatedAt:   updatedAt,
+		ID:          r.GetId(),
+		TenantID:    r.GetTenantId(),
+		Name:        r.GetName(),
+		Description: r.GetDescription(),
+		Permissions: r.GetPermissions(),
+		CreatedAt:   pbTimePtr(r.GetCreatedAt()),
+		UpdatedAt:   pbTimePtr(r.GetUpdatedAt()),
 	}
 }
 
-// convertGroupResponse converts daemon.IAMGroupResponse to Group
-func convertGroupResponse(resp *daemon.IAMGroupResponse) *Group {
-	if resp == nil {
+func pbGroupToGroup(g *platformv1.IAMGroup) *Group {
+	if g == nil {
 		return nil
 	}
-
-	var createdAt, updatedAt *time.Time
-	if resp.CreatedAt > 0 {
-		t := time.Unix(resp.CreatedAt, 0)
-		createdAt = &t
-	}
-	if resp.UpdatedAt > 0 {
-		t := time.Unix(resp.UpdatedAt, 0)
-		updatedAt = &t
-	}
-
 	return &Group{
-		ID:          resp.ID,
-		TenantID:    resp.TenantID,
-		Name:        resp.Name,
-		Description: resp.Description,
-		Members:     resp.Members,
-		CreatedAt:   createdAt,
-		UpdatedAt:   updatedAt,
+		ID:          g.GetId(),
+		TenantID:    g.GetTenantId(),
+		Name:        g.GetName(),
+		Description: g.GetDescription(),
+		Members:     g.GetMembers(),
+		CreatedAt:   pbTimePtr(g.GetCreatedAt()),
+		UpdatedAt:   pbTimePtr(g.GetUpdatedAt()),
 	}
 }
 
-// Verify QUICAdapter implements IAMCommands
+// pbTimePtr converts a protobuf timestamp to a *time.Time, returning nil for a
+// nil/zero timestamp so the JSON result omits it.
+func pbTimePtr(ts *timestamppb.Timestamp) *time.Time {
+	if ts == nil {
+		return nil
+	}
+	t := ts.AsTime()
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+// =============================================================================
+// Compile-time Interface Verification
+// =============================================================================
+
 var _ IAMCommands = (*QUICAdapter)(nil)

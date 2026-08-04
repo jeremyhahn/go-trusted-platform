@@ -161,6 +161,12 @@ type Config struct {
 	PublicIPv4                string             `yaml:"public-ipv4" json:"public_ipv4" mapstructure:"public-ipv4"`
 	PublicIPv6                string             `yaml:"public-ipv6" json:"public_ipv6" mapstructure:"public-ipv6"`
 	Resolver                  *ResolverConfig    `yaml:"resolver" json:"resolver" mapstructure:"resolver"`
+	// Transfer configures outbound authoritative zone transfers (AXFR).
+	// The platform is a PRIMARY nameserver: it serves full zone transfers
+	// to explicitly configured, TSIG-authenticated secondaries over DNS
+	// TCP. When nil or without keys, the AXFR responder refuses every
+	// transfer request (fail closed).
+	Transfer *TransferConfig `yaml:"transfer" json:"transfer" mapstructure:"transfer"`
 	// ZoneSubdomains, when true, enables per-network-zone subdomain support in
 	// the internal DNS server. At startup the server pre-creates one DNS
 	// sub-zone per declared network zone under the internal domain
@@ -237,6 +243,36 @@ type DANEConfig struct {
 	// RolloverTTL is the TTL for pre-published TLSA records during DANE-EE rollover.
 	// Must be >= 2x the normal TTL for DNS cache expiry. 0 means auto (2x DefaultTTL).
 	RolloverTTL uint32 `yaml:"rollover-ttl" json:"rollover_ttl" mapstructure:"rollover-ttl"`
+}
+
+// TransferConfig configures outbound authoritative zone transfers (AXFR).
+// The platform acts as a PRIMARY nameserver per RFC 5936: it serves full
+// zone transfers to explicitly configured, TSIG-authenticated secondary
+// nameservers over DNS TCP. Inbound/secondary mode is intentionally not
+// supported. When Enabled is false or no keys are configured, the AXFR
+// responder refuses every transfer request (fail closed).
+type TransferConfig struct {
+	// Enabled turns on the outbound AXFR responder. Even when true, a
+	// transfer is only served to a request bearing a valid TSIG signed
+	// with one of the configured keys.
+	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
+	// TSIGKeys are the shared TSIG keys authorized to pull zone transfers.
+	// Each configured secondary must present a TSIG signed with one of
+	// these keys. An empty list refuses all transfers.
+	TSIGKeys []TSIGKey `yaml:"tsig-keys" json:"tsig_keys" mapstructure:"tsig-keys"`
+}
+
+// TSIGKey is a shared TSIG key authorizing a secondary nameserver to pull
+// zone transfers per RFC 8945.
+type TSIGKey struct {
+	// Name is the TSIG key name (e.g. "secondary1."). It is canonicalized
+	// (lowercased, fully qualified) before use.
+	Name string `yaml:"name" json:"name" mapstructure:"name"`
+	// Algorithm is the TSIG HMAC algorithm (e.g. "hmac-sha256."). Defaults
+	// to hmac-sha256 when empty.
+	Algorithm string `yaml:"algorithm" json:"algorithm" mapstructure:"algorithm"`
+	// Secret is the base64-encoded shared HMAC secret.
+	Secret string `yaml:"secret" json:"secret" mapstructure:"secret"`
 }
 
 // DNSSECConfig configures DNSSEC zone signing.

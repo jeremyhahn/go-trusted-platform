@@ -476,18 +476,11 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": quicapi.OpKMSGenerateWrappedDataKey,
 
 	// vTPM Service — proto: pkg/api/grpc/proto/vtpm.proto
-	"/platform.v1.VTPMInstanceService/CreateInstance":    quicapi.OpVTPMCreate,
-	"/platform.v1.VTPMInstanceService/DeleteInstance":    quicapi.OpVTPMDelete,
-	"/platform.v1.VTPMInstanceService/StartInstance":     quicapi.OpVTPMStart,
-	"/platform.v1.VTPMInstanceService/StopInstance":      quicapi.OpVTPMStop,
-	"/platform.v1.VTPMInstanceService/ListInstances":     quicapi.OpVTPMList,
-	"/platform.v1.VTPMInstanceService/GetInstance":       quicapi.OpVTPMGetState,
-	"/platform.v1.VTPMInstanceService/GetInstanceStatus": quicapi.OpVTPMGetState,
-	"/platform.v1.VTPMService/QuoteVTPM":                 quicapi.OpVTPMQuote,
-	"/platform.v1.VTPMService/SealVTPM":                  quicapi.OpVTPMSeal,
-	"/platform.v1.VTPMService/UnsealVTPM":                quicapi.OpVTPMUnseal,
-	"/platform.v1.VTPMService/ExtendVTPMPCR":             quicapi.OpVTPMExtendPCR,
-	"/platform.v1.VTPMService/ReadVTPMPCR":               quicapi.OpVTPMReadPCR,
+	"/platform.v1.VTPMService/QuoteVTPM":     quicapi.OpVTPMQuote,
+	"/platform.v1.VTPMService/SealVTPM":      quicapi.OpVTPMSeal,
+	"/platform.v1.VTPMService/UnsealVTPM":    quicapi.OpVTPMUnseal,
+	"/platform.v1.VTPMService/ExtendVTPMPCR": quicapi.OpVTPMExtendPCR,
+	"/platform.v1.VTPMService/ReadVTPMPCR":   quicapi.OpVTPMReadPCR,
 
 	// Device Service — proto: pkg/api/grpc/proto/device.proto
 	"/platform.v1.DeviceService/CreateDevice":       quicapi.OpDeviceRegister,
@@ -518,7 +511,7 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.SDNService/GetBridge":    quicapi.OpSDNGetBridge,
 	"/platform.v1.SDNService/GetPort":      quicapi.OpSDNGetPort,
 	"/platform.v1.SDNService/SetPortState": quicapi.OpSDNSetPortState,
-	"/platform.v1.SDNService/CreatePort":   quicapi.OpSDNCreatePort,
+	"/platform.v1.SDNService/AddPort":      quicapi.OpSDNCreatePort,
 	"/platform.v1.SDNService/DeletePort":   quicapi.OpSDNDeletePort,
 	"/platform.v1.SDNService/ListPorts":    quicapi.OpSDNListPorts,
 	"/platform.v1.SDNService/AddFlow":      quicapi.OpSDNAddFlow,

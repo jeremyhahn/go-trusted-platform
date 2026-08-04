@@ -16,6 +16,8 @@ package dns
 import (
 	"context"
 
+	"github.com/miekg/dns"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 )
 
@@ -104,6 +106,25 @@ type DNSService interface {
 	// zone_subdomains is false or networkZone is empty.
 	RegisterWithNetworkZone(ctx context.Context, host, networkZone, ip string) error
 }
+
+// ZoneTransferrer is the optional capability implemented by DNS services that
+// can export a zone in AXFR order and report their configured transfer
+// secondaries. It is kept separate from DNSService so protocol handlers can
+// type-assert for it without every DNSService mock having to implement zone
+// transfer. The platform serves live AXFR over DNS TCP from the CoreDNS
+// plugin; this interface is the management/export projection of that data.
+type ZoneTransferrer interface {
+	// ZoneTransfer returns the named zone's records in RFC 5936 AXFR order
+	// (apex SOA, records, closing SOA).
+	ZoneTransfer(ctx context.Context, zoneName string) ([]dns.RR, error)
+
+	// TransferSecondaries returns the canonical TSIG key names authorized to
+	// pull zone transfers, or nil when outbound transfer is disabled.
+	TransferSecondaries() []string
+}
+
+// Ensure Service implements the ZoneTransferrer capability at compile time.
+var _ ZoneTransferrer = (*Service)(nil)
 
 // Ensure Service implements DNSService interface at compile time.
 var _ DNSService = (*Service)(nil)

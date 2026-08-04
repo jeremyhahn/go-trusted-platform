@@ -1285,6 +1285,12 @@ func (h *VTPMHandlers) parseListOptions(r *http.Request) *vtpm.ListOptions {
 		}
 	}
 
+	if profileID := query.Get("device_profile_id"); profileID != "" {
+		if id, err := strconv.ParseUint(profileID, 10, 64); err == nil {
+			opts.DeviceProfileID = id
+		}
+	}
+
 	return opts
 }
 

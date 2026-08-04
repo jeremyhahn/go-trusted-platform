@@ -529,6 +529,10 @@ type ListOptions struct {
 
 	// Offset skips the first N results.
 	Offset int
+
+	// DeviceProfileID filters bundles bound to the given device profile.
+	// A zero value disables the filter.
+	DeviceProfileID uint64
 }
 
 // QuoteResult represents the result of a TPM quote operation.

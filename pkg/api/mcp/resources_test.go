@@ -15,6 +15,7 @@ package mcp
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -193,12 +194,33 @@ func TestResourceRegistry_ReadVTPMResource(t *testing.T) {
 			t.Errorf("unexpected error: %v", err)
 		}
 
+		// The specific-vTPM path now delegates to VTPMGet and returns
+		// the formatted resource content (JSON blob) rather than a
+		// placeholder. The underlying instance metadata (id/hostname)
+		// must be present in the serialized content.
 		resultMap, ok := result.(map[string]interface{})
 		if !ok {
 			t.Fatal("result is not a map")
 		}
-		if resultMap["name"] != "my-vtpm" {
-			t.Errorf("name = %v, want my-vtpm", resultMap["name"])
+		contents, ok := resultMap["contents"].([]map[string]interface{})
+		if !ok || len(contents) == 0 {
+			t.Fatalf("result missing formatted contents: %#v", resultMap)
+		}
+		text, _ := contents[0]["text"].(string)
+		if !strings.Contains(text, "my-vtpm") {
+			t.Errorf("formatted content %q does not reference my-vtpm", text)
+		}
+	})
+
+	t.Run("propagates specific vtpm error", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		svc.vtpmGetFunc = func(ctx context.Context, name string) (interface{}, error) {
+			return nil, ErrMockServiceError
+		}
+		registry := NewResourceRegistry(svc, log)
+
+		if _, err := registry.ReadResource(ctx, "platform://vtpm/my-vtpm"); err == nil {
+			t.Error("expected error from VTPMGet")
 		}
 	})
 

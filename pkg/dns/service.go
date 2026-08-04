@@ -30,6 +30,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
+	"github.com/miekg/dns"
 
 	_ "github.com/coredns/coredns/plugin/chaos"
 	_ "github.com/coredns/coredns/plugin/forward"
@@ -960,6 +961,38 @@ func (s *Service) ListZones(ctx context.Context) ([]*entities.Zone, error) {
 }
 
 // IsDNSSECEnabled returns true if DNSSEC is enabled for the service.
+// ZoneTransfer returns the named zone's resource records in RFC 5936 AXFR
+// order (apex SOA, all records, closing SOA). It reuses the same projection
+// the on-the-wire AXFR responder emits, so the REST zone-export surface and
+// the DNS server stay byte-for-byte consistent. It is the read side of the
+// platform-as-primary transfer model; the authenticated wire transfer itself
+// is served by the CoreDNS plugin over TCP, not through this method.
+func (s *Service) ZoneTransfer(ctx context.Context, zoneName string) ([]dns.RR, error) {
+	zone, err := s.Zone(ctx, zoneName)
+	if err != nil {
+		return nil, err
+	}
+	return BuildZoneTransfer(zone), nil
+}
+
+// TransferSecondaries returns the canonical TSIG key names authorized to pull
+// zone transfers, or nil when outbound transfer is disabled. It backs the
+// REST secondary-management view; it never exposes key secrets.
+func (s *Service) TransferSecondaries() []string {
+	cfg := s.params.Config.Transfer
+	if cfg == nil || !cfg.Enabled || len(cfg.TSIGKeys) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(cfg.TSIGKeys))
+	for _, k := range cfg.TSIGKeys {
+		if k.Name == "" || k.Secret == "" {
+			continue
+		}
+		names = append(names, dns.CanonicalName(k.Name))
+	}
+	return names
+}
+
 func (s *Service) IsDNSSECEnabled() bool {
 	return s.dnssecSvc != nil && s.dnssecSvc.IsEnabled()
 }

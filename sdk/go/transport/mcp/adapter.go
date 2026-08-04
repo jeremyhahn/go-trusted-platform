@@ -286,17 +286,11 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": "kms_generate_wrapped_data_key",
 
 	// vTPM — proto: pkg/api/grpc/proto/vtpm.proto
-	"/platform.v1.VTPMInstanceService/CreateInstance":    "vtpm_create",
-	"/platform.v1.VTPMInstanceService/DeleteInstance":    "vtpm_delete",
-	"/platform.v1.VTPMInstanceService/StartInstance":     "vtpm_start",
-	"/platform.v1.VTPMInstanceService/StopInstance":      "vtpm_stop",
-	"/platform.v1.VTPMInstanceService/ListInstances":     "vtpm_list",
-	"/platform.v1.VTPMInstanceService/GetInstanceStatus": "vtpm_state",
-	"/platform.v1.VTPMService/QuoteVTPM":                 "vtpm_quote",
-	"/platform.v1.VTPMService/SealVTPM":                  "vtpm_seal",
-	"/platform.v1.VTPMService/UnsealVTPM":                "vtpm_unseal",
-	"/platform.v1.VTPMService/ExtendVTPMPCR":             "vtpm_extend_pcr",
-	"/platform.v1.VTPMService/ReadVTPMPCR":               "vtpm_read_pcr",
+	"/platform.v1.VTPMService/QuoteVTPM":     "vtpm_quote",
+	"/platform.v1.VTPMService/SealVTPM":      "vtpm_seal",
+	"/platform.v1.VTPMService/UnsealVTPM":    "vtpm_unseal",
+	"/platform.v1.VTPMService/ExtendVTPMPCR": "vtpm_extend_pcr",
+	"/platform.v1.VTPMService/ReadVTPMPCR":   "vtpm_read_pcr",
 
 	// Device — proto: pkg/api/grpc/proto/device.proto
 	"/platform.v1.DeviceService/CreateDevice": "device_register",

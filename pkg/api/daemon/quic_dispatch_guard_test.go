@@ -509,12 +509,37 @@ func newBareQUICDispatchHandler() *QUICServiceHandler {
 
 // assertDispatchFamily drives one request through HandleRequest and
 // asserts the response carries the family signature.
+// iamTokenNotImplementedOpcodes are the IAM token operations that return
+// StatusNotImplemented by OIDC design (token issuance/verification/revocation
+// happens through OIDC, not these QUIC ops). They are still routed to and owned
+// by the iam family on the wire; they simply answer NotImplemented instead of
+// the iam-unavailable error a bare handler returns for the other iam opcodes.
+var iamTokenNotImplementedOpcodes = map[byte]bool{
+	quic.OpIAMTokenCreate: true,
+	quic.OpIAMTokenRevoke: true,
+	quic.OpIAMTokenVerify: true,
+}
+
 func assertDispatchFamily(t *testing.T, h *QUICServiceHandler, opcode byte, payload []byte, family string) {
 	t.Helper()
 
 	resp := h.HandleRequest(context.Background(), &quic.Request{Opcode: opcode, Payload: payload})
 	if resp == nil {
 		t.Fatalf("opcode 0x%02X: nil response", opcode)
+	}
+
+	// IAM token opcodes are iam-owned on the wire but return
+	// StatusNotImplemented by OIDC design (tokens are issued via OIDC, never
+	// over the QUIC token ops), rather than the iam-unavailable error the rest
+	// of the iam family returns on a bare handler. This is the honest parity
+	// with the gRPC IAM service, which returns codes.Unimplemented for the same
+	// three RPCs.
+	if iamTokenNotImplementedOpcodes[opcode] {
+		if resp.Status != quic.StatusNotImplemented {
+			t.Fatalf("opcode 0x%02X: expected iam-token NotImplemented (OIDC), got status 0x%02X payload %q",
+				opcode, resp.Status, resp.Payload)
+		}
+		return
 	}
 
 	if family == "reserved" {

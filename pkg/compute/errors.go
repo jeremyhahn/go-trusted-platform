@@ -74,6 +74,17 @@ var (
 	// ErrInvalidAttestationEvidence is returned when attestation evidence
 	// submitted for verification is missing required fields
 	ErrInvalidAttestationEvidence = errors.New("invalid attestation evidence")
+
+	// ErrVTPMIdentityRequired is returned when a device profile requires a
+	// hardware-rooted vTPM identity — because Secure Boot is enabled for the
+	// instance, or the profile has a prestaged EK certificate / EK serial —
+	// but no vTPM generator is wired into the orchestrator, so a
+	// profile-bound, CA-issued EK bundle cannot be provisioned. The VM is NOT
+	// booted with an anonymous swtpm in this case: falling back silently to an
+	// identity-less TPM would defeat the profile's attestation contract. The
+	// operator must wire the vTPM subsystem (and its CA) or clear the
+	// profile's identity requirement.
+	ErrVTPMIdentityRequired = errors.New("device profile requires a CA-issued vTPM identity but no vTPM generator is configured")
 )
 
 // MessageError is a typed error carrying a fully formatted message with no

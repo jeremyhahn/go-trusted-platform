@@ -705,6 +705,10 @@ func (s *Service) ListBundles(ctx context.Context, opts *ListOptions) ([]*Bundle
 					continue
 				}
 			}
+			if opts.DeviceProfileID != 0 &&
+				(bundle.Manifest == nil || bundle.Manifest.DeviceProfileID != opts.DeviceProfileID) {
+				continue
+			}
 		}
 
 		bundles = append(bundles, bundle)
