@@ -27,8 +27,8 @@ func TestBuildHandlerMap_DaemonOnly(t *testing.T) {
 	}
 
 	// Daemon should register exactly 14 unary methods.
-	if len(m) != 14 {
-		t.Errorf("expected 14 daemon handlers, got %d", len(m))
+	if len(m) != 13 {
+		t.Errorf("expected 13 daemon handlers, got %d", len(m))
 	}
 
 	// Verify a few known methods are present.
@@ -36,7 +36,6 @@ func TestBuildHandlerMap_DaemonOnly(t *testing.T) {
 		platformv1.PlatformDaemon_GetStatus_FullMethodName,
 		platformv1.PlatformDaemon_GetHealth_FullMethodName,
 		platformv1.PlatformDaemon_GetVersion_FullMethodName,
-		platformv1.PlatformDaemon_Provision_FullMethodName,
 		platformv1.PlatformDaemon_Shutdown_FullMethodName,
 		platformv1.PlatformDaemon_GetConfig_FullMethodName,
 	}

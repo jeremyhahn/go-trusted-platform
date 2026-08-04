@@ -59,24 +59,6 @@ func TestErrGetHealthFailed(t *testing.T) {
 	})
 }
 
-func TestErrProvisionFailed(t *testing.T) {
-	cause := errors.New("TPM not found")
-	err := &ErrProvisionFailed{Cause: cause}
-
-	t.Run("Error returns formatted message", func(t *testing.T) {
-		msg := err.Error()
-		if !strings.Contains(msg, "failed to provision platform") {
-			t.Errorf("Error() = %v, should contain expected message", msg)
-		}
-	})
-
-	t.Run("Unwrap returns cause", func(t *testing.T) {
-		if err.Unwrap() != cause {
-			t.Errorf("Unwrap() = %v, want %v", err.Unwrap(), cause)
-		}
-	})
-}
-
 func TestErrShutdownFailed(t *testing.T) {
 	cause := errors.New("services still running")
 	err := &ErrShutdownFailed{Cause: cause}

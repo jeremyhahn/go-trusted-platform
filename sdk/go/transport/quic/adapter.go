@@ -325,6 +325,7 @@ var categoryOpcodes = map[byte]struct{}{
 	quicapi.OpTenantBarrierCategory: {},
 	quicapi.OpSwitchCategory:        {},
 	quicapi.OpProvisioningCategory:  {},
+	quicapi.OpVMExtendedCategory:    {},
 }
 
 // categorySubOpcodeMap routes gRPC method paths to the sub-opcode byte
@@ -342,6 +343,15 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.SwitchService/SetPortVLAN":   quicapi.SwitchSubSetPortVLAN,
 	"/platform.v1.SwitchService/EnablePort":    quicapi.SwitchSubEnablePort,
 	"/platform.v1.SwitchService/DisablePort":   quicapi.SwitchSubDisablePort,
+
+	// Compute Service containers — OpVMExtendedCategory (0x69) sub-opcodes.
+	// Server dispatcher: pkg/api/daemon/quic_vm.go::handleVMServiceOperation
+	"/platform.v1.ComputeService/CreateContainer": quicapi.OpContainerCreate,
+	"/platform.v1.ComputeService/StartContainer":  quicapi.OpContainerStart,
+	"/platform.v1.ComputeService/StopContainer":   quicapi.OpContainerStop,
+	"/platform.v1.ComputeService/DeleteContainer": quicapi.OpContainerRemove,
+	"/platform.v1.ComputeService/GetContainer":    quicapi.OpContainerGet,
+	"/platform.v1.ComputeService/ListContainers":  quicapi.OpContainerList,
 
 	// Tenant Service — OpTenantBarrierCategory (0x9E)
 	// Server dispatcher: pkg/api/daemon/quic_tenant.go::handleTenantBarrierCategory
@@ -530,7 +540,7 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	// Attestation Service — proto: pkg/api/grpc/proto/attestation.proto
 	"/platform.v1.AttestationService/GetAttestationQuote":    quicapi.OpAttestQuote,
 	"/platform.v1.AttestationService/VerifyAttestationQuote": quicapi.OpAttestVerify,
-	"/platform.v1.AttestationService/CollectHostAttestation": quicapi.OpAttestQuote,
+	"/platform.v1.AttestationService/CollectHostAttestation": quicapi.OpAttestCollectHost,
 
 	// IDevID Service — proto: pkg/api/grpc/proto/idevid.proto
 	"/platform.v1.IDevIDService/GetIDevID":                quicapi.OpIDevIDInfo,
@@ -597,12 +607,12 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.EABService/CleanupExpiredCredentials": quicapi.OpProvisioningCategory,
 
 	// Compute Service — proto: pkg/api/grpc/proto/compute.proto
-	"/platform.v1.ComputeService/CreateContainer":  quicapi.OpContainerCreate,
-	"/platform.v1.ComputeService/DeleteContainer":  quicapi.OpContainerRemove,
-	"/platform.v1.ComputeService/StartContainer":   quicapi.OpContainerStart,
-	"/platform.v1.ComputeService/StopContainer":    quicapi.OpContainerStop,
-	"/platform.v1.ComputeService/ListContainers":   quicapi.OpContainerList,
-	"/platform.v1.ComputeService/GetContainer":     quicapi.OpContainerGet,
+	"/platform.v1.ComputeService/CreateContainer":  quicapi.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/DeleteContainer":  quicapi.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/StartContainer":   quicapi.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/StopContainer":    quicapi.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/ListContainers":   quicapi.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/GetContainer":     quicapi.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/GetContainerLogs": quicapi.OpContainerLogs,
 
 	// Switch Service — proto: pkg/api/grpc/proto/switch.proto

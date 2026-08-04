@@ -17,7 +17,6 @@ service PlatformDaemon {
   // System operations
   rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
   rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
-  rpc Provision(ProvisionRequest) returns (ProvisionResponse);
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
   rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
 
@@ -214,21 +213,6 @@ message GetHealthResponse {
   HealthStatus status = 1;
   repeated ComponentHealth components = 2;
   google.protobuf.Timestamp timestamp = 3;
-}
-
-message ProvisionRequest {
-  string owner_password = 1;
-  string endorsement_password = 2;
-  bool provision_tpm = 3;
-  bool provision_ca = 4;
-  bool provision_network = 5;
-  map<string, string> options = 6;
-}
-
-message ProvisionResponse {
-  Status status = 1;
-  repeated string steps_completed = 2;
-  map<string, string> results = 3;
 }
 
 message ShutdownRequest {

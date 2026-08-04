@@ -1733,6 +1733,170 @@ func (x *CreateIAKCSRResponse) GetCsrPem() []byte {
 	return nil
 }
 
+type CreateLDevIDRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Template carries the subject and SAN fields for the LDevID certificate.
+	Template *CSRTemplate `protobuf:"bytes,1,opt,name=template,proto3" json:"template,omitempty"`
+	// Algorithm specifies the LDevID key algorithm (default: ECDSA-P256).
+	Algorithm DeviceKeyAlgorithm `protobuf:"varint,2,opt,name=algorithm,proto3,enum=platform.v1.DeviceKeyAlgorithm" json:"algorithm,omitempty"`
+	// Handle is the persistent TPM handle for the LDevID key. This MUST be
+	// distinct from the IDevID and IAK handles. Default: 0x81010102.
+	Handle uint32 `protobuf:"varint,3,opt,name=handle,proto3" json:"handle,omitempty"`
+	// Profile selects the platform CA certificate profile used for issuance.
+	// If empty, the CA's default end-entity profile is used.
+	Profile string `protobuf:"bytes,4,opt,name=profile,proto3" json:"profile,omitempty"`
+	// ValidityDays overrides the issued certificate validity period.
+	// A value of 0 uses the CA/profile default.
+	ValidityDays uint32 `protobuf:"varint,5,opt,name=validity_days,json=validityDays,proto3" json:"validity_days,omitempty"`
+	// Overwrite allows overwriting an existing LDevID key at the handle.
+	Overwrite     bool `protobuf:"varint,6,opt,name=overwrite,proto3" json:"overwrite,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateLDevIDRequest) Reset() {
+	*x = CreateLDevIDRequest{}
+	mi := &file_idevid_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateLDevIDRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateLDevIDRequest) ProtoMessage() {}
+
+func (x *CreateLDevIDRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_idevid_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateLDevIDRequest.ProtoReflect.Descriptor instead.
+func (*CreateLDevIDRequest) Descriptor() ([]byte, []int) {
+	return file_idevid_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *CreateLDevIDRequest) GetTemplate() *CSRTemplate {
+	if x != nil {
+		return x.Template
+	}
+	return nil
+}
+
+func (x *CreateLDevIDRequest) GetAlgorithm() DeviceKeyAlgorithm {
+	if x != nil {
+		return x.Algorithm
+	}
+	return DeviceKeyAlgorithm_DEVICE_KEY_ALGORITHM_UNSPECIFIED
+}
+
+func (x *CreateLDevIDRequest) GetHandle() uint32 {
+	if x != nil {
+		return x.Handle
+	}
+	return 0
+}
+
+func (x *CreateLDevIDRequest) GetProfile() string {
+	if x != nil {
+		return x.Profile
+	}
+	return ""
+}
+
+func (x *CreateLDevIDRequest) GetValidityDays() uint32 {
+	if x != nil {
+		return x.ValidityDays
+	}
+	return 0
+}
+
+func (x *CreateLDevIDRequest) GetOverwrite() bool {
+	if x != nil {
+		return x.Overwrite
+	}
+	return false
+}
+
+type CreateLDevIDResponse struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Status *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	// CsrPEM is the PEM-encoded PKCS#10 CSR that was signed by the CA.
+	CsrPem []byte `protobuf:"bytes,2,opt,name=csr_pem,json=csrPem,proto3" json:"csr_pem,omitempty"`
+	// CertificatePEM is the PEM-encoded LDevID certificate issued by the CA.
+	CertificatePem []byte `protobuf:"bytes,3,opt,name=certificate_pem,json=certificatePem,proto3" json:"certificate_pem,omitempty"`
+	// Certificate contains parsed metadata for the issued LDevID certificate.
+	Certificate   *DeviceIdentityCertificate `protobuf:"bytes,4,opt,name=certificate,proto3" json:"certificate,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateLDevIDResponse) Reset() {
+	*x = CreateLDevIDResponse{}
+	mi := &file_idevid_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateLDevIDResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateLDevIDResponse) ProtoMessage() {}
+
+func (x *CreateLDevIDResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_idevid_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateLDevIDResponse.ProtoReflect.Descriptor instead.
+func (*CreateLDevIDResponse) Descriptor() ([]byte, []int) {
+	return file_idevid_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *CreateLDevIDResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+func (x *CreateLDevIDResponse) GetCsrPem() []byte {
+	if x != nil {
+		return x.CsrPem
+	}
+	return nil
+}
+
+func (x *CreateLDevIDResponse) GetCertificatePem() []byte {
+	if x != nil {
+		return x.CertificatePem
+	}
+	return nil
+}
+
+func (x *CreateLDevIDResponse) GetCertificate() *DeviceIdentityCertificate {
+	if x != nil {
+		return x.Certificate
+	}
+	return nil
+}
+
 type InstallIDevIDCertificateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// CertificatePEM is the PEM-encoded certificate to install.
@@ -1743,7 +1907,7 @@ type InstallIDevIDCertificateRequest struct {
 
 func (x *InstallIDevIDCertificateRequest) Reset() {
 	*x = InstallIDevIDCertificateRequest{}
-	mi := &file_idevid_proto_msgTypes[26]
+	mi := &file_idevid_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1755,7 +1919,7 @@ func (x *InstallIDevIDCertificateRequest) String() string {
 func (*InstallIDevIDCertificateRequest) ProtoMessage() {}
 
 func (x *InstallIDevIDCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[26]
+	mi := &file_idevid_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1768,7 +1932,7 @@ func (x *InstallIDevIDCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallIDevIDCertificateRequest.ProtoReflect.Descriptor instead.
 func (*InstallIDevIDCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{26}
+	return file_idevid_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *InstallIDevIDCertificateRequest) GetCertificatePem() []byte {
@@ -1787,7 +1951,7 @@ type InstallIDevIDCertificateResponse struct {
 
 func (x *InstallIDevIDCertificateResponse) Reset() {
 	*x = InstallIDevIDCertificateResponse{}
-	mi := &file_idevid_proto_msgTypes[27]
+	mi := &file_idevid_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1799,7 +1963,7 @@ func (x *InstallIDevIDCertificateResponse) String() string {
 func (*InstallIDevIDCertificateResponse) ProtoMessage() {}
 
 func (x *InstallIDevIDCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[27]
+	mi := &file_idevid_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1812,7 +1976,7 @@ func (x *InstallIDevIDCertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallIDevIDCertificateResponse.ProtoReflect.Descriptor instead.
 func (*InstallIDevIDCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{27}
+	return file_idevid_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *InstallIDevIDCertificateResponse) GetStatus() *Status {
@@ -1832,7 +1996,7 @@ type InstallIAKCertificateRequest struct {
 
 func (x *InstallIAKCertificateRequest) Reset() {
 	*x = InstallIAKCertificateRequest{}
-	mi := &file_idevid_proto_msgTypes[28]
+	mi := &file_idevid_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1844,7 +2008,7 @@ func (x *InstallIAKCertificateRequest) String() string {
 func (*InstallIAKCertificateRequest) ProtoMessage() {}
 
 func (x *InstallIAKCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[28]
+	mi := &file_idevid_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1857,7 +2021,7 @@ func (x *InstallIAKCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallIAKCertificateRequest.ProtoReflect.Descriptor instead.
 func (*InstallIAKCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{28}
+	return file_idevid_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *InstallIAKCertificateRequest) GetCertificatePem() []byte {
@@ -1876,7 +2040,7 @@ type InstallIAKCertificateResponse struct {
 
 func (x *InstallIAKCertificateResponse) Reset() {
 	*x = InstallIAKCertificateResponse{}
-	mi := &file_idevid_proto_msgTypes[29]
+	mi := &file_idevid_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1888,7 +2052,7 @@ func (x *InstallIAKCertificateResponse) String() string {
 func (*InstallIAKCertificateResponse) ProtoMessage() {}
 
 func (x *InstallIAKCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[29]
+	mi := &file_idevid_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1901,7 +2065,7 @@ func (x *InstallIAKCertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallIAKCertificateResponse.ProtoReflect.Descriptor instead.
 func (*InstallIAKCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{29}
+	return file_idevid_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *InstallIAKCertificateResponse) GetStatus() *Status {
@@ -1919,7 +2083,7 @@ type GetIDevIDCertificateRequest struct {
 
 func (x *GetIDevIDCertificateRequest) Reset() {
 	*x = GetIDevIDCertificateRequest{}
-	mi := &file_idevid_proto_msgTypes[30]
+	mi := &file_idevid_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1931,7 +2095,7 @@ func (x *GetIDevIDCertificateRequest) String() string {
 func (*GetIDevIDCertificateRequest) ProtoMessage() {}
 
 func (x *GetIDevIDCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[30]
+	mi := &file_idevid_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1944,7 +2108,7 @@ func (x *GetIDevIDCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetIDevIDCertificateRequest.ProtoReflect.Descriptor instead.
 func (*GetIDevIDCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{30}
+	return file_idevid_proto_rawDescGZIP(), []int{32}
 }
 
 type GetIDevIDCertificateResponse struct {
@@ -1956,7 +2120,7 @@ type GetIDevIDCertificateResponse struct {
 
 func (x *GetIDevIDCertificateResponse) Reset() {
 	*x = GetIDevIDCertificateResponse{}
-	mi := &file_idevid_proto_msgTypes[31]
+	mi := &file_idevid_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1968,7 +2132,7 @@ func (x *GetIDevIDCertificateResponse) String() string {
 func (*GetIDevIDCertificateResponse) ProtoMessage() {}
 
 func (x *GetIDevIDCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[31]
+	mi := &file_idevid_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1981,7 +2145,7 @@ func (x *GetIDevIDCertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetIDevIDCertificateResponse.ProtoReflect.Descriptor instead.
 func (*GetIDevIDCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{31}
+	return file_idevid_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *GetIDevIDCertificateResponse) GetCertificate() *DeviceIdentityCertificate {
@@ -1999,7 +2163,7 @@ type GetIAKCertificateRequest struct {
 
 func (x *GetIAKCertificateRequest) Reset() {
 	*x = GetIAKCertificateRequest{}
-	mi := &file_idevid_proto_msgTypes[32]
+	mi := &file_idevid_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2011,7 +2175,7 @@ func (x *GetIAKCertificateRequest) String() string {
 func (*GetIAKCertificateRequest) ProtoMessage() {}
 
 func (x *GetIAKCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[32]
+	mi := &file_idevid_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2024,7 +2188,7 @@ func (x *GetIAKCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetIAKCertificateRequest.ProtoReflect.Descriptor instead.
 func (*GetIAKCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{32}
+	return file_idevid_proto_rawDescGZIP(), []int{34}
 }
 
 type GetIAKCertificateResponse struct {
@@ -2036,7 +2200,7 @@ type GetIAKCertificateResponse struct {
 
 func (x *GetIAKCertificateResponse) Reset() {
 	*x = GetIAKCertificateResponse{}
-	mi := &file_idevid_proto_msgTypes[33]
+	mi := &file_idevid_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2048,7 +2212,7 @@ func (x *GetIAKCertificateResponse) String() string {
 func (*GetIAKCertificateResponse) ProtoMessage() {}
 
 func (x *GetIAKCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[33]
+	mi := &file_idevid_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2061,7 +2225,7 @@ func (x *GetIAKCertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetIAKCertificateResponse.ProtoReflect.Descriptor instead.
 func (*GetIAKCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{33}
+	return file_idevid_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *GetIAKCertificateResponse) GetCertificate() *DeviceIdentityCertificate {
@@ -2079,7 +2243,7 @@ type DeleteIDevIDCertificateRequest struct {
 
 func (x *DeleteIDevIDCertificateRequest) Reset() {
 	*x = DeleteIDevIDCertificateRequest{}
-	mi := &file_idevid_proto_msgTypes[34]
+	mi := &file_idevid_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2091,7 +2255,7 @@ func (x *DeleteIDevIDCertificateRequest) String() string {
 func (*DeleteIDevIDCertificateRequest) ProtoMessage() {}
 
 func (x *DeleteIDevIDCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[34]
+	mi := &file_idevid_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2104,7 +2268,7 @@ func (x *DeleteIDevIDCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteIDevIDCertificateRequest.ProtoReflect.Descriptor instead.
 func (*DeleteIDevIDCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{34}
+	return file_idevid_proto_rawDescGZIP(), []int{36}
 }
 
 type DeleteIDevIDCertificateResponse struct {
@@ -2116,7 +2280,7 @@ type DeleteIDevIDCertificateResponse struct {
 
 func (x *DeleteIDevIDCertificateResponse) Reset() {
 	*x = DeleteIDevIDCertificateResponse{}
-	mi := &file_idevid_proto_msgTypes[35]
+	mi := &file_idevid_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2128,7 +2292,7 @@ func (x *DeleteIDevIDCertificateResponse) String() string {
 func (*DeleteIDevIDCertificateResponse) ProtoMessage() {}
 
 func (x *DeleteIDevIDCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[35]
+	mi := &file_idevid_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2141,7 +2305,7 @@ func (x *DeleteIDevIDCertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteIDevIDCertificateResponse.ProtoReflect.Descriptor instead.
 func (*DeleteIDevIDCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{35}
+	return file_idevid_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *DeleteIDevIDCertificateResponse) GetStatus() *Status {
@@ -2159,7 +2323,7 @@ type DeleteIAKCertificateRequest struct {
 
 func (x *DeleteIAKCertificateRequest) Reset() {
 	*x = DeleteIAKCertificateRequest{}
-	mi := &file_idevid_proto_msgTypes[36]
+	mi := &file_idevid_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2171,7 +2335,7 @@ func (x *DeleteIAKCertificateRequest) String() string {
 func (*DeleteIAKCertificateRequest) ProtoMessage() {}
 
 func (x *DeleteIAKCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[36]
+	mi := &file_idevid_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2184,7 +2348,7 @@ func (x *DeleteIAKCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteIAKCertificateRequest.ProtoReflect.Descriptor instead.
 func (*DeleteIAKCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{36}
+	return file_idevid_proto_rawDescGZIP(), []int{38}
 }
 
 type DeleteIAKCertificateResponse struct {
@@ -2196,7 +2360,7 @@ type DeleteIAKCertificateResponse struct {
 
 func (x *DeleteIAKCertificateResponse) Reset() {
 	*x = DeleteIAKCertificateResponse{}
-	mi := &file_idevid_proto_msgTypes[37]
+	mi := &file_idevid_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2208,7 +2372,7 @@ func (x *DeleteIAKCertificateResponse) String() string {
 func (*DeleteIAKCertificateResponse) ProtoMessage() {}
 
 func (x *DeleteIAKCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[37]
+	mi := &file_idevid_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2221,7 +2385,7 @@ func (x *DeleteIAKCertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteIAKCertificateResponse.ProtoReflect.Descriptor instead.
 func (*DeleteIAKCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{37}
+	return file_idevid_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *DeleteIAKCertificateResponse) GetStatus() *Status {
@@ -2239,7 +2403,7 @@ type GetDeviceAttributesRequest struct {
 
 func (x *GetDeviceAttributesRequest) Reset() {
 	*x = GetDeviceAttributesRequest{}
-	mi := &file_idevid_proto_msgTypes[38]
+	mi := &file_idevid_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2251,7 +2415,7 @@ func (x *GetDeviceAttributesRequest) String() string {
 func (*GetDeviceAttributesRequest) ProtoMessage() {}
 
 func (x *GetDeviceAttributesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[38]
+	mi := &file_idevid_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2264,7 +2428,7 @@ func (x *GetDeviceAttributesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDeviceAttributesRequest.ProtoReflect.Descriptor instead.
 func (*GetDeviceAttributesRequest) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{38}
+	return file_idevid_proto_rawDescGZIP(), []int{40}
 }
 
 type GetDeviceAttributesResponse struct {
@@ -2276,7 +2440,7 @@ type GetDeviceAttributesResponse struct {
 
 func (x *GetDeviceAttributesResponse) Reset() {
 	*x = GetDeviceAttributesResponse{}
-	mi := &file_idevid_proto_msgTypes[39]
+	mi := &file_idevid_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2288,7 +2452,7 @@ func (x *GetDeviceAttributesResponse) String() string {
 func (*GetDeviceAttributesResponse) ProtoMessage() {}
 
 func (x *GetDeviceAttributesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[39]
+	mi := &file_idevid_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2301,7 +2465,7 @@ func (x *GetDeviceAttributesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDeviceAttributesResponse.ProtoReflect.Descriptor instead.
 func (*GetDeviceAttributesResponse) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{39}
+	return file_idevid_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *GetDeviceAttributesResponse) GetAttributes() *TCGDeviceAttributes {
@@ -2323,7 +2487,7 @@ type ActivateCredentialRequest struct {
 
 func (x *ActivateCredentialRequest) Reset() {
 	*x = ActivateCredentialRequest{}
-	mi := &file_idevid_proto_msgTypes[40]
+	mi := &file_idevid_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2335,7 +2499,7 @@ func (x *ActivateCredentialRequest) String() string {
 func (*ActivateCredentialRequest) ProtoMessage() {}
 
 func (x *ActivateCredentialRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[40]
+	mi := &file_idevid_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2348,7 +2512,7 @@ func (x *ActivateCredentialRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActivateCredentialRequest.ProtoReflect.Descriptor instead.
 func (*ActivateCredentialRequest) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{40}
+	return file_idevid_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *ActivateCredentialRequest) GetCredentialBlob() []byte {
@@ -2376,7 +2540,7 @@ type ActivateCredentialResponse struct {
 
 func (x *ActivateCredentialResponse) Reset() {
 	*x = ActivateCredentialResponse{}
-	mi := &file_idevid_proto_msgTypes[41]
+	mi := &file_idevid_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2388,7 +2552,7 @@ func (x *ActivateCredentialResponse) String() string {
 func (*ActivateCredentialResponse) ProtoMessage() {}
 
 func (x *ActivateCredentialResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[41]
+	mi := &file_idevid_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2401,7 +2565,7 @@ func (x *ActivateCredentialResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActivateCredentialResponse.ProtoReflect.Descriptor instead.
 func (*ActivateCredentialResponse) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{41}
+	return file_idevid_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *ActivateCredentialResponse) GetStatus() *Status {
@@ -2426,7 +2590,7 @@ type FlushTransientContextsRequest struct {
 
 func (x *FlushTransientContextsRequest) Reset() {
 	*x = FlushTransientContextsRequest{}
-	mi := &file_idevid_proto_msgTypes[42]
+	mi := &file_idevid_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2438,7 +2602,7 @@ func (x *FlushTransientContextsRequest) String() string {
 func (*FlushTransientContextsRequest) ProtoMessage() {}
 
 func (x *FlushTransientContextsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[42]
+	mi := &file_idevid_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2451,7 +2615,7 @@ func (x *FlushTransientContextsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FlushTransientContextsRequest.ProtoReflect.Descriptor instead.
 func (*FlushTransientContextsRequest) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{42}
+	return file_idevid_proto_rawDescGZIP(), []int{44}
 }
 
 type FlushTransientContextsResponse struct {
@@ -2465,7 +2629,7 @@ type FlushTransientContextsResponse struct {
 
 func (x *FlushTransientContextsResponse) Reset() {
 	*x = FlushTransientContextsResponse{}
-	mi := &file_idevid_proto_msgTypes[43]
+	mi := &file_idevid_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2477,7 +2641,7 @@ func (x *FlushTransientContextsResponse) String() string {
 func (*FlushTransientContextsResponse) ProtoMessage() {}
 
 func (x *FlushTransientContextsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idevid_proto_msgTypes[43]
+	mi := &file_idevid_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2490,7 +2654,7 @@ func (x *FlushTransientContextsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FlushTransientContextsResponse.ProtoReflect.Descriptor instead.
 func (*FlushTransientContextsResponse) Descriptor() ([]byte, []int) {
-	return file_idevid_proto_rawDescGZIP(), []int{43}
+	return file_idevid_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *FlushTransientContextsResponse) GetStatus() *Status {
@@ -2621,7 +2785,19 @@ const file_idevid_proto_rawDesc = "" +
 	"\btemplate\x18\x01 \x01(\v2\x18.platform.v1.CSRTemplateR\btemplate\"\\\n" +
 	"\x14CreateIAKCSRResponse\x12+\n" +
 	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x12\x17\n" +
-	"\acsr_pem\x18\x02 \x01(\fR\x06csrPem\"J\n" +
+	"\acsr_pem\x18\x02 \x01(\fR\x06csrPem\"\xff\x01\n" +
+	"\x13CreateLDevIDRequest\x124\n" +
+	"\btemplate\x18\x01 \x01(\v2\x18.platform.v1.CSRTemplateR\btemplate\x12=\n" +
+	"\talgorithm\x18\x02 \x01(\x0e2\x1f.platform.v1.DeviceKeyAlgorithmR\talgorithm\x12\x16\n" +
+	"\x06handle\x18\x03 \x01(\rR\x06handle\x12\x18\n" +
+	"\aprofile\x18\x04 \x01(\tR\aprofile\x12#\n" +
+	"\rvalidity_days\x18\x05 \x01(\rR\fvalidityDays\x12\x1c\n" +
+	"\toverwrite\x18\x06 \x01(\bR\toverwrite\"\xcf\x01\n" +
+	"\x14CreateLDevIDResponse\x12+\n" +
+	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x12\x17\n" +
+	"\acsr_pem\x18\x02 \x01(\fR\x06csrPem\x12'\n" +
+	"\x0fcertificate_pem\x18\x03 \x01(\fR\x0ecertificatePem\x12H\n" +
+	"\vcertificate\x18\x04 \x01(\v2&.platform.v1.DeviceIdentityCertificateR\vcertificate\"J\n" +
 	"\x1fInstallIDevIDCertificateRequest\x12'\n" +
 	"\x0fcertificate_pem\x18\x01 \x01(\fR\x0ecertificatePem\"O\n" +
 	" InstallIDevIDCertificateResponse\x12+\n" +
@@ -2666,7 +2842,7 @@ const file_idevid_proto_rawDesc = "" +
 	"\x0fCertStorageType\x12!\n" +
 	"\x1dCERT_STORAGE_TYPE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17CERT_STORAGE_TYPE_NVRAM\x10\x01\x12 \n" +
-	"\x1cCERT_STORAGE_TYPE_FILESYSTEM\x10\x022\xa7\x0e\n" +
+	"\x1cCERT_STORAGE_TYPE_FILESYSTEM\x10\x022\xfc\x0e\n" +
 	"\rIDevIDService\x12Y\n" +
 	"\x0eGenerateIDevID\x12\".platform.v1.GenerateIDevIDRequest\x1a#.platform.v1.GenerateIDevIDResponse\x12V\n" +
 	"\rGetIDevIDInfo\x12!.platform.v1.GetIDevIDInfoRequest\x1a\".platform.v1.GetIDevIDInfoResponse\x12J\n" +
@@ -2678,7 +2854,8 @@ const file_idevid_proto_rawDesc = "" +
 	"\x06HasIAK\x12\x1a.platform.v1.HasIAKRequest\x1a\x1b.platform.v1.HasIAKResponse\x12J\n" +
 	"\tDeleteIAK\x12\x1d.platform.v1.DeleteIAKRequest\x1a\x1e.platform.v1.DeleteIAKResponse\x12\\\n" +
 	"\x0fCreateIDevIDCSR\x12#.platform.v1.CreateIDevIDCSRRequest\x1a$.platform.v1.CreateIDevIDCSRResponse\x12S\n" +
-	"\fCreateIAKCSR\x12 .platform.v1.CreateIAKCSRRequest\x1a!.platform.v1.CreateIAKCSRResponse\x12w\n" +
+	"\fCreateIAKCSR\x12 .platform.v1.CreateIAKCSRRequest\x1a!.platform.v1.CreateIAKCSRResponse\x12S\n" +
+	"\fCreateLDevID\x12 .platform.v1.CreateLDevIDRequest\x1a!.platform.v1.CreateLDevIDResponse\x12w\n" +
 	"\x18InstallIDevIDCertificate\x12,.platform.v1.InstallIDevIDCertificateRequest\x1a-.platform.v1.InstallIDevIDCertificateResponse\x12n\n" +
 	"\x15InstallIAKCertificate\x12).platform.v1.InstallIAKCertificateRequest\x1a*.platform.v1.InstallIAKCertificateResponse\x12k\n" +
 	"\x14GetIDevIDCertificate\x12(.platform.v1.GetIDevIDCertificateRequest\x1a).platform.v1.GetIDevIDCertificateResponse\x12b\n" +
@@ -2702,7 +2879,7 @@ func file_idevid_proto_rawDescGZIP() []byte {
 }
 
 var file_idevid_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_idevid_proto_msgTypes = make([]protoimpl.MessageInfo, 44)
+var file_idevid_proto_msgTypes = make([]protoimpl.MessageInfo, 46)
 var file_idevid_proto_goTypes = []any{
 	(DeviceKeyAlgorithm)(0),                  // 0: platform.v1.DeviceKeyAlgorithm
 	(CertStorageType)(0),                     // 1: platform.v1.CertStorageType
@@ -2732,26 +2909,28 @@ var file_idevid_proto_goTypes = []any{
 	(*CreateIDevIDCSRResponse)(nil),          // 25: platform.v1.CreateIDevIDCSRResponse
 	(*CreateIAKCSRRequest)(nil),              // 26: platform.v1.CreateIAKCSRRequest
 	(*CreateIAKCSRResponse)(nil),             // 27: platform.v1.CreateIAKCSRResponse
-	(*InstallIDevIDCertificateRequest)(nil),  // 28: platform.v1.InstallIDevIDCertificateRequest
-	(*InstallIDevIDCertificateResponse)(nil), // 29: platform.v1.InstallIDevIDCertificateResponse
-	(*InstallIAKCertificateRequest)(nil),     // 30: platform.v1.InstallIAKCertificateRequest
-	(*InstallIAKCertificateResponse)(nil),    // 31: platform.v1.InstallIAKCertificateResponse
-	(*GetIDevIDCertificateRequest)(nil),      // 32: platform.v1.GetIDevIDCertificateRequest
-	(*GetIDevIDCertificateResponse)(nil),     // 33: platform.v1.GetIDevIDCertificateResponse
-	(*GetIAKCertificateRequest)(nil),         // 34: platform.v1.GetIAKCertificateRequest
-	(*GetIAKCertificateResponse)(nil),        // 35: platform.v1.GetIAKCertificateResponse
-	(*DeleteIDevIDCertificateRequest)(nil),   // 36: platform.v1.DeleteIDevIDCertificateRequest
-	(*DeleteIDevIDCertificateResponse)(nil),  // 37: platform.v1.DeleteIDevIDCertificateResponse
-	(*DeleteIAKCertificateRequest)(nil),      // 38: platform.v1.DeleteIAKCertificateRequest
-	(*DeleteIAKCertificateResponse)(nil),     // 39: platform.v1.DeleteIAKCertificateResponse
-	(*GetDeviceAttributesRequest)(nil),       // 40: platform.v1.GetDeviceAttributesRequest
-	(*GetDeviceAttributesResponse)(nil),      // 41: platform.v1.GetDeviceAttributesResponse
-	(*ActivateCredentialRequest)(nil),        // 42: platform.v1.ActivateCredentialRequest
-	(*ActivateCredentialResponse)(nil),       // 43: platform.v1.ActivateCredentialResponse
-	(*FlushTransientContextsRequest)(nil),    // 44: platform.v1.FlushTransientContextsRequest
-	(*FlushTransientContextsResponse)(nil),   // 45: platform.v1.FlushTransientContextsResponse
-	(*timestamppb.Timestamp)(nil),            // 46: google.protobuf.Timestamp
-	(*Status)(nil),                           // 47: platform.v1.Status
+	(*CreateLDevIDRequest)(nil),              // 28: platform.v1.CreateLDevIDRequest
+	(*CreateLDevIDResponse)(nil),             // 29: platform.v1.CreateLDevIDResponse
+	(*InstallIDevIDCertificateRequest)(nil),  // 30: platform.v1.InstallIDevIDCertificateRequest
+	(*InstallIDevIDCertificateResponse)(nil), // 31: platform.v1.InstallIDevIDCertificateResponse
+	(*InstallIAKCertificateRequest)(nil),     // 32: platform.v1.InstallIAKCertificateRequest
+	(*InstallIAKCertificateResponse)(nil),    // 33: platform.v1.InstallIAKCertificateResponse
+	(*GetIDevIDCertificateRequest)(nil),      // 34: platform.v1.GetIDevIDCertificateRequest
+	(*GetIDevIDCertificateResponse)(nil),     // 35: platform.v1.GetIDevIDCertificateResponse
+	(*GetIAKCertificateRequest)(nil),         // 36: platform.v1.GetIAKCertificateRequest
+	(*GetIAKCertificateResponse)(nil),        // 37: platform.v1.GetIAKCertificateResponse
+	(*DeleteIDevIDCertificateRequest)(nil),   // 38: platform.v1.DeleteIDevIDCertificateRequest
+	(*DeleteIDevIDCertificateResponse)(nil),  // 39: platform.v1.DeleteIDevIDCertificateResponse
+	(*DeleteIAKCertificateRequest)(nil),      // 40: platform.v1.DeleteIAKCertificateRequest
+	(*DeleteIAKCertificateResponse)(nil),     // 41: platform.v1.DeleteIAKCertificateResponse
+	(*GetDeviceAttributesRequest)(nil),       // 42: platform.v1.GetDeviceAttributesRequest
+	(*GetDeviceAttributesResponse)(nil),      // 43: platform.v1.GetDeviceAttributesResponse
+	(*ActivateCredentialRequest)(nil),        // 44: platform.v1.ActivateCredentialRequest
+	(*ActivateCredentialResponse)(nil),       // 45: platform.v1.ActivateCredentialResponse
+	(*FlushTransientContextsRequest)(nil),    // 46: platform.v1.FlushTransientContextsRequest
+	(*FlushTransientContextsResponse)(nil),   // 47: platform.v1.FlushTransientContextsResponse
+	(*timestamppb.Timestamp)(nil),            // 48: google.protobuf.Timestamp
+	(*Status)(nil),                           // 49: platform.v1.Status
 }
 var file_idevid_proto_depIdxs = []int32{
 	0,  // 0: platform.v1.IDevIDConfig.algorithm:type_name -> platform.v1.DeviceKeyAlgorithm
@@ -2760,74 +2939,80 @@ var file_idevid_proto_depIdxs = []int32{
 	1,  // 3: platform.v1.IAKConfig.storage:type_name -> platform.v1.CertStorageType
 	5,  // 4: platform.v1.CSRTemplate.tcg_attributes:type_name -> platform.v1.TCGDeviceAttributes
 	0,  // 5: platform.v1.DeviceKeyInfo.algorithm:type_name -> platform.v1.DeviceKeyAlgorithm
-	46, // 6: platform.v1.DeviceKeyInfo.created_at:type_name -> google.protobuf.Timestamp
+	48, // 6: platform.v1.DeviceKeyInfo.created_at:type_name -> google.protobuf.Timestamp
 	7,  // 7: platform.v1.DeviceKeyInfo.certificate_info:type_name -> platform.v1.DeviceIdentityCertificate
-	46, // 8: platform.v1.DeviceIdentityCertificate.issued_at:type_name -> google.protobuf.Timestamp
-	46, // 9: platform.v1.DeviceIdentityCertificate.expires_at:type_name -> google.protobuf.Timestamp
+	48, // 8: platform.v1.DeviceIdentityCertificate.issued_at:type_name -> google.protobuf.Timestamp
+	48, // 9: platform.v1.DeviceIdentityCertificate.expires_at:type_name -> google.protobuf.Timestamp
 	2,  // 10: platform.v1.GenerateIDevIDRequest.config:type_name -> platform.v1.IDevIDConfig
-	47, // 11: platform.v1.GenerateIDevIDResponse.status:type_name -> platform.v1.Status
+	49, // 11: platform.v1.GenerateIDevIDResponse.status:type_name -> platform.v1.Status
 	6,  // 12: platform.v1.GetIDevIDInfoResponse.key_info:type_name -> platform.v1.DeviceKeyInfo
-	47, // 13: platform.v1.DeleteIDevIDResponse.status:type_name -> platform.v1.Status
+	49, // 13: platform.v1.DeleteIDevIDResponse.status:type_name -> platform.v1.Status
 	3,  // 14: platform.v1.GenerateIAKRequest.config:type_name -> platform.v1.IAKConfig
-	47, // 15: platform.v1.GenerateIAKResponse.status:type_name -> platform.v1.Status
+	49, // 15: platform.v1.GenerateIAKResponse.status:type_name -> platform.v1.Status
 	6,  // 16: platform.v1.GetIAKInfoResponse.key_info:type_name -> platform.v1.DeviceKeyInfo
-	47, // 17: platform.v1.DeleteIAKResponse.status:type_name -> platform.v1.Status
+	49, // 17: platform.v1.DeleteIAKResponse.status:type_name -> platform.v1.Status
 	4,  // 18: platform.v1.CreateIDevIDCSRRequest.template:type_name -> platform.v1.CSRTemplate
-	47, // 19: platform.v1.CreateIDevIDCSRResponse.status:type_name -> platform.v1.Status
+	49, // 19: platform.v1.CreateIDevIDCSRResponse.status:type_name -> platform.v1.Status
 	4,  // 20: platform.v1.CreateIAKCSRRequest.template:type_name -> platform.v1.CSRTemplate
-	47, // 21: platform.v1.CreateIAKCSRResponse.status:type_name -> platform.v1.Status
-	47, // 22: platform.v1.InstallIDevIDCertificateResponse.status:type_name -> platform.v1.Status
-	47, // 23: platform.v1.InstallIAKCertificateResponse.status:type_name -> platform.v1.Status
-	7,  // 24: platform.v1.GetIDevIDCertificateResponse.certificate:type_name -> platform.v1.DeviceIdentityCertificate
-	7,  // 25: platform.v1.GetIAKCertificateResponse.certificate:type_name -> platform.v1.DeviceIdentityCertificate
-	47, // 26: platform.v1.DeleteIDevIDCertificateResponse.status:type_name -> platform.v1.Status
-	47, // 27: platform.v1.DeleteIAKCertificateResponse.status:type_name -> platform.v1.Status
-	5,  // 28: platform.v1.GetDeviceAttributesResponse.attributes:type_name -> platform.v1.TCGDeviceAttributes
-	47, // 29: platform.v1.ActivateCredentialResponse.status:type_name -> platform.v1.Status
-	47, // 30: platform.v1.FlushTransientContextsResponse.status:type_name -> platform.v1.Status
-	8,  // 31: platform.v1.IDevIDService.GenerateIDevID:input_type -> platform.v1.GenerateIDevIDRequest
-	10, // 32: platform.v1.IDevIDService.GetIDevIDInfo:input_type -> platform.v1.GetIDevIDInfoRequest
-	12, // 33: platform.v1.IDevIDService.HasIDevID:input_type -> platform.v1.HasIDevIDRequest
-	14, // 34: platform.v1.IDevIDService.DeleteIDevID:input_type -> platform.v1.DeleteIDevIDRequest
-	16, // 35: platform.v1.IDevIDService.GenerateIAK:input_type -> platform.v1.GenerateIAKRequest
-	18, // 36: platform.v1.IDevIDService.GetIAKInfo:input_type -> platform.v1.GetIAKInfoRequest
-	20, // 37: platform.v1.IDevIDService.HasIAK:input_type -> platform.v1.HasIAKRequest
-	22, // 38: platform.v1.IDevIDService.DeleteIAK:input_type -> platform.v1.DeleteIAKRequest
-	24, // 39: platform.v1.IDevIDService.CreateIDevIDCSR:input_type -> platform.v1.CreateIDevIDCSRRequest
-	26, // 40: platform.v1.IDevIDService.CreateIAKCSR:input_type -> platform.v1.CreateIAKCSRRequest
-	28, // 41: platform.v1.IDevIDService.InstallIDevIDCertificate:input_type -> platform.v1.InstallIDevIDCertificateRequest
-	30, // 42: platform.v1.IDevIDService.InstallIAKCertificate:input_type -> platform.v1.InstallIAKCertificateRequest
-	32, // 43: platform.v1.IDevIDService.GetIDevIDCertificate:input_type -> platform.v1.GetIDevIDCertificateRequest
-	34, // 44: platform.v1.IDevIDService.GetIAKCertificate:input_type -> platform.v1.GetIAKCertificateRequest
-	36, // 45: platform.v1.IDevIDService.DeleteIDevIDCertificate:input_type -> platform.v1.DeleteIDevIDCertificateRequest
-	38, // 46: platform.v1.IDevIDService.DeleteIAKCertificate:input_type -> platform.v1.DeleteIAKCertificateRequest
-	40, // 47: platform.v1.IDevIDService.GetDeviceAttributes:input_type -> platform.v1.GetDeviceAttributesRequest
-	44, // 48: platform.v1.IDevIDService.FlushTransientContexts:input_type -> platform.v1.FlushTransientContextsRequest
-	42, // 49: platform.v1.IDevIDService.ActivateCredential:input_type -> platform.v1.ActivateCredentialRequest
-	9,  // 50: platform.v1.IDevIDService.GenerateIDevID:output_type -> platform.v1.GenerateIDevIDResponse
-	11, // 51: platform.v1.IDevIDService.GetIDevIDInfo:output_type -> platform.v1.GetIDevIDInfoResponse
-	13, // 52: platform.v1.IDevIDService.HasIDevID:output_type -> platform.v1.HasIDevIDResponse
-	15, // 53: platform.v1.IDevIDService.DeleteIDevID:output_type -> platform.v1.DeleteIDevIDResponse
-	17, // 54: platform.v1.IDevIDService.GenerateIAK:output_type -> platform.v1.GenerateIAKResponse
-	19, // 55: platform.v1.IDevIDService.GetIAKInfo:output_type -> platform.v1.GetIAKInfoResponse
-	21, // 56: platform.v1.IDevIDService.HasIAK:output_type -> platform.v1.HasIAKResponse
-	23, // 57: platform.v1.IDevIDService.DeleteIAK:output_type -> platform.v1.DeleteIAKResponse
-	25, // 58: platform.v1.IDevIDService.CreateIDevIDCSR:output_type -> platform.v1.CreateIDevIDCSRResponse
-	27, // 59: platform.v1.IDevIDService.CreateIAKCSR:output_type -> platform.v1.CreateIAKCSRResponse
-	29, // 60: platform.v1.IDevIDService.InstallIDevIDCertificate:output_type -> platform.v1.InstallIDevIDCertificateResponse
-	31, // 61: platform.v1.IDevIDService.InstallIAKCertificate:output_type -> platform.v1.InstallIAKCertificateResponse
-	33, // 62: platform.v1.IDevIDService.GetIDevIDCertificate:output_type -> platform.v1.GetIDevIDCertificateResponse
-	35, // 63: platform.v1.IDevIDService.GetIAKCertificate:output_type -> platform.v1.GetIAKCertificateResponse
-	37, // 64: platform.v1.IDevIDService.DeleteIDevIDCertificate:output_type -> platform.v1.DeleteIDevIDCertificateResponse
-	39, // 65: platform.v1.IDevIDService.DeleteIAKCertificate:output_type -> platform.v1.DeleteIAKCertificateResponse
-	41, // 66: platform.v1.IDevIDService.GetDeviceAttributes:output_type -> platform.v1.GetDeviceAttributesResponse
-	45, // 67: platform.v1.IDevIDService.FlushTransientContexts:output_type -> platform.v1.FlushTransientContextsResponse
-	43, // 68: platform.v1.IDevIDService.ActivateCredential:output_type -> platform.v1.ActivateCredentialResponse
-	50, // [50:69] is the sub-list for method output_type
-	31, // [31:50] is the sub-list for method input_type
-	31, // [31:31] is the sub-list for extension type_name
-	31, // [31:31] is the sub-list for extension extendee
-	0,  // [0:31] is the sub-list for field type_name
+	49, // 21: platform.v1.CreateIAKCSRResponse.status:type_name -> platform.v1.Status
+	4,  // 22: platform.v1.CreateLDevIDRequest.template:type_name -> platform.v1.CSRTemplate
+	0,  // 23: platform.v1.CreateLDevIDRequest.algorithm:type_name -> platform.v1.DeviceKeyAlgorithm
+	49, // 24: platform.v1.CreateLDevIDResponse.status:type_name -> platform.v1.Status
+	7,  // 25: platform.v1.CreateLDevIDResponse.certificate:type_name -> platform.v1.DeviceIdentityCertificate
+	49, // 26: platform.v1.InstallIDevIDCertificateResponse.status:type_name -> platform.v1.Status
+	49, // 27: platform.v1.InstallIAKCertificateResponse.status:type_name -> platform.v1.Status
+	7,  // 28: platform.v1.GetIDevIDCertificateResponse.certificate:type_name -> platform.v1.DeviceIdentityCertificate
+	7,  // 29: platform.v1.GetIAKCertificateResponse.certificate:type_name -> platform.v1.DeviceIdentityCertificate
+	49, // 30: platform.v1.DeleteIDevIDCertificateResponse.status:type_name -> platform.v1.Status
+	49, // 31: platform.v1.DeleteIAKCertificateResponse.status:type_name -> platform.v1.Status
+	5,  // 32: platform.v1.GetDeviceAttributesResponse.attributes:type_name -> platform.v1.TCGDeviceAttributes
+	49, // 33: platform.v1.ActivateCredentialResponse.status:type_name -> platform.v1.Status
+	49, // 34: platform.v1.FlushTransientContextsResponse.status:type_name -> platform.v1.Status
+	8,  // 35: platform.v1.IDevIDService.GenerateIDevID:input_type -> platform.v1.GenerateIDevIDRequest
+	10, // 36: platform.v1.IDevIDService.GetIDevIDInfo:input_type -> platform.v1.GetIDevIDInfoRequest
+	12, // 37: platform.v1.IDevIDService.HasIDevID:input_type -> platform.v1.HasIDevIDRequest
+	14, // 38: platform.v1.IDevIDService.DeleteIDevID:input_type -> platform.v1.DeleteIDevIDRequest
+	16, // 39: platform.v1.IDevIDService.GenerateIAK:input_type -> platform.v1.GenerateIAKRequest
+	18, // 40: platform.v1.IDevIDService.GetIAKInfo:input_type -> platform.v1.GetIAKInfoRequest
+	20, // 41: platform.v1.IDevIDService.HasIAK:input_type -> platform.v1.HasIAKRequest
+	22, // 42: platform.v1.IDevIDService.DeleteIAK:input_type -> platform.v1.DeleteIAKRequest
+	24, // 43: platform.v1.IDevIDService.CreateIDevIDCSR:input_type -> platform.v1.CreateIDevIDCSRRequest
+	26, // 44: platform.v1.IDevIDService.CreateIAKCSR:input_type -> platform.v1.CreateIAKCSRRequest
+	28, // 45: platform.v1.IDevIDService.CreateLDevID:input_type -> platform.v1.CreateLDevIDRequest
+	30, // 46: platform.v1.IDevIDService.InstallIDevIDCertificate:input_type -> platform.v1.InstallIDevIDCertificateRequest
+	32, // 47: platform.v1.IDevIDService.InstallIAKCertificate:input_type -> platform.v1.InstallIAKCertificateRequest
+	34, // 48: platform.v1.IDevIDService.GetIDevIDCertificate:input_type -> platform.v1.GetIDevIDCertificateRequest
+	36, // 49: platform.v1.IDevIDService.GetIAKCertificate:input_type -> platform.v1.GetIAKCertificateRequest
+	38, // 50: platform.v1.IDevIDService.DeleteIDevIDCertificate:input_type -> platform.v1.DeleteIDevIDCertificateRequest
+	40, // 51: platform.v1.IDevIDService.DeleteIAKCertificate:input_type -> platform.v1.DeleteIAKCertificateRequest
+	42, // 52: platform.v1.IDevIDService.GetDeviceAttributes:input_type -> platform.v1.GetDeviceAttributesRequest
+	46, // 53: platform.v1.IDevIDService.FlushTransientContexts:input_type -> platform.v1.FlushTransientContextsRequest
+	44, // 54: platform.v1.IDevIDService.ActivateCredential:input_type -> platform.v1.ActivateCredentialRequest
+	9,  // 55: platform.v1.IDevIDService.GenerateIDevID:output_type -> platform.v1.GenerateIDevIDResponse
+	11, // 56: platform.v1.IDevIDService.GetIDevIDInfo:output_type -> platform.v1.GetIDevIDInfoResponse
+	13, // 57: platform.v1.IDevIDService.HasIDevID:output_type -> platform.v1.HasIDevIDResponse
+	15, // 58: platform.v1.IDevIDService.DeleteIDevID:output_type -> platform.v1.DeleteIDevIDResponse
+	17, // 59: platform.v1.IDevIDService.GenerateIAK:output_type -> platform.v1.GenerateIAKResponse
+	19, // 60: platform.v1.IDevIDService.GetIAKInfo:output_type -> platform.v1.GetIAKInfoResponse
+	21, // 61: platform.v1.IDevIDService.HasIAK:output_type -> platform.v1.HasIAKResponse
+	23, // 62: platform.v1.IDevIDService.DeleteIAK:output_type -> platform.v1.DeleteIAKResponse
+	25, // 63: platform.v1.IDevIDService.CreateIDevIDCSR:output_type -> platform.v1.CreateIDevIDCSRResponse
+	27, // 64: platform.v1.IDevIDService.CreateIAKCSR:output_type -> platform.v1.CreateIAKCSRResponse
+	29, // 65: platform.v1.IDevIDService.CreateLDevID:output_type -> platform.v1.CreateLDevIDResponse
+	31, // 66: platform.v1.IDevIDService.InstallIDevIDCertificate:output_type -> platform.v1.InstallIDevIDCertificateResponse
+	33, // 67: platform.v1.IDevIDService.InstallIAKCertificate:output_type -> platform.v1.InstallIAKCertificateResponse
+	35, // 68: platform.v1.IDevIDService.GetIDevIDCertificate:output_type -> platform.v1.GetIDevIDCertificateResponse
+	37, // 69: platform.v1.IDevIDService.GetIAKCertificate:output_type -> platform.v1.GetIAKCertificateResponse
+	39, // 70: platform.v1.IDevIDService.DeleteIDevIDCertificate:output_type -> platform.v1.DeleteIDevIDCertificateResponse
+	41, // 71: platform.v1.IDevIDService.DeleteIAKCertificate:output_type -> platform.v1.DeleteIAKCertificateResponse
+	43, // 72: platform.v1.IDevIDService.GetDeviceAttributes:output_type -> platform.v1.GetDeviceAttributesResponse
+	47, // 73: platform.v1.IDevIDService.FlushTransientContexts:output_type -> platform.v1.FlushTransientContextsResponse
+	45, // 74: platform.v1.IDevIDService.ActivateCredential:output_type -> platform.v1.ActivateCredentialResponse
+	55, // [55:75] is the sub-list for method output_type
+	35, // [35:55] is the sub-list for method input_type
+	35, // [35:35] is the sub-list for extension type_name
+	35, // [35:35] is the sub-list for extension extendee
+	0,  // [0:35] is the sub-list for field type_name
 }
 
 func init() { file_idevid_proto_init() }
@@ -2842,7 +3027,7 @@ func file_idevid_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_idevid_proto_rawDesc), len(file_idevid_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   44,
+			NumMessages:   46,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

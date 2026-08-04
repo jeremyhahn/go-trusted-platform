@@ -21,7 +21,6 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	PlatformDaemon_GetStatus_FullMethodName        = "/platform.v1.PlatformDaemon/GetStatus"
 	PlatformDaemon_GetHealth_FullMethodName        = "/platform.v1.PlatformDaemon/GetHealth"
-	PlatformDaemon_Provision_FullMethodName        = "/platform.v1.PlatformDaemon/Provision"
 	PlatformDaemon_Shutdown_FullMethodName         = "/platform.v1.PlatformDaemon/Shutdown"
 	PlatformDaemon_GetVersion_FullMethodName       = "/platform.v1.PlatformDaemon/GetVersion"
 	PlatformDaemon_GetConfig_FullMethodName        = "/platform.v1.PlatformDaemon/GetConfig"
@@ -50,7 +49,6 @@ type PlatformDaemonClient interface {
 	// System operations
 	GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error)
 	GetHealth(ctx context.Context, in *GetHealthRequest, opts ...grpc.CallOption) (*GetHealthResponse, error)
-	Provision(ctx context.Context, in *ProvisionRequest, opts ...grpc.CallOption) (*ProvisionResponse, error)
 	Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error)
 	GetVersion(ctx context.Context, in *GetVersionRequest, opts ...grpc.CallOption) (*GetVersionResponse, error)
 	// Configuration operations
@@ -94,16 +92,6 @@ func (c *platformDaemonClient) GetHealth(ctx context.Context, in *GetHealthReque
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetHealthResponse)
 	err := c.cc.Invoke(ctx, PlatformDaemon_GetHealth_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *platformDaemonClient) Provision(ctx context.Context, in *ProvisionRequest, opts ...grpc.CallOption) (*ProvisionResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ProvisionResponse)
-	err := c.cc.Invoke(ctx, PlatformDaemon_Provision_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +295,6 @@ type PlatformDaemonServer interface {
 	// System operations
 	GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error)
 	GetHealth(context.Context, *GetHealthRequest) (*GetHealthResponse, error)
-	Provision(context.Context, *ProvisionRequest) (*ProvisionResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 	GetVersion(context.Context, *GetVersionRequest) (*GetVersionResponse, error)
 	// Configuration operations
@@ -342,9 +329,6 @@ func (UnimplementedPlatformDaemonServer) GetStatus(context.Context, *GetStatusRe
 }
 func (UnimplementedPlatformDaemonServer) GetHealth(context.Context, *GetHealthRequest) (*GetHealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetHealth not implemented")
-}
-func (UnimplementedPlatformDaemonServer) Provision(context.Context, *ProvisionRequest) (*ProvisionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method Provision not implemented")
 }
 func (UnimplementedPlatformDaemonServer) Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Shutdown not implemented")
@@ -444,24 +428,6 @@ func _PlatformDaemon_GetHealth_Handler(srv interface{}, ctx context.Context, dec
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PlatformDaemonServer).GetHealth(ctx, req.(*GetHealthRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PlatformDaemon_Provision_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ProvisionRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PlatformDaemonServer).Provision(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PlatformDaemon_Provision_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PlatformDaemonServer).Provision(ctx, req.(*ProvisionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -722,10 +688,6 @@ var PlatformDaemon_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetHealth",
 			Handler:    _PlatformDaemon_GetHealth_Handler,
-		},
-		{
-			MethodName: "Provision",
-			Handler:    _PlatformDaemon_Provision_Handler,
 		},
 		{
 			MethodName: "Shutdown",

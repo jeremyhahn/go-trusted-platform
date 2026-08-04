@@ -43,7 +43,6 @@ type PlatformClient interface {
 	ReloadConfig(ctx context.Context) ([]string, error)
 
 	// Lifecycle Operations
-	Provision(ctx context.Context, req *platformv1.ProvisionRequest) (*platformv1.ProvisionResponse, error)
 	Shutdown(ctx context.Context, graceful bool, timeoutSeconds uint32) error
 	Restart(ctx context.Context, timeoutSeconds uint32) error
 
@@ -218,18 +217,6 @@ func (c *Client) ReloadConfig(ctx context.Context) ([]string, error) {
 		return nil, &ErrReloadConfigFailed{Cause: err}
 	}
 	return resp.ReloadedSections, nil
-}
-
-// Provision initializes the platform with the specified options.
-func (c *Client) Provision(ctx context.Context, req *platformv1.ProvisionRequest) (*platformv1.ProvisionResponse, error) {
-	if req == nil {
-		return nil, &ErrProvisionFailed{Cause: ErrNilRequest}
-	}
-	resp, err := c.grpc.Provision(ctx, req)
-	if err != nil {
-		return nil, &ErrProvisionFailed{Cause: err}
-	}
-	return resp, nil
 }
 
 // Shutdown initiates a graceful shutdown of the platform daemon.

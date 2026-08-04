@@ -813,7 +813,7 @@ func TestOpcodeToString(t *testing.T) {
 		// Attestation Operations
 		{OpAttestQuote, "AttestQuote"},
 		{OpAttestVerify, "AttestVerify"},
-		{OpAttestGetEK, "AttestGetEK"},
+		{OpAttestCollectHost, "AttestCollectHost"},
 		{OpAttestGetAK, "AttestGetAK"},
 		{OpAttestChallenge, "AttestChallenge"},
 		{OpAttestResponse, "AttestResponse"},

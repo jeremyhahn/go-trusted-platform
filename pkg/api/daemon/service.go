@@ -318,14 +318,6 @@ func (s *Service) GetVersion(ctx context.Context, req *platformv1.GetVersionRequ
 	}, nil
 }
 
-// Provision delegates to existing platform provision logic
-func (s *Service) Provision(ctx context.Context, req *platformv1.ProvisionRequest) (*platformv1.ProvisionResponse, error) {
-	// This would delegate to the actual provisioning logic
-	// For now, return unimplemented - the actual implementation will be
-	// integrated with the existing platform provisioning code
-	return nil, status.Error(codes.Unimplemented, "provisioning not yet implemented in daemon service")
-}
-
 // Shutdown performs graceful shutdown
 func (s *Service) Shutdown(ctx context.Context, req *platformv1.ShutdownRequest) (*platformv1.ShutdownResponse, error) {
 	s.systemStatus.Store(int32(platformv1.SystemStatus_SYSTEM_STATUS_SHUTTING_DOWN))

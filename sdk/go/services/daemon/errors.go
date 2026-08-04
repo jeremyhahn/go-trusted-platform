@@ -59,19 +59,6 @@ func (e *ErrGetHealthFailed) Unwrap() error {
 	return e.Cause
 }
 
-// ErrProvisionFailed is returned when provisioning fails.
-type ErrProvisionFailed struct {
-	Cause error
-}
-
-func (e *ErrProvisionFailed) Error() string {
-	return fmt.Sprintf("failed to provision platform: %v", e.Cause)
-}
-
-func (e *ErrProvisionFailed) Unwrap() error {
-	return e.Cause
-}
-
 // ErrShutdownFailed is returned when shutdown fails.
 type ErrShutdownFailed struct {
 	Cause error

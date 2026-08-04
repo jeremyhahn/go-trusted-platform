@@ -8,8 +8,14 @@ import "google/protobuf/timestamp.proto";
 import "common.proto";
 
 // IDevIDService provides device identity management operations for
-// IDevID (Initial Device Identifier) and IAK (Initial Attestation Key)
-// per TCG (Trusted Computing Group) specifications.
+// IDevID (Initial Device Identifier), IAK (Initial Attestation Key), and
+// LDevID (Local Device Identifier) per TCG (Trusted Computing Group) and
+// IEEE 802.1AR specifications.
+//
+// IDevID is the permanent birth identity established during enrollment
+// (enroll-01 / endorse-01) via the TCG-CSR ceremony. LDevID is a locally
+// significant, CA-issued, rotatable operational identity. A device has one
+// IDevID and zero-or-more LDevIDs; LDevID issuance is gated on a proven IDevID.
 service IDevIDService {
   // ==========================================================================
   // IDevID Operations
@@ -60,6 +66,19 @@ service IDevIDService {
   // CreateIAKCSR creates a certificate signing request for the IAK key.
   // The CSR includes TCG-specific attributes in the SAN.
   rpc CreateIAKCSR(CreateIAKCSRRequest) returns (CreateIAKCSRResponse);
+
+  // ==========================================================================
+  // LDevID Operations (IEEE 802.1AR Local Device Identifier)
+  // ==========================================================================
+
+  // CreateLDevID provisions a Local Device Identifier. It creates a
+  // TPM-resident LDevID signing key (distinct from the IDevID/IAK birth
+  // keys), builds a PKCS#10 certificate signing request signed by that key,
+  // and has the request issued by the platform certificate authority.
+  //
+  // Issuance is gated on a prior successful IDevID enrollment/attestation:
+  // FailedPrecondition is returned for a device with no proven IDevID.
+  rpc CreateLDevID(CreateLDevIDRequest) returns (CreateLDevIDResponse);
 
   // ==========================================================================
   // Certificate Operations
@@ -433,6 +452,46 @@ message CreateIAKCSRResponse {
   Status status = 1;
   // CsrPEM is the PEM-encoded certificate signing request.
   bytes csr_pem = 2;
+}
+
+// =============================================================================
+// LDevID Request/Response Messages
+// =============================================================================
+
+message CreateLDevIDRequest {
+  // Template carries the subject and SAN fields for the LDevID certificate.
+  CSRTemplate template = 1;
+
+  // Algorithm specifies the LDevID key algorithm (default: ECDSA-P256).
+  DeviceKeyAlgorithm algorithm = 2;
+
+  // Handle is the persistent TPM handle for the LDevID key. This MUST be
+  // distinct from the IDevID and IAK handles. Default: 0x81010102.
+  uint32 handle = 3;
+
+  // Profile selects the platform CA certificate profile used for issuance.
+  // If empty, the CA's default end-entity profile is used.
+  string profile = 4;
+
+  // ValidityDays overrides the issued certificate validity period.
+  // A value of 0 uses the CA/profile default.
+  uint32 validity_days = 5;
+
+  // Overwrite allows overwriting an existing LDevID key at the handle.
+  bool overwrite = 6;
+}
+
+message CreateLDevIDResponse {
+  Status status = 1;
+
+  // CsrPEM is the PEM-encoded PKCS#10 CSR that was signed by the CA.
+  bytes csr_pem = 2;
+
+  // CertificatePEM is the PEM-encoded LDevID certificate issued by the CA.
+  bytes certificate_pem = 3;
+
+  // Certificate contains parsed metadata for the issued LDevID certificate.
+  DeviceIdentityCertificate certificate = 4;
 }
 
 // =============================================================================

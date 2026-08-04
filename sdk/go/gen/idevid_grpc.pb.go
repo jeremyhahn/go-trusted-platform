@@ -29,6 +29,7 @@ const (
 	IDevIDService_DeleteIAK_FullMethodName                = "/platform.v1.IDevIDService/DeleteIAK"
 	IDevIDService_CreateIDevIDCSR_FullMethodName          = "/platform.v1.IDevIDService/CreateIDevIDCSR"
 	IDevIDService_CreateIAKCSR_FullMethodName             = "/platform.v1.IDevIDService/CreateIAKCSR"
+	IDevIDService_CreateLDevID_FullMethodName             = "/platform.v1.IDevIDService/CreateLDevID"
 	IDevIDService_InstallIDevIDCertificate_FullMethodName = "/platform.v1.IDevIDService/InstallIDevIDCertificate"
 	IDevIDService_InstallIAKCertificate_FullMethodName    = "/platform.v1.IDevIDService/InstallIAKCertificate"
 	IDevIDService_GetIDevIDCertificate_FullMethodName     = "/platform.v1.IDevIDService/GetIDevIDCertificate"
@@ -45,8 +46,14 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // IDevIDService provides device identity management operations for
-// IDevID (Initial Device Identifier) and IAK (Initial Attestation Key)
-// per TCG (Trusted Computing Group) specifications.
+// IDevID (Initial Device Identifier), IAK (Initial Attestation Key), and
+// LDevID (Local Device Identifier) per TCG (Trusted Computing Group) and
+// IEEE 802.1AR specifications.
+//
+// IDevID is the permanent birth identity established during enrollment
+// (enroll-01 / endorse-01) via the TCG-CSR ceremony. LDevID is a locally
+// significant, CA-issued, rotatable operational identity. A device has one
+// IDevID and zero-or-more LDevIDs; LDevID issuance is gated on a proven IDevID.
 type IDevIDServiceClient interface {
 	// GenerateIDevID creates a new IDevID key in the TPM.
 	// Returns AlreadyExists if a key exists at the handle and Overwrite is false.
@@ -76,6 +83,14 @@ type IDevIDServiceClient interface {
 	// CreateIAKCSR creates a certificate signing request for the IAK key.
 	// The CSR includes TCG-specific attributes in the SAN.
 	CreateIAKCSR(ctx context.Context, in *CreateIAKCSRRequest, opts ...grpc.CallOption) (*CreateIAKCSRResponse, error)
+	// CreateLDevID provisions a Local Device Identifier. It creates a
+	// TPM-resident LDevID signing key (distinct from the IDevID/IAK birth
+	// keys), builds a PKCS#10 certificate signing request signed by that key,
+	// and has the request issued by the platform certificate authority.
+	//
+	// Issuance is gated on a prior successful IDevID enrollment/attestation:
+	// FailedPrecondition is returned for a device with no proven IDevID.
+	CreateLDevID(ctx context.Context, in *CreateLDevIDRequest, opts ...grpc.CallOption) (*CreateLDevIDResponse, error)
 	// InstallIDevIDCertificate installs an IDevID certificate.
 	// The certificate public key must match the IDevID key in the TPM.
 	InstallIDevIDCertificate(ctx context.Context, in *InstallIDevIDCertificateRequest, opts ...grpc.CallOption) (*InstallIDevIDCertificateResponse, error)
@@ -213,6 +228,16 @@ func (c *iDevIDServiceClient) CreateIAKCSR(ctx context.Context, in *CreateIAKCSR
 	return out, nil
 }
 
+func (c *iDevIDServiceClient) CreateLDevID(ctx context.Context, in *CreateLDevIDRequest, opts ...grpc.CallOption) (*CreateLDevIDResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateLDevIDResponse)
+	err := c.cc.Invoke(ctx, IDevIDService_CreateLDevID_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *iDevIDServiceClient) InstallIDevIDCertificate(ctx context.Context, in *InstallIDevIDCertificateRequest, opts ...grpc.CallOption) (*InstallIDevIDCertificateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(InstallIDevIDCertificateResponse)
@@ -308,8 +333,14 @@ func (c *iDevIDServiceClient) ActivateCredential(ctx context.Context, in *Activa
 // for forward compatibility.
 //
 // IDevIDService provides device identity management operations for
-// IDevID (Initial Device Identifier) and IAK (Initial Attestation Key)
-// per TCG (Trusted Computing Group) specifications.
+// IDevID (Initial Device Identifier), IAK (Initial Attestation Key), and
+// LDevID (Local Device Identifier) per TCG (Trusted Computing Group) and
+// IEEE 802.1AR specifications.
+//
+// IDevID is the permanent birth identity established during enrollment
+// (enroll-01 / endorse-01) via the TCG-CSR ceremony. LDevID is a locally
+// significant, CA-issued, rotatable operational identity. A device has one
+// IDevID and zero-or-more LDevIDs; LDevID issuance is gated on a proven IDevID.
 type IDevIDServiceServer interface {
 	// GenerateIDevID creates a new IDevID key in the TPM.
 	// Returns AlreadyExists if a key exists at the handle and Overwrite is false.
@@ -339,6 +370,14 @@ type IDevIDServiceServer interface {
 	// CreateIAKCSR creates a certificate signing request for the IAK key.
 	// The CSR includes TCG-specific attributes in the SAN.
 	CreateIAKCSR(context.Context, *CreateIAKCSRRequest) (*CreateIAKCSRResponse, error)
+	// CreateLDevID provisions a Local Device Identifier. It creates a
+	// TPM-resident LDevID signing key (distinct from the IDevID/IAK birth
+	// keys), builds a PKCS#10 certificate signing request signed by that key,
+	// and has the request issued by the platform certificate authority.
+	//
+	// Issuance is gated on a prior successful IDevID enrollment/attestation:
+	// FailedPrecondition is returned for a device with no proven IDevID.
+	CreateLDevID(context.Context, *CreateLDevIDRequest) (*CreateLDevIDResponse, error)
 	// InstallIDevIDCertificate installs an IDevID certificate.
 	// The certificate public key must match the IDevID key in the TPM.
 	InstallIDevIDCertificate(context.Context, *InstallIDevIDCertificateRequest) (*InstallIDevIDCertificateResponse, error)
@@ -405,6 +444,9 @@ func (UnimplementedIDevIDServiceServer) CreateIDevIDCSR(context.Context, *Create
 }
 func (UnimplementedIDevIDServiceServer) CreateIAKCSR(context.Context, *CreateIAKCSRRequest) (*CreateIAKCSRResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateIAKCSR not implemented")
+}
+func (UnimplementedIDevIDServiceServer) CreateLDevID(context.Context, *CreateLDevIDRequest) (*CreateLDevIDResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateLDevID not implemented")
 }
 func (UnimplementedIDevIDServiceServer) InstallIDevIDCertificate(context.Context, *InstallIDevIDCertificateRequest) (*InstallIDevIDCertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InstallIDevIDCertificate not implemented")
@@ -634,6 +676,24 @@ func _IDevIDService_CreateIAKCSR_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IDevIDService_CreateLDevID_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateLDevIDRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IDevIDServiceServer).CreateLDevID(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IDevIDService_CreateLDevID_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IDevIDServiceServer).CreateLDevID(ctx, req.(*CreateLDevIDRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _IDevIDService_InstallIDevIDCertificate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(InstallIDevIDCertificateRequest)
 	if err := dec(in); err != nil {
@@ -842,6 +902,10 @@ var IDevIDService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateIAKCSR",
 			Handler:    _IDevIDService_CreateIAKCSR_Handler,
+		},
+		{
+			MethodName: "CreateLDevID",
+			Handler:    _IDevIDService_CreateLDevID_Handler,
 		},
 		{
 			MethodName: "InstallIDevIDCertificate",

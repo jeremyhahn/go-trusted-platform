@@ -121,6 +121,15 @@ func (e *ErrCreateIAKCSRFailed) Error() string {
 
 func (e *ErrCreateIAKCSRFailed) Unwrap() error { return e.Cause }
 
+// ErrCreateLDevIDFailed is returned when LDevID provisioning fails.
+type ErrCreateLDevIDFailed struct{ Cause error }
+
+func (e *ErrCreateLDevIDFailed) Error() string {
+	return fmt.Sprintf("failed to create LDevID: %v", e.Cause)
+}
+
+func (e *ErrCreateLDevIDFailed) Unwrap() error { return e.Cause }
+
 // Certificate Errors
 
 type ErrInstallIDevIDCertFailed struct {

@@ -40,8 +40,6 @@ type mockPlatformDaemonClient struct {
 	updateConfigErr  error
 	reloadConfigResp *platformv1.ReloadConfigResponse
 	reloadConfigErr  error
-	provisionResp    *platformv1.ProvisionResponse
-	provisionErr     error
 	shutdownResp     *platformv1.ShutdownResponse
 	shutdownErr      error
 
@@ -91,10 +89,6 @@ func (m *mockPlatformDaemonClient) UpdateConfig(ctx context.Context, in *platfor
 
 func (m *mockPlatformDaemonClient) ReloadConfig(ctx context.Context, in *platformv1.ReloadConfigRequest, opts ...grpc.CallOption) (*platformv1.ReloadConfigResponse, error) {
 	return m.reloadConfigResp, m.reloadConfigErr
-}
-
-func (m *mockPlatformDaemonClient) Provision(ctx context.Context, in *platformv1.ProvisionRequest, opts ...grpc.CallOption) (*platformv1.ProvisionResponse, error) {
-	return m.provisionResp, m.provisionErr
 }
 
 func (m *mockPlatformDaemonClient) Shutdown(ctx context.Context, in *platformv1.ShutdownRequest, opts ...grpc.CallOption) (*platformv1.ShutdownResponse, error) {
@@ -599,52 +593,6 @@ func TestClient_ReloadConfig(t *testing.T) {
 		var reloadErr *ErrReloadConfigFailed
 		if !errors.As(err, &reloadErr) {
 			t.Errorf("error type = %T, want *ErrReloadConfigFailed", err)
-		}
-	})
-}
-
-func TestClient_Provision(t *testing.T) {
-	t.Run("provisions successfully", func(t *testing.T) {
-		mockGRPC := &mockPlatformDaemonClient{
-			provisionResp: &platformv1.ProvisionResponse{
-				StepsCompleted: []string{"tpm", "ca"},
-			},
-		}
-		client := NewClientFromGRPC(mockGRPC)
-
-		resp, err := client.Provision(context.Background(), &platformv1.ProvisionRequest{
-			ProvisionTpm: true,
-			ProvisionCa:  true,
-		})
-		if err != nil {
-			t.Fatalf("Provision() error = %v", err)
-		}
-		if len(resp.StepsCompleted) != 2 {
-			t.Errorf("len(StepsCompleted) = %d, want 2", len(resp.StepsCompleted))
-		}
-	})
-
-	t.Run("returns error for nil request", func(t *testing.T) {
-		mockGRPC := &mockPlatformDaemonClient{}
-		client := NewClientFromGRPC(mockGRPC)
-
-		_, err := client.Provision(context.Background(), nil)
-		if err == nil {
-			t.Fatal("Provision() should return error for nil request")
-		}
-		var provisionErr *ErrProvisionFailed
-		if !errors.As(err, &provisionErr) {
-			t.Errorf("error type = %T, want *ErrProvisionFailed", err)
-		}
-	})
-
-	t.Run("returns error on gRPC failure", func(t *testing.T) {
-		mockGRPC := &mockPlatformDaemonClient{provisionErr: errors.New("rpc error")}
-		client := NewClientFromGRPC(mockGRPC)
-
-		_, err := client.Provision(context.Background(), &platformv1.ProvisionRequest{})
-		if err == nil {
-			t.Fatal("Provision() should return error")
 		}
 	})
 }

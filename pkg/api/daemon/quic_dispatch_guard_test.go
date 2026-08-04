@@ -335,7 +335,7 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpContainerGet":              {value: quic.OpContainerGet, mode: wireDirect, family: "container"},
 	"OpAttestQuote":               {value: quic.OpAttestQuote, mode: wireDirect, family: "attestation"},
 	"OpAttestVerify":              {value: quic.OpAttestVerify, mode: wireDirect, family: "attestation"},
-	"OpAttestGetEK":               {value: quic.OpAttestGetEK, mode: wireDirect, family: "attestation"},
+	"OpAttestCollectHost":         {value: quic.OpAttestCollectHost, mode: wireDirect, family: "attestation"},
 	"OpAttestGetAK":               {value: quic.OpAttestGetAK, mode: wireDirect, family: "attestation"},
 	"OpAttestChallenge":           {value: quic.OpAttestChallenge, mode: wireDirect, family: "attestation"},
 	"OpAttestResponse":            {value: quic.OpAttestResponse, mode: wireDirect, family: "attestation"},

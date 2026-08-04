@@ -24,6 +24,7 @@ import (
 
 	tpmgo "github.com/google/go-tpm/tpm2"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
@@ -40,6 +41,8 @@ type IDevIDGRPCService struct {
 
 	logger      *logging.Logger
 	tpm2Service xkmssdk.TrustedPlatformModule
+	// ca issues LDevID (802.1AR) certificates from the platform CA.
+	ca quicbaasca.CACertificateAuthority
 }
 
 // NewIDevIDGRPCService creates a new IDevID gRPC service instance.

@@ -1,4 +1,4 @@
-# Device Identity (IDevID/IAK) Design
+# Device Identity (IDevID/IAK/LDevID) Design
 
 **Version**: 1.0
 **Last Updated**: 2026-01-05
@@ -6,7 +6,7 @@
 
 ## Overview
 
-This document describes the architecture and implementation of TPM-based Device Identity using IDevID (Initial Device Identifier) and IAK (Initial Attestation Key) certificates per TCG specifications. Device identity provides a cryptographically-bound, manufacturer-issued identity for secure device authentication and attestation.
+This document describes the architecture and implementation of TPM-based Device Identity using IDevID (Initial Device Identifier) and IAK (Initial Attestation Key) certificates per TCG specifications, plus the CA-issued LDevID (Local Device Identifier) per IEEE 802.1AR. Device identity provides a cryptographically-bound, manufacturer-issued identity for secure device authentication and attestation.
 
 ## References
 
@@ -268,6 +268,61 @@ type DeviceIdentityCA interface {
     CompleteTPMVerification(ctx context.Context, challengeID string, secret []byte) error
 }
 ```
+
+## LDevID (IEEE 802.1AR Local Device Identifier)
+
+### IDevID vs LDevID
+
+IDevID and LDevID are the two halves of the IEEE 802.1AR device identity model:
+
+| Property | IDevID (birth identity) | LDevID (operational identity) |
+|----------|-------------------------|-------------------------------|
+| Lifetime | Permanent, created once | Rotatable, many over device life |
+| Issued by | Manufacturer / enrollment CA via the TCG-CSR ceremony (endorse-01 / enroll-01) | The **platform CA** the device already trusts |
+| Wire format | TCG-CSR (TPM-attested) | Standard PKCS#10 CSR |
+| TPM key | IDevID key at `0x81010100` (+ IAK `0x81010101`) | Dedicated LDevID key at `0x81010102`, distinct from the birth keys |
+| Cardinality | Exactly one | Zero-or-more |
+| Precondition | EK attestation | **A proven IDevID** |
+
+An IDevID is the device's cryptographic birth certificate; an LDevID is a
+locally significant, CA-issued, rotatable identity layered on top of it (for
+example, a per-deployment or per-tenant operational certificate).
+
+### CreateLDevID Flow
+
+`IDevIDService.CreateLDevID` provisions an LDevID in a single call:
+
+1. **Gate on a proven IDevID.** The service refuses issuance
+   (`FailedPrecondition`, typed `ErrIDevIDNotEnrolled`) unless the device has a
+   currently-valid IDevID certificate installed. That certificate is the
+   on-device materialization of a successful enroll-01 / endorse-01 attestation
+   — the CA only issues it after verifying the device's attestation manifest —
+   so its presence is proof the IDevID was enrolled.
+2. **Create the LDevID key.** A dedicated TPM-resident signing key is created as
+   a child of the platform key store SRK, using the existing TPM key management
+   (`LDevIDAttributesFromConfig` + `CreateECDSA` / `CreateRSA`). It works
+   identically on a hardware TPM and swtpm via the `TrustedPlatformModule`
+   abstraction. The key is distinct from the IDevID and IAK birth keys.
+3. **Build a PKCS#10 CSR.** A standard `x509.CertificateRequest` is signed by the
+   TPM-resident LDevID key (the private key never leaves the TPM).
+4. **Issue from the platform CA.** The CSR is signed by the same platform CA seam
+   used elsewhere (`config.CAService.SignCSR`, reached through the quicbaas SDK),
+   honoring the requested profile and validity.
+
+The response carries the PKCS#10 CSR, the issued certificate (PEM), and parsed
+certificate metadata (`KeyType = "LDevID"`, TPM handle `0x81010102`).
+
+`CreateLDevIDRequest` fields: `template` (subject / SANs), `algorithm`
+(default ECDSA P-256), `handle` (default `0x81010102`), `profile`,
+`validity_days`, and `overwrite`.
+
+### Multi-Protocol Surface
+
+`CreateLDevID` is exposed over gRPC and the Unix socket (both bound to the shared
+`IDevIDGRPCService`), the in-process embedded transport, and the Go SDK
+(`sdk/go/services/idevid.Client.CreateLDevID`). Parity across REST, QUIC, and MCP
+plus the `platformctl idevid ldevid create` CLI verb follows the same request /
+response contract.
 
 ## ACME enroll-01 Challenge Flow (Future)
 

@@ -51,6 +51,8 @@ type QUICServiceHandler struct {
 	// It is (re)built by the device service setters (rebuildDeviceGRPC).
 	deviceGRPC     *DeviceGRPCService
 	dnsService     DNSService
+	computeGRPC    *ComputeGRPCService
+	attestGRPC     *AttestationServiceServer
 	healthRegistry health.Registry
 	sdnService     *SDNService
 	iamService     QUICIAMService
@@ -288,6 +290,16 @@ func (h *QUICServiceHandler) SetDeviceProfileService(svc device.DeviceProfileSer
 // SetDNSService sets the DNS service after construction
 func (h *QUICServiceHandler) SetDNSService(svc DNSService) {
 	h.dnsService = svc
+}
+
+// SetComputeGRPCService sets the shared compute gRPC service the container
+// QUIC handlers delegate to.
+func (h *QUICServiceHandler) SetComputeGRPCService(svc *ComputeGRPCService) { h.computeGRPC = svc }
+
+// SetAttestationGRPCService sets the shared attestation gRPC service the
+// quote QUIC handlers delegate to.
+func (h *QUICServiceHandler) SetAttestationGRPCService(svc *AttestationServiceServer) {
+	h.attestGRPC = svc
 }
 
 // SetSDNService sets the SDN service after construction

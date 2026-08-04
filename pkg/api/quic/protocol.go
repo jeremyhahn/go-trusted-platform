@@ -216,14 +216,14 @@ const (
 	// 0x6F reserved
 
 	// Attestation Operations (0x70-0x7F)
-	OpAttestQuote     byte = 0x70
-	OpAttestVerify    byte = 0x71
-	OpAttestGetEK     byte = 0x72
-	OpAttestGetAK     byte = 0x73
-	OpAttestChallenge byte = 0x74
-	OpAttestResponse  byte = 0x75
-	OpAttestGetReport byte = 0x76
-	OpAttestGetPCRs   byte = 0x77
+	OpAttestQuote       byte = 0x70
+	OpAttestVerify      byte = 0x71
+	OpAttestCollectHost byte = 0x72 // repurposed from the never-implemented OpAttestGetEK
+	OpAttestGetAK       byte = 0x73
+	OpAttestChallenge   byte = 0x74
+	OpAttestResponse    byte = 0x75
+	OpAttestGetReport   byte = 0x76
+	OpAttestGetPCRs     byte = 0x77
 	// 0x78-0x7E reserved
 	// IDevID/IAK Extended Operations (0x7F)
 	OpHasIDevID        byte = 0x78
@@ -893,14 +893,14 @@ var opcodeNames = map[byte]string{
 	OpVMGetState:         "VMGetState",
 
 	// Attestation
-	OpAttestQuote:     "AttestQuote",
-	OpAttestVerify:    "AttestVerify",
-	OpAttestGetEK:     "AttestGetEK",
-	OpAttestGetAK:     "AttestGetAK",
-	OpAttestChallenge: "AttestChallenge",
-	OpAttestResponse:  "AttestResponse",
-	OpAttestGetReport: "AttestGetReport",
-	OpAttestGetPCRs:   "AttestGetPCRs",
+	OpAttestQuote:       "AttestQuote",
+	OpAttestVerify:      "AttestVerify",
+	OpAttestCollectHost: "AttestCollectHost",
+	OpAttestGetAK:       "AttestGetAK",
+	OpAttestChallenge:   "AttestChallenge",
+	OpAttestResponse:    "AttestResponse",
+	OpAttestGetReport:   "AttestGetReport",
+	OpAttestGetPCRs:     "AttestGetPCRs",
 
 	// Certificate
 	OpCertIssue:    "CertIssue",

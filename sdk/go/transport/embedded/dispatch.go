@@ -93,9 +93,6 @@ func registerDaemonHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.PlatformDaemon_GetHealth_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.GetHealth(ctx, req.(*platformv1.GetHealthRequest))
 	}
-	m[platformv1.PlatformDaemon_Provision_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
-		return svc.Provision(ctx, req.(*platformv1.ProvisionRequest))
-	}
 	m[platformv1.PlatformDaemon_Shutdown_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.Shutdown(ctx, req.(*platformv1.ShutdownRequest))
 	}
@@ -797,6 +794,9 @@ func registerIDevIDHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 	m[platformv1.IDevIDService_CreateIAKCSR_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CreateIAKCSR(ctx, req.(*platformv1.CreateIAKCSRRequest))
+	}
+	m[platformv1.IDevIDService_CreateLDevID_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CreateLDevID(ctx, req.(*platformv1.CreateLDevIDRequest))
 	}
 	m[platformv1.IDevIDService_InstallIDevIDCertificate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.InstallIDevIDCertificate(ctx, req.(*platformv1.InstallIDevIDCertificateRequest))

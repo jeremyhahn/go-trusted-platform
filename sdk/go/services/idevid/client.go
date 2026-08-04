@@ -137,6 +137,18 @@ func (c *Client) CreateIAKCSR(ctx context.Context, template *platformv1.CSRTempl
 	return resp.CsrPem, nil
 }
 
+// CreateLDevID provisions a Local Device Identifier (IEEE 802.1AR). It creates
+// a TPM-resident LDevID key distinct from the IDevID/IAK birth keys, builds a
+// PKCS#10 CSR signed by that key, and has the platform CA issue the
+// certificate. Issuance requires a proven IDevID.
+func (c *Client) CreateLDevID(ctx context.Context, req *platformv1.CreateLDevIDRequest) (*platformv1.CreateLDevIDResponse, error) {
+	resp, err := c.grpc.CreateLDevID(ctx, req)
+	if err != nil {
+		return nil, &ErrCreateLDevIDFailed{Cause: err}
+	}
+	return resp, nil
+}
+
 // Certificate Operations
 
 // InstallIDevIDCertificate installs an IDevID certificate.

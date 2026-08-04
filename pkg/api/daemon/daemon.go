@@ -722,6 +722,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Warn("IDevID gRPC service created but app.TPM is nil; IDevID/IAK ops will return FailedPrecondition")
 	}
 
+	if config.CAService != nil {
+		idevidService.SetCAService(config.CAService)
+		logger.Info("IDevID gRPC service wired to CA for LDevID issuance")
+	} else {
+		logger.Warn("IDevID gRPC service created without CA; CreateLDevID will return FailedPrecondition")
+	}
+
 	// Register with TCP gRPC server if enabled
 	if grpcServer != nil {
 		platformv1.RegisterIDevIDServiceServer(grpcServer, idevidService)
@@ -1057,6 +1064,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			quicHandler.SetDNSService(config.DNSService)
 			logger.Debug("DNS service set for QUIC handler")
 		}
+
+		// Wire the shared compute + attestation gRPC services into the QUIC
+		// handler so container and quote ops delegate through the pb services.
+		if computeService != nil {
+			quicHandler.SetComputeGRPCService(computeService)
+			logger.Debug("Compute gRPC service set for QUIC handler")
+		}
+		quicHandler.SetAttestationGRPCService(attestationService)
 
 		// Set up overlay and gateway QUIC handlers for proper request routing.
 		// Even without concrete service implementations, having these handlers

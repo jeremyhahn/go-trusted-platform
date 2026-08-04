@@ -1275,29 +1275,6 @@ func TestService_ReloadConfig(t *testing.T) {
 	}
 }
 
-func TestService_Provision(t *testing.T) {
-	svc, err := NewService(DefaultConfig())
-	if err != nil {
-		t.Fatalf("NewService() error: %v", err)
-	}
-
-	ctx := context.Background()
-	_, err = svc.Provision(ctx, &platformv1.ProvisionRequest{})
-
-	if err == nil {
-		t.Error("Provision() should return unimplemented error")
-	}
-
-	st, ok := status.FromError(err)
-	if !ok {
-		t.Fatalf("expected gRPC status error, got %T", err)
-	}
-
-	if st.Code() != codes.Unimplemented {
-		t.Errorf("error code = %v, want Unimplemented", st.Code())
-	}
-}
-
 func TestHelperFunctions(t *testing.T) {
 	t.Run("serviceTypeFromName", func(t *testing.T) {
 		tests := []struct {
